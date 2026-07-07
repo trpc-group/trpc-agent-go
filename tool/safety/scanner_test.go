@@ -150,7 +150,7 @@ func TestDefaultScanner_AcceptanceCases(t *testing.T) {
 			name: "human_review_custom",
 			req: ScanRequest{
 				ToolName: "custom_downloader", Backend: BackendUnknown,
-				Arguments: []byte(`{"text":"download https://example.invalid/a.sh"}`),
+				RawArguments: []byte(`{"text":"download https://example.invalid/a.sh"}`),
 			},
 			decision: DecisionNeedsHumanReview, ruleID: "unknown.requires_review",
 			blocked: true,
@@ -159,7 +159,7 @@ func TestDefaultScanner_AcceptanceCases(t *testing.T) {
 			name: "unknown_dangerous_command",
 			req: ScanRequest{
 				ToolName: "mcp_call", Backend: BackendUnknown,
-				Arguments: []byte(`{"cmd":"rm -rf /tmp/x"}`),
+				RawArguments: []byte(`{"cmd":"rm -rf /tmp/x"}`),
 			},
 			decision: DecisionNeedsHumanReview, ruleID: "unknown.dangerous_command",
 			blocked: true,
@@ -168,7 +168,7 @@ func TestDefaultScanner_AcceptanceCases(t *testing.T) {
 			name: "unknown_sensitive_path",
 			req: ScanRequest{
 				ToolName: "mcp_call", Backend: BackendUnknown,
-				Arguments: []byte(`{"path":"~/.ssh/id_rsa"}`),
+				RawArguments: []byte(`{"path":"~/.ssh/id_rsa"}`),
 			},
 			decision: DecisionNeedsHumanReview, ruleID: "unknown.sensitive_path",
 			blocked: true, redacted: true,
@@ -191,6 +191,60 @@ func TestDefaultScanner_AcceptanceCases(t *testing.T) {
 			decision: DecisionDeny, ruleID: "path.sensitive_credentials",
 			blocked: true, redacted: true,
 		},
+		{
+			name: "stdin_dangerous_delete",
+			req: ScanRequest{
+				ToolName: "exec_command", Backend: BackendHost,
+				Command: "cat", Stdin: "rm -rf /tmp/x",
+			},
+			decision: DecisionDeny, ruleID: "command.dangerous_delete",
+			blocked: true,
+		},
+		{
+			name: "codeexec_python_network_private_address",
+			req: ScanRequest{
+				ToolName: "execute_code", Backend: BackendCodeExec,
+				Language: "python", Code: `import urllib.request
+urllib.request.urlopen("http://127.0.0.1:8080/debug")`,
+			},
+			decision: DecisionDeny, ruleID: "network.private_address",
+			blocked: true,
+		},
+		{
+			name: "rm_relative_path_is_review",
+			req: ScanRequest{
+				ToolName: "workspace_exec", Backend: BackendWorkspace,
+				Command: "rm build/output.o",
+			},
+			decision: DecisionDeny, ruleID: "command.policy",
+			blocked: true,
+		},
+		{
+			name: "sleep_duration_suffix",
+			req: ScanRequest{
+				ToolName: "exec_command", Backend: BackendHost,
+				Command: "sleep 10m",
+			},
+			decision: DecisionAsk, ruleID: "resource.long_running",
+			blocked: true,
+		},
+		{
+			name: "yes_head_substring_no_large_output",
+			req: ScanRequest{
+				ToolName: "workspace_exec", Backend: BackendWorkspace,
+				Command: "grep yes headfile.txt",
+			},
+			decision: DecisionAllow, ruleID: "evaluation.none",
+		},
+		{
+			name: "multiline_shell_control_flow_denied",
+			req: ScanRequest{
+				ToolName: "execute_code", Backend: BackendCodeExec,
+				Language: "bash", Code: "if true; then\ncurl https://evil.example\nfi",
+			},
+			decision: DecisionDeny, ruleID: "network.non_allowlisted_domain",
+			blocked: true,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -204,6 +258,225 @@ func TestDefaultScanner_AcceptanceCases(t *testing.T) {
 			require.NotEmpty(t, report.Recommendation)
 		})
 	}
+}
+
+func TestDefaultScanner_EnvAllowlistBlocksUnknownEnv(t *testing.T) {
+	scanner := MustDefaultScanner(Policy{
+		EnvAllowlist: []string{"PATH"},
+	})
+	report, err := scanner.Scan(context.Background(), ScanRequest{
+		ToolName: "workspace_exec",
+		Backend:  BackendWorkspace,
+		Command:  "go test ./...",
+		Env: map[string]string{
+			"PATH":       "/usr/bin",
+			"LD_PRELOAD": "/tmp/hook.so",
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, DecisionAsk, report.Decision)
+	require.Equal(t, "env.not_allowlisted", report.RuleID)
+	require.True(t, report.Blocked)
+}
+
+func TestDefaultScanner_EdgeCoverageCases(t *testing.T) {
+	t.Run("nil scanner uses defaults", func(t *testing.T) {
+		var scanner *DefaultScanner
+		report, err := scanner.Scan(context.Background(), ScanRequest{
+			ToolName: "workspace_exec",
+			Backend:  BackendWorkspace,
+			Command:  "go test ./tool/safety",
+		})
+		require.NoError(t, err)
+		require.Equal(t, DecisionAllow, report.Decision)
+	})
+
+	t.Run("cancelled context asks before scanning", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		report, err := MustDefaultScanner(Policy{}).Scan(ctx, ScanRequest{
+			ToolName: "workspace_exec",
+			Backend:  BackendWorkspace,
+			Command:  "go test ./tool/safety",
+		})
+		require.NoError(t, err)
+		require.Equal(t, DecisionAsk, report.Decision)
+		require.Equal(t, "scanner.context_cancelled", report.RuleID)
+	})
+
+	t.Run("oversized command and script require review", func(t *testing.T) {
+		scanner := MustDefaultScanner(Policy{
+			MaxCommandBytes: 4,
+			MaxScriptBytes:  4,
+		})
+		report, err := scanner.Scan(context.Background(), ScanRequest{
+			ToolName: "execute_code",
+			Backend:  BackendCodeExec,
+			Language: "python",
+			Code:     "print('too long')",
+			Command:  "echo too long",
+		})
+		require.NoError(t, err)
+		require.Equal(t, DecisionNeedsHumanReview, report.Decision)
+		require.Contains(t, []string{"command.too_large", "script.too_large"}, report.RuleID)
+	})
+
+	t.Run("timeout host request denies", func(t *testing.T) {
+		report, err := MustDefaultScanner(Policy{MaxTimeoutSec: 5}).Scan(
+			context.Background(),
+			ScanRequest{
+				ToolName:   "exec_command",
+				Backend:    BackendHost,
+				Command:    "go test ./tool/safety",
+				TimeoutSec: 6,
+			},
+		)
+		require.NoError(t, err)
+		require.Equal(t, DecisionDeny, report.Decision)
+		require.Equal(t, "resource.long_running", report.RuleID)
+	})
+
+	t.Run("host background asks", func(t *testing.T) {
+		report, err := MustDefaultScanner(Policy{}).Scan(context.Background(), ScanRequest{
+			ToolName:   "exec_command",
+			Backend:    BackendHost,
+			Command:    "go test ./tool/safety",
+			Background: true,
+		})
+		require.NoError(t, err)
+		require.Equal(t, DecisionAsk, report.Decision)
+		require.Equal(t, "host.background_process", report.RuleID)
+	})
+
+	t.Run("relative delete asks instead of critical delete", func(t *testing.T) {
+		scanner := MustDefaultScanner(Policy{
+			DeniedCommands:       []string{},
+			DeniedPaths:          []string{},
+			DisableDefaultDenies: true,
+		})
+		report, err := scanner.Scan(context.Background(), ScanRequest{
+			ToolName: "workspace_exec",
+			Backend:  BackendWorkspace,
+			Command:  "rm build/output.o",
+		})
+		require.NoError(t, err)
+		require.Equal(t, DecisionAsk, report.Decision)
+		require.Equal(t, "command.delete", report.RuleID)
+	})
+}
+
+func TestDefaultScanner_NetworkAndCodeEdges(t *testing.T) {
+	t.Run("network command without URL asks", func(t *testing.T) {
+		report, err := MustDefaultScanner(Policy{}).Scan(context.Background(), ScanRequest{
+			ToolName: "workspace_exec",
+			Backend:  BackendWorkspace,
+			Command:  "curl example.invalid",
+		})
+		require.NoError(t, err)
+		require.Equal(t, DecisionAsk, report.Decision)
+		require.Equal(t, "network.external_tool", report.RuleID)
+	})
+
+	t.Run("ssh without URL denies", func(t *testing.T) {
+		scanner := MustDefaultScanner(Policy{
+			DeniedCommands:       []string{},
+			DeniedPaths:          []string{},
+			DisableDefaultDenies: true,
+		})
+		report, err := scanner.Scan(context.Background(), ScanRequest{
+			ToolName: "workspace_exec",
+			Backend:  BackendWorkspace,
+			Command:  "ssh example.invalid",
+		})
+		require.NoError(t, err)
+		require.Equal(t, DecisionDeny, report.Decision)
+		require.Equal(t, "network.external_tool", report.RuleID)
+	})
+
+	t.Run("external network without strict allowlist asks", func(t *testing.T) {
+		report, err := MustDefaultScanner(Policy{}).Scan(context.Background(), ScanRequest{
+			ToolName: "workspace_exec",
+			Backend:  BackendWorkspace,
+			Command:  "curl https://example.invalid/file",
+		})
+		require.NoError(t, err)
+		require.Equal(t, DecisionAsk, report.Decision)
+		require.Equal(t, "network.external_domain", report.RuleID)
+	})
+
+	t.Run("allowed suffix host is skipped", func(t *testing.T) {
+		report, err := MustDefaultScanner(Policy{
+			NetworkAllowlist: []string{".example.com"},
+		}).Scan(context.Background(), ScanRequest{
+			ToolName: "workspace_exec",
+			Backend:  BackendWorkspace,
+			Command:  "curl https://api.example.com/file",
+		})
+		require.NoError(t, err)
+		require.Equal(t, DecisionAllow, report.Decision)
+	})
+
+	t.Run("code with missing language asks", func(t *testing.T) {
+		report, err := MustDefaultScanner(Policy{}).Scan(context.Background(), ScanRequest{
+			ToolName: "execute_code",
+			Backend:  BackendCodeExec,
+			Code:     "print(1)",
+		})
+		require.NoError(t, err)
+		require.Equal(t, DecisionAsk, report.Decision)
+		require.Equal(t, "codeexec.unsupported_language", report.RuleID)
+	})
+
+	t.Run("python subprocess asks", func(t *testing.T) {
+		report, err := MustDefaultScanner(Policy{}).Scan(context.Background(), ScanRequest{
+			ToolName: "execute_code",
+			Backend:  BackendCodeExec,
+			Language: "python",
+			Code:     "import subprocess\nsubprocess.run(['go', 'version'])",
+		})
+		require.NoError(t, err)
+		require.Equal(t, DecisionAsk, report.Decision)
+		require.Equal(t, "codeexec.subprocess", report.RuleID)
+	})
+
+	t.Run("unsupported language asks", func(t *testing.T) {
+		report, err := MustDefaultScanner(Policy{}).Scan(context.Background(), ScanRequest{
+			ToolName: "execute_code",
+			Backend:  BackendCodeExec,
+			Language: "ruby",
+			Code:     "puts 1",
+		})
+		require.NoError(t, err)
+		require.Equal(t, DecisionAsk, report.Decision)
+		require.Equal(t, "codeexec.unsupported_language", report.RuleID)
+	})
+}
+
+func TestDefaultScanner_HelperEdges(t *testing.T) {
+	require.False(t, deleteTargetIsSystemPath(""))
+	require.False(t, deleteTargetIsSystemPath("-f"))
+	require.True(t, deleteTargetIsSystemPath("."))
+	require.True(t, deleteTargetIsSystemPath(".."))
+	require.True(t, deleteTargetIsSystemPath("~/tmp"))
+	require.True(t, deleteTargetIsSystemPath("/tmp/x"))
+	require.True(t, deleteTargetIsSystemPath(`C:\Windows`))
+	require.False(t, deleteTargetIsSystemPath("build/output.o"))
+
+	n, ok := parseSleepSeconds("2d")
+	require.True(t, ok)
+	require.Equal(t, 172800, n)
+	n, ok = parseSleepSeconds("1500ms")
+	require.True(t, ok)
+	require.Equal(t, 1, n)
+	_, ok = parseSleepSeconds("")
+	require.False(t, ok)
+	_, ok = parseSleepSeconds("bad")
+	require.False(t, ok)
+
+	require.True(t, sensitivePathMatch("foo/.ssh/id_ed25519", "~/.ssh"))
+	require.False(t, sensitivePathMatch("", "~/.ssh"))
+	require.Equal(t, "plain", redactSensitivePath("plain", ""))
+	require.Equal(t, "<redacted>/id_rsa", redactSensitivePath("C:/Users/me/.ssh/id_rsa", `C:\Users\me\.ssh`))
 }
 
 func TestDefaultScanner_RedactsReportCommandAndEvidence(t *testing.T) {
