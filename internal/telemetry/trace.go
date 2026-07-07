@@ -12,6 +12,7 @@
 package telemetry
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -281,7 +282,7 @@ func (r *chatRequestAttributes) appendStringAttribute(
 	slot.valid = true
 	slot.fingerprint = fingerprint
 	slot.rule = rule
-	slot.attrs = append(slot.attrs[:0], attrs[before:]...)
+	slot.attrs = append([]attribute.KeyValue(nil), attrs[before:]...)
 	return attrs
 }
 
@@ -310,6 +311,10 @@ func requestMessagesFingerprint(messages []model.Message) uint64 {
 
 func hashString(h uint64, s string) uint64 {
 	h = hashInt(h, len(s))
+	return hashRawString(h, s)
+}
+
+func hashRawString(h uint64, s string) uint64 {
 	for i := 0; i < len(s); i++ {
 		h ^= uint64(s[i])
 		h *= fnvPrime64
@@ -318,7 +323,12 @@ func hashString(h uint64, s string) uint64 {
 }
 
 func hashBytes(h uint64, b []byte) uint64 {
+	h = hashBool(h, b != nil)
 	h = hashInt(h, len(b))
+	return hashRawBytes(h, b)
+}
+
+func hashRawBytes(h uint64, b []byte) uint64 {
 	for _, c := range b {
 		h ^= uint64(c)
 		h *= fnvPrime64
@@ -334,21 +344,13 @@ func hashBool(h uint64, b bool) uint64 {
 }
 
 func hashInt(h uint64, n int) uint64 {
-	u := uint64(n)
-	for i := 0; i < 8; i++ {
-		h ^= uint64(byte(u >> (i * 8)))
-		h *= fnvPrime64
-	}
-	return h
+	return hashInt64(h, int64(n))
 }
 
 func hashInt64(h uint64, n int64) uint64 {
-	u := uint64(n)
-	for i := 0; i < 8; i++ {
-		h ^= uint64(byte(u >> (i * 8)))
-		h *= fnvPrime64
-	}
-	return h
+	var buf [binary.MaxVarintLen64]byte
+	size := binary.PutVarint(buf[:], n)
+	return hashRawBytes(h, buf[:size])
 }
 
 func hashContentParts(h uint64, parts []model.ContentPart) uint64 {
@@ -437,8 +439,13 @@ func hashToolCalls(h uint64, calls []model.ToolCall) uint64 {
 			h = hashBool(h, false)
 		}
 		if len(call.ExtraFields) > 0 {
-			b, _ := json.Marshal(call.ExtraFields)
-			h = hashBytes(h, b)
+			b, err := json.Marshal(call.ExtraFields)
+			h = hashBool(h, err == nil)
+			if err != nil {
+				h = hashString(h, err.Error())
+			} else {
+				h = hashBytes(h, b)
+			}
 		} else {
 			h = hashInt(h, 0)
 		}

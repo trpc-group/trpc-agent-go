@@ -100,6 +100,55 @@ func TestChatTraceState_ResponseAttributesStillUpdate(t *testing.T) {
 	}
 }
 
+func TestRequestMessagesFingerprint_DistinguishesNilAndEmptyBytes(t *testing.T) {
+	nilArgs := []model.Message{{
+		Role: model.RoleAssistant,
+		ToolCalls: []model.ToolCall{{
+			ID: "call",
+			Function: model.FunctionDefinitionParam{
+				Name: "tool",
+			},
+		}},
+	}}
+	emptyArgs := []model.Message{{
+		Role: model.RoleAssistant,
+		ToolCalls: []model.ToolCall{{
+			ID: "call",
+			Function: model.FunctionDefinitionParam{
+				Name:      "tool",
+				Arguments: []byte{},
+			},
+		}},
+	}}
+
+	if requestMessagesFingerprint(nilArgs) == requestMessagesFingerprint(emptyArgs) {
+		t.Fatal("expected nil and empty byte slices to produce different fingerprints")
+	}
+}
+
+func TestRequestMessagesFingerprint_DistinguishesExtraFieldsMarshalError(t *testing.T) {
+	emptyExtraFields := []model.Message{{
+		Role: model.RoleAssistant,
+		ToolCalls: []model.ToolCall{{
+			ID:          "call",
+			ExtraFields: map[string]any{},
+		}},
+	}}
+	invalidExtraFields := []model.Message{{
+		Role: model.RoleAssistant,
+		ToolCalls: []model.ToolCall{{
+			ID: "call",
+			ExtraFields: map[string]any{
+				"invalid": func() {},
+			},
+		}},
+	}}
+
+	if requestMessagesFingerprint(emptyExtraFields) == requestMessagesFingerprint(invalidExtraFields) {
+		t.Fatal("expected extra field marshal errors to affect the fingerprint")
+	}
+}
+
 func BenchmarkTraceChatStreamingRequestAttributes_NoCache(b *testing.B) {
 	benchmarkTraceChatStreamingRequestAttributes(b, false)
 }
