@@ -16,6 +16,8 @@ import (
 	"errors"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -32,6 +34,45 @@ const (
 	DefaultUnavailableImageURLPlaceholder = "[Image unavailable: the user attached an image here, but the model could not access or decode it. The image content was not observed.]"
 
 	maxUnavailableImageURLRecords = 128
+)
+
+var (
+	urlFailureSignals = []string{
+		"must be",
+		"invalid",
+		"unsupported",
+		"malformed",
+		"scheme",
+		"fetch",
+		"retrieve",
+		"download",
+		"access",
+		"decode",
+		"load",
+		"not-a-url",
+		"not a url",
+		"不符合",
+		"安全要求",
+		"base64",
+		"cos",
+		"下载",
+		"拉取",
+		"访问",
+		"异常",
+		"失败",
+		"无效",
+		"不支持",
+	}
+
+	imageFetchSignals = []string{
+		"fetch",
+		"retrieve",
+		"download",
+		"access",
+		"下载",
+		"拉取",
+		"访问",
+	}
 )
 
 // UnavailableImageURLRecord describes one URL-backed image that should be
@@ -53,33 +94,13 @@ type unavailableImageURLState struct {
 // image URL fetch, access, validation, or decode failure.
 func IsImageURLFailure(err error, respErr *model.ResponseError) bool {
 	text := imageFailureText(err, respErr)
-	if !strings.Contains(text, "image") && !strings.Contains(text, "图片") {
+	if !hasImageSignal(text) {
 		return false
 	}
-	needles := []string{
-		"url",
-		"uri",
-		"fetch",
-		"retrieve",
-		"download",
-		"access",
-		"decode",
-		"invalid",
-		"unsupported",
-		"load",
-		"read",
-		"下载",
-		"异常",
-		"失败",
-		"无效",
-		"不支持",
+	if hasURLSignal(text) {
+		return containsAny(text, urlFailureSignals)
 	}
-	for _, needle := range needles {
-		if strings.Contains(text, needle) {
-			return true
-		}
-	}
-	return false
+	return containsAny(text, imageFetchSignals)
 }
 
 // IsImageURLFailureForRequest reports whether err/respErr should suppress
@@ -95,7 +116,8 @@ func IsImageURLFailureForRequest(
 	if len(requestImageURLs(req)) == 0 {
 		return false
 	}
-	return isURLInputFailure(imageFailureText(err, respErr))
+	text := imageFailureText(err, respErr)
+	return hasURLSignal(text) && containsAny(text, urlFailureSignals)
 }
 
 // MarkUnavailableImageURLsFromRequest records image URLs from req that should
@@ -142,7 +164,6 @@ func MarkUnavailableImageURLsFromRequest(
 	if err != nil {
 		return 0, err
 	}
-	inv.Session.SetState(UnavailableImageURLsStateKey, raw)
 	if inv.SessionService != nil {
 		key := session.Key{
 			AppName:   inv.Session.AppName,
@@ -157,6 +178,7 @@ func MarkUnavailableImageURLsFromRequest(
 			return 0, err
 		}
 	}
+	inv.Session.SetState(UnavailableImageURLsStateKey, raw)
 	return len(urls), nil
 }
 
@@ -273,54 +295,7 @@ func mentionedURLs(urls []string, text string) []string {
 	}
 	var out []string
 	for _, imageURL := range urls {
-		if strings.Contains(text, strings.ToLower(imageURL)) {
-			out = append(out, imageURL)
-		}
-	}
-	return dedupeOrdered(out)
-}
-
-func isURLInputFailure(text string) bool {
-	if !strings.Contains(text, "url") &&
-		!strings.Contains(text, "uri") &&
-		!strings.Contains(text, "图片") {
-		return false
-	}
-	needles := []string{
-		"must be",
-		"invalid",
-		"unsupported",
-		"malformed",
-		"scheme",
-		"fetch",
-		"retrieve",
-		"download",
-		"access",
-		"decode",
-		"load",
-		"read",
-		"下载",
-		"异常",
-		"失败",
-		"无效",
-		"不支持",
-	}
-	for _, needle := range needles {
-		if strings.Contains(text, needle) {
-			return true
-		}
-	}
-	return false
-}
-
-func intersectOrdered(primary, allowed []string) []string {
-	allowedSet := make(map[string]struct{}, len(allowed))
-	for _, imageURL := range allowed {
-		allowedSet[imageURL] = struct{}{}
-	}
-	var out []string
-	for _, imageURL := range primary {
-		if _, ok := allowedSet[imageURL]; ok {
+		if containsURLToken(text, strings.ToLower(imageURL)) {
 			out = append(out, imageURL)
 		}
 	}
@@ -344,6 +319,110 @@ func dedupeOrdered(urls []string) []string {
 		out = append(out, imageURL)
 	}
 	return out
+}
+
+func containsURLToken(text, imageURL string) bool {
+	if text == "" || imageURL == "" {
+		return false
+	}
+	start := 0
+	for {
+		idx := strings.Index(text[start:], imageURL)
+		if idx < 0 {
+			return false
+		}
+		idx += start
+		end := idx + len(imageURL)
+		if isURLTokenBoundaryBefore(text, idx) &&
+			isURLTokenBoundaryAfter(text, end) {
+			return true
+		}
+		start = idx + 1
+	}
+}
+
+func isURLTokenBoundaryBefore(text string, idx int) bool {
+	if idx <= 0 {
+		return true
+	}
+	r, _ := utf8.DecodeLastRuneInString(text[:idx])
+	return isURLTokenBoundaryRune(r)
+}
+
+func isURLTokenBoundaryAfter(text string, idx int) bool {
+	if idx >= len(text) {
+		return true
+	}
+	r, _ := utf8.DecodeRuneInString(text[idx:])
+	return isURLTokenBoundaryRune(r)
+}
+
+func isURLTokenBoundaryRune(r rune) bool {
+	if unicode.IsSpace(r) || unicode.IsControl(r) {
+		return true
+	}
+	switch r {
+	case '"', '\'', '`', '<', '>', '(', ')', '[', ']', '{', '}', ',', ';':
+		return true
+	default:
+		return false
+	}
+}
+
+func hasImageSignal(text string) bool {
+	return strings.Contains(text, "image") || strings.Contains(text, "图片")
+}
+
+func hasURLSignal(text string) bool {
+	return strings.Contains(text, "url") ||
+		containsWordSignal(text, "uri") ||
+		containsWordSignal(text, "link") ||
+		strings.Contains(text, "链接") ||
+		strings.Contains(text, "地址")
+}
+
+func containsAny(text string, needles []string) bool {
+	for _, needle := range needles {
+		if strings.Contains(text, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsWordSignal(text, word string) bool {
+	if text == "" || word == "" {
+		return false
+	}
+	start := 0
+	for {
+		idx := strings.Index(text[start:], word)
+		if idx < 0 {
+			return false
+		}
+		idx += start
+		end := idx + len(word)
+		if isWordBoundaryBefore(text, idx) && isWordBoundaryAfter(text, end) {
+			return true
+		}
+		start = idx + 1
+	}
+}
+
+func isWordBoundaryBefore(text string, idx int) bool {
+	if idx <= 0 {
+		return true
+	}
+	r, _ := utf8.DecodeLastRuneInString(text[:idx])
+	return !unicode.IsLetter(r) && !unicode.IsNumber(r)
+}
+
+func isWordBoundaryAfter(text string, idx int) bool {
+	if idx >= len(text) {
+		return true
+	}
+	r, _ := utf8.DecodeRuneInString(text[idx:])
+	return !unicode.IsLetter(r) && !unicode.IsNumber(r)
 }
 
 func readUnavailableImageURLState(sess *session.Session) unavailableImageURLState {
