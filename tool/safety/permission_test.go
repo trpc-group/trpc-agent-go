@@ -108,6 +108,99 @@ func TestPermissionPolicy_CodeExecInvalidArgumentsAsk(t *testing.T) {
 	require.Equal(t, "tool.arguments_invalid", observed.RuleID)
 }
 
+func TestPermissionPolicy_ScannerErrorStillAuditsAndObserves(t *testing.T) {
+	var observed Report
+	var audit bytes.Buffer
+	policy := NewPermissionPolicy(
+		ScannerFunc(func(context.Context, ScanRequest) (Report, error) {
+			return Report{}, errors.New("scanner unavailable")
+		}),
+		WithAuditWriter(NewJSONLAuditWriter(&audit)),
+		WithReportObserver(func(_ context.Context, report Report) {
+			observed = report
+		}),
+	)
+	decision, err := policy.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:  "workspace_exec",
+		Arguments: []byte(`{"command":"go test ./..."}`),
+	})
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionDeny, decision.Action)
+	require.Equal(t, "scanner.error", observed.RuleID)
+	require.Contains(t, audit.String(), `"rule_id":"scanner.error"`)
+}
+
+func TestPermissionPolicy_UsesBackendResolverAndNilFallbacks(t *testing.T) {
+	allowPolicy := NewPermissionPolicy(nil)
+	decision, err := allowPolicy.CheckToolPermission(context.Background(), nil)
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionAllow, decision.Action)
+
+	var observed Report
+	policy := NewPermissionPolicy(
+		ScannerFunc(func(_ context.Context, req ScanRequest) (Report, error) {
+			return Report{
+				ToolName:       req.ToolName,
+				Backend:        req.Backend,
+				Decision:       DecisionAsk,
+				RiskLevel:      RiskMedium,
+				RuleID:         "test.ask",
+				Recommendation: "review",
+				Blocked:        true,
+			}, nil
+		}),
+		WithBackendResolver(func(*tool.PermissionRequest) Backend {
+			return BackendSandbox
+		}),
+		WithReportObserver(func(_ context.Context, report Report) {
+			observed = report
+		}),
+	)
+	decision, err = policy.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:  "custom",
+		Arguments: []byte(`{"x":1}`),
+	})
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionAsk, decision.Action)
+	require.Equal(t, BackendSandbox, observed.Backend)
+}
+
+func TestPermissionHelpers(t *testing.T) {
+	require.Equal(t, tool.PermissionActionAllow, permissionDecisionForReport(Report{Decision: DecisionAllow}).Action)
+	require.Equal(t, tool.PermissionActionDeny, permissionDecisionForReport(Report{Decision: DecisionDeny}).Action)
+	require.Equal(t, tool.PermissionActionAsk, permissionDecisionForReport(Report{Decision: DecisionNeedsHumanReview}).Action)
+	require.Equal(t, string(tool.PermissionActionDeny), permissionAction(DecisionDeny))
+	require.Equal(t, string(tool.PermissionActionAsk), permissionAction(DecisionNeedsHumanReview))
+	require.Equal(t, string(tool.PermissionActionAllow), permissionAction(DecisionAllow))
+	require.Equal(t, BackendUnknown, defaultBackendResolver(nil))
+	require.Empty(t, PermissionReason(Report{Decision: DecisionAllow}))
+	require.NotEmpty(t, PermissionReason(Report{
+		Decision:       DecisionAsk,
+		RiskLevel:      RiskMedium,
+		RuleID:         "x",
+		Backend:        BackendHost,
+		Recommendation: "token=abc123\nretry",
+	}))
+}
+
+func TestJSONLAuditWriter_NilCancelledAndShortWrite(t *testing.T) {
+	require.NoError(t, (*JSONLAuditWriter)(nil).WriteAuditEvent(context.Background(), AuditEvent{}))
+	require.NoError(t, NewJSONLAuditWriter(nil).WriteAuditEvent(context.Background(), AuditEvent{}))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.ErrorIs(t, NewJSONLAuditWriter(&bytes.Buffer{}).WriteAuditEvent(ctx, AuditEvent{}), context.Canceled)
+
+	err := NewJSONLAuditWriter(shortWriter{}).WriteAuditEvent(context.Background(), AuditEvent{})
+	require.Error(t, err)
+}
+
+type shortWriter struct{}
+
+func (shortWriter) Write(p []byte) (int, error) {
+	return len(p) - 1, nil
+}
+
 func TestPermissionPolicy_AuditStrictKeepsBlockedDecision(t *testing.T) {
 	var observed Report
 	policy := NewPermissionPolicy(

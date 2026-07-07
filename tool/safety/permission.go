@@ -131,7 +131,22 @@ func (p *permissionPolicy) CheckToolPermission(
 	for i, scanReq := range scanReqs {
 		report, err := p.scanner.Scan(ctx, scanReq)
 		if err != nil {
-			return tool.PermissionDecision{}, err
+			failure := Report{
+				ToolName:       scanReq.ToolName,
+				ToolCallID:     scanReq.ToolCallID,
+				Backend:        scanReq.Backend,
+				Command:        scanReq.Command,
+				Decision:       DecisionDeny,
+				RiskLevel:      RiskHigh,
+				RuleID:         "scanner.error",
+				Evidence:       err.Error(),
+				Recommendation: "fix scanner errors before tool execution",
+				Blocked:        true,
+			}
+			if i == 0 || reportRank(failure) > reportRank(final) {
+				final = failure
+			}
+			return p.finish(ctx, final)
 		}
 		if i == 0 || reportRank(report) > reportRank(final) {
 			final = report

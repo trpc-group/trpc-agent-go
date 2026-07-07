@@ -94,7 +94,7 @@ func (s *DefaultScanner) scanRequest(ctx context.Context, req ScanRequest) []Fin
 		findings = append(findings, s.scanCommand(req)...)
 	case req.Code != "":
 		findings = append(findings, s.scanCode(req)...)
-	case len(req.Arguments) > 0:
+	case len(req.RawArguments) > 0:
 		findings = append(findings, s.scanUnknownArguments(req)...)
 	}
 	if req.TimeoutSec > 0 && s.policy.MaxTimeoutSec > 0 &&
@@ -182,6 +182,21 @@ func (s *DefaultScanner) scanSize(req ScanRequest) []Finding {
 func (s *DefaultScanner) scanEnv(env map[string]string) []Finding {
 	var findings []Finding
 	for key, value := range env {
+		if len(s.policy.EnvAllowlist) > 0 && !s.envAllowed(key) {
+			decision := DecisionAsk
+			risk := RiskMedium
+			if strings.HasPrefix(strings.ToLower(key), "ld_") ||
+				strings.EqualFold(key, "path") {
+				risk = RiskHigh
+			}
+			findings = append(findings, Finding{
+				RuleID:         "env.not_allowlisted",
+				RiskLevel:      risk,
+				Decision:       decision,
+				Evidence:       key,
+				Recommendation: "add the variable to env_allowlist or remove it from the tool environment",
+			})
+		}
 		if looksSecretName(key) || containsSecret(value) {
 			findings = append(findings, Finding{
 				RuleID:         "secret.env_value",
@@ -218,7 +233,14 @@ func (s *DefaultScanner) scanCommand(req ScanRequest) []Finding {
 	if req.Stdin != "" {
 		stdinReq := req
 		stdinReq.Command = req.Stdin
-		stdinFindings := s.scanTextForUnknownRisk(stdinReq, req.Stdin)
+		stdinReq.Stdin = ""
+		stdinFindings := s.scanCommand(stdinReq)
+		textReq := req
+		textReq.Command = ""
+		stdinFindings = append(
+			stdinFindings,
+			s.scanTextForUnknownRisk(textReq, req.Stdin)...,
+		)
 		for i := range stdinFindings {
 			if req.Backend == BackendHost && stdinFindings[i].Decision == DecisionAsk {
 				stdinFindings[i].Decision = DecisionDeny
@@ -293,9 +315,7 @@ func (s *DefaultScanner) scanDangerousDelete(cmd string, argv []string) []Findin
 		cmd != "format" {
 		return nil
 	}
-	joined := strings.Join(argv[1:], " ")
-	if strings.Contains(joined, "-rf") || strings.Contains(joined, "-fr") ||
-		strings.Contains(joined, "/") || strings.Contains(joined, "\\") {
+	if deleteArgsAreDangerous(argv[1:]) {
 		return []Finding{{
 			RuleID:         "command.dangerous_delete",
 			RiskLevel:      RiskCritical,
@@ -368,7 +388,7 @@ func (s *DefaultScanner) scanNetwork(cmd string, argv []string) []Finding {
 		}
 		if isPrivateHost(host) {
 			rule = "network.private_address"
-			if decision == DecisionDeny {
+			if decision != DecisionDeny {
 				decision = DecisionAsk
 			}
 		}
@@ -399,7 +419,7 @@ func (s *DefaultScanner) scanDependencyInstall(cmd string, argv []string) []Find
 func (s *DefaultScanner) scanResourceAbuse(cmd string, argv []string) []Finding {
 	var findings []Finding
 	if cmd == "sleep" && len(argv) > 1 {
-		if n, err := strconv.Atoi(argv[1]); err == nil &&
+		if n, ok := parseSleepSeconds(argv[1]); ok &&
 			s.policy.MaxTimeoutSec > 0 && n > s.policy.MaxTimeoutSec {
 			decision := DecisionAsk
 			risk := RiskHigh
@@ -416,10 +436,8 @@ func (s *DefaultScanner) scanResourceAbuse(cmd string, argv []string) []Finding 
 			})
 		}
 	}
-	joined := strings.ToLower(strings.Join(argv, " "))
 	if cmd == "yes" ||
-		(strings.Contains(joined, "yes") &&
-			strings.Contains(joined, "head")) {
+		(hasExactArg(argv, "yes") && hasExactArg(argv, "head")) {
 		findings = append(findings, Finding{
 			RuleID:         "resource.large_output",
 			RiskLevel:      RiskHigh,
@@ -482,7 +500,7 @@ func (s *DefaultScanner) scanCode(req ScanRequest) []Finding {
 }
 
 func (s *DefaultScanner) scanUnknownArguments(req ScanRequest) []Finding {
-	return s.scanTextForUnknownRisk(req, string(req.Arguments))
+	return s.scanTextForUnknownRisk(req, string(req.RawArguments))
 }
 
 func (s *DefaultScanner) scanTextForUnknownRisk(req ScanRequest, text string) []Finding {
@@ -509,35 +527,98 @@ func (s *DefaultScanner) scanTextForUnknownRisk(req ScanRequest, text string) []
 			Redacted:       true,
 		})
 	}
-	if req.Backend == BackendUnknown &&
-		(strings.Contains(lower, "download") || strings.Contains(lower, "curl ") ||
-			strings.Contains(lower, "wget ") || strings.Contains(lower, "http://") ||
-			strings.Contains(lower, "https://")) {
-		findings = append(findings, Finding{
-			RuleID:         "unknown.requires_review",
+	directTextInput := req.Command == ""
+	if containsDownloaderOrURL(lower) {
+		if req.Backend == BackendUnknown {
+			findings = append(findings, Finding{
+				RuleID:         "unknown.requires_review",
+				RiskLevel:      RiskHigh,
+				Decision:       DecisionNeedsHumanReview,
+				Evidence:       "unknown tool contains downloader or URL-like content",
+				Recommendation: "review unknown open-world tools before execution",
+			})
+		} else if directTextInput && (req.Backend == BackendHost || req.Backend == BackendCodeExec) {
+			findings = append(findings, s.scanTextNetwork(text)...)
+		}
+	}
+	if containsDangerousCommandText(lower) {
+		switch req.Backend {
+		case BackendUnknown:
+			findings = append(findings, Finding{
+				RuleID:         "unknown.dangerous_command",
+				RiskLevel:      RiskCritical,
+				Decision:       DecisionNeedsHumanReview,
+				Evidence:       "unknown tool contains dangerous command-like content",
+				Recommendation: "review unknown open-world tools before execution",
+			})
+		case BackendHost, BackendCodeExec:
+			if !directTextInput {
+				break
+			}
+			findings = append(findings, Finding{
+				RuleID:         "command.dangerous_text",
+				RiskLevel:      RiskCritical,
+				Decision:       DecisionAsk,
+				Evidence:       "text contains dangerous command-like content",
+				Recommendation: "review generated stdin or code before execution",
+			})
+		}
+	}
+	if s.textMentionsDeniedPath(text) {
+		if req.Backend == BackendUnknown {
+			findings = append(findings, Finding{
+				RuleID:         "unknown.sensitive_path",
+				RiskLevel:      RiskCritical,
+				Decision:       DecisionNeedsHumanReview,
+				Evidence:       "<redacted>",
+				Recommendation: "review unknown tools that reference credential or secret paths",
+				Redacted:       true,
+			})
+		} else if directTextInput && (req.Backend == BackendHost || req.Backend == BackendCodeExec) {
+			findings = append(findings, Finding{
+				RuleID:         "path.sensitive_credentials",
+				RiskLevel:      RiskCritical,
+				Decision:       DecisionDeny,
+				Evidence:       "<redacted>",
+				Recommendation: "do not pass credential or secret paths through execution inputs",
+				Redacted:       true,
+			})
+		}
+	}
+	return findings
+}
+
+func (s *DefaultScanner) scanTextNetwork(text string) []Finding {
+	hosts := extractHosts(text)
+	if len(hosts) == 0 {
+		return []Finding{{
+			RuleID:         "network.external_tool",
 			RiskLevel:      RiskHigh,
-			Decision:       DecisionNeedsHumanReview,
-			Evidence:       "unknown tool contains downloader or URL-like content",
-			Recommendation: "review unknown open-world tools before execution",
-		})
+			Decision:       DecisionAsk,
+			Evidence:       "text contains network-capable command",
+			Recommendation: "review generated network access before execution",
+		}}
 	}
-	if req.Backend == BackendUnknown && containsDangerousCommandText(lower) {
+	var findings []Finding
+	for _, host := range hosts {
+		if s.hostAllowed(host) {
+			continue
+		}
+		decision := DecisionAsk
+		rule := "network.external_domain"
+		if len(s.policy.NetworkAllowlist) > 0 {
+			decision = DecisionDeny
+			rule = "network.non_allowlisted_domain"
+		}
+		if isPrivateHost(host) {
+			rule = "network.private_address"
+		}
 		findings = append(findings, Finding{
-			RuleID:         "unknown.dangerous_command",
-			RiskLevel:      RiskCritical,
-			Decision:       DecisionNeedsHumanReview,
-			Evidence:       "unknown tool contains dangerous command-like content",
-			Recommendation: "review unknown open-world tools before execution",
-		})
-	}
-	if req.Backend == BackendUnknown && s.textMentionsDeniedPath(text) {
-		findings = append(findings, Finding{
-			RuleID:         "unknown.sensitive_path",
-			RiskLevel:      RiskCritical,
-			Decision:       DecisionNeedsHumanReview,
-			Evidence:       "<redacted>",
-			Recommendation: "review unknown tools that reference credential or secret paths",
-			Redacted:       true,
+			RuleID:         rule,
+			RiskLevel:      RiskHigh,
+			Decision:       decision,
+			Evidence:       host,
+			Recommendation: "add the host to network_allowlist or require human review",
 		})
 	}
 	return findings
@@ -696,6 +777,15 @@ func (s *DefaultScanner) hostAllowed(host string) bool {
 	return false
 }
 
+func (s *DefaultScanner) envAllowed(key string) bool {
+	for _, allowed := range s.policy.EnvAllowlist {
+		if key == allowed || strings.EqualFold(key, allowed) {
+			return true
+		}
+	}
+	return false
+}
+
 func isPrivateHost(host string) bool {
 	if host == "localhost" {
 		return true
@@ -814,6 +904,81 @@ var dangerousCommandTextTokens = map[string]struct{}{
 func containsDangerousCommandText(lower string) bool {
 	return containsAnySubstring(lower, dangerousCommandTextSubstrings) ||
 		containsDangerousCommandToken(lower)
+}
+
+func containsDownloaderOrURL(lower string) bool {
+	return strings.Contains(lower, "download") ||
+		strings.Contains(lower, "curl ") ||
+		strings.Contains(lower, "wget ") ||
+		strings.Contains(lower, "http://") ||
+		strings.Contains(lower, "https://")
+}
+
+func deleteArgsAreDangerous(args []string) bool {
+	for _, arg := range args {
+		if deleteFlagIsRecursive(arg) || deleteTargetIsSystemPath(arg) {
+			return true
+		}
+	}
+	return false
+}
+
+func deleteFlagIsRecursive(arg string) bool {
+	arg = strings.ToLower(strings.TrimSpace(arg))
+	return strings.Contains(arg, "-rf") ||
+		strings.Contains(arg, "-fr") ||
+		strings.Contains(arg, "--recursive") ||
+		(strings.HasPrefix(arg, "-") && strings.Contains(arg, "r"))
+}
+
+func deleteTargetIsSystemPath(arg string) bool {
+	arg = strings.Trim(strings.TrimSpace(arg), `"'`)
+	if arg == "" || strings.HasPrefix(arg, "-") {
+		return false
+	}
+	slashed := filepath.ToSlash(arg)
+	lower := strings.ToLower(slashed)
+	if lower == "." || lower == ".." || strings.HasPrefix(lower, "~/") {
+		return true
+	}
+	if filepath.IsAbs(arg) || strings.HasPrefix(lower, "/") {
+		return true
+	}
+	if len(lower) >= 3 && lower[1] == ':' && lower[2] == '/' {
+		return true
+	}
+	return false
+}
+
+func parseSleepSeconds(raw string) (int, bool) {
+	raw = strings.TrimSpace(strings.ToLower(raw))
+	if raw == "" {
+		return 0, false
+	}
+	if n, err := strconv.Atoi(raw); err == nil {
+		return n, true
+	}
+	if strings.HasSuffix(raw, "d") {
+		n, err := strconv.Atoi(strings.TrimSuffix(raw, "d"))
+		if err != nil {
+			return 0, false
+		}
+		return n * 24 * 60 * 60, true
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		return 0, false
+	}
+	return int(d.Seconds()), true
+}
+
+func hasExactArg(argv []string, want string) bool {
+	for _, arg := range argv {
+		if normalizeCommand(arg) == want {
+			return true
+		}
+	}
+	return false
 }
 
 func containsAnySubstring(text string, substrings []string) bool {

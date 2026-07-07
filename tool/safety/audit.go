@@ -11,7 +11,6 @@ package safety
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"io"
 	"sync"
 	"time"
@@ -94,15 +93,4 @@ func auditEventFromReport(report Report) AuditEvent {
 		Redacted:         report.Redacted,
 		Recommendation:   report.Recommendation,
 	}
-}
-
-type failingAuditWriter struct {
-	err error
-}
-
-func (w failingAuditWriter) WriteAuditEvent(context.Context, AuditEvent) error {
-	if w.err != nil {
-		return w.err
-	}
-	return errors.New("audit write failed")
 }

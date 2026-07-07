@@ -40,6 +40,7 @@ type Policy struct {
 	AllowedCommands         []string         `json:"allowed_commands" yaml:"allowed_commands"`
 	DeniedCommands          []string         `json:"denied_commands" yaml:"denied_commands"`
 	DeniedPaths             []string         `json:"denied_paths" yaml:"denied_paths"`
+	DisableDefaultDenies    bool             `json:"disable_default_denies" yaml:"disable_default_denies"`
 	NetworkAllowlist        []string         `json:"network_allowlist" yaml:"network_allowlist"`
 	MaxTimeoutSec           int              `json:"max_timeout_sec" yaml:"max_timeout_sec"`
 	MaxOutputBytes          int64            `json:"max_output_bytes" yaml:"max_output_bytes"`
@@ -84,12 +85,13 @@ func (p Policy) WithDefaults() Policy {
 	if p.AllowedCommands != nil {
 		d.AllowedCommands = cleanStringList(p.AllowedCommands)
 	}
-	if p.DeniedCommands != nil {
+	if p.DeniedCommands != nil && (len(cleanStringList(p.DeniedCommands)) > 0 || p.DisableDefaultDenies) {
 		d.DeniedCommands = cleanStringList(p.DeniedCommands)
 	}
-	if p.DeniedPaths != nil {
+	if p.DeniedPaths != nil && (len(cleanStringList(p.DeniedPaths)) > 0 || p.DisableDefaultDenies) {
 		d.DeniedPaths = cleanStringList(p.DeniedPaths)
 	}
+	d.DisableDefaultDenies = p.DisableDefaultDenies
 	if p.NetworkAllowlist != nil {
 		d.NetworkAllowlist = cleanStringList(p.NetworkAllowlist)
 	}
@@ -155,6 +157,15 @@ func (p Policy) Validate() error {
 	}
 	if p.MaxScriptBytes < 0 {
 		return fmt.Errorf("max_script_bytes must be >= 0")
+	}
+	if p.DisableDefaultDenies {
+		return nil
+	}
+	if len(p.DeniedCommands) == 0 {
+		return fmt.Errorf("denied_commands cannot be empty unless disable_default_denies is true")
+	}
+	if len(p.DeniedPaths) == 0 {
+		return fmt.Errorf("denied_paths cannot be empty unless disable_default_denies is true")
 	}
 	return nil
 }

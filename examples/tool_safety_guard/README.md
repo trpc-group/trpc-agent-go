@@ -16,12 +16,12 @@ The example demonstrates:
 go run .
 ```
 
-The command writes generated outputs next to the policy file:
+The command writes outputs next to the policy file:
 
 - `tool_safety_report.json`
 - `tool_safety_audit.jsonl`
 
-These generated files are verification artifacts and do not need to be committed. The checked-in input for the example is `tool_safety_policy.yaml`.
+The checked-in JSON and JSONL files are intentional reference samples for CI and reviewers. Running the example locally regenerates them, so review any diff before committing.
 
 Expected stdout includes decisions for safe and risky samples:
 
@@ -52,7 +52,7 @@ After `go run .`, confirm generated reports do not contain raw sensitive sample 
 grep -E '~/.ssh|id_rsa|\.env' tool_safety_report.json tool_safety_audit.jsonl
 ```
 
-The grep command should print no matches. If you do not want to keep the generated artifacts locally, remove them after verification:
+The grep command should print no matches. If you are only experimenting locally, reset or remove regenerated artifacts after verification:
 
 ```bash
 rm -f tool_safety_report.json tool_safety_audit.jsonl

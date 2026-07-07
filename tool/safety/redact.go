@@ -14,7 +14,10 @@ import (
 )
 
 var secretPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)(api[_-]?key|token|password|passwd|secret)\s*[:=]\s*["']?[^"'\s]+`),
+	regexp.MustCompile(`(?i)(api[_-]?key|token|password|passwd|secret)\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s]+)`),
+	regexp.MustCompile(`(?i)(authorization\s*:\s*bearer)\s+[A-Za-z0-9._~+/-]+=*`),
+	regexp.MustCompile(`\bAKIA[0-9A-Z]{16}\b`),
+	regexp.MustCompile(`\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b`),
 	regexp.MustCompile(`(?i)(sk-[A-Za-z0-9_-]{16,})`),
 	regexp.MustCompile(`(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----`),
 }
@@ -62,5 +65,8 @@ func looksSecretName(s string) bool {
 		strings.Contains(name, "secret") ||
 		strings.Contains(name, "api_key") ||
 		strings.Contains(name, "apikey") ||
-		strings.Contains(name, "private_key")
+		strings.Contains(name, "private_key") ||
+		strings.Contains(name, "authorization") ||
+		strings.Contains(name, "bearer") ||
+		strings.Contains(name, "aws_access_key")
 }

@@ -77,7 +77,7 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(*reportPath, append(b, '\n'), 0o644)
+	return os.WriteFile(*reportPath, append(b, '\n'), 0o600)
 }
 
 func auditEvent(report safety.Report) safety.AuditEvent {
@@ -201,7 +201,7 @@ func samples() []sample {
 			Name: "human_review_custom",
 			Req: safety.ScanRequest{
 				ToolName: "custom_downloader", Backend: safety.BackendUnknown,
-				Arguments: []byte(`{"text":"download https://example.invalid/a.sh"}`),
+				RawArguments: []byte(`{"text":"download https://example.invalid/a.sh"}`),
 			},
 		},
 	}

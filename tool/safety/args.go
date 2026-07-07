@@ -34,20 +34,21 @@ func RequestsFromToolCall(
 		return parseWriteStdinArgs(toolName, toolCallID, backend, args, metadata)
 	case "workspace_kill_session", "kill_session":
 		return []ScanRequest{{
-			ToolName:   toolName,
-			ToolCallID: toolCallID,
-			Backend:    backend,
-			Metadata:   metadata,
+			ToolName:     toolName,
+			ToolCallID:   toolCallID,
+			Backend:      backend,
+			RawArguments: append([]byte(nil), args...),
+			Metadata:     metadata,
 		}}, nil
 	case "execute_code":
 		return parseCodeExecArgs(toolName, toolCallID, backend, args, metadata)
 	default:
 		return []ScanRequest{{
-			ToolName:   toolName,
-			ToolCallID: toolCallID,
-			Backend:    backend,
-			Arguments:  append([]byte(nil), args...),
-			Metadata:   metadata,
+			ToolName:     toolName,
+			ToolCallID:   toolCallID,
+			Backend:      backend,
+			RawArguments: append([]byte(nil), args...),
+			Metadata:     metadata,
 		}}, nil
 	}
 }
@@ -77,24 +78,50 @@ func parseExecArgs(
 	if err := json.Unmarshal(args, &raw); err != nil {
 		return nil, fmt.Errorf("invalid args: %w", err)
 	}
-	command := stringField(raw, "command")
+	command, err := stringField(raw, "command")
+	if err != nil {
+		return nil, err
+	}
 	if strings.TrimSpace(command) == "" {
 		return nil, fmt.Errorf("command is required")
 	}
-	timeout := intField(raw, "timeout_sec", "timeoutSec", "timeout")
+	timeout, err := intField(raw, "timeout_sec", "timeoutSec", "timeout")
+	if err != nil {
+		return nil, err
+	}
+	cwd, err := stringField(raw, cwdField)
+	if err != nil {
+		return nil, err
+	}
+	env, err := stringMapField(raw, "env")
+	if err != nil {
+		return nil, err
+	}
+	stdin, err := stringField(raw, "stdin")
+	if err != nil {
+		return nil, err
+	}
+	background, err := boolField(raw, "background")
+	if err != nil {
+		return nil, err
+	}
+	tty, err := boolAnyField(raw, "tty", "pty")
+	if err != nil {
+		return nil, err
+	}
 	req := ScanRequest{
-		ToolName:   toolName,
-		ToolCallID: toolCallID,
-		Backend:    backend,
-		Command:    command,
-		Cwd:        stringField(raw, cwdField),
-		Env:        stringMapField(raw, "env"),
-		Stdin:      stringField(raw, "stdin"),
-		TimeoutSec: timeout,
-		Background: boolField(raw, "background"),
-		TTY:        boolField(raw, "tty") || boolField(raw, "pty"),
-		Arguments:  append([]byte(nil), args...),
-		Metadata:   metadata,
+		ToolName:     toolName,
+		ToolCallID:   toolCallID,
+		Backend:      backend,
+		Command:      command,
+		Cwd:          cwd,
+		Env:          env,
+		Stdin:        stdin,
+		TimeoutSec:   timeout,
+		Background:   background,
+		TTY:          tty,
+		RawArguments: append([]byte(nil), args...),
+		Metadata:     metadata,
 	}
 	return []ScanRequest{req}, nil
 }
@@ -109,25 +136,31 @@ func parseWriteStdinArgs(
 	if err := json.Unmarshal(args, &raw); err != nil {
 		return nil, fmt.Errorf("invalid args: %w", err)
 	}
-	chars := stringField(raw, "chars")
-	submit := boolField(raw, "append_newline") || boolField(raw, "submit")
+	chars, err := stringField(raw, "chars")
+	if err != nil {
+		return nil, err
+	}
+	submit, err := boolAnyField(raw, "append_newline", "submit")
+	if err != nil {
+		return nil, err
+	}
 	if chars == "" && !submit {
 		return []ScanRequest{{
-			ToolName:   toolName,
-			ToolCallID: toolCallID,
-			Backend:    backend,
-			Arguments:  append([]byte(nil), args...),
-			Metadata:   metadata,
+			ToolName:     toolName,
+			ToolCallID:   toolCallID,
+			Backend:      backend,
+			RawArguments: append([]byte(nil), args...),
+			Metadata:     metadata,
 		}}, nil
 	}
 	return []ScanRequest{{
-		ToolName:   toolName,
-		ToolCallID: toolCallID,
-		Backend:    backend,
-		Command:    chars,
-		Stdin:      chars,
-		Arguments:  append([]byte(nil), args...),
-		Metadata:   metadata,
+		ToolName:     toolName,
+		ToolCallID:   toolCallID,
+		Backend:      backend,
+		Command:      chars,
+		Stdin:        chars,
+		RawArguments: append([]byte(nil), args...),
+		Metadata:     metadata,
 	}}, nil
 }
 
@@ -161,13 +194,13 @@ func parseCodeExecArgs(
 	reqs := make([]ScanRequest, 0, len(blocks))
 	for _, block := range blocks {
 		reqs = append(reqs, ScanRequest{
-			ToolName:   toolName,
-			ToolCallID: toolCallID,
-			Backend:    backend,
-			Language:   block.Language,
-			Code:       block.Code,
-			Arguments:  append([]byte(nil), args...),
-			Metadata:   metadata,
+			ToolName:     toolName,
+			ToolCallID:   toolCallID,
+			Backend:      backend,
+			Language:     block.Language,
+			Code:         block.Code,
+			RawArguments: append([]byte(nil), args...),
+			Metadata:     metadata,
 		})
 	}
 	return reqs, nil
@@ -205,40 +238,63 @@ func unmarshalCodeBlocks(raw json.RawMessage) ([]codeBlock, error) {
 	}
 }
 
-func stringField(raw map[string]json.RawMessage, key string) string {
+func stringField(raw map[string]json.RawMessage, key string) (string, error) {
 	var out string
 	if b, ok := raw[key]; ok {
-		_ = json.Unmarshal(b, &out)
+		if err := json.Unmarshal(b, &out); err != nil {
+			return "", fmt.Errorf("%s: expected string: %w", key, err)
+		}
 	}
-	return out
+	return out, nil
 }
 
-func stringMapField(raw map[string]json.RawMessage, key string) map[string]string {
+func stringMapField(raw map[string]json.RawMessage, key string) (map[string]string, error) {
 	var out map[string]string
 	if b, ok := raw[key]; ok {
-		_ = json.Unmarshal(b, &out)
+		if err := json.Unmarshal(b, &out); err != nil {
+			return nil, fmt.Errorf("%s: expected string map: %w", key, err)
+		}
 	}
-	return out
+	return out, nil
 }
 
-func intField(raw map[string]json.RawMessage, keys ...string) int {
+func intField(raw map[string]json.RawMessage, keys ...string) (int, error) {
 	for _, key := range keys {
 		b, ok := raw[key]
 		if !ok {
 			continue
 		}
 		var out int
-		if err := json.Unmarshal(b, &out); err == nil {
-			return out
+		if err := json.Unmarshal(b, &out); err != nil {
+			return 0, fmt.Errorf("%s: expected integer: %w", key, err)
 		}
+		return out, nil
 	}
-	return 0
+	return 0, nil
 }
 
-func boolField(raw map[string]json.RawMessage, key string) bool {
+func boolField(raw map[string]json.RawMessage, key string) (bool, error) {
 	var out bool
 	if b, ok := raw[key]; ok {
-		_ = json.Unmarshal(b, &out)
+		if err := json.Unmarshal(b, &out); err != nil {
+			return false, fmt.Errorf("%s: expected boolean: %w", key, err)
+		}
 	}
-	return out
+	return out, nil
+}
+
+func boolAnyField(raw map[string]json.RawMessage, keys ...string) (bool, error) {
+	for _, key := range keys {
+		if _, ok := raw[key]; !ok {
+			continue
+		}
+		value, err := boolField(raw, key)
+		if err != nil {
+			return false, err
+		}
+		if value {
+			return true, nil
+		}
+	}
+	return false, nil
 }

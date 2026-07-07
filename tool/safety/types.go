@@ -49,6 +49,16 @@ const (
 	RiskCritical RiskLevel = "critical"
 )
 
+// Valid reports whether r is a supported risk level.
+func (r RiskLevel) Valid() bool {
+	switch r {
+	case RiskLow, RiskMedium, RiskHigh, RiskCritical:
+		return true
+	default:
+		return false
+	}
+}
+
 // Backend identifies the execution surface being scanned.
 type Backend string
 
@@ -61,23 +71,33 @@ const (
 	BackendUnknown   Backend = "unknown"
 )
 
+// Valid reports whether b is a supported backend.
+func (b Backend) Valid() bool {
+	switch b {
+	case BackendWorkspace, BackendHost, BackendCodeExec, BackendSandbox, BackendUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
 // ScanRequest describes one pending tool call or script execution.
 type ScanRequest struct {
-	ToolName   string            `json:"tool_name"`
-	ToolCallID string            `json:"tool_call_id,omitempty"`
-	Backend    Backend           `json:"backend"`
-	Command    string            `json:"command,omitempty"`
-	Args       []string          `json:"args,omitempty"`
-	Cwd        string            `json:"cwd,omitempty"`
-	Env        map[string]string `json:"env,omitempty"`
-	Stdin      string            `json:"stdin,omitempty"`
-	TimeoutSec int               `json:"timeout_sec,omitempty"`
-	Background bool              `json:"background,omitempty"`
-	TTY        bool              `json:"tty,omitempty"`
-	Language   string            `json:"language,omitempty"`
-	Code       string            `json:"code,omitempty"`
-	Arguments  []byte            `json:"-"`
-	Metadata   map[string]any    `json:"metadata,omitempty"`
+	ToolName     string            `json:"tool_name"`
+	ToolCallID   string            `json:"tool_call_id,omitempty"`
+	Backend      Backend           `json:"backend"`
+	Command      string            `json:"command,omitempty"`
+	Args         []string          `json:"args,omitempty"`
+	Cwd          string            `json:"cwd,omitempty"`
+	Env          map[string]string `json:"env,omitempty"`
+	Stdin        string            `json:"stdin,omitempty"`
+	TimeoutSec   int               `json:"timeout_sec,omitempty"`
+	Background   bool              `json:"background,omitempty"`
+	TTY          bool              `json:"tty,omitempty"`
+	Language     string            `json:"language,omitempty"`
+	Code         string            `json:"code,omitempty"`
+	RawArguments []byte            `json:"-"`
+	Metadata     map[string]any    `json:"metadata,omitempty"`
 }
 
 // Finding describes one scanner finding.
