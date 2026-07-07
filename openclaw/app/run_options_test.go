@@ -836,6 +836,7 @@ gateway:
   allow_users: ["u1","u2"]
   require_mention: true
   mention_patterns: ["@bot"]
+  max_body_bytes: 33554432
 
 channels:
   - type: "telegram"
@@ -1003,6 +1004,7 @@ memory:
 	require.Equal(t, "u1,u2", opts.AllowUsers)
 	require.True(t, opts.RequireMention)
 	require.Equal(t, "@bot", opts.Mention)
+	require.Equal(t, int64(33554432), opts.GatewayMaxBodyBytes)
 
 	require.Len(t, opts.Channels, 1)
 	require.Equal(t, telegramChannelType, opts.Channels[0].Type)
