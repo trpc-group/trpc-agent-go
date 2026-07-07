@@ -17,6 +17,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/datatypes"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
@@ -343,7 +344,7 @@ func TestService_Tools_enabledAndHidden(t *testing.T) {
 func TestService_SearchMemories_maxResults(t *testing.T) {
 	ctx := context.Background()
 	db := testDB(t)
-	svc, err := NewService(db, WithMaxSearchResults(1))
+	svc, err := NewService(db, WithMaxResults(1))
 	require.NoError(t, err)
 	defer svc.Close()
 
@@ -405,7 +406,7 @@ func TestService_rowsToEntries_invalidJSON(t *testing.T) {
 		MemoryID:   "corrupt-id",
 		AppName:    uk.AppName,
 		UserID:     uk.UserID,
-		MemoryData: []byte("not-valid-json"),
+		MemoryData: datatypes.JSON("not-valid-json"),
 		CreatedAt:  now,
 		UpdatedAt:  now,
 	}).Error)
@@ -436,7 +437,7 @@ func TestService_WithExtractor_startsWorker(t *testing.T) {
 func TestRowsToEntries(t *testing.T) {
 	now := time.Now()
 	valid, err := rowsToEntries([]memoryRow{{
-		MemoryData: []byte(`{"id":"1","app_name":"app","user_id":"u","memory":{"memory":"hello"},"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}`),
+		MemoryData: datatypes.JSON(`{"id":"1","app_name":"app","user_id":"u","memory":{"memory":"hello"},"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}`),
 		CreatedAt:  now,
 		UpdatedAt:  now,
 	}})
@@ -444,7 +445,7 @@ func TestRowsToEntries(t *testing.T) {
 	require.Len(t, valid, 1)
 	assert.Equal(t, "hello", valid[0].Memory.Memory)
 
-	_, err = rowsToEntries([]memoryRow{{MemoryData: []byte("{")}})
+	_, err = rowsToEntries([]memoryRow{{MemoryData: datatypes.JSON("{")}})
 	require.Error(t, err)
 
 	empty, err := rowsToEntries(nil)

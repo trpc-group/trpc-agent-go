@@ -17,6 +17,7 @@ import (
 	"slices"
 	"time"
 
+	"gorm.io/datatypes"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
@@ -31,7 +32,7 @@ var _ memory.Service = (*Service)(nil)
 // Storage structure matches memory/postgres:
 //
 //	Table: memories (configurable)
-//	Columns: memory_id, app_name, user_id, memory_data (JSONB), created_at, updated_at, deleted_at.
+//	Columns: memory_id, app_name, user_id, memory_data (JSON), created_at, updated_at, deleted_at.
 //	Primary Key: memory_id.
 //	Index: (app_name, user_id).
 type Service struct {
@@ -46,6 +47,8 @@ type Service struct {
 
 // NewService creates a new GORM memory service using a shared *gorm.DB.
 // The caller owns the database lifecycle; Close does not close the DB.
+// Connection construction may move to a future storage/gorm helper; this package
+// focuses on memory semantics over an already-open GORM handle.
 func NewService(db *gorm.DB, options ...ServiceOpt) (*Service, error) {
 	if db == nil {
 		return nil, fmt.Errorf("gorm memory service requires a non-nil *gorm.DB")
@@ -147,7 +150,7 @@ func (s *Service) AddMemory(ctx context.Context, userKey memory.UserKey, memoryS
 		MemoryID:   entry.ID,
 		AppName:    userKey.AppName,
 		UserID:     userKey.UserID,
-		MemoryData: memoryData,
+		MemoryData: datatypes.JSON(memoryData),
 		CreatedAt:  now,
 		UpdatedAt:  now,
 	}
