@@ -544,16 +544,19 @@ func (s *DefaultScanner) scanTextForUnknownRisk(req ScanRequest, text string) []
 
 func buildReport(req ScanRequest, findings []Finding, dur time.Duration) Report {
 	report := Report{
-		ToolName:   req.ToolName,
-		ToolCallID: req.ToolCallID,
-		Backend:    req.Backend,
-		Command:    req.Command,
-		Decision:   DecisionAllow,
-		RiskLevel:  RiskLow,
-		Blocked:    false,
-		Findings:   findings,
-		Duration:   dur,
-		DurationMS: dur.Milliseconds(),
+		ToolName:       req.ToolName,
+		ToolCallID:     req.ToolCallID,
+		Backend:        req.Backend,
+		Command:        req.Command,
+		Decision:       DecisionAllow,
+		RiskLevel:      RiskLow,
+		RuleID:         "evaluation.none",
+		Evidence:       "no findings",
+		Recommendation: "no action required",
+		Blocked:        false,
+		Findings:       findings,
+		Duration:       dur,
+		DurationMS:     dur.Milliseconds(),
 	}
 	for _, f := range findings {
 		if findingRank(f) > reportRank(report) {

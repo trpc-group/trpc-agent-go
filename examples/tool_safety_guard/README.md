@@ -26,7 +26,7 @@ These generated files are verification artifacts and do not need to be committed
 Expected stdout includes decisions for safe and risky samples:
 
 ```text
-safe_go_test               decision=allow              risk=low      rule=
+safe_go_test               decision=allow              risk=low      rule=evaluation.none
 dangerous_rm_rf            decision=deny               risk=critical rule=command.dangerous_delete
 dependency_install         decision=ask                risk=high     rule=dependency.install
 human_review_custom        decision=needs_human_review risk=high     rule=unknown.requires_review

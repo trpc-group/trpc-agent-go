@@ -6,6 +6,9 @@
     "command": "go test ./...",
     "decision": "allow",
     "risk_level": "low",
+    "rule_id": "evaluation.none",
+    "evidence": "no findings",
+    "recommendation": "no action required",
     "blocked": false,
     "redacted": false,
     "duration_ms": 0
@@ -126,6 +129,9 @@
     "command": "curl https://proxy.golang.org",
     "decision": "allow",
     "risk_level": "low",
+    "rule_id": "evaluation.none",
+    "evidence": "no findings",
+    "recommendation": "no action required",
     "blocked": false,
     "redacted": false,
     "duration_ms": 0
@@ -184,6 +190,9 @@
     "command": "echo ok | wc -c",
     "decision": "allow",
     "risk_level": "low",
+    "rule_id": "evaluation.none",
+    "evidence": "no findings",
+    "recommendation": "no action required",
     "blocked": false,
     "redacted": false,
     "duration_ms": 0

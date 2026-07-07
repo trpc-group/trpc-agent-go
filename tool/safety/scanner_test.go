@@ -36,6 +36,7 @@ func TestDefaultScanner_AcceptanceCases(t *testing.T) {
 				Command: "go test ./...",
 			},
 			decision: DecisionAllow,
+			ruleID:   "evaluation.none",
 		},
 		{
 			name: "dangerous_rm_rf",
@@ -80,6 +81,7 @@ func TestDefaultScanner_AcceptanceCases(t *testing.T) {
 				Command: "curl https://proxy.golang.org",
 			},
 			decision: DecisionAllow,
+			ruleID:   "evaluation.none",
 		},
 		{
 			name: "shell_wrapper_bypass",
@@ -106,6 +108,7 @@ func TestDefaultScanner_AcceptanceCases(t *testing.T) {
 				Command: "echo ok | wc -c",
 			},
 			decision: DecisionAllow,
+			ruleID:   "evaluation.none",
 		},
 		{
 			name: "dependency_install",
@@ -197,6 +200,8 @@ func TestDefaultScanner_AcceptanceCases(t *testing.T) {
 			require.Equal(t, tc.ruleID, report.RuleID)
 			require.Equal(t, tc.blocked, report.Blocked)
 			require.Equal(t, tc.redacted, report.Redacted)
+			require.NotEmpty(t, report.Evidence)
+			require.NotEmpty(t, report.Recommendation)
 		})
 	}
 }
