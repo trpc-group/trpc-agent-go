@@ -12,6 +12,7 @@ package gorm
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -89,6 +90,22 @@ func TestDefaultClientBuilder_MissingDialector(t *testing.T) {
 	_, err := GetClientBuilder()(context.Background())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "dialector is required")
+}
+
+func TestRegisterGormInstance_Concurrent(t *testing.T) {
+	const workers = 16
+	done := make(chan struct{}, workers)
+	for i := 0; i < workers; i++ {
+		go func(n int) {
+			name := fmt.Sprintf("concurrent-%d", n%4)
+			RegisterGormInstance(name, WithInstanceName(name))
+			_, _ = GetGormInstance(name)
+			done <- struct{}{}
+		}(i)
+	}
+	for i := 0; i < workers; i++ {
+		<-done
+	}
 }
 
 func TestClientBuilderOpts_WithExtraOptions(t *testing.T) {
