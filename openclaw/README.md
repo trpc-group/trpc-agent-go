@@ -1541,6 +1541,11 @@ OpenClaw supports these extension points:
 - **Gateway run options**: pass `app.WithGatewayRunOptions(...)` or
   `app.WithGatewayRunOptionResolver(...)` from a custom binary to inject
   request-scoped `agent.RunOption` values.
+- **Durable request context**: set
+  `gwproto.MessageRequest.RequestSessionContextPrompt` to persist one context
+  message before the current user turn, or use
+  `app.WithGatewayRunOptionResolver(...)` with
+  `agent.WithSessionContextSource(...)` for append-only snapshot/update context.
 - **Skills**: no Go code needed; point `skills.extra_dirs` at a folder.
 
 For a step-by-step plugin authoring guide (with copy-paste templates),

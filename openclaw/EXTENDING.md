@@ -638,7 +638,41 @@ This is useful for request-scoped controls such as:
 
 - request-scoped server tools via `agent.WithAdditionalTools`
 - temporary runtime state via `agent.MergeRuntimeState`
+- durable request context via `agent.WithSessionContextMessages` or
+  `agent.WithSessionContextSource`
 - per-request instruction or model controls
+
+For the common case where a channel only needs to persist one text block before
+the current user message, set `gwproto.MessageRequest.RequestSessionContextPrompt`.
+OpenClaw stores that prompt in the session transcript immediately before the
+current user turn. This differs from `RequestLateContextPrompt`, which is only
+injected into the current model request and is not persisted.
+
+When a channel owns structured runtime state and wants append-only
+snapshot/update behavior, pass that state through `MessageRequest.Extensions`
+and translate it inside a gateway run option resolver:
+
+```go
+app.WithGatewayRunOptionResolver(func(
+    ctx context.Context,
+    input app.GatewayRunOptionInput,
+) (context.Context, []agent.RunOption, error) {
+    raw := input.Extensions["my_product.runtime_state"]
+    if len(raw) == 0 {
+        return ctx, nil, nil
+    }
+    state, err := decodeRuntimeState(raw)
+    if err != nil {
+        return ctx, nil, err
+    }
+    return ctx, []agent.RunOption{
+        agent.WithSessionContextSource(
+            "my_product_runtime_state",
+            buildRuntimeStateSource(state),
+        ),
+    }, nil
+})
+```
 
 For request-scoped tools, keep the OpenClaw server as the execution boundary.
 Convert channel-specific extension data into server-side `tool.Tool` values and

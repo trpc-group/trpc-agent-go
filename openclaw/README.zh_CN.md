@@ -1278,6 +1278,11 @@ OpenClaw 支持以下扩展点：
   `app.WithGatewayRunOptions(...)` 或
   `app.WithGatewayRunOptionResolver(...)`，为每个请求注入
   `agent.RunOption`。
+- **持久化请求上下文**：设置
+  `gwproto.MessageRequest.RequestSessionContextPrompt`，可在当前用户消息前
+  持久写入一条上下文；如果需要 append-only snapshot/update 上下文，可通过
+  `app.WithGatewayRunOptionResolver(...)` 接入
+  `agent.WithSessionContextSource(...)`。
 - **Skills**：无需 Go 代码；将 `skills.extra_dirs` 指向一个文件夹。
 
 有关插件编写的分步指南（含复制粘贴模板），参见 `openclaw/EXTENDING.md`。

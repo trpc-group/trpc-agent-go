@@ -453,8 +453,9 @@ type RequestSummary struct {
 	MessageID string `json:"message_id,omitempty"`
 	Text      string `json:"text,omitempty"`
 
-	RequestSystemPrompt      string `json:"request_system_prompt,omitempty"`
-	RequestLateContextPrompt string `json:"request_late_context_prompt,omitempty"`
+	RequestSystemPrompt         string `json:"request_system_prompt,omitempty"`
+	RequestSessionContextPrompt string `json:"request_session_context_prompt,omitempty"`
+	RequestLateContextPrompt    string `json:"request_late_context_prompt,omitempty"`
 
 	UserID    string `json:"user_id,omitempty"`
 	SessionID string `json:"session_id,omitempty"`
@@ -508,6 +509,9 @@ func SummarizeRequest(
 		Text:      strings.TrimSpace(req.Text),
 		RequestSystemPrompt: strings.TrimSpace(
 			req.RequestSystemPrompt,
+		),
+		RequestSessionContextPrompt: strings.TrimSpace(
+			req.RequestSessionContextPrompt,
 		),
 		RequestLateContextPrompt: strings.TrimSpace(
 			req.RequestLateContextPrompt,
