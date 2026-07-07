@@ -374,7 +374,7 @@ func TestDefaultScanner_NetworkAndCodeEdges(t *testing.T) {
 		})
 		require.NoError(t, err)
 		require.Equal(t, DecisionAsk, report.Decision)
-		require.Equal(t, "network.external_tool", report.RuleID)
+		require.Equal(t, "network.external_domain", report.RuleID)
 	})
 
 	t.Run("ssh without URL denies", func(t *testing.T) {
@@ -391,6 +391,31 @@ func TestDefaultScanner_NetworkAndCodeEdges(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, DecisionDeny, report.Decision)
 		require.Equal(t, "network.external_tool", report.RuleID)
+	})
+
+	t.Run("schemeless network host obeys strict allowlist", func(t *testing.T) {
+		report, err := MustDefaultScanner(Policy{
+			NetworkAllowlist: []string{"proxy.golang.org"},
+		}).Scan(context.Background(), ScanRequest{
+			ToolName: "workspace_exec",
+			Backend:  BackendWorkspace,
+			Command:  "curl example.invalid",
+		})
+		require.NoError(t, err)
+		require.Equal(t, DecisionDeny, report.Decision)
+		require.Equal(t, "network.non_allowlisted_domain", report.RuleID)
+	})
+
+	t.Run("schemeless allowlisted suffix host is skipped", func(t *testing.T) {
+		report, err := MustDefaultScanner(Policy{
+			NetworkAllowlist: []string{".example.com"},
+		}).Scan(context.Background(), ScanRequest{
+			ToolName: "workspace_exec",
+			Backend:  BackendWorkspace,
+			Command:  "curl api.example.com",
+		})
+		require.NoError(t, err)
+		require.Equal(t, DecisionAllow, report.Decision)
 	})
 
 	t.Run("external network without strict allowlist asks", func(t *testing.T) {
@@ -461,6 +486,13 @@ func TestDefaultScanner_HelperEdges(t *testing.T) {
 	require.True(t, deleteTargetIsSystemPath("/tmp/x"))
 	require.True(t, deleteTargetIsSystemPath(`C:\Windows`))
 	require.False(t, deleteTargetIsSystemPath("build/output.o"))
+	require.True(t, deleteFlagIsRecursive("-r"))
+	require.True(t, deleteFlagIsRecursive("-rf"))
+	require.True(t, deleteFlagIsRecursive("-fr"))
+	require.True(t, deleteFlagIsRecursive("--recursive"))
+	require.False(t, deleteFlagIsRecursive("--force"))
+	require.False(t, deleteFlagIsRecursive("--verbose"))
+	require.False(t, deleteFlagIsRecursive("-force"))
 
 	n, ok := parseSleepSeconds("2d")
 	require.True(t, ok)

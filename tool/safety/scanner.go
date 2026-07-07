@@ -361,7 +361,7 @@ func (s *DefaultScanner) scanNetwork(cmd string, argv []string) []Finding {
 		return nil
 	}
 	text := strings.Join(argv, " ")
-	hosts := extractHosts(text)
+	hosts := extractNetworkHosts(cmd, argv)
 	if len(hosts) == 0 {
 		decision := DecisionAsk
 		if cmd == "nc" || cmd == "netcat" || cmd == "ssh" || cmd == "scp" {
@@ -382,6 +382,10 @@ func (s *DefaultScanner) scanNetwork(cmd string, argv []string) []Finding {
 		}
 		decision := DecisionAsk
 		rule := "network.external_domain"
+		if isHighRiskNetworkCommand(cmd) {
+			decision = DecisionDeny
+			rule = "network.external_tool"
+		}
 		if len(s.policy.NetworkAllowlist) > 0 {
 			decision = DecisionDeny
 			rule = "network.non_allowlisted_domain"
@@ -741,18 +745,118 @@ func isNetworkCommand(cmd string) bool {
 	}
 }
 
+func isHighRiskNetworkCommand(cmd string) bool {
+	switch cmd {
+	case "nc", "netcat", "ssh", "scp":
+		return true
+	default:
+		return false
+	}
+}
+
 var urlLikePattern = regexp.MustCompile(`(?i)\b(?:https?|ftp)://[^\s"'<>]+`)
 
 func extractHosts(text string) []string {
+	seen := make(map[string]struct{})
 	var hosts []string
 	for _, raw := range urlLikePattern.FindAllString(text, -1) {
 		u, err := url.Parse(raw)
 		if err != nil || u.Hostname() == "" {
 			continue
 		}
-		hosts = append(hosts, strings.ToLower(u.Hostname()))
+		hosts = appendHost(hosts, seen, u.Hostname())
 	}
 	return hosts
+}
+
+func extractNetworkHosts(cmd string, argv []string) []string {
+	seen := make(map[string]struct{})
+	var hosts []string
+	hosts = appendHosts(hosts, seen, extractHosts(strings.Join(argv, " "))...)
+	for _, arg := range argv[1:] {
+		host, ok := networkArgHost(cmd, arg)
+		if !ok {
+			continue
+		}
+		hosts = appendHost(hosts, seen, host)
+	}
+	return hosts
+}
+
+func networkArgHost(cmd, arg string) (string, bool) {
+	arg = strings.Trim(strings.TrimSpace(arg), `"'`)
+	if arg == "" || strings.HasPrefix(arg, "-") {
+		return "", false
+	}
+	if strings.Contains(arg, "://") {
+		u, err := url.Parse(arg)
+		if err != nil || u.Hostname() == "" {
+			return "", false
+		}
+		return u.Hostname(), true
+	}
+	switch cmd {
+	case "curl", "wget":
+		if host, _, ok := strings.Cut(arg, "/"); ok {
+			arg = host
+		}
+	case "ssh", "scp":
+		if userHost, _, ok := strings.Cut(arg, ":"); ok {
+			arg = userHost
+		}
+		if _, host, ok := strings.Cut(arg, "@"); ok {
+			arg = host
+		}
+	case "nc", "netcat":
+	}
+	arg = strings.TrimSuffix(arg, ".")
+	if !looksLikeHost(arg) {
+		return "", false
+	}
+	return arg, true
+}
+
+func appendHosts(hosts []string, seen map[string]struct{}, values ...string) []string {
+	for _, host := range values {
+		hosts = appendHost(hosts, seen, host)
+	}
+	return hosts
+}
+
+func appendHost(hosts []string, seen map[string]struct{}, host string) []string {
+	host = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
+	if host == "" {
+		return hosts
+	}
+	if _, ok := seen[host]; ok {
+		return hosts
+	}
+	seen[host] = struct{}{}
+	return append(hosts, host)
+}
+
+func looksLikeHost(s string) bool {
+	if s == "localhost" || net.ParseIP(s) != nil {
+		return true
+	}
+	if strings.ContainsAny(s, ":/\\") {
+		return false
+	}
+	parts := strings.Split(s, ".")
+	if len(parts) < 2 {
+		return false
+	}
+	for _, part := range parts {
+		if part == "" {
+			return false
+		}
+		for _, r := range part {
+			if !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '-' {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func (s *DefaultScanner) hostAllowed(host string) bool {
@@ -925,10 +1029,22 @@ func deleteArgsAreDangerous(args []string) bool {
 
 func deleteFlagIsRecursive(arg string) bool {
 	arg = strings.ToLower(strings.TrimSpace(arg))
-	return strings.Contains(arg, "-rf") ||
-		strings.Contains(arg, "-fr") ||
-		strings.Contains(arg, "--recursive") ||
-		(strings.HasPrefix(arg, "-") && strings.Contains(arg, "r"))
+	if arg == "--recursive" {
+		return true
+	}
+	if strings.HasPrefix(arg, "--") || !strings.HasPrefix(arg, "-") {
+		return false
+	}
+	flags := strings.TrimLeft(arg, "-")
+	if flags == "" {
+		return false
+	}
+	for _, r := range flags {
+		if !strings.ContainsRune("dfirpv", r) {
+			return false
+		}
+	}
+	return strings.ContainsRune(flags, 'r')
 }
 
 func deleteTargetIsSystemPath(arg string) bool {
@@ -936,7 +1052,7 @@ func deleteTargetIsSystemPath(arg string) bool {
 	if arg == "" || strings.HasPrefix(arg, "-") {
 		return false
 	}
-	slashed := filepath.ToSlash(arg)
+	slashed := strings.ReplaceAll(filepath.ToSlash(arg), `\`, "/")
 	lower := strings.ToLower(slashed)
 	if lower == "." || lower == ".." || strings.HasPrefix(lower, "~/") {
 		return true
