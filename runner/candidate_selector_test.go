@@ -111,6 +111,29 @@ func TestCandidateSelectorAgent_NewAttemptInvocationMemoryReader(t *testing.T) {
 		require.Nil(t, attempt.MemoryService)
 		require.Same(t, reader, attempt.MemoryReader)
 	})
+
+	t.Run("prefers wrapped memory service over explicit reader", func(t *testing.T) {
+		memSvc := &mockMemoryServiceForAutoMemory{}
+		explicitReader := &mockMemoryReaderIngestor{}
+		base := agent.NewInvocation(
+			agent.WithInvocationAgent(&candidateScriptAgent{name: "base"}),
+			agent.WithInvocationMessage(model.NewUserMessage("question")),
+			agent.WithInvocationMemoryService(memSvc),
+			agent.WithInvocationMemoryReader(explicitReader),
+		)
+
+		attempt := selectorAgent.newAttemptInvocation(
+			base,
+			session.NewSession("app", "user", "attempt"),
+			sessioninmemory.NewSessionService(),
+		)
+
+		reader, ok := attempt.MemoryReader.(*readOnlyMemoryService)
+		require.True(t, ok)
+		require.Same(t, memSvc, reader.base)
+		require.Same(t, attempt.MemoryService, attempt.MemoryReader)
+		require.NotSame(t, explicitReader, attempt.MemoryReader)
+	})
 }
 
 func TestRunnerCandidateSelector_AttemptSessionReadsOwnOverlay(t *testing.T) {
