@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -47,4 +48,13 @@ func TestGormMemoryService_sharedDB(t *testing.T) {
 	results, err := svc.SearchMemories(ctx, uk, "hiking")
 	require.NoError(t, err)
 	require.NotEmpty(t, results)
+}
+
+func TestRedactDSN(t *testing.T) {
+	t.Parallel()
+	redacted := redactDSN("postgres://user:pass@localhost:5432/app?sslmode=disable")
+	assert.NotContains(t, redacted, "pass")
+	assert.Contains(t, redacted, "user:")
+	assert.Contains(t, redacted, "@localhost:5432")
+	assert.Equal(t, "not-a-url", redactDSN("not-a-url"))
 }
