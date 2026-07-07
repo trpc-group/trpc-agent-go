@@ -24,6 +24,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
+	"trpc.group/trpc-go/trpc-agent-go/internal/imageinput"
 	"trpc.group/trpc-go/trpc-agent-go/internal/util/message"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -766,6 +767,84 @@ func TestContentRequestProcessor_getIncrementMessages_ProjectsEvents(
 	messages := p.getIncrementMessages(inv, time.Time{})
 	assert.Len(t, messages, 1)
 	assert.Equal(t, "Projected: hello", messages[0].Content)
+}
+
+func TestContentRequestProcessor_getIncrementMessages_ProjectsFailedImageURL(
+	t *testing.T,
+) {
+	const (
+		imageURL    = "https://example.invalid/image.png"
+		placeholder = "[Image unavailable]"
+	)
+	msg := model.NewUserMessage("look at this")
+	msg.AddImageURL(imageURL, "auto")
+	evt := event.NewResponseEvent(
+		"invocation-id",
+		"user",
+		&model.Response{
+			Choices: []model.Choice{{Message: msg}},
+		},
+	)
+	sess := &session.Session{Events: []event.Event{*evt}}
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationMessage(msg),
+		agent.WithInvocationEventFilterKey("test-filter"),
+	)
+	_, err := imageinput.MarkUnavailableImageURLsFromRequest(
+		context.Background(),
+		inv,
+		&model.Request{Messages: []model.Message{msg}},
+		assert.AnError,
+	)
+	require.NoError(t, err)
+
+	p := NewContentRequestProcessor(
+		WithImageURLFailureContinuation(true),
+		WithImageURLFailureContinuationPlaceholder(placeholder),
+	)
+	messages := p.getIncrementMessages(inv, time.Time{})
+
+	require.Len(t, messages, 1)
+	require.Len(t, messages[0].ContentParts, 1)
+	require.NotNil(t, messages[0].ContentParts[0].Text)
+	assert.Equal(t, placeholder, *messages[0].ContentParts[0].Text)
+	assert.Equal(t, model.ContentTypeImage, sess.Events[0].Choices[0].Message.ContentParts[0].Type)
+}
+
+func TestContentRequestProcessor_ImageURLFailureContinuationCanBeDisabled(
+	t *testing.T,
+) {
+	const imageURL = "https://example.invalid/image.png"
+	msg := model.NewUserMessage("look at this")
+	msg.AddImageURL(imageURL, "auto")
+	evt := event.NewResponseEvent(
+		"invocation-id",
+		"user",
+		&model.Response{
+			Choices: []model.Choice{{Message: msg}},
+		},
+	)
+	sess := &session.Session{Events: []event.Event{*evt}}
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationMessage(msg),
+		agent.WithInvocationEventFilterKey("test-filter"),
+	)
+	_, err := imageinput.MarkUnavailableImageURLsFromRequest(
+		context.Background(),
+		inv,
+		&model.Request{Messages: []model.Message{msg}},
+		assert.AnError,
+	)
+	require.NoError(t, err)
+
+	p := NewContentRequestProcessor(WithImageURLFailureContinuation(false))
+	messages := p.getIncrementMessages(inv, time.Time{})
+
+	require.Len(t, messages, 1)
+	require.Len(t, messages[0].ContentParts, 1)
+	assert.Equal(t, model.ContentTypeImage, messages[0].ContentParts[0].Type)
 }
 
 func TestContentRequestProcessor_getIncrementMessages_DropsReasoningOnlyAssistant(

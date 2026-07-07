@@ -28,6 +28,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
 	iflow "trpc.group/trpc-go/trpc-agent-go/internal/flow"
+	"trpc.group/trpc-go/trpc-agent-go/internal/imageinput"
 	"trpc.group/trpc-go/trpc-agent-go/internal/util/message"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
@@ -226,6 +227,12 @@ type ContentRequestProcessor struct {
 	// EventMessageProjector rewrites one event-derived message before it
 	// is appended to the model request.
 	EventMessageProjector EventMessageProjector
+	// ImageURLFailureContinuation replaces session-marked unavailable image URLs
+	// with a text placeholder in later model-facing request views.
+	ImageURLFailureContinuation bool
+	// ImageURLFailureContinuationPlaceholder overrides the unavailable image URL
+	// placeholder when ImageURLFailureContinuation is enabled.
+	ImageURLFailureContinuationPlaceholder string
 	// ContextCompactionConfig controls request-side historical tool-result
 	// compaction before messages are sent to the model.
 	ContextCompactionConfig ContextCompactionConfig
@@ -472,6 +479,22 @@ func WithEventMessageProjector(
 ) ContentOption {
 	return func(p *ContentRequestProcessor) {
 		p.EventMessageProjector = projector
+	}
+}
+
+// WithImageURLFailureContinuation controls whether session-marked unavailable
+// image URLs are replaced before messages are appended to later requests.
+func WithImageURLFailureContinuation(enabled bool) ContentOption {
+	return func(p *ContentRequestProcessor) {
+		p.ImageURLFailureContinuation = enabled
+	}
+}
+
+// WithImageURLFailureContinuationPlaceholder sets the placeholder used for
+// session-marked unavailable image URLs. Empty keeps the default placeholder.
+func WithImageURLFailureContinuationPlaceholder(placeholder string) ContentOption {
+	return func(p *ContentRequestProcessor) {
+		p.ImageURLFailureContinuationPlaceholder = placeholder
 	}
 }
 
@@ -1903,10 +1926,20 @@ func (p *ContentRequestProcessor) projectEventMessage(
 	evt event.Event,
 	msg model.Message,
 ) model.Message {
-	if p == nil || p.EventMessageProjector == nil {
+	if p == nil {
 		return msg
 	}
-	return p.EventMessageProjector(inv, evt, msg)
+	if p.EventMessageProjector != nil {
+		msg = p.EventMessageProjector(inv, evt, msg)
+	}
+	if p.ImageURLFailureContinuation && inv != nil {
+		msg = imageinput.ProjectUnavailableImageURLs(
+			inv.Session,
+			msg,
+			p.ImageURLFailureContinuationPlaceholder,
+		)
+	}
+	return msg
 }
 
 // getCurrentInvocationMessages gets messages only from the current invocation.

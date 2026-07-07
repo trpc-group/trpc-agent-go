@@ -134,6 +134,49 @@ model := openai.New("deepseek-v4-flash",
 // Other platform configurations are similar, only need to modify model name, BaseURL and APIKey, no additional fields needed.
 ```
 
+### Continuing After Model-Side Image URL Failures
+
+URL-backed images can fail at the model service even when the agent runtime can
+reach them. The framework does not download, validate, proxy, or store images
+for the application. That belongs in the business layer, because the agent
+runtime's network reachability is not the same as the model provider's
+reachability.
+
+LLM agents keep image URL failure continuation disabled by default.
+Applications that want later same-session turns to continue can enable it
+explicitly. When a model call then fails with an image URL
+fetch/access/decode-style error, the framework records the matching URL-backed
+image inputs in session state. Later requests in the same session replace those
+image parts with a text placeholder before sending the model request, while
+leaving the original persisted user event unchanged. The failed model call is
+not retried; the option only affects later turns.
+
+```go
+agent := llmagent.New(
+    "vision-agent",
+    llmagent.WithModel(openai.New(os.Getenv("MODEL_NAME"))),
+    llmagent.WithImageURLFailureContinuation(true),
+    llmagent.WithImageURLFailureContinuationPlaceholder(
+        "[Image unavailable: the model could not access the earlier image URL.]",
+    ),
+)
+```
+
+Leave the behavior disabled when your application wants to handle all failed
+image URLs itself:
+
+```go
+agent := llmagent.New(
+    "vision-agent",
+    llmagent.WithModel(openai.New(os.Getenv("MODEL_NAME"))),
+)
+```
+
+This continuation behavior is intentionally narrow: it only reacts to model
+errors that look image-related and only changes later model-facing request
+views. It does not repair the URL, fetch the image, or remove the original
+event from the session.
+
 ## Core Interface Design
 
 ### Model Interface
