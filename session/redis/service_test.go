@@ -1058,6 +1058,43 @@ func TestService_DeleteSession_WithEvents(t *testing.T) {
 	assert.Nil(t, deletedSess)
 }
 
+func TestService_WithDisableScriptCache(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	// WithDisableScriptCache forces every Lua script to run via EVAL instead of
+	// the default EVALSHA-first Script.Run. Exercise a full session round-trip to
+	// make sure the EVAL path is functionally identical: AppendEvent runs
+	// luaAppendEvent and GetSession runs luaLoadSessionData, both via EVAL here.
+	service, err := NewService(
+		WithRedisClientURL(redisURL),
+		WithDisableScriptCache(true),
+	)
+	require.NoError(t, err)
+	defer service.Close()
+
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "s1"}
+
+	sess, err := service.CreateSession(ctx, key, session.StateMap{"k": []byte("v")})
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+
+	evt := createTestEvent("e1", "agent", "hello", time.Now(), true)
+	require.NoError(t, service.AppendEvent(ctx, sess, evt))
+
+	got, err := service.GetSession(ctx, key)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, []byte("v"), got.State["k"])
+	require.Len(t, got.Events, 1)
+	assert.Equal(t, "e1", got.Events[0].ID)
+
+	sessions, err := service.ListSessions(ctx, session.UserKey{AppName: "app", UserID: "u1"})
+	require.NoError(t, err)
+	assert.Len(t, sessions, 1)
+}
+
 // setupTestRedis creates a miniredis instance and returns its URL and cleanup function.
 func setupTestRedis(t *testing.T) (string, func()) {
 	t.Helper()

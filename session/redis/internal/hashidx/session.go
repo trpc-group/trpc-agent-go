@@ -34,6 +34,11 @@ type Config struct {
 	// on the user session index.
 	// When false (default), no index is maintained and ListSessions falls back to SCAN.
 	EnableUserSessionIndex bool
+	// DisableScriptCache runs all Lua scripts via EVAL instead of the default
+	// EVALSHA-first Script.Run. Enable for proxy/cluster backends whose script
+	// cache is not reliably maintained (e.g. a Tendis cluster fronted by twemproxy),
+	// avoiding repeated NOSCRIPT round-trips and the resulting monitoring noise.
+	DisableScriptCache bool
 }
 
 // Client implements HashIdx session storage logic.
@@ -50,6 +55,21 @@ func NewClient(client redis.UniversalClient, cfg Config) *Client {
 		keys:   newKeyBuilder(cfg.KeyPrefix),
 		cfg:    cfg,
 	}
+}
+
+// runScript executes a Lua script against the redis client. By default it uses
+// Script.Run (EVALSHA first, with automatic EVAL fallback on NOSCRIPT). When
+// cfg.DisableScriptCache is set it uses Script.Eval directly, sending the full
+// script body every time and skipping EVALSHA — suited to proxy/cluster backends
+// whose script cache is not reliably kept (e.g. a Tendis cluster fronted by
+// twemproxy, which recommends EVAL over EVALSHA).
+func (c *Client) runScript(
+	ctx context.Context, script *redis.Script, keys []string, args ...interface{},
+) *redis.Cmd {
+	if c.cfg.DisableScriptCache {
+		return script.Eval(ctx, c.client, keys, args...)
+	}
+	return script.Run(ctx, c.client, keys, args...)
 }
 
 // sessionMeta is the session metadata structure for HashIdx.
@@ -247,7 +267,7 @@ func (c *Client) loadSessionDataViaLua(
 		c.keys.UserStateKey(key.AppName, key.UserID),
 	}
 
-	raw, err := luaLoadSessionData.Run(ctx, c.client, keys).Text()
+	raw, err := c.runScript(ctx, luaLoadSessionData, keys).Text()
 	if err != nil {
 		return nil, err
 	}
@@ -350,7 +370,7 @@ func (c *Client) AppendEvent(ctx context.Context, key session.Key, evt *event.Ev
 		boolToInt(shouldStoreEvent),
 	}
 
-	result, err := luaAppendEvent.Run(ctx, c.client, keys, args...).Int()
+	result, err := c.runScript(ctx, luaAppendEvent, keys, args...).Int()
 	if err != nil {
 		return fmt.Errorf("append event: %w", err)
 	}
@@ -393,7 +413,7 @@ func (c *Client) DeleteSession(ctx context.Context, key session.Key) error {
 			return err
 		}
 	} else {
-		if _, err := luaDeleteSessionLegacy.Run(ctx, c.client, keys).Result(); err != nil {
+		if _, err := c.runScript(ctx, luaDeleteSessionLegacy, keys).Result(); err != nil {
 			return fmt.Errorf("delete session: %w", err)
 		}
 	}
@@ -411,7 +431,7 @@ func (c *Client) TrimConversations(ctx context.Context, key session.Key, count i
 		c.keys.EventTimeIndexKey(key),
 	}
 
-	result, err := luaTrimConversations.Run(ctx, c.client, keys, count).StringSlice()
+	result, err := c.runScript(ctx, luaTrimConversations, keys, count).StringSlice()
 	if err != nil {
 		return nil, fmt.Errorf("trim conversations: %w", err)
 	}
@@ -434,7 +454,7 @@ func (c *Client) DeleteEvent(ctx context.Context, key session.Key, eventID strin
 		c.keys.EventTimeIndexKey(key),
 	}
 
-	if _, err := luaDeleteEvent.Run(ctx, c.client, keys, eventID).Result(); err != nil {
+	if _, err := c.runScript(ctx, luaDeleteEvent, keys, eventID).Result(); err != nil {
 		return fmt.Errorf("delete event: %w", err)
 	}
 	return nil
@@ -615,7 +635,7 @@ func (c *Client) loadSessionBasic(
 	sess.UpdatedAt = meta.UpdatedAt
 
 	if !listOnlyMeta {
-		result, err := luaLoadEvents.Run(ctx, c.client,
+		result, err := c.runScript(ctx, luaLoadEvents,
 			[]string{
 				c.keys.EventDataKey(key),
 				c.keys.EventTimeIndexKey(key),

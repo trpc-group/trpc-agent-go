@@ -33,6 +33,10 @@ type Config struct {
 	UserStateTTL      time.Duration
 	SessionEventLimit int
 	KeyPrefix         string // Prefix for legacy keys
+	// DisableScriptCache runs Lua scripts via EVAL instead of the EVALSHA-first
+	// Script.Run. Enable for proxy/cluster backends whose script cache is not
+	// reliably maintained (e.g. a Tendis cluster fronted by twemproxy).
+	DisableScriptCache bool
 }
 
 // Client implements ZSet session storage logic.
@@ -49,6 +53,19 @@ func NewClient(client redis.UniversalClient, cfg Config) *Client {
 		client: client,
 		cfg:    cfg,
 	}
+}
+
+// runScript executes a Lua script against the redis client. By default it uses
+// Script.Run (EVALSHA first, EVAL fallback on NOSCRIPT). When cfg.DisableScriptCache
+// is set it uses Script.Eval directly, suited to proxy/cluster backends whose script
+// cache is not reliably kept (e.g. a Tendis cluster fronted by twemproxy).
+func (c *Client) runScript(
+	ctx context.Context, script *redis.Script, keys []string, args ...interface{},
+) *redis.Cmd {
+	if c.cfg.DisableScriptCache {
+		return script.Eval(ctx, c.client, keys, args...)
+	}
+	return script.Run(ctx, c.client, keys, args...)
 }
 
 // SessionState is the state of a session (ZSet structure).
@@ -971,8 +988,8 @@ func (c *Client) CreateSummary(
 	sumKey := c.sessionSummaryKey(key)
 	hashField := key.SessionID
 
-	if _, err := luaSummariesSetIfNewer.Run(
-		ctx, c.client, []string{sumKey}, hashField, filterKey, string(payload),
+	if _, err := c.runScript(
+		ctx, luaSummariesSetIfNewer, []string{sumKey}, hashField, filterKey, string(payload),
 	).Result(); err != nil {
 		return fmt.Errorf("store summary (lua) failed: %w", err)
 	}
