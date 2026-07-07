@@ -33,7 +33,7 @@ env_allowlist:
   - GOPATH
   - GOCACHE
 dependency_install_action: ask
-unparseable_shell_action: ask
-host_unparseable_shell_action: deny
+unparsable_shell_action: ask
+host_unparsable_shell_action: deny
 secret_action: deny
 audit_failure_mode: best_effort

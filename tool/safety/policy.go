@@ -47,8 +47,8 @@ type Policy struct {
 	MaxScriptBytes          int              `json:"max_script_bytes" yaml:"max_script_bytes"`
 	EnvAllowlist            []string         `json:"env_allowlist" yaml:"env_allowlist"`
 	DependencyInstallAction Decision         `json:"dependency_install_action" yaml:"dependency_install_action"`
-	UnparseableShellAction  Decision         `json:"unparseable_shell_action" yaml:"unparseable_shell_action"`
-	HostUnparseableAction   Decision         `json:"host_unparseable_shell_action" yaml:"host_unparseable_shell_action"`
+	UnparsableShellAction   Decision         `json:"unparsable_shell_action" yaml:"unparsable_shell_action"`
+	HostUnparsableAction    Decision         `json:"host_unparsable_shell_action" yaml:"host_unparsable_shell_action"`
 	SecretAction            Decision         `json:"secret_action" yaml:"secret_action"`
 	AuditFailureMode        AuditFailureMode `json:"audit_failure_mode" yaml:"audit_failure_mode"`
 }
@@ -71,8 +71,8 @@ func DefaultPolicy() Policy {
 		MaxCommandBytes:         defaultMaxCommandSize,
 		MaxScriptBytes:          defaultMaxScriptSize,
 		DependencyInstallAction: DecisionAsk,
-		UnparseableShellAction:  DecisionAsk,
-		HostUnparseableAction:   DecisionDeny,
+		UnparsableShellAction:   DecisionAsk,
+		HostUnparsableAction:    DecisionDeny,
 		SecretAction:            DecisionDeny,
 		AuditFailureMode:        AuditFailureModeBestEffort,
 	}
@@ -111,11 +111,11 @@ func (p Policy) WithDefaults() Policy {
 	if p.DependencyInstallAction != "" {
 		d.DependencyInstallAction = p.DependencyInstallAction
 	}
-	if p.UnparseableShellAction != "" {
-		d.UnparseableShellAction = p.UnparseableShellAction
+	if p.UnparsableShellAction != "" {
+		d.UnparsableShellAction = p.UnparsableShellAction
 	}
-	if p.HostUnparseableAction != "" {
-		d.HostUnparseableAction = p.HostUnparseableAction
+	if p.HostUnparsableAction != "" {
+		d.HostUnparsableAction = p.HostUnparsableAction
 	}
 	if p.SecretAction != "" {
 		d.SecretAction = p.SecretAction
@@ -129,10 +129,10 @@ func (p Policy) WithDefaults() Policy {
 // Validate rejects invalid policy values.
 func (p Policy) Validate() error {
 	decisions := map[string]Decision{
-		"dependency_install_action":     p.DependencyInstallAction,
-		"unparseable_shell_action":      p.UnparseableShellAction,
-		"host_unparseable_shell_action": p.HostUnparseableAction,
-		"secret_action":                 p.SecretAction,
+		"dependency_install_action":    p.DependencyInstallAction,
+		"unparsable_shell_action":      p.UnparsableShellAction,
+		"host_unparsable_shell_action": p.HostUnparsableAction,
+		"secret_action":                p.SecretAction,
 	}
 	for name, decision := range decisions {
 		if !decision.Valid() {

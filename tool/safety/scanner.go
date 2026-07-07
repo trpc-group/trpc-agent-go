@@ -230,11 +230,11 @@ func (s *DefaultScanner) scanCommand(req ScanRequest) []Finding {
 
 func (s *DefaultScanner) shellParseFinding(req ScanRequest, err error) Finding {
 	msg := err.Error()
-	decision := s.policy.UnparseableShellAction
+	decision := s.policy.UnparsableShellAction
 	if req.Backend == BackendHost {
-		decision = s.policy.HostUnparseableAction
+		decision = s.policy.HostUnparsableAction
 	}
-	rule := "shell.unparseable"
+	rule := "shell.unparsable"
 	risk := RiskMedium
 	if strings.Contains(msg, "$") ||
 		strings.Contains(msg, "substitution") ||
