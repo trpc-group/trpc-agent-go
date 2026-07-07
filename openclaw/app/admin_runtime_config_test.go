@@ -660,6 +660,33 @@ func TestAdminRuntimeConfigProvider_SaveStringFieldAndEnvExpansion(
 	require.Contains(t, string(data), "base_url: https://override.example")
 }
 
+func TestBuildAdminOptions_ExposesOpenAITextOnlyField(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeAdminRuntimeConfigTestFile(
+		t,
+		"model:\n  text_only_content: true\n",
+	)
+	opts := adminRuntimeConfigTestOptions(cfgPath)
+	opts.OpenAITextOnlyMessageContent = true
+	provider, ok := buildAdminRuntimeConfigProvider(
+		opts,
+	).(*adminRuntimeConfigProvider)
+	require.True(t, ok)
+
+	status, err := provider.RuntimeConfigStatus()
+	require.NoError(t, err)
+	field := findAdminRuntimeConfigField(
+		t,
+		status,
+		"model.text_only_content",
+	)
+	require.Equal(t, "true", field.RuntimeValue)
+	require.Equal(t, "true", field.ConfiguredValue)
+	require.Equal(t, adminRuntimeConfigInputSelect, field.InputType)
+	require.Len(t, field.Options, 2)
+}
+
 func TestAdminRuntimeConfigProvider_ErrorPaths(t *testing.T) {
 	t.Parallel()
 

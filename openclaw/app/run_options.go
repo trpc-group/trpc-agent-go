@@ -128,9 +128,10 @@ const (
 	flagSkillsToolResults     = "skills-loaded-content-in-tool-results"
 	flagSkillsSkipFallback    = "skills-skip-fallback-on-session-summary"
 
-	flagDebugRecorder     = "debug-recorder"
-	flagDebugRecorderDir  = "debug-recorder-dir"
-	flagDebugRecorderMode = "debug-recorder-mode"
+	flagDebugRecorder                = "debug-recorder"
+	flagDebugRecorderDir             = "debug-recorder-dir"
+	flagDebugRecorderMode            = "debug-recorder-mode"
+	flagOpenAITextOnlyMessageContent = "openai-text-only-message-content"
 
 	flagLatencyDiagnostics                 = "latency-diagnostics"
 	flagLatencyDiagnosticsEvents           = "latency-diagnostics-events"
@@ -218,32 +219,33 @@ type runOptions struct {
 	ClaudeEnv          string
 	ClaudeWorkDir      string
 
-	ModelMode             string
-	OpenAIModel           string
-	OpenAIVariant         string
-	OpenAIBaseURL         string
-	OpenAIHeaders         map[string]string
-	GenerationConfig      *model.GenerationConfig
-	ModelConfig           *yaml.Node
-	KnowledgesConfig      []knowledgeEntry
-	SkillsRoot            string
-	SkillsExtraDir        string
-	SkillsDebug           bool
-	SkillsAllowBundled    string
-	SkillConfigs          map[string]ocskills.SkillConfig
-	SkillsWatch           bool
-	SkillsWatchBundled    bool
-	SkillsWatchDebounce   time.Duration
-	SkillsSummaryCacheTTL time.Duration
-	SkillsOverviewLimit   int
-	SkillsOverviewPinned  string
-	SkillsToolProfile     string
-	SkillsLoadMode        string
-	SkillsMaxLoaded       int
-	SkillsToolResults     bool
-	SkillsSkipFallback    bool
-	SkillsToolingGuide    *string
-	StateDir              string
+	ModelMode                    string
+	OpenAIModel                  string
+	OpenAIVariant                string
+	OpenAIBaseURL                string
+	OpenAITextOnlyMessageContent bool
+	OpenAIHeaders                map[string]string
+	GenerationConfig             *model.GenerationConfig
+	ModelConfig                  *yaml.Node
+	KnowledgesConfig             []knowledgeEntry
+	SkillsRoot                   string
+	SkillsExtraDir               string
+	SkillsDebug                  bool
+	SkillsAllowBundled           string
+	SkillConfigs                 map[string]ocskills.SkillConfig
+	SkillsWatch                  bool
+	SkillsWatchBundled           bool
+	SkillsWatchDebounce          time.Duration
+	SkillsSummaryCacheTTL        time.Duration
+	SkillsOverviewLimit          int
+	SkillsOverviewPinned         string
+	SkillsToolProfile            string
+	SkillsLoadMode               string
+	SkillsMaxLoaded              int
+	SkillsToolResults            bool
+	SkillsSkipFallback           bool
+	SkillsToolingGuide           *string
+	StateDir                     string
 
 	EvolutionEnabled               bool
 	EvolutionHumanGate             string
@@ -631,6 +633,12 @@ func parseRunOptions(args []string) (runOptions, error) {
 		"openai-base-url",
 		"",
 		"OpenAI base URL override (mode=openai, optional)",
+	)
+	fs.BoolVar(
+		&opts.OpenAITextOnlyMessageContent,
+		flagOpenAITextOnlyMessageContent,
+		false,
+		"Reduce OpenAI-compatible user message content parts to text-only",
 	)
 	fs.StringVar(
 		&opts.AllowUsers,
@@ -1235,6 +1243,7 @@ type modelConfig struct {
 	Name             *string               `yaml:"name,omitempty"`
 	BaseURL          *string               `yaml:"base_url,omitempty"`
 	OpenAIVariant    *string               `yaml:"openai_variant,omitempty"`
+	TextOnlyContent  *bool                 `yaml:"text_only_content,omitempty"`
 	Headers          map[string]string     `yaml:"headers,omitempty"`
 	GenerationConfig *generationConfigYAML `yaml:"generation_config,omitempty"`
 	Config           *rawYAMLNode          `yaml:"config,omitempty"`
@@ -1824,6 +1833,11 @@ func (cfg *fileConfig) apply(
 			opts.OpenAIVariant = strings.TrimSpace(
 				*cfg.Model.OpenAIVariant,
 			)
+		}
+		textOnly := cfg.Model.TextOnlyContent
+		if textOnly != nil &&
+			!flagWasSet(set, flagOpenAITextOnlyMessageContent) {
+			opts.OpenAITextOnlyMessageContent = *textOnly
 		}
 		if len(cfg.Model.Headers) > 0 {
 			opts.OpenAIHeaders = cleanHeaderMap(cfg.Model.Headers)
