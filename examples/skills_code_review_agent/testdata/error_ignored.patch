@@ -1,0 +1,10 @@
+--- a/db.go
++++ b/db.go
+@@ -5,7 +5,12 @@ package db
+ import "database/sql"
+
+ func query(db *sql.DB) {
++	rows, err := db.Query("SELECT 1")
++	doSomething(rows)
++	_ = err
+ }

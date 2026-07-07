@@ -1,0 +1,16 @@
+diff --git a/pkg/client/client.go b/pkg/client/client.go
+new file mode 100644
+--- /dev/null
++++ b/pkg/client/client.go
+@@ -0,0 +1,10 @@
++package client
++
++import "net/http"
++
++func FetchData(url string) {
++	resp, err := http.Get(url)
++	if err != nil {
++		return
++	}
++	_ = resp
++}

@@ -1,0 +1,11 @@
+--- a/worker.go
++++ b/worker.go
+@@ -5,8 +5,11 @@ package main
+
+ func process(items []int) int {
+ 	result := 0
++	go func() {
++		result += 42
++	}()
+ 	return result
+ }

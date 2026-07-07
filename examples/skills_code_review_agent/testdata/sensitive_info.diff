@@ -1,0 +1,8 @@
+--- a/config.go
++++ b/config.go
+@@ -3,4 +3,7 @@ package config
+
+ var (
++	apiKey  = "sk-abc123secretvalue"
++	dbPass  = "hardcoded123"
+ )
