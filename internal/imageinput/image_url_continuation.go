@@ -260,6 +260,10 @@ func imageURLsToMark(
 	); len(mentioned) > 0 {
 		return mentioned
 	}
+	current := messageImageURLs(inv.Message)
+	if len(current) > 0 {
+		return intersectOrdered(current, reqURLs)
+	}
 	return reqURLs
 }
 
@@ -339,6 +343,20 @@ func containsURLToken(text, imageURL string) bool {
 		}
 		start = idx + 1
 	}
+}
+
+func intersectOrdered(primary, allowed []string) []string {
+	allowedSet := make(map[string]struct{}, len(allowed))
+	for _, imageURL := range allowed {
+		allowedSet[imageURL] = struct{}{}
+	}
+	var out []string
+	for _, imageURL := range primary {
+		if _, ok := allowedSet[imageURL]; ok {
+			out = append(out, imageURL)
+		}
+	}
+	return dedupeOrdered(out)
 }
 
 func isURLTokenBoundaryBefore(text string, idx int) bool {

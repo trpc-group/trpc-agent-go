@@ -158,7 +158,7 @@ func TestMarkUnavailableImageURLsFromRequestMatchesWholeURLToken(t *testing.T) {
 	require.Contains(t, unavailable, longURL)
 }
 
-func TestMarkUnavailableImageURLsFromRequestFallsBackToAllRequestURLs(t *testing.T) {
+func TestMarkUnavailableImageURLsFromRequestFallsBackToCurrentMessage(t *testing.T) {
 	const (
 		currentURL = "https://example.invalid/current.png"
 		otherURL   = "https://example.invalid/other.png"
@@ -183,10 +183,40 @@ func TestMarkUnavailableImageURLsFromRequestFallsBackToAllRequestURLs(t *testing
 	)
 
 	require.NoError(t, err)
-	require.Equal(t, 2, count)
+	require.Equal(t, 1, count)
 	unavailable := UnavailableImageURLSet(sess)
 	require.Contains(t, unavailable, currentURL)
-	require.Contains(t, unavailable, otherURL)
+	require.NotContains(t, unavailable, otherURL)
+}
+
+func TestMarkUnavailableImageURLsFromRequestFallsBackToAllRequestURLsWithoutCurrentMessage(
+	t *testing.T,
+) {
+	const (
+		firstURL  = "https://example.invalid/first.png"
+		secondURL = "https://example.invalid/second.png"
+	)
+	firstMsg := model.NewUserMessage("first")
+	firstMsg.AddImageURL(firstURL, "auto")
+	secondMsg := model.NewUserMessage("second")
+	secondMsg.AddImageURL(secondURL, "auto")
+
+	sess := &session.Session{ID: "sess", AppName: "app", UserID: "user"}
+	inv := agent.NewInvocation(agent.WithInvocationSession(sess))
+	req := &model.Request{Messages: []model.Message{firstMsg, secondMsg}}
+
+	count, err := MarkUnavailableImageURLsFromRequest(
+		context.Background(),
+		inv,
+		req,
+		errors.New("failed to fetch image"),
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, 2, count)
+	unavailable := UnavailableImageURLSet(sess)
+	require.Contains(t, unavailable, firstURL)
+	require.Contains(t, unavailable, secondURL)
 }
 
 func TestMarkUnavailableImageURLsFromRequestDoesNotSetLocalStateOnPersistFailure(

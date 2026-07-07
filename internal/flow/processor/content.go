@@ -1932,7 +1932,9 @@ func (p *ContentRequestProcessor) projectEventMessage(
 	if p.EventMessageProjector != nil {
 		msg = p.EventMessageProjector(inv, evt, msg)
 	}
-	if p.ImageURLFailureContinuation && inv != nil {
+	if p.ImageURLFailureContinuation &&
+		inv != nil &&
+		!isCurrentInvocationMessageProjection(evt, inv, msg) {
 		msg = imageinput.ProjectUnavailableImageURLs(
 			inv.Session,
 			msg,
@@ -1940,6 +1942,21 @@ func (p *ContentRequestProcessor) projectEventMessage(
 		)
 	}
 	return msg
+}
+
+func isCurrentInvocationMessageProjection(
+	evt event.Event,
+	inv *agent.Invocation,
+	msg model.Message,
+) bool {
+	if inv == nil || !invocationMessageEqual(inv.Message, msg) {
+		return false
+	}
+	if evt.RequestID == "" && evt.InvocationID == "" {
+		return true
+	}
+	return evt.RequestID == inv.RunOptions.RequestID &&
+		evt.InvocationID == inv.InvocationID
 }
 
 // getCurrentInvocationMessages gets messages only from the current invocation.

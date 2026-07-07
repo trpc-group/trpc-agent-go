@@ -149,7 +149,9 @@ fetch/access/decode-style error, the framework records the matching URL-backed
 image inputs in session state. Later requests in the same session replace those
 image parts with a text placeholder before sending the model request, while
 leaving the original persisted user event unchanged. The failed model call is
-not retried; the option only affects later turns.
+not retried; the option only affects later turns. The replacement is only
+applied when projecting historical messages. If the user sends the same image
+URL again in a later message, that current input is sent unchanged.
 
 ```go
 agent := llmagent.New(
