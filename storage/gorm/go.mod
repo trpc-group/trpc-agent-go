@@ -3,6 +3,7 @@ module trpc.group/trpc-go/trpc-agent-go/storage/gorm
 go 1.21
 
 require (
+	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/stretchr/testify v1.11.1
 	gorm.io/driver/sqlite v1.5.7
 	gorm.io/gorm v1.25.12
