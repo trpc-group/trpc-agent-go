@@ -69,6 +69,50 @@ func TestRunnerCandidateSelector_CommitsOnlyWinner(t *testing.T) {
 	assert.Equal(t, "1", string(state))
 }
 
+func TestCandidateSelectorAgent_NewAttemptInvocationMemoryReader(t *testing.T) {
+	selectorAgent := &candidateSelectorAgent{
+		inner: &candidateScriptAgent{name: "candidate"},
+	}
+
+	t.Run("wraps memory service reader", func(t *testing.T) {
+		memSvc := &mockMemoryServiceForAutoMemory{}
+		base := agent.NewInvocation(
+			agent.WithInvocationAgent(&candidateScriptAgent{name: "base"}),
+			agent.WithInvocationMessage(model.NewUserMessage("question")),
+			agent.WithInvocationMemoryService(memSvc),
+		)
+
+		attempt := selectorAgent.newAttemptInvocation(
+			base,
+			session.NewSession("app", "user", "attempt"),
+			sessioninmemory.NewSessionService(),
+		)
+
+		reader, ok := attempt.MemoryReader.(*readOnlyMemoryService)
+		require.True(t, ok)
+		require.Same(t, memSvc, reader.base)
+		require.Same(t, attempt.MemoryService, attempt.MemoryReader)
+	})
+
+	t.Run("falls back to base memory reader", func(t *testing.T) {
+		reader := &mockMemoryReaderIngestor{}
+		base := agent.NewInvocation(
+			agent.WithInvocationAgent(&candidateScriptAgent{name: "base"}),
+			agent.WithInvocationMessage(model.NewUserMessage("question")),
+			agent.WithInvocationMemoryReader(reader),
+		)
+
+		attempt := selectorAgent.newAttemptInvocation(
+			base,
+			session.NewSession("app", "user", "attempt"),
+			sessioninmemory.NewSessionService(),
+		)
+
+		require.Nil(t, attempt.MemoryService)
+		require.Same(t, reader, attempt.MemoryReader)
+	})
+}
+
 func TestRunnerCandidateSelector_AttemptSessionReadsOwnOverlay(t *testing.T) {
 	ctx := context.Background()
 	sessionService := sessioninmemory.NewSessionService()
