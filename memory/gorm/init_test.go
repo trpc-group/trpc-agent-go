@@ -29,7 +29,7 @@ func TestWrapDBErr(t *testing.T) {
 func TestService_memoryTable(t *testing.T) {
 	ctx := context.Background()
 	db := testDB(t)
-	svc, err := NewService(db)
+	svc, err := NewService(WithDB(db))
 	require.NoError(t, err)
 	defer svc.Close()
 	assert.NotNil(t, svc.memoryTable(ctx))
@@ -41,7 +41,7 @@ func TestService_initDB_failure(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, sqlDB.Close())
 
-	_, err = NewService(db)
+	_, err = NewService(WithDB(db))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "init database failed")
 }

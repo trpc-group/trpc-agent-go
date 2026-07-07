@@ -2,14 +2,18 @@ module trpc.group/trpc-go/trpc-agent-go/memory/gorm
 
 go 1.21
 
-replace trpc.group/trpc-go/trpc-agent-go => ../..
+replace (
+	trpc.group/trpc-go/trpc-agent-go => ../..
+	trpc.group/trpc-go/trpc-agent-go/storage/gorm => ../../storage/gorm
+)
 
 require (
-	github.com/stretchr/testify v1.10.0
+	github.com/stretchr/testify v1.11.1
 	gorm.io/datatypes v1.2.7
 	gorm.io/driver/sqlite v1.5.7
 	gorm.io/gorm v1.30.0
 	trpc.group/trpc-go/trpc-agent-go v0.2.0
+	trpc.group/trpc-go/trpc-agent-go/storage/gorm v0.0.0
 )
 
 require (

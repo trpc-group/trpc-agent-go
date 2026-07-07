@@ -102,7 +102,8 @@ By default no memory tools are registered (empty `Tools()`), which suits hosts t
 ```go
 db, _ := gorm.Open(sqlite.Open("memories.db"), &gorm.Config{})
 
-memorySvc, err := memorygorm.NewService(db,
+memorySvc, err := memorygorm.NewService(
+    memorygorm.WithDB(db),
     memorygorm.WithSkipDBInit(true), // production: host runs DDL
     memorygorm.WithToolEnabled(memory.AddToolName, true),
     // ... other tools as needed

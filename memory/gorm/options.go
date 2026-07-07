@@ -15,6 +15,7 @@ import (
 	"maps"
 	"time"
 
+	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/sqldb"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
@@ -53,6 +54,12 @@ type ServiceOpts struct {
 
 	// skipDBInit skips AutoMigrate when tables are managed externally.
 	skipDBInit bool
+
+	// GORM connection settings (priority: db > dialector > instance name).
+	db           *gorm.DB
+	dialector    gorm.Dialector
+	instanceName string
+	extraOptions []any
 
 	// Memory extractor for auto memory mode.
 	extractor extractor.MemoryExtractor
@@ -98,6 +105,35 @@ func WithTableName(tableName string) ServiceOpt {
 func WithSkipDBInit(skip bool) ServiceOpt {
 	return func(opts *ServiceOpts) {
 		opts.skipDBInit = skip
+	}
+}
+
+// WithDB injects a shared *gorm.DB. The caller owns the DB lifecycle unless
+// the service opened the connection via WithDialector or WithGormInstance.
+func WithDB(db *gorm.DB) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		opts.db = db
+	}
+}
+
+// WithDialector opens a new GORM connection using storage/gorm.
+func WithDialector(d gorm.Dialector) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		opts.dialector = d
+	}
+}
+
+// WithGormInstance uses a registered storage/gorm instance by name.
+func WithGormInstance(instanceName string) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		opts.instanceName = instanceName
+	}
+}
+
+// WithExtraOptions passes opaque options to the storage/gorm client builder.
+func WithExtraOptions(extraOptions ...any) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		opts.extraOptions = append(opts.extraOptions, extraOptions...)
 	}
 }
 

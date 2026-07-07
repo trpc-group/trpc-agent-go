@@ -23,6 +23,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	storage "trpc.group/trpc-go/trpc-agent-go/storage/gorm"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -37,6 +38,7 @@ var _ memory.Service = (*Service)(nil)
 //	Index: (app_name, user_id).
 type Service struct {
 	db        *gorm.DB
+	dbClient  storage.Client
 	tableName string
 	opts      ServiceOpts
 
@@ -45,15 +47,9 @@ type Service struct {
 	autoMemoryWorker *imemory.AutoMemoryWorker
 }
 
-// NewService creates a new GORM memory service using a shared *gorm.DB.
-// The caller owns the database lifecycle; Close does not close the DB.
-// Connection construction may move to a future storage/gorm helper; this package
-// focuses on memory semantics over an already-open GORM handle.
-func NewService(db *gorm.DB, options ...ServiceOpt) (*Service, error) {
-	if db == nil {
-		return nil, fmt.Errorf("gorm memory service requires a non-nil *gorm.DB")
-	}
-
+// NewService creates a new GORM memory service.
+// Provide a database via WithDB (shared injection), WithDialector, or WithGormInstance.
+func NewService(options ...ServiceOpt) (*Service, error) {
 	opts := defaultOptions.clone()
 	for _, option := range options {
 		option(&opts)
@@ -63,8 +59,14 @@ func NewService(db *gorm.DB, options ...ServiceOpt) (*Service, error) {
 		imemory.ApplyAutoModeDefaults(opts.enabledTools, opts.userExplicitlySet)
 	}
 
+	db, dbClient, err := resolveGormDB(opts)
+	if err != nil {
+		return nil, err
+	}
+
 	s := &Service{
 		db:          db,
+		dbClient:    dbClient,
 		tableName:   opts.tableName,
 		opts:        opts,
 		cachedTools: make(map[string]tool.Tool),
@@ -335,12 +337,44 @@ func (s *Service) EnqueueAutoMemoryJob(ctx context.Context, sess *session.Sessio
 	return s.autoMemoryWorker.EnqueueJob(ctx, sess)
 }
 
-// Close stops async workers. It does not close the shared *gorm.DB.
+// Close stops async workers and closes owned GORM connections.
+// Injected handles (WithDB) are not closed.
 func (s *Service) Close() error {
 	if s.autoMemoryWorker != nil {
 		s.autoMemoryWorker.Stop()
 	}
+	if s.dbClient != nil {
+		return s.dbClient.Close()
+	}
 	return nil
+}
+
+func resolveGormDB(opts ServiceOpts) (*gorm.DB, storage.Client, error) {
+	if opts.db != nil {
+		return opts.db, nil, nil
+	}
+
+	builderOpts := []storage.ClientBuilderOpt{
+		storage.WithExtraOptions(opts.extraOptions...),
+	}
+	if opts.dialector != nil {
+		builderOpts = append(builderOpts, storage.WithDialector(opts.dialector))
+	} else if opts.instanceName != "" {
+		var ok bool
+		builderOpts, ok = storage.GetGormInstance(opts.instanceName)
+		if !ok {
+			return nil, nil, fmt.Errorf("gorm instance %s not found", opts.instanceName)
+		}
+		builderOpts = append(builderOpts, storage.WithExtraOptions(opts.extraOptions...))
+	} else {
+		return nil, nil, fmt.Errorf("gorm memory service requires WithDB, WithDialector, or WithGormInstance")
+	}
+
+	client, err := storage.GetClientBuilder()(context.Background(), builderOpts...)
+	if err != nil {
+		return nil, nil, fmt.Errorf("create gorm client failed: %w", err)
+	}
+	return client.DB(), client, nil
 }
 
 func rowsToEntries(rows []memoryRow) ([]*memory.Entry, error) {

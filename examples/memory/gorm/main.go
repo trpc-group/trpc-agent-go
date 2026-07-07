@@ -135,7 +135,7 @@ func newGormMemoryService(db *gorm.DB) (memory.Service, error) {
 	if *softDelete {
 		opts = append(opts, memorygorm.WithSoftDelete(true))
 	}
-	return memorygorm.NewService(db, opts...)
+	return memorygorm.NewService(append([]memorygorm.ServiceOpt{memorygorm.WithDB(db)}, opts...)...)
 }
 
 type gormMemoryChat struct {
