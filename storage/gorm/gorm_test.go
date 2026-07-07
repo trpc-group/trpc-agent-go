@@ -11,6 +11,7 @@ package gorm
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -84,6 +85,23 @@ func TestDefaultClientBuilder_WithDialector(t *testing.T) {
 
 	_, err = GetClientBuilder()(ctx, WithDialector(sqlite.Open(path)))
 	require.NoError(t, err)
+}
+
+func TestDefaultClientBuilder_WithDialector_ExternalConnPool(t *testing.T) {
+	ctx := context.Background()
+	sqlDB, err := sql.Open("sqlite3", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	client, err := GetClientBuilder()(ctx,
+		WithDialector(sqlite.Dialector{Conn: sqlDB}),
+		WithOwnsConnection(false),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, client)
+
+	require.NoError(t, client.Close())
+	require.NoError(t, sqlDB.PingContext(ctx), "caller-owned pool must remain open after client close")
 }
 
 func TestDefaultClientBuilder_MissingDialector(t *testing.T) {

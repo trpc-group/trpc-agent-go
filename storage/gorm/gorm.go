@@ -37,7 +37,8 @@ type Client interface {
 	DB() *gormio.DB
 
 	// Close closes the database connection when the client owns it.
-	// Injected handles (WithDB) are not closed by the client.
+	// Injected handles (WithDB) and dialectors opened with WithOwnsConnection(false)
+	// are not closed by the client.
 	Close() error
 }
 
@@ -105,12 +106,20 @@ func defaultClientBuilder(ctx context.Context, builderOpts ...ClientBuilderOpt) 
 	if err != nil {
 		return nil, fmt.Errorf("gorm: get sql db: %w", err)
 	}
+
+	ownsConnection := true
+	if o.ownsConnectionSet {
+		ownsConnection = o.ownsConnection
+	}
+
 	if err := sqlDB.PingContext(ctx); err != nil {
-		_ = sqlDB.Close()
+		if ownsConnection {
+			_ = sqlDB.Close()
+		}
 		return nil, fmt.Errorf("gorm: ping database: %w", err)
 	}
 
-	return &gormClient{db: db, ownsConnection: true}, nil
+	return &gormClient{db: db, ownsConnection: ownsConnection}, nil
 }
 
 // ClientBuilderOpt configures GORM client construction.
@@ -123,6 +132,11 @@ type ClientBuilderOpts struct {
 	Config       *gormio.Config
 	InstanceName string
 	ExtraOptions []any
+
+	// ownsConnection controls whether Client.Close closes the opened pool.
+	// Defaults to true for dialector-opened connections; WithDB always skips close.
+	ownsConnection    bool
+	ownsConnectionSet bool
 }
 
 // WithDB injects an existing *gorm.DB. The caller owns the DB lifecycle.
@@ -132,10 +146,21 @@ func WithDB(db *gormio.DB) ClientBuilderOpt {
 	}
 }
 
-// WithDialector sets the GORM dialector used to open a new connection.
+// WithDialector sets the GORM dialector used to open a connection.
+// By default Client.Close closes the opened pool (ownership transfer).
+// When the dialector wraps a caller-owned ConnPool, also pass WithOwnsConnection(false).
 func WithDialector(d gormio.Dialector) ClientBuilderOpt {
 	return func(opts *ClientBuilderOpts) {
 		opts.Dialector = d
+	}
+}
+
+// WithOwnsConnection controls whether Client.Close closes the underlying pool
+// for dialector-opened connections. Ignored when WithDB is used.
+func WithOwnsConnection(owns bool) ClientBuilderOpt {
+	return func(opts *ClientBuilderOpts) {
+		opts.ownsConnection = owns
+		opts.ownsConnectionSet = true
 	}
 }
 
