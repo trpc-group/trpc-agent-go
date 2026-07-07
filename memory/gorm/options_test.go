@@ -75,10 +75,26 @@ func TestServiceOpts_WithMemoryLimit(t *testing.T) {
 
 func TestServiceOpts_WithSearchOptions(t *testing.T) {
 	opts := ServiceOpts{}
-	WithSearchMinScore(0.75)(&opts)
-	WithMaxSearchResults(5)(&opts)
+	WithMinSearchScore(0.75)(&opts)
+	WithMaxResults(5)(&opts)
 	assert.Equal(t, 0.75, opts.searchMinScore)
 	assert.Equal(t, 5, opts.maxSearchResults)
+}
+
+func TestServiceOpts_WithSearchOptions_NegativeIgnored(t *testing.T) {
+	opts := defaultOptions.clone()
+	WithMinSearchScore(-1)(&opts)
+	WithMaxResults(-5)(&opts)
+	assert.Equal(t, imemory.DefaultSearchMinScore, opts.searchMinScore)
+	assert.Equal(t, imemory.DefaultMaxSearchResults, opts.maxSearchResults)
+}
+
+func TestServiceOpts_DeprecatedSearchOptions(t *testing.T) {
+	opts := ServiceOpts{}
+	WithSearchMinScore(0.5)(&opts)
+	WithMaxSearchResults(3)(&opts)
+	assert.Equal(t, 0.5, opts.searchMinScore)
+	assert.Equal(t, 3, opts.maxSearchResults)
 }
 
 func TestServiceOpts_WithToolEnabled(t *testing.T) {

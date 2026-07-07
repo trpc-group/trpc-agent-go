@@ -28,7 +28,57 @@ export GORM_DSN="postgres://user:pass@localhost:5432/app?sslmode=disable"
 go run . -skip-db-init
 ```
 
-Create the table using the reference DDL in [`memory/gorm/README.md`](../../../memory/gorm/README.md).
+Create the table using the reference DDL below.
+
+## Supported dialects
+
+- **SQLite** — used by unit tests and this example's default path (`AutoMigrate`).
+- **PostgreSQL** — production target (JSONB `memory_data` when using reference DDL).
+- **MySQL** — `AutoMigrate` uses portable column types (`char(64)` PK, `varchar` scopes, JSON `memory_data`).
+
+When the host owns DDL (`WithSkipDBInit(true)`), align columns with the reference schema below.
+
+## Reference DDL (PostgreSQL)
+
+```sql
+CREATE TABLE memories (
+  memory_id CHAR(64) PRIMARY KEY,
+  app_name VARCHAR(255) NOT NULL,
+  user_id VARCHAR(255) NOT NULL,
+  memory_data JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL,
+  deleted_at TIMESTAMPTZ
+);
+
+CREATE INDEX idx_memories_app_user ON memories (app_name, user_id);
+CREATE INDEX idx_memories_updated_at ON memories (updated_at DESC);
+CREATE INDEX idx_memories_deleted_at ON memories (deleted_at);
+```
+
+### Column semantics
+
+| Column | Description |
+|--------|-------------|
+| `memory_id` | Stable primary key (SHA-256 hex, 64 chars) |
+| `app_name` | Application scope (from `memory.UserKey`) |
+| `user_id` | User scope (from `memory.UserKey`) |
+| `memory_data` | JSON document encoding a full `memory.Entry` (same shape as `memory/postgres`) |
+| `created_at` | Row creation time |
+| `updated_at` | Last update time (used for ordering reads) |
+| `deleted_at` | Optional soft-delete timestamp when `WithSoftDelete(true)` |
+
+## Options
+
+| Option | Purpose |
+|--------|---------|
+| `WithSkipDBInit(true)` | Skip `AutoMigrate`; host runs reference DDL |
+| `WithTableName(name)` | Custom table name (default `memories`) |
+| `WithSoftDelete(true)` | Soft delete via `deleted_at` |
+| `WithMinSearchScore` / `WithMaxResults` | Keyword search tuning (matches `memory/postgres`) |
+| `WithToolEnabled` / `WithExtractor` | Opt in to built-in memory tools and auto-memory mode |
+
+By default no memory tools are registered (empty `Tools()`), which suits hosts that expose vector memory tools separately.
 
 ## Flags
 

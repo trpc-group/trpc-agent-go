@@ -115,18 +115,36 @@ func WithMemoryLimit(limit int) ServiceOpt {
 	}
 }
 
-// WithSearchMinScore sets the minimum score for keyword search results.
-func WithSearchMinScore(score float64) ServiceOpt {
+// WithMinSearchScore sets the minimum keyword-search score. Scores below
+// this value are filtered out. Default is 0.3.
+func WithMinSearchScore(score float64) ServiceOpt {
 	return func(opts *ServiceOpts) {
+		if score < 0 {
+			return
+		}
 		opts.searchMinScore = score
 	}
 }
 
-// WithMaxSearchResults sets the maximum number of search results.
-func WithMaxSearchResults(max int) ServiceOpt {
+// WithMaxResults sets the maximum number of keyword-search results.
+// Default is 10. Use 0 to disable truncation.
+func WithMaxResults(maxResults int) ServiceOpt {
 	return func(opts *ServiceOpts) {
-		opts.maxSearchResults = max
+		if maxResults < 0 {
+			return
+		}
+		opts.maxSearchResults = maxResults
 	}
+}
+
+// WithSearchMinScore is deprecated; use WithMinSearchScore instead.
+func WithSearchMinScore(score float64) ServiceOpt {
+	return WithMinSearchScore(score)
+}
+
+// WithMaxSearchResults is deprecated; use WithMaxResults instead.
+func WithMaxSearchResults(max int) ServiceOpt {
+	return WithMaxResults(max)
 }
 
 // WithToolEnabled sets which tool is enabled.

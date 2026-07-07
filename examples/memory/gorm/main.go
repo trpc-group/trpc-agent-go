@@ -14,7 +14,7 @@
 //	# SQLite file (default; AutoMigrate creates the memories table)
 //	go run .
 //
-//	# PostgreSQL (host-owned DDL — table must exist; see memory/gorm/README.md)
+//	# PostgreSQL (host-owned DDL — table must exist; see examples/memory/gorm/README.md)
 //	export GORM_DSN="postgres://user:pass@localhost:5432/app?sslmode=disable"
 //	go run . -skip-db-init
 //
