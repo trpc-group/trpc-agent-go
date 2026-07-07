@@ -7107,7 +7107,7 @@ to balance performance and cost.</p>
 <tbody>
 <tr>
 <td><code>WithAPIKey(key)</code></td>
-<td>mem0 API key. Required for all requests.</td>
+<td>mem0 API key. Required for hosted platform requests; optional for self-hosted OSS when auth is disabled.</td>
 <td>required</td>
 </tr>
 <tr>
@@ -7116,18 +7116,28 @@ to balance performance and cost.</p>
 <td><code>https://api.mem0.ai</code></td>
 </tr>
 <tr>
+<td><code>WithSelfHostedOSS()</code></td>
+<td>Use the self-hosted Mem0 OSS REST API (<code>/memories</code>, <code>/search</code>, <code>X-API-Key</code>). When enabled without <code>WithHost</code>, the host defaults to <code>http://localhost:8888</code>; the hosted-platform default host is rejected in OSS mode.</td>
+<td>disabled</td>
+</tr>
+<tr>
+<td><code>WithSelfHostedOSSIncludeUnscopedMemories()</code></td>
+<td>Include legacy OSS records that do not carry <code>metadata.trpc_app_name</code>; records tagged for a different app remain hidden.</td>
+<td>disabled</td>
+</tr>
+<tr>
 <td><code>WithOrgProject(orgID, projectID)</code></td>
-<td>Add mem0 <code>org_id</code> / <code>project_id</code> to ingest and retrieval requests.</td>
+<td>Add hosted-platform <code>org_id</code> / <code>project_id</code>; unsupported with self-hosted OSS.</td>
 <td>empty</td>
 </tr>
 <tr>
 <td><code>WithAsyncMode(bool)</code></td>
-<td>Controls mem0's <code>async_mode</code> flag on ingest requests.</td>
+<td>Controls hosted-platform <code>async_mode</code>; self-hosted OSS writes are synchronous at the REST layer.</td>
 <td><code>true</code></td>
 </tr>
 <tr>
 <td><code>WithVersion(v)</code></td>
-<td>Sets the mem0 ingestion API version field.</td>
+<td>Sets the hosted-platform ingestion API version field.</td>
 <td><code>v2</code></td>
 </tr>
 <tr>
@@ -7157,10 +7167,18 @@ to balance performance and cost.</p>
 </tr>
 </tbody>
 </table>
+<p>For the official self-hosted OSS server, configure the server-side LLM and
+embedder independently when they use different endpoints or API keys. The OSS
+server exposes <code>POST /configure</code>; set <code>llm.provider=openai</code> with the LLM model,
+base URL, and API key, and set <code>embedder.provider=openai</code> with the embedding
+model, base URL, and API key. The Go adapter only uses the REST API and does not
+access the OSS server's internal vector store directly.</p>
 <h3 id="notes">Notes</h3>
 <ul>
 <li><code>Tools()</code> exposes <code>memory_search</code> by default; <code>memory_load</code> can be enabled explicitly.</li>
 <li>All reads remain scoped to the current <code>&lt;appName, userID&gt;</code>.</li>
+<li>Self-hosted OSS app isolation uses <code>metadata.trpc_app_name</code> because the OSS API has no top-level <code>app_id</code>. Existing OSS records without this metadata are hidden by default until reingested or backfilled. Use <code>WithSelfHostedOSSIncludeUnscopedMemories()</code> only for migrations that need those legacy records visible.</li>
+<li>The current OSS <code>GET /memories</code> API is capped at 1000 user-level results, is not pageable, and cannot express <code>metadata.trpc_app_name</code> as a server-side filter. <code>ReadMemories</code> therefore requires a positive limit no larger than 1000 and applies app isolation as a best-effort local filter over the first 1000 OSS records returned for the user.</li>
 <li>Runner automatically passes session context into ingest. Custom callers can also use <code>session.WithIngestMetadata</code>, <code>session.WithIngestAgentID</code>, and <code>session.WithIngestRunID</code> when needed.</li>
 <li>When mem0 metadata is available, search results can still carry structured fields such as <code>Topics</code>, <code>Kind</code>, <code>EventTime</code>, <code>Participants</code>, and <code>Location</code>.</li>
 <li>Call <code>Close()</code> on the service so background workers shut down cleanly.</li>
@@ -7603,7 +7621,7 @@ modes and does not write local offload state.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="June 23, 2026 12:23:02 UTC">2026-06-23 12:23:02</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="July 7, 2026 07:20:26 UTC">2026-07-07 07:20:26</span>
   </span>
 
     

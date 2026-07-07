@@ -7253,7 +7253,7 @@ Hybrid 用法。</p>
 <tbody>
 <tr>
 <td><code>WithAPIKey(key)</code></td>
-<td>mem0 API Key，所有请求必需。</td>
+<td>mem0 API Key；托管平台必填，本地 OSS 且关闭鉴权时可为空。</td>
 <td>必填</td>
 </tr>
 <tr>
@@ -7262,18 +7262,28 @@ Hybrid 用法。</p>
 <td><code>https://api.mem0.ai</code></td>
 </tr>
 <tr>
+<td><code>WithSelfHostedOSS()</code></td>
+<td>使用本地 Mem0 OSS REST API（<code>/memories</code>、<code>/search</code>、<code>X-API-Key</code>）。开启后如果没有设置 <code>WithHost</code>，host 默认 <code>http://localhost:8888</code>；OSS 模式会拒绝托管平台默认 host。</td>
+<td>关闭</td>
+</tr>
+<tr>
+<td><code>WithSelfHostedOSSIncludeUnscopedMemories()</code></td>
+<td>包含没有 <code>metadata.trpc_app_name</code> 的历史 OSS 记录；已标记为其他 app 的记录仍会隐藏。</td>
+<td>关闭</td>
+</tr>
+<tr>
 <td><code>WithOrgProject(orgID, projectID)</code></td>
-<td>为 ingest 与读取请求追加 mem0 的 <code>org_id</code> / <code>project_id</code>。</td>
+<td>追加托管平台的 <code>org_id</code> / <code>project_id</code>；本地 OSS 不支持。</td>
 <td>空</td>
 </tr>
 <tr>
 <td><code>WithAsyncMode(bool)</code></td>
-<td>控制 ingest 请求里的 <code>async_mode</code>。</td>
+<td>控制托管平台 ingest 请求里的 <code>async_mode</code>；本地 OSS 在 REST 层同步写入。</td>
 <td><code>true</code></td>
 </tr>
 <tr>
 <td><code>WithVersion(v)</code></td>
-<td>设置 mem0 ingest 请求里的版本字段。</td>
+<td>设置托管平台 mem0 ingest 请求里的版本字段。</td>
 <td><code>v2</code></td>
 </tr>
 <tr>
@@ -7303,10 +7313,17 @@ Hybrid 用法。</p>
 </tr>
 </tbody>
 </table>
+<p>如果使用官方本地 Mem0 OSS server，并且 LLM 与 embedding 使用不同 endpoint 或
+API key，需要在 server 侧分别配置。OSS server 提供 <code>POST /configure</code>：
+<code>llm.provider=openai</code> 配置 LLM 的模型、base URL 和 API key，
+<code>embedder.provider=openai</code> 配置 embedding 的模型、base URL 和 API key。Go
+适配层只访问 Mem0 REST API，不直接读写 OSS server 内部的向量库。</p>
 <h3 id="_45">注意事项</h3>
 <ul>
 <li><code>Tools()</code> 默认暴露 <code>memory_search</code>；<code>memory_load</code> 可按需开启。</li>
 <li>所有读取仍然基于当前 <code>&lt;appName, userID&gt;</code> 做隔离。</li>
+<li>本地 OSS 没有 top-level <code>app_id</code>，适配层使用 <code>metadata.trpc_app_name</code> 做 app 隔离。已有 OSS 记录如果缺少这个 metadata，默认会被隐藏，直到重新 ingest 或回填 metadata。迁移期确实需要读取这些历史记录时，可显式开启 <code>WithSelfHostedOSSIncludeUnscopedMemories()</code>。</li>
+<li>当前 OSS <code>GET /memories</code> API 最多返回 1000 条 user 级结果，不支持分页，也不能在服务端表达 <code>metadata.trpc_app_name</code> 过滤。因此 <code>ReadMemories</code> 要求传入大于 0 且不超过 1000 的 limit，并且只会在 OSS 返回的前 1000 条 user 级记录内尽力做本地 app 隔离。</li>
 <li>Runner 会自动把 session 上下文带入 ingest；如果有需要，也可以通过 <code>session.WithIngestMetadata</code>、<code>session.WithIngestAgentID</code>、<code>session.WithIngestRunID</code> 追加信息。</li>
 <li>当 mem0 返回结构化 metadata 时，检索结果仍可携带 <code>Topics</code>、<code>Kind</code>、<code>EventTime</code>、<code>Participants</code>、<code>Location</code> 等字段。</li>
 <li>使用完成后请调用 <code>Close()</code>，确保后台 worker 干净退出。</li>
@@ -7724,7 +7741,7 @@ local/backend/collect 模式。</p>
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年6月23日 12:23:02 UTC">2026-06-23 12:23:02</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年7月7日 07:20:26 UTC">2026-07-07 07:20:26</span>
   </span>
 
     
