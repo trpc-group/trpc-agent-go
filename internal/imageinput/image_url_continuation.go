@@ -38,7 +38,8 @@ const (
 	// suppressed from a model request after a model-side image access failure.
 	DefaultUnavailableImageURLPlaceholder = "[Image unavailable: the user attached an image here, but the model could not access or decode it. The image content was not observed.]"
 
-	maxUnavailableImageURLRecords = 128
+	maxUnavailableImageURLRecords   = 128
+	unavailableImageURLStateVersion = 2
 )
 
 var (
@@ -173,36 +174,60 @@ func MarkUnavailableImageURLsFromRequest(
 	if inv == nil || inv.Session == nil || req == nil {
 		return 0, nil
 	}
-	markSession, marks := imageURLMarksToMarkFromRoutedSession(
+	markSession, marks, err := imageURLMarksToRecord(
+		ctx,
 		inv,
 		req,
 		cause,
 		respErr,
 	)
-	if len(marks) == 0 {
-		markSession = inv.Session
-		marks = imageURLMarksToMark(inv, req, cause, respErr)
+	if err != nil || len(marks) == 0 || markSession == nil {
+		return 0, err
 	}
+	return writeUnavailableImageURLMarks(ctx, inv, markSession, marks, cause)
+}
+
+func imageURLMarksToRecord(
+	ctx context.Context,
+	inv *agent.Invocation,
+	req *model.Request,
+	cause error,
+	respErr *model.ResponseError,
+) (*session.Session, []imageURLMark, error) {
+	markSession := inv.Session
+	if routedSession, ok := routedImageURLFailureSession(inv); ok &&
+		!sameSession(routedSession, inv.Session) {
+		markSession = routedSession
+	}
+	marks := imageURLMarksToMarkInSession(inv, markSession, req, cause, respErr)
 	if len(marks) == 0 {
 		var sessionForMarks *session.Session
 		var err error
 		sessionForMarks, marks, err = imageURLMarksToMarkFromPersistedSession(
 			ctx,
 			inv,
+			markSession,
 			req,
 			cause,
 			respErr,
 		)
 		if err != nil {
-			return 0, err
+			return nil, nil, err
 		}
 		if len(marks) > 0 {
 			markSession = sessionForMarks
 		}
 	}
-	if len(marks) == 0 || markSession == nil {
-		return 0, nil
-	}
+	return markSession, marks, nil
+}
+
+func writeUnavailableImageURLMarks(
+	ctx context.Context,
+	inv *agent.Invocation,
+	markSession *session.Session,
+	marks []imageURLMark,
+	cause error,
+) (int, error) {
 	state := readUnavailableImageURLState(markSession)
 	now := time.Now()
 	seen := make(map[unavailableImageURLLocation]int, len(state.URLs))
@@ -243,7 +268,7 @@ func MarkUnavailableImageURLsFromRequest(
 	if len(state.URLs) > maxUnavailableImageURLRecords {
 		state.URLs = state.URLs[len(state.URLs)-maxUnavailableImageURLRecords:]
 	}
-	state.Version = 2
+	state.Version = unavailableImageURLStateVersion
 	raw, err := json.Marshal(state)
 	if err != nil {
 		return 0, err
@@ -266,42 +291,26 @@ func MarkUnavailableImageURLsFromRequest(
 	return written, nil
 }
 
-func imageURLMarksToMarkFromRoutedSession(
-	inv *agent.Invocation,
-	req *model.Request,
-	cause error,
-	respErr *model.ResponseError,
-) (*session.Session, []imageURLMark) {
-	routedSession, ok := routedImageURLFailureSession(inv)
-	if !ok || sameSession(routedSession, inv.Session) {
-		return nil, nil
-	}
-	routedInv := *inv
-	routedInv.Session = routedSession
-	return routedSession, imageURLMarksToMark(&routedInv, req, cause, respErr)
-}
-
 func imageURLMarksToMarkFromPersistedSession(
 	ctx context.Context,
 	inv *agent.Invocation,
+	baseSession *session.Session,
 	req *model.Request,
 	cause error,
 	respErr *model.ResponseError,
 ) (*session.Session, []imageURLMark, error) {
-	if inv == nil || inv.Session == nil || inv.SessionService == nil {
+	if inv == nil || baseSession == nil || inv.SessionService == nil {
 		return nil, nil, nil
 	}
 	sess, err := inv.SessionService.GetSession(ctx, session.Key{
-		AppName:   inv.Session.AppName,
-		UserID:    inv.Session.UserID,
-		SessionID: inv.Session.ID,
+		AppName:   baseSession.AppName,
+		UserID:    baseSession.UserID,
+		SessionID: baseSession.ID,
 	})
 	if err != nil || sess == nil {
 		return nil, nil, err
 	}
-	refreshed := *inv
-	refreshed.Session = sess
-	return sess, imageURLMarksToMark(&refreshed, req, cause, respErr), nil
+	return sess, imageURLMarksToMarkInSession(inv, sess, req, cause, respErr), nil
 }
 
 func routedImageURLFailureSession(inv *agent.Invocation) (*session.Session, bool) {
@@ -408,6 +417,7 @@ func unavailableImageURLLocationSet(
 	out := make(map[unavailableImageURLLocation]struct{}, len(state.URLs))
 	for _, record := range state.URLs {
 		if !record.hasLocation() {
+			// URL-only draft records cannot be projected without widening scope.
 			continue
 		}
 		out[record.location()] = struct{}{}
@@ -441,14 +451,18 @@ func (m imageURLMark) location() unavailableImageURLLocation {
 	}
 }
 
-func imageURLMarksToMark(
+func imageURLMarksToMarkInSession(
 	inv *agent.Invocation,
+	sess *session.Session,
 	req *model.Request,
 	cause error,
 	respErr *model.ResponseError,
 ) []imageURLMark {
+	if inv == nil || sess == nil {
+		return nil
+	}
 	if marks := imageURLMarksFromResponseParam(
-		inv,
+		sess,
 		req,
 		cause,
 		respErr,
@@ -463,20 +477,21 @@ func imageURLMarksToMark(
 		reqURLs,
 		imageFailureText(cause, respErr),
 	); len(mentioned) > 0 {
-		return uniqueSessionImageURLMarks(inv, req, mentioned)
+		return uniqueSessionImageURLMarks(sess, req, mentioned)
 	}
 	current := messageImageURLs(inv.Message)
 	if len(current) > 0 {
 		return currentInvocationImageURLMarks(
 			inv,
+			sess,
 			intersectOrdered(current, reqURLs),
 		)
 	}
-	return uniqueSessionImageURLMarks(inv, req, reqURLs)
+	return uniqueSessionImageURLMarks(sess, req, reqURLs)
 }
 
 func imageURLMarksFromResponseParam(
-	inv *agent.Invocation,
+	sess *session.Session,
 	req *model.Request,
 	cause error,
 	respErr *model.ResponseError,
@@ -502,7 +517,7 @@ func imageURLMarksFromResponseParam(
 		return nil
 	}
 	var matches []imageURLMark
-	for _, ref := range sessionImageURLRefs(inv.Session) {
+	for _, ref := range sessionImageURLRefs(sess) {
 		if ref.URL != imageURL || ref.PartIndex != partIndex {
 			continue
 		}
@@ -519,14 +534,15 @@ func imageURLMarksFromResponseParam(
 
 func currentInvocationImageURLMarks(
 	inv *agent.Invocation,
+	sess *session.Session,
 	urls []string,
 ) []imageURLMark {
-	if inv == nil || inv.Session == nil || len(urls) == 0 {
+	if inv == nil || sess == nil || len(urls) == 0 {
 		return nil
 	}
 	allowed := urlSet(urls)
 	var out []imageURLMark
-	for _, ref := range sessionImageURLRefs(inv.Session) {
+	for _, ref := range sessionImageURLRefs(sess) {
 		if _, ok := allowed[ref.URL]; !ok {
 			continue
 		}
@@ -542,16 +558,16 @@ func currentInvocationImageURLMarks(
 }
 
 func uniqueSessionImageURLMarks(
-	inv *agent.Invocation,
+	sess *session.Session,
 	req *model.Request,
 	urls []string,
 ) []imageURLMark {
-	if inv == nil || inv.Session == nil || req == nil || len(urls) == 0 {
+	if sess == nil || req == nil || len(urls) == 0 {
 		return nil
 	}
 	allowed := urlSet(urls)
 	byURL := make(map[string][]imageURLMark, len(urls))
-	for _, ref := range sessionImageURLRefs(inv.Session) {
+	for _, ref := range sessionImageURLRefs(sess) {
 		if _, ok := allowed[ref.URL]; !ok {
 			continue
 		}
@@ -889,18 +905,18 @@ func isWordBoundaryAfter(text string, idx int) bool {
 
 func readUnavailableImageURLState(sess *session.Session) unavailableImageURLState {
 	if sess == nil {
-		return unavailableImageURLState{Version: 1}
+		return unavailableImageURLState{Version: unavailableImageURLStateVersion}
 	}
 	raw, ok := sess.GetState(UnavailableImageURLsStateKey)
 	if !ok || len(raw) == 0 {
-		return unavailableImageURLState{Version: 1}
+		return unavailableImageURLState{Version: unavailableImageURLStateVersion}
 	}
 	var state unavailableImageURLState
 	if err := json.Unmarshal(raw, &state); err != nil {
-		return unavailableImageURLState{Version: 1}
+		return unavailableImageURLState{Version: unavailableImageURLStateVersion}
 	}
 	if state.Version == 0 {
-		state.Version = 1
+		state.Version = unavailableImageURLStateVersion
 	}
 	return state
 }

@@ -10,6 +10,7 @@ package imageinput
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -366,6 +367,98 @@ func TestMarkUnavailableImageURLsFromRequestUsesRoutedSession(t *testing.T) {
 	require.Contains(t, UnavailableImageURLSet(routedSess), imageURL)
 }
 
+func TestMarkUnavailableImageURLsFromRequestDoesNotFallbackToRootWhenRouted(
+	t *testing.T,
+) {
+	const imageURL = "https://example.invalid/current.png"
+	msg := model.NewUserMessage("current")
+	msg.AddImageURL(imageURL, "auto")
+	rootSess := &session.Session{
+		ID:      "root",
+		AppName: "app",
+		UserID:  "user",
+		Events: []event.Event{
+			*imageMessageEvent("current-inv", msg),
+		},
+	}
+	routedSess := &session.Session{
+		ID:      "root/team/member",
+		AppName: "app",
+		UserID:  "user",
+	}
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(rootSess),
+		agent.WithInvocationMessage(msg),
+	)
+	inv.InvocationID = "current-inv"
+	sessionroute.AttachEventRouter(inv, routedSessionRouter{sess: routedSess})
+
+	count, err := MarkUnavailableImageURLsFromRequest(
+		context.Background(),
+		inv,
+		&model.Request{Messages: []model.Message{msg}},
+		errors.New("Unable to download image from "+imageURL),
+		nil,
+	)
+
+	require.NoError(t, err)
+	require.Zero(t, count)
+	require.Empty(t, UnavailableImageURLSet(rootSess))
+	require.Empty(t, UnavailableImageURLSet(routedSess))
+}
+
+func TestMarkUnavailableImageURLsFromRequestUsesPersistedRoutedSessionEvent(
+	t *testing.T,
+) {
+	const imageURL = "https://example.invalid/current.png"
+	msg := model.NewUserMessage("current")
+	msg.AddImageURL(imageURL, "auto")
+	rootSess := &session.Session{ID: "root", AppName: "app", UserID: "user"}
+	routedSess := &session.Session{
+		ID:      "root/team/member",
+		AppName: "app",
+		UserID:  "user",
+	}
+	persistedRoutedSess := &session.Session{
+		ID:      routedSess.ID,
+		AppName: routedSess.AppName,
+		UserID:  routedSess.UserID,
+		Events: []event.Event{
+			*imageMessageEvent("current-inv", msg),
+		},
+	}
+	sessionSvc := &persistedSessionService{
+		Service: sessionnoop.NewService(),
+		sess:    persistedRoutedSess,
+	}
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(rootSess),
+		agent.WithInvocationMessage(msg),
+		agent.WithInvocationSessionService(sessionSvc),
+	)
+	inv.InvocationID = "current-inv"
+	sessionroute.AttachEventRouter(inv, routedSessionRouter{sess: routedSess})
+
+	count, err := MarkUnavailableImageURLsFromRequest(
+		context.Background(),
+		inv,
+		&model.Request{Messages: []model.Message{msg}},
+		errors.New("Unable to download image from "+imageURL),
+		nil,
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, 1, count)
+	require.Equal(t, session.Key{
+		AppName:   routedSess.AppName,
+		UserID:    routedSess.UserID,
+		SessionID: routedSess.ID,
+	}, sessionSvc.key)
+	require.Empty(t, UnavailableImageURLSet(rootSess))
+	require.Empty(t, UnavailableImageURLSet(routedSess))
+	require.Contains(t, UnavailableImageURLSet(persistedRoutedSess), imageURL)
+}
+
 func TestProjectUnavailableImageURLs(t *testing.T) {
 	const imageURL = "https://example.invalid/current.png"
 	msg := model.NewUserMessage("current")
@@ -438,6 +531,28 @@ func TestProjectUnavailableImageURLsScopesToEventPart(t *testing.T) {
 	)
 	require.Equal(t, model.ContentTypeImage, projectedSecond.ContentParts[0].Type)
 	require.Equal(t, imageURL, projectedSecond.ContentParts[0].Image.URL)
+}
+
+func TestProjectUnavailableImageURLsIgnoresLegacyURLOnlyState(t *testing.T) {
+	const imageURL = "https://example.invalid/current.png"
+	msg := model.NewUserMessage("current")
+	msg.AddImageURL(imageURL, "auto")
+	evt := imageMessageEvent("current-inv", msg)
+	raw, err := json.Marshal(unavailableImageURLState{
+		Version: 1,
+		URLs: []UnavailableImageURLRecord{
+			{URL: imageURL},
+		},
+	})
+	require.NoError(t, err)
+	sess := &session.Session{Events: []event.Event{*evt}}
+	sess.SetState(UnavailableImageURLsStateKey, raw)
+
+	projected := ProjectUnavailableImageURLs(sess, *evt, 0, msg, "[missing image]")
+
+	require.Len(t, projected.ContentParts, 1)
+	require.Equal(t, model.ContentTypeImage, projected.ContentParts[0].Type)
+	require.Equal(t, imageURL, projected.ContentParts[0].Image.URL)
 }
 
 func TestMarkUnavailableImageURLsFromRequestUsesResponseParam(t *testing.T) {
@@ -534,13 +649,15 @@ func (s *failingUpdateSessionService) UpdateSessionState(
 type persistedSessionService struct {
 	*sessionnoop.Service
 	sess *session.Session
+	key  session.Key
 }
 
 func (s *persistedSessionService) GetSession(
-	context.Context,
-	session.Key,
-	...session.Option,
+	_ context.Context,
+	key session.Key,
+	_ ...session.Option,
 ) (*session.Session, error) {
+	s.key = key
 	return s.sess, nil
 }
 
