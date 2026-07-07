@@ -92,6 +92,21 @@ func TestDefaultClientBuilder_MissingDialector(t *testing.T) {
 	assert.Contains(t, err.Error(), "dialector is required")
 }
 
+func TestGetGormInstance_ReturnsCopy(t *testing.T) {
+	instanceName := "test-copy"
+	RegisterGormInstance(instanceName, WithDialector(sqlite.Open(":memory:")))
+
+	opts, ok := GetGormInstance(instanceName)
+	require.True(t, ok)
+	require.Len(t, opts, 1)
+
+	opts = append(opts, WithInstanceName("mutated"))
+
+	stored, ok := GetGormInstance(instanceName)
+	require.True(t, ok)
+	assert.Len(t, stored, 1, "caller mutations must not affect registry state")
+}
+
 func TestRegisterGormInstance_Concurrent(t *testing.T) {
 	const workers = 16
 	done := make(chan struct{}, workers)
