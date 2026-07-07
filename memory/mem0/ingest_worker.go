@@ -35,6 +35,7 @@ type ingestJob struct {
 type ingestWorker struct {
 	c *client
 
+	apiMode   apiMode
 	asyncMode bool
 	version   string
 
@@ -68,6 +69,7 @@ func newIngestWorker(c *client, opts serviceOpts) *ingestWorker {
 	}
 	w := &ingestWorker{
 		c:         c,
+		apiMode:   opts.apiMode,
 		asyncMode: opts.asyncMode,
 		version:   opts.version,
 		timeout:   opts.memoryJobTimeout,
@@ -183,6 +185,9 @@ func (w *ingestWorker) ingest(
 	if len(apiMsgs) == 0 {
 		return nil
 	}
+	if w.apiMode == apiModeSelfHostedOSS {
+		return w.ingestOSS(ctx, userKey, apiMsgs, reqOpts)
+	}
 	req := createMemoryRequest{
 		Messages:  apiMsgs,
 		UserID:    userKey.UserID,
@@ -201,6 +206,23 @@ func (w *ingestWorker) ingest(
 		return err
 	}
 	return w.awaitQueuedEvents(ctx, events)
+}
+
+func (w *ingestWorker) ingestOSS(
+	ctx context.Context,
+	userKey memory.UserKey,
+	messages []apiMessage,
+	reqOpts session.IngestOptions,
+) error {
+	req := ossCreateMemoryRequest{
+		Messages: messages,
+		UserID:   userKey.UserID,
+		AgentID:  reqOpts.AgentID,
+		RunID:    reqOpts.RunID,
+		Metadata: withTRPCAppMetadata(reqOpts.Metadata, userKey.AppName),
+		Infer:    true,
+	}
+	return w.c.doJSON(ctx, httpMethodPost, pathOSSMemories, nil, req, nil)
 }
 
 func (w *ingestWorker) awaitQueuedEvents(ctx context.Context, events createMemoryEvents) error {

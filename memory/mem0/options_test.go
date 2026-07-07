@@ -34,6 +34,23 @@ func TestWithAPIKey(t *testing.T) {
 	assert.Equal(t, "k", apply(WithAPIKey("k")).apiKey)
 }
 
+func TestWithSelfHostedOSS(t *testing.T) {
+	assert.Equal(t, apiModeCloud, apply().apiMode)
+
+	got := apply(WithSelfHostedOSS())
+	assert.Equal(t, apiModeSelfHostedOSS, got.apiMode)
+	assert.Equal(t, defaultSelfHostedOSSHost, got.host)
+
+	customHost := "http://mem0.internal:8888"
+	assert.Equal(t, customHost, apply(WithHost(customHost), WithSelfHostedOSS()).host)
+	assert.Equal(t, customHost, apply(WithSelfHostedOSS(), WithHost(customHost)).host)
+}
+
+func TestWithSelfHostedOSSIncludeUnscopedMemories(t *testing.T) {
+	assert.False(t, apply().includeUnscopedSelfHostedOSSMemories)
+	assert.True(t, apply(WithSelfHostedOSSIncludeUnscopedMemories()).includeUnscopedSelfHostedOSSMemories)
+}
+
 func TestWithOrgProject(t *testing.T) {
 	got := apply(WithOrgProject("o", "p"))
 	assert.Equal(t, "o", got.orgID)
