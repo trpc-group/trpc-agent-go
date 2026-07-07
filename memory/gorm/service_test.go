@@ -421,7 +421,7 @@ func TestService_WithExtractor_startsWorker(t *testing.T) {
 		WithExtractor(&fakeExtractor{}),
 		WithAsyncMemoryNum(1),
 		WithMemoryQueueSize(2),
-		WithMemoryJobTimeout(50 * time.Millisecond),
+		WithMemoryJobTimeout(50*time.Millisecond),
 	)
 	require.NoError(t, err)
 	require.NotNil(t, svc.autoMemoryWorker)
