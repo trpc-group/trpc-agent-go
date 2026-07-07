@@ -518,22 +518,20 @@ func TestNewFileToolSet_RuntimeReadDirsRelativeStateDir(t *testing.T) {
 func TestNewFileToolSet_RuntimeReadDirsAllowBrowserArtifacts(
 	t *testing.T,
 ) {
-	workdir := t.TempDir()
 	oldWorkdir, err := os.Getwd()
 	require.NoError(t, err)
+	workdir, err := os.MkdirTemp(oldWorkdir, ".test-browser-artifacts-")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, os.RemoveAll(workdir))
+	})
 	require.NoError(t, os.Chdir(workdir))
 	t.Cleanup(func() {
 		require.NoError(t, os.Chdir(oldWorkdir))
 	})
 
 	artifactDir := filepath.Join(workdir, browserArtifactDirName)
-	require.NoError(t, os.MkdirAll(artifactDir, 0o755))
-	artifactFile := filepath.Join(artifactDir, "page.yml")
-	require.NoError(t, os.WriteFile(
-		artifactFile,
-		[]byte("title: Example\n"),
-		0o644,
-	))
+	require.NoDirExists(t, artifactDir)
 
 	cfg := yamlNode(t, "base_dir: "+t.TempDir()+"\n")
 	ts, err := newFileToolSet(
@@ -541,8 +539,15 @@ func TestNewFileToolSet_RuntimeReadDirsAllowBrowserArtifacts(
 		registry.PluginSpec{Name: "fs", Config: cfg},
 	)
 	require.NoError(t, err)
+	require.DirExists(t, artifactDir)
 	readFile := findCallableTool(t, ts.Tools(context.Background()), "read_file")
 
+	artifactFile := filepath.Join(artifactDir, "page.yml")
+	require.NoError(t, os.WriteFile(
+		artifactFile,
+		[]byte("title: Example\n"),
+		0o644,
+	))
 	raw, err := readFile.Call(
 		context.Background(),
 		[]byte(`{"file_name":`+strconv.Quote(artifactFile)+`}`),

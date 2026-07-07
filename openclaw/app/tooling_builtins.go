@@ -470,7 +470,10 @@ func defaultFileReadOnlyDirs(stateDir string) []string {
 	}
 	if cwd, err := os.Getwd(); err == nil {
 		if cwd = strings.TrimSpace(cwd); cwd != "" {
-			roots = append(roots, filepath.Join(cwd, browserArtifactDirName))
+			artifactDir := filepath.Join(cwd, browserArtifactDirName)
+			if err := os.MkdirAll(artifactDir, 0o755); err == nil {
+				roots = append(roots, artifactDir)
+			}
 		}
 	}
 	if stateDir := strings.TrimSpace(stateDir); stateDir != "" {
