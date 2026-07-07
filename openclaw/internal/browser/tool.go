@@ -1133,6 +1133,7 @@ func navigationPolicyInfo(policy navigationPolicy) *NavigationPolicyInfo {
 		AllowLoopback:        policy.AllowLoopback,
 		AllowPrivateNetworks: policy.AllowPrivateNet,
 		AllowFileURLs:        policy.AllowFileURLs,
+		AllowRootFileURLs:    len(policy.AllowedFileRoots) > 0,
 		AllowedFileRoots:     append([]string(nil), policy.AllowedFileRoots...),
 	}
 }

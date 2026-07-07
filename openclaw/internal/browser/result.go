@@ -87,6 +87,7 @@ type NavigationPolicyInfo struct {
 	AllowLoopback        bool     `json:"allowLoopback,omitempty"`
 	AllowPrivateNetworks bool     `json:"allowPrivateNetworks,omitempty"`
 	AllowFileURLs        bool     `json:"allowFileUrls,omitempty"`
+	AllowRootFileURLs    bool     `json:"allowRootFileUrls,omitempty"`
 	AllowedFileRoots     []string `json:"allowedFileRoots,omitempty"`
 }
 
