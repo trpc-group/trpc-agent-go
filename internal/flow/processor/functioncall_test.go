@@ -1407,10 +1407,9 @@ func TestStateDeltaSessionHelpers_EdgeCases(t *testing.T) {
 	preserveStateDeltaInvocationDefaults(agent.NewInvocation(), nil)
 	memoryReader := &mockMemoryService{}
 	viewInv := agent.NewInvocation()
-	preserveStateDeltaInvocationDefaults(
-		viewInv,
-		agent.NewInvocation(agent.WithInvocationMemoryReader(memoryReader)),
-	)
+	baseWithMemoryReader := agent.NewInvocation()
+	baseWithMemoryReader.MemoryReader = memoryReader
+	preserveStateDeltaInvocationDefaults(viewInv, baseWithMemoryReader)
 	require.Same(t, memoryReader, viewInv.MemoryReader)
 
 	current := session.StateMap{

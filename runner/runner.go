@@ -787,9 +787,6 @@ func (r *runner) newRunInvocation(
 		agent.WithInvocationStructuredOutput(ro.StructuredOutput),
 		agent.WithInvocationStructuredOutputType(ro.StructuredOutputType),
 		agent.WithInvocationMemoryService(r.memoryService),
-		agent.WithInvocationMemoryReader(
-			resolveMemoryReader(r.memoryService, r.ingestor),
-		),
 		agent.WithInvocationArtifactService(r.artifactService),
 		agent.WithInvocationEventFilterKey(eventFilterKey),
 		agent.WithInvocationPlugins(combineRunPlugins(r.pluginManager, ro.Plugins)),
@@ -801,6 +798,7 @@ func (r *runner) newRunInvocation(
 		)
 	}
 	invocation := agent.NewInvocation(invocationOpts...)
+	invocation.MemoryReader = resolveMemoryReader(r.memoryService, r.ingestor)
 	if rootLookupName := r.selectedRootLookupName(
 		ro,
 		awaitUserReplyRootName,

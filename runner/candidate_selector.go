@@ -391,7 +391,6 @@ func (a *candidateSelectorAgent) newAttemptInvocation(
 		agent.WithInvocationStructuredOutput(base.StructuredOutput),
 		agent.WithInvocationStructuredOutputType(base.StructuredOutputType),
 		agent.WithInvocationMemoryService(readOnlyMemoryService),
-		agent.WithInvocationMemoryReader(memoryReader),
 		agent.WithInvocationArtifactService(newReadOnlyArtifactService(base.ArtifactService)),
 		agent.WithInvocationPlugins(base.Plugins),
 		agent.WithInvocationEventFilterKey(base.GetEventFilterKey()),
@@ -400,6 +399,7 @@ func (a *candidateSelectorAgent) newAttemptInvocation(
 		opts = append(opts, agent.WithInvocationTraceNodeID(traceNodeID))
 	}
 	innerInv := agent.NewInvocation(opts...)
+	innerInv.MemoryReader = memoryReader
 	innerInv.MaxLLMCalls = base.MaxLLMCalls
 	innerInv.MaxToolIterations = base.MaxToolIterations
 	barrier.Enable(innerInv)

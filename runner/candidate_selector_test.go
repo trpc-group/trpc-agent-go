@@ -99,8 +99,8 @@ func TestCandidateSelectorAgent_NewAttemptInvocationMemoryReader(t *testing.T) {
 		base := agent.NewInvocation(
 			agent.WithInvocationAgent(&candidateScriptAgent{name: "base"}),
 			agent.WithInvocationMessage(model.NewUserMessage("question")),
-			agent.WithInvocationMemoryReader(reader),
 		)
+		base.MemoryReader = reader
 
 		attempt := selectorAgent.newAttemptInvocation(
 			base,
@@ -119,8 +119,8 @@ func TestCandidateSelectorAgent_NewAttemptInvocationMemoryReader(t *testing.T) {
 			agent.WithInvocationAgent(&candidateScriptAgent{name: "base"}),
 			agent.WithInvocationMessage(model.NewUserMessage("question")),
 			agent.WithInvocationMemoryService(memSvc),
-			agent.WithInvocationMemoryReader(explicitReader),
 		)
+		base.MemoryReader = explicitReader
 
 		attempt := selectorAgent.newAttemptInvocation(
 			base,

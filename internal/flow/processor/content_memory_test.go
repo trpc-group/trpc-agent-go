@@ -484,8 +484,8 @@ func TestGetPreloadMemoryMessage(t *testing.T) {
 				AppName: "app",
 				UserID:  "user",
 			}),
-			agent.WithInvocationMemoryReader(mockReader),
 		)
+		inv.MemoryReader = mockReader
 		msg := p.getPreloadMemoryMessage(context.Background(), inv)
 		require.NotNil(t, msg)
 		assert.Contains(t, msg.Content, "User prefers tea")
