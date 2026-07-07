@@ -228,6 +228,33 @@ func TestWebFetch_PDF(t *testing.T) {
 	assert.Contains(t, resp.Results[0].Content, "works flyer\nLife")
 }
 
+func TestWebFetch_PDFRespectsPerURLBodyLimit(t *testing.T) {
+	pdfBytes := createPDFBytes(t, []string{
+		"Quarterly reference works flyer",
+	})
+	ts := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		w.Header().Set("Content-Type", "application/pdf")
+		_, _ = w.Write(pdfBytes)
+	}))
+	defer ts.Close()
+
+	tool := NewTool(WithMaxContentLength(len(pdfBytes) - 1))
+	args := fmt.Sprintf(`{"urls": ["%s"]}`, ts.URL)
+
+	res, err := tool.Call(context.Background(), []byte(args))
+	require.NoError(t, err)
+
+	resp, ok := res.(fetchResponse)
+	require.True(t, ok, "Response should be of type fetchResponse")
+	require.Len(t, resp.Results, 1)
+	assert.Equal(t, "application/pdf", resp.Results[0].ContentType)
+	assert.Empty(t, resp.Results[0].Content)
+	assert.Contains(t, resp.Results[0].Error, "per-url content limit")
+}
+
 func TestWebFetch_InvalidPDFReportsParseError(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/pdf")
@@ -253,6 +280,78 @@ func TestReadPDFPageText_NullPage(t *testing.T) {
 	text, err := readPDFPageText(pdfpkg.Page{})
 	require.NoError(t, err)
 	assert.Empty(t, text)
+}
+
+func TestReadPDFBody(t *testing.T) {
+	data, err := readPDFBody(strings.NewReader("abcdef"), 0)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("abcdef"), data)
+
+	data, err = readPDFBody(strings.NewReader("abc"), 3)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("abc"), data)
+
+	_, err = readPDFBody(strings.NewReader("abcd"), 3)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "per-url content limit")
+
+	_, err = readPDFBody(&failReader{}, 0)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to read response body")
+
+	_, err = readPDFBody(&failReader{}, 3)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to read response body")
+}
+
+func TestPDFPageTextFormatsFragments(t *testing.T) {
+	text := pdfPageText([]pdfpkg.Text{
+		{S: "Second line", X: 10, Y: 80, W: 60, FontSize: 12},
+		{S: "World ", X: 30, Y: 100, W: 30, FontSize: 12},
+		{S: "", X: 5, Y: 100, W: 0, FontSize: 12},
+		{S: "Hello", X: 10, Y: 100, W: 15, FontSize: 12},
+	})
+
+	assert.Equal(t, "Hello World\nSecond line", text)
+	assert.Empty(t, pdfPageText(nil))
+}
+
+func TestShouldSeparatePDFText(t *testing.T) {
+	assert.False(t, shouldSeparatePDFText(
+		pdfpkg.Text{S: "Hello ", X: 0, W: 10, FontSize: 12},
+		pdfpkg.Text{S: "World", X: 30, FontSize: 12},
+	))
+	assert.False(t, shouldSeparatePDFText(
+		pdfpkg.Text{S: "Hello", X: 0, W: 10, FontSize: 12},
+		pdfpkg.Text{S: " World", X: 30, FontSize: 12},
+	))
+	assert.False(t, shouldSeparatePDFText(
+		pdfpkg.Text{S: "Hello", X: 0, W: 10, FontSize: 12},
+		pdfpkg.Text{S: "World", X: 9, FontSize: 12},
+	))
+	assert.False(t, shouldSeparatePDFText(
+		pdfpkg.Text{S: "Hello", X: 0, W: 10, FontSize: 12},
+		pdfpkg.Text{S: "World", X: 12, FontSize: 12},
+	))
+	assert.True(t, shouldSeparatePDFText(
+		pdfpkg.Text{S: "Hello", X: 0, W: 10, FontSize: 12},
+		pdfpkg.Text{S: "World", X: 30, FontSize: 12},
+	))
+	assert.True(t, shouldSeparatePDFText(
+		pdfpkg.Text{S: "Hello", X: 0, W: 1},
+		pdfpkg.Text{S: "World", X: 5},
+	))
+}
+
+func TestTrimTrailingSpaces(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("already clean")
+	trimTrailingSpaces(&b)
+	assert.Equal(t, "already clean", b.String())
+
+	b.WriteString(" \t")
+	trimTrailingSpaces(&b)
+	assert.Equal(t, "already clean", b.String())
 }
 
 func TestWebFetch_PerUrlLimit(t *testing.T) {

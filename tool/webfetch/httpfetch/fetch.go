@@ -309,7 +309,10 @@ func (t *webFetchTool) fetchOne(ctx context.Context, urlStr string) resultItem {
 			t.mainContentOnly,
 		)
 	} else if item.ContentType == "application/pdf" {
-		content, processErr = readPDFAsText(resp.Body)
+		content, processErr = readPDFAsText(
+			resp.Body,
+			t.maxContentLength,
+		)
 	} else if isSupportedTextType(item.ContentType) {
 		content, processErr = readBodyAsString(resp.Body)
 	} else {
@@ -437,10 +440,10 @@ func readBodyAsString(r io.Reader) (string, error) {
 
 const pdfLineYTolerance = 2.0
 
-func readPDFAsText(r io.Reader) (string, error) {
-	data, err := io.ReadAll(r)
+func readPDFAsText(r io.Reader, maxBodyBytes int) (string, error) {
+	data, err := readPDFBody(r, maxBodyBytes)
 	if err != nil {
-		return "", fmt.Errorf("failed to read response body: %w", err)
+		return "", err
 	}
 	reader, err := pdfpkg.NewReader(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
@@ -464,6 +467,27 @@ func readPDFAsText(r io.Reader) (string, error) {
 		text.WriteString(pageText)
 	}
 	return strings.ToValidUTF8(text.String(), ""), nil
+}
+
+func readPDFBody(r io.Reader, maxBodyBytes int) ([]byte, error) {
+	if maxBodyBytes <= 0 {
+		data, err := io.ReadAll(r)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read response body: %w", err)
+		}
+		return data, nil
+	}
+	data, err := io.ReadAll(io.LimitReader(r, int64(maxBodyBytes)+1))
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+	if len(data) > maxBodyBytes {
+		return nil, fmt.Errorf(
+			"pdf response body exceeds per-url content limit of %d bytes",
+			maxBodyBytes,
+		)
+	}
+	return data, nil
 }
 
 func readPDFPageText(page pdfpkg.Page) (text string, err error) {
