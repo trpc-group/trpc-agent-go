@@ -28,6 +28,10 @@ var errSERPChallenge = errors.New(
 	"duckduckgo returned an anti-bot challenge page",
 )
 
+var errAPIFallbackNoResults = errors.New(
+	"api fallback returned no results",
+)
+
 func (t *ddgTool) searchSERPWithFallback(
 	ctx context.Context,
 	req searchRequest,
@@ -116,7 +120,8 @@ func (t *ddgTool) searchSERPWithFallbackForBackend(
 			apiFallbackErr,
 		)
 	}
-	if isSERPRouteBlocker(err, fallbackErr) {
+	if isSERPRouteBlocker(err, fallbackErr) &&
+		errors.Is(apiFallbackErr, errAPIFallbackNoResults) {
 		return searchResponse{
 			Query:   req.Query,
 			Results: []resultItem{},
@@ -315,7 +320,7 @@ func (t *ddgTool) searchAPIFallbackAfterSERPFailure(
 		return searchResponse{}, err
 	}
 	if len(result.Results) == 0 {
-		return searchResponse{}, fmt.Errorf("api fallback returned no results")
+		return searchResponse{}, errAPIFallbackNoResults
 	}
 	return result, nil
 }

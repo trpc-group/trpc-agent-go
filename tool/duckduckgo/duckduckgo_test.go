@@ -714,7 +714,7 @@ func TestDDGTool_SERPFallbackUsesAPIForDefaultDuckDuckGoURLs(t *testing.T) {
 	require.Equal(t, 1, calls["api.duckduckgo.com"])
 }
 
-func TestDDGTool_SERPFallbackReportsUnavailableWhenAPIFallbackFails(
+func TestDDGTool_SERPFallbackReportsUnavailableWhenAPIFallbackHasNoResults(
 	t *testing.T,
 ) {
 	t.Parallel()
@@ -737,9 +737,12 @@ func TestDDGTool_SERPFallbackReportsUnavailableWhenAPIFallbackFails(
 					}, nil
 				case "api.duckduckgo.com":
 					return &http.Response{
-						StatusCode: http.StatusServiceUnavailable,
-						Body:       io.NopCloser(strings.NewReader("down")),
-						Header:     make(http.Header),
+						StatusCode: http.StatusOK,
+						Body: io.NopCloser(strings.NewReader(`{
+  "RelatedTopics": [],
+  "Results": []
+}`)),
+						Header: make(http.Header),
 					}, nil
 				default:
 					t.Fatalf("unexpected host %s", r.URL.Host)
@@ -763,7 +766,7 @@ func TestDDGTool_SERPFallbackReportsUnavailableWhenAPIFallbackFails(
 	require.Contains(t, result.Summary, "instead of immediately retrying")
 }
 
-func TestDDGTool_SERPFallbackReportsTransportUnavailable(t *testing.T) {
+func TestDDGTool_SERPFallbackReturnsAPIFailure(t *testing.T) {
 	t.Parallel()
 
 	calls := make(map[string]int)
@@ -802,10 +805,11 @@ func TestDDGTool_SERPFallbackReportsTransportUnavailable(t *testing.T) {
 		context.Background(),
 		searchRequest{Query: "example search topic"},
 	)
-	require.NoError(t, err)
+	require.Error(t, err)
 	require.Empty(t, result.Results)
-	require.Contains(t, result.Summary, "html and lite")
-	require.Contains(t, result.Summary, "unavailable")
+	require.Contains(t, result.Summary, "api fallback failed")
+	require.Contains(t, err.Error(), "api fallback failed")
+	require.Contains(t, err.Error(), "status 503")
 	require.GreaterOrEqual(t, calls["html.duckduckgo.com"], 1)
 	require.LessOrEqual(t, calls["html.duckduckgo.com"], 2)
 	require.GreaterOrEqual(t, calls["lite.duckduckgo.com"], 1)
