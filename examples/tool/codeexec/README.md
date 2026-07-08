@@ -70,6 +70,7 @@ export OPENSANDBOX_API_KEY=your-api-key                             # API key
 # Optional overrides (defaults come from the OpenSandbox Go SDK):
 # export OPENSANDBOX_IMAGE=opensandbox/code-interpreter:latest      # Container image
 # export OPENSANDBOX_ENTRYPOINT="/opt/code-interpreter/code-interpreter.sh"  # Entrypoint (space-separated)
+# export OPENSANDBOX_USE_SERVER_PROXY=1                             # Route execd via server (Docker Desktop / WSL2)
 ```
 
 Run with OpenSandbox backend:
@@ -79,7 +80,7 @@ cd tool/codeexec
 ./codeexec-demo -model deepseek-v4-flash -executor opensandbox
 ```
 
-**Self-hosted deployment notes (Docker Desktop / WSL2):** When running the OpenSandbox server locally via Docker Desktop (WSL2/macOS), sandbox containers live on a Docker bridge network that is not directly reachable from the host. Use `opensandbox.WithUseServerProxy(true)` to route execd requests through the server. On Linux hosts where the server returns `host.docker.internal` (which is not resolvable), use `opensandbox.WithEndpointHostRewrite` to remap it:
+**Self-hosted deployment (Docker Desktop / WSL2):** When running the OpenSandbox server locally via Docker Desktop (WSL2/macOS), sandbox containers live on a Docker bridge network that is not directly reachable from the host. Set `OPENSANDBOX_USE_SERVER_PROXY=1` so execd requests are routed through the server. On Linux hosts where the server returns `host.docker.internal` (which is not resolvable), use `opensandbox.WithEndpointHostRewrite` in code to remap it:
 
 ```go
 executor, err := opensandbox.New(

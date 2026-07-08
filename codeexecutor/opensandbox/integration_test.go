@@ -43,10 +43,20 @@ func newIntegrationExecutor(t *testing.T, opts ...Option) *CodeExecutor {
 	if endpoint == "" {
 		endpoint = "localhost:8080"
 	}
-	all := append([]Option{
+	base := []Option{
 		WithDomain(endpoint),
 		WithProtocol("http"),
-	}, opts...)
+	}
+	if k := os.Getenv("OPENSANDBOX_API_KEY"); k != "" {
+		base = append(base, WithAPIKey(k))
+	}
+	// WSL2 / Docker Desktop: sandbox containers live on a bridge
+	// network that the host cannot reach directly. Gate via env so
+	// the same tests run on Linux hosts without the proxy.
+	if os.Getenv("OPENSANDBOX_USE_SERVER_PROXY") == "1" {
+		base = append(base, WithUseServerProxy(true))
+	}
+	all := append(base, opts...)
 	exec, err := New(all...)
 	require.NoErrorf(t, err, "failed to create executor against %s", endpoint)
 	t.Cleanup(func() {

@@ -122,6 +122,9 @@ func (c *codeExecChat) setup(_ context.Context) error {
 		if v := os.Getenv("OPENSANDBOX_ENTRYPOINT"); v != "" {
 			osbOpts = append(osbOpts, osbexec.WithEntrypoint(strings.Fields(v)))
 		}
+		if os.Getenv("OPENSANDBOX_USE_SERVER_PROXY") == "1" {
+			osbOpts = append(osbOpts, osbexec.WithUseServerProxy(true))
+		}
 		osbe, err := osbexec.New(osbOpts...)
 		if err != nil {
 			return fmt.Errorf("opensandbox executor: %w", err)
