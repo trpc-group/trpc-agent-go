@@ -25,6 +25,13 @@ func TestRedactString_CoversCommonSecretShapes(t *testing.T) {
 	require.NotContains(t, out, "PRIVATE KEY")
 }
 
+func TestContainsSecret_CoversJSONSecretShapes(t *testing.T) {
+	require.True(t, containsSecret(`{"token":"abc123"}`))
+	require.True(t, containsSecret(`{"nested":{"password":"abc123"}}`))
+	require.True(t, containsSecret(`{"items":[{"client_secret":"abc123"}]}`))
+	require.False(t, containsSecret(`{"message":"plain"}`))
+}
+
 func TestRedactString_NoSecretLeavesInput(t *testing.T) {
 	out, redacted := redactString("plain output")
 	require.False(t, redacted)

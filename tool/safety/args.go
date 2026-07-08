@@ -28,9 +28,9 @@ func RequestsFromToolCall(
 	switch toolName {
 	case "workspace_exec":
 		return parseExecArgs(toolName, toolCallID, backend, args, "cwd", metadata)
-	case "exec_command":
+	case "exec_command", "skill_run", "skill_exec":
 		return parseExecArgs(toolName, toolCallID, backend, args, "workdir", metadata)
-	case "workspace_write_stdin", "write_stdin":
+	case "workspace_write_stdin", "write_stdin", "skill_write_stdin":
 		return parseWriteStdinArgs(toolName, toolCallID, backend, args, metadata)
 	case "workspace_kill_session", "kill_session":
 		return []ScanRequest{{
@@ -58,7 +58,8 @@ func InferBackend(toolName string) Backend {
 	switch toolName {
 	case "workspace_exec", "workspace_write_stdin", "workspace_kill_session":
 		return BackendWorkspace
-	case "exec_command", "write_stdin", "kill_session":
+	case "exec_command", "write_stdin", "kill_session",
+		"skill_run", "skill_exec", "skill_write_stdin":
 		return BackendHost
 	case "execute_code":
 		return BackendCodeExec
@@ -89,7 +90,7 @@ func parseExecArgs(
 	if err != nil {
 		return nil, err
 	}
-	cwd, err := stringField(raw, cwdField)
+	cwd, err := stringAnyField(raw, cwdField, "cwd", "workdir")
 	if err != nil {
 		return nil, err
 	}
@@ -157,7 +158,6 @@ func parseWriteStdinArgs(
 		ToolName:     toolName,
 		ToolCallID:   toolCallID,
 		Backend:      backend,
-		Command:      chars,
 		Stdin:        chars,
 		RawArguments: append([]byte(nil), args...),
 		Metadata:     metadata,
@@ -246,6 +246,16 @@ func stringField(raw map[string]json.RawMessage, key string) (string, error) {
 		}
 	}
 	return out, nil
+}
+
+func stringAnyField(raw map[string]json.RawMessage, keys ...string) (string, error) {
+	for _, key := range keys {
+		if _, ok := raw[key]; !ok {
+			continue
+		}
+		return stringField(raw, key)
+	}
+	return "", nil
 }
 
 func stringMapField(raw map[string]json.RawMessage, key string) (map[string]string, error) {

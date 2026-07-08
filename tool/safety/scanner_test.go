@@ -174,6 +174,54 @@ func TestDefaultScanner_AcceptanceCases(t *testing.T) {
 			blocked: true, redacted: true,
 		},
 		{
+			name: "unknown_json_secret",
+			req: ScanRequest{
+				ToolName: "mcp_call", Backend: BackendUnknown,
+				RawArguments: []byte(`{"token":"abc123"}`),
+			},
+			decision: DecisionDeny, ruleID: "secret.inline_value",
+			blocked: true, redacted: true,
+		},
+		{
+			name: "argv_only_dangerous_delete",
+			req: ScanRequest{
+				ToolName: "workspace_exec", Backend: BackendWorkspace,
+				Args: []string{"rm", "-rf", "/tmp/x"},
+			},
+			decision: DecisionDeny, ruleID: "command.dangerous_delete",
+			blocked: true,
+		},
+		{
+			name: "argv_only_sensitive_path",
+			req: ScanRequest{
+				ToolName: "workspace_exec", Backend: BackendWorkspace,
+				Args: []string{"cat", "~/.ssh/id_rsa"},
+			},
+			decision: DecisionDeny, ruleID: "path.sensitive_credentials",
+			blocked: true, redacted: true,
+		},
+		{
+			name: "argv_only_network",
+			req: ScanRequest{
+				ToolName: "workspace_exec", Backend: BackendWorkspace,
+				Args: []string{"curl", "evil.example"},
+			},
+			decision: DecisionDeny, ruleID: "network.non_allowlisted_domain",
+			blocked: true,
+		},
+		{
+			name: "metadata_output_limit",
+			req: ScanRequest{
+				ToolName: "workspace_exec", Backend: BackendWorkspace,
+				Command: "echo ok",
+				Metadata: map[string]any{
+					"max_result_size": int64(2 << 20),
+				},
+			},
+			decision: DecisionAsk, ruleID: "resource.output_limit",
+			blocked: true,
+		},
+		{
 			name: "cwd_relative_sensitive_path",
 			req: ScanRequest{
 				ToolName: "workspace_exec", Backend: BackendWorkspace,
@@ -416,6 +464,94 @@ func TestDefaultScanner_NetworkAndCodeEdges(t *testing.T) {
 		})
 		require.NoError(t, err)
 		require.Equal(t, DecisionAllow, report.Decision)
+	})
+
+	t.Run("schemeless host port obeys strict allowlist", func(t *testing.T) {
+		report, err := MustDefaultScanner(Policy{
+			NetworkAllowlist: []string{"proxy.golang.org"},
+		}).Scan(context.Background(), ScanRequest{
+			ToolName: "workspace_exec",
+			Backend:  BackendWorkspace,
+			Command:  "curl evil.example:443/path",
+		})
+		require.NoError(t, err)
+		require.Equal(t, DecisionDeny, report.Decision)
+		require.Equal(t, "network.non_allowlisted_domain", report.RuleID)
+	})
+
+	t.Run("schemeless host port allowlisted is skipped", func(t *testing.T) {
+		report, err := MustDefaultScanner(Policy{
+			NetworkAllowlist: []string{"allowed.example"},
+		}).Scan(context.Background(), ScanRequest{
+			ToolName: "workspace_exec",
+			Backend:  BackendWorkspace,
+			Command:  "wget allowed.example:443/file",
+		})
+		require.NoError(t, err)
+		require.Equal(t, DecisionAllow, report.Decision)
+	})
+
+	t.Run("write stdin fragment requires review", func(t *testing.T) {
+		report, err := MustDefaultScanner(Policy{}).Scan(context.Background(), ScanRequest{
+			ToolName: "write_stdin",
+			Backend:  BackendHost,
+			Stdin:    "cu",
+		})
+		require.NoError(t, err)
+		require.Equal(t, DecisionNeedsHumanReview, report.Decision)
+		require.Equal(t, "stdin.session_fragment", report.RuleID)
+	})
+
+	t.Run("split write stdin submitted chunks require review", func(t *testing.T) {
+		scanner := MustDefaultScanner(Policy{})
+		for _, args := range [][]byte{
+			[]byte(`{"chars":"cu"}`),
+			[]byte(`{"chars":"rl https://evil.example\n","append_newline":true}`),
+		} {
+			reqs, err := RequestsFromToolCall("write_stdin", "call-1", "", args, nil)
+			require.NoError(t, err)
+			require.Len(t, reqs, 1)
+
+			report, err := scanner.Scan(context.Background(), reqs[0])
+			require.NoError(t, err)
+			require.Equal(t, DecisionNeedsHumanReview, report.Decision)
+			require.Equal(t, "stdin.session_fragment", report.RuleID)
+		}
+	})
+
+	t.Run("skill execution tools use scanner command rules", func(t *testing.T) {
+		scanner := MustDefaultScanner(Policy{
+			NetworkAllowlist: []string{"proxy.golang.org"},
+		})
+		cases := []struct {
+			toolName string
+			args     []byte
+			ruleID   string
+			decision Decision
+		}{
+			{
+				toolName: "skill_run",
+				args:     []byte(`{"command":"curl https://evil.example","workdir":"."}`),
+				ruleID:   "network.non_allowlisted_domain",
+				decision: DecisionDeny,
+			},
+			{
+				toolName: "skill_exec",
+				args:     []byte(`{"command":"npm install left-pad","cwd":"."}`),
+				ruleID:   "dependency.install",
+				decision: DecisionAsk,
+			},
+		}
+		for _, tc := range cases {
+			reqs, err := RequestsFromToolCall(tc.toolName, "call-1", "", tc.args, nil)
+			require.NoError(t, err)
+			require.Len(t, reqs, 1)
+
+			report, err := scanner.Scan(context.Background(), reqs[0])
+			require.NoError(t, err)
+			require.Equal(t, tc.decision, report.Decision)
+			require.Equal(t, tc.ruleID, report.RuleID)
+		}
 	})
 
 	t.Run("external network without strict allowlist asks", func(t *testing.T) {

@@ -89,13 +89,25 @@ func (s *DefaultScanner) scanRequest(ctx context.Context, req ScanRequest) []Fin
 	findings = append(findings, s.scanSize(req)...)
 	findings = append(findings, s.scanEnv(req.Env)...)
 	findings = append(findings, s.scanCwd(req.Cwd)...)
+	findings = append(findings, s.scanOutputLimit(req)...)
 	switch {
 	case req.Command != "":
 		findings = append(findings, s.scanCommand(req)...)
+	case len(req.Args) > 0:
+		findings = append(findings, s.scanArgvRequest(req)...)
 	case req.Code != "":
 		findings = append(findings, s.scanCode(req)...)
 	case len(req.RawArguments) > 0:
 		findings = append(findings, s.scanUnknownArguments(req)...)
+	}
+	if req.Stdin != "" && req.Command == "" {
+		findings = append(findings, Finding{
+			RuleID:         "stdin.session_fragment",
+			RiskLevel:      RiskHigh,
+			Decision:       DecisionNeedsHumanReview,
+			Evidence:       "non-empty stdin without a complete submitted command",
+			Recommendation: "scan complete submitted session lines or require review",
+		})
 	}
 	if req.TimeoutSec > 0 && s.policy.MaxTimeoutSec > 0 &&
 		req.TimeoutSec > s.policy.MaxTimeoutSec {
@@ -251,6 +263,21 @@ func (s *DefaultScanner) scanCommand(req ScanRequest) []Finding {
 	return findings
 }
 
+func (s *DefaultScanner) scanArgvRequest(req ScanRequest) []Finding {
+	if len(req.Args) == 0 {
+		return nil
+	}
+	var findings []Finding
+	if policyErr := shellsafe.PolicyFromLists(
+		s.policy.AllowedCommands,
+		s.policy.DeniedCommands,
+	).Check(&shellsafe.Pipeline{Commands: [][]string{req.Args}}); policyErr != nil {
+		findings = append(findings, s.commandPolicyFinding(policyErr))
+	}
+	findings = append(findings, s.scanArgv(req, req.Args)...)
+	return findings
+}
+
 func (s *DefaultScanner) shellParseFinding(req ScanRequest, err error) Finding {
 	msg := err.Error()
 	decision := s.policy.UnparsableShellAction
@@ -364,6 +391,9 @@ func (s *DefaultScanner) scanNetwork(cmd string, argv []string) []Finding {
 	hosts := extractNetworkHosts(cmd, argv)
 	if len(hosts) == 0 {
 		decision := DecisionAsk
+		if len(s.policy.NetworkAllowlist) > 0 {
+			decision = DecisionDeny
+		}
 		if cmd == "nc" || cmd == "netcat" || cmd == "ssh" || cmd == "scp" {
 			decision = DecisionDeny
 		}
@@ -451,6 +481,23 @@ func (s *DefaultScanner) scanResourceAbuse(cmd string, argv []string) []Finding 
 		})
 	}
 	return findings
+}
+
+func (s *DefaultScanner) scanOutputLimit(req ScanRequest) []Finding {
+	if s.policy.MaxOutputBytes <= 0 || len(req.Metadata) == 0 {
+		return nil
+	}
+	value, ok := metadataInt64(req.Metadata, "max_result_size", "max_output_bytes", "max_output_size")
+	if !ok || value <= s.policy.MaxOutputBytes {
+		return nil
+	}
+	return []Finding{{
+		RuleID:         "resource.output_limit",
+		RiskLevel:      RiskHigh,
+		Decision:       DecisionAsk,
+		Evidence:       fmt.Sprintf("requested output size %d exceeds max_output_bytes=%d", value, s.policy.MaxOutputBytes),
+		Recommendation: "lower the requested output size or require approval",
+	}}
 }
 
 func (s *DefaultScanner) scanCode(req ScanRequest) []Finding {
@@ -800,6 +847,9 @@ func networkArgHost(cmd, arg string) (string, bool) {
 		if host, _, ok := strings.Cut(arg, "/"); ok {
 			arg = host
 		}
+		if host, _, ok := strings.Cut(arg, ":"); ok {
+			arg = host
+		}
 	case "ssh", "scp":
 		if userHost, _, ok := strings.Cut(arg, ":"); ok {
 			arg = userHost
@@ -1016,6 +1066,48 @@ func containsDownloaderOrURL(lower string) bool {
 		strings.Contains(lower, "wget ") ||
 		strings.Contains(lower, "http://") ||
 		strings.Contains(lower, "https://")
+}
+
+func metadataInt64(metadata map[string]any, keys ...string) (int64, bool) {
+	for _, key := range keys {
+		value, ok := metadata[key]
+		if !ok {
+			continue
+		}
+		switch v := value.(type) {
+		case int:
+			return int64(v), true
+		case int8:
+			return int64(v), true
+		case int16:
+			return int64(v), true
+		case int32:
+			return int64(v), true
+		case int64:
+			return v, true
+		case uint:
+			return metadataUnsignedInt64(uint64(v))
+		case uint8:
+			return metadataUnsignedInt64(uint64(v))
+		case uint16:
+			return metadataUnsignedInt64(uint64(v))
+		case uint32:
+			return metadataUnsignedInt64(uint64(v))
+		case uint64:
+			return metadataUnsignedInt64(v)
+		case float64:
+			return int64(v), true
+		case string:
+			n, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
+			return n, err == nil
+		}
+	}
+	return 0, false
+}
+
+func metadataUnsignedInt64(v uint64) (int64, bool) {
+	n, err := strconv.ParseInt(strconv.FormatUint(v, 10), 10, 64)
+	return n, err == nil
 }
 
 func deleteArgsAreDangerous(args []string) bool {

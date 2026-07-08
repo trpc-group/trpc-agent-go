@@ -9,11 +9,13 @@
 package safety
 
 import (
+	"encoding/json"
 	"regexp"
 	"strings"
 )
 
 var secretPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)"(api[_-]?key|token|password|passwd|secret)"\s*:\s*(?:"[^"]*"|'[^']*'|[^\s,}]+)`),
 	regexp.MustCompile(`(?i)(api[_-]?key|token|password|passwd|secret)\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s]+)`),
 	regexp.MustCompile(`(?i)(authorization\s*:\s*bearer)\s+[A-Za-z0-9._~+/-]+=*`),
 	regexp.MustCompile(`\bAKIA[0-9A-Z]{16}\b`),
@@ -37,7 +39,7 @@ func redactString(s string) (string, bool) {
 
 func containsSecret(s string) bool {
 	_, ok := redactString(s)
-	return ok
+	return ok || containsJSONSecret([]byte(s))
 }
 
 func redactEnv(env map[string]string) (map[string]string, bool) {
@@ -69,4 +71,36 @@ func looksSecretName(s string) bool {
 		strings.Contains(name, "authorization") ||
 		strings.Contains(name, "bearer") ||
 		strings.Contains(name, "aws_access_key")
+}
+
+func containsJSONSecret(raw []byte) bool {
+	var v any
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return false
+	}
+	return valueContainsJSONSecret(v)
+}
+
+func valueContainsJSONSecret(v any) bool {
+	switch x := v.(type) {
+	case map[string]any:
+		for key, value := range x {
+			if looksSecretName(key) {
+				return true
+			}
+			if valueContainsJSONSecret(value) {
+				return true
+			}
+		}
+	case []any:
+		for _, value := range x {
+			if valueContainsJSONSecret(value) {
+				return true
+			}
+		}
+	case string:
+		_, redacted := redactString(x)
+		return redacted
+	}
+	return false
 }

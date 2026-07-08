@@ -42,7 +42,44 @@ func TestRequestsFromToolCall_ParsesKnownToolArguments(t *testing.T) {
 				require.Equal(t, 10, reqs[0].TimeoutSec)
 				require.True(t, reqs[0].Background)
 				require.True(t, reqs[0].TTY)
-				require.JSONEq(t, string(reqs[0].RawArguments), string(reqs[0].RawArguments))
+				require.JSONEq(t, `{
+				"command":"go test ./tool/safety",
+				"cwd":".",
+				"env":{"PATH":"/usr/bin"},
+				"stdin":"echo ok",
+				"timeoutSec":10,
+				"background":true,
+				"pty":true
+			}`, string(reqs[0].RawArguments))
+			},
+		},
+		{
+			name:     "skill_exec",
+			toolName: "skill_exec",
+			args: []byte(`{
+				"command":"npm install left-pad",
+				"cwd":".",
+				"env":{"PATH":"/usr/bin"},
+				"timeout":5,
+				"tty":true
+			}`),
+			assert: func(t *testing.T, reqs []ScanRequest) {
+				require.Len(t, reqs, 1)
+				require.Equal(t, BackendHost, reqs[0].Backend)
+				require.Equal(t, "npm install left-pad", reqs[0].Command)
+				require.Equal(t, ".", reqs[0].Cwd)
+				require.Equal(t, 5, reqs[0].TimeoutSec)
+				require.True(t, reqs[0].TTY)
+			},
+		},
+		{
+			name:     "skill_run",
+			toolName: "skill_run",
+			args:     []byte(`{"command":"curl https://evil.example","workdir":"."}`),
+			assert: func(t *testing.T, reqs []ScanRequest) {
+				require.Len(t, reqs, 1)
+				require.Equal(t, BackendHost, reqs[0].Backend)
+				require.Equal(t, "curl https://evil.example", reqs[0].Command)
 			},
 		},
 		{
@@ -52,8 +89,19 @@ func TestRequestsFromToolCall_ParsesKnownToolArguments(t *testing.T) {
 			assert: func(t *testing.T, reqs []ScanRequest) {
 				require.Len(t, reqs, 1)
 				require.Equal(t, BackendHost, reqs[0].Backend)
-				require.Equal(t, "rm -rf /tmp/x", reqs[0].Command)
-				require.Equal(t, reqs[0].Command, reqs[0].Stdin)
+				require.Empty(t, reqs[0].Command)
+				require.Equal(t, "rm -rf /tmp/x", reqs[0].Stdin)
+			},
+		},
+		{
+			name:     "skill_write_stdin_fragment",
+			toolName: "skill_write_stdin",
+			args:     []byte(`{"chars":"cu"}`),
+			assert: func(t *testing.T, reqs []ScanRequest) {
+				require.Len(t, reqs, 1)
+				require.Equal(t, BackendHost, reqs[0].Backend)
+				require.Empty(t, reqs[0].Command)
+				require.Equal(t, "cu", reqs[0].Stdin)
 			},
 		},
 		{
@@ -153,6 +201,9 @@ func TestInferBackend_AllKnownTools(t *testing.T) {
 	require.Equal(t, BackendHost, InferBackend("exec_command"))
 	require.Equal(t, BackendHost, InferBackend("write_stdin"))
 	require.Equal(t, BackendHost, InferBackend("kill_session"))
+	require.Equal(t, BackendHost, InferBackend("skill_run"))
+	require.Equal(t, BackendHost, InferBackend("skill_exec"))
+	require.Equal(t, BackendHost, InferBackend("skill_write_stdin"))
 	require.Equal(t, BackendCodeExec, InferBackend("execute_code"))
 	require.Equal(t, BackendUnknown, InferBackend("custom"))
 }

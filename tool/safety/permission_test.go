@@ -135,6 +135,12 @@ func TestPermissionPolicy_UsesBackendResolverAndNilFallbacks(t *testing.T) {
 	decision, err := allowPolicy.CheckToolPermission(context.Background(), nil)
 	require.NoError(t, err)
 	require.Equal(t, tool.PermissionActionAllow, decision.Action)
+	decision, err = allowPolicy.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:  "workspace_exec",
+		Arguments: []byte(`{"command":"echo ok"}`),
+	})
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionAllow, decision.Action)
 
 	var observed Report
 	policy := NewPermissionPolicy(
