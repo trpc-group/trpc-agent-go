@@ -183,7 +183,7 @@ func parseMCPName(name string) (server, toolName string, ok bool) {
 	}
 	rest := name[len(mcpNamePrefix):]
 	i := strings.Index(rest, "__")
-	if i <= 0 || i+2 > len(rest) {
+	if i <= 0 || i+2 >= len(rest) {
 		return "", "", false
 	}
 	return rest[:i], rest[i+2:], true

@@ -304,7 +304,6 @@ func (p *Plugin) searchTools(ctx context.Context, input toolSearchInput) (string
 		}
 	}
 	if !useEmbedding {
-		log.Infof("knowledge search3 namespace=%q queries=%s", namespace, strings.Join(queries, "|"))
 		// Resolve under a single read lock; overflow are matches beyond maxResults.
 		selectedTools, overflow, errPayload = p.resolveSelection(namespace, toolNames, queries, isSelect, hasQuery, maxResults)
 	}

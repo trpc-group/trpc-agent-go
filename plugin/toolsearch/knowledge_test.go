@@ -187,7 +187,7 @@ type errTest string
 func (e errTest) Error() string { return string(e) }
 
 func TestWithMaxTools_CapsResults(t *testing.T) {
-	// WithMaxTools is an alias for WithMaxTools: cap tools loaded with schemas.
+	// WithMaxTools caps the number of tools loaded with schemas.
 	weather := newTestTool("get_weather", "weather forecast")
 	timeTool := newTestTool("get_time", "current time")
 	emb := &fakeEmbedder{vectors: map[string][]float64{

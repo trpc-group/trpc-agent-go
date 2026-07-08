@@ -390,8 +390,7 @@ func accuracyCases() []accuracyCase {
 		{"Extract plain text from a PDF", []string{"extract_document_text"}, "document"},
 		{"Merge several documents into one", []string{"merge_documents"}, "document"},
 		{"List the section outline of this document", []string{"get_document_outline"}, "document"},
-		//
-		// // process
+		// process
 		{"Run npm install for me", []string{"run_command"}, "process"},
 		{"List the currently running processes", []string{"list_processes"}, "process"},
 		{"Kill the process with PID 1234", []string{"kill_process"}, "process"},
@@ -507,7 +506,10 @@ func collectToolCalls(t *testing.T, ch <-chan *event.Event, timeout time.Duratio
 					buf.WriteString("\n")
 				}
 				// record tool calls
-				for _, tc := range append(choice.Message.ToolCalls, choice.Delta.ToolCalls...) {
+				allCalls := make([]model.ToolCall, 0, len(choice.Message.ToolCalls)+len(choice.Delta.ToolCalls))
+				allCalls = append(allCalls, choice.Message.ToolCalls...)
+				allCalls = append(allCalls, choice.Delta.ToolCalls...)
+				for _, tc := range allCalls {
 					switch tc.Function.Name {
 					case "":
 					case toolSearchToolName:

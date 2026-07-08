@@ -357,13 +357,18 @@ func TestSessionState_PersistsAcrossLoad(t *testing.T) {
 	p := NewPlugin(nil, WithDeferredTools([]tool.Tool{
 		newTestTool("send_email", "x"), newTestTool("create_doc", "y"),
 	}))
-	ctx, inv := ctxWithInvocation()
+	ctx, _ := ctxWithInvocation()
 
 	callSearch(t, ctx, p, toolSearchInput{ToolNames: []string{"send_email"}})
 	callSearch(t, ctx, p, toolSearchInput{ToolNames: []string{"create_doc"}})
 
-	loaded := p.loadDiscoveredTools(ctx, inv)
-	assert.ElementsMatch(t, []string{"send_email", "create_doc"}, loaded)
+	req := &model.Request{}
+	_, err := p.beforeModel(ctx, &model.BeforeModelArgs{Request: req})
+	require.NoError(t, err)
+	_, ok := req.Tools["send_email"]
+	assert.True(t, ok, "send_email should be injected after loading")
+	_, ok = req.Tools["create_doc"]
+	assert.True(t, ok, "create_doc should be injected after loading")
 }
 
 func TestDuplicateNamespaceRegistrationKeepsFirstOwner(t *testing.T) {
@@ -372,11 +377,15 @@ func TestDuplicateNamespaceRegistrationKeepsFirstOwner(t *testing.T) {
 		{Name: "first", Tools: []tool.Tool{shared}},
 		{Name: "second", Tools: []tool.Tool{shared}},
 	}))
-	assert.Equal(t, "first", p.namespaceByTool["shared_tool"])
-	_, inFirst := p.toolboxByName["first"].toolNames["shared_tool"]
-	_, inSecond := p.toolboxByName["second"].toolNames["shared_tool"]
-	assert.True(t, inFirst)
-	assert.False(t, inSecond)
+	ctx, _ := ctxWithInvocation()
+
+	first := callSearch(t, ctx, p, toolSearchInput{Namespace: "first"})
+	assert.Contains(t, toolNames(first.Tools), "shared_tool",
+		"shared_tool should be discoverable under the first namespace")
+
+	second := callSearch(t, ctx, p, toolSearchInput{Namespace: "second"})
+	assert.NotContains(t, toolNames(second.Tools), "shared_tool",
+		"shared_tool should not be discoverable under the second namespace")
 }
 
 func TestParseToolName(t *testing.T) {
@@ -515,6 +524,9 @@ func TestBeforeModel_WithKnowledge(t *testing.T) {
 	require.NotNil(t, res)
 	// Context should be updated with usage accumulator.
 	require.NotNil(t, res.Context)
+	usage, ok := ToolSearchUsageFromContext(res.Context)
+	assert.True(t, ok, "usage accumulator should be retrievable from context")
+	assert.NotNil(t, usage, "usage snapshot should not be nil")
 }
 
 func TestBeforeTool_NilArgs(t *testing.T) {

@@ -159,7 +159,7 @@ func (k *ToolKnowledge) upsert(ctx context.Context, tools map[string]tool.Tool, 
 		if err != nil {
 			return err
 		}
-		log.InfofContext(ctx, "add embedded tool %s", name)
+		log.DebugfContext(ctx, "add embedded tool %s", name)
 		addEmbedderUsage(usage, u)
 		if err := k.store.Add(ctx, &document.Document{ID: name}, embedding); err != nil {
 			return err

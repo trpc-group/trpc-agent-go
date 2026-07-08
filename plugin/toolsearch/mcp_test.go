@@ -253,7 +253,7 @@ func TestParseMCPName(t *testing.T) {
 		{"tool with underscores", "mcp__server__my_tool_v2", "server", "my_tool_v2", true},
 		{"no mcp prefix", "server__tool", "", "", false},
 		{"only mcp prefix", "mcp__", "", "", false},
-		{"mcp with no tool", "mcp__server__", "server", "", true},
+		{"mcp with no tool", "mcp__server__", "", "", false},
 		{"mcp with single underscore", "mcp_server_tool", "", "", false},
 		{"empty string", "", "", "", false},
 		{"mcp with empty server", "mcp____tool", "", "", false},

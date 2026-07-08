@@ -81,7 +81,7 @@
 //	)
 //	plugin := toolsearch.NewPlugin(presetTools,
 //	    toolsearch.WithToolKnowledge(toolKnowledge),
-//	    toolsearch.WithMaxTools(3), // cap schema-loaded results (alias of WithMaxTools)
+//	    toolsearch.WithMaxTools(3), // cap schema-loaded results
 //	    toolsearch.WithFailOpen(),  // on embedding failure, fall back to keyword search
 //	    toolsearch.WithToolboxes(boxes),
 //	)
