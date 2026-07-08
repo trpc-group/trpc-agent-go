@@ -33,6 +33,20 @@ func TestReadDiffFile(t *testing.T) {
 	}
 }
 
+func TestReadFixturesNormalizesLineEndings(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a.diff"), []byte("diff --git a/a.go b/a.go\r\n--- a/a.go\r\n+++ b/a.go\r\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(fixture) error = %v", err)
+	}
+	src, err := readFixtures(dir)
+	if err != nil {
+		t.Fatalf("readFixtures() error = %v", err)
+	}
+	if strings.Contains(src.Diff, "\r\n") {
+		t.Fatalf("fixture diff was not normalized to LF: %q", src.Diff)
+	}
+}
+
 func TestReadFileList(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "files.txt")
@@ -99,6 +113,35 @@ func TestReadRepoDiffIncludesStagedAndUntrackedWithoutColor(t *testing.T) {
 	}
 	if strings.Contains(src.Diff, "\x1b[") {
 		t.Fatalf("repo diff contained ANSI color escapes:\n%q", src.Diff)
+	}
+}
+
+func TestUntrackedFileDiffRendersSymlinkWithoutReadingTarget(t *testing.T) {
+	dir := t.TempDir()
+	repo := filepath.Join(dir, "repo")
+	if err := os.Mkdir(repo, 0o700); err != nil {
+		t.Fatalf("Mkdir(repo) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "outside.txt"), []byte("outside-secret\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(outside) error = %v", err)
+	}
+	linkTarget := filepath.ToSlash(filepath.Join("..", "outside.txt"))
+	if err := os.Symlink(linkTarget, filepath.Join(repo, "leak.txt")); err != nil {
+		t.Skipf("symlink creation is not supported in this environment: %v", err)
+	}
+
+	diff, err := untrackedFileDiff(repo, "leak.txt")
+	if err != nil {
+		t.Fatalf("untrackedFileDiff() error = %v", err)
+	}
+	if strings.Contains(diff, "outside-secret") {
+		t.Fatalf("symlink target contents leaked into diff:\n%s", diff)
+	}
+	if !strings.Contains(diff, "new file mode 120000") {
+		t.Fatalf("symlink diff did not use git symlink mode:\n%s", diff)
+	}
+	if !strings.Contains(diff, "+"+linkTarget) {
+		t.Fatalf("symlink diff did not include link target %q:\n%s", linkTarget, diff)
 	}
 }
 

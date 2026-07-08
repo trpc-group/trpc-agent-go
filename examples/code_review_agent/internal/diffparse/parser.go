@@ -77,6 +77,9 @@ func Parse(diff string) ([]review.DiffFile, error) {
 			oldLine = parsedOldLine
 			newLine = parsedNewLine
 		case currentHunk != nil:
+			if !isDiffHunkLine(line) {
+				continue
+			}
 			diffLine, nextOld, nextNew := parseDiffLine(line, oldLine, newLine)
 			currentHunk.Lines = append(currentHunk.Lines, diffLine)
 			oldLine = nextOld
@@ -90,6 +93,21 @@ func Parse(diff string) ([]review.DiffFile, error) {
 		return nil, fmt.Errorf("no diff files found")
 	}
 	return files, nil
+}
+
+func isDiffHunkLine(line string) bool {
+	if line == `\ No newline at end of file` {
+		return true
+	}
+	if line == "" {
+		return false
+	}
+	switch line[0] {
+	case ' ', '+', '-':
+		return true
+	default:
+		return false
+	}
 }
 
 func parseDiffGitLine(file *review.DiffFile, line string) {

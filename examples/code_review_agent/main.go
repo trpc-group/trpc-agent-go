@@ -13,7 +13,9 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/orchestrator"
@@ -36,7 +38,9 @@ func main() {
 	if *dbPath == "" {
 		*dbPath = filepath.Join(*outDir, "review_agent.db")
 	}
-	result, err := orchestrator.Run(context.Background(), orchestrator.Options{
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	result, err := orchestrator.Run(ctx, orchestrator.Options{
 		FixtureDir:     *fixtureDir,
 		DiffFile:       *diffFile,
 		RepoPath:       *repoPath,

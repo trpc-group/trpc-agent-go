@@ -100,6 +100,7 @@ func readFixtures(dir string) (Source, error) {
 		if err != nil {
 			return Source{}, fmt.Errorf("read fixture %s: %w", name, err)
 		}
+		raw = normalizeFixtureDiff(raw)
 		if b.Len() > 0 {
 			b.WriteString("\n")
 		}
@@ -114,6 +115,12 @@ func readFixtures(dir string) (Source, error) {
 		FixtureNames: names,
 		Summary:      fmt.Sprintf("Reviewed %d diff fixtures.", len(names)),
 	}, nil
+}
+
+func normalizeFixtureDiff(raw []byte) []byte {
+	raw = bytes.ReplaceAll(raw, []byte("\r\n"), []byte("\n"))
+	raw = bytes.ReplaceAll(raw, []byte("\r"), []byte("\n"))
+	return raw
 }
 
 func readDiffFile(path string) (Source, error) {
@@ -219,9 +226,12 @@ func splitNUL(raw []byte) []string {
 
 func untrackedFileDiff(repoPath string, file string) (string, error) {
 	abs := filepath.Join(repoPath, filepath.FromSlash(file))
-	info, err := os.Stat(abs)
+	info, err := os.Lstat(abs)
 	if err != nil {
 		return "", fmt.Errorf("stat untracked file %s: %w", file, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return untrackedSymlinkDiff(abs, file)
 	}
 	if info.IsDir() {
 		return "", nil
@@ -251,6 +261,22 @@ func untrackedFileDiff(repoPath string, file string) (string, error) {
 		b.WriteString(`\ No newline at end of file`)
 		b.WriteString("\n")
 	}
+	return b.String(), nil
+}
+
+func untrackedSymlinkDiff(abs string, file string) (string, error) {
+	target, err := os.Readlink(abs)
+	if err != nil {
+		return "", fmt.Errorf("read untracked symlink %s: %w", file, err)
+	}
+	target = filepath.ToSlash(target)
+	var b strings.Builder
+	fmt.Fprintf(&b, "diff --git a/%s b/%s\n", file, file)
+	fmt.Fprintf(&b, "new file mode 120000\n")
+	fmt.Fprintf(&b, "--- /dev/null\n")
+	fmt.Fprintf(&b, "+++ b/%s\n", file)
+	fmt.Fprintf(&b, "@@ -0,0 +1 @@\n")
+	fmt.Fprintf(&b, "+%s\n", target)
 	return b.String(), nil
 }
 

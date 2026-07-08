@@ -95,14 +95,14 @@ The implementation also tracks status and fingerprint metadata. High-confidence 
 English:
 The sandbox layer supports `fake`, `container`, `e2b`, and `local` runtimes. `fake` is deterministic and used for offline tests. `container` and `e2b` are production-oriented sandbox choices. `local` exists only as a development fallback and should not be treated as the default production execution path.
 
-For the container runtime, the orchestrator stages the repository into an isolated workspace and runs commands from the example module directory. The container is unprivileged and auto-removed after execution. Network mode is explicitly set to bridge so Go module downloads can work when the host network allows it. The runtime sets container-safe Go paths such as `HOME=/tmp`, `GOPATH=/go`, `GOMODCACHE=/go/pkg/mod`, and `GOCACHE=/tmp/go-build`.
+For the container runtime, the orchestrator stages the repository into an isolated workspace and runs commands from the example module directory. The container is unprivileged and auto-removed after execution. Network mode is explicitly set to `none`; sandboxed commands do not download modules over the network and must rely on the read-only, prepopulated module cache mounted at `GOMODCACHE=/go/pkg/mod`. The runtime also sets container-safe Go paths such as `HOME=/tmp`, `GOPATH=/go`, and `GOCACHE=/tmp/go-build`.
 
 Execution is bounded by command timeouts and output size limits. Stdout and stderr are redacted before they are stored or reported. Sandbox failures, command failures, timeouts, and truncated output are recorded as sandbox run records instead of crashing the whole review task.
 
 中文：
 沙箱层支持 `fake`、`container`、`e2b` 和 `local` runtime。`fake` 是确定性的离线测试 runtime；`container` 和 `e2b` 是面向生产的沙箱方案；`local` 只作为开发 fallback，不应作为默认生产执行路径。
 
-在 container runtime 中，orchestrator 会把仓库内容 staging 到隔离 workspace，并从示例模块目录执行命令。容器以非特权方式运行，执行结束后自动删除。网络模式显式设置为 bridge，以便在宿主机网络允许时下载 Go module。runtime 会设置容器内安全的 Go 路径，例如 `HOME=/tmp`、`GOPATH=/go`、`GOMODCACHE=/go/pkg/mod` 和 `GOCACHE=/tmp/go-build`。
+在 container runtime 中，orchestrator 会把仓库内容 staging 到隔离 workspace，并从示例模块目录执行命令。容器以非特权方式运行，执行结束后自动删除。网络模式显式设置为 `none`；沙箱命令不会通过网络下载 Go module，依赖必须来自挂载到 `GOMODCACHE=/go/pkg/mod` 的只读、预填充 module cache。runtime 还会设置容器内安全的 Go 路径，例如 `HOME=/tmp`、`GOPATH=/go` 和 `GOCACHE=/tmp/go-build`。
 
 命令执行受 timeout 和输出大小限制约束。stdout 和 stderr 在落库或写入报告前会先做脱敏处理。沙箱初始化失败、命令失败、超时、输出截断都会记录为 sandbox run，而不是让整个 review task 崩溃。
 

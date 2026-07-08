@@ -73,11 +73,6 @@
               "kind": "add",
               "new_line": 7,
               "content": "}"
-            },
-            {
-              "kind": "context",
-              "new_line": 8,
-              "content": ""
             }
           ]
         }
@@ -140,11 +135,6 @@
               "kind": "add",
               "new_line": 9,
               "content": "}"
-            },
-            {
-              "kind": "context",
-              "new_line": 10,
-              "content": ""
             }
           ]
         }
@@ -192,11 +182,6 @@
               "kind": "add",
               "new_line": 6,
               "content": "}"
-            },
-            {
-              "kind": "context",
-              "new_line": 7,
-              "content": ""
             }
           ]
         }
@@ -254,11 +239,6 @@
               "kind": "add",
               "new_line": 8,
               "content": "}"
-            },
-            {
-              "kind": "context",
-              "new_line": 9,
-              "content": ""
             }
           ]
         }
@@ -301,11 +281,6 @@
               "kind": "add",
               "new_line": 5,
               "content": "}"
-            },
-            {
-              "kind": "context",
-              "new_line": 6,
-              "content": ""
             }
           ]
         }
@@ -363,11 +338,6 @@
               "kind": "add",
               "new_line": 8,
               "content": "}"
-            },
-            {
-              "kind": "context",
-              "new_line": 9,
-              "content": ""
             }
           ]
         }
@@ -410,11 +380,6 @@
               "kind": "add",
               "new_line": 5,
               "content": "}"
-            },
-            {
-              "kind": "context",
-              "new_line": 6,
-              "content": ""
             }
           ]
         }
@@ -457,11 +422,6 @@
               "kind": "add",
               "new_line": 5,
               "content": "}"
-            },
-            {
-              "kind": "context",
-              "new_line": 6,
-              "content": ""
             }
           ]
         }

@@ -115,3 +115,27 @@ func TestParseMultipleRawUnifiedDiffFiles(t *testing.T) {
 		t.Fatalf("paths = %q/%q, want pkg/a.go/pkg/b.go", files[0].NewPath, files[1].NewPath)
 	}
 }
+
+func TestParseIgnoresBlankSeparatorsInsideHunk(t *testing.T) {
+	raw := `--- pkg/config.go
++++ pkg/config.go
+@@ -1,2 +1,3 @@
+ package pkg
+
++const token = "token=supersecretvalue"
+ func ok() {}
+`
+	files, err := Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("len(files) = %d, want 1", len(files))
+	}
+	if got := files[0].Hunks[0].Lines[1].NewLine; got != 2 {
+		t.Fatalf("added line NewLine = %d, want 2", got)
+	}
+	if got := files[0].Hunks[0].Lines[1].Content; got != `const token = "token=supersecretvalue"` {
+		t.Fatalf("added line Content = %q", got)
+	}
+}
