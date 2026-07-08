@@ -12,6 +12,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"image"
 	"image/color"
 	"image/png"
@@ -24,6 +25,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
@@ -608,6 +610,94 @@ func TestNewFileToolSet_RuntimeReadDirsRejectSymlinkedBrowserArtifacts(
 	)
 }
 
+func TestBrowserArtifactReadRootWithErrorPaths(t *testing.T) {
+	t.Parallel()
+
+	errBoom := errors.New("boom")
+
+	tests := []struct {
+		name    string
+		lstat   browserArtifactLstatFunc
+		mkdir   browserArtifactMkdirAllFunc
+		wantDir string
+		wantOK  bool
+	}{
+		{
+			name: "lstat error",
+			lstat: func(string) (os.FileInfo, error) {
+				return nil, errBoom
+			},
+			mkdir: func(string, os.FileMode) error {
+				t.Fatal("mkdir should not be called")
+				return nil
+			},
+		},
+		{
+			name: "mkdir error",
+			lstat: func(string) (os.FileInfo, error) {
+				return nil, os.ErrNotExist
+			},
+			mkdir: func(string, os.FileMode) error {
+				return errBoom
+			},
+		},
+		{
+			name: "post-create lstat error",
+			lstat: lstatSequence(
+				nil,
+				os.ErrNotExist,
+				nil,
+				errBoom,
+			),
+			mkdir: func(string, os.FileMode) error {
+				return nil
+			},
+		},
+		{
+			name: "post-create symlink",
+			lstat: lstatSequence(
+				nil,
+				os.ErrNotExist,
+				browserArtifactFileInfo{
+					mode: os.ModeSymlink,
+				},
+				nil,
+			),
+			mkdir: func(string, os.FileMode) error {
+				return nil
+			},
+		},
+		{
+			name: "post-create safe directory",
+			lstat: lstatSequence(
+				nil,
+				os.ErrNotExist,
+				browserArtifactFileInfo{dir: true},
+				nil,
+			),
+			mkdir: func(string, os.FileMode) error {
+				return nil
+			},
+			wantDir: filepath.Join("cwd", browserArtifactDirName),
+			wantOK:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			gotDir, gotOK := browserArtifactReadRootWith(
+				"cwd",
+				tt.lstat,
+				tt.mkdir,
+			)
+			require.Equal(t, tt.wantOK, gotOK)
+			require.Equal(t, tt.wantDir, gotDir)
+		})
+	}
+}
+
 func TestNewFileToolSet_RuntimeReadDirsCanDisable(t *testing.T) {
 	dir := t.TempDir()
 	tmpFile := filepath.Join(t.TempDir(), "derived.txt")
@@ -657,6 +747,51 @@ func TestDefaultFileReadOnlyDirsAbsolutizesRelativeStateDir(t *testing.T) {
 
 	roots := defaultFileReadOnlyDirs(stateRoot)
 	require.Contains(t, roots, wantScratch)
+}
+
+func lstatSequence(
+	firstInfo os.FileInfo,
+	firstErr error,
+	secondInfo os.FileInfo,
+	secondErr error,
+) browserArtifactLstatFunc {
+	var calls int
+	return func(string) (os.FileInfo, error) {
+		calls++
+		if calls == 1 {
+			return firstInfo, firstErr
+		}
+		return secondInfo, secondErr
+	}
+}
+
+type browserArtifactFileInfo struct {
+	mode os.FileMode
+	dir  bool
+}
+
+func (i browserArtifactFileInfo) Name() string {
+	return browserArtifactDirName
+}
+
+func (i browserArtifactFileInfo) Size() int64 {
+	return 0
+}
+
+func (i browserArtifactFileInfo) Mode() os.FileMode {
+	return i.mode
+}
+
+func (i browserArtifactFileInfo) ModTime() time.Time {
+	return time.Time{}
+}
+
+func (i browserArtifactFileInfo) IsDir() bool {
+	return i.dir
+}
+
+func (i browserArtifactFileInfo) Sys() any {
+	return nil
 }
 
 func TestAbsPathOrOriginalFallbacks(t *testing.T) {

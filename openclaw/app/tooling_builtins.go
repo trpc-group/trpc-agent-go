@@ -487,22 +487,34 @@ func defaultFileReadOnlyDirs(stateDir string) []string {
 }
 
 func browserArtifactReadRoot(cwd string) (string, bool) {
+	return browserArtifactReadRootWith(cwd, os.Lstat, os.MkdirAll)
+}
+
+type browserArtifactLstatFunc func(string) (os.FileInfo, error)
+
+type browserArtifactMkdirAllFunc func(string, os.FileMode) error
+
+func browserArtifactReadRootWith(
+	cwd string,
+	lstat browserArtifactLstatFunc,
+	mkdirAll browserArtifactMkdirAllFunc,
+) (string, bool) {
 	artifactDir := filepath.Join(cwd, browserArtifactDirName)
-	info, err := os.Lstat(artifactDir)
+	info, err := lstat(artifactDir)
 	switch {
 	case err == nil:
 		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 			return "", false
 		}
 	case os.IsNotExist(err):
-		if err := os.MkdirAll(artifactDir, 0o755); err != nil {
+		if err := mkdirAll(artifactDir, 0o755); err != nil {
 			return "", false
 		}
 	default:
 		return "", false
 	}
 
-	info, err = os.Lstat(artifactDir)
+	info, err = lstat(artifactDir)
 	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 		return "", false
 	}
