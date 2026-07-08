@@ -102,18 +102,25 @@ func defaultClientBuilder(ctx context.Context, builderOpts ...ClientBuilderOpt) 
 		return nil, fmt.Errorf("gorm: open connection: %w", err)
 	}
 
+	ownsConnection := o.EffectiveOwnsConnection()
+	needsPing := !cfg.DisableAutomaticPing
+
+	if !needsPing && !ownsConnection {
+		return NewClient(db, ownsConnection), nil
+	}
+
 	sqlDB, err := db.DB()
 	if err != nil {
 		return nil, fmt.Errorf("gorm: get sql db: %w", err)
 	}
 
-	ownsConnection := o.EffectiveOwnsConnection()
-
-	if err := sqlDB.PingContext(ctx); err != nil {
-		if ownsConnection {
-			_ = sqlDB.Close()
+	if needsPing {
+		if err := sqlDB.PingContext(ctx); err != nil {
+			if ownsConnection {
+				_ = sqlDB.Close()
+			}
+			return nil, fmt.Errorf("gorm: ping database: %w", err)
 		}
-		return nil, fmt.Errorf("gorm: ping database: %w", err)
 	}
 
 	return NewClient(db, ownsConnection), nil
@@ -173,6 +180,8 @@ func WithDB(db *gormio.DB) ClientBuilderOpt {
 // WithDialector sets the GORM dialector used to open a connection.
 // By default Client.Close closes the opened pool (ownership transfer).
 // When the dialector wraps a caller-owned ConnPool, also pass WithOwnsConnection(false).
+// Custom gorm.ConnPool implementations that are not backed by *sql.DB are supported when
+// WithOwnsConnection(false) is set and automatic ping is disabled via WithConfig.
 func WithDialector(d gormio.Dialector) ClientBuilderOpt {
 	return func(opts *ClientBuilderOpts) {
 		opts.Dialector = d
