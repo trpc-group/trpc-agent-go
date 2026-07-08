@@ -256,7 +256,8 @@ func (f *fileToolSet) readMultipleFilesTool() tool.CallableTool {
 		function.WithDescription(
 			"Read multiple text files under base_directory. "+
 				"Supports glob patterns, workspace:// refs, and "+
-				"explicit absolute paths under configured read-only roots.",
+				"explicit absolute paths under base_directory or "+
+				"configured read-only roots.",
 		),
 	)
 }
