@@ -23,6 +23,11 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
+var (
+	_ session.Ingestor = (*Service)(nil)
+	_ memory.Reader    = (*Service)(nil)
+)
+
 // Service provides an ingest-first integration with mem0.
 type Service struct {
 	opts serviceOpts
@@ -164,6 +169,9 @@ func (s *Service) ReadMemories(ctx context.Context, userKey memory.UserKey, limi
 			if entry := toEntry(userKey.AppName, userKey.UserID, &batch.Results[i]); entry != nil {
 				entries = append(entries, entry)
 			}
+		}
+		if limit > 0 && len(entries) >= limit {
+			break
 		}
 		page++
 	}

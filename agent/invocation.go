@@ -168,6 +168,8 @@ type Invocation struct {
 
 	// MemoryService is the service for managing memory.
 	MemoryService memory.Service
+	// MemoryReader is the read-only memory source for memory preload.
+	MemoryReader memory.Reader
 	// ArtifactService is the service for managing artifacts.
 	ArtifactService artifact.Service
 
@@ -1519,6 +1521,7 @@ func (inv *Invocation) Clone(invocationOpts ...InvocationOptions) *Invocation {
 		Message:         inv.Message,
 		RunOptions:      inv.RunOptions,
 		MemoryService:   inv.MemoryService,
+		MemoryReader:    inv.MemoryReader,
 		ArtifactService: inv.ArtifactService,
 		Plugins:         inv.Plugins,
 		noticeMu:        inv.noticeMu,
@@ -1583,6 +1586,7 @@ func (inv *Invocation) View(invocationOpts ...InvocationOptions) *Invocation {
 		StructuredOutput:     inv.StructuredOutput,
 		StructuredOutputType: inv.StructuredOutputType,
 		MemoryService:        inv.MemoryService,
+		MemoryReader:         inv.MemoryReader,
 		ArtifactService:      inv.ArtifactService,
 		noticeChannels:       inv.noticeChannels,
 		noticeMu:             inv.noticeMu,
@@ -1626,6 +1630,7 @@ func (inv *Invocation) SyncView(view *Invocation) {
 	inv.StructuredOutput = view.StructuredOutput
 	inv.StructuredOutputType = view.StructuredOutputType
 	inv.MemoryService = view.MemoryService
+	inv.MemoryReader = view.MemoryReader
 	inv.ArtifactService = view.ArtifactService
 	inv.noticeChannels = view.noticeChannels
 	inv.noticeMu = view.noticeMu

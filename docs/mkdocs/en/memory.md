@@ -1677,6 +1677,7 @@ agent := llmagent.New(
     "assistant",
     llmagent.WithModel(openai.New("deepseek-v4-flash")),
     llmagent.WithTools(mem0Svc.Tools()),
+    llmagent.WithPreloadMemory(10), // Optional read-only preload budget.
 )
 
 r := runner.NewRunner(
@@ -1692,6 +1693,7 @@ defer r.Close()
 
 - Register tools with `llmagent.WithTools(mem0Svc.Tools())`
 - Use `runner.WithSessionIngestor(mem0Svc)` to send session transcripts to mem0
+- Optionally enable `llmagent.WithPreloadMemory(N)`; because `mem0Svc` also implements `memory.Reader`, the runner can use it for read-only preload
 - Do **not** use `runner.WithMemoryService(...)` with this integration
 
 ### Why `WithSessionIngestor(...)` Instead of `WithMemoryService(...)`
@@ -1705,7 +1707,7 @@ Using `runner.WithSessionIngestor(...)` makes that boundary explicit:
 - Runner sends the completed session transcript after each turn
 - mem0 performs extraction and storage on the service side
 - per-request ingest fields such as `metadata`, `agent_id`, and `run_id` can be passed through `session.IngestOption`
-- the integration is not mistaken for a built-in backend that supports full framework-side CRUD or preload behavior
+- the integration is not mistaken for a built-in backend that supports full framework-side CRUD; framework-side preload uses only the read-only `memory.Reader` surface when explicitly enabled
 
 In short, `MemoryService` means "the framework manages memories directly", while `SessionIngestor` means "the framework hands the transcript to an external memory system". `mem0` matches the second model.
 
@@ -1740,9 +1742,10 @@ access the OSS server's internal vector store directly.
 - Self-hosted OSS app isolation uses `metadata.trpc_app_name` because the OSS API has no top-level `app_id`. Existing OSS records without this metadata are hidden by default until reingested or backfilled. Use `WithSelfHostedOSSIncludeUnscopedMemories()` only for migrations that need those legacy records visible.
 - The current OSS `GET /memories` API is capped at 1000 user-level results, is not pageable, and cannot express `metadata.trpc_app_name` as a server-side filter. `ReadMemories` therefore requires a positive limit no larger than 1000 and applies app isolation as a best-effort local filter over the first 1000 OSS records returned for the user.
 - Runner automatically passes session context into ingest. Custom callers can also use `session.WithIngestMetadata`, `session.WithIngestAgentID`, and `session.WithIngestRunID` when needed.
+- `WithPreloadMemory(N)` works with mem0 when the same service is configured via `runner.WithSessionIngestor(mem0Svc)`. Use a positive budget in production.
 - When mem0 metadata is available, search results can still carry structured fields such as `Topics`, `Kind`, `EventTime`, `Participants`, and `Location`.
 - Call `Close()` on the service so background workers shut down cleanly.
-- If you need full CRUD tools or framework-side preload, use one of the built-in memory backends instead.
+- If you need full CRUD tools, use one of the built-in memory backends instead.
 
 ## TencentDB Agent Memory Integration (`memory/tencentdb`)
 

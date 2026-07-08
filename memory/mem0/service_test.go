@@ -261,7 +261,9 @@ func TestReadMemories_PaginatesAndSorts(t *testing.T) {
 }
 
 func TestReadMemories_AppliesLimit(t *testing.T) {
+	var calls int32
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&calls, 1)
 		if r.URL.Query().Get("page") != "1" {
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`[]`))
@@ -283,6 +285,7 @@ func TestReadMemories_AppliesLimit(t *testing.T) {
 		memory.UserKey{AppName: "app", UserID: "user"}, 1)
 	require.NoError(t, err)
 	assert.Len(t, entries, 1)
+	assert.Equal(t, int32(1), atomic.LoadInt32(&calls), "limit should stop cloud pagination")
 }
 
 func TestReadMemories_StopsOnInvalidPage(t *testing.T) {

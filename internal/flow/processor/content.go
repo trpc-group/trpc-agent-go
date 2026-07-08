@@ -812,7 +812,7 @@ func (p *ContentRequestProcessor) appendPreloadMemoryContext(
 	userContextBlocks []string,
 ) []string {
 	// PreloadMemory: 0 = disabled, -1 = all, N > 0 = adaptive preload budget.
-	if p.PreloadMemory == 0 || invocation.MemoryService == nil {
+	if p.PreloadMemory == 0 || preloadMemoryReader(invocation) == nil {
 		return userContextBlocks
 	}
 	memMsg := p.getPreloadMemoryMessage(ctx, invocation)
@@ -3045,7 +3045,8 @@ func (p *ContentRequestProcessor) getPreloadMemoryMessage(
 	ctx context.Context,
 	inv *agent.Invocation,
 ) *model.Message {
-	if inv.MemoryService == nil || inv.Session == nil {
+	reader := preloadMemoryReader(inv)
+	if reader == nil || inv.Session == nil {
 		return nil
 	}
 	userKey := memory.UserKey{
@@ -3061,9 +3062,15 @@ func (p *ContentRequestProcessor) getPreloadMemoryMessage(
 		return nil
 	}
 	if p.PreloadMemory < 0 {
-		return p.loadPreloadMemoryMessage(ctx, inv, userKey, 0)
+		return p.loadPreloadMemoryMessage(ctx, inv, reader, userKey, 0)
 	}
-	return p.getAdaptivePreloadMemoryMessage(ctx, inv, userKey, p.PreloadMemory)
+	return p.getAdaptivePreloadMemoryMessage(
+		ctx,
+		inv,
+		reader,
+		userKey,
+		p.PreloadMemory,
+	)
 }
 
 // getAdaptivePreloadMemoryMessage preloads all memories for small memory sets
@@ -3071,12 +3078,13 @@ func (p *ContentRequestProcessor) getPreloadMemoryMessage(
 func (p *ContentRequestProcessor) getAdaptivePreloadMemoryMessage(
 	ctx context.Context,
 	inv *agent.Invocation,
+	reader memory.Reader,
 	userKey memory.UserKey,
 	budget int,
 ) *model.Message {
 	const preloadProbeExtra = 1
 	probeLimit := budget + preloadProbeExtra
-	probeEntries, err := inv.MemoryService.ReadMemories(ctx, userKey, probeLimit)
+	probeEntries, err := reader.ReadMemories(ctx, userKey, probeLimit)
 	if err != nil {
 		log.WarnfContext(ctx, "Failed to probe memories for preload: %v", err)
 		return nil
@@ -3090,7 +3098,7 @@ func (p *ContentRequestProcessor) getAdaptivePreloadMemoryMessage(
 
 	query := buildPreloadSearchQuery(inv.Message)
 	if query == "" {
-		return p.loadPreloadMemoryMessage(ctx, inv, userKey, budget)
+		return p.loadPreloadMemoryMessage(ctx, inv, reader, userKey, budget)
 	}
 
 	searchOpts := memory.SearchOptions{
@@ -3099,7 +3107,7 @@ func (p *ContentRequestProcessor) getAdaptivePreloadMemoryMessage(
 		Deduplicate:  true,
 		HybridSearch: true,
 	}
-	memories, err := inv.MemoryService.SearchMemories(
+	memories, err := reader.SearchMemories(
 		ctx,
 		userKey,
 		query,
@@ -3107,10 +3115,10 @@ func (p *ContentRequestProcessor) getAdaptivePreloadMemoryMessage(
 	)
 	if err != nil {
 		log.WarnfContext(ctx, "Failed to search memories for preload: %v", err)
-		return p.loadPreloadMemoryMessage(ctx, inv, userKey, budget)
+		return p.loadPreloadMemoryMessage(ctx, inv, reader, userKey, budget)
 	}
 	if len(memories) == 0 {
-		return p.loadPreloadMemoryMessage(ctx, inv, userKey, budget)
+		return p.loadPreloadMemoryMessage(ctx, inv, reader, userKey, budget)
 	}
 	return newPreloadMemoryMessage(memories, p.PreloadMemoryPlaybook)
 }
@@ -3120,15 +3128,26 @@ func (p *ContentRequestProcessor) getAdaptivePreloadMemoryMessage(
 func (p *ContentRequestProcessor) loadPreloadMemoryMessage(
 	ctx context.Context,
 	inv *agent.Invocation,
+	reader memory.Reader,
 	userKey memory.UserKey,
 	limit int,
 ) *model.Message {
-	memories, err := inv.MemoryService.ReadMemories(ctx, userKey, limit)
+	memories, err := reader.ReadMemories(ctx, userKey, limit)
 	if err != nil {
 		log.WarnfContext(ctx, "Failed to preload memories: %v", err)
 		return nil
 	}
 	return newPreloadMemoryMessage(memories, p.PreloadMemoryPlaybook)
+}
+
+func preloadMemoryReader(inv *agent.Invocation) memory.Reader {
+	if inv == nil {
+		return nil
+	}
+	if inv.MemoryReader != nil {
+		return inv.MemoryReader
+	}
+	return inv.MemoryService
 }
 
 func newPreloadMemoryMessage(

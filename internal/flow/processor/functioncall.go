@@ -1416,6 +1416,7 @@ func preserveStateDeltaInvocationDefaults(
 	view.StructuredOutput = base.StructuredOutput
 	view.StructuredOutputType = base.StructuredOutputType
 	view.MemoryService = base.MemoryService
+	view.MemoryReader = base.MemoryReader
 	view.ArtifactService = base.ArtifactService
 	view.MaxLLMCalls = base.MaxLLMCalls
 	view.MaxToolIterations = base.MaxToolIterations
