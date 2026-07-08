@@ -59,6 +59,8 @@ const (
 	mcpTransportStdio      = "stdio"
 	mcpTransportSSE        = "sse"
 	mcpTransportStreamable = "streamable"
+
+	browserArtifactDirName = ".playwright-mcp"
 )
 
 func init() {
@@ -466,6 +468,14 @@ func defaultFileReadOnlyDirs(stateDir string) []string {
 	if runtime.GOOS != "windows" {
 		roots = append(roots, absPathOrOriginal("/tmp"))
 	}
+	if cwd, err := os.Getwd(); err == nil {
+		if cwd = strings.TrimSpace(cwd); cwd != "" {
+			artifactDir, ok := browserArtifactReadRoot(cwd)
+			if ok {
+				roots = append(roots, artifactDir)
+			}
+		}
+	}
 	if stateDir := strings.TrimSpace(stateDir); stateDir != "" {
 		roots = append(
 			roots,
@@ -474,6 +484,41 @@ func defaultFileReadOnlyDirs(stateDir string) []string {
 		)
 	}
 	return roots
+}
+
+func browserArtifactReadRoot(cwd string) (string, bool) {
+	return browserArtifactReadRootWith(cwd, os.Lstat, os.MkdirAll)
+}
+
+type browserArtifactLstatFunc func(string) (os.FileInfo, error)
+
+type browserArtifactMkdirAllFunc func(string, os.FileMode) error
+
+func browserArtifactReadRootWith(
+	cwd string,
+	lstat browserArtifactLstatFunc,
+	mkdirAll browserArtifactMkdirAllFunc,
+) (string, bool) {
+	artifactDir := filepath.Join(cwd, browserArtifactDirName)
+	info, err := lstat(artifactDir)
+	switch {
+	case err == nil:
+		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return "", false
+		}
+	case os.IsNotExist(err):
+		if err := mkdirAll(artifactDir, 0o755); err != nil {
+			return "", false
+		}
+	default:
+		return "", false
+	}
+
+	info, err = lstat(artifactDir)
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return "", false
+	}
+	return artifactDir, true
 }
 
 func absPathOrOriginal(path string) string {
