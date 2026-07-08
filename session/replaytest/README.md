@@ -31,15 +31,24 @@ and per-case classified diff entries with locators.
 
 ## Integration Backends
 
-External backend wiring is runtime-gated by environment variables. When enabled,
-the harness should append the backend after InMemory and SQLite:
+External backends are wired at runtime when their environment variable is set;
+each is appended after InMemory and SQLite. A local run with neither variable
+set stays on InMemory + SQLite and needs no external service.
 
-| Backend | Environment variable |
-| --- | --- |
-| Redis | `REPLAYTEST_REDIS_ADDR` |
-| Postgres | `REPLAYTEST_POSTGRES_DSN` |
-| MySQL | `REPLAYTEST_MYSQL_DSN` |
-| ClickHouse | `REPLAYTEST_CLICKHOUSE_DSN` |
+| Backend | Environment variable | Example |
+| --- | --- | --- |
+| Redis | `REPLAYTEST_REDIS_ADDR` | `redis://127.0.0.1:6379` |
+| Postgres | `REPLAYTEST_POSTGRES_DSN` | `postgres://user:pass@localhost:5432/db?sslmode=disable` |
+
+Run with an external backend to produce the full three-verdict report,
+including `unsupported` rows (which the local `inmemory + sqlite` run never
+emits, since capability-gap categories require an integration backend):
+
+```bash
+cd session/replaytest
+REPLAYTEST_REDIS_ADDR=redis://127.0.0.1:6379 \
+  go run ./cmd/replayreport -cases testdata/cases -out report.json
+```
 
 Cases marked `"mode": "integration"` are skipped by lightweight mode and are
 intended for these external runs.

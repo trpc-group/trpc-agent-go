@@ -24,10 +24,10 @@
       "kind": "fact"
     }
   ],
-  "faultInjection": "tamper_state",
+  "faultInjection": "drop_memory",
   "expectedDefect": {
-    "category": "state",
-    "fieldPath": "state",
+    "category": "memory",
+    "fieldPath": "memories",
     "locator": {
       "sessionID": "s18"
     }

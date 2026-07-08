@@ -11,6 +11,7 @@ package harness
 
 import (
 	"context"
+	"errors"
 
 	"trpc.group/trpc-go/trpc-agent-go/session/replaytest/backends"
 )
@@ -21,6 +22,9 @@ import (
 // skipped here; they are exercised by the fault-detection test. Integration-only
 // cases are skipped unless an external backend is present.
 func RunAll(ctx context.Context, dir, mode string, bs []*backends.Backend) (*Report, error) {
+	if len(bs) == 0 {
+		return nil, errors.New("RunAll requires at least one backend (baseline)")
+	}
 	cases, err := LoadCases(dir)
 	if err != nil {
 		return nil, err

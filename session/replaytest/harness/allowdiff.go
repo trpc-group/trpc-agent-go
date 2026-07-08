@@ -9,7 +9,15 @@
 
 package harness
 
-import "strings"
+import (
+	"math"
+	"strconv"
+	"strings"
+)
+
+// scoreEpsilon bounds how far two memory scores may differ before the diff is
+// treated as a real inconsistency rather than float/similarity precision noise.
+const scoreEpsilon = 1e-6
 
 // Verdict classifies a diff as consistent, an allowed difference, an
 // unsupported-capability gap, or a real inconsistency.
@@ -33,9 +41,15 @@ type Capabilities struct {
 // Classify decides the verdict for a single diff given the compared backend's
 // capabilities. Returns the verdict and a human-readable explanation.
 func Classify(backend string, caps Capabilities, d Diff) (Verdict, string) {
-	// Similarity/precision noise on memory scores is an accepted difference.
+	// Similarity/precision noise on memory scores is an accepted difference, but
+	// only within a bounded tolerance; larger score gaps are real inconsistencies.
 	if d.Category == "memory" && strings.HasSuffix(d.FieldPath, ".score") {
-		return VerdictAllowedDiff, "memory score differs only within similarity/float precision tolerance"
+		a, aerr := strconv.ParseFloat(d.BaselineValue, 64)
+		b, berr := strconv.ParseFloat(d.CompareValue, 64)
+		if aerr == nil && berr == nil && math.Abs(a-b) <= scoreEpsilon {
+			return VerdictAllowedDiff, "memory score differs only within float precision tolerance"
+		}
+		return VerdictInconsistent, "memory score diff exceeds tolerance"
 	}
 	if backend == "sqlite" &&
 		d.Category == "summary" &&

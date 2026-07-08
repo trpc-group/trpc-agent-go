@@ -18,10 +18,10 @@
       "bytes": "AAEC"
     }
   ],
-  "faultInjection": "wrong_summary_session",
+  "faultInjection": "tamper_state",
   "expectedDefect": {
-    "category": "summary",
-    "fieldPath": "summaries",
+    "category": "state",
+    "fieldPath": "state",
     "locator": {
       "sessionID": "s16"
     }

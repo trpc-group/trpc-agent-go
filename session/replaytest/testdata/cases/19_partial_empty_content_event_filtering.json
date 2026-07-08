@@ -11,7 +11,8 @@
       "type": "append_event",
       "event": {
         "author": "user",
-        "role": "user"
+        "role": "user",
+        "content": "ask"
       }
     },
     {
@@ -21,6 +22,14 @@
         "role": "assistant",
         "content": "partial payload",
         "partial": true
+      }
+    },
+    {
+      "type": "append_event",
+      "event": {
+        "author": "assistant",
+        "role": "assistant",
+        "content": "final answer"
       }
     }
   ]

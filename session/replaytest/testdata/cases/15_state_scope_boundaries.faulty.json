@@ -23,10 +23,10 @@
       "value": "T"
     }
   ],
-  "faultInjection": "overwrite_summary",
+  "faultInjection": "tamper_state",
   "expectedDefect": {
-    "category": "summary",
-    "fieldPath": "summaries",
+    "category": "state",
+    "fieldPath": "state",
     "locator": {
       "sessionID": "s15"
     }

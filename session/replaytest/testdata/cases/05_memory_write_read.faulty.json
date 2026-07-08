@@ -24,10 +24,10 @@
       }
     }
   ],
-  "faultInjection": "drop_summary",
+  "faultInjection": "drop_memory",
   "expectedDefect": {
-    "category": "summary",
-    "fieldPath": "summaries",
+    "category": "memory",
+    "fieldPath": "memories",
     "locator": {
       "sessionID": "s05"
     }

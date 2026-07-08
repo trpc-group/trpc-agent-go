@@ -29,8 +29,7 @@
     "category": "memory",
     "fieldPath": "memories",
     "locator": {
-      "sessionID": "s17",
-      "memoryID": "mem#0"
+      "sessionID": "s17"
     }
   }
 }

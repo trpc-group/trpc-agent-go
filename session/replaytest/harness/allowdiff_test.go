@@ -16,9 +16,28 @@ import (
 )
 
 func TestClassifyScoreIsAllowed(t *testing.T) {
-	v, expl := Classify("sqlite", Capabilities{}, Diff{Category: "memory", FieldPath: "memories[0].score"})
+	v, expl := Classify("sqlite", Capabilities{}, Diff{
+		Category: "memory", FieldPath: "memories[0].score",
+		BaselineValue: "0.5", CompareValue: "0.5",
+	})
 	require.Equal(t, VerdictAllowedDiff, v)
 	require.NotEmpty(t, expl)
+}
+
+func TestClassifyScoreWithinEpsilonIsAllowed(t *testing.T) {
+	v, _ := Classify("sqlite", Capabilities{}, Diff{
+		Category: "memory", FieldPath: "memories[0].score",
+		BaselineValue: "0.5000000", CompareValue: "0.5000004",
+	})
+	require.Equal(t, VerdictAllowedDiff, v)
+}
+
+func TestClassifyScoreBeyondEpsilonIsInconsistent(t *testing.T) {
+	v, _ := Classify("sqlite", Capabilities{}, Diff{
+		Category: "memory", FieldPath: "memories[0].score",
+		BaselineValue: "0.5", CompareValue: "0.9",
+	})
+	require.Equal(t, VerdictInconsistent, v)
 }
 
 func TestClassifySummaryTextIsInconsistent(t *testing.T) {

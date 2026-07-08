@@ -1,0 +1,20 @@
+{
+  "name": "23_state_delete",
+  "description": "State set then delete_state removes the key on every backend.",
+  "key": {
+    "appName": "replaytest",
+    "userID": "u23",
+    "sessionID": "s23"
+  },
+  "operations": [
+    {
+      "type": "set_state",
+      "key": "flag",
+      "value": "on"
+    },
+    {
+      "type": "delete_state",
+      "key": "flag"
+    }
+  ]
+}

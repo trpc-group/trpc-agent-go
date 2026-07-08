@@ -26,13 +26,12 @@
       }
     }
   ],
-  "faultInjection": "drop_memory",
+  "faultInjection": "tamper_state",
   "expectedDefect": {
-    "category": "memory",
-    "fieldPath": "memories",
+    "category": "state",
+    "fieldPath": "state",
     "locator": {
-      "sessionID": "s04",
-      "memoryID": "mem#0"
+      "sessionID": "s04"
     }
   }
 }

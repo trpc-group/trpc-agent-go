@@ -10,6 +10,7 @@
 package harness
 
 import (
+	"bytes"
 	"encoding/json"
 	"math"
 	"sort"
@@ -60,8 +61,25 @@ func normalizeMemories(s *Snapshot) {
 	for i := range s.Memories {
 		s.Memories[i].ID = ordinalID("mem", i)
 		s.Memories[i].Score = round6(s.Memories[i].Score)
-		s.Memories[i].Metadata = canonicalizeMap(s.Memories[i].Metadata)
+		s.Memories[i].Metadata = canonicalizeMap(zeroMetadataTimes(s.Memories[i].Metadata))
 	}
+}
+
+// zeroMetadataTimes zeroes any time.Time values in memory metadata so two
+// backends that stored the same instant do not diff on formatting.
+func zeroMetadataTimes(m map[string]any) map[string]any {
+	if len(m) == 0 {
+		return m
+	}
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		if _, ok := v.(time.Time); ok {
+			out[k] = time.Time{}
+			continue
+		}
+		out[k] = v
+	}
+	return out
 }
 
 func normalizeSummaries(s *Snapshot) {
@@ -100,6 +118,8 @@ func round6(f float64) float64 {
 
 // canonicalizeValue round-trips an arbitrary value through JSON so numeric
 // types and nested structures are represented consistently across backends.
+// It decodes with UseNumber so large integers (e.g. epoch-ns timestamps) stay
+// exact instead of being coerced to lossy float64.
 func canonicalizeValue(v any) any {
 	if v == nil {
 		return nil
@@ -108,8 +128,10 @@ func canonicalizeValue(v any) any {
 	if err != nil {
 		return v
 	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
 	var out any
-	if err := json.Unmarshal(raw, &out); err != nil {
+	if err := dec.Decode(&out); err != nil {
 		return v
 	}
 	return out

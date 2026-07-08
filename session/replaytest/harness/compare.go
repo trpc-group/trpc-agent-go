@@ -121,35 +121,67 @@ func compareState(baseline, other *Snapshot) []Diff {
 
 func compareMemories(baseline, other *Snapshot) []Diff {
 	var diffs []Diff
-	n := max(len(baseline.Memories), len(other.Memories))
-	for i := 0; i < n; i++ {
+	baseByKey := indexMemories(baseline.Memories)
+	otherByKey := indexMemories(other.Memories)
+	for _, k := range unionMemoryKeys(baseline.Memories, other.Memories) {
+		a, aok := baseByKey[k]
+		b, bok := otherByKey[k]
 		switch {
-		case i >= len(baseline.Memories):
-			b := other.Memories[i]
-			diffs = append(diffs, Diff{Category: "memory",
-				Locator:       Locator{SessionID: baseline.SessionID, MemoryID: b.ID},
-				FieldPath:     fmt.Sprintf("memories[%d]", i),
-				BaselineValue: missingValue, CompareValue: renderJSON(b)})
-		case i >= len(other.Memories):
-			a := baseline.Memories[i]
+		case aok && !bok:
 			diffs = append(diffs, Diff{Category: "memory",
 				Locator:       Locator{SessionID: baseline.SessionID, MemoryID: a.ID},
-				FieldPath:     fmt.Sprintf("memories[%d]", i),
+				FieldPath:     "memories",
 				BaselineValue: renderJSON(a), CompareValue: missingValue})
+		case !aok && bok:
+			diffs = append(diffs, Diff{Category: "memory",
+				Locator:       Locator{SessionID: baseline.SessionID, MemoryID: b.ID},
+				FieldPath:     "memories",
+				BaselineValue: missingValue, CompareValue: renderJSON(b)})
 		default:
-			diffs = append(diffs, compareMemoryFields(baseline.SessionID, i, baseline.Memories[i], other.Memories[i])...)
+			diffs = append(diffs, compareMemoryFields(baseline.SessionID, a, b)...)
 		}
 	}
 	return diffs
 }
 
-func compareMemoryFields(sessionID string, i int, a, b MemoryView) []Diff {
+func memoryKey(m MemoryView) string { return m.Content + "\x00" + m.Kind }
+
+func indexMemories(ms []MemoryView) map[string]MemoryView {
+	out := make(map[string]MemoryView, len(ms))
+	for _, m := range ms {
+		out[memoryKey(m)] = m
+	}
+	return out
+}
+
+func unionMemoryKeys(a, b []MemoryView) []string {
+	seen := make(map[string]struct{})
+	var keys []string
+	for _, m := range a {
+		k := memoryKey(m)
+		if _, ok := seen[k]; !ok {
+			seen[k] = struct{}{}
+			keys = append(keys, k)
+		}
+	}
+	for _, m := range b {
+		k := memoryKey(m)
+		if _, ok := seen[k]; !ok {
+			seen[k] = struct{}{}
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func compareMemoryFields(sessionID string, a, b MemoryView) []Diff {
 	var diffs []Diff
 	loc := Locator{SessionID: sessionID, MemoryID: a.ID}
 	add := func(field, av, bv string) {
 		if av != bv {
 			diffs = append(diffs, Diff{Category: "memory", Locator: loc,
-				FieldPath: fmt.Sprintf("memories[%d].%s", i, field), BaselineValue: av, CompareValue: bv})
+				FieldPath: "memories." + field, BaselineValue: av, CompareValue: bv})
 		}
 	}
 	add("content", a.Content, b.Content)

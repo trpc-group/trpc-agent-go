@@ -88,6 +88,29 @@ func TestCompareDetectsMemoryDrop(t *testing.T) {
 	require.True(t, found)
 }
 
+func TestCompareMemoriesPairsByContentKindNotIndex(t *testing.T) {
+	// baseline has A,B,C; other dropped B. Index pairing would misalign C,
+	// key pairing must report exactly one missing (B).
+	base := &Snapshot{SessionID: "s", Memories: []MemoryView{
+		{ID: "mem#0", Content: "A", Kind: "fact"},
+		{ID: "mem#1", Content: "B", Kind: "fact"},
+		{ID: "mem#2", Content: "C", Kind: "fact"},
+	}}
+	other := &Snapshot{SessionID: "s", Memories: []MemoryView{
+		{ID: "mem#0", Content: "A", Kind: "fact"},
+		{ID: "mem#1", Content: "C", Kind: "fact"},
+	}}
+	diffs := Compare("c", "sqlite", base, other)
+	missing := 0
+	for _, d := range diffs {
+		if d.Category == "memory" && d.CompareValue == missingValue {
+			missing++
+			require.Contains(t, d.BaselineValue, "B")
+		}
+	}
+	require.Equal(t, 1, missing, "exactly one memory (B) is missing; got diffs %+v", diffs)
+}
+
 func TestCompareDetectsTrackPayloadMismatch(t *testing.T) {
 	base := &Snapshot{SessionID: "s", Tracks: []TrackView{{Name: "steps", Payload: "one"}}}
 	other := &Snapshot{SessionID: "s", Tracks: []TrackView{{Name: "steps", Payload: "two"}}}

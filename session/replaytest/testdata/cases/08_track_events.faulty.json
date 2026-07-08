@@ -25,12 +25,13 @@
       }
     }
   ],
-  "faultInjection": "wrong_summary_session",
+  "faultInjection": "wrong_track_payload",
   "expectedDefect": {
-    "category": "summary",
-    "fieldPath": "summaries",
+    "category": "track",
+    "fieldPath": "tracks",
     "locator": {
-      "sessionID": "s08"
+      "sessionID": "s08",
+      "trackName": "tool_exec"
     }
   }
 }

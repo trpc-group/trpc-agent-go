@@ -10,6 +10,7 @@
 package harness
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -34,4 +35,25 @@ func TestNormalizeStripsVolatileFields(t *testing.T) {
 	require.InDelta(t, 0.765432, s.Memories[0].Score, 1e-9)
 	require.True(t, s.Summaries[0].UpdatedAt.IsZero())
 	require.True(t, s.Tracks[0].Timestamp.IsZero())
+}
+
+func TestCanonicalizeValueKeepsLargeIntegerExact(t *testing.T) {
+	// epoch-ns timestamp: beyond float64 exact-integer range.
+	in := map[string]any{"ts": json.Number("1720000000000000001")}
+	out := canonicalizeValue(in).(map[string]any)
+	require.Equal(t, "1720000000000000001", out["ts"].(json.Number).String())
+}
+
+func TestNormalizeZeroesMemoryMetadataTimes(t *testing.T) {
+	s := &Snapshot{
+		Memories: []MemoryView{
+			{ID: "raw", Content: "a", Metadata: map[string]any{"eventTime": time.Now(), "kind": "episode"}},
+		},
+	}
+	Normalize(s)
+	require.Equal(t, "episode", s.Memories[0].Metadata["kind"])
+	// The zeroed time is canonicalized through JSON, so it lands as the RFC3339
+	// rendering of the zero instant. What matters is that it is deterministic and
+	// no longer carries the volatile wall-clock value.
+	require.Equal(t, "0001-01-01T00:00:00Z", s.Memories[0].Metadata["eventTime"])
 }

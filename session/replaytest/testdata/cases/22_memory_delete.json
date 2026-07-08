@@ -1,0 +1,23 @@
+{
+  "name": "22_memory_delete",
+  "description": "Memory add then delete leaves an empty set on every backend.",
+  "key": {
+    "appName": "replaytest",
+    "userID": "u22",
+    "sessionID": "s22"
+  },
+  "operations": [
+    {
+      "type": "add_memory",
+      "value": "temp fact",
+      "topics": [
+        "t"
+      ],
+      "kind": "fact"
+    },
+    {
+      "type": "delete_memory",
+      "memoryID": "temp fact"
+    }
+  ]
+}

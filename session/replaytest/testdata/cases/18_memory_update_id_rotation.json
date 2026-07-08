@@ -1,6 +1,6 @@
 {
   "name": "18_memory_update_id_rotation",
-  "description": "Memory update scenario placeholder with stable add path.",
+  "description": "Memory update rotates the content-derived ID consistently on every backend.",
   "key": {
     "appName": "replaytest",
     "userID": "u18",
@@ -16,12 +16,12 @@
       "kind": "fact"
     },
     {
-      "type": "add_memory",
+      "type": "update_memory",
+      "memoryID": "initial memory",
       "value": "updated memory",
       "topics": [
         "profile"
-      ],
-      "kind": "fact"
+      ]
     }
   ]
 }

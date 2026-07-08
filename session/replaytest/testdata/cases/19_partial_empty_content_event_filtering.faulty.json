@@ -11,7 +11,8 @@
       "type": "append_event",
       "event": {
         "author": "user",
-        "role": "user"
+        "role": "user",
+        "content": "ask"
       }
     },
     {
@@ -22,15 +23,22 @@
         "content": "partial payload",
         "partial": true
       }
+    },
+    {
+      "type": "append_event",
+      "event": {
+        "author": "assistant",
+        "role": "assistant",
+        "content": "final answer"
+      }
     }
   ],
-  "faultInjection": "wrong_track_payload",
+  "faultInjection": "duplicate_event",
   "expectedDefect": {
-    "category": "track",
-    "fieldPath": "tracks",
+    "category": "event",
+    "fieldPath": "events",
     "locator": {
-      "sessionID": "s19",
-      "trackName": "tool_exec"
+      "sessionID": "s19"
     }
   }
 }

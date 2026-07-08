@@ -1,0 +1,28 @@
+{
+  "name": "24_failure_after",
+  "description": "failAfter induces an error that the runner swallows so read-back reflects recovery.",
+  "key": {
+    "appName": "replaytest",
+    "userID": "u24",
+    "sessionID": "s24"
+  },
+  "operations": [
+    {
+      "type": "append_event",
+      "failAfter": 1,
+      "event": {
+        "author": "user",
+        "role": "user",
+        "content": "before failure"
+      }
+    },
+    {
+      "type": "append_event",
+      "event": {
+        "author": "assistant",
+        "role": "assistant",
+        "content": "recovered"
+      }
+    }
+  ]
+}

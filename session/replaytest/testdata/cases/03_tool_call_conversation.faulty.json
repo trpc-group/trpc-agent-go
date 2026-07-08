@@ -54,13 +54,12 @@
       }
     }
   ],
-  "faultInjection": "wrong_track_payload",
+  "faultInjection": "duplicate_event",
   "expectedDefect": {
-    "category": "track",
-    "fieldPath": "tracks",
+    "category": "event",
+    "fieldPath": "events",
     "locator": {
-      "sessionID": "s03",
-      "trackName": "tool_exec"
+      "sessionID": "s03"
     }
   }
 }

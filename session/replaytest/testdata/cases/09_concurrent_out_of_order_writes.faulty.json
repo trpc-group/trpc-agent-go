@@ -50,8 +50,7 @@
     "category": "event",
     "fieldPath": "events",
     "locator": {
-      "sessionID": "s09",
-      "eventIndex": 0
+      "sessionID": "s09"
     }
   }
 }

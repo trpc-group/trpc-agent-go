@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -33,8 +34,27 @@ func Run(ctx context.Context, b *backends.Backend, c *ReplayCase) (*Snapshot, er
 		return nil, fmt.Errorf("%s: create session: %w", b.Name, err)
 	}
 
+	var (
+		wg      sync.WaitGroup
+		mu      sync.Mutex
+		concErr error
+	)
 	for i := range c.Operations {
 		op := c.Operations[i]
+		if op.Concurrent {
+			wg.Add(1)
+			go func(op Operation) {
+				defer wg.Done()
+				if err := applyOperation(ctx, b, key, userKey, op); err != nil {
+					mu.Lock()
+					if concErr == nil {
+						concErr = err
+					}
+					mu.Unlock()
+				}
+			}(op)
+			continue
+		}
 		repeat := op.Repeat
 		if repeat < 0 {
 			repeat = 0
@@ -49,6 +69,10 @@ func Run(ctx context.Context, b *backends.Backend, c *ReplayCase) (*Snapshot, er
 				return nil, fmt.Errorf("%s: op %q #%d: %w", b.Name, op.Type, i, err)
 			}
 		}
+	}
+	wg.Wait()
+	if concErr != nil {
+		return nil, fmt.Errorf("%s: concurrent op: %w", b.Name, concErr)
 	}
 
 	return readBack(ctx, b, key, userKey, c.Key.SessionID)
@@ -79,22 +103,40 @@ func applyOperation(
 		e := event.New("", "system")
 		e.StateDelta = map[string][]byte{op.Key: nil}
 		return b.Session.AppendEvent(ctx, fresh, e)
+	case "clear_state":
+		// Clear a session-scoped state key by appending a nil-valued state delta,
+		// mirroring delete_state so the mechanism stays backend-agnostic.
+		fresh, err := b.Session.GetSession(ctx, key)
+		if err != nil {
+			return err
+		}
+		e := event.New("", "system")
+		e.StateDelta = map[string][]byte{op.Key: nil}
+		return b.Session.AppendEvent(ctx, fresh, e)
 	case "add_memory":
 		return b.Memory.AddMemory(ctx, userKey, op.Value, op.Topics, memoryAddOptions(op)...)
 	case "update_memory":
+		id, err := resolveMemoryID(ctx, b, userKey, op.MemoryID)
+		if err != nil {
+			return err
+		}
 		var res memory.UpdateResult
 		return b.Memory.UpdateMemory(
 			ctx,
-			memory.Key{AppName: userKey.AppName, UserID: userKey.UserID, MemoryID: op.MemoryID},
+			memory.Key{AppName: userKey.AppName, UserID: userKey.UserID, MemoryID: id},
 			op.Value,
 			op.Topics,
 			memory.WithUpdateResult(&res),
 		)
 	case "delete_memory":
+		id, err := resolveMemoryID(ctx, b, userKey, op.MemoryID)
+		if err != nil {
+			return err
+		}
 		return b.Memory.DeleteMemory(ctx, memory.Key{
 			AppName:  userKey.AppName,
 			UserID:   userKey.UserID,
-			MemoryID: op.MemoryID,
+			MemoryID: id,
 		})
 	case "create_summary":
 		fresh, err := b.Session.GetSession(ctx, key)
@@ -138,6 +180,22 @@ func memoryAddOptions(op Operation) []memory.AddOption {
 	return []memory.AddOption{memory.WithMetadata(&memory.Metadata{Kind: memory.Kind(op.Kind)})}
 }
 
+// resolveMemoryID maps a content selector to the backend-assigned memory ID.
+// Memory IDs are content-derived and differ per backend, so a case file cannot
+// hardcode one; it names the target memory by its content instead.
+func resolveMemoryID(ctx context.Context, b *backends.Backend, userKey memory.UserKey, selector string) (string, error) {
+	mems, err := b.Memory.ReadMemories(ctx, userKey, 0)
+	if err != nil {
+		return "", err
+	}
+	for _, e := range mems {
+		if e != nil && e.Memory != nil && e.Memory.Memory == selector {
+			return e.ID, nil
+		}
+	}
+	return "", fmt.Errorf("memory selector %q not found", selector)
+}
+
 func buildEvent(spec *EventSpec) *event.Event {
 	msg := model.Message{
 		Role:    model.Role(spec.Role),
@@ -154,9 +212,11 @@ func buildEvent(spec *EventSpec) *event.Event {
 			},
 		})
 	}
+	resp := &model.Response{Choices: []model.Choice{{Message: msg}}}
+	resp.IsPartial = spec.Partial
 	e := &event.Event{
 		Author:    spec.Author,
-		Response:  &model.Response{Choices: []model.Choice{{Message: msg}}},
+		Response:  resp,
 		Timestamp: time.Now(),
 		Branch:    spec.Branch,
 		Tag:       spec.Tag,
@@ -192,13 +252,20 @@ func readBack(
 	if sess != nil {
 		snap.Events = projectEvents(sess.GetEvents())
 		for k, v := range sess.SnapshotState() {
+			// A cleared key persists as a nil/empty value (clear_state and
+			// delete_state append a nil-valued state delta). The framework treats
+			// empty values as absent (see Session.HasStateKeyWithPrefix), so the
+			// projection drops them to compare equal across backends.
+			if len(v) == 0 {
+				continue
+			}
 			snap.State[k] = string(v)
 		}
 		snap.Summaries = projectSummaries(sess, sessionID)
 		snap.Tracks = projectTracks(sess)
 	}
 
-	mems, err := b.Memory.ReadMemories(ctx, userKey, 100)
+	mems, err := b.Memory.ReadMemories(ctx, userKey, 0)
 	if err != nil {
 		return nil, fmt.Errorf("%s: read memories: %w", b.Name, err)
 	}
@@ -308,12 +375,33 @@ func projectMemories(entries []*memory.Entry) []MemoryView {
 			continue
 		}
 		views = append(views, MemoryView{
-			ID:      entry.ID,
-			Content: entry.Memory.Memory,
-			Topics:  entry.Memory.Topics,
-			Kind:    string(entry.Memory.Kind),
-			Score:   entry.Score,
+			ID:       entry.ID,
+			Content:  entry.Memory.Memory,
+			Topics:   entry.Memory.Topics,
+			Kind:     string(entry.Memory.Kind),
+			Score:    entry.Score,
+			Metadata: projectMemoryMetadata(entry.Memory),
 		})
 	}
 	return views
+}
+
+func projectMemoryMetadata(m *memory.Memory) map[string]any {
+	meta := map[string]any{}
+	if m.Kind != "" {
+		meta["kind"] = string(m.Kind)
+	}
+	if m.EventTime != nil {
+		meta["eventTime"] = *m.EventTime
+	}
+	if len(m.Participants) > 0 {
+		meta["participants"] = m.Participants
+	}
+	if m.Location != "" {
+		meta["location"] = m.Location
+	}
+	if len(meta) == 0 {
+		return nil
+	}
+	return meta
 }

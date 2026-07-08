@@ -25,10 +25,10 @@
       }
     }
   ],
-  "faultInjection": "tamper_state",
+  "faultInjection": "duplicate_event",
   "expectedDefect": {
-    "category": "state",
-    "fieldPath": "state",
+    "category": "event",
+    "fieldPath": "events",
     "locator": {
       "sessionID": "s10"
     }
