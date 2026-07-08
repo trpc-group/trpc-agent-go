@@ -28,6 +28,10 @@ var errSERPChallenge = errors.New(
 	"duckduckgo returned an anti-bot challenge page",
 )
 
+var errAPIFallbackNoResults = errors.New(
+	"api fallback returned no results",
+)
+
 func (t *ddgTool) searchSERPWithFallback(
 	ctx context.Context,
 	req searchRequest,
@@ -105,6 +109,30 @@ func (t *ddgTool) searchSERPWithFallbackForBackend(
 			)
 		}
 		return apiFallback, nil
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		if errors.Is(apiFallbackErr, ctxErr) {
+			return apiFallback, apiFallbackErr
+		}
+		return apiFallback, fmt.Errorf(
+			"%w: api fallback failed: %w",
+			ctxErr,
+			apiFallbackErr,
+		)
+	}
+	if isSERPRouteBlocker(err, fallbackErr) &&
+		errors.Is(apiFallbackErr, errAPIFallbackNoResults) {
+		return searchResponse{
+			Query:   req.Query,
+			Results: []resultItem{},
+			Summary: "DuckDuckGo html and lite search pages are both " +
+				"unavailable for this query due to transport errors " +
+				"or anti-bot challenge pages, and the Instant Answer " +
+				"API fallback did not return web results; use direct " +
+				"URLs with web_fetch/browser or another configured " +
+				"search provider instead of immediately retrying " +
+				"DuckDuckGo",
+		}, nil
 	}
 	result.Summary = fmt.Sprintf(
 		"%s; fallback %s failed: %v; api fallback failed: %v",
@@ -244,8 +272,7 @@ func isSERPChallengeError(err error) bool {
 
 func isSERPRouteBlocker(err error, fallbackErr error) bool {
 	return isSERPUnavailableError(err) &&
-		isSERPUnavailableError(fallbackErr) &&
-		(isSERPChallengeError(err) || isSERPChallengeError(fallbackErr))
+		isSERPUnavailableError(fallbackErr)
 }
 
 func isSERPUnavailableError(err error) bool {
@@ -288,12 +315,12 @@ func (t *ddgTool) searchAPIFallbackAfterSERPFailure(
 			baseURL,
 		)
 	}
-	result, err := t.searchAPIWithDefaultBaseURL(req)
+	result, err := t.searchAPIWithDefaultBaseURL(ctx, req)
 	if err != nil {
 		return searchResponse{}, err
 	}
 	if len(result.Results) == 0 {
-		return searchResponse{}, fmt.Errorf("api fallback returned no results")
+		return searchResponse{}, errAPIFallbackNoResults
 	}
 	return result, nil
 }

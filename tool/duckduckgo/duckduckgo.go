@@ -301,7 +301,7 @@ func (t *ddgTool) searchAPIWithSERPFallback(
 	ctx context.Context,
 	req searchRequest,
 ) (searchResponse, error) {
-	result, err := t.searchAPI(req)
+	result, err := t.searchAPI(ctx, req)
 	if err == nil || ctx.Err() != nil || !shouldFallbackFromAPIError(err) {
 		return result, err
 	}
@@ -334,24 +334,30 @@ func (t *ddgTool) searchAPIWithSERPFallback(
 	)
 }
 
-func (t *ddgTool) searchAPIWithDefaultBaseURL(req searchRequest) (searchResponse, error) {
+func (t *ddgTool) searchAPIWithDefaultBaseURL(
+	ctx context.Context,
+	req searchRequest,
+) (searchResponse, error) {
 	apiTool := *t
 	apiTool.baseURL = defaultBaseURL
 	apiTool.backend = backendAPI
 	apiTool.userAgent = defaultUserAgent
 	apiTool.client = client.New(defaultBaseURL, apiTool.userAgent, apiTool.httpClient)
-	return apiTool.searchAPI(req)
+	return apiTool.searchAPI(ctx, req)
 }
 
-func (t *ddgTool) searchAPI(req searchRequest) (searchResponse, error) {
+func (t *ddgTool) searchAPI(
+	ctx context.Context,
+	req searchRequest,
+) (searchResponse, error) {
 	// Perform the search.
-	response, err := t.client.Search(req.Query)
+	response, err := t.client.SearchContext(ctx, req.Query)
 	if err != nil {
 		return searchResponse{
 			Query:   req.Query,
 			Results: []resultItem{},
 			Summary: fmt.Sprintf("Error performing search: %v", err),
-		}, fmt.Errorf("error performing search: %v", err)
+		}, fmt.Errorf("error performing search: %w", err)
 	}
 
 	// Convert the response to our format.
