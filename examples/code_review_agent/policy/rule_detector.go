@@ -195,10 +195,15 @@ func (d *RuleDetector) Detect(diff *parser.DiffResult) []storage.Finding {
 					matches := rule.Pattern.FindAllStringIndex(addedContent, -1)
 					for _, match := range matches {
 						startLineIdx := countLines(addedContent[:match[0]])
-						if startLineIdx >= len(lineNumbers) {
-							startLineIdx = len(lineNumbers) - 1
+						var startLine int
+						if len(lineNumbers) > 0 {
+							if startLineIdx >= len(lineNumbers) {
+								startLineIdx = len(lineNumbers) - 1
+							}
+							startLine = lineNumbers[startLineIdx]
+						} else {
+							startLine = hunk.NewStart + startLineIdx
 						}
-						startLine := lineNumbers[startLineIdx]
 						evidence := addedContent[match[0]:match[1]]
 						findings = append(findings, storage.Finding{
 							RuleID:      rule.ID,
