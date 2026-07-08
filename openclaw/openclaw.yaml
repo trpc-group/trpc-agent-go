@@ -77,6 +77,7 @@ tools:
       config:
         default_profile: "openclaw"
         evaluate_enabled: false
+        screenshot_dir: "${TRPC_CLAW_STATE_DIR}/workspaces/scratch/out"
         server_url: "http://127.0.0.1:19790"
         sandbox_server_url: "http://127.0.0.1:20790"
         profiles:

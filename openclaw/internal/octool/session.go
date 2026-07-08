@@ -20,6 +20,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 )
@@ -43,11 +44,16 @@ type session struct {
 	finished time.Time
 	exitCode int
 
-	lineBase   int
-	lines      []string
-	partial    string
-	pollCursor int
-	maxLines   int
+	segmentBase int
+	segments    []outputSegment
+	partial     string
+	pollCursor  int
+	maxLines    int
+}
+
+type outputSegment struct {
+	Text      string
+	Continued bool
 }
 
 func newSession(id, command string, maxLines int) *session {
@@ -84,7 +90,7 @@ func (s *session) markDone(exitCode int) {
 		return
 	}
 	if s.partial != "" {
-		s.lines = append(s.lines, s.partial)
+		s.appendLineLocked(s.partial)
 		s.partial = ""
 	}
 	s.exitCode = exitCode
@@ -121,23 +127,44 @@ func (s *session) appendOutput(chunk string) {
 	}
 	s.partial = parts[len(parts)-1]
 	for _, line := range parts[:len(parts)-1] {
-		s.lines = append(s.lines, line)
+		s.appendLineLocked(line)
 	}
 	s.trimLocked()
+}
+
+func (s *session) appendLineLocked(line string) {
+	s.segments = append(s.segments, outputSegment{Text: line})
 }
 
 func (s *session) trimLocked() {
 	if s.maxLines <= 0 {
 		return
 	}
-	if len(s.lines) <= s.maxLines {
+	lineCount := 0
+	for _, seg := range s.segments {
+		if !seg.Continued {
+			lineCount++
+		}
+	}
+	if lineCount <= s.maxLines {
 		return
 	}
-	drop := len(s.lines) - s.maxLines
-	s.lines = s.lines[drop:]
-	s.lineBase += drop
-	if s.pollCursor < s.lineBase {
-		s.pollCursor = s.lineBase
+	dropLines := lineCount - s.maxLines
+	dropSegments := 0
+	for dropSegments < len(s.segments) && dropLines > 0 {
+		if !s.segments[dropSegments].Continued {
+			dropLines--
+		}
+		dropSegments++
+		for dropSegments < len(s.segments) &&
+			s.segments[dropSegments].Continued {
+			dropSegments++
+		}
+	}
+	s.segments = s.segments[dropSegments:]
+	s.segmentBase += dropSegments
+	if s.pollCursor < s.segmentBase {
+		s.pollCursor = s.segmentBase
 	}
 }
 
@@ -149,10 +176,18 @@ func (s *session) tail(lines int) string {
 		return ""
 	}
 	start := 0
-	if len(s.lines) > lines {
-		start = len(s.lines) - lines
+	seen := 0
+	for i := len(s.segments) - 1; i >= 0; i-- {
+		if s.segments[i].Continued {
+			continue
+		}
+		seen++
+		if seen == lines {
+			start = i
+			break
+		}
 	}
-	out := strings.Join(s.lines[start:], "\n")
+	out := joinOutputSegments(s.segments[start:])
 	if s.partial != "" {
 		if out != "" {
 			out += "\n"
@@ -166,7 +201,7 @@ func (s *session) allOutput() (string, int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	out := strings.Join(s.lines, "\n")
+	out := joinOutputSegments(s.segments)
 	if s.partial != "" {
 		if out != "" {
 			out += "\n"
@@ -216,31 +251,38 @@ type processPoll struct {
 	ExitCode   *int   `json:"exitCode,omitempty"`
 }
 
-func (s *session) poll(limit *int) processPoll {
+func (s *session) poll(limit *int, maxOutputChars int) processPoll {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	start := s.pollCursor
-	if start < s.lineBase {
-		start = s.lineBase
+	s.splitLongSegmentsLocked(maxOutputChars)
+	if start < s.segmentBase {
+		start = s.segmentBase
 		s.pollCursor = start
 	}
-	end := s.lineBase + len(s.lines)
+	end := s.segmentBase + len(s.segments)
 	if limit != nil && *limit > 0 {
 		if want := start + *limit; want < end {
 			end = want
 		}
 	}
 
-	from := start - s.lineBase
-	to := end - s.lineBase
-	out := strings.Join(s.lines[from:to], "\n")
-	s.pollCursor = end
+	from := start - s.segmentBase
+	to := end - s.segmentBase
+	out, next := renderSessionSegmentWindow(
+		s.segments[from:to],
+		maxOutputChars,
+		start,
+		end,
+		s.redact,
+	)
+	s.pollCursor = next
 
 	res := processPoll{
-		Output:     applyOutputRedactor(s.redact, out),
+		Output:     out,
 		Offset:     start,
-		NextOffset: end,
+		NextOffset: next,
 	}
 	if s.finished.IsZero() {
 		res.Status = "running"
@@ -258,18 +300,24 @@ type processLog struct {
 	NextOffset int    `json:"nextOffset"`
 }
 
-func (s *session) log(offset *int, limit *int) processLog {
+func (s *session) log(
+	offset *int,
+	limit *int,
+	maxOutputChars int,
+) processLog {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	start := s.lineBase
-	end := s.lineBase + len(s.lines)
+	s.splitLongSegmentsLocked(maxOutputChars)
+
+	start := s.segmentBase
+	end := s.segmentBase + len(s.segments)
 
 	if offset != nil {
 		start = *offset
 	}
-	if start < s.lineBase {
-		start = s.lineBase
+	if start < s.segmentBase {
+		start = s.segmentBase
 	}
 	if start > end {
 		start = end
@@ -285,15 +333,125 @@ func (s *session) log(offset *int, limit *int) processLog {
 		}
 	}
 
-	from := start - s.lineBase
-	to := end - s.lineBase
-	out := strings.Join(s.lines[from:to], "\n")
+	from := start - s.segmentBase
+	to := end - s.segmentBase
+	out, next := renderSessionSegmentWindow(
+		s.segments[from:to],
+		maxOutputChars,
+		start,
+		end,
+		s.redact,
+	)
 
 	return processLog{
-		Output:     applyOutputRedactor(s.redact, out),
+		Output:     out,
 		Offset:     start,
-		NextOffset: end,
+		NextOffset: next,
 	}
+}
+
+func (s *session) splitLongSegmentsLocked(maxOutputChars int) {
+	if maxOutputChars <= 0 {
+		return
+	}
+	var out []outputSegment
+	changed := false
+	for _, seg := range s.segments {
+		if utf8.RuneCountInString(seg.Text) <= maxOutputChars {
+			out = append(out, seg)
+			continue
+		}
+		changed = true
+		chunks := splitRunes(seg.Text, maxOutputChars)
+		for i, chunk := range chunks {
+			out = append(out, outputSegment{
+				Text:      chunk,
+				Continued: seg.Continued || i > 0,
+			})
+		}
+	}
+	if changed {
+		s.segments = out
+	}
+}
+
+func renderSessionSegmentWindow(
+	segments []outputSegment,
+	maxOutputChars int,
+	offset int,
+	nextOffset int,
+	redact func(string) string,
+) (string, int) {
+	raw := joinOutputSegments(segments)
+	if maxOutputChars <= 0 || raw == "" {
+		return applyOutputRedactor(redact, raw), nextOffset
+	}
+
+	redactedAll := normalizeOutput(applyOutputRedactor(redact, raw))
+	totalChars := utf8.RuneCountInString(redactedAll)
+	if totalChars <= maxOutputChars {
+		return redactedAll, nextOffset
+	}
+
+	var kept string
+	var keptChars int
+	for i := 1; i <= len(segments); i++ {
+		rawCandidate := joinOutputSegments(segments[:i])
+		candidate := normalizeOutput(
+			applyOutputRedactor(redact, rawCandidate),
+		)
+		candidateChars := utf8.RuneCountInString(candidate)
+		if candidateChars > maxOutputChars {
+			if i == 1 {
+				out := truncateResultOutput(candidate, maxOutputChars)
+				next := clampNextOffset(offset+1, offset, nextOffset)
+				return out, next
+			}
+			out := appendTruncationNotice(kept, keptChars, totalChars)
+			next := clampNextOffset(offset+i-1, offset, nextOffset)
+			return out, next
+		}
+		kept = candidate
+		keptChars = candidateChars
+	}
+
+	return truncateResultOutput(redactedAll, maxOutputChars), nextOffset
+}
+
+func joinOutputSegments(segments []outputSegment) string {
+	var b strings.Builder
+	for i, seg := range segments {
+		if i > 0 && !seg.Continued {
+			b.WriteByte('\n')
+		}
+		b.WriteString(seg.Text)
+	}
+	return b.String()
+}
+
+func splitRunes(value string, size int) []string {
+	if size <= 0 || value == "" {
+		return []string{value}
+	}
+	chunks := make([]string, 0)
+	for value != "" {
+		count := 0
+		end := len(value)
+		for idx := range value {
+			if count == size {
+				end = idx
+				break
+			}
+			count++
+		}
+		chunks = append(chunks, value[:end])
+		value = value[end:]
+	}
+	return chunks
+}
+
+func normalizeOutput(output string) string {
+	return strings.ToValidUTF8(output, "\uFFFD")
 }
 
 type processWrite struct {
