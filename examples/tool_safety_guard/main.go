@@ -88,6 +88,8 @@ func auditEvent(report safety.Report) safety.AuditEvent {
 	case safety.DecisionAsk, safety.DecisionNeedsHumanReview:
 		action = "ask"
 	}
+	// Keep the offline example deterministic so generated audit output
+	// stays diffable against the checked-in sample file.
 	return safety.AuditEvent{
 		Time:             time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 		ToolName:         report.ToolName,
