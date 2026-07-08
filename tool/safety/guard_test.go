@@ -244,5 +244,3 @@ func TestGuard_DefaultExtractor_CodeBlocksEmptyEntries(t *testing.T) {
 		t.Fatalf("expected 1 CodeBlock (empty entries skipped), got %d", len(in.CodeBlocks))
 	}
 }
-
-
