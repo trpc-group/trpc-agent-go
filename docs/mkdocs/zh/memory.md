@@ -1710,6 +1710,7 @@ agent := llmagent.New(
     "assistant",
     llmagent.WithModel(openai.New("deepseek-v4-flash")),
     llmagent.WithTools(mem0Svc.Tools()),
+    llmagent.WithPreloadMemory(10), // 可选：只读预加载预算。
 )
 
 r := runner.NewRunner(
@@ -1725,6 +1726,7 @@ defer r.Close()
 
 - 通过 `llmagent.WithTools(mem0Svc.Tools())` 注册工具
 - 通过 `runner.WithSessionIngestor(mem0Svc)` 把 session transcript 交给 mem0
+- 可选启用 `llmagent.WithPreloadMemory(N)`；由于 `mem0Svc` 同时实现 `memory.Reader`，Runner 可以用它执行只读预加载
 - 不要对该集成使用 `runner.WithMemoryService(...)`
 
 ### 为什么用 `WithSessionIngestor(...)`，而不是 `WithMemoryService(...)`
@@ -1738,7 +1740,7 @@ defer r.Close()
 - Runner 在每轮结束后把完整 session transcript 发送出去
 - 记忆提取与存储由 mem0 在服务端完成
 - `metadata`、`agent_id`、`run_id` 这类按请求传递的 ingest 字段，可以通过 `session.IngestOption` 透传
-- 不会把该集成误解成支持完整框架侧 CRUD 或 preload 的内置后端
+- 不会把该集成误解成支持完整框架侧 CRUD 的内置后端；显式启用的框架侧 preload 只使用只读 `memory.Reader` 能力
 
 简单说，`MemoryService` 表示“框架直接管理记忆”，而 `SessionIngestor` 表示“框架把 transcript 交给外部记忆系统”。`mem0` 属于后者。
 
@@ -1772,9 +1774,10 @@ API key，需要在 server 侧分别配置。OSS server 提供 `POST /configure`
 - 本地 OSS 没有 top-level `app_id`，适配层使用 `metadata.trpc_app_name` 做 app 隔离。已有 OSS 记录如果缺少这个 metadata，默认会被隐藏，直到重新 ingest 或回填 metadata。迁移期确实需要读取这些历史记录时，可显式开启 `WithSelfHostedOSSIncludeUnscopedMemories()`。
 - 当前 OSS `GET /memories` API 最多返回 1000 条 user 级结果，不支持分页，也不能在服务端表达 `metadata.trpc_app_name` 过滤。因此 `ReadMemories` 要求传入大于 0 且不超过 1000 的 limit，并且只会在 OSS 返回的前 1000 条 user 级记录内尽力做本地 app 隔离。
 - Runner 会自动把 session 上下文带入 ingest；如果有需要，也可以通过 `session.WithIngestMetadata`、`session.WithIngestAgentID`、`session.WithIngestRunID` 追加信息。
+- 当同一个 mem0 service 通过 `runner.WithSessionIngestor(mem0Svc)` 配置后，`WithPreloadMemory(N)` 可以使用 mem0 的只读能力；生产环境建议使用正数预算。
 - 当 mem0 返回结构化 metadata 时，检索结果仍可携带 `Topics`、`Kind`、`EventTime`、`Participants`、`Location` 等字段。
 - 使用完成后请调用 `Close()`，确保后台 worker 干净退出。
-- 如果你需要完整的 CRUD 工具面，或依赖框架侧 preload，建议优先选择内置 Memory 后端。
+- 如果你需要完整的 CRUD 工具面，建议优先选择内置 Memory 后端。
 
 ## TencentDB Agent Memory 集成（`memory/tencentdb`）
 
