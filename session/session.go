@@ -59,6 +59,7 @@ var (
 // the full-session summary with no filtering applied.
 const SummaryFilterKeyAllContents = ""
 
+// 先预先设置转换成json的结构体，避免后续修改结构体导致json格式变化
 // Session is the interface that all sessions must implement.
 type Session struct {
 	ID       string                 `json:"id"`      // ID is the session id.
