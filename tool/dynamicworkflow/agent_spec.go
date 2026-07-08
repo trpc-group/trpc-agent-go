@@ -654,7 +654,6 @@ func sanitizeWorkflowChildRunOptions(runOpts *agent.RunOptions) {
 	runOpts.GlobalInstruction = ""
 	runOpts.CodeExecutor = nil
 	runOpts.ToolExecutionFilter = nil
-	runOpts.ToolPermissionPolicy = nil
 	runOpts.StructuredOutput = nil
 	runOpts.StructuredOutputType = nil
 }

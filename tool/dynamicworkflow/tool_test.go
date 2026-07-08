@@ -110,6 +110,11 @@ func TestWorkflowAgentDoesNotInheritRootRunScopedOverrides(t *testing.T) {
 	parent.RunOptions.ExternalToolNames = map[string]bool{"external": true}
 	parent.RunOptions.ToolFilter = func(context.Context, tool.Tool) bool { return false }
 	parent.RunOptions.ToolExecutionFilter = func(context.Context, tool.Tool) bool { return false }
+	parent.RunOptions.ToolPermissionPolicy = tool.PermissionPolicyFunc(
+		func(context.Context, *tool.PermissionRequest) (tool.PermissionDecision, error) {
+			return tool.AllowPermission(), nil
+		},
+	)
 	parent.RunOptions.StructuredOutput = &model.StructuredOutput{
 		Type: model.StructuredOutputJSONSchema,
 	}
@@ -131,6 +136,7 @@ func TestWorkflowAgentDoesNotInheritRootRunScopedOverrides(t *testing.T) {
 	require.Nil(t, child.RunOptions.ExternalToolNames)
 	require.Nil(t, child.RunOptions.ToolFilter)
 	require.Nil(t, child.RunOptions.ToolExecutionFilter)
+	require.NotNil(t, child.RunOptions.ToolPermissionPolicy)
 	require.Nil(t, child.RunOptions.StructuredOutput)
 	require.Nil(t, child.StructuredOutput)
 }
@@ -557,6 +563,53 @@ func TestWorkflowCallToolHonorsPermissionBoundaries(t *testing.T) {
 		require.JSONEq(t, `{"status":"approval_required","tool":"sensitive","reason":"needs approval"}`, string(result.Value))
 		require.False(t, sensitive.called)
 	})
+}
+
+func TestWorkflowChildAgentToolsHonorParentPermissionPolicy(t *testing.T) {
+	called := false
+	sensitive := &testTool{name: "sensitive", call: func(context.Context, []byte) (any, error) {
+		called = true
+		return map[string]any{"ok": true}, nil
+	}}
+	modelImpl := &toolCallingThenFinalModel{toolName: "sensitive"}
+	reviewer := llmagent.New(
+		"reviewer",
+		llmagent.WithModel(modelImpl),
+		llmagent.WithTools([]tool.Tool{sensitive}),
+	)
+	workflow, err := NewTool(scriptedRuntime{run: func(ctx context.Context, handler CallHandler) (Result, error) {
+		raw, err := handler.HandleWorkflowCall(ctx, Call{
+			ID:   "agent-1",
+			Kind: CallKindAgent,
+			Args: json.RawMessage(`{"input":"review it"}`),
+		})
+		return Result{Value: raw}, err
+	}}, []agent.Agent{reviewer})
+	require.NoError(t, err)
+
+	policyCalled := false
+	parent := agent.NewInvocation(
+		agent.WithInvocationAgent(&testAgent{name: "root"}),
+		agent.WithInvocationSession(&session.Session{ID: "session-1", AppName: "app", UserID: "user"}),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(agent.WithToolPermissionPolicyFunc(
+			func(_ context.Context, req *tool.PermissionRequest) (tool.PermissionDecision, error) {
+				policyCalled = true
+				require.Equal(t, "sensitive", req.ToolName)
+				require.Equal(t, "call-1", req.ToolCallID)
+				require.JSONEq(t, `{"id":"42"}`, string(req.Arguments))
+				return tool.DenyPermission("blocked by run policy"), nil
+			},
+		))),
+	)
+	appender.Attach(parent, func(context.Context, *event.Event) error { return nil })
+
+	value, err := workflow.Call(agent.NewInvocationContext(context.Background(), parent), []byte(`{"code":"return None"}`))
+	require.NoError(t, err)
+	result := value.(Result)
+	require.JSONEq(t, `{"text":"done","session_id":"session-1","history_key":"root/dynamic_workflow/<workflow>/agent-1","invocation_id":"<invocation-id>"}`, normalizeSingleAgentResult(t, result.Value))
+	require.True(t, policyCalled)
+	require.False(t, called)
+	require.GreaterOrEqual(t, modelImpl.callCount(), 2)
 }
 
 func TestWorkflowForwardsChildEventsWhenRunnerForwarderIsAttached(t *testing.T) {
@@ -1684,6 +1737,68 @@ func (m *structuredOutputCaptureModel) latestStructuredOutput() *model.Structure
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return cloneStructuredOutput(&model.Request{StructuredOutput: m.structuredOutput})
+}
+
+type toolCallingThenFinalModel struct {
+	toolName string
+
+	mu    sync.Mutex
+	calls int
+}
+
+func (m *toolCallingThenFinalModel) GenerateContent(
+	_ context.Context,
+	_ *model.Request,
+) (<-chan *model.Response, error) {
+	m.mu.Lock()
+	m.calls++
+	callNumber := m.calls
+	m.mu.Unlock()
+
+	responses := make(chan *model.Response, 1)
+	if callNumber == 1 {
+		finishReason := "tool_calls"
+		responses <- &model.Response{
+			ID:   "tool-calling-model",
+			Done: true,
+			Choices: []model.Choice{{
+				Index:        0,
+				FinishReason: &finishReason,
+				Message: model.Message{
+					Role: model.RoleAssistant,
+					ToolCalls: []model.ToolCall{{
+						Type: "function",
+						ID:   "call-1",
+						Function: model.FunctionDefinitionParam{
+							Name:      m.toolName,
+							Arguments: []byte(`{"id":"42"}`),
+						},
+					}},
+				},
+			}},
+		}
+	} else {
+		responses <- &model.Response{
+			ID:   "tool-calling-model",
+			Done: true,
+			Choices: []model.Choice{{
+				Index:   0,
+				Message: model.NewAssistantMessage("done"),
+			}},
+		}
+	}
+	close(responses)
+	return responses, nil
+}
+
+func (m *toolCallingThenFinalModel) Info() model.Info {
+	return model.Info{Name: "tool-calling-model"}
+}
+
+func (m *toolCallingThenFinalModel) callCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.calls
 }
 
 func cloneStructuredOutput(request *model.Request) *model.StructuredOutput {

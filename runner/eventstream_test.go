@@ -207,6 +207,39 @@ func TestRunnerForwardedEventsDoNotBlockRunReturn(t *testing.T) {
 	require.GreaterOrEqual(t, len(sessionAssistantContents(sess)), ag.count)
 }
 
+func TestRunnerEventEmitterClosesAfterCancellationWithoutReader(t *testing.T) {
+	service := sessioninmemory.NewSessionService()
+	ag := &burstSynchronousEventForwardingAgent{
+		count: defaultRunnerEventBufferSize + 8,
+	}
+	r := NewRunner("event-forwarding-cancel", ag, WithSessionService(service))
+	defer r.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	events, err := r.Run(
+		ctx,
+		"user",
+		"session",
+		model.NewUserMessage("start"),
+	)
+	require.NoError(t, err)
+
+	// Cancel before consuming from the returned event channel. The emitter must
+	// stop waiting on caller backpressure and close the channel during cleanup.
+	cancel()
+	closed := make(chan struct{})
+	go func() {
+		defer close(closed)
+		for range events {
+		}
+	}()
+	select {
+	case <-closed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("runner event stream did not close after cancellation")
+	}
+}
+
 func TestForwardedEventIsExcludedFromRootCompletionCapture(t *testing.T) {
 	r := &runner{}
 	rootSession := session.NewSession("app", "user", "session")

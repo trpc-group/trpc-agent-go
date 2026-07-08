@@ -1272,7 +1272,9 @@ type runnerEventEmitter struct {
 }
 
 type runnerQueuedEvent struct {
+	ctx   context.Context
 	event *event.Event
+	ack   chan error
 }
 
 func newRunnerEventEmitter(out chan<- *event.Event) *runnerEventEmitter {
@@ -1297,9 +1299,33 @@ func (e *runnerEventEmitter) emit(ctx context.Context, evt *event.Event) error {
 	if e.closed {
 		return context.Canceled
 	}
-	e.queue = append(e.queue, runnerQueuedEvent{event: evt})
+	e.queue = append(e.queue, runnerQueuedEvent{ctx: ctx, event: evt})
 	e.cond.Signal()
 	return nil
+}
+
+func (e *runnerEventEmitter) emitSync(ctx context.Context, evt *event.Event) error {
+	if e == nil || evt == nil {
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	ack := make(chan error, 1)
+	e.mu.Lock()
+	if e.closed {
+		e.mu.Unlock()
+		return context.Canceled
+	}
+	e.queue = append(e.queue, runnerQueuedEvent{ctx: ctx, event: evt, ack: ack})
+	e.cond.Signal()
+	e.mu.Unlock()
+	select {
+	case err := <-ack:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (e *runnerEventEmitter) close() {
@@ -1323,8 +1349,14 @@ func (e *runnerEventEmitter) run() {
 		if !ok {
 			return
 		}
-		if err := event.EmitEvent(context.Background(), e.out, queued.event); err != nil {
-			log.Errorf("emit runner event: %v", err)
+		err := event.EmitEvent(queued.ctx, e.out, queued.event)
+		if queued.ack != nil {
+			queued.ack <- err
+		}
+		if err != nil {
+			if queued.ctx.Err() == nil {
+				log.Errorf("emit runner event: %v", err)
+			}
 		}
 	}
 }
@@ -3095,9 +3127,13 @@ func (r *runner) emitRunnerCompletion(ctx context.Context, loop *eventLoopContex
 			time.Second,
 		)
 		defer emitCancel()
-		if err := r.emitProcessedEvent(
-			emitCtx, loop, runnerCompletionEvent, false,
-		); err != nil {
+		var err error
+		if loop.eventEmitter != nil {
+			err = loop.eventEmitter.emitSync(emitCtx, runnerCompletionEvent)
+		} else {
+			err = r.emitProcessedEvent(emitCtx, loop, runnerCompletionEvent, false)
+		}
+		if err != nil {
 			log.Errorf("Failed to emit runner completion event: %v", err)
 		}
 	}()
