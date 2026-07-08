@@ -7044,7 +7044,8 @@ to balance performance and cost.</p>
 <span class="normal"><a href="#__codelineno-48-30">30</a></span>
 <span class="normal"><a href="#__codelineno-48-31">31</a></span>
 <span class="normal"><a href="#__codelineno-48-32">32</a></span>
-<span class="normal"><a href="#__codelineno-48-33">33</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-48-1"><a id="__codelineno-48-1" name="__codelineno-48-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+<span class="normal"><a href="#__codelineno-48-33">33</a></span>
+<span class="normal"><a href="#__codelineno-48-34">34</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-48-1"><a id="__codelineno-48-1" name="__codelineno-48-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
 </span><span id="__span-48-2"><a id="__codelineno-48-2" name="__codelineno-48-2"></a><span class="w">    </span><span class="s">&quot;os&quot;</span>
 </span><span id="__span-48-3"><a id="__codelineno-48-3" name="__codelineno-48-3"></a>
 </span><span id="__span-48-4"><a id="__codelineno-48-4" name="__codelineno-48-4"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent/llmagent&quot;</span>
@@ -7068,20 +7069,22 @@ to balance performance and cost.</p>
 </span><span id="__span-48-22"><a id="__codelineno-48-22" name="__codelineno-48-22"></a><span class="w">    </span><span class="s">&quot;assistant&quot;</span><span class="p">,</span>
 </span><span id="__span-48-23"><a id="__codelineno-48-23" name="__codelineno-48-23"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;deepseek-v4-flash&quot;</span><span class="p">)),</span>
 </span><span id="__span-48-24"><a id="__codelineno-48-24" name="__codelineno-48-24"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithTools</span><span class="p">(</span><span class="nx">mem0Svc</span><span class="p">.</span><span class="nx">Tools</span><span class="p">()),</span>
-</span><span id="__span-48-25"><a id="__codelineno-48-25" name="__codelineno-48-25"></a><span class="p">)</span>
-</span><span id="__span-48-26"><a id="__codelineno-48-26" name="__codelineno-48-26"></a>
-</span><span id="__span-48-27"><a id="__codelineno-48-27" name="__codelineno-48-27"></a><span class="nx">r</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span>
-</span><span id="__span-48-28"><a id="__codelineno-48-28" name="__codelineno-48-28"></a><span class="w">    </span><span class="s">&quot;my-app&quot;</span><span class="p">,</span>
-</span><span id="__span-48-29"><a id="__codelineno-48-29" name="__codelineno-48-29"></a><span class="w">    </span><span class="nx">agent</span><span class="p">,</span>
-</span><span id="__span-48-30"><a id="__codelineno-48-30" name="__codelineno-48-30"></a><span class="w">    </span><span class="nx">runner</span><span class="p">.</span><span class="nx">WithSessionService</span><span class="p">(</span><span class="nx">sessionSvc</span><span class="p">),</span>
-</span><span id="__span-48-31"><a id="__codelineno-48-31" name="__codelineno-48-31"></a><span class="w">    </span><span class="nx">runner</span><span class="p">.</span><span class="nx">WithSessionIngestor</span><span class="p">(</span><span class="nx">mem0Svc</span><span class="p">),</span>
-</span><span id="__span-48-32"><a id="__codelineno-48-32" name="__codelineno-48-32"></a><span class="p">)</span>
-</span><span id="__span-48-33"><a id="__codelineno-48-33" name="__codelineno-48-33"></a><span class="k">defer</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span>
+</span><span id="__span-48-25"><a id="__codelineno-48-25" name="__codelineno-48-25"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithPreloadMemory</span><span class="p">(</span><span class="mi">10</span><span class="p">),</span><span class="w"> </span><span class="c1">// Optional read-only preload budget.</span>
+</span><span id="__span-48-26"><a id="__codelineno-48-26" name="__codelineno-48-26"></a><span class="p">)</span>
+</span><span id="__span-48-27"><a id="__codelineno-48-27" name="__codelineno-48-27"></a>
+</span><span id="__span-48-28"><a id="__codelineno-48-28" name="__codelineno-48-28"></a><span class="nx">r</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span>
+</span><span id="__span-48-29"><a id="__codelineno-48-29" name="__codelineno-48-29"></a><span class="w">    </span><span class="s">&quot;my-app&quot;</span><span class="p">,</span>
+</span><span id="__span-48-30"><a id="__codelineno-48-30" name="__codelineno-48-30"></a><span class="w">    </span><span class="nx">agent</span><span class="p">,</span>
+</span><span id="__span-48-31"><a id="__codelineno-48-31" name="__codelineno-48-31"></a><span class="w">    </span><span class="nx">runner</span><span class="p">.</span><span class="nx">WithSessionService</span><span class="p">(</span><span class="nx">sessionSvc</span><span class="p">),</span>
+</span><span id="__span-48-32"><a id="__codelineno-48-32" name="__codelineno-48-32"></a><span class="w">    </span><span class="nx">runner</span><span class="p">.</span><span class="nx">WithSessionIngestor</span><span class="p">(</span><span class="nx">mem0Svc</span><span class="p">),</span>
+</span><span id="__span-48-33"><a id="__codelineno-48-33" name="__codelineno-48-33"></a><span class="p">)</span>
+</span><span id="__span-48-34"><a id="__codelineno-48-34" name="__codelineno-48-34"></a><span class="k">defer</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span>
 </span></code></pre></div></td></tr></table></div>
 <p><strong>Integration points</strong>:</p>
 <ul>
 <li>Register tools with <code>llmagent.WithTools(mem0Svc.Tools())</code></li>
 <li>Use <code>runner.WithSessionIngestor(mem0Svc)</code> to send session transcripts to mem0</li>
+<li>Optionally enable <code>llmagent.WithPreloadMemory(N)</code>; because <code>mem0Svc</code> also implements <code>memory.Reader</code>, the runner can use it for read-only preload</li>
 <li>Do <strong>not</strong> use <code>runner.WithMemoryService(...)</code> with this integration</li>
 </ul>
 <h3 id="why-withsessioningestor-instead-of-withmemoryservice">Why <code>WithSessionIngestor(...)</code> Instead of <code>WithMemoryService(...)</code></h3>
@@ -7092,7 +7095,7 @@ to balance performance and cost.</p>
 <li>Runner sends the completed session transcript after each turn</li>
 <li>mem0 performs extraction and storage on the service side</li>
 <li>per-request ingest fields such as <code>metadata</code>, <code>agent_id</code>, and <code>run_id</code> can be passed through <code>session.IngestOption</code></li>
-<li>the integration is not mistaken for a built-in backend that supports full framework-side CRUD or preload behavior</li>
+<li>the integration is not mistaken for a built-in backend that supports full framework-side CRUD; framework-side preload uses only the read-only <code>memory.Reader</code> surface when explicitly enabled</li>
 </ul>
 <p>In short, <code>MemoryService</code> means "the framework manages memories directly", while <code>SessionIngestor</code> means "the framework hands the transcript to an external memory system". <code>mem0</code> matches the second model.</p>
 <h3 id="configuration-options">Configuration Options</h3>
@@ -7180,9 +7183,10 @@ access the OSS server's internal vector store directly.</p>
 <li>Self-hosted OSS app isolation uses <code>metadata.trpc_app_name</code> because the OSS API has no top-level <code>app_id</code>. Existing OSS records without this metadata are hidden by default until reingested or backfilled. Use <code>WithSelfHostedOSSIncludeUnscopedMemories()</code> only for migrations that need those legacy records visible.</li>
 <li>The current OSS <code>GET /memories</code> API is capped at 1000 user-level results, is not pageable, and cannot express <code>metadata.trpc_app_name</code> as a server-side filter. <code>ReadMemories</code> therefore requires a positive limit no larger than 1000 and applies app isolation as a best-effort local filter over the first 1000 OSS records returned for the user.</li>
 <li>Runner automatically passes session context into ingest. Custom callers can also use <code>session.WithIngestMetadata</code>, <code>session.WithIngestAgentID</code>, and <code>session.WithIngestRunID</code> when needed.</li>
+<li><code>WithPreloadMemory(N)</code> works with mem0 when the same service is configured via <code>runner.WithSessionIngestor(mem0Svc)</code>. Use a positive budget in production.</li>
 <li>When mem0 metadata is available, search results can still carry structured fields such as <code>Topics</code>, <code>Kind</code>, <code>EventTime</code>, <code>Participants</code>, and <code>Location</code>.</li>
 <li>Call <code>Close()</code> on the service so background workers shut down cleanly.</li>
-<li>If you need full CRUD tools or framework-side preload, use one of the built-in memory backends instead.</li>
+<li>If you need full CRUD tools, use one of the built-in memory backends instead.</li>
 </ul>
 <h2 id="tencentdb-agent-memory-integration-memorytencentdb">TencentDB Agent Memory Integration (<code>memory/tencentdb</code>)</h2>
 <p><code>memory/tencentdb</code> integrates
@@ -7621,7 +7625,7 @@ modes and does not write local offload state.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="July 7, 2026 07:20:26 UTC">2026-07-07 07:20:26</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="July 8, 2026 01:17:36 UTC">2026-07-08 01:17:36</span>
   </span>
 
     
