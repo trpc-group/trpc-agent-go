@@ -70,9 +70,9 @@ The second path is explicit tool calling, especially `workspace_exec`. This is u
 
 The third path is application and Skills access to the workspace. `codeexecutor/workspaceio` provides workspace access for business callbacks. Skills scripts can also be written into the workspace and executed there. Code Executor is therefore a shared foundation for model tool calls, framework flows, and application extensions.
 
-A common distinction matters: `llmagent.WithCodeExecutor(...)` and fenced-code auto-execution are not the same switch.
+Two distinctions matter here.
 
-`WithCodeExecutor(...)` supplies runtime capability. It gives the Agent an executor that can power `workspace_exec`, Skills, workspace I/O, and related paths. Whether the final assistant response is scanned for fenced code blocks is controlled by `WithEnableCodeExecutionResponseProcessor(enable bool)`. The response processor is enabled by default, so if you explicitly configure a Code Executor and do not want fenced code blocks in final replies to run automatically, set it to `false`.
+First, `llmagent.WithCodeExecutor(...)` and fenced-code auto-execution are not the same switch. `llmagent.WithCodeExecutor(...)` configures the Agent's default executor for paths such as `workspace_exec`, Skills, and workspace I/O. If a single `runner.Run(...)` needs a different execution environment, `agent.WithCodeExecutor(...)` can be passed as a `RunOption` to override the default for that run only. Whether the final assistant response is scanned for fenced code blocks is controlled separately by `WithEnableCodeExecutionResponseProcessor(enable bool)`. The response processor is enabled by default, so if you explicitly configure a Code Executor and do not want fenced code blocks in final replies to run automatically, set it to `false`.
 
 Automatic execution requires both conditions:
 
@@ -203,7 +203,7 @@ Backend selection is a trade-off among developer convenience, environment consis
 | `container` | Docker / container runtime | Standard service deployment, semi-trusted execution | Reproducible environment, closer to production | Security depends on container config, mounts, and runtime hardening |
 | `jupyter` | Jupyter kernel / notebook semantics | Data analysis, interactive Python, long-lived computation state | Kernel state is natural for analysis | A compute session, not strong isolation |
 | `e2b` | External cloud sandbox provider | Cloud execution, remote isolation, temporary environments | Isolation and lifecycle delegated to provider | Depends on external service, network, provider capability, and cost |
-| `sandbox` | Local OS-level sandbox, mainly bubblewrap on Linux | Local execution with tighter file/network/env boundaries | Constrains local commands without Docker | Managed OS sandbox mainly supports Linux; Docker/K8s may need outer runtime support for namespaces and mounts |
+| `sandbox` | Local OS-level sandbox; bubblewrap on Linux, Seatbelt / `sandbox-exec` on macOS | Local execution with tighter file/network/env boundaries | Constrains local commands without Docker | Managed OS sandbox is not implemented on Windows; Linux backends inside Docker/K8s may need outer runtime support for namespaces and mounts |
 
 ### local: Cheapest and Easiest to Misuse
 
@@ -231,7 +231,7 @@ It fits cloud Agents, temporary computation environments, and remote isolation s
 
 ### sandbox: Local OS-Level Security Boundary
 
-The `sandbox` backend is a security-focused case. It is not a remote platform and not a Docker container. It uses OS-level mechanisms to constrain which files a command can see, which paths it can write, whether it has network access, and which environment variables are injected. The managed backend currently focuses on Linux and uses `bubblewrap`; managed OS sandboxing for macOS and Windows is not implemented.
+The `sandbox` backend is a security-focused case. It is not a remote platform and not a Docker container. It uses OS-level mechanisms to constrain which files a command can see, which paths it can write, whether it has network access, and which environment variables are injected. The managed backend uses `bubblewrap` on Linux and `/usr/bin/sandbox-exec` with Seatbelt profiles on macOS; managed OS sandboxing for Windows is not implemented.
 
 The next section expands this backend.
 
@@ -378,7 +378,7 @@ When adding Code Executor to an application, start from decision questions inste
 | Question | Likely choice | Reason |
 | --- | --- | --- |
 | Are inputs, commands, or user files untrusted? | Avoid `local`; consider `sandbox`, `container`, or `e2b` | Untrusted execution needs runtime boundaries, not only prompts or command descriptions |
-| Must execution happen locally while constraining files, network, and environment variables? | `sandbox` | Local OS-level boundary, mainly Linux bubblewrap today |
+| Must execution happen locally while constraining files, network, and environment variables? | `sandbox` | Local OS-level boundary; bubblewrap on Linux, Seatbelt / `sandbox-exec` on macOS |
 | Do you need a temporary cloud-isolated environment and can accept external provider dependency? | `e2b` | Remote sandbox and elastic execution, with auth, cost, and provider capability trade-offs |
 | Do you already have containerized deployment and need fixed dependencies? | `container` | Good for engineering standardization; security depends on container hardening |
 | Is the task data analysis, chart generation, interactive Python, or long-lived computation? | `jupyter` | Kernel state fits analysis, but should not be treated as strong isolation |

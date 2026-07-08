@@ -70,9 +70,9 @@ type CodeExecutor interface {
 
 第三条路径是应用代码和 Skills 对 workspace 的访问。`codeexecutor/workspaceio` 提供了面向业务回调的 workspace 访问封装；Skills 脚本也可以被写入 workspace 并在其中执行。也就是说，Code Executor 同时服务模型工具调用、框架内部流程和业务扩展，是访问执行环境的共同底座。
 
-这里有一个常见但重要的区分：`llmagent.WithCodeExecutor(...)` 和围栏代码自动执行不是同一个开关。
+这里有两个常见但重要的区分。
 
-`WithCodeExecutor(...)` 提供的是运行时能力。它让 Agent 拥有一个执行器，供 `workspace_exec`、Skills、workspace I/O 等路径使用。是否扫描 assistant 最终回复中的围栏代码块，则由 `WithEnableCodeExecutionResponseProcessor(enable bool)` 控制。需要注意的是，这个响应处理器默认开启；因此显式配置 Code Executor 后，如果不希望最终回复里的 fenced code block 被自动执行，应显式设置为 `false`。
+第一，`llmagent.WithCodeExecutor(...)` 和围栏代码自动执行不是同一个开关。`llmagent.WithCodeExecutor(...)` 配置的是 Agent 默认执行器，供 `workspace_exec`、Skills、workspace I/O 等路径使用。如果某次 `runner.Run(...)` 需要临时换执行环境，还可以通过 `agent.WithCodeExecutor(...)` 作为 `RunOption` 覆盖本次运行的默认执行器。是否扫描 assistant 最终回复中的围栏代码块，则由 `WithEnableCodeExecutionResponseProcessor(enable bool)` 单独控制。需要注意的是，这个响应处理器默认开启；因此显式配置 Code Executor 后，如果不希望最终回复里的 fenced code block 被自动执行，应显式设置为 `false`。
 
 也就是说，自动执行回复里的代码块，需要两个条件同时成立：
 
@@ -205,7 +205,7 @@ Code Executor 的后端分层，本质上是在“开发便利、运行环境一
 | `container` | Docker / container runtime | 标准服务部署、半可信执行 | 环境可复现，和生产部署更接近 | 安全边界取决于容器配置、挂载和 runtime hardening |
 | `jupyter` | Jupyter kernel / notebook 语义 | 数据分析、交互式 Python、长状态计算 | kernel 状态自然延续，适合分析型任务 | 更偏计算会话，不等同于强安全隔离 |
 | `e2b` | 外部云端 sandbox 提供方 | 云端代码执行、远程隔离、临时工作环境 | 隔离和生命周期交给提供方，适合弹性场景 | 依赖外部服务、网络和提供方能力 |
-| `sandbox` | 本地 OS 级 sandbox，Linux 主要基于 bubblewrap | 本地执行但需要收紧文件/网络/环境边界 | 不依赖 Docker 即可约束本地命令，安全语义更明确 | 当前 managed OS sandbox 主要支持 Linux；在 Docker/K8s 内运行需要外层 runtime 放行 namespace/mount 能力 |
+| `sandbox` | 本地 OS 级 sandbox；Linux 基于 bubblewrap，macOS 基于 Seatbelt / `sandbox-exec` | 本地执行但需要收紧文件/网络/环境边界 | 不依赖 Docker 即可约束本地命令，安全语义更明确 | Windows managed OS sandbox 尚未实现；在 Docker/K8s 内运行 Linux 后端时，需要外层 runtime 放行 namespace/mount 能力 |
 
 ### local：最低成本，也最不应该被误用
 
@@ -233,7 +233,7 @@ Code Executor 的后端分层，本质上是在“开发便利、运行环境一
 
 ### sandbox：本地 OS 级安全边界
 
-`sandbox` 后端是一个重点安全案例。它不是远程平台，也不是 Docker 容器，而是在本地执行场景中，用 OS 级机制约束命令可见的文件系统、可写路径、网络和环境变量。当前 managed 后端主要支持 Linux，底层使用 `bubblewrap`；macOS/Windows 的 managed OS sandbox 尚未实现。
+`sandbox` 后端是一个重点安全案例。它不是远程平台，也不是 Docker 容器，而是在本地执行场景中，用 OS 级机制约束命令可见的文件系统、可写路径、网络和环境变量。当前 managed 后端在 Linux 上使用 `bubblewrap`，在 macOS 上通过 `/usr/bin/sandbox-exec` 和 Seatbelt profile 落地；Windows 的 managed OS sandbox 尚未实现。
 
 下面进一步展开 sandbox。
 
@@ -382,7 +382,7 @@ Code Executor 的设计有几个容易被忽略的工程取舍。
 | 决策问题 | 选择倾向 | 判断理由 |
 | --- | --- | --- |
 | 输入、命令或用户文件是否不可信？ | 避免 `local`，优先考虑 `sandbox`、`container` 或 `e2b` | 不可信执行需要运行时边界，而不是只依赖 prompt 或命令说明 |
-| 是否必须在本地运行，同时要约束文件、网络和环境变量？ | `sandbox` | 适合本地 OS 级边界；当前 managed sandbox 主要面向 Linux bubblewrap |
+| 是否必须在本地运行，同时要约束文件、网络和环境变量？ | `sandbox` | 适合本地 OS 级边界；Linux 使用 bubblewrap，macOS 使用 Seatbelt / `sandbox-exec` |
 | 是否需要云端临时隔离环境，且能接受外部提供方依赖？ | `e2b` | 适合远程 sandbox 和弹性执行，但要关注鉴权、成本和提供方能力 |
 | 是否已有容器化部署体系，并且需要固定依赖环境？ | `container` | 适合工程标准化；安全强度取决于容器权限、挂载、网络和 runtime hardening |
 | 是否是数据分析、图表生成、交互式 Python 或长状态计算？ | `jupyter` | kernel 状态适合分析任务，但不应被理解成强安全边界 |
