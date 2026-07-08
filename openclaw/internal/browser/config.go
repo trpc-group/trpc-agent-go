@@ -21,7 +21,8 @@ import (
 const (
 	ToolName = "browser"
 
-	defaultProfileName = "openclaw"
+	defaultProfileName  = "openclaw"
+	defaultStdioTimeout = 60 * time.Second
 
 	transportStdio      = "stdio"
 	transportSSE        = "sse"
@@ -70,6 +71,7 @@ type Config struct {
 	AllowLoopback    *bool           `yaml:"allow_loopback,omitempty"`
 	AllowPrivateNet  *bool           `yaml:"allow_private_networks,omitempty"`
 	AllowFileURLs    *bool           `yaml:"allow_file_urls,omitempty"`
+	AllowedFileRoots []string        `yaml:"allowed_file_roots,omitempty"`
 	Nodes            []NodeConfig    `yaml:"nodes,omitempty"`
 	Profiles         []ProfileConfig `yaml:"profiles,omitempty"`
 }
@@ -163,8 +165,9 @@ func resolveConfig(cfg Config) (resolvedConfig, error) {
 
 func resolveNavigationPolicy(cfg Config) navigationPolicy {
 	policy := navigationPolicy{
-		AllowedDomains: normalizeDomains(cfg.AllowedDomains),
-		BlockedDomains: normalizeDomains(cfg.BlockedDomains),
+		AllowedDomains:   normalizeDomains(cfg.AllowedDomains),
+		BlockedDomains:   normalizeDomains(cfg.BlockedDomains),
+		AllowedFileRoots: normalizeFileRoots(cfg.AllowedFileRoots),
 	}
 	if cfg.AllowLoopback != nil {
 		policy.AllowLoopback = *cfg.AllowLoopback
@@ -202,6 +205,10 @@ func resolveProfile(
 		Command:   strings.TrimSpace(cfg.Command),
 		Args:      cfg.Args,
 		Timeout:   cfg.Timeout,
+	}
+	if strings.EqualFold(conn.Transport, transportStdio) &&
+		conn.Timeout == 0 {
+		conn.Timeout = defaultStdioTimeout
 	}
 	browserServerURL := strings.TrimSpace(cfg.BrowserServerURL)
 	if browserServerURL != "" {
@@ -293,6 +300,9 @@ func resolveNodeTargets(
 }
 
 func validateConnection(cfg mcptool.ConnectionConfig) error {
+	if cfg.Timeout < 0 {
+		return errors.New("timeout must be non-negative")
+	}
 	transport := strings.ToLower(strings.TrimSpace(cfg.Transport))
 	switch transport {
 	case transportStdio:
