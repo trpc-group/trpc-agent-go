@@ -11,6 +11,7 @@
 package client
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -114,6 +115,14 @@ type Result struct {
 
 // Search performs a search query using DuckDuckGo Instant Answer API.
 func (c *Client) Search(query string) (*Response, error) {
+	return c.SearchContext(context.Background(), query)
+}
+
+// SearchContext performs a search query using DuckDuckGo Instant Answer API.
+func (c *Client) SearchContext(
+	ctx context.Context,
+	query string,
+) (*Response, error) {
 	if strings.TrimSpace(query) == "" {
 		return nil, fmt.Errorf("query cannot be empty")
 	}
@@ -123,7 +132,7 @@ func (c *Client) Search(query string) (*Response, error) {
 		c.baseURL, url.QueryEscape(query))
 
 	// Create the HTTP request.
-	req, err := http.NewRequest("GET", reqURL, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
