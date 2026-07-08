@@ -92,6 +92,9 @@ func (m *modelTimeoutModel) forwardResponses(
 			select {
 			case rsp, ok := <-ch:
 				if !ok {
+					if err := ctx.Err(); err != nil {
+						sendTimeoutResponse(out, m.timeout, err)
+					}
 					return
 				}
 				select {
@@ -168,6 +171,9 @@ func (m *modelTimeoutIterModel) forwardSeq(
 			select {
 			case rsp, ok := <-ch:
 				if !ok {
+					if err := ctx.Err(); err != nil {
+						yield(timeoutResponse(m.timeout, err))
+					}
 					return
 				}
 				if !yield(rsp) {

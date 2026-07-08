@@ -115,6 +115,24 @@ func TestModelTimeoutModel_StopsBlockedStream(t *testing.T) {
 	require.Contains(t, resp.Error.Message, "model request timeout")
 }
 
+func TestModelTimeoutModel_ReportsTimeoutWhenStreamClosesAfterContext(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	wrapped := newModelTimeoutModel(
+		&ctxClosedStreamModel{},
+		10*time.Millisecond,
+	)
+
+	ch, err := wrapped.GenerateContent(context.Background(), &model.Request{})
+	require.NoError(t, err)
+
+	resp := readTimeoutResponse(t, ch)
+	require.Equal(t, model.ErrorTypeCancelled, resp.Error.Type)
+	require.Contains(t, resp.Error.Message, "model request timeout")
+}
+
 func TestModelTimeoutModel_DeliversTimeoutAfterQueuedResponses(t *testing.T) {
 	t.Parallel()
 
@@ -226,6 +244,34 @@ func TestModelTimeoutIterModel_StopsBlockedSeq(t *testing.T) {
 	})
 	require.NotNil(t, resp)
 	require.Equal(t, model.ErrorTypeCancelled, resp.Error.Type)
+}
+
+func TestModelTimeoutIterModel_ReportsTimeoutWhenSeqClosesAfterContext(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	wrapped := newModelTimeoutModel(
+		&ctxClosedIterSeqModel{},
+		10*time.Millisecond,
+	)
+	iter, ok := wrapped.(model.IterModel)
+	require.True(t, ok)
+
+	seq, err := iter.GenerateContentIter(
+		context.Background(),
+		&model.Request{},
+	)
+	require.NoError(t, err)
+
+	var resp *model.Response
+	seq(func(r *model.Response) bool {
+		resp = r
+		return false
+	})
+	require.NotNil(t, resp)
+	require.Equal(t, model.ErrorTypeCancelled, resp.Error.Type)
+	require.Contains(t, resp.Error.Message, "model request timeout")
 }
 
 func readResponse(
@@ -358,6 +404,22 @@ func (m *blockingStreamModel) GenerateContent(
 	return ch, nil
 }
 
+type ctxClosedStreamModel struct {
+	timeoutImmediateModel
+}
+
+func (m *ctxClosedStreamModel) GenerateContent(
+	ctx context.Context,
+	_ *model.Request,
+) (<-chan *model.Response, error) {
+	ch := make(chan *model.Response)
+	go func() {
+		defer close(ch)
+		<-ctx.Done()
+	}()
+	return ch, nil
+}
+
 type queuedThenBlockingStreamModel struct {
 	timeoutImmediateModel
 	release chan struct{}
@@ -422,5 +484,18 @@ func (m *blockingIterSeqModel) GenerateContentIter(
 ) (model.Seq[*model.Response], error) {
 	return func(func(*model.Response) bool) {
 		<-m.release
+	}, nil
+}
+
+type ctxClosedIterSeqModel struct {
+	timeoutImmediateModel
+}
+
+func (m *ctxClosedIterSeqModel) GenerateContentIter(
+	ctx context.Context,
+	_ *model.Request,
+) (model.Seq[*model.Response], error) {
+	return func(func(*model.Response) bool) {
+		<-ctx.Done()
 	}, nil
 }
