@@ -34,6 +34,19 @@ func newTestTool(name, desc string) tool.Tool {
 	)
 }
 
+// newEchoTool builds a function tool that echoes its "value" input, used to
+// verify call_tool forwards params to the underlying tool.
+func newEchoTool(name string) tool.Tool {
+	type echoIn struct {
+		Value string `json:"value"`
+	}
+	return function.NewFunctionTool(
+		func(ctx context.Context, in echoIn) (string, error) { return "echo:" + in.Value, nil },
+		function.WithName(name),
+		function.WithDescription("echo the value input"),
+	)
+}
+
 // callSearch invokes the tool_search entry point and decodes the result.
 func callSearch(t *testing.T, ctx context.Context, p *Plugin, in toolSearchInput) searchResult {
 	t.Helper()
