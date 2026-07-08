@@ -462,18 +462,29 @@ func newFileToolSet(
 }
 
 func defaultFileReadOnlyDirs(stateDir string) []string {
-	roots := []string{os.TempDir()}
+	roots := []string{absPathOrOriginal(os.TempDir())}
 	if runtime.GOOS != "windows" {
-		roots = append(roots, "/tmp")
+		roots = append(roots, absPathOrOriginal("/tmp"))
 	}
 	if stateDir := strings.TrimSpace(stateDir); stateDir != "" {
 		roots = append(
 			roots,
-			filepath.Join(stateDir, "runtime", "tmp"),
-			filepath.Join(stateDir, "workspaces", "scratch"),
+			absPathOrOriginal(filepath.Join(stateDir, "runtime", "tmp")),
+			absPathOrOriginal(filepath.Join(stateDir, "workspaces", "scratch")),
 		)
 	}
 	return roots
+}
+
+func absPathOrOriginal(path string) string {
+	if strings.TrimSpace(path) == "" {
+		return path
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return path
+	}
+	return abs
 }
 
 type openAPISpecConfig struct {
