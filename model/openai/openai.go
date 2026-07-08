@@ -331,6 +331,10 @@ func New(name string, opts ...Option) *Model {
 	if o.TailoringStrategy == nil {
 		o.TailoringStrategy = model.NewMiddleOutStrategy(o.TokenCounter)
 	}
+	variantCfg := variantConfigs[o.Variant]
+	if o.textOnlyMessageContent != nil {
+		variantCfg.textOnlyMessageContent = *o.textOnlyMessageContent
+	}
 
 	return &Model{
 		client:                     client,
@@ -347,7 +351,7 @@ func New(name string, opts ...Option) *Model {
 		chatTelemetry:              o.ChatTelemetry,
 		extraFields:                o.ExtraFields,
 		variant:                    o.Variant,
-		variantConfig:              variantConfigs[o.Variant],
+		variantConfig:              variantCfg,
 		reasoningContentBackfill:   o.ReasoningContentBackfill,
 		batchCompletionWindow:      o.BatchCompletionWindow,
 		batchMetadata:              o.BatchMetadata,

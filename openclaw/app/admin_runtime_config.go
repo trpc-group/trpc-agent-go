@@ -382,6 +382,20 @@ func adminRuntimeConfigSectionSpecs() []adminRuntimeConfigSectionSpec {
 					"hunyuan",
 					"glm",
 				),
+				adminRuntimeBoolField(
+					"model.text_only_content",
+					"Text-Only Message Content",
+					"Drop non-text user content parts for text-only providers.",
+					[]adminRuntimeConfigKeyRef{
+						adminRuntimeKey("model"),
+						adminRuntimeKey("text_only_content"),
+					},
+					func(opts runOptions) string {
+						return strconv.FormatBool(
+							opts.OpenAITextOnlyMessageContent,
+						)
+					},
+				),
 			},
 		},
 		{
