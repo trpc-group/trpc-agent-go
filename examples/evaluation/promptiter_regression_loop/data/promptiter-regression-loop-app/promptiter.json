@@ -1,0 +1,47 @@
+{
+  "appName": "promptiter-regression-loop-app",
+  "seed": 20260708,
+  "promptSource": {
+    "id": "support-agent-instruction",
+    "path": "baseline_prompt.txt",
+    "targetType": "agent_instruction",
+    "surfaceId": "support-agent#instruction"
+  },
+  "trainEvalSet": {
+    "id": "train",
+    "path": "train.evalset.json"
+  },
+  "validationEvalSet": {
+    "id": "validation",
+    "path": "validation.evalset.json"
+  },
+  "metrics": {
+    "path": "metrics.json",
+    "metricFileId": "metrics"
+  },
+  "promptiter": {
+    "maxRounds": 3,
+    "targetSurfaceIds": ["support-agent#instruction"],
+    "minScoreGain": 0.05,
+    "maxRoundsWithoutAcceptance": 2,
+    "targetScore": 0.95
+  },
+  "gate": {
+    "minValidationScoreGain": 0.05,
+    "allowNewHardFails": false,
+    "blockCriticalRegression": true,
+    "criticalCaseIds": ["val_json_receipt"],
+    "maxCost": 1,
+    "maxCalls": 30,
+    "maxLatencyMs": 1000
+  },
+  "runner": {
+    "mode": "fake",
+    "deterministic": true
+  },
+  "output": {
+    "dir": "../../output",
+    "jsonReport": "optimization_report.json",
+    "markdownReport": "optimization_report.md"
+  }
+}

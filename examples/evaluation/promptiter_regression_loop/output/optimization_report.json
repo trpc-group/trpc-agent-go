@@ -1,0 +1,1366 @@
+{
+  "run": {
+    "appName": "promptiter-regression-loop-app",
+    "startedAt": "2026-07-08T20:22:00+08:00",
+    "durationMs": 0,
+    "seed": 20260708,
+    "runner": {
+      "mode": "fake",
+      "deterministic": true
+    }
+  },
+  "baseline": {
+    "train": {
+      "evalSetId": "train",
+      "score": 0.4000000000000001,
+      "status": "failed",
+      "cases": [
+        {
+          "evalSetId": "train",
+          "evalId": "train_tool_argument",
+          "score": 0.25,
+          "passed": false,
+          "hardFail": false,
+          "metricResults": [
+            {
+              "name": "deterministic_quality",
+              "score": 0.25,
+              "passed": false,
+              "reason": "tool argument query is wrong for order id"
+            }
+          ],
+          "finalResponse": "I cannot find the order.",
+          "expectedResponse": "Order A100 is shipped.",
+          "toolTrajectory": [
+            {
+              "name": "lookup_order",
+              "arguments": {
+                "order_id": "100"
+              },
+              "result": {
+                "status": "not_found"
+              }
+            }
+          ],
+          "expectedToolTrajectory": [
+            {
+              "name": "lookup_order",
+              "arguments": {
+                "order_id": "A100"
+              },
+              "result": {
+                "status": "shipped"
+              }
+            }
+          ],
+          "failureReasons": [
+            "tool argument query is wrong for order id"
+          ],
+          "attributions": [
+            {
+              "category": "tool_argument_error",
+              "confidence": 0.9,
+              "evidence": "tool trajectory differs from expected trajectory",
+              "metricName": "deterministic_quality",
+              "source": "tool_trajectory"
+            }
+          ]
+        },
+        {
+          "evalSetId": "train",
+          "evalId": "train_format",
+          "score": 0.4,
+          "passed": false,
+          "hardFail": false,
+          "metricResults": [
+            {
+              "name": "deterministic_quality",
+              "score": 0.4,
+              "passed": false,
+              "reason": "structured output json schema violation"
+            }
+          ],
+          "finalResponse": "Refund R55 is approved.",
+          "expectedResponse": "{\"refund_id\":\"R55\",\"status\":\"approved\"}",
+          "structuredOutputStatus": "format error: expected JSON object",
+          "failureReasons": [
+            "structured output json schema violation"
+          ],
+          "attributions": [
+            {
+              "category": "format_error",
+              "confidence": 0.85,
+              "evidence": "format error: expected JSON object",
+              "metricName": "deterministic_quality",
+              "source": "structured_output"
+            }
+          ]
+        },
+        {
+          "evalSetId": "train",
+          "evalId": "train_knowledge_recall",
+          "score": 0.55,
+          "passed": false,
+          "hardFail": false,
+          "metricResults": [
+            {
+              "name": "deterministic_quality",
+              "score": 0.55,
+              "passed": false,
+              "reason": "knowledge recall missing context"
+            }
+          ],
+          "finalResponse": "Premium support is usually same day.",
+          "expectedResponse": "Premium support SLA is 2 hours.",
+          "rubricReason": "knowledge recall missing context for premium SLA",
+          "failureReasons": [
+            "knowledge recall missing context"
+          ],
+          "attributions": [
+            {
+              "category": "knowledge_recall_insufficient",
+              "confidence": 0.8,
+              "evidence": "knowledge recall missing context for premium SLA",
+              "metricName": "deterministic_quality",
+              "source": "rubric"
+            }
+          ]
+        }
+      ],
+      "cost": {
+        "calls": 3,
+        "estimatedCost": 0.003
+      },
+      "latency": {
+        "totalMs": 15
+      }
+    },
+    "validation": {
+      "evalSetId": "validation",
+      "score": 0.65,
+      "status": "failed",
+      "cases": [
+        {
+          "evalSetId": "validation",
+          "evalId": "val_tool_selection",
+          "score": 0.5,
+          "passed": false,
+          "hardFail": false,
+          "metricResults": [
+            {
+              "name": "deterministic_quality",
+              "score": 0.5,
+              "passed": false,
+              "reason": "missing tool call caused tool selection failure"
+            }
+          ],
+          "finalResponse": "I do not have live tracking access.",
+          "expectedResponse": "Tracking T900 arrives tomorrow.",
+          "expectedToolTrajectory": [
+            {
+              "name": "lookup_tracking",
+              "arguments": {
+                "tracking_id": "T900"
+              },
+              "result": {
+                "eta": "tomorrow"
+              }
+            }
+          ],
+          "failureReasons": [
+            "missing tool call caused tool selection failure"
+          ],
+          "attributions": [
+            {
+              "category": "tool_selection_error",
+              "confidence": 0.9,
+              "evidence": "tool trajectory differs from expected trajectory",
+              "metricName": "deterministic_quality",
+              "source": "tool_trajectory"
+            }
+          ]
+        },
+        {
+          "evalSetId": "validation",
+          "evalId": "val_route_skill",
+          "score": 0.65,
+          "passed": false,
+          "hardFail": false,
+          "metricResults": [
+            {
+              "name": "deterministic_quality",
+              "score": 0.65,
+              "passed": false,
+              "reason": "route selected wrong agent"
+            }
+          ],
+          "finalResponse": "Routed to billing support.",
+          "expectedResponse": "Routed to account support.",
+          "traceSummary": "route selected wrong agent: billing_support",
+          "failureReasons": [
+            "route selected wrong agent"
+          ],
+          "attributions": [
+            {
+              "category": "routing_error",
+              "confidence": 0.85,
+              "evidence": "route selected wrong agent: billing_support",
+              "metricName": "deterministic_quality",
+              "source": "trace"
+            }
+          ]
+        },
+        {
+          "evalSetId": "validation",
+          "evalId": "val_json_receipt",
+          "critical": true,
+          "score": 0.8,
+          "passed": true,
+          "hardFail": false,
+          "metricResults": [
+            {
+              "name": "deterministic_quality",
+              "score": 0.8,
+              "passed": true
+            }
+          ],
+          "finalResponse": "{\"payment_id\":\"P77\",\"status\":\"captured\"}",
+          "expectedResponse": "{\"payment_id\":\"P77\",\"status\":\"captured\"}",
+          "attributions": []
+        }
+      ],
+      "cost": {
+        "calls": 3,
+        "estimatedCost": 0.003
+      },
+      "latency": {
+        "totalMs": 15
+      }
+    }
+  },
+  "candidates": [
+    {
+      "round": 1,
+      "prompt": "SUCCESS_PROMPT: call tools only when needed, preserve final answer format, and verify numeric facts.",
+      "reason": "fix tool and format failures without changing validation-critical behavior",
+      "train": {
+        "evalSetId": "train",
+        "score": 0.9,
+        "status": "passed",
+        "cases": [
+          {
+            "evalSetId": "train",
+            "evalId": "train_tool_argument",
+            "score": 0.95,
+            "passed": true,
+            "hardFail": false,
+            "metricResults": [
+              {
+                "name": "deterministic_quality",
+                "score": 0.95,
+                "passed": true
+              }
+            ],
+            "finalResponse": "Order A100 is shipped.",
+            "expectedResponse": "Order A100 is shipped.",
+            "toolTrajectory": [
+              {
+                "name": "lookup_order",
+                "arguments": {
+                  "order_id": "A100"
+                },
+                "result": {
+                  "status": "shipped"
+                }
+              }
+            ],
+            "expectedToolTrajectory": [
+              {
+                "name": "lookup_order",
+                "arguments": {
+                  "order_id": "A100"
+                },
+                "result": {
+                  "status": "shipped"
+                }
+              }
+            ],
+            "attributions": []
+          },
+          {
+            "evalSetId": "train",
+            "evalId": "train_format",
+            "score": 0.9,
+            "passed": true,
+            "hardFail": false,
+            "metricResults": [
+              {
+                "name": "deterministic_quality",
+                "score": 0.9,
+                "passed": true
+              }
+            ],
+            "finalResponse": "{\"refund_id\":\"R55\",\"status\":\"approved\"}",
+            "expectedResponse": "{\"refund_id\":\"R55\",\"status\":\"approved\"}",
+            "attributions": []
+          },
+          {
+            "evalSetId": "train",
+            "evalId": "train_knowledge_recall",
+            "score": 0.85,
+            "passed": true,
+            "hardFail": false,
+            "metricResults": [
+              {
+                "name": "deterministic_quality",
+                "score": 0.85,
+                "passed": true
+              }
+            ],
+            "finalResponse": "Premium support SLA is 2 hours.",
+            "expectedResponse": "Premium support SLA is 2 hours.",
+            "attributions": []
+          }
+        ],
+        "cost": {
+          "calls": 3,
+          "estimatedCost": 0.003
+        },
+        "latency": {
+          "totalMs": 15
+        }
+      },
+      "validation": {
+        "evalSetId": "validation",
+        "score": 0.8633333333333333,
+        "status": "passed",
+        "cases": [
+          {
+            "evalSetId": "validation",
+            "evalId": "val_tool_selection",
+            "score": 0.92,
+            "passed": true,
+            "hardFail": false,
+            "metricResults": [
+              {
+                "name": "deterministic_quality",
+                "score": 0.92,
+                "passed": true
+              }
+            ],
+            "finalResponse": "Tracking T900 arrives tomorrow.",
+            "expectedResponse": "Tracking T900 arrives tomorrow.",
+            "toolTrajectory": [
+              {
+                "name": "lookup_tracking",
+                "arguments": {
+                  "tracking_id": "T900"
+                },
+                "result": {
+                  "eta": "tomorrow"
+                }
+              }
+            ],
+            "expectedToolTrajectory": [
+              {
+                "name": "lookup_tracking",
+                "arguments": {
+                  "tracking_id": "T900"
+                },
+                "result": {
+                  "eta": "tomorrow"
+                }
+              }
+            ],
+            "attributions": []
+          },
+          {
+            "evalSetId": "validation",
+            "evalId": "val_route_skill",
+            "score": 0.82,
+            "passed": true,
+            "hardFail": false,
+            "metricResults": [
+              {
+                "name": "deterministic_quality",
+                "score": 0.82,
+                "passed": true
+              }
+            ],
+            "finalResponse": "Routed to account support.",
+            "expectedResponse": "Routed to account support.",
+            "traceSummary": "route selected account_support",
+            "attributions": []
+          },
+          {
+            "evalSetId": "validation",
+            "evalId": "val_json_receipt",
+            "critical": true,
+            "score": 0.85,
+            "passed": true,
+            "hardFail": false,
+            "metricResults": [
+              {
+                "name": "deterministic_quality",
+                "score": 0.85,
+                "passed": true
+              }
+            ],
+            "finalResponse": "{\"payment_id\":\"P77\",\"status\":\"captured\"}",
+            "expectedResponse": "{\"payment_id\":\"P77\",\"status\":\"captured\"}",
+            "attributions": []
+          }
+        ],
+        "cost": {
+          "calls": 3,
+          "estimatedCost": 0.003
+        },
+        "latency": {
+          "totalMs": 15
+        }
+      },
+      "delta": [
+        {
+          "evalSetId": "validation",
+          "evalId": "val_json_receipt",
+          "baselineScore": 0.8,
+          "candidateScore": 0.85,
+          "scoreDelta": 0.04999999999999993,
+          "baselinePassed": true,
+          "candidatePassed": true,
+          "transition": "improved",
+          "newHardFail": false,
+          "criticalRegression": false
+        },
+        {
+          "evalSetId": "validation",
+          "evalId": "val_route_skill",
+          "baselineScore": 0.65,
+          "candidateScore": 0.82,
+          "scoreDelta": 0.16999999999999993,
+          "candidatePassed": true,
+          "transition": "newly_passed",
+          "newHardFail": false,
+          "criticalRegression": false,
+          "attributionChange": "candidate attribution cleared"
+        },
+        {
+          "evalSetId": "validation",
+          "evalId": "val_tool_selection",
+          "baselineScore": 0.5,
+          "candidateScore": 0.92,
+          "scoreDelta": 0.42000000000000004,
+          "candidatePassed": true,
+          "transition": "newly_passed",
+          "newHardFail": false,
+          "criticalRegression": false,
+          "attributionChange": "candidate attribution cleared"
+        }
+      ],
+      "gateDecision": {
+        "accepted": true,
+        "scoreDelta": 0.21333333333333326,
+        "passedRules": [
+          "validation_score_gain",
+          "no_new_hard_fails",
+          "critical_case_non_regression",
+          "max_cost",
+          "max_calls",
+          "max_latency"
+        ],
+        "reasons": [
+          "candidate satisfies all acceptance gates"
+        ]
+      },
+      "cost": {
+        "calls": 6,
+        "estimatedCost": 0.006
+      },
+      "latency": {
+        "totalMs": 30
+      }
+    },
+    {
+      "round": 2,
+      "prompt": "INEFFECTIVE_PROMPT: be helpful and concise.",
+      "reason": "generic rewrite with no material validation gain",
+      "train": {
+        "evalSetId": "train",
+        "score": 0.43333333333333335,
+        "status": "failed",
+        "cases": [
+          {
+            "evalSetId": "train",
+            "evalId": "train_tool_argument",
+            "score": 0.3,
+            "passed": false,
+            "hardFail": false,
+            "metricResults": [
+              {
+                "name": "deterministic_quality",
+                "score": 0.3,
+                "passed": false,
+                "reason": "tool argument query is wrong for order id"
+              }
+            ],
+            "finalResponse": "I cannot find the order.",
+            "expectedResponse": "Order A100 is shipped.",
+            "toolTrajectory": [
+              {
+                "name": "lookup_order",
+                "arguments": {
+                  "order_id": "100"
+                },
+                "result": {
+                  "status": "not_found"
+                }
+              }
+            ],
+            "expectedToolTrajectory": [
+              {
+                "name": "lookup_order",
+                "arguments": {
+                  "order_id": "A100"
+                },
+                "result": {
+                  "status": "shipped"
+                }
+              }
+            ],
+            "failureReasons": [
+              "tool argument query is wrong for order id"
+            ],
+            "attributions": [
+              {
+                "category": "tool_argument_error",
+                "confidence": 0.9,
+                "evidence": "tool trajectory differs from expected trajectory",
+                "metricName": "deterministic_quality",
+                "source": "tool_trajectory"
+              }
+            ]
+          },
+          {
+            "evalSetId": "train",
+            "evalId": "train_format",
+            "score": 0.45,
+            "passed": false,
+            "hardFail": false,
+            "metricResults": [
+              {
+                "name": "deterministic_quality",
+                "score": 0.45,
+                "passed": false,
+                "reason": "structured output json schema violation"
+              }
+            ],
+            "finalResponse": "Refund R55 is approved.",
+            "expectedResponse": "{\"refund_id\":\"R55\",\"status\":\"approved\"}",
+            "structuredOutputStatus": "format error: expected JSON object",
+            "failureReasons": [
+              "structured output json schema violation"
+            ],
+            "attributions": [
+              {
+                "category": "format_error",
+                "confidence": 0.85,
+                "evidence": "format error: expected JSON object",
+                "metricName": "deterministic_quality",
+                "source": "structured_output"
+              }
+            ]
+          },
+          {
+            "evalSetId": "train",
+            "evalId": "train_knowledge_recall",
+            "score": 0.55,
+            "passed": false,
+            "hardFail": false,
+            "metricResults": [
+              {
+                "name": "deterministic_quality",
+                "score": 0.55,
+                "passed": false,
+                "reason": "knowledge recall missing context"
+              }
+            ],
+            "finalResponse": "Premium support is usually same day.",
+            "expectedResponse": "Premium support SLA is 2 hours.",
+            "rubricReason": "knowledge recall missing context for premium SLA",
+            "failureReasons": [
+              "knowledge recall missing context"
+            ],
+            "attributions": [
+              {
+                "category": "knowledge_recall_insufficient",
+                "confidence": 0.8,
+                "evidence": "knowledge recall missing context for premium SLA",
+                "metricName": "deterministic_quality",
+                "source": "rubric"
+              }
+            ]
+          }
+        ],
+        "cost": {
+          "calls": 3,
+          "estimatedCost": 0.003
+        },
+        "latency": {
+          "totalMs": 15
+        }
+      },
+      "validation": {
+        "evalSetId": "validation",
+        "score": 0.6566666666666666,
+        "status": "failed",
+        "cases": [
+          {
+            "evalSetId": "validation",
+            "evalId": "val_tool_selection",
+            "score": 0.52,
+            "passed": false,
+            "hardFail": false,
+            "metricResults": [
+              {
+                "name": "deterministic_quality",
+                "score": 0.52,
+                "passed": false,
+                "reason": "missing tool call caused tool selection failure"
+              }
+            ],
+            "finalResponse": "I do not have live tracking access.",
+            "expectedResponse": "Tracking T900 arrives tomorrow.",
+            "expectedToolTrajectory": [
+              {
+                "name": "lookup_tracking",
+                "arguments": {
+                  "tracking_id": "T900"
+                },
+                "result": {
+                  "eta": "tomorrow"
+                }
+              }
+            ],
+            "failureReasons": [
+              "missing tool call caused tool selection failure"
+            ],
+            "attributions": [
+              {
+                "category": "tool_selection_error",
+                "confidence": 0.9,
+                "evidence": "tool trajectory differs from expected trajectory",
+                "metricName": "deterministic_quality",
+                "source": "tool_trajectory"
+              }
+            ]
+          },
+          {
+            "evalSetId": "validation",
+            "evalId": "val_route_skill",
+            "score": 0.65,
+            "passed": false,
+            "hardFail": false,
+            "metricResults": [
+              {
+                "name": "deterministic_quality",
+                "score": 0.65,
+                "passed": false,
+                "reason": "route selected wrong agent"
+              }
+            ],
+            "finalResponse": "Routed to billing support.",
+            "expectedResponse": "Routed to account support.",
+            "traceSummary": "route selected wrong agent: billing_support",
+            "failureReasons": [
+              "route selected wrong agent"
+            ],
+            "attributions": [
+              {
+                "category": "routing_error",
+                "confidence": 0.85,
+                "evidence": "route selected wrong agent: billing_support",
+                "metricName": "deterministic_quality",
+                "source": "trace"
+              }
+            ]
+          },
+          {
+            "evalSetId": "validation",
+            "evalId": "val_json_receipt",
+            "critical": true,
+            "score": 0.8,
+            "passed": true,
+            "hardFail": false,
+            "metricResults": [
+              {
+                "name": "deterministic_quality",
+                "score": 0.8,
+                "passed": true
+              }
+            ],
+            "finalResponse": "{\"payment_id\":\"P77\",\"status\":\"captured\"}",
+            "expectedResponse": "{\"payment_id\":\"P77\",\"status\":\"captured\"}",
+            "attributions": []
+          }
+        ],
+        "cost": {
+          "calls": 3,
+          "estimatedCost": 0.003
+        },
+        "latency": {
+          "totalMs": 15
+        }
+      },
+      "delta": [
+        {
+          "evalSetId": "validation",
+          "evalId": "val_json_receipt",
+          "baselineScore": 0.8,
+          "candidateScore": 0.8,
+          "scoreDelta": 0,
+          "baselinePassed": true,
+          "candidatePassed": true,
+          "transition": "unchanged",
+          "newHardFail": false,
+          "criticalRegression": false
+        },
+        {
+          "evalSetId": "validation",
+          "evalId": "val_route_skill",
+          "baselineScore": 0.65,
+          "candidateScore": 0.65,
+          "scoreDelta": 0,
+          "transition": "unchanged",
+          "newHardFail": false,
+          "criticalRegression": false
+        },
+        {
+          "evalSetId": "validation",
+          "evalId": "val_tool_selection",
+          "baselineScore": 0.5,
+          "candidateScore": 0.52,
+          "scoreDelta": 0.020000000000000018,
+          "transition": "improved",
+          "newHardFail": false,
+          "criticalRegression": false
+        }
+      ],
+      "gateDecision": {
+        "accepted": false,
+        "scoreDelta": 0.006666666666666599,
+        "passedRules": [
+          "no_new_hard_fails",
+          "critical_case_non_regression",
+          "max_cost",
+          "max_calls",
+          "max_latency"
+        ],
+        "failedRules": [
+          "validation_score_gain"
+        ],
+        "reasons": [
+          "validation score gain 0.0067 is below threshold 0.0500"
+        ]
+      },
+      "cost": {
+        "calls": 6,
+        "estimatedCost": 0.006
+      },
+      "latency": {
+        "totalMs": 30
+      }
+    },
+    {
+      "round": 3,
+      "prompt": "OVERFIT_PROMPT: optimize train cases aggressively even if validation formatting changes.",
+      "reason": "train-focused prompt that causes validation regression",
+      "train": {
+        "evalSetId": "train",
+        "score": 0.9766666666666666,
+        "status": "passed",
+        "cases": [
+          {
+            "evalSetId": "train",
+            "evalId": "train_tool_argument",
+            "score": 1,
+            "passed": true,
+            "hardFail": false,
+            "metricResults": [
+              {
+                "name": "deterministic_quality",
+                "score": 1,
+                "passed": true
+              }
+            ],
+            "finalResponse": "Order A100 is shipped.",
+            "expectedResponse": "Order A100 is shipped.",
+            "toolTrajectory": [
+              {
+                "name": "lookup_order",
+                "arguments": {
+                  "order_id": "A100"
+                },
+                "result": {
+                  "status": "shipped"
+                }
+              }
+            ],
+            "expectedToolTrajectory": [
+              {
+                "name": "lookup_order",
+                "arguments": {
+                  "order_id": "A100"
+                },
+                "result": {
+                  "status": "shipped"
+                }
+              }
+            ],
+            "attributions": []
+          },
+          {
+            "evalSetId": "train",
+            "evalId": "train_format",
+            "score": 0.95,
+            "passed": true,
+            "hardFail": false,
+            "metricResults": [
+              {
+                "name": "deterministic_quality",
+                "score": 0.95,
+                "passed": true
+              }
+            ],
+            "finalResponse": "{\"refund_id\":\"R55\",\"status\":\"approved\"}",
+            "expectedResponse": "{\"refund_id\":\"R55\",\"status\":\"approved\"}",
+            "attributions": []
+          },
+          {
+            "evalSetId": "train",
+            "evalId": "train_knowledge_recall",
+            "score": 0.98,
+            "passed": true,
+            "hardFail": false,
+            "metricResults": [
+              {
+                "name": "deterministic_quality",
+                "score": 0.98,
+                "passed": true
+              }
+            ],
+            "finalResponse": "Premium support SLA is 2 hours.",
+            "expectedResponse": "Premium support SLA is 2 hours.",
+            "attributions": []
+          }
+        ],
+        "cost": {
+          "calls": 3,
+          "estimatedCost": 0.003
+        },
+        "latency": {
+          "totalMs": 15
+        }
+      },
+      "validation": {
+        "evalSetId": "validation",
+        "score": 0.5333333333333333,
+        "status": "failed",
+        "cases": [
+          {
+            "evalSetId": "validation",
+            "evalId": "val_tool_selection",
+            "score": 0.9,
+            "passed": true,
+            "hardFail": false,
+            "metricResults": [
+              {
+                "name": "deterministic_quality",
+                "score": 0.9,
+                "passed": true
+              }
+            ],
+            "finalResponse": "Tracking T900 arrives tomorrow.",
+            "expectedResponse": "Tracking T900 arrives tomorrow.",
+            "toolTrajectory": [
+              {
+                "name": "lookup_tracking",
+                "arguments": {
+                  "tracking_id": "T900"
+                },
+                "result": {
+                  "eta": "tomorrow"
+                }
+              }
+            ],
+            "expectedToolTrajectory": [
+              {
+                "name": "lookup_tracking",
+                "arguments": {
+                  "tracking_id": "T900"
+                },
+                "result": {
+                  "eta": "tomorrow"
+                }
+              }
+            ],
+            "attributions": []
+          },
+          {
+            "evalSetId": "validation",
+            "evalId": "val_route_skill",
+            "score": 0.7,
+            "passed": false,
+            "hardFail": false,
+            "metricResults": [
+              {
+                "name": "deterministic_quality",
+                "score": 0.7,
+                "passed": false,
+                "reason": "route selected wrong node"
+              }
+            ],
+            "finalResponse": "Routed to account support after manual review.",
+            "expectedResponse": "Routed to account support.",
+            "traceSummary": "route selected wrong node for review flow",
+            "failureReasons": [
+              "route selected wrong node"
+            ],
+            "attributions": [
+              {
+                "category": "routing_error",
+                "confidence": 0.85,
+                "evidence": "route selected wrong node for review flow",
+                "metricName": "deterministic_quality",
+                "source": "trace"
+              }
+            ]
+          },
+          {
+            "evalSetId": "validation",
+            "evalId": "val_json_receipt",
+            "critical": true,
+            "score": 0,
+            "passed": false,
+            "hardFail": true,
+            "metricResults": [
+              {
+                "name": "deterministic_quality",
+                "score": 0,
+                "passed": false,
+                "hardFail": true,
+                "reason": "structured output json schema violation"
+              }
+            ],
+            "finalResponse": "Payment P77 captured.",
+            "expectedResponse": "{\"payment_id\":\"P77\",\"status\":\"captured\"}",
+            "structuredOutputStatus": "format error: expected JSON object",
+            "failureReasons": [
+              "structured output json schema violation"
+            ],
+            "attributions": [
+              {
+                "category": "format_error",
+                "confidence": 0.85,
+                "evidence": "format error: expected JSON object",
+                "metricName": "deterministic_quality",
+                "source": "structured_output"
+              }
+            ]
+          }
+        ],
+        "cost": {
+          "calls": 3,
+          "estimatedCost": 0.003
+        },
+        "latency": {
+          "totalMs": 15
+        }
+      },
+      "delta": [
+        {
+          "evalSetId": "validation",
+          "evalId": "val_json_receipt",
+          "baselineScore": 0.8,
+          "candidateScore": 0,
+          "scoreDelta": -0.8,
+          "baselinePassed": true,
+          "transition": "newly_failed",
+          "newHardFail": true,
+          "criticalRegression": true,
+          "attributionChange": "candidate attribution added"
+        },
+        {
+          "evalSetId": "validation",
+          "evalId": "val_route_skill",
+          "baselineScore": 0.65,
+          "candidateScore": 0.7,
+          "scoreDelta": 0.04999999999999993,
+          "transition": "improved",
+          "newHardFail": false,
+          "criticalRegression": false
+        },
+        {
+          "evalSetId": "validation",
+          "evalId": "val_tool_selection",
+          "baselineScore": 0.5,
+          "candidateScore": 0.9,
+          "scoreDelta": 0.4,
+          "candidatePassed": true,
+          "transition": "newly_passed",
+          "newHardFail": false,
+          "criticalRegression": false,
+          "attributionChange": "candidate attribution cleared"
+        }
+      ],
+      "gateDecision": {
+        "accepted": false,
+        "scoreDelta": -0.1166666666666667,
+        "passedRules": [
+          "max_cost",
+          "max_calls",
+          "max_latency"
+        ],
+        "failedRules": [
+          "validation_score_gain",
+          "no_new_hard_fails",
+          "critical_case_non_regression"
+        ],
+        "reasons": [
+          "validation score gain -0.1167 is below threshold 0.0500",
+          "candidate introduced 1 new hard fail(s)",
+          "candidate regressed 1 critical case(s)"
+        ]
+      },
+      "cost": {
+        "calls": 6,
+        "estimatedCost": 0.006
+      },
+      "latency": {
+        "totalMs": 30
+      }
+    }
+  ],
+  "selectedCandidate": {
+    "round": 1,
+    "prompt": "SUCCESS_PROMPT: call tools only when needed, preserve final answer format, and verify numeric facts.",
+    "reason": "fix tool and format failures without changing validation-critical behavior",
+    "train": {
+      "evalSetId": "train",
+      "score": 0.9,
+      "status": "passed",
+      "cases": [
+        {
+          "evalSetId": "train",
+          "evalId": "train_tool_argument",
+          "score": 0.95,
+          "passed": true,
+          "hardFail": false,
+          "metricResults": [
+            {
+              "name": "deterministic_quality",
+              "score": 0.95,
+              "passed": true
+            }
+          ],
+          "finalResponse": "Order A100 is shipped.",
+          "expectedResponse": "Order A100 is shipped.",
+          "toolTrajectory": [
+            {
+              "name": "lookup_order",
+              "arguments": {
+                "order_id": "A100"
+              },
+              "result": {
+                "status": "shipped"
+              }
+            }
+          ],
+          "expectedToolTrajectory": [
+            {
+              "name": "lookup_order",
+              "arguments": {
+                "order_id": "A100"
+              },
+              "result": {
+                "status": "shipped"
+              }
+            }
+          ],
+          "attributions": []
+        },
+        {
+          "evalSetId": "train",
+          "evalId": "train_format",
+          "score": 0.9,
+          "passed": true,
+          "hardFail": false,
+          "metricResults": [
+            {
+              "name": "deterministic_quality",
+              "score": 0.9,
+              "passed": true
+            }
+          ],
+          "finalResponse": "{\"refund_id\":\"R55\",\"status\":\"approved\"}",
+          "expectedResponse": "{\"refund_id\":\"R55\",\"status\":\"approved\"}",
+          "attributions": []
+        },
+        {
+          "evalSetId": "train",
+          "evalId": "train_knowledge_recall",
+          "score": 0.85,
+          "passed": true,
+          "hardFail": false,
+          "metricResults": [
+            {
+              "name": "deterministic_quality",
+              "score": 0.85,
+              "passed": true
+            }
+          ],
+          "finalResponse": "Premium support SLA is 2 hours.",
+          "expectedResponse": "Premium support SLA is 2 hours.",
+          "attributions": []
+        }
+      ],
+      "cost": {
+        "calls": 3,
+        "estimatedCost": 0.003
+      },
+      "latency": {
+        "totalMs": 15
+      }
+    },
+    "validation": {
+      "evalSetId": "validation",
+      "score": 0.8633333333333333,
+      "status": "passed",
+      "cases": [
+        {
+          "evalSetId": "validation",
+          "evalId": "val_tool_selection",
+          "score": 0.92,
+          "passed": true,
+          "hardFail": false,
+          "metricResults": [
+            {
+              "name": "deterministic_quality",
+              "score": 0.92,
+              "passed": true
+            }
+          ],
+          "finalResponse": "Tracking T900 arrives tomorrow.",
+          "expectedResponse": "Tracking T900 arrives tomorrow.",
+          "toolTrajectory": [
+            {
+              "name": "lookup_tracking",
+              "arguments": {
+                "tracking_id": "T900"
+              },
+              "result": {
+                "eta": "tomorrow"
+              }
+            }
+          ],
+          "expectedToolTrajectory": [
+            {
+              "name": "lookup_tracking",
+              "arguments": {
+                "tracking_id": "T900"
+              },
+              "result": {
+                "eta": "tomorrow"
+              }
+            }
+          ],
+          "attributions": []
+        },
+        {
+          "evalSetId": "validation",
+          "evalId": "val_route_skill",
+          "score": 0.82,
+          "passed": true,
+          "hardFail": false,
+          "metricResults": [
+            {
+              "name": "deterministic_quality",
+              "score": 0.82,
+              "passed": true
+            }
+          ],
+          "finalResponse": "Routed to account support.",
+          "expectedResponse": "Routed to account support.",
+          "traceSummary": "route selected account_support",
+          "attributions": []
+        },
+        {
+          "evalSetId": "validation",
+          "evalId": "val_json_receipt",
+          "critical": true,
+          "score": 0.85,
+          "passed": true,
+          "hardFail": false,
+          "metricResults": [
+            {
+              "name": "deterministic_quality",
+              "score": 0.85,
+              "passed": true
+            }
+          ],
+          "finalResponse": "{\"payment_id\":\"P77\",\"status\":\"captured\"}",
+          "expectedResponse": "{\"payment_id\":\"P77\",\"status\":\"captured\"}",
+          "attributions": []
+        }
+      ],
+      "cost": {
+        "calls": 3,
+        "estimatedCost": 0.003
+      },
+      "latency": {
+        "totalMs": 15
+      }
+    },
+    "delta": [
+      {
+        "evalSetId": "validation",
+        "evalId": "val_json_receipt",
+        "baselineScore": 0.8,
+        "candidateScore": 0.85,
+        "scoreDelta": 0.04999999999999993,
+        "baselinePassed": true,
+        "candidatePassed": true,
+        "transition": "improved",
+        "newHardFail": false,
+        "criticalRegression": false
+      },
+      {
+        "evalSetId": "validation",
+        "evalId": "val_route_skill",
+        "baselineScore": 0.65,
+        "candidateScore": 0.82,
+        "scoreDelta": 0.16999999999999993,
+        "candidatePassed": true,
+        "transition": "newly_passed",
+        "newHardFail": false,
+        "criticalRegression": false,
+        "attributionChange": "candidate attribution cleared"
+      },
+      {
+        "evalSetId": "validation",
+        "evalId": "val_tool_selection",
+        "baselineScore": 0.5,
+        "candidateScore": 0.92,
+        "scoreDelta": 0.42000000000000004,
+        "candidatePassed": true,
+        "transition": "newly_passed",
+        "newHardFail": false,
+        "criticalRegression": false,
+        "attributionChange": "candidate attribution cleared"
+      }
+    ],
+    "gateDecision": {
+      "accepted": true,
+      "scoreDelta": 0.21333333333333326,
+      "passedRules": [
+        "validation_score_gain",
+        "no_new_hard_fails",
+        "critical_case_non_regression",
+        "max_cost",
+        "max_calls",
+        "max_latency"
+      ],
+      "reasons": [
+        "candidate satisfies all acceptance gates"
+      ]
+    },
+    "cost": {
+      "calls": 6,
+      "estimatedCost": 0.006
+    },
+    "latency": {
+      "totalMs": 30
+    }
+  },
+  "delta": {
+    "summary": {
+      "newlyPassed": 2,
+      "newlyFailed": 0,
+      "improved": 1,
+      "regressed": 0,
+      "unchanged": 0,
+      "newHardFails": 0,
+      "criticalRegressions": 0
+    },
+    "cases": [
+      {
+        "evalSetId": "validation",
+        "evalId": "val_json_receipt",
+        "baselineScore": 0.8,
+        "candidateScore": 0.85,
+        "scoreDelta": 0.04999999999999993,
+        "baselinePassed": true,
+        "candidatePassed": true,
+        "transition": "improved",
+        "newHardFail": false,
+        "criticalRegression": false
+      },
+      {
+        "evalSetId": "validation",
+        "evalId": "val_route_skill",
+        "baselineScore": 0.65,
+        "candidateScore": 0.82,
+        "scoreDelta": 0.16999999999999993,
+        "candidatePassed": true,
+        "transition": "newly_passed",
+        "newHardFail": false,
+        "criticalRegression": false,
+        "attributionChange": "candidate attribution cleared"
+      },
+      {
+        "evalSetId": "validation",
+        "evalId": "val_tool_selection",
+        "baselineScore": 0.5,
+        "candidateScore": 0.92,
+        "scoreDelta": 0.42000000000000004,
+        "candidatePassed": true,
+        "transition": "newly_passed",
+        "newHardFail": false,
+        "criticalRegression": false,
+        "attributionChange": "candidate attribution cleared"
+      }
+    ]
+  },
+  "gateDecision": {
+    "accepted": true,
+    "scoreDelta": 0.21333333333333326,
+    "passedRules": [
+      "validation_score_gain",
+      "no_new_hard_fails",
+      "critical_case_non_regression",
+      "max_cost",
+      "max_calls",
+      "max_latency"
+    ],
+    "reasons": [
+      "candidate satisfies all acceptance gates"
+    ]
+  },
+  "failureAttributionStats": {
+    "format_error": 3,
+    "knowledge_recall_insufficient": 2,
+    "routing_error": 3,
+    "tool_argument_error": 2,
+    "tool_selection_error": 2
+  },
+  "costSummary": {
+    "calls": 24,
+    "estimatedCost": 0.024
+  },
+  "latencySummary": {
+    "totalMs": 120
+  },
+  "artifacts": [
+    "./output/optimization_report.json",
+    "./output/optimization_report.md"
+  ]
+}
