@@ -385,8 +385,26 @@ func (t *Tool) Declaration() *tool.Declaration {
 		InputSchema: browserSchema(
 			t.evaluateEnabled,
 			t.driverTypeForProfile(t.defaultProfile),
+			t.browserTargetDescription(),
 		),
 	}
+}
+
+func (t *Tool) browserTargetDescription() string {
+	description := "Browser target. Omit for the default host browser."
+	targets := make([]string, 0, 2)
+	if hasServerTarget(t.sandboxServer) {
+		targets = append(targets, targetSandbox)
+	}
+	if hasNodeServerTarget(t.nodeTargets) {
+		targets = append(targets, targetNode)
+	}
+	if len(targets) == 0 {
+		return description + " No non-default browser targets are configured."
+	}
+	sort.Strings(targets)
+	return description + " Available non-default targets: " +
+		strings.Join(targets, ", ") + "."
 }
 
 // Close releases browser profile drivers owned by this tool.
@@ -711,7 +729,11 @@ func (r *cancelCleanupRegistry) register(profile string) bool {
 	return true
 }
 
-func browserSchema(evaluateEnabled bool, driverType string) *tool.Schema {
+func browserSchema(
+	evaluateEnabled bool,
+	driverType string,
+	targetDescription string,
+) *tool.Schema {
 	actionDescription := "Browser action. Supported actions include: " +
 		strings.Join(visibleActionsForDriver(
 			driverType,
@@ -775,11 +797,8 @@ func browserSchema(evaluateEnabled bool, driverType string) *tool.Schema {
 	}
 
 	properties := map[string]*tool.Schema{
-		"action": stringSchema(actionDescription),
-		"target": stringSchema(
-			"Browser target. Omit for default host; only use " +
-				"sandbox or node when configured.",
-		),
+		"action":         stringSchema(actionDescription),
+		"target":         stringSchema(targetDescription),
 		"node":           stringSchema("Node browser target."),
 		"profile":        stringSchema("Browser profile name."),
 		"targetUrl":      stringSchema("Alias for browser URL."),
