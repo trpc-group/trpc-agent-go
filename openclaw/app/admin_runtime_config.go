@@ -406,7 +406,9 @@ func adminRuntimeConfigSectionSpecs() []adminRuntimeConfigSectionSpec {
 				adminRuntimeNumberField(
 					"agent.max_llm_calls",
 					"Max LLM Calls",
-					"Limit LLM calls per invocation; 0 is unlimited.",
+					"Limit agent-facing LLM calls per invocation; "+
+						"auxiliary summary and memory calls are excluded; "+
+						"0 is unlimited.",
 					[]adminRuntimeConfigKeyRef{
 						adminRuntimeKey("agent"),
 						adminRuntimeKey("max_llm_calls"),
