@@ -17,6 +17,9 @@ The integration works in two parts:
    `memory_search` and (optionally) `memory_load`. Write tools such as
    `memory_add` / `memory_update` / `memory_delete` are intentionally not
    exposed because mem0 handles the write side natively.
+3. **Optional preload** — When `llmagent.WithPreloadMemory(N)` is enabled,
+   the Runner can use the same mem0 service as a read-only memory source
+   because it implements `memory.Reader`.
 
 ### Architecture
 
@@ -173,6 +176,7 @@ agent := llmagent.New(
     "assistant",
     llmagent.WithModel(openai.New("deepseek-v4-flash")),
     llmagent.WithTools(mem0Svc.Tools()),
+    llmagent.WithPreloadMemory(10), // Optional read-only preload budget.
 )
 
 // 3. Create the runner with session ingestion enabled.
@@ -191,6 +195,8 @@ Key points:
   (enable with `memorymem0.WithLoadToolEnabled(true)`).
 - `runner.WithSessionIngestor(mem0Svc)` hooks the mem0 service into the
   runner's post-turn lifecycle via the `session.Ingestor` interface.
+- `llmagent.WithPreloadMemory(N)` can preload mem0 memories without configuring
+  `runner.WithMemoryService(...)`; use a positive budget for production.
 - Mem0 performs its own extraction with `infer: true` — no local LLM
   extractor is needed.
 
