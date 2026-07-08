@@ -576,7 +576,7 @@ func TestMarkUnavailableImageURLsFromRequestUsesResponseParam(t *testing.T) {
 		},
 	}
 	inv := agent.NewInvocation(agent.WithInvocationSession(sess))
-	param := "messages[1].content[0].image_url.url"
+	param := "messages[1].content[1].image_url.url"
 
 	count, err := MarkUnavailableImageURLsFromRequest(
 		context.Background(),
@@ -591,6 +591,81 @@ func TestMarkUnavailableImageURLsFromRequestUsesResponseParam(t *testing.T) {
 	unavailable := UnavailableImageURLSet(sess)
 	require.NotContains(t, unavailable, firstURL)
 	require.Contains(t, unavailable, secondURL)
+}
+
+func TestMarkUnavailableImageURLsFromRequestMapsProviderContentIndex(
+	t *testing.T,
+) {
+	const (
+		firstURL  = "https://example.invalid/first.png"
+		secondURL = "https://example.invalid/second.png"
+	)
+	tests := []struct {
+		name       string
+		param      string
+		wantCount  int
+		wantFirst  bool
+		wantSecond bool
+	}{
+		{
+			name:      "content text is not an image",
+			param:     "messages[0].content[0].image_url.url",
+			wantCount: 0,
+		},
+		{
+			name:      "first image follows message content",
+			param:     "messages[0].content[1].image_url.url",
+			wantCount: 1,
+			wantFirst: true,
+		},
+		{
+			name:       "second image follows message content",
+			param:      "messages[0].content[2].image_url.url",
+			wantCount:  1,
+			wantSecond: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg := model.NewUserMessage("describe these images")
+			msg.AddImageURL(firstURL, "auto")
+			msg.AddImageURL(secondURL, "auto")
+			sess := &session.Session{
+				ID:      "sess",
+				AppName: "app",
+				UserID:  "user",
+				Events: []event.Event{
+					*imageMessageEvent("inv", msg),
+				},
+			}
+			inv := agent.NewInvocation(agent.WithInvocationSession(sess))
+
+			count, err := MarkUnavailableImageURLsFromRequest(
+				context.Background(),
+				inv,
+				&model.Request{Messages: []model.Message{msg}},
+				errors.New("invalid request"),
+				&model.ResponseError{
+					Message: "invalid image url",
+					Param:   &tt.param,
+				},
+			)
+
+			require.NoError(t, err)
+			require.Equal(t, tt.wantCount, count)
+			unavailable := UnavailableImageURLSet(sess)
+			if tt.wantFirst {
+				require.Contains(t, unavailable, firstURL)
+			} else {
+				require.NotContains(t, unavailable, firstURL)
+			}
+			if tt.wantSecond {
+				require.Contains(t, unavailable, secondURL)
+			} else {
+				require.NotContains(t, unavailable, secondURL)
+			}
+		})
+	}
 }
 
 func TestMarkUnavailableImageURLsFromRequestSkipsAmbiguousDuplicateURL(

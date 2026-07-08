@@ -461,12 +461,12 @@ func imageURLMarksToMarkInSession(
 	if inv == nil || sess == nil {
 		return nil
 	}
-	if marks := imageURLMarksFromResponseParam(
+	if marks, handled := imageURLMarksFromResponseParamResult(
 		sess,
 		req,
 		cause,
 		respErr,
-	); len(marks) > 0 {
+	); handled {
 		return marks
 	}
 	reqURLs := requestImageURLs(req)
@@ -496,25 +496,42 @@ func imageURLMarksFromResponseParam(
 	cause error,
 	respErr *model.ResponseError,
 ) []imageURLMark {
+	marks, _ := imageURLMarksFromResponseParamResult(sess, req, cause, respErr)
+	return marks
+}
+
+func imageURLMarksFromResponseParamResult(
+	sess *session.Session,
+	req *model.Request,
+	cause error,
+	respErr *model.ResponseError,
+) ([]imageURLMark, bool) {
 	respErr = responseError(cause, respErr)
 	if respErr == nil || respErr.Param == nil {
-		return nil
+		return nil, false
 	}
-	messageIndex, partIndex, ok := parseImageURLParam(*respErr.Param)
+	messageIndex, providerPartIndex, ok := parseImageURLParam(*respErr.Param)
 	if !ok || req == nil || messageIndex < 0 || messageIndex >= len(req.Messages) {
-		return nil
+		return nil, false
 	}
 	msg := req.Messages[messageIndex]
+	partIndex, ok := frameworkImagePartIndexFromProviderContentIndex(
+		msg,
+		providerPartIndex,
+	)
+	if !ok {
+		return nil, true
+	}
 	if partIndex < 0 || partIndex >= len(msg.ContentParts) {
-		return nil
+		return nil, true
 	}
 	part := msg.ContentParts[partIndex]
 	if part.Type != model.ContentTypeImage || part.Image == nil {
-		return nil
+		return nil, true
 	}
 	imageURL := strings.TrimSpace(part.Image.URL)
 	if imageURL == "" {
-		return nil
+		return nil, true
 	}
 	var matches []imageURLMark
 	for _, ref := range sessionImageURLRefs(sess) {
@@ -527,9 +544,55 @@ func imageURLMarksFromResponseParam(
 		matches = append(matches, markFromRef(ref))
 	}
 	if len(matches) != 1 {
-		return nil
+		return nil, true
 	}
-	return matches
+	return matches, true
+}
+
+func frameworkImagePartIndexFromProviderContentIndex(
+	msg model.Message,
+	providerIndex int,
+) (int, bool) {
+	if providerIndex < 0 {
+		return -1, false
+	}
+	contentIndex := 0
+	if msg.Content != "" {
+		if providerIndex == contentIndex {
+			return -1, false
+		}
+		contentIndex++
+	}
+	for partIndex, part := range msg.ContentParts {
+		if !providerVisibleContentPart(part) {
+			continue
+		}
+		if providerIndex == contentIndex {
+			if part.Type == model.ContentTypeImage &&
+				part.Image != nil &&
+				strings.TrimSpace(part.Image.URL) != "" {
+				return partIndex, true
+			}
+			return -1, false
+		}
+		contentIndex++
+	}
+	return -1, false
+}
+
+func providerVisibleContentPart(part model.ContentPart) bool {
+	switch part.Type {
+	case model.ContentTypeText:
+		return part.Text != nil
+	case model.ContentTypeImage:
+		return part.Image != nil
+	case model.ContentTypeAudio:
+		return part.Audio != nil
+	case model.ContentTypeFile:
+		return part.File != nil
+	default:
+		return false
+	}
 }
 
 func currentInvocationImageURLMarks(
