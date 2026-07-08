@@ -13,6 +13,7 @@ package httpfetch
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -35,6 +36,8 @@ const (
 
 	maxHTTPErrorBodyLength = 512
 )
+
+var errNoVisibleHTMLText = errors.New("HTML response contained no visible text")
 
 // Option configures the WebFetch tool.
 type Option func(*config)
@@ -455,14 +458,52 @@ func convertHTMLToMarkdownWithOptions(
 			commonmark.NewCommonmarkPlugin(),
 		),
 	)
-	markdown, err := conv.ConvertString(
-		markdownSourceHTML(bodyBytes, mainContentOnly),
-	)
+	source := markdownSourceHTML(bodyBytes, mainContentOnly)
+	markdown, err := conv.ConvertString(source)
 	if err != nil {
 		return "", err
 	}
+	if strings.TrimSpace(markdown) == "" {
+		text, fallbackErr := htmlVisibleTextFallback([]byte(source))
+		if errors.Is(fallbackErr, errNoVisibleHTMLText) {
+			return markdown, nil
+		}
+		if fallbackErr != nil {
+			return "", fallbackErr
+		}
+		return text, nil
+	}
 
 	return markdown, nil
+}
+
+func htmlVisibleTextFallback(raw []byte) (string, error) {
+	return htmlVisibleTextFallbackFromReader(bytes.NewReader(raw), raw)
+}
+
+func htmlVisibleTextFallbackFromReader(
+	r io.Reader,
+	_ []byte,
+) (string, error) {
+	doc, err := html.Parse(r)
+	if err != nil {
+		return "", fmt.Errorf("parse HTML for visible-text fallback: %w", err)
+	}
+
+	var chunks []string
+	walkHTML(doc, func(n *html.Node) {
+		if n.Type != html.TextNode || hasInvisibleHTMLAncestor(n.Parent) {
+			return
+		}
+		text := strings.Join(strings.Fields(n.Data), " ")
+		if text != "" {
+			chunks = append(chunks, text)
+		}
+	})
+	if len(chunks) == 0 {
+		return "", errNoVisibleHTMLText
+	}
+	return strings.Join(chunks, "\n"), nil
 }
 
 func markdownSourceHTML(raw []byte, mainContentOnly bool) string {
@@ -592,9 +633,32 @@ func isNoisyHTMLNode(n *html.Node) bool {
 	if n.Type != html.ElementNode {
 		return false
 	}
+	if isInvisibleHTMLNode(n) {
+		return true
+	}
 	switch strings.ToLower(n.Data) {
-	case "script", "style", "noscript", "template", "svg",
-		"nav", "header", "footer", "form":
+	case "nav", "header", "footer", "form":
+		return true
+	}
+	return false
+}
+
+func hasInvisibleHTMLAncestor(n *html.Node) bool {
+	for n != nil {
+		if isInvisibleHTMLNode(n) {
+			return true
+		}
+		n = n.Parent
+	}
+	return false
+}
+
+func isInvisibleHTMLNode(n *html.Node) bool {
+	if n == nil || n.Type != html.ElementNode {
+		return false
+	}
+	switch strings.ToLower(n.Data) {
+	case "script", "style", "noscript", "template", "svg":
 		return true
 	}
 	if hasHTMLAttr(n, "hidden") {
