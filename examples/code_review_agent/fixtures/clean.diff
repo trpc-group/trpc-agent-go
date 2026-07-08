@@ -1,0 +1,29 @@
+diff --git a/pkg/utils/helper.go b/pkg/utils/helper.go
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/pkg/utils/helper.go
+@@ -0,0 +1,20 @@
++package utils
++
++import "fmt"
++
++func Add(a, b int) int {
++    return a + b
++}
++
++func Multiply(a, b int) int {
++    return a * b
++}
++
++func FormatResult(result int) string {
++    return fmt.Sprintf("Result: %d", result)
++}
++
++func ProcessNumbers(numbers []int) int {
++    sum := 0
++    for _, n := range numbers {
++        sum += n
++    }
++    return sum
++}

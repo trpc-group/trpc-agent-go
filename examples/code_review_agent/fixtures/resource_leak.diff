@@ -1,0 +1,38 @@
+diff --git a/pkg/io/reader.go b/pkg/io/reader.go
+index abc1234..def5678 100644
+--- a/pkg/io/reader.go
++++ b/pkg/io/reader.go
+@@ -1,20 +1,30 @@
+ package io
+ 
+ import (
+     "os"
+-    "fmt"
+ )
+ 
+ func ReadFileContent(path string) (string, error) {
+-    file, err := os.Open(path)
++    f, err := os.Open(path)
+     if err != nil {
+         return "", err
+     }
+-    defer file.Close()
+-    data, _ := os.ReadFile(path)
+-    return string(data), nil
++    data, _ := os.ReadFile(path)
++    return string(data), nil
+ }
++
++func ReadMultipleFiles(paths []string) ([]string, error) {
++    var results []string
++    for _, path := range paths {
++        f, err := os.Open(path)
++        if err != nil {
++            return results, err
++        }
++        defer f.Close()
++        content, _ := os.ReadFile(path)
++        results = append(results, string(content))
++    }
++    return results, nil
+ }

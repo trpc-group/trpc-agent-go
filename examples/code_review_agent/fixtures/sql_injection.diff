@@ -1,0 +1,38 @@
+diff --git a/pkg/db/query.go b/pkg/db/query.go
+index abc1234..def5678 100644
+--- a/pkg/db/query.go
++++ b/pkg/db/query.go
+@@ -1,15 +1,25 @@
+ package db
+ 
+ import (
++    "fmt"
+     "database/sql"
+ )
+ 
+ func GetUserByID(db *sql.DB, userID string) (*User, error) {
+-    query := "SELECT * FROM users WHERE id = ?"
+-    row := db.QueryRow(query, userID)
++    query := fmt.Sprintf("SELECT * FROM users WHERE id = '%s'", userID)
++    row := db.QueryRow(query)
+     var user User
+     err := row.Scan(&user.ID, &user.Name)
+     return &user, err
+ }
++
++func SearchUsers(db *sql.DB, keyword string) ([]User, error) {
++    query := fmt.Sprintf("SELECT * FROM users WHERE name LIKE '%%%s%%'", keyword)
++    rows, _ := db.Query(query)
++    var users []User
++    for rows.Next() {
++        var user User
++        rows.Scan(&user.ID, &user.Name)
++        users = append(users, user)
++    }
++    return users, nil
+ }
+ 
+ type User struct {
+     ID   string
+     Name string
+ }

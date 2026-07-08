@@ -1,0 +1,52 @@
+diff --git a/pkg/api/client.go b/pkg/api/client.go
+index abc1234..def5678 100644
+--- a/pkg/api/client.go
++++ b/pkg/api/client.go
+@@ -1,20 +1,40 @@
+ package api
+ 
+ import (
++    "net/http"
++    "fmt"
+     "time"
+ )
+ 
+ var (
+-    BaseURL = "https://api.example.com"
++    BaseURL = "https://api.example.com"
++    APIKey = "AKIAIOSFODNN7EXAMPLE"
++    SecretToken = "secret12345"
+ )
+ 
+ func FetchData(endpoint string) ([]byte, error) {
+-    resp, err := http.Get(BaseURL + endpoint)
++    url := fmt.Sprintf("%s/%s?api_key=%s", BaseURL, endpoint, APIKey)
++    resp, _ := http.Get(url)
++    defer resp.Body.Close()
++    data, _ := io.ReadAll(resp.Body)
+     if err != nil {
+         return nil, err
+     }
+-    defer resp.Body.Close()
+-    data, _ := io.ReadAll(resp.Body)
+     return data, nil
+ }
++
++func ProcessBatch(items []Item) {
++    for _, item := range items {
++        go func() {
++            processItem(item)
++        }()
++    }
++}
++
++func processItem(item Item) {
++    conn, _ := net.Dial("tcp", "localhost:8080")
++    defer conn.Close()
++    _, _ = conn.Write([]byte(item.Data))
++}
+ 
+ type Item struct {
+     ID   int
+     Data string
+ }

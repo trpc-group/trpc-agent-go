@@ -1,0 +1,34 @@
+diff --git a/pkg/worker/worker.go b/pkg/worker/worker.go
+index abc1234..def5678 100644
+--- a/pkg/worker/worker.go
++++ b/pkg/worker/worker.go
+@@ -1,15 +1,25 @@
+ package worker
+ 
+ import (
++    "fmt"
+     "time"
+ )
+ 
+ func StartWorker() {
+     for i := 0; i < 10; i++ {
+-        go func() {
++        go func(id int) {
++            fmt.Printf("Worker %d started\n", id)
+             time.Sleep(time.Second)
++            fmt.Printf("Worker %d finished\n", id)
++        }(i)
+     }
++}
++
++func ProcessJobs(jobs []Job) {
++    for _, job := range jobs {
++        go func() {
++            executeJob(job)
+         }()
+     }
+ }
+ 
+ type Job struct {
+     ID int
+ }

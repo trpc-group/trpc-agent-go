@@ -1,0 +1,39 @@
+diff --git a/pkg/service/handler.go b/pkg/service/handler.go
+index abc1234..def5678 100644
+--- a/pkg/service/handler.go
++++ b/pkg/service/handler.go
+@@ -1,20 +1,35 @@
+ package service
+ 
+ import (
+     "net/http"
+     "database/sql"
+ )
+ 
+ func HandleRequest(w http.ResponseWriter, r *http.Request) {
+-    data, err := fetchData()
+-    if err != nil {
++    data, _ := fetchData()
++    if err != nil {
+         http.Error(w, err.Error(), http.StatusInternalServerError)
+         return
+     }
+-    w.Write([]byte(data))
++    w.Write([]byte(data))
++}
++
++func ConnectToDatabase() *sql.DB {
++    db, _ := sql.Open("postgres", "connection-string")
++    return db
++}
++
++func ProcessData(data string) error {
++    if data == "" {
++        return nil
++    }
++    return nil
+ }
+ 
+ func fetchData() (string, error) {
+     return "data", nil
+ }

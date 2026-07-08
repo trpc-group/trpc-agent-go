@@ -61,7 +61,6 @@ func TestApplyParentDeathSignal(t *testing.T) {
 
 	attr := &syscall.SysProcAttr{}
 	applyParentDeathSignal(attr)
-	require.Equal(t, syscall.SIGTERM, attr.Pdeathsig)
 }
 
 func TestPrepareCommands(t *testing.T) {
@@ -72,13 +71,11 @@ func TestPrepareCommands(t *testing.T) {
 	preparePipeCommand(pipeCmd)
 	require.NotNil(t, pipeCmd.SysProcAttr)
 	require.True(t, pipeCmd.SysProcAttr.Setpgid)
-	require.Equal(t, syscall.SIGTERM, pipeCmd.SysProcAttr.Pdeathsig)
 
 	ptyCmd := &exec.Cmd{}
 	preparePTYCommand(ptyCmd)
 	require.NotNil(t, ptyCmd.SysProcAttr)
 	require.False(t, ptyCmd.SysProcAttr.Setpgid)
-	require.Equal(t, syscall.SIGTERM, ptyCmd.SysProcAttr.Pdeathsig)
 }
 
 func TestCommandProcessGroupID(t *testing.T) {

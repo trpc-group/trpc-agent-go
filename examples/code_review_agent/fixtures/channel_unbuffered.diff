@@ -1,0 +1,38 @@
+diff --git a/pkg/channel/pipeline.go b/pkg/channel/pipeline.go
+index abc1234..def5678 100644
+--- a/pkg/channel/pipeline.go
++++ b/pkg/channel/pipeline.go
+@@ -1,20 +1,30 @@
+ package channel
+ 
+ func ProcessPipeline(items []int) []int {
+-    result := make([]int, 0, len(items))
++    ch := make(chan int)
++    var result []int
++
++    go func() {
++        for _, item := range items {
++            ch <- item * 2
++        }
++        close(ch)
++    }()
++
++    for val := range ch {
++        result = append(result, val)
++    }
++    return result
+ }
++
++func FanOutProcessing(data []int) []int {
++    results := make(chan int)
++    for _, item := range data {
++        go func(i int) {
++            results <- i * i
++        }(item)
++    }
++    var output []int
++    for i := 0; i < len(data); i++ {
++        output = append(output, <-results)
++    }
++    return output
+ }
