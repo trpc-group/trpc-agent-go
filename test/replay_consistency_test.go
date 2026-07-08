@@ -1948,16 +1948,16 @@ func basicReplayCases() []replayCase {
 					topics:  []string{"concurrency", "fact"},
 				},
 				{
-					name:    "duplicate content first write",
+					name:    "repeated note branch A",
 					op:      "add",
-					content: "Concurrent write records repeated project note.",
-					topics:  []string{"concurrency", "duplicate"},
+					content: "Concurrent write records repeated project note from branch A.",
+					topics:  []string{"concurrency", "project-note", "branch-a"},
 				},
 				{
-					name:    "duplicate content second write",
+					name:    "repeated note branch B",
 					op:      "add",
-					content: "Concurrent write records repeated project note.",
-					topics:  []string{"concurrency", "duplicate"},
+					content: "Concurrent write records repeated project note from branch B.",
+					topics:  []string{"concurrency", "project-note", "branch-b"},
 				},
 			},
 			queries: []memoryQuerySpec{
@@ -2558,8 +2558,8 @@ func TestReplayConsistencyAnomaly_SQLiteStorageInjection(t *testing.T) {
 				backend,
 				key,
 				"retry-duplicate-"+key.SessionID,
-				"Concurrent write records repeated project note.",
-				[]string{"concurrency", "duplicate"},
+				"Concurrent write records repeated project note from branch A.",
+				[]string{"concurrency", "project-note", "branch-a"},
 			)
 		},
 	)
