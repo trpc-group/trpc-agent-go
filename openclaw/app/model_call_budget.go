@@ -12,6 +12,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -306,6 +307,7 @@ func finalModelCallRequest(req *model.Request) *model.Request {
 	}
 	clone := *req
 	clone.Tools = nil
+	clone.ExtraFields = finalModelCallExtraFields(req.ExtraFields)
 	clone.Messages = append([]model.Message(nil), req.Messages...)
 	clone.Messages = append(clone.Messages, model.NewUserMessage(
 		"[OpenClaw Budget Notice] This is the final allowed model call "+
@@ -319,4 +321,27 @@ func finalModelCallRequest(req *model.Request) *model.Request {
 			"format, follow it exactly.",
 	))
 	return &clone
+}
+
+func finalModelCallExtraFields(extra map[string]any) map[string]any {
+	if len(extra) == 0 {
+		return nil
+	}
+	clone := make(map[string]any, len(extra))
+	for key, value := range extra {
+		switch strings.ToLower(key) {
+		case "function_call",
+			"functions",
+			"parallel_tool_calls",
+			"tool_choice",
+			"tools":
+			continue
+		default:
+			clone[key] = value
+		}
+	}
+	if len(clone) == 0 {
+		return nil
+	}
+	return clone
 }

@@ -247,6 +247,12 @@ func TestModelCallBudgetModel_FinalizesOnLastAllowedCall(t *testing.T) {
 	req := &model.Request{
 		Messages: []model.Message{model.NewUserMessage("question")},
 		Tools:    map[string]tool.Tool{"search": nil},
+		ExtraFields: map[string]any{
+			"parallel_tool_calls": true,
+			"response_format":     "json",
+			"tool_choice":         "required",
+			"tools":               []string{"search"},
+		},
 	}
 
 	_, err := wrapped.GenerateContent(ctx, req)
@@ -273,6 +279,15 @@ func TestModelCallBudgetModel_FinalizesOnLastAllowedCall(t *testing.T) {
 	)
 	require.Len(t, req.Tools, 1)
 	require.Len(t, req.Messages, 1)
+	require.Equal(t, map[string]any{
+		"parallel_tool_calls": true,
+		"response_format":     "json",
+		"tool_choice":         "required",
+		"tools":               []string{"search"},
+	}, req.ExtraFields)
+	require.Equal(t, map[string]any{
+		"response_format": "json",
+	}, got.ExtraFields)
 }
 
 func TestModelCallBudgetModel_UserPromptPrefixConsumesBudget(t *testing.T) {
@@ -479,4 +494,35 @@ func TestBuildModelCallBudgetRunOptionResolverInjectsBudget(
 	_, err = wrapped.GenerateContent(childCtx, &model.Request{})
 	require.ErrorContains(t, err, "max LLM calls (1) exceeded")
 	require.EqualValues(t, 2, underlying.callCount())
+}
+
+func TestBuildModelCallBudgetRunOptionResolverBypassesAuxiliaryCalls(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	resolver := buildModelCallBudgetRunOptionResolver(1, false)
+	_, runOpts, err := resolver(context.Background(), gateway.RunOptionInput{})
+	require.NoError(t, err)
+
+	opts := agent.NewRunOptions(runOpts...)
+	underlying := &countingBudgetModel{}
+	budgeted := newModelCallBudgetModel(underlying)
+	auxiliary := newModelCallBudgetBypassModel(budgeted)
+	inv := agent.NewInvocation(
+		agent.WithInvocationID("run"),
+		agent.WithInvocationRunOptions(opts),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	_, err = auxiliary.GenerateContent(ctx, &model.Request{})
+	require.NoError(t, err)
+	_, err = auxiliary.GenerateContent(ctx, &model.Request{})
+	require.NoError(t, err)
+
+	_, err = budgeted.GenerateContent(ctx, &model.Request{})
+	require.NoError(t, err)
+	_, err = budgeted.GenerateContent(ctx, &model.Request{})
+	require.ErrorContains(t, err, "max LLM calls (1) exceeded")
+	require.EqualValues(t, 3, underlying.callCount())
 }

@@ -1212,13 +1212,15 @@ type agentRunConfig struct {
 	EnableContextCompaction                       *bool `yaml:"enable_context_compaction,omitempty"`
 	ContextCompactionOversizedToolResultMaxTokens *int  `yaml:"context_compaction_oversized_tool_result_max_tokens,omitempty"`
 	MaxHistoryRuns                                *int  `yaml:"max_history_runs,omitempty"`
-	MaxLLMCalls                                   *int  `yaml:"max_llm_calls,omitempty"`
-	FinalizeBeforeMaxLLMCalls                     *bool `yaml:"finalize_before_max_llm_calls,omitempty"`
-	MaxToolIterations                             *int  `yaml:"max_tool_iterations,omitempty"`
-	PreloadMemory                                 *int  `yaml:"preload_memory,omitempty"`
-	ToolCallArgumentsJSONRepair                   *bool `yaml:"tool_call_arguments_json_repair,omitempty"`
-	DisablePostToolPrompt                         *bool `yaml:"disable_post_tool_prompt,omitempty"`
-	DisablePostToolPromptCamel                    *bool `yaml:"disablePostToolPrompt,omitempty"`
+	// MaxLLMCalls limits agent-facing model calls per invocation. Auxiliary
+	// session summary and auto-memory extraction calls are excluded.
+	MaxLLMCalls                 *int  `yaml:"max_llm_calls,omitempty"`
+	FinalizeBeforeMaxLLMCalls   *bool `yaml:"finalize_before_max_llm_calls,omitempty"`
+	MaxToolIterations           *int  `yaml:"max_tool_iterations,omitempty"`
+	PreloadMemory               *int  `yaml:"preload_memory,omitempty"`
+	ToolCallArgumentsJSONRepair *bool `yaml:"tool_call_arguments_json_repair,omitempty"`
+	DisablePostToolPrompt       *bool `yaml:"disable_post_tool_prompt,omitempty"`
+	DisablePostToolPromptCamel  *bool `yaml:"disablePostToolPrompt,omitempty"`
 
 	Instruction      *string  `yaml:"instruction,omitempty"`
 	InstructionFiles []string `yaml:"instruction_files,omitempty"`
