@@ -558,6 +558,56 @@ func TestNewFileToolSet_RuntimeReadDirsAllowBrowserArtifacts(
 	require.Contains(t, string(data), `"contents":"title: Example`)
 }
 
+func TestNewFileToolSet_RuntimeReadDirsRejectSymlinkedBrowserArtifacts(
+	t *testing.T,
+) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink behavior differs on windows")
+	}
+
+	oldWorkdir, err := os.Getwd()
+	require.NoError(t, err)
+	workdir, err := os.MkdirTemp(oldWorkdir, ".test-browser-artifacts-")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, os.RemoveAll(workdir))
+	})
+	require.NoError(t, os.Chdir(workdir))
+	t.Cleanup(func() {
+		require.NoError(t, os.Chdir(oldWorkdir))
+	})
+
+	outsideDir := filepath.Join(workdir, "outside")
+	require.NoError(t, os.MkdirAll(outsideDir, 0o755))
+	artifactDir := filepath.Join(workdir, browserArtifactDirName)
+	require.NoError(t, os.Symlink(outsideDir, artifactDir))
+
+	cfg := yamlNode(t, "base_dir: "+t.TempDir()+"\n")
+	ts, err := newFileToolSet(
+		registry.ToolSetProviderDeps{StateDir: t.TempDir()},
+		registry.PluginSpec{Name: "fs", Config: cfg},
+	)
+	require.NoError(t, err)
+	readFile := findCallableTool(t, ts.Tools(context.Background()), "read_file")
+
+	artifactFile := filepath.Join(outsideDir, "page.yml")
+	require.NoError(t, os.WriteFile(
+		artifactFile,
+		[]byte("title: Symlink\n"),
+		0o644,
+	))
+	_, err = readFile.Call(
+		context.Background(),
+		[]byte(`{"file_name":`+strconv.Quote(artifactFile)+`}`),
+	)
+	require.Error(t, err)
+	require.Contains(
+		t,
+		err.Error(),
+		"outside base_directory and configured read-only roots",
+	)
+}
+
 func TestNewFileToolSet_RuntimeReadDirsCanDisable(t *testing.T) {
 	dir := t.TempDir()
 	tmpFile := filepath.Join(t.TempDir(), "derived.txt")

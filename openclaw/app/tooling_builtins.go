@@ -470,8 +470,8 @@ func defaultFileReadOnlyDirs(stateDir string) []string {
 	}
 	if cwd, err := os.Getwd(); err == nil {
 		if cwd = strings.TrimSpace(cwd); cwd != "" {
-			artifactDir := filepath.Join(cwd, browserArtifactDirName)
-			if err := os.MkdirAll(artifactDir, 0o755); err == nil {
+			artifactDir, ok := browserArtifactReadRoot(cwd)
+			if ok {
 				roots = append(roots, artifactDir)
 			}
 		}
@@ -484,6 +484,29 @@ func defaultFileReadOnlyDirs(stateDir string) []string {
 		)
 	}
 	return roots
+}
+
+func browserArtifactReadRoot(cwd string) (string, bool) {
+	artifactDir := filepath.Join(cwd, browserArtifactDirName)
+	info, err := os.Lstat(artifactDir)
+	switch {
+	case err == nil:
+		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return "", false
+		}
+	case os.IsNotExist(err):
+		if err := os.MkdirAll(artifactDir, 0o755); err != nil {
+			return "", false
+		}
+	default:
+		return "", false
+	}
+
+	info, err = os.Lstat(artifactDir)
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return "", false
+	}
+	return artifactDir, true
 }
 
 func absPathOrOriginal(path string) string {
