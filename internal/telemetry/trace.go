@@ -278,7 +278,7 @@ func (r *chatRequestAttributes) appendStringAttribute(
 		return append(attrs, slot.attrs...)
 	}
 	before := len(attrs)
-	attrs = appendStringAttribute(attrs, operation, key, notSerializable, marshal)
+	attrs = appendStringAttributeWithRule(attrs, operation, key, notSerializable, marshal, rule)
 	slot.valid = true
 	slot.fingerprint = fingerprint
 	slot.rule = rule
