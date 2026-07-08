@@ -1393,7 +1393,7 @@ func TestServer_ProcessMessage_LargeInlineData(t *testing.T) {
 	srv, err := New(r)
 	require.NoError(t, err)
 
-	data := bytes.Repeat([]byte("a"), int(defaultMaxBodyBytes))
+	data := bytes.Repeat([]byte("a"), int(defaultMaxContentPartBytes))
 	req := gwproto.MessageRequest{
 		From: "u1",
 		ContentParts: []gwproto.ContentPart{
@@ -1429,8 +1429,8 @@ func TestServer_ProcessMessage_LargeInlineData(t *testing.T) {
 	)
 	srv.Handler().ServeHTTP(rr, httpReq)
 
-	require.Equal(t, http.StatusBadRequest, rr.Code)
-	require.Contains(t, rr.Body.String(), "request body exceeds max_body_bytes")
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Equal(t, 2, r.Calls())
 }
 
 func TestServer_ProcessMessage_LargeBodyWithoutContentLength(t *testing.T) {

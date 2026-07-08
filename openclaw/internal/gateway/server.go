@@ -70,7 +70,9 @@ const (
 	methodPost = "POST"
 	methodGet  = "GET"
 
-	defaultMaxBodyBytes int64 = 1 << 20
+	// Enough for one default max-size binary content part after base64 JSON
+	// encoding plus normal request metadata.
+	defaultMaxBodyBytes int64 = 12 << 20
 
 	queryRequestID = "request_id"
 
