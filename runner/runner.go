@@ -113,6 +113,19 @@ func WithSessionIngestor(ingestor session.Ingestor) Option {
 	}
 }
 
+func resolveMemoryReader(
+	memoryService memory.Service,
+	ingestor session.Ingestor,
+) memory.Reader {
+	if memoryService != nil {
+		return memoryService
+	}
+	if reader, ok := ingestor.(memory.Reader); ok {
+		return reader
+	}
+	return nil
+}
+
 // WithArtifactService sets the artifact service to use.
 func WithArtifactService(service artifact.Service) Option {
 	return func(opts *Options) {
@@ -785,6 +798,7 @@ func (r *runner) newRunInvocation(
 		)
 	}
 	invocation := agent.NewInvocation(invocationOpts...)
+	invocation.MemoryReader = resolveMemoryReader(r.memoryService, r.ingestor)
 	if rootLookupName := r.selectedRootLookupName(
 		ro,
 		awaitUserReplyRootName,
