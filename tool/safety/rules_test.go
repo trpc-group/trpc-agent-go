@@ -332,6 +332,28 @@ func TestNetworkAccessRuleWithPolicy_DeniedDomains(t *testing.T) {
 	}
 }
 
+func TestNetworkAccessRule_DefaultPolicy_AllowlistReturnsAsk(t *testing.T) {
+	// DefaultPolicy now keeps network clients in NetworkClientDeny instead of
+	// DeniedCommands, so the network rule can downgrade allowlisted hosts to Ask
+	// instead of having DangerousCommandRule deny them first.
+	p := DefaultPolicy()
+	p.AllowedDomains = []string{"github.com"}
+	scanner := NewScanner(
+		NewDangerousCommandRuleWithPolicy(&p),
+		NewNetworkAccessRuleWithPolicy(&p),
+	)
+	res := scanner.Scan(ScanInput{Command: "curl https://github.com/foo/bar"})
+	if res == nil {
+		t.Fatal("expected ask for allowlisted host, got nil")
+	}
+	if res.Decision != DecisionAsk {
+		t.Errorf("expected ask for allowlisted network access, got %s", res.Decision)
+	}
+	if res.RuleID != "network_002" {
+		t.Errorf("expected network_002, got %s", res.RuleID)
+	}
+}
+
 // ---------- Rule 3: Shell Bypass ----------
 
 func TestShellBypassRule_Deny(t *testing.T) {

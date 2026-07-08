@@ -157,13 +157,49 @@ func defaultExtractor(args []byte) ScanInput {
 		}
 	}
 	// "code_blocks" is the canonical list shape used by tool/codeexec.
-	// Each entry may be a string (treated as code with empty language)
-	// or an object with "code" / "language" / "lang" keys.
+	// It may be a normal array, a single object (instead of an array),
+	// or a double-encoded JSON string containing either of the above.
 	if v, ok := raw["code_blocks"]; ok {
-		// First try: array of objects.
-		var objects []map[string]any
-		if err := json.Unmarshal(v, &objects); err == nil {
-			for _, obj := range objects {
+		blocks := parseCodeBlocks(v)
+		for _, cb := range blocks {
+			if cb.Code != "" {
+				in.CodeBlocks = append(in.CodeBlocks, cb)
+			}
+		}
+	}
+	return in
+}
+
+// parseCodeBlocks mirrors tool/codeexec's unmarshalCodeBlocks so the
+// guard accepts the same payload shapes the executor will accept.
+// The value may be a normal array, a single object, or a double-encoded
+// JSON string containing either of the above.
+func parseCodeBlocks(raw json.RawMessage) []CodeBlock {
+	if len(raw) == 0 {
+		return nil
+	}
+	var val any
+	if err := json.Unmarshal(raw, &val); err != nil {
+		return nil
+	}
+	if val == nil {
+		return nil
+	}
+	// If the LLM double-encoded the value as a JSON string, unwrap and re-parse.
+	if s, ok := val.(string); ok {
+		raw = json.RawMessage(s)
+		if err := json.Unmarshal(raw, &val); err != nil {
+			return nil
+		}
+		if val == nil {
+			return nil
+		}
+	}
+	switch v := val.(type) {
+	case []any:
+		out := make([]CodeBlock, 0, len(v))
+		for _, elem := range v {
+			if obj, ok := elem.(map[string]any); ok {
 				cb := CodeBlock{}
 				if s, ok := obj["code"].(string); ok {
 					cb.Code = s
@@ -174,21 +210,30 @@ func defaultExtractor(args []byte) ScanInput {
 					cb.Language = s
 				}
 				if cb.Code != "" {
-					in.CodeBlocks = append(in.CodeBlocks, cb)
+					out = append(out, cb)
 				}
+				continue
 			}
-		} else {
-			// Fallback: array of raw strings.
-			var strs []string
-			if err := json.Unmarshal(v, &strs); err == nil {
-				for _, s := range strs {
-					if s == "" {
-						continue
-					}
-					in.CodeBlocks = append(in.CodeBlocks, CodeBlock{Code: s})
-				}
+			if s, ok := elem.(string); ok && s != "" {
+				out = append(out, CodeBlock{Code: s})
 			}
 		}
+		return out
+	case map[string]any:
+		cb := CodeBlock{}
+		if s, ok := v["code"].(string); ok {
+			cb.Code = s
+		}
+		if s, ok := v["language"].(string); ok {
+			cb.Language = s
+		} else if s, ok := v["lang"].(string); ok {
+			cb.Language = s
+		}
+		if cb.Code != "" {
+			return []CodeBlock{cb}
+		}
+		return nil
+	default:
+		return nil
 	}
-	return in
 }

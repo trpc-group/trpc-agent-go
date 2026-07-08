@@ -51,9 +51,11 @@ type PolicyFile struct {
 func DefaultPolicy() PolicyFile {
 	return PolicyFile{
 		DeniedCommands: []string{
-			"curl", "wget", "nc", "ssh", "telnet",
 			"rm -rf", "mkfs", "fdisk",
 			"eval", "exec", "source", "sudo",
+		},
+		NetworkClientDeny: []string{
+			"curl", "wget", "nc", "ssh", "telnet",
 		},
 		DeniedPaths: []string{
 			"/etc/shadow", "/etc/passwd",
