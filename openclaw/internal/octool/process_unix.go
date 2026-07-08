@@ -33,6 +33,21 @@ func forceKillCommandProcess(cmd *exec.Cmd) error {
 	return signalCommandProcess(cmd, syscall.SIGKILL)
 }
 
+func cleanupCommandProcessGroup(cmd *exec.Cmd) error {
+	if cmd == nil || cmd.Process == nil {
+		return nil
+	}
+	pid := cmd.Process.Pid
+	if pid <= 0 {
+		return nil
+	}
+	err := syscall.Kill(-pid, syscall.SIGKILL)
+	if err == nil || err == syscall.ESRCH {
+		return nil
+	}
+	return err
+}
+
 func signalCommandProcess(cmd *exec.Cmd, sig os.Signal) error {
 	if cmd == nil || cmd.Process == nil {
 		return nil
