@@ -27,6 +27,7 @@ const (
 	defaultMaxCues   = 12
 	defaultMaxTags   = 8
 	defaultBatchSize = 80
+	outputPrefixSize = 80
 )
 
 var errOutputValidation = errors.New("deepsearch output validation failed")
@@ -267,7 +268,8 @@ func generateBatch(
 func systemPrompt(cfg options) string {
 	return fmt.Sprintf(
 		"Generate compact cue/tag indexes for durable memory entries. "+
-			"Return JSON only with shape {\"memories\":[{\"id\":\"...\",\"cues\":[...],\"tags\":[...]}]}. "+
+			"Return raw JSON only with shape {\"memories\":[{\"id\":\"...\",\"cues\":[...],\"tags\":[...]}]}. "+
+			"Do not wrap the JSON in Markdown/code fences. Do not add explanations. "+
 			"Preserve every input id. Cues are short retrieval phrases a future user question may contain. "+
 			"Tags are stable entities, topics, relations, dates, people, places, or aspects. "+
 			"Do not invent facts. Return at least one cue and one tag, with at most %d cues and %d tags per memory.",
@@ -306,11 +308,43 @@ func parseOutput(text string) (*llmOutput, error) {
 	if text == "" {
 		return nil, errors.New("deepsearch model returned empty output")
 	}
+	normalized, err := normalizeJSONOutput(text)
+	if err != nil {
+		return nil, err
+	}
 	var output llmOutput
-	if err := json.Unmarshal([]byte(text), &output); err != nil {
-		return nil, fmt.Errorf("parse deepsearch output: %w", err)
+	if err := json.Unmarshal([]byte(normalized), &output); err != nil {
+		return nil, fmt.Errorf("parse deepsearch output near %s: %w", outputPrefix(text), err)
 	}
 	return &output, nil
+}
+
+func normalizeJSONOutput(text string) (string, error) {
+	if !strings.HasPrefix(text, "```") {
+		return text, nil
+	}
+	lines := strings.Split(text, "\n")
+	if len(lines) < 3 {
+		return "", fmt.Errorf("parse deepsearch output near %s: malformed markdown code fence", outputPrefix(text))
+	}
+	opening := strings.TrimSpace(lines[0])
+	language := strings.TrimSpace(strings.TrimPrefix(opening, "```"))
+	if language != "" && !strings.EqualFold(language, "json") {
+		return text, nil
+	}
+	if strings.TrimSpace(lines[len(lines)-1]) != "```" {
+		return "", fmt.Errorf("parse deepsearch output near %s: malformed markdown code fence", outputPrefix(text))
+	}
+	return strings.TrimSpace(strings.Join(lines[1:len(lines)-1], "\n")), nil
+}
+
+func outputPrefix(text string) string {
+	text = strings.TrimSpace(text)
+	runes := []rune(text)
+	if len(runes) > outputPrefixSize {
+		text = string(runes[:outputPrefixSize-3]) + "..."
+	}
+	return fmt.Sprintf("%q", text)
 }
 
 func mergeOutput(

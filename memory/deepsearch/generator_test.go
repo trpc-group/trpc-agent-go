@@ -88,6 +88,7 @@ func TestBuildDocumentsGeneratesIndexes(t *testing.T) {
 	require.NotNil(t, fakeModel.requests[0].StructuredOutput)
 	require.Len(t, fakeModel.requests[0].Messages, 2)
 	require.Contains(t, fakeModel.requests[0].Messages[0].Content, "Generate compact cue/tag")
+	require.Contains(t, fakeModel.requests[0].Messages[0].Content, "Do not wrap the JSON")
 	require.Contains(t, fakeModel.requests[0].Messages[1].Content, "espresso")
 }
 
@@ -184,6 +185,14 @@ func TestBuildDocumentsErrors(t *testing.T) {
 			entries: []*memory.Entry{entry},
 			want:    "parse deepsearch output",
 		},
+		{
+			name: "fenced output still validates",
+			model: &generatorModel{calls: []generatorModelCall{
+				{content: "```json\n{\"memories\":[{\"id\":\"m1\",\"tags\":[\"tea\"]}]}\n```"},
+			}},
+			entries: []*memory.Entry{entry},
+			want:    "requires cues and tags",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -192,6 +201,58 @@ func TestBuildDocumentsErrors(t *testing.T) {
 			require.Contains(t, err.Error(), tt.want)
 		})
 	}
+}
+
+func TestParseOutputAcceptsRawAndFencedJSON(t *testing.T) {
+	raw := `{"memories":[{"id":"m1","cues":["coffee"],"tags":["espresso"]}]}`
+	tests := []struct {
+		name string
+		text string
+	}{
+		{name: "raw", text: raw},
+		{name: "json fence", text: "```json\n" + raw + "\n```"},
+		{name: "plain fence", text: "```\n" + raw + "\n```"},
+		{name: "uppercase json fence", text: "```JSON\n" + raw + "\n```"},
+		{name: "fence with surrounding whitespace", text: "\n\t```json\n" + raw + "\n```\n\t"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			output, err := parseOutput(tt.text)
+			require.NoError(t, err)
+			require.Len(t, output.Memories, 1)
+			require.Equal(t, "m1", output.Memories[0].ID)
+			require.Equal(t, []string{"coffee"}, output.Memories[0].Cues)
+			require.Equal(t, []string{"espresso"}, output.Memories[0].Tags)
+		})
+	}
+}
+
+func TestParseOutputRejectsMalformedOrWrappedJSON(t *testing.T) {
+	raw := `{"memories":[{"id":"m1","cues":["coffee"],"tags":["espresso"]}]}`
+	tests := []struct {
+		name string
+		text string
+	}{
+		{name: "missing closing fence", text: "```json\n" + raw},
+		{name: "trailing text after closing fence", text: "```json\n" + raw + "\n```\nextra"},
+		{name: "explanation before json", text: "Here is the JSON:\n" + raw},
+		{name: "unsupported fence language", text: "```text\n" + raw + "\n```"},
+		{name: "non json", text: "not-json"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := parseOutput(tt.text)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "parse deepsearch output")
+		})
+	}
+
+	longText := strings.Repeat("x", 120)
+	_, err := parseOutput(longText)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "parse deepsearch output near")
+	require.NotContains(t, err.Error(), longText)
+	require.Contains(t, err.Error(), strings.Repeat("x", 77)+"...")
 }
 
 func TestCollectResponseHandlesStreamingAndCancel(t *testing.T) {
