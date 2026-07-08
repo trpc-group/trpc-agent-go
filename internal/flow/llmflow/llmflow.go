@@ -928,6 +928,7 @@ func (p *streamingResponseProcessor) process(
 	response = p.applyCallbackResponse(response, customResp, callbackTimingAttachment)
 	responseusage.AttachTiming(response, p.timingInfo, &p.partialUsageState)
 	p.repairToolCallArguments(response)
+	p.repairToolCallTextAndStats(response)
 	llmResponseEvent := p.emitLLMResponse(
 		eventInvocation,
 		response,
@@ -1025,6 +1026,29 @@ func (p *streamingResponseProcessor) repairToolCallArguments(
 		return
 	}
 	jsonrepair.RepairResponseToolCallArgumentsInPlace(p.ctx, response)
+}
+
+func (p *streamingResponseProcessor) repairToolCallTextAndStats(
+	response *model.Response,
+) {
+	wasToolResponse := response != nil &&
+		(response.IsToolCallResponse() || response.IsToolResultResponse())
+	if p.repairToolCallText(response) && !wasToolResponse &&
+		response.IsToolCallResponse() {
+		p.toolResponseCount++
+	}
+}
+
+func (p *streamingResponseProcessor) repairToolCallText(
+	response *model.Response,
+) bool {
+	if p.currentInvocation == nil {
+		return false
+	}
+	if !isToolCallTextRepairEnabled(p.currentInvocation) {
+		return false
+	}
+	return repairResponseToolCallTextInPlace(p.ctx, p.llmRequest, response)
 }
 
 func (p *streamingResponseProcessor) emitLLMResponse(

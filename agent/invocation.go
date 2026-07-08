@@ -1022,6 +1022,15 @@ func WithToolCallArgumentsJSONRepairEnabled(enabled bool) RunOption {
 	}
 }
 
+// WithToolCallTextRepairEnabled enables best-effort repair for model responses
+// that emit tool calls as visible text instead of structured tool_calls.
+func WithToolCallTextRepairEnabled(enabled bool) RunOption {
+	return func(opts *RunOptions) {
+		e := enabled
+		opts.ToolCallTextRepairEnabled = &e
+	}
+}
+
 // WithA2ARequestOptions sets the A2A request options for the RunOptions.
 // These options will be passed to A2A agent's SendMessage and StreamMessage calls.
 // This allows passing dynamic HTTP headers or other request-specific options for each run.
@@ -1397,6 +1406,11 @@ type RunOptions struct {
 	// ToolCallArgumentsJSONRepairEnabled enables best-effort JSON repair for tool call arguments.
 	// When nil, JSON repair is disabled by default.
 	ToolCallArgumentsJSONRepairEnabled *bool
+
+	// ToolCallTextRepairEnabled enables best-effort repair for model responses
+	// that emit tool calls as visible text instead of structured tool_calls.
+	// When nil, text repair is disabled by default.
+	ToolCallTextRepairEnabled *bool
 
 	// runControlConfig stores internal event and buffering controls.
 	runControlConfig runControlConfig
