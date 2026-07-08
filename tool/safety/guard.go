@@ -9,6 +9,7 @@
 package safety
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 
@@ -123,6 +124,10 @@ func (g *Guard) CheckToolPermission(ctx context.Context, req *tool.PermissionReq
 // which is the same behaviour as the previous substring-only extractor.
 func defaultExtractor(args []byte) ScanInput {
 	in := ScanInput{ExecutorType: "local"}
+	if len(args) == 0 {
+		return in
+	}
+	args = bytes.TrimLeft(args, " \t\n\r\v\f")
 	if len(args) == 0 {
 		return in
 	}

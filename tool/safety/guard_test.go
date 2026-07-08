@@ -190,6 +190,21 @@ func TestGuard_DefaultExtractor_JSONDecodeError(t *testing.T) {
 	}
 }
 
+func TestGuard_DefaultExtractor_LeadingWhitespace(t *testing.T) {
+	guard := NewGuard(WithRules(NewDangerousCommandRule()))
+	dec, err := guard.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:   "exec_command",
+		Arguments:  []byte("  \t\n{\"command\":\"rm -rf /\"}"),
+		ToolCallID: "call-whitespace-json",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if dec.Action != tool.PermissionActionDeny {
+		t.Errorf("leading whitespace JSON should still be extracted and denied, got %s", dec.Action)
+	}
+}
+
 func TestGuard_DefaultExtractor_CodeLegacyAlias(t *testing.T) {
 	guard := NewGuard(WithRules(NewDangerousCommandRule()))
 	// Legacy "code" field (not "command") should still be extracted.

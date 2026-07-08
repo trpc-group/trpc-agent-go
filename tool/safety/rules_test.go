@@ -283,6 +283,55 @@ func TestNetworkAccessRule_AllowlistStillDeniesUnknown(t *testing.T) {
 	}
 }
 
+func TestNetworkAccessRule_DenylistTakesPrecedence(t *testing.T) {
+	rule := NewNetworkAccessRuleWithAllowlist([]string{"github.com"}).
+		WithDeniedDomains([]string{"evil.github.com"})
+	res := rule.Check(ScanInput{Command: "curl https://evil.github.com/x"})
+	if res == nil {
+		t.Fatal("expected deny for deny-listed host, got nil")
+	}
+	if res.Decision != DecisionDeny {
+		t.Errorf("expected deny for deny-listed host, got %s", res.Decision)
+	}
+}
+
+func TestNetworkAccessRule_DenylistEmptyAllows(t *testing.T) {
+	rule := NewNetworkAccessRule().WithDeniedDomains([]string{})
+	res := rule.Check(ScanInput{Command: "curl https://evil.example.com/x"})
+	if res == nil {
+		t.Fatal("expected deny for network call, got nil")
+	}
+	if res.Decision != DecisionDeny {
+		t.Errorf("expected deny, got %s", res.Decision)
+	}
+}
+
+func TestNetworkAccessRule_DenylistWithWildcard(t *testing.T) {
+	rule := NewNetworkAccessRule().WithDeniedDomains([]string{"*.evil.com"})
+	res := rule.Check(ScanInput{Command: "curl https://foo.evil.com/x"})
+	if res == nil {
+		t.Fatal("expected deny for wildcard deny-listed host, got nil")
+	}
+	if res.Decision != DecisionDeny {
+		t.Errorf("expected deny for wildcard deny-listed host, got %s", res.Decision)
+	}
+}
+
+func TestNetworkAccessRuleWithPolicy_DeniedDomains(t *testing.T) {
+	p := &PolicyFile{
+		AllowedDomains: []string{"github.com"},
+		DeniedDomains:  []string{"evil.github.com"},
+	}
+	rule := NewNetworkAccessRuleWithPolicy(p)
+	res := rule.Check(ScanInput{Command: "curl https://evil.github.com/x"})
+	if res == nil {
+		t.Fatal("expected deny for policy deny-listed host, got nil")
+	}
+	if res.Decision != DecisionDeny {
+		t.Errorf("expected deny, got %s", res.Decision)
+	}
+}
+
 // ---------- Rule 3: Shell Bypass ----------
 
 func TestShellBypassRule_Deny(t *testing.T) {

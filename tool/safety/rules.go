@@ -322,6 +322,9 @@ type NetworkAccessRule struct {
 	// allowedDomains downgrades a match to DecisionAsk when the target
 	// host is in this list. Supports wildcard "*.example.com" entries.
 	allowedDomains []string
+	// deniedDomains is an explicit deny list of hosts. A match here takes
+	// precedence over the allow list, returning DecisionDeny.
+	deniedDomains []string
 }
 
 // NewNetworkAccessRule creates a network access detection rule
@@ -387,6 +390,7 @@ func NewNetworkAccessRuleWithPolicy(p *PolicyFile) *NetworkAccessRule {
 		return r
 	}
 	r.allowedDomains = append([]string(nil), p.AllowedDomains...)
+	r.deniedDomains = append([]string(nil), p.DeniedDomains...)
 	cliSource := p.NetworkClientDeny
 	if len(cliSource) == 0 {
 		cliSource = p.DeniedCommands
@@ -400,6 +404,12 @@ func NewNetworkAccessRuleWithPolicy(p *PolicyFile) *NetworkAccessRule {
 // WithAllowedDomains sets the allow list on an existing rule.
 func (r *NetworkAccessRule) WithAllowedDomains(domains []string) *NetworkAccessRule {
 	r.allowedDomains = domains
+	return r
+}
+
+// WithDeniedDomains sets the explicit deny list on an existing rule.
+func (r *NetworkAccessRule) WithDeniedDomains(domains []string) *NetworkAccessRule {
+	r.deniedDomains = domains
 	return r
 }
 
@@ -449,6 +459,16 @@ func (r *NetworkAccessRule) Check(input ScanInput) *ScanResult {
 	for _, kw := range r.dangerousCmds {
 		if !strings.Contains(cmd, kw) {
 			continue
+		}
+		// If a host in the command matches the explicit deny list, deny outright.
+		if r.matchesDenylist(cmd) {
+			return &ScanResult{
+				Decision:  DecisionDeny,
+				RiskLevel: RiskHigh,
+				RuleID:    r.ID(),
+				Evidence:  kw,
+				Reason:    "network access to denied host: " + kw,
+			}
 		}
 		// If a host in the command matches the allow list, downgrade to ask.
 		if r.matchesAllowlist(cmd) {
@@ -597,6 +617,32 @@ func (r *NetworkAccessRule) matchesAllowlist(cmd string) bool {
 		return false
 	}
 	for _, pattern := range r.allowedDomains {
+		pattern = strings.ToLower(strings.TrimSpace(pattern))
+		if pattern == "" {
+			continue
+		}
+		for _, h := range hosts {
+			if hostMatchesPattern(h, pattern) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// matchesDenylist reports whether any host in cmd is in the configured
+// explicit deny list. Matching follows the same semantics as
+// matchesAllowlist, but a hit here returns DecisionDeny and takes
+// precedence over the allow list.
+func (r *NetworkAccessRule) matchesDenylist(cmd string) bool {
+	if len(r.deniedDomains) == 0 {
+		return false
+	}
+	hosts := parseHosts(cmd)
+	if len(hosts) == 0 {
+		return false
+	}
+	for _, pattern := range r.deniedDomains {
 		pattern = strings.ToLower(strings.TrimSpace(pattern))
 		if pattern == "" {
 			continue
