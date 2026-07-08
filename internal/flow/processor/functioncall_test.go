@@ -4491,6 +4491,131 @@ func TestExecuteToolCall_ToolNotFound_ReturnsErrorChoice(t *testing.T) {
 	require.Nil(t, choices)
 }
 
+func TestExecuteToolCall_ToolNotFoundSuggestsSimilarTool(t *testing.T) {
+	ctx := context.Background()
+	p := NewFunctionCallResponseProcessor(false, nil)
+	inv := &agent.Invocation{Model: &mockModel{}}
+	tools := map[string]tool.Tool{
+		"alpha_tool": &mockTool{name: "alpha_tool"},
+		"web_fetch":  &mockTool{name: "web_fetch"},
+	}
+	call := model.ToolCall{
+		ID: "call-duck",
+		Function: model.FunctionDefinitionParam{
+			Name:      "alpha_too",
+			Arguments: []byte(`{}`),
+		},
+	}
+
+	_, choices, _, shouldIgnoreError, _, err := p.executeToolCall(
+		ctx, inv, call, tools, 0, nil,
+	)
+
+	require.True(t, shouldIgnoreError)
+	require.Nil(t, choices)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), ErrorToolNotFound)
+	require.Contains(t, err.Error(), "alpha_too")
+	require.Contains(t, err.Error(), `did you mean "alpha_tool"?`)
+}
+
+func TestExecuteToolCall_ToolNotFoundOmitsDistantSuggestions(t *testing.T) {
+	ctx := context.Background()
+	p := NewFunctionCallResponseProcessor(false, nil)
+	inv := &agent.Invocation{Model: &mockModel{}}
+	tools := map[string]tool.Tool{
+		"web_fetch": &mockTool{name: "web_fetch"},
+	}
+	call := model.ToolCall{
+		ID: "call-missing",
+		Function: model.FunctionDefinitionParam{
+			Name:      "totally_missing",
+			Arguments: []byte(`{}`),
+		},
+	}
+
+	_, choices, _, shouldIgnoreError, _, err := p.executeToolCall(
+		ctx, inv, call, tools, 0, nil,
+	)
+
+	require.True(t, shouldIgnoreError)
+	require.Nil(t, choices)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), ErrorToolNotFound)
+	require.Contains(t, err.Error(), "totally_missing")
+	require.NotContains(t, err.Error(), "did you mean")
+}
+
+func TestExecuteToolCall_ToolNameSuggestionsCanBeDisabled(t *testing.T) {
+	ctx := context.Background()
+	p := NewFunctionCallResponseProcessor(
+		false,
+		nil,
+		WithToolNameSuggestions(0, 0),
+	)
+	inv := &agent.Invocation{Model: &mockModel{}}
+	tools := map[string]tool.Tool{
+		"alpha_tool": &mockTool{name: "alpha_tool"},
+	}
+	call := model.ToolCall{
+		ID: "call-missing",
+		Function: model.FunctionDefinitionParam{
+			Name:      "alpha_too",
+			Arguments: []byte(`{}`),
+		},
+	}
+
+	_, choices, _, shouldIgnoreError, _, err := p.executeToolCall(
+		ctx, inv, call, tools, 0, nil,
+	)
+
+	require.True(t, shouldIgnoreError)
+	require.Nil(t, choices)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), ErrorToolNotFound)
+	require.Contains(t, err.Error(), "alpha_too")
+	require.NotContains(t, err.Error(), "did you mean")
+}
+
+func TestToolNotFoundError(t *testing.T) {
+	tools := map[string]tool.Tool{
+		"alpha_took":   &mockTool{name: "alpha_took"},
+		"alpha_tool":   &mockTool{name: "alpha_tool"},
+		"alpha_town":   &mockTool{name: "alpha_town"},
+		"exec_command": &mockTool{name: "exec_command"},
+		"tool_xyz":     &mockTool{name: "tool_xyz"},
+		"web_fetch":    &mockTool{name: "web_fetch"},
+	}
+	options := defaultToolNameSuggestionOptions()
+
+	require.Equal(t, ErrorToolNotFound, toolNotFoundError("", tools, options))
+	require.Equal(
+		t,
+		`Error: tool not found: alpha_too; did you mean one of `+
+			`"alpha_took", "alpha_tool", "alpha_town"?`,
+		toolNotFoundError("alpha_too", tools, options),
+	)
+	require.Equal(
+		t,
+		"Error: tool not found: browser_navigate",
+		toolNotFoundError("browser_navigate", tools, options),
+	)
+
+	malformed := "exec_exec_commandcommand</arg_key><arg_value>" +
+		strings.Repeat("script ", 80)
+	got := toolNotFoundError(malformed, tools, options)
+	require.Contains(t, got, `did you mean "exec_command"?`)
+	require.Contains(t, got, "exec_exec_commandcommand")
+	require.NotContains(t, got, strings.Repeat("script ", 40))
+}
+
+func TestToolNameEditDistance(t *testing.T) {
+	require.Equal(t, 0, toolNameEditDistance("web_fetch", "web_fetch"))
+	require.Equal(t, 1, toolNameEditDistance("alpha_too", "alpha_tool"))
+	require.Equal(t, 3, toolNameEditDistance("", "abc"))
+	require.Equal(t, 3, toolNameEditDistance("abc", ""))
+}
+
 func TestFindCompatibleTool(t *testing.T) {
 	tests := []struct {
 		name           string
