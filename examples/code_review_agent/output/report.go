@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -24,6 +25,10 @@ import (
 func GenerateReport(taskID string, diff *parser.DiffResult, findings []storage.Finding,
 	metricsSummary telemetry.MetricsSummary, sandboxRuns []storage.SandboxRun,
 	permissionRecords []storage.PermissionRecord, outputDir string) error {
+
+	if diff == nil {
+		return fmt.Errorf("diff parameter cannot be nil")
+	}
 
 	if err := os.MkdirAll(outputDir, 0755); err != nil {
 		return fmt.Errorf("create output dir: %w", err)
@@ -43,7 +48,15 @@ func GenerateReport(taskID string, diff *parser.DiffResult, findings []storage.F
 
 	if len(metricsSummary.FindingsBySeverity) > 0 {
 		report.WriteString("### Findings by Severity\n\n")
-		for severity, count := range metricsSummary.FindingsBySeverity {
+		severities := make([]storage.FindingSeverity, 0, len(metricsSummary.FindingsBySeverity))
+		for s := range metricsSummary.FindingsBySeverity {
+			severities = append(severities, s)
+		}
+		sort.Slice(severities, func(i, j int) bool {
+			return string(severities[i]) < string(severities[j])
+		})
+		for _, severity := range severities {
+			count := metricsSummary.FindingsBySeverity[severity]
 			report.WriteString(fmt.Sprintf("- **%s:** %d\n", severity, count))
 		}
 		report.WriteString("\n")
@@ -120,5 +133,9 @@ func truncate(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s
 	}
-	return s[:maxLen] + "..."
+	runes := []rune(s)
+	if len(runes) <= maxLen {
+		return s
+	}
+	return string(runes[:maxLen]) + "..."
 }
