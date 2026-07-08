@@ -127,11 +127,11 @@ func TestRequestMessagesFingerprint_DistinguishesNilAndEmptyBytes(t *testing.T) 
 }
 
 func TestRequestMessagesFingerprint_DistinguishesExtraFieldsMarshalError(t *testing.T) {
-	emptyExtraFields := []model.Message{{
+	validExtraFields := []model.Message{{
 		Role: model.RoleAssistant,
 		ToolCalls: []model.ToolCall{{
 			ID:          "call",
-			ExtraFields: map[string]any{},
+			ExtraFields: map[string]any{"valid": "value"},
 		}},
 	}}
 	invalidExtraFields := []model.Message{{
@@ -144,8 +144,153 @@ func TestRequestMessagesFingerprint_DistinguishesExtraFieldsMarshalError(t *test
 		}},
 	}}
 
-	if requestMessagesFingerprint(emptyExtraFields) == requestMessagesFingerprint(invalidExtraFields) {
+	if requestMessagesFingerprint(validExtraFields) == requestMessagesFingerprint(invalidExtraFields) {
 		t.Fatal("expected extra field marshal errors to affect the fingerprint")
+	}
+}
+
+func TestRequestMessagesFingerprint_CoversMultimodalAndToolCallFields(t *testing.T) {
+	text := "part-text"
+	index := 2
+	messages := []model.Message{{
+		Role:    model.RoleUser,
+		Content: "message content",
+		ContentParts: []model.ContentPart{
+			{Type: model.ContentTypeText, Text: &text},
+			{
+				Type: model.ContentTypeImage,
+				Image: &model.Image{
+					URL:    "https://example.com/image.png",
+					Data:   []byte{0x01, 0x02},
+					Detail: "high",
+					Format: "png",
+				},
+			},
+			{
+				Type: model.ContentTypeAudio,
+				Audio: &model.Audio{
+					Data:   []byte{0x03},
+					Format: "wav",
+				},
+			},
+			{
+				Type: model.ContentTypeFile,
+				File: &model.File{
+					Name:     "notes.txt",
+					URL:      "https://example.com/notes.txt",
+					Data:     []byte{0x04},
+					FileID:   "file-id",
+					MimeType: "text/plain",
+				},
+			},
+			{Type: model.ContentTypeText},
+			{
+				Type: model.ContentTypeText,
+				ContentRef: &model.ContentRef{
+					ArtifactRef:     "artifact://doc@3",
+					ArtifactName:    "doc",
+					ArtifactVersion: 3,
+					MimeType:        "application/pdf",
+					SizeBytes:       4096,
+					SHA256:          "deadbeef",
+					OriginalName:    "doc.pdf",
+					EventID:         "event-1",
+					RequestID:       "request-1",
+				},
+			},
+		},
+		ToolID:           "tool-id",
+		ToolName:         "tool-name",
+		ReasoningContent: "thinking",
+		ToolCalls: []model.ToolCall{{
+			Type:  "function",
+			ID:    "call-1",
+			Index: &index,
+			Function: model.FunctionDefinitionParam{
+				Name:        "lookup",
+				Strict:      true,
+				Description: "lookup data",
+				Arguments:   []byte(`{"query":"weather"}`),
+			},
+			ExtraFields: map[string]any{"provider": "gemini"},
+		}},
+	}}
+
+	stable := requestMessagesFingerprint(messages)
+	if stable != requestMessagesFingerprint(messages) {
+		t.Fatal("expected stable fingerprint for identical messages")
+	}
+
+	messages[0].ReasoningContent = "changed reasoning"
+	if stable == requestMessagesFingerprint(messages) {
+		t.Fatal("expected fingerprint to change when message fields change")
+	}
+}
+
+func TestChatTraceState_NilReceiverUsesStatelessPath(t *testing.T) {
+	t.Cleanup(func() { SetSpanAttributePolicy(SpanAttributePolicy{}) })
+	installChatStreamingPolicyForTest()
+
+	var state *ChatTraceState
+	span := newRecordingSpan()
+	req := &model.Request{Messages: []model.Message{model.NewUserMessage("hello")}}
+
+	state.TraceChat(span, &TraceChatAttributes{Request: req})
+	if countAttr(span.attrs, semconvtrace.KeyGenAIInputMessages) != 1 {
+		t.Fatalf("expected input messages attribute from nil ChatTraceState path")
+	}
+}
+
+func TestTraceChat_NilAttributesSetsBaseSpanAttributes(t *testing.T) {
+	span := newRecordingSpan()
+
+	traceChat(span, nil, nil)
+
+	if countAttr(span.attrs, semconvtrace.KeyGenAISystem) != 1 {
+		t.Fatalf("expected gen_ai.system attribute, got %d", countAttr(span.attrs, semconvtrace.KeyGenAISystem))
+	}
+	if countAttr(span.attrs, semconvtrace.KeyGenAIOperationName) != 1 {
+		t.Fatalf("expected gen_ai.operation.name attribute, got %d", countAttr(span.attrs, semconvtrace.KeyGenAIOperationName))
+	}
+	if countAttr(span.attrs, semconvtrace.KeyGenAIInputMessages) != 0 {
+		t.Fatalf("expected no input messages when attributes are nil")
+	}
+}
+
+func TestChatTraceState_RequestWithOptionalGenerationConfig(t *testing.T) {
+	t.Cleanup(func() { SetSpanAttributePolicy(SpanAttributePolicy{}) })
+	installChatStreamingPolicyForTest()
+
+	fp := 0.1
+	mt := 128
+	pp := 0.2
+	tp := 0.7
+	topP := 0.9
+	thinkingEnabled := true
+	req := &model.Request{
+		GenerationConfig: model.GenerationConfig{
+			Stop:             []string{"END"},
+			Stream:           true,
+			FrequencyPenalty: &fp,
+			MaxTokens:        &mt,
+			PresencePenalty:  &pp,
+			Temperature:      &tp,
+			TopP:             &topP,
+			ThinkingEnabled:  &thinkingEnabled,
+		},
+		Messages: []model.Message{model.NewUserMessage("hello")},
+	}
+	span := newRecordingSpan()
+	state := &ChatTraceState{}
+
+	state.TraceChat(span, &TraceChatAttributes{Request: req})
+	state.TraceChat(span, &TraceChatAttributes{Request: req})
+
+	if countAttr(span.attrs, semconvtrace.KeyGenAIRequestThinkingEnabled) == 0 {
+		t.Fatal("expected thinking enabled attribute")
+	}
+	if countAttr(span.attrs, semconvtrace.KeyGenAIInputMessages) != 2 {
+		t.Fatalf("expected cached input messages on each chunk, got %d", countAttr(span.attrs, semconvtrace.KeyGenAIInputMessages))
 	}
 }
 
