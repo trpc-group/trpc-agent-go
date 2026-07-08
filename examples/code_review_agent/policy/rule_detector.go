@@ -171,14 +171,35 @@ func (d *RuleDetector) Detect(diff *parser.DiffResult) []storage.Finding {
 		}
 
 		for _, hunk := range file.Hunks {
-			hunkContent := strings.Join(hunk.Content, "\n")
+			var addedLines []string
+			var lineNumbers []int
+			addedLineIdx := 0
+			for _, line := range hunk.Content {
+				if len(line) > 0 && line[0] == '+' && line != "+++" {
+					addedLines = append(addedLines, line[1:])
+					if addedLineIdx < len(hunk.AddedLines) {
+						lineNumbers = append(lineNumbers, hunk.AddedLines[addedLineIdx])
+						addedLineIdx++
+					}
+				}
+			}
+
+			if len(addedLines) == 0 {
+				continue
+			}
+
+			addedContent := strings.Join(addedLines, "\n")
 
 			for _, rule := range d.rules {
-				if rule.Pattern.MatchString(hunkContent) {
-					matches := rule.Pattern.FindAllStringIndex(hunkContent, -1)
+				if rule.Pattern.MatchString(addedContent) {
+					matches := rule.Pattern.FindAllStringIndex(addedContent, -1)
 					for _, match := range matches {
-						startLine := countLines(hunkContent[:match[0]]) + hunk.NewStart
-						evidence := hunkContent[match[0]:match[1]]
+						startLineIdx := countLines(addedContent[:match[0]])
+						if startLineIdx >= len(lineNumbers) {
+							startLineIdx = len(lineNumbers) - 1
+						}
+						startLine := lineNumbers[startLineIdx]
+						evidence := addedContent[match[0]:match[1]]
 						findings = append(findings, storage.Finding{
 							RuleID:      rule.ID,
 							Filepath:    file.NewPath,

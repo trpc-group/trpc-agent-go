@@ -101,9 +101,14 @@ func (s *LocalSandbox) RunCommand(ctx context.Context, command string, config Sa
 		output = output[:config.OutputSizeLimit] + "... [truncated]"
 	}
 
+	errOutput := stderr.String()
+	if config.OutputSizeLimit > 0 && len(errOutput) > config.OutputSizeLimit {
+		errOutput = errOutput[:config.OutputSizeLimit] + "... [truncated]"
+	}
+
 	return SandboxResult{
 		Output:      output,
-		Error:       stderr.String(),
+		Error:       errOutput,
 		ExitCode:    exitCode,
 		TimedOut:    ctx.Err() == context.DeadlineExceeded,
 		Duration:    duration,
@@ -168,8 +173,7 @@ func createContainerSandbox(workDir string) (Sandbox, error) {
 var DefaultConfig = SandboxConfig{
 	Timeout:          60 * time.Second,
 	OutputSizeLimit:  1024 * 1024,
+	EnvWhitelist:     []string{"PATH", "HOME"},
 	UseLocalFallback: true,
 	Type:             SandboxTypeLocal,
 }
-
-

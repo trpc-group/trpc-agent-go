@@ -111,20 +111,21 @@ func NewPermissionPolicy() *PermissionPolicy {
 
 func (p *PermissionPolicy) CheckCommand(command string) PermissionResult {
 	cmd := strings.TrimSpace(command)
-	lowerCmd := strings.ToLower(cmd)
-
-	cmdArgs := parseCommand(cmd)
-	if len(cmdArgs) == 0 {
+	if cmd == "" {
 		return PermissionResult{
 			Action:  ActionReview,
 			Reason:  "Empty command",
-			Command: cmd,
+			Command: command,
 		}
 	}
-	executable := cmdArgs[0]
+
+	lowerCmd := strings.ToLower(cmd)
+	cmdArgs := parseCommand(cmd)
+	executable := strings.ToLower(cmdArgs[0])
 
 	for _, denied := range p.deniedCommands {
-		if executable == denied || strings.HasPrefix(lowerCmd, strings.ToLower(denied)+" ") {
+		deniedLow := strings.ToLower(denied)
+		if executable == deniedLow || strings.HasPrefix(lowerCmd, deniedLow+" ") {
 			return PermissionResult{
 				Action:  ActionDeny,
 				Reason:  "Command is denied",
@@ -144,7 +145,8 @@ func (p *PermissionPolicy) CheckCommand(command string) PermissionResult {
 	}
 
 	for _, allowed := range p.allowedCommands {
-		if executable == allowed || strings.HasPrefix(lowerCmd, strings.ToLower(allowed)+" ") {
+		allowedLow := strings.ToLower(allowed)
+		if executable == allowedLow || strings.HasPrefix(lowerCmd, allowedLow+" ") {
 			return PermissionResult{
 				Action:  ActionAllow,
 				Reason:  "Command is allowed",
