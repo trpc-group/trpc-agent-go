@@ -16,7 +16,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -24,6 +26,7 @@ import (
 	"github.com/JohannesKaufmann/html-to-markdown/v2/converter"
 	"github.com/JohannesKaufmann/html-to-markdown/v2/plugin/base"
 	"github.com/JohannesKaufmann/html-to-markdown/v2/plugin/commonmark"
+	pdfpkg "github.com/dslipak/pdf"
 	"golang.org/x/net/html"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
@@ -191,7 +194,7 @@ func NewTool(opts ...Option) tool.CallableTool {
 		function.WithName("web_fetch"),
 		function.WithDescription("Fetches and extracts text content from a list of URLs. "+
 			"Supports up to 20 URLs. Useful for summarizing, comparing, or extracting information from web pages. "+
-			"For PDFs or binary documents, download the file and use a document-reading tool instead."),
+			"Supports HTML, text-like responses, JSON, and PDFs."),
 	)
 }
 
@@ -308,6 +311,11 @@ func (t *webFetchTool) fetchOne(ctx context.Context, urlStr string) resultItem {
 			resp.Body,
 			t.mainContentOnly,
 		)
+	} else if item.ContentType == "application/pdf" {
+		content, processErr = readPDFAsText(
+			resp.Body,
+			t.maxContentLength,
+		)
 	} else if isSupportedTextType(item.ContentType) {
 		content, processErr = readBodyAsString(resp.Body)
 	} else {
@@ -376,15 +384,9 @@ func unsupportedContentTypeError(contentType string) string {
 		contentType = "unknown"
 	}
 	msg := fmt.Sprintf("unsupported content type: %s", contentType)
-	switch contentType {
-	case "application/pdf":
-		return msg + "; web_fetch extracts text and HTML pages only. " +
-			"Download the PDF and use a document-reading tool instead."
-	default:
-		return msg + "; web_fetch extracts text and HTML pages only. " +
-			"For binary documents, download the file and use an " +
-			"appropriate document-reading tool instead."
-	}
+	return msg + "; web_fetch extracts HTML, text-like responses, JSON, " +
+		"and PDFs. For other binary documents, download the file and " +
+		"use an appropriate document-reading tool instead."
 }
 
 // truncateString truncates a string to n bytes, ensuring valid UTF-8.
@@ -437,6 +439,124 @@ func readBodyAsString(r io.Reader) (string, error) {
 		return "", fmt.Errorf("failed to read response body: %w", err)
 	}
 	return buf.String(), nil
+}
+
+const pdfLineYTolerance = 2.0
+
+func readPDFAsText(r io.Reader, maxBodyBytes int) (string, error) {
+	data, err := readPDFBody(r, maxBodyBytes)
+	if err != nil {
+		return "", err
+	}
+	reader, err := pdfpkg.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return "", fmt.Errorf("read pdf: %w", err)
+	}
+
+	var text strings.Builder
+	pageCount := reader.NumPage()
+	for pageIndex := 1; pageIndex <= pageCount; pageIndex++ {
+		pageText, err := readPDFPageText(reader.Page(pageIndex))
+		if err != nil {
+			return "", fmt.Errorf("read pdf page %d: %w", pageIndex, err)
+		}
+		pageText = strings.TrimSpace(pageText)
+		if pageText == "" {
+			continue
+		}
+		if text.Len() > 0 {
+			text.WriteString("\n\n")
+		}
+		text.WriteString(pageText)
+	}
+	return strings.ToValidUTF8(text.String(), ""), nil
+}
+
+func readPDFBody(r io.Reader, maxBodyBytes int) ([]byte, error) {
+	if maxBodyBytes <= 0 {
+		data, err := io.ReadAll(r)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read response body: %w", err)
+		}
+		return data, nil
+	}
+	data, err := io.ReadAll(io.LimitReader(r, int64(maxBodyBytes)+1))
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+	if len(data) > maxBodyBytes {
+		return nil, fmt.Errorf(
+			"pdf response body exceeds per-url content limit of %d bytes",
+			maxBodyBytes,
+		)
+	}
+	return data, nil
+}
+
+func readPDFPageText(page pdfpkg.Page) (text string, err error) {
+	if page.V.IsNull() {
+		return "", nil
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("read pdf page content: %v", recovered)
+		}
+	}()
+	return pdfPageText(page.Content().Text), nil
+}
+
+func pdfPageText(text []pdfpkg.Text) string {
+	if len(text) == 0 {
+		return ""
+	}
+	fragments := append([]pdfpkg.Text(nil), text...)
+	sort.Sort(pdfpkg.TextVertical(fragments))
+
+	var b strings.Builder
+	var last pdfpkg.Text
+	haveLast := false
+	for _, fragment := range fragments {
+		if fragment.S == "" {
+			continue
+		}
+		if haveLast {
+			if math.Abs(fragment.Y-last.Y) > pdfLineYTolerance {
+				trimTrailingSpaces(&b)
+				b.WriteByte('\n')
+			} else if shouldSeparatePDFText(last, fragment) {
+				b.WriteByte(' ')
+			}
+		}
+		b.WriteString(fragment.S)
+		last = fragment
+		haveLast = true
+	}
+	return b.String()
+}
+
+func shouldSeparatePDFText(prev, next pdfpkg.Text) bool {
+	if strings.HasSuffix(prev.S, " ") || strings.HasPrefix(next.S, " ") {
+		return false
+	}
+	gap := next.X - (prev.X + prev.W)
+	if gap <= 0 {
+		return false
+	}
+	size := math.Max(prev.FontSize, next.FontSize)
+	if size <= 0 {
+		size = 12
+	}
+	return gap > size*0.25
+}
+
+func trimTrailingSpaces(b *strings.Builder) {
+	s := b.String()
+	trimmed := strings.TrimRight(s, " \t")
+	if len(trimmed) == len(s) {
+		return
+	}
+	b.Reset()
+	b.WriteString(trimmed)
 }
 
 func convertHTMLToMarkdown(r io.Reader) (string, error) {
