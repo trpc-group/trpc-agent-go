@@ -88,9 +88,10 @@ type summaryEntry struct {
 }
 
 type summaryBoundary struct {
-	Version   int    `json:"version"`
-	FilterKey string `json:"filter_key"`
-	CutoffAt  string `json:"cutoff_at,omitempty"`
+	Version        int    `json:"version"`
+	FilterKey      string `json:"filter_key"`
+	CutoffAt       string `json:"cutoff_at,omitempty"`
+	LastEventIndex *int   `json:"last_event_index,omitempty"`
 }
 
 type trackSnapshot struct {
@@ -305,16 +306,17 @@ func makeReplaySnapshot(sess *session.Session, memories []*memory.Entry) replayS
 		}
 	}
 
+	events := sess.GetEvents()
 	return replaySnapshot{
 		Session: replaySessionSnapshot{
 			ID:     sess.ID,
 			App:    sess.AppName,
 			UserID: sess.UserID,
 		},
-		Events:  normalizeReplayEvents(sess.GetEvents()),
+		Events:  normalizeReplayEvents(events),
 		State:   normalizeReplayState(sess.SnapshotState()),
 		Memory:  normalizeReplayMemories(memories),
-		Summary: normalizeReplaySummaries(cloneReplaySummaries(sess)),
+		Summary: normalizeReplaySummaries(cloneReplaySummaries(sess), events),
 		Tracks:  normalizeReplayTracks(cloneReplayTracks(sess)),
 	}
 }
@@ -479,7 +481,7 @@ func replayMemoryKey(snapshot replayMemorySnapshot) string {
 	return string(encoded)
 }
 
-func normalizeReplaySummaries(summaries map[string]*session.Summary) map[string]summaryEntry {
+func normalizeReplaySummaries(summaries map[string]*session.Summary, events []event.Event) map[string]summaryEntry {
 	out := make(map[string]summaryEntry, len(summaries))
 	for filterKey, summary := range summaries {
 		if summary == nil {
@@ -492,14 +494,31 @@ func normalizeReplaySummaries(summaries map[string]*session.Summary) map[string]
 		}
 		if boundary := summary.CutoffBoundary(); boundary != nil {
 			entry.Boundary = &summaryBoundary{
-				Version:   boundary.Version,
-				FilterKey: boundary.FilterKey,
-				CutoffAt:  normalizeReplayTime(boundary.CutoffAt),
+				Version:        boundary.Version,
+				FilterKey:      boundary.FilterKey,
+				CutoffAt:       normalizeReplayTime(boundary.CutoffAt),
+				LastEventIndex: replaySummaryLastEventIndex(events, boundary.LastEventID),
 			}
 		}
 		out[filterKey] = entry
 	}
 	return out
+}
+
+func replaySummaryLastEventIndex(events []event.Event, lastEventID string) *int {
+	if lastEventID == "" {
+		return nil
+	}
+	for i, evt := range events {
+		if evt.ID == lastEventID {
+			index := i
+			return &index
+		}
+	}
+	// -1 means the boundary had a non-empty LastEventID that could not be
+	// mapped to the current snapshot event list.
+	unmatched := -1
+	return &unmatched
 }
 
 func normalizeReplayTracks(tracks map[session.Track]*session.TrackEvents) []trackSnapshot {
@@ -1238,6 +1257,22 @@ func requireReplayDiff(
 		diffs,
 	)
 	return diffEntry{}
+}
+
+func requireSummaryLastEventIndexDiff(t *testing.T, diffs []diffEntry, wantLeft any, wantRight any) {
+	t.Helper()
+
+	diff := requireReplayDiff(
+		t,
+		diffs,
+		"summary",
+		`$.summary["branch/a"].boundary.last_event_index`,
+		map[string]any{"summary_filter_key": "branch/a"},
+	)
+	require.Equal(t, `$.summary["branch/a"].boundary.last_event_index`, diff.Path)
+	require.Equal(t, wantLeft, diff.Left)
+	require.Equal(t, wantRight, diff.Right)
+	require.False(t, diff.Allowed)
 }
 
 func requireReplayReportFields(t *testing.T, reportPath string) []map[string]any {
@@ -2174,32 +2209,96 @@ func TestReplayConsistencySnapshotNormalize_IgnoresGeneratedFields(t *testing.T)
 	require.Empty(t, diffs)
 }
 
-func TestReplayConsistencySnapshotNormalize_IgnoresSummaryLastEventID(t *testing.T) {
-	left := newReplaySnapshotFixtureWithSummaryEventID(
-		"left",
-		`{"a":1,"b":2}`,
-		`{"a":1,"b":2}`,
-		"raw-left",
-		"event-left",
-	)
-	right := newReplaySnapshotFixtureWithSummaryEventID(
-		"left",
-		`{"a":1,"b":2}`,
-		`{"a":1,"b":2}`,
-		"raw-left",
-		"event-right",
-	)
+func TestReplayConsistencySnapshotNormalize_UsesSummaryLastEventAnchor(t *testing.T) {
+	t.Run("same semantic anchor ignores raw ids", func(t *testing.T) {
+		left := newReplaySnapshotFixtureWithSummaryAnchor(
+			"left",
+			`{"a":1,"b":2}`,
+			`{"a":1,"b":2}`,
+			"raw-left",
+			"event-left",
+			"event-left",
+		)
+		right := newReplaySnapshotFixtureWithSummaryAnchor(
+			"left",
+			`{"a":1,"b":2}`,
+			`{"a":1,"b":2}`,
+			"raw-left",
+			"event-right",
+			"event-right",
+		)
 
-	diffs := diffReplaySnapshots(
-		"normalize-summary-last-event-id",
-		left.Session.ID,
-		"in_memory",
-		"sqlite",
-		left,
-		right,
-		nil,
-	)
-	require.Empty(t, diffs)
+		diffs := diffReplaySnapshots(
+			"normalize-summary-last-event-anchor",
+			left.Session.ID,
+			"in_memory",
+			"sqlite",
+			left,
+			right,
+			nil,
+		)
+		require.Empty(t, diffs)
+	})
+
+	t.Run("missing anchor differs from present anchor", func(t *testing.T) {
+		left := newReplaySnapshotFixtureWithSummaryAnchor(
+			"left",
+			`{"a":1,"b":2}`,
+			`{"a":1,"b":2}`,
+			"raw-left",
+			"event-left",
+			"event-left",
+		)
+		right := newReplaySnapshotFixtureWithSummaryAnchor(
+			"left",
+			`{"a":1,"b":2}`,
+			`{"a":1,"b":2}`,
+			"raw-left",
+			"event-right",
+			"",
+		)
+
+		diffs := diffReplaySnapshots(
+			"summary-anchor-missing",
+			left.Session.ID,
+			"in_memory",
+			"sqlite",
+			left,
+			right,
+			nil,
+		)
+		requireSummaryLastEventIndexDiff(t, diffs, float64(0), replayMissingValue())
+	})
+
+	t.Run("unmatched anchor uses sentinel", func(t *testing.T) {
+		left := newReplaySnapshotFixtureWithSummaryAnchor(
+			"left",
+			`{"a":1,"b":2}`,
+			`{"a":1,"b":2}`,
+			"raw-left",
+			"event-left",
+			"event-left",
+		)
+		right := newReplaySnapshotFixtureWithSummaryAnchor(
+			"left",
+			`{"a":1,"b":2}`,
+			`{"a":1,"b":2}`,
+			"raw-left",
+			"event-right",
+			"event-not-in-snapshot",
+		)
+
+		diffs := diffReplaySnapshots(
+			"summary-anchor-unmatched",
+			left.Session.ID,
+			"in_memory",
+			"sqlite",
+			left,
+			right,
+			nil,
+		)
+		requireSummaryLastEventIndexDiff(t, diffs, float64(0), float64(-1))
+	})
 }
 
 func TestReplayConsistencySnapshotDiff_MutationsHavePrecisePaths(t *testing.T) {
@@ -2718,20 +2817,23 @@ func newReplaySnapshotFixture(
 	trackPayload string,
 	rawMemoryID string,
 ) replaySnapshot {
-	return newReplaySnapshotFixtureWithSummaryEventID(
+	eventID := "event-" + generated
+	return newReplaySnapshotFixtureWithSummaryAnchor(
 		generated,
 		stateJSON,
 		trackPayload,
 		rawMemoryID,
-		"event-semantic-1",
+		eventID,
+		eventID,
 	)
 }
 
-func newReplaySnapshotFixtureWithSummaryEventID(
+func newReplaySnapshotFixtureWithSummaryAnchor(
 	generated string,
 	stateJSON string,
 	trackPayload string,
 	rawMemoryID string,
+	eventID string,
 	summaryLastEventID string,
 ) replaySnapshot {
 	fixed := time.Date(2026, 7, 1, 1, 2, 3, 4, time.UTC)
@@ -2764,7 +2866,7 @@ func newReplaySnapshotFixtureWithSummaryEventID(
 		RequestID:    "request-1",
 		InvocationID: "invocation-1",
 		Author:       "agent",
-		ID:           "event-" + generated,
+		ID:           eventID,
 		Timestamp:    fixed.Add(time.Duration(len(generated)) * time.Minute),
 		Branch:       "branch/a",
 		FilterKey:    "branch/a",

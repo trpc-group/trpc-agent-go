@@ -84,8 +84,10 @@ summary 比较重点：
 - full summary：`session.SummaryFilterKeyAllContents`
 - filter-key summary，例如 `root/tools/weather`
 - summary overwrite/update
-- `SummaryBoundary` 的 version、filter key、cutoff
+- `SummaryBoundary` 的 version、filter key、cutoff，以及归一化后的 last-event 锚点
 - `GetSessionSummaryText` 返回值
+
+非空但无法映射到当前 snapshot 事件列表的 summary boundary anchor 会表示为 `last_event_index: -1`。
 
 track 比较重点：
 

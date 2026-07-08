@@ -84,8 +84,10 @@ Summary comparison covers:
 - full summary: `session.SummaryFilterKeyAllContents`
 - filter-key summaries such as `root/tools/weather`
 - summary overwrite/update
-- `SummaryBoundary` version, filter key, and cutoff
+- `SummaryBoundary` version, filter key, cutoff, and normalized last-event anchor
 - `GetSessionSummaryText` results
+
+A non-empty summary boundary anchor that cannot be mapped to the current snapshot events is reported as `last_event_index: -1`.
 
 Track comparison covers:
 
