@@ -97,6 +97,22 @@ func TestIsShellWrapper(t *testing.T) {
 	}
 }
 
+func TestParseCommand_Executables_EmptySegments(t *testing.T) {
+	// A command that produces segments with one empty argv.
+	p := &ParsedCommand{Segments: [][]string{{"ls"}, {""}}}
+	execs := p.Executables()
+	if len(execs) != 1 || execs[0] != "ls" {
+		t.Errorf("Executables with empty segment: got %v, want [ls]", execs)
+	}
+}
+
+func TestParseCommand_FirstExecutable_Empty(t *testing.T) {
+	p := &ParsedCommand{Segments: nil}
+	if got := p.FirstExecutable(); got != "" {
+		t.Errorf("FirstExecutable() on empty = %q, want empty", got)
+	}
+}
+
 func equalStrings(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

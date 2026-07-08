@@ -157,6 +157,12 @@ func (g *GuardedTool) Declaration() *tool.Declaration {
 // when the decision is allow. Ask and Deny are returned to the model
 // as a structured PermissionResult so the framework's normal
 // permission-skip machinery handles the rest.
+//
+// When a custom extractor is set (via WithGuardedExtractor), Call uses it
+// to build the ScanInput and then runs the guard's scanner directly.  When
+// no custom extractor is provided Call delegates to the guard's own
+// PermissionPolicy path so tools with standard "command" JSON arguments
+// get the full Guard.CheckToolPermission treatment.
 func (g *GuardedTool) Call(ctx context.Context, args []byte) (any, error) {
 	if g == nil || g.inner == nil {
 		return nil, fmt.Errorf("guarded tool: not configured")
@@ -168,14 +174,33 @@ func (g *GuardedTool) Call(ctx context.Context, args []byte) (any, error) {
 	if d := g.inner.Declaration(); d != nil {
 		decName = d.Name
 	}
-	decision, err := g.guard.CheckToolPermission(ctx, &tool.PermissionRequest{
-		ToolName:    decName,
-		Arguments:   args,
-		ToolCallID:  "",
-		Declaration: g.inner.Declaration(),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("guard check: %w", err)
+
+	var decision tool.PermissionDecision
+	var err error
+	if g.extractor != nil {
+		// Use the tool-level extractor to pull ScanInput from
+		// non-standard argument shapes, then scan via the guard's
+		// scanner directly.
+		input := g.extractor(args)
+		res := g.guard.scanner.Scan(input)
+		switch res.Decision {
+		case DecisionDeny:
+			decision = tool.DenyPermission(res.Reason)
+		case DecisionAsk:
+			decision = tool.AskPermission(res.Reason)
+		default:
+			decision = tool.AllowPermission()
+		}
+	} else {
+		decision, err = g.guard.CheckToolPermission(ctx, &tool.PermissionRequest{
+			ToolName:    decName,
+			Arguments:   args,
+			ToolCallID:  "",
+			Declaration: g.inner.Declaration(),
+		})
+		if err != nil {
+			return nil, fmt.Errorf("guard check: %w", err)
+		}
 	}
 	if decision.Action != tool.PermissionActionAllow {
 		return tool.PermissionResultFor(decName, decision), nil

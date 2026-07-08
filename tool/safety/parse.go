@@ -72,7 +72,7 @@ func (p *ParsedCommand) Executables() []string {
 	}
 	out := make([]string, 0, len(p.Segments))
 	for _, seg := range p.Segments {
-		if len(seg) == 0 {
+		if len(seg) == 0 || seg[0] == "" {
 			continue
 		}
 		out = append(out, seg[0])

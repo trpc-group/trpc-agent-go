@@ -9,6 +9,7 @@
 package safety
 
 import (
+	"os"
 	"testing"
 	"time"
 )
@@ -134,5 +135,34 @@ func TestNewReport_BackendDefault(t *testing.T) {
 	report := NewReport(nil, ScanInput{Command: "ls", ExecutorType: ""}, "t", time.Second)
 	if report.Backend != "local" {
 		t.Errorf("empty backend should default to local, got %s", report.Backend)
+	}
+}
+
+func TestLoadPolicyFile_InvalidYAML(t *testing.T) {
+	// Create a temp file with invalid YAML to test the parse error path.
+	tmpDir := t.TempDir()
+	invalidPath := tmpDir + "/invalid.yaml"
+	os.WriteFile(invalidPath, []byte(":invalid: yaml: [[["), 0644)
+	_, err := LoadPolicyFile(invalidPath)
+	if err == nil {
+		t.Error("expected error for invalid YAML")
+	}
+}
+
+func TestLoadPolicyFile_EmptyDefaultsToSensibleValues(t *testing.T) {
+	// Load with a YAML that has empty MaxTimeoutSeconds/MaxOutputBytes
+	// to exercise the zero-value default path.
+	tmpDir := t.TempDir()
+	path := tmpDir + "/empty.yaml"
+	os.WriteFile(path, []byte("max_timeout_seconds: 0\nmax_output_bytes: 0\n"), 0644)
+	p, err := LoadPolicyFile(path)
+	if err != nil {
+		t.Fatalf("LoadPolicyFile: %v", err)
+	}
+	if p.MaxTimeoutSeconds == 0 {
+		t.Error("MaxTimeoutSeconds should have been defaulted")
+	}
+	if p.MaxOutputBytes == 0 {
+		t.Error("MaxOutputBytes should have been defaulted")
 	}
 }

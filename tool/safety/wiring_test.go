@@ -10,6 +10,7 @@ package safety
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -265,4 +266,178 @@ type errorStub struct{}
 func (e *errorStub) Declaration() *tool.Declaration { return &tool.Declaration{Name: "x"} }
 func (e *errorStub) Call(context.Context, []byte) (any, error) {
 	return nil, errors.New("boom")
+}
+
+// TestWrapTool_WithGuardedExtractor verifies that WithGuardedExtractor
+// overrides the extractor for a single wrapped tool.
+func TestWrapTool_WithGuardedExtractor(t *testing.T) {
+	stub := &stubTool{name: "custom_tool", desc: "custom"}
+	guard := NewGuard(WithRules(NewDangerousCommandRule()))
+
+	extractorCalled := false
+	customFn := func(args []byte) ScanInput {
+		extractorCalled = true
+		var raw map[string]string
+		json.Unmarshal(args, &raw)
+		return ScanInput{Command: raw["cmd"], ExecutorType: "local"}
+	}
+
+	wrapped := WrapTool(stub, guard, WithGuardedExtractor(customFn))
+
+	// Send args with "cmd" field (not "command") — safe command so inner tool runs.
+	args, _ := json.Marshal(map[string]string{"cmd": "ls"})
+	out, err := wrapped.Call(context.Background(), args)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !extractorCalled {
+		t.Error("custom extractor was not invoked")
+	}
+	// Inner tool should have been called (safe command).
+	if stub.callCount != 1 {
+		t.Errorf("inner tool call count = %d, want 1", stub.callCount)
+	}
+	_ = out
+}
+
+// TestGuardedToolSet_Close verifies that Close forwards to the inner ToolSet.
+func TestGuardedToolSet_Close(t *testing.T) {
+	inner := &stubToolSet{name: "test_ts", tools: nil}
+	guard := NewGuard()
+	ts := WrapToolSet(inner, guard)
+	if err := ts.Close(); err != nil {
+		t.Errorf("Close should succeed, got %v", err)
+	}
+}
+
+// TestGuardedTool_Declaration_Nil verifies that a nil GuardedTool
+// returns nil from Declaration().
+func TestGuardedTool_Declaration_Nil(t *testing.T) {
+	var gt *GuardedTool
+	if d := gt.Declaration(); d != nil {
+		t.Errorf("nil GuardedTool should return nil declaration, got %+v", d)
+	}
+}
+
+// declOnlyTool is a minimal tool.Tool that does NOT implement CallableTool.
+type declOnlyTool struct {
+	name string
+	desc string
+}
+
+func (d *declOnlyTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{Name: d.name, Description: d.desc}
+}
+
+// TestWrapTools_NonCallableTool passes a non-CallableTool tool through unchanged.
+func TestWrapTools_NonCallableTool(t *testing.T) {
+	dt := &declOnlyTool{name: "decl_only", desc: "decl"}
+	guard := NewGuard(WithRules(NewDangerousCommandRule()))
+	wrapped := WrapTools([]tool.Tool{dt}, guard)
+	if len(wrapped) != 1 {
+		t.Fatalf("expected 1 tool, got %d", len(wrapped))
+	}
+	// Non-callable tools should pass through unchanged.
+	if wrapped[0] != tool.Tool(dt) {
+		t.Error("non-callable tool should pass through unchanged")
+	}
+}
+
+// TestWrapTools_NilGuardPassesThrough confirms nil guard returns original slice.
+func TestWrapTools_NilGuardPassesThrough(t *testing.T) {
+	stubs := []tool.Tool{&stubTool{name: "t1", desc: "d1"}}
+	got := WrapTools(stubs, nil)
+	if len(got) != len(stubs) || got[0] != stubs[0] {
+		t.Error("nil guard should return original slice")
+	}
+}
+
+// TestWrapTools_EmptySlicePassesThrough confirms empty/nil slice returns unchanged.
+func TestWrapTools_EmptySlicePassesThrough(t *testing.T) {
+	guard := NewGuard()
+	got := WrapTools(nil, guard)
+	if got != nil {
+		t.Errorf("nil slice should return nil, got %v", got)
+	}
+}
+
+// TestGuardedTool_Call_WithExtractor_Deny verifies that a custom extractor
+// path correctly denies dangerous commands.
+func TestGuardedTool_Call_WithExtractor_Deny(t *testing.T) {
+	stub := &stubTool{name: "exec_command", desc: "stub"}
+	guard := NewGuard(WithRules(NewDangerousCommandRule()))
+
+	customFn := func(args []byte) ScanInput {
+		var raw map[string]string
+		json.Unmarshal(args, &raw)
+		return ScanInput{Command: raw["script"], ExecutorType: "local"}
+	}
+
+	wrapped := WrapTool(stub, guard, WithGuardedExtractor(customFn))
+	args, _ := json.Marshal(map[string]string{"script": "rm -rf /"})
+	out, err := wrapped.Call(context.Background(), args)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if stub.callCount != 0 {
+		t.Error("inner tool should not be called on deny")
+	}
+	pr, ok := out.(tool.PermissionResult)
+	if !ok {
+		t.Fatalf("expected PermissionResult, got %T", out)
+	}
+	if pr.Status != tool.PermissionResultStatusDenied {
+		t.Errorf("expected denied, got %s", pr.Status)
+	}
+}
+
+// TestGuardedTool_Call_WithExtractor_Ask verifies the ask path through custom extractor.
+func TestGuardedTool_Call_WithExtractor_Ask(t *testing.T) {
+	stub := &stubTool{name: "exec_command", desc: "stub"}
+	guard := NewGuard(WithRules(NewAskForReviewRule()))
+
+	customFn := func(args []byte) ScanInput {
+		var raw map[string]string
+		json.Unmarshal(args, &raw)
+		return ScanInput{Command: raw["op"], ExecutorType: "local"}
+	}
+
+	wrapped := WrapTool(stub, guard, WithGuardedExtractor(customFn))
+	args, _ := json.Marshal(map[string]string{"op": "rm -r ./build"})
+	out, err := wrapped.Call(context.Background(), args)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	pr, ok := out.(tool.PermissionResult)
+	if !ok {
+		t.Fatalf("expected PermissionResult, got %T", out)
+	}
+	if pr.Status != tool.PermissionResultStatusApprovalRequired {
+		t.Errorf("expected approval-required, got %s", pr.Status)
+	}
+}
+
+// TestGuardedTool_Call_NilDeclaration exercises the path where
+// the inner tool's Declaration returns nil.
+func TestGuardedTool_Call_NilDeclaration(t *testing.T) {
+	// stubTool returns a non-nil Declaration, so use a custom stub here.
+	stub := &nilDeclTool{}
+	guard := NewGuard(WithRules(NewDangerousCommandRule()))
+
+	wrapped := WrapTool(stub, guard)
+	out, err := wrapped.Call(context.Background(), jsonCommandArgs("ls"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, ok := out.(map[string]string); !ok {
+		t.Errorf("expected inner output, got %T", out)
+	}
+}
+
+// nilDeclTool returns nil from Declaration().
+type nilDeclTool struct{}
+
+func (n *nilDeclTool) Declaration() *tool.Declaration { return nil }
+func (n *nilDeclTool) Call(_ context.Context, _ []byte) (any, error) {
+	return map[string]string{"ok": "nil_decl"}, nil
 }

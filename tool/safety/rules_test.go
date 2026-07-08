@@ -664,6 +664,64 @@ func TestNetworkAccessRule_AllowlistWildcardExact(t *testing.T) {
 	}
 }
 
+// TestNetworkAccessRule_WithAllowedDomains verifies the method form
+// of setting the allow list.
+func TestNetworkAccessRule_WithAllowedDomains(t *testing.T) {
+	rule := NewNetworkAccessRule()
+	rule.WithAllowedDomains([]string{"github.com"})
+	// Should match and downgrade to ask.
+	res := rule.Check(ScanInput{Command: "curl https://github.com/foo/bar"})
+	if res == nil || res.Decision != DecisionAsk {
+		t.Errorf("expected DecisionAsk for allowlisted domain via WithAllowedDomains, got %+v", res)
+	}
+}
+
+// TestDecisionPriority covers the decisionPriority helper.
+func TestDecisionPriority(t *testing.T) {
+	tests := []struct {
+		d    Decision
+		want int
+	}{
+		{DecisionDeny, 3},
+		{DecisionAsk, 2},
+		{DecisionAllow, 1},
+		{Decision("unknown"), 0},
+	}
+	for _, tt := range tests {
+		t.Run(string(tt.d), func(t *testing.T) {
+			got := decisionPriority(tt.d)
+			if got != tt.want {
+				t.Errorf("decisionPriority(%q) = %d, want %d", tt.d, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestIsMoreSevere_DenyWinsOverAsk confirms deny overrides ask regardless of risk.
+func TestIsMoreSevere_DenyWinsOverAsk(t *testing.T) {
+	denyRes := &ScanResult{Decision: DecisionDeny, RiskLevel: RiskLow}
+	askRes := &ScanResult{Decision: DecisionAsk, RiskLevel: RiskCritical}
+	if !isMoreSevere(denyRes, askRes) {
+		t.Error("deny should be more severe than ask, regardless of risk")
+	}
+}
+
+// TestIsMoreSevere_HigherRiskSameDecision confirms risk matters within the same decision.
+func TestIsMoreSevere_HigherRiskSameDecision(t *testing.T) {
+	highRisk := &ScanResult{Decision: DecisionAsk, RiskLevel: RiskHigh}
+	mediumRisk := &ScanResult{Decision: DecisionAsk, RiskLevel: RiskMedium}
+	if !isMoreSevere(highRisk, mediumRisk) {
+		t.Error("higher risk should win within same decision")
+	}
+}
+
+// TestIsMoreSevere_NilCurrent confirms first result is always more severe.
+func TestIsMoreSevere_NilCurrent(t *testing.T) {
+	if !isMoreSevere(&ScanResult{Decision: DecisionAllow, RiskLevel: RiskNone}, nil) {
+		t.Error("any result should be more severe than nil current")
+	}
+}
+
 // TestScanner_PolicyAllowsListedCurl is the scanner-level precedence
 // test called out in the policy-aware review on PR #2044. With the
 // network_client_deny split, "curl https://github.com/..." plus

@@ -106,6 +106,26 @@ func TestRedactor_RedactAuditEvent(t *testing.T) {
 	}
 }
 
+// TestRedactor_RedactCommand verifies the convenience wrapper RedactCommand.
+func TestRedactor_RedactCommand(t *testing.T) {
+	r := NewRedactor()
+	got := r.RedactCommand("api_key=supersecret12345")
+	if got == "api_key=supersecret12345" {
+		t.Error("expected RedactCommand to redact the key, got unchanged")
+	}
+	if !contains(got, "***REDACTED***") {
+		t.Errorf("expected redaction marker in output, got %q", got)
+	}
+}
+
+// TestRedactor_RedactEmptyCommand covers empty input for RedactCommand.
+func TestRedactor_RedactCommand_Empty(t *testing.T) {
+	r := NewRedactor()
+	if got := r.RedactCommand(""); got != "" {
+		t.Errorf("expected empty string, got %q", got)
+	}
+}
+
 // contains is a small helper to avoid pulling in strings for tests.
 func contains(s, sub string) bool {
 	return len(s) >= len(sub) && indexOf(s, sub) >= 0
