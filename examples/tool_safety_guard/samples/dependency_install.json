@@ -1,0 +1,6 @@
+{
+  "id": "dependency_install",
+  "tool_name": "workspace_exec",
+  "backend": "workspaceexec",
+  "command": "npm install left-pad"
+}

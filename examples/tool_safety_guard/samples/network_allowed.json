@@ -1,0 +1,7 @@
+{
+  "id": "network_allowed",
+  "tool_name": "workspace_exec",
+  "backend": "workspaceexec",
+  "command": "curl https://proxy.example.test/archive.tar.gz",
+  "cwd": "."
+}

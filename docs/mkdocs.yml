@@ -32,6 +32,7 @@ nav:
       - Skill: skill.md
       - Evolution: evolution.md
       - Tool: tool.md
+      - Tool Safety Guard: tool-safety-guard.md
       - Session:
           - Overview: session/index.md
           - Session Summary: session/summary.md
@@ -137,6 +138,7 @@ plugins:
                 - Skill: skill.md
                 - Evolution: evolution.md
                 - Tool: tool.md
+                - Tool Safety Guard: tool-safety-guard.md
                 - Session:
                     - Overview: session/index.md
                     - Session Summary: session/summary.md

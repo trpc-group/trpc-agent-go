@@ -14,9 +14,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/safety"
 )
 
 // Option configures the code execution tool.
@@ -26,6 +28,7 @@ type config struct {
 	name        string
 	description string
 	languages   []string
+	safety      *safety.Scanner
 }
 
 // WithName sets the tool name.
@@ -44,6 +47,11 @@ func WithLanguages(langs ...string) Option {
 		// Defensive copy to avoid caller mutation.
 		c.languages = append([]string(nil), langs...)
 	}
+}
+
+// WithSafetyScanner configures a pre-execution safety scanner for code blocks.
+func WithSafetyScanner(scanner *safety.Scanner) Option {
+	return func(c *config) { c.safety = scanner }
 }
 
 func defaultConfig() config {
@@ -223,8 +231,52 @@ func (t *executeCodeTool) Call(ctx context.Context, args []byte) (any, error) {
 			return codeexecutor.CodeExecutionResult{Output: fmt.Sprintf("Error: unsupported language: %d: %s", i, b.Language)}, nil
 		}
 	}
+	if err := t.checkSafety(ctx, input); err != nil {
+		return nil, err
+	}
 
 	return t.executor.ExecuteCode(ctx, input)
+}
+
+func (t *executeCodeTool) checkSafety(
+	ctx context.Context,
+	input codeexecutor.CodeExecutionInput,
+) error {
+	if t.cfg.safety == nil {
+		return nil
+	}
+	var scriptParts []string
+	var langParts []string
+	for _, block := range input.CodeBlocks {
+		langParts = append(langParts, block.Language)
+		scriptParts = append(scriptParts, block.Code)
+	}
+	report, err := t.cfg.safety.Scan(ctx, safety.ExecutionRequest{
+		ToolName: t.cfg.name,
+		Backend:  safety.BackendCodeExec,
+		Script:   strings.Join(scriptParts, "\n"),
+		Language: strings.Join(langParts, ","),
+	})
+	if err != nil {
+		return err
+	}
+	if report.Blocked {
+		return fmt.Errorf(
+			"execute_code blocked by tool safety: decision=%s risk=%s rule=%s recommendation=%s",
+			report.Decision,
+			report.RiskLevel,
+			firstCodeExecRuleID(report.RuleIDs),
+			report.Recommendation,
+		)
+	}
+	return nil
+}
+
+func firstCodeExecRuleID(ids []string) string {
+	if len(ids) == 0 {
+		return ""
+	}
+	return ids[0]
 }
 
 func (t *executeCodeTool) isSupportedLanguage(language string) bool {

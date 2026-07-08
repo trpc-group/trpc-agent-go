@@ -34,6 +34,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/safety"
 )
 
 const (
@@ -76,6 +77,8 @@ type ExecTool struct {
 	// "eval curl ..." or "sh -c '...'".
 	allowedCmds []string
 	deniedCmds  []string
+
+	safetyScanner *safety.Scanner
 
 	mu       sync.Mutex
 	sessions map[string]*execSession
@@ -251,6 +254,15 @@ func WithAllowedCommands(cmds ...string) func(*ExecTool) {
 func WithDeniedCommands(cmds ...string) func(*ExecTool) {
 	return func(t *ExecTool) {
 		t.setDeniedCommands(cmds)
+	}
+}
+
+// WithSafetyScanner configures a pre-execution safety scanner for
+// workspace_exec. When the scanner returns deny or ask, the command
+// is rejected before any workspace process is started.
+func WithSafetyScanner(scanner *safety.Scanner) func(*ExecTool) {
+	return func(t *ExecTool) {
+		t.safetyScanner = scanner
 	}
 }
 
@@ -601,6 +613,9 @@ func (t *ExecTool) prepareExec(
 	ctx context.Context,
 	in execInput,
 ) (execRequest, error) {
+	if err := t.checkSafety(ctx, in); err != nil {
+		return execRequest{}, err
+	}
 	if err := t.checkCommandPolicy(in.Command); err != nil {
 		return execRequest{}, err
 	}
@@ -643,6 +658,46 @@ func (t *ExecTool) prepareExec(
 			Timeout:  execTimeout(timeout),
 		},
 	}, nil
+}
+
+func (t *ExecTool) checkSafety(ctx context.Context, in execInput) error {
+	if t.safetyScanner == nil {
+		return nil
+	}
+	timeout := firstIntValue(in.TimeoutSec, in.TimeoutSecOld)
+	if timeout <= 0 {
+		timeout = in.Timeout
+	}
+	report, err := t.safetyScanner.Scan(ctx, safety.ExecutionRequest{
+		ToolName:   "workspace_exec",
+		Backend:    safety.BackendWorkspaceExec,
+		Command:    in.Command,
+		Cwd:        in.Cwd,
+		Env:        in.Env,
+		TimeoutMS:  int64(timeout) * 1000,
+		TTY:        firstBoolValue(in.TTY, in.PTY),
+		Background: in.Background,
+	})
+	if err != nil {
+		return err
+	}
+	if report.Blocked {
+		return fmt.Errorf(
+			"workspace_exec blocked by tool safety: decision=%s risk=%s rule=%s recommendation=%s",
+			report.Decision,
+			report.RiskLevel,
+			firstRuleID(report.RuleIDs),
+			report.Recommendation,
+		)
+	}
+	return nil
+}
+
+func firstRuleID(ids []string) string {
+	if len(ids) == 0 {
+		return ""
+	}
+	return ids[0]
 }
 
 // checkCommandPolicy enforces the optional allow/deny lists. When no

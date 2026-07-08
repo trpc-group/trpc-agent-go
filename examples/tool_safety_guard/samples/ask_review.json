@@ -1,0 +1,7 @@
+{
+  "id": "ask_review",
+  "tool_name": "execute_code",
+  "backend": "codeexec",
+  "language": "bash",
+  "script": "go install example.com/unreviewed/tool@latest"
+}

@@ -1,0 +1,9 @@
+{
+  "id": "safe_go_test",
+  "tool_name": "workspace_exec",
+  "backend": "workspaceexec",
+  "command": "go test ./tool/safety",
+  "cwd": ".",
+  "timeout_ms": 120000,
+  "max_output_bytes": 1048576
+}

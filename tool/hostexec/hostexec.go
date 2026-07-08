@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/safety"
 )
 
 const (
@@ -48,6 +49,7 @@ type config struct {
 	maxLines int
 	jobTTL   time.Duration
 	baseEnv  map[string]string
+	safety   *safety.Scanner
 }
 
 // Option configures the hostexec tool set.
@@ -95,6 +97,14 @@ func WithBaseEnv(env map[string]string) Option {
 	}
 }
 
+// WithSafetyScanner configures a pre-execution safety scanner for host
+// command execution. Blocked decisions stop before the host shell starts.
+func WithSafetyScanner(scanner *safety.Scanner) Option {
+	return func(c *config) {
+		c.safety = scanner
+	}
+}
+
 func defaultConfig() config {
 	return config{
 		baseDir: defaultBaseDir,
@@ -136,7 +146,7 @@ func NewToolSet(opts ...Option) (tool.ToolSet, error) {
 		set.name = defaultToolSetName
 	}
 	set.tools = []tool.Tool{
-		&execCommandTool{mgr: mgr, baseDir: baseDir},
+		&execCommandTool{mgr: mgr, baseDir: baseDir, safety: cfg.safety},
 		&writeStdinTool{mgr: mgr},
 		&killSessionTool{mgr: mgr},
 	}
@@ -168,6 +178,7 @@ func (s *toolSet) Name() string {
 type execCommandTool struct {
 	mgr     *manager
 	baseDir string
+	safety  *safety.Scanner
 }
 
 func (t *execCommandTool) Declaration() *tool.Declaration {
@@ -286,6 +297,9 @@ func (t *execCommandTool) Call(
 	if strings.TrimSpace(in.Command) == "" {
 		return nil, errors.New(errCommandRequired)
 	}
+	if err := t.checkSafety(ctx, in); err != nil {
+		return nil, err
+	}
 
 	workdir, err := resolveWorkdir(in.Workdir, t.baseDir)
 	if err != nil {
@@ -307,6 +321,47 @@ func (t *execCommandTool) Call(
 		return nil, err
 	}
 	return mapExecResult(res), nil
+}
+
+func (t *execCommandTool) checkSafety(ctx context.Context, in execInput) error {
+	if t.safety == nil {
+		return nil
+	}
+	timeout := firstInt(in.TimeoutSec, in.TimeoutSecOld)
+	var timeoutMS int64
+	if timeout != nil {
+		timeoutMS = int64(*timeout) * 1000
+	}
+	report, err := t.safety.Scan(ctx, safety.ExecutionRequest{
+		ToolName:   toolExecCommand,
+		Backend:    safety.BackendHostExec,
+		Command:    in.Command,
+		Cwd:        in.Workdir,
+		Env:        in.Env,
+		TimeoutMS:  timeoutMS,
+		TTY:        firstBool(in.TTY, in.PTY),
+		Background: in.Background,
+	})
+	if err != nil {
+		return err
+	}
+	if report.Blocked {
+		return fmt.Errorf(
+			"exec_command blocked by tool safety: decision=%s risk=%s rule=%s recommendation=%s",
+			report.Decision,
+			report.RiskLevel,
+			firstHostRuleID(report.RuleIDs),
+			report.Recommendation,
+		)
+	}
+	return nil
+}
+
+func firstHostRuleID(ids []string) string {
+	if len(ids) == 0 {
+		return ""
+	}
+	return ids[0]
 }
 
 type writeStdinTool struct {

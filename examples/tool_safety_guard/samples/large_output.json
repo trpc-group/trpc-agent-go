@@ -1,0 +1,7 @@
+{
+  "id": "large_output",
+  "tool_name": "workspace_exec",
+  "backend": "workspaceexec",
+  "command": "yes output",
+  "max_output_bytes": 1073741824
+}
