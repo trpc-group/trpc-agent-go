@@ -513,6 +513,14 @@ func (r *workspaceRuntime) RunProgram(
 	cwd := ws.Path
 	if spec.Cwd != "" {
 		cwd = path.Join(ws.Path, filepath.ToSlash(spec.Cwd))
+		// Reject a Cwd that escapes the workspace before emitting `cd`.
+		// Without this a direct RunProgram caller could run anywhere
+		// inside the sandbox by passing spec.Cwd = "../../etc".
+		if !pathUnder(cwd, ws.Path) {
+			return codeexecutor.RunResult{}, fmt.Errorf(
+				"opensandbox: spec.Cwd %q escapes workspace", spec.Cwd,
+			)
+		}
 	}
 
 	skillsDir := path.Join(ws.Path, codeexecutor.DirSkills)

@@ -530,6 +530,29 @@ func TestWorkspace_RunProgram_TimeoutWithinBudget(t *testing.T) {
 		"spec.Timeout 20s should not be clamped when within budget")
 }
 
+// TestWorkspace_RunProgram_CwdEscapesWorkspace verifies that a
+// spec.Cwd that resolves outside ws.Path is rejected before the
+// command is sent to the sandbox. Without this check a direct
+// RunProgram caller could run anywhere inside the sandbox.
+func TestWorkspace_RunProgram_CwdEscapesWorkspace(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	ws, err := exec.CreateWorkspace(context.Background(), "exec-1", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+
+	_, err = exec.RunProgram(context.Background(), ws, codeexecutor.RunProgramSpec{
+		Cmd:     "echo",
+		Args:    []string{"ok"},
+		Cwd:     "../../etc",
+		Timeout: 5 * time.Second,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "escapes workspace")
+}
+
 func TestWorkspace_RunProgram_CleanEnv(t *testing.T) {
 	m := newMockServer(t)
 	defer m.close()
