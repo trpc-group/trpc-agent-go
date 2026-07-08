@@ -73,123 +73,230 @@ func (b *inMemoryBackend) Apply(ctx context.Context, c ReplayCase) (*Snapshot, e
 	if err != nil {
 		return nil, err
 	}
-	stateOverlay := newStateOverlay()
-	logicalMemoryIDs := map[string]string{}
-	seenEvents := map[string]struct{}{}
-	unsupported := make([]UnsupportedFeature, 0)
+	run := &inMemoryRun{
+		backend:          b,
+		ctx:              ctx,
+		caseDef:          c,
+		sessions:         sessions,
+		memories:         memories,
+		sess:             sess,
+		stateOverlay:     newStateOverlay(),
+		logicalMemoryIDs: map[string]string{},
+		seenEvents:       map[string]struct{}{},
+	}
 
-	for _, op := range c.Operations {
-		switch op.Kind {
-		case OpAppendEvent:
-			overlayEventStateDelta(stateOverlay, op.Event, seenEvents)
-			if err := appendEventOnce(ctx, sessions, sess, op.Event, seenEvents); err != nil {
-				return nil, err
-			}
-		case OpRetryEvent:
-			overlayEventStateDelta(stateOverlay, op.Event, seenEvents)
-			if err := appendEventOnce(ctx, sessions, sess, op.Event, seenEvents); err != nil {
-				return nil, err
-			}
-			if err := appendEventOnce(ctx, sessions, sess, op.Event, seenEvents); err != nil {
-				return nil, err
-			}
-		case OpSetState:
-			value := cloneRaw(op.State.Value)
-			if err := sessions.UpdateSessionState(ctx, c.Key, session.StateMap{op.State.Key: value}); err != nil {
-				return nil, err
-			}
-			sess.SetState(op.State.Key, value)
-			stateOverlay.set(op.State.Key, value)
-		case OpDeleteState:
-			sess.DeleteState(op.State.Key)
-			stateOverlay.delete(op.State.Key)
-		case OpClearState:
-			sess.State = make(session.StateMap)
-			stateOverlay.clear()
-		case OpAddMemory:
-			if err := memories.AddMemory(ctx, userKey(c.Key), op.Memory.Content, op.Memory.Topics, memoryOptions(op.Memory)...); err != nil {
-				return nil, err
-			}
-			if op.Memory.ID != "" {
-				id, err := findMemoryID(ctx, memories, c.Key, op.Memory.Content)
-				if err != nil {
-					return nil, err
-				}
-				logicalMemoryIDs[op.Memory.ID] = id
-			}
-		case OpUpdateMemory:
-			id := logicalMemoryIDs[op.Memory.ID]
-			result := &memory.UpdateResult{}
-			err := memories.UpdateMemory(
-				ctx,
-				memory.Key{AppName: c.Key.AppName, UserID: c.Key.UserID, MemoryID: id},
-				op.Memory.Content,
-				op.Memory.Topics,
-				append(memoryUpdateOptions(op.Memory), memory.WithUpdateResult(result))...,
-			)
-			if err != nil {
-				return nil, err
-			}
-			if result.MemoryID != "" {
-				logicalMemoryIDs[op.Memory.ID] = result.MemoryID
-			}
-		case OpDeleteMemory:
-			id := logicalMemoryIDs[op.Memory.ID]
-			if err := memories.DeleteMemory(ctx, memory.Key{AppName: c.Key.AppName, UserID: c.Key.UserID, MemoryID: id}); err != nil {
-				return nil, err
-			}
-		case OpClearMemory:
-			if err := memories.ClearMemories(ctx, userKey(c.Key)); err != nil {
-				return nil, err
-			}
-		case OpWriteSummary:
-			if err := sessions.CreateSessionSummary(ctx, sess, op.Summary.FilterKey, op.Summary.Force); err != nil {
-				return nil, err
-			}
-			fresh, err := sessions.GetSession(ctx, c.Key)
-			if err != nil {
-				return nil, err
-			}
-			sess = fresh
-		case OpAppendTrack:
-			raw, err := json.Marshal(op.Track.Payload)
-			if err != nil {
-				return nil, err
-			}
-			ts := op.Track.Timestamp
-			if ts.IsZero() {
-				ts = deterministicEventTime(string(op.Track.Name))
-			}
-			if err := sessions.AppendTrackEvent(ctx, sess, &session.TrackEvent{
-				Track:     op.Track.Name,
-				Payload:   raw,
-				Timestamp: ts,
-			}); err != nil {
-				return nil, err
-			}
-		case OpUnsupportedProbe:
-			if !b.Supports(op.Unsupported) {
-				unsupported = append(unsupported, UnsupportedFeature{
-					Capability:  op.Unsupported,
-					AllowedDiff: true,
-					Explanation: b.Unsupported(op.Unsupported),
-				})
-			}
-		}
+	if err := run.applyOperations(); err != nil {
+		return nil, err
 	}
 	got, err := sessions.GetSession(ctx, c.Key)
 	if err != nil {
 		return nil, err
 	}
-	stateOverlay.apply(got)
+	run.stateOverlay.apply(got)
 	memoryEntries, err := memories.ReadMemories(ctx, userKey(c.Key), 100)
 	if err != nil {
 		return nil, err
 	}
-	return normalizeSession(c.Name, b.Name(), got, memoryEntries, unsupported), nil
+	return normalizeSession(c.Name, b.Name(), got, memoryEntries, run.unsupported), nil
 }
 
 func (b *inMemoryBackend) Close() error { return nil }
+
+type inMemoryRun struct {
+	backend          *inMemoryBackend
+	ctx              context.Context
+	caseDef          ReplayCase
+	sessions         *sessinmemory.SessionService
+	memories         memory.Service
+	sess             *session.Session
+	stateOverlay     *stateOverlay
+	logicalMemoryIDs map[string]string
+	seenEvents       map[string]struct{}
+	unsupported      []UnsupportedFeature
+}
+
+func (r *inMemoryRun) applyOperations() error {
+	for _, op := range r.caseDef.Operations {
+		if err := r.applyOperation(op); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *inMemoryRun) applyOperation(op Operation) error {
+	switch op.Kind {
+	case OpAppendEvent, OpRetryEvent:
+		return r.applyEventOperation(op)
+	case OpSetState, OpDeleteState, OpClearState:
+		return r.applyStateOperation(op)
+	case OpAddMemory, OpUpdateMemory, OpDeleteMemory, OpClearMemory:
+		return r.applyMemoryOperation(op)
+	case OpWriteSummary:
+		return r.applySummaryOperation(op)
+	case OpAppendTrack:
+		return r.applyTrackOperation(op)
+	case OpUnsupportedProbe:
+		r.recordUnsupported(op.Unsupported)
+	}
+	return nil
+}
+
+func (r *inMemoryRun) applyEventOperation(op Operation) error {
+	overlayEventStateDelta(r.stateOverlay, op.Event, r.seenEvents)
+	if err := appendEventOnce(r.ctx, r.sessions, r.sess, op.Event, r.seenEvents); err != nil {
+		return err
+	}
+	if op.Kind == OpRetryEvent {
+		return appendEventOnce(r.ctx, r.sessions, r.sess, op.Event, r.seenEvents)
+	}
+	return nil
+}
+
+func (r *inMemoryRun) applyStateOperation(op Operation) error {
+	switch op.Kind {
+	case OpSetState:
+		if op.State == nil {
+			return nil
+		}
+		value := cloneRaw(op.State.Value)
+		if err := r.sessions.UpdateSessionState(
+			r.ctx,
+			r.caseDef.Key,
+			session.StateMap{op.State.Key: value},
+		); err != nil {
+			return err
+		}
+		r.sess.SetState(op.State.Key, value)
+		r.stateOverlay.set(op.State.Key, value)
+	case OpDeleteState:
+		if op.State != nil {
+			r.sess.DeleteState(op.State.Key)
+			r.stateOverlay.delete(op.State.Key)
+		}
+	case OpClearState:
+		r.sess.State = make(session.StateMap)
+		r.stateOverlay.clear()
+	}
+	return nil
+}
+
+func (r *inMemoryRun) applyMemoryOperation(op Operation) error {
+	switch op.Kind {
+	case OpAddMemory:
+		return r.addMemory(op.Memory)
+	case OpUpdateMemory:
+		return r.updateMemory(op.Memory)
+	case OpDeleteMemory:
+		return r.deleteMemory(op.Memory)
+	case OpClearMemory:
+		return r.memories.ClearMemories(r.ctx, userKey(r.caseDef.Key))
+	default:
+		return nil
+	}
+}
+
+func (r *inMemoryRun) addMemory(spec *MemorySpec) error {
+	if spec == nil {
+		return nil
+	}
+	if err := r.memories.AddMemory(
+		r.ctx,
+		userKey(r.caseDef.Key),
+		spec.Content,
+		spec.Topics,
+		memoryOptions(spec)...,
+	); err != nil {
+		return err
+	}
+	if spec.ID == "" {
+		return nil
+	}
+	id, err := findMemoryID(r.ctx, r.memories, r.caseDef.Key, spec.Content)
+	if err != nil {
+		return err
+	}
+	r.logicalMemoryIDs[spec.ID] = id
+	return nil
+}
+
+func (r *inMemoryRun) updateMemory(spec *MemorySpec) error {
+	if spec == nil {
+		return nil
+	}
+	result := &memory.UpdateResult{}
+	err := r.memories.UpdateMemory(
+		r.ctx,
+		memory.Key{
+			AppName:  r.caseDef.Key.AppName,
+			UserID:   r.caseDef.Key.UserID,
+			MemoryID: r.logicalMemoryIDs[spec.ID],
+		},
+		spec.Content,
+		spec.Topics,
+		append(memoryUpdateOptions(spec), memory.WithUpdateResult(result))...,
+	)
+	if err != nil {
+		return err
+	}
+	if result.MemoryID != "" {
+		r.logicalMemoryIDs[spec.ID] = result.MemoryID
+	}
+	return nil
+}
+
+func (r *inMemoryRun) deleteMemory(spec *MemorySpec) error {
+	if spec == nil {
+		return nil
+	}
+	return r.memories.DeleteMemory(r.ctx, memory.Key{
+		AppName:  r.caseDef.Key.AppName,
+		UserID:   r.caseDef.Key.UserID,
+		MemoryID: r.logicalMemoryIDs[spec.ID],
+	})
+}
+
+func (r *inMemoryRun) applySummaryOperation(op Operation) error {
+	if op.Summary == nil {
+		return nil
+	}
+	if err := r.sessions.CreateSessionSummary(
+		r.ctx,
+		r.sess,
+		op.Summary.FilterKey,
+		op.Summary.Force,
+	); err != nil {
+		return err
+	}
+	fresh, err := r.sessions.GetSession(r.ctx, r.caseDef.Key)
+	if err != nil {
+		return err
+	}
+	r.sess = fresh
+	return nil
+}
+
+func (r *inMemoryRun) applyTrackOperation(op Operation) error {
+	if op.Track == nil {
+		return nil
+	}
+	trackEvent, err := trackEventFromSpec(op.Track)
+	if err != nil {
+		return err
+	}
+	return r.sessions.AppendTrackEvent(r.ctx, r.sess, trackEvent)
+}
+
+func (r *inMemoryRun) recordUnsupported(cap Capability) {
+	if r.backend.Supports(cap) {
+		return
+	}
+	r.unsupported = append(r.unsupported, UnsupportedFeature{
+		Capability:  cap,
+		AllowedDiff: true,
+		Explanation: r.backend.Unsupported(cap),
+	})
+}
 
 type jsonFileBackend struct {
 	dir string
@@ -221,6 +328,7 @@ func (b *jsonFileBackend) Unsupported(cap Capability) string {
 }
 
 func (b *jsonFileBackend) Apply(ctx context.Context, c ReplayCase) (*Snapshot, error) {
+	_ = ctx
 	dir := b.dir
 	if dir == "" {
 		var err error
@@ -238,90 +346,168 @@ func (b *jsonFileBackend) Apply(ctx context.Context, c ReplayCase) (*Snapshot, e
 	if err := writeStore(path, store); err != nil {
 		return nil, err
 	}
-	logicalMemoryIDs := map[string]string{}
-	seenEvents := map[string]struct{}{}
-	unsupported := make([]UnsupportedFeature, 0)
-
-	for _, op := range c.Operations {
-		loaded, err := readStore(path)
-		if err != nil {
-			return nil, err
-		}
-		switch op.Kind {
-		case OpAppendEvent:
-			if err := appendFileEvent(loaded.Session, op.Event, seenEvents); err != nil {
-				return nil, err
-			}
-		case OpRetryEvent:
-			if err := appendFileEvent(loaded.Session, op.Event, seenEvents); err != nil {
-				return nil, err
-			}
-			if err := appendFileEvent(loaded.Session, op.Event, seenEvents); err != nil {
-				return nil, err
-			}
-		case OpSetState:
-			loaded.Session.SetState(op.State.Key, cloneRaw(op.State.Value))
-		case OpDeleteState:
-			loaded.Session.DeleteState(op.State.Key)
-		case OpClearState:
-			loaded.Session.State = make(session.StateMap)
-		case OpAddMemory:
-			entry := fileMemoryEntry(c.Key, op.Memory)
-			loaded.Memories = upsertMemory(loaded.Memories, entry)
-			if op.Memory.ID != "" {
-				logicalMemoryIDs[op.Memory.ID] = entry.ID
-			}
-		case OpUpdateMemory:
-			id := logicalMemoryIDs[op.Memory.ID]
-			entry := fileMemoryEntry(c.Key, op.Memory)
-			entry.ID = stableID(c.Key.AppName, c.Key.UserID, op.Memory.Content, strings.Join(op.Memory.Topics, ","), "")
-			loaded.Memories = deleteMemory(loaded.Memories, id)
-			loaded.Memories = upsertMemory(loaded.Memories, entry)
-			logicalMemoryIDs[op.Memory.ID] = entry.ID
-		case OpDeleteMemory:
-			loaded.Memories = deleteMemory(loaded.Memories, logicalMemoryIDs[op.Memory.ID])
-		case OpClearMemory:
-			loaded.Memories = nil
-		case OpWriteSummary:
-			writeFileSummary(loaded.Session, op.Summary.FilterKey, op.Summary.Force)
-		case OpAppendTrack:
-			raw, err := json.Marshal(op.Track.Payload)
-			if err != nil {
-				return nil, err
-			}
-			ts := op.Track.Timestamp
-			if ts.IsZero() {
-				ts = deterministicEventTime(string(op.Track.Name))
-			}
-			if err := loaded.Session.AppendTrackEvent(&session.TrackEvent{
-				Track:     op.Track.Name,
-				Payload:   raw,
-				Timestamp: ts,
-			}); err != nil {
-				return nil, err
-			}
-		case OpUnsupportedProbe:
-			if !b.Supports(op.Unsupported) {
-				unsupported = append(unsupported, UnsupportedFeature{
-					Capability:  op.Unsupported,
-					AllowedDiff: true,
-					Explanation: b.Unsupported(op.Unsupported),
-				})
-			}
-		}
-		if err := writeStore(path, loaded); err != nil {
-			return nil, err
-		}
-		_ = ctx
+	run := &jsonFileRun{
+		backend:          b,
+		caseDef:          c,
+		path:             path,
+		logicalMemoryIDs: map[string]string{},
+		seenEvents:       map[string]struct{}{},
+	}
+	if err := run.applyOperations(); err != nil {
+		return nil, err
 	}
 	finalStore, err := readStore(path)
 	if err != nil {
 		return nil, err
 	}
-	return normalizeSession(c.Name, b.Name(), finalStore.Session, finalStore.Memories, unsupported), nil
+	return normalizeSession(c.Name, b.Name(), finalStore.Session, finalStore.Memories, run.unsupported), nil
 }
 
 func (b *jsonFileBackend) Close() error { return nil }
+
+type jsonFileRun struct {
+	backend          *jsonFileBackend
+	caseDef          ReplayCase
+	path             string
+	logicalMemoryIDs map[string]string
+	seenEvents       map[string]struct{}
+	unsupported      []UnsupportedFeature
+}
+
+func (r *jsonFileRun) applyOperations() error {
+	for _, op := range r.caseDef.Operations {
+		loaded, err := readStore(r.path)
+		if err != nil {
+			return err
+		}
+		if err := r.applyOperation(loaded, op); err != nil {
+			return err
+		}
+		if err := writeStore(r.path, loaded); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *jsonFileRun) applyOperation(store *fileStore, op Operation) error {
+	switch op.Kind {
+	case OpAppendEvent, OpRetryEvent:
+		return r.applyEventOperation(store, op)
+	case OpSetState, OpDeleteState, OpClearState:
+		applyFileStateOperation(store.Session, op)
+	case OpAddMemory, OpUpdateMemory, OpDeleteMemory, OpClearMemory:
+		applyFileMemoryOperation(&store.Memories, r.caseDef.Key, r.logicalMemoryIDs, op)
+	case OpWriteSummary:
+		if op.Summary != nil {
+			writeFileSummary(store.Session, op.Summary.FilterKey, op.Summary.Force)
+		}
+	case OpAppendTrack:
+		return applyFileTrackOperation(store.Session, op)
+	case OpUnsupportedProbe:
+		r.recordUnsupported(op.Unsupported)
+	}
+	return nil
+}
+
+func (r *jsonFileRun) applyEventOperation(store *fileStore, op Operation) error {
+	if err := appendFileEvent(store.Session, op.Event, r.seenEvents); err != nil {
+		return err
+	}
+	if op.Kind == OpRetryEvent {
+		return appendFileEvent(store.Session, op.Event, r.seenEvents)
+	}
+	return nil
+}
+
+func (r *jsonFileRun) recordUnsupported(cap Capability) {
+	if r.backend.Supports(cap) {
+		return
+	}
+	r.unsupported = append(r.unsupported, UnsupportedFeature{
+		Capability:  cap,
+		AllowedDiff: true,
+		Explanation: r.backend.Unsupported(cap),
+	})
+}
+
+func applyFileStateOperation(sess *session.Session, op Operation) {
+	switch op.Kind {
+	case OpSetState:
+		if op.State != nil {
+			sess.SetState(op.State.Key, cloneRaw(op.State.Value))
+		}
+	case OpDeleteState:
+		if op.State != nil {
+			sess.DeleteState(op.State.Key)
+		}
+	case OpClearState:
+		sess.State = make(session.StateMap)
+	}
+}
+
+func applyFileMemoryOperation(
+	entries *[]*memory.Entry,
+	key session.Key,
+	logicalIDs map[string]string,
+	op Operation,
+) {
+	switch op.Kind {
+	case OpAddMemory:
+		addFileMemory(entries, key, logicalIDs, op.Memory)
+	case OpUpdateMemory:
+		updateFileMemory(entries, key, logicalIDs, op.Memory)
+	case OpDeleteMemory:
+		if op.Memory != nil {
+			*entries = deleteMemory(*entries, logicalIDs[op.Memory.ID])
+		}
+	case OpClearMemory:
+		*entries = nil
+	}
+}
+
+func addFileMemory(
+	entries *[]*memory.Entry,
+	key session.Key,
+	logicalIDs map[string]string,
+	spec *MemorySpec,
+) {
+	if spec == nil {
+		return
+	}
+	entry := fileMemoryEntry(key, spec)
+	*entries = upsertMemory(*entries, entry)
+	if spec.ID != "" {
+		logicalIDs[spec.ID] = entry.ID
+	}
+}
+
+func updateFileMemory(
+	entries *[]*memory.Entry,
+	key session.Key,
+	logicalIDs map[string]string,
+	spec *MemorySpec,
+) {
+	if spec == nil {
+		return
+	}
+	entry := fileMemoryEntry(key, spec)
+	entry.ID = stableID(key.AppName, key.UserID, spec.Content, strings.Join(spec.Topics, ","), "")
+	*entries = deleteMemory(*entries, logicalIDs[spec.ID])
+	*entries = upsertMemory(*entries, entry)
+	logicalIDs[spec.ID] = entry.ID
+}
+
+func applyFileTrackOperation(sess *session.Session, op Operation) error {
+	if op.Track == nil {
+		return nil
+	}
+	trackEvent, err := trackEventFromSpec(op.Track)
+	if err != nil {
+		return err
+	}
+	return sess.AppendTrackEvent(trackEvent)
+}
 
 type fileStore struct {
 	Session  *session.Session `json:"session"`
@@ -549,7 +735,7 @@ func writeStore(path string, store *fileStore) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o644)
+	return os.WriteFile(path, data, 0o600)
 }
 
 func safeFileName(name string) string {
@@ -607,4 +793,20 @@ func overlayEventStateDelta(overlay *stateOverlay, spec *EventSpec, seen map[str
 	for k, v := range spec.StateDelta {
 		overlay.set(k, v)
 	}
+}
+
+func trackEventFromSpec(spec *TrackSpec) (*session.TrackEvent, error) {
+	raw, err := json.Marshal(spec.Payload)
+	if err != nil {
+		return nil, err
+	}
+	ts := spec.Timestamp
+	if ts.IsZero() {
+		ts = deterministicEventTime(string(spec.Name))
+	}
+	return &session.TrackEvent{
+		Track:     spec.Name,
+		Payload:   raw,
+		Timestamp: ts,
+	}, nil
 }

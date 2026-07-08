@@ -25,9 +25,13 @@ import (
 type Capability string
 
 const (
-	CapabilityEventPage    Capability = "event_page"
-	CapabilityTTL          Capability = "ttl"
-	CapabilityTrack        Capability = "track"
+	// CapabilityEventPage marks strict event page reads.
+	CapabilityEventPage Capability = "event_page"
+	// CapabilityTTL marks time-to-live expiry.
+	CapabilityTTL Capability = "ttl"
+	// CapabilityTrack marks persisted track events.
+	CapabilityTrack Capability = "track"
+	// CapabilityMemorySearch marks memory search support.
 	CapabilityMemorySearch Capability = "memory_search"
 )
 
@@ -52,17 +56,29 @@ type ReplayCase struct {
 type OperationKind string
 
 const (
-	OpAppendEvent      OperationKind = "append_event"
-	OpSetState         OperationKind = "set_state"
-	OpDeleteState      OperationKind = "delete_state"
-	OpClearState       OperationKind = "clear_state"
-	OpAddMemory        OperationKind = "add_memory"
-	OpUpdateMemory     OperationKind = "update_memory"
-	OpDeleteMemory     OperationKind = "delete_memory"
-	OpClearMemory      OperationKind = "clear_memory"
-	OpWriteSummary     OperationKind = "write_summary"
-	OpAppendTrack      OperationKind = "append_track"
-	OpRetryEvent       OperationKind = "retry_event"
+	// OpAppendEvent appends one session event.
+	OpAppendEvent OperationKind = "append_event"
+	// OpSetState sets or overwrites one session state key.
+	OpSetState OperationKind = "set_state"
+	// OpDeleteState deletes one session state key.
+	OpDeleteState OperationKind = "delete_state"
+	// OpClearState clears all session state keys.
+	OpClearState OperationKind = "clear_state"
+	// OpAddMemory adds one memory entry.
+	OpAddMemory OperationKind = "add_memory"
+	// OpUpdateMemory updates one logical memory entry.
+	OpUpdateMemory OperationKind = "update_memory"
+	// OpDeleteMemory deletes one logical memory entry.
+	OpDeleteMemory OperationKind = "delete_memory"
+	// OpClearMemory clears all memories for the replay user.
+	OpClearMemory OperationKind = "clear_memory"
+	// OpWriteSummary writes or updates one summary.
+	OpWriteSummary OperationKind = "write_summary"
+	// OpAppendTrack appends one track event.
+	OpAppendTrack OperationKind = "append_track"
+	// OpRetryEvent appends the same event through retry semantics.
+	OpRetryEvent OperationKind = "retry_event"
+	// OpUnsupportedProbe records unsupported backend capability metadata.
 	OpUnsupportedProbe OperationKind = "unsupported_probe"
 )
 

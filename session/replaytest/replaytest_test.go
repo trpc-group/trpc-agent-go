@@ -11,8 +11,12 @@ package replaytest
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
+
+	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
 func TestPublicCasesLightweightBackendsNoDiff(t *testing.T) {
@@ -203,6 +207,192 @@ func TestCompareSnapshotsStateDiffsAreSorted(t *testing.T) {
 	}
 	if diffs[1].FieldPath != "$.state[\"b\"].value" {
 		t.Fatalf("second state diff = %s, want b after a", diffs[1].FieldPath)
+	}
+}
+
+func TestBackendsReplayMemoryLifecycleAndNilOperations(t *testing.T) {
+	c := ReplayCase{
+		Name: "memory_lifecycle",
+		Key:  baseKey("memory-lifecycle"),
+		Operations: []Operation{
+			{Kind: OpSetState},
+			{Kind: OpDeleteState},
+			{Kind: OpAddMemory},
+			{
+				Kind: OpAddMemory,
+				Memory: &MemorySpec{
+					ID:      "pref",
+					Content: "User likes deterministic tests.",
+					Topics:  []string{"tests"},
+				},
+			},
+			{
+				Kind: OpUpdateMemory,
+				Memory: &MemorySpec{
+					ID:      "pref",
+					Content: "User likes deterministic replay tests.",
+					Topics:  []string{"tests", "replay"},
+				},
+			},
+			{Kind: OpDeleteMemory, Memory: &MemorySpec{ID: "pref"}},
+			{
+				Kind: OpAddMemory,
+				Memory: &MemorySpec{
+					ID:      "task",
+					Content: "Keep replay harness lightweight.",
+					Topics:  []string{"task"},
+				},
+			},
+			{Kind: OpClearMemory},
+			{
+				Kind: OpAddMemory,
+				Memory: &MemorySpec{
+					ID:      "final",
+					Content: "Final memory survives lifecycle case.",
+					Topics:  []string{"final"},
+				},
+			},
+			{Kind: OpWriteSummary},
+			{Kind: OpAppendTrack},
+			{Kind: OpUnsupportedProbe, Unsupported: CapabilityTTL},
+		},
+	}
+	report, err := Run(context.Background(), []ReplayCase{c}, []Backend{
+		NewInMemoryBackend(),
+		NewJSONFileBackend(t.TempDir()),
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if HasBlockingDiff(report) {
+		data, _ := MarshalReport(report)
+		t.Fatalf("unexpected blocking diffs:\n%s", data)
+	}
+	if len(report.Cases) != 1 || len(report.Cases[0].Unsupported) == 0 {
+		t.Fatalf("unsupported capability was not reported: %+v", report.Cases)
+	}
+}
+
+func TestJSONFileBackendPersistsWithPrivatePermissions(t *testing.T) {
+	dir := t.TempDir()
+	c := singleTurnCase()
+	_, err := NewJSONFileBackend(dir).Apply(context.Background(), c)
+	if err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	info, err := os.Stat(dir + "/" + safeFileName(c.Name) + ".json")
+	if err != nil {
+		t.Fatalf("stat store file: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("store file mode = %o, want 600", got)
+	}
+}
+
+func TestReplayHelpersCoverEdgeBranches(t *testing.T) {
+	memBackend := NewInMemoryBackend()
+	fileBackend := NewJSONFileBackend("")
+	if err := memBackend.Close(); err != nil {
+		t.Fatalf("inmemory Close() error = %v", err)
+	}
+	if err := fileBackend.Close(); err != nil {
+		t.Fatalf("jsonfile Close() error = %v", err)
+	}
+	if !memBackend.Supports(CapabilityTTL) || memBackend.Supports(CapabilityEventPage) {
+		t.Fatalf("unexpected in-memory capabilities")
+	}
+	if !strings.Contains(memBackend.Unsupported(CapabilityEventPage), "strict offset") {
+		t.Fatalf("unexpected in-memory unsupported explanation")
+	}
+	if fileBackend.Supports(CapabilityTTL) || !strings.Contains(fileBackend.Unsupported(CapabilityTTL), "does not expire") {
+		t.Fatalf("unexpected jsonfile TTL support")
+	}
+	if fileBackend.Unsupported(CapabilityTrack) != "" {
+		t.Fatalf("supported jsonfile track capability should have empty unsupported explanation")
+	}
+
+	if HasBlockingDiff(nil) {
+		t.Fatalf("nil report should not have blocking diffs")
+	}
+	if HasBlockingDiff(&Report{Cases: []CaseReport{{Differences: []Difference{{AllowedDiff: true}}}}}) {
+		t.Fatalf("allowed diff should not block")
+	}
+	if !HasBlockingDiff(&Report{Cases: []CaseReport{{Differences: []Difference{{AllowedDiff: false}}}}}) {
+		t.Fatalf("non-allowed diff should block")
+	}
+
+	summarizer := deterministicSummarizer{}
+	if !summarizer.ShouldSummarize(nil) {
+		t.Fatalf("deterministic summarizer should always summarize")
+	}
+	summarizer.SetPrompt("ignored")
+	summarizer.SetModel(nil)
+	if summarizer.Metadata()["name"] != "replay-deterministic" {
+		t.Fatalf("unexpected summarizer metadata")
+	}
+	if summaryFilterKeyFromSessionID("sess") != session.SummaryFilterKeyAllContents {
+		t.Fatalf("session without suffix should use full-session summary key")
+	}
+	if summaryFilterKeyFromSessionID("sess:branch") != "branch" {
+		t.Fatalf("summary filter key suffix not parsed")
+	}
+
+	if normalizeBytes(nil).Kind != "null" {
+		t.Fatalf("nil bytes should normalize as null")
+	}
+	if canonicalJSONBytes([]byte(`not-json`)) != "not-json" {
+		t.Fatalf("invalid json should trim to raw text")
+	}
+	if canonicalJSON(func() {}) == "" {
+		t.Fatalf("unmarshalable value should fall back to fmt string")
+	}
+	if normalizeTrackPayload([]byte(`{bad`)) != "{bad" {
+		t.Fatalf("invalid track payload should remain trimmed raw text")
+	}
+	if payloadType(`{"event_type":"finish"}`) != "finish" {
+		t.Fatalf("event_type fallback not detected")
+	}
+	if payloadType(`not-json`) != "" {
+		t.Fatalf("invalid payload should not have type")
+	}
+	for _, score := range []float64{0, 0.2, 0.6, 0.82, 0.97} {
+		if score == 0 && scoreBand(score) != "" {
+			t.Fatalf("zero score should not have a band")
+		}
+		if score > 0 && scoreBand(score) == "" {
+			t.Fatalf("score %v should have a band", score)
+		}
+	}
+}
+
+func TestFileSummaryAndBoundaryHelpers(t *testing.T) {
+	sess := session.NewSession("app", "user", "sess")
+	writeFileSummary(sess, "", false)
+	if len(sess.Summaries) != 0 {
+		t.Fatalf("non-forced empty summary should not be written")
+	}
+	evt, err := eventFromSpec(EventSpec{
+		LogicalID:    "boundary-1",
+		InvocationID: "inv-boundary",
+		Author:       "user",
+		Role:         model.RoleUser,
+		Content:      "hello",
+		FilterKey:    "branch",
+	})
+	if err != nil {
+		t.Fatalf("eventFromSpec() error = %v", err)
+	}
+	sess.UpdateUserSession(evt)
+	writeFileSummary(sess, "branch", true)
+	if len(sess.Summaries) != 1 {
+		t.Fatalf("forced summary was not written")
+	}
+	covered := eventsAfterBoundary(sess.GetEvents(), sess.Summaries["branch"].Boundary, "branch")
+	if len(covered) != 0 {
+		t.Fatalf("boundary should exclude already summarized events")
+	}
+	if latestBoundary("branch", nil) != nil {
+		t.Fatalf("empty latest boundary should be nil")
 	}
 }
 
