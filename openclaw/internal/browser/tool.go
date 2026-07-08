@@ -431,7 +431,7 @@ func browserDescription(evaluateEnabled bool) string {
 		"direct inspection of local or generated files. Do not " +
 		"navigate to file://, data:, or ad hoc localhost/127.0.0.1 " +
 		"URLs unless the runtime configuration explicitly exposes " +
-		"that server; normal browser policy may block those paths. " +
+		"that file root or server; normal browser policy may block those paths. " +
 		"For local images, PDFs, audio, video, or generated " +
 		"artifacts, use file/document/exec tools and MEDIA or " +
 		"MEDIA_DIR outputs instead. Prefer snapshot + act for UI " +
@@ -1080,10 +1080,11 @@ func (t *Tool) handleProfiles(
 	sort.Strings(names)
 
 	out := Result{
-		Action:          actionProfiles,
-		DefaultProfile:  t.defaultProfile,
-		Driver:          ToolName,
-		EvaluateEnabled: t.evaluateEnabled,
+		Action:           actionProfiles,
+		DefaultProfile:   t.defaultProfile,
+		Driver:           ToolName,
+		EvaluateEnabled:  t.evaluateEnabled,
+		NavigationPolicy: navigationPolicyInfo(t.navigation),
 		Supported: visibleActionsForDriver(
 			t.driverTypeForProfile(t.defaultProfile),
 			t.evaluateEnabled,
@@ -1095,11 +1096,12 @@ func (t *Tool) handleProfiles(
 		cfg := t.profiles[name]
 		driverType := t.driverTypeForProfile(name)
 		info := ProfileInfo{
-			Name:        name,
-			Description: cfg.Description,
-			Default:     name == t.defaultProfile,
-			Driver:      driverType,
-			Supported:   visibleActionsForDriver(driverType, t.evaluateEnabled),
+			Name:             name,
+			Description:      cfg.Description,
+			Default:          name == t.defaultProfile,
+			Driver:           driverType,
+			Supported:        visibleActionsForDriver(driverType, t.evaluateEnabled),
+			NavigationPolicy: out.NavigationPolicy,
 		}
 		drv := t.statusDriver(name, cfg)
 		if drv != nil {
@@ -1114,6 +1116,26 @@ func (t *Tool) handleProfiles(
 		out.Profiles = append(out.Profiles, info)
 	}
 	return out
+}
+
+func navigationPolicyInfo(policy navigationPolicy) *NavigationPolicyInfo {
+	if len(policy.AllowedDomains) == 0 &&
+		len(policy.BlockedDomains) == 0 &&
+		!policy.AllowLoopback &&
+		!policy.AllowPrivateNet &&
+		!policy.AllowFileURLs &&
+		len(policy.AllowedFileRoots) == 0 {
+		return nil
+	}
+	return &NavigationPolicyInfo{
+		AllowedDomains:       append([]string(nil), policy.AllowedDomains...),
+		BlockedDomains:       append([]string(nil), policy.BlockedDomains...),
+		AllowLoopback:        policy.AllowLoopback,
+		AllowPrivateNetworks: policy.AllowPrivateNet,
+		AllowFileURLs:        policy.AllowFileURLs,
+		AllowRootFileURLs:    len(policy.AllowedFileRoots) > 0,
+		AllowedFileRoots:     append([]string(nil), policy.AllowedFileRoots...),
+	}
 }
 
 func (t *Tool) statusDriver(
