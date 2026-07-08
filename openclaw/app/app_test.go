@@ -39,6 +39,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/evolution"
 	"trpc.group/trpc-go/trpc-agent-go/internal/skillprofile"
+	toolcurrenttime "trpc.group/trpc-go/trpc-agent-go/internal/tool/currenttime"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	meminmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -1989,6 +1990,37 @@ func TestNewAgent_EnablesOnDemandSessionTools(t *testing.T) {
 	)
 	require.NotNil(t, findTool(tools, "session_load"))
 	require.False(t, userToolNames["session_load"])
+}
+
+func TestNewAgent_EnablesStableCurrentTimeContext(t *testing.T) {
+	t.Parallel()
+
+	mdl := &captureRequestModel{}
+	agt, _, err := newAgent(mdl, agentConfig{
+		AppName:    "demo",
+		SkillsRoot: t.TempDir(),
+		StateDir:   t.TempDir(),
+	}, nil, nil)
+	require.NoError(t, err)
+
+	require.NotNil(t, findTool(agt.Tools(), toolcurrenttime.ToolName))
+
+	req := runAgentAndCapture(
+		t,
+		agt,
+		mdl,
+		&session.Session{},
+	)
+	require.Contains(t, req.Tools, toolcurrenttime.ToolName)
+
+	sys := joinSystemMessages(req)
+	require.Contains(t, sys, "The current date is:")
+	require.Contains(
+		t,
+		sys,
+		"call the built-in "+toolcurrenttime.ToolName+" tool",
+	)
+	require.NotContains(t, sys, "The current time is:")
 }
 
 func TestNewAgent_UsesConfiguredSkillRepositoryProvider(t *testing.T) {
