@@ -28,7 +28,7 @@ import (
 
 // readFileRequest represents the input for the read file operation.
 type readFileRequest struct {
-	FileName  string `json:"file_name" jsonschema:"description=Relative file path under base_directory or workspace:// or artifact:// file ref or an absolute path under a configured read-only root"`
+	FileName  string `json:"file_name" description:"Relative file path under base_directory, workspace:// or artifact:// file ref, or an absolute path under base_directory or a configured read-only root"`
 	StartLine *int   `json:"start_line,omitempty" jsonschema:"description=Optional 1-based start line to begin reading from"`
 	NumLines  *int   `json:"num_lines,omitempty" jsonschema:"description=Optional maximum number of lines to return"`
 }
@@ -388,7 +388,8 @@ func (f *fileToolSet) readFileTool() tool.CallableTool {
 		function.WithDescription(
 			"Read a text file under base_directory. Supports "+
 				"workspace:// refs, artifact:// refs, and "+
-				"absolute paths under configured read-only roots. "+
+				"absolute paths under base_directory or configured "+
+				"read-only roots. "+
 				"Optional start_line and num_lines select line "+
 				"ranges.",
 		),

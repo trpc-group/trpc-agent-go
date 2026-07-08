@@ -496,7 +496,11 @@ func TestNewFileToolSet_RuntimeReadDirsCanDisable(t *testing.T) {
 		[]byte(`{"file_name":`+strconv.Quote(tmpFile)+`}`),
 	)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "outside configured read-only roots")
+	require.Contains(
+		t,
+		err.Error(),
+		"outside base_directory and configured read-only roots",
+	)
 }
 
 func TestDefaultFileReadOnlyDirsIncludesPlatformTmp(t *testing.T) {
