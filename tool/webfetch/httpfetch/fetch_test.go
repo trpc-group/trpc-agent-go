@@ -23,6 +23,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type errReader struct{}
+
+func (errReader) Read(_ []byte) (int, error) {
+	return 0, errors.New("read failed")
+}
+
 func TestWebFetch(t *testing.T) {
 	// Mock server
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -400,6 +406,84 @@ func TestConvertHTMLToMarkdownCanPreferMainContent(t *testing.T) {
 	assert.Contains(t, result, "356,400-370,400 km")
 	assert.NotContains(t, result, "Main menu navigation")
 	assert.NotContains(t, result, "Footer links")
+}
+
+func TestHTMLVisibleTextFallbackKeepsVisiblePageText(t *testing.T) {
+	htmlContent := `
+		<html>
+		<body>
+			<header>Useful header notice</header>
+			<script>console.log("hidden")</script>
+			<style>.hidden { display: none }</style>
+			<div>Visible <span>article</span> text.</div>
+			<p hidden>Hidden paragraph.</p>
+			<p aria-hidden="true">Aria hidden paragraph.</p>
+			<p style="display: none">CSS hidden paragraph.</p>
+			<footer>Useful footer citation</footer>
+		</body>
+		</html>`
+
+	result, err := htmlVisibleTextFallback([]byte(htmlContent))
+	require.NoError(t, err)
+
+	assert.Contains(t, result, "Useful header notice")
+	assert.Contains(t, result, "Visible")
+	assert.Contains(t, result, "article")
+	assert.Contains(t, result, "text.")
+	assert.Contains(t, result, "Useful footer citation")
+	assert.NotContains(t, result, "console.log")
+	assert.NotContains(t, result, "display: none")
+	assert.NotContains(t, result, "Hidden paragraph")
+	assert.NotContains(t, result, "Aria hidden paragraph")
+	assert.NotContains(t, result, "CSS hidden paragraph")
+}
+
+func TestHTMLVisibleTextFallbackReportsEmptyContent(t *testing.T) {
+	result, err := htmlVisibleTextFallback([]byte(`
+		<html>
+		<body>
+			<script>console.log("hidden")</script>
+			<style>body { color: red }</style>
+		</body>
+		</html>`))
+
+	require.Error(t, err)
+	assert.Empty(t, result)
+	assert.Contains(t, err.Error(), "no visible text")
+}
+
+func TestHTMLVisibleTextFallbackReportsParseFailure(t *testing.T) {
+	result, err := htmlVisibleTextFallbackFromReader(
+		errReader{},
+		[]byte("  visible fallback text  "),
+	)
+
+	require.Error(t, err)
+	assert.Empty(t, result)
+	assert.Contains(t, err.Error(), "parse HTML for visible-text fallback")
+}
+
+func TestHTMLVisibleTextFallbackReportsParseFailureWithEmptyRawText(
+	t *testing.T,
+) {
+	result, err := htmlVisibleTextFallbackFromReader(errReader{}, nil)
+
+	require.Error(t, err)
+	assert.Empty(t, result)
+	assert.Contains(t, err.Error(), "parse HTML for visible-text fallback")
+}
+
+func TestConvertHTMLToMarkdownKeepsEmptyVisibleHTMLSuccessful(t *testing.T) {
+	result, err := convertHTMLToMarkdown(strings.NewReader(`
+		<html>
+		<body>
+			<script>console.log("hidden")</script>
+			<style>body { color: red }</style>
+		</body>
+		</html>`))
+
+	require.NoError(t, err)
+	assert.Empty(t, result)
 }
 
 func TestWebFetch_MainContentExtractionOption(t *testing.T) {
