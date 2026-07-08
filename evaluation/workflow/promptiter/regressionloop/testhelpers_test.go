@@ -10,6 +10,7 @@ package regressionloop
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -35,11 +36,15 @@ func (c *fixedClock) Now() time.Time {
 type fakeEvaluator struct {
 	calls   []EvaluationRequest
 	results map[string]EvaluationSummary
+	errors  map[string]error
 }
 
 func (e *fakeEvaluator) Evaluate(ctx context.Context, req EvaluationRequest) (EvaluationSummary, error) {
 	e.calls = append(e.calls, req)
 	key := phaseKey(req.Phase, req.Round)
+	if err := e.errors[key]; err != nil {
+		return EvaluationSummary{}, err
+	}
 	result := e.results[key]
 	result.EvalSetID = req.EvalSet.ID
 	return result, nil
@@ -47,11 +52,17 @@ func (e *fakeEvaluator) Evaluate(ctx context.Context, req EvaluationRequest) (Ev
 
 type fakeOptimizer struct {
 	candidates []Candidate
+	err        error
 }
 
 func (o fakeOptimizer) Candidates(ctx context.Context, req OptimizationRequest) ([]Candidate, error) {
+	if o.err != nil {
+		return nil, o.err
+	}
 	return o.candidates, nil
 }
+
+var errFake = errors.New("fake failure")
 
 func phaseKey(phase Phase, round int) string {
 	return string(phase) + ":" + string(rune('0'+round))

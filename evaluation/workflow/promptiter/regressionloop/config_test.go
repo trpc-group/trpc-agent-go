@@ -118,6 +118,31 @@ func TestConfigValidateRejectsInvalidValues(t *testing.T) {
 	}
 }
 
+func TestConfigValidateReportsRequiredFields(t *testing.T) {
+	var cfg Config
+	err := cfg.Validate()
+	require.Error(t, err)
+	for _, field := range []string{
+		"appName",
+		"promptSource.id",
+		"promptSource.path",
+		"promptSource.targetType",
+		"trainEvalSet.id",
+		"trainEvalSet.path",
+		"validationEvalSet.id",
+		"validationEvalSet.path",
+		"metrics.path",
+		"promptiter.maxRounds",
+		"promptiter.targetSurfaceIds",
+		"runner.mode",
+		"output.dir",
+		"output.jsonReport",
+		"output.markdownReport",
+	} {
+		assert.ErrorContains(t, err, field)
+	}
+}
+
 func TestLoadConfigResolvesRelativePaths(t *testing.T) {
 	dir := t.TempDir()
 	cfg := testConfig(t)
@@ -144,9 +169,21 @@ func TestLoadConfigRejectsBadInput(t *testing.T) {
 	_, err := LoadConfig("")
 	require.ErrorContains(t, err, "config path is empty")
 
+	_, err = LoadConfig(filepath.Join(t.TempDir(), "missing.json"))
+	require.ErrorContains(t, err, "read config")
+
 	dir := t.TempDir()
 	badJSON := filepath.Join(dir, "bad.json")
 	require.NoError(t, os.WriteFile(badJSON, []byte("{"), 0o644))
 	_, err = LoadConfig(badJSON)
 	require.ErrorContains(t, err, "decode config")
+
+	invalid := testConfig(t)
+	invalid.AppName = ""
+	data, err := json.Marshal(invalid)
+	require.NoError(t, err)
+	invalidPath := filepath.Join(dir, "invalid.json")
+	require.NoError(t, os.WriteFile(invalidPath, data, 0o644))
+	_, err = LoadConfig(invalidPath)
+	require.ErrorContains(t, err, "missing required config fields")
 }
