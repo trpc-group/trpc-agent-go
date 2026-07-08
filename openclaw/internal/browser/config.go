@@ -72,6 +72,7 @@ type Config struct {
 	AllowLoopback    *bool           `yaml:"allow_loopback,omitempty"`
 	AllowPrivateNet  *bool           `yaml:"allow_private_networks,omitempty"`
 	AllowFileURLs    *bool           `yaml:"allow_file_urls,omitempty"`
+	AllowSearchPages *bool           `yaml:"allow_search_result_pages,omitempty"`
 	AllowedFileRoots []string        `yaml:"allowed_file_roots,omitempty"`
 	Nodes            []NodeConfig    `yaml:"nodes,omitempty"`
 	Profiles         []ProfileConfig `yaml:"profiles,omitempty"`
@@ -180,6 +181,9 @@ func resolveNavigationPolicy(cfg Config) navigationPolicy {
 	}
 	if cfg.AllowFileURLs != nil {
 		policy.AllowFileURLs = *cfg.AllowFileURLs
+	}
+	if cfg.AllowSearchPages != nil {
+		policy.AllowSearchPages = *cfg.AllowSearchPages
 	}
 	return policy
 }

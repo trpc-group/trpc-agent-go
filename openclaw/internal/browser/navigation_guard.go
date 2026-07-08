@@ -23,7 +23,61 @@ type navigationPolicy struct {
 	AllowLoopback    bool
 	AllowPrivateNet  bool
 	AllowFileURLs    bool
+	AllowSearchPages bool
 	AllowedFileRoots []string
+}
+
+type searchResultPageRule struct {
+	Name      string
+	Host      string
+	Paths     []string
+	QueryKeys []string
+}
+
+var searchResultPageRules = []searchResultPageRule{
+	{
+		Name:      "DuckDuckGo search",
+		Host:      "duckduckgo.com",
+		Paths:     []string{"/"},
+		QueryKeys: []string{"q"},
+	},
+	{
+		Name:      "DuckDuckGo HTML search",
+		Host:      "html.duckduckgo.com",
+		Paths:     []string{"/html", "/html/"},
+		QueryKeys: []string{"q"},
+	},
+	{
+		Name:      "DuckDuckGo Lite search",
+		Host:      "lite.duckduckgo.com",
+		Paths:     []string{"/lite", "/lite/"},
+		QueryKeys: []string{"q"},
+	},
+	{
+		Name:  "Google search",
+		Host:  "google.com",
+		Paths: []string{"/search"},
+	},
+	{
+		Name:  "Google Scholar search",
+		Host:  "scholar.google.com",
+		Paths: []string{"/scholar"},
+	},
+	{
+		Name:  "Bing search",
+		Host:  "bing.com",
+		Paths: []string{"/search"},
+	},
+	{
+		Name:  "Brave Search",
+		Host:  "search.brave.com",
+		Paths: []string{"/search"},
+	},
+	{
+		Name:  "Yahoo search",
+		Host:  "search.yahoo.com",
+		Paths: []string{"/search"},
+	},
 }
 
 func (p navigationPolicy) Validate(raw string) error {
@@ -102,6 +156,79 @@ func (p navigationPolicy) Validate(raw string) error {
 		}
 	}
 	return fmt.Errorf("browser domain is not allowed: %s", host)
+}
+
+func (p navigationPolicy) BlockedSearchResultPage(raw string) (string, bool) {
+	if p.AllowSearchPages {
+		return "", false
+	}
+	rule, ok := matchSearchResultPage(raw)
+	if !ok {
+		return "", false
+	}
+	return rule.Name, true
+}
+
+func matchSearchResultPage(raw string) (searchResultPageRule, bool) {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return searchResultPageRule{}, false
+	}
+	host := normalizeHost(u.Hostname())
+	if host == "" {
+		return searchResultPageRule{}, false
+	}
+	path := strings.ToLower(strings.TrimSpace(u.Path))
+	if path == "" {
+		path = "/"
+	}
+
+	for i := range searchResultPageRules {
+		rule := searchResultPageRules[i]
+		if !hostMatchesDomain(host, rule.Host) {
+			continue
+		}
+		if !searchResultPathMatches(path, rule.Paths) {
+			continue
+		}
+		if !searchResultQueryMatches(u, rule.QueryKeys) {
+			continue
+		}
+		return rule, true
+	}
+	return searchResultPageRule{}, false
+}
+
+func searchResultPathMatches(path string, allowed []string) bool {
+	for _, raw := range allowed {
+		allowedPath := strings.ToLower(strings.TrimSpace(raw))
+		if allowedPath == "" {
+			continue
+		}
+		if path == allowedPath {
+			return true
+		}
+		if strings.HasSuffix(allowedPath, "/") {
+			continue
+		}
+		if strings.HasPrefix(path, allowedPath+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+func searchResultQueryMatches(u *url.URL, keys []string) bool {
+	if len(keys) == 0 {
+		return true
+	}
+	query := u.Query()
+	for _, key := range keys {
+		if strings.TrimSpace(query.Get(key)) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func (p navigationPolicy) fileURLAllowed(u *url.URL) bool {

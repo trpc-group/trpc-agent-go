@@ -88,6 +88,77 @@ func TestCompactBrowserErrorText_IgnoresPlainPageText(t *testing.T) {
 	require.Empty(t, got)
 }
 
+func TestBlockedBrowserPageReason_DetectsCommonChallenges(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		text string
+		want string
+	}{
+		{
+			name: "cloudflare title",
+			text: "Page Title: Just a moment...\n" +
+				"Checking if the site connection is secure",
+			want: "Cloudflare",
+		},
+		{
+			name: "unusual traffic",
+			text: "Our systems have detected unusual traffic from " +
+				"your computer network.",
+			want: "unusual-traffic",
+		},
+		{
+			name: "captcha",
+			text: "Please complete the CAPTCHA to verify you are human.",
+			want: "CAPTCHA",
+		},
+		{
+			name: "human verification",
+			text: "Checking if the site connection is secure. " +
+				"Enable JavaScript and cookies to continue.",
+			want: "human-verification",
+		},
+		{
+			name: "bot check",
+			text: "This page is running an anti-bot check. " +
+				"Please wait while we verify your browser.",
+			want: "bot-check",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, ok := blockedBrowserPageReason(tc.text)
+			require.True(t, ok)
+			require.Contains(t, got, tc.want)
+		})
+	}
+}
+
+func TestBlockedBrowserPageReason_IgnoresPlainPageText(t *testing.T) {
+	t.Parallel()
+
+	cases := []string{
+		"This article says a captcha can be hard to read.",
+		"The phrase just a moment appeared in the transcript.",
+		"Verify your account settings before changing the profile.",
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc, func(t *testing.T) {
+			t.Parallel()
+
+			got, ok := blockedBrowserPageReason(tc)
+			require.False(t, ok)
+			require.Empty(t, got)
+		})
+	}
+}
+
 func TestParseTabs_ParsesActiveTab(t *testing.T) {
 	t.Parallel()
 

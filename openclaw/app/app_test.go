@@ -2752,6 +2752,12 @@ func TestNewAgent_BrowserToolingGuidance_Applied(t *testing.T) {
 	require.Contains(
 		t,
 		sys,
+		"Google Scholar, Brave Search",
+	)
+	require.Contains(t, sys, "unusual traffic warning")
+	require.Contains(
+		t,
+		sys,
 		"Browser snapshots are for current page structure",
 	)
 }
@@ -2809,6 +2815,8 @@ func TestNewAgent_BrowserToolingGuidance_FromToolProvider(
 		sys,
 		"missing search/fetch blocker",
 	)
+	require.Contains(t, sys, "search-engine result pages")
+	require.Contains(t, sys, "CAPTCHA")
 }
 
 func TestNewAgent_OpenClawToolingGuidance_OverrideApplied(

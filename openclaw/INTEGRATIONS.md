@@ -1006,12 +1006,14 @@ Highlights:
   - loopback hosts are blocked
   - private-network IPs are blocked
   - `file://` URLs are blocked
+  - search-engine result pages are blocked
 - You can refine navigation policy with:
   - `allowed_domains`
   - `blocked_domains`
   - `allow_loopback`
   - `allow_private_networks`
   - `allow_file_urls`
+  - `allow_search_result_pages`
 
 Runnable example: `openclaw/examples/browser_use/`.
 Browser-server example: `openclaw/examples/browser_server_use/`.
