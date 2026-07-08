@@ -541,3 +541,101 @@ func TestService_SoftDelete_ClearMemories(t *testing.T) {
 	require.NoError(t, db.Table(defaultTableName).Unscoped().Count(&count).Error)
 	assert.Equal(t, int64(2), count)
 }
+
+func TestService_AddMemory_hardDeleteSchemaWithoutDeletedAt(t *testing.T) {
+	ctx := context.Background()
+	db := testDB(t)
+	const table = "hard_delete_memories"
+	require.NoError(t, db.Exec(`CREATE TABLE hard_delete_memories (
+		memory_id char(64) PRIMARY KEY,
+		app_name varchar(255) NOT NULL,
+		user_id varchar(255) NOT NULL,
+		memory_data blob NOT NULL,
+		created_at datetime NOT NULL,
+		updated_at datetime NOT NULL
+	)`).Error)
+
+	svc, err := NewService(
+		WithDB(db),
+		WithTableName(table),
+		WithSkipDBInit(true),
+	)
+	require.NoError(t, err)
+	defer svc.Close()
+
+	uk := memory.UserKey{AppName: "app", UserID: "hard-delete"}
+	require.NoError(t, svc.AddMemory(ctx, uk, "same content", []string{"a"}))
+	require.NoError(t, svc.AddMemory(ctx, uk, "same content", []string{"b"}))
+
+	entries, err := svc.ReadMemories(ctx, uk, 0)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, []string{"b"}, entries[0].Memory.Topics)
+}
+
+type fakeGormClient struct {
+	db      *gorm.DB
+	closeFn func() error
+}
+
+func (c *fakeGormClient) DB() *gorm.DB { return c.db }
+
+func (c *fakeGormClient) Close() error {
+	if c.closeFn != nil {
+		return c.closeFn()
+	}
+	return nil
+}
+
+func TestNewService_initDBFailureClosesOwnedClient(t *testing.T) {
+	original := storagegorm.GetClientBuilder()
+	defer storagegorm.SetClientBuilder(original)
+
+	instanceName := "init-fail-close-test"
+	storagegorm.RegisterGormInstance(instanceName, storagegorm.WithDialector(sqlite.Open(":memory:")))
+
+	closedDB := testDB(t)
+	sqlDB, err := closedDB.DB()
+	require.NoError(t, err)
+	require.NoError(t, sqlDB.Close())
+
+	closed := false
+	storagegorm.SetClientBuilder(func(ctx context.Context, opts ...storagegorm.ClientBuilderOpt) (storagegorm.Client, error) {
+		return &fakeGormClient{
+			db: closedDB,
+			closeFn: func() error {
+				closed = true
+				return nil
+			},
+		}, nil
+	})
+
+	_, err = NewService(WithGormInstance(instanceName))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "init database failed")
+	assert.True(t, closed, "owned gorm client must be closed when initDB fails")
+}
+
+func TestService_WithToolExposed_hidesAutoModeDefaults(t *testing.T) {
+	db := testDB(t)
+	defaultSvc, err := NewService(WithDB(db), WithExtractor(&fakeExtractor{}))
+	require.NoError(t, err)
+
+	hiddenSvc, err := NewService(WithDB(db),
+		WithExtractor(&fakeExtractor{}),
+		WithToolExposed(memory.SearchToolName, false),
+	)
+	require.NoError(t, err)
+	defer hiddenSvc.Close()
+	defer defaultSvc.Close()
+
+	assert.Len(t, hiddenSvc.Tools(), len(defaultSvc.Tools())-1)
+
+	for _, tl := range hiddenSvc.Tools() {
+		decl := tl.Declaration()
+		if decl == nil {
+			continue
+		}
+		assert.NotEqual(t, memory.SearchToolName, decl.Name)
+	}
+}

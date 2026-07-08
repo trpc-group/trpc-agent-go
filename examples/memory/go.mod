@@ -12,6 +12,7 @@ replace (
 	trpc.group/trpc-go/trpc-agent-go/memory/redis => ../../memory/redis
 	trpc.group/trpc-go/trpc-agent-go/memory/sqlite => ../../memory/sqlite
 	trpc.group/trpc-go/trpc-agent-go/memory/sqlitevec => ../../memory/sqlitevec
+	trpc.group/trpc-go/trpc-agent-go/storage/gorm => ../../storage/gorm
 	trpc.group/trpc-go/trpc-agent-go/storage/mysql => ../../storage/mysql
 	trpc.group/trpc-go/trpc-agent-go/storage/postgres => ../../storage/postgres
 )
@@ -23,8 +24,8 @@ require (
 	github.com/stretchr/testify v1.11.1
 	gorm.io/driver/postgres v1.5.7
 	gorm.io/driver/sqlite v1.5.7
-	gorm.io/gorm v1.25.12
-	trpc.group/trpc-go/trpc-agent-go v1.8.1
+	gorm.io/gorm v1.30.0
+	trpc.group/trpc-go/trpc-agent-go v1.10.1-0.20260708123258-eba6f54c8869
 	trpc.group/trpc-go/trpc-agent-go/memory/gorm v0.0.0
 	trpc.group/trpc-go/trpc-agent-go/memory/mysql v1.1.1
 	trpc.group/trpc-go/trpc-agent-go/memory/mysqlvec v1.1.1
@@ -89,7 +90,10 @@ require (
 	google.golang.org/grpc v1.79.3 // indirect
 	google.golang.org/protobuf v1.36.10 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
+	gorm.io/datatypes v1.2.7 // indirect
+	gorm.io/driver/mysql v1.5.6 // indirect
 	trpc.group/trpc-go/trpc-a2a-go v0.2.5 // indirect
+	trpc.group/trpc-go/trpc-agent-go/storage/gorm v0.0.0-20260708123258-eba6f54c8869 // indirect
 	trpc.group/trpc-go/trpc-agent-go/storage/mysql v1.8.1 // indirect
 	trpc.group/trpc-go/trpc-agent-go/storage/postgres v1.1.1 // indirect
 	trpc.group/trpc-go/trpc-agent-go/storage/redis v0.2.0 // indirect
