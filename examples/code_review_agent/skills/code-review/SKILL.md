@@ -42,35 +42,37 @@ Commands
 1. Run full static analysis on diff
    bash scripts/run_static_analysis.sh <diff_file>
 
-2. Execute unit tests
-   bash scripts/run_tests.sh <repo_path>
-
-3. Parse diff and extract changed files
+2. Parse diff and extract changed files
    bash scripts/parse_diff.sh <diff_file>
 
-4. Check for secrets
+3. Check for secrets
    bash scripts/check_secrets.sh <file_path>
 
-5. Run go vet
+4. Run go vet
    bash scripts/run_go_vet.sh <package_path>
 
-6. Run staticcheck
+5. Run staticcheck
    bash scripts/run_staticcheck.sh <package_path>
 
 Input Parameters
 
 - --diff-file: Path to unified diff file
 - --repo-path: Path to local repository
-- --package: Go package path to analyze
+- --output-dir: Output directory for reports
+- --db-path: SQLite database path
+- --fixture: Run specific test fixture
 - --dry-run: Run without LLM, only static analysis
 
 Output Files
 
-- out/review_report.json: Structured findings
-- out/review_report.md: Human-readable report
-- out/static_analysis.txt: Static analysis results
-- out/test_results.txt: Test execution results
+Shell script outputs (in `out/` directory relative to script execution):
+- out/go_vet_results.txt: go vet analysis results
+- out/staticcheck_results.txt: staticcheck analysis results
 - out/secrets_scan.txt: Secrets detection results
+
+Go program outputs (in `output/` directory specified by --output-dir):
+- output/review_report.json: Structured findings
+- output/review_report.md: Human-readable report
 
 Risk Classification
 

@@ -1,3 +1,12 @@
+//
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
 package policy
 
 import (
@@ -162,44 +171,37 @@ func (d *RuleDetector) Detect(diff *parser.DiffResult) []storage.Finding {
 		}
 
 		for _, hunk := range file.Hunks {
-			newLineOffset := 0
-			for _, line := range hunk.Content {
-				if len(line) == 0 {
-					continue
-				}
-				switch line[0] {
-				case '+':
-					if line == "+++" {
-						continue
+			hunkContent := strings.Join(hunk.Content, "\n")
+
+			for _, rule := range d.rules {
+				if rule.Pattern.MatchString(hunkContent) {
+					matches := rule.Pattern.FindAllStringIndex(hunkContent, -1)
+					for _, match := range matches {
+						startLine := countLines(hunkContent[:match[0]]) + hunk.NewStart
+						evidence := hunkContent[match[0]:match[1]]
+						findings = append(findings, storage.Finding{
+							RuleID:      rule.ID,
+							Filepath:    file.NewPath,
+							LineNumber:  startLine,
+							Severity:    rule.Severity,
+							Category:    rule.Category,
+							Message:     rule.Name + ": " + rule.Description,
+							Evidence:    evidence,
+							Suggestion:  rule.Suggestion,
+							Confidence:  rule.Confidence,
+							NeedsReview: rule.NeedsReview,
+						})
 					}
-					lineNum := hunk.NewStart + newLineOffset
-					newLineOffset++
-					for _, rule := range d.rules {
-						if rule.Pattern.MatchString(line[1:]) {
-							findings = append(findings, storage.Finding{
-								RuleID:      rule.ID,
-								Filepath:    file.NewPath,
-								LineNumber:  lineNum,
-								Severity:    rule.Severity,
-								Category:    rule.Category,
-								Message:     rule.Name + ": " + rule.Description,
-								Evidence:    line[1:],
-								Suggestion:  rule.Suggestion,
-								Confidence:  rule.Confidence,
-								NeedsReview: rule.NeedsReview,
-							})
-						}
-					}
-				case '-':
-					continue
-				default:
-					newLineOffset++
 				}
 			}
 		}
 	}
 
 	return findings
+}
+
+func countLines(s string) int {
+	return strings.Count(s, "\n")
 }
 
 func (d *RuleDetector) DetectInCode(code string, filepath string) []storage.Finding {

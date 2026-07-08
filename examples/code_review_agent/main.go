@@ -1,3 +1,12 @@
+//
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
 package main
 
 import (
@@ -9,6 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -110,9 +120,17 @@ func listAvailableFixtures() {
 }
 
 func runFixtureReview(fixtureName string) error {
-	diffPath := filepath.Join(".", "fixtures", fixtureName+".diff")
+	var diffPath string
+	if filepath.Dir(fixtureName) == "." {
+		diffPath = filepath.Join(".", "fixtures", fixtureName+".diff")
+	} else {
+		diffPath = fixtureName
+		if !strings.HasSuffix(diffPath, ".diff") {
+			diffPath += ".diff"
+		}
+	}
 	if _, err := os.Stat(diffPath); os.IsNotExist(err) {
-		return fmt.Errorf("fixture not found: %s", fixtureName)
+		return fmt.Errorf("fixture not found: %s", diffPath)
 	}
 
 	outputDir := filepath.Join(".", "output", fixtureName)
@@ -134,6 +152,10 @@ func runCodeReview(diffPath, repoPath, outputDir, dbPath string, dryRun bool) er
 	taskID := uuid.New().String()
 	log.Printf("Task ID: %s", taskID)
 
+	if err := os.MkdirAll(outputDir, 0755); err != nil {
+		return fmt.Errorf("create output dir: %w", err)
+	}
+
 	db, err := storage.NewSQLiteStorage(dbPath)
 	if err != nil {
 		return fmt.Errorf("create storage: %w", err)
@@ -154,6 +176,15 @@ func runCodeReview(diffPath, repoPath, outputDir, dbPath string, dryRun bool) er
 	if err := db.CreateReviewTask(ctx, task); err != nil {
 		return fmt.Errorf("create task: %w", err)
 	}
+
+	defer func() {
+		if task.Status == "running" {
+			task.Status = "failed"
+			now := time.Now()
+			task.CompletedAt = &now
+			_ = db.UpdateReviewTask(ctx, task)
+		}
+	}()
 
 	metrics := telemetry.NewMetrics()
 	permissionPolicy := policy.NewPermissionPolicy()
@@ -225,6 +256,7 @@ func runCodeReview(diffPath, repoPath, outputDir, dbPath string, dryRun bool) er
 				if err != nil {
 					log.Printf("Sandbox error: %v", err)
 					metrics.RecordError()
+					continue
 				}
 
 				runRecord := storage.SandboxRun{

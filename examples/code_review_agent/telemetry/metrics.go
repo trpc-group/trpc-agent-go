@@ -1,3 +1,12 @@
+//
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
 package telemetry
 
 import (
@@ -81,13 +90,18 @@ func (m *Metrics) GetSummary() MetricsSummary {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	findCopy := make(map[storage.FindingSeverity]int, len(m.FindingsBySeverity))
+	for k, v := range m.FindingsBySeverity {
+		findCopy[k] = v
+	}
+
 	return MetricsSummary{
 		TotalReviewTime:      m.TotalReviewTime,
 		SandboxExecutionTime: m.SandboxExecutionTime,
 		SandboxExecutions:    m.SandboxExecutions,
 		ToolCalls:            m.ToolCalls,
 		PermissionBlocks:     m.PermissionBlocks,
-		FindingsBySeverity:   m.FindingsBySeverity,
+		FindingsBySeverity:   findCopy,
 		TotalFindings:        m.TotalFindings,
 		Errors:               m.Errors,
 		TasksCompleted:       m.TasksCompleted,

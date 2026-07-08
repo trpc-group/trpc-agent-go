@@ -1,3 +1,12 @@
+//
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
 package parser
 
 import (
@@ -92,6 +101,13 @@ index abc1234..def5678 100644
 
 	if len(hunk.AddedLines) != 3 {
 		t.Errorf("Expected 3 added lines, got %d", len(hunk.AddedLines))
+	}
+
+	expectedAddedLines := []int{7, 8, 10}
+	for i, expected := range expectedAddedLines {
+		if hunk.AddedLines[i] != expected {
+			t.Errorf("Expected added line %d to be %d, got %d", i+1, expected, hunk.AddedLines[i])
+		}
 	}
 }
 

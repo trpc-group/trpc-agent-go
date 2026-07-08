@@ -1,3 +1,12 @@
+//
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
 package parser
 
 import (
@@ -29,6 +38,7 @@ type DiffFile struct {
 	Hunks        []DiffHunk
 	GoPackage    string
 	AddedCode    []string
+	RemovedCode  []string
 	ModifiedCode []string
 }
 
@@ -61,6 +71,8 @@ func ParseDiff(diffContent string) (*DiffResult, error) {
 	var currentFile *DiffFile
 	var currentHunk *DiffHunk
 	inHunk := false
+	newLineOffset := 0
+	oldLineOffset := 0
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -123,26 +135,39 @@ func ParseDiff(diffContent string) (*DiffResult, error) {
 				NewCount: newCount,
 			}
 			inHunk = true
+			newLineOffset = -1
+			oldLineOffset = -1
 			continue
 		}
 
 		if inHunk && currentHunk != nil {
 			currentHunk.Content = append(currentHunk.Content, line)
 
+			if len(line) == 0 {
+				newLineOffset++
+				oldLineOffset++
+				continue
+			}
+
 			switch line[0] {
 			case '+':
 				if line != "+++" {
-					currentHunk.AddedLines = append(currentHunk.AddedLines, currentHunk.NewStart+len(currentHunk.AddedLines))
+					currentHunk.AddedLines = append(currentHunk.AddedLines, currentHunk.NewStart+newLineOffset)
 					currentFile.AddedCode = append(currentFile.AddedCode, line[1:])
 					result.TotalAdded++
 				}
+				newLineOffset++
 			case '-':
 				if line != "---" {
-					currentHunk.RemovedLines = append(currentHunk.RemovedLines, currentHunk.OldStart+len(currentHunk.RemovedLines))
+					currentHunk.RemovedLines = append(currentHunk.RemovedLines, currentHunk.OldStart+oldLineOffset)
+					currentFile.RemovedCode = append(currentFile.RemovedCode, line[1:])
 					result.TotalRemoved++
 				}
+				oldLineOffset++
 			default:
 				currentFile.ModifiedCode = append(currentFile.ModifiedCode, line)
+				newLineOffset++
+				oldLineOffset++
 			}
 		}
 	}
@@ -205,7 +230,7 @@ func FormatDiffForReview(diff *DiffResult) string {
 		if file.GoPackage != "" {
 			buf.WriteString(fmt.Sprintf("Package: %s\n", file.GoPackage))
 		}
-		buf.WriteString(fmt.Sprintf("Added: %d lines, Removed: %d lines\n", len(file.AddedCode), len(file.ModifiedCode)))
+		buf.WriteString(fmt.Sprintf("Added: %d lines, Removed: %d lines\n", len(file.AddedCode), len(file.RemovedCode)))
 		buf.WriteString("\n--- Added Code ---\n")
 		for _, line := range file.AddedCode {
 			buf.WriteString(fmt.Sprintf("+ %s\n", line))

@@ -1,3 +1,12 @@
+//
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
 package policy
 
 import (
@@ -104,8 +113,18 @@ func (p *PermissionPolicy) CheckCommand(command string) PermissionResult {
 	cmd := strings.TrimSpace(command)
 	lowerCmd := strings.ToLower(cmd)
 
+	cmdArgs := parseCommand(cmd)
+	if len(cmdArgs) == 0 {
+		return PermissionResult{
+			Action:  ActionReview,
+			Reason:  "Empty command",
+			Command: cmd,
+		}
+	}
+	executable := cmdArgs[0]
+
 	for _, denied := range p.deniedCommands {
-		if strings.Contains(lowerCmd, strings.ToLower(denied)) {
+		if executable == denied || strings.HasPrefix(lowerCmd, strings.ToLower(denied)+" ") {
 			return PermissionResult{
 				Action:  ActionDeny,
 				Reason:  "Command is denied",
@@ -125,7 +144,7 @@ func (p *PermissionPolicy) CheckCommand(command string) PermissionResult {
 	}
 
 	for _, allowed := range p.allowedCommands {
-		if strings.HasPrefix(lowerCmd, strings.ToLower(allowed)) {
+		if executable == allowed || strings.HasPrefix(lowerCmd, strings.ToLower(allowed)+" ") {
 			return PermissionResult{
 				Action:  ActionAllow,
 				Reason:  "Command is allowed",
@@ -135,10 +154,18 @@ func (p *PermissionPolicy) CheckCommand(command string) PermissionResult {
 	}
 
 	return PermissionResult{
-		Action:  ActionAllow,
-		Reason:  "Command not in deny list",
+		Action:  ActionReview,
+		Reason:  "Command not in allow list; requires manual review",
 		Command: cmd,
 	}
+}
+
+func parseCommand(cmd string) []string {
+	args := strings.Fields(cmd)
+	if len(args) == 0 {
+		return []string{cmd}
+	}
+	return args
 }
 
 func (p *PermissionPolicy) IsAllowed(command string) bool {

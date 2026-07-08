@@ -1,3 +1,12 @@
+//
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
 package storage
 
 import (
@@ -116,6 +125,15 @@ func TestSQLiteStorage_CreateAndGetFindings(t *testing.T) {
 	}
 
 	taskID := uuid.New().String()
+	if err := storage.CreateReviewTask(ctx, ReviewTask{
+		ID:        taskID,
+		DiffPath:  "test.diff",
+		RepoPath:  ".",
+		Status:    "running",
+		StartedAt: time.Now(),
+	}); err != nil {
+		t.Fatalf("Failed to create task: %v", err)
+	}
 
 	finding := Finding{
 		ID:          uuid.New().String(),
@@ -166,6 +184,15 @@ func TestSQLiteStorage_CreateAndGetSandboxRuns(t *testing.T) {
 	}
 
 	taskID := uuid.New().String()
+	if err := storage.CreateReviewTask(ctx, ReviewTask{
+		ID:        taskID,
+		DiffPath:  "test.diff",
+		RepoPath:  ".",
+		Status:    "running",
+		StartedAt: time.Now(),
+	}); err != nil {
+		t.Fatalf("Failed to create task: %v", err)
+	}
 
 	run := SandboxRun{
 		ID:         uuid.New().String(),
@@ -214,6 +241,15 @@ func TestSQLiteStorage_CreateAndGetPermissionRecords(t *testing.T) {
 	}
 
 	taskID := uuid.New().String()
+	if err := storage.CreateReviewTask(ctx, ReviewTask{
+		ID:        taskID,
+		DiffPath:  "test.diff",
+		RepoPath:  ".",
+		Status:    "running",
+		StartedAt: time.Now(),
+	}); err != nil {
+		t.Fatalf("Failed to create task: %v", err)
+	}
 
 	record := PermissionRecord{
 		ID:        uuid.New().String(),

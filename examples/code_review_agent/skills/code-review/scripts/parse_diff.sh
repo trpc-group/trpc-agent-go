@@ -16,7 +16,7 @@ awk '
     /^diff --git/ {
         split($0, parts, " ")
         from_file = parts[3]
-        gsub("a/", "", from_file)
+        sub(/^a\//, "", from_file)
         print from_file
     }
 ' "$DIFF_FILE"

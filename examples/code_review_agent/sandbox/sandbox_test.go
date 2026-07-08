@@ -1,7 +1,18 @@
+//
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
 package sandbox
 
 import (
 	"context"
+	"os/exec"
+	"strings"
 	"testing"
 	"time"
 )
@@ -49,6 +60,10 @@ func TestLocalSandbox_RunCommand_Failure(t *testing.T) {
 }
 
 func TestLocalSandbox_RunCommand_Timeout(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available, skipping timeout test")
+	}
+
 	sandbox, err := NewLocalSandbox(".")
 	if err != nil {
 		t.Fatalf("Failed to create sandbox: %v", err)
@@ -91,16 +106,7 @@ func TestLocalSandbox_RunCommand_OutputLimit(t *testing.T) {
 		t.Errorf("Expected output to be truncated to ~10 chars, got %d", len(result.Output))
 	}
 
-	if !contains(result.Output, "[truncated]") {
+	if !strings.Contains(result.Output, "[truncated]") {
 		t.Error("Expected output to contain '[truncated]'")
 	}
-}
-
-func contains(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }

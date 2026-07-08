@@ -1,3 +1,12 @@
+//
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
 package storage
 
 import (
@@ -135,7 +144,7 @@ type SQLiteStorage struct {
 }
 
 func NewSQLiteStorage(path string) (*SQLiteStorage, error) {
-	db, err := sql.Open("sqlite3", path)
+	db, err := sql.Open("sqlite3", path+"?_foreign_keys=on")
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
@@ -154,7 +163,7 @@ func (s *SQLiteStorage) Init(ctx context.Context) error {
 			repo_path TEXT,
 			status TEXT,
 			started_at INTEGER,
-			completed_at INTEGER,
+			completed_at INTEGER NULL,
 			total_time_ms INTEGER
 		)`,
 		`CREATE TABLE IF NOT EXISTS finding (
@@ -272,7 +281,8 @@ func (s *SQLiteStorage) GetReviewTask(ctx context.Context, id string) (*ReviewTa
 	`, id)
 
 	var task ReviewTask
-	var startedAt, completedAt int64
+	var startedAt int64
+	var completedAt sql.NullInt64
 	err := row.Scan(&task.ID, &task.DiffPath, &task.RepoPath, &task.Status,
 		&startedAt, &completedAt, &task.TotalTimeMs)
 	if err != nil {
@@ -283,8 +293,8 @@ func (s *SQLiteStorage) GetReviewTask(ctx context.Context, id string) (*ReviewTa
 	}
 
 	task.StartedAt = time.Unix(0, startedAt)
-	if completedAt != 0 {
-		t := time.Unix(0, completedAt)
+	if completedAt.Valid {
+		t := time.Unix(0, completedAt.Int64)
 		task.CompletedAt = &t
 	}
 
@@ -551,11 +561,11 @@ func (s *SQLiteStorage) Close() error {
 	return s.db.Close()
 }
 
-func toNullInt64(t *time.Time) int64 {
+func toNullInt64(t *time.Time) sql.NullInt64 {
 	if t == nil {
-		return 0
+		return sql.NullInt64{Valid: false}
 	}
-	return t.UnixNano()
+	return sql.NullInt64{Int64: t.UnixNano(), Valid: true}
 }
 
 func boolToInt(b bool) int {

@@ -1,3 +1,12 @@
+//
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
 package policy
 
 import (
@@ -79,6 +88,32 @@ func TestPermissionPolicy_CheckCommand_Review(t *testing.T) {
 			result := policy.CheckCommand(tc.command)
 			if result.Action != ActionReview {
 				t.Errorf("Expected action %s, got %s for command '%s'", ActionReview, result.Action, tc.command)
+			}
+		})
+	}
+}
+
+func TestPermissionPolicy_CheckCommand_UnknownCommand(t *testing.T) {
+	policy := NewPermissionPolicy()
+
+	testCases := []struct {
+		name    string
+		command string
+	}{
+		{"unknown command", "unknown_cmd --arg"},
+		{"custom script", "./custom_script.sh"},
+		{"npm install", "npm install package"},
+		{"yarn", "yarn install"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := policy.CheckCommand(tc.command)
+			if result.Action != ActionReview {
+				t.Errorf("Expected action %s for unknown command '%s', got %s", ActionReview, tc.command, result.Action)
+			}
+			if result.Reason != "Command not in allow list; requires manual review" {
+				t.Errorf("Expected reason for unknown command '%s', got '%s'", tc.command, result.Reason)
 			}
 		})
 	}

@@ -1,3 +1,12 @@
+//
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
 package sandbox
 
 import (
@@ -81,14 +90,14 @@ func (s *LocalSandbox) RunCommand(ctx context.Context, command string, config Sa
 				Error:       err.Error(),
 				ExitCode:    -1,
 				Duration:    duration,
-				TimedOut:    strings.Contains(err.Error(), "context deadline exceeded"),
+				TimedOut:    ctx.Err() == context.DeadlineExceeded,
 				SandboxType: SandboxTypeLocal,
 			}, nil
 		}
 	}
 
 	output := stdout.String()
-	if len(output) > config.OutputSizeLimit {
+	if config.OutputSizeLimit > 0 && len(output) > config.OutputSizeLimit {
 		output = output[:config.OutputSizeLimit] + "... [truncated]"
 	}
 
@@ -163,6 +172,4 @@ var DefaultConfig = SandboxConfig{
 	Type:             SandboxTypeLocal,
 }
 
-func osEnviron() []string {
-	return os.Environ()
-}
+

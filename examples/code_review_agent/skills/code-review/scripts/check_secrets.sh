@@ -30,7 +30,7 @@ echo "Scanning for potential secrets in: $FILE_PATH" >> out/secrets_scan.txt
 echo "" >> out/secrets_scan.txt
 
 for pattern in "${SECRET_PATTERNS[@]}"; do
-    matches=$(grep -i -n "$pattern" "$FILE_PATH" | head -20)
+    matches=$(grep -i -n -E "$pattern" "$FILE_PATH" | head -20)
     if [ -n "$matches" ]; then
         echo "Found potential '$pattern' references:" >> out/secrets_scan.txt
         echo "$matches" >> out/secrets_scan.txt
