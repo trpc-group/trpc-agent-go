@@ -4862,6 +4862,69 @@ func TestNewModel_OpenAIGLMPreservesNonTextContentByDefault(t *testing.T) {
 	require.NotContains(t, body, "Omitted non-text attachments")
 }
 
+func TestNewModel_OpenAITimeout(t *testing.T) {
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-release:
+			return
+		case <-time.After(5 * time.Second):
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id":"chatcmpl-test",
+			"object":"chat.completion",
+			"created":123,
+			"model":"glm50",
+			"choices":[{
+				"index":0,
+				"message":{"role":"assistant","content":"ok"},
+				"finish_reason":"stop"
+			}]
+		}`))
+	}))
+	defer func() {
+		server.CloseClientConnections()
+		server.Close()
+	}()
+	defer close(release)
+
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	mdl, err := modelFromOptions(runOptions{
+		ModelMode:           modeOpenAI,
+		OpenAIModel:         "glm50",
+		OpenAIVariant:       openAIVariantAuto,
+		OpenAIBaseURL:       server.URL,
+		OpenAITimeout:       50 * time.Millisecond,
+		OpenAIMaxRetriesSet: true,
+		OpenAIMaxRetries:    0,
+	})
+	require.NoError(t, err)
+
+	start := time.Now()
+	ch, err := mdl.GenerateContent(context.Background(), &model.Request{
+		Messages: []model.Message{model.NewUserMessage("hi")},
+		GenerationConfig: model.GenerationConfig{
+			Stream: false,
+		},
+	})
+	require.NoError(t, err)
+
+	var gotErr error
+	for rsp := range ch {
+		if rsp.Error != nil {
+			gotErr = rsp.Error
+		}
+	}
+	require.Error(t, gotErr)
+	require.Less(t, time.Since(start), 2*time.Second)
+}
+
 func TestResolveOpenAIHeaders_EnvOnlyAndConfigOnly(t *testing.T) {
 	t.Setenv(
 		openAIHeadersEnvName,
