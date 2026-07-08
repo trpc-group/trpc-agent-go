@@ -85,7 +85,7 @@ func defaultClientBuilder(ctx context.Context, builderOpts ...ClientBuilderOpt) 
 	}
 
 	if o.DB != nil {
-		return &gormClient{db: o.DB, ownsConnection: false}, nil
+		return NewClient(o.DB, false), nil
 	}
 
 	if o.Dialector == nil {
@@ -107,10 +107,7 @@ func defaultClientBuilder(ctx context.Context, builderOpts ...ClientBuilderOpt) 
 		return nil, fmt.Errorf("gorm: get sql db: %w", err)
 	}
 
-	ownsConnection := true
-	if o.ownsConnectionSet {
-		ownsConnection = o.ownsConnection
-	}
+	ownsConnection := o.EffectiveOwnsConnection()
 
 	if err := sqlDB.PingContext(ctx); err != nil {
 		if ownsConnection {
@@ -119,7 +116,23 @@ func defaultClientBuilder(ctx context.Context, builderOpts ...ClientBuilderOpt) 
 		return nil, fmt.Errorf("gorm: ping database: %w", err)
 	}
 
-	return &gormClient{db: db, ownsConnection: ownsConnection}, nil
+	return NewClient(db, ownsConnection), nil
+}
+
+// NewClient wraps an existing *gorm.DB with explicit close ownership.
+// Custom builders installed via SetClientBuilder can use this helper.
+func NewClient(db *gormio.DB, ownsConnection bool) Client {
+	return &gormClient{db: db, ownsConnection: ownsConnection}
+}
+
+// ApplyClientBuilderOpts folds builder options into a ClientBuilderOpts value.
+// Custom builders can use this to observe options such as WithOwnsConnection.
+func ApplyClientBuilderOpts(opts ...ClientBuilderOpt) ClientBuilderOpts {
+	o := ClientBuilderOpts{}
+	for _, opt := range opts {
+		opt(&o)
+	}
+	return o
 }
 
 // ClientBuilderOpt configures GORM client construction.
@@ -133,10 +146,21 @@ type ClientBuilderOpts struct {
 	InstanceName string
 	ExtraOptions []any
 
-	// ownsConnection controls whether Client.Close closes the opened pool.
-	// Defaults to true for dialector-opened connections; WithDB always skips close.
-	ownsConnection    bool
-	ownsConnectionSet bool
+	// OwnsConnection controls whether Client.Close closes dialector-opened pools.
+	// Only meaningful when OwnsConnectionSet is true.
+	OwnsConnection bool
+
+	// OwnsConnectionSet reports whether OwnsConnection was configured explicitly.
+	OwnsConnectionSet bool
+}
+
+// EffectiveOwnsConnection reports whether the client should close dialector-opened pools.
+// Defaults to true when OwnsConnectionSet is false.
+func (o ClientBuilderOpts) EffectiveOwnsConnection() bool {
+	if o.OwnsConnectionSet {
+		return o.OwnsConnection
+	}
+	return true
 }
 
 // WithDB injects an existing *gorm.DB. The caller owns the DB lifecycle.
@@ -159,8 +183,8 @@ func WithDialector(d gormio.Dialector) ClientBuilderOpt {
 // for dialector-opened connections. Ignored when WithDB is used.
 func WithOwnsConnection(owns bool) ClientBuilderOpt {
 	return func(opts *ClientBuilderOpts) {
-		opts.ownsConnection = owns
-		opts.ownsConnectionSet = true
+		opts.OwnsConnection = owns
+		opts.OwnsConnectionSet = true
 	}
 }
 
