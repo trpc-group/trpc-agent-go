@@ -175,65 +175,76 @@ func defaultExtractor(args []byte) ScanInput {
 // The value may be a normal array, a single object, or a double-encoded
 // JSON string containing either of the above.
 func parseCodeBlocks(raw json.RawMessage) []CodeBlock {
-	if len(raw) == 0 {
-		return nil
-	}
-	var val any
-	if err := json.Unmarshal(raw, &val); err != nil {
-		return nil
-	}
-	if val == nil {
+	val, ok := unmarshalJSONAny(raw)
+	if !ok {
 		return nil
 	}
 	// If the LLM double-encoded the value as a JSON string, unwrap and re-parse.
 	if s, ok := val.(string); ok {
-		raw = json.RawMessage(s)
-		if err := json.Unmarshal(raw, &val); err != nil {
-			return nil
-		}
-		if val == nil {
+		val, ok = unmarshalJSONAny(json.RawMessage(s))
+		if !ok {
 			return nil
 		}
 	}
 	switch v := val.(type) {
 	case []any:
-		out := make([]CodeBlock, 0, len(v))
-		for _, elem := range v {
-			if obj, ok := elem.(map[string]any); ok {
-				cb := CodeBlock{}
-				if s, ok := obj["code"].(string); ok {
-					cb.Code = s
-				}
-				if s, ok := obj["language"].(string); ok {
-					cb.Language = s
-				} else if s, ok := obj["lang"].(string); ok {
-					cb.Language = s
-				}
-				if cb.Code != "" {
-					out = append(out, cb)
-				}
-				continue
-			}
-			if s, ok := elem.(string); ok && s != "" {
-				out = append(out, CodeBlock{Code: s})
-			}
-		}
-		return out
+		return parseCodeBlockArray(v)
 	case map[string]any:
-		cb := CodeBlock{}
-		if s, ok := v["code"].(string); ok {
-			cb.Code = s
-		}
-		if s, ok := v["language"].(string); ok {
-			cb.Language = s
-		} else if s, ok := v["lang"].(string); ok {
-			cb.Language = s
-		}
-		if cb.Code != "" {
+		if cb, ok := codeBlockFromMap(v); ok {
 			return []CodeBlock{cb}
 		}
 		return nil
 	default:
 		return nil
 	}
+}
+
+// unmarshalJSONAny unmarshals a non-empty JSON blob into a Go any value.
+// It returns false for empty or invalid payloads.
+func unmarshalJSONAny(raw json.RawMessage) (any, bool) {
+	if len(raw) == 0 {
+		return nil, false
+	}
+	var val any
+	if err := json.Unmarshal(raw, &val); err != nil || val == nil {
+		return nil, false
+	}
+	return val, true
+}
+
+// parseCodeBlockArray converts a JSON array of objects/strings into CodeBlocks.
+func parseCodeBlockArray(arr []any) []CodeBlock {
+	out := make([]CodeBlock, 0, len(arr))
+	for _, elem := range arr {
+		if cb, ok := codeBlockFromAny(elem); ok {
+			out = append(out, cb)
+		}
+	}
+	return out
+}
+
+// codeBlockFromAny converts a single JSON element (object or string) into a CodeBlock.
+func codeBlockFromAny(v any) (CodeBlock, bool) {
+	if obj, ok := v.(map[string]any); ok {
+		return codeBlockFromMap(obj)
+	}
+	if s, ok := v.(string); ok && s != "" {
+		return CodeBlock{Code: s}, true
+	}
+	return CodeBlock{}, false
+}
+
+// codeBlockFromMap extracts a CodeBlock from a JSON object, supporting both
+// "language" and "lang" keys.
+func codeBlockFromMap(m map[string]any) (CodeBlock, bool) {
+	cb := CodeBlock{}
+	if s, ok := m["code"].(string); ok {
+		cb.Code = s
+	}
+	if s, ok := m["language"].(string); ok {
+		cb.Language = s
+	} else if s, ok := m["lang"].(string); ok {
+		cb.Language = s
+	}
+	return cb, cb.Code != ""
 }
