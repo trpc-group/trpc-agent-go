@@ -2287,10 +2287,21 @@ and only its per-run execution policy should change, continue to use
 `agent.WithToolExecutionFilter(...)`. `WithExternalTools` is better for AG-UI,
 browser, mobile, or upstream-service callers that declare tools dynamically on
 each request. The AG-UI runner maps request `input.Tools` to `WithExternalTools`
-by default. If an external tool has the same name as an existing tool, the
+by default; the OpenAI Chat Completions adapter (`server/openai`) maps request
+`tools` to `WithExternalTools` as well. The server does not execute those tools;
+callers run them after receiving `tool_calls` and resume with `role=tool`
+messages. If an external tool has the same name as an existing tool, the
 existing tool wins; the external declaration does not override or intercept it.
 This includes tools registered on the Agent and tools added with
 `WithAdditionalTools`.
+
+The `server/openai` adapter only implements `tool_choice: "none"` (skip
+exposing tools to the model) and `tool_choice: "auto"` or an omitted value
+(let the model decide, which is the only behavior the adapter can offer since
+it never executes tools itself). `tool_choice: "required"` and forced-function
+tool choice (`{"type":"function","function":{"name":"..."}}`) are rejected
+with an HTTP 400 when the request also includes `tools`, instead of being
+silently treated as `"auto"`.
 
 **Complete example:** `examples/toolinterrupt/`
 
