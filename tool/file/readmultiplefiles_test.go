@@ -219,6 +219,25 @@ func TestReadMultipleFiles_AbsolutePathUnderExtraReadRoot(t *testing.T) {
 	assert.Equal(t, "derived", rsp.Files[0].Contents)
 }
 
+func TestReadMultipleFiles_AbsolutePathUnderBaseDir(t *testing.T) {
+	base := t.TempDir()
+	fileName := filepath.Join(base, "derived.txt")
+	assert.NoError(t, os.WriteFile(fileName, []byte("derived"), 0o644))
+
+	set, err := NewToolSet(WithBaseDir(base))
+	assert.NoError(t, err)
+	fts := set.(*fileToolSet)
+
+	rsp, err := fts.readMultipleFiles(
+		context.Background(),
+		&readMultipleFilesRequest{Patterns: []string{fileName}},
+	)
+	assert.NoError(t, err)
+	assert.Len(t, rsp.Files, 1)
+	assert.Equal(t, fileName, rsp.Files[0].FileName)
+	assert.Equal(t, "derived", rsp.Files[0].Contents)
+}
+
 func TestReadMultipleFiles_BlocksSymlinkEscapeFromExtraReadRoot(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink permissions vary on windows")
@@ -245,7 +264,7 @@ func TestReadMultipleFiles_BlocksSymlinkEscapeFromExtraReadRoot(t *testing.T) {
 	assert.Contains(
 		t,
 		rsp.Files[0].Message,
-		"outside configured read-only roots",
+		"outside base_directory and configured read-only roots",
 	)
 }
 
