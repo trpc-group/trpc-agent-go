@@ -20,6 +20,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
 	"trpc.group/trpc-go/trpc-agent-go/internal/skillprofile"
 	"trpc.group/trpc-go/trpc-agent-go/internal/structuredoutput"
+	"trpc.group/trpc-go/trpc-agent-go/internal/workspacesession"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -1400,7 +1401,7 @@ func WithWorkspaceAcquirer(
 	reg codeexecutor.WorkspaceAcquirer,
 ) Option {
 	return func(opts *Options) {
-		opts.workspaceAcquirer = reg
+		opts.workspaceAcquirer = workspacesession.NormalizeAcquirer(reg)
 	}
 }
 

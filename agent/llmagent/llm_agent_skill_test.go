@@ -542,6 +542,18 @@ func TestWithWorkspaceAcquirer_UsesSuppliedAcquirer(t *testing.T) {
 	require.NotSame(t, noSession1, noSession2)
 }
 
+func TestWithWorkspaceAcquirer_TypedNilKeepsSharedDefault(t *testing.T) {
+	var typedNil *codeexecutor.WorkspaceRegistry
+	exec := &stubExec{}
+	a := New("tester", WithCodeExecutor(exec), WithWorkspaceAcquirer(typedNil))
+
+	// A typed-nil acquirer is normalized to a true nil, so the shared default
+	// registry that connects skill_run and workspace_exec is still built
+	// instead of leaving each tool on its own private registry.
+	require.NotNil(t, a.workspaceRegistry)
+	require.NotNil(t, a.workspaceRegistryForInvocation(nil, exec))
+}
+
 func TestWithWorkspaceAcquirer_AcquireInvokedDuringRun(t *testing.T) {
 	custom := &fakeAcquirer{inner: codeexecutor.NewWorkspaceRegistry()}
 	a := New(
