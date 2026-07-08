@@ -11,6 +11,7 @@ package browser
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	mcptool "trpc.group/trpc-go/trpc-agent-go/tool/mcp"
@@ -39,6 +40,37 @@ func TestResolveConfig_DefaultsFirstProfile(t *testing.T) {
 	require.Equal(t, defaultProfileName, got.DefaultProfile)
 	require.Len(t, got.Profiles, 1)
 	require.Equal(t, defaultProfileName, got.Profiles[0].Name)
+}
+
+func TestResolveConfig_DefaultsStdioTimeout(t *testing.T) {
+	t.Parallel()
+
+	got, err := resolveConfig(Config{
+		Profiles: []ProfileConfig{{
+			Transport: transportStdio,
+			Command:   "npx",
+		}},
+	})
+	require.NoError(t, err)
+	require.Equal(
+		t,
+		defaultStdioTimeout,
+		got.Profiles[0].Connection.Timeout,
+	)
+}
+
+func TestResolveConfig_PreservesConfiguredStdioTimeout(t *testing.T) {
+	t.Parallel()
+
+	got, err := resolveConfig(Config{
+		Profiles: []ProfileConfig{{
+			Transport: transportStdio,
+			Command:   "npx",
+			Timeout:   5 * time.Second,
+		}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 5*time.Second, got.Profiles[0].Connection.Timeout)
 }
 
 func TestResolveConfig_DefaultProfileMustExist(t *testing.T) {
@@ -110,11 +142,12 @@ func TestResolveConfig_NavigationPolicyApplied(t *testing.T) {
 
 	allow := true
 	cfg := Config{
-		AllowedDomains:  []string{"example.com"},
-		BlockedDomains:  []string{"bad.example.com"},
-		AllowLoopback:   &allow,
-		AllowPrivateNet: &allow,
-		AllowFileURLs:   &allow,
+		AllowedDomains:   []string{"example.com"},
+		BlockedDomains:   []string{"bad.example.com"},
+		AllowLoopback:    &allow,
+		AllowPrivateNet:  &allow,
+		AllowFileURLs:    &allow,
+		AllowedFileRoots: []string{"/tmp/openclaw-uploads"},
 		Profiles: []ProfileConfig{{
 			Transport: transportStdio,
 			Command:   "npx",
@@ -132,6 +165,11 @@ func TestResolveConfig_NavigationPolicyApplied(t *testing.T) {
 	require.True(t, got.Navigation.AllowLoopback)
 	require.True(t, got.Navigation.AllowPrivateNet)
 	require.True(t, got.Navigation.AllowFileURLs)
+	require.Equal(
+		t,
+		normalizeFileRoots([]string{"/tmp/openclaw-uploads"}),
+		got.Navigation.AllowedFileRoots,
+	)
 }
 
 func TestResolveConfig_ServerTargetsAllowEmptyProfileTransport(t *testing.T) {
@@ -270,6 +308,17 @@ func TestValidateConnection_RequiresCommandForStdio(t *testing.T) {
 	err := validateConnection(connectionConfig(transportStdio, "", ""))
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "requires command")
+}
+
+func TestValidateConnection_RejectsNegativeTimeout(t *testing.T) {
+	t.Parallel()
+
+	cfg := connectionConfig(transportStdio, "", "npx")
+	cfg.Timeout = -time.Second
+
+	err := validateConnection(cfg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "timeout")
 }
 
 func TestResolveNodeTargets_ReturnsNilWhenEmpty(t *testing.T) {

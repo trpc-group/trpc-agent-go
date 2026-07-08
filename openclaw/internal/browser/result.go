@@ -50,32 +50,45 @@ type textContentItem struct {
 
 // Result is the normalized native browser tool result.
 type Result struct {
-	Action          string        `json:"action"`
-	Profile         string        `json:"profile,omitempty"`
-	DefaultProfile  string        `json:"defaultProfile,omitempty"`
-	Driver          string        `json:"driver,omitempty"`
-	State           string        `json:"state,omitempty"`
-	ToolCount       int           `json:"toolCount,omitempty"`
-	EvaluateEnabled bool          `json:"evaluateEnabled,omitempty"`
-	Supported       []string      `json:"supportedActions,omitempty"`
-	TargetID        string        `json:"targetId,omitempty"`
-	Profiles        []ProfileInfo `json:"profiles,omitempty"`
-	Tabs            []TabInfo     `json:"tabs,omitempty"`
-	Untrusted       bool          `json:"untrusted,omitempty"`
-	Text            string        `json:"text,omitempty"`
-	Content         any           `json:"content,omitempty"`
-	Warning         string        `json:"warning,omitempty"`
+	Action           string                `json:"action"`
+	Profile          string                `json:"profile,omitempty"`
+	DefaultProfile   string                `json:"defaultProfile,omitempty"`
+	Driver           string                `json:"driver,omitempty"`
+	State            string                `json:"state,omitempty"`
+	ToolCount        int                   `json:"toolCount,omitempty"`
+	EvaluateEnabled  bool                  `json:"evaluateEnabled,omitempty"`
+	Supported        []string              `json:"supportedActions,omitempty"`
+	NavigationPolicy *NavigationPolicyInfo `json:"navigationPolicy,omitempty"`
+	TargetID         string                `json:"targetId,omitempty"`
+	Profiles         []ProfileInfo         `json:"profiles,omitempty"`
+	Tabs             []TabInfo             `json:"tabs,omitempty"`
+	Untrusted        bool                  `json:"untrusted,omitempty"`
+	Text             string                `json:"text,omitempty"`
+	Content          any                   `json:"content,omitempty"`
+	Warning          string                `json:"warning,omitempty"`
 }
 
 // ProfileInfo describes one configured browser profile.
 type ProfileInfo struct {
-	Name        string   `json:"name"`
-	Description string   `json:"description,omitempty"`
-	Default     bool     `json:"default,omitempty"`
-	Driver      string   `json:"driver"`
-	State       string   `json:"state,omitempty"`
-	ToolCount   int      `json:"toolCount,omitempty"`
-	Supported   []string `json:"supportedActions,omitempty"`
+	Name             string                `json:"name"`
+	Description      string                `json:"description,omitempty"`
+	Default          bool                  `json:"default,omitempty"`
+	Driver           string                `json:"driver"`
+	State            string                `json:"state,omitempty"`
+	ToolCount        int                   `json:"toolCount,omitempty"`
+	Supported        []string              `json:"supportedActions,omitempty"`
+	NavigationPolicy *NavigationPolicyInfo `json:"navigationPolicy,omitempty"`
+}
+
+// NavigationPolicyInfo describes browser navigation gates visible to callers.
+type NavigationPolicyInfo struct {
+	AllowedDomains       []string `json:"allowedDomains,omitempty"`
+	BlockedDomains       []string `json:"blockedDomains,omitempty"`
+	AllowLoopback        bool     `json:"allowLoopback,omitempty"`
+	AllowPrivateNetworks bool     `json:"allowPrivateNetworks,omitempty"`
+	AllowFileURLs        bool     `json:"allowFileUrls,omitempty"`
+	AllowRootFileURLs    bool     `json:"allowRootFileUrls,omitempty"`
+	AllowedFileRoots     []string `json:"allowedFileRoots,omitempty"`
 }
 
 // TabInfo describes one known tab.
