@@ -224,6 +224,31 @@ func TestClientBuilderOpts_WithInstanceName(t *testing.T) {
 	assert.Equal(t, "primary", opts.InstanceName)
 }
 
+func TestApplyClientBuilderOpts(t *testing.T) {
+	opts := ApplyClientBuilderOpts(
+		WithDialector(sqlite.Open(":memory:")),
+		WithOwnsConnection(false),
+		WithInstanceName("primary"),
+	)
+	assert.True(t, opts.OwnsConnectionSet)
+	assert.False(t, opts.OwnsConnection)
+	assert.False(t, opts.EffectiveOwnsConnection())
+	assert.Equal(t, "primary", opts.InstanceName)
+}
+
+func TestClientBuilderOpts_EffectiveOwnsConnection_Default(t *testing.T) {
+	opts := ClientBuilderOpts{}
+	assert.True(t, opts.EffectiveOwnsConnection())
+}
+
+func TestNewClient(t *testing.T) {
+	db, err := gormio.Open(sqlite.Open(":memory:"), &gormio.Config{})
+	require.NoError(t, err)
+
+	client := NewClient(db, true)
+	require.NoError(t, client.Close())
+}
+
 func TestGetGormInstance_NotFound(t *testing.T) {
 	opts, ok := GetGormInstance("missing-instance-name")
 	assert.False(t, ok)
