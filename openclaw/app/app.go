@@ -1371,6 +1371,7 @@ func NewRuntimeWithOptions(
 	gwOpts = appendModelCallBudgetGatewayOption(
 		gwOpts,
 		opts.MaxLLMCalls,
+		opts.FinalizeBeforeMaxLLMCalls,
 	)
 	if langfuseRT != nil && langfuseRT.runOptionResolver != nil {
 		gwOpts = append(
@@ -2001,6 +2002,7 @@ func run(
 	gwOpts = appendModelCallBudgetGatewayOption(
 		gwOpts,
 		opts.MaxLLMCalls,
+		opts.FinalizeBeforeMaxLLMCalls,
 	)
 	if langfuseRT != nil && langfuseRT.runOptionResolver != nil {
 		gwOpts = append(

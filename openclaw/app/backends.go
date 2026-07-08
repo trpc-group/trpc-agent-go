@@ -368,7 +368,10 @@ func newSessionSummarizer(
 		)
 	}
 
-	return summary.NewSummarizer(mdl, options...), nil
+	return summary.NewSummarizer(
+		newModelCallBudgetBypassModel(mdl),
+		options...,
+	), nil
 }
 
 func parseSummaryPolicy(raw string) (string, error) {
@@ -439,7 +442,10 @@ func newAutoMemoryExtractor(
 		}
 	}
 
-	return memextractor.NewExtractor(mdl, extOpts...), nil
+	return memextractor.NewExtractor(
+		newModelCallBudgetBypassModel(mdl),
+		extOpts...,
+	), nil
 }
 
 const summaryToolResultMaxRunes = 2000
