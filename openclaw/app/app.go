@@ -35,6 +35,7 @@ import (
 	"time"
 	"unicode"
 
+	openaiopt "github.com/openai/openai-go/option"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/claudecode"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
@@ -3808,6 +3809,25 @@ func newOpenAIModel(spec registry.ModelSpec) (model.Model, error) {
 	if apiKey := strings.TrimSpace(spec.APIKey); apiKey != "" {
 		opts = append(opts, openai.WithAPIKey(apiKey))
 	}
+	if spec.Timeout > 0 {
+		opts = append(
+			opts,
+			openai.WithHTTPClientOptions(
+				openai.WithHTTPClientTimeout(spec.Timeout),
+			),
+			openai.WithOpenAIOptions(
+				openaiopt.WithRequestTimeout(spec.Timeout),
+			),
+		)
+	}
+	if spec.MaxRetries != nil {
+		opts = append(
+			opts,
+			openai.WithOpenAIOptions(
+				openaiopt.WithMaxRetries(*spec.MaxRetries),
+			),
+		)
+	}
 	if len(spec.Headers) > 0 {
 		opts = append(opts, openai.WithHeaders(spec.Headers))
 	}
@@ -3846,11 +3866,27 @@ func modelFromOptions(opts runOptions) (model.Model, error) {
 		APIKey:                       apiKey,
 		OpenAIVariant:                opts.OpenAIVariant,
 		OpenAITextOnlyMessageContent: opts.OpenAITextOnlyMessageContent,
-		Headers:                      headers,
-		DebugRecorderEnabled:         opts.DebugRecorderEnabled,
-		Config:                       opts.ModelConfig,
+		Timeout:                      opts.OpenAITimeout,
+		MaxRetries: openAIMaxRetriesPtr(
+			opts.OpenAIMaxRetries,
+			opts.OpenAIMaxRetriesSet,
+		),
+		Headers:              headers,
+		DebugRecorderEnabled: opts.DebugRecorderEnabled,
+		Config:               opts.ModelConfig,
 	}
-	return f(spec)
+	mdl, err := f(spec)
+	if err != nil {
+		return nil, err
+	}
+	return newModelTimeoutModel(mdl, opts.OpenAITimeout), nil
+}
+
+func openAIMaxRetriesPtr(maxRetries int, set bool) *int {
+	if !set || maxRetries < 0 {
+		return nil
+	}
+	return &maxRetries
 }
 
 func resolveOpenAIHeaders(

@@ -31,6 +31,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -199,6 +200,8 @@ type ModelSpec struct {
 	APIKey                       string
 	OpenAIVariant                string
 	OpenAITextOnlyMessageContent bool
+	Timeout                      time.Duration
+	MaxRetries                   *int
 	Headers                      map[string]string
 	DebugRecorderEnabled         bool
 

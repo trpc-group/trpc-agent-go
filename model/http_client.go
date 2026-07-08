@@ -10,7 +10,10 @@
 // Package model provides interfaces for working with LLMs.
 package model
 
-import "net/http"
+import (
+	"net/http"
+	"time"
+)
 
 // HTTPClient is the interface for the HTTP client.
 type HTTPClient interface {
@@ -28,6 +31,7 @@ var DefaultNewHTTPClient HTTPClientNewFunc = func(opts ...HTTPClientOption) HTTP
 	}
 	return &http.Client{
 		Transport: options.Transport,
+		Timeout:   options.Timeout,
 	}
 }
 
@@ -48,8 +52,16 @@ func WithHTTPClientTransport(transport http.RoundTripper) HTTPClientOption {
 	}
 }
 
+// WithHTTPClientTimeout configures the HTTP client timeout.
+func WithHTTPClientTimeout(timeout time.Duration) HTTPClientOption {
+	return func(options *HTTPClientOptions) {
+		options.Timeout = timeout
+	}
+}
+
 // HTTPClientOptions is the options for the HTTP client.
 type HTTPClientOptions struct {
 	Name      string
 	Transport http.RoundTripper
+	Timeout   time.Duration
 }
