@@ -21,9 +21,13 @@ const (
 		"policy: %s"
 
 	reasonSensitivePath = "reading or modifying shell or " +
-		"credential files is not allowed in chat"
+		"credential files is not allowed in chat; do not retry " +
+		"protected shell or credential paths, and use non-sensitive " +
+		"working files or public sources instead"
 	reasonSystemPackageInstall = "installing system packages with " +
-		"host package managers is not allowed in chat"
+		"host package managers is not allowed in chat; do not retry " +
+		"host package manager commands, and use existing tools or " +
+		"user-space dependencies instead"
 
 	sensitivePathBoundaryChars = " \t\r\n\"'`=:/\\|&;()[]{}<>"
 
