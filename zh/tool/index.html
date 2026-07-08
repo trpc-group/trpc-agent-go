@@ -7642,7 +7642,8 @@ Model Context Protocol (MCP)）来执行工具。此时可以使用
 运行中改成由调用方执行，可以继续使用 <code>agent.WithToolExecutionFilter(...)</code>。
 <code>WithExternalTools</code> 更适合 AG-UI、浏览器、移动端或上游服务在每次请求中动态声明
 工具的场景。AG-UI runner 默认会把请求里的 <code>input.Tools</code> 映射为
-<code>WithExternalTools</code>。外部工具与已有工具同名时，已有工具优先，外部声明不会覆盖或拦截它。这里的已有工具包括 Agent 上注册的工具，以及通过 <code>WithAdditionalTools</code> 追加的工具。</p>
+<code>WithExternalTools</code>；OpenAI Chat Completions adapter（<code>server/openai</code>）同样会把请求里的 <code>tools</code> 映射为 <code>WithExternalTools</code>，服务端不执行这些工具，由调用方在收到 <code>tool_calls</code> 后外部执行并用 <code>role=tool</code> 消息续聊。外部工具与已有工具同名时，已有工具优先，外部声明不会覆盖或拦截它。这里的已有工具包括 Agent 上注册的工具，以及通过 <code>WithAdditionalTools</code> 追加的工具。</p>
+<p><code>server/openai</code> adapter 目前只实现了 <code>tool_choice: "none"</code>（不把 tools 暴露给模型）和 <code>tool_choice: "auto"</code> 或省略该字段（由模型自行决定，这也是该 adapter 能提供的唯一行为，因为它自身从不执行工具）。当请求同时带有 <code>tools</code> 时，<code>tool_choice: "required"</code> 以及强制指定函数的写法（<code>{"type":"function","function":{"name":"..."}}</code>）会被拒绝并返回 HTTP 400，而不会被静默当作 <code>"auto"</code> 处理。</p>
 <p><strong>完整示例：</strong> <code>examples/toolinterrupt/</code></p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-55-1">1</a></span>
 <span class="normal"><a href="#__codelineno-55-2">2</a></span>
@@ -8004,7 +8005,7 @@ Model Context Protocol (MCP)）来执行工具。此时可以使用
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年6月30日 06:30:29 UTC">2026-06-30 06:30:29</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年7月8日 08:03:21 UTC">2026-07-08 08:03:21</span>
   </span>
 
     

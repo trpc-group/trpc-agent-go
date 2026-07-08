@@ -7773,10 +7773,20 @@ and only its per-run execution policy should change, continue to use
 <code>agent.WithToolExecutionFilter(...)</code>. <code>WithExternalTools</code> is better for AG-UI,
 browser, mobile, or upstream-service callers that declare tools dynamically on
 each request. The AG-UI runner maps request <code>input.Tools</code> to <code>WithExternalTools</code>
-by default. If an external tool has the same name as an existing tool, the
+by default; the OpenAI Chat Completions adapter (<code>server/openai</code>) maps request
+<code>tools</code> to <code>WithExternalTools</code> as well. The server does not execute those tools;
+callers run them after receiving <code>tool_calls</code> and resume with <code>role=tool</code>
+messages. If an external tool has the same name as an existing tool, the
 existing tool wins; the external declaration does not override or intercept it.
 This includes tools registered on the Agent and tools added with
 <code>WithAdditionalTools</code>.</p>
+<p>The <code>server/openai</code> adapter only implements <code>tool_choice: "none"</code> (skip
+exposing tools to the model) and <code>tool_choice: "auto"</code> or an omitted value
+(let the model decide, which is the only behavior the adapter can offer since
+it never executes tools itself). <code>tool_choice: "required"</code> and forced-function
+tool choice (<code>{"type":"function","function":{"name":"..."}}</code>) are rejected
+with an HTTP 400 when the request also includes <code>tools</code>, instead of being
+silently treated as <code>"auto"</code>.</p>
 <p><strong>Complete example:</strong> <code>examples/toolinterrupt/</code></p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-55-1">1</a></span>
 <span class="normal"><a href="#__codelineno-55-2">2</a></span>
@@ -8140,7 +8150,7 @@ explicitly at the right time.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="June 30, 2026 06:30:29 UTC">2026-06-30 06:30:29</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="July 8, 2026 08:03:21 UTC">2026-07-08 08:03:21</span>
   </span>
 
     
