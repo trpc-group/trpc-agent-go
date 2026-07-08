@@ -10,6 +10,7 @@
 package app
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -260,6 +261,64 @@ func TestNewAutoMemoryExtractor_NoCheckers(t *testing.T) {
 		Messages: make([]model.Message, 1),
 	}
 	require.True(t, ext.ShouldExtract(ctx))
+}
+
+func TestNewAutoMemoryExtractor_DoesNotConsumeModelCallBudget(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	underlying := &countingBudgetModel{}
+	budgeted := newModelCallBudgetModel(underlying)
+	ext, err := newAutoMemoryExtractor(budgeted, runOptions{
+		MemoryAutoEnabled: true,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, ext)
+	ctx := withModelCallBudget(context.Background(), 1)
+	messages := []model.Message{
+		model.NewUserMessage("Remember that I prefer tea."),
+	}
+
+	_, err = ext.Extract(ctx, messages, nil)
+	require.NoError(t, err)
+	_, err = ext.Extract(ctx, messages, nil)
+	require.NoError(t, err)
+
+	_, err = budgeted.GenerateContent(ctx, &model.Request{})
+	require.NoError(t, err)
+	_, err = budgeted.GenerateContent(ctx, &model.Request{})
+	require.ErrorContains(t, err, "max LLM calls (1) exceeded")
+	require.EqualValues(t, 3, underlying.callCount())
+}
+
+func TestNewSessionSummarizer_DoesNotConsumeModelCallBudget(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	underlying := &countingBudgetModel{}
+	budgeted := newModelCallBudgetModel(underlying)
+	summarizer, err := newSessionSummarizer(budgeted, runOptions{
+		SessionSummaryEnabled: true,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, summarizer)
+
+	ctx := withModelCallBudget(context.Background(), 1)
+	sess := session.NewSession("app", "user", "sess")
+	sess.Events = append(sess.Events, summaryTestMessageEvent())
+
+	_, err = summarizer.Summarize(ctx, sess)
+	require.NoError(t, err)
+	_, err = summarizer.Summarize(ctx, sess)
+	require.NoError(t, err)
+
+	_, err = budgeted.GenerateContent(ctx, &model.Request{})
+	require.NoError(t, err)
+	_, err = budgeted.GenerateContent(ctx, &model.Request{})
+	require.ErrorContains(t, err, "max LLM calls (1) exceeded")
+	require.EqualValues(t, 3, underlying.callCount())
 }
 
 func TestNewAutoMemoryExtractor_PolicyAll(t *testing.T) {
