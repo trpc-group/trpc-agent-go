@@ -321,6 +321,32 @@ func TestDefaultClientBuilder_GetDBFailure(t *testing.T) {
 	assert.Contains(t, err.Error(), "get sql db")
 }
 
+func TestDefaultClientBuilder_NonSQLConnPool_SkipsGetDB(t *testing.T) {
+	client, err := GetClientBuilder()(context.Background(),
+		WithDialector(poolOnlyDialector{pool: badConnPool{}}),
+		WithOwnsConnection(false),
+		WithConfig(&gormio.Config{DisableAutomaticPing: true}),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, client.DB())
+	require.NoError(t, client.Close())
+}
+
+func TestDefaultClientBuilder_WithConfig_DisableAutomaticPing(t *testing.T) {
+	ctx := context.Background()
+	mockDB, mock, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
+	require.NoError(t, err)
+	mock.ExpectClose()
+
+	client, err := GetClientBuilder()(ctx,
+		WithDialector(poolOnlyDialector{pool: mockDB}),
+		WithConfig(&gormio.Config{DisableAutomaticPing: true}),
+	)
+	require.NoError(t, err)
+	require.NoError(t, client.Close())
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestGormClient_Close_NilDB(t *testing.T) {
 	require.NoError(t, (&gormClient{}).Close())
 }
