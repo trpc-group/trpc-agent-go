@@ -12,8 +12,8 @@ require (
 	gorm.io/datatypes v1.2.7
 	gorm.io/driver/sqlite v1.5.7
 	gorm.io/gorm v1.30.0
-	trpc.group/trpc-go/trpc-agent-go v0.2.0
-	trpc.group/trpc-go/trpc-agent-go/storage/gorm v0.0.0
+	trpc.group/trpc-go/trpc-agent-go v1.10.1-0.20260708123258-eba6f54c8869
+	trpc.group/trpc-go/trpc-agent-go/storage/gorm v0.0.0-20260708123258-eba6f54c8869
 )
 
 require (

@@ -120,9 +120,11 @@ func TestServiceOpts_WithToolExposedAndHidden(t *testing.T) {
 	WithToolExposed(memory.AddToolName, false)(&opts)
 	_, exposed = opts.toolExposed[memory.AddToolName]
 	assert.False(t, exposed)
+	_, hidden := opts.toolHidden[memory.AddToolName]
+	assert.True(t, hidden)
 
 	WithToolHidden(memory.SearchToolName, true)(&opts)
-	_, hidden := opts.toolHidden[memory.SearchToolName]
+	_, hidden = opts.toolHidden[memory.SearchToolName]
 	assert.True(t, hidden)
 
 	WithToolHidden(memory.SearchToolName, false)(&opts)

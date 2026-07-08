@@ -204,13 +204,21 @@ func WithToolEnabled(toolName string, enabled bool) ServiceOpt {
 // WithToolExposed controls whether an enabled memory tool is exposed via Tools().
 func WithToolExposed(toolName string, exposed bool) ServiceOpt {
 	return func(opts *ServiceOpts) {
-		if opts.toolExposed == nil {
-			opts.toolExposed = make(map[string]struct{})
-		}
-		if exposed {
-			opts.toolExposed[toolName] = struct{}{}
+		if !imemory.IsValidToolName(toolName) {
 			return
 		}
+		if exposed {
+			if opts.toolExposed == nil {
+				opts.toolExposed = make(map[string]struct{})
+			}
+			opts.toolExposed[toolName] = struct{}{}
+			delete(opts.toolHidden, toolName)
+			return
+		}
+		if opts.toolHidden == nil {
+			opts.toolHidden = make(map[string]struct{})
+		}
+		opts.toolHidden[toolName] = struct{}{}
 		delete(opts.toolExposed, toolName)
 	}
 }

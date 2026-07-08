@@ -76,6 +76,9 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), defaultDBInitTimeout)
 		defer cancel()
 		if err := s.initDB(ctx); err != nil {
+			if s.dbClient != nil {
+				_ = s.dbClient.Close()
+			}
 			return nil, fmt.Errorf("init database failed: %w", err)
 		}
 	}
@@ -157,14 +160,26 @@ func (s *Service) AddMemory(ctx context.Context, userKey memory.UserKey, memoryS
 		UpdatedAt:  now,
 	}
 
-	err = s.memoryTable(ctx).Clauses(clause.OnConflict{
-		Columns: []clause.Column{{Name: "memory_id"}},
-		DoUpdates: clause.Assignments(map[string]any{
-			"memory_data": row.MemoryData,
-			"updated_at":  row.UpdatedAt,
-			"deleted_at":  nil,
-		}),
-	}).Create(&row).Error
+	conflictUpdates := map[string]any{
+		"memory_data": row.MemoryData,
+		"updated_at":  row.UpdatedAt,
+	}
+	if s.opts.softDelete {
+		conflictUpdates["deleted_at"] = nil
+	}
+
+	conflict := clause.OnConflict{
+		Columns:   []clause.Column{{Name: "memory_id"}},
+		DoUpdates: clause.Assignments(conflictUpdates),
+	}
+	createQuery := s.memoryTable(ctx).Clauses(conflict)
+	if s.opts.softDelete {
+		err = createQuery.Create(&row).Error
+	} else {
+		err = createQuery.Select(
+			"memory_id", "app_name", "user_id", "memory_data", "created_at", "updated_at",
+		).Create(&row).Error
+	}
 	if err != nil {
 		return wrapDBErr("store memory entry", err)
 	}
