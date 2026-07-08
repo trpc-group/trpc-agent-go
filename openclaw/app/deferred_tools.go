@@ -60,6 +60,7 @@ func baseLLMAgentOptions(
 		llmagent.WithInstruction(instruction),
 		llmagent.WithGlobalInstruction(systemPrompt),
 		llmagent.WithGenerationConfig(genConfig),
+		llmagent.WithAddCurrentTime(true),
 		llmagent.WithAddSessionSummary(cfg.AddSessionSummary),
 		llmagent.WithEnableContextCompaction(cfg.EnableContextCompaction),
 		llmagent.WithContextCompactionOversizedToolResultMaxTokens(
