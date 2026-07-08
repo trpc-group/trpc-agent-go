@@ -3781,6 +3781,9 @@ func newOpenAIModel(spec registry.ModelSpec) (model.Model, error) {
 		openai.WithVariant(variant),
 		openai.WithOmitFileContentParts(true),
 	}
+	if spec.OpenAITextOnlyMessageContent {
+		opts = append(opts, openai.WithTextOnlyMessageContent(true))
+	}
 	if spec.DebugRecorderEnabled {
 		opts = append(
 			opts,
@@ -3825,15 +3828,17 @@ func modelFromOptions(opts runOptions) (model.Model, error) {
 		headers = resolved
 	}
 
+	apiKey := strings.TrimSpace(os.Getenv(openAIAPIKeyEnvName))
 	spec := registry.ModelSpec{
-		Type:                 mode,
-		Name:                 opts.OpenAIModel,
-		BaseURL:              baseURL,
-		APIKey:               strings.TrimSpace(os.Getenv(openAIAPIKeyEnvName)),
-		OpenAIVariant:        opts.OpenAIVariant,
-		Headers:              headers,
-		DebugRecorderEnabled: opts.DebugRecorderEnabled,
-		Config:               opts.ModelConfig,
+		Type:                         mode,
+		Name:                         opts.OpenAIModel,
+		BaseURL:                      baseURL,
+		APIKey:                       apiKey,
+		OpenAIVariant:                opts.OpenAIVariant,
+		OpenAITextOnlyMessageContent: opts.OpenAITextOnlyMessageContent,
+		Headers:                      headers,
+		DebugRecorderEnabled:         opts.DebugRecorderEnabled,
+		Config:                       opts.ModelConfig,
 	}
 	return f(spec)
 }
