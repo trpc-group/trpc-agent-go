@@ -251,10 +251,11 @@ func (r *workspaceRuntime) PutDirectory(
 		return fmt.Errorf("create directory %s: %w", dest, err)
 	}
 
-	entries, err := r.collectUploadEntries(ctx, sb, abs, dest)
+	entries, cleanup, err := r.collectUploadEntries(ctx, sb, abs, dest)
 	if err != nil {
 		return err
 	}
+	defer cleanup()
 	if len(entries) == 0 {
 		return nil
 	}
@@ -271,12 +272,27 @@ func (r *workspaceRuntime) PutDirectory(
 // d.Info() reports Lstat semantics (it does not follow symlinks), so
 // a symlink inside hostRoot cannot cause files outside hostRoot to be
 // uploaded. This matches the e2b adapter's behaviour.
+//
+// Files are opened with os.Open and streamed via the io.Reader
+// interface rather than buffered in memory with os.ReadFile, so
+// staging a directory with large files does not materialize the full
+// tree in the agent process. The returned cleanup func closes all
+// opened file handles and MUST be called by the caller (e.g. via
+// defer) once UploadFiles has finished.
 func (r *workspaceRuntime) collectUploadEntries(
 	ctx context.Context,
 	sb *osb.Sandbox,
 	hostRoot, destRoot string,
-) ([]osb.UploadFileEntry, error) {
-	var entries []osb.UploadFileEntry
+) ([]osb.UploadFileEntry, func(), error) {
+	var (
+		entries   []osb.UploadFileEntry
+		openFiles []*os.File
+	)
+	cleanup := func() {
+		for _, f := range openFiles {
+			_ = f.Close()
+		}
+	}
 	walkErr := filepath.WalkDir(hostRoot, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -314,12 +330,13 @@ func (r *workspaceRuntime) collectUploadEntries(
 		if mode == 0 {
 			mode = 0o644
 		}
-		data, err := os.ReadFile(p)
+		f, err := os.Open(p)
 		if err != nil {
 			return err
 		}
+		openFiles = append(openFiles, f)
 		entries = append(entries, osb.UploadFileEntry{
-			File: bytes.NewReader(data),
+			File: f,
 			Options: osb.UploadFileOptions{
 				FileName: path.Base(remotePath),
 				Metadata: osb.FileMetadata{
@@ -331,9 +348,10 @@ func (r *workspaceRuntime) collectUploadEntries(
 		return nil
 	})
 	if walkErr != nil {
-		return nil, walkErr
+		cleanup()
+		return nil, nil, walkErr
 	}
-	return entries, nil
+	return entries, cleanup, nil
 }
 
 // StageDirectory stages a directory with options (ReadOnly).
@@ -600,7 +618,11 @@ func (r *workspaceRuntime) ExecuteInline(
 	if err != nil {
 		return codeexecutor.RunResult{}, err
 	}
-	defer r.Cleanup(ctx, ws)
+	// In PerSession mode the workspace is reused across turns; the
+	// caller owns cleanup. In PerTurn mode we clean up automatically.
+	if r.cfg.workspacePersistence != WorkspacePersistencePerSession {
+		defer r.Cleanup(ctx, ws)
+	}
 
 	var allOut, allErr strings.Builder
 	start := time.Now()
@@ -711,7 +733,11 @@ func (r *workspaceRuntime) readFile(
 		return nil, 0, err
 	}
 	defer rc.Close()
-	data, err := io.ReadAll(rc)
+	// Cap the read at limit+1 bytes regardless of whether the server
+	// honors the Range header. Without this, a server/proxy that
+	// ignores Range would stream the entire file into memory before
+	// the truncation check below fires.
+	data, err := io.ReadAll(io.LimitReader(rc, limit+1))
 	if err != nil {
 		return nil, 0, err
 	}

@@ -75,6 +75,15 @@ type mockOpenSandboxServer struct {
 	// killShouldFail, when true, makes DELETE /v1/sandboxes/{id} return
 	// 500 so the SDK's Kill call fails. Used to test Close error path.
 	killShouldFail bool
+	// endpointOverride, when non-empty, is returned as the execd
+	// endpoint instead of the mock server's own host:port. Used to test
+	// EndpointHostRewrite by returning an unresolvable hostname that
+	// the rewrite must map back to a reachable address.
+	endpointOverride string
+	// endpointProxyParams captures the use_server_proxy query parameter
+	// values from GET /v1/sandboxes/{id}/endpoints/{port} requests.
+	// Used to verify WithUseServerProxy wires through to the SDK.
+	endpointProxyParams []string
 }
 
 func newMockServer(t *testing.T) *mockOpenSandboxServer {
@@ -154,6 +163,18 @@ func (m *mockOpenSandboxServer) lastCommandTimeoutMs() int64 {
 	return m.commandTimeouts[len(m.commandTimeouts)-1]
 }
 
+// lastEndpointProxyParam returns the use_server_proxy query parameter
+// value from the most recent GET /v1/sandboxes/{id}/endpoints/{port}
+// request, or "" if none has been captured.
+func (m *mockOpenSandboxServer) lastEndpointProxyParam() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.endpointProxyParams) == 0 {
+		return ""
+	}
+	return m.endpointProxyParams[len(m.endpointProxyParams)-1]
+}
+
 func (m *mockOpenSandboxServer) handle(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
 
@@ -171,9 +192,21 @@ func (m *mockOpenSandboxServer) handle(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, sandboxInfo)
 		return
 	case r.Method == http.MethodGet && strings.Contains(path, "/endpoints/"):
-		// Return the mock server's own URL as the execd endpoint.
-		u, _ := url.Parse(m.server.URL)
-		endpoint := u.Host // host:port
+		// Capture the use_server_proxy query parameter so tests can
+		// verify WithUseServerProxy wired through to the SDK.
+		m.mu.Lock()
+		m.endpointProxyParams = append(m.endpointProxyParams, r.URL.Query().Get("use_server_proxy"))
+		override := m.endpointOverride
+		m.mu.Unlock()
+		// Return the mock server's own URL as the execd endpoint,
+		// unless an override is configured (for rewrite tests).
+		endpoint := ""
+		if override != "" {
+			endpoint = override
+		} else {
+			u, _ := url.Parse(m.server.URL)
+			endpoint = u.Host // host:port
+		}
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintf(w, `{"endpoint":%q}`, endpoint)
 		return
@@ -742,6 +775,43 @@ func TestExecuteInline_MultipleBlocks(t *testing.T) {
 	assert.Contains(t, res.Stderr, "unsupported language")
 }
 
+// TestExecuteInline_PerSession_NoAutoCleanup verifies that in
+// WorkspacePersistencePerSession mode, ExecuteInline does NOT call
+// Cleanup — the caller owns the workspace lifecycle so files written
+// during one turn remain visible to later turns in the same session.
+func TestExecuteInline_PerSession_NoAutoCleanup(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	m.setStdout("ok")
+	zero := 0
+	m.setExitCode(zero)
+	u, err := url.Parse(m.server.URL)
+	require.NoError(t, err)
+
+	exec, err := New(
+		WithDomain(u.Host),
+		WithProtocol("http"),
+		WithAPIKey("test-key"),
+		WithWorkspacePersistence(WorkspacePersistencePerSession),
+	)
+	require.NoError(t, err)
+	defer exec.Close()
+
+	cmdCountBefore := len(m.commands)
+
+	_, err = exec.ExecuteInline(context.Background(), "persist-inline", []codeexecutor.CodeBlock{
+		{Language: "bash", Code: "echo ok"},
+	}, 5*time.Second)
+	require.NoError(t, err)
+
+	// PerSession mode must NOT issue `rm -rf` (Cleanup) — files written
+	// this turn should survive for the next turn.
+	for _, cmd := range m.commands[cmdCountBefore:] {
+		assert.NotContains(t, cmd, "rm -rf",
+			"PerSession mode should NOT auto-cleanup after ExecuteInline")
+	}
+}
+
 func TestWorkspace_PutDirectory_WithSubdirs(t *testing.T) {
 	m := newMockServer(t)
 	defer m.close()
@@ -1206,4 +1276,58 @@ func TestWorkspace_Close_KillError(t *testing.T) {
 	err := exec.Close()
 	require.Error(t, err)
 	assert.Equal(t, 1, m.killCalls)
+}
+
+// TestWorkspace_ReadFile_ServerIgnoresRange is a regression test for P1:
+// when the download endpoint ignores the Range header and returns far
+// more than the limit, io.LimitReader caps the read at limit+1 bytes so
+// the agent process does not buffer the entire response.
+func TestWorkspace_ReadFile_ServerIgnoresRange(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	ws, err := exec.CreateWorkspace(context.Background(), "exec-range", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+
+	// Seed a file much larger than maxReadSizeBytes. The mock's
+	// handleDownloadFile ignores the Range header and returns the
+	// full content.
+	expectedPath := filepath.ToSlash(filepath.Join(ws.Path, "output.txt"))
+	bigData := make([]byte, maxReadSizeBytes*3) // 3x the cap
+	m.setDownloadData(expectedPath, bigData)
+
+	files, err := exec.Collect(context.Background(), ws, []string{"*.txt"})
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	assert.True(t, files[0].Truncated, "file exceeding maxReadSizeBytes should be truncated")
+	assert.Equal(t, maxReadSizeBytes, len(files[0].Content), "content should be capped at maxReadSizeBytes")
+}
+
+// TestWorkspace_CollectUploadEntries_StreamsFiles is a regression test
+// for P2-2: files should be opened as io.Reader (streamed via
+// *os.File), not materialized into memory via os.ReadFile.
+func TestWorkspace_CollectUploadEntries_StreamsFiles(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hello"), 0o644))
+
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	ws, err := exec.CreateWorkspace(context.Background(), "exec-stream", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+
+	sb, err := exec.rt.sandbox()
+	require.NoError(t, err)
+
+	entries, cleanup, err := exec.rt.collectUploadEntries(context.Background(), sb, dir, ws.Path)
+	require.NoError(t, err)
+	defer cleanup()
+
+	require.Len(t, entries, 1)
+	_, ok := entries[0].File.(*os.File)
+	assert.True(t, ok, "entry should stream via *os.File, not buffer via *bytes.Reader")
 }

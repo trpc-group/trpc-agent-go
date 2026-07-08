@@ -47,6 +47,9 @@ func TestOptions(t *testing.T) {
 	WithSandboxRunBase("/tmp/sandbox-run")(c)
 	WithWorkspacePersistence(WorkspacePersistencePerSession)(c)
 	WithOutputPatterns([]string{"*.log"})(c)
+	WithUseServerProxy(true)(c)
+	hostRewrites := map[string]string{"host.docker.internal": "localhost"}
+	WithEndpointHostRewrite(hostRewrites)(c)
 
 	assert.Equal(t, "key-1", c.apiKey)
 	assert.Equal(t, "example.com", c.domain)
@@ -65,6 +68,8 @@ func TestOptions(t *testing.T) {
 	assert.Equal(t, "/tmp/sandbox-run", c.sandboxRunBase)
 	assert.Equal(t, WorkspacePersistencePerSession, c.workspacePersistence)
 	assert.Equal(t, []string{"*.log"}, c.outputPatterns)
+	assert.True(t, c.useServerProxy, "WithUseServerProxy(true) should set useServerProxy")
+	assert.Equal(t, hostRewrites, c.endpointHostRewrite, "WithEndpointHostRewrite should set endpointHostRewrite")
 }
 
 func TestCodeBlockDelimiter(t *testing.T) {
@@ -235,6 +240,92 @@ func TestNew_WithHTTPClient_RoutesThroughCustomClient(t *testing.T) {
 	// SDK for all requests. We verify it is wired through; a nil
 	// transport would mean the SDK fell back to its default client.
 	assert.Same(t, hc, exec.httpClient)
+}
+
+// TestNew_UseServerProxy_PassedToSDK verifies that WithUseServerProxy(true)
+// causes the SDK to send use_server_proxy=true in the GET
+// /v1/sandboxes/{id}/endpoints/{port} query string. The SDK calls
+// GetEndpoint during CreateSandbox (resolveExecd), so by the time New()
+// returns the mock has captured the parameter.
+func TestNew_UseServerProxy_PassedToSDK(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	u, err := url.Parse(m.server.URL)
+	require.NoError(t, err)
+
+	exec, err := New(
+		WithDomain(u.Host),
+		WithProtocol("http"),
+		WithAPIKey("test-key"),
+		WithUseServerProxy(true),
+	)
+	require.NoError(t, err, "New should succeed against mock")
+	defer exec.Close()
+
+	assert.Equal(t, "true", m.lastEndpointProxyParam(),
+		"WithUseServerProxy(true) should cause use_server_proxy=true query param")
+}
+
+// TestNew_UseServerProxy_DefaultFalse verifies that without
+// WithUseServerProxy, the SDK sends use_server_proxy=false (the default).
+func TestNew_UseServerProxy_DefaultFalse(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	u, err := url.Parse(m.server.URL)
+	require.NoError(t, err)
+
+	exec, err := New(
+		WithDomain(u.Host),
+		WithProtocol("http"),
+		WithAPIKey("test-key"),
+	)
+	require.NoError(t, err)
+	defer exec.Close()
+
+	assert.Equal(t, "false", m.lastEndpointProxyParam(),
+		"Default should be use_server_proxy=false")
+}
+
+// TestNew_EndpointHostRewrite_RewritesUnresolvableHost verifies that
+// WithEndpointHostRewrite rewrites the endpoint URL returned by the
+// server. The mock returns an unresolvable hostname
+// ("nonexistent.invalid:<port>"); without the rewrite, New() would fail
+// because WaitUntilReady cannot ping the execd endpoint. With the rewrite
+// mapping "nonexistent.invalid" → the mock's actual hostname, New()
+// succeeds and ExecuteCode works.
+func TestNew_EndpointHostRewrite_RewritesUnresolvableHost(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	u, err := url.Parse(m.server.URL)
+	require.NoError(t, err)
+
+	// Make the mock return an unresolvable hostname with the mock's port.
+	m.endpointOverride = "nonexistent.invalid:" + u.Port()
+
+	exec, err := New(
+		WithDomain(u.Host),
+		WithProtocol("http"),
+		WithAPIKey("test-key"),
+		WithEndpointHostRewrite(map[string]string{
+			"nonexistent.invalid": u.Hostname(),
+		}),
+	)
+	require.NoError(t, err, "New should succeed when endpoint rewrite maps to a reachable host")
+	defer exec.Close()
+
+	// ExecuteCode exercises the full execd path (resolveExecd → /command),
+	// proving the rewritten endpoint is actually used.
+	m.setStdout("42")
+	zero := 0
+	m.setExitCode(zero)
+	res, err := exec.ExecuteCode(context.Background(), codeexecutor.CodeExecutionInput{
+		ExecutionID: "exec-rewrite",
+		CodeBlocks: []codeexecutor.CodeBlock{
+			{Language: "python", Code: "print(42)"},
+		},
+	})
+	require.NoError(t, err, "ExecuteCode should succeed with rewritten endpoint")
+	assert.Contains(t, res.Output, "42")
 }
 
 func TestExecuteCode_Python(t *testing.T) {
@@ -493,6 +584,31 @@ func TestNew_RequestTimeout_DefaultClamped(t *testing.T) {
 		"default requestTimeout should be clamped to default executionTimeout + buffer")
 }
 
+// TestNew_RequestTimeout_ZeroResolvesToDefault verifies that
+// WithRequestTimeout(0) resolves to the SDK default and the clamp
+// logic fires, so the RunProgram budget check is not bypassed.
+func TestNew_RequestTimeout_ZeroResolvesToDefault(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	u, err := url.Parse(m.server.URL)
+	require.NoError(t, err)
+
+	exec, err := New(
+		WithDomain(u.Host),
+		WithProtocol("http"),
+		WithAPIKey("test-key"),
+		WithRequestTimeout(0),
+	)
+	require.NoError(t, err)
+	defer exec.Close()
+
+	// WithRequestTimeout(0) should resolve to osb.DefaultRequestTimeout,
+	// then be clamped up to executionTimeout + buffer (30s + 10s = 40s).
+	want := 30*time.Second + requestTimeoutBuffer
+	assert.Equal(t, want, exec.requestTimeout,
+		"WithRequestTimeout(0) should resolve to SDK default and be clamped")
+}
+
 // TestAppendStderr_EdgeCases verifies appendStderr handles empty and
 // multi-line input.
 func TestAppendStderr_EdgeCases(t *testing.T) {
@@ -567,4 +683,72 @@ func TestNew_ConnectError(t *testing.T) {
 		WithRequestTimeout(1*time.Second),
 	)
 	assert.Error(t, err)
+}
+
+// TestExecuteCode_PerSession_NoAutoCleanup is a regression test for
+// P2-1: in PerSession mode, ExecuteCode should NOT auto-cleanup the
+// workspace so files remain visible across turns.
+func TestExecuteCode_PerSession_NoAutoCleanup(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	m.setStdout("ok")
+	zero := 0
+	m.setExitCode(zero)
+	u, err := url.Parse(m.server.URL)
+	require.NoError(t, err)
+	exec, err := New(
+		WithDomain(u.Host),
+		WithProtocol("http"),
+		WithAPIKey("test-key"),
+		WithWorkspacePersistence(WorkspacePersistencePerSession),
+	)
+	require.NoError(t, err)
+	defer exec.Close()
+
+	_, err = exec.ExecuteCode(context.Background(), codeexecutor.CodeExecutionInput{
+		ExecutionID: "exec-session",
+		CodeBlocks: []codeexecutor.CodeBlock{
+			{Language: "bash", Code: "echo ok"},
+		},
+	})
+	require.NoError(t, err)
+
+	// No "rm -rf" command should have been issued in PerSession mode.
+	for _, cmd := range m.commands {
+		assert.NotContains(t, cmd, "rm -rf",
+			"PerSession mode should not auto-cleanup")
+	}
+}
+
+// TestExecuteCode_PerTurn_AutoCleanup verifies that in the default
+// PerTurn mode, ExecuteCode DOES call Cleanup after execution.
+func TestExecuteCode_PerTurn_AutoCleanup(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	m.setStdout("ok")
+	zero := 0
+	m.setExitCode(zero)
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	cmdCountBefore := len(m.commands)
+
+	_, err := exec.ExecuteCode(context.Background(), codeexecutor.CodeExecutionInput{
+		ExecutionID: "perturn-cleanup-test",
+		CodeBlocks: []codeexecutor.CodeBlock{
+			{Language: "bash", Code: "echo ok"},
+		},
+	})
+	require.NoError(t, err)
+
+	// In PerTurn mode ExecuteCode must issue `rm -rf` (Cleanup).
+	foundCleanup := false
+	for _, cmd := range m.commands[cmdCountBefore:] {
+		if strings.Contains(cmd, "rm -rf") {
+			foundCleanup = true
+			break
+		}
+	}
+	assert.True(t, foundCleanup,
+		"PerTurn mode should auto-cleanup the workspace")
 }

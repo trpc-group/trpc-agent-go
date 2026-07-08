@@ -94,7 +94,12 @@ func (c *codeExecChat) run() error {
 func (c *codeExecChat) setup(_ context.Context) error {
 	// Create OpenAI model
 	var modelOpts []openai.Option
-	if strings.HasPrefix(strings.ToLower(c.modelName), "deepseek") {
+	if baseURL := os.Getenv("OPENAI_BASE_URL"); baseURL != "" {
+		modelOpts = append(modelOpts, openai.WithBaseURL(baseURL))
+	} else if strings.HasPrefix(strings.ToLower(c.modelName), "deepseek") {
+		// Default DeepSeek endpoint only when the user hasn't
+		// configured OPENAI_BASE_URL, so OpenAI-compatible gateways /
+		// private proxies / local test servers are not overridden.
 		modelOpts = append(modelOpts, openai.WithBaseURL("https://api.deepseek.com"))
 	}
 	modelInstance := openai.New(c.modelName, modelOpts...)

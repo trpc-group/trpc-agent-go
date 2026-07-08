@@ -83,7 +83,8 @@ func WithSandboxTimeout(t time.Duration) Option {
 // greater than requestTimeout - requestTimeoutBuffer, RunProgram
 // returns an error instead of silently shortening the timeout; raise
 // this option (or WithExecutionTimeout) to allow longer individual
-// runs. Set t to 0 to keep the SDK default.
+// runs. Set t to 0 to use the SDK default (osb.DefaultRequestTimeout),
+// which is then clamped like any other value.
 func WithRequestTimeout(t time.Duration) Option {
 	return func(c *CodeExecutor) { c.requestTimeout = t }
 }
@@ -127,6 +128,33 @@ func WithSandboxID(sandboxID string) Option {
 	return func(c *CodeExecutor) { c.sandboxID = sandboxID }
 }
 
+// WithUseServerProxy routes execd/egress HTTP requests through the
+// OpenSandbox server instead of connecting directly to sandbox
+// containers. Enable this when the client cannot reach sandbox
+// containers directly — the canonical case is Docker Desktop on
+// WSL2/macOS, where sandboxes live on a docker bridge network that is
+// not routable from the host. Cloud-hosted OpenSandbox deployments
+// (where each sandbox has a public endpoint) do not need this.
+//
+// This option maps to osb.ConnectionConfig.UseServerProxy.
+func WithUseServerProxy(b bool) Option {
+	return func(c *CodeExecutor) { c.useServerProxy = b }
+}
+
+// WithEndpointHostRewrite rewrites hostnames in endpoint URLs returned
+// by the OpenSandbox server. This is needed when the server runs inside
+// Docker and returns hostnames (e.g. "host.docker.internal") that the
+// client cannot resolve — typically on a Linux host where
+// host.docker.internal is not defined. The map's keys are the
+// hostnames returned by the server; values are the replacements.
+// Example: WithEndpointHostRewrite(map[string]string{"host.docker.internal": "localhost"}).
+//
+// The caller-provided map is used as-is; do not mutate it after passing
+// it to New. This option maps to osb.ConnectionConfig.EndpointHostRewrite.
+func WithEndpointHostRewrite(rewrites map[string]string) Option {
+	return func(c *CodeExecutor) { c.endpointHostRewrite = rewrites }
+}
+
 // WithSandboxRunBase sets the base directory **inside the sandbox**
 // where per-execution workspaces are created (default: /tmp/run).
 func WithSandboxRunBase(dir string) Option {
@@ -145,11 +173,18 @@ const (
 
 	// WorkspacePersistencePerSession reuses one deterministic workspace
 	// for all turns in the same session. Files written during one turn
-	// remain visible to later turns in that session.
+	// remain visible to later turns in that session. In this mode
+	// ExecuteCode and ExecuteInline do NOT auto-cleanup the workspace;
+	// the caller is responsible for calling Cleanup when the session
+	// ends.
 	WorkspacePersistencePerSession
 )
 
-// WithWorkspacePersistence sets the workspace persistence mode.
+// WithWorkspacePersistence sets the workspace persistence mode. The
+// default is WorkspacePersistencePerTurn. Use
+// WorkspacePersistencePerSession when multi-turn agents should keep
+// files and intermediate state across turns; in that mode the caller
+// owns Cleanup (ExecuteCode/ExecuteInline skip auto-cleanup).
 func WithWorkspacePersistence(mode WorkspacePersistenceMode) Option {
 	return func(c *CodeExecutor) { c.workspacePersistence = mode }
 }
@@ -172,19 +207,21 @@ type CodeExecutor struct {
 	mu sync.Mutex
 
 	// Connection-level options.
-	apiKey         string
-	domain         string
-	protocol       string
-	image          string
-	entrypoint     []string
-	resourceLimits osb.ResourceLimits
-	sandboxTimeout time.Duration
-	requestTimeout time.Duration
-	envVars        map[string]string
-	metadata       map[string]string
-	httpClient     *http.Client
-	headers        map[string]string
-	sandboxID      string
+	apiKey              string
+	domain              string
+	protocol            string
+	image               string
+	entrypoint          []string
+	resourceLimits      osb.ResourceLimits
+	sandboxTimeout      time.Duration
+	requestTimeout      time.Duration
+	envVars             map[string]string
+	metadata            map[string]string
+	httpClient          *http.Client
+	headers             map[string]string
+	sandboxID           string
+	useServerProxy      bool
+	endpointHostRewrite map[string]string
 
 	// Execution-level options.
 	executionTimeout time.Duration
@@ -238,6 +275,14 @@ func NewWithContext(ctx context.Context, opts ...Option) (*CodeExecutor, error) 
 		opt(c)
 	}
 
+	// WithRequestTimeout(0) means "keep the SDK default"; resolve it
+	// now so the clamp below and the RunProgram budget check both see
+	// the actual timeout value rather than a sentinel 0 that would
+	// silently bypass the budget check.
+	if c.requestTimeout == 0 {
+		c.requestTimeout = osb.DefaultRequestTimeout
+	}
+
 	// The OpenSandbox SDK applies ConnectionConfig.RequestTimeout to the
 	// HTTP client used for ALL requests, including the streaming
 	// /command endpoint used by RunProgram. If requestTimeout is shorter
@@ -250,17 +295,19 @@ func NewWithContext(ctx context.Context, opts ...Option) (*CodeExecutor, error) 
 		effectiveExecTimeout = defaultRunTimeout
 	}
 	minRequestTimeout := effectiveExecTimeout + requestTimeoutBuffer
-	if c.requestTimeout > 0 && c.requestTimeout < minRequestTimeout {
+	if c.requestTimeout < minRequestTimeout {
 		c.requestTimeout = minRequestTimeout
 	}
 
 	connCfg := osb.ConnectionConfig{
-		Domain:         c.domain,
-		Protocol:       c.protocol,
-		APIKey:         c.apiKey,
-		RequestTimeout: c.requestTimeout,
-		HTTPClient:     c.httpClient,
-		Headers:        c.headers,
+		Domain:              c.domain,
+		Protocol:            c.protocol,
+		APIKey:              c.apiKey,
+		RequestTimeout:      c.requestTimeout,
+		HTTPClient:          c.httpClient,
+		Headers:             c.headers,
+		UseServerProxy:      c.useServerProxy,
+		EndpointHostRewrite: c.endpointHostRewrite,
 	}
 
 	createOpts := osb.SandboxCreateOptions{
@@ -341,7 +388,11 @@ func (c *CodeExecutor) ExecuteCode(
 			"opensandbox: create workspace: %w", err,
 		)
 	}
-	defer c.Cleanup(ctx, ws)
+	// In PerSession mode the workspace is reused across turns; the
+	// caller owns cleanup. In PerTurn mode we clean up automatically.
+	if c.workspacePersistence != WorkspacePersistencePerSession {
+		defer c.Cleanup(ctx, ws)
+	}
 
 	var (
 		out      strings.Builder

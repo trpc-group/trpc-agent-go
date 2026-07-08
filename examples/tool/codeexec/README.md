@@ -79,6 +79,22 @@ cd tool/codeexec
 ./codeexec-demo -model deepseek-v4-flash -executor opensandbox
 ```
 
+**Self-hosted deployment notes (Docker Desktop / WSL2):** When running the OpenSandbox server locally via Docker Desktop (WSL2/macOS), sandbox containers live on a Docker bridge network that is not directly reachable from the host. Use `opensandbox.WithUseServerProxy(true)` to route execd requests through the server. On Linux hosts where the server returns `host.docker.internal` (which is not resolvable), use `opensandbox.WithEndpointHostRewrite` to remap it:
+
+```go
+executor, err := opensandbox.New(
+    opensandbox.WithDomain("localhost:8080"),
+    opensandbox.WithAPIKey("your-api-key"),
+    // Required for Docker Desktop / WSL2 — sandboxes are on a bridge
+    // network that the Windows/macOS host cannot reach directly.
+    opensandbox.WithUseServerProxy(true),
+    // Required on Linux hosts where host.docker.internal is undefined.
+    // opensandbox.WithEndpointHostRewrite(map[string]string{
+    //     "host.docker.internal": "localhost",
+    // }),
+)
+```
+
 ### 4. Example Conversation
 
 ```
