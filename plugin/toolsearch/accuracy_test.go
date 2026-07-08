@@ -358,77 +358,77 @@ type accuracyCase struct {
 func accuracyCases() []accuracyCase {
 	return []accuracyCase{
 		// filesystem
-		{"把hello world这段文字保存到 notes.txt", []string{"write_file"}, "filesystem"},
-		{"帮我读取 config.yaml 的内容", []string{"read_file"}, "filesystem"},
-		{"在文件末尾追加一行日志", []string{"append_file"}, "filesystem"},
-		{"删除临时文件 tmp.log", []string{"delete_file"}, "filesystem"},
-		{"把 a.txt 重命名为 b.txt", []string{"move_file"}, "filesystem"},
-		{"列出 src 目录下的所有文件", []string{"list_directory"}, "filesystem"},
-		{"新建一个 build 目录", []string{"create_directory"}, "filesystem"},
-		{"在代码里搜索 TODO 注释", []string{"search_file_content", "find_files"}, "filesystem"},
-		{"请帮我看一下 notes.txt 文件的大小和最后修改时间", []string{"get_file_info"}, "filesystem"},
+		{"Save the text 'hello world' to notes.txt", []string{"write_file"}, "filesystem"},
+		{"Read the contents of config.yaml for me", []string{"read_file"}, "filesystem"},
+		{"Append a log line to the end of the file", []string{"append_file"}, "filesystem"},
+		{"Delete the temporary file tmp.log", []string{"delete_file"}, "filesystem"},
+		{"Rename a.txt to b.txt", []string{"move_file"}, "filesystem"},
+		{"List all files in the src directory", []string{"list_directory"}, "filesystem"},
+		{"Create a new build directory", []string{"create_directory"}, "filesystem"},
+		{"Search for TODO comments in the code", []string{"search_file_content", "find_files"}, "filesystem"},
+		{"Check the file size and last modified time of notes.txt", []string{"get_file_info"}, "filesystem"},
 		{"List files in the current folder", []string{"list_directory"}, "filesystem"},
 
 		// git
-		{"看看当前仓库有哪些改动", []string{"git_status"}, "git"},
-		{"显示我还没提交的差异", []string{"git_diff"}, "git"},
-		{"把暂存的修改提交一下", []string{"git_commit"}, "git"},
-		{"把这些文件加入暂存区", []string{"git_add"}, "git"},
-		{"查看最近的提交历史", []string{"git_log"}, "git"},
-		{"切换到 develop 分支", []string{"git_checkout"}, "git"},
-		{"创建一个新分支 feature-x", []string{"git_branch", "git_checkout"}, "git"},
-		{"把本地提交推到远端", []string{"git_push"}, "git"},
-		{"从远端拉取最新代码", []string{"git_pull"}, "git"},
-		{"这一行代码是谁写的", []string{"git_blame"}, "git"},
+		{"Check what changes have been made in the current repository", []string{"git_status"}, "git"},
+		{"Show the uncommitted diff", []string{"git_diff"}, "git"},
+		{"Commit the staged changes", []string{"git_commit"}, "git"},
+		{"Stage these files for the next commit", []string{"git_add"}, "git"},
+		{"View the recent commit history", []string{"git_log"}, "git"},
+		{"Switch to the develop branch", []string{"git_checkout"}, "git"},
+		{"Create a new branch feature-x", []string{"git_branch", "git_checkout"}, "git"},
+		{"Push local commits to remote", []string{"git_push"}, "git"},
+		{"Pull the latest code from remote", []string{"git_pull"}, "git"},
+		{"Who wrote this line of code", []string{"git_blame"}, "git"},
 
 		// document
-		{"请撰写一篇新的 markdown 格式的文档", []string{"create_document"}, "document"},
-		{"把这份报告导出成 PDF", []string{"export_pdf"}, "document"},
-		{"把这个 markdown 转成网页", []string{"convert_markdown_to_html"}, "document"},
-		{"请总结一篇长文档的内容并提炼核心要点", []string{"summarize_document"}, "document"},
-		{"把这份文档翻译成英文", []string{"translate_document"}, "document"},
-		{"从 PDF 里提取纯文本", []string{"extract_document_text"}, "document"},
-		{"把几份文档合并成一个", []string{"merge_documents"}, "document"},
-		{"列出这篇文档的章节大纲", []string{"get_document_outline"}, "document"},
+		{"Create a new markdown document", []string{"create_document"}, "document"},
+		{"Export this report as a PDF", []string{"export_pdf"}, "document"},
+		{"Convert this markdown to a webpage", []string{"convert_markdown_to_html"}, "document"},
+		{"Summarize a long document and extract key points", []string{"summarize_document"}, "document"},
+		{"Translate this document into English", []string{"translate_document"}, "document"},
+		{"Extract plain text from a PDF", []string{"extract_document_text"}, "document"},
+		{"Merge several documents into one", []string{"merge_documents"}, "document"},
+		{"List the section outline of this document", []string{"get_document_outline"}, "document"},
 		//
 		// // process
-		{"帮我执行 npm install", []string{"run_command"}, "process"},
-		{"看看现在有哪些进程在跑", []string{"list_processes"}, "process"},
-		{"杀掉 PID 为 1234 的进程", []string{"kill_process"}, "process"},
-		{"读一下 PATH 环境变量", []string{"get_env_var"}, "process"},
-		{"设置环境变量 DEBUG=1", []string{"set_env_var"}, "process"},
+		{"Run npm install for me", []string{"run_command"}, "process"},
+		{"List the currently running processes", []string{"list_processes"}, "process"},
+		{"Kill the process with PID 1234", []string{"kill_process"}, "process"},
+		{"Read the PATH environment variable", []string{"get_env_var"}, "process"},
+		{"Set the environment variable DEBUG=1", []string{"set_env_var"}, "process"},
 
 		// network
-		{"请发送 HTTP GET 请求到指定的 API 接口地址查看响应数据", []string{"http_get", "http_post"}, "network"},
-		{"请向www.tencent.com 地址发起 POST 请求并提交 JSON 数据 [\"hello\"]", []string{"http_post"}, "network"},
-		{"从这个www.demo.com/1.txt链接下载安装包", []string{"download_file"}, "network"},
-		{"把这个文件上传到服务器", []string{"upload_file"}, "network"},
-		{"检查这个网址www.demo.com通不通", []string{"check_url_status"}, "network"},
+		{"Send an HTTP GET request to the specified API endpoint to view the response data", []string{"http_get", "http_post"}, "network"},
+		{"Send a POST request to www.tencent.com with JSON data [\"hello\"]", []string{"http_post"}, "network"},
+		{"Download the file from www.demo.com/1.txt", []string{"download_file"}, "network"},
+		{"Upload this file to the server", []string{"upload_file"}, "network"},
+		{"Check if www.demo.com is reachable", []string{"check_url_status"}, "network"},
 
 		// iam — identity and access management
 		// These cases test that "delete user" / "create user" requests are
 		// scoped to the iam namespace rather than leaking into crm (which has
 		// similar verbs on customer records). The model must infer the domain
 		// from the context (account, login, role, permission → iam).
-		{"帮我从系统中删除用户账号 zhangsan", []string{"delete_user"}, "iam"},
-		{"创建一个新的登录用户", []string{"create_user"}, "iam"},
-		{"列出所有管理系统用户", []string{"list_users"}, "iam"},
-		{"更新用户 wangwu 的邮箱地址", []string{"update_user"}, "iam"},
-		{"查看用户 lisi 的详细信息", []string{"get_user"}, "iam"},
-		{"给用户 admin 授予管理员角色", []string{"grant_role"}, "iam"},
-		{"撤销用户 zhaoliu 的编辑权限", []string{"revoke_role"}, "iam"},
+		{"Delete user account zhangsan from the system", []string{"delete_user"}, "iam"},
+		{"Create a new login user", []string{"create_user"}, "iam"},
+		{"List all system management users", []string{"list_users"}, "iam"},
+		{"Update user wangwu's email address", []string{"update_user"}, "iam"},
+		{"View user lisi's detailed information", []string{"get_user"}, "iam"},
+		{"Grant the admin role to user admin", []string{"grant_role"}, "iam"},
+		{"Revoke edit permissions from user zhaoliu", []string{"revoke_role"}, "iam"},
 
 		// crm — customer relationship management
 		// These cases test that "delete customer" / "create customer" requests
 		// are scoped to the crm namespace. The model must pick crm over iam
 		// based on keywords like customer, contact, lead, CRM.
-		{"把客户张三从CRM系统中删除", []string{"delete_customer"}, "crm"},
-		{"新增一个客户记录：腾讯科技", []string{"create_customer"}, "crm"},
-		{"列出所有客户", []string{"list_customers"}, "crm"},
-		{"更新客户李四的联系方式", []string{"update_customer"}, "crm"},
-		{"查看客户阿里巴巴的详细信息", []string{"get_customer"}, "crm"},
-		{"为客户腾讯添加联系人王五", []string{"add_contact"}, "crm"},
-		{"删除客户字节跳动的联系人赵六", []string{"remove_contact"}, "crm"},
+		{"Delete customer Zhang San from the CRM system", []string{"delete_customer"}, "crm"},
+		{"Create a new customer record: Tencent Technology", []string{"create_customer"}, "crm"},
+		{"List all customers", []string{"list_customers"}, "crm"},
+		{"Update customer Li Si's contact information", []string{"update_customer"}, "crm"},
+		{"View customer Alibaba's detailed information", []string{"get_customer"}, "crm"},
+		{"Add contact Wang Wu to customer Tencent", []string{"add_contact"}, "crm"},
+		{"Delete contact Zhao Liu from customer ByteDance", []string{"remove_contact"}, "crm"},
 
 		// cross-namespace disambiguation: these requests are intentionally
 		// ambiguous between iam and crm — both have a notion of "delete" on a
@@ -436,23 +436,23 @@ func accuracyCases() []accuracyCase {
 		// expected tools is loaded (the model is not expected to guess the
 		// right namespace without disambiguation), demonstrating that namespace
 		// scoping prevents a generic verb from matching an unrelated domain.
-		{"删除用户", []string{"delete_user"}, "iam"},
-		{"创建一个用户", []string{"create_user"}, "iam"},
-		{"显示用户列表", []string{"list_users"}, "iam"},
+		{"Delete a user", []string{"delete_user"}, "iam"},
+		{"Create a user", []string{"create_user"}, "iam"},
+		{"Show user list", []string{"list_users"}, "iam"},
 
 		// default (no namespace) — general-purpose deferred tools registered via
 		// WithDeferredTools without a toolbox. These tools have no domain bias:
 		// the model must find them with keyword search alone, without specifying
 		// a namespace argument. This validates that tool_search works correctly
 		// for the non-toolbox path (keyword → _default namespace fallback).
-		{"帮我算一下 3.14 乘以 256 等于多少", []string{"calculator"}, "default"},
-		{"现在几点了", []string{"get_current_time"}, "default"},
-		{"把 https://github.com 这个链接生成一个二维码", []string{"generate_qrcode"}, "default"},
-		{"帮我把这段文本 'hello world' 进行 base64 编码", []string{"base64_encode"}, "default"},
-		{"解码这段 base64 字符串 aGVsbG8gd29ybGQ=", []string{"base64_decode"}, "default"},
-		{"解析这个 JSON：{\"name\":\"张三\",\"age\":30}", []string{"parse_json"}, "default"},
-		{"把日期 2025-01-15 格式化成 2025年1月15日", []string{"format_date"}, "default"},
-		{"给我生成一个随机的 UUID", []string{"generate_uuid"}, "default"},
+		{"Calculate 3.14 times 256 for me", []string{"calculator"}, "default"},
+		{"What time is it now", []string{"get_current_time"}, "default"},
+		{"Generate a QR code for https://github.com", []string{"generate_qrcode"}, "default"},
+		{"Encode the text 'hello world' to base64", []string{"base64_encode"}, "default"},
+		{"Decode the base64 string aGVsbG8gd29ybGQ=", []string{"base64_decode"}, "default"},
+		{"Parse this JSON: {\"name\":\"Zhang San\",\"age\":30}", []string{"parse_json"}, "default"},
+		{"Format the date 2025-01-15 as January 15, 2025", []string{"format_date"}, "default"},
+		{"Generate a random UUID for me", []string{"generate_uuid"}, "default"},
 		{"Encode 'hello world' to base64", []string{"base64_encode"}, "default"},
 		{"What time is it now in UTC", []string{"get_current_time"}, "default"},
 	}
