@@ -1319,7 +1319,40 @@ func TestNewTool_DeclarationExposesSchema(t *testing.T) {
 	require.Contains(
 		t,
 		decl.InputSchema.Properties["target"].Description,
-		"only use sandbox or node when configured",
+		"No non-default browser targets are configured",
+	)
+	require.NotContains(
+		t,
+		decl.InputSchema.Properties["target"].Description,
+		"sandbox",
+	)
+	require.NotContains(
+		t,
+		decl.InputSchema.Properties["target"].Description,
+		"node",
+	)
+}
+
+func TestNewTool_DeclarationDescribesConfiguredBrowserTargets(t *testing.T) {
+	t.Parallel()
+
+	tool, err := NewTool(Config{
+		SandboxServerURL: "http://127.0.0.1:20790",
+		Nodes: []NodeConfig{{
+			ID:        "edge",
+			ServerURL: "http://127.0.0.1:21790",
+		}},
+		Profiles: []ProfileConfig{{
+			Name: defaultProfileName,
+		}},
+	})
+	require.NoError(t, err)
+
+	decl := tool.Declaration()
+	require.Contains(
+		t,
+		decl.InputSchema.Properties["target"].Description,
+		"Available non-default targets: node, sandbox",
 	)
 }
 
@@ -4289,6 +4322,32 @@ func TestToolResolveDriver_TargetFallbackPaths(t *testing.T) {
 		serverDrv, ok := drv.(*serverProfileDriver)
 		require.True(t, ok)
 		require.Equal(t, "http://127.0.0.1:20790", serverDrv.baseURL)
+	})
+
+	t.Run("sandbox without sandbox server stays strict", func(t *testing.T) {
+		tool := newToolWithDrivers(
+			defaultProfileName,
+			false,
+			navigationPolicy{},
+			&serverTargetConfig{
+				ID:        targetHost,
+				ServerURL: "http://127.0.0.1:19790",
+			},
+			nil,
+			nil,
+			map[string]ProfileConfig{
+				defaultProfileName: {Name: defaultProfileName},
+			},
+			map[string]driver{
+				defaultProfileName: &fakeDriver{},
+			},
+		)
+
+		_, _, err := tool.resolveDriver(input{
+			Target: targetSandbox,
+		})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "sandbox target is not configured")
 	})
 
 	t.Run("single node auto select", func(t *testing.T) {
