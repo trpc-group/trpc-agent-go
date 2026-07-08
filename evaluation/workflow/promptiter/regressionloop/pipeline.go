@@ -138,12 +138,13 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config) (*RunResult, error) {
 			selected = &copy
 		}
 	}
-	finalRound := bestRound(rounds)
 	finalDelta := DeltaReport{}
 	finalGate := GateDecision{Accepted: false, Reasons: []string{"no candidate generated"}}
-	if finalRound != nil {
-		finalDelta.Cases, finalDelta.Summary = ComputeDeltas(baseValidation, finalRound.Validation, cfg.Gate.CriticalCaseIDs)
-		finalGate = finalRound.GateDecision
+	if selected != nil {
+		finalDelta.Cases, finalDelta.Summary = ComputeDeltas(baseValidation, selected.Validation, cfg.Gate.CriticalCaseIDs)
+		finalGate = selected.GateDecision
+	} else if len(rounds) > 0 {
+		finalGate = GateDecision{Accepted: false, Reasons: []string{"no candidate accepted by gate"}}
 	}
 	report := &Report{
 		Run: RunMetadata{
@@ -188,17 +189,4 @@ func (p *Pipeline) evaluate(ctx context.Context, cfg Config, phase Phase, round 
 		return EvaluationSummary{}, fmt.Errorf("evaluate %s %s: %w", phase, evalSet.ID, err)
 	}
 	return AttributeEvaluation(result), nil
-}
-
-func bestRound(rounds []CandidateRound) *CandidateRound {
-	if len(rounds) == 0 {
-		return nil
-	}
-	best := rounds[0]
-	for _, round := range rounds[1:] {
-		if round.Validation.Score > best.Validation.Score {
-			best = round
-		}
-	}
-	return &best
 }

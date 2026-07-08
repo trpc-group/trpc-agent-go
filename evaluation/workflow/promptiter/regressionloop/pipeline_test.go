@@ -84,7 +84,52 @@ func TestPipelineRejectsOverfitCandidate(t *testing.T) {
 	result, err := pipeline.Run(context.Background(), cfg)
 	require.NoError(t, err)
 	assert.False(t, result.Report.GateDecision.Accepted)
-	assert.Contains(t, result.Report.GateDecision.FailedRules, "no_new_hard_fails")
-	assert.Contains(t, result.Report.GateDecision.FailedRules, "critical_case_non_regression")
+	assert.Contains(t, result.Report.GateDecision.Reasons, "no candidate accepted by gate")
+	require.Len(t, result.Report.Candidates, 1)
+	assert.Contains(t, result.Report.Candidates[0].GateDecision.FailedRules, "no_new_hard_fails")
+	assert.Contains(t, result.Report.Candidates[0].GateDecision.FailedRules, "critical_case_non_regression")
 	assert.Nil(t, result.Report.SelectedCandidate)
+}
+
+func TestPipelineFinalReportUsesSelectedAcceptedCandidate(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Gate.MaxCalls = 2
+	evaluator := &fakeEvaluator{results: map[string]EvaluationSummary{
+		phaseKey(PhaseBaselineTrain, 0):      evalSummary(0.5, caseResult("train", 0.5, false)),
+		phaseKey(PhaseBaselineValidation, 0): evalSummary(0.6, caseResult("valid", 0.6, true)),
+		phaseKey(PhaseCandidateTrain, 1):     evalSummary(0.7, caseResult("train", 0.7, true)),
+		phaseKey(PhaseCandidateValidation, 1): evalSummary(0.75,
+			caseResult("valid", 0.75, true),
+		),
+		phaseKey(PhaseCandidateTrain, 2): evalSummary(0.95,
+			caseResult("train-a", 0.95, true),
+			caseResult("train-b", 0.95, true),
+		),
+		phaseKey(PhaseCandidateValidation, 2): evalSummary(0.9,
+			caseResult("valid", 0.9, true),
+			caseResult("extra", 0.9, true),
+		),
+	}}
+	pipeline := &Pipeline{
+		Evaluator: evaluator,
+		Optimizer: fakeOptimizer{candidates: []Candidate{
+			{Round: 1, Prompt: "accepted"},
+			{Round: 2, Prompt: "higher-score-but-too-expensive"},
+		}},
+		Clock: &fixedClock{ticks: []time.Time{
+			time.Unix(100, 0).UTC(),
+			time.Unix(101, 0).UTC(),
+		}},
+	}
+
+	result, err := pipeline.Run(context.Background(), cfg)
+	require.NoError(t, err)
+	require.NotNil(t, result.Report.SelectedCandidate)
+	assert.Equal(t, 1, result.Report.SelectedCandidate.Round)
+	assert.True(t, result.Report.GateDecision.Accepted)
+	assert.Equal(t, result.Report.SelectedCandidate.GateDecision, result.Report.GateDecision)
+	require.Len(t, result.Report.Delta.Cases, 1)
+	assert.Equal(t, 0.75, result.Report.Delta.Cases[0].CandidateScore)
+	assert.False(t, result.Report.Candidates[1].GateDecision.Accepted)
+	assert.Contains(t, result.Report.Candidates[1].GateDecision.FailedRules, "max_calls")
 }

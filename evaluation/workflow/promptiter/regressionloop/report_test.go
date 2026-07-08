@@ -37,6 +37,11 @@ func TestWriteReports(t *testing.T) {
 	assert.Contains(t, string(md), "candidate satisfies")
 }
 
+func TestWriteReportsRejectsNilReport(t *testing.T) {
+	err := WriteReports(nil, "optimization_report.json", "optimization_report.md")
+	require.ErrorContains(t, err, "report is nil")
+}
+
 func sampleReport() *Report {
 	base := evalSummary(0.6, caseResult("case", 0.6, true))
 	candidate := evalSummary(0.8, caseResult("case", 0.8, true))
