@@ -1089,6 +1089,7 @@ func NewRuntimeWithOptions(
 				Err:  fmt.Errorf("create model failed: %w", err),
 			}
 		}
+		mdl = newModelCallBudgetModel(mdl)
 	}
 
 	instanceID := runtimeInstanceID(
@@ -1365,6 +1366,10 @@ func NewRuntimeWithOptions(
 		gwOpts,
 		runtimeProfileResolver,
 		runtimeProfileRequired,
+	)
+	gwOpts = appendModelCallBudgetGatewayOption(
+		gwOpts,
+		opts.MaxLLMCalls,
 	)
 	if langfuseRT != nil && langfuseRT.runOptionResolver != nil {
 		gwOpts = append(
@@ -1709,6 +1714,7 @@ func run(
 				Err:  fmt.Errorf("create model failed: %w", err),
 			}
 		}
+		mdl = newModelCallBudgetModel(mdl)
 	}
 
 	instanceID := runtimeInstanceID(
@@ -1990,6 +1996,10 @@ func run(
 		gwOpts,
 		runtimeProfileResolver,
 		runtimeProfileRequired,
+	)
+	gwOpts = appendModelCallBudgetGatewayOption(
+		gwOpts,
+		opts.MaxLLMCalls,
 	)
 	if langfuseRT != nil && langfuseRT.runOptionResolver != nil {
 		gwOpts = append(
