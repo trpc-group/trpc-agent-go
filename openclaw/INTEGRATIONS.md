@@ -936,6 +936,9 @@ Optional config fields:
 - `base_url` (default depends on `backend`)
 - `user_agent`
 - `timeout`
+- `blocked_result_url_patterns`: optional case-insensitive URL substrings
+  to filter from search results, intended for benchmark hygiene such as
+  excluding public trace or answer mirrors
 
 `api` uses the DuckDuckGo Instant Answer API and works best for
 encyclopedic answers. `html` and `lite` parse DuckDuckGo search result pages
@@ -974,8 +977,18 @@ tools:
 Optional config fields:
 
 - `blocked_domains`
+- `allow_search_result_pages` (default: `false`)
+- `detect_blocked_pages` (default: `true`)
 - `max_content_length`
 - `max_total_content_length`
+
+By default, OpenClaw configures `web_fetch` to reject common
+search-engine result pages and to report CAPTCHA, Cloudflare,
+unusual-traffic, and anti-bot challenge pages as blocked. Use dedicated
+search tools for discovery, then fetch known result URLs. Set
+`allow_search_result_pages: true` only for workflows that intentionally
+need raw search-result HTML, and set `detect_blocked_pages: false` only
+when the challenge page itself is the target content.
 
 ## Built-in ToolSets
 

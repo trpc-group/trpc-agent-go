@@ -284,6 +284,9 @@ func blockedBrowserPageReason(text string) (string, bool) {
 }
 
 func looksLikeCloudflareChallenge(text string) bool {
+	if isShortJustAMomentPage(text) {
+		return true
+	}
 	if containsAny(
 		text,
 		"page title: just a moment",
@@ -306,6 +309,15 @@ func looksLikeCloudflareChallenge(text string) bool {
 		"cloudflare ray id",
 		"checking your browser before accessing",
 	)
+}
+
+func isShortJustAMomentPage(text string) bool {
+	compact := strings.Join(strings.Fields(text), " ")
+	compact = strings.Trim(compact, ".!。 \t\r\n")
+	if len(compact) > 80 {
+		return false
+	}
+	return compact == "just a moment"
 }
 
 func containsAny(text string, values ...string) bool {

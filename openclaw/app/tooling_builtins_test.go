@@ -63,6 +63,44 @@ max_total_content_length: 456
 	require.NoError(t, err)
 	require.Len(t, tools, 1)
 	require.NotEmpty(t, tools[0].Declaration().Name)
+	require.Contains(
+		t,
+		tools[0].Declaration().Description,
+		"Search-result pages are blocked",
+	)
+	require.Contains(
+		t,
+		tools[0].Declaration().Description,
+		"challenge pages are reported as blocked",
+	)
+}
+
+func TestNewHTTPWebFetchTools_SearchPageAndBlockedPageOptOut(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	cfg := yamlNode(t, `
+allow_all_domains: true
+allow_search_result_pages: true
+detect_blocked_pages: false
+`)
+	tools, err := newHTTPWebFetchTools(
+		registry.ToolProviderDeps{},
+		registry.PluginSpec{Config: cfg},
+	)
+	require.NoError(t, err)
+	require.Len(t, tools, 1)
+	require.NotContains(
+		t,
+		tools[0].Declaration().Description,
+		"Search-result pages are blocked",
+	)
+	require.NotContains(
+		t,
+		tools[0].Declaration().Description,
+		"challenge pages are reported as blocked",
+	)
 }
 
 func TestNewDuckDuckGoTools_Succeeds(t *testing.T) {
@@ -108,6 +146,49 @@ func TestNewDuckDuckGoTools_Succeeds(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, string(data), `"summary":"Found 1 html results`)
 	require.Contains(t, string(data), `"url":"https://example.com/gaia"`)
+}
+
+func TestNewDuckDuckGoTools_BlockedResultURLPatterns(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(`
+<html><body>
+  <a class="result__a" href="https://x.io/t">Trace mirror</a>
+  <a class="result__snippet">Benchmark trace mirror.</a>
+  <a class="result__a" href="/l/?uddg=https%3A%2F%2Fexample.com%2Fsource">Source page</a>
+  <a class="result__snippet">Primary source.</a>
+</body></html>`))
+		},
+	))
+	defer server.Close()
+
+	cfg := yamlNode(t, strings.Join([]string{
+		`base_url: "` + server.URL + `"`,
+		`backend: "html"`,
+		`blocked_result_url_patterns:`,
+		`  - "x.io/t"`,
+		"",
+	}, "\n"))
+	tools, err := newDuckDuckGoTools(
+		registry.ToolProviderDeps{},
+		registry.PluginSpec{Config: cfg},
+	)
+	require.NoError(t, err)
+
+	callable, ok := tools[0].(tool.CallableTool)
+	require.True(t, ok)
+	raw, err := callable.Call(
+		context.Background(),
+		[]byte(`{"query":"example benchmark"}`),
+	)
+	require.NoError(t, err)
+	data, err := json.Marshal(raw)
+	require.NoError(t, err)
+	require.Contains(t, string(data), "filtered 1 result")
+	require.Contains(t, string(data), "https://example.com/source")
+	require.NotContains(t, string(data), "x.io/t")
 }
 
 func TestNewDuckDuckGoTools_InvalidBackend(t *testing.T) {

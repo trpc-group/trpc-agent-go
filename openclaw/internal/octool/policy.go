@@ -13,7 +13,10 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"strings"
+
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/searchresult"
 )
 
 const (
@@ -28,6 +31,10 @@ const (
 		"host package managers is not allowed in chat; do not retry " +
 		"host package manager commands, and use existing tools or " +
 		"user-space dependencies instead"
+	reasonSearchResultHTTP = "scraping %s result pages with " +
+		"command-line HTTP clients is not allowed in chat; use " +
+		"dedicated search tools, direct source URLs, archives, or " +
+		"existing evidence instead"
 
 	sensitivePathBoundaryChars = " \t\r\n\"'`=:/\\|&;()[]{}<>"
 
@@ -39,6 +46,8 @@ const (
 
 	shellQuoteChars = `"'`
 )
+
+var httpURLPattern = regexp.MustCompile("https?://[^\\s\"'`<>\\\\]+")
 
 var protectedPathFragments = []string{
 	".aws/credentials",
@@ -91,6 +100,12 @@ func NewChatCommandSafetyPolicy() CommandPolicy {
 				reasonSystemPackageInstall,
 			)
 		}
+		if source, ok := blocksSearchResultHTTP(req.Command); ok {
+			return fmt.Errorf(
+				errCommandPolicyRejected,
+				fmt.Sprintf(reasonSearchResultHTTP, source),
+			)
+		}
 		return nil
 	}
 }
@@ -116,6 +131,70 @@ func blocksSensitivePath(command string) bool {
 
 func blocksSystemPackageInstall(command string) bool {
 	return blocksSystemPackageInstallDepth(normalizePolicyCommand(command), 0)
+}
+
+func blocksSearchResultHTTP(command string) (string, bool) {
+	command = normalizePolicyCommand(command)
+	if command == "" || !usesCommandLineHTTPClient(command, 0) {
+		return "", false
+	}
+	for _, raw := range httpURLPattern.FindAllString(command, -1) {
+		source, ok := searchresult.Match(trimShellURL(raw))
+		if ok {
+			return source, true
+		}
+	}
+	return "", false
+}
+
+func usesCommandLineHTTPClient(command string, depth int) bool {
+	if command == "" || depth > 2 {
+		return false
+	}
+	words := shellPolicyWords(command)
+	for i, word := range words {
+		cmd := policyCommandName(word)
+		switch cmd {
+		case "curl", "wget", "http", "https", "aria2c", "lynx", "w3m":
+			return true
+		case "python", "python3", "python2", "pypy", "pypy3":
+			if containsPythonHTTPClient(command) {
+				return true
+			}
+		case "node", "nodejs", "bun", "deno":
+			if containsJSHTTPClient(command) {
+				return true
+			}
+		}
+		if !isShellExecutable(cmd) {
+			continue
+		}
+		cmdArg, ok := shellCommandStringArg(words[i+1:])
+		if ok && usesCommandLineHTTPClient(cmdArg, depth+1) {
+			return true
+		}
+	}
+	return false
+}
+
+func trimShellURL(raw string) string {
+	return strings.TrimRight(strings.TrimSpace(raw), ".,;:)]}")
+}
+
+func containsPythonHTTPClient(command string) bool {
+	lower := strings.ToLower(command)
+	return strings.Contains(lower, "requests") ||
+		strings.Contains(lower, "urllib") ||
+		strings.Contains(lower, "http.client") ||
+		strings.Contains(lower, "urlopen")
+}
+
+func containsJSHTTPClient(command string) bool {
+	lower := strings.ToLower(command)
+	return strings.Contains(lower, "fetch(") ||
+		strings.Contains(lower, "axios") ||
+		strings.Contains(lower, "http.get") ||
+		strings.Contains(lower, "https.get")
 }
 
 func blocksSystemPackageInstallDepth(command string, depth int) bool {

@@ -71,6 +71,10 @@ func TestNavigationPolicy_BlocksSearchResultPagesByDefault(
 			name: "Google Scholar search",
 		},
 		{
+			raw:  "https://webcache.googleusercontent.com/search?q=cache:x",
+			name: "Google cached search",
+		},
+		{
 			raw:  "https://html.duckduckgo.com/html/?q=openclaw",
 			name: "DuckDuckGo HTML search",
 		},
@@ -128,9 +132,14 @@ func TestNavigationPolicy_DoesNotBlockSourcePagesAsSearchResults(
 	cases := []string{
 		"https://github.com/trpc-group/trpc-agent-go",
 		"https://www.google.com/",
+		"https://www.google.com/search/about",
+		"https://webcache.googleusercontent.com/search/about",
 		"https://scholar.google.com/citations?user=abc",
 		"https://www.bing.com/maps?q=openclaw",
+		"https://www.bing.com/search/overview",
 		"https://duckduckgo.com/",
+		"https://search.brave.com/search/help",
+		"https://search.yahoo.com/search/help",
 	}
 
 	for _, raw := range cases {

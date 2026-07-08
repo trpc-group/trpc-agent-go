@@ -259,6 +259,57 @@ func TestChatCommandSafetyPolicy_AllowsLanguagePackageInstall(
 	}
 }
 
+func TestChatCommandSafetyPolicy_BlocksSearchResultHTTPClients(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	policy := NewChatCommandSafetyPolicy()
+	for _, command := range []string{
+		`curl -sL "https://www.google.com/search?q=openclaw"`,
+		`wget -qO- https://www.bing.com/search?q=openclaw`,
+		`http https://search.yahoo.com/search?p=openclaw`,
+		`bash -lc 'curl -s "https://duckduckgo.com/?q=openclaw"'`,
+		`python3 -c "import requests; ` +
+			`requests.get('https://search.brave.com/search?q=x')"`,
+		`node -e "fetch('https://www.google.com/search?q=x')"`,
+	} {
+		command := command
+		t.Run(command, func(t *testing.T) {
+			t.Parallel()
+
+			err := policy(context.Background(), CommandRequest{
+				Command: command,
+			})
+			require.ErrorContains(t, err, "result pages")
+		})
+	}
+}
+
+func TestChatCommandSafetyPolicy_AllowsNonSearchHTTPCommands(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	policy := NewChatCommandSafetyPolicy()
+	for _, command := range []string{
+		`curl -sL "https://www.google.com/search/about"`,
+		`curl -sL "https://www.boxofficemojo.com/year/world/2020/"`,
+		`echo "https://www.google.com/search?q=openclaw"`,
+		`python3 -c "print('https://www.google.com/search?q=x')"`,
+	} {
+		command := command
+		t.Run(command, func(t *testing.T) {
+			t.Parallel()
+
+			err := policy(context.Background(), CommandRequest{
+				Command: command,
+			})
+			require.NoError(t, err)
+		})
+	}
+}
+
 func TestBlocksSystemPackageInstall_EdgeCases(t *testing.T) {
 	t.Parallel()
 

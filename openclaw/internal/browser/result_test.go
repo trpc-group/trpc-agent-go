@@ -103,6 +103,11 @@ func TestBlockedBrowserPageReason_DetectsCommonChallenges(t *testing.T) {
 			want: "Cloudflare",
 		},
 		{
+			name: "short just a moment body",
+			text: "Just a moment......",
+			want: "Cloudflare",
+		},
+		{
 			name: "unusual traffic",
 			text: "Our systems have detected unusual traffic from " +
 				"your computer network.",
@@ -145,6 +150,7 @@ func TestBlockedBrowserPageReason_IgnoresPlainPageText(t *testing.T) {
 	cases := []string{
 		"This article says a captcha can be hard to read.",
 		"The phrase just a moment appeared in the transcript.",
+		"Just a moment in the article title, then regular text.",
 		"Verify your account settings before changing the profile.",
 	}
 	for _, tc := range cases {
