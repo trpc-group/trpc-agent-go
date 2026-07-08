@@ -193,6 +193,27 @@ test("HostProfile upload supports file chooser refs", async () => {
   assert.equal(result.content[0].text, "Uploaded 1 file(s).");
 });
 
+test("HostProfile act accepts press/key as a press alias", async () => {
+  const calls = [];
+  const page = {
+    keyboard: {
+      async press(key, options) {
+        calls.push({ key, options });
+      }
+    }
+  };
+
+  const profile = profileForPage(page);
+  const result = await profile.act("tab-1", {
+    kind: "press/key",
+    key: "End",
+    delayMs: 25
+  });
+
+  assert.deepEqual(calls, [{ key: "End", options: { delay: 25 } }]);
+  assert.equal(result.content[0].text, "Pressed End.");
+});
+
 test("HostProfile download clicks a ref and saves the file", async () => {
   const calls = [];
   const download = {

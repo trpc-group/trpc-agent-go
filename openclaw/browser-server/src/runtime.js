@@ -1,4 +1,5 @@
 import { WebSocketServer } from "ws";
+import { normalizeActKind } from "./act-kind.js";
 import { ChromeRelay } from "./chrome-relay.js";
 import { HostProfile } from "./host-profile.js";
 
@@ -365,7 +366,7 @@ export class BrowserRuntime {
     if (profile === "chrome") {
       return this.chromeRelay.execute(
         payload.targetId || payload.request?.targetId,
-        payload.request?.kind || payload.kind,
+        normalizeActKind(payload.request?.kind || payload.kind),
         payload.request || payload
       );
     }
