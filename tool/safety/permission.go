@@ -39,10 +39,14 @@ func NewPermissionPolicy(
 	if scanner == nil {
 		scanner = MustDefaultScanner(Policy{})
 	}
+	auditMode := AuditFailureModeBestEffort
+	if defaultScanner, ok := scanner.(*DefaultScanner); ok {
+		auditMode = defaultScanner.policy.AuditFailureMode
+	}
 	p := &permissionPolicy{
 		scanner:        scanner,
 		resolver:       defaultBackendResolver,
-		auditMode:      AuditFailureModeBestEffort,
+		auditMode:      auditMode,
 		defaultBackend: BackendUnknown,
 	}
 	for _, opt := range opts {

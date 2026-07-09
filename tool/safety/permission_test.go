@@ -90,6 +90,38 @@ func TestPermissionPolicy_AuditStrictFailsAllowDecision(t *testing.T) {
 	require.ErrorContains(t, err, "disk full")
 }
 
+func TestPermissionPolicy_InheritsAuditFailureModeFromDefaultScanner(t *testing.T) {
+	scanner := MustDefaultScanner(Policy{
+		AuditFailureMode: AuditFailureModeStrict,
+	})
+	policy := NewPermissionPolicy(
+		scanner,
+		WithAuditWriter(failingAuditWriter{err: errors.New("disk full")}),
+	)
+	_, err := policy.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:  "workspace_exec",
+		Arguments: []byte(`{"command":"go test ./..."}`),
+	})
+	require.ErrorContains(t, err, "disk full")
+}
+
+func TestPermissionPolicy_ExplicitAuditFailureModeOverridesScannerPolicy(t *testing.T) {
+	scanner := MustDefaultScanner(Policy{
+		AuditFailureMode: AuditFailureModeStrict,
+	})
+	policy := NewPermissionPolicy(
+		scanner,
+		WithAuditWriter(failingAuditWriter{err: errors.New("disk full")}),
+		WithAuditFailureMode(AuditFailureModeBestEffort),
+	)
+	decision, err := policy.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:  "workspace_exec",
+		Arguments: []byte(`{"command":"go test ./..."}`),
+	})
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionAllow, decision.Action)
+}
+
 func TestPermissionPolicy_CodeExecInvalidArgumentsAsk(t *testing.T) {
 	var observed Report
 	policy := NewPermissionPolicy(
