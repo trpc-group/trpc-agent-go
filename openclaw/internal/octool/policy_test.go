@@ -327,6 +327,16 @@ func TestChatCommandSafetyPolicy_BlocksAdHocNetworkProxies(
 		`echo ok; HTTPS_PROXY=http://127.0.0.1:8080 curl https://x`,
 		`proxychains4 curl https://example.com`,
 		`ssh -D 1080 user@example.com`,
+		`python3 - <<'PY'
+import requests
+requests.get("https://example.com", proxies={"http": "http://127.0.0.1:8080"})
+PY`,
+		`python3 -c "import urllib.request; ` +
+			`urllib.request.ProxyHandler({'http':'http://127.0.0.1:8080'})"`,
+		`node -e "const {HttpsProxyAgent}=require('https-proxy-agent'); ` +
+			`fetch('https://example.com', {agent:new HttpsProxyAgent('http://127.0.0.1:8080')})"`,
+		`node -e "require('axios').get('https://example.com', ` +
+			`{proxy:{host:'127.0.0.1',port:8080}})"`,
 	} {
 		command := command
 		t.Run(command, func(t *testing.T) {
@@ -352,6 +362,9 @@ func TestChatCommandSafetyPolicy_AllowsNonProxyHTTPCommands(
 		`env -u HTTP_PROXY curl https://example.com`,
 		`wget --no-proxy https://example.com/file.txt`,
 		`echo http_proxy=http://127.0.0.1:8080`,
+		`echo "python3 requests.get(url, proxies={'http':'http://127.0.0.1:8080'})"`,
+		`python3 -c "import requests; print(requests.get('https://example.com').status_code)"`,
+		`node -e "fetch('https://example.com').then(r=>console.log(r.status))"`,
 	} {
 		command := command
 		t.Run(command, func(t *testing.T) {

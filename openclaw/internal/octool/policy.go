@@ -56,7 +56,11 @@ const (
 	shellQuoteChars = `"'`
 )
 
-var httpURLPattern = regexp.MustCompile("https?://[^\\s\"'`<>\\\\]+")
+var (
+	httpURLPattern       = regexp.MustCompile("https?://[^\\s\"'`<>\\\\]+")
+	pythonProxiesPattern = regexp.MustCompile(`\bproxies\s*=`)
+	jsProxyOptionPattern = regexp.MustCompile(`\bproxy\s*:`)
+)
 
 var protectedPathFragments = []string{
 	".aws/credentials",
@@ -319,6 +323,9 @@ func blocksNetworkProxyDepth(command string, depth int) bool {
 	if command == "" || depth > 2 {
 		return false
 	}
+	if blocksProgrammaticNetworkProxy(command) {
+		return true
+	}
 	for _, segment := range shellPolicySegments(command) {
 		words := shellPolicyWords(segment)
 		if blocksNetworkProxyWords(words) {
@@ -330,6 +337,26 @@ func blocksNetworkProxyDepth(command string, depth int) bool {
 			}
 			cmdArg, ok := shellCommandStringArg(words[i+1:])
 			if ok && blocksNetworkProxyDepth(cmdArg, depth+1) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func blocksProgrammaticNetworkProxy(command string) bool {
+	words := shellPolicyWords(command)
+	for i, word := range words {
+		if !looksLikeExecutablePosition(words, i) {
+			continue
+		}
+		switch policyCommandName(word) {
+		case "python", "python3", "python2", "pypy", "pypy3":
+			if containsPythonProxyRouting(command) {
+				return true
+			}
+		case "node", "nodejs", "bun", "deno":
+			if containsJSProxyRouting(command) {
 				return true
 			}
 		}
@@ -510,6 +537,24 @@ func containsJSHTTPClient(command string) bool {
 		strings.Contains(lower, "axios") ||
 		strings.Contains(lower, "http.get") ||
 		strings.Contains(lower, "https.get")
+}
+
+func containsPythonProxyRouting(command string) bool {
+	lower := strings.ToLower(command)
+	return pythonProxiesPattern.MatchString(lower) ||
+		strings.Contains(lower, ".proxies") ||
+		strings.Contains(lower, "proxyhandler") ||
+		strings.Contains(lower, ".set_proxy(") ||
+		strings.Contains(lower, "proxymanager")
+}
+
+func containsJSProxyRouting(command string) bool {
+	lower := strings.ToLower(command)
+	return jsProxyOptionPattern.MatchString(lower) ||
+		strings.Contains(lower, "httpsproxyagent") ||
+		strings.Contains(lower, "httpproxyagent") ||
+		strings.Contains(lower, "socksproxyagent") ||
+		strings.Contains(lower, "proxy-agent")
 }
 
 func blocksSystemPackageInstallDepth(command string, depth int) bool {
