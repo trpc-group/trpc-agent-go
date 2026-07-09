@@ -64,9 +64,9 @@ func (deterministicSummarizer) Summarize(ctx context.Context, sess *session.Sess
 	return strings.Join(parts, " | "), nil
 }
 
-func (deterministicSummarizer) SetPrompt(string) {}
+func (deterministicSummarizer) SetPrompt(prompt string) { _ = prompt }
 
-func (deterministicSummarizer) SetModel(model.Model) {}
+func (deterministicSummarizer) SetModel(m model.Model) { _ = m }
 
 func (deterministicSummarizer) Metadata() map[string]any {
 	return map[string]any{"name": "replay-deterministic"}
