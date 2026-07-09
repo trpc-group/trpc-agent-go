@@ -214,10 +214,23 @@ func TestSessionSQLite_GetSession_LoadsSummaryWithFilteredEventWindow(t *testing
 		session.SummaryFilterKeyAllContents,
 		true,
 	))
+	// Exercise summary loading when the event query returns an empty window.
+	_, err = svc.db.ExecContext(
+		ctx,
+		"UPDATE "+svc.tableSessionEvents+
+			" SET deleted_at = ? WHERE app_name = ? AND user_id = ?"+
+			" AND session_id = ?",
+		time.Now().UTC().UnixNano(),
+		key.AppName,
+		key.UserID,
+		key.SessionID,
+	)
+	require.NoError(t, err)
 
 	got, err := svc.GetSession(ctx, key, session.WithEventTime(time.Now().Add(time.Hour)))
 	require.NoError(t, err)
 	require.NotNil(t, got)
+	require.Empty(t, got.GetEvents())
 	require.NotEmpty(t, got.Summaries)
 	require.Equal(t, "summary", got.Summaries[session.SummaryFilterKeyAllContents].Summary)
 }
