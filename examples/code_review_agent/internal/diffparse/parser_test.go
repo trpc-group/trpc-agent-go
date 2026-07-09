@@ -116,6 +116,42 @@ func TestParseMultipleRawUnifiedDiffFiles(t *testing.T) {
 	}
 }
 
+func TestParseHunkLinesThatLookLikeFileHeaders(t *testing.T) {
+	raw := `--- pkg/config.go
++++ pkg/config.go
+@@ -1,3 +1,3 @@
+ package pkg
+--- old marker
++++ new marker
+ func ok() {}
+--- pkg/next.go
++++ pkg/next.go
+@@ -1 +1,2 @@
+ package pkg
++const next = true
+`
+	files, err := Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if len(files) != 2 {
+		t.Fatalf("len(files) = %d, want 2", len(files))
+	}
+	firstHunkLines := files[0].Hunks[0].Lines
+	if len(firstHunkLines) != 4 {
+		t.Fatalf("len(firstHunkLines) = %d, want 4", len(firstHunkLines))
+	}
+	if got := firstHunkLines[1]; got.Kind != "delete" || got.OldLine != 2 || got.Content != "-- old marker" {
+		t.Fatalf("delete line = %#v, want old line 2 content %q", got, "-- old marker")
+	}
+	if got := firstHunkLines[2]; got.Kind != "add" || got.NewLine != 2 || got.Content != "++ new marker" {
+		t.Fatalf("add line = %#v, want new line 2 content %q", got, "++ new marker")
+	}
+	if files[1].NewPath != "pkg/next.go" {
+		t.Fatalf("second NewPath = %q, want pkg/next.go", files[1].NewPath)
+	}
+}
+
 func TestParseIgnoresBlankSeparatorsInsideHunk(t *testing.T) {
 	raw := `--- pkg/config.go
 +++ pkg/config.go

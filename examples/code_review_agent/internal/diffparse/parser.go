@@ -33,6 +33,13 @@ func Parse(diff string) ([]review.DiffFile, error) {
 	scanner.Buffer(make([]byte, 1024), 1024*1024)
 	for scanner.Scan() {
 		line := scanner.Text()
+		if shouldParseHunkLine(currentHunk, oldLine, newLine, line) {
+			diffLine, nextOld, nextNew := parseDiffLine(line, oldLine, newLine)
+			currentHunk.Lines = append(currentHunk.Lines, diffLine)
+			oldLine = nextOld
+			newLine = nextNew
+			continue
+		}
 		switch {
 		case strings.HasPrefix(line, "diff --git "):
 			files = append(files, review.DiffFile{})
@@ -76,14 +83,8 @@ func Parse(diff string) ([]review.DiffFile, error) {
 			currentHunk = &current.Hunks[len(current.Hunks)-1]
 			oldLine = parsedOldLine
 			newLine = parsedNewLine
-		case currentHunk != nil:
-			if !isDiffHunkLine(line) {
-				continue
-			}
-			diffLine, nextOld, nextNew := parseDiffLine(line, oldLine, newLine)
-			currentHunk.Lines = append(currentHunk.Lines, diffLine)
-			oldLine = nextOld
-			newLine = nextNew
+		case currentHunk != nil && hunkHasRemaining(currentHunk, oldLine, newLine):
+			continue
 		}
 	}
 	if err := scanner.Err(); err != nil {
@@ -93,6 +94,20 @@ func Parse(diff string) ([]review.DiffFile, error) {
 		return nil, fmt.Errorf("no diff files found")
 	}
 	return files, nil
+}
+
+func shouldParseHunkLine(hunk *review.DiffHunk, oldLine int, newLine int, line string) bool {
+	if hunk == nil || !isDiffHunkLine(line) {
+		return false
+	}
+	if line == `\ No newline at end of file` {
+		return true
+	}
+	return hunkHasRemaining(hunk, oldLine, newLine)
+}
+
+func hunkHasRemaining(hunk *review.DiffHunk, oldLine int, newLine int) bool {
+	return oldLine < hunk.OldStart+hunk.OldLines || newLine < hunk.NewStart+hunk.NewLines
 }
 
 func isDiffHunkLine(line string) bool {
