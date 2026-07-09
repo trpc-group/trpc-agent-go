@@ -76,14 +76,14 @@ go run main.go
 
 **GORM Memory — Shared Database Connection**
 
-Demonstrates episodic memory via [`memory/gorm`](../../memory/gorm) using an injected `*gorm.DB`. Matches the Guild/Genie pattern: shared GORM connection, optional `WithSkipDBInit(true)` when the host owns DDL.
+Reference docs and DDL for episodic memory via [`memory/gorm`](../../memory/gorm) using an injected `*gorm.DB`. Run the interactive demo through `simple` or `auto` with `-memory=gorm`.
 
 **Getting Started:**
 
 ```bash
-cd examples/memory/gorm
+cd examples/memory/simple
 export OPENAI_API_KEY="your-api-key"
-go run .
+go run main.go -memory=gorm
 ```
 
 [Read full documentation →](./gorm/README.md)
@@ -174,6 +174,7 @@ All examples support multiple storage backends:
 | `mysqlvec` | MySQL + vector search (embeddings)          | `-memory=mysqlvec` |
 | `postgres` | PostgreSQL-based storage                    | `-memory=postgres` |
 | `pgvector` | pgvector PostgreSQL storage with embeddings | `-memory=pgvector` |
+| `gorm`     | GORM-backed storage (shared `*gorm.DB`)     | `-memory=gorm`     |
 
 See also [`gorm/`](./gorm/) for a **shared `*gorm.DB`** example (not a `simple/` backend flag).
 
@@ -356,6 +357,9 @@ export PGVECTOR_PASSWORD=""
 export PGVECTOR_DATABASE=trpc-agent-go-pgmemory
 export PGVECTOR_EMBEDDER_MODEL=text-embedding-3-small
 go run main.go -memory pgvector
+
+# GORM memory service (SQLite default, or set GORM_DSN for PostgreSQL)
+go run main.go -memory gorm
 ```
 
 ### Custom Models

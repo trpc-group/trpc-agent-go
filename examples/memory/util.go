@@ -18,10 +18,14 @@ import (
 	"strings"
 	"time"
 
+	"gorm.io/driver/postgres"
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
+	memorygorm "trpc.group/trpc-go/trpc-agent-go/memory/gorm"
 	memoryinmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
 	memorymysql "trpc.group/trpc-go/trpc-agent-go/memory/mysql"
 	memorymysqlvec "trpc.group/trpc-go/trpc-agent-go/memory/mysqlvec"
@@ -48,6 +52,7 @@ const (
 	MemoryPGVector  MemoryType = "pgvector"
 	MemoryMySQL     MemoryType = "mysql"
 	MemoryMySQLVec  MemoryType = "mysqlvec"
+	MemoryGORM      MemoryType = "gorm"
 )
 
 // MemoryServiceConfig holds configuration for creating a memory service.
@@ -127,6 +132,8 @@ func NewMemoryServiceByType(memoryType MemoryType, cfg MemoryServiceConfig) (mem
 		return newMySQLMemoryService(cfg)
 	case MemoryMySQLVec:
 		return newMySQLVecMemoryService(cfg)
+	case MemoryGORM:
+		return newGormMemoryService(cfg)
 	case MemoryInMemory:
 		fallthrough
 	default:
@@ -184,6 +191,60 @@ func newSQLiteMemoryService(cfg MemoryServiceConfig) (memory.Service, error) {
 	}
 
 	return svc, nil
+}
+
+const (
+	gormMemoryDSNEnvKey         = "GORM_DSN"
+	gormMemorySkipDBInitEnvKey  = "GORM_SKIP_DB_INIT"
+	defaultGormMemorySQLiteFile = "memories_gorm.db"
+)
+
+// newGormMemoryService creates a GORM memory service with a shared *gorm.DB.
+// Environment variables:
+//   - GORM_DSN: SQLite path or postgres:// DSN (default: memories_gorm.db)
+//   - GORM_SKIP_DB_INIT: set to true when the host application owns DDL
+func newGormMemoryService(cfg MemoryServiceConfig) (memory.Service, error) {
+	db, err := openGormMemoryDB()
+	if err != nil {
+		return nil, fmt.Errorf("open gorm memory database: %w", err)
+	}
+
+	opts := []memorygorm.ServiceOpt{
+		memorygorm.WithDB(db),
+		memorygorm.WithSoftDelete(cfg.SoftDelete),
+	}
+
+	skipInit := strings.EqualFold(GetEnvOrDefault(gormMemorySkipDBInitEnvKey, "false"), "true") ||
+		GetEnvOrDefault(gormMemorySkipDBInitEnvKey, "") == "1"
+	if skipInit {
+		opts = append(opts, memorygorm.WithSkipDBInit(true))
+	}
+
+	if cfg.Extractor != nil {
+		opts = append(opts, memorygorm.WithExtractor(cfg.Extractor))
+		if cfg.AsyncMemoryNum > 0 {
+			opts = append(opts, memorygorm.WithAsyncMemoryNum(cfg.AsyncMemoryNum))
+		}
+		if cfg.MemoryQueueSize > 0 {
+			opts = append(opts, memorygorm.WithMemoryQueueSize(cfg.MemoryQueueSize))
+		}
+		if cfg.MemoryJobTimeout > 0 {
+			opts = append(opts, memorygorm.WithMemoryJobTimeout(cfg.MemoryJobTimeout))
+		}
+	}
+
+	return memorygorm.NewService(opts...)
+}
+
+func openGormMemoryDB() (*gorm.DB, error) {
+	dsn := strings.TrimSpace(os.Getenv(gormMemoryDSNEnvKey))
+	if dsn == "" {
+		return gorm.Open(sqlite.Open(defaultGormMemorySQLiteFile), &gorm.Config{})
+	}
+	if strings.HasPrefix(dsn, "postgres://") || strings.HasPrefix(dsn, "postgresql://") {
+		return gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	}
+	return gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 }
 
 const (

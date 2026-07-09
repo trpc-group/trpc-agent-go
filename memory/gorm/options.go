@@ -30,7 +30,7 @@ var defaultOptions = ServiceOpts{
 	searchMinScore:   imemory.DefaultSearchMinScore,
 	maxSearchResults: imemory.DefaultMaxSearchResults,
 	toolCreators:     imemory.AllToolCreators,
-	enabledTools:     make(map[string]struct{}),
+	enabledTools:     maps.Clone(imemory.DefaultEnabledTools),
 	asyncMemoryNum:   imemory.DefaultAsyncMemoryNum,
 	memoryQueueSize:  imemory.DefaultMemoryQueueSize,
 	memoryJobTimeout: imemory.DefaultMemoryJobTimeout,

@@ -1,23 +1,27 @@
 # GORM Memory Example
 
-Interactive chat demo using [`memory/gorm`](../../../memory/gorm) with a **shared `*gorm.DB`**.
+Reference wiring for [`memory/gorm`](../../../memory/gorm) with a **shared `*gorm.DB`**.
 
 This matches how Guild/Genie wire episodic memory: the host application owns the database connection and (in production) the DDL.
 
-## Quick start (SQLite)
+## Quick start (interactive chat)
+
+Use the shared `simple` or `auto` examples with `-memory=gorm`:
 
 ```bash
-cd examples/memory/gorm
+cd examples/memory/simple
 export OPENAI_API_KEY="your-api-key"
-go run .
+go run main.go -memory=gorm
 ```
 
-By default the example:
+By default this:
 
 1. Opens a local SQLite file (`memories_gorm.db`)
 2. Runs GORM `AutoMigrate` for the `memories` table
 3. Enables the four agentic memory tools (`memory_add`, `memory_update`, `memory_search`, `memory_load`)
 4. Starts an interactive chat session
+
+For automatic background extraction, use `examples/memory/auto` with the same flag.
 
 ## PostgreSQL (host-owned DDL)
 
@@ -25,7 +29,9 @@ When memory lives in an existing application database, skip initialization and p
 
 ```bash
 export GORM_DSN="postgres://user:pass@localhost:5432/app?sslmode=disable"
-go run . -skip-db-init
+export GORM_SKIP_DB_INIT=true
+cd examples/memory/simple
+go run main.go -memory=gorm
 ```
 
 Create the table using the reference DDL below.
