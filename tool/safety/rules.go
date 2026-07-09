@@ -7,6 +7,7 @@
 
 package safety
 
+// Rule IDs emitted by the tool safety scanner.
 const (
 	RuleAllowSafeCommand     = "TSG-ALLOW-SAFE-COMMAND"
 	RuleDangerousDelete      = "TSG-DANGER-RM-RF"
@@ -16,7 +17,7 @@ const (
 	RuleNetworkAllowedDomain = "TSG-NETWORK-DOMAIN-ALLOWED"
 	RuleShellParseUnsafe     = "TSG-SHELL-PARSE-UNSAFE"
 	RuleShellWrapper         = "TSG-SHELL-WRAPPER"
-	RuleShellBypassConstruct = "TSG-SHELL-BYPASS-CONSTRUCT"
+	RuleShellBypassConstruct = "TSG-SHELL-BYPASS-CONSTRUCT" // #nosec G101 -- rule identifier, not a credential.
 	RuleHostPTY              = "TSG-HOSTEXEC-PTY"
 	RuleHostBackground       = "TSG-HOSTEXEC-BACKGROUND"
 	RuleHostPrivilege        = "TSG-HOSTEXEC-PRIVILEGE"
@@ -25,7 +26,7 @@ const (
 	RuleResourceOutput       = "TSG-RESOURCE-OUTPUT"
 	RuleResourceLongRunning  = "TSG-RESOURCE-LONG-RUNNING"
 	RuleResourceParallelism  = "TSG-RESOURCE-PARALLELISM"
-	RuleSecretLeak           = "TSG-SECRET-LEAK"
+	RuleSecretLeak           = "TSG-SECRET-LEAK" // #nosec G101 -- rule identifier, not a credential.
 	RuleEnvNotAllowed        = "TSG-POLICY-ENV-NOT-ALLOWED"
 	RulePolicyInvalid        = "TSG-POLICY-INVALID"
 	RuleHumanReview          = "TSG-HUMAN-REVIEW"

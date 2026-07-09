@@ -181,6 +181,12 @@ func (p Policy) normalized() (Policy, error) {
 	if p.ParseErrorAction == "" {
 		p.ParseErrorAction = def.ParseErrorAction
 	}
+	if len(p.AllowedCommands) == 0 {
+		p.AllowedCommands = append([]string(nil), def.AllowedCommands...)
+	}
+	if len(p.DeniedCommands) == 0 {
+		p.DeniedCommands = append([]string(nil), def.DeniedCommands...)
+	}
 	if len(p.ForbiddenPaths) == 0 {
 		p.ForbiddenPaths = append([]string(nil), def.ForbiddenPaths...)
 	}

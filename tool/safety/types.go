@@ -12,6 +12,7 @@ import "time"
 // Decision is the normalized safety outcome for a pending execution.
 type Decision string
 
+// Decision values used by reports and permission decisions.
 const (
 	DecisionAllow            Decision = "allow"
 	DecisionDeny             Decision = "deny"
@@ -22,6 +23,7 @@ const (
 // RiskLevel is the severity assigned to a finding or final report.
 type RiskLevel string
 
+// RiskLevel values are ordered from no risk to critical risk.
 const (
 	RiskNone     RiskLevel = "none"
 	RiskLow      RiskLevel = "low"
@@ -33,6 +35,7 @@ const (
 // Backend classifies the execution surface being scanned.
 type Backend string
 
+// Backend values identify execution surfaces known to the scanner.
 const (
 	BackendWorkspaceExec Backend = "workspaceexec"
 	BackendHostExec      Backend = "hostexec"
@@ -45,6 +48,7 @@ const (
 // Category classifies a safety finding.
 type Category string
 
+// Category values classify safety findings for audit and telemetry.
 const (
 	CategoryDangerousCommand Category = "dangerous_command"
 	CategoryNetwork          Category = "network"

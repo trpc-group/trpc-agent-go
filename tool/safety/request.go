@@ -101,18 +101,33 @@ func fillCodeExec(out *ExecutionRequest, raw []byte) {
 		out.Script = string(raw)
 		return
 	}
+	codeBlocks := in.CodeBlocks
+	if len(codeBlocks) == 0 {
+		return
+	}
+	var encoded string
+	if err := json.Unmarshal(codeBlocks, &encoded); err == nil {
+		codeBlocks = []byte(encoded)
+	}
 	var blocks []struct {
 		Language string `json:"language"`
 		Code     string `json:"code"`
 	}
-	if err := json.Unmarshal(in.CodeBlocks, &blocks); err != nil {
+	parsed := true
+	if err := json.Unmarshal(codeBlocks, &blocks); err != nil {
+		parsed = false
 		var single struct {
 			Language string `json:"language"`
 			Code     string `json:"code"`
 		}
-		if err := json.Unmarshal(in.CodeBlocks, &single); err == nil {
+		if err := json.Unmarshal(codeBlocks, &single); err == nil {
 			blocks = append(blocks, single)
+			parsed = true
 		}
+	}
+	if !parsed {
+		out.Script = string(codeBlocks)
+		return
 	}
 	var scripts []string
 	var langs []string

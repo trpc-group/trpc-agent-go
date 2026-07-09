@@ -7,6 +7,7 @@
 
 package safety
 
+// Telemetry attribute names emitted for safety decisions.
 const (
 	AttrDecision  = "tool.safety.decision"
 	AttrRiskLevel = "tool.safety.risk_level"
