@@ -74,12 +74,14 @@ Two distinctions matter here.
 
 First, `llmagent.WithCodeExecutor(...)` and fenced-code auto-execution are not the same switch. `llmagent.WithCodeExecutor(...)` configures the Agent's default executor for paths such as `workspace_exec`, Skills, and workspace I/O. If a single `runner.Run(...)` needs a different execution environment, `agent.WithCodeExecutor(...)` can be passed as a `RunOption` to override the default for that run only. Whether the final assistant response is scanned for fenced code blocks is controlled separately by `WithEnableCodeExecutionResponseProcessor(enable bool)`. The response processor is enabled by default, so if you explicitly configure a Code Executor and do not want fenced code blocks in final replies to run automatically, set it to `false`.
 
-Automatic execution requires both conditions:
+Automatic execution requires all of the following:
 
 ```text
 CodeExecutor is available
 AND
 EnableCodeExecutionResponseProcessor is enabled
+AND
+The trimmed final response is exactly one runnable fenced code block
 ```
 
 For production scenarios that care about security and explainability, execution is often routed through explicit tool calls:
@@ -88,7 +90,7 @@ For production scenarios that care about security and explainability, execution 
 agent := llmagent.New(
     "demo",
     llmagent.WithModel(m),
-    llmagent.WithCodeExecutor(local.New()),
+    llmagent.WithCodeExecutor(sandbox.New()),
     llmagent.WithEnableCodeExecutionResponseProcessor(false),
 )
 ```

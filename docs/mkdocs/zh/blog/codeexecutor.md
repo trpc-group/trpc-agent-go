@@ -74,12 +74,14 @@ type CodeExecutor interface {
 
 第一，`llmagent.WithCodeExecutor(...)` 和围栏代码自动执行不是同一个开关。`llmagent.WithCodeExecutor(...)` 配置的是 Agent 默认执行器，供 `workspace_exec`、Skills、workspace I/O 等路径使用。如果某次 `runner.Run(...)` 需要临时换执行环境，还可以通过 `agent.WithCodeExecutor(...)` 作为 `RunOption` 覆盖本次运行的默认执行器。是否扫描 assistant 最终回复中的围栏代码块，则由 `WithEnableCodeExecutionResponseProcessor(enable bool)` 单独控制。需要注意的是，这个响应处理器默认开启；因此显式配置 Code Executor 后，如果不希望最终回复里的 fenced code block 被自动执行，应显式设置为 `false`。
 
-也就是说，自动执行回复里的代码块，需要两个条件同时成立：
+也就是说，自动执行回复里的代码块，需要同时满足以下全部条件：
 
 ```text
 有可用 CodeExecutor
 AND
 EnableCodeExecutionResponseProcessor 开启
+AND
+去掉首尾空白后的最终回复恰好是一个可执行的围栏代码块
 ```
 
 在更强调安全和可解释性的生产场景里，通常会让执行都走显式工具调用路径：
@@ -88,7 +90,7 @@ EnableCodeExecutionResponseProcessor 开启
 agent := llmagent.New(
     "demo",
     llmagent.WithModel(m),
-    llmagent.WithCodeExecutor(local.New()),
+    llmagent.WithCodeExecutor(sandbox.New()),
     llmagent.WithEnableCodeExecutionResponseProcessor(false),
 )
 ```
