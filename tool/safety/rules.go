@@ -365,6 +365,19 @@ func ruleNetwork(c ruleCtx) []Finding {
 					action:         c.policy.Network.OnNonWhitelisted,
 				})
 			}
+		} else if opt, ok := genericOpaqueOption(cmd, argv[1:]); ok {
+			// Non-curl equivalents of the opaque curl config: wget
+			// -e/--execute/--config, ssh/scp -o/-F, scp/sftp -S can redirect
+			// the real egress (proxy, ProxyCommand, transport program) in ways
+			// the guard cannot read, so they fail closed too.
+			out = append(out, Finding{
+				RuleID:         ruleNetworkID,
+				Category:       catNetwork,
+				RiskLevel:      RiskHigh,
+				Evidence:       argv[0] + " " + opt + " (opaque option may redirect egress via proxy/config)",
+				Recommendation: recNetwork,
+				action:         c.policy.Network.OnNonWhitelisted,
+			})
 		}
 		for _, host := range extractHosts(cmd, argv[1:]) {
 			if c.policy.domainAllowed(host) {
@@ -563,18 +576,81 @@ var (
 	domainRe   = regexp.MustCompile(`(?i)^[a-z0-9.-]+$`)
 )
 
-// optionsWithValue lists, per non-curl download command, the option flags whose
-// value is the *next* argument, so that value is not mistaken for a bare host
-// (e.g. "wget -O config.yaml" must not treat config.yaml as a host). Boolean
-// flags (wget -q) are NOT listed, so the operand after them is still parsed and
-// "wget -q evil.io" cannot bypass the whitelist. curl is not here — its richer
-// option surface (short bundles, connection-redirect, opaque config) is handled
-// by extractCurlHosts. The "--flag=value" form carries its value inline.
-var optionsWithValue = map[string]map[string]bool{
+// optClass classifies an option of a non-curl download command for the network
+// rule. Unlisted options are treated as boolean, which fails toward flagging: a
+// boolean never consumes an operand, so the operand after it is still parsed as
+// a potential host.
+type optClass int
+
+const (
+	// optValue: the option's value is an opaque non-host string (filename,
+	// header, credential) carried inline ("--flag=value", "-Xvalue") or in the
+	// next argument; it is consumed so it is not mistaken for a bare host
+	// (e.g. "wget -O config.yaml" must not treat config.yaml as a host).
+	optValue optClass = iota + 1
+	// optHost: the option's value names the real connection target(s) — proxy,
+	// jump hosts, forwarding specs — and every host/IP in it must be checked
+	// against the whitelist.
+	optHost
+	// optOpaque: the option is an out-of-band egress control the guard cannot
+	// audit (a config file, an arbitrary rc directive or client option, a
+	// replacement transport program); its mere presence fails closed, mirroring
+	// curl -K/--config.
+	optOpaque
+)
+
+// genericOptions classifies, per non-curl download command, the options the
+// network rule must not treat as booleans. Boolean flags (wget -q, ssh -v) are
+// NOT listed, so the operand after them is still parsed and "wget -q evil.io"
+// cannot bypass the whitelist. Long options match exactly; single-letter
+// options are also resolved inside getopt-style bundles and inline values
+// ("-qe X", "-Jhost", "-oKey=Val"). curl is not here — its richer option
+// surface is handled by extractCurlHosts / curlOpaqueConfigOption.
+var genericOptions = map[string]map[string]optClass{
 	"wget": {
-		"-O": true, "--output-document": true, "-o": true, "--output-file": true,
-		"-a": true, "--append-output": true, "-P": true, "--directory-prefix": true,
-		"-U": true, "--user-agent": true, "--header": true,
+		"-O": optValue, "--output-document": optValue,
+		"-o": optValue, "--output-file": optValue,
+		"-a": optValue, "--append-output": optValue,
+		"-P": optValue, "--directory-prefix": optValue,
+		"-U": optValue, "--user-agent": optValue,
+		"--header": optValue, "--proxy-user": optValue, "--proxy-password": optValue,
+		// -e/--execute injects an arbitrary .wgetrc directive
+		// (http_proxy/https_proxy/use_proxy redirect the real egress);
+		// --config points at an opaque config file. Both fail closed.
+		"-e": optOpaque, "--execute": optOpaque, "--config": optOpaque,
+	},
+	"ssh": {
+		// -J routes through jump hosts; -W/-L/-R carry host:port forwarding
+		// targets. Every host in their values is whitelist-checked.
+		"-J": optHost, "-W": optHost, "-L": optHost, "-R": optHost,
+		// -o sets any client option (ProxyCommand/ProxyJump/Hostname);
+		// -F reads an opaque config file. Both fail closed.
+		"-o": optOpaque, "-F": optOpaque,
+		"-i": optValue, "-l": optValue, "-p": optValue, "-b": optValue,
+		"-c": optValue, "-m": optValue, "-e": optValue, "-E": optValue,
+		"-D": optValue, "-I": optValue, "-Q": optValue, "-S": optValue,
+		"-w": optValue, "-B": optValue,
+	},
+	"scp": {
+		"-J": optHost,
+		// -o/-F as for ssh; -S swaps in an arbitrary transport program that
+		// then owns the connection, so it is as opaque as a ProxyCommand.
+		"-o": optOpaque, "-F": optOpaque, "-S": optOpaque,
+		"-i": optValue, "-l": optValue, "-P": optValue, "-c": optValue,
+		"-D": optValue, "-X": optValue,
+	},
+	"sftp": {
+		"-J": optHost,
+		"-o": optOpaque, "-F": optOpaque, "-S": optOpaque,
+		"-i": optValue, "-l": optValue, "-P": optValue, "-c": optValue,
+		"-b": optValue, "-B": optValue, "-D": optValue, "-R": optValue,
+		"-X": optValue,
+	},
+	"nc": {
+		// -x routes through a SOCKS/HTTP proxy.
+		"-x": optHost,
+		"-X": optValue, "-p": optValue, "-s": optValue, "-w": optValue,
+		"-i": optValue, "-I": optValue, "-O": optValue, "-T": optValue,
 	},
 }
 
@@ -615,8 +691,10 @@ var curlShortValueBytes = map[byte]bool{
 // only called for configured download commands (curl, wget, nc, ssh, scp, ...),
 // all of which take a host/URL operand. curl gets a dedicated parser because its
 // option surface (short bundles, connection-redirect and proxy options, the
-// opaque config file) is where whitelist bypasses hide; other commands use the
-// simpler generic parser.
+// opaque config file) is where whitelist bypasses hide; other commands share a
+// generic parser driven by the per-command genericOptions classification
+// (opaque egress controls are handled separately by genericOpaqueOption in
+// ruleNetwork).
 func extractHosts(cmd string, args []string) []string {
 	if cmd == "curl" {
 		return extractCurlHosts(args)
@@ -625,24 +703,123 @@ func extractHosts(cmd string, args []string) []string {
 }
 
 // extractGenericHosts parses non-curl download commands (wget, nc, ssh, scp,
-// ftp, ...). A value-taking option (optionsWithValue) consumes its following
-// operand; everything else that is a URL, user@host or bare domain/IP operand is
-// a host candidate.
+// ftp, ...). A value-taking option (genericOptions) consumes its following
+// operand; a host-bearing option (proxy, jump host, forwarding spec)
+// contributes every host in its value; everything else that is a URL,
+// user@host or bare domain/IP operand is a host candidate. Short options are
+// resolved through getopt-style bundles ("-vJhost", "-qO file") so a bundled
+// host-bearing flag cannot hide its value.
 func extractGenericHosts(cmd string, args []string) []string {
 	var hosts []string
-	valueOpts := optionsWithValue[cmd]
+	opts := genericOptions[cmd]
 	for i := 0; i < len(args); i++ {
 		a := args[i]
-		if strings.HasPrefix(a, "-") {
-			flag, _, hasInline := splitFlagValue(a)
-			if valueOpts[flag] && !hasInline {
-				i++
-			}
+		if !strings.HasPrefix(a, "-") || len(a) == 1 {
+			hosts = append(hosts, operandHosts(a)...)
 			continue
 		}
-		hosts = append(hosts, operandHosts(a)...)
+		var cl optClass
+		var inline string
+		var hasInline bool
+		if strings.HasPrefix(a, "--") {
+			var flag string
+			flag, inline, hasInline = splitFlagValue(a)
+			cl = opts[flag]
+		} else {
+			cl, _, inline, hasInline = scanGenericShortBundle(opts, a)
+		}
+		switch cl {
+		case optHost:
+			val := inline
+			if !hasInline && i+1 < len(args) {
+				val, i = args[i+1], i+1
+			}
+			hosts = append(hosts, hostsFromGenericValue(val)...)
+		case optValue, optOpaque:
+			if !hasInline {
+				i++
+			}
+		}
 	}
 	return hosts
+}
+
+// scanGenericShortBundle walks a getopt-style short-option token ("-vJhost").
+// Letters not in opts are booleans and are skipped; the first classified
+// (value-taking) letter wins and its value is the remainder of the token when
+// non-empty, else the next argument. A token with no classified letter is all
+// booleans: class 0, nothing consumed.
+func scanGenericShortBundle(opts map[string]optClass, token string) (cl optClass, flag, inline string, hasInline bool) {
+	for j := 1; j < len(token); j++ {
+		f := "-" + string(token[j])
+		c, ok := opts[f]
+		if !ok {
+			continue
+		}
+		rest := token[j+1:]
+		return c, f, rest, rest != ""
+	}
+	return 0, "", "", false
+}
+
+// hostsFromGenericValue extracts every host/IP from a host-bearing option
+// value: comma-separated [user@]host[:port] hops (ssh/scp -J), a
+// [bind:]port:host:hostport forwarding spec (ssh -W/-L/-R) or a proxy address
+// (nc -x). Ports and empty fields are dropped; it is deliberately
+// over-inclusive so any non-whitelisted destination in the spec trips the
+// network rule.
+func hostsFromGenericValue(val string) []string {
+	var hosts []string
+	for _, part := range strings.Split(val, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if m := userHostRe.FindStringSubmatch(part); m != nil {
+			hosts = append(hosts, m[1])
+			continue
+		}
+		hosts = append(hosts, hostsFromColonSpec(part)...)
+	}
+	return hosts
+}
+
+// genericOpaqueOption reports whether a non-curl download command carries an
+// option classified optOpaque (wget -e/--execute/--config, ssh/scp -o/-F,
+// scp/sftp -S): an out-of-band egress control whose effect the guard cannot
+// read, so its mere presence fails closed, mirroring curl -K/--config. Short
+// options are resolved through getopt bundles ("-qe X", "-oKey=Val") so a
+// bundled opaque flag still counts, while an opaque letter inside another
+// option's inline value does not.
+func genericOpaqueOption(cmd string, args []string) (string, bool) {
+	opts := genericOptions[cmd]
+	if len(opts) == 0 {
+		return "", false
+	}
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if !strings.HasPrefix(a, "-") || len(a) == 1 {
+			continue
+		}
+		var cl optClass
+		var flag string
+		var hasInline bool
+		if strings.HasPrefix(a, "--") {
+			flag, _, hasInline = splitFlagValue(a)
+			cl = opts[flag]
+		} else {
+			cl, flag, _, hasInline = scanGenericShortBundle(opts, a)
+		}
+		if cl == optOpaque {
+			return flag, true
+		}
+		// Any value-taking option consumes the next argument, so that value is
+		// not itself scanned as an option token.
+		if cl != 0 && !hasInline {
+			i++
+		}
+	}
+	return "", false
 }
 
 // extractCurlHosts parses curl arguments, resolving short-flag bundles, long
