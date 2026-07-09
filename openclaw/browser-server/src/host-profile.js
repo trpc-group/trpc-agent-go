@@ -5,6 +5,7 @@ import {
   chromium,
   devices as playwrightDevices
 } from "playwright";
+import { normalizeActKind } from "./act-kind.js";
 import { snapshotDOM } from "./dom-tools.js";
 import { validateNavigationURL } from "./ssrf.js";
 
@@ -295,6 +296,12 @@ export class HostProfile {
 
   async navigate(targetId, url) {
     await validateNavigationURL(url, this.config.policy);
+    if (!targetId && !this.currentPage()) {
+      const opened = await this.openTab(url);
+      return textContent(`Navigated to ${url}`, {
+        targetId: opened.targetId
+      });
+    }
     const page = this.requirePageOrCurrent(targetId);
     await page.goto(url, { waitUntil: "domcontentloaded" });
     this.activeTargetId = this.pageIds.get(page);
@@ -802,7 +809,7 @@ export class HostProfile {
   async act(targetId, request) {
     const page = this.requirePageOrCurrent(targetId);
     const ref = `${request.ref || ""}`.trim();
-    switch (`${request.kind || ""}`.trim()) {
+    switch (normalizeActKind(request.kind)) {
       case "click":
         await this.click(page, request, ref);
         return textContent(`Clicked ${ref}.`);

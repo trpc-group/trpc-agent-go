@@ -30,6 +30,7 @@ import (
 	openaigo "github.com/openai/openai-go"
 	openaiopt "github.com/openai/openai-go/option"
 	"github.com/openai/openai-go/packages/respjson"
+	"github.com/openai/openai-go/packages/ssestream"
 	"go.opentelemetry.io/otel/attribute"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
@@ -2404,7 +2405,7 @@ func TestWithTokenTailoring_ReservesRequestMaxTokens(t *testing.T) {
 		WithEnableTokenTailoring(true),
 		WithTailoringStrategy(strategy),
 	)
-	maxCompletionTokens := 65536
+	maxCompletionTokens := 8192
 	req := &model.Request{
 		Messages: []model.Message{model.NewUserMessage("hello")},
 		GenerationConfig: model.GenerationConfig{
@@ -2419,6 +2420,36 @@ func TestWithTokenTailoring_ReservesRequestMaxTokens(t *testing.T) {
 		contextWindow,
 		imodel.DefaultProtocolOverheadTokens,
 		maxCompletionTokens,
+		imodel.DefaultInputTokensFloor,
+		imodel.DefaultSafetyMarginRatio,
+		imodel.DefaultMaxInputTokensRatio,
+	)
+	require.Equal(t, want, strategy.maxTokens)
+}
+
+func TestWithTokenTailoring_ClampsRequestMaxTokensToModelCap(t *testing.T) {
+	strategy := &captureMaxTokensStrategy{}
+	m := New("gpt-4o-mini",
+		WithEnableTokenTailoring(true),
+		WithTailoringStrategy(strategy),
+	)
+	overCap := 65536
+	req := &model.Request{
+		Messages: []model.Message{model.NewUserMessage("hello")},
+		GenerationConfig: model.GenerationConfig{
+			MaxTokens: &overCap,
+		},
+	}
+
+	m.applyTokenTailoring(context.Background(), req)
+
+	modelCap := imodel.ResolveMaxOutputTokens("gpt-4o-mini")
+	require.Equal(t, 16384, modelCap)
+	contextWindow := imodel.ResolveContextWindow("gpt-4o-mini")
+	want := imodel.CalculateMaxInputTokensWithParams(
+		contextWindow,
+		imodel.DefaultProtocolOverheadTokens,
+		modelCap,
 		imodel.DefaultInputTokensFloor,
 		imodel.DefaultSafetyMarginRatio,
 		imodel.DefaultMaxInputTokensRatio,
@@ -3554,6 +3585,156 @@ func TestModel_GenerateContent_WithReasoningContent_NonStreaming(t *testing.T) {
 	assert.Equalf(t, "Final answer", responses[0].Choices[0].Message.Content, "Expected content 'Final answer', got '%s'", responses[0].Choices[0].Message.Content)
 }
 
+func TestModel_GenerateContent_GLMThinkingPayload(t *testing.T) {
+	tests := []struct {
+		name    string
+		enabled bool
+		want    string
+	}{
+		{
+			name:    "enabled",
+			enabled: true,
+			want:    "enabled",
+		},
+		{
+			name:    "disabled",
+			enabled: false,
+			want:    "disabled",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var captured map[string]any
+			server := httptest.NewServer(http.HandlerFunc(
+				func(w http.ResponseWriter, r *http.Request) {
+					if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+						http.Error(w, "not found", http.StatusNotFound)
+						return
+					}
+					require.NoError(t, json.NewDecoder(r.Body).Decode(&captured))
+					w.Header().Set("Content-Type", "application/json")
+					fmt.Fprint(w, `{
+						"id": "test",
+						"object": "chat.completion",
+						"created": 1699200000,
+						"model": "glm50",
+						"choices": [{
+							"index": 0,
+							"message": {
+								"role": "assistant",
+								"content": "ok"
+							},
+							"finish_reason": "stop"
+						}]
+					}`)
+				},
+			))
+			defer server.Close()
+
+			m := New(
+				"glm50",
+				WithVariant(VariantGLM),
+				WithBaseURL(server.URL),
+				WithAPIKey("test-key"),
+			)
+			req := &model.Request{
+				Messages: []model.Message{
+					model.NewUserMessage("hi"),
+				},
+				GenerationConfig: model.GenerationConfig{
+					ThinkingEnabled: &tt.enabled,
+				},
+			}
+			ch, err := m.GenerateContent(context.Background(), req)
+			require.NoError(t, err)
+			for resp := range ch {
+				require.Nil(t, resp.Error)
+			}
+
+			thinking, ok := captured[thinkingKey].(map[string]any)
+			require.True(t, ok)
+			require.Equal(t, tt.want, thinking["type"])
+			require.NotContains(t, captured, model.ThinkingEnabledKey)
+		})
+	}
+}
+
+func TestModel_GenerateContent_HunyuanThinkingPayload(t *testing.T) {
+	tests := []struct {
+		name    string
+		enabled bool
+		want    string
+	}{
+		{
+			name:    "enabled",
+			enabled: true,
+			want:    "enabled",
+		},
+		{
+			name:    "disabled",
+			enabled: false,
+			want:    "disabled",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var captured map[string]any
+			server := httptest.NewServer(http.HandlerFunc(
+				func(w http.ResponseWriter, r *http.Request) {
+					if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+						http.Error(w, "not found", http.StatusNotFound)
+						return
+					}
+					require.NoError(t, json.NewDecoder(r.Body).Decode(&captured))
+					w.Header().Set("Content-Type", "application/json")
+					fmt.Fprint(w, `{
+						"id": "test",
+						"object": "chat.completion",
+						"created": 1699200000,
+						"model": "hy3-preview",
+						"choices": [{
+							"index": 0,
+							"message": {
+								"role": "assistant",
+								"content": "ok"
+							},
+							"finish_reason": "stop"
+						}]
+					}`)
+				},
+			))
+			defer server.Close()
+
+			m := New(
+				"hy3-preview",
+				WithVariant(VariantHunyuan),
+				WithBaseURL(server.URL),
+				WithAPIKey("test-key"),
+			)
+			req := &model.Request{
+				Messages: []model.Message{
+					model.NewUserMessage("hi"),
+				},
+				GenerationConfig: model.GenerationConfig{
+					ThinkingEnabled: &tt.enabled,
+				},
+			}
+			ch, err := m.GenerateContent(context.Background(), req)
+			require.NoError(t, err)
+			for resp := range ch {
+				require.Nil(t, resp.Error)
+			}
+
+			thinking, ok := captured[thinkingKey].(map[string]any)
+			require.True(t, ok)
+			require.Equal(t, tt.want, thinking["type"])
+			require.NotContains(t, captured, model.ThinkingEnabledKey)
+		})
+	}
+}
+
 // TestModel_GenerateContent_NonStreaming_ToolCallNoID_Synthesized verifies that
 // when the provider omits tool_call.id in a non-streaming response, we synthesize
 // a stable ID (auto_call_<index>). This covers the non-streaming code path in
@@ -4361,6 +4542,19 @@ func TestWithVariant(t *testing.T) {
 		assert.True(t, opts.variantSet, "expected variantSet to be true")
 	})
 
+	t.Run("glm variant", func(t *testing.T) {
+		opts := &options{}
+		WithVariant(VariantGLM)(opts)
+
+		assert.Equal(
+			t,
+			VariantGLM,
+			opts.Variant,
+			"expected variant to be VariantGLM",
+		)
+		assert.True(t, opts.variantSet, "expected variantSet to be true")
+	})
+
 	t.Run("variant in model creation", func(t *testing.T) {
 		m := New("test-model", WithAPIKey("test-key"), WithVariant(VariantHunyuan))
 		require.NotNil(t, m, "expected model to be created")
@@ -4512,6 +4706,20 @@ func TestAppendFileID_NilFilePart(t *testing.T) {
 // TestBuildChatRequest_EdgeCases tests edge cases in buildChatRequest.
 func TestBuildChatRequest_EdgeCases(t *testing.T) {
 	m := New("gpt-3.5-turbo", WithAPIKey("test-key"))
+
+	t.Run("clamps max completion tokens to model cap", func(t *testing.T) {
+		m := New("gpt-4o", WithAPIKey("test-key"))
+		over := 114687
+		req := &model.Request{
+			Messages: []model.Message{model.NewUserMessage("hi")},
+			GenerationConfig: model.GenerationConfig{
+				MaxTokens: &over,
+			},
+		}
+		chatReq, _ := m.buildChatRequest(req)
+		require.NotNil(t, chatReq.MaxCompletionTokens)
+		assert.Equal(t, int64(16384), chatReq.MaxCompletionTokens.Value)
+	})
 
 	t.Run("empty messages", func(t *testing.T) {
 		req := &model.Request{
@@ -6110,6 +6318,379 @@ func TestCreateFinalResponseFinishReason(t *testing.T) {
 		*finalResponse.Choices[0].FinishReason)
 }
 
+func TestCreateFinalResponseGLMReasoningContentFallback(t *testing.T) {
+	t.Parallel()
+
+	m := New("glm50", WithVariant(VariantGLM))
+	acc := openai.ChatCompletionAccumulator{
+		ChatCompletion: openai.ChatCompletion{
+			ID:    "acc-id",
+			Model: "glm50",
+			Choices: []openai.ChatCompletionChoice{{
+				Index:        0,
+				FinishReason: "stop",
+				Message: openai.ChatCompletionMessage{
+					Content: "",
+				},
+			}},
+		},
+	}
+
+	resp := m.createFinalResponse(acc, false, nil, "收到")
+	require.NotNil(t, resp)
+	require.Len(t, resp.Choices, 1)
+	require.Equal(t, "收到", resp.Choices[0].Message.Content)
+	require.Equal(t, "收到", resp.Choices[0].Message.ReasoningContent)
+}
+
+func TestCreateFinalResponseGLMReasoningContentFallbackSkipsToolCall(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	m := New("glm50", WithVariant(VariantGLM))
+	acc := openai.ChatCompletionAccumulator{
+		ChatCompletion: openai.ChatCompletion{
+			ID:    "acc-id",
+			Model: "glm50",
+			Choices: []openai.ChatCompletionChoice{{
+				Index: 0,
+				Message: openai.ChatCompletionMessage{
+					Content: "",
+				},
+			}},
+		},
+	}
+
+	resp := m.createFinalResponse(
+		acc,
+		true,
+		[]model.ToolCall{{
+			ID:   "call-1",
+			Type: functionToolType,
+			Function: model.FunctionDefinitionParam{
+				Name: "lookup",
+			},
+		}},
+		"need tool",
+	)
+	require.NotNil(t, resp)
+	require.Len(t, resp.Choices, 1)
+	require.Empty(t, resp.Choices[0].Message.Content)
+	require.Equal(t, "need tool", resp.Choices[0].Message.ReasoningContent)
+	require.Len(t, resp.Choices[0].Message.ToolCalls, 1)
+}
+
+func TestCreateFinalResponseReasoningContentNoFallbackForOpenAI(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	m := New("gpt-5", WithVariant(VariantOpenAI))
+	acc := openai.ChatCompletionAccumulator{
+		ChatCompletion: openai.ChatCompletion{
+			ID:    "acc-id",
+			Model: "gpt-5",
+			Choices: []openai.ChatCompletionChoice{{
+				Index: 0,
+				Message: openai.ChatCompletionMessage{
+					Content: "",
+				},
+			}},
+		},
+	}
+
+	resp := m.createFinalResponse(acc, false, nil, "thinking")
+	require.NotNil(t, resp)
+	require.Len(t, resp.Choices, 1)
+	require.Empty(t, resp.Choices[0].Message.Content)
+	require.Equal(t, "thinking", resp.Choices[0].Message.ReasoningContent)
+}
+
+func TestCreateResponseFromCompletionGLMReasoningContentFallback(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	m := New("glm50", WithVariant(VariantGLM))
+	var completion openai.ChatCompletion
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"id": "completion-id",
+		"object": "chat.completion",
+		"created": 1699200000,
+		"model": "glm50",
+		"choices": [{
+			"index": 0,
+			"message": {
+				"role": "assistant",
+				"content": "",
+				"reasoning_content": "收到"
+			},
+			"finish_reason": "stop"
+		}]
+	}`), &completion))
+
+	resp := m.createResponseFromCompletion(&completion)
+	require.NotNil(t, resp)
+	require.Len(t, resp.Choices, 1)
+	require.Equal(t, "收到", resp.Choices[0].Message.Content)
+	require.Equal(t, "收到", resp.Choices[0].Message.ReasoningContent)
+}
+
+func TestCreateResponseFromCompletionGLMReasoningContentSkipsToolCall(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	m := New("glm50", WithVariant(VariantGLM))
+	var completion openai.ChatCompletion
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"id": "completion-id",
+		"object": "chat.completion",
+		"created": 1699200000,
+		"model": "glm50",
+		"choices": [{
+			"index": 0,
+			"message": {
+				"role": "assistant",
+				"content": "",
+				"reasoning_content": "need lookup",
+				"tool_calls": [{
+					"id": "call-1",
+					"type": "function",
+					"function": {
+						"name": "lookup",
+						"arguments": "{\"query\":\"x\"}"
+					}
+				}]
+			},
+			"finish_reason": "tool_calls"
+		}]
+	}`), &completion))
+
+	resp := m.createResponseFromCompletion(&completion)
+	require.NotNil(t, resp)
+	require.Len(t, resp.Choices, 1)
+	require.Empty(t, resp.Choices[0].Message.Content)
+	require.Equal(t, "need lookup",
+		resp.Choices[0].Message.ReasoningContent)
+	require.Len(t, resp.Choices[0].Message.ToolCalls, 1)
+}
+
+func TestEmitStreamingFinalResponseGLMReasoningContentFallback(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	m := New("glm50", WithVariant(VariantGLM))
+	var got *model.Response
+	m.emitStreamingFinalResponse(
+		context.Background(),
+		&ssestream.Stream[openai.ChatCompletionChunk]{},
+		openai.ChatCompletionAccumulator{
+			ChatCompletion: openai.ChatCompletion{
+				ID:    "acc-id",
+				Model: "glm50",
+			},
+		},
+		nil,
+		nil,
+		"收到",
+		func(resp *model.Response) bool {
+			got = resp
+			return true
+		},
+	)
+
+	require.NotNil(t, got)
+	require.Len(t, got.Choices, 1)
+	require.Equal(t, "收到", got.Choices[0].Message.Content)
+	require.Equal(t, "收到", got.Choices[0].Message.ReasoningContent)
+}
+
+// TestCreateFinalResponseUsageConditional verifies that Usage is only set on the
+// final response when at least one token count is non-zero. This prevents the
+// Langfuse exporter from seeing zero-valued usage attributes that get filtered
+// out by usageDetails.empty().
+func TestCreateFinalResponseUsageConditional(t *testing.T) {
+	m := &Model{}
+
+	tests := []struct {
+		name      string
+		usage     openai.CompletionUsage
+		expectNil bool
+	}{
+		{
+			name: "all zero tokens - usage should be nil",
+			usage: openai.CompletionUsage{
+				PromptTokens:     0,
+				CompletionTokens: 0,
+				TotalTokens:      0,
+			},
+			expectNil: true,
+		},
+		{
+			name: "only prompt tokens non-zero",
+			usage: openai.CompletionUsage{
+				PromptTokens:     10,
+				CompletionTokens: 0,
+				TotalTokens:      0,
+			},
+			expectNil: false,
+		},
+		{
+			name: "only completion tokens non-zero",
+			usage: openai.CompletionUsage{
+				PromptTokens:     0,
+				CompletionTokens: 20,
+				TotalTokens:      0,
+			},
+			expectNil: false,
+		},
+		{
+			name: "only total tokens non-zero",
+			usage: openai.CompletionUsage{
+				PromptTokens:     0,
+				CompletionTokens: 0,
+				TotalTokens:      30,
+			},
+			expectNil: false,
+		},
+		{
+			name: "all tokens non-zero",
+			usage: openai.CompletionUsage{
+				PromptTokens:     10,
+				CompletionTokens: 20,
+				TotalTokens:      30,
+			},
+			expectNil: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			acc := openai.ChatCompletionAccumulator{}
+			chunk := openai.ChatCompletionChunk{
+				ID:    "test-id",
+				Model: "test-model",
+				Usage: tt.usage,
+				Choices: []openai.ChatCompletionChunkChoice{
+					{
+						Index: 0,
+						Delta: openai.ChatCompletionChunkChoiceDelta{
+							Content: "Hello",
+						},
+					},
+				},
+			}
+			acc.AddChunk(chunk)
+
+			resp := m.createFinalResponse(acc, false, nil, "")
+			require.NotNil(t, resp)
+
+			if tt.expectNil {
+				assert.Nil(t, resp.Usage, "expected Usage to be nil when all tokens are zero")
+			} else {
+				require.NotNil(t, resp.Usage, "expected Usage to be set when token counts are non-zero")
+				assert.Equal(t, int(tt.usage.PromptTokens), resp.Usage.PromptTokens)
+				assert.Equal(t, int(tt.usage.CompletionTokens), resp.Usage.CompletionTokens)
+				assert.Equal(t, int(tt.usage.TotalTokens), resp.Usage.TotalTokens)
+			}
+		})
+	}
+}
+
+// TestCreateResponseFromCompletionUsageConditional verifies that Usage is only
+// set on the non-streaming response when at least one token count is non-zero.
+// This ensures consistency with the streaming createFinalResponse path and
+// prevents the Langfuse exporter from seeing zero-valued usage attributes.
+func TestCreateResponseFromCompletionUsageConditional(t *testing.T) {
+	m := &Model{}
+
+	tests := []struct {
+		name      string
+		usage     openai.CompletionUsage
+		expectNil bool
+	}{
+		{
+			name: "all zero tokens - usage should be nil",
+			usage: openai.CompletionUsage{
+				PromptTokens:     0,
+				CompletionTokens: 0,
+				TotalTokens:      0,
+			},
+			expectNil: true,
+		},
+		{
+			name: "only prompt tokens non-zero",
+			usage: openai.CompletionUsage{
+				PromptTokens:     10,
+				CompletionTokens: 0,
+				TotalTokens:      0,
+			},
+			expectNil: false,
+		},
+		{
+			name: "only completion tokens non-zero",
+			usage: openai.CompletionUsage{
+				PromptTokens:     0,
+				CompletionTokens: 20,
+				TotalTokens:      0,
+			},
+			expectNil: false,
+		},
+		{
+			name: "only total tokens non-zero",
+			usage: openai.CompletionUsage{
+				PromptTokens:     0,
+				CompletionTokens: 0,
+				TotalTokens:      30,
+			},
+			expectNil: false,
+		},
+		{
+			name: "all tokens non-zero",
+			usage: openai.CompletionUsage{
+				PromptTokens:     10,
+				CompletionTokens: 20,
+				TotalTokens:      30,
+			},
+			expectNil: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			chatCompletion := openai.ChatCompletion{
+				ID:    "test-id",
+				Model: "test-model",
+				Usage: tt.usage,
+				Choices: []openai.ChatCompletionChoice{
+					{
+						Index: 0,
+						Message: openai.ChatCompletionMessage{
+							Content: "Hello",
+						},
+						FinishReason: "stop",
+					},
+				},
+			}
+
+			resp := m.createResponseFromCompletion(&chatCompletion)
+			require.NotNil(t, resp)
+
+			if tt.expectNil {
+				assert.Nil(t, resp.Usage, "expected Usage to be nil when all tokens are zero")
+			} else {
+				require.NotNil(t, resp.Usage, "expected Usage to be set when token counts are non-zero")
+				assert.Equal(t, int(tt.usage.PromptTokens), resp.Usage.PromptTokens)
+				assert.Equal(t, int(tt.usage.CompletionTokens), resp.Usage.CompletionTokens)
+				assert.Equal(t, int(tt.usage.TotalTokens), resp.Usage.TotalTokens)
+			}
+		})
+	}
+}
+
 // TestToolCallIndexMapping tests the tool call index mapping functionality.
 func TestToolCallIndexMapping(t *testing.T) {
 	m := New("test-model")
@@ -6693,7 +7274,7 @@ func TestModel_buildChatRequest(t *testing.T) {
 				},
 			},
 			want1: []openaiopt.RequestOption{
-				openaiopt.WithJSONSet(model.EnabledThinkingKey, true),
+				openaiopt.WithJSONSet(model.EnableThinkingKey, true),
 				openaiopt.WithJSONSet(model.ThinkingTokensKey, tokens),
 			},
 		},
@@ -6723,7 +7304,7 @@ func TestModel_buildChatRequest(t *testing.T) {
 				},
 			},
 			want1: []openaiopt.RequestOption{
-				openaiopt.WithJSONSet("thinking", map[string]string{"type": "enabled"}),
+				openaiopt.WithJSONSet(thinkingKey, map[string]string{"type": "enabled"}),
 			},
 		},
 		{
@@ -6891,14 +7472,14 @@ func TestBuildThinkingOption(t *testing.T) {
 			name:            "DeepSeek variant with thinking enabled",
 			variant:         VariantDeepSeek,
 			thinkingEnabled: &trueVal,
-			wantKeys:        []string{"thinking"},
+			wantKeys:        []string{thinkingKey},
 			wantValues:      []any{map[string]string{"type": "enabled"}},
 		},
 		{
 			name:            "DeepSeek variant with thinking disabled",
 			variant:         VariantDeepSeek,
 			thinkingEnabled: &falseVal,
-			wantKeys:        []string{"thinking"},
+			wantKeys:        []string{thinkingKey},
 			wantValues:      []any{map[string]string{"type": "disabled"}},
 		},
 		{
@@ -6906,8 +7487,22 @@ func TestBuildThinkingOption(t *testing.T) {
 			variant:         VariantDeepSeek,
 			thinkingEnabled: &trueVal,
 			thinkingTokens:  &thinkingTokens,
-			wantKeys:        []string{model.ThinkingTokensKey, "thinking"},
+			wantKeys:        []string{model.ThinkingTokensKey, thinkingKey},
 			wantValues:      []any{1024, map[string]string{"type": "enabled"}},
+		},
+		{
+			name:            "GLM variant with thinking enabled",
+			variant:         VariantGLM,
+			thinkingEnabled: &trueVal,
+			wantKeys:        []string{thinkingKey},
+			wantValues:      []any{map[string]string{"type": "enabled"}},
+		},
+		{
+			name:            "Hunyuan variant with thinking enabled",
+			variant:         VariantHunyuan,
+			thinkingEnabled: &trueVal,
+			wantKeys:        []string{thinkingKey},
+			wantValues:      []any{map[string]string{"type": "enabled"}},
 		},
 		{
 			name:            "OpenAI variant with thinking enabled",
@@ -6927,7 +7522,7 @@ func TestBuildThinkingOption(t *testing.T) {
 			name:            "Qwen variant with thinking enabled",
 			variant:         VariantQwen,
 			thinkingEnabled: &trueVal,
-			wantKeys:        []string{model.EnabledThinkingKey},
+			wantKeys:        []string{model.EnableThinkingKey},
 			wantValues:      []any{true},
 		},
 		{
@@ -8765,6 +9360,111 @@ func TestAppendUserContentParts_FileURLWithDataSkippedForTextOnlyVariant(t *test
 	require.Empty(t, dst)
 }
 
+func TestAppendUserContentParts_GLMVariantPreservesNonTextByDefault(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	m := New("glm50", WithVariant(VariantGLM))
+	text := "use the attached files via tools"
+	dst := []openai.ChatCompletionContentPartUnionParam{}
+	fields := m.appendUserContentParts(&dst, []model.ContentPart{
+		{
+			Type: model.ContentTypeText,
+			Text: &text,
+		},
+		{
+			Type: model.ContentTypeImage,
+			Image: &model.Image{
+				Data:   []byte("png"),
+				Format: "png",
+			},
+		},
+		{
+			Type: model.ContentTypeFile,
+			File: &model.File{
+				Name:     "photo.jpg",
+				Data:     []byte("jpg"),
+				MimeType: "image/jpeg",
+			},
+		},
+	})
+
+	require.Nil(t, fields)
+	require.Len(t, dst, 3)
+	require.NotNil(t, dst[0].OfText)
+	require.Equal(t, text, dst[0].OfText.Text)
+	require.NotNil(t, dst[1].OfImageURL)
+	require.NotNil(t, dst[2].OfFile)
+	require.Empty(t,
+		m.omittedContentHint([]model.ContentPart{
+			{
+				Type: model.ContentTypeImage,
+				Image: &model.Image{
+					Data:   []byte("png"),
+					Format: "png",
+				},
+			},
+		}))
+}
+
+func TestAppendUserContentParts_TextOnlyOptionOmitsNonText(t *testing.T) {
+	t.Parallel()
+
+	m := New(
+		"glm50",
+		WithVariant(VariantGLM),
+		WithTextOnlyMessageContent(true),
+	)
+	text := "use the attached files via tools"
+	dst := []openai.ChatCompletionContentPartUnionParam{}
+	fields := m.appendUserContentParts(&dst, []model.ContentPart{
+		{
+			Type: model.ContentTypeText,
+			Text: &text,
+		},
+		{
+			Type: model.ContentTypeImage,
+			Image: &model.Image{
+				Data:   []byte("png"),
+				Format: "png",
+			},
+		},
+		{
+			Type: model.ContentTypeFile,
+			File: &model.File{
+				Name:     "photo.jpg",
+				Data:     []byte("jpg"),
+				MimeType: "image/jpeg",
+			},
+		},
+	})
+
+	require.Nil(t, fields)
+	require.Len(t, dst, 1)
+	require.NotNil(t, dst[0].OfText)
+	require.Equal(t, text, dst[0].OfText.Text)
+	require.Equal(t,
+		"Omitted non-text attachments for this provider: 1 image, 1 file.",
+		m.omittedContentHint([]model.ContentPart{
+			{
+				Type: model.ContentTypeImage,
+				Image: &model.Image{
+					Data:   []byte("png"),
+					Format: "png",
+				},
+			},
+			{
+				Type: model.ContentTypeFile,
+				File: &model.File{
+					Name:     "photo.jpg",
+					Data:     []byte("jpg"),
+					MimeType: "image/jpeg",
+				},
+			},
+		}))
+}
+
 func TestAppendUserContentParts_FileURLPreservedForSkipFileTypeVariant(t *testing.T) {
 	m := &Model{variantConfig: variantConfig{skipFileTypeInContent: true}}
 	dst := []openai.ChatCompletionContentPartUnionParam{}
@@ -9165,4 +9865,43 @@ func TestModel_GenerateContentIter_EmbeddedErrorHTTP200(t *testing.T) {
 	assert.Equal(t, "rate limit exceeded", resp.Error.Message)
 	assert.Equal(t, model.ErrorTypeAPIError, resp.Error.Type)
 	assert.True(t, resp.Done)
+}
+
+func TestImageToURLOrBase64(t *testing.T) {
+	tests := []struct {
+		name  string
+		image *model.Image
+		want  string
+	}{
+		{
+			name: "with URL",
+			image: &model.Image{
+				URL: "http://example.com/image.jpg",
+			},
+			want: "http://example.com/image.jpg",
+		},
+		{
+			name: "with extension format",
+			image: &model.Image{
+				Format: "png",
+				Data:   []byte("test"),
+			},
+			want: "data:image/png;base64,dGVzdA==",
+		},
+		{
+			name: "with full MIME format",
+			image: &model.Image{
+				Format: "image/png",
+				Data:   []byte("test"),
+			},
+			want: "data:image/png;base64,dGVzdA==",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := imageToURLOrBase64(tt.image)
+			assert.Equal(t, tt.want, result)
+		})
+	}
 }

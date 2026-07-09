@@ -30,6 +30,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/steer"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryfork"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -587,7 +588,9 @@ func TestProcessStreamingResponses_RepairsToolCallArgumentsWhenEnabled(t *testin
 
 func TestRunOneStep_DisableTracingSkipsSpanCreation(t *testing.T) {
 	recorder := useSpanRecorder(t)
-	f := New(nil, nil, Options{})
+	f := New([]flow.RequestProcessor{&seedMessagesRequestProcessor{
+		messages: []model.Message{model.NewUserMessage("test")},
+	}}, nil, Options{})
 	inv := agent.NewInvocation(
 		agent.WithInvocationID("inv-disable-tracing"),
 		agent.WithInvocationRunOptions(agent.RunOptions{
@@ -651,6 +654,49 @@ func TestRunOneStep_RecordsExecutionTraceStepOnSuccess(t *testing.T) {
 	require.Contains(t, step.Output.Text, "ok")
 	require.Empty(t, step.PredecessorStepIDs)
 	require.Empty(t, step.Error)
+}
+
+func TestRunOneStep_AttachesCacheSafeSummaryForkRequest(t *testing.T) {
+	f := New(
+		[]flow.RequestProcessor{
+			&seedMessagesRequestProcessor{
+				messages: []model.Message{
+					model.NewSystemMessage("stable system"),
+					model.NewUserMessage("current user"),
+				},
+			},
+		},
+		nil,
+		Options{},
+	)
+	inv := agent.NewInvocation(
+		agent.WithInvocationAgent(&minimalAgent{}),
+		agent.WithInvocationModel(&mockModel{
+			responses: []*model.Response{
+				{
+					Done: true,
+					Choices: []model.Choice{
+						{Message: model.NewAssistantMessage("ok")},
+					},
+				},
+			},
+		}),
+	)
+	eventChan := make(chan *event.Event, 8)
+	_, err := f.runOneStep(context.Background(), inv, eventChan)
+	require.NoError(t, err)
+
+	parent, ok := summaryfork.Request(inv)
+	require.True(t, ok)
+	require.NotNil(t, parent)
+	require.Equal(
+		t,
+		[]model.Message{
+			model.NewSystemMessage("stable system"),
+			model.NewUserMessage("current user"),
+		},
+		parent.Messages,
+	)
 }
 
 func TestRunOneStep_RecordsExecutionTraceStepErrorWhenModelFails(t *testing.T) {
@@ -1779,6 +1825,34 @@ func (m *mockAgentWithTools) FindSubAgent(name string) agent.Agent {
 	return nil
 }
 
+// testLLMRequest returns a minimal request that passes the empty-messages guard.
+func testLLMRequest() *model.Request {
+	return &model.Request{
+		Messages: []model.Message{model.NewUserMessage("test")},
+	}
+}
+
+func newRunFlow(respProcessors []flow.ResponseProcessor, opts ...Options) *Flow {
+	opt := Options{}
+	if len(opts) > 0 {
+		opt = opts[0]
+	}
+	return New(
+		[]flow.RequestProcessor{&seedMessagesRequestProcessor{
+			messages: []model.Message{model.NewUserMessage("test")},
+		}},
+		respProcessors,
+		opt,
+	)
+}
+
+func runInvocationWithUserMessage(m model.Model, opts ...agent.InvocationOptions) *agent.Invocation {
+	opts = append(opts, agent.WithInvocationModel(m))
+	inv := agent.NewInvocation(opts...)
+	inv.Message = model.NewUserMessage("test")
+	return inv
+}
+
 // mockModel implements model.Model for testing
 type mockModel struct {
 	ShouldError bool
@@ -2251,20 +2325,17 @@ func TestModelCallbacks_BeforeSetsContext_AfterSeesValue(t *testing.T) {
 			return nil, nil
 		})
 
-	llmFlow := New(nil, nil, Options{ModelCallbacks: modelCallbacks})
-	invocation := agent.NewInvocation(
-		agent.WithInvocationModel(&mockModel{
-			responses: []*model.Response{
-				{
-					Done: true,
-					Choices: []model.Choice{
-						{Message: model.NewAssistantMessage("ok")},
-					},
+	llmFlow := newRunFlow(nil, Options{ModelCallbacks: modelCallbacks})
+	invocation := runInvocationWithUserMessage(&mockModel{
+		responses: []*model.Response{
+			{
+				Done: true,
+				Choices: []model.Choice{
+					{Message: model.NewAssistantMessage("ok")},
 				},
 			},
-		}),
-		agent.WithInvocationSession(&session.Session{ID: "test-session"}),
-	)
+		},
+	}, agent.WithInvocationSession(&session.Session{ID: "test-session"}))
 
 	eventChan, err := llmFlow.Run(ctx, invocation)
 	require.NoError(t, err)
@@ -2295,13 +2366,10 @@ func TestModelCBs_AfterOverride(t *testing.T) {
 		},
 	)
 
-	llmFlow := New(nil, nil, Options{ModelCallbacks: modelCallbacks})
-	invocation := agent.NewInvocation(
-		agent.WithInvocationModel(&mockModel{
-			responses: []*model.Response{{ID: "original"}},
-		}),
-		agent.WithInvocationSession(&session.Session{ID: "test-session"}),
-	)
+	llmFlow := newRunFlow(nil, Options{ModelCallbacks: modelCallbacks})
+	invocation := runInvocationWithUserMessage(&mockModel{
+		responses: []*model.Response{{ID: "original"}},
+	}, agent.WithInvocationSession(&session.Session{ID: "test-session"}))
 	eventChan, err := llmFlow.Run(ctx, invocation)
 	require.NoError(t, err)
 	var events []*event.Event
@@ -2331,13 +2399,10 @@ func TestModelCallbacks_AfterError(t *testing.T) {
 		},
 	)
 
-	llmFlow := New(nil, nil, Options{ModelCallbacks: modelCallbacks})
-	invocation := agent.NewInvocation(
-		agent.WithInvocationModel(&mockModel{
-			responses: []*model.Response{{ID: "original"}},
-		}),
-		agent.WithInvocationSession(&session.Session{ID: "test-session"}),
-	)
+	llmFlow := newRunFlow(nil, Options{ModelCallbacks: modelCallbacks})
+	invocation := runInvocationWithUserMessage(&mockModel{
+		responses: []*model.Response{{ID: "original"}},
+	}, agent.WithInvocationSession(&session.Session{ID: "test-session"}))
 	eventChan, err := llmFlow.Run(ctx, invocation)
 	require.NoError(t, err)
 	var events []*event.Event
@@ -2547,7 +2612,7 @@ func TestFlow_GenerateContentSeq_UsesIterModel(t *testing.T) {
 	}
 	inv := agent.NewInvocation(agent.WithInvocationModel(iterModel))
 
-	seq, err := f.generateContentSeq(context.Background(), inv, &model.Request{}, inv.Model)
+	seq, err := f.generateContentSeq(context.Background(), inv, testLLMRequest(), inv.Model)
 	require.NoError(t, err)
 	require.True(t, iterModel.GenerateContentIterCalled)
 	require.False(t, iterModel.GenerateContentCalled)
@@ -2569,7 +2634,7 @@ func TestFlow_GenerateContentSeq_AssignsGeneratedIDForStreamingResponses(t *test
 			{Object: model.ObjectTypeChatCompletion, Done: true},
 		},
 	}))
-	seq, err := f.generateContentSeq(context.Background(), inv, &model.Request{}, inv.Model)
+	seq, err := f.generateContentSeq(context.Background(), inv, testLLMRequest(), inv.Model)
 	require.NoError(t, err)
 	var responses []*model.Response
 	seq(func(resp *model.Response) bool {
@@ -2589,7 +2654,7 @@ func TestFlow_GenerateContentSeq_PreservesActiveResponseIDWhenLaterChunksMissIt(
 			{Object: model.ObjectTypeChatCompletion, Done: true},
 		},
 	}))
-	seq, err := f.generateContentSeq(context.Background(), inv, &model.Request{}, inv.Model)
+	seq, err := f.generateContentSeq(context.Background(), inv, testLLMRequest(), inv.Model)
 	require.NoError(t, err)
 	var responses []*model.Response
 	seq(func(resp *model.Response) bool {
@@ -2609,7 +2674,7 @@ func TestFlow_GenerateContentSeq_KeepsGeneratedIDWhenRealIDArrivesLate(t *testin
 			{ID: "real-1", Object: model.ObjectTypeChatCompletion, Done: true},
 		},
 	}))
-	seq, err := f.generateContentSeq(context.Background(), inv, &model.Request{}, inv.Model)
+	seq, err := f.generateContentSeq(context.Background(), inv, testLLMRequest(), inv.Model)
 	require.NoError(t, err)
 	var responses []*model.Response
 	seq(func(resp *model.Response) bool {
@@ -2631,7 +2696,7 @@ func TestFlow_GenerateContentSeq_ResetsGeneratedIDAfterFinalResponse(t *testing.
 			{Object: model.ObjectTypeChatCompletion, Done: true},
 		},
 	}))
-	seq, err := f.generateContentSeq(context.Background(), inv, &model.Request{}, inv.Model)
+	seq, err := f.generateContentSeq(context.Background(), inv, testLLMRequest(), inv.Model)
 	require.NoError(t, err)
 	var responses []*model.Response
 	seq(func(resp *model.Response) bool {
@@ -2653,7 +2718,7 @@ func TestFlow_GenerateContentSeq_IterModelAssignsGeneratedIDForStreamingResponse
 		},
 	}
 	inv := agent.NewInvocation(agent.WithInvocationModel(iterModel))
-	seq, err := f.generateContentSeq(context.Background(), inv, &model.Request{}, inv.Model)
+	seq, err := f.generateContentSeq(context.Background(), inv, testLLMRequest(), inv.Model)
 	require.NoError(t, err)
 	require.True(t, iterModel.GenerateContentIterCalled)
 	var responses []*model.Response
@@ -2701,7 +2766,7 @@ func TestFlow_GenerateContentSeq_IterModelError(t *testing.T) {
 	}
 	inv := agent.NewInvocation(agent.WithInvocationModel(iterModel))
 
-	seq, err := f.generateContentSeq(context.Background(), inv, &model.Request{}, inv.Model)
+	seq, err := f.generateContentSeq(context.Background(), inv, testLLMRequest(), inv.Model)
 	require.Error(t, err)
 	require.Nil(t, seq)
 	require.True(t, iterModel.GenerateContentIterCalled)
@@ -2712,7 +2777,7 @@ func TestFlow_GenerateContentSeq_NilIterModel(t *testing.T) {
 	iterModel := &mockIterModel{}
 	inv := agent.NewInvocation(agent.WithInvocationModel(iterModel))
 
-	seq, err := f.generateContentSeq(context.Background(), inv, &model.Request{}, inv.Model)
+	seq, err := f.generateContentSeq(context.Background(), inv, testLLMRequest(), inv.Model)
 	require.ErrorContains(t, err, errMsgNoModelResponse)
 	require.Nil(t, seq)
 	require.True(t, iterModel.GenerateContentIterCalled)
@@ -2722,7 +2787,7 @@ func TestFlow_GenerateContentSeq_NilIterModel(t *testing.T) {
 func TestFlow_GenerateContentSeq_NoResponseModel(t *testing.T) {
 	f := New(nil, nil, Options{})
 	inv := agent.NewInvocation(agent.WithInvocationModel(&noResponseModel{}))
-	seq, err := f.generateContentSeq(context.Background(), inv, &model.Request{}, inv.Model)
+	seq, err := f.generateContentSeq(context.Background(), inv, testLLMRequest(), inv.Model)
 	require.NoError(t, err)
 	require.NotNil(t, seq)
 }
@@ -2736,10 +2801,10 @@ func TestFlow_CallLLM_MaxLLMCallsExceeded(t *testing.T) {
 	)
 	inv.MaxLLMCalls = 1
 
-	_, _, err := f.callLLM(context.Background(), inv, &model.Request{}, inv.Model)
+	_, _, err := f.callLLM(context.Background(), inv, testLLMRequest(), inv.Model)
 	require.NoError(t, err)
 
-	_, _, err = f.callLLM(context.Background(), inv, &model.Request{}, inv.Model)
+	_, _, err = f.callLLM(context.Background(), inv, testLLMRequest(), inv.Model)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "max LLM calls (1) exceeded")
 }
@@ -2776,10 +2841,8 @@ func (m *noResponseModel) GenerateContent(ctx context.Context, req *model.Reques
 func TestRun_NoPanicWhenModelReturnsNoResponses(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-	f := New(nil, nil, Options{})
-	inv := agent.NewInvocation(
-		agent.WithInvocationModel(&noResponseModel{}),
-	)
+	f := newRunFlow(nil)
+	inv := runInvocationWithUserMessage(&noResponseModel{})
 	ch, err := f.Run(ctx, inv)
 	require.NoError(t, err)
 	var errorEvent *event.Event
@@ -2802,10 +2865,8 @@ func TestRun_NilIterModelEmitsErrorEvent(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	f := New(nil, nil, Options{})
-	inv := agent.NewInvocation(
-		agent.WithInvocationModel(&mockIterModel{}),
-	)
+	f := newRunFlow(nil)
+	inv := runInvocationWithUserMessage(&mockIterModel{})
 
 	ch, err := f.Run(ctx, inv)
 	require.NoError(t, err)
@@ -3065,7 +3126,7 @@ func TestFlow_CallLLM_PluginBeforeModelCanShortCircuit(t *testing.T) {
 		Plugins:   pm,
 	}
 
-	_, ch, err := flow.callLLM(context.Background(), inv, &model.Request{}, inv.Model)
+	_, ch, err := flow.callLLM(context.Background(), inv, testLLMRequest(), inv.Model)
 	require.NoError(t, err)
 	ch(func(_ *model.Response) bool { return true })
 	require.True(t, plugCalled)
@@ -3108,7 +3169,7 @@ func TestFlow_CallLLM_PluginBeforeModelError(t *testing.T) {
 		Plugins:   pm,
 	}
 
-	_, ch, err := flow.callLLM(context.Background(), inv, &model.Request{}, inv.Model)
+	_, ch, err := flow.callLLM(context.Background(), inv, testLLMRequest(), inv.Model)
 	require.Error(t, err)
 	require.Nil(t, ch)
 	require.True(t, plugCalled)
@@ -3153,7 +3214,7 @@ func TestFlow_CallLLM_PluginBeforeModelContextPropagates(t *testing.T) {
 		Plugins:   pm,
 	}
 
-	_, ch, err := flow.callLLM(context.Background(), inv, &model.Request{}, inv.Model)
+	_, ch, err := flow.callLLM(context.Background(), inv, testLLMRequest(), inv.Model)
 	require.NoError(t, err)
 	ch(func(_ *model.Response) bool { return true })
 	require.True(t, plugCalled)
@@ -3318,11 +3379,35 @@ func TestFlow_AfterModelPluginSeesResponseError(t *testing.T) {
 func TestFlow_callLLM_NoModel(t *testing.T) {
 	f := New(nil, nil, Options{})
 	inv := agent.NewInvocation()
-	req := &model.Request{}
+	req := testLLMRequest()
 
 	_, ch, err := f.callLLM(context.Background(), inv, req, inv.Model)
 	require.Error(t, err)
 	require.Nil(t, ch)
+}
+
+func TestFlow_callLLM_EmptyMessages(t *testing.T) {
+	f := New(nil, nil, Options{})
+	inv := agent.NewInvocation(
+		agent.WithInvocationModel(&mockModel{}),
+	)
+
+	_, ch, err := f.callLLM(context.Background(), inv, &model.Request{}, inv.Model)
+	require.Error(t, err)
+	require.EqualError(t, err, errMsgNoLLMMessages)
+	require.Nil(t, ch)
+}
+
+func TestFlow_generateContentSeq_EmptyMessages(t *testing.T) {
+	f := New(nil, nil, Options{})
+	inv := agent.NewInvocation(
+		agent.WithInvocationModel(&mockModel{}),
+	)
+
+	seq, err := f.generateContentSeq(context.Background(), inv, &model.Request{}, inv.Model)
+	require.Error(t, err)
+	require.EqualError(t, err, errMsgNoLLMMessages)
+	require.Nil(t, seq)
 }
 
 func TestFlow_callLLM_ModelError(t *testing.T) {
@@ -3330,7 +3415,7 @@ func TestFlow_callLLM_ModelError(t *testing.T) {
 	inv := agent.NewInvocation(
 		agent.WithInvocationModel(&mockModel{ShouldError: true}),
 	)
-	req := &model.Request{}
+	req := testLLMRequest()
 
 	_, ch, err := f.callLLM(context.Background(), inv, req, inv.Model)
 	require.Error(t, err)
@@ -3342,7 +3427,12 @@ func TestFlow_RunOneStep_ModelSelectorSelectsBeforePreprocess(t *testing.T) {
 	selectedModel := &namedFlowModel{name: "selected"}
 	processor := &captureInvocationModelNameProcessor{}
 	f := New(
-		[]flow.RequestProcessor{processor},
+		[]flow.RequestProcessor{
+			&seedMessagesRequestProcessor{
+				messages: []model.Message{model.NewUserMessage("test")},
+			},
+			processor,
+		},
 		nil,
 		Options{
 			BaseModelResolver: func(inv *agent.Invocation) ModelBaseResolution {
@@ -3442,7 +3532,7 @@ func TestFlow_CallLLM_BeforeModelCannotReplaceCallModel(t *testing.T) {
 	)
 	f := New(nil, nil, Options{ModelCallbacks: callbacks})
 	inv := agent.NewInvocation(agent.WithInvocationModel(selectedModel))
-	_, seq, err := f.callLLM(context.Background(), inv, &model.Request{}, selectedModel)
+	_, seq, err := f.callLLM(context.Background(), inv, testLLMRequest(), selectedModel)
 	require.NoError(t, err)
 	seq(func(response *model.Response) bool { return true })
 	require.True(t, selectedModel.Called())
@@ -3545,9 +3635,12 @@ func TestRun_WithResumeExecutesPendingToolCalls(t *testing.T) {
 			Resume: true,
 		}),
 	)
+	inv.Message = model.NewUserMessage("test")
 
 	llmFlow := New(
-		nil,
+		[]flow.RequestProcessor{&seedMessagesRequestProcessor{
+			messages: []model.Message{model.NewUserMessage("test")},
+		}},
 		[]flow.ResponseProcessor{
 			processor.NewFunctionCallResponseProcessor(false, nil),
 		},
@@ -3689,9 +3782,12 @@ func TestRun_SyncSummaryIntraRun_TriggersBetweenIterations(t *testing.T) {
 		agent.WithInvocationModel(modelStub),
 		agent.WithInvocationEventFilterKey("branch/agent-intra-run"),
 	)
+	inv.Message = model.NewUserMessage("test")
 
 	llmFlow := New(
-		nil,
+		[]flow.RequestProcessor{&seedMessagesRequestProcessor{
+			messages: []model.Message{model.NewUserMessage("test")},
+		}},
 		[]flow.ResponseProcessor{
 			processor.NewFunctionCallResponseProcessor(false, nil),
 		},
@@ -3777,6 +3873,47 @@ func TestMaybeSyncSummaryIntraRun_ErrorBranch(t *testing.T) {
 
 	// Should not panic; just logs the error internally.
 	f.maybeSyncSummaryIntraRun(ctx, inv)
+}
+
+func TestMaybeSyncSummaryIntraRun_AttachesCacheSafeForkRequest(t *testing.T) {
+	f := &Flow{syncSummaryIntraRun: true}
+	svc := &contextCapturingSummaryService{}
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{}),
+		agent.WithInvocationSessionService(svc),
+		agent.WithInvocationEventFilterKey("branch/fork"),
+	)
+	parent := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("system"),
+			model.NewUserMessage("question"),
+		},
+	}
+	summaryfork.Attach(inv, parent)
+	parent.Messages[1].Content = "mutated"
+
+	f.maybeSyncSummaryIntraRun(context.Background(), inv)
+
+	require.Equal(t, 1, svc.Calls())
+	got := svc.ParentRequest()
+	require.NotNil(t, got)
+	require.Len(t, got.Messages, 2)
+	require.Equal(t, "question", got.Messages[1].Content)
+}
+
+func TestMaybeSyncSummaryIntraRun_FallsBackWithoutForkRequest(t *testing.T) {
+	f := &Flow{syncSummaryIntraRun: true}
+	svc := &contextCapturingSummaryService{}
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{}),
+		agent.WithInvocationSessionService(svc),
+		agent.WithInvocationEventFilterKey("branch/fallback"),
+	)
+
+	f.maybeSyncSummaryIntraRun(context.Background(), inv)
+
+	require.Equal(t, 1, svc.Calls())
+	require.Nil(t, svc.ParentRequest())
 }
 
 func TestRun_SyncSummaryIntraRun_NilInvocation(t *testing.T) {

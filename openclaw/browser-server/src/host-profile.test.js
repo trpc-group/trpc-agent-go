@@ -12,6 +12,23 @@ function profileForPage(page) {
   return profile;
 }
 
+test("HostProfile navigate opens a tab when none exists", async () => {
+  const profile = new HostProfile({
+    headless: true,
+    policy: {}
+  });
+  profile.currentPage = () => null;
+  profile.openTab = async (url) => {
+    assert.equal(url, "about:blank");
+    return { targetId: "tab-1", tabs: [] };
+  };
+
+  const result = await profile.navigate("", "about:blank");
+
+  assert.equal(result.targetId, "tab-1");
+  assert.match(result.content[0].text, /Navigated to about:blank/);
+});
+
 test("HostProfile screenshot supports CSS element selectors", async () => {
   const calls = [];
   const locator = {
@@ -174,6 +191,27 @@ test("HostProfile upload supports file chooser refs", async () => {
   assert.equal(calls[2].click.timeout, 2222);
   assert.deepEqual(calls[3].setFiles, ["/tmp/a.txt"]);
   assert.equal(result.content[0].text, "Uploaded 1 file(s).");
+});
+
+test("HostProfile act accepts press/key as a press alias", async () => {
+  const calls = [];
+  const page = {
+    keyboard: {
+      async press(key, options) {
+        calls.push({ key, options });
+      }
+    }
+  };
+
+  const profile = profileForPage(page);
+  const result = await profile.act("tab-1", {
+    kind: "press/key",
+    key: "End",
+    delayMs: 25
+  });
+
+  assert.deepEqual(calls, [{ key: "End", options: { delay: 25 } }]);
+  assert.equal(result.content[0].text, "Pressed End.");
 });
 
 test("HostProfile download clicks a ref and saves the file", async () => {

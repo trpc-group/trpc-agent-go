@@ -17,7 +17,6 @@ import (
 	"io"
 	"math"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1581,6 +1580,12 @@ func TestStateDeltaSessionHelpers_EdgeCases(t *testing.T) {
 	require.Nil(t, invocationView(nil))
 	preserveStateDeltaInvocationDefaults(nil, baseInv)
 	preserveStateDeltaInvocationDefaults(agent.NewInvocation(), nil)
+	memoryReader := &mockMemoryService{}
+	viewInv := agent.NewInvocation()
+	baseWithMemoryReader := agent.NewInvocation()
+	baseWithMemoryReader.MemoryReader = memoryReader
+	preserveStateDeltaInvocationDefaults(viewInv, baseWithMemoryReader)
+	require.Same(t, memoryReader, viewInv.MemoryReader)
 
 	current := session.StateMap{
 		baseKey:    []byte("base"),
@@ -2084,6 +2089,377 @@ func TestExecuteToolCall_ToolResultMessagesCallback_Nil_NoOverride(t *testing.T)
 	assert.Equal(t, pc.ID, choices[0].Message.ToolID)
 	assert.Equal(t, "echo", choices[0].Message.ToolName)
 	assert.Equal(t, string(wantBytes), choices[0].Message.Content)
+}
+
+func TestProcessResponse_ToolResultMessagesNoAttachmentBudgetByDefault(
+	t *testing.T,
+) {
+	ctx := context.Background()
+
+	tools := map[string]tool.Tool{
+		"first": &mockCallableTool{
+			declaration: &tool.Declaration{Name: "first"},
+			callFn: func(_ context.Context, _ []byte) (any, error) {
+				return map[string]any{"ok": true}, nil
+			},
+		},
+		"second": &mockCallableTool{
+			declaration: &tool.Declaration{Name: "second"},
+			callFn: func(_ context.Context, _ []byte) (any, error) {
+				return map[string]any{"ok": true}, nil
+			},
+		},
+	}
+
+	var grants []int
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterToolResultMessages(func(
+		ctx context.Context,
+		_ *tool.ToolResultMessagesInput,
+	) (any, error) {
+		grants = append(
+			grants,
+			tool.ReserveToolResultAttachments(ctx, 4),
+		)
+		return nil, nil
+	})
+
+	p := NewFunctionCallResponseProcessor(false, callbacks)
+	inv := &agent.Invocation{
+		InvocationID: "inv-1",
+		AgentName:    "echo-agent",
+	}
+	req := &model.Request{Tools: tools}
+	rsp := &model.Response{
+		Choices: []model.Choice{{
+			Message: model.Message{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{
+					{
+						ID: "call-1",
+						Function: model.FunctionDefinitionParam{
+							Name:      "first",
+							Arguments: []byte(`{}`),
+						},
+					},
+					{
+						ID: "call-2",
+						Function: model.FunctionDefinitionParam{
+							Name:      "second",
+							Arguments: []byte(`{}`),
+						},
+					},
+				},
+			},
+		}},
+	}
+	ch := make(chan *event.Event, 1)
+
+	p.ProcessResponse(ctx, inv, req, rsp, ch)
+
+	require.Equal(t, []int{4, 4}, grants)
+	select {
+	case <-ch:
+	default:
+		t.Fatal("expected merged tool response event")
+	}
+}
+
+func TestProcessResponse_ToolResultMessagesShareAttachmentBudget(
+	t *testing.T,
+) {
+	ctx := context.Background()
+
+	tools := map[string]tool.Tool{
+		"first": &mockCallableTool{
+			declaration: &tool.Declaration{Name: "first"},
+			callFn: func(_ context.Context, _ []byte) (any, error) {
+				return map[string]any{"ok": true}, nil
+			},
+		},
+		"second": &mockCallableTool{
+			declaration: &tool.Declaration{Name: "second"},
+			callFn: func(_ context.Context, _ []byte) (any, error) {
+				return map[string]any{"ok": true}, nil
+			},
+		},
+	}
+
+	var grants []int
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterToolResultMessages(func(
+		ctx context.Context,
+		_ *tool.ToolResultMessagesInput,
+	) (any, error) {
+		grants = append(
+			grants,
+			tool.ReserveToolResultAttachments(ctx, 4),
+		)
+		return nil, nil
+	})
+
+	p := NewFunctionCallResponseProcessor(
+		false,
+		callbacks,
+		WithToolResultAttachmentBudget(6),
+	)
+	inv := &agent.Invocation{
+		InvocationID: "inv-1",
+		AgentName:    "echo-agent",
+	}
+	req := &model.Request{Tools: tools}
+	rsp := &model.Response{
+		Choices: []model.Choice{{
+			Message: model.Message{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{
+					{
+						ID: "call-1",
+						Function: model.FunctionDefinitionParam{
+							Name:      "first",
+							Arguments: []byte(`{}`),
+						},
+					},
+					{
+						ID: "call-2",
+						Function: model.FunctionDefinitionParam{
+							Name:      "second",
+							Arguments: []byte(`{}`),
+						},
+					},
+				},
+			},
+		}},
+	}
+	ch := make(chan *event.Event, 1)
+
+	p.ProcessResponse(ctx, inv, req, rsp, ch)
+
+	require.Equal(t, []int{4, 2}, grants)
+	select {
+	case <-ch:
+	default:
+		t.Fatal("expected merged tool response event")
+	}
+}
+
+func TestProcessResponse_ToolResultMessagesBudgetIsPerPass(
+	t *testing.T,
+) {
+	ctx := tool.WithToolResultAttachmentBudget(context.Background(), 1)
+	require.Equal(t, 1, tool.ReserveToolResultAttachments(ctx, 1))
+
+	tools := map[string]tool.Tool{
+		"first": &mockCallableTool{
+			declaration: &tool.Declaration{Name: "first"},
+			callFn: func(_ context.Context, _ []byte) (any, error) {
+				return map[string]any{"ok": true}, nil
+			},
+		},
+		"second": &mockCallableTool{
+			declaration: &tool.Declaration{Name: "second"},
+			callFn: func(_ context.Context, _ []byte) (any, error) {
+				return map[string]any{"ok": true}, nil
+			},
+		},
+	}
+
+	var grants []int
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterToolResultMessages(func(
+		ctx context.Context,
+		_ *tool.ToolResultMessagesInput,
+	) (any, error) {
+		grants = append(
+			grants,
+			tool.ReserveToolResultAttachments(ctx, 4),
+		)
+		return nil, nil
+	})
+
+	p := NewFunctionCallResponseProcessor(
+		false,
+		callbacks,
+		WithToolResultAttachmentBudget(6),
+	)
+	inv := &agent.Invocation{
+		InvocationID: "inv-1",
+		AgentName:    "echo-agent",
+	}
+	req := &model.Request{Tools: tools}
+	rsp := &model.Response{
+		Choices: []model.Choice{{
+			Message: model.Message{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{
+					{
+						ID: "call-1",
+						Function: model.FunctionDefinitionParam{
+							Name:      "first",
+							Arguments: []byte(`{}`),
+						},
+					},
+					{
+						ID: "call-2",
+						Function: model.FunctionDefinitionParam{
+							Name:      "second",
+							Arguments: []byte(`{}`),
+						},
+					},
+				},
+			},
+		}},
+	}
+	ch := make(chan *event.Event, 1)
+
+	p.ProcessResponse(ctx, inv, req, rsp, ch)
+
+	require.Equal(t, []int{4, 2}, grants)
+	require.Equal(t, 0, tool.ReserveToolResultAttachments(ctx, 1))
+	select {
+	case <-ch:
+	default:
+		t.Fatal("expected merged tool response event")
+	}
+}
+
+func TestProcessResponse_ToolExecutionDoesNotInheritAttachmentBudget(
+	t *testing.T,
+) {
+	ctx := context.Background()
+
+	var callGrant int
+	tools := map[string]tool.Tool{
+		"media": &mockCallableTool{
+			declaration: &tool.Declaration{Name: "media"},
+			callFn: func(ctx context.Context, _ []byte) (any, error) {
+				callGrant = tool.ReserveToolResultAttachments(ctx, 2)
+				return map[string]any{"ok": true}, nil
+			},
+		},
+	}
+
+	var callbackGrant int
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterToolResultMessages(func(
+		ctx context.Context,
+		_ *tool.ToolResultMessagesInput,
+	) (any, error) {
+		callbackGrant = tool.ReserveToolResultAttachments(ctx, 2)
+		return nil, nil
+	})
+
+	p := NewFunctionCallResponseProcessor(
+		false,
+		callbacks,
+		WithToolResultAttachmentBudget(1),
+	)
+	inv := &agent.Invocation{
+		InvocationID: "inv-1",
+		AgentName:    "echo-agent",
+	}
+	req := &model.Request{Tools: tools}
+	rsp := &model.Response{
+		Choices: []model.Choice{{
+			Message: model.Message{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					ID: "call-1",
+					Function: model.FunctionDefinitionParam{
+						Name:      "media",
+						Arguments: []byte(`{}`),
+					},
+				}},
+			},
+		}},
+	}
+	ch := make(chan *event.Event, 1)
+
+	p.ProcessResponse(ctx, inv, req, rsp, ch)
+
+	require.Equal(t, 2, callGrant)
+	require.Equal(t, 1, callbackGrant)
+	select {
+	case <-ch:
+	default:
+		t.Fatal("expected merged tool response event")
+	}
+}
+
+func TestProcessResponse_ParallelToolResultMessagesShareAttachmentBudget(
+	t *testing.T,
+) {
+	ctx := context.Background()
+
+	tools := map[string]tool.Tool{
+		"first": &mockCallableTool{
+			declaration: &tool.Declaration{Name: "first"},
+			callFn: func(_ context.Context, _ []byte) (any, error) {
+				return map[string]any{"ok": true}, nil
+			},
+		},
+		"second": &mockCallableTool{
+			declaration: &tool.Declaration{Name: "second"},
+			callFn: func(_ context.Context, _ []byte) (any, error) {
+				return map[string]any{"ok": true}, nil
+			},
+		},
+	}
+
+	var total atomic.Int64
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterToolResultMessages(func(
+		ctx context.Context,
+		_ *tool.ToolResultMessagesInput,
+	) (any, error) {
+		granted := tool.ReserveToolResultAttachments(ctx, 4)
+		total.Add(int64(granted))
+		return nil, nil
+	})
+
+	p := NewFunctionCallResponseProcessor(
+		true,
+		callbacks,
+		WithToolResultAttachmentBudget(6),
+	)
+	inv := &agent.Invocation{
+		InvocationID: "inv-1",
+		AgentName:    "echo-agent",
+	}
+	req := &model.Request{Tools: tools}
+	rsp := &model.Response{
+		Choices: []model.Choice{{
+			Message: model.Message{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{
+					{
+						ID: "call-1",
+						Function: model.FunctionDefinitionParam{
+							Name:      "first",
+							Arguments: []byte(`{}`),
+						},
+					},
+					{
+						ID: "call-2",
+						Function: model.FunctionDefinitionParam{
+							Name:      "second",
+							Arguments: []byte(`{}`),
+						},
+					},
+				},
+			},
+		}},
+	}
+	ch := make(chan *event.Event, 1)
+
+	p.ProcessResponse(ctx, inv, req, rsp, ch)
+
+	require.Equal(t, int64(6), total.Load())
+	select {
+	case <-ch:
+	default:
+		t.Fatal("expected merged tool response event")
+	}
 }
 
 func TestExecuteToolCall_ToolResultMessagesCallback_OverrideWithSingleMessage(t *testing.T) {
@@ -4136,10 +4512,10 @@ func TestRunParallelToolCall_LongRunningToolNoImmediateResult(t *testing.T) {
 	resultChan := make(chan toolResult, 1)
 	eventChan := make(chan *event.Event, 1)
 
-	var wg sync.WaitGroup
-	wg.Add(1)
-	p.runParallelToolCall(ctx, &wg, inv, llmResp, tools, eventChan, resultChan, 0, tc)
-	wg.Wait()
+	// runParallelToolCall returns nil for non-cancelling outcomes (including
+	// recovered panics and ignorable errors). Critical errors return a
+	// non-nil error so the errgroup cancels siblings.
+	require.NoError(t, p.runParallelToolCall(ctx, inv, llmResp, tools, eventChan, resultChan, 0, tc))
 	close(resultChan)
 
 	res, ok := <-resultChan
@@ -4178,11 +4554,8 @@ func TestRunParallelToolCall_PanicUsesModifiedArgsExtension(t *testing.T) {
 	llmResp := &model.Response{Model: "mock"}
 	resultChan := make(chan toolResult, 1)
 
-	var wg sync.WaitGroup
-	wg.Add(1)
-	p.runParallelToolCall(
+	err := p.runParallelToolCall(
 		context.Background(),
-		&wg,
 		inv,
 		llmResp,
 		tools,
@@ -4191,7 +4564,7 @@ func TestRunParallelToolCall_PanicUsesModifiedArgsExtension(t *testing.T) {
 		0,
 		tc,
 	)
-	wg.Wait()
+	require.NoError(t, err)
 	close(resultChan)
 
 	res, ok := <-resultChan
@@ -4291,6 +4664,131 @@ func TestExecuteToolCall_ToolNotFound_ReturnsErrorChoice(t *testing.T) {
 	require.True(t, shouldIgnoreError)
 	require.Contains(t, err.Error(), ErrorToolNotFound)
 	require.Nil(t, choices)
+}
+
+func TestExecuteToolCall_ToolNotFoundSuggestsSimilarTool(t *testing.T) {
+	ctx := context.Background()
+	p := NewFunctionCallResponseProcessor(false, nil)
+	inv := &agent.Invocation{Model: &mockModel{}}
+	tools := map[string]tool.Tool{
+		"alpha_tool": &mockTool{name: "alpha_tool"},
+		"web_fetch":  &mockTool{name: "web_fetch"},
+	}
+	call := model.ToolCall{
+		ID: "call-duck",
+		Function: model.FunctionDefinitionParam{
+			Name:      "alpha_too",
+			Arguments: []byte(`{}`),
+		},
+	}
+
+	_, choices, _, shouldIgnoreError, _, err := p.executeToolCall(
+		ctx, inv, call, tools, 0, nil,
+	)
+
+	require.True(t, shouldIgnoreError)
+	require.Nil(t, choices)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), ErrorToolNotFound)
+	require.Contains(t, err.Error(), "alpha_too")
+	require.Contains(t, err.Error(), `did you mean "alpha_tool"?`)
+}
+
+func TestExecuteToolCall_ToolNotFoundOmitsDistantSuggestions(t *testing.T) {
+	ctx := context.Background()
+	p := NewFunctionCallResponseProcessor(false, nil)
+	inv := &agent.Invocation{Model: &mockModel{}}
+	tools := map[string]tool.Tool{
+		"web_fetch": &mockTool{name: "web_fetch"},
+	}
+	call := model.ToolCall{
+		ID: "call-missing",
+		Function: model.FunctionDefinitionParam{
+			Name:      "totally_missing",
+			Arguments: []byte(`{}`),
+		},
+	}
+
+	_, choices, _, shouldIgnoreError, _, err := p.executeToolCall(
+		ctx, inv, call, tools, 0, nil,
+	)
+
+	require.True(t, shouldIgnoreError)
+	require.Nil(t, choices)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), ErrorToolNotFound)
+	require.Contains(t, err.Error(), "totally_missing")
+	require.NotContains(t, err.Error(), "did you mean")
+}
+
+func TestExecuteToolCall_ToolNameSuggestionsCanBeDisabled(t *testing.T) {
+	ctx := context.Background()
+	p := NewFunctionCallResponseProcessor(
+		false,
+		nil,
+		WithToolNameSuggestions(0, 0),
+	)
+	inv := &agent.Invocation{Model: &mockModel{}}
+	tools := map[string]tool.Tool{
+		"alpha_tool": &mockTool{name: "alpha_tool"},
+	}
+	call := model.ToolCall{
+		ID: "call-missing",
+		Function: model.FunctionDefinitionParam{
+			Name:      "alpha_too",
+			Arguments: []byte(`{}`),
+		},
+	}
+
+	_, choices, _, shouldIgnoreError, _, err := p.executeToolCall(
+		ctx, inv, call, tools, 0, nil,
+	)
+
+	require.True(t, shouldIgnoreError)
+	require.Nil(t, choices)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), ErrorToolNotFound)
+	require.Contains(t, err.Error(), "alpha_too")
+	require.NotContains(t, err.Error(), "did you mean")
+}
+
+func TestToolNotFoundError(t *testing.T) {
+	tools := map[string]tool.Tool{
+		"alpha_took":   &mockTool{name: "alpha_took"},
+		"alpha_tool":   &mockTool{name: "alpha_tool"},
+		"alpha_town":   &mockTool{name: "alpha_town"},
+		"exec_command": &mockTool{name: "exec_command"},
+		"tool_xyz":     &mockTool{name: "tool_xyz"},
+		"web_fetch":    &mockTool{name: "web_fetch"},
+	}
+	options := defaultToolNameSuggestionOptions()
+
+	require.Equal(t, ErrorToolNotFound, toolNotFoundError("", tools, options))
+	require.Equal(
+		t,
+		`Error: tool not found: alpha_too; did you mean one of `+
+			`"alpha_took", "alpha_tool", "alpha_town"?`,
+		toolNotFoundError("alpha_too", tools, options),
+	)
+	require.Equal(
+		t,
+		"Error: tool not found: browser_navigate",
+		toolNotFoundError("browser_navigate", tools, options),
+	)
+
+	malformed := "exec_exec_commandcommand</arg_key><arg_value>" +
+		strings.Repeat("script ", 80)
+	got := toolNotFoundError(malformed, tools, options)
+	require.Contains(t, got, `did you mean "exec_command"?`)
+	require.Contains(t, got, "exec_exec_commandcommand")
+	require.NotContains(t, got, strings.Repeat("script ", 40))
+}
+
+func TestToolNameEditDistance(t *testing.T) {
+	require.Equal(t, 0, toolNameEditDistance("web_fetch", "web_fetch"))
+	require.Equal(t, 1, toolNameEditDistance("alpha_too", "alpha_tool"))
+	require.Equal(t, 3, toolNameEditDistance("", "abc"))
+	require.Equal(t, 3, toolNameEditDistance("abc", ""))
 }
 
 func TestFindCompatibleTool(t *testing.T) {
@@ -4460,7 +4958,7 @@ func TestConvertToolArguments(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := convertToolArguments(tt.originalName, tt.originalArgs, tt.targetName)
+			result := convertToolArguments(nil, tt.originalName, tt.originalArgs, tt.targetName)
 
 			if tt.expected == nil {
 				assert.Nil(t, result, tt.description)
@@ -4488,7 +4986,7 @@ func TestSetDefaultTransferMessage(t *testing.T) {
 	SetDefaultTransferMessage("delegated")
 	defer func() { SetDefaultTransferMessage("Task delegated from coordinator") }()
 
-	res := convertToolArguments("agent-x", []byte("{}"),
+	res := convertToolArguments(nil, "agent-x", []byte("{}"),
 		transfer.TransferToolName)
 	require.NotNil(t, res)
 	var got transfer.Request
@@ -4911,7 +5409,35 @@ func TestExecuteCallableTool_NoRetryPolicyCallsToolOnCanceledContext(t *testing.
 }
 
 func TestConvertToolArguments_InvalidJSON(t *testing.T) {
-	b := convertToolArguments("child", []byte("{"),
+	b := convertToolArguments(nil, "child", []byte("{"),
+		transfer.TransferToolName)
+	require.Nil(t, b)
+}
+
+func TestConvertToolArguments_RepairsMalformedJSON(t *testing.T) {
+	enabled := true
+	inv := &agent.Invocation{
+		RunOptions: agent.RunOptions{
+			ToolCallArgumentsJSONRepairEnabled: &enabled,
+		},
+	}
+	b := convertToolArguments(inv, "child", []byte("{"),
+		transfer.TransferToolName)
+	require.NotNil(t, b)
+	var req transfer.Request
+	require.NoError(t, json.Unmarshal(b, &req))
+	require.Equal(t, "child", req.AgentName)
+	require.NotEmpty(t, req.Message)
+}
+
+func TestConvertToolArguments_RejectsLeadingProse(t *testing.T) {
+	enabled := true
+	inv := &agent.Invocation{
+		RunOptions: agent.RunOptions{
+			ToolCallArgumentsJSONRepairEnabled: &enabled,
+		},
+	}
+	b := convertToolArguments(inv, "child", []byte(`Summary: {"message":"hi"}`),
 		transfer.TransferToolName)
 	require.Nil(t, b)
 }
@@ -7083,7 +7609,108 @@ func TestCollectParallelToolResults_ContextCancelled(t *testing.T) {
 	cancel()
 	res, err := p.collectParallelToolResults(ctx, make(chan toolResult), 2)
 	require.NotNil(t, res)
-	require.NoError(t, err)
+	// When the parent ctx is cancelled before any result arrives, the
+	// collector now surfaces ctx.Err() instead of a silent nil so callers
+	// can distinguish "cancelled mid-flight" from "all tools completed".
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+// mockStopTool is a callable tool that returns an agent.StopError on its
+// first invocation. Stop errors are the canonical "critical, non-ignorable"
+// failure that should fan out and cancel sibling tool calls in the new
+// errgroup-based parallel dispatch.
+type mockStopTool struct {
+	name string
+}
+
+func (m *mockStopTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{
+		Name:        m.name,
+		Description: "Mock tool that returns a StopError",
+	}
+}
+
+func (m *mockStopTool) Call(_ context.Context, _ []byte) (any, error) {
+	return nil, agent.NewStopError("mock stop error")
+}
+
+// TestExecuteToolCallsInParallel_ErrgroupCancelsSiblings verifies the
+// fail-fast semantics introduced when parallel tool dispatch moved from
+// raw goroutines to errgroup.WithContext: when one sibling returns a
+// non-ignorable (StopError) failure, the group ctx is cancelled and a
+// slow-but-cancellable sibling observes ctx.Done() and aborts instead of
+// running to completion. This is what keeps the agent budget from being
+// burned on work whose result will never be consumed.
+func TestExecuteToolCallsInParallel_ErrgroupCancelsSiblings(t *testing.T) {
+	p := NewFunctionCallResponseProcessor(true, nil)
+
+	const slowDelay = 1500 * time.Millisecond
+
+	// Slow tool blocks until ctx is done or the delay elapses, returning
+	// ctx.Err() on cancel.
+	slow := &mockTool{
+		name:   "slow",
+		delay:  slowDelay,
+		result: "slow-ok",
+	}
+	// Stop tool returns an immediate StopError — this is the critical
+	// (non-ignorable) failure that should cancel siblings.
+	stopper := &mockStopTool{name: "stopper"}
+
+	tools := map[string]tool.Tool{
+		"slow":    slow,
+		"stopper": stopper,
+	}
+	toolCalls := []model.ToolCall{
+		{
+			ID:       "call-slow",
+			Function: model.FunctionDefinitionParam{Name: "slow", Arguments: []byte(`{}`)},
+		},
+		{
+			ID:       "call-stopper",
+			Function: model.FunctionDefinitionParam{Name: "stopper", Arguments: []byte(`{}`)},
+		},
+	}
+	llmResp := &model.Response{
+		Choices: []model.Choice{{
+			Message: model.Message{
+				Role:      model.RoleAssistant,
+				ToolCalls: toolCalls,
+			},
+		}},
+	}
+	inv := agent.NewInvocation(
+		agent.WithInvocationID("inv-errgroup"),
+		agent.WithInvocationAgent(&mockAgentWithTools{name: "errgroup-test"}),
+	)
+	eventChan := make(chan *event.Event, 8)
+
+	// Drain eventChan in the background so writes never block the dispatch.
+	doneDrain := make(chan struct{})
+	go func() {
+		defer close(doneDrain)
+		for range eventChan {
+		}
+	}()
+
+	start := time.Now()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := p.executeToolCallsInParallel(ctx, inv, llmResp, toolCalls, tools, eventChan)
+	elapsed := time.Since(start)
+	close(eventChan)
+	<-doneDrain
+
+	// The stopper's critical error must surface as the group error.
+	require.Error(t, err, "expected the critical sibling error to be returned")
+	_, isStop := agent.AsStopError(err)
+	require.True(t, isStop, "expected a StopError to surface, got %v", err)
+
+	// The slow tool must have been cancelled — we should be well under its
+	// natural delay. Generous margin avoids CI flakes while still proving
+	// the slow tool didn't run to completion.
+	require.Less(t, elapsed, slowDelay/2,
+		"slow sibling should have been cancelled by errgroup; elapsed=%v", elapsed)
 }
 
 func TestConvertToolArguments_DefaultMessageAndSetter(t *testing.T) {
@@ -7094,7 +7721,7 @@ func TestConvertToolArguments_DefaultMessageAndSetter(t *testing.T) {
 	SetDefaultTransferMessage("Delegated task")
 	// No message provided in original args should use default.
 	b := convertToolArguments(
-		"weather-agent", []byte("{}"), transfer.TransferToolName,
+		nil, "weather-agent", []byte("{}"), transfer.TransferToolName,
 	)
 	require.NotNil(t, b)
 	var req transfer.Request
@@ -7120,6 +7747,18 @@ func TestIsStreamable_RespectsPreferenceFalse(t *testing.T) {
 	require.False(t, isStreamable(&noStreamPrefTool{}))
 }
 
+type originalOnlyStreamWrapper struct {
+	original tool.Tool
+}
+
+func (w *originalOnlyStreamWrapper) Declaration() *tool.Declaration {
+	return w.original.Declaration()
+}
+
+func (w *originalOnlyStreamWrapper) Original() tool.Tool {
+	return w.original
+}
+
 // onlyTool implements Tool but neither Callable nor Streamable.
 type onlyTool struct{}
 
@@ -7133,6 +7772,18 @@ func TestExecuteTool_UnsupportedToolType(t *testing.T) {
 	inv := &agent.Invocation{}
 	tc := model.ToolCall{Function: model.FunctionDefinitionParam{Name: "only"}}
 	_, _, _, err := p.executeTool(ctx, inv, tc, &onlyTool{}, nil)
+	require.Error(t, err)
+}
+
+func TestExecuteTool_OriginalOnlyStreamWrapperDoesNotPanic(t *testing.T) {
+	p := NewFunctionCallResponseProcessor(false, nil)
+	ctx := context.Background()
+	inv := &agent.Invocation{}
+	tc := model.ToolCall{Function: model.FunctionDefinitionParam{Name: "stream"}}
+	wrapper := &originalOnlyStreamWrapper{
+		original: &mockStreamTool{name: "stream"},
+	}
+	_, _, _, err := p.executeTool(ctx, inv, tc, wrapper, nil)
 	require.Error(t, err)
 }
 
@@ -8847,6 +9498,14 @@ func TestShouldRequestStructuredStreamErrors_NilAndNamedTool(t *testing.T) {
 	namedStreamTool, ok := namedTools[0].(tool.StreamableTool)
 	require.True(t, ok)
 	require.True(t, shouldRequestStructuredStreamErrors(namedStreamTool))
+	patchedTools := itool.ApplyDeclarations([]tool.Tool{baseTool}, []tool.Declaration{{
+		Name:        "structured",
+		Description: "patched",
+	}})
+	require.Len(t, patchedTools, 1)
+	patchedStreamTool, ok := patchedTools[0].(tool.StreamableTool)
+	require.True(t, ok)
+	require.True(t, shouldRequestStructuredStreamErrors(patchedStreamTool))
 }
 
 func TestHasSyntheticStateOnlyToolChoice_NilContext(t *testing.T) {

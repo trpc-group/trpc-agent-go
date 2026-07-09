@@ -48,6 +48,7 @@ const reasonSeparator = ";"
 type local struct {
 	runner                            runner.Runner
 	expectedRunner                    runner.Runner
+	toolMockRunner                    runner.Runner
 	evalSetManager                    evalset.Manager
 	evalResultManager                 evalresult.Manager
 	registry                          registry.Registry
@@ -93,6 +94,7 @@ func New(runner runner.Runner, opt ...service.Option) (service.Service, error) {
 	service := &local{
 		runner:                            runner,
 		expectedRunner:                    opts.ExpectedRunner,
+		toolMockRunner:                    opts.ToolMockRunner,
 		evalSetManager:                    opts.EvalSetManager,
 		evalResultManager:                 opts.EvalResultManager,
 		registry:                          opts.Registry,
@@ -658,6 +660,18 @@ func (s *local) prepareCaseEvaluationInputs(
 		return nil, fmt.Errorf("inference count %d does not match expected conversation length %d",
 			len(actuals), len(expecteds))
 	}
+	if len(inferenceResult.ExecutionTraces) > 0 {
+		if len(actuals) != len(inferenceResult.ExecutionTraces) {
+			return nil, fmt.Errorf("execution trace count %d does not match inference count %d",
+				len(inferenceResult.ExecutionTraces), len(actuals))
+		}
+		for i, actual := range actuals {
+			if actual == nil {
+				continue
+			}
+			actual.ExecutionTrace = inferenceResult.ExecutionTraces[i]
+		}
+	}
 	attachContextMessages(actuals, evalCase.ContextMessages)
 	attachContextMessages(expecteds, evalCase.ContextMessages)
 	return &caseEvaluationInputs{
@@ -707,6 +721,8 @@ func (s *local) inferExpectedInferences(
 		evalCase.SessionInput,
 		sessionID,
 		mergedRunOptions,
+		inference.WithToolMockRunner(opts.ToolMockRunner),
+		inference.WithToolMockMode(inference.ToolMockModeExpected),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("run expected runner: %w", err)

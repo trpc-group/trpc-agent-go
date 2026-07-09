@@ -11,10 +11,14 @@
 package httpfetch
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -22,6 +26,8 @@ import (
 	"github.com/JohannesKaufmann/html-to-markdown/v2/converter"
 	"github.com/JohannesKaufmann/html-to-markdown/v2/plugin/base"
 	"github.com/JohannesKaufmann/html-to-markdown/v2/plugin/commonmark"
+	pdfpkg "github.com/dslipak/pdf"
+	"golang.org/x/net/html"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 	"trpc.group/trpc-go/trpc-agent-go/tool/webfetch/internal/urlfilter"
@@ -30,7 +36,11 @@ import (
 const (
 	defaultTimeout = 30 * time.Second
 	maxURLs        = 20
+
+	maxHTTPErrorBodyLength = 512
 )
+
+var errNoVisibleHTMLText = errors.New("HTML response contained no visible text")
 
 // Option configures the WebFetch tool.
 type Option func(*config)
@@ -43,6 +53,7 @@ type config struct {
 	maxTotalContentLength int
 	allowedDomains        []string
 	blockedDomains        []string
+	mainContentOnly       bool
 }
 
 // WithHTTPClient sets the HTTP client.
@@ -82,6 +93,14 @@ func WithAllowedDomains(domains []string) Option {
 func WithBlockedDomains(domains []string) Option {
 	return func(cfg *config) {
 		cfg.blockedDomains = domains
+	}
+}
+
+// WithMainContentExtraction enables heuristic main-content extraction for
+// HTML pages. It is off by default to preserve full-page conversion.
+func WithMainContentExtraction(enabled bool) Option {
+	return func(cfg *config) {
+		cfg.mainContentOnly = enabled
 	}
 }
 
@@ -150,6 +169,7 @@ func NewTool(opts ...Option) tool.CallableTool {
 		client:                client,
 		maxContentLength:      cfg.maxContentLength,
 		maxTotalContentLength: cfg.maxTotalContentLength,
+		mainContentOnly:       cfg.mainContentOnly,
 	}
 
 	// Register urlValidators
@@ -173,7 +193,8 @@ func NewTool(opts ...Option) tool.CallableTool {
 		t.fetch,
 		function.WithName("web_fetch"),
 		function.WithDescription("Fetches and extracts text content from a list of URLs. "+
-			"Supports up to 20 URLs. Useful for summarizing, comparing, or extracting information from web pages."),
+			"Supports up to 20 URLs. Useful for summarizing, comparing, or extracting information from web pages. "+
+			"Supports HTML, text-like responses, JSON, and PDFs."),
 	)
 }
 
@@ -181,6 +202,7 @@ type webFetchTool struct {
 	client                *http.Client
 	maxContentLength      int
 	maxTotalContentLength int
+	mainContentOnly       bool
 	urlValidators         []urlfilter.URLValidator
 }
 
@@ -277,7 +299,7 @@ func (t *webFetchTool) fetchOne(ctx context.Context, urlStr string) resultItem {
 	item.StatusCode = resp.StatusCode
 
 	if item.StatusCode < 200 || item.StatusCode >= 300 {
-		item.Error = fmt.Sprintf("HTTP status %d", item.StatusCode)
+		item.Error = httpStatusError(resp)
 		return item
 	}
 
@@ -285,11 +307,19 @@ func (t *webFetchTool) fetchOne(ctx context.Context, urlStr string) resultItem {
 	var processErr error
 
 	if item.ContentType == "text/html" {
-		content, processErr = convertHTMLToMarkdown(resp.Body)
+		content, processErr = convertHTMLToMarkdownWithOptions(
+			resp.Body,
+			t.mainContentOnly,
+		)
+	} else if item.ContentType == "application/pdf" {
+		content, processErr = readPDFAsText(
+			resp.Body,
+			t.maxContentLength,
+		)
 	} else if isSupportedTextType(item.ContentType) {
 		content, processErr = readBodyAsString(resp.Body)
 	} else {
-		item.Error = fmt.Sprintf("unsupported content type: %s", item.ContentType)
+		item.Error = unsupportedContentTypeError(item.ContentType)
 		return item
 	}
 
@@ -305,6 +335,58 @@ func (t *webFetchTool) fetchOne(ctx context.Context, urlStr string) resultItem {
 
 	item.Content = content
 	return item
+}
+
+func httpStatusError(resp *http.Response) string {
+	msg := fmt.Sprintf("HTTP status %s", resp.Status)
+	if snippet := httpErrorBodySnippet(resp); snippet != "" {
+		msg += "; body: " + snippet
+	}
+	return msg
+}
+
+func httpErrorBodySnippet(resp *http.Response) string {
+	data, err := io.ReadAll(io.LimitReader(
+		resp.Body,
+		maxHTTPErrorBodyLength+1,
+	))
+	if err != nil {
+		return ""
+	}
+	truncated := len(data) > maxHTTPErrorBodyLength
+	if truncated {
+		data = data[:maxHTTPErrorBodyLength]
+	}
+	text := string(data)
+	contentType := strings.Split(resp.Header.Get("Content-Type"), ";")[0]
+	if strings.TrimSpace(contentType) == "text/html" {
+		if converted, err := convertHTMLToMarkdownWithOptions(
+			bytes.NewReader(data),
+			true,
+		); err == nil {
+			text = converted
+		}
+	}
+	text = strings.ToValidUTF8(text, "")
+	text = strings.Join(strings.Fields(text), " ")
+	if text == "" {
+		return ""
+	}
+	if truncated {
+		text += "..."
+	}
+	return text
+}
+
+func unsupportedContentTypeError(contentType string) string {
+	contentType = strings.TrimSpace(contentType)
+	if contentType == "" {
+		contentType = "unknown"
+	}
+	msg := fmt.Sprintf("unsupported content type: %s", contentType)
+	return msg + "; web_fetch extracts HTML, text-like responses, JSON, " +
+		"and PDFs. For other binary documents, download the file and " +
+		"use an appropriate document-reading tool instead."
 }
 
 // truncateString truncates a string to n bytes, ensuring valid UTF-8.
@@ -359,23 +441,379 @@ func readBodyAsString(r io.Reader) (string, error) {
 	return buf.String(), nil
 }
 
+const pdfLineYTolerance = 2.0
+
+func readPDFAsText(r io.Reader, maxBodyBytes int) (string, error) {
+	data, err := readPDFBody(r, maxBodyBytes)
+	if err != nil {
+		return "", err
+	}
+	reader, err := pdfpkg.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return "", fmt.Errorf("read pdf: %w", err)
+	}
+
+	var text strings.Builder
+	pageCount := reader.NumPage()
+	for pageIndex := 1; pageIndex <= pageCount; pageIndex++ {
+		pageText, err := readPDFPageText(reader.Page(pageIndex))
+		if err != nil {
+			return "", fmt.Errorf("read pdf page %d: %w", pageIndex, err)
+		}
+		pageText = strings.TrimSpace(pageText)
+		if pageText == "" {
+			continue
+		}
+		if text.Len() > 0 {
+			text.WriteString("\n\n")
+		}
+		text.WriteString(pageText)
+	}
+	return strings.ToValidUTF8(text.String(), ""), nil
+}
+
+func readPDFBody(r io.Reader, maxBodyBytes int) ([]byte, error) {
+	if maxBodyBytes <= 0 {
+		data, err := io.ReadAll(r)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read response body: %w", err)
+		}
+		return data, nil
+	}
+	data, err := io.ReadAll(io.LimitReader(r, int64(maxBodyBytes)+1))
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+	if len(data) > maxBodyBytes {
+		return nil, fmt.Errorf(
+			"pdf response body exceeds per-url content limit of %d bytes",
+			maxBodyBytes,
+		)
+	}
+	return data, nil
+}
+
+func readPDFPageText(page pdfpkg.Page) (text string, err error) {
+	if page.V.IsNull() {
+		return "", nil
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("read pdf page content: %v", recovered)
+		}
+	}()
+	return pdfPageText(page.Content().Text), nil
+}
+
+func pdfPageText(text []pdfpkg.Text) string {
+	if len(text) == 0 {
+		return ""
+	}
+	fragments := append([]pdfpkg.Text(nil), text...)
+	sort.Sort(pdfpkg.TextVertical(fragments))
+
+	var b strings.Builder
+	var last pdfpkg.Text
+	haveLast := false
+	for _, fragment := range fragments {
+		if fragment.S == "" {
+			continue
+		}
+		if haveLast {
+			if math.Abs(fragment.Y-last.Y) > pdfLineYTolerance {
+				trimTrailingSpaces(&b)
+				b.WriteByte('\n')
+			} else if shouldSeparatePDFText(last, fragment) {
+				b.WriteByte(' ')
+			}
+		}
+		b.WriteString(fragment.S)
+		last = fragment
+		haveLast = true
+	}
+	return b.String()
+}
+
+func shouldSeparatePDFText(prev, next pdfpkg.Text) bool {
+	if strings.HasSuffix(prev.S, " ") || strings.HasPrefix(next.S, " ") {
+		return false
+	}
+	gap := next.X - (prev.X + prev.W)
+	if gap <= 0 {
+		return false
+	}
+	size := math.Max(prev.FontSize, next.FontSize)
+	if size <= 0 {
+		size = 12
+	}
+	return gap > size*0.25
+}
+
+func trimTrailingSpaces(b *strings.Builder) {
+	s := b.String()
+	trimmed := strings.TrimRight(s, " \t")
+	if len(trimmed) == len(s) {
+		return
+	}
+	b.Reset()
+	b.WriteString(trimmed)
+}
+
 func convertHTMLToMarkdown(r io.Reader) (string, error) {
+	return convertHTMLToMarkdownWithOptions(r, false)
+}
+
+func convertHTMLToMarkdownWithOptions(
+	r io.Reader,
+	mainContentOnly bool,
+) (string, error) {
+	bodyBytes, err := io.ReadAll(r)
+	if err != nil {
+		return "", err
+	}
+
 	conv := converter.NewConverter(
 		converter.WithPlugins(
 			base.NewBasePlugin(),
 			commonmark.NewCommonmarkPlugin(),
 		),
 	)
-
-	bodyBytes, err := io.ReadAll(r)
+	source := markdownSourceHTML(bodyBytes, mainContentOnly)
+	markdown, err := conv.ConvertString(source)
 	if err != nil {
 		return "", err
 	}
-
-	markdown, err := conv.ConvertString(string(bodyBytes))
-	if err != nil {
-		return "", err
+	if strings.TrimSpace(markdown) == "" {
+		text, fallbackErr := htmlVisibleTextFallback([]byte(source))
+		if errors.Is(fallbackErr, errNoVisibleHTMLText) {
+			return markdown, nil
+		}
+		if fallbackErr != nil {
+			return "", fallbackErr
+		}
+		return text, nil
 	}
 
 	return markdown, nil
+}
+
+func htmlVisibleTextFallback(raw []byte) (string, error) {
+	return htmlVisibleTextFallbackFromReader(bytes.NewReader(raw), raw)
+}
+
+func htmlVisibleTextFallbackFromReader(
+	r io.Reader,
+	_ []byte,
+) (string, error) {
+	doc, err := html.Parse(r)
+	if err != nil {
+		return "", fmt.Errorf("parse HTML for visible-text fallback: %w", err)
+	}
+
+	var chunks []string
+	walkHTML(doc, func(n *html.Node) {
+		if n.Type != html.TextNode || hasInvisibleHTMLAncestor(n.Parent) {
+			return
+		}
+		text := strings.Join(strings.Fields(n.Data), " ")
+		if text != "" {
+			chunks = append(chunks, text)
+		}
+	})
+	if len(chunks) == 0 {
+		return "", errNoVisibleHTMLText
+	}
+	return strings.Join(chunks, "\n"), nil
+}
+
+func markdownSourceHTML(raw []byte, mainContentOnly bool) string {
+	if !mainContentOnly {
+		return string(raw)
+	}
+
+	doc, err := html.Parse(bytes.NewReader(raw))
+	if err != nil {
+		return string(raw)
+	}
+
+	node := preferredContentNode(doc)
+	if node == nil {
+		node = doc
+	}
+	removeNoisyHTMLNodes(node)
+
+	var out strings.Builder
+	if err := html.Render(&out, node); err != nil {
+		return string(raw)
+	}
+	if strings.TrimSpace(out.String()) == "" {
+		return string(raw)
+	}
+	return out.String()
+}
+
+func preferredContentNode(root *html.Node) *html.Node {
+	if node := findHTMLNode(root, func(n *html.Node) bool {
+		return n.Type == html.ElementNode && htmlAttr(n, "role") == "main"
+	}); node != nil {
+		return node
+	}
+	if node := findHTMLNode(root, func(n *html.Node) bool {
+		return n.Type == html.ElementNode &&
+			(n.Data == "main" || n.Data == "article")
+	}); node != nil {
+		return node
+	}
+	return bestContentNode(root)
+}
+
+func bestContentNode(root *html.Node) *html.Node {
+	var best *html.Node
+	bestScore := 0
+	walkHTML(root, func(n *html.Node) {
+		if !isContentCandidateNode(n) {
+			return
+		}
+		score := visibleTextLen(n)
+		if score > bestScore {
+			best = n
+			bestScore = score
+		}
+	})
+	return best
+}
+
+func isContentCandidateNode(n *html.Node) bool {
+	if n == nil || n.Type != html.ElementNode || isNoisyHTMLNode(n) {
+		return false
+	}
+	switch strings.ToLower(n.Data) {
+	case "main", "article", "section", "div":
+		return true
+	default:
+		return false
+	}
+}
+
+func visibleTextLen(n *html.Node) int {
+	if n == nil || isNoisyHTMLNode(n) {
+		return 0
+	}
+	if n.Type == html.TextNode {
+		return len(strings.TrimSpace(n.Data))
+	}
+	total := 0
+	for child := n.FirstChild; child != nil; child = child.NextSibling {
+		total += visibleTextLen(child)
+	}
+	return total
+}
+
+func walkHTML(root *html.Node, visit func(*html.Node)) {
+	if root == nil {
+		return
+	}
+	visit(root)
+	for child := root.FirstChild; child != nil; child = child.NextSibling {
+		walkHTML(child, visit)
+	}
+}
+
+func findHTMLNode(
+	root *html.Node,
+	matches func(*html.Node) bool,
+) *html.Node {
+	if root == nil {
+		return nil
+	}
+	if matches(root) {
+		return root
+	}
+	for child := root.FirstChild; child != nil; child = child.NextSibling {
+		if found := findHTMLNode(child, matches); found != nil {
+			return found
+		}
+	}
+	return nil
+}
+
+func removeNoisyHTMLNodes(root *html.Node) {
+	for child := root.FirstChild; child != nil; {
+		next := child.NextSibling
+		if isNoisyHTMLNode(child) {
+			root.RemoveChild(child)
+		} else {
+			removeNoisyHTMLNodes(child)
+		}
+		child = next
+	}
+}
+
+func isNoisyHTMLNode(n *html.Node) bool {
+	if n.Type != html.ElementNode {
+		return false
+	}
+	if isInvisibleHTMLNode(n) {
+		return true
+	}
+	switch strings.ToLower(n.Data) {
+	case "nav", "header", "footer", "form":
+		return true
+	}
+	return false
+}
+
+func hasInvisibleHTMLAncestor(n *html.Node) bool {
+	for n != nil {
+		if isInvisibleHTMLNode(n) {
+			return true
+		}
+		n = n.Parent
+	}
+	return false
+}
+
+func isInvisibleHTMLNode(n *html.Node) bool {
+	if n == nil || n.Type != html.ElementNode {
+		return false
+	}
+	switch strings.ToLower(n.Data) {
+	case "script", "style", "noscript", "template", "svg":
+		return true
+	}
+	if hasHTMLAttr(n, "hidden") {
+		return true
+	}
+	if strings.EqualFold(htmlAttr(n, "aria-hidden"), "true") {
+		return true
+	}
+	style := strings.ToLower(htmlAttr(n, "style"))
+	return strings.Contains(style, "display:none") ||
+		strings.Contains(style, "display: none") ||
+		strings.Contains(style, "visibility:hidden") ||
+		strings.Contains(style, "visibility: hidden")
+}
+
+func htmlAttr(n *html.Node, key string) string {
+	if n == nil {
+		return ""
+	}
+	for i := range n.Attr {
+		if strings.EqualFold(n.Attr[i].Key, key) {
+			return strings.TrimSpace(n.Attr[i].Val)
+		}
+	}
+	return ""
+}
+
+func hasHTMLAttr(n *html.Node, key string) bool {
+	if n == nil {
+		return false
+	}
+	for i := range n.Attr {
+		if strings.EqualFold(n.Attr[i].Key, key) {
+			return true
+		}
+	}
+	return false
 }

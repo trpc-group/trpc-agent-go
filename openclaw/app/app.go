@@ -33,7 +33,9 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unicode"
 
+	openaiopt "github.com/openai/openai-go/option"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/claudecode"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
@@ -203,8 +205,12 @@ const (
 		"pattern, or to remember an executable workflow or " +
 		"integration, prefer creating or updating a local " +
 		"skill over treating it as a one-off answer. For " +
-		"lightweight facts, preferences, or simple standing " +
-		"rules, use memory instead. " +
+		"lightweight facts, stable persona or tone preferences, " +
+		"and simple non-procedural standing facts, use memory " +
+		"instead. Do not use memory for reusable task workflows, " +
+		"output formats, tool procedures, or post-task feedback " +
+		"unless the user explicitly asks to save that content as " +
+		"memory. " +
 		"Use platform code and tools for stable safety " +
 		"boundaries, secrets, permissions, file paths, " +
 		"validation, and execution guarantees; use skill " +
@@ -257,6 +263,28 @@ const (
 		"prior knowledge, or partial memory when a matching " +
 		"skill exists. Load `SKILL.md` first, then load " +
 		"only the extra docs you still need."
+	openClawShellSharedGuidance = "Do not use exec_command for public web search " +
+		"or static page fetches when duckduckgo_search or web_fetch is " +
+		"present; reserve shell network commands for installed media " +
+		"tools, deterministic data processing, or sites not covered by " +
+		"a dedicated web tool. Do not use host system package managers " +
+		"such as apt, yum, dnf, apk, pacman, zypper, or brew from chat; " +
+		"use preconfigured dependencies or ask for an explicit setup " +
+		"flow. "
+	openClawHostShellGuidance = "For other general local shell work, " +
+		"use exec_command. " +
+		openClawShellSharedGuidance +
+		"For interactive follow-up input, use write_stdin and " +
+		"kill_session when needed. Use message to send to the current " +
+		"chat or an explicit target. "
+	openClawSandboxShellGuidance = "For other general local shell work, " +
+		"use exec_command. In sandbox mode, exec_command only supports " +
+		"foreground non-interactive commands; write_stdin, kill_session, " +
+		"background execution, TTY allocation, and session continuation " +
+		"are unavailable. " +
+		openClawShellSharedGuidance +
+		"Use message to send to the current chat or an explicit " +
+		"target. "
 	openClawToolingGuidance = "For common PDF, DOCX, text, CSV, " +
 		"and spreadsheet uploads already in the chat, prefer " +
 		"read_document or read_spreadsheet before falling back " +
@@ -268,11 +296,35 @@ const (
 		"available in the current session. " +
 		"Do not call exec_command just to print OPENCLAW_* upload " +
 		"vars or inspect recent upload metadata when a matching " +
-		"chat file is already available. For other general local " +
-		"shell work, use exec_command. For interactive follow-up " +
-		"input, use " +
-		"write_stdin and kill_session when needed. Use message " +
-		"to send to the current chat or an explicit target. " +
+		"chat file is already available. " +
+		openClawHostShellGuidance +
+		"When a web search tool such as duckduckgo_search is " +
+		"present, use it for general web search before using " +
+		"browser automation or web_fetch against search engine " +
+		"result pages. Use web_fetch for known result URLs. Use " +
+		"the returned web_fetch content as primary evidence when " +
+		"it has status 200; search or parse that returned content " +
+		"before switching to browser automation, downloading large " +
+		"exports, or retrying alternate mirrors. If a successful " +
+		"fetch result is too long, truncated, or hidden behind " +
+		"history compaction, use session_load with content_limit " +
+		"and content_offset around that tool result instead of " +
+		"refetching the same static page through browser. Use " +
+		"browser only when a page requires JavaScript rendering, " +
+		"interaction, download handling, screenshots, or visual " +
+		"verification; do not drive Google, Bing, or DuckDuckGo " +
+		"result pages through browser when a search tool is " +
+		"available. If a public site repeatedly blocks access " +
+		"with sign-in, bot-check, CAPTCHA, or anti-automation " +
+		"errors and the user has not provided credentials, stop " +
+		"retrying that blocked path; use search, fetch, metadata, " +
+		"or the evidence already available to complete the task or " +
+		"state the exact blocker. When searches return no useful " +
+		"results or a source is blocked, diversify instead of " +
+		"repeating the same constrained query: remove site/date " +
+		"filters, search distinctive entities plus the requested " +
+		"fact, and try credible mirrors, metadata, publisher, " +
+		"or press-release pages. " +
 		artifactCompletionRule + " " +
 		"Use the available tool path to complete the request " +
 		"in this turn. " +
@@ -339,8 +391,11 @@ const (
 		"absolute image paths on their own lines. OpenClaw can " +
 		"reattach those generated images to the model for direct " +
 		"visual inspection, so inspect the image before assuming " +
-		"OCR failed. If you intentionally " +
-		"use that directive path, keep the visible prose separate " +
+		"OCR failed. Do not open local files through browser " +
+		"`file://` URLs or ad hoc localhost/127.0.0.1 servers; " +
+		"normal browser policy blocks those paths and wastes " +
+		"tool calls. If you intentionally " +
+		"use the MEDIA directive path, keep the visible prose separate " +
 		"from the `MEDIA:` lines. If a compatible audio reply " +
 		"should arrive as a Telegram voice bubble instead of a " +
 		"generic audio file, call message with as_voice=true or " +
@@ -365,10 +420,14 @@ const (
 		"remember or asks to inspect memory, read the relevant " +
 		"file and quote or summarize the relevant lines. If the " +
 		"user explicitly says 'remember this' or asks you to " +
-		"remember a durable fact, preference, workflow rule, task " +
-		"list, or reminder list, update the narrowest relevant " +
+		"remember a durable fact, preference, task list, " +
+		"checklist, or reminder list, update the narrowest relevant " +
 		"memory file with a short bullet in the same turn. Do not " +
-		"store secrets or large transcripts in memory files. " +
+		"store secrets or large transcripts in memory files. Do not " +
+		"store reusable task workflows, output formats, tool " +
+		"procedures, or post-task feedback in memory files unless " +
+		"the user explicitly " +
+		"asks to save that content as memory. " +
 		"If a memory file does not exist yet, you may create it " +
 		"at that exact path. Prefer already installed local tools " +
 		"for OCR, PDF, audio, image, and video work before " +
@@ -387,10 +446,30 @@ const (
 		"latency-sensitive tools kept directly available when " +
 		"configured. Use direct tools for simple local actions when " +
 		"they are present. Use `tool_search` when you need exact " +
-		"tool or skill names, then call `dynamic_agent` for broader " +
+		"tool or skill names, then call `dynamic_agent`; pass exact " +
+		"tool names such as web_fetch or browser in its `tools` " +
+		"field, and pass only real skill names in its `skills` " +
+		"field. Skill-backed work is tool-backed work. If a direct " +
+		"`skill_load` tool is available and the user names a skill or " +
+		"the task clearly matches a listed skill description, call " +
+		"`skill_load` first. If direct `skill_load` is unavailable, " +
+		"use `tool_search` to find the matching skill, then call " +
+		"`dynamic_agent` with that skill name. Do not answer a " +
+		"matching skill task directly from prior knowledge before the " +
+		"skill has been loaded or delegated. Use `dynamic_agent` for broader " +
 		"files, uploads, browser automation, shell work, messaging, " +
 		"cron, memory, skills, knowledge, external tools, or " +
-		"verification. Give the sub-agent a self-contained request " +
+		"verification. For public web research, include search and " +
+		"fetch tools with browser workers when those tools are " +
+		"available; avoid browser-only workers for search-engine " +
+		"lookup or static page fetches. Give the sub-agent a " +
+		"clear instruction to inspect successful web_fetch results " +
+		"first and to report when a result is truncated instead " +
+		"of looping through browser snapshots. For blocked or empty " +
+		"web research, ask the worker to diversify queries and " +
+		"evidence sources before returning the exact blocker. Give " +
+		"the sub-agent a " +
+		"self-contained request " +
 		"and ask it to complete the concrete action or return the " +
 		"exact blocker. Answer directly only when no tool work is " +
 		"needed."
@@ -408,7 +487,22 @@ const (
 		"verification matters, and keep using the same targetId " +
 		"after tabs or snapshot calls. When the user mentions " +
 		"their current browser tab, relay, or extension attach " +
-		"flow, use profile=\"chrome\" when that profile exists."
+		"flow, use profile=\"chrome\" when that profile exists. " +
+		"Do not use browser as a substitute for web search or " +
+		"fetching known static URLs; if a worker needs those " +
+		"capabilities but they are unavailable, return the exact " +
+		"missing search/fetch blocker. " +
+		"Browser snapshots are for current page structure and " +
+		"interactive state, not bulk extraction of long static " +
+		"documents; when static page text is needed, prefer " +
+		"web_fetch or file/document tools and use browser only " +
+		"for the specific rendered or visual evidence those tools " +
+		"cannot provide. " +
+		"Do not use browser to open local or generated files " +
+		"through file://, data:, or ad hoc localhost/127.0.0.1 " +
+		"URLs unless the runtime explicitly exposes that server; " +
+		"use file/document/exec tools and MEDIA or MEDIA_DIR " +
+		"outputs for local media inspection."
 
 	agentTypeLLM        = "llm"
 	agentTypeClaudeCode = "claude-code"
@@ -417,11 +511,16 @@ const (
 
 	defaultOpenAIVariant = openAIVariantAuto
 
+	defaultExecResultOutputChars = 20_000
+
 	deepSeekAPIHost = "api.deepseek.com"
 	qwenAPIHost     = "dashscope.aliyuncs.com"
 	hunyuanAPIHost  = "api.hunyuan.cloud.tencent.com"
+	glmAPIHost      = "open.bigmodel.cn"
 
+	openAIAPIKeyEnvName  = "OPENAI_API_KEY"
 	openAIBaseURLEnvName = "OPENAI_BASE_URL"
+	openAIHeadersEnvName = "OPENAI_HEADERS"
 	openAIModelEnvName   = "OPENAI_MODEL"
 
 	errClaudeCodeAgentNoPrompts = "claude-code agent does not support " +
@@ -698,6 +797,7 @@ type Runtime struct {
 	cronSvc           closeFunc
 	subagentSvc       closeFunc
 	skillsWatch       closeFunc
+	tools             []tool.Tool
 	evolutionService  evolution.Service
 	toolSets          []tool.ToolSet
 	telemetryShutdown func(context.Context) error
@@ -990,6 +1090,7 @@ func NewRuntimeWithOptions(
 				Err:  fmt.Errorf("create model failed: %w", err),
 			}
 		}
+		mdl = newModelCallBudgetModel(mdl)
 	}
 
 	instanceID := runtimeInstanceID(
@@ -1039,21 +1140,49 @@ func NewRuntimeWithOptions(
 		opts.MemoryBackend,
 		stores.memoryFiles,
 	)
+	codeExec, err := codeExecutorLoader(runtimeOpts)(
+		resolvedStateDir,
+		opts.EnableLocalExec,
+		opts.CodeExecutor,
+	)
+	if err != nil {
+		return nil, &exitError{
+			Code: 1,
+			Err:  fmt.Errorf("create code executor failed: %w", err),
+		}
+	}
+	var sandboxExecEngine codeexecutor.Engine
+	if isSandboxCodeExecutor(opts.CodeExecutor) {
+		sandboxExecEngine = codeExecutorEngine(codeExec)
+		if sandboxExecEngine == nil {
+			return nil, &exitError{
+				Code: 1,
+				Err: errors.New(
+					"sandbox code executor does not expose a program runner",
+				),
+			}
+		}
+	}
 	openClawTools := buildOpenClawTools(
 		opts.EnableOpenClawTools,
 		resolvedStateDir,
 		stores.uploads,
 		fileMemoryStore,
+		sandboxExecEngine,
+		opts.HostExecDefaultTimeout,
+		opts.HostExecMaxTimeout,
+		opts.HostExecMaxYield,
 	)
 	extraTools := memoryServiceTools(memSvc)
 	extraTools = append(extraTools, openClawTools.tools...)
 
 	var (
-		toolSets    []tool.ToolSet
-		ag          agent.Agent
-		skillsRepo  *ocskills.Repository
-		skillsProv  skill.RepositoryProvider
-		skillsWatch *ocskills.WatchService
+		toolSets     []tool.ToolSet
+		runtimeTools []tool.Tool
+		ag           agent.Agent
+		skillsRepo   *ocskills.Repository
+		skillsProv   skill.RepositoryProvider
+		skillsWatch  *ocskills.WatchService
 	)
 	if agentType == agentTypeClaudeCode {
 		ag, err = newClaudeCodeAgent(opts)
@@ -1070,19 +1199,24 @@ func NewRuntimeWithOptions(
 				Err:  fmt.Errorf("create toolsets failed: %w", err),
 			}
 		}
+		postToolPromptEnabled := resolvePostToolPromptEnabled(
+			opts,
+			runtimeOpts,
+		)
 		agentCfg := agentConfig{
 			AppName:                 opts.AppName,
 			AddSessionSummary:       opts.AddSessionSummary,
 			EnableContextCompaction: opts.EnableContextCompaction,
 			ContextCompactionOversizedToolResultMaxTokens: opts.
 				ContextCompactionOversizedToolResultMaxTokens,
-			MaxHistoryRuns:   opts.MaxHistoryRuns,
-			PreloadMemory:    opts.PreloadMemory,
-			GenerationConfig: opts.GenerationConfig,
-			PostToolPromptEnabled: runtimeOpts.
-				postToolPromptEnabled,
-			Instruction:  prompts.Instruction,
-			SystemPrompt: prompts.SystemPrompt,
+			MaxHistoryRuns:        opts.MaxHistoryRuns,
+			MaxLLMCalls:           opts.MaxLLMCalls,
+			MaxToolIterations:     opts.MaxToolIterations,
+			PreloadMemory:         opts.PreloadMemory,
+			GenerationConfig:      opts.GenerationConfig,
+			PostToolPromptEnabled: postToolPromptEnabled,
+			Instruction:           prompts.Instruction,
+			SystemPrompt:          prompts.SystemPrompt,
 
 			SkillsRoot:      opts.SkillsRoot,
 			SkillsExtraDirs: splitCSV(opts.SkillsExtraDir),
@@ -1114,6 +1248,7 @@ func NewRuntimeWithOptions(
 			EnableOpenClawTools:  opts.EnableOpenClawTools,
 			OpenClawToolingGuide: opts.OpenClawToolingGuide,
 			EnableParallelTools:  opts.EnableParallelTools,
+			codeExecutor:         codeExec,
 
 			ToolProviders: opts.ToolProviders,
 			ToolSets:      opts.ToolSets,
@@ -1123,13 +1258,20 @@ func NewRuntimeWithOptions(
 			DeferToolSurfaceMode: opts.DeferToolSurfaceMode,
 			DeferToolSurfaceThresholdChars: opts.
 				DeferToolSurfaceChars,
+			DeferToolSurfaceDefaultDirectTools: boolPtr(
+				opts.DeferToolSurfaceDefaultDirectTools,
+			),
 			DeferToolSurfaceDirectTools: splitCSV(
 				opts.DeferToolSurfaceDirect,
 			),
+			DynamicAgentTimeout: opts.DynamicAgentTimeout,
 		}
 		cwd, _ := os.Getwd()
 		skillsProv = newScopedSkillRepositoryProvider(cwd, agentCfg)
 		agentCfg.SkillRepositoryProvider = skillsProv
+		agentCfg.ownedToolsSink = func(tools []tool.Tool) {
+			runtimeTools = tools
+		}
 		ag, skillsRepo, err = newAgent(
 			mdl,
 			agentCfg,
@@ -1145,6 +1287,7 @@ func NewRuntimeWithOptions(
 		}
 	}
 	if err != nil {
+		closeTools(runtimeTools)
 		closeToolSets(toolSets)
 		return nil, &exitError{
 			Code: 1,
@@ -1157,6 +1300,7 @@ func NewRuntimeWithOptions(
 		prompts.SystemPrompt,
 	)
 	rt.toolSets = toolSets
+	rt.tools = runtimeTools
 	rt.skillsWatch = skillsWatch
 
 	bridgedSessionSvc := conversationscope.WrapSessionService(sessionSvc)
@@ -1205,6 +1349,7 @@ func NewRuntimeWithOptions(
 		splitCSV(opts.AllowUsers),
 		opts.RequireMention,
 		mentionPatterns,
+		opts.GatewayMaxBodyBytes,
 	)
 	gwOpts = append(gwOpts, gateway.WithAppName(opts.AppName))
 	gwOpts = append(gwOpts, gateway.WithUploadStore(stores.uploads))
@@ -1222,6 +1367,11 @@ func NewRuntimeWithOptions(
 		gwOpts,
 		runtimeProfileResolver,
 		runtimeProfileRequired,
+	)
+	gwOpts = appendModelCallBudgetGatewayOption(
+		gwOpts,
+		opts.MaxLLMCalls,
+		opts.FinalizeBeforeMaxLLMCalls,
 	)
 	if langfuseRT != nil && langfuseRT.runOptionResolver != nil {
 		gwOpts = append(
@@ -1242,6 +1392,10 @@ func NewRuntimeWithOptions(
 		opts.SkillsOverviewLimit,
 		splitCSV(opts.SkillsOverviewPinned),
 	)
+	gwOpts = appendToolCallArgumentsJSONRepairGatewayOption(
+		gwOpts,
+		opts.ToolCallArgumentsJSONRepair,
+	)
 	gwOpts = append(
 		gwOpts,
 		gateway.WithRunOptionResolver(
@@ -1258,6 +1412,7 @@ func NewRuntimeWithOptions(
 			),
 		),
 	)
+	gwOpts = appendModelCompatibilityGatewayRunOptions(gwOpts, opts)
 	gwOpts = appendRuntimeGatewayRunOptions(gwOpts, runtimeOpts)
 	gwSrv, err := gateway.New(r, gwOpts...)
 	if err != nil {
@@ -1446,6 +1601,7 @@ func (r *Runtime) Close() error {
 			errs = append(errs, err)
 		}
 	}
+	closeTools(r.tools)
 	closeToolSets(r.toolSets)
 	closeMemoryService(r.memorySvc)
 	closeSessionService(r.sessionSvc)
@@ -1560,6 +1716,7 @@ func run(
 				Err:  fmt.Errorf("create model failed: %w", err),
 			}
 		}
+		mdl = newModelCallBudgetModel(mdl)
 	}
 
 	instanceID := runtimeInstanceID(
@@ -1608,23 +1765,52 @@ func run(
 		opts.MemoryBackend,
 		stores.memoryFiles,
 	)
+	codeExec, err := codeExecutorLoader(runtimeOpts)(
+		resolvedStateDir,
+		opts.EnableLocalExec,
+		opts.CodeExecutor,
+	)
+	if err != nil {
+		return &exitError{
+			Code: 1,
+			Err:  fmt.Errorf("create code executor failed: %w", err),
+		}
+	}
+	var sandboxExecEngine codeexecutor.Engine
+	if isSandboxCodeExecutor(opts.CodeExecutor) {
+		sandboxExecEngine = codeExecutorEngine(codeExec)
+		if sandboxExecEngine == nil {
+			return &exitError{
+				Code: 1,
+				Err: errors.New(
+					"sandbox code executor does not expose a program runner",
+				),
+			}
+		}
+	}
 	openClawTools := buildOpenClawTools(
 		opts.EnableOpenClawTools,
 		resolvedStateDir,
 		stores.uploads,
 		fileMemoryStore,
+		sandboxExecEngine,
+		opts.HostExecDefaultTimeout,
+		opts.HostExecMaxTimeout,
+		opts.HostExecMaxYield,
 	)
 	extraTools := memoryServiceTools(memSvc)
 	extraTools = append(extraTools, openClawTools.tools...)
 
 	var (
-		toolSets    []tool.ToolSet
-		ag          agent.Agent
-		skillsRepo  *ocskills.Repository
-		skillsProv  skill.RepositoryProvider
-		skillsWatch *ocskills.WatchService
+		toolSets     []tool.ToolSet
+		runtimeTools []tool.Tool
+		ag           agent.Agent
+		skillsRepo   *ocskills.Repository
+		skillsProv   skill.RepositoryProvider
+		skillsWatch  *ocskills.WatchService
 	)
 	defer func() {
+		closeTools(runtimeTools)
 		closeToolSets(toolSets)
 	}()
 	defer func() {
@@ -1650,19 +1836,24 @@ func run(
 				Err:  fmt.Errorf("create toolsets failed: %w", err),
 			}
 		}
+		postToolPromptEnabled := resolvePostToolPromptEnabled(
+			opts,
+			runtimeOpts,
+		)
 		agentCfg := agentConfig{
 			AppName:                 opts.AppName,
 			AddSessionSummary:       opts.AddSessionSummary,
 			EnableContextCompaction: opts.EnableContextCompaction,
 			ContextCompactionOversizedToolResultMaxTokens: opts.
 				ContextCompactionOversizedToolResultMaxTokens,
-			MaxHistoryRuns:   opts.MaxHistoryRuns,
-			PreloadMemory:    opts.PreloadMemory,
-			GenerationConfig: opts.GenerationConfig,
-			PostToolPromptEnabled: runtimeOpts.
-				postToolPromptEnabled,
-			Instruction:  prompts.Instruction,
-			SystemPrompt: prompts.SystemPrompt,
+			MaxHistoryRuns:        opts.MaxHistoryRuns,
+			MaxLLMCalls:           opts.MaxLLMCalls,
+			MaxToolIterations:     opts.MaxToolIterations,
+			PreloadMemory:         opts.PreloadMemory,
+			GenerationConfig:      opts.GenerationConfig,
+			PostToolPromptEnabled: postToolPromptEnabled,
+			Instruction:           prompts.Instruction,
+			SystemPrompt:          prompts.SystemPrompt,
 
 			SkillsRoot:      opts.SkillsRoot,
 			SkillsExtraDirs: splitCSV(opts.SkillsExtraDir),
@@ -1693,6 +1884,7 @@ func run(
 			CodeExecutor:        opts.CodeExecutor,
 			EnableOpenClawTools: opts.EnableOpenClawTools,
 			EnableParallelTools: opts.EnableParallelTools,
+			codeExecutor:        codeExec,
 
 			ToolProviders: opts.ToolProviders,
 			ToolSets:      opts.ToolSets,
@@ -1702,13 +1894,20 @@ func run(
 			DeferToolSurfaceMode: opts.DeferToolSurfaceMode,
 			DeferToolSurfaceThresholdChars: opts.
 				DeferToolSurfaceChars,
+			DeferToolSurfaceDefaultDirectTools: boolPtr(
+				opts.DeferToolSurfaceDefaultDirectTools,
+			),
 			DeferToolSurfaceDirectTools: splitCSV(
 				opts.DeferToolSurfaceDirect,
 			),
+			DynamicAgentTimeout: opts.DynamicAgentTimeout,
 		}
 		cwd, _ := os.Getwd()
 		skillsProv = newScopedSkillRepositoryProvider(cwd, agentCfg)
 		agentCfg.SkillRepositoryProvider = skillsProv
+		agentCfg.ownedToolsSink = func(tools []tool.Tool) {
+			runtimeTools = tools
+		}
 		ag, skillsRepo, err = newAgent(
 			mdl,
 			agentCfg,
@@ -1781,6 +1980,7 @@ func run(
 		splitCSV(opts.AllowUsers),
 		opts.RequireMention,
 		mentionPatterns,
+		opts.GatewayMaxBodyBytes,
 	)
 	gwOpts = append(gwOpts, gateway.WithAppName(opts.AppName))
 	gwOpts = append(gwOpts, gateway.WithUploadStore(stores.uploads))
@@ -1798,6 +1998,11 @@ func run(
 		gwOpts,
 		runtimeProfileResolver,
 		runtimeProfileRequired,
+	)
+	gwOpts = appendModelCallBudgetGatewayOption(
+		gwOpts,
+		opts.MaxLLMCalls,
+		opts.FinalizeBeforeMaxLLMCalls,
 	)
 	if langfuseRT != nil && langfuseRT.runOptionResolver != nil {
 		gwOpts = append(
@@ -1818,6 +2023,10 @@ func run(
 		opts.SkillsOverviewLimit,
 		splitCSV(opts.SkillsOverviewPinned),
 	)
+	gwOpts = appendToolCallArgumentsJSONRepairGatewayOption(
+		gwOpts,
+		opts.ToolCallArgumentsJSONRepair,
+	)
 	gwOpts = append(
 		gwOpts,
 		gateway.WithRunOptionResolver(
@@ -1834,6 +2043,7 @@ func run(
 			),
 		),
 	)
+	gwOpts = appendModelCompatibilityGatewayRunOptions(gwOpts, opts)
 	gwOpts = appendRuntimeGatewayRunOptions(gwOpts, runtimeOpts)
 	gwSrv, err := gateway.New(r, gwOpts...)
 	if err != nil {
@@ -2149,6 +2359,24 @@ func closeMemoryService(svc closeFunc) {
 	}
 }
 
+func closeTools(tools []tool.Tool) {
+	for _, tl := range tools {
+		closer, ok := tl.(closeFunc)
+		if !ok || closer == nil {
+			continue
+		}
+		name := "unknown"
+		if decl := tl.Declaration(); decl != nil {
+			if toolName := strings.TrimSpace(decl.Name); toolName != "" {
+				name = toolName
+			}
+		}
+		if err := closer.Close(); err != nil {
+			log.Warnf("close tool %q failed: %v", name, err)
+		}
+	}
+}
+
 func memoryServiceTools(svc memory.Service) []tool.Tool {
 	if svc == nil {
 		return nil
@@ -2301,8 +2529,12 @@ func makeGatewayOptions(
 	users []string,
 	requireMention bool,
 	mentionPatterns []string,
+	maxBodyBytes int64,
 ) []gateway.Option {
 	opts := make([]gateway.Option, 0, 4)
+	if maxBodyBytes > 0 {
+		opts = append(opts, gateway.WithMaxBodyBytes(maxBodyBytes))
+	}
 	if len(users) > 0 {
 		opts = append(opts, gateway.WithAllowUsers(users...))
 	}
@@ -2359,6 +2591,16 @@ func validateAgentRunOptions(agentType string, opts runOptions) error {
 			"claude-code agent does not support max-history-runs",
 		)
 	}
+	if opts.MaxToolIterations != 0 {
+		return errors.New(
+			"claude-code agent does not support max-tool-iterations",
+		)
+	}
+	if opts.MaxLLMCalls != 0 {
+		return errors.New(
+			"claude-code agent does not support max-llm-calls",
+		)
+	}
 	if opts.PreloadMemory != 0 {
 		return errors.New(
 			"claude-code agent does not support preload-memory",
@@ -2379,8 +2621,7 @@ func validateAgentRunOptions(agentType string, opts runOptions) error {
 			"claude-code agent does not support enable-local-exec",
 		)
 	}
-	if opts.CodeExecutor.Type != "" &&
-		opts.CodeExecutor.Type != codeExecutorTypeNone {
+	if opts.CodeExecutor.Type != "" {
 		return errors.New(
 			"claude-code agent does not support tools.code_executor",
 		)
@@ -2625,6 +2866,9 @@ func newAgent(
 		}
 		tools = append(tools, extra...)
 	}
+	if cfg.ownedToolsSink != nil {
+		cfg.ownedToolsSink(append([]tool.Tool(nil), tools...))
+	}
 
 	deferToolSurface, directTools, err := resolveDeferredToolSurface(
 		cfg,
@@ -2677,15 +2921,24 @@ func newAgent(
 		cfg.MemoryFileStore,
 		cfg.StateDir,
 	)
+	registerDynamicAgentBlockerCallback(callbacks)
+	registerToolArgumentGuardCallback(
+		callbacks,
+		os.Getenv(envBlockedToolArgumentSubstrings),
+	)
 	callbacks.RegisterToolResultMessages(openClawToolResultMessages)
 
-	exec, err := codeExecutorFromConfig(
-		cfg.StateDir,
-		cfg.EnableLocalExec,
-		cfg.CodeExecutor,
-	)
-	if err != nil {
-		return nil, nil, err
+	exec := cfg.codeExecutor
+	if exec == nil {
+		var err error
+		exec, err = codeExecutorFromConfig(
+			cfg.StateDir,
+			cfg.EnableLocalExec,
+			cfg.CodeExecutor,
+		)
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 
 	opts := baseLLMAgentOptions(
@@ -2705,6 +2958,12 @@ func newAgent(
 		)
 	}
 	if deferToolSurface {
+		opts = appendDeferredSkillOverviewOptions(
+			opts,
+			cfg,
+			repo,
+			repoProvider,
+		)
 		searchTool := newDeferredCapabilitySearchTool(
 			deferredToolSurfaceConfig{
 				Model:         mdl,
@@ -2766,15 +3025,32 @@ func codeExecutorFromConfig(
 		return nil, nil
 	}
 	switch typeName {
-	case codeExecutorTypeNone:
-		return nil, nil
-	case codeExecutorTypeLocal:
-		return localexec.New(), nil
 	case codeExecutorTypeSandbox:
 		return sandboxCodeExecutorFromConfig(stateDir, cfg.Sandbox), nil
 	default:
 		return nil, fmt.Errorf("unsupported code executor type: %s", typeName)
 	}
+}
+
+func isSandboxCodeExecutor(cfg codeExecutorOptions) bool {
+	return strings.ToLower(strings.TrimSpace(cfg.Type)) == codeExecutorTypeSandbox
+}
+
+func codeExecutorEngine(exec codeexecutor.CodeExecutor) codeexecutor.Engine {
+	provider, ok := exec.(codeexecutor.EngineProvider)
+	if !ok || provider == nil {
+		return nil
+	}
+	return provider.Engine()
+}
+
+func codeExecutorLoader(
+	runtimeOpts runtimeOptions,
+) codeExecutorConfigLoader {
+	if runtimeOpts.codeExecutorLoader != nil {
+		return runtimeOpts.codeExecutorLoader
+	}
+	return codeExecutorFromConfig
 }
 
 func sandboxCodeExecutorFromConfig(
@@ -2802,6 +3078,8 @@ func sandboxBackendFromConfig(raw string) sandboxexec.BackendType {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case sandboxBackendLinuxBubblewrap:
 		return sandboxexec.BackendLinuxBubblewrap
+	case sandboxBackendMacOSSandbox:
+		return sandboxexec.BackendMacOSSandboxExec
 	default:
 		return sandboxexec.BackendAuto
 	}
@@ -2872,7 +3150,42 @@ func buildOpenClawToolingGuidance(cfg agentConfig) string {
 	if cfg.OpenClawToolingGuide != nil {
 		return strings.TrimSpace(*cfg.OpenClawToolingGuide)
 	}
-	return strings.TrimSpace(openClawToolingGuidance)
+	guidance := strings.TrimSpace(openClawToolingGuidance)
+	if !isSandboxCodeExecutor(cfg.CodeExecutor) {
+		return guidance
+	}
+	guidance = strings.Replace(
+		guidance,
+		openClawHostShellGuidance,
+		openClawSandboxShellGuidance,
+		1,
+	)
+	guidance = strings.Replace(
+		guidance,
+		"Chat uploads are saved to stable host paths. For host "+
+			"commands, prefer OPENCLAW_LAST_UPLOAD_PATH or "+
+			"OPENCLAW_SESSION_UPLOADS_DIR, OPENCLAW_LAST_UPLOAD_HOST_REF, "+
+			"OPENCLAW_LAST_UPLOAD_NAME, "+
+			"OPENCLAW_LAST_UPLOAD_MIME, OPENCLAW_MEMORY_FILE, "+
+			"OPENCLAW_USER_MEMORY_FILE, OPENCLAW_CHAT_MEMORY_FILE, and "+
+			"OPENCLAW_RECENT_UPLOADS_JSON instead of guessing "+
+			"attachment paths. ",
+		"Chat uploads still provide stable OPENCLAW_* metadata, but sandbox "+
+			"exec_command does not automatically mount host paths such as "+
+			"OPENCLAW_LAST_UPLOAD_PATH, OPENCLAW_SESSION_UPLOADS_DIR, "+
+			"OPENCLAW_MEMORY_FILE, OPENCLAW_USER_MEMORY_FILE, or "+
+			"OPENCLAW_CHAT_MEMORY_FILE. Use that metadata for filenames and "+
+			"host refs, and avoid assuming those host paths are directly "+
+			"readable inside the sandbox. ",
+		1,
+	)
+	guidance = strings.Replace(
+		guidance,
+		"When exec_command or write_stdin generates images",
+		"When exec_command generates images",
+		1,
+	)
+	return guidance
 }
 
 func buildOpenClawSkillsGuidance(cfg agentConfig) string {
@@ -2941,6 +3254,7 @@ func toolsFromProviders(
 			Config: spec.Config,
 		})
 		if err != nil {
+			closeTools(out)
 			return nil, fmt.Errorf(
 				"tool provider %s failed: %w",
 				typeName,
@@ -3063,6 +3377,8 @@ type agentConfig struct {
 	EnableContextCompaction                       bool
 	ContextCompactionOversizedToolResultMaxTokens int
 	MaxHistoryRuns                                int
+	MaxLLMCalls                                   int
+	MaxToolIterations                             int
 	PreloadMemory                                 int
 	GenerationConfig                              *model.GenerationConfig
 	PostToolPromptEnabled                         *bool
@@ -3097,6 +3413,7 @@ type agentConfig struct {
 
 	EnableLocalExec bool
 	CodeExecutor    codeExecutorOptions
+	codeExecutor    codeexecutor.CodeExecutor
 
 	EnableOpenClawTools  bool
 	OpenClawToolingGuide *string
@@ -3106,11 +3423,25 @@ type agentConfig struct {
 
 	ToolSets []pluginSpec
 
-	RefreshToolSetsOnRun           bool
-	DeferToolSurface               bool
-	DeferToolSurfaceMode           string
-	DeferToolSurfaceThresholdChars int
-	DeferToolSurfaceDirectTools    []string
+	ownedToolsSink func([]tool.Tool)
+
+	RefreshToolSetsOnRun               bool
+	DeferToolSurface                   bool
+	DeferToolSurfaceMode               string
+	DeferToolSurfaceThresholdChars     int
+	DeferToolSurfaceDefaultDirectTools *bool
+	DeferToolSurfaceDirectTools        []string
+	DynamicAgentTimeout                time.Duration
+}
+
+func resolvePostToolPromptEnabled(
+	opts runOptions,
+	runtimeOpts runtimeOptions,
+) *bool {
+	if runtimeOpts.postToolPromptEnabled != nil {
+		return runtimeOpts.postToolPromptEnabled
+	}
+	return opts.PostToolPromptEnabled
 }
 
 type openClawToolsBundle struct {
@@ -3173,20 +3504,15 @@ func buildOpenClawTools(
 	stateDir string,
 	uploadStore *uploads.Store,
 	memoryFileStore *memoryfile.Store,
+	sandboxExecEngine codeexecutor.Engine,
+	hostExecDefaultTimeout time.Duration,
+	hostExecMaxTimeout time.Duration,
+	hostExecMaxYield time.Duration,
 ) openClawToolsBundle {
 	if !enabled {
 		return openClawToolsBundle{}
 	}
 
-	mgr := octool.NewManager(
-		octool.WithBaseEnv(deps.ToolEnv(stateDir)),
-		octool.WithCommandPolicy(
-			octool.NewChatCommandSafetyPolicy(),
-		),
-		octool.WithOutputRedactor(
-			octool.NewChatCommandOutputRedactor(),
-		),
-	)
 	router := outbound.NewRouter()
 	cronTool := cron.NewTool(nil)
 	subagentTools := subagentrun.NewTools(nil)
@@ -3199,23 +3525,70 @@ func buildOpenClawTools(
 		}
 	}
 
-	execTool := octool.NewExecCommandTool(mgr, uploadStore)
-	if memoryFileStore != nil {
-		execTool = octool.NewExecCommandToolWithMemoryFileStore(
-			mgr,
+	var mgr *octool.Manager
+	var execTool tool.Tool
+	commandPolicy := octool.NewChatCommandSafetyPolicy()
+	outputRedactor := octool.NewChatCommandOutputRedactor()
+	if sandboxExecEngine != nil {
+		execTool = octool.NewSandboxExecCommandToolWithPolicy(
+			sandboxExecEngine,
 			uploadStore,
 			memoryFileStore,
+			commandPolicy,
+			outputRedactor,
 		)
+	} else {
+		mgrOpts := []octool.Option{
+			octool.WithBaseEnv(deps.ToolEnv(stateDir)),
+			octool.WithCommandPolicy(commandPolicy),
+			octool.WithOutputRedactor(outputRedactor),
+			octool.WithCleanShellStartup(true),
+			octool.WithMaxResultOutputChars(
+				defaultExecResultOutputChars,
+			),
+		}
+		if hostExecDefaultTimeout > 0 {
+			mgrOpts = append(
+				mgrOpts,
+				octool.WithDefaultTimeout(hostExecDefaultTimeout),
+			)
+		}
+		if hostExecMaxTimeout > 0 {
+			mgrOpts = append(
+				mgrOpts,
+				octool.WithMaxTimeout(hostExecMaxTimeout),
+			)
+		}
+		if hostExecMaxYield > 0 {
+			mgrOpts = append(
+				mgrOpts,
+				octool.WithMaxYield(hostExecMaxYield),
+			)
+		}
+		mgr = octool.NewManager(mgrOpts...)
+		execTool = octool.NewExecCommandTool(mgr, uploadStore)
+		if memoryFileStore != nil {
+			execTool = octool.NewExecCommandToolWithMemoryFileStore(
+				mgr,
+				uploadStore,
+				memoryFileStore,
+			)
+		}
 	}
 	tools := []tool.Tool{
 		conversationtool.NewTool(),
 		octool.NewReadDocumentTool(uploadStore),
 		octool.NewReadSpreadsheetTool(uploadStore),
 		execTool,
-		octool.NewWriteStdinTool(mgr),
-		octool.NewKillSessionTool(mgr),
 		outbound.NewTool(router),
 		cronTool,
+	}
+	if mgr != nil {
+		tools = append(
+			tools,
+			octool.NewWriteStdinTool(mgr),
+			octool.NewKillSessionTool(mgr),
+		)
 	}
 	tools = append(tools, subagentTools.All()...)
 	return openClawToolsBundle{
@@ -3421,6 +3794,9 @@ func newOpenAIModel(spec registry.ModelSpec) (model.Model, error) {
 		openai.WithVariant(variant),
 		openai.WithOmitFileContentParts(true),
 	}
+	if spec.OpenAITextOnlyMessageContent {
+		opts = append(opts, openai.WithTextOnlyMessageContent(true))
+	}
 	if spec.DebugRecorderEnabled {
 		opts = append(
 			opts,
@@ -3431,6 +3807,31 @@ func newOpenAIModel(spec registry.ModelSpec) (model.Model, error) {
 	}
 	if baseURL != "" {
 		opts = append(opts, openai.WithBaseURL(baseURL))
+	}
+	if apiKey := strings.TrimSpace(spec.APIKey); apiKey != "" {
+		opts = append(opts, openai.WithAPIKey(apiKey))
+	}
+	if spec.Timeout > 0 {
+		opts = append(
+			opts,
+			openai.WithHTTPClientOptions(
+				openai.WithHTTPClientTimeout(spec.Timeout),
+			),
+			openai.WithOpenAIOptions(
+				openaiopt.WithRequestTimeout(spec.Timeout),
+			),
+		)
+	}
+	if spec.MaxRetries != nil {
+		opts = append(
+			opts,
+			openai.WithOpenAIOptions(
+				openaiopt.WithMaxRetries(*spec.MaxRetries),
+			),
+		)
+	}
+	if len(spec.Headers) > 0 {
+		opts = append(opts, openai.WithHeaders(spec.Headers))
 	}
 	return openai.New(name, opts...), nil
 }
@@ -3450,16 +3851,169 @@ func modelFromOptions(opts runOptions) (model.Model, error) {
 	if baseURL == "" {
 		baseURL = strings.TrimSpace(os.Getenv(openAIBaseURLEnvName))
 	}
+	var headers map[string]string
+	if mode == modeOpenAI {
+		resolved, err := resolveOpenAIHeaders(opts.OpenAIHeaders)
+		if err != nil {
+			return nil, err
+		}
+		headers = resolved
+	}
 
+	apiKey := strings.TrimSpace(os.Getenv(openAIAPIKeyEnvName))
 	spec := registry.ModelSpec{
-		Type:                 mode,
-		Name:                 opts.OpenAIModel,
-		BaseURL:              baseURL,
-		OpenAIVariant:        opts.OpenAIVariant,
+		Type:                         mode,
+		Name:                         opts.OpenAIModel,
+		BaseURL:                      baseURL,
+		APIKey:                       apiKey,
+		OpenAIVariant:                opts.OpenAIVariant,
+		OpenAITextOnlyMessageContent: opts.OpenAITextOnlyMessageContent,
+		Timeout:                      opts.OpenAITimeout,
+		MaxRetries: openAIMaxRetriesPtr(
+			opts.OpenAIMaxRetries,
+			opts.OpenAIMaxRetriesSet,
+		),
+		Headers:              headers,
 		DebugRecorderEnabled: opts.DebugRecorderEnabled,
 		Config:               opts.ModelConfig,
 	}
-	return f(spec)
+	mdl, err := f(spec)
+	if err != nil {
+		return nil, err
+	}
+	return newModelTimeoutModel(mdl, opts.OpenAITimeout), nil
+}
+
+func openAIMaxRetriesPtr(maxRetries int, set bool) *int {
+	if !set || maxRetries < 0 {
+		return nil
+	}
+	return &maxRetries
+}
+
+func resolveOpenAIHeaders(
+	config map[string]string,
+) (map[string]string, error) {
+	headers := cleanHeaderMap(config)
+	envHeaders, err := parseHeaderPairs(os.Getenv(openAIHeadersEnvName))
+	if err != nil {
+		return nil, err
+	}
+	if len(envHeaders) == 0 {
+		return headers, nil
+	}
+	if headers == nil {
+		headers = map[string]string{}
+	}
+	for key, value := range envHeaders {
+		headers[key] = value
+	}
+	return headers, nil
+}
+
+func cleanHeaderMap(headers map[string]string) map[string]string {
+	if len(headers) == 0 {
+		return nil
+	}
+	cleaned := make(map[string]string, len(headers))
+	for key, value := range headers {
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		if key == "" || value == "" {
+			continue
+		}
+		cleaned[key] = value
+	}
+	if len(cleaned) == 0 {
+		return nil
+	}
+	return cleaned
+}
+
+func parseHeaderPairs(raw string) (map[string]string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	fields, err := splitHeaderFields(raw)
+	if err != nil {
+		return nil, fmt.Errorf("invalid %s: %w", openAIHeadersEnvName, err)
+	}
+	headers := make(map[string]string, len(fields))
+	for _, field := range fields {
+		key, value, ok := strings.Cut(field, "=")
+		if !ok {
+			key, value, ok = strings.Cut(field, ":")
+		}
+		if !ok {
+			return nil, fmt.Errorf(
+				"invalid %s entry %q: want KEY=VALUE",
+				openAIHeadersEnvName,
+				field,
+			)
+		}
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		if key == "" || value == "" {
+			return nil, fmt.Errorf(
+				"invalid %s entry %q: empty key or value",
+				openAIHeadersEnvName,
+				field,
+			)
+		}
+		headers[key] = value
+	}
+	return headers, nil
+}
+
+func splitHeaderFields(raw string) ([]string, error) {
+	var fields []string
+	var field strings.Builder
+	var quote rune
+	escaped := false
+	flush := func() {
+		if s := strings.TrimSpace(field.String()); s != "" {
+			fields = append(fields, s)
+		}
+		field.Reset()
+	}
+
+	for _, r := range raw {
+		if escaped {
+			field.WriteRune(r)
+			escaped = false
+			continue
+		}
+		if quote != 0 {
+			if quote == '"' && r == '\\' {
+				escaped = true
+				continue
+			}
+			if r == quote {
+				quote = 0
+				continue
+			}
+			field.WriteRune(r)
+			continue
+		}
+
+		switch {
+		case r == '"' || r == '\'':
+			quote = r
+		case r == ',' || unicode.IsSpace(r):
+			flush()
+		default:
+			field.WriteRune(r)
+		}
+	}
+	if escaped {
+		return nil, errors.New("unterminated escape sequence")
+	}
+	if quote != 0 {
+		return nil, fmt.Errorf("unterminated %q quote", string(quote))
+	}
+	flush()
+	return fields, nil
 }
 
 func parseOpenAIVariant(
@@ -3476,10 +4030,45 @@ func parseOpenAIVariant(
 	case openai.VariantOpenAI,
 		openai.VariantDeepSeek,
 		openai.VariantHunyuan,
-		openai.VariantQwen:
+		openai.VariantQwen,
+		openai.VariantGLM:
 		return variant, nil
 	default:
 		return "", fmt.Errorf("unsupported openai variant: %s", raw)
+	}
+}
+
+func appendModelCompatibilityGatewayRunOptions(
+	opts []gateway.Option,
+	runOpts runOptions,
+) []gateway.Option {
+	staticRunOpts := modelCompatibilityRunOptions(runOpts)
+	if len(staticRunOpts) == 0 {
+		return opts
+	}
+	return append(
+		opts,
+		gateway.WithRunOptionResolver(func(
+			ctx context.Context,
+			_ gateway.RunOptionInput,
+		) (context.Context, []agent.RunOption, error) {
+			return ctx, append([]agent.RunOption(nil), staticRunOpts...), nil
+		}),
+	)
+}
+
+func modelCompatibilityRunOptions(
+	opts runOptions,
+) []agent.RunOption {
+	if strings.TrimSpace(opts.ModelMode) != modeOpenAI {
+		return nil
+	}
+	variant, err := parseOpenAIVariant(opts.OpenAIVariant, opts.OpenAIBaseURL)
+	if err != nil || variant != openai.VariantGLM {
+		return nil
+	}
+	return []agent.RunOption{
+		agent.WithToolCallArgumentsJSONRepairEnabled(true),
 	}
 }
 
@@ -3495,6 +4084,8 @@ func inferOpenAIVariant(baseURL string) openai.Variant {
 		return openai.VariantQwen
 	case strings.EqualFold(host, hunyuanAPIHost):
 		return openai.VariantHunyuan
+	case strings.EqualFold(host, glmAPIHost):
+		return openai.VariantGLM
 	default:
 		return openai.VariantOpenAI
 	}

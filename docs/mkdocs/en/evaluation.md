@@ -537,6 +537,7 @@ EvalSet is a collection of evaluation cases. Each case is an EvalCase. In defaul
 ```go
 import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/epochtime"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/toolmock"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -593,6 +594,7 @@ type Invocation struct {
 	UserContent           *model.Message       // UserContent is the user input for this turn, required.
 	FinalResponse         *model.Message       // FinalResponse is the final response, optional.
 	Tools                 []*Tool              // Tools are tool traces, optional.
+	ToolMock              *toolmock.ToolMock   // ToolMock configures mocked tool results for this turn, optional.
 	IntermediateResponses []*model.Message     // IntermediateResponses are intermediate responses, optional.
 	CreationTimestamp     *epochtime.EpochTime // CreationTimestamp is the creation timestamp, optional.
 }
@@ -618,6 +620,8 @@ EvalSet is identified by `evalSetId` and contains multiple EvalCases, each ident
 In default mode, inference can be organized in two ways. With `conversation`, the framework reads `userContent` turn by turn as input. With `conversationScenario`, the framework first creates the target Agent session and then uses UserSimulator to generate each user turn dynamically from the scenario. Both modes create the session with `sessionInput.userId`, can inject initial state through `sessionInput.state`, and inject additional context through `contextMessages` before each inference. In trace mode, inference is skipped and `actualConversation` is used directly as actual traces.
 
 `tools` and `finalResponse` in EvalSet describe tool traces and final responses. Whether they are needed depends on the selected evaluation metrics.
+
+`toolMock` replaces tool execution results during inference. It is not an expected output for the evaluation phase. It only applies to the invocation where it is configured; the model still decides whether to call tools based on the real tool declarations, and the framework only replaces the return value at the tool execution point. The mocked result is still captured in the actual tool trace.
 
 In trace mode, you can configure actual output traces explicitly via `actualConversation`.
 
@@ -1563,8 +1567,14 @@ type TemplateVariableBinding struct {
 
 // TemplateVariableSource represents a template variable source.
 type TemplateVariableSource struct {
-	Scope TemplateVariableScope // Scope is the source scope.
-	Field TemplateVariableField // Field is the source field.
+	Scope    TemplateVariableScope     // Scope is the source scope.
+	Field    TemplateVariableField     // Field is the source field.
+	Selector *TemplateVariableSelector // Selector is the trace step selector.
+}
+
+// TemplateVariableSelector represents a template variable selector.
+type TemplateVariableSelector struct {
+	NodeID string // NodeID is the trace step node ID to read.
 }
 
 // TemplateVariableScope represents the template variable source scope.
@@ -1579,8 +1589,10 @@ const (
 type TemplateVariableField string
 
 const (
-	TemplateVariableFieldUserContent   TemplateVariableField = "userContent"
-	TemplateVariableFieldFinalResponse TemplateVariableField = "finalResponse"
+	TemplateVariableFieldUserContent     TemplateVariableField = "userContent"
+	TemplateVariableFieldFinalResponse   TemplateVariableField = "finalResponse"
+	TemplateVariableFieldTraceStepInput  TemplateVariableField = "traceStepInput"
+	TemplateVariableFieldTraceStepOutput TemplateVariableField = "traceStepOutput"
 )
 
 // Rubric represents one evaluation rubric.
@@ -1665,13 +1677,15 @@ The target metric uses `criterion.llmJudge` to carry the rubric list. Built-in r
 
 `template.prompt` uses double-brace template syntax such as `{{question}}` and `{{answer}}`. Every placeholder must be explicitly bound in `variableBindings`. Unbound variables, unknown variables, or binding resolution failures all result in errors.
 
-`template.variableBindings` currently supports values from the current scoring turn only:
+`template.variableBindings` supports values from `actual` and `expected` in the current scoring turn:
 
 - `actual.userContent`
 - `actual.finalResponse`
+- `actual.traceStepInput`
+- `actual.traceStepOutput`
 - `expected.finalResponse`
 
-`expected.finalResponse` requires the current expected turn to contain `finalResponse`. If the template binds that field but the expected turn has only placeholder `userContent` and no `finalResponse`, evaluation fails directly.
+`actual.userContent`, `actual.finalResponse`, and `expected.finalResponse` render the current scoring turn's user input, actual final response, and expected final response respectively. `actual.traceStepInput` and `actual.traceStepOutput` require `source.selector.nodeID` to specify the trace step `NodeID`; the resolver selects the last matching step from the current invocation's `executionTrace.steps` and reads `Input.Text` or `Output.Text`. When using a trace source, the evaluation call must pass `agent.WithExecutionTraceEnabled(true)`. If the current actual invocation has no `ExecutionTrace`, evaluation fails. `expected.finalResponse` requires the current expected turn to contain `finalResponse`. If the template binds that field but the expected turn has only placeholder `userContent` and no `finalResponse`, evaluation fails directly.
 
 `template.responseScorerName` specifies how judge output is parsed. The current supported values are:
 
@@ -2431,13 +2445,15 @@ The template evaluator runs as follows:
 3. `responsescorer/singlescore` or `responsescorer/rubricscores` parses the judge output.
 4. Sample aggregation defaults to `majority_vote`, and multi-turn aggregation defaults to `average`. You can override them through `template.sampleAggregatorName` and `template.invocationAggregatorName`.
 
-Variable bindings currently support only:
+Variable bindings support the following sources:
 
 - `actual.userContent`
 - `actual.finalResponse`
+- `actual.traceStepInput`
+- `actual.traceStepOutput`
 - `expected.finalResponse`
 
-Every placeholder in the template must be explicitly bound in `variableBindings`. Binding `expected.finalResponse` requires the current expected turn to contain `finalResponse`; if the template uses that field but the expected turn does not contain a final response, evaluation fails directly.
+Every placeholder in the template must be explicitly bound in `variableBindings`. `actual.traceStepInput` and `actual.traceStepOutput` require `source.selector.nodeID`; the resolver selects the last step whose `NodeID` matches in the current invocation execution trace. When using a trace source, the evaluation caller must enable `agent.WithExecutionTraceEnabled(true)`. Binding `expected.finalResponse` requires the current expected turn to contain `finalResponse`; if the template uses that field but the expected turn does not contain a final response, evaluation fails directly.
 
 The template evaluator currently supports two response parsing modes:
 
@@ -2500,6 +2516,83 @@ Example template metric configuration:
 ```
 
 See [examples/evaluation/llm/template](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/llm/template) for the full example. It includes both `single_score` and `rubric_scores` template metrics.
+
+If the judge prompt needs to reference the output of a trace step from agent execution, bind variables as shown below. This kind of metric depends on execution trace, so the evaluation call must pass `agent.WithExecutionTraceEnabled(true)`.
+
+```json
+[
+  {
+    "metricName": "weather_trace_grounded_template",
+    "evaluatorName": "llm_judge_template",
+    "threshold": 1.0,
+    "criterion": {
+      "llmJudge": {
+        "judgeModel": {
+          "providerName": "openai",
+          "modelName": "gpt-5.2",
+          "baseURL": "${OPENAI_BASE_URL}",
+          "apiKey": "${OPENAI_API_KEY}",
+          "numSamples": 1,
+          "generationConfig": {
+            "max_tokens": 256,
+            "temperature": 0,
+            "stream": false
+          }
+        },
+        "template": {
+          "prompt": "You are the judge. Decide whether the candidate answer is grounded in the selected ToolNode trace step and matches the reference answer.\\n\\nUser question:\\n{{question}}\\n\\nWeather ToolNode input snapshot:\\n{{tool_input}}\\n\\nWeather ToolNode output snapshot:\\n{{tool_output}}\\n\\nReference answer:\\n{{reference}}\\n\\nCandidate answer:\\n{{answer}}\\n\\nReturn JSON:\\n- score: return 1 if the candidate answer is supported by the weather ToolNode input and output snapshots, and is factually equivalent to the reference answer.\\n- score: otherwise return 0.\\n- reason: one concise sentence.\\n\\nTreat minor wording and punctuation differences as equivalent.",
+          "responseScorerName": "single_score",
+          "variableBindings": [
+            {
+              "templateVariable": "question",
+              "source": {
+                "scope": "actual",
+                "field": "userContent"
+              }
+            },
+            {
+              "templateVariable": "answer",
+              "source": {
+                "scope": "actual",
+                "field": "finalResponse"
+              }
+            },
+            {
+              "templateVariable": "reference",
+              "source": {
+                "scope": "expected",
+                "field": "finalResponse"
+              }
+            },
+            {
+              "templateVariable": "tool_input",
+              "source": {
+                "scope": "actual",
+                "field": "traceStepInput",
+                "selector": {
+                  "nodeID": "template-trace-agent/weather_lookup"
+                }
+              }
+            },
+            {
+              "templateVariable": "tool_output",
+              "source": {
+                "scope": "actual",
+                "field": "traceStepOutput",
+                "selector": {
+                  "nodeID": "template-trace-agent/weather_lookup"
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+]
+```
+
+See [examples/evaluation/llm/templatetrace](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/llm/templatetrace) for the full trace template example. It shows how to enable execution trace and bind template variables to the input or output of a selected trace step through `source.selector.nodeID`.
 
 ##### LLM Rubric Critic Evaluator
 
@@ -3294,6 +3387,144 @@ agentEvaluator, err := evaluation.New(
 	evaluation.WithExpectedRunner(expectedRunner),
 )
 ```
+
+### ToolMock for Tool Result Simulation
+
+When an evaluation case depends on external tools, live services, or unstable data, configure `toolMock` on an EvalSet `Invocation` to return a fixed result at the tool execution point. ToolMock does not change the tool declarations seen by the model and does not force the model to call a tool; the model still decides whether to issue a tool call, and the framework replaces the tool result only after a configured tool name and argument rule matches.
+
+`toolMock` is invocation-level only. `EvalCase` and `Metric` do not configure ToolMock. `conversationScenario` has no predeclared invocation, so declarative ToolMock is not supported there.
+
+Structure definition:
+
+```go
+package toolmock
+
+type ToolMock struct {
+	Actual   []*Tool // Actual applies to the tested Runner.
+	Expected []*Tool // Expected applies to ExpectedRunner.
+}
+
+type Tool struct {
+	Name         string          // Name is the tool name to mock.
+	Arguments    *ArgumentsMatch // Arguments defines how tool arguments are matched. When it is nil, only the tool name is matched.
+	Result       any             // Result is the static tool result.
+	LLMGenerator *LLMGenerator   // LLMGenerator generates the tool result through ToolMockRunner.
+}
+
+type ArgumentsMatch struct {
+	Ignore          bool           // Ignore skips argument comparison and matches only by tool name.
+	Expected        any            // Expected is the expected tool arguments.
+	OnlyTree        map[string]any // OnlyTree compares only selected fields.
+	IgnoreTree      map[string]any // IgnoreTree skips selected fields.
+	NumberTolerance *float64       // NumberTolerance is the numeric comparison tolerance. The default is 0.
+}
+
+type LLMGenerator struct {
+	Prompt string // Prompt is the ToolMockRunner instruction.
+}
+```
+
+`actual` and `expected` apply to the tested Runner and ExpectedRunner respectively. The two sides can use different mock results for the same tool, which is useful when the candidate implementation and the reference implementation should see different external states. The same tool name can appear multiple times. Rules are checked in configuration order, and the first match returns; put more specific argument rules before a tool-name-only fallback.
+
+Choose argument matching by intent. The common case is returning a fixed result for a tool regardless of its arguments. In that case, omit `arguments`:
+
+```json
+{
+  "name": "get_weather",
+  "result": {"condition": "sunny"}
+}
+```
+
+When the same tool needs different results for different inputs, configure `arguments.expected`. JSON is compared exactly by default, including numbers. Use `onlyTree` when only stable fields matter, `ignoreTree` when unstable fields should be skipped, and a nonnegative `numberTolerance` only when numeric differences should be tolerated.
+
+```json
+{
+  "name": "get_weather",
+  "arguments": {
+    "expected": {"city": "Shenzhen", "date": "2026-07-01"},
+    "onlyTree": {"city": true, "date": true}
+  },
+  "result": {"condition": "sunny"}
+}
+```
+
+`ignore=true` is the explicit form of "do not compare arguments". It has the same matching behavior as omitting `arguments`, and is useful only when the configuration should state that choice explicitly. Do not combine it with `expected`, `onlyTree`, `ignoreTree`, or `numberTolerance`. `onlyTree` and `ignoreTree` should not be configured together.
+
+Static result example:
+
+```json
+{
+  "evalId": "weather-case",
+  "conversation": [
+    {
+      "invocationId": "turn-1",
+      "userContent": {
+        "role": "user",
+        "content": "Is Shenzhen suitable for outdoor activities tomorrow?"
+      },
+      "toolMock": {
+        "actual": [
+          {
+            "name": "get_weather",
+            "arguments": {
+              "expected": {"city": "Shenzhen", "date": "2026-07-01"},
+              "onlyTree": {"city": true, "date": true}
+            },
+            "result": {"city": "Shenzhen", "condition": "sunny", "temperature": 28}
+          }
+        ],
+        "expected": [
+          {
+            "name": "get_weather",
+            "result": {"city": "Shenzhen", "condition": "sunny", "temperature": 28}
+          }
+        ]
+      }
+    }
+  ],
+  "sessionInput": {
+    "appName": "weather-eval-app",
+    "userId": "demo-user"
+  }
+}
+```
+
+If ToolMock is configured for a tool name but a tool call does not match any configured rule, that inference turn fails instead of falling back to the real tool. This keeps evaluations precise and avoids silently reaching real external dependencies when the mock configuration is stale.
+
+In addition to a static `result`, `llmGenerator` can use a separate ToolMockRunner to generate the tool result dynamically. `prompt` is used as the ToolMockRunner instruction, and the current tool arguments JSON is sent as the user message. When tool arguments are empty, the user message is `{}`. Inject ToolMockRunner when creating AgentEvaluator.
+
+```json
+{
+  "toolMock": {
+    "actual": [
+      {
+        "name": "search_hotels",
+        "arguments": {"ignore": true},
+        "llmGenerator": {
+          "prompt": "Return only the tool result JSON, for example {\"hotels\":[]}."
+        }
+      }
+    ]
+  }
+}
+```
+
+```go
+mockRunner := runner.NewRunner(appName, toolMockAgent)
+agentEvaluator, err := evaluation.New(
+	appName,
+	actualRunner,
+	evaluation.WithToolMockRunner(mockRunner),
+)
+```
+
+When using the lower-level `evaluation/service` API directly, inject the same ToolMockRunner with `service.WithToolMockRunner(mockRunner)`.
+
+If the tool declaration contains an `OutputSchema` whose type is `object`, the framework reuses that schema as the structured output constraint when calling ToolMockRunner. The schema name uses the real tool declaration name, and the description uses the tool output schema description. ToolMock does not define an extra output schema field and does not require users to configure a separate schema for mock results. Without structured output, the final text from ToolMockRunner is parsed as JSON when possible; otherwise the raw text is used. Empty output and JSON `null` are invalid.
+
+In trace mode, the actual side does not run the tested Runner, so `toolMock.actual` does not take effect. If `expectedRunnerEnabled` is enabled, ExpectedRunner still runs and `toolMock.expected` can take effect. When a trace case configures both `actualConversation` and `conversation`, ExpectedRunner uses `actualConversation[i].userContent` as input and `conversation[i].toolMock.expected` as the expected-side tool mock configuration.
+
+See the full example at [examples/evaluation/toolmock](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/toolmock).
 
 ### UserSimulation for Dynamic User Turns
 

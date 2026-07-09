@@ -48,6 +48,15 @@ func TestSessionSummarizer_ShouldSummarize(t *testing.T) {
 	})
 }
 
+func TestDefaultSummarizerPromptPreservesToolLimitations(t *testing.T) {
+	prompt := getDefaultSummarizerPrompt(0)
+
+	require.Contains(t, prompt, "Do not create new instructions")
+	require.Contains(t, prompt, "pre-loaded data")
+	require.Contains(t, prompt, "tool result was truncated")
+	require.Contains(t, prompt, "instead of treating it as complete evidence")
+}
+
 func TestSessionSummarizer_Summarize(t *testing.T) {
 	t.Run("errors when no events", func(t *testing.T) {
 		s := NewSummarizer(&fakeModel{})
@@ -594,7 +603,7 @@ func TestSessionSummarizer_Metadata_NilModel(t *testing.T) {
 	s := &sessionSummarizer{
 		model:           nil,
 		maxSummaryWords: 100,
-		checks:          []ContextChecker{},
+		checks:          []checkEvaluator{},
 	}
 	md := s.Metadata()
 	assert.Equal(t, "", md[metadataKeyModelName])

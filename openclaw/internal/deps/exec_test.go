@@ -110,22 +110,18 @@ func TestCombinedOutputContext(t *testing.T) {
 		t.Skip("shell assertions run on unix-like systems")
 	}
 
-	okPath := writeTestCommand(
-		t,
-		t.TempDir(),
-		"python3",
-		"printf ok",
-	)
+	shell, err := resolveExecutable("", "sh", "")
+	require.NoError(t, err)
 	out, err := combinedOutputContext(
 		nil,
-		newExecCommand(executableSpec{path: okPath}),
+		newExecCommand(shell, "-c", "printf ok"),
 	)
 	require.NoError(t, err)
 	require.Equal(t, "ok", string(out))
 
 	out, err = combinedOutputContext(
 		context.Background(),
-		newExecCommand(executableSpec{path: okPath}),
+		newExecCommand(shell, "-c", "printf ok"),
 	)
 	require.NoError(t, err)
 	require.Equal(t, "ok", string(out))
@@ -139,17 +135,11 @@ func TestCombinedOutputContext(t *testing.T) {
 	require.Error(t, err)
 	require.Empty(t, out)
 
-	slowPath := writeTestCommand(
-		t,
-		t.TempDir(),
-		"python3",
-		"sleep 1\nprintf late",
-	)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
 	out, err = combinedOutputContext(
 		ctx,
-		newExecCommand(executableSpec{path: slowPath}),
+		newExecCommand(shell, "-c", "sleep 1; printf late"),
 	)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 	require.Empty(t, out)

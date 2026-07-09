@@ -36,6 +36,11 @@ The example supports the following environment variables:
 | `-retries` | Maximum number of retries | `3`           |
 | `-timeout` | Request timeout duration  | `30s`         |
 
+`-retries` maps to `openaiopt.WithMaxRetries(n)`. The value counts retry
+attempts, not total HTTP request attempts. For example, `-retries 3` allows one
+initial request plus up to three retries. Use `-retries 0` to disable SDK
+automatic retries.
+
 ## How It Works
 
 The retry mechanism works by:
@@ -156,6 +161,17 @@ llm := openai.New("gpt-4",
 )
 ```
 
+### Disable Retry
+
+```go
+llm := openai.New("gpt-4",
+    openai.WithOpenAIOptions(
+        openaiopt.WithMaxRetries(0), // No retries; send one request only.
+        openaiopt.WithRequestTimeout(10*time.Second),
+    ),
+)
+```
+
 ## Error Handling
 
 The example includes comprehensive error handling for:
@@ -177,6 +193,7 @@ The example includes comprehensive error handling for:
 - **No Framework Retry**: The framework itself doesn't implement retry logic
 - **Client-level Retry**: All retry logic is handled by the OpenAI client
 - **Configuration Pass-through**: Use `WithOpenAIOptions` to configure retry behavior
+- **Retry Count Semantics**: `WithMaxRetries(n)` counts retries, not total request attempts
 - **Automatic Handling**: Rate limiting (429) is automatically handled with smart backoff
 - **Environment Variables**: API key and base URL are automatically read from environment
 

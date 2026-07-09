@@ -277,6 +277,57 @@ approvalSvc.Decide(ctx, evolution.ApprovalDecision{
 审批结果会结构化写入 `HumanReport`（`Approved`、`Reviewer`、`Comment`、
 `DecidedAt`）并追加 audit log。被 HumanGate 拦截的 delete revision 在批准前不会删除 live skill；批准后会调用 `Publisher.DeleteSkill` 并清空 active pointer。
 
+#### 自动过期（Auto-expire）
+
+为防止 `pending_approval` 状态的 revision 永久阻塞，可配置过期时长。超过该时长仍未被人工处理的 revision 将自动被 promote 到 `active`（Reviewer 字段记录为 `auto-expire`，可在 audit log 中查询）：
+
+```go
+evoSvc := evolution.NewService(reviewerModel,
+    evolution.WithManagedSkillsDir(skillsDir),
+    evolution.WithSkillRepository(repo),
+    evolution.WithCandidateStore(evolution.NewFileCandidateStore(revisionsDir)),
+    evolution.WithActivePointer(evolution.NewFileActivePointer(revisionsDir)),
+    evolution.WithHumanGate(evolution.NewCreateOnlyHoldGate()),
+    evolution.WithApprovalTimeout(72*time.Hour), // 3 天后自动 promote
+    // 可选：覆盖默认扫描周期 min(timeout/4, 1h)
+    // evolution.WithApprovalSweepInterval(15*time.Minute),
+)
+```
+
+扫描器以后台 goroutine 形式运行，`Service.Close()` 时退出。`ApprovalTimeout` 设为 0（默认）即关闭该机制。
+
+在 `openclaw` YAML 中使用 duration 字符串配置：
+
+```yaml
+evolution:
+  enabled: true
+  human_gate: "create"
+  approval_timeout: "72h"
+  # 可选：默认 min(approval_timeout/4, 1h)
+  approval_sweep_interval: "15m"
+```
+
+#### Rollback（版本回退）
+
+当新版本质量回退时，可将当前 active revision 回退到此前的 archived 版本：当前 active 被降级为 `archived`，目标 archived 被重新 promote 为 `active`，并立即更新 publisher，agent 下次读取时即生效。
+
+```go
+res, err := approvalSvc.Rollback(ctx, "weather-monitor", evolution.RollbackOpts{
+    Reviewer: "alice@example.com",
+    Comment:  "regressed quality",
+    // TargetRevisionID: "20260601T120000.000-abc123", // 可选：指定具体的 archived revision
+})
+fmt.Printf("rolled back %s → %s\n", res.PreviousActiveID, res.RestoredID)
+```
+
+`TargetRevisionID` 为空时，自动选择 revision store 排序中最新的 archived revision。若没有可回退的 archived revision，返回 `ErrNoArchivedRevision`。
+
+`openclaw` CLI 提供同名命令：
+
+```bash
+openclaw evolution rollback <skill-id> --dir <revisions-dir> [--revision <rev-id>] [--reviewer <id>] [--comment <text>]
+```
+
 ### 自定义 Gate
 
 实现对应接口即可接入自定义门禁：
@@ -363,6 +414,8 @@ revisions/
 | `WithEffectivenessGate(gate)` | 效果评估 | nil |
 | `WithHumanGate(gate)` | 人工审批 | nil（禁用） |
 | `WithApprovalGateShadow(bool)` | Shadow 模式 — 评估门禁但不拦截 | false |
+| `WithApprovalTimeout(d)` | 自动 promote 超过 `d` 仍在 `pending_approval` 的 revision | 0（关闭） |
+| `WithApprovalSweepInterval(d)` | 自动过期扫描周期 | min(timeout/4, 1h) |
 | `WithWorkerNum(n)` | 异步 worker 数量 | 1 |
 | `WithQueueSize(n)` | 每个 worker 的 job 队列大小 | 10 |
 | `WithExistingSkillBodyMaxChars(n)` | 传给 reviewer 的已有 skill body 截取长度 | 600 |

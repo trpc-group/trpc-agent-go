@@ -723,7 +723,7 @@ agent := llmagent.New("todo-assistant",
 )
 ```
 
-该 extension 会自动贡献 `todo_write` 和 `todo_declare_blocker`，不要再通过 `WithTools` 额外传入 `todo.New()`。如果需要复用 `tool/todo` 的选项（例如 `WithStateKeyPrefix`、`WithClearOnAllDone` 或 `WithNudgeHook`），先构造 `todo.New(...)`，再通过 `todoenforcer.WithTodoTool(...)` 传入。`todo_declare_blocker` 用于声明客观阻塞，例如缺少权限、凭据、基础设施或必须由用户决策的信息。
+该 extension 会自动贡献 `todo_write` 和 `todo_declare_blocker`，不要再通过 `WithTools` 额外传入 `todo.New()`。如果需要复用 `tool/todo` 的选项（例如 `WithStateKeyPrefix`、`WithClearOnAllDone` 或 `WithNudgeHook`），先构造 `todo.New(...)`，再通过 `todoenforcer.WithTodoTool(...)` 传入。`todo_declare_blocker` 用于声明客观阻塞，例如缺少权限、凭据、基础设施或必须由用户决策的信息。extension 不会改写调用方的流式设置：未完成时模型已经输出的文本仍可能到达客户端，但最终响应会被转为继续执行信号，不会作为本轮终态写入会话历史。
 
 #### 工具返回结构
 
@@ -1660,6 +1660,8 @@ Agent、模型或 executor；它只能在开发者配置好的边界内，为这
   解析，不会在此枚举）。
 - `WithCapabilitySkills(repo)`：设置模型可选择的最大 skill 仓库。未设置时默认从父
   Agent 本轮有效 skill 仓库派生。
+- `WithDynamicTimeout(timeout)`：限制一次动态子 Agent 调用的最长时间。非正值表示不额外
+  设置 deadline，继续使用父请求的 context。
 - `WithExposeToolSelection(false)`：不向模型暴露 `tools` 字段。子 Agent 仍使用代码边界内
   的工具面，但模型不能进一步收窄。
 - `WithExposeSkillSelection(true)`：向模型暴露 `skills` 字段。默认关闭，因为 skill 是否
@@ -2167,7 +2169,9 @@ ch, err = r.Run(ctx, userID, sessionID, toolMsg,
 运行中改成由调用方执行，可以继续使用 `agent.WithToolExecutionFilter(...)`。
 `WithExternalTools` 更适合 AG-UI、浏览器、移动端或上游服务在每次请求中动态声明
 工具的场景。AG-UI runner 默认会把请求里的 `input.Tools` 映射为
-`WithExternalTools`。外部工具与已有工具同名时，已有工具优先，外部声明不会覆盖或拦截它。这里的已有工具包括 Agent 上注册的工具，以及通过 `WithAdditionalTools` 追加的工具。
+`WithExternalTools`；OpenAI Chat Completions adapter（`server/openai`）同样会把请求里的 `tools` 映射为 `WithExternalTools`，服务端不执行这些工具，由调用方在收到 `tool_calls` 后外部执行并用 `role=tool` 消息续聊。外部工具与已有工具同名时，已有工具优先，外部声明不会覆盖或拦截它。这里的已有工具包括 Agent 上注册的工具，以及通过 `WithAdditionalTools` 追加的工具。
+
+`server/openai` adapter 目前只实现了 `tool_choice: "none"`（不把 tools 暴露给模型）和 `tool_choice: "auto"` 或省略该字段（由模型自行决定，这也是该 adapter 能提供的唯一行为，因为它自身从不执行工具）。当请求同时带有 `tools` 时，`tool_choice: "required"` 以及强制指定函数的写法（`{"type":"function","function":{"name":"..."}}`）会被拒绝并返回 HTTP 400，而不会被静默当作 `"auto"` 处理。
 
 **完整示例：** `examples/toolinterrupt/`
 

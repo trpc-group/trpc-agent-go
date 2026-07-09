@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime/debug"
+	"sort"
 	"time"
 
 	"github.com/google/uuid"
@@ -33,14 +34,16 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/modelcontext"
 	"trpc.group/trpc-go/trpc-agent-go/internal/responseusage"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/steer"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryfork"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
+	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolcall"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolsurface"
 	itrace "trpc.group/trpc-go/trpc-agent-go/internal/trace"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
-	sessionsummary "trpc.group/trpc-go/trpc-agent-go/session/summary"
+	"trpc.group/trpc-go/trpc-agent-go/session/summary"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
@@ -52,6 +55,7 @@ const (
 	queuedUserAuthor          = "user"
 
 	errMsgNoModelResponse = "no response received from model"
+	errMsgNoLLMMessages   = "no messages available for LLM call"
 
 	flowRunPanicLogFmt = log.PanicPrefix + " Flow execution panic (invocation: %s, " +
 		"agent: %s): %v\n%s"
@@ -67,6 +71,11 @@ const (
 // snapshot for this invocation still contains any user tool.
 func InvocationHasFilteredUserTools(invocation *agent.Invocation) (bool, bool) {
 	return toolsnapshot.HasFilteredUserTools(invocation)
+}
+
+// InvocationFilteredTraceableUserToolNames reports filtered user tool names that have structure surfaces.
+func InvocationFilteredTraceableUserToolNames(invocation *agent.Invocation) ([]string, bool) {
+	return toolsnapshot.FilteredTraceableUserToolNames(invocation)
 }
 
 // Options contains configuration options for creating a Flow.
@@ -481,9 +490,7 @@ func (f *Flow) maybeResumePendingToolCalls(
 	req := &model.Request{
 		Tools: make(map[string]tool.Tool),
 	}
-	for _, t := range f.getFilteredTools(ctx, invocation) {
-		req.Tools[t.Declaration().Name] = t
-	}
+	f.populateRequestTools(ctx, invocation, req)
 
 	for _, rp := range f.responseProcessors {
 		if toolRP, ok := rp.(*processor.FunctionCallResponseProcessor); ok {
@@ -511,8 +518,16 @@ func (f *Flow) maybeSyncSummaryIntraRun(
 		return
 	}
 
+	summaryCtx := ctx
+	if parentRequest, ok := summaryfork.Request(invocation); ok {
+		summaryCtx = summary.ContextWithCacheSafeForkRequest(
+			summaryCtx,
+			parentRequest,
+		)
+	}
+
 	err = invocation.SessionService.CreateSessionSummary(
-		ctx,
+		summaryCtx,
 		invocation.Session,
 		invocation.GetEventFilterKey(),
 		false,
@@ -711,6 +726,9 @@ func (f *Flow) runOneStep(
 		startedSpan,
 	)
 	agent.FinishExecutionTraceStep(invocation, stepID, traceSnapshotFromEvent(lastEvent), err)
+	if lastEvent != nil && lastEvent.Response != nil {
+		agent.SetExecutionTraceStepUsage(invocation, stepID, lastEvent.Response.Usage)
+	}
 	return lastEvent, err
 }
 
@@ -1259,7 +1277,7 @@ func collectLongRunningToolIDs(ToolCalls []model.ToolCall, tools map[string]tool
 		if !ok {
 			continue
 		}
-		caller, ok := t.(function.LongRunner)
+		caller, ok := itool.ResolveDeclaration(t).(function.LongRunner)
 		if !ok {
 			continue
 		}
@@ -1362,6 +1380,7 @@ func (f *Flow) preprocess(
 		finishLatencySpan(span, started, nil)
 	}()
 
+	f.populateRequestTools(ctx, invocation, llmRequest)
 	// Run request processors - they send events directly to the channel.
 	for _, requestProcessor := range f.requestProcessors {
 		if rebuildPlan == nil {
@@ -1405,13 +1424,6 @@ func (f *Flow) preprocess(
 			stageSpan.SetAttributes(latencyRequestAttrs(llmRequest)...)
 		}
 		finishLatencySpan(stageSpan, stageStarted, nil)
-	}
-	// Add tools to the request with optional filtering.
-	if invocation.Agent != nil {
-		tools := f.getFilteredTools(ctx, invocation)
-		for _, t := range tools {
-			llmRequest.Tools[t.Declaration().Name] = t
-		}
 	}
 	// Sanitize invalid tool calls in history to avoid poisoning future requests.
 	llmRequest.Messages = toolcall.SanitizeMessagesWithTools(ctx, llmRequest.Messages, llmRequest.Tools)
@@ -1516,7 +1528,7 @@ func (f *Flow) runContextCompaction(
 		latencySpanContextSummary,
 		contextCompactionAttrs(decision, req)...,
 	)
-	summaryCtx = sessionsummary.ContextWithCacheSafeForkRequest(summaryCtx, req)
+	summaryCtx = summary.ContextWithCacheSafeForkRequest(summaryCtx, req)
 	err := invocation.SessionService.CreateSessionSummary(
 		summaryCtx,
 		invocation.Session,
@@ -1627,11 +1639,6 @@ func (f *Flow) rebuildRequestForContextCompaction(
 			invocation,
 			rebuilt,
 		)
-	}
-	if invocation.Agent != nil {
-		for _, t := range f.getFilteredTools(ctx, invocation) {
-			rebuilt.Tools[t.Declaration().Name] = t
-		}
 	}
 	rebuilt.Messages = toolcall.SanitizeMessagesWithTools(
 		ctx,
@@ -1969,6 +1976,11 @@ func (f *Flow) getFilteredTools(
 		ctx,
 		invocation,
 	)
+	traceableUserToolNames := trackedUserToolNames(
+		allTools,
+		hasUserToolTracking,
+		userToolNames,
+	)
 	allTools, userToolNames, hasUserToolTracking, externalToolNames :=
 		toolsurface.AppendRunOptionTools(
 			allTools,
@@ -2002,7 +2014,8 @@ func (f *Flow) getFilteredTools(
 		toolsnapshot.Set(
 			invocation,
 			allTools,
-			hasTrackedUserTool(allTools, hasUserToolTracking, userToolNames),
+			len(trackedUserToolNames(allTools, hasUserToolTracking, userToolNames)) > 0,
+			filteredTraceableToolNames(allTools, traceableUserToolNames),
 		)
 		return allTools
 	}
@@ -2022,10 +2035,31 @@ func (f *Flow) getFilteredTools(
 	toolsnapshot.Set(
 		invocation,
 		filtered,
-		hasTrackedUserTool(filtered, hasUserToolTracking, userToolNames),
+		len(trackedUserToolNames(filtered, hasUserToolTracking, userToolNames)) > 0,
+		filteredTraceableToolNames(filtered, traceableUserToolNames),
 	)
 
 	return filtered
+}
+
+func (f *Flow) populateRequestTools(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	req *model.Request,
+) {
+	if req == nil || invocation == nil || invocation.Agent == nil {
+		return
+	}
+	if req.Tools == nil {
+		req.Tools = make(map[string]tool.Tool)
+	}
+	for _, tl := range f.getFilteredTools(ctx, invocation) {
+		name := toolName(tl)
+		if name == "" {
+			continue
+		}
+		req.Tools[name] = tl
+	}
 }
 
 func sanitizeTools(tools []tool.Tool) []tool.Tool {
@@ -2078,26 +2112,66 @@ func toolName(tl tool.Tool) string {
 	return decl.Name
 }
 
-func hasTrackedUserTool(
+func trackedUserToolNames(
 	tools []tool.Tool,
 	hasUserToolTracking bool,
 	userToolNames map[string]bool,
-) bool {
+) []string {
 	if len(tools) == 0 {
-		return false
+		return nil
 	}
+	seen := make(map[string]struct{}, len(tools))
 	if !hasUserToolTracking {
-		return true
+		for _, tl := range tools {
+			if name := toolName(tl); name != "" {
+				seen[name] = struct{}{}
+			}
+		}
+		return sortedToolNames(seen)
 	}
 	for _, tl := range tools {
-		if tl == nil || tl.Declaration() == nil {
-			continue
-		}
-		if userToolNames[tl.Declaration().Name] {
-			return true
+		name := toolName(tl)
+		if name != "" && userToolNames[name] {
+			seen[name] = struct{}{}
 		}
 	}
-	return false
+	return sortedToolNames(seen)
+}
+
+func sortedToolNames(names map[string]struct{}) []string {
+	if len(names) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(names))
+	for name := range names {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func filteredTraceableToolNames(
+	tools []tool.Tool,
+	traceableToolNames []string,
+) []string {
+	if len(tools) == 0 || len(traceableToolNames) == 0 {
+		return nil
+	}
+	traceable := make(map[string]struct{}, len(traceableToolNames))
+	for _, name := range traceableToolNames {
+		traceable[name] = struct{}{}
+	}
+	seen := make(map[string]struct{}, len(tools))
+	for _, tl := range tools {
+		name := toolName(tl)
+		if name == "" {
+			continue
+		}
+		if _, ok := traceable[name]; ok {
+			seen[name] = struct{}{}
+		}
+	}
+	return sortedToolNames(seen)
 }
 
 // callLLM performs the actual LLM call using core/model.
@@ -2147,6 +2221,7 @@ func (f *Flow) callLLM(
 			yield(customResp)
 		}, nil
 	}
+	summaryfork.Attach(invocation, llmRequest)
 	seq, err := f.generateContentSeq(ctx, invocation, llmRequest, callModel)
 	if err != nil {
 		return ctx, nil, err
@@ -2279,6 +2354,9 @@ func (f *Flow) generateContentSeq(
 	llmRequest *model.Request,
 	callModel model.Model,
 ) (model.Seq[*model.Response], error) {
+	if llmRequest == nil || len(llmRequest.Messages) == 0 {
+		return nil, errors.New(errMsgNoLLMMessages)
+	}
 	ctx, span, started := startLatencySpan(
 		ctx,
 		invocation,

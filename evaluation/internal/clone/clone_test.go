@@ -22,6 +22,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	agenttrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/epochtime"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
@@ -36,6 +37,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/tooltrajectory"
 	criterionxml "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/xml"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/toolmock"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
@@ -92,6 +94,9 @@ func TestCloneEvalMetric_DeepCopiesJudgeTemplate(t *testing.T) {
 							Source: &criterionllm.TemplateVariableSource{
 								Scope: criterionllm.TemplateVariableScopeActual,
 								Field: criterionllm.TemplateVariableFieldUserContent,
+								Selector: &criterionllm.TemplateVariableSelector{
+									NodeID: "ignored",
+								},
 							},
 						},
 					},
@@ -112,6 +117,8 @@ func TestCloneEvalMetric_DeepCopiesJudgeTemplate(t *testing.T) {
 	assert.Equal(t, "question", src.Criterion.LLMJudge.Template.VariableBindings[0].TemplateVariable)
 	dst.Criterion.LLMJudge.Template.VariableBindings[0].Source.Scope = criterionllm.TemplateVariableScopeExpected
 	assert.Equal(t, criterionllm.TemplateVariableScopeActual, src.Criterion.LLMJudge.Template.VariableBindings[0].Source.Scope)
+	dst.Criterion.LLMJudge.Template.VariableBindings[0].Source.Selector.NodeID = "changed"
+	assert.Equal(t, "ignored", src.Criterion.LLMJudge.Template.VariableBindings[0].Source.Selector.NodeID)
 }
 
 func TestCloneTemplateVariableHelpersHandleNil(t *testing.T) {
@@ -224,6 +231,28 @@ func TestCloneEvalCase_DeepCopy(t *testing.T) {
 						Result: []any{"ok", []byte{6, 7, 8}},
 					},
 				},
+				ToolMock: &toolmock.ToolMock{
+					Actual: []*toolmock.Tool{
+						{
+							Name: "tool",
+							Arguments: &toolmock.ArgumentsMatch{
+								Expected:        map[string]any{"a": 1},
+								IgnoreTree:      map[string]any{"nonce": true},
+								NumberTolerance: float64Ptr(0.1),
+							},
+							Result: map[string]any{"ok": true},
+						},
+						nil,
+					},
+					Expected: []*toolmock.Tool{{
+						Name: "generated-tool",
+						Arguments: &toolmock.ArgumentsMatch{
+							Expected: map[string]any{"city": "Shenzhen"},
+							OnlyTree: map[string]any{"city": true},
+						},
+						LLMGenerator: &toolmock.LLMGenerator{Prompt: "Generate result."},
+					}},
+				},
 				IntermediateResponses: []*model.Message{
 					{
 						Role:    model.RoleAssistant,
@@ -234,6 +263,34 @@ func TestCloneEvalCase_DeepCopy(t *testing.T) {
 					},
 				},
 				CreationTimestamp: &epochtime.EpochTime{Time: time.Unix(1, 0).UTC()},
+				ExecutionTrace: &agenttrace.Trace{
+					RootAgentName:    "agent",
+					RootInvocationID: "root-inv",
+					SessionID:        "session",
+					Status:           agenttrace.TraceStatusCompleted,
+					Usage: &model.Usage{
+						TotalTokens: 10,
+						TimingInfo: &model.TimingInfo{
+							FirstTokenDuration: time.Second,
+						},
+					},
+					Steps: []agenttrace.Step{
+						{
+							StepID:             "step-1",
+							NodeID:             "fetch",
+							PredecessorStepIDs: []string{"entry"},
+							AppliedSurfaceIDs:  []string{"agent#instruction"},
+							Input:              &agenttrace.Snapshot{Text: "input"},
+							Output:             &agenttrace.Snapshot{Text: "output"},
+							Usage: &model.Usage{
+								TotalTokens: 5,
+								TimingInfo: &model.TimingInfo{
+									ReasoningDuration: time.Second,
+								},
+							},
+						},
+					},
+				},
 			},
 		},
 		ActualConversation: []*evalset.Invocation{
@@ -291,8 +348,40 @@ func TestCloneEvalCase_DeepCopy(t *testing.T) {
 	dst.Conversation[0].Tools[0].Arguments.(map[string]any)["a"] = 2
 	assert.Equal(t, 1, src.Conversation[0].Tools[0].Arguments.(map[string]any)["a"])
 
+	dst.Conversation[0].ToolMock.Actual[0].Arguments.Expected.(map[string]any)["a"] = 2
+	assert.Equal(t, 1, src.Conversation[0].ToolMock.Actual[0].Arguments.Expected.(map[string]any)["a"])
+
+	dst.Conversation[0].ToolMock.Actual[0].Arguments.IgnoreTree["nonce"] = false
+	assert.Equal(t, true, src.Conversation[0].ToolMock.Actual[0].Arguments.IgnoreTree["nonce"])
+
+	*dst.Conversation[0].ToolMock.Actual[0].Arguments.NumberTolerance = 0.2
+	assert.Equal(t, 0.1, *src.Conversation[0].ToolMock.Actual[0].Arguments.NumberTolerance)
+
+	dst.Conversation[0].ToolMock.Actual[0].Result.(map[string]any)["ok"] = false
+	assert.Equal(t, true, src.Conversation[0].ToolMock.Actual[0].Result.(map[string]any)["ok"])
+
+	require.Nil(t, dst.Conversation[0].ToolMock.Actual[1])
+
+	dst.Conversation[0].ToolMock.Expected[0].Arguments.OnlyTree["city"] = false
+	assert.Equal(t, true, src.Conversation[0].ToolMock.Expected[0].Arguments.OnlyTree["city"])
+
+	dst.Conversation[0].ToolMock.Expected[0].LLMGenerator.Prompt = "changed"
+	assert.Equal(t, "Generate result.", src.Conversation[0].ToolMock.Expected[0].LLMGenerator.Prompt)
+
 	dst.Conversation[0].IntermediateResponses[0].ContentParts[0].Audio.Data[0] = 0
 	assert.Equal(t, byte(9), src.Conversation[0].IntermediateResponses[0].ContentParts[0].Audio.Data[0])
+
+	dst.Conversation[0].ExecutionTrace.Steps[0].PredecessorStepIDs[0] = "changed"
+	assert.Equal(t, "entry", src.Conversation[0].ExecutionTrace.Steps[0].PredecessorStepIDs[0])
+
+	dst.Conversation[0].ExecutionTrace.Steps[0].Input.Text = "changed"
+	assert.Equal(t, "input", src.Conversation[0].ExecutionTrace.Steps[0].Input.Text)
+
+	dst.Conversation[0].ExecutionTrace.Steps[0].Usage.TimingInfo.ReasoningDuration = 2 * time.Second
+	assert.Equal(t, time.Second, src.Conversation[0].ExecutionTrace.Steps[0].Usage.TimingInfo.ReasoningDuration)
+
+	dst.Conversation[0].ExecutionTrace.Usage.TimingInfo.FirstTokenDuration = 2 * time.Second
+	assert.Equal(t, time.Second, src.Conversation[0].ExecutionTrace.Usage.TimingInfo.FirstTokenDuration)
 
 	dst.SessionInput.State["bytes"].([]byte)[0] = 0
 	assert.Equal(t, byte(9), src.SessionInput.State["bytes"].([]byte)[0])
@@ -323,6 +412,82 @@ func TestCloneEvalSet_DeepCopy(t *testing.T) {
 
 	dst.EvalCases[0].EvalID = "changed"
 	assert.Equal(t, "case-1", src.EvalCases[0].EvalID)
+}
+
+func TestCloneToolMockHelpersHandleNil(t *testing.T) {
+	mock, err := cloneToolMock(nil)
+	require.NoError(t, err)
+	assert.Nil(t, mock)
+	list, err := cloneToolMockList(nil)
+	require.NoError(t, err)
+	assert.Nil(t, list)
+	entry, err := cloneToolMockEntry(nil)
+	require.NoError(t, err)
+	assert.Nil(t, entry)
+	arguments, err := cloneArgumentsMatch(nil)
+	require.NoError(t, err)
+	assert.Nil(t, arguments)
+}
+
+func TestCloneToolMockReturnsErrorsForUnsupportedValues(t *testing.T) {
+	unsupported := func() {}
+	tests := []struct {
+		name string
+		mock *toolmock.ToolMock
+	}{
+		{
+			name: "actual_expected",
+			mock: &toolmock.ToolMock{
+				Actual: []*toolmock.Tool{{
+					Name:      "tool",
+					Arguments: &toolmock.ArgumentsMatch{Expected: unsupported},
+					Result:    "ok",
+				}},
+			},
+		},
+		{
+			name: "expected_result",
+			mock: &toolmock.ToolMock{
+				Expected: []*toolmock.Tool{{
+					Name:   "tool",
+					Result: unsupported,
+				}},
+			},
+		},
+		{
+			name: "only_tree",
+			mock: &toolmock.ToolMock{
+				Actual: []*toolmock.Tool{{
+					Name: "tool",
+					Arguments: &toolmock.ArgumentsMatch{
+						Expected: map[string]any{"city": "Shenzhen"},
+						OnlyTree: map[string]any{"city": unsupported},
+					},
+					Result: "ok",
+				}},
+			},
+		},
+		{
+			name: "ignore_tree",
+			mock: &toolmock.ToolMock{
+				Expected: []*toolmock.Tool{{
+					Name: "tool",
+					Arguments: &toolmock.ArgumentsMatch{
+						Expected:   map[string]any{"city": "Shenzhen"},
+						IgnoreTree: map[string]any{"traceID": unsupported},
+					},
+					Result: "ok",
+				}},
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := cloneToolMock(tc.mock)
+			require.Error(t, err)
+			assert.Nil(t, got)
+		})
+	}
 }
 
 func TestCloneEvalMetric_DeepCopyKeepsAPIKeyAndDropsJudgeRunnerOptions(t *testing.T) {

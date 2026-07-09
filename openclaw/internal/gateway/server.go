@@ -20,11 +20,13 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"strings"
@@ -68,7 +70,9 @@ const (
 	methodPost = "POST"
 	methodGet  = "GET"
 
-	defaultMaxBodyBytes int64 = 1 << 20
+	// Enough for one default max-size binary content part after base64 JSON
+	// encoding plus normal request metadata.
+	defaultMaxBodyBytes int64 = 12 << 20
 
 	queryRequestID = "request_id"
 
@@ -431,8 +435,32 @@ func (s *Server) decodeJSON(r *http.Request, target any) error {
 	if r == nil {
 		return errors.New("nil request")
 	}
-	reader := io.LimitReader(r.Body, s.maxBodyBytes)
-	decoder := json.NewDecoder(reader)
+	maxBytes := s.maxBodyBytes
+	if maxBytes <= 0 {
+		maxBytes = defaultMaxBodyBytes
+	}
+	if r.ContentLength > maxBytes {
+		return fmt.Errorf(
+			"request body exceeds max_body_bytes (%d bytes)",
+			maxBytes,
+		)
+	}
+	limit := maxBytes
+	if maxBytes < math.MaxInt64 {
+		limit = maxBytes + 1
+	}
+	reader := &io.LimitedReader{R: r.Body, N: limit}
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return fmt.Errorf("read request body: %w", err)
+	}
+	if int64(len(data)) > maxBytes {
+		return fmt.Errorf(
+			"request body exceeds max_body_bytes (%d bytes)",
+			maxBytes,
+		)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
 	if err := decoder.Decode(target); err != nil {
 		return fmt.Errorf("decode json: %w", err)
 	}
@@ -572,6 +600,7 @@ func (s *Server) resolveRunOptions(
 		run.sessionID,
 		run.requestID,
 		run.requestSystemPrompt,
+		run.requestLateContextPrompt,
 	)
 	if len(extra) == 0 {
 		return ctx, runOpts, nil
@@ -604,6 +633,7 @@ func (s *Server) runOptions(
 	sessionID string,
 	requestID string,
 	requestSystemPrompt string,
+	requestLateContextPrompt string,
 ) []agent.RunOption {
 	runOpts := make([]agent.RunOption, 0, 1)
 	if requestID != "" {
@@ -618,6 +648,14 @@ func (s *Server) runOptions(
 		runOpts = append(
 			runOpts,
 			agent.WithInjectedContextMessages(messages),
+		)
+	}
+	if msg := requestLateContextPromptMessage(
+		requestLateContextPrompt,
+	); msg != nil {
+		runOpts = append(
+			runOpts,
+			agent.WithLateContextMessages([]model.Message{*msg}),
 		)
 	}
 	return runOpts
@@ -719,7 +757,10 @@ func usageFromModelUsage(usage *model.Usage) *gwproto.Usage {
 		return nil
 	}
 	return &gwproto.Usage{
-		PromptTokens:     usage.PromptTokens,
+		PromptTokens: usage.PromptTokens,
+		PromptDetails: promptTokensDetailsFromModel(
+			usage.PromptTokensDetails,
+		),
 		CompletionTokens: usage.CompletionTokens,
 		TotalTokens:      usage.TotalTokens,
 	}
@@ -759,21 +800,35 @@ func mergeGatewayUsage(
 		cloned := cloneGatewayUsage(usage)
 		if cloned != nil {
 			cloned.LastPromptTokens = usage.PromptTokens
+			cloned.LastDetails = clonePromptTokensDetails(
+				usage.PromptDetails,
+			)
 		}
 		return cloned
 	}
 	lastPrompt := accumulated.LastPromptTokens
+	lastPromptDetails := clonePromptTokensDetails(
+		accumulated.LastDetails,
+	)
 	if usage.PromptTokens > 0 {
 		lastPrompt = usage.PromptTokens
+		lastPromptDetails = clonePromptTokensDetails(
+			usage.PromptDetails,
+		)
 	}
 	return &gwproto.Usage{
 		PromptTokens: accumulated.PromptTokens +
 			usage.PromptTokens,
+		PromptDetails: mergePromptTokensDetails(
+			accumulated.PromptDetails,
+			usage.PromptDetails,
+		),
 		CompletionTokens: accumulated.CompletionTokens +
 			usage.CompletionTokens,
 		TotalTokens: accumulated.TotalTokens +
 			usage.TotalTokens,
 		LastPromptTokens: lastPrompt,
+		LastDetails:      lastPromptDetails,
 	}
 }
 
@@ -782,7 +837,67 @@ func cloneGatewayUsage(usage *gwproto.Usage) *gwproto.Usage {
 		return nil
 	}
 	cloned := *usage
+	cloned.PromptDetails = clonePromptTokensDetails(
+		usage.PromptDetails,
+	)
+	cloned.LastDetails = clonePromptTokensDetails(
+		usage.LastDetails,
+	)
 	return &cloned
+}
+
+func promptTokensDetailsFromModel(
+	details model.PromptTokensDetails,
+) *gwproto.PromptDetails {
+	return nonZeroPromptTokensDetails(&gwproto.PromptDetails{
+		CachedTokens:        details.CachedTokens,
+		CacheCreationTokens: details.CacheCreationTokens,
+		CacheReadTokens:     details.CacheReadTokens,
+	})
+}
+
+func clonePromptTokensDetails(
+	details *gwproto.PromptDetails,
+) *gwproto.PromptDetails {
+	if details == nil {
+		return nil
+	}
+	cloned := *details
+	return nonZeroPromptTokensDetails(&cloned)
+}
+
+func mergePromptTokensDetails(
+	accumulated *gwproto.PromptDetails,
+	details *gwproto.PromptDetails,
+) *gwproto.PromptDetails {
+	if accumulated == nil {
+		return clonePromptTokensDetails(details)
+	}
+	if details == nil {
+		return clonePromptTokensDetails(accumulated)
+	}
+	return nonZeroPromptTokensDetails(&gwproto.PromptDetails{
+		CachedTokens: accumulated.CachedTokens +
+			details.CachedTokens,
+		CacheCreationTokens: accumulated.CacheCreationTokens +
+			details.CacheCreationTokens,
+		CacheReadTokens: accumulated.CacheReadTokens +
+			details.CacheReadTokens,
+	})
+}
+
+func nonZeroPromptTokensDetails(
+	details *gwproto.PromptDetails,
+) *gwproto.PromptDetails {
+	if details == nil {
+		return nil
+	}
+	if details.CachedTokens == 0 &&
+		details.CacheCreationTokens == 0 &&
+		details.CacheReadTokens == 0 {
+		return nil
+	}
+	return details
 }
 
 type laneLocker struct {

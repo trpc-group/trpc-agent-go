@@ -186,6 +186,7 @@ func (m *capturingInvocationMessagesAgent) Tools() []tool.Tool {
 type staticModel struct {
 	name    string
 	content string
+	usage   *model.Usage
 }
 
 type unsupportedSteerRunner struct{}
@@ -226,6 +227,7 @@ func (m *staticModel) GenerateContent(
 			Index:   0,
 			Message: model.NewAssistantMessage(m.content),
 		}},
+		Usage: m.usage,
 	}
 	close(ch)
 	return ch, nil
@@ -8852,8 +8854,17 @@ func TestProcessAgentEvents_EmitEventErrorBranch_Direct(t *testing.T) {
 
 	agentCh := make(chan *event.Event)
 	flushCh := make(chan *flush.FlushRequest)
-	// No Attach needed because processAgentEvents will attach using this channel.
-	processed := rr.processAgentEvents(ctx, sess, inv, agentCh, flushCh, nil)
+	forwardedEventCh, forwardedEventDone := attachRunnerEventForwarder(inv)
+	processed := rr.processAgentEvents(
+		ctx,
+		sess,
+		inv,
+		agentCh,
+		forwardedEventCh,
+		forwardedEventDone,
+		flushCh,
+		nil,
+	)
 	// Send one event, then close agentCh
 	go func() {
 		agentCh <- &event.Event{Response: &model.Response{Done: true, Choices: []model.Choice{{Index: 0, Message: model.NewAssistantMessage("x")}}}}

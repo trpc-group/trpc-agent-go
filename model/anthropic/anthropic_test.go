@@ -2110,14 +2110,79 @@ func Test_StreamingMessageAccumulator_ErrorPaths(t *testing.T) {
 		`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"x"}}`)), "no content block")
 	require.ErrorContains(t, acc.Accumulate(mustMessageStreamEventUnion(t,
 		`{"type":"content_block_stop","index":0}`)), "no content block")
+	// Partial JSON in tool-use Input is now handled gracefully:
+	// ensureValidToolInput resets invalid Input to {} before refreshContentBlockRawJSON.
 	acc.message.Content = []anthropic.ContentBlockUnion{{Type: "tool_use", Input: json.RawMessage("{")}}
 	acc.inputDeltaStartedAt = []bool{false}
-	require.ErrorContains(t, acc.Accumulate(mustMessageStreamEventUnion(t,
-		`{"type":"content_block_stop","index":0}`)), "error converting content block to JSON")
+	require.NoError(t, acc.Accumulate(mustMessageStreamEventUnion(t,
+		`{"type":"content_block_stop","index":0}`)))
+	// The invalid Input should have been reset to {}.
+	assert.Equal(t, json.RawMessage("{}"), acc.message.Content[0].Input)
+	// Proxy sends "input": null (literal JSON null) with no input_json_delta.
+	// ensureValidToolInput must treat this as empty and reset to {}.
+	acc3 := newStreamingMessageAccumulator()
+	acc3.message.Content = []anthropic.ContentBlockUnion{{Type: "tool_use", Input: json.RawMessage("null")}}
+	acc3.inputDeltaStartedAt = []bool{false}
+	require.NoError(t, acc3.Accumulate(mustMessageStreamEventUnion(t,
+		`{"type":"content_block_stop","index":0}`)))
+	assert.Equal(t, json.RawMessage("{}"), acc3.message.Content[0].Input)
+
+	// Non-tool_use blocks with malformed Input must NOT be auto-repaired.
+	acc2 := newStreamingMessageAccumulator()
+	acc2.message.Content = []anthropic.ContentBlockUnion{{Type: "text", Input: json.RawMessage("{")}}
+	acc2.inputDeltaStartedAt = []bool{false}
+	require.Error(t, acc2.Accumulate(mustMessageStreamEventUnion(t,
+		`{"type":"content_block_stop","index":0}`)))
+	// Input remains unchanged — auto-repair is tool_use-specific.
+	assert.Equal(t, json.RawMessage("{"), acc2.message.Content[0].Input)
+
+	// refreshContentBlockRawJSON and finalizeStreamingMessage still fail on
+	// invalid Input when called directly (no ensureValidToolInput guard).
 	require.Error(t, refreshContentBlockRawJSON(&anthropic.ContentBlockUnion{Type: "tool_use", Input: json.RawMessage("{")}))
 	require.Error(t, finalizeStreamingMessage(&anthropic.Message{
 		Content: []anthropic.ContentBlockUnion{{Type: "tool_use", Input: json.RawMessage("{")}},
 	}))
+}
+
+func Test_ensureValidToolInput(t *testing.T) {
+	// nil input — no-op.
+	var nilBlock *anthropic.ContentBlockUnion
+	ensureValidToolInput(nilBlock) // should not panic
+
+	// non-tool_use block — no-op.
+	nonTool := &anthropic.ContentBlockUnion{Type: "text", Input: json.RawMessage("{bad")}
+	ensureValidToolInput(nonTool)
+	assert.Equal(t, json.RawMessage("{bad"), nonTool.Input, "non-tool_use Input must not be modified")
+
+	// tool_use with nil Input — reset to {}.
+	nilInput := &anthropic.ContentBlockUnion{Type: "tool_use"}
+	ensureValidToolInput(nilInput)
+	assert.Equal(t, json.RawMessage("{}"), nilInput.Input)
+
+	// tool_use with empty Input — reset to {}.
+	emptyInput := &anthropic.ContentBlockUnion{Type: "tool_use", Input: json.RawMessage("")}
+	ensureValidToolInput(emptyInput)
+	assert.Equal(t, json.RawMessage("{}"), emptyInput.Input)
+
+	// tool_use with whitespace-only Input — reset to {}.
+	wsInput := &anthropic.ContentBlockUnion{Type: "tool_use", Input: json.RawMessage("  ")}
+	ensureValidToolInput(wsInput)
+	assert.Equal(t, json.RawMessage("{}"), wsInput.Input)
+
+	// tool_use with partial JSON — reset to {}.
+	partialInput := &anthropic.ContentBlockUnion{Type: "tool_use", Input: json.RawMessage("{")}
+	ensureValidToolInput(partialInput)
+	assert.Equal(t, json.RawMessage("{}"), partialInput.Input)
+
+	// tool_use with literal "null" (json.Valid("null") is true) — reset to {}.
+	nullLiteral := &anthropic.ContentBlockUnion{Type: "tool_use", Input: json.RawMessage("null")}
+	ensureValidToolInput(nullLiteral)
+	assert.Equal(t, json.RawMessage("{}"), nullLiteral.Input)
+
+	// tool_use with valid JSON — unchanged.
+	validInput := &anthropic.ContentBlockUnion{Type: "tool_use", Input: json.RawMessage(`{"key":"val"}`)}
+	ensureValidToolInput(validInput)
+	assert.Equal(t, json.RawMessage(`{"key":"val"}`), validInput.Input)
 }
 
 func mustMessageStreamEventUnion(t *testing.T, raw string) anthropic.MessageStreamEventUnion {
@@ -2679,8 +2744,8 @@ func TestWithEnableTokenTailoring_ErrorInCountTokens(t *testing.T) {
 	require.NotNil(t, captured, "expected request callback to capture request")
 	// Tailoring succeeds but token counting fails, messages should be tailored.
 	require.Len(t, captured.Messages, 1, "expected tailored messages even when token counting fails, got %d", len(captured.Messages))
-	// MaxTokens should not be set when token counting fails.
-	require.Equal(t, int64(0), captured.MaxTokens, "expected MaxTokens to be 0 when token counting fails")
+	// MaxTokens defaults to 4096 when unset (Anthropic requires max_tokens >= 1).
+	require.Equal(t, int64(4096), captured.MaxTokens)
 }
 
 // zeroTokenCounter always returns 0 for testing edge cases.
@@ -2727,8 +2792,7 @@ func TestWithEnableTokenTailoring_RemainingTokensNegative(t *testing.T) {
 	}
 
 	require.NotNil(t, captured, "expected request callback to capture request")
-	// MaxTokens should not be auto-set by token tailoring.
-	require.Equal(t, int64(0), captured.MaxTokens, "expected MaxTokens to remain unset")
+	require.Equal(t, int64(4096), captured.MaxTokens)
 }
 
 // TestWithEnableTokenTailoring_AutoSetMaxTokens tests automatic MaxTokens setting.
@@ -2757,8 +2821,22 @@ func TestWithEnableTokenTailoring_AutoSetMaxTokens(t *testing.T) {
 	}
 
 	require.NotNil(t, captured, "expected request callback to capture request")
-	// MaxTokens should stay unset when not specified by user.
-	require.Equal(t, int64(0), captured.MaxTokens, "expected MaxTokens to remain unset")
+	// Anthropic requires max_tokens >= 1; apply framework default when unset.
+	require.Equal(t, int64(4096), captured.MaxTokens)
+}
+
+func TestBuildChatRequest_ClampsMaxTokensToModelCap(t *testing.T) {
+	m := New("claude-3-5-sonnet-20241022")
+	over := 64000
+	req := &model.Request{
+		Messages: []model.Message{model.NewUserMessage("hi")},
+		GenerationConfig: model.GenerationConfig{
+			MaxTokens: &over,
+		},
+	}
+	chatReq, err := m.buildChatRequest(req)
+	require.NoError(t, err)
+	require.Equal(t, int64(8192), chatReq.MaxTokens)
 }
 
 // TestWithEnableTokenTailoring_UserSpecifiedMaxTokens tests user-specified MaxTokens is preserved.

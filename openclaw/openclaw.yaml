@@ -18,6 +18,12 @@ model:
   mode: "openai"
   name: "gpt-5"
   openai_variant: "auto"
+  # Optional static headers for OpenAI-compatible gateways. OPENAI_HEADERS
+  # can also provide space-, comma-, or newline-separated KEY=VALUE pairs
+  # and supports quoted values such as Authorization="Bearer token".
+  # headers:
+  #   X-Example-User: "alice"
+  #   X-Example-Token: "Bearer token-with-space"
 
 # skills:
 #   extra_dirs:
@@ -38,19 +44,26 @@ model:
 
 tools:
   enable_parallel_tools: true
-  # Optional: expose compact tool_search + dynamic_agent entrypoints
-  # when direct tool declarations exceed the auto threshold.
-  # Default mode is auto. Set defer_to_dynamic_agent_mode: on to force
-  # it on, or defer_to_dynamic_agent_mode: off to disable it.
-  # defer_to_dynamic_agent_mode: auto # off|on|auto
+  # Optional: expose compact tool_search + dynamic_agent entrypoints.
+  # Default mode is off, which keeps configured tools directly available
+  # on the parent agent. Set auto to defer only when direct tool
+  # declarations exceed the threshold, or on to force it.
+  # defer_to_dynamic_agent_mode: off # off|on|auto
   # defer_to_dynamic_agent_threshold_chars: 4000
+  # dynamic_agent_timeout: "180s"
+  # Set false to expose only tool_search/dynamic_agent plus
+  # defer_direct_tools, useful for token-sensitive benchmark profiles.
+  # defer_default_direct_tools: true
   # defer_direct_tools: ["exec_command"]
+  # Optional: default timeout for host exec_command calls when timeout_sec is
+  # omitted. Leave unset to keep the built-in host exec default.
+  # host_exec_default_timeout: "60s"
   # code_executor:
-  #   type: "sandbox" # none|local|sandbox
+  #   type: "sandbox" # sandbox; leave empty/unset to inherit enable_local_exec
   #   auto_execute_code_blocks: true
   #   sandbox:
   #     workspace_root: "" # default: state_dir/sandbox
-  #     backend: "auto" # auto|linux-bubblewrap
+  #     backend: "auto" # auto|linux-bubblewrap|macos-sandbox-exec
   #     profile: "workspace_write" # workspace_write|read_only|disabled
   #     network: "restricted" # restricted|enabled
   #     default_timeout: "30s"
@@ -64,6 +77,7 @@ tools:
       config:
         default_profile: "openclaw"
         evaluate_enabled: false
+        screenshot_dir: "${TRPC_CLAW_STATE_DIR}/workspaces/scratch/out"
         server_url: "http://127.0.0.1:19790"
         sandbox_server_url: "http://127.0.0.1:20790"
         profiles:

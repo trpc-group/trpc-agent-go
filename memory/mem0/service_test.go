@@ -10,6 +10,8 @@ package mem0
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -31,6 +33,34 @@ import (
 func TestNewService_FailsWithoutAPIKey(t *testing.T) {
 	_, err := NewService()
 	assert.Error(t, err, "missing api key must fail")
+}
+
+func TestNewService_SelfHostedOSSAllowsEmptyAPIKey(t *testing.T) {
+	svc, err := NewService(WithSelfHostedOSS())
+	require.NoError(t, err)
+	defer svc.Close()
+	assert.Equal(t, apiModeSelfHostedOSS, svc.opts.apiMode)
+	assert.Equal(t, defaultSelfHostedOSSHost, svc.opts.host)
+}
+
+func TestNewService_SelfHostedOSSRejectsCloudDefaultHost(t *testing.T) {
+	_, err := NewService(WithSelfHostedOSS(), WithHost(defaultHost))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "default host")
+
+	_, err = NewService(WithSelfHostedOSS(), WithHost(defaultHost+"/"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "default host")
+}
+
+func TestNewService_SelfHostedOSSRejectsOrgProject(t *testing.T) {
+	_, err := NewService(
+		WithSelfHostedOSS(),
+		WithHost("http://localhost:8888"),
+		WithOrgProject("org", "project"),
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "org/project")
 }
 
 func TestNewService_DefaultsToolsList(t *testing.T) {
@@ -231,7 +261,9 @@ func TestReadMemories_PaginatesAndSorts(t *testing.T) {
 }
 
 func TestReadMemories_AppliesLimit(t *testing.T) {
+	var calls int32
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&calls, 1)
 		if r.URL.Query().Get("page") != "1" {
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`[]`))
@@ -253,6 +285,7 @@ func TestReadMemories_AppliesLimit(t *testing.T) {
 		memory.UserKey{AppName: "app", UserID: "user"}, 1)
 	require.NoError(t, err)
 	assert.Len(t, entries, 1)
+	assert.Equal(t, int32(1), atomic.LoadInt32(&calls), "limit should stop cloud pagination")
 }
 
 func TestReadMemories_StopsOnInvalidPage(t *testing.T) {
@@ -287,6 +320,134 @@ func TestReadMemories_BackendErrorPropagates(t *testing.T) {
 	_, err := svc.ReadMemories(context.Background(),
 		memory.UserKey{AppName: "a", UserID: "u"}, 0)
 	assert.Error(t, err)
+}
+
+func TestReadMemories_SelfHostedOSSFiltersByAppMetadata(t *testing.T) {
+	var gotPath string
+	var gotQuery string
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotQuery = r.URL.RawQuery
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"results":[
+			{"id":"a","memory":"keep","metadata":{"trpc_app_name":"app"},"created_at":"2024-01-01T00:00:00Z"},
+			{"id":"legacy","memory":"drop legacy without metadata","created_at":"2024-01-02T00:00:00Z"},
+			{"id":"b","memory":"drop","metadata":{"trpc_app_name":"other"},"created_at":"2024-01-02T00:00:00Z"}
+		]}`))
+	})
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	svc, err := NewService(WithSelfHostedOSS(), WithHost(srv.URL))
+	require.NoError(t, err)
+	defer svc.Close()
+
+	entries, err := svc.ReadMemories(context.Background(),
+		memory.UserKey{AppName: "app", UserID: "user"}, 10)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, "a", entries[0].ID)
+	assert.Equal(t, "/memories", gotPath)
+	assert.Contains(t, gotQuery, "user_id=user")
+	assert.Contains(t, gotQuery, "top_k=")
+}
+
+func TestReadMemories_SelfHostedOSSCanIncludeUnscopedMemories(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/memories", r.URL.Path)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"results":[
+			{"id":"app","memory":"keep app","metadata":{"trpc_app_name":"app"},"created_at":"2024-01-03T00:00:00Z"},
+			{"id":"legacy-missing","memory":"keep legacy missing","created_at":"2024-01-02T00:00:00Z"},
+			{"id":"legacy-non-string","memory":"keep legacy non string","metadata":{"trpc_app_name":123},"created_at":"2024-01-01T00:00:00Z"},
+			{"id":"other","memory":"drop other app","metadata":{"trpc_app_name":"other"},"created_at":"2024-01-04T00:00:00Z"}
+		]}`))
+	})
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	svc, err := NewService(
+		WithSelfHostedOSS(),
+		WithHost(srv.URL),
+		WithSelfHostedOSSIncludeUnscopedMemories(),
+	)
+	require.NoError(t, err)
+	defer svc.Close()
+
+	entries, err := svc.ReadMemories(context.Background(),
+		memory.UserKey{AppName: "app", UserID: "user"}, 10)
+	require.NoError(t, err)
+	require.Len(t, entries, 3)
+	assert.Equal(t, "app", entries[0].ID)
+	assert.Equal(t, "legacy-missing", entries[1].ID)
+	assert.Equal(t, "legacy-non-string", entries[2].ID)
+}
+
+func TestReadMemories_SelfHostedOSSRejectsUnboundedLimit(t *testing.T) {
+	svc, err := NewService(WithSelfHostedOSS(), WithHost("http://localhost:8888"))
+	require.NoError(t, err)
+	defer svc.Close()
+
+	_, err = svc.ReadMemories(context.Background(),
+		memory.UserKey{AppName: "app", UserID: "user"}, 0)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "positive limit")
+
+	_, err = svc.ReadMemories(context.Background(),
+		memory.UserKey{AppName: "app", UserID: "user"}, maxOSSListTopK+1)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "exceeds maximum")
+}
+
+func TestReadMemories_SelfHostedOSSBackendErrorPropagates(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/memories", r.URL.Path)
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte(`{"detail":"upstream unavailable"}`))
+	})
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	svc, err := NewService(WithSelfHostedOSS(), WithHost(srv.URL))
+	require.NoError(t, err)
+	defer svc.Close()
+
+	_, err = svc.ReadMemories(context.Background(),
+		memory.UserKey{AppName: "app", UserID: "user"}, 10)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "502")
+}
+
+func TestReadMemories_SelfHostedOSSSortsLimitsAndSkipsInvalidRecords(t *testing.T) {
+	var gotQuery string
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.RawQuery
+		assert.Equal(t, "/memories", r.URL.Path)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"results":[
+			{"id":"older-update","memory":"older update","metadata":{"trpc_app_name":"app"},"created_at":"2024-01-05T00:00:00Z","updated_at":"2024-01-06T00:00:00Z"},
+			{"id":"newer-update","memory":"newer update","metadata":{"trpc_app_name":"app"},"created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-07T00:00:00Z"},
+			{"id":"same-update-newer-created","memory":"same update newer created","metadata":{"trpc_app_name":"app"},"created_at":"2024-01-06T00:00:00Z","updated_at":"2024-01-06T00:00:00Z"},
+			{"id":"wrong-app","memory":"drop wrong app","metadata":{"trpc_app_name":"other"},"created_at":"2024-01-08T00:00:00Z","updated_at":"2024-01-08T00:00:00Z"},
+			{"id":"","memory":"drop empty id","metadata":{"trpc_app_name":"app"},"created_at":"2024-01-09T00:00:00Z","updated_at":"2024-01-09T00:00:00Z"},
+			{"id":"empty-memory","memory":"","metadata":{"trpc_app_name":"app"},"created_at":"2024-01-10T00:00:00Z","updated_at":"2024-01-10T00:00:00Z"}
+		]}`))
+	})
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	svc, err := NewService(WithSelfHostedOSS(), WithHost(srv.URL))
+	require.NoError(t, err)
+	defer svc.Close()
+
+	entries, err := svc.ReadMemories(context.Background(),
+		memory.UserKey{AppName: "app", UserID: "user"}, 2)
+	require.NoError(t, err)
+	require.Len(t, entries, 2)
+	assert.Equal(t, "newer-update", entries[0].ID)
+	assert.Equal(t, "same-update-newer-created", entries[1].ID)
+	assert.Contains(t, gotQuery, "user_id=user")
+	assert.Contains(t, gotQuery, "top_k=1000")
 }
 
 // --- SearchMemories ---
@@ -371,4 +532,77 @@ func TestSearchMemories_BackendErrorPropagates(t *testing.T) {
 	_, err := svc.SearchMemories(context.Background(),
 		memory.UserKey{AppName: "a", UserID: "u"}, "q")
 	assert.Error(t, err)
+}
+
+func TestSearchMemories_SelfHostedOSSUsesMetadataFilter(t *testing.T) {
+	var gotReq searchV2Request
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/search" {
+			http.NotFound(w, r)
+			return
+		}
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		require.NoError(t, json.Unmarshal(body, &gotReq))
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"results":[
+			{"id":"keep","memory":"match","metadata":{"trpc_app_name":"app"},"score":0.9},
+			{"id":"drop","memory":"wrong app","metadata":{"trpc_app_name":"other"},"score":1}
+		]}`))
+	})
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	svc, err := NewService(WithSelfHostedOSS(), WithHost(srv.URL), WithAPIKey("oss-key"))
+	require.NoError(t, err)
+	defer svc.Close()
+
+	got, err := svc.SearchMemories(context.Background(),
+		memory.UserKey{AppName: "app", UserID: "user"}, "query")
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, "keep", got[0].ID)
+	assert.Equal(t, "query", gotReq.Query)
+	assert.Equal(t, map[string]any{
+		queryKeyUserID:         "user",
+		metadataKeyTRPCAppName: "app",
+	}, gotReq.Filters)
+}
+
+func TestSearchMemories_SelfHostedOSSCanIncludeUnscopedMemories(t *testing.T) {
+	var gotReq searchV2Request
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/search" {
+			http.NotFound(w, r)
+			return
+		}
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		require.NoError(t, json.Unmarshal(body, &gotReq))
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"results":[
+			{"id":"app","memory":"keep app","metadata":{"trpc_app_name":"app"},"score":0.9},
+			{"id":"legacy","memory":"keep legacy","score":0.8},
+			{"id":"other","memory":"drop other app","metadata":{"trpc_app_name":"other"},"score":1}
+		]}`))
+	})
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	svc, err := NewService(
+		WithSelfHostedOSS(),
+		WithHost(srv.URL),
+		WithAPIKey("oss-key"),
+		WithSelfHostedOSSIncludeUnscopedMemories(),
+	)
+	require.NoError(t, err)
+	defer svc.Close()
+
+	got, err := svc.SearchMemories(context.Background(),
+		memory.UserKey{AppName: "app", UserID: "user"}, "query")
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	assert.Equal(t, "app", got[0].ID)
+	assert.Equal(t, "legacy", got[1].ID)
+	assert.Equal(t, map[string]any{queryKeyUserID: "user"}, gotReq.Filters)
 }

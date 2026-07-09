@@ -9,7 +9,11 @@
 // Package trace defines the public execution trace model.
 package trace
 
-import "time"
+import (
+	"time"
+
+	"trpc.group/trpc-go/trpc-agent-go/model"
+)
 
 // TraceStatus describes the overall status of a single runner.Run execution trace.
 type TraceStatus string
@@ -31,6 +35,7 @@ type Trace struct {
 	StartedAt        time.Time
 	EndedAt          time.Time
 	Status           TraceStatus
+	Usage            *model.Usage
 	Steps            []Step
 }
 
@@ -48,6 +53,7 @@ type Step struct {
 	AppliedSurfaceIDs  []string
 	Input              *Snapshot
 	Output             *Snapshot
+	Usage              *model.Usage
 	Error              string
 }
 

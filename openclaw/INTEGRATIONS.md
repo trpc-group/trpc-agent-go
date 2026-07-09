@@ -857,22 +857,23 @@ reloaded on each agent run (useful for MCP where tools can change).
 ### Deferred tool surface (optional)
 
 Large tool and skill surfaces can dominate the parent model request even
-when a turn is answered directly. The default
-`tools.defer_to_dynamic_agent_mode: auto` exposes compact `tool_search` and
-`dynamic_agent` tools only when the configured tool declarations exceed the
-auto threshold. The parent can discover exact tool and skill names with
-`tool_search`, while the configured tools, toolsets, skills, memory, and code
-execution surface are loaded only inside the short-lived worker call. Existing
-`tools.defer_to_dynamic_agent: true` configs remain supported and force
-deferred mode on; use `tools.defer_to_dynamic_agent_mode: off` or
-`tools.defer_to_dynamic_agent: false` to disable it.
+when a turn is answered directly. Deferred tool surface mode is disabled by
+default so configured tools stay directly available on the parent agent. Set
+`tools.defer_to_dynamic_agent_mode: auto` to expose compact `tool_search` and
+`dynamic_agent` tools only when configured tool declarations exceed the auto
+threshold, or set `on` to force deferred mode. The parent can discover exact
+tool and skill names with `tool_search`, while the configured tools,
+toolsets, skills, memory, and code execution surface are loaded only inside
+the short-lived worker call. Existing `tools.defer_to_dynamic_agent: true`
+configs remain supported and force deferred mode on.
 
 YAML:
 
 ```yaml
 tools:
-  defer_to_dynamic_agent_mode: auto # off|on|auto
+  defer_to_dynamic_agent_mode: off # off|on|auto
   defer_to_dynamic_agent_threshold_chars: 4000 # optional
+  defer_default_direct_tools: true # optional
   defer_direct_tools: ["exec_command"] # optional keep-list
 ```
 
@@ -925,14 +926,20 @@ tools:
   providers:
     - type: "duckduckgo"
       config:
+        backend: "api"
         timeout: "30s"
 ```
 
 Optional config fields:
 
-- `base_url` (default uses the official API endpoint)
+- `backend`: `api` (default), `html`, or `lite`
+- `base_url` (default depends on `backend`)
 - `user_agent`
 - `timeout`
+
+`api` uses the DuckDuckGo Instant Answer API and works best for
+encyclopedic answers. `html` and `lite` parse DuckDuckGo search result pages
+and return web result titles, URLs, and snippets for discovery workflows.
 
 ### Provider: webfetch_http (safe by default)
 

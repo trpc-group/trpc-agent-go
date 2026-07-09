@@ -1677,6 +1677,7 @@ agent := llmagent.New(
     "assistant",
     llmagent.WithModel(openai.New("deepseek-v4-flash")),
     llmagent.WithTools(mem0Svc.Tools()),
+    llmagent.WithPreloadMemory(10), // Optional read-only preload budget.
 )
 
 r := runner.NewRunner(
@@ -1692,6 +1693,7 @@ defer r.Close()
 
 - Register tools with `llmagent.WithTools(mem0Svc.Tools())`
 - Use `runner.WithSessionIngestor(mem0Svc)` to send session transcripts to mem0
+- Optionally enable `llmagent.WithPreloadMemory(N)`; because `mem0Svc` also implements `memory.Reader`, the runner can use it for read-only preload
 - Do **not** use `runner.WithMemoryService(...)` with this integration
 
 ### Why `WithSessionIngestor(...)` Instead of `WithMemoryService(...)`
@@ -1705,7 +1707,7 @@ Using `runner.WithSessionIngestor(...)` makes that boundary explicit:
 - Runner sends the completed session transcript after each turn
 - mem0 performs extraction and storage on the service side
 - per-request ingest fields such as `metadata`, `agent_id`, and `run_id` can be passed through `session.IngestOption`
-- the integration is not mistaken for a built-in backend that supports full framework-side CRUD or preload behavior
+- the integration is not mistaken for a built-in backend that supports full framework-side CRUD; framework-side preload uses only the read-only `memory.Reader` surface when explicitly enabled
 
 In short, `MemoryService` means "the framework manages memories directly", while `SessionIngestor` means "the framework hands the transcript to an external memory system". `mem0` matches the second model.
 
@@ -1713,25 +1715,37 @@ In short, `MemoryService` means "the framework manages memories directly", while
 
 | Option | Purpose | Default |
 | ------ | ------- | ------- |
-| `WithAPIKey(key)` | mem0 API key. Required for all requests. | required |
+| `WithAPIKey(key)` | mem0 API key. Required for hosted platform requests; optional for self-hosted OSS when auth is disabled. | required |
 | `WithHost(url)` | Override the mem0 API host/base URL. | `https://api.mem0.ai` |
-| `WithOrgProject(orgID, projectID)` | Add mem0 `org_id` / `project_id` to ingest and retrieval requests. | empty |
-| `WithAsyncMode(bool)` | Controls mem0's `async_mode` flag on ingest requests. | `true` |
-| `WithVersion(v)` | Sets the mem0 ingestion API version field. | `v2` |
+| `WithSelfHostedOSS()` | Use the self-hosted Mem0 OSS REST API (`/memories`, `/search`, `X-API-Key`). When enabled without `WithHost`, the host defaults to `http://localhost:8888`; the hosted-platform default host is rejected in OSS mode. | disabled |
+| `WithSelfHostedOSSIncludeUnscopedMemories()` | Include legacy OSS records that do not carry `metadata.trpc_app_name`; records tagged for a different app remain hidden. | disabled |
+| `WithOrgProject(orgID, projectID)` | Add hosted-platform `org_id` / `project_id`; unsupported with self-hosted OSS. | empty |
+| `WithAsyncMode(bool)` | Controls hosted-platform `async_mode`; self-hosted OSS writes are synchronous at the REST layer. | `true` |
+| `WithVersion(v)` | Sets the hosted-platform ingestion API version field. | `v2` |
 | `WithTimeout(d)` | HTTP timeout used by the client. | `10s` |
 | `WithLoadToolEnabled(bool)` | Expose `memory_load` from `Tools()`. | `false` |
 | `WithAsyncMemoryNum(n)` | Number of background ingest workers. | `1` |
 | `WithMemoryQueueSize(n)` | Queue size per ingest worker. | `10` |
 | `WithMemoryJobTimeout(d)` | Timeout for queued jobs and synchronous fallback ingest. | `30s` |
 
+For the official self-hosted OSS server, configure the server-side LLM and
+embedder independently when they use different endpoints or API keys. The OSS
+server exposes `POST /configure`; set `llm.provider=openai` with the LLM model,
+base URL, and API key, and set `embedder.provider=openai` with the embedding
+model, base URL, and API key. The Go adapter only uses the REST API and does not
+access the OSS server's internal vector store directly.
+
 ### Notes
 
 - `Tools()` exposes `memory_search` by default; `memory_load` can be enabled explicitly.
 - All reads remain scoped to the current `<appName, userID>`.
+- Self-hosted OSS app isolation uses `metadata.trpc_app_name` because the OSS API has no top-level `app_id`. Existing OSS records without this metadata are hidden by default until reingested or backfilled. Use `WithSelfHostedOSSIncludeUnscopedMemories()` only for migrations that need those legacy records visible.
+- The current OSS `GET /memories` API is capped at 1000 user-level results, is not pageable, and cannot express `metadata.trpc_app_name` as a server-side filter. `ReadMemories` therefore requires a positive limit no larger than 1000 and applies app isolation as a best-effort local filter over the first 1000 OSS records returned for the user.
 - Runner automatically passes session context into ingest. Custom callers can also use `session.WithIngestMetadata`, `session.WithIngestAgentID`, and `session.WithIngestRunID` when needed.
+- `WithPreloadMemory(N)` works with mem0 when the same service is configured via `runner.WithSessionIngestor(mem0Svc)`. Use a positive budget in production.
 - When mem0 metadata is available, search results can still carry structured fields such as `Topics`, `Kind`, `EventTime`, `Participants`, and `Location`.
 - Call `Close()` on the service so background workers shut down cleanly.
-- If you need full CRUD tools or framework-side preload, use one of the built-in memory backends instead.
+- If you need full CRUD tools, use one of the built-in memory backends instead.
 
 ## TencentDB Agent Memory Integration (`memory/tencentdb`)
 
@@ -1751,11 +1765,10 @@ The boundary is intentionally different from built-in backends:
 - Native tools expose read-oriented search through `tdai_conversation_search`
   (session-scoped, on by default) and `tdai_memory_search` (opt-in via
   `WithMemorySearchTool(true)`).
-- An optional short-term context offload plugin can externalize large tool
-  results into local `refs/*.md` files, maintain L1 JSONL summaries, judge
-  L1.5 task boundaries, generate L2 Mermaid task maps, and apply L3
-  token-pressure compression before model calls. It is separate from recall and
-  is off by default.
+- An optional short-term context offload plugin delegates tool-result
+  externalization, L1/L1.5/L2/L3 processing, drill-down, and persistence to
+  TencentDB Agent Memory gateway hook APIs. The Go adapter does not write local
+  offload files. It is separate from recall and is off by default.
 
 > **Multi-tenant note:** automatic recall and `tdai_memory_search` read from the
 > gateway's shared long-term store, which does not currently enforce
@@ -1813,21 +1826,10 @@ memSvc, err := memorytencentdb.NewService(
     // Opt-in cross-session/user reads; enable only for a trusted/isolated gateway.
     memorytencentdb.WithRecallEnabled(true),
     memorytencentdb.WithMemorySearchTool(true),
-    // Optional short-term tool result offload; separate from long-term recall.
+    // Optional short-term tool result offload; requires a gateway that supports
+    // /offload/v1/hooks/* and /offload/v1/tools/*.
     // memorytencentdb.WithContextOffload(memorytencentdb.ContextOffloadConfig{
     //     Enabled: true,
-    //     DataDir: ".tdai-offload",
-    //     Mode:    memorytencentdb.ContextOffloadModeLocal,
-    //     Model:   openai.New("deepseek-v4-flash"),
-    // }),
-    // Or route L1/L1.5/L2 through a compatible offload backend:
-    // memorytencentdb.WithContextOffload(memorytencentdb.ContextOffloadConfig{
-    //     Enabled: true,
-    //     Mode:    memorytencentdb.ContextOffloadModeBackend,
-    //     Backend: memorytencentdb.ContextOffloadBackendConfig{
-    //         URL:    gatewayURL,
-    //         APIKey: os.Getenv("TDAI_GATEWAY_API_KEY"),
-    //     },
     // }),
     // memorytencentdb.WithAPIKey(os.Getenv("TDAI_GATEWAY_API_KEY")),
 )
@@ -1871,6 +1873,65 @@ defer r.Close()
   through `memSvc.Tools()` when enabled.
 - Do **not** use `runner.WithMemoryService(...)` with this integration
 
+### Enable Context Offload
+
+Context offload is a separate, opt-in path for large tool results. Use it only
+with a TencentDB Agent Memory gateway build that exposes the offload routes
+listed in the notes below. The Go adapter does not provide local storage,
+summarization models, or local/backend/collect modes.
+
+Minimal setup:
+
+```go
+memSvc, err := memorytencentdb.NewService(
+    memorytencentdb.WithGatewayURL(gatewayURL),
+    memorytencentdb.WithContextOffload(memorytencentdb.ContextOffloadConfig{
+        Enabled: true,
+    }),
+)
+if err != nil {
+    panic(err)
+}
+
+agent := llmagent.New(
+    "assistant",
+    llmagent.WithModel(openai.New("deepseek-v4-flash")),
+    llmagent.WithTools(memSvc.Tools()),
+)
+
+r := runner.NewRunner(
+    "my-app",
+    agent,
+    runner.WithSessionService(sessionSvc),
+    runner.WithSessionIngestor(memSvc),
+    runner.WithPlugins(memSvc.ContextOffloadPlugin()),
+)
+```
+
+If offload traffic should use a different gateway or key from normal
+capture/search/recall traffic, set `GatewayURL` and `APIKey` on
+`ContextOffloadConfig`:
+
+```go
+memorytencentdb.WithContextOffload(memorytencentdb.ContextOffloadConfig{
+    Enabled:    true,
+    GatewayURL: "http://127.0.0.1:8420",
+    APIKey:     os.Getenv("TDAI_OFFLOAD_GATEWAY_API_KEY"),
+})
+```
+
+At runtime:
+
+- `ContextOffloadPlugin()` calls the gateway after tool execution. The gateway
+  may replace large tool result messages with compact references or summaries.
+- Before the next model call, the plugin asks the gateway whether the current
+  request should be rewritten with offloaded context.
+- `memSvc.Tools()` exposes `tdai_read_offload_ref`,
+  `tdai_read_offload_node`, and `tdai_search_offload_index` when context
+  offload is enabled, so the model can drill into gateway-owned offload data.
+- Do not configure local directories, local models, or L0-L3 policies in the Go
+  adapter; those concerns belong to TencentDB Agent Memory.
+
 ### Interactive Example
 
 Run the example after the gateway is ready:
@@ -1913,26 +1974,16 @@ tools even after conversation history is reset.
 | `WithToolPrefix(prefix)` | Change native tool prefix. | `tdai` |
 | `WithContextOffload(ContextOffloadConfig)` | Configure explicit short-term context offload for large tool results. | disabled |
 
-`ContextOffloadConfig` groups the detailed settings by offload layer. Zero
-values are filled from defaults except `Enabled`, which must be set explicitly.
+`ContextOffloadConfig` only controls the Go adapter's gateway integration.
+Offload layers, state, storage, TTL, and isolation are owned by the TencentDB
+Agent Memory gateway. The Go adapter does not expose local/backend offload
+modes and does not write local offload state.
 
 | Field | Purpose | Default |
 | ----- | ------- | ------- |
 | `Enabled` | Enable context offload plugin and companion tools. | `false` |
-| `DataDir` | Directory for `refs/`, JSONL indexes, and Mermaid files. | `.tdai-offload` |
-| `Mode` | Select `local`, `backend`, or `collect` offload mode. | `local` |
-| `Model` | Model used for local L1/L1.5/L2 offload tasks. When unset, deterministic fallback summaries are used. | none |
-| `MaxEntries` | Maximum offload entries rendered into the current task Mermaid context. | `20` |
-| `Backend.URL`, `Backend.APIKey` | Backend endpoint and optional API key for backend-mode L1/L1.5/L2. | none |
-| `L0.MinToolResultBytes` | Minimum tool result size to externalize. | `8192` |
-| `L0.MaxRefBytes` | Maximum bytes returned by `tdai_read_offload_ref`. | `1048576` |
-| `L1.MaxPairsPerBatch` | Maximum tool pairs sent to one L1 summarization request. | `20` |
-| `L2.NullThreshold` | Number of unmapped L1 rows that trigger L2 Mermaid generation. | `4` |
-| `L2.Timeout` | Time-based L2 trigger interval. | `5m` |
-| `L3.ContextWindow` | Context window used for L3 token-pressure checks when the offload model does not report one. | `200000` |
-| `L3.MildRatio` | Token ratio that triggers L3 summary replacement. | `0.50` |
-| `L3.AggressiveRatio` | Token ratio that triggers deletion of old offloaded tool blocks. | `0.85` |
-| `L3.EmergencyRatio`, `L3.EmergencyTargetRatio` | Emergency compression trigger and target ratios. | `0.95`, `0.60` |
+| `GatewayURL` | Optional gateway URL override for context offload hook/tool calls. Empty reuses `WithGatewayURL`. | none |
+| `APIKey` | Optional API key override for context offload hook/tool calls. Empty reuses `WithAPIKey`. | none |
 
 ### Notes
 
@@ -1948,20 +1999,17 @@ values are filled from defaults except `Enabled`, which must be set explicitly.
   searchable.
 - `tdai_conversation_search` searches conversation history and defaults to the
   current gateway `session_key`.
-- Context offload is local, opt-in, and runtime-scoped. It does not call
-  `/capture` or `/recall`, and enabling recall alone will not rewrite tool
-  result messages or create Mermaid task maps.
-- Context offload has three model modes. `local` calls the configured
-  `ContextOffloadConfig.Model` for L1/L1.5/L2 and falls back deterministically
-  when unset; `backend` calls compatible `/offload/v1/...` endpoints;
-  `collect` records refs and JSONL state without rewriting model-facing
-  messages.
-- The offload tools are scoped to the current invocation's agent/session data
-  directory. `read_offload_ref` validates `result_ref` reads against path
-  traversal; `read_offload_node` reads by `node_id` and does not accept
-  `result_ref`.
-- Live model coverage is behind the `integration` build tag, for example:
-  `TDAI_CONTEXT_OFFLOAD_INTEGRATION=1 OPENAI_API_KEY=... go test -tags=integration ./memory/tencentdb -run TestContextOffloadPlugin_IntegrationLocalModel`.
+- Context offload is opt-in and gateway-owned. It does not call `/capture` or
+  `/recall`, and enabling recall alone will not rewrite tool result messages or
+  create Mermaid task maps.
+- The Go adapter calls gateway hook endpoints
+  `/offload/v1/hooks/after-tool-messages` and
+  `/offload/v1/hooks/before-model`. It does not create `.tdai-offload`, local
+  refs, JSONL indexes, Mermaid files, or local state.
+- The offload tools call gateway drill-down endpoints
+  `/offload/v1/tools/read-ref`, `/offload/v1/tools/read-node`, and
+  `/offload/v1/tools/search-index`. Scope validation, storage ACLs, byte
+  limits, and persistence are gateway responsibilities.
 - Call `Close()` on the service so background capture workers shut down cleanly.
 
 ## References

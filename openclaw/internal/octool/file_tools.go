@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 
+	legacyxls "github.com/extrame/xls"
 	pdfpkg "github.com/ledongthuc/pdf"
 	"github.com/xuri/excelize/v2"
 	docreader "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
@@ -40,11 +41,13 @@ const (
 	errSpreadsheetUnsupported = "unsupported spreadsheet type"
 	errSpreadsheetSheetEmpty  = "spreadsheet has no sheets"
 
-	docKindPDF  = "pdf"
-	docKindDOCX = "docx"
-	docKindText = "text"
+	docKindPDF   = "pdf"
+	docKindDOCX  = "docx"
+	docKindText  = "text"
+	docKindImage = "image"
 
 	sheetKindXLSX = "xlsx"
+	sheetKindXLS  = "xls"
 	sheetKindCSV  = "csv"
 
 	defaultReadDocumentChars = 6_000
@@ -72,13 +75,15 @@ type readDocumentInput struct {
 }
 
 type readDocumentResult struct {
-	Path      string `json:"path"`
-	Kind      string `json:"kind"`
-	Title     string `json:"title"`
-	PageCount int    `json:"page_count,omitempty"`
-	Page      *int   `json:"page,omitempty"`
-	Text      string `json:"text"`
-	Truncated bool   `json:"truncated,omitempty"`
+	Path       string   `json:"path"`
+	Kind       string   `json:"kind"`
+	Title      string   `json:"title"`
+	PageCount  int      `json:"page_count,omitempty"`
+	Page       *int     `json:"page,omitempty"`
+	Text       string   `json:"text,omitempty"`
+	Output     string   `json:"output,omitempty"`
+	MediaFiles []string `json:"media_files,omitempty"`
+	Truncated  bool     `json:"truncated,omitempty"`
 }
 
 type readSpreadsheetInput struct {
@@ -135,8 +140,8 @@ func (t *readDocumentTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{
 		Name: toolReadDocument,
 		Description: "Read a chat document from a stable local path. " +
-			"Use this for PDFs, DOCX files, and plain text-like " +
-			"documents already present in the chat instead of " +
+			"Use this for PDFs, DOCX files, images, and plain " +
+			"text-like documents already present in the chat instead of " +
 			"calling exec_command to inspect upload paths.",
 		InputSchema: &tool.Schema{
 			Type: schemaTypeObject,
@@ -182,6 +187,23 @@ func (t *readDocumentTool) Call(
 	}
 
 	maxChars := resolvedMaxChars(in.MaxChars, defaultReadDocumentChars)
+	if kind == docKindImage {
+		if normalizedPositive(in.Page) != nil {
+			return nil, errors.New(
+				"page is only supported for PDF files",
+			)
+		}
+		return readDocumentResult{
+			Path:  path,
+			Kind:  kind,
+			Title: filepath.Base(path),
+			Text: "Image file attached for direct inspection. " +
+				"If vision is unavailable, use image or OCR " +
+				"tools against the returned path.",
+			Output:     execOutputMediaMarker + " " + path,
+			MediaFiles: []string{path},
+		}, nil
+	}
 	text, pageCount, err := readDocumentText(path, kind, in.Page)
 	if err != nil {
 		return nil, err
@@ -202,7 +224,7 @@ func (t *readDocumentTool) Call(
 func (t *readSpreadsheetTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{
 		Name: toolReadSpreadsheet,
-		Description: "Read tabular chat uploads such as XLSX and " +
+		Description: "Read tabular chat uploads such as XLSX, XLS, and " +
 			"CSV files. Use this instead of exec_command when the " +
 			"user asks for rows, sheets, or table excerpts.",
 		InputSchema: &tool.Schema{
@@ -262,7 +284,11 @@ func (t *readSpreadsheetTool) Call(
 		return nil, err
 	}
 
-	rows, sheetName, err := readSpreadsheetRows(path, kind, in.Sheet)
+	rows, sheetName, parsedKind, err := readSpreadsheetRows(
+		path,
+		kind,
+		in.Sheet,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -278,7 +304,7 @@ func (t *readSpreadsheetTool) Call(
 
 	return readSpreadsheetResult{
 		Path:      path,
-		Kind:      kind,
+		Kind:      parsedKind,
 		Title:     filepath.Base(path),
 		Sheet:     sheetName,
 		StartRow:  startRow,
@@ -473,9 +499,16 @@ func documentKindFromPath(path string) string {
 		return docKindPDF
 	case ".docx", ".doc":
 		return docKindDOCX
-	case ".txt", ".md", ".markdown", ".json", ".csv",
-		".yaml", ".yml", ".log":
+	case ".txt", ".md", ".markdown", ".json", ".jsonld", ".csv",
+		".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf",
+		".log", ".py", ".go", ".js", ".jsx", ".ts", ".tsx",
+		".java", ".c", ".cc", ".cpp", ".h", ".hpp", ".rs",
+		".rb", ".php", ".sh", ".bash", ".zsh", ".fish", ".sql",
+		".xml", ".html", ".htm", ".css", ".scss", ".less",
+		".rst", ".tex":
 		return docKindText
+	case ".png", ".jpg", ".jpeg", ".webp", ".gif":
+		return docKindImage
 	default:
 		return ""
 	}
@@ -483,8 +516,10 @@ func documentKindFromPath(path string) string {
 
 func spreadsheetKindFromPath(path string) string {
 	switch strings.ToLower(filepath.Ext(path)) {
-	case ".xlsx", ".xls", ".xlsm":
+	case ".xlsx", ".xlsm":
 		return sheetKindXLSX
+	case ".xls":
+		return sheetKindXLS
 	case ".csv":
 		return sheetKindCSV
 	default:
@@ -618,15 +653,29 @@ func readSpreadsheetRows(
 	path string,
 	kind string,
 	sheet string,
-) ([][]string, string, error) {
+) ([][]string, string, string, error) {
 	switch kind {
 	case sheetKindCSV:
 		rows, err := readCSVRows(path)
-		return rows, "", err
+		return rows, "", sheetKindCSV, err
 	case sheetKindXLSX:
-		return readWorkbookRows(path, sheet)
+		rows, name, err := readWorkbookRows(path, sheet)
+		return rows, name, sheetKindXLSX, err
+	case sheetKindXLS:
+		rows, name, err := readLegacyWorkbookRows(path, sheet)
+		if err == nil {
+			return rows, name, sheetKindXLS, nil
+		}
+		fallbackRows, fallbackName, fallbackErr := readWorkbookRows(path, sheet)
+		if fallbackErr == nil {
+			return fallbackRows, fallbackName, sheetKindXLSX, nil
+		}
+		return nil, "", "", errors.Join(
+			fmt.Errorf("read legacy spreadsheet: %w", err),
+			fmt.Errorf("xlsx fallback: %w", fallbackErr),
+		)
 	default:
-		return nil, "", fmt.Errorf("%s: %s",
+		return nil, "", "", fmt.Errorf("%s: %s",
 			errSpreadsheetUnsupported, kind)
 	}
 }
@@ -673,6 +722,65 @@ func readWorkbookRows(
 		return nil, "", fmt.Errorf("read sheet %q: %w", selected, err)
 	}
 	return rows, selected, nil
+}
+
+func readLegacyWorkbookRows(
+	path string,
+	sheet string,
+) ([][]string, string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, "", fmt.Errorf("open legacy spreadsheet: %w", err)
+	}
+	defer file.Close()
+
+	workbook, err := legacyxls.OpenReader(file, "utf-8")
+	if err != nil {
+		return nil, "", fmt.Errorf("open legacy spreadsheet: %w", err)
+	}
+	if workbook.NumSheets() == 0 {
+		return nil, "", errors.New(errSpreadsheetSheetEmpty)
+	}
+
+	selectedName := strings.TrimSpace(sheet)
+	selectedIndex := 0
+	if selectedName != "" {
+		selectedIndex = -1
+		for i := 0; i < workbook.NumSheets(); i++ {
+			s := workbook.GetSheet(i)
+			if s != nil && s.Name == selectedName {
+				selectedIndex = i
+				break
+			}
+		}
+		if selectedIndex < 0 {
+			return nil, "", fmt.Errorf("sheet %q not found", selectedName)
+		}
+	}
+
+	selected := workbook.GetSheet(selectedIndex)
+	if selected == nil {
+		return nil, "", errors.New(errSpreadsheetSheetEmpty)
+	}
+	rows := make([][]string, 0, int(selected.MaxRow)+1)
+	for rowIndex := 0; rowIndex <= int(selected.MaxRow); rowIndex++ {
+		row := selected.Row(rowIndex)
+		if row == nil {
+			rows = append(rows, nil)
+			continue
+		}
+		lastCol := row.LastCol()
+		if lastCol <= 0 {
+			rows = append(rows, nil)
+			continue
+		}
+		values := make([]string, lastCol)
+		for colIndex := row.FirstCol(); colIndex < lastCol; colIndex++ {
+			values[colIndex] = row.Col(colIndex)
+		}
+		rows = append(rows, trimTrailingEmptyCells(values))
+	}
+	return rows, selected.Name, nil
 }
 
 func selectSpreadsheetRows(
@@ -761,6 +869,16 @@ func sanitizeSpreadsheetCells(values []string) []string {
 		out = append(out, sanitized)
 	}
 	return out
+}
+
+func trimTrailingEmptyCells(values []string) []string {
+	for len(values) > 0 && strings.TrimSpace(values[len(values)-1]) == "" {
+		values = values[:len(values)-1]
+	}
+	if len(values) == 0 {
+		return nil
+	}
+	return values
 }
 
 func formatSpreadsheetRows(rows []spreadsheetRow) string {

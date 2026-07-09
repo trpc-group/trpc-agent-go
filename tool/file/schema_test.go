@@ -29,6 +29,19 @@ func TestFileTool_InputSchemaDescriptions(t *testing.T) {
 		declarations[decl.Name] = decl
 	}
 
+	require.Contains(t, declarations, "read_file")
+	assert.Contains(
+		t,
+		declarations["read_file"].Description,
+		"absolute paths under base_directory or configured read-only roots",
+	)
+	require.Contains(t, declarations, "read_multiple_files")
+	assert.Contains(
+		t,
+		declarations["read_multiple_files"].Description,
+		"absolute paths under base_directory or configured read-only roots",
+	)
+
 	expected := map[string]map[string]string{
 		"save_file": {
 			"file_name": "Relative file path under base_directory to write",
@@ -36,7 +49,7 @@ func TestFileTool_InputSchemaDescriptions(t *testing.T) {
 			"overwrite": "Whether to replace the file if it already exists",
 		},
 		"read_file": {
-			"file_name":  "Relative file path under base_directory or workspace:// or artifact:// file ref to read",
+			"file_name":  "Relative file path under base_directory, workspace:// or artifact:// file ref, or an absolute path under base_directory or a configured read-only root",
 			"start_line": "Optional 1-based start line to begin reading from",
 			"num_lines":  "Optional maximum number of lines to return",
 		},

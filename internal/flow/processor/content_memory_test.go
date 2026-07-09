@@ -472,6 +472,26 @@ func TestGetPreloadMemoryMessage(t *testing.T) {
 		assert.Nil(t, msg)
 	})
 
+	t.Run("uses memory reader without memory service", func(t *testing.T) {
+		p := NewContentRequestProcessor(WithPreloadMemory(-1))
+		mockReader := &mockMemoryService{
+			memories: []*memory.Entry{
+				newTestMemoryEntry("mem-reader", "User prefers tea"),
+			},
+		}
+		inv := agent.NewInvocation(
+			agent.WithInvocationSession(&session.Session{
+				AppName: "app",
+				UserID:  "user",
+			}),
+		)
+		inv.MemoryReader = mockReader
+		msg := p.getPreloadMemoryMessage(context.Background(), inv)
+		require.NotNil(t, msg)
+		assert.Contains(t, msg.Content, "User prefers tea")
+		assert.True(t, mockReader.readCalled)
+	})
+
 	t.Run("nil session", func(t *testing.T) {
 		p := NewContentRequestProcessor(WithPreloadMemory(-1))
 		inv := agent.NewInvocation()
@@ -1524,7 +1544,7 @@ func TestContentRequestProcessor_UsesSummaryBoundaryCutoff(t *testing.T) {
 	require.Equal(t, "summary text", summaryText)
 	require.True(t, summaryCutoff.CutoffTime().Equal(cutoff))
 
-	messages := p.getIncrementMessagesAfterCutoff(inv, summaryCutoff)
+	messages := p.getIncrementMessagesAfterCutoff(inv, nil, summaryCutoff)
 	require.Len(t, messages, 1)
 	assert.Equal(t, "after boundary", messages[0].Content)
 }

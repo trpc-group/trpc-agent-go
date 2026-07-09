@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -85,19 +86,22 @@ type agentToolOptions struct {
 
 // dynamicOptions holds the configuration knobs for the dynamic AgentTool mode.
 type dynamicOptions struct {
-	templateAgent           agent.Agent
-	capabilityProvider      CapabilitySurfaceProvider
-	capabilitySkillProvider CapabilitySkillsProvider
-	capabilityTools         []tool.Tool
-	capabilitySkills        skillRepository
-	capabilityToolsSet      bool
-	exposeToolSelection     bool
-	exposeSkillSelection    bool
-	exposeInstruction       bool
-	requestDescription      *string
-	instructionDescription  *string
-	toolsDescription        *string
-	skillsDescription       *string
+	templateAgent             agent.Agent
+	capabilityProvider        CapabilitySurfaceProvider
+	capabilitySurfaceProvider DetailedCapabilitySurfaceProvider
+	capabilitySkillProvider   CapabilitySkillsProvider
+	capabilityTools           []tool.Tool
+	capabilitySkills          skillRepository
+	capabilityToolsSet        bool
+	exposeToolSelection       bool
+	exposeSkillSelection      bool
+	exposeInstruction         bool
+	requestDescription        *string
+	instructionDescription    *string
+	toolsDescription          *string
+	skillsDescription         *string
+	toolAliases               map[string]string
+	timeout                   time.Duration
 }
 
 func defaultDynamicOptions() *dynamicOptions {
@@ -1373,26 +1377,35 @@ func (at *Tool) forwardSubInvocationStream(
 			return
 		}
 	}
-	for ev := range wrapped {
-		if at.handleForwardedStreamEvent(
-			ctx, subInv, ev, writer, &state,
-			managePendingVisibleCompletion, emitFinalResultChunk,
-		) {
+	for {
+		select {
+		case <-ctx.Done():
+			sendStreamableCallError(ctx, writer, "agent tool run error: %w", ctx.Err())
 			return
+		case ev, ok := <-wrapped:
+			if !ok {
+				if managePendingVisibleCompletion {
+					at.flushPendingVisibleCompletionForSession(ctx, subInv, &state)
+				}
+				if emitFinalResultChunk {
+					if at.responseMode == ResponseModeFinalOnly {
+						at.emitFinalOnlyResultChunk(&state, writer)
+						return
+					}
+					at.emitPendingCompletionChunk(&state, writer)
+					return
+				}
+				at.emitPendingVisibleCompletionEvent(&state, writer)
+				return
+			}
+			if at.handleForwardedStreamEvent(
+				ctx, subInv, ev, writer, &state,
+				managePendingVisibleCompletion, emitFinalResultChunk,
+			) {
+				return
+			}
 		}
 	}
-	if managePendingVisibleCompletion {
-		at.flushPendingVisibleCompletionForSession(ctx, subInv, &state)
-	}
-	if emitFinalResultChunk {
-		if at.responseMode == ResponseModeFinalOnly {
-			at.emitFinalOnlyResultChunk(&state, writer)
-			return
-		}
-		at.emitPendingCompletionChunk(&state, writer)
-		return
-	}
-	at.emitPendingVisibleCompletionEvent(&state, writer)
 }
 
 // handleForwardedStreamEvent processes a single forwarded sub-invocation event

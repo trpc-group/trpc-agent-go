@@ -1,0 +1,65 @@
+[
+  {
+    "metricName": "tool_trajectory_avg_score",
+    "threshold": 1,
+    "criterion": {
+      "toolTrajectory": {
+        "orderSensitive": false,
+        "subsetMatching": false,
+        "defaultStrategy": {
+          "name": {
+            "matchStrategy": "exact"
+          },
+          "arguments": {
+            "matchStrategy": "exact"
+          },
+          "result": {
+            "matchStrategy": "exact"
+          }
+        }
+      }
+    }
+  },
+  {
+    "metricName": "llm_rubric_critic",
+    "threshold": 0.98,
+    "criterion": {
+      "llmJudge": {
+        "rubrics": [
+          {
+            "id": "status",
+            "description": "The answer states the flight status.",
+            "type": "FINAL_RESPONSE_QUALITY",
+            "content": {
+              "text": "The actual answer must state the flight's current status using the tool result and the reference answer. Fail if the status is missing, contradicted, or replaced by unsupported uncertainty."
+            }
+          },
+          {
+            "id": "delay",
+            "description": "The answer handles delay minutes when relevant.",
+            "type": "FINAL_RESPONSE_QUALITY",
+            "content": {
+              "text": "When the reference answer includes delay information, the actual answer must preserve the delay conclusion and minutes. Fail if delay minutes are omitted, numerically wrong, or contradicted."
+            }
+          },
+          {
+            "id": "gate",
+            "description": "The answer includes the gate when the reference includes one.",
+            "type": "FINAL_RESPONSE_QUALITY",
+            "content": {
+              "text": "When the reference answer includes a gate, the actual answer must include the same gate. Fail if the gate is missing, wrong, or replaced by unsupported fallback advice."
+            }
+          },
+          {
+            "id": "departure_time",
+            "description": "The answer includes the relevant departure time when the reference includes one.",
+            "type": "FINAL_RESPONSE_QUALITY",
+            "content": {
+              "text": "When the reference answer includes a scheduled or estimated departure time, the actual answer must include the same relevant time. Fail if the time is missing, wrong, or contradicted."
+            }
+          }
+        ]
+      }
+    }
+  }
+]

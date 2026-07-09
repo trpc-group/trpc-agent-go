@@ -19,6 +19,11 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "${{ env.ROOT_GO_VERSION }}"
+          cache-dependency-path: |
+            go.mod
+            go.sum
+            **/go.mod
+            **/go.sum
       - name: Build
         run: go build -v ./...
   discover-go-modules:
@@ -60,6 +65,11 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "${{ env.ROOT_GO_VERSION }}"
+          cache-dependency-path: |
+            go.mod
+            go.sum
+            **/go.mod
+            **/go.sum
       - name: Prepare module metadata
         id: module-info
         shell: bash
@@ -102,6 +112,11 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "${{ env.ROOT_GO_VERSION }}"
+          cache-dependency-path: |
+            go.mod
+            go.sum
+            **/go.mod
+            **/go.sum
       - name: Run e2e tests
         shell: bash
         run: |
@@ -148,10 +163,15 @@ jobs:
     name: lint
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v3
       - uses: actions/setup-go@v5
         with:
           go-version: "${{ env.ROOT_GO_VERSION }}"
-      - uses: actions/checkout@v3
+          cache-dependency-path: |
+            go.mod
+            go.sum
+            **/go.mod
+            **/go.sum
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v3
         with:
@@ -236,6 +256,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "${{ env.ROOT_GO_VERSION }}"
+          cache: false
       - name: Check go.mod and go.sum are tidy
         shell: bash
         run: bash .github/scripts/check-go-mod-tidy.sh
@@ -251,6 +272,11 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "${{ env.ROOT_GO_VERSION }}"
+          cache-dependency-path: |
+            go.mod
+            go.sum
+            **/go.mod
+            **/go.sum
       - name: Check module as an external consumer
         shell: bash
         run: bash .github/scripts/check-external-consumer.sh --module "${{ matrix.module }}"
@@ -356,6 +382,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "${{ env.ROOT_GO_VERSION }}"
+          cache: false
       - name: Validate module checksums via sumdb
         run: bash .github/scripts/check-go-sumdb.sh
   typos:
@@ -375,6 +402,11 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "${{ env.ROOT_GO_VERSION }}"
+          cache-dependency-path: |
+            go.mod
+            go.sum
+            **/go.mod
+            **/go.sum
       # Use merge-base to only detect breaking changes introduced by this PR,
       # not changes from main that were merged after the PR branch was created.
       - name: Get merge base
@@ -411,6 +443,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "${{ env.ROOT_GO_VERSION }}"
+          cache: false
       - name: Validate go.mod version strings
         shell: bash
         run: bash .github/scripts/check-go-mod-version.sh

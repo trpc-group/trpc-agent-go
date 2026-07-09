@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -94,6 +95,66 @@ type CapabilitySkillsProvider func(
 	parentInv *agent.Invocation,
 ) skill.Repository
 
+// CapabilityUnavailableReason describes why a named capability exists in the
+// system boundary but is not available for the current dynamic sub-agent call.
+type CapabilityUnavailableReason string
+
+const (
+	// CapabilityUnavailableReasonUnknown is used when the provider does not
+	// supply a more specific reason.
+	CapabilityUnavailableReasonUnknown CapabilityUnavailableReason = "unknown"
+	// CapabilityUnavailableReasonMissingCredential means a required credential
+	// or token is not configured for this user, tenant, or runtime.
+	CapabilityUnavailableReasonMissingCredential CapabilityUnavailableReason = "missing_credential"
+	// CapabilityUnavailableReasonPermissionDenied means policy denied this
+	// capability for the current user, tenant, or task.
+	CapabilityUnavailableReasonPermissionDenied CapabilityUnavailableReason = "permission_denied"
+	// CapabilityUnavailableReasonExecutorUnavailable means the required local,
+	// remote, sandbox, or workflow executor is not available.
+	CapabilityUnavailableReasonExecutorUnavailable CapabilityUnavailableReason = "executor_unavailable"
+	// CapabilityUnavailableReasonNetworkDisabled means network access required
+	// by the capability is disabled for this run.
+	CapabilityUnavailableReasonNetworkDisabled CapabilityUnavailableReason = "network_disabled"
+)
+
+// UnavailableCapability records a named capability that should not be mounted
+// into the child surface for this call, while still giving the parent model a
+// concrete reason when it requested that capability.
+type UnavailableCapability struct {
+	Name   string
+	Reason CapabilityUnavailableReason
+	// Detail is included in the dynamic tool's model-visible warning note.
+	// Keep it safe for prompt context: do not include secrets, credential
+	// values, internal policy internals, or tenant-specific sensitive data.
+	Detail string
+}
+
+// CapabilitySurface is the structured dynamic capability boundary returned by
+// DetailedCapabilitySurfaceProvider.
+type CapabilitySurface struct {
+	// Tools is the maximum available tool surface.
+	Tools []tool.Tool
+	// UserToolNames classifies selectable user tools. Nil means every returned
+	// tool is selectable unless excluded by framework rules.
+	UserToolNames map[string]bool
+	// ExternalToolNames marks caller-executed tools that must not be mounted
+	// into the synchronous child invocation.
+	ExternalToolNames map[string]bool
+	// UnavailableTools names capabilities that are known but unavailable for
+	// this call. They are not mounted. If requested, their reason is surfaced
+	// to the parent model in the dynamic tool warning note.
+	UnavailableTools []UnavailableCapability
+}
+
+// DetailedCapabilitySurfaceProvider returns a structured capability surface for
+// dynamic sub-agent calls. Use it when the provider needs to distinguish
+// "unknown tool" from "known but unavailable" and surface actionable reasons
+// such as missing_credential or executor_unavailable.
+type DetailedCapabilitySurfaceProvider func(
+	ctx context.Context,
+	parentInv *agent.Invocation,
+) CapabilitySurface
+
 // WithTemplateAgent sets the base/template agent that defines the execution
 // boundary for the dynamic sub-agent (model, executor, callbacks, permission
 // policy, max calls, ...).
@@ -108,23 +169,58 @@ func WithTemplateAgent(a agent.Agent) Option {
 }
 
 // WithCapabilityProvider overrides how the maximum capability surface is
-// resolved for a dynamic sub-agent. By default the surface is derived from the
-// parent invocation's effective tool surface.
+// resolved for a dynamic sub-agent. It is the legacy provider shape: it can
+// return available tools, but not known-unavailable tools with reasons. Use
+// WithCapabilitySurfaceProvider when the parent model needs actionable
+// unavailable reasons. By default the surface is derived from the parent
+// invocation's effective tool surface.
 func WithCapabilityProvider(provider CapabilitySurfaceProvider) Option {
 	return func(opts *agentToolOptions) {
 		opts.ensureDynamicOptions().capabilityProvider = provider
 	}
 }
 
+// WithCapabilitySurfaceProvider overrides how the maximum capability surface
+// is resolved for a dynamic sub-agent and can also report known-but-unavailable
+// capabilities with structured reasons. It takes precedence over
+// WithCapabilityProvider, WithCapabilityTools, and the default parent-derived
+// surface.
+func WithCapabilitySurfaceProvider(provider DetailedCapabilitySurfaceProvider) Option {
+	return func(opts *agentToolOptions) {
+		opts.ensureDynamicOptions().capabilitySurfaceProvider = provider
+	}
+}
+
 // WithCapabilityTools sets a fixed maximum tool surface for a dynamic
 // sub-agent. The model may only select a subset of these tools. This takes
 // precedence over the default parent-derived surface (but not over
-// WithCapabilityProvider).
+// WithCapabilityProvider or WithCapabilitySurfaceProvider).
 func WithCapabilityTools(tools []tool.Tool) Option {
 	return func(opts *agentToolOptions) {
 		cfg := opts.ensureDynamicOptions()
 		cfg.capabilityTools = append([]tool.Tool(nil), tools...)
 		cfg.capabilityToolsSet = true
+	}
+}
+
+// WithCapabilityToolAliases maps model-facing aliases to canonical tool names
+// when a dynamic sub-agent selects tools. Use this for stable runtime names,
+// legacy names, or product names that users and models naturally mention but
+// that differ from the actual tool declaration name. Aliases never create new
+// capabilities; they only resolve to tools already present in the dynamic
+// capability surface.
+func WithCapabilityToolAliases(aliases map[string]string) Option {
+	return func(opts *agentToolOptions) {
+		opts.ensureDynamicOptions().toolAliases =
+			normalizeToolAliases(aliases)
+	}
+}
+
+// WithDynamicTimeout limits one dynamic sub-agent invocation. A non-positive
+// timeout keeps the parent's context unchanged.
+func WithDynamicTimeout(timeout time.Duration) Option {
+	return func(opts *agentToolOptions) {
+		opts.ensureDynamicOptions().timeout = timeout
 	}
 }
 
@@ -340,12 +436,14 @@ func buildDynamicInputSchema(name string, cfg *dynamicOptions) *tool.Schema {
 			Description: optionalString(cfg.toolsDescription, defaultToolsDescription),
 			Items:       &tool.Schema{Type: "string"},
 		}
-		// When the capability surface is statically defined in code via
-		// WithCapabilityTools, enumerate the selectable tool names so the model
-		// picks from a known set instead of guessing. The default parent-derived
-		// surface and WithCapabilityProvider are resolved per call, so their
-		// names are not available at schema-build time.
-		if cfg.capabilityToolsSet {
+		// When the effective capability surface is statically defined in code
+		// via WithCapabilityTools, enumerate the selectable tool names so the
+		// model picks from a known set instead of guessing. Provider-based and
+		// default parent-derived surfaces are resolved per call, so their names
+		// are not available at schema-build time.
+		if cfg.capabilityToolsSet &&
+			cfg.capabilityProvider == nil &&
+			cfg.capabilitySurfaceProvider == nil {
 			if names, enum := capabilityToolNameEnum(cfg.capabilityTools); len(enum) > 0 {
 				toolsSchema.Items = &tool.Schema{Type: "string", Enum: enum}
 				if cfg.toolsDescription == nil {
@@ -463,6 +561,8 @@ func (at *Tool) callDynamic(ctx context.Context, jsonArgs []byte) (any, error) {
 	if err != nil {
 		return "", err
 	}
+	subCtx, cancel := at.dynamicRunContext(subCtx)
+	defer cancel()
 	evCh, err := agent.RunWithPlugins(subCtx, subInv, subInv.Agent)
 	if err != nil {
 		return "", fmt.Errorf("failed to run sub-agent: %w", err)
@@ -473,6 +573,11 @@ func (at *Tool) callDynamic(ctx context.Context, jsonArgs []byte) (any, error) {
 	)
 	if err != nil {
 		return "", err
+	}
+	if response == "" {
+		if err := subCtx.Err(); err != nil {
+			return "", fmt.Errorf("dynamic sub-agent stopped: %w", err)
+		}
 	}
 	return at.formatResponseWithWarnings(response, warnings), nil
 }
@@ -488,6 +593,8 @@ func (at *Tool) streamDynamic(
 		sendStreamableCallError(ctx, writer, "dynamic sub-agent error: %w", err)
 		return
 	}
+	subCtx, cancel := at.dynamicRunContext(subCtx)
+	defer cancel()
 	for _, w := range warnings {
 		log.Warnf("AgentTool[%s]: %s", at.name, w)
 	}
@@ -505,6 +612,17 @@ func (at *Tool) streamDynamic(
 		writer,
 		at.warningsNote(warnings),
 	)
+}
+
+func (at *Tool) dynamicRunContext(ctx context.Context) (
+	context.Context,
+	context.CancelFunc,
+) {
+	timeout := at.dynamicCfg.timeout
+	if timeout <= 0 {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, timeout)
 }
 
 // buildDynamicSubInvocation resolves the base agent, capability surface and
@@ -550,7 +668,10 @@ func (at *Tool) buildDynamicSubInvocation(
 	}
 	parentInv = parentInvocationWithLiveSession(parentInv)
 
-	patch, warnings := at.buildDynamicPatch(ctx, parentInv, spec)
+	patch, warnings, err := at.buildDynamicPatch(ctx, parentInv, spec)
+	if err != nil {
+		return nil, nil, nil, err
+	}
 
 	message := model.NewUserMessage(spec.request)
 	childKey := at.buildDynamicChildFilterKey(parentInv, baseAgent)
@@ -568,7 +689,7 @@ func (at *Tool) buildDynamicPatch(
 	ctx context.Context,
 	parentInv *agent.Invocation,
 	spec dynamicSpec,
-) (agent.SurfacePatch, []string) {
+) (agent.SurfacePatch, []string, error) {
 	var patch agent.SurfacePatch
 	var warnings []string
 
@@ -578,8 +699,12 @@ func (at *Tool) buildDynamicPatch(
 
 	// Tools: always set so the dynamic tool itself (and transfer_to_agent) are
 	// excluded from the child, preventing runaway recursion.
-	maxTools, userToolNames, externalNames := at.dynamicMaxToolSurface(ctx, parentInv)
-	selectedTools, toolWarnings := at.selectDynamicTools(maxTools, userToolNames, externalNames, spec)
+	maxTools, userToolNames, externalNames, unavailableTools := at.dynamicMaxToolSurface(ctx, parentInv)
+	selectedTools, toolWarnings, err := at.selectDynamicTools(
+		maxTools, userToolNames, externalNames, unavailableTools, spec)
+	if err != nil {
+		return agent.SurfacePatch{}, nil, err
+	}
 	patch.SetTools(selectedTools)
 	// SetTools only replaces the user tools. The framework re-derives
 	// transfer_to_agent from the base/template agent's own sub-agents, so
@@ -597,7 +722,7 @@ func (at *Tool) buildDynamicPatch(
 	}
 	warnings = append(warnings, skillWarnings...)
 
-	return patch, warnings
+	return patch, warnings, nil
 }
 
 // dynamicMaxToolSurface resolves the maximum tool surface the model may select
@@ -621,19 +746,27 @@ func (at *Tool) buildDynamicPatch(
 func (at *Tool) dynamicMaxToolSurface(
 	ctx context.Context,
 	parentInv *agent.Invocation,
-) ([]tool.Tool, map[string]bool, map[string]bool) {
+) ([]tool.Tool, map[string]bool, map[string]bool, map[string]UnavailableCapability) {
+	if at.dynamicCfg.capabilitySurfaceProvider != nil {
+		surface := at.dynamicCfg.capabilitySurfaceProvider(ctx, parentInv)
+		return surface.Tools,
+			surface.UserToolNames,
+			surface.ExternalToolNames,
+			unavailableCapabilityMap(surface.UnavailableTools)
+	}
 	if at.dynamicCfg.capabilityProvider != nil {
 		tools, userToolNames := at.dynamicCfg.capabilityProvider(ctx, parentInv)
-		return tools, userToolNames, nil
+		return tools, userToolNames, nil, nil
 	}
 	if at.dynamicCfg.capabilityToolsSet {
 		return at.dynamicCfg.capabilityTools,
-			toolNameSet(at.dynamicCfg.capabilityTools), nil
+			toolNameSet(at.dynamicCfg.capabilityTools), nil, nil
 	}
 	if parentInv == nil || parentInv.Agent == nil {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
-	return toolsurface.EffectiveWithExternal(ctx, parentInv)
+	tools, userToolNames, externalNames := toolsurface.EffectiveWithExternal(ctx, parentInv)
+	return tools, userToolNames, externalNames, nil
 }
 
 // selectDynamicTools computes the child tool surface from the maximum surface
@@ -652,8 +785,9 @@ func (at *Tool) selectDynamicTools(
 	maxTools []tool.Tool,
 	userToolNames map[string]bool,
 	externalNames map[string]bool,
+	unavailableTools map[string]UnavailableCapability,
 	spec dynamicSpec,
-) ([]tool.Tool, []string) {
+) ([]tool.Tool, []string, error) {
 	excluded := map[string]bool{at.name: true, transfer.TransferToolName: true}
 	for name := range externalNames {
 		excluded[name] = true
@@ -674,6 +808,9 @@ func (at *Tool) selectDynamicTools(
 		if name == "" || excluded[name] || !isUserTool(name) {
 			continue
 		}
+		if _, unavailable := unavailableTools[name]; unavailable {
+			continue
+		}
 		if _, seen := candidateByName[name]; seen {
 			continue
 		}
@@ -682,31 +819,67 @@ func (at *Tool) selectDynamicTools(
 	}
 
 	if !at.dynamicCfg.exposeToolSelection || !spec.toolsProvided {
-		return candidates, nil
+		return candidates, nil, nil
 	}
 	// An explicit empty array ("tools": []) is a valid "allow none" selection:
 	// the model deliberately ran a tool-free sub-agent. That is not an error,
 	// so return an empty surface without a warning.
 	if len(spec.tools) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	selected := make([]tool.Tool, 0, len(spec.tools))
+	selectedNames := make(map[string]bool, len(spec.tools))
 	var warnings []string
 	for _, name := range spec.tools {
-		t, ok := candidateByName[name]
+		canonicalName := at.resolveDynamicToolName(name)
+		t, ok := candidateByName[canonicalName]
 		if !ok {
+			if unavailable, exists := unavailableTools[canonicalName]; exists {
+				warnings = append(warnings,
+					formatUnavailableToolWarning(name, unavailable))
+				continue
+			}
 			warnings = append(warnings, fmt.Sprintf(
 				"requested tool %q is not available and was ignored", name))
 			continue
 		}
+		if selectedNames[canonicalName] {
+			continue
+		}
+		selectedNames[canonicalName] = true
 		selected = append(selected, t)
 	}
 	if len(selected) == 0 {
-		warnings = append(warnings,
-			"none of the requested tools were available; the sub-agent has no user tools")
+		return nil, warnings, fmt.Errorf(
+			"agenttool: none of the requested tools are available for the dynamic sub-agent; "+
+				"omit tools to allow all permitted tools or choose from: %s",
+			strings.Join(availableDynamicToolNames(candidates), ", "),
+		)
 	}
-	return selected, warnings
+	return selected, warnings, nil
+}
+
+func availableDynamicToolNames(tools []tool.Tool) []string {
+	names := make([]string, 0, len(tools))
+	for _, t := range tools {
+		if name := declarationName(t); name != "" {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
+func (at *Tool) resolveDynamicToolName(name string) string {
+	name = strings.TrimSpace(name)
+	if at == nil || at.dynamicCfg == nil || len(at.dynamicCfg.toolAliases) == 0 {
+		return name
+	}
+	if canonical, ok := at.dynamicCfg.toolAliases[name]; ok {
+		return canonical
+	}
+	return name
 }
 
 // dynamicMaxSkillRepo resolves the maximum skill repository the model may
@@ -970,6 +1143,57 @@ func (at *Tool) formatResponseWithWarnings(response string, warnings []string) s
 	return note
 }
 
+func unavailableCapabilityMap(values []UnavailableCapability) map[string]UnavailableCapability {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make(map[string]UnavailableCapability, len(values))
+	for _, value := range values {
+		value.Name = strings.TrimSpace(value.Name)
+		if value.Name == "" {
+			continue
+		}
+		value.Detail = sanitizeUnavailableDetail(value.Detail)
+		if value.Reason == "" {
+			value.Reason = CapabilityUnavailableReasonUnknown
+		}
+		out[value.Name] = value
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+const maxUnavailableDetailRunes = 256
+
+func sanitizeUnavailableDetail(detail string) string {
+	cleaned := strings.Join(strings.Fields(strings.TrimSpace(detail)), " ")
+	runes := []rune(cleaned)
+	if len(runes) <= maxUnavailableDetailRunes {
+		return cleaned
+	}
+	return string(runes[:maxUnavailableDetailRunes]) + "..."
+}
+
+func formatUnavailableToolWarning(name string, unavailable UnavailableCapability) string {
+	reason := unavailable.Reason
+	if reason == "" {
+		reason = CapabilityUnavailableReasonUnknown
+	}
+	detail := sanitizeUnavailableDetail(unavailable.Detail)
+	if detail != "" {
+		return fmt.Sprintf(
+			"requested tool %q is unavailable (reason: %s; detail: %s) and was ignored",
+			name, reason, detail,
+		)
+	}
+	return fmt.Sprintf(
+		"requested tool %q is unavailable (reason: %s) and was ignored",
+		name, reason,
+	)
+}
+
 func toolNameSet(tools []tool.Tool) map[string]bool {
 	names := make(map[string]bool, len(tools))
 	for _, t := range tools {
@@ -978,6 +1202,25 @@ func toolNameSet(tools []tool.Tool) map[string]bool {
 		}
 	}
 	return names
+}
+
+func normalizeToolAliases(aliases map[string]string) map[string]string {
+	if len(aliases) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(aliases))
+	for alias, canonical := range aliases {
+		alias = strings.TrimSpace(alias)
+		canonical = strings.TrimSpace(canonical)
+		if alias == "" || canonical == "" || alias == canonical {
+			continue
+		}
+		out[alias] = canonical
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func declarationName(t tool.Tool) string {

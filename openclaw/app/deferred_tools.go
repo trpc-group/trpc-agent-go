@@ -18,6 +18,7 @@ import (
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/conversation"
+	ocbrowser "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/browser"
 	ocskills "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/skills"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/runtimeprofile"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
@@ -39,6 +40,13 @@ type deferredToolSurfaceConfig struct {
 	ToolCallbacks *tool.Callbacks
 }
 
+var openClawDeferredToolAliases = map[string]string{
+	"browser-runtime":           ocbrowser.ToolName,
+	"browser_runtime":           ocbrowser.ToolName,
+	"trpc-claw-browser-runtime": ocbrowser.ToolName,
+	"trpc_claw_browser_runtime": ocbrowser.ToolName,
+}
+
 func baseLLMAgentOptions(
 	mdl model.Model,
 	cfg agentConfig,
@@ -47,26 +55,88 @@ func baseLLMAgentOptions(
 	genConfig model.GenerationConfig,
 	repo *ocskills.Repository,
 ) []llmagent.Option {
-	return []llmagent.Option{
+	opts := []llmagent.Option{
 		llmagent.WithModel(mdl),
 		llmagent.WithInstruction(instruction),
 		llmagent.WithGlobalInstruction(systemPrompt),
 		llmagent.WithGenerationConfig(genConfig),
+		llmagent.WithAddCurrentTime(true),
 		llmagent.WithAddSessionSummary(cfg.AddSessionSummary),
 		llmagent.WithEnableContextCompaction(cfg.EnableContextCompaction),
 		llmagent.WithContextCompactionOversizedToolResultMaxTokens(
 			cfg.ContextCompactionOversizedToolResultMaxTokens,
 		),
 		llmagent.WithMaxHistoryRuns(cfg.MaxHistoryRuns),
+		llmagent.WithMaxLLMCalls(cfg.MaxLLMCalls),
+		llmagent.WithMaxToolIterations(cfg.MaxToolIterations),
 		llmagent.WithPreloadMemory(cfg.PreloadMemory),
+		llmagent.WithEnableOnDemandSession(true),
 		llmagent.WithEventMessageProjector(
 			conversation.ProjectEventMessage,
+		),
+		llmagent.WithToolResultCompactionConfig(
+			openClawToolResultCompactionConfig(),
+		),
+		llmagent.WithToolResultAttachmentBudget(
+			openClawToolResultAttachmentBudget,
 		),
 		llmagent.WithEnableParallelTools(cfg.EnableParallelTools),
 		llmagent.WithPostToolPrompt(openClawPostToolPrompt),
 		llmagent.WithSkillFilter(
 			runtimeprofile.SkillVisibilityFilterForRepository(repo),
 		),
+	}
+	if cfg.MaxLLMCalls > 0 {
+		opts = append(opts, llmagent.WithModelCallbacks(
+			modelCallBudgetCallbacks(),
+		))
+	}
+	return opts
+}
+
+func appendDeferredSkillOverviewOptions(
+	opts []llmagent.Option,
+	cfg agentConfig,
+	repo *ocskills.Repository,
+	repoProvider skill.RepositoryProvider,
+) []llmagent.Option {
+	if repo == nil {
+		return opts
+	}
+	opts = append(
+		opts,
+		llmagent.WithSkills(repo),
+		llmagent.WithSkillRepositoryProvider(repoProvider),
+		llmagent.WithSkillScopeMode(cfg.EvolutionSkillScopeMode),
+		llmagent.WithAllowedSkillTools(llmagent.SkillToolLoad),
+		llmagent.WithSkillLoadMode(cfg.SkillsLoadMode),
+		llmagent.WithSkillLoadToolDescription(
+			openClawSkillLoadToolDescription,
+		),
+		llmagent.WithSkillsProtocolGuidance(
+			buildOpenClawSkillsGuidance(cfg),
+		),
+	)
+	if cfg.SkillsOverviewLimit > 0 {
+		opts = append(
+			opts,
+			llmagent.WithMaxOverviewSkills(cfg.SkillsOverviewLimit),
+		)
+	}
+	if cfg.SkillsMaxLoaded > 0 {
+		opts = append(
+			opts,
+			llmagent.WithMaxLoadedSkills(cfg.SkillsMaxLoaded),
+		)
+	}
+	return opts
+}
+
+func openClawToolResultCompactionConfig() *llmagent.ToolResultCompactionConfig {
+	return &llmagent.ToolResultCompactionConfig{
+		KeepToolNames: []string{
+			agenttool.DefaultDynamicToolName,
+		},
 	}
 }
 
@@ -185,12 +255,13 @@ func newDeferredToolSurfaceTool(
 	}
 
 	template := llmagent.New(defaultAgentName+"-tool-worker", templateOpts...)
-	return agenttool.NewDynamicTool(
+	dynamicOpts := []agenttool.Option{
 		agenttool.WithDescription(openClawDeferredToolDescription),
 		agenttool.WithTemplateAgent(template),
 		agenttool.WithCapabilityProvider(
 			deferredCapabilityProvider(cfg.Tools, cfg.ToolSets),
 		),
+		agenttool.WithCapabilityToolAliases(openClawDeferredToolAliases),
 		agenttool.WithCapabilitySkillsProvider(
 			deferredCapabilitySkillsProvider(
 				cfg.Repository,
@@ -199,6 +270,16 @@ func newDeferredToolSurfaceTool(
 			),
 		),
 		agenttool.WithExposeSkillSelection(true),
+	}
+	if cfg.Config.DynamicAgentTimeout > 0 {
+		dynamicOpts = append(
+			dynamicOpts,
+			agenttool.WithDynamicTimeout(cfg.Config.DynamicAgentTimeout),
+		)
+	}
+
+	dynamicOpts = append(
+		dynamicOpts,
 		agenttool.WithRequestDescription(
 			"Self-contained tool-backed task for the OpenClaw worker.",
 		),
@@ -206,14 +287,19 @@ func newDeferredToolSurfaceTool(
 			"Optional role or constraints for this worker call.",
 		),
 		agenttool.WithToolsDescription(
-			"Optional exact tool names if already known. Omit to let "+
-				"the worker choose from all permitted tools.",
+			"Optional exact tool names, for example web_fetch, "+
+				"browser, or exec_command. Omit to let the "+
+				"worker choose from all permitted tools. Do not "+
+				"put tool names in skills.",
 		),
 		agenttool.WithSkillsDescription(
-			"Optional exact skill names if already known. Omit to let "+
-				"the worker choose from all permitted skills.",
+			"Optional exact skill names if already known. Use only "+
+				"real skill names here; put tool names in tools. "+
+				"Omit to let the worker choose from all permitted "+
+				"skills.",
 		),
 	)
+	return agenttool.NewDynamicTool(dynamicOpts...)
 }
 
 func newDeferredCapabilitySearchTool(
@@ -222,6 +308,9 @@ func newDeferredCapabilitySearchTool(
 	return agenttool.NewCapabilitySearchTool(
 		agenttool.WithCapabilitySearchProvider(
 			deferredCapabilityProvider(cfg.Tools, cfg.ToolSets),
+		),
+		agenttool.WithCapabilitySearchToolAliases(
+			openClawDeferredToolAliases,
 		),
 		agenttool.WithCapabilitySearchSkillsProvider(
 			deferredCapabilitySkillsProvider(

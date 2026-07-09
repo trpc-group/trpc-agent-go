@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	agenttrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/internal/templateresolver"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/messagesconstructor"
@@ -69,6 +70,73 @@ func TestConstructMessagesRendersBoundVariables(t *testing.T) {
 	assert.Contains(t, messages[0].Content, "What is the capital of France?")
 	assert.Contains(t, messages[0].Content, "Answer: Paris")
 	assert.Contains(t, messages[0].Content, "Reference: Paris")
+}
+
+func TestConstructMessagesRendersTraceStepOutputFromLastMatchingNode(t *testing.T) {
+	constructor := New()
+	actual := &evalset.Invocation{
+		ExecutionTrace: &agenttrace.Trace{
+			Steps: []agenttrace.Step{
+				{NodeID: "fetch_match", Output: &agenttrace.Snapshot{Text: "stale data"}},
+				{NodeID: "other", Output: &agenttrace.Snapshot{Text: "ignore me"}},
+				{NodeID: "fetch_match", Output: &agenttrace.Snapshot{Text: "fresh match data"}},
+			},
+		},
+	}
+	messages, err := constructor.ConstructMessages(
+		context.Background(),
+		[]*evalset.Invocation{actual},
+		[]*evalset.Invocation{{FinalResponse: &model.Message{Content: "reference"}}},
+		buildTemplateEvalMetric(
+			"Match data: {{match_data}}",
+			&criterionllm.TemplateVariableBinding{
+				TemplateVariable: "match_data",
+				Source: &criterionllm.TemplateVariableSource{
+					Scope: criterionllm.TemplateVariableScopeActual,
+					Field: criterionllm.TemplateVariableFieldTraceStepOutput,
+					Selector: &criterionllm.TemplateVariableSelector{
+						NodeID: "fetch_match",
+					},
+				},
+			},
+		),
+	)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Contains(t, messages[0].Content, "fresh match data")
+	assert.NotContains(t, messages[0].Content, "stale data")
+}
+
+func TestConstructMessagesRendersTraceStepInput(t *testing.T) {
+	constructor := New()
+	actual := &evalset.Invocation{
+		ExecutionTrace: &agenttrace.Trace{
+			Steps: []agenttrace.Step{
+				{NodeID: "fetch_match", Input: &agenttrace.Snapshot{Text: "match query"}},
+			},
+		},
+	}
+	messages, err := constructor.ConstructMessages(
+		context.Background(),
+		[]*evalset.Invocation{actual},
+		[]*evalset.Invocation{{FinalResponse: &model.Message{Content: "reference"}}},
+		buildTemplateEvalMetric(
+			"Tool input: {{tool_input}}",
+			&criterionllm.TemplateVariableBinding{
+				TemplateVariable: "tool_input",
+				Source: &criterionllm.TemplateVariableSource{
+					Scope: criterionllm.TemplateVariableScopeActual,
+					Field: criterionllm.TemplateVariableFieldTraceStepInput,
+					Selector: &criterionllm.TemplateVariableSelector{
+						NodeID: "fetch_match",
+					},
+				},
+			},
+		),
+	)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Contains(t, messages[0].Content, "Tool input: match query")
 }
 
 func TestConstructMessagesRejectsDuplicateBindings(t *testing.T) {
@@ -269,34 +337,119 @@ func TestResolveBindingValueRejectsNilAndUnsupportedSource(t *testing.T) {
 }
 
 func TestResolveActualValueRejectsInvalidActualInput(t *testing.T) {
-	value, err := resolveActualValue(nil, criterionllm.TemplateVariableFieldFinalResponse)
+	value, err := resolveActualValue(nil, &criterionllm.TemplateVariableSource{
+		Field: criterionllm.TemplateVariableFieldFinalResponse,
+	})
 	require.Error(t, err)
 	assert.Empty(t, value)
 	assert.Contains(t, err.Error(), "actuals is empty")
-	value, err = resolveActualValue([]*evalset.Invocation{nil}, criterionllm.TemplateVariableFieldFinalResponse)
+	value, err = resolveActualValue([]*evalset.Invocation{nil}, &criterionllm.TemplateVariableSource{
+		Field: criterionllm.TemplateVariableFieldFinalResponse,
+	})
 	require.Error(t, err)
 	assert.Empty(t, value)
 	assert.Contains(t, err.Error(), "actual invocation is nil")
-	value, err = resolveActualValue([]*evalset.Invocation{{}}, criterionllm.TemplateVariableField("rubrics"))
-	require.Error(t, err)
-	assert.Empty(t, value)
-	assert.Contains(t, err.Error(), "unsupported source actual.rubrics")
 }
 
 func TestResolveExpectedValueRejectsInvalidExpectedInput(t *testing.T) {
-	value, err := resolveExpectedValue(nil, criterionllm.TemplateVariableFieldFinalResponse)
+	value, err := resolveExpectedValue(nil, &criterionllm.TemplateVariableSource{
+		Field: criterionllm.TemplateVariableFieldFinalResponse,
+	})
 	require.Error(t, err)
 	assert.Empty(t, value)
 	assert.Contains(t, err.Error(), "expecteds is empty")
-	value, err = resolveExpectedValue([]*evalset.Invocation{nil}, criterionllm.TemplateVariableFieldFinalResponse)
+	value, err = resolveExpectedValue([]*evalset.Invocation{nil}, &criterionllm.TemplateVariableSource{
+		Field: criterionllm.TemplateVariableFieldFinalResponse,
+	})
 	require.Error(t, err)
 	assert.Empty(t, value)
 	assert.Contains(t, err.Error(), "expected invocation is nil")
 	value, err = resolveExpectedValue([]*evalset.Invocation{{FinalResponse: &model.Message{Content: "ok"}}},
-		criterionllm.TemplateVariableFieldUserContent)
+		&criterionllm.TemplateVariableSource{Field: criterionllm.TemplateVariableFieldUserContent})
 	require.Error(t, err)
 	assert.Empty(t, value)
 	assert.Contains(t, err.Error(), "unsupported source expected.userContent")
+}
+
+func TestResolveTraceStepErrors(t *testing.T) {
+	tests := []struct {
+		name    string
+		actuals []*evalset.Invocation
+		source  *criterionllm.TemplateVariableSource
+		wantErr string
+	}{
+		{
+			name: "missing trace",
+			actuals: []*evalset.Invocation{{
+				InvocationID: "inv-1",
+			}},
+			source: &criterionllm.TemplateVariableSource{
+				Scope: criterionllm.TemplateVariableScopeActual,
+				Field: criterionllm.TemplateVariableFieldTraceStepOutput,
+				Selector: &criterionllm.TemplateVariableSelector{
+					NodeID: "fetch",
+				},
+			},
+			wantErr: "executionTrace is empty for actual.traceStepOutput at invocation index 0",
+		},
+		{
+			name:    "missing selector",
+			actuals: []*evalset.Invocation{{ExecutionTrace: &agenttrace.Trace{}}},
+			source: &criterionllm.TemplateVariableSource{
+				Scope: criterionllm.TemplateVariableScopeActual,
+				Field: criterionllm.TemplateVariableFieldTraceStepOutput,
+			},
+			wantErr: "trace selector nodeID is required",
+		},
+		{
+			name:    "empty node id",
+			actuals: []*evalset.Invocation{{ExecutionTrace: &agenttrace.Trace{}}},
+			source: &criterionllm.TemplateVariableSource{
+				Scope: criterionllm.TemplateVariableScopeActual,
+				Field: criterionllm.TemplateVariableFieldTraceStepOutput,
+				Selector: &criterionllm.TemplateVariableSelector{
+					NodeID: " ",
+				},
+			},
+			wantErr: "trace selector nodeID is required",
+		},
+		{
+			name: "no matching step",
+			actuals: []*evalset.Invocation{{
+				ExecutionTrace: &agenttrace.Trace{Steps: []agenttrace.Step{{NodeID: "other"}}},
+			}},
+			source: &criterionllm.TemplateVariableSource{
+				Scope: criterionllm.TemplateVariableScopeActual,
+				Field: criterionllm.TemplateVariableFieldTraceStepOutput,
+				Selector: &criterionllm.TemplateVariableSelector{
+					NodeID: "fetch",
+				},
+			},
+			wantErr: `trace step not found for actual.traceStepOutput nodeID "fetch" at invocation index 0`,
+		},
+		{
+			name: "empty snapshot",
+			actuals: []*evalset.Invocation{{
+				ExecutionTrace: &agenttrace.Trace{Steps: []agenttrace.Step{{NodeID: "fetch"}}},
+			}},
+			source: &criterionllm.TemplateVariableSource{
+				Scope: criterionllm.TemplateVariableScopeActual,
+				Field: criterionllm.TemplateVariableFieldTraceStepOutput,
+				Selector: &criterionllm.TemplateVariableSelector{
+					NodeID: "fetch",
+				},
+			},
+			wantErr: `trace snapshot is empty for actual.traceStepOutput nodeID "fetch" at invocation index 0`,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			value, err := resolveActualValue(tc.actuals, tc.source)
+			require.Error(t, err)
+			assert.Empty(t, value)
+			assert.Contains(t, err.Error(), tc.wantErr)
+		})
+	}
 }
 
 func buildTemplateEvalMetric(promptText string,

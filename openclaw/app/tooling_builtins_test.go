@@ -11,13 +11,21 @@ package app
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"image"
+	"image/color"
+	"image/png"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
@@ -44,6 +52,7 @@ func TestNewHTTPWebFetchTools_AllowAllSucceeds(t *testing.T) {
 	cfg := yamlNode(t, `
 allow_all_domains: true
 timeout: 200ms
+main_content_only: true
 max_content_length: 123
 max_total_content_length: 456
 `)
@@ -59,11 +68,26 @@ max_total_content_length: 456
 func TestNewDuckDuckGoTools_Succeeds(t *testing.T) {
 	t.Parallel()
 
-	cfg := yamlNode(t, `
-base_url: "https://example.invalid"
-user_agent: "ua"
-timeout: 100ms
-`)
+	server := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			require.Equal(t, "GAIA benchmark", r.URL.Query().Get("q"))
+			require.Equal(t, "ua", r.Header.Get("User-Agent"))
+			_, _ = w.Write([]byte(`
+<html><body>
+  <a class="result__a" href="/l/?uddg=https%3A%2F%2Fexample.com%2Fgaia">GAIA benchmark</a>
+  <a class="result__snippet">HTML backend result.</a>
+</body></html>`))
+		},
+	))
+	defer server.Close()
+
+	cfg := yamlNode(t, strings.Join([]string{
+		`base_url: "` + server.URL + `"`,
+		`backend: "html"`,
+		`user_agent: "ua"`,
+		`timeout: 100ms`,
+		"",
+	}, "\n"))
 	tools, err := newDuckDuckGoTools(
 		registry.ToolProviderDeps{},
 		registry.PluginSpec{Config: cfg},
@@ -71,6 +95,86 @@ timeout: 100ms
 	require.NoError(t, err)
 	require.Len(t, tools, 1)
 	require.NotEmpty(t, tools[0].Declaration().Name)
+	require.Contains(t, tools[0].Declaration().Description, "html search")
+
+	callable, ok := tools[0].(tool.CallableTool)
+	require.True(t, ok)
+	raw, err := callable.Call(
+		context.Background(),
+		[]byte(`{"query":"GAIA benchmark"}`),
+	)
+	require.NoError(t, err)
+	data, err := json.Marshal(raw)
+	require.NoError(t, err)
+	require.Contains(t, string(data), `"summary":"Found 1 html results`)
+	require.Contains(t, string(data), `"url":"https://example.com/gaia"`)
+}
+
+func TestNewDuckDuckGoTools_InvalidBackend(t *testing.T) {
+	t.Parallel()
+
+	cfg := yamlNode(t, "backend: unknown\n")
+	_, err := newDuckDuckGoTools(
+		registry.ToolProviderDeps{},
+		registry.PluginSpec{Config: cfg},
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "backend must be api, html, or lite")
+}
+
+func TestNewImageInspectTools_RequiresFileScope(t *testing.T) {
+	t.Parallel()
+
+	_, err := newImageInspectTools(
+		registry.ToolProviderDeps{},
+		registry.PluginSpec{},
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "requires allowed_dirs")
+}
+
+func TestNewImageInspectTools_InspectImage(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "sample.png")
+	img := image.NewRGBA(image.Rect(0, 0, 12, 8))
+	for y := 0; y < 8; y++ {
+		for x := 0; x < 12; x++ {
+			img.Set(x, y, color.White)
+		}
+	}
+	file, err := os.Create(path)
+	require.NoError(t, err)
+	require.NoError(t, png.Encode(file, img))
+	require.NoError(t, file.Close())
+
+	cfg := yamlNode(t, strings.Join([]string{
+		`allowed_dirs:`,
+		`  - "` + dir + `"`,
+		`timeout: "100ms"`,
+		"",
+	}, "\n"))
+	tools, err := newImageInspectTools(
+		registry.ToolProviderDeps{},
+		registry.PluginSpec{Config: cfg},
+	)
+	require.NoError(t, err)
+	require.Len(t, tools, 1)
+	require.Equal(t, "image_inspect", tools[0].Declaration().Name)
+
+	callable, ok := tools[0].(tool.CallableTool)
+	require.True(t, ok)
+	raw, err := callable.Call(
+		context.Background(),
+		[]byte(`{"path":`+strconv.Quote(path)+`,"ocr":false}`),
+	)
+	require.NoError(t, err)
+	data, err := json.Marshal(raw)
+	require.NoError(t, err)
+	require.Contains(t, string(data), `"format":"png"`)
+	require.Contains(t, string(data), `"width":12`)
+	require.Contains(t, string(data), `"height":8`)
 }
 
 func TestNewBrowserTools_Succeeds(t *testing.T) {
@@ -348,6 +452,363 @@ func TestNewFileToolSet_EnableReadCanDisable(t *testing.T) {
 
 	names := toolNames(ts.Tools(context.Background()))
 	require.NotContains(t, names, "read_file")
+}
+
+func TestNewFileToolSet_RuntimeReadDirsDefault(t *testing.T) {
+	dir := t.TempDir()
+	tmpFile := filepath.Join(t.TempDir(), "derived.txt")
+	require.NoError(t, os.WriteFile(tmpFile, []byte("derived"), 0o644))
+
+	cfg := yamlNode(t, "base_dir: "+dir+"\n")
+	ts, err := newFileToolSet(
+		registry.ToolSetProviderDeps{StateDir: t.TempDir()},
+		registry.PluginSpec{Name: "fs", Config: cfg},
+	)
+	require.NoError(t, err)
+	readFile := findCallableTool(t, ts.Tools(context.Background()), "read_file")
+
+	raw, err := readFile.Call(
+		context.Background(),
+		[]byte(`{"file_name":`+strconv.Quote(tmpFile)+`}`),
+	)
+	require.NoError(t, err)
+	data, err := json.Marshal(raw)
+	require.NoError(t, err)
+	require.Contains(t, string(data), `"contents":"derived"`)
+}
+
+func TestNewFileToolSet_RuntimeReadDirsRelativeStateDir(t *testing.T) {
+	cwd := t.TempDir()
+	oldwd, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(cwd))
+	t.Cleanup(func() {
+		require.NoError(t, os.Chdir(oldwd))
+	})
+
+	baseDir := filepath.Join(cwd, "base")
+	require.NoError(t, os.MkdirAll(baseDir, 0o755))
+	scratchFile := filepath.Join(
+		cwd,
+		"state",
+		"workspaces",
+		"scratch",
+		"out",
+		"derived.txt",
+	)
+	require.NoError(t, os.MkdirAll(filepath.Dir(scratchFile), 0o755))
+	require.NoError(t, os.WriteFile(scratchFile, []byte("derived"), 0o644))
+
+	cfg := yamlNode(t, "base_dir: "+baseDir+"\n")
+	ts, err := newFileToolSet(
+		registry.ToolSetProviderDeps{StateDir: "state"},
+		registry.PluginSpec{Name: "fs", Config: cfg},
+	)
+	require.NoError(t, err)
+	readFile := findCallableTool(t, ts.Tools(context.Background()), "read_file")
+
+	raw, err := readFile.Call(
+		context.Background(),
+		[]byte(`{"file_name":`+strconv.Quote(scratchFile)+`}`),
+	)
+	require.NoError(t, err)
+	data, err := json.Marshal(raw)
+	require.NoError(t, err)
+	require.Contains(t, string(data), `"contents":"derived"`)
+}
+
+func TestNewFileToolSet_RuntimeReadDirsAllowBrowserArtifacts(
+	t *testing.T,
+) {
+	oldWorkdir, err := os.Getwd()
+	require.NoError(t, err)
+	workdir, err := os.MkdirTemp(oldWorkdir, ".test-browser-artifacts-")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, os.RemoveAll(workdir))
+	})
+	require.NoError(t, os.Chdir(workdir))
+	t.Cleanup(func() {
+		require.NoError(t, os.Chdir(oldWorkdir))
+	})
+
+	artifactDir := filepath.Join(workdir, browserArtifactDirName)
+	require.NoDirExists(t, artifactDir)
+
+	cfg := yamlNode(t, "base_dir: "+t.TempDir()+"\n")
+	ts, err := newFileToolSet(
+		registry.ToolSetProviderDeps{StateDir: t.TempDir()},
+		registry.PluginSpec{Name: "fs", Config: cfg},
+	)
+	require.NoError(t, err)
+	require.DirExists(t, artifactDir)
+	readFile := findCallableTool(t, ts.Tools(context.Background()), "read_file")
+
+	artifactFile := filepath.Join(artifactDir, "page.yml")
+	require.NoError(t, os.WriteFile(
+		artifactFile,
+		[]byte("title: Example\n"),
+		0o644,
+	))
+	raw, err := readFile.Call(
+		context.Background(),
+		[]byte(`{"file_name":`+strconv.Quote(artifactFile)+`}`),
+	)
+	require.NoError(t, err)
+	data, err := json.Marshal(raw)
+	require.NoError(t, err)
+	require.Contains(t, string(data), `"contents":"title: Example`)
+}
+
+func TestNewFileToolSet_RuntimeReadDirsRejectSymlinkedBrowserArtifacts(
+	t *testing.T,
+) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink behavior differs on windows")
+	}
+
+	oldWorkdir, err := os.Getwd()
+	require.NoError(t, err)
+	workdir, err := os.MkdirTemp(oldWorkdir, ".test-browser-artifacts-")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, os.RemoveAll(workdir))
+	})
+	require.NoError(t, os.Chdir(workdir))
+	t.Cleanup(func() {
+		require.NoError(t, os.Chdir(oldWorkdir))
+	})
+
+	outsideDir := filepath.Join(workdir, "outside")
+	require.NoError(t, os.MkdirAll(outsideDir, 0o755))
+	artifactDir := filepath.Join(workdir, browserArtifactDirName)
+	require.NoError(t, os.Symlink(outsideDir, artifactDir))
+
+	cfg := yamlNode(t, "base_dir: "+t.TempDir()+"\n")
+	ts, err := newFileToolSet(
+		registry.ToolSetProviderDeps{StateDir: t.TempDir()},
+		registry.PluginSpec{Name: "fs", Config: cfg},
+	)
+	require.NoError(t, err)
+	readFile := findCallableTool(t, ts.Tools(context.Background()), "read_file")
+
+	artifactFile := filepath.Join(outsideDir, "page.yml")
+	require.NoError(t, os.WriteFile(
+		artifactFile,
+		[]byte("title: Symlink\n"),
+		0o644,
+	))
+	_, err = readFile.Call(
+		context.Background(),
+		[]byte(`{"file_name":`+strconv.Quote(artifactFile)+`}`),
+	)
+	require.Error(t, err)
+	require.Contains(
+		t,
+		err.Error(),
+		"outside base_directory and configured read-only roots",
+	)
+}
+
+func TestBrowserArtifactReadRootWithErrorPaths(t *testing.T) {
+	t.Parallel()
+
+	errBoom := errors.New("boom")
+
+	tests := []struct {
+		name    string
+		lstat   browserArtifactLstatFunc
+		mkdir   browserArtifactMkdirAllFunc
+		wantDir string
+		wantOK  bool
+	}{
+		{
+			name: "lstat error",
+			lstat: func(string) (os.FileInfo, error) {
+				return nil, errBoom
+			},
+			mkdir: func(string, os.FileMode) error {
+				t.Fatal("mkdir should not be called")
+				return nil
+			},
+		},
+		{
+			name: "mkdir error",
+			lstat: func(string) (os.FileInfo, error) {
+				return nil, os.ErrNotExist
+			},
+			mkdir: func(string, os.FileMode) error {
+				return errBoom
+			},
+		},
+		{
+			name: "post-create lstat error",
+			lstat: lstatSequence(
+				nil,
+				os.ErrNotExist,
+				nil,
+				errBoom,
+			),
+			mkdir: func(string, os.FileMode) error {
+				return nil
+			},
+		},
+		{
+			name: "post-create symlink",
+			lstat: lstatSequence(
+				nil,
+				os.ErrNotExist,
+				browserArtifactFileInfo{
+					mode: os.ModeSymlink,
+				},
+				nil,
+			),
+			mkdir: func(string, os.FileMode) error {
+				return nil
+			},
+		},
+		{
+			name: "post-create safe directory",
+			lstat: lstatSequence(
+				nil,
+				os.ErrNotExist,
+				browserArtifactFileInfo{dir: true},
+				nil,
+			),
+			mkdir: func(string, os.FileMode) error {
+				return nil
+			},
+			wantDir: filepath.Join("cwd", browserArtifactDirName),
+			wantOK:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			gotDir, gotOK := browserArtifactReadRootWith(
+				"cwd",
+				tt.lstat,
+				tt.mkdir,
+			)
+			require.Equal(t, tt.wantOK, gotOK)
+			require.Equal(t, tt.wantDir, gotDir)
+		})
+	}
+}
+
+func TestNewFileToolSet_RuntimeReadDirsCanDisable(t *testing.T) {
+	dir := t.TempDir()
+	tmpFile := filepath.Join(t.TempDir(), "derived.txt")
+	require.NoError(t, os.WriteFile(tmpFile, []byte("derived"), 0o644))
+
+	cfg := yamlNode(
+		t,
+		"base_dir: "+dir+"\nruntime_read_dirs: false\n",
+	)
+	ts, err := newFileToolSet(
+		registry.ToolSetProviderDeps{StateDir: t.TempDir()},
+		registry.PluginSpec{Name: "fs", Config: cfg},
+	)
+	require.NoError(t, err)
+	readFile := findCallableTool(t, ts.Tools(context.Background()), "read_file")
+
+	_, err = readFile.Call(
+		context.Background(),
+		[]byte(`{"file_name":`+strconv.Quote(tmpFile)+`}`),
+	)
+	require.Error(t, err)
+	require.Contains(
+		t,
+		err.Error(),
+		"outside base_directory and configured read-only roots",
+	)
+}
+
+func TestDefaultFileReadOnlyDirsIncludesPlatformTmp(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("hardcoded /tmp root is Unix-only")
+	}
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+
+	roots := defaultFileReadOnlyDirs("")
+	require.Contains(t, roots, tmp)
+	require.Contains(t, roots, "/tmp")
+}
+
+func TestDefaultFileReadOnlyDirsAbsolutizesRelativeStateDir(t *testing.T) {
+	stateRoot := filepath.Join(".", "state")
+	wantScratch, err := filepath.Abs(
+		filepath.Join(stateRoot, "workspaces", "scratch"),
+	)
+	require.NoError(t, err)
+
+	roots := defaultFileReadOnlyDirs(stateRoot)
+	require.Contains(t, roots, wantScratch)
+}
+
+func lstatSequence(
+	firstInfo os.FileInfo,
+	firstErr error,
+	secondInfo os.FileInfo,
+	secondErr error,
+) browserArtifactLstatFunc {
+	var calls int
+	return func(string) (os.FileInfo, error) {
+		calls++
+		if calls == 1 {
+			return firstInfo, firstErr
+		}
+		return secondInfo, secondErr
+	}
+}
+
+type browserArtifactFileInfo struct {
+	mode os.FileMode
+	dir  bool
+}
+
+func (i browserArtifactFileInfo) Name() string {
+	return browserArtifactDirName
+}
+
+func (i browserArtifactFileInfo) Size() int64 {
+	return 0
+}
+
+func (i browserArtifactFileInfo) Mode() os.FileMode {
+	return i.mode
+}
+
+func (i browserArtifactFileInfo) ModTime() time.Time {
+	return time.Time{}
+}
+
+func (i browserArtifactFileInfo) IsDir() bool {
+	return i.dir
+}
+
+func (i browserArtifactFileInfo) Sys() any {
+	return nil
+}
+
+func TestAbsPathOrOriginalFallbacks(t *testing.T) {
+	require.Equal(t, "  ", absPathOrOriginal("  "))
+
+	oldwd, err := os.Getwd()
+	require.NoError(t, err)
+	tmp := t.TempDir()
+	deletedWD := filepath.Join(tmp, "deleted")
+	require.NoError(t, os.MkdirAll(deletedWD, 0o755))
+	require.NoError(t, os.Chdir(deletedWD))
+	require.NoError(t, os.RemoveAll(deletedWD))
+	t.Cleanup(func() {
+		require.NoError(t, os.Chdir(oldwd))
+	})
+
+	require.Equal(t, "relative-state", absPathOrOriginal("relative-state"))
 }
 
 func TestOverrideToolSetName_NoOpWhenEmpty(t *testing.T) {
@@ -636,6 +1097,24 @@ func toolNames(tools []tool.Tool) map[string]struct{} {
 		out[t.Declaration().Name] = struct{}{}
 	}
 	return out
+}
+
+func findCallableTool(
+	t *testing.T,
+	tools []tool.Tool,
+	name string,
+) tool.CallableTool {
+	t.Helper()
+	for _, tl := range tools {
+		if tl.Declaration().Name != name {
+			continue
+		}
+		callable, ok := tl.(tool.CallableTool)
+		require.True(t, ok)
+		return callable
+	}
+	t.Fatalf("tool %q not found", name)
+	return nil
 }
 
 func indentYAML(body string, spaces int) string {

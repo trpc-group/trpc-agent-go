@@ -1710,6 +1710,7 @@ agent := llmagent.New(
     "assistant",
     llmagent.WithModel(openai.New("deepseek-v4-flash")),
     llmagent.WithTools(mem0Svc.Tools()),
+    llmagent.WithPreloadMemory(10), // 可选：只读预加载预算。
 )
 
 r := runner.NewRunner(
@@ -1725,6 +1726,7 @@ defer r.Close()
 
 - 通过 `llmagent.WithTools(mem0Svc.Tools())` 注册工具
 - 通过 `runner.WithSessionIngestor(mem0Svc)` 把 session transcript 交给 mem0
+- 可选启用 `llmagent.WithPreloadMemory(N)`；由于 `mem0Svc` 同时实现 `memory.Reader`，Runner 可以用它执行只读预加载
 - 不要对该集成使用 `runner.WithMemoryService(...)`
 
 ### 为什么用 `WithSessionIngestor(...)`，而不是 `WithMemoryService(...)`
@@ -1738,7 +1740,7 @@ defer r.Close()
 - Runner 在每轮结束后把完整 session transcript 发送出去
 - 记忆提取与存储由 mem0 在服务端完成
 - `metadata`、`agent_id`、`run_id` 这类按请求传递的 ingest 字段，可以通过 `session.IngestOption` 透传
-- 不会把该集成误解成支持完整框架侧 CRUD 或 preload 的内置后端
+- 不会把该集成误解成支持完整框架侧 CRUD 的内置后端；显式启用的框架侧 preload 只使用只读 `memory.Reader` 能力
 
 简单说，`MemoryService` 表示“框架直接管理记忆”，而 `SessionIngestor` 表示“框架把 transcript 交给外部记忆系统”。`mem0` 属于后者。
 
@@ -1746,25 +1748,36 @@ defer r.Close()
 
 | 选项 | 作用 | 默认值 |
 | ---- | ---- | ------ |
-| `WithAPIKey(key)` | mem0 API Key，所有请求必需。 | 必填 |
+| `WithAPIKey(key)` | mem0 API Key；托管平台必填，本地 OSS 且关闭鉴权时可为空。 | 必填 |
 | `WithHost(url)` | 覆盖 mem0 API Host / Base URL。 | `https://api.mem0.ai` |
-| `WithOrgProject(orgID, projectID)` | 为 ingest 与读取请求追加 mem0 的 `org_id` / `project_id`。 | 空 |
-| `WithAsyncMode(bool)` | 控制 ingest 请求里的 `async_mode`。 | `true` |
-| `WithVersion(v)` | 设置 mem0 ingest 请求里的版本字段。 | `v2` |
+| `WithSelfHostedOSS()` | 使用本地 Mem0 OSS REST API（`/memories`、`/search`、`X-API-Key`）。开启后如果没有设置 `WithHost`，host 默认 `http://localhost:8888`；OSS 模式会拒绝托管平台默认 host。 | 关闭 |
+| `WithSelfHostedOSSIncludeUnscopedMemories()` | 包含没有 `metadata.trpc_app_name` 的历史 OSS 记录；已标记为其他 app 的记录仍会隐藏。 | 关闭 |
+| `WithOrgProject(orgID, projectID)` | 追加托管平台的 `org_id` / `project_id`；本地 OSS 不支持。 | 空 |
+| `WithAsyncMode(bool)` | 控制托管平台 ingest 请求里的 `async_mode`；本地 OSS 在 REST 层同步写入。 | `true` |
+| `WithVersion(v)` | 设置托管平台 mem0 ingest 请求里的版本字段。 | `v2` |
 | `WithTimeout(d)` | HTTP 客户端超时时间。 | `10s` |
 | `WithLoadToolEnabled(bool)` | 是否在 `Tools()` 里暴露 `memory_load`。 | `false` |
 | `WithAsyncMemoryNum(n)` | 后台 ingest worker 数量。 | `1` |
 | `WithMemoryQueueSize(n)` | 每个 worker 的队列长度。 | `10` |
 | `WithMemoryJobTimeout(d)` | 队列任务与同步 fallback ingest 的超时时间。 | `30s` |
 
+如果使用官方本地 Mem0 OSS server，并且 LLM 与 embedding 使用不同 endpoint 或
+API key，需要在 server 侧分别配置。OSS server 提供 `POST /configure`：
+`llm.provider=openai` 配置 LLM 的模型、base URL 和 API key，
+`embedder.provider=openai` 配置 embedding 的模型、base URL 和 API key。Go
+适配层只访问 Mem0 REST API，不直接读写 OSS server 内部的向量库。
+
 ### 注意事项
 
 - `Tools()` 默认暴露 `memory_search`；`memory_load` 可按需开启。
 - 所有读取仍然基于当前 `<appName, userID>` 做隔离。
+- 本地 OSS 没有 top-level `app_id`，适配层使用 `metadata.trpc_app_name` 做 app 隔离。已有 OSS 记录如果缺少这个 metadata，默认会被隐藏，直到重新 ingest 或回填 metadata。迁移期确实需要读取这些历史记录时，可显式开启 `WithSelfHostedOSSIncludeUnscopedMemories()`。
+- 当前 OSS `GET /memories` API 最多返回 1000 条 user 级结果，不支持分页，也不能在服务端表达 `metadata.trpc_app_name` 过滤。因此 `ReadMemories` 要求传入大于 0 且不超过 1000 的 limit，并且只会在 OSS 返回的前 1000 条 user 级记录内尽力做本地 app 隔离。
 - Runner 会自动把 session 上下文带入 ingest；如果有需要，也可以通过 `session.WithIngestMetadata`、`session.WithIngestAgentID`、`session.WithIngestRunID` 追加信息。
+- 当同一个 mem0 service 通过 `runner.WithSessionIngestor(mem0Svc)` 配置后，`WithPreloadMemory(N)` 可以使用 mem0 的只读能力；生产环境建议使用正数预算。
 - 当 mem0 返回结构化 metadata 时，检索结果仍可携带 `Topics`、`Kind`、`EventTime`、`Participants`、`Location` 等字段。
 - 使用完成后请调用 `Close()`，确保后台 worker 干净退出。
-- 如果你需要完整的 CRUD 工具面，或依赖框架侧 preload，建议优先选择内置 Memory 后端。
+- 如果你需要完整的 CRUD 工具面，建议优先选择内置 Memory 后端。
 
 ## TencentDB Agent Memory 集成（`memory/tencentdb`）
 
@@ -1779,10 +1792,9 @@ tRPC-Agent-Go 侧继续负责 Runner、Session、Plugin 和 Tool 生命周期的
 - Go adapter 通过 `session.Ingestor` 把每轮完成后的会话内容发送给 gateway。
 - Runner plugin 在每次模型调用前请求 `/recall`，并把返回的上下文注入模型请求（需通过 `WithRecallEnabled(true)` 显式开启）。
 - 通过 `tdai_conversation_search`（按 session 作用域，默认开启）和 `tdai_memory_search`（需 `WithMemorySearchTool(true)` 显式开启）暴露只读检索工具。
-- 可选的短期上下文卸载 plugin 可以把较大的工具结果外置到本地
-  `refs/*.md`，维护 L1 JSONL 摘要、判断 L1.5 任务边界、生成 L2
-  Mermaid 任务图，并在模型调用前执行 L3 token 压力压缩。它与 recall
-  相互独立，默认关闭。
+- 可选的短期上下文卸载 plugin 会把工具结果外置化、L1/L1.5/L2/L3、
+  drill-down 和持久化委托给 TencentDB Agent Memory gateway hook API。
+  Go adapter 不写本地 offload 文件。它与 recall 相互独立，默认关闭。
 
 > **多租户提示**：自动 recall 和 `tdai_memory_search` 会读取 gateway 的共享长期
 > 存储，而当前 gateway 并不会在这些路径上强制按 user/session 隔离，因此它们默认
@@ -1838,21 +1850,10 @@ memSvc, err := memorytencentdb.NewService(
     // 跨 session/user 的读取属于 opt-in，仅在 gateway 可信/隔离时开启。
     memorytencentdb.WithRecallEnabled(true),
     memorytencentdb.WithMemorySearchTool(true),
-    // 可选短期工具结果卸载；它与长期 recall 是独立能力。
+    // 可选短期工具结果卸载；需要 gateway 支持 /offload/v1/hooks/*
+    // 和 /offload/v1/tools/*。
     // memorytencentdb.WithContextOffload(memorytencentdb.ContextOffloadConfig{
     //     Enabled: true,
-    //     DataDir: ".tdai-offload",
-    //     Mode:    memorytencentdb.ContextOffloadModeLocal,
-    //     Model:   openai.New("deepseek-v4-flash"),
-    // }),
-    // 或将 L1/L1.5/L2 交给兼容的 offload backend：
-    // memorytencentdb.WithContextOffload(memorytencentdb.ContextOffloadConfig{
-    //     Enabled: true,
-    //     Mode:    memorytencentdb.ContextOffloadModeBackend,
-    //     Backend: memorytencentdb.ContextOffloadBackendConfig{
-    //         URL:    gatewayURL,
-    //         APIKey: os.Getenv("TDAI_GATEWAY_API_KEY"),
-    //     },
     // }),
     // memorytencentdb.WithAPIKey(os.Getenv("TDAI_GATEWAY_API_KEY")),
 )
@@ -1893,6 +1894,64 @@ defer r.Close()
   `tdai_search_offload_index` 工具会通过 `memSvc.Tools()` 暴露。
 - 不要对该集成使用 `runner.WithMemoryService(...)`。
 
+### 启用 Context Offload
+
+context offload 是独立、显式开启的短期大工具结果卸载路径。只有在
+TencentDB Agent Memory gateway 已经提供下方 notes 中列出的 offload routes
+时才应启用它。Go adapter 不提供本地存储、摘要模型，也不再暴露
+local/backend/collect 模式。
+
+最小接入方式：
+
+```go
+memSvc, err := memorytencentdb.NewService(
+    memorytencentdb.WithGatewayURL(gatewayURL),
+    memorytencentdb.WithContextOffload(memorytencentdb.ContextOffloadConfig{
+        Enabled: true,
+    }),
+)
+if err != nil {
+    panic(err)
+}
+
+agent := llmagent.New(
+    "assistant",
+    llmagent.WithModel(openai.New("deepseek-v4-flash")),
+    llmagent.WithTools(memSvc.Tools()),
+)
+
+r := runner.NewRunner(
+    "my-app",
+    agent,
+    runner.WithSessionService(sessionSvc),
+    runner.WithSessionIngestor(memSvc),
+    runner.WithPlugins(memSvc.ContextOffloadPlugin()),
+)
+```
+
+如果 offload 流量需要使用与普通 capture/search/recall 不同的 gateway 或 key，
+可以在 `ContextOffloadConfig` 中单独设置 `GatewayURL` 和 `APIKey`：
+
+```go
+memorytencentdb.WithContextOffload(memorytencentdb.ContextOffloadConfig{
+    Enabled:    true,
+    GatewayURL: "http://127.0.0.1:8420",
+    APIKey:     os.Getenv("TDAI_OFFLOAD_GATEWAY_API_KEY"),
+})
+```
+
+运行时行为：
+
+- `ContextOffloadPlugin()` 会在工具执行后调用 gateway。gateway 可以把较大的
+  tool result message 替换成紧凑引用或摘要。
+- 下一次模型调用前，plugin 会询问 gateway 是否需要用已卸载上下文改写当前请求。
+- 启用 context offload 后，`memSvc.Tools()` 会暴露
+  `tdai_read_offload_ref`、`tdai_read_offload_node` 和
+  `tdai_search_offload_index`，模型可以通过这些工具继续下钻 gateway 托管的
+  offload 数据。
+- 不要在 Go adapter 中配置本地目录、本地模型或 L0-L3 策略；这些职责属于
+  TencentDB Agent Memory。
+
 ### 交互式示例
 
 gateway 就绪后运行示例：
@@ -1932,26 +1991,15 @@ You: 我的项目代号、部署窗口和回答偏好是什么？
 | `WithToolPrefix(prefix)` | 修改原生工具名前缀。 | `tdai` |
 | `WithContextOffload(ContextOffloadConfig)` | 配置较大工具结果的显式短期上下文卸载。 | 关闭 |
 
-`ContextOffloadConfig` 按 offload 层级组织详细配置。除 `Enabled` 必须显式设置外，
-其余零值都会补全为保守默认值。
+`ContextOffloadConfig` 只控制 Go adapter 的 gateway 对接。offload 层级、
+状态、存储、TTL 和隔离由 TencentDB Agent Memory gateway 负责。Go adapter
+不暴露 local/backend offload 模式，也不会写本地 offload state。
 
 | 字段 | 作用 | 默认值 |
 | ---- | ---- | ------ |
 | `Enabled` | 是否启用 context offload plugin 和配套工具。 | `false` |
-| `DataDir` | `refs/`、JSONL 索引和 Mermaid 文件目录。 | `.tdai-offload` |
-| `Mode` | 选择 `local`、`backend` 或 `collect` offload 模式。 | `local` |
-| `Model` | local 模式下执行 L1/L1.5/L2 offload 任务的模型。未设置时使用确定性 fallback 摘要。 | 无 |
-| `MaxEntries` | 注入当前任务 Mermaid 上下文的最大 offload 条目数。 | `20` |
-| `Backend.URL`、`Backend.APIKey` | backend 模式下的 L1/L1.5/L2 endpoint 和可选 API key。 | 无 |
-| `L0.MinToolResultBytes` | 触发外置化的最小工具结果大小。 | `8192` |
-| `L0.MaxRefBytes` | `tdai_read_offload_ref` 最多返回的字节数。 | `1048576` |
-| `L1.MaxPairsPerBatch` | 单次 L1 摘要请求最多处理的工具调用对数量。 | `20` |
-| `L2.NullThreshold` | 触发 L2 Mermaid 生成的未映射 L1 行数。 | `4` |
-| `L2.Timeout` | 基于时间的 L2 触发间隔。 | `5m` |
-| `L3.ContextWindow` | offload model 未报告窗口时，L3 token 压力检查使用的上下文窗口。 | `200000` |
-| `L3.MildRatio` | 触发 L3 摘要替换的 token 比例。 | `0.50` |
-| `L3.AggressiveRatio` | 触发删除旧 offloaded 工具块的 token 比例。 | `0.85` |
-| `L3.EmergencyRatio`、`L3.EmergencyTargetRatio` | emergency 压缩的触发比例和目标比例。 | `0.95`、`0.60` |
+| `GatewayURL` | context offload hook/tool 调用的可选 gateway URL 覆盖。为空时复用 `WithGatewayURL`。 | 无 |
+| `APIKey` | context offload hook/tool 调用的可选 API key 覆盖。为空时复用 `WithAPIKey`。 | 无 |
 
 ### 注意事项
 
@@ -1959,17 +2007,16 @@ You: 我的项目代号、部署窗口和回答偏好是什么？
 - 当 gateway 设置了 `TDAI_GATEWAY_API_KEY` 时，请用 `WithAPIKey(...)` 让请求携带 `Authorization: Bearer <key>`，否则除 `/health` 外的路由都会返回 401（health 仍可通过）。
 - `tdai_memory_search` 检索已提取的长期记忆；提取是异步的，新捕获的信息可能需要短暂等待后才可检索。
 - `tdai_conversation_search` 检索对话历史，默认使用当前 gateway `session_key`。
-- context offload 是本地、显式开启、运行时作用域的能力。它不调用 `/capture` 或
+- context offload 是显式开启、由 gateway 承载的能力。它不调用 `/capture` 或
   `/recall`；单独开启 recall 不会改写工具结果消息，也不会生成 Mermaid 任务图。
-- context offload 有三种模型模式：`local` 使用 `ContextOffloadConfig.Model`
-  配置的模型执行 L1/L1.5/L2，未配置时使用确定性 fallback；`backend`
-  调用兼容的 `/offload/v1/...` endpoint；`collect` 只记录 refs 和 JSONL
-  状态，不改写模型侧 messages。
-- offload 工具只读取当前 invocation 的 agent/session 数据目录。
-  `read_offload_ref` 会对 `result_ref` 读取做 path traversal 防护；
-  `read_offload_node` 按 `node_id` 读取，不接收 `result_ref`。
-- live model 覆盖放在 `integration` build tag 后，例如：
-  `TDAI_CONTEXT_OFFLOAD_INTEGRATION=1 OPENAI_API_KEY=... go test -tags=integration ./memory/tencentdb -run TestContextOffloadPlugin_IntegrationLocalModel`。
+- Go adapter 调用 gateway hook endpoints：
+  `/offload/v1/hooks/after-tool-messages` 和
+  `/offload/v1/hooks/before-model`。它不会创建 `.tdai-offload`、本地 refs、
+  JSONL 索引、Mermaid 文件或本地 state。
+- offload 工具调用 gateway drill-down endpoints：
+  `/offload/v1/tools/read-ref`、`/offload/v1/tools/read-node` 和
+  `/offload/v1/tools/search-index`。scope 校验、存储 ACL、返回字节限制和持久化
+  都由 gateway 负责。
 - 使用完成后请调用 `Close()`，确保后台 capture worker 干净退出。
 
 ## 参考链接

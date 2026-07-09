@@ -10,6 +10,7 @@
 package httpfetch
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -19,9 +20,17 @@ import (
 	"testing"
 	"time"
 
+	pdfpkg "github.com/dslipak/pdf"
+	"github.com/go-pdf/fpdf"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type errReader struct{}
+
+func (errReader) Read(_ []byte) (int, error) {
+	return 0, errors.New("read failed")
+}
 
 func TestWebFetch(t *testing.T) {
 	// Mock server
@@ -99,6 +108,38 @@ func TestWebFetch_NoURLs(t *testing.T) {
 	assert.Equal(t, "No URLs provided", resp.Summary)
 }
 
+func TestWebFetch_HTTPErrorIncludesStatusTextAndBodySnippet(
+	t *testing.T,
+) {
+	ts := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(http.StatusTooManyRequests)
+			fmt.Fprint(
+				w,
+				`<html><body><h1>Too Many Requests</h1></body></html>`,
+			)
+		},
+	))
+	defer ts.Close()
+
+	tool := NewTool()
+	args := fmt.Sprintf(`{"urls": ["%s"]}`, ts.URL)
+
+	res, err := tool.Call(context.Background(), []byte(args))
+	require.NoError(t, err)
+
+	resp := res.(fetchResponse)
+	require.Len(t, resp.Results, 1)
+	require.Empty(t, resp.Results[0].Content)
+	require.Contains(
+		t,
+		resp.Results[0].Error,
+		"HTTP status 429 Too Many Requests",
+	)
+	require.Contains(t, resp.Results[0].Error, "Too Many Requests")
+}
+
 func TestWebFetch_PlainText(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8") // With params to test cleaning
@@ -164,6 +205,159 @@ func TestWebFetch_UnsupportedType(t *testing.T) {
 	assert.Equal(t, "application/octet-stream", resp.Results[0].ContentType)
 	assert.Empty(t, resp.Results[0].Content)
 	assert.Contains(t, resp.Results[0].Error, "unsupported content type: application/octet-stream")
+}
+
+func TestWebFetch_PDF(t *testing.T) {
+	pdfBytes := createPDFBytes(t, []string{
+		"Quarterly reference works flyer",
+		"Life sciences collection",
+	})
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/pdf")
+		_, _ = w.Write(pdfBytes)
+	}))
+	defer ts.Close()
+
+	tool := NewTool()
+	args := fmt.Sprintf(`{"urls": ["%s"]}`, ts.URL)
+
+	res, err := tool.Call(context.Background(), []byte(args))
+	require.NoError(t, err)
+
+	resp, ok := res.(fetchResponse)
+	require.True(t, ok, "Response should be of type fetchResponse")
+	assert.Len(t, resp.Results, 1)
+	assert.Equal(t, "application/pdf", resp.Results[0].ContentType)
+	assert.Empty(t, resp.Results[0].Error)
+	assert.Contains(t, resp.Results[0].Content, "Quarterly reference")
+	assert.Contains(t, resp.Results[0].Content, "Life sciences")
+	assert.Contains(t, resp.Results[0].Content, "works flyer\nLife")
+}
+
+func TestWebFetch_PDFRespectsPerURLBodyLimit(t *testing.T) {
+	pdfBytes := createPDFBytes(t, []string{
+		"Quarterly reference works flyer",
+	})
+	ts := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		w.Header().Set("Content-Type", "application/pdf")
+		_, _ = w.Write(pdfBytes)
+	}))
+	defer ts.Close()
+
+	tool := NewTool(WithMaxContentLength(len(pdfBytes) - 1))
+	args := fmt.Sprintf(`{"urls": ["%s"]}`, ts.URL)
+
+	res, err := tool.Call(context.Background(), []byte(args))
+	require.NoError(t, err)
+
+	resp, ok := res.(fetchResponse)
+	require.True(t, ok, "Response should be of type fetchResponse")
+	require.Len(t, resp.Results, 1)
+	assert.Equal(t, "application/pdf", resp.Results[0].ContentType)
+	assert.Empty(t, resp.Results[0].Content)
+	assert.Contains(t, resp.Results[0].Error, "per-url content limit")
+}
+
+func TestWebFetch_InvalidPDFReportsParseError(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/pdf")
+		fmt.Fprint(w, `%PDF-1.7`)
+	}))
+	defer ts.Close()
+
+	tool := NewTool()
+	args := fmt.Sprintf(`{"urls": ["%s"]}`, ts.URL)
+
+	res, err := tool.Call(context.Background(), []byte(args))
+	require.NoError(t, err)
+
+	resp, ok := res.(fetchResponse)
+	require.True(t, ok, "Response should be of type fetchResponse")
+	assert.Len(t, resp.Results, 1)
+	assert.Equal(t, "application/pdf", resp.Results[0].ContentType)
+	assert.Empty(t, resp.Results[0].Content)
+	assert.Contains(t, resp.Results[0].Error, "read pdf")
+}
+
+func TestReadPDFPageText_NullPage(t *testing.T) {
+	text, err := readPDFPageText(pdfpkg.Page{})
+	require.NoError(t, err)
+	assert.Empty(t, text)
+}
+
+func TestReadPDFBody(t *testing.T) {
+	data, err := readPDFBody(strings.NewReader("abcdef"), 0)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("abcdef"), data)
+
+	data, err = readPDFBody(strings.NewReader("abc"), 3)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("abc"), data)
+
+	_, err = readPDFBody(strings.NewReader("abcd"), 3)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "per-url content limit")
+
+	_, err = readPDFBody(&failReader{}, 0)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to read response body")
+
+	_, err = readPDFBody(&failReader{}, 3)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to read response body")
+}
+
+func TestPDFPageTextFormatsFragments(t *testing.T) {
+	text := pdfPageText([]pdfpkg.Text{
+		{S: "Second line", X: 10, Y: 80, W: 60, FontSize: 12},
+		{S: "World ", X: 30, Y: 100, W: 30, FontSize: 12},
+		{S: "", X: 5, Y: 100, W: 0, FontSize: 12},
+		{S: "Hello", X: 10, Y: 100, W: 15, FontSize: 12},
+	})
+
+	assert.Equal(t, "Hello World\nSecond line", text)
+	assert.Empty(t, pdfPageText(nil))
+}
+
+func TestShouldSeparatePDFText(t *testing.T) {
+	assert.False(t, shouldSeparatePDFText(
+		pdfpkg.Text{S: "Hello ", X: 0, W: 10, FontSize: 12},
+		pdfpkg.Text{S: "World", X: 30, FontSize: 12},
+	))
+	assert.False(t, shouldSeparatePDFText(
+		pdfpkg.Text{S: "Hello", X: 0, W: 10, FontSize: 12},
+		pdfpkg.Text{S: " World", X: 30, FontSize: 12},
+	))
+	assert.False(t, shouldSeparatePDFText(
+		pdfpkg.Text{S: "Hello", X: 0, W: 10, FontSize: 12},
+		pdfpkg.Text{S: "World", X: 9, FontSize: 12},
+	))
+	assert.False(t, shouldSeparatePDFText(
+		pdfpkg.Text{S: "Hello", X: 0, W: 10, FontSize: 12},
+		pdfpkg.Text{S: "World", X: 12, FontSize: 12},
+	))
+	assert.True(t, shouldSeparatePDFText(
+		pdfpkg.Text{S: "Hello", X: 0, W: 10, FontSize: 12},
+		pdfpkg.Text{S: "World", X: 30, FontSize: 12},
+	))
+	assert.True(t, shouldSeparatePDFText(
+		pdfpkg.Text{S: "Hello", X: 0, W: 1},
+		pdfpkg.Text{S: "World", X: 5},
+	))
+}
+
+func TestTrimTrailingSpaces(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("already clean")
+	trimTrailingSpaces(&b)
+	assert.Equal(t, "already clean", b.String())
+
+	b.WriteString(" \t")
+	trimTrailingSpaces(&b)
+	assert.Equal(t, "already clean", b.String())
 }
 
 func TestWebFetch_PerUrlLimit(t *testing.T) {
@@ -294,6 +488,161 @@ func TestConvertHTMLToMarkdown(t *testing.T) {
 
 	assert.NotContains(t, result, "console.log")
 	assert.NotContains(t, result, "color: red")
+}
+
+func TestConvertHTMLToMarkdownKeepsFullPageByDefault(t *testing.T) {
+	htmlContent := `
+		<html>
+		<body>
+			<header>Useful header notice</header>
+			<main><p>Main article text.</p></main>
+			<form><label>Useful form label</label></form>
+			<footer>Useful footer citation</footer>
+		</body>
+		</html>`
+
+	result, err := convertHTMLToMarkdown(strings.NewReader(htmlContent))
+	require.NoError(t, err)
+
+	assert.Contains(t, result, "Useful header notice")
+	assert.Contains(t, result, "Main article text")
+	assert.Contains(t, result, "Useful form label")
+	assert.Contains(t, result, "Useful footer citation")
+}
+
+func TestConvertHTMLToMarkdownCanPreferMainContent(t *testing.T) {
+	htmlContent := `
+		<html>
+		<body>
+			<nav>` + strings.Repeat("Main menu navigation. ", 200) + `</nav>
+			<div id="article-body">
+				<h1>Moon</h1>
+				<table class="infobox">
+					<tr><th>Periapsis</th><td>356,400-370,400 km</td></tr>
+				</table>
+				<p>The Moon is Earth's only natural satellite.</p>
+			</div>
+			<footer>Footer links</footer>
+		</body>
+		</html>`
+
+	result, err := convertHTMLToMarkdownWithOptions(
+		strings.NewReader(htmlContent),
+		true,
+	)
+	require.NoError(t, err)
+
+	assert.Contains(t, result, "Moon")
+	assert.Contains(t, result, "Periapsis")
+	assert.Contains(t, result, "356,400-370,400 km")
+	assert.NotContains(t, result, "Main menu navigation")
+	assert.NotContains(t, result, "Footer links")
+}
+
+func TestHTMLVisibleTextFallbackKeepsVisiblePageText(t *testing.T) {
+	htmlContent := `
+		<html>
+		<body>
+			<header>Useful header notice</header>
+			<script>console.log("hidden")</script>
+			<style>.hidden { display: none }</style>
+			<div>Visible <span>article</span> text.</div>
+			<p hidden>Hidden paragraph.</p>
+			<p aria-hidden="true">Aria hidden paragraph.</p>
+			<p style="display: none">CSS hidden paragraph.</p>
+			<footer>Useful footer citation</footer>
+		</body>
+		</html>`
+
+	result, err := htmlVisibleTextFallback([]byte(htmlContent))
+	require.NoError(t, err)
+
+	assert.Contains(t, result, "Useful header notice")
+	assert.Contains(t, result, "Visible")
+	assert.Contains(t, result, "article")
+	assert.Contains(t, result, "text.")
+	assert.Contains(t, result, "Useful footer citation")
+	assert.NotContains(t, result, "console.log")
+	assert.NotContains(t, result, "display: none")
+	assert.NotContains(t, result, "Hidden paragraph")
+	assert.NotContains(t, result, "Aria hidden paragraph")
+	assert.NotContains(t, result, "CSS hidden paragraph")
+}
+
+func TestHTMLVisibleTextFallbackReportsEmptyContent(t *testing.T) {
+	result, err := htmlVisibleTextFallback([]byte(`
+		<html>
+		<body>
+			<script>console.log("hidden")</script>
+			<style>body { color: red }</style>
+		</body>
+		</html>`))
+
+	require.Error(t, err)
+	assert.Empty(t, result)
+	assert.Contains(t, err.Error(), "no visible text")
+}
+
+func TestHTMLVisibleTextFallbackReportsParseFailure(t *testing.T) {
+	result, err := htmlVisibleTextFallbackFromReader(
+		errReader{},
+		[]byte("  visible fallback text  "),
+	)
+
+	require.Error(t, err)
+	assert.Empty(t, result)
+	assert.Contains(t, err.Error(), "parse HTML for visible-text fallback")
+}
+
+func TestHTMLVisibleTextFallbackReportsParseFailureWithEmptyRawText(
+	t *testing.T,
+) {
+	result, err := htmlVisibleTextFallbackFromReader(errReader{}, nil)
+
+	require.Error(t, err)
+	assert.Empty(t, result)
+	assert.Contains(t, err.Error(), "parse HTML for visible-text fallback")
+}
+
+func TestConvertHTMLToMarkdownKeepsEmptyVisibleHTMLSuccessful(t *testing.T) {
+	result, err := convertHTMLToMarkdown(strings.NewReader(`
+		<html>
+		<body>
+			<script>console.log("hidden")</script>
+			<style>body { color: red }</style>
+		</body>
+		</html>`))
+
+	require.NoError(t, err)
+	assert.Empty(t, result)
+}
+
+func TestWebFetch_MainContentExtractionOption(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "text/html")
+			fmt.Fprint(w, `
+<html><body>
+  <nav>Navigation text</nav>
+  <main><h1>Main Heading</h1><p>Main body.</p></main>
+  <footer>Footer citation</footer>
+</body></html>`)
+		},
+	))
+	defer ts.Close()
+
+	tool := NewTool(WithMainContentExtraction(true))
+	args := fmt.Sprintf(`{"urls": ["%s"]}`, ts.URL)
+
+	res, err := tool.Call(context.Background(), []byte(args))
+	require.NoError(t, err)
+	resp := res.(fetchResponse)
+
+	require.Len(t, resp.Results, 1)
+	assert.Contains(t, resp.Results[0].Content, "Main Heading")
+	assert.Contains(t, resp.Results[0].Content, "Main body")
+	assert.NotContains(t, resp.Results[0].Content, "Navigation text")
+	assert.NotContains(t, resp.Results[0].Content, "Footer citation")
 }
 
 func TestWebFetch_WithHTTPClient(t *testing.T) {
@@ -648,6 +997,21 @@ func TestIsSupportedTextType(t *testing.T) {
 	assert.False(t, isSupportedTextType("image/png"))
 	assert.False(t, isSupportedTextType("video/mp4"))
 	assert.False(t, isSupportedTextType(""))
+}
+
+func createPDFBytes(t *testing.T, lines []string) []byte {
+	t.Helper()
+
+	pdf := fpdf.New("P", "mm", "A4", "")
+	pdf.AddPage()
+	pdf.SetFont("Arial", "", 12)
+	for _, line := range lines {
+		pdf.Cell(40, 10, line)
+		pdf.Ln(10)
+	}
+	var buf bytes.Buffer
+	require.NoError(t, pdf.Output(&buf))
+	return buf.Bytes()
 }
 
 func TestWebFetch_TotalLimitWithError(t *testing.T) {

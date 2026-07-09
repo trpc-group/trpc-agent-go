@@ -27,6 +27,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/structuredoutput"
+	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/internal/tracecapture"
 	"trpc.group/trpc-go/trpc-agent-go/internal/util"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
@@ -64,6 +65,9 @@ const (
 	// session after the function-call processor clones the invocation
 	// session for state-delta isolation.
 	liveSessionStateKey = "__live_session__"
+	// forwardEventStateKey is the invocation state key used by internal
+	// eventstream attachment (see internal/state/eventstream).
+	forwardEventStateKey = "__forward_event__"
 
 	// streamHubStateKey is the invocation state key used by the graph to
 	// share ephemeral streams across node invocations within the same run.
@@ -102,6 +106,9 @@ const (
 	// TriggerTypeTransfer indicates the child invocation was created because
 	// the parent agent invoked the transfer_to_agent tool (handoff pattern).
 	TriggerTypeTransfer = event.TriggerTypeTransfer
+	// TriggerTypeDynamicWorkflow indicates the child invocation was created by
+	// a dynamic workflow script calling a registered child agent.
+	TriggerTypeDynamicWorkflow = event.TriggerTypeDynamicWorkflow
 )
 
 // ParentInvocationMetadata describes how a child invocation was triggered by
@@ -167,6 +174,8 @@ type Invocation struct {
 
 	// MemoryService is the service for managing memory.
 	MemoryService memory.Service
+	// MemoryReader is the read-only memory source for memory preload.
+	MemoryReader memory.Reader
 	// ArtifactService is the service for managing artifacts.
 	ArtifactService artifact.Service
 
@@ -1413,7 +1422,7 @@ func (opts RunOptions) ShouldExecuteTool(
 	if opts.ToolExecutionFilter == nil {
 		return true
 	}
-	return opts.ToolExecutionFilter(ctx, tl)
+	return opts.ToolExecutionFilter(ctx, itool.ResolveDeclaration(tl))
 }
 
 func (opts RunOptions) isExternalTool(tl tool.Tool) bool {
@@ -1518,6 +1527,7 @@ func (inv *Invocation) Clone(invocationOpts ...InvocationOptions) *Invocation {
 		Message:         inv.Message,
 		RunOptions:      inv.RunOptions,
 		MemoryService:   inv.MemoryService,
+		MemoryReader:    inv.MemoryReader,
 		ArtifactService: inv.ArtifactService,
 		Plugins:         inv.Plugins,
 		noticeMu:        inv.noticeMu,
@@ -1582,6 +1592,7 @@ func (inv *Invocation) View(invocationOpts ...InvocationOptions) *Invocation {
 		StructuredOutput:     inv.StructuredOutput,
 		StructuredOutputType: inv.StructuredOutputType,
 		MemoryService:        inv.MemoryService,
+		MemoryReader:         inv.MemoryReader,
 		ArtifactService:      inv.ArtifactService,
 		noticeChannels:       inv.noticeChannels,
 		noticeMu:             inv.noticeMu,
@@ -1625,6 +1636,7 @@ func (inv *Invocation) SyncView(view *Invocation) {
 	inv.StructuredOutput = view.StructuredOutput
 	inv.StructuredOutputType = view.StructuredOutputType
 	inv.MemoryService = view.MemoryService
+	inv.MemoryReader = view.MemoryReader
 	inv.ArtifactService = view.ArtifactService
 	inv.noticeChannels = view.noticeChannels
 	inv.noticeMu = view.noticeMu
@@ -1699,6 +1711,7 @@ func isCloneStateKey(key string) bool {
 		barrierStateKey,
 		appenderStateKey,
 		liveSessionStateKey,
+		forwardEventStateKey,
 		streamHubStateKey,
 		surfaceRootNodeIDStateKey,
 		teamMemberTraceRootStateKey:

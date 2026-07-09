@@ -346,8 +346,8 @@ func (m *Model) buildChatRequest(request *model.Request) (*api.ChatRequest, erro
 	if len(request.Stop) > 0 {
 		chatRequest.Options["stop"] = request.Stop
 	}
-	if request.MaxTokens != nil {
-		chatRequest.Options["num_predict"] = *request.MaxTokens
+	if mt := imodel.ClampMaxTokensForModel(m.name, request.MaxTokens); mt != nil {
+		chatRequest.Options["num_predict"] = *mt
 	}
 	if request.ThinkingEnabled != nil {
 		chatRequest.Think = &api.ThinkValue{

@@ -19,7 +19,17 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
+
+type contextCompactionTestTool struct {
+	name string
+}
+
+func (t contextCompactionTestTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{Name: t.name}
+}
 
 type sequenceTokenCounter struct {
 	counts []int
@@ -65,6 +75,19 @@ func TestRecoveryRefLinesKeepToolCallIDWithoutEventID(t *testing.T) {
 	require.Contains(t, placeholder, "tool_call_id: call-1")
 	require.Contains(t, placeholder, "tool_name: worker")
 	require.NotContains(t, placeholder, "recoverable: false")
+	require.NotContains(t, placeholder, "Use session_load")
+	require.Contains(t, placeholder, "read-only or idempotent")
+	require.Contains(t, placeholder, "do not repeat side-effecting")
+
+	withLoad := recoverableToolResultPlaceholder(
+		toolResultRecoveryRef{
+			ToolCallID:           "call-1",
+			ToolName:             "worker",
+			Reason:               "policy",
+			SessionLoadAvailable: true,
+		},
+	)
+	require.Contains(t, withLoad, "Use session_load")
 
 	marker := recoverableTruncationMarker(
 		toolResultRecoveryRef{ToolCallID: "call-1", ToolName: "worker"},
@@ -72,6 +95,7 @@ func TestRecoveryRefLinesKeepToolCallIDWithoutEventID(t *testing.T) {
 	)
 	require.Contains(t, marker, "tool_call_id=call-1")
 	require.Contains(t, marker, "tool_name=worker")
+	require.NotContains(t, marker, "session_load")
 }
 
 func TestCompactIncrementEvents_PreservesCurrentAndRecentRequests(t *testing.T) {
@@ -617,6 +641,9 @@ func TestCompactedCurrentInvocationMessage_KeepToolName(t *testing.T) {
 	)
 	require.True(t, baselineOK)
 	require.Contains(t, baseline.Content, compactedToolResultPlaceholder)
+	require.Contains(t, baseline.Content, "read-only, idempotent")
+	require.Contains(t, baseline.Content, "do not repeat side-effecting")
+	require.NotContains(t, baseline.Content, "session summary above")
 
 	compacted, ok := compactedCurrentInvocationMessage(
 		msg,
@@ -687,6 +714,53 @@ func TestContextCompactionToolResultOptions(t *testing.T) {
 	require.NotContains(t, cfg.toolResultCompactionRules.forceCleanToolNames, "")
 	require.Contains(t, cfg.toolResultCompactionRules.keepToolNames, "session_load")
 	require.NotContains(t, cfg.toolResultCompactionRules.keepToolNames, "")
+}
+
+func TestContextCompactionSessionLoadRecoveryDerivedFromRequestTools(t *testing.T) {
+	svc := inmemory.NewSessionService()
+	t.Cleanup(func() {
+		require.NoError(t, svc.Close())
+	})
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{}),
+		agent.WithInvocationSessionService(svc),
+	)
+	p := NewContentRequestProcessor(WithEnableContextCompaction(true))
+
+	cfg := p.contextCompactionConfigForInvocation(inv, &model.Request{
+		Tools: map[string]tool.Tool{
+			sessionLoadToolName: contextCompactionTestTool{
+				name: sessionLoadToolName,
+			},
+		},
+	})
+	require.True(t, cfg.SessionLoadRecoveryEnabled)
+
+	cfg = p.contextCompactionConfigForInvocation(inv, &model.Request{
+		Tools: map[string]tool.Tool{
+			"alias": contextCompactionTestTool{name: sessionLoadToolName},
+		},
+	})
+	require.True(t, cfg.SessionLoadRecoveryEnabled)
+
+	cfg = p.contextCompactionConfigForInvocation(inv, &model.Request{
+		Tools: map[string]tool.Tool{
+			"worker": contextCompactionTestTool{name: "worker"},
+		},
+	})
+	require.False(t, cfg.SessionLoadRecoveryEnabled)
+
+	cfg = p.contextCompactionConfigForInvocation(
+		agent.NewInvocation(agent.WithInvocationSession(&session.Session{})),
+		&model.Request{
+			Tools: map[string]tool.Tool{
+				sessionLoadToolName: contextCompactionTestTool{
+					name: sessionLoadToolName,
+				},
+			},
+		},
+	)
+	require.False(t, cfg.SessionLoadRecoveryEnabled)
 }
 
 func TestTruncateOversizedToolResultMessages_SkipsForceCleanForCurrentMessages(t *testing.T) {
@@ -821,6 +895,141 @@ func TestCompactIncrementEvents_AddsRecoverableTruncationRef(t *testing.T) {
 	require.Contains(t, got, "event_id=evt-tool")
 	require.Contains(t, got, "tool_call_id=tool-call-current")
 	require.Contains(t, got, "tool_name=worker")
+}
+
+func TestCompactIncrementEvents_CurrentResultNoSessionLoadHint(t *testing.T) {
+	content := "HEAD-" + strings.Repeat("middle-", 400) + "-TAIL"
+	evt := event.Event{
+		RequestID:    "req-current",
+		InvocationID: "inv-current",
+		FilterKey:    "test-agent",
+		Response: &model.Response{
+			Done: true,
+			Choices: []model.Choice{{
+				Message: model.NewToolMessage(
+					"tool-call-current",
+					"worker",
+					content,
+				),
+			}},
+		},
+	}
+
+	compacted, stats := compactIncrementEvents(
+		context.Background(),
+		[]event.Event{evt},
+		"req-current",
+		"inv-current",
+		ContextCompactionConfig{
+			Enabled:                      true,
+			SessionLoadRecoveryEnabled:   true,
+			OversizedToolResultMaxTokens: 80,
+		},
+	)
+
+	require.Equal(t, 1, stats.ToolResultsCompacted)
+	got := compacted[0].Response.Choices[0].Message.Content
+	require.Contains(t, got, "characters truncated from tool result")
+	require.Contains(t, got, "tool_call_id=tool-call-current")
+	require.NotContains(t, got, "session_load")
+	require.Contains(t, got, "re-run only safe read-only/idempotent tools")
+}
+
+func TestCompactIncrementEvents_CurrentResultWithEventIDHasSessionLoadHint(
+	t *testing.T,
+) {
+	content := "HEAD-" + strings.Repeat("middle-", 400) + "-TAIL"
+	evt := event.Event{
+		ID:           "evt-current",
+		RequestID:    "req-current",
+		InvocationID: "inv-current",
+		FilterKey:    "test-agent",
+		Response: &model.Response{
+			Done: true,
+			Choices: []model.Choice{{
+				Message: model.NewToolMessage(
+					"tool-call-current",
+					"worker",
+					content,
+				),
+			}},
+		},
+	}
+
+	compacted, stats := compactIncrementEvents(
+		context.Background(),
+		[]event.Event{evt},
+		"req-current",
+		"inv-current",
+		ContextCompactionConfig{
+			Enabled:                      true,
+			SessionLoadRecoveryEnabled:   true,
+			OversizedToolResultMaxTokens: 80,
+		},
+	)
+
+	require.Equal(t, 1, stats.ToolResultsCompacted)
+	got := compacted[0].Response.Choices[0].Message.Content
+	require.Contains(t, got, "characters truncated from tool result")
+	require.Contains(t, got, "event_id=evt-current")
+	require.Contains(t, got, "tool_call_id=tool-call-current")
+	require.Contains(t, got, "session_load")
+}
+
+func TestCompactIncrementEvents_HistoryResultHasSessionLoadHint(t *testing.T) {
+	content := "HEAD-" + strings.Repeat("middle-", 400) + "-TAIL"
+	events := []event.Event{
+		{
+			RequestID:    "req-current",
+			InvocationID: "inv-current",
+			FilterKey:    "test-agent",
+			Response: &model.Response{
+				Done: true,
+				Choices: []model.Choice{{
+					Message: model.NewToolMessage(
+						"tool-call-current",
+						"worker",
+						"ok",
+					),
+				}},
+			},
+		},
+		{
+			ID:           "evt-history",
+			RequestID:    "req-history",
+			InvocationID: "inv-history",
+			FilterKey:    "test-agent",
+			Response: &model.Response{
+				Done: true,
+				Choices: []model.Choice{{
+					Message: model.NewToolMessage(
+						"tool-call-history",
+						"worker",
+						content,
+					),
+				}},
+			},
+		},
+	}
+
+	compacted, stats := compactIncrementEvents(
+		context.Background(),
+		events,
+		"req-current",
+		"inv-current",
+		ContextCompactionConfig{
+			Enabled:                      true,
+			SessionLoadRecoveryEnabled:   true,
+			OversizedToolResultMaxTokens: 80,
+		},
+	)
+
+	require.Equal(t, 1, stats.ToolResultsCompacted)
+	got := compacted[1].Response.Choices[0].Message.Content
+	require.Contains(t, got, "characters truncated from tool result")
+	require.Contains(t, got, "event_id=evt-history")
+	require.Contains(t, got, "tool_call_id=tool-call-history")
+	require.Contains(t, got, "session_load")
 }
 
 func TestCompactIncrementEvents_DoesNotTruncateSessionLoadResult(t *testing.T) {
@@ -1034,7 +1243,18 @@ func TestTruncateMiddleWithRef_UsesToolCallIDOnlyRecoveryMarker(t *testing.T) {
 
 	require.Contains(t, got, "[... ")
 	require.Contains(t, got, "tool_call_id=tool-call-current")
-	require.Contains(t, got, "session_load")
+	require.NotContains(t, got, "session_load")
+
+	withLoad := truncateMiddleWithRef(
+		"HEAD-"+strings.Repeat("middle-", 80)+"-TAIL",
+		120,
+		toolResultRecoveryRef{
+			ToolCallID:           "tool-call-current",
+			ToolName:             "worker",
+			SessionLoadAvailable: true,
+		},
+	)
+	require.Contains(t, withLoad, "session_load")
 }
 
 func TestTruncateOversizedToolResultMessage_ContentPartsOnlyKeepsPayload(t *testing.T) {

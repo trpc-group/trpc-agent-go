@@ -271,6 +271,60 @@ func (r *recordingSessionService) Close() error {
 	return nil
 }
 
+type windowRecordingSessionService struct {
+	*recordingSessionService
+	windowReq session.EventWindowRequest
+	window    *session.EventWindow
+	windowErr error
+}
+
+func (r *windowRecordingSessionService) GetEventWindow(
+	_ context.Context,
+	req session.EventWindowRequest,
+) (*session.EventWindow, error) {
+	r.windowReq = req
+	return r.window, r.windowErr
+}
+
+type searchableRecordingSessionService struct {
+	*recordingSessionService
+	searchReq     session.EventSearchRequest
+	searchResults []session.EventSearchResult
+	searchErr     error
+}
+
+func (r *searchableRecordingSessionService) SearchEvents(
+	_ context.Context,
+	req session.EventSearchRequest,
+) ([]session.EventSearchResult, error) {
+	r.searchReq = req
+	return r.searchResults, r.searchErr
+}
+
+type searchWindowRecordingSessionService struct {
+	*recordingSessionService
+	windowReq     session.EventWindowRequest
+	window        *session.EventWindow
+	searchReq     session.EventSearchRequest
+	searchResults []session.EventSearchResult
+}
+
+func (r *searchWindowRecordingSessionService) GetEventWindow(
+	_ context.Context,
+	req session.EventWindowRequest,
+) (*session.EventWindow, error) {
+	r.windowReq = req
+	return r.window, nil
+}
+
+func (r *searchWindowRecordingSessionService) SearchEvents(
+	_ context.Context,
+	req session.EventSearchRequest,
+) ([]session.EventSearchResult, error) {
+	r.searchReq = req
+	return r.searchResults, nil
+}
+
 func TestResolveStorageUserID(t *testing.T) {
 	t.Parallel()
 
@@ -495,6 +549,141 @@ func TestWrapSessionService_WithoutStorageOverrideKeepsCanonicalUser(t *testing.
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	require.Equal(t, "canonical-user", sess.UserID)
+}
+
+func TestWrapSessionService_PreservesWindowService(t *testing.T) {
+	t.Parallel()
+
+	plain := WrapSessionService(&recordingSessionService{})
+	_, ok := plain.(session.WindowService)
+	require.False(t, ok)
+
+	rec := &windowRecordingSessionService{
+		recordingSessionService: &recordingSessionService{},
+		window: &session.EventWindow{
+			SessionKey: session.Key{
+				AppName:   "demo-app",
+				UserID:    "chat-scope",
+				SessionID: "sess-1",
+			},
+			AnchorEventID: "evt-1",
+		},
+	}
+	wrapped := WrapSessionService(rec)
+	windowSvc, ok := wrapped.(session.WindowService)
+	require.True(t, ok)
+
+	got, err := windowSvc.GetEventWindow(
+		WithStorageUserID(context.Background(), "chat-scope"),
+		session.EventWindowRequest{
+			Key: session.Key{
+				AppName:   "demo-app",
+				UserID:    "canonical-user",
+				SessionID: "sess-1",
+			},
+			AnchorEventID: "evt-1",
+		},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.Equal(t, "chat-scope", rec.windowReq.Key.UserID)
+	require.Equal(t, "canonical-user", got.SessionKey.UserID)
+}
+
+func TestWrapSessionService_PreservesSearchableService(t *testing.T) {
+	t.Parallel()
+
+	plain := WrapSessionService(&recordingSessionService{})
+	_, ok := plain.(session.SearchableService)
+	require.False(t, ok)
+
+	userEvt := event.New("inv-1", "user")
+	rec := &searchableRecordingSessionService{
+		recordingSessionService: &recordingSessionService{},
+		searchResults: []session.EventSearchResult{{
+			SessionKey: session.Key{
+				AppName:   "demo-app",
+				UserID:    "chat-scope",
+				SessionID: "sess-1",
+			},
+			Event: *userEvt,
+			Text:  "remembered answer",
+		}},
+	}
+	wrapped := WrapSessionService(rec)
+	searchSvc, ok := wrapped.(session.SearchableService)
+	require.True(t, ok)
+
+	got, err := searchSvc.SearchEvents(
+		WithStorageUserID(context.Background(), "chat-scope"),
+		session.EventSearchRequest{
+			Query: "remembered",
+			UserKey: session.UserKey{
+				AppName: "demo-app",
+				UserID:  "canonical-user",
+			},
+		},
+	)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.Equal(t, "chat-scope", rec.searchReq.UserKey.UserID)
+	require.Equal(t, "canonical-user", got[0].SessionKey.UserID)
+}
+
+func TestWrapSessionService_PreservesCombinedRecallServices(t *testing.T) {
+	t.Parallel()
+
+	rec := &searchWindowRecordingSessionService{
+		recordingSessionService: &recordingSessionService{},
+		window: &session.EventWindow{
+			SessionKey: session.Key{
+				AppName:   "demo-app",
+				UserID:    "chat-scope",
+				SessionID: "sess-1",
+			},
+		},
+		searchResults: []session.EventSearchResult{{
+			SessionKey: session.Key{
+				AppName:   "demo-app",
+				UserID:    "chat-scope",
+				SessionID: "sess-1",
+			},
+		}},
+	}
+	wrapped := WrapSessionService(rec)
+	windowSvc, ok := wrapped.(session.WindowService)
+	require.True(t, ok)
+	searchSvc, ok := wrapped.(session.SearchableService)
+	require.True(t, ok)
+
+	ctx := WithStorageUserID(context.Background(), "chat-scope")
+	window, err := windowSvc.GetEventWindow(
+		ctx,
+		session.EventWindowRequest{
+			Key: session.Key{
+				AppName:   "demo-app",
+				UserID:    "canonical-user",
+				SessionID: "sess-1",
+			},
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "canonical-user", window.SessionKey.UserID)
+
+	results, err := searchSvc.SearchEvents(
+		ctx,
+		session.EventSearchRequest{
+			UserKey: session.UserKey{
+				AppName: "demo-app",
+				UserID:  "canonical-user",
+			},
+		},
+	)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.Equal(t, "canonical-user", results[0].SessionKey.UserID)
+	require.Equal(t, "chat-scope", rec.windowReq.Key.UserID)
+	require.Equal(t, "chat-scope", rec.searchReq.UserKey.UserID)
 }
 
 func TestIndexedStorageUsersLifecycle(t *testing.T) {

@@ -25,7 +25,7 @@ const (
 var (
 	sensitiveEnvNamePattern = regexp.MustCompile(
 		`(?i)\b[A-Z0-9_]*(TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|` +
-			`ACCESS_KEY|PRIVATE_KEY)[A-Z0-9_]*\b`,
+			`ACCESS_KEY|PRIVATE_KEY|KEY|CREDENTIAL)[A-Z0-9_]*\b`,
 	)
 
 	sensitiveAssignmentPattern = regexp.MustCompile(

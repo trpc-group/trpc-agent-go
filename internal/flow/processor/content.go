@@ -33,6 +33,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 // SessionSummaryInjectionMode controls where session summaries are injected.
@@ -586,7 +587,10 @@ const (
 	// must not set this flag, because downstream processors use it as a
 	// same-turn signal.
 	contentHasCompactedToolResultsStateKey = "processor:content:has_compacted_tool_results"
-	compactedToolResultPlaceholder         = "Tool result omitted from raw history; details are captured in the session summary above."
+	compactedToolResultPlaceholder         = "Tool result omitted from raw history; " +
+		"the previous tool call " +
+		"succeeded, but its payload was compacted to preserve context. " +
+		"Use the available summary or recovery hints before repeating work."
 )
 
 const (
@@ -763,6 +767,7 @@ func (p *ContentRequestProcessor) appendSessionMessages(
 
 	messages := p.sessionMessagesAfterCutoff(
 		invocation,
+		req,
 		skipHistory,
 		includeInvocationMessage,
 		summaryCutoff,
@@ -807,7 +812,7 @@ func (p *ContentRequestProcessor) appendPreloadMemoryContext(
 	userContextBlocks []string,
 ) []string {
 	// PreloadMemory: 0 = disabled, -1 = all, N > 0 = adaptive preload budget.
-	if p.PreloadMemory == 0 || invocation.MemoryService == nil {
+	if p.PreloadMemory == 0 || preloadMemoryReader(invocation) == nil {
 		return userContextBlocks
 	}
 	memMsg := p.getPreloadMemoryMessage(ctx, invocation)
@@ -868,6 +873,7 @@ func (p *ContentRequestProcessor) appendPreloadSessionRecallContext(
 
 func (p *ContentRequestProcessor) sessionMessagesAfterCutoff(
 	invocation *agent.Invocation,
+	req *model.Request,
 	skipHistory bool,
 	includeInvocationMessage bool,
 	summaryCutoff summaryHistoryCutoff,
@@ -882,7 +888,11 @@ func (p *ContentRequestProcessor) sessionMessagesAfterCutoff(
 		}
 		return nil
 	}
-	messages := p.getIncrementMessagesAfterCutoff(invocation, summaryCutoff)
+	messages := p.getIncrementMessagesAfterCutoff(
+		invocation,
+		req,
+		summaryCutoff,
+	)
 	if p.hasCompactedCurrentInvocationToolResultsAfterCutoff(invocation, summaryCutoff) {
 		invocation.SetState(contentHasCompactedToolResultsStateKey, true)
 	}
@@ -1208,11 +1218,16 @@ func (p *ContentRequestProcessor) formatSummary(summary string) string {
 // getHistoryMessages gets history messages for the current filter, potentially truncated by MaxHistoryRuns.
 // This method is used when AddSessionSummary is false to get recent history messages.
 func (p *ContentRequestProcessor) getIncrementMessages(inv *agent.Invocation, since time.Time) []model.Message {
-	return p.getIncrementMessagesAfterCutoff(inv, summaryHistoryCutoffFromTime(since))
+	return p.getIncrementMessagesAfterCutoff(
+		inv,
+		nil,
+		summaryHistoryCutoffFromTime(since),
+	)
 }
 
 func (p *ContentRequestProcessor) getIncrementMessagesAfterCutoff(
 	inv *agent.Invocation,
+	req *model.Request,
 	cutoff summaryHistoryCutoff,
 ) []model.Message {
 	if inv.Session == nil {
@@ -1235,6 +1250,7 @@ func (p *ContentRequestProcessor) getIncrementMessagesAfterCutoff(
 			evt,
 			i,
 			inv,
+			req,
 			filter,
 			eventCutoff,
 		); ok {
@@ -1286,12 +1302,13 @@ func (p *ContentRequestProcessor) getIncrementMessagesAfterCutoff(
 	// policy (force-clean/keep) and historical passes must run for scoped modes
 	// such as request/invocation, not only when TimelineFilterAll is selected.
 	var stats ContextCompactionStats
+	compactionCfg := p.contextCompactionConfigForInvocation(inv, req)
 	resultEvents, stats = compactIncrementEvents(
 		context.Background(),
 		resultEvents,
 		inv.RunOptions.RequestID,
 		inv.InvocationID,
-		p.ContextCompactionConfig,
+		compactionCfg,
 	)
 	if stats.ToolResultsCompacted > 0 {
 		log.DebugfContext(
@@ -1476,6 +1493,7 @@ func (p *ContentRequestProcessor) compactCurrentInvocationEvent(
 	evt event.Event,
 	eventIndex int,
 	inv *agent.Invocation,
+	req *model.Request,
 	filter string,
 	cutoff eventHistoryCutoff,
 ) (event.Event, bool) {
@@ -1496,7 +1514,9 @@ func (p *ContentRequestProcessor) compactCurrentInvocationEvent(
 		return event.Event{}, false
 	}
 
-	cfg := normalizeContextCompactionConfig(p.ContextCompactionConfig)
+	cfg := normalizeContextCompactionConfig(
+		p.contextCompactionConfigForInvocation(inv, req),
+	)
 	var compactedChoices []model.Choice
 	for _, choice := range evt.Choices {
 		msg, ok := compactedCurrentInvocationMessage(
@@ -1549,7 +1569,7 @@ func compactedCurrentInvocationMessage(
 		return model.Message{
 			Role: msg.Role,
 			Content: recoverableToolResultPlaceholder(
-				toolResultRecoveryRefForMessage(
+				cfg.recoveryRefForMessage(
 					evt,
 					msg,
 					"current_invocation_summary",
@@ -1561,6 +1581,51 @@ func compactedCurrentInvocationMessage(
 	default:
 		return model.Message{}, false
 	}
+}
+
+func (p *ContentRequestProcessor) contextCompactionConfigForInvocation(
+	inv *agent.Invocation,
+	req *model.Request,
+) ContextCompactionConfig {
+	cfg := p.ContextCompactionConfig
+	cfg.SessionLoadRecoveryEnabled = sessionLoadRecoverySupported(inv, req)
+	return cfg
+}
+
+func sessionLoadRecoverySupported(
+	inv *agent.Invocation,
+	req *model.Request,
+) bool {
+	if inv == nil || inv.Session == nil || inv.SessionService == nil {
+		return false
+	}
+	if _, ok := inv.SessionService.(session.WindowService); !ok {
+		return false
+	}
+	return requestHasTool(req, sessionLoadToolName)
+}
+
+func requestHasTool(req *model.Request, name string) bool {
+	if req == nil || len(req.Tools) == 0 || name == "" {
+		return false
+	}
+	if tl := req.Tools[name]; toolHasName(tl, name) {
+		return true
+	}
+	for _, tl := range req.Tools {
+		if toolHasName(tl, name) {
+			return true
+		}
+	}
+	return false
+}
+
+func toolHasName(tl tool.Tool, name string) bool {
+	if tl == nil {
+		return false
+	}
+	decl := tl.Declaration()
+	return decl != nil && decl.Name == name
 }
 
 func shouldCompactCurrentInvocationToolResult(
@@ -2980,7 +3045,8 @@ func (p *ContentRequestProcessor) getPreloadMemoryMessage(
 	ctx context.Context,
 	inv *agent.Invocation,
 ) *model.Message {
-	if inv.MemoryService == nil || inv.Session == nil {
+	reader := preloadMemoryReader(inv)
+	if reader == nil || inv.Session == nil {
 		return nil
 	}
 	userKey := memory.UserKey{
@@ -2996,9 +3062,15 @@ func (p *ContentRequestProcessor) getPreloadMemoryMessage(
 		return nil
 	}
 	if p.PreloadMemory < 0 {
-		return p.loadPreloadMemoryMessage(ctx, inv, userKey, 0)
+		return p.loadPreloadMemoryMessage(ctx, inv, reader, userKey, 0)
 	}
-	return p.getAdaptivePreloadMemoryMessage(ctx, inv, userKey, p.PreloadMemory)
+	return p.getAdaptivePreloadMemoryMessage(
+		ctx,
+		inv,
+		reader,
+		userKey,
+		p.PreloadMemory,
+	)
 }
 
 // getAdaptivePreloadMemoryMessage preloads all memories for small memory sets
@@ -3006,12 +3078,13 @@ func (p *ContentRequestProcessor) getPreloadMemoryMessage(
 func (p *ContentRequestProcessor) getAdaptivePreloadMemoryMessage(
 	ctx context.Context,
 	inv *agent.Invocation,
+	reader memory.Reader,
 	userKey memory.UserKey,
 	budget int,
 ) *model.Message {
 	const preloadProbeExtra = 1
 	probeLimit := budget + preloadProbeExtra
-	probeEntries, err := inv.MemoryService.ReadMemories(ctx, userKey, probeLimit)
+	probeEntries, err := reader.ReadMemories(ctx, userKey, probeLimit)
 	if err != nil {
 		log.WarnfContext(ctx, "Failed to probe memories for preload: %v", err)
 		return nil
@@ -3025,7 +3098,7 @@ func (p *ContentRequestProcessor) getAdaptivePreloadMemoryMessage(
 
 	query := buildPreloadSearchQuery(inv.Message)
 	if query == "" {
-		return p.loadPreloadMemoryMessage(ctx, inv, userKey, budget)
+		return p.loadPreloadMemoryMessage(ctx, inv, reader, userKey, budget)
 	}
 
 	searchOpts := memory.SearchOptions{
@@ -3034,7 +3107,7 @@ func (p *ContentRequestProcessor) getAdaptivePreloadMemoryMessage(
 		Deduplicate:  true,
 		HybridSearch: true,
 	}
-	memories, err := inv.MemoryService.SearchMemories(
+	memories, err := reader.SearchMemories(
 		ctx,
 		userKey,
 		query,
@@ -3042,10 +3115,10 @@ func (p *ContentRequestProcessor) getAdaptivePreloadMemoryMessage(
 	)
 	if err != nil {
 		log.WarnfContext(ctx, "Failed to search memories for preload: %v", err)
-		return p.loadPreloadMemoryMessage(ctx, inv, userKey, budget)
+		return p.loadPreloadMemoryMessage(ctx, inv, reader, userKey, budget)
 	}
 	if len(memories) == 0 {
-		return p.loadPreloadMemoryMessage(ctx, inv, userKey, budget)
+		return p.loadPreloadMemoryMessage(ctx, inv, reader, userKey, budget)
 	}
 	return newPreloadMemoryMessage(memories, p.PreloadMemoryPlaybook)
 }
@@ -3055,15 +3128,26 @@ func (p *ContentRequestProcessor) getAdaptivePreloadMemoryMessage(
 func (p *ContentRequestProcessor) loadPreloadMemoryMessage(
 	ctx context.Context,
 	inv *agent.Invocation,
+	reader memory.Reader,
 	userKey memory.UserKey,
 	limit int,
 ) *model.Message {
-	memories, err := inv.MemoryService.ReadMemories(ctx, userKey, limit)
+	memories, err := reader.ReadMemories(ctx, userKey, limit)
 	if err != nil {
 		log.WarnfContext(ctx, "Failed to preload memories: %v", err)
 		return nil
 	}
 	return newPreloadMemoryMessage(memories, p.PreloadMemoryPlaybook)
+}
+
+func preloadMemoryReader(inv *agent.Invocation) memory.Reader {
+	if inv == nil {
+		return nil
+	}
+	if inv.MemoryReader != nil {
+		return inv.MemoryReader
+	}
+	return inv.MemoryService
 }
 
 func newPreloadMemoryMessage(

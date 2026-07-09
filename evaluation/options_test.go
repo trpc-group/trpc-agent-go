@@ -132,6 +132,12 @@ func TestWithExpectedRunner(t *testing.T) {
 	assert.Equal(t, custom, opts.expectedRunner)
 }
 
+func TestWithToolMockRunner(t *testing.T) {
+	custom := stubRunner{}
+	opts := newOptions(WithToolMockRunner(custom))
+	assert.Equal(t, custom, opts.toolMockRunner)
+}
+
 func TestWithJudgeRunner(t *testing.T) {
 	custom := stubRunner{}
 	opts := newOptions(WithJudgeRunner(custom))
