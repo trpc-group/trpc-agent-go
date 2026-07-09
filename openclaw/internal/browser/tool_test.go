@@ -2299,6 +2299,70 @@ func TestToolCall_ActClickAcceptsTopLevelElementTarget(t *testing.T) {
 	require.Equal(t, "element article", drv.calls[0].Args["element"])
 }
 
+func TestToolCall_ActClickPassesBrowserServerElementTarget(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{}
+	tool := newBrowserServerTestTool(drv)
+
+	_, err := tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action": actionAct,
+			"request": map[string]any{
+				"kind":   actClick,
+				"target": "button that says Download",
+			},
+		}),
+	)
+	require.NoError(t, err)
+	require.Len(t, drv.calls, 1)
+	require.Equal(t, mcpToolClick, drv.calls[0].Tool)
+	require.Equal(
+		t,
+		"button that says Download",
+		drv.calls[0].Args["element"],
+	)
+	require.NotContains(t, drv.calls[0].Args, "ref")
+}
+
+func TestToolCall_ActDragPassesBrowserServerElementTargets(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{}
+	tool := newBrowserServerTestTool(drv)
+
+	_, err := tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action":      actionAct,
+			"kind":        actDrag,
+			"startTarget": ".card",
+			"endTarget":   ".drop-zone",
+		}),
+	)
+	require.NoError(t, err)
+	require.Len(t, drv.calls, 1)
+	require.Equal(t, mcpToolDrag, drv.calls[0].Tool)
+	require.Equal(t, ".card", drv.calls[0].Args["startElement"])
+	require.Equal(t, ".drop-zone", drv.calls[0].Args["endElement"])
+	require.NotContains(t, drv.calls[0].Args, "startRef")
+	require.NotContains(t, drv.calls[0].Args, "endRef")
+}
+
+func TestToolCall_ActClickRejectsEmptyBrowserServerTarget(t *testing.T) {
+	t.Parallel()
+
+	_, err := newBrowserServerTestTool(&fakeDriver{}).Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action": actionAct,
+			"kind":   actClick,
+		}),
+	)
+	require.ErrorContains(t, err, "browser act requires ref or target")
+}
+
 func TestToolCall_ProfileAliasUsesDefaultProfile(t *testing.T) {
 	t.Parallel()
 

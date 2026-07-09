@@ -2712,8 +2712,17 @@ func elementActionArgs(
 		)
 		return args, nil
 	}
-	args["ref"] = strings.TrimSpace(req.Ref)
-	args["element"] = describeElement(req.Ref, "")
+	ref := strings.TrimSpace(req.Ref)
+	target := strings.TrimSpace(req.Target)
+	if ref == "" && target == "" {
+		return nil, errors.New("browser act requires ref or target")
+	}
+	if ref != "" {
+		args["ref"] = ref
+		args["element"] = describeElement(ref, "")
+		return args, nil
+	}
+	args["element"] = target
 	return args, nil
 }
 
@@ -2759,12 +2768,30 @@ func dragArgs(req actRequest, driverType string) (map[string]any, error) {
 			),
 		}, nil
 	}
-	return map[string]any{
-		"startRef":     strings.TrimSpace(req.StartRef),
-		"startElement": describeElement(req.StartRef, "start"),
-		"endRef":       strings.TrimSpace(req.EndRef),
-		"endElement":   describeElement(req.EndRef, "end"),
-	}, nil
+	startRef := strings.TrimSpace(req.StartRef)
+	startTarget := strings.TrimSpace(req.StartTarget)
+	endRef := strings.TrimSpace(req.EndRef)
+	endTarget := strings.TrimSpace(req.EndTarget)
+	if startRef == "" && startTarget == "" {
+		return nil, errors.New("browser drag requires start ref or target")
+	}
+	if endRef == "" && endTarget == "" {
+		return nil, errors.New("browser drag requires end ref or target")
+	}
+	args := map[string]any{}
+	if startRef != "" {
+		args["startRef"] = startRef
+		args["startElement"] = describeElement(startRef, "start")
+	} else {
+		args["startElement"] = startTarget
+	}
+	if endRef != "" {
+		args["endRef"] = endRef
+		args["endElement"] = describeElement(endRef, "end")
+	} else {
+		args["endElement"] = endTarget
+	}
+	return args, nil
 }
 
 func (t *Tool) executeFill(
