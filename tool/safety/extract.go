@@ -31,6 +31,19 @@ type ExecRequest struct {
 	PTY bool
 	// TimeoutSec is the requested timeout in seconds, 0 when unset.
 	TimeoutSec int
+	// CodeBlocks holds the individual execute_code blocks; Command carries
+	// their concatenation for the raw-text (secret/resource) rules while the
+	// per-block language drives the code-specific rules.
+	CodeBlocks []CodeBlock
+	// ToolDestructive is true when the tool's published metadata
+	// (tool.ToolMetadata.Destructive) marks it as destructive.
+	ToolDestructive bool
+}
+
+// CodeBlock is one script block passed to the execute_code tool.
+type CodeBlock struct {
+	Code     string `json:"code"`
+	Language string `json:"language"`
 }
 
 // execArgs is the union of the workspace_exec and exec_command argument
@@ -84,9 +97,11 @@ func extract(args []byte, backend string) (ExecRequest, error) {
 }
 
 // extractCode handles the execute_code schema. Its payload is a code_blocks
-// array (not a shell command), so the source is concatenated into Command for
-// the secret / resource rules; the shell-structure rules see no pipeline. Code
-// execution relies primarily on the sandbox for isolation (see README).
+// array (not a shell command). The blocks are kept individually so the rule
+// engine can scan shell-language blocks as full commands and other languages
+// with the code-specific rules; Command carries the concatenated source for
+// the raw-text (secret / resource) rules. The sandbox remains the primary
+// isolation for code execution (see README).
 func extractCode(args []byte) (ExecRequest, error) {
 	var a struct {
 		CodeBlocks json.RawMessage `json:"code_blocks"`
@@ -96,56 +111,54 @@ func extractCode(args []byte) (ExecRequest, error) {
 			return ExecRequest{}, fmt.Errorf("parse code args: %w", err)
 		}
 	}
-	return ExecRequest{Command: joinCodeBlocks(a.CodeBlocks)}, nil
+	blocks := parseCodeBlocks(a.CodeBlocks)
+	var sb strings.Builder
+	for _, b := range blocks {
+		if sb.Len() > 0 {
+			sb.WriteByte('\n')
+		}
+		sb.WriteString(b.Code)
+	}
+	return ExecRequest{Command: sb.String(), CodeBlocks: blocks}, nil
 }
 
-// codeBlock mirrors the subset of codeexecutor.CodeBlock that the guard needs.
-type codeBlock struct {
-	Code     string `json:"code"`
-	Language string `json:"language"`
-}
-
-// joinCodeBlocks extracts and concatenates the source from a code_blocks value.
-// It accepts the same shapes as codeexec (array, single object, or a
-// double-encoded JSON string) and falls back to the raw bytes so the secret
-// scan still has something to inspect.
-func joinCodeBlocks(raw json.RawMessage) string {
+// parseCodeBlocks extracts the blocks from a code_blocks value. It accepts the
+// same shapes as codeexec (array, single object, or a double-encoded JSON
+// string) and falls back to a single language-less block holding the raw bytes
+// so the scan still has something to inspect; a language-less block is treated
+// as shell, so unparsable garbage fails closed instead of slipping through.
+func parseCodeBlocks(raw json.RawMessage) []CodeBlock {
 	if len(raw) == 0 {
-		return ""
+		return nil
 	}
 	var val any
 	if err := json.Unmarshal(raw, &val); err != nil {
-		return string(raw)
+		return []CodeBlock{{Code: string(raw)}}
 	}
 	if s, ok := val.(string); ok {
 		// Double-encoded array: unwrap and re-parse.
 		raw = json.RawMessage(s)
 		if err := json.Unmarshal(raw, &val); err != nil {
-			return s
+			return []CodeBlock{{Code: s}}
 		}
 	}
 	switch val.(type) {
+	case nil:
+		return nil
 	case []any:
-		var blocks []codeBlock
+		var blocks []CodeBlock
 		if err := json.Unmarshal(raw, &blocks); err != nil {
-			return string(raw)
+			return []CodeBlock{{Code: string(raw)}}
 		}
-		var sb strings.Builder
-		for _, b := range blocks {
-			if sb.Len() > 0 {
-				sb.WriteByte('\n')
-			}
-			sb.WriteString(b.Code)
-		}
-		return sb.String()
+		return blocks
 	case map[string]any:
-		var b codeBlock
+		var b CodeBlock
 		if err := json.Unmarshal(raw, &b); err != nil {
-			return string(raw)
+			return []CodeBlock{{Code: string(raw)}}
 		}
-		return b.Code
+		return []CodeBlock{b}
 	default:
-		return string(raw)
+		return []CodeBlock{{Code: string(raw)}}
 	}
 }
 

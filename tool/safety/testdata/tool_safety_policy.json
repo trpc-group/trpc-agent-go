@@ -10,7 +10,8 @@
   "commands": {
     "allowed": ["go", "git", "ls", "cat", "echo", "grep", "sed", "awk", "jq",
                 "python3", "curl", "wget", "pip", "pip3", "sleep", "yes"],
-    "denied": ["dd", "mkfs", "shutdown", "reboot", "chmod", "chown"]
+    "denied": ["dd", "mkfs", "shutdown", "reboot", "chmod", "chown"],
+    "review_pipelines": false
   },
   "denied_subcommands": [
     {"cmd": "go", "args_prefix": ["install"]},
@@ -29,7 +30,8 @@
   ],
   "network": {
     "download_commands": ["curl", "wget", "nc", "ssh", "scp", "ftp"],
-    "allowed_domains": ["github.com", "*.googleapis.com", "pypi.org", "registry.npmjs.org"],
+    "allowed_domains": ["github.com", "*.googleapis.com", "pypi.org", "registry.npmjs.org",
+                        "proxy.golang.org", "sum.golang.org", "files.pythonhosted.org"],
     "on_non_whitelisted": "deny"
   },
   "resources": {
@@ -46,8 +48,11 @@
     "patterns": [
       "AKIA[0-9A-Z]{16}",
       "ghp_[0-9A-Za-z]{36}",
+      "sk-[A-Za-z0-9_-]{12,}",
+      "xox[baprs]-[A-Za-z0-9-]{10,}",
       "-----BEGIN [A-Z ]*PRIVATE KEY-----",
-      "(?i)bearer\\s+[a-z0-9._-]+"
+      "(?i)bearer\\s+[a-z0-9._-]+",
+      "(?i)(api[_-]?key|token|password|passwd|secret|private[_-]?key|credential)[a-z0-9_]*=[\"']?[^\\s\"']+"
     ]
   },
   "rule_overrides": {}

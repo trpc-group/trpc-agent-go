@@ -47,6 +47,7 @@ const (
 	ruleResourceID  = "R-RES-001"
 	ruleSecretID    = "R-SECRET-001"
 	ruleEnvID       = "R-ENV-001"
+	ruleMetaID      = "R-META-001"
 )
 
 // Finding categories.
@@ -61,6 +62,7 @@ const (
 	catResource    = "resource_abuse"
 	catSecret      = "secret_leak"
 	catEnvKey      = "env_policy"
+	catMetadata    = "tool_metadata"
 )
 
 // Recommendation strings attached to each finding.
@@ -75,6 +77,7 @@ const (
 	recResource    = "Command may exhaust resources; lower the timeout/output or rely on sandbox runtime limits."
 	recSecret      = "Command/env contains a secret-like value; pass secrets via a secret store, not inline." //nolint:gosec // G101 false positive: a recommendation string, not a credential.
 	recEnv         = "Environment key is not in env.allowed_keys; add it to the whitelist or drop the override."
+	recMetadata    = "The tool publishes destructive metadata; review the call or use a narrower, read-only tool."
 )
 
 // Finding is one detected risk. action is the internal, post-override action
@@ -114,6 +117,7 @@ type ruleFn func(ruleCtx) []Finding
 // argument-level risks shellsafe does not cover.
 var builtinRules = []ruleFn{
 	ruleCommandPolicy,
+	rulePipelineReview,
 	ruleDangerousArgs,
 	ruleForbiddenPath,
 	ruleNetwork,
@@ -122,17 +126,22 @@ var builtinRules = []ruleFn{
 	ruleResource,
 	ruleSecret,
 	ruleEnvKeys,
+	ruleToolMetadata,
 }
 
 // scan parses the command once, runs every rule, applies overrides and
 // aggregates the verdict. A command shellsafe cannot parse yields a shell-
 // bypass finding whose action is the policy's unparsable_action (fail
 // closed); the secret and resource rules still run on the raw command so an
-// unparsable command is not a blind spot.
+// unparsable command is not a blind spot. For the code backend, shell-language
+// code blocks are parsed and merged into the pipeline so every argv-level rule
+// applies to them; other languages get the code-specific checks.
 func (p *Policy) scan(er ExecRequest, backend string) ([]Finding, Decision, RiskLevel) {
 	var findings []Finding
 	var pipe *shellsafe.Pipeline
-	if backend != BackendCode && strings.TrimSpace(er.Command) != "" {
+	if backend == BackendCode {
+		findings, pipe = p.scanCodeBlocks(er.CodeBlocks)
+	} else if strings.TrimSpace(er.Command) != "" {
 		parsed, err := shellsafe.Parse(er.Command)
 		if err != nil {
 			f := shellBypassFinding(err)
@@ -149,6 +158,107 @@ func (p *Policy) scan(er ExecRequest, backend string) ([]Finding, Decision, Risk
 	findings = applyOverrides(findings, p.RuleOverrides)
 	decision, risk := p.decide(findings)
 	return findings, decision, risk
+}
+
+// scanCodeBlocks processes execute_code blocks. Shell-language blocks are
+// parsed with shellsafe and merged into one pipeline, so the command policy,
+// dangerous-argument, forbidden-path, network and dependency rules all apply
+// to code that is really just shell; an unparsable shell block fails closed
+// via unparsable_action exactly like an unparsable command. Non-shell blocks
+// (python, js, ...) get the code-specific checks: shell-bridge calls that
+// would sidestep every argv-level rule, and a URL whitelist pass over the
+// source. The raw-text rules (secret, resource) run separately on the
+// concatenated Command.
+func (p *Policy) scanCodeBlocks(blocks []CodeBlock) ([]Finding, *shellsafe.Pipeline) {
+	var findings []Finding
+	var merged *shellsafe.Pipeline
+	for _, b := range blocks {
+		if strings.TrimSpace(b.Code) == "" {
+			continue
+		}
+		if !isShellLanguage(b.Language) {
+			findings = append(findings, codeBridgeFindings(b)...)
+			findings = append(findings, p.codeNetworkFindings(b.Code)...)
+			continue
+		}
+		parsed, err := shellsafe.Parse(b.Code)
+		if err != nil {
+			f := shellBypassFinding(err)
+			f.action = p.UnparsableAction
+			findings = append(findings, f)
+			continue
+		}
+		if merged == nil {
+			merged = &shellsafe.Pipeline{}
+		}
+		merged.Commands = append(merged.Commands, parsed.Commands...)
+	}
+	return findings, merged
+}
+
+// isShellLanguage reports whether a code block's language means the block is
+// really a shell command. An empty language is treated as shell so an
+// unlabeled block cannot dodge the argv-level rules.
+func isShellLanguage(lang string) bool {
+	switch strings.ToLower(strings.TrimSpace(lang)) {
+	case "", "sh", "bash", "shell", "zsh":
+		return true
+	}
+	return false
+}
+
+// codeBridgePatterns are substrings of non-shell code that bridge into shell
+// execution (python os.system/subprocess, JS child_process, generic exec()),
+// which would bypass every argv-level rule; their presence routes the block to
+// human review.
+var codeBridgePatterns = []string{
+	"os.system", "os.popen", "subprocess.", "exec(", "execsync(", "child_process",
+}
+
+// codeBridgeFindings flags non-shell code that can launch shell commands.
+func codeBridgeFindings(b CodeBlock) []Finding {
+	low := strings.ToLower(b.Code)
+	for _, pat := range codeBridgePatterns {
+		if strings.Contains(low, pat) {
+			return []Finding{{
+				RuleID:         ruleShellID,
+				Category:       catShellBypass,
+				RiskLevel:      RiskMedium,
+				Evidence:       b.Language + " code can launch shell commands (" + pat + ")",
+				Recommendation: recShellBypass,
+			}}
+		}
+	}
+	return nil
+}
+
+// codeNetworkFindings runs the network whitelist over URLs embedded in
+// non-shell code. Bare hosts are not extracted here (arbitrary source text
+// would be far too noisy); full URLs are unambiguous and are exactly what
+// download-and-execute code contains.
+func (p *Policy) codeNetworkFindings(code string) []Finding {
+	var out []Finding
+	seen := make(map[string]bool)
+	for _, m := range urlRe.FindAllString(code, -1) {
+		u, err := url.Parse(m)
+		if err != nil || u.Hostname() == "" {
+			continue
+		}
+		host := u.Hostname()
+		if seen[host] || p.domainAllowed(host) {
+			continue
+		}
+		seen[host] = true
+		out = append(out, Finding{
+			RuleID:         ruleNetworkID,
+			Category:       catNetwork,
+			RiskLevel:      RiskHigh,
+			Evidence:       "code -> " + host,
+			Recommendation: recNetwork,
+			action:         p.Network.OnNonWhitelisted,
+		})
+	}
+	return out
 }
 
 // decide aggregates findings into a single decision and the highest risk seen.
@@ -268,8 +378,9 @@ func isAllowListMiss(err error) bool {
 }
 
 // ruleDangerousArgs catches argument-level destructive patterns that shellsafe
-// does not see: recursive+force rm, escalated to critical when the target is
-// the root or a system directory.
+// does not see: recursive rm (with force, or aimed at the root / a system
+// directory even without force — "rm -r /etc" destroys the system just as
+// surely as "rm -rf /etc") and recursive chmod.
 func ruleDangerousArgs(c ruleCtx) []Finding {
 	if c.pipe == nil {
 		return nil
@@ -279,25 +390,71 @@ func ruleDangerousArgs(c ruleCtx) []Finding {
 		if len(argv) == 0 {
 			continue
 		}
-		if lowerBase(argv[0]) != "rm" || !hasRecursiveForce(argv[1:]) {
-			continue
-		}
-		risk := RiskHigh
-		for _, a := range argv[1:] {
-			if !strings.HasPrefix(a, "-") && isRootOrSystem(a) {
-				risk = RiskCritical
-				break
+		switch lowerBase(argv[0]) {
+		case "rm":
+			if f, ok := rmFinding(argv); ok {
+				out = append(out, f)
+			}
+		case "chmod":
+			if chmodRecursive(argv[1:]) {
+				out = append(out, Finding{
+					RuleID:         ruleDangerousID,
+					Category:       catDangerous,
+					RiskLevel:      RiskMedium,
+					Evidence:       strings.Join(argv, " "),
+					Recommendation: recDangerous,
+				})
 			}
 		}
-		out = append(out, Finding{
-			RuleID:         ruleDangerousID,
-			Category:       catDangerous,
-			RiskLevel:      risk,
-			Evidence:       strings.Join(argv, " "),
-			Recommendation: recDangerous,
-		})
 	}
 	return out
+}
+
+// rmFinding evaluates one rm invocation: recursive with force is high risk;
+// recursive aimed at the root or a system directory is critical whether or not
+// force is present.
+func rmFinding(argv []string) (Finding, bool) {
+	recursive, force := recursiveForceFlags(argv[1:])
+	if !recursive {
+		return Finding{}, false
+	}
+	system := false
+	for _, a := range argv[1:] {
+		if !strings.HasPrefix(a, "-") && isRootOrSystem(a) {
+			system = true
+			break
+		}
+	}
+	if !force && !system {
+		return Finding{}, false
+	}
+	risk := RiskHigh
+	if system {
+		risk = RiskCritical
+	}
+	return Finding{
+		RuleID:         ruleDangerousID,
+		Category:       catDangerous,
+		RiskLevel:      risk,
+		Evidence:       strings.Join(argv, " "),
+		Recommendation: recDangerous,
+	}, true
+}
+
+// chmodRecursive reports whether a chmod invocation is recursive. Only the
+// capital-R spellings count: a lowercase "-r" is a symbolic mode ("remove
+// read"), not a flag.
+func chmodRecursive(args []string) bool {
+	for _, a := range args {
+		if a == "--recursive" {
+			return true
+		}
+		if strings.HasPrefix(a, "-") && !strings.HasPrefix(a, "--") &&
+			strings.ContainsRune(a[1:], 'R') {
+			return true
+		}
+	}
+	return false
 }
 
 // ruleForbiddenPath flags any argv word or cwd that matches a forbidden path
@@ -338,6 +495,7 @@ func ruleNetwork(c ruleCtx) []Finding {
 		if !dl[cmd] {
 			continue
 		}
+		before := len(out)
 		// An opaque curl config file (-K/--config) can define url/proxy/resolve
 		// and other egress controls the guard cannot see, so it fails closed
 		// regardless of the whitelist.
@@ -379,7 +537,8 @@ func ruleNetwork(c ruleCtx) []Finding {
 				action:         c.policy.Network.OnNonWhitelisted,
 			})
 		}
-		for _, host := range extractHosts(cmd, argv[1:]) {
+		hosts := extractHosts(cmd, argv[1:])
+		for _, host := range hosts {
 			if c.policy.domainAllowed(host) {
 				continue
 			}
@@ -390,6 +549,19 @@ func ruleNetwork(c ruleCtx) []Finding {
 				Evidence:       argv[0] + " -> " + host,
 				Recommendation: recNetwork,
 				action:         c.policy.Network.OnNonWhitelisted,
+			})
+		}
+		// Fallback: a download command with no extractable target and no other
+		// network finding cannot be checked against the whitelist (unknown
+		// option carrying the URL, listener modes, ...); route it to review
+		// instead of silently allowing it.
+		if len(hosts) == 0 && len(out) == before {
+			out = append(out, Finding{
+				RuleID:         ruleNetworkID,
+				Category:       catNetwork,
+				RiskLevel:      RiskMedium,
+				Evidence:       argv[0] + " (no parseable network target to check against the whitelist)",
+				Recommendation: recNetwork,
 			})
 		}
 	}
@@ -487,6 +659,23 @@ func ruleResource(c ruleCtx) []Finding {
 				}
 			case "yes":
 				out = append(out, resourceFinding(RiskHigh, "yes produces unbounded output"))
+			case "head":
+				if n, ok := headByteCount(argv[1:]); ok && r.MaxOutputBytes > 0 && n > r.MaxOutputBytes {
+					out = append(out, resourceFinding(RiskMedium, fmt.Sprintf(
+						"head -c %d exceeds max_output_bytes %d", n, r.MaxOutputBytes)))
+				}
+			case "xargs":
+				if n, ok := flagIntValue(argv[1:], "-P", "--max-procs"); ok &&
+					(n == 0 || n > maxParallelWorkers) {
+					out = append(out, resourceFinding(RiskMedium,
+						"xargs requests "+workerCount(n)+" parallel workers"))
+				}
+			case "parallel":
+				if n, ok := flagIntValue(argv[1:], "-j", "--jobs"); ok &&
+					(n == 0 || n > maxParallelWorkers) {
+					out = append(out, resourceFinding(RiskMedium,
+						"parallel requests "+workerCount(n)+" jobs"))
+				}
 			}
 		}
 	}
@@ -495,7 +684,90 @@ func ruleResource(c ruleCtx) []Finding {
 		strings.Contains(strings.ReplaceAll(low, " ", ""), "for(;;)") {
 		out = append(out, resourceFinding(RiskHigh, "infinite loop pattern"))
 	}
+	if printRepeatRe.MatchString(low) {
+		out = append(out, resourceFinding(RiskMedium, "large string-multiplication output pattern"))
+	}
 	return out
+}
+
+// maxParallelWorkers is the built-in review threshold for explicit xargs -P /
+// parallel -j worker counts; 0 means "unlimited" to both tools and is always
+// flagged.
+const maxParallelWorkers = 8
+
+// printRepeatRe catches interpreter one-liners that materialize a huge string
+// by repetition (print("x" * 10000000)), a cheap way to blow the output cap.
+var printRepeatRe = regexp.MustCompile(`print\s*\([^)]*\*\s*[0-9]{7,}`)
+
+// workerCount renders an xargs/parallel worker count for evidence text.
+func workerCount(n int) string {
+	if n == 0 {
+		return "unlimited"
+	}
+	return strconv.Itoa(n)
+}
+
+// headByteCount returns the byte count requested by a "head -c N" / "--bytes=N"
+// invocation, honoring the common K/M/G binary suffixes (optional trailing B).
+func headByteCount(args []string) (int, bool) {
+	for i, a := range args {
+		switch {
+		case a == "-c" || a == "--bytes":
+			if i+1 < len(args) {
+				return parseByteCount(args[i+1])
+			}
+		case strings.HasPrefix(a, "-c") && len(a) > 2:
+			return parseByteCount(a[2:])
+		case strings.HasPrefix(a, "--bytes="):
+			return parseByteCount(a[len("--bytes="):])
+		}
+	}
+	return 0, false
+}
+
+// parseByteCount parses a size with an optional K/M/G suffix (and optional
+// trailing B), e.g. "512", "4K", "10MB".
+func parseByteCount(s string) (int, bool) {
+	s = strings.TrimSpace(strings.ToUpper(s))
+	s = strings.TrimSuffix(s, "B")
+	mult := 1
+	switch {
+	case strings.HasSuffix(s, "K"):
+		mult, s = 1024, s[:len(s)-1]
+	case strings.HasSuffix(s, "M"):
+		mult, s = 1024*1024, s[:len(s)-1]
+	case strings.HasSuffix(s, "G"):
+		mult, s = 1024*1024*1024, s[:len(s)-1]
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil || n < 0 {
+		return 0, false
+	}
+	return n * mult, true
+}
+
+// flagIntValue finds an integer option value in "-P 4", "-P4" or "--jobs=4"
+// form.
+func flagIntValue(args []string, short, long string) (int, bool) {
+	for i, a := range args {
+		switch {
+		case a == short || a == long:
+			if i+1 < len(args) {
+				if n, err := strconv.Atoi(args[i+1]); err == nil {
+					return n, true
+				}
+			}
+		case strings.HasPrefix(a, short) && len(a) > len(short):
+			if n, err := strconv.Atoi(a[len(short):]); err == nil {
+				return n, true
+			}
+		case strings.HasPrefix(a, long+"="):
+			if n, err := strconv.Atoi(a[len(long)+1:]); err == nil {
+				return n, true
+			}
+		}
+	}
+	return 0, false
 }
 
 func resourceFinding(risk RiskLevel, evidence string) Finding {
@@ -519,8 +791,11 @@ func ruleSecret(c ruleCtx) []Finding {
 	if matchAnyRegex(res, c.er.Command) {
 		out = append(out, secretFinding("secret-like value in command"))
 	}
+	// The key participates in the match ("key=value") so name-based patterns
+	// (password=, api_key=, ...) catch a secret-named env override whatever
+	// its value looks like.
 	for k, v := range c.er.Env {
-		if matchAnyRegex(res, v) {
+		if matchAnyRegex(res, k+"="+v) {
 			out = append(out, secretFinding("secret-like value in env "+k))
 		}
 	}
@@ -570,6 +845,40 @@ func ruleEnvKeys(c ruleCtx) []Finding {
 	return out
 }
 
+// ruleToolMetadata routes tools whose published metadata marks them as
+// destructive (tool.ToolMetadata.Destructive) to human review. The built-in
+// exec tools do not publish the flag, so this only fires for tools that
+// explicitly declare irreversible side effects.
+func ruleToolMetadata(c ruleCtx) []Finding {
+	if !c.er.ToolDestructive {
+		return nil
+	}
+	return []Finding{{
+		RuleID:         ruleMetaID,
+		Category:       catMetadata,
+		RiskLevel:      RiskMedium,
+		Evidence:       "tool metadata marks this tool as destructive",
+		Recommendation: recMetadata,
+	}}
+}
+
+// rulePipelineReview is the opt-in commands.review_pipelines knob: any
+// multi-segment pipeline or command chain is routed to human review, for
+// operators who want a coarse "no unreviewed shell plumbing" posture on top of
+// the per-command rules. Off by default so legitimate pipes stay allowed.
+func rulePipelineReview(c ruleCtx) []Finding {
+	if c.pipe == nil || !c.policy.Commands.ReviewPipelines || len(c.pipe.Commands) < 2 {
+		return nil
+	}
+	return []Finding{{
+		RuleID:         ruleCmdID,
+		Category:       catCommandPol,
+		RiskLevel:      RiskMedium,
+		Evidence:       fmt.Sprintf("pipeline with %d commands (commands.review_pipelines)", len(c.pipe.Commands)),
+		Recommendation: recShellBypass,
+	}}
+}
+
 var (
 	urlRe      = regexp.MustCompile(`(?i)\b[a-z][a-z0-9+.-]*://[^\s'"]+`)
 	userHostRe = regexp.MustCompile(`^[A-Za-z0-9._%+-]+@([A-Za-z0-9.-]+)(?::.*)?$`)
@@ -616,8 +925,10 @@ var genericOptions = map[string]map[string]optClass{
 		"--header": optValue, "--proxy-user": optValue, "--proxy-password": optValue,
 		// -e/--execute injects an arbitrary .wgetrc directive
 		// (http_proxy/https_proxy/use_proxy redirect the real egress);
-		// --config points at an opaque config file. Both fail closed.
+		// --config points at an opaque config file; -i/--input-file reads the
+		// URL list from a file the guard cannot see. All fail closed.
 		"-e": optOpaque, "--execute": optOpaque, "--config": optOpaque,
+		"-i": optOpaque, "--input-file": optOpaque,
 	},
 	"ssh": {
 		// -J routes through jump hosts; -W/-L/-R carry host:port forwarding
@@ -1121,11 +1432,10 @@ func domainLike(s string) bool {
 		strings.ContainsAny(s, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
 }
 
-// hasRecursiveForce reports whether the flags request both recursive and force
-// deletion, covering separate, combined, and long-option spellings
+// recursiveForceFlags reports which of recursive and force deletion the flags
+// request, covering separate, combined, and long-option spellings
 // (-r -f, -rf, -fr, -Rf, --recursive --force).
-func hasRecursiveForce(args []string) bool {
-	recursive, force := false, false
+func recursiveForceFlags(args []string) (recursive, force bool) {
 	for _, a := range args {
 		la := strings.ToLower(a)
 		switch {
@@ -1143,12 +1453,18 @@ func hasRecursiveForce(args []string) bool {
 			}
 		}
 	}
-	return recursive && force
+	return recursive, force
 }
 
 var systemDirs = []string{
 	"/etc", "/usr", "/bin", "/sbin", "/lib", "/lib64",
 	"/boot", "/sys", "/proc", "/var", "/dev", "/root",
+}
+
+// windowsSystemDirs are matched case-insensitively after backslash-to-slash
+// normalization.
+var windowsSystemDirs = []string{
+	"c:/windows", "c:/program files", "c:/program files (x86)", "c:/programdata",
 }
 
 func isRootOrSystem(p string) bool {
@@ -1159,6 +1475,17 @@ func isRootOrSystem(p string) bool {
 	}
 	for _, sys := range systemDirs {
 		if clean == sys || strings.HasPrefix(clean, sys+"/") {
+			return true
+		}
+	}
+	low := strings.ToLower(clean)
+	// A bare drive root ("C:", after the trailing slash was trimmed) is as
+	// destructive a target as "/".
+	if len(low) == 2 && low[1] == ':' && low[0] >= 'a' && low[0] <= 'z' {
+		return true
+	}
+	for _, sys := range windowsSystemDirs {
+		if low == sys || strings.HasPrefix(low, sys+"/") {
 			return true
 		}
 	}

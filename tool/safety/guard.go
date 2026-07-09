@@ -103,8 +103,10 @@ func WithReportSink(fn func(Report)) Option {
 }
 
 // NewGuard builds a Guard. With no WithPolicy/WithPolicyFile option it uses the
-// compiled DefaultPolicy (fail-closed on unparsable commands, otherwise
-// permissive); supply a policy file for real protection.
+// compiled DefaultPolicy: fail-closed on unparsable commands, destructive
+// binaries and privilege escalation denied, well-known credential paths
+// forbidden and common secret shapes flagged, but no command allow-list or
+// network whitelist. Supply a policy file to tighten it to your environment.
 func NewGuard(opts ...Option) (*Guard, error) {
 	g := &Guard{}
 	for _, opt := range opts {
@@ -141,6 +143,7 @@ func (g *Guard) CheckToolPermission(
 		return g.finalize(ctx, req.ToolName, backend, ExecRequest{},
 			findings, actionToDecision(g.policy.UnparsableAction), RiskHigh, start)
 	}
+	er.ToolDestructive = req.Metadata.Destructive
 	findings, decision, risk := g.policy.scan(er, backend)
 	return g.finalize(ctx, req.ToolName, backend, er, findings, decision, risk, start)
 }

@@ -72,6 +72,10 @@ const (
 type CommandPolicy struct {
 	Allowed []string `yaml:"allowed" json:"allowed"`
 	Denied  []string `yaml:"denied" json:"denied"`
+	// ReviewPipelines (opt-in) routes any multi-segment pipeline or command
+	// chain to human review, a coarse posture on top of the per-command rules.
+	// Off by default so legitimate pipes ("cat a | grep b") stay allowed.
+	ReviewPipelines bool `yaml:"review_pipelines" json:"review_pipelines"`
 }
 
 // NetworkPolicy configures outbound-network detection.
@@ -168,18 +172,51 @@ type domainMatcher struct {
 
 // DefaultPolicy returns the built-in safe defaults: unparsable commands are
 // denied, anything not matched by a rule is allowed, non-whitelisted network
-// access is denied, and the backend map points at the real tool names.
+// access is denied, and the backend map points at the real tool names. The
+// defaults are protective out of the box — obviously destructive binaries and
+// privilege escalation are denied, well-known credential paths are forbidden
+// and common secret shapes are flagged/redacted — while leaving no command
+// allow-list, so ordinary commands still run. Note that a non-empty denied
+// list activates shellsafe, which also rejects shell wrappers (bash -c, eval,
+// ...); a policy file can override every list.
 func DefaultPolicy() Policy {
 	return Policy{
 		Version:          1,
 		UnparsableAction: ActionDeny,
 		DefaultAction:    ActionAllow,
-		Network:          NetworkPolicy{OnNonWhitelisted: ActionDeny},
+		Commands: CommandPolicy{
+			Denied: []string{
+				"dd", "mkfs", "mount", "umount", "shutdown", "reboot",
+				"halt", "poweroff", "sudo", "su", "doas",
+			},
+		},
+		ForbiddenPaths: []string{
+			"~/.ssh", "**/id_rsa", "**/id_ed25519", "**/.env",
+			"**/credentials", "/etc/shadow",
+		},
+		Network: NetworkPolicy{OnNonWhitelisted: ActionDeny},
+		Secrets: SecretPolicy{Patterns: defaultSecretPatterns()},
 		Backends: map[string][]string{
 			BackendWorkspace: {"workspace_exec"},
 			BackendHost:      {"exec_command"},
 			BackendCode:      {"execute_code"},
 		},
+	}
+}
+
+// defaultSecretPatterns are the built-in secret shapes: provider token formats
+// (AWS, GitHub, OpenAI-style sk-, Slack xox), private-key material, bearer
+// headers, and a name-based key=value heuristic that catches a secret-named
+// assignment whatever the value looks like.
+func defaultSecretPatterns() []string {
+	return []string{
+		`AKIA[0-9A-Z]{16}`,
+		`ghp_[0-9A-Za-z]{36}`,
+		`sk-[A-Za-z0-9_-]{12,}`,
+		`xox[baprs]-[A-Za-z0-9-]{10,}`,
+		`-----BEGIN [A-Z ]*PRIVATE KEY-----`,
+		`(?i)bearer\s+[a-z0-9._-]+`,
+		`(?i)(api[_-]?key|token|password|passwd|secret|private[_-]?key|credential)[a-z0-9_]*=["']?[^\s"']+`,
 	}
 }
 

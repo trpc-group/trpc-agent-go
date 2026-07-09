@@ -41,16 +41,17 @@ second gate.
 
 | # | Category | Rule id | What it catches | Risk |
 |---|----------|---------|-----------------|------|
-| 1 | dangerous_command | `R-DEL-001` | denied destructive commands; `rm -rf` (all flag spellings), escalated on root/system paths | high → critical |
+| 1 | dangerous_command | `R-DEL-001` | denied destructive commands; recursive `rm` (all flag spellings) with force **or aimed at a root/system path even without force** (`rm -r /etc`); recursive `chmod -R` → review. System paths include the Windows drive roots, `C:\Windows`, `C:\Program Files`, `C:\ProgramData` | medium → critical |
 | 2 | credential_access | `R-CRED-001` | argv/cwd hitting `~/.ssh`, `**/.env`, `**/id_rsa`, credentials; `file:` URIs are decoded to their filesystem path first so `curl file:///etc/shadow` (any RFC 8089 spelling, incl. percent-encoded) cannot hide the path inside a URI | critical |
-| 3 | network | `R-NET-001` | download commands targeting a non-whitelisted host, including curl egress-redirect options (`--connect-to`, `--resolve`, `-x/--proxy`, `--url`, `--dns-servers`, `--doh-url`) parsed for their real target across `flag value`, `flag=value` and bundled/inline short-flag (`-sx`, `-xhost`) forms. `--resolve` uses an option-specific `[+]host:port:addr[,addr]` parser so an **unbracketed IPv6** rewrite target (`--resolve github.com:443:2001:db8::1`) is extracted whole instead of being shattered on its colons. Fails closed on the opaque `-K/--config` file (incl. `-sK`); optionally fails closed on curl's **implicit default config** (see below). The non-curl download commands get the same treatment: host-bearing options (`ssh/scp -J` jump hosts, `ssh -W/-L/-R` forwarding specs, `nc -x` proxy) are parsed for their real targets across space/inline/bundled forms, and opaque egress controls (`wget -e/--execute/--config`, `ssh/scp -o/-F`, `scp/sftp -S`) **fail closed** because their config file / rc directive / transport program can redirect egress invisibly. Raw and bracketed IPv6 operands (`nc 2001:db8::1`, `[2001:db8::1]:443`, `user@[2001:db8::1]:`) are parsed as whole addresses instead of being truncated at the first colon | high |
-| 4 | shell_bypass | `R-SHELL-001` | unparsable commands (`$()`, backticks, `$VAR`, redirection, subshell) and shell wrappers / re-executing builtins (`bash -c`, `eval`, `xargs`, `env CMD`) that can bypass the allow/deny list | high |
-| 4b | command_policy | `R-CMD-001` | a plain, parseable command that is simply **not in `commands.allowed`** (an allow-list miss, not a bypass) | high |
+| 3 | network | `R-NET-001` | download commands targeting a non-whitelisted host, including curl egress-redirect options (`--connect-to`, `--resolve`, `-x/--proxy`, `--url`, `--dns-servers`, `--doh-url`) parsed for their real target across `flag value`, `flag=value` and bundled/inline short-flag (`-sx`, `-xhost`) forms. `--resolve` uses an option-specific `[+]host:port:addr[,addr]` parser so an **unbracketed IPv6** rewrite target (`--resolve github.com:443:2001:db8::1`) is extracted whole instead of being shattered on its colons. Fails closed on the opaque `-K/--config` file (incl. `-sK`); optionally fails closed on curl's **implicit default config** (see below). The non-curl download commands get the same treatment: host-bearing options (`ssh/scp -J` jump hosts, `ssh -W/-L/-R` forwarding specs, `nc -x` proxy) are parsed for their real targets across space/inline/bundled forms, and opaque egress controls (`wget -e/--execute/--config/-i/--input-file`, `ssh/scp -o/-F`, `scp/sftp -S`) **fail closed** because their config file / rc directive / URL list / transport program can redirect egress invisibly. Raw and bracketed IPv6 operands (`nc 2001:db8::1`, `[2001:db8::1]:443`, `user@[2001:db8::1]:`) are parsed as whole addresses instead of being truncated at the first colon. A download command with **no extractable target at all** falls back to review instead of silently allowing. URLs embedded in non-shell `execute_code` source are checked against the same whitelist | medium → high |
+| 4 | shell_bypass | `R-SHELL-001` | unparsable commands (`$()`, backticks, `$VAR`, redirection, subshell) and shell wrappers / re-executing builtins (`bash -c`, `eval`, `xargs`, `env CMD`) that can bypass the allow/deny list; non-shell `execute_code` source that bridges into shell execution (`os.system`, `subprocess.`, `exec(`, `child_process`) → review | medium → high |
+| 4b | command_policy | `R-CMD-001` | a plain, parseable command that is simply **not in `commands.allowed`** (an allow-list miss, not a bypass); with the opt-in `commands.review_pipelines` knob, any multi-segment pipeline / chain → review | medium → high |
 | 5 | host_risk | `R-HOST-001` | host backend background / PTY sessions, `sudo`/`su`/`nohup` | high → critical |
 | 6 | dependency | `R-DEP-001` | configured installer subcommands (`pip install`, `go install`, ...) | medium |
-| 7 | resource_abuse | `R-RES-001` | over-budget timeout, long `sleep`, `yes`, infinite-loop patterns | medium → high |
-| 8 | secret_leak | `R-SECRET-001` | secret-like values in the command or env (also sets `redacted`) | medium |
+| 7 | resource_abuse | `R-RES-001` | over-budget timeout, long `sleep`, `yes`, infinite-loop patterns, `head -c` beyond `max_output_bytes`, explicit high/unlimited concurrency (`xargs -P`, `parallel -j`), interpreter string-multiplication output (`print("x" * 10000000)`) | medium → high |
+| 8 | secret_leak | `R-SECRET-001` | secret-like values in the command or env — provider token shapes (AWS, GitHub, `sk-`, Slack `xox`), private-key material, bearer headers, plus a name-based `password=`/`api_key=`/`token=` key=value heuristic; the env key participates in the match (also sets `redacted`) | medium |
 | 9 | env_policy | `R-ENV-001` | environment keys not in `env.allowed_keys` (opt-in; inert when the list is empty) | medium |
+| 10 | tool_metadata | `R-META-001` | a tool whose published metadata (`tool.ToolMetadata.Destructive`) declares irreversible side effects → review | medium |
 
 Decision aggregation: the strongest action across findings wins
 (`critical`/`high` → deny, `medium` → ask); with no actionable finding the
@@ -70,16 +71,18 @@ full annotated example. Key fields:
 - `backends` — tool name → backend identifier. Defaults cover the real tool
   names; **override here if a host/code tool was renamed via `WithName`**, since
   an unmapped tool is allowed without scanning.
-- `commands.allowed` / `commands.denied` — handed to `internal/shellsafe`.
+- `commands.allowed` / `commands.denied` — handed to `internal/shellsafe`;
+  `commands.review_pipelines` (opt-in) routes any multi-segment pipeline to
+  review.
 - `denied_subcommands`, `forbidden_paths`, `network.*`, `resources.*`,
   `env.*`, `secrets.patterns`, `rule_overrides`.
 
-Two `resources` fields are intentionally **not** statically enforced by the
-guard: `max_output_bytes` (output size is unknowable before the command runs)
-and the byte cap in general are passed through for the **runtime** to enforce
-(workspaceexec / sandbox). `env.allowed_keys` *is* enforced statically as a soft
-check (`R-ENV-001` flags non-whitelisted keys); the guard cannot strip a key, so
-real env isolation is still the runtime's job.
+`max_output_bytes` is checked statically only where the requested size is
+explicit in the command (`head -c N`); output size is otherwise unknowable
+before the command runs, so the byte cap is passed through for the **runtime**
+to enforce (workspaceexec / sandbox). `env.allowed_keys` *is* enforced
+statically as a soft check (`R-ENV-001` flags non-whitelisted keys); the guard
+cannot strip a key, so real env isolation is still the runtime's job.
 
 ## workspace vs host security boundary
 
@@ -152,10 +155,15 @@ Explicit limitations:
   anything it cannot tokenize is rejected (→ deny/ask). The residual risk is a
   command it *accepts* but incorrectly tokenizes; that direction is pinned by the
   differential anchor tests in `shellsafe_anchor_test.go`.
-- **`code` backend (`execute_code`) protection is significantly weaker.** Only
-  the secret and resource rules run; malicious Python/JS largely bypasses this
-  layer and relies entirely on the sandbox. Do not assume code execution gets
-  the same protection as shell commands.
+- **`code` backend (`execute_code`) protection is narrower than shell.**
+  Shell-language blocks (`bash`/`sh`/`zsh`/unlabeled) get the **full** rule set
+  (they are parsed and scanned like commands; unparsable blocks fail closed).
+  Non-shell blocks get the secret/resource rules, a URL whitelist pass over the
+  source and a shell-bridge check (`os.system`, `subprocess.`, `exec(`,
+  `child_process` → review) — but dynamically built strings, obfuscated imports
+  and everything else an interpreter can do still bypass static analysis and
+  rely on the sandbox. Do not assume code execution gets the same protection as
+  shell commands.
 - **Resource-abuse rules are best-effort.** String heuristics (`while true`,
   `yes`, `sleep N`) are easily evaded; the real enforcement is the runtime
   timeout / output cap in workspaceexec and the sandbox.

