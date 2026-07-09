@@ -91,7 +91,7 @@ type GateDecision struct {
 	Rules []RuleOutcome `json:"rules"`
 	// Selection records every candidate's gate and selection outcome.
 	Selection []CandidateOutcome `json:"selection"`
-	// Recommendation is reject, accept_pending_canary, or accept.
+	// Recommendation is reject or accept_pending_canary.
 	Recommendation string `json:"recommendation"`
 	// Summary is the one-line human-readable conclusion.
 	Summary string `json:"summary"`

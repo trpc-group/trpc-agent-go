@@ -214,4 +214,5 @@ override 注入引擎；引擎每轮事件由 Observer 流式落盘。
 
 **产物审计**：`audit/` 留存 run_meta（seed、模式、配置快照）、每轮全部引擎
 事件、per-round 成本耗时、归因、候选与 gate 决策；报告汇总 baseline/candidate
-分数、双集逐 case delta 与规则明细。全流程无随机源，同输入必同输出。
+分数、双集逐 case delta 与规则明细。fake 模式下评测分数、归因与 gate 决策
+完全确定：同输入必得同结论；runId、时间戳、耗时等审计字段随每次运行变化。
