@@ -545,6 +545,10 @@ func TestExtractGenericHostBearingOptions(t *testing.T) {
 		{"ssh remote forward", "ssh", []string{"-R", "8080:evil.io:80", "github.com"}, []string{"evil.io", "github.com"}},
 		{"ssh stdio forward", "ssh", []string{"-W", "evil.io:443", "github.com"}, []string{"evil.io", "github.com"}},
 		{"nc proxy", "nc", []string{"-x", "evil.io:1080", "github.com", "443"}, []string{"evil.io", "github.com"}},
+		// Raw / bracketed IPv6 operands must survive port stripping whole.
+		{"nc raw ipv6", "nc", []string{"2001:db8::1", "443"}, []string{"2001:db8::1"}},
+		{"ssh bracketed ipv6 port", "ssh", []string{"[2001:db8::1]:22"}, []string{"2001:db8::1"}},
+		{"scp user at bracketed ipv6", "scp", []string{"user@[2001:db8::1]:/tmp/a", "."}, []string{"2001:db8::1"}},
 		// Value-taking options consume their operand: key.pem / 2222 are not hosts.
 		{"ssh identity file", "ssh", []string{"-i", "key.pem", "user@github.com"}, []string{"github.com"}},
 		{"ssh port", "ssh", []string{"-p", "2222", "github.com"}, []string{"github.com"}},
@@ -600,6 +604,51 @@ func TestGenericDownloadOptionBypassDeny(t *testing.T) {
 				t.Errorf("missing R-NET-001: %+v", findings)
 			}
 		})
+	}
+}
+
+// TestFileURIForbiddenPathDeny pins that a file: URI cannot smuggle a
+// forbidden path past R-CRED-001: the URI's decoded path is matched against
+// forbidden_paths, not just the raw URI string. All RFC 8089 spellings curl
+// accepts are covered, including the percent-encoded form.
+func TestFileURIForbiddenPathDeny(t *testing.T) {
+	p := loadExamplePolicy(t)
+	for _, cmd := range []string{
+		`curl file:///etc/shadow`,
+		`curl file:/etc/shadow`,
+		`curl file://localhost/etc/shadow`,
+		`curl file:///%65tc/shadow`,
+		`wget file:///home/user/.ssh/id_rsa`,
+	} {
+		findings, decision := scanCmd(t, p, BackendWorkspace, cmd)
+		if decision != DecisionDeny {
+			t.Errorf("%q: decision = %q, want deny (findings: %+v)", cmd, decision, findings)
+		}
+		if !hasRule(findings, ruleCredID) {
+			t.Errorf("%q: missing R-CRED-001: %+v", cmd, findings)
+		}
+	}
+}
+
+// TestRawIPv6OperandDeny pins that a raw or bracketed IPv6 operand is checked
+// against the whitelist instead of being truncated at its first colon
+// ("nc 2001:db8::1 443" must not slip past R-NET-001).
+func TestRawIPv6OperandDeny(t *testing.T) {
+	p := loadExamplePolicy(t) // allows github.com; on_non_whitelisted: deny
+	for _, cmd := range []string{
+		`nc 2001:db8::1 443`,
+		// Unquoted [..] is already rejected by shellsafe as a glob; the quoted
+		// form reaches the network rule and must still be extracted whole.
+		`curl "[2001:db8::1]:8080/x"`,
+		`ssh ::1`,
+	} {
+		findings, decision := scanCmd(t, p, BackendWorkspace, cmd)
+		if decision != DecisionDeny {
+			t.Errorf("%q: decision = %q, want deny (findings: %+v)", cmd, decision, findings)
+		}
+		if !hasRule(findings, ruleNetworkID) {
+			t.Errorf("%q: missing R-NET-001: %+v", cmd, findings)
+		}
 	}
 }
 

@@ -894,6 +894,11 @@ func operandHosts(a string) []string {
 	if mm := userHostRe.FindStringSubmatch(a); mm != nil {
 		return []string{mm[1]}
 	}
+	// user@[2001:db8::1]:/path — a bracketed IPv6 behind a user prefix is
+	// outside userHostRe's host charset; hand the bracketed part to bareHost.
+	if at := strings.IndexByte(a, '@'); at > 0 && strings.HasPrefix(a[at+1:], "[") {
+		return bareHost(a[at+1:])
+	}
 	return bareHost(a)
 }
 
@@ -912,6 +917,20 @@ func hostFromURL(a string) string {
 // pure ports). Both domains and raw IPs are accepted so "ssh 1.2.3.4" cannot
 // bypass the whitelist.
 func bareHost(a string) []string {
+	// A raw IPv6 literal ("nc 2001:db8::1") is all colons: it must parse as a
+	// whole before the port stripping below shatters it at the first colon.
+	if net.ParseIP(a) != nil {
+		return []string{a}
+	}
+	// Bracketed IPv6, optionally with a port or path: [2001:db8::1]:443.
+	if strings.HasPrefix(a, "[") {
+		if end := strings.IndexByte(a, ']'); end > 1 {
+			if ip := a[1:end]; net.ParseIP(ip) != nil {
+				return []string{ip}
+			}
+		}
+		return nil
+	}
 	host := a
 	if j := strings.IndexByte(host, ':'); j > 0 {
 		host = host[:j]
@@ -1153,10 +1172,38 @@ func pathCandidates(c ruleCtx) []string {
 	}
 	if c.pipe != nil {
 		for _, argv := range c.pipe.Commands {
-			out = append(out, argv...)
+			for _, a := range argv {
+				out = append(out, a)
+				// A file:// URI is a filesystem access in disguise: add its
+				// decoded path so "curl file:///etc/shadow" matches the
+				// forbidden-path globs, not just the raw URI string.
+				if p := fileURIPath(a); p != "" {
+					out = append(out, p)
+				}
+			}
 		}
 	}
 	return out
+}
+
+// fileURIPath extracts the filesystem path from a file: URI embedded in an
+// argument, or "" when the argument carries none. All RFC 8089 spellings curl
+// accepts resolve to the same path: file:///etc/shadow, file:/etc/shadow and
+// file://localhost/etc/shadow.
+func fileURIPath(a string) string {
+	i := strings.Index(strings.ToLower(a), "file:")
+	if i < 0 {
+		return ""
+	}
+	u, err := url.Parse(a[i:])
+	if err != nil {
+		return ""
+	}
+	if u.Path != "" {
+		return u.Path
+	}
+	// file:etc/passwd — the pathless opaque form still names a file.
+	return u.Opaque
 }
 
 // argsHavePrefix reports whether args, after skipping leading option flags,
