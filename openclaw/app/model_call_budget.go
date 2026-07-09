@@ -317,8 +317,11 @@ func finalModelCallRequest(req *model.Request) *model.Request {
 			"calls, function calls, JSON tool requests, XML-style tool "+
 			"markup such as <tool_call>, code blocks that ask to run "+
 			"tools, or descriptions of future tool use. Do not ask to "+
-			"continue. If the original task requires a final-answer "+
-			"format, follow it exactly.",
+			"continue. Put the answer in visible assistant message "+
+			"content for the user, not only in internal reasoning or "+
+			"thinking content. If evidence is incomplete, give the best "+
+			"supported final answer now. If the original task requires "+
+			"a final-answer format, follow it exactly.",
 	))
 	return &clone
 }
