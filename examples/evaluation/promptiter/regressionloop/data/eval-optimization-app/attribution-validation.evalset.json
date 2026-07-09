@@ -1,0 +1,43 @@
+{
+  "evalSetId": "attribution-validation",
+  "name": "attribution-validation",
+  "evalCases": [
+    {
+      "evalId": "attr_01_calculator",
+      "conversation": [
+        {
+          "invocationId": "attr_01_calculator-1",
+          "userContent": {
+            "role": "user",
+            "content": "用计算器算 2 加 3"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "结果是5。"
+          },
+          "tools": [
+            {
+              "id": "call_1",
+              "name": "calculator",
+              "arguments": {
+                "operation": "add",
+                "a": 2,
+                "b": 3
+              },
+              "result": {
+                "operation": "add",
+                "a": 2,
+                "b": 3,
+                "result": 5
+              }
+            }
+          ]
+        }
+      ],
+      "sessionInput": {
+        "appName": "eval-optimization-app",
+        "userId": "eval-optimization-demo-user"
+      }
+    }
+  ]
+}

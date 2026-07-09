@@ -1,0 +1,131 @@
+{
+  "app": "eval-optimization-app",
+  "mode": "fake",
+  "status": "succeeded",
+  "baseline": {
+    "overallScore": 0,
+    "evalSets": [
+      {
+        "evalSetId": "attribution-validation",
+        "overallScore": 0,
+        "cases": [
+          {
+            "evalCaseId": "attr_01_calculator",
+            "metrics": [
+              {
+                "metricName": "final_response_avg_score",
+                "score": 0,
+                "status": "failed",
+                "reason": "final response mismatch: text mismatch: source 比赛结束。 and target 结果是5。 do not match"
+              },
+              {
+                "metricName": "tool_trajectory_avg_score",
+                "score": 0,
+                "status": "failed",
+                "reason": "tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "candidate": {
+    "overallScore": 0,
+    "profileAccepted": false
+  },
+  "delta": {
+    "caseDeltas": [
+      {
+        "evalSetId": "attribution-validation",
+        "evalCaseId": "attr_01_calculator",
+        "metricName": "final_response_avg_score",
+        "baselineScore": 0,
+        "candidateScore": 0,
+        "baselineStatus": "failed",
+        "candidateStatus": "failed",
+        "kind": "Unchanged"
+      },
+      {
+        "evalSetId": "attribution-validation",
+        "evalCaseId": "attr_01_calculator",
+        "metricName": "tool_trajectory_avg_score",
+        "baselineScore": 0,
+        "candidateScore": 0,
+        "baselineStatus": "failed",
+        "candidateStatus": "failed",
+        "kind": "Unchanged"
+      }
+    ],
+    "summary": {
+      "newlyPassed": 0,
+      "newlyFailed": 0,
+      "scoreUp": 0,
+      "scoreDown": 0,
+      "unchanged": 2
+    }
+  },
+  "failureAttribution": {
+    "baseline": {
+      "responseMismatch": 1,
+      "toolError": 1
+    },
+    "bySeverity": {
+      "unknown": 4
+    },
+    "details": [
+      {
+        "evalSetId": "attribution-validation",
+        "evalCaseId": "attr_01_calculator",
+        "metricName": "final_response_avg_score",
+        "category": "responseMismatch",
+        "reason": "final response mismatch: text mismatch: source 比赛结束。 and target 结果是5。 do not match"
+      },
+      {
+        "evalSetId": "attribution-validation",
+        "evalCaseId": "attr_01_calculator",
+        "metricName": "tool_trajectory_avg_score",
+        "category": "toolError",
+        "reason": "tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)"
+      }
+    ]
+  },
+  "gate": {
+    "released": false,
+    "reasons": [
+      "no candidate profile was accepted by the engine"
+    ]
+  },
+  "cost": {
+    "rounds": 2,
+    "teacherCalls": 5,
+    "estimated": true,
+    "note": "teacher calls derived from evaluated cases across baseline and rounds"
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "validationScore": 0,
+      "accepted": false,
+      "scoreDelta": 0,
+      "reason": "candidate score gain does not satisfy acceptance policy"
+    },
+    {
+      "round": 2,
+      "validationScore": 0,
+      "accepted": false,
+      "scoreDelta": 0,
+      "reason": "candidate score gain does not satisfy acceptance policy"
+    }
+  ],
+  "config": {
+    "gateMinTotalGain": 0.5,
+    "maxRounds": 2,
+    "minScoreGain": 0.5,
+    "mode": "fake",
+    "scenario": "attribution",
+    "targetSurfaceIds": [
+      "candidate#instruction"
+    ]
+  }
+}

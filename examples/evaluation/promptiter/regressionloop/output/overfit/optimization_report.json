@@ -1,0 +1,158 @@
+{
+  "app": "eval-optimization-app",
+  "mode": "fake",
+  "status": "succeeded",
+  "baseline": {
+    "overallScore": 0.3333333333333333,
+    "evalSets": [
+      {
+        "evalSetId": "validation",
+        "overallScore": 0.3333333333333333,
+        "cases": [
+          {
+            "evalCaseId": "val_01_gold_vs_silver",
+            "metrics": [
+              {
+                "metricName": "final_response_avg_score",
+                "score": 1,
+                "status": "passed"
+              }
+            ]
+          },
+          {
+            "evalCaseId": "val_02_fire_vs_ice",
+            "metrics": [
+              {
+                "metricName": "final_response_avg_score",
+                "score": 0,
+                "status": "failed",
+                "reason": "final response mismatch: text mismatch: source 比赛结束。 and target 火队以5-4战胜冰队。 do not match"
+              }
+            ]
+          },
+          {
+            "evalCaseId": "val_03_mountain_vs_sea",
+            "metrics": [
+              {
+                "metricName": "final_response_avg_score",
+                "score": 0,
+                "status": "failed",
+                "reason": "final response mismatch: text mismatch: source 比赛结束。 and target 山队以112-108战胜海队。 do not match"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "candidate": {
+    "overallScore": 0.6666666666666666,
+    "profileAccepted": true,
+    "acceptedRound": 1
+  },
+  "delta": {
+    "caseDeltas": [
+      {
+        "evalSetId": "validation",
+        "evalCaseId": "val_01_gold_vs_silver",
+        "metricName": "final_response_avg_score",
+        "baselineScore": 1,
+        "candidateScore": 0,
+        "baselineStatus": "passed",
+        "candidateStatus": "failed",
+        "kind": "NewlyFailed"
+      },
+      {
+        "evalSetId": "validation",
+        "evalCaseId": "val_02_fire_vs_ice",
+        "metricName": "final_response_avg_score",
+        "baselineScore": 0,
+        "candidateScore": 1,
+        "baselineStatus": "failed",
+        "candidateStatus": "passed",
+        "kind": "NewlyPassed"
+      },
+      {
+        "evalSetId": "validation",
+        "evalCaseId": "val_03_mountain_vs_sea",
+        "metricName": "final_response_avg_score",
+        "baselineScore": 0,
+        "candidateScore": 1,
+        "baselineStatus": "failed",
+        "candidateStatus": "passed",
+        "kind": "NewlyPassed"
+      }
+    ],
+    "summary": {
+      "newlyPassed": 2,
+      "newlyFailed": 1,
+      "scoreUp": 0,
+      "scoreDown": 0,
+      "unchanged": 0
+    }
+  },
+  "failureAttribution": {
+    "baseline": {
+      "responseMismatch": 2
+    },
+    "bySeverity": {
+      "unknown": 3
+    },
+    "details": [
+      {
+        "evalSetId": "validation",
+        "evalCaseId": "val_02_fire_vs_ice",
+        "metricName": "final_response_avg_score",
+        "category": "responseMismatch",
+        "reason": "final response mismatch: text mismatch: source 比赛结束。 and target 火队以5-4战胜冰队。 do not match"
+      },
+      {
+        "evalSetId": "validation",
+        "evalCaseId": "val_03_mountain_vs_sea",
+        "metricName": "final_response_avg_score",
+        "category": "responseMismatch",
+        "reason": "final response mismatch: text mismatch: source 比赛结束。 and target 山队以112-108战胜海队。 do not match"
+      }
+    ]
+  },
+  "gate": {
+    "released": false,
+    "reasons": [
+      "total gain 0.333 \u003e= threshold 0.200",
+      "1 newly failed cases",
+      "rounds 2 within budget 4"
+    ]
+  },
+  "cost": {
+    "rounds": 2,
+    "teacherCalls": 15,
+    "estimated": true,
+    "note": "teacher calls derived from evaluated cases across baseline and rounds"
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "validationScore": 0.6666666666666666,
+      "accepted": true,
+      "scoreDelta": 0.3333333333333333,
+      "reason": "candidate score gain satisfies acceptance policy"
+    },
+    {
+      "round": 2,
+      "validationScore": 0.6666666666666666,
+      "accepted": false,
+      "scoreDelta": 0,
+      "reason": "candidate score gain does not satisfy acceptance policy"
+    }
+  ],
+  "config": {
+    "gateMinTotalGain": 0.2,
+    "maxRounds": 2,
+    "minScoreGain": 0.2,
+    "mode": "fake",
+    "scenario": "overfit",
+    "targetSurfaceIds": [
+      "candidate#instruction"
+    ]
+  }
+}

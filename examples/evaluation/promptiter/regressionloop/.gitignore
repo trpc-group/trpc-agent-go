@@ -1,0 +1,6 @@
+# Engine eval-result dumps carry non-deterministic UUID filenames.
+output/**/evalresults/
+output/evalresults/
+
+# Go build artifacts
+*.exe

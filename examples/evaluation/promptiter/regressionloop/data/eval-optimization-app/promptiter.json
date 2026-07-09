@@ -1,0 +1,12 @@
+{
+  "maxRounds": 2,
+  "minScoreGain": 0.5,
+  "targetScore": 1.0,
+  "maxRoundsWithoutAcceptance": 2,
+  "gate": {
+    "minTotalGain": 0.5,
+    "allowNewHardFail": false,
+    "maxRounds": 4,
+    "protectedCaseIds": []
+  }
+}

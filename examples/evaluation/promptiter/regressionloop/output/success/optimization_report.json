@@ -1,0 +1,159 @@
+{
+  "app": "eval-optimization-app",
+  "mode": "fake",
+  "status": "succeeded",
+  "baseline": {
+    "overallScore": 0,
+    "evalSets": [
+      {
+        "evalSetId": "validation",
+        "overallScore": 0,
+        "cases": [
+          {
+            "evalCaseId": "val_01_gold_vs_silver",
+            "metrics": [
+              {
+                "metricName": "final_response_avg_score",
+                "score": 0,
+                "status": "failed",
+                "reason": "final response mismatch: text mismatch: source 比赛结束。 and target 金队以88-80战胜银队。 do not match"
+              }
+            ]
+          },
+          {
+            "evalCaseId": "val_02_fire_vs_ice",
+            "metrics": [
+              {
+                "metricName": "final_response_avg_score",
+                "score": 0,
+                "status": "failed",
+                "reason": "final response mismatch: text mismatch: source 比赛结束。 and target 火队以5-4战胜冰队。 do not match"
+              }
+            ]
+          },
+          {
+            "evalCaseId": "val_03_mountain_vs_sea",
+            "metrics": [
+              {
+                "metricName": "final_response_avg_score",
+                "score": 0,
+                "status": "failed",
+                "reason": "final response mismatch: text mismatch: source 比赛结束。 and target 山队以112-108战胜海队。 do not match"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "candidate": {
+    "overallScore": 1,
+    "profileAccepted": true,
+    "acceptedRound": 1
+  },
+  "delta": {
+    "caseDeltas": [
+      {
+        "evalSetId": "validation",
+        "evalCaseId": "val_01_gold_vs_silver",
+        "metricName": "final_response_avg_score",
+        "baselineScore": 0,
+        "candidateScore": 1,
+        "baselineStatus": "failed",
+        "candidateStatus": "passed",
+        "kind": "NewlyPassed"
+      },
+      {
+        "evalSetId": "validation",
+        "evalCaseId": "val_02_fire_vs_ice",
+        "metricName": "final_response_avg_score",
+        "baselineScore": 0,
+        "candidateScore": 1,
+        "baselineStatus": "failed",
+        "candidateStatus": "passed",
+        "kind": "NewlyPassed"
+      },
+      {
+        "evalSetId": "validation",
+        "evalCaseId": "val_03_mountain_vs_sea",
+        "metricName": "final_response_avg_score",
+        "baselineScore": 0,
+        "candidateScore": 1,
+        "baselineStatus": "failed",
+        "candidateStatus": "passed",
+        "kind": "NewlyPassed"
+      }
+    ],
+    "summary": {
+      "newlyPassed": 3,
+      "newlyFailed": 0,
+      "scoreUp": 0,
+      "scoreDown": 0,
+      "unchanged": 0
+    }
+  },
+  "failureAttribution": {
+    "baseline": {
+      "responseMismatch": 3
+    },
+    "bySeverity": {
+      "unknown": 3
+    },
+    "details": [
+      {
+        "evalSetId": "validation",
+        "evalCaseId": "val_01_gold_vs_silver",
+        "metricName": "final_response_avg_score",
+        "category": "responseMismatch",
+        "reason": "final response mismatch: text mismatch: source 比赛结束。 and target 金队以88-80战胜银队。 do not match"
+      },
+      {
+        "evalSetId": "validation",
+        "evalCaseId": "val_02_fire_vs_ice",
+        "metricName": "final_response_avg_score",
+        "category": "responseMismatch",
+        "reason": "final response mismatch: text mismatch: source 比赛结束。 and target 火队以5-4战胜冰队。 do not match"
+      },
+      {
+        "evalSetId": "validation",
+        "evalCaseId": "val_03_mountain_vs_sea",
+        "metricName": "final_response_avg_score",
+        "category": "responseMismatch",
+        "reason": "final response mismatch: text mismatch: source 比赛结束。 and target 山队以112-108战胜海队。 do not match"
+      }
+    ]
+  },
+  "gate": {
+    "released": true,
+    "reasons": [
+      "total gain 1.000 \u003e= threshold 0.500",
+      "no newly failed cases",
+      "rounds 1 within budget 4"
+    ]
+  },
+  "cost": {
+    "rounds": 1,
+    "teacherCalls": 9,
+    "estimated": true,
+    "note": "teacher calls derived from evaluated cases across baseline and rounds"
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "validationScore": 1,
+      "accepted": true,
+      "scoreDelta": 1,
+      "reason": "candidate score gain satisfies acceptance policy"
+    }
+  ],
+  "config": {
+    "gateMinTotalGain": 0.5,
+    "maxRounds": 2,
+    "minScoreGain": 0.5,
+    "mode": "fake",
+    "scenario": "success",
+    "targetSurfaceIds": [
+      "candidate#instruction"
+    ]
+  }
+}
