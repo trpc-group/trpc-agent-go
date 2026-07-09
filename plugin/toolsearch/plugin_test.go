@@ -432,21 +432,6 @@ func TestAfterTool(t *testing.T) {
 	require.NotNil(t, res)
 }
 
-func TestHasRegisteredToolboxes(t *testing.T) {
-	p := NewPlugin(nil)
-	assert.False(t, p.hasRegisteredToolboxes(), "empty plugin has no toolboxes")
-
-	p2 := NewPlugin(nil, WithToolboxes([]Toolbox{
-		{Name: "billing", Tools: []tool.Tool{newTestTool("t1", "d1")}},
-	}))
-	assert.True(t, p2.hasRegisteredToolboxes())
-
-	p3 := NewPlugin(nil, WithMCPToolboxes([]MCPToolbox{
-		{ServerName: "mcp1", ToolSet: &fakeToolSet{name: "mcp1"}},
-	}))
-	assert.True(t, p3.hasRegisteredToolboxes())
-}
-
 func TestIsDefaultOnly(t *testing.T) {
 	// WithDeferredTools alone → only _default toolbox.
 	p := NewPlugin(nil, WithDeferredTools([]tool.Tool{newTestTool("t1", "d1")}))
@@ -673,7 +658,7 @@ func TestSearchToolWithDynamicDesc_Call_NonCallable(t *testing.T) {
 }
 
 func TestCallToolFn_EmptyToolName(t *testing.T) {
-	p := NewPlugin(nil, WithEnableCallTool(true))
+	p := NewPlugin(nil, WithInvocationMode(DispatchToolCalls))
 	ctx, _ := ctxWithInvocation()
 	res, err := p.callToolFn(ctx, callToolInput{ToolName: ""})
 	require.NoError(t, err)
@@ -683,7 +668,7 @@ func TestCallToolFn_EmptyToolName(t *testing.T) {
 }
 
 func TestCallToolFn_WhitespaceOnlyToolName(t *testing.T) {
-	p := NewPlugin(nil, WithEnableCallTool(true))
+	p := NewPlugin(nil, WithInvocationMode(DispatchToolCalls))
 	ctx, _ := ctxWithInvocation()
 	res, err := p.callToolFn(ctx, callToolInput{ToolName: "   "})
 	require.NoError(t, err)
@@ -693,7 +678,7 @@ func TestCallToolFn_WhitespaceOnlyToolName(t *testing.T) {
 }
 
 func TestCallToolFn_NoInvocation(t *testing.T) {
-	p := NewPlugin(nil, WithEnableCallTool(true), WithDeferredTools([]tool.Tool{newEchoTool("echo")}))
+	p := NewPlugin(nil, WithInvocationMode(DispatchToolCalls), WithDeferredTools([]tool.Tool{newEchoTool("echo")}))
 	ctx := context.Background()
 	// Call load to mark as loaded.
 	p.saveDiscoveredTools(ctx, &agent.Invocation{Session: &session.Session{
@@ -708,7 +693,7 @@ func TestCallToolFn_NoInvocation(t *testing.T) {
 }
 
 func TestCallToolFn_PresetToolIsCallable(t *testing.T) {
-	p := NewPlugin([]tool.Tool{newEchoTool("echo")}, WithEnableCallTool(true))
+	p := NewPlugin([]tool.Tool{newEchoTool("echo")}, WithInvocationMode(DispatchToolCalls))
 	ctx, _ := ctxWithInvocation()
 	res, err := p.callToolFn(ctx, callToolInput{ToolName: "echo", Params: map[string]any{"value": "hi"}})
 	require.NoError(t, err)
@@ -716,7 +701,7 @@ func TestCallToolFn_PresetToolIsCallable(t *testing.T) {
 }
 
 func TestCallToolFn_CaseInsensitive(t *testing.T) {
-	p := NewPlugin([]tool.Tool{newEchoTool("echo")}, WithEnableCallTool(true))
+	p := NewPlugin([]tool.Tool{newEchoTool("echo")}, WithInvocationMode(DispatchToolCalls))
 	ctx, _ := ctxWithInvocation()
 	res, err := p.callToolFn(ctx, callToolInput{ToolName: "ECHO", Params: map[string]any{"value": "hi"}})
 	require.NoError(t, err)
