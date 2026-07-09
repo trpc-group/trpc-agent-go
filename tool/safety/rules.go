@@ -79,10 +79,17 @@ var systemDirs = []string{
 	"/sys", "/root", "/opt", "/dev",
 }
 
+// interpreters are shell wrappers and re-executing builtins that run an
+// arbitrary sub-command hidden in their arguments, so an argv[0]-based rule
+// never sees it (e.g. "command curl http://evil", "builtin curl ...",
+// "eval curl ..."). This mirrors the re-executer half of internal/shellsafe's
+// implicit-deny set; the stateful builtins it also denies (cd/printf/export/...)
+// are intentionally omitted here because they do not hide a nested command in
+// argv (a chained "cd x && curl y" is split into separate scanned segments).
 var interpreters = map[string]struct{}{
 	"sh": {}, "bash": {}, "zsh": {}, "ash": {}, "dash": {}, "ksh": {},
 	"mksh": {}, "fish": {}, "pwsh": {}, "powershell": {}, "cmd": {},
-	"eval": {}, "exec": {}, "source": {},
+	"eval": {}, "exec": {}, "source": {}, "command": {}, "builtin": {}, ".": {},
 }
 
 var dashCInterpreters = map[string]struct{}{
