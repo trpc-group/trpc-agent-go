@@ -2837,7 +2837,7 @@ func TestToolCall_ScreenshotDirProvidesDefaultFilename(t *testing.T) {
 	tool := newTestTool(drv)
 	tool.screenshotDir = dir
 
-	_, err := tool.Call(
+	raw, err := tool.Call(
 		context.Background(),
 		mustJSON(t, map[string]any{
 			"action": actionScreenshot,
@@ -2852,6 +2852,9 @@ func TestToolCall_ScreenshotDirProvidesDefaultFilename(t *testing.T) {
 	require.Equal(t, dir, filepath.Dir(filename))
 	require.Contains(t, filepath.Base(filename), "screenshot-")
 	require.Equal(t, ".jpg", filepath.Ext(filename))
+
+	got := raw.(Result)
+	require.Equal(t, filename, got.ScreenshotPath)
 }
 
 func TestResolveScreenshotFilenameCompatibilityBranches(t *testing.T) {

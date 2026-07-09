@@ -10,6 +10,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -32,6 +33,7 @@ const (
 	mcpImageDetailAuto = "auto"
 
 	mcpImagesUserContent = "MCP tool returned image(s)."
+	mcpImageDataOmitted  = "[omitted: image data attached separately]"
 )
 
 type mcpContentItem struct {
@@ -63,24 +65,139 @@ func mcpImageResultMessages(
 	if candidates == 0 {
 		return nil, nil
 	}
+	defaultMsg = sanitizedMCPImageToolMessage(
+		defaultMsg,
+		in.Result,
+		items,
+	)
 	allowed := tool.ReserveToolResultAttachments(ctx, candidates)
 	if allowed <= 0 {
-		return nil, nil
+		return []model.Message{defaultMsg}, nil
 	}
 	images := extractMCPImagesUpTo(ctx, items, allowed)
 	if len(images) == 0 {
-		return nil, nil
+		return []model.Message{defaultMsg}, nil
 	}
 
 	userMsg := model.Message{
 		Role:    model.RoleUser,
-		Content: mcpImagesUserContent,
+		Content: mcpImageUserContent(in.Result),
 	}
 	for _, img := range images {
 		userMsg.AddImageData(img.Data, mcpImageDetailAuto, img.Format)
 	}
 
 	return []model.Message{defaultMsg, userMsg}, nil
+}
+
+func mcpImageUserContent(result any) string {
+	path := mcpImageSavedPath(result)
+	if path == "" {
+		return mcpImagesUserContent
+	}
+	return mcpImagesUserContent + " Saved file: " + path +
+		". Use image_inspect with the saved file path when detailed " +
+		"visual reading or OCR is needed."
+}
+
+func mcpImageSavedPath(result any) string {
+	body, err := json.Marshal(result)
+	if err != nil {
+		return ""
+	}
+	var envelope struct {
+		ScreenshotPath string `json:"screenshotPath"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(envelope.ScreenshotPath)
+}
+
+func sanitizedMCPImageToolMessage(
+	msg model.Message,
+	result any,
+	items []mcpContentItem,
+) model.Message {
+	sanitizedItems := sanitizeMCPContentItems(items)
+	if len(sanitizedItems) == 0 {
+		return msg
+	}
+
+	content, ok := sanitizedMCPResultJSON(result, sanitizedItems)
+	if !ok {
+		content = mustMarshalMCPContentItems(sanitizedItems)
+	}
+	if content != "" {
+		msg.Content = content
+	}
+	return msg
+}
+
+func sanitizeMCPContentItems(items []mcpContentItem) []mcpContentItem {
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]mcpContentItem, 0, len(items))
+	for _, item := range items {
+		if strings.ToLower(strings.TrimSpace(item.Type)) !=
+			mcpContentTypeImage {
+			out = append(out, item)
+			continue
+		}
+		if _, ok := mcpImageFormatFromMime(item.MimeType); !ok {
+			out = append(out, item)
+			continue
+		}
+		item.Data = mcpImageDataOmitted
+		out = append(out, item)
+	}
+	return out
+}
+
+func sanitizedMCPResultJSON(
+	result any,
+	items []mcpContentItem,
+) (string, bool) {
+	body, err := json.Marshal(result)
+	if err != nil {
+		return "", false
+	}
+
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return "", false
+	}
+	if _, ok := envelope["content"]; !ok {
+		return "", false
+	}
+
+	itemBytes, err := marshalModelVisibleJSON(items)
+	if err != nil {
+		return "", false
+	}
+	envelope["content"] = itemBytes
+
+	sanitized, err := marshalModelVisibleJSON(envelope)
+	if err != nil {
+		return "", false
+	}
+	return string(sanitized), true
+}
+
+func mustMarshalMCPContentItems(items []mcpContentItem) string {
+	body, _ := marshalModelVisibleJSON(items)
+	return string(body)
+}
+
+func marshalModelVisibleJSON(v any) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(buf.Bytes(), []byte("\n")), nil
 }
 
 func extractMCPImages(ctx context.Context, result any) []mcpImage {
