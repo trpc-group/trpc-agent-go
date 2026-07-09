@@ -89,20 +89,32 @@
 // Embedding token usage per model turn is accumulated on the context and can be
 // read back with ToolSearchUsageFromContext.
 //
-// # Two-tool mode (call_tool)
+// # Invocation modes (native vs. indirect tool calls)
 //
-// By default each deferred tool, once loaded via tool_search, is advertised to
-// the model as its own function tool and called directly. Passing
-// WithEnableCallTool(true) collapses the toolset into exactly two tools:
+// Once tool_search loads a deferred tool, how the model actually invokes it is
+// controlled by WithInvocationMode:
 //
-//   - tool_search — discover and load deferred tools. In this mode each result
-//     also carries the tool's input_schema, since the tool is never advertised
-//     as an individual function.
-//   - call_tool — invoke a loaded tool by its exact name with a params object
-//     matching that schema.
+//   - toolsearch.NativeToolCalls (default): each loaded deferred tool is
+//     advertised to the model as its own function tool and the model calls it
+//     directly by name using the backend's native function-calling protocol.
 //
-// This keeps the advertised tool count constant (two) no matter how many
-// deferred tools are loaded, which some backends handle better than a growing
-// tool list. call_tool enforces the same permission and loaded-set guards as a
-// direct deferred-tool call.
+//   - toolsearch.IndirectToolCalls: the deferred toolset is collapsed into
+//     exactly two function tools:
+//
+//   - tool_search — discover and load deferred tools. In this mode each
+//     result also carries the tool's input_schema, since the tool is never
+//     advertised as an individual function.
+//
+//   - call_tool — invoke a loaded tool by its exact name with a params
+//     object matching that schema.
+//
+// IndirectToolCalls keeps the advertised tool count constant (two) no matter
+// how many deferred tools are loaded, which some backends handle better than a
+// growing tool list. call_tool enforces the same permission and loaded-set
+// guards as a direct deferred-tool call.
+//
+//	plugin := toolsearch.NewPlugin(presetTools,
+//	    toolsearch.WithToolboxes(boxes),
+//	    toolsearch.WithInvocationMode(toolsearch.IndirectToolCalls),
+//	)
 package toolsearch

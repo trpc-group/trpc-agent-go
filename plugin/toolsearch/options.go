@@ -23,9 +23,10 @@ const (
 	toolSearchToolName = "tool_search"
 
 	// callToolToolName is the name of the function tool that invokes a deferred
-	// tool loaded through tool_search. It is only injected when EnableCallTool is
-	// set, in which case the model interacts with the toolset through exactly two
-	// tools: tool_search (discover + load) and call_tool (invoke).
+	// tool loaded through tool_search. It is only injected when the invocation
+	// mode is IndirectToolCalls, in which case the model interacts with the
+	// toolset through exactly two tools: tool_search (discover + load) and
+	// call_tool (invoke).
 	callToolToolName = "call_tool"
 
 	// discoveredToolsStateKey is the session-state key holding the names of
@@ -69,6 +70,33 @@ type Toolbox struct {
 // the active invocation, so implementations can key on the authenticated user.
 type ToolPermissionFilter func(ctx context.Context, toolNames []string) map[string]bool
 
+// InvocationMode controls how a deferred tool, once loaded via tool_search,
+// is invoked by the model.
+//
+// The two modes are mutually exclusive; a plugin runs in exactly one mode for
+// the lifetime of the conversation.
+type InvocationMode int
+
+const (
+	// NativeToolCalls (default) advertises every loaded deferred tool to the
+	// model as its own function tool. The model invokes each tool directly by
+	// its name using the backend's native function-calling protocol. The
+	// advertised tool count grows as the model loads more deferred tools.
+	NativeToolCalls InvocationMode = 0
+
+	// IndirectToolCalls collapses the deferred toolset behind exactly two
+	// function tools: tool_search (discover + load, returning each match's
+	// input schema) and call_tool (invoke a loaded tool by name). Loaded
+	// deferred tools are NOT advertised as individual function tools; the
+	// model must invoke them through call_tool, passing the tool_name and a
+	// params object matching the schema tool_search returned.
+	//
+	// This keeps the advertised tool count constant (two) regardless of how
+	// many deferred tools the model has loaded, which some backends handle
+	// better than a growing tool list.
+	IndirectToolCalls InvocationMode = 1
+)
+
 // Option configures the plugin.
 type Option func(*options)
 
@@ -81,12 +109,9 @@ type options struct {
 	mcpToolboxes         []MCPToolbox
 	permissionFilter     ToolPermissionFilter
 	catalogInDescription bool
-	// enableCallTool, when true, collapses the deferred toolset into exactly two
-	// tools exposed to the model: tool_search (discover + load, returning each
-	// match's input schema) and call_tool (invoke a loaded tool by name with
-	// params). Loaded deferred tools are no longer injected as individual
-	// function tools.
-	enableCallTool bool
+	// invocationMode selects how loaded deferred tools are invoked. See the
+	// InvocationMode docs for details. Defaults to NativeToolCalls.
+	invocationMode InvocationMode
 	// toolKnowledge, when set via WithToolKnowledge, switches the tool_search
 	// "queries" path from keyword matching to embedding-based semantic search.
 	toolKnowledge *ToolKnowledge
@@ -181,24 +206,24 @@ func WithCatalogInDescription(enabled bool) Option {
 	}
 }
 
-// WithEnableCallTool collapses the deferred toolset behind exactly two tools:
+// WithInvocationMode selects how loaded deferred tools are invoked.
 //
-//   - tool_search — discover and load deferred tools. In this mode each loaded
-//     tool's input schema is returned inline in the search result, since the
-//     tool itself is never advertised as an individual function to the model.
-//   - call_tool — invoke a previously loaded tool by its exact name, passing the
-//     parameters that match the schema tool_search returned.
+//   - toolsearch.NativeToolCalls (default): each loaded deferred tool is
+//     advertised to the model as its own function tool and the model calls it
+//     directly by name using the backend's native function-calling protocol.
+//   - toolsearch.IndirectToolCalls: the deferred toolset is collapsed behind
+//     exactly two function tools — tool_search (discover + load; each search
+//     result carries the matched tool's input_schema) and call_tool (invoke a
+//     previously loaded tool by its exact name, passing a params object that
+//     matches that schema). Loaded deferred tools are NOT injected as
+//     individual function tools, so the advertised tool count stays constant
+//     (two) no matter how many deferred tools the model has loaded.
 //
-// When disabled (default), loaded deferred tools are injected as individual
-// function tools and the model calls them directly by name.
-//
-// This mode keeps the model's advertised tool count constant (two) regardless
-// of how many deferred tools are loaded, which some backends handle better than
-// a growing tool list. tool_search's description is adjusted to steer the model
-// toward call_tool instead of a direct call.
-func WithEnableCallTool(enabled bool) Option {
+// The tool_search description is adjusted per mode: in IndirectToolCalls it
+// steers the model toward call_tool instead of a direct call.
+func WithInvocationMode(mode InvocationMode) Option {
 	return func(o *options) {
-		o.enableCallTool = enabled
+		o.invocationMode = mode
 	}
 }
 

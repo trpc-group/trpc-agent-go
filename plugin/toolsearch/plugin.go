@@ -30,10 +30,10 @@ const toolSearchDescription = `Load deferred tools from <toolbox-catalog> so the
 - Known name → use "tool_names" (exact, cross-namespace).
 - Unknown name → use "queries" plus "namespace" of the matching catalog domain; leave "namespace" empty only when no domain fits.`
 
-// toolSearchCallToolDescription replaces toolSearchDescription when
-// EnableCallTool is set: loaded tools are invoked through call_tool rather than
-// as individual function tools, and each search result carries the tool's input
-// schema for building the call_tool "params".
+// toolSearchCallToolDescription replaces toolSearchDescription when the
+// invocation mode is IndirectToolCalls: loaded tools are invoked through
+// call_tool rather than as individual function tools, and each search result
+// carries the tool's input schema for building the call_tool "params".
 const toolSearchCallToolDescription = `Load deferred tools from <toolbox-catalog>, then invoke them with call_tool — never search for the same tool again. Each result includes the tool's input_schema; use it to build call_tool "params".
 
 - Known name → use "tool_names" (exact, cross-namespace).
@@ -66,11 +66,13 @@ type Plugin struct {
 	// the tool_search tool's description each turn instead of injecting it
 	// into the system prompt via {deferred_tools_section}.
 	catalogInDescription bool
-	// enableCallTool, when true, collapses the deferred toolset into two tools:
+	// invocationMode selects how loaded deferred tools are invoked. Under
+	// IndirectToolCalls the deferred toolset is collapsed behind two tools:
 	// tool_search (discover + load, returning each match's input schema) and
 	// call_tool (invoke a loaded tool by name). Loaded deferred tools are then
-	// NOT injected as individual function tools.
-	enableCallTool bool
+	// NOT injected as individual function tools. Under NativeToolCalls (the
+	// default) each loaded deferred tool is advertised individually.
+	invocationMode InvocationMode
 
 	// knowledge, when non-nil, backs the tool_search "queries" path with
 	// embedding-based semantic search over the deferred tools instead of the
@@ -109,7 +111,7 @@ func NewPlugin(presetTools []tool.Tool, opts ...Option) *Plugin {
 		maxResults:           o.maxResults,
 		permissionFilter:     o.permissionFilter,
 		catalogInDescription: o.catalogInDescription,
-		enableCallTool:       o.enableCallTool,
+		invocationMode:       o.invocationMode,
 		knowledge:            o.toolKnowledge,
 		failOpen:             o.failOpen,
 	}
@@ -139,7 +141,7 @@ func NewPlugin(presetTools []tool.Tool, opts ...Option) *Plugin {
 	}
 
 	p.searchTool = p.createSearchTool()
-	if p.enableCallTool {
+	if p.invocationMode == IndirectToolCalls {
 		p.callTool = p.createCallTool()
 	}
 	log.Infof("[%s] registered %d deferred tools across %d toolboxes",
@@ -230,19 +232,19 @@ func (p *Plugin) createSearchTool() tool.Tool {
 	)
 }
 
-// baseSearchDescription returns the tool_search description matching the current
-// mode: the call_tool-oriented variant when EnableCallTool is set, otherwise the
-// direct-call variant.
+// baseSearchDescription returns the tool_search description matching the
+// current invocation mode: the call_tool-oriented variant when the mode is
+// IndirectToolCalls, otherwise the direct-call variant.
 func (p *Plugin) baseSearchDescription() string {
-	if p.enableCallTool {
+	if p.invocationMode == IndirectToolCalls {
 		return toolSearchCallToolDescription
 	}
 	return toolSearchDescription
 }
 
 // createCallTool creates the call_tool function tool used to invoke deferred
-// tools loaded through tool_search. It is only injected when EnableCallTool is
-// set.
+// tools loaded through tool_search. It is only injected when the invocation
+// mode is IndirectToolCalls.
 func (p *Plugin) createCallTool() tool.Tool {
 	return function.NewFunctionTool(
 		p.callToolFn,
@@ -466,7 +468,7 @@ func (p *Plugin) beforeModel(
 	allDeferredAllowed := p.allDeferredPermissions(ctx)
 	discoveredTools = p.filterAllowed(discoveredTools, allDeferredAllowed)
 
-	if !p.enableCallTool {
+	if p.invocationMode != IndirectToolCalls {
 		p.mu.RLock()
 		for _, toolName := range discoveredTools {
 			if t, exists := p.toolBox[toolName]; exists {
@@ -496,9 +498,9 @@ func (p *Plugin) beforeModel(
 		}
 	}
 
-	// In call_tool mode, also inject the call_tool function so the model can
-	// invoke any loaded deferred tool through it.
-	if p.enableCallTool && p.callTool != nil {
+	// In IndirectToolCalls mode, also inject the call_tool function so the
+	// model can invoke any loaded deferred tool through it.
+	if p.invocationMode == IndirectToolCalls && p.callTool != nil {
 		callName := p.callTool.Declaration().Name
 		if _, exists := args.Request.Tools[callName]; !exists {
 			args.Request.Tools[callName] = p.callTool

@@ -953,3 +953,188 @@ func TestPermissionFilter_PreRanking_SelectByName(t *testing.T) {
 	})
 	assert.Equal(t, []string{"allowed_tool"}, toolNames(res.Tools))
 }
+
+// --- WithInvocationMode ---
+
+// TestInvocationMode_DefaultIsNativeToolCalls verifies that omitting
+// WithInvocationMode leaves the plugin in NativeToolCalls mode: no call_tool is
+// created, each loaded deferred tool is advertised individually, and
+// tool_search results do NOT carry input_schema.
+func TestInvocationMode_DefaultIsNativeToolCalls(t *testing.T) {
+	p := NewPlugin(nil, WithToolboxes([]Toolbox{
+		{Name: "billing", Tools: []tool.Tool{newTestTool("create_invoice", "x")}},
+	}))
+	// No mode set => default NativeToolCalls; call_tool must not be created.
+	assert.Nil(t, p.callTool, "call_tool must not be created in NativeToolCalls mode")
+	assert.Equal(t, NativeToolCalls, p.invocationMode)
+
+	ctx, _ := ctxWithInvocation()
+	// Load the deferred tool via tool_search.
+	res := callSearch(t, ctx, p, toolSearchInput{ToolNames: []string{"create_invoice"}})
+	require.Len(t, res.Tools, 1)
+	// In NativeToolCalls the model calls loaded tools directly, so the search
+	// payload need not include the schema.
+	assert.Nil(t, res.Tools[0].InputSchema,
+		"NativeToolCalls must not surface input_schema in tool_search results")
+
+	// beforeModel should inject the loaded tool as an individual function tool,
+	// and must NOT inject a call_tool function tool.
+	req := &model.Request{}
+	_, err := p.beforeModel(ctx, &model.BeforeModelArgs{Request: req})
+	require.NoError(t, err)
+	_, ok := req.Tools["create_invoice"]
+	assert.True(t, ok, "loaded deferred tool schema must be injected in NativeToolCalls")
+	_, hasCallTool := req.Tools[callToolToolName]
+	assert.False(t, hasCallTool, "call_tool must not be injected in NativeToolCalls")
+
+	// tool_search description should be the direct-call variant.
+	assert.Equal(t, toolSearchDescription, p.baseSearchDescription())
+}
+
+// TestInvocationMode_ExplicitNativeToolCalls verifies that explicitly setting
+// WithInvocationMode(NativeToolCalls) behaves identically to the default.
+func TestInvocationMode_ExplicitNativeToolCalls(t *testing.T) {
+	p := NewPlugin(nil,
+		WithInvocationMode(NativeToolCalls),
+		WithToolboxes([]Toolbox{
+			{Name: "billing", Tools: []tool.Tool{newTestTool("create_invoice", "x")}},
+		}),
+	)
+	assert.Equal(t, NativeToolCalls, p.invocationMode)
+	assert.Nil(t, p.callTool, "call_tool must not be created in NativeToolCalls mode")
+	assert.Equal(t, toolSearchDescription, p.baseSearchDescription())
+}
+
+// TestInvocationMode_IndirectToolCalls_InjectsCallTool verifies that under
+// IndirectToolCalls the plugin exposes exactly tool_search + call_tool, does
+// NOT advertise loaded deferred tools individually, and surfaces each match's
+// input_schema in tool_search results so the model can build call_tool params.
+func TestInvocationMode_IndirectToolCalls_InjectsCallTool(t *testing.T) {
+	p := NewPlugin(nil,
+		WithInvocationMode(IndirectToolCalls),
+		WithToolboxes([]Toolbox{
+			{Name: "billing", Tools: []tool.Tool{newTestTool("create_invoice", "x")}},
+		}),
+	)
+	assert.Equal(t, IndirectToolCalls, p.invocationMode)
+	require.NotNil(t, p.callTool, "call_tool must be created in IndirectToolCalls mode")
+	assert.Equal(t, callToolToolName, p.callTool.Declaration().Name)
+	// tool_search description should be the call_tool-oriented variant.
+	assert.Equal(t, toolSearchCallToolDescription, p.baseSearchDescription())
+
+	ctx, _ := ctxWithInvocation()
+	// Load the deferred tool: the search result must carry input_schema so the
+	// model can construct call_tool "params" without the tool being advertised.
+	res := callSearch(t, ctx, p, toolSearchInput{ToolNames: []string{"create_invoice"}})
+	require.Len(t, res.Tools, 1)
+	assert.NotNil(t, res.Tools[0].InputSchema,
+		"IndirectToolCalls must surface input_schema in tool_search results")
+	assert.Contains(t, res.Status, "call_tool",
+		"status line should steer the model toward call_tool")
+
+	// beforeModel must inject tool_search + call_tool, but NOT the loaded
+	// deferred tool as an individual function.
+	req := &model.Request{}
+	_, err := p.beforeModel(ctx, &model.BeforeModelArgs{Request: req})
+	require.NoError(t, err)
+	_, hasSearch := req.Tools[toolSearchToolName]
+	assert.True(t, hasSearch, "tool_search must be injected")
+	_, hasCallTool := req.Tools[callToolToolName]
+	assert.True(t, hasCallTool, "call_tool must be injected in IndirectToolCalls")
+	_, hasDeferred := req.Tools["create_invoice"]
+	assert.False(t, hasDeferred,
+		"loaded deferred tool must NOT be advertised as an individual function in IndirectToolCalls")
+}
+
+// TestInvocationMode_IndirectToolCalls_CallToolInvokesLoadedTool verifies that
+// under IndirectToolCalls, call_tool can invoke a deferred tool that has been
+// loaded via tool_search and rejects unloaded / unknown targets.
+func TestInvocationMode_IndirectToolCalls_CallToolInvokesLoadedTool(t *testing.T) {
+	// Build a deferred tool whose Call is observable via the returned value.
+	echo := function.NewFunctionTool(
+		func(ctx context.Context, in struct {
+			Msg string `json:"msg"`
+		}) (string, error) {
+			return "echo:" + in.Msg, nil
+		},
+		function.WithName("echo_tool"),
+		function.WithDescription("echoes a message"),
+	)
+	p := NewPlugin(nil,
+		WithInvocationMode(IndirectToolCalls),
+		WithToolboxes([]Toolbox{{Name: "utils", Tools: []tool.Tool{echo}}}),
+	)
+	require.NotNil(t, p.callTool)
+
+	ctx, _ := ctxWithInvocation()
+
+	// (a) Unknown tool_name is rejected with a helpful hint.
+	out, err := p.callToolFn(ctx, callToolInput{ToolName: "unknown", Params: map[string]any{}})
+	require.NoError(t, err)
+	m, ok := out.(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "error", m["status"])
+	assert.Contains(t, m["message"], "Unknown tool")
+
+	// (b) Known but not-yet-loaded deferred tool must be rejected — the model
+	//     must call tool_search first, matching the guard in beforeTool.
+	out, err = p.callToolFn(ctx, callToolInput{ToolName: "echo_tool", Params: map[string]any{"msg": "hi"}})
+	require.NoError(t, err)
+	m, ok = out.(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "error", m["status"])
+	assert.Contains(t, m["message"], "not loaded yet")
+
+	// (c) After tool_search loads it, call_tool forwards the params and returns
+	//     the underlying tool's result.
+	callSearch(t, ctx, p, toolSearchInput{ToolNames: []string{"echo_tool"}})
+	out, err = p.callToolFn(ctx, callToolInput{ToolName: "echo_tool", Params: map[string]any{"msg": "hi"}})
+	require.NoError(t, err)
+	assert.Equal(t, "echo:hi", out)
+
+	// (d) Empty tool_name is a validation error, not a panic.
+	out, err = p.callToolFn(ctx, callToolInput{ToolName: "   "})
+	require.NoError(t, err)
+	m, ok = out.(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "error", m["status"])
+	assert.Contains(t, m["message"], "tool_name is required")
+}
+
+// TestInvocationMode_IndirectToolCalls_CallToolRespectsPermissionFilter
+// verifies that call_tool applies the same permission guard as a direct
+// deferred-tool invocation: a denied tool cannot be reached through call_tool
+// even after it was loaded.
+func TestInvocationMode_IndirectToolCalls_CallToolRespectsPermissionFilter(t *testing.T) {
+	filter := func(ctx context.Context, names []string) map[string]bool {
+		out := make(map[string]bool, len(names))
+		for _, n := range names {
+			out[n] = n == "allowed_tool"
+		}
+		return out
+	}
+	p := NewPlugin(nil,
+		WithInvocationMode(IndirectToolCalls),
+		WithToolPermissionFilter(filter),
+		WithToolboxes([]Toolbox{{
+			Name: "ns",
+			Tools: []tool.Tool{
+				newTestTool("allowed_tool", "ok"),
+				newTestTool("denied_tool", "no"),
+			},
+		}}),
+	)
+	ctx, _ := ctxWithInvocation()
+
+	// Even attempting to load denied_tool via tool_search filters it out.
+	res := callSearch(t, ctx, p, toolSearchInput{ToolNames: []string{"denied_tool"}})
+	assert.NotContains(t, toolNames(res.Tools), "denied_tool")
+
+	// call_tool must refuse invocation with a permission message.
+	out, err := p.callToolFn(ctx, callToolInput{ToolName: "denied_tool", Params: map[string]any{}})
+	require.NoError(t, err)
+	m, ok := out.(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "error", m["status"])
+	assert.Contains(t, m["message"], "permission")
+}
