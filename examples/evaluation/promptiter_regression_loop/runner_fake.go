@@ -61,6 +61,9 @@ func (fakeEvaluator) Evaluate(ctx context.Context, req regressionloop.Evaluation
 	if err := json.Unmarshal(data, &set); err != nil {
 		return regressionloop.EvaluationSummary{}, fmt.Errorf("decode evalset %s: %w", req.EvalSet.Path, err)
 	}
+	if len(set.EvalCases) == 0 {
+		return regressionloop.EvaluationSummary{}, fmt.Errorf("evalset %s has no eval cases", req.EvalSet.ID)
+	}
 	key := promptKey(req.Prompt)
 	cases := make([]regressionloop.CaseResult, 0, len(set.EvalCases))
 	total := 0.0

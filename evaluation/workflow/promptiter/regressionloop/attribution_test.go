@@ -38,6 +38,25 @@ func TestAttributeCaseCategories(t *testing.T) {
 	}
 }
 
+func TestAttributeCaseIgnoresIncidentalResponseKeywords(t *testing.T) {
+	c := caseResult("case", 0, false)
+	c.FailureReasons = []string{"wrong tool selected"}
+	c.ExpectedResponse = `{"argument":"value"}`
+
+	got := AttributeCase(c)
+	assert.Equal(t, AttributionToolSelectionError, got[0].Category)
+}
+
+func TestAttributeCaseEscapesQuotedEvidence(t *testing.T) {
+	c := caseResult("case", 0, false)
+	c.FailureReasons = []string{"final response mismatch"}
+	c.FinalResponse = `actual "quoted" value`
+
+	got := AttributeCase(c)
+	assert.Equal(t, AttributionFinalResponseMismatch, got[0].Category)
+	assert.Contains(t, got[0].Evidence, `"actual \"quoted\" value"`)
+}
+
 func TestAttributeCaseFallsBackToMetricThreshold(t *testing.T) {
 	c := CaseResult{
 		EvalID: "case",

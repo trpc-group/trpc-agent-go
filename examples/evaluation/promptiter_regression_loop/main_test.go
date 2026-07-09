@@ -42,3 +42,15 @@ func TestRunDeterministicExample(t *testing.T) {
 	assert.Contains(t, string(md), "Validation Delta")
 	assert.Contains(t, string(md), "Candidate 3")
 }
+
+func TestFakeEvaluatorRejectsEmptyEvalSet(t *testing.T) {
+	dir := t.TempDir()
+	evalsetPath := filepath.Join(dir, "empty.evalset.json")
+	require.NoError(t, os.WriteFile(evalsetPath, []byte(`{"evalSetId":"empty","evalCases":[]}`), 0o644))
+
+	_, err := newFakeEvaluator().Evaluate(context.Background(), regressionloop.EvaluationRequest{
+		Prompt:  "baseline",
+		EvalSet: regressionloop.EvalSetRef{ID: "empty", Path: evalsetPath},
+	})
+	require.ErrorContains(t, err, "has no eval cases")
+}

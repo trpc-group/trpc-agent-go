@@ -134,8 +134,8 @@ func (p *Pipeline) Run(ctx context.Context, cfg Config) (*RunResult, error) {
 		}
 		rounds = append(rounds, round)
 		if gate.Accepted && (selected == nil || round.Validation.Score > selected.Validation.Score) {
-			copy := round
-			selected = &copy
+			snapshot := round
+			selected = &snapshot
 		}
 	}
 	finalDelta := DeltaReport{}

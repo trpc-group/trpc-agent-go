@@ -8,7 +8,11 @@
 
 package regressionloop
 
-import "strings"
+import (
+	"fmt"
+	"strconv"
+	"strings"
+)
 
 // AttributeCase returns deterministic failure attributions for a case.
 func AttributeCase(c CaseResult) []Attribution {
@@ -21,8 +25,8 @@ func AttributeCase(c CaseResult) []Attribution {
 	if len(c.Attributions) > 0 {
 		return c.Attributions
 	}
-	text := strings.ToLower(strings.Join(evidenceParts(c), " "))
 	for _, rule := range attributionRules() {
+		text := strings.ToLower(sourceTextForRule(c, rule.source))
 		if containsAny(text, rule.needles...) {
 			return []Attribution{{
 				Category:   rule.category,
@@ -90,8 +94,32 @@ func evidenceParts(c CaseResult) []string {
 	for _, metric := range c.MetricResults {
 		parts = append(parts, metric.Name, metric.Reason)
 	}
-	parts = append(parts, c.FinalResponse, c.ExpectedResponse, c.TraceSummary, c.RubricReason, c.StructuredOutputStatus)
 	return parts
+}
+
+func sourceTextForRule(c CaseResult, source string) string {
+	parts := evidenceParts(c)
+	switch source {
+	case "tool_trajectory":
+		parts = append(parts, toolCallsText(c.ToolTrajectory), toolCallsText(c.ExpectedToolTrajectory))
+	case "trace":
+		parts = append(parts, c.TraceSummary)
+	case "structured_output":
+		parts = append(parts, c.StructuredOutputStatus)
+	case "rubric":
+		parts = append(parts, c.RubricReason)
+	case "final_response":
+		parts = append(parts, c.FinalResponse, c.ExpectedResponse)
+	}
+	return strings.Join(parts, " ")
+}
+
+func toolCallsText(calls []ToolCall) string {
+	parts := make([]string, 0, len(calls)*3)
+	for _, call := range calls {
+		parts = append(parts, call.Name, fmt.Sprint(call.Arguments), fmt.Sprint(call.Result))
+	}
+	return strings.Join(parts, " ")
 }
 
 func bestEvidence(c CaseResult, source string) string {
@@ -147,5 +175,5 @@ func quote(value string) string {
 	if value == "" {
 		return `""`
 	}
-	return `"` + value + `"`
+	return strconv.Quote(value)
 }
