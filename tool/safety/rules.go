@@ -9,6 +9,7 @@
 package safety
 
 import (
+	"path"
 	"regexp"
 	"strconv"
 	"strings"
@@ -119,9 +120,9 @@ func (s *Scanner) segmentFindings(argv []string, line string, in ScanInput) []Fi
 	// 1b. Permission / ownership changes on system or root paths.
 	out = append(out, s.dangerousPerms(base, argv, seg, line)...)
 	// 2. Secret / credential path access.
-	out = append(out, s.deniedPathAccess(argv, seg, line)...)
+	out = append(out, s.deniedPathAccess(argv, seg, line, in.Cwd)...)
 	// 3. Overwrite of system paths by a writer command.
-	out = append(out, s.overwriteSystem(base, argv, seg, line)...)
+	out = append(out, s.overwriteSystem(base, argv, seg, line, in.Cwd)...)
 	// 4. Denied command names. rm is also on the denied list; dangerousDelete
 	// adds a more severe finding for the -rf form, but a plain denied rm must
 	// still be flagged here.
@@ -217,7 +218,7 @@ func (s *Scanner) dangerousPerms(base string, argv []string, seg, line string) [
 	return nil
 }
 
-func (s *Scanner) deniedPathAccess(argv []string, seg, line string) []Finding {
+func (s *Scanner) deniedPathAccess(argv []string, seg, line, cwd string) []Finding {
 	// Check operand candidates (including option values like --output=PATH and
 	// curl-style @file uploads) so a secret path embedded in a flag is not
 	// missed, e.g. `curl --data-binary @/etc/shadow ...`.
@@ -228,23 +229,24 @@ func (s *Scanner) deniedPathAccess(argv []string, seg, line string) []Finding {
 		if strings.ContainsAny(c, "*?") && !strings.ContainsAny(c, `/\`) {
 			continue
 		}
-		if pat, ok := s.policy.matchesDeniedPath(c); ok {
-			return []Finding{s.finding(RuleReadSecret, CategoryDangerousCommand,
-				RiskCritical, DecisionDeny, "path="+normalizePathArg(c)+" ("+pat+")", line,
-				"Access to secret/credential paths is blocked.")}
+		for _, cand := range resolvedCandidates(c, cwd) {
+			if pat, ok := s.policy.matchesDeniedPath(cand); ok {
+				return []Finding{s.finding(RuleReadSecret, CategoryDangerousCommand,
+					RiskCritical, DecisionDeny, "path="+normalizePathArg(cand)+" ("+pat+")", line,
+					"Access to secret/credential paths is blocked.")}
+			}
 		}
 	}
 	_ = seg
 	return nil
 }
 
-func (s *Scanner) overwriteSystem(base string, argv []string, seg, line string) []Finding {
+func (s *Scanner) overwriteSystem(base string, argv []string, seg, line, cwd string) []Finding {
 	// Only inspect the paths the command actually writes to, so a source under
 	// a system dir (e.g. `cp /etc/hosts ./x`) is not falsely denied.
 	for _, a := range writeTargets(base, argv) {
-		n := normalizePathArg(a)
-		for _, d := range systemDirs {
-			if n == d || strings.HasPrefix(n, d+"/") {
+		for _, cand := range resolvedCandidates(a, cwd) {
+			if underSystemDir(cand) {
 				return []Finding{s.finding(RuleOverwriteSystem, CategoryDangerousCommand,
 					RiskHigh, DecisionDeny, seg, line,
 					"Writing into system directories is blocked.")}
@@ -252,6 +254,32 @@ func (s *Scanner) overwriteSystem(base string, argv []string, seg, line string) 
 		}
 	}
 	return nil
+}
+
+// underSystemDir reports whether a normalised path is at or under a system dir.
+func underSystemDir(a string) bool {
+	n := normalizePathArg(a)
+	for _, d := range systemDirs {
+		if n == d || strings.HasPrefix(n, d+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// resolvedCandidates returns the operand itself plus, when it is a relative path
+// and a working directory is set, the path resolved against that cwd. This lets
+// `cat shadow` with workdir=/etc be treated like `cat /etc/shadow`.
+func resolvedCandidates(c, cwd string) []string {
+	out := []string{c}
+	if cwd == "" || isFlag(c) {
+		return out
+	}
+	if strings.HasPrefix(c, "/") || strings.HasPrefix(c, "~") || strings.Contains(c, "://") {
+		return out
+	}
+	out = append(out, path.Clean(normalizePathArg(cwd)+"/"+normalizePathArg(c)))
+	return out
 }
 
 // writeTargets returns the argv entries a writer command actually writes to.

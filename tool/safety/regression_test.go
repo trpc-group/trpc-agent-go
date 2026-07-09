@@ -133,6 +133,42 @@ func TestCodeExecGuardedByDefault(t *testing.T) {
 	}
 }
 
+// TestReviewRegressions locks in the maintainer-review fixes: workdir-relative
+// secret paths, compiling caller-built policies, and the @file-as-host FP.
+func TestReviewRegressions(t *testing.T) {
+	// P1: a relative denied path is resolved against the requested workdir.
+	r := NewScanner(nil).Scan(context.Background(), ScanInput{
+		ToolName: "exec_command", Backend: BackendHostExec, Command: "cat shadow", Cwd: "/etc",
+	})
+	if r.Decision != DecisionDeny || !hasRule(r, RuleReadSecret) {
+		t.Errorf("relative secret path via cwd not denied: %s %+v", r.Decision, r.Findings)
+	}
+	// P1: the same via the permission adapter (workdir -> Cwd).
+	p := NewPermissionPolicy(NewScanner(nil))
+	d, _ := p.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName: "exec_command", Arguments: []byte(`{"workdir":"/etc","command":"cat shadow"}`),
+	})
+	if d.Action != tool.PermissionActionDeny {
+		t.Errorf("workdir-relative secret should deny, got %s", d.Action)
+	}
+	// P1: a caller-built Policy struct is compiled, so its rules are enforced.
+	r2 := NewScanner(&Policy{DeniedCommands: []string{"wget"}}).Scan(context.Background(), ScanInput{
+		ToolName: "t", Backend: BackendWorkspaceExec, Command: "wget http://x",
+	})
+	if r2.Decision != DecisionDeny {
+		t.Errorf("raw-policy denied command not enforced (fail-open): %s %+v", r2.Decision, r2.Findings)
+	}
+	// P2: a curl @file upload with a dotted filename to an allowlisted host is
+	// not mistaken for a second, non-allowlisted host.
+	r3 := NewScanner(nil).Scan(context.Background(), ScanInput{
+		ToolName: "t", Backend: BackendWorkspaceExec,
+		Command: "curl --data-binary @payload.json https://github.com/upload",
+	})
+	if r3.Decision != DecisionAllow {
+		t.Errorf("allowlisted upload with @file should allow, got %s %+v", r3.Decision, r3.Findings)
+	}
+}
+
 // Prefixed exec tool names from a named toolset (hostexec.NewToolSet exposes
 // "hostexec_exec_command") are still recognised and guarded, not allowed
 // unscanned.

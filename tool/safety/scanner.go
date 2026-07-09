@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/internal/envscrub"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 )
 
 // Scanner statically evaluates a ScanInput against a Policy and produces a
@@ -27,10 +28,19 @@ type Scanner struct {
 }
 
 // NewScanner returns a Scanner using the given policy, or DefaultPolicy when
-// policy is nil.
+// policy is nil. A caller-provided policy built directly as a struct literal is
+// compiled here so its lookup maps, defaults and validation are populated; a
+// policy that fails validation falls back to DefaultPolicy (fail closed) rather
+// than scanning with empty rules (fail open).
 func NewScanner(policy *Policy) *Scanner {
-	if policy == nil {
+	switch {
+	case policy == nil:
 		policy = DefaultPolicy()
+	case !policy.compiled:
+		if err := policy.compile(); err != nil {
+			log.Errorf("safety: invalid policy, falling back to default: %v", err)
+			policy = DefaultPolicy()
+		}
 	}
 	return &Scanner{policy: policy, now: time.Now}
 }

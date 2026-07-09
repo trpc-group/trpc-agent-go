@@ -52,7 +52,9 @@ type DependencyPolicy struct {
 type LimitsPolicy struct {
 	// MaxTimeoutSec is the largest accepted requested timeout, in seconds.
 	MaxTimeoutSec int `json:"max_timeout_sec" yaml:"max_timeout_sec"`
-	// MaxOutputBytes is the advisory maximum captured output size.
+	// MaxOutputBytes is an advisory maximum captured-output size for the
+	// executor/runtime to enforce at execution time; the static guard does not
+	// (and cannot) cap output, so this field is informational to the scanner.
 	MaxOutputBytes int64 `json:"max_output_bytes" yaml:"max_output_bytes"`
 }
 
@@ -99,6 +101,7 @@ type Policy struct {
 	RiskOverrides map[string]RiskLevel `json:"risk_overrides" yaml:"risk_overrides"`
 
 	// Compiled lookup structures (populated by compile, not serialised).
+	compiled        bool
 	deniedCmdSet    map[string]struct{}
 	allowedCmdSet   map[string]struct{}
 	networkCmdSet   map[string]struct{}
@@ -339,6 +342,7 @@ func (p *Policy) compile() error {
 		}
 		p.secrets = append(p.secrets, compiledSecret{name: s.Name, re: re})
 	}
+	p.compiled = true
 	return nil
 }
 

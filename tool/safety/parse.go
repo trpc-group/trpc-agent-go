@@ -171,19 +171,32 @@ func extractHosts(argv []string) []string {
 		return nil
 	}
 	// Multi-target tools (curl/wget/ssh/scp/...): every referenced host, so a
-	// benign host cannot mask a second non-allowlisted exfil target.
+	// benign host cannot mask a second non-allowlisted exfil target. Host
+	// candidates are the raw operands and option values (--url=host, user@host)
+	// but NOT curl @file upload operands (@payload.json), which are local files
+	// — those are only path candidates, handled by deniedPathAccess.
 	var hosts []string
 	seen := make(map[string]struct{})
-	for _, c := range operandCandidates(argv) {
-		h := hostFromToken(c)
+	add := func(h string) {
 		if h == "" {
-			continue
+			return
 		}
 		if _, ok := seen[h]; ok {
-			continue
+			return
 		}
 		seen[h] = struct{}{}
 		hosts = append(hosts, h)
+	}
+	for _, a := range argv[1:] {
+		if a == "" || strings.HasPrefix(a, "@") {
+			continue // curl @file upload operand, not a host
+		}
+		add(hostFromToken(a))
+		if i := strings.IndexByte(a, '='); i >= 0 && i+1 < len(a) {
+			if v := a[i+1:]; !strings.HasPrefix(v, "@") {
+				add(hostFromToken(v))
+			}
+		}
 	}
 	return hosts
 }
