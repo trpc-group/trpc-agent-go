@@ -45,6 +45,7 @@ next-env.d.ts
 .codebuddy
 examples/**/*.evalset_result.json
 !examples/evaluation/**/*.evalset_result.json
+examples/tool_safety_guard/tool_safety_audit.jsonl
 examples/results/
 __pycache__
 .venv

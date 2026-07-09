@@ -1,4 +1,12 @@
-# Tool Execution Safety Guard — example policy for the demo.
+# Tool Execution Safety Guard — trimmed policy for THIS demo only.
+#
+# This is intentionally a small subset, kept short so the example reads easily.
+# It is NOT the reference: the canonical, fully annotated policy (every field,
+# with rationale) is tool/safety/testdata/tool_safety_policy.yaml, which the
+# package tests keep honest. When in doubt, copy from there — do not treat this
+# file as the source of truth. main_test.go pins the demo decisions so an
+# over-aggressive trim here fails the build.
+#
 # Editing this file changes allow/deny lists, forbidden paths, the network
 # whitelist and limits without any code change.
 version: 1

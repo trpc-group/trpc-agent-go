@@ -1,9 +1,0 @@
-{"tool_name":"workspace_exec","decision":"allow","risk_level":"none","backend":"workspace_exec","rule_ids":[],"blocked":false,"redacted":false,"duration_us":0,"timestamp":"2026-06-30T22:33:21Z"}
-{"tool_name":"workspace_exec","decision":"deny","risk_level":"critical","backend":"workspace_exec","rule_ids":["R-CMD-001","R-DEL-001"],"blocked":true,"redacted":false,"duration_us":0,"timestamp":"2026-06-30T22:33:21Z"}
-{"tool_name":"workspace_exec","decision":"deny","risk_level":"critical","backend":"workspace_exec","rule_ids":["R-CRED-001"],"blocked":true,"redacted":false,"duration_us":0,"timestamp":"2026-06-30T22:33:21Z"}
-{"tool_name":"workspace_exec","decision":"deny","risk_level":"high","backend":"workspace_exec","rule_ids":["R-NET-001"],"blocked":true,"redacted":false,"duration_us":0,"timestamp":"2026-06-30T22:33:21Z"}
-{"tool_name":"workspace_exec","decision":"allow","risk_level":"none","backend":"workspace_exec","rule_ids":[],"blocked":false,"redacted":false,"duration_us":0,"timestamp":"2026-06-30T22:33:21Z"}
-{"tool_name":"workspace_exec","decision":"deny","risk_level":"high","backend":"workspace_exec","rule_ids":["R-SHELL-001"],"blocked":true,"redacted":false,"duration_us":0,"timestamp":"2026-06-30T22:33:21Z"}
-{"tool_name":"workspace_exec","decision":"needs_human_review","risk_level":"medium","backend":"workspace_exec","rule_ids":["R-DEP-001"],"blocked":true,"redacted":false,"duration_us":0,"timestamp":"2026-06-30T22:33:21Z"}
-{"tool_name":"exec_command","decision":"deny","risk_level":"high","backend":"host","rule_ids":["R-HOST-001"],"blocked":true,"redacted":false,"duration_us":0,"timestamp":"2026-06-30T22:33:21Z"}
-{"tool_name":"workspace_exec","decision":"needs_human_review","risk_level":"medium","backend":"workspace_exec","rule_ids":["R-SECRET-001"],"blocked":true,"redacted":true,"duration_us":0,"timestamp":"2026-06-30T22:33:21Z"}

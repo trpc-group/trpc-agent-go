@@ -85,8 +85,9 @@ func main() {
 }
 
 func run() error {
-	// Start each demo run with a fresh audit log so the committed sample stays a
-	// single, reproducible run rather than accumulating appended duplicates.
+	// Start each demo run with a fresh audit log so a re-run reflects a single
+	// run rather than accumulating appended duplicates. The file is generated
+	// output (git-ignored), not a committed artifact.
 	_ = os.Remove(*auditPath)
 
 	guard, err := safety.NewGuard(

@@ -964,9 +964,9 @@ func TestDefaultPolicyProtectiveBaseline(t *testing.T) {
 		t.Fatalf("compile: %v", err)
 	}
 	deny := map[string]string{
-		"sudo rm -rf /tmp/x":     ruleDangerousID,
+		"sudo rm -rf /tmp/x":          ruleDangerousID,
 		"dd if=/dev/zero of=/dev/sda": ruleDangerousID,
-		"cat ~/.ssh/id_rsa":      ruleCredID,
+		"cat ~/.ssh/id_rsa":           ruleCredID,
 	}
 	for cmd, rule := range deny {
 		findings, decision := scanCmd(t, &p, BackendWorkspace, cmd)

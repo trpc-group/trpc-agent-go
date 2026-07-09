@@ -61,9 +61,12 @@ policy `default_action` applies. `rule_overrides` can relax or tighten any rule.
 
 The policy is YAML or JSON (`LoadPolicy` picks by extension). Editing it changes
 the allow/deny lists, forbidden paths, network whitelist, limits and the
-tool→backend mapping **without recompiling**. See
-[`testdata/tool_safety_policy.yaml`](testdata/tool_safety_policy.yaml) for the
-full annotated example. Key fields:
+tool→backend mapping **without recompiling**.
+[`testdata/tool_safety_policy.yaml`](testdata/tool_safety_policy.yaml) is the
+**canonical, fully annotated reference** (every field, with rationale), kept
+honest by the package tests — start from it. The trimmed policy under
+[`examples/tool_safety_guard`](../../examples/tool_safety_guard) is a demo
+subset, not the reference. Key fields:
 
 - `unparsable_action` (default `deny`) — verdict when shellsafe cannot parse a
   command. **Fail closed.**
