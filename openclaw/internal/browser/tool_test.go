@@ -2449,6 +2449,34 @@ func TestNormalizeActRequestBackfillsNestedDragRefs(t *testing.T) {
 	require.Equal(t, "destination-ref", got.EndRef)
 }
 
+func TestToolCall_ActBackfillsTopLevelKindIntoNestedRequest(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{
+		callResult: map[string]any{
+			mcpToolPressKey: textPayload("pressed"),
+		},
+	}
+
+	raw, err := newTestTool(drv).Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action": actionAct,
+			"kind":   actPress,
+			"request": map[string]any{
+				"key": "Home",
+			},
+		}),
+	)
+	require.NoError(t, err)
+
+	got := raw.(Result)
+	require.Equal(t, actionAct, got.Action)
+	require.Len(t, drv.calls, 1)
+	require.Equal(t, mcpToolPressKey, drv.calls[0].Tool)
+	require.Equal(t, "Home", drv.calls[0].Args["key"])
+}
+
 func TestToolCall_ActPassesTimeoutToBrowserServer(t *testing.T) {
 	t.Parallel()
 
