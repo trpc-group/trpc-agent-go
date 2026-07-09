@@ -310,6 +310,60 @@ func TestChatCommandSafetyPolicy_AllowsNonSearchHTTPCommands(
 	}
 }
 
+func TestChatCommandSafetyPolicy_BlocksAdHocNetworkProxies(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	policy := NewChatCommandSafetyPolicy()
+	for _, command := range []string{
+		`curl --proxy "http://203.0.113.10:8080" https://example.com`,
+		`curl -x socks5h://127.0.0.1:9050 https://example.com`,
+		`wget -e use_proxy=yes -e http_proxy=http://127.0.0.1:8080 ` +
+			`https://example.com`,
+		`HTTP_PROXY=http://203.0.113.10:8080 curl https://example.com`,
+		`bash -lc 'ALL_PROXY=socks5://127.0.0.1:9050 curl https://x'`,
+		`echo ok; HTTPS_PROXY=http://127.0.0.1:8080 curl https://x`,
+		`proxychains4 curl https://example.com`,
+		`ssh -D 1080 user@example.com`,
+	} {
+		command := command
+		t.Run(command, func(t *testing.T) {
+			t.Parallel()
+
+			err := policy(context.Background(), CommandRequest{
+				Command: command,
+			})
+			require.ErrorContains(t, err, reasonNetworkProxy)
+		})
+	}
+}
+
+func TestChatCommandSafetyPolicy_AllowsNonProxyHTTPCommands(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	policy := NewChatCommandSafetyPolicy()
+	for _, command := range []string{
+		`curl -X POST https://example.com/api`,
+		`HTTP_PROXY= curl https://example.com`,
+		`env -u HTTP_PROXY curl https://example.com`,
+		`wget --no-proxy https://example.com/file.txt`,
+		`echo http_proxy=http://127.0.0.1:8080`,
+	} {
+		command := command
+		t.Run(command, func(t *testing.T) {
+			t.Parallel()
+
+			err := policy(context.Background(), CommandRequest{
+				Command: command,
+			})
+			require.NoError(t, err)
+		})
+	}
+}
+
 func TestBlocksSystemPackageInstall_EdgeCases(t *testing.T) {
 	t.Parallel()
 
@@ -319,7 +373,9 @@ func TestBlocksSystemPackageInstall_EdgeCases(t *testing.T) {
 	require.True(t, blocksSystemPackageInstall("pacman --sync stockfish"))
 	require.True(t, blocksSystemPackageInstall("FOO=bar brew install wget"))
 	require.True(t, blocksSystemPackageInstall("command:apt install curl"))
-	require.True(t, blocksSystemPackageInstall("exec:/usr/bin/apt-get install t"))
+	require.True(t, blocksSystemPackageInstall(
+		"exec:/usr/bin/apt-get install t",
+	))
 	require.False(t, blocksSystemPackageInstall("alias=apt install docs"))
 }
 
