@@ -889,6 +889,20 @@ func TestInvocationViewDoesNotRaceWithOpaqueStateMutation(t *testing.T) {
 	wg.Wait()
 }
 
+func TestCloneKnownStateReflectValueRejectsUnsafeReflectValues(t *testing.T) {
+	cloned, ok := cloneKnownStateReflectValue(reflect.Value{})
+	require.False(t, ok)
+	require.False(t, cloned.IsValid())
+
+	type opaqueState struct {
+		hidden int
+	}
+	hiddenField := reflect.ValueOf(opaqueState{hidden: 1}).Field(0)
+	cloned, ok = cloneKnownStateReflectValue(hiddenField)
+	require.False(t, ok)
+	require.False(t, cloned.IsValid())
+}
+
 func TestCloneStateValueHandlesEdgeCases(t *testing.T) {
 	type namedString string
 	type customPayload struct {
