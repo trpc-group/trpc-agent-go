@@ -18,10 +18,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os/exec"
 	"strings"
 	"sync"
 	"time"
+
+	"trpc.group/trpc-go/trpc-agent-go/internal/coderuntime/localpython"
 )
 
 var errWorkflowGuestExitTimeout = errors.New("dynamicworkflow: guest did not exit after completion")
@@ -40,7 +41,25 @@ const (
 //
 // Set Python to select a specific interpreter. The default is python3.
 type LocalRunner struct {
+	// Python selects the Python interpreter. The default is python3.
 	Python string
+	// Timeout optionally bounds the local guest process lifetime. The zero
+	// value preserves existing behavior and relies on the caller's context.
+	Timeout time.Duration
+	// MaxCodeBytes bounds the workflow source size before launching Python.
+	// The default is 64 KiB. Use a negative value to disable this limit.
+	MaxCodeBytes int
+	// Env sets extra guest process environment variables. LocalRunner filters
+	// shell, loader, and Python preload/search-path variables and always enforces
+	// its Python hardening environment. When nil, it does not inherit the host
+	// environment.
+	// Do not pass secrets or the full host environment unless each variable is
+	// intentionally available to workflow code.
+	Env []string
+	// WorkDir sets the guest process working directory. When empty, LocalRunner
+	// creates an empty temporary directory and removes it after the guest exits.
+	// WorkDir is not automatically added to Python's module search path.
+	WorkDir string
 }
 
 type protocolMessage struct {
@@ -55,10 +74,15 @@ type protocolMessage struct {
 }
 
 type workflowGuestProcess struct {
-	cmd    *exec.Cmd
-	stdin  io.WriteCloser
-	stdout io.Reader
-	stderr *limitedBuffer
+	process workflowProcess
+	stdin   io.WriteCloser
+	stdout  io.Reader
+	stderr  *limitedBuffer
+}
+
+type workflowProcess interface {
+	Wait() error
+	Kill() error
 }
 
 type workflowGuestState struct {
@@ -86,35 +110,33 @@ func (r LocalRunner) startWorkflowGuest(
 	ctx context.Context,
 	code string,
 ) (*workflowGuestProcess, error) {
-	python := strings.TrimSpace(r.Python)
-	if python == "" {
-		python = "python3"
-	}
-	cmd := exec.CommandContext(
-		ctx,
-		python,
-		"-c",
-		pythonGuest,
-		base64.StdEncoding.EncodeToString([]byte(code)),
-	)
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		return nil, fmt.Errorf("dynamicworkflow: create guest stdin: %w", err)
-	}
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, fmt.Errorf("dynamicworkflow: create guest stdout: %w", err)
-	}
 	stderr := newLimitedBuffer(workflowGuestCapturedOutputLimit)
-	cmd.Stderr = stderr
-	if err := cmd.Start(); err != nil {
+	proc, err := localpython.StartScript(
+		ctx,
+		localpython.Config{
+			Python:       r.Python,
+			Timeout:      r.Timeout,
+			MaxCodeBytes: r.MaxCodeBytes,
+			Env:          r.Env,
+			WorkDir:      r.WorkDir,
+		},
+		code,
+		"guest.py",
+		[]byte(pythonGuest),
+		nil,
+		[]string{
+			base64.StdEncoding.EncodeToString([]byte(code)),
+		},
+		stderr,
+	)
+	if err != nil {
 		return nil, fmt.Errorf("dynamicworkflow: start Python guest: %w", err)
 	}
 	return &workflowGuestProcess{
-		cmd:    cmd,
-		stdin:  stdin,
-		stdout: stdout,
-		stderr: stderr,
+		process: proc,
+		stdin:   proc.Stdin(),
+		stdout:  proc.Stdout(),
+		stderr:  stderr,
 	}, nil
 }
 
@@ -359,7 +381,7 @@ func workflowGuestScannerError(err error) error {
 func waitWorkflowGuest(ctx context.Context, guest *workflowGuestProcess) error {
 	waitCh := make(chan error, 1)
 	go func() {
-		waitCh <- guest.cmd.Wait()
+		waitCh <- guest.process.Wait()
 	}()
 	timer := time.NewTimer(workflowGuestExitGrace)
 	defer timer.Stop()
@@ -378,10 +400,10 @@ func waitWorkflowGuest(ctx context.Context, guest *workflowGuestProcess) error {
 }
 
 func killWorkflowGuest(guest *workflowGuestProcess) {
-	if guest == nil || guest.cmd == nil || guest.cmd.Process == nil {
+	if guest == nil || guest.process == nil {
 		return
 	}
-	_ = guest.cmd.Process.Kill()
+	_ = guest.process.Kill()
 }
 
 func guestErrorWithStderr(err error, stderr string) error {
@@ -463,6 +485,59 @@ import traceback
 _CAPTURED_OUTPUT_LIMIT = 1048576
 _PROTOCOL_LINE_LIMIT = 4194304
 _protocol_stdout = sys.stdout
+_FORBIDDEN_NODES = (
+    ast.Import,
+    ast.ImportFrom,
+    ast.ClassDef,
+    ast.With,
+    ast.AsyncWith,
+    ast.Try,
+    ast.Global,
+    ast.Nonlocal,
+)
+_FORBIDDEN_CALL_NAMES = {
+    "open",
+    "eval",
+    "exec",
+    "compile",
+    "__import__",
+    "input",
+    "breakpoint",
+    "globals",
+    "locals",
+    "vars",
+    "dir",
+    "getattr",
+    "setattr",
+    "delattr",
+}
+_SAFE_BUILTINS = {
+    "abs": abs,
+    "all": all,
+    "any": any,
+    "bool": bool,
+    "dict": dict,
+    "enumerate": enumerate,
+    "Exception": Exception,
+    "float": float,
+    "int": int,
+    "isinstance": isinstance,
+    "len": len,
+    "list": list,
+    "max": max,
+    "min": min,
+    "print": print,
+    "range": range,
+    "round": round,
+    "set": set,
+    "sorted": sorted,
+    "str": str,
+    "sum": sum,
+    "tuple": tuple,
+    "TypeError": TypeError,
+    "ValueError": ValueError,
+    "zip": zip,
+}
 
 class _LimitedStdout(io.StringIO):
     def __init__(self, limit):
@@ -678,12 +753,45 @@ def _contains_outer_return(node):
         return False
     return any(_contains_outer_return(child) for child in ast.iter_child_nodes(node))
 
+def _validate_workflow_ast(parsed):
+    for node in ast.walk(parsed):
+        if isinstance(node, _FORBIDDEN_NODES):
+            raise RuntimeError(
+                "workflow code uses unsupported Python syntax: "
+                + node.__class__.__name__
+            )
+        if isinstance(node, ast.Name):
+            if node.id.startswith("__") and node.id.endswith("__"):
+                raise RuntimeError(
+                    "workflow code cannot access Python dunder names: " + node.id
+                )
+            if node.id in _FORBIDDEN_CALL_NAMES:
+                raise RuntimeError(
+                    "workflow code cannot access restricted name: " + node.id
+                )
+        if isinstance(node, ast.Attribute):
+            if node.attr.startswith("__") and node.attr.endswith("__"):
+                raise RuntimeError(
+                    "workflow code cannot access Python dunder attributes: " + node.attr
+                )
+        if isinstance(node, ast.Call):
+            func = node.func
+            if isinstance(func, ast.Name) and func.id in _FORBIDDEN_CALL_NAMES:
+                raise RuntimeError(
+                    "workflow code cannot call restricted function: " + func.id
+                )
+            if isinstance(func, ast.Attribute) and func.attr.startswith("__") and func.attr.endswith("__"):
+                raise RuntimeError(
+                    "workflow code cannot call Python dunder methods: " + func.attr
+                )
+
 async def _main():
     global _bridge
     source = base64.b64decode(sys.argv[1]).decode("utf-8")
     wrapped = "async def __workflow__():\n" + "\n".join("    " + line for line in source.splitlines())
 
     parsed = ast.parse(wrapped, "<dynamic-workflow>", "exec")
+    _validate_workflow_ast(parsed)
     workflow = parsed.body[0]
     if not any(_contains_outer_return(statement) for statement in workflow.body):
         raise RuntimeError(
@@ -692,6 +800,7 @@ async def _main():
     # JSON-style literals make generated AgentSpec dictionaries less brittle
     # when a model emits JSON inside otherwise valid Python source.
     scope = {
+        "__builtins__": _SAFE_BUILTINS,
         "call_tool": call_tool,
         "agent": agent,
         "parallel": parallel,

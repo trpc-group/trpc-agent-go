@@ -16,11 +16,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
+
+	"trpc.group/trpc-go/trpc-agent-go/internal/coderuntime/localpython"
 )
 
 //go:embed guest.py
@@ -33,7 +32,7 @@ var completedGuestKillWaitTimeout = 100 * time.Millisecond
 // It is an implementation detail of LocalRunner; non-stdio backends implement
 // Runtime directly.
 type stdioRunner interface {
-	start(context.Context, string) (stdioProcess, error)
+	start(context.Context, Request, string) (stdioProcess, error)
 }
 
 type stdioProcess interface {
@@ -45,69 +44,50 @@ type stdioProcess interface {
 
 // LocalRunner runs the guest with a caller-supplied Python executable. Use it
 // only in an already isolated environment or for development/tests.
-type LocalRunner struct{ Python string }
+type LocalRunner struct {
+	// Python selects the Python interpreter. The default is python3.
+	Python string
+	// Timeout optionally bounds the local guest process lifetime. The zero
+	// value preserves existing behavior and relies on the caller's context.
+	Timeout time.Duration
+	// MaxCodeBytes bounds the generated code size before launching Python.
+	// The default is 64 KiB. Use a negative value to disable this limit.
+	MaxCodeBytes int
+	// Env sets extra guest process environment variables. LocalRunner filters
+	// shell, loader, and Python preload/search-path variables and always enforces
+	// its Python hardening environment. When nil, it does not inherit the host
+	// environment.
+	// Do not pass secrets or the full host environment unless each variable is
+	// intentionally available to generated code.
+	Env []string
+	// WorkDir sets the guest process working directory. When empty, LocalRunner
+	// creates an empty temporary directory and removes it after the guest exits.
+	// WorkDir is not automatically added to Python's module search path.
+	WorkDir string
+}
 
-func (r LocalRunner) start(ctx context.Context, script string) (stdioProcess, error) {
-	python := r.Python
-	if python == "" {
-		python = "python3"
-	}
-	dir, err := os.MkdirTemp("", "trpc-codeact-")
-	if err != nil {
-		return nil, err
-	}
-	path := filepath.Join(dir, "guest.py")
-	if err := os.WriteFile(path, []byte(script), 0o600); err != nil {
-		_ = os.RemoveAll(dir)
-		return nil, err
-	}
-	cmd := exec.CommandContext(ctx, python, "-u", path)
-	in, err := cmd.StdinPipe()
-	if err != nil {
-		_ = os.RemoveAll(dir)
-		return nil, err
-	}
-	out, err := cmd.StdoutPipe()
-	if err != nil {
-		_ = os.RemoveAll(dir)
-		return nil, err
-	}
-	if err := cmd.Start(); err != nil {
-		_ = os.RemoveAll(dir)
-		return nil, err
-	}
-	return &localProcess{
-		cmd:     cmd,
-		in:      in,
-		out:     out,
-		cleanup: func() { _ = os.RemoveAll(dir) },
-	}, nil
+func (r LocalRunner) start(ctx context.Context, req Request, script string) (stdioProcess, error) {
+	return localpython.StartScript(
+		ctx,
+		localpython.Config{
+			Python:       r.Python,
+			Timeout:      r.Timeout,
+			MaxCodeBytes: r.MaxCodeBytes,
+			Env:          r.Env,
+			WorkDir:      r.WorkDir,
+		},
+		req.Code,
+		"guest.py",
+		[]byte(script),
+		[]string{"-u"},
+		nil,
+		nil,
+	)
 }
 
 // ExecuteCodeAct implements Runtime using a fresh local Python stdio guest.
 func (r LocalRunner) ExecuteCodeAct(ctx context.Context, req Request, handler ToolCallHandler) (Result, error) {
 	return executeStdio(ctx, r, req, handler)
-}
-
-type localProcess struct {
-	cmd     *exec.Cmd
-	in      io.WriteCloser
-	out     io.ReadCloser
-	cleanup func()
-}
-
-func (p *localProcess) Stdin() io.WriteCloser { return p.in }
-func (p *localProcess) Stdout() io.ReadCloser { return p.out }
-func (p *localProcess) Kill() error {
-	if p.cmd.Process == nil {
-		return nil
-	}
-	return p.cmd.Process.Kill()
-}
-func (p *localProcess) Wait() error {
-	err := p.cmd.Wait()
-	p.cleanup()
-	return err
 }
 
 type protocolMessage struct {
@@ -138,7 +118,7 @@ func executeStdio(ctx context.Context, runner stdioRunner, req Request, handler 
 	if err := validateLocalLanguage(req.Language); err != nil {
 		return Result{}, err
 	}
-	p, err := runner.start(ctx, guestPython)
+	p, err := runner.start(ctx, req, guestPython)
 	if err != nil {
 		return Result{}, fmt.Errorf("codeact: start guest: %w", err)
 	}

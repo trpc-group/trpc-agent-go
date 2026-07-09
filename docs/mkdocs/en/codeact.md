@@ -13,7 +13,33 @@ The Go gateway is the trust boundary: it rejects unknown tools, validates input 
 
 ## Security
 
-`LocalRunner` starts a local Python process and is only for development or an already isolated container/VM. It is **not** a security sandbox. Applications should implement `codeact.Runtime` for their existing remote sandbox, microVM, or container service, with the isolation, resource, and dependency policies appropriate to their environment.
+`LocalRunner` starts a local Python process and is only for development or an
+already isolated container/VM. It is **not** a security sandbox. It uses the
+shared local Python runtime, which applies defense-in-depth checks such as
+source-size limits, a minimal process environment, an empty temporary working
+directory by default, a private bootstrap script, best-effort guest process
+termination with process-group cleanup on Unix-like systems, and an optional
+`LocalRunner.Timeout`.
+
+CodeAct preserves general Python syntax and builtins, including imports and
+exception handling. Unlike Dynamic Workflow, it does not apply an AST or
+builtin allowlist. The shared runtime covers process startup and lifecycle
+hardening, not a shared language policy.
+
+If you pass `LocalRunner.Env`, LocalRunner still filters shell, dynamic-loader,
+and Python preload/search-path variables and enforces its Python hardening
+environment. Do not pass the host `os.Environ()` unless each variable is
+intentionally allowed for the guest; this filtering is not secret isolation.
+
+Compared with the earlier LocalRunner behavior, the hardened runner no longer
+inherits the host environment, uses an empty temporary working directory by
+default, and rejects generated source larger than 64 KiB unless configured
+otherwise. These are intentional behavior changes rather than a security
+sandbox boundary.
+
+Applications should implement `codeact.Runtime` for their existing remote
+sandbox, microVM, or container service, with the isolation, resource, and
+dependency policies appropriate to their environment.
 
 ## Why not call raw HTTP APIs from generated code?
 

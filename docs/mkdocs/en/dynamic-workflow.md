@@ -344,10 +344,32 @@ standalone script: the temporary workflow gets code-level flexibility, while
 Agent execution, tool boundaries, event streaming, and Session persistence
 remain controlled by the Go framework.
 
-`dynamicworkflow.LocalRunner` starts a local Python process. It is not a
-security sandbox. In production, provide your own `dynamicworkflow.Runtime`,
-such as a container, microVM, or remote sandbox, and enforce filesystem,
-network, process, dependency, and resource limits there.
+`dynamicworkflow.LocalRunner` starts a local Python process through the shared
+local Python runtime. It is not a security sandbox. It applies
+defense-in-depth checks for local use, including
+restricted Python syntax, restricted builtins, source-size limits, captured
+output limits, a minimal process environment, an empty temporary working
+directory by default, a private bootstrap script, best-effort guest process
+termination with process-group cleanup on Unix-like systems, and an optional
+`LocalRunner.Timeout`.
+The default timeout is intentionally unset; LocalRunner inherits the caller's
+context so long Agent workflows are not cut off unexpectedly.
+
+Compared with the earlier LocalRunner behavior, the hardened runner no longer
+inherits the host environment, uses an empty temporary working directory by
+default, rejects generated source larger than 64 KiB unless configured
+otherwise, and enforces the documented restricted Python subset. These are
+intentional behavior changes rather than a security sandbox boundary.
+
+If you pass `LocalRunner.Env`, LocalRunner still filters shell, dynamic-loader,
+and Python preload/search-path variables and enforces its Python hardening
+environment. Do not pass the host `os.Environ()` unless each variable is
+intentionally allowed for the workflow guest; this filtering is not secret
+isolation.
+
+In production, provide your own `dynamicworkflow.Runtime`, such as a container,
+microVM, or remote sandbox, and enforce filesystem, network, process,
+dependency, and resource limits there.
 
 Generated workflow code should call host tools rather than direct HTTP APIs.
 Authentication, authorization, retries, idempotency, audit, rate limiting, and

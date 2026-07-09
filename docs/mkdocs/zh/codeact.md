@@ -11,7 +11,24 @@ LLM -> execute_tool_code -> Runtime -> guest call_tool(name, JSON args)
 
 ## 安全边界
 
-`LocalRunner` 仅用于开发或已经隔离的容器/VM；它不是安全 sandbox。生产应用应基于已有远端 sandbox、microVM 或容器服务实现 `codeact.Runtime`，并由应用侧配置隔离、资源和依赖策略。
+`LocalRunner` 仅用于开发或已经隔离的容器/VM；它不是安全 sandbox。它使用共享的
+local Python runtime，为本地生成代码执行提供 defense-in-depth 防护，包括限制源码大小、
+使用最小进程环境、默认使用空的临时工作目录、将 bootstrap 脚本放在私有目录、尽力终止
+guest 进程（Unix-like 系统下会清理进程组），以及可选的 `LocalRunner.Timeout`。
+
+CodeAct 会保留通用 Python 语法和 builtins，包括 import 与异常处理。它与 Dynamic
+Workflow 不同，不应用 AST 或 builtin allowlist。二者共享的是进程启动和生命周期
+加固，而不是相同的语言策略。
+
+如果传入 `LocalRunner.Env`，LocalRunner 仍会过滤 shell、动态加载器以及 Python 预加载和
+搜索路径相关变量，并强制设置 Python hardening 环境。除非每个变量都确认需要暴露给
+guest，否则不要直接传宿主进程的 `os.Environ()`；这层过滤不是环境变量机密隔离。
+
+相较之前的 LocalRunner，强化后的默认行为不再继承宿主环境，默认使用空的临时工作
+目录，并会拒绝超过 64 KiB 的生成源码，除非调用方显式调整限制。这些是有意的行为
+变化，但不会构成安全 sandbox 边界。
+
+生产应用应基于已有远端 sandbox、microVM 或容器服务实现 `codeact.Runtime`，并由应用侧配置隔离、资源和依赖策略。
 
 ## 为什么不让生成代码直接调用 HTTP API？
 

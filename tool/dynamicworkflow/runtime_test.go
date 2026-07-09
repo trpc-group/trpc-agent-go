@@ -10,12 +10,16 @@
 package dynamicworkflow
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -323,29 +327,87 @@ return await pipeline(["a", "b"], analyze, review)
 	require.JSONEq(t, `[{"text":"reviewed-a"},{"text":"reviewed-b"}]`, string(result.Value))
 }
 
-func TestLocalRunnerDoesNotHangWhenCompletedGuestKeepsThreadAlive(t *testing.T) {
+func TestLocalRunnerOptionalTimeoutStopsBusyWorkflow(t *testing.T) {
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 is not installed")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
 
 	start := time.Now()
-	result, err := Execute(ctx, LocalRunner{}, callHandlerFunc(func(context.Context, Call) (json.RawMessage, error) {
+	_, err := Execute(context.Background(), LocalRunner{Timeout: 100 * time.Millisecond}, callHandlerFunc(func(context.Context, Call) (json.RawMessage, error) {
 		return nil, nil
 	}), `
-import threading
-import time
-
-def keep_alive():
-    time.sleep(30)
-
-threading.Thread(target=keep_alive).start()
-return {"ok": True}
+while True:
+    pass
 `)
+	require.Error(t, err)
+	require.Less(t, time.Since(start), 5*time.Second)
+}
+
+func TestFinishWorkflowGuestPreservesCompletedResultAfterExitTimeout(t *testing.T) {
+	process := newBlockingWorkflowProcess()
+	guest := newFakeWorkflowGuest(
+		process,
+		`{"type":"done","result":{"ok":true}}`+"\n",
+	)
+	result, err := runWorkflowGuest(
+		context.Background(),
+		guest,
+		callHandlerFunc(func(context.Context, Call) (json.RawMessage, error) {
+			return nil, nil
+		}),
+	)
 	require.NoError(t, err)
 	require.JSONEq(t, `{"ok":true}`, string(result.Value))
-	require.Less(t, time.Since(start), 5*time.Second)
+	require.NoError(t, waitClosed(process.killed, time.Second))
+}
+
+func TestFinishWorkflowGuestCancelsCallbacksAfterCompletion(t *testing.T) {
+	started := make(chan struct{})
+	cancelled := make(chan struct{})
+	var once sync.Once
+	guest := newFakeWorkflowGuest(
+		newExitedWorkflowProcess(),
+		strings.Join([]string{
+			`{"type":"call","id":"1","kind":"agent","args":{}}`,
+			`{"type":"done","result":{"ok":true}}`,
+			"",
+		}, "\n"),
+	)
+	result, err := runWorkflowGuest(
+		context.Background(),
+		guest,
+		callHandlerFunc(func(ctx context.Context, _ Call) (json.RawMessage, error) {
+			once.Do(func() { close(started) })
+			<-ctx.Done()
+			close(cancelled)
+			return nil, ctx.Err()
+		}),
+	)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"ok":true}`, string(result.Value))
+	require.NoError(t, waitClosed(started, time.Second))
+	require.NoError(t, waitClosed(cancelled, time.Second))
+}
+
+func TestFinishWorkflowGuestReportsStderrLimit(t *testing.T) {
+	guest := newFakeWorkflowGuest(
+		newExitedWorkflowProcess(),
+		`{"type":"done","result":null}`+"\n",
+	)
+	_, err := guest.stderr.Write(bytes.Repeat(
+		[]byte("x"),
+		workflowGuestCapturedOutputLimit+1,
+	))
+	require.NoError(t, err)
+
+	_, err = runWorkflowGuest(
+		context.Background(),
+		guest,
+		callHandlerFunc(func(context.Context, Call) (json.RawMessage, error) {
+			return nil, nil
+		}),
+	)
+	require.ErrorContains(t, err, "guest stderr exceeds")
 }
 
 func TestLocalRunnerEnforcesOutputLimits(t *testing.T) {
@@ -366,39 +428,142 @@ return None
 return "x" * %d
 `, workflowGuestProtocolLineLimit+1))
 	require.ErrorContains(t, err, "workflow protocol message exceeds")
-
-	_, err = Execute(context.Background(), LocalRunner{}, handler, fmt.Sprintf(`
-import sys
-sys.stderr.write("x" * %d)
-return None
-`, workflowGuestCapturedOutputLimit+1))
-	require.ErrorContains(t, err, "guest stderr exceeds")
 }
 
-func TestLocalRunnerCancelsUnawaitedCallbacksAfterCompletion(t *testing.T) {
+func TestLocalRunnerRejectsRestrictedPythonFeatures(t *testing.T) {
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 is not installed")
 	}
-	started := make(chan struct{})
-	cancelled := make(chan struct{})
-	var once sync.Once
-	handler := callHandlerFunc(func(ctx context.Context, _ Call) (json.RawMessage, error) {
-		once.Do(func() { close(started) })
-		<-ctx.Done()
-		close(cancelled)
-		return nil, ctx.Err()
+	handler := callHandlerFunc(func(context.Context, Call) (json.RawMessage, error) {
+		return nil, nil
 	})
 
-	result, err := Execute(context.Background(), LocalRunner{}, handler, `
-import asyncio
-asyncio.create_task(agent("background", "reviewer"))
-await asyncio.sleep(0)
-return {"ok": True}
+	cases := []struct {
+		name string
+		code string
+		want string
+	}{
+		{
+			name: "import",
+			code: "import os\nreturn None",
+			want: "unsupported Python syntax: Import",
+		},
+		{
+			name: "from import",
+			code: "from os import system\nreturn None",
+			want: "unsupported Python syntax: ImportFrom",
+		},
+		{
+			name: "class",
+			code: "class Unsafe:\n    pass\nreturn None",
+			want: "unsupported Python syntax: ClassDef",
+		},
+		{
+			name: "with",
+			code: "with [] as value:\n    return value\nreturn None",
+			want: "unsupported Python syntax: With",
+		},
+		{
+			name: "try",
+			code: "try:\n    return None\nexcept Exception:\n    return None",
+			want: "unsupported Python syntax: Try",
+		},
+		{
+			name: "open",
+			code: `return open("/etc/passwd").read()`,
+			want: "restricted function: open",
+		},
+		{
+			name: "open reference",
+			code: "fn = open\nreturn fn",
+			want: "restricted name: open",
+		},
+		{
+			name: "eval",
+			code: `return eval("1 + 1")`,
+			want: "restricted function: eval",
+		},
+		{
+			name: "import builtin",
+			code: `return __import__("os")`,
+			want: "restricted function: __import__",
+		},
+		{
+			name: "dunder attribute",
+			code: "return (1).__class__",
+			want: "dunder attributes: __class__",
+		},
+		{
+			name: "dunder name",
+			code: "return __builtins__",
+			want: "dunder names: __builtins__",
+		},
+		{
+			name: "globals",
+			code: "return globals()",
+			want: "restricted function: globals",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Execute(context.Background(), LocalRunner{}, handler, tc.code)
+			require.ErrorContains(t, err, tc.want)
+		})
+	}
+}
+
+func TestLocalRunnerAllowsHarmlessRestrictedNameStrings(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 is not installed")
+	}
+	result, err := Execute(context.Background(), LocalRunner{}, callHandlerFunc(func(context.Context, Call) (json.RawMessage, error) {
+		return nil, nil
+	}), `
+name = "open"
+return {"name": name}
 `)
 	require.NoError(t, err)
-	require.JSONEq(t, `{"ok":true}`, string(result.Value))
-	require.NoError(t, waitClosed(started, time.Second))
-	require.NoError(t, waitClosed(cancelled, time.Second))
+	require.JSONEq(t, `{"name":"open"}`, string(result.Value))
+}
+
+func TestLocalRunnerEnforcesMaxCodeBytes(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 is not installed")
+	}
+	_, err := Execute(
+		context.Background(),
+		LocalRunner{MaxCodeBytes: 8},
+		callHandlerFunc(func(context.Context, Call) (json.RawMessage, error) {
+			return nil, nil
+		}),
+		"return None",
+	)
+	require.ErrorContains(t, err, "code exceeds 8 bytes")
+}
+
+func TestLocalRunnerWorkDirCannotShadowBootstrapImports(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 is not installed")
+	}
+	workDir := t.TempDir()
+	marker := filepath.Join(workDir, "import-shadowed")
+	require.NoError(t, os.WriteFile(
+		filepath.Join(workDir, "asyncio.py"),
+		[]byte("from pathlib import Path\nPath('import-shadowed').write_text('loaded')\n"),
+		0o600,
+	))
+
+	result, err := Execute(
+		context.Background(),
+		LocalRunner{WorkDir: workDir},
+		callHandlerFunc(func(context.Context, Call) (json.RawMessage, error) {
+			return nil, nil
+		}),
+		"return None",
+	)
+	require.NoError(t, err)
+	require.JSONEq(t, "null", string(result.Value))
+	require.NoFileExists(t, marker)
 }
 
 func TestExecuteRejectsMissingRequirements(t *testing.T) {
@@ -551,6 +716,49 @@ type errorWriter struct{}
 func (errorWriter) Write([]byte) (int, error) {
 	return 0, errors.New("write failed")
 }
+
+type fakeWorkflowProcess struct {
+	wait   <-chan struct{}
+	killed chan struct{}
+	once   sync.Once
+}
+
+func newBlockingWorkflowProcess() *fakeWorkflowProcess {
+	released := make(chan struct{})
+	return &fakeWorkflowProcess{wait: released, killed: released}
+}
+
+func newExitedWorkflowProcess() *fakeWorkflowProcess {
+	exited := make(chan struct{})
+	close(exited)
+	return &fakeWorkflowProcess{wait: exited, killed: make(chan struct{})}
+}
+
+func (p *fakeWorkflowProcess) Wait() error {
+	<-p.wait
+	return nil
+}
+
+func (p *fakeWorkflowProcess) Kill() error {
+	p.once.Do(func() { close(p.killed) })
+	return nil
+}
+
+func newFakeWorkflowGuest(
+	process workflowProcess,
+	stdout string,
+) *workflowGuestProcess {
+	return &workflowGuestProcess{
+		process: process,
+		stdin:   nopWriteCloser{Writer: &bytes.Buffer{}},
+		stdout:  strings.NewReader(stdout),
+		stderr:  newLimitedBuffer(workflowGuestCapturedOutputLimit),
+	}
+}
+
+type nopWriteCloser struct{ io.Writer }
+
+func (nopWriteCloser) Close() error { return nil }
 
 func waitClosed(ch <-chan struct{}, timeout time.Duration) error {
 	timer := time.NewTimer(timeout)
