@@ -2236,6 +2236,9 @@ func TestLocalInferenceTraceModeUsesConfiguredActualConversation(t *testing.T) {
 	_, err := mgr.Create(ctx, appName, evalSetID)
 	assert.NoError(t, err)
 
+	executionTrace := &agenttrace.Trace{RootInvocationID: "trace-root-1", SessionID: "trace-session-1"}
+	actualInvocation := makeActualInvocation("trace-inv-1", "prompt", "answer")
+	actualInvocation.ExecutionTrace = executionTrace
 	traceCase := &evalset.EvalCase{
 		EvalID:   caseID,
 		EvalMode: evalset.EvalModeTrace,
@@ -2243,7 +2246,7 @@ func TestLocalInferenceTraceModeUsesConfiguredActualConversation(t *testing.T) {
 			makeInvocation("trace-inv-1", "prompt"),
 		},
 		ActualConversation: []*evalset.Invocation{
-			makeActualInvocation("trace-inv-1", "prompt", "answer"),
+			actualInvocation,
 		},
 		SessionInput: &evalset.SessionInput{AppName: appName, UserID: "demo-user", State: map[string]any{}},
 	}
@@ -2263,6 +2266,10 @@ func TestLocalInferenceTraceModeUsesConfiguredActualConversation(t *testing.T) {
 	assert.Equal(t, "trace-inv-1", results[0].Inferences[0].InvocationID)
 	assert.NotNil(t, results[0].Inferences[0].FinalResponse)
 	assert.Equal(t, "answer", results[0].Inferences[0].FinalResponse.Content)
+	if assert.Len(t, results[0].ExecutionTraces, 1) {
+		assert.Equal(t, executionTrace.RootInvocationID, results[0].ExecutionTraces[0].RootInvocationID)
+		assert.Equal(t, executionTrace.SessionID, results[0].ExecutionTraces[0].SessionID)
+	}
 
 	runnerStub.mu.Lock()
 	callCount := len(runnerStub.calls)
