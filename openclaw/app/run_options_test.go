@@ -586,6 +586,24 @@ func TestParseRunOptions_DeadlineFinalizationWindowNegativeFails(
 	)
 }
 
+func TestParseRunOptions_DeadlineFinalizationWindowYAMLNegativeFails(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+agent:
+  deadline_finalization_window: "-1s"
+`)
+	_, err := parseRunOptions([]string{"-config", cfgPath})
+	require.Error(t, err)
+	require.Contains(
+		t,
+		err.Error(),
+		"agent.deadline_finalization_window must be >= 0",
+	)
+}
+
 func TestParseRunOptions_ModelGenerationConfig_DefaultsStreamTrue(
 	t *testing.T,
 ) {

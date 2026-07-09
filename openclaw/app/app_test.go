@@ -1646,6 +1646,50 @@ func TestRuntimeGatewayRunOptionsEdgeCases(t *testing.T) {
 	require.Nil(t, input.Extensions)
 }
 
+func TestRuntimeRunAddsModelCallBudgetOptions(t *testing.T) {
+	t.Parallel()
+
+	const instruction = "caller"
+
+	runner := &capturingRuntimeRunOptionRunner{reply: "ok"}
+	rt := &Runtime{
+		runner:                        runner,
+		modelCallBudgetDeadlineWindow: time.Minute,
+	}
+	_, err := rt.Run(
+		context.Background(),
+		"u1",
+		"s1",
+		model.NewUserMessage("hello"),
+		agent.WithInstruction(instruction),
+	)
+	require.NoError(t, err)
+	require.Equal(t, instruction, runner.opts.Instruction)
+
+	factory, ok := runner.opts.RuntimeState[modelCallBudgetRuntimeStateKey].(*modelCallBudgetFactory)
+	require.True(t, ok)
+	require.Equal(t, time.Minute, factory.deadlineWindow)
+}
+
+func TestRuntimeRunWithoutModelCallBudgetPreservesOptions(t *testing.T) {
+	t.Parallel()
+
+	const instruction = "caller"
+
+	runner := &capturingRuntimeRunOptionRunner{reply: "ok"}
+	rt := &Runtime{runner: runner}
+	_, err := rt.Run(
+		context.Background(),
+		"u1",
+		"s1",
+		model.NewUserMessage("hello"),
+		agent.WithInstruction(instruction),
+	)
+	require.NoError(t, err)
+	require.Equal(t, instruction, runner.opts.Instruction)
+	require.Empty(t, runner.opts.RuntimeState)
+}
+
 func TestToolCallArgumentsJSONRepairRunOptionResolver(t *testing.T) {
 	t.Parallel()
 
@@ -4543,6 +4587,57 @@ func TestModelCompatibilityRunOptions_NonGLMUnaffected(t *testing.T) {
 		ModelMode:     modeMock,
 		OpenAIVariant: string(openai.VariantGLM),
 	}))
+}
+
+func TestModelCallBudgetFinalRequestFromOptions_DisablesThinking(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	for _, variant := range []openai.Variant{
+		openai.VariantDeepSeek,
+		openai.VariantHunyuan,
+		openai.VariantQwen,
+		openai.VariantGLM,
+	} {
+		cfg := modelCallBudgetFinalRequestFromOptions(runOptions{
+			ModelMode:     modeOpenAI,
+			OpenAIVariant: string(variant),
+		})
+		require.True(t, cfg.DisableThinking, string(variant))
+	}
+}
+
+func TestModelCallBudgetFinalRequestFromOptions_DefaultUnaffected(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	require.False(t, modelCallBudgetFinalRequestFromOptions(runOptions{
+		ModelMode:     modeOpenAI,
+		OpenAIVariant: string(openai.VariantOpenAI),
+	}).DisableThinking)
+	require.False(t, modelCallBudgetFinalRequestFromOptions(runOptions{
+		ModelMode:     modeMock,
+		OpenAIVariant: string(openai.VariantGLM),
+	}).DisableThinking)
+	require.False(t, modelCallBudgetFinalRequestFromOptions(runOptions{
+		ModelMode:     modeOpenAI,
+		OpenAIVariant: "unsupported",
+	}).DisableThinking)
+}
+
+func TestModelCallBudgetFinalRequestFromOptions_AutoInfersThinking(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	cfg := modelCallBudgetFinalRequestFromOptions(runOptions{
+		ModelMode:     modeOpenAI,
+		OpenAIVariant: openAIVariantAuto,
+		OpenAIBaseURL: "https://open.bigmodel.cn/api/paas/v4",
+	})
+	require.True(t, cfg.DisableThinking)
 }
 
 func TestInferOpenAIVariant(t *testing.T) {

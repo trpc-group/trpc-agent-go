@@ -27,18 +27,24 @@ type modelCallBudgetBypassKey struct{}
 
 const modelCallBudgetRuntimeStateKey = "openclaw.model_call_budget"
 
+type modelCallBudgetFinalRequestConfig struct {
+	DisableThinking bool
+}
+
 type modelCallBudget struct {
 	mu             sync.Mutex
 	limit          int
 	count          int
 	finalizeOnLast bool
 	deadlineWindow time.Duration
+	finalRequest   modelCallBudgetFinalRequestConfig
 }
 
 func newModelCallBudget(
 	limit int,
 	finalizeOnLast bool,
 	deadlineWindow time.Duration,
+	finalRequest ...modelCallBudgetFinalRequestConfig,
 ) *modelCallBudget {
 	if limit <= 0 && deadlineWindow <= 0 {
 		return nil
@@ -47,6 +53,7 @@ func newModelCallBudget(
 		limit:          limit,
 		finalizeOnLast: finalizeOnLast,
 		deadlineWindow: deadlineWindow,
+		finalRequest:   modelCallBudgetFinalRequestArg(finalRequest),
 	}
 }
 
@@ -55,6 +62,7 @@ type modelCallBudgetFactory struct {
 	limit          int
 	finalizeOnLast bool
 	deadlineWindow time.Duration
+	finalRequest   modelCallBudgetFinalRequestConfig
 	budgets        map[string]*modelCallBudget
 }
 
@@ -62,6 +70,7 @@ func newModelCallBudgetFactory(
 	limit int,
 	finalizeOnLast bool,
 	deadlineWindow time.Duration,
+	finalRequest ...modelCallBudgetFinalRequestConfig,
 ) *modelCallBudgetFactory {
 	if limit <= 0 && deadlineWindow <= 0 {
 		return nil
@@ -70,7 +79,17 @@ func newModelCallBudgetFactory(
 		limit:          limit,
 		finalizeOnLast: finalizeOnLast,
 		deadlineWindow: deadlineWindow,
+		finalRequest:   modelCallBudgetFinalRequestArg(finalRequest),
 	}
+}
+
+func modelCallBudgetFinalRequestArg(
+	finalRequest []modelCallBudgetFinalRequestConfig,
+) modelCallBudgetFinalRequestConfig {
+	if len(finalRequest) == 0 {
+		return modelCallBudgetFinalRequestConfig{}
+	}
+	return finalRequest[0]
 }
 
 func withModelCallBudget(ctx context.Context, limit int) context.Context {
@@ -142,6 +161,7 @@ func (f *modelCallBudgetFactory) budgetFor(
 		f.limit,
 		f.finalizeOnLast,
 		f.deadlineWindow,
+		f.finalRequest,
 	)
 	f.budgets[key] = budget
 	return budget
@@ -172,6 +192,13 @@ func (b *modelCallBudget) use(ctx context.Context) (bool, error) {
 		}
 	}
 	return modelCallBudgetDeadlineSoon(ctx, b.deadlineWindow), nil
+}
+
+func (b *modelCallBudget) finalConfig() modelCallBudgetFinalRequestConfig {
+	if b == nil {
+		return modelCallBudgetFinalRequestConfig{}
+	}
+	return b.finalRequest
 }
 
 func modelCallBudgetDeadlineSoon(
@@ -235,12 +262,13 @@ func (m *modelCallBudgetModel) GenerateContent(
 	ctx context.Context,
 	req *model.Request,
 ) (<-chan *model.Response, error) {
-	finalize, err := modelCallBudgetFromContext(ctx).use(ctx)
+	budget := modelCallBudgetFromContext(ctx)
+	finalize, err := budget.use(ctx)
 	if err != nil {
 		return nil, err
 	}
 	if finalize {
-		req = finalModelCallRequest(req)
+		req = finalModelCallRequest(req, budget.finalConfig())
 	}
 	return m.model.GenerateContent(ctx, req)
 }
@@ -273,12 +301,13 @@ func (m *modelCallBudgetIterModel) GenerateContentIter(
 	ctx context.Context,
 	req *model.Request,
 ) (model.Seq[*model.Response], error) {
-	finalize, err := modelCallBudgetFromContext(ctx).use(ctx)
+	budget := modelCallBudgetFromContext(ctx)
+	finalize, err := budget.use(ctx)
 	if err != nil {
 		return nil, err
 	}
 	if finalize {
-		req = finalModelCallRequest(req)
+		req = finalModelCallRequest(req, budget.finalConfig())
 	}
 	return m.iter.GenerateContentIter(ctx, req)
 }
@@ -300,6 +329,7 @@ func appendModelCallBudgetGatewayOption(
 	limit int,
 	finalizeOnLast bool,
 	deadlineWindow time.Duration,
+	finalRequest ...modelCallBudgetFinalRequestConfig,
 ) []gateway.Option {
 	if limit <= 0 && deadlineWindow <= 0 {
 		return opts
@@ -309,6 +339,7 @@ func appendModelCallBudgetGatewayOption(
 			limit,
 			finalizeOnLast,
 			deadlineWindow,
+			modelCallBudgetFinalRequestArg(finalRequest),
 		),
 	))
 }
@@ -317,34 +348,58 @@ func buildModelCallBudgetRunOptionResolver(
 	limit int,
 	finalizeOnLast bool,
 	deadlineWindow time.Duration,
+	finalRequest ...modelCallBudgetFinalRequestConfig,
 ) gateway.RunOptionResolver {
+	config := modelCallBudgetFinalRequestArg(finalRequest)
 	return func(ctx context.Context, _ gateway.RunOptionInput) (
 		context.Context,
 		[]agent.RunOption,
 		error,
 	) {
-		factory := newModelCallBudgetFactory(
+		return ctx, modelCallBudgetRunOptions(
 			limit,
 			finalizeOnLast,
 			deadlineWindow,
-		)
-		return ctx,
-			[]agent.RunOption{
-				agent.MergeRuntimeState(map[string]any{
-					modelCallBudgetRuntimeStateKey: factory,
-				}),
-			},
-			nil
+			config,
+		), nil
 	}
 }
 
-func finalModelCallRequest(req *model.Request) *model.Request {
+func modelCallBudgetRunOptions(
+	limit int,
+	finalizeOnLast bool,
+	deadlineWindow time.Duration,
+	finalRequest ...modelCallBudgetFinalRequestConfig,
+) []agent.RunOption {
+	factory := newModelCallBudgetFactory(
+		limit,
+		finalizeOnLast,
+		deadlineWindow,
+		modelCallBudgetFinalRequestArg(finalRequest),
+	)
+	if factory == nil {
+		return nil
+	}
+	return []agent.RunOption{
+		agent.MergeRuntimeState(map[string]any{
+			modelCallBudgetRuntimeStateKey: factory,
+		}),
+	}
+}
+
+func finalModelCallRequest(
+	req *model.Request,
+	config modelCallBudgetFinalRequestConfig,
+) *model.Request {
 	if req == nil {
 		req = &model.Request{}
 	}
 	clone := *req
 	clone.Tools = nil
 	clone.ExtraFields = finalModelCallExtraFields(req.ExtraFields)
+	if config.DisableThinking {
+		clone.ThinkingEnabled = model.BoolPtr(false)
+	}
 	clone.Messages = append([]model.Message(nil), req.Messages...)
 	clone.Messages = append(clone.Messages, model.NewUserMessage(
 		"[OpenClaw Budget Notice] This is the final allowed model call "+
