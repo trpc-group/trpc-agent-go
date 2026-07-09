@@ -24,7 +24,7 @@ import (
 
 var (
 	mode         = flag.String("mode", "fake", "Execution mode: fake (deterministic, no API key)")
-	scenarioName = flag.String("scenario", "success", "Scenario: success | ineffective | overfit | all")
+	scenarioName = flag.String("scenario", "success", "Scenario: success | ineffective | overfit | attribution | all")
 	dataDir      = flag.String("data-dir", "./data", "Directory containing eval set and metric files")
 	outputDir    = flag.String("output-dir", "./output", "Directory where reports are written (per scenario)")
 )
