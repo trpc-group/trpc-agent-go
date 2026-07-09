@@ -257,6 +257,14 @@ func (i *inspector) resolvePath(raw string) (string, error) {
 	}
 	real, err := filepath.EvalSymlinks(abs)
 	if err != nil {
+		if os.IsNotExist(err) {
+			if path, ok, resolveErr := i.resolveDuplicatedAllowedPath(
+				abs,
+				raw,
+			); ok || resolveErr != nil {
+				return path, resolveErr
+			}
+		}
 		return "", fmt.Errorf("resolve image path: %w", err)
 	}
 	real = filepath.Clean(real)
@@ -293,6 +301,15 @@ func (i *inspector) resolveAllowedRelativePath(
 			return "", true, fmt.Errorf("path %q is outside allowed_dirs", raw)
 		}
 		return real, true, nil
+	}
+	for _, dir := range i.allowedDirs {
+		candidate := filepath.Clean(filepath.Join(dir, cleaned))
+		if path, ok, err := i.resolveDuplicatedAllowedPath(
+			candidate,
+			raw,
+		); ok || err != nil {
+			return path, true, err
+		}
 	}
 
 	if strings.Contains(cleaned, string(os.PathSeparator)) {
@@ -380,6 +397,101 @@ func (i *inspector) resolvePreferredBasename(
 		return "", false, nil
 	}
 	return match, true, nil
+}
+
+func (i *inspector) resolveDuplicatedAllowedPath(
+	abs string,
+	raw string,
+) (string, bool, error) {
+	var match string
+	for _, dir := range i.allowedDirs {
+		for _, candidate := range duplicatedAllowedPathCandidates(abs, dir) {
+			if !fileExists(candidate) {
+				continue
+			}
+			real, err := filepath.EvalSymlinks(candidate)
+			if err != nil {
+				return "", true, fmt.Errorf("resolve image path: %w", err)
+			}
+			real = filepath.Clean(real)
+			if !pathInAllowedDir(real, dir) {
+				return "", true, fmt.Errorf(
+					"path %q is outside allowed_dirs",
+					raw,
+				)
+			}
+			if match != "" && match != real {
+				return "", true, fmt.Errorf(
+					"multiple corrected paths match %q in allowed_dirs",
+					raw,
+				)
+			}
+			match = real
+		}
+	}
+	if match == "" {
+		return "", false, nil
+	}
+	return match, true, nil
+}
+
+func duplicatedAllowedPathCandidates(abs string, dir string) []string {
+	rel, err := filepath.Rel(dir, abs)
+	if err != nil || rel == "." {
+		return nil
+	}
+	if rel == ".." ||
+		strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return nil
+	}
+	parts := splitPath(rel)
+	if len(parts) < 2 {
+		return nil
+	}
+
+	seen := map[string]struct{}{}
+	var candidates []string
+	add := func(candidateParts []string) {
+		if len(candidateParts) == 0 {
+			return
+		}
+		candidate := filepath.Clean(filepath.Join(
+			append([]string{dir}, candidateParts...)...,
+		))
+		if !pathInAllowedDir(candidate, dir) {
+			return
+		}
+		if _, ok := seen[candidate]; ok {
+			return
+		}
+		seen[candidate] = struct{}{}
+		candidates = append(candidates, candidate)
+	}
+
+	if parts[0] == filepath.Base(dir) {
+		add(parts[1:])
+	}
+	for idx := 0; idx < len(parts)-1; idx++ {
+		if parts[idx] != parts[idx+1] {
+			continue
+		}
+		candidateParts := make([]string, 0, len(parts)-1)
+		candidateParts = append(candidateParts, parts[:idx]...)
+		candidateParts = append(candidateParts, parts[idx+1:]...)
+		add(candidateParts)
+	}
+	return candidates
+}
+
+func splitPath(path string) []string {
+	parts := strings.Split(path, string(os.PathSeparator))
+	out := parts[:0]
+	for _, part := range parts {
+		if part != "" && part != "." {
+			out = append(out, part)
+		}
+	}
+	return out
 }
 
 func pathInAllowedDir(path string, dir string) bool {

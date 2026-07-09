@@ -352,6 +352,110 @@ func TestResolvePathRequiresPath(t *testing.T) {
 	require.Contains(t, err.Error(), "path is required")
 }
 
+func TestResolvePathCorrectsDuplicatedAttachmentRoot(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	attachmentID := "attachment-12345"
+	actual := filepath.Join(root, attachmentID, attachmentID+".png")
+	require.NoError(t, os.MkdirAll(filepath.Dir(actual), 0o755))
+	writeTestPNG(t, actual, image.Rect(0, 0, 1, 1))
+
+	tool, err := newInspector(Config{AllowedDirs: []string{root}})
+	require.NoError(t, err)
+	raw := filepath.Join(root, attachmentID, attachmentID, attachmentID+".png")
+	got, err := tool.resolvePath(raw)
+	require.NoError(t, err)
+	require.Equal(t, actual, got)
+}
+
+func TestResolvePathCorrectsDuplicatedAllowedDirBase(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	attachmentID := "attachment-12345"
+	allowed := filepath.Join(root, attachmentID)
+	actual := filepath.Join(allowed, attachmentID+".png")
+	require.NoError(t, os.MkdirAll(filepath.Dir(actual), 0o755))
+	writeTestPNG(t, actual, image.Rect(0, 0, 1, 1))
+
+	tool, err := newInspector(Config{AllowedDirs: []string{allowed}})
+	require.NoError(t, err)
+	raw := filepath.Join(allowed, attachmentID, attachmentID+".png")
+	got, err := tool.resolvePath(raw)
+	require.NoError(t, err)
+	require.Equal(t, actual, got)
+}
+
+func TestResolvePathCorrectsDuplicatedRelativeAttachment(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	attachmentID := "attachment-12345"
+	actual := filepath.Join(root, attachmentID, attachmentID+".png")
+	require.NoError(t, os.MkdirAll(filepath.Dir(actual), 0o755))
+	writeTestPNG(t, actual, image.Rect(0, 0, 1, 1))
+
+	tool, err := newInspector(Config{AllowedDirs: []string{root}})
+	require.NoError(t, err)
+	raw := filepath.Join(attachmentID, attachmentID, attachmentID+".png")
+	got, err := tool.resolvePath(raw)
+	require.NoError(t, err)
+	require.Equal(t, actual, got)
+}
+
+func TestResolvePathRejectsDuplicatedSymlinkEscape(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	outside := t.TempDir()
+	attachmentID := "attachment-12345"
+	inside := filepath.Join(root, attachmentID, attachmentID+".png")
+	outsidePath := filepath.Join(outside, attachmentID+".png")
+	writeTestPNG(t, outsidePath, image.Rect(0, 0, 1, 1))
+	require.NoError(t, os.MkdirAll(filepath.Dir(inside), 0o755))
+	require.NoError(t, os.Symlink(outsidePath, inside))
+
+	tool, err := newInspector(Config{AllowedDirs: []string{root}})
+	require.NoError(t, err)
+	raw := filepath.Join(root, attachmentID, attachmentID, attachmentID+".png")
+	_, err = tool.resolvePath(raw)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "outside allowed_dirs")
+}
+
+func TestResolvePathRejectsAmbiguousDuplicatedCandidates(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	allowed := filepath.Join(root, "attachment")
+	first := filepath.Join(allowed, "b", "b", "image.png")
+	second := filepath.Join(allowed, "attachment", "b", "image.png")
+	require.NoError(t, os.MkdirAll(filepath.Dir(first), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Dir(second), 0o755))
+	writeTestPNG(t, first, image.Rect(0, 0, 1, 1))
+	writeTestPNG(t, second, image.Rect(0, 0, 1, 1))
+
+	tool, err := newInspector(Config{AllowedDirs: []string{allowed}})
+	require.NoError(t, err)
+	raw := filepath.Join(allowed, "attachment", "b", "b", "image.png")
+	_, err = tool.resolvePath(raw)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "multiple corrected paths")
+}
+
+func TestDuplicatedAllowedPathCandidatesRejectsNonDuplicatedPaths(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	require.Empty(t, duplicatedAllowedPathCandidates(root, root))
+	require.Empty(t, duplicatedAllowedPathCandidates(filepath.Dir(root), root))
+	require.Empty(t, duplicatedAllowedPathCandidates(
+		filepath.Join(root, "single"),
+		root,
+	))
+}
+
 func TestInspectRejectsSymlinkEscapeFromAllowedDirs(t *testing.T) {
 	t.Parallel()
 
