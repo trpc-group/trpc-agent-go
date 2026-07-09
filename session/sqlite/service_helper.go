@@ -87,17 +87,15 @@ AND deleted_at IS NULL`
 	events := eventsList[0]
 
 	summaries := make(map[string]*session.Summary)
-	if len(events) > 0 {
-		sums, err := s.getSummariesList(
-			ctx,
-			[]session.Key{key},
-			[]time.Time{sessState.CreatedAt},
-		)
-		if err != nil {
-			return nil, err
-		}
-		summaries = sums[0]
+	sums, err := s.getSummariesList(
+		ctx,
+		[]session.Key{key},
+		[]time.Time{sessState.CreatedAt},
+	)
+	if err != nil {
+		return nil, err
 	}
+	summaries = sums[0]
 
 	sess := session.NewSession(
 		key.AppName,

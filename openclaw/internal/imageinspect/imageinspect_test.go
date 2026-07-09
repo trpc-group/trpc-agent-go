@@ -563,7 +563,13 @@ func writeShellScript(
 	path := filepath.Join(dir, name)
 	tmpPath := path + ".tmp"
 	content := "#!/bin/sh\n" + body
-	require.NoError(t, os.WriteFile(tmpPath, []byte(content), 0o755))
+	file, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	require.NoError(t, err)
+	defer func() { _ = file.Close() }()
+	_, err = file.WriteString(content)
+	require.NoError(t, err)
+	require.NoError(t, file.Close())
+	require.NoError(t, os.Chmod(tmpPath, 0o755))
 	require.NoError(t, os.Rename(tmpPath, path))
 	return path
 }

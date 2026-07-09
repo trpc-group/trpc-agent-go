@@ -195,6 +195,33 @@ func TestSessionSQLite_GetSession_LoadsAndFiltersSummaries(t *testing.T) {
 	require.Len(t, got.Summaries, 0)
 }
 
+func TestSessionSQLite_GetSession_LoadsSummaryWithFilteredEventWindow(t *testing.T) {
+	db, _, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	svc, err := NewService(db, WithSummarizer(&fakeSummarizer{}))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "s1"}
+	sess, err := svc.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	require.NoError(t, svc.AppendEvent(ctx, sess, newUserEvent("hi")))
+	require.NoError(t, svc.CreateSessionSummary(
+		ctx,
+		sess,
+		session.SummaryFilterKeyAllContents,
+		true,
+	))
+
+	got, err := svc.GetSession(ctx, key, session.WithEventTime(time.Now().Add(time.Hour)))
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.NotEmpty(t, got.Summaries)
+	require.Equal(t, "summary", got.Summaries[session.SummaryFilterKeyAllContents].Summary)
+}
+
 func TestSessionSQLite_SummaryBoundaryLastEventIDRoundTrip(t *testing.T) {
 	db, _, cleanup := openTempSQLiteDB(t)
 	defer cleanup()
