@@ -2938,6 +2938,7 @@ func newAgent(
 		callbacks,
 		os.Getenv(envBlockedToolArgumentSubstrings),
 	)
+	registerBlockedRouteToolCallback(callbacks)
 	callbacks.RegisterToolResultMessages(openClawToolResultMessages)
 
 	exec := cfg.codeExecutor
