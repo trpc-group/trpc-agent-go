@@ -842,3 +842,114 @@ func TestBeforeModel_CatalogWithPermissionFilter(t *testing.T) {
 	assert.Contains(t, req.Messages[0].Content, "allowed")
 	assert.NotContains(t, req.Messages[0].Content, "denied")
 }
+
+// TestPermissionFilter_PreRanking verifies that a permission-denied tool never
+// consumes a max_results slot ahead of an allowed tool. Before the fix,
+// filterAllowed ran after splitByCap, so a denied top-ranked tool could push
+// an allowed lower-ranked tool into additional_candidates or make it invisible.
+func TestPermissionFilter_PreRanking(t *testing.T) {
+	filter := func(ctx context.Context, names []string) map[string]bool {
+		out := make(map[string]bool, len(names))
+		for _, n := range names {
+			// Only "allowed_data" is permitted; "denied_data" is blocked even
+			// though it scores higher for the query "data".
+			out[n] = n == "allowed_data"
+		}
+		return out
+	}
+	p := NewPlugin(nil,
+		WithToolPermissionFilter(filter),
+		WithMaxTools(1),
+		WithToolboxes([]Toolbox{{
+			Name: "ns",
+			Tools: []tool.Tool{
+				// denied_data: name-part "data" (+10) + desc "data" (+3) = 13.
+				newTestTool("denied_data", "forbidden data handler"),
+				// allowed_data: name-part "data" (+10), desc has no "data" = 10.
+				newTestTool("allowed_data", "general utility tool"),
+			},
+		}}),
+	)
+	ctx, _ := ctxWithInvocation()
+
+	// Query "data" matches both tools, but denied_data scores 13 vs allowed_data's
+	// 10. With maxResults=1 and post-split filtering, denied_data would consume
+	// the only slot and allowed_data would be invisible. With the fix, denied_data
+	// is dropped before splitByCap, so allowed_data becomes the sole result.
+	res := callSearch(t, ctx, p, toolSearchInput{Queries: []string{"data"}, MaxResults: 1})
+
+	names := toolNames(res.Tools)
+	assert.Contains(t, names, "allowed_data",
+		"allowed_data should appear in tools even when denied_data ranks higher")
+	assert.NotContains(t, names, "denied_data",
+		"denied_data must not appear in tools")
+	assert.Empty(t, res.AdditionalCandidates,
+		"no overflow expected when only one tool is allowed")
+}
+
+// TestPermissionFilter_PreRanking_ListNamespace ensures the listing path
+// ("namespace only, no query") also filters denied tools before splitByCap.
+func TestPermissionFilter_PreRanking_ListNamespace(t *testing.T) {
+	filter := func(ctx context.Context, names []string) map[string]bool {
+		out := make(map[string]bool, len(names))
+		for _, n := range names {
+			// Only b_tool is permitted; a_tool and c_tool are denied.
+			out[n] = n == "b_tool"
+		}
+		return out
+	}
+	p := NewPlugin(nil,
+		WithToolPermissionFilter(filter),
+		WithMaxTools(1),
+		WithToolboxes([]Toolbox{{
+			Name: "ns",
+			Tools: []tool.Tool{
+				newTestTool("a_tool", "denied, alphabetically first"),
+				newTestTool("b_tool", "allowed, alphabetically second"),
+				newTestTool("c_tool", "denied, alphabetically third"),
+			},
+		}}),
+	)
+	ctx, _ := ctxWithInvocation()
+
+	// List the namespace without a query: tools sort alphabetically.
+	// Without pre-ranking filtering, a_tool would consume the maxResults=1 slot
+	// and b_tool would land in additional_candidates. With the fix, a_tool is
+	// dropped before splitByCap and b_tool becomes the first (and only) result.
+	res := callSearch(t, ctx, p, toolSearchInput{Namespace: "ns", MaxResults: 1})
+
+	names := toolNames(res.Tools)
+	assert.Equal(t, []string{"b_tool"}, names,
+		"b_tool should be the only result when a_tool is denied and maxResults=1")
+	assert.Empty(t, res.AdditionalCandidates,
+		"only one tool is allowed, so overflow should be empty")
+}
+
+// TestPermissionFilter_PreRanking_SelectByName verifies that exact-name loads
+// also filter denied tools inside resolveSelection rather than after.
+func TestPermissionFilter_PreRanking_SelectByName(t *testing.T) {
+	filter := func(ctx context.Context, names []string) map[string]bool {
+		out := make(map[string]bool, len(names))
+		for _, n := range names {
+			out[n] = n == "allowed_tool"
+		}
+		return out
+	}
+	p := NewPlugin(nil,
+		WithToolPermissionFilter(filter),
+		WithToolboxes([]Toolbox{{
+			Name: "ns",
+			Tools: []tool.Tool{
+				newTestTool("allowed_tool", "ok"),
+				newTestTool("denied_tool", "no"),
+			},
+		}}),
+	)
+	ctx, _ := ctxWithInvocation()
+
+	// Request both tools by exact name; only allowed_tool should appear.
+	res := callSearch(t, ctx, p, toolSearchInput{
+		ToolNames: []string{"allowed_tool", "denied_tool"},
+	})
+	assert.Equal(t, []string{"allowed_tool"}, toolNames(res.Tools))
+}

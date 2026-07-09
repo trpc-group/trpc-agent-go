@@ -213,14 +213,46 @@ func toolToText(t tool.Tool) string {
 	if decl == nil {
 		return ""
 	}
-	return fmt.Sprintf("Tool: %s\nDescription: %s", decl.Name, decl.Description)
+	parts := []string{
+		fmt.Sprintf("Tool: %s", decl.Name),
+		fmt.Sprintf("Description: %s", decl.Description),
+	}
+	if decl.InputSchema != nil && len(decl.InputSchema.Properties) > 0 {
+		keys := make([]string, 0, len(decl.InputSchema.Properties))
+		for name := range decl.InputSchema.Properties {
+			keys = append(keys, name)
+		}
+		sort.Strings(keys)
+		descs := make([]string, 0, len(keys))
+		for _, name := range keys {
+			info := decl.InputSchema.Properties[name]
+			if info == nil {
+				continue
+			}
+			paramType := strings.TrimSpace(info.Type)
+			if paramType == "" {
+				if info.Items != nil {
+					paramType = "array"
+				} else if len(info.Properties) > 0 {
+					paramType = "object"
+				}
+			}
+			descs = append(descs, fmt.Sprintf("%s (%s): %s", name, paramType, strings.TrimSpace(info.Description)))
+		}
+		if len(descs) > 0 {
+			parts = append(parts, "Parameters: "+strings.Join(descs, ", "))
+		}
+	}
+	return strings.Join(parts, "\n")
 }
 
 // --- Embedding search path wired into tool_search ---
 
 // searchToolsByEmbedding ranks deferred tools by semantic similarity to the
 // queries. A non-empty namespace scopes the candidate set to that toolbox; an
-// empty namespace searches every deferred tool. Each query is searched
+// empty namespace searches every deferred tool. permission-denied tools are
+// dropped from the candidate set before embeddings are computed so their
+// name/description is never sent to a remote embedder. Each query is searched
 // independently and merged by best (smallest) rank per tool so OR-combined
 // queries behave like the keyword path. The top maxResults load with schemas;
 // the remainder are returned as name-only overflow.
@@ -229,11 +261,10 @@ func toolToText(t tool.Tool) string {
 // or an error only on embedding/store failures.
 func (p *Plugin) searchToolsByEmbedding(
 	ctx context.Context,
-	namespace string,
-	queries []string,
-	maxResults int,
+	req searchRequest,
+	allAllowed map[string]bool,
 ) (selected, overflow []string, errPayload string, err error) {
-	candidateTools, errPayload := p.embeddingCandidates(namespace)
+	candidateTools, errPayload := p.embeddingCandidates(req.namespace, allAllowed)
 	if errPayload != "" || len(candidateTools) == 0 {
 		return nil, nil, errPayload, nil
 	}
@@ -254,7 +285,7 @@ func (p *Plugin) searchToolsByEmbedding(
 	// Fetch the full candidate pool per query (limit=len) so the merge, not a
 	// per-query cap, decides the final cut.
 	bestRank := make(map[string]int, len(candidateIDs))
-	for _, q := range queries {
+	for _, q := range req.queries {
 		if q = strings.TrimSpace(q); q == "" {
 			continue
 		}
@@ -283,14 +314,16 @@ func (p *Plugin) searchToolsByEmbedding(
 		return ranked[i] < ranked[j]
 	})
 
-	selected, overflow = splitByCap(ranked, maxResults)
+	selected, overflow = splitByCap(ranked, req.maxResults)
 	return selected, overflow, "", nil
 }
 
 // embeddingCandidates resolves the candidate tools for an embedding search under
 // a single read lock: the namespace's tools when namespace is set (with the same
 // unknown-namespace guard as resolveSelection), otherwise every deferred tool.
-func (p *Plugin) embeddingCandidates(namespace string) (map[string]tool.Tool, string) {
+// Permission-denied tools are excluded so their name/description is never sent
+// to a remote embedder.
+func (p *Plugin) embeddingCandidates(namespace string, allAllowed map[string]bool) (map[string]tool.Tool, string) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 
@@ -309,6 +342,9 @@ func (p *Plugin) embeddingCandidates(namespace string) (map[string]tool.Tool, st
 
 	tools := make(map[string]tool.Tool, len(names))
 	for name := range names {
+		if allAllowed != nil && !allAllowed[name] {
+			continue
+		}
 		if t, ok := p.toolBox[name]; ok {
 			tools[name] = t
 		}

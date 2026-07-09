@@ -235,6 +235,23 @@ func scoreToolForQuery(meta *toolMetadata, terms []string, patterns map[string]*
 	return totalScore
 }
 
+// searchRequest is the normalized, pre-parsed view of toolSearchInput used by
+// the internal routing layer. Grouping the fields keeps resolveSelection and
+// searchToolsByEmbedding signatures short and lets callers compute the derived
+// flags (isSelect / hasQuery) once at the entry point.
+type searchRequest struct {
+	namespace  string
+	toolNames  []string
+	queries    []string
+	maxResults int
+}
+
+// isSelect reports whether the caller asked for exact tool names.
+func (r searchRequest) isSelect() bool { return len(r.toolNames) > 0 }
+
+// hasQuery reports whether the caller provided keyword queries.
+func (r searchRequest) hasQuery() bool { return len(r.queries) > 0 }
+
 // toolSearchInput is the argument schema for the tool_search function tool.
 type toolSearchInput struct {
 	ToolNames  []string `json:"tool_names,omitempty" jsonschema:"description=Exact, fully-qualified tool name(s), e.g. [\"create_image\",\"mcp__git__commit\"].  Do NOT pass partial names, descriptions, or keywords here — use queries for those. Prefer this over queries when the catalog shows a matching name."`
@@ -254,19 +271,20 @@ func (p *Plugin) searchTools(ctx context.Context, input toolSearchInput) (string
 		maxResults = maxMaxResults
 	}
 
-	namespace := strings.TrimSpace(input.Namespace)
-	toolNames := trimNonEmpty(input.ToolNames)
-	queries := trimNonEmpty(input.Queries)
-	isSelect := len(toolNames) > 0
-	hasQuery := len(queries) > 0
+	req := searchRequest{
+		namespace:  strings.TrimSpace(input.Namespace),
+		toolNames:  trimNonEmpty(input.ToolNames),
+		queries:    trimNonEmpty(input.Queries),
+		maxResults: maxResults,
+	}
 
 	// Materialize MCP servers before the index is read: exact-name load lists
 	// the owning servers, a namespace search lists that server, otherwise all.
 	switch {
-	case isSelect:
-		p.materializeByToolNames(ctx, toolNames)
-	case namespace != "":
-		p.materializeNamespace(ctx, namespace)
+	case req.isSelect():
+		p.materializeByToolNames(ctx, req.toolNames)
+	case req.namespace != "":
+		p.materializeNamespace(ctx, req.namespace)
 	default:
 		p.materializeAllMCP(ctx)
 	}
@@ -290,10 +308,10 @@ func (p *Plugin) searchTools(ctx context.Context, input toolSearchInput) (string
 	// the model issued a keyword query, rank deferred tools by semantic (vector)
 	// similarity instead of the built-in keyword text matching. Exact tool_names
 	// loads and namespace-only listings keep the deterministic index path.
-	useEmbedding := p.knowledge != nil && !isSelect && hasQuery
+	useEmbedding := p.knowledge != nil && !req.isSelect() && req.hasQuery()
 	if useEmbedding {
 		var err error
-		selectedTools, overflow, errPayload, err = p.searchToolsByEmbedding(ctx, namespace, queries, maxResults)
+		selectedTools, overflow, errPayload, err = p.searchToolsByEmbedding(ctx, req, allAllowed)
 		if err != nil {
 			if !p.failOpen {
 				return "", err
@@ -305,21 +323,19 @@ func (p *Plugin) searchTools(ctx context.Context, input toolSearchInput) (string
 	}
 	if !useEmbedding {
 		// Resolve under a single read lock; overflow are matches beyond maxResults.
-		selectedTools, overflow, errPayload = p.resolveSelection(namespace, toolNames, queries, isSelect, hasQuery, maxResults)
+		// Permissions are enforced inside the selection phase so denied tools
+		// never consume max_results slots ahead of allowed tools.
+		selectedTools, overflow, errPayload = p.resolveSelection(req, allAllowed)
 	}
 	if errPayload != "" {
 		return errPayload, nil
 	}
 
-	// Permission filtering reuses allAllowed (preset tools are not controlled).
-	selectedTools = p.filterAllowed(selectedTools, allAllowed)
-	overflow = p.filterAllowed(overflow, allAllowed)
-
 	// Accumulate into session state.
 	if hasInv && inv != nil {
 		p.appendDiscoveredTools(ctx, inv, selectedTools)
 		log.InfofContext(ctx, "[%s] tool_search namespace=%q queries=%s toolNames=%s found=%s",
-			p.name, namespace, strings.Join(queries, "|"), strings.Join(toolNames, "|"), strings.Join(selectedTools, "|"))
+			p.name, req.namespace, strings.Join(req.queries, "|"), strings.Join(req.toolNames, "|"), strings.Join(selectedTools, "|"))
 	}
 	return p.formatSearchResult(selectedTools, overflow, previouslyLoaded), nil
 }
@@ -334,39 +350,38 @@ func (p *Plugin) searchTools(ctx context.Context, input toolSearchInput) (string
 // Returns selected tools (loaded with full schemas), an overflow list surfaced
 // as name-only additional_candidates, or errPayload on validation failure.
 func (p *Plugin) resolveSelection(
-	namespace string,
-	toolNames, queries []string,
-	isSelect, hasQuery bool,
-	maxResults int,
+	req searchRequest,
+	allAllowed map[string]bool,
 ) (selected, overflow []string, errPayload string) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 
 	// tool_names is name-anchored, so namespace validation is skipped. An empty
 	// namespace falls through to the global keyword path in candidateSetWithBias.
-	if !isSelect {
-		if errPayload := p.validateNamespace(namespace); errPayload != "" {
+	if !req.isSelect() {
+		if errPayload := p.validateNamespace(req.namespace); errPayload != "" {
 			return nil, nil, errPayload
 		}
 	}
 
 	switch {
-	case isSelect:
+	case req.isSelect():
 		// Exact-name loads have no overflow: every resolved name is loaded.
-		return p.selectToolsByName(toolNames), nil, ""
-	case namespace != "" && !hasQuery:
-		sel, of := p.listNamespaceTools(namespace, maxResults)
+		return p.selectToolsByName(req.toolNames, allAllowed), nil, ""
+	case req.namespace != "" && !req.hasQuery():
+		sel, of := p.listNamespaceTools(req.namespace, req.maxResults, allAllowed)
 		return sel, of, ""
 	default:
-		sel, of := p.searchToolsByQueries(namespace, queries, maxResults)
+		sel, of := p.searchToolsByQueries(req.namespace, req.queries, req.maxResults, allAllowed)
 		return sel, of, ""
 	}
 }
 
 // selectToolsByName resolves exact tool names to their canonical form, dropping
-// blanks, unknown names, and duplicates. Matching is case-insensitive across
-// all namespaces. The caller must hold p.mu (read).
-func (p *Plugin) selectToolsByName(names []string) []string {
+// blanks, unknown names, duplicates, and permission-denied deferred tools.
+// Matching is case-insensitive across all namespaces. The caller must hold p.mu
+// (read).
+func (p *Plugin) selectToolsByName(names []string, allAllowed map[string]bool) []string {
 	seen := make(map[string]struct{}, len(names))
 	result := make([]string, 0, len(names))
 	for _, name := range names {
@@ -381,23 +396,33 @@ func (p *Plugin) selectToolsByName(names []string) []string {
 		if _, dup := seen[canonical]; dup {
 			continue
 		}
+		// Permission check for deferred tools; preset tools pass through.
+		if allAllowed != nil {
+			if _, isDeferred := p.deferredNames[canonical]; isDeferred && !allAllowed[canonical] {
+				continue
+			}
+		}
 		seen[canonical] = struct{}{}
 		result = append(result, canonical)
 	}
 	return result
 }
 
-// listNamespaceTools returns every tool in the given namespace, sorted by name.
-// The first maxResults are loaded; any beyond that are returned as overflow
-// (name-only additional_candidates). Supports the "namespace=X, no query" scan
-// mode. The caller must hold p.mu (read).
-func (p *Plugin) listNamespaceTools(namespace string, maxResults int) (selected, overflow []string) {
+// listNamespaceTools returns every tool in the given namespace that the caller
+// is permitted to use, sorted by name. The first maxResults are loaded; any
+// beyond that are returned as overflow (name-only additional_candidates).
+// Supports the "namespace=X, no query" scan mode. The caller must hold p.mu
+// (read).
+func (p *Plugin) listNamespaceTools(namespace string, maxResults int, allAllowed map[string]bool) (selected, overflow []string) {
 	box, ok := p.toolboxByName[namespace]
 	if !ok || box == nil {
 		return nil, nil
 	}
 	names := make([]string, 0, len(box.toolNames))
 	for name := range box.toolNames {
+		if allAllowed != nil && !allAllowed[name] {
+			continue
+		}
 		names = append(names, name)
 	}
 	sort.Strings(names)
@@ -421,10 +446,25 @@ func splitByCap(names []string, maxResults int) (selected, overflow []string) {
 // A non-empty namespace scopes scoring to that toolbox. An empty namespace
 // searches every deferred tool and adds a per-tool namespace bias so a
 // generic-verb tool in the wrong domain does not out-rank the right-domain
-// tool at the same raw score. The caller must hold p.mu (read).
-func (p *Plugin) searchToolsByQueries(namespace string, queries []string, maxResults int) (selected, overflow []string) {
+// tool at the same raw score. Denied tools are dropped from the candidate set
+// before scoring so they never consume max_results slots. The caller must hold
+// p.mu (read).
+func (p *Plugin) searchToolsByQueries(namespace string, queries []string, maxResults int, allAllowed map[string]bool) (selected, overflow []string) {
 	candidatesSet, namespaceBias := p.candidateSetWithBias(namespace, queries)
 	if candidatesSet == nil {
+		return nil, nil
+	}
+
+	// Drop permission-denied tools from the candidate set so they never
+	// consume max_results slots ahead of allowed tools.
+	if allAllowed != nil {
+		for name := range candidatesSet {
+			if !allAllowed[name] {
+				delete(candidatesSet, name)
+			}
+		}
+	}
+	if len(candidatesSet) == 0 {
 		return nil, nil
 	}
 

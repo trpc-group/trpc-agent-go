@@ -18,6 +18,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
 // fakeEmbedder maps known text to fixed vectors so cosine similarity is
@@ -239,4 +240,65 @@ func TestWithoutFailOpen_EmbeddingErrorPropagates(t *testing.T) {
 	ctx, _ := ctxWithInvocation()
 	_, callErr := p.searchTools(ctx, toolSearchInput{Namespace: "utility", Queries: []string{"weather"}})
 	require.Error(t, callErr, "without fail-open the embedding error surfaces")
+}
+
+// TestEmbeddingSearch_QueryMatchesParameterOnly verifies that semantic search
+// can find a tool when the query matches only parameter names/descriptions, not
+// the tool name or description. This exercises the Parameters section produced
+// by toolToText.
+func TestEmbeddingSearch_QueryMatchesParameterOnly(t *testing.T) {
+	// create_customer: name/description do NOT contain "email" or "mail".
+	// The match must come from the parameter name/description.
+	emailTool := function.NewFunctionTool(
+		func(ctx context.Context, in struct{}) (string, error) { return "", nil },
+		function.WithName("create_customer"),
+		function.WithDescription("creates a new record"),
+		function.WithInputSchema(&tool.Schema{
+			Type: "object",
+			Properties: map[string]*tool.Schema{
+				"email_address": {
+					Type:        "string",
+					Description: "The customer's electronic mail address",
+				},
+			},
+		}),
+	)
+	statusTool := function.NewFunctionTool(
+		func(ctx context.Context, in struct{}) (string, error) { return "", nil },
+		function.WithName("check_status"),
+		function.WithDescription("checks system status"),
+		function.WithInputSchema(&tool.Schema{
+			Type: "object",
+			Properties: map[string]*tool.Schema{
+				"service_name": {
+					Type:        "string",
+					Description: "Name of the service to check status for",
+				},
+			},
+		}),
+	)
+
+	emb := &fakeEmbedder{vectors: map[string][]float64{
+		toolToText(emailTool):  {1, 0, 0},
+		toolToText(statusTool): {0, 1, 0},
+		"electronic mail":      {1, 0, 0},
+	}}
+	k, err := NewToolKnowledge(emb, WithVectorStore(inmemory.New()))
+	require.NoError(t, err)
+
+	p := NewPlugin(nil,
+		WithToolKnowledge(k),
+		WithToolboxes([]Toolbox{{
+			Name:        "crm",
+			Description: "customer management",
+			Tools:       []tool.Tool{emailTool, statusTool},
+		}}),
+	)
+	ctx, _ := ctxWithInvocation()
+
+	// "electronic mail" only appears in email_address's parameter description,
+	// not in the tool name or description. It should still match.
+	res := callSearch(t, ctx, p, toolSearchInput{Queries: []string{"electronic mail"}, MaxResults: 1})
+	require.Len(t, res.Tools, 1)
+	assert.Equal(t, "create_customer", res.Tools[0].Name)
 }
