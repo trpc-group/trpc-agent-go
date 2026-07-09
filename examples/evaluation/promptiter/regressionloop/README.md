@@ -61,8 +61,8 @@ The **overfit** case is the important one: overall validation improves
 (0.333 → 0.667) so the engine's `MinScoreGain` accepts it, but the harness gate
 sees `newlyFailed=1` (a case that passed at baseline now fails) and rejects the
 candidate — exactly the "training up, validation down" protection an
-optimization loop needs. Committed sample reports for all three are under
-[`output/`](./output).
+optimization loop needs. Committed sample reports for all four scenarios are
+under [`output/`](./output).
 
 ## Inputs (`data/eval-optimization-app/`)
 
