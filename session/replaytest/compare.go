@@ -170,7 +170,12 @@ func compareStruct(path string, base, compare any, add func(string, any, any)) {
 	for k := range cm {
 		keys[k] = struct{}{}
 	}
+	keyList := make([]string, 0, len(keys))
 	for k := range keys {
+		keyList = append(keyList, k)
+	}
+	sort.Strings(keyList)
+	for _, k := range keyList {
 		if !reflect.DeepEqual(bm[k], cm[k]) {
 			add(k, bm[k], cm[k])
 		}

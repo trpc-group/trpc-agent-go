@@ -210,6 +210,34 @@ func TestCompareSnapshotsStateDiffsAreSorted(t *testing.T) {
 	}
 }
 
+func TestCompareSnapshotsStructDiffsAreSorted(t *testing.T) {
+	base := &Snapshot{
+		Case:      "case",
+		Backend:   "base",
+		SessionID: "sess",
+		Events: []NormalizedEvent{{
+			Author:  "assistant",
+			Content: "base content",
+			Role:    string(model.RoleAssistant),
+		}},
+	}
+	compare := cloneSnapshot(base)
+	compare.Backend = "other"
+	compare.Events[0].Author = "user"
+	compare.Events[0].Content = "compare content"
+
+	diffs := CompareSnapshots(base, compare)
+	if len(diffs) != 2 {
+		t.Fatalf("diff count = %d, want 2: %+v", len(diffs), diffs)
+	}
+	if diffs[0].FieldPath != "$.events[0].author" {
+		t.Fatalf("first event diff = %s, want author before content", diffs[0].FieldPath)
+	}
+	if diffs[1].FieldPath != "$.events[0].content" {
+		t.Fatalf("second event diff = %s, want content after author", diffs[1].FieldPath)
+	}
+}
+
 func TestBackendsReplayMemoryLifecycleAndNilOperations(t *testing.T) {
 	c := ReplayCase{
 		Name: "memory_lifecycle",

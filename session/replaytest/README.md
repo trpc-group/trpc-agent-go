@@ -46,9 +46,9 @@ Recommended environment gates:
 ```
 
 When a backend does not support event pages, TTL, tracks, or memory search, its
-adapter should add an `UnsupportedFeature` with `allowed_diff=true` and a concrete
-explanation. Unsupported features are reported but do not hide mismatches in
-supported fields.
+adapter should append a `BackendUnsupported` entry through
+`CaseReport.Unsupported` with `allowed_diff=true` and a concrete explanation.
+Unsupported features are reported but do not hide mismatches in supported fields.
 
 ## Design Notes
 
