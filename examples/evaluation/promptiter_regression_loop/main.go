@@ -76,7 +76,10 @@ func run(ctx context.Context, logger *log.Logger) error {
 	if err != nil {
 		return err
 	}
-	components, closeComponents, err := buildComponents(ctx, pipelineMode, inputs.baselinePrompt)
+	// One tracker spans the whole run so worker model calls (real mode) count
+	// toward the report cost summary and the max_model_calls gate budget.
+	tracker := NewCostTracker()
+	components, closeComponents, err := buildComponents(ctx, pipelineMode, inputs.baselinePrompt, tracker)
 	if err != nil {
 		return err
 	}
@@ -89,6 +92,7 @@ func run(ctx context.Context, logger *log.Logger) error {
 		Mode:       pipelineMode,
 		WriteBack:  *writeBack,
 		Components: components,
+		Tracker:    tracker,
 		Logger:     logger,
 	})
 	if err != nil {
@@ -112,13 +116,15 @@ func parseMode(value string) (Mode, error) {
 	}
 }
 
-// buildComponents assembles mode-specific pipeline collaborators. The
-// returned closer releases worker runners; it is safe to call once.
-func buildComponents(ctx context.Context, pipelineMode Mode, baselinePrompt string) (Components, func(), error) {
+// buildComponents assembles mode-specific pipeline collaborators. Real-mode
+// worker runners are wrapped with the tracker so their model calls are
+// accounted; fake components make no model calls. The returned closer
+// releases worker runners; it is safe to call once.
+func buildComponents(ctx context.Context, pipelineMode Mode, baselinePrompt string, tracker *CostTracker) (Components, func(), error) {
 	if pipelineMode == ModeFake {
 		return buildFakeComponents(baselinePrompt)
 	}
-	return buildRealComponents(ctx, baselinePrompt)
+	return buildRealComponents(ctx, baselinePrompt, tracker)
 }
 
 // buildFakeComponents wires the deterministic scripted runtime: scripted
@@ -141,8 +147,10 @@ func buildFakeComponents(baselinePrompt string) (Components, func(), error) {
 }
 
 // buildRealComponents wires OpenAI-compatible models for the candidate and
-// the PromptIter worker stages.
-func buildRealComponents(ctx context.Context, baselinePrompt string) (Components, func(), error) {
+// the PromptIter worker stages. Every worker runner is wrapped with the
+// tracker so its model calls land in the cost report and the
+// max_model_calls gate budget.
+func buildRealComponents(ctx context.Context, baselinePrompt string, tracker *CostTracker) (Components, func(), error) {
 	candidateModel, err := loadOpenAIModel(defaultRealCandidateModel)
 	if err != nil {
 		return Components{}, nil, fmt.Errorf("load candidate model: %w", err)
@@ -151,10 +159,14 @@ func buildRealComponents(ctx context.Context, baselinePrompt string) (Components
 	if err != nil {
 		return Components{}, nil, fmt.Errorf("load worker model: %w", err)
 	}
-	backwarderRunner := runner.NewRunner("promptiter-backwarder", newWorkerAgent("promptiter-backwarder", workerModel))
-	aggregatorRunner := runner.NewRunner("promptiter-aggregator", newWorkerAgent("promptiter-aggregator", workerModel))
-	optimizerRunner := runner.NewRunner("promptiter-optimizer", newWorkerAgent("promptiter-optimizer", workerModel))
-	judgeRunner := runner.NewRunner("promptiter-judge", newWorkerAgent("promptiter-judge", workerModel))
+	backwarderRunner := tracker.Wrap("backwarder",
+		runner.NewRunner("promptiter-backwarder", newWorkerAgent("promptiter-backwarder", workerModel)))
+	aggregatorRunner := tracker.Wrap("aggregator",
+		runner.NewRunner("promptiter-aggregator", newWorkerAgent("promptiter-aggregator", workerModel)))
+	optimizerRunner := tracker.Wrap("optimizer",
+		runner.NewRunner("promptiter-optimizer", newWorkerAgent("promptiter-optimizer", workerModel)))
+	judgeRunner := tracker.Wrap("judge",
+		runner.NewRunner("promptiter-judge", newWorkerAgent("promptiter-judge", workerModel)))
 	closer := func() {
 		backwarderRunner.Close()
 		aggregatorRunner.Close()

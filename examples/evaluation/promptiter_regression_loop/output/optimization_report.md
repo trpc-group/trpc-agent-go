@@ -4,7 +4,7 @@
 
 **拒绝**：拒绝全部候选；最优候选（第 1 轮）未通过规则: max_regressed_cases, protected_cases。训练集 +0.1250 但验证集 case val_02_protected_format 由 pass 转 fail，判定为过拟合
 
-- 运行 ID：`run-20260709-184441.447944700`（mode=fake，seed=20260705，耗时 49ms）
+- 运行 ID：`run-20260709-192920.108723000`（mode=fake，seed=20260705，耗时 34ms）
 - 验证集总分：baseline 0.6667 → 候选 0.8333
 - 训练集总分：baseline 0.3750 → 候选 0.5000
 
@@ -64,8 +64,8 @@ baseline 失败 4 例，候选失败 1 例。
 
 | 轮次 | 验证集分数 | 模型调用 | 耗时 | 过安全门 | 选中 |
 |---|---|---|---|---|---|
-| 1 | 0.8333 | 11 | 14ms | 否 | 否 |
-| 2 | 0.8333 | 11 | 11ms | 否 | 否 |
+| 1 | 0.8333 | 11 | 12ms | 否 | 否 |
+| 2 | 0.8333 | 11 | 9ms | 否 | 否 |
 
 ## 安全门规则明细
 
@@ -76,14 +76,14 @@ baseline 失败 4 例，候选失败 1 例。
 | max_regressed_cases | 1 | <= 0 | **未通过** | 退化 case: val_02_protected_format |
 | protected_cases | 1 | == 0 | **未通过** | 关键 case 退化: val_02_protected_format |
 | max_model_calls | 32 | <= 200 | 通过 | 整个 pipeline 运行的模型调用预算 |
-| max_wall_clock | 48ms | <= 3m0s | 通过 | 整个 pipeline 运行的墙钟预算 |
+| max_wall_clock | 34ms | <= 3m0s | 通过 | 整个 pipeline 运行的墙钟预算 |
 
 ## 轮次时间线
 
 | 轮次 | train | validation | 引擎内层判定 | 模型调用 | 耗时 |
 |---|---|---|---|---|---|
-| 1 | 0.3750 | 0.8333 | 接受 | 11 | 14ms |
-| 2 | 0.5000 | 0.8333 | 拒绝（停止：max rounds reached） | 11 | 11ms |
+| 1 | 0.3750 | 0.8333 | 接受 | 11 | 12ms |
+| 2 | 0.5000 | 0.8333 | 拒绝（停止：max rounds reached） | 11 | 9ms |
 
 ## 成本摘要
 
@@ -92,7 +92,7 @@ baseline 失败 4 例，候选失败 1 例。
 | candidate | 21 | 32 | 9255 | 611 |
 | **合计** | 21 | 32 | 9255 | 611 |
 
-分阶段耗时：s1_baseline_train=11ms s2_attribution=1ms s3_optimization=31ms s4_delta=2ms s5_gate=0s 
+分阶段耗时：s1_baseline_train=8ms s2_attribution=0s s3_optimization=23ms s4_delta=0s s5_gate=0s 
 
 ## 下一步建议
 

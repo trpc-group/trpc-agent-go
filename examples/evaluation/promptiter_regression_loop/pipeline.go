@@ -81,8 +81,11 @@ type Options struct {
 	// WriteBack overwrites the baseline prompt source on acceptance instead of
 	// only emitting output/candidate_prompt.txt.
 	WriteBack bool
-	// Components carries the mode-specific collaborators.
+	// Components carries the mode-specific collaborators. Worker runners
+	// (including Judge) must already be wrapped with Tracker by the builder.
 	Components Components
+	// Tracker accumulates runner costs across the run. Nil creates a fresh one.
+	Tracker *CostTracker
 	// Logger receives progress output. Defaults to the standard logger.
 	Logger *log.Logger
 }
@@ -152,7 +155,7 @@ func runPipeline(ctx context.Context, opts Options) (*Result, error) {
 		return nil, fmt.Errorf("create output dir %q: %w", opts.OutputDir, err)
 	}
 
-	tracker := NewCostTracker()
+	tracker := opts.Tracker
 	audit, err := newAuditWriter(opts.OutputDir, tracker)
 	if err != nil {
 		return nil, err
@@ -183,10 +186,8 @@ func runPipeline(ctx context.Context, opts Options) (*Result, error) {
 		runner.NewRunner(opts.Config.AppName, opts.Components.CandidateAgent),
 	)
 	defer candidateRunner.Close()
+	// The judge runner arrives pre-wrapped by the component builder.
 	judgeRunner := opts.Components.Judge
-	if judgeRunner != nil {
-		judgeRunner = tracker.Wrap("judge", judgeRunner)
-	}
 	evalSetManager := evalsetlocal.New(evalset.WithBaseDir(opts.DataDir))
 	metricManager := metriclocal.New(
 		metric.WithBaseDir(opts.DataDir),
@@ -623,6 +624,9 @@ func validateOptions(opts *Options) error {
 	}
 	if opts.Logger == nil {
 		opts.Logger = log.Default()
+	}
+	if opts.Tracker == nil {
+		opts.Tracker = NewCostTracker()
 	}
 	return nil
 }

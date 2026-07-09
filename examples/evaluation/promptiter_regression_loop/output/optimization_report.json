@@ -1,10 +1,10 @@
 {
-  "runId": "run-20260709-184441.447944700",
+  "runId": "run-20260709-192920.108723000",
   "mode": "fake",
   "seed": 20260705,
-  "startedAt": "2026-07-09T18:44:41.4657455+08:00",
-  "finishedAt": "2026-07-09T18:44:41.5148126+08:00",
-  "duration": "49ms",
+  "startedAt": "2026-07-09T19:29:20.1233451+08:00",
+  "finishedAt": "2026-07-09T19:29:20.1574186+08:00",
+  "duration": "34ms",
   "models": {
     "aggregator": "fake pass-through aggregator",
     "backwarder": "fake deterministic backwarder",
@@ -475,7 +475,7 @@
       {
         "name": "max_wall_clock",
         "passed": true,
-        "observed": "48ms",
+        "observed": "34ms",
         "threshold": "\u003c= 3m0s",
         "reason": "整个 pipeline 运行的墙钟预算"
       }
@@ -485,7 +485,7 @@
         "round": 1,
         "validationScore": 0.8333333333333334,
         "modelCalls": 11,
-        "wallClock": 13804700,
+        "wallClock": 11547400,
         "gatePassed": false,
         "selected": false,
         "rules": [
@@ -527,7 +527,7 @@
           {
             "name": "max_wall_clock",
             "passed": true,
-            "observed": "48ms",
+            "observed": "34ms",
             "threshold": "\u003c= 3m0s",
             "reason": "整个 pipeline 运行的墙钟预算"
           }
@@ -537,7 +537,7 @@
         "round": 2,
         "validationScore": 0.8333333333333334,
         "modelCalls": 11,
-        "wallClock": 11354100,
+        "wallClock": 8523300,
         "gatePassed": false,
         "selected": false,
         "rules": [
@@ -579,7 +579,7 @@
           {
             "name": "max_wall_clock",
             "passed": true,
-            "observed": "48ms",
+            "observed": "34ms",
             "threshold": "\u003c= 3m0s",
             "reason": "整个 pipeline 运行的墙钟预算"
           }
@@ -597,7 +597,7 @@
       "engineAccepted": true,
       "engineReason": "candidate score gain satisfies acceptance policy",
       "modelCalls": 11,
-      "wallClock": "14ms"
+      "wallClock": "12ms"
     },
     {
       "round": 2,
@@ -606,7 +606,7 @@
       "engineAccepted": false,
       "engineReason": "candidate score gain does not satisfy acceptance policy",
       "modelCalls": 11,
-      "wallClock": "11ms",
+      "wallClock": "9ms",
       "stopReason": "max rounds reached"
     }
   ],
@@ -626,10 +626,10 @@
       "completionTokens": 611
     },
     "stageDurations": {
-      "s1_baseline_train": "11ms",
-      "s2_attribution": "1ms",
-      "s3_optimization": "31ms",
-      "s4_delta": "2ms",
+      "s1_baseline_train": "8ms",
+      "s2_attribution": "0s",
+      "s3_optimization": "23ms",
+      "s4_delta": "0s",
       "s5_gate": "0s"
     }
   },
