@@ -57,6 +57,7 @@ const (
 	actionAct        = "act"
 	actionEvaluate   = "evaluate"
 	actionWait       = "wait"
+	actionScroll     = "scroll"
 )
 
 const (
@@ -140,6 +141,7 @@ var supportedActions = []string{
 	actionAct,
 	actionEvaluate,
 	actionWait,
+	actionScroll,
 }
 
 var supportedPlaywrightMCPActions = []string{
@@ -159,6 +161,7 @@ var supportedPlaywrightMCPActions = []string{
 	actionDialog,
 	actionAct,
 	actionEvaluate,
+	actionScroll,
 }
 
 func supportedActionsForDriver(driverType string) []string {
@@ -500,6 +503,10 @@ func (t *Tool) Call(ctx context.Context, args []byte) (any, error) {
 	}
 	if actionKey == actionWait {
 		in = normalizeWaitActionInput(in)
+		actionKey = strings.ToLower(actionAct)
+	}
+	if actionKey == actionScroll {
+		in.Kind = actScroll
 		actionKey = strings.ToLower(actionAct)
 	}
 	in = normalizeBrowserActionInput(in, actionKey)
@@ -2342,10 +2349,10 @@ func normalizeActRequest(in input) actRequest {
 		if strings.TrimSpace(req.Button) == "" {
 			req.Button = in.Button
 		}
-		if len(req.Modifiers) == 0 {
+		if req.Modifiers == nil {
 			req.Modifiers = in.Modifiers
 		}
-		if strings.TrimSpace(req.Text) == "" {
+		if req.Text == "" {
 			req.Text = in.Text
 		}
 		if req.Submit == nil {
@@ -2372,10 +2379,10 @@ func normalizeActRequest(in input) actRequest {
 		if strings.TrimSpace(req.EndRef) == "" {
 			req.EndRef = in.EndRef
 		}
-		if len(req.Values) == 0 {
+		if req.Values == nil {
 			req.Values = in.Values
 		}
-		if len(req.Fields) == 0 {
+		if req.Fields == nil {
 			req.Fields = in.Fields
 		}
 		if req.Width == nil {

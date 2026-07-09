@@ -2195,6 +2195,20 @@ func TestToolCall_ActRoutesLegacyFields(t *testing.T) {
 			},
 		},
 		{
+			name: "top-level scroll alias",
+			input: map[string]any{
+				"action":    actionScroll,
+				"direction": "up",
+				"amount":    500,
+			},
+			wantTool: mcpToolMouseWheel,
+			assertArg: func(t *testing.T, call fakeCall) {
+				t.Helper()
+				require.Equal(t, 0, call.Args["deltaX"])
+				require.Equal(t, -500, call.Args["deltaY"])
+			},
+		},
+		{
 			name: "drag",
 			input: map[string]any{
 				"action":   actionAct,
@@ -2475,6 +2489,35 @@ func TestToolCall_ActBackfillsTopLevelKindIntoNestedRequest(t *testing.T) {
 	require.Len(t, drv.calls, 1)
 	require.Equal(t, mcpToolPressKey, drv.calls[0].Tool)
 	require.Equal(t, "Home", drv.calls[0].Args["key"])
+}
+
+func TestNormalizeActRequestPreservesExplicitNestedValues(t *testing.T) {
+	t.Parallel()
+
+	got := normalizeActRequest(input{
+		Kind:      actType,
+		Text:      "fallback",
+		Modifiers: []string{"Shift"},
+		Values:    []string{"fallback"},
+		Fields: []map[string]any{
+			{"target": "fallback", "text": "fallback"},
+		},
+		Request: &actRequest{
+			Kind:      actType,
+			Text:      " ",
+			Modifiers: []string{},
+			Values:    []string{},
+			Fields:    []map[string]any{},
+		},
+	})
+
+	require.Equal(t, " ", got.Text)
+	require.Empty(t, got.Modifiers)
+	require.NotNil(t, got.Modifiers)
+	require.Empty(t, got.Values)
+	require.NotNil(t, got.Values)
+	require.Empty(t, got.Fields)
+	require.NotNil(t, got.Fields)
 }
 
 func TestToolCall_ActPassesTimeoutToBrowserServer(t *testing.T) {
