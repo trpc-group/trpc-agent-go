@@ -38,7 +38,7 @@ var (
 	repoPath     = flag.String("repo-path", "", "Path to repository")
 	outputDir    = flag.String("output-dir", "output", "Output directory")
 	dbPath       = flag.String("db-path", "code_review.db", "SQLite database path")
-	dryRun       = flag.Bool("dry-run", false, "Run without LLM")
+	dryRun       = flag.Bool("dry-run", false, "Run without LLM, but still run static analysis and sandbox checks")
 	runFixture   = flag.String("fixture", "", "Run specific fixture")
 	listFixtures = flag.Bool("list-fixtures", false, "List available fixtures")
 	unsafeLocal  = flag.Bool("unsafe-local", false, "Enable unsafe local sandbox mode for testing (runs untrusted code on host)")
@@ -96,24 +96,41 @@ func generateDiffFromRepo(repoPath string) (string, error) {
 		baseRef = "origin/main"
 	}
 
+	var output []byte
+	var err error
+
 	cmd := exec.Command("git", "-C", repoPath, "merge-base", baseRef, "HEAD")
 	mergeBase, err := cmd.CombinedOutput()
 	if err != nil {
 		log.Printf("Warning: Failed to find merge base with %s, falling back to HEAD~1", baseRef)
 		cmd := exec.Command("git", "-C", repoPath, "diff", "HEAD~1", "HEAD")
-		output, err := cmd.CombinedOutput()
+		output, err = cmd.CombinedOutput()
 		if err != nil {
 			return "", fmt.Errorf("git diff failed: %w", err)
 		}
-		return string(output), nil
+	} else {
+		mergeBaseHash := strings.TrimSpace(string(mergeBase))
+		cmd = exec.Command("git", "-C", repoPath, "diff", mergeBaseHash, "HEAD")
+		output, err = cmd.CombinedOutput()
+		if err != nil {
+			return "", fmt.Errorf("git diff failed: %w", err)
+		}
 	}
 
-	mergeBaseHash := strings.TrimSpace(string(mergeBase))
-	cmd = exec.Command("git", "-C", repoPath, "diff", mergeBaseHash, "HEAD")
-	output, err := cmd.CombinedOutput()
+	stagedOutput, err := exec.Command("git", "-C", repoPath, "diff", "--cached").CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("git diff failed: %w", err)
+		log.Printf("Warning: Failed to get staged diff: %v", err)
+	} else if len(stagedOutput) > 0 {
+		output = append(output, stagedOutput...)
 	}
+
+	unstagedOutput, err := exec.Command("git", "-C", repoPath, "diff").CombinedOutput()
+	if err != nil {
+		log.Printf("Warning: Failed to get unstaged diff: %v", err)
+	} else if len(unstagedOutput) > 0 {
+		output = append(output, unstagedOutput...)
+	}
+
 	return string(output), nil
 }
 
@@ -166,6 +183,19 @@ func runCodeReview(diffPath, repoPath, outputDir, dbPath string, dryRun bool) er
 
 	taskID := uuid.New().String()
 	log.Printf("Task ID: %s", taskID)
+
+	if err := validatePath(diffPath); err != nil {
+		return fmt.Errorf("invalid diff path: %w", err)
+	}
+	if err := validatePath(repoPath); err != nil {
+		return fmt.Errorf("invalid repo path: %w", err)
+	}
+	if err := validatePath(outputDir); err != nil {
+		return fmt.Errorf("invalid output dir: %w", err)
+	}
+	if err := validatePath(dbPath); err != nil {
+		return fmt.Errorf("invalid db path: %w", err)
+	}
 
 	if err := os.MkdirAll(outputDir, 0755); err != nil {
 		return fmt.Errorf("create output dir: %w", err)
@@ -229,75 +259,73 @@ func runCodeReview(diffPath, repoPath, outputDir, dbPath string, dryRun bool) er
 
 	var findings []storage.Finding
 
-	if !dryRun {
-		log.Printf("Running static analysis...")
-		sbx, err := sandbox.NewSandboxWithConfig(repoPath, sandbox.SandboxConfig{
-			UnsafeLocal: *unsafeLocal,
-		})
-		if err != nil {
-			log.Printf("Warning: Failed to create sandbox: %v", err)
-			log.Printf("Hint: Use --unsafe-local flag to enable local sandbox for testing")
-		} else {
-			log.Printf("Using sandbox type: %s", sbx.GetType())
-			defer sbx.Close()
+	log.Printf("Running static analysis...")
+	sbx, err := sandbox.NewSandboxWithConfig(repoPath, sandbox.SandboxConfig{
+		UnsafeLocal: *unsafeLocal,
+	})
+	if err != nil {
+		log.Printf("Warning: Failed to create sandbox: %v", err)
+		log.Printf("Hint: Use --unsafe-local flag to enable local sandbox for testing")
+	} else {
+		log.Printf("Using sandbox type: %s", sbx.GetType())
+		defer sbx.Close()
 
-			commands := []string{
-				"go vet ./...",
-				"go test ./... -short",
+		commands := []string{
+			"go vet ./...",
+			"go test ./... -short",
+		}
+
+		for _, cmd := range commands {
+			result := permissionPolicy.CheckCommand(cmd)
+			record := storage.PermissionRecord{
+				ID:        uuid.New().String(),
+				TaskID:    taskID,
+				Command:   cmd,
+				Action:    string(result.Action),
+				Reason:    result.Reason,
+				CreatedAt: time.Now(),
+			}
+			db.CreatePermissionRecord(ctx, record)
+
+			if result.Action == policy.ActionDeny {
+				log.Printf("Command denied: %s", cmd)
+				metrics.RecordPermissionBlock()
+				continue
 			}
 
-			for _, cmd := range commands {
-				result := permissionPolicy.CheckCommand(cmd)
-				record := storage.PermissionRecord{
-					ID:        uuid.New().String(),
-					TaskID:    taskID,
-					Command:   cmd,
-					Action:    string(result.Action),
-					Reason:    result.Reason,
-					CreatedAt: time.Now(),
-				}
-				db.CreatePermissionRecord(ctx, record)
+			if result.Action == policy.ActionReview {
+				log.Printf("Command needs review: %s", cmd)
+				continue
+			}
 
-				if result.Action == policy.ActionDeny {
-					log.Printf("Command denied: %s", cmd)
-					metrics.RecordPermissionBlock()
-					continue
-				}
+			log.Printf("Executing: %s", cmd)
+			sandboxResult, err := sbx.RunCommand(ctx, cmd, sandbox.DefaultConfig)
+			if err != nil {
+				log.Printf("Sandbox error: %v", err)
+				metrics.RecordError()
+				continue
+			}
 
-				if result.Action == policy.ActionReview {
-					log.Printf("Command needs review: %s", cmd)
-					continue
-				}
+			runRecord := storage.SandboxRun{
+				ID:         uuid.New().String(),
+				TaskID:     taskID,
+				Command:    cmd,
+				Output:     sandboxResult.Output,
+				Error:      sandboxResult.Error,
+				ExitCode:   sandboxResult.ExitCode,
+				TimedOut:   sandboxResult.TimedOut,
+				DurationMs: int64(sandboxResult.Duration / time.Millisecond),
+				CreatedAt:  time.Now(),
+			}
+			db.CreateSandboxRun(ctx, runRecord)
 
-				log.Printf("Executing: %s", cmd)
-				sandboxResult, err := sbx.RunCommand(ctx, cmd, sandbox.DefaultConfig)
-				if err != nil {
-					log.Printf("Sandbox error: %v", err)
-					metrics.RecordError()
-					continue
-				}
+			metrics.RecordSandboxExecution(sandboxResult.Duration)
+			metrics.RecordToolCall()
 
-				runRecord := storage.SandboxRun{
-					ID:         uuid.New().String(),
-					TaskID:     taskID,
-					Command:    cmd,
-					Output:     sandboxResult.Output,
-					Error:      sandboxResult.Error,
-					ExitCode:   sandboxResult.ExitCode,
-					TimedOut:   sandboxResult.TimedOut,
-					DurationMs: int64(sandboxResult.Duration / time.Millisecond),
-					CreatedAt:  time.Now(),
-				}
-				db.CreateSandboxRun(ctx, runRecord)
-
-				metrics.RecordSandboxExecution(sandboxResult.Duration)
-				metrics.RecordToolCall()
-
-				if sandboxResult.ExitCode != 0 {
-					log.Printf("Command failed with exit code %d", sandboxResult.ExitCode)
-					log.Printf("Output: %s", sandboxResult.Output)
-					log.Printf("Error: %s", sandboxResult.Error)
-				}
+			if sandboxResult.ExitCode != 0 {
+				log.Printf("Command failed with exit code %d", sandboxResult.ExitCode)
+				log.Printf("Output: %s", sandboxResult.Output)
+				log.Printf("Error: %s", sandboxResult.Error)
 			}
 		}
 	}
@@ -374,5 +402,15 @@ func runCodeReview(diffPath, repoPath, outputDir, dbPath string, dryRun bool) er
 	log.Printf("Total findings: %d", len(findings))
 	log.Printf("Report saved to: %s", outputDir)
 
+	return nil
+}
+
+func validatePath(path string) error {
+	if strings.Contains(path, "..") {
+		return fmt.Errorf("path traversal detected: %s", path)
+	}
+	if strings.HasPrefix(path, "/") && strings.Contains(path[1:], "/../") {
+		return fmt.Errorf("path traversal detected: %s", path)
+	}
 	return nil
 }

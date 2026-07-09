@@ -10,6 +10,7 @@
 package output
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -121,9 +122,59 @@ func GenerateReport(taskID string, diff *parser.DiffResult, findings []storage.F
 		report.WriteString(fmt.Sprintf("- **Errors:** %d\n", metricsSummary.Errors))
 	}
 
-	reportPath := filepath.Join(outputDir, "report.md")
+	reportPath := filepath.Join(outputDir, "review_report.md")
 	if err := os.WriteFile(reportPath, []byte(report.String()), 0644); err != nil {
-		return fmt.Errorf("write report: %w", err)
+		return fmt.Errorf("write review_report.md: %w", err)
+	}
+
+	type ReportJSON struct {
+		TaskID             string                          `json:"task_id"`
+		GeneratedAt        string                          `json:"generated_at"`
+		FilesChanged       int                             `json:"files_changed"`
+		LinesAdded         int                             `json:"lines_added"`
+		LinesRemoved       int                             `json:"lines_removed"`
+		TotalFindings      int                             `json:"total_findings"`
+		ReviewTime         string                          `json:"review_time"`
+		FindingsBySeverity map[storage.FindingSeverity]int `json:"findings_by_severity"`
+		Findings           []storage.Finding               `json:"findings"`
+		SandboxRuns        []storage.SandboxRun            `json:"sandbox_runs"`
+		PermissionRecords  []storage.PermissionRecord      `json:"permission_records"`
+		Metrics            struct {
+			SandboxExecutions int    `json:"sandbox_executions"`
+			SandboxTotalTime  string `json:"sandbox_total_time"`
+			ToolCalls         int    `json:"tool_calls"`
+			PermissionBlocks  int    `json:"permission_blocks"`
+			Errors            int    `json:"errors"`
+		} `json:"metrics"`
+	}
+
+	reportJSON := ReportJSON{
+		TaskID:             taskID,
+		GeneratedAt:        time.Now().Format(time.RFC3339),
+		FilesChanged:       len(diff.Files),
+		LinesAdded:         diff.TotalAdded,
+		LinesRemoved:       diff.TotalRemoved,
+		TotalFindings:      metricsSummary.TotalFindings,
+		ReviewTime:         metricsSummary.TotalReviewTime.String(),
+		FindingsBySeverity: metricsSummary.FindingsBySeverity,
+		Findings:           findings,
+		SandboxRuns:        sandboxRuns,
+		PermissionRecords:  permissionRecords,
+	}
+	reportJSON.Metrics.SandboxExecutions = metricsSummary.SandboxExecutions
+	reportJSON.Metrics.SandboxTotalTime = metricsSummary.SandboxExecutionTime.String()
+	reportJSON.Metrics.ToolCalls = metricsSummary.ToolCalls
+	reportJSON.Metrics.PermissionBlocks = metricsSummary.PermissionBlocks
+	reportJSON.Metrics.Errors = metricsSummary.Errors
+
+	jsonData, err := json.MarshalIndent(reportJSON, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal report JSON: %w", err)
+	}
+
+	jsonPath := filepath.Join(outputDir, "review_report.json")
+	if err := os.WriteFile(jsonPath, jsonData, 0644); err != nil {
+		return fmt.Errorf("write review_report.json: %w", err)
 	}
 
 	return nil

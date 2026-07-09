@@ -16,6 +16,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -58,7 +59,24 @@ type LocalSandbox struct {
 }
 
 func NewLocalSandbox(workDir string) (*LocalSandbox, error) {
-	return &LocalSandbox{workDir: workDir}, nil
+	if strings.Contains(workDir, "..") {
+		return nil, fmt.Errorf("path traversal detected in work directory: %s", workDir)
+	}
+
+	absPath, err := filepath.Abs(workDir)
+	if err != nil {
+		return nil, fmt.Errorf("get absolute path: %w", err)
+	}
+
+	info, err := os.Stat(absPath)
+	if err != nil {
+		return nil, fmt.Errorf("stat work directory: %w", err)
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("work directory is not a directory: %s", workDir)
+	}
+
+	return &LocalSandbox{workDir: absPath}, nil
 }
 
 func (s *LocalSandbox) RunCommand(ctx context.Context, command string, config SandboxConfig) (SandboxResult, error) {
@@ -67,7 +85,23 @@ func (s *LocalSandbox) RunCommand(ctx context.Context, command string, config Sa
 
 	start := time.Now()
 
-	cmd := exec.CommandContext(ctx, "bash", "-c", command)
+	args := parseShellCommand(command)
+	if len(args) == 0 {
+		return SandboxResult{
+			Error:       "Empty command",
+			ExitCode:    -1,
+			Duration:    time.Since(start),
+			TimedOut:    false,
+			SandboxType: SandboxTypeLocal,
+		}, nil
+	}
+
+	var cmd *exec.Cmd
+	if len(args) == 1 {
+		cmd = exec.CommandContext(ctx, args[0])
+	} else {
+		cmd = exec.CommandContext(ctx, args[0], args[1:]...)
+	}
 	cmd.Dir = s.workDir
 
 	if len(config.EnvWhitelist) > 0 {
@@ -195,6 +229,53 @@ func filterEnv(env []string, whitelist []string) []string {
 	return result
 }
 
+func parseShellCommand(cmd string) []string {
+	var args []string
+	var current []byte
+	inSingleQuote := false
+	inDoubleQuote := false
+	escape := false
+
+	for _, c := range cmd {
+		if escape {
+			current = append(current, byte(c))
+			escape = false
+			continue
+		}
+
+		if c == '\\' && !inSingleQuote {
+			escape = true
+			continue
+		}
+
+		if c == '\'' && !inDoubleQuote {
+			inSingleQuote = !inSingleQuote
+			continue
+		}
+
+		if c == '"' && !inSingleQuote {
+			inDoubleQuote = !inDoubleQuote
+			continue
+		}
+
+		if (c == ' ' || c == '\t' || c == '\n') && !inSingleQuote && !inDoubleQuote {
+			if len(current) > 0 {
+				args = append(args, string(current))
+				current = current[:0]
+			}
+			continue
+		}
+
+		current = append(current, byte(c))
+	}
+
+	if len(current) > 0 {
+		args = append(args, string(current))
+	}
+
+	return args
+}
+
 func NewSandbox(workDir string) (Sandbox, error) {
 	return NewSandboxWithConfig(workDir, SandboxConfig{})
 }
@@ -202,30 +283,12 @@ func NewSandbox(workDir string) (Sandbox, error) {
 func NewSandboxWithConfig(workDir string, config SandboxConfig) (Sandbox, error) {
 	log.Printf("Attempting to create sandbox...")
 
-	if os.Getenv("E2B_API_KEY") != "" {
-		log.Printf("E2B API key found, attempting E2B sandbox...")
-		return createE2BSandbox(workDir)
-	}
-
-	if os.Getenv("CONTAINER_RUNTIME") != "" {
-		log.Printf("Container runtime available, attempting container sandbox...")
-		return createContainerSandbox(workDir)
-	}
-
 	if config.UnsafeLocal || os.Getenv("UNSAFE_LOCAL_SANDBOX") == "true" {
 		log.Printf("Unsafe local sandbox enabled, using local sandbox")
 		return NewLocalSandbox(workDir)
 	}
 
-	return nil, fmt.Errorf("no external sandbox available and unsafe-local mode is not enabled")
-}
-
-func createE2BSandbox(workDir string) (Sandbox, error) {
-	return nil, fmt.Errorf("E2B sandbox not implemented")
-}
-
-func createContainerSandbox(workDir string) (Sandbox, error) {
-	return nil, fmt.Errorf("container sandbox not implemented")
+	return nil, fmt.Errorf("sandbox requires --unsafe-local flag or UNSAFE_LOCAL_SANDBOX=true environment variable")
 }
 
 var DefaultConfig = SandboxConfig{

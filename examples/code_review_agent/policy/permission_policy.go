@@ -10,6 +10,7 @@
 package policy
 
 import (
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -122,10 +123,11 @@ func (p *PermissionPolicy) CheckCommand(command string) PermissionResult {
 	lowerCmd := strings.ToLower(cmd)
 	cmdArgs := parseCommand(cmd)
 	executable := strings.ToLower(cmdArgs[0])
+	executableName := strings.ToLower(filepath.Base(cmdArgs[0]))
 
 	for _, denied := range p.deniedCommands {
 		deniedLow := strings.ToLower(denied)
-		if executable == deniedLow || strings.HasPrefix(lowerCmd, deniedLow+" ") {
+		if executable == deniedLow || executableName == deniedLow || strings.HasPrefix(lowerCmd, deniedLow+" ") {
 			return PermissionResult{
 				Action:  ActionDeny,
 				Reason:  "Command is denied",
@@ -146,7 +148,7 @@ func (p *PermissionPolicy) CheckCommand(command string) PermissionResult {
 
 	for _, allowed := range p.allowedCommands {
 		allowedLow := strings.ToLower(allowed)
-		if executable == allowedLow || strings.HasPrefix(lowerCmd, allowedLow+" ") {
+		if executable == allowedLow || executableName == allowedLow || strings.HasPrefix(lowerCmd, allowedLow+" ") {
 			return PermissionResult{
 				Action:  ActionAllow,
 				Reason:  "Command is allowed",

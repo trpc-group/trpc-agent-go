@@ -15,12 +15,19 @@ import (
 
 var secretPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)(sk-[a-zA-Z0-9_-]{20,})`),
-	regexp.MustCompile(`(?i)(eyJ[a-zA-Z0-9_-]*\.[a-zA-Z0-9_-]*\.[a-zA-Z0-9_-]*)`),
+	regexp.MustCompile(`(?i)(eyJ[a-zA-Z0-9_-]*\.[a-zA-Z0-9_-]*(\.[a-zA-Z0-9_-]*)?)`),
 	regexp.MustCompile(`(?i)(ghp_[a-zA-Z0-9]{36})`),
 	regexp.MustCompile(`(?i)(AKIA[0-9A-Z]{16})`),
 	regexp.MustCompile(`(?i)(api[_-]?key|secret[_-]?key|access[_-]?token|password|secret)\s*=\s*["']([^"']+)["']`),
 	regexp.MustCompile(`(?i)(AWS_SECRET_ACCESS_KEY|AWS_ACCESS_KEY_ID)\s*=\s*["']([^"']+)["']`),
 	regexp.MustCompile(`(?i)(password|secret|token|key)\s*[:=]\s*["']([^"']+)["']`),
+	regexp.MustCompile(`(?i)(dckr_pat_[a-zA-Z0-9_-]{20,})`),
+	regexp.MustCompile(`(?i)(gho_[a-zA-Z0-9]{36})`),
+	regexp.MustCompile(`(?i)(github_pat_[a-zA-Z0-9]{22}_[a-zA-Z0-9]{59})`),
+	regexp.MustCompile(`(?i)(sqldb[_-]?user|sqldb[_-]?password)\s*=\s*["']([^"']+)["']`),
+	regexp.MustCompile(`(?i)(connection[_-]?string|conn[_-]?str)\s*=\s*["']([^"']+)["']`),
+	regexp.MustCompile(`(?i)(ftp|sftp|http|https)://[^@]+@`),
+	regexp.MustCompile(`(?i)([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})\s*:\s*["']([^"']+)["']`),
 }
 
 func RedactSecrets(input string) string {
