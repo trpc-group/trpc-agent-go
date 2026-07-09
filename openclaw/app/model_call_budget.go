@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -31,22 +32,21 @@ type modelCallBudget struct {
 	limit          int
 	count          int
 	finalizeOnLast bool
+	deadlineWindow time.Duration
 }
 
 func newModelCallBudget(
 	limit int,
-	finalizeOnLast ...bool,
+	finalizeOnLast bool,
+	deadlineWindow time.Duration,
 ) *modelCallBudget {
-	if limit <= 0 {
+	if limit <= 0 && deadlineWindow <= 0 {
 		return nil
-	}
-	finalize := false
-	if len(finalizeOnLast) > 0 {
-		finalize = finalizeOnLast[0]
 	}
 	return &modelCallBudget{
 		limit:          limit,
-		finalizeOnLast: finalize,
+		finalizeOnLast: finalizeOnLast,
+		deadlineWindow: deadlineWindow,
 	}
 }
 
@@ -54,24 +54,27 @@ type modelCallBudgetFactory struct {
 	mu             sync.Mutex
 	limit          int
 	finalizeOnLast bool
+	deadlineWindow time.Duration
 	budgets        map[string]*modelCallBudget
 }
 
 func newModelCallBudgetFactory(
 	limit int,
 	finalizeOnLast bool,
+	deadlineWindow time.Duration,
 ) *modelCallBudgetFactory {
-	if limit <= 0 {
+	if limit <= 0 && deadlineWindow <= 0 {
 		return nil
 	}
 	return &modelCallBudgetFactory{
 		limit:          limit,
 		finalizeOnLast: finalizeOnLast,
+		deadlineWindow: deadlineWindow,
 	}
 }
 
 func withModelCallBudget(ctx context.Context, limit int) context.Context {
-	return withModelCallBudgetValue(ctx, newModelCallBudget(limit))
+	return withModelCallBudgetValue(ctx, newModelCallBudget(limit, false, 0))
 }
 
 func withModelCallBudgetValue(
@@ -122,7 +125,8 @@ func modelCallBudgetFromContext(ctx context.Context) *modelCallBudget {
 func (f *modelCallBudgetFactory) budgetFor(
 	inv *agent.Invocation,
 ) *modelCallBudget {
-	if f == nil || inv == nil || f.limit <= 0 {
+	if f == nil || inv == nil ||
+		(f.limit <= 0 && f.deadlineWindow <= 0) {
 		return nil
 	}
 	key := modelCallBudgetInvocationKey(inv)
@@ -134,7 +138,11 @@ func (f *modelCallBudgetFactory) budgetFor(
 	if budget := f.budgets[key]; budget != nil {
 		return budget
 	}
-	budget := newModelCallBudget(f.limit, f.finalizeOnLast)
+	budget := newModelCallBudget(
+		f.limit,
+		f.finalizeOnLast,
+		f.deadlineWindow,
+	)
 	f.budgets[key] = budget
 	return budget
 }
@@ -146,19 +154,38 @@ func modelCallBudgetInvocationKey(inv *agent.Invocation) string {
 	return fmt.Sprintf("%p", inv)
 }
 
-func (b *modelCallBudget) use() (bool, error) {
-	if b == nil || b.limit <= 0 {
+func (b *modelCallBudget) use(ctx context.Context) (bool, error) {
+	if b == nil || (b.limit <= 0 && b.deadlineWindow <= 0) {
 		return false, nil
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.count++
-	if b.count > b.limit {
-		return false, agent.NewStopError(
-			fmt.Sprintf("max LLM calls (%d) exceeded", b.limit),
-		)
+	if b.limit > 0 {
+		b.count++
+		if b.count > b.limit {
+			return false, agent.NewStopError(
+				fmt.Sprintf("max LLM calls (%d) exceeded", b.limit),
+			)
+		}
+		if b.finalizeOnLast && b.count == b.limit {
+			return true, nil
+		}
 	}
-	return b.finalizeOnLast && b.count == b.limit, nil
+	return modelCallBudgetDeadlineSoon(ctx, b.deadlineWindow), nil
+}
+
+func modelCallBudgetDeadlineSoon(
+	ctx context.Context,
+	window time.Duration,
+) bool {
+	if ctx == nil || window <= 0 {
+		return false
+	}
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return false
+	}
+	return time.Until(deadline) <= window
 }
 
 func newModelCallBudgetModel(m model.Model) model.Model {
@@ -208,7 +235,7 @@ func (m *modelCallBudgetModel) GenerateContent(
 	ctx context.Context,
 	req *model.Request,
 ) (<-chan *model.Response, error) {
-	finalize, err := modelCallBudgetFromContext(ctx).use()
+	finalize, err := modelCallBudgetFromContext(ctx).use(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -246,7 +273,7 @@ func (m *modelCallBudgetIterModel) GenerateContentIter(
 	ctx context.Context,
 	req *model.Request,
 ) (model.Seq[*model.Response], error) {
-	finalize, err := modelCallBudgetFromContext(ctx).use()
+	finalize, err := modelCallBudgetFromContext(ctx).use(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -272,25 +299,35 @@ func appendModelCallBudgetGatewayOption(
 	opts []gateway.Option,
 	limit int,
 	finalizeOnLast bool,
+	deadlineWindow time.Duration,
 ) []gateway.Option {
-	if limit <= 0 {
+	if limit <= 0 && deadlineWindow <= 0 {
 		return opts
 	}
 	return append(opts, gateway.WithRunOptionResolver(
-		buildModelCallBudgetRunOptionResolver(limit, finalizeOnLast),
+		buildModelCallBudgetRunOptionResolver(
+			limit,
+			finalizeOnLast,
+			deadlineWindow,
+		),
 	))
 }
 
 func buildModelCallBudgetRunOptionResolver(
 	limit int,
 	finalizeOnLast bool,
+	deadlineWindow time.Duration,
 ) gateway.RunOptionResolver {
 	return func(ctx context.Context, _ gateway.RunOptionInput) (
 		context.Context,
 		[]agent.RunOption,
 		error,
 	) {
-		factory := newModelCallBudgetFactory(limit, finalizeOnLast)
+		factory := newModelCallBudgetFactory(
+			limit,
+			finalizeOnLast,
+			deadlineWindow,
+		)
 		return ctx,
 			[]agent.RunOption{
 				agent.MergeRuntimeState(map[string]any{

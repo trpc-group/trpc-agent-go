@@ -14,6 +14,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -77,7 +78,7 @@ func TestModelCallBudgetModel_UsesInvocationRuntimeStateFactory(
 
 	underlying := &countingBudgetModel{}
 	wrapped := newModelCallBudgetModel(underlying)
-	factory := newModelCallBudgetFactory(1, false)
+	factory := newModelCallBudgetFactory(1, false, 0)
 	inv := agent.NewInvocation(agent.WithInvocationRunOptions(
 		agent.NewRunOptions(agent.MergeRuntimeState(map[string]any{
 			modelCallBudgetRuntimeStateKey: factory,
@@ -165,9 +166,10 @@ func TestNewModelCallBudgetModel_Nil(t *testing.T) {
 func TestModelCallBudget_Guards(t *testing.T) {
 	t.Parallel()
 
-	require.Nil(t, newModelCallBudget(0))
-	require.Nil(t, newModelCallBudget(-1))
-	_, err := (*modelCallBudget)(nil).use()
+	require.Nil(t, newModelCallBudget(0, false, 0))
+	require.Nil(t, newModelCallBudget(-1, false, 0))
+	require.NotNil(t, newModelCallBudget(0, false, time.Second))
+	_, err := (*modelCallBudget)(nil).use(context.Background())
 	require.NoError(t, err)
 
 	ctx := withModelCallBudget(nil, 1)
@@ -224,14 +226,23 @@ func TestBaseLLMAgentOptions_AddsModelCallBudgetCallbacks(t *testing.T) {
 func TestAppendModelCallBudgetGatewayOption_Disabled(t *testing.T) {
 	t.Parallel()
 
-	opts := appendModelCallBudgetGatewayOption(nil, 0, false)
+	opts := appendModelCallBudgetGatewayOption(nil, 0, false, 0)
 	require.Empty(t, opts)
 }
 
 func TestAppendModelCallBudgetGatewayOption_AddsRunBudget(t *testing.T) {
 	t.Parallel()
 
-	opts := appendModelCallBudgetGatewayOption(nil, 1, false)
+	opts := appendModelCallBudgetGatewayOption(nil, 1, false, 0)
+	require.Len(t, opts, 1)
+}
+
+func TestAppendModelCallBudgetGatewayOption_AddsDeadlineBudget(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	opts := appendModelCallBudgetGatewayOption(nil, 0, false, time.Minute)
 	require.Len(t, opts, 1)
 }
 
@@ -242,7 +253,7 @@ func TestModelCallBudgetModel_FinalizesOnLastAllowedCall(t *testing.T) {
 	wrapped := newModelCallBudgetModel(underlying)
 	ctx := withModelCallBudgetValue(
 		context.Background(),
-		newModelCallBudget(1, true),
+		newModelCallBudget(1, true, 0),
 	)
 	req := &model.Request{
 		Messages: []model.Message{model.NewUserMessage("question")},
@@ -288,6 +299,109 @@ func TestModelCallBudgetModel_FinalizesOnLastAllowedCall(t *testing.T) {
 	require.Equal(t, map[string]any{
 		"response_format": "json",
 	}, got.ExtraFields)
+}
+
+func TestModelCallBudgetModel_FinalizesNearDeadline(t *testing.T) {
+	t.Parallel()
+
+	underlying := &capturingBudgetModel{}
+	wrapped := newModelCallBudgetModel(underlying)
+	ctx, cancel := context.WithDeadline(
+		context.Background(),
+		time.Now().Add(time.Second),
+	)
+	defer cancel()
+	ctx = withModelCallBudgetValue(
+		ctx,
+		newModelCallBudget(0, false, time.Minute),
+	)
+	req := &model.Request{
+		Messages: []model.Message{model.NewUserMessage("question")},
+		Tools:    map[string]tool.Tool{"search": nil},
+	}
+
+	_, err := wrapped.GenerateContent(ctx, req)
+	require.NoError(t, err)
+
+	got := underlying.lastRequest()
+	require.NotNil(t, got)
+	require.Nil(t, got.Tools)
+	require.Len(t, got.Messages, 2)
+	require.Contains(
+		t,
+		got.Messages[1].Content,
+		"final allowed model call",
+	)
+	require.Len(t, req.Tools, 1)
+	require.Len(t, req.Messages, 1)
+}
+
+func TestModelCallBudgetIterModel_FinalizesNearDeadline(t *testing.T) {
+	t.Parallel()
+
+	underlying := &capturingBudgetModel{}
+	wrapped := newModelCallBudgetModel(underlying)
+	iter, ok := wrapped.(model.IterModel)
+	require.True(t, ok)
+	ctx, cancel := context.WithDeadline(
+		context.Background(),
+		time.Now().Add(time.Second),
+	)
+	defer cancel()
+	ctx = withModelCallBudgetValue(
+		ctx,
+		newModelCallBudget(0, false, time.Minute),
+	)
+	req := &model.Request{
+		Messages: []model.Message{model.NewUserMessage("question")},
+		Tools:    map[string]tool.Tool{"search": nil},
+	}
+
+	_, err := iter.GenerateContentIter(ctx, req)
+	require.NoError(t, err)
+
+	got := underlying.lastIterRequest()
+	require.NotNil(t, got)
+	require.Nil(t, got.Tools)
+	require.Len(t, got.Messages, 2)
+	require.Contains(
+		t,
+		got.Messages[1].Content,
+		"final allowed model call",
+	)
+	require.Len(t, req.Tools, 1)
+	require.Len(t, req.Messages, 1)
+}
+
+func TestModelCallBudgetModel_DoesNotFinalizeOutsideDeadlineWindow(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	underlying := &capturingBudgetModel{}
+	wrapped := newModelCallBudgetModel(underlying)
+	ctx, cancel := context.WithDeadline(
+		context.Background(),
+		time.Now().Add(time.Hour),
+	)
+	defer cancel()
+	ctx = withModelCallBudgetValue(
+		ctx,
+		newModelCallBudget(0, false, time.Minute),
+	)
+	req := &model.Request{
+		Messages: []model.Message{model.NewUserMessage("question")},
+		Tools:    map[string]tool.Tool{"search": nil},
+	}
+
+	_, err := wrapped.GenerateContent(ctx, req)
+	require.NoError(t, err)
+
+	got := underlying.lastRequest()
+	require.NotNil(t, got)
+	require.NotNil(t, got.Tools)
+	require.Len(t, got.Messages, 1)
+	require.NotNil(t, req.Tools)
 }
 
 func TestModelCallBudgetModel_UserPromptPrefixConsumesBudget(t *testing.T) {
@@ -338,7 +452,7 @@ func TestModelCallBudgetBypassModel_DoesNotConsumeInvocationBudget(
 	underlying := &countingBudgetModel{}
 	budgeted := newModelCallBudgetModel(underlying)
 	bypassed := newModelCallBudgetBypassModel(budgeted)
-	factory := newModelCallBudgetFactory(1, false)
+	factory := newModelCallBudgetFactory(1, false, 0)
 	inv := agent.NewInvocation(agent.WithInvocationRunOptions(
 		agent.NewRunOptions(agent.MergeRuntimeState(map[string]any{
 			modelCallBudgetRuntimeStateKey: factory,
@@ -410,8 +524,9 @@ func (m *countingBudgetModel) callCount() int64 {
 }
 
 type capturingBudgetModel struct {
-	mu   sync.Mutex
-	last *model.Request
+	mu       sync.Mutex
+	last     *model.Request
+	iterLast *model.Request
 }
 
 func (m *capturingBudgetModel) GenerateContent(
@@ -431,10 +546,28 @@ func (m *capturingBudgetModel) Info() model.Info {
 	return model.Info{Name: "capturing"}
 }
 
+func (m *capturingBudgetModel) GenerateContentIter(
+	_ context.Context,
+	req *model.Request,
+) (model.Seq[*model.Response], error) {
+	m.mu.Lock()
+	m.iterLast = req
+	m.mu.Unlock()
+	return func(yield func(*model.Response) bool) {
+		yield(&model.Response{})
+	}, nil
+}
+
 func (m *capturingBudgetModel) lastRequest() *model.Request {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.last
+}
+
+func (m *capturingBudgetModel) lastIterRequest() *model.Request {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.iterLast
 }
 
 type countingBudgetIterModel struct {
@@ -461,7 +594,7 @@ func TestBuildModelCallBudgetRunOptionResolverInjectsBudget(
 ) {
 	t.Parallel()
 
-	resolver := buildModelCallBudgetRunOptionResolver(1, false)
+	resolver := buildModelCallBudgetRunOptionResolver(1, false, 0)
 	ctx, runOpts, err := resolver(context.Background(), gateway.RunOptionInput{})
 	require.NoError(t, err)
 	require.Len(t, runOpts, 1)
@@ -501,7 +634,7 @@ func TestBuildModelCallBudgetRunOptionResolverBypassesAuxiliaryCalls(
 ) {
 	t.Parallel()
 
-	resolver := buildModelCallBudgetRunOptionResolver(1, false)
+	resolver := buildModelCallBudgetRunOptionResolver(1, false, 0)
 	_, runOpts, err := resolver(context.Background(), gateway.RunOptionInput{})
 	require.NoError(t, err)
 
@@ -525,4 +658,51 @@ func TestBuildModelCallBudgetRunOptionResolverBypassesAuxiliaryCalls(
 	_, err = budgeted.GenerateContent(ctx, &model.Request{})
 	require.ErrorContains(t, err, "max LLM calls (1) exceeded")
 	require.EqualValues(t, 3, underlying.callCount())
+}
+
+func TestBuildModelCallBudgetRunOptionResolverInjectsDeadlineBudget(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	resolver := buildModelCallBudgetRunOptionResolver(
+		0,
+		false,
+		time.Minute,
+	)
+	ctx, runOpts, err := resolver(context.Background(), gateway.RunOptionInput{})
+	require.NoError(t, err)
+	require.Len(t, runOpts, 1)
+	require.Nil(t, modelCallBudgetFromContext(ctx))
+
+	opts := agent.NewRunOptions(runOpts...)
+	underlying := &capturingBudgetModel{}
+	wrapped := newModelCallBudgetModel(underlying)
+	inv := agent.NewInvocation(
+		agent.WithInvocationID("deadline-run"),
+		agent.WithInvocationRunOptions(opts),
+	)
+	deadlineCtx, cancel := context.WithDeadline(
+		context.Background(),
+		time.Now().Add(time.Second),
+	)
+	defer cancel()
+	deadlineCtx = agent.NewInvocationContext(deadlineCtx, inv)
+	req := &model.Request{
+		Messages: []model.Message{model.NewUserMessage("question")},
+		Tools:    map[string]tool.Tool{"search": nil},
+	}
+
+	_, err = wrapped.GenerateContent(deadlineCtx, req)
+	require.NoError(t, err)
+
+	got := underlying.lastRequest()
+	require.NotNil(t, got)
+	require.Nil(t, got.Tools)
+	require.Len(t, got.Messages, 2)
+	require.Contains(
+		t,
+		got.Messages[1].Content,
+		"final allowed model call",
+	)
 }

@@ -4210,6 +4210,14 @@ func TestValidateAgentRunOptions(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name:      "deadline-finalization-window",
+			agentType: agentTypeClaudeCode,
+			opts: runOptions{
+				DeadlineFinalizationWindow: time.Minute,
+			},
+			wantErr: true,
+		},
+		{
 			name:      "preload-memory",
 			agentType: agentTypeClaudeCode,
 			opts: runOptions{

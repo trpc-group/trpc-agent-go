@@ -86,7 +86,7 @@ func baseLLMAgentOptions(
 			runtimeprofile.SkillVisibilityFilterForRepository(repo),
 		),
 	}
-	if cfg.MaxLLMCalls > 0 {
+	if cfg.MaxLLMCalls > 0 || cfg.DeadlineFinalizationWindow > 0 {
 		opts = append(opts, llmagent.WithModelCallbacks(
 			modelCallBudgetCallbacks(),
 		))
