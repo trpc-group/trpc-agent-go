@@ -150,8 +150,10 @@ func New(opts ...Option) (*A2AAgent, error) {
 	return agent, nil
 }
 
+var newCookieJar = cookiejar.New
+
 func withDefaultCookieJar(opts []client.Option) []client.Option {
-	jar, err := cookiejar.New(nil)
+	jar, err := newCookieJar(nil)
 	if err != nil {
 		return opts
 	}

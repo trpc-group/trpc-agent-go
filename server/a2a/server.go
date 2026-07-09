@@ -545,7 +545,11 @@ func (m *messageProcessor) ProcessMessage(
 	// anonymous request-bound principal when no trusted user header is supplied.
 	userID := strings.TrimSpace(user.ID)
 	if userID == "" {
-		userID = newAnonymousUserID()
+		anonymousUserID, err := newAnonymousUserID()
+		if err != nil {
+			return nil, err
+		}
+		userID = anonymousUserID
 		log.DebugfContext(ctx, "UserID not set in auth context, using anonymous principal")
 	}
 

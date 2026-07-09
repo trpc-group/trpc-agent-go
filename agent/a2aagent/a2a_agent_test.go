@@ -12,9 +12,11 @@ package a2aagent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"strings"
 	"sync"
@@ -254,6 +256,19 @@ func TestNew_DefaultClientPersistsCookies(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	require.True(t, sawCookieBack)
+}
+
+func TestWithDefaultCookieJar_ReturnsOriginalOptionsOnJarError(t *testing.T) {
+	origNewCookieJar := newCookieJar
+	defer func() { newCookieJar = origNewCookieJar }()
+	newCookieJar = func(_ *cookiejar.Options) (*cookiejar.Jar, error) {
+		return nil, errors.New("cookie jar unavailable")
+	}
+
+	opts := []client.Option{client.WithUserAgent("custom-agent")}
+	got := withDefaultCookieJar(opts)
+
+	require.Len(t, got, 1)
 }
 
 type stubA2AEventConverter struct{}

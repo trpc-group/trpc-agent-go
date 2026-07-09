@@ -12,7 +12,6 @@ package a2a
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -35,6 +34,8 @@ var serverUserIDHeader = "X-User-ID"
 
 const anonymousUserIDPrefix = "A2A_ANONYMOUS_"
 const anonymousUserIDCookie = "trpc_agent_a2a_anon"
+
+var anonymousRandRead = rand.Read
 
 // UserIDFromContext returns the user ID from the context.
 func UserIDFromContext(ctx context.Context) (string, bool) {
@@ -127,13 +128,18 @@ type anonymousUserCookieMiddleware struct {
 func (m anonymousUserCookieMiddleware) Wrap(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.TrimSpace(r.Header.Get(m.userIDHeader)) == "" {
-			userID := anonymousUserIDFromRequest(r)
+			userID, err := anonymousUserIDFromRequest(r)
+			if err != nil {
+				http.Error(w, "failed to create anonymous user", http.StatusInternalServerError)
+				return
+			}
 			http.SetCookie(w, &http.Cookie{
 				Name:     anonymousUserIDCookie,
 				Value:    userID,
 				Path:     "/",
 				HttpOnly: true,
 				SameSite: http.SameSiteLaxMode,
+				Secure:   r.TLS != nil,
 			})
 			r = r.Clone(r.Context())
 			r.AddCookie(&http.Cookie{Name: anonymousUserIDCookie, Value: userID})
@@ -148,7 +154,11 @@ func (d *defaultAuthProvider) Authenticate(r *http.Request) (*auth.User, error) 
 	}
 	userID := strings.TrimSpace(r.Header.Get(d.userIDHeader))
 	if userID == "" {
-		userID = anonymousUserIDFromRequest(r)
+		var err error
+		userID, err = anonymousUserIDFromRequest(r)
+		if err != nil {
+			return nil, err
+		}
 		log.DebugfContext(
 			r.Context(),
 			"UserID(Header %s) not set, using anonymous request principal. "+
@@ -161,25 +171,24 @@ func (d *defaultAuthProvider) Authenticate(r *http.Request) (*auth.User, error) 
 	return &auth.User{ID: userID}, nil
 }
 
-func anonymousUserIDFromRequest(r *http.Request) string {
+func anonymousUserIDFromRequest(r *http.Request) (string, error) {
 	for _, cookie := range r.Cookies() {
 		if cookie.Name != anonymousUserIDCookie {
 			continue
 		}
 		if userID := strings.TrimSpace(cookie.Value); isAnonymousUserID(userID) {
-			return userID
+			return userID, nil
 		}
 	}
 	return newAnonymousUserID()
 }
 
-func newAnonymousUserID() string {
+func newAnonymousUserID() (string, error) {
 	var raw [16]byte
-	if _, err := rand.Read(raw[:]); err != nil {
-		sum := sha256.Sum256([]byte(fmt.Sprintf("%p", &raw)))
-		return anonymousUserIDPrefix + hex.EncodeToString(sum[:16])
+	if _, err := anonymousRandRead(raw[:]); err != nil {
+		return "", fmt.Errorf("generate anonymous user ID: %w", err)
 	}
-	return anonymousUserIDPrefix + hex.EncodeToString(raw[:])
+	return anonymousUserIDPrefix + hex.EncodeToString(raw[:]), nil
 }
 
 func isAnonymousUserID(userID string) bool {

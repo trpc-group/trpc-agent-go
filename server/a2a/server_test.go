@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
@@ -2022,20 +2023,20 @@ func TestA2AHTTPAnonymousContextDoesNotRebindPrincipal(t *testing.T) {
 			URL:         "http://placeholder.local",
 		}),
 	)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	httpSrv := httptest.NewServer(srv.Handler())
 	defer httpSrv.Close()
 
 	jar, err := cookiejar.New(nil)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	clientWithCookie, err := a2aclient.NewA2AClient(
 		httpSrv.URL,
 		a2aclient.WithHTTPClient(&http.Client{Jar: jar}),
 	)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	otherClient, err := a2aclient.NewA2AClient(httpSrv.URL)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	sharedContextID := "shared-a2a-context"
 	send := func(client *a2aclient.A2AClient, messageID string) {
@@ -2047,7 +2048,7 @@ func TestA2AHTTPAnonymousContextDoesNotRebindPrincipal(t *testing.T) {
 		)
 		msg.MessageID = messageID
 		_, err := client.SendMessage(context.Background(), protocol.SendMessageParams{Message: msg})
-		assert.NoError(t, err)
+		require.NoError(t, err)
 	}
 
 	send(clientWithCookie, "anonymous-first")
@@ -2056,7 +2057,7 @@ func TestA2AHTTPAnonymousContextDoesNotRebindPrincipal(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	assert.Len(t, runs, 3)
+	require.Len(t, runs, 3)
 	assert.Equal(t, sharedContextID, runs[0].sessionID)
 	assert.Equal(t, sharedContextID, runs[1].sessionID)
 	assert.Equal(t, sharedContextID, runs[2].sessionID)
