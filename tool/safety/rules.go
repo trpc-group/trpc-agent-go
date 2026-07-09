@@ -550,11 +550,13 @@ func ruleNetwork(c ruleCtx) []Finding {
 				action:         c.policy.Network.OnNonWhitelisted,
 			})
 		}
-		// Fallback: a download command with no extractable target and no other
-		// network finding cannot be checked against the whitelist (unknown
-		// option carrying the URL, listener modes, ...); route it to review
-		// instead of silently allowing it.
-		if len(hosts) == 0 && len(out) == before {
+		// Fallback: the command carries a non-option operand we could not turn
+		// into a checkable host (a URL hidden in an unrecognized option, a
+		// listener spec, ...). We cannot clear it against the whitelist, so
+		// route it to review instead of silently allowing it. Pure-flag
+		// invocations (curl --version, wget --help) have no operand and no
+		// egress, so they are left to allow rather than flagged.
+		if len(hosts) == 0 && len(out) == before && hasNonOptionOperand(argv[1:]) {
 			out = append(out, Finding{
 				RuleID:         ruleNetworkID,
 				Category:       catNetwork,
@@ -565,6 +567,22 @@ func ruleNetwork(c ruleCtx) []Finding {
 		}
 	}
 	return out
+}
+
+// hasNonOptionOperand reports whether any argument is a bare (non-option)
+// operand — a token that is not empty and does not start with "-". It gates the
+// network no-target fallback so a pure-flag invocation (curl --version, wget
+// --help, curl -V) is not flagged: with no operand there is nothing that could
+// be a smuggled target. A value token that follows a value-taking option
+// (wget -O out.txt) counts as an operand, so a download command that names a
+// file but no URL is still routed to review — a degenerate, rare case.
+func hasNonOptionOperand(args []string) bool {
+	for _, a := range args {
+		if a != "" && !strings.HasPrefix(a, "-") {
+			return true
+		}
+	}
+	return false
 }
 
 // ruleHostRisk only applies to the host backend: background/PTY sessions and

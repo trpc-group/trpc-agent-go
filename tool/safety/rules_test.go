@@ -771,17 +771,38 @@ func TestWgetInputFileFailsClosed(t *testing.T) {
 	}
 }
 
-// TestDownloadNoTargetReview pins the fallback: a download command whose
-// target cannot be extracted at all is routed to review instead of silently
-// allowed.
+// TestDownloadNoTargetReview pins the fallback: a download command that carries
+// a bare operand we could not turn into a checkable host is routed to review
+// instead of silently allowed.
 func TestDownloadNoTargetReview(t *testing.T) {
 	p := loadExamplePolicy(t)
-	findings, decision := scanCmd(t, p, BackendWorkspace, `wget --tries=3`)
+	// -O consumes out.bin; the trailing "./payload" is a bare operand that
+	// yields no host, so it cannot be cleared against the whitelist.
+	findings, decision := scanCmd(t, p, BackendWorkspace, `wget -O out.bin ./payload`)
 	if decision != DecisionReview {
 		t.Errorf("decision = %q, want needs_human_review (findings: %+v)", decision, findings)
 	}
 	if !hasRule(findings, ruleNetworkID) {
 		t.Errorf("missing R-NET-001 fallback finding: %+v", findings)
+	}
+}
+
+// TestDownloadInformationalFlagsAllow pins that pure-flag download invocations
+// (no operand, no egress) are not caught by the no-target fallback: they must
+// allow, not route to review.
+func TestDownloadInformationalFlagsAllow(t *testing.T) {
+	p := loadExamplePolicy(t)
+	for _, cmd := range []string{
+		`curl --version`,
+		`curl -V`,
+		`wget --version`,
+		`wget --help`,
+		`wget --tries=3`,
+	} {
+		findings, decision := scanCmd(t, p, BackendWorkspace, cmd)
+		if decision != DecisionAllow {
+			t.Errorf("%q: decision = %q, want allow (findings: %+v)", cmd, decision, findings)
+		}
 	}
 }
 
