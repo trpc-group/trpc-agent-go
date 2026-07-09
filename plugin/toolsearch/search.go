@@ -455,14 +455,15 @@ func (p *Plugin) searchToolsByQueries(namespace string, queries []string, maxRes
 		return nil, nil
 	}
 
-	// Drop permission-denied tools from the candidate set so they never
-	// consume max_results slots ahead of allowed tools.
+	// Drop permission-denied tools so they never consume max_results slots ahead of allowed tools.
 	if allAllowed != nil {
+		filtered := make(map[string]struct{}, len(candidatesSet))
 		for name := range candidatesSet {
-			if !allAllowed[name] {
-				delete(candidatesSet, name)
+			if allAllowed[name] {
+				filtered[name] = struct{}{}
 			}
 		}
+		candidatesSet = filtered
 	}
 	if len(candidatesSet) == 0 {
 		return nil, nil
@@ -691,7 +692,7 @@ func (p *Plugin) formatNamespaceError(status, message, badNamespace string) stri
 // toolSummary describes a matched tool. already_loaded=true tells the model it
 // was loaded earlier in this conversation and should be called directly.
 //
-// InputSchema is populated only in IndirectToolCalls mode: since the loaded
+// InputSchema is populated only in DispatchToolCalls mode: since the loaded
 // tool is not advertised as an individual function, the model needs its schema
 // here to build the call_tool "params".
 type toolSummary struct {
@@ -726,10 +727,10 @@ func (p *Plugin) formatSearchResult(
 			allAlreadyLoaded = false
 		}
 		summary := toolSummary{Name: name, Description: desc, AlreadyLoaded: loaded}
-		// In IndirectToolCalls mode the loaded tool is not advertised as an
+		// In DispatchToolCalls mode the loaded tool is not advertised as an
 		// individual function, so surface its input schema here for building
 		// call_tool params.
-		if p.invocationMode == IndirectToolCalls {
+		if p.invocationMode == DispatchToolCalls {
 			if t, ok := p.toolBox[name]; ok && t != nil {
 				if decl := t.Declaration(); decl != nil {
 					summary.InputSchema = decl.InputSchema
@@ -741,7 +742,7 @@ func (p *Plugin) formatSearchResult(
 	p.mu.RUnlock()
 
 	var status string
-	if p.invocationMode == IndirectToolCalls {
+	if p.invocationMode == DispatchToolCalls {
 		switch {
 		case len(tools) == 0:
 			status = "No matches. Try different keywords, another namespace, or tool_names."

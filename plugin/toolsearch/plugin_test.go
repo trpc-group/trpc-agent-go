@@ -1005,19 +1005,19 @@ func TestInvocationMode_ExplicitNativeToolCalls(t *testing.T) {
 	assert.Equal(t, toolSearchDescription, p.baseSearchDescription())
 }
 
-// TestInvocationMode_IndirectToolCalls_InjectsCallTool verifies that under
-// IndirectToolCalls the plugin exposes exactly tool_search + call_tool, does
+// TestInvocationMode_DispatchToolCalls_InjectsCallTool verifies that under
+// DispatchToolCalls the plugin exposes exactly tool_search + call_tool, does
 // NOT advertise loaded deferred tools individually, and surfaces each match's
 // input_schema in tool_search results so the model can build call_tool params.
-func TestInvocationMode_IndirectToolCalls_InjectsCallTool(t *testing.T) {
+func TestInvocationMode_DispatchToolCalls_InjectsCallTool(t *testing.T) {
 	p := NewPlugin(nil,
-		WithInvocationMode(IndirectToolCalls),
+		WithInvocationMode(DispatchToolCalls),
 		WithToolboxes([]Toolbox{
 			{Name: "billing", Tools: []tool.Tool{newTestTool("create_invoice", "x")}},
 		}),
 	)
-	assert.Equal(t, IndirectToolCalls, p.invocationMode)
-	require.NotNil(t, p.callTool, "call_tool must be created in IndirectToolCalls mode")
+	assert.Equal(t, DispatchToolCalls, p.invocationMode)
+	require.NotNil(t, p.callTool, "call_tool must be created in DispatchToolCalls mode")
 	assert.Equal(t, callToolToolName, p.callTool.Declaration().Name)
 	// tool_search description should be the call_tool-oriented variant.
 	assert.Equal(t, toolSearchCallToolDescription, p.baseSearchDescription())
@@ -1028,7 +1028,7 @@ func TestInvocationMode_IndirectToolCalls_InjectsCallTool(t *testing.T) {
 	res := callSearch(t, ctx, p, toolSearchInput{ToolNames: []string{"create_invoice"}})
 	require.Len(t, res.Tools, 1)
 	assert.NotNil(t, res.Tools[0].InputSchema,
-		"IndirectToolCalls must surface input_schema in tool_search results")
+		"DispatchToolCalls must surface input_schema in tool_search results")
 	assert.Contains(t, res.Status, "call_tool",
 		"status line should steer the model toward call_tool")
 
@@ -1040,16 +1040,16 @@ func TestInvocationMode_IndirectToolCalls_InjectsCallTool(t *testing.T) {
 	_, hasSearch := req.Tools[toolSearchToolName]
 	assert.True(t, hasSearch, "tool_search must be injected")
 	_, hasCallTool := req.Tools[callToolToolName]
-	assert.True(t, hasCallTool, "call_tool must be injected in IndirectToolCalls")
+	assert.True(t, hasCallTool, "call_tool must be injected in DispatchToolCalls")
 	_, hasDeferred := req.Tools["create_invoice"]
 	assert.False(t, hasDeferred,
-		"loaded deferred tool must NOT be advertised as an individual function in IndirectToolCalls")
+		"loaded deferred tool must NOT be advertised as an individual function in DispatchToolCalls")
 }
 
-// TestInvocationMode_IndirectToolCalls_CallToolInvokesLoadedTool verifies that
-// under IndirectToolCalls, call_tool can invoke a deferred tool that has been
+// TestInvocationMode_DispatchToolCalls_CallToolInvokesLoadedTool verifies that
+// under DispatchToolCalls, call_tool can invoke a deferred tool that has been
 // loaded via tool_search and rejects unloaded / unknown targets.
-func TestInvocationMode_IndirectToolCalls_CallToolInvokesLoadedTool(t *testing.T) {
+func TestInvocationMode_DispatchToolCalls_CallToolInvokesLoadedTool(t *testing.T) {
 	// Build a deferred tool whose Call is observable via the returned value.
 	echo := function.NewFunctionTool(
 		func(ctx context.Context, in struct {
@@ -1061,7 +1061,7 @@ func TestInvocationMode_IndirectToolCalls_CallToolInvokesLoadedTool(t *testing.T
 		function.WithDescription("echoes a message"),
 	)
 	p := NewPlugin(nil,
-		WithInvocationMode(IndirectToolCalls),
+		WithInvocationMode(DispatchToolCalls),
 		WithToolboxes([]Toolbox{{Name: "utils", Tools: []tool.Tool{echo}}}),
 	)
 	require.NotNil(t, p.callTool)
@@ -1101,11 +1101,11 @@ func TestInvocationMode_IndirectToolCalls_CallToolInvokesLoadedTool(t *testing.T
 	assert.Contains(t, m["message"], "tool_name is required")
 }
 
-// TestInvocationMode_IndirectToolCalls_CallToolRespectsPermissionFilter
+// TestInvocationMode_DispatchToolCalls_CallToolRespectsPermissionFilter
 // verifies that call_tool applies the same permission guard as a direct
 // deferred-tool invocation: a denied tool cannot be reached through call_tool
 // even after it was loaded.
-func TestInvocationMode_IndirectToolCalls_CallToolRespectsPermissionFilter(t *testing.T) {
+func TestInvocationMode_DispatchToolCalls_CallToolRespectsPermissionFilter(t *testing.T) {
 	filter := func(ctx context.Context, names []string) map[string]bool {
 		out := make(map[string]bool, len(names))
 		for _, n := range names {
@@ -1114,7 +1114,7 @@ func TestInvocationMode_IndirectToolCalls_CallToolRespectsPermissionFilter(t *te
 		return out
 	}
 	p := NewPlugin(nil,
-		WithInvocationMode(IndirectToolCalls),
+		WithInvocationMode(DispatchToolCalls),
 		WithToolPermissionFilter(filter),
 		WithToolboxes([]Toolbox{{
 			Name: "ns",

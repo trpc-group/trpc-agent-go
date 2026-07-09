@@ -98,7 +98,7 @@
 //     advertised to the model as its own function tool and the model calls it
 //     directly by name using the backend's native function-calling protocol.
 //
-//   - toolsearch.IndirectToolCalls: the deferred toolset is collapsed into
+//   - toolsearch.DispatchToolCalls: the deferred toolset is collapsed into
 //     exactly two function tools:
 //
 //   - tool_search — discover and load deferred tools. In this mode each
@@ -108,13 +108,13 @@
 //   - call_tool — invoke a loaded tool by its exact name with a params
 //     object matching that schema.
 //
-// IndirectToolCalls keeps the advertised tool count constant (two) no matter
+// DispatchToolCalls keeps the advertised tool count constant (two) no matter
 // how many deferred tools are loaded, which some backends handle better than a
 // growing tool list. call_tool enforces the same permission and loaded-set
 // guards as a direct deferred-tool call.
 //
 //	plugin := toolsearch.NewPlugin(presetTools,
 //	    toolsearch.WithToolboxes(boxes),
-//	    toolsearch.WithInvocationMode(toolsearch.IndirectToolCalls),
+//	    toolsearch.WithInvocationMode(toolsearch.DispatchToolCalls),
 //	)
 package toolsearch

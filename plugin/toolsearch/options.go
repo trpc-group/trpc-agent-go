@@ -24,7 +24,7 @@ const (
 
 	// callToolToolName is the name of the function tool that invokes a deferred
 	// tool loaded through tool_search. It is only injected when the invocation
-	// mode is IndirectToolCalls, in which case the model interacts with the
+	// mode is DispatchToolCalls, in which case the model interacts with the
 	// toolset through exactly two tools: tool_search (discover + load) and
 	// call_tool (invoke).
 	callToolToolName = "call_tool"
@@ -84,7 +84,7 @@ const (
 	// advertised tool count grows as the model loads more deferred tools.
 	NativeToolCalls InvocationMode = 0
 
-	// IndirectToolCalls collapses the deferred toolset behind exactly two
+	// DispatchToolCalls collapses the deferred toolset behind exactly two
 	// function tools: tool_search (discover + load, returning each match's
 	// input schema) and call_tool (invoke a loaded tool by name). Loaded
 	// deferred tools are NOT advertised as individual function tools; the
@@ -94,7 +94,7 @@ const (
 	// This keeps the advertised tool count constant (two) regardless of how
 	// many deferred tools the model has loaded, which some backends handle
 	// better than a growing tool list.
-	IndirectToolCalls InvocationMode = 1
+	DispatchToolCalls InvocationMode = 1
 )
 
 // Option configures the plugin.
@@ -211,7 +211,7 @@ func WithCatalogInDescription(enabled bool) Option {
 //   - toolsearch.NativeToolCalls (default): each loaded deferred tool is
 //     advertised to the model as its own function tool and the model calls it
 //     directly by name using the backend's native function-calling protocol.
-//   - toolsearch.IndirectToolCalls: the deferred toolset is collapsed behind
+//   - toolsearch.DispatchToolCalls: the deferred toolset is collapsed behind
 //     exactly two function tools — tool_search (discover + load; each search
 //     result carries the matched tool's input_schema) and call_tool (invoke a
 //     previously loaded tool by its exact name, passing a params object that
@@ -219,7 +219,7 @@ func WithCatalogInDescription(enabled bool) Option {
 //     individual function tools, so the advertised tool count stays constant
 //     (two) no matter how many deferred tools the model has loaded.
 //
-// The tool_search description is adjusted per mode: in IndirectToolCalls it
+// The tool_search description is adjusted per mode: in DispatchToolCalls it
 // steers the model toward call_tool instead of a direct call.
 func WithInvocationMode(mode InvocationMode) Option {
 	return func(o *options) {
