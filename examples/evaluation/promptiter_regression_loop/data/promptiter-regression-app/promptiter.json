@@ -1,0 +1,37 @@
+{
+  "appName": "promptiter-regression-app",
+  "evalsets": {
+    "train": "train",
+    "validation": "validation"
+  },
+  "promptSource": "baseline_prompt.txt",
+  "targetSurfaces": [
+    {
+      "node": "candidate",
+      "type": "instruction"
+    },
+    {
+      "node": "candidate",
+      "type": "tool",
+      "name": "query_order"
+    }
+  ],
+  "engine": {
+    "maxRounds": 2,
+    "minScoreGain": 0.01,
+    "maxRoundsWithoutAcceptance": 2,
+    "evalCaseParallelism": 1
+  },
+  "gate": {
+    "minValidationScoreGain": 0.02,
+    "maxNewHardFails": 0,
+    "maxRegressedCases": 0,
+    "protectedCases": [
+      "val_02_protected_format"
+    ],
+    "maxModelCalls": 200,
+    "maxWallClock": "3m",
+    "requireTrainNotWorse": false
+  },
+  "seed": 20260705
+}

@@ -1,0 +1,640 @@
+{
+  "runId": "run-20260709-184441.447944700",
+  "mode": "fake",
+  "seed": 20260705,
+  "startedAt": "2026-07-09T18:44:41.4657455+08:00",
+  "finishedAt": "2026-07-09T18:44:41.5148126+08:00",
+  "duration": "49ms",
+  "models": {
+    "aggregator": "fake pass-through aggregator",
+    "backwarder": "fake deterministic backwarder",
+    "candidate": "fake scripted order assistant",
+    "optimizer": "fake marker-append optimizer"
+  },
+  "config": {
+    "appName": "promptiter-regression-app",
+    "evalsets": {
+      "train": "train",
+      "validation": "validation"
+    },
+    "promptSource": "baseline_prompt.txt",
+    "targetSurfaces": [
+      {
+        "node": "candidate",
+        "type": "instruction"
+      },
+      {
+        "node": "candidate",
+        "type": "tool",
+        "name": "query_order"
+      }
+    ],
+    "engine": {
+      "maxRounds": 2,
+      "minScoreGain": 0.01,
+      "maxRoundsWithoutAcceptance": 2,
+      "evalCaseParallelism": 1
+    },
+    "gate": {
+      "minValidationScoreGain": 0.02,
+      "maxNewHardFails": 0,
+      "maxRegressedCases": 0,
+      "protectedCases": [
+        "val_02_protected_format"
+      ],
+      "hardFailCategories": [
+        "tool_call_error",
+        "route_error",
+        "format_error"
+      ],
+      "maxModelCalls": 200,
+      "maxWallClock": "3m",
+      "requireTrainNotWorse": false
+    },
+    "attribution": {},
+    "seed": 20260705
+  },
+  "baseline": {
+    "train": {
+      "score": 0.375,
+      "passCount": 1,
+      "caseCount": 4,
+      "cases": [
+        {
+          "evalSetId": "train",
+          "evalCaseId": "train_01_response_completeness",
+          "pass": false,
+          "score": 0.5,
+          "metrics": [
+            {
+              "name": "final_response_avg_score",
+              "score": 0,
+              "status": "failed",
+              "reason": "final response mismatch: text mismatch: source 您的订单 ORD-1001 正在处理中，请耐心等待。 and target 订单查询结果：订单 ORD-1001 当前状态为已发货，订单金额 299.00 元，预计送达时间 2026-07-08。 do not match"
+            },
+            {
+              "name": "tool_trajectory_avg_score",
+              "score": 1,
+              "status": "passed"
+            }
+          ]
+        },
+        {
+          "evalSetId": "train",
+          "evalCaseId": "train_02_wrong_tool_choice",
+          "pass": false,
+          "score": 0,
+          "metrics": [
+            {
+              "name": "final_response_avg_score",
+              "score": 0,
+              "status": "failed",
+              "reason": "final response mismatch: text mismatch: source 根据物流信息，您的包裹正在运输途中，请留意配送通知。 and target 订单查询结果：订单 ORD-1002 当前状态为待发货，订单金额 58.50 元，预计送达时间 2026-07-10。 do not match"
+            },
+            {
+              "name": "tool_trajectory_avg_score",
+              "score": 0,
+              "status": "failed",
+              "reason": "tool trajectory mismatch: match tools: tool id  with name query_order mismatch: actual tool call_query_logistics named query_logistics mismatch with expected tool  named query_order: name mismatch: source query_logistics and target query_order do not match"
+            }
+          ]
+        },
+        {
+          "evalSetId": "train",
+          "evalCaseId": "train_03_stable_tool_pass",
+          "pass": true,
+          "score": 1,
+          "metrics": [
+            {
+              "name": "final_response_avg_score",
+              "score": 1,
+              "status": "passed"
+            },
+            {
+              "name": "tool_trajectory_avg_score",
+              "score": 1,
+              "status": "passed"
+            }
+          ]
+        },
+        {
+          "evalSetId": "train",
+          "evalCaseId": "train_04_wrong_tool_argument",
+          "pass": false,
+          "score": 0,
+          "metrics": [
+            {
+              "name": "final_response_avg_score",
+              "score": 0,
+              "status": "failed",
+              "reason": "final response mismatch: text mismatch: source 订单查询结果：订单 ORD-1070 当前状态为已发货，订单金额 66.00 元，预计送达时间 2026-07-12。 and target 订单查询结果：订单 ORD-1007 当前状态为待发货，订单金额 129.00 元，预计送达时间 2026-07-14。 do not match"
+            },
+            {
+              "name": "tool_trajectory_avg_score",
+              "score": 0,
+              "status": "failed",
+              "reason": "tool trajectory mismatch: match tools: tool id  with name query_order mismatch: actual tool call_query_order named query_order mismatch with expected tool  named query_order: arguments mismatch: actual map[order_id:ORD-1070] and expected map[order_id:ORD-1007] do not match: compare order_id: actual ORD-1070 and expected ORD-1007 do not match"
+            }
+          ]
+        }
+      ]
+    },
+    "validation": {
+      "score": 0.6666666666666666,
+      "passCount": 2,
+      "caseCount": 3,
+      "cases": [
+        {
+          "evalSetId": "validation",
+          "evalCaseId": "val_01_generalize_tool_and_format",
+          "pass": false,
+          "score": 0,
+          "metrics": [
+            {
+              "name": "final_response_avg_score",
+              "score": 0,
+              "status": "failed",
+              "reason": "final response mismatch: text mismatch: source 您的订单 ORD-1004 已收到，我们会尽快安排。 and target 订单查询结果：订单 ORD-1004 当前状态为运输中，订单金额 449.00 元，预计送达时间 2026-07-09。 do not match"
+            },
+            {
+              "name": "tool_trajectory_avg_score",
+              "score": 0,
+              "status": "failed",
+              "reason": "tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)"
+            }
+          ]
+        },
+        {
+          "evalSetId": "validation",
+          "evalCaseId": "val_02_protected_format",
+          "pass": true,
+          "score": 1,
+          "metrics": [
+            {
+              "name": "final_response_avg_score",
+              "score": 1,
+              "status": "passed"
+            },
+            {
+              "name": "tool_trajectory_avg_score",
+              "score": 1,
+              "status": "passed"
+            }
+          ]
+        },
+        {
+          "evalSetId": "validation",
+          "evalCaseId": "val_03_stable_pass",
+          "pass": true,
+          "score": 1,
+          "metrics": [
+            {
+              "name": "final_response_avg_score",
+              "score": 1,
+              "status": "passed"
+            },
+            {
+              "name": "tool_trajectory_avg_score",
+              "score": 1,
+              "status": "passed"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "candidate": {
+    "round": 1,
+    "accepted": false,
+    "prompt": "你是电商客服助手。回答用户关于订单的问题。\n\n【优化标记M1】回答订单问题时，必须以\"订单查询结果：\"开头，并包含订单状态、订单金额和预计送达时间。",
+    "validationScore": 0.8333333333333334,
+    "trainScore": 0.5,
+    "trainScoreKnown": true
+  },
+  "attribution": {
+    "baselineCounts": {
+      "final_response_mismatch": 1,
+      "tool_argument_error": 1,
+      "tool_call_error": 2
+    },
+    "candidateCounts": {
+      "final_response_mismatch": 1
+    },
+    "baseline": [
+      {
+        "evalSetId": "train",
+        "evalCaseId": "train_01_response_completeness",
+        "rootCauses": [
+          {
+            "category": "final_response_mismatch",
+            "metric": "final_response_avg_score",
+            "evidence": "final response mismatch: text mismatch: source 您的订单 ORD-1001 正在处理中，请耐心等待。 and target 订单查询结果：订单 ORD-1001 当前状态为已发货，订单金额 299.00 元，预计送达时间 2026-07-08。 do not match"
+          }
+        ],
+        "chain": [
+          {
+            "category": "final_response_mismatch",
+            "metric": "final_response_avg_score",
+            "evidence": "final response mismatch: text mismatch: source 您的订单 ORD-1001 正在处理中，请耐心等待。 and target 订单查询结果：订单 ORD-1001 当前状态为已发货，订单金额 299.00 元，预计送达时间 2026-07-08。 do not match"
+          }
+        ]
+      },
+      {
+        "evalSetId": "train",
+        "evalCaseId": "train_02_wrong_tool_choice",
+        "rootCauses": [
+          {
+            "category": "tool_call_error",
+            "metric": "tool_trajectory_avg_score",
+            "evidence": "expected tool(s) not called: query_order; unexpected tool call(s): query_logistics"
+          }
+        ],
+        "chain": [
+          {
+            "category": "tool_call_error",
+            "metric": "tool_trajectory_avg_score",
+            "evidence": "expected tool(s) not called: query_order; unexpected tool call(s): query_logistics"
+          },
+          {
+            "category": "final_response_mismatch",
+            "metric": "final_response_avg_score",
+            "evidence": "final response mismatch: text mismatch: source 根据物流信息，您的包裹正在运输途中，请留意配送通知。 and target 订单查询结果：订单 ORD-1002 当前状态为待发货，订单金额 58.50 元，预计送达时间 2026-07-10。 do not match",
+            "derivedFrom": "tool_call_error"
+          }
+        ]
+      },
+      {
+        "evalSetId": "train",
+        "evalCaseId": "train_04_wrong_tool_argument",
+        "rootCauses": [
+          {
+            "category": "tool_argument_error",
+            "metric": "tool_trajectory_avg_score",
+            "evidence": "tool query_order argument mismatch: expected {\"order_id\":\"ORD-1007\"}, actual {\"order_id\":\"ORD-1070\"}"
+          }
+        ],
+        "chain": [
+          {
+            "category": "tool_argument_error",
+            "metric": "tool_trajectory_avg_score",
+            "evidence": "tool query_order argument mismatch: expected {\"order_id\":\"ORD-1007\"}, actual {\"order_id\":\"ORD-1070\"}"
+          },
+          {
+            "category": "final_response_mismatch",
+            "metric": "final_response_avg_score",
+            "evidence": "final response mismatch: text mismatch: source 订单查询结果：订单 ORD-1070 当前状态为已发货，订单金额 66.00 元，预计送达时间 2026-07-12。 and target 订单查询结果：订单 ORD-1007 当前状态为待发货，订单金额 129.00 元，预计送达时间 2026-07-14。 do not match",
+            "derivedFrom": "tool_argument_error"
+          }
+        ]
+      },
+      {
+        "evalSetId": "validation",
+        "evalCaseId": "val_01_generalize_tool_and_format",
+        "rootCauses": [
+          {
+            "category": "tool_call_error",
+            "metric": "tool_trajectory_avg_score",
+            "evidence": "tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)"
+          }
+        ],
+        "chain": [
+          {
+            "category": "tool_call_error",
+            "metric": "tool_trajectory_avg_score",
+            "evidence": "tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)"
+          },
+          {
+            "category": "final_response_mismatch",
+            "metric": "final_response_avg_score",
+            "evidence": "final response mismatch: text mismatch: source 您的订单 ORD-1004 已收到，我们会尽快安排。 and target 订单查询结果：订单 ORD-1004 当前状态为运输中，订单金额 449.00 元，预计送达时间 2026-07-09。 do not match",
+            "derivedFrom": "tool_call_error"
+          }
+        ]
+      }
+    ],
+    "candidate": [
+      {
+        "evalSetId": "validation",
+        "evalCaseId": "val_02_protected_format",
+        "rootCauses": [
+          {
+            "category": "final_response_mismatch",
+            "metric": "final_response_avg_score",
+            "evidence": "final response mismatch: text mismatch: source 订单查询结果：**订单 ORD-1005**\n- 状态：已取消\n- 退款金额：199.00 元 and target 订单 ORD-1005 已取消，退款 199.00 元将在 3 个工作日内原路退回。 do not match"
+          }
+        ],
+        "chain": [
+          {
+            "category": "final_response_mismatch",
+            "metric": "final_response_avg_score",
+            "evidence": "final response mismatch: text mismatch: source 订单查询结果：**订单 ORD-1005**\n- 状态：已取消\n- 退款金额：199.00 元 and target 订单 ORD-1005 已取消，退款 199.00 元将在 3 个工作日内原路退回。 do not match"
+          }
+        ]
+      }
+    ]
+  },
+  "delta": {
+    "validation": [
+      {
+        "evalSetId": "validation",
+        "evalCaseId": "val_01_generalize_tool_and_format",
+        "kind": "new_pass",
+        "baselinePass": false,
+        "baselineScore": 0,
+        "candidatePass": true,
+        "candidateScore": 1,
+        "scoreDelta": 1
+      },
+      {
+        "evalSetId": "validation",
+        "evalCaseId": "val_02_protected_format",
+        "kind": "new_fail",
+        "baselinePass": true,
+        "baselineScore": 1,
+        "candidatePass": false,
+        "candidateScore": 0.5,
+        "scoreDelta": -0.5,
+        "candidateAttribution": {
+          "evalSetId": "validation",
+          "evalCaseId": "val_02_protected_format",
+          "rootCauses": [
+            {
+              "category": "final_response_mismatch",
+              "metric": "final_response_avg_score",
+              "evidence": "final response mismatch: text mismatch: source 订单查询结果：**订单 ORD-1005**\n- 状态：已取消\n- 退款金额：199.00 元 and target 订单 ORD-1005 已取消，退款 199.00 元将在 3 个工作日内原路退回。 do not match"
+            }
+          ],
+          "chain": [
+            {
+              "category": "final_response_mismatch",
+              "metric": "final_response_avg_score",
+              "evidence": "final response mismatch: text mismatch: source 订单查询结果：**订单 ORD-1005**\n- 状态：已取消\n- 退款金额：199.00 元 and target 订单 ORD-1005 已取消，退款 199.00 元将在 3 个工作日内原路退回。 do not match"
+            }
+          ]
+        }
+      },
+      {
+        "evalSetId": "validation",
+        "evalCaseId": "val_03_stable_pass",
+        "kind": "unchanged",
+        "baselinePass": true,
+        "baselineScore": 1,
+        "candidatePass": true,
+        "candidateScore": 1,
+        "scoreDelta": 0
+      }
+    ],
+    "train": [
+      {
+        "evalSetId": "train",
+        "evalCaseId": "train_01_response_completeness",
+        "kind": "new_pass",
+        "baselinePass": false,
+        "baselineScore": 0.5,
+        "candidatePass": true,
+        "candidateScore": 1,
+        "scoreDelta": 0.5
+      },
+      {
+        "evalSetId": "train",
+        "evalCaseId": "train_02_wrong_tool_choice",
+        "kind": "unchanged",
+        "baselinePass": false,
+        "baselineScore": 0,
+        "candidatePass": false,
+        "candidateScore": 0,
+        "scoreDelta": 0
+      },
+      {
+        "evalSetId": "train",
+        "evalCaseId": "train_03_stable_tool_pass",
+        "kind": "unchanged",
+        "baselinePass": true,
+        "baselineScore": 1,
+        "candidatePass": true,
+        "candidateScore": 1,
+        "scoreDelta": 0
+      },
+      {
+        "evalSetId": "train",
+        "evalCaseId": "train_04_wrong_tool_argument",
+        "kind": "unchanged",
+        "baselinePass": false,
+        "baselineScore": 0,
+        "candidatePass": false,
+        "candidateScore": 0,
+        "scoreDelta": 0
+      }
+    ],
+    "summary": {
+      "newPass": 1,
+      "newFail": 1,
+      "improved": 0,
+      "regressed": 0,
+      "unchanged": 1
+    }
+  },
+  "gate": {
+    "accepted": false,
+    "rules": [
+      {
+        "name": "min_validation_score_gain",
+        "passed": true,
+        "observed": "+0.1667",
+        "threshold": "\u003e= 0.0200",
+        "reason": "验证集总分 0.8333 对比 baseline 0.6667"
+      },
+      {
+        "name": "max_new_hard_fails",
+        "passed": true,
+        "observed": "0",
+        "threshold": "\u003c= 0",
+        "reason": "无新增 hard fail"
+      },
+      {
+        "name": "max_regressed_cases",
+        "passed": false,
+        "observed": "1",
+        "threshold": "\u003c= 0",
+        "reason": "退化 case: val_02_protected_format"
+      },
+      {
+        "name": "protected_cases",
+        "passed": false,
+        "observed": "1",
+        "threshold": "== 0",
+        "reason": "关键 case 退化: val_02_protected_format"
+      },
+      {
+        "name": "max_model_calls",
+        "passed": true,
+        "observed": "32",
+        "threshold": "\u003c= 200",
+        "reason": "整个 pipeline 运行的模型调用预算"
+      },
+      {
+        "name": "max_wall_clock",
+        "passed": true,
+        "observed": "48ms",
+        "threshold": "\u003c= 3m0s",
+        "reason": "整个 pipeline 运行的墙钟预算"
+      }
+    ],
+    "selection": [
+      {
+        "round": 1,
+        "validationScore": 0.8333333333333334,
+        "modelCalls": 11,
+        "wallClock": 13804700,
+        "gatePassed": false,
+        "selected": false,
+        "rules": [
+          {
+            "name": "min_validation_score_gain",
+            "passed": true,
+            "observed": "+0.1667",
+            "threshold": "\u003e= 0.0200",
+            "reason": "验证集总分 0.8333 对比 baseline 0.6667"
+          },
+          {
+            "name": "max_new_hard_fails",
+            "passed": true,
+            "observed": "0",
+            "threshold": "\u003c= 0",
+            "reason": "无新增 hard fail"
+          },
+          {
+            "name": "max_regressed_cases",
+            "passed": false,
+            "observed": "1",
+            "threshold": "\u003c= 0",
+            "reason": "退化 case: val_02_protected_format"
+          },
+          {
+            "name": "protected_cases",
+            "passed": false,
+            "observed": "1",
+            "threshold": "== 0",
+            "reason": "关键 case 退化: val_02_protected_format"
+          },
+          {
+            "name": "max_model_calls",
+            "passed": true,
+            "observed": "32",
+            "threshold": "\u003c= 200",
+            "reason": "整个 pipeline 运行的模型调用预算"
+          },
+          {
+            "name": "max_wall_clock",
+            "passed": true,
+            "observed": "48ms",
+            "threshold": "\u003c= 3m0s",
+            "reason": "整个 pipeline 运行的墙钟预算"
+          }
+        ]
+      },
+      {
+        "round": 2,
+        "validationScore": 0.8333333333333334,
+        "modelCalls": 11,
+        "wallClock": 11354100,
+        "gatePassed": false,
+        "selected": false,
+        "rules": [
+          {
+            "name": "min_validation_score_gain",
+            "passed": true,
+            "observed": "+0.1667",
+            "threshold": "\u003e= 0.0200",
+            "reason": "验证集总分 0.8333 对比 baseline 0.6667"
+          },
+          {
+            "name": "max_new_hard_fails",
+            "passed": true,
+            "observed": "0",
+            "threshold": "\u003c= 0",
+            "reason": "无新增 hard fail"
+          },
+          {
+            "name": "max_regressed_cases",
+            "passed": false,
+            "observed": "1",
+            "threshold": "\u003c= 0",
+            "reason": "退化 case: val_02_protected_format"
+          },
+          {
+            "name": "protected_cases",
+            "passed": false,
+            "observed": "1",
+            "threshold": "== 0",
+            "reason": "关键 case 退化: val_02_protected_format"
+          },
+          {
+            "name": "max_model_calls",
+            "passed": true,
+            "observed": "32",
+            "threshold": "\u003c= 200",
+            "reason": "整个 pipeline 运行的模型调用预算"
+          },
+          {
+            "name": "max_wall_clock",
+            "passed": true,
+            "observed": "48ms",
+            "threshold": "\u003c= 3m0s",
+            "reason": "整个 pipeline 运行的墙钟预算"
+          }
+        ]
+      }
+    ],
+    "recommendation": "reject",
+    "summary": "拒绝全部候选；最优候选（第 1 轮）未通过规则: max_regressed_cases, protected_cases。训练集 +0.1250 但验证集 case val_02_protected_format 由 pass 转 fail，判定为过拟合"
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "trainScore": 0.375,
+      "validationScore": 0.8333333333333334,
+      "engineAccepted": true,
+      "engineReason": "candidate score gain satisfies acceptance policy",
+      "modelCalls": 11,
+      "wallClock": "14ms"
+    },
+    {
+      "round": 2,
+      "trainScore": 0.5,
+      "validationScore": 0.8333333333333334,
+      "engineAccepted": false,
+      "engineReason": "candidate score gain does not satisfy acceptance policy",
+      "modelCalls": 11,
+      "wallClock": "11ms",
+      "stopReason": "max rounds reached"
+    }
+  ],
+  "cost": {
+    "scopes": {
+      "candidate": {
+        "runCalls": 21,
+        "modelCalls": 32,
+        "promptTokens": 9255,
+        "completionTokens": 611
+      }
+    },
+    "total": {
+      "runCalls": 21,
+      "modelCalls": 32,
+      "promptTokens": 9255,
+      "completionTokens": 611
+    },
+    "stageDurations": {
+      "s1_baseline_train": "11ms",
+      "s2_attribution": "1ms",
+      "s3_optimization": "31ms",
+      "s4_delta": "2ms",
+      "s5_gate": "0s"
+    }
+  },
+  "nextSteps": [
+    "候选被拒绝，baseline prompt 保持不变。",
+    "参考失败归因与逐 case delta 修订评测集或调整优化目标后重跑。"
+  ]
+}
