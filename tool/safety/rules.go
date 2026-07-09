@@ -647,39 +647,57 @@ func ruleResource(c ruleCtx) []Finding {
 	}
 	if c.pipe != nil {
 		for _, argv := range c.pipe.Commands {
-			if len(argv) == 0 {
-				continue
-			}
-			switch lowerBase(argv[0]) {
-			case "sleep":
-				if len(argv) > 1 {
-					if secs, ok := parseSleep(argv[1]); ok && r.MaxSleepSec > 0 && secs > r.MaxSleepSec {
-						out = append(out, resourceFinding(RiskMedium, "sleep "+argv[1]))
-					}
-				}
-			case "yes":
-				out = append(out, resourceFinding(RiskHigh, "yes produces unbounded output"))
-			case "head":
-				if n, ok := headByteCount(argv[1:]); ok && r.MaxOutputBytes > 0 && n > r.MaxOutputBytes {
-					out = append(out, resourceFinding(RiskMedium, fmt.Sprintf(
-						"head -c %d exceeds max_output_bytes %d", n, r.MaxOutputBytes)))
-				}
-			case "xargs":
-				if n, ok := flagIntValue(argv[1:], "-P", "--max-procs"); ok &&
-					(n == 0 || n > maxParallelWorkers) {
-					out = append(out, resourceFinding(RiskMedium,
-						"xargs requests "+workerCount(n)+" parallel workers"))
-				}
-			case "parallel":
-				if n, ok := flagIntValue(argv[1:], "-j", "--jobs"); ok &&
-					(n == 0 || n > maxParallelWorkers) {
-					out = append(out, resourceFinding(RiskMedium,
-						"parallel requests "+workerCount(n)+" jobs"))
-				}
-			}
+			out = append(out, resourceArgvFindings(argv, r)...)
 		}
 	}
-	low := strings.ToLower(c.er.Command)
+	out = append(out, resourceTextFindings(c.er.Command)...)
+	return out
+}
+
+// resourceArgvFindings applies the per-command resource checks to one parsed
+// pipeline segment.
+func resourceArgvFindings(argv []string, r ResourcePolicy) []Finding {
+	if len(argv) == 0 {
+		return nil
+	}
+	switch lowerBase(argv[0]) {
+	case "sleep":
+		if len(argv) > 1 {
+			if secs, ok := parseSleep(argv[1]); ok && r.MaxSleepSec > 0 && secs > r.MaxSleepSec {
+				return []Finding{resourceFinding(RiskMedium, "sleep "+argv[1])}
+			}
+		}
+	case "yes":
+		return []Finding{resourceFinding(RiskHigh, "yes produces unbounded output")}
+	case "head":
+		if n, ok := headByteCount(argv[1:]); ok && r.MaxOutputBytes > 0 && n > r.MaxOutputBytes {
+			return []Finding{resourceFinding(RiskMedium, fmt.Sprintf(
+				"head -c %d exceeds max_output_bytes %d", n, r.MaxOutputBytes))}
+		}
+	case "xargs":
+		return workerFindings(argv[1:], "-P", "--max-procs", "xargs", "parallel workers")
+	case "parallel":
+		return workerFindings(argv[1:], "-j", "--jobs", "parallel", "jobs")
+	}
+	return nil
+}
+
+// workerFindings flags an explicit high or unlimited worker count on a
+// parallel-execution command.
+func workerFindings(args []string, short, long, cmd, noun string) []Finding {
+	n, ok := flagIntValue(args, short, long)
+	if !ok || (n > 0 && n <= maxParallelWorkers) {
+		return nil
+	}
+	return []Finding{resourceFinding(RiskMedium,
+		cmd+" requests "+workerCount(n)+" "+noun)}
+}
+
+// resourceTextFindings applies the raw-text resource heuristics (infinite
+// loops, interpreter string multiplication) to the full command/code text.
+func resourceTextFindings(command string) []Finding {
+	var out []Finding
+	low := strings.ToLower(command)
 	if strings.Contains(low, "while true") ||
 		strings.Contains(strings.ReplaceAll(low, " ", ""), "for(;;)") {
 		out = append(out, resourceFinding(RiskHigh, "infinite loop pattern"))
@@ -1468,7 +1486,10 @@ var windowsSystemDirs = []string{
 }
 
 func isRootOrSystem(p string) bool {
-	clean := strings.TrimSpace(filepath.ToSlash(p))
+	// Normalize separators explicitly: the scanned command may target a
+	// Windows path even when the guard runs on Linux, where filepath.ToSlash
+	// is a no-op for backslashes.
+	clean := strings.TrimSpace(strings.ReplaceAll(p, "\\", "/"))
 	clean = strings.TrimRight(clean, "/")
 	if clean == "" || p == "/" {
 		return true
