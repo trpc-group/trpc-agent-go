@@ -34,6 +34,7 @@ type SandboxConfig struct {
 	EnvWhitelist     []string
 	UseLocalFallback bool
 	Type             SandboxType
+	UnsafeLocal      bool
 }
 
 type SandboxResult struct {
@@ -117,9 +118,60 @@ func (s *LocalSandbox) RunCommand(ctx context.Context, command string, config Sa
 }
 
 func (s *LocalSandbox) ExecuteScript(ctx context.Context, scriptPath string, args []string, config SandboxConfig) (SandboxResult, error) {
-	argStr := strings.Join(args, " ")
-	command := fmt.Sprintf("bash %s %s", scriptPath, argStr)
-	return s.RunCommand(ctx, command, config)
+	ctx, cancel := context.WithTimeout(ctx, config.Timeout)
+	defer cancel()
+
+	start := time.Now()
+
+	cmdArgs := append([]string{scriptPath}, args...)
+	cmd := exec.CommandContext(ctx, "bash", cmdArgs...)
+	cmd.Dir = s.workDir
+
+	if len(config.EnvWhitelist) > 0 {
+		cmd.Env = filterEnv(os.Environ(), config.EnvWhitelist)
+	}
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+
+	duration := time.Since(start)
+
+	exitCode := 0
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			exitCode = exitErr.ExitCode()
+		} else {
+			return SandboxResult{
+				Error:       err.Error(),
+				ExitCode:    -1,
+				Duration:    duration,
+				TimedOut:    ctx.Err() == context.DeadlineExceeded,
+				SandboxType: SandboxTypeLocal,
+			}, nil
+		}
+	}
+
+	output := stdout.String()
+	if config.OutputSizeLimit > 0 && len(output) > config.OutputSizeLimit {
+		output = output[:config.OutputSizeLimit] + "... [truncated]"
+	}
+
+	errOutput := stderr.String()
+	if config.OutputSizeLimit > 0 && len(errOutput) > config.OutputSizeLimit {
+		errOutput = errOutput[:config.OutputSizeLimit] + "... [truncated]"
+	}
+
+	return SandboxResult{
+		Output:      output,
+		Error:       errOutput,
+		ExitCode:    exitCode,
+		TimedOut:    ctx.Err() == context.DeadlineExceeded,
+		Duration:    duration,
+		SandboxType: SandboxTypeLocal,
+	}, nil
 }
 
 func (s *LocalSandbox) Close() error {
@@ -144,6 +196,10 @@ func filterEnv(env []string, whitelist []string) []string {
 }
 
 func NewSandbox(workDir string) (Sandbox, error) {
+	return NewSandboxWithConfig(workDir, SandboxConfig{})
+}
+
+func NewSandboxWithConfig(workDir string, config SandboxConfig) (Sandbox, error) {
 	log.Printf("Attempting to create sandbox...")
 
 	if os.Getenv("E2B_API_KEY") != "" {
@@ -156,18 +212,20 @@ func NewSandbox(workDir string) (Sandbox, error) {
 		return createContainerSandbox(workDir)
 	}
 
-	log.Printf("No external sandbox available, falling back to local sandbox")
-	return NewLocalSandbox(workDir)
+	if config.UnsafeLocal || os.Getenv("UNSAFE_LOCAL_SANDBOX") == "true" {
+		log.Printf("Unsafe local sandbox enabled, using local sandbox")
+		return NewLocalSandbox(workDir)
+	}
+
+	return nil, fmt.Errorf("no external sandbox available and unsafe-local mode is not enabled")
 }
 
 func createE2BSandbox(workDir string) (Sandbox, error) {
-	log.Printf("E2B sandbox not implemented, falling back to local")
-	return NewLocalSandbox(workDir)
+	return nil, fmt.Errorf("E2B sandbox not implemented")
 }
 
 func createContainerSandbox(workDir string) (Sandbox, error) {
-	log.Printf("Container sandbox not implemented, falling back to local")
-	return NewLocalSandbox(workDir)
+	return nil, fmt.Errorf("container sandbox not implemented")
 }
 
 var DefaultConfig = SandboxConfig{

@@ -41,6 +41,7 @@ var (
 	dryRun       = flag.Bool("dry-run", false, "Run without LLM")
 	runFixture   = flag.String("fixture", "", "Run specific fixture")
 	listFixtures = flag.Bool("list-fixtures", false, "List available fixtures")
+	unsafeLocal  = flag.Bool("unsafe-local", false, "Enable unsafe local sandbox mode for testing (runs untrusted code on host)")
 )
 
 func main() {
@@ -90,14 +91,28 @@ func main() {
 }
 
 func generateDiffFromRepo(repoPath string) (string, error) {
-	cmd := exec.Command("git", "-C", repoPath, "diff", "HEAD~1", "HEAD")
-	output, err := cmd.CombinedOutput()
+	baseRef := os.Getenv("BASE_REF")
+	if baseRef == "" {
+		baseRef = "origin/main"
+	}
+
+	cmd := exec.Command("git", "-C", repoPath, "merge-base", baseRef, "HEAD")
+	mergeBase, err := cmd.CombinedOutput()
 	if err != nil {
-		cmd := exec.Command("git", "-C", repoPath, "diff")
-		output, err = cmd.CombinedOutput()
+		log.Printf("Warning: Failed to find merge base with %s, falling back to HEAD~1", baseRef)
+		cmd := exec.Command("git", "-C", repoPath, "diff", "HEAD~1", "HEAD")
+		output, err := cmd.CombinedOutput()
 		if err != nil {
 			return "", fmt.Errorf("git diff failed: %w", err)
 		}
+		return string(output), nil
+	}
+
+	mergeBaseHash := strings.TrimSpace(string(mergeBase))
+	cmd = exec.Command("git", "-C", repoPath, "diff", mergeBaseHash, "HEAD")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("git diff failed: %w", err)
 	}
 	return string(output), nil
 }
@@ -216,9 +231,12 @@ func runCodeReview(diffPath, repoPath, outputDir, dbPath string, dryRun bool) er
 
 	if !dryRun {
 		log.Printf("Running static analysis...")
-		sbx, err := sandbox.NewSandbox(repoPath)
+		sbx, err := sandbox.NewSandboxWithConfig(repoPath, sandbox.SandboxConfig{
+			UnsafeLocal: *unsafeLocal,
+		})
 		if err != nil {
 			log.Printf("Warning: Failed to create sandbox: %v", err)
+			log.Printf("Hint: Use --unsafe-local flag to enable local sandbox for testing")
 		} else {
 			log.Printf("Using sandbox type: %s", sbx.GetType())
 			defer sbx.Close()
