@@ -216,14 +216,65 @@ func TestWorkspaceRuntimeEnvKeepsLocalGoCacheValues(t *testing.T) {
 }
 
 func TestWorkspaceRuntimeCwdScopesCommandsToReviewAgentModule(t *testing.T) {
-	if got := workspaceRuntimeCwd("container"); got != "work/examples/code_review_agent" {
+	if got := newSandboxWorkspace("").runtimeCwd("container"); got != "work/examples/code_review_agent" {
 		t.Fatalf("container cwd = %q, want work/examples/code_review_agent", got)
 	}
-	if got := workspaceRuntimeCwd("e2b"); got != "work/examples/code_review_agent" {
+	if got := newSandboxWorkspace("").runtimeCwd("e2b"); got != "work/examples/code_review_agent" {
 		t.Fatalf("e2b cwd = %q, want work/examples/code_review_agent", got)
 	}
-	if got := workspaceRuntimeCwd("local"); got != "examples/code_review_agent" {
+	if got := newSandboxWorkspace("").runtimeCwd("local"); got != "examples/code_review_agent" {
 		t.Fatalf("local cwd = %q, want examples/code_review_agent", got)
+	}
+}
+
+func TestWorkspaceRuntimeCwdUsesSelectedRepoPath(t *testing.T) {
+	workspace := newSandboxWorkspace("/tmp/target-repo")
+	if got := workspace.runtimeCwd("container"); got != "work" {
+		t.Fatalf("container cwd = %q, want work", got)
+	}
+	if got := workspace.runtimeCwd("e2b"); got != "work" {
+		t.Fatalf("e2b cwd = %q, want work", got)
+	}
+	if got := workspace.runtimeCwd("local"); got != "." {
+		t.Fatalf("local cwd = %q, want .", got)
+	}
+}
+
+func TestSandboxWorkDirUsesSelectedRepoPath(t *testing.T) {
+	targetRepo := t.TempDir()
+	got, err := newSandboxWorkspace(targetRepo).root()
+	if err != nil {
+		t.Fatalf("root() error = %v", err)
+	}
+	want, err := filepath.Abs(targetRepo)
+	if err != nil {
+		t.Fatalf("Abs() error = %v", err)
+	}
+	if got != want {
+		t.Fatalf("root() = %q, want %q", got, want)
+	}
+}
+
+func TestRunTaskIDIncludesFullRunTimestamp(t *testing.T) {
+	diff := "diff --git a/a.go b/a.go\n"
+	first := runTaskID(diff, time.Date(2026, 7, 6, 12, 0, 0, 0, time.UTC))
+	second := runTaskID(diff, time.Date(2026, 7, 6, 12, 0, 0, 1, time.UTC))
+	if first == second {
+		t.Fatalf("runTaskID reused %q for repeated same-day runs", first)
+	}
+}
+
+func TestSummarizeOutcomeWarnsForFileListInput(t *testing.T) {
+	summary := summarizeOutcome(
+		inputsource.Source{Type: review.InputTypeFileList},
+		[]review.DiffFile{{NewPath: "pkg/a.go"}},
+		nil,
+		nil,
+		review.ReviewPlan{Model: "mock-model", Skill: defaultSkillName},
+	)
+
+	if !strings.Contains(summary, "File-list input supplies path context only") {
+		t.Fatalf("summary = %q, want file-list caveat", summary)
 	}
 }
 
@@ -298,7 +349,7 @@ func assertFailedTaskStored(t *testing.T, dbPath string) {
 	if err != nil {
 		t.Fatalf("inputsource.Read() error = %v", err)
 	}
-	report, err := st.LoadTaskReport(context.Background(), stableTaskID(input.Diff, fixedTestTime()))
+	report, err := st.LoadTaskReport(context.Background(), runTaskID(input.Diff, fixedTestTime()))
 	if err != nil {
 		t.Fatalf("LoadTaskReport() error = %v", err)
 	}

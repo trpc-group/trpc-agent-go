@@ -100,7 +100,12 @@ type PlanRequest struct {
 	Model   string
 	Runtime string
 	Skill   string
+	WorkDir string
 	Files   []review.DiffFile
+}
+
+type sandboxWorkspace struct {
+	workDir string
 }
 
 // EnvPlanner validates OpenAI-compatible model configuration for real runs.
@@ -147,7 +152,7 @@ func (p EnvPlanner) PlanReview(ctx context.Context, req PlanRequest) (review.Rev
 		if modelName == "" {
 			modelName = "mock-model"
 		}
-		return reviewPlan(modelName, "mock", "mock_planner", req.Skill, runtimeName), nil
+		return reviewPlan(modelName, "mock", "mock_planner", req.Skill, runtimeName, req.WorkDir), nil
 	}
 	if modelName == "" {
 		return review.ReviewPlan{}, fmt.Errorf("model orchestration requires --model or MODEL for runtime %q; use --runtime fake for unit tests", runtimeName)
@@ -159,9 +164,9 @@ func (p EnvPlanner) PlanReview(ctx context.Context, req PlanRequest) (review.Rev
 	if err != nil {
 		return review.ReviewPlan{}, err
 	}
-	plan := reviewPlan(modelName, "openai_compatible", "model_response", req.Skill, runtimeName)
+	plan := reviewPlan(modelName, "openai_compatible", "model_response", req.Skill, runtimeName, req.WorkDir)
 	if len(modelPlan.Commands) > 0 {
-		if allowedCommands := allowlistedModelCommands(modelPlan.Commands); len(allowedCommands) > 0 {
+		if allowedCommands := allowlistedModelCommands(modelPlan.Commands, req.WorkDir); len(allowedCommands) > 0 {
 			plan.Commands = redactStrings(allowedCommands)
 		}
 	}
@@ -171,7 +176,7 @@ func (p EnvPlanner) PlanReview(ctx context.Context, req PlanRequest) (review.Rev
 	return plan, nil
 }
 
-func reviewPlan(modelName string, provider string, source string, skill string, runtimeName string) review.ReviewPlan {
+func reviewPlan(modelName string, provider string, source string, skill string, runtimeName string, workDir string) review.ReviewPlan {
 	if skill == "" {
 		skill = defaultSkillName
 	}
@@ -181,7 +186,7 @@ func reviewPlan(modelName string, provider string, source string, skill string, 
 		Source:   source,
 		Skill:    skill,
 		Runtime:  runtimeName,
-		Commands: append([]string(nil), defaultSandboxCommands...),
+		Commands: newSandboxWorkspace(workDir).commandAllowlist(),
 		RuleSources: []string{
 			"skills/code-review/SKILL.md",
 			"skills/code-review/docs/rules.md",
@@ -253,15 +258,10 @@ func buildPlanningPrompt(req PlanRequest) string {
 	}
 	sort.Strings(files)
 	payload := map[string]any{
-		"skill":         req.Skill,
-		"runtime":       req.Runtime,
-		"changed_files": files,
-		"allowed_commands": []string{
-			"go test ./...",
-			"go vet ./...",
-			"go test ./skills/code-review/scripts",
-			"go test ./internal/rules",
-		},
+		"skill":            req.Skill,
+		"runtime":          req.Runtime,
+		"changed_files":    files,
+		"allowed_commands": newSandboxWorkspace(req.WorkDir).commandAllowlist(),
 		"rule_sources": []string{
 			"skills/code-review/SKILL.md",
 			"skills/code-review/docs/rules.md",
@@ -286,9 +286,10 @@ func redactStrings(in []string) []string {
 	return out
 }
 
-func allowlistedModelCommands(commands []string) []string {
-	allowed := make(map[string]string, len(defaultSandboxCommands))
-	for _, command := range defaultSandboxCommands {
+func allowlistedModelCommands(commands []string, workDir string) []string {
+	allowlist := newSandboxWorkspace(workDir).commandAllowlist()
+	allowed := make(map[string]string, len(allowlist))
+	for _, command := range allowlist {
 		allowed[canonicalCommand(command)] = command
 	}
 	seen := make(map[string]struct{}, len(commands))
@@ -318,6 +319,48 @@ func defaultPlanner() Planner {
 		BaseURL:    os.Getenv("OPENAI_BASE_URL"),
 		HTTPClient: &http.Client{Timeout: 30 * time.Second},
 	}
+}
+
+func newSandboxWorkspace(workDir string) sandboxWorkspace {
+	return sandboxWorkspace{workDir: strings.TrimSpace(workDir)}
+}
+
+func (ws sandboxWorkspace) commandAllowlist() []string {
+	if ws.hasSelectedRepo() {
+		return []string{
+			"go test ./...",
+			"go vet ./...",
+		}
+	}
+	return append([]string(nil), defaultSandboxCommands...)
+}
+
+func (ws sandboxWorkspace) root() (string, error) {
+	if ws.hasSelectedRepo() {
+		abs, err := filepath.Abs(ws.workDir)
+		if err != nil {
+			return "", fmt.Errorf("resolve sandbox workdir: %w", err)
+		}
+		return abs, nil
+	}
+	return repositoryRoot()
+}
+
+func (ws sandboxWorkspace) runtimeCwd(runtimeName string) string {
+	if runtimeName == "local" {
+		if ws.hasSelectedRepo() {
+			return "."
+		}
+		return filepath.ToSlash(reviewAgentModuleDir)
+	}
+	if ws.hasSelectedRepo() {
+		return codeexecutor.DirWork
+	}
+	return path.Join(codeexecutor.DirWork, reviewAgentModuleDir)
+}
+
+func (ws sandboxWorkspace) hasSelectedRepo() bool {
+	return ws.workDir != ""
 }
 
 // Run executes a model-planned review over fixture diffs.
@@ -353,7 +396,7 @@ func Run(ctx context.Context, opts Options) (result Result, err error) {
 		return Result{}, err
 	}
 	rawDiff := input.Diff
-	taskID := stableTaskID(rawDiff, now)
+	taskID := runTaskID(rawDiff, now)
 	task := review.ReviewTask{
 		ID:        taskID,
 		Status:    review.TaskStatusRunning,
@@ -415,6 +458,7 @@ func Run(ctx context.Context, opts Options) (result Result, err error) {
 		Model:   opts.Model,
 		Runtime: opts.Runtime,
 		Skill:   defaultSkillName,
+		WorkDir: input.WorkDir,
 		Files:   files,
 	})
 	if err != nil {
@@ -426,7 +470,7 @@ func Run(ctx context.Context, opts Options) (result Result, err error) {
 		return Result{}, failTask(err)
 	}
 
-	decisions, runs, err := executePlannedCommands(ctx, st, task.ID, opts.Runtime, plan.Commands, now, opts.SandboxTimeout)
+	decisions, runs, err := executePlannedCommands(ctx, st, task.ID, opts.Runtime, plan.Commands, now, opts.SandboxTimeout, input.WorkDir)
 	if err != nil {
 		return Result{}, failTask(err)
 	}
@@ -446,7 +490,7 @@ func Run(ctx context.Context, opts Options) (result Result, err error) {
 	conclusion := conclusionFor(task.Status, findings, runs)
 	r := review.Report{
 		Task:                task,
-		Summary:             summarizeOutcome(files, findings, runs, plan),
+		Summary:             summarizeOutcome(input, files, findings, runs, plan),
 		Plan:                plan,
 		ChangedFiles:        files,
 		Findings:            findings,
@@ -486,8 +530,8 @@ func Run(ctx context.Context, opts Options) (result Result, err error) {
 	}, nil
 }
 
-func stableTaskID(diff string, now time.Time) string {
-	sum := sha256.Sum256([]byte(diff + now.UTC().Format("20060102")))
+func runTaskID(diff string, now time.Time) string {
+	sum := sha256.Sum256([]byte(diff + now.UTC().Format(time.RFC3339Nano)))
 	return "review-" + hex.EncodeToString(sum[:])[:12]
 }
 
@@ -530,13 +574,17 @@ func summarizeDiff(input inputsource.Source, files []review.DiffFile) string {
 	return fmt.Sprintf("Reviewed %d changed files.", len(files))
 }
 
-func summarizeOutcome(files []review.DiffFile, findings []review.Finding, runs []review.SandboxRun, plan review.ReviewPlan) string {
-	return fmt.Sprintf("Model plan %q coordinated skill %q for %d changed files, produced %d findings, and recorded %d sandbox runs.", plan.Model, plan.Skill, len(files), len(findings), len(runs))
+func summarizeOutcome(input inputsource.Source, files []review.DiffFile, findings []review.Finding, runs []review.SandboxRun, plan review.ReviewPlan) string {
+	summary := fmt.Sprintf("Model plan %q coordinated skill %q for %d changed files, produced %d findings, and recorded %d sandbox runs.", plan.Model, plan.Skill, len(files), len(findings), len(runs))
+	if input.Type == review.InputTypeFileList {
+		return summary + " File-list input supplies path context only; content-based deterministic rules require diff input."
+	}
+	return summary
 }
 
-func executePlannedCommands(ctx context.Context, st store.Store, taskID string, runtimeName string, commands []string, now time.Time, timeout time.Duration) ([]review.PermissionDecisionRecord, []review.SandboxRun, error) {
+func executePlannedCommands(ctx context.Context, st store.Store, taskID string, runtimeName string, commands []string, now time.Time, timeout time.Duration, workDir string) ([]review.PermissionDecisionRecord, []review.SandboxRun, error) {
 	if len(commands) == 0 {
-		commands = defaultSandboxCommands
+		commands = newSandboxWorkspace(workDir).commandAllowlist()
 	}
 	var decisions []review.PermissionDecisionRecord
 	var runs []review.SandboxRun
@@ -575,7 +623,7 @@ func executePlannedCommands(ctx context.Context, st store.Store, taskID string, 
 		}
 		if runtime == nil {
 			var initRun *review.SandboxRun
-			runtime, cleanup, initRun = runtimeForName(ctx, runtimeName, taskID, suffix, timeout)
+			runtime, cleanup, initRun = runtimeForName(ctx, runtimeName, taskID, suffix, timeout, workDir)
 			if initRun != nil {
 				runs = append(runs, *initRun)
 			}
@@ -600,7 +648,7 @@ func countFindingRedactions(findings []review.Finding) int {
 	return count
 }
 
-func runtimeForName(ctx context.Context, name string, taskID string, suffix string, timeout time.Duration) (sandboxrun.Runtime, func(), *review.SandboxRun) {
+func runtimeForName(ctx context.Context, name string, taskID string, suffix string, timeout time.Duration, workDir string) (sandboxrun.Runtime, func(), *review.SandboxRun) {
 	normalized := strings.ToLower(strings.TrimSpace(name))
 	if normalized == "" {
 		normalized = "container"
@@ -608,7 +656,7 @@ func runtimeForName(ctx context.Context, name string, taskID string, suffix stri
 	if normalized == "fake" {
 		return sandboxrun.FakeRuntime{RuntimeName: normalized}, nil, nil
 	}
-	rt, cleanup, err := newWorkspaceRuntime(ctx, normalized, taskID, timeout)
+	rt, cleanup, err := newWorkspaceRuntime(ctx, normalized, taskID, timeout, workDir)
 	if err != nil {
 		run := review.SandboxRun{
 			ID:             taskID + "-sandbox-init-" + suffix,
@@ -624,8 +672,9 @@ func runtimeForName(ctx context.Context, name string, taskID string, suffix stri
 	return rt, cleanup, nil
 }
 
-func newWorkspaceRuntime(ctx context.Context, runtimeName string, taskID string, timeout time.Duration) (sandboxrun.Runtime, func(), error) {
-	repoRoot, err := repositoryRoot()
+func newWorkspaceRuntime(ctx context.Context, runtimeName string, taskID string, timeout time.Duration, workDir string) (sandboxrun.Runtime, func(), error) {
+	workspace := newSandboxWorkspace(workDir)
+	repoRoot, err := workspace.root()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -697,7 +746,7 @@ func newWorkspaceRuntime(ctx context.Context, runtimeName string, taskID string,
 		RuntimeName: runtimeName,
 		Engine:      eng,
 		Workspace:   ws,
-		Cwd:         workspaceRuntimeCwd(runtimeName),
+		Cwd:         workspace.runtimeCwd(runtimeName),
 		Timeout:     timeout,
 		Env:         workspaceRuntimeEnv(runtimeName),
 	}, cleanup, nil
@@ -735,13 +784,6 @@ func containerBindMounts(repoRoot string) []bindMount {
 		})
 	}
 	return mounts
-}
-
-func workspaceRuntimeCwd(runtimeName string) string {
-	if runtimeName == "local" {
-		return filepath.ToSlash(reviewAgentModuleDir)
-	}
-	return path.Join(codeexecutor.DirWork, reviewAgentModuleDir)
 }
 
 func workspaceRuntimeEnv(runtimeName string) map[string]string {

@@ -39,6 +39,7 @@ type Source struct {
 	FixtureNames []string
 	FileList     []string
 	RepoPath     string
+	WorkDir      string
 	Summary      string
 }
 
@@ -165,6 +166,7 @@ func readRepoDiff(ctx context.Context, repoPath string) (Source, error) {
 		Type:     review.InputTypeRepo,
 		Diff:     diff,
 		RepoPath: abs,
+		WorkDir:  abs,
 		Summary:  fmt.Sprintf("Reviewed git workspace diff from %s.", abs),
 	}, nil
 }
@@ -309,6 +311,6 @@ func readFileList(path string) (Source, error) {
 	return Source{
 		Type:     review.InputTypeFileList,
 		FileList: files,
-		Summary:  fmt.Sprintf("Reviewed %d changed file paths from %s.", len(files), filepath.Base(path)),
+		Summary:  fmt.Sprintf("Loaded %d changed file paths from %s for planning and sandbox context; content-based deterministic rules require diff input.", len(files), filepath.Base(path)),
 	}, nil
 }

@@ -22,8 +22,8 @@ Supported input modes:
 
 - `--fixture-dir testdata/fixtures` for deterministic public samples.
 - `--diff-file path/to/change.diff` for a unified diff.
-- `--repo-path path/to/repo` for `git diff --no-ext-diff --binary`.
-- `--file-list path/to/files.txt` for a newline-delimited changed-file list.
+- `--repo-path path/to/repo` for `git diff --no-ext-diff --binary`; sandbox commands run in that repository.
+- `--file-list path/to/files.txt` for a newline-delimited changed-file list used for planning and sandbox context. Content-based deterministic rules require diff input.
 
 The CLI reads diff fixtures, asks an OpenAI-compatible model for the execution
 plan, records a review task, writes `review_report.json` and

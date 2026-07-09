@@ -1,6 +1,6 @@
 {
   "task": {
-    "id": "review-7ed8cd6d5ee2",
+    "id": "review-dbabce9d1bfa",
     "status": "failed",
     "input_type": "fixture",
     "diff_hash": "8136cf57777c1facd24ed813acb4329aea6b6c6c246a22ec27126b598299a939",
@@ -726,8 +726,8 @@
   ],
   "sandbox_runs": [
     {
-      "id": "review-7ed8cd6d5ee2-sandbox-001",
-      "task_id": "review-7ed8cd6d5ee2",
+      "id": "review-dbabce9d1bfa-sandbox-001",
+      "task_id": "review-dbabce9d1bfa",
       "runtime": "fake",
       "command": "go test ./...",
       "status": "passed",
@@ -737,8 +737,8 @@
       "output_truncated": false
     },
     {
-      "id": "review-7ed8cd6d5ee2-sandbox-002",
-      "task_id": "review-7ed8cd6d5ee2",
+      "id": "review-dbabce9d1bfa-sandbox-002",
+      "task_id": "review-dbabce9d1bfa",
       "runtime": "fake",
       "command": "go vet ./...",
       "status": "passed",
@@ -748,8 +748,8 @@
       "output_truncated": false
     },
     {
-      "id": "review-7ed8cd6d5ee2-sandbox-003",
-      "task_id": "review-7ed8cd6d5ee2",
+      "id": "review-dbabce9d1bfa-sandbox-003",
+      "task_id": "review-dbabce9d1bfa",
       "runtime": "fake",
       "command": "go test ./skills/code-review/scripts",
       "status": "passed",
@@ -759,8 +759,8 @@
       "output_truncated": false
     },
     {
-      "id": "review-7ed8cd6d5ee2-sandbox-004",
-      "task_id": "review-7ed8cd6d5ee2",
+      "id": "review-dbabce9d1bfa-sandbox-004",
+      "task_id": "review-dbabce9d1bfa",
       "runtime": "fake",
       "command": "go test ./internal/rules",
       "status": "passed",
@@ -772,8 +772,8 @@
   ],
   "permission_decisions": [
     {
-      "id": "review-7ed8cd6d5ee2-permission-001",
-      "task_id": "review-7ed8cd6d5ee2",
+      "id": "review-dbabce9d1bfa-permission-001",
+      "task_id": "review-dbabce9d1bfa",
       "tool_name": "workspace_exec",
       "command": "go test ./...",
       "framework_action": "allow",
@@ -785,8 +785,8 @@
       "created_at": "2026-07-06T00:00:00Z"
     },
     {
-      "id": "review-7ed8cd6d5ee2-permission-002",
-      "task_id": "review-7ed8cd6d5ee2",
+      "id": "review-dbabce9d1bfa-permission-002",
+      "task_id": "review-dbabce9d1bfa",
       "tool_name": "workspace_exec",
       "command": "go vet ./...",
       "framework_action": "allow",
@@ -798,8 +798,8 @@
       "created_at": "2026-07-06T00:00:00Z"
     },
     {
-      "id": "review-7ed8cd6d5ee2-permission-003",
-      "task_id": "review-7ed8cd6d5ee2",
+      "id": "review-dbabce9d1bfa-permission-003",
+      "task_id": "review-dbabce9d1bfa",
       "tool_name": "workspace_exec",
       "command": "go test ./skills/code-review/scripts",
       "framework_action": "allow",
@@ -811,8 +811,8 @@
       "created_at": "2026-07-06T00:00:00Z"
     },
     {
-      "id": "review-7ed8cd6d5ee2-permission-004",
-      "task_id": "review-7ed8cd6d5ee2",
+      "id": "review-dbabce9d1bfa-permission-004",
+      "task_id": "review-dbabce9d1bfa",
       "tool_name": "workspace_exec",
       "command": "go test ./internal/rules",
       "framework_action": "allow",
@@ -826,16 +826,16 @@
   ],
   "artifacts": [
     {
-      "id": "json_report-review-7ed8cd6d5ee2",
-      "task_id": "review-7ed8cd6d5ee2",
+      "id": "json_report-review-dbabce9d1bfa",
+      "task_id": "review-dbabce9d1bfa",
       "kind": "json_report",
       "path": "review_report.json",
       "mime_type": "application/json",
       "created_at": "2026-07-06T00:00:00Z"
     },
     {
-      "id": "markdown_report-review-7ed8cd6d5ee2",
-      "task_id": "review-7ed8cd6d5ee2",
+      "id": "markdown_report-review-dbabce9d1bfa",
+      "task_id": "review-dbabce9d1bfa",
       "kind": "markdown_report",
       "path": "review_report.md",
       "mime_type": "text/markdown",
@@ -843,7 +843,7 @@
     }
   ],
   "metrics": {
-    "task_id": "review-7ed8cd6d5ee2",
+    "task_id": "review-dbabce9d1bfa",
     "total_duration_ms": 0,
     "sandbox_duration_ms": 0,
     "tool_call_count": 4,
