@@ -20,6 +20,7 @@
 //	go run main.go -memory=mysqlvec
 //	go run main.go -memory=postgres
 //	go run main.go -memory=pgvector
+//	go run main.go -memory=gorm
 //
 // Environment variables by memory type (example usage):
 //

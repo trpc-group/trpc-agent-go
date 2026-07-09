@@ -25,7 +25,7 @@ func (s *Service) memoryTable(ctx context.Context) *gorm.DB {
 	if !s.opts.softDelete {
 		return q.Unscoped()
 	}
-	return q
+	return q.Model(&memoryRow{})
 }
 
 func wrapDBErr(op string, err error) error {

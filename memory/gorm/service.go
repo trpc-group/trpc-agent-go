@@ -115,30 +115,36 @@ func (s *Service) AddMemory(ctx context.Context, userKey memory.UserKey, memoryS
 		return err
 	}
 
-	if s.opts.memoryLimit > 0 {
-		var count int64
-		q := s.memoryTable(ctx).
-			Where("app_name = ? AND user_id = ?", userKey.AppName, userKey.UserID)
-		if err := q.Count(&count).Error; err != nil {
-			return wrapDBErr("check memory count", err)
-		}
-		if int(count) >= s.opts.memoryLimit {
-			return fmt.Errorf(
-				"memory limit exceeded for user %s, limit: %d, current: %d",
-				userKey.UserID, s.opts.memoryLimit, count)
-		}
-	}
-
+	ep := memory.ResolveAddOptions(opts)
 	now := time.Now()
 	mem := &memory.Memory{
 		Memory:      memoryStr,
 		Topics:      topics,
 		LastUpdated: &now,
 	}
-	ep := memory.ResolveAddOptions(opts)
 	imemory.ApplyMetadata(mem, ep)
+	memoryID := imemory.GenerateMemoryID(mem, userKey.AppName, userKey.UserID)
+
+	if s.opts.memoryLimit > 0 {
+		var existing int64
+		err := s.memoryTable(ctx).
+			Where(
+				"memory_id = ? AND app_name = ? AND user_id = ?",
+				memoryID, userKey.AppName, userKey.UserID,
+			).
+			Count(&existing).Error
+		if err != nil {
+			return wrapDBErr("check existing memory", err)
+		}
+		if existing == 0 {
+			if err := s.enforceMemoryLimit(ctx, userKey); err != nil {
+				return err
+			}
+		}
+	}
+
 	entry := &memory.Entry{
-		ID:        imemory.GenerateMemoryID(mem, userKey.AppName, userKey.UserID),
+		ID:        memoryID,
 		AppName:   userKey.AppName,
 		Memory:    mem,
 		UserID:    userKey.UserID,
@@ -182,6 +188,26 @@ func (s *Service) AddMemory(ctx context.Context, userKey memory.UserKey, memoryS
 	}
 	if err != nil {
 		return wrapDBErr("store memory entry", err)
+	}
+	return nil
+}
+
+func (s *Service) enforceMemoryLimit(ctx context.Context, userKey memory.UserKey) error {
+	if s.opts.memoryLimit <= 0 {
+		return nil
+	}
+
+	var count int64
+	err := s.memoryTable(ctx).
+		Where("app_name = ? AND user_id = ?", userKey.AppName, userKey.UserID).
+		Count(&count).Error
+	if err != nil {
+		return wrapDBErr("check memory count", err)
+	}
+	if int(count) >= s.opts.memoryLimit {
+		return fmt.Errorf(
+			"memory limit exceeded for user %s, limit: %d, current: %d",
+			userKey.UserID, s.opts.memoryLimit, count)
 	}
 	return nil
 }

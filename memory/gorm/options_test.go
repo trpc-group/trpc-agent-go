@@ -27,6 +27,7 @@ func TestDefaultOptions(t *testing.T) {
 	assert.Equal(t, imemory.DefaultMaxSearchResults, opts.maxSearchResults)
 	assert.False(t, opts.softDelete)
 	assert.False(t, opts.skipDBInit)
+	assert.Equal(t, imemory.DefaultEnabledTools, opts.enabledTools)
 }
 
 func TestServiceOpts_clone(t *testing.T) {

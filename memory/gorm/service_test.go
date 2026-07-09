@@ -188,9 +188,10 @@ func TestService_DeleteAndClear(t *testing.T) {
 	assert.Empty(t, afterClear)
 }
 
-func TestService_Tools_emptyByDefault(t *testing.T) {
+func TestService_Tools_defaultEnabled(t *testing.T) {
 	svc := newTestService(t, testDB(t))
-	assert.Empty(t, svc.Tools())
+	tools := svc.Tools()
+	assert.Len(t, tools, 4)
 	require.NoError(t, svc.Close())
 	require.NoError(t, svc.EnqueueAutoMemoryJob(context.Background(), nil))
 }
@@ -325,6 +326,45 @@ func TestService_AddMemory_memoryLimit(t *testing.T) {
 	assert.Contains(t, err.Error(), "memory limit exceeded")
 }
 
+func TestService_AddMemory_memoryLimit_idempotentAtLimit(t *testing.T) {
+	ctx := context.Background()
+	db := testDB(t)
+	svc, err := NewService(WithDB(db), WithMemoryLimit(2))
+	require.NoError(t, err)
+	defer svc.Close()
+
+	uk := memory.UserKey{AppName: "app", UserID: "limited-idempotent"}
+	require.NoError(t, svc.AddMemory(ctx, uk, "first memory", nil))
+	require.NoError(t, svc.AddMemory(ctx, uk, "second memory", nil))
+
+	require.NoError(t, svc.AddMemory(ctx, uk, "first memory", nil))
+}
+
+func TestService_AddMemory_memoryLimit_afterSoftDelete(t *testing.T) {
+	ctx := context.Background()
+	db := testDB(t)
+	svc, err := NewService(WithDB(db), WithMemoryLimit(1), WithSoftDelete(true))
+	require.NoError(t, err)
+	defer svc.Close()
+
+	uk := memory.UserKey{AppName: "app", UserID: "soft-limit"}
+	require.NoError(t, svc.AddMemory(ctx, uk, "first memory", nil))
+
+	read, err := svc.ReadMemories(ctx, uk, 1)
+	require.NoError(t, err)
+	require.Len(t, read, 1)
+
+	require.NoError(t, svc.DeleteMemory(ctx, memory.Key{
+		AppName: uk.AppName, UserID: uk.UserID, MemoryID: read[0].ID,
+	}))
+
+	require.NoError(t, svc.AddMemory(ctx, uk, "replacement memory", nil))
+	after, err := svc.ReadMemories(ctx, uk, 1)
+	require.NoError(t, err)
+	require.Len(t, after, 1)
+	assert.Equal(t, "replacement memory", after[0].Memory.Memory)
+}
+
 func TestService_WithCustomTableName(t *testing.T) {
 	ctx := context.Background()
 	db := testDB(t)
@@ -346,6 +386,7 @@ func TestService_Tools_enabledAndHidden(t *testing.T) {
 	db := testDB(t)
 	svc, err := NewService(WithDB(db),
 		WithToolEnabled(memory.AddToolName, true),
+		WithToolEnabled(memory.UpdateToolName, false),
 		WithToolEnabled(memory.SearchToolName, true),
 		WithToolEnabled(memory.LoadToolName, true),
 		WithToolHidden(memory.LoadToolName, true),
