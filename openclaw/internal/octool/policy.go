@@ -57,9 +57,10 @@ const (
 )
 
 var (
-	httpURLPattern       = regexp.MustCompile("https?://[^\\s\"'`<>\\\\]+")
-	pythonProxiesPattern = regexp.MustCompile(`\bproxies\s*=`)
-	jsProxyOptionPattern = regexp.MustCompile(`\bproxy\s*:`)
+	httpURLPattern             = regexp.MustCompile("https?://[^\\s\"'`<>\\\\]+")
+	webProxyTargetParamPattern = regexp.MustCompile(`[?&](url|uri|target|quest)=`)
+	pythonProxiesPattern       = regexp.MustCompile(`\bproxies\s*=`)
+	jsProxyOptionPattern       = regexp.MustCompile(`\bproxy\s*:`)
 )
 
 var protectedPathFragments = []string{
@@ -78,6 +79,16 @@ var protectedPathFragments = []string{
 	".zprofile",
 	".zshenv",
 	".zshrc",
+}
+
+var adHocWebProxyURLFragments = []string{
+	"://allorigins.win/",
+	"://api.allorigins.win/",
+	"://api.codetabs.com/v1/proxy",
+	"://codetabs.com/v1/proxy",
+	"://cors-anywhere.herokuapp.com/",
+	"://corsproxy.io/",
+	"://thingproxy.freeboard.io/fetch/",
 }
 
 // CommandRequest is the normalized command metadata checked by policies.
@@ -326,6 +337,10 @@ func blocksNetworkProxyDepth(command string, depth int) bool {
 	if blocksProgrammaticNetworkProxy(command) {
 		return true
 	}
+	if usesCommandLineHTTPClient(command, 0) &&
+		blocksAdHocWebProxyServiceURL(command) {
+		return true
+	}
 	for _, segment := range shellPolicySegments(command) {
 		words := shellPolicyWords(segment)
 		if blocksNetworkProxyWords(words) {
@@ -359,6 +374,23 @@ func blocksProgrammaticNetworkProxy(command string) bool {
 			if containsJSProxyRouting(command) {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+func blocksAdHocWebProxyServiceURL(command string) bool {
+	lower := strings.ToLower(command)
+	for _, raw := range httpURLPattern.FindAllString(lower, -1) {
+		u := trimShellURL(raw)
+		for _, fragment := range adHocWebProxyURLFragments {
+			if strings.Contains(u, fragment) {
+				return true
+			}
+		}
+		if strings.Contains(u, "/proxy") &&
+			webProxyTargetParamPattern.MatchString(u) {
+			return true
 		}
 	}
 	return false

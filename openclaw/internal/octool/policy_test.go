@@ -337,6 +337,14 @@ PY`,
 			`fetch('https://example.com', {agent:new HttpsProxyAgent('http://127.0.0.1:8080')})"`,
 		`node -e "require('axios').get('https://example.com', ` +
 			`{proxy:{host:'127.0.0.1',port:8080}})"`,
+		`python3 - <<'PY'
+import urllib.parse
+import urllib.request
+url = "https://api.allorigins.win/get?url=" + urllib.parse.quote("https://example.com")
+print(urllib.request.urlopen(url).read())
+PY`,
+		`curl "https://corsproxy.io/?https://example.com"`,
+		`curl "https://api.codetabs.com/v1/proxy?quest=https://example.com"`,
 	} {
 		command := command
 		t.Run(command, func(t *testing.T) {
@@ -363,6 +371,7 @@ func TestChatCommandSafetyPolicy_AllowsNonProxyHTTPCommands(
 		`wget --no-proxy https://example.com/file.txt`,
 		`echo http_proxy=http://127.0.0.1:8080`,
 		`echo "python3 requests.get(url, proxies={'http':'http://127.0.0.1:8080'})"`,
+		`echo "https://api.allorigins.win/get?url=https://example.com"`,
 		`python3 -c "import requests; print(requests.get('https://example.com').status_code)"`,
 		`node -e "fetch('https://example.com').then(r=>console.log(r.status))"`,
 	} {
