@@ -183,7 +183,7 @@ func isShellWrapper(cmd string) bool {
 func (s *Scanner) scanScript(script, language string) []Finding {
 	var findings []Finding
 	lang := strings.ToLower(strings.TrimSpace(language))
-	if lang == "bash" || lang == "sh" || lang == "shell" {
+	if isShellLikeLanguage(lang) {
 		action := s.policy.BackendRules.CodeExec.BashAction
 		if action == "" {
 			action = DecisionAsk
@@ -195,6 +195,7 @@ func (s *Scanner) scanScript(script, language string) []Finding {
 			"Review shell code before execution or use a more constrained language.",
 		))
 	}
+	allowCommandScan := shouldScanScriptCommands(lang)
 	lines := strings.Split(script, "\n")
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
@@ -203,7 +204,7 @@ func (s *Scanner) scanScript(script, language string) []Finding {
 		}
 		loc := fmt.Sprintf("script.line[%d]", i+1)
 		findings = append(findings, s.scanRawTextAt(trimmed, loc)...)
-		if looksLikeCommand(trimmed) {
+		if allowCommandScan && looksLikeCommand(trimmed) {
 			for _, f := range s.scanCommand(trimmed) {
 				if f.Location == "" || f.Location == "command" {
 					f.Location = loc
@@ -225,7 +226,7 @@ func (s *Scanner) scanRawTextAt(text, loc string) []Finding {
 		return findings
 	}
 	lower := strings.ToLower(text)
-	for _, token := range []string{"`", "$(", "${", ">", "<", " 2>", "&>", "eval ", "sh -c", "bash -c"} {
+	for _, token := range []string{"`", "$(", "${", " 2>", "&>", "eval ", "sh -c", "bash -c"} {
 		if strings.Contains(lower, strings.ToLower(token)) {
 			findings = append(findings, finding(
 				RuleShellBypassConstruct, CategoryShellBypass, RiskHigh, DecisionDeny,
@@ -313,11 +314,33 @@ func hasAnyFlag(args []string, flags ...string) bool {
 				return true
 			}
 		}
-		if strings.HasPrefix(arg, "-") && strings.Contains(arg, "r") && strings.Contains(arg, "f") {
-			return true
+		if strings.HasPrefix(arg, "-") && !strings.HasPrefix(arg, "--") {
+			short := strings.TrimLeft(arg, "-")
+			if isRecursiveForceShortFlag(short) {
+				return true
+			}
 		}
 	}
 	return false
+}
+
+func isRecursiveForceShortFlag(short string) bool {
+	if short == "" {
+		return false
+	}
+	hasRecursive := false
+	hasForce := false
+	for _, r := range short {
+		switch r {
+		case 'r', 'R':
+			hasRecursive = true
+		case 'f', 'F':
+			hasForce = true
+		default:
+			return false
+		}
+	}
+	return hasRecursive && hasForce
 }
 
 func firstNonBlank(values ...string) string {
@@ -343,6 +366,24 @@ func looksLikeCommand(line string) bool {
 	default:
 		return false
 	}
+}
+
+func isShellLikeLanguage(lang string) bool {
+	for _, part := range strings.Split(lang, ",") {
+		switch strings.ToLower(strings.TrimSpace(part)) {
+		case "bash", "sh", "shell", "zsh", "dash":
+			return true
+		}
+	}
+	return false
+}
+
+func shouldScanScriptCommands(lang string) bool {
+	lang = strings.TrimSpace(lang)
+	if lang == "" {
+		return true
+	}
+	return isShellLikeLanguage(lang)
 }
 
 func ruleForDeniedCommand(cmd string) string {

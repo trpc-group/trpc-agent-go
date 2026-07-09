@@ -42,7 +42,19 @@ func normalizePathToken(s string) string {
 	if strings.ContainsAny(s, `/\`) || strings.HasPrefix(s, ".") || strings.HasPrefix(s, "~") {
 		return filepath.ToSlash(filepath.Clean(s))
 	}
-	return ""
+	if filepath.Ext(s) == "" && !isKnownSensitiveBareFilename(s) {
+		return ""
+	}
+	return filepath.ToSlash(filepath.Clean(s))
+}
+
+func isKnownSensitiveBareFilename(s string) bool {
+	switch strings.ToLower(s) {
+	case "credentials", "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519":
+		return true
+	default:
+		return false
+	}
 }
 
 func isForbiddenPath(path string, patterns []string) bool {

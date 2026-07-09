@@ -43,6 +43,9 @@ func (s *Scanner) scanResources(req ExecutionRequest) []Finding {
 
 func (s *Scanner) scanResourceArgv(argv []string, loc string) []Finding {
 	var findings []Finding
+	if len(argv) == 0 {
+		return findings
+	}
 	cmd := normalizeCommandName(argv[0])
 	if cmd == "sleep" && len(argv) > 1 {
 		if n, ok := parseIntArg(argv[1]); ok && s.policy.ResourceLimits.MaxSleepSeconds > 0 && n > s.policy.ResourceLimits.MaxSleepSeconds {

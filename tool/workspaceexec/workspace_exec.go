@@ -682,22 +682,9 @@ func (t *ExecTool) checkSafety(ctx context.Context, in execInput) error {
 		return err
 	}
 	if report.Blocked {
-		return fmt.Errorf(
-			"workspace_exec blocked by tool safety: decision=%s risk=%s rule=%s recommendation=%s",
-			report.Decision,
-			report.RiskLevel,
-			firstRuleID(report.RuleIDs),
-			report.Recommendation,
-		)
+		return safety.NewBlockedError(report)
 	}
 	return nil
-}
-
-func firstRuleID(ids []string) string {
-	if len(ids) == 0 {
-		return ""
-	}
-	return ids[0]
 }
 
 // checkCommandPolicy enforces the optional allow/deny lists. When no

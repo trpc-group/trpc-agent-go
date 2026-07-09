@@ -193,17 +193,25 @@ func (p Policy) normalized() (Policy, error) {
 	if len(p.DependencyCommands) == 0 {
 		p.DependencyCommands = append([]DependencyCommandPolicy(nil), def.DependencyCommands...)
 	}
+	if len(p.EnvAllowlist) == 0 {
+		p.EnvAllowlist = append([]string(nil), def.EnvAllowlist...)
+	}
 	if p.ResourceLimits == (ResourceLimits{}) {
 		p.ResourceLimits = def.ResourceLimits
 	}
-	if p.BackendRules.WorkspaceExec == (WorkspaceExecRules{}) {
-		p.BackendRules.WorkspaceExec = def.BackendRules.WorkspaceExec
+	p.BackendRules.WorkspaceExec = normalizeWorkspaceExecRules(
+		p.BackendRules.WorkspaceExec,
+		def.BackendRules.WorkspaceExec,
+	)
+	p.BackendRules.HostExec = normalizeHostExecRules(
+		p.BackendRules.HostExec,
+		def.BackendRules.HostExec,
+	)
+	if len(p.BackendRules.CodeExec.AllowedLanguages) == 0 {
+		p.BackendRules.CodeExec.AllowedLanguages = append([]string(nil), def.BackendRules.CodeExec.AllowedLanguages...)
 	}
-	if p.BackendRules.HostExec == (HostExecRules{}) {
-		p.BackendRules.HostExec = def.BackendRules.HostExec
-	}
-	if len(p.BackendRules.CodeExec.AllowedLanguages) == 0 && p.BackendRules.CodeExec.BashAction == "" {
-		p.BackendRules.CodeExec = def.BackendRules.CodeExec
+	if p.BackendRules.CodeExec.BashAction == "" {
+		p.BackendRules.CodeExec.BashAction = def.BackendRules.CodeExec.BashAction
 	}
 	if p.Redaction.Replacement == "" {
 		p.Redaction.Replacement = def.Redaction.Replacement
@@ -231,6 +239,10 @@ func (p Policy) validate() error {
 	for name, action := range map[string]Decision{
 		"default_action":     p.DefaultAction,
 		"parse_error_action": p.ParseErrorAction,
+		"backend_rules.workspaceexec.background_action": p.BackendRules.WorkspaceExec.BackgroundAction,
+		"backend_rules.hostexec.default_action":         p.BackendRules.HostExec.DefaultAction,
+		"backend_rules.hostexec.background_action":      p.BackendRules.HostExec.BackgroundAction,
+		"backend_rules.codeexec.bash_action":            p.BackendRules.CodeExec.BashAction,
 	} {
 		if !validDecision(action) {
 			return fmt.Errorf("%s: invalid decision %q", name, action)
@@ -264,6 +276,32 @@ func (p Policy) validate() error {
 		return errors.New("resource limits cannot be negative")
 	}
 	return nil
+}
+
+func normalizeWorkspaceExecRules(got, def WorkspaceExecRules) WorkspaceExecRules {
+	if got == (WorkspaceExecRules{}) {
+		return def
+	}
+	if !got.RequireWorkspaceRelativeCwd {
+		got.RequireWorkspaceRelativeCwd = def.RequireWorkspaceRelativeCwd
+	}
+	if got.BackgroundAction == "" {
+		got.BackgroundAction = def.BackgroundAction
+	}
+	return got
+}
+
+func normalizeHostExecRules(got, def HostExecRules) HostExecRules {
+	if got.DefaultAction == "" {
+		got.DefaultAction = def.DefaultAction
+	}
+	if got.BackgroundAction == "" {
+		got.BackgroundAction = def.BackgroundAction
+	}
+	if got.MaxTimeoutMS == 0 {
+		got.MaxTimeoutMS = def.MaxTimeoutMS
+	}
+	return got
 }
 
 func validDecision(d Decision) bool {

@@ -180,6 +180,52 @@ func TestPolicyValidationAndParsing(t *testing.T) {
 	if _, err := NewScanner(Policy{ResourceLimits: ResourceLimits{MaxTimeoutMS: -1}}); err == nil {
 		t.Fatalf("NewScanner accepted negative resource limit")
 	}
+	if _, err := NewScanner(Policy{
+		BackendRules: BackendRules{
+			WorkspaceExec: WorkspaceExecRules{BackgroundAction: "maybe"},
+		},
+	}); err == nil {
+		t.Fatalf("NewScanner accepted invalid workspace background action")
+	}
+	if _, err := NewScanner(Policy{
+		BackendRules: BackendRules{
+			HostExec: HostExecRules{DefaultAction: "maybe"},
+		},
+	}); err == nil {
+		t.Fatalf("NewScanner accepted invalid host default action")
+	}
+	if _, err := NewScanner(Policy{
+		BackendRules: BackendRules{
+			HostExec: HostExecRules{BackgroundAction: "maybe"},
+		},
+	}); err == nil {
+		t.Fatalf("NewScanner accepted invalid host background action")
+	}
+	if _, err := NewScanner(Policy{
+		BackendRules: BackendRules{
+			CodeExec: CodeExecRules{BashAction: "maybe"},
+		},
+	}); err == nil {
+		t.Fatalf("NewScanner accepted invalid codeexec bash action")
+	}
+	policy, err := Policy{
+		BackendRules: BackendRules{
+			HostExec: HostExecRules{DefaultAction: DecisionDeny},
+			CodeExec: CodeExecRules{BashAction: DecisionDeny},
+		},
+	}.normalized()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(policy.EnvAllowlist) == 0 ||
+		!policy.BackendRules.WorkspaceExec.RequireWorkspaceRelativeCwd ||
+		policy.BackendRules.HostExec.DefaultAction != DecisionDeny ||
+		policy.BackendRules.HostExec.BackgroundAction != DecisionAsk ||
+		policy.BackendRules.HostExec.MaxTimeoutMS == 0 ||
+		len(policy.BackendRules.CodeExec.AllowedLanguages) == 0 ||
+		policy.BackendRules.CodeExec.BashAction != DecisionDeny {
+		t.Fatalf("partial policy defaults not preserved: %#v", policy)
+	}
 }
 
 func TestScannerBranchesAndOverrides(t *testing.T) {
@@ -216,9 +262,10 @@ func TestScannerBranchesAndOverrides(t *testing.T) {
 
 func TestBackendResourceAndNetworkBranches(t *testing.T) {
 	cases := []struct {
-		name string
-		req  ExecutionRequest
-		rule string
+		name         string
+		req          ExecutionRequest
+		rule         string
+		modifyPolicy func(*Policy)
 	}{
 		{
 			name: "workspace tty denied",
@@ -229,6 +276,9 @@ func TestBackendResourceAndNetworkBranches(t *testing.T) {
 				TTY:      true,
 			},
 			rule: RuleHostPTY,
+			modifyPolicy: func(p *Policy) {
+				p.BackendRules.WorkspaceExec.DenyTTY = true
+			},
 		},
 		{
 			name: "host background",
@@ -282,8 +332,8 @@ func TestBackendResourceAndNetworkBranches(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			policy := DefaultPolicy()
-			if tc.name == "workspace tty denied" {
-				policy.BackendRules.WorkspaceExec.DenyTTY = true
+			if tc.modifyPolicy != nil {
+				tc.modifyPolicy(&policy)
 			}
 			localScanner, err := NewScanner(policy)
 			if err != nil {
@@ -297,6 +347,86 @@ func TestBackendResourceAndNetworkBranches(t *testing.T) {
 				t.Fatalf("rules = %v, want %s", report.RuleIDs, tc.rule)
 			}
 		})
+	}
+}
+
+func TestScannerReviewRegressionCases(t *testing.T) {
+	scanner := MustScanner(DefaultPolicy())
+
+	tests := []struct {
+		name         string
+		req          ExecutionRequest
+		wantDecision Decision
+		wantRule     string
+	}{
+		{
+			name: "bare credential filename",
+			req: ExecutionRequest{
+				ToolName: "workspace_exec",
+				Backend:  BackendWorkspaceExec,
+				Command:  "cat credentials.json",
+			},
+			wantDecision: DecisionDeny,
+			wantRule:     RuleForbiddenPath,
+		},
+		{
+			name: "go comparison is not shell redirection",
+			req: ExecutionRequest{
+				ToolName: "execute_code",
+				Backend:  BackendCodeExec,
+				Language: "go",
+				Script:   "if x > 0 {\n\tfmt.Println(\"ok\")\n}",
+			},
+			wantDecision: DecisionAllow,
+		},
+		{
+			name: "html tag is not shell input redirect",
+			req: ExecutionRequest{
+				ToolName: "execute_code",
+				Backend:  BackendCodeExec,
+				Language: "html",
+				Script:   "<div>safe</div>",
+			},
+			wantDecision: DecisionAllow,
+		},
+		{
+			name: "shell script still scans commands",
+			req: ExecutionRequest{
+				ToolName: "execute_code",
+				Backend:  BackendCodeExec,
+				Language: "bash",
+				Script:   "rm -rf ./build",
+			},
+			wantDecision: DecisionDeny,
+			wantRule:     RuleDangerousDelete,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			report, err := scanner.Scan(context.Background(), tc.req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if report.Decision != tc.wantDecision {
+				t.Fatalf("decision = %s, want %s: %#v", report.Decision, tc.wantDecision, report)
+			}
+			if tc.wantRule != "" && !contains(report.RuleIDs, tc.wantRule) {
+				t.Fatalf("rules = %v, want %s", report.RuleIDs, tc.wantRule)
+			}
+		})
+	}
+
+	if hasAnyFlag([]string{"-ref"}, "-rf", "-fr", "-r", "-R", "--recursive") {
+		t.Fatalf("hasAnyFlag matched non-rm short flag")
+	}
+	if !hasAnyFlag([]string{"-Rf"}, "-rf", "-fr", "-r", "-R", "--recursive") {
+		t.Fatalf("hasAnyFlag did not match recursive force short flag")
+	}
+	if got := scanner.scanResourceArgv(nil, "test"); len(got) != 0 {
+		t.Fatalf("scanResourceArgv(nil) = %v, want none", got)
+	}
+	if got := moveRuleFirst([]string{"a", "b", "a"}, "a"); strings.Join(got, ",") != "a,b" {
+		t.Fatalf("moveRuleFirst duplicated primary: %v", got)
 	}
 }
 

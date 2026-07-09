@@ -3,7 +3,7 @@
   "tool_name": "exec_command",
   "backend": "hostexec",
   "command": "sudo tail -f /var/log/system.log",
-  "workdir": ".",
+  "cwd": ".",
   "tty": true,
   "background": true,
   "timeout_ms": 1800000

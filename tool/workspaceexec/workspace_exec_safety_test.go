@@ -9,6 +9,7 @@ package workspaceexec
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -24,6 +25,9 @@ func TestExecTool_SafetyScannerBlocksBeforeExecutor(t *testing.T) {
 	_, err = tl.Call(context.Background(), []byte(`{"command":"rm -rf /tmp/project"}`))
 	if err == nil {
 		t.Fatal("expected safety scanner to block command")
+	}
+	if !errors.Is(err, safety.ErrBlocked) {
+		t.Fatalf("error = %v, want ErrBlocked", err)
 	}
 	if !strings.Contains(err.Error(), safety.RuleDangerousDelete) {
 		t.Fatalf("error = %v, want rule %s", err, safety.RuleDangerousDelete)

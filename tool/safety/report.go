@@ -59,7 +59,7 @@ func newReport(req ExecutionRequest, command string, findings []Finding, durMS f
 	}
 	primary := primaryFindingRuleID(findings, ruleIDs)
 	ruleIDs = moveRuleFirst(ruleIDs, primary)
-	return Report{
+	report := Report{
 		SchemaVersion:  "1",
 		RequestID:      req.ID,
 		ToolName:       nonEmpty(req.ToolName, "unknown"),
@@ -73,25 +73,19 @@ func newReport(req ExecutionRequest, command string, findings []Finding, durMS f
 		Findings:       findings,
 		Recommendation: recommendation,
 		Redacted:       redactedAny,
-		TelemetryAttributes: map[string]any{
-			AttrDecision:  string(decision),
-			AttrRiskLevel: string(risk),
-			AttrRuleID:    primary,
-			AttrBackend:   string(normalizeBackend(req.Backend)),
-			AttrBlocked:   blocked(decision),
-			AttrRedacted:  redactedAny,
-		},
 	}
+	report.TelemetryAttributes = TelemetryAttributes(report)
+	return report
 }
 
 func moveRuleFirst(ids []string, primary string) []string {
-	if primary == "" || len(ids) == 0 || ids[0] == primary {
+	if primary == "" || len(ids) == 0 {
 		return ids
 	}
 	out := make([]string, 0, len(ids))
 	out = append(out, primary)
 	for _, id := range ids {
-		if id == primary && len(out) == 1 {
+		if id == primary {
 			continue
 		}
 		out = append(out, id)

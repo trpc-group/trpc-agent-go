@@ -40,7 +40,7 @@ tool call may run.
 `workspace_exec` runs in an executor workspace and can use workspace-relative
 paths, output limits, and environment scrubbing. `hostexec` runs a host shell and
 has a wider blast radius: PTY sessions, background jobs, privilege escalation,
-and residual processes require stricter review. `codeexecutor` backends and
+and residual processes require stricter review. `codeexec` backends and
 sandboxes still need runtime isolation for filesystem, process, network, and
 resource controls.
 

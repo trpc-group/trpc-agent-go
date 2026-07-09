@@ -261,22 +261,9 @@ func (t *executeCodeTool) checkSafety(
 		return err
 	}
 	if report.Blocked {
-		return fmt.Errorf(
-			"execute_code blocked by tool safety: decision=%s risk=%s rule=%s recommendation=%s",
-			report.Decision,
-			report.RiskLevel,
-			firstCodeExecRuleID(report.RuleIDs),
-			report.Recommendation,
-		)
+		return safety.NewBlockedError(report)
 	}
 	return nil
-}
-
-func firstCodeExecRuleID(ids []string) string {
-	if len(ids) == 0 {
-		return ""
-	}
-	return ids[0]
 }
 
 func (t *executeCodeTool) isSupportedLanguage(language string) bool {

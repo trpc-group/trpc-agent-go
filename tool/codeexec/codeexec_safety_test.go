@@ -9,6 +9,7 @@ package codeexec
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -41,6 +42,9 @@ func TestExecuteCodeTool_SafetyScannerBlocksBeforeExecutor(t *testing.T) {
 	}`))
 	if err == nil {
 		t.Fatal("expected safety scanner to block code execution")
+	}
+	if !errors.Is(err, safety.ErrBlocked) {
+		t.Fatalf("error = %v, want ErrBlocked", err)
 	}
 	if !strings.Contains(err.Error(), safety.RuleDangerousDelete) {
 		t.Fatalf("error = %v, want rule %s", err, safety.RuleDangerousDelete)

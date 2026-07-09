@@ -41,22 +41,24 @@ func TestSampleCorpusDecisions(t *testing.T) {
 		"network_denied":   RuleNetworkDeniedDomain,
 	}
 	for name, want := range expected {
-		req := loadSample(t, name)
-		report, err := scanner.Scan(context.Background(), req)
-		if err != nil {
-			t.Fatalf("%s scan: %v", name, err)
-		}
-		if report.Decision != want {
-			t.Fatalf("%s decision = %s, want %s (rules=%v)", name, report.Decision, want, report.RuleIDs)
-		}
-		if report.ToolName == "" || report.Backend == "" ||
-			report.RiskLevel == "" || len(report.RuleIDs) == 0 ||
-			report.Recommendation == "" {
-			t.Fatalf("%s report missing required fields: %#v", name, report)
-		}
-		if rule := criticalRules[name]; rule != "" && !contains(report.RuleIDs, rule) {
-			t.Fatalf("%s rules = %v, want %s", name, report.RuleIDs, rule)
-		}
+		t.Run(name, func(t *testing.T) {
+			req := loadSample(t, name)
+			report, err := scanner.Scan(context.Background(), req)
+			if err != nil {
+				t.Fatalf("%s scan: %v", name, err)
+			}
+			if report.Decision != want {
+				t.Fatalf("%s decision = %s, want %s (rules=%v)", name, report.Decision, want, report.RuleIDs)
+			}
+			if report.ToolName == "" || report.Backend == "" ||
+				report.RiskLevel == "" || len(report.RuleIDs) == 0 ||
+				report.Recommendation == "" {
+				t.Fatalf("%s report missing required fields: %#v", name, report)
+			}
+			if rule := criticalRules[name]; rule != "" && !contains(report.RuleIDs, rule) {
+				t.Fatalf("%s rules = %v, want %s", name, report.RuleIDs, rule)
+			}
+		})
 	}
 }
 
