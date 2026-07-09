@@ -87,6 +87,11 @@ const (
 	cancelCleanupNoticePrefix = "__openclaw_browser_cancel_cleanup:"
 )
 
+const scrollIntoViewFunction = `element => element.scrollIntoView({
+  block: "center",
+  inline: "nearest",
+})`
+
 const (
 	tabActionList   = "list"
 	tabActionNew    = "create"
@@ -2487,11 +2492,20 @@ func (t *Tool) executeAct(
 		addServerTimeoutArg(args, driverType, req.TimeoutMs)
 		return drv.Call(ctx, mcpToolHover, args)
 	case strings.ToLower(actScrollIntoView):
-		if driverType != driverTypeBrowserServer {
-			return nil, errors.New(
-				"scrollIntoView is only supported by the " +
-					"browser-server driver",
-			)
+		if driverType == driverTypePlaywrightMCP {
+			if t.evaluateEnabled {
+				args := map[string]any{
+					"function": scrollIntoViewFunction,
+				}
+				addOptionalElementArgs(
+					args,
+					req.Ref,
+					req.Target,
+					driverType,
+				)
+				return drv.Call(ctx, mcpToolEvaluate, args)
+			}
+			return t.executeScroll(ctx, drv, req, driverType)
 		}
 		args := map[string]any{
 			"ref": strings.TrimSpace(req.Ref),
@@ -2800,18 +2814,39 @@ func (t *Tool) executeFill(
 	req actRequest,
 	driverType string,
 ) (any, error) {
-	if len(req.Fields) == 0 {
+	fields := fillFields(req)
+	if len(fields) == 0 {
 		return nil, errors.New("browser fill requires fields")
 	}
-	fields := req.Fields
 	if driverType == driverTypePlaywrightMCP {
-		fields = normalizeMCPFillFields(req.Fields)
+		fields = normalizeMCPFillFields(fields)
 	}
 	args := map[string]any{
 		"fields": fields,
 	}
 	addServerTimeoutArg(args, driverType, req.TimeoutMs)
 	return drv.Call(ctx, mcpToolFillForm, args)
+}
+
+func fillFields(req actRequest) []map[string]any {
+	if len(req.Fields) > 0 {
+		return req.Fields
+	}
+	text := strings.TrimSpace(req.Text)
+	target := firstNonEmpty(req.Ref, req.Target)
+	if text == "" || target == "" {
+		return nil
+	}
+	field := map[string]any{
+		"text": text,
+	}
+	if strings.TrimSpace(req.Ref) != "" {
+		field["ref"] = strings.TrimSpace(req.Ref)
+	}
+	if strings.TrimSpace(req.Target) != "" {
+		field["target"] = strings.TrimSpace(req.Target)
+	}
+	return []map[string]any{field}
 }
 
 func normalizeMCPFillFields(fields []map[string]any) []map[string]any {
