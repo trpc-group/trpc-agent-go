@@ -1182,6 +1182,7 @@ func NewRuntimeWithOptions(
 		opts.HostExecDefaultTimeout,
 		opts.HostExecMaxTimeout,
 		opts.HostExecMaxYield,
+		opts.HostExecMaxIdleWait,
 	)
 	extraTools := memoryServiceTools(memSvc)
 	extraTools = append(extraTools, openClawTools.tools...)
@@ -1807,6 +1808,7 @@ func run(
 		opts.HostExecDefaultTimeout,
 		opts.HostExecMaxTimeout,
 		opts.HostExecMaxYield,
+		opts.HostExecMaxIdleWait,
 	)
 	extraTools := memoryServiceTools(memSvc)
 	extraTools = append(extraTools, openClawTools.tools...)
@@ -3518,6 +3520,7 @@ func buildOpenClawTools(
 	hostExecDefaultTimeout time.Duration,
 	hostExecMaxTimeout time.Duration,
 	hostExecMaxYield time.Duration,
+	hostExecMaxIdleWait time.Duration,
 ) openClawToolsBundle {
 	if !enabled {
 		return openClawToolsBundle{}
@@ -3537,7 +3540,11 @@ func buildOpenClawTools(
 
 	var mgr *octool.Manager
 	var execTool tool.Tool
-	commandPolicy := octool.NewChatCommandSafetyPolicy()
+	commandPolicy := octool.NewChatCommandSafetyPolicyWithOptions(
+		octool.ChatCommandSafetyPolicyOptions{
+			MaxIdleWait: hostExecMaxIdleWait,
+		},
+	)
 	outputRedactor := octool.NewChatCommandOutputRedactor()
 	if sandboxExecEngine != nil {
 		execTool = octool.NewSandboxExecCommandToolWithPolicy(

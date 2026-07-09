@@ -14,7 +14,9 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/searchresult"
 )
@@ -38,6 +40,10 @@ const (
 	reasonNetworkProxy = "routing command traffic through ad hoc " +
 		"proxies or tunnels is not allowed in chat; use the " +
 		"configured network path or built-in web tools instead"
+	reasonLongIdleWait = "long idle waits in exec_command are not " +
+		"allowed in chat; do not wait for external rate limits to " +
+		"cool down, and use another source or finalize from available " +
+		"evidence instead"
 
 	sensitivePathBoundaryChars = " \t\r\n\"'`=:/\\|&;()[]{}<>"
 
@@ -84,9 +90,26 @@ type CommandRequest struct {
 // CommandPolicy decides whether one exec_command call is allowed.
 type CommandPolicy func(context.Context, CommandRequest) error
 
+// ChatCommandSafetyPolicyOptions configures the chat command safety policy.
+type ChatCommandSafetyPolicyOptions struct {
+	// MaxIdleWait blocks sleep-style idle waits longer than this duration.
+	// A zero value keeps long idle waits allowed for compatibility.
+	MaxIdleWait time.Duration
+}
+
 // NewChatCommandSafetyPolicy blocks direct access to protected shell and
 // credential paths in chat contexts.
 func NewChatCommandSafetyPolicy() CommandPolicy {
+	return NewChatCommandSafetyPolicyWithOptions(
+		ChatCommandSafetyPolicyOptions{},
+	)
+}
+
+// NewChatCommandSafetyPolicyWithOptions blocks unsafe chat commands using the
+// supplied compatibility-sensitive options.
+func NewChatCommandSafetyPolicyWithOptions(
+	opts ChatCommandSafetyPolicyOptions,
+) CommandPolicy {
 	return func(
 		_ context.Context,
 		req CommandRequest,
@@ -113,6 +136,13 @@ func NewChatCommandSafetyPolicy() CommandPolicy {
 			return fmt.Errorf(
 				errCommandPolicyRejected,
 				reasonNetworkProxy,
+			)
+		}
+		if opts.MaxIdleWait > 0 &&
+			blocksLongIdleWait(req.Command, opts.MaxIdleWait) {
+			return fmt.Errorf(
+				errCommandPolicyRejected,
+				reasonLongIdleWait,
 			)
 		}
 		return nil
@@ -158,6 +188,131 @@ func blocksSearchResultHTTP(command string) (string, bool) {
 
 func blocksNetworkProxy(command string) bool {
 	return blocksNetworkProxyDepth(normalizeProxyPolicyCommand(command), 0)
+}
+
+func blocksLongIdleWait(command string, maxWait time.Duration) bool {
+	return blocksLongIdleWaitDepth(
+		normalizeProxyPolicyCommand(command),
+		maxWait,
+		0,
+	)
+}
+
+func blocksLongIdleWaitDepth(
+	command string,
+	maxWait time.Duration,
+	depth int,
+) bool {
+	if command == "" || maxWait <= 0 || depth > 2 {
+		return false
+	}
+	for _, segment := range shellPolicySegments(command) {
+		words := shellPolicyWords(segment)
+		if blocksLongIdleWaitWords(words, maxWait) {
+			return true
+		}
+		for i := 0; i < len(words); i++ {
+			if !isShellExecutable(policyCommandName(words[i])) {
+				continue
+			}
+			cmdArg, ok := shellCommandStringArg(words[i+1:])
+			if ok && blocksLongIdleWaitDepth(
+				cmdArg,
+				maxWait,
+				depth+1,
+			) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func blocksLongIdleWaitWords(words []string, maxWait time.Duration) bool {
+	for i, word := range words {
+		if policyCommandName(word) != "sleep" ||
+			!looksLikeExecutablePosition(words, i) {
+			continue
+		}
+		wait, ok := sleepDuration(words[i+1:])
+		if ok && wait > maxWait {
+			return true
+		}
+	}
+	return false
+}
+
+func looksLikeExecutablePosition(words []string, index int) bool {
+	if index < 0 || index >= len(words) {
+		return false
+	}
+	for i := 0; i < index; i++ {
+		name := policyCommandName(words[i])
+		switch {
+		case name == "":
+			continue
+		case name == "env" || name == "timeout":
+			continue
+		case isEnvAssignment(words[i]):
+			continue
+		case isDurationLiteral(words[i]):
+			continue
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func sleepDuration(words []string) (time.Duration, bool) {
+	for _, word := range words {
+		value := strings.Trim(strings.TrimSpace(word), shellQuoteChars)
+		value = strings.TrimRight(value, ".,;:)]}")
+		if value == "" || strings.HasPrefix(value, "-") {
+			continue
+		}
+		return parseIdleWaitDuration(value)
+	}
+	return 0, false
+}
+
+func parseIdleWaitDuration(value string) (time.Duration, bool) {
+	lower := strings.ToLower(strings.TrimSpace(value))
+	switch lower {
+	case "inf", "infinity":
+		return time.Duration(1<<63 - 1), true
+	}
+	if isBareNumber(lower) {
+		seconds, err := strconv.ParseFloat(lower, 64)
+		if err != nil || seconds < 0 {
+			return 0, false
+		}
+		maxDuration := time.Duration(1<<63 - 1)
+		if seconds > float64(maxDuration)/float64(time.Second) {
+			return maxDuration, true
+		}
+		return time.Duration(seconds * float64(time.Second)), true
+	}
+	duration, err := time.ParseDuration(lower)
+	if err != nil || duration < 0 {
+		return 0, false
+	}
+	return duration, true
+}
+
+func isBareNumber(value string) bool {
+	if value == "" {
+		return false
+	}
+	_, err := strconv.ParseFloat(value, 64)
+	return err == nil
+}
+
+func isDurationLiteral(value string) bool {
+	_, ok := parseIdleWaitDuration(
+		strings.Trim(strings.TrimSpace(value), shellQuoteChars),
+	)
+	return ok
 }
 
 func blocksNetworkProxyDepth(command string, depth int) bool {
@@ -247,6 +402,13 @@ func isProxyEnvAssignment(word string) bool {
 	default:
 		return false
 	}
+}
+
+func isEnvAssignment(word string) bool {
+	name, value, ok := strings.Cut(strings.Trim(word, shellQuoteChars), "=")
+	return ok && strings.TrimSpace(name) != "" &&
+		strings.TrimSpace(value) != "" &&
+		!strings.ContainsAny(name, "/.")
 }
 
 func curlArgsUseProxy(words []string) bool {

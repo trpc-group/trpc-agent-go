@@ -13,6 +13,7 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -362,6 +363,71 @@ func TestChatCommandSafetyPolicy_AllowsNonProxyHTTPCommands(
 			require.NoError(t, err)
 		})
 	}
+}
+
+func TestChatCommandSafetyPolicy_BlocksLongIdleWaits(t *testing.T) {
+	t.Parallel()
+
+	policy := NewChatCommandSafetyPolicyWithOptions(
+		ChatCommandSafetyPolicyOptions{
+			MaxIdleWait: 20 * time.Second,
+		},
+	)
+	for _, command := range []string{
+		`sleep 30 && curl https://example.com`,
+		`bash -lc 'sleep 45 && curl https://example.com'`,
+		`env FOO=bar sleep 1m`,
+		`timeout 90 sleep 45`,
+		`echo ok; sleep infinity`,
+	} {
+		command := command
+		t.Run(command, func(t *testing.T) {
+			t.Parallel()
+
+			err := policy(context.Background(), CommandRequest{
+				Command: command,
+			})
+			require.ErrorContains(t, err, reasonLongIdleWait)
+		})
+	}
+}
+
+func TestChatCommandSafetyPolicy_AllowsShortOrQuotedIdleWaits(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	policy := NewChatCommandSafetyPolicyWithOptions(
+		ChatCommandSafetyPolicyOptions{
+			MaxIdleWait: 20 * time.Second,
+		},
+	)
+	for _, command := range []string{
+		`sleep 5 && curl https://example.com`,
+		`sleep 20`,
+		`echo sleep 60`,
+		`printf 'sleep 60\n'`,
+		`python3 -c "print('sleep 60')"`,
+	} {
+		command := command
+		t.Run(command, func(t *testing.T) {
+			t.Parallel()
+
+			err := policy(context.Background(), CommandRequest{
+				Command: command,
+			})
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestChatCommandSafetyPolicy_AllowsIdleWaitsByDefault(t *testing.T) {
+	t.Parallel()
+
+	err := NewChatCommandSafetyPolicy()(context.Background(), CommandRequest{
+		Command: `sleep 60 && printf done`,
+	})
+	require.NoError(t, err)
 }
 
 func TestBlocksSystemPackageInstall_EdgeCases(t *testing.T) {
