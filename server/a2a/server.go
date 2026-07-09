@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -210,6 +211,7 @@ func buildA2AServer(options *options) (*a2a.A2AServer, error) {
 	basePath := extractBasePath(ia2a.NormalizeURL(agentCard.URL))
 
 	opts := []a2a.Option{
+		a2a.WithMiddleWare(anonymousUserCookieMiddleware{userIDHeader: userIDHeader}),
 		a2a.WithAuthProvider(&defaultAuthProvider{userIDHeader: userIDHeader}),
 		a2a.WithBasePath(basePath),
 		a2a.WithMiddleWare(&traceContextMiddleware{}),
@@ -539,16 +541,12 @@ func (m *messageProcessor) ProcessMessage(
 
 	ctxID := *message.ContextID
 
-	// Get user ID from auth context, or generate from context ID if not available
-	// This follows ADK pattern: use auth user if available, otherwise use A2A_USER_{context_id}
-	userID := user.ID
+	// Get user ID from auth context. The default auth provider creates an
+	// anonymous request-bound principal when no trusted user header is supplied.
+	userID := strings.TrimSpace(user.ID)
 	if userID == "" {
-		userID = fmt.Sprintf("A2A_USER_%s", ctxID)
-		log.DebugfContext(
-			ctx,
-			"UserID not set in auth context, using generated ID from context: %s",
-			userID,
-		)
+		userID = newAnonymousUserID()
+		log.DebugfContext(ctx, "UserID not set in auth context, using anonymous principal")
 	}
 
 	// Convert A2A message to agent message

@@ -216,6 +216,46 @@ func TestNew(t *testing.T) {
 	}
 }
 
+func TestNew_DefaultClientPersistsCookies(t *testing.T) {
+	const cookieName = "trpc_agent_a2a_anon"
+	const cookieValue = "A2A_ANONYMOUS_0123456789abcdef0123456789abcdef"
+
+	var (
+		mu            sync.Mutex
+		sawCookieBack bool
+	)
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/.well-known/agent-card.json" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if cookie, err := r.Cookie(cookieName); err == nil && cookie.Value == cookieValue {
+			mu.Lock()
+			sawCookieBack = true
+			mu.Unlock()
+		}
+		http.SetCookie(w, &http.Cookie{Name: cookieName, Value: cookieValue, Path: "/"})
+		require.NoError(t, json.NewEncoder(w).Encode(server.AgentCard{
+			Name:        "cookie-agent",
+			Description: "cookie persistence test",
+			URL:         srv.URL,
+		}))
+	}))
+	defer srv.Close()
+
+	a, err := New(WithAgentCardURL(srv.URL))
+	require.NoError(t, err)
+	require.NotNil(t, a)
+
+	_, err = a.a2aClient.GetAgentCard(context.Background(), "")
+	require.NoError(t, err)
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.True(t, sawCookieBack)
+}
+
 type stubA2AEventConverter struct{}
 
 func (s *stubA2AEventConverter) ConvertToEvents(

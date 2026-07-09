@@ -158,7 +158,7 @@ func TestDefaultAuthProvider_Authenticate(t *testing.T) {
 				return req
 			}(),
 			expectError: false,
-			checkUserID: false, // Will be empty, generated from context ID in ProcessMessage
+			checkUserID: false,
 		},
 		{
 			name: "request with empty user ID header",
@@ -168,7 +168,7 @@ func TestDefaultAuthProvider_Authenticate(t *testing.T) {
 				return req
 			}(),
 			expectError: false,
-			checkUserID: false, // Will be empty, generated from context ID in ProcessMessage
+			checkUserID: false,
 		},
 	}
 
@@ -201,9 +201,8 @@ func TestDefaultAuthProvider_Authenticate(t *testing.T) {
 					t.Errorf("Authenticate() userID = %v, want %v", user.ID, expectedUserID)
 				}
 			} else {
-				// Should be empty when no user ID provided - will be generated from context ID in ProcessMessage
-				if user.ID != "" {
-					t.Errorf("Authenticate() userID should be empty when not provided, got: %v", user.ID)
+				if !isAnonymousUserID(user.ID) {
+					t.Errorf("Authenticate() userID should be anonymous when not provided, got: %v", user.ID)
 				}
 			}
 		})
@@ -690,7 +689,7 @@ func TestDefaultAuthProvider_CustomUserIDHeader(t *testing.T) {
 				return req
 			}(),
 			expectError: false,
-			checkUserID: false, // Will be empty, generated from context ID in ProcessMessage
+			checkUserID: false,
 		},
 		{
 			name:     "default header still works",
@@ -732,13 +731,22 @@ func TestDefaultAuthProvider_CustomUserIDHeader(t *testing.T) {
 					t.Errorf("Authenticate() userID = %v, want %v", user.ID, tt.expectedID)
 				}
 			} else {
-				// Should be empty when no user ID provided - will be generated from context ID in ProcessMessage
-				if user.ID != "" {
-					t.Errorf("Authenticate() userID should be empty when not provided, got: %v", user.ID)
+				if !isAnonymousUserID(user.ID) {
+					t.Errorf("Authenticate() userID should be anonymous when not provided, got: %v", user.ID)
 				}
 			}
 		})
 	}
+}
+
+func TestDefaultAuthProvider_AnonymousUserCookie(t *testing.T) {
+	userID := newAnonymousUserID()
+	req, _ := http.NewRequest("GET", "/test", nil)
+	req.AddCookie(&http.Cookie{Name: anonymousUserIDCookie, Value: userID})
+
+	user, err := (&defaultAuthProvider{userIDHeader: serverUserIDHeader}).Authenticate(req)
+	assert.NoError(t, err)
+	assert.Equal(t, userID, user.ID)
 }
 
 func TestWithUserIDHeader(t *testing.T) {

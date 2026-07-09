@@ -14,7 +14,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -23,6 +25,7 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 	"trpc.group/trpc-go/trpc-a2a-go/auth"
+	a2aclient "trpc.group/trpc-go/trpc-a2a-go/client"
 	"trpc.group/trpc-go/trpc-a2a-go/protocol"
 	a2a "trpc.group/trpc-go/trpc-a2a-go/server"
 	"trpc.group/trpc-go/trpc-a2a-go/taskmanager"
@@ -1806,30 +1809,30 @@ func TestProcessAgentStreamingEvents_Success(t *testing.T) {
 	assert.NotZero(t, count)
 }
 
-// TestMessageProcessor_ProcessMessage_EmptyUserID tests the userID generation when user.ID is empty
+// TestMessageProcessor_ProcessMessage_EmptyUserID tests anonymous userID generation when user.ID is empty.
 func TestMessageProcessor_ProcessMessage_EmptyUserID(t *testing.T) {
 	ctxID := "test-context-123"
 
 	tests := []struct {
-		name           string
-		userID         string
-		expectedUserID string
-		validateFunc   func(t *testing.T, capturedUserID string)
+		name         string
+		userID       string
+		validateFunc func(t *testing.T, capturedUserID string)
 	}{
 		{
-			name:           "empty_user_id_generates_from_context",
-			userID:         "", // Empty user ID
-			expectedUserID: "A2A_USER_test-context-123",
+			name:   "empty_user_id_generates_anonymous_principal",
+			userID: "", // Empty user ID.
 			validateFunc: func(t *testing.T, capturedUserID string) {
-				if capturedUserID != "A2A_USER_test-context-123" {
-					t.Errorf("Expected generated userID 'A2A_USER_test-context-123', got '%s'", capturedUserID)
+				if !isAnonymousUserID(capturedUserID) {
+					t.Errorf("Expected anonymous userID, got '%s'", capturedUserID)
+				}
+				if capturedUserID == "A2A_USER_test-context-123" {
+					t.Errorf("Expected userID not to be derived from context ID, got '%s'", capturedUserID)
 				}
 			},
 		},
 		{
-			name:           "non_empty_user_id_uses_original",
-			userID:         "actual-user-456",
-			expectedUserID: "actual-user-456",
+			name:   "non_empty_user_id_uses_original",
+			userID: "actual-user-456",
 			validateFunc: func(t *testing.T, capturedUserID string) {
 				if capturedUserID != "actual-user-456" {
 					t.Errorf("Expected original userID 'actual-user-456', got '%s'", capturedUserID)
@@ -1901,7 +1904,7 @@ func TestMessageProcessor_ProcessMessage_EmptyUserID(t *testing.T) {
 	}
 }
 
-// TestMessageProcessor_ProcessStreamingMessage_EmptyUserID tests userID generation in streaming mode
+// TestMessageProcessor_ProcessStreamingMessage_EmptyUserID tests anonymous userID generation in streaming mode.
 func TestMessageProcessor_ProcessStreamingMessage_EmptyUserID(t *testing.T) {
 	ctxID := "stream-context-789"
 
@@ -1963,11 +1966,106 @@ func TestMessageProcessor_ProcessStreamingMessage_EmptyUserID(t *testing.T) {
 		return
 	}
 
-	// Verify the userID was generated from context ID
-	expectedUserID := "A2A_USER_stream-context-789"
-	if capturedUserID != expectedUserID {
-		t.Errorf("Expected generated userID '%s', got '%s'", expectedUserID, capturedUserID)
+	if !isAnonymousUserID(capturedUserID) {
+		t.Errorf("Expected anonymous userID, got '%s'", capturedUserID)
 	}
+	if capturedUserID == "A2A_USER_stream-context-789" {
+		t.Errorf("Expected userID not to be derived from context ID, got '%s'", capturedUserID)
+	}
+}
+
+func TestA2AHTTPAnonymousContextDoesNotRebindPrincipal(t *testing.T) {
+	type capturedRun struct {
+		userID    string
+		sessionID string
+	}
+
+	var (
+		mu   sync.Mutex
+		runs []capturedRun
+	)
+	mockRunner := &mockRunner{
+		runFunc: func(
+			ctx context.Context,
+			userID string,
+			sessionID string,
+			message model.Message,
+			opts ...agent.RunOption,
+		) (<-chan *event.Event, error) {
+			mu.Lock()
+			runs = append(runs, capturedRun{userID: userID, sessionID: sessionID})
+			mu.Unlock()
+
+			ch := make(chan *event.Event, 1)
+			ch <- event.NewResponseEvent("anonymous-context-rebinding", "agent", &model.Response{
+				ID:      "response-anonymous-context-rebinding",
+				Object:  model.ObjectTypeChatCompletion,
+				Created: time.Now().Unix(),
+				Done:    true,
+				Choices: []model.Choice{{
+					Message: model.Message{
+						Role:    model.RoleAssistant,
+						Content: "ok",
+					},
+				}},
+			})
+			close(ch)
+			return ch, nil
+		},
+	}
+
+	srv, err := New(
+		WithRunner(mockRunner),
+		WithAgentCard(a2a.AgentCard{
+			Name:        "anonymous-context-regression",
+			Description: "anonymous context regression",
+			URL:         "http://placeholder.local",
+		}),
+	)
+	assert.NoError(t, err)
+
+	httpSrv := httptest.NewServer(srv.Handler())
+	defer httpSrv.Close()
+
+	jar, err := cookiejar.New(nil)
+	assert.NoError(t, err)
+	clientWithCookie, err := a2aclient.NewA2AClient(
+		httpSrv.URL,
+		a2aclient.WithHTTPClient(&http.Client{Jar: jar}),
+	)
+	assert.NoError(t, err)
+	otherClient, err := a2aclient.NewA2AClient(httpSrv.URL)
+	assert.NoError(t, err)
+
+	sharedContextID := "shared-a2a-context"
+	send := func(client *a2aclient.A2AClient, messageID string) {
+		msg := protocol.NewMessageWithContext(
+			protocol.MessageRoleUser,
+			[]protocol.Part{protocol.NewTextPart("hello")},
+			nil,
+			&sharedContextID,
+		)
+		msg.MessageID = messageID
+		_, err := client.SendMessage(context.Background(), protocol.SendMessageParams{Message: msg})
+		assert.NoError(t, err)
+	}
+
+	send(clientWithCookie, "anonymous-first")
+	send(clientWithCookie, "anonymous-same-client")
+	send(otherClient, "anonymous-other-client")
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Len(t, runs, 3)
+	assert.Equal(t, sharedContextID, runs[0].sessionID)
+	assert.Equal(t, sharedContextID, runs[1].sessionID)
+	assert.Equal(t, sharedContextID, runs[2].sessionID)
+	assert.True(t, isAnonymousUserID(runs[0].userID))
+	assert.Equal(t, runs[0].userID, runs[1].userID)
+	assert.True(t, isAnonymousUserID(runs[2].userID))
+	assert.NotEqual(t, runs[0].userID, runs[2].userID)
+	assert.NotEqual(t, "A2A_USER_"+sharedContextID, runs[0].userID)
+	assert.NotEqual(t, "A2A_USER_"+sharedContextID, runs[2].userID)
 }
 
 func TestBuildA2AServer_EdgeCases(t *testing.T) {

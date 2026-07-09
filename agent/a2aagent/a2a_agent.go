@@ -14,6 +14,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/cookiejar"
 	"strings"
 	"time"
 
@@ -102,9 +104,10 @@ func New(opts ...Option) (*A2AAgent, error) {
 
 	// Normalize the URL to ensure it has a proper scheme
 	agentURL = ia2a.NormalizeURL(agentURL)
+	a2aOptions := withDefaultCookieJar(agent.extraA2AOptions)
 
 	// Create A2A client first
-	a2aClient, err := client.NewA2AClient(agentURL, agent.extraA2AOptions...)
+	a2aClient, err := client.NewA2AClient(agentURL, a2aOptions...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create A2A client for %s: %w", agentURL, err)
 	}
@@ -134,7 +137,7 @@ func New(opts ...Option) (*A2AAgent, error) {
 
 		// Rebuild a2a client if URL changed
 		if agentCard.URL != agentURL {
-			a2aClient, err := client.NewA2AClient(agentCard.URL, agent.extraA2AOptions...)
+			a2aClient, err := client.NewA2AClient(agentCard.URL, a2aOptions...)
 			if err != nil {
 				return nil, fmt.Errorf("failed to create A2A client for %s: %w", agentCard.URL, err)
 			}
@@ -145,6 +148,17 @@ func New(opts ...Option) (*A2AAgent, error) {
 	}
 
 	return agent, nil
+}
+
+func withDefaultCookieJar(opts []client.Option) []client.Option {
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		return opts
+	}
+	defaultOpts := []client.Option{
+		client.WithHTTPClient(&http.Client{Jar: jar}),
+	}
+	return append(defaultOpts, opts...)
 }
 
 // sendErrorEvent sends an error event to the event channel.

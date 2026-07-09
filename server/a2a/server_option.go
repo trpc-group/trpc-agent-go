@@ -11,6 +11,9 @@ package a2a
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
@@ -29,6 +32,9 @@ import (
 
 // serverUserIDHeader is the default header that a2a server get UserID of invocation.
 var serverUserIDHeader = "X-User-ID"
+
+const anonymousUserIDPrefix = "A2A_ANONYMOUS_"
+const anonymousUserIDCookie = "trpc_agent_a2a_anon"
 
 // UserIDFromContext returns the user ID from the context.
 func UserIDFromContext(ctx context.Context) (string, bool) {
@@ -114,22 +120,75 @@ type defaultAuthProvider struct {
 	userIDHeader string
 }
 
+type anonymousUserCookieMiddleware struct {
+	userIDHeader string
+}
+
+func (m anonymousUserCookieMiddleware) Wrap(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.TrimSpace(r.Header.Get(m.userIDHeader)) == "" {
+			userID := anonymousUserIDFromRequest(r)
+			http.SetCookie(w, &http.Cookie{
+				Name:     anonymousUserIDCookie,
+				Value:    userID,
+				Path:     "/",
+				HttpOnly: true,
+				SameSite: http.SameSiteLaxMode,
+			})
+			r = r.Clone(r.Context())
+			r.AddCookie(&http.Cookie{Name: anonymousUserIDCookie, Value: userID})
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func (d *defaultAuthProvider) Authenticate(r *http.Request) (*auth.User, error) {
 	if r == nil {
 		return nil, errors.New("request is nil")
 	}
-	userID := r.Header.Get(d.userIDHeader)
+	userID := strings.TrimSpace(r.Header.Get(d.userIDHeader))
 	if userID == "" {
+		userID = anonymousUserIDFromRequest(r)
 		log.DebugfContext(
 			r.Context(),
-			"UserID(Header %s) not set, will be generated from "+
-				"context ID. You can use WithUserIDHeader in "+
+			"UserID(Header %s) not set, using anonymous request principal. "+
+				"You can use WithUserIDHeader in "+
 				"A2AAgent and A2AServer to specify the header "+
 				"that transfers user info.",
 			d.userIDHeader,
 		)
 	}
 	return &auth.User{ID: userID}, nil
+}
+
+func anonymousUserIDFromRequest(r *http.Request) string {
+	for _, cookie := range r.Cookies() {
+		if cookie.Name != anonymousUserIDCookie {
+			continue
+		}
+		if userID := strings.TrimSpace(cookie.Value); isAnonymousUserID(userID) {
+			return userID
+		}
+	}
+	return newAnonymousUserID()
+}
+
+func newAnonymousUserID() string {
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		sum := sha256.Sum256([]byte(fmt.Sprintf("%p", &raw)))
+		return anonymousUserIDPrefix + hex.EncodeToString(sum[:16])
+	}
+	return anonymousUserIDPrefix + hex.EncodeToString(raw[:])
+}
+
+func isAnonymousUserID(userID string) bool {
+	if !strings.HasPrefix(userID, anonymousUserIDPrefix) {
+		return false
+	}
+	encoded := strings.TrimPrefix(userID, anonymousUserIDPrefix)
+	decoded, err := hex.DecodeString(encoded)
+	return err == nil && len(decoded) == 16
 }
 
 type options struct {
