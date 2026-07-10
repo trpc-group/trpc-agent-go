@@ -667,8 +667,8 @@ const finalModelCallNotice = "[OpenClaw Budget Notice] This is the " +
 	"requires a final-answer format, follow it exactly."
 
 const (
-	finalModelCallSystemBudgetDivisor = 4
-	finalModelCallUserBudgetDivisor   = 2
+	finalModelCallSystemBudgetDivisor = 8
+	finalModelCallUserBudgetDivisor   = 4
 	finalModelCallTruncationNotice    = "\n\n" +
 		"[...truncated for deadline finalization...]\n\n"
 )
