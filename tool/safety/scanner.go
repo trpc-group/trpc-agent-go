@@ -361,17 +361,25 @@ func scanUnknownRawArgs(raw string, p Policy) []Finding {
 		return nil
 	}
 	var findings []Finding
-	for _, field := range extractJSONStrings("", v) {
+	for _, field := range extractJSONFields("", v) {
 		key := strings.ToLower(field.key)
-		val := strings.TrimSpace(field.value)
-		if val == "" {
-			continue
-		}
 		if isCommandLikeKey(key) {
+			if len(field.values) > 0 {
+				findings = append(findings, scanArgv(field.values, p)...)
+				continue
+			}
+			val := strings.TrimSpace(field.value)
+			if val == "" {
+				continue
+			}
 			findings = append(findings, scanCommand(val, p)...)
 			continue
 		}
 		if isCodeLikeKey(key) {
+			val := strings.TrimSpace(field.value)
+			if val == "" {
+				continue
+			}
 			findings = append(findings, scanCodeBlock(CodeBlock{
 				Language: languageFromKey(key),
 				Code:     val,
@@ -382,11 +390,16 @@ func scanUnknownRawArgs(raw string, p Policy) []Finding {
 }
 
 type jsonStringField struct {
-	key   string
-	value string
+	key    string
+	value  string
+	values []string
 }
 
 func extractJSONStrings(prefix string, v any) []jsonStringField {
+	return extractJSONFields(prefix, v)
+}
+
+func extractJSONFields(prefix string, v any) []jsonStringField {
 	switch x := v.(type) {
 	case map[string]any:
 		var out []jsonStringField
@@ -395,13 +408,19 @@ func extractJSONStrings(prefix string, v any) []jsonStringField {
 			if prefix != "" {
 				key = prefix + "." + k
 			}
-			out = append(out, extractJSONStrings(key, value)...)
+			out = append(out, extractJSONFields(key, value)...)
 		}
 		return out
 	case []any:
+		if isCommandLikeKey(strings.ToLower(prefix)) {
+			values := stringArrayValue(x)
+			if len(values) > 0 {
+				return []jsonStringField{{key: prefix, values: values}}
+			}
+		}
 		var out []jsonStringField
 		for _, value := range x {
-			out = append(out, extractJSONStrings(prefix, value)...)
+			out = append(out, extractJSONFields(prefix, value)...)
 		}
 		return out
 	case string:
@@ -409,6 +428,18 @@ func extractJSONStrings(prefix string, v any) []jsonStringField {
 	default:
 		return nil
 	}
+}
+
+func stringArrayValue(values []any) []string {
+	out := make([]string, 0, len(values))
+	for _, v := range values {
+		s, ok := v.(string)
+		if !ok {
+			return nil
+		}
+		out = append(out, s)
+	}
+	return out
 }
 
 func isCommandLikeKey(key string) bool {
@@ -915,12 +946,42 @@ func looksLikeShellCommand(s string) bool {
 
 func longSleep(argv []string, limit int) bool {
 	for _, a := range argv[1:] {
-		n, err := strconv.Atoi(strings.TrimSuffix(a, "s"))
-		if err == nil && n > limit {
+		n, ok := sleepSeconds(a)
+		if ok && n > limit {
 			return true
 		}
 	}
 	return false
+}
+
+func sleepSeconds(arg string) (int, bool) {
+	arg = strings.TrimSpace(arg)
+	if arg == "" {
+		return 0, false
+	}
+	multiplier := 1
+	last := arg[len(arg)-1]
+	switch last {
+	case 's', 'S':
+		arg = arg[:len(arg)-1]
+	case 'm', 'M':
+		arg = arg[:len(arg)-1]
+		multiplier = 60
+	case 'h', 'H':
+		arg = arg[:len(arg)-1]
+		multiplier = 60 * 60
+	case 'd', 'D':
+		arg = arg[:len(arg)-1]
+		multiplier = 24 * 60 * 60
+	}
+	n, err := strconv.Atoi(arg)
+	if err != nil || n < 0 {
+		return 0, false
+	}
+	if multiplier != 0 && n > int(^uint(0)>>1)/multiplier {
+		return 0, false
+	}
+	return n * multiplier, true
 }
 
 func commandBase(cmd string) string {

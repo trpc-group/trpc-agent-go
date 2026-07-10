@@ -174,6 +174,14 @@ func TestPermissionPolicyMapsMCPCommandTools(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, tool.PermissionActionDeny, decision.Action)
 	require.Contains(t, decision.Reason, ruleDangerousDelete)
+
+	decision, err = pp.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:  "mcp_shell",
+		Arguments: []byte(`{"args":["rm","-rf","/"]}`),
+	})
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionDeny, decision.Action)
+	require.Contains(t, decision.Reason, ruleDangerousDelete)
 }
 
 func TestPermissionPolicyFileOptions(t *testing.T) {

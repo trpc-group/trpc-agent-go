@@ -43,6 +43,26 @@ func TestScannerOptionallyRedactsSensitivePaths(t *testing.T) {
 	require.Contains(t, report.Findings[0].Evidence, sensitivePathRedaction)
 }
 
+func TestScannerRedactsSensitivePathAliases(t *testing.T) {
+	p := DefaultPolicy()
+	p.RedactSensitivePaths = true
+	report := NewScanner(p).Scan(context.Background(), Request{
+		ToolName: "hostexec_exec_command",
+		Backend:  BackendHostExec,
+		Command:  "cat /home/deploy/.ssh/id_rsa /root/.aws/credentials .env.production",
+	})
+	require.Equal(t, DecisionDeny, report.Decision)
+	require.True(t, report.Redacted)
+	require.NotContains(t, report.Command, "/home/deploy/.ssh")
+	require.NotContains(t, report.Command, "/root/.aws")
+	require.NotContains(t, report.Command, ".env.production")
+	for _, f := range report.Findings {
+		require.NotContains(t, f.Evidence, "/home/deploy/.ssh")
+		require.NotContains(t, f.Evidence, "/root/.aws")
+		require.NotContains(t, f.Evidence, ".env.production")
+	}
+}
+
 func TestScannerScansOutputForSecretLeakage(t *testing.T) {
 	report := NewScanner(DefaultPolicy()).ScanOutput(context.Background(), Request{
 		ToolName: "workspace_exec",

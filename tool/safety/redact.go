@@ -9,10 +9,19 @@
 
 package safety
 
-import "strings"
+import (
+	"regexp"
+	"strings"
+)
 
 const redaction = "[REDACTED]"
 const sensitivePathRedaction = "[SENSITIVE_PATH]"
+
+var (
+	sshPathTokenRe = regexp.MustCompile(`(?i)(~|/home/[^/\s'"|;&<>]+|/root)/\.ssh(?:/[^\s'"|;&<>]*)?`)
+	awsPathTokenRe = regexp.MustCompile(`(?i)(~|/home/[^/\s'"|;&<>]+|/root)/\.aws(?:/[^\s'"|;&<>]*)?`)
+	envFileTokenRe = regexp.MustCompile(`(?i)(^|[\s'"|;&<>])([^\s'"|;&<>]*/)?\.env(?:[.\w-]*)?`)
+)
 
 type redactedText struct {
 	text    string
@@ -75,14 +84,28 @@ func redactSensitivePaths(s string, p Policy) redactedText {
 	out := s
 	changed := false
 	for _, path := range p.DeniedPaths {
+		path = strings.TrimSpace(path)
 		if path == "" || path == "/" {
 			continue
 		}
-		next := strings.ReplaceAll(out, path, sensitivePathRedaction)
+		next := redactSensitivePath(out, path)
 		if next != out {
 			changed = true
 			out = next
 		}
 	}
 	return redactedText{text: out, changed: changed}
+}
+
+func redactSensitivePath(text, denied string) string {
+	switch strings.ToLower(denied) {
+	case "~/.ssh":
+		return sshPathTokenRe.ReplaceAllString(text, sensitivePathRedaction)
+	case "~/.aws":
+		return awsPathTokenRe.ReplaceAllString(text, sensitivePathRedaction)
+	case ".env":
+		return envFileTokenRe.ReplaceAllString(text, "${1}"+sensitivePathRedaction)
+	default:
+		return strings.ReplaceAll(text, denied, sensitivePathRedaction)
+	}
 }

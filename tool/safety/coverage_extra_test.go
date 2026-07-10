@@ -192,6 +192,15 @@ func TestScannerAdditionalBranches(t *testing.T) {
 			rule: ruleNetworkEgress,
 		},
 		{
+			name: "raw argv dangerous delete",
+			req: Request{
+				ToolName: "mcp_custom",
+				Backend:  BackendUnknown,
+				RawArgs:  `{"args":["rm","-rf","/"]}`,
+			},
+			rule: ruleDangerousDelete,
+		},
+		{
 			name: "ssh target host",
 			req: Request{
 				ToolName: "workspace_exec",
@@ -492,6 +501,10 @@ func TestScannerHelperEdges(t *testing.T) {
 	require.True(t, looksLikeShellCommand("https://evil.example"))
 	require.False(t, longSleep([]string{"sleep", "bad"}, 60))
 	require.False(t, longSleep([]string{"sleep", "1"}, 60))
+	require.True(t, longSleep([]string{"sleep", "2m"}, 60))
+	require.True(t, longSleep([]string{"sleep", "1h"}, 60))
+	require.True(t, longSleep([]string{"sleep", "1d"}, 60))
+	require.False(t, longSleep([]string{"sleep", "1x"}, 60))
 	require.Nil(t, extractQuotedCommands("fmt.Println(\"rm -rf /\")"))
 	require.Equal(t, []string{"a", "b"}, uniqueStrings([]string{"a", "a", "b"}))
 	require.Equal(t, "", hostFromURL("://bad"))
