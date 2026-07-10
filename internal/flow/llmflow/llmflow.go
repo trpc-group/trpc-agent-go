@@ -1067,12 +1067,12 @@ func (p *streamingResponseProcessor) traceChat(
 	if p.tracker != nil {
 		ttfb = p.tracker.FirstTokenTimeDuration()
 	}
-	p.chatTraceState.TraceChat(p.span, &itelemetry.TraceChatAttributes{
+	p.chatTraceState.CommitRequest(p.span, p.llmRequest, "")
+	p.chatTraceState.TraceChunk(p.span, &itelemetry.TraceChunkAttributes{
 		Invocation: observabilityInvocationForCurrent(
 			eventInvocation,
 			p.observabilityInvocation,
 		),
-		Request:          p.llmRequest,
 		Response:         response,
 		EventID:          llmResponseEvent.ID,
 		TimeToFirstToken: ttfb,

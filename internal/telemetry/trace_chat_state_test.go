@@ -20,7 +20,7 @@ import (
 	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
 )
 
-func TestChatTraceState_UpdatesWhenMessagesMutate(t *testing.T) {
+func TestChatTraceState_RequestAttributesCommittedOnce(t *testing.T) {
 	t.Cleanup(func() { SetSpanAttributePolicy(SpanAttributePolicy{}) })
 	installChatStreamingPolicyForTest()
 
@@ -31,7 +31,7 @@ func TestChatTraceState_UpdatesWhenMessagesMutate(t *testing.T) {
 	state := &ChatTraceState{}
 
 	state.TraceChat(span, &TraceChatAttributes{Request: req})
-	req.Messages[0].Content = "bbbb" // Same length, different bytes.
+	req.Messages[0].Content = "bbbb" // Request mutations after commit are not reflected.
 	state.TraceChat(span, &TraceChatAttributes{Request: req})
 
 	got := lastAttrStringValue(t, span.attrs, semconvtrace.KeyGenAIInputMessages)
@@ -39,12 +39,15 @@ func TestChatTraceState_UpdatesWhenMessagesMutate(t *testing.T) {
 	if err := json.Unmarshal([]byte(got), &messages); err != nil {
 		t.Fatalf("unmarshal input messages: %v", err)
 	}
-	if len(messages) != 1 || messages[0].Content != "bbbb" {
-		t.Fatalf("expected mutated message in cached trace, got %+v", messages)
+	if len(messages) != 1 || messages[0].Content != "aaaa" {
+		t.Fatalf("expected initially committed message in trace, got %+v", messages)
+	}
+	if countAttr(span.attrs, semconvtrace.KeyGenAIInputMessages) != 1 {
+		t.Fatalf("expected input messages to be committed once, got %d", countAttr(span.attrs, semconvtrace.KeyGenAIInputMessages))
 	}
 }
 
-func TestChatTraceState_PolicyDropInvalidatesCachedAttribute(t *testing.T) {
+func TestChatTraceState_PolicyDropSkipsRecommit(t *testing.T) {
 	t.Cleanup(func() { SetSpanAttributePolicy(SpanAttributePolicy{}) })
 
 	req := &model.Request{
@@ -83,11 +86,11 @@ func TestChatTraceState_ResponseAttributesStillUpdate(t *testing.T) {
 
 	state.TraceChat(span, &TraceChatAttributes{
 		Request:  req,
-		Response: chatResponseForCacheTest("first"),
+		Response: chatResponseForChatStateTest("first"),
 	})
 	state.TraceChat(span, &TraceChatAttributes{
 		Request:  req,
-		Response: chatResponseForCacheTest("second"),
+		Response: chatResponseForChatStateTest("second"),
 	})
 
 	got := lastAttrStringValue(t, span.attrs, semconvtrace.KeyGenAIOutputMessages)
@@ -97,133 +100,6 @@ func TestChatTraceState_ResponseAttributesStillUpdate(t *testing.T) {
 	}
 	if len(choices) != 1 || choices[0].Delta.Content != "second" {
 		t.Fatalf("expected latest response output, got %+v", choices)
-	}
-}
-
-func TestRequestMessagesFingerprint_DistinguishesNilAndEmptyBytes(t *testing.T) {
-	nilArgs := []model.Message{{
-		Role: model.RoleAssistant,
-		ToolCalls: []model.ToolCall{{
-			ID: "call",
-			Function: model.FunctionDefinitionParam{
-				Name: "tool",
-			},
-		}},
-	}}
-	emptyArgs := []model.Message{{
-		Role: model.RoleAssistant,
-		ToolCalls: []model.ToolCall{{
-			ID: "call",
-			Function: model.FunctionDefinitionParam{
-				Name:      "tool",
-				Arguments: []byte{},
-			},
-		}},
-	}}
-
-	if requestMessagesFingerprint(nilArgs) == requestMessagesFingerprint(emptyArgs) {
-		t.Fatal("expected nil and empty byte slices to produce different fingerprints")
-	}
-}
-
-func TestRequestMessagesFingerprint_DistinguishesExtraFieldsMarshalError(t *testing.T) {
-	validExtraFields := []model.Message{{
-		Role: model.RoleAssistant,
-		ToolCalls: []model.ToolCall{{
-			ID:          "call",
-			ExtraFields: map[string]any{"valid": "value"},
-		}},
-	}}
-	invalidExtraFields := []model.Message{{
-		Role: model.RoleAssistant,
-		ToolCalls: []model.ToolCall{{
-			ID: "call",
-			ExtraFields: map[string]any{
-				"invalid": func() {},
-			},
-		}},
-	}}
-
-	if requestMessagesFingerprint(validExtraFields) == requestMessagesFingerprint(invalidExtraFields) {
-		t.Fatal("expected extra field marshal errors to affect the fingerprint")
-	}
-}
-
-func TestRequestMessagesFingerprint_CoversMultimodalAndToolCallFields(t *testing.T) {
-	text := "part-text"
-	index := 2
-	messages := []model.Message{{
-		Role:    model.RoleUser,
-		Content: "message content",
-		ContentParts: []model.ContentPart{
-			{Type: model.ContentTypeText, Text: &text},
-			{
-				Type: model.ContentTypeImage,
-				Image: &model.Image{
-					URL:    "https://example.com/image.png",
-					Data:   []byte{0x01, 0x02},
-					Detail: "high",
-					Format: "png",
-				},
-			},
-			{
-				Type: model.ContentTypeAudio,
-				Audio: &model.Audio{
-					Data:   []byte{0x03},
-					Format: "wav",
-				},
-			},
-			{
-				Type: model.ContentTypeFile,
-				File: &model.File{
-					Name:     "notes.txt",
-					URL:      "https://example.com/notes.txt",
-					Data:     []byte{0x04},
-					FileID:   "file-id",
-					MimeType: "text/plain",
-				},
-			},
-			{Type: model.ContentTypeText},
-			{
-				Type: model.ContentTypeText,
-				ContentRef: &model.ContentRef{
-					ArtifactRef:     "artifact://doc@3",
-					ArtifactName:    "doc",
-					ArtifactVersion: 3,
-					MimeType:        "application/pdf",
-					SizeBytes:       4096,
-					SHA256:          "deadbeef",
-					OriginalName:    "doc.pdf",
-					EventID:         "event-1",
-					RequestID:       "request-1",
-				},
-			},
-		},
-		ToolID:           "tool-id",
-		ToolName:         "tool-name",
-		ReasoningContent: "thinking",
-		ToolCalls: []model.ToolCall{{
-			Type:  "function",
-			ID:    "call-1",
-			Index: &index,
-			Function: model.FunctionDefinitionParam{
-				Name:        "lookup",
-				Strict:      true,
-				Description: "lookup data",
-				Arguments:   []byte(`{"query":"weather"}`),
-			},
-			ExtraFields: map[string]any{"provider": "gemini"},
-		}},
-	}}
-
-	stable := requestMessagesFingerprint(messages)
-	if stable != requestMessagesFingerprint(messages) {
-		t.Fatal("expected stable fingerprint for identical messages")
-	}
-
-	messages[0].ReasoningContent = "changed reasoning"
-	if stable == requestMessagesFingerprint(messages) {
-		t.Fatal("expected fingerprint to change when message fields change")
 	}
 }
 
@@ -244,7 +120,7 @@ func TestChatTraceState_NilReceiverUsesStatelessPath(t *testing.T) {
 func TestTraceChat_NilAttributesSetsBaseSpanAttributes(t *testing.T) {
 	span := newRecordingSpan()
 
-	traceChat(span, nil, nil)
+	TraceChat(span, nil)
 
 	if countAttr(span.attrs, semconvtrace.KeyGenAISystem) != 1 {
 		t.Fatalf("expected gen_ai.system attribute, got %d", countAttr(span.attrs, semconvtrace.KeyGenAISystem))
@@ -289,34 +165,34 @@ func TestChatTraceState_RequestWithOptionalGenerationConfig(t *testing.T) {
 	if countAttr(span.attrs, semconvtrace.KeyGenAIRequestThinkingEnabled) == 0 {
 		t.Fatal("expected thinking enabled attribute")
 	}
-	if countAttr(span.attrs, semconvtrace.KeyGenAIInputMessages) != 2 {
-		t.Fatalf("expected cached input messages on each chunk, got %d", countAttr(span.attrs, semconvtrace.KeyGenAIInputMessages))
+	if countAttr(span.attrs, semconvtrace.KeyGenAIInputMessages) != 1 {
+		t.Fatalf("expected input messages committed once, got %d", countAttr(span.attrs, semconvtrace.KeyGenAIInputMessages))
 	}
 }
 
-func BenchmarkTraceChatStreamingRequestAttributes_NoCache(b *testing.B) {
+func BenchmarkTraceChatStreamingRequestAttributes_Stateless(b *testing.B) {
 	benchmarkTraceChatStreamingRequestAttributes(b, false)
 }
 
-func BenchmarkTraceChatStreamingRequestAttributes_WithCache(b *testing.B) {
+func BenchmarkTraceChatStreamingRequestAttributes_WithState(b *testing.B) {
 	benchmarkTraceChatStreamingRequestAttributes(b, true)
 }
 
-func benchmarkTraceChatStreamingRequestAttributes(b *testing.B, useCache bool) {
+func benchmarkTraceChatStreamingRequestAttributes(b *testing.B, useState bool) {
 	installChatStreamingPolicyForTest()
 	defer SetSpanAttributePolicy(SpanAttributePolicy{})
 
-	req := &model.Request{Messages: multiTurnMessagesForCacheTest(4)}
+	req := &model.Request{Messages: multiTurnMessagesForChatStateTest(4)}
 	responses := make([]*model.Response, 40)
 	for i := range responses {
-		responses[i] = chatResponseForCacheTest(fmt.Sprintf("chunk-%d", i))
+		responses[i] = chatResponseForChatStateTest(fmt.Sprintf("chunk-%d", i))
 	}
 
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		span := newRecordingSpan()
-		if useCache {
+		if useState {
 			state := &ChatTraceState{}
 			for _, rsp := range responses {
 				state.TraceChat(span, &TraceChatAttributes{Request: req, Response: rsp})
@@ -346,7 +222,7 @@ func installChatStreamingPolicyForTest() {
 	SetSpanAttributePolicy(policy)
 }
 
-func chatResponseForCacheTest(content string) *model.Response {
+func chatResponseForChatStateTest(content string) *model.Response {
 	return &model.Response{
 		ID:    "response-id",
 		Model: "test-model",
@@ -357,7 +233,7 @@ func chatResponseForCacheTest(content string) *model.Response {
 	}
 }
 
-func multiTurnMessagesForCacheTest(turns int) []model.Message {
+func multiTurnMessagesForChatStateTest(turns int) []model.Message {
 	messages := make([]model.Message, 0, turns*2)
 	for i := 0; i < turns; i++ {
 		messages = append(messages,

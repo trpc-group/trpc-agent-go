@@ -30,6 +30,7 @@ type Reporter struct {
 	request      *model.Request
 	span         oteltrace.Span
 	startedSpan  bool
+	traceState   itelemetry.ChatTraceState
 	tracker      *itelemetry.ChatMetricsTracker
 	recordMetric func()
 	ended        bool
@@ -106,9 +107,9 @@ func (r *Reporter) TrackResponse(response *model.Response) {
 		if r.tracker != nil {
 			ttfb = r.tracker.FirstTokenTimeDuration()
 		}
-		itelemetry.TraceChat(r.span, &itelemetry.TraceChatAttributes{
+		r.traceState.CommitRequest(r.span, r.request, "")
+		r.traceState.TraceChunk(r.span, &itelemetry.TraceChunkAttributes{
 			Invocation:       r.invocation,
-			Request:          r.request,
 			Response:         response,
 			TimeToFirstToken: ttfb,
 		})

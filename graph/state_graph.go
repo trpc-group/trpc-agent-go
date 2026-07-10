@@ -5020,6 +5020,7 @@ func emitFastModelResponseEvent(
 
 func traceProcessedModelResponse(
 	span oteltrace.Span,
+	traceState *itelemetry.ChatTraceState,
 	tracker *itelemetry.ChatMetricsTracker,
 	invocation *agent.Invocation,
 	request *model.Request,
@@ -5039,9 +5040,9 @@ func traceProcessedModelResponse(
 	if tracker != nil {
 		ttfb = tracker.FirstTokenTimeDuration()
 	}
-	itelemetry.TraceChat(span, &itelemetry.TraceChatAttributes{
+	traceState.CommitRequest(span, request, "")
+	traceState.TraceChunk(span, &itelemetry.TraceChunkAttributes{
 		Invocation:       invocation,
-		Request:          request,
 		Response:         response,
 		EventID:          lastEvent.ID,
 		TimeToFirstToken: ttfb,
@@ -5054,6 +5055,7 @@ type modelResponseProcessor struct {
 	stableInvocation               *agent.Invocation
 	observabilityInvocation        *agent.Invocation
 	invocation                     *agent.Invocation
+	chatTraceState                 itelemetry.ChatTraceState
 	tracker                        *itelemetry.ChatMetricsTracker
 	timingInfo                     *model.TimingInfo
 	partialUsageState              responseusage.PartialState
@@ -5373,6 +5375,7 @@ func (p *modelResponseProcessor) handleResponse(response *model.Response) (bool,
 	)
 	traceProcessedModelResponse(
 		p.config.Span,
+		&p.chatTraceState,
 		p.tracker,
 		p.observabilityInvocation,
 		p.config.Request,
