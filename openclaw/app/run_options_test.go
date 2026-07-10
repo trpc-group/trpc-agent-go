@@ -473,6 +473,7 @@ agent:
   max_history_runs: 123
   max_llm_calls: 22
   deadline_finalization_window: "45s"
+  deadline_finalization_max_input_tokens: 3000
   max_tool_iterations: 123
   preload_memory: 2
   tool_call_arguments_json_repair: false
@@ -501,6 +502,7 @@ agent:
 		"-max-llm-calls", "4",
 		"-finalize-before-max-llm-calls",
 		"-deadline-finalization-window", "2m",
+		"-deadline-finalization-max-input-tokens", "1200",
 		"-max-tool-iterations", "6",
 		"-preload-memory", "-1",
 		"-tool-call-arguments-json-repair=true",
@@ -527,6 +529,7 @@ agent:
 	require.Equal(t, 4, opts.MaxLLMCalls)
 	require.True(t, opts.FinalizeBeforeMaxLLMCalls)
 	require.Equal(t, 2*time.Minute, opts.DeadlineFinalizationWindow)
+	require.Equal(t, 1200, opts.DeadlineFinalizationMaxInputTokens)
 	require.Equal(t, 6, opts.MaxToolIterations)
 	require.Equal(t, -1, opts.PreloadMemory)
 	require.True(t, opts.ToolCallArgumentsJSONRepair)
@@ -601,6 +604,41 @@ agent:
 		t,
 		err.Error(),
 		"agent.deadline_finalization_window must be >= 0",
+	)
+}
+
+func TestParseRunOptions_DeadlineFinalizationMaxInputTokensNegativeFails(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	_, err := parseRunOptions([]string{
+		"-deadline-finalization-max-input-tokens",
+		"-1",
+	})
+	require.Error(t, err)
+	require.Contains(
+		t,
+		err.Error(),
+		"invalid deadline finalization max input tokens",
+	)
+}
+
+func TestParseRunOptions_DeadlineFinalizationMaxInputTokensYAMLNegativeFails(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+agent:
+  deadline_finalization_max_input_tokens: -1
+`)
+	_, err := parseRunOptions([]string{"-config", cfgPath})
+	require.Error(t, err)
+	require.Contains(
+		t,
+		err.Error(),
+		"agent.deadline_finalization_max_input_tokens must be >= 0",
 	)
 }
 

@@ -11,6 +11,7 @@ package app
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -366,6 +367,79 @@ func TestModelCallBudgetModel_FinalizationDisablesThinking(
 	require.False(t, *got.ThinkingEnabled)
 	require.NotNil(t, req.ThinkingEnabled)
 	require.False(t, *req.ThinkingEnabled)
+}
+
+func TestFinalModelCallRequest_DropsReasoningWhenConfigured(t *testing.T) {
+	t.Parallel()
+
+	req := &model.Request{
+		Messages: []model.Message{
+			{
+				Role:               model.RoleAssistant,
+				Content:            "visible answer",
+				ReasoningContent:   "private reasoning",
+				ReasoningSignature: "signature",
+			},
+		},
+	}
+
+	got := finalModelCallRequest(
+		req,
+		modelCallBudgetFinalRequestConfig{DropReasoningContent: true},
+	)
+
+	require.Len(t, got.Messages, 2)
+	require.Equal(t, "visible answer", got.Messages[0].Content)
+	require.Empty(t, got.Messages[0].ReasoningContent)
+	require.Empty(t, got.Messages[0].ReasoningSignature)
+	require.Equal(t, "private reasoning", req.Messages[0].ReasoningContent)
+	require.Equal(t, "signature", req.Messages[0].ReasoningSignature)
+}
+
+func TestFinalModelCallRequest_TrimsContextWhenConfigured(t *testing.T) {
+	t.Parallel()
+
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("system instructions"),
+			model.NewUserMessage("old question " + strings.Repeat("x", 800)),
+			model.NewAssistantMessage(
+				"old answer " + strings.Repeat("y", 800),
+			),
+			model.NewUserMessage("latest question"),
+			model.NewToolMessage("call_1", "search", "latest evidence"),
+		},
+		Tools: map[string]tool.Tool{"search": nil},
+	}
+
+	got := finalModelCallRequest(
+		req,
+		modelCallBudgetFinalRequestConfig{MaxInputTokens: 20},
+	)
+
+	require.Nil(t, got.Tools)
+	require.Less(t, len(got.Messages), len(req.Messages)+1)
+	require.Equal(t, model.RoleSystem, got.Messages[0].Role)
+	require.Equal(t, model.RoleUser, got.Messages[len(got.Messages)-1].Role)
+	require.Contains(
+		t,
+		got.Messages[len(got.Messages)-1].Content,
+		"final allowed model call",
+	)
+	content := budgetTestMessageText(got.Messages)
+	require.Contains(t, content, "latest question")
+	require.Contains(t, content, "latest evidence")
+	require.NotContains(t, content, "old question")
+	require.NotContains(t, content, "old answer")
+}
+
+func budgetTestMessageText(messages []model.Message) string {
+	var b strings.Builder
+	for _, msg := range messages {
+		b.WriteString(msg.Content)
+		b.WriteByte('\n')
+	}
+	return b.String()
 }
 
 func TestModelCallBudgetModel_FinalizesNearDeadline(t *testing.T) {

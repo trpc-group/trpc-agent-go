@@ -29,7 +29,9 @@ type modelCallBudgetBypassKey struct{}
 const modelCallBudgetRuntimeStateKey = "openclaw.model_call_budget"
 
 type modelCallBudgetFinalRequestConfig struct {
-	DisableThinking bool
+	DisableThinking      bool
+	DropReasoningContent bool
+	MaxInputTokens       int
 }
 
 type modelCallBudget struct {
@@ -614,19 +616,58 @@ func finalModelCallRequest(
 	if config.DisableThinking {
 		clone.ThinkingEnabled = model.BoolPtr(false)
 	}
-	clone.Messages = append([]model.Message(nil), req.Messages...)
+	clone.Messages = finalModelCallMessages(req.Messages, config)
+	clone.Messages = finalModelCallTrimMessages(
+		clone.Messages,
+		config.MaxInputTokens,
+	)
 	clone.Messages = append(clone.Messages, model.NewUserMessage(
-		"[OpenClaw Budget Notice] This is the final allowed model call "+
-			"for this run. No further tools are available now. Use only "+
-			"the existing conversation and tool results, then produce "+
-			"the final user-facing answer immediately. Do not emit tool "+
-			"calls, function calls, JSON tool requests, XML-style tool "+
-			"markup such as <tool_call>, code blocks that ask to run "+
-			"tools, or descriptions of future tool use. Do not ask to "+
-			"continue. If the original task requires a final-answer "+
-			"format, follow it exactly.",
+		finalModelCallNotice,
 	))
 	return &clone
+}
+
+func finalModelCallMessages(
+	messages []model.Message,
+	config modelCallBudgetFinalRequestConfig,
+) []model.Message {
+	clone := append([]model.Message(nil), messages...)
+	if !config.DropReasoningContent {
+		return clone
+	}
+	for i := range clone {
+		clone[i].ReasoningContent = ""
+		clone[i].ReasoningSignature = ""
+	}
+	return clone
+}
+
+const finalModelCallNotice = "[OpenClaw Budget Notice] This is the " +
+	"final allowed model call for this run. No further tools are available " +
+	"now. Use only the existing conversation and tool results, then " +
+	"produce the final user-facing answer immediately. Do not emit tool " +
+	"calls, function calls, JSON tool requests, XML-style tool markup such " +
+	"as <tool_call>, code blocks that ask to run tools, or descriptions of " +
+	"future tool use. Do not ask to continue. If the original task " +
+	"requires a final-answer format, follow it exactly."
+
+func finalModelCallTrimMessages(
+	messages []model.Message,
+	maxInputTokens int,
+) []model.Message {
+	if maxInputTokens <= 0 || len(messages) == 0 {
+		return messages
+	}
+	strategy := model.NewMiddleOutStrategy(model.NewSimpleTokenCounter())
+	trimmed, _ := strategy.TailorMessages(
+		context.Background(),
+		messages,
+		maxInputTokens,
+	)
+	if len(trimmed) == 0 {
+		return messages
+	}
+	return trimmed
 }
 
 func applyFinalModelCallRequest(

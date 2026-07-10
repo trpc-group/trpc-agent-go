@@ -4112,21 +4112,26 @@ func modelCompatibilityRunOptions(
 func modelCallBudgetFinalRequestFromOptions(
 	opts runOptions,
 ) modelCallBudgetFinalRequestConfig {
+	cfg := modelCallBudgetFinalRequestConfig{
+		MaxInputTokens: opts.DeadlineFinalizationMaxInputTokens,
+	}
 	if strings.TrimSpace(opts.ModelMode) != modeOpenAI {
-		return modelCallBudgetFinalRequestConfig{}
+		return cfg
 	}
 	variant, err := parseOpenAIVariant(opts.OpenAIVariant, opts.OpenAIBaseURL)
 	if err != nil {
-		return modelCallBudgetFinalRequestConfig{}
+		return cfg
 	}
 	switch variant {
 	case openai.VariantDeepSeek,
 		openai.VariantHunyuan,
 		openai.VariantQwen,
 		openai.VariantGLM:
-		return modelCallBudgetFinalRequestConfig{DisableThinking: true}
+		cfg.DisableThinking = true
+		cfg.DropReasoningContent = true
+		return cfg
 	default:
-		return modelCallBudgetFinalRequestConfig{}
+		return cfg
 	}
 }
 
