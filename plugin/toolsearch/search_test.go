@@ -183,7 +183,7 @@ func TestScoreToolForQuery(t *testing.T) {
 }
 
 func TestCandidateSetWithBias(t *testing.T) {
-	p := NewPlugin(nil,
+	p := New(nil,
 		WithDeferredTools([]tool.Tool{newTestTool("default_tool", "desc")}),
 		WithToolboxes([]Toolbox{
 			{Name: "billing", Description: "invoice and payment tools", Tools: []tool.Tool{newTestTool("create_invoice", "x")}},
@@ -210,7 +210,7 @@ func TestCandidateSetWithBias(t *testing.T) {
 }
 
 func TestScoreNamespacesByQueries(t *testing.T) {
-	p := NewPlugin(nil, WithToolboxes([]Toolbox{
+	p := New(nil, WithToolboxes([]Toolbox{
 		{Name: "billing", Description: "invoice and payment tools"},
 		{Name: "media", Description: "image assets"},
 		{Name: "ops", Description: ""}, // no description → skipped
@@ -228,7 +228,7 @@ func TestScoreNamespacesByQueries(t *testing.T) {
 }
 
 func TestScoreQueryInto(t *testing.T) {
-	p := NewPlugin(nil, WithDeferredTools([]tool.Tool{
+	p := New(nil, WithDeferredTools([]tool.Tool{
 		newTestTool("get_weather", "weather forecast"),
 		newTestTool("get_time", "current time"),
 	}))
@@ -264,7 +264,7 @@ func TestScoreQueryInto(t *testing.T) {
 }
 
 func TestFormatNamespaceError(t *testing.T) {
-	p := NewPlugin(nil, WithToolboxes([]Toolbox{
+	p := New(nil, WithToolboxes([]Toolbox{
 		{Name: "billing", Description: "invoices"},
 		{Name: "media", Description: "images"},
 	}))

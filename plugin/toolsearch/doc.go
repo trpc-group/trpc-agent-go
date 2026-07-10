@@ -25,7 +25,7 @@
 //
 // # Concepts
 //
-//   - Preset tools are passed to NewPlugin and stay available as usual; they are
+//   - Preset tools are passed to New and stay available as usual; they are
 //     searchable but never deferred.
 //   - Deferred tools are registered via WithDeferredTools or WithToolboxes. They
 //     are not advertised to the model until loaded through tool_search.
@@ -53,7 +53,7 @@
 //	runner := runner.NewRunner(
 //	    "app",
 //	    myAgent,
-//	    runner.WithPlugins(toolsearch.NewPlugin(
+//	    runner.WithPlugins(toolsearch.New(
 //	        presetTools,
 //	        toolsearch.WithToolboxes([]toolsearch.Toolbox{{
 //	            Name:        "billing",
@@ -79,10 +79,10 @@
 //	    openaiembedder.New(openaiembedder.WithModel(openaiembedder.ModelTextEmbedding3Small)),
 //	    toolsearch.WithVectorStore(vectorinmemory.New()), // optional; defaults to in-memory
 //	)
-//	plugin := toolsearch.NewPlugin(presetTools,
+//	plugin := toolsearch.New(presetTools,
 //	    toolsearch.WithToolKnowledge(toolKnowledge),
 //	    toolsearch.WithMaxTools(3), // cap schema-loaded results
-//	    toolsearch.WithFailOpen(),  // on embedding failure, fall back to keyword search
+//	    toolsearch.WithEmbeddingFailOpen(),  // on embedding failure, fall back to keyword search
 //	    toolsearch.WithToolboxes(boxes),
 //	)
 //
@@ -113,7 +113,7 @@
 // growing tool list. call_tool enforces the same permission and loaded-set
 // guards as a direct deferred-tool call.
 //
-//	plugin := toolsearch.NewPlugin(presetTools,
+//	plugin := toolsearch.New(presetTools,
 //	    toolsearch.WithToolboxes(boxes),
 //	    toolsearch.WithInvocationMode(toolsearch.DispatchToolCalls),
 //	)

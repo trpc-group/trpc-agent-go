@@ -104,7 +104,7 @@ func usageTokens(v any) int {
 
 // ToolKnowledge stores deferred tools and their embeddings in a vector store,
 // enabling semantic keyword search from tool_search. Build one with
-// NewToolKnowledge and pass it to NewPlugin via WithToolKnowledge.
+// NewToolKnowledge and pass it to New via WithToolKnowledge.
 type ToolKnowledge struct {
 	store    vectorstore.VectorStore
 	embedder embedder.Embedder

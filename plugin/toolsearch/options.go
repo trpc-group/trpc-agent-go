@@ -115,9 +115,10 @@ type options struct {
 	// toolKnowledge, when set via WithToolKnowledge, switches the tool_search
 	// "queries" path from keyword matching to embedding-based semantic search.
 	toolKnowledge *ToolKnowledge
-	// failOpen, when true, makes an embedding-search failure fall back to the
-	// built-in keyword matching instead of returning an error to the model.
-	failOpen bool
+	// embeddingFailOpen, when true, makes an embedding-search failure fall
+	// back to the built-in keyword matching instead of returning an error to
+	// the model. It has no effect unless WithToolKnowledge is also set.
+	embeddingFailOpen bool
 }
 
 func newOptions(opts ...Option) *options {
@@ -237,12 +238,12 @@ func WithToolKnowledge(k *ToolKnowledge) Option {
 	return func(o *options) { o.toolKnowledge = k }
 }
 
-// WithFailOpen makes an embedding-search failure "fail open": instead of
-// returning an error to the model, tool_search falls back to the built-in
+// WithEmbeddingFailOpen makes an embedding-search failure "fail open": instead
+// of returning an error to the model, tool_search falls back to the built-in
 // keyword matching so tools stay reachable. It has no effect unless
 // WithToolKnowledge is also set.
-func WithFailOpen() Option {
-	return func(o *options) { o.failOpen = true }
+func WithEmbeddingFailOpen() Option {
+	return func(o *options) { o.embeddingFailOpen = true }
 }
 
 // trimNonEmpty trims whitespace from each entry and drops the empties.

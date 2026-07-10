@@ -313,7 +313,7 @@ func (p *Plugin) searchTools(ctx context.Context, input toolSearchInput) (string
 		var err error
 		selectedTools, overflow, errPayload, err = p.searchToolsByEmbedding(ctx, req, allAllowed)
 		if err != nil {
-			if !p.failOpen {
+			if !p.embeddingFailOpen {
 				return "", err
 			}
 			// fail-open: fall back to keyword matching so tools stay reachable.

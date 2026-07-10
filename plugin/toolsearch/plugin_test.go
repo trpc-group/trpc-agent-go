@@ -89,15 +89,15 @@ func ctxWithInvocation() (context.Context, *agent.Invocation) {
 func TestPlugin_NameAndInterface(t *testing.T) {
 	var _ plugin.Plugin = (*Plugin)(nil)
 
-	p := NewPlugin(nil)
+	p := New(nil)
 	assert.Equal(t, PluginName, p.Name())
 
-	p2 := NewPlugin(nil, WithName("custom"))
+	p2 := New(nil, WithName("custom"))
 	assert.Equal(t, "custom", p2.Name())
 }
 
 func TestSelectToolsByName_CrossNamespaceCaseInsensitiveDedup(t *testing.T) {
-	p := NewPlugin(nil, WithToolboxes([]Toolbox{
+	p := New(nil, WithToolboxes([]Toolbox{
 		{Name: "billing", Tools: []tool.Tool{newTestTool("create_invoice", "make an invoice")}},
 		{Name: "media", Tools: []tool.Tool{newTestTool("create_image", "render an image")}},
 	}))
@@ -110,7 +110,7 @@ func TestSelectToolsByName_CrossNamespaceCaseInsensitiveDedup(t *testing.T) {
 }
 
 func TestSearchByQueries_ScopedToNamespace(t *testing.T) {
-	p := NewPlugin(nil, WithToolboxes([]Toolbox{
+	p := New(nil, WithToolboxes([]Toolbox{
 		{Name: "billing", Description: "invoices", Tools: []tool.Tool{
 			newTestTool("create_invoice", "create a billing invoice"),
 			newTestTool("refund_payment", "refund a payment"),
@@ -128,7 +128,7 @@ func TestSearchByQueries_ScopedToNamespace(t *testing.T) {
 }
 
 func TestSearchByQueries_RequiredTermGating(t *testing.T) {
-	p := NewPlugin(nil, WithToolboxes([]Toolbox{
+	p := New(nil, WithToolboxes([]Toolbox{
 		{Name: "ops", Tools: []tool.Tool{
 			newTestTool("export_invoice", "export an invoice to pdf"),
 			newTestTool("export_report", "export a report"),
@@ -141,7 +141,7 @@ func TestSearchByQueries_RequiredTermGating(t *testing.T) {
 }
 
 func TestSearch_MissingNamespaceFallsBackToGlobalSearch(t *testing.T) {
-	p := NewPlugin(nil, WithToolboxes([]Toolbox{
+	p := New(nil, WithToolboxes([]Toolbox{
 		{Name: "billing", Description: "invoices and payments", Tools: []tool.Tool{
 			newTestTool("create_invoice", "create a billing invoice"),
 			newTestTool("refund_payment", "refund a payment"),
@@ -179,7 +179,7 @@ func TestSearch_MissingNamespaceFallsBackToGlobalSearch(t *testing.T) {
 }
 
 func TestSearch_UnknownNamespaceSuggests(t *testing.T) {
-	p := NewPlugin(nil, WithToolboxes([]Toolbox{
+	p := New(nil, WithToolboxes([]Toolbox{
 		{Name: "billing", Tools: []tool.Tool{newTestTool("create_invoice", "x")}},
 	}))
 	ctx, _ := ctxWithInvocation()
@@ -191,7 +191,7 @@ func TestSearch_UnknownNamespaceSuggests(t *testing.T) {
 }
 
 func TestSearch_NamespaceWithoutQueryListsTools(t *testing.T) {
-	p := NewPlugin(nil, WithToolboxes([]Toolbox{
+	p := New(nil, WithToolboxes([]Toolbox{
 		{Name: "billing", Tools: []tool.Tool{
 			newTestTool("a_tool", "x"), newTestTool("b_tool", "y"),
 		}},
@@ -203,7 +203,7 @@ func TestSearch_NamespaceWithoutQueryListsTools(t *testing.T) {
 }
 
 func TestSearch_DeferredToolsNoNamespaceRequired(t *testing.T) {
-	p := NewPlugin(nil, WithDeferredTools([]tool.Tool{
+	p := New(nil, WithDeferredTools([]tool.Tool{
 		newTestTool("send_email", "send an email message"),
 	}))
 	ctx, _ := ctxWithInvocation()
@@ -220,7 +220,7 @@ func TestSearch_MissingNamespaceSpansDefaultAndToolboxes(t *testing.T) {
 	// WithDeferredTools (internal default namespace) coexists with named
 	// toolboxes. An empty namespace query must reach into BOTH sources when
 	// the query provides a domain signal that matches the toolbox description.
-	p := NewPlugin(nil,
+	p := New(nil,
 		WithDeferredTools([]tool.Tool{
 			newTestTool("send_email", "send an email message"),
 		}),
@@ -245,7 +245,7 @@ func TestSearch_MissingNamespaceSpansDefaultAndToolboxes(t *testing.T) {
 }
 
 func TestSearch_AlreadyLoaded(t *testing.T) {
-	p := NewPlugin(nil, WithDeferredTools([]tool.Tool{newTestTool("send_email", "send email")}))
+	p := New(nil, WithDeferredTools([]tool.Tool{newTestTool("send_email", "send email")}))
 	ctx, _ := ctxWithInvocation()
 
 	callSearch(t, ctx, p, toolSearchInput{ToolNames: []string{"send_email"}})
@@ -256,7 +256,7 @@ func TestSearch_AlreadyLoaded(t *testing.T) {
 }
 
 func TestBeforeModel_InjectsSearchToolAndCatalog(t *testing.T) {
-	p := NewPlugin(nil, WithToolboxes([]Toolbox{
+	p := New(nil, WithToolboxes([]Toolbox{
 		{Name: "billing", Description: "invoices", Tools: []tool.Tool{newTestTool("create_invoice", "x")}},
 	}))
 	ctx, _ := ctxWithInvocation()
@@ -277,7 +277,7 @@ func TestBeforeModel_InjectsSearchToolAndCatalog(t *testing.T) {
 }
 
 func TestBeforeModel_InjectsLoadedToolSchema(t *testing.T) {
-	p := NewPlugin(nil, WithToolboxes([]Toolbox{
+	p := New(nil, WithToolboxes([]Toolbox{
 		{Name: "billing", Tools: []tool.Tool{newTestTool("create_invoice", "x")}},
 	}))
 	ctx, _ := ctxWithInvocation()
@@ -292,7 +292,7 @@ func TestBeforeModel_InjectsLoadedToolSchema(t *testing.T) {
 }
 
 func TestBeforeModel_LegacyDeferredRendering(t *testing.T) {
-	p := NewPlugin(nil, WithDeferredTools([]tool.Tool{newTestTool("send_email", "x")}))
+	p := New(nil, WithDeferredTools([]tool.Tool{newTestTool("send_email", "x")}))
 	ctx, _ := ctxWithInvocation()
 
 	req := &model.Request{
@@ -305,7 +305,7 @@ func TestBeforeModel_LegacyDeferredRendering(t *testing.T) {
 }
 
 func TestBeforeTool_BlocksUnloadedDeferredTool(t *testing.T) {
-	p := NewPlugin(nil, WithToolboxes([]Toolbox{
+	p := New(nil, WithToolboxes([]Toolbox{
 		{Name: "billing", Tools: []tool.Tool{newTestTool("create_invoice", "x")}},
 	}))
 	ctx, _ := ctxWithInvocation()
@@ -318,7 +318,7 @@ func TestBeforeTool_BlocksUnloadedDeferredTool(t *testing.T) {
 }
 
 func TestBeforeTool_AllowsLoadedDeferredTool(t *testing.T) {
-	p := NewPlugin(nil, WithToolboxes([]Toolbox{
+	p := New(nil, WithToolboxes([]Toolbox{
 		{Name: "billing", Tools: []tool.Tool{newTestTool("create_invoice", "x")}},
 	}))
 	ctx, _ := ctxWithInvocation()
@@ -330,7 +330,7 @@ func TestBeforeTool_AllowsLoadedDeferredTool(t *testing.T) {
 }
 
 func TestBeforeTool_IgnoresPresetTool(t *testing.T) {
-	p := NewPlugin([]tool.Tool{newTestTool("preset_tool", "x")})
+	p := New([]tool.Tool{newTestTool("preset_tool", "x")})
 	ctx, _ := ctxWithInvocation()
 
 	res, err := p.beforeTool(ctx, &tool.BeforeToolArgs{ToolName: "preset_tool"})
@@ -346,7 +346,7 @@ func TestPermissionFilter_HidesAndBlocks(t *testing.T) {
 		}
 		return out
 	}
-	p := NewPlugin(nil,
+	p := New(nil,
 		WithToolboxes([]Toolbox{{Name: "ns", Tools: []tool.Tool{
 			newTestTool("allowed_tool", "ok"),
 			newTestTool("denied_tool", "no"),
@@ -367,7 +367,7 @@ func TestPermissionFilter_HidesAndBlocks(t *testing.T) {
 }
 
 func TestSessionState_PersistsAcrossLoad(t *testing.T) {
-	p := NewPlugin(nil, WithDeferredTools([]tool.Tool{
+	p := New(nil, WithDeferredTools([]tool.Tool{
 		newTestTool("send_email", "x"), newTestTool("create_doc", "y"),
 	}))
 	ctx, _ := ctxWithInvocation()
@@ -386,7 +386,7 @@ func TestSessionState_PersistsAcrossLoad(t *testing.T) {
 
 func TestDuplicateNamespaceRegistrationKeepsFirstOwner(t *testing.T) {
 	shared := newTestTool("shared_tool", "x")
-	p := NewPlugin(nil, WithToolboxes([]Toolbox{
+	p := New(nil, WithToolboxes([]Toolbox{
 		{Name: "first", Tools: []tool.Tool{shared}},
 		{Name: "second", Tools: []tool.Tool{shared}},
 	}))
@@ -419,13 +419,13 @@ func TestRegister_NilCases(t *testing.T) {
 	// should not panic
 
 	// Valid Plugin with nil registry.
-	p2 := NewPlugin(nil)
+	p2 := New(nil)
 	p2.Register(nil)
 	// should not panic
 }
 
 func TestAfterTool(t *testing.T) {
-	p := NewPlugin(nil)
+	p := New(nil)
 	ctx, _ := ctxWithInvocation()
 	res, err := p.afterTool(ctx, &tool.AfterToolArgs{})
 	require.NoError(t, err)
@@ -434,17 +434,17 @@ func TestAfterTool(t *testing.T) {
 
 func TestIsDefaultOnly(t *testing.T) {
 	// WithDeferredTools alone → only _default toolbox.
-	p := NewPlugin(nil, WithDeferredTools([]tool.Tool{newTestTool("t1", "d1")}))
+	p := New(nil, WithDeferredTools([]tool.Tool{newTestTool("t1", "d1")}))
 	assert.True(t, p.isDefaultOnly())
 
 	// With toolboxes → not default only.
-	p2 := NewPlugin(nil, WithToolboxes([]Toolbox{
+	p2 := New(nil, WithToolboxes([]Toolbox{
 		{Name: "billing", Tools: []tool.Tool{newTestTool("t1", "d1")}},
 	}))
 	assert.False(t, p2.isDefaultOnly())
 
 	// Both → not default only.
-	p3 := NewPlugin(nil,
+	p3 := New(nil,
 		WithDeferredTools([]tool.Tool{newTestTool("t1", "d1")}),
 		WithToolboxes([]Toolbox{{Name: "billing", Tools: []tool.Tool{newTestTool("t2", "d2")}}}),
 	)
@@ -452,20 +452,20 @@ func TestIsDefaultOnly(t *testing.T) {
 }
 
 func TestAllDeferredPermissions_NoFilter(t *testing.T) {
-	p := NewPlugin(nil, WithDeferredTools([]tool.Tool{newTestTool("t1", "d1")}))
+	p := New(nil, WithDeferredTools([]tool.Tool{newTestTool("t1", "d1")}))
 	ctx, _ := ctxWithInvocation()
 	assert.Nil(t, p.allDeferredPermissions(ctx), "nil filter returns nil")
 }
 
 func TestFilterAllowed_NilAllowed(t *testing.T) {
-	p := NewPlugin(nil, WithDeferredTools([]tool.Tool{newTestTool("t1", "d1")}))
+	p := New(nil, WithDeferredTools([]tool.Tool{newTestTool("t1", "d1")}))
 	names := []string{"t1", "t2"}
 	result := p.filterAllowed(names, nil)
 	assert.Equal(t, names, result, "nil allowed returns original names")
 }
 
 func TestBeforeModel_NilArgs(t *testing.T) {
-	p := NewPlugin(nil)
+	p := New(nil)
 	ctx, _ := ctxWithInvocation()
 	res, err := p.beforeModel(ctx, nil)
 	require.NoError(t, err)
@@ -473,7 +473,7 @@ func TestBeforeModel_NilArgs(t *testing.T) {
 }
 
 func TestBeforeModel_NilRequest(t *testing.T) {
-	p := NewPlugin(nil)
+	p := New(nil)
 	ctx, _ := ctxWithInvocation()
 	res, err := p.beforeModel(ctx, &model.BeforeModelArgs{Request: nil})
 	require.NoError(t, err)
@@ -481,7 +481,7 @@ func TestBeforeModel_NilRequest(t *testing.T) {
 }
 
 func TestBeforeModel_NoInvocation(t *testing.T) {
-	p := NewPlugin(nil)
+	p := New(nil)
 	ctx := context.Background() // no invocation
 	res, err := p.beforeModel(ctx, &model.BeforeModelArgs{Request: &model.Request{}})
 	require.NoError(t, err)
@@ -489,7 +489,7 @@ func TestBeforeModel_NoInvocation(t *testing.T) {
 }
 
 func TestBeforeModel_CatalogInDescription(t *testing.T) {
-	p := NewPlugin(nil, WithCatalogInDescription(true), WithToolboxes([]Toolbox{
+	p := New(nil, WithCatalogInDescription(true), WithToolboxes([]Toolbox{
 		{Name: "billing", Description: "invoices", Tools: []tool.Tool{newTestTool("create_invoice", "x")}},
 	}))
 	ctx, _ := ctxWithInvocation()
@@ -514,7 +514,7 @@ func TestBeforeModel_WithKnowledge(t *testing.T) {
 	emb := &fakeEmbedder{vectors: map[string][]float64{}}
 	k, err := NewToolKnowledge(emb, WithVectorStore(inmemory.New()))
 	require.NoError(t, err)
-	p := NewPlugin(nil, WithToolKnowledge(k))
+	p := New(nil, WithToolKnowledge(k))
 	ctx, _ := ctxWithInvocation()
 
 	res, err := p.beforeModel(ctx, &model.BeforeModelArgs{Request: &model.Request{}})
@@ -528,7 +528,7 @@ func TestBeforeModel_WithKnowledge(t *testing.T) {
 }
 
 func TestBeforeTool_NilArgs(t *testing.T) {
-	p := NewPlugin(nil)
+	p := New(nil)
 	ctx, _ := ctxWithInvocation()
 	res, err := p.beforeTool(ctx, nil)
 	require.NoError(t, err)
@@ -536,7 +536,7 @@ func TestBeforeTool_NilArgs(t *testing.T) {
 }
 
 func TestBeforeTool_EmptyToolName(t *testing.T) {
-	p := NewPlugin(nil, WithDeferredTools([]tool.Tool{newTestTool("t1", "d1")}))
+	p := New(nil, WithDeferredTools([]tool.Tool{newTestTool("t1", "d1")}))
 	ctx, _ := ctxWithInvocation()
 	res, err := p.beforeTool(ctx, &tool.BeforeToolArgs{ToolName: ""})
 	require.NoError(t, err)
@@ -544,7 +544,7 @@ func TestBeforeTool_EmptyToolName(t *testing.T) {
 }
 
 func TestBeforeTool_NoInvocation(t *testing.T) {
-	p := NewPlugin(nil, WithDeferredTools([]tool.Tool{newTestTool("t1", "d1")}))
+	p := New(nil, WithDeferredTools([]tool.Tool{newTestTool("t1", "d1")}))
 	ctx := context.Background()
 	res, err := p.beforeTool(ctx, &tool.BeforeToolArgs{ToolName: "t1"})
 	require.NoError(t, err)
@@ -553,7 +553,7 @@ func TestBeforeTool_NoInvocation(t *testing.T) {
 
 func TestBeforeTool_MCPToolBypassesPreSearchCheck(t *testing.T) {
 	ts := &fakeToolSet{name: "billing", tools: []tool.Tool{newTestTool("create_invoice", "x")}}
-	p := NewPlugin(nil, WithMCPToolboxes([]MCPToolbox{
+	p := New(nil, WithMCPToolboxes([]MCPToolbox{
 		{ServerName: "billing", ToolSet: ts},
 	}))
 	ctx, _ := ctxWithInvocation()
@@ -567,7 +567,7 @@ func TestBeforeTool_MCPToolBypassesPreSearchCheck(t *testing.T) {
 }
 
 func TestReplaceDeferredToolsPlaceholder_NoPlaceholderAppend(t *testing.T) {
-	p := NewPlugin(nil, WithToolboxes([]Toolbox{
+	p := New(nil, WithToolboxes([]Toolbox{
 		{Name: "billing", Description: "invoices", Tools: []tool.Tool{newTestTool("create_invoice", "x")}},
 	}))
 	req := &model.Request{
@@ -579,7 +579,7 @@ func TestReplaceDeferredToolsPlaceholder_NoPlaceholderAppend(t *testing.T) {
 }
 
 func TestReplaceDeferredToolsPlaceholder_NoSystemMessage(t *testing.T) {
-	p := NewPlugin(nil, WithToolboxes([]Toolbox{
+	p := New(nil, WithToolboxes([]Toolbox{
 		{Name: "billing", Description: "invoices", Tools: []tool.Tool{newTestTool("create_invoice", "x")}},
 	}))
 	req := &model.Request{
@@ -594,7 +594,7 @@ func TestReplaceDeferredToolsPlaceholder_NoSystemMessage(t *testing.T) {
 
 func TestReplaceDeferredToolsPlaceholder_EmptyCatalog(t *testing.T) {
 	// No toolboxes → empty catalog → nothing appended.
-	p := NewPlugin(nil)
+	p := New(nil)
 	req := &model.Request{
 		Messages: []model.Message{{Role: model.RoleSystem, Content: "System prompt."}},
 	}
@@ -604,7 +604,7 @@ func TestReplaceDeferredToolsPlaceholder_EmptyCatalog(t *testing.T) {
 }
 
 func TestReplaceDeferredToolsPlaceholder_CatalogInDescriptionStripsPlaceholder(t *testing.T) {
-	p := NewPlugin(nil, WithCatalogInDescription(true))
+	p := New(nil, WithCatalogInDescription(true))
 	req := &model.Request{
 		Messages: []model.Message{{Role: model.RoleSystem, Content: "Tools:\n" + Placeholder}},
 	}
@@ -613,7 +613,7 @@ func TestReplaceDeferredToolsPlaceholder_CatalogInDescriptionStripsPlaceholder(t
 }
 
 func TestSearchToolWithCatalog(t *testing.T) {
-	p := NewPlugin(nil, WithCatalogInDescription(true), WithToolboxes([]Toolbox{
+	p := New(nil, WithCatalogInDescription(true), WithToolboxes([]Toolbox{
 		{Name: "billing", Description: "invoices", Tools: []tool.Tool{newTestTool("create_invoice", "x")}},
 	}))
 	wrapped := p.searchToolWithCatalog(nil)
@@ -658,7 +658,7 @@ func TestSearchToolWithDynamicDesc_Call_NonCallable(t *testing.T) {
 }
 
 func TestCallToolFn_EmptyToolName(t *testing.T) {
-	p := NewPlugin(nil, WithInvocationMode(DispatchToolCalls))
+	p := New(nil, WithInvocationMode(DispatchToolCalls))
 	ctx, _ := ctxWithInvocation()
 	res, err := p.callToolFn(ctx, callToolInput{ToolName: ""})
 	require.NoError(t, err)
@@ -668,7 +668,7 @@ func TestCallToolFn_EmptyToolName(t *testing.T) {
 }
 
 func TestCallToolFn_WhitespaceOnlyToolName(t *testing.T) {
-	p := NewPlugin(nil, WithInvocationMode(DispatchToolCalls))
+	p := New(nil, WithInvocationMode(DispatchToolCalls))
 	ctx, _ := ctxWithInvocation()
 	res, err := p.callToolFn(ctx, callToolInput{ToolName: "   "})
 	require.NoError(t, err)
@@ -678,7 +678,7 @@ func TestCallToolFn_WhitespaceOnlyToolName(t *testing.T) {
 }
 
 func TestCallToolFn_NoInvocation(t *testing.T) {
-	p := NewPlugin(nil, WithInvocationMode(DispatchToolCalls), WithDeferredTools([]tool.Tool{newEchoTool("echo")}))
+	p := New(nil, WithInvocationMode(DispatchToolCalls), WithDeferredTools([]tool.Tool{newEchoTool("echo")}))
 	ctx := context.Background()
 	// Call load to mark as loaded.
 	p.saveDiscoveredTools(ctx, &agent.Invocation{Session: &session.Session{
@@ -693,7 +693,7 @@ func TestCallToolFn_NoInvocation(t *testing.T) {
 }
 
 func TestCallToolFn_PresetToolIsCallable(t *testing.T) {
-	p := NewPlugin([]tool.Tool{newEchoTool("echo")}, WithInvocationMode(DispatchToolCalls))
+	p := New([]tool.Tool{newEchoTool("echo")}, WithInvocationMode(DispatchToolCalls))
 	ctx, _ := ctxWithInvocation()
 	res, err := p.callToolFn(ctx, callToolInput{ToolName: "echo", Params: map[string]any{"value": "hi"}})
 	require.NoError(t, err)
@@ -701,7 +701,7 @@ func TestCallToolFn_PresetToolIsCallable(t *testing.T) {
 }
 
 func TestCallToolFn_CaseInsensitive(t *testing.T) {
-	p := NewPlugin([]tool.Tool{newEchoTool("echo")}, WithInvocationMode(DispatchToolCalls))
+	p := New([]tool.Tool{newEchoTool("echo")}, WithInvocationMode(DispatchToolCalls))
 	ctx, _ := ctxWithInvocation()
 	res, err := p.callToolFn(ctx, callToolInput{ToolName: "ECHO", Params: map[string]any{"value": "hi"}})
 	require.NoError(t, err)
@@ -716,7 +716,7 @@ func TestRenderToolboxCatalog_PermissionFiltering(t *testing.T) {
 		}
 		return out
 	}
-	p := NewPlugin(nil,
+	p := New(nil,
 		WithToolPermissionFilter(filter),
 		WithToolboxes([]Toolbox{{
 			Name:        "ns",
@@ -740,7 +740,7 @@ func TestRenderToolboxCatalog_LegacyWithPermission(t *testing.T) {
 		}
 		return out
 	}
-	p := NewPlugin(nil,
+	p := New(nil,
 		WithToolPermissionFilter(filter),
 		WithDeferredTools([]tool.Tool{
 			newTestTool("visible", "ok"), newTestTool("hidden", "no"),
@@ -761,7 +761,7 @@ func TestRenderToolboxCatalog_EmptyAfterFiltering(t *testing.T) {
 		}
 		return out
 	}
-	p := NewPlugin(nil,
+	p := New(nil,
 		WithToolPermissionFilter(filter),
 		WithToolboxes([]Toolbox{{
 			Name: "ns", Description: "desc", Tools: []tool.Tool{newTestTool("t1", "d1")},
@@ -774,7 +774,7 @@ func TestRenderToolboxCatalog_EmptyAfterFiltering(t *testing.T) {
 }
 
 func TestBeforeModel_AppendToSystemMessage(t *testing.T) {
-	p := NewPlugin(nil, WithToolboxes([]Toolbox{
+	p := New(nil, WithToolboxes([]Toolbox{
 		{Name: "n", Description: "d", Tools: []tool.Tool{newTestTool("t1", "d1")}},
 	}))
 	ctx, _ := ctxWithInvocation()
@@ -790,7 +790,7 @@ func TestBeforeModel_AppendToSystemMessage(t *testing.T) {
 }
 
 func TestBeforeModel_PrependSystemMessage(t *testing.T) {
-	p := NewPlugin(nil, WithToolboxes([]Toolbox{
+	p := New(nil, WithToolboxes([]Toolbox{
 		{Name: "n", Description: "d", Tools: []tool.Tool{newTestTool("t1", "d1")}},
 	}))
 	ctx, _ := ctxWithInvocation()
@@ -814,7 +814,7 @@ func TestBeforeModel_CatalogWithPermissionFilter(t *testing.T) {
 		}
 		return out
 	}
-	p := NewPlugin(nil, WithToolPermissionFilter(filter), WithDeferredTools([]tool.Tool{
+	p := New(nil, WithToolPermissionFilter(filter), WithDeferredTools([]tool.Tool{
 		newTestTool("allowed", "ok"), newTestTool("denied", "no"),
 	}))
 	ctx, _ := ctxWithInvocation()
@@ -842,7 +842,7 @@ func TestPermissionFilter_PreRanking(t *testing.T) {
 		}
 		return out
 	}
-	p := NewPlugin(nil,
+	p := New(nil,
 		WithToolPermissionFilter(filter),
 		WithMaxTools(1),
 		WithToolboxes([]Toolbox{{
@@ -883,7 +883,7 @@ func TestPermissionFilter_PreRanking_ListNamespace(t *testing.T) {
 		}
 		return out
 	}
-	p := NewPlugin(nil,
+	p := New(nil,
 		WithToolPermissionFilter(filter),
 		WithMaxTools(1),
 		WithToolboxes([]Toolbox{{
@@ -920,7 +920,7 @@ func TestPermissionFilter_PreRanking_SelectByName(t *testing.T) {
 		}
 		return out
 	}
-	p := NewPlugin(nil,
+	p := New(nil,
 		WithToolPermissionFilter(filter),
 		WithToolboxes([]Toolbox{{
 			Name: "ns",
@@ -946,7 +946,7 @@ func TestPermissionFilter_PreRanking_SelectByName(t *testing.T) {
 // created, each loaded deferred tool is advertised individually, and
 // tool_search results do NOT carry input_schema.
 func TestInvocationMode_DefaultIsNativeToolCalls(t *testing.T) {
-	p := NewPlugin(nil, WithToolboxes([]Toolbox{
+	p := New(nil, WithToolboxes([]Toolbox{
 		{Name: "billing", Tools: []tool.Tool{newTestTool("create_invoice", "x")}},
 	}))
 	// No mode set => default NativeToolCalls; call_tool must not be created.
@@ -979,7 +979,7 @@ func TestInvocationMode_DefaultIsNativeToolCalls(t *testing.T) {
 // TestInvocationMode_ExplicitNativeToolCalls verifies that explicitly setting
 // WithInvocationMode(NativeToolCalls) behaves identically to the default.
 func TestInvocationMode_ExplicitNativeToolCalls(t *testing.T) {
-	p := NewPlugin(nil,
+	p := New(nil,
 		WithInvocationMode(NativeToolCalls),
 		WithToolboxes([]Toolbox{
 			{Name: "billing", Tools: []tool.Tool{newTestTool("create_invoice", "x")}},
@@ -995,7 +995,7 @@ func TestInvocationMode_ExplicitNativeToolCalls(t *testing.T) {
 // NOT advertise loaded deferred tools individually, and surfaces each match's
 // input_schema in tool_search results so the model can build call_tool params.
 func TestInvocationMode_DispatchToolCalls_InjectsCallTool(t *testing.T) {
-	p := NewPlugin(nil,
+	p := New(nil,
 		WithInvocationMode(DispatchToolCalls),
 		WithToolboxes([]Toolbox{
 			{Name: "billing", Tools: []tool.Tool{newTestTool("create_invoice", "x")}},
@@ -1045,7 +1045,7 @@ func TestInvocationMode_DispatchToolCalls_CallToolInvokesLoadedTool(t *testing.T
 		function.WithName("echo_tool"),
 		function.WithDescription("echoes a message"),
 	)
-	p := NewPlugin(nil,
+	p := New(nil,
 		WithInvocationMode(DispatchToolCalls),
 		WithToolboxes([]Toolbox{{Name: "utils", Tools: []tool.Tool{echo}}}),
 	)
@@ -1098,7 +1098,7 @@ func TestInvocationMode_DispatchToolCalls_CallToolRespectsPermissionFilter(t *te
 		}
 		return out
 	}
-	p := NewPlugin(nil,
+	p := New(nil,
 		WithInvocationMode(DispatchToolCalls),
 		WithToolPermissionFilter(filter),
 		WithToolboxes([]Toolbox{{

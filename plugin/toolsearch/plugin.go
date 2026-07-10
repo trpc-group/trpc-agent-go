@@ -78,9 +78,9 @@ type Plugin struct {
 	// embedding-based semantic search over the deferred tools instead of the
 	// built-in keyword text matching. It is configured via WithToolKnowledge.
 	knowledge *ToolKnowledge
-	// failOpen, when true, makes an embedding-search failure fall back to the
-	// built-in keyword matching instead of surfacing the error.
-	failOpen bool
+	// embeddingFailOpen, when true, makes an embedding-search failure fall back
+	// to the built-in keyword matching instead of surfacing the error.
+	embeddingFailOpen bool
 }
 
 // toolboxIndex holds catalog metadata and an O(1) membership set for a namespace.
@@ -95,10 +95,10 @@ type toolboxIndex struct {
 // compile-time check.
 var _ plugin.Plugin = (*Plugin)(nil)
 
-// NewPlugin creates a tool-search plugin. presetTools are always available and
+// New creates a tool-search plugin. presetTools are always available and
 // searchable; deferred tools are registered through WithDeferredTools or
 // WithToolboxes options.
-func NewPlugin(presetTools []tool.Tool, opts ...Option) *Plugin {
+func New(presetTools []tool.Tool, opts ...Option) *Plugin {
 	o := newOptions(opts...)
 	p := &Plugin{
 		name:                 o.name,
@@ -113,7 +113,7 @@ func NewPlugin(presetTools []tool.Tool, opts ...Option) *Plugin {
 		catalogInDescription: o.catalogInDescription,
 		invocationMode:       o.invocationMode,
 		knowledge:            o.toolKnowledge,
-		failOpen:             o.failOpen,
+		embeddingFailOpen:    o.embeddingFailOpen,
 	}
 
 	for _, t := range presetTools {

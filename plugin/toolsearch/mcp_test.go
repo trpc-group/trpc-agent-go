@@ -50,7 +50,7 @@ func TestMCPToolbox_ListAndRename(t *testing.T) {
 			newTestTool("get_alerts", "get severe weather alerts"),
 		},
 	}
-	p := NewPlugin(nil, WithMCPToolboxes([]MCPToolbox{
+	p := New(nil, WithMCPToolboxes([]MCPToolbox{
 		{ServerName: "weather", Description: "weather data", ToolSet: ts},
 	}))
 	ctx, _ := ctxWithInvocation()
@@ -79,7 +79,7 @@ func TestMCPToolbox_SearchByQueryAndLoad(t *testing.T) {
 			newTestTool("refund_payment", "refund a payment"),
 		},
 	}
-	p := NewPlugin(nil, WithMCPToolboxes([]MCPToolbox{
+	p := New(nil, WithMCPToolboxes([]MCPToolbox{
 		{ServerName: "billing", Description: "invoices", ToolSet: ts},
 	}))
 	ctx, _ := ctxWithInvocation()
@@ -105,7 +105,7 @@ func TestMCPToolbox_BlocksUnloadedTool(t *testing.T) {
 		name:  "billing",
 		tools: []tool.Tool{newTestTool("create_invoice", "x")},
 	}
-	p := NewPlugin(nil, WithMCPToolboxes([]MCPToolbox{
+	p := New(nil, WithMCPToolboxes([]MCPToolbox{
 		{ServerName: "billing", ToolSet: ts},
 	}))
 	ctx, _ := ctxWithInvocation()
@@ -122,7 +122,7 @@ func TestMCPToolbox_RetriesAfterEmptyListing(t *testing.T) {
 		tools:    []tool.Tool{newTestTool("get_forecast", "forecast")},
 		emptyFor: 1, // first listing fails (server down), second succeeds
 	}
-	p := NewPlugin(nil, WithMCPToolboxes([]MCPToolbox{
+	p := New(nil, WithMCPToolboxes([]MCPToolbox{
 		{ServerName: "weather", ToolSet: ts},
 	}))
 	ctx, _ := ctxWithInvocation()
@@ -165,7 +165,7 @@ func TestMCPToolbox_CatalogRendersWithToolNames(t *testing.T) {
 		name:  "weather",
 		tools: []tool.Tool{newTestTool("get_forecast", "forecast")},
 	}
-	p := NewPlugin(nil, WithMCPToolboxes([]MCPToolbox{
+	p := New(nil, WithMCPToolboxes([]MCPToolbox{
 		{ServerName: "weather", Description: "weather data", ToolSet: ts},
 	}))
 	ctx, _ := ctxWithInvocation()
@@ -192,7 +192,7 @@ func TestMCPToolbox_LoadedToolSchemaInjectedAfterRestart(t *testing.T) {
 		name:  "billing",
 		tools: []tool.Tool{newTestTool("create_invoice", "create an invoice")},
 	}
-	p := NewPlugin(nil, WithMCPToolboxes([]MCPToolbox{
+	p := New(nil, WithMCPToolboxes([]MCPToolbox{
 		{ServerName: "billing", ToolSet: ts},
 	}))
 	ctx, inv := ctxWithInvocation()
@@ -213,7 +213,7 @@ func TestMCPToolbox_ConcurrentSearchesAreRaceFree(t *testing.T) {
 			newTestTool("get_alerts", "alerts"),
 		},
 	}
-	p := NewPlugin(nil, WithMCPToolboxes([]MCPToolbox{
+	p := New(nil, WithMCPToolboxes([]MCPToolbox{
 		{ServerName: "weather", Description: "weather data", ToolSet: ts},
 	}))
 
@@ -285,19 +285,19 @@ func TestIsMCP(t *testing.T) {
 
 func TestRegisterMCPToolbox_EdgeCases(t *testing.T) {
 	// Empty server name should be skipped.
-	p1 := NewPlugin(nil, WithMCPToolboxes([]MCPToolbox{
+	p1 := New(nil, WithMCPToolboxes([]MCPToolbox{
 		{ServerName: "", Description: "desc", ToolSet: &fakeToolSet{name: "empty"}},
 	}))
 	assert.Len(t, p1.toolboxes, 0, "empty server name MCP toolbox should be skipped")
 
 	// Nil ToolSet should be skipped.
-	p2 := NewPlugin(nil, WithMCPToolboxes([]MCPToolbox{
+	p2 := New(nil, WithMCPToolboxes([]MCPToolbox{
 		{ServerName: "valid", Description: "desc", ToolSet: nil},
 	}))
 	assert.Len(t, p2.toolboxes, 0, "nil ToolSet MCP toolbox should be skipped")
 
 	// Collision should be skipped (two MCP toolboxes with same ServerName).
-	p3 := NewPlugin(nil, WithMCPToolboxes([]MCPToolbox{
+	p3 := New(nil, WithMCPToolboxes([]MCPToolbox{
 		{ServerName: "collision", ToolSet: &fakeToolSet{name: "c1", tools: []tool.Tool{newTestTool("t1", "d1")}}},
 		{ServerName: "collision", ToolSet: &fakeToolSet{name: "c2", tools: []tool.Tool{newTestTool("t2", "d2")}}},
 	}))
@@ -305,7 +305,7 @@ func TestRegisterMCPToolbox_EdgeCases(t *testing.T) {
 	assert.Equal(t, "collision", p3.toolboxes[0].name)
 
 	// MCP toolbox collision with static toolbox.
-	p4 := NewPlugin(nil,
+	p4 := New(nil,
 		WithToolboxes([]Toolbox{{Name: "shared", Tools: []tool.Tool{newTestTool("t1", "d1")}}}),
 		WithMCPToolboxes([]MCPToolbox{{ServerName: "shared", ToolSet: &fakeToolSet{name: "mcp"}}}),
 	)
@@ -414,7 +414,7 @@ func (f *fakeNoStreamTool) StreamableCall(ctx context.Context, jsonArgs []byte) 
 func (f *fakeNoStreamTool) StreamInner() bool { return false }
 
 func TestMaterializeNamespace_BlankAndNonMCP(t *testing.T) {
-	p := NewPlugin(nil, WithToolboxes([]Toolbox{
+	p := New(nil, WithToolboxes([]Toolbox{
 		{Name: "static", Tools: []tool.Tool{newTestTool("t1", "d1")}},
 	}))
 	ctx, _ := ctxWithInvocation()
@@ -429,7 +429,7 @@ func TestMaterializeNamespace_BlankAndNonMCP(t *testing.T) {
 
 func TestMaterializeByToolNames_Mixed(t *testing.T) {
 	ts := &fakeToolSet{name: "billing", tools: []tool.Tool{newTestTool("create_invoice", "desc")}}
-	p := NewPlugin(nil, WithMCPToolboxes([]MCPToolbox{
+	p := New(nil, WithMCPToolboxes([]MCPToolbox{
 		{ServerName: "billing", ToolSet: ts},
 	}))
 	ctx, _ := ctxWithInvocation()
@@ -442,7 +442,7 @@ func TestMaterializeByToolNames_Mixed(t *testing.T) {
 func TestMaterializeAllMCP_MixedBoxes(t *testing.T) {
 	ts1 := &fakeToolSet{name: "weather", tools: []tool.Tool{newTestTool("forecast", "desc")}}
 	ts2 := &fakeToolSet{name: "billing", tools: []tool.Tool{newTestTool("invoice", "desc")}}
-	p := NewPlugin(nil,
+	p := New(nil,
 		WithToolboxes([]Toolbox{{Name: "static", Tools: []tool.Tool{newTestTool("t1", "d1")}}}),
 		WithMCPToolboxes([]MCPToolbox{
 			{ServerName: "weather", ToolSet: ts1},

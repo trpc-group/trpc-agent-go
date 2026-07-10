@@ -58,7 +58,7 @@ func newKnowledgePlugin(t *testing.T) *Plugin {
 	k, err := NewToolKnowledge(emb, WithVectorStore(inmemory.New()))
 	require.NoError(t, err)
 
-	return NewPlugin(nil,
+	return New(nil,
 		WithToolKnowledge(k),
 		WithToolboxes([]Toolbox{{
 			Name:        "utility",
@@ -142,7 +142,7 @@ func TestEmbeddingSearch_RecordsUsage(t *testing.T) {
 
 func TestKeywordPathUnaffectedWithoutKnowledge(t *testing.T) {
 	// No WithToolKnowledge → the built-in keyword matching still runs.
-	p := NewPlugin(nil, WithToolboxes([]Toolbox{{
+	p := New(nil, WithToolboxes([]Toolbox{{
 		Name:  "utility",
 		Tools: []tool.Tool{newTestTool("get_weather", "weather forecast")},
 	}}))
@@ -199,7 +199,7 @@ func TestWithMaxTools_CapsResults(t *testing.T) {
 	k, err := NewToolKnowledge(emb, WithVectorStore(inmemory.New()))
 	require.NoError(t, err)
 
-	p := NewPlugin(nil,
+	p := New(nil,
 		WithToolKnowledge(k),
 		WithMaxTools(1),
 		WithToolboxes([]Toolbox{{Name: "utility", Tools: []tool.Tool{weather, timeTool}}}),
@@ -210,14 +210,14 @@ func TestWithMaxTools_CapsResults(t *testing.T) {
 	assert.Len(t, res.AdditionalCandidates, 1)
 }
 
-func TestWithFailOpen_FallsBackToKeyword(t *testing.T) {
+func TestWithEmbeddingFailOpen_FallsBackToKeyword(t *testing.T) {
 	weather := newTestTool("get_weather", "weather forecast")
 	k, err := NewToolKnowledge(failingEmbedder{}, WithVectorStore(inmemory.New()))
 	require.NoError(t, err)
 
-	p := NewPlugin(nil,
+	p := New(nil,
 		WithToolKnowledge(k),
-		WithFailOpen(),
+		WithEmbeddingFailOpen(),
 		WithToolboxes([]Toolbox{{Name: "utility", Tools: []tool.Tool{weather}}}),
 	)
 	ctx, _ := ctxWithInvocation()
@@ -233,7 +233,7 @@ func TestWithoutFailOpen_EmbeddingErrorPropagates(t *testing.T) {
 	k, err := NewToolKnowledge(failingEmbedder{}, WithVectorStore(inmemory.New()))
 	require.NoError(t, err)
 
-	p := NewPlugin(nil,
+	p := New(nil,
 		WithToolKnowledge(k),
 		WithToolboxes([]Toolbox{{Name: "utility", Tools: []tool.Tool{weather}}}),
 	)
@@ -286,7 +286,7 @@ func TestEmbeddingSearch_QueryMatchesParameterOnly(t *testing.T) {
 	k, err := NewToolKnowledge(emb, WithVectorStore(inmemory.New()))
 	require.NoError(t, err)
 
-	p := NewPlugin(nil,
+	p := New(nil,
 		WithToolKnowledge(k),
 		WithToolboxes([]Toolbox{{
 			Name:        "crm",
