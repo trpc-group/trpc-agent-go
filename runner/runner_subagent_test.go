@@ -272,7 +272,16 @@ func (a *agentToolParentAgent) Run(ctx context.Context, inv *agent.Invocation) (
 			}},
 		}
 		upstream := event.NewResponseEvent(inv.InvocationID, "parent-agent", rsp)
-		_ = agent.EmitEvent(ctx, inv, ch, upstream)
+		upstream.RequiresCompletion = true
+		if err := agent.EmitEvent(ctx, inv, ch, upstream); err != nil {
+			a.toolErrCh <- err
+			return
+		}
+		completionID := agent.GetAppendEventNoticeKey(upstream.ID)
+		if err := inv.AddNoticeChannelAndWait(ctx, completionID, time.Second); err != nil {
+			a.toolErrCh <- err
+			return
+		}
 
 		// Call the child GraphAgent via AgentTool using the same invocation/session.
 		at := agenttool.NewTool(a.child, agenttool.WithHistoryScope(agenttool.HistoryScopeParentBranch))
