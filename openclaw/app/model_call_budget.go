@@ -396,6 +396,7 @@ func finalModelCallRequest(
 	}
 	clone := *req
 	clone.Tools = nil
+	clone.Stream = false
 	clone.ExtraFields = finalModelCallExtraFields(req.ExtraFields)
 	if config.DisableThinking {
 		clone.ThinkingEnabled = model.BoolPtr(false)

@@ -289,6 +289,9 @@ func TestModelCallBudgetModel_FinalizesOnLastAllowedCall(t *testing.T) {
 	req := &model.Request{
 		Messages: []model.Message{model.NewUserMessage("question")},
 		Tools:    map[string]tool.Tool{"search": nil},
+		GenerationConfig: model.GenerationConfig{
+			Stream: true,
+		},
 		ExtraFields: map[string]any{
 			"parallel_tool_calls": true,
 			"response_format":     "json",
@@ -330,6 +333,8 @@ func TestModelCallBudgetModel_FinalizesOnLastAllowedCall(t *testing.T) {
 	require.Equal(t, map[string]any{
 		"response_format": "json",
 	}, got.ExtraFields)
+	require.False(t, got.Stream)
+	require.True(t, req.Stream)
 }
 
 func TestModelCallBudgetModel_FinalizationDisablesThinking(
@@ -383,6 +388,9 @@ func TestModelCallBudgetModel_FinalizesNearDeadline(t *testing.T) {
 	req := &model.Request{
 		Messages: []model.Message{model.NewUserMessage("question")},
 		Tools:    map[string]tool.Tool{"search": nil},
+		GenerationConfig: model.GenerationConfig{
+			Stream: true,
+		},
 	}
 
 	_, err := wrapped.GenerateContent(ctx, req)
@@ -399,6 +407,8 @@ func TestModelCallBudgetModel_FinalizesNearDeadline(t *testing.T) {
 	)
 	require.Len(t, req.Tools, 1)
 	require.Len(t, req.Messages, 1)
+	require.False(t, got.Stream)
+	require.True(t, req.Stream)
 }
 
 func TestModelCallBudgetIterModel_FinalizesNearDeadline(t *testing.T) {
@@ -420,6 +430,9 @@ func TestModelCallBudgetIterModel_FinalizesNearDeadline(t *testing.T) {
 	req := &model.Request{
 		Messages: []model.Message{model.NewUserMessage("question")},
 		Tools:    map[string]tool.Tool{"search": nil},
+		GenerationConfig: model.GenerationConfig{
+			Stream: true,
+		},
 	}
 
 	_, err := iter.GenerateContentIter(ctx, req)
@@ -436,6 +449,8 @@ func TestModelCallBudgetIterModel_FinalizesNearDeadline(t *testing.T) {
 	)
 	require.Len(t, req.Tools, 1)
 	require.Len(t, req.Messages, 1)
+	require.False(t, got.Stream)
+	require.True(t, req.Stream)
 }
 
 func TestModelCallBudgetModel_DoesNotFinalizeOutsideDeadlineWindow(
