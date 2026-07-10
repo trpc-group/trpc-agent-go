@@ -17,6 +17,13 @@ type Event struct {
 	ToolName  string
 	ToolArgs  string
 	ToolCalls []ToolCall
+	FilterKey string
+}
+type Summary struct {
+	FilterKey string
+	Text      string
+	Version   int
+	UpdateAt  bool
 }
 
 type ToolCall struct {
@@ -29,6 +36,7 @@ type SnapShot struct {
 	SessionId string
 	Events    []Event
 	State     map[string]string
+	Summaries map[string]Summary
 }
 
 //从某一session 转化得到 snapshot
@@ -51,7 +59,7 @@ func FromSession(sess *session.Session) *SnapShot {
 	}
 	// 处理状态
 	snapshot.State = NormalizeState(sess.State)
-
+	snapshot.Summaries = NormalizeSummaries(sess)
 	return snapshot
 }
 
@@ -75,6 +83,7 @@ func NormalizeEvent(index int, evt event.Event) Event {
 		ToolID:    msg.ToolID,
 		ToolName:  msg.ToolName,
 		ToolCalls: NormalizeToolCalls(msg.ToolCalls),
+		FilterKey: evt.FilterKey,
 	}
 }
 
@@ -88,4 +97,27 @@ func NormalizeToolCalls(calls []model.ToolCall) []ToolCall {
 		})
 	}
 	return normalizedToolcalls
+}
+func NormalizeSummaries(sess *session.Session) map[string]Summary {
+	normalziedsum := make(map[string]Summary)
+	if sess == nil {
+		return normalziedsum
+	}
+
+	sess.SummariesMu.RLock()
+	defer sess.SummariesMu.RUnlock()
+
+	for filterKey, summary := range sess.Summaries {
+		if summary == nil {
+			continue
+		}
+		normalziedsum[filterKey] = Summary{
+			FilterKey: filterKey,
+			Text:      summary.Summary,
+			Version:   summary.Boundary.Version,
+			UpdateAt:  !summary.UpdatedAt.IsZero(),
+		}
+	}
+
+	return normalziedsum
 }

@@ -3,7 +3,9 @@ package replaytest
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"os"
+	"strings"
 	"testing"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -14,8 +16,38 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session/replaytest/normalize"
 	"trpc.group/trpc-go/trpc-agent-go/session/replaytest/scenario"
 	"trpc.group/trpc-go/trpc-agent-go/session/sqlite"
+
+	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
+type fakeSummarizer struct{}
+
+func (fakeSummarizer) ShouldSummarize(sess *session.Session) bool {
+	return true
+}
+
+func (fakeSummarizer) Summarize(ctx context.Context, sess *session.Session) (string, error) {
+	var b strings.Builder
+
+	fmt.Fprintf(&b, "summary:%s:", sess.ID)
+	for _, evt := range sess.Events {
+		if evt.Response == nil || len(evt.Response.Choices) == 0 {
+			continue
+		}
+		msg := evt.Response.Choices[0].Message
+		fmt.Fprintf(&b, "[%s]%s;", msg.Role, msg.Content)
+	}
+
+	return b.String(), nil
+}
+
+func (fakeSummarizer) SetPrompt(prompt string) {}
+
+func (fakeSummarizer) SetModel(m model.Model) {}
+
+func (fakeSummarizer) Metadata() map[string]any {
+	return nil
+}
 func TestReplay(t *testing.T) {
 	// 待测所有case
 	cases := []*scenario.Case{
@@ -23,6 +55,8 @@ func TestReplay(t *testing.T) {
 		scenario.Case02_MultiTurn,
 		scenario.Case03_UpdateState,
 		scenario.Case04_ToolCall,
+		scenario.Case06_Summary,
+		scenario.Case06_SummaryFilterKey,
 	}
 
 	for _, tc := range cases {
@@ -38,9 +72,8 @@ func RunCase(t *testing.T, c *scenario.Case) {
 
 	ctx := context.Background()
 
-	baseline := inmemory.NewSessionService()
-	candidate := newSQLiteService(t)
-
+	baseline := inmemory.NewSessionService(inmemory.WithSummarizer(fakeSummarizer{}))
+	candidate := newSQLiteService(t, sqlite.WithSummarizer(fakeSummarizer{}))
 	sessA, err := harness.Run(ctx, baseline, c)
 	if err != nil {
 		t.Fatalf("run svcA: %v", err)
@@ -60,7 +93,7 @@ func RunCase(t *testing.T, c *scenario.Case) {
 	}
 }
 
-func newSQLiteService(t *testing.T) session.Service {
+func newSQLiteService(t *testing.T, opts ...sqlite.ServiceOpt) session.Service {
 	t.Helper()
 
 	f, err := os.CreateTemp("", "trpc-agent-go-replaytest-*.db")
@@ -77,7 +110,7 @@ func newSQLiteService(t *testing.T) session.Service {
 		t.Fatalf("open sqlite db: %v", err)
 	}
 
-	svc, err := sqlite.NewService(db)
+	svc, err := sqlite.NewService(db, opts...)
 	if err != nil {
 		_ = db.Close()
 		_ = os.Remove(f.Name())

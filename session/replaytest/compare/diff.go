@@ -44,6 +44,9 @@ func MakeDiff(a, b *normalize.SnapShot) map[string]string {
 			diff[fmt.Sprintf("event_%d", i)] = fmt.Sprintf("a: %+v, b: %+v", a.Events[i], b.Events[i])
 		}
 	}
+	if !reflect.DeepEqual(a.Summaries, b.Summaries) {
+		diff["summaries"] = fmt.Sprintf("a: %+v, b: %+v", a.Summaries, b.Summaries)
+	}
 
 	return diff
 }

@@ -57,3 +57,24 @@ var Case04_ToolCall = &Case{
 		{Kind: OpAppendEvent, Role: "assistant", Content: "北京今天晴。"},
 	},
 }
+var Case06_Summary = &Case{
+	Name: "case06_summary",
+	Ops: []Op{
+		{Kind: OpCreateSession},
+		{Kind: OpAppendEvent, Role: "user", Content: "用户喜欢简洁中文回答"},
+		{Kind: OpAppendEvent, Role: "assistant", Content: "好的，后续会尽量简洁。"},
+		{Kind: OpUpdateSummary, FilterKey: "", Force: true},
+	},
+}
+var Case06_SummaryFilterKey = &Case{
+	Name: "case06_summary_filter_key",
+	Ops: []Op{
+		{Kind: OpCreateSession},
+		{Kind: OpAppendEvent, Role: "user", Content: "查一下北京天气", FilterKey: "weather"},
+		{Kind: OpAppendToolCall, ToolID: "call_weather_2", ToolName: "weather_query", ToolArgs: `{"city":"北京"}`, FilterKey: "weather"},
+		{Kind: OpAppendToolResponse, ToolID: "call_weather_2", ToolName: "weather_query", Content: `{"weather":"晴"}`, FilterKey: "weather"},
+		{Kind: OpAppendEvent, Role: "assistant", Content: "北京今天晴。", FilterKey: "weather"},
+		{Kind: OpAppendEvent, Role: "user", Content: "我喜欢 Go", FilterKey: "profile"},
+		{Kind: OpUpdateSummary, FilterKey: "weather", Force: true},
+	},
+}

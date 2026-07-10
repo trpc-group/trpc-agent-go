@@ -79,10 +79,19 @@ func Run(
 			if err = svc.AppendEvent(ctx, sess, evt); err != nil {
 				return nil, fmt.Errorf("op[%d] append tool response: %w", i, err)
 			}
-			
+
 		case scenario.OpUpdateSummary:
-		case scenario.OpCreateSummary:
-			
+			if sess == nil {
+				return nil, fmt.Errorf("op[%d] update summary before create session", i)
+			}
+			if err = svc.CreateSessionSummary(ctx, sess, op.FilterKey, op.Force); err != nil {
+				return nil, fmt.Errorf("op[%d] update summary: %w", i, err)
+			}
+			// 修改了session 需要重新获取session
+			sess, err = svc.GetSession(ctx, key)
+			if err != nil {
+				return nil, fmt.Errorf("op[%d] get session after summary: %w", i, err)
+			}
 		default:
 			return nil, fmt.Errorf("op[%d] unsupported kind %q", i, op.Kind)
 		}
@@ -95,12 +104,18 @@ func Run(
 
 // 根据不同角色 构建不同事件
 func buildEvent(op scenario.Op) (*event.Event, error) {
+
+	var evt *event.Event
 	switch op.Role {
 	case "user":
-		return fixture.NewUserEvent(op.Content), nil
+		evt = fixture.NewUserEvent(op.Content)
 	case "assistant":
-		return fixture.NewAssistantEvent(op.Content), nil
+		evt = fixture.NewAssistantEvent(op.Content)
+
 	default:
 		return nil, fmt.Errorf("unsupported role %q", op.Role)
 	}
+
+	evt.FilterKey = op.FilterKey
+	return evt, nil
 }
