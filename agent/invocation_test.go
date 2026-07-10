@@ -1652,3 +1652,38 @@ func TestWithUserMessageRewriter(t *testing.T) {
 		model.NewUserMessage("rewritten"),
 	}, msgs)
 }
+
+// TestNotifyCompletion_UninitializedNoticeMu tests the fallback initialization
+// of noticeMu when Invocation is created directly without NewInvocation.
+func TestNotifyCompletion_UninitializedNoticeMu(t *testing.T) {
+	inv := &Invocation{InvocationID: "test", AgentName: "test"}
+
+	err := inv.NotifyCompletion(context.Background(), "test-key")
+	require.NoError(t, err)
+	require.NotNil(t, inv.noticeMu)
+	require.NotNil(t, inv.noticeChannels)
+}
+
+// TestCleanupNotice_UninitializedNoticeMu tests the fallback initialization
+// of noticeMu when CleanupNotice is called on an Invocation with uninitialized noticeMu.
+func TestCleanupNotice_UninitializedNoticeMu(t *testing.T) {
+	inv := &Invocation{InvocationID: "test", AgentName: "test"}
+
+	inv.CleanupNotice(context.Background())
+	require.NotNil(t, inv.noticeMu)
+}
+
+// TestNotifyCompletion_NilInvocation tests the nil check in NotifyCompletion.
+func TestNotifyCompletion_NilInvocation(t *testing.T) {
+	var inv *Invocation
+	err := inv.NotifyCompletion(context.Background(), "test-key")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invocation is nil")
+}
+
+// TestCleanupNotice_NilInvocation tests the nil check in CleanupNotice.
+func TestCleanupNotice_NilInvocation(t *testing.T) {
+	var inv *Invocation
+	// Should not panic
+	inv.CleanupNotice(context.Background())
+}

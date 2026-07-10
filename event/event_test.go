@@ -1044,3 +1044,22 @@ func TestEmitEventWithTimeout_ClosedChannel(t *testing.T) {
 	// but the important thing is it should not panic
 	_ = err // We only care that it doesn't panic
 }
+
+// TestEmitEventWithTimeout_NoTimeout_BlockingSendClosedChannel tests the recover() logic
+// at line 504: EmitWithoutTimeout path with blocking send to closed channel.
+func TestEmitEventWithTimeout_NoTimeout_BlockingSendClosedChannel(t *testing.T) {
+	ch := make(chan *Event) // unbuffered, tryEmitReadyEvent will return false
+
+	evt := New("inv-blocking-closed", "author")
+
+	// Close channel in a goroutine so tryEmitReadyEvent returns false first,
+	// then the blocking send select will hit the closed channel
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		close(ch)
+	}()
+
+	// This should trigger the blocking send path (line 508-521) and recover from panic
+	err := EmitEventWithTimeout(context.Background(), ch, evt, EmitWithoutTimeout)
+	_ = err // We only care that it doesn't panic
+}
