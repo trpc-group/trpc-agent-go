@@ -1,0 +1,3971 @@
+
+<!doctype html>
+<html lang="zh" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+      
+      
+        <link rel="canonical" href="https://trpc-group.github.io/trpc-agent-go/zh/blog/codeexecutor/">
+      
+      
+        <link rel="prev" href="../promptcache/">
+      
+      
+        <link rel="next" href="../graphagent/">
+      
+      
+      <link rel="icon" href="../../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.17">
+    
+    
+      
+        <title>从对话到执行：tRPC-Agent-Go Code Executor 如何为 Agent 构建可控运行环境 - tRPC-Agent-Go</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.7e37652d.min.css">
+      
+        
+        <link rel="stylesheet" href="../../../assets/stylesheets/palette.06af60db.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+  
+
+
+  
+  
+
+<script id="__analytics">function __md_analytics(){function e(){dataLayer.push(arguments)}window.dataLayer=window.dataLayer||[],e("js",new Date),e("config",""),document.addEventListener("DOMContentLoaded",(function(){document.forms.search&&document.forms.search.query.addEventListener("blur",(function(){this.value&&e("event","search",{search_term:this.value})}));document$.subscribe((function(){var t=document.forms.feedback;if(void 0!==t)for(var a of t.querySelectorAll("[type=submit]"))a.addEventListener("click",(function(a){a.preventDefault();var n=document.location.pathname,d=this.getAttribute("data-md-value");e("event","feedback",{page:n,data:d}),t.firstElementChild.disabled=!0;var r=t.querySelector(".md-feedback__note [data-md-value='"+d+"']");r&&(r.hidden=!1)})),t.hidden=!1})),location$.subscribe((function(t){e("config","",{page_path:t.pathname})}))}));var t=document.createElement("script");t.async=!0,t.src="https://www.googletagmanager.com/gtag/js?id=",document.getElementById("__analytics").insertAdjacentElement("afterEnd",t)}</script>
+  
+    <script>"undefined"!=typeof __md_analytics&&__md_analytics()</script>
+  
+
+    
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#trpc-agent-go-code-executor-agent" class="md-skip">
+          跳转至
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="页眉">
+    <a href="../../" title="tRPC-Agent-Go" class="md-header__button md-logo" aria-label="tRPC-Agent-Go" data-md-component="logo">
+      
+  <img src="../../../assets/img/logo.png" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            tRPC-Agent-Go
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              从对话到执行：tRPC-Agent-Go Code Executor 如何为 Agent 构建可控运行环境
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+      <div class="md-header__option">
+  <div class="md-select">
+    
+    <button class="md-header__button md-icon" aria-label="选择当前语言">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m12.87 15.07-2.54-2.51.03-.03A17.5 17.5 0 0 0 14.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2zm-2.62 7 1.62-4.33L19.12 17z"/></svg>
+    </button>
+    <div class="md-select__inner">
+      <ul class="md-select__list">
+        
+          <li class="md-select__item">
+            <a href="../../../blog/codeexecutor/" hreflang="en" class="md-select__link">
+              English
+            </a>
+          </li>
+        
+          <li class="md-select__item">
+            <a href="./" hreflang="zh" class="md-select__link">
+              中文
+            </a>
+          </li>
+        
+      </ul>
+    </div>
+  </div>
+</div>
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="搜索" placeholder="搜索" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="查找">
+        
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="分享" aria-label="分享" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
+        <button type="reset" class="md-search__icon md-icon" title="清空当前内容" aria-label="清空当前内容" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            正在初始化搜索引擎
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/trpc-group/trpc-agent-go" title="前往仓库" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.0.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path fill="currentColor" d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    trpc-group/trpc-agent-go
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="标签" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../" class="md-tabs__link">
+        
+  
+  
+    
+  
+  概览
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../agent/" class="md-tabs__link">
+          
+  
+  
+  组件
+
+        </a>
+      </li>
+    
+  
+
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../gateway/" class="md-tabs__link">
+          
+  
+  
+  服务
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../observability/" class="md-tabs__link">
+          
+  
+  
+  可观测
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../ecosystem/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  生态
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../trpcagentgo/" class="md-tabs__link">
+          
+  
+  
+  博客
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="导航栏" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../../" title="tRPC-Agent-Go" class="md-nav__button md-logo" aria-label="tRPC-Agent-Go" data-md-component="logo">
+      
+  <img src="../../../assets/img/logo.png" alt="logo">
+
+    </a>
+    tRPC-Agent-Go
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/trpc-group/trpc-agent-go" title="前往仓库" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.0.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path fill="currentColor" d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    trpc-group/trpc-agent-go
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    概览
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    组件
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            组件
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_1" >
+        
+          
+          <label class="md-nav__link" for="__nav_2_1" id="__nav_2_1_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Agent
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_1_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_1">
+            <span class="md-nav__icon md-icon"></span>
+            Agent
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agent/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Agent
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../goal/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Goal 扩展
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../multiagent/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Multi Agent
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../dynamic-workflow/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    动态工作流
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../taskrun/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Task Run 运行时
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../team/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Team
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../graph/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Graph Agent
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../custom-agent/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    自定义 Agent
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../dify/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Dify Agent
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../claudecode/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Claude Code Agent
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../codex/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Codex Agent
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../runner/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Runner
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../codeexecutor/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Code Executor
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../codeact/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    CodeAct
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../error-handling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    错误处理
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../model/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Model
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../prompt/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Prompt Template
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../callbacks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Callbacks
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../plugin/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Plugins
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../memory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Memory
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../artifact/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Artifact
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../skill/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Skill
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../evolution/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Evolution
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tool/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Tool
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_15" >
+        
+          
+          <label class="md-nav__link" for="__nav_2_15" id="__nav_2_15_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Session
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_15_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_15">
+            <span class="md-nav__icon md-icon"></span>
+            Session
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Overview
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/summary/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Session Summary
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/inmemory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Memory Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/sqlite/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    SQLite Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/redis/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Redis Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/mysql/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    MySQL Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/tdsql/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    TDSQL Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/postgres/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    PostgreSQL Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/pgvector/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    PGVector Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/clickhouse/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    ClickHouse Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/mongodb/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    MongoDB Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_16" >
+        
+          
+          <label class="md-nav__link" for="__nav_2_16" id="__nav_2_16_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Knowledge
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_16_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_16">
+            <span class="md-nav__icon md-icon"></span>
+            Knowledge
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    概述
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/embedder/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Embedder
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/reranker/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Reranker
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/query-enhancer/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Query Enhancer
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/source/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    数据源
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/code-rag/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    代码知识库（Code RAG, Beta）
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/extractor/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    内容提取器
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/filter/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    过滤器
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/management/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    知识库管理
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/ocr/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    OCR
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_16_11" >
+        
+          
+          <label class="md-nav__link" for="__nav_2_16_11" id="__nav_2_16_11_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    向量存储
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_2_16_11_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_16_11">
+            <span class="md-nav__icon md-icon"></span>
+            向量存储
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/vectorstore/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    概述
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/vectorstore/inmemory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Memory
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/vectorstore/pgvector/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    PGVector
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/vectorstore/tcvector/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    TcVector
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/vectorstore/elasticsearch/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Elasticsearch
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/vectorstore/qdrant/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Qdrant
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/vectorstore/milvus/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Milvus
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    故障排除
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../planner/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Planner
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../event/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Event
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../evaluation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Evaluation
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../promptiter/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    PromptIter
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    服务
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            服务
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../gateway/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Gateway
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../trpcagent/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    tRPC-Agent API
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3_3" id="__nav_3_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    AG-UI
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_3">
+            <span class="md-nav__icon md-icon"></span>
+            AG-UI
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agui/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    总览
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agui/chat/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    实时对话路由
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agui/history/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    消息快照路由
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agui/cancel/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    取消路由
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../a2a/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    A2A
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../a2ui/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    A2UI
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../openclaw-runtime/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    OpenClaw Runtime
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    可观测
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            可观测
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../observability/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    概览
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../telemetry-multimodal/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    多模态遥测
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ecosystem/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    生态
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    博客
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            博客
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../trpcagentgo/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    构建智能 AI 应用的 Go 语言 Agent 框架
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../summary/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    长任务 Agent 上下文管理的设计与评测
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../observability/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    看见 Agent 运行时：tRPC-Agent-Go 可观测的设计与取舍
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../promptcache/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    降低 Agent Token 成本：tRPC-Agent-Go 的 Prompt Cache 工程实践
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    从对话到执行：tRPC-Agent-Go Code Executor 如何为 Agent 构建可控运行环境
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    从对话到执行：tRPC-Agent-Go Code Executor 如何为 Agent 构建可控运行环境
+    
+  </span>
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="目录">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      目录
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      一、从文本生成到代码执行
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#code-executor" class="md-nav__link">
+    <span class="md-ellipsis">
+      二、Code Executor 的核心：从代码块到执行链路
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#workspace-engine" class="md-nav__link">
+    <span class="md-ellipsis">
+      三、Workspace 与 Engine：执行上下文和后端抽象
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="三、Workspace 与 Engine：执行上下文和后端抽象">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#workspace" class="md-nav__link">
+    <span class="md-ellipsis">
+      Workspace：把执行从“命令”变成“上下文”
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#engine" class="md-nav__link">
+    <span class="md-ellipsis">
+      Engine：统一后端，而不是统一安全等级
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#local-sandbox" class="md-nav__link">
+    <span class="md-ellipsis">
+      四、五类执行后端：从 local 到 sandbox
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="四、五类执行后端：从 local 到 sandbox">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#local" class="md-nav__link">
+    <span class="md-ellipsis">
+      local：最低成本，也最不应该被误用
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#container" class="md-nav__link">
+    <span class="md-ellipsis">
+      container：工程部署的常用中间层
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#jupyter" class="md-nav__link">
+    <span class="md-ellipsis">
+      jupyter：为交互式计算而生
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#e2b" class="md-nav__link">
+    <span class="md-ellipsis">
+      e2b：把执行环境交给外部提供方
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sandbox-os" class="md-nav__link">
+    <span class="md-ellipsis">
+      sandbox：本地 OS 级安全边界
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sandbox" class="md-nav__link">
+    <span class="md-ellipsis">
+      五、以 Sandbox 为例：把安全边界落到运行时
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="五、以 Sandbox 为例：把安全边界落到运行时">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#1" class="md-nav__link">
+    <span class="md-ellipsis">
+      1. 文件系统：哪些可读，哪些可写，哪些禁止访问
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2" class="md-nav__link">
+    <span class="md-ellipsis">
+      2. 网络：默认限制，显式开启
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3" class="md-nav__link">
+    <span class="md-ellipsis">
+      3. 环境变量：不要无意识继承宿主秘密
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#4-os" class="md-nav__link">
+    <span class="md-ellipsis">
+      4. 进程与系统能力：用 OS 原语约束子进程
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#5-claude-codecodexopenai-agents-sdk" class="md-nav__link">
+    <span class="md-ellipsis">
+      5. 和 Claude Code、Codex、OpenAI Agents SDK 的对照
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      六、工程取舍与后端选择
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="六、工程取舍与后端选择">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#sandbox_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      取舍一：不直接绑定某一个 sandbox
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      取舍二：能力必须显式声明
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      取舍三：命令策略不能只做字符串白名单
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      取舍四：开发便利和安全边界要清楚命名
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      如何选择后端
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#code-executor_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      七、总结：Code Executor 的本质
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_7" class="md-nav__link">
+    <span class="md-ellipsis">
+      八、参考资料
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../graphagent/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    GraphAgent 让 AI 工作流与 Agent 无缝融合
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../agui/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    快速构建基于 AG-UI 的 Agent 服务
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../skill/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Anthropic Agent Skills 规范的 Go 原生实现
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../evaluation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    AI Agent 自动化评估范式与工程实践全解析
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../llmverifier/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    AI Agent 高质量稳定性提升方法
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../openclaw/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    打造企业级安全可控的 OpenClaw Runtime
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../promptiter/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    AI Agent 提示词自动迭代与工程实践全解析
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../multiagent-boundaries/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    把工作放到合适边界：tRPC-Agent-Go Multi-Agent 设计与选型
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="目录">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      目录
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      一、从文本生成到代码执行
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#code-executor" class="md-nav__link">
+    <span class="md-ellipsis">
+      二、Code Executor 的核心：从代码块到执行链路
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#workspace-engine" class="md-nav__link">
+    <span class="md-ellipsis">
+      三、Workspace 与 Engine：执行上下文和后端抽象
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="三、Workspace 与 Engine：执行上下文和后端抽象">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#workspace" class="md-nav__link">
+    <span class="md-ellipsis">
+      Workspace：把执行从“命令”变成“上下文”
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#engine" class="md-nav__link">
+    <span class="md-ellipsis">
+      Engine：统一后端，而不是统一安全等级
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#local-sandbox" class="md-nav__link">
+    <span class="md-ellipsis">
+      四、五类执行后端：从 local 到 sandbox
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="四、五类执行后端：从 local 到 sandbox">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#local" class="md-nav__link">
+    <span class="md-ellipsis">
+      local：最低成本，也最不应该被误用
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#container" class="md-nav__link">
+    <span class="md-ellipsis">
+      container：工程部署的常用中间层
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#jupyter" class="md-nav__link">
+    <span class="md-ellipsis">
+      jupyter：为交互式计算而生
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#e2b" class="md-nav__link">
+    <span class="md-ellipsis">
+      e2b：把执行环境交给外部提供方
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sandbox-os" class="md-nav__link">
+    <span class="md-ellipsis">
+      sandbox：本地 OS 级安全边界
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#sandbox" class="md-nav__link">
+    <span class="md-ellipsis">
+      五、以 Sandbox 为例：把安全边界落到运行时
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="五、以 Sandbox 为例：把安全边界落到运行时">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#1" class="md-nav__link">
+    <span class="md-ellipsis">
+      1. 文件系统：哪些可读，哪些可写，哪些禁止访问
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2" class="md-nav__link">
+    <span class="md-ellipsis">
+      2. 网络：默认限制，显式开启
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3" class="md-nav__link">
+    <span class="md-ellipsis">
+      3. 环境变量：不要无意识继承宿主秘密
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#4-os" class="md-nav__link">
+    <span class="md-ellipsis">
+      4. 进程与系统能力：用 OS 原语约束子进程
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#5-claude-codecodexopenai-agents-sdk" class="md-nav__link">
+    <span class="md-ellipsis">
+      5. 和 Claude Code、Codex、OpenAI Agents SDK 的对照
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      六、工程取舍与后端选择
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="六、工程取舍与后端选择">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#sandbox_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      取舍一：不直接绑定某一个 sandbox
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      取舍二：能力必须显式声明
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      取舍三：命令策略不能只做字符串白名单
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      取舍四：开发便利和安全边界要清楚命名
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      如何选择后端
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#code-executor_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      七、总结：Code Executor 的本质
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_7" class="md-nav__link">
+    <span class="md-ellipsis">
+      八、参考资料
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="https://github.com/trpc-group/trpc-agent-go/edit/main/docs/mkdocs/zh/blog/codeexecutor.md" title="编辑此页" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+    
+      
+    
+    <a href="https://github.com/trpc-group/trpc-agent-go/raw/main/docs/mkdocs/zh/blog/codeexecutor.md" title="查看本页的源代码" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M17 18c.56 0 1 .44 1 1s-.44 1-1 1-1-.44-1-1 .44-1 1-1m0-3c-2.73 0-5.06 1.66-6 4 .94 2.34 3.27 4 6 4s5.06-1.66 6-4c-.94-2.34-3.27-4-6-4m0 6.5a2.5 2.5 0 0 1-2.5-2.5 2.5 2.5 0 0 1 2.5-2.5 2.5 2.5 0 0 1 2.5 2.5 2.5 2.5 0 0 1-2.5 2.5M9.27 20H6V4h7v5h5v4.07c.7.08 1.36.25 2 .49V8l-6-6H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h4.5a8.2 8.2 0 0 1-1.23-2"/></svg>
+    </a>
+  
+
+
+<h1 id="trpc-agent-go-code-executor-agent">从对话到执行：tRPC-Agent-Go Code Executor 如何为 Agent 构建可控运行环境</h1>
+<blockquote>
+<p>本文聚焦 tRPC-Agent-Go 的 Code Executor：它不是简单地把模型输出的代码块跑一下，而是把 Agent 的文件、命令、workspace、执行后端和安全边界组织成一条可描述、可替换、可治理的执行链路。</p>
+</blockquote>
+<p>大模型应用从 Chat 走向 Agent 后，模型生成的内容开始进入工具调用、文件处理和代码执行链路。此时，框架面对的不再只是 prompt 和 response 的组织问题，还要管理执行环境、文件流转、后端差异和安全边界。</p>
+<p>这就是 Code Executor 要解决的问题。</p>
+<p>对一个生产级 Agent 框架来说，代码执行至少涉及三件事：执行上下文如何组织，文件和产物如何流转；执行后端如何抽象，才能同时接入本地、容器、Jupyter、远程沙箱和本地 OS 级沙箱；安全边界如何落地，才能约束命令可访问的目录、环境变量和网络。</p>
+<p>tRPC-Agent-Go 的 Code Executor 设计，正是围绕这条执行链路展开的。本文会沿着这条链路展开：先从 Agent 代码执行的风险说起，再看 Code Executor、Workspace、Engine，以及 local、container、jupyter、e2b、sandbox 五类执行后端的设计取舍，最后落到后端选型建议和参考资料。</p>
+<h2 id="_1">一、从文本生成到代码执行</h2>
+<p>先看 Agent 为什么需要执行代码。</p>
+<p>很多任务不能只依赖模型直接推理完成。用户可能让 Agent 分析一个 CSV，生成一张图，跑一个单元测试，检查一个仓库里的 API 调用关系，批量处理一组文档，或者把中间结果保存成 Markdown、JSON、PDF、图片等制品。这些任务的答案不是从模型参数中直接生成的，而是依赖运行时计算、文件系统和外部工具。</p>
+<p>一旦 Agent 进入执行阶段，问题性质就变了。</p>
+<p>在文本生成里，模型面对的是上下文窗口。框架主要关心 prompt 如何组织、工具 schema 如何暴露、模型响应如何解析。执行代码时，模型面对的是一个操作系统视角的世界：目录、文件、进程、环境变量、网络、包管理器、临时文件、输出文件、退出码和超时。</p>
+<p>这带来四类风险。</p>
+<p>第一，文件系统风险。模型生成的代码可能读取宿主机上的配置文件、SSH key、云厂商凭证，也可能把不该修改的文件覆盖掉。即使模型没有恶意，错误路径、通配符、递归删除、中间脚本也会造成真实破坏。</p>
+<p>第二，环境变量风险。许多服务把 token、secret、endpoint、proxy、debug 开关放在环境变量里。如果执行命令默认继承宿主进程环境，模型生成的命令就可能间接看到这些变量，甚至把它们写进日志或输出文件。</p>
+<p>第三，网络风险。代码执行通常会自然使用网络：安装依赖、访问 API、下载数据、推送仓库、打开端口。网络本身不是坏事，但在 Agent 场景里必须回答“谁允许它访问哪里”。否则，一个工具调用就可能从本地计算变成外部副作用。</p>
+<p>第四，状态风险。Agent 往往不是一次性脚本。第一轮可能生成中间数据，第二轮继续分析，第三轮把结果保存成 artifact（制品）。状态如果完全不保留，用户体验很差；状态如果无边界保留，又会带来数据串扰、脏环境和难以解释的问题。</p>
+<p>所以，Agent 需要的不是简单的：</p>
+<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1"></a>model output -&gt; sh -c -&gt; stdout
+</span></code></pre></div></td></tr></table></div>
+<p>而是：</p>
+<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-1-1">1</a></span>
+<span class="normal"><a href="#__codelineno-1-2">2</a></span>
+<span class="normal"><a href="#__codelineno-1-3">3</a></span>
+<span class="normal"><a href="#__codelineno-1-4">4</a></span>
+<span class="normal"><a href="#__codelineno-1-5">5</a></span>
+<span class="normal"><a href="#__codelineno-1-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1"></a>model/tool intent
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2"></a>-&gt; controlled workspace
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3"></a>-&gt; explicit inputs
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4"></a>-&gt; selected execution backend
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5"></a>-&gt; policy-bounded program run
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6"></a>-&gt; collected outputs / artifacts
+</span></code></pre></div></td></tr></table></div>
+<p>这条链路里，真正重要的是“可控”。能执行只是第一步；知道在哪里执行、能访问和修改什么、产物去哪、后端能力如何声明，才是框架设计的核心。</p>
+<h2 id="code-executor">二、Code Executor 的核心：从代码块到执行链路</h2>
+<p>tRPC-Agent-Go 的 <code>codeexecutor.CodeExecutor</code> 对外看起来很简单：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-2-1">1</a></span>
+<span class="normal"><a href="#__codelineno-2-2">2</a></span>
+<span class="normal"><a href="#__codelineno-2-3">3</a></span>
+<span class="normal"><a href="#__codelineno-2-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">CodeExecutor</span><span class="w"> </span><span class="kd">interface</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2"></a><span class="w">    </span><span class="nx">ExecuteCode</span><span class="p">(</span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">CodeExecutionInput</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">CodeExecutionResult</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3"></a><span class="w">    </span><span class="nx">CodeBlockDelimiter</span><span class="p">()</span><span class="w"> </span><span class="nx">CodeBlockDelimiter</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<p>这个接口是 Code Executor 最外层的使用入口：传入代码块，返回执行结果和输出文件。早期理解 Code Executor 时，很容易停在这层 API 上，把它看成“围栏代码块执行器”。</p>
+<p>但在 Agent 框架里，Code Executor 承担的角色比这个更大。它至少服务三条执行路径。</p>
+<p>第一条路径是模型最终回复中的围栏代码块自动执行。框架可以扫描 assistant response 中的 fenced code block，把代码块交给 <code>ExecuteCode</code> 执行，再把结果回填。这条路径适合演示“模型生成代码并运行”的基础能力。</p>
+<p>第二条路径是显式工具调用，也就是 <code>workspace_exec</code>。这是更适合生产 Agent 的路径：模型不是在最终回复里顺手写一段代码，而是在工具调用阶段明确请求“在当前 workspace 里执行某个命令”。这样执行行为会进入工具调用链路，有参数、有结果、有错误、有超时，也更容易和权限、审计、观测结合。</p>
+<p>第三条路径是应用代码和 Skills 对 workspace 的访问。<code>codeexecutor/workspaceio</code> 提供了面向业务回调的 workspace 访问封装；Skills 脚本也可以被写入 workspace 并在其中执行。也就是说，Code Executor 同时服务模型工具调用、框架内部流程和业务扩展，是访问执行环境的共同底座。</p>
+<p>这里有两个常见但重要的区分。</p>
+<p>第一，<code>llmagent.WithCodeExecutor(...)</code> 和围栏代码自动执行不是同一个开关。<code>llmagent.WithCodeExecutor(...)</code> 配置的是 Agent 默认执行器，供 <code>workspace_exec</code>、Skills、workspace I/O 等路径使用。如果某次 <code>runner.Run(...)</code> 需要临时换执行环境，还可以通过 <code>agent.WithCodeExecutor(...)</code> 作为 <code>RunOption</code> 覆盖本次运行的默认执行器。是否扫描 assistant 最终回复中的围栏代码块，则由 <code>WithEnableCodeExecutionResponseProcessor(enable bool)</code> 单独控制。需要注意的是，这个响应处理器默认开启；因此显式配置 Code Executor 后，如果不希望最终回复里的 fenced code block 被自动执行，应显式设置为 <code>false</code>。</p>
+<p>也就是说，自动执行回复里的代码块，需要同时满足以下全部条件：</p>
+<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-3-1">1</a></span>
+<span class="normal"><a href="#__codelineno-3-2">2</a></span>
+<span class="normal"><a href="#__codelineno-3-3">3</a></span>
+<span class="normal"><a href="#__codelineno-3-4">4</a></span>
+<span class="normal"><a href="#__codelineno-3-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1"></a>有可用 CodeExecutor
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2"></a>AND
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3"></a>EnableCodeExecutionResponseProcessor 开启
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4"></a>AND
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5"></a>去掉首尾空白后的最终回复恰好是一个可执行的围栏代码块
+</span></code></pre></div></td></tr></table></div>
+<p>在更强调安全和可解释性的生产场景里，通常会让执行都走显式工具调用路径：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-4-1">1</a></span>
+<span class="normal"><a href="#__codelineno-4-2">2</a></span>
+<span class="normal"><a href="#__codelineno-4-3">3</a></span>
+<span class="normal"><a href="#__codelineno-4-4">4</a></span>
+<span class="normal"><a href="#__codelineno-4-5">5</a></span>
+<span class="normal"><a href="#__codelineno-4-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1"></a><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2"></a><span class="w">    </span><span class="s">&quot;demo&quot;</span><span class="p">,</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">m</span><span class="p">),</span>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithCodeExecutor</span><span class="p">(</span><span class="nx">sandbox</span><span class="p">.</span><span class="nx">New</span><span class="p">()),</span>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithEnableCodeExecutionResponseProcessor</span><span class="p">(</span><span class="kc">false</span><span class="p">),</span>
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>这样做会保留 Code Executor 作为工具和 workspace 的运行时能力，同时关闭最终回复扫描。这也是理解 tRPC-Agent-Go Code Executor 的关键：它承担的是执行链路的运行时能力，不只是代码块处理。</p>
+<p>为了支撑这些路径，框架必须先把“执行”放进一个稳定上下文里，再用统一接口接入不同后端。这就是 Workspace 与 Engine 要解决的问题。</p>
+<h2 id="workspace-engine">三、Workspace 与 Engine：执行上下文和后端抽象</h2>
+<h3 id="workspace">Workspace：把执行从“命令”变成“上下文”</h3>
+<p>如果只运行一条命令，似乎传入 <code>cmd</code>、<code>args</code>、<code>env</code>、<code>cwd</code> 就够了。但 Agent 的执行通常不是孤立命令，而是围绕一组文件持续展开。</p>
+<p>比如用户上传了一个 <code>report.pdf</code>，Agent 需要先把它放进执行环境；接着运行 Python 抽取内容；再把中间 JSON 放到工作目录；最后生成 <code>summary.md</code> 和 <code>chart.png</code>。下一轮用户又问“把刚才那张图换成柱状图”，Agent 最好能继续基于上一次的文件状态工作。</p>
+<p>这时，Workspace 就不再是一个临时目录，而是 Agent 执行过程中的状态容器和文件边界。</p>
+<p>tRPC-Agent-Go 的 workspace 约定了几个关键目录：<code>work/inputs/</code> 放执行前准备好的输入文件，例如用户上传文件或 artifact 引用物化后的文件；<code>work/</code> 是主要工作目录，用来保存中间文件、脚本和分析过程数据；<code>out/</code> 放最终结果，方便后续读取或保存为产物；<code>runs/</code> 则用于保存日志、辅助文件和单次运行的过程数据。</p>
+<p>这个目录约定有两个价值。</p>
+<p>第一，它让模型和工具有稳定协作语言。模型不需要知道文件 staging 的底层过程，只要知道“用户输入通常在 <code>work/inputs/</code>，中间处理放在 <code>work/</code>，最终结果写到 <code>out/</code>”。稳定路径降低了 prompt 和工具实现之间的耦合。</p>
+<p>第二，它让框架能把文件输入输出纳入生命周期管理。外部文件可以通过消息里的 file data、file path 或 <code>artifact://...</code> 引用进入 workspace；执行结束后，框架可以按 pattern collect 输出文件，也可以把重要产物保存到 artifact service。</p>
+<p>这里有一个实践上很重要的边界：即使当前运行复用了同一个物理 workspace，也不应理解成框架承诺永远复用旧目录。</p>
+<p>在同一个物理 workspace 中，<code>work/</code>、<code>out/</code> 里的文件通常还在；但如果后续换成新的 workspace，旧的 <code>out/**</code> 和 <code>work/**</code> 不应被假设自动恢复。需要跨新 workspace 稳定复用的文件，应该保存为 artifact，或者由业务层自己管理持久化。</p>
+<p>这也是 workspace 和 artifact 的分工：</p>
+<ul>
+<li>Workspace 负责执行期状态，让一轮或一个会话中的工具、脚本、callback 能围绕同一组文件协作。</li>
+<li>Artifact 负责稳定制品，让跨 workspace、跨会话或长期存储的文件有可寻址引用。</li>
+</ul>
+<h3 id="engine">Engine：统一后端，而不是统一安全等级</h3>
+<p>有了 Workspace，还需要回答另一个问题：这个 workspace 到底由谁管理，文件怎么进去，程序由谁运行？这三件事在一次任务里经常同时出现，但它们的变化原因不同。把生命周期、文件系统和程序运行拆开，才能让不同后端复用同一套上层工具链。</p>
+<p>tRPC-Agent-Go 把这部分拆成了三层接口：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-5-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-5-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-5-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-5-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-5-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-5-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-5-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-5-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-5-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-5-10">10</a></span>
+<span class="normal"><a href="#__codelineno-5-11">11</a></span>
+<span class="normal"><a href="#__codelineno-5-12">12</a></span>
+<span class="normal"><a href="#__codelineno-5-13">13</a></span>
+<span class="normal"><a href="#__codelineno-5-14">14</a></span>
+<span class="normal"><a href="#__codelineno-5-15">15</a></span>
+<span class="normal"><a href="#__codelineno-5-16">16</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">WorkspaceManager</span><span class="w"> </span><span class="kd">interface</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2"></a><span class="w">    </span><span class="nx">CreateWorkspace</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">execID</span><span class="w"> </span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="nx">pol</span><span class="w"> </span><span class="nx">WorkspacePolicy</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">Workspace</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3"></a><span class="w">    </span><span class="nx">Cleanup</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">ws</span><span class="w"> </span><span class="nx">Workspace</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4"></a><span class="p">}</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5"></a>
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6"></a><span class="kd">type</span><span class="w"> </span><span class="nx">WorkspaceFS</span><span class="w"> </span><span class="kd">interface</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7"></a><span class="w">    </span><span class="nx">PutFiles</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">ws</span><span class="w"> </span><span class="nx">Workspace</span><span class="p">,</span><span class="w"> </span><span class="nx">files</span><span class="w"> </span><span class="p">[]</span><span class="nx">PutFile</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
+</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8"></a><span class="w">    </span><span class="nx">StageDirectory</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">ws</span><span class="w"> </span><span class="nx">Workspace</span><span class="p">,</span><span class="w"> </span><span class="nx">src</span><span class="p">,</span><span class="w"> </span><span class="nx">to</span><span class="w"> </span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="nx">opt</span><span class="w"> </span><span class="nx">StageOptions</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
+</span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9"></a><span class="w">    </span><span class="nx">Collect</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">ws</span><span class="w"> </span><span class="nx">Workspace</span><span class="p">,</span><span class="w"> </span><span class="nx">patterns</span><span class="w"> </span><span class="p">[]</span><span class="kt">string</span><span class="p">)</span><span class="w"> </span><span class="p">([]</span><span class="nx">File</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</span><span id="__span-5-10"><a id="__codelineno-5-10" name="__codelineno-5-10"></a><span class="w">    </span><span class="nx">StageInputs</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">ws</span><span class="w"> </span><span class="nx">Workspace</span><span class="p">,</span><span class="w"> </span><span class="nx">specs</span><span class="w"> </span><span class="p">[]</span><span class="nx">InputSpec</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
+</span><span id="__span-5-11"><a id="__codelineno-5-11" name="__codelineno-5-11"></a><span class="w">    </span><span class="nx">CollectOutputs</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">ws</span><span class="w"> </span><span class="nx">Workspace</span><span class="p">,</span><span class="w"> </span><span class="nx">spec</span><span class="w"> </span><span class="nx">OutputSpec</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">OutputManifest</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</span><span id="__span-5-12"><a id="__codelineno-5-12" name="__codelineno-5-12"></a><span class="p">}</span>
+</span><span id="__span-5-13"><a id="__codelineno-5-13" name="__codelineno-5-13"></a>
+</span><span id="__span-5-14"><a id="__codelineno-5-14" name="__codelineno-5-14"></a><span class="kd">type</span><span class="w"> </span><span class="nx">ProgramRunner</span><span class="w"> </span><span class="kd">interface</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-5-15"><a id="__codelineno-5-15" name="__codelineno-5-15"></a><span class="w">    </span><span class="nx">RunProgram</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">ws</span><span class="w"> </span><span class="nx">Workspace</span><span class="p">,</span><span class="w"> </span><span class="nx">spec</span><span class="w"> </span><span class="nx">RunProgramSpec</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">RunResult</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</span><span id="__span-5-16"><a id="__codelineno-5-16" name="__codelineno-5-16"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<p>三层接口分别对应三件事：</p>
+<ul>
+<li><code>WorkspaceManager</code> 管 workspace 生命周期：创建、复用、清理。</li>
+<li><code>WorkspaceFS</code> 管文件进出：投放输入、收集输出、处理 artifact 和目录。</li>
+<li><code>ProgramRunner</code> 管真正执行：命令、参数、环境、cwd、stdin、超时和资源限制。</li>
+</ul>
+<p>再往上一层，<code>Engine</code> 把它们组合起来：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-6-1">1</a></span>
+<span class="normal"><a href="#__codelineno-6-2">2</a></span>
+<span class="normal"><a href="#__codelineno-6-3">3</a></span>
+<span class="normal"><a href="#__codelineno-6-4">4</a></span>
+<span class="normal"><a href="#__codelineno-6-5">5</a></span>
+<span class="normal"><a href="#__codelineno-6-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Engine</span><span class="w"> </span><span class="kd">interface</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2"></a><span class="w">    </span><span class="nx">Manager</span><span class="p">()</span><span class="w"> </span><span class="nx">WorkspaceManager</span>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3"></a><span class="w">    </span><span class="nx">FS</span><span class="p">()</span><span class="w"> </span><span class="nx">WorkspaceFS</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4"></a><span class="w">    </span><span class="nx">Runner</span><span class="p">()</span><span class="w"> </span><span class="nx">ProgramRunner</span>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5"></a><span class="w">    </span><span class="nx">Describe</span><span class="p">()</span><span class="w"> </span><span class="nx">Capabilities</span>
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<p>这个设计的好处是，<code>workspace_exec</code>、Skills、workspaceio 不需要知道底层到底是本机目录、Docker 容器、Jupyter kernel、E2B 沙箱，还是 Linux bubblewrap 本地 sandbox。它们只依赖同一组 workspace 和 program runner 语义。</p>
+<p>但这里必须强调一句：统一接口不等于统一安全等级。</p>
+<p><code>local</code> 后端和 <code>sandbox</code> 后端都可以实现 <code>ProgramRunner</code>，但它们的风险边界完全不同。<code>container</code> 和 <code>e2b</code> 都可以运行命令，但一个依赖本地 Docker 配置，一个依赖远程提供方。<code>jupyter</code> 有 kernel 状态优势，但它的隔离语义也不能和 OS sandbox 混为一谈。</p>
+<p>因此，Engine 还提供 <code>Capabilities</code> 来表达能力差异，例如 <code>Isolation</code> 描述隔离形态，<code>NetworkAllowed</code> 描述网络是否允许，<code>ReadOnlyMount</code> 描述是否支持只读挂载，<code>Streaming</code> 描述是否支持流式输出，<code>MaxDiskBytes</code> 描述磁盘软限制。</p>
+<p>其中 <code>SupportsCleanEnv</code> 很能体现工程设计取舍。<code>workspace_exec</code> 在启用 allow/deny command policy 时，会依赖干净环境来避免命令策略被宿主环境变量、shell startup 文件或动态链接注入绕过。如果某个后端没有明确声明支持 <code>CleanEnv</code>，工具层应该 fail closed，而不是静默降级。</p>
+<p>这就是框架分层的价值：统一的是执行接口，显式暴露的是能力差异。</p>
+<p>整体链路可以画成这样：</p>
+<pre class="mermaid"><code>flowchart TD
+  A["LLM Agent"] --&gt; B["WithCodeExecutor"]
+  B --&gt; C["workspace_exec / Skills / workspace I/O"]
+  C --&gt; D["Engine"]
+  D --&gt; E["WorkspaceManager"]
+  D --&gt; F["WorkspaceFS"]
+  D --&gt; G["ProgramRunner"]
+  G --&gt; H["local"]
+  G --&gt; I["container"]
+  G --&gt; J["jupyter"]
+  G --&gt; K["e2b"]
+  G --&gt; L["sandbox"]</code></pre>
+<h2 id="local-sandbox">四、五类执行后端：从 local 到 sandbox</h2>
+<p>Code Executor 的后端分层，本质上是在“开发便利、运行环境一致性、远程隔离、安全边界、平台成本”之间做选择。没有一个后端适合所有场景。</p>
+<table>
+<thead>
+<tr>
+<th>后端</th>
+<th>执行边界</th>
+<th>适合场景</th>
+<th>主要优势</th>
+<th>关键风险或限制</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>local</code></td>
+<td>宿主机当前用户权限</td>
+<td>本地开发、可信任务、快速调试</td>
+<td>接入简单、反馈快、依赖宿主环境</td>
+<td>基本没有隔离，不适合不可信代码</td>
+</tr>
+<tr>
+<td><code>container</code></td>
+<td>Docker / container runtime</td>
+<td>标准服务部署、半可信执行</td>
+<td>环境可复现，和生产部署更接近</td>
+<td>安全边界取决于容器配置、挂载和 runtime hardening</td>
+</tr>
+<tr>
+<td><code>jupyter</code></td>
+<td>Jupyter kernel / notebook 语义</td>
+<td>数据分析、交互式 Python、长状态计算</td>
+<td>kernel 状态自然延续，适合分析型任务</td>
+<td>更偏计算会话，不等同于强安全隔离</td>
+</tr>
+<tr>
+<td><code>e2b</code></td>
+<td>外部云端 sandbox 提供方</td>
+<td>云端代码执行、远程隔离、临时工作环境</td>
+<td>隔离和生命周期交给提供方，适合弹性场景</td>
+<td>依赖外部服务、网络和提供方能力</td>
+</tr>
+<tr>
+<td><code>sandbox</code></td>
+<td>本地 OS 级 sandbox；Linux 基于 bubblewrap，macOS 基于 Seatbelt / <code>sandbox-exec</code></td>
+<td>本地执行但需要收紧文件/网络/环境边界</td>
+<td>不依赖 Docker 即可约束本地命令，安全语义更明确</td>
+<td>Windows managed OS sandbox 尚未实现；在 Docker/K8s 内运行 Linux 后端时，需要外层 runtime 放行 namespace/mount 能力</td>
+</tr>
+</tbody>
+</table>
+<h3 id="local">local：最低成本，也最不应该被误用</h3>
+<p><code>local</code> 后端直接在宿主环境执行代码。它适合本地验证、单元测试、demo、可信输入和快速开发。它的优势非常现实：不需要启动容器，不依赖远程服务，调试成本低。</p>
+<p>它的边界也很清楚：<code>local</code> 不提供安全隔离。模型生成的命令会在当前用户权限下触碰宿主环境，因此它的正确定位是“可信环境里的便捷执行器”，不要把它当成“轻量沙箱”。</p>
+<h3 id="container">container：工程部署的常用中间层</h3>
+<p><code>container</code> 后端把执行环境放进 Docker/container runtime。相比 local，它至少能把依赖、文件系统视图和运行环境封进容器里，适合服务化部署、半可信任务和需要复现环境的场景。</p>
+<p>但容器不是自动等于安全。它的边界取决于镜像、用户权限、挂载路径、capabilities、seccomp profile、网络配置、Docker socket 暴露情况等。它适合做工程标准化和一定程度隔离，生产级安全仍需要配合平台策略。</p>
+<h3 id="jupyter">jupyter：为交互式计算而生</h3>
+<p><code>jupyter</code> 后端适合 notebook / kernel 风格的代码执行，尤其是 Python 数据分析。它的优势不是“更安全”，而是“更适合持续计算状态”：变量、导入、绘图、分析过程可以自然保留在 kernel 中。</p>
+<p>因此它适合数据科学 Agent、分析助手、报表生成场景。需要注意的是，kernel 状态也会带来脏状态和复现问题；如果任务要求强隔离、强可复现或不可信代码执行，不能把 Jupyter 理解成 sandbox。</p>
+<h3 id="e2b">e2b：把执行环境交给外部提供方</h3>
+<p><code>e2b</code> 后端是典型 remote/cloud sandbox 思路：让代码在外部隔离环境中运行，框架通过提供方 API 管理执行和文件。对业务来说，它减少了自建执行环境、资源回收、基础隔离的成本。</p>
+<p>它适合云端 Agent、临时计算环境、需要弹性资源和远程隔离的场景。代价是引入外部依赖：网络、鉴权、提供方能力、成本和可观测性都要纳入平台设计。</p>
+<h3 id="sandbox-os">sandbox：本地 OS 级安全边界</h3>
+<p><code>sandbox</code> 后端是一个重点安全案例。它不是远程平台，也不是 Docker 容器，而是在本地执行场景中，用 OS 级机制约束命令可见的文件系统、可写路径、网络和环境变量。当前 managed 后端在 Linux 上使用 <code>bubblewrap</code>，在 macOS 上通过 <code>/usr/bin/sandbox-exec</code> 和 Seatbelt profile 落地；Windows 的 managed OS sandbox 尚未实现。</p>
+<p>下面进一步展开 sandbox。</p>
+<h2 id="sandbox">五、以 Sandbox 为例：把安全边界落到运行时</h2>
+<p>先明确一个关系：sandbox 只是 Code Executor 的一种安全后端。</p>
+<p>Code Executor 是执行体系；sandbox 是其中一种更强调安全边界的后端。没有 sandbox，Code Executor 仍然可以通过 local、container、jupyter、e2b 运行；有了 sandbox，Code Executor 才能在本地 OS 级边界上回答“模型生成的命令到底能访问和修改哪些资源”。</p>
+<p>理解 sandbox，可以先看四个运行时问题，再和主流 Agent 沙箱做一个对照。</p>
+<h3 id="1">1. 文件系统：哪些可读，哪些可写，哪些禁止访问</h3>
+<p>tRPC-Agent-Go sandbox 的权限模型围绕 <code>PermissionProfile</code> 展开。它把文件系统策略和网络策略放在同一个 profile 里，避免调用方组合出自相矛盾的策略。</p>
+<p><code>ReadOnlyProfile</code> 表示宿主根文件系统只读、网络受限，适合只需要读取环境、尽量不写文件的任务。<code>WorkspaceWriteProfile</code> 是默认 managed profile：根文件系统只读，workspace 及其工作目录可写，网络受限，适合大多数本地 sandbox 执行。<code>DangerFullAccessProfile</code> 会显式禁用 sandbox 并开启网络，只适合完全可信、确实需要完整宿主权限的特殊任务。<code>ExternalSandboxProfile</code> 则表示隔离由外部系统提供，例如外部容器、远程平台或上层系统。</p>
+<p><code>WorkspaceWriteProfile</code> 的含义非常贴近 Agent 执行：外部世界默认只读，真正允许写入的是 session workspace、<code>work</code>、<code>out</code>、<code>runs</code>、<code>skills</code>、<code>home</code>、<code>tmp</code> 等执行所需目录。</p>
+<p>在这个基础上，调用方可以通过 <code>WithReadPaths</code>、<code>WithWritePaths</code> 增加显式路径授权，也可以通过 <code>WithNoAccessPaths</code>、<code>WithNoAccessGlobs</code> 屏蔽敏感路径。这里的策略不是 prompt 约束，而是运行时挂载（mount）和路径规则约束。</p>
+<p>Linux 后端构造 bubblewrap 命令时，会从只读根开始：</p>
+<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-7-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1"></a>--ro-bind / /
+</span></code></pre></div></td></tr></table></div>
+<p>然后再把 workspace 里允许写的路径重新以可写方式挂载，把受保护路径屏蔽掉。这个模型很重要：不是“默认都能写，再禁止一部分”，而是“默认只读，再显式开放写路径”。</p>
+<h3 id="2">2. 网络：默认限制，显式开启</h3>
+<p>网络策略是二值模型：</p>
+<ul>
+<li><code>NetworkRestricted</code>：要求后端阻断出网能力。</li>
+<li><code>NetworkEnabled</code>：允许命令使用宿主网络。</li>
+</ul>
+<p>managed profile 默认采用 <code>NetworkRestricted</code>。在 Linux bubblewrap 后端中，限制网络时会追加：</p>
+<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-8-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1"></a>--unshare-net
+</span></code></pre></div></td></tr></table></div>
+<p>这意味着命令进入新的 network namespace，不能直接使用宿主网络。选择 <code>NetworkEnabled</code> 时，后端会省略这个参数，让命令使用宿主网络。</p>
+<p>这个设计不追求复杂的域名级策略，而是先提供清晰的本地二值边界：这次执行能不能出网。更细的 egress 控制可以由外部代理、远程平台、容器网络策略或业务网关承担。</p>
+<h3 id="3">3. 环境变量：不要无意识继承宿主秘密</h3>
+<p>环境变量是 Agent 执行里很容易被低估的风险。很多密钥不在文件里，而在进程环境里。</p>
+<p>sandbox runtime 有 <code>ShellEnvironmentPolicy</code>，用于控制宿主环境变量的继承、过滤、覆盖和运行时变量注入。Linux bubblewrap 后端会使用：</p>
+<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-9-1">1</a></span>
+<span class="normal"><a href="#__codelineno-9-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1"></a>--clearenv
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2"></a>--setenv KEY VALUE
+</span></code></pre></div></td></tr></table></div>
+<p>也就是说，沙箱命令不会让子进程自然继承宿主进程环境，而是先清空环境，再由 runtime 通过 <code>--setenv</code> 注入构造出的变量集合。与此同时，runtime 会注入稳定的 workspace 环境变量，例如 <code>HOME</code>、<code>TMPDIR</code>、<code>WORKSPACE_DIR</code>、<code>OUTPUT_DIR</code> 等，让程序能正常工作。</p>
+<p>但这不等于默认不继承宿主变量。源码里的 <code>ShellEnvironmentPolicy</code> 空值会归一化为 <code>ShellEnvironmentPolicyInheritAll</code>，也就是默认会从宿主环境构造变量集，只是通过 <code>--clearenv</code> 和 <code>--setenv</code> 显式注入到沙箱进程中。生产环境如果要降低密钥泄露风险，应显式配置更严格的策略，例如选择 <code>ShellEnvironmentPolicyInheritCore</code> 或 <code>ShellEnvironmentPolicyInheritNone</code>，开启 <code>ApplyDefaultExcludes</code>，使用 <code>IncludeOnly</code> 做最终 allow-list，或者只通过最小化的 <code>Set</code> 注入必要变量。</p>
+<p>这和 <code>workspace_exec</code> 的 <code>CleanEnv</code> 能力形成呼应。命令策略如果依赖干净环境，就必须确认后端真正支持，而不是只在参数里写了 <code>CleanEnv: true</code>。</p>
+<h3 id="4-os">4. 进程与系统能力：用 OS 原语约束子进程</h3>
+<p>在 Linux 上，tRPC-Agent-Go sandbox 使用 bubblewrap 构造执行环境。典型参数包括：</p>
+<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-10-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-10-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-10-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-10-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-10-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-10-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-10-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-10-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-10-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-10-10">10</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1"></a>--die-with-parent
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2"></a>--unshare-user
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3"></a>--unshare-pid
+</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4"></a>--new-session
+</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5"></a>--ro-bind / /
+</span><span id="__span-10-6"><a id="__codelineno-10-6" name="__codelineno-10-6"></a>--dev /dev
+</span><span id="__span-10-7"><a id="__codelineno-10-7" name="__codelineno-10-7"></a>--proc /proc
+</span><span id="__span-10-8"><a id="__codelineno-10-8" name="__codelineno-10-8"></a>--unshare-net
+</span><span id="__span-10-9"><a id="__codelineno-10-9" name="__codelineno-10-9"></a>--clearenv
+</span><span id="__span-10-10"><a id="__codelineno-10-10" name="__codelineno-10-10"></a>--chdir &lt;cwd&gt;
+</span></code></pre></div></td></tr></table></div>
+<p>这些参数背后对应的是 OS 级边界：user namespace、PID namespace、mount 视图、network namespace、独立 session、清理环境变量等。它们的价值在于约束正在运行的进程及其子进程，而不是只在命令执行前做字符串审核。</p>
+<p>同时，sandbox runtime 会做 preflight：检查 <code>bwrap</code> 是否存在，尝试运行短命令探测当前环境是否支持所需 namespace/mount 操作。如果 preflight 失败，managed profile 会在命令开始前失败，而不是悄悄退回不安全执行。</p>
+<p>这点非常关键。安全能力最怕“看起来开了，实际上没生效”。fail closed，也就是能力不可用时直接失败；silent fallback，也就是悄悄退回低安全模式。前者虽然会让部署初期更容易暴露环境问题，但更符合安全边界的语义。</p>
+<h3 id="5-claude-codecodexopenai-agents-sdk">5. 和 Claude Code、Codex、OpenAI Agents SDK 的对照</h3>
+<p>下面的对照只用来说明设计趋势，不把外部产品的当前实现作为本文结论的前提。Claude Code、Codex、OpenAI Agents SDK 这类文档和实现迭代很快，正式发布前建议再核对一次参考资料中的公开链接。</p>
+<p>主流代码型 Agent 产品和 Agent SDK 都在把“执行能力”从简单工具调用推进到“受控运行环境”。</p>
+<p>Claude Code 的 sandboxed Bash tool 会把 Bash 命令放进文件系统和网络隔离边界中，并明确区分“权限审批”和“运行时沙箱”：前者决定工具是否可以运行，后者决定 Bash 命令真正运行后能访问什么。macOS 使用 Seatbelt，Linux/WSL2 使用 bubblewrap，并且提供网络和凭证保护相关配置。</p>
+<p>Codex 也把 sandbox mode 和 approval policy 分成两层。sandbox mode 描述命令在技术上能做什么，例如 read-only、workspace-write、danger-full-access；approval policy 描述哪些行为需要用户批准。它的核心观点是：sandbox 是技术边界，approval 是越界时的决策机制。</p>
+<p>OpenAI Agents SDK 的 Sandbox Agents 则从应用架构角度强调“编排层”和“沙箱工作区”的分离：Agent 编排层可以运行在你的基础设施里，而文件系统、命令执行、artifact 生成等有状态工作放进沙箱 workspace。</p>
+<p>这些设计的共同点是：不要把“模型被告知不要做坏事”当作安全机制。真正的执行安全，需要运行时边界、权限策略、审批流程和后端能力声明一起工作。</p>
+<h2 id="_2">六、工程取舍与后端选择</h2>
+<p>Code Executor 的设计有几个容易被忽略的工程取舍。</p>
+<h3 id="sandbox_1">取舍一：不直接绑定某一个 sandbox</h3>
+<p>如果只看安全，似乎框架应该默认强制所有执行都走 sandbox。但 Agent 框架服务的场景并不单一。</p>
+<p>本地开发需要快速反馈，<code>local</code> 很方便；生产服务可能已有容器平台，<code>container</code> 更自然；数据分析需要 kernel 状态，<code>jupyter</code> 更合适；云端执行可以交给 <code>e2b</code>；本地高约束场景才适合 <code>sandbox</code>。</p>
+<p>如果框架直接绑定某一个 sandbox，就会牺牲部署灵活性。tRPC-Agent-Go 选择的是更底层的抽象：把 workspace、文件系统和程序运行抽象出来，让不同后端接入同一套上层工具链。</p>
+<h3 id="_3">取舍二：能力必须显式声明</h3>
+<p>统一接口之后，最危险的误区是“大家实现了同一个接口，所以能力一样”。实际不是。</p>
+<p>例如 <code>RunProgramSpec.CleanEnv</code> 只有在后端真正能以干净环境启动程序时才有意义。框架用 <code>Capabilities.SupportsCleanEnv</code> 显式声明这一点。<code>workspace_exec</code> 启用命令 allow/deny policy 时，如果发现后端没有声明支持，就应该 fail closed。</p>
+<p>这个策略看起来保守，但它避免了安全策略在不同后端上悄悄失效。</p>
+<h3 id="_4">取舍三：命令策略不能只做字符串白名单</h3>
+<p><code>workspace_exec</code> 支持 allowed/denied commands，但实现上不是简单 <code>strings.Contains</code>。命令会先经过 shellsafe 解析，限制在较简单的 pipeline 结构内，并拒绝重定向、命令替换、变量展开、子 shell、花括号展开、前置变量赋值等容易绕过策略的结构。</p>
+<p>它还内置拒绝 shell wrapper 和重新执行类内建命令，例如 <code>sh</code>、<code>bash</code>、<code>eval</code>、<code>exec</code>、<code>xargs</code>、<code>env</code>、<code>sudo</code> 等。原因很直接：如果允许 <code>sh -c</code> 或 <code>eval</code>，所谓命令白名单很快会变成摆设。</p>
+<p>这说明命令策略和 sandbox 是互补关系：</p>
+<ul>
+<li>命令策略限制“模型能请求什么形式的命令”。</li>
+<li>sandbox 限制“命令运行起来之后能接触什么资源”。</li>
+</ul>
+<p>两者不是互相替代。</p>
+<h3 id="_5">取舍四：开发便利和安全边界要清楚命名</h3>
+<p><code>DangerFullAccessProfile</code> 这个名字很直白。它不是叫 <code>DefaultProfile</code>，也不是叫 <code>LocalProfile</code>，而是明确告诉调用方：你正在关闭 sandbox。</p>
+<p>类似地，<code>local</code> 后端源码注释也明确写着 unsafe。这样的命名很重要，因为 Agent 框架里很多风险不是来自“没有功能”，而是来自“功能看起来像安全能力，但其实只是开发便利”。</p>
+<p>好的框架设计应该让危险路径可以被选择，但不能让它看起来无害。</p>
+<h3 id="_6">如何选择后端</h3>
+<p>如果把 Code Executor 放进业务系统，后端选型可以从几个决策问题开始，而不是先问“哪个后端最强”。</p>
+<table>
+<thead>
+<tr>
+<th>决策问题</th>
+<th>选择倾向</th>
+<th>判断理由</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>输入、命令或用户文件是否不可信？</td>
+<td>避免 <code>local</code>，优先考虑 <code>sandbox</code>、<code>container</code> 或 <code>e2b</code></td>
+<td>不可信执行需要运行时边界，而不是只依赖 prompt 或命令说明</td>
+</tr>
+<tr>
+<td>是否必须在本地运行，同时要约束文件、网络和环境变量？</td>
+<td><code>sandbox</code></td>
+<td>适合本地 OS 级边界；Linux 使用 bubblewrap，macOS 使用 Seatbelt / <code>sandbox-exec</code></td>
+</tr>
+<tr>
+<td>是否需要云端临时隔离环境，且能接受外部提供方依赖？</td>
+<td><code>e2b</code></td>
+<td>适合远程 sandbox 和弹性执行，但要关注鉴权、成本和提供方能力</td>
+</tr>
+<tr>
+<td>是否已有容器化部署体系，并且需要固定依赖环境？</td>
+<td><code>container</code></td>
+<td>适合工程标准化；安全强度取决于容器权限、挂载、网络和 runtime hardening</td>
+</tr>
+<tr>
+<td>是否是数据分析、图表生成、交互式 Python 或长状态计算？</td>
+<td><code>jupyter</code></td>
+<td>kernel 状态适合分析任务，但不应被理解成强安全边界</td>
+</tr>
+<tr>
+<td>是否只是本地 demo、开发调试或完全可信脚本？</td>
+<td><code>local</code></td>
+<td>成本最低、调试最方便，但不适合不可信代码</td>
+</tr>
+<tr>
+<td>是否需要出网安装依赖或访问外部服务？</td>
+<td>显式选择允许网络的策略或后端</td>
+<td>默认收紧网络更稳妥；需要出网时再把网络能力纳入审计和治理</td>
+</tr>
+</tbody>
+</table>
+<p>还有几条实践建议值得单独强调。</p>
+<p>第一，如果你只想让模型通过 <code>workspace_exec</code> 显式执行命令，不希望最终回复里的围栏代码被自动执行，应关闭响应处理器：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-11-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1"></a><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithEnableCodeExecutionResponseProcessor</span><span class="p">(</span><span class="kc">false</span><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>这能让执行行为更集中地进入工具调用链路。</p>
+<p>第二，跨轮稳定复用文件时，优先使用 artifact。不要把某个物理 workspace 的偶然延续当成持久化契约。</p>
+<p>第三，给 <code>workspace_exec</code> 配命令策略时，要同时关注后端的 <code>SupportsCleanEnv</code>。如果策略依赖干净环境，而后端没有声明支持，宁可让执行失败，也不要静默降级。</p>
+<p>第四，不要把网络打开当作默认选项。很多代码执行任务只需要处理已有文件，不需要出网。需要安装依赖或访问外部服务时，再显式开启网络，或走更合适的远程/平台执行后端。</p>
+<p>第五，密钥尽量留在业务编排层或业务服务侧。只有确实需要被执行程序访问的最小凭证，才通过受控方式注入到执行环境；并且要明确日志、stdout/stderr、artifact 中是否可能泄露。</p>
+<p>第六，把执行后端选择写进产品或平台策略，而不是让每个业务临时决定。Code Executor 的灵活性很强，但生产治理需要默认值：哪些场景允许 local，哪些可以用 container，哪些需要 sandbox 在能力不可用时直接失败。</p>
+<h2 id="code-executor_1">七、总结：Code Executor 的本质</h2>
+<p>回到开头的问题：Code Executor 到底是什么？</p>
+<p>它不是“让模型跑一段代码”的小功能。那只是最表层的能力。</p>
+<p>在 Agent 框架里，Code Executor 的本质是把模型执行副作用系统化。Workspace 管理文件和状态，Engine 抽象不同执行后端，Capabilities 暴露能力差异，<code>workspace_exec</code> 和 <code>workspaceio</code> 把执行能力接入模型工具调用与业务回调。</p>
+<p>所以，tRPC-Agent-Go 的 Code Executor 可以用一句话概括：</p>
+<blockquote>
+<p>它把 Agent 从文本生成推进到可控执行，同时把执行产生的副作用纳入一套边界可描述、后端可替换、策略可管控的运行时体系。</p>
+</blockquote>
+<p>Sandbox 是 Code Executor 安全边界的重要落点，但它并不等同于 Code Executor 本身。Code Executor 的价值，是让 sandbox、container 或远程提供方都能成为同一套执行体系中的可替换后端。</p>
+<h2 id="_7">八、参考资料</h2>
+<ul>
+<li><a href="https://github.com/trpc-group/trpc-agent-go">tRPC-Agent-Go GitHub 仓库</a></li>
+<li><a href="https://github.com/trpc-group/trpc-agent-go/blob/main/docs/mkdocs/zh/codeexecutor.md">tRPC-Agent-Go CodeExecutor 中文文档</a></li>
+<li><a href="https://github.com/trpc-group/trpc-agent-go/tree/main/codeexecutor">tRPC-Agent-Go codeexecutor 源码目录</a></li>
+<li><a href="https://github.com/trpc-group/trpc-agent-go/tree/main/tool/workspaceexec">tRPC-Agent-Go workspace_exec 工具源码目录</a></li>
+<li><a href="https://github.com/trpc-group/trpc-agent-go/blob/main/codeexecutor/sandbox/docs/README.md">tRPC-Agent-Go sandbox 后端文档</a></li>
+<li><a href="https://code.claude.com/docs/en/sandboxing">Claude Code: Configure the sandboxed Bash tool</a></li>
+<li><a href="https://www.anthropic.com/engineering/claude-code-sandboxing">Anthropic Engineering: Making Claude Code more secure and autonomous with sandboxing</a></li>
+<li><a href="https://developers.openai.com/codex/concepts/sandboxing">OpenAI Developers: Codex sandboxing concepts</a></li>
+<li><a href="https://developers.openai.com/codex/agent-approvals-security">OpenAI Developers: Codex agent approvals &amp; security</a></li>
+<li><a href="https://github.com/openai/codex/blob/main/codex-rs/linux-sandbox/README.md">OpenAI Codex GitHub: Linux sandbox implementation notes</a></li>
+<li><a href="https://developers.openai.com/api/docs/guides/agents/sandboxes">OpenAI API Docs: Sandbox Agents</a></li>
+<li><a href="https://openai.github.io/openai-agents-python/sandbox/guide/">OpenAI Agents SDK Python: Sandbox Agents concepts</a></li>
+<li><a href="https://github.com/containers/bubblewrap">bubblewrap GitHub 仓库</a></li>
+<li><a href="https://man7.org/linux/man-pages/man7/namespaces.7.html">Linux namespaces 手册</a></li>
+<li><a href="https://docs.docker.com/engine/security/">Docker container security 文档</a></li>
+<li><a href="https://e2b.dev/docs">E2B Documentation</a></li>
+</ul>
+
+
+
+
+
+
+
+  
+    
+  
+  
+    
+  
+
+
+  <aside class="md-source-file">
+    
+      
+  <span class="md-source-file__fact">
+    <span class="md-icon" title="最后更新">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
+    </span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年7月10日 03:04:33 UTC">2026-07-10 03:04:33</span>
+  </span>
+
+    
+    
+      
+  <span class="md-source-file__fact">
+    <span class="md-icon" title="创建日期">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M14.47 15.08 11 13V7h1.5v5.25l3.08 1.83c-.41.28-.79.62-1.11 1m-1.39 4.84c-.36.05-.71.08-1.08.08-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8c0 .37-.03.72-.08 1.08.69.1 1.33.32 1.92.64.1-.56.16-1.13.16-1.72 0-5.5-4.5-10-10-10S2 6.5 2 12s4.47 10 10 10c.59 0 1.16-.06 1.72-.16-.32-.59-.54-1.23-.64-1.92M18 15v3h-3v2h3v3h2v-3h3v-2h-3v-3z"/></svg>
+    </span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年7月10日 03:04:33 UTC">2026-07-10 03:04:33</span>
+  </span>
+
+    
+    
+    
+  </aside>
+
+
+  
+
+
+
+  <form class="md-feedback" name="feedback" hidden>
+    <fieldset>
+      <legend class="md-feedback__title">
+        Was this page helpful?
+      </legend>
+      <div class="md-feedback__inner">
+        <div class="md-feedback__list">
+          
+            <button class="md-feedback__icon md-icon" type="submit" title="This page was helpful" data-md-value="1">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 12a8 8 0 0 0-8-8 8 8 0 0 0-8 8 8 8 0 0 0 8 8 8 8 0 0 0 8-8m2 0a10 10 0 0 1-10 10A10 10 0 0 1 2 12 10 10 0 0 1 12 2a10 10 0 0 1 10 10M10 9.5c0 .8-.7 1.5-1.5 1.5S7 10.3 7 9.5 7.7 8 8.5 8s1.5.7 1.5 1.5m7 0c0 .8-.7 1.5-1.5 1.5S14 10.3 14 9.5 14.7 8 15.5 8s1.5.7 1.5 1.5m-5 7.73c-1.75 0-3.29-.73-4.19-1.81L9.23 14c.45.72 1.52 1.23 2.77 1.23s2.32-.51 2.77-1.23l1.42 1.42c-.9 1.08-2.44 1.81-4.19 1.81"/></svg>
+            </button>
+          
+            <button class="md-feedback__icon md-icon" type="submit" title="This page could be improved" data-md-value="0">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 12a8 8 0 0 0-8-8 8 8 0 0 0-8 8 8 8 0 0 0 8 8 8 8 0 0 0 8-8m2 0a10 10 0 0 1-10 10A10 10 0 0 1 2 12 10 10 0 0 1 12 2a10 10 0 0 1 10 10m-6.5-4c.8 0 1.5.7 1.5 1.5s-.7 1.5-1.5 1.5-1.5-.7-1.5-1.5.7-1.5 1.5-1.5M10 9.5c0 .8-.7 1.5-1.5 1.5S7 10.3 7 9.5 7.7 8 8.5 8s1.5.7 1.5 1.5m2 4.5c1.75 0 3.29.72 4.19 1.81l-1.42 1.42C14.32 16.5 13.25 16 12 16s-2.32.5-2.77 1.23l-1.42-1.42C8.71 14.72 10.25 14 12 14"/></svg>
+            </button>
+          
+        </div>
+        <div class="md-feedback__note">
+          
+            <div data-md-value="1" hidden>
+              
+              
+                
+              
+              
+              
+                
+                
+              
+              Thanks for your feedback!
+            </div>
+          
+            <div data-md-value="0" hidden>
+              
+              
+                
+              
+              
+              
+                
+                
+              
+              Thanks for your feedback!<br>Please help us improve by opening an <a href="https://github.com/trpc-group/trpc-agent-go/issues/new" target="_blank" rel="noopener">issue</a>.
+            </div>
+          
+        </div>
+      </div>
+    </fieldset>
+  </form>
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="页脚" >
+        
+          
+          <a href="../promptcache/" class="md-footer__link md-footer__link--prev" aria-label="上一页: 降低 Agent Token 成本：tRPC-Agent-Go 的 Prompt Cache 工程实践">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                上一页
+              </span>
+              <div class="md-ellipsis">
+                降低 Agent Token 成本：tRPC-Agent-Go 的 Prompt Cache 工程实践
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../graphagent/" class="md-footer__link md-footer__link--next" aria-label="下一页: GraphAgent 让 AI 工作流与 Agent 无缝融合">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                下一页
+              </span>
+              <div class="md-ellipsis">
+                GraphAgent 让 AI 工作流与 Agent 无缝融合
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      <script id="__config" type="application/json">{"base": "../../..", "features": ["content.code.copy", "navigation.footer", "navigation.tabs", "search.suggest", "search.share", "content.action.edit", "content.action.view"], "search": "../../../assets/javascripts/workers/search.973d3a69.min.js", "tags": null, "translations": {"clipboard.copied": "\u5df2\u590d\u5236", "clipboard.copy": "\u590d\u5236", "search.result.more.one": "\u5728\u8be5\u9875\u4e0a\u8fd8\u6709 1 \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.more.other": "\u5728\u8be5\u9875\u4e0a\u8fd8\u6709 # \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.none": "\u6ca1\u6709\u627e\u5230\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.one": "\u627e\u5230 1 \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.other": "# \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.placeholder": "\u952e\u5165\u4ee5\u5f00\u59cb\u641c\u7d22", "search.result.term.missing": "\u7f3a\u5c11", "select.version": "\u9009\u62e9\u5f53\u524d\u7248\u672c"}, "version": null}</script>
+    
+    
+      <script src="../../../assets/javascripts/bundle.92b07e13.min.js"></script>
+      
+        <script src="../../../assets/javascripts/mathjax.js"></script>
+      
+        <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+      
+    
+  </body>
+</html>
