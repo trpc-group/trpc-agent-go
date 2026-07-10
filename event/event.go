@@ -445,10 +445,12 @@ func redactedEventForLogging(e *Event) Event {
 }
 
 func tryEmitReadyEvent(ctx context.Context, ch chan<- *Event, e *Event) (bool, error) {
-	// Snapshot before send: once ch <- e returns, the receiver owns *e and
-	// may mutate it concurrently (runner.copyEventInvocationFields). Reading
-	// *e after the send for logging is a data race.
 	eventStr := snapshotEvent(e)
+	defer func() {
+		if r := recover(); r != nil {
+			log.WarnfContext(ctx, "EmitEventWithTimeout: recovered from panic sending to closed channel: %v, event: %s", r, eventStr)
+		}
+	}()
 	select {
 	case ch <- e:
 		log.TracefContext(ctx, "EmitEventWithTimeout: event sent, event: %s", eventStr)
@@ -497,8 +499,12 @@ func EmitEventWithTimeout(ctx context.Context, ch chan<- *Event,
 		if handled, err := tryEmitReadyEvent(ctx, ch, e); handled {
 			return err
 		}
-		// Fall back to a blocking send. Snapshot before send — same race as above.
 		eventStr := snapshotEvent(e)
+		defer func() {
+			if r := recover(); r != nil {
+				log.WarnfContext(ctx, "EmitEventWithTimeout: recovered from panic sending to closed channel (blocking): %v, event: %s", r, eventStr)
+			}
+		}()
 		select {
 		case ch <- e:
 			log.TracefContext(ctx, "EmitEventWithTimeout: event sent, event: %s", eventStr)
@@ -522,8 +528,12 @@ func EmitEventWithTimeout(ctx context.Context, ch chan<- *Event,
 
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
-	// Snapshot before send — same race as above.
 	eventStr := snapshotEvent(e)
+	defer func() {
+		if r := recover(); r != nil {
+			log.WarnfContext(ctx, "EmitEventWithTimeout: recovered from panic sending to closed channel (timeout): %v, event: %s", r, eventStr)
+		}
+	}()
 	select {
 	case ch <- e:
 		log.TracefContext(ctx, "EmitEventWithTimeout: event sent, event: %s", eventStr)
