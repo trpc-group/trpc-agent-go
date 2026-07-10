@@ -562,7 +562,7 @@ func TestInvocation_AddNoticeChannel_Panic(t *testing.T) {
 	inv := &Invocation{}
 
 	ch := inv.AddNoticeChannel(context.Background(), "test-key")
-	require.NotNil(t, ch)
+	require.Nil(t, ch)
 }
 
 func TestInvocation_NotifyCompletion_Panic(t *testing.T) {
@@ -577,7 +577,7 @@ func TestInvocation_AddNoticeChannelAndWait_Panic(t *testing.T) {
 
 	err := inv.AddNoticeChannelAndWait(context.Background(), "test-key", 2*time.Second)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "Timeout")
+	require.Contains(t, err.Error(), "notice channel create failed")
 }
 
 func TestInvocation_AddNoticeChannelAndWait_NoTimeoutUsesContext(t *testing.T) {
