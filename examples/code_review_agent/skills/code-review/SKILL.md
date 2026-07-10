@@ -46,7 +46,7 @@ read-only repository mounted into the sandboxed workspace.
 4. Run `go test`:
 
    ```sh
-   sh scripts/run_go_test.sh [package]
+   sh scripts/run_go_unit.sh [package]
    ```
 
 The default package argument for the vet / staticcheck / test scripts is

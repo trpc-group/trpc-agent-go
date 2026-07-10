@@ -84,7 +84,7 @@ func TestSkillLoad(t *testing.T) {
 
 	scripts := []string{
 		"scripts/run_go_vet.sh",
-		"scripts/run_go_test.sh",
+		"scripts/run_go_unit.sh",
 		"scripts/run_staticcheck.sh",
 		"scripts/parse_diff.sh",
 	}
