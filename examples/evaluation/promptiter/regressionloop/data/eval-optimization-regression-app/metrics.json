@@ -1,0 +1,49 @@
+[
+  {
+    "metricName": "final_response",
+    "failureCategory": "final_response_mismatch",
+    "threshold": 1,
+    "criterion": {
+      "finalResponse": {
+        "matchStrategy": "exact"
+      }
+    }
+  },
+  {
+    "metricName": "json_format",
+    "failureCategory": "format_error",
+    "threshold": 1,
+    "criterion": {
+      "json": {}
+    }
+  },
+  {
+    "metricName": "tool_trajectory",
+    "threshold": 1,
+    "criterion": {
+      "toolTrajectory": {
+        "orderSensitive": false
+      }
+    }
+  },
+  {
+    "metricName": "router_decision",
+    "failureCategory": "route_error",
+    "threshold": 1,
+    "criterion": {
+      "finalResponse": {
+        "matchStrategy": "exact"
+      }
+    }
+  },
+  {
+    "metricName": "knowledge_recall",
+    "failureCategory": "knowledge_recall_gap",
+    "threshold": 1,
+    "criterion": {
+      "finalResponse": {
+        "matchStrategy": "exact"
+      }
+    }
+  }
+]

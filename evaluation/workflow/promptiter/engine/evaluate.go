@@ -19,6 +19,7 @@ import (
 	atrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 	"trpc.group/trpc-go/trpc-agent-go/internal/profilecompiler"
@@ -71,6 +72,10 @@ type CaseResult struct {
 	SessionID string
 	// Trace records the node-level execution path used to produce the output.
 	Trace *atrace.Trace
+	// ActualInvocation stores the actual invocation used by metric evaluators.
+	ActualInvocation *evalset.Invocation
+	// ExpectedInvocation stores the expected invocation used by metric evaluators.
+	ExpectedInvocation *evalset.Invocation
 	// Metrics stores all metric outputs for this case.
 	Metrics []MetricResult
 }

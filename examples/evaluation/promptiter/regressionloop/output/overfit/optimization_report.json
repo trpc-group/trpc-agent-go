@@ -1,0 +1,1069 @@
+{
+  "metadata": {
+    "appName": "eval-optimization-regression-app",
+    "startedAt": "2026-07-10T08:00:00Z",
+    "finishedAt": "2026-07-10T08:00:00.15Z",
+    "duration": "150ms",
+    "seed": 20260710,
+    "promptSource": "data/eval-optimization-regression-app/baseline_prompt.txt",
+    "metricsPath": "data/eval-optimization-regression-app/metrics.json",
+    "metricNames": [
+      "final_response",
+      "json_format",
+      "tool_trajectory",
+      "router_decision",
+      "knowledge_recall"
+    ],
+    "trainEvalSetId": "train",
+    "validationEvalSetId": "validation",
+    "scenario": "overfit",
+    "targetSurfaces": [
+      "support_agent#instruction"
+    ],
+    "fakeConfig": {
+      "runner": "deterministic-fake-engine",
+      "scenario": "train improves but validation adds a hard fail"
+    },
+    "attributionHints": {
+      "final_response": "final_response_mismatch",
+      "json_format": "format_error",
+      "knowledge_recall": "knowledge_recall_gap",
+      "router_decision": "route_error"
+    }
+  },
+  "baselineTrain": {
+    "overallScore": 0,
+    "evalSets": [
+      {
+        "evalSetId": "train",
+        "overallScore": 0,
+        "cases": [
+          {
+            "evalSetId": "train",
+            "evalCaseId": "train_prompt_fix_success",
+            "trace": {
+              "rootAgentName": "support_agent",
+              "rootInvocationId": "invocation-train_prompt_fix_success",
+              "sessionId": "session-train_prompt_fix_success",
+              "status": "completed",
+              "steps": [
+                {
+                  "stepId": "step-train_prompt_fix_success",
+                  "invocationId": "invocation-train_prompt_fix_success",
+                  "agentName": "support_agent",
+                  "nodeId": "support_agent",
+                  "appliedSurfaceIds": [
+                    "support_agent#instruction"
+                  ],
+                  "output": {
+                    "text": "trace output for train_prompt_fix_success"
+                  }
+                }
+              ]
+            },
+            "metrics": [
+              {
+                "metricName": "tool_trajectory",
+                "score": 0,
+                "status": "failed",
+                "reason": "tool argument parameter mismatch: invoice_id was omitted"
+              }
+            ]
+          },
+          {
+            "evalSetId": "train",
+            "evalCaseId": "train_optimization_ineffective",
+            "trace": {
+              "rootAgentName": "support_agent",
+              "rootInvocationId": "invocation-train_optimization_ineffective",
+              "sessionId": "session-train_optimization_ineffective",
+              "status": "completed",
+              "steps": [
+                {
+                  "stepId": "step-train_optimization_ineffective",
+                  "invocationId": "invocation-train_optimization_ineffective",
+                  "agentName": "support_agent",
+                  "nodeId": "support_agent",
+                  "appliedSurfaceIds": [
+                    "support_agent#instruction"
+                  ],
+                  "output": {
+                    "text": "trace output for train_optimization_ineffective"
+                  }
+                }
+              ]
+            },
+            "metrics": [
+              {
+                "metricName": "router_decision",
+                "score": 0,
+                "status": "failed",
+                "reason": "route error: selected general_support instead of routing_helper"
+              }
+            ]
+          },
+          {
+            "evalSetId": "train",
+            "evalCaseId": "train_overfit_success",
+            "trace": {
+              "rootAgentName": "support_agent",
+              "rootInvocationId": "invocation-train_overfit_success",
+              "sessionId": "session-train_overfit_success",
+              "status": "completed",
+              "steps": [
+                {
+                  "stepId": "step-train_overfit_success",
+                  "invocationId": "invocation-train_overfit_success",
+                  "agentName": "support_agent",
+                  "nodeId": "support_agent",
+                  "appliedSurfaceIds": [
+                    "support_agent#instruction"
+                  ],
+                  "output": {
+                    "text": "trace output for train_overfit_success"
+                  }
+                }
+              ]
+            },
+            "metrics": [
+              {
+                "metricName": "knowledge_recall",
+                "score": 0,
+                "status": "failed",
+                "reason": "knowledge recall gap: refund policy date omitted"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "baselineValidation": {
+    "overallScore": 0.3333333333333333,
+    "evalSets": [
+      {
+        "evalSetId": "validation",
+        "overallScore": 0.3333333333333333,
+        "cases": [
+          {
+            "evalSetId": "validation",
+            "evalCaseId": "val_prompt_fix_generalizes",
+            "trace": {
+              "rootAgentName": "support_agent",
+              "rootInvocationId": "invocation-val_prompt_fix_generalizes",
+              "sessionId": "session-val_prompt_fix_generalizes",
+              "status": "completed",
+              "steps": [
+                {
+                  "stepId": "step-val_prompt_fix_generalizes",
+                  "invocationId": "invocation-val_prompt_fix_generalizes",
+                  "agentName": "support_agent",
+                  "nodeId": "support_agent",
+                  "appliedSurfaceIds": [
+                    "support_agent#instruction"
+                  ],
+                  "output": {
+                    "text": "trace output for val_prompt_fix_generalizes"
+                  }
+                }
+              ]
+            },
+            "metrics": [
+              {
+                "metricName": "tool_trajectory",
+                "score": 0,
+                "status": "failed",
+                "reason": "missing tool call: invoice question was not sent to billing_lookup"
+              }
+            ]
+          },
+          {
+            "evalSetId": "validation",
+            "evalCaseId": "val_optimization_ineffective",
+            "trace": {
+              "rootAgentName": "support_agent",
+              "rootInvocationId": "invocation-val_optimization_ineffective",
+              "sessionId": "session-val_optimization_ineffective",
+              "status": "completed",
+              "steps": [
+                {
+                  "stepId": "step-val_optimization_ineffective",
+                  "invocationId": "invocation-val_optimization_ineffective",
+                  "agentName": "support_agent",
+                  "nodeId": "support_agent",
+                  "appliedSurfaceIds": [
+                    "support_agent#instruction"
+                  ],
+                  "output": {
+                    "text": "trace output for val_optimization_ineffective"
+                  }
+                }
+              ]
+            },
+            "metrics": [
+              {
+                "metricName": "json_format",
+                "score": 0,
+                "status": "failed",
+                "reason": "format error: response uses prose instead of JSON"
+              }
+            ]
+          },
+          {
+            "evalSetId": "validation",
+            "evalCaseId": "val_overfit_refund_policy",
+            "trace": {
+              "rootAgentName": "support_agent",
+              "rootInvocationId": "invocation-val_overfit_refund_policy",
+              "sessionId": "session-val_overfit_refund_policy",
+              "status": "completed",
+              "steps": [
+                {
+                  "stepId": "step-val_overfit_refund_policy",
+                  "invocationId": "invocation-val_overfit_refund_policy",
+                  "agentName": "support_agent",
+                  "nodeId": "support_agent",
+                  "appliedSurfaceIds": [
+                    "support_agent#instruction"
+                  ],
+                  "output": {
+                    "text": "trace output for val_overfit_refund_policy"
+                  }
+                }
+              ]
+            },
+            "metrics": [
+              {
+                "metricName": "final_response",
+                "score": 1,
+                "status": "passed",
+                "reason": "baseline preserves the validation refund cutoff date"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "acceptedValidation": {
+    "overallScore": 0.5,
+    "evalSets": [
+      {
+        "evalSetId": "validation",
+        "overallScore": 0.5,
+        "cases": [
+          {
+            "evalSetId": "validation",
+            "evalCaseId": "val_prompt_fix_generalizes",
+            "sessionId": "session-val_prompt_fix_generalizes",
+            "trace": {
+              "rootAgentName": "support_agent",
+              "rootInvocationId": "invocation-val_prompt_fix_generalizes",
+              "sessionId": "session-val_prompt_fix_generalizes",
+              "status": "completed",
+              "steps": [
+                {
+                  "stepId": "step-val_prompt_fix_generalizes",
+                  "invocationId": "invocation-val_prompt_fix_generalizes",
+                  "agentName": "support_agent",
+                  "nodeId": "support_agent",
+                  "appliedSurfaceIds": [
+                    "support_agent#instruction"
+                  ],
+                  "input": {
+                    "text": "user request for val_prompt_fix_generalizes"
+                  },
+                  "output": {
+                    "text": "candidate response for val_prompt_fix_generalizes"
+                  }
+                }
+              ]
+            },
+            "metrics": [
+              {
+                "metricName": "tool_trajectory",
+                "score": 1,
+                "status": "passed",
+                "reason": "candidate routes invoice question to billing"
+              }
+            ]
+          },
+          {
+            "evalSetId": "validation",
+            "evalCaseId": "val_optimization_ineffective",
+            "sessionId": "session-val_optimization_ineffective",
+            "trace": {
+              "rootAgentName": "support_agent",
+              "rootInvocationId": "invocation-val_optimization_ineffective",
+              "sessionId": "session-val_optimization_ineffective",
+              "status": "completed",
+              "steps": [
+                {
+                  "stepId": "step-val_optimization_ineffective",
+                  "invocationId": "invocation-val_optimization_ineffective",
+                  "agentName": "support_agent",
+                  "nodeId": "support_agent",
+                  "appliedSurfaceIds": [
+                    "support_agent#instruction"
+                  ],
+                  "input": {
+                    "text": "user request for val_optimization_ineffective"
+                  },
+                  "output": {
+                    "text": "candidate response for val_optimization_ineffective"
+                  }
+                }
+              ]
+            },
+            "metrics": [
+              {
+                "metricName": "json_format",
+                "score": 0.5,
+                "status": "failed",
+                "reason": "partial JSON improvement but still fails schema"
+              }
+            ]
+          },
+          {
+            "evalSetId": "validation",
+            "evalCaseId": "val_overfit_refund_policy",
+            "sessionId": "session-val_overfit_refund_policy",
+            "trace": {
+              "rootAgentName": "support_agent",
+              "rootInvocationId": "invocation-val_overfit_refund_policy",
+              "sessionId": "session-val_overfit_refund_policy",
+              "status": "completed",
+              "steps": [
+                {
+                  "stepId": "step-val_overfit_refund_policy",
+                  "invocationId": "invocation-val_overfit_refund_policy",
+                  "agentName": "support_agent",
+                  "nodeId": "support_agent",
+                  "appliedSurfaceIds": [
+                    "support_agent#instruction"
+                  ],
+                  "input": {
+                    "text": "user request for val_overfit_refund_policy"
+                  },
+                  "output": {
+                    "text": "candidate response for val_overfit_refund_policy"
+                  }
+                }
+              ]
+            },
+            "metrics": [
+              {
+                "metricName": "final_response",
+                "score": 0,
+                "status": "failed",
+                "reason": "final response mismatch: candidate overfits train date and drops 2026-08-31"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "candidateValidation": {
+    "overallScore": 0.5,
+    "evalSets": [
+      {
+        "evalSetId": "validation",
+        "overallScore": 0.5,
+        "cases": [
+          {
+            "evalSetId": "validation",
+            "evalCaseId": "val_prompt_fix_generalizes",
+            "trace": {
+              "rootAgentName": "support_agent",
+              "rootInvocationId": "invocation-val_prompt_fix_generalizes",
+              "sessionId": "session-val_prompt_fix_generalizes",
+              "status": "completed",
+              "steps": [
+                {
+                  "stepId": "step-val_prompt_fix_generalizes",
+                  "invocationId": "invocation-val_prompt_fix_generalizes",
+                  "agentName": "support_agent",
+                  "nodeId": "support_agent",
+                  "appliedSurfaceIds": [
+                    "support_agent#instruction"
+                  ],
+                  "output": {
+                    "text": "trace output for val_prompt_fix_generalizes"
+                  }
+                }
+              ]
+            },
+            "metrics": [
+              {
+                "metricName": "tool_trajectory",
+                "score": 1,
+                "status": "passed",
+                "reason": "candidate routes invoice question to billing"
+              }
+            ]
+          },
+          {
+            "evalSetId": "validation",
+            "evalCaseId": "val_optimization_ineffective",
+            "trace": {
+              "rootAgentName": "support_agent",
+              "rootInvocationId": "invocation-val_optimization_ineffective",
+              "sessionId": "session-val_optimization_ineffective",
+              "status": "completed",
+              "steps": [
+                {
+                  "stepId": "step-val_optimization_ineffective",
+                  "invocationId": "invocation-val_optimization_ineffective",
+                  "agentName": "support_agent",
+                  "nodeId": "support_agent",
+                  "appliedSurfaceIds": [
+                    "support_agent#instruction"
+                  ],
+                  "output": {
+                    "text": "trace output for val_optimization_ineffective"
+                  }
+                }
+              ]
+            },
+            "metrics": [
+              {
+                "metricName": "json_format",
+                "score": 0.5,
+                "status": "failed",
+                "reason": "partial JSON improvement but still fails schema"
+              }
+            ]
+          },
+          {
+            "evalSetId": "validation",
+            "evalCaseId": "val_overfit_refund_policy",
+            "trace": {
+              "rootAgentName": "support_agent",
+              "rootInvocationId": "invocation-val_overfit_refund_policy",
+              "sessionId": "session-val_overfit_refund_policy",
+              "status": "completed",
+              "steps": [
+                {
+                  "stepId": "step-val_overfit_refund_policy",
+                  "invocationId": "invocation-val_overfit_refund_policy",
+                  "agentName": "support_agent",
+                  "nodeId": "support_agent",
+                  "appliedSurfaceIds": [
+                    "support_agent#instruction"
+                  ],
+                  "output": {
+                    "text": "trace output for val_overfit_refund_policy"
+                  }
+                }
+              ]
+            },
+            "metrics": [
+              {
+                "metricName": "final_response",
+                "score": 0,
+                "status": "failed",
+                "reason": "final response mismatch: candidate overfits train date and drops 2026-08-31"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "trainScore": 0.6666666666666666,
+      "validationScore": 0.5,
+      "accepted": true,
+      "reason": "candidate score gain satisfies acceptance policy",
+      "patches": [
+        {
+          "surfaceId": "support_agent#instruction",
+          "value": "OVERFIT_PROMPT: optimize train failures aggressively, even if validation policy dates change.",
+          "reason": "deterministic fake optimizer generated a scenario-specific candidate"
+        }
+      ],
+      "delta": {
+        "overallScoreDelta": 0.16666666666666669,
+        "summary": {
+          "newlyPassed": 1,
+          "newlyFailed": 1,
+          "scoreUp": 1,
+          "scoreDown": 0,
+          "unchanged": 0
+        },
+        "cases": [
+          {
+            "evalSetId": "validation",
+            "evalCaseId": "val_optimization_ineffective",
+            "metricName": "json_format",
+            "baselineScore": 0,
+            "candidateScore": 0.5,
+            "baselineStatus": "failed",
+            "candidateStatus": "failed",
+            "scoreDelta": 0.5,
+            "kind": "score_up"
+          },
+          {
+            "evalSetId": "validation",
+            "evalCaseId": "val_overfit_refund_policy",
+            "metricName": "final_response",
+            "baselineScore": 1,
+            "candidateScore": 0,
+            "baselineStatus": "passed",
+            "candidateStatus": "failed",
+            "scoreDelta": -1,
+            "kind": "newly_failed",
+            "critical": true
+          },
+          {
+            "evalSetId": "validation",
+            "evalCaseId": "val_prompt_fix_generalizes",
+            "metricName": "tool_trajectory",
+            "baselineScore": 0,
+            "candidateScore": 1,
+            "baselineStatus": "failed",
+            "candidateStatus": "passed",
+            "scoreDelta": 1,
+            "kind": "newly_passed"
+          }
+        ]
+      },
+      "validation": {
+        "overallScore": 0.5,
+        "evalSets": [
+          {
+            "evalSetId": "validation",
+            "overallScore": 0.5,
+            "cases": [
+              {
+                "evalSetId": "validation",
+                "evalCaseId": "val_prompt_fix_generalizes",
+                "sessionId": "session-val_prompt_fix_generalizes",
+                "trace": {
+                  "rootAgentName": "support_agent",
+                  "rootInvocationId": "invocation-val_prompt_fix_generalizes",
+                  "sessionId": "session-val_prompt_fix_generalizes",
+                  "status": "completed",
+                  "steps": [
+                    {
+                      "stepId": "step-val_prompt_fix_generalizes",
+                      "invocationId": "invocation-val_prompt_fix_generalizes",
+                      "agentName": "support_agent",
+                      "nodeId": "support_agent",
+                      "appliedSurfaceIds": [
+                        "support_agent#instruction"
+                      ],
+                      "input": {
+                        "text": "user request for val_prompt_fix_generalizes"
+                      },
+                      "output": {
+                        "text": "candidate response for val_prompt_fix_generalizes"
+                      }
+                    }
+                  ]
+                },
+                "metrics": [
+                  {
+                    "metricName": "tool_trajectory",
+                    "score": 1,
+                    "status": "passed",
+                    "reason": "candidate routes invoice question to billing"
+                  }
+                ]
+              },
+              {
+                "evalSetId": "validation",
+                "evalCaseId": "val_optimization_ineffective",
+                "sessionId": "session-val_optimization_ineffective",
+                "trace": {
+                  "rootAgentName": "support_agent",
+                  "rootInvocationId": "invocation-val_optimization_ineffective",
+                  "sessionId": "session-val_optimization_ineffective",
+                  "status": "completed",
+                  "steps": [
+                    {
+                      "stepId": "step-val_optimization_ineffective",
+                      "invocationId": "invocation-val_optimization_ineffective",
+                      "agentName": "support_agent",
+                      "nodeId": "support_agent",
+                      "appliedSurfaceIds": [
+                        "support_agent#instruction"
+                      ],
+                      "input": {
+                        "text": "user request for val_optimization_ineffective"
+                      },
+                      "output": {
+                        "text": "candidate response for val_optimization_ineffective"
+                      }
+                    }
+                  ]
+                },
+                "metrics": [
+                  {
+                    "metricName": "json_format",
+                    "score": 0.5,
+                    "status": "failed",
+                    "reason": "partial JSON improvement but still fails schema"
+                  }
+                ]
+              },
+              {
+                "evalSetId": "validation",
+                "evalCaseId": "val_overfit_refund_policy",
+                "sessionId": "session-val_overfit_refund_policy",
+                "trace": {
+                  "rootAgentName": "support_agent",
+                  "rootInvocationId": "invocation-val_overfit_refund_policy",
+                  "sessionId": "session-val_overfit_refund_policy",
+                  "status": "completed",
+                  "steps": [
+                    {
+                      "stepId": "step-val_overfit_refund_policy",
+                      "invocationId": "invocation-val_overfit_refund_policy",
+                      "agentName": "support_agent",
+                      "nodeId": "support_agent",
+                      "appliedSurfaceIds": [
+                        "support_agent#instruction"
+                      ],
+                      "input": {
+                        "text": "user request for val_overfit_refund_policy"
+                      },
+                      "output": {
+                        "text": "candidate response for val_overfit_refund_policy"
+                      }
+                    }
+                  ]
+                },
+                "metrics": [
+                  {
+                    "metricName": "final_response",
+                    "score": 0,
+                    "status": "failed",
+                    "reason": "final response mismatch: candidate overfits train date and drops 2026-08-31"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "delta": {
+    "overallScoreDelta": 0.16666666666666669,
+    "summary": {
+      "newlyPassed": 1,
+      "newlyFailed": 1,
+      "scoreUp": 1,
+      "scoreDown": 0,
+      "unchanged": 0
+    },
+    "cases": [
+      {
+        "evalSetId": "validation",
+        "evalCaseId": "val_optimization_ineffective",
+        "metricName": "json_format",
+        "baselineScore": 0,
+        "candidateScore": 0.5,
+        "baselineStatus": "failed",
+        "candidateStatus": "failed",
+        "scoreDelta": 0.5,
+        "kind": "score_up"
+      },
+      {
+        "evalSetId": "validation",
+        "evalCaseId": "val_overfit_refund_policy",
+        "metricName": "final_response",
+        "baselineScore": 1,
+        "candidateScore": 0,
+        "baselineStatus": "passed",
+        "candidateStatus": "failed",
+        "scoreDelta": -1,
+        "kind": "newly_failed",
+        "critical": true
+      },
+      {
+        "evalSetId": "validation",
+        "evalCaseId": "val_prompt_fix_generalizes",
+        "metricName": "tool_trajectory",
+        "baselineScore": 0,
+        "candidateScore": 1,
+        "baselineStatus": "failed",
+        "candidateStatus": "passed",
+        "scoreDelta": 1,
+        "kind": "newly_passed"
+      }
+    ]
+  },
+  "gateDecision": {
+    "accepted": false,
+    "reasons": [
+      "PromptIter accepted a candidate profile",
+      "validation score gain 0.167 \u003e= threshold 0.050",
+      "1 newly failed hard validation metrics: [val_overfit_refund_policy/final_response]",
+      "critical cases regressed: [val_overfit_refund_policy]",
+      "model calls 6 within budget 10"
+    ]
+  },
+  "baselineFailureAttributions": [
+    {
+      "evalSetId": "train",
+      "evalCaseId": "train_optimization_ineffective",
+      "metricName": "router_decision",
+      "category": "route_error",
+      "secondaryCategories": [
+        "final_response_mismatch"
+      ],
+      "severity": "P0",
+      "method": "configured_hint",
+      "confidence": 0.95,
+      "reason": "route error: selected general_support instead of routing_helper",
+      "evidence": [
+        "metric=router_decision status=failed score=0.000",
+        "metric_reason=route error: selected general_support instead of routing_helper",
+        "trace_status=completed",
+        "final_output=trace output for train_optimization_ineffective"
+      ]
+    },
+    {
+      "evalSetId": "train",
+      "evalCaseId": "train_overfit_success",
+      "metricName": "knowledge_recall",
+      "category": "knowledge_recall_gap",
+      "secondaryCategories": [
+        "final_response_mismatch"
+      ],
+      "severity": "P2",
+      "method": "configured_hint",
+      "confidence": 0.95,
+      "reason": "knowledge recall gap: refund policy date omitted",
+      "evidence": [
+        "metric=knowledge_recall status=failed score=0.000",
+        "metric_reason=knowledge recall gap: refund policy date omitted",
+        "trace_status=completed",
+        "final_output=trace output for train_overfit_success"
+      ]
+    },
+    {
+      "evalSetId": "train",
+      "evalCaseId": "train_prompt_fix_success",
+      "metricName": "tool_trajectory",
+      "category": "tool_argument_error",
+      "secondaryCategories": [
+        "tool_call_error",
+        "final_response_mismatch"
+      ],
+      "severity": "P1",
+      "method": "deterministic_rules",
+      "confidence": 0.85,
+      "reason": "tool argument parameter mismatch: invoice_id was omitted",
+      "evidence": [
+        "metric=tool_trajectory status=failed score=0.000",
+        "metric_reason=tool argument parameter mismatch: invoice_id was omitted",
+        "trace_status=completed",
+        "final_output=trace output for train_prompt_fix_success",
+        "metric_definition_hint=tool_call_error superseded_by_reason_signal"
+      ]
+    },
+    {
+      "evalSetId": "validation",
+      "evalCaseId": "val_optimization_ineffective",
+      "metricName": "json_format",
+      "category": "format_error",
+      "severity": "P1",
+      "method": "structured_diff",
+      "confidence": 0.9,
+      "reason": "format error: response uses prose instead of JSON",
+      "evidence": [
+        "metric=json_format status=failed score=0.000",
+        "metric_reason=format error: response uses prose instead of JSON",
+        "trace_status=completed",
+        "final_output=trace output for val_optimization_ineffective"
+      ]
+    },
+    {
+      "evalSetId": "validation",
+      "evalCaseId": "val_prompt_fix_generalizes",
+      "metricName": "tool_trajectory",
+      "category": "tool_call_error",
+      "severity": "P1",
+      "method": "deterministic_rules",
+      "confidence": 0.85,
+      "reason": "missing tool call: invoice question was not sent to billing_lookup",
+      "evidence": [
+        "metric=tool_trajectory status=failed score=0.000",
+        "metric_reason=missing tool call: invoice question was not sent to billing_lookup",
+        "trace_status=completed",
+        "final_output=trace output for val_prompt_fix_generalizes"
+      ]
+    }
+  ],
+  "baselineFailureAttributionSummary": {
+    "total": 5,
+    "byCategory": {
+      "format_error": 1,
+      "knowledge_recall_gap": 1,
+      "route_error": 1,
+      "tool_argument_error": 1,
+      "tool_call_error": 1
+    },
+    "bySecondaryCategory": {
+      "final_response_mismatch": 3,
+      "tool_call_error": 1
+    },
+    "byMetric": {
+      "json_format": 1,
+      "knowledge_recall": 1,
+      "router_decision": 1,
+      "tool_trajectory": 2
+    },
+    "byCase": {
+      "train/train_optimization_ineffective": [
+        "route_error"
+      ],
+      "train/train_overfit_success": [
+        "knowledge_recall_gap"
+      ],
+      "train/train_prompt_fix_success": [
+        "tool_argument_error"
+      ],
+      "validation/val_optimization_ineffective": [
+        "format_error"
+      ],
+      "validation/val_prompt_fix_generalizes": [
+        "tool_call_error"
+      ]
+    }
+  },
+  "candidateFailureAttributions": [
+    {
+      "evalSetId": "validation",
+      "evalCaseId": "val_optimization_ineffective",
+      "metricName": "json_format",
+      "category": "format_error",
+      "severity": "P1",
+      "method": "structured_diff",
+      "confidence": 0.9,
+      "reason": "partial JSON improvement but still fails schema",
+      "evidence": [
+        "metric=json_format status=failed score=0.500",
+        "metric_reason=partial JSON improvement but still fails schema",
+        "trace_status=completed",
+        "final_output=trace output for val_optimization_ineffective"
+      ]
+    },
+    {
+      "evalSetId": "validation",
+      "evalCaseId": "val_overfit_refund_policy",
+      "metricName": "final_response",
+      "category": "final_response_mismatch",
+      "severity": "P2",
+      "method": "configured_hint",
+      "confidence": 0.95,
+      "reason": "final response mismatch: candidate overfits train date and drops 2026-08-31",
+      "evidence": [
+        "metric=final_response status=failed score=0.000",
+        "metric_reason=final response mismatch: candidate overfits train date and drops 2026-08-31",
+        "trace_status=completed",
+        "final_output=trace output for val_overfit_refund_policy"
+      ]
+    }
+  ],
+  "candidateFailureAttributionSummary": {
+    "total": 2,
+    "byCategory": {
+      "final_response_mismatch": 1,
+      "format_error": 1
+    },
+    "byMetric": {
+      "final_response": 1,
+      "json_format": 1
+    },
+    "byCase": {
+      "validation/val_optimization_ineffective": [
+        "format_error"
+      ],
+      "validation/val_overfit_refund_policy": [
+        "final_response_mismatch"
+      ]
+    }
+  },
+  "failureAttributions": [
+    {
+      "evalSetId": "train",
+      "evalCaseId": "train_optimization_ineffective",
+      "metricName": "router_decision",
+      "category": "route_error",
+      "secondaryCategories": [
+        "final_response_mismatch"
+      ],
+      "severity": "P0",
+      "method": "configured_hint",
+      "confidence": 0.95,
+      "reason": "route error: selected general_support instead of routing_helper",
+      "evidence": [
+        "metric=router_decision status=failed score=0.000",
+        "metric_reason=route error: selected general_support instead of routing_helper",
+        "trace_status=completed",
+        "final_output=trace output for train_optimization_ineffective"
+      ]
+    },
+    {
+      "evalSetId": "train",
+      "evalCaseId": "train_overfit_success",
+      "metricName": "knowledge_recall",
+      "category": "knowledge_recall_gap",
+      "secondaryCategories": [
+        "final_response_mismatch"
+      ],
+      "severity": "P2",
+      "method": "configured_hint",
+      "confidence": 0.95,
+      "reason": "knowledge recall gap: refund policy date omitted",
+      "evidence": [
+        "metric=knowledge_recall status=failed score=0.000",
+        "metric_reason=knowledge recall gap: refund policy date omitted",
+        "trace_status=completed",
+        "final_output=trace output for train_overfit_success"
+      ]
+    },
+    {
+      "evalSetId": "train",
+      "evalCaseId": "train_prompt_fix_success",
+      "metricName": "tool_trajectory",
+      "category": "tool_argument_error",
+      "secondaryCategories": [
+        "tool_call_error",
+        "final_response_mismatch"
+      ],
+      "severity": "P1",
+      "method": "deterministic_rules",
+      "confidence": 0.85,
+      "reason": "tool argument parameter mismatch: invoice_id was omitted",
+      "evidence": [
+        "metric=tool_trajectory status=failed score=0.000",
+        "metric_reason=tool argument parameter mismatch: invoice_id was omitted",
+        "trace_status=completed",
+        "final_output=trace output for train_prompt_fix_success",
+        "metric_definition_hint=tool_call_error superseded_by_reason_signal"
+      ]
+    },
+    {
+      "evalSetId": "validation",
+      "evalCaseId": "val_optimization_ineffective",
+      "metricName": "json_format",
+      "category": "format_error",
+      "severity": "P1",
+      "method": "structured_diff",
+      "confidence": 0.9,
+      "reason": "format error: response uses prose instead of JSON",
+      "evidence": [
+        "metric=json_format status=failed score=0.000",
+        "metric_reason=format error: response uses prose instead of JSON",
+        "trace_status=completed",
+        "final_output=trace output for val_optimization_ineffective"
+      ]
+    },
+    {
+      "evalSetId": "validation",
+      "evalCaseId": "val_prompt_fix_generalizes",
+      "metricName": "tool_trajectory",
+      "category": "tool_call_error",
+      "severity": "P1",
+      "method": "deterministic_rules",
+      "confidence": 0.85,
+      "reason": "missing tool call: invoice question was not sent to billing_lookup",
+      "evidence": [
+        "metric=tool_trajectory status=failed score=0.000",
+        "metric_reason=missing tool call: invoice question was not sent to billing_lookup",
+        "trace_status=completed",
+        "final_output=trace output for val_prompt_fix_generalizes"
+      ]
+    },
+    {
+      "evalSetId": "validation",
+      "evalCaseId": "val_optimization_ineffective",
+      "metricName": "json_format",
+      "category": "format_error",
+      "severity": "P1",
+      "method": "structured_diff",
+      "confidence": 0.9,
+      "reason": "partial JSON improvement but still fails schema",
+      "evidence": [
+        "metric=json_format status=failed score=0.500",
+        "metric_reason=partial JSON improvement but still fails schema",
+        "trace_status=completed",
+        "final_output=trace output for val_optimization_ineffective"
+      ]
+    },
+    {
+      "evalSetId": "validation",
+      "evalCaseId": "val_overfit_refund_policy",
+      "metricName": "final_response",
+      "category": "final_response_mismatch",
+      "severity": "P2",
+      "method": "configured_hint",
+      "confidence": 0.95,
+      "reason": "final response mismatch: candidate overfits train date and drops 2026-08-31",
+      "evidence": [
+        "metric=final_response status=failed score=0.000",
+        "metric_reason=final response mismatch: candidate overfits train date and drops 2026-08-31",
+        "trace_status=completed",
+        "final_output=trace output for val_overfit_refund_policy"
+      ]
+    }
+  ],
+  "failureAttributionSummary": {
+    "total": 7,
+    "byCategory": {
+      "final_response_mismatch": 1,
+      "format_error": 2,
+      "knowledge_recall_gap": 1,
+      "route_error": 1,
+      "tool_argument_error": 1,
+      "tool_call_error": 1
+    },
+    "bySecondaryCategory": {
+      "final_response_mismatch": 3,
+      "tool_call_error": 1
+    },
+    "byMetric": {
+      "final_response": 1,
+      "json_format": 2,
+      "knowledge_recall": 1,
+      "router_decision": 1,
+      "tool_trajectory": 2
+    },
+    "byCase": {
+      "train/train_optimization_ineffective": [
+        "route_error"
+      ],
+      "train/train_overfit_success": [
+        "knowledge_recall_gap"
+      ],
+      "train/train_prompt_fix_success": [
+        "tool_argument_error"
+      ],
+      "validation/val_optimization_ineffective": [
+        "format_error",
+        "format_error"
+      ],
+      "validation/val_overfit_refund_policy": [
+        "final_response_mismatch"
+      ],
+      "validation/val_prompt_fix_generalizes": [
+        "tool_call_error"
+      ]
+    }
+  },
+  "cost": {
+    "modelCalls": 6,
+    "estimated": true,
+    "source": "model_call_estimate"
+  },
+  "latency": "150ms",
+  "candidatePrompt": "OVERFIT_PROMPT: optimize train failures aggressively, even if validation policy dates change."
+}

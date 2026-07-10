@@ -1,0 +1,72 @@
+{
+  "evalSetId": "train",
+  "name": "train",
+  "evalCases": [
+    {
+      "evalId": "train_prompt_fix_success",
+      "conversation": [
+        {
+          "userContent": {"role": "user", "content": "Route my invoice dispute."},
+          "finalResponse": {"role": "assistant", "content": "billing"}
+        }
+      ],
+      "sessionInput": {
+        "appName": "eval-optimization-regression-app",
+        "userId": "demo",
+        "state": {
+          "metricName": "tool_trajectory",
+          "baselineScore": 0,
+          "baselineStatus": "failed",
+          "baselineReason": "tool argument parameter mismatch: invoice_id was omitted",
+          "candidateScore": 1,
+          "candidateStatus": "passed",
+          "candidateReason": "candidate routes invoice disputes to billing"
+        }
+      }
+    },
+    {
+      "evalId": "train_optimization_ineffective",
+      "conversation": [
+        {
+          "userContent": {"role": "user", "content": "Return compact JSON."},
+          "finalResponse": {"role": "assistant", "content": "{\"ok\":true}"}
+        }
+      ],
+      "sessionInput": {
+        "appName": "eval-optimization-regression-app",
+        "userId": "demo",
+        "state": {
+          "metricName": "router_decision",
+          "baselineScore": 0,
+          "baselineStatus": "failed",
+          "baselineReason": "route error: selected general_support instead of routing_helper",
+          "candidateScore": 0,
+          "candidateStatus": "failed",
+          "candidateReason": "route error remains in this case"
+        }
+      }
+    },
+    {
+      "evalId": "train_overfit_success",
+      "conversation": [
+        {
+          "userContent": {"role": "user", "content": "Summarize refund policy."},
+          "finalResponse": {"role": "assistant", "content": "refund policy date preserved"}
+        }
+      ],
+      "sessionInput": {
+        "appName": "eval-optimization-regression-app",
+        "userId": "demo",
+        "state": {
+          "metricName": "knowledge_recall",
+          "baselineScore": 0,
+          "baselineStatus": "failed",
+          "baselineReason": "knowledge recall gap: refund policy date omitted",
+          "candidateScore": 1,
+          "candidateStatus": "passed",
+          "candidateReason": "candidate includes the policy date"
+        }
+      }
+    }
+  ]
+}
