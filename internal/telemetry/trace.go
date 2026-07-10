@@ -149,9 +149,10 @@ func marshalTelemetryChoices(choices []model.Choice) ([]byte, error) {
 
 // ChatTraceState keeps per-chat-span trace state for repeated streaming chunks.
 //
-// Request attributes are committed once per chat span. Invocation and response
-// attributes remain chunk-scoped because they are cheap and may be completed as
-// streaming processing advances.
+// Request attributes are normally committed once per chat span while the
+// installed span attribute policy pointer remains unchanged. Invocation and
+// response attributes remain chunk-scoped because they are cheap and may be
+// completed as streaming processing advances.
 //
 // ChatTraceState is not goroutine-safe and must not be shared across chat spans.
 type ChatTraceState struct {
@@ -167,7 +168,13 @@ type TraceChunkAttributes struct {
 	TimeToFirstToken time.Duration
 }
 
-// CommitRequest writes base chat and request attributes once per chat span.
+// CommitRequest writes base chat and request attributes for a chat span.
+//
+// Request payload attributes are committed once while the global span attribute
+// policy pointer remains unchanged. If the policy pointer changes, request
+// attributes are rebuilt and written again under the new policy. Base chat
+// attributes may be rewritten on those refreshes. When req is nil, only base
+// attributes are written and request commit state is not latched.
 func (s *ChatTraceState) CommitRequest(span trace.Span, req *model.Request, taskType string) {
 	if !span.IsRecording() {
 		return
@@ -182,13 +189,15 @@ func (s *ChatTraceState) CommitRequest(span trace.Span, req *model.Request, task
 	if taskType != "" {
 		attrs = append(attrs, attribute.String(semconvtrace.KeyGenAITaskType, taskType))
 	}
-	attrs = append(attrs, buildRequestAttributes(req)...)
+	if req != nil {
+		attrs = append(attrs, buildRequestAttributes(req)...)
+	}
 
 	if len(attrs) > 0 {
 		span.SetAttributes(attrs...)
 	}
 
-	if s != nil {
+	if s != nil && req != nil {
 		s.requestCommitted = true
 		s.cachedPolicy = policy
 	}

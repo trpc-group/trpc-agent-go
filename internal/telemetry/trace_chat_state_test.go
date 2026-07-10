@@ -47,7 +47,7 @@ func TestChatTraceState_RequestAttributesCommittedOnce(t *testing.T) {
 	}
 }
 
-func TestChatTraceState_PolicyDropSkipsRecommit(t *testing.T) {
+func TestChatTraceState_PolicyDropSkipsDroppedRequestAttributesOnRefresh(t *testing.T) {
 	t.Cleanup(func() { SetSpanAttributePolicy(SpanAttributePolicy{}) })
 
 	req := &model.Request{
@@ -71,6 +71,40 @@ func TestChatTraceState_PolicyDropSkipsRecommit(t *testing.T) {
 	after := countAttr(span.attrs, semconvtrace.KeyGenAIInputMessages)
 	if after != before {
 		t.Fatalf("drop policy should not append cached input messages: before=%d after=%d", before, after)
+	}
+}
+
+func TestChatTraceState_NilRequestThenRequestCommitsPayload(t *testing.T) {
+	t.Cleanup(func() { SetSpanAttributePolicy(SpanAttributePolicy{}) })
+	installChatStreamingPolicyForTest()
+
+	span := newRecordingSpan()
+	state := &ChatTraceState{}
+	req := &model.Request{
+		Messages: []model.Message{model.NewUserMessage("hello")},
+	}
+
+	state.TraceChat(span, &TraceChatAttributes{
+		Response: chatResponseForChatStateTest("first"),
+	})
+	if countAttr(span.attrs, semconvtrace.KeyGenAIInputMessages) != 0 {
+		t.Fatalf("expected no input messages before request is committed, got %d", countAttr(span.attrs, semconvtrace.KeyGenAIInputMessages))
+	}
+
+	state.TraceChat(span, &TraceChatAttributes{
+		Request:  req,
+		Response: chatResponseForChatStateTest("second"),
+	})
+	if countAttr(span.attrs, semconvtrace.KeyGenAIInputMessages) != 1 {
+		t.Fatalf("expected input messages after delayed request commit, got %d", countAttr(span.attrs, semconvtrace.KeyGenAIInputMessages))
+	}
+
+	state.TraceChat(span, &TraceChatAttributes{
+		Request:  req,
+		Response: chatResponseForChatStateTest("third"),
+	})
+	if countAttr(span.attrs, semconvtrace.KeyGenAIInputMessages) != 1 {
+		t.Fatalf("expected input messages committed once, got %d", countAttr(span.attrs, semconvtrace.KeyGenAIInputMessages))
 	}
 }
 
