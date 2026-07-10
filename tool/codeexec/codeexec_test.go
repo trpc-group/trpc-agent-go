@@ -18,15 +18,18 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
+	"trpc.group/trpc-go/trpc-agent-go/tool/safety"
 )
 
 // mockCodeExecutor is a mock implementation of codeexecutor.CodeExecutor for testing.
 type mockCodeExecutor struct {
 	result codeexecutor.CodeExecutionResult
 	err    error
+	calls  int
 }
 
 func (m *mockCodeExecutor) ExecuteCode(_ context.Context, _ codeexecutor.CodeExecutionInput) (codeexecutor.CodeExecutionResult, error) {
+	m.calls++
 	return m.result, m.err
 }
 
@@ -104,6 +107,44 @@ func TestNewTool(t *testing.T) {
 		assert.Equal(t, []any{"python"}, langSchema.Enum)
 	})
 
+}
+
+func TestExecuteCodeSafetyScannerBlocksBeforeExecutor(t *testing.T) {
+	exec := &mockCodeExecutor{}
+	tl := NewTool(exec, WithSafetyScanner(safety.NewScanner(safety.DefaultPolicy())))
+
+	_, err := tl.Call(context.Background(), []byte(`{
+		"code_blocks":[{"language":"bash","code":"cat .env"}]
+	}`))
+	require.Error(t, err)
+	var blocked *safety.BlockedError
+	require.ErrorAs(t, err, &blocked)
+	require.Equal(t, safety.DecisionDeny, blocked.Report.Decision)
+	require.Equal(t, "TSG-PATH-001", blocked.Report.PrimaryRuleID())
+	require.Zero(t, exec.calls)
+}
+
+func TestExecuteCodeSafetyScannerRedactsOutputAndArtifacts(t *testing.T) {
+	exec := &mockCodeExecutor{
+		result: codeexecutor.CodeExecutionResult{
+			Output: "token=sk-abcdefghijklmnopqrstuvwxyz",
+			OutputFiles: []codeexecutor.File{{
+				Name:     "secret.txt",
+				Content:  "password=supersecret",
+				MIMEType: "text/plain",
+			}},
+		},
+	}
+	tl := NewTool(exec, WithSafetyScanner(safety.NewScanner(safety.DefaultPolicy())))
+
+	result, err := tl.Call(context.Background(), []byte(`{
+		"code_blocks":[{"language":"python","code":"print('ok')"}]
+	}`))
+	require.NoError(t, err)
+	out, ok := result.(codeexecutor.CodeExecutionResult)
+	require.True(t, ok)
+	require.Equal(t, "[REDACTED]", out.Output)
+	require.Equal(t, "[REDACTED]", out.OutputFiles[0].Content)
 }
 
 func TestExecuteCodeTool_Call(t *testing.T) {

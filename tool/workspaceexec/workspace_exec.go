@@ -34,6 +34,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/safety"
 )
 
 const (
@@ -76,6 +77,8 @@ type ExecTool struct {
 	// "eval curl ..." or "sh -c '...'".
 	allowedCmds []string
 	deniedCmds  []string
+
+	safetyScanner *safety.Scanner
 
 	mu       sync.Mutex
 	sessions map[string]*execSession
@@ -251,6 +254,14 @@ func WithAllowedCommands(cmds ...string) func(*ExecTool) {
 func WithDeniedCommands(cmds ...string) func(*ExecTool) {
 	return func(t *ExecTool) {
 		t.setDeniedCommands(cmds)
+	}
+}
+
+// WithSafetyScanner configures a pre-execution scanner for workspace_exec.
+// Deny and ask decisions are returned before any workspace process starts.
+func WithSafetyScanner(scanner *safety.Scanner) func(*ExecTool) {
+	return func(t *ExecTool) {
+		t.safetyScanner = scanner
 	}
 }
 
@@ -601,6 +612,9 @@ func (t *ExecTool) prepareExec(
 	ctx context.Context,
 	in execInput,
 ) (execRequest, error) {
+	if err := t.checkSafety(ctx, in); err != nil {
+		return execRequest{}, err
+	}
 	if err := t.checkCommandPolicy(in.Command); err != nil {
 		return execRequest{}, err
 	}
@@ -643,6 +657,77 @@ func (t *ExecTool) prepareExec(
 			Timeout:  execTimeout(timeout),
 		},
 	}, nil
+}
+
+func (t *ExecTool) checkSafety(ctx context.Context, in execInput) error {
+	if t == nil || t.safetyScanner == nil {
+		return nil
+	}
+	timeout := firstIntValue(in.TimeoutSec, in.TimeoutSecOld)
+	if timeout <= 0 {
+		timeout = in.Timeout
+	}
+	report := t.safetyScanner.Scan(ctx, safety.Request{
+		ToolName:   "workspace_exec",
+		Backend:    safety.BackendWorkspaceExec,
+		Command:    in.Command,
+		Cwd:        in.Cwd,
+		Env:        in.Env,
+		Stdin:      in.Stdin,
+		TimeoutSec: timeout,
+		Background: in.Background,
+		TTY:        firstBoolValue(in.TTY, in.PTY),
+	})
+	if report.Blocked {
+		return safety.NewBlockedError(report)
+	}
+	return nil
+}
+
+func (t *ExecTool) checkStdinSafety(
+	ctx context.Context,
+	sessionID string,
+	chars string,
+	appendNewline bool,
+) error {
+	if t == nil || t.safetyScanner == nil {
+		return nil
+	}
+	stdin := chars
+	if appendNewline {
+		stdin += "\n"
+	}
+	report := t.safetyScanner.Scan(ctx, safety.Request{
+		ToolName: "workspace_write_stdin",
+		Backend:  safety.BackendWorkspaceExec,
+		Stdin:    stdin,
+		Metadata: map[string]string{
+			"session_id":        sessionID,
+			"interactive_stdin": "true",
+		},
+		TTY: true,
+	})
+	if report.Blocked {
+		return safety.NewBlockedError(report)
+	}
+	return nil
+}
+
+func (t *ExecTool) scanOutput(ctx context.Context, out execOutput) execOutput {
+	if t == nil || t.safetyScanner == nil || out.Output == "" {
+		return out
+	}
+	report := t.safetyScanner.ScanOutput(ctx, safety.Request{
+		ToolName: "workspace_exec",
+		Backend:  safety.BackendWorkspaceExec,
+		Metadata: map[string]string{
+			"output_status": out.Status,
+		},
+	}, out.Output)
+	if report.Redacted {
+		out.Output, _ = safety.RedactText(out.Output, t.safetyScanner.Policy())
+	}
+	return out
 }
 
 // checkCommandPolicy enforces the optional allow/deny lists. When no
@@ -764,7 +849,7 @@ func (t *ExecTool) callNonSessional(
 	if err != nil {
 		return execOutput{}, err
 	}
-	return out, nil
+	return t.scanOutput(ctx, out), nil
 }
 
 func (t *ExecTool) callSessional(
@@ -776,9 +861,13 @@ func (t *ExecTool) callSessional(
 		if err != nil {
 			return execOutput{}, err
 		}
-		return out, nil
+		return t.scanOutput(ctx, out), nil
 	}
-	return t.startInteractive(ctx, req)
+	out, err := t.startInteractive(ctx, req)
+	if err != nil {
+		return execOutput{}, err
+	}
+	return t.scanOutput(ctx, out), nil
 }
 
 func runOneShot(
@@ -867,6 +956,11 @@ func (t *WriteStdinTool) Call(ctx context.Context, args []byte) (any, error) {
 	}
 	appendNewline := firstBoolValue(in.AppendNewline, in.Submit)
 	if in.Chars != "" || appendNewline {
+		if err := t.exec.checkStdinSafety(
+			ctx, sessionID, in.Chars, appendNewline,
+		); err != nil {
+			return nil, err
+		}
 		if err := sess.proc.Write(in.Chars, appendNewline); err != nil {
 			return nil, err
 		}
@@ -884,7 +978,7 @@ func (t *WriteStdinTool) Call(ctx context.Context, args []byte) (any, error) {
 			out.SessionID = sessionID
 		}
 	}
-	return out, nil
+	return t.exec.scanOutput(ctx, out), nil
 }
 
 // Call terminates a running workspace_exec session.

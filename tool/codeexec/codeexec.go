@@ -17,6 +17,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/safety"
 )
 
 // Option configures the code execution tool.
@@ -26,6 +27,7 @@ type config struct {
 	name        string
 	description string
 	languages   []string
+	safety      *safety.Scanner
 }
 
 // WithName sets the tool name.
@@ -43,6 +45,14 @@ func WithLanguages(langs ...string) Option {
 	return func(c *config) {
 		// Defensive copy to avoid caller mutation.
 		c.languages = append([]string(nil), langs...)
+	}
+}
+
+// WithSafetyScanner configures a pre-execution scanner for code blocks.
+// Deny and ask decisions are returned before the code executor is invoked.
+func WithSafetyScanner(scanner *safety.Scanner) Option {
+	return func(c *config) {
+		c.safety = scanner
 	}
 }
 
@@ -224,7 +234,80 @@ func (t *executeCodeTool) Call(ctx context.Context, args []byte) (any, error) {
 		}
 	}
 
-	return t.executor.ExecuteCode(ctx, input)
+	if err := t.checkSafety(ctx, input); err != nil {
+		return nil, err
+	}
+	result, err := t.executor.ExecuteCode(ctx, input)
+	return t.scanOutput(ctx, result), err
+}
+
+func (t *executeCodeTool) checkSafety(
+	ctx context.Context,
+	input codeexecutor.CodeExecutionInput,
+) error {
+	if t == nil || t.cfg.safety == nil {
+		return nil
+	}
+	blocks := make([]safety.CodeBlock, 0, len(input.CodeBlocks))
+	for _, b := range input.CodeBlocks {
+		blocks = append(blocks, safety.CodeBlock{
+			Language: b.Language,
+			Code:     b.Code,
+		})
+	}
+	report := t.cfg.safety.Scan(ctx, safety.Request{
+		ToolName:   t.cfg.name,
+		Backend:    safety.BackendCodeExec,
+		CodeBlocks: blocks,
+		Metadata: map[string]string{
+			"execution_id": input.ExecutionID,
+		},
+	})
+	if report.Blocked {
+		return safety.NewBlockedError(report)
+	}
+	return nil
+}
+
+func (t *executeCodeTool) scanOutput(
+	ctx context.Context,
+	result codeexecutor.CodeExecutionResult,
+) codeexecutor.CodeExecutionResult {
+	if t == nil || t.cfg.safety == nil {
+		return result
+	}
+	if result.Output != "" {
+		report := t.cfg.safety.ScanOutput(ctx, safety.Request{
+			ToolName: t.cfg.name,
+			Backend:  safety.BackendCodeExec,
+			Metadata: map[string]string{
+				"output_kind": "stdout",
+			},
+		}, result.Output)
+		if report.Redacted {
+			result.Output, _ = safety.RedactText(result.Output, t.cfg.safety.Policy())
+		}
+	}
+	for i := range result.OutputFiles {
+		if result.OutputFiles[i].Content == "" {
+			continue
+		}
+		report := t.cfg.safety.ScanOutput(ctx, safety.Request{
+			ToolName: t.cfg.name,
+			Backend:  safety.BackendCodeExec,
+			Metadata: map[string]string{
+				"output_kind": "artifact",
+				"file_name":   result.OutputFiles[i].Name,
+			},
+		}, result.OutputFiles[i].Content)
+		if report.Redacted {
+			result.OutputFiles[i].Content, _ = safety.RedactText(
+				result.OutputFiles[i].Content,
+				t.cfg.safety.Policy(),
+			)
+		}
+	}
+	return result
 }
 
 func (t *executeCodeTool) isSupportedLanguage(language string) bool {
