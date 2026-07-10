@@ -36,3 +36,24 @@ var Case03_UpdateState = &Case{
 		{Kind: OpAppendEvent, Role: "assistant", Content: "今天天气下雨"},
 	},
 }
+
+var Case04_ToolCall = &Case{
+	Name: "case04_tool_call",
+	Ops: []Op{
+		{Kind: OpCreateSession},
+		{Kind: OpAppendEvent, Role: "user", Content: "查一下北京天气"},
+		{
+			Kind:     OpAppendToolCall,
+			ToolID:   "call_weather_1",
+			ToolName: "weather_query",
+			ToolArgs: `{"city":"北京"}`,
+		},
+		{
+			Kind:     OpAppendToolResponse,
+			ToolID:   "call_weather_1",
+			ToolName: "weather_query",
+			Content:  `{"weather":"晴"}`,
+		},
+		{Kind: OpAppendEvent, Role: "assistant", Content: "北京今天晴。"},
+	},
+}

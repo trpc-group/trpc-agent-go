@@ -4,14 +4,25 @@ package normalize
 
 import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
 // 同一的格式
 type Event struct {
-	Index   int
-	Role    string
-	Content string
+	Index     int
+	Role      string
+	Content   string
+	ToolID    string
+	ToolName  string
+	ToolArgs  string
+	ToolCalls []ToolCall
+}
+
+type ToolCall struct {
+	ID   string
+	Name string
+	Args string
 }
 
 type SnapShot struct {
@@ -21,6 +32,7 @@ type SnapShot struct {
 }
 
 //从某一session 转化得到 snapshot
+// 获得snapshot的最后接口 其他 归一化在这个函数内 以及之前进行
 
 func FromSession(sess *session.Session) *SnapShot {
 
@@ -35,14 +47,7 @@ func FromSession(sess *session.Session) *SnapShot {
 	}
 
 	for i, evt := range sess.Events {
-		role, content := RoleAndContent(evt)
-
-		snapshot.Events = append(snapshot.Events, Event{
-			Index:   i,
-			Role:    role,
-			Content: content,
-		})
-
+		snapshot.Events = append(snapshot.Events, NormalizeEvent(i, evt))
 	}
 	// 处理状态
 	snapshot.State = NormalizeState(sess.State)
@@ -58,10 +63,29 @@ func NormalizeState(state session.StateMap) map[string]string {
 	return normalizedState
 }
 
-func RoleAndContent(evt event.Event) (string, string) {
+func NormalizeEvent(index int, evt event.Event) Event {
 	if evt.Response == nil || len(evt.Response.Choices) == 0 {
-		return "", ""
+		return Event{Index: index}
 	}
 	msg := evt.Response.Choices[0].Message
-	return string(msg.Role), msg.Content
+	return Event{
+		Index:     index,
+		Role:      string(msg.Role),
+		Content:   msg.Content,
+		ToolID:    msg.ToolID,
+		ToolName:  msg.ToolName,
+		ToolCalls: NormalizeToolCalls(msg.ToolCalls),
+	}
+}
+
+func NormalizeToolCalls(calls []model.ToolCall) []ToolCall {
+	normalizedToolcalls := make([]ToolCall, 0, len(calls))
+	for _, call := range calls {
+		normalizedToolcalls = append(normalizedToolcalls, ToolCall{
+			ID:   call.ID,
+			Name: call.Function.Name,
+			Args: string(call.Function.Arguments),
+		})
+	}
+	return normalizedToolcalls
 }

@@ -35,3 +35,40 @@ func NewAssistantEvent(content string) *event.Event {
 		Timestamp: time.Now(),
 	}
 }
+
+func NewAssistantToolCallEvent(toolID, toolName, toolArgs string) *event.Event {
+	return &event.Event{
+		Response: &model.Response{
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role: model.RoleAssistant,
+					ToolCalls: []model.ToolCall{{
+						ID:   toolID,
+						Type: "function",
+						Function: model.FunctionDefinitionParam{
+							Name:      toolName,
+							Arguments: []byte(toolArgs),
+						},
+					}},
+				},
+			}},
+		},
+		Timestamp: time.Now(),
+	}
+}
+
+func NewToolResponseEvent(toolID, toolName, content string) *event.Event {
+	return &event.Event{
+		Response: &model.Response{
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:     model.RoleTool,
+					ToolID:   toolID,
+					ToolName: toolName,
+					Content:  content,
+				},
+			}},
+		},
+		Timestamp: time.Now(),
+	}
+}

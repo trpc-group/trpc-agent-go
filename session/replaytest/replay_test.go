@@ -22,6 +22,7 @@ func TestReplay(t *testing.T) {
 		scenario.Case01_SingleTurn,
 		scenario.Case02_MultiTurn,
 		scenario.Case03_UpdateState,
+		scenario.Case04_ToolCall,
 	}
 
 	for _, tc := range cases {

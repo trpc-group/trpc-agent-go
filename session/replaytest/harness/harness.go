@@ -63,6 +63,26 @@ func Run(
 			if err = svc.UpdateSessionState(ctx, key, state); err != nil {
 				return nil, fmt.Errorf("op[%d] update state: %w", i, err)
 			}
+		case scenario.OpAppendToolCall:
+			if sess == nil {
+				return nil, fmt.Errorf("op[%d] append event before create session", i)
+			}
+			evt := fixture.NewAssistantToolCallEvent(op.ToolID, op.ToolName, op.ToolArgs)
+			if err = svc.AppendEvent(ctx, sess, evt); err != nil {
+				return nil, fmt.Errorf("op[%d] append tool call: %w", i, err)
+			}
+		case scenario.OpAppendToolResponse:
+			if sess == nil {
+				return nil, fmt.Errorf("op[%d] append event before create session", i)
+			}
+			evt := fixture.NewToolResponseEvent(op.ToolID, op.ToolName, op.Content)
+			if err = svc.AppendEvent(ctx, sess, evt); err != nil {
+				return nil, fmt.Errorf("op[%d] append tool response: %w", i, err)
+			}
+			
+		case scenario.OpUpdateSummary:
+		case scenario.OpCreateSummary:
+			
 		default:
 			return nil, fmt.Errorf("op[%d] unsupported kind %q", i, op.Kind)
 		}
