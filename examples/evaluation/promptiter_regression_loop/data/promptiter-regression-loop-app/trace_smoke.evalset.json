@@ -1,0 +1,172 @@
+{
+  "evalSetId": "trace_smoke",
+  "name": "trace_smoke",
+  "evalCases": [
+    {
+      "evalId": "trace_flight_tr321_delay_replay",
+      "evalMode": "trace",
+      "conversation": [
+        {
+          "invocationId": "trace_flight_tr321_delay_replay-expected",
+          "userContent": {
+            "role": "user",
+            "content": "How delayed is flight TR321 right now?"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "Flight TR321 is delayed by 20 minutes and is estimated to depart at 14:40 from gate C03."
+          },
+          "tools": [
+            {
+              "id": "tool_use_flight_tr321",
+              "name": "lookup_record",
+              "arguments": {
+                "query": "TR321"
+              },
+              "result": {
+                "recordId": "TR321",
+                "state": "delayed",
+                "minutes": 20,
+                "location": "C03",
+                "scheduled": "14:20",
+                "updated": "14:40"
+              }
+            }
+          ]
+        }
+      ],
+      "actualConversation": [
+        {
+          "invocationId": "trace_flight_tr321_delay_replay-actual",
+          "userContent": {
+            "role": "user",
+            "content": "How delayed is flight TR321 right now?"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "Flight TR321 is delayed by 20 minutes and is estimated to depart at 14:40 from gate C03."
+          },
+          "tools": [
+            {
+              "id": "tool_use_flight_tr321",
+              "name": "lookup_record",
+              "arguments": {
+                "query": "TR321"
+              },
+              "result": {
+                "recordId": "TR321",
+                "state": "delayed",
+                "minutes": 20,
+                "location": "C03",
+                "scheduled": "14:20",
+                "updated": "14:40"
+              }
+            }
+          ],
+          "executionTrace": {
+            "RootAgentName": "candidate",
+            "RootInvocationID": "trace_flight_tr321_delay_replay-actual",
+            "SessionID": "trace-smoke-session-1",
+            "Status": "completed",
+            "Steps": [
+              {
+                "StepID": "trace-tr321-step-1",
+                "InvocationID": "trace_flight_tr321_delay_replay-actual",
+                "AgentName": "candidate",
+                "NodeID": "candidate",
+                "AppliedSurfaceIDs": [
+                  "candidate#tool.lookup_record"
+                ],
+                "Input": {
+                  "Text": "How delayed is flight TR321 right now?"
+                },
+                "Output": {
+                  "Text": "Flight TR321 is delayed by 20 minutes and is estimated to depart at 14:40 from gate C03."
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-regression-loop-app",
+        "userId": "traveler"
+      }
+    },
+    {
+      "evalId": "trace_flight_tr654_gate_tool_missing",
+      "evalMode": "trace",
+      "conversation": [
+        {
+          "invocationId": "trace_flight_tr654_gate_tool_missing-expected",
+          "userContent": {
+            "role": "user",
+            "content": "Which gate is flight TR654 boarding at?"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "Flight TR654 is boarding at gate D18."
+          },
+          "tools": [
+            {
+              "id": "tool_use_flight_tr654",
+              "name": "lookup_record",
+              "arguments": {
+                "query": "TR654"
+              },
+              "result": {
+                "recordId": "TR654",
+                "state": "boarding",
+                "minutes": 0,
+                "location": "D18",
+                "scheduled": "16:05",
+                "updated": "16:05"
+              }
+            }
+          ]
+        }
+      ],
+      "actualConversation": [
+        {
+          "invocationId": "trace_flight_tr654_gate_tool_missing-actual",
+          "userContent": {
+            "role": "user",
+            "content": "Which gate is flight TR654 boarding at?"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "I do not have enough flight status information to answer that."
+          },
+          "tools": [],
+          "executionTrace": {
+            "RootAgentName": "candidate",
+            "RootInvocationID": "trace_flight_tr654_gate_tool_missing-actual",
+            "SessionID": "trace-smoke-session-2",
+            "Status": "completed",
+            "Steps": [
+              {
+                "StepID": "trace-tr654-step-1",
+                "InvocationID": "trace_flight_tr654_gate_tool_missing-actual",
+                "AgentName": "candidate",
+                "NodeID": "candidate",
+                "AppliedSurfaceIDs": [
+                  "candidate#tool.lookup_record"
+                ],
+                "Input": {
+                  "Text": "Which gate is flight TR654 boarding at?"
+                },
+                "Output": {
+                  "Text": "I do not have enough flight status information to answer that."
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-regression-loop-app",
+        "userId": "traveler"
+      }
+    }
+  ]
+}

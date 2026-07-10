@@ -1,0 +1,138 @@
+{
+  "evalSetId": "validation",
+  "name": "validation",
+  "evalCases": [
+    {
+      "evalId": "flight_tr789_cancelled_no_tool",
+      "conversation": [
+        {
+          "invocationId": "flight_tr789_cancelled_no_tool-1",
+          "userContent": {
+            "role": "user",
+            "content": "The cancellation notice is already in front of me: flight TR789 is cancelled and is not operating tonight. Write the traveler update without looking anything up."
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "Flight TR789 is currently cancelled, so it is not operating tonight."
+          },
+          "tools": []
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-regression-loop-app",
+        "userId": "traveler"
+      }
+    },
+    {
+      "evalId": "flight_tr321_delay",
+      "conversation": [
+        {
+          "invocationId": "flight_tr321_delay-1",
+          "userContent": {
+            "role": "user",
+            "content": "How delayed is flight TR321 right now?"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "Flight TR321 is delayed by 20 minutes and is estimated to depart at 14:40 from gate C03."
+          },
+          "tools": [
+            {
+              "id": "tool_use_flight_tr321",
+              "name": "lookup_record",
+              "arguments": {
+                "query": "TR321"
+              },
+              "result": {
+                "recordId": "TR321",
+                "state": "delayed",
+                "minutes": 20,
+                "location": "C03",
+                "scheduled": "14:20",
+                "updated": "14:40"
+              }
+            }
+          ]
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-regression-loop-app",
+        "userId": "traveler"
+      }
+    },
+    {
+      "evalId": "flight_tr654_gate",
+      "conversation": [
+        {
+          "invocationId": "flight_tr654_gate-1",
+          "userContent": {
+            "role": "user",
+            "content": "Which gate is flight TR654 boarding at?"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "Flight TR654 is boarding at gate D18."
+          },
+          "tools": [
+            {
+              "id": "tool_use_flight_tr654",
+              "name": "lookup_record",
+              "arguments": {
+                "query": "TR654"
+              },
+              "result": {
+                "recordId": "TR654",
+                "state": "boarding",
+                "minutes": 0,
+                "location": "D18",
+                "scheduled": "16:05",
+                "updated": "16:05"
+              }
+            }
+          ]
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-regression-loop-app",
+        "userId": "traveler"
+      }
+    },
+    {
+      "evalId": "flight_tr987_departure",
+      "conversation": [
+        {
+          "invocationId": "flight_tr987_departure-1",
+          "userContent": {
+            "role": "user",
+            "content": "What is the updated departure time for flight TR987?"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "Flight TR987 is delayed by 5 minutes and is estimated to depart at 19:05 from gate G11."
+          },
+          "tools": [
+            {
+              "id": "tool_use_flight_tr987",
+              "name": "lookup_record",
+              "arguments": {
+                "query": "TR987"
+              },
+              "result": {
+                "recordId": "TR987",
+                "state": "delayed",
+                "minutes": 5,
+                "location": "G11",
+                "scheduled": "19:00",
+                "updated": "19:05"
+              }
+            }
+          ]
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-regression-loop-app",
+        "userId": "traveler"
+      }
+    }
+  ]
+}

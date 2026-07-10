@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	atrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/internal/callback"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/service"
@@ -400,8 +401,12 @@ func (s *local) inferTraceConversation(
 		inferences = evalCase.Conversation
 		expectedInputs = evalCase.Conversation
 	}
+	result := &inference.Result{
+		Invocations:     inferences,
+		ExecutionTraces: executionTracesFromInvocations(inferences),
+	}
 	if !evalCase.ExpectedRunnerEnabled {
-		return &inference.Result{Invocations: inferences}, nil, nil
+		return result, nil, nil
 	}
 	expectedInferences, err := s.inferExpectedInferences(
 		ctx,
@@ -411,9 +416,25 @@ func (s *local) inferTraceConversation(
 		opts,
 	)
 	if err != nil {
-		return &inference.Result{Invocations: inferences}, nil, err
+		return result, nil, err
 	}
-	return &inference.Result{Invocations: inferences}, expectedInferences, nil
+	return result, expectedInferences, nil
+}
+
+func executionTracesFromInvocations(invocations []*evalset.Invocation) []*atrace.Trace {
+	traces := make([]*atrace.Trace, len(invocations))
+	hasTrace := false
+	for i, invocation := range invocations {
+		if invocation == nil || invocation.ExecutionTrace == nil {
+			continue
+		}
+		traces[i] = invocation.ExecutionTrace
+		hasTrace = true
+	}
+	if !hasTrace {
+		return nil
+	}
+	return traces
 }
 
 func traceExpectedRunnerInputs(actuals, expecteds []*evalset.Invocation) []*evalset.Invocation {

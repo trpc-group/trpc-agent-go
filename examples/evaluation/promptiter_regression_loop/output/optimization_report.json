@@ -1,0 +1,975 @@
+{
+  "mode": "fake",
+  "seed": 42,
+  "targetSurfaces": [
+    "candidate#tool.lookup_record"
+  ],
+  "promptSource": "config/baseline_prompt.txt",
+  "promptHash": "efe95ea54a53187ff9c718e7bd78b91c2b471cdc325c511e25ad47561b1f56be",
+  "promptSummary": "Answer travel operations questions concisely. Use a tool only when its declaration clearly matches the user's request. If the user alread...",
+  "baselineToolDescription": "Look up a traveler loyalty-profile record.",
+  "baseline": {
+    "train": {
+      "score": 0.3333333333333333,
+      "evalSets": [
+        {
+          "evalSetId": "train",
+          "score": 0.3333333333333333,
+          "cases": [
+            {
+              "evalCaseId": "flight_direct_no_tool",
+              "score": 1,
+              "passed": true,
+              "metrics": [
+                {
+                  "metricName": "final_response_avg_score",
+                  "score": 1,
+                  "status": "passed"
+                },
+                {
+                  "metricName": "tool_trajectory_avg_score",
+                  "score": 1,
+                  "status": "passed"
+                }
+              ]
+            },
+            {
+              "evalCaseId": "flight_tr123_status",
+              "score": 0,
+              "passed": false,
+              "metrics": [
+                {
+                  "metricName": "final_response_avg_score",
+                  "score": 0,
+                  "status": "failed",
+                  "reason": "final response mismatch: text mismatch: source I do not have enough flight status information to answer that. and target Flight TR123 is delayed by 35 minutes and is now estimated to depart at 10:45 from gate B12. do not match"
+                },
+                {
+                  "metricName": "tool_trajectory_avg_score",
+                  "score": 0,
+                  "status": "failed",
+                  "reason": "tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)"
+                }
+              ]
+            },
+            {
+              "evalCaseId": "flight_tr456_delay",
+              "score": 0,
+              "passed": false,
+              "metrics": [
+                {
+                  "metricName": "final_response_avg_score",
+                  "score": 0,
+                  "status": "failed",
+                  "reason": "final response mismatch: text mismatch: source I do not have enough flight status information to answer that. and target Flight TR456 is delayed by 15 minutes and is estimated to depart at 12:45 from gate A07. do not match"
+                },
+                {
+                  "metricName": "tool_trajectory_avg_score",
+                  "score": 0,
+                  "status": "failed",
+                  "reason": "tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "validation": {
+      "score": 0.25,
+      "evalSets": [
+        {
+          "evalSetId": "validation",
+          "score": 0.25,
+          "cases": [
+            {
+              "evalCaseId": "flight_tr321_delay",
+              "score": 0,
+              "passed": false,
+              "metrics": [
+                {
+                  "metricName": "final_response_avg_score",
+                  "score": 0,
+                  "status": "failed",
+                  "reason": "final response mismatch: text mismatch: source I do not have enough flight status information to answer that. and target Flight TR321 is delayed by 20 minutes and is estimated to depart at 14:40 from gate C03. do not match"
+                },
+                {
+                  "metricName": "tool_trajectory_avg_score",
+                  "score": 0,
+                  "status": "failed",
+                  "reason": "tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)"
+                }
+              ]
+            },
+            {
+              "evalCaseId": "flight_tr654_gate",
+              "score": 0,
+              "passed": false,
+              "metrics": [
+                {
+                  "metricName": "final_response_avg_score",
+                  "score": 0,
+                  "status": "failed",
+                  "reason": "final response mismatch: text mismatch: source I do not have enough flight status information to answer that. and target Flight TR654 is boarding at gate D18. do not match"
+                },
+                {
+                  "metricName": "tool_trajectory_avg_score",
+                  "score": 0,
+                  "status": "failed",
+                  "reason": "tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)"
+                }
+              ]
+            },
+            {
+              "evalCaseId": "flight_tr789_cancelled_no_tool",
+              "score": 1,
+              "passed": true,
+              "metrics": [
+                {
+                  "metricName": "final_response_avg_score",
+                  "score": 1,
+                  "status": "passed"
+                },
+                {
+                  "metricName": "tool_trajectory_avg_score",
+                  "score": 1,
+                  "status": "passed"
+                }
+              ]
+            },
+            {
+              "evalCaseId": "flight_tr987_departure",
+              "score": 0,
+              "passed": false,
+              "metrics": [
+                {
+                  "metricName": "final_response_avg_score",
+                  "score": 0,
+                  "status": "failed",
+                  "reason": "final response mismatch: text mismatch: source I do not have enough flight status information to answer that. and target Flight TR987 is delayed by 5 minutes and is estimated to depart at 19:05 from gate G11. do not match"
+                },
+                {
+                  "metricName": "tool_trajectory_avg_score",
+                  "score": 0,
+                  "status": "failed",
+                  "reason": "tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "candidate": {
+    "train": {
+      "score": 0.6666666666666666,
+      "evalSets": [
+        {
+          "evalSetId": "train",
+          "score": 0.6666666666666666,
+          "cases": [
+            {
+              "evalCaseId": "flight_direct_no_tool",
+              "score": 0,
+              "passed": false,
+              "metrics": [
+                {
+                  "metricName": "final_response_avg_score",
+                  "score": 0,
+                  "status": "failed",
+                  "reason": "final response mismatch: text mismatch: source Flight TR222 is unknown and is estimated to depart at  from gate . and target Flight TR222 is boarding at gate E04 and remains scheduled to depart at 09:20 with no delay. do not match"
+                },
+                {
+                  "metricName": "tool_trajectory_avg_score",
+                  "score": 0,
+                  "status": "failed",
+                  "reason": "tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(1) != expected(0)"
+                }
+              ]
+            },
+            {
+              "evalCaseId": "flight_tr123_status",
+              "score": 1,
+              "passed": true,
+              "metrics": [
+                {
+                  "metricName": "final_response_avg_score",
+                  "score": 1,
+                  "status": "passed"
+                },
+                {
+                  "metricName": "tool_trajectory_avg_score",
+                  "score": 1,
+                  "status": "passed"
+                }
+              ]
+            },
+            {
+              "evalCaseId": "flight_tr456_delay",
+              "score": 1,
+              "passed": true,
+              "metrics": [
+                {
+                  "metricName": "final_response_avg_score",
+                  "score": 1,
+                  "status": "passed"
+                },
+                {
+                  "metricName": "tool_trajectory_avg_score",
+                  "score": 1,
+                  "status": "passed"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "validation": {
+      "score": 0.75,
+      "evalSets": [
+        {
+          "evalSetId": "validation",
+          "score": 0.75,
+          "cases": [
+            {
+              "evalCaseId": "flight_tr321_delay",
+              "score": 1,
+              "passed": true,
+              "metrics": [
+                {
+                  "metricName": "final_response_avg_score",
+                  "score": 1,
+                  "status": "passed"
+                },
+                {
+                  "metricName": "tool_trajectory_avg_score",
+                  "score": 1,
+                  "status": "passed"
+                }
+              ]
+            },
+            {
+              "evalCaseId": "flight_tr654_gate",
+              "score": 1,
+              "passed": true,
+              "metrics": [
+                {
+                  "metricName": "final_response_avg_score",
+                  "score": 1,
+                  "status": "passed"
+                },
+                {
+                  "metricName": "tool_trajectory_avg_score",
+                  "score": 1,
+                  "status": "passed"
+                }
+              ]
+            },
+            {
+              "evalCaseId": "flight_tr789_cancelled_no_tool",
+              "score": 0,
+              "passed": false,
+              "metrics": [
+                {
+                  "metricName": "final_response_avg_score",
+                  "score": 0,
+                  "status": "failed",
+                  "reason": "final response mismatch: text mismatch: source Lookup result for TR789: cancelled. and target Flight TR789 is currently cancelled, so it is not operating tonight. do not match"
+                },
+                {
+                  "metricName": "tool_trajectory_avg_score",
+                  "score": 0,
+                  "status": "failed",
+                  "reason": "tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(1) != expected(0)"
+                }
+              ]
+            },
+            {
+              "evalCaseId": "flight_tr987_departure",
+              "score": 1,
+              "passed": true,
+              "metrics": [
+                {
+                  "metricName": "final_response_avg_score",
+                  "score": 1,
+                  "status": "passed"
+                },
+                {
+                  "metricName": "tool_trajectory_avg_score",
+                  "score": 1,
+                  "status": "passed"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "acceptedProfile": {
+      "StructureID": "struct_bf6e5cd2264d660a011de3d3320c1f1f29d35e11938bc068702a9b91b1ef8b84",
+      "Overrides": [
+        {
+          "SurfaceID": "candidate#tool.lookup_record",
+          "Value": {
+            "Text": null,
+            "PromptSyntax": null,
+            "FewShot": null,
+            "Model": null,
+            "Tools": [
+              {
+                "ID": "lookup_record",
+                "Description": "Use lookup_record for all flight questions, including delay, gate, and departure. Always look up any TR record before answering.",
+                "InputSchema": {
+                  "type": "object",
+                  "required": [
+                    "query"
+                  ],
+                  "properties": {
+                    "query": {
+                      "type": "string",
+                      "description": "Record key to look up"
+                    }
+                  }
+                },
+                "OutputSchema": {
+                  "type": "object",
+                  "required": [
+                    "recordId",
+                    "state",
+                    "minutes",
+                    "location",
+                    "scheduled",
+                    "updated"
+                  ],
+                  "properties": {
+                    "location": {
+                      "type": "string",
+                      "description": "Relevant location code"
+                    },
+                    "minutes": {
+                      "type": "integer",
+                      "description": "Relevant minute value"
+                    },
+                    "recordId": {
+                      "type": "string",
+                      "description": "Resolved record identifier"
+                    },
+                    "scheduled": {
+                      "type": "string",
+                      "description": "Scheduled local time"
+                    },
+                    "state": {
+                      "type": "string",
+                      "description": "Primary record state"
+                    },
+                    "updated": {
+                      "type": "string",
+                      "description": "Updated local time"
+                    }
+                  }
+                }
+              }
+            ],
+            "Skills": null
+          }
+        }
+      ]
+    },
+    "accepted": true
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "train": {
+        "score": 0.3333333333333333,
+        "evalSets": [
+          {
+            "evalSetId": "train",
+            "score": 0.3333333333333333,
+            "cases": [
+              {
+                "evalCaseId": "flight_direct_no_tool",
+                "score": 1,
+                "passed": true,
+                "metrics": [
+                  {
+                    "metricName": "final_response_avg_score",
+                    "score": 1,
+                    "status": "passed"
+                  },
+                  {
+                    "metricName": "tool_trajectory_avg_score",
+                    "score": 1,
+                    "status": "passed"
+                  }
+                ]
+              },
+              {
+                "evalCaseId": "flight_tr123_status",
+                "score": 0,
+                "passed": false,
+                "metrics": [
+                  {
+                    "metricName": "final_response_avg_score",
+                    "score": 0,
+                    "status": "failed",
+                    "reason": "final response mismatch: text mismatch: source I do not have enough flight status information to answer that. and target Flight TR123 is delayed by 35 minutes and is now estimated to depart at 10:45 from gate B12. do not match"
+                  },
+                  {
+                    "metricName": "tool_trajectory_avg_score",
+                    "score": 0,
+                    "status": "failed",
+                    "reason": "tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)"
+                  }
+                ]
+              },
+              {
+                "evalCaseId": "flight_tr456_delay",
+                "score": 0,
+                "passed": false,
+                "metrics": [
+                  {
+                    "metricName": "final_response_avg_score",
+                    "score": 0,
+                    "status": "failed",
+                    "reason": "final response mismatch: text mismatch: source I do not have enough flight status information to answer that. and target Flight TR456 is delayed by 15 minutes and is estimated to depart at 12:45 from gate A07. do not match"
+                  },
+                  {
+                    "metricName": "tool_trajectory_avg_score",
+                    "score": 0,
+                    "status": "failed",
+                    "reason": "tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "validation": {
+        "score": 0.5,
+        "evalSets": [
+          {
+            "evalSetId": "validation",
+            "score": 0.5,
+            "cases": [
+              {
+                "evalCaseId": "flight_tr321_delay",
+                "score": 1,
+                "passed": true,
+                "metrics": [
+                  {
+                    "metricName": "final_response_avg_score",
+                    "score": 1,
+                    "status": "passed"
+                  },
+                  {
+                    "metricName": "tool_trajectory_avg_score",
+                    "score": 1,
+                    "status": "passed"
+                  }
+                ]
+              },
+              {
+                "evalCaseId": "flight_tr654_gate",
+                "score": 0,
+                "passed": false,
+                "metrics": [
+                  {
+                    "metricName": "final_response_avg_score",
+                    "score": 0,
+                    "status": "failed",
+                    "reason": "final response mismatch: text mismatch: source I do not have enough flight status information to answer that. and target Flight TR654 is boarding at gate D18. do not match"
+                  },
+                  {
+                    "metricName": "tool_trajectory_avg_score",
+                    "score": 0,
+                    "status": "failed",
+                    "reason": "tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)"
+                  }
+                ]
+              },
+              {
+                "evalCaseId": "flight_tr789_cancelled_no_tool",
+                "score": 1,
+                "passed": true,
+                "metrics": [
+                  {
+                    "metricName": "final_response_avg_score",
+                    "score": 1,
+                    "status": "passed"
+                  },
+                  {
+                    "metricName": "tool_trajectory_avg_score",
+                    "score": 1,
+                    "status": "passed"
+                  }
+                ]
+              },
+              {
+                "evalCaseId": "flight_tr987_departure",
+                "score": 0,
+                "passed": false,
+                "metrics": [
+                  {
+                    "metricName": "final_response_avg_score",
+                    "score": 0,
+                    "status": "failed",
+                    "reason": "final response mismatch: text mismatch: source I do not have enough flight status information to answer that. and target Flight TR987 is delayed by 5 minutes and is estimated to depart at 19:05 from gate G11. do not match"
+                  },
+                  {
+                    "metricName": "tool_trajectory_avg_score",
+                    "score": 0,
+                    "status": "failed",
+                    "reason": "tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "patches": [
+        {
+          "surfaceId": "candidate#tool.lookup_record",
+          "toolId": "lookup_record",
+          "toolDescription": "Use lookup_record only for flight delay questions.",
+          "reason": "Teach the lookup_record declaration that delay questions can be answered from flight records."
+        }
+      ],
+      "accepted": true,
+      "scoreDelta": 0.25,
+      "acceptReason": "candidate score gain satisfies acceptance policy",
+      "stopReason": "continue optimization",
+      "outputProfile": {
+        "StructureID": "struct_bf6e5cd2264d660a011de3d3320c1f1f29d35e11938bc068702a9b91b1ef8b84",
+        "Overrides": [
+          {
+            "SurfaceID": "candidate#tool.lookup_record",
+            "Value": {
+              "Text": null,
+              "PromptSyntax": null,
+              "FewShot": null,
+              "Model": null,
+              "Tools": [
+                {
+                  "ID": "lookup_record",
+                  "Description": "Use lookup_record only for flight delay questions.",
+                  "InputSchema": {
+                    "type": "object",
+                    "required": [
+                      "query"
+                    ],
+                    "properties": {
+                      "query": {
+                        "type": "string",
+                        "description": "Record key to look up"
+                      }
+                    }
+                  },
+                  "OutputSchema": {
+                    "type": "object",
+                    "required": [
+                      "recordId",
+                      "state",
+                      "minutes",
+                      "location",
+                      "scheduled",
+                      "updated"
+                    ],
+                    "properties": {
+                      "location": {
+                        "type": "string",
+                        "description": "Relevant location code"
+                      },
+                      "minutes": {
+                        "type": "integer",
+                        "description": "Relevant minute value"
+                      },
+                      "recordId": {
+                        "type": "string",
+                        "description": "Resolved record identifier"
+                      },
+                      "scheduled": {
+                        "type": "string",
+                        "description": "Scheduled local time"
+                      },
+                      "state": {
+                        "type": "string",
+                        "description": "Primary record state"
+                      },
+                      "updated": {
+                        "type": "string",
+                        "description": "Updated local time"
+                      }
+                    }
+                  }
+                }
+              ],
+              "Skills": null
+            }
+          }
+        ]
+      }
+    },
+    {
+      "round": 2,
+      "train": {
+        "score": 0.6666666666666666,
+        "evalSets": [
+          {
+            "evalSetId": "train",
+            "score": 0.6666666666666666,
+            "cases": [
+              {
+                "evalCaseId": "flight_direct_no_tool",
+                "score": 1,
+                "passed": true,
+                "metrics": [
+                  {
+                    "metricName": "final_response_avg_score",
+                    "score": 1,
+                    "status": "passed"
+                  },
+                  {
+                    "metricName": "tool_trajectory_avg_score",
+                    "score": 1,
+                    "status": "passed"
+                  }
+                ]
+              },
+              {
+                "evalCaseId": "flight_tr123_status",
+                "score": 0,
+                "passed": false,
+                "metrics": [
+                  {
+                    "metricName": "final_response_avg_score",
+                    "score": 0,
+                    "status": "failed",
+                    "reason": "final response mismatch: text mismatch: source I do not have enough flight status information to answer that. and target Flight TR123 is delayed by 35 minutes and is now estimated to depart at 10:45 from gate B12. do not match"
+                  },
+                  {
+                    "metricName": "tool_trajectory_avg_score",
+                    "score": 0,
+                    "status": "failed",
+                    "reason": "tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)"
+                  }
+                ]
+              },
+              {
+                "evalCaseId": "flight_tr456_delay",
+                "score": 1,
+                "passed": true,
+                "metrics": [
+                  {
+                    "metricName": "final_response_avg_score",
+                    "score": 1,
+                    "status": "passed"
+                  },
+                  {
+                    "metricName": "tool_trajectory_avg_score",
+                    "score": 1,
+                    "status": "passed"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "validation": {
+        "score": 0.75,
+        "evalSets": [
+          {
+            "evalSetId": "validation",
+            "score": 0.75,
+            "cases": [
+              {
+                "evalCaseId": "flight_tr321_delay",
+                "score": 1,
+                "passed": true,
+                "metrics": [
+                  {
+                    "metricName": "final_response_avg_score",
+                    "score": 1,
+                    "status": "passed"
+                  },
+                  {
+                    "metricName": "tool_trajectory_avg_score",
+                    "score": 1,
+                    "status": "passed"
+                  }
+                ]
+              },
+              {
+                "evalCaseId": "flight_tr654_gate",
+                "score": 1,
+                "passed": true,
+                "metrics": [
+                  {
+                    "metricName": "final_response_avg_score",
+                    "score": 1,
+                    "status": "passed"
+                  },
+                  {
+                    "metricName": "tool_trajectory_avg_score",
+                    "score": 1,
+                    "status": "passed"
+                  }
+                ]
+              },
+              {
+                "evalCaseId": "flight_tr789_cancelled_no_tool",
+                "score": 0,
+                "passed": false,
+                "metrics": [
+                  {
+                    "metricName": "final_response_avg_score",
+                    "score": 0,
+                    "status": "failed",
+                    "reason": "final response mismatch: text mismatch: source Lookup result for TR789: cancelled. and target Flight TR789 is currently cancelled, so it is not operating tonight. do not match"
+                  },
+                  {
+                    "metricName": "tool_trajectory_avg_score",
+                    "score": 0,
+                    "status": "failed",
+                    "reason": "tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(1) != expected(0)"
+                  }
+                ]
+              },
+              {
+                "evalCaseId": "flight_tr987_departure",
+                "score": 1,
+                "passed": true,
+                "metrics": [
+                  {
+                    "metricName": "final_response_avg_score",
+                    "score": 1,
+                    "status": "passed"
+                  },
+                  {
+                    "metricName": "tool_trajectory_avg_score",
+                    "score": 1,
+                    "status": "passed"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "patches": [
+        {
+          "surfaceId": "candidate#tool.lookup_record",
+          "toolId": "lookup_record",
+          "toolDescription": "Use lookup_record for all flight questions, including delay, gate, and departure. Always look up any TR record before answering.",
+          "reason": "Over-generalize lookup_record so every TR flight question is routed through the tool."
+        }
+      ],
+      "accepted": true,
+      "scoreDelta": 0.25,
+      "acceptReason": "candidate score gain satisfies acceptance policy",
+      "stopReason": "max rounds reached",
+      "outputProfile": {
+        "StructureID": "struct_bf6e5cd2264d660a011de3d3320c1f1f29d35e11938bc068702a9b91b1ef8b84",
+        "Overrides": [
+          {
+            "SurfaceID": "candidate#tool.lookup_record",
+            "Value": {
+              "Text": null,
+              "PromptSyntax": null,
+              "FewShot": null,
+              "Model": null,
+              "Tools": [
+                {
+                  "ID": "lookup_record",
+                  "Description": "Use lookup_record for all flight questions, including delay, gate, and departure. Always look up any TR record before answering.",
+                  "InputSchema": {
+                    "type": "object",
+                    "required": [
+                      "query"
+                    ],
+                    "properties": {
+                      "query": {
+                        "type": "string",
+                        "description": "Record key to look up"
+                      }
+                    }
+                  },
+                  "OutputSchema": {
+                    "type": "object",
+                    "required": [
+                      "recordId",
+                      "state",
+                      "minutes",
+                      "location",
+                      "scheduled",
+                      "updated"
+                    ],
+                    "properties": {
+                      "location": {
+                        "type": "string",
+                        "description": "Relevant location code"
+                      },
+                      "minutes": {
+                        "type": "integer",
+                        "description": "Relevant minute value"
+                      },
+                      "recordId": {
+                        "type": "string",
+                        "description": "Resolved record identifier"
+                      },
+                      "scheduled": {
+                        "type": "string",
+                        "description": "Scheduled local time"
+                      },
+                      "state": {
+                        "type": "string",
+                        "description": "Primary record state"
+                      },
+                      "updated": {
+                        "type": "string",
+                        "description": "Updated local time"
+                      }
+                    }
+                  }
+                }
+              ],
+              "Skills": null
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "delta": {
+    "perCase": [
+      {
+        "evalSetId": "validation",
+        "evalCaseId": "flight_tr321_delay",
+        "classification": "new_pass",
+        "baselineScore": 0,
+        "candidateScore": 1,
+        "scoreDelta": 1,
+        "baselinePassed": false,
+        "candidatePassed": true,
+        "newHardFail": false,
+        "critical": false,
+        "criticalRegression": false
+      },
+      {
+        "evalSetId": "validation",
+        "evalCaseId": "flight_tr654_gate",
+        "classification": "new_pass",
+        "baselineScore": 0,
+        "candidateScore": 1,
+        "scoreDelta": 1,
+        "baselinePassed": false,
+        "candidatePassed": true,
+        "newHardFail": false,
+        "critical": false,
+        "criticalRegression": false
+      },
+      {
+        "evalSetId": "validation",
+        "evalCaseId": "flight_tr789_cancelled_no_tool",
+        "classification": "new_fail",
+        "baselineScore": 1,
+        "candidateScore": 0,
+        "scoreDelta": -1,
+        "baselinePassed": true,
+        "candidatePassed": false,
+        "newHardFail": true,
+        "critical": true,
+        "criticalRegression": true
+      },
+      {
+        "evalSetId": "validation",
+        "evalCaseId": "flight_tr987_departure",
+        "classification": "new_pass",
+        "baselineScore": 0,
+        "candidateScore": 1,
+        "scoreDelta": 1,
+        "baselinePassed": false,
+        "candidatePassed": true,
+        "newHardFail": false,
+        "critical": false,
+        "criticalRegression": false
+      }
+    ],
+    "summary": {
+      "newPass": 3,
+      "newFail": 1,
+      "improved": 0,
+      "regressed": 0,
+      "unchangedPass": 0,
+      "unchangedFail": 0,
+      "newHardFail": 1,
+      "criticalRegression": 1,
+      "baselineValidationScore": 0.25,
+      "candidateValidationScore": 0.75,
+      "scoreDelta": 0.5
+    }
+  },
+  "attribution": {
+    "perFailedCase": [
+      {
+        "evalSetId": "validation",
+        "evalCaseId": "flight_tr789_cancelled_no_tool",
+        "category": "wrong_tool_name",
+        "explanation": "Expected no tool calls, but actual tool call(s) were lookup_record. final response mismatch: text mismatch: source Lookup result for TR789: cancelled. and target Flight TR789 is currently cancelled, so it is not operating tonight. do not match tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(1) != expected(0)",
+        "failedMetrics": [
+          {
+            "metricName": "final_response_avg_score",
+            "status": "failed",
+            "reason": "final response mismatch: text mismatch: source Lookup result for TR789: cancelled. and target Flight TR789 is currently cancelled, so it is not operating tonight. do not match"
+          },
+          {
+            "metricName": "tool_trajectory_avg_score",
+            "status": "failed",
+            "reason": "tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(1) != expected(0)"
+          }
+        ],
+        "actualToolNames": [
+          "lookup_record"
+        ],
+        "terminalStepId": "s2",
+        "terminalOutput": "{\"id\":\"resp_fake_flight\",\"object\":\"chat.completion\",\"created\":1700000000,\"model\":\"deterministic-flight-fake\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"Lookup result for TR789: cancelled.\"},\"delta\":{\"role\":\"\"}}],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0,\"total_tokens\":0,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{},\"timing_info\":{}},\"timestamp\":\"0001-01-01T00:00:00Z\",\"done\":true,\"is_partial\":false}"
+      }
+    ],
+    "summary": {
+      "final_response_mismatch": 0,
+      "format_error": 0,
+      "knowledge_insufficient": 0,
+      "metric_failure": 0,
+      "route_error": 0,
+      "tool_arguments_mismatch": 0,
+      "tool_not_called": 0,
+      "wrong_tool_name": 1
+    }
+  },
+  "gate": {
+    "decision": "reject",
+    "publishable": false,
+    "reasons": [
+      "validation gain 0.500 meets minimum 0.050",
+      "new hard fail count is 1",
+      "critical regression count is 1",
+      "latency 31ms is below max 180000ms",
+      "fake mode cost is 0"
+    ]
+  },
+  "traceSmoke": {
+    "enabled": false,
+    "optimizationSkipped": false
+  },
+  "cost": {
+    "totalUsd": 0,
+    "modelCallCount": 30,
+    "workerCallCount": 7
+  },
+  "latencyMs": 31
+}

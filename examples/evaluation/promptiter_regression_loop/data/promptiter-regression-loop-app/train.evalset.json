@@ -1,0 +1,101 @@
+{
+  "evalSetId": "train",
+  "name": "train",
+  "evalCases": [
+    {
+      "evalId": "flight_tr123_status",
+      "conversation": [
+        {
+          "invocationId": "flight_tr123_status-1",
+          "userContent": {
+            "role": "user",
+            "content": "Could you check the current status for flight TR123?"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "Flight TR123 is delayed by 35 minutes and is now estimated to depart at 10:45 from gate B12."
+          },
+          "tools": [
+            {
+              "id": "tool_use_flight_tr123",
+              "name": "lookup_record",
+              "arguments": {
+                "query": "TR123"
+              },
+              "result": {
+                "recordId": "TR123",
+                "state": "delayed",
+                "minutes": 35,
+                "location": "B12",
+                "scheduled": "10:10",
+                "updated": "10:45"
+              }
+            }
+          ]
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-regression-loop-app",
+        "userId": "traveler"
+      }
+    },
+    {
+      "evalId": "flight_tr456_delay",
+      "conversation": [
+        {
+          "invocationId": "flight_tr456_delay-1",
+          "userContent": {
+            "role": "user",
+            "content": "How delayed is flight TR456 right now?"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "Flight TR456 is delayed by 15 minutes and is estimated to depart at 12:45 from gate A07."
+          },
+          "tools": [
+            {
+              "id": "tool_use_flight_tr456",
+              "name": "lookup_record",
+              "arguments": {
+                "query": "TR456"
+              },
+              "result": {
+                "recordId": "TR456",
+                "state": "delayed",
+                "minutes": 15,
+                "location": "A07",
+                "scheduled": "12:30",
+                "updated": "12:45"
+              }
+            }
+          ]
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-regression-loop-app",
+        "userId": "traveler"
+      }
+    },
+    {
+      "evalId": "flight_direct_no_tool",
+      "conversation": [
+        {
+          "invocationId": "flight_direct_no_tool-1",
+          "userContent": {
+            "role": "user",
+            "content": "I already have the record: flight TR222 is boarding at gate E04, scheduled and updated departure are both 09:20, with no delay. Write the traveler-facing status sentence."
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "Flight TR222 is boarding at gate E04 and remains scheduled to depart at 09:20 with no delay."
+          },
+          "tools": []
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-regression-loop-app",
+        "userId": "traveler"
+      }
+    }
+  ]
+}
