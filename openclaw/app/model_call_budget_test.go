@@ -287,6 +287,16 @@ func TestModelCallBudgetModel_FinalizesOnLastAllowedCall(t *testing.T) {
 		got.Messages[1].Content,
 		"not only in internal reasoning",
 	)
+	require.Contains(
+		t,
+		got.Messages[1].Content,
+		"Do not describe plans, next steps",
+	)
+	require.Contains(
+		t,
+		got.Messages[1].Content,
+		"answer now with the best supported final value",
+	)
 	require.Len(t, req.Tools, 1)
 	require.Len(t, req.Messages, 1)
 	require.Equal(t, map[string]any{
