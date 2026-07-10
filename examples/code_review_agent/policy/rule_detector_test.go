@@ -164,11 +164,11 @@ func TestRuleDetector_DetectInCode_AllRules(t *testing.T) {
 	detector := NewRuleDetector()
 
 	testCases := []struct {
-		name      string
-		code      string
-		ruleID    string
-		severity  storage.FindingSeverity
-		category  storage.FindingCategory
+		name     string
+		code     string
+		ruleID   string
+		severity storage.FindingSeverity
+		category storage.FindingCategory
 	}{
 		{"goroutine leak", "go func() {}()", "GOROUTINE_LEAK", storage.SeverityHigh, storage.CategoryReliability},
 		{"unbuffered channel", "ch := make(chan int)", "CHANNEL_UNBUFFERED", storage.SeverityMedium, storage.CategoryReliability},
