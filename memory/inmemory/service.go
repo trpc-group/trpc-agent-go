@@ -91,11 +91,12 @@ func NewMemoryService(options ...ServiceOpt) *MemoryService {
 			opts.extractor, opts.enabledTools,
 		)
 		config := imemory.AutoMemoryConfig{
-			Extractor:        opts.extractor,
-			AsyncMemoryNum:   opts.asyncMemoryNum,
-			MemoryQueueSize:  opts.memoryQueueSize,
-			MemoryJobTimeout: opts.memoryJobTimeout,
-			EnabledTools:     opts.enabledTools,
+			Extractor:                opts.extractor,
+			AsyncMemoryNum:           opts.asyncMemoryNum,
+			MemoryQueueSize:          opts.memoryQueueSize,
+			MemoryJobTimeout:         opts.memoryJobTimeout,
+			DisableOnExternalContext: opts.disableAutoMemoryOnExternalContext,
+			EnabledTools:             opts.enabledTools,
 		}
 		svc.autoMemoryWorker = imemory.NewAutoMemoryWorker(config, svc)
 		svc.autoMemoryWorker.Start()

@@ -33,6 +33,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolretry"
 	itrace "trpc.group/trpc-go/trpc-agent-go/internal/trace"
 	"trpc.group/trpc-go/trpc-agent-go/log"
+	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/plugin"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -62,6 +63,13 @@ const (
 // tool.response event has been processed by the session persistence layer.
 const funcRespCompletionTimeout = 5 * time.Second
 
+const (
+	knowledgeSearchToolName                    = "knowledge_search"
+	knowledgeSearchWithAgenticFilterName       = "knowledge_search_with_agentic_filter"
+	knowledgeSearchToolNameSuffix              = "_knowledge_search"
+	knowledgeSearchWithAgenticFilterNameSuffix = "_knowledge_search_with_agentic_filter"
+)
+
 // summarizationSkipper is implemented by tools that can indicate whether
 // the flow should skip a post-tool summarization step. This allows tools
 // like AgentTool to mark their tool.response as final for the turn.
@@ -79,6 +87,14 @@ type streamInnerPreference interface {
 
 type innerTextModePreference interface {
 	InnerTextMode() tool.InnerTextMode
+}
+
+type autoMemoryPollutionSource interface {
+	PollutesAutoMemory() bool
+}
+
+type originalToolProvider interface {
+	Original() tool.Tool
 }
 
 type toolEventStateDelta struct {
@@ -820,6 +836,12 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequentialResult(
 	decl := p.lookupDeclaration(tools, toolCall.Function.Name)
 	var stateDelta *toolEventStateDelta
 	if err == nil {
+		markSessionAutoMemoryPolluted(
+			invocation,
+			toolEvent,
+			tools[toolCall.Function.Name],
+			toolCall.Function.Name,
+		)
 		stateDelta = p.buildToolEventStateDelta(
 			ctx,
 			invocation,
@@ -863,6 +885,62 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequentialResult(
 		stateDelta: stateDelta,
 		toolArgs:   modifiedArgs,
 	}, nil
+}
+
+func markSessionAutoMemoryPolluted(
+	invocation *agent.Invocation,
+	ev *event.Event,
+	tl tool.Tool,
+	toolName string,
+) {
+	if !toolPollutesAutoMemory(tl, toolName) {
+		return
+	}
+	value := []byte(memory.MemoryModePolluted)
+	if invocation != nil && invocation.Session != nil {
+		invocation.Session.SetState(memory.SessionStateKeyMemoryMode, value)
+	}
+	if ev != nil {
+		if ev.StateDelta == nil {
+			ev.StateDelta = make(map[string][]byte)
+		}
+		ev.StateDelta[memory.SessionStateKeyMemoryMode] = value
+	}
+}
+
+func toolPollutesAutoMemory(tl tool.Tool, name string) bool {
+	if toolCapabilityPollutesAutoMemory(tl) {
+		return true
+	}
+	return toolNamePollutesAutoMemory(name)
+}
+
+func toolCapabilityPollutesAutoMemory(tl tool.Tool) bool {
+	for tl != nil {
+		if source, ok := tl.(autoMemoryPollutionSource); ok && source.PollutesAutoMemory() {
+			return true
+		}
+		wrapper, ok := tl.(originalToolProvider)
+		if !ok {
+			return false
+		}
+		original := wrapper.Original()
+		if original == nil || original == tl {
+			return false
+		}
+		tl = original
+	}
+	return false
+}
+
+func toolNamePollutesAutoMemory(name string) bool {
+	switch name {
+	case knowledgeSearchToolName, knowledgeSearchWithAgenticFilterName:
+		return true
+	default:
+		return strings.HasSuffix(name, knowledgeSearchToolNameSuffix) ||
+			strings.HasSuffix(name, knowledgeSearchWithAgenticFilterNameSuffix)
+	}
 }
 
 // executeToolCallsInParallel runs multiple tool calls concurrently and merges
@@ -1117,6 +1195,12 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 			agentName = invocation.AgentName
 		}
 	}
+	markSessionAutoMemoryPolluted(
+		invocation,
+		toolCallResponseEvent,
+		tools[tc.Function.Name],
+		tc.Function.Name,
+	)
 	stateDelta := p.buildToolEventStateDelta(
 		ctx,
 		invocation,
