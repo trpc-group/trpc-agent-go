@@ -92,6 +92,47 @@ func TestBuildDocumentsGeneratesIndexes(t *testing.T) {
 	require.Contains(t, fakeModel.requests[0].Messages[1].Content, "espresso")
 }
 
+func TestBuildDocumentsParsesWrappedJSON(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+	}{
+		{
+			name: "fenced object",
+			content: "```json\n" +
+				`{"memories":[{"id":"m1","cues":["espresso preference"],"tags":["coffee"]}]}` +
+				"\n```",
+		},
+		{
+			name:    "raw array",
+			content: `[{"id":"m1","cues":["espresso preference"],"tags":["coffee"]}]`,
+		},
+		{
+			name: "fenced array",
+			content: "```json\n" +
+				`[{"id":"m1","cues":["espresso preference"],"tags":["coffee"]}]` +
+				"\n```",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			entry := testEntry("m1", "User likes espresso.", []string{"coffee"})
+			fakeModel := &generatorModel{
+				calls: []generatorModelCall{
+					{content: tt.content},
+				},
+			}
+
+			documents, err := BuildDocuments(context.Background(), fakeModel, []*memory.Entry{entry})
+			require.NoError(t, err)
+			require.Len(t, documents, 1)
+			require.Equal(t, []string{"espresso preference"}, documents[0].Cues)
+			require.Equal(t, []string{"coffee"}, documents[0].Tags)
+		})
+	}
+}
+
 func TestBuildDocumentsSplitsInvalidBatch(t *testing.T) {
 	entries := []*memory.Entry{
 		testEntry("m1", "User likes espresso.", []string{"coffee"}),

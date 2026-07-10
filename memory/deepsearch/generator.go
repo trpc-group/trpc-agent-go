@@ -314,6 +314,10 @@ func parseOutput(text string) (*llmOutput, error) {
 	}
 	var output llmOutput
 	if err := json.Unmarshal([]byte(normalized), &output); err != nil {
+		var memories []llmOutputEntry
+		if arrayErr := json.Unmarshal([]byte(normalized), &memories); arrayErr == nil {
+			return &llmOutput{Memories: memories}, nil
+		}
 		return nil, fmt.Errorf("parse deepsearch output near %s: %w", outputPrefix(text), err)
 	}
 	return &output, nil
