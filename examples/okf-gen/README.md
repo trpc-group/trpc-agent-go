@@ -22,4 +22,18 @@ go run .
 
 To build a real bundle from your own source, replace the hard-coded `drafts`
 with your enumeration logic (and optionally an LLM enrichment pass over each
-body). To point an agent at a bundle, use `okf.NewToolSet(localokf.New(dir))`.
+body).
+
+To point an agent at a bundle, open a local store and mount its tool set:
+
+```go
+store, err := localokf.New(dir)
+if err != nil {
+    return err
+}
+ts, err := okf.NewToolSet(store)
+if err != nil {
+    return err
+}
+agent := llmagent.New("okf-agent", llmagent.WithToolSets([]tool.ToolSet{ts}))
+```

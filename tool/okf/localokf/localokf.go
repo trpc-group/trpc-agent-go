@@ -70,6 +70,9 @@ func (l *Local) List(_ context.Context, dir string) (okf.Listing, error) {
 	}
 	entries, err := os.ReadDir(abs)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return okf.Listing{}, fmt.Errorf("%w: %q", okf.ErrNotFound, dir)
+		}
 		return okf.Listing{}, fmt.Errorf("okf/localokf: list %q: %w", dir, err)
 	}
 	listing := okf.Listing{Dir: normDir(dir)}
@@ -86,6 +89,10 @@ func (l *Local) List(_ context.Context, dir string) (okf.Listing, error) {
 		case okf.IndexFile:
 			if data, err := os.ReadFile(filepath.Join(abs, name)); err == nil {
 				listing.Index = string(data)
+				if normDir(dir) == "" { // okf_version lives only in the root index.md.
+					fm, _ := okf.SplitFrontmatter(data)
+					listing.OKFVersion = fm.OKFVersion
+				}
 			}
 			continue
 		case okf.LogFile:
@@ -115,6 +122,9 @@ func (l *Local) Read(_ context.Context, conceptID string) (okf.Concept, error) {
 	}
 	data, err := os.ReadFile(abs)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return okf.Concept{}, fmt.Errorf("%w: %q", okf.ErrNotFound, conceptID)
+		}
 		return okf.Concept{}, fmt.Errorf("okf/localokf: read %q: %w", conceptID, err)
 	}
 	fm, body := okf.SplitFrontmatter(data)

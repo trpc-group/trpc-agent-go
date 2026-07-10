@@ -12,6 +12,7 @@ package okf
 import (
 	"context"
 	"errors"
+	"fmt"
 	"unicode/utf8"
 
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -73,8 +74,14 @@ func (t *toolSet) Tools(context.Context) []tool.Tool { return t.tools }
 // Close implements tool.ToolSet. A local store holds no resources.
 func (t *toolSet) Close() error { return nil }
 
-// Name implements tool.ToolSet.
-func (t *toolSet) Name() string { return t.name }
+// Name implements tool.ToolSet. It reflects WithNamePrefix so several bundles
+// mounted on one agent get distinct set names.
+func (t *toolSet) Name() string {
+	if t.namePrefix != "" {
+		return t.namePrefix + "_" + t.name
+	}
+	return t.name
+}
 
 func (t *toolSet) toolName(base string) string {
 	if t.namePrefix != "" {
@@ -113,7 +120,8 @@ func (t *toolSet) listTool() tool.Tool {
 		function.WithName(t.toolName("okf_list")),
 		function.WithDescription("List an OKF knowledge-bundle directory (progressive disclosure). "+
 			"Returns index.md content plus the concepts and sub-directories directly under 'dir', "+
-			"so you can decide what to read next. Omit 'dir' for the bundle root."),
+			"so you can decide what to read next. Start here with 'dir' omitted to see the bundle "+
+			"root index and top-level concepts."),
 	)
 }
 
@@ -128,6 +136,9 @@ func (t *toolSet) readTool() tool.Tool {
 		func(ctx context.Context, a readArgs) (Concept, error) {
 			c, err := t.store.Read(ctx, a.ConceptID)
 			if err != nil {
+				if errors.Is(err, ErrNotFound) {
+					return Concept{}, fmt.Errorf("concept %q not found — call okf_list to browse the bundle or okf_find to search by keyword", a.ConceptID)
+				}
 				return Concept{}, err
 			}
 			if t.maxBodyBytes > 0 && len(c.Body) > t.maxBodyBytes {
@@ -153,7 +164,8 @@ type findArgs struct {
 }
 
 type findResult struct {
-	Hits []Hit `json:"hits"`
+	Hits []Hit  `json:"hits"`
+	Note string `json:"note,omitempty"` // Guidance to the model when Hits is empty.
 }
 
 func (t *toolSet) findTool() tool.Tool {
@@ -172,7 +184,14 @@ func (t *toolSet) findTool() tool.Tool {
 			if err != nil {
 				return findResult{}, err
 			}
-			return findResult{Hits: hits}, nil
+			if hits == nil {
+				hits = []Hit{} // serialize [] not null, so the model reads "no matches" clearly.
+			}
+			res := findResult{Hits: hits}
+			if len(hits) == 0 {
+				res.Note = "no concepts matched; try broader terms, drop the type/tags filter, or call okf_list to browse the bundle root"
+			}
+			return res, nil
 		},
 		function.WithName(t.toolName("okf_find")),
 		function.WithDescription("Search the OKF bundle for concepts matching a free-text query, "+

@@ -34,11 +34,17 @@ func (f *fakeStore) List(_ context.Context, dir string) (Listing, error) {
 
 func (f *fakeStore) Read(_ context.Context, id string) (Concept, error) {
 	f.lastReadID = id
+	if id == "__missing__" {
+		return Concept{}, ErrNotFound
+	}
 	return Concept{ID: id, Body: f.body}, nil
 }
 
 func (f *fakeStore) Find(_ context.Context, q Query) ([]Hit, error) {
 	f.lastQuery = q
+	if q.Text == "__none__" {
+		return nil, nil
+	}
 	return []Hit{{ConceptMeta: ConceptMeta{ID: "hit"}}}, nil
 }
 
@@ -192,6 +198,33 @@ func TestFindQueryDescriptionIntact(t *testing.T) {
 	desc := d.InputSchema.Properties["query"].Description
 	if !strings.Contains(desc, "description and body") {
 		t.Errorf("query description truncated by comma-in-tag: %q", desc)
+	}
+}
+
+func TestCall_ReadNotFound(t *testing.T) {
+	ts, _ := NewToolSet(&fakeStore{})
+	read := toolByName(ts.Tools(context.Background()), "okf_read").(tool.CallableTool)
+	_, err := read.Call(context.Background(), []byte(`{"concept_id":"__missing__"}`))
+	if err == nil {
+		t.Fatal("expected error for a missing concept")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "not found") || !strings.Contains(msg, "okf_list") {
+		t.Errorf("not-found error should be actionable, got %q", msg)
+	}
+	if strings.Contains(msg, "no such file") {
+		t.Errorf("raw os error leaked to the model: %q", msg)
+	}
+}
+
+func TestCall_FindEmpty(t *testing.T) {
+	ts, _ := NewToolSet(&fakeStore{})
+	out := callTool(t, toolByName(ts.Tools(context.Background()), "okf_find"), `{"query":"__none__"}`)
+	if !strings.Contains(string(out), `"hits":[]`) {
+		t.Errorf("empty find should serialize hits:[] not null, got %s", out)
+	}
+	if !strings.Contains(string(out), "no concepts matched") {
+		t.Errorf("empty find should carry a guidance note, got %s", out)
 	}
 }
 

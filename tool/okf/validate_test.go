@@ -32,21 +32,23 @@ func TestValidate_Conformant(t *testing.T) {
 
 func TestValidate_ReportsViolations(t *testing.T) {
 	fsys := fstest.MapFS{
-		"index.md":    {Data: []byte("no frontmatter but reserved -> skipped")},
-		"log.md":      {Data: []byte("# log")},
-		"ok.md":       {Data: []byte("---\ntype: T\n---\nok")},
-		"no-type.md":  {Data: []byte("---\ntitle: x\n---\nbody")},
-		"bad.md":      {Data: []byte("---\ntype: [unclosed\n---\nbody")},
-		"sub/nofm.md": {Data: []byte("plain text, no frontmatter fence")},
+		"index.md":     {Data: []byte("no frontmatter but reserved -> skipped")},
+		"log.md":       {Data: []byte("# log")},
+		"ok.md":        {Data: []byte("---\ntype: T\n---\nok")},
+		"no-type.md":   {Data: []byte("---\ntitle: x\n---\nbody")},
+		"bad.md":       {Data: []byte("---\ntype: [unclosed\n---\nbody")},
+		"sub/nofm.md":  {Data: []byte("plain text, no frontmatter fence")},
+		"sub/index.md": {Data: []byte("---\nnote: nope\n---\nlisting")}, // non-root index.md must carry no frontmatter.
 	}
 	vs, err := Validate(fsys)
 	if err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
 	want := map[string]string{
-		"no-type":  RuleMissingType,
-		"bad":      RuleBadFrontmatter,
-		"sub/nofm": RuleMissingFrontmatter,
+		"no-type":   RuleMissingType,
+		"bad":       RuleBadFrontmatter,
+		"sub/nofm":  RuleMissingFrontmatter,
+		"sub/index": RuleReservedStructure,
 	}
 	if len(vs) != len(want) {
 		t.Fatalf("got %d violations, want %d: %+v", len(vs), len(want), vs)

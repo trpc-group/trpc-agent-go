@@ -11,6 +11,7 @@ package localokf
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -46,6 +47,9 @@ func TestList_Root(t *testing.T) {
 	}
 	if !strings.Contains(l.Index, "okf_version") {
 		t.Errorf("root Index should contain the raw index.md, got %q", l.Index)
+	}
+	if l.OKFVersion != "0.1" {
+		t.Errorf("root OKFVersion parsed from index.md = %q, want 0.1", l.OKFVersion)
 	}
 	// Reserved files must never surface as concepts.
 	if len(l.Concepts) != 0 {
@@ -149,6 +153,17 @@ func TestRead_MinimalOnlyType(t *testing.T) {
 	}
 	if c.Frontmatter.Type != "Rule" || c.Frontmatter.Title != "" {
 		t.Errorf("minimal concept: %+v", c.Frontmatter)
+	}
+}
+
+func TestRead_NotFound(t *testing.T) {
+	s := newTestStore(t)
+	_, err := s.Read(context.Background(), "does/not/exist")
+	if !errors.Is(err, okf.ErrNotFound) {
+		t.Fatalf("want ErrNotFound, got %v", err)
+	}
+	if strings.Contains(err.Error(), s.root) {
+		t.Errorf("not-found error must not leak the bundle root path: %q", err)
 	}
 }
 

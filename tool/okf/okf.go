@@ -42,6 +42,11 @@ const (
 // capability (for example a remote store with no search index answering Find).
 var ErrUnsupported = errors.New("okf: capability not supported by backend")
 
+// ErrNotFound is returned (wrapped, without leaking a filesystem path) by a
+// Store when a requested concept does not exist, so callers can distinguish it
+// from I/O errors with errors.Is.
+var ErrNotFound = errors.New("okf: concept not found")
+
 // Frontmatter holds the reserved OKF frontmatter fields plus any
 // producer-defined extensions. Only Type is required by the spec; consumers
 // must tolerate everything else being absent.
@@ -53,7 +58,7 @@ type Frontmatter struct {
 	Tags        []string       `json:"tags,omitempty" yaml:"tags,omitempty"`               // OPTIONAL.
 	Timestamp   string         `json:"timestamp,omitempty" yaml:"timestamp,omitempty"`     // OPTIONAL, ISO-8601 (kept verbatim).
 	OKFVersion  string         `json:"okf_version,omitempty" yaml:"okf_version,omitempty"` // OPTIONAL, only in the root index.md.
-	Extra       map[string]any `json:"extra,omitempty" yaml:",inline"`                     // Unknown / producer keys, preserved.
+	Extra       map[string]any `json:"extra,omitempty" yaml:",inline"`                     // Unknown / producer keys, preserved (nested under "extra" in tool JSON).
 }
 
 // Link is one outgoing markdown link from a concept body, normalized to the
@@ -84,10 +89,11 @@ type ConceptMeta struct {
 
 // Listing is the result of listing one directory (progressive disclosure).
 type Listing struct {
-	Dir      string        `json:"dir"`                // "" == bundle root.
-	Index    string        `json:"index,omitempty"`    // index.md content, if present.
-	Concepts []ConceptMeta `json:"concepts,omitempty"` // Concepts directly under Dir (reserved files excluded).
-	Subdirs  []string      `json:"subdirs,omitempty"`  // Immediate sub-directories.
+	Dir        string        `json:"dir"`                   // "" == bundle root.
+	Index      string        `json:"index,omitempty"`       // index.md content, if present.
+	OKFVersion string        `json:"okf_version,omitempty"` // Bundle version, parsed from the root index.md only.
+	Concepts   []ConceptMeta `json:"concepts,omitempty"`    // Concepts directly under Dir (reserved files excluded).
+	Subdirs    []string      `json:"subdirs,omitempty"`     // Immediate sub-directories.
 }
 
 // Query describes a Find request. Text is matched against title/description/

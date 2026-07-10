@@ -22,6 +22,7 @@ const (
 	RuleMissingFrontmatter = "missing-frontmatter"
 	RuleBadFrontmatter     = "bad-frontmatter"
 	RuleMissingType        = "missing-type"
+	RuleReservedStructure  = "reserved-structure"
 )
 
 // Violation is one OKF conformance problem found by Validate.
@@ -37,8 +38,14 @@ type Violation struct {
 // This is the strict, generation/CI-time gate — the counterpart to the runtime
 // tolerance a consumer must have. Per the OKF spec a consumer MUST NOT reject a
 // bundle for missing/unknown fields or broken links; Validate does the opposite,
-// so producers can catch problems before publishing: every non-reserved .md must
-// carry a parseable YAML frontmatter block with a non-empty type.
+// so producers can catch problems before publishing. It checks:
+//   - every non-reserved .md carries a parseable YAML frontmatter block with a
+//     non-empty type (§9 rules 1 and 2);
+//   - a non-root index.md carries no frontmatter (§6 — only the root index.md may,
+//     to hold okf_version).
+//
+// It does NOT validate log.md structure or which reserved keys the root index.md
+// carries; those are lower-value and left to the producer.
 //
 // Pass os.DirFS(bundleRoot) as fsys.
 func Validate(fsys fs.FS) ([]Violation, error) {
@@ -50,14 +57,24 @@ func Validate(fsys fs.FS) ([]Violation, error) {
 		if d.IsDir() || !strings.HasSuffix(p, ".md") {
 			return nil
 		}
-		if base := path.Base(p); base == IndexFile || base == LogFile {
-			return nil // reserved files are not concepts.
+		base := path.Base(p)
+		if base == LogFile {
+			return nil // log.md structure is not validated.
 		}
-		id := ConceptID(p)
 		raw, err := fs.ReadFile(fsys, p)
 		if err != nil {
 			return err
 		}
+		if base == IndexFile {
+			// §6: only the root index.md may carry frontmatter.
+			if path.Dir(p) != "." {
+				if _, _, ok := splitRaw(raw); ok {
+					violations = append(violations, Violation{ConceptID(p), RuleReservedStructure, "non-root index.md must not carry frontmatter"})
+				}
+			}
+			return nil
+		}
+		id := ConceptID(p)
 		yamlPart, _, ok := splitRaw(raw)
 		if !ok {
 			violations = append(violations, Violation{id, RuleMissingFrontmatter, "no leading --- YAML frontmatter block"})

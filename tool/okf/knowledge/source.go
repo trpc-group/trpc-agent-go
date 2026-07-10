@@ -21,6 +21,14 @@
 // so retrieval augments navigation instead of shredding OKF structure. The
 // dependency edge is one-way (this package -> tool/okf + knowledge/*); the
 // knowledge core never imports tool/*.
+//
+// Wire the agent so the model knows retrieval returns pointers, not content —
+// each result's Content and Metadata["okf_concept"] carry the concept id. A
+// system-prompt snippet that closes the loop:
+//
+//	Knowledge search over the OKF bundle returns concept summaries and ids, not
+//	full content. To read a concept in full, call okf_read with the concept id
+//	from a search result, then follow its links.
 package okfknowledge
 
 import (
@@ -143,10 +151,17 @@ func (s *Source) toDocument(c okf.Concept) *document.Document {
 	for k, v := range s.metadata {
 		md[k] = v
 	}
+	// Content leads with the concept id (not just the description) so the model
+	// always sees an id it can pass to okf_read, even if the retrieval tool does
+	// not surface metadata. Full body is still served only by okf_read.
+	content := c.ID
+	if fm.Description != "" {
+		content += " — " + fm.Description
+	}
 	return &document.Document{
 		ID:            c.ID,
 		Name:          fm.Title,
-		Content:       fm.Description, // summary/pointer; full body served by okf_read.
+		Content:       content,
 		EmbeddingText: embeddingText(fm),
 		Metadata:      md,
 	}

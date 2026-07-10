@@ -65,6 +65,9 @@ func SplitFrontmatter(raw []byte) (Frontmatter, []byte) {
 // owning the body (used to resolve relative links). External URLs are ignored;
 // a #fragment or ?query after a .md target is stripped. Broken links (targets
 // that do not exist) are still returned: consumers must tolerate them.
+//
+// Only inline links — [text](target.md) — are recognized; reference-style links
+// ([text][ref] with a separate [ref]: target.md definition) are not.
 func ExtractLinks(conceptDir string, body []byte) []Link {
 	matches := linkRe.FindAllSubmatch(body, -1)
 	if len(matches) == 0 {

@@ -78,6 +78,10 @@ func TestReadDocuments_OneNonChunkedDocPerConcept(t *testing.T) {
 		if strings.Contains(d.EmbeddingText, "full body") || strings.Contains(d.Content, "full body") {
 			t.Errorf("body must not be indexed: content=%q emb=%q", d.Content, d.EmbeddingText)
 		}
+		// Content must carry the concept id so the model can pass it to okf_read.
+		if !strings.Contains(d.Content, "research/x402") {
+			t.Errorf("Content should lead with the concept id, got %q", d.Content)
+		}
 		// Frontmatter lands in metadata; stable identity via MetaURI.
 		if d.Metadata[MetaType] != "Protocol" || d.Metadata[ksource.MetaURI] != "research/x402" {
 			t.Errorf("metadata wrong: %+v", d.Metadata)
