@@ -16,13 +16,13 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/google/uuid"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
-	"trpc.group/trpc-go/trpc-agent-go/internal/state/eventstream"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/flush"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/livesession"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -112,6 +112,11 @@ type workflowTool struct {
 	cfg     config
 }
 
+var _ tool.CallableTool = (*workflowTool)(nil)
+var _ tool.StreamableTool = (*workflowTool)(nil)
+
+const workflowStreamBufferSize = 64
+
 // Declaration implements tool.Tool.
 func (t *workflowTool) Declaration() *tool.Declaration {
 	description := t.cfg.description
@@ -159,41 +164,193 @@ Short parallel idiom: analyses = await parallel([lambda: agent("Option A", instr
 	}
 }
 
-// Call implements tool.CallableTool.
+// Call executes a workflow without streaming child Agent events and returns
+// its final result.
 func (t *workflowTool) Call(ctx context.Context, raw []byte) (any, error) {
+	parent, code, err := decodeWorkflowCall(ctx, raw)
+	if err != nil {
+		return nil, err
+	}
+	return t.execute(ctx, parent, code, nil)
+}
+
+// StreamableCall executes a workflow and streams child Agent events.
+func (t *workflowTool) StreamableCall(
+	ctx context.Context,
+	raw []byte,
+) (*tool.StreamReader, error) {
+	parent, code, err := decodeWorkflowCall(ctx, raw)
+	if err != nil {
+		return nil, err
+	}
+	stream := tool.NewStream(workflowStreamBufferSize)
+	runCtx := agent.CloneContext(ctx)
+	runnerOwnsEvents := flush.IsAttached(parent)
+	go func() {
+		defer stream.Writer.Close()
+		if runnerOwnsEvents {
+			if err := waitForRunnerStream(
+				runCtx,
+				parent,
+				t.cfg.name,
+				stream.Writer,
+			); err != nil {
+				sendWorkflowStreamError(runCtx, stream.Writer, err)
+				return
+			}
+		}
+		var streamedChildEvent atomic.Bool
+		result, err := t.execute(
+			runCtx,
+			parent,
+			code,
+			func(evt *event.Event) error {
+				streamedChildEvent.Store(true)
+				if stream.Writer.Send(tool.StreamChunk{Content: evt}, nil) {
+					return context.Canceled
+				}
+				if evt != nil && evt.RequiresCompletion && !runnerOwnsEvents {
+					return parent.NotifyCompletion(
+						runCtx,
+						agent.GetAppendEventNoticeKey(evt.ID),
+					)
+				}
+				return nil
+			},
+		)
+		if streamedChildEvent.Load() && runnerOwnsEvents {
+			if barrierErr := waitForRunnerStream(
+				runCtx,
+				parent,
+				t.cfg.name,
+				stream.Writer,
+			); barrierErr != nil && err == nil {
+				err = barrierErr
+			}
+		}
+		if err != nil {
+			sendWorkflowStreamError(runCtx, stream.Writer, err)
+			return
+		}
+		_ = stream.Writer.Send(tool.StreamChunk{
+			Content: tool.FinalResultChunk{Result: result},
+		}, nil)
+	}()
+	return stream.Reader, nil
+}
+
+// waitForRunnerStream inserts an in-band ordering point into the normal Agent
+// event stream. Runner acknowledgement guarantees that all preceding events
+// have completed its persistence path before workflow execution continues.
+func waitForRunnerStream(
+	ctx context.Context,
+	parent *agent.Invocation,
+	toolName string,
+	writer *tool.StreamWriter,
+) error {
+	if parent == nil || writer == nil {
+		return nil
+	}
+	syncEvent := event.New(
+		parent.InvocationID,
+		parent.AgentName,
+	)
+	syncEvent.RequiresCompletion = true
+	syncEvent.ParentMetadata = &agent.ParentInvocationMetadata{
+		TriggerType: agent.TriggerTypeDynamicWorkflow,
+		TriggerID:   syncEvent.ID,
+		TriggerName: toolName,
+	}
+	agent.InjectIntoEvent(parent, syncEvent)
+	completionID := agent.GetAppendEventNoticeKey(syncEvent.ID)
+	notice := parent.AddNoticeChannel(ctx, completionID)
+	if notice == nil {
+		return fmt.Errorf("dynamicworkflow: synchronize workflow stream")
+	}
+	if writer.Send(tool.StreamChunk{Content: syncEvent}, nil) {
+		return context.Canceled
+	}
+	select {
+	case <-notice:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// TRPCAgentGoStructuredStreamErrorsOptIn requests structured stream errors.
+func (*workflowTool) TRPCAgentGoStructuredStreamErrorsOptIn() bool {
+	return true
+}
+
+func decodeWorkflowCall(
+	ctx context.Context,
+	raw []byte,
+) (*agent.Invocation, string, error) {
 	var input struct {
 		Code string `json:"code"`
 	}
 	if err := json.Unmarshal(raw, &input); err != nil {
-		return nil, fmt.Errorf("dynamicworkflow: decode input: %w", err)
+		return nil, "", fmt.Errorf("dynamicworkflow: decode input: %w", err)
+	}
+	if strings.TrimSpace(input.Code) == "" {
+		return nil, "", required("code")
 	}
 	parent, ok := agent.InvocationFromContext(ctx)
 	if !ok || parent == nil {
-		return nil, fmt.Errorf("dynamicworkflow: run_workflow requires a running agent invocation")
+		return nil, "", fmt.Errorf("dynamicworkflow: run_workflow must be called from an active Agent run")
 	}
 	if parent.Session == nil {
-		return nil, fmt.Errorf("dynamicworkflow: run_workflow requires a parent session")
+		return nil, "", fmt.Errorf("dynamicworkflow: run_workflow requires an active Session")
 	}
+	return parent, input.Code, nil
+}
+
+func (t *workflowTool) execute(
+	ctx context.Context,
+	parent *agent.Invocation,
+	code string,
+	emitEvent func(*event.Event) error,
+) (Result, error) {
 	gateway := &workflowGateway{
 		parent:     parent,
 		agents:     t.agents,
 		tools:      t.tools,
 		workflow:   uuid.NewString(),
 		toolName:   t.cfg.name,
+		emitEvent:  emitEvent,
 		agentSlots: make(chan struct{}, defaultMaxConcurrentAgents),
 	}
-	if err := flush.Invoke(ctx, parent); err != nil {
-		return nil, fmt.Errorf("dynamicworkflow: flush parent session: %w", err)
+	if emitEvent == nil {
+		if err := flush.Invoke(ctx, parent); err != nil {
+			return Result{}, fmt.Errorf("dynamicworkflow: synchronize parent run: %w", err)
+		}
 	}
-	return Execute(ctx, t.runtime, gateway, input.Code)
+	return Execute(ctx, t.runtime, gateway, code)
+}
+
+func sendWorkflowStreamError(
+	ctx context.Context,
+	writer *tool.StreamWriter,
+	err error,
+) {
+	if writer == nil || err == nil {
+		return
+	}
+	evt := event.NewErrorEvent("", "", model.ErrorTypeFlowError, err.Error())
+	if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
+		agent.InjectIntoEvent(inv, evt)
+	}
+	_ = writer.Send(tool.StreamChunk{Content: evt}, nil)
 }
 
 type workflowGateway struct {
-	parent   *agent.Invocation
-	agents   map[string]agentTemplate
-	tools    map[string]tool.CallableTool
-	workflow string
-	toolName string
+	parent    *agent.Invocation
+	agents    map[string]agentTemplate
+	tools     map[string]tool.CallableTool
+	workflow  string
+	toolName  string
+	emitEvent func(*event.Event) error
 
 	agentSlots    chan struct{}
 	instanceLocks sync.Map
@@ -206,7 +363,7 @@ func (g *workflowGateway) HandleWorkflowCall(
 	call Call,
 ) (json.RawMessage, error) {
 	if g == nil {
-		return nil, fmt.Errorf("dynamicworkflow: nil gateway")
+		return nil, fmt.Errorf("dynamicworkflow: workflow bridge is unavailable")
 	}
 	switch call.Kind {
 	case CallKindTool:
@@ -339,7 +496,9 @@ func (g *workflowGateway) callAgent(ctx context.Context, call Call) (json.RawMes
 	if err := g.appendChildUserMessage(ctx, child); err != nil {
 		return nil, err
 	}
-	childCtx := agent.NewInvocationContext(ctx, child)
+	childRunCtx, cancelChild := context.WithCancel(ctx)
+	defer cancelChild()
+	childCtx := agent.NewInvocationContext(childRunCtx, child)
 	events, err := agent.RunWithPlugins(childCtx, child, candidate.agent)
 	if err != nil {
 		return nil, fmt.Errorf("dynamicworkflow: run agent %q: %w", req.templateName, err)
@@ -452,14 +611,14 @@ func workflowInputText(raw json.RawMessage) string {
 
 func (g *workflowGateway) appendChildUserMessage(ctx context.Context, inv *agent.Invocation) error {
 	if inv == nil {
-		return fmt.Errorf("dynamicworkflow: child invocation is nil")
+		return fmt.Errorf("dynamicworkflow: initialize child Agent")
 	}
 	userEvent := event.NewResponseEvent(inv.InvocationID, "user", &model.Response{
 		Choices: []model.Choice{{Index: 0, Message: inv.Message}},
 	})
 	agent.InjectIntoEvent(inv, userEvent)
 	if err := g.appendSessionEvent(ctx, inv, userEvent); err != nil {
-		return fmt.Errorf("dynamicworkflow: append child input: %w", err)
+		return fmt.Errorf("dynamicworkflow: record child input: %w", err)
 	}
 	return nil
 }
@@ -486,16 +645,19 @@ func (g *workflowGateway) collectChildResult(
 			}
 			result.Structured = json.RawMessage(raw)
 		}
-		forwarded, err := eventstream.Invoke(ctx, inv, evt)
-		if err != nil {
-			return agentResult{}, err
-		}
-		if !forwarded {
+		if g.emitEvent != nil {
+			if err := g.emitEvent(evt); err != nil {
+				return agentResult{}, fmt.Errorf(
+					"dynamicworkflow: publish child event: %w",
+					err,
+				)
+			}
+		} else {
 			if err := g.appendSessionEvent(ctx, inv, evt); err != nil {
 				return agentResult{}, err
 			}
 		}
-		if evt.RequiresCompletion {
+		if evt.RequiresCompletion && g.emitEvent == nil {
 			if err := inv.NotifyCompletion(ctx, agent.GetAppendEventNoticeKey(evt.ID)); err != nil {
 				return agentResult{}, err
 			}

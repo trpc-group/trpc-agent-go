@@ -195,6 +195,34 @@ func TestLLMAgent_AfterCbNoResp(t *testing.T) {
 	}
 }
 
+func TestLLMAgent_WrappedTelemetryAllowsEventWithoutResponse(t *testing.T) {
+	orig := make(chan *event.Event, 1)
+	orig <- &event.Event{
+		ID:         "state-only",
+		StateDelta: map[string][]byte{"state": []byte(`"updated"`)},
+	}
+	close(orig)
+
+	inv := &agent.Invocation{InvocationID: "id", AgentName: "agent"}
+	llm := &LLMAgent{}
+	wrapped := llm.wrapEventChannelWithTelemetry(
+		context.Background(),
+		inv,
+		orig,
+		noop.Span{},
+		&itelemetry.InvokeAgentTracker{},
+		false,
+	)
+
+	evt, ok := <-wrapped
+	require.True(t, ok)
+	require.NotNil(t, evt)
+	require.Nil(t, evt.Response)
+	require.Equal(t, []byte(`"updated"`), evt.StateDelta["state"])
+	_, ok = <-wrapped
+	require.False(t, ok)
+}
+
 func TestLLMAgent_AfterCbErrorRecordsTelemetryErrorType(t *testing.T) {
 	reader := sdkmetric.NewManualReader()
 	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
