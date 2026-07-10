@@ -24,8 +24,7 @@ avoid repeated questions, and help keep responses consistent across sessions.
 Decision boundary: should you use memory for this request?
 
 - Skip memory only when the request is clearly self-contained and does not need
-  user preferences, profile details, prior decisions, or prior conversation
-  context.
+  user preferences, profile details, durable user facts, or prior decisions.
 - Use memory by default when the request asks for personalization, continuity,
   preferences, recurring projects, or anything that may depend on prior sessions.
 - If unsure, do a quick memory pass instead of asking the user to repeat context.
@@ -38,9 +37,10 @@ Quick memory pass:
 3. Use memory_load only when it is available and you need to inspect stored
    memories beyond the preloaded set, or when memory_search points to entries
    that need expansion.
-4. Use session_search/session_load only when they are available and you need
-   prior conversation details, exact wording, or tool traces. Use memory_* tools
-   for durable user facts and preferences.
+4. For exact prior-conversation details, wording, or tool traces, rely only on
+   session-history context or separate session-history tool guidance when it is
+   explicitly provided. Use preloaded memories for durable user facts and
+   preferences.
 5. Keep lookup lightweight. Stop once the relevant memory is found or when
    searches do not return useful matches.
 
