@@ -12,6 +12,7 @@ package evolution
 import (
 	"context"
 	"hash/fnv"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -1050,7 +1051,7 @@ func (w *worker) isEvolutionManagedSkill(name string, repo skill.Repository, sco
 	if err != nil {
 		return false
 	}
-	return !strings.HasPrefix(rel, "..")
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)) && !filepath.IsAbs(rel)
 }
 
 func (w *worker) applyUpdates(ctx context.Context, updates []*SkillUpdate, scope skill.SkillScope, scoped bool, repo skill.Repository) bool {
@@ -1100,8 +1101,15 @@ func (w *worker) applyDeletions(ctx context.Context, names []string, scope skill
 	}
 	mutated := false
 	for _, name := range names {
-		if name == "" || !skillExists(repo, name) {
+		if strings.TrimSpace(name) == "" || !skillExists(repo, name) {
 			// Idempotent: nothing to delete (or never existed).
+			continue
+		}
+		// Write isolation: only delete skills that live within the
+		// evolution-managed directory. Bundled and user-authored skills
+		// are protected from accidental deletion.
+		if !w.isEvolutionManagedSkill(name, repo, scope, scoped) {
+			log.WarnfContext(ctx, "evolution: delete skill %q skipped: not evolution-managed (protected)", name)
 			continue
 		}
 		if err := publisher.DeleteSkill(ctx, name); err != nil {
