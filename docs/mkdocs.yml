@@ -89,6 +89,7 @@ nav:
       - "Context Management Design and Evaluation for Long-Running Agents": blog/summary.md
       - "Seeing the Agent Runtime: Observability Design in tRPC-Agent-Go": blog/observability.md
       - "Reducing Agent Token Cost: Prompt Cache Engineering in tRPC-Agent-Go": blog/promptcache.md
+      - "From Conversation to Execution: How tRPC-Agent-Go Code Executor Builds a Controlled Runtime for Agents": blog/codeexecutor.md
       - "GraphAgent Seamlessly Combines AI Workflows and Agents": blog/graphagent.md
       - "Quickly Build AG-UI-Based Agent Services": blog/agui.md
       - "A Go-Native Implementation of the Anthropic Agent Skills Specification": blog/skill.md
@@ -195,6 +196,7 @@ plugins:
                 - "长任务 Agent 上下文管理的设计与评测": blog/summary.md
                 - "看见 Agent 运行时：tRPC-Agent-Go 可观测的设计与取舍": blog/observability.md
                 - "降低 Agent Token 成本：tRPC-Agent-Go 的 Prompt Cache 工程实践": blog/promptcache.md
+                - "从对话到执行：tRPC-Agent-Go Code Executor 如何为 Agent 构建可控运行环境": blog/codeexecutor.md
                 - "GraphAgent 让 AI 工作流与 Agent 无缝融合": blog/graphagent.md
                 - "快速构建基于 AG-UI 的 Agent 服务": blog/agui.md
                 - "Anthropic Agent Skills 规范的 Go 原生实现": blog/skill.md
