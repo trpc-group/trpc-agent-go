@@ -607,6 +607,20 @@ agent:
 	)
 }
 
+func TestParseRunOptions_DeadlineFinalizationWindowYAMLInvalidFails(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+agent:
+  deadline_finalization_window: "definitely-not-a-duration"
+`)
+	_, err := parseRunOptions([]string{"-config", cfgPath})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "agent.deadline_finalization_window")
+}
+
 func TestParseRunOptions_DeadlineFinalizationMaxInputTokensNegativeFails(
 	t *testing.T,
 ) {

@@ -187,6 +187,53 @@ func TestModelCallBudget_Guards(t *testing.T) {
 	require.Nil(t, modelCallBudgetFromContext(ctx))
 }
 
+func TestModelCallBudget_FinalRequestEvidenceGuards(t *testing.T) {
+	t.Parallel()
+
+	var nilBudget *modelCallBudget
+	require.Equal(t, modelCallBudgetFinalRequestConfig{}, nilBudget.finalConfig())
+	require.False(t, modelCallBudgetHasToolEvidence(nil))
+	require.True(t, modelCallBudgetHasToolEvidence(&model.Request{
+		Messages: []model.Message{{Role: model.RoleAssistant, ToolID: "call_1"}},
+	}))
+	require.True(t, modelCallBudgetHasToolEvidence(&model.Request{
+		Messages: []model.Message{{
+			Role: model.RoleAssistant,
+			ToolCalls: []model.ToolCall{{
+				ID:   "call_1",
+				Type: "function",
+			}},
+		}},
+	}))
+
+	direct := nilBudget.applyFinalRequest(&model.Request{
+		Messages: []model.Message{
+			model.NewToolMessage("call_1", "search", "evidence"),
+		},
+	})
+	require.NotNil(t, direct)
+	require.Contains(t, budgetTestMessageText(direct.Messages), "final allowed")
+
+	budget := newModelCallBudget(2, true, 0)
+	budget.rememberRequest(&model.Request{
+		Messages: []model.Message{
+			model.NewUserMessage("question"),
+			model.NewToolMessage("call_1", "search", "original evidence"),
+		},
+	})
+	budget.rememberRequest(&model.Request{
+		Messages: []model.Message{
+			model.NewToolMessage("call_2", "search", "shorter evidence"),
+		},
+	})
+	finalReq := budget.applyFinalRequest(&model.Request{
+		Messages: []model.Message{model.NewUserMessage("question")},
+	})
+	content := budgetTestMessageText(finalReq.Messages)
+	require.Contains(t, content, "original evidence")
+	require.NotContains(t, content, "shorter evidence")
+}
+
 func TestModelCallBudgetDeadlineSoon_Guards(t *testing.T) {
 	t.Parallel()
 
@@ -203,6 +250,47 @@ func TestModelCallBudgetDeadlineSoon_Guards(t *testing.T) {
 	defer cancel()
 	require.False(t, modelCallBudgetDeadlineSoon(ctx, 0))
 	require.True(t, modelCallBudgetDeadlineSoon(ctx, time.Minute))
+}
+
+func TestModelCallBudgetPrefinalHelpers_Guards(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel, ok := modelCallBudgetPrefinalContext(
+		context.Background(),
+		time.Second,
+	)
+	require.False(t, ok)
+	require.Nil(t, cancel)
+	require.NotNil(t, ctx)
+
+	nearDeadline, cancel := context.WithDeadline(
+		context.Background(),
+		time.Now().Add(10*time.Millisecond),
+	)
+	defer cancel()
+	ctx, prefinalCancel, ok := modelCallBudgetPrefinalContext(
+		nearDeadline,
+		time.Minute,
+	)
+	require.False(t, ok)
+	require.Nil(t, prefinalCancel)
+	require.Same(t, nearDeadline, ctx)
+
+	require.False(t, modelCallBudgetPrefinalTimedOut(nil, context.Background()))
+	require.False(t, modelCallBudgetTimeoutResponse(
+		timeoutResponse(time.Second, context.DeadlineExceeded),
+		context.Background(),
+		context.Background(),
+		&modelCallBudget{deadlineWindow: time.Second},
+	))
+
+	canceled, stop := context.WithCancel(context.Background())
+	stop()
+	require.False(t, modelCallBudgetSendResponse(
+		canceled,
+		make(chan *model.Response),
+		&model.Response{},
+	))
 }
 
 func TestModelCallBudgetCallbacks_RunBeforeModel(t *testing.T) {
@@ -637,6 +725,119 @@ func TestFinalModelCallRequest_PreservesAnswerFormatInstruction(
 	require.Contains(t, content, "numeric value")
 	require.Contains(t, content, "evidence")
 	require.Contains(t, content, "final allowed model call")
+}
+
+func TestFinalModelCallHelpers_EdgeCases(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	counter := model.NewSimpleTokenCounter(model.WithApproxRunesPerToken(1))
+	require.Empty(t, finalModelCallRecentTailEvidenceSnippet([]model.Message{
+		model.NewSystemMessage("system only"),
+	}))
+	require.Len(
+		t,
+		finalModelCallEvidenceSnippet(strings.Repeat("x", 80)),
+		finalModelCallEvidenceSnippetLen,
+	)
+	require.Equal(t, 0, finalModelCallTrimBudget(ctx, counter, 0))
+	require.Equal(
+		t,
+		20,
+		finalModelCallTrimBudget(ctx, failingBudgetTokenCounter{}, 20),
+	)
+	require.False(t, finalModelCallFits(ctx, counter, nil, 20))
+	require.False(t, finalModelCallFits(ctx, counter, []model.Message{
+		model.NewUserMessage("question"),
+	}, 0))
+	require.Nil(t, finalModelCallTailEvidenceMessages(
+		ctx,
+		counter,
+		[]model.Message{model.NewSystemMessage("system only")},
+		20,
+	))
+
+	oversizedPrefix := []model.Message{
+		model.NewUserMessage(strings.Repeat("x", 200)),
+	}
+	require.Equal(t, oversizedPrefix, finalModelCallTailEvidenceWithPrefix(
+		ctx,
+		counter,
+		[]model.Message{
+			model.NewUserMessage("question"),
+			model.NewAssistantMessage("answer"),
+		},
+		oversizedPrefix,
+		0,
+		1,
+	))
+
+	compact := finalModelCallCompactTailEvidenceWithPrefix(
+		ctx,
+		counter,
+		[]model.Message{
+			model.NewUserMessage("question"),
+			model.NewAssistantMessage(strings.Repeat("evidence ", 80)),
+		},
+		[]model.Message{model.NewUserMessage("question")},
+		0,
+		80,
+	)
+	require.NotEmpty(t, compact)
+	require.Contains(t, budgetTestMessageText(compact), "evidence")
+
+	compacted := finalModelCallCompactMessages(
+		[]model.Message{model.NewUserMessage(strings.Repeat("abc", 20))},
+		12,
+	)
+	require.Len(t, compacted, 1)
+	require.LessOrEqual(t, len([]rune(compacted[0].Content)), 12)
+
+	require.Equal(
+		t,
+		"[Tool result: tool]",
+		finalModelCallToolResultText(model.Message{}),
+	)
+	require.Equal(t, 1, finalModelCallAnchorUserIndex(
+		[]model.Message{
+			model.NewSystemMessage("system"),
+			model.NewAssistantMessage("assistant"),
+		},
+		-1,
+	))
+	require.Equal(t, -1, finalModelCallAnchorUserIndex(
+		[]model.Message{model.NewSystemMessage("system")},
+		0,
+	))
+	require.Equal(t, 0, finalModelCallPartRuneLimit(0, 2))
+	require.Equal(t, 10, finalModelCallPartRuneLimit(10, 0))
+	require.Equal(t, 1, finalModelCallPartRuneLimit(1, 10))
+	require.Equal(t, "\n\nFIN", finalModelCallTrimContent(
+		"FINAL ANSWER: value",
+		5,
+	))
+	require.Empty(t, finalModelCallTrimContentPlain("abc", 0))
+	require.Equal(t, 0, finalModelCallParagraphStart("answer", 0))
+	require.Equal(t, 2, finalModelCallParagraphStart("a\nanswer", 4))
+	require.Equal(t, 6, finalModelCallParagraphEnd("answer", len("answer")))
+	require.Equal(t, 6, finalModelCallParagraphEnd("answer\nnext", 0))
+	require.Equal(
+		t,
+		"xxxxx",
+		finalModelCallLimitSnippet(strings.Repeat("x", 20), -1, 5),
+	)
+	require.Equal(
+		t,
+		"xxxxx",
+		finalModelCallLimitSnippet(strings.Repeat("x", 20), 100, 5),
+	)
+	require.Equal(t, []model.Message{model.NewUserMessage("tail")},
+		finalModelCallNormalizeTail([]model.Message{
+			model.NewToolMessage("call_1", "search", "skip"),
+			model.NewUserMessage("tail"),
+		}),
+	)
+	require.NotNil(t, applyFinalModelCallRequest(nil))
 }
 
 func budgetTestMessageText(messages []model.Message) string {
@@ -1251,6 +1452,24 @@ func cloneBudgetTestRequest(req *model.Request) *model.Request {
 	}
 	clone.Messages = append([]model.Message(nil), req.Messages...)
 	return &clone
+}
+
+type failingBudgetTokenCounter struct{}
+
+func (failingBudgetTokenCounter) CountTokens(
+	context.Context,
+	model.Message,
+) (int, error) {
+	return 0, fmt.Errorf("count tokens")
+}
+
+func (failingBudgetTokenCounter) CountTokensRange(
+	context.Context,
+	[]model.Message,
+	int,
+	int,
+) (int, error) {
+	return 0, fmt.Errorf("count tokens range")
 }
 
 type countingBudgetIterModel struct {
