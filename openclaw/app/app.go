@@ -4109,11 +4109,14 @@ func modelCompatibilityRunOptions(
 	}
 }
 
+const defaultReasoningFinalizationApproxRunesPerToken = 1.0
+
 func modelCallBudgetFinalRequestFromOptions(
 	opts runOptions,
 ) modelCallBudgetFinalRequestConfig {
 	cfg := modelCallBudgetFinalRequestConfig{
-		MaxInputTokens: opts.DeadlineFinalizationMaxInputTokens,
+		MaxInputTokens:      opts.DeadlineFinalizationMaxInputTokens,
+		ApproxRunesPerToken: opts.DeadlineFinalizationApproxRunesPerToken,
 	}
 	if strings.TrimSpace(opts.ModelMode) != modeOpenAI {
 		return cfg
@@ -4129,6 +4132,10 @@ func modelCallBudgetFinalRequestFromOptions(
 		openai.VariantGLM:
 		cfg.DisableThinking = true
 		cfg.DropReasoningContent = true
+		if cfg.ApproxRunesPerToken <= 0 {
+			cfg.ApproxRunesPerToken =
+				defaultReasoningFinalizationApproxRunesPerToken
+		}
 		return cfg
 	default:
 		return cfg

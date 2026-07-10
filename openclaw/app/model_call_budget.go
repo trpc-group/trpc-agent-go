@@ -32,6 +32,7 @@ type modelCallBudgetFinalRequestConfig struct {
 	DisableThinking      bool
 	DropReasoningContent bool
 	MaxInputTokens       int
+	ApproxRunesPerToken  float64
 }
 
 type modelCallBudget struct {
@@ -617,10 +618,7 @@ func finalModelCallRequest(
 		clone.ThinkingEnabled = model.BoolPtr(false)
 	}
 	clone.Messages = finalModelCallMessages(req.Messages, config)
-	clone.Messages = finalModelCallTrimMessages(
-		clone.Messages,
-		config.MaxInputTokens,
-	)
+	clone.Messages = finalModelCallTrimMessages(clone.Messages, config)
 	clone.Messages = append(clone.Messages, model.NewUserMessage(
 		finalModelCallNotice,
 	))
@@ -653,12 +651,22 @@ const finalModelCallNotice = "[OpenClaw Budget Notice] This is the " +
 
 func finalModelCallTrimMessages(
 	messages []model.Message,
-	maxInputTokens int,
+	config modelCallBudgetFinalRequestConfig,
 ) []model.Message {
+	maxInputTokens := config.MaxInputTokens
 	if maxInputTokens <= 0 || len(messages) == 0 {
 		return messages
 	}
-	strategy := model.NewMiddleOutStrategy(model.NewSimpleTokenCounter())
+	counterOpts := []model.SimpleTokenCounterOption(nil)
+	if config.ApproxRunesPerToken > 0 {
+		counterOpts = append(
+			counterOpts,
+			model.WithApproxRunesPerToken(config.ApproxRunesPerToken),
+		)
+	}
+	strategy := model.NewMiddleOutStrategy(
+		model.NewSimpleTokenCounter(counterOpts...),
+	)
 	trimmed, _ := strategy.TailorMessages(
 		context.Background(),
 		messages,

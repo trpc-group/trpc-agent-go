@@ -4608,7 +4608,27 @@ func TestModelCallBudgetFinalRequestFromOptions_DisablesThinking(
 		require.True(t, cfg.DisableThinking, string(variant))
 		require.True(t, cfg.DropReasoningContent, string(variant))
 		require.Equal(t, 1234, cfg.MaxInputTokens)
+		require.Equal(
+			t,
+			defaultReasoningFinalizationApproxRunesPerToken,
+			cfg.ApproxRunesPerToken,
+		)
 	}
+}
+
+func TestModelCallBudgetFinalRequestFromOptions_RespectsApproxRunes(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	cfg := modelCallBudgetFinalRequestFromOptions(runOptions{
+		ModelMode:                               modeOpenAI,
+		OpenAIVariant:                           string(openai.VariantGLM),
+		DeadlineFinalizationApproxRunesPerToken: 2.5,
+	})
+	require.True(t, cfg.DisableThinking)
+	require.True(t, cfg.DropReasoningContent)
+	require.Equal(t, 2.5, cfg.ApproxRunesPerToken)
 }
 
 func TestModelCallBudgetFinalRequestFromOptions_DefaultUnaffected(
@@ -4616,10 +4636,12 @@ func TestModelCallBudgetFinalRequestFromOptions_DefaultUnaffected(
 ) {
 	t.Parallel()
 
-	require.False(t, modelCallBudgetFinalRequestFromOptions(runOptions{
+	defaultCfg := modelCallBudgetFinalRequestFromOptions(runOptions{
 		ModelMode:     modeOpenAI,
 		OpenAIVariant: string(openai.VariantOpenAI),
-	}).DisableThinking)
+	})
+	require.False(t, defaultCfg.DisableThinking)
+	require.Zero(t, defaultCfg.ApproxRunesPerToken)
 	require.False(t, modelCallBudgetFinalRequestFromOptions(runOptions{
 		ModelMode:     modeOpenAI,
 		OpenAIVariant: string(openai.VariantOpenAI),
@@ -4650,6 +4672,11 @@ func TestModelCallBudgetFinalRequestFromOptions_AutoInfersThinking(
 		OpenAIBaseURL: "https://open.bigmodel.cn/api/paas/v4",
 	})
 	require.True(t, cfg.DisableThinking)
+	require.Equal(
+		t,
+		defaultReasoningFinalizationApproxRunesPerToken,
+		cfg.ApproxRunesPerToken,
+	)
 }
 
 func TestInferOpenAIVariant(t *testing.T) {

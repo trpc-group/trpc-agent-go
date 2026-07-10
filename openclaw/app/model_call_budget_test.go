@@ -433,6 +433,44 @@ func TestFinalModelCallRequest_TrimsContextWhenConfigured(t *testing.T) {
 	require.NotContains(t, content, "old answer")
 }
 
+func TestFinalModelCallRequest_UsesConfiguredTokenEstimate(t *testing.T) {
+	t.Parallel()
+
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("system instructions"),
+			model.NewUserMessage(
+				"old question " + strings.Repeat("x", 100),
+			),
+			model.NewAssistantMessage(
+				"old answer " + strings.Repeat("y", 100),
+			),
+			model.NewUserMessage("latest question"),
+		},
+	}
+
+	relaxed := finalModelCallRequest(
+		req,
+		modelCallBudgetFinalRequestConfig{MaxInputTokens: 80},
+	)
+	strict := finalModelCallRequest(
+		req,
+		modelCallBudgetFinalRequestConfig{
+			MaxInputTokens:      80,
+			ApproxRunesPerToken: 1,
+		},
+	)
+
+	relaxedContent := budgetTestMessageText(relaxed.Messages)
+	require.Contains(t, relaxedContent, "old question")
+	require.Contains(t, relaxedContent, "old answer")
+
+	strictContent := budgetTestMessageText(strict.Messages)
+	require.Contains(t, strictContent, "latest question")
+	require.NotContains(t, strictContent, "old question")
+	require.NotContains(t, strictContent, "old answer")
+}
+
 func budgetTestMessageText(messages []model.Message) string {
 	var b strings.Builder
 	for _, msg := range messages {
