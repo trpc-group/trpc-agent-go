@@ -318,6 +318,48 @@ func TestInferTraceConversationClearsActualToolMockWhenConversationHasNoToolMock
 	assert.Equal(t, 0, pluginCount)
 }
 
+func TestInferTraceConversationExpectedRunnerErrorPreservesExecutionTraces(t *testing.T) {
+	ctx := context.Background()
+	executionTrace := &agenttrace.Trace{RootInvocationID: "trace-root", SessionID: "session"}
+	svc := &local{}
+	evalCase := &evalset.EvalCase{
+		EvalID:                "case",
+		EvalMode:              evalset.EvalModeTrace,
+		ExpectedRunnerEnabled: true,
+		ActualConversation: []*evalset.Invocation{{
+			InvocationID:   "actual",
+			UserContent:    &model.Message{Role: model.RoleUser, Content: "question"},
+			FinalResponse:  &model.Message{Role: model.RoleAssistant, Content: "actual"},
+			ExecutionTrace: executionTrace,
+		}},
+		SessionInput: &evalset.SessionInput{UserID: "demo-user"},
+	}
+
+	inferenceResult, expectedInferences, err := svc.inferTraceConversation(ctx, evalCase, "session", &service.Options{})
+
+	require.ErrorContains(t, err, "expected runner is nil")
+	assert.Nil(t, expectedInferences)
+	require.NotNil(t, inferenceResult)
+	if assert.Len(t, inferenceResult.ExecutionTraces, 1) {
+		assert.Same(t, executionTrace, inferenceResult.ExecutionTraces[0])
+	}
+}
+
+func TestExecutionTracesFromInvocationsHandlesEmptyAndNilInvocations(t *testing.T) {
+	assert.Nil(t, executionTracesFromInvocations(nil))
+
+	executionTrace := &agenttrace.Trace{RootInvocationID: "trace-root", SessionID: "session"}
+	traces := executionTracesFromInvocations([]*evalset.Invocation{
+		nil,
+		{ExecutionTrace: executionTrace},
+	})
+
+	if assert.Len(t, traces, 2) {
+		assert.Nil(t, traces[0])
+		assert.Same(t, executionTrace, traces[1])
+	}
+}
+
 type fakeEvaluator struct {
 	name   string
 	result *evaluator.EvaluateResult
