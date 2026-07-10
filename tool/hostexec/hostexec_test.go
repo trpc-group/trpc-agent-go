@@ -798,7 +798,8 @@ func TestToolCalls_NotConfigured(t *testing.T) {
 func TestWriteStdin_CanceledBeforePoll(t *testing.T) {
 	mgr := newManager()
 	sess := newSession("session", "cat", defaultMaxLines)
-	sess.stdin = &testWriteCloser{}
+	writer := &testWriteCloser{}
+	sess.stdin = writer
 	mgr.sessions[sess.id] = sess
 
 	tool := &writeStdinTool{mgr: mgr}
@@ -815,6 +816,7 @@ func TestWriteStdin_CanceledBeforePoll(t *testing.T) {
 		}),
 	)
 	require.ErrorIs(t, err, context.Canceled)
+	require.Empty(t, writer.String())
 }
 
 func TestHostexec_HelperFunctions(t *testing.T) {

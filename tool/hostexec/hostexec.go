@@ -388,6 +388,9 @@ func (t *writeStdinTool) Call(
 		return nil, errors.New(errSessionIDRequired)
 	}
 
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if err := t.mgr.write(
 		sessionID,
 		in.Chars,
@@ -408,9 +411,15 @@ func (t *writeStdinTool) Call(
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		case <-timer.C:
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 		}
 	}
 
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	poll, err := t.mgr.poll(sessionID, nil)
 	if err != nil {
 		return nil, err
