@@ -2,6 +2,7 @@ package compare
 
 import (
 	"fmt"
+	"reflect"
 
 	"trpc.group/trpc-go/trpc-agent-go/session/replaytest/normalize"
 )
@@ -32,6 +33,10 @@ func MakeDiff(a, b *normalize.SnapShot) map[string]string {
 	n := len(a.Events)
 	if len(b.Events) < n {
 		n = len(b.Events)
+	}
+
+	if !reflect.DeepEqual(a.State, b.State) {
+		diff["state"] = fmt.Sprintf("a: %+v, b: %+v", a.State, b.State)
 	}
 
 	for i := 0; i < n; i++ {

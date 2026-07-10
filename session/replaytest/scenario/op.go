@@ -14,6 +14,7 @@ type Op struct {
 	Kind    OpKind // 具体操作类型
 	Role    string // user / assistant
 	Content string // 信息内容
+	State map[string]string // 状态
 }
 
 // 枚举操作类型

@@ -17,6 +17,7 @@ type Event struct {
 type SnapShot struct {
 	SessionId string
 	Events    []Event
+	State     map[string]string
 }
 
 //从某一session 转化得到 snapshot
@@ -30,6 +31,7 @@ func FromSession(sess *session.Session) *SnapShot {
 	snapshot := &SnapShot{
 		SessionId: sess.ID,
 		Events:    make([]Event, 0, len(sess.Events)),
+		State:     make(map[string]string),
 	}
 
 	for i, evt := range sess.Events {
@@ -42,7 +44,18 @@ func FromSession(sess *session.Session) *SnapShot {
 		})
 
 	}
+	// 处理状态
+	snapshot.State = NormalizeState(sess.State)
+
 	return snapshot
+}
+
+func NormalizeState(state session.StateMap) map[string]string {
+	normalizedState := make(map[string]string)
+	for k, v := range state {
+		normalizedState[k] = string(v)
+	}
+	return normalizedState
 }
 
 func RoleAndContent(evt event.Event) (string, string) {

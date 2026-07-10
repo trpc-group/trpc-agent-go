@@ -51,6 +51,18 @@ func Run(
 			if err = svc.AppendEvent(ctx, sess, evt); err != nil {
 				return nil, fmt.Errorf("op[%d] append event: %w", i, err)
 			}
+		case scenario.OpUpdateState:
+			if sess == nil {
+				return nil, fmt.Errorf("op[%d] append event before create session", i)
+			}
+			// 将状态转换为session.StateMap 格式
+			state := make(session.StateMap)
+			for k, v := range op.State {
+				state[k] = []byte(v)
+			}
+			if err = svc.UpdateSessionState(ctx, key, state); err != nil {
+				return nil, fmt.Errorf("op[%d] update state: %w", i, err)
+			}
 		default:
 			return nil, fmt.Errorf("op[%d] unsupported kind %q", i, op.Kind)
 		}

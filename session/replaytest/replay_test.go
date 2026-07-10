@@ -16,18 +16,36 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session/sqlite"
 )
 
-func TestReplaySingleTurn(t *testing.T) {
+func TestReplay(t *testing.T) {
+	// 待测所有case
+	cases := []*scenario.Case{
+		scenario.Case01_SingleTurn,
+		scenario.Case02_MultiTurn,
+		scenario.Case03_UpdateState,
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.Name, func(t *testing.T) {
+			RunCase(t, tc)
+		})
+	}
+}
+
+// case执行器, 执行单个case
+func RunCase(t *testing.T, c *scenario.Case) {
+	t.Helper()
+
 	ctx := context.Background()
 
 	baseline := inmemory.NewSessionService()
 	candidate := newSQLiteService(t)
 
-	sessA, err := harness.Run(ctx, baseline, scenario.Case01_SingleTurn)
+	sessA, err := harness.Run(ctx, baseline, c)
 	if err != nil {
 		t.Fatalf("run svcA: %v", err)
 	}
 
-	sessB, err := harness.Run(ctx, candidate, scenario.Case01_SingleTurn)
+	sessB, err := harness.Run(ctx, candidate, c)
 	if err != nil {
 		t.Fatalf("run svcB: %v", err)
 	}
