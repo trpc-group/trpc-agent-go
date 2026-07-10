@@ -60,6 +60,8 @@ type MemoryServiceConfig struct {
 	AsyncMemoryNum   int
 	MemoryQueueSize  int
 	MemoryJobTimeout time.Duration
+	// DisableAutoMemoryOnExternalContext skips auto extraction after framework-owned external context.
+	DisableAutoMemoryOnExternalContext bool
 }
 
 // RunnerConfig holds configuration for creating a runner.
@@ -157,6 +159,9 @@ func newSQLiteMemoryService(cfg MemoryServiceConfig) (memory.Service, error) {
 
 	if cfg.Extractor != nil {
 		opts = append(opts, memorysqlite.WithExtractor(cfg.Extractor))
+		opts = append(opts, memorysqlite.WithDisableAutoMemoryOnExternalContext(
+			cfg.DisableAutoMemoryOnExternalContext,
+		))
 		if cfg.AsyncMemoryNum > 0 {
 			opts = append(
 				opts,
@@ -233,6 +238,9 @@ func newInMemoryMemoryService(cfg MemoryServiceConfig) memory.Service {
 	// Configure extractor for auto memory mode if provided.
 	if cfg.Extractor != nil {
 		opts = append(opts, memoryinmemory.WithExtractor(cfg.Extractor))
+		opts = append(opts, memoryinmemory.WithDisableAutoMemoryOnExternalContext(
+			cfg.DisableAutoMemoryOnExternalContext,
+		))
 		if cfg.AsyncMemoryNum > 0 {
 			opts = append(opts, memoryinmemory.WithAsyncMemoryNum(cfg.AsyncMemoryNum))
 		}
@@ -262,6 +270,9 @@ func newRedisMemoryService(cfg MemoryServiceConfig) (memory.Service, error) {
 	// Configure extractor for auto memory mode if provided.
 	if cfg.Extractor != nil {
 		opts = append(opts, memoryredis.WithExtractor(cfg.Extractor))
+		opts = append(opts, memoryredis.WithDisableAutoMemoryOnExternalContext(
+			cfg.DisableAutoMemoryOnExternalContext,
+		))
 		if cfg.AsyncMemoryNum > 0 {
 			opts = append(opts, memoryredis.WithAsyncMemoryNum(cfg.AsyncMemoryNum))
 		}
@@ -309,6 +320,9 @@ func newPostgresMemoryService(cfg MemoryServiceConfig) (memory.Service, error) {
 	// Configure extractor for auto memory mode if provided.
 	if cfg.Extractor != nil {
 		opts = append(opts, memorypostgres.WithExtractor(cfg.Extractor))
+		opts = append(opts, memorypostgres.WithDisableAutoMemoryOnExternalContext(
+			cfg.DisableAutoMemoryOnExternalContext,
+		))
 		if cfg.AsyncMemoryNum > 0 {
 			opts = append(opts, memorypostgres.WithAsyncMemoryNum(cfg.AsyncMemoryNum))
 		}
@@ -362,6 +376,9 @@ func newPGVectorMemoryService(cfg MemoryServiceConfig) (memory.Service, error) {
 	// Configure extractor for auto memory mode if provided.
 	if cfg.Extractor != nil {
 		opts = append(opts, memorypgvector.WithExtractor(cfg.Extractor))
+		opts = append(opts, memorypgvector.WithDisableAutoMemoryOnExternalContext(
+			cfg.DisableAutoMemoryOnExternalContext,
+		))
 		if cfg.AsyncMemoryNum > 0 {
 			opts = append(opts, memorypgvector.WithAsyncMemoryNum(cfg.AsyncMemoryNum))
 		}
@@ -402,6 +419,9 @@ func newMySQLMemoryService(cfg MemoryServiceConfig) (memory.Service, error) {
 	// Configure extractor for auto memory mode if provided.
 	if cfg.Extractor != nil {
 		opts = append(opts, memorymysql.WithExtractor(cfg.Extractor))
+		opts = append(opts, memorymysql.WithDisableAutoMemoryOnExternalContext(
+			cfg.DisableAutoMemoryOnExternalContext,
+		))
 		if cfg.AsyncMemoryNum > 0 {
 			opts = append(opts, memorymysql.WithAsyncMemoryNum(cfg.AsyncMemoryNum))
 		}
@@ -447,6 +467,9 @@ func newMySQLVecMemoryService(cfg MemoryServiceConfig) (memory.Service, error) {
 	// Configure extractor for auto memory mode if provided.
 	if cfg.Extractor != nil {
 		opts = append(opts, memorymysqlvec.WithExtractor(cfg.Extractor))
+		opts = append(opts, memorymysqlvec.WithDisableAutoMemoryOnExternalContext(
+			cfg.DisableAutoMemoryOnExternalContext,
+		))
 		if cfg.AsyncMemoryNum > 0 {
 			opts = append(opts, memorymysqlvec.WithAsyncMemoryNum(cfg.AsyncMemoryNum))
 		}
