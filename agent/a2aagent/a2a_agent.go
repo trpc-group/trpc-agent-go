@@ -11,6 +11,7 @@
 package a2aagent
 
 import (
+	"container/list"
 	"context"
 	"errors"
 	"fmt"
@@ -41,9 +42,10 @@ import (
 )
 
 const (
-	defaultStreamingChannelSize    = 1024
-	defaultNonStreamingChannelSize = 10
-	defaultUserIDHeader            = "X-User-ID"
+	defaultStreamingChannelSize     = 1024
+	defaultNonStreamingChannelSize  = 10
+	defaultAnonymousClientCacheSize = 1024
+	defaultUserIDHeader             = "X-User-ID"
 )
 
 // A2AAgent is an agent that communicates with a remote A2A agent via A2A protocol.
@@ -67,13 +69,21 @@ type A2AAgent struct {
 	a2aClient    *client.A2AClient
 	a2aClientURL string
 
-	anonymousClientsMu sync.Mutex
-	anonymousClients   map[anonymousClientScope]*client.A2AClient
+	anonymousClientsMu       sync.Mutex
+	anonymousClients         map[anonymousClientScope]*list.Element
+	anonymousClientsLRU      *list.List
+	anonymousClientCacheSize int
 }
 
 type anonymousClientScope struct {
-	appName   string
-	sessionID string
+	appName           string
+	sessionID         string
+	createdAtUnixNano int64
+}
+
+type anonymousClientCacheEntry struct {
+	scope  anonymousClientScope
+	client *client.A2AClient
 }
 
 // New creates a new A2AAgent.
@@ -177,17 +187,36 @@ func (r *A2AAgent) clientForInvocation(
 
 	r.anonymousClientsMu.Lock()
 	defer r.anonymousClientsMu.Unlock()
-	if existing := r.anonymousClients[scope]; existing != nil {
-		return existing, nil
+	if element := r.anonymousClients[scope]; element != nil {
+		r.anonymousClientsLRU.MoveToFront(element)
+		return element.Value.(*anonymousClientCacheEntry).client, nil
 	}
 	a2aClient, err := r.newAnonymousClient()
 	if err != nil {
 		return nil, err
 	}
 	if r.anonymousClients == nil {
-		r.anonymousClients = make(map[anonymousClientScope]*client.A2AClient)
+		r.anonymousClients = make(map[anonymousClientScope]*list.Element)
+		r.anonymousClientsLRU = list.New()
 	}
-	r.anonymousClients[scope] = a2aClient
+	element := r.anonymousClientsLRU.PushFront(&anonymousClientCacheEntry{
+		scope:  scope,
+		client: a2aClient,
+	})
+	r.anonymousClients[scope] = element
+
+	cacheSize := r.anonymousClientCacheSize
+	if cacheSize <= 0 {
+		cacheSize = defaultAnonymousClientCacheSize
+	}
+	if len(r.anonymousClients) > cacheSize {
+		oldest := r.anonymousClientsLRU.Back()
+		r.anonymousClientsLRU.Remove(oldest)
+		delete(
+			r.anonymousClients,
+			oldest.Value.(*anonymousClientCacheEntry).scope,
+		)
+	}
 	return a2aClient, nil
 }
 
@@ -201,13 +230,20 @@ func anonymousScopeFromInvocation(
 	invocation *agent.Invocation,
 ) (anonymousClientScope, bool) {
 	if invocation == nil ||
-		invocation.Session == nil ||
-		strings.TrimSpace(invocation.Session.ID) == "" {
+		invocation.Session == nil {
+		return anonymousClientScope{}, false
+	}
+	appName := strings.TrimSpace(invocation.Session.AppName)
+	sessionID := strings.TrimSpace(invocation.Session.ID)
+	if appName == "" ||
+		sessionID == "" ||
+		invocation.Session.CreatedAt.IsZero() {
 		return anonymousClientScope{}, false
 	}
 	return anonymousClientScope{
-		appName:   invocation.Session.AppName,
-		sessionID: invocation.Session.ID,
+		appName:           appName,
+		sessionID:         sessionID,
+		createdAtUnixNano: invocation.Session.CreatedAt.UnixNano(),
 	}, true
 }
 

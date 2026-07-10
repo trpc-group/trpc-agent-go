@@ -227,12 +227,23 @@ func TestA2AAgent_AnonymousCookiesAreSessionScoped(t *testing.T) {
 		receivedCookies []string
 		serverURL       string
 	)
+	handlerErrs := make(chan error, 1)
+	reportHandlerError := func(err error) {
+		select {
+		case handlerErrs <- err:
+		default:
+		}
+	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/.well-known/agent-card.json" {
 			var rpcRequest struct {
 				ID any `json:"id"`
 			}
-			require.NoError(t, json.NewDecoder(r.Body).Decode(&rpcRequest))
+			if err := json.NewDecoder(r.Body).Decode(&rpcRequest); err != nil {
+				reportHandlerError(fmt.Errorf("decode RPC request: %w", err))
+				http.Error(w, "invalid request", http.StatusBadRequest)
+				return
+			}
 			cookieValue := ""
 			if cookie, err := r.Cookie(cookieName); err == nil {
 				cookieValue = cookie.Value
@@ -251,7 +262,7 @@ func TestA2AAgent_AnonymousCookiesAreSessionScoped(t *testing.T) {
 				Path:  "/",
 			})
 			w.Header().Set("Content-Type", "application/json")
-			require.NoError(t, json.NewEncoder(w).Encode(struct {
+			if err := json.NewEncoder(w).Encode(struct {
 				JSONRPC string           `json:"jsonrpc"`
 				ID      any              `json:"id"`
 				Result  protocol.Message `json:"result"`
@@ -266,14 +277,18 @@ func TestA2AAgent_AnonymousCookiesAreSessionScoped(t *testing.T) {
 						protocol.NewTextPart("test response"),
 					},
 				},
-			}))
+			}); err != nil {
+				reportHandlerError(fmt.Errorf("encode RPC response: %w", err))
+			}
 			return
 		}
-		require.NoError(t, json.NewEncoder(w).Encode(server.AgentCard{
+		if err := json.NewEncoder(w).Encode(server.AgentCard{
 			Name:        "session-scoped-cookie-agent",
 			Description: "session-scoped cookie test",
 			URL:         serverURL,
-		}))
+		}); err != nil {
+			reportHandlerError(fmt.Errorf("encode agent card: %w", err))
+		}
 	}))
 	defer srv.Close()
 	serverURL = srv.URL
@@ -292,15 +307,17 @@ func TestA2AAgent_AnonymousCookiesAreSessionScoped(t *testing.T) {
 	require.NoError(t, err)
 	require.Same(t, a.a2aClient, identifiedClient)
 
+	createdAt := time.Now()
 	runCount := 0
-	runAnonymous := func(appName, sessionID string) {
+	runAnonymous := func(appName, sessionID string, sessionCreatedAt time.Time) {
 		t.Helper()
 		runCount++
 		eventChan, runErr := a.Run(context.Background(), &agent.Invocation{
 			InvocationID: fmt.Sprintf("invocation-%d", runCount),
 			Session: &session.Session{
-				AppName: appName,
-				ID:      sessionID,
+				AppName:   appName,
+				ID:        sessionID,
+				CreatedAt: sessionCreatedAt,
 			},
 			Message: model.NewUserMessage("test message"),
 		})
@@ -312,11 +329,17 @@ func TestA2AAgent_AnonymousCookiesAreSessionScoped(t *testing.T) {
 		}
 	}
 
-	runAnonymous("app", "session-a")
-	runAnonymous("app", "session-a")
-	runAnonymous("app", "session-b")
-	runAnonymous("app", "session-b")
-	runAnonymous("other-app", "session-a")
+	runAnonymous("app", "session-a", createdAt)
+	runAnonymous("app", "session-a", createdAt)
+	runAnonymous("app", "session-b", createdAt)
+	runAnonymous("app", "session-b", createdAt)
+	runAnonymous("other-app", "session-a", createdAt)
+
+	select {
+	case handlerErr := <-handlerErrs:
+		require.NoError(t, handlerErr)
+	default:
+	}
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -327,6 +350,98 @@ func TestA2AAgent_AnonymousCookiesAreSessionScoped(t *testing.T) {
 		"session-cookie-2",
 		"",
 	}, receivedCookies)
+}
+
+func TestA2AAgent_AnonymousClientWithoutStableScopeIsEphemeral(t *testing.T) {
+	testCases := []struct {
+		name    string
+		session *session.Session
+	}{
+		{
+			name: "missing app name",
+			session: &session.Session{
+				ID:        "session-a",
+				CreatedAt: time.Now(),
+			},
+		},
+		{
+			name: "missing session ID",
+			session: &session.Session{
+				AppName:   "app",
+				CreatedAt: time.Now(),
+			},
+		},
+		{
+			name: "missing creation time",
+			session: &session.Session{
+				AppName: "app",
+				ID:      "session-a",
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			a := &A2AAgent{
+				a2aClientURL: "http://example.com",
+			}
+			invocation := &agent.Invocation{Session: tc.session}
+
+			first, err := a.clientForInvocation(invocation)
+			require.NoError(t, err)
+			second, err := a.clientForInvocation(invocation)
+			require.NoError(t, err)
+
+			require.NotSame(t, first, second)
+			require.Empty(t, a.anonymousClients)
+		})
+	}
+}
+
+func TestA2AAgent_AnonymousClientCacheUsesSessionGenerationAndEvictsLRU(
+	t *testing.T,
+) {
+	a := &A2AAgent{
+		a2aClientURL:             "http://example.com",
+		anonymousClientCacheSize: 2,
+	}
+	createdAt := time.Unix(100, 0)
+	invocation := func(sessionID string, sessionCreatedAt time.Time) *agent.Invocation {
+		return &agent.Invocation{
+			Session: &session.Session{
+				AppName:   "app",
+				ID:        sessionID,
+				CreatedAt: sessionCreatedAt,
+			},
+		}
+	}
+
+	firstGeneration, err := a.clientForInvocation(
+		invocation("session-a", createdAt),
+	)
+	require.NoError(t, err)
+	sameGeneration, err := a.clientForInvocation(
+		invocation("session-a", createdAt),
+	)
+	require.NoError(t, err)
+	require.Same(t, firstGeneration, sameGeneration)
+
+	secondGeneration, err := a.clientForInvocation(
+		invocation("session-a", createdAt.Add(time.Second)),
+	)
+	require.NoError(t, err)
+	require.NotSame(t, firstGeneration, secondGeneration)
+
+	_, err = a.clientForInvocation(invocation("session-b", createdAt))
+	require.NoError(t, err)
+	require.Len(t, a.anonymousClients, 2)
+
+	recreatedFirstGeneration, err := a.clientForInvocation(
+		invocation("session-a", createdAt),
+	)
+	require.NoError(t, err)
+	require.NotSame(t, firstGeneration, recreatedFirstGeneration)
+	require.Len(t, a.anonymousClients, 2)
 }
 
 func TestA2AAgent_ClientForInvocationReturnsCookieJarError(t *testing.T) {
