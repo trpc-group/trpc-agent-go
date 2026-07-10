@@ -441,15 +441,20 @@ func exitCode(err error) int {
 }
 
 func (m *Manager) startBackground(
-	parentCtx context.Context,
+	parent context.Context,
 	params execParams,
 	timeout time.Duration,
 	redact func(string) string,
 ) (*session, error) {
-	if parentCtx == nil {
-		parentCtx = context.Background()
+	if parent != nil {
+		select {
+		case <-parent.Done():
+			return nil, parent.Err()
+		default:
+		}
 	}
-	ctx, cancel := context.WithTimeout(parentCtx, timeout)
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	cmd := shellCmdWithStartup(
 		ctx,
 		params.Command,

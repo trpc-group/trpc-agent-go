@@ -437,6 +437,21 @@ func TestManagerStartBackgroundUsesBackgroundForNilParentContext(
 	}, 3*time.Second, 20*time.Millisecond)
 }
 
+func TestManagerStartBackgroundRejectsCanceledParentContext(t *testing.T) {
+	mgr := NewManager()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	sess, err := mgr.startBackground(
+		ctx,
+		execParams{Command: "printf unexpected"},
+		time.Second,
+		nil,
+	)
+	require.Nil(t, sess)
+	require.ErrorIs(t, err, context.Canceled)
+}
+
 func TestExecTool_RuntimeProfileWorkspacePolicy(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash is not available")
@@ -1084,6 +1099,44 @@ func TestExecTool_YieldBackgroundAndPoll(t *testing.T) {
 	t.Fatalf("process did not exit; output: %s", all)
 }
 
+func TestExecTool_YieldSessionSurvivesCallerContextCancel(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash is not available")
+	}
+
+	mgr := NewManager(WithJobTTL(10 * time.Second))
+	execTool := newExecCommandTool(mgr)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	args := mustJSON(t, map[string]any{
+		"command": "printf 'start\\n'; sleep 0.2; printf 'end\\n'",
+		"yieldMs": 10,
+	})
+	out, err := execTool.Call(ctx, args)
+	require.NoError(t, err)
+	cancel()
+
+	res := out.(execResult)
+	require.Equal(t, "running", res.Status)
+	require.NotEmpty(t, res.SessionID)
+
+	var all string
+	require.Eventually(t, func() bool {
+		poll, err := mgr.poll(res.SessionID, nil)
+		require.NoError(t, err)
+		if poll.Output != "" {
+			all += "\n" + poll.Output
+		}
+		if poll.Status != "exited" {
+			return false
+		}
+		require.NotNil(t, poll.ExitCode)
+		require.Equal(t, 0, *poll.ExitCode)
+		return strings.Contains(all, "start") &&
+			strings.Contains(all, "end")
+	}, 2*time.Second, 20*time.Millisecond, "output: %s", all)
+}
+
 func TestExecTool_DefaultTimeoutKillsProcessGroup(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("process group signaling is unix-specific")
@@ -1188,7 +1241,7 @@ func TestExecTool_SessionExitCleansExecBypassedTrap(t *testing.T) {
 	}, 800*time.Millisecond, 20*time.Millisecond)
 }
 
-func TestExecTool_ContextCancelKillsYieldSessionProcessGroup(t *testing.T) {
+func TestExecTool_KillKillsYieldSessionProcessGroup(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("process group signaling is unix-specific")
 	}
@@ -1203,6 +1256,7 @@ func TestExecTool_ContextCancelKillsYieldSessionProcessGroup(t *testing.T) {
 	yieldMs := 10
 	timeoutS := 30
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	res, err := mgr.Exec(ctx, execParams{
 		Command: "(sleep 0.7; echo orphan > " +
@@ -1220,7 +1274,7 @@ func TestExecTool_ContextCancelKillsYieldSessionProcessGroup(t *testing.T) {
 		return err == nil
 	}, time.Second, 20*time.Millisecond)
 
-	cancel()
+	require.NoError(t, mgr.kill(res.SessionID))
 	pollUntilExited(t, mgr, res.SessionID)
 	require.Never(t, func() bool {
 		_, err = os.Stat(marker)
