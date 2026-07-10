@@ -139,8 +139,12 @@ func (c *Client) Search(search Search) ([]Result, error) {
 // buildQueryURL builds the query URL for the search
 func (c *Client) buildQueryURL(search Search, start, maxResults int) (string, error) {
 	params := url.Values{}
-	if search.Query != "" {
-		params.Add("search_query", search.Query)
+	query, err := buildSearchQuery(search)
+	if err != nil {
+		return "", err
+	}
+	if query != "" {
+		params.Add("search_query", query)
 	}
 	if len(search.IDList) > 0 {
 		params.Add("id_list", strings.Join(search.IDList, ","))
@@ -159,6 +163,86 @@ func (c *Client) buildQueryURL(search Search, start, maxResults int) (string, er
 	}
 
 	return c.BaseURL + "?" + params.Encode(), nil
+}
+
+func buildSearchQuery(search Search) (string, error) {
+	query := strings.TrimSpace(search.Query)
+	dateClause, err := submittedDateClause(
+		search.SubmittedDateFrom,
+		search.SubmittedDateTo,
+	)
+	if err != nil {
+		return "", err
+	}
+	if dateClause == "" {
+		return query, nil
+	}
+	if query == "" {
+		return dateClause, nil
+	}
+	return query + " AND " + dateClause, nil
+}
+
+func submittedDateClause(from string, to string) (string, error) {
+	from = strings.TrimSpace(from)
+	to = strings.TrimSpace(to)
+	if from == "" && to == "" {
+		return "", nil
+	}
+	if from == "" {
+		from = "199001010000"
+	}
+	if to == "" {
+		to = "999912312359"
+	}
+	fromDate, err := normalizeArxivDateBound(from, false)
+	if err != nil {
+		return "", fmt.Errorf("invalid submitted_date_from: %w", err)
+	}
+	toDate, err := normalizeArxivDateBound(to, true)
+	if err != nil {
+		return "", fmt.Errorf("invalid submitted_date_to: %w", err)
+	}
+	return fmt.Sprintf(
+		"submittedDate:[%s TO %s]",
+		fromDate,
+		toDate,
+	), nil
+}
+
+func normalizeArxivDateBound(raw string, upper bool) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", fmt.Errorf("empty date")
+	}
+	digits := dateDigits(raw)
+	switch len(digits) {
+	case 8:
+		if upper {
+			digits += "2359"
+		} else {
+			digits += "0000"
+		}
+	case 12:
+	default:
+		return "", fmt.Errorf(
+			"expected YYYY-MM-DD, YYYYMMDD, or YYYYMMDDHHMM",
+		)
+	}
+	if _, err := time.Parse("200601021504", digits); err != nil {
+		return "", err
+	}
+	return digits, nil
+}
+
+func dateDigits(raw string) string {
+	var b strings.Builder
+	for _, r := range raw {
+		if r >= '0' && r <= '9' {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 // fetchPage fetches a page of results
