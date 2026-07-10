@@ -177,10 +177,23 @@ func buildSearchQuery(search Search) (string, error) {
 	if dateClause == "" {
 		return query, nil
 	}
+	if containsSubmittedDateClause(query) {
+		return "", fmt.Errorf(
+			"query already contains submittedDate; use either the " +
+				"query clause or submitted_date_from/to",
+		)
+	}
 	if query == "" {
 		return dateClause, nil
 	}
 	return query + " AND " + dateClause, nil
+}
+
+func containsSubmittedDateClause(query string) bool {
+	return strings.Contains(
+		strings.ToLower(query),
+		"submitteddate:",
+	)
 }
 
 func submittedDateClause(from string, to string) (string, error) {
@@ -202,6 +215,12 @@ func submittedDateClause(from string, to string) (string, error) {
 	toDate, err := normalizeArxivDateBound(to, true)
 	if err != nil {
 		return "", fmt.Errorf("invalid submitted_date_to: %w", err)
+	}
+	if fromDate > toDate {
+		return "", fmt.Errorf(
+			"submitted_date_from must be before or equal to " +
+				"submitted_date_to",
+		)
 	}
 	return fmt.Sprintf(
 		"submittedDate:[%s TO %s]",

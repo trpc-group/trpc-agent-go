@@ -73,8 +73,8 @@ type Search struct {
 	MaxResults        *int          `json:"max_results,omitempty" jsonschema:"description=Maximum number of results to return"`
 	SortBy            SortCriterion `json:"sort_by,omitempty" jsonschema:"description=Sort criterion: relevance or lastUpdatedDate or submittedDate,enum=relevance,enum=lastUpdatedDate,enum=submittedDate"`
 	SortOrder         SortOrder     `json:"sort_order,omitempty" jsonschema:"description=Sort order: ascending or descending,enum=ascending,enum=descending"`
-	SubmittedDateFrom string        `json:"submitted_date_from,omitempty" jsonschema:"description=Submitted date lower bound in YYYY-MM-DD or YYYYMMDDHHMM GMT"`
-	SubmittedDateTo   string        `json:"submitted_date_to,omitempty" jsonschema:"description=Submitted date upper bound in YYYY-MM-DD or YYYYMMDDHHMM GMT"`
+	SubmittedDateFrom string        `json:"submitted_date_from,omitempty" jsonschema:"description=Submitted date lower bound in YYYY-MM-DD or YYYYMMDDHHMM GMT. Can be used without submitted_date_to for an open-ended range."`
+	SubmittedDateTo   string        `json:"submitted_date_to,omitempty" jsonschema:"description=Submitted date upper bound in YYYY-MM-DD or YYYYMMDDHHMM GMT. Can be used without submitted_date_from for an open-ended range."`
 }
 
 // ClientConfig contains the configuration for the arXiv client

@@ -531,6 +531,21 @@ func TestNormalizedMaxContentRunes(t *testing.T) {
 		normalizedMaxContentRunes(maxArticleContentRunes+1))
 }
 
+func TestIsEmptySearchTrimsWhitespace(t *testing.T) {
+	assert.True(t, isEmptySearch(arxiv.Search{
+		Query:             "  \t\n",
+		IDList:            []string{" ", "\t"},
+		SubmittedDateFrom: " ",
+		SubmittedDateTo:   "\n",
+	}))
+	assert.False(t, isEmptySearch(arxiv.Search{
+		IDList: []string{" ", "2301.00001"},
+	}))
+	assert.False(t, isEmptySearch(arxiv.Search{
+		SubmittedDateFrom: "2022-01-01",
+	}))
+}
+
 func TestAppendArticleContentAppliesRuneBudget(t *testing.T) {
 	var got article
 	appendArticleContent(&got, []*document.Document{
@@ -547,6 +562,23 @@ func TestAppendArticleContentAppliesRuneBudget(t *testing.T) {
 	assert.True(t, got.ContentTruncated)
 	assert.Equal(t, 13, got.ContentRunes)
 	assert.Equal(t, 7, got.ReturnedContentRunes)
+}
+
+func TestAppendArticleContentHandlesNilAndZeroBudget(t *testing.T) {
+	require.NotPanics(t, func() {
+		appendArticleContent(nil, []*document.Document{{Content: "ignored"}}, 1)
+	})
+
+	var got article
+	appendArticleContent(&got, []*document.Document{
+		nil,
+		{Content: "alpha"},
+	}, 0)
+
+	assert.Empty(t, got.Content)
+	assert.True(t, got.ContentTruncated)
+	assert.Equal(t, 5, got.ContentRunes)
+	assert.Equal(t, 0, got.ReturnedContentRunes)
 }
 
 func TestAppendArticleContentKeepsShortDocuments(t *testing.T) {

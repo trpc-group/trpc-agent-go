@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -75,7 +76,7 @@ type searchRequest struct {
 	ReadArxivPapers bool         `json:"read_arxiv_papers" jsonschema:"description=Whether to read the content from PDF"`
 	// MaxContentRunes limits PDF text returned per article.
 	// It defaults to 20000 and is capped at 200000.
-	MaxContentRunes int `json:"max_content_runes,omitempty"`
+	MaxContentRunes int `json:"max_content_runes,omitempty" jsonschema:"description=Maximum PDF text runes returned per article when read_arxiv_papers is true. Non-positive values use the 20000 default; values above 200000 are capped. Set read_arxiv_papers to false to omit PDF content."`
 }
 
 // Option define an option for arxiv tool
@@ -241,10 +242,19 @@ func (t *ToolSet) search(
 }
 
 func isEmptySearch(search arxiv.Search) bool {
-	return len(search.Query) == 0 &&
-		len(search.IDList) == 0 &&
-		len(search.SubmittedDateFrom) == 0 &&
-		len(search.SubmittedDateTo) == 0
+	return strings.TrimSpace(search.Query) == "" &&
+		!hasNonEmptyString(search.IDList) &&
+		strings.TrimSpace(search.SubmittedDateFrom) == "" &&
+		strings.TrimSpace(search.SubmittedDateTo) == ""
+}
+
+func hasNonEmptyString(values []string) bool {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizedMaxContentRunes(maxRunes int) int {

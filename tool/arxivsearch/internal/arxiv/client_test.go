@@ -172,6 +172,37 @@ func TestClient_buildQueryURL(t *testing.T) {
 			},
 			wantErr: true,
 		},
+		{
+			name: "duplicate submitted date clause",
+			fields: fields{
+				baseURL: "http://arxiv.org",
+			},
+			args: args{
+				search: Search{
+					Query:             "cat:cs.AI AND submittedDate:[202201010000 TO 202201312359]",
+					SubmittedDateFrom: "2022-06-01",
+				},
+				start:      0,
+				maxResults: 5,
+			},
+			wantErr: true,
+		},
+		{
+			name: "inverted submitted date range",
+			fields: fields{
+				baseURL: "http://arxiv.org",
+			},
+			args: args{
+				search: Search{
+					Query:             "cat:cs.AI",
+					SubmittedDateFrom: "2022-12-31",
+					SubmittedDateTo:   "2022-01-01",
+				},
+				start:      0,
+				maxResults: 5,
+			},
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {
