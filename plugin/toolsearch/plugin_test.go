@@ -11,6 +11,7 @@ package toolsearch
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -382,6 +383,70 @@ func TestSessionState_PersistsAcrossLoad(t *testing.T) {
 	assert.True(t, ok, "send_email should be injected after loading")
 	_, ok = req.Tools["create_doc"]
 	assert.True(t, ok, "create_doc should be injected after loading")
+}
+
+// TestSessionState_ParallelLoadsMergeInSharedSession is a regression guard
+// for LLMAgent parallel tool calls: cloned invocations share the same
+// *session.Session, so two concurrent tool_search calls must not clobber each
+// other's newly-loaded tool.
+func TestSessionState_ParallelLoadsMergeInSharedSession(t *testing.T) {
+	p := New(nil, WithDeferredTools([]tool.Tool{
+		newTestTool("send_email", "x"),
+		newTestTool("create_doc", "y"),
+	}))
+
+	// Two invocations share one session, mirroring Invocation.Clone.
+	sess := &session.Session{
+		AppName: "app",
+		UserID:  "user",
+		ID:      "sess",
+		State:   session.StateMap{},
+	}
+	invA := &agent.Invocation{Session: sess}
+	invB := &agent.Invocation{Session: sess}
+	ctxA := agent.NewInvocationContext(context.Background(), invA)
+	ctxB := agent.NewInvocationContext(context.Background(), invB)
+
+	// Run many iterations to amplify interleaving.
+	const iterations = 32
+	for i := 0; i < iterations; i++ {
+		// Reset shared state each iteration.
+		sess.SetState(discoveredToolsStateKey, nil)
+		sess.DeleteState(discoveredToolsStateKey)
+
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, err := p.searchTools(ctxA, toolSearchInput{ToolNames: []string{"send_email"}})
+			assert.NoError(t, err)
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			_, err := p.searchTools(ctxB, toolSearchInput{ToolNames: []string{"create_doc"}})
+			assert.NoError(t, err)
+		}()
+		close(start)
+		wg.Wait()
+
+		loaded := p.loadDiscoveredTools(ctxA, invA)
+		assert.ElementsMatch(t,
+			[]string{"send_email", "create_doc"}, loaded,
+			"iteration %d: both parallel tool_search loads must survive in the shared session state", i,
+		)
+	}
+
+	// Both schemas should be injected on the next model turn.
+	req := &model.Request{}
+	_, err := p.beforeModel(ctxA, &model.BeforeModelArgs{Request: req})
+	require.NoError(t, err)
+	_, ok := req.Tools["send_email"]
+	assert.True(t, ok, "send_email schema must be injected after parallel load")
+	_, ok = req.Tools["create_doc"]
+	assert.True(t, ok, "create_doc schema must be injected after parallel load")
 }
 
 func TestDuplicateNamespaceRegistrationKeepsFirstOwner(t *testing.T) {

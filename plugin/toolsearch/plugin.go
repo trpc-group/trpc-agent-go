@@ -81,6 +81,12 @@ type Plugin struct {
 	// embeddingFailOpen, when true, makes an embedding-search failure fall back
 	// to the built-in keyword matching instead of surfacing the error.
 	embeddingFailOpen bool
+
+	// discoveredMuBySession serializes appendDiscoveredTools per session so
+	// concurrent tool_search calls on cloned invocations sharing the same
+	// *session.Session don't clobber each other's newly-loaded tool.
+	// Keyed by session.Key; values are *sync.Mutex.
+	discoveredMuBySession sync.Map
 }
 
 // toolboxIndex holds catalog metadata and an O(1) membership set for a namespace.
@@ -760,13 +766,13 @@ func (p *Plugin) renderToolboxCatalog(allDeferredAllowed map[string]bool) string
 // --- Session state management ---
 
 // loadDiscoveredTools reads the loaded deferred-tool names from session state.
-// It returns nil on missing data or a parse failure; callers treat nil as the
-// empty set.
+// Returns nil on missing data or parse failure. Read goes through
+// Session.GetState, so it is safe against concurrent SetState writers.
 func (p *Plugin) loadDiscoveredTools(ctx context.Context, inv *agent.Invocation) []string {
-	if inv == nil || inv.Session == nil || inv.Session.State == nil {
+	if inv == nil || inv.Session == nil {
 		return nil
 	}
-	raw, ok := inv.Session.State[discoveredToolsStateKey]
+	raw, ok := inv.Session.GetState(discoveredToolsStateKey)
 	if !ok || len(raw) == 0 {
 		return nil
 	}
@@ -778,9 +784,27 @@ func (p *Plugin) loadDiscoveredTools(ctx context.Context, inv *agent.Invocation)
 	return toolNames
 }
 
+// discoveredToolsLock returns the per-session mutex used by
+// appendDiscoveredTools. Different sessions never contend.
+func (p *Plugin) discoveredToolsLock(inv *agent.Invocation) *sync.Mutex {
+	if inv == nil || inv.Session == nil {
+		return nil
+	}
+	key := session.Key{
+		AppName:   inv.Session.AppName,
+		UserID:    inv.Session.UserID,
+		SessionID: inv.Session.ID,
+	}
+	if v, ok := p.discoveredMuBySession.Load(key); ok {
+		return v.(*sync.Mutex)
+	}
+	actual, _ := p.discoveredMuBySession.LoadOrStore(key, &sync.Mutex{})
+	return actual.(*sync.Mutex)
+}
+
 // saveDiscoveredTools writes the loaded deferred-tool names back into session
-// state and persists them through the SessionService so the next turn can read
-// them.
+// state and persists them through the SessionService. The in-memory write
+// uses Session.SetState, which is safe under concurrent access.
 func (p *Plugin) saveDiscoveredTools(ctx context.Context, inv *agent.Invocation, tools []string) {
 	if inv == nil || inv.Session == nil {
 		return
@@ -792,10 +816,8 @@ func (p *Plugin) saveDiscoveredTools(ctx context.Context, inv *agent.Invocation,
 	}
 
 	// Write into the in-memory state so later callbacks this turn see it.
-	if inv.Session.State == nil {
-		inv.Session.State = make(session.StateMap)
-	}
-	inv.Session.State[discoveredToolsStateKey] = data
+	// SetState locks the session's stateMu and copies the payload internally.
+	inv.Session.SetState(discoveredToolsStateKey, data)
 
 	// Persist explicitly so the next turn does not lose the loaded set.
 	if inv.SessionService == nil {
@@ -815,7 +837,14 @@ func (p *Plugin) saveDiscoveredTools(ctx context.Context, inv *agent.Invocation,
 }
 
 // appendDiscoveredTools merges newTools into the loaded set and persists it.
+// The load/merge/save cycle is serialized per session so concurrent
+// tool_search calls (LLMAgent parallel tool calls share the underlying
+// *session.Session via Invocation.Clone) do not overwrite each other.
 func (p *Plugin) appendDiscoveredTools(ctx context.Context, inv *agent.Invocation, newTools []string) {
+	if mu := p.discoveredToolsLock(inv); mu != nil {
+		mu.Lock()
+		defer mu.Unlock()
+	}
 	toolSet := toStringSet(p.loadDiscoveredTools(ctx, inv))
 	for _, t := range newTools {
 		toolSet[t] = struct{}{}
