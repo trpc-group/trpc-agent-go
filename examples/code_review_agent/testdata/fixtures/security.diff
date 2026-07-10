@@ -1,0 +1,8 @@
+diff --git a/config.go b/config.go
+new file mode 100644
+--- /dev/null
++++ b/config.go
+@@ -0,0 +1,3 @@
++package example
++
++const API_KEY = "sk-abc123def456ghi789jkl012mno345"
