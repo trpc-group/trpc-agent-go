@@ -1013,3 +1013,34 @@ func TestEvent_Filter_LegacyBranchCompatibility(t *testing.T) {
 	require.True(t, legacy.Filter("legacy/branch/sub"))
 	require.False(t, legacy.Filter("legacy-other"))
 }
+
+// TestTryEmitReadyEvent_ClosedChannel tests that tryEmitReadyEvent recovers from
+// panic when sending to a closed channel, covering the recover() logic at line 450.
+func TestTryEmitReadyEvent_ClosedChannel(t *testing.T) {
+	ch := make(chan *Event, 1)
+	close(ch)
+
+	evt := New("inv-closed", "author")
+
+	// This should not panic, and should return false (event not sent)
+	// The recover() catches the panic from sending to closed channel
+	handled, err := tryEmitReadyEvent(context.Background(), ch, evt)
+	require.False(t, handled, "event should not be sent to closed channel")
+	require.NoError(t, err, "should not return error on closed channel")
+}
+
+// TestEmitEventWithTimeout_ClosedChannel tests that EmitEventWithTimeout recovers from
+// panic when sending to a closed channel with timeout, covering the recover() logic.
+func TestEmitEventWithTimeout_ClosedChannel(t *testing.T) {
+	ch := make(chan *Event, 1)
+	close(ch)
+
+	evt := New("inv-closed-timeout", "author")
+
+	// This should not panic even when sending to a closed channel
+	// The recover() catches the panic and logs a warning instead
+	err := EmitEventWithTimeout(context.Background(), ch, evt, 10*time.Millisecond)
+	// The function may or may not return an error depending on the exact path,
+	// but the important thing is it should not panic
+	_ = err // We only care that it doesn't panic
+}
