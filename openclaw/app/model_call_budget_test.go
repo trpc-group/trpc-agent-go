@@ -322,19 +322,16 @@ func TestModelCallBudgetModel_FinalizesOnLastAllowedCall(t *testing.T) {
 		got.Messages[1].Content,
 		"<tool_call>",
 	)
-	require.Len(t, req.Tools, 1)
-	require.Len(t, req.Messages, 1)
+	require.Nil(t, req.Tools)
+	require.Len(t, req.Messages, 2)
 	require.Equal(t, map[string]any{
-		"parallel_tool_calls": true,
-		"response_format":     "json",
-		"tool_choice":         "required",
-		"tools":               []string{"search"},
+		"response_format": "json",
 	}, req.ExtraFields)
 	require.Equal(t, map[string]any{
 		"response_format": "json",
 	}, got.ExtraFields)
 	require.False(t, got.Stream)
-	require.True(t, req.Stream)
+	require.False(t, req.Stream)
 }
 
 func TestModelCallBudgetModel_FinalizationDisablesThinking(
@@ -368,7 +365,7 @@ func TestModelCallBudgetModel_FinalizationDisablesThinking(
 	require.NotNil(t, got.ThinkingEnabled)
 	require.False(t, *got.ThinkingEnabled)
 	require.NotNil(t, req.ThinkingEnabled)
-	require.True(t, *req.ThinkingEnabled)
+	require.False(t, *req.ThinkingEnabled)
 }
 
 func TestModelCallBudgetModel_FinalizesNearDeadline(t *testing.T) {
@@ -405,10 +402,10 @@ func TestModelCallBudgetModel_FinalizesNearDeadline(t *testing.T) {
 		got.Messages[1].Content,
 		"final allowed model call",
 	)
-	require.Len(t, req.Tools, 1)
-	require.Len(t, req.Messages, 1)
+	require.Nil(t, req.Tools)
+	require.Len(t, req.Messages, 2)
 	require.False(t, got.Stream)
-	require.True(t, req.Stream)
+	require.False(t, req.Stream)
 }
 
 func TestModelCallBudgetIterModel_FinalizesNearDeadline(t *testing.T) {
@@ -447,10 +444,10 @@ func TestModelCallBudgetIterModel_FinalizesNearDeadline(t *testing.T) {
 		got.Messages[1].Content,
 		"final allowed model call",
 	)
-	require.Len(t, req.Tools, 1)
-	require.Len(t, req.Messages, 1)
+	require.Nil(t, req.Tools)
+	require.Len(t, req.Messages, 2)
 	require.False(t, got.Stream)
-	require.True(t, req.Stream)
+	require.False(t, req.Stream)
 }
 
 func TestModelCallBudgetModel_FinalizesWhenPrefinalWindowExpires(
@@ -458,16 +455,21 @@ func TestModelCallBudgetModel_FinalizesWhenPrefinalWindowExpires(
 ) {
 	t.Parallel()
 
+	const (
+		prefinalTestDeadline = 500 * time.Millisecond
+		prefinalTestWindow   = 300 * time.Millisecond
+	)
+
 	underlying := &prefinalTimeoutBudgetModel{}
 	wrapped := newModelCallBudgetModel(underlying)
 	ctx, cancel := context.WithDeadline(
 		context.Background(),
-		time.Now().Add(200*time.Millisecond),
+		time.Now().Add(prefinalTestDeadline),
 	)
 	defer cancel()
 	ctx = withModelCallBudgetValue(
 		ctx,
-		newModelCallBudget(0, false, 150*time.Millisecond),
+		newModelCallBudget(0, false, prefinalTestWindow),
 	)
 	req := &model.Request{
 		Messages: []model.Message{model.NewUserMessage("question")},
@@ -501,18 +503,23 @@ func TestModelCallBudgetIterModel_FinalizesWhenPrefinalWindowExpires(
 ) {
 	t.Parallel()
 
+	const (
+		prefinalTestDeadline = 500 * time.Millisecond
+		prefinalTestWindow   = 300 * time.Millisecond
+	)
+
 	underlying := &prefinalTimeoutBudgetModel{}
 	wrapped := newModelCallBudgetModel(underlying)
 	iter, ok := wrapped.(model.IterModel)
 	require.True(t, ok)
 	ctx, cancel := context.WithDeadline(
 		context.Background(),
-		time.Now().Add(200*time.Millisecond),
+		time.Now().Add(prefinalTestDeadline),
 	)
 	defer cancel()
 	ctx = withModelCallBudgetValue(
 		ctx,
-		newModelCallBudget(0, false, 150*time.Millisecond),
+		newModelCallBudget(0, false, prefinalTestWindow),
 	)
 	req := &model.Request{
 		Messages: []model.Message{model.NewUserMessage("question")},
@@ -539,6 +546,83 @@ func TestModelCallBudgetIterModel_FinalizesWhenPrefinalWindowExpires(
 		requests[1].Messages[1].Content,
 		"final allowed model call",
 	)
+	require.Nil(t, req.Tools)
+}
+
+func TestModelCallBudgetModel_FinalizesAfterInnerModelTimeout(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	underlying := &innerTimeoutBudgetModel{}
+	wrapped := newModelCallBudgetModel(underlying)
+	ctx, cancel := context.WithDeadline(
+		context.Background(),
+		time.Now().Add(time.Second),
+	)
+	defer cancel()
+	ctx = withModelCallBudgetValue(
+		ctx,
+		newModelCallBudget(0, false, 150*time.Millisecond),
+	)
+	req := &model.Request{
+		Messages: []model.Message{model.NewUserMessage("question")},
+		Tools:    map[string]tool.Tool{"search": nil},
+	}
+
+	ch, err := wrapped.GenerateContent(ctx, req)
+	require.NoError(t, err)
+	var got []*model.Response
+	for resp := range ch {
+		got = append(got, resp)
+	}
+
+	require.Len(t, got, 1)
+	require.Equal(t, "final answer", got[0].Choices[0].Message.Content)
+	requests := underlying.requestsSnapshot()
+	require.Len(t, requests, 2)
+	require.NotNil(t, requests[0].Tools)
+	require.Nil(t, requests[1].Tools)
+	require.Nil(t, req.Tools)
+}
+
+func TestModelCallBudgetIterModel_FinalizesAfterInnerModelTimeout(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	underlying := &innerTimeoutBudgetModel{}
+	wrapped := newModelCallBudgetModel(underlying)
+	iter, ok := wrapped.(model.IterModel)
+	require.True(t, ok)
+	ctx, cancel := context.WithDeadline(
+		context.Background(),
+		time.Now().Add(time.Second),
+	)
+	defer cancel()
+	ctx = withModelCallBudgetValue(
+		ctx,
+		newModelCallBudget(0, false, 150*time.Millisecond),
+	)
+	req := &model.Request{
+		Messages: []model.Message{model.NewUserMessage("question")},
+		Tools:    map[string]tool.Tool{"search": nil},
+	}
+
+	seq, err := iter.GenerateContentIter(ctx, req)
+	require.NoError(t, err)
+	var got []*model.Response
+	seq(func(resp *model.Response) bool {
+		got = append(got, resp)
+		return true
+	})
+
+	require.Len(t, got, 1)
+	require.Equal(t, "final answer", got[0].Choices[0].Message.Content)
+	requests := underlying.iterRequestsSnapshot()
+	require.Len(t, requests, 2)
+	require.NotNil(t, requests[0].Tools)
+	require.Nil(t, requests[1].Tools)
 	require.Nil(t, req.Tools)
 }
 
@@ -805,6 +889,61 @@ func (m *prefinalTimeoutBudgetModel) requestsSnapshot() []*model.Request {
 }
 
 func (m *prefinalTimeoutBudgetModel) iterRequestsSnapshot() []*model.Request {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]*model.Request(nil), m.iterRequests...)
+}
+
+type innerTimeoutBudgetModel struct {
+	mu           sync.Mutex
+	requests     []*model.Request
+	iterRequests []*model.Request
+}
+
+func (m *innerTimeoutBudgetModel) GenerateContent(
+	_ context.Context,
+	req *model.Request,
+) (<-chan *model.Response, error) {
+	m.mu.Lock()
+	m.requests = append(m.requests, cloneBudgetTestRequest(req))
+	m.mu.Unlock()
+	ch := make(chan *model.Response, 1)
+	if req == nil || req.Tools == nil {
+		ch <- modelCallBudgetTestFinalResponse()
+	} else {
+		ch <- timeoutResponse(5*time.Minute, context.DeadlineExceeded)
+	}
+	close(ch)
+	return ch, nil
+}
+
+func (m *innerTimeoutBudgetModel) Info() model.Info {
+	return model.Info{Name: "inner-timeout"}
+}
+
+func (m *innerTimeoutBudgetModel) GenerateContentIter(
+	_ context.Context,
+	req *model.Request,
+) (model.Seq[*model.Response], error) {
+	m.mu.Lock()
+	m.iterRequests = append(m.iterRequests, cloneBudgetTestRequest(req))
+	m.mu.Unlock()
+	return func(yield func(*model.Response) bool) {
+		if req == nil || req.Tools == nil {
+			yield(modelCallBudgetTestFinalResponse())
+			return
+		}
+		yield(timeoutResponse(5*time.Minute, context.DeadlineExceeded))
+	}, nil
+}
+
+func (m *innerTimeoutBudgetModel) requestsSnapshot() []*model.Request {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]*model.Request(nil), m.requests...)
+}
+
+func (m *innerTimeoutBudgetModel) iterRequestsSnapshot() []*model.Request {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return append([]*model.Request(nil), m.iterRequests...)

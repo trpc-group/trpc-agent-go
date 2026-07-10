@@ -261,6 +261,29 @@ func modelCallBudgetPrefinalTimeoutResponse(
 		)
 }
 
+func modelCallBudgetTimeoutResponse(
+	resp *model.Response,
+	prefinalCtx context.Context,
+	parentCtx context.Context,
+	budget *modelCallBudget,
+) bool {
+	if modelCallBudgetPrefinalTimeoutResponse(
+		resp,
+		prefinalCtx,
+		parentCtx,
+	) {
+		return true
+	}
+	if budget == nil || budget.deadlineWindow <= 0 ||
+		parentCtx == nil || parentCtx.Err() != nil {
+		return false
+	}
+	if _, ok := parentCtx.Deadline(); !ok {
+		return false
+	}
+	return isModelTimeoutResponse(resp)
+}
+
 func newModelCallBudgetModel(m model.Model) model.Model {
 	if m == nil {
 		return nil
@@ -344,7 +367,12 @@ func (m *modelCallBudgetModel) GenerateContent(
 		defer cancel()
 		timedOut := false
 		for resp := range ch {
-			if modelCallBudgetPrefinalTimeoutResponse(resp, prefinalCtx, ctx) {
+			if modelCallBudgetTimeoutResponse(
+				resp,
+				prefinalCtx,
+				ctx,
+				budget,
+			) {
 				timedOut = true
 				continue
 			}
@@ -447,7 +475,12 @@ func (m *modelCallBudgetIterModel) GenerateContentIter(
 		defer cancel()
 		timedOut := false
 		seq(func(resp *model.Response) bool {
-			if modelCallBudgetPrefinalTimeoutResponse(resp, prefinalCtx, ctx) {
+			if modelCallBudgetTimeoutResponse(
+				resp,
+				prefinalCtx,
+				ctx,
+				budget,
+			) {
 				timedOut = true
 				return true
 			}
@@ -594,6 +627,21 @@ func finalModelCallRequest(
 			"format, follow it exactly.",
 	))
 	return &clone
+}
+
+func applyFinalModelCallRequest(
+	req *model.Request,
+	finalRequest ...modelCallBudgetFinalRequestConfig,
+) *model.Request {
+	finalReq := finalModelCallRequest(
+		req,
+		modelCallBudgetFinalRequestArg(finalRequest),
+	)
+	if req == nil {
+		return finalReq
+	}
+	*req = *finalReq
+	return req
 }
 
 func finalModelCallExtraFields(extra map[string]any) map[string]any {
