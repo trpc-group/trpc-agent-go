@@ -322,8 +322,9 @@ func finalModelCallRequest(req *model.Request) *model.Request {
 			"answer in visible assistant message content for the user, "+
 			"not only in internal reasoning or thinking content. If "+
 			"evidence is incomplete, give the best supported final answer "+
-			"now. If the original task requires a final-answer format, "+
-			"follow it exactly.",
+			"now. If the original task requires a final-answer format or "+
+			"marker such as FINAL ANSWER:, follow it exactly and avoid "+
+			"extra explanation.",
 	))
 	return &clone
 }

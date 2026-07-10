@@ -297,6 +297,16 @@ func TestModelCallBudgetModel_FinalizesOnLastAllowedCall(t *testing.T) {
 		got.Messages[1].Content,
 		"answer now with the best supported final value",
 	)
+	require.Contains(
+		t,
+		got.Messages[1].Content,
+		"FINAL ANSWER:",
+	)
+	require.Contains(
+		t,
+		got.Messages[1].Content,
+		"avoid extra explanation",
+	)
 	require.Len(t, req.Tools, 1)
 	require.Len(t, req.Messages, 1)
 	require.Equal(t, map[string]any{
