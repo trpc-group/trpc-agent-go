@@ -453,6 +453,95 @@ func TestModelCallBudgetIterModel_FinalizesNearDeadline(t *testing.T) {
 	require.True(t, req.Stream)
 }
 
+func TestModelCallBudgetModel_FinalizesWhenPrefinalWindowExpires(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	underlying := &prefinalTimeoutBudgetModel{}
+	wrapped := newModelCallBudgetModel(underlying)
+	ctx, cancel := context.WithDeadline(
+		context.Background(),
+		time.Now().Add(200*time.Millisecond),
+	)
+	defer cancel()
+	ctx = withModelCallBudgetValue(
+		ctx,
+		newModelCallBudget(0, false, 150*time.Millisecond),
+	)
+	req := &model.Request{
+		Messages: []model.Message{model.NewUserMessage("question")},
+		Tools:    map[string]tool.Tool{"search": nil},
+	}
+
+	ch, err := wrapped.GenerateContent(ctx, req)
+	require.NoError(t, err)
+	var got []*model.Response
+	for resp := range ch {
+		got = append(got, resp)
+	}
+
+	require.Len(t, got, 1)
+	require.Equal(t, "final answer", got[0].Choices[0].Message.Content)
+	requests := underlying.requestsSnapshot()
+	require.Len(t, requests, 2)
+	require.NotNil(t, requests[0].Tools)
+	require.Nil(t, requests[1].Tools)
+	require.Len(t, requests[1].Messages, 2)
+	require.Contains(
+		t,
+		requests[1].Messages[1].Content,
+		"final allowed model call",
+	)
+	require.Nil(t, req.Tools)
+}
+
+func TestModelCallBudgetIterModel_FinalizesWhenPrefinalWindowExpires(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	underlying := &prefinalTimeoutBudgetModel{}
+	wrapped := newModelCallBudgetModel(underlying)
+	iter, ok := wrapped.(model.IterModel)
+	require.True(t, ok)
+	ctx, cancel := context.WithDeadline(
+		context.Background(),
+		time.Now().Add(200*time.Millisecond),
+	)
+	defer cancel()
+	ctx = withModelCallBudgetValue(
+		ctx,
+		newModelCallBudget(0, false, 150*time.Millisecond),
+	)
+	req := &model.Request{
+		Messages: []model.Message{model.NewUserMessage("question")},
+		Tools:    map[string]tool.Tool{"search": nil},
+	}
+
+	seq, err := iter.GenerateContentIter(ctx, req)
+	require.NoError(t, err)
+	var got []*model.Response
+	seq(func(resp *model.Response) bool {
+		got = append(got, resp)
+		return true
+	})
+
+	require.Len(t, got, 1)
+	require.Equal(t, "final answer", got[0].Choices[0].Message.Content)
+	requests := underlying.iterRequestsSnapshot()
+	require.Len(t, requests, 2)
+	require.NotNil(t, requests[0].Tools)
+	require.Nil(t, requests[1].Tools)
+	require.Len(t, requests[1].Messages, 2)
+	require.Contains(
+		t,
+		requests[1].Messages[1].Content,
+		"final allowed model call",
+	)
+	require.Nil(t, req.Tools)
+}
+
 func TestModelCallBudgetModel_DoesNotFinalizeOutsideDeadlineWindow(
 	t *testing.T,
 ) {
@@ -648,6 +737,101 @@ func (m *capturingBudgetModel) lastIterRequest() *model.Request {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.iterLast
+}
+
+type prefinalTimeoutBudgetModel struct {
+	mu           sync.Mutex
+	requests     []*model.Request
+	iterRequests []*model.Request
+}
+
+func (m *prefinalTimeoutBudgetModel) GenerateContent(
+	ctx context.Context,
+	req *model.Request,
+) (<-chan *model.Response, error) {
+	m.mu.Lock()
+	m.requests = append(m.requests, cloneBudgetTestRequest(req))
+	m.mu.Unlock()
+	ch := make(chan *model.Response, 1)
+	go func() {
+		defer close(ch)
+		if req == nil || req.Tools == nil {
+			ch <- modelCallBudgetTestFinalResponse()
+			return
+		}
+		<-ctx.Done()
+		ch <- &model.Response{
+			Error: model.ResponseErrorFromError(
+				ctx.Err(),
+				model.ErrorTypeStreamError,
+			),
+			Done: true,
+		}
+	}()
+	return ch, nil
+}
+
+func (m *prefinalTimeoutBudgetModel) Info() model.Info {
+	return model.Info{Name: "prefinal-timeout"}
+}
+
+func (m *prefinalTimeoutBudgetModel) GenerateContentIter(
+	ctx context.Context,
+	req *model.Request,
+) (model.Seq[*model.Response], error) {
+	m.mu.Lock()
+	m.iterRequests = append(m.iterRequests, cloneBudgetTestRequest(req))
+	m.mu.Unlock()
+	return func(yield func(*model.Response) bool) {
+		if req == nil || req.Tools == nil {
+			yield(modelCallBudgetTestFinalResponse())
+			return
+		}
+		<-ctx.Done()
+		yield(&model.Response{
+			Error: model.ResponseErrorFromError(
+				ctx.Err(),
+				model.ErrorTypeStreamError,
+			),
+			Done: true,
+		})
+	}, nil
+}
+
+func (m *prefinalTimeoutBudgetModel) requestsSnapshot() []*model.Request {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]*model.Request(nil), m.requests...)
+}
+
+func (m *prefinalTimeoutBudgetModel) iterRequestsSnapshot() []*model.Request {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]*model.Request(nil), m.iterRequests...)
+}
+
+func modelCallBudgetTestFinalResponse() *model.Response {
+	return &model.Response{
+		Done: true,
+		Choices: []model.Choice{{
+			Message: model.NewAssistantMessage("final answer"),
+		}},
+	}
+}
+
+func cloneBudgetTestRequest(req *model.Request) *model.Request {
+	if req == nil {
+		return nil
+	}
+	clone := *req
+	if req.Tools != nil {
+		clone.Tools = make(map[string]tool.Tool, len(req.Tools))
+		for name, t := range req.Tools {
+			clone.Tools[name] = t
+		}
+	}
+	clone.Messages = append([]model.Message(nil), req.Messages...)
+	return &clone
 }
 
 type countingBudgetIterModel struct {
