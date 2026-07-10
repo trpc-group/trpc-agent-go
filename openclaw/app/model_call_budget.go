@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -668,8 +669,13 @@ const finalModelCallNotice = "[OpenClaw Budget Notice] This is the " +
 
 const (
 	finalModelCallSystemBudgetDivisor = 16
-	finalModelCallUserBudgetDivisor   = 4
+	finalModelCallAnchorBudgetDivisor = 2
+	finalModelCallMaxAnchorDivisor    = 8
+	finalModelCallEvidenceDivisor     = 2
+	finalModelCallMaxEvidenceDivisor  = 16
+	finalModelCallEvidenceSnippetLen  = 48
 	finalModelCallTruncationNotice    = "\n\n[...truncated...]\n\n"
+	finalModelCallFormatSnippetLimit  = 700
 )
 
 func finalModelCallTrimMessages(
@@ -686,23 +692,29 @@ func finalModelCallTrimMessages(
 	if budget <= 0 {
 		return messages
 	}
-	trimmed, err := model.NewMiddleOutStrategy(counter).TailorMessages(
-		ctx,
-		messages,
-		budget,
-	)
-	if err == nil && finalModelCallFits(ctx, counter, trimmed, budget) {
-		return trimmed
-	}
-	if finalModelCallFits(ctx, counter, trimmed, budget) {
-		return trimmed
-	}
 	fallback := finalModelCallTailEvidenceMessages(
 		ctx,
 		counter,
 		messages,
 		budget,
 	)
+	trimmed, err := model.NewMiddleOutStrategy(counter).TailorMessages(
+		ctx,
+		messages,
+		budget,
+	)
+	if err == nil && finalModelCallFits(ctx, counter, trimmed, budget) {
+		if finalModelCallPreferTailEvidence(messages, trimmed, fallback) {
+			return fallback
+		}
+		return trimmed
+	}
+	if finalModelCallFits(ctx, counter, trimmed, budget) {
+		if finalModelCallPreferTailEvidence(messages, trimmed, fallback) {
+			return fallback
+		}
+		return trimmed
+	}
 	if len(fallback) > 0 {
 		return fallback
 	}
@@ -710,6 +722,59 @@ func finalModelCallTrimMessages(
 		return trimmed
 	}
 	return messages
+}
+
+func finalModelCallPreferTailEvidence(
+	messages []model.Message,
+	trimmed []model.Message,
+	fallback []model.Message,
+) bool {
+	if !finalModelCallContainsRecentTailEvidence(messages, fallback) {
+		return false
+	}
+	return !finalModelCallContainsRecentTailEvidence(messages, trimmed)
+}
+
+func finalModelCallContainsRecentTailEvidence(
+	messages []model.Message,
+	candidate []model.Message,
+) bool {
+	snippet := finalModelCallRecentTailEvidenceSnippet(messages)
+	if snippet == "" {
+		return false
+	}
+	for _, msg := range candidate {
+		if strings.Contains(msg.Content, snippet) {
+			return true
+		}
+	}
+	return false
+}
+
+func finalModelCallRecentTailEvidenceSnippet(
+	messages []model.Message,
+) string {
+	headCount := finalModelCallSystemPrefixLen(messages)
+	anchor := finalModelCallAnchorUserIndex(messages, headCount)
+	if anchor < 0 {
+		return ""
+	}
+	transcript := finalModelCallTranscriptMessages(messages)
+	for i := len(transcript) - 1; i > anchor; i-- {
+		content := strings.TrimSpace(transcript[i].Content)
+		if content != "" {
+			return finalModelCallEvidenceSnippet(content)
+		}
+	}
+	return ""
+}
+
+func finalModelCallEvidenceSnippet(content string) string {
+	runes := []rune(content)
+	if len(runes) <= finalModelCallEvidenceSnippetLen {
+		return content
+	}
+	return string(runes[:finalModelCallEvidenceSnippetLen])
 }
 
 func finalModelCallTokenCounter(
@@ -779,6 +844,60 @@ func finalModelCallTailEvidenceMessages(
 		transcript[anchor],
 		maxTokens,
 	)
+	best := finalModelCallTailEvidenceWithPrefix(
+		ctx,
+		counter,
+		transcript,
+		prefix,
+		anchor,
+		maxTokens,
+	)
+	if len(best) > len(prefix) {
+		return best
+	}
+	for divisor := finalModelCallAnchorBudgetDivisor; divisor <= finalModelCallMaxAnchorDivisor; divisor *= 2 {
+		compactPrefix := finalModelCallProtectedPrefixWithAnchorDivisor(
+			ctx,
+			counter,
+			transcript[:headCount],
+			transcript[anchor],
+			maxTokens,
+			divisor,
+		)
+		compactBest := finalModelCallTailEvidenceWithPrefix(
+			ctx,
+			counter,
+			transcript,
+			compactPrefix,
+			anchor,
+			maxTokens,
+		)
+		if len(compactBest) > len(compactPrefix) {
+			return compactBest
+		}
+		compactEvidence := finalModelCallCompactTailEvidenceWithPrefix(
+			ctx,
+			counter,
+			transcript,
+			compactPrefix,
+			anchor,
+			maxTokens,
+		)
+		if len(compactEvidence) > len(compactPrefix) {
+			return compactEvidence
+		}
+	}
+	return best
+}
+
+func finalModelCallTailEvidenceWithPrefix(
+	ctx context.Context,
+	counter model.TokenCounter,
+	transcript []model.Message,
+	prefix []model.Message,
+	anchor int,
+	maxTokens int,
+) []model.Message {
 	best := prefix
 	if !finalModelCallFits(ctx, counter, best, maxTokens) {
 		return best
@@ -800,6 +919,48 @@ func finalModelCallTailEvidenceMessages(
 		}
 	}
 	return best
+}
+
+func finalModelCallCompactTailEvidenceWithPrefix(
+	ctx context.Context,
+	counter model.TokenCounter,
+	transcript []model.Message,
+	prefix []model.Message,
+	anchor int,
+	maxTokens int,
+) []model.Message {
+	for start := len(transcript) - 1; start > anchor; start-- {
+		suffix := finalModelCallNormalizeTail(transcript[start:])
+		if len(suffix) == 0 {
+			continue
+		}
+		for divisor := finalModelCallEvidenceDivisor; divisor <= finalModelCallMaxEvidenceDivisor; divisor *= 2 {
+			compactSuffix := finalModelCallCompactMessages(
+				suffix,
+				finalModelCallPartRuneLimit(maxTokens, divisor),
+			)
+			candidate := make([]model.Message, 0,
+				len(prefix)+len(compactSuffix))
+			candidate = append(candidate, prefix...)
+			candidate = append(candidate, compactSuffix...)
+			if finalModelCallFits(ctx, counter, candidate, maxTokens) {
+				return candidate
+			}
+		}
+	}
+	return nil
+}
+
+func finalModelCallCompactMessages(
+	messages []model.Message,
+	contentLimit int,
+) []model.Message {
+	compact := make([]model.Message, 0, len(messages))
+	for _, msg := range messages {
+		msg.Content = finalModelCallTrimContent(msg.Content, contentLimit)
+		compact = append(compact, msg)
+	}
+	return compact
 }
 
 func finalModelCallTranscriptMessages(
@@ -869,6 +1030,24 @@ func finalModelCallProtectedPrefix(
 	anchor model.Message,
 	maxTokens int,
 ) []model.Message {
+	return finalModelCallProtectedPrefixWithAnchorDivisor(
+		ctx,
+		counter,
+		system,
+		anchor,
+		maxTokens,
+		1,
+	)
+}
+
+func finalModelCallProtectedPrefixWithAnchorDivisor(
+	ctx context.Context,
+	counter model.TokenCounter,
+	system []model.Message,
+	anchor model.Message,
+	maxTokens int,
+	anchorDivisor int,
+) []model.Message {
 	prefix := make([]model.Message, 0, len(system)+1)
 	systemLimit := finalModelCallPartRuneLimit(
 		maxTokens,
@@ -880,7 +1059,7 @@ func finalModelCallProtectedPrefix(
 	}
 	anchorLimit := finalModelCallPartRuneLimit(
 		maxTokens,
-		finalModelCallUserBudgetDivisor,
+		anchorDivisor,
 	)
 	anchor.Content = finalModelCallTrimContent(anchor.Content, anchorLimit)
 	prefix = append(prefix, anchor)
@@ -911,6 +1090,24 @@ func finalModelCallPartRuneLimit(maxTokens, divisor int) int {
 }
 
 func finalModelCallTrimContent(content string, limit int) string {
+	trimmed := finalModelCallTrimContentPlain(content, limit)
+	snippet := finalModelCallAnswerFormatSnippet(content)
+	if snippet == "" || strings.Contains(trimmed, snippet) {
+		return trimmed
+	}
+	block := "\n\n" + snippet
+	blockRunes := []rune(block)
+	if len(blockRunes) >= limit {
+		return string(blockRunes[:limit])
+	}
+	body := finalModelCallTrimContentPlain(
+		content,
+		limit-len(blockRunes),
+	)
+	return body + block
+}
+
+func finalModelCallTrimContentPlain(content string, limit int) string {
 	if limit <= 0 {
 		return ""
 	}
@@ -928,6 +1125,107 @@ func finalModelCallTrimContent(content string, limit int) string {
 	return string(runes[:head]) +
 		finalModelCallTruncationNotice +
 		string(runes[len(runes)-tail:])
+}
+
+func finalModelCallAnswerFormatSnippet(content string) string {
+	lower := strings.ToLower(content)
+	index := finalModelCallAnswerFormatIndex(lower)
+	if index < 0 {
+		return ""
+	}
+	start := finalModelCallParagraphStart(content, index)
+	end := finalModelCallParagraphEnd(content, index)
+	snippet := strings.TrimSpace(content[start:end])
+	if snippet == "" {
+		return ""
+	}
+	return finalModelCallLimitSnippet(
+		snippet,
+		index-start,
+		finalModelCallFormatSnippetLimit,
+	)
+}
+
+func finalModelCallAnswerFormatIndex(lower string) int {
+	markers := []string{
+		"final answer:",
+		"answer-format instruction",
+		"answer format instruction",
+	}
+	best := -1
+	for _, marker := range markers {
+		index := strings.Index(lower, marker)
+		if index < 0 {
+			continue
+		}
+		if best < 0 || index < best {
+			best = index
+		}
+	}
+	return best
+}
+
+func finalModelCallParagraphStart(content string, index int) int {
+	if index <= 0 {
+		return 0
+	}
+	start := strings.LastIndex(content[:index], "\n\n")
+	if start >= 0 {
+		return start + len("\n\n")
+	}
+	start = strings.LastIndex(content[:index], "\n")
+	if start >= 0 {
+		return start + len("\n")
+	}
+	return 0
+}
+
+func finalModelCallParagraphEnd(content string, index int) int {
+	if index >= len(content) {
+		return len(content)
+	}
+	end := strings.Index(content[index:], "\n\n")
+	if end >= 0 {
+		return index + end
+	}
+	end = strings.Index(content[index:], "\n")
+	if end >= 0 {
+		return index + end
+	}
+	return len(content)
+}
+
+func finalModelCallLimitSnippet(
+	snippet string,
+	index int,
+	limit int,
+) string {
+	runes := []rune(snippet)
+	if limit <= 0 || len(runes) <= limit {
+		return snippet
+	}
+	if index < 0 {
+		index = 0
+	}
+	if index > len(snippet) {
+		index = len(snippet)
+	}
+	marker := utf8.RuneCountInString(snippet[:index])
+	if marker > len(runes) {
+		marker = len(runes)
+	}
+	head := limit / 2
+	start := marker - head
+	if start < 0 {
+		start = 0
+	}
+	if start+limit > len(runes) {
+		start = len(runes) - limit
+	}
+	if start < 0 {
+		start = 0
+	}
+	return string(runes[start : start+limit])
 }
 
 func finalModelCallNormalizeTail(

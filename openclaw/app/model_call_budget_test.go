@@ -555,6 +555,39 @@ func TestFinalModelCallRequest_TrimsSingleUserToolChain(t *testing.T) {
 	}
 }
 
+func TestFinalModelCallRequest_PreservesAnswerFormatInstruction(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	userPrompt := "Solve the visible task.\n\n" +
+		strings.Repeat("background evidence ", 120) +
+		"\n\nFINAL ANSWER: put only the numeric value on the final line." +
+		"\n\n" + strings.Repeat("attachment paths and metadata ", 120)
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("system instructions"),
+			model.NewUserMessage(userPrompt),
+			model.NewAssistantMessage("I will inspect the evidence."),
+			model.NewToolMessage("call_1", "image_inspect", "evidence"),
+		},
+	}
+
+	got := finalModelCallRequest(
+		req,
+		modelCallBudgetFinalRequestConfig{
+			MaxInputTokens:      1000,
+			ApproxRunesPerToken: 1,
+		},
+	)
+
+	content := budgetTestMessageText(got.Messages)
+	require.Contains(t, content, "FINAL ANSWER:")
+	require.Contains(t, content, "numeric value")
+	require.Contains(t, content, "evidence")
+	require.Contains(t, content, "final allowed model call")
+}
+
 func budgetTestMessageText(messages []model.Message) string {
 	var b strings.Builder
 	for _, msg := range messages {
