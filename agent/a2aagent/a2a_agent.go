@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"strings"
+	"sync"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -63,7 +64,16 @@ type A2AAgent struct {
 	userIDHeader         string                 // HTTP header name to send UserID to A2A server
 	enableStreaming      *bool                  // Explicitly set streaming mode; nil means use agent card capability
 
-	a2aClient *client.A2AClient
+	a2aClient    *client.A2AClient
+	a2aClientURL string
+
+	anonymousClientsMu sync.Mutex
+	anonymousClients   map[anonymousClientScope]*client.A2AClient
+}
+
+type anonymousClientScope struct {
+	appName   string
+	sessionID string
 }
 
 // New creates a new A2AAgent.
@@ -104,14 +114,14 @@ func New(opts ...Option) (*A2AAgent, error) {
 
 	// Normalize the URL to ensure it has a proper scheme
 	agentURL = ia2a.NormalizeURL(agentURL)
-	a2aOptions := withDefaultCookieJar(agent.extraA2AOptions)
 
 	// Create A2A client first
-	a2aClient, err := client.NewA2AClient(agentURL, a2aOptions...)
+	a2aClient, err := client.NewA2AClient(agentURL, agent.extraA2AOptions...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create A2A client for %s: %w", agentURL, err)
 	}
 	agent.a2aClient = a2aClient
+	agent.a2aClientURL = agentURL
 
 	// If agent card is not set, fetch it using A2A client's GetAgentCard method
 	if agent.agentCard == nil {
@@ -137,11 +147,12 @@ func New(opts ...Option) (*A2AAgent, error) {
 
 		// Rebuild a2a client if URL changed
 		if agentCard.URL != agentURL {
-			a2aClient, err := client.NewA2AClient(agentCard.URL, a2aOptions...)
+			a2aClient, err := client.NewA2AClient(agentCard.URL, agent.extraA2AOptions...)
 			if err != nil {
 				return nil, fmt.Errorf("failed to create A2A client for %s: %w", agentCard.URL, err)
 			}
 			agent.a2aClient = a2aClient
+			agent.a2aClientURL = agentCard.URL
 		}
 
 		agent.agentCard = agentCard
@@ -152,15 +163,73 @@ func New(opts ...Option) (*A2AAgent, error) {
 
 var newCookieJar = cookiejar.New
 
-func withDefaultCookieJar(opts []client.Option) []client.Option {
+func (r *A2AAgent) clientForInvocation(
+	invocation *agent.Invocation,
+) (*client.A2AClient, error) {
+	if !needsAnonymousClient(invocation) || r.a2aClientURL == "" {
+		return r.a2aClient, nil
+	}
+
+	scope, ok := anonymousScopeFromInvocation(invocation)
+	if !ok {
+		return r.newAnonymousClient()
+	}
+
+	r.anonymousClientsMu.Lock()
+	defer r.anonymousClientsMu.Unlock()
+	if existing := r.anonymousClients[scope]; existing != nil {
+		return existing, nil
+	}
+	a2aClient, err := r.newAnonymousClient()
+	if err != nil {
+		return nil, err
+	}
+	if r.anonymousClients == nil {
+		r.anonymousClients = make(map[anonymousClientScope]*client.A2AClient)
+	}
+	r.anonymousClients[scope] = a2aClient
+	return a2aClient, nil
+}
+
+func needsAnonymousClient(invocation *agent.Invocation) bool {
+	return invocation == nil ||
+		invocation.Session == nil ||
+		strings.TrimSpace(invocation.Session.UserID) == ""
+}
+
+func anonymousScopeFromInvocation(
+	invocation *agent.Invocation,
+) (anonymousClientScope, bool) {
+	if invocation == nil ||
+		invocation.Session == nil ||
+		strings.TrimSpace(invocation.Session.ID) == "" {
+		return anonymousClientScope{}, false
+	}
+	return anonymousClientScope{
+		appName:   invocation.Session.AppName,
+		sessionID: invocation.Session.ID,
+	}, true
+}
+
+func (r *A2AAgent) newAnonymousClient() (*client.A2AClient, error) {
 	jar, err := newCookieJar(nil)
 	if err != nil {
-		return opts
+		return nil, fmt.Errorf("create anonymous cookie jar: %w", err)
 	}
-	defaultOpts := []client.Option{
+	opts := make([]client.Option, 0, len(r.extraA2AOptions)+1)
+	opts = append(opts,
 		client.WithHTTPClient(&http.Client{Jar: jar}),
+	)
+	opts = append(opts, r.extraA2AOptions...)
+	a2aClient, err := client.NewA2AClient(r.a2aClientURL, opts...)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"failed to create session-scoped A2A client for %s: %w",
+			r.a2aClientURL,
+			err,
+		)
 	}
-	return append(defaultOpts, opts...)
+	return a2aClient, nil
 }
 
 // sendErrorEvent sends an error event to the event channel.
@@ -223,16 +292,26 @@ func (r *A2AAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-cha
 		)
 	}
 	tracker := itelemetry.NewInvokeAgentTracker(ctx, invocation, useStreaming, &err)
-	if r.a2aClient == nil {
+	// Validate A2A request options early
+	if err := r.validateA2ARequestOptions(invocation); err != nil {
 		if startedSpan {
-			span.SetStatus(codes.Error, "A2A client is nil")
+			span.SetStatus(codes.Error, err.Error())
 			span.SetAttributes(attribute.String(semconvtrace.KeyErrorType, itelemetry.ToErrorType(err, model.ErrorTypeRunError)))
 			span.End()
 		}
-		return nil, fmt.Errorf("A2A client is nil")
+		return nil, err
 	}
-	// Validate A2A request options early
-	if err := r.validateA2ARequestOptions(invocation); err != nil {
+	a2aClient, err := r.clientForInvocation(invocation)
+	if err != nil {
+		if startedSpan {
+			span.SetStatus(codes.Error, err.Error())
+			span.SetAttributes(attribute.String(semconvtrace.KeyErrorType, itelemetry.ToErrorType(err, model.ErrorTypeRunError)))
+			span.End()
+		}
+		return nil, err
+	}
+	if a2aClient == nil {
+		err = errors.New("A2A client is nil")
 		if startedSpan {
 			span.SetStatus(codes.Error, err.Error())
 			span.SetAttributes(attribute.String(semconvtrace.KeyErrorType, itelemetry.ToErrorType(err, model.ErrorTypeRunError)))
@@ -244,9 +323,9 @@ func (r *A2AAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-cha
 		eventChan <-chan *event.Event
 	)
 	if useStreaming {
-		eventChan, err = r.runStreaming(ctx, invocation)
+		eventChan, err = r.runStreamingWithClient(ctx, invocation, a2aClient)
 	} else {
-		eventChan, err = r.runNonStreaming(ctx, invocation)
+		eventChan, err = r.runNonStreamingWithClient(ctx, invocation, a2aClient)
 	}
 	if err != nil {
 		if startedSpan {
@@ -382,6 +461,14 @@ func matchStateKeys(pattern string, src map[string]any, dst map[string]any) {
 
 // runStreaming handles streaming A2A communication
 func (r *A2AAgent) runStreaming(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
+	return r.runStreamingWithClient(ctx, invocation, r.a2aClient)
+}
+
+func (r *A2AAgent) runStreamingWithClient(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	a2aClient *client.A2AClient,
+) (<-chan *event.Event, error) {
 	if r.eventConverter == nil {
 		return nil, fmt.Errorf("event converter not set")
 	}
@@ -389,13 +476,18 @@ func (r *A2AAgent) runStreaming(ctx context.Context, invocation *agent.Invocatio
 	runCtx := agent.CloneContext(ctx)
 	go func(ctx context.Context) {
 		defer close(eventChan)
-		r.executeStreaming(ctx, invocation, eventChan)
+		r.executeStreaming(ctx, invocation, eventChan, a2aClient)
 	}(runCtx)
 	return eventChan, nil
 }
 
 // executeStreaming executes the streaming A2A communication workflow.
-func (r *A2AAgent) executeStreaming(ctx context.Context, invocation *agent.Invocation, eventChan chan<- *event.Event) {
+func (r *A2AAgent) executeStreaming(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	eventChan chan<- *event.Event,
+	a2aClient *client.A2AClient,
+) {
 	a2aMessage, err := r.buildA2AMessage(invocation, true)
 	if err != nil {
 		r.sendErrorEvent(
@@ -410,7 +502,7 @@ func (r *A2AAgent) executeStreaming(ctx context.Context, invocation *agent.Invoc
 	requestOpts := r.buildRequestOptions(ctx, invocation)
 	streamCtx, cancelStream := context.WithCancel(ctx)
 	defer cancelStream()
-	streamChan, err := r.a2aClient.StreamMessage(
+	streamChan, err := a2aClient.StreamMessage(
 		streamCtx,
 		protocol.SendMessageParams{Message: *a2aMessage},
 		requestOpts...,
@@ -668,6 +760,14 @@ func (r *A2AAgent) emitFinalEvent(
 
 // runNonStreaming handles non-streaming A2A communication
 func (r *A2AAgent) runNonStreaming(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
+	return r.runNonStreamingWithClient(ctx, invocation, r.a2aClient)
+}
+
+func (r *A2AAgent) runNonStreamingWithClient(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	a2aClient *client.A2AClient,
+) (<-chan *event.Event, error) {
 	eventChan := make(chan *event.Event, defaultNonStreamingChannelSize)
 	runCtx := agent.CloneContext(ctx)
 	go func(ctx context.Context) {
@@ -689,7 +789,7 @@ func (r *A2AAgent) runNonStreaming(ctx context.Context, invocation *agent.Invoca
 			Message: *a2aMessage,
 		}
 		requestOpts := r.buildRequestOptions(ctx, invocation)
-		result, err := r.a2aClient.SendMessage(ctx, params, requestOpts...)
+		result, err := a2aClient.SendMessage(ctx, params, requestOpts...)
 		if err != nil {
 			r.sendErrorEvent(
 				ctx,

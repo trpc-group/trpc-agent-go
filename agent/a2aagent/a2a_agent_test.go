@@ -218,57 +218,141 @@ func TestNew(t *testing.T) {
 	}
 }
 
-func TestNew_DefaultClientPersistsCookies(t *testing.T) {
+func TestA2AAgent_AnonymousCookiesAreSessionScoped(t *testing.T) {
 	const cookieName = "trpc_agent_a2a_anon"
-	const cookieValue = "A2A_ANONYMOUS_0123456789abcdef0123456789abcdef"
 
 	var (
-		mu            sync.Mutex
-		sawCookieBack bool
+		mu              sync.Mutex
+		nextCookieID    int
+		receivedCookies []string
+		serverURL       string
 	)
-	var srv *httptest.Server
-	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/.well-known/agent-card.json" {
-			w.WriteHeader(http.StatusNotFound)
+			var rpcRequest struct {
+				ID any `json:"id"`
+			}
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&rpcRequest))
+			cookieValue := ""
+			if cookie, err := r.Cookie(cookieName); err == nil {
+				cookieValue = cookie.Value
+			}
+			mu.Lock()
+			receivedCookies = append(receivedCookies, cookieValue)
+			if cookieValue == "" {
+				nextCookieID++
+				cookieValue = fmt.Sprintf("session-cookie-%d", nextCookieID)
+			}
+			responseNumber := len(receivedCookies)
+			mu.Unlock()
+			http.SetCookie(w, &http.Cookie{
+				Name:  cookieName,
+				Value: cookieValue,
+				Path:  "/",
+			})
+			w.Header().Set("Content-Type", "application/json")
+			require.NoError(t, json.NewEncoder(w).Encode(struct {
+				JSONRPC string           `json:"jsonrpc"`
+				ID      any              `json:"id"`
+				Result  protocol.Message `json:"result"`
+			}{
+				JSONRPC: "2.0",
+				ID:      rpcRequest.ID,
+				Result: protocol.Message{
+					Kind:      protocol.KindMessage,
+					MessageID: fmt.Sprintf("response-%d", responseNumber),
+					Role:      protocol.MessageRoleAgent,
+					Parts: []protocol.Part{
+						protocol.NewTextPart("test response"),
+					},
+				},
+			}))
 			return
 		}
-		if cookie, err := r.Cookie(cookieName); err == nil && cookie.Value == cookieValue {
-			mu.Lock()
-			sawCookieBack = true
-			mu.Unlock()
-		}
-		http.SetCookie(w, &http.Cookie{Name: cookieName, Value: cookieValue, Path: "/"})
 		require.NoError(t, json.NewEncoder(w).Encode(server.AgentCard{
-			Name:        "cookie-agent",
-			Description: "cookie persistence test",
-			URL:         srv.URL,
+			Name:        "session-scoped-cookie-agent",
+			Description: "session-scoped cookie test",
+			URL:         serverURL,
 		}))
 	}))
 	defer srv.Close()
+	serverURL = srv.URL
 
-	a, err := New(WithAgentCardURL(srv.URL))
+	a, err := New(WithAgentCardURL(serverURL))
 	require.NoError(t, err)
 	require.NotNil(t, a)
 
-	_, err = a.a2aClient.GetAgentCard(context.Background(), "")
+	identifiedClient, err := a.clientForInvocation(&agent.Invocation{
+		Session: &session.Session{
+			AppName: "app",
+			UserID:  "user-1",
+			ID:      "session-a",
+		},
+	})
 	require.NoError(t, err)
+	require.Same(t, a.a2aClient, identifiedClient)
+
+	runCount := 0
+	runAnonymous := func(appName, sessionID string) {
+		t.Helper()
+		runCount++
+		eventChan, runErr := a.Run(context.Background(), &agent.Invocation{
+			InvocationID: fmt.Sprintf("invocation-%d", runCount),
+			Session: &session.Session{
+				AppName: appName,
+				ID:      sessionID,
+			},
+			Message: model.NewUserMessage("test message"),
+		})
+		require.NoError(t, runErr)
+		for evt := range eventChan {
+			if evt != nil && evt.Response != nil {
+				require.Nil(t, evt.Response.Error)
+			}
+		}
+	}
+
+	runAnonymous("app", "session-a")
+	runAnonymous("app", "session-a")
+	runAnonymous("app", "session-b")
+	runAnonymous("app", "session-b")
+	runAnonymous("other-app", "session-a")
 
 	mu.Lock()
 	defer mu.Unlock()
-	require.True(t, sawCookieBack)
+	require.Equal(t, []string{
+		"",
+		"session-cookie-1",
+		"",
+		"session-cookie-2",
+		"",
+	}, receivedCookies)
 }
 
-func TestWithDefaultCookieJar_ReturnsOriginalOptionsOnJarError(t *testing.T) {
+func TestA2AAgent_ClientForInvocationReturnsCookieJarError(t *testing.T) {
 	origNewCookieJar := newCookieJar
 	defer func() { newCookieJar = origNewCookieJar }()
 	newCookieJar = func(_ *cookiejar.Options) (*cookiejar.Jar, error) {
 		return nil, errors.New("cookie jar unavailable")
 	}
 
-	opts := []client.Option{client.WithUserAgent("custom-agent")}
-	got := withDefaultCookieJar(opts)
+	baseClient, err := client.NewA2AClient("http://example.com")
+	require.NoError(t, err)
+	a := &A2AAgent{
+		a2aClient:    baseClient,
+		a2aClientURL: "http://example.com",
+	}
 
-	require.Len(t, got, 1)
+	identifiedClient, err := a.clientForInvocation(&agent.Invocation{
+		Session: &session.Session{UserID: "user-1"},
+	})
+	require.NoError(t, err)
+	require.Same(t, baseClient, identifiedClient)
+
+	_, err = a.clientForInvocation(&agent.Invocation{
+		Session: &session.Session{AppName: "app", ID: "session-a"},
+	})
+	require.ErrorContains(t, err, "create anonymous cookie jar")
 }
 
 type stubA2AEventConverter struct{}
