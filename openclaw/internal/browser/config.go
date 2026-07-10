@@ -21,7 +21,8 @@ import (
 const (
 	ToolName = "browser"
 
-	defaultProfileName = "openclaw"
+	defaultProfileName  = "openclaw"
+	defaultStdioTimeout = 60 * time.Second
 
 	transportStdio      = "stdio"
 	transportSSE        = "sse"
@@ -61,6 +62,7 @@ type ProfileConfig struct {
 type Config struct {
 	DefaultProfile   string          `yaml:"default_profile,omitempty"`
 	EvaluateEnabled  *bool           `yaml:"evaluate_enabled,omitempty"`
+	ScreenshotDir    string          `yaml:"screenshot_dir,omitempty"`
 	ServerURL        string          `yaml:"server_url,omitempty"`
 	AuthToken        string          `yaml:"auth_token,omitempty"`
 	SandboxServerURL string          `yaml:"sandbox_server_url,omitempty"`
@@ -70,6 +72,7 @@ type Config struct {
 	AllowLoopback    *bool           `yaml:"allow_loopback,omitempty"`
 	AllowPrivateNet  *bool           `yaml:"allow_private_networks,omitempty"`
 	AllowFileURLs    *bool           `yaml:"allow_file_urls,omitempty"`
+	AllowedFileRoots []string        `yaml:"allowed_file_roots,omitempty"`
 	Nodes            []NodeConfig    `yaml:"nodes,omitempty"`
 	Profiles         []ProfileConfig `yaml:"profiles,omitempty"`
 }
@@ -77,6 +80,7 @@ type Config struct {
 type resolvedConfig struct {
 	DefaultProfile  string
 	EvaluateEnabled bool
+	ScreenshotDir   string
 	Navigation      navigationPolicy
 	HostServer      *serverTargetConfig
 	SandboxServer   *serverTargetConfig
@@ -108,6 +112,7 @@ func resolveConfig(cfg Config) (resolvedConfig, error) {
 
 	out := resolvedConfig{
 		DefaultProfile: strings.TrimSpace(cfg.DefaultProfile),
+		ScreenshotDir:  strings.TrimSpace(cfg.ScreenshotDir),
 	}
 	if cfg.EvaluateEnabled != nil {
 		out.EvaluateEnabled = *cfg.EvaluateEnabled
@@ -163,8 +168,9 @@ func resolveConfig(cfg Config) (resolvedConfig, error) {
 
 func resolveNavigationPolicy(cfg Config) navigationPolicy {
 	policy := navigationPolicy{
-		AllowedDomains: normalizeDomains(cfg.AllowedDomains),
-		BlockedDomains: normalizeDomains(cfg.BlockedDomains),
+		AllowedDomains:   normalizeDomains(cfg.AllowedDomains),
+		BlockedDomains:   normalizeDomains(cfg.BlockedDomains),
+		AllowedFileRoots: normalizeFileRoots(cfg.AllowedFileRoots),
 	}
 	if cfg.AllowLoopback != nil {
 		policy.AllowLoopback = *cfg.AllowLoopback
@@ -202,6 +208,10 @@ func resolveProfile(
 		Command:   strings.TrimSpace(cfg.Command),
 		Args:      cfg.Args,
 		Timeout:   cfg.Timeout,
+	}
+	if strings.EqualFold(conn.Transport, transportStdio) &&
+		conn.Timeout == 0 {
+		conn.Timeout = defaultStdioTimeout
 	}
 	browserServerURL := strings.TrimSpace(cfg.BrowserServerURL)
 	if browserServerURL != "" {
@@ -293,6 +303,9 @@ func resolveNodeTargets(
 }
 
 func validateConnection(cfg mcptool.ConnectionConfig) error {
+	if cfg.Timeout < 0 {
+		return errors.New("timeout must be non-negative")
+	}
 	transport := strings.ToLower(strings.TrimSpace(cfg.Transport))
 	switch transport {
 	case transportStdio:

@@ -67,6 +67,9 @@ const (
 	// TriggerTypeTransfer indicates the child invocation was created because
 	// the parent agent invoked the transfer_to_agent tool (handoff pattern).
 	TriggerTypeTransfer = "transfer"
+	// TriggerTypeDynamicWorkflow indicates the child invocation was created by
+	// one dynamic workflow script calling a registered child agent.
+	TriggerTypeDynamicWorkflow = "dynamic_workflow"
 )
 
 // ParentInvocationMetadata describes how a child invocation was triggered by

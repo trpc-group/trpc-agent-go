@@ -20,6 +20,8 @@ import (
 )
 
 func TestApplyParentDeathSignal_Linux(t *testing.T) {
+	applyParentDeathSignal(nil)
+
 	attr := &syscall.SysProcAttr{}
 	applyParentDeathSignal(attr)
 	require.Equal(t, syscall.SIGTERM, attr.Pdeathsig)

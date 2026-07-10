@@ -92,7 +92,10 @@ const (
 	flagContextCompactionOversizedToolResultMaxTokens = "context-compaction-oversized-tool-result-max-tokens"
 	flagMaxHistoryRuns                                = "max-history-runs"
 	flagMaxLLMCalls                                   = "max-llm-calls"
+	flagFinalizeBeforeMaxLLMCalls                     = "finalize-before-max-llm-calls"
 	flagMaxToolIterations                             = "max-tool-iterations"
+	flagOpenAIMaxRetries                              = "openai-max-retries"
+	flagOpenAITimeout                                 = "openai-timeout"
 	flagPreloadMemory                                 = "preload-memory"
 	flagToolCallArgumentsJSONRepair                   = "tool-call-arguments-json-repair"
 
@@ -128,9 +131,10 @@ const (
 	flagSkillsToolResults     = "skills-loaded-content-in-tool-results"
 	flagSkillsSkipFallback    = "skills-skip-fallback-on-session-summary"
 
-	flagDebugRecorder     = "debug-recorder"
-	flagDebugRecorderDir  = "debug-recorder-dir"
-	flagDebugRecorderMode = "debug-recorder-mode"
+	flagDebugRecorder                = "debug-recorder"
+	flagDebugRecorderDir             = "debug-recorder-dir"
+	flagDebugRecorderMode            = "debug-recorder-mode"
+	flagOpenAITextOnlyMessageContent = "openai-text-only-message-content"
 
 	flagLatencyDiagnostics                 = "latency-diagnostics"
 	flagLatencyDiagnosticsEvents           = "latency-diagnostics-events"
@@ -188,6 +192,7 @@ type runOptions struct {
 	ContextCompactionOversizedToolResultMaxTokens int
 	MaxHistoryRuns                                int
 	MaxLLMCalls                                   int
+	FinalizeBeforeMaxLLMCalls                     bool
 	MaxToolIterations                             int
 	PreloadMemory                                 int
 	ToolCallArgumentsJSONRepair                   bool
@@ -218,32 +223,36 @@ type runOptions struct {
 	ClaudeEnv          string
 	ClaudeWorkDir      string
 
-	ModelMode             string
-	OpenAIModel           string
-	OpenAIVariant         string
-	OpenAIBaseURL         string
-	OpenAIHeaders         map[string]string
-	GenerationConfig      *model.GenerationConfig
-	ModelConfig           *yaml.Node
-	KnowledgesConfig      []knowledgeEntry
-	SkillsRoot            string
-	SkillsExtraDir        string
-	SkillsDebug           bool
-	SkillsAllowBundled    string
-	SkillConfigs          map[string]ocskills.SkillConfig
-	SkillsWatch           bool
-	SkillsWatchBundled    bool
-	SkillsWatchDebounce   time.Duration
-	SkillsSummaryCacheTTL time.Duration
-	SkillsOverviewLimit   int
-	SkillsOverviewPinned  string
-	SkillsToolProfile     string
-	SkillsLoadMode        string
-	SkillsMaxLoaded       int
-	SkillsToolResults     bool
-	SkillsSkipFallback    bool
-	SkillsToolingGuide    *string
-	StateDir              string
+	ModelMode                    string
+	OpenAIModel                  string
+	OpenAIVariant                string
+	OpenAIBaseURL                string
+	OpenAITextOnlyMessageContent bool
+	OpenAITimeout                time.Duration
+	OpenAIMaxRetries             int
+	OpenAIMaxRetriesSet          bool
+	OpenAIHeaders                map[string]string
+	GenerationConfig             *model.GenerationConfig
+	ModelConfig                  *yaml.Node
+	KnowledgesConfig             []knowledgeEntry
+	SkillsRoot                   string
+	SkillsExtraDir               string
+	SkillsDebug                  bool
+	SkillsAllowBundled           string
+	SkillConfigs                 map[string]ocskills.SkillConfig
+	SkillsWatch                  bool
+	SkillsWatchBundled           bool
+	SkillsWatchDebounce          time.Duration
+	SkillsSummaryCacheTTL        time.Duration
+	SkillsOverviewLimit          int
+	SkillsOverviewPinned         string
+	SkillsToolProfile            string
+	SkillsLoadMode               string
+	SkillsMaxLoaded              int
+	SkillsToolResults            bool
+	SkillsSkipFallback           bool
+	SkillsToolingGuide           *string
+	StateDir                     string
 
 	EvolutionEnabled               bool
 	EvolutionHumanGate             string
@@ -328,9 +337,10 @@ func parseRunOptions(args []string) (runOptions, error) {
 
 		AgentType: agentTypeLLM,
 
-		ModelMode:     modeOpenAI,
-		OpenAIModel:   defaultOpenAIModelName(),
-		OpenAIVariant: defaultOpenAIVariant,
+		ModelMode:        modeOpenAI,
+		OpenAIModel:      defaultOpenAIModelName(),
+		OpenAIVariant:    defaultOpenAIVariant,
+		OpenAIMaxRetries: -1,
 
 		SkillsWatch:         true,
 		SkillsWatchDebounce: defaultSkillsWatchDebounce,
@@ -469,6 +479,12 @@ func parseRunOptions(args []string) (runOptions, error) {
 		flagMaxLLMCalls,
 		0,
 		"Max LLM calls per invocation (0=unlimited)",
+	)
+	fs.BoolVar(
+		&opts.FinalizeBeforeMaxLLMCalls,
+		flagFinalizeBeforeMaxLLMCalls,
+		false,
+		"On the last allowed LLM call, disable tools and ask the model to finalize",
 	)
 	fs.IntVar(
 		&opts.MaxToolIterations,
@@ -632,6 +648,24 @@ func parseRunOptions(args []string) (runOptions, error) {
 		"openai-base-url",
 		"",
 		"OpenAI base URL override (mode=openai, optional)",
+	)
+	fs.BoolVar(
+		&opts.OpenAITextOnlyMessageContent,
+		flagOpenAITextOnlyMessageContent,
+		false,
+		"Reduce OpenAI-compatible user message content parts to text-only",
+	)
+	fs.DurationVar(
+		&opts.OpenAITimeout,
+		flagOpenAITimeout,
+		0,
+		"OpenAI HTTP request timeout (0 disables)",
+	)
+	fs.IntVar(
+		&opts.OpenAIMaxRetries,
+		flagOpenAIMaxRetries,
+		-1,
+		"OpenAI max retries (-1 uses SDK default)",
 	)
 	fs.StringVar(
 		&opts.AllowUsers,
@@ -1025,6 +1059,7 @@ func parseRunOptions(args []string) (runOptions, error) {
 		setFlags,
 		flagDeferToolSurfaceMode,
 	)
+	opts.OpenAIMaxRetriesSet = flagWasSet(setFlags, flagOpenAIMaxRetries)
 	if flagWasSet(setFlags, flagDeferToolSurface) &&
 		!opts.DeferToolSurface &&
 		!flagWasSet(setFlags, flagDeferToolSurfaceMode) {
@@ -1196,12 +1231,15 @@ type agentRunConfig struct {
 	EnableContextCompaction                       *bool `yaml:"enable_context_compaction,omitempty"`
 	ContextCompactionOversizedToolResultMaxTokens *int  `yaml:"context_compaction_oversized_tool_result_max_tokens,omitempty"`
 	MaxHistoryRuns                                *int  `yaml:"max_history_runs,omitempty"`
-	MaxLLMCalls                                   *int  `yaml:"max_llm_calls,omitempty"`
-	MaxToolIterations                             *int  `yaml:"max_tool_iterations,omitempty"`
-	PreloadMemory                                 *int  `yaml:"preload_memory,omitempty"`
-	ToolCallArgumentsJSONRepair                   *bool `yaml:"tool_call_arguments_json_repair,omitempty"`
-	DisablePostToolPrompt                         *bool `yaml:"disable_post_tool_prompt,omitempty"`
-	DisablePostToolPromptCamel                    *bool `yaml:"disablePostToolPrompt,omitempty"`
+	// MaxLLMCalls limits agent-facing model calls per invocation. Auxiliary
+	// session summary and auto-memory extraction calls are excluded.
+	MaxLLMCalls                 *int  `yaml:"max_llm_calls,omitempty"`
+	FinalizeBeforeMaxLLMCalls   *bool `yaml:"finalize_before_max_llm_calls,omitempty"`
+	MaxToolIterations           *int  `yaml:"max_tool_iterations,omitempty"`
+	PreloadMemory               *int  `yaml:"preload_memory,omitempty"`
+	ToolCallArgumentsJSONRepair *bool `yaml:"tool_call_arguments_json_repair,omitempty"`
+	DisablePostToolPrompt       *bool `yaml:"disable_post_tool_prompt,omitempty"`
+	DisablePostToolPromptCamel  *bool `yaml:"disablePostToolPrompt,omitempty"`
 
 	Instruction      *string  `yaml:"instruction,omitempty"`
 	InstructionFiles []string `yaml:"instruction_files,omitempty"`
@@ -1242,6 +1280,9 @@ type modelConfig struct {
 	Name             *string               `yaml:"name,omitempty"`
 	BaseURL          *string               `yaml:"base_url,omitempty"`
 	OpenAIVariant    *string               `yaml:"openai_variant,omitempty"`
+	TextOnlyContent  *bool                 `yaml:"text_only_content,omitempty"`
+	Timeout          *string               `yaml:"timeout,omitempty"`
+	MaxRetries       *int                  `yaml:"max_retries,omitempty"`
 	Headers          map[string]string     `yaml:"headers,omitempty"`
 	GenerationConfig *generationConfigYAML `yaml:"generation_config,omitempty"`
 	Config           *rawYAMLNode          `yaml:"config,omitempty"`
@@ -1717,6 +1758,10 @@ func (cfg *fileConfig) apply(
 			!flagWasSet(set, flagMaxLLMCalls) {
 			opts.MaxLLMCalls = *cfg.Agent.MaxLLMCalls
 		}
+		if cfg.Agent.FinalizeBeforeMaxLLMCalls != nil &&
+			!flagWasSet(set, flagFinalizeBeforeMaxLLMCalls) {
+			opts.FinalizeBeforeMaxLLMCalls = *cfg.Agent.FinalizeBeforeMaxLLMCalls
+		}
 		if cfg.Agent.MaxToolIterations != nil &&
 			!flagWasSet(set, flagMaxToolIterations) {
 			opts.MaxToolIterations = *cfg.Agent.MaxToolIterations
@@ -1832,6 +1877,29 @@ func (cfg *fileConfig) apply(
 			opts.OpenAIVariant = strings.TrimSpace(
 				*cfg.Model.OpenAIVariant,
 			)
+		}
+		textOnly := cfg.Model.TextOnlyContent
+		if textOnly != nil &&
+			!flagWasSet(set, flagOpenAITextOnlyMessageContent) {
+			opts.OpenAITextOnlyMessageContent = *textOnly
+		}
+		if cfg.Model.Timeout != nil && !flagWasSet(set, flagOpenAITimeout) {
+			dur, err := parseDuration(*cfg.Model.Timeout)
+			if err != nil {
+				return fmt.Errorf("model.timeout: %w", err)
+			}
+			if dur < 0 {
+				return fmt.Errorf("model.timeout must be >= 0")
+			}
+			opts.OpenAITimeout = dur
+		}
+		if cfg.Model.MaxRetries != nil &&
+			!flagWasSet(set, flagOpenAIMaxRetries) {
+			if *cfg.Model.MaxRetries < 0 {
+				return fmt.Errorf("model.max_retries must be >= 0")
+			}
+			opts.OpenAIMaxRetries = *cfg.Model.MaxRetries
+			opts.OpenAIMaxRetriesSet = true
 		}
 		if len(cfg.Model.Headers) > 0 {
 			opts.OpenAIHeaders = cleanHeaderMap(cfg.Model.Headers)
@@ -2902,6 +2970,15 @@ func finalizeRunOptions(opts *runOptions) error {
 		return fmt.Errorf(
 			"invalid dynamic agent timeout: %s",
 			opts.DynamicAgentTimeout,
+		)
+	}
+	if opts.OpenAITimeout < 0 {
+		return fmt.Errorf("invalid OpenAI timeout: %s", opts.OpenAITimeout)
+	}
+	if opts.OpenAIMaxRetries < -1 {
+		return fmt.Errorf(
+			"invalid OpenAI max retries: %d",
+			opts.OpenAIMaxRetries,
 		)
 	}
 	if opts.HostExecDefaultTimeout < 0 {

@@ -498,6 +498,7 @@ agent:
 		"-context-compaction-oversized-tool-result-max-tokens", "256",
 		"-max-history-runs", "9",
 		"-max-llm-calls", "4",
+		"-finalize-before-max-llm-calls",
 		"-max-tool-iterations", "6",
 		"-preload-memory", "-1",
 		"-tool-call-arguments-json-repair=true",
@@ -522,6 +523,7 @@ agent:
 	require.Equal(t, 256, opts.ContextCompactionOversizedToolResultMaxTokens)
 	require.Equal(t, 9, opts.MaxHistoryRuns)
 	require.Equal(t, 4, opts.MaxLLMCalls)
+	require.True(t, opts.FinalizeBeforeMaxLLMCalls)
 	require.Equal(t, 6, opts.MaxToolIterations)
 	require.Equal(t, -1, opts.PreloadMemory)
 	require.True(t, opts.ToolCallArgumentsJSONRepair)
@@ -587,6 +589,78 @@ model:
 		float64PtrValue(0.1),
 		opts.GenerationConfig.Temperature,
 	)
+}
+
+func TestParseRunOptions_OpenAITimeoutFlagOverridesConfig(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+model:
+  timeout: "4m"
+`)
+
+	opts, err := parseRunOptions([]string{
+		"-config", cfgPath,
+		"-openai-timeout", "30s",
+	})
+	require.NoError(t, err)
+	require.Equal(t, 30*time.Second, opts.OpenAITimeout)
+}
+
+func TestParseRunOptions_OpenAITimeoutRejectsNegative(t *testing.T) {
+	t.Parallel()
+
+	_, err := parseRunOptions([]string{"-openai-timeout", "-1s"})
+	require.ErrorContains(t, err, "invalid OpenAI timeout")
+
+	cfgPath := writeTempConfig(t, `
+model:
+  timeout: "-1s"
+`)
+	_, err = parseRunOptions([]string{"-config", cfgPath})
+	require.ErrorContains(t, err, "model.timeout must be >= 0")
+}
+
+func TestParseRunOptions_OpenAIMaxRetriesFlagOverridesConfig(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+model:
+  max_retries: 2
+`)
+
+	opts, err := parseRunOptions([]string{
+		"-config", cfgPath,
+		"-openai-max-retries", "0",
+	})
+	require.NoError(t, err)
+	require.True(t, opts.OpenAIMaxRetriesSet)
+	require.Equal(t, 0, opts.OpenAIMaxRetries)
+}
+
+func TestParseRunOptions_OpenAIMaxRetriesFlagAcceptsDefaultSentinel(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	opts, err := parseRunOptions([]string{"-openai-max-retries", "-1"})
+	require.NoError(t, err)
+	require.True(t, opts.OpenAIMaxRetriesSet)
+	require.Equal(t, -1, opts.OpenAIMaxRetries)
+}
+
+func TestParseRunOptions_OpenAIMaxRetriesRejectsNegative(t *testing.T) {
+	t.Parallel()
+
+	_, err := parseRunOptions([]string{"-openai-max-retries", "-2"})
+	require.ErrorContains(t, err, "invalid OpenAI max retries")
+
+	cfgPath := writeTempConfig(t, `
+model:
+  max_retries: -1
+`)
+	_, err = parseRunOptions([]string{"-config", cfgPath})
+	require.ErrorContains(t, err, "model.max_retries must be >= 0")
 }
 
 func TestParseRunOptions_ModelGenerationConfig_PreservesFalseStream(
@@ -803,6 +877,7 @@ agent:
   context_compaction_oversized_tool_result_max_tokens: 4096
   max_history_runs: 50
   max_llm_calls: 13
+  finalize_before_max_llm_calls: true
   max_tool_iterations: 11
   preload_memory: 10
   tool_call_arguments_json_repair: false
@@ -828,6 +903,9 @@ model:
   mode: "mock"
   name: "gpt-5"
   openai_variant: "openai"
+  text_only_content: true
+  timeout: "4m"
+  max_retries: 0
   headers:
     X-SMG-Routing-Key: "wineguo"
     X-SMG-Agent-Name: "trpc-claw-benchmark"
@@ -974,6 +1052,7 @@ memory:
 	require.Equal(t, 4096, opts.ContextCompactionOversizedToolResultMaxTokens)
 	require.Equal(t, 50, opts.MaxHistoryRuns)
 	require.Equal(t, 13, opts.MaxLLMCalls)
+	require.True(t, opts.FinalizeBeforeMaxLLMCalls)
 	require.Equal(t, 11, opts.MaxToolIterations)
 	require.Equal(t, 10, opts.PreloadMemory)
 	require.False(t, opts.ToolCallArgumentsJSONRepair)
@@ -996,6 +1075,10 @@ memory:
 	require.Equal(t, modeMock, opts.ModelMode)
 	require.Equal(t, "gpt-5", opts.OpenAIModel)
 	require.Equal(t, "openai", opts.OpenAIVariant)
+	require.True(t, opts.OpenAITextOnlyMessageContent)
+	require.Equal(t, 4*time.Minute, opts.OpenAITimeout)
+	require.True(t, opts.OpenAIMaxRetriesSet)
+	require.Equal(t, 0, opts.OpenAIMaxRetries)
 	require.Equal(t, map[string]string{
 		"X-SMG-Routing-Key": "wineguo",
 		"X-SMG-Agent-Name":  "trpc-claw-benchmark",
@@ -1258,6 +1341,21 @@ tools:
 	})
 	require.NoError(t, err)
 	require.Equal(t, 45*time.Second, opts.DynamicAgentTimeout)
+}
+
+func TestParseRunOptions_OpenAITextOnlyFlagOverridesConfig(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+model:
+  text_only_content: true
+`)
+	opts, err := parseRunOptions([]string{
+		"-config", cfgPath,
+		"-openai-text-only-message-content=false",
+	})
+	require.NoError(t, err)
+	require.False(t, opts.OpenAITextOnlyMessageContent)
 }
 
 func TestParseRunOptions_HostExecDefaultTimeoutFlagOverridesConfig(

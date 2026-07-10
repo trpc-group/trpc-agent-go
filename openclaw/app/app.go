@@ -35,6 +35,7 @@ import (
 	"time"
 	"unicode"
 
+	openaiopt "github.com/openai/openai-go/option"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/claudecode"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
@@ -1089,6 +1090,7 @@ func NewRuntimeWithOptions(
 				Err:  fmt.Errorf("create model failed: %w", err),
 			}
 		}
+		mdl = newModelCallBudgetModel(mdl)
 	}
 
 	instanceID := runtimeInstanceID(
@@ -1365,6 +1367,11 @@ func NewRuntimeWithOptions(
 		gwOpts,
 		runtimeProfileResolver,
 		runtimeProfileRequired,
+	)
+	gwOpts = appendModelCallBudgetGatewayOption(
+		gwOpts,
+		opts.MaxLLMCalls,
+		opts.FinalizeBeforeMaxLLMCalls,
 	)
 	if langfuseRT != nil && langfuseRT.runOptionResolver != nil {
 		gwOpts = append(
@@ -1709,6 +1716,7 @@ func run(
 				Err:  fmt.Errorf("create model failed: %w", err),
 			}
 		}
+		mdl = newModelCallBudgetModel(mdl)
 	}
 
 	instanceID := runtimeInstanceID(
@@ -1990,6 +1998,11 @@ func run(
 		gwOpts,
 		runtimeProfileResolver,
 		runtimeProfileRequired,
+	)
+	gwOpts = appendModelCallBudgetGatewayOption(
+		gwOpts,
+		opts.MaxLLMCalls,
+		opts.FinalizeBeforeMaxLLMCalls,
 	)
 	if langfuseRT != nil && langfuseRT.runOptionResolver != nil {
 		gwOpts = append(
@@ -3529,6 +3542,7 @@ func buildOpenClawTools(
 			octool.WithBaseEnv(deps.ToolEnv(stateDir)),
 			octool.WithCommandPolicy(commandPolicy),
 			octool.WithOutputRedactor(outputRedactor),
+			octool.WithCleanShellStartup(true),
 			octool.WithMaxResultOutputChars(
 				defaultExecResultOutputChars,
 			),
@@ -3780,6 +3794,9 @@ func newOpenAIModel(spec registry.ModelSpec) (model.Model, error) {
 		openai.WithVariant(variant),
 		openai.WithOmitFileContentParts(true),
 	}
+	if spec.OpenAITextOnlyMessageContent {
+		opts = append(opts, openai.WithTextOnlyMessageContent(true))
+	}
 	if spec.DebugRecorderEnabled {
 		opts = append(
 			opts,
@@ -3793,6 +3810,25 @@ func newOpenAIModel(spec registry.ModelSpec) (model.Model, error) {
 	}
 	if apiKey := strings.TrimSpace(spec.APIKey); apiKey != "" {
 		opts = append(opts, openai.WithAPIKey(apiKey))
+	}
+	if spec.Timeout > 0 {
+		opts = append(
+			opts,
+			openai.WithHTTPClientOptions(
+				openai.WithHTTPClientTimeout(spec.Timeout),
+			),
+			openai.WithOpenAIOptions(
+				openaiopt.WithRequestTimeout(spec.Timeout),
+			),
+		)
+	}
+	if spec.MaxRetries != nil {
+		opts = append(
+			opts,
+			openai.WithOpenAIOptions(
+				openaiopt.WithMaxRetries(*spec.MaxRetries),
+			),
+		)
 	}
 	if len(spec.Headers) > 0 {
 		opts = append(opts, openai.WithHeaders(spec.Headers))
@@ -3824,17 +3860,35 @@ func modelFromOptions(opts runOptions) (model.Model, error) {
 		headers = resolved
 	}
 
+	apiKey := strings.TrimSpace(os.Getenv(openAIAPIKeyEnvName))
 	spec := registry.ModelSpec{
-		Type:                 mode,
-		Name:                 opts.OpenAIModel,
-		BaseURL:              baseURL,
-		APIKey:               strings.TrimSpace(os.Getenv(openAIAPIKeyEnvName)),
-		OpenAIVariant:        opts.OpenAIVariant,
+		Type:                         mode,
+		Name:                         opts.OpenAIModel,
+		BaseURL:                      baseURL,
+		APIKey:                       apiKey,
+		OpenAIVariant:                opts.OpenAIVariant,
+		OpenAITextOnlyMessageContent: opts.OpenAITextOnlyMessageContent,
+		Timeout:                      opts.OpenAITimeout,
+		MaxRetries: openAIMaxRetriesPtr(
+			opts.OpenAIMaxRetries,
+			opts.OpenAIMaxRetriesSet,
+		),
 		Headers:              headers,
 		DebugRecorderEnabled: opts.DebugRecorderEnabled,
 		Config:               opts.ModelConfig,
 	}
-	return f(spec)
+	mdl, err := f(spec)
+	if err != nil {
+		return nil, err
+	}
+	return newModelTimeoutModel(mdl, opts.OpenAITimeout), nil
+}
+
+func openAIMaxRetriesPtr(maxRetries int, set bool) *int {
+	if !set || maxRetries < 0 {
+		return nil
+	}
+	return &maxRetries
 }
 
 func resolveOpenAIHeaders(

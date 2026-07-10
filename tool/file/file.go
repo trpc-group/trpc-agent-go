@@ -53,10 +53,10 @@ const (
 	relativePathGuidance        = "Use a relative path under " +
 		"base_directory. If exec_command wrote an absolute temp " +
 		"path, fs_read_file can read it only when that path is " +
-		"under a configured read-only root; otherwise have " +
-		"exec_command print the needed data directly."
+		"under base_directory or a configured read-only root; " +
+		"otherwise have exec_command print the needed data directly."
 	extraReadRootGuidance = "Absolute paths are readable only when " +
-		"they are under a configured read-only root."
+		"they are under base_directory or a configured read-only root."
 	missingFileRecoveryGuidance = "Use " +
 		missingFileListToolName + " or " +
 		missingFileSearchToolName +
@@ -300,16 +300,46 @@ func (f *fileToolSet) resolveReadPath(requestPath string) (string, error) {
 		return f.resolvePath(requestPath)
 	}
 	clean := filepath.Clean(raw)
-	if _, ok := f.matchExtraReadRoot(clean); ok {
+	if _, ok := f.matchReadRoot(clean); ok {
 		return clean, nil
 	}
 	return "", fmt.Errorf(
-		"invalid path - absolute path is outside configured "+
-			"read-only roots: %s. %s %s",
+		"invalid path - absolute path is outside base_directory "+
+			"and configured read-only roots: %s. %s %s",
 		requestPath,
 		extraReadRootGuidance,
 		relativePathGuidance,
 	)
+}
+
+func (f *fileToolSet) matchReadRoot(absPath string) (string, bool) {
+	if root, ok := f.matchBaseReadRoot(absPath); ok {
+		return root, true
+	}
+	return f.matchExtraReadRoot(absPath)
+}
+
+func (f *fileToolSet) matchBaseReadRoot(absPath string) (string, bool) {
+	if f == nil || strings.TrimSpace(f.baseDir) == "" {
+		return "", false
+	}
+	root := filepath.Clean(f.baseDir)
+	if !filepath.IsAbs(root) {
+		absRoot, err := filepath.Abs(root)
+		if err != nil {
+			return "", false
+		}
+		root = absRoot
+	}
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = filepath.Clean(resolved)
+	}
+	candidate := filepath.Clean(absPath)
+	evaluatedCandidate, resolvedPath := evalPathWithExistingParent(candidate)
+	if readRootContains(candidate, evaluatedCandidate, root, resolvedPath) {
+		return root, true
+	}
+	return "", false
 }
 
 func (f *fileToolSet) matchExtraReadRoot(absPath string) (string, bool) {
@@ -319,17 +349,31 @@ func (f *fileToolSet) matchExtraReadRoot(absPath string) (string, bool) {
 	candidate := filepath.Clean(absPath)
 	evaluatedCandidate, resolvedPath := evalPathWithExistingParent(candidate)
 	for _, root := range f.extraReadRoots {
-		candidateInRoot := isPathWithinRoot(candidate, root)
-		evaluatedInRoot := resolvedPath &&
-			isPathWithinRoot(evaluatedCandidate, root)
-		if candidateInRoot && (!resolvedPath || evaluatedInRoot) {
-			return root, true
-		}
-		if !candidateInRoot && evaluatedInRoot {
+		if readRootContains(
+			candidate,
+			evaluatedCandidate,
+			root,
+			resolvedPath,
+		) {
 			return root, true
 		}
 	}
 	return "", false
+}
+
+func readRootContains(
+	candidate string,
+	evaluatedCandidate string,
+	root string,
+	resolvedPath bool,
+) bool {
+	candidateInRoot := isPathWithinRoot(candidate, root)
+	evaluatedInRoot := resolvedPath &&
+		isPathWithinRoot(evaluatedCandidate, root)
+	if candidateInRoot && (!resolvedPath || evaluatedInRoot) {
+		return true
+	}
+	return !candidateInRoot && evaluatedInRoot
 }
 
 func evalPathWithExistingParent(path string) (string, bool) {

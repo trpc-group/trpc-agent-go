@@ -35,8 +35,18 @@ const (
 	defaultIODrain         = 1 * time.Second
 	defaultShellEnvTimeout = 5 * time.Second
 
-	shellProgram        = "bash"
-	shellLoginFlag      = "-lc"
+	shellProgram       = "bash"
+	shellLoginFlag     = "-lc"
+	shellNoProfileFlag = "--noprofile"
+	shellNoRcFlag      = "--norc"
+	shellCommandFlag   = "-c"
+	shellExitCleanup   = `__trpc_claw_cleanup_jobs(){ ` +
+		`local pids; pids="$(jobs -pr)"; ` +
+		`if [ -n "$pids" ]; then ` +
+		`kill $pids 2>/dev/null || true; ` +
+		`sleep 0.05; ` +
+		`kill -KILL $pids 2>/dev/null || true; ` +
+		`fi; }; trap __trpc_claw_cleanup_jobs EXIT`
 	shellEnvDumpCommand = "env -0"
 )
 
@@ -53,6 +63,7 @@ type Manager struct {
 	policy               CommandPolicy
 	redactor             OutputRedactor
 	maxResultOutputChars int
+	cleanShellStartup    bool
 
 	clock func() time.Time
 
@@ -136,6 +147,15 @@ func WithMaxResultOutputChars(n int) Option {
 	}
 }
 
+// WithCleanShellStartup runs shell commands without profile/rc startup files
+// and removes shell-startup env hooks such as BASH_ENV. The default is false
+// for compatibility with callers that rely on login shell setup.
+func WithCleanShellStartup(enabled bool) Option {
+	return func(m *Manager) {
+		m.cleanShellStartup = enabled
+	}
+}
+
 func NewManager(opts ...Option) *Manager {
 	m := &Manager{
 		sessions:         map[string]*session{},
@@ -210,6 +230,7 @@ func (m *Manager) Exec(
 			params,
 			timeout,
 			m.baseEnv,
+			m.cleanShellStartup,
 		)
 		if err != nil {
 			return execResult{}, err
@@ -232,7 +253,7 @@ func (m *Manager) Exec(
 		return execResult{
 			Status:    "running",
 			SessionID: sess.id,
-			Output:    sess.tail(defaultLogTail),
+			Output:    m.limitTailResultOutput(sess.tail(defaultLogTail)),
 		}, nil
 	}
 
@@ -274,7 +295,7 @@ func (m *Manager) Exec(
 		return execResult{
 			Status:    "running",
 			SessionID: sess.id,
-			Output:    sess.tail(defaultLogTail),
+			Output:    m.limitTailResultOutput(sess.tail(defaultLogTail)),
 		}, nil
 	}
 }
@@ -284,32 +305,65 @@ func runForeground(
 	params execParams,
 	timeout time.Duration,
 	baseEnv map[string]string,
+	cleanStartup bool,
 ) (string, int, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	cmd := shellCmd(ctx, params.Command)
+	cmd := shellCmdWithStartup(ctx, params.Command, true, cleanStartup)
 	prepareCommandProcess(cmd)
 	cmd.Dir = params.Workdir
 	cmd.Env = mergedEnv(baseEnv, params.Env)
+	if cleanStartup {
+		cmd.Env = cleanCommandEnv(cmd.Env)
+	}
+	defer func() {
+		_ = cleanupCommandProcessGroup(cmd)
+	}()
 
 	out, err := cmd.CombinedOutput()
 	code := exitCode(err)
 	return string(out), code, nil
 }
 
-func shellCmd(ctx context.Context, command string) *exec.Cmd {
+func shellCmd(
+	ctx context.Context,
+	command string,
+	cleanupShellJobs bool,
+) *exec.Cmd {
+	return shellCmdWithStartup(ctx, command, cleanupShellJobs, false)
+}
+
+func shellCmdWithStartup(
+	ctx context.Context,
+	command string,
+	cleanupShellJobs bool,
+	cleanStartup bool,
+) *exec.Cmd {
+	if cleanupShellJobs {
+		command = shellCommandWithExitCleanup(command)
+	}
 	cmd := exec.CommandContext(
 		ctx,
 		shellProgram,
-		shellLoginFlag,
-		command,
+		append(shellArgs(cleanStartup), command)...,
 	)
 	cmd.Cancel = func() error {
 		return forceKillCommandProcess(cmd)
 	}
 	cmd.WaitDelay = defaultIODrain
 	return cmd
+}
+
+func shellArgs(cleanStartup bool) []string {
+	if cleanStartup {
+		return []string{shellNoProfileFlag, shellNoRcFlag, shellCommandFlag}
+	}
+	return []string{shellLoginFlag}
+}
+
+func shellCommandWithExitCleanup(command string) string {
+	return shellExitCleanup + "\n" + command
 }
 
 func mergedEnv(
@@ -343,6 +397,38 @@ func setEnv(env []string, k, v string) []string {
 	return append(env, prefix+v)
 }
 
+func cleanShellStartupEnv(env []string) []string {
+	if len(env) == 0 {
+		return nil
+	}
+	out := env[:0]
+	for _, pair := range env {
+		key, _, ok := splitEnvPair(pair)
+		if !ok || isShellStartupEnvKey(key) {
+			continue
+		}
+		out = append(out, pair)
+	}
+	return out
+}
+
+func cleanCommandEnv(env []string) []string {
+	if len(env) == 0 {
+		env = os.Environ()
+	}
+	return cleanShellStartupEnv(env)
+}
+
+func isShellStartupEnvKey(key string) bool {
+	switch strings.ToUpper(key) {
+	case "BASH_ENV", "ENV", "PROMPT_COMMAND", "PS4",
+		"SHELLOPTS", "BASHOPTS":
+		return true
+	default:
+		return strings.HasPrefix(strings.ToUpper(key), "BASH_FUNC_")
+	}
+}
+
 func exitCode(err error) int {
 	if err == nil {
 		return 0
@@ -364,9 +450,17 @@ func (m *Manager) startBackground(
 		parentCtx = context.Background()
 	}
 	ctx, cancel := context.WithTimeout(parentCtx, timeout)
-	cmd := shellCmd(ctx, params.Command)
+	cmd := shellCmdWithStartup(
+		ctx,
+		params.Command,
+		!params.Background,
+		m.cleanShellStartup,
+	)
 	cmd.Dir = params.Workdir
 	cmd.Env = mergedEnv(m.baseEnv, params.Env)
+	if m.cleanShellStartup {
+		cmd.Env = cleanCommandEnv(cmd.Env)
+	}
 
 	sess := newSession(newSessionID(), params.Command, m.maxLines)
 	sess.cancel = cancel
@@ -433,6 +527,9 @@ func (m *Manager) startBackground(
 		// "It is thus incorrect to call Wait before all reads from the
 		// pipe have completed."
 		ps, _ := cmd.Process.Wait()
+		if !params.Background {
+			_ = cleanupCommandProcessGroup(cmd)
+		}
 		waitDone(sess.ioDone, defaultIODrain)
 		code := -1
 		if ps != nil {
@@ -478,7 +575,10 @@ func (m *Manager) commandEnv(
 	workdir string,
 	extra map[string]string,
 ) map[string]string {
-	out := m.loginShellEnv(ctx, workdir)
+	var out map[string]string
+	if !m.cleanShellStartup {
+		out = m.loginShellEnv(ctx, workdir)
+	}
 	if len(out) == 0 {
 		out = currentProcessEnvMap()
 	}
@@ -540,6 +640,13 @@ func (m *Manager) limitResultOutput(output string) string {
 	return truncateResultOutput(output, m.maxResultOutputChars)
 }
 
+func (m *Manager) limitTailResultOutput(output string) string {
+	if m == nil || m.maxResultOutputChars <= 0 {
+		return output
+	}
+	return truncateTailResultOutput(output, m.maxResultOutputChars)
+}
+
 func (m *Manager) commandTimeout(timeoutS *int) time.Duration {
 	timeout := m.timeout
 	if timeoutS != nil && *timeoutS > 0 {
@@ -577,13 +684,54 @@ func truncateResultOutput(output string, maxChars int) string {
 	if charCount <= maxChars {
 		return output
 	}
-	return firstRunes(output, maxChars) + fmt.Sprintf(
-		"\n\n[OpenClaw truncated command output to %d of %d chars. "+
-			"Write large outputs to a file and read only the needed "+
-			"chunks with file tools or shell commands.]",
+	return appendTruncationNotice(
+		firstRunes(output, maxChars),
 		maxChars,
 		charCount,
 	)
+}
+
+func truncateTailResultOutput(output string, maxChars int) string {
+	if maxChars <= 0 {
+		return output
+	}
+	output = strings.ToValidUTF8(output, "\uFFFD")
+	charCount := utf8.RuneCountInString(output)
+	if charCount <= maxChars {
+		return output
+	}
+	return fmt.Sprintf(
+		"[OpenClaw truncated command output to the last %d of %d "+
+			"chars. Write large outputs to a file and read only "+
+			"the needed chunks with file tools or shell commands.]\n\n%s",
+		maxChars,
+		charCount,
+		lastRunes(output, maxChars),
+	)
+}
+
+func appendTruncationNotice(
+	prefix string,
+	keptChars int,
+	totalChars int,
+) string {
+	return prefix + fmt.Sprintf(
+		"\n\n[OpenClaw truncated command output to %d of %d chars. "+
+			"Write large outputs to a file and read only the needed "+
+			"chunks with file tools or shell commands.]",
+		keptChars,
+		totalChars,
+	)
+}
+
+func clampNextOffset(next int, offset int, end int) int {
+	if next <= offset && end > offset {
+		next = offset + 1
+	}
+	if next > end {
+		return end
+	}
+	return next
 }
 
 func firstRunes(value string, n int) string {
@@ -594,6 +742,24 @@ func firstRunes(value string, n int) string {
 	for idx := range value {
 		if count == n {
 			return value[:idx]
+		}
+		count++
+	}
+	return value
+}
+
+func lastRunes(value string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	start := utf8.RuneCountInString(value) - n
+	if start <= 0 {
+		return value
+	}
+	count := 0
+	for idx := range value {
+		if count == start {
+			return value[idx:]
 		}
 		count++
 	}
@@ -651,7 +817,7 @@ func snapshotLoginShellEnv(
 	ctx, cancel := context.WithTimeout(ctx, defaultShellEnvTimeout)
 	defer cancel()
 
-	cmd := shellCmd(ctx, shellEnvDumpCommand)
+	cmd := shellCmd(ctx, shellEnvDumpCommand, false)
 	cmd.Dir = workdir
 
 	out, err := cmd.Output()
@@ -726,7 +892,7 @@ func (m *Manager) poll(id string, limit *int) (processPoll, error) {
 	if err != nil {
 		return processPoll{}, err
 	}
-	return s.poll(limit), nil
+	return s.poll(limit, m.maxResultOutputChars), nil
 }
 
 func (m *Manager) log(
@@ -738,7 +904,7 @@ func (m *Manager) log(
 	if err != nil {
 		return processLog{}, err
 	}
-	return s.log(offset, limit), nil
+	return s.log(offset, limit, m.maxResultOutputChars), nil
 }
 
 func (m *Manager) write(
