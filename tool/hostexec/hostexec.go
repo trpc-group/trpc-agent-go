@@ -411,9 +411,6 @@ func (t *writeStdinTool) Call(
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		case <-timer.C:
-			if err := ctx.Err(); err != nil {
-				return nil, err
-			}
 		}
 	}
 
