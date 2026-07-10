@@ -4616,21 +4616,6 @@ func TestModelCallBudgetFinalRequestFromOptions_DisablesThinking(
 	}
 }
 
-func TestModelCallBudgetFinalRequestFromOptions_RespectsApproxRunes(
-	t *testing.T,
-) {
-	t.Parallel()
-
-	cfg := modelCallBudgetFinalRequestFromOptions(runOptions{
-		ModelMode:                               modeOpenAI,
-		OpenAIVariant:                           string(openai.VariantGLM),
-		DeadlineFinalizationApproxRunesPerToken: 2.5,
-	})
-	require.True(t, cfg.DisableThinking)
-	require.True(t, cfg.DropReasoningContent)
-	require.Equal(t, 2.5, cfg.ApproxRunesPerToken)
-}
-
 func TestModelCallBudgetFinalRequestFromOptions_DefaultUnaffected(
 	t *testing.T,
 ) {

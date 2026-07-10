@@ -11,6 +11,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -469,6 +470,61 @@ func TestFinalModelCallRequest_UsesConfiguredTokenEstimate(t *testing.T) {
 	require.Contains(t, strictContent, "latest question")
 	require.NotContains(t, strictContent, "old question")
 	require.NotContains(t, strictContent, "old answer")
+}
+
+func TestFinalModelCallRequest_TrimsSingleUserToolChain(t *testing.T) {
+	t.Parallel()
+
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage(
+				"system " + strings.Repeat("s", 600),
+			),
+			model.NewUserMessage(
+				"solve the task " + strings.Repeat("q", 120),
+			),
+		},
+	}
+	for i := 0; i < 16; i++ {
+		req.Messages = append(req.Messages, model.Message{
+			Role: model.RoleAssistant,
+			ToolCalls: []model.ToolCall{{
+				ID:   fmt.Sprintf("call_%02d", i),
+				Type: "function",
+				Function: model.FunctionDefinitionParam{
+					Name:      "search",
+					Arguments: []byte(`{"query":"large query payload"}`),
+				},
+			}},
+		})
+		req.Messages = append(req.Messages, model.NewToolMessage(
+			fmt.Sprintf("call_%02d", i),
+			"search",
+			fmt.Sprintf(
+				"tool-result-%02d %s",
+				i,
+				strings.Repeat("r", 120),
+			),
+		))
+	}
+
+	got := finalModelCallRequest(
+		req,
+		modelCallBudgetFinalRequestConfig{
+			MaxInputTokens:      1000,
+			ApproxRunesPerToken: 1,
+		},
+	)
+
+	require.Less(t, len(got.Messages), len(req.Messages))
+	content := budgetTestMessageText(got.Messages)
+	require.Contains(t, content, "solve the task")
+	require.Contains(t, content, "tool-result-15")
+	require.NotContains(t, content, "tool-result-00")
+	for _, msg := range got.Messages {
+		require.NotEqual(t, model.RoleTool, msg.Role)
+		require.Empty(t, msg.ToolCalls)
+	}
 }
 
 func budgetTestMessageText(messages []model.Message) string {

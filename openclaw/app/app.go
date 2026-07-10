@@ -4115,8 +4115,7 @@ func modelCallBudgetFinalRequestFromOptions(
 	opts runOptions,
 ) modelCallBudgetFinalRequestConfig {
 	cfg := modelCallBudgetFinalRequestConfig{
-		MaxInputTokens:      opts.DeadlineFinalizationMaxInputTokens,
-		ApproxRunesPerToken: opts.DeadlineFinalizationApproxRunesPerToken,
+		MaxInputTokens: opts.DeadlineFinalizationMaxInputTokens,
 	}
 	if strings.TrimSpace(opts.ModelMode) != modeOpenAI {
 		return cfg

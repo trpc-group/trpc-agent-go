@@ -503,7 +503,6 @@ agent:
 		"-finalize-before-max-llm-calls",
 		"-deadline-finalization-window", "2m",
 		"-deadline-finalization-max-input-tokens", "1200",
-		"-deadline-finalization-approx-runes-per-token", "1.25",
 		"-max-tool-iterations", "6",
 		"-preload-memory", "-1",
 		"-tool-call-arguments-json-repair=true",
@@ -531,7 +530,6 @@ agent:
 	require.True(t, opts.FinalizeBeforeMaxLLMCalls)
 	require.Equal(t, 2*time.Minute, opts.DeadlineFinalizationWindow)
 	require.Equal(t, 1200, opts.DeadlineFinalizationMaxInputTokens)
-	require.Equal(t, 1.25, opts.DeadlineFinalizationApproxRunesPerToken)
 	require.Equal(t, 6, opts.MaxToolIterations)
 	require.Equal(t, -1, opts.PreloadMemory)
 	require.True(t, opts.ToolCallArgumentsJSONRepair)
@@ -641,42 +639,6 @@ agent:
 		t,
 		err.Error(),
 		"agent.deadline_finalization_max_input_tokens must be >= 0",
-	)
-}
-
-func TestParseRunOptions_DeadlineFinalizationApproxRunesNegativeFails(
-	t *testing.T,
-) {
-	t.Parallel()
-
-	_, err := parseRunOptions([]string{
-		"-deadline-finalization-approx-runes-per-token",
-		"-1",
-	})
-	require.Error(t, err)
-	require.Contains(
-		t,
-		err.Error(),
-		"invalid deadline finalization approx runes per token",
-	)
-}
-
-func TestParseRunOptions_DeadlineFinalizationApproxRunesYAMLNaNFails(
-	t *testing.T,
-) {
-	t.Parallel()
-
-	cfgPath := writeTempConfig(t, `
-agent:
-  deadline_finalization_approx_runes_per_token: .nan
-`)
-	_, err := parseRunOptions([]string{"-config", cfgPath})
-	require.Error(t, err)
-	require.Contains(
-		t,
-		err.Error(),
-		"agent.deadline_finalization_approx_runes_per_token "+
-			"must be finite and >= 0",
 	)
 }
 
@@ -994,7 +956,6 @@ agent:
   finalize_before_max_llm_calls: true
   deadline_finalization_window: "90s"
   deadline_finalization_max_input_tokens: 3200
-  deadline_finalization_approx_runes_per_token: 1.5
   max_tool_iterations: 11
   preload_memory: 10
   tool_call_arguments_json_repair: false
@@ -1172,7 +1133,6 @@ memory:
 	require.True(t, opts.FinalizeBeforeMaxLLMCalls)
 	require.Equal(t, 90*time.Second, opts.DeadlineFinalizationWindow)
 	require.Equal(t, 3200, opts.DeadlineFinalizationMaxInputTokens)
-	require.Equal(t, 1.5, opts.DeadlineFinalizationApproxRunesPerToken)
 	require.Equal(t, 11, opts.MaxToolIterations)
 	require.Equal(t, 10, opts.PreloadMemory)
 	require.False(t, opts.ToolCallArgumentsJSONRepair)

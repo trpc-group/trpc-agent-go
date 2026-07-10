@@ -649,6 +649,13 @@ const finalModelCallNotice = "[OpenClaw Budget Notice] This is the " +
 	"future tool use. Do not ask to continue. If the original task " +
 	"requires a final-answer format, follow it exactly."
 
+const (
+	finalModelCallSystemBudgetDivisor = 4
+	finalModelCallUserBudgetDivisor   = 2
+	finalModelCallTruncationNotice    = "\n\n" +
+		"[...truncated for deadline finalization...]\n\n"
+)
+
 func finalModelCallTrimMessages(
 	messages []model.Message,
 	config modelCallBudgetFinalRequestConfig,
@@ -657,6 +664,41 @@ func finalModelCallTrimMessages(
 	if maxInputTokens <= 0 || len(messages) == 0 {
 		return messages
 	}
+	ctx := context.Background()
+	counter := finalModelCallTokenCounter(config)
+	budget := finalModelCallTrimBudget(ctx, counter, maxInputTokens)
+	if budget <= 0 {
+		return messages
+	}
+	trimmed, err := model.NewMiddleOutStrategy(counter).TailorMessages(
+		ctx,
+		messages,
+		budget,
+	)
+	if err == nil && finalModelCallFits(ctx, counter, trimmed, budget) {
+		return trimmed
+	}
+	if finalModelCallFits(ctx, counter, trimmed, budget) {
+		return trimmed
+	}
+	fallback := finalModelCallTailEvidenceMessages(
+		ctx,
+		counter,
+		messages,
+		budget,
+	)
+	if len(fallback) > 0 {
+		return fallback
+	}
+	if len(trimmed) > 0 {
+		return trimmed
+	}
+	return messages
+}
+
+func finalModelCallTokenCounter(
+	config modelCallBudgetFinalRequestConfig,
+) model.TokenCounter {
 	counterOpts := []model.SimpleTokenCounterOption(nil)
 	if config.ApproxRunesPerToken > 0 {
 		counterOpts = append(
@@ -664,18 +706,221 @@ func finalModelCallTrimMessages(
 			model.WithApproxRunesPerToken(config.ApproxRunesPerToken),
 		)
 	}
-	strategy := model.NewMiddleOutStrategy(
-		model.NewSimpleTokenCounter(counterOpts...),
-	)
-	trimmed, _ := strategy.TailorMessages(
-		context.Background(),
-		messages,
-		maxInputTokens,
-	)
-	if len(trimmed) == 0 {
-		return messages
+	return model.NewSimpleTokenCounter(counterOpts...)
+}
+
+func finalModelCallTrimBudget(
+	ctx context.Context,
+	counter model.TokenCounter,
+	maxInputTokens int,
+) int {
+	if maxInputTokens <= 0 {
+		return maxInputTokens
 	}
-	return trimmed
+	noticeTokens, err := counter.CountTokens(
+		ctx,
+		model.NewUserMessage(finalModelCallNotice),
+	)
+	if err != nil || noticeTokens <= 0 {
+		return maxInputTokens
+	}
+	budget := maxInputTokens - noticeTokens
+	if budget <= 0 {
+		return maxInputTokens
+	}
+	return budget
+}
+
+func finalModelCallFits(
+	ctx context.Context,
+	counter model.TokenCounter,
+	messages []model.Message,
+	maxTokens int,
+) bool {
+	if len(messages) == 0 || maxTokens <= 0 {
+		return false
+	}
+	tokens, err := counter.CountTokensRange(ctx, messages, 0, len(messages))
+	return err == nil && tokens <= maxTokens
+}
+
+func finalModelCallTailEvidenceMessages(
+	ctx context.Context,
+	counter model.TokenCounter,
+	messages []model.Message,
+	maxTokens int,
+) []model.Message {
+	headCount := finalModelCallSystemPrefixLen(messages)
+	anchor := finalModelCallAnchorUserIndex(messages, headCount)
+	if anchor < 0 {
+		return nil
+	}
+	transcript := finalModelCallTranscriptMessages(messages)
+	prefix := finalModelCallProtectedPrefix(
+		ctx,
+		counter,
+		transcript[:headCount],
+		transcript[anchor],
+		maxTokens,
+	)
+	best := prefix
+	if !finalModelCallFits(ctx, counter, best, maxTokens) {
+		return best
+	}
+	for start := len(transcript) - 1; start > anchor; start-- {
+		suffix := finalModelCallNormalizeTail(transcript[start:])
+		if len(suffix) == 0 {
+			continue
+		}
+		candidate := make([]model.Message, 0, len(prefix)+len(suffix))
+		candidate = append(candidate, prefix...)
+		candidate = append(candidate, suffix...)
+		if finalModelCallFits(ctx, counter, candidate, maxTokens) {
+			best = candidate
+			continue
+		}
+		if len(best) > len(prefix) {
+			break
+		}
+	}
+	return best
+}
+
+func finalModelCallTranscriptMessages(
+	messages []model.Message,
+) []model.Message {
+	transcript := make([]model.Message, len(messages))
+	for i, msg := range messages {
+		msg.ToolCalls = nil
+		if msg.Role == model.RoleTool {
+			msg.Role = model.RoleUser
+			msg.Content = finalModelCallToolResultText(msg)
+			msg.ToolID = ""
+			msg.ToolName = ""
+		}
+		transcript[i] = msg
+	}
+	return transcript
+}
+
+func finalModelCallToolResultText(msg model.Message) string {
+	name := strings.TrimSpace(msg.ToolName)
+	if name == "" {
+		name = "tool"
+	}
+	content := strings.TrimSpace(msg.Content)
+	if content == "" {
+		return "[Tool result: " + name + "]"
+	}
+	return "[Tool result: " + name + "]\n" + content
+}
+
+func finalModelCallSystemPrefixLen(messages []model.Message) int {
+	count := 0
+	for _, msg := range messages {
+		if msg.Role != model.RoleSystem {
+			break
+		}
+		count++
+	}
+	return count
+}
+
+func finalModelCallAnchorUserIndex(
+	messages []model.Message,
+	start int,
+) int {
+	if start < 0 {
+		start = 0
+	}
+	for i := len(messages) - 1; i >= start; i-- {
+		if messages[i].Role == model.RoleUser {
+			return i
+		}
+	}
+	for i := len(messages) - 1; i >= start; i-- {
+		if messages[i].Role != model.RoleSystem {
+			return i
+		}
+	}
+	return -1
+}
+
+func finalModelCallProtectedPrefix(
+	ctx context.Context,
+	counter model.TokenCounter,
+	system []model.Message,
+	anchor model.Message,
+	maxTokens int,
+) []model.Message {
+	prefix := make([]model.Message, 0, len(system)+1)
+	systemLimit := finalModelCallPartRuneLimit(
+		maxTokens,
+		finalModelCallSystemBudgetDivisor*max(len(system), 1),
+	)
+	for _, msg := range system {
+		msg.Content = finalModelCallTrimContent(msg.Content, systemLimit)
+		prefix = append(prefix, msg)
+	}
+	anchorLimit := finalModelCallPartRuneLimit(
+		maxTokens,
+		finalModelCallUserBudgetDivisor,
+	)
+	anchor.Content = finalModelCallTrimContent(anchor.Content, anchorLimit)
+	prefix = append(prefix, anchor)
+	if finalModelCallFits(ctx, counter, prefix, maxTokens) {
+		return prefix
+	}
+	for i := range prefix {
+		prefix[i].Content = finalModelCallTrimContent(
+			prefix[i].Content,
+			finalModelCallPartRuneLimit(maxTokens, len(prefix)*2),
+		)
+	}
+	return prefix
+}
+
+func finalModelCallPartRuneLimit(maxTokens, divisor int) int {
+	if maxTokens <= 0 {
+		return 0
+	}
+	if divisor <= 0 {
+		return maxTokens
+	}
+	limit := maxTokens / divisor
+	if limit < 1 {
+		return 1
+	}
+	return limit
+}
+
+func finalModelCallTrimContent(content string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	runes := []rune(content)
+	if len(runes) <= limit {
+		return content
+	}
+	notice := []rune(finalModelCallTruncationNotice)
+	if limit <= len(notice)+2 {
+		return string(runes[:limit])
+	}
+	bodyLimit := limit - len(notice)
+	head := bodyLimit / 2
+	tail := bodyLimit - head
+	return string(runes[:head]) +
+		finalModelCallTruncationNotice +
+		string(runes[len(runes)-tail:])
+}
+
+func finalModelCallNormalizeTail(
+	messages []model.Message,
+) []model.Message {
+	for len(messages) > 0 && messages[0].Role == model.RoleTool {
+		messages = messages[1:]
+	}
+	return messages
 }
 
 func applyFinalModelCallRequest(
