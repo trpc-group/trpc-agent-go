@@ -171,13 +171,16 @@ func Test_arxivTool_search(t *testing.T) {
 	}
 
 	tests := []struct {
-		name         string
-		req          searchRequest
-		setupServer  func() *httptest.Server
-		wantErr      bool
-		wantErrText  string
-		wantArticles int
-		wantContent  []content
+		name          string
+		req           searchRequest
+		setupServer   func() *httptest.Server
+		wantErr       bool
+		wantErrText   string
+		wantArticles  int
+		wantContent   []content
+		wantRunes     int
+		wantReturned  int
+		wantTruncated bool
 	}{
 		{
 			name: "normal case with query",
@@ -217,6 +220,36 @@ func Test_arxivTool_search(t *testing.T) {
 					Text: "Hello World",
 				},
 			},
+		},
+		{
+			name: "read pdf content applies max content runes",
+			req: searchRequest{
+				Search: arxiv.Search{
+					Query: "pdf cap test",
+				},
+				ReadArxivPapers: true,
+				MaxContentRunes: 5,
+			},
+			setupServer: func() *httptest.Server {
+				return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					entryXML := createEntryXML("PDF Cap Test Paper", "6789.0123v1", "cs.AI", pdfServer.URL+"/capped.pdf")
+					feedXML := createFeedXML([]string{entryXML})
+					w.Header().Set("Content-Type", "application/xml")
+					w.WriteHeader(http.StatusOK)
+					w.Write([]byte(feedXML))
+				}))
+			},
+			wantArticles: 1,
+			wantContent: []content{
+				{
+					Page:      1,
+					Text:      "Hello",
+					Truncated: true,
+				},
+			},
+			wantRunes:     11,
+			wantReturned:  5,
+			wantTruncated: true,
 		},
 		{
 			name: "empty query and id list",
@@ -395,6 +428,15 @@ func Test_arxivTool_search(t *testing.T) {
 			if tt.req.ReadArxivPapers {
 				for _, article := range got {
 					assert.Equal(t, article.Content, tt.wantContent)
+					if tt.wantRunes > 0 || tt.wantReturned > 0 ||
+						tt.wantTruncated {
+						assert.Equal(t, tt.wantRunes,
+							article.ContentRunes)
+						assert.Equal(t, tt.wantReturned,
+							article.ReturnedContentRunes)
+						assert.Equal(t, tt.wantTruncated,
+							article.ContentTruncated)
+					}
 				}
 			}
 		})

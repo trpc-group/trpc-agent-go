@@ -41,7 +41,7 @@ var (
 const (
 	defaultArticleContentRunes = 20000
 	maxArticleContentRunes     = 200000
-	errEmptySearch             = "query, id list, or submitted date is required"
+	errEmptySearch             = "query, id list, submitted_date_from, or submitted_date_to is required"
 )
 
 // content define an article content download from pdf
@@ -182,7 +182,8 @@ func NewToolSet(opts ...Option) (*ToolSet, error) {
 			"the fields of physics, mathematics, computer science, quantitative biology, quantitative finance, statistics, "+
 			"electrical engineering and systems science, and economics. "+
 			"Returns a list of articles, containing title, authors, primary category, categories, published date, PDF URL, "+
-			"links, summary, comment, and content (if read_arxiv_papers is true)."),
+			"links, summary, comment, and capped PDF content with truncation metadata (if read_arxiv_papers is true). "+
+			"Use max_content_runes to adjust the per-article PDF content cap."),
 	))
 	t.tools = tools
 	return t, nil

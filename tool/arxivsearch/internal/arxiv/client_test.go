@@ -158,6 +158,35 @@ func TestClient_buildQueryURL(t *testing.T) {
 			want: "http://arxiv.org?max_results=5&search_query=submittedDate%3A%5B201608110000+TO+201608112359%5D&start=0",
 		},
 		{
+			name: "submitted date from only",
+			fields: fields{
+				baseURL: "http://arxiv.org",
+			},
+			args: args{
+				search: Search{
+					Query:             "cat:cs.AI",
+					SubmittedDateFrom: "2022-06-01",
+				},
+				start:      0,
+				maxResults: 5,
+			},
+			want: "http://arxiv.org?max_results=5&search_query=cat%3Acs.AI+AND+submittedDate%3A%5B202206010000+TO+999912312359%5D&start=0",
+		},
+		{
+			name: "submitted date to only",
+			fields: fields{
+				baseURL: "http://arxiv.org",
+			},
+			args: args{
+				search: Search{
+					SubmittedDateTo: "2022-06-30",
+				},
+				start:      0,
+				maxResults: 5,
+			},
+			want: "http://arxiv.org?max_results=5&search_query=submittedDate%3A%5B199001010000+TO+202206302359%5D&start=0",
+		},
+		{
 			name: "invalid submitted date",
 			fields: fields{
 				baseURL: "http://arxiv.org",
