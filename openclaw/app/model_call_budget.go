@@ -667,10 +667,9 @@ const finalModelCallNotice = "[OpenClaw Budget Notice] This is the " +
 	"requires a final-answer format, follow it exactly."
 
 const (
-	finalModelCallSystemBudgetDivisor = 8
+	finalModelCallSystemBudgetDivisor = 16
 	finalModelCallUserBudgetDivisor   = 4
-	finalModelCallTruncationNotice    = "\n\n" +
-		"[...truncated for deadline finalization...]\n\n"
+	finalModelCallTruncationNotice    = "\n\n[...truncated...]\n\n"
 )
 
 func finalModelCallTrimMessages(
