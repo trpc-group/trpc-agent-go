@@ -97,12 +97,16 @@ func StreamReader(r io.Reader) io.Reader {
 }
 
 type streamRedactor struct {
-	r   io.Reader
-	buf bytes.Buffer
+	r       io.Reader
+	buf     bytes.Buffer
+	pending error // stored non-EOF error, returned once buf is drained
 }
 
 func (s *streamRedactor) Read(p []byte) (int, error) {
 	if s.buf.Len() == 0 {
+		if s.pending != nil {
+			return 0, s.pending
+		}
 		chunk := make([]byte, 4096)
 		n, err := s.r.Read(chunk)
 		if n > 0 {
@@ -110,7 +114,7 @@ func (s *streamRedactor) Read(p []byte) (int, error) {
 			s.buf.Write(redacted)
 		}
 		if err != nil && err != io.EOF {
-			return 0, err
+			s.pending = err
 		}
 		if err == io.EOF && n == 0 && s.buf.Len() == 0 {
 			return 0, io.EOF

@@ -39,7 +39,7 @@ import (
 // "$" blocks both "$(…)" and "${…}", and "`" blocks backtick
 // substitution. Backslash is included because strings.Fields does not
 // interpret escapes, so a stray "\" would otherwise leak into argv.
-const shellMetacharacters = "|;&><\\`$"
+const shellMetacharacters = "|;&><\\`$\n\r"
 
 // defaultDeniedCommands are always blocked, even when a caller of
 // NewPolicy/LoadPolicy forgets to list them. They are dangerous in a

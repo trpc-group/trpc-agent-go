@@ -29,6 +29,7 @@ import (
 	_ "embed" // blank import for the go:embed directive
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"time"
 
 	_ "modernc.org/sqlite" // blank import registers the "sqlite" driver
@@ -75,13 +76,21 @@ func New(path string) Store {
 }
 
 // Init opens the database, enables foreign keys and applies schema.sql. It is
-// safe to call multiple times because every CREATE TABLE statement uses
-// IF NOT EXISTS.
+// safe to call multiple times: a repeated call is a no-op if the database
+// handle is already open, preventing connection leaks. Every CREATE TABLE and
+// CREATE INDEX statement uses IF NOT EXISTS, so re-applying the schema is
+// idempotent.
 func (s *sqliteStore) Init(ctx context.Context) error {
+	if s.db != nil {
+		return nil
+	}
 	db, err := sql.Open("sqlite", s.path)
 	if err != nil {
 		return fmt.Errorf("store: open %q: %w", s.path, err)
 	}
+	// SQLite serializes writes; limiting the pool to a single connection
+	// avoids "database is locked" errors under concurrent access.
+	db.SetMaxOpenConns(1)
 	s.db = db
 	if _, err := s.db.ExecContext(ctx, `PRAGMA foreign_keys=ON;`); err != nil {
 		_ = s.db.Close()
@@ -545,28 +554,13 @@ func NewTaskID(repoPath string) string {
 // deterministic for a given input, which makes task ids for the same repo
 // visually similar across runs while still being collision-resistant.
 func shortHash(s string, n int) string {
-	h := fnv1a32(s)
-	hex := fmt.Sprintf("%08x", h)
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(s))
+	hex := fmt.Sprintf("%08x", h.Sum32())
 	if n > len(hex) {
 		n = len(hex)
 	}
 	return hex[:n]
-}
-
-// fnv1a32 is a small, dependency-free implementation of the 32-bit FNV-1a hash
-// (identical to hash/fnv for the same input). It is inlined here to avoid
-// pulling in an extra import for a single call site.
-func fnv1a32(s string) uint32 {
-	const (
-		offset32 = 2166136261
-		prime32  = 16777619
-	)
-	h := uint32(offset32)
-	for i := 0; i < len(s); i++ {
-		h ^= uint32(s[i])
-		h *= prime32
-	}
-	return h
 }
 
 // nonce returns n random lowercase hex characters. If crypto/rand fails (which

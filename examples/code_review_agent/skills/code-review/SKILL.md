@@ -20,7 +20,7 @@ read-only repository mounted into the sandboxed workspace.
 
 - This skill only reads from the mounted repo (read-only).
 - Scripts execute via the framework's sandboxed `workspace_exec`.
-- No network access required for offline checks (`go vet`, `staticcheck`).
+- No network access required for offline checks (`go vet`, `staticcheck`, `go test`).
 - Permission gating: all commands pass through the agent's `PermissionPolicy`.
 
 ## Usage

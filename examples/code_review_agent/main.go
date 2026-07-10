@@ -157,8 +157,11 @@ func runPipeline(ctx context.Context, opts *pipelineOpts) (retErr error) {
 			return
 		}
 		log.Printf("persisting partial report for task %s after failure: %v", taskID, retErr)
+		// Use a non-cancelled context so SaveTaskReport can complete even
+		// after the pipeline ctx was cancelled (e.g. by Ctrl-C).
+		persistCtx := context.WithoutCancel(ctx)
 		if _, _, _, perr := buildAndPersistReport(
-			ctx, st, opts, taskID, input, rev,
+			persistCtx, st, opts, taskID, input, rev,
 			runRecords, permDecisions, metrics,
 			string(report.ConclusionNeedsReview),
 		); perr != nil {

@@ -103,6 +103,22 @@ func sampleTaskReport(taskID string) TaskReport {
 				CreatedAt: "2025-01-04T10:00:04Z",
 			},
 		},
+		Artifacts: []Artifact{
+			{
+				TaskID:    taskID,
+				Name:      "review_report.json",
+				Path:      "/out/review_report.json",
+				SizeBytes: 2048,
+				CreatedAt: "2025-01-04T10:00:05Z",
+			},
+			{
+				TaskID:    taskID,
+				Name:      "review_report.md",
+				Path:      "/out/review_report.md",
+				SizeBytes: 1536,
+				CreatedAt: "2025-01-04T10:00:05Z",
+			},
+		},
 		Report: ReportRow{
 			TaskID:       taskID,
 			JSONPath:     "/out/report.json",
@@ -205,6 +221,8 @@ func assertChildRowsEqual(t *testing.T, got, want *TaskReport) {
 		t.Errorf("Permissions mismatch:\n got  %+v\n want %+v", got.Permissions, want.Permissions)
 	}
 
+	assertArtifactsEqual(t, got, want)
+
 	// Report
 	if got.Report.ID == 0 {
 		t.Errorf("Report.ID = 0, want non-zero")
@@ -221,6 +239,25 @@ func assertChildRowsEqual(t *testing.T, got, want *TaskReport) {
 	got.Metrics.ID = 0
 	if !reflect.DeepEqual(got.Metrics, want.Metrics) {
 		t.Errorf("TelemetryMetrics mismatch:\n got  %+v\n want %+v", got.Metrics, want.Metrics)
+	}
+}
+
+// assertArtifactsEqual compares the artifact slices of got and want, ignoring
+// auto-generated IDs. Extracted from assertChildRowsEqual to keep its
+// cyclomatic complexity under 20.
+func assertArtifactsEqual(t *testing.T, got, want *TaskReport) {
+	t.Helper()
+	if len(got.Artifacts) != len(want.Artifacts) {
+		t.Fatalf("Artifacts len = %d, want %d", len(got.Artifacts), len(want.Artifacts))
+	}
+	for i := range got.Artifacts {
+		if got.Artifacts[i].ID == 0 {
+			t.Errorf("Artifacts[%d].ID = 0, want non-zero", i)
+		}
+		got.Artifacts[i].ID = 0
+	}
+	if !reflect.DeepEqual(got.Artifacts, want.Artifacts) {
+		t.Errorf("Artifacts mismatch:\n got  %+v\n want %+v", got.Artifacts, want.Artifacts)
 	}
 }
 

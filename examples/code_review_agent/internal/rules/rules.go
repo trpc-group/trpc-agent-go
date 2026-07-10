@@ -147,7 +147,7 @@ type goroutineRule struct {
 }
 
 func newGoroutineRule() *goroutineRule {
-	return &goroutineRule{goFuncRe: regexp.MustCompile(`go func`)}
+	return &goroutineRule{goFuncRe: regexp.MustCompile(`\bgo\s+(func\b|\w+\()`)}
 }
 
 func (r *goroutineRule) ID() string          { return "GL-001" }

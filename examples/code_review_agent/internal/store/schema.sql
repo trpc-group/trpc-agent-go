@@ -33,6 +33,8 @@ CREATE TABLE IF NOT EXISTS finding (
     FOREIGN KEY(task_id) REFERENCES review_task(task_id) ON DELETE CASCADE
 );
 
+CREATE INDEX IF NOT EXISTS idx_finding_task_id ON finding(task_id);
+
 CREATE TABLE IF NOT EXISTS sandbox_run (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     task_id      TEXT    NOT NULL,
@@ -48,6 +50,8 @@ CREATE TABLE IF NOT EXISTS sandbox_run (
     FOREIGN KEY(task_id) REFERENCES review_task(task_id) ON DELETE CASCADE
 );
 
+CREATE INDEX IF NOT EXISTS idx_sandbox_run_task_id ON sandbox_run(task_id);
+
 CREATE TABLE IF NOT EXISTS permission_decision (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     task_id    TEXT    NOT NULL,
@@ -57,6 +61,8 @@ CREATE TABLE IF NOT EXISTS permission_decision (
     created_at TEXT    NOT NULL,
     FOREIGN KEY(task_id) REFERENCES review_task(task_id) ON DELETE CASCADE
 );
+
+CREATE INDEX IF NOT EXISTS idx_permission_decision_task_id ON permission_decision(task_id);
 
 CREATE TABLE IF NOT EXISTS artifact (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -76,6 +82,8 @@ CREATE TABLE IF NOT EXISTS report (
     created_at    TEXT    NOT NULL,
     FOREIGN KEY(task_id) REFERENCES review_task(task_id) ON DELETE CASCADE
 );
+
+CREATE INDEX IF NOT EXISTS idx_artifact_task_id ON artifact(task_id);
 
 CREATE TABLE IF NOT EXISTS telemetry_metrics (
     id                      INTEGER PRIMARY KEY AUTOINCREMENT,
