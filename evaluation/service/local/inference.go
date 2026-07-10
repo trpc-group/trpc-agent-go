@@ -189,7 +189,10 @@ func (s *local) inferEvalCases(ctx context.Context, req *service.InferenceReques
 
 func (s *local) inferEvalCasesSerial(ctx context.Context, req *service.InferenceRequest, evalCases []*evalset.EvalCase, opts *service.Options) ([]*service.InferenceResult, error) {
 	results := make([]*service.InferenceResult, 0, len(evalCases))
-	for _, evalCase := range evalCases {
+	for i, evalCase := range evalCases {
+		if i > 0 {
+			time.Sleep(time.Second * 3)
+		}
 		result := s.inferenceEvalCase(ctx, req, evalCase, opts)
 		results = append(results, result)
 	}

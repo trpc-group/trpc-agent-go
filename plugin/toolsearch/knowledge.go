@@ -169,6 +169,31 @@ func (k *ToolKnowledge) upsert(ctx context.Context, tools map[string]tool.Tool, 
 	return nil
 }
 
+// forget drops the given tool names from the embedding index so their next
+// upsert re-embeds them, and removes their documents from the store so a
+// removed tool no longer surfaces in semantic search results. Missing entries
+// (never indexed, or already removed by a concurrent call) are ignored so
+// callers can pass a superset without pre-checking.
+func (k *ToolKnowledge) forget(ctx context.Context, names []string) {
+	if len(names) == 0 {
+		return
+	}
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	for _, name := range names {
+		if _, ok := k.indexed[name]; !ok {
+			continue
+		}
+		delete(k.indexed, name)
+		if err := k.store.Delete(ctx, name); err != nil {
+			// Delete errors are typically "not found" for a store that lost
+			// state (e.g. a fresh in-memory store on restart); log and move on
+			// so a stale entry cannot block the refresh.
+			log.DebugfContext(ctx, "forget embedded tool %s: %v", name, err)
+		}
+	}
+}
+
 // searchNames embeds query and returns candidate tool names ordered by
 // descending vector similarity, scoped to candidateIDs. Token usage is folded
 // into usage.

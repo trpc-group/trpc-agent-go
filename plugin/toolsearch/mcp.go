@@ -85,9 +85,15 @@ func (p *Plugin) registerMCPToolbox(box MCPToolbox) {
 	p.toolboxes = append(p.toolboxes, idx)
 }
 
-// ensureMCPListed lists an MCP toolbox's ToolSet and indexes its renamed tools.
-// It is a no-op for non-MCP toolboxes. Each call fetches Tools(ctx) so the
-// catalog always reflects the server's current tools.
+// ensureMCPListed lists an MCP toolbox's ToolSet and refreshes its indexed
+// tools to match the server's current snapshot: same-namespace entries are
+// replaced (so schema/implementation updates propagate) and names no longer
+// returned are pruned. It is a no-op for non-MCP toolboxes.
+//
+// An empty listing is treated as a transient failure (e.g. server temporarily
+// unavailable) and leaves the previous snapshot untouched, matching the
+// long-standing retry behavior; a non-empty listing is the authoritative fresh
+// snapshot for this namespace.
 //
 // Tools(ctx) is invoked without holding the lock — it may perform network I/O —
 // and the result is committed under the write lock.
@@ -97,31 +103,75 @@ func (p *Plugin) ensureMCPListed(ctx context.Context, box *toolboxIndex) {
 	}
 
 	tools := box.mcp.toolSet.Tools(ctx)
-
-	p.mu.Lock()
-	defer p.mu.Unlock()
 	if len(tools) == 0 {
+		// Empty listing = transient failure; keep the last-known snapshot so a
+		// down server does not wipe previously-visible tools.
 		return
 	}
+
+	// Build the fresh set of renamed tools outside the lock (cheap, no I/O).
+	fresh := make(map[string]tool.Tool, len(tools))
 	for _, t := range tools {
 		if t == nil {
 			continue
 		}
 		renamed := newRenamedTool(t, box.mcp.serverName)
-		name := renamed.Declaration().Name
-		if existingNS, dup := p.namespaceByTool[name]; dup {
-			if existingNS != box.name {
-				log.Errorf("[%s] MCP tool %q collides with namespace %q; kept %q",
-					p.name, name, box.name, existingNS)
-			}
+		fresh[renamed.Declaration().Name] = renamed
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	// Prune tools that were previously indexed for this namespace but are no
+	// longer returned by the server. Collisions from other namespaces never
+	// entered box.toolNames, so this only touches tools we actually own.
+	var pruned []string
+	for name := range box.toolNames {
+		if _, keep := fresh[name]; keep {
 			continue
+		}
+		p.unindexTool(name)
+		delete(box.toolNames, name)
+		pruned = append(pruned, name)
+	}
+
+	// Add or refresh every tool in the fresh listing. Refreshing rebinds
+	// toolBox/allMeta to the latest wrapper so a server-side schema or
+	// implementation update immediately supersedes the stale one.
+	var added, refreshed int
+	for name, renamed := range fresh {
+		if existingNS, dup := p.namespaceByTool[name]; dup && existingNS != box.name {
+			log.Errorf("[%s] MCP tool %q collides with namespace %q; kept %q",
+				p.name, name, box.name, existingNS)
+			continue
+		}
+		if _, existed := box.toolNames[name]; existed {
+			refreshed++
+		} else {
+			added++
 		}
 		p.indexTool(renamed)
 		p.deferredNames[name] = struct{}{}
 		p.namespaceByTool[name] = box.name
 		box.toolNames[name] = struct{}{}
 	}
-	log.Infof("[%s] listed MCP server %q: %d tools", p.name, box.mcp.serverName, len(box.toolNames))
+
+	// A refreshed tool's schema/description may have changed, and a pruned
+	// tool must not leak into future embedding searches. Forget both so the
+	// embedding index re-embeds refreshed tools and drops removed ones.
+	if p.knowledge != nil {
+		forget := make([]string, 0, len(fresh)+len(pruned))
+		for name := range fresh {
+			forget = append(forget, name)
+		}
+		forget = append(forget, pruned...)
+		if len(forget) > 0 {
+			p.knowledge.forget(ctx, forget)
+		}
+	}
+
+	log.Infof("[%s] listed MCP server %q: %d tools (added=%d refreshed=%d pruned=%d)",
+		p.name, box.mcp.serverName, len(box.toolNames), added, refreshed, len(pruned))
 }
 
 // materializeNamespace lists the MCP server backing a namespace, if any, so its

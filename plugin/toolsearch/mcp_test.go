@@ -26,6 +26,7 @@ import (
 // controllable, so tests can exercise lazy listing, caching, and retry.
 type fakeToolSet struct {
 	name     string
+	mu       sync.Mutex
 	tools    []tool.Tool
 	calls    int32 // number of Tools() invocations
 	emptyFor int32 // return no tools for the first N calls (simulates a down server)
@@ -36,7 +37,20 @@ func (f *fakeToolSet) Tools(context.Context) []tool.Tool {
 	if n <= f.emptyFor {
 		return nil
 	}
-	return f.tools
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	// Copy so a concurrent setTools cannot mutate the slice a caller iterates.
+	out := make([]tool.Tool, len(f.tools))
+	copy(out, f.tools)
+	return out
+}
+
+// setTools atomically replaces the tools returned by subsequent Tools() calls,
+// simulating a live MCP server changing its exposed tool set between listings.
+func (f *fakeToolSet) setTools(tools []tool.Tool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.tools = tools
 }
 
 func (f *fakeToolSet) Close() error { return nil }
@@ -238,6 +252,94 @@ func TestMCPToolbox_ConcurrentSearchesAreRaceFree(t *testing.T) {
 	// no races occur (the test is run with -race in CI) and the server is
 	// listed at least once.
 	assert.Greater(t, atomic.LoadInt32(&ts.calls), int32(0))
+}
+
+// TestMCPToolbox_RefreshesChangedAndRemovedTools verifies each listing is
+// treated as the fresh namespace snapshot: schema/description updates on an
+// existing tool replace the previously indexed wrapper, and a tool dropped by
+// the server between two listings is pruned from the catalog, invisible to
+// tool_search, and no longer callable via beforeTool.
+func TestMCPToolbox_RefreshesChangedAndRemovedTools(t *testing.T) {
+	ts := &fakeToolSet{
+		name: "weather",
+		tools: []tool.Tool{
+			newTestTool("get_forecast", "get the weather forecast"),
+			newTestTool("get_alerts", "get severe weather alerts"),
+		},
+	}
+	p := New(nil, WithMCPToolboxes([]MCPToolbox{
+		{ServerName: "weather", Description: "weather data", ToolSet: ts},
+	}))
+	ctx, _ := ctxWithInvocation()
+
+	// First listing indexes the initial snapshot.
+	res := callSearch(t, ctx, p, toolSearchInput{Namespace: "weather"})
+	assert.ElementsMatch(t,
+		[]string{"mcp__weather__get_forecast", "mcp__weather__get_alerts"},
+		toolNames(res.Tools),
+	)
+
+	// Server swaps get_forecast's description (schema/impl update) and drops
+	// get_alerts entirely. The next listing must reflect both.
+	ts.setTools([]tool.Tool{
+		newTestTool("get_forecast", "return the updated weather forecast"),
+	})
+
+	res = callSearch(t, ctx, p, toolSearchInput{Namespace: "weather"})
+	assert.Equal(t, []string{"mcp__weather__get_forecast"}, toolNames(res.Tools),
+		"pruned tool must disappear from search results")
+
+	// The refreshed wrapper carries the new description.
+	got := p.toolBox["mcp__weather__get_forecast"]
+	require.NotNil(t, got)
+	assert.Equal(t, "return the updated weather forecast", got.Declaration().Description)
+
+	// The pruned tool is gone from every index.
+	_, stillIndexed := p.toolBox["mcp__weather__get_alerts"]
+	assert.False(t, stillIndexed, "pruned tool must be removed from toolBox")
+	assert.False(t, p.isDeferred("mcp__weather__get_alerts"), "pruned tool must be un-deferred")
+	_, stillInBox := p.toolboxByName["weather"].toolNames["mcp__weather__get_alerts"]
+	assert.False(t, stillInBox, "pruned tool must leave the namespace membership set")
+
+	// beforeTool must no longer treat the pruned tool as a deferred one: without
+	// an owning namespace it should fall through untouched (no "not loaded" gate).
+	bt, err := p.beforeTool(ctx, &tool.BeforeToolArgs{ToolName: "mcp__weather__get_alerts"})
+	require.NoError(t, err)
+	assert.Nil(t, bt, "pruned tool must not be intercepted as a deferred call")
+
+	// The catalog rendered for the model reflects only the current snapshot.
+	req := &model.Request{
+		Messages: []model.Message{{Role: model.RoleSystem, Content: Placeholder}},
+	}
+	_, err = p.beforeModel(ctx, &model.BeforeModelArgs{Request: req})
+	require.NoError(t, err)
+	assert.Contains(t, req.Messages[0].Content, "mcp__weather__get_forecast")
+	assert.NotContains(t, req.Messages[0].Content, "mcp__weather__get_alerts")
+}
+
+// TestMCPToolbox_EmptyListingKeepsPreviousSnapshot ensures a transient empty
+// listing (e.g. a server temporarily unavailable) does not wipe the previously
+// indexed tools — pruning only takes effect on a non-empty authoritative
+// listing.
+func TestMCPToolbox_EmptyListingKeepsPreviousSnapshot(t *testing.T) {
+	ts := &fakeToolSet{
+		name:  "weather",
+		tools: []tool.Tool{newTestTool("get_forecast", "forecast")},
+	}
+	p := New(nil, WithMCPToolboxes([]MCPToolbox{
+		{ServerName: "weather", ToolSet: ts},
+	}))
+	ctx, _ := ctxWithInvocation()
+
+	// First listing populates the index.
+	callSearch(t, ctx, p, toolSearchInput{Namespace: "weather"})
+	require.True(t, p.isDeferred("mcp__weather__get_forecast"))
+
+	// Server returns nothing (transient failure). The previous snapshot stays.
+	ts.setTools(nil)
+	callSearch(t, ctx, p, toolSearchInput{Namespace: "weather"})
+	assert.True(t, p.isDeferred("mcp__weather__get_forecast"),
+		"empty listing must not prune previously indexed tools")
 }
 
 func TestParseMCPName(t *testing.T) {

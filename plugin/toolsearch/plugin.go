@@ -185,6 +185,19 @@ func (p *Plugin) indexTool(t tool.Tool) {
 	p.nameByLower[strings.ToLower(name)] = name
 }
 
+// unindexTool is the inverse of indexTool: it removes a tool from every
+// name-keyed catalog map so a subsequent listing/search no longer sees it.
+// It is used when an MCP server drops a tool between two listings so the
+// stale entry stops being surfaced or callable. The caller must hold p.mu
+// (write).
+func (p *Plugin) unindexTool(name string) {
+	delete(p.toolBox, name)
+	delete(p.allMeta, name)
+	delete(p.nameByLower, strings.ToLower(name))
+	delete(p.deferredNames, name)
+	delete(p.namespaceByTool, name)
+}
+
 // registerToolbox is the shared registration path for both WithToolboxes and
 // WithDeferredTools. It indexes each tool, marks it deferred, and records its
 // namespace membership exactly once. A tool registered into two namespaces logs
