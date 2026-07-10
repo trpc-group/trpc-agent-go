@@ -193,3 +193,136 @@ func TestRemoveDuplicates(t *testing.T) {
 		t.Errorf("Expected 3 unique findings, got %d", len(result))
 	}
 }
+
+func TestPermissionPolicy_CheckCommand_Empty(t *testing.T) {
+	policy := NewPermissionPolicy()
+
+	testCases := []string{"", "   ", "\t", "\n"}
+	for _, tc := range testCases {
+		result := policy.CheckCommand(tc)
+		if result.Action != ActionReview {
+			t.Errorf("Expected action %s for empty command, got %s", ActionReview, result.Action)
+		}
+		if result.Reason != "Empty command" {
+			t.Errorf("Expected reason 'Empty command', got '%s'", result.Reason)
+		}
+	}
+}
+
+func TestPermissionPolicy_CheckCommand_PathPrefix(t *testing.T) {
+	policy := NewPermissionPolicy()
+
+	testCases := []struct {
+		command  string
+		expected PermissionAction
+	}{
+		{"/usr/bin/go vet ./...", ActionAllow},
+		{"/usr/bin/rm file.txt", ActionDeny},
+		{"./go test ./...", ActionAllow},
+		{"/bin/bash -c 'echo test'", ActionAllow},
+		{"/usr/bin/sudo ls", ActionDeny},
+	}
+
+	for _, tc := range testCases {
+		result := policy.CheckCommand(tc.command)
+		if result.Action != tc.expected {
+			t.Errorf("Expected action %s for command '%s', got %s", tc.expected, tc.command, result.Action)
+		}
+	}
+}
+
+func TestPermissionPolicy_IsAllowed(t *testing.T) {
+	policy := NewPermissionPolicy()
+
+	testCases := []struct {
+		command  string
+		expected bool
+	}{
+		{"go vet ./...", true},
+		{"go test ./...", true},
+		{"cat file.txt", true},
+		{"rm file.txt", false},
+		{"docker run image", false},
+	}
+
+	for _, tc := range testCases {
+		result := policy.IsAllowed(tc.command)
+		if result != tc.expected {
+			t.Errorf("IsAllowed(%q) = %v, expected %v", tc.command, result, tc.expected)
+		}
+	}
+}
+
+func TestPermissionPolicy_IsDenied(t *testing.T) {
+	policy := NewPermissionPolicy()
+
+	testCases := []struct {
+		command  string
+		expected bool
+	}{
+		{"rm file.txt", true},
+		{"rm -rf /tmp", true},
+		{"kill -9 1234", true},
+		{"go vet ./...", false},
+		{"docker run image", false},
+	}
+
+	for _, tc := range testCases {
+		result := policy.IsDenied(tc.command)
+		if result != tc.expected {
+			t.Errorf("IsDenied(%q) = %v, expected %v", tc.command, result, tc.expected)
+		}
+	}
+}
+
+func TestPermissionPolicy_NeedsReview(t *testing.T) {
+	policy := NewPermissionPolicy()
+
+	testCases := []struct {
+		command  string
+		expected bool
+	}{
+		{"docker run image", true},
+		{"kubectl apply -f file.yaml", true},
+		{"unknown_command", true},
+		{"go vet ./...", false},
+		{"rm file.txt", false},
+	}
+
+	for _, tc := range testCases {
+		result := policy.NeedsReview(tc.command)
+		if result != tc.expected {
+			t.Errorf("NeedsReview(%q) = %v, expected %v", tc.command, result, tc.expected)
+		}
+	}
+}
+
+func TestParseCommand(t *testing.T) {
+	testCases := []struct {
+		input    string
+		expected []string
+	}{
+		{"go vet ./...", []string{"go", "vet", "./..."}},
+		{"echo hello world", []string{"echo", "hello", "world"}},
+		{"", []string{""}},
+		{"  ", []string{"  "}},
+		{"'single quoted'", []string{"'single", "quoted'"}},
+		{`"double quoted"`, []string{`"double`, `quoted"`}},
+		{"echo 'hello world'", []string{"echo", "'hello", "world'"}},
+		{"echo \"hello world\"", []string{"echo", `"hello`, `world"`}},
+		{"cmd -a -b", []string{"cmd", "-a", "-b"}},
+	}
+
+	for _, tc := range testCases {
+		result := parseCommand(tc.input)
+		if len(result) != len(tc.expected) {
+			t.Errorf("parseCommand(%q) = %v, expected %v", tc.input, result, tc.expected)
+			continue
+		}
+		for i := range result {
+			if result[i] != tc.expected[i] {
+				t.Errorf("parseCommand(%q)[%d] = %q, expected %q", tc.input, i, result[i], tc.expected[i])
+			}
+		}
+	}
+}
