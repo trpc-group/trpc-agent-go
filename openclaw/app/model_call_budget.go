@@ -629,7 +629,13 @@ func finalModelCallMessages(
 	messages []model.Message,
 	config modelCallBudgetFinalRequestConfig,
 ) []model.Message {
-	clone := append([]model.Message(nil), messages...)
+	clone := make([]model.Message, 0, len(messages))
+	for _, msg := range messages {
+		if finalModelCallDropSystemMessage(msg) {
+			continue
+		}
+		clone = append(clone, msg)
+	}
 	if !config.DropReasoningContent {
 		return clone
 	}
@@ -638,6 +644,17 @@ func finalModelCallMessages(
 		clone[i].ReasoningSignature = ""
 	}
 	return clone
+}
+
+const finalModelCallSkillOverviewPrefix = "Treat the skill overview " +
+	"below as the skills available in this session."
+
+func finalModelCallDropSystemMessage(msg model.Message) bool {
+	if msg.Role != model.RoleSystem {
+		return false
+	}
+	content := strings.TrimSpace(msg.Content)
+	return strings.HasPrefix(content, finalModelCallSkillOverviewPrefix)
 }
 
 const finalModelCallNotice = "[OpenClaw Budget Notice] This is the " +

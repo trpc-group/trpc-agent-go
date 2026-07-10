@@ -397,6 +397,34 @@ func TestFinalModelCallRequest_DropsReasoningWhenConfigured(t *testing.T) {
 	require.Equal(t, "signature", req.Messages[0].ReasoningSignature)
 }
 
+func TestFinalModelCallRequest_DropsSkillOverviewSystemPrompt(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage(
+				"\n" + finalModelCallSkillOverviewPrefix +
+					"\n\n- skill-a: " + strings.Repeat("x", 200),
+			),
+			model.NewSystemMessage("memory and stable instructions"),
+			model.NewUserMessage("latest question"),
+		},
+	}
+
+	got := finalModelCallRequest(
+		req,
+		modelCallBudgetFinalRequestConfig{MaxInputTokens: 1000},
+	)
+
+	content := budgetTestMessageText(got.Messages)
+	require.NotContains(t, content, "skill-a")
+	require.Contains(t, content, "memory and stable instructions")
+	require.Contains(t, content, "latest question")
+	require.Contains(t, content, "final allowed model call")
+}
+
 func TestFinalModelCallRequest_TrimsContextWhenConfigured(t *testing.T) {
 	t.Parallel()
 
