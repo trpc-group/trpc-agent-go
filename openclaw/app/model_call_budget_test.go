@@ -336,6 +336,57 @@ func TestModelCallBudgetModel_FinalizesOnLastAllowedCall(t *testing.T) {
 	require.False(t, req.Stream)
 }
 
+func TestModelCallBudgetModel_FinalizesWithStoredEvidenceMessages(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	underlying := &capturingBudgetModel{}
+	wrapped := newModelCallBudgetModel(underlying)
+	ctx := withModelCallBudgetValue(
+		context.Background(),
+		newModelCallBudget(2, true, 0),
+	)
+	richReq := &model.Request{
+		Messages: []model.Message{
+			model.NewUserMessage("question"),
+			model.NewAssistantMessage("I should verify the candidate."),
+			model.NewToolMessage(
+				"call_1",
+				"web_fetch",
+				"Michele Fitzgerald was born May 5, 1990.",
+			),
+		},
+		Tools: map[string]tool.Tool{"web_fetch": nil},
+	}
+	_, err := wrapped.GenerateContent(ctx, richReq)
+	require.NoError(t, err)
+
+	minimalReq := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("final system"),
+			model.NewUserMessage("question"),
+		},
+		Tools: map[string]tool.Tool{"web_fetch": nil},
+	}
+	_, err = wrapped.GenerateContent(ctx, minimalReq)
+	require.NoError(t, err)
+
+	got := underlying.lastRequest()
+	require.NotNil(t, got)
+	require.Nil(t, got.Tools)
+	require.Len(t, got.Messages, 4)
+	require.Equal(t, model.RoleTool, got.Messages[2].Role)
+	require.Contains(t, got.Messages[2].Content, "Michele Fitzgerald")
+	require.Contains(
+		t,
+		got.Messages[3].Content,
+		"final allowed model call",
+	)
+	require.Len(t, minimalReq.Messages, 2)
+	require.Len(t, minimalReq.Tools, 1)
+}
+
 func TestModelCallBudgetModel_FinalizationDisablesThinking(
 	t *testing.T,
 ) {

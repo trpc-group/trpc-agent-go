@@ -37,12 +37,13 @@ type modelCallBudgetFinalRequestConfig struct {
 }
 
 type modelCallBudget struct {
-	mu             sync.Mutex
-	limit          int
-	count          int
-	finalizeOnLast bool
-	deadlineWindow time.Duration
-	finalRequest   modelCallBudgetFinalRequestConfig
+	mu                   sync.Mutex
+	limit                int
+	count                int
+	finalizeOnLast       bool
+	deadlineWindow       time.Duration
+	finalRequest         modelCallBudgetFinalRequestConfig
+	lastEvidenceMessages []model.Message
 }
 
 func newModelCallBudget(
@@ -206,6 +207,33 @@ func (b *modelCallBudget) finalConfig() modelCallBudgetFinalRequestConfig {
 	return b.finalRequest
 }
 
+func (b *modelCallBudget) rememberRequest(req *model.Request) {
+	if b == nil || req == nil || !modelCallBudgetHasToolEvidence(req) {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if len(req.Messages) < len(b.lastEvidenceMessages) {
+		return
+	}
+	b.lastEvidenceMessages = append([]model.Message(nil), req.Messages...)
+}
+
+func (b *modelCallBudget) applyFinalRequest(req *model.Request) *model.Request {
+	if b == nil || req == nil || modelCallBudgetHasToolEvidence(req) {
+		return applyFinalModelCallRequest(req, b.finalConfig())
+	}
+	b.mu.Lock()
+	messages := append([]model.Message(nil), b.lastEvidenceMessages...)
+	b.mu.Unlock()
+	if len(messages) == 0 {
+		return applyFinalModelCallRequest(req, b.finalConfig())
+	}
+	clone := *req
+	clone.Messages = messages
+	return applyFinalModelCallRequest(&clone, b.finalConfig())
+}
+
 func modelCallBudgetDeadlineSoon(
 	ctx context.Context,
 	window time.Duration,
@@ -341,12 +369,13 @@ func (m *modelCallBudgetModel) GenerateContent(
 		return nil, err
 	}
 	if finalize {
-		req = applyFinalModelCallRequest(req, budget.finalConfig())
+		req = budget.applyFinalRequest(req)
 		return m.model.GenerateContent(ctx, req)
 	}
 	if budget == nil {
 		return m.model.GenerateContent(ctx, req)
 	}
+	budget.rememberRequest(req)
 	prefinalCtx, cancel, ok := modelCallBudgetPrefinalContext(
 		ctx,
 		budget.deadlineWindow,
@@ -360,7 +389,7 @@ func (m *modelCallBudgetModel) GenerateContent(
 			cancel()
 		}
 		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
-			req = applyFinalModelCallRequest(req, budget.finalConfig())
+			req = budget.applyFinalRequest(req)
 			return m.model.GenerateContent(withoutModelCallBudget(ctx), req)
 		}
 		return nil, err
@@ -392,7 +421,7 @@ func (m *modelCallBudgetModel) GenerateContent(
 		if !timedOut || ctx.Err() != nil {
 			return
 		}
-		req = applyFinalModelCallRequest(req, budget.finalConfig())
+		req = budget.applyFinalRequest(req)
 		finalCh, finalErr := m.model.GenerateContent(
 			withoutModelCallBudget(ctx),
 			req,
@@ -451,12 +480,13 @@ func (m *modelCallBudgetIterModel) GenerateContentIter(
 		return nil, err
 	}
 	if finalize {
-		req = applyFinalModelCallRequest(req, budget.finalConfig())
+		req = budget.applyFinalRequest(req)
 		return m.iter.GenerateContentIter(ctx, req)
 	}
 	if budget == nil {
 		return m.iter.GenerateContentIter(ctx, req)
 	}
+	budget.rememberRequest(req)
 	prefinalCtx, cancel, ok := modelCallBudgetPrefinalContext(
 		ctx,
 		budget.deadlineWindow,
@@ -470,7 +500,7 @@ func (m *modelCallBudgetIterModel) GenerateContentIter(
 			cancel()
 		}
 		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
-			req = applyFinalModelCallRequest(req, budget.finalConfig())
+			req = budget.applyFinalRequest(req)
 			return m.iter.GenerateContentIter(withoutModelCallBudget(ctx), req)
 		}
 		return nil, err
@@ -496,7 +526,7 @@ func (m *modelCallBudgetIterModel) GenerateContentIter(
 		if !timedOut || ctx.Err() != nil {
 			return
 		}
-		req = applyFinalModelCallRequest(req, budget.finalConfig())
+		req = budget.applyFinalRequest(req)
 		finalSeq, finalErr := m.iter.GenerateContentIter(
 			withoutModelCallBudget(ctx),
 			req,
@@ -1250,6 +1280,20 @@ func applyFinalModelCallRequest(
 	}
 	*req = *finalReq
 	return req
+}
+
+func modelCallBudgetHasToolEvidence(req *model.Request) bool {
+	if req == nil {
+		return false
+	}
+	for _, msg := range req.Messages {
+		if msg.Role == model.RoleTool ||
+			strings.TrimSpace(msg.ToolID) != "" ||
+			len(msg.ToolCalls) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func finalModelCallExtraFields(extra map[string]any) map[string]any {
