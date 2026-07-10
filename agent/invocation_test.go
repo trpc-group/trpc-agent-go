@@ -562,15 +562,14 @@ func TestInvocation_AddNoticeChannel_Panic(t *testing.T) {
 	inv := &Invocation{}
 
 	ch := inv.AddNoticeChannel(context.Background(), "test-key")
-	require.Nil(t, ch)
+	require.NotNil(t, ch)
 }
 
 func TestInvocation_NotifyCompletion_Panic(t *testing.T) {
 	inv := &Invocation{}
 
 	err := inv.NotifyCompletion(context.Background(), "test-key")
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "noticeMu is uninitialized")
+	require.NoError(t, err)
 }
 
 func TestInvocation_AddNoticeChannelAndWait_Panic(t *testing.T) {
@@ -578,6 +577,7 @@ func TestInvocation_AddNoticeChannelAndWait_Panic(t *testing.T) {
 
 	err := inv.AddNoticeChannelAndWait(context.Background(), "test-key", 2*time.Second)
 	require.Error(t, err)
+	require.Contains(t, err.Error(), "Timeout")
 }
 
 func TestInvocation_AddNoticeChannelAndWait_NoTimeoutUsesContext(t *testing.T) {
