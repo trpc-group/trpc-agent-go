@@ -1751,10 +1751,8 @@ func cloneStateReflectValue(
 	value reflect.Value,
 	visited map[reflectVisit]reflect.Value,
 ) (reflect.Value, bool) {
-	if value.IsValid() && value.CanInterface() {
-		if cloned, ok := cloneKnownStateValue(value.Interface()); ok {
-			return reflect.ValueOf(cloned), true
-		}
+	if cloned, ok := cloneKnownStateReflectValue(value); ok {
+		return cloned, true
 	}
 	switch value.Kind() {
 	case reflect.Interface:
@@ -1777,31 +1775,49 @@ func cloneStateReflectValue(
 	}
 }
 
-func cloneKnownStateValue(value any) (any, bool) {
-	switch v := value.(type) {
-	case *bytes.Buffer:
-		if v == nil {
-			return v, true
+var (
+	bytesBufferStateType    = reflect.TypeOf(bytes.Buffer{})
+	bytesBufferPtrStateType = reflect.TypeOf((*bytes.Buffer)(nil))
+	stringBuilderStateType  = reflect.TypeOf((*strings.Builder)(nil))
+	bigIntStateType         = reflect.TypeOf(big.Int{})
+	bigIntPtrStateType      = reflect.TypeOf((*big.Int)(nil))
+)
+
+func cloneKnownStateReflectValue(value reflect.Value) (reflect.Value, bool) {
+	if !value.IsValid() || !value.CanInterface() {
+		return reflect.Value{}, false
+	}
+	// Match by type before calling Interface. Interface on an arbitrary struct
+	// copies its fields, which is unsafe for opaque state carrying locks.
+	switch value.Type() {
+	case bytesBufferPtrStateType:
+		if value.IsNil() {
+			return value, true
 		}
-		return bytes.NewBuffer(cloneBytes(v.Bytes())), true
-	case bytes.Buffer:
-		return *bytes.NewBuffer(cloneBytes(v.Bytes())), true
-	case *strings.Builder:
-		if v == nil {
-			return v, true
+		v := value.Interface().(*bytes.Buffer)
+		return reflect.ValueOf(bytes.NewBuffer(cloneBytes(v.Bytes()))), true
+	case bytesBufferStateType:
+		v := value.Interface().(bytes.Buffer)
+		return reflect.ValueOf(*bytes.NewBuffer(cloneBytes(v.Bytes()))), true
+	case stringBuilderStateType:
+		if value.IsNil() {
+			return value, true
 		}
+		v := value.Interface().(*strings.Builder)
 		var cloned strings.Builder
 		_, _ = cloned.WriteString(v.String())
-		return &cloned, true
-	case *big.Int:
-		if v == nil {
-			return v, true
+		return reflect.ValueOf(&cloned), true
+	case bigIntPtrStateType:
+		if value.IsNil() {
+			return value, true
 		}
-		return new(big.Int).Set(v), true
-	case big.Int:
-		return *new(big.Int).Set(&v), true
+		v := value.Interface().(*big.Int)
+		return reflect.ValueOf(new(big.Int).Set(v)), true
+	case bigIntStateType:
+		v := value.Interface().(big.Int)
+		return reflect.ValueOf(*new(big.Int).Set(&v)), true
 	default:
-		return nil, false
+		return reflect.Value{}, false
 	}
 }
 
