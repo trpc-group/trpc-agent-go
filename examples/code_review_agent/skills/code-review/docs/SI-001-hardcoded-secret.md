@@ -3,7 +3,7 @@
 | Field | Value |
 | --- | --- |
 | **RuleID** | SI-001 |
-| **Severity** | High |
+| **Severity** | Critical |
 | **Category** | Security |
 | **Confidence** | 0.85 |
 
@@ -19,7 +19,7 @@ credential leakage and must never appear in source files.
 const apiKey = "sk-1234567890abcdef1234567890abcdef"
 
 func newClient() *http.Client {
-    cfg := &Config{Token: "ghp_abcdef0123456789abcdef0123456789abcd"}
+    cfg := &Config{Token: "<github-token>"}
     return cfg.Client()
 }
 ```

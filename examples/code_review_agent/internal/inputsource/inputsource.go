@@ -12,7 +12,7 @@
 // Package inputsource loads review inputs from one of four sources: a
 // directory of .diff fixtures, a single .diff file, a text file listing
 // source files (synthesized into a synthetic "new file" diff), or a live
-// git repository (committed + working-tree changes vs master).
+// git repository (committed + working-tree changes vs the default branch).
 //
 // Directory traversal is symlink-safe: WalkDir combined with Lstat skips
 // symlinks, devices, sockets and named pipes so a hostile fixture tree
@@ -45,7 +45,7 @@ const (
 	// to be synthesized into a synthetic "new file" diff.
 	SourceFileList Source = "file-list"
 	// SourceRepoPath treats the path as a git repository whose committed
-	// and working-tree changes vs master should be reviewed.
+	// and working-tree changes vs the default branch should be reviewed.
 	SourceRepoPath Source = "repo-path"
 )
 
@@ -183,11 +183,16 @@ func syntheticDiffForFile(name string) (string, error) {
 	return b.String(), nil
 }
 
-// loadRepoPath extracts the committed-vs-master diff and the working-tree
-// diff from the repository, concatenates them and parses the result. An
-// empty repo (unborn HEAD, no changes) yields an empty diff with no files.
+// loadRepoPath extracts the committed-vs-default-branch diff and the
+// working-tree diff from the repository, concatenates them and parses the
+// result. An empty repo (unborn HEAD, no changes) yields an empty diff
+// with no files.
 func loadRepoPath(ctx context.Context, repo string) (*Input, error) {
-	committed, err := gitCommittedDiff(ctx, repo)
+	baseBranch, err := gitDefaultBranch(ctx, repo)
+	if err != nil {
+		return nil, err
+	}
+	committed, err := gitCommittedDiff(ctx, repo, baseBranch)
 	if err != nil {
 		return nil, err
 	}
@@ -207,27 +212,56 @@ func loadRepoPath(ctx context.Context, repo string) (*Input, error) {
 	return &Input{Source: SourceRepoPath, DiffText: diffText, Files: parsed.Files, RepoPath: repo}, nil
 }
 
-// gitCommittedDiff returns the diff of HEAD against its merge-base with
-// master. If the repo has an unborn HEAD or no master branch, it falls
-// back to "git diff --root"; if that also fails the repo is treated as
-// empty and an empty string is returned.
-func gitCommittedDiff(ctx context.Context, repo string) (string, error) {
-	base, err := gitOutput(ctx, repo, "merge-base", "HEAD", "master")
+// gitDefaultBranch resolves the repository's default branch name via
+// `git symbolic-ref refs/remotes/origin/HEAD`. This returns a remote-tracking
+// ref name (e.g. "origin/main") that merge-base and diff can resolve directly,
+// even when no local branch exists (common in CI checkouts). For repos without
+// remotes it falls back to verifying "main"/"master" as local or remote refs.
+// For repos with an unborn HEAD (no commits), it returns "" so the caller
+// treats the repo as having no committed diff.
+func gitDefaultBranch(ctx context.Context, repo string) (string, error) {
+	out, err := gitOutput(ctx, repo, "symbolic-ref", "--short", "refs/remotes/origin/HEAD")
 	if err == nil {
-		base = strings.TrimSpace(base)
-		if base != "" {
-			diff, derr := gitOutput(ctx, repo, "diff", base+"...HEAD")
-			if derr != nil {
-				return "", fmt.Errorf("inputsource: git diff committed: %w", derr)
-			}
-			return diff, nil
+		name := strings.TrimSpace(out)
+		// symbolic-ref --short returns e.g. "origin/main" — keep the prefix
+		// so merge-base/diff resolve against the remote-tracking ref, which
+		// exists even when the local branch is absent.
+		if name != "" {
+			return name, nil
 		}
 	}
-	// Unborn HEAD or no master branch: try --root, else treat as empty.
-	if diff, derr := gitOutput(ctx, repo, "diff", "--root"); derr == nil {
-		return diff, nil
+	// No remote HEAD: try common default branch names (local + remote-tracking).
+	for _, candidate := range []string{"main", "master", "origin/main", "origin/master"} {
+		if _, err := gitOutput(ctx, repo, "rev-parse", "--verify", candidate); err == nil {
+			return candidate, nil
+		}
 	}
+	// Unborn HEAD or no branches: return empty so gitCommittedDiff returns "".
 	return "", nil
+}
+
+// gitCommittedDiff returns the diff of HEAD against its merge-base with
+// the given base branch. If baseBranch is empty (unborn HEAD, no commits)
+// or the merge-base fails (unrelated histories), it returns an empty string
+// so the caller only sees the working-tree diff — never a duplicate of it.
+func gitCommittedDiff(ctx context.Context, repo, baseBranch string) (string, error) {
+	if baseBranch == "" {
+		return "", nil
+	}
+	base, err := gitOutput(ctx, repo, "merge-base", "HEAD", baseBranch)
+	if err != nil {
+		// No common ancestor (unrelated histories): no committed diff.
+		return "", nil
+	}
+	base = strings.TrimSpace(base)
+	if base == "" {
+		return "", nil
+	}
+	diff, err := gitOutput(ctx, repo, "diff", base+"...HEAD")
+	if err != nil {
+		return "", fmt.Errorf("inputsource: git diff committed: %w", err)
+	}
+	return diff, nil
 }
 
 // gitWorkingTreeDiff returns the unstaged working-tree diff.

@@ -44,19 +44,27 @@ const shellMetacharacters = "|;&><\\`$\n\r"
 // defaultDeniedCommands are always blocked, even when a caller of
 // NewPolicy/LoadPolicy forgets to list them. They are dangerous in a
 // sandboxed code-review context (destructive ops, network egress,
-// privilege escalation, shell interpreters, system power control).
+// privilege escalation, system power control).
+//
+// Note: "sh" and "bash" are NOT in the deny-list because the skill's
+// POSIX shell scripts are invoked via "sh <script>". Shell injection is
+// prevented by the shellMetacharacters check (pipes, sequencing,
+// substitution, etc.) and by the allow-list, which only permits "sh"
+// when the pipeline explicitly generates the command.
 var defaultDeniedCommands = []string{
 	"rm", "rmdir", "dd", "mkfs", "fdisk", "curl", "wget", "nc",
-	"bash", "sh", "su", "sudo", "chmod", "chown", "mount", "umount",
+	"su", "sudo", "chmod", "chown", "mount", "umount",
 	"kill", "pkill", "reboot", "shutdown", "poweroff",
 }
 
 // defaultAllowedCommands are the known-safe review tools that the
 // sandbox may run without prompting. They are read-only or low-risk
-// for a code-review workload.
+// for a code-review workload. "sh" is allowed so the skill's POSIX
+// shell scripts can be executed.
 var defaultAllowedCommands = []string{
 	"go", "staticcheck", "git", "ls", "cat", "grep", "find", "wc",
 	"diff", "head", "tail", "mkdir", "cp", "mv", "echo", "printf",
+	"sh",
 }
 
 // Policy is a fail-closed PermissionPolicy for code-review sandbox
@@ -183,6 +191,12 @@ func (p *Policy) evaluate(cmd string) tool.PermissionDecision {
 		return tool.DenyPermission("fail-closed: unparseable")
 	}
 	base := filepath.Base(tokens[0])
+	// Deny shell flags (-c/-i/-s) for any shell, even allow-listed ones,
+	// because they enable arbitrary command execution that bypasses the
+	// deny-list (e.g. "sh -c 'rm -rf /'").
+	if isShellWithFlags(base, tokens[1:]) {
+		return tool.DenyPermission("fail-closed: shell flag denied (use sh <script> only)")
+	}
 	if _, ok := p.deniedCommands[base]; ok {
 		return tool.DenyPermission("deny-listed: " + base)
 	}
@@ -190,6 +204,28 @@ func (p *Policy) evaluate(cmd string) tool.PermissionDecision {
 		return tool.AllowPermission()
 	}
 	return tool.AskPermission("needs review: " + base)
+}
+
+// shellCommands is the set of shells that accept -c/-i/-s flags for
+// arbitrary command execution. When these flags are present the shell can
+// bypass the deny-list entirely (e.g. "sh -c 'rm -rf /'"), so the policy
+// only allows shells when invoked as "sh <script-path>" with no flags.
+var shellCommands = map[string]struct{}{
+	"sh": {}, "bash": {}, "zsh": {}, "dash": {},
+}
+
+// isShellWithFlags reports whether base is a shell and any argument starts
+// with "-", which would enable -c/-i/-s arbitrary command execution.
+func isShellWithFlags(base string, args []string) bool {
+	if _, isShell := shellCommands[base]; !isShell {
+		return false
+	}
+	for _, a := range args {
+		if strings.HasPrefix(a, "-") {
+			return true
+		}
+	}
+	return false
 }
 
 // record increments the counter for the given action.

@@ -27,7 +27,13 @@ if [ ! -r "$DIFF_FILE" ]; then
     exit 2
 fi
 
-mkdir -p out
-cp "$DIFF_FILE" out/input.diff
+OUT="${WORKSPACE_DIR}/out"
+mkdir -p "$OUT"
+# Prefix with ./ if the path starts with a dash so cp does not interpret
+# it as an option (POSIX sh does not support -- before operands).
+case "$DIFF_FILE" in
+    -*) cp "./$DIFF_FILE" "$OUT/input.diff" ;;
+    *)  cp "$DIFF_FILE" "$OUT/input.diff" ;;
+esac
 
 exit 0

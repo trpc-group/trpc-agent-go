@@ -9,10 +9,15 @@
 
 ## Description
 
-Flags new non-test Go source files (e.g. `foo.go`) added in a diff that have
-no corresponding `_test.go` file (e.g. `foo_test.go`) in the same package.
-Untested code is the most common source of regressions and should be paired
-with at least a basic table-driven test.
+Flags new non-test Go source files (e.g. `foo.go`) added in a diff. The
+evaluator reports a finding for every newly added non-test `.go` file
+without checking whether a companion `_test.go` exists. This serves as a
+reminder to pair new source files with tests.
+
+> **Scope note**: The evaluator does **not** check for the existence of a
+> companion `_test.go` file, nor does it implement exclusions for `main.go`,
+> `doc.go`, generated code, or glue packages. All non-test `.go` files are
+> flagged uniformly.
 
 ## Evidence Example
 
@@ -56,9 +61,9 @@ func TestValidateEmail(t *testing.T) {
 
 ## False Positive Notes
 
-- `main.go` entry points and `doc.go` package documentation files rarely need
-  dedicated tests; the rule excludes them by filename convention.
-- Generated code (e.g. `*.pb.go`, files with `// Code generated` headers) is
-  skipped because tests live alongside the generator, not the output.
+- The evaluator flags **all** new non-test `.go` files, including `main.go`,
+  `doc.go`, and generated code (`*.pb.go`). Suppress with
+  `// code-review:ignore TM-001` if the file does not require a companion
+  test.
 - Glue packages that only wire dependencies may legitimately have integration
   tests elsewhere; suppress with a comment if coverage exists.

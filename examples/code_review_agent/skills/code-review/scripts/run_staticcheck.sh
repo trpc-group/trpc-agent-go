@@ -14,16 +14,18 @@ set -e
 # exit; those findings are treated as normal review output (exit 0), and only
 # a genuine tool failure (any exit code other than 0 or 1) is propagated.
 
-mkdir -p out
+OUT="${WORKSPACE_DIR}/out"
+mkdir -p "$OUT"
+cd "${WORKSPACE_DIR}/repo"
 PKG="${1:-./...}"
 
 if ! command -v staticcheck > /dev/null 2>&1; then
-    echo "staticcheck not installed, skipping" > out/staticcheck.txt
+    echo "staticcheck not installed, skipping" > "$OUT/staticcheck.txt"
     exit 0
 fi
 
 set +e
-staticcheck "$PKG" > out/staticcheck.txt 2>&1
+staticcheck "$PKG" > "$OUT/staticcheck.txt" 2>&1
 status=$?
 set -e
 
@@ -36,7 +38,7 @@ case "$status" in
         ;;
     *)
         echo "staticcheck failed with exit code $status" >&2
-        cat out/staticcheck.txt >&2
+        cat "$OUT/staticcheck.txt" >&2
         exit "$status"
         ;;
 esac

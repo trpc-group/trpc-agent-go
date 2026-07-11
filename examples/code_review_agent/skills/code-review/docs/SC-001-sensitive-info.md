@@ -33,7 +33,7 @@ Redact sensitive fields before logging, or log only non-identifying metadata:
 
 ```go
 func login(user string, password string) {
-    log.Printf("login user=%s credential=***REDACTED***", user)
+    log.Printf("login request_id=%s credential=***REDACTED***", requestID)
     // ...
 }
 ```

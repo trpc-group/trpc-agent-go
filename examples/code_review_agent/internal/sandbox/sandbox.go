@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -35,6 +36,7 @@ import (
 	containerexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/container"
 	e2bexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/e2b"
 	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
+	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/redact"
 )
 
 // Backend selects the execution backend used by the Executor.
@@ -71,8 +73,12 @@ const (
 
 	// repoStageDir is the workspace-relative location the repository is
 	// staged into. Keeping it in a subdirectory avoids colliding with the
-	// workspace layout directories (skills/, work/, out/, runs/).
+	// skill scripts and output directories.
 	repoStageDir = "repo"
+
+	// SkillStageDir is the workspace-relative location skill scripts are
+	// staged into so they are visible inside the sandbox filesystem.
+	SkillStageDir = "skills"
 
 	// workspaceExecID labels workspace spans/metadata for this agent.
 	workspaceExecID = "code-review-agent"
@@ -216,6 +222,17 @@ func (e *Executor) CreateWorkspace(ctx context.Context) (codeexecutor.Workspace,
 	return ws, nil
 }
 
+// StageDirectory stages a host directory into the workspace at the given
+// workspace-relative path. It is used to stage skill scripts alongside the
+// read-only repo so the sandbox can execute skill-defined commands.
+func (e *Executor) StageDirectory(ctx context.Context, ws codeexecutor.Workspace, src, to string, readOnly bool) error {
+	fs := e.eng.FS()
+	if fs == nil {
+		return errors.New("sandbox: engine has no filesystem interface")
+	}
+	return fs.StageDirectory(ctx, ws, src, to, codeexecutor.StageOptions{ReadOnly: readOnly})
+}
+
 // Run executes a command via the framework Engine with a cleaned
 // environment, bounded output, and resource limits. It never panics on
 // command failure; failures are reflected in RunResult.Status.
@@ -254,7 +271,7 @@ func (e *Executor) Run(
 		// Infrastructure error (not a normal non-zero exit). Classify
 		// without panicking so the pipeline still records a result.
 		status := StatusFailed
-		if ctx.Err() != nil {
+		if res.TimedOut {
 			status = StatusTimeout
 		}
 		return RunResult{
@@ -264,11 +281,18 @@ func (e *Executor) Run(
 		}, nil
 	}
 
-	stdout, outTrunc := limitedRead(strings.NewReader(res.Stdout), e.cfg.MaxStdoutBytes)
-	stderr, errTrunc := limitedRead(strings.NewReader(res.Stderr), e.cfg.MaxStderrBytes)
+	// Redact sensitive patterns from captured output before truncation so
+	// secrets split across the byte boundary are caught. This is
+	// defense-in-depth: the permission layer should block exfiltration
+	// commands, but a tool may print secrets that exist in the staged repo.
+	stdoutBytes, _ := redact.TextBytes([]byte(res.Stdout))
+	stderrBytes, _ := redact.TextBytes([]byte(res.Stderr))
+
+	stdout, outTrunc := limitedRead(strings.NewReader(string(stdoutBytes)), e.cfg.MaxStdoutBytes)
+	stderr, errTrunc := limitedRead(strings.NewReader(string(stderrBytes)), e.cfg.MaxStderrBytes)
 
 	status := StatusSuccess
-	if ctx.Err() != nil || res.TimedOut {
+	if res.TimedOut {
 		status = StatusTimeout
 	} else if res.ExitCode != 0 {
 		status = StatusFailed
@@ -299,13 +323,22 @@ func (e *Executor) Close(ctx context.Context, ws codeexecutor.Workspace) error {
 
 // buildSandboxEnv constructs the minimal, allowlisted environment for a
 // spawned process. Only PATH, GOPATH, GOCACHE, GOPROXY and WORKSPACE_DIR are
-// injected; os.Environ is never called. Caller-supplied extra values are
-// merged on top.
+// injected; os.Environ is never called. When host GOPATH or GOCACHE is empty,
+// they default to workspace-local cache paths so Go commands work in a clean
+// sandbox. Caller-supplied extra values are merged on top.
 func buildSandboxEnv(ws codeexecutor.Workspace, extra map[string]string) map[string]string {
+	gopath := os.Getenv("GOPATH")
+	if gopath == "" {
+		gopath = filepath.Join(ws.Path, ".gopath")
+	}
+	gocache := os.Getenv("GOCACHE")
+	if gocache == "" {
+		gocache = filepath.Join(ws.Path, ".gocache")
+	}
 	env := map[string]string{
 		"PATH":                          os.Getenv("PATH"),
-		"GOPATH":                        os.Getenv("GOPATH"),
-		"GOCACHE":                       os.Getenv("GOCACHE"),
+		"GOPATH":                        gopath,
+		"GOCACHE":                       gocache,
 		"GOPROXY":                       os.Getenv("GOPROXY"),
 		codeexecutor.WorkspaceEnvDirKey: ws.Path,
 	}

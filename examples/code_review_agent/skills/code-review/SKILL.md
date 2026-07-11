@@ -58,7 +58,7 @@ All artifacts are written under the skill workspace's `out/` directory:
 
 - `out/findings.json` — structured findings aggregated by the orchestrator.
 - `out/vet.txt` — raw `go vet` output.
-- `out/test.txt` — raw `go test` output.
+- `out/go_unit.txt` — raw `go test` output.
 - `out/staticcheck.txt` — raw `staticcheck` output.
 - `out/input.diff` — copy of the parsed diff input.
 

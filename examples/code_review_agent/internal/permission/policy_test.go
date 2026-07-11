@@ -80,6 +80,30 @@ func TestCheck_AllowStaticcheck(t *testing.T) {
 	}
 }
 
+// TestCheck_DenyShellFlag verifies that sh -c (and similar flags) are denied
+// even though "sh" is in the allow-list, because -c enables arbitrary command
+// execution that bypasses the deny-list.
+func TestCheck_DenyShellFlag(t *testing.T) {
+	p := NewPolicy(nil)
+	cases := []string{
+		`sh -c 'rm -rf /'`,
+		`sh -i`,
+		`sh -s`,
+		`bash -c 'echo pwned'`,
+	}
+	for _, cmd := range cases {
+		dec, _ := p.Check(cmd)
+		if dec.Action != tool.PermissionActionDeny {
+			t.Fatalf("%q: want deny (shell flag), got %q", cmd, dec.Action)
+		}
+	}
+	// sh <script-path> (no flags) is still allowed.
+	dec, reason := p.Check("sh scripts/run_go_vet.sh")
+	if dec.Action != tool.PermissionActionAllow {
+		t.Fatalf("sh <script>: want allow, got %q (%s)", dec.Action, reason)
+	}
+}
+
 func TestCheck_DenyEmpty(t *testing.T) {
 	p := NewPolicy(nil)
 	dec, reason := p.Check("")

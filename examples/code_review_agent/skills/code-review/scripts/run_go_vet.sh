@@ -12,11 +12,13 @@ set -e
 # when go vet reports findings (exit code 1) and only propagates a non-zero
 # exit when go vet itself fails to run (any exit code other than 0 or 1).
 
-mkdir -p out
+OUT="${WORKSPACE_DIR}/out"
+mkdir -p "$OUT"
+cd "${WORKSPACE_DIR}/repo"
 PKG="${1:-./...}"
 
 set +e
-go vet "$PKG" > out/vet.txt 2>&1
+go vet "$PKG" > "$OUT/vet.txt" 2>&1
 status=$?
 set -e
 
@@ -29,7 +31,7 @@ case "$status" in
         ;;
     *)
         echo "go vet failed with exit code $status" >&2
-        cat out/vet.txt >&2
+        cat "$OUT/vet.txt" >&2
         exit "$status"
         ;;
 esac

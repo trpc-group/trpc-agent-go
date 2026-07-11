@@ -15,16 +15,18 @@ set -e
 # Note: the filename avoids the "test" substring to sidestep the repo-wide
 # .gitignore `*test*.sh` rule; the script itself still invokes `go test`.
 
-mkdir -p out
+OUT="${WORKSPACE_DIR}/out"
+mkdir -p "$OUT"
+cd "${WORKSPACE_DIR}/repo"
 PKG="${1:-./...}"
 
 set +e
-go test -count=1 "$PKG" > out/go_unit.txt 2>&1
+go test -count=1 "$PKG" > "$OUT/go_unit.txt" 2>&1
 status=$?
 set -e
 
 if [ "$status" -ne 0 ]; then
-    echo "go test exited with code $status (see out/go_unit.txt for details)" >&2
+    echo "go test exited with code $status (see $OUT/go_unit.txt for details)" >&2
 fi
 
 exit "$status"

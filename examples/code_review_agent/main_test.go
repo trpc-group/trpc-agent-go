@@ -16,6 +16,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -145,10 +146,13 @@ func readReportJSON(t *testing.T, outDir string) string {
 	return string(jsonBytes)
 }
 
-// checkConclusion verifies the expected conclusion string appears in the report.
+// checkConclusion verifies the expected conclusion string appears as the
+// "Conclusion" JSON value in the report. Anchoring on the key avoids false
+// matches from other fields like "status":"failed".
 func checkConclusion(t *testing.T, tt fixtureCase, jsonStr string) {
 	t.Helper()
-	if !strings.Contains(jsonStr, tt.expectConclusion) {
+	want := fmt.Sprintf(`"Conclusion": "%s"`, tt.expectConclusion)
+	if !strings.Contains(jsonStr, want) {
 		t.Errorf("conclusion %q not in report; snippet: %s",
 			tt.expectConclusion, truncate(jsonStr, 500))
 	}

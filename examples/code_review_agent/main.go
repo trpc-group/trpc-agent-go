@@ -45,6 +45,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/sandbox"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/store"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/telemetry"
+	"trpc.group/trpc-go/trpc-agent-go/skill"
 )
 
 // cliFlags holds the resolved command-line flags for the code review agent.
@@ -184,8 +185,29 @@ func runPipeline(ctx context.Context, opts *pipelineOpts) (retErr error) {
 	log.Printf("rules: %d confirmed finding(s), %d warning(s), %d need human review",
 		len(rev.Findings), len(rev.Warnings), len(rev.NeedsHumanReview))
 
+	// Load the code-review Skill so that sandbox commands are sourced from
+	// the skill's scripts rather than hardcoded in the pipeline. The skill
+	// repository scans the skills/ directory; Get returns the SKILL.md body
+	// and Docs (rule metadata). The scripts themselves are executed inside
+	// the sandbox via the skill directory path.
+	skillsRoot := resolveSkillsDir()
+	skillRepo, err := skill.NewFSRepository(skillsRoot)
+	if err != nil {
+		log.Printf("warning: failed to load skill repository from %q: %v (falling back to built-in commands)", skillsRoot, err)
+	}
+	var skillDir string
+	if skillRepo != nil {
+		sk, gerr := skillRepo.Get("code-review")
+		if gerr != nil || sk == nil {
+			log.Printf("warning: code-review skill not found: %v (falling back to built-in commands)", gerr)
+		} else {
+			log.Printf("loaded skill %q: %s", sk.Summary.Name, sk.Summary.Description)
+			skillDir, _ = skillRepo.Path("code-review")
+		}
+	}
+
 	policy := permission.NewPolicy(nil)
-	runs, perms, err := runSandboxChecks(ctx, opts, taskID, policy, metrics)
+	runs, perms, err := runSandboxChecks(ctx, opts, taskID, policy, metrics, skillDir)
 	if err != nil {
 		return err
 	}
@@ -231,14 +253,36 @@ func runRules(taskID string, input *inputsource.Input, metrics *telemetry.Metric
 	return review.Build(taskID, ruleFindings)
 }
 
+// resolveSkillsDir resolves the skills/ directory path. It checks the
+// SKILLS_ROOT env var first, then falls back to ./skills relative to the
+// current working directory. Returns "" if not found (the pipeline falls
+// back to built-in commands).
+func resolveSkillsDir() string {
+	if root := os.Getenv("SKILLS_ROOT"); root != "" {
+		if info, err := os.Stat(root); err == nil && info.IsDir() {
+			return root
+		}
+	}
+	if info, err := os.Stat("skills"); err == nil && info.IsDir() {
+		return "skills"
+	}
+	return ""
+}
+
 // runSandboxChecks initialises the sandbox, plans the static-check commands,
 // applies the permission policy to each, and executes the allowed ones. In
 // dry-run mode it keeps `go vet` and `staticcheck` but skips `go test`.
 //
+// When skillDir is non-empty, the skill's shell scripts (run_go_vet.sh,
+// run_staticcheck.sh, run_go_unit.sh) are staged read-only into the workspace
+// at sandbox.SkillStageDir and executed instead of bare `go vet`/`staticcheck`/
+// `go test`, so the example exercises the Skill + sandbox integration requested
+// by the issue.
+//
 // The workspace lifecycle (create + close) is owned by this function so the
 // workspace never outlives the sandbox checks. Sandbox construction failures
 // are fail-closed in normal mode and best-effort skipped in dry-run mode.
-func runSandboxChecks(ctx context.Context, opts *pipelineOpts, taskID string, policy *permission.Policy, metrics *telemetry.Metrics) ([]sandboxRunRecord, []store.PermissionDecision, error) {
+func runSandboxChecks(ctx context.Context, opts *pipelineOpts, taskID string, policy *permission.Policy, metrics *telemetry.Metrics, skillDir string) ([]sandboxRunRecord, []store.PermissionDecision, error) {
 	sbCfg := sandbox.Config{
 		Backend:        backendFromFlag(opts.executor),
 		UnsafeLocal:    opts.unsafeLocal,
@@ -258,7 +302,19 @@ func runSandboxChecks(ctx context.Context, opts *pipelineOpts, taskID string, po
 	}
 	defer sb.Close(ctx, ws)
 
-	return executeSandboxCommands(ctx, sb, ws, opts, taskID, policy, metrics)
+	// Stage the skill scripts into the workspace so they are visible inside
+	// the sandbox filesystem (container/e2b backends do not share the host
+	// filesystem). Staging is read-only to prevent sandbox commands from
+	// modifying the skill definition.
+	useSkillScripts := false
+	if skillDir != "" {
+		if serr := sb.StageDirectory(ctx, ws, skillDir, sandbox.SkillStageDir, true); serr != nil {
+			return handleSandboxInitFailure(opts, fmt.Errorf("stage skill dir: %w", serr))
+		}
+		useSkillScripts = true
+	}
+
+	return executeSandboxCommands(ctx, sb, ws, opts, taskID, policy, metrics, useSkillScripts)
 }
 
 // handleSandboxInitFailure applies the dry-run vs fail-closed policy when the
@@ -280,6 +336,8 @@ func handleSandboxInitFailure(opts *pipelineOpts, err error) ([]sandboxRunRecord
 // executeSandboxCommands runs each planned command through the permission
 // policy and sandbox executor, recording permission decisions, run results,
 // and telemetry. Blocked commands are skipped; allowed commands are executed.
+// When useSkillScripts is true, commands are sourced from the skill's scripts
+// which have been staged into the workspace.
 func executeSandboxCommands(
 	ctx context.Context,
 	sb *sandbox.Executor,
@@ -288,12 +346,13 @@ func executeSandboxCommands(
 	taskID string,
 	policy *permission.Policy,
 	metrics *telemetry.Metrics,
+	useSkillScripts bool,
 ) ([]sandboxRunRecord, []store.PermissionDecision, error) {
 	var records []sandboxRunRecord
 	var perms []store.PermissionDecision
 	var totalDuration time.Duration
 
-	for _, spec := range planSandboxCommands(opts) {
+	for _, spec := range planSandboxCommands(opts, useSkillScripts) {
 		cmd := spec.Cmd + " " + strings.Join(spec.Args, " ")
 		dec, reason := policy.CheckNonInteractive(cmd)
 		perms = append(perms, store.PermissionDecision{
@@ -327,22 +386,39 @@ func executeSandboxCommands(
 	return records, perms, nil
 }
 
-// planSandboxCommands returns the sandbox commands to run. `go vet` and
-// `staticcheck` always run; `go test` is skipped in dry-run mode to keep the
-// run under two minutes. When a repository is staged (RepoPath set) commands
-// run inside the staged "repo" directory; otherwise they run at the workspace
-// root.
-func planSandboxCommands(opts *pipelineOpts) []sandbox.RunSpec {
-	cwd := ""
+// planSandboxCommands returns the sandbox commands to run. When useSkillScripts
+// is true, the skill's POSIX shell scripts (already staged into the workspace
+// at sandbox.SkillStageDir) are used instead of bare `go vet`/`staticcheck`/
+// `go test`, so the example exercises the Skill + sandbox integration.
+// `go vet` and `staticcheck` scripts always run; the `go test` script is
+// skipped in dry-run mode to keep the run under two minutes.
+//
+// Skill scripts run with Cwd="" (workspace root) because the repo is staged
+// read-only — the scripts use $WORKSPACE_DIR/repo to cd into the repo and
+// $WORKSPACE_DIR/out for writable output. Non-skill commands use Cwd="repo"
+// directly.
+func planSandboxCommands(opts *pipelineOpts, useSkillScripts bool) []sandbox.RunSpec {
+	repoCwd := ""
 	if opts.repoPath != "" {
-		cwd = "repo"
+		repoCwd = "repo"
+	}
+	if useSkillScripts {
+		scriptRel := sandbox.SkillStageDir + "/scripts"
+		specs := []sandbox.RunSpec{
+			{Cmd: "sh", Args: []string{scriptRel + "/run_go_vet.sh"}, Cwd: ""},
+			{Cmd: "sh", Args: []string{scriptRel + "/run_staticcheck.sh"}, Cwd: ""},
+		}
+		if !opts.dryRun {
+			specs = append(specs, sandbox.RunSpec{Cmd: "sh", Args: []string{scriptRel + "/run_go_unit.sh"}, Cwd: ""})
+		}
+		return specs
 	}
 	specs := []sandbox.RunSpec{
-		{Cmd: "go", Args: []string{"vet", "./..."}, Cwd: cwd},
-		{Cmd: "staticcheck", Args: []string{"./..."}, Cwd: cwd},
+		{Cmd: "go", Args: []string{"vet", "./..."}, Cwd: repoCwd},
+		{Cmd: "staticcheck", Args: []string{"./..."}, Cwd: repoCwd},
 	}
 	if !opts.dryRun {
-		specs = append(specs, sandbox.RunSpec{Cmd: "go", Args: []string{"test", "-count=1", "./..."}, Cwd: cwd})
+		specs = append(specs, sandbox.RunSpec{Cmd: "go", Args: []string{"test", "-count=1", "./..."}, Cwd: repoCwd})
 	}
 	return specs
 }

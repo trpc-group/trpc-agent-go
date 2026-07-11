@@ -113,8 +113,11 @@ func TestSkillLoad(t *testing.T) {
 	for _, m := range ruleIDRe.FindAllString(string(data), -1) {
 		seen[m] = true
 	}
-	if len(seen) < 7 {
-		t.Fatalf("docs/rules.md lists %d unique rule IDs, want >= 7", len(seen))
+	required := []string{"SI-001", "GL-001", "GL-002", "RL-001", "EH-001", "TM-001", "DB-001", "SC-001"}
+	for _, rid := range required {
+		if !seen[rid] {
+			t.Errorf("docs/rules.md missing required rule ID %s; seen: %v", rid, seen)
+		}
 	}
 
 	// Each script must start with #!/bin/sh and use set -e (POSIX sh, not bash).

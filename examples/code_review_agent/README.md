@@ -25,7 +25,7 @@ CGO_ENABLED=0 go build ./...
 Dry-run the skeleton against a clean fixture (parses inputs and plans the review without executing sandboxed tools):
 
 ```sh
-go run . --dry-run --fixture-dir ./testdata/fixtures/clean --out-dir ./out --db-path ./review.db
+go run . --dry-run --diff-file ./testdata/fixtures/clean.diff --out-dir ./out --db-path ./review.db
 ```
 
 ## Flags
