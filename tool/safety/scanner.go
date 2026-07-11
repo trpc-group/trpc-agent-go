@@ -269,6 +269,7 @@ func scanCommand(command string, p Policy) []Finding {
 	if err == nil {
 		pol := shellsafe.PolicyFromLists(p.AllowedCommands, p.DeniedCommands)
 		findings = append(findings, scanCommandSegments(pipe.Commands, p)...)
+		findings = append(findings, scanNetworkCommandSegments(pipe.Commands, p)...)
 		if err := pol.Check(pipe); err != nil {
 			riskType, decision := commandPolicyFinding(err, p)
 			findings = append(findings, finding(ruleShellWrapper, riskType, RiskHigh, err.Error(),
@@ -331,6 +332,7 @@ func scanArgv(argv []string, p Policy) []Finding {
 	}
 	var findings []Finding
 	findings = append(findings, scanCommandSegments([][]string{clean}, p)...)
+	findings = append(findings, scanNetworkCommandSegments([][]string{clean}, p)...)
 	pol := shellsafe.PolicyFromLists(p.AllowedCommands, p.DeniedCommands)
 	if err := pol.Check(&shellsafe.Pipeline{Commands: [][]string{clean}}); err != nil {
 		riskType, decision := commandPolicyFinding(err, p)
@@ -1001,6 +1003,29 @@ func hasNetworkCommand(text string) bool {
 	return false
 }
 
+func scanNetworkCommandSegments(cmds [][]string, p Policy) []Finding {
+	var findings []Finding
+	for _, argv := range cmds {
+		if len(argv) == 0 {
+			continue
+		}
+		cmd := commandBase(argv[0])
+		if cmd != "ssh" && cmd != "scp" && cmd != "sftp" {
+			continue
+		}
+		for _, host := range sshLikeHosts(cmd, argv[1:]) {
+			if domainAllowed(host, p.AllowedDomains) {
+				continue
+			}
+			findings = append(findings, finding(ruleNetworkEgress,
+				"network_egress", RiskCritical, host,
+				"add the domain to allowed_domains or remove the outbound network call",
+				p.NonWhitelistedNetworkAction))
+		}
+	}
+	return findings
+}
+
 func schemelessNetworkHosts(text string) []string {
 	fields := strings.Fields(text)
 	var out []string
@@ -1068,12 +1093,16 @@ func sshLikeHosts(cmd string, args []string) []string {
 		}
 		if !optionsEnded && strings.HasPrefix(arg, "-") {
 			opt := strings.TrimLeft(arg, "-")
-			if sshLikeOptionNeedsOperand(cmd, arg) {
-				if len(opt) == 1 {
-					pendingOption = opt
-				} else {
-					out = append(out, hostsFromSSHLikeOptionOperand(cmd, opt[:1], opt[1:])...)
+			for i := 0; i < len(opt); i++ {
+				if !sshLikeOptionNeedsOperand(cmd, opt[i]) {
+					continue
 				}
+				if operand := opt[i+1:]; operand != "" {
+					out = append(out, hostsFromSSHLikeOptionOperand(cmd, opt[i:i+1], operand)...)
+				} else {
+					pendingOption = opt[i : i+1]
+				}
+				break
 			}
 			continue
 		}
@@ -1095,8 +1124,15 @@ func hostsFromSSHLikeOptionOperand(cmd, opt, operand string) []string {
 	switch opt[0] {
 	case 'J':
 		return hostsFromProxyJump(operand)
+	case 'L', 'R':
+		return hostsFromSSHForward(operand)
 	case 'o':
 		return hostsFromSSHConfigOption(operand)
+	case 'W':
+		if host := hostFromSSHLikeTarget(operand); host != "" {
+			return []string{host}
+		}
+		return nil
 	default:
 		return nil
 	}
@@ -1105,14 +1141,44 @@ func hostsFromSSHLikeOptionOperand(cmd, opt, operand string) []string {
 func hostsFromSSHConfigOption(option string) []string {
 	name, value, ok := strings.Cut(option, "=")
 	if !ok {
-		return nil
+		fields := strings.Fields(option)
+		if len(fields) < 2 {
+			return nil
+		}
+		name = fields[0]
+		value = strings.Join(fields[1:], " ")
 	}
 	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "hostname":
+		if host := hostFromSSHLikeTarget(value); host != "" {
+			return []string{host}
+		}
+		return nil
+	case "proxycommand":
+		return schemelessNetworkHosts(value)
 	case "proxyjump":
 		return hostsFromProxyJump(value)
+	case "localforward", "remoteforward":
+		return hostsFromSSHForward(value)
 	default:
 		return nil
 	}
+}
+
+func hostsFromSSHForward(value string) []string {
+	value = strings.TrimSpace(value)
+	fields := strings.Fields(value)
+	if len(fields) > 1 {
+		value = strings.Join(fields, ":")
+	}
+	parts := strings.Split(value, ":")
+	if len(parts) < 3 {
+		return nil
+	}
+	if host := hostFromSSHLikeTarget(parts[len(parts)-2]); host != "" {
+		return []string{host}
+	}
+	return nil
 }
 
 func hostsFromProxyJump(value string) []string {
@@ -1136,18 +1202,17 @@ func shellSeparatorToken(arg string) bool {
 	return strings.Trim(arg, ";|&") == ""
 }
 
-func sshLikeOptionNeedsOperand(cmd, arg string) bool {
-	opt := strings.TrimLeft(arg, "-")
-	if opt == "" {
+func sshLikeOptionNeedsOperand(cmd string, opt byte) bool {
+	if opt == 0 {
 		return false
 	}
 	switch cmd {
 	case "ssh":
-		return strings.ContainsRune("BbcDEeFIiJLlmOoPpQRSWw", rune(opt[0]))
+		return strings.ContainsRune("BbcDEeFIiJLlmOoPpQRSWw", rune(opt))
 	case "scp":
-		return strings.ContainsRune("cDFiJloPSX", rune(opt[0]))
+		return strings.ContainsRune("cDFiJloPSX", rune(opt))
 	case "sftp":
-		return strings.ContainsRune("BbcDFiJloPRS", rune(opt[0]))
+		return strings.ContainsRune("BbcDFiJloPRS", rune(opt))
 	default:
 		return false
 	}
