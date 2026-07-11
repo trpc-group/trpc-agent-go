@@ -8,6 +8,7 @@
 //
 //
 
+// Package backend provides temporary backend fixtures for replay tests.
 package backend
 
 import (
@@ -20,7 +21,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session/sqlite"
 )
 
-// 创建临时 sqlite session 服务，测试结束后自动清理。
+// NewSQLiteService creates a temporary SQLite session service and cleans it up after the test.
 func NewSQLiteService(t *testing.T, opts ...sqlite.ServiceOpt) session.Service {
 	t.Helper()
 

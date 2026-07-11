@@ -8,6 +8,7 @@
 //
 //
 
+// Package normalize converts backend-specific session and memory data into comparable snapshots.
 package normalize
 
 import (
@@ -32,11 +33,13 @@ type MemoryEntry struct {
 	Location     string   // 发生地点
 }
 
+// MemorySnapshot holds normalized read and search memory results.
 type MemorySnapshot struct {
 	Read   []MemoryEntry
 	Search []MemoryEntry
 }
 
+// FromMemoryEntries builds a normalized memory snapshot from read and search results.
 func FromMemoryEntries(
 	read []*memory.Entry,
 	search []*memory.Entry,

@@ -8,6 +8,7 @@
 //
 //
 
+// Package fixture builds deterministic session events for replay tests.
 package fixture
 
 import (
@@ -17,7 +18,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
-// 同 service_test中的
+// NewUserEvent builds a user message event with the given content.
 func NewUserEvent(content string) *event.Event {
 	return &event.Event{
 		Response: &model.Response{
@@ -32,6 +33,7 @@ func NewUserEvent(content string) *event.Event {
 	}
 }
 
+// NewAssistantEvent builds an assistant message event with the given content.
 func NewAssistantEvent(content string) *event.Event {
 	return &event.Event{
 		Response: &model.Response{
@@ -46,7 +48,7 @@ func NewAssistantEvent(content string) *event.Event {
 	}
 }
 
-// 构造助手工具调用事件。
+// NewAssistantToolCallEvent builds an assistant tool-call event.
 func NewAssistantToolCallEvent(toolID, toolName, toolArgs string) *event.Event {
 	return &event.Event{
 		Response: &model.Response{
@@ -68,7 +70,7 @@ func NewAssistantToolCallEvent(toolID, toolName, toolArgs string) *event.Event {
 	}
 }
 
-// 构造工具响应事件。
+// NewToolResponseEvent builds a tool response event.
 func NewToolResponseEvent(toolID, toolName, content string) *event.Event {
 	return &event.Event{
 		Response: &model.Response{

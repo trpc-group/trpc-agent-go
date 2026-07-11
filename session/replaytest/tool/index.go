@@ -8,11 +8,12 @@
 //
 //
 
+// Package tool provides JSON normalization helpers for replay comparisons.
 package tool
 
 import "encoding/json"
 
-// @ 将不同格式的json  统一成一样 忽略字段顺序
+// NormalizeJSON canonicalizes JSON payloads for stable comparison.
 func NormalizeJSON(raw json.RawMessage) string {
 	if len(raw) == 0 {
 		return ""

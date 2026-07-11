@@ -25,20 +25,28 @@ import (
 type Scope string
 
 const (
-	ScopeSession Scope = "session" // session 回放
-	ScopeMemory  Scope = "memory"  // memory 回放
+	// ScopeSession compares session replay snapshots.
+	ScopeSession Scope = "session"
+	// ScopeMemory compares memory replay snapshots.
+	ScopeMemory Scope = "memory"
 )
 
 // Domain 表示差异所属的数据域。
 type Domain string
 
 const (
-	DomainSnapshot Domain = "snapshot" // 整体快照
-	DomainEvent    Domain = "event"    // 事件
-	DomainState    Domain = "state"    // 会话状态
-	DomainSummary  Domain = "summary"  // 摘要
-	DomainTrack    Domain = "track"    // Track
-	DomainMemory   Domain = "memory"   // 记忆
+	// DomainSnapshot compares the full normalized snapshot.
+	DomainSnapshot Domain = "snapshot"
+	// DomainEvent compares normalized session events.
+	DomainEvent Domain = "event"
+	// DomainState compares session state maps.
+	DomainState Domain = "state"
+	// DomainSummary compares session summaries.
+	DomainSummary Domain = "summary"
+	// DomainTrack compares track event payloads.
+	DomainTrack Domain = "track"
+	// DomainMemory compares memory entries.
+	DomainMemory Domain = "memory"
 )
 
 // Context 保存一次比较的元信息。
@@ -183,7 +191,7 @@ func WriteReport(path string, reports []Report) error {
 	if err != nil {
 		return fmt.Errorf("marshal replay report: %w", err)
 	}
-	if err := os.WriteFile(path, append(data, '\n'), 0o644); err != nil {
+	if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
 		return fmt.Errorf("write replay report: %w", err)
 	}
 	return nil

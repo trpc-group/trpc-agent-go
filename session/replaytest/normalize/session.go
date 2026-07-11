@@ -10,8 +10,6 @@
 
 package normalize
 
-// 归一化： 将不同后端拿出的东西 处理转化/映射成 在同一评价标准下
-
 import (
 	"encoding/json"
 
@@ -21,7 +19,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session/replaytest/tool"
 )
 
-// 同一的格式
+// Event is the normalized representation of a session event.
 type Event struct {
 	Index      int               // 事件序号
 	ID         string            // 事件 ID
@@ -38,6 +36,8 @@ type Event struct {
 	StateDelta map[string]string // 事件携带的状态变化
 	Extensions map[string]string // 扩展 JSON，已规范化
 }
+
+// Summary is the normalized representation of a session summary.
 type Summary struct {
 	FilterKey    string // 摘要过滤键
 	Text         string // 摘要正文
@@ -47,17 +47,21 @@ type Summary struct {
 	LastEventID  string // 摘要覆盖的最后事件 ID
 }
 
+// ToolCall is the normalized representation of a model tool call.
 type ToolCall struct {
 	ID   string // 工具调用 ID
 	Name string // 工具名称
 	Args string // 工具参数 JSON
 }
+
+// TrackEvent is the normalized representation of a track event.
 type TrackEvent struct {
 	Index     int    // Track 内序号
 	TrackName string // Track 名称
 	Payload   string // 事件 JSON，已规范化
 }
 
+// SnapShot is the normalized representation of a full session state.
 type SnapShot struct {
 	SessionId string                  // 会话 ID
 	Events    []Event                 // 事件列表
@@ -66,9 +70,7 @@ type SnapShot struct {
 	Tracks    map[string][]TrackEvent // 按 track 名称索引的事件
 }
 
-//从某一session 转化得到 snapshot
-// 获得snapshot的最后接口 其他 归一化在这个函数内 以及之前进行
-
+// FromSession converts a session into a normalized snapshot.
 func FromSession(sess *session.Session) *SnapShot {
 
 	if sess == nil {
@@ -91,7 +93,7 @@ func FromSession(sess *session.Session) *SnapShot {
 	return snapshot
 }
 
-// 把 session.StateMap 转成 string map，方便比较。
+// NormalizeState converts session.StateMap into a string map for comparison.
 func NormalizeState(state session.StateMap) map[string]string {
 	normalizedState := make(map[string]string)
 	for k, v := range state {
@@ -103,7 +105,7 @@ func NormalizeState(state session.StateMap) map[string]string {
 	return normalizedState
 }
 
-// 把单个 event.Event 转成归一化事件，忽略无消息体的事件。
+// NormalizeEvent converts a single event.Event into a normalized event.
 func NormalizeEvent(index int, evt event.Event) Event {
 	if evt.Response == nil || len(evt.Response.Choices) == 0 {
 		return Event{Index: index}
@@ -126,7 +128,7 @@ func NormalizeEvent(index int, evt event.Event) Event {
 	}
 }
 
-// 把 model.ToolCall 转成可比较的 ToolCall 切片。
+// NormalizeToolCalls converts model tool calls into comparable ToolCall values.
 func NormalizeToolCalls(calls []model.ToolCall) []ToolCall {
 	normalizedToolcalls := make([]ToolCall, 0, len(calls))
 	for _, call := range calls {
@@ -139,7 +141,7 @@ func NormalizeToolCalls(calls []model.ToolCall) []ToolCall {
 	return normalizedToolcalls
 }
 
-// 归一化 session 中的摘要，只保留是否设置时间戳等稳定字段。
+// NormalizeSummaries converts session summaries into comparable Summary values.
 func NormalizeSummaries(sess *session.Session) map[string]Summary {
 	normalziedsum := make(map[string]Summary)
 	if sess == nil {
@@ -169,7 +171,7 @@ func NormalizeSummaries(sess *session.Session) map[string]Summary {
 	return normalziedsum
 }
 
-// 归一化 session 中的 Track 事件，并对 payload 做 JSON 规范化。
+// NormalizeTracks converts session tracks into comparable TrackEvent values.
 func NormalizeTracks(sess *session.Session) map[string][]TrackEvent {
 	normalizedTracks := make(map[string][]TrackEvent)
 	if sess == nil {

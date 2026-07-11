@@ -15,8 +15,7 @@ import "time"
 // 固定回放基准时间，避免 SQLite 按当前时间过滤摘要。
 var replayBaseTime = time.Date(2030, 1, 1, 10, 0, 0, 0, time.UTC)
 
-//单轮普通对话
-
+// Case01_SingleTurn covers a single user-assistant turn.
 var Case01_SingleTurn = &Case{
 	Name: "case01_single_turn",
 	Ops: []Op{
@@ -26,7 +25,7 @@ var Case01_SingleTurn = &Case{
 	},
 }
 
-// 多轮普通对话
+// Case02_MultiTurn covers a multi-turn conversation.
 var Case02_MultiTurn = &Case{
 	Name: "case02_multi_turn",
 	Ops: []Op{
@@ -40,7 +39,7 @@ var Case02_MultiTurn = &Case{
 	},
 }
 
-// 会话状态更新
+// Case03_UpdateState covers session state updates and deletions.
 var Case03_UpdateState = &Case{
 	Name: "case03_update_state",
 	Ops: []Op{
@@ -57,7 +56,7 @@ var Case03_UpdateState = &Case{
 	},
 }
 
-// 工具调用与响应
+// Case04_ToolCall covers tool invocation and response events.
 var Case04_ToolCall = &Case{
 	Name: "case04_tool_call",
 	Ops: []Op{
@@ -93,7 +92,7 @@ var Case04_ToolCall = &Case{
 	},
 }
 
-// 全量 Summary
+// Case06_Summary covers full-session summary generation.
 var Case06_Summary = &Case{
 	Name: "case06_summary",
 	Ops: []Op{
@@ -107,7 +106,7 @@ var Case06_Summary = &Case{
 	},
 }
 
-// 按 FilterKey 生成 Summary，验证分支隔离
+// Case06_SummaryFilterKey covers summary generation scoped by filter key.
 var Case06_SummaryFilterKey = &Case{
 	Name: "case06_summary_filter_key",
 	Ops: []Op{
@@ -121,7 +120,7 @@ var Case06_SummaryFilterKey = &Case{
 	},
 }
 
-// Summary 后截断事件读取
+// Case07_SummaryWithTruncation covers truncated event reads after summary.
 var Case07_SummaryWithTruncation = &Case{
 	Name:          "case07_summary_with_truncation",
 	FinalEventNum: 3,
@@ -137,7 +136,7 @@ var Case07_SummaryWithTruncation = &Case{
 	},
 }
 
-// Track 事件：正常、完成、耗时、失败
+// Case08_Track covers normal, completion, duration, and failure track events.
 var Case08_Track = &Case{
 	Name: "case08_track",
 	Ops: []Op{
@@ -191,7 +190,7 @@ var Case08_Track = &Case{
 	},
 }
 
-// 并发追加事件，验证最终顺序稳定
+// Case09_ConcurrentAppend covers concurrent event appends with stable ordering.
 var Case09_ConcurrentAppend = &Case{
 	Name: "case09_concurrent_append",
 	Ops: []Op{
@@ -219,7 +218,7 @@ var Case09_ConcurrentAppend = &Case{
 	},
 }
 
-// 仅 StateDelta 恢复，不附带完整响应事件
+// Case10_Recovery covers recovery using only state deltas.
 var Case10_Recovery = &Case{
 	Name: "case10_recovery",
 	Ops: []Op{

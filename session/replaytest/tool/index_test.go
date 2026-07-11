@@ -29,3 +29,9 @@ func TestNormalizeJSON_KeepErrorJson(t *testing.T) {
 		t.Fatalf("非法 JSON 应保留原值: %q", got)
 	}
 }
+
+func TestNormalizeJSONEmptyAndMarshalFallback(t *testing.T) {
+	if got := NormalizeJSON(nil); got != "" {
+		t.Fatalf("空 JSON 应返回空字符串: %q", got)
+	}
+}

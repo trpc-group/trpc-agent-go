@@ -16,7 +16,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 )
 
-// 描述一次确定性的记忆写入。
+// MemoryWrite describes one deterministic memory write operation.
 type MemoryWrite struct {
 	Content      string
 	Topics       []string

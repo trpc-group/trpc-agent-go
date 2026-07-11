@@ -17,6 +17,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session/replaytest/normalize"
 )
 
+// MakeDiff returns a field-level diff map between two normalized snapshots.
 func MakeDiff(a, b *normalize.SnapShot) map[string]string {
 	diff := make(map[string]string)
 

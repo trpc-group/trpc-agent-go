@@ -8,6 +8,7 @@
 //
 //
 
+// Package scenario defines replay cases and operations for session backends.
 package scenario
 
 import "time"

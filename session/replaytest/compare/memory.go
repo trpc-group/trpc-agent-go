@@ -17,6 +17,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session/replaytest/normalize"
 )
 
+// MakeMemoryDiff returns a field-level diff map between two memory snapshots.
 func MakeMemoryDiff(
 	a *normalize.MemorySnapshot,
 	b *normalize.MemorySnapshot,
