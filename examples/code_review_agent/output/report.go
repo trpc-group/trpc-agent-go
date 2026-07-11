@@ -23,17 +23,9 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/telemetry"
 )
 
-func GenerateReport(taskID string, diff *parser.DiffResult, findings []storage.Finding,
+func GenerateReportContent(taskID string, diff *parser.DiffResult, findings []storage.Finding,
 	metricsSummary telemetry.MetricsSummary, sandboxRuns []storage.SandboxRun,
-	permissionRecords []storage.PermissionRecord, outputDir string) error {
-
-	if diff == nil {
-		return fmt.Errorf("diff parameter cannot be nil")
-	}
-
-	if err := os.MkdirAll(outputDir, 0755); err != nil {
-		return fmt.Errorf("create output dir: %w", err)
-	}
+	permissionRecords []storage.PermissionRecord) string {
 
 	var report strings.Builder
 	report.WriteString("# Code Review Report\n\n")
@@ -122,8 +114,25 @@ func GenerateReport(taskID string, diff *parser.DiffResult, findings []storage.F
 		report.WriteString(fmt.Sprintf("- **Errors:** %d\n", metricsSummary.Errors))
 	}
 
+	return report.String()
+}
+
+func GenerateReport(taskID string, diff *parser.DiffResult, findings []storage.Finding,
+	metricsSummary telemetry.MetricsSummary, sandboxRuns []storage.SandboxRun,
+	permissionRecords []storage.PermissionRecord, outputDir string) error {
+
+	if diff == nil {
+		return fmt.Errorf("diff parameter cannot be nil")
+	}
+
+	if err := os.MkdirAll(outputDir, 0755); err != nil {
+		return fmt.Errorf("create output dir: %w", err)
+	}
+
+	reportContent := GenerateReportContent(taskID, diff, findings, metricsSummary, sandboxRuns, permissionRecords)
+
 	reportPath := filepath.Join(outputDir, "review_report.md")
-	if err := os.WriteFile(reportPath, []byte(report.String()), 0644); err != nil {
+	if err := os.WriteFile(reportPath, []byte(reportContent), 0644); err != nil {
 		return fmt.Errorf("write review_report.md: %w", err)
 	}
 

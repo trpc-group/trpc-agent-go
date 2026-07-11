@@ -132,6 +132,7 @@ type Storage interface {
 	GetPermissionRecords(ctx context.Context, taskID string) ([]PermissionRecord, error)
 	CreateReport(ctx context.Context, report Report) error
 	GetReport(ctx context.Context, id string) (*Report, error)
+	GetReportsByTask(ctx context.Context, taskID string) ([]Report, error)
 	CreateArtifact(ctx context.Context, artifact Artifact) error
 	GetArtifactsByTask(ctx context.Context, taskID string) ([]Artifact, error)
 	CreateTelemetryMetrics(ctx context.Context, metrics TelemetryMetrics) error
@@ -464,6 +465,34 @@ func (s *SQLiteStorage) GetReport(ctx context.Context, id string) (*Report, erro
 
 	report.CreatedAt = time.Unix(0, createdAt)
 	return &report, nil
+}
+
+func (s *SQLiteStorage) GetReportsByTask(ctx context.Context, taskID string) ([]Report, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, task_id, content, format, created_at
+		FROM report WHERE task_id = ?
+	`, taskID)
+	if err != nil {
+		return nil, fmt.Errorf("select reports by task: %w", err)
+	}
+	defer rows.Close()
+
+	var reports []Report
+	for rows.Next() {
+		var report Report
+		var createdAt int64
+		if err := rows.Scan(&report.ID, &report.TaskID, &report.Content, &report.Format, &createdAt); err != nil {
+			return nil, fmt.Errorf("scan report: %w", err)
+		}
+		report.CreatedAt = time.Unix(0, createdAt)
+		reports = append(reports, report)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows error: %w", err)
+	}
+
+	return reports, nil
 }
 
 func (s *SQLiteStorage) CreateArtifact(ctx context.Context, artifact Artifact) error {

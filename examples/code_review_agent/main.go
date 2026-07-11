@@ -264,69 +264,69 @@ func runCodeReview(diffPath, repoPath, outputDir, dbPath string, dryRun bool) er
 		UnsafeLocal: *unsafeLocal,
 	})
 	if err != nil {
-		log.Printf("Warning: Failed to create sandbox: %v", err)
+		log.Printf("Error: Failed to create sandbox: %v", err)
 		log.Printf("Hint: Use --unsafe-local flag to enable local sandbox for testing")
-	} else {
-		log.Printf("Using sandbox type: %s", sbx.GetType())
-		defer sbx.Close()
+		return fmt.Errorf("failed to create sandbox: %w", err)
+	}
+	log.Printf("Using sandbox type: %s", sbx.GetType())
+	defer sbx.Close()
 
-		commands := []string{
-			"go vet ./...",
-			"go test ./... -short",
+	commands := []string{
+		"go vet ./...",
+		"go test ./... -short",
+	}
+
+	for _, cmd := range commands {
+		result := permissionPolicy.CheckCommand(cmd)
+		record := storage.PermissionRecord{
+			ID:        uuid.New().String(),
+			TaskID:    taskID,
+			Command:   cmd,
+			Action:    string(result.Action),
+			Reason:    result.Reason,
+			CreatedAt: time.Now(),
+		}
+		db.CreatePermissionRecord(ctx, record)
+
+		if result.Action == policy.ActionDeny {
+			log.Printf("Command denied: %s", cmd)
+			metrics.RecordPermissionBlock()
+			continue
 		}
 
-		for _, cmd := range commands {
-			result := permissionPolicy.CheckCommand(cmd)
-			record := storage.PermissionRecord{
-				ID:        uuid.New().String(),
-				TaskID:    taskID,
-				Command:   cmd,
-				Action:    string(result.Action),
-				Reason:    result.Reason,
-				CreatedAt: time.Now(),
-			}
-			db.CreatePermissionRecord(ctx, record)
+		if result.Action == policy.ActionReview {
+			log.Printf("Command needs review: %s", cmd)
+			continue
+		}
 
-			if result.Action == policy.ActionDeny {
-				log.Printf("Command denied: %s", cmd)
-				metrics.RecordPermissionBlock()
-				continue
-			}
+		log.Printf("Executing: %s", cmd)
+		sandboxResult, err := sbx.RunCommand(ctx, cmd, sandbox.DefaultConfig)
+		if err != nil {
+			log.Printf("Sandbox error: %v", err)
+			metrics.RecordError()
+			continue
+		}
 
-			if result.Action == policy.ActionReview {
-				log.Printf("Command needs review: %s", cmd)
-				continue
-			}
+		runRecord := storage.SandboxRun{
+			ID:         uuid.New().String(),
+			TaskID:     taskID,
+			Command:    cmd,
+			Output:     sandboxResult.Output,
+			Error:      sandboxResult.Error,
+			ExitCode:   sandboxResult.ExitCode,
+			TimedOut:   sandboxResult.TimedOut,
+			DurationMs: int64(sandboxResult.Duration / time.Millisecond),
+			CreatedAt:  time.Now(),
+		}
+		db.CreateSandboxRun(ctx, runRecord)
 
-			log.Printf("Executing: %s", cmd)
-			sandboxResult, err := sbx.RunCommand(ctx, cmd, sandbox.DefaultConfig)
-			if err != nil {
-				log.Printf("Sandbox error: %v", err)
-				metrics.RecordError()
-				continue
-			}
+		metrics.RecordSandboxExecution(sandboxResult.Duration)
+		metrics.RecordToolCall()
 
-			runRecord := storage.SandboxRun{
-				ID:         uuid.New().String(),
-				TaskID:     taskID,
-				Command:    cmd,
-				Output:     sandboxResult.Output,
-				Error:      sandboxResult.Error,
-				ExitCode:   sandboxResult.ExitCode,
-				TimedOut:   sandboxResult.TimedOut,
-				DurationMs: int64(sandboxResult.Duration / time.Millisecond),
-				CreatedAt:  time.Now(),
-			}
-			db.CreateSandboxRun(ctx, runRecord)
-
-			metrics.RecordSandboxExecution(sandboxResult.Duration)
-			metrics.RecordToolCall()
-
-			if sandboxResult.ExitCode != 0 {
-				log.Printf("Command failed with exit code %d", sandboxResult.ExitCode)
-				log.Printf("Output: %s", sandboxResult.Output)
-				log.Printf("Error: %s", sandboxResult.Error)
-			}
+		if sandboxResult.ExitCode != 0 {
+			log.Printf("Command failed with exit code %d", sandboxResult.ExitCode)
+			log.Printf("Output: %s", sandboxResult.Output)
+			log.Printf("Error: %s", sandboxResult.Error)
 		}
 	}
 
@@ -396,6 +396,18 @@ func runCodeReview(diffPath, repoPath, outputDir, dbPath string, dryRun bool) er
 	if err := output.GenerateReport(taskID, diff, findings, metricsSummary,
 		sandboxRuns, permissionRecords, outputDir); err != nil {
 		return fmt.Errorf("generate report: %w", err)
+	}
+
+	reportContent := output.GenerateReportContent(taskID, diff, findings, metricsSummary, sandboxRuns, permissionRecords)
+	reportID := uuid.New().String()
+	if err := db.CreateReport(ctx, storage.Report{
+		ID:        reportID,
+		TaskID:    taskID,
+		Content:   reportContent,
+		Format:    "markdown",
+		CreatedAt: time.Now(),
+	}); err != nil {
+		log.Printf("Warning: Failed to persist report: %v", err)
 	}
 
 	log.Printf("Code review completed in %s", totalTime)

@@ -151,8 +151,8 @@ index abc1234..def5678 100644
 		t.Fatalf("Expected 1 finding, got %d", len(findings))
 	}
 
-	if findings[0].LineNumber != 14 {
-		t.Errorf("Expected line number 14, got %d", findings[0].LineNumber)
+	if findings[0].LineNumber != 15 {
+		t.Errorf("Expected line number 15, got %d", findings[0].LineNumber)
 	}
 
 	if findings[0].RuleID != "GOROUTINE_LEAK" {

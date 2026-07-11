@@ -103,7 +103,7 @@ index abc1234..def5678 100644
 		t.Errorf("Expected 3 added lines, got %d", len(hunk.AddedLines))
 	}
 
-	expectedAddedLines := []int{7, 8, 10}
+	expectedAddedLines := []int{8, 9, 11}
 	for i, expected := range expectedAddedLines {
 		if hunk.AddedLines[i] != expected {
 			t.Errorf("Expected added line %d to be %d, got %d", i+1, expected, hunk.AddedLines[i])

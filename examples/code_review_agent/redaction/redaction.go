@@ -30,26 +30,51 @@ var secretPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})\s*:\s*["']([^"']+)["']`),
 }
 
+func redactToken(token string) string {
+	if len(token) <= 8 {
+		return "******"
+	}
+	return token[:4] + "******" + token[len(token)-4:]
+}
+
 func RedactSecrets(input string) string {
 	result := input
 
 	for _, pattern := range secretPatterns {
 		result = pattern.ReplaceAllStringFunc(result, func(match string) string {
 			indices := pattern.FindStringSubmatchIndex(match)
-			if len(indices) >= 4 {
-				start := indices[len(indices)-2]
-				end := indices[len(indices)-1]
-				secretValue := match[start:end]
-				if len(secretValue) <= 8 {
-					return match[:start] + "******" + match[end:]
+			if len(indices) < 4 {
+				return redactToken(match)
+			}
+
+			valueStart := -1
+			valueEnd := -1
+
+			if names := pattern.SubexpNames(); len(names) > 0 {
+				for i, name := range names {
+					if name == "value" || name == "secret" {
+						valueStart = indices[i*2]
+						valueEnd = indices[i*2+1]
+						break
+					}
 				}
-				redacted := secretValue[:4] + "******" + secretValue[len(secretValue)-4:]
-				return match[:start] + redacted + match[end:]
 			}
-			if len(match) <= 8 {
-				return "******"
+
+			if valueStart == -1 {
+				valueStart = indices[2]
+				valueEnd = indices[3]
 			}
-			return match[:4] + "******" + match[len(match)-4:]
+
+			if valueStart == -1 || valueEnd == -1 || valueStart >= valueEnd {
+				return redactToken(match)
+			}
+
+			secretValue := match[valueStart:valueEnd]
+			if len(secretValue) <= 8 {
+				return match[:valueStart] + "******" + match[valueEnd:]
+			}
+			redacted := secretValue[:4] + "******" + secretValue[len(secretValue)-4:]
+			return match[:valueStart] + redacted + match[valueEnd:]
 		})
 	}
 

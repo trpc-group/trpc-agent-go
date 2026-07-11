@@ -135,8 +135,8 @@ func ParseDiff(diffContent string) (*DiffResult, error) {
 				NewCount: newCount,
 			}
 			inHunk = true
-			newLineOffset = -1
-			oldLineOffset = -1
+			newLineOffset = 0
+			oldLineOffset = 0
 			continue
 		}
 
