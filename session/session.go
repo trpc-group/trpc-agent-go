@@ -59,6 +59,7 @@ var (
 // the full-session summary with no filtering applied.
 const SummaryFilterKeyAllContents = ""
 
+// Session is the interface that all sessions must implement.
 type Session struct {
 	ID       string                 `json:"id"`      // ID is the session id.
 	AppName  string                 `json:"appName"` // AppName is the app name.
