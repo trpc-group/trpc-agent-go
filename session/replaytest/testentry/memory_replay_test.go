@@ -16,6 +16,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session/replaytest/scenario"
 )
 
+// TestMemoryReplay 在 inmemory 与 sqlite 之间回放记忆 case。
 func TestMemoryReplay(t *testing.T) {
 	ctx := context.Background()
 	baseline := memoryinmemory.NewMemoryService()
@@ -24,6 +25,7 @@ func TestMemoryReplay(t *testing.T) {
 	})
 	candidate := newSQLiteMemoryService(t)
 
+	// 分别在两个后端执行同一组写入、读取和搜索。
 	resultA, err := memoryharness.Run(
 		ctx,
 		baseline,
@@ -43,8 +45,16 @@ func TestMemoryReplay(t *testing.T) {
 
 	snapshotA := normalize.FromMemoryEntries(resultA.Read, resultA.Search)
 	snapshotB := normalize.FromMemoryEntries(resultB.Read, resultB.Search)
-	if diff := compare.MakeMemoryDiff(snapshotA, snapshotB); len(diff) > 0 {
-		t.Fatalf("memory snapshot diff: %+v", diff)
+	// 生成结构化差异报告，失败时输出 JSON 方便定位。
+	report := compare.CompareMemory(compare.Context{
+		Case:             scenario.Case05_Memory.Name,
+		BaselineBackend:  "memory/inmemory",
+		CandidateBackend: "memory/sqlite",
+		Scope:            compare.ScopeMemory,
+	}, snapshotA, snapshotB, compare.DefaultAllowedRules())
+	if !report.Passed {
+		data, _ := compare.MarshalReportSet([]compare.Report{report})
+		t.Fatalf("memory snapshot diff:\n%s", data)
 	}
 }
 

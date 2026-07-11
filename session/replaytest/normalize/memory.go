@@ -1,3 +1,13 @@
+//
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+
 package normalize
 
 import (
@@ -6,7 +16,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 )
 
-
+// MemoryEntry 保存与具体后端无关的记忆字段。
 type MemoryEntry struct {
 	ID           string
 	AppName      string
@@ -14,9 +24,9 @@ type MemoryEntry struct {
 	Content      string
 	Topics       []string
 	Kind         string
-	EventTime    string
-	Participants []string
-	Location     string
+	EventTime    string   // 事件时间
+	Participants []string // 参与者，
+	Location     string   // 发生地点
 }
 
 type MemorySnapshot struct {
@@ -24,7 +34,6 @@ type MemorySnapshot struct {
 	Search []MemoryEntry
 }
 
-// FromMemoryEntries normalizes memory results for deterministic comparison.
 func FromMemoryEntries(
 	read []*memory.Entry,
 	search []*memory.Entry,
@@ -41,6 +50,8 @@ func normalizeMemoryEntries(entries []*memory.Entry) []MemoryEntry {
 		if entry == nil || entry.Memory == nil {
 			continue
 		}
+		// 避免后端迭代顺序影响比较结果。
+		// 统一顺序
 		topics := append([]string(nil), entry.Memory.Topics...)
 		sort.Strings(topics)
 		participants := append([]string(nil), entry.Memory.Participants...)
@@ -68,6 +79,7 @@ func normalizeMemoryEntries(entries []*memory.Entry) []MemoryEntry {
 			Location:     entry.Memory.Location,
 		})
 	}
+
 	sort.Slice(out, func(i, j int) bool {
 		return out[i].ID < out[j].ID
 	})

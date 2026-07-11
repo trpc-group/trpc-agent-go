@@ -8,13 +8,13 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session/replaytest/scenario"
 )
 
-// Result contains the observable output of one memory replay.
+// Result 保存一次记忆回放可观察到的结果。
 type Result struct {
-	Read   []*memory.Entry
-	Search []*memory.Entry
+	Read   []*memory.Entry // 全量读取结果
+	Search []*memory.Entry // 关键词搜索结果
 }
 
-// Run replays a memory case against one backend.
+。
 func Run(
 	ctx context.Context,
 	svc memory.Service,

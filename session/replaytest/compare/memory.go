@@ -17,7 +17,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session/replaytest/normalize"
 )
 
-// MakeMemoryDiff compares normalized memory read and search results.
 func MakeMemoryDiff(
 	a *normalize.MemorySnapshot,
 	b *normalize.MemorySnapshot,

@@ -2,52 +2,19 @@ package replaytest
 
 import (
 	"context"
-	"database/sql"
-	"fmt"
-	"os"
-	"strings"
 	"testing"
 
-	_ "github.com/mattn/go-sqlite3"
-	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+	"trpc.group/trpc-go/trpc-agent-go/session/replaytest/backend"
 	"trpc.group/trpc-go/trpc-agent-go/session/replaytest/compare"
 	"trpc.group/trpc-go/trpc-agent-go/session/replaytest/harness"
 	"trpc.group/trpc-go/trpc-agent-go/session/replaytest/normalize"
 	"trpc.group/trpc-go/trpc-agent-go/session/replaytest/scenario"
+	"trpc.group/trpc-go/trpc-agent-go/session/replaytest/summary"
 	"trpc.group/trpc-go/trpc-agent-go/session/sqlite"
-
-	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
-type fakeSummarizer struct{}
-
-func (fakeSummarizer) ShouldSummarize(sess *session.Session) bool {
-	return true
-}
-
-func (fakeSummarizer) Summarize(ctx context.Context, sess *session.Session) (string, error) {
-	var b strings.Builder
-
-	fmt.Fprintf(&b, "summary:%s:", sess.ID)
-	for _, evt := range sess.Events {
-		if evt.Response == nil || len(evt.Response.Choices) == 0 {
-			continue
-		}
-		msg := evt.Response.Choices[0].Message
-		fmt.Fprintf(&b, "[%s]%s;", msg.Role, msg.Content)
-	}
-
-	return b.String(), nil
-}
-
-func (fakeSummarizer) SetPrompt(prompt string) {}
-
-func (fakeSummarizer) SetModel(m model.Model) {}
-
-func (fakeSummarizer) Metadata() map[string]any {
-	return nil
-}
+// TestReplay 在 inmemory 与 sqlite 之间回放全部 session case。
 func TestReplay(t *testing.T) {
 	// 待测所有case
 	cases := []*scenario.Case{
@@ -57,7 +24,10 @@ func TestReplay(t *testing.T) {
 		scenario.Case04_ToolCall,
 		scenario.Case06_Summary,
 		scenario.Case06_SummaryFilterKey,
+		scenario.Case07_SummaryWithTruncation,
 		scenario.Case08_Track,
+		scenario.Case09_ConcurrentAppend,
+		scenario.Case10_Recovery,
 	}
 
 	for _, tc := range cases {
@@ -73,8 +43,9 @@ func RunCase(t *testing.T, c *scenario.Case) {
 
 	ctx := context.Background()
 
-	baseline := inmemory.NewSessionService(inmemory.WithSummarizer(fakeSummarizer{}))
-	candidate := newSQLiteService(t, sqlite.WithSummarizer(fakeSummarizer{}))
+	baseline := inmemory.NewSessionService(inmemory.WithSummarizer(summary.FakeSummarizer{}))
+	candidate := backend.NewSQLiteService(t, sqlite.WithSummarizer(summary.FakeSummarizer{}))
+	// sessA : inmemroy 返回session  sessB : sqlite 返回session
 	sessA, err := harness.Run(ctx, baseline, c)
 	if err != nil {
 		t.Fatalf("run svcA: %v", err)
@@ -87,41 +58,58 @@ func RunCase(t *testing.T, c *scenario.Case) {
 	// 归一化
 	snapA := normalize.FromSession(sessA)
 	snapB := normalize.FromSession(sessB)
+	assertCaseExpectations(t, c.Name, snapA)
+	assertCaseExpectations(t, c.Name, snapB)
 
-	diff := compare.MakeDiff(snapA, snapB)
-	if len(diff) > 0 {
-		t.Fatalf("snapshot diff: %+v", diff)
+	report := compare.CompareSession(compare.Context{
+		Case:             c.Name,
+		BaselineBackend:  "session/inmemory",
+		CandidateBackend: "session/sqlite",
+		Scope:            compare.ScopeSession,
+	}, snapA, snapB, compare.DefaultAllowedRules())
+	// 失败时输出结构化 JSON，便于定位到 event/summary/track 字段。
+	if !report.Passed {
+		data, _ := compare.MarshalReportSet([]compare.Report{report})
+		t.Fatalf("snapshot diff:\n%s", data)
 	}
 }
 
-func newSQLiteService(t *testing.T, opts ...sqlite.ServiceOpt) session.Service {
+// 校验单个 case 的业务期望，不依赖后端实现细节。
+func assertCaseExpectations(
+	t *testing.T,
+	caseName string,
+	snapshot *normalize.SnapShot,
+) {
 	t.Helper()
-
-	f, err := os.CreateTemp("", "trpc-agent-go-replaytest-*.db")
-	if err != nil {
-		t.Fatalf("create temp sqlite db: %v", err)
+	switch caseName {
+	case scenario.Case07_SummaryWithTruncation.Name:
+		summary, ok := snapshot.Summaries[""]
+		if !ok || summary.LastEventID != "case07-a2" {
+			t.Fatalf("summary boundary 错误: %+v", snapshot.Summaries)
+		}
+		if len(snapshot.Events) != 2 ||
+			snapshot.Events[0].ID != "case07-u3" ||
+			snapshot.Events[1].ID != "case07-a3" {
+			t.Fatalf("截断后事件错误: %+v", snapshot.Events)
+		}
+	case scenario.Case09_ConcurrentAppend.Name:
+		want := []string{"case09-u1", "case09-a1", "case09-u2"}
+		if len(snapshot.Events) != len(want) {
+			t.Fatalf("并发事件数量错误: %+v", snapshot.Events)
+		}
+		for i, id := range want {
+			if snapshot.Events[i].ID != id {
+				t.Fatalf("并发事件顺序错误: %+v", snapshot.Events)
+			}
+		}
+	case scenario.Case10_Recovery.Name:
+		if snapshot.State["recovered"] != "ok" {
+			t.Fatalf("恢复状态丢失: %+v", snapshot.State)
+		}
+		if len(snapshot.Events) != 1 ||
+			snapshot.Events[0].ID != "case10-u1" {
+			t.Fatalf("恢复后的事件错误: %+v", snapshot.Events)
+		}
 	}
-	if err := f.Close(); err != nil {
-		t.Fatalf("close temp sqlite db: %v", err)
-	}
-
-	db, err := sql.Open("sqlite3", f.Name())
-	if err != nil {
-		_ = os.Remove(f.Name())
-		t.Fatalf("open sqlite db: %v", err)
-	}
-
-	svc, err := sqlite.NewService(db, opts...)
-	if err != nil {
-		_ = db.Close()
-		_ = os.Remove(f.Name())
-		t.Fatalf("new sqlite service: %v", err)
-	}
-
-	t.Cleanup(func() {
-		_ = svc.Close()
-		_ = os.Remove(f.Name())
-	})
-
-	return svc
 }
+
