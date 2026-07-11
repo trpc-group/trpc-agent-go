@@ -181,8 +181,15 @@ func parseSingleReadlinkPath(cmd string) string {
 
 // parseBatchReadlinkPaths extracts each path from a batch
 // `for p in <p1> <p2> ...; do readlink -f -- "$p"; done` command.
+// Only the "for p in ...; do" portion is scanned so that /dev/null
+// (from `2>/dev/null` in the script body) is not picked up as a path.
 func parseBatchReadlinkPaths(cmd string) []string {
-	matches := readlinkPathRe.FindAllStringSubmatch(cmd, -1)
+	idx := strings.Index(cmd, "; do")
+	if idx < 0 {
+		return nil
+	}
+	head := cmd[:idx]
+	matches := readlinkPathRe.FindAllStringSubmatch(head, -1)
 	paths := make([]string, 0, len(matches))
 	for _, m := range matches {
 		paths = append(paths, m[1])
@@ -397,8 +404,10 @@ func (m *mockOpenSandboxServer) handleCommand(w http.ResponseWriter, r *http.Req
 		if exists {
 			stdout = "yes"
 		}
-		zero := 0
-		exitCode = &zero
+		if !forceInfraExit {
+			zero := 0
+			exitCode = &zero
+		}
 	}
 
 	// Handle readlink -f calls from resolveSandboxPath /
@@ -419,8 +428,10 @@ func (m *mockOpenSandboxServer) handleCommand(w http.ResponseWriter, r *http.Req
 			result = resolveMockSymlink(p, symlinks)
 		}
 		stdout = result
-		zero := 0
-		exitCode = &zero
+		if !forceInfraExit {
+			zero := 0
+			exitCode = &zero
+		}
 	}
 
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -2009,4 +2020,103 @@ func TestWorkspace_StageDirectory_ReadOnly_NoChmodOutsideWorkspace(t *testing.T)
 		codeexecutor.StageOptions{ReadOnly: true})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "escapes workspace")
+}
+
+// TestResolveSandboxAncestor_NoExistingAncestor exercises the fallback
+// path in resolveSandboxAncestor where no ancestor of the target
+// exists (the loop walks all the way to "/"). The fallback resolves
+// wsBase directly and appends the relative tail. This covers lines
+// 1141-1149 in workspace_runtime.go.
+func TestResolveSandboxAncestor_NoExistingAncestor(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	r := exec.ensureRuntime()
+	// Use a wsBase whose ancestors are not in the mock's existingPaths
+	// (avoid /tmp which the mock always considers existing).
+	wsBase := "/var/run/custom_ws"
+	target := wsBase + "/a/b/c/file.txt"
+
+	resolved, err := r.resolveSandboxAncestor(
+		context.Background(), target, wsBase,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, target, resolved,
+		"fallback should resolve wsBase and append the relative tail")
+}
+
+// TestResolveSandboxPaths_BatchError covers the runBash error branch
+// in resolveSandboxPaths (lines 565-569). When the batch readlink
+// command fails, resolveSandboxPaths must return an error.
+func TestResolveSandboxPaths_BatchError(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	// Force infrastructure commands to honour the non-zero exit code
+	// so the batch readlink runBash call fails.
+	m.setExitCode(1)
+	m.setForceInfraExit(true)
+
+	r := exec.ensureRuntime()
+	_, err := r.resolveSandboxPaths(
+		context.Background(),
+		[]fileSearchResult{{path: "/tmp/run/ws_x/file.txt", size: 10}},
+		"/tmp/run/ws_x",
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "resolve paths")
+}
+
+// TestResolveSandboxPath_EmptyResult covers the empty-result branch
+// in resolveSandboxPath (lines 1081-1085). When readlink -f returns
+// empty output, resolveSandboxPath must return an error.
+func TestResolveSandboxPath_EmptyResult(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	// Register a symlink that resolves to empty string to simulate
+	// readlink -f returning empty.
+	m.setSymlink("/tmp/run/ws_x/empty", "")
+
+	r := exec.ensureRuntime()
+	_, err := r.resolveSandboxPath(
+		context.Background(),
+		"/tmp/run/ws_x/empty",
+		"/tmp/run/ws_x",
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "returned empty")
+}
+
+// TestReadFile_KnownSizeFallback covers the knownSize <= 0 branch in
+// readFile (lines 973-975). When knownSize is non-positive, the size
+// falls back to the number of bytes actually read.
+func TestReadFile_KnownSizeFallback(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	r := exec.ensureRuntime()
+	sb, err := r.sandbox()
+	require.NoError(t, err)
+
+	// Seed a small file.
+	m.setDownloadData("/tmp/run/ws_x/data.txt", []byte("hello"))
+
+	// Call readFile with knownSize=0 to exercise the fallback.
+	data, size, err := r.readFile(
+		context.Background(), sb, "/tmp/run/ws_x/data.txt",
+		maxReadSizeBytes, 0,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("hello"), data)
+	assert.Equal(t, int64(5), size,
+		"size should fall back to len(data) when knownSize <= 0")
 }
