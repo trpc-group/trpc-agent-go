@@ -1,0 +1,111 @@
+{
+  "reports": [
+    {
+      "case": "case01_single_turn",
+      "baseline_backend": "session/inmemory",
+      "candidate_backend": "session/sqlite",
+      "scope": "session",
+      "passed": true,
+      "diffs": []
+    },
+    {
+      "case": "case02_multi_turn",
+      "baseline_backend": "session/inmemory",
+      "candidate_backend": "session/sqlite",
+      "scope": "session",
+      "passed": true,
+      "diffs": []
+    },
+    {
+      "case": "case03_update_state",
+      "baseline_backend": "session/inmemory",
+      "candidate_backend": "session/sqlite",
+      "scope": "session",
+      "passed": true,
+      "diffs": []
+    },
+    {
+      "case": "case04_tool_call",
+      "baseline_backend": "session/inmemory",
+      "candidate_backend": "session/sqlite",
+      "scope": "session",
+      "passed": true,
+      "diffs": []
+    },
+    {
+      "case": "case05_memory",
+      "baseline_backend": "memory/inmemory",
+      "candidate_backend": "memory/sqlite",
+      "scope": "memory",
+      "passed": true,
+      "diffs": []
+    },
+    {
+      "case": "case06_summary",
+      "baseline_backend": "session/inmemory",
+      "candidate_backend": "session/sqlite",
+      "scope": "session",
+      "passed": true,
+      "diffs": []
+    },
+    {
+      "case": "case06_summary_filter_key",
+      "baseline_backend": "session/inmemory",
+      "candidate_backend": "session/sqlite",
+      "scope": "session",
+      "passed": true,
+      "diffs": []
+    },
+    {
+      "case": "case07_summary_with_truncation",
+      "baseline_backend": "session/inmemory",
+      "candidate_backend": "session/sqlite",
+      "scope": "session",
+      "passed": true,
+      "diffs": []
+    },
+    {
+      "case": "case08_track",
+      "baseline_backend": "session/inmemory",
+      "candidate_backend": "session/sqlite",
+      "scope": "session",
+      "passed": true,
+      "diffs": [],
+      "allowed_diffs": [
+        {
+          "case": "case08_track",
+          "scope": "session",
+          "baseline_backend": "session/inmemory",
+          "candidate_backend": "session/sqlite",
+          "locator": {
+            "session_id": "session_id_01",
+            "track_name": "tool.weather_query",
+            "track_event_index": 2
+          },
+          "domain": "track",
+          "field_path": "tracks[\"tool.weather_query\"][2].payload.duration_ms",
+          "baseline_value": 25,
+          "candidate_value": 26,
+          "allowed_diff": true,
+          "reason": "Backend timing is nondeterministic."
+        }
+      ]
+    },
+    {
+      "case": "case09_concurrent_append",
+      "baseline_backend": "session/inmemory",
+      "candidate_backend": "session/sqlite",
+      "scope": "session",
+      "passed": true,
+      "diffs": []
+    },
+    {
+      "case": "case10_recovery",
+      "baseline_backend": "session/inmemory",
+      "candidate_backend": "session/sqlite",
+      "scope": "session",
+      "passed": true,
+      "diffs": []
+    }
+  ]
+}

@@ -10,29 +10,29 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session/sqlite"
 )
 
-// new 一个 temp sqlite db service
+// 创建临时 sqlite session 服务，测试结束后自动清理。
 func NewSQLiteService(t *testing.T, opts ...sqlite.ServiceOpt) session.Service {
 	t.Helper()
 
 	f, err := os.CreateTemp("", "trpc-agent-go-replaytest-*.db")
 	if err != nil {
-		t.Fatalf("create temp sqlite db: %v", err)
+		t.Fatalf("创建临时 sqlite 数据库失败: %v", err)
 	}
 	if err := f.Close(); err != nil {
-		t.Fatalf("close temp sqlite db: %v", err)
+		t.Fatalf("关闭临时 sqlite 数据库失败: %v", err)
 	}
 
 	db, err := sql.Open("sqlite3", f.Name())
 	if err != nil {
 		_ = os.Remove(f.Name())
-		t.Fatalf("open sqlite db: %v", err)
+		t.Fatalf("打开 sqlite 数据库失败: %v", err)
 	}
 
 	svc, err := sqlite.NewService(db, opts...)
 	if err != nil {
 		_ = db.Close()
 		_ = os.Remove(f.Name())
-		t.Fatalf("new sqlite service: %v", err)
+		t.Fatalf("创建 sqlite 服务失败: %v", err)
 	}
 
 	t.Cleanup(func() {

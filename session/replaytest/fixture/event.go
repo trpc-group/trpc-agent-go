@@ -1,3 +1,13 @@
+//
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+
 package fixture
 
 import (
@@ -36,6 +46,7 @@ func NewAssistantEvent(content string) *event.Event {
 	}
 }
 
+// 构造助手工具调用事件。
 func NewAssistantToolCallEvent(toolID, toolName, toolArgs string) *event.Event {
 	return &event.Event{
 		Response: &model.Response{
@@ -57,6 +68,7 @@ func NewAssistantToolCallEvent(toolID, toolName, toolArgs string) *event.Event {
 	}
 }
 
+// 构造工具响应事件。
 func NewToolResponseEvent(toolID, toolName, content string) *event.Event {
 	return &event.Event{
 		Response: &model.Response{

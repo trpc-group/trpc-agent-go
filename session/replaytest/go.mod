@@ -1,6 +1,6 @@
 module trpc.group/trpc-go/trpc-agent-go/session/replaytest
 
-go 1.26.1
+go 1.21
 
 replace trpc.group/trpc-go/trpc-agent-go => ../../
 

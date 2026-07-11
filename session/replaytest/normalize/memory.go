@@ -11,7 +11,10 @@
 package normalize
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"sort"
+	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 )
@@ -68,7 +71,7 @@ func normalizeMemoryEntries(entries []*memory.Entry) []MemoryEntry {
 			)
 		}
 		out = append(out, MemoryEntry{
-			ID:           entry.ID,
+			ID:           semanticMemoryID(entry, topics, participants, eventTime, kind),
 			AppName:      entry.AppName,
 			UserID:       entry.UserID,
 			Content:      entry.Memory.Memory,
@@ -84,4 +87,11 @@ func normalizeMemoryEntries(entries []*memory.Entry) []MemoryEntry {
 		return out[i].ID < out[j].ID
 	})
 	return out
+}
+
+// semanticMemoryID removes backend-generated ids from the replay contract.
+func semanticMemoryID(entry *memory.Entry, topics, participants []string, eventTime string, kind memory.Kind) string {
+	parts := []string{entry.AppName, entry.UserID, entry.Memory.Memory, strings.Join(topics, ","), string(kind), eventTime, strings.Join(participants, ","), entry.Memory.Location}
+	sum := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
+	return "semantic-" + hex.EncodeToString(sum[:8])
 }
