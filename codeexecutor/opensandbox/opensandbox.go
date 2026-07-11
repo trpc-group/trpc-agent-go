@@ -49,16 +49,29 @@ func WithProtocol(protocol string) Option {
 	return func(c *CodeExecutor) { c.protocol = protocol }
 }
 
-// WithImage sets the sandbox container image URI. When empty the SDK
-// default CodeInterpreterImage is used.
+// WithImage sets the sandbox container image URI. When empty (or when
+// the option is not supplied) the SDK default CodeInterpreterImage is
+// used; an explicit empty string is treated as "use the default" so
+// callers cannot accidentally clear the image and trigger an SDK
+// "missing image" error.
 func WithImage(image string) Option {
-	return func(c *CodeExecutor) { c.image = image }
+	return func(c *CodeExecutor) {
+		if image != "" {
+			c.image = image
+		}
+	}
 }
 
-// WithEntrypoint overrides the sandbox entrypoint. When empty the SDK
-// default CodeInterpreterEntrypoint is used.
+// WithEntrypoint overrides the sandbox entrypoint. When nil or empty
+// the SDK default CodeInterpreterEntrypoint is used; an explicit empty
+// slice is treated as "use the default" so callers cannot accidentally
+// clear the entrypoint and fall through to tail -f /dev/null.
 func WithEntrypoint(entrypoint []string) Option {
-	return func(c *CodeExecutor) { c.entrypoint = entrypoint }
+	return func(c *CodeExecutor) {
+		if len(entrypoint) > 0 {
+			c.entrypoint = entrypoint
+		}
+	}
 }
 
 // WithResourceLimits sets CPU/memory/GPU limits

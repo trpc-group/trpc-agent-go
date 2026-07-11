@@ -143,13 +143,41 @@ func (r *workspaceRuntime) CreateWorkspace(
 	return codeexecutor.Workspace{ID: execID, Path: wsPath}, nil
 }
 
+// validateWorkspace enforces that ws.Path is a directory created under
+// the configured runBase. Without this a caller that hand-constructs a
+// codeexecutor.Workspace could point Cleanup/RunProgram/Collect at an
+// arbitrary sandbox path (e.g. "/" or "/tmp"). runBase itself is also
+// rejected, since removing it would wipe all workspaces.
+func (r *workspaceRuntime) validateWorkspace(
+	ws codeexecutor.Workspace,
+) error {
+	if ws.Path == "" {
+		return errors.New("opensandbox: workspace path is empty")
+	}
+	base := path.Clean(r.cfg.runBase)
+	p := path.Clean(ws.Path)
+	if p == base {
+		return fmt.Errorf(
+			"opensandbox: workspace path %q must not equal runBase %q",
+			ws.Path, r.cfg.runBase,
+		)
+	}
+	if !pathUnder(p, base) {
+		return fmt.Errorf(
+			"opensandbox: workspace path %q escapes runBase %q",
+			ws.Path, r.cfg.runBase,
+		)
+	}
+	return nil
+}
+
 // Cleanup removes the workspace directory from the sandbox.
 func (r *workspaceRuntime) Cleanup(
 	ctx context.Context,
 	ws codeexecutor.Workspace,
 ) error {
-	if ws.Path == "" {
-		return nil
+	if err := r.validateWorkspace(ws); err != nil {
+		return err
 	}
 	script := "rm -rf " + shellQuote(ws.Path)
 	_, err := r.runBash(ctx, script, defaultRmTimeout)
@@ -166,6 +194,9 @@ func (r *workspaceRuntime) PutFiles(
 ) error {
 	if len(files) == 0 {
 		return nil
+	}
+	if err := r.validateWorkspace(ws); err != nil {
+		return err
 	}
 	sb, err := r.sandbox()
 	if err != nil {
@@ -222,6 +253,9 @@ func (r *workspaceRuntime) PutDirectory(
 ) error {
 	if strings.TrimSpace(hostPath) == "" {
 		return errors.New("hostPath is empty")
+	}
+	if err := r.validateWorkspace(ws); err != nil {
+		return err
 	}
 	abs, err := filepath.Abs(hostPath)
 	if err != nil {
@@ -390,6 +424,9 @@ func (r *workspaceRuntime) Collect(
 	if len(patterns) == 0 {
 		return nil, nil
 	}
+	if err := r.validateWorkspace(ws); err != nil {
+		return nil, err
+	}
 	sb, err := r.sandbox()
 	if err != nil {
 		return nil, err
@@ -481,6 +518,9 @@ func (r *workspaceRuntime) RunProgram(
 	ws codeexecutor.Workspace,
 	spec codeexecutor.RunProgramSpec,
 ) (codeexecutor.RunResult, error) {
+	if err := r.validateWorkspace(ws); err != nil {
+		return codeexecutor.RunResult{}, err
+	}
 	sb, err := r.sandbox()
 	if err != nil {
 		return codeexecutor.RunResult{}, err
@@ -632,13 +672,27 @@ func (r *workspaceRuntime) ExecuteInline(
 		defer r.Cleanup(ctx, ws)
 	}
 
-	var allOut, allErr strings.Builder
+	var (
+		allOut, allErr strings.Builder
+		// Aggregate the last non-zero exit code across blocks so the
+		// caller can detect a failed block via RunResult.ExitCode.
+		// 0 means "no block reported a non-zero exit".
+		aggExit int
+		// OR-fold TimedOut across blocks: if any block timed out, the
+		// aggregated result reports TimedOut = true.
+		aggTimedOut bool
+	)
 	start := time.Now()
 	for i, b := range blocks {
 		fn, mode, cmd, args, err := codeexecutor.BuildBlockSpec(i, b)
 		if err != nil {
 			allErr.WriteString(err.Error())
 			allErr.WriteString("\n")
+			// Build failure is a non-execution failure; surface as
+			// exit 1 so the caller sees the block did not succeed.
+			if aggExit == 0 {
+				aggExit = 1
+			}
 			continue
 		}
 		pf := codeexecutor.PutFile{
@@ -649,6 +703,9 @@ func (r *workspaceRuntime) ExecuteInline(
 		if err := r.PutFiles(ctx, ws, []codeexecutor.PutFile{pf}); err != nil {
 			allErr.WriteString(err.Error())
 			allErr.WriteString("\n")
+			if aggExit == 0 {
+				aggExit = 1
+			}
 			continue
 		}
 		argv := append([]string{}, args...)
@@ -662,6 +719,11 @@ func (r *workspaceRuntime) ExecuteInline(
 		if err != nil {
 			allErr.WriteString(err.Error())
 			allErr.WriteString("\n")
+			// RunProgram returned an error (not a non-zero exit).
+			// Surface as exit 1 so the caller sees failure.
+			if aggExit == 0 {
+				aggExit = 1
+			}
 		}
 		if res.Stdout != "" {
 			allOut.WriteString(res.Stdout)
@@ -669,14 +731,20 @@ func (r *workspaceRuntime) ExecuteInline(
 		if res.Stderr != "" {
 			allErr.WriteString(res.Stderr)
 		}
+		if res.ExitCode != 0 {
+			aggExit = res.ExitCode
+		}
+		if res.TimedOut {
+			aggTimedOut = true
+		}
 	}
 	dur := time.Since(start)
 	return codeexecutor.RunResult{
 		Stdout:   allOut.String(),
 		Stderr:   allErr.String(),
-		ExitCode: 0,
+		ExitCode: aggExit,
 		Duration: dur,
-		TimedOut: false,
+		TimedOut: aggTimedOut,
 	}, nil
 }
 

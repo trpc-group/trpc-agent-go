@@ -276,16 +276,6 @@ func (m *mockOpenSandboxServer) handleCommand(w http.ResponseWriter, r *http.Req
 	forceInfraExit := m.forceInfraExit
 	m.mu.Unlock()
 
-	// runError makes /command return a 500 with "timeout" in the code
-	// field so the SDK produces an APIError whose Error() contains
-	// "timeout" — exercising isTimeoutErr in RunProgram.
-	if runErr != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		fmt.Fprintf(w, `{"code":"timeout","message":%q}`, runErr.Error())
-		return
-	}
-
 	// runBash calls (CreateWorkspace mkdir, Cleanup rm, StageDirectory
 	// chmod) and RunProgram calls are both wrapped in `bash -c '...'`.
 	// Infrastructure commands should always succeed; only apply the
@@ -293,6 +283,19 @@ func (m *mockOpenSandboxServer) handleCommand(w http.ResponseWriter, r *http.Req
 	// contain `&& cd ` (from `mkdir -p ... && cd ... && ...`).
 	// forceInfraExit bypasses this guard to test runBash error paths.
 	isRunProgram := strings.Contains(req.Command, "&& cd ")
+
+	// runError makes /command return a 500 with "timeout" in the code
+	// field so the SDK produces an APIError whose Error() contains
+	// "timeout" — exercising isTimeoutErr in RunProgram. Only apply
+	// to RunProgram commands so infra calls (CreateWorkspace mkdir,
+	// Cleanup rm) still succeed and tests can reach the RunProgram
+	// stage.
+	if runErr != nil && (isRunProgram || forceInfraExit) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintf(w, `{"code":"timeout","message":%q}`, runErr.Error())
+		return
+	}
 	if !isRunProgram && exitCode != nil && *exitCode != 0 && !forceInfraExit {
 		zero := 0
 		exitCode = &zero
@@ -1145,9 +1148,11 @@ func TestWorkspace_Cleanup_EmptyPath(t *testing.T) {
 	exec := newTestExecutor(t, m)
 	defer exec.Close()
 
-	// An empty workspace path should be a no-op (no /command call).
+	// An empty workspace path is rejected by validateWorkspace before
+	// any /command call is made.
 	err := exec.Cleanup(context.Background(), codeexecutor.Workspace{Path: ""})
-	require.NoError(t, err)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "workspace path is empty")
 }
 
 func TestWorkspace_Cleanup_RunError(t *testing.T) {
@@ -1161,7 +1166,10 @@ func TestWorkspace_Cleanup_RunError(t *testing.T) {
 
 	// Make the /command endpoint return an HTTP error so runBash
 	// receives a non-nil error with a non-nil exec (covering the
-	// `if exec != nil` branch in runBash).
+	// `if exec != nil` branch in runBash). forceInfraExit is needed
+	// because the mock otherwise only applies runError to RunProgram
+	// commands (those containing `&& cd `).
+	m.setForceInfraExit(true)
 	m.setRunError(fmt.Errorf("command timeout"))
 
 	err = exec.Cleanup(context.Background(), ws)
@@ -1174,9 +1182,14 @@ func TestWorkspace_Cleanup_RunError(t *testing.T) {
 // in CreateWorkspace, Cleanup, PutFiles, RunProgram, Collect, runBash,
 // listFilesByGlob, and ExecuteInline.
 func TestWorkspace_NilSandbox_ErrorPaths(t *testing.T) {
-	rt := &workspaceRuntime{ce: &CodeExecutor{}}
+	rt := &workspaceRuntime{
+		ce:  &CodeExecutor{},
+		cfg: runtimeConfig{runBase: defaultSandboxRunBase},
+	}
 	ctx := context.Background()
-	ws := codeexecutor.Workspace{ID: "x", Path: "/tmp/ws"}
+	// Use a path under the default runBase so validateWorkspace does
+	// not short-circuit before the sandbox() nil check.
+	ws := codeexecutor.Workspace{ID: "x", Path: "/tmp/run/ws_x"}
 
 	_, err := rt.CreateWorkspace(ctx, "exec-1", codeexecutor.WorkspacePolicy{})
 	require.Error(t, err)
@@ -1276,9 +1289,14 @@ func TestWorkspace_CreateWorkspace_PerSession_EmptyExecID(t *testing.T) {
 // TestWorkspace_PutDirectory_NilSandbox verifies PutDirectory returns
 // the sandbox-not-initialized error after passing filesystem checks.
 func TestWorkspace_PutDirectory_NilSandbox(t *testing.T) {
-	rt := &workspaceRuntime{ce: &CodeExecutor{}}
+	rt := &workspaceRuntime{
+		ce:  &CodeExecutor{},
+		cfg: runtimeConfig{runBase: defaultSandboxRunBase},
+	}
 	tmpDir := t.TempDir()
-	err := rt.PutDirectory(context.Background(), codeexecutor.Workspace{Path: "/tmp/ws"}, tmpDir, "")
+	// Use a path under the default runBase so validateWorkspace does
+	// not short-circuit before the sandbox() nil check.
+	err := rt.PutDirectory(context.Background(), codeexecutor.Workspace{Path: "/tmp/run/ws_x"}, tmpDir, "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "sandbox not initialized")
 }
@@ -1353,4 +1371,173 @@ func TestWorkspace_CollectUploadEntries_StreamsFiles(t *testing.T) {
 	require.Len(t, entries, 1)
 	_, ok := entries[0].File.(*os.File)
 	assert.True(t, ok, "entry should stream via *os.File, not buffer via *bytes.Reader")
+}
+
+// --- validateWorkspace hardening tests ---
+
+// TestWorkspace_Cleanup_RejectsRootPath verifies that a caller cannot
+// hand-construct a Workspace pointing at an arbitrary sandbox path
+// (e.g. "/") and have Cleanup rm -rf it.
+func TestWorkspace_Cleanup_RejectsRootPath(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	err := exec.Cleanup(context.Background(), codeexecutor.Workspace{Path: "/"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "escapes runBase")
+}
+
+// TestWorkspace_Cleanup_RejectsRunBase verifies that Cleanup refuses
+// to remove the runBase directory itself, which would wipe all
+// workspaces.
+func TestWorkspace_Cleanup_RejectsRunBase(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	err := exec.Cleanup(context.Background(), codeexecutor.Workspace{Path: "/tmp/run"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must not equal runBase")
+}
+
+// TestWorkspace_Cleanup_RejectsEscapePath verifies that a path like
+// "/etc" (outside runBase) is rejected.
+func TestWorkspace_Cleanup_RejectsEscapePath(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	err := exec.Cleanup(context.Background(), codeexecutor.Workspace{Path: "/etc"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "escapes runBase")
+}
+
+// TestWorkspace_PutFiles_RejectsInvalidWorkspace verifies that PutFiles
+// validates the workspace path before touching the sandbox.
+func TestWorkspace_PutFiles_RejectsInvalidWorkspace(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	err := exec.PutFiles(context.Background(),
+		codeexecutor.Workspace{Path: "/etc"},
+		[]codeexecutor.PutFile{{Path: "a.txt", Content: []byte("x")}})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "escapes runBase")
+}
+
+// TestWorkspace_Collect_RejectsInvalidWorkspace verifies that Collect
+// validates the workspace path.
+func TestWorkspace_Collect_RejectsInvalidWorkspace(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	_, err := exec.Collect(context.Background(),
+		codeexecutor.Workspace{Path: "/etc"},
+		[]string{"*.txt"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "escapes runBase")
+}
+
+// TestWorkspace_RunProgram_RejectsInvalidWorkspace verifies that
+// RunProgram validates the workspace path.
+func TestWorkspace_RunProgram_RejectsInvalidWorkspace(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	_, err := exec.RunProgram(context.Background(),
+		codeexecutor.Workspace{Path: "/etc"},
+		codeexecutor.RunProgramSpec{Cmd: "ls", Timeout: 5 * time.Second})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "escapes runBase")
+}
+
+// --- ExecuteInline status aggregation tests ---
+
+// TestExecuteInline_NonZeroExitCode_Aggregated verifies that a non-zero
+// exit code from a block is reflected in the aggregated RunResult,
+// instead of being silently replaced with 0.
+func TestExecuteInline_NonZeroExitCode_Aggregated(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	m.setStdout("out")
+	exitCode := 42
+	m.setExitCode(exitCode)
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	res, err := exec.ExecuteInline(context.Background(), "exec-fail", []codeexecutor.CodeBlock{
+		{Language: "bash", Code: "exit 42"},
+	}, 10*time.Second)
+	require.NoError(t, err)
+	assert.Equal(t, 42, res.ExitCode, "non-zero exit code should be propagated")
+	assert.False(t, res.TimedOut)
+}
+
+// TestExecuteInline_TimeoutAggregated verifies that a timeout in any
+// block is reflected in the aggregated RunResult.TimedOut.
+func TestExecuteInline_TimeoutAggregated(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	m.setStdout("out")
+	// setRunError with "timeout" in the message triggers the
+	// isTimeoutErr path in RunProgram, which sets TimedOut=true.
+	m.setRunError(fmt.Errorf("command timeout exceeded"))
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	res, err := exec.ExecuteInline(context.Background(), "exec-timeout", []codeexecutor.CodeBlock{
+		{Language: "bash", Code: "sleep 100"},
+	}, 10*time.Second)
+	require.NoError(t, err)
+	assert.True(t, res.TimedOut, "timeout should be propagated")
+}
+
+// TestExecuteInline_MixedSuccessAndFailure verifies that when one block
+// succeeds (exit 0) and a later block fails (exit non-zero), the
+// aggregated exit code reflects the failure.
+func TestExecuteInline_MixedSuccessAndFailure(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	m.setStdout("out")
+	exitCode := 7
+	m.setExitCode(exitCode)
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	res, err := exec.ExecuteInline(context.Background(), "exec-mixed", []codeexecutor.CodeBlock{
+		{Language: "bash", Code: "echo ok"}, // would be exit 0
+		{Language: "bash", Code: "exit 7"},  // mock returns 7
+	}, 10*time.Second)
+	require.NoError(t, err)
+	assert.Equal(t, 7, res.ExitCode, "last non-zero exit code should be propagated")
+}
+
+// TestExecuteInline_UnsupportedLanguage_SurfacesExitCode verifies that
+// an unsupported language (which causes BuildBlockSpec to fail) is
+// surfaced as a non-zero exit code, not silently swallowed as 0.
+func TestExecuteInline_UnsupportedLanguage_SurfacesExitCode(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	m.setStdout("ok")
+	zero := 0
+	m.setExitCode(zero)
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	res, err := exec.ExecuteInline(context.Background(), "exec-unsupported", []codeexecutor.CodeBlock{
+		{Language: "ruby", Code: "puts 'x'"},
+	}, 10*time.Second)
+	require.NoError(t, err)
+	assert.NotEqual(t, 0, res.ExitCode, "build failure should surface as non-zero exit")
+	assert.Contains(t, res.Stderr, "unsupported language")
 }

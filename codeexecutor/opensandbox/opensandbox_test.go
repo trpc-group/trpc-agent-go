@@ -752,3 +752,30 @@ func TestExecuteCode_PerTurn_AutoCleanup(t *testing.T) {
 	assert.True(t, foundCleanup,
 		"PerTurn mode should auto-cleanup the workspace")
 }
+
+// TestWithImage_EmptyStringKeepsDefault verifies that WithImage("")
+// does not clear the SDK default image. Without this guard an explicit
+// empty string would overwrite the default and trigger an SDK
+// "missing image" error at sandbox creation time.
+func TestWithImage_EmptyStringKeepsDefault(t *testing.T) {
+	c := &CodeExecutor{image: osb.CodeInterpreterImage}
+	WithImage("")(c)
+	assert.Equal(t, osb.CodeInterpreterImage, c.image,
+		"WithImage(\"\") should not clear the default image")
+}
+
+// TestWithEntrypoint_EmptyKeepsDefault verifies that
+// WithEntrypoint(nil) and WithEntrypoint([]string{}) do not clear the
+// SDK default entrypoint. Without this guard an explicit empty value
+// would fall through to `tail -f /dev/null` instead of the code
+// interpreter entrypoint.
+func TestWithEntrypoint_EmptyKeepsDefault(t *testing.T) {
+	c := &CodeExecutor{entrypoint: osb.CodeInterpreterEntrypoint}
+	WithEntrypoint(nil)(c)
+	assert.Equal(t, osb.CodeInterpreterEntrypoint, c.entrypoint,
+		"WithEntrypoint(nil) should not clear the default entrypoint")
+
+	WithEntrypoint([]string{})(c)
+	assert.Equal(t, osb.CodeInterpreterEntrypoint, c.entrypoint,
+		"WithEntrypoint([]string{}) should not clear the default entrypoint")
+}
