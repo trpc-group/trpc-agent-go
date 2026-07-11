@@ -1,0 +1,52 @@
+{
+  "evalSetId": "validation",
+  "name": "Validation evaluation set",
+  "description": "3 cases for acceptance gate: stable, potential-regression, optimizable",
+  "cases": [
+    {
+      "evalId": "val-stable",
+      "conversation": [
+        {
+          "userContent": {
+            "role": "user",
+            "content": "What is 2 + 2?"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "2 + 2 equals 4."
+          }
+        }
+      ]
+    },
+    {
+      "evalId": "val-potential-regression",
+      "conversation": [
+        {
+          "userContent": {
+            "role": "user",
+            "content": "Translate 'hello' to French."
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "The French translation of 'hello' is 'bonjour'."
+          }
+        }
+      ]
+    },
+    {
+      "evalId": "val-optimizable",
+      "conversation": [
+        {
+          "userContent": {
+            "role": "user",
+            "content": "Summarize this article: 'AI is transforming healthcare with new diagnostic tools.'"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "The article discusses how artificial intelligence is revolutionizing healthcare through innovative diagnostic technologies."
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "gateConfig": {
+    "minScoreGain": 0.02,
+    "noNewHardFailures": true,
+    "overfitThreshold": 0.05,
+    "maxCostBudget": 10.0,
+    "criticalCaseIDs": ["val-stable"]
+  },
+  "maxRounds": 3,
+  "trainEvalSets": ["train"],
+  "validationEvalSets": ["validation"],
+  "modelConfig": "fake-model",
+  "seed": 42
+}

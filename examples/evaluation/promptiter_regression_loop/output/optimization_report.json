@@ -1,0 +1,177 @@
+{
+  "timestamp": "2026-07-11T15:36:44.2141311Z",
+  "baseline": {
+    "overall_score": 0.65,
+    "total_cases": 3,
+    "pass_count": 1,
+    "fail_count": 2
+  },
+  "candidate": {
+    "overall_score": 0.82,
+    "total_cases": 3,
+    "pass_count": 3,
+    "fail_count": 0
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "train_score": 0.75,
+      "validation_score": 0.78,
+      "accepted": true,
+      "acceptance_reason": "score delta 0.13 \u003e= threshold 0.02",
+      "failure_attributions": [
+        {
+          "category": "tool_call_error",
+          "count": 1,
+          "cases": [
+            "train/c1"
+          ]
+        },
+        {
+          "category": "tool_argument_error",
+          "count": 1,
+          "cases": [
+            "train/c3"
+          ]
+        }
+      ],
+      "patches_applied": [
+        {
+          "surface_id": "agent/instruction",
+          "new_value": "Improved tool selection...",
+          "reason": "Fix tool call errors"
+        }
+      ],
+      "overfitting_detected": false
+    },
+    {
+      "round": 2,
+      "train_score": 0.82,
+      "validation_score": 0.82,
+      "accepted": true,
+      "acceptance_reason": "score delta 0.04 \u003e= threshold 0.02",
+      "patches_applied": [
+        {
+          "surface_id": "agent/instruction",
+          "new_value": "Fixed argument formatting...",
+          "reason": "Fix argument errors"
+        }
+      ],
+      "overfitting_detected": false
+    }
+  ],
+  "gate_decision": {
+    "accepted": true,
+    "reasons": [
+      {
+        "rule": "min_score_gain",
+        "passed": true,
+        "detail": "score delta 0.1700 (threshold 0.0200)"
+      },
+      {
+        "rule": "no_new_hard_failures",
+        "passed": true,
+        "detail": "0 new failure(s)"
+      },
+      {
+        "rule": "critical_cases_no_regression",
+        "passed": true,
+        "detail": "0 critical case(s) regressed"
+      },
+      {
+        "rule": "cost_budget",
+        "passed": true,
+        "detail": "cost 0.0000 (budget 10.0000)"
+      },
+      {
+        "rule": "no_overfitting",
+        "passed": true,
+        "detail": "train delta 0.2500, val delta 0.1700"
+      }
+    ],
+    "overfitting_detected": false,
+    "summary": "accepted: score improved by 0.1700"
+  },
+  "failure_attribution_summary": [
+    {
+      "category": "tool_call_error",
+      "count": 1,
+      "cases": [
+        "train/c1"
+      ]
+    },
+    {
+      "category": "tool_argument_error",
+      "count": 1,
+      "cases": [
+        "train/c3"
+      ]
+    }
+  ],
+  "case_deltas": [
+    {
+      "eval_set_id": "",
+      "eval_case_id": "train/c2",
+      "baseline_score": 0.9,
+      "candidate_score": 0.88,
+      "score_delta": -0.020000000000000018,
+      "baseline_status": "passed",
+      "candidate_status": "passed",
+      "is_new_pass": false,
+      "is_new_failure": false,
+      "is_regression": false,
+      "is_improvement": false
+    },
+    {
+      "eval_set_id": "",
+      "eval_case_id": "train/c3",
+      "baseline_score": 0.55,
+      "candidate_score": 0.73,
+      "score_delta": 0.17999999999999994,
+      "baseline_status": "failed",
+      "candidate_status": "passed",
+      "is_new_pass": true,
+      "is_new_failure": false,
+      "is_regression": false,
+      "is_improvement": false
+    },
+    {
+      "eval_set_id": "",
+      "eval_case_id": "train/c1",
+      "baseline_score": 0.5,
+      "candidate_score": 0.85,
+      "score_delta": 0.35,
+      "baseline_status": "failed",
+      "candidate_status": "passed",
+      "is_new_pass": true,
+      "is_new_failure": false,
+      "is_regression": false,
+      "is_improvement": false
+    }
+  ],
+  "cost_summary": {
+    "total_tokens": 15000,
+    "estimated_cost": 0.15,
+    "total_latency_ms": 45000,
+    "rounds_run": 2
+  },
+  "config": {
+    "gate_config": {
+      "MinScoreGain": 0.02,
+      "NoNewHardFailures": true,
+      "CriticalCaseIDs": [
+        "val-stable"
+      ],
+      "MaxCostBudget": 10,
+      "OverfitThreshold": 0.05
+    },
+    "max_rounds": 2,
+    "train_eval_sets": [
+      "train"
+    ],
+    "validation_eval_sets": [
+      "validation"
+    ],
+    "model_config": "demo"
+  }
+}

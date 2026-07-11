@@ -1,0 +1,66 @@
+{
+  "evalSetId": "train",
+  "name": "Training evaluation set",
+  "description": "3 cases for gradient generation: optimizable, already-passing, hard-failure",
+  "cases": [
+    {
+      "evalId": "train-optimizable",
+      "conversation": [
+        {
+          "userContent": {
+            "role": "user",
+            "content": "What is the weather in Beijing today?"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "The current weather in Beijing is 25°C with clear skies and low humidity."
+          },
+          "tools": [
+            {
+              "name": "get_weather",
+              "arguments": "{\"city\": \"Beijing\"}",
+              "result": "{\"temperature\": 25, \"condition\": \"clear\", \"humidity\": \"low\"}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "evalId": "train-passing",
+      "conversation": [
+        {
+          "userContent": {
+            "role": "user",
+            "content": "Hello, how are you?"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "Hello! I'm doing great, thank you for asking. How can I help you today?"
+          }
+        }
+      ]
+    },
+    {
+      "evalId": "train-hard-failure",
+      "conversation": [
+        {
+          "userContent": {
+            "role": "user",
+            "content": "Book a flight from Beijing to Shanghai for tomorrow."
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "I found several flights from Beijing to Shanghai for tomorrow. The best option is CA1234 departing at 08:00."
+          },
+          "tools": [
+            {
+              "name": "search_flights",
+              "arguments": "{\"from\": \"Beijing\", \"to\": \"Shanghai\", \"date\": \"tomorrow\"}",
+              "result": "{\"flights\": [{\"id\": \"CA1234\", \"departure\": \"08:00\", \"price\": 800}]}"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
