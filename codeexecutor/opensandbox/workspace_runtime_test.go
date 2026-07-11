@@ -20,6 +20,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -50,6 +51,7 @@ type mockOpenSandboxServer struct {
 	commandTimeouts []int64           // captured /command timeout field (ms)
 	files           map[string][]byte // simulated sandbox filesystem
 	dirsCreated     []string
+	createCalls     int
 	killCalls       int
 	pauseCalls      int
 	// exitCode controls the exit_code in execution_complete events.
@@ -84,13 +86,22 @@ type mockOpenSandboxServer struct {
 	// values from GET /v1/sandboxes/{id}/endpoints/{port} requests.
 	// Used to verify WithUseServerProxy wires through to the SDK.
 	endpointProxyParams []string
+	// symlinks maps a symlink path to its target, simulating sandbox
+	// filesystem symlinks for readlink -f resolution in tests.
+	symlinks map[string]string
+	// existingPaths tracks paths that exist in the simulated sandbox
+	// filesystem, used by test -e checks in resolveSandboxAncestor.
+	// Workspaces and directories created via CreateDirectory /
+	// UploadFiles are added here automatically.
+	existingPaths map[string]bool
 }
 
 func newMockServer(t *testing.T) *mockOpenSandboxServer {
 	t.Helper()
 	m := &mockOpenSandboxServer{
-		t:     t,
-		files: map[string][]byte{},
+		t:             t,
+		files:         map[string][]byte{},
+		existingPaths: map[string]bool{},
 	}
 	m.server = httptest.NewServer(http.HandlerFunc(m.handle))
 	// The execd endpoint points back at the same mock server; the SDK
@@ -143,6 +154,62 @@ func (m *mockOpenSandboxServer) setDownloadData(path string, data []byte) {
 	m.files[path] = data
 }
 
+func (m *mockOpenSandboxServer) setSymlink(link, target string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.symlinks == nil {
+		m.symlinks = map[string]string{}
+	}
+	m.symlinks[link] = target
+}
+
+// readlinkPathRe matches absolute POSIX paths (e.g. /tmp/run/ws_x/src)
+// embedded in a `bash -c 'readlink -f ...'` command, regardless of
+// the shell quoting scheme used by shellQuote.
+var readlinkPathRe = regexp.MustCompile(`(/[^\s'\\]+)`)
+
+// parseSingleReadlinkPath extracts the path argument from a
+// `bash -c 'readlink -f <path>'` command. Uses a regex because
+// shellQuote's nested quoting makes simple string splitting fragile.
+func parseSingleReadlinkPath(cmd string) string {
+	m := readlinkPathRe.FindStringSubmatch(cmd)
+	if m == nil {
+		return ""
+	}
+	return m[1]
+}
+
+// parseBatchReadlinkPaths extracts each path from a batch
+// `for p in <p1> <p2> ...; do readlink -f -- "$p"; done` command.
+func parseBatchReadlinkPaths(cmd string) []string {
+	matches := readlinkPathRe.FindAllStringSubmatch(cmd, -1)
+	paths := make([]string, 0, len(matches))
+	for _, m := range matches {
+		paths = append(paths, m[1])
+	}
+	return paths
+}
+
+// resolveMockSymlink simulates `readlink -f` against the mock's
+// symlinks map. If the path itself is a symlink, return the target.
+// Otherwise return the path as-is (no further resolution).
+func resolveMockSymlink(p string, symlinks map[string]string) string {
+	if target, ok := symlinks[p]; ok {
+		return target
+	}
+	return p
+}
+
+// parseTestEPath extracts the path argument from a
+// `bash -c 'test -e <path> && echo yes || echo no'` command.
+func parseTestEPath(cmd string) string {
+	m := readlinkPathRe.FindStringSubmatch(cmd)
+	if m == nil {
+		return ""
+	}
+	return m[1]
+}
+
 func (m *mockOpenSandboxServer) lastCommand() string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -184,6 +251,9 @@ func (m *mockOpenSandboxServer) handle(w http.ResponseWriter, r *http.Request) {
 	const sandboxInfo = `{"id":"sbx-mock","status":{"state":"Running"},"createdAt":"2026-01-01T00:00:00Z"}`
 	switch {
 	case r.Method == http.MethodPost && path == "/v1/sandboxes":
+		m.mu.Lock()
+		m.createCalls++
+		m.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, sandboxInfo)
 		return
@@ -301,6 +371,58 @@ func (m *mockOpenSandboxServer) handleCommand(w http.ResponseWriter, r *http.Req
 		exitCode = &zero
 	}
 
+	// Handle mkdir -p calls from CreateWorkspace: register created
+	// directories as existing so resolveSandboxAncestor's test -e
+	// returns "yes" for them.
+	if strings.Contains(req.Command, "mkdir -p") {
+		m.mu.Lock()
+		for _, p := range readlinkPathRe.FindAllStringSubmatch(req.Command, -1) {
+			m.existingPaths[p[1]] = true
+		}
+		m.mu.Unlock()
+	}
+
+	// Handle test -e calls from resolveSandboxAncestor. The mock
+	// simulates file existence via existingPaths (seeded by
+	// CreateDirectory / UploadFiles) plus symlinks (which always
+	// exist as path entries).
+	if strings.Contains(req.Command, "test -e") {
+		m.mu.Lock()
+		existing := m.existingPaths
+		symlinks := m.symlinks
+		m.mu.Unlock()
+		p := parseTestEPath(req.Command)
+		exists := existing[p] || symlinks[p] != "" || p == "/" || p == "/tmp"
+		stdout = "no"
+		if exists {
+			stdout = "yes"
+		}
+		zero := 0
+		exitCode = &zero
+	}
+
+	// Handle readlink -f calls from resolveSandboxPath /
+	// resolveSandboxPaths. The mock simulates a sandbox filesystem
+	// with symlinks via the symlinks map (seeded via setSymlink).
+	if strings.Contains(req.Command, "readlink -f") {
+		m.mu.Lock()
+		symlinks := m.symlinks
+		m.mu.Unlock()
+		var result string
+		if strings.Contains(req.Command, "for p in") {
+			paths := parseBatchReadlinkPaths(req.Command)
+			for _, p := range paths {
+				result += resolveMockSymlink(p, symlinks) + "\n"
+			}
+		} else {
+			p := parseSingleReadlinkPath(req.Command)
+			result = resolveMockSymlink(p, symlinks)
+		}
+		stdout = result
+		zero := 0
+		exitCode = &zero
+	}
+
 	w.Header().Set("Content-Type", "text/event-stream")
 	flusher, _ := w.(http.Flusher)
 	// init event
@@ -351,6 +473,7 @@ func (m *mockOpenSandboxServer) handleCreateDirectory(w http.ResponseWriter, r *
 	m.mu.Lock()
 	for p := range dirs {
 		m.dirsCreated = append(m.dirsCreated, p)
+		m.existingPaths[p] = true
 	}
 	m.mu.Unlock()
 	w.WriteHeader(http.StatusOK)
@@ -394,7 +517,11 @@ func (m *mockOpenSandboxServer) handleSearchFiles(w http.ResponseWriter, r *http
 	dir := r.URL.Query().Get("path")
 	pattern := r.URL.Query().Get("pattern")
 	_ = pattern
-	// Return fake files under the searched directory.
+	// Return fake files under the searched directory. File sizes are
+	// looked up from the files map (seeded via setDownloadData) so
+	// that Collect's SizeBytes reflects the real file size; when a
+	// file has no seeded data the default "mock-content" (12 bytes)
+	// size is reported.
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	w.Header().Set("Content-Type", "application/json")
@@ -412,10 +539,14 @@ func (m *mockOpenSandboxServer) handleSearchFiles(w http.ResponseWriter, r *http
 				fileType = spec[idx+1:]
 			}
 			p := filepath.ToSlash(filepath.Join(dir, name))
+			size := int64(12)
+			if data, ok := m.files[p]; ok {
+				size = int64(len(data))
+			}
 			if fileType != "" {
-				entries = append(entries, fmt.Sprintf(`{"path":%q,"size":12,"type":%q}`, p, fileType))
+				entries = append(entries, fmt.Sprintf(`{"path":%q,"size":%d,"type":%q}`, p, size, fileType))
 			} else {
-				entries = append(entries, fmt.Sprintf(`{"path":%q,"size":12}`, p))
+				entries = append(entries, fmt.Sprintf(`{"path":%q,"size":%d}`, p, size))
 			}
 		}
 		fmt.Fprintf(w, "[%s]", strings.Join(entries, ","))
@@ -423,7 +554,11 @@ func (m *mockOpenSandboxServer) handleSearchFiles(w http.ResponseWriter, r *http
 	}
 	// Default: return one file so basic Collect tests work.
 	fakePath := filepath.ToSlash(filepath.Join(dir, "output.txt"))
-	fmt.Fprintf(w, `[{"path":%q,"size":12}]`, fakePath)
+	size := int64(12)
+	if data, ok := m.files[fakePath]; ok {
+		size = int64(len(data))
+	}
+	fmt.Fprintf(w, `[{"path":%q,"size":%d}]`, fakePath, size)
 }
 
 // newTestExecutor creates a CodeExecutor backed by the mock server.
@@ -1139,7 +1274,7 @@ func TestWorkspace_ListFilesByGlob_SkipsDirectories(t *testing.T) {
 	out, err := exec.rt.listFilesByGlob(context.Background(), ws.Path, []string{"*"})
 	require.NoError(t, err)
 	require.Len(t, out, 1, "only the regular file should be collected")
-	assert.Contains(t, out[0], "real.txt")
+	assert.Contains(t, out[0].path, "real.txt")
 }
 
 func TestWorkspace_Cleanup_EmptyPath(t *testing.T) {
@@ -1540,4 +1675,338 @@ func TestExecuteInline_UnsupportedLanguage_SurfacesExitCode(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEqual(t, 0, res.ExitCode, "build failure should surface as non-zero exit")
 	assert.Contains(t, res.Stderr, "unsupported language")
+}
+
+// --- FU-5: readFile SizeBytes reflects real file size ---
+
+// TestWorkspace_Collect_SizeBytesReflectsRealSize verifies that
+// Collect's File.SizeBytes is the real file size reported by
+// SearchFiles metadata, not just "at least limit+1". Without the
+// SearchFiles size, a file 3x the cap would report SizeBytes ==
+// maxReadSizeBytes+1 (the byte count read before truncation), which
+// is not the true size.
+func TestWorkspace_Collect_SizeBytesReflectsRealSize(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	ws, err := exec.CreateWorkspace(context.Background(), "exec-size", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+
+	// Seed a file 3x the cap. The mock's handleSearchFiles looks up
+	// the real size from the files map and returns it as metadata.
+	expectedPath := filepath.ToSlash(filepath.Join(ws.Path, "output.txt"))
+	realSize := int64(maxReadSizeBytes * 3)
+	m.setDownloadData(expectedPath, make([]byte, realSize))
+
+	files, err := exec.Collect(context.Background(), ws, []string{"*.txt"})
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	assert.Equal(t, realSize, files[0].SizeBytes,
+		"SizeBytes should be the real file size from SearchFiles, not limit+1")
+	assert.True(t, files[0].Truncated, "file exceeding maxReadSizeBytes should be truncated")
+	assert.Equal(t, maxReadSizeBytes, len(files[0].Content),
+		"content should be capped at maxReadSizeBytes")
+}
+
+// --- FU-6: cleanup runs after context cancellation ---
+
+// TestCleanupContext_DetachesFromParent is a direct unit test for the
+// cleanupContext helper. It proves the returned context is NOT
+// cancelled even when the parent context is already cancelled, and
+// that it carries a deadline (defaultRmTimeout). Without
+// context.WithoutCancel, cleanup would inherit the parent's cancelled
+// state and fail immediately.
+func TestCleanupContext_DetachesFromParent(t *testing.T) {
+	parent, cancelParent := context.WithCancel(context.Background())
+	cancelParent()
+
+	// Parent is now cancelled.
+	require.Error(t, parent.Err())
+
+	// cleanupCtx must NOT be cancelled even though parent is.
+	cleanupCtx, cancelCleanup := cleanupContext(parent)
+	defer cancelCleanup()
+
+	assert.NoError(t, cleanupCtx.Err(),
+		"cleanupContext must detach from parent cancellation")
+
+	// cleanupCtx must have a deadline (defaultRmTimeout).
+	_, hasDeadline := cleanupCtx.Deadline()
+	assert.True(t, hasDeadline,
+		"cleanupContext must carry a timeout deadline")
+}
+
+// TestWorkspace_Cleanup_CancelledContext_Fails proves that Cleanup
+// with an already-cancelled context does NOT send the rm -rf command
+// — the SDK's HTTP client rejects the request before it reaches the
+// server. This is the "before" state that FU-6 fixes: without
+// cleanupContext, deferred cleanup would silently no-op.
+func TestWorkspace_Cleanup_CancelledContext_Fails(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	ws, err := exec.CreateWorkspace(
+		context.Background(), "exec-fail", codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+
+	// Cancel the context before calling Cleanup.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.Error(t, ctx.Err())
+
+	err = exec.Cleanup(ctx, ws)
+	assert.Error(t, err,
+		"Cleanup with cancelled context should fail")
+
+	// Verify no rm -rf was received by the mock server.
+	m.mu.Lock()
+	commands := append([]string(nil), m.commands...)
+	m.mu.Unlock()
+	for _, cmd := range commands {
+		assert.NotContains(t, cmd, "rm -rf",
+			"rm -rf should NOT be sent with a cancelled context")
+	}
+}
+
+// TestWorkspace_Cleanup_cleanupContext_Succeeds proves that Cleanup
+// with cleanupContext(cancelledCtx) DOES send the rm -rf command —
+// the detached context is not cancelled, so the SDK's HTTP client
+// processes the request normally. This is the "after" state that FU-6
+// enables: deferred cleanup uses cleanupContext, so rm -rf runs even
+// when the parent context is cancelled.
+func TestWorkspace_Cleanup_cleanupContext_Succeeds(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	ws, err := exec.CreateWorkspace(
+		context.Background(), "exec-ok", codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+
+	// Cancel the parent context, then derive a cleanup context.
+	parent, cancelParent := context.WithCancel(context.Background())
+	cancelParent()
+	require.Error(t, parent.Err())
+
+	cleanupCtx, cancelCleanup := cleanupContext(parent)
+	defer cancelCleanup()
+	require.NoError(t, cleanupCtx.Err(),
+		"cleanupContext must detach from parent cancellation")
+
+	err = exec.Cleanup(cleanupCtx, ws)
+	assert.NoError(t, err,
+		"Cleanup with cleanupContext should succeed after parent cancel")
+
+	// Verify rm -rf was received by the mock server.
+	m.mu.Lock()
+	commands := append([]string(nil), m.commands...)
+	m.mu.Unlock()
+	foundCleanup := false
+	for _, cmd := range commands {
+		if strings.Contains(cmd, "rm -rf") && strings.Contains(cmd, "ws_") {
+			foundCleanup = true
+			break
+		}
+	}
+	assert.True(t, foundCleanup,
+		"cleanup rm -rf should run via cleanupContext after parent cancel")
+}
+
+// --- Symlink escape prevention ---
+
+// TestWorkspace_PutFiles_RejectsSymlinkEscape verifies that PutFiles
+// rejects a file whose parent directory is a symlink pointing outside
+// the workspace. Without readlink -f resolution, the lexical
+// pathUnder check would pass but the write would land outside the
+// workspace.
+func TestWorkspace_PutFiles_RejectsSymlinkEscape(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	ws, err := exec.CreateWorkspace(
+		context.Background(), "exec-sym", codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+
+	// Simulate a symlink: /tmp/run/ws_x/link -> /tmp/outside
+	outside := "/tmp/outside"
+	linkPath := ws.Path + "/link"
+	m.setSymlink(linkPath, outside)
+
+	err = exec.PutFiles(context.Background(), ws, []codeexecutor.PutFile{
+		{Path: "link/file.txt", Content: []byte("data")},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "escapes workspace")
+}
+
+// TestWorkspace_RunProgram_RejectsSymlinkCwd verifies that RunProgram
+// rejects a Cwd that is a symlink pointing outside the workspace.
+func TestWorkspace_RunProgram_RejectsSymlinkCwd(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	ws, err := exec.CreateWorkspace(
+		context.Background(), "exec-sym-cwd", codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+
+	outside := "/tmp/outside"
+	linkPath := ws.Path + "/link"
+	m.setSymlink(linkPath, outside)
+
+	_, err = exec.RunProgram(context.Background(), ws,
+		codeexecutor.RunProgramSpec{
+			Cmd:     "ls",
+			Cwd:     "link",
+			Timeout: 5 * time.Second,
+		})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "escapes workspace")
+}
+
+// TestWorkspace_Collect_SkipsSymlinkEscape verifies that Collect
+// skips files that resolve outside the workspace via symlink, rather
+// than reading them.
+func TestWorkspace_Collect_SkipsSymlinkEscape(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	ws, err := exec.CreateWorkspace(
+		context.Background(), "exec-sym-col", codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+
+	// Simulate: workspace contains a symlink "leak.txt" -> /tmp/outside/secret.txt
+	outsideFile := "/tmp/outside/secret.txt"
+	leakPath := ws.Path + "/leak.txt"
+	m.setSymlink(leakPath, outsideFile)
+	// Seed data at the outside path so the mock would return it if
+	// Collect didn't skip the symlink.
+	m.setDownloadData(outsideFile, []byte("SECRET"))
+
+	// SearchFiles returns the symlink path; resolveSandboxPaths must
+	// resolve it to /tmp/outside/secret.txt and skip it.
+	m.setSearchResults([]string{"leak.txt"})
+
+	files, err := exec.Collect(context.Background(), ws, []string{"*.txt"})
+	require.NoError(t, err)
+	assert.Empty(t, files,
+		"Collect must skip files that resolve outside the workspace via symlink")
+}
+
+// TestWorkspace_PutFiles_AcceptsNormalPath verifies that PutFiles
+// still works for normal (non-symlink) paths after the readlink
+// resolution was added.
+func TestWorkspace_PutFiles_AcceptsNormalPath(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	ws, err := exec.CreateWorkspace(
+		context.Background(), "exec-normal", codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+
+	err = exec.PutFiles(context.Background(), ws, []codeexecutor.PutFile{
+		{Path: "src/main.py", Content: []byte("print(1)")},
+	})
+	require.NoError(t, err)
+}
+
+// TestWorkspace_PutFiles_MultiLevelNewDirs verifies that PutFiles can
+// upload to a path with multiple non-existent parent directories
+// (e.g. a/b/c/file.txt where a, b, and c are all new). This is a
+// regression test for the switch from resolveSandboxPath (which fails
+// on non-existent intermediate components) to resolveSandboxAncestor
+// (which walks up to the nearest existing ancestor).
+func TestWorkspace_PutFiles_MultiLevelNewDirs(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	ws, err := exec.CreateWorkspace(
+		context.Background(), "exec-multi", codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+
+	// a, a/b, and a/b/c are all new directories; none exist yet.
+	err = exec.PutFiles(context.Background(), ws, []codeexecutor.PutFile{
+		{Path: "a/b/c/file.txt", Content: []byte("deep")},
+	})
+	require.NoError(t, err,
+		"PutFiles must support multi-level new directories")
+}
+
+// TestWorkspace_PutDirectory_RejectsSymlinkEscape verifies that
+// PutDirectory rejects a destination that is a symlink pointing
+// outside the workspace.
+func TestWorkspace_PutDirectory_RejectsSymlinkEscape(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	ws, err := exec.CreateWorkspace(
+		context.Background(), "exec-pd-sym", codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+
+	// Create a temp host directory to upload.
+	hostDir := t.TempDir()
+	require.NoError(t, os.WriteFile(
+		filepath.Join(hostDir, "file.txt"), []byte("data"), 0o644,
+	))
+
+	// Simulate a symlink: ws.Path/link -> /tmp/outside
+	linkPath := ws.Path + "/link"
+	m.setSymlink(linkPath, "/tmp/outside")
+
+	err = exec.PutDirectory(context.Background(), ws, hostDir, "link")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "escapes workspace")
+}
+
+// TestWorkspace_StageDirectory_ReadOnly_NoChmodOutsideWorkspace
+// verifies that StageDirectory with ReadOnly=true does not chmod a
+// symlink target outside the workspace.
+func TestWorkspace_StageDirectory_ReadOnly_NoChmodOutsideWorkspace(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	ws, err := exec.CreateWorkspace(
+		context.Background(), "exec-stage-sym", codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+
+	hostDir := t.TempDir()
+	require.NoError(t, os.WriteFile(
+		filepath.Join(hostDir, "file.txt"), []byte("data"), 0o644,
+	))
+
+	// Simulate a symlink: ws.Path/link -> /tmp/outside
+	linkPath := ws.Path + "/link"
+	m.setSymlink(linkPath, "/tmp/outside")
+
+	err = exec.StageDirectory(context.Background(), ws, hostDir, "link",
+		codeexecutor.StageOptions{ReadOnly: true})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "escapes workspace")
 }

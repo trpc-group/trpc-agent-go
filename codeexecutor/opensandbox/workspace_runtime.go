@@ -30,6 +30,7 @@ import (
 	osb "github.com/alibaba/OpenSandbox/sdks/sandbox/go"
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 )
 
 // Compile-time checks that workspaceRuntime satisfies the workspace
@@ -75,9 +76,43 @@ func newWorkspaceRuntime(c *CodeExecutor) *workspaceRuntime {
 		base = defaultSandboxRunBase
 	}
 	return &workspaceRuntime{ce: c, cfg: runtimeConfig{
-		runBase:              base,
+		runBase:              path.Clean(base),
 		workspacePersistence: c.workspacePersistence,
 	}}
+}
+
+// validateRunBase enforces that the sandbox runBase is an absolute
+// POSIX path that is not root and does not contain ".." escape
+// components. This prevents a misconfigured runBase (e.g.
+// "/tmp/run/../../etc") from allowing workspace paths to be created
+// outside the intended directory. An empty base is valid (the default
+// is applied by newWorkspaceRuntime).
+func validateRunBase(base string) error {
+	if base == "" {
+		return nil
+	}
+	if !path.IsAbs(base) {
+		return fmt.Errorf("opensandbox: runBase %q is not an absolute path", base)
+	}
+	if path.Clean(base) == "/" {
+		return errors.New("opensandbox: runBase must not be \"/\"")
+	}
+	for _, part := range strings.Split(base, "/") {
+		if part == ".." {
+			return fmt.Errorf("opensandbox: runBase %q contains \"..\" escape", base)
+		}
+	}
+	return nil
+}
+
+// cleanupContext returns a context detached from the parent's
+// cancellation signal, with a short timeout. Deferred workspace
+// cleanup (rm -rf) must use this instead of the original context:
+// if the parent context is already cancelled/timed out, cleanup
+// using the same context would fail immediately and leave per-turn
+// workspace directories behind in the sandbox.
+func cleanupContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), defaultRmTimeout)
 }
 
 // sandbox returns the underlying OpenSandbox sandbox, or an error if
@@ -213,10 +248,23 @@ func (r *workspaceRuntime) PutFiles(
 		if !pathUnder(finalPath, ws.Path) {
 			return fmt.Errorf("opensandbox: path %q escapes workspace", f.Path)
 		}
+		// Resolve symlinks in the parent directory to prevent a
+		// symlink inside the workspace from redirecting writes
+		// outside. Use resolveSandboxAncestor (not resolveSandboxPath)
+		// because the parent may not yet exist — e.g. uploading
+		// a/b/c/file.txt where a, b, and c are all new directories.
+		// resolveSandboxAncestor walks up to the nearest existing
+		// ancestor, resolves it with readlink -f, and appends the
+		// non-existent tail back.
+		resolvedParent, err := r.resolveSandboxAncestor(ctx, path.Dir(finalPath), ws.Path)
+		if err != nil {
+			return err
+		}
+		finalPath = path.Join(resolvedParent, path.Base(finalPath))
 		// Ensure the parent directory exists. The SDK's UploadFiles
 		// creates intermediate directories, but we create them
 		// explicitly to be safe across server versions.
-		parent := path.Dir(finalPath)
+		parent := resolvedParent
 		if parent != "." && parent != "/" && parent != ws.Path {
 			if err := sb.CreateDirectory(ctx, parent, osb.OctalMode(0o755)); err != nil {
 				return fmt.Errorf("create directory %s: %w", parent, err)
@@ -276,6 +324,14 @@ func (r *workspaceRuntime) PutDirectory(
 	if !pathUnder(dest, ws.Path) {
 		return fmt.Errorf("opensandbox: destination %q escapes workspace", to)
 	}
+	// Resolve symlinks in dest to prevent a symlink inside the
+	// workspace from redirecting directory uploads outside. Use
+	// resolveSandboxAncestor because dest may not yet exist.
+	resolvedDest, err := r.resolveSandboxAncestor(ctx, dest, ws.Path)
+	if err != nil {
+		return err
+	}
+	dest = resolvedDest
 
 	sb, err := r.sandbox()
 	if err != nil {
@@ -400,11 +456,19 @@ func (r *workspaceRuntime) StageDirectory(
 		return err
 	}
 	if opt.ReadOnly {
+		// Re-resolve dest to ensure chmod operates on the real path
+		// (after symlink resolution), not a symlink that might point
+		// outside the workspace. PutDirectory already validated this,
+		// but we resolve again in case the filesystem changed.
 		dest := ws.Path
 		if to != "" {
 			dest = path.Join(ws.Path, filepath.ToSlash(to))
 		}
-		script := "chmod -R a-w " + shellQuote(dest)
+		resolvedDest, err := r.resolveSandboxAncestor(ctx, dest, ws.Path)
+		if err != nil {
+			return err
+		}
+		script := "chmod -R a-w " + shellQuote(resolvedDest)
 		if _, err := r.runBash(ctx, script, defaultStageTimeout); err != nil {
 			return err
 		}
@@ -437,12 +501,21 @@ func (r *workspaceRuntime) Collect(
 		return nil, err
 	}
 
-	out := make([]codeexecutor.File, 0, len(paths))
+	// Resolve symlinks for all collected paths in a single round-trip
+	// to prevent a symlink inside the workspace from causing Collect
+	// to read files outside the workspace. A path that resolves
+	// outside ws.Path is skipped.
+	resolvedPaths, err := r.resolveSandboxPaths(ctx, paths, ws.Path)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]codeexecutor.File, 0, len(resolvedPaths))
 	seen := map[string]bool{}
-	for _, full := range paths {
-		rel := strings.TrimPrefix(full, ws.Path+"/")
-		if rel == full {
-			rel = filepath.ToSlash(full)
+	for _, fr := range resolvedPaths {
+		rel := strings.TrimPrefix(fr.path, ws.Path+"/")
+		if rel == fr.path {
+			rel = filepath.ToSlash(fr.path)
 		}
 		if codeexecutor.IsRootMetadataTempPath(rel) {
 			continue
@@ -451,7 +524,7 @@ func (r *workspaceRuntime) Collect(
 			continue
 		}
 		seen[rel] = true
-		data, size, err := r.readFile(ctx, sb, full, maxReadSizeBytes)
+		data, size, err := r.readFile(ctx, sb, fr.path, maxReadSizeBytes, fr.size)
 		if err != nil {
 			return nil, err
 		}
@@ -465,6 +538,62 @@ func (r *workspaceRuntime) Collect(
 		})
 	}
 	return out, nil
+}
+
+// resolveSandboxPaths resolves the real paths of multiple targets
+// inside the sandbox in a single bash invocation, then filters out
+// any that resolve outside wsBase. This is the batch version of
+// resolveSandboxPath, used by Collect to avoid one round-trip per
+// search result.
+func (r *workspaceRuntime) resolveSandboxPaths(
+	ctx context.Context, results []fileSearchResult, wsBase string,
+) ([]fileSearchResult, error) {
+	if len(results) == 0 {
+		return results, nil
+	}
+	// Use printf with a NUL-separated format to avoid ambiguity from
+	// readlink's own newline output. Each result is on exactly one
+	// line, with no extra echo that would create blank lines.
+	var script strings.Builder
+	script.WriteString("for p in")
+	for _, fr := range results {
+		script.WriteByte(' ')
+		script.WriteString(shellQuote(fr.path))
+	}
+	script.WriteString(`; do r=$(readlink -f -- "$p" 2>/dev/null) || r=""; printf '%s\n' "$r"; done`)
+	out, err := r.runBash(ctx, script.String(), defaultCollectTimeout)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"opensandbox: resolve paths: %w", err,
+		)
+	}
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) != len(results) {
+		// Fallback: if the batch script returned unexpected output,
+		// resolve each path individually.
+		filtered := make([]fileSearchResult, 0, len(results))
+		for _, fr := range results {
+			resolved, err := r.resolveSandboxPath(ctx, fr.path, wsBase)
+			if err != nil {
+				continue // skip paths that escape
+			}
+			filtered = append(filtered, fileSearchResult{
+				path: resolved, size: fr.size,
+			})
+		}
+		return filtered, nil
+	}
+	filtered := make([]fileSearchResult, 0, len(results))
+	for i, line := range lines {
+		resolved := strings.TrimSpace(line)
+		if resolved == "" || !pathUnder(resolved, wsBase) {
+			continue
+		}
+		filtered = append(filtered, fileSearchResult{
+			path: resolved, size: results[i].size,
+		})
+	}
+	return filtered, nil
 }
 
 // StageInputs maps external inputs into the sandbox workspace.
@@ -561,6 +690,14 @@ func (r *workspaceRuntime) RunProgram(
 				"opensandbox: spec.Cwd %q escapes workspace", spec.Cwd,
 			)
 		}
+		// Also resolve symlinks: a symlink inside the workspace
+		// pointing to an external directory would pass the lexical
+		// check above but cause `cd` to land outside the workspace.
+		resolved, err := r.resolveSandboxPath(ctx, cwd, ws.Path)
+		if err != nil {
+			return codeexecutor.RunResult{}, err
+		}
+		cwd = resolved
 	}
 
 	skillsDir := path.Join(ws.Path, codeexecutor.DirSkills)
@@ -668,8 +805,16 @@ func (r *workspaceRuntime) ExecuteInline(
 	}
 	// In PerSession mode the workspace is reused across turns; the
 	// caller owns cleanup. In PerTurn mode we clean up automatically.
+	// Use a context detached from the parent's cancellation so cleanup
+	// still runs after the parent context is cancelled/timed out.
 	if r.cfg.workspacePersistence != WorkspacePersistencePerSession {
-		defer r.Cleanup(ctx, ws)
+		defer func() {
+			cleanupCtx, cancel := cleanupContext(ctx)
+			defer cancel()
+			if err := r.Cleanup(cleanupCtx, ws); err != nil {
+				log.Errorf("opensandbox: cleanup workspace %q: %v", ws.Path, err)
+			}
+		}()
 	}
 
 	var (
@@ -794,9 +939,14 @@ func (r *workspaceRuntime) runBash(
 
 // readFile reads up to limit bytes from a remote path via the SDK's
 // DownloadFile API. Returns the data and the file's full size (which
-// may exceed len(data) when truncated).
+// may exceed len(data) when truncated). knownSize is the real file
+// size from SearchFiles metadata; when positive it is used as the
+// returned size so callers get an accurate SizeBytes even for files
+// larger than limit. When knownSize is non-positive, the size falls
+// back to the number of bytes actually read (capped at limit+1).
 func (r *workspaceRuntime) readFile(
 	ctx context.Context, sb *osb.Sandbox, full string, limit int64,
+	knownSize int64,
 ) ([]byte, int64, error) {
 	if limit <= 0 {
 		limit = maxReadSizeBytes
@@ -817,23 +967,34 @@ func (r *workspaceRuntime) readFile(
 	if err != nil {
 		return nil, 0, err
 	}
-	size := int64(len(data))
-	if size > limit {
-		// File is at least limit+1 bytes; truncate the payload to
-		// limit and keep size > len(data) so callers can detect
-		// truncation via size > len(truncatedData).
+	// Prefer the real size from SearchFiles metadata; fall back to
+	// the byte count we actually read when metadata is unavailable.
+	size := knownSize
+	if size <= 0 {
+		size = int64(len(data))
+	}
+	if int64(len(data)) > limit {
 		data = data[:limit]
 	}
 	return data, size, nil
 }
 
+// fileSearchResult carries a file path and its real size as reported
+// by the SearchFiles API. The size is used by Collect to set
+// File.SizeBytes accurately even when the file content is truncated
+// by readFile's byte cap.
+type fileSearchResult struct {
+	path string
+	size int64
+}
+
 // listFilesByGlob resolves the provided patterns inside the sandbox
-// using the SDK's SearchFiles API and returns absolute file paths.
-// SearchFiles matches a single glob per call, so we iterate over
-// patterns and dedup results.
+// using the SDK's SearchFiles API and returns absolute file paths
+// with their real sizes. SearchFiles matches a single glob per call,
+// so we iterate over patterns and dedup results.
 func (r *workspaceRuntime) listFilesByGlob(
 	ctx context.Context, wsPath string, patterns []string,
-) ([]string, error) {
+) ([]fileSearchResult, error) {
 	if len(patterns) == 0 {
 		return nil, nil
 	}
@@ -841,7 +1002,7 @@ func (r *workspaceRuntime) listFilesByGlob(
 	if err != nil {
 		return nil, err
 	}
-	var out []string
+	var out []fileSearchResult
 	seen := map[string]bool{}
 	for _, p := range patterns {
 		p = strings.TrimSpace(p)
@@ -865,7 +1026,7 @@ func (r *workspaceRuntime) listFilesByGlob(
 				continue
 			}
 			seen[clean] = true
-			out = append(out, clean)
+			out = append(out, fileSearchResult{path: clean, size: fi.Size})
 		}
 	}
 	return out, nil
@@ -890,6 +1051,102 @@ func pathUnder(p, base string) bool {
 		return true
 	}
 	return strings.HasPrefix(p, base+"/")
+}
+
+// resolveSandboxPath resolves the real path of a target inside the
+// sandbox using `readlink -f`, then verifies the resolved path is
+// still under the workspace base. This prevents symlink-based escape:
+// a symlink inside the workspace pointing to an external directory
+// (e.g. /tmp/outside) would pass the lexical pathUnder check but
+// cause writes/reads to land outside the workspace.
+//
+// The target must exist (readlink -f fails on non-existent paths when
+// any component other than the last is missing). For targets that may
+// not yet exist (e.g. a file about to be created, possibly under
+// multiple new directories), use resolveSandboxAncestor instead.
+//
+// Returns the resolved path if it is under wsBase, or an error
+// otherwise.
+func (r *workspaceRuntime) resolveSandboxPath(
+	ctx context.Context, target, wsBase string,
+) (string, error) {
+	script := "readlink -f " + shellQuote(target)
+	out, err := r.runBash(ctx, script, defaultCreateTimeout)
+	if err != nil {
+		return "", fmt.Errorf(
+			"opensandbox: resolve path %q: %w", target, err,
+		)
+	}
+	resolved := strings.TrimSpace(out)
+	if resolved == "" {
+		return "", fmt.Errorf(
+			"opensandbox: readlink -f returned empty for %q", target,
+		)
+	}
+	if !pathUnder(resolved, wsBase) {
+		return "", fmt.Errorf(
+			"opensandbox: resolved path %q escapes workspace %q (symlink?)",
+			resolved, wsBase,
+		)
+	}
+	return resolved, nil
+}
+
+// resolveSandboxAncestor resolves the real path of a target that may
+// not yet exist (e.g. a/b/c/file.txt where a, b, and c are all new).
+// It walks up the path until it finds an existing ancestor, resolves
+// that ancestor with readlink -f to follow symlinks, verifies the
+// resolved ancestor is still under wsBase, then appends the
+// non-existent tail components back.
+//
+// This prevents symlink escape via a parent directory that is a
+// symlink to an external location, while still allowing uploads to
+// multi-level new directories (which readlink -f alone would reject
+// because intermediate components don't exist).
+func (r *workspaceRuntime) resolveSandboxAncestor(
+	ctx context.Context, target, wsBase string,
+) (string, error) {
+	target = path.Clean(target)
+	// If target exists, resolve it directly.
+	if out, err := r.runBash(ctx,
+		"test -e "+shellQuote(target)+" && echo yes || echo no",
+		defaultCreateTimeout); err == nil && strings.TrimSpace(out) == "yes" {
+		return r.resolveSandboxPath(ctx, target, wsBase)
+	}
+	// Walk up to find the nearest existing ancestor.
+	dir := path.Dir(target)
+	tail := path.Base(target)
+	for dir != "/" && dir != "." {
+		out, err := r.runBash(ctx,
+			"test -e "+shellQuote(dir)+" && echo yes || echo no",
+			defaultCreateTimeout)
+		if err != nil {
+			return "", fmt.Errorf(
+				"opensandbox: check ancestor %q: %w", dir, err,
+			)
+		}
+		if strings.TrimSpace(out) == "yes" {
+			// Found existing ancestor; resolve it.
+			resolved, err := r.resolveSandboxPath(ctx, dir, wsBase)
+			if err != nil {
+				return "", err
+			}
+			return path.Join(resolved, tail), nil
+		}
+		tail = path.Join(path.Base(dir), tail)
+		dir = path.Dir(dir)
+	}
+	// No existing ancestor found; the workspace root itself should
+	// exist. Resolve wsBase directly.
+	resolved, err := r.resolveSandboxPath(ctx, wsBase, wsBase)
+	if err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(wsBase, target)
+	if err != nil {
+		return "", err
+	}
+	return path.Join(resolved, filepath.ToSlash(rel)), nil
 }
 
 func isTimeoutErr(err error) bool {

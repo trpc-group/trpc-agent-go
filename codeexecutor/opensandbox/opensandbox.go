@@ -190,6 +190,11 @@ const (
 	// ExecuteCode and ExecuteInline do NOT auto-cleanup the workspace;
 	// the caller is responsible for calling Cleanup when the session
 	// ends.
+	//
+	// Concurrent calls with the same session ID are NOT safe: they
+	// reuse one workspace and will race on source files and output
+	// directories. The caller must serialize calls sharing a session
+	// ID.
 	WorkspacePersistencePerSession
 )
 
@@ -198,6 +203,11 @@ const (
 // WorkspacePersistencePerSession when multi-turn agents should keep
 // files and intermediate state across turns; in that mode the caller
 // owns Cleanup (ExecuteCode/ExecuteInline skip auto-cleanup).
+//
+// PerSession mode is NOT safe for concurrent calls with the same
+// session ID: they reuse one workspace and will race on source files
+// and output directories. The caller must serialize calls sharing a
+// session ID. PerTurn mode (the default) is safe for concurrent use.
 func WithWorkspacePersistence(mode WorkspacePersistenceMode) Option {
 	return func(c *CodeExecutor) { c.workspacePersistence = mode }
 }
@@ -216,6 +226,15 @@ func WithOutputPatterns(patterns []string) Option {
 // concurrently with each other, but Close must not run concurrently
 // with any other method. This mirrors the e2b adapter's lifecycle
 // contract.
+//
+// Concurrency with WorkspacePersistencePerSession: when the executor
+// is configured with PerSession persistence, calls sharing the same
+// session ID reuse one workspace and therefore MUST be serialized by
+// the caller. Concurrent ExecuteCode/ExecuteInline calls with the same
+// session ID will race on source files (src/inline_0.*), output
+// directories, and run directories, causing cross-request
+// interference. PerTurn mode (the default) is safe for concurrent use
+// because each call gets an isolated workspace.
 type CodeExecutor struct {
 	mu sync.Mutex
 
@@ -286,6 +305,16 @@ func NewWithContext(ctx context.Context, opts ...Option) (*CodeExecutor, error) 
 	}
 	for _, opt := range opts {
 		opt(c)
+	}
+
+	// Validate the configured runBase before creating or connecting to
+	// a sandbox. Without this early check, an invalid runBase (e.g.
+	// "/tmp/run/../../etc") would cause CreateSandbox to succeed, then
+	// validateRunBase to fail, and the caller — unable to obtain the
+	// CodeExecutor to call Close() — would leak the sandbox until the
+	// server-side timeout fires.
+	if err := validateRunBase(c.sandboxRunBase); err != nil {
+		return nil, err
 	}
 
 	// WithRequestTimeout(0) means "keep the SDK default"; resolve it
@@ -403,8 +432,16 @@ func (c *CodeExecutor) ExecuteCode(
 	}
 	// In PerSession mode the workspace is reused across turns; the
 	// caller owns cleanup. In PerTurn mode we clean up automatically.
+	// Use a context detached from the parent's cancellation so cleanup
+	// still runs after the parent context is cancelled/timed out.
 	if c.workspacePersistence != WorkspacePersistencePerSession {
-		defer c.Cleanup(ctx, ws)
+		defer func() {
+			cleanupCtx, cancel := cleanupContext(ctx)
+			defer cancel()
+			if err := c.Cleanup(cleanupCtx, ws); err != nil {
+				log.Errorf("opensandbox: cleanup workspace %q: %v", ws.Path, err)
+			}
+		}()
 	}
 
 	var (

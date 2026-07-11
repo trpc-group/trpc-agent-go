@@ -779,3 +779,79 @@ func TestWithEntrypoint_EmptyKeepsDefault(t *testing.T) {
 	assert.Equal(t, osb.CodeInterpreterEntrypoint, c.entrypoint,
 		"WithEntrypoint([]string{}) should not clear the default entrypoint")
 }
+
+// --- FU-7: WithSandboxRunBase path validation ---
+
+// TestValidateRunBase_RejectsRelativePath verifies that a non-absolute
+// runBase is rejected. Relative paths break the pathUnder precondition
+// (which expects absolute POSIX paths) and could allow workspace
+// creation in unintended locations.
+func TestValidateRunBase_RejectsRelativePath(t *testing.T) {
+	err := validateRunBase("tmp/run")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not an absolute path")
+}
+
+// TestValidateRunBase_RejectsRoot verifies that "/" is rejected as a
+// runBase. If "/" were allowed, validateWorkspace's "path must not
+// equal runBase" check would reject every workspace (since no path
+// can be under "/" without being... under "/"), and more critically,
+// a workspace path of "/tmp" would pass pathUnder but Cleanup rm -rf
+// on "/" would be catastrophic if the path check were ever bypassed.
+func TestValidateRunBase_RejectsRoot(t *testing.T) {
+	err := validateRunBase("/")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `must not be`)
+}
+
+// TestValidateRunBase_RejectsDotDotEscape verifies that a runBase
+// containing ".." components is rejected. Without this,
+// WithSandboxRunBase("/tmp/run/../../etc") would be path.Cleaned to
+// "/etc", allowing workspace creation under arbitrary directories.
+func TestValidateRunBase_RejectsDotDotEscape(t *testing.T) {
+	err := validateRunBase("/tmp/run/../../etc")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `".." escape`)
+}
+
+// TestValidateRunBase_AcceptsValidPaths verifies that normal absolute
+// paths and the empty string (use default) are accepted.
+func TestValidateRunBase_AcceptsValidPaths(t *testing.T) {
+	assert.NoError(t, validateRunBase(""))
+	assert.NoError(t, validateRunBase("/tmp/run"))
+	assert.NoError(t, validateRunBase("/tmp/run/"))
+	assert.NoError(t, validateRunBase("/home/user/workspaces"))
+}
+
+// TestNew_WithSandboxRunBase_RejectsInvalid verifies that
+// NewWithContext returns an error when WithSandboxRunBase is given an
+// invalid path, rather than silently creating a workspace runtime
+// with an escape-prone base. The error must fire BEFORE
+// CreateSandbox/ConnectSandbox is called, otherwise the caller cannot
+// obtain the CodeExecutor to Close() it and the sandbox leaks until
+// the server-side timeout fires.
+func TestNew_WithSandboxRunBase_RejectsInvalid(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	u, err := url.Parse(m.server.URL)
+	require.NoError(t, err)
+	host := u.Host
+
+	_, err = NewWithContext(context.Background(),
+		WithAPIKey("test"),
+		WithDomain(host),
+		WithProtocol("http"),
+		WithSandboxRunBase("/tmp/run/../../etc"),
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `".." escape`)
+
+	// The sandbox create endpoint must NOT have been called —
+	// validateRunBase must fire before CreateSandbox/ConnectSandbox
+	// so an invalid config does not leak a remote sandbox.
+	m.mu.Lock()
+	createCalls := m.createCalls
+	m.mu.Unlock()
+	assert.Equal(t, 0, createCalls,
+		"validateRunBase must reject before CreateSandbox is called")
+}
