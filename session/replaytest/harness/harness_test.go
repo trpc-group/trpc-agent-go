@@ -12,8 +12,11 @@ package harness
 
 import (
 	"context"
+	"errors"
 	"testing"
 
+	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/session/replaytest/scenario"
 	"trpc.group/trpc-go/trpc-agent-go/session/replaytest/summary"
@@ -168,4 +171,95 @@ func TestRunRecoveryCase(t *testing.T) {
 	if string(sess.State["recovered"]) != "ok" {
 		t.Fatalf("恢复状态错误: %+v", sess.State)
 	}
+}
+
+func TestRunMultiTurnCase(t *testing.T) {
+	sess, err := Run(context.Background(), inmemory.NewSessionService(), scenario.Case02_MultiTurn)
+	if err != nil {
+		t.Fatalf("多轮回放失败: %v", err)
+	}
+	if len(sess.Events) != 6 {
+		t.Fatalf("多轮事件数量错误: %+v", sess.Events)
+	}
+}
+
+func TestRunAppendStateDelta(t *testing.T) {
+	c := &scenario.Case{
+		Name: "state_delta",
+		Ops: []scenario.Op{
+			{Kind: scenario.OpCreateSession},
+			{
+				Kind:       scenario.OpAppendStateDelta,
+				EventID:    "delta-1",
+				Author:     "system",
+				StateDelta: map[string]string{"k": "v"},
+			},
+		},
+	}
+	if _, err := Run(context.Background(), inmemory.NewSessionService(), c); err != nil {
+		t.Fatalf("state delta 回放失败: %v", err)
+	}
+}
+
+func TestRunAppendEventWithRetry(t *testing.T) {
+	c := &scenario.Case{
+		Name: "retry_append",
+		Ops: []scenario.Op{
+			{Kind: scenario.OpCreateSession},
+			{Kind: scenario.OpAppendEventWithRetry, Role: "user", Content: "retry me"},
+		},
+	}
+	svc := &failOnceAppendService{Service: inmemory.NewSessionService()}
+	sess, err := Run(context.Background(), svc, c)
+	if err != nil {
+		t.Fatalf("重试追加回放失败: %v", err)
+	}
+	if len(sess.Events) != 1 {
+		t.Fatalf("重试后事件数量错误: %+v", sess.Events)
+	}
+}
+
+func TestRunAppendTrackUnsupportedBackend(t *testing.T) {
+	c := &scenario.Case{
+		Name: "track_unsupported",
+		Ops: []scenario.Op{
+			{Kind: scenario.OpCreateSession},
+			{Kind: scenario.OpAppendTrack, TrackName: "tool", TrackPayload: `{}`},
+		},
+	}
+	_, err := Run(context.Background(), nonTrackService{}, c)
+	if err == nil {
+		t.Fatal("不支持 track 的后端应返回错误")
+	}
+}
+
+type failOnceAppendService struct {
+	session.Service
+	failed bool
+}
+
+func (s *failOnceAppendService) AppendEvent(
+	ctx context.Context,
+	sess *session.Session,
+	evt *event.Event,
+	opts ...session.Option,
+) error {
+	if !s.failed {
+		s.failed = true
+		return errors.New("fail once")
+	}
+	return s.Service.AppendEvent(ctx, sess, evt, opts...)
+}
+
+type nonTrackService struct {
+	session.Service
+}
+
+func (nonTrackService) CreateSession(
+	ctx context.Context,
+	key session.Key,
+	state session.StateMap,
+	opts ...session.Option,
+) (*session.Session, error) {
+	return inmemory.NewSessionService().CreateSession(ctx, key, state, opts...)
 }

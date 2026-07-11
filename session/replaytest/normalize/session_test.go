@@ -109,3 +109,42 @@ func TestNormalizeTracksNilSession(t *testing.T) {
 		t.Fatalf("nil session 应返回空 map: %+v", got)
 	}
 }
+
+func TestNormalizeSummariesSkipsNilEntry(t *testing.T) {
+	sess := &session.Session{
+		Summaries: map[string]*session.Summary{
+			"skip": nil,
+			"keep": {Summary: "ok"},
+		},
+	}
+	got := NormalizeSummaries(sess)
+	if len(got) != 1 || got["keep"].Text != "ok" {
+		t.Fatalf("应跳过 nil summary: %+v", got)
+	}
+}
+
+func TestNormalizeTracksSkipsNilHistory(t *testing.T) {
+	sess := &session.Session{
+		Tracks: map[session.Track]*session.TrackEvents{
+			"skip": nil,
+			"keep": {Events: []session.TrackEvent{{
+				Track: "keep", Payload: []byte(`{"ok":true}`),
+			}}},
+		},
+	}
+	got := NormalizeTracks(sess)
+	if len(got) != 1 || len(got["keep"]) != 1 {
+		t.Fatalf("应跳过 nil track history: %+v", got)
+	}
+}
+
+func TestNormalizeEventOmitsEmptyMaps(t *testing.T) {
+	evt := NormalizeEvent(0, event.Event{
+		Response: &model.Response{Choices: []model.Choice{{
+			Message: model.Message{Role: model.RoleUser, Content: "hi"},
+		}}},
+	})
+	if evt.StateDelta != nil || evt.Extensions != nil {
+		t.Fatalf("空 map 应归一化为 nil: %+v", evt)
+	}
+}

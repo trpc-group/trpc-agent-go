@@ -220,3 +220,35 @@ func TestCompareJSONInvalidPayload(t *testing.T) {
 		t.Fatalf("非法 JSON payload 应产生差异: %+v", report.Diffs)
 	}
 }
+
+func TestCompareSessionTrackBranches(t *testing.T) {
+	base := sampleSessionSnapshot()
+	candidate := cloneSessionSnapshot(t, base)
+	candidate.Tracks["tool"] = append(candidate.Tracks["tool"], normalize.TrackEvent{
+		Index: 1, TrackName: "tool", Payload: `{"status":"ok"}`,
+	})
+	report := CompareSession(testContext(ScopeSession), base, candidate, nil)
+	if !containsPath(report.Diffs, `tracks["tool"].length`) {
+		t.Fatalf("应检测到 track 数量差异: %+v", report.Diffs)
+	}
+
+	candidate = cloneSessionSnapshot(t, base)
+	candidate.Tracks["extra"] = []normalize.TrackEvent{{
+		Index: 0, TrackName: "extra", Payload: `{"status":"ok"}`,
+	}}
+	report = CompareSession(testContext(ScopeSession), base, candidate, nil)
+	if !containsPath(report.Diffs, `tracks["extra"]`) {
+		t.Fatalf("应检测到缺失 track: %+v", report.Diffs)
+	}
+}
+
+func TestCompareJSONNestedKeyMissing(t *testing.T) {
+	base := sampleSessionSnapshot()
+	candidate := cloneSessionSnapshot(t, base)
+	base.Tracks["tool"][0].Payload = `{"status":"ok","detail":"base"}`
+	candidate.Tracks["tool"][0].Payload = `{"status":"ok"}`
+	report := CompareSession(testContext(ScopeSession), base, candidate, nil)
+	if !containsPath(report.Diffs, `tracks["tool"][0].payload.detail`) {
+		t.Fatalf("应检测到嵌套 JSON 字段差异: %+v", report.Diffs)
+	}
+}

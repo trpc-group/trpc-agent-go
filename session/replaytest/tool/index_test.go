@@ -34,4 +34,7 @@ func TestNormalizeJSONEmptyAndMarshalFallback(t *testing.T) {
 	if got := NormalizeJSON(nil); got != "" {
 		t.Fatalf("空 JSON 应返回空字符串: %q", got)
 	}
+	if got := NormalizeJSON([]byte(`[]`)); got != "[]" {
+		t.Fatalf("数组 JSON 应被规范化: %q", got)
+	}
 }
