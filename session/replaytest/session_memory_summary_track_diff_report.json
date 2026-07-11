@@ -1,0 +1,207 @@
+{
+  "timestamp": "2026-07-11T14:39:23.0503504Z",
+  "total_cases": 12,
+  "pass_cases": 12,
+  "fail_cases": 0,
+  "total_diffs": 0,
+  "allowed_diffs": 0,
+  "case_results": [
+    {
+      "case_name": "single_turn_conversation",
+      "backend_pairs": [
+        [
+          "inmemory",
+          "inmemory-A"
+        ],
+        [
+          "inmemory",
+          "inmemory-B"
+        ]
+      ],
+      "has_diff": false,
+      "diff_count": 0,
+      "allowed_diff_count": 0
+    },
+    {
+      "case_name": "multi_turn_conversation",
+      "backend_pairs": [
+        [
+          "inmemory",
+          "inmemory-A"
+        ],
+        [
+          "inmemory",
+          "inmemory-B"
+        ]
+      ],
+      "has_diff": false,
+      "diff_count": 0,
+      "allowed_diff_count": 0
+    },
+    {
+      "case_name": "tool_call_conversation",
+      "backend_pairs": [
+        [
+          "inmemory",
+          "inmemory-A"
+        ],
+        [
+          "inmemory",
+          "inmemory-B"
+        ]
+      ],
+      "has_diff": false,
+      "diff_count": 0,
+      "allowed_diff_count": 0
+    },
+    {
+      "case_name": "state_updates",
+      "backend_pairs": [
+        [
+          "inmemory",
+          "inmemory-A"
+        ],
+        [
+          "inmemory",
+          "inmemory-B"
+        ]
+      ],
+      "has_diff": false,
+      "diff_count": 0,
+      "allowed_diff_count": 0
+    },
+    {
+      "case_name": "memory_write_read",
+      "backend_pairs": [
+        [
+          "inmemory",
+          "inmemory-A"
+        ],
+        [
+          "inmemory",
+          "inmemory-B"
+        ]
+      ],
+      "has_diff": false,
+      "diff_count": 0,
+      "allowed_diff_count": 0
+    },
+    {
+      "case_name": "summary_generation",
+      "backend_pairs": [
+        [
+          "inmemory",
+          "inmemory-A"
+        ],
+        [
+          "inmemory",
+          "inmemory-B"
+        ]
+      ],
+      "has_diff": false,
+      "diff_count": 0,
+      "allowed_diff_count": 0
+    },
+    {
+      "case_name": "summary_event_truncation",
+      "backend_pairs": [
+        [
+          "inmemory",
+          "inmemory-A"
+        ],
+        [
+          "inmemory",
+          "inmemory-B"
+        ]
+      ],
+      "has_diff": false,
+      "diff_count": 0,
+      "allowed_diff_count": 0
+    },
+    {
+      "case_name": "track_events",
+      "backend_pairs": [
+        [
+          "inmemory",
+          "inmemory-A"
+        ],
+        [
+          "inmemory",
+          "inmemory-B"
+        ]
+      ],
+      "has_diff": false,
+      "diff_count": 0,
+      "allowed_diff_count": 0
+    },
+    {
+      "case_name": "concurrent_writes",
+      "backend_pairs": [
+        [
+          "inmemory",
+          "inmemory-A"
+        ],
+        [
+          "inmemory",
+          "inmemory-B"
+        ]
+      ],
+      "has_diff": false,
+      "diff_count": 0,
+      "allowed_diff_count": 0
+    },
+    {
+      "case_name": "error_recovery",
+      "backend_pairs": [
+        [
+          "inmemory",
+          "inmemory-A"
+        ],
+        [
+          "inmemory",
+          "inmemory-B"
+        ]
+      ],
+      "has_diff": false,
+      "diff_count": 0,
+      "allowed_diff_count": 0
+    },
+    {
+      "case_name": "state_delete_clear",
+      "backend_pairs": [
+        [
+          "inmemory",
+          "inmemory-A"
+        ],
+        [
+          "inmemory",
+          "inmemory-B"
+        ]
+      ],
+      "has_diff": false,
+      "diff_count": 0,
+      "allowed_diff_count": 0
+    },
+    {
+      "case_name": "multiple_memory_entries",
+      "backend_pairs": [
+        [
+          "inmemory",
+          "inmemory-A"
+        ],
+        [
+          "inmemory",
+          "inmemory-B"
+        ]
+      ],
+      "has_diff": false,
+      "diff_count": 0,
+      "allowed_diff_count": 0
+    }
+  ],
+  "backend_names": [
+    "inmemory",
+    "inmemory-A",
+    "inmemory-B"
+  ]
+}
