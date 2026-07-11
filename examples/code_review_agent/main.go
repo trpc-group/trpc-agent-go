@@ -263,10 +263,16 @@ func runRules(taskID string, input *inputsource.Input, metrics *telemetry.Metric
 func resolveSkillsDir() string {
 	if root := os.Getenv("SKILLS_ROOT"); root != "" {
 		if info, err := os.Stat(root); err == nil && info.IsDir() {
+			if abs, err := filepath.Abs(root); err == nil {
+				return abs
+			}
 			return root
 		}
 	}
 	if info, err := os.Stat("skills"); err == nil && info.IsDir() {
+		if abs, err := filepath.Abs("skills"); err == nil {
+			return abs
+		}
 		return "skills"
 	}
 	return ""
@@ -303,14 +309,19 @@ func runSandboxChecks(ctx context.Context, opts *pipelineOpts, taskID string, po
 	if err != nil {
 		return handleSandboxInitFailure(opts, fmt.Errorf("create workspace: %w", err))
 	}
-	defer sb.Close(ctx, ws)
+	defer sb.Close(context.WithoutCancel(ctx), ws)
 
 	// Stage the skill scripts into the workspace so they are visible inside
 	// the sandbox filesystem (container/e2b backends do not share the host
 	// filesystem). Staging is read-only to prevent sandbox commands from
 	// modifying the skill definition.
+	//
+	// Skill scripts are only executed when a repo is staged: the scripts
+	// cd into $WORKSPACE_DIR/repo, which only exists when RepoPath is set.
+	// In diff-only/fixture mode there is no repo to vet, so we fall back
+	// to built-in commands (which are harmless no-ops without a repo Cwd).
 	useSkillScripts := false
-	if skillDir != "" {
+	if skillDir != "" && opts.repoPath != "" {
 		if serr := sb.StageDirectory(ctx, ws, skillDir, sandbox.SkillStageDir, true); serr != nil {
 			return handleSandboxInitFailure(opts, fmt.Errorf("stage skill dir: %w", serr))
 		}

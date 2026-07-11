@@ -325,7 +325,9 @@ func (e *Executor) Close(ctx context.Context, ws codeexecutor.Workspace) error {
 // spawned process. Only PATH, GOPATH, GOCACHE, GOPROXY and WORKSPACE_DIR are
 // injected; os.Environ is never called. When host GOPATH or GOCACHE is empty,
 // they default to workspace-local cache paths so Go commands work in a clean
-// sandbox. Caller-supplied extra values are merged on top.
+// sandbox. GOPROXY defaults to "off" when unset by the user, enforcing the
+// skill's offline-friendly safety claim; an explicit user value always wins.
+// Caller-supplied extra values are merged on top.
 func buildSandboxEnv(ws codeexecutor.Workspace, extra map[string]string) map[string]string {
 	gopath := os.Getenv("GOPATH")
 	if gopath == "" {
@@ -335,11 +337,15 @@ func buildSandboxEnv(ws codeexecutor.Workspace, extra map[string]string) map[str
 	if gocache == "" {
 		gocache = filepath.Join(ws.Path, ".gocache")
 	}
+	goproxy := os.Getenv("GOPROXY")
+	if goproxy == "" {
+		goproxy = "off"
+	}
 	env := map[string]string{
 		"PATH":                          os.Getenv("PATH"),
 		"GOPATH":                        gopath,
 		"GOCACHE":                       gocache,
-		"GOPROXY":                       os.Getenv("GOPROXY"),
+		"GOPROXY":                       goproxy,
 		codeexecutor.WorkspaceEnvDirKey: ws.Path,
 	}
 	for k, v := range extra {
