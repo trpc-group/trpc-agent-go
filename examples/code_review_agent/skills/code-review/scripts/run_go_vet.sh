@@ -7,10 +7,11 @@ set -e
 #   sh scripts/run_go_vet.sh [package]
 #
 # The package argument defaults to ./... (all packages under the repo root).
-# go vet returns a non-zero exit whenever it reports findings, but findings
-# are the expected output of a code review. This script therefore exits 0
-# when go vet reports findings (exit code 1) and only propagates a non-zero
-# exit when go vet itself fails to run (any exit code other than 0 or 1).
+# The tool output is echoed to stdout so the pipeline captures it in
+# RunResult, and also persisted to out/vet.txt for workspace artifacts.
+# The real exit code propagates: 0 = clean, 1 = findings reported,
+# other = tool failure. The pipeline treats non-zero as StatusFailed
+# which forces needs_human_review so findings are never silently lost.
 
 OUT="${WORKSPACE_DIR}/out"
 mkdir -p "$OUT"
@@ -22,18 +23,11 @@ go vet "$PKG" > "$OUT/vet.txt" 2>&1
 status=$?
 set -e
 
-case "$status" in
-    0)
-        # No findings.
-        ;;
-    1)
-        # Findings reported -- normal review output, not a tool failure.
-        ;;
-    *)
-        echo "go vet failed with exit code $status" >&2
-        cat "$OUT/vet.txt" >&2
-        exit "$status"
-        ;;
-esac
+# Echo output to stdout so the pipeline captures it in RunResult.
+cat "$OUT/vet.txt"
 
-exit 0
+if [ "$status" -gt 1 ]; then
+    echo "go vet failed with exit code $status" >&2
+fi
+
+exit "$status"

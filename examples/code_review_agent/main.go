@@ -234,7 +234,10 @@ func loadInput(ctx context.Context, opts *pipelineOpts) (*inputsource.Input, err
 	case opts.diffFile != "":
 		return inputsource.Load(ctx, inputsource.SourceDiffFile, opts.diffFile)
 	case opts.fileList != "":
-		return inputsource.Load(ctx, inputsource.SourceFileList, opts.fileList)
+		if opts.repoPath == "" {
+			return nil, errors.New("--file-list requires --repo-path to anchor file paths")
+		}
+		return inputsource.Load(ctx, inputsource.SourceFileList, opts.fileList, opts.repoPath)
 	case opts.repoPath != "":
 		return inputsource.Load(ctx, inputsource.SourceRepoPath, opts.repoPath)
 	default:

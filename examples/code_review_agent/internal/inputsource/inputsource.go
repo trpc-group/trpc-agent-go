@@ -60,7 +60,9 @@ type Input struct {
 
 // Load reads inputs based on the mode and returns parsed diff files. At
 // least one path must be supplied; the first path is interpreted per the
-// chosen Source.
+// chosen Source. For SourceFileList, a second path (the repo root) is
+// required — file-list entries are resolved under it and validated against
+// directory traversal, symlinks and non-regular files.
 func Load(ctx context.Context, source Source, paths ...string) (*Input, error) {
 	if len(paths) == 0 {
 		return nil, fmt.Errorf("inputsource: at least one path required for source %q", source)
@@ -71,7 +73,10 @@ func Load(ctx context.Context, source Source, paths ...string) (*Input, error) {
 	case SourceDiffFile:
 		return loadDiffFile(paths[0])
 	case SourceFileList:
-		return loadFileList(paths[0])
+		if len(paths) < 2 || paths[1] == "" {
+			return nil, fmt.Errorf("inputsource: file-list mode requires a repo root")
+		}
+		return loadFileList(paths[0], paths[1])
 	case SourceRepoPath:
 		return loadRepoPath(ctx, paths[0])
 	default:
@@ -132,7 +137,14 @@ func loadDiffFile(path string) (*Input, error) {
 
 // loadFileList reads a text file listing source paths (one per line),
 // synthesizes a "new file" diff for each, concatenates and parses them.
-func loadFileList(listPath string) (*Input, error) {
+// Each entry is resolved under repoRoot and validated against directory
+// traversal, symlinks and non-regular files to prevent reading files
+// outside the reviewed repository.
+func loadFileList(listPath, repoRoot string) (*Input, error) {
+	absRoot, err := filepath.Abs(repoRoot)
+	if err != nil {
+		return nil, fmt.Errorf("inputsource: resolve repo root %q: %w", repoRoot, err)
+	}
 	data, err := os.ReadFile(listPath)
 	if err != nil {
 		return nil, fmt.Errorf("inputsource: read file list %q: %w", listPath, err)
@@ -143,7 +155,7 @@ func loadFileList(listPath string) (*Input, error) {
 		if name == "" {
 			continue
 		}
-		synth, serr := syntheticDiffForFile(name)
+		synth, serr := syntheticDiffForFile(name, absRoot)
 		if serr != nil {
 			return nil, serr
 		}
@@ -154,13 +166,39 @@ func loadFileList(listPath string) (*Input, error) {
 	if err != nil {
 		return nil, fmt.Errorf("inputsource: parse file-list diff: %w", err)
 	}
-	return &Input{Source: SourceFileList, DiffText: diffText, Files: parsed.Files}, nil
+	return &Input{Source: SourceFileList, DiffText: diffText, Files: parsed.Files, RepoPath: absRoot}, nil
 }
 
 // syntheticDiffForFile reads a source file and builds a synthetic "new
-// file" diff treating its full contents as added lines.
-func syntheticDiffForFile(name string) (string, error) {
-	content, err := os.ReadFile(name)
+// file" diff treating its full contents as added lines. The path is
+// resolved under repoRoot and validated: absolute paths, traversal
+// (../), symlinks and non-regular files are rejected before reading.
+func syntheticDiffForFile(name, repoRoot string) (string, error) {
+	// Reject absolute paths — file-list entries must be repo-relative.
+	if filepath.IsAbs(name) {
+		return "", fmt.Errorf("inputsource: reject absolute path %q in file-list", name)
+	}
+	// Resolve the entry under repoRoot and verify it stays under root.
+	full := filepath.Join(repoRoot, name)
+	abs, err := filepath.Abs(full)
+	if err != nil {
+		return "", fmt.Errorf("inputsource: resolve %q: %w", name, err)
+	}
+	if _, err := pathUnder(repoRoot, abs); err != nil {
+		return "", fmt.Errorf("inputsource: reject path traversal %q (resolves outside repo root)", name)
+	}
+	// Lstat to reject symlinks, devices, sockets, etc.
+	info, err := os.Lstat(abs)
+	if err != nil {
+		return "", fmt.Errorf("inputsource: stat listed file %q: %w", name, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return "", fmt.Errorf("inputsource: reject symlink %q in file-list", name)
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("inputsource: reject non-regular file %q in file-list", name)
+	}
+	content, err := os.ReadFile(abs)
 	if err != nil {
 		return "", fmt.Errorf("inputsource: read listed file %q: %w", name, err)
 	}
@@ -169,11 +207,14 @@ func syntheticDiffForFile(name string) (string, error) {
 	if text != "" {
 		lines = strings.Split(strings.TrimSuffix(text, "\n"), "\n")
 	}
+	// Use the repo-relative name in the diff header so it matches the
+	// reviewed repository's layout.
+	rel := filepath.ToSlash(name)
 	var b strings.Builder
-	fmt.Fprintf(&b, "diff --git a/%s b/%s\n", name, name)
+	fmt.Fprintf(&b, "diff --git a/%s b/%s\n", rel, rel)
 	b.WriteString("new file mode 100644\n")
 	b.WriteString("--- /dev/null\n")
-	fmt.Fprintf(&b, "+++ b/%s\n", name)
+	fmt.Fprintf(&b, "+++ b/%s\n", rel)
 	fmt.Fprintf(&b, "@@ -0,0 +1,%d @@\n", len(lines))
 	for _, l := range lines {
 		b.WriteString("+")

@@ -120,7 +120,8 @@ func TestLoad_DiffFile(t *testing.T) {
 }
 
 // TestLoad_FileList creates a list of two source files and verifies the
-// synthetic diff parses into two files.
+// synthetic diff parses into two files. File-list entries must be
+// repo-relative; the repo root anchors them.
 func TestLoad_FileList(t *testing.T) {
 	dir := t.TempDir()
 	src1 := filepath.Join(dir, "a.go")
@@ -131,11 +132,12 @@ func TestLoad_FileList(t *testing.T) {
 	if err := os.WriteFile(src2, []byte("package b\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// Entries are repo-relative (not absolute) so they resolve under dir.
 	list := filepath.Join(dir, "list.txt")
-	if err := os.WriteFile(list, []byte(src1+"\n"+src2+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(list, []byte("a.go\nb.go\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	in, err := Load(context.Background(), SourceFileList, list)
+	in, err := Load(context.Background(), SourceFileList, list, dir)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -149,6 +151,34 @@ func TestLoad_FileList(t *testing.T) {
 	}
 	if added == 0 {
 		t.Fatal("expected added lines from synthetic diff")
+	}
+}
+
+// TestLoad_FileList_RejectTraversal verifies that absolute paths and
+// ../ traversal entries are rejected before reading.
+func TestLoad_FileList_RejectTraversal(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a.go"), []byte("package a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Absolute path entry — must be rejected.
+	list := filepath.Join(dir, "list.txt")
+	if err := os.WriteFile(list, []byte(filepath.Join(dir, "a.go")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(context.Background(), SourceFileList, list, dir); err == nil {
+		t.Fatal("expected error for absolute path in file-list")
+	}
+	// Traversal entry — must be rejected.
+	if err := os.WriteFile(list, []byte("../a.go\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(context.Background(), SourceFileList, list, dir); err == nil {
+		t.Fatal("expected error for traversal path in file-list")
+	}
+	// Missing repo root — must be rejected.
+	if _, err := Load(context.Background(), SourceFileList, list); err == nil {
+		t.Fatal("expected error for file-list without repo root")
 	}
 }
 

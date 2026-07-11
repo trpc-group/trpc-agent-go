@@ -9,10 +9,11 @@ set -e
 #
 # The package argument defaults to ./... (all packages under the repo root).
 # If the staticcheck binary is not installed, the script writes a skip notice
-# to out/staticcheck.txt and exits 0 so the review pipeline can continue with
-# the other checks. Like go vet, staticcheck reports findings via a non-zero
-# exit; those findings are treated as normal review output (exit 0), and only
-# a genuine tool failure (any exit code other than 0 or 1) is propagated.
+# to stdout and exits 0 so the review pipeline can continue with the other
+# checks. The tool output is echoed to stdout so the pipeline captures it in
+# RunResult, and also persisted to out/staticcheck.txt for workspace artifacts.
+# The real exit code propagates: 0 = clean, 1 = findings reported,
+# other = tool failure.
 
 OUT="${WORKSPACE_DIR}/out"
 mkdir -p "$OUT"
@@ -20,7 +21,7 @@ cd "${WORKSPACE_DIR}/repo"
 PKG="${1:-./...}"
 
 if ! command -v staticcheck > /dev/null 2>&1; then
-    echo "staticcheck not installed, skipping" > "$OUT/staticcheck.txt"
+    echo "staticcheck not installed, skipping"
     exit 0
 fi
 
@@ -29,18 +30,11 @@ staticcheck "$PKG" > "$OUT/staticcheck.txt" 2>&1
 status=$?
 set -e
 
-case "$status" in
-    0)
-        # No findings.
-        ;;
-    1)
-        # Findings reported -- normal review output, not a tool failure.
-        ;;
-    *)
-        echo "staticcheck failed with exit code $status" >&2
-        cat "$OUT/staticcheck.txt" >&2
-        exit "$status"
-        ;;
-esac
+# Echo output to stdout so the pipeline captures it in RunResult.
+cat "$OUT/staticcheck.txt"
 
-exit 0
+if [ "$status" -gt 1 ]; then
+    echo "staticcheck failed with exit code $status" >&2
+fi
+
+exit "$status"

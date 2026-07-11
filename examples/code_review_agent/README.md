@@ -34,7 +34,7 @@ go run . --dry-run --diff-file ./testdata/fixtures/clean.diff --out-dir ./out --
 | --- | --- | --- | --- |
 | `--diff-file` | string | `""` | Path to a unified diff file to review. |
 | `--repo-path` | string | `""` | Path to the repository under review. |
-| `--file-list` | string | `""` | Path to a newline-separated list of files to review. |
+| `--file-list` | string | `""` | Path to a newline-separated list of repo-relative files to review. Requires `--repo-path`. |
 | `--fixture-dir` | string | `""` | Path to a fixture directory used for dry-run inputs. |
 | `--out-dir` | string | `./out` | Directory where review artifacts are written. |
 | `--db-path` | string | `./review.db` | Path to the SQLite database used for persistence. |
