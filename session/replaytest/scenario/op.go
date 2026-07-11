@@ -23,6 +23,9 @@ type Op struct {
 
 	FilterKey string
 	Force     bool
+
+	TrackName    string
+	TrackPayload string
 }
 
 // 枚举操作类型
@@ -35,4 +38,5 @@ const (
 	OpAppendToolCall     OpKind = "append_tool_call"
 	OpAppendToolResponse OpKind = "append_tool_response"
 	OpCreateSummary      OpKind = "create_summary"
+	OpAppendTrack        OpKind = "append_track"
 )

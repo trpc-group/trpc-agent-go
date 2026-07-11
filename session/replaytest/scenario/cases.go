@@ -1,5 +1,7 @@
 package scenario
 
+import "trpc.group/trpc-go/trpc-agent-go/memory"
+
 //单轮普通对话
 
 var Case01_SingleTurn = &Case{
@@ -77,4 +79,87 @@ var Case06_SummaryFilterKey = &Case{
 		{Kind: OpAppendEvent, Role: "user", Content: "我喜欢 Go", FilterKey: "profile"},
 		{Kind: OpUpdateSummary, FilterKey: "weather", Force: true},
 	},
+}
+
+var Case08_Track = &Case{
+	Name: "case08_track",
+	Ops: []Op{
+		{Kind: OpCreateSession},
+		{Kind: OpAppendEvent, Role: "user", Content: "执行天气工具"},
+		// 正常
+		{
+			Kind:      OpAppendTrack,
+			TrackName: "tool.weather_query",
+			TrackPayload: `{
+				"event_type":"start",
+				"invocation_id":"inv-1",
+				"tool":"weather_query",
+				"status":"running"
+			}`,
+		},
+		// 完成
+		{
+			Kind:      OpAppendTrack,
+			TrackName: "subtask.weather_parse",
+			TrackPayload: `{
+				"event_type":"state",
+				"invocation_id":"inv-1",
+				"subtask":"parse_response",
+				"status":"done"
+			}`,
+		},
+		// 延时
+		{
+			Kind:      OpAppendTrack,
+			TrackName: "tool.weather_query",
+			TrackPayload: `{
+				"event_type":"finish",
+				"invocation_id":"inv-1",
+				"status":"ok",
+				"duration_ms":25
+			}`,
+		},
+		// 超时 + 失败
+		{
+			Kind:      OpAppendTrack,
+			TrackName: "tool.weather_query",
+			TrackPayload: `{
+				"event_type":"error",
+				"invocation_id":"inv-2",
+				"status":"error",
+				"error":"timeout",
+				"duration_ms":3000
+			}`,
+		},
+	},
+}
+
+var Case05_Memory = &MemoryCase{
+	Name: "case05_memory",
+	Writes: []MemoryWrite{
+		{
+			Content: "用户偏好简洁中文回答",
+			Topics:  []string{"language", "preference"},
+			Kind:    memory.KindFact,
+		},
+		{
+			Content: "用户正在开发 trpc-agent-go",
+			Topics:  []string{"project", "fact"},
+			Kind:    memory.KindFact,
+		},
+		{
+			Content:      "Windows SQLite 测试需要 MinGW GCC",
+			Topics:       []string{"sqlite", "experience"},
+			Kind:         memory.KindEpisode,
+			EventTime:    &memoryTaskTime,
+			Participants: []string{"Liam"},
+			Location:     "Windows",
+		},
+		{
+			Content: "已完成 Session replay 的事件、状态和 Track 测试",
+			Topics:  []string{"summary", "history"},
+			Kind:    memory.KindFact,
+		},
+	},
+	SearchQuery: "SQLite GCC",
 }

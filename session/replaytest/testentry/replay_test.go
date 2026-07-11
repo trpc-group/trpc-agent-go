@@ -57,6 +57,7 @@ func TestReplay(t *testing.T) {
 		scenario.Case04_ToolCall,
 		scenario.Case06_Summary,
 		scenario.Case06_SummaryFilterKey,
+		scenario.Case08_Track,
 	}
 
 	for _, tc := range cases {

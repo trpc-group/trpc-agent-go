@@ -47,6 +47,9 @@ func MakeDiff(a, b *normalize.SnapShot) map[string]string {
 	if !reflect.DeepEqual(a.Summaries, b.Summaries) {
 		diff["summaries"] = fmt.Sprintf("a: %+v, b: %+v", a.Summaries, b.Summaries)
 	}
+	if !reflect.DeepEqual(a.Tracks, b.Tracks) {
+		diff["tracks"] = fmt.Sprintf("a: %+v, b: %+v", a.Tracks, b.Tracks)
+	}
 
 	return diff
 }

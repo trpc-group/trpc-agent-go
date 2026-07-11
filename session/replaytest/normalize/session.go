@@ -6,6 +6,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/session/replaytest/tool"
 )
 
 // 同一的格式
@@ -31,12 +32,18 @@ type ToolCall struct {
 	Name string
 	Args string
 }
+type TrackEvent struct {
+	Index     int
+	TrackName string
+	Payload   string
+}
 
 type SnapShot struct {
 	SessionId string
 	Events    []Event
 	State     map[string]string
 	Summaries map[string]Summary
+	Tracks    map[string][]TrackEvent
 }
 
 //从某一session 转化得到 snapshot
@@ -60,6 +67,7 @@ func FromSession(sess *session.Session) *SnapShot {
 	// 处理状态
 	snapshot.State = NormalizeState(sess.State)
 	snapshot.Summaries = NormalizeSummaries(sess)
+	snapshot.Tracks = NormalizeTracks(sess)
 	return snapshot
 }
 
@@ -120,4 +128,27 @@ func NormalizeSummaries(sess *session.Session) map[string]Summary {
 	}
 
 	return normalziedsum
+}
+func NormalizeTracks(sess *session.Session) map[string][]TrackEvent {
+	normalizedTracks := make(map[string][]TrackEvent)
+	if sess == nil {
+		return normalizedTracks
+	}
+
+	for trackName, history := range sess.Tracks {
+		if history == nil {
+			continue
+		}
+		events := make([]TrackEvent, 0, len(history.Events))
+		for i, evt := range history.Events {
+			events = append(events, TrackEvent{
+				Index:     i,
+				TrackName: string(trackName),
+				Payload:   tool.NormalizeJSON(evt.Payload),
+			})
+		}
+		normalizedTracks[string(trackName)] = events
+	}
+
+	return normalizedTracks
 }

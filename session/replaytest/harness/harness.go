@@ -3,6 +3,7 @@ package harness
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -32,6 +33,7 @@ func Run(
 		err  error
 	)
 	// 对某一case 遍历 需要进行的操作
+	// 一个case下有多次 操作 都是对于同一session
 	for i, op := range c.Ops {
 		switch op.Kind {
 		case scenario.OpCreateSession:
@@ -92,6 +94,28 @@ func Run(
 			if err != nil {
 				return nil, fmt.Errorf("op[%d] get session after summary: %w", i, err)
 			}
+
+		case scenario.OpAppendTrack:
+			if sess == nil {
+				return nil, fmt.Errorf("op[%d] append track before create session", i)
+			}
+			trackSvc, ok := svc.(session.TrackService)
+			if !ok {
+				return nil, fmt.Errorf("op[%d] track unsupported", i)
+			}
+			trackEvt := &session.TrackEvent{
+				Track:     session.Track(op.TrackName),
+				Payload:   []byte(op.TrackPayload),
+				Timestamp: time.Now(),
+			}
+			if err = trackSvc.AppendTrackEvent(ctx, sess, trackEvt); err != nil {
+				return nil, fmt.Errorf("op[%d] append track: %w", i, err)
+			}
+			sess, err = svc.GetSession(ctx, key)
+			if err != nil {
+				return nil, fmt.Errorf("op[%d] get session after track: %w", i, err)
+			}
+
 		default:
 			return nil, fmt.Errorf("op[%d] unsupported kind %q", i, op.Kind)
 		}
