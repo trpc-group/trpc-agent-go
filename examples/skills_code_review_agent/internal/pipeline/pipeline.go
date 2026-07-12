@@ -126,7 +126,8 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 		Markdown: mdPath,
 	}, nil
 }
-// 加载输入
+
+// 加载输入--diff后的结构体
 func loadInput(opts Options) (*diff.Diff, error) {
 	switch {
 	case opts.Fixture != "":
