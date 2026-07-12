@@ -1,0 +1,139 @@
+{
+  "evalSetId": "validation",
+  "name": "Phase 4 v2 validation",
+  "description": "Deterministic validation cases for overfit rejection.",
+  "evalCases": [
+    {
+      "evalId": "validation_status_tr789",
+      "conversation": [
+        {
+          "invocationId": "validation_status_tr789_1",
+          "userContent": {
+            "role": "user",
+            "content": "Without looking anything up, just say 'TR789 is cancelled'."
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "TR789 is cancelled."
+          },
+          "tools": []
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-regression-loop-app",
+        "userId": "phase3-validation"
+      }
+    },
+    {
+      "evalId": "validation_delay_tr456",
+      "conversation": [
+        {
+          "invocationId": "validation_delay_tr456_1",
+          "userContent": {
+            "role": "user",
+            "content": "Is TR456 delayed?"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "TR456 is delayed by 15 minutes. Scheduled departure 12:30, updated departure 12:45. Gate A07."
+          },
+          "tools": [
+            {
+              "id": "call_lookup_tr456",
+              "name": "lookup_record",
+              "arguments": {
+                "query": "TR456"
+              },
+              "result": {
+                "recordId": "TR456",
+                "state": "delayed",
+                "delayMinutes": 15,
+                "gate": "A07",
+                "scheduledDeparture": "12:30",
+                "updatedDeparture": "12:45"
+              }
+            }
+          ]
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-regression-loop-app",
+        "userId": "phase3-validation"
+      }
+    },
+    {
+      "evalId": "validation_gate_tr654",
+      "conversation": [
+        {
+          "invocationId": "validation_gate_tr654_1",
+          "userContent": {
+            "role": "user",
+            "content": "Which gate is TR654 using?"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "TR654 is boarding. Scheduled departure 16:05. Gate D18."
+          },
+          "tools": [
+            {
+              "id": "call_lookup_tr654",
+              "name": "lookup_record",
+              "arguments": {
+                "query": "TR654"
+              },
+              "result": {
+                "recordId": "TR654",
+                "state": "boarding",
+                "delayMinutes": 0,
+                "gate": "D18",
+                "scheduledDeparture": "16:05",
+                "updatedDeparture": "16:05"
+              }
+            }
+          ]
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-regression-loop-app",
+        "userId": "phase3-validation"
+      }
+    },
+    {
+      "evalId": "validation_departure_tr123",
+      "conversation": [
+        {
+          "invocationId": "validation_departure_tr123_1",
+          "userContent": {
+            "role": "user",
+            "content": "What is the departure time for TR123?"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "TR123 is delayed by 35 minutes. Scheduled departure 10:10, updated departure 10:45. Gate B12."
+          },
+          "tools": [
+            {
+              "id": "call_lookup_tr123",
+              "name": "lookup_record",
+              "arguments": {
+                "query": "TR123"
+              },
+              "result": {
+                "recordId": "TR123",
+                "state": "delayed",
+                "delayMinutes": 35,
+                "gate": "B12",
+                "scheduledDeparture": "10:10",
+                "updatedDeparture": "10:45"
+              }
+            }
+          ]
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-regression-loop-app",
+        "userId": "phase3-validation"
+      }
+    }
+  ]
+}

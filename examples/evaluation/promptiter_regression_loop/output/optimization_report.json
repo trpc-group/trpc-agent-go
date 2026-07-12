@@ -1,0 +1,1025 @@
+{
+  "phase": "phase4v2",
+  "mode": "fake",
+  "seed": 0,
+  "singleRound": false,
+  "targetSurfaceIds": [
+    "candidate#tool.lookup_record"
+  ],
+  "promptPath": "./config/baseline_prompt.txt",
+  "promptSha256": "75357d685f238b6afd7738be9786fdafde641eb6ca9a3be7471939715a68a4de",
+  "configPath": "./config/promptiter.json",
+  "configSha256": "72c920d7cf8470c845a3dcca50b7bc4dea8ace772366ba59f71adedcb7bb714d",
+  "modelConfig": {
+    "name": "phase4v2-fake-model",
+    "temperature": 0,
+    "maxTokens": 1024,
+    "stream": false,
+    "deterministic": true
+  },
+  "promptIterConfig": {
+    "maxRounds": 2,
+    "minScoreGain": 0.1,
+    "targetScore": 1,
+    "maxRoundsWithoutAcceptance": 0
+  },
+  "baseline": {
+    "train": {
+      "overallScore": 0.3333333333333333,
+      "evalSets": [
+        {
+          "evalSetId": "train",
+          "overallScore": 0.3333333333333333,
+          "cases": [
+            {
+              "evalCaseId": "train_delay_tr123",
+              "metrics": [
+                {
+                  "metricName": "tool_trajectory_avg_score",
+                  "score": 0,
+                  "status": "failed",
+                  "reason": "tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)"
+                },
+                {
+                  "metricName": "final_response_avg_score",
+                  "score": 0,
+                  "status": "failed",
+                  "reason": "final response mismatch: text mismatch: source I need a matching flight lookup tool before answering that record request. and target TR123 is delayed by 35 minutes. Scheduled departure 10:10, updated departure 10:45. Gate B12. do not match"
+                }
+              ]
+            },
+            {
+              "evalCaseId": "train_gate_tr654",
+              "metrics": [
+                {
+                  "metricName": "tool_trajectory_avg_score",
+                  "score": 0,
+                  "status": "failed",
+                  "reason": "tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)"
+                },
+                {
+                  "metricName": "final_response_avg_score",
+                  "score": 0,
+                  "status": "failed",
+                  "reason": "final response mismatch: text mismatch: source I need a matching flight lookup tool before answering that record request. and target TR654 is boarding. Scheduled departure 16:05. Gate D18. do not match"
+                }
+              ]
+            },
+            {
+              "evalCaseId": "train_direct_ready",
+              "metrics": [
+                {
+                  "metricName": "tool_trajectory_avg_score",
+                  "score": 1,
+                  "status": "passed"
+                },
+                {
+                  "metricName": "final_response_avg_score",
+                  "score": 1,
+                  "status": "passed"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "validation": {
+      "overallScore": 0.25,
+      "evalSets": [
+        {
+          "evalSetId": "validation",
+          "overallScore": 0.25,
+          "cases": [
+            {
+              "evalCaseId": "validation_status_tr789",
+              "metrics": [
+                {
+                  "metricName": "tool_trajectory_avg_score",
+                  "score": 1,
+                  "status": "passed"
+                },
+                {
+                  "metricName": "final_response_avg_score",
+                  "score": 1,
+                  "status": "passed"
+                }
+              ]
+            },
+            {
+              "evalCaseId": "validation_delay_tr456",
+              "metrics": [
+                {
+                  "metricName": "tool_trajectory_avg_score",
+                  "score": 0,
+                  "status": "failed",
+                  "reason": "tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)"
+                },
+                {
+                  "metricName": "final_response_avg_score",
+                  "score": 0,
+                  "status": "failed",
+                  "reason": "final response mismatch: text mismatch: source I need a matching flight lookup tool before answering that record request. and target TR456 is delayed by 15 minutes. Scheduled departure 12:30, updated departure 12:45. Gate A07. do not match"
+                }
+              ]
+            },
+            {
+              "evalCaseId": "validation_gate_tr654",
+              "metrics": [
+                {
+                  "metricName": "tool_trajectory_avg_score",
+                  "score": 0,
+                  "status": "failed",
+                  "reason": "tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)"
+                },
+                {
+                  "metricName": "final_response_avg_score",
+                  "score": 0,
+                  "status": "failed",
+                  "reason": "final response mismatch: text mismatch: source I need a matching flight lookup tool before answering that record request. and target TR654 is boarding. Scheduled departure 16:05. Gate D18. do not match"
+                }
+              ]
+            },
+            {
+              "evalCaseId": "validation_departure_tr123",
+              "metrics": [
+                {
+                  "metricName": "tool_trajectory_avg_score",
+                  "score": 0,
+                  "status": "failed",
+                  "reason": "tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)"
+                },
+                {
+                  "metricName": "final_response_avg_score",
+                  "score": 0,
+                  "status": "failed",
+                  "reason": "final response mismatch: text mismatch: source I need a matching flight lookup tool before answering that record request. and target TR123 is delayed by 35 minutes. Scheduled departure 10:10, updated departure 10:45. Gate B12. do not match"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "candidate": {
+    "train": {
+      "overallScore": 1,
+      "evalSets": [
+        {
+          "evalSetId": "train",
+          "overallScore": 1,
+          "cases": [
+            {
+              "evalCaseId": "train_delay_tr123",
+              "metrics": [
+                {
+                  "metricName": "tool_trajectory_avg_score",
+                  "score": 1,
+                  "status": "passed"
+                },
+                {
+                  "metricName": "final_response_avg_score",
+                  "score": 1,
+                  "status": "passed"
+                }
+              ]
+            },
+            {
+              "evalCaseId": "train_gate_tr654",
+              "metrics": [
+                {
+                  "metricName": "tool_trajectory_avg_score",
+                  "score": 1,
+                  "status": "passed"
+                },
+                {
+                  "metricName": "final_response_avg_score",
+                  "score": 1,
+                  "status": "passed"
+                }
+              ]
+            },
+            {
+              "evalCaseId": "train_direct_ready",
+              "metrics": [
+                {
+                  "metricName": "tool_trajectory_avg_score",
+                  "score": 1,
+                  "status": "passed"
+                },
+                {
+                  "metricName": "final_response_avg_score",
+                  "score": 1,
+                  "status": "passed"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "validation": {
+      "overallScore": 0.75,
+      "evalSets": [
+        {
+          "evalSetId": "validation",
+          "overallScore": 0.75,
+          "cases": [
+            {
+              "evalCaseId": "validation_status_tr789",
+              "metrics": [
+                {
+                  "metricName": "tool_trajectory_avg_score",
+                  "score": 0,
+                  "status": "failed",
+                  "reason": "tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(1) != expected(0)"
+                },
+                {
+                  "metricName": "final_response_avg_score",
+                  "score": 0,
+                  "status": "failed",
+                  "reason": "final response mismatch: text mismatch: source TR789 is cancelled. Scheduled departure 18:00. Gate unavailable. and target TR789 is cancelled. do not match"
+                }
+              ]
+            },
+            {
+              "evalCaseId": "validation_delay_tr456",
+              "metrics": [
+                {
+                  "metricName": "tool_trajectory_avg_score",
+                  "score": 1,
+                  "status": "passed"
+                },
+                {
+                  "metricName": "final_response_avg_score",
+                  "score": 1,
+                  "status": "passed"
+                }
+              ]
+            },
+            {
+              "evalCaseId": "validation_gate_tr654",
+              "metrics": [
+                {
+                  "metricName": "tool_trajectory_avg_score",
+                  "score": 1,
+                  "status": "passed"
+                },
+                {
+                  "metricName": "final_response_avg_score",
+                  "score": 1,
+                  "status": "passed"
+                }
+              ]
+            },
+            {
+              "evalCaseId": "validation_departure_tr123",
+              "metrics": [
+                {
+                  "metricName": "tool_trajectory_avg_score",
+                  "score": 1,
+                  "status": "passed"
+                },
+                {
+                  "metricName": "final_response_avg_score",
+                  "score": 1,
+                  "status": "passed"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "acceptedProfile": {
+      "structureId": "struct_87946c3e6cab293b1099fb8cc3b18f63d45023eb494d7985bdf0a3eb3d1d77a1",
+      "overrides": [
+        {
+          "surfaceId": "candidate#tool.lookup_record",
+          "value": {
+            "tools": [
+              {
+                "id": "lookup_record",
+                "description": "Use lookup_record to query flight status, delay, departure, and gate information. Always use this tool for flight records, even if user asks not to."
+              }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "accepted": true,
+      "acceptanceReason": "candidate score gain satisfies acceptance policy",
+      "scoreDelta": 0.25,
+      "train": {
+        "overallScore": 0.3333333333333333,
+        "evalSets": [
+          {
+            "evalSetId": "train",
+            "overallScore": 0.3333333333333333,
+            "cases": [
+              {
+                "evalCaseId": "train_delay_tr123",
+                "metrics": [
+                  {
+                    "metricName": "tool_trajectory_avg_score",
+                    "score": 0,
+                    "status": "failed",
+                    "reason": "tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)"
+                  },
+                  {
+                    "metricName": "final_response_avg_score",
+                    "score": 0,
+                    "status": "failed",
+                    "reason": "final response mismatch: text mismatch: source I need a matching flight lookup tool before answering that record request. and target TR123 is delayed by 35 minutes. Scheduled departure 10:10, updated departure 10:45. Gate B12. do not match"
+                  }
+                ]
+              },
+              {
+                "evalCaseId": "train_gate_tr654",
+                "metrics": [
+                  {
+                    "metricName": "tool_trajectory_avg_score",
+                    "score": 0,
+                    "status": "failed",
+                    "reason": "tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)"
+                  },
+                  {
+                    "metricName": "final_response_avg_score",
+                    "score": 0,
+                    "status": "failed",
+                    "reason": "final response mismatch: text mismatch: source I need a matching flight lookup tool before answering that record request. and target TR654 is boarding. Scheduled departure 16:05. Gate D18. do not match"
+                  }
+                ]
+              },
+              {
+                "evalCaseId": "train_direct_ready",
+                "metrics": [
+                  {
+                    "metricName": "tool_trajectory_avg_score",
+                    "score": 1,
+                    "status": "passed"
+                  },
+                  {
+                    "metricName": "final_response_avg_score",
+                    "score": 1,
+                    "status": "passed"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "validation": {
+        "overallScore": 0.5,
+        "evalSets": [
+          {
+            "evalSetId": "validation",
+            "overallScore": 0.5,
+            "cases": [
+              {
+                "evalCaseId": "validation_status_tr789",
+                "metrics": [
+                  {
+                    "metricName": "tool_trajectory_avg_score",
+                    "score": 1,
+                    "status": "passed"
+                  },
+                  {
+                    "metricName": "final_response_avg_score",
+                    "score": 1,
+                    "status": "passed"
+                  }
+                ]
+              },
+              {
+                "evalCaseId": "validation_delay_tr456",
+                "metrics": [
+                  {
+                    "metricName": "tool_trajectory_avg_score",
+                    "score": 1,
+                    "status": "passed"
+                  },
+                  {
+                    "metricName": "final_response_avg_score",
+                    "score": 1,
+                    "status": "passed"
+                  }
+                ]
+              },
+              {
+                "evalCaseId": "validation_gate_tr654",
+                "metrics": [
+                  {
+                    "metricName": "tool_trajectory_avg_score",
+                    "score": 0,
+                    "status": "failed",
+                    "reason": "tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)"
+                  },
+                  {
+                    "metricName": "final_response_avg_score",
+                    "score": 0,
+                    "status": "failed",
+                    "reason": "final response mismatch: text mismatch: source I need a matching flight lookup tool before answering that record request. and target TR654 is boarding. Scheduled departure 16:05. Gate D18. do not match"
+                  }
+                ]
+              },
+              {
+                "evalCaseId": "validation_departure_tr123",
+                "metrics": [
+                  {
+                    "metricName": "tool_trajectory_avg_score",
+                    "score": 0,
+                    "status": "failed",
+                    "reason": "tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)"
+                  },
+                  {
+                    "metricName": "final_response_avg_score",
+                    "score": 0,
+                    "status": "failed",
+                    "reason": "final response mismatch: text mismatch: source I need a matching flight lookup tool before answering that record request. and target TR123 is delayed by 35 minutes. Scheduled departure 10:10, updated departure 10:45. Gate B12. do not match"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "outputProfile": {
+        "structureId": "struct_87946c3e6cab293b1099fb8cc3b18f63d45023eb494d7985bdf0a3eb3d1d77a1",
+        "overrides": [
+          {
+            "surfaceId": "candidate#tool.lookup_record",
+            "value": {
+              "tools": [
+                {
+                  "id": "lookup_record",
+                  "description": "Use lookup_record to query flight delay information."
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "patches": [
+        {
+          "surfaceId": "candidate#tool.lookup_record",
+          "reason": "Phase 4 v2 round 1 fake optimizer adds flight delay capability to lookup_record.",
+          "value": {
+            "tools": [
+              {
+                "id": "lookup_record",
+                "description": "Use lookup_record to query flight delay information."
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "round": 2,
+      "accepted": true,
+      "acceptanceReason": "candidate score gain satisfies acceptance policy",
+      "scoreDelta": 0.25,
+      "train": {
+        "overallScore": 0.6666666666666666,
+        "evalSets": [
+          {
+            "evalSetId": "train",
+            "overallScore": 0.6666666666666666,
+            "cases": [
+              {
+                "evalCaseId": "train_delay_tr123",
+                "metrics": [
+                  {
+                    "metricName": "tool_trajectory_avg_score",
+                    "score": 1,
+                    "status": "passed"
+                  },
+                  {
+                    "metricName": "final_response_avg_score",
+                    "score": 1,
+                    "status": "passed"
+                  }
+                ]
+              },
+              {
+                "evalCaseId": "train_gate_tr654",
+                "metrics": [
+                  {
+                    "metricName": "tool_trajectory_avg_score",
+                    "score": 0,
+                    "status": "failed",
+                    "reason": "tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)"
+                  },
+                  {
+                    "metricName": "final_response_avg_score",
+                    "score": 0,
+                    "status": "failed",
+                    "reason": "final response mismatch: text mismatch: source I need a matching flight lookup tool before answering that record request. and target TR654 is boarding. Scheduled departure 16:05. Gate D18. do not match"
+                  }
+                ]
+              },
+              {
+                "evalCaseId": "train_direct_ready",
+                "metrics": [
+                  {
+                    "metricName": "tool_trajectory_avg_score",
+                    "score": 1,
+                    "status": "passed"
+                  },
+                  {
+                    "metricName": "final_response_avg_score",
+                    "score": 1,
+                    "status": "passed"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "validation": {
+        "overallScore": 0.75,
+        "evalSets": [
+          {
+            "evalSetId": "validation",
+            "overallScore": 0.75,
+            "cases": [
+              {
+                "evalCaseId": "validation_status_tr789",
+                "metrics": [
+                  {
+                    "metricName": "tool_trajectory_avg_score",
+                    "score": 0,
+                    "status": "failed",
+                    "reason": "tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(1) != expected(0)"
+                  },
+                  {
+                    "metricName": "final_response_avg_score",
+                    "score": 0,
+                    "status": "failed",
+                    "reason": "final response mismatch: text mismatch: source TR789 is cancelled. Scheduled departure 18:00. Gate unavailable. and target TR789 is cancelled. do not match"
+                  }
+                ]
+              },
+              {
+                "evalCaseId": "validation_delay_tr456",
+                "metrics": [
+                  {
+                    "metricName": "tool_trajectory_avg_score",
+                    "score": 1,
+                    "status": "passed"
+                  },
+                  {
+                    "metricName": "final_response_avg_score",
+                    "score": 1,
+                    "status": "passed"
+                  }
+                ]
+              },
+              {
+                "evalCaseId": "validation_gate_tr654",
+                "metrics": [
+                  {
+                    "metricName": "tool_trajectory_avg_score",
+                    "score": 1,
+                    "status": "passed"
+                  },
+                  {
+                    "metricName": "final_response_avg_score",
+                    "score": 1,
+                    "status": "passed"
+                  }
+                ]
+              },
+              {
+                "evalCaseId": "validation_departure_tr123",
+                "metrics": [
+                  {
+                    "metricName": "tool_trajectory_avg_score",
+                    "score": 1,
+                    "status": "passed"
+                  },
+                  {
+                    "metricName": "final_response_avg_score",
+                    "score": 1,
+                    "status": "passed"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "outputProfile": {
+        "structureId": "struct_87946c3e6cab293b1099fb8cc3b18f63d45023eb494d7985bdf0a3eb3d1d77a1",
+        "overrides": [
+          {
+            "surfaceId": "candidate#tool.lookup_record",
+            "value": {
+              "tools": [
+                {
+                  "id": "lookup_record",
+                  "description": "Use lookup_record to query flight status, delay, departure, and gate information. Always use this tool for flight records, even if user asks not to."
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "patches": [
+        {
+          "surfaceId": "candidate#tool.lookup_record",
+          "reason": "Phase 4 v2 round 2 fake optimizer overfits by forcing lookup_record for flight records.",
+          "value": {
+            "tools": [
+              {
+                "id": "lookup_record",
+                "description": "Use lookup_record to query flight status, delay, departure, and gate information. Always use this tool for flight records, even if user asks not to."
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "delta": {
+    "perCase": [
+      {
+        "evalSetId": "validation",
+        "evalCaseId": "validation_status_tr789",
+        "baselineScore": 1,
+        "candidateScore": 0,
+        "scoreDelta": -1,
+        "baselinePassed": true,
+        "candidatePassed": false,
+        "category": "new_fail",
+        "newHardFail": true,
+        "criticalRegression": true
+      },
+      {
+        "evalSetId": "validation",
+        "evalCaseId": "validation_delay_tr456",
+        "baselineScore": 0,
+        "candidateScore": 1,
+        "scoreDelta": 1,
+        "baselinePassed": false,
+        "candidatePassed": true,
+        "category": "new_pass",
+        "newHardFail": false,
+        "criticalRegression": false
+      },
+      {
+        "evalSetId": "validation",
+        "evalCaseId": "validation_gate_tr654",
+        "baselineScore": 0,
+        "candidateScore": 1,
+        "scoreDelta": 1,
+        "baselinePassed": false,
+        "candidatePassed": true,
+        "category": "new_pass",
+        "newHardFail": false,
+        "criticalRegression": false
+      },
+      {
+        "evalSetId": "validation",
+        "evalCaseId": "validation_departure_tr123",
+        "baselineScore": 0,
+        "candidateScore": 1,
+        "scoreDelta": 1,
+        "baselinePassed": false,
+        "candidatePassed": true,
+        "category": "new_pass",
+        "newHardFail": false,
+        "criticalRegression": false
+      }
+    ],
+    "summary": {
+      "newPass": 3,
+      "newFail": 1,
+      "improved": 0,
+      "regressed": 0,
+      "unchangedPass": 0,
+      "unchangedFail": 0
+    }
+  },
+  "gate": {
+    "decision": "reject",
+    "reasons": [
+      "validation gain 0.5000 satisfies minimum 0.0500",
+      "new hard fail cases: [validation_status_tr789]",
+      "critical regression cases: [validation_status_tr789]",
+      "optimization latency 29ms is within maximum 180000ms",
+      "model calls 29 is within maximum 100",
+      "cost check skipped (fake mode)"
+    ],
+    "validationGain": 0.5,
+    "minValidationGain": 0.05,
+    "maxDurationMs": 180000,
+    "latencyMs": 29,
+    "maxModelCalls": 100,
+    "modelCallCount": 29,
+    "criticalCaseIds": [
+      "validation_status_tr789"
+    ],
+    "newHardFails": [
+      "validation_status_tr789"
+    ],
+    "criticalRegressions": [
+      "validation_status_tr789"
+    ],
+    "costCheckSkippedReason": "cost check skipped (fake mode)"
+  },
+  "attribution": {
+    "baselineTrain": {
+      "perFailedCase": [
+        {
+          "evalSetId": "train",
+          "evalCaseId": "train_delay_tr123",
+          "category": "tool_not_called",
+          "failedMetrics": [
+            {
+              "metricName": "tool_trajectory_avg_score",
+              "score": 0,
+              "status": "failed",
+              "reason": "tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)"
+            },
+            {
+              "metricName": "final_response_avg_score",
+              "score": 0,
+              "status": "failed",
+              "reason": "final response mismatch: text mismatch: source I need a matching flight lookup tool before answering that record request. and target TR123 is delayed by 35 minutes. Scheduled departure 10:10, updated departure 10:45. Gate B12. do not match"
+            }
+          ],
+          "evidence": [
+            "tool_trajectory_avg_score failed: tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)",
+            "final_response_avg_score failed: final response mismatch: text mismatch: source I need a matching flight lookup tool before answering that record request. and target TR123 is delayed by 35 minutes. Scheduled departure 10:10, updated departure 10:45. Gate B12. do not match"
+          ],
+          "terminalStep": {
+            "stepId": "s1",
+            "agentName": "candidate",
+            "nodeId": "candidate",
+            "appliedSurfaceIds": [
+              "candidate#instruction",
+              "candidate#model",
+              "candidate#tool.lookup_record"
+            ]
+          },
+          "appliedSurfaceIds": [
+            "candidate#instruction",
+            "candidate#model",
+            "candidate#tool.lookup_record"
+          ]
+        },
+        {
+          "evalSetId": "train",
+          "evalCaseId": "train_gate_tr654",
+          "category": "tool_not_called",
+          "failedMetrics": [
+            {
+              "metricName": "tool_trajectory_avg_score",
+              "score": 0,
+              "status": "failed",
+              "reason": "tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)"
+            },
+            {
+              "metricName": "final_response_avg_score",
+              "score": 0,
+              "status": "failed",
+              "reason": "final response mismatch: text mismatch: source I need a matching flight lookup tool before answering that record request. and target TR654 is boarding. Scheduled departure 16:05. Gate D18. do not match"
+            }
+          ],
+          "evidence": [
+            "tool_trajectory_avg_score failed: tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)",
+            "final_response_avg_score failed: final response mismatch: text mismatch: source I need a matching flight lookup tool before answering that record request. and target TR654 is boarding. Scheduled departure 16:05. Gate D18. do not match"
+          ],
+          "terminalStep": {
+            "stepId": "s1",
+            "agentName": "candidate",
+            "nodeId": "candidate",
+            "appliedSurfaceIds": [
+              "candidate#instruction",
+              "candidate#model",
+              "candidate#tool.lookup_record"
+            ]
+          },
+          "appliedSurfaceIds": [
+            "candidate#instruction",
+            "candidate#model",
+            "candidate#tool.lookup_record"
+          ]
+        }
+      ],
+      "summary": {
+        "toolNotCalled": 2,
+        "wrongToolName": 0,
+        "toolArgumentsMismatch": 0,
+        "routeError": 0,
+        "formatError": 0,
+        "knowledgeInsufficient": 0,
+        "finalResponseMismatch": 0,
+        "metricFailure": 0
+      }
+    },
+    "baselineValidation": {
+      "perFailedCase": [
+        {
+          "evalSetId": "validation",
+          "evalCaseId": "validation_delay_tr456",
+          "category": "tool_not_called",
+          "failedMetrics": [
+            {
+              "metricName": "tool_trajectory_avg_score",
+              "score": 0,
+              "status": "failed",
+              "reason": "tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)"
+            },
+            {
+              "metricName": "final_response_avg_score",
+              "score": 0,
+              "status": "failed",
+              "reason": "final response mismatch: text mismatch: source I need a matching flight lookup tool before answering that record request. and target TR456 is delayed by 15 minutes. Scheduled departure 12:30, updated departure 12:45. Gate A07. do not match"
+            }
+          ],
+          "evidence": [
+            "tool_trajectory_avg_score failed: tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)",
+            "final_response_avg_score failed: final response mismatch: text mismatch: source I need a matching flight lookup tool before answering that record request. and target TR456 is delayed by 15 minutes. Scheduled departure 12:30, updated departure 12:45. Gate A07. do not match"
+          ],
+          "terminalStep": {
+            "stepId": "s1",
+            "agentName": "candidate",
+            "nodeId": "candidate",
+            "appliedSurfaceIds": [
+              "candidate#instruction",
+              "candidate#model",
+              "candidate#tool.lookup_record"
+            ]
+          },
+          "appliedSurfaceIds": [
+            "candidate#instruction",
+            "candidate#model",
+            "candidate#tool.lookup_record"
+          ]
+        },
+        {
+          "evalSetId": "validation",
+          "evalCaseId": "validation_gate_tr654",
+          "category": "tool_not_called",
+          "failedMetrics": [
+            {
+              "metricName": "tool_trajectory_avg_score",
+              "score": 0,
+              "status": "failed",
+              "reason": "tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)"
+            },
+            {
+              "metricName": "final_response_avg_score",
+              "score": 0,
+              "status": "failed",
+              "reason": "final response mismatch: text mismatch: source I need a matching flight lookup tool before answering that record request. and target TR654 is boarding. Scheduled departure 16:05. Gate D18. do not match"
+            }
+          ],
+          "evidence": [
+            "tool_trajectory_avg_score failed: tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)",
+            "final_response_avg_score failed: final response mismatch: text mismatch: source I need a matching flight lookup tool before answering that record request. and target TR654 is boarding. Scheduled departure 16:05. Gate D18. do not match"
+          ],
+          "terminalStep": {
+            "stepId": "s1",
+            "agentName": "candidate",
+            "nodeId": "candidate",
+            "appliedSurfaceIds": [
+              "candidate#instruction",
+              "candidate#model",
+              "candidate#tool.lookup_record"
+            ]
+          },
+          "appliedSurfaceIds": [
+            "candidate#instruction",
+            "candidate#model",
+            "candidate#tool.lookup_record"
+          ]
+        },
+        {
+          "evalSetId": "validation",
+          "evalCaseId": "validation_departure_tr123",
+          "category": "tool_not_called",
+          "failedMetrics": [
+            {
+              "metricName": "tool_trajectory_avg_score",
+              "score": 0,
+              "status": "failed",
+              "reason": "tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)"
+            },
+            {
+              "metricName": "final_response_avg_score",
+              "score": 0,
+              "status": "failed",
+              "reason": "final response mismatch: text mismatch: source I need a matching flight lookup tool before answering that record request. and target TR123 is delayed by 35 minutes. Scheduled departure 10:10, updated departure 10:45. Gate B12. do not match"
+            }
+          ],
+          "evidence": [
+            "tool_trajectory_avg_score failed: tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)",
+            "final_response_avg_score failed: final response mismatch: text mismatch: source I need a matching flight lookup tool before answering that record request. and target TR123 is delayed by 35 minutes. Scheduled departure 10:10, updated departure 10:45. Gate B12. do not match"
+          ],
+          "terminalStep": {
+            "stepId": "s1",
+            "agentName": "candidate",
+            "nodeId": "candidate",
+            "appliedSurfaceIds": [
+              "candidate#instruction",
+              "candidate#model",
+              "candidate#tool.lookup_record"
+            ]
+          },
+          "appliedSurfaceIds": [
+            "candidate#instruction",
+            "candidate#model",
+            "candidate#tool.lookup_record"
+          ]
+        }
+      ],
+      "summary": {
+        "toolNotCalled": 3,
+        "wrongToolName": 0,
+        "toolArgumentsMismatch": 0,
+        "routeError": 0,
+        "formatError": 0,
+        "knowledgeInsufficient": 0,
+        "finalResponseMismatch": 0,
+        "metricFailure": 0
+      }
+    },
+    "candidateValidation": {
+      "perFailedCase": [
+        {
+          "evalSetId": "validation",
+          "evalCaseId": "validation_status_tr789",
+          "category": "route_error",
+          "failedMetrics": [
+            {
+              "metricName": "tool_trajectory_avg_score",
+              "score": 0,
+              "status": "failed",
+              "reason": "tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(1) != expected(0)"
+            },
+            {
+              "metricName": "final_response_avg_score",
+              "score": 0,
+              "status": "failed",
+              "reason": "final response mismatch: text mismatch: source TR789 is cancelled. Scheduled departure 18:00. Gate unavailable. and target TR789 is cancelled. do not match"
+            }
+          ],
+          "evidence": [
+            "tool_trajectory_avg_score failed: tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(1) != expected(0)",
+            "final_response_avg_score failed: final response mismatch: text mismatch: source TR789 is cancelled. Scheduled departure 18:00. Gate unavailable. and target TR789 is cancelled. do not match"
+          ],
+          "terminalStep": {
+            "stepId": "s2",
+            "agentName": "candidate",
+            "nodeId": "candidate",
+            "appliedSurfaceIds": [
+              "candidate#instruction",
+              "candidate#model",
+              "candidate#tool.lookup_record"
+            ]
+          },
+          "appliedSurfaceIds": [
+            "candidate#instruction",
+            "candidate#model",
+            "candidate#tool.lookup_record"
+          ]
+        }
+      ],
+      "summary": {
+        "toolNotCalled": 0,
+        "wrongToolName": 0,
+        "toolArgumentsMismatch": 0,
+        "routeError": 1,
+        "formatError": 0,
+        "knowledgeInsufficient": 0,
+        "finalResponseMismatch": 0,
+        "metricFailure": 0
+      }
+    }
+  },
+  "traceSmoke": {
+    "enabled": false,
+    "evalSetId": "",
+    "optimizationSkipped": false,
+    "optimizationSkippedReason": "",
+    "evaluation": null,
+    "attribution": null
+  },
+  "cost": {
+    "totalUsd": 0
+  },
+  "latencyMs": 29,
+  "modelCallCount": 29,
+  "pending": []
+}
