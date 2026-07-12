@@ -341,20 +341,20 @@ func (r *workspaceRuntime) PutDirectory(
 		return fmt.Errorf("create directory %s: %w", dest, err)
 	}
 
-	entries, cleanup, err := r.collectUploadEntries(ctx, sb, abs, dest)
-	if err != nil {
-		return err
-	}
-	defer cleanup()
-	if len(entries) == 0 {
-		return nil
-	}
-	return sb.UploadFiles(ctx, entries)
+	return r.walkAndUpload(ctx, sb, abs, dest)
 }
 
-// collectUploadEntries walks hostRoot with filepath.WalkDir and
-// returns one UploadFileEntry per regular file. Empty subdirectories
-// are created explicitly via sb.CreateDirectory so they survive in the
+// uploadBatchSize is the maximum number of files uploaded in a single
+// UploadFiles call during directory staging. Bounding the batch keeps
+// the number of simultaneously open file descriptors well below the
+// typical ulimit -n (1024), preventing StageDirectory from failing on
+// large workspaces. Each batch's file handles are closed as soon as
+// UploadFiles returns, before the next batch is opened.
+const uploadBatchSize = 64
+
+// walkAndUpload walks hostRoot with filepath.WalkDir and uploads files
+// to destRoot in batches of uploadBatchSize. Empty subdirectories are
+// created explicitly via sb.CreateDirectory so they survive in the
 // sandbox even when they contain no files (matches the e2b adapter's
 // tar TypeDir behaviour).
 //
@@ -366,22 +366,32 @@ func (r *workspaceRuntime) PutDirectory(
 // Files are opened with os.Open and streamed via the io.Reader
 // interface rather than buffered in memory with os.ReadFile, so
 // staging a directory with large files does not materialize the full
-// tree in the agent process. The returned cleanup func closes all
-// opened file handles and MUST be called by the caller (e.g. via
-// defer) once UploadFiles has finished.
-func (r *workspaceRuntime) collectUploadEntries(
+// tree in the agent process. File handles are closed after each batch
+// is uploaded, keeping the open-fd count bounded by uploadBatchSize
+// rather than the total file count in the tree.
+func (r *workspaceRuntime) walkAndUpload(
 	ctx context.Context,
 	sb *osb.Sandbox,
 	hostRoot, destRoot string,
-) ([]osb.UploadFileEntry, func(), error) {
+) error {
 	var (
 		entries   []osb.UploadFileEntry
 		openFiles []*os.File
 	)
-	cleanup := func() {
+	// flushBatch uploads the current batch and closes all its file
+	// handles. Called when the batch reaches uploadBatchSize and once
+	// more after the walk finishes.
+	flushBatch := func() error {
+		if len(entries) == 0 {
+			return nil
+		}
+		err := sb.UploadFiles(ctx, entries)
 		for _, f := range openFiles {
 			_ = f.Close()
 		}
+		entries = entries[:0]
+		openFiles = openFiles[:0]
+		return err
 	}
 	walkErr := filepath.WalkDir(hostRoot, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -435,13 +445,21 @@ func (r *workspaceRuntime) collectUploadEntries(
 				},
 			},
 		})
+		// Upload and close this batch once it reaches the size limit.
+		if len(entries) >= uploadBatchSize {
+			return flushBatch()
+		}
 		return nil
 	})
 	if walkErr != nil {
-		cleanup()
-		return nil, nil, walkErr
+		// Close any pending handles on error.
+		for _, f := range openFiles {
+			_ = f.Close()
+		}
+		return walkErr
 	}
-	return entries, cleanup, nil
+	// Flush any remaining entries after the walk completes.
+	return flushBatch()
 }
 
 // StageDirectory stages a directory with options (ReadOnly).

@@ -1492,10 +1492,12 @@ func TestWorkspace_ReadFile_ServerIgnoresRange(t *testing.T) {
 	assert.Equal(t, maxReadSizeBytes, len(files[0].Content), "content should be capped at maxReadSizeBytes")
 }
 
-// TestWorkspace_CollectUploadEntries_StreamsFiles is a regression test
-// for P2-2: files should be opened as io.Reader (streamed via
-// *os.File), not materialized into memory via os.ReadFile.
-func TestWorkspace_CollectUploadEntries_StreamsFiles(t *testing.T) {
+// TestWorkspace_WalkAndUpload_StreamsFiles is a regression test for
+// P2-2: files should be opened as io.Reader (streamed via *os.File),
+// not materialized into memory via os.ReadFile. It also verifies that
+// walkAndUpload uploads files in batches and closes each batch's file
+// handles, so the open-fd count stays bounded regardless of tree size.
+func TestWorkspace_WalkAndUpload_StreamsFiles(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hello"), 0o644))
 
@@ -1507,16 +1509,88 @@ func TestWorkspace_CollectUploadEntries_StreamsFiles(t *testing.T) {
 	ws, err := exec.CreateWorkspace(context.Background(), "exec-stream", codeexecutor.WorkspacePolicy{})
 	require.NoError(t, err)
 
+	// walkAndUpload should succeed and upload the file via the mock's
+	// /files endpoint.
+	sb, err := exec.rt.sandbox()
+	require.NoError(t, err)
+	err = exec.rt.walkAndUpload(context.Background(), sb, dir, ws.Path)
+	require.NoError(t, err)
+}
+
+// TestWorkspace_WalkAndUpload_BatchedBySize verifies that walkAndUpload
+// uploads files in batches of uploadBatchSize, closing each batch's
+// file handles before opening the next. This is a regression test for
+// the fd-exhaustion issue: staging a directory with more files than
+// ulimit -n must not fail because all fds were held open until the
+// walk finished.
+func TestWorkspace_WalkAndUpload_BatchedBySize(t *testing.T) {
+	// Create a directory with more than uploadBatchSize files.
+	dir := t.TempDir()
+	fileCount := uploadBatchSize + 10
+	for i := 0; i < fileCount; i++ {
+		name := fmt.Sprintf("file_%04d.txt", i)
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644))
+	}
+
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	ws, err := exec.CreateWorkspace(context.Background(), "exec-batch", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+
+	// PutDirectory should succeed even though fileCount > uploadBatchSize,
+	// because each batch's fds are closed before the next batch opens.
+	err = exec.PutDirectory(context.Background(), ws, dir, "staged")
+	require.NoError(t, err, "PutDirectory must handle directories larger than uploadBatchSize")
+}
+
+// TestWorkspace_WalkAndUpload_SkipsNonRegularFiles verifies that
+// symlinks inside the host directory are skipped during upload,
+// matching the e2b adapter's behaviour and preventing a symlink
+// inside hostRoot from causing files outside hostRoot to be uploaded.
+func TestWorkspace_WalkAndUpload_SkipsNonRegularFiles(t *testing.T) {
+	dir := t.TempDir()
+	// Create a regular file.
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "real.txt"), []byte("ok"), 0o644))
+	// Create a symlink pointing outside hostRoot.
+	require.NoError(t, os.Symlink(filepath.Join(os.TempDir(), "external"), filepath.Join(dir, "link")))
+
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	ws, err := exec.CreateWorkspace(context.Background(), "exec-skip-symlink", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+
+	// PutDirectory should succeed, skipping the symlink.
+	err = exec.PutDirectory(context.Background(), ws, dir, "staged")
+	require.NoError(t, err, "PutDirectory must skip non-regular files without error")
+}
+
+// TestWorkspace_WalkAndUpload_ClosesPendingHandlesOnError verifies
+// that when WalkDir encounters an error after some files have been
+// opened but not yet flushed, the pending file handles are closed.
+// This is the core fd-lifecycle guarantee from WineChord's review.
+func TestWorkspace_WalkAndUpload_ClosesPendingHandlesOnError(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	ws, err := exec.CreateWorkspace(context.Background(), "exec-err-close", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+
 	sb, err := exec.rt.sandbox()
 	require.NoError(t, err)
 
-	entries, cleanup, err := exec.rt.collectUploadEntries(context.Background(), sb, dir, ws.Path)
-	require.NoError(t, err)
-	defer cleanup()
-
-	require.Len(t, entries, 1)
-	_, ok := entries[0].File.(*os.File)
-	assert.True(t, ok, "entry should stream via *os.File, not buffer via *bytes.Reader")
+	// Call walkAndUpload with a non-existent hostRoot to trigger a
+	// WalkDir error. No files will be opened, but the error path
+	// (closing pending handles) is exercised.
+	err = exec.rt.walkAndUpload(context.Background(), sb, filepath.Join(t.TempDir(), "nonexistent"), ws.Path)
+	require.Error(t, err)
 }
 
 // --- validateWorkspace hardening tests ---

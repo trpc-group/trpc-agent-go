@@ -81,6 +81,10 @@ func WithResourceLimits(limits osb.ResourceLimits) Option {
 }
 
 // WithSandboxTimeout sets the wall-clock lifetime of the sandbox.
+// Values in the range (0, 1s) are rejected because the OpenSandbox API
+// only accepts integer seconds; a sub-second value would be silently
+// truncated to 0, which the server may interpret as immediate expiry
+// or no timeout. A value of 0 means "use the SDK default".
 func WithSandboxTimeout(t time.Duration) Option {
 	return func(c *CodeExecutor) { c.sandboxTimeout = t }
 }
@@ -123,13 +127,18 @@ func WithMetadata(meta map[string]string) Option {
 }
 
 // WithHTTPClient overrides the underlying HTTP client used by the
-// OpenSandbox SDK. The client is passed through transparently to
-// ConnectionConfig.HTTPClient.
+// OpenSandbox SDK. NewWithContext shallow-copies the client before
+// passing it to the SDK: the copy gets its own Timeout field (so the
+// SDK's timeout configuration does not mutate the caller's client),
+// while Transport is intentionally shared so the caller's connection
+// pool and TLS config still apply.
 func WithHTTPClient(h *http.Client) Option {
 	return func(c *CodeExecutor) { c.httpClient = h }
 }
 
 // WithHeaders sets additional HTTP headers applied to every API call.
+// The caller-provided map is used as-is; do not mutate it after passing
+// it to New.
 func WithHeaders(headers map[string]string) Option {
 	return func(c *CodeExecutor) { c.headers = headers }
 }
@@ -214,9 +223,12 @@ func WithWorkspacePersistence(mode WorkspacePersistenceMode) Option {
 
 // WithOutputPatterns sets the glob patterns used by Collect to harvest
 // output files after ExecuteCode completes. Defaults to a sensible
-// image/document set.
+// image/document set. The caller's slice is copied so subsequent
+// modifications do not affect the executor.
 func WithOutputPatterns(patterns []string) Option {
-	return func(c *CodeExecutor) { c.outputPatterns = patterns }
+	return func(c *CodeExecutor) {
+		c.outputPatterns = append([]string(nil), patterns...)
+	}
 }
 
 // CodeExecutor executes code inside an OpenSandbox sandbox.
@@ -301,7 +313,7 @@ func NewWithContext(ctx context.Context, opts ...Option) (*CodeExecutor, error) 
 		sandboxTimeout:   time.Duration(osb.DefaultCodeInterpreterTimeoutSeconds) * time.Second,
 		requestTimeout:   osb.DefaultRequestTimeout,
 		executionTimeout: 30 * time.Second,
-		outputPatterns:   defaultOutputPatterns,
+		outputPatterns:   append([]string(nil), defaultOutputPatterns...),
 	}
 	for _, opt := range opts {
 		opt(c)
@@ -341,12 +353,26 @@ func NewWithContext(ctx context.Context, opts ...Option) (*CodeExecutor, error) 
 		c.requestTimeout = minRequestTimeout
 	}
 
+	// Clone the caller-provided *http.Client before handing it to the
+	// SDK. The SDK's WithTimeout option writes c.httpClient.Timeout in
+	// place when the client has a custom Transport (it only clones when
+	// Transport is nil). Without cloning, the SDK would mutate the
+	// caller's shared client, changing timeout behaviour for unrelated
+	// auth/proxy/mesh traffic reusing the same client in this process.
+	// The shallow copy is sufficient: Timeout is a value field (so the
+	// clone gets its own), and Transport is intentionally shared (the
+	// caller's connection pool / TLS config still applies).
+	var httpClient *http.Client
+	if c.httpClient != nil {
+		cloned := *c.httpClient
+		httpClient = &cloned
+	}
 	connCfg := osb.ConnectionConfig{
 		Domain:              c.domain,
 		Protocol:            c.protocol,
 		APIKey:              c.apiKey,
 		RequestTimeout:      c.requestTimeout,
-		HTTPClient:          c.httpClient,
+		HTTPClient:          httpClient,
 		Headers:             c.headers,
 		UseServerProxy:      c.useServerProxy,
 		EndpointHostRewrite: c.endpointHostRewrite,
@@ -360,6 +386,12 @@ func NewWithContext(ctx context.Context, opts ...Option) (*CodeExecutor, error) 
 		Metadata:       c.metadata,
 	}
 	if c.sandboxTimeout > 0 {
+		if c.sandboxTimeout < time.Second {
+			return nil, fmt.Errorf(
+				"opensandbox: sandbox timeout %v must be at least 1s",
+				c.sandboxTimeout,
+			)
+		}
 		secs := int(c.sandboxTimeout / time.Second)
 		createOpts.TimeoutSeconds = &secs
 	}

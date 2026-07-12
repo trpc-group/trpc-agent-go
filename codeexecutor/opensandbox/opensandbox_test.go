@@ -242,6 +242,95 @@ func TestNew_WithHTTPClient_RoutesThroughCustomClient(t *testing.T) {
 	assert.Same(t, hc, exec.httpClient)
 }
 
+// TestNew_WithHTTPClient_DoesNotMutateCallerClient is a regression
+// test for WineChord's review comment: the SDK's WithTimeout option
+// writes httpClient.Timeout in place when the client has a custom
+// Transport. Without cloning, the caller's shared client would have
+// its Timeout changed, affecting unrelated auth/proxy/mesh traffic
+// reusing the same client. NewWithContext must pass a clone to the
+// SDK so the caller's Timeout is preserved.
+func TestNew_WithHTTPClient_DoesNotMutateCallerClient(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	u, err := url.Parse(m.server.URL)
+	require.NoError(t, err)
+
+	originalTimeout := 5 * time.Second
+	hc := &http.Client{
+		Timeout:   originalTimeout,
+		Transport: http.DefaultTransport, // non-nil Transport triggers the SDK's in-place write
+	}
+	_, err = New(
+		WithDomain(u.Host),
+		WithProtocol("http"),
+		WithAPIKey("test-key"),
+		WithHTTPClient(hc),
+	)
+	require.NoError(t, err)
+
+	// The caller's client must retain its original Timeout; the SDK
+	// must have written its clamped timeout to a clone, not the
+	// original.
+	assert.Equal(t, originalTimeout, hc.Timeout,
+		"caller's HTTP client Timeout must not be mutated by NewWithContext")
+}
+
+// TestNew_WithOutputPatterns_DoesNotAliasCallerSlice verifies that
+// WithOutputPatterns copies the caller's slice so subsequent
+// modifications to the original slice do not change executor behaviour.
+// Without the copy, mutating patterns after construction would silently
+// change which files Collect harvests, and concurrent mutation would
+// be a data race.
+func TestNew_WithOutputPatterns_DoesNotAliasCallerSlice(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	u, err := url.Parse(m.server.URL)
+	require.NoError(t, err)
+
+	patterns := []string{"*.txt", "*.csv"}
+	exec, err := New(
+		WithDomain(u.Host),
+		WithProtocol("http"),
+		WithAPIKey("test-key"),
+		WithOutputPatterns(patterns),
+	)
+	require.NoError(t, err)
+	defer exec.Close()
+
+	// Mutate the original slice after construction.
+	patterns[0] = "**/*"
+	patterns[1] = "*.secret"
+
+	// The executor's patterns must be unaffected.
+	assert.Equal(t, []string{"*.txt", "*.csv"}, exec.outputPatterns,
+		"WithOutputPatterns must copy the caller's slice")
+}
+
+// TestNew_WithSandboxTimeout_RejectsSubSecond verifies that a sandbox
+// timeout between 0 and 1 second is rejected with a clear error rather
+// than silently truncated to 0 (which the server may interpret as
+// immediate expiry or no timeout).
+func TestNew_WithSandboxTimeout_RejectsSubSecond(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	u, err := url.Parse(m.server.URL)
+	require.NoError(t, err)
+
+	_, err = New(
+		WithDomain(u.Host),
+		WithProtocol("http"),
+		WithAPIKey("test-key"),
+		WithSandboxTimeout(500*time.Millisecond),
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must be at least 1s")
+
+	// The mock should not have received a create call — the error
+	// fires before CreateSandbox.
+	assert.Equal(t, 0, m.createCalls,
+		"sub-second timeout must be rejected before CreateSandbox")
+}
+
 // TestNew_UseServerProxy_PassedToSDK verifies that WithUseServerProxy(true)
 // causes the SDK to send use_server_proxy=true in the GET
 // /v1/sandboxes/{id}/endpoints/{port} query string. The SDK calls
