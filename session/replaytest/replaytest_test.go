@@ -107,6 +107,7 @@ func TestNormalizerToolIdentifiersAndJSONPayloads(t *testing.T) {
 	require.NoError(t, event.SetExtension(toolCallEvent, "identifiers", map[string]any{
 		"invocation_id": parentInvocationID,
 		"triggerId":     toolCallID,
+		"tool_call_id":  largeInteger,
 	}))
 
 	toolResponseEvent := event.New(invocationID, "tool", event.WithResponse(&model.Response{
@@ -149,6 +150,15 @@ func TestNormalizerToolIdentifiersAndJSONPayloads(t *testing.T) {
 	identifiers := extensions["identifiers"].(map[string]any)
 	require.Equal(t, "invocation-001", identifiers["invocation_id"])
 	require.Equal(t, "tool-call-000", identifiers["triggerId"])
+	require.Equal(t, largeInteger, identifiers["tool_call_id"])
+	compared, err := snapshot.Clone()
+	require.NoError(t, err)
+	comparedExtensions := compared.Events[0]["extensions"].(map[string]any)
+	comparedIdentifiers := comparedExtensions["identifiers"].(map[string]any)
+	comparedIdentifiers["tool_call_id"] = largeInteger + 1
+	diffs, err := Compare("non-string-identifier", "baseline", "compared", snapshot, compared, nil)
+	require.NoError(t, err)
+	requireDiffAtPath(t, diffs, "$.events[0].extensions.identifiers.tool_call_id")
 
 	responseChoices := snapshot.Events[1]["choices"].([]any)
 	responseMessage := responseChoices[0].(map[string]any)["message"].(map[string]any)

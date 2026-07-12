@@ -131,7 +131,14 @@ func (n Normalizer) normalizeEvents(
 }
 
 func aliasMapValue(value map[string]any, key string, aliases map[string]string, prefix string) {
-	original, _ := value[key].(string)
+	raw, exists := value[key]
+	if !exists {
+		return
+	}
+	original, ok := raw.(string)
+	if !ok {
+		return
+	}
 	if original == "" {
 		delete(value, key)
 		return
