@@ -330,6 +330,8 @@ func TestCheckOverfitDetection(t *testing.T) {
 		{"both improved", 0.1, 0.12, true, "no overfit"},
 		{"val improved more", 0.05, 0.1, true, "no overfit"},
 		{"no improvement", 0, 0, true, "no overfit"},
+		{"train improved val unchanged - no division by zero", 0.1, 0, false, "overfit"},
+		{"train unchanged val unchanged", 0, 0, true, "no overfit"},
 	}
 
 	for _, tc := range testCases {

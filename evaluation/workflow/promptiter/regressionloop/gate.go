@@ -264,6 +264,11 @@ func checkOverfitDetection(trainDelta, valDelta float64) (bool, string) {
 	if trainDelta > 0.1 && valDelta < 0.01 {
 		return false, fmt.Sprintf("overfit detected: train improved %.4f but validation barely improved %.4f", trainDelta, valDelta)
 	}
+	if valDelta == 0 {
+		if trainDelta > 0 {
+			return false, fmt.Sprintf("overfit detected: train improved %.4f but validation unchanged", trainDelta)
+		}
+	}
 	if trainDelta > valDelta*2 && valDelta < 0.05 {
 		return false, fmt.Sprintf("overfit detected: train improvement %.4f is %.1fx validation improvement %.4f", trainDelta, trainDelta/valDelta, valDelta)
 	}
