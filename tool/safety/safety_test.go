@@ -335,6 +335,55 @@ func TestWrappedNetworkCommandsRejectSchemeLessTarget(t *testing.T) {
 	}
 }
 
+func TestWrappedCommandsApplyPolicyToEffectiveCommand(t *testing.T) {
+	tests := []struct {
+		name     string
+		command  string
+		decision Decision
+		ruleID   string
+		evidence string
+	}{
+		{
+			name:     "env denied command",
+			command:  "env sudo id",
+			decision: DecisionDeny,
+			ruleID:   "policy.denied_command",
+			evidence: `command "sudo" is denied`,
+		},
+		{
+			name:     "command destructive command",
+			command:  "command rm -rf work/tmp",
+			decision: DecisionDeny,
+			ruleID:   "dangerous.rm_rf",
+			evidence: "rm -rf work/tmp",
+		},
+		{
+			name:     "timeout review command",
+			command:  "timeout 5 npm install left-pad",
+			decision: DecisionNeedsHumanReview,
+			ruleID:   "dependency.environment_change",
+			evidence: `command starts with "npm install"`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			report := Scan(Request{
+				ToolName: "workspace_exec",
+				Backend:  BackendWorkspaceExec,
+				Command:  tt.command,
+			}, DefaultPolicy())
+			if report.Decision != tt.decision || report.RuleID != tt.ruleID {
+				t.Fatalf("unexpected wrapped command report: %+v", report)
+			}
+			if !slices.Contains(report.Evidence, tt.evidence) {
+				t.Fatalf("evidence = %q, want effective command evidence %q",
+					report.Evidence, tt.evidence)
+			}
+		})
+	}
+}
+
 func TestNetworkCommandsRejectLoopbackTargets(t *testing.T) {
 	commands := []string{
 		"/usr/bin/curl 127.0.0.1",
