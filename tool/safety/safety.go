@@ -606,6 +606,16 @@ func (s scanner) scanParsedCommands(pipe *shellsafe.Pipeline) []Finding {
 				"Use an allowed command or update allowed_commands in the policy.",
 			))
 		}
+		if containsEnvSplitString(argv) {
+			findings = append(findings, newFinding(
+				DecisionDeny,
+				RiskCritical,
+				"shell.env_split_string",
+				[]string{"env split-string can hide an arbitrary command payload"},
+				"Do not use env -S or --split-string in tool commands; pass the "+
+					"command and arguments directly.",
+			))
+		}
 		findings = append(findings, s.scanDangerousCommand(name, argv)...)
 		findings = append(findings, s.scanReviewCommand(full)...)
 		findings = append(findings, s.scanDeniedPaths(argv)...)
@@ -820,7 +830,17 @@ func (s scanner) scanNetwork(command string) []Finding {
 
 func extractURLs(s string) []string {
 	targets := explicitURLRE.FindAllString(s, -1)
-	return append(targets, schemeLessNetworkTargetRE.FindAllString(s, -1)...)
+	remaining := make([]string, 0, len(strings.Fields(s)))
+	for _, field := range strings.Fields(s) {
+		clean := strings.Trim(field, `"'`)
+		if match := scpLikeNetworkTargetRE.FindStringSubmatch(clean); len(match) == 2 {
+			targets = append(targets, match[1])
+			continue
+		}
+		remaining = append(remaining, field)
+	}
+	return append(targets,
+		schemeLessNetworkTargetRE.FindAllString(strings.Join(remaining, " "), -1)...)
 }
 
 func hostOf(raw string) string {
@@ -835,9 +855,45 @@ func hostOf(raw string) string {
 	return strings.ToLower(u.Hostname())
 }
 
-func isNetworkCommand(name string) bool {
-	switch name {
+func isNetworkCommand(argv []string) bool {
+	if len(argv) == 0 {
+		return false
+	}
+	switch commandName(argv[0]) {
 	case "curl", "wget", "nc", "netcat", "ssh", "scp", "rsync":
+		return true
+	case "git":
+		return isGitNetworkOperation(argv)
+	default:
+		return false
+	}
+}
+
+func isGitNetworkOperation(argv []string) bool {
+	for i := 1; i < len(argv); i++ {
+		arg := strings.ToLower(argv[i])
+		if gitGlobalOptionHasValue(arg) {
+			i++
+			continue
+		}
+		if strings.HasPrefix(arg, "-") {
+			continue
+		}
+		switch arg {
+		case "clone", "fetch", "pull", "push", "ls-remote", "submodule":
+			return true
+		case "remote":
+			return slices.Contains(argv[i+1:], "update")
+		default:
+			return false
+		}
+	}
+	return false
+}
+
+func gitGlobalOptionHasValue(arg string) bool {
+	switch arg {
+	case "-c", "-C", "--git-dir", "--work-tree", "--namespace", "--config-env":
 		return true
 	default:
 		return false
@@ -846,7 +902,7 @@ func isNetworkCommand(name string) bool {
 
 func containsNetworkCommand(argv []string) bool {
 	for depth := 0; depth < 8 && len(argv) > 0; depth++ {
-		if isNetworkCommand(commandName(argv[0])) {
+		if isNetworkCommand(argv) {
 			return true
 		}
 		next := unwrapCommand(argv)
@@ -874,6 +930,9 @@ func unwrapCommand(argv []string) []string {
 }
 
 func unwrapEnvCommand(argv []string) []string {
+	if envSplitStringRequested(argv) {
+		return nil
+	}
 	for i := 1; i < len(argv); {
 		arg := argv[i]
 		if arg == "-u" || arg == "--unset" || arg == "-C" || arg == "--chdir" {
@@ -887,6 +946,64 @@ func unwrapEnvCommand(argv []string) []string {
 		return argv[i:]
 	}
 	return nil
+}
+
+func containsEnvSplitString(argv []string) bool {
+	for depth := 0; depth < 8 && len(argv) > 0; depth++ {
+		if commandName(argv[0]) == "env" && envSplitStringRequested(argv) {
+			return true
+		}
+		next := unwrapCommand(argv)
+		if len(next) == 0 || len(next) == len(argv) {
+			return false
+		}
+		argv = next
+	}
+	return false
+}
+
+func envSplitStringRequested(argv []string) bool {
+	for i := 1; i < len(argv); {
+		arg := argv[i]
+		if arg == "--" {
+			return false
+		}
+		if isEnvSplitStringOption(arg) {
+			return true
+		}
+		if arg == "-u" || arg == "--unset" || arg == "-C" || arg == "--chdir" {
+			i += 2
+			continue
+		}
+		if strings.HasPrefix(arg, "-") || strings.Contains(arg, "=") {
+			i++
+			continue
+		}
+		return false
+	}
+	return false
+}
+
+func isEnvSplitStringOption(arg string) bool {
+	if arg == "--split-string" || strings.HasPrefix(arg, "--split-string=") {
+		return true
+	}
+	if !strings.HasPrefix(arg, "-") || strings.HasPrefix(arg, "--") {
+		return false
+	}
+	for _, option := range arg[1:] {
+		switch option {
+		case 'S':
+			return true
+		case 'u', 'C':
+			return false
+		case 'i', '0', 'v':
+			continue
+		default:
+			return false
+		}
+	}
+	return false
 }
 
 func unwrapOptionCommand(argv []string, optionHasValue bool) []string {
@@ -1341,6 +1458,8 @@ var (
 		`(?i)https?://[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+`)
 	schemeLessNetworkTargetRE = regexp.MustCompile(
 		`(?i)\b(?:(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}|(?:[0-9]{1,3}\.){3}[0-9]{1,3}|localhost)(?::[0-9]{1,5})?(?:/[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]*)?`)
+	scpLikeNetworkTargetRE = regexp.MustCompile(
+		`(?i)^(?:[a-z0-9._-]+@)?((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}|(?:[0-9]{1,3}\.){3}[0-9]{1,3}|localhost):.+$`)
 	longSleepRE   = regexp.MustCompile(`\bsleep\s+([0-9]+)`)
 	headBytesRE   = regexp.MustCompile(`\bhead\s+-c\s+([0-9]+)`)
 	printRepeatRE = regexp.MustCompile(
