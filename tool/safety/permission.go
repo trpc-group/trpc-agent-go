@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -33,6 +34,7 @@ type PermissionPolicy struct {
 	policy         Policy
 	auditPath      string
 	audit          io.Writer
+	auditMu        sync.Mutex
 	requestParsers map[string]PermissionRequestParser
 }
 
@@ -98,7 +100,7 @@ func (p *PermissionPolicy) CheckToolPermission(
 	}
 	report := Scan(scanReq, p.policy)
 	if err := p.writeAudit(report); err != nil {
-		return tool.PermissionDecision{}, err
+		return tool.DenyPermission("tool safety audit failed"), err
 	}
 	switch report.Decision {
 	case DecisionAllow:
@@ -130,6 +132,8 @@ func (p *PermissionPolicy) requestFromExtension(
 }
 
 func (p *PermissionPolicy) writeAudit(report Report) error {
+	p.auditMu.Lock()
+	defer p.auditMu.Unlock()
 	if p.audit != nil {
 		if err := WriteAuditJSONL(p.audit, report); err != nil {
 			return err

