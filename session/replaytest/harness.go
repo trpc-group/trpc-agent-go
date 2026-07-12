@@ -223,7 +223,7 @@ func validateBackend(backend Backend) error {
 	if strings.TrimSpace(backend.Name) == "" || backend.Session == nil {
 		return fmt.Errorf("invalid backend configuration")
 	}
-	if capabilitySupported(backend.Capabilities, CapabilityMemory) && backend.Memory == nil {
+	if backend.Load == nil && capabilitySupported(backend.Capabilities, CapabilityMemory) && backend.Memory == nil {
 		return fmt.Errorf("backend %q requires a memory service", backend.Name)
 	}
 	for name, capability := range backend.Capabilities {

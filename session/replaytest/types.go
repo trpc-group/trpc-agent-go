@@ -37,7 +37,8 @@ type Capability struct {
 }
 
 // Backend is a Session/Memory pair participating in one replay case.
-// Load may be provided for backends that need custom read or consistency logic.
+// Load overrides capture reads for backends that need custom consistency logic;
+// services used by Case.Run remain the caller's responsibility.
 type Backend struct {
 	Name         string
 	Session      session.Service

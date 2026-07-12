@@ -269,7 +269,15 @@ func (n Normalizer) normalizeTracks(
 	toolCalls map[string]string,
 ) map[string][]TrackSnapshot {
 	result := make(map[string][]TrackSnapshot, len(tracks))
-	for name, history := range tracks {
+	names := make([]session.Track, 0, len(tracks))
+	for name := range tracks {
+		names = append(names, name)
+	}
+	sort.Slice(names, func(i, j int) bool {
+		return string(names[i]) < string(names[j])
+	})
+	for _, name := range names {
+		history := tracks[name]
 		if history == nil {
 			result[string(name)] = nil
 			continue

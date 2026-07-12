@@ -168,6 +168,38 @@ func TestNormalizerToolIdentifiersAndJSONPayloads(t *testing.T) {
 	require.Equal(t, largeInteger, responseContent["large"])
 }
 
+func TestNormalizeTracksUsesStableTrackOrder(t *testing.T) {
+	tracks := map[session.Track]*session.TrackEvents{
+		"zeta": {
+			Track: "zeta",
+			Events: []session.TrackEvent{{
+				Track: "zeta", Payload: json.RawMessage(
+					`{"invocation_id":"invocation-z","tool_call_id":"tool-z"}`,
+				),
+			}},
+		},
+		"alpha": {
+			Track: "alpha",
+			Events: []session.TrackEvent{{
+				Track: "alpha", Payload: json.RawMessage(
+					`{"invocation_id":"invocation-a","tool_call_id":"tool-a"}`,
+				),
+			}},
+		},
+	}
+	for i := 0; i < 20; i++ {
+		normalized := DefaultNormalizer().normalizeTracks(
+			tracks, make(map[string]string), make(map[string]string),
+		)
+		alpha := normalized["alpha"][0].Payload.(map[string]any)
+		require.Equal(t, "invocation-000", alpha["invocation_id"])
+		require.Equal(t, "tool-call-000", alpha["tool_call_id"])
+		zeta := normalized["zeta"][0].Payload.(map[string]any)
+		require.Equal(t, "invocation-001", zeta["invocation_id"])
+		require.Equal(t, "tool-call-001", zeta["tool_call_id"])
+	}
+}
+
 func TestNormalizeMemoriesOrderedAndUnordered(t *testing.T) {
 	entries := []*memory.Entry{
 		{
@@ -609,6 +641,19 @@ func TestSnapshotCloneCaptureAndBackendValidation(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, sessionOnlySnapshot.Memories)
 	require.Equal(t, "not configured", sessionOnlySnapshot.Unsupported[CapabilityMemory])
+	loadOnly := backend
+	loadOnly.Name = "load-only"
+	loadOnly.Memory = nil
+	loadCalled := false
+	loadOnly.Load = func(context.Context, Backend) (*session.Session, []*memory.Entry, error) {
+		loadCalled = true
+		return sess.Clone(), entries, nil
+	}
+	loadOnlySnapshot, err := Capture(ctx, loadOnly, CaptureOptions{})
+	require.NoError(t, err)
+	require.True(t, loadCalled)
+	require.Len(t, loadOnlySnapshot.Memories, len(entries))
+	require.Equal(t, "z", loadOnlySnapshot.Memories[0].Content)
 
 	validationTests := []struct {
 		name    string
