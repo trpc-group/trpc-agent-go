@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	promptiterengine "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/engine"
@@ -176,17 +177,20 @@ func (p Pipeline) evaluateFinalCandidate(
 	run *promptiterengine.RunResult,
 	metrics []MetricDefinition,
 ) (*promptiterengine.EvaluationResult, bool, error) {
-	candidatePrompt, err := CandidateTextPrompt(run)
+	candidate, err := candidateTextOverride(run)
 	if err != nil {
 		return nil, false, err
 	}
-	if candidatePrompt == "" {
+	if candidate.Text == "" {
 		return nil, false, nil
+	}
+	if err := validateCandidateTextTarget(candidate.SurfaceID, cfg.TargetSurfaceIDs); err != nil {
+		return nil, false, err
 	}
 	result, err := p.Evaluator.Evaluate(ctx, EvaluationRequest{
 		Phase:     PhaseCandidateValidation,
 		EvalSetID: cfg.ValidationEvalSetID,
-		Prompt:    candidatePrompt,
+		Prompt:    candidate.Text,
 		Config:    cfg,
 		Metrics:   metrics,
 	})
@@ -194,6 +198,25 @@ func (p Pipeline) evaluateFinalCandidate(
 		return nil, false, fmt.Errorf("evaluate candidate validation: %w", err)
 	}
 	return result, true, nil
+}
+
+func validateCandidateTextTarget(candidateSurfaceID string, targetSurfaceIDs []string) error {
+	if len(targetSurfaceIDs) != 1 {
+		return fmt.Errorf(
+			"candidate text override %q requires exactly one matching target surface id; got %v",
+			candidateSurfaceID,
+			targetSurfaceIDs,
+		)
+	}
+	targetSurfaceID := strings.TrimSpace(targetSurfaceIDs[0])
+	if strings.TrimSpace(candidateSurfaceID) != targetSurfaceID {
+		return fmt.Errorf(
+			"candidate text override surface %q does not match configured target surface %q",
+			candidateSurfaceID,
+			targetSurfaceID,
+		)
+	}
+	return nil
 }
 
 func estimateCost(run *promptiterengine.RunResult, reranCandidateValidation ...bool) CostSummary {

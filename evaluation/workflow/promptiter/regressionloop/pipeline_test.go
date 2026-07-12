@@ -198,6 +198,78 @@ func TestPipelineRejectsFinalCandidateProfilesItCannotRepresentAsSinglePrompt(t 
 	assert.ErrorContains(t, err, "candidate profile contains non-text override")
 }
 
+func TestPipelineRejectsCandidateTextWhenTargetSurfaceIdentityIsAmbiguous(t *testing.T) {
+	tests := []struct {
+		name             string
+		targetSurfaceIDs []string
+		wantErr          string
+	}{
+		{
+			name:             "multiple configured targets",
+			targetSurfaceIDs: []string{"agent#instruction", "router#instruction"},
+			wantErr:          "requires exactly one matching target surface id",
+		},
+		{
+			name:             "single target mismatch",
+			targetSurfaceIDs: []string{"router#instruction"},
+			wantErr:          "does not match configured target surface",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			promptPath := filepath.Join(dir, "prompt.txt")
+			metricsPath := filepath.Join(dir, "metrics.json")
+			require.NoError(t, os.WriteFile(promptPath, []byte("baseline prompt"), 0o644))
+			require.NoError(t, os.WriteFile(metricsPath, []byte(`{"metrics":[]}`), 0o644))
+			candidatePrompt := "candidate prompt"
+			iterator := &capturingPromptIterator{
+				result: &promptiterengine.RunResult{
+					Rounds: []promptiterengine.RoundResult{
+						{
+							Round: 1,
+							OutputProfile: &promptiter.Profile{Overrides: []promptiter.SurfaceOverride{
+								{
+									SurfaceID: "agent#instruction",
+									Value:     astructure.SurfaceValue{Text: &candidatePrompt},
+								},
+							}},
+						},
+					},
+				},
+			}
+			cfg := Config{
+				AppName:             "app",
+				PromptSource:        promptPath,
+				MetricsPath:         metricsPath,
+				TrainEvalSetID:      "train",
+				ValidationEvalSetID: "validation",
+				OutputJSON:          filepath.Join(dir, "optimization_report.json"),
+				OutputMarkdown:      filepath.Join(dir, "optimization_report.md"),
+				TargetSurfaceIDs:    tt.targetSurfaceIDs,
+				PromptIter:          PromptIterConfig{MaxRounds: 1},
+			}
+			evaluator := &scriptedEvaluator{
+				results: map[Phase]*promptiterengine.EvaluationResult{
+					PhaseBaselineTrain: evalResult("train", []caseSpec{
+						{id: "case", metric: "m", score: 1, status: status.EvalStatusPassed},
+					}),
+					PhaseBaselineValidation: evalResult("validation", []caseSpec{
+						{id: "case", metric: "m", score: 1, status: status.EvalStatusPassed},
+					}),
+				},
+			}
+			_, err := Pipeline{
+				Evaluator:      evaluator,
+				PromptIterator: iterator,
+				Clock:          &sequenceClock{times: []time.Time{time.Unix(1, 0), time.Unix(2, 0)}},
+			}.Run(context.Background(), cfg)
+			assert.ErrorContains(t, err, tt.wantErr)
+			require.Len(t, evaluator.requests, 2)
+		})
+	}
+}
+
 func TestPipelineRerunsFinalCandidateValidation(t *testing.T) {
 	dir := t.TempDir()
 	promptPath := filepath.Join(dir, "prompt.txt")

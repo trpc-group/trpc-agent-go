@@ -144,47 +144,71 @@ func BuildRoundAudit(
 // string for multi-surface or non-text profiles that cannot be represented by
 // one prompt string.
 func CandidatePrompt(run *promptiterengine.RunResult) string {
-	text, err := CandidateTextPrompt(run)
+	override, err := candidateTextOverride(run)
 	if err != nil {
 		return ""
 	}
-	return text
+	return override.Text
 }
 
 func CandidateTextPrompt(run *promptiterengine.RunResult) (string, error) {
+	override, err := candidateTextOverride(run)
+	if err != nil {
+		return "", err
+	}
+	return override.Text, nil
+}
+
+type textOverride struct {
+	SurfaceID string
+	Text      string
+}
+
+func candidateTextOverride(run *promptiterengine.RunResult) (textOverride, error) {
 	if run == nil {
-		return "", nil
+		return textOverride{}, nil
 	}
 	for i := len(run.Rounds) - 1; i >= 0; i-- {
-		text, err := profilePromptText(run.Rounds[i].OutputProfile)
+		override, err := profileTextOverride(run.Rounds[i].OutputProfile)
 		if err != nil {
-			return "", err
+			return textOverride{}, err
 		}
-		if text != "" {
-			return text, nil
+		if override.Text != "" {
+			return override, nil
 		}
 	}
-	return profilePromptText(run.AcceptedProfile)
+	return profileTextOverride(run.AcceptedProfile)
 }
 
 func profilePromptText(profile *promptiter.Profile) (string, error) {
-	if profile == nil {
-		return "", nil
+	override, err := profileTextOverride(profile)
+	if err != nil {
+		return "", err
 	}
-	var text string
-	for _, override := range profile.Overrides {
-		if override.Value.Text != nil && strings.TrimSpace(*override.Value.Text) != "" {
-			if text != "" {
-				return "", fmt.Errorf("candidate profile has multiple text overrides; provide profile-aware validation")
+	return override.Text, nil
+}
+
+func profileTextOverride(profile *promptiter.Profile) (textOverride, error) {
+	if profile == nil {
+		return textOverride{}, nil
+	}
+	var found textOverride
+	for _, surfaceOverride := range profile.Overrides {
+		if surfaceOverride.Value.Text != nil && strings.TrimSpace(*surfaceOverride.Value.Text) != "" {
+			if found.Text != "" {
+				return textOverride{}, fmt.Errorf("candidate profile has multiple text overrides; provide profile-aware validation")
 			}
-			text = *override.Value.Text
+			found = textOverride{
+				SurfaceID: strings.TrimSpace(surfaceOverride.SurfaceID),
+				Text:      *surfaceOverride.Value.Text,
+			}
 			continue
 		}
-		if hasNonTextProfileValue(override.Value) {
-			return "", fmt.Errorf("candidate profile contains non-text override for %q; provide profile-aware validation", override.SurfaceID)
+		if hasNonTextProfileValue(surfaceOverride.Value) {
+			return textOverride{}, fmt.Errorf("candidate profile contains non-text override for %q; provide profile-aware validation", surfaceOverride.SurfaceID)
 		}
 	}
-	return text, nil
+	return found, nil
 }
 
 func hasNonTextProfileValue(value astructure.SurfaceValue) bool {
