@@ -56,7 +56,11 @@ func (p *Pipeline) Run(ctx context.Context) (*OptimizationReport, error) {
 	}
 
 	endTime := time.Now()
-	durationMS := endTime.Sub(startTime).Milliseconds()
+	d := endTime.Sub(startTime)
+	durationMS := d.Milliseconds()
+	if durationMS == 0 {
+		durationMS = 1
+	}
 
 	report := GenerateReport(pctx)
 	report.RunMeta.EndTime = endTime

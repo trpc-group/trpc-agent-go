@@ -33,6 +33,7 @@ func ComputeDeltas(baseline, candidate *engine.EvaluationResult) []CaseDelta {
 		if !baselineOK {
 			deltas = append(deltas, CaseDelta{
 				EvalCaseID:      id,
+				EvalSetID:       candidateCase.EvalSetID,
 				DeltaType:       DeltaMissing,
 				BaselinePassed:  false,
 				CandidatePassed: isCasePassed(candidateCase),
@@ -44,6 +45,7 @@ func ComputeDeltas(baseline, candidate *engine.EvaluationResult) []CaseDelta {
 		if !candidateOK {
 			deltas = append(deltas, CaseDelta{
 				EvalCaseID:      id,
+				EvalSetID:       baselineCase.EvalSetID,
 				DeltaType:       DeltaMissing,
 				BaselineScore:   getCaseScore(baselineCase),
 				BaselinePassed:  isCasePassed(baselineCase),

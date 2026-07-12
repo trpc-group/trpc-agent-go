@@ -10,6 +10,7 @@ package regressionloop
 
 import (
 	"encoding/json"
+	"sort"
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
@@ -209,8 +210,15 @@ func foldCausalChain(attributions []AttributionResult) []AttributionResult {
 		caseMap[attr.EvalCaseID] = append(caseMap[attr.EvalCaseID], attr)
 	}
 
+	caseIDs := make([]string, 0, len(caseMap))
+	for id := range caseMap {
+		caseIDs = append(caseIDs, id)
+	}
+	sort.Strings(caseIDs)
+
 	var result []AttributionResult
-	for _, attrs := range caseMap {
+	for _, id := range caseIDs {
+		attrs := caseMap[id]
 		if len(attrs) == 1 {
 			result = append(result, attrs[0])
 			continue
@@ -275,9 +283,15 @@ func ConvertToLossHints(attributions []AttributionResult) []promptiter.CaseLoss 
 		})
 	}
 
+	caseIDs := make([]string, 0, len(caseLossMap))
+	for id := range caseLossMap {
+		caseIDs = append(caseIDs, id)
+	}
+	sort.Strings(caseIDs)
+
 	var losses []promptiter.CaseLoss
-	for _, cl := range caseLossMap {
-		losses = append(losses, *cl)
+	for _, id := range caseIDs {
+		losses = append(losses, *caseLossMap[id])
 	}
 	return losses
 }
