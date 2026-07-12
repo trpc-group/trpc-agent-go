@@ -55,13 +55,16 @@ func (p *Pipeline) Run(ctx context.Context) (*OptimizationReport, error) {
 		return nil, fmt.Errorf("S5 delta and gate failed: %w", err)
 	}
 
-	if err := p.S6Reporting(pctx); err != nil {
-		return nil, fmt.Errorf("S6 reporting failed: %w", err)
-	}
+	endTime := time.Now()
+	durationMS := endTime.Sub(startTime).Milliseconds()
 
 	report := GenerateReport(pctx)
-	report.RunMeta.EndTime = time.Now()
-	report.RunMeta.DurationMS = report.RunMeta.EndTime.Sub(startTime).Milliseconds()
+	report.RunMeta.EndTime = endTime
+	report.RunMeta.DurationMS = durationMS
+
+	if err := p.S6Reporting(pctx, report); err != nil {
+		return nil, fmt.Errorf("S6 reporting failed: %w", err)
+	}
 
 	return report, nil
 }
@@ -210,8 +213,6 @@ func (p *Pipeline) S3PromptiterOptimization(ctx *PipelineContext) error {
 		return p.runFakeOptimization(ctx)
 	case "trace-smoke":
 		return p.runFakeOptimization(ctx)
-	case "real":
-		return p.runRealOptimization(ctx)
 	default:
 		return fmt.Errorf("unsupported mode: %s", p.config.Mode)
 	}
@@ -270,10 +271,6 @@ func (p *Pipeline) runFakeOptimization(ctx *PipelineContext) error {
 	ctx.TotalLatencyMS = int64(totalLatency)
 
 	return nil
-}
-
-func (p *Pipeline) runRealOptimization(ctx *PipelineContext) error {
-	return fmt.Errorf("real mode optimization requires agent and evaluator setup")
 }
 
 func (p *Pipeline) convertAttributionsToLossHints(attributions []AttributionResult) []engine.LossHint {
@@ -419,6 +416,6 @@ func (p *Pipeline) S5DeltaAndGate(ctx *PipelineContext) error {
 	return nil
 }
 
-func (p *Pipeline) S6Reporting(ctx *PipelineContext) error {
-	return WriteReports(GenerateReport(ctx), p.config.Output.OutputDir)
+func (p *Pipeline) S6Reporting(ctx *PipelineContext, report *OptimizationReport) error {
+	return WriteReports(report, p.config.Output.OutputDir)
 }

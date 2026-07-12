@@ -93,8 +93,8 @@ func (c *Config) Validate() error {
 	if c.PromptiterConfigPath == "" {
 		return errors.New("promptiterConfigPath is required")
 	}
-	if c.Mode != "fake" && c.Mode != "trace-smoke" && c.Mode != "real" {
-		return errors.New("mode must be one of: fake, trace-smoke, real")
+	if c.Mode != "fake" && c.Mode != "trace-smoke" {
+		return errors.New("mode must be one of: fake, trace-smoke")
 	}
 	if c.Seed <= 0 && (c.Mode == "fake" || c.Mode == "trace-smoke") {
 		return errors.New("seed must be positive for fake/trace-smoke mode")
