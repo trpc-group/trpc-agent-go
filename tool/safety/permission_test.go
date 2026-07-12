@@ -259,6 +259,31 @@ func TestPermissionPolicyAuditFailureMode(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, tool.PermissionActionDeny, decision.Action)
+
+	var audit bytes.Buffer
+	pp = NewPermissionPolicy(
+		WithAuditWriter(&audit),
+		WithPolicy(DefaultPolicy()),
+	)
+	decision, err = pp.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:  "workspace_exec",
+		Arguments: []byte(`{"command":"echo ok"}`),
+	})
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionAllow, decision.Action)
+	require.Contains(t, audit.String(), `"decision":"allow"`)
+
+	pp = NewPermissionPolicy(
+		WithAuditWriter(failingWriter{}),
+		WithPolicy(ProductionPolicy()),
+	)
+	decision, err = pp.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:  "workspace_exec",
+		Arguments: []byte(`{"command":"echo ok"}`),
+	})
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionDeny, decision.Action)
+	require.Contains(t, decision.Reason, "audit failed")
 }
 
 func TestPermissionPolicyMapsHostExecAndCodeExec(t *testing.T) {
@@ -287,6 +312,20 @@ func TestPermissionPolicyMapsHostExecAndCodeExec(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, tool.PermissionActionDeny, decision.Action)
+}
+
+func TestPermissionPolicyUsesPolicyConfig(t *testing.T) {
+	explicitFalse := false
+	pp := NewPermissionPolicy(WithPolicyConfig(PolicyConfig{
+		DenySecretLeakage: &explicitFalse,
+	}))
+
+	decision, err := pp.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:  "workspace_exec",
+		Arguments: []byte(`{"command":"echo token=sk-12345678901234567890"}`),
+	})
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionAllow, decision.Action)
 }
 
 func TestPermissionPolicyScansDoubleEncodedCodeBlocks(t *testing.T) {

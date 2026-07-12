@@ -74,12 +74,17 @@ func WithPolicy(policy Policy) PermissionOption {
 	return func(p *PermissionPolicy) {
 		rawAuditMode := policy.AuditFailureMode
 		policy = policy.Normalize()
-		p.scanner = NewScanner(policy)
+		p.replaceScanner(policy)
 		p.unsupportedAction = policy.UnknownToolAction
 		if rawAuditMode != "" {
 			p.auditFailureMode = policy.AuditFailureMode
 		}
 	}
+}
+
+// WithPolicyConfig uses a presence-aware policy overlay for the internal scanner.
+func WithPolicyConfig(cfg PolicyConfig) PermissionOption {
+	return WithPolicy(PolicyFromConfig(cfg))
 }
 
 // WithPolicyFile loads policy from a YAML or JSON policy file.
@@ -101,12 +106,22 @@ func withPolicyFile(path string, load func(string) (Policy, error)) PermissionOp
 			return
 		}
 		rawAuditMode := policy.AuditFailureMode
-		policy = policy.Normalize()
-		p.scanner = NewScanner(policy)
+		p.replaceScanner(policy)
 		p.unsupportedAction = policy.UnknownToolAction
 		if rawAuditMode != "" {
 			p.auditFailureMode = policy.AuditFailureMode
 		}
+	}
+}
+
+func (p *PermissionPolicy) replaceScanner(policy Policy) {
+	var audit AuditSink
+	if p.scanner != nil {
+		audit = p.scanner.audit
+	}
+	p.scanner = NewScanner(policy)
+	if audit != nil {
+		p.scanner.audit = audit
 	}
 }
 

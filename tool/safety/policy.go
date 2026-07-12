@@ -48,6 +48,41 @@ type Policy struct {
 	RedactSensitivePaths           bool             `json:"redact_sensitive_paths" yaml:"redact_sensitive_paths"`
 	FailClosedOnUnsupportedBackend bool             `json:"fail_closed_on_unsupported_backend" yaml:"fail_closed_on_unsupported_backend"`
 	AuditFailureMode               AuditFailureMode `json:"audit_failure_mode" yaml:"audit_failure_mode"`
+
+	preserveBoolFalse  bool
+	preserveZeroLimits bool
+}
+
+// PolicyConfig is a presence-aware policy overlay. Nil fields inherit
+// DefaultPolicy values; non-nil fields, including false bools and zero limits,
+// are applied explicitly.
+type PolicyConfig struct {
+	AllowedCommands *[]string `json:"allowed_commands" yaml:"allowed_commands"`
+	DeniedCommands  *[]string `json:"denied_commands" yaml:"denied_commands"`
+	AllowedDomains  *[]string `json:"allowed_domains" yaml:"allowed_domains"`
+	DeniedPaths     *[]string `json:"denied_paths" yaml:"denied_paths"`
+	EnvAllowlist    *[]string `json:"env_allowlist" yaml:"env_allowlist"`
+
+	MaxTimeoutSec    *int `json:"max_timeout_sec" yaml:"max_timeout_sec"`
+	MaxOutputBytes   *int `json:"max_output_bytes" yaml:"max_output_bytes"`
+	LongSleepSeconds *int `json:"long_sleep_seconds" yaml:"long_sleep_seconds"`
+
+	ParseErrorAction               *Decision         `json:"parse_error_action" yaml:"parse_error_action"`
+	UnknownToolAction              *Decision         `json:"unknown_tool_action" yaml:"unknown_tool_action"`
+	HostExecTTYAction              *Decision         `json:"hostexec_tty_action" yaml:"hostexec_tty_action"`
+	BackgroundAction               *Decision         `json:"background_action" yaml:"background_action"`
+	NonWhitelistedNetworkAction    *Decision         `json:"non_whitelisted_network_action" yaml:"non_whitelisted_network_action"`
+	DependencyInstallAction        *Decision         `json:"dependency_install_action" yaml:"dependency_install_action"`
+	ShellBypassAction              *Decision         `json:"shell_bypass_action" yaml:"shell_bypass_action"`
+	DisallowedEnvironmentAction    *Decision         `json:"disallowed_environment_action" yaml:"disallowed_environment_action"`
+	SensitivePathReadAction        *Decision         `json:"sensitive_path_read_action" yaml:"sensitive_path_read_action"`
+	ReviewShellPipelines           *bool             `json:"review_shell_pipelines" yaml:"review_shell_pipelines"`
+	DenyDangerousRecursiveDelete   *bool             `json:"deny_dangerous_recursive_delete" yaml:"deny_dangerous_recursive_delete"`
+	DenySecretLeakage              *bool             `json:"deny_secret_leakage" yaml:"deny_secret_leakage"`
+	RedactSensitiveEvidence        *bool             `json:"redact_sensitive_evidence" yaml:"redact_sensitive_evidence"`
+	RedactSensitivePaths           *bool             `json:"redact_sensitive_paths" yaml:"redact_sensitive_paths"`
+	FailClosedOnUnsupportedBackend *bool             `json:"fail_closed_on_unsupported_backend" yaml:"fail_closed_on_unsupported_backend"`
+	AuditFailureMode               *AuditFailureMode `json:"audit_failure_mode" yaml:"audit_failure_mode"`
 }
 
 // DefaultPolicy returns conservative defaults suitable for examples and tests.
@@ -72,8 +107,8 @@ func DefaultPolicy() Policy {
 			"id_ed25519", "credentials", "credential", "secrets",
 		},
 		EnvAllowlist: []string{
-			"HOME", "TMPDIR", "GOMODCACHE", "GOCACHE",
-			"GOPROXY", "GONOSUMDB", "GONOPROXY", "GOFLAGS",
+			"TMPDIR", "GOMODCACHE", "GOCACHE", "GOPROXY",
+			"GONOSUMDB", "GONOPROXY", "GOFLAGS",
 		},
 		MaxTimeoutSec:    300,
 		MaxOutputBytes:   1 << 20,
@@ -94,6 +129,7 @@ func DefaultPolicy() Policy {
 		RedactSensitiveEvidence:      true,
 		RedactSensitivePaths:         false,
 		AuditFailureMode:             AuditBestEffort,
+		preserveBoolFalse:            true,
 	}
 }
 
@@ -110,6 +146,16 @@ func ProductionPolicy() Policy {
 
 // Normalize fills unset fields and validates decisions.
 func (p Policy) Normalize() Policy {
+	return normalizePolicy(p, p.preserveBoolFalse, p.preserveZeroLimits)
+}
+
+func normalizeLoadedPolicy(p Policy) Policy {
+	p = normalizePolicy(p, true, false)
+	p.preserveBoolFalse = true
+	return p
+}
+
+func normalizePolicy(p Policy, preserveBoolFalse, preserveZeroLimits bool) Policy {
 	def := DefaultPolicy()
 	if p.AllowedCommands == nil {
 		p.AllowedCommands = def.AllowedCommands
@@ -126,13 +172,13 @@ func (p Policy) Normalize() Policy {
 	if p.EnvAllowlist == nil {
 		p.EnvAllowlist = def.EnvAllowlist
 	}
-	if p.MaxTimeoutSec == 0 {
+	if p.MaxTimeoutSec == 0 && !preserveZeroLimits {
 		p.MaxTimeoutSec = def.MaxTimeoutSec
 	}
-	if p.MaxOutputBytes == 0 {
+	if p.MaxOutputBytes == 0 && !preserveZeroLimits {
 		p.MaxOutputBytes = def.MaxOutputBytes
 	}
-	if p.LongSleepSeconds == 0 {
+	if p.LongSleepSeconds == 0 && !preserveZeroLimits {
 		p.LongSleepSeconds = def.LongSleepSeconds
 	}
 	p.ParseErrorAction = normalizeDecision(p.ParseErrorAction, def.ParseErrorAction)
@@ -149,7 +195,97 @@ func (p Policy) Normalize() Policy {
 	p.SensitivePathReadAction = normalizeDecision(
 		p.SensitivePathReadAction, def.SensitivePathReadAction)
 	p.AuditFailureMode = normalizeAuditFailureMode(p.AuditFailureMode, def.AuditFailureMode)
+	if !preserveBoolFalse {
+		p.ReviewShellPipelines = def.ReviewShellPipelines
+		p.DenyDangerousRecursiveDelete = def.DenyDangerousRecursiveDelete
+		p.DenySecretLeakage = def.DenySecretLeakage
+		p.RedactSensitiveEvidence = def.RedactSensitiveEvidence
+	}
 	return p
+}
+
+// PolicyFromConfig materializes a presence-aware policy overlay.
+func PolicyFromConfig(cfg PolicyConfig) Policy {
+	p := DefaultPolicy()
+	if cfg.AllowedCommands != nil {
+		p.AllowedCommands = cloneStrings(*cfg.AllowedCommands)
+	}
+	if cfg.DeniedCommands != nil {
+		p.DeniedCommands = cloneStrings(*cfg.DeniedCommands)
+	}
+	if cfg.AllowedDomains != nil {
+		p.AllowedDomains = cloneStrings(*cfg.AllowedDomains)
+	}
+	if cfg.DeniedPaths != nil {
+		p.DeniedPaths = cloneStrings(*cfg.DeniedPaths)
+	}
+	if cfg.EnvAllowlist != nil {
+		p.EnvAllowlist = cloneStrings(*cfg.EnvAllowlist)
+	}
+	if cfg.MaxTimeoutSec != nil {
+		p.MaxTimeoutSec = *cfg.MaxTimeoutSec
+	}
+	if cfg.MaxOutputBytes != nil {
+		p.MaxOutputBytes = *cfg.MaxOutputBytes
+	}
+	if cfg.LongSleepSeconds != nil {
+		p.LongSleepSeconds = *cfg.LongSleepSeconds
+	}
+	if cfg.ParseErrorAction != nil {
+		p.ParseErrorAction = *cfg.ParseErrorAction
+	}
+	if cfg.UnknownToolAction != nil {
+		p.UnknownToolAction = *cfg.UnknownToolAction
+	}
+	if cfg.HostExecTTYAction != nil {
+		p.HostExecTTYAction = *cfg.HostExecTTYAction
+	}
+	if cfg.BackgroundAction != nil {
+		p.BackgroundAction = *cfg.BackgroundAction
+	}
+	if cfg.NonWhitelistedNetworkAction != nil {
+		p.NonWhitelistedNetworkAction = *cfg.NonWhitelistedNetworkAction
+	}
+	if cfg.DependencyInstallAction != nil {
+		p.DependencyInstallAction = *cfg.DependencyInstallAction
+	}
+	if cfg.ShellBypassAction != nil {
+		p.ShellBypassAction = *cfg.ShellBypassAction
+	}
+	if cfg.DisallowedEnvironmentAction != nil {
+		p.DisallowedEnvironmentAction = *cfg.DisallowedEnvironmentAction
+	}
+	if cfg.SensitivePathReadAction != nil {
+		p.SensitivePathReadAction = *cfg.SensitivePathReadAction
+	}
+	if cfg.ReviewShellPipelines != nil {
+		p.ReviewShellPipelines = *cfg.ReviewShellPipelines
+	}
+	if cfg.DenyDangerousRecursiveDelete != nil {
+		p.DenyDangerousRecursiveDelete = *cfg.DenyDangerousRecursiveDelete
+	}
+	if cfg.DenySecretLeakage != nil {
+		p.DenySecretLeakage = *cfg.DenySecretLeakage
+	}
+	if cfg.RedactSensitiveEvidence != nil {
+		p.RedactSensitiveEvidence = *cfg.RedactSensitiveEvidence
+	}
+	if cfg.RedactSensitivePaths != nil {
+		p.RedactSensitivePaths = *cfg.RedactSensitivePaths
+	}
+	if cfg.FailClosedOnUnsupportedBackend != nil {
+		p.FailClosedOnUnsupportedBackend = *cfg.FailClosedOnUnsupportedBackend
+	}
+	if cfg.AuditFailureMode != nil {
+		p.AuditFailureMode = *cfg.AuditFailureMode
+	}
+	p.preserveBoolFalse = true
+	p.preserveZeroLimits = true
+	return p.Normalize()
+}
+
+func cloneStrings(in []string) []string {
+	return append([]string(nil), in...)
 }
 
 // LoadPolicy loads a JSON or YAML policy file.
@@ -170,7 +306,7 @@ func LoadPolicy(path string) (Policy, error) {
 	if err != nil {
 		return Policy{}, err
 	}
-	return p.Normalize(), nil
+	return normalizeLoadedPolicy(p), nil
 }
 
 // LoadPolicyStrict loads a policy and rejects unknown fields and invalid limits.
@@ -198,7 +334,7 @@ func LoadPolicyStrict(path string) (Policy, error) {
 	if err := validatePolicy(p); err != nil {
 		return Policy{}, err
 	}
-	return p.Normalize(), nil
+	return normalizeLoadedPolicy(p), nil
 }
 
 func validatePolicy(p Policy) error {

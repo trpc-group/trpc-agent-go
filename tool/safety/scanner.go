@@ -1011,6 +1011,25 @@ func scanNetworkCommandSegments(cmds [][]string, p Policy) []Finding {
 			continue
 		}
 		cmd := commandBase(argv[0])
+		if cmd == "git" {
+			hosts, review := gitNetworkTargets(argv[1:])
+			for _, host := range hosts {
+				if domainAllowed(host, p.AllowedDomains) {
+					continue
+				}
+				findings = append(findings, finding(ruleNetworkEgress,
+					"network_egress", RiskCritical, host,
+					"add the domain to allowed_domains or remove the outbound network call",
+					p.NonWhitelistedNetworkAction))
+			}
+			for _, evidence := range review {
+				findings = append(findings, finding(ruleNetworkEgress,
+					"network_egress", RiskHigh, evidence,
+					"review git remotes that are resolved from local configuration",
+					DecisionAsk))
+			}
+			continue
+		}
 		if cmd == "curl" {
 			for _, host := range curlConnectionOverrideHosts(argv[1:]) {
 				if domainAllowed(host, p.AllowedDomains) {
@@ -1043,6 +1062,334 @@ func scanNetworkCommandSegments(cmds [][]string, p Policy) []Finding {
 		}
 	}
 	return findings
+}
+
+func gitNetworkTargets(args []string) ([]string, []string) {
+	hosts, review := gitConfigNetworkEffects(args)
+	subcmd, rest := gitSubcommand(args)
+	if subcmd == "" || !gitSubcommandUsesNetwork(subcmd, rest) {
+		return uniqueStrings(hosts), uniqueStrings(review)
+	}
+	operands := gitRemoteOperands(subcmd, rest)
+	for _, operand := range operands {
+		if host := hostFromGitRemote(operand); host != "" {
+			hosts = append(hosts, host)
+			continue
+		}
+		if strings.TrimSpace(operand) != "" {
+			review = append(review, "git "+subcmd+" "+operand)
+		}
+	}
+	if len(operands) == 0 {
+		review = append(review, "git "+subcmd)
+	}
+	return uniqueStrings(hosts), uniqueStrings(review)
+}
+
+func gitConfigNetworkEffects(args []string) ([]string, []string) {
+	var hosts []string
+	var review []string
+	for i := 0; i < len(args); i++ {
+		arg := strings.Trim(args[i], `"' ;|&`)
+		if arg == "" {
+			continue
+		}
+		if shellSeparatorToken(arg) {
+			break
+		}
+		var config string
+		switch {
+		case arg == "-c" || arg == "--config":
+			if i+1 >= len(args) {
+				continue
+			}
+			i++
+			config = strings.Trim(args[i], `"'`)
+		case strings.HasPrefix(arg, "--config="):
+			config = strings.TrimPrefix(arg, "--config=")
+		case strings.HasPrefix(arg, "-c") && len(arg) > 2:
+			config = strings.TrimPrefix(arg, "-c")
+		case arg == "--config-env":
+			if i+1 >= len(args) {
+				continue
+			}
+			i++
+			key, _, ok := strings.Cut(strings.Trim(args[i], `"'`), "=")
+			if ok && gitConfigNeedsReview(key) {
+				review = append(review, "git --config-env "+key)
+			}
+			continue
+		case strings.HasPrefix(arg, "--config-env="):
+			key, _, ok := strings.Cut(strings.TrimPrefix(arg, "--config-env="), "=")
+			if ok && gitConfigNeedsReview(key) {
+				review = append(review, "git --config-env "+key)
+			}
+			continue
+		default:
+			continue
+		}
+		h, r := gitNetworkConfigEffect(config)
+		hosts = append(hosts, h...)
+		review = append(review, r...)
+	}
+	return uniqueStrings(hosts), uniqueStrings(review)
+}
+
+func gitNetworkConfigEffect(config string) ([]string, []string) {
+	key, value, ok := strings.Cut(strings.TrimSpace(config), "=")
+	if !ok {
+		return nil, nil
+	}
+	key = strings.TrimSpace(key)
+	value = strings.TrimSpace(value)
+	if key == "" {
+		return nil, nil
+	}
+	lowerKey := strings.ToLower(key)
+	if base, ok := gitURLRewriteBase(key, lowerKey); ok {
+		if host := hostFromGitRemote(base); host != "" {
+			return []string{host}, nil
+		}
+		return nil, []string{"git config " + key}
+	}
+	switch {
+	case lowerKey == "core.sshcommand",
+		lowerKey == "include.path",
+		strings.HasPrefix(lowerKey, "includeif.") && strings.HasSuffix(lowerKey, ".path"),
+		strings.HasPrefix(lowerKey, "protocol.") && strings.HasSuffix(lowerKey, ".allow"):
+		return nil, []string{"git config " + key}
+	case lowerKey == "http.proxy" || lowerKey == "https.proxy" ||
+		strings.HasSuffix(lowerKey, ".proxy") ||
+		strings.HasSuffix(lowerKey, ".url") ||
+		strings.HasSuffix(lowerKey, ".pushurl"):
+		if host := hostFromGitRemote(value); host != "" {
+			return []string{host}, nil
+		}
+		if value != "" {
+			return nil, []string{"git config " + key}
+		}
+	}
+	return nil, nil
+}
+
+func gitURLRewriteBase(key, lowerKey string) (string, bool) {
+	const prefix = "url."
+	for _, suffix := range []string{".insteadof", ".pushinsteadof"} {
+		if strings.HasPrefix(lowerKey, prefix) && strings.HasSuffix(lowerKey, suffix) {
+			return key[len(prefix) : len(key)-len(suffix)], true
+		}
+	}
+	return "", false
+}
+
+func gitConfigNeedsReview(key string) bool {
+	lowerKey := strings.ToLower(strings.TrimSpace(key))
+	if _, ok := gitURLRewriteBase(key, lowerKey); ok {
+		return true
+	}
+	return lowerKey == "core.sshcommand" ||
+		lowerKey == "http.proxy" ||
+		lowerKey == "https.proxy" ||
+		lowerKey == "include.path" ||
+		(strings.HasPrefix(lowerKey, "includeif.") && strings.HasSuffix(lowerKey, ".path")) ||
+		(strings.HasPrefix(lowerKey, "protocol.") && strings.HasSuffix(lowerKey, ".allow")) ||
+		strings.HasSuffix(lowerKey, ".proxy") ||
+		strings.HasSuffix(lowerKey, ".url") ||
+		strings.HasSuffix(lowerKey, ".pushurl")
+}
+
+func gitSubcommand(args []string) (string, []string) {
+	for i := 0; i < len(args); i++ {
+		arg := strings.Trim(args[i], `"' ;|&`)
+		if arg == "" {
+			continue
+		}
+		if shellSeparatorToken(arg) {
+			break
+		}
+		if arg == "--" {
+			continue
+		}
+		if strings.HasPrefix(arg, "--") {
+			if !strings.Contains(arg, "=") && gitGlobalOptionNeedsOperand(arg) && i+1 < len(args) {
+				i++
+			}
+			continue
+		}
+		if strings.HasPrefix(arg, "-") {
+			if gitShortGlobalOptionNeedsOperand(arg) && i+1 < len(args) {
+				i++
+			}
+			continue
+		}
+		return strings.ToLower(arg), args[i+1:]
+	}
+	return "", nil
+}
+
+func gitGlobalOptionNeedsOperand(opt string) bool {
+	switch opt {
+	case "--git-dir", "--work-tree", "--namespace", "--config-env", "--exec-path":
+		return true
+	default:
+		return false
+	}
+}
+
+func gitShortGlobalOptionNeedsOperand(opt string) bool {
+	return opt == "-C" || opt == "-c"
+}
+
+func gitSubcommandUsesNetwork(subcmd string, rest []string) bool {
+	switch subcmd {
+	case "clone", "fetch", "pull", "push", "ls-remote":
+		return true
+	case "remote":
+		action, _ := firstGitOperand(rest)
+		return action == "add" || action == "set-url"
+	case "submodule":
+		action, _ := firstGitOperand(rest)
+		return action == "add" || action == "update"
+	default:
+		return false
+	}
+}
+
+func gitRemoteOperands(subcmd string, args []string) []string {
+	switch subcmd {
+	case "clone", "ls-remote":
+		if operand, ok := firstGitRemoteOperand(args); ok {
+			return []string{operand}
+		}
+	case "fetch", "pull", "push":
+		if operand, ok := firstGitRemoteOperand(args); ok {
+			return []string{operand}
+		}
+	case "remote":
+		return gitRemoteCommandOperands(args)
+	case "submodule":
+		return gitSubmoduleOperands(args)
+	}
+	return nil
+}
+
+func gitRemoteCommandOperands(args []string) []string {
+	action, rest := firstGitOperand(args)
+	switch action {
+	case "add":
+		if _, rest = firstGitOperand(rest); len(rest) > 0 {
+			if operand, ok := firstGitRemoteOperand(rest); ok {
+				return []string{operand}
+			}
+		}
+	case "set-url":
+		if _, rest = firstGitOperand(rest); len(rest) > 0 {
+			if operand, ok := firstGitRemoteOperand(rest); ok {
+				return []string{operand}
+			}
+		}
+	}
+	return nil
+}
+
+func gitSubmoduleOperands(args []string) []string {
+	action, rest := firstGitOperand(args)
+	switch action {
+	case "add":
+		if operand, ok := firstGitRemoteOperand(rest); ok {
+			return []string{operand}
+		}
+	case "update":
+		return nil
+	}
+	return nil
+}
+
+func firstGitOperand(args []string) (string, []string) {
+	for i := 0; i < len(args); i++ {
+		arg := strings.Trim(args[i], `"' ;|&`)
+		if arg == "" {
+			continue
+		}
+		if shellSeparatorToken(arg) {
+			break
+		}
+		if strings.HasPrefix(arg, "-") {
+			if gitOptionNeedsOperand(arg) && !strings.Contains(arg, "=") && i+1 < len(args) {
+				i++
+			}
+			continue
+		}
+		return strings.ToLower(arg), args[i+1:]
+	}
+	return "", nil
+}
+
+func firstGitRemoteOperand(args []string) (string, bool) {
+	for i := 0; i < len(args); i++ {
+		arg := strings.Trim(args[i], `"' ;|&`)
+		if arg == "" {
+			continue
+		}
+		if shellSeparatorToken(arg) {
+			break
+		}
+		if strings.HasPrefix(arg, "-") {
+			if gitOptionNeedsOperand(arg) && !strings.Contains(arg, "=") && i+1 < len(args) {
+				i++
+			}
+			continue
+		}
+		return arg, true
+	}
+	return "", false
+}
+
+func gitOptionNeedsOperand(opt string) bool {
+	name := opt
+	if strings.HasPrefix(name, "--") {
+		name, _, _ = strings.Cut(name, "=")
+		switch name {
+		case "--branch", "--origin", "--upload-pack", "--template", "--reference",
+			"--reference-if-able", "--separate-git-dir", "--depth", "--jobs",
+			"--server-option", "--config":
+			return true
+		default:
+			return false
+		}
+	}
+	switch strings.TrimLeft(name, "-") {
+	case "b", "o", "u", "c", "C":
+		return true
+	default:
+		return false
+	}
+}
+
+func hostFromGitRemote(remote string) string {
+	remote = strings.TrimSpace(strings.Trim(remote, `"'`))
+	if remote == "" || strings.HasPrefix(remote, "-") {
+		return ""
+	}
+	if strings.Contains(remote, "://") {
+		u, err := url.Parse(remote)
+		if err != nil {
+			return ""
+		}
+		return strings.ToLower(u.Hostname())
+	}
+	beforeColon, _, ok := strings.Cut(remote, ":")
+	if !ok || strings.ContainsAny(beforeColon, `/\`) {
+		return ""
+	}
+	if at := strings.LastIndex(beforeColon, "@"); at >= 0 {
+		beforeColon = beforeColon[at+1:]
+	}
+	host := strings.ToLower(strings.Trim(beforeColon, "[]"))
+	if !looksLikeHost(host) {
+		return ""
+	}
+	return host
 }
 
 func curlConnectionOverrideHosts(args []string) []string {
@@ -1508,7 +1855,8 @@ func domainAllowed(host string, allowed []string) bool {
 func isDangerousEnvKey(key string) bool {
 	return slices.Contains([]string{
 		"LD_PRELOAD", "LD_LIBRARY_PATH", "DYLD_INSERT_LIBRARIES",
-		"BASH_ENV", "ENV", "SHELLOPTS", "PATH",
+		"BASH_ENV", "ENV", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM",
+		"GIT_SSH_COMMAND", "HOME", "SHELLOPTS", "SSH_AUTH_SOCK", "PATH",
 	}, key)
 }
 
