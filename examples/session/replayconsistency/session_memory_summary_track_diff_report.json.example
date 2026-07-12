@@ -1,0 +1,41 @@
+{
+  "duration_ms": 136,
+  "cases": 10,
+  "detected_injected": 10,
+  "backends": ["inmemory", "json-persistent"],
+  "differences": [
+    {
+      "case": "summary-update",
+      "backend": "json-persistent",
+      "session_id": "s6",
+      "locator": "summary[0]",
+      "field_path": "/summaries/0/text",
+      "baseline": "latest summary",
+      "compared": "old summary",
+      "allowed_diff": false,
+      "explanation": "normalized values differ"
+    },
+    {
+      "case": "summary-truncation",
+      "backend": "json-persistent",
+      "session_id": "s7",
+      "locator": "summary[0]",
+      "field_path": "/summaries/0",
+      "baseline": {"filter_key": "conversation", "id": "sum2", "session_id": "s7", "text": "events 1-9", "version": 1},
+      "compared": null,
+      "allowed_diff": false,
+      "explanation": "normalized values differ"
+    },
+    {
+      "case": "track-events",
+      "backend": "json-persistent",
+      "session_id": "s8",
+      "locator": "track[0]",
+      "field_path": "/tracks/0/error",
+      "baseline": "",
+      "compared": "timeout",
+      "allowed_diff": false,
+      "explanation": "normalized values differ"
+    }
+  ]
+}
