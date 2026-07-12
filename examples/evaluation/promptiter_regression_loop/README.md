@@ -10,8 +10,8 @@ From `examples/evaluation`:
 
 ```bash
 go test ./promptiter_regression_loop
-go run ./promptiter_regression_loop -mode fake
-go run ./promptiter_regression_loop -mode trace-smoke -output-dir ./promptiter_regression_loop/output-trace-smoke
+go run ./promptiter_regression_loop -mode fake -output-dir ./promptiter_regression_loop/output
+go run ./promptiter_regression_loop -mode trace-smoke -output-dir ./promptiter_regression_loop/output/trace-smoke
 ```
 
 From this directory:
@@ -19,7 +19,7 @@ From this directory:
 ```bash
 go test .
 go run . -mode fake
-go run . -mode trace-smoke -output-dir ./output-trace-smoke
+go run . -mode trace-smoke -output-dir ./output/trace-smoke
 ```
 
 The demo also accepts:
@@ -32,6 +32,8 @@ The demo also accepts:
 ```
 
 `fake` is the default mode and is the main closed-loop acceptance path. `trace-smoke` is a compatibility smoke test; it replays recorded actual invocations from `evalMode: "trace"` cases and explicitly skips optimization because replayed traces cannot prove that a new prompt patch changes candidate inference.
+
+The default output directory is `./output`. When running from this example directory, regular fake-mode reports are written under the ignored `output/` directory. The commands above use an explicit path when running from `examples/evaluation` so that those reports are written to the same ignored directory.
 
 `config/promptiter.json` configures the target surface, round count, PromptIter acceptance policy, stop policy, and final gate. The demo currently supports only `candidate#tool.lookup_record`, so unsupported target surfaces fail fast instead of silently producing unauditable output.
 
@@ -49,7 +51,13 @@ The initial `lookup_record` tool description only mentions a traveler loyalty pr
 
 The fake model reads only user messages, tool descriptions, and tool results. It does not read evalset expected invocations, expected final responses, case IDs, or test state.
 
-The checked-in golden report is generated from `go run . -mode fake`. It intentionally ends with `gate.decision = "reject"`: train reaches `1.0` and validation rises from `0.25` to `0.75`, but `validation_status_tr789` becomes a new hard fail and critical regression.
+The checked-in sample snapshot under `sample/` is refreshed only with an explicit output directory:
+
+```bash
+go run . -mode fake -output-dir ./sample
+```
+
+It intentionally ends with `gate.decision = "reject"`: train reaches `1.0` and validation rises from `0.25` to `0.75`, but `validation_status_tr789` becomes a new hard fail and critical regression. Normal runs do not overwrite this snapshot.
 
 ## Trace Smoke Mode
 

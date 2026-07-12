@@ -176,12 +176,18 @@ func newOptimizationReport(
 		rounds = append(rounds, reportRound(round))
 	}
 	firstRound := result.Rounds[0]
+	baselineTrain := evaluationSummary(firstRound.Train)
 	candidateValidationResult, accepted, err := finalCandidateValidation(result)
 	if err != nil {
 		return nil, err
 	}
-	if accepted && candidateTrain == nil {
-		return nil, errors.New("candidate train regression is required when a round was accepted")
+	effectiveCandidateTrain := candidateTrain
+	if accepted {
+		if effectiveCandidateTrain == nil {
+			return nil, errors.New("candidate train regression is required when a round was accepted")
+		}
+	} else {
+		effectiveCandidateTrain = baselineTrain
 	}
 	baselineValidation := evaluationSummary(result.BaselineValidation)
 	candidateValidation := evaluationSummary(candidateValidationResult)
@@ -220,11 +226,11 @@ func newOptimizationReport(
 		Baseline: ReportCandidate{
 			// See buildRunRequest: result.Rounds[0].Train is the baseline train
 			// evaluation while InitialProfile remains nil for this example run.
-			Train:      evaluationSummary(firstRound.Train),
+			Train:      baselineTrain,
 			Validation: baselineValidation,
 		},
 		Candidate: ReportCandidate{
-			Train:           candidateTrain,
+			Train:           effectiveCandidateTrain,
 			Validation:      candidateValidation,
 			AcceptedProfile: profileSummary(result.AcceptedProfile),
 		},

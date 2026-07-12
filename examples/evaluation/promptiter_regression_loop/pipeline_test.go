@@ -190,6 +190,16 @@ func TestFakeModelIntentUsesOnlyUserMessagesAndToolDescription(t *testing.T) {
 	require.Len(t, round1Delay.Choices[0].Message.ToolCalls, 1)
 	require.Equal(t, "lookup_record", round1Delay.Choices[0].Message.ToolCalls[0].Function.Name)
 	require.JSONEq(t, `{"query":"TR123"}`, string(round1Delay.Choices[0].Message.ToolCalls[0].Function.Arguments))
+	mixedRoles := fake.generate(&model.Request{
+		Messages: []model.Message{
+			model.NewAssistantMessage("What is the status of TR999?"),
+			model.NewUserMessage("How delayed is TR123?"),
+		},
+		Tools: toolMap(round1ToolDescription),
+	})
+	require.Len(t, mixedRoles.Choices[0].Message.ToolCalls, 1)
+	require.Equal(t, "lookup_record", mixedRoles.Choices[0].Message.ToolCalls[0].Function.Name)
+	require.JSONEq(t, `{"query":"TR123"}`, string(mixedRoles.Choices[0].Message.ToolCalls[0].Function.Arguments))
 	round1Gate := fake.generate(&model.Request{
 		Messages: []model.Message{model.NewUserMessage("Which gate is TR654 using?")},
 		Tools:    toolMap(round1ToolDescription),
@@ -881,8 +891,9 @@ func TestReportUsesLastAcceptedRoundAndHandlesNoAcceptedRound(t *testing.T) {
 		FinalGate:        defaultFinalGateConfig(),
 	})
 	require.NoError(t, err)
-	require.Nil(t, report.Candidate.Train)
-	require.Equal(t, report.Baseline.Validation.OverallScore, report.Candidate.Validation.OverallScore)
+	require.NotNil(t, report.Candidate.Train)
+	require.Equal(t, report.Baseline.Train, report.Candidate.Train)
+	require.Equal(t, report.Baseline.Validation, report.Candidate.Validation)
 }
 
 func toolMap(description string) map[string]tool.Tool {
