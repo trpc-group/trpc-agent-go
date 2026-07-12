@@ -36,6 +36,7 @@ nav:
       - Session:
           - Overview: session/index.md
           - Session Summary: session/summary.md
+          - Replay Consistency: session/replay_consistency.md
           - Memory Session: session/inmemory.md
           - SQLite Session: session/sqlite.md
           - Redis Session: session/redis.md
@@ -143,6 +144,7 @@ plugins:
                 - Session:
                     - Overview: session/index.md
                     - Session Summary: session/summary.md
+                    - Replay Consistency: session/replay_consistency.md
                     - Memory Session: session/inmemory.md
                     - SQLite Session: session/sqlite.md
                     - Redis Session: session/redis.md
