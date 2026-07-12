@@ -1,0 +1,28 @@
+{
+	"evalSetId": "train_set",
+	"name": "Train Evaluation Set",
+	"description": "Training evaluation cases for regression loop",
+	"cases": [
+		{
+			"evalCaseId": "train_01_simple",
+			"name": "Simple Task",
+			"input": "What is the capital of France?",
+			"expectedOutput": "Paris",
+			"metrics": ["final_response", "format_validator"]
+		},
+		{
+			"evalCaseId": "train_02_tool_call",
+			"name": "Tool Call Task",
+			"input": "Search for information about tRPC",
+			"expectedOutput": "tRPC is a high-performance RPC framework",
+			"metrics": ["tool_call_metric", "final_response"]
+		},
+		{
+			"evalCaseId": "train_03_knowledge",
+			"name": "Knowledge Recall Task",
+			"input": "What is the meaning of 'regression' in machine learning?",
+			"expectedOutput": "Regression is a supervised learning task for predicting continuous values",
+			"metrics": ["knowledge_recall_score", "final_response"]
+		}
+	]
+}

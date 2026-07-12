@@ -1,0 +1,31 @@
+{
+	"trainEvalSetPath": "data/promptiter-regression-app/train.evalset.json",
+	"validationEvalSetPath": "data/promptiter-regression-app/validation.evalset.json",
+	"metricsPath": "data/promptiter-regression-app/metrics.json",
+	"baselinePromptPath": "data/promptiter-regression-app/baseline_prompt.txt",
+	"promptiterConfigPath": "data/promptiter-regression-app/promptiter.json",
+	"seed": 12345,
+	"mode": "fake",
+	"gate": {
+		"minValidationGain": 0.05,
+		"allowNewHardFail": false,
+		"maxNewHardFailCount": 0,
+		"maxRegressedCases": 10,
+		"protectedCaseIds": [],
+		"criticalCaseIds": ["val_02_protected_format"],
+		"maxCost": 100.0,
+		"maxCalls": 1000,
+		"maxLatencyMs": 180000
+	},
+	"optimization": {
+		"maxRounds": 3,
+		"targetSurfaceIds": ["agent.system_prompt"],
+		"minScoreGain": 0.01,
+		"caseParallelism": 4
+	},
+	"output": {
+		"outputDir": "./output",
+		"saveAuditTrail": true,
+		"saveCandidatePrompt": true
+	}
+}

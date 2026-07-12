@@ -1,0 +1,54 @@
+{
+	"metrics": [
+		{
+			"metricId": "final_response",
+			"name": "Final Response",
+			"description": "Evaluate the final response quality",
+			"criterion": {
+				"type": "final_response",
+				"options": {
+					"exactMatch": false,
+					"similarityThreshold": 0.8
+				}
+			}
+		},
+		{
+			"metricId": "format_validator",
+			"name": "Format Validator",
+			"description": "Validate output format",
+			"criterion": {
+				"type": "json",
+				"options": {
+					"schema": {}
+				}
+			}
+		},
+		{
+			"metricId": "tool_call_metric",
+			"name": "Tool Call",
+			"description": "Evaluate tool call correctness",
+			"criterion": {
+				"type": "tool_trajectory",
+				"options": {}
+			}
+		},
+		{
+			"metricId": "knowledge_recall_score",
+			"name": "Knowledge Recall",
+			"description": "Evaluate knowledge recall accuracy",
+			"criterion": {
+				"type": "rouge",
+				"options": {}
+			}
+		},
+		{
+			"metricId": "router_metric",
+			"name": "Router",
+			"description": "Evaluate routing correctness",
+			"criterion": {
+				"type": "text",
+				"options": {}
+			}
+		}
+	]
+}

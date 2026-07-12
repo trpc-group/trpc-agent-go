@@ -1,0 +1,28 @@
+{
+	"evalSetId": "validation_set",
+	"name": "Validation Evaluation Set",
+	"description": "Validation evaluation cases for regression loop",
+	"cases": [
+		{
+			"evalCaseId": "val_01_format",
+			"name": "Format Validation",
+			"input": "Return a JSON object with 'name' and 'value' fields",
+			"expectedOutput": "{\"name\": \"test\", \"value\": 42}",
+			"metrics": ["format_validator", "final_response"]
+		},
+		{
+			"evalCaseId": "val_02_protected_format",
+			"name": "Protected Format Task",
+			"input": "Format the number 1234 as currency",
+			"expectedOutput": "$1,234.00",
+			"metrics": ["format_validator", "final_response"]
+		},
+		{
+			"evalCaseId": "val_03_router",
+			"name": "Router Validation",
+			"input": "Route this request to the appropriate handler",
+			"expectedOutput": "Request routed successfully",
+			"metrics": ["router_metric", "final_response"]
+		}
+	]
+}
