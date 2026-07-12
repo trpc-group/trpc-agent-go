@@ -207,6 +207,16 @@ func normalizePolicy(p Policy, preserveBoolFalse, preserveZeroLimits bool) Polic
 // PolicyFromConfig materializes a presence-aware policy overlay.
 func PolicyFromConfig(cfg PolicyConfig) Policy {
 	p := DefaultPolicy()
+	applyPolicyConfigLists(&p, cfg)
+	applyPolicyConfigLimits(&p, cfg)
+	applyPolicyConfigDecisions(&p, cfg)
+	applyPolicyConfigBools(&p, cfg)
+	p.preserveBoolFalse = true
+	p.preserveZeroLimits = true
+	return p.Normalize()
+}
+
+func applyPolicyConfigLists(p *Policy, cfg PolicyConfig) {
 	if cfg.AllowedCommands != nil {
 		p.AllowedCommands = cloneStrings(*cfg.AllowedCommands)
 	}
@@ -222,6 +232,9 @@ func PolicyFromConfig(cfg PolicyConfig) Policy {
 	if cfg.EnvAllowlist != nil {
 		p.EnvAllowlist = cloneStrings(*cfg.EnvAllowlist)
 	}
+}
+
+func applyPolicyConfigLimits(p *Policy, cfg PolicyConfig) {
 	if cfg.MaxTimeoutSec != nil {
 		p.MaxTimeoutSec = *cfg.MaxTimeoutSec
 	}
@@ -231,6 +244,9 @@ func PolicyFromConfig(cfg PolicyConfig) Policy {
 	if cfg.LongSleepSeconds != nil {
 		p.LongSleepSeconds = *cfg.LongSleepSeconds
 	}
+}
+
+func applyPolicyConfigDecisions(p *Policy, cfg PolicyConfig) {
 	if cfg.ParseErrorAction != nil {
 		p.ParseErrorAction = *cfg.ParseErrorAction
 	}
@@ -258,6 +274,12 @@ func PolicyFromConfig(cfg PolicyConfig) Policy {
 	if cfg.SensitivePathReadAction != nil {
 		p.SensitivePathReadAction = *cfg.SensitivePathReadAction
 	}
+	if cfg.AuditFailureMode != nil {
+		p.AuditFailureMode = *cfg.AuditFailureMode
+	}
+}
+
+func applyPolicyConfigBools(p *Policy, cfg PolicyConfig) {
 	if cfg.ReviewShellPipelines != nil {
 		p.ReviewShellPipelines = *cfg.ReviewShellPipelines
 	}
@@ -276,12 +298,6 @@ func PolicyFromConfig(cfg PolicyConfig) Policy {
 	if cfg.FailClosedOnUnsupportedBackend != nil {
 		p.FailClosedOnUnsupportedBackend = *cfg.FailClosedOnUnsupportedBackend
 	}
-	if cfg.AuditFailureMode != nil {
-		p.AuditFailureMode = *cfg.AuditFailureMode
-	}
-	p.preserveBoolFalse = true
-	p.preserveZeroLimits = true
-	return p.Normalize()
 }
 
 func cloneStrings(in []string) []string {
