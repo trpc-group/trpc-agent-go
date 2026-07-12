@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -596,12 +597,12 @@ func (s scanner) scanParsedCommands(pipe *shellsafe.Pipeline) []Finding {
 				"Remove the denied command or change the policy after review.",
 			))
 		}
-		if len(s.policy.AllowedCommands) > 0 && !s.commandAllowed(name) {
+		if len(s.policy.AllowedCommands) > 0 && !s.commandAllowed(argv[0]) {
 			findings = append(findings, newFinding(
 				DecisionDeny,
 				RiskMedium,
 				"policy.command_not_allowed",
-				[]string{fmt.Sprintf("command %q is not in allowed_commands", name)},
+				[]string{fmt.Sprintf("command %q is not in allowed_commands", argv[0])},
 				"Use an allowed command or update allowed_commands in the policy.",
 			))
 		}
@@ -697,19 +698,34 @@ func (s scanner) scanReviewCommand(command string) []Finding {
 func (s scanner) scanDeniedPaths(argv []string) []Finding {
 	var findings []Finding
 	for _, arg := range argv[1:] {
-		clean := strings.Trim(arg, `"'`)
-		if s.pathDenied(clean) {
-			findings = append(findings, newFinding(
-				DecisionDeny,
-				RiskCritical,
-				"sensitive.path_access",
-				[]string{fmt.Sprintf("argument references denied path %q", clean)},
-				"Do not access SSH keys, .env files, credential stores, or "+
-					"system directories from tool execution.",
-			))
+		for _, candidate := range pathCandidates(arg) {
+			if s.pathDenied(candidate) {
+				findings = append(findings, newFinding(
+					DecisionDeny,
+					RiskCritical,
+					"sensitive.path_access",
+					[]string{fmt.Sprintf("argument references denied path %q", candidate)},
+					"Do not access SSH keys, .env files, credential stores, or "+
+						"system directories from tool execution.",
+				))
+				break
+			}
 		}
 	}
 	return findings
+}
+
+func pathCandidates(arg string) []string {
+	clean := strings.TrimSpace(strings.Trim(arg, `"'`))
+	if clean == "" {
+		return nil
+	}
+	candidates := []string{clean}
+	if key, value, ok := strings.Cut(clean, "="); ok &&
+		strings.HasPrefix(key, "-") && value != "" {
+		candidates = append(candidates, strings.Trim(value, `"'`))
+	}
+	return candidates
 }
 
 func (s scanner) pathDenied(path string) bool {
@@ -728,8 +744,20 @@ func (s scanner) pathDenied(path string) bool {
 			strings.HasPrefix(normalized, d+"/") {
 			return true
 		}
+		deniedBase := pathBase(d)
+		if strings.HasPrefix(deniedBase, ".") &&
+			strings.Contains(pathBase(normalized), deniedBase) {
+			return true
+		}
 	}
 	return false
+}
+
+func pathBase(path string) string {
+	if index := strings.LastIndex(path, "/"); index >= 0 {
+		return path[index+1:]
+	}
+	return path
 }
 
 func normalizePathForMatch(path string) string {
@@ -746,15 +774,28 @@ func normalizePathForMatch(path string) string {
 
 func (s scanner) scanNetwork(command string) []Finding {
 	var findings []Finding
-	lower := strings.ToLower(command)
-	networkCommand := regexp.MustCompile(`(^|[;&|]\s*)(curl|wget|nc|netcat|ssh|scp|rsync)\b`).
-		FindString(lower) != ""
-	urls := extractURLs(command)
-	for _, raw := range urls {
+	networkCommand := networkCommandRE.MatchString(command)
+	if pipe, err := shellsafe.Parse(command); err == nil {
+		for _, argv := range pipe.Commands {
+			if containsNetworkCommand(argv) {
+				networkCommand = true
+			}
+		}
+	}
+	targets := explicitURLRE.FindAllString(command, -1)
+	if networkCommand {
+		targets = extractURLs(command)
+	}
+	checkedHosts := make(map[string]struct{})
+	for _, raw := range targets {
 		host := hostOf(raw)
 		if host == "" {
 			continue
 		}
+		if _, ok := checkedHosts[host]; ok {
+			continue
+		}
+		checkedHosts[host] = struct{}{}
 		if !s.hostAllowed(host) {
 			findings = append(findings, newFinding(
 				DecisionDeny,
@@ -765,7 +806,7 @@ func (s scanner) scanNetwork(command string) []Finding {
 			))
 		}
 	}
-	if networkCommand && len(urls) == 0 {
+	if networkCommand && len(checkedHosts) == 0 {
 		findings = append(findings, newFinding(
 			DecisionNeedsHumanReview,
 			RiskMedium,
@@ -778,16 +819,110 @@ func (s scanner) scanNetwork(command string) []Finding {
 }
 
 func extractURLs(s string) []string {
-	re := regexp.MustCompile(`https?://[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+`)
-	return re.FindAllString(s, -1)
+	targets := explicitURLRE.FindAllString(s, -1)
+	return append(targets, schemeLessNetworkTargetRE.FindAllString(s, -1)...)
 }
 
 func hostOf(raw string) string {
+	raw = strings.TrimSpace(strings.Trim(raw, `"'`))
+	if !strings.Contains(raw, "://") {
+		raw = "https://" + raw
+	}
 	u, err := url.Parse(raw)
 	if err != nil {
 		return ""
 	}
 	return strings.ToLower(u.Hostname())
+}
+
+func isNetworkCommand(name string) bool {
+	switch name {
+	case "curl", "wget", "nc", "netcat", "ssh", "scp", "rsync":
+		return true
+	default:
+		return false
+	}
+}
+
+func containsNetworkCommand(argv []string) bool {
+	for depth := 0; depth < 8 && len(argv) > 0; depth++ {
+		if isNetworkCommand(commandName(argv[0])) {
+			return true
+		}
+		next := unwrapCommand(argv)
+		if len(next) == 0 || len(next) == len(argv) {
+			return false
+		}
+		argv = next
+	}
+	return false
+}
+
+func unwrapCommand(argv []string) []string {
+	name := commandName(argv[0])
+	switch name {
+	case "env":
+		return unwrapEnvCommand(argv)
+	case "command", "nohup":
+		return unwrapOptionCommand(argv, false)
+	case "timeout":
+		return unwrapTimeoutCommand(argv)
+	case "nice":
+		return unwrapOptionCommand(argv, true)
+	}
+	return argv
+}
+
+func unwrapEnvCommand(argv []string) []string {
+	for i := 1; i < len(argv); {
+		arg := argv[i]
+		if arg == "-u" || arg == "--unset" || arg == "-C" || arg == "--chdir" {
+			i += 2
+			continue
+		}
+		if strings.HasPrefix(arg, "-") || strings.Contains(arg, "=") {
+			i++
+			continue
+		}
+		return argv[i:]
+	}
+	return nil
+}
+
+func unwrapOptionCommand(argv []string, optionHasValue bool) []string {
+	for i := 1; i < len(argv); {
+		arg := argv[i]
+		if optionHasValue && (arg == "-n" || arg == "--adjustment") {
+			i += 2
+			continue
+		}
+		if strings.HasPrefix(arg, "-") {
+			i++
+			continue
+		}
+		return argv[i:]
+	}
+	return nil
+}
+
+func unwrapTimeoutCommand(argv []string) []string {
+	for i := 1; i < len(argv); {
+		arg := argv[i]
+		if arg == "-s" || arg == "--signal" || arg == "-k" || arg == "--kill-after" {
+			i += 2
+			continue
+		}
+		if strings.HasPrefix(arg, "-") {
+			i++
+			continue
+		}
+		i++ // Skip the required duration.
+		if i < len(argv) {
+			return argv[i:]
+		}
+		return nil
+	}
+	return nil
 }
 
 func (s scanner) hostAllowed(host string) bool {
@@ -849,8 +984,7 @@ func (s scanner) scanResourcePatterns(lower string) []Finding {
 }
 
 func longSleep(lower string) bool {
-	re := regexp.MustCompile(`\bsleep\s+([0-9]+)`)
-	m := re.FindStringSubmatch(lower)
+	m := longSleepRE.FindStringSubmatch(lower)
 	if len(m) != 2 {
 		return false
 	}
@@ -869,26 +1003,22 @@ func infiniteLoop(lower string) bool {
 }
 
 func largeOutput(lower string, limit int64) bool {
-	head := regexp.MustCompile(`\bhead\s+-c\s+([0-9]+)`)
-	if m := head.FindStringSubmatch(lower); len(m) == 2 {
+	if m := headBytesRE.FindStringSubmatch(lower); len(m) == 2 {
 		n, _ := strconv.ParseInt(m[1], 10, 64)
 		return n > limit
 	}
 	if strings.Contains(lower, "yes ") || strings.HasPrefix(lower, "yes") {
 		return true
 	}
-	printRepeat := regexp.MustCompile(`print\s*\([^)]*\*\s*([0-9]{7,})`)
-	return printRepeat.MatchString(lower)
+	return printRepeatRE.MatchString(lower)
 }
 
 func highConcurrency(lower string) bool {
-	xargs := regexp.MustCompile(`\bxargs\b[^;&|]*\s-p\s*([0-9]+)`)
-	if m := xargs.FindStringSubmatch(lower); len(m) == 2 {
+	if m := xargsParallelRE.FindStringSubmatch(lower); len(m) == 2 {
 		n, _ := strconv.Atoi(m[1])
 		return n > 8
 	}
-	parallel := regexp.MustCompile(`\bparallel\b[^;&|]*(?:-j|--jobs)\s*([0-9]+)`)
-	if m := parallel.FindStringSubmatch(lower); len(m) == 2 {
+	if m := parallelJobsRE.FindStringSubmatch(lower); len(m) == 2 {
 		n, _ := strconv.Atoi(m[1])
 		return n > 8
 	}
@@ -961,6 +1091,9 @@ func (s scanner) scanCodeBlock(req Request, block CodeBlock) []Finding {
 		shellReq.Command = code
 		shellReq.Backend = BackendCodeExec
 		shellReq.CodeBlocks = nil
+		if strings.ContainsAny(code, "\r\n") {
+			code = normalizeShellScript(code)
+		}
 		findings = append(findings, s.scanShell(shellReq, code)...)
 		return findings
 	}
@@ -984,11 +1117,136 @@ func (s scanner) scanCodeBlock(req Request, block CodeBlock) []Finding {
 func hasShellBypass(lower string) bool {
 	patterns := []string{
 		"sh -c", "bash -c", "zsh -c", "eval ", "`", "$(",
-		"${", ">", "<", " 2>", "exec ",
+		"${", "exec ",
 	}
-	return slices.ContainsFunc(patterns, func(p string) bool {
+	if slices.ContainsFunc(patterns, func(p string) bool {
 		return strings.Contains(lower, p)
-	})
+	}) {
+		return true
+	}
+	return containsUnquotedRedirect(lower)
+}
+
+func containsUnquotedRedirect(command string) bool {
+	inSingle := false
+	inDouble := false
+	escaped := false
+	for i := 0; i < len(command); i++ {
+		char := command[i]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if char == '\\' && !inSingle {
+			escaped = true
+			continue
+		}
+		switch char {
+		case '\'':
+			if !inDouble {
+				inSingle = !inSingle
+			}
+		case '"':
+			if !inSingle {
+				inDouble = !inDouble
+			}
+		case '>', '<':
+			if !inSingle && !inDouble {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func normalizeShellScript(script string) string {
+	var normalized strings.Builder
+	normalized.Grow(len(script) + strings.Count(script, "\n")*2)
+	inSingle := false
+	inDouble := false
+	for i := 0; i < len(script); i++ {
+		char := script[i]
+		if end, ok := shellLineContinuationEnd(script, i); ok {
+			normalized.WriteByte(' ')
+			i = end
+			continue
+		}
+		if char == '\\' && !inSingle && i+1 < len(script) {
+			normalized.WriteByte(char)
+			normalized.WriteByte(script[i+1])
+			i++
+			continue
+		}
+		if char == '\r' || char == '\n' {
+			i = shellNewlineEnd(script, i)
+			writeScriptNewline(&normalized, script, i+1, inSingle || inDouble)
+			continue
+		}
+		if char == '\'' && !inDouble {
+			inSingle = !inSingle
+		}
+		if char == '"' && !inSingle {
+			inDouble = !inDouble
+		}
+		normalized.WriteByte(char)
+	}
+	return strings.TrimSpace(normalized.String())
+}
+
+func shellLineContinuationEnd(script string, index int) (int, bool) {
+	if script[index] != '\\' || index+1 >= len(script) {
+		return index, false
+	}
+	next := script[index+1]
+	if next != '\n' && next != '\r' {
+		return index, false
+	}
+	end := index + 1
+	if next == '\r' && end+1 < len(script) && script[end+1] == '\n' {
+		end++
+	}
+	return end, true
+}
+
+func shellNewlineEnd(script string, index int) int {
+	if script[index] == '\r' && index+1 < len(script) && script[index+1] == '\n' {
+		return index + 1
+	}
+	return index
+}
+
+func writeScriptNewline(
+	normalized *strings.Builder,
+	script string,
+	next int,
+	quoted bool,
+) {
+	if quoted {
+		normalized.WriteByte(' ')
+		return
+	}
+	writeScriptSeparator(normalized, script, next)
+}
+
+func writeScriptSeparator(normalized *strings.Builder, script string, next int) {
+	current := normalized.String()
+	last := len(current) - 1
+	for last >= 0 && (current[last] == ' ' || current[last] == '\t') {
+		last--
+	}
+	if last < 0 || current[last] == ';' || current[last] == '|' ||
+		current[last] == '&' {
+		return
+	}
+	for next < len(script) && (script[next] == ' ' || script[next] == '\t' ||
+		script[next] == '\r' || script[next] == '\n') {
+		next++
+	}
+	if next >= len(script) || script[next] == ';' || script[next] == '|' ||
+		script[next] == '&' {
+		return
+	}
+	normalized.WriteString(" ; ")
 }
 
 func containsPipeline(command string) bool {
@@ -1026,13 +1284,21 @@ func (s scanner) commandDenied(name string) bool {
 	return false
 }
 
-func (s scanner) commandAllowed(name string) bool {
+func (s scanner) commandAllowed(rawName string) bool {
+	candidate := commandToken(rawName)
 	for _, allowed := range s.policy.AllowedCommands {
-		if strings.EqualFold(commandName(allowed), name) {
+		allowedToken := commandToken(allowed)
+		if candidate == allowedToken ||
+			(runtime.GOOS == "windows" && strings.EqualFold(candidate, allowedToken)) {
 			return true
 		}
 	}
 	return false
+}
+
+func commandToken(name string) string {
+	name = strings.TrimSpace(strings.Trim(name, `"'`))
+	return strings.ReplaceAll(name, "\\", "/")
 }
 
 func commandName(name string) string {
@@ -1069,10 +1335,26 @@ func newFinding(
 }
 
 var (
+	networkCommandRE = regexp.MustCompile(
+		`(?i)(?:^|[;&|]\s*)["']?(?:(?:[a-z]:)?[^\s"';&|]*[/\\])?(?:curl|wget|nc|netcat|ssh|scp|rsync)(?:\.exe|\.cmd|\.bat|\.com)?["']?(?:\s|$)`)
+	explicitURLRE = regexp.MustCompile(
+		`(?i)https?://[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+`)
+	schemeLessNetworkTargetRE = regexp.MustCompile(
+		`(?i)\b(?:(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}|(?:[0-9]{1,3}\.){3}[0-9]{1,3}|localhost)(?::[0-9]{1,5})?(?:/[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]*)?`)
+	longSleepRE   = regexp.MustCompile(`\bsleep\s+([0-9]+)`)
+	headBytesRE   = regexp.MustCompile(`\bhead\s+-c\s+([0-9]+)`)
+	printRepeatRE = regexp.MustCompile(
+		`print\s*\([^)]*\*\s*([0-9]{7,})`)
+	xargsParallelRE = regexp.MustCompile(
+		`\bxargs\b[^;&|]*\s-p\s*([0-9]+)`)
+	parallelJobsRE = regexp.MustCompile(
+		`\bparallel\b[^;&|]*(?:-j|--jobs)\s*([0-9]+)`)
 	secretNameRE = regexp.MustCompile(
 		`(?i)(api[_-]?key|token|password|passwd|secret|private[_-]?key|credential)`)
 	secretValueRE = regexp.MustCompile(
 		`(?i)(sk-[A-Za-z0-9_-]{12,}|ghp_[A-Za-z0-9_]{12,}|xox[baprs]-[A-Za-z0-9-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY-----)`)
+	secretNameValueRE = regexp.MustCompile(
+		`(?i)(api[_-]?key|token|password|passwd|secret|private[_-]?key|credential)=([^ \t\n\r;&|]+)`)
 )
 
 func looksSensitive(text string) bool {
@@ -1089,9 +1371,7 @@ func newRedactor() *redactor { return &redactor{} }
 func (r *redactor) redact(s string) string {
 	orig := s
 	s = secretValueRE.ReplaceAllString(s, "[REDACTED_SECRET]")
-	nameValue := regexp.MustCompile(
-		`(?i)(api[_-]?key|token|password|passwd|secret|private[_-]?key|credential)=([^ \t\n\r;&|]+)`)
-	s = nameValue.ReplaceAllString(s, "$1=[REDACTED_SECRET]")
+	s = secretNameValueRE.ReplaceAllString(s, "$1=[REDACTED_SECRET]")
 	if s != orig {
 		r.changed = true
 	}
