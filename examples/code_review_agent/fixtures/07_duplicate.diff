@@ -1,0 +1,25 @@
+diff --git a/handler/api.go b/handler/api.go
+index 1234567..89abcde 100644
+--- a/handler/api.go
++++ b/handler/api.go
+@@ -5,6 +5,14 @@ import (
+ 	"os"
+ )
+
++func ProcessData(data string) error {
++	f, err := os.Open("config.txt")
++	if err != nil {
++		return err
++	}
++	_ = os.WriteFile("output.txt", []byte(data), 0644)
++	return nil
++}
++
++func ProcessData2(data string) error {
++	f, err := os.Open("config2.txt")
++	if err != nil {
++		return err
++	}
++	_ = os.WriteFile("output2.txt", []byte(data), 0644)
++	return nil
++}

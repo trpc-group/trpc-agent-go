@@ -1,0 +1,22 @@
+diff --git a/user/service.go b/user/service.go
+index 1234567..89abcde 100644
+--- a/user/service.go
++++ b/user/service.go
+@@ -10,6 +10,12 @@ import (
+ 	"fmt"
+ )
+
++// GetUser retrieves a user by ID from the database.
++func GetUser(db *sql.DB, id int) (*User, error) {
++	row := db.QueryRow("SELECT id, name FROM users WHERE id = ?", id)
++	var u User
++	err := row.Scan(&u.ID, &u.Name)
++	if err != nil {
++		return nil, fmt.Errorf("scan user: %w", err)
++	}
++	return &u, nil
++}
++
+ func main() {
+ 	fmt.Println("hello")
+ }

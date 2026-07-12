@@ -1,0 +1,25 @@
+diff --git a/worker/pool.go b/worker/pool.go
+index 1234567..89abcde 100644
+--- a/worker/pool.go
++++ b/worker/pool.go
+@@ -5,6 +5,14 @@ import (
+ 	"sync"
+ )
+
++func StartWorkers(jobs <-chan int) {
++	var wg sync.WaitGroup
++	for i := 0; i < 10; i++ {
++		wg.Add(1)
++		go func() {
++			defer wg.Done()
++			for j := range jobs {
++				process(j)
++			}
++		}()
++	}
++	wg.Wait()
++}
++
++func ProcessInBackground() {
++	go processItem()
++}

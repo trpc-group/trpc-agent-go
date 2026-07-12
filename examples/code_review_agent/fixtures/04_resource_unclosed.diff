@@ -1,0 +1,28 @@
+diff --git a/io/reader.go b/io/reader.go
+index 1234567..89abcde 100644
+--- a/io/reader.go
++++ b/io/reader.go
+@@ -3,6 +3,16 @@ package io
+ import (
+ 	"os"
+ 	"net/http"
+ )
+
++func ReadConfig(path string) ([]byte, error) {
++	f, err := os.Open(path)
++	if err != nil {
++		return nil, err
++	}
++	buf := make([]byte, 1024)
++	n, _ := f.Read(buf)
++	return buf[:n], nil
++}
++
++func FetchURL(url string) (string, error) {
++	resp, err := http.Get(url)
++	if err != nil {
++		return "", err
++	}
++	body, _ := io.ReadAll(resp.Body)
++	return string(body), nil
++}

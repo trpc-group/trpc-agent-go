@@ -1,0 +1,33 @@
+diff --git a/db/repository.go b/db/repository.go
+index 1234567..89abcde 100644
+--- a/db/repository.go
++++ b/db/repository.go
+@@ -3,6 +3,22 @@ package db
+ import (
+ 	"database/sql"
+ )
+
++func NewDB(driver, dsn string) (*sql.DB, error) {
++	db, err := sql.Open(driver, dsn)
++	if err != nil {
++		return nil, err
++	}
++	db.SetMaxOpenConns(10)
++	return db, nil
++}
++
++func TransferMoney(db *sql.DB, from, to int, amount float64) error {
++	tx, err := db.Begin()
++	if err != nil {
++		return err
++	}
++	_, err = tx.Exec("UPDATE accounts SET balance = balance - ? WHERE id = ?", amount, from)
++	if err != nil {
++		return err
++	}
++	_, err = tx.Exec("UPDATE accounts SET balance = balance + ? WHERE id = ?", amount, to)
++	if err != nil {
++		return err
++	}
++	return tx.Commit()
++}

@@ -1,0 +1,24 @@
+diff --git a/auth/handler.go b/auth/handler.go
+index 1234567..89abcde 100644
+--- a/auth/handler.go
++++ b/auth/handler.go
+@@ -5,6 +5,18 @@ import (
+ 	"database/sql"
+ )
+
++func Login(db *sql.DB, username string) (*User, error) {
++	query := "SELECT id, name FROM users WHERE name = '" + username + "'"
++	rows, err := db.Query(query)
++	if err != nil {
++		return nil, err
++	}
++	var u User
++	if rows.Next() {
++		rows.Scan(&u.ID, &u.Name)
++	}
++	return &u, nil
++}
++
++const APIKey = "sk-1234567890abcdef1234567890"
++
++const SecretToken = "tok_abcdef1234567890abcdef12"

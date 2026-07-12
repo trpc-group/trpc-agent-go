@@ -1,0 +1,61 @@
+# Code Review Report
+
+**Task ID:** review-example
+
+**Generated:** 2026-07-11T12:00:00Z
+
+**Diff Summary:** 1 files, +18 -0
+
+## Summary
+
+- **Total findings:** 2
+- **Critical:** 2
+- **High:** 0
+- **Medium:** 0
+- **Low:** 0
+- **Warnings (needs review):** 1
+
+## Findings
+
+### [CRITICAL] SQL query built with string concatenation
+
+- **File:** auth/handler.go:8
+- **Category:** security
+- **Rule ID:** SQL_INJECTION
+- **Source:** rule
+- **Confidence:** 90%
+- **Evidence:**
+```
+query := "SELECT id, name FROM users WHERE name = '" + username + "'"
+```
+- **Recommendation:** Use parameterized queries with placeholders (?, $1) instead of string concatenation to prevent SQL injection.
+
+### [CRITICAL] Hardcoded API key detected
+
+- **File:** auth/handler.go:18
+- **Category:** security
+- **Rule ID:** HARDCODED_SECRET
+- **Source:** rule
+- **Confidence:** 95%
+- **Evidence:**
+```
+const APIKey = "***REDACTED***"
+```
+- **Recommendation:** Never hardcode API keys in source code. Use environment variables or a secrets manager.
+
+## Items Needing Human Review
+
+The following items have low confidence and may be false positives:
+
+- **New exported functions without tests** (auth/handler.go:8) — Add unit tests for new exported functions.
+
+## Monitoring Metrics
+
+- **Total duration:** 42ms
+- **Sandbox duration:** 0ms
+- **Tool calls:** 1
+- **Permission blocks:** 0
+
+## Recommendations
+
+1. Fix 2 critical issue(s) before merging — these are likely security vulnerabilities or crash risks.

@@ -1,0 +1,23 @@
+diff --git a/service/user.go b/service/user.go
+index 1234567..89abcde 100644
+--- a/service/user.go
++++ b/service/user.go
+@@ -5,6 +5,18 @@ import (
+ 	"fmt"
+ )
+
++// CreateUser creates a new user record.
++func CreateUser(name, email string) (*User, error) {
++	u := &User{Name: name, Email: email}
++	return u, nil
++}
++
++// DeleteUser removes a user by ID.
++func DeleteUser(id int) error {
++	return fmt.Errorf("not implemented: %d", id)
++}
++
++// UpdateUser updates a user record.
++func UpdateUser(u *User) error {
++	return nil
++}

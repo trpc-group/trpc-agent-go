@@ -1,0 +1,28 @@
+diff --git a/config/secrets.go b/config/secrets.go
+index 1234567..89abcde 100644
+--- a/config/secrets.go
++++ b/config/secrets.go
+@@ -1,3 +1,18 @@ package config
+
++const apiKey = "sk-proj-abcdef1234567890abcdef"
++const apiSecret = "secret_1234567890abcdef1234567890"
++const password = "MyP@ssw0rd!2024"
++const accessToken = "tok_1234567890abcdef1234567890abcd"
++const dbPassword = "db_secret_123"
++
++func LogSecret() {
++	log.Printf("Connecting with password: %s", dbPassword)
++	log.Printf("API key is: %s", apiKey)
++}
++
++func ConnectDB() {
++	dsn := "postgres://admin:supersecret@localhost:5432/mydb"
++	_ = dsn
++}
++
++func InitConfig() {
++	token := "bearer_1234567890abcdef1234567890"
++	secret := "AKIAIOSFODNN7EXAMPLE"
++	_ = token
++	_ = secret
++}
