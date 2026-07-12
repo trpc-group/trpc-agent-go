@@ -588,15 +588,7 @@ func (s scanner) scanParsedCommands(pipe *shellsafe.Pipeline) []Finding {
 		}
 		name := commandName(argv[0])
 		full := strings.Join(argv, " ")
-		if s.commandDenied(name) {
-			findings = append(findings, newFinding(
-				DecisionDeny,
-				RiskHigh,
-				"policy.denied_command",
-				[]string{fmt.Sprintf("command %q is denied", name)},
-				"Remove the denied command or change the policy after review.",
-			))
-		}
+		findings = append(findings, s.scanDeniedCommand(name)...)
 		if len(s.policy.AllowedCommands) > 0 && !s.commandAllowed(argv[0]) {
 			findings = append(findings, newFinding(
 				DecisionDeny,
@@ -618,9 +610,30 @@ func (s scanner) scanParsedCommands(pipe *shellsafe.Pipeline) []Finding {
 		}
 		findings = append(findings, s.scanDangerousCommand(name, argv)...)
 		findings = append(findings, s.scanReviewCommand(full)...)
+		for _, effective := range commandChain(argv)[1:] {
+			effectiveName := commandName(effective[0])
+			findings = append(findings, s.scanDeniedCommand(effectiveName)...)
+			findings = append(findings,
+				s.scanDangerousCommand(effectiveName, effective)...)
+			findings = append(findings,
+				s.scanReviewCommand(strings.Join(effective, " "))...)
+		}
 		findings = append(findings, s.scanDeniedPaths(argv)...)
 	}
 	return findings
+}
+
+func (s scanner) scanDeniedCommand(name string) []Finding {
+	if !s.commandDenied(name) {
+		return nil
+	}
+	return []Finding{newFinding(
+		DecisionDeny,
+		RiskHigh,
+		"policy.denied_command",
+		[]string{fmt.Sprintf("command %q is denied", name)},
+		"Remove the denied command or change the policy after review.",
+	)}
 }
 
 func (s scanner) scanDangerousCommand(name string, argv []string) []Finding {
@@ -901,17 +914,25 @@ func gitGlobalOptionHasValue(arg string) bool {
 }
 
 func containsNetworkCommand(argv []string) bool {
-	for depth := 0; depth < 8 && len(argv) > 0; depth++ {
-		if isNetworkCommand(argv) {
+	for _, command := range commandChain(argv) {
+		if isNetworkCommand(command) {
 			return true
 		}
+	}
+	return false
+}
+
+func commandChain(argv []string) [][]string {
+	var commands [][]string
+	for len(argv) > 0 {
+		commands = append(commands, argv)
 		next := unwrapCommand(argv)
-		if len(next) == 0 || len(next) == len(argv) {
-			return false
+		if len(next) == 0 || len(next) >= len(argv) {
+			return commands
 		}
 		argv = next
 	}
-	return false
+	return commands
 }
 
 func unwrapCommand(argv []string) []string {
@@ -949,15 +970,10 @@ func unwrapEnvCommand(argv []string) []string {
 }
 
 func containsEnvSplitString(argv []string) bool {
-	for depth := 0; depth < 8 && len(argv) > 0; depth++ {
-		if commandName(argv[0]) == "env" && envSplitStringRequested(argv) {
+	for _, command := range commandChain(argv) {
+		if commandName(command[0]) == "env" && envSplitStringRequested(command) {
 			return true
 		}
-		next := unwrapCommand(argv)
-		if len(next) == 0 || len(next) == len(argv) {
-			return false
-		}
-		argv = next
 	}
 	return false
 }
