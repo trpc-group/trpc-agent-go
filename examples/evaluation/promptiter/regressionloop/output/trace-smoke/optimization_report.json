@@ -23,7 +23,7 @@
     "fakeConfig": {
       "optimization": "skipped: trace-smoke replays traces and audits reporting only",
       "runner": "deterministic-trace-replay",
-      "scenario": "train improves but validation adds a hard fail"
+      "scenario": "trace replay audits reporting without optimization"
     },
     "attributionHints": {
       "final_response": "final_response_mismatch",

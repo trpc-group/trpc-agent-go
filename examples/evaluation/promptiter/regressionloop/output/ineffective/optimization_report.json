@@ -22,7 +22,7 @@
     ],
     "fakeConfig": {
       "runner": "deterministic-fake-engine",
-      "scenario": "train improves but validation adds a hard fail"
+      "scenario": "train changes but validation has no score gain"
     },
     "attributionHints": {
       "final_response": "final_response_mismatch",

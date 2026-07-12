@@ -155,9 +155,9 @@ func promptSurfaceRunOption(surfaceID, prompt string) (agent.RunOption, error) {
 }
 
 // BuildPromptProfile builds a PromptIter initial profile from a prompt file.
-// It supports text, few-shot, tool-description, and skill-description surfaces.
-// Model surfaces require a concrete model instance and should use a custom
-// PromptIterator/PromptApplier integration.
+// It supports text, few-shot, and tool-description surfaces. Model and skill
+// surfaces require custom PromptIterator/PromptApplier integrations because the
+// built-in PromptIter engine does not compile them.
 func BuildPromptProfile(surfaceIDs []string, prompt string) (*promptiter.Profile, error) {
 	if strings.TrimSpace(prompt) == "" || len(surfaceIDs) == 0 {
 		return nil, nil
@@ -207,9 +207,7 @@ func promptSurfaceValue(
 			Tools: []astructure.ToolRef{{ID: partOrNode(part, nodeID), Description: prompt}},
 		}, nil
 	case astructure.SurfaceTypeSkill:
-		return astructure.SurfaceValue{
-			Skills: []astructure.SkillRef{{ID: partOrNode(part, nodeID), Description: prompt}},
-		}, nil
+		return astructure.SurfaceValue{}, errors.New("skill surface requires a custom prompt adapter")
 	case astructure.SurfaceTypeModel:
 		return astructure.SurfaceValue{}, errors.New("model surface requires a concrete model adapter")
 	default:

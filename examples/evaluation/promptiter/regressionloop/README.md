@@ -79,9 +79,9 @@ Expected summary:
 accepted: false
 - PromptIter accepted a candidate profile
 - validation score gain 0.167 >= threshold 0.050
-- 1 newly failed validation metrics
+- 1 newly failed hard validation metrics: [val_overfit_refund_policy/final_response]
 - critical cases regressed: [val_overfit_refund_policy]
-- model calls 5 within budget 10
+- model calls 6 within budget 10
 ```
 
 Run all deterministic scenarios:

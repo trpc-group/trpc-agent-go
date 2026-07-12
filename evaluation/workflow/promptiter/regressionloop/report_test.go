@@ -9,6 +9,7 @@
 package regressionloop
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -20,6 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
 	atrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 	promptiterengine "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/engine"
@@ -40,7 +42,7 @@ func TestRenderMarkdownContainsDecisionAndDelta(t *testing.T) {
 			nil,
 		),
 		GateDecision: GateDecision{Accepted: true, Reasons: []string{"ok"}},
-		Cost:         CostSummary{ModelCalls: 1, Amount: 0.25, Source: CostSourceProvider},
+		Cost:         CostSummary{ModelCalls: 1, Amount: 0.25, AmountMeasured: true, Source: CostSourceProvider},
 	}
 	md := RenderMarkdown(report)
 	assert.Contains(t, md, "Optimization Report")
@@ -201,28 +203,49 @@ func TestBuildReportIncludesAcceptedCandidateAttributionAndRoundAudit(t *testing
 
 func TestCandidatePromptCoversProfileValueVariants(t *testing.T) {
 	assert.Empty(t, CandidatePrompt(nil))
-	assert.Empty(t, profilePromptText(nil))
-	assert.Empty(t, profilePromptText(&promptiter.Profile{}))
+	text, err := profilePromptText(nil)
+	require.NoError(t, err)
+	assert.Empty(t, text)
+	text, err = profilePromptText(&promptiter.Profile{})
+	require.NoError(t, err)
+	assert.Empty(t, text)
 
 	skillProfile := &promptiter.Profile{Overrides: []promptiter.SurfaceOverride{
 		{Value: astructure.SurfaceValue{Skills: []astructure.SkillRef{{Description: "skill prompt"}}}},
 	}}
-	assert.Equal(t, "skill prompt", profilePromptText(skillProfile))
+	text, err = profilePromptText(skillProfile)
+	assert.Empty(t, text)
+	assert.ErrorContains(t, err, "non-text override")
 
 	toolProfile := &promptiter.Profile{Overrides: []promptiter.SurfaceOverride{
 		{Value: astructure.SurfaceValue{Tools: []astructure.ToolRef{{Description: "tool prompt"}}}},
 	}}
-	assert.Equal(t, "tool prompt", profilePromptText(toolProfile))
+	text, err = profilePromptText(toolProfile)
+	assert.Empty(t, text)
+	assert.ErrorContains(t, err, "non-text override")
 
 	fewShotProfile := &promptiter.Profile{Overrides: []promptiter.SurfaceOverride{
 		{Value: astructure.SurfaceValue{FewShot: []astructure.FewShotExample{
 			{Messages: []astructure.FewShotMessage{{Content: "few shot prompt"}}},
 		}}},
 	}}
-	assert.Equal(t, "few shot prompt", profilePromptText(fewShotProfile))
-	assert.Equal(t, "few shot prompt", CandidatePrompt(&promptiterengine.RunResult{
+	text, err = profilePromptText(fewShotProfile)
+	assert.Empty(t, text)
+	assert.ErrorContains(t, err, "non-text override")
+	assert.Empty(t, CandidatePrompt(&promptiterengine.RunResult{
 		AcceptedProfile: fewShotProfile,
 	}))
+
+	first := "first prompt"
+	second := "second prompt"
+	text, err = CandidateTextPrompt(&promptiterengine.RunResult{
+		AcceptedProfile: &promptiter.Profile{Overrides: []promptiter.SurfaceOverride{
+			{Value: astructure.SurfaceValue{Text: &first}},
+			{Value: astructure.SurfaceValue{Text: &second}},
+		}},
+	})
+	assert.Empty(t, text)
+	assert.ErrorContains(t, err, "multiple text overrides")
 }
 
 func TestTraceReportAndSnapshotHelpers(t *testing.T) {
@@ -319,4 +342,78 @@ func TestBuildReportUsesExplicitCandidateValidationOverride(t *testing.T) {
 	require.NotNil(t, report.CandidateValidation)
 	assert.Equal(t, 1.0, report.CandidateValidation.OverallScore)
 	assert.Equal(t, 1, report.Delta.Summary.NewlyPassed)
+}
+
+func TestBuildReportDoesNotTreatPriorAcceptedRoundAsFinalCandidateAcceptance(t *testing.T) {
+	prompt := "rejected candidate prompt"
+	report := BuildReport(ReportInput{
+		Config: Config{
+			Gate: GateConfig{RequireEngineAccepted: true},
+		},
+		BaselineValidation: evalResult("validation", []caseSpec{
+			{id: "case", metric: "metric", score: 0, status: status.EvalStatusFailed},
+		}),
+		PromptIterRun: &promptiterengine.RunResult{
+			Rounds: []promptiterengine.RoundResult{
+				{
+					Round:      1,
+					Validation: evalResult("validation", []caseSpec{{id: "case", metric: "metric", score: 1, status: status.EvalStatusPassed}}),
+					Acceptance: &promptiterengine.AcceptanceDecision{Accepted: true},
+				},
+				{
+					Round:      2,
+					Validation: evalResult("validation", []caseSpec{{id: "case", metric: "metric", score: 1, status: status.EvalStatusPassed}}),
+					OutputProfile: &promptiter.Profile{Overrides: []promptiter.SurfaceOverride{
+						{SurfaceID: "agent#instruction", Value: astructure.SurfaceValue{Text: &prompt}},
+					}},
+					Acceptance: &promptiterengine.AcceptanceDecision{Accepted: false},
+				},
+			},
+		},
+	})
+	assert.False(t, report.GateDecision.Accepted)
+	assert.Contains(t, report.GateDecision.Reasons, "PromptIter did not accept a candidate profile")
+}
+
+func TestBuildReportPropagatesContextToAttributionJudge(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	report := BuildReport(ReportInput{
+		Ctx: ctx,
+		Config: Config{
+			Gate: GateConfig{},
+		},
+		BaselineValidation: evalResult("validation", []caseSpec{
+			{id: "case", metric: "metric", score: 1, status: status.EvalStatusPassed},
+		}),
+		CandidateValidation: &promptiterengine.EvaluationResult{
+			OverallScore: 0,
+			EvalSets: []promptiterengine.EvalSetResult{
+				{
+					EvalSetID: "validation",
+					Cases: []promptiterengine.CaseResult{
+						{
+							EvalSetID:  "validation",
+							EvalCaseID: "case",
+							ActualInvocation: &evalset.Invocation{
+								FinalResponse: assistantMessage("wrong"),
+							},
+							Metrics: []promptiterengine.MetricResult{
+								{MetricName: "metric", Score: 0, Status: status.EvalStatusFailed, Reason: "needs judge"},
+							},
+						},
+					},
+				},
+			},
+		},
+		AttributionJudge: contextCheckingJudge{},
+	})
+	require.Len(t, report.CandidateFailureAttributions, 1)
+	assert.Contains(t, report.CandidateFailureAttributions[0].Evidence, "judge_fallback_error=context canceled")
+}
+
+type contextCheckingJudge struct{}
+
+func (contextCheckingJudge) ClassifyFailure(ctx context.Context, _ AttributionJudgeRequest) (AttributionJudgeResult, error) {
+	return AttributionJudgeResult{}, ctx.Err()
 }

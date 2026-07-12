@@ -9,6 +9,7 @@
 package regressionloop
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -38,8 +39,8 @@ func TestEvaluateGateRejectsOverfitValidationRegression(t *testing.T) {
 		Duration{},
 	)
 	assert.False(t, decision.Accepted)
-	assert.Contains(t, decision.Reasons[1], "validation score gain")
-	assert.Contains(t, decision.Reasons[2], "newly failed hard")
+	assert.True(t, containsSubstring(decision.Reasons, "validation score gain"))
+	assert.True(t, containsSubstring(decision.Reasons, "newly failed hard"))
 }
 
 func TestEvaluateGateOnlyBlocksConfiguredHardFailMetrics(t *testing.T) {
@@ -147,11 +148,12 @@ func TestEvaluateGateReportsCriticalCasesCleanAndDeduplicatesRegressions(t *test
 }
 
 func TestEvaluateGateRejectsBudgets(t *testing.T) {
+	maxLatency := Duration{Duration: time.Second}
 	decision := EvaluateGate(
-		GateConfig{MaxModelCalls: 2, MaxCost: 0.01, MaxLatency: Duration{Duration: time.Second}},
+		GateConfig{MaxModelCalls: 2, MaxCost: 0.01, MaxLatency: &maxLatency},
 		true,
 		DeltaReport{},
-		CostSummary{ModelCalls: 3, Amount: 0.02},
+		CostSummary{ModelCalls: 3, Amount: 0.02, AmountMeasured: true},
 		Duration{Duration: 2 * time.Second},
 	)
 	assert.False(t, decision.Accepted)
@@ -167,25 +169,45 @@ func TestEvaluateGateRejectsMaxCostWithoutMeasuredAmount(t *testing.T) {
 	)
 	assert.False(t, decision.Accepted)
 	assert.Contains(t, decision.Reasons, "cost amount unavailable; configure CostProvider to enforce maxCost")
+
+	decision = EvaluateGate(
+		GateConfig{MaxCost: 1},
+		true,
+		DeltaReport{},
+		CostSummary{ModelCalls: 3, Source: CostSourceProvider},
+		Duration{},
+	)
+	assert.False(t, decision.Accepted)
+	assert.Contains(t, decision.Reasons, "cost amount unavailable; configure CostProvider to enforce maxCost")
 }
 
 func TestEvaluateGateAllowsConfiguredNewFailuresAndBudgetsWithinLimit(t *testing.T) {
+	maxLatency := Duration{Duration: time.Second}
 	decision := EvaluateGate(
 		GateConfig{
 			MinValidationScoreGain: 0.1,
 			AllowNewHardFail:       true,
 			MaxModelCalls:          5,
 			MaxCost:                1,
-			MaxLatency:             Duration{Duration: time.Second},
+			MaxLatency:             &maxLatency,
 		},
 		false,
 		DeltaReport{
 			OverallScoreDelta: 0.2,
 			Summary:           DeltaSummary{NewlyFailed: 1},
 		},
-		CostSummary{ModelCalls: 5, Amount: 0.5},
+		CostSummary{ModelCalls: 5, Amount: 0.5, AmountMeasured: true},
 		Duration{Duration: 500 * time.Millisecond},
 	)
 	assert.True(t, decision.Accepted)
 	assert.Contains(t, decision.Reasons, "1 newly failed hard validation metrics allowed by policy: [unknown]")
+}
+
+func containsSubstring(items []string, want string) bool {
+	for _, item := range items {
+		if strings.Contains(item, want) {
+			return true
+		}
+	}
+	return false
 }

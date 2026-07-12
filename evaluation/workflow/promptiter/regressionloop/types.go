@@ -121,15 +121,15 @@ type DeltaReport struct {
 
 // GateConfig controls the production release decision.
 type GateConfig struct {
-	MinValidationScoreGain float64  `json:"minValidationScoreGain"`
-	AllowNewHardFail       bool     `json:"allowNewHardFail"`
-	RejectAnyScoreDown     bool     `json:"rejectAnyScoreDown,omitempty"`
-	CriticalCaseIDs        []string `json:"criticalCaseIds,omitempty"`
-	HardFailMetricNames    []string `json:"hardFailMetricNames,omitempty"`
-	MaxModelCalls          int      `json:"maxModelCalls,omitempty"`
-	MaxCost                float64  `json:"maxCost,omitempty"`
-	MaxLatency             Duration `json:"maxLatency,omitempty"`
-	RequireEngineAccepted  bool     `json:"requireEngineAccepted"`
+	MinValidationScoreGain float64   `json:"minValidationScoreGain"`
+	AllowNewHardFail       bool      `json:"allowNewHardFail"`
+	RejectAnyScoreDown     bool      `json:"rejectAnyScoreDown,omitempty"`
+	CriticalCaseIDs        []string  `json:"criticalCaseIds,omitempty"`
+	HardFailMetricNames    []string  `json:"hardFailMetricNames,omitempty"`
+	MaxModelCalls          int       `json:"maxModelCalls,omitempty"`
+	MaxCost                float64   `json:"maxCost,omitempty"`
+	MaxLatency             *Duration `json:"maxLatency,omitempty"`
+	RequireEngineAccepted  bool      `json:"requireEngineAccepted"`
 }
 
 // GateDecision stores the final release gate outcome.
@@ -155,9 +155,11 @@ type CostSummary struct {
 	ModelCalls int     `json:"modelCalls"`
 	Tokens     int     `json:"tokens,omitempty"`
 	Amount     float64 `json:"amount,omitempty"`
-	Currency   string  `json:"currency,omitempty"`
-	Estimated  bool    `json:"estimated,omitempty"`
-	Source     string  `json:"source,omitempty"`
+	// AmountMeasured marks Amount as an explicit cost-provider value, including zero.
+	AmountMeasured bool   `json:"amountMeasured,omitempty"`
+	Currency       string `json:"currency,omitempty"`
+	Estimated      bool   `json:"estimated,omitempty"`
+	Source         string `json:"source,omitempty"`
 }
 
 // RunMetadata stores audit metadata.

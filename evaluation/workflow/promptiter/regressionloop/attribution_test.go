@@ -11,7 +11,9 @@ package regressionloop
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -761,6 +763,13 @@ func TestAttributeFailuresUsesStructuredFormatRouteAndFinalDiff(t *testing.T) {
 	assert.Equal(t, FailureRouteError, byCase["route_wrong"].Category)
 	assert.Equal(t, FailureRouteError, byCase["route_wrong_empty_reason"].Category)
 	assert.Equal(t, FailureFinalResponseMismatch, byCase["answer_mismatch"].Category)
+}
+
+func TestTrimForEvidenceTruncatesByRunes(t *testing.T) {
+	got := trimForEvidence(strings.Repeat("长", 181))
+	assert.True(t, utf8.ValidString(got))
+	assert.Len(t, []rune(got), 180)
+	assert.True(t, strings.HasSuffix(got, "..."))
 }
 
 func structuredEvalResult(evalSetID string, cases []promptiterengine.CaseResult) *promptiterengine.EvaluationResult {

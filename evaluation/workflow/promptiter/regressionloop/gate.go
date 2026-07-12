@@ -108,7 +108,7 @@ func EvaluateGate(
 			reasons = append(reasons, fmt.Sprintf("cost %.4f exceeds budget %.4f", cost.Amount, cfg.MaxCost))
 		}
 	}
-	if cfg.MaxLatency.Duration > 0 {
+	if cfg.MaxLatency != nil && cfg.MaxLatency.Duration > 0 {
 		if latency.Duration <= cfg.MaxLatency.Duration {
 			reasons = append(reasons, fmt.Sprintf("latency %s within budget %s", latency.Duration, cfg.MaxLatency.Duration))
 		} else {
@@ -120,7 +120,7 @@ func EvaluateGate(
 }
 
 func hasMeasuredAmount(cost CostSummary) bool {
-	return cost.Source == CostSourceProvider || cost.Amount > 0
+	return cost.AmountMeasured || cost.Amount > 0
 }
 
 func hardFailRegressions(delta DeltaReport, hardFailMetricNames []string) []string {

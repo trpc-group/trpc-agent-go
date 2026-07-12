@@ -2468,6 +2468,55 @@ func TestAdaptEvaluationCaseResultValidationErrors(t *testing.T) {
 	assert.EqualError(t, err, `evaluation case "case_1" run detail id 2 does not match run result id 1`)
 }
 
+func TestAdaptEvaluationCaseResultPreservesPerInvocationEvidence(t *testing.T) {
+	structure, structureErr := profilecompiler.NewStructure(testStructureSnapshot(t))
+	require.NoError(t, structureErr)
+	trace := &atrace.Trace{
+		SessionID: "session",
+		Steps: []atrace.Step{
+			{
+				StepID:            "step_1",
+				NodeID:            "node_1",
+				AppliedSurfaceIDs: []string{testSurfaceID},
+			},
+		},
+	}
+	actual := &evalset.Invocation{InvocationID: "actual"}
+	expected := &evalset.Invocation{InvocationID: "expected"}
+	result, err := adaptEvaluationCaseResult(structure, "validation", &evaluation.EvaluationCaseResult{
+		EvalCaseID: "case_1",
+		EvalCaseResults: []*evalresult.EvalCaseResult{
+			{
+				RunID: 1,
+				OverallEvalMetricResults: []*evalresult.EvalMetricResult{
+					{
+						MetricName: "quality",
+						Score:      1,
+						EvalStatus: status.EvalStatusPassed,
+					},
+				},
+				EvalMetricResultPerInvocation: []*evalresult.EvalMetricResultPerInvocation{
+					{
+						ActualInvocation:   actual,
+						ExpectedInvocation: expected,
+					},
+				},
+			},
+		},
+		RunDetails: []*evaluation.EvaluationCaseRunDetails{
+			{
+				RunID: 1,
+				Inference: &evaluation.EvaluationInferenceDetails{
+					ExecutionTraces: []*atrace.Trace{trace},
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	assert.Same(t, actual, result.ActualInvocation)
+	assert.Same(t, expected, result.ExpectedInvocation)
+}
+
 func TestAdaptEvaluationSetResultValidationErrors(t *testing.T) {
 	structure, structureErr := profilecompiler.NewStructure(testStructureSnapshot(t))
 	require.NoError(t, structureErr)

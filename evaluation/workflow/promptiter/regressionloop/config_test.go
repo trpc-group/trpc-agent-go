@@ -45,6 +45,10 @@ func TestConfigValidateRequiresCoreInputs(t *testing.T) {
 	cfg.Attribution = AttributionConfig{}
 	cfg.Gate.HardFailMetricNames = []string{" "}
 	assert.ErrorContains(t, cfg.Validate(), "gate hard fail metric name is empty")
+
+	cfg.Gate.HardFailMetricNames = nil
+	cfg.TargetSurfaceIDs = []string{"agent#instruction", " "}
+	assert.ErrorContains(t, cfg.Validate(), "target surface id is empty")
 }
 
 func TestConfigValidateReportsAllMissingCoreInputs(t *testing.T) {
@@ -168,4 +172,15 @@ func TestDurationJSONRoundTrip(t *testing.T) {
 
 	assert.Error(t, json.Unmarshal([]byte(`"not-a-duration"`), &parsed))
 	assert.Error(t, json.Unmarshal([]byte(`{}`), &parsed))
+}
+
+func TestGateConfigOmitsUnsetMaxLatency(t *testing.T) {
+	data, err := json.Marshal(GateConfig{})
+	require.NoError(t, err)
+	assert.NotContains(t, string(data), "maxLatency")
+
+	latency := Duration{Duration: time.Second}
+	data, err = json.Marshal(GateConfig{MaxLatency: &latency})
+	require.NoError(t, err)
+	assert.Contains(t, string(data), `"maxLatency":"1s"`)
 }

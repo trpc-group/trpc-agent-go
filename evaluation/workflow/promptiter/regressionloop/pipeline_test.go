@@ -139,6 +139,63 @@ func TestPipelineUsesCostProviderWithEstimatedModelCallFallback(t *testing.T) {
 	assert.Equal(t, CostSourceProvider, result.Report.Cost.Source)
 	assert.False(t, result.Report.Cost.Estimated)
 	assert.True(t, result.Report.GateDecision.Accepted)
+
+	pipeline.CostProvider = staticCostProvider{summary: CostSummary{Tokens: 123}}
+	result, err = pipeline.Run(context.Background(), cfg)
+	require.NoError(t, err)
+	assert.False(t, result.Report.GateDecision.Accepted)
+	assert.Contains(t, result.Report.GateDecision.Reasons, "cost amount unavailable; configure CostProvider to enforce maxCost")
+}
+
+func TestPipelineRejectsFinalCandidateProfilesItCannotRepresentAsSinglePrompt(t *testing.T) {
+	dir := t.TempDir()
+	promptPath := filepath.Join(dir, "prompt.txt")
+	metricsPath := filepath.Join(dir, "metrics.json")
+	require.NoError(t, os.WriteFile(promptPath, []byte("baseline prompt"), 0o644))
+	require.NoError(t, os.WriteFile(metricsPath, []byte(`{"metrics":[]}`), 0o644))
+	iterator := &capturingPromptIterator{
+		result: &promptiterengine.RunResult{
+			Rounds: []promptiterengine.RoundResult{
+				{
+					Round: 1,
+					OutputProfile: &promptiter.Profile{Overrides: []promptiter.SurfaceOverride{
+						{
+							SurfaceID: "agent#tool.lookup",
+							Value: astructure.SurfaceValue{
+								Tools: []astructure.ToolRef{{ID: "lookup", Description: "candidate tool description"}},
+							},
+						},
+					}},
+				},
+			},
+		},
+	}
+	cfg := Config{
+		AppName:             "app",
+		PromptSource:        promptPath,
+		MetricsPath:         metricsPath,
+		TrainEvalSetID:      "train",
+		ValidationEvalSetID: "validation",
+		OutputJSON:          filepath.Join(dir, "optimization_report.json"),
+		OutputMarkdown:      filepath.Join(dir, "optimization_report.md"),
+		TargetSurfaceIDs:    []string{"agent#instruction"},
+		PromptIter:          PromptIterConfig{MaxRounds: 1},
+	}
+	_, err := Pipeline{
+		Evaluator: &scriptedEvaluator{
+			results: map[Phase]*promptiterengine.EvaluationResult{
+				PhaseBaselineTrain: evalResult("train", []caseSpec{
+					{id: "case", metric: "m", score: 1, status: status.EvalStatusPassed},
+				}),
+				PhaseBaselineValidation: evalResult("validation", []caseSpec{
+					{id: "case", metric: "m", score: 1, status: status.EvalStatusPassed},
+				}),
+			},
+		},
+		PromptIterator: iterator,
+		Clock:          &sequenceClock{times: []time.Time{time.Unix(1, 0), time.Unix(2, 0)}},
+	}.Run(context.Background(), cfg)
+	assert.ErrorContains(t, err, "candidate profile contains non-text override")
 }
 
 func TestPipelineRerunsFinalCandidateValidation(t *testing.T) {

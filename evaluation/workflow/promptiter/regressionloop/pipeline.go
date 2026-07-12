@@ -120,11 +120,11 @@ func (p Pipeline) Run(ctx context.Context, cfg Config) (*Result, error) {
 		Metrics: metrics,
 		Judge:   p.AttributionJudge,
 	}
+	trainAttributions := AttributeFailuresWithOptions(ctx, baselineTrain, attributionOptions)
 	attributions := append(
-		AttributeFailuresWithOptions(ctx, baselineTrain, attributionOptions),
+		trainAttributions,
 		AttributeFailuresWithOptions(ctx, baselineValidation, attributionOptions)...,
 	)
-	trainAttributions := AttributeFailuresWithOptions(ctx, baselineTrain, attributionOptions)
 	request := cfg.BuildRunRequest(BuildLossHints(trainAttributions))
 	initialProfile, err := BuildPromptProfile(cfg.TargetSurfaceIDs, prompt)
 	if err != nil {
@@ -146,6 +146,7 @@ func (p Pipeline) Run(ctx context.Context, cfg Config) (*Result, error) {
 		cost = normalizeProviderCost(p.CostProvider.CostSummary(), cost)
 	}
 	report := BuildReport(ReportInput{
+		Ctx:                 ctx,
 		Config:              cfg,
 		StartedAt:           startedAt,
 		FinishedAt:          finishedAt,
@@ -175,7 +176,10 @@ func (p Pipeline) evaluateFinalCandidate(
 	run *promptiterengine.RunResult,
 	metrics []MetricDefinition,
 ) (*promptiterengine.EvaluationResult, bool, error) {
-	candidatePrompt := CandidatePrompt(run)
+	candidatePrompt, err := CandidateTextPrompt(run)
+	if err != nil {
+		return nil, false, err
+	}
 	if candidatePrompt == "" {
 		return nil, false, nil
 	}
@@ -219,6 +223,9 @@ func estimateCost(run *promptiterengine.RunResult, reranCandidateValidation ...b
 func normalizeProviderCost(cost, fallback CostSummary) CostSummary {
 	if cost.ModelCalls == 0 {
 		cost.ModelCalls = fallback.ModelCalls
+	}
+	if cost.Amount != 0 || cost.Currency != "" {
+		cost.AmountMeasured = true
 	}
 	cost.Estimated = false
 	if cost.Source == "" {

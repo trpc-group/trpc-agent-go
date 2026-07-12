@@ -220,10 +220,6 @@ func engineEvaluationResult(
 func caseTrace(evalCaseID, surfaceID string, overall status.EvalStatus) *atrace.Trace {
 	traceStatus := atrace.TraceStatusCompleted
 	stepError := ""
-	if overall == status.EvalStatusFailed && strings.Contains(evalCaseID, "inference") {
-		traceStatus = atrace.TraceStatusFailed
-		stepError = "deterministic inference failure"
-	}
 	return &atrace.Trace{
 		RootAgentName:    "support_agent",
 		RootInvocationID: "invocation-" + evalCaseID,

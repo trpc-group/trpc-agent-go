@@ -817,10 +817,11 @@ func containsAny(text string, needles ...string) bool {
 
 func trimForEvidence(text string) string {
 	text = strings.Join(strings.Fields(text), " ")
-	if len(text) <= 180 {
+	runes := []rune(text)
+	if len(runes) <= 180 {
 		return text
 	}
-	return text[:177] + "..."
+	return string(runes[:177]) + "..."
 }
 
 func normalizeAttributionHints(hints map[string]FailureCategory) map[string]FailureCategory {

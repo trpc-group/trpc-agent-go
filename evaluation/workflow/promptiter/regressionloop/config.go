@@ -80,6 +80,11 @@ func (c Config) Validate() error {
 	if len(c.TargetSurfaceIDs) == 0 {
 		errs = append(errs, errors.New("target surface ids are empty"))
 	}
+	for _, surfaceID := range c.TargetSurfaceIDs {
+		if strings.TrimSpace(surfaceID) == "" {
+			errs = append(errs, errors.New("target surface id is empty"))
+		}
+	}
 	if c.PromptIter.MaxRounds <= 0 {
 		errs = append(errs, errors.New("promptiter max rounds must be greater than 0"))
 	}

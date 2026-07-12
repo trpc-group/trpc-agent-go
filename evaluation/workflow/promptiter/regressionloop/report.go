@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
 	atrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 	promptiterengine "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/engine"
@@ -26,22 +27,28 @@ import (
 
 // BuildReport assembles the auditable optimization report.
 func BuildReport(input ReportInput) OptimizationReport {
-	acceptedValidation, _, engineAccepted := AcceptedValidation(input.PromptIterRun)
-	candidateValidation, _, hasFinalCandidate := FinalCandidateValidation(input.PromptIterRun)
+	ctx := input.Ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	acceptedValidation, acceptedRound, hasEngineAccepted := AcceptedValidation(input.PromptIterRun)
+	candidateValidation, candidateRound, hasFinalCandidate := FinalCandidateValidation(input.PromptIterRun)
 	if input.CandidateValidation != nil {
 		candidateValidation = input.CandidateValidation
 		hasFinalCandidate = true
 	}
 	if candidateValidation == nil {
 		candidateValidation = acceptedValidation
+		candidateRound = acceptedRound
 	}
 	delta := ComputeDelta(input.BaselineValidation, candidateValidation, input.Config.Gate.CriticalCaseIDs)
+	engineAccepted := hasEngineAccepted && (!hasFinalCandidate || acceptedRound == candidateRound)
 	gate := EvaluateGate(input.Config.Gate, engineAccepted, delta, input.Cost, input.Latency)
 	attributionHints := AttributionHints(input.Config, input.Metrics)
 	baselineAttributions := append([]CaseAttribution(nil), input.Attributions...)
 	var candidateAttributions []CaseAttribution
 	if hasFinalCandidate {
-		candidateAttributions = AttributeFailuresWithOptions(context.Background(), candidateValidation, AttributionOptions{
+		candidateAttributions = AttributeFailuresWithOptions(ctx, candidateValidation, AttributionOptions{
 			Hints:   attributionHints,
 			Metrics: input.Metrics,
 			Judge:   input.AttributionJudge,
@@ -89,6 +96,7 @@ func BuildReport(input ReportInput) OptimizationReport {
 
 // ReportInput carries report-generation inputs.
 type ReportInput struct {
+	Ctx                 context.Context
 	Config              Config
 	StartedAt           time.Time
 	FinishedAt          time.Time
@@ -132,47 +140,55 @@ func BuildRoundAudit(
 	return rounds
 }
 
-// CandidatePrompt returns the latest candidate text override, even if the
-// outer gate or PromptIter acceptance rejected it.
+// CandidatePrompt returns the latest single text override. It returns an empty
+// string for multi-surface or non-text profiles that cannot be represented by
+// one prompt string.
 func CandidatePrompt(run *promptiterengine.RunResult) string {
-	if run == nil {
+	text, err := CandidateTextPrompt(run)
+	if err != nil {
 		return ""
 	}
+	return text
+}
+
+func CandidateTextPrompt(run *promptiterengine.RunResult) (string, error) {
+	if run == nil {
+		return "", nil
+	}
 	for i := len(run.Rounds) - 1; i >= 0; i-- {
-		if text := profilePromptText(run.Rounds[i].OutputProfile); text != "" {
-			return text
+		text, err := profilePromptText(run.Rounds[i].OutputProfile)
+		if err != nil {
+			return "", err
+		}
+		if text != "" {
+			return text, nil
 		}
 	}
 	return profilePromptText(run.AcceptedProfile)
 }
 
-func profilePromptText(profile *promptiter.Profile) string {
+func profilePromptText(profile *promptiter.Profile) (string, error) {
 	if profile == nil {
-		return ""
+		return "", nil
 	}
+	var text string
 	for _, override := range profile.Overrides {
 		if override.Value.Text != nil && strings.TrimSpace(*override.Value.Text) != "" {
-			return *override.Value.Text
-		}
-		for _, skill := range override.Value.Skills {
-			if strings.TrimSpace(skill.Description) != "" {
-				return skill.Description
+			if text != "" {
+				return "", fmt.Errorf("candidate profile has multiple text overrides; provide profile-aware validation")
 			}
+			text = *override.Value.Text
+			continue
 		}
-		for _, toolRef := range override.Value.Tools {
-			if strings.TrimSpace(toolRef.Description) != "" {
-				return toolRef.Description
-			}
-		}
-		for _, example := range override.Value.FewShot {
-			for _, message := range example.Messages {
-				if strings.TrimSpace(message.Content) != "" {
-					return message.Content
-				}
-			}
+		if hasNonTextProfileValue(override.Value) {
+			return "", fmt.Errorf("candidate profile contains non-text override for %q; provide profile-aware validation", override.SurfaceID)
 		}
 	}
-	return ""
+	return text, nil
+}
+
+func hasNonTextProfileValue(value astructure.SurfaceValue) bool {
+	return len(value.Skills) > 0 || len(value.Tools) > 0 || len(value.FewShot) > 0 || value.Model != nil
 }
 
 // WriteReports writes JSON and Markdown reports.
@@ -213,7 +229,7 @@ func RenderMarkdown(report OptimizationReport) string {
 	if report.Cost.Tokens > 0 {
 		fmt.Fprintf(&b, ", `%d` tokens", report.Cost.Tokens)
 	}
-	if report.Cost.Amount > 0 || report.Cost.Source == CostSourceProvider {
+	if report.Cost.Amount > 0 || report.Cost.AmountMeasured {
 		if strings.TrimSpace(report.Cost.Currency) == "" {
 			fmt.Fprintf(&b, ", `%.4f`", report.Cost.Amount)
 		} else {

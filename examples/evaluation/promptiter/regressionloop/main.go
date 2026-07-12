@@ -123,18 +123,17 @@ func runPipeline(
 	mode string,
 ) (*regressionloop.Result, error) {
 	mode = strings.ToLower(strings.TrimSpace(mode))
+	if cfg.FakeConfig == nil {
+		cfg.FakeConfig = map[string]string{}
+	}
+	cfg.FakeConfig["scenario"] = scenarioDescription(cfg.Scenario)
 	if mode == "trace-fake-engine" {
-		if cfg.FakeConfig == nil {
-			cfg.FakeConfig = map[string]string{}
-		}
 		cfg.FakeConfig["runner"] = "deterministic-trace-fake-engine"
 		cfg.FakeConfig["optimization"] = "complete: PromptIter fake engine with trace-bearing evaluations"
 	}
 	if mode == "trace-smoke" {
 		cfg.Scenario = "trace-smoke"
-		if cfg.FakeConfig == nil {
-			cfg.FakeConfig = map[string]string{}
-		}
+		cfg.FakeConfig["scenario"] = scenarioDescription(cfg.Scenario)
 		cfg.FakeConfig["runner"] = "deterministic-trace-replay"
 		cfg.FakeConfig["optimization"] = "skipped: trace-smoke replays traces and audits reporting only"
 	}
@@ -185,4 +184,17 @@ func selectedScenarios(configScenario, flagScenario, mode string) []string {
 		scenarioName = scenarioOrDefault(flagScenario)
 	}
 	return []string{scenarioName}
+}
+
+func scenarioDescription(scenario string) string {
+	switch scenarioOrDefault(scenario) {
+	case "success":
+		return "validation improves from 0.333 to 1.000 without newly failed metrics"
+	case "ineffective":
+		return "train changes but validation has no score gain"
+	case "trace-smoke":
+		return "trace replay audits reporting without optimization"
+	default:
+		return "train improves but validation adds a hard fail"
+	}
 }

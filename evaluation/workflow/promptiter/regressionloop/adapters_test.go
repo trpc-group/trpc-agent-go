@@ -299,19 +299,20 @@ func TestBuildPromptProfileCoversEmptyInvalidFewShotAndModel(t *testing.T) {
 	assert.ErrorContains(t, err, "invalid prompt surface id")
 }
 
-func TestBuildPromptProfileSupportsSkillAndToolDescriptions(t *testing.T) {
+func TestBuildPromptProfileSupportsToolDescriptionsAndRejectsSkill(t *testing.T) {
 	profile, err := BuildPromptProfile(
-		[]string{"support_agent#skill.refund_policy", "support_agent#tool.billing_lookup", "support_agent#tool"},
+		[]string{"support_agent#tool.billing_lookup", "support_agent#tool"},
 		"optimized description",
 	)
 	require.NoError(t, err)
 	require.NotNil(t, profile)
-	require.Len(t, profile.Overrides, 3)
-	assert.Equal(t, "refund_policy", profile.Overrides[0].Value.Skills[0].ID)
-	assert.Equal(t, "optimized description", profile.Overrides[0].Value.Skills[0].Description)
-	assert.Equal(t, "billing_lookup", profile.Overrides[1].Value.Tools[0].ID)
-	assert.Equal(t, "optimized description", profile.Overrides[1].Value.Tools[0].Description)
-	assert.Equal(t, "support_agent", profile.Overrides[2].Value.Tools[0].ID)
+	require.Len(t, profile.Overrides, 2)
+	assert.Equal(t, "billing_lookup", profile.Overrides[0].Value.Tools[0].ID)
+	assert.Equal(t, "optimized description", profile.Overrides[0].Value.Tools[0].Description)
+	assert.Equal(t, "support_agent", profile.Overrides[1].Value.Tools[0].ID)
+
+	_, err = BuildPromptProfile([]string{"support_agent#skill.refund_policy"}, "optimized description")
+	assert.ErrorContains(t, err, "skill surface requires a custom prompt adapter")
 }
 
 func TestPromptSurfaceValueRejectsUnsupportedSurface(t *testing.T) {

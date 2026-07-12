@@ -22,7 +22,7 @@
     ],
     "fakeConfig": {
       "runner": "deterministic-fake-engine",
-      "scenario": "train improves but validation adds a hard fail"
+      "scenario": "validation improves from 0.333 to 1.000 without newly failed metrics"
     },
     "attributionHints": {
       "final_response": "final_response_mismatch",

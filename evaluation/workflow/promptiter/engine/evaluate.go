@@ -320,13 +320,31 @@ func adaptEvaluationCaseResult(
 			err,
 		)
 	}
+	actualInvocation, expectedInvocation := firstInvocationPair(runResult)
 	return &CaseResult{
-		EvalSetID:  evalSetID,
-		EvalCaseID: evalCase.EvalCaseID,
-		SessionID:  sessionID,
-		Trace:      trace,
-		Metrics:    metrics,
+		EvalSetID:          evalSetID,
+		EvalCaseID:         evalCase.EvalCaseID,
+		SessionID:          sessionID,
+		Trace:              trace,
+		ActualInvocation:   actualInvocation,
+		ExpectedInvocation: expectedInvocation,
+		Metrics:            metrics,
 	}, nil
+}
+
+func firstInvocationPair(result *evalresult.EvalCaseResult) (*evalset.Invocation, *evalset.Invocation) {
+	if result == nil {
+		return nil, nil
+	}
+	for _, perInvocation := range result.EvalMetricResultPerInvocation {
+		if perInvocation == nil {
+			continue
+		}
+		if perInvocation.ActualInvocation != nil || perInvocation.ExpectedInvocation != nil {
+			return perInvocation.ActualInvocation, perInvocation.ExpectedInvocation
+		}
+	}
+	return nil, nil
 }
 
 func extractInferenceTraceDetails(
