@@ -54,12 +54,12 @@ const (
 )
 
 type InvocationEvidence struct {
-	ActualToolName    string                 `json:"actualToolName,omitempty"`
-	ExpectedToolName  string                 `json:"expectedToolName,omitempty"`
-	ActualArguments   map[string]interface{} `json:"actualArguments,omitempty"`
-	ExpectedArguments map[string]interface{} `json:"expectedArguments,omitempty"`
-	ToolCallPresent   bool                   `json:"toolCallPresent"`
-	ExpectedToolCall  bool                   `json:"expectedToolCall"`
+	ActualToolName    string         `json:"actualToolName,omitempty"`
+	ExpectedToolName  string         `json:"expectedToolName,omitempty"`
+	ActualArguments   map[string]any `json:"actualArguments,omitempty"`
+	ExpectedArguments map[string]any `json:"expectedArguments,omitempty"`
+	ToolCallPresent   bool           `json:"toolCallPresent"`
+	ExpectedToolCall  bool           `json:"expectedToolCall"`
 }
 
 type AttributionResult struct {

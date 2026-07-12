@@ -112,8 +112,8 @@ func extractInvocationEvidence(caseResult engine.CaseResult, metric engine.Metri
 }
 
 type parsedToolCall struct {
-	Name string                 `json:"name"`
-	Args map[string]interface{} `json:"arguments"`
+	Name string         `json:"name"`
+	Args map[string]any `json:"arguments"`
 }
 
 func parseToolCallsFromText(text string) []parsedToolCall {
@@ -135,12 +135,12 @@ func parseToolCallsFromText(text string) []parsedToolCall {
 	if err := json.Unmarshal([]byte(text), &openAIToolCalls); err == nil && len(openAIToolCalls.ToolCalls) > 0 && openAIToolCalls.ToolCalls[0].Function.Name != "" {
 		var calls []parsedToolCall
 		for _, tc := range openAIToolCalls.ToolCalls {
-			parsedArgs := make(map[string]interface{})
+			parsedArgs := make(map[string]any)
 			if tc.Function.Arguments != nil {
 				if err := json.Unmarshal(tc.Function.Arguments, &parsedArgs); err != nil {
 					var argsStr string
 					if err := json.Unmarshal(tc.Function.Arguments, &argsStr); err == nil {
-						parsedArgs = map[string]interface{}{"raw": argsStr}
+						parsedArgs = map[string]any{"raw": argsStr}
 					}
 				}
 			}
@@ -150,8 +150,8 @@ func parseToolCallsFromText(text string) []parsedToolCall {
 	}
 
 	var singleToolCall struct {
-		Name      string                 `json:"name"`
-		Arguments map[string]interface{} `json:"arguments"`
+		Name      string         `json:"name"`
+		Arguments map[string]any `json:"arguments"`
 	}
 	if err := json.Unmarshal([]byte(text), &singleToolCall); err == nil && singleToolCall.Name != "" {
 		return []parsedToolCall{{Name: singleToolCall.Name, Args: singleToolCall.Arguments}}

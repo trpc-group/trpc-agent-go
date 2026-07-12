@@ -25,13 +25,13 @@ func TestConfigValidation(t *testing.T) {
 		{
 			name: "valid config",
 			config: Config{
-				TrainEvalSetPath:        "train.evalset.json",
-				ValidationEvalSetPath:   "validation.evalset.json",
-				MetricsPath:             "metrics.json",
-				BaselinePromptPath:      "baseline_prompt.txt",
-				PromptiterConfigPath:    "promptiter.json",
-				Seed:                    12345,
-				Mode:                    "fake",
+				TrainEvalSetPath:      "train.evalset.json",
+				ValidationEvalSetPath: "validation.evalset.json",
+				MetricsPath:           "metrics.json",
+				BaselinePromptPath:    "baseline_prompt.txt",
+				PromptiterConfigPath:  "promptiter.json",
+				Seed:                  12345,
+				Mode:                  "fake",
 				Gate: GateConfig{
 					MinValidationGain:   0.05,
 					AllowNewHardFail:    false,
@@ -50,8 +50,8 @@ func TestConfigValidation(t *testing.T) {
 					CaseParallelism:  4,
 				},
 				Output: OutputConfig{
-					OutputDir:          "output",
-					SaveAuditTrail:     true,
+					OutputDir:           "output",
+					SaveAuditTrail:      true,
 					SaveCandidatePrompt: true,
 				},
 			},
@@ -100,13 +100,13 @@ func TestConfigValidation(t *testing.T) {
 		{
 			name: "invalid mode",
 			config: Config{
-				TrainEvalSetPath:     "train.evalset.json",
+				TrainEvalSetPath:      "train.evalset.json",
 				ValidationEvalSetPath: "validation.evalset.json",
-				MetricsPath:          "metrics.json",
-				BaselinePromptPath:   "baseline_prompt.txt",
-				PromptiterConfigPath: "promptiter.json",
-				Seed:                 12345,
-				Mode:                 "invalid",
+				MetricsPath:           "metrics.json",
+				BaselinePromptPath:    "baseline_prompt.txt",
+				PromptiterConfigPath:  "promptiter.json",
+				Seed:                  12345,
+				Mode:                  "invalid",
 				Gate: GateConfig{
 					MinValidationGain: 0.05,
 				},
@@ -121,13 +121,13 @@ func TestConfigValidation(t *testing.T) {
 		{
 			name: "zero seed in fake mode",
 			config: Config{
-				TrainEvalSetPath:     "train.evalset.json",
+				TrainEvalSetPath:      "train.evalset.json",
 				ValidationEvalSetPath: "validation.evalset.json",
-				MetricsPath:          "metrics.json",
-				BaselinePromptPath:   "baseline_prompt.txt",
-				PromptiterConfigPath: "promptiter.json",
-				Seed:                 0,
-				Mode:                 "fake",
+				MetricsPath:           "metrics.json",
+				BaselinePromptPath:    "baseline_prompt.txt",
+				PromptiterConfigPath:  "promptiter.json",
+				Seed:                  0,
+				Mode:                  "fake",
 				Gate: GateConfig{
 					MinValidationGain: 0.05,
 				},
@@ -142,13 +142,13 @@ func TestConfigValidation(t *testing.T) {
 		{
 			name: "negative minValidationGain",
 			config: Config{
-				TrainEvalSetPath:     "train.evalset.json",
+				TrainEvalSetPath:      "train.evalset.json",
 				ValidationEvalSetPath: "validation.evalset.json",
-				MetricsPath:          "metrics.json",
-				BaselinePromptPath:   "baseline_prompt.txt",
-				PromptiterConfigPath: "promptiter.json",
-				Seed:                 12345,
-				Mode:                 "fake",
+				MetricsPath:           "metrics.json",
+				BaselinePromptPath:    "baseline_prompt.txt",
+				PromptiterConfigPath:  "promptiter.json",
+				Seed:                  12345,
+				Mode:                  "fake",
 				Gate: GateConfig{
 					MinValidationGain: -0.05,
 				},
@@ -163,13 +163,13 @@ func TestConfigValidation(t *testing.T) {
 		{
 			name: "zero maxRounds",
 			config: Config{
-				TrainEvalSetPath:     "train.evalset.json",
+				TrainEvalSetPath:      "train.evalset.json",
 				ValidationEvalSetPath: "validation.evalset.json",
-				MetricsPath:          "metrics.json",
-				BaselinePromptPath:   "baseline_prompt.txt",
-				PromptiterConfigPath: "promptiter.json",
-				Seed:                 12345,
-				Mode:                 "fake",
+				MetricsPath:           "metrics.json",
+				BaselinePromptPath:    "baseline_prompt.txt",
+				PromptiterConfigPath:  "promptiter.json",
+				Seed:                  12345,
+				Mode:                  "fake",
 				Gate: GateConfig{
 					MinValidationGain: 0.05,
 				},
@@ -184,13 +184,13 @@ func TestConfigValidation(t *testing.T) {
 		{
 			name: "empty targetSurfaceIDs",
 			config: Config{
-				TrainEvalSetPath:     "train.evalset.json",
+				TrainEvalSetPath:      "train.evalset.json",
 				ValidationEvalSetPath: "validation.evalset.json",
-				MetricsPath:          "metrics.json",
-				BaselinePromptPath:   "baseline_prompt.txt",
-				PromptiterConfigPath: "promptiter.json",
-				Seed:                 12345,
-				Mode:                 "fake",
+				MetricsPath:           "metrics.json",
+				BaselinePromptPath:    "baseline_prompt.txt",
+				PromptiterConfigPath:  "promptiter.json",
+				Seed:                  12345,
+				Mode:                  "fake",
 				Gate: GateConfig{
 					MinValidationGain: 0.05,
 				},
@@ -219,11 +219,11 @@ func TestConfigValidation(t *testing.T) {
 func TestConfigResolvePaths(t *testing.T) {
 	baseDir := "/test/base"
 	config := &Config{
-		TrainEvalSetPath:        "train.evalset.json",
-		ValidationEvalSetPath:   "../validation.evalset.json",
-		MetricsPath:             "/absolute/metrics.json",
-		BaselinePromptPath:      "baseline_prompt.txt",
-		PromptiterConfigPath:    "config/promptiter.json",
+		TrainEvalSetPath:      "train.evalset.json",
+		ValidationEvalSetPath: "../validation.evalset.json",
+		MetricsPath:           "/absolute/metrics.json",
+		BaselinePromptPath:    "baseline_prompt.txt",
+		PromptiterConfigPath:  "config/promptiter.json",
 		Output: OutputConfig{
 			OutputDir: "output",
 		},
@@ -241,13 +241,13 @@ func TestConfigResolvePaths(t *testing.T) {
 
 func TestConfigHash(t *testing.T) {
 	config := &Config{
-		TrainEvalSetPath:        "train.evalset.json",
-		ValidationEvalSetPath:   "validation.evalset.json",
-		MetricsPath:             "metrics.json",
-		BaselinePromptPath:      "baseline_prompt.txt",
-		PromptiterConfigPath:    "promptiter.json",
-		Seed:                    12345,
-		Mode:                    "fake",
+		TrainEvalSetPath:      "train.evalset.json",
+		ValidationEvalSetPath: "validation.evalset.json",
+		MetricsPath:           "metrics.json",
+		BaselinePromptPath:    "baseline_prompt.txt",
+		PromptiterConfigPath:  "promptiter.json",
+		Seed:                  12345,
+		Mode:                  "fake",
 		Gate: GateConfig{
 			MinValidationGain: 0.05,
 		},
