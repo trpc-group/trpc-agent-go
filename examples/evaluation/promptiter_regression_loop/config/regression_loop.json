@@ -1,9 +1,9 @@
 {
-	"trainEvalSetPath": "data/promptiter-regression-app/train.evalset.json",
-	"validationEvalSetPath": "data/promptiter-regression-app/validation.evalset.json",
-	"metricsPath": "data/promptiter-regression-app/metrics.json",
-	"baselinePromptPath": "data/promptiter-regression-app/baseline_prompt.txt",
-	"promptiterConfigPath": "data/promptiter-regression-app/promptiter.json",
+	"trainEvalSetPath": "../data/promptiter-regression-app/train.evalset.json",
+	"validationEvalSetPath": "../data/promptiter-regression-app/validation.evalset.json",
+	"metricsPath": "../data/promptiter-regression-app/metrics.json",
+	"baselinePromptPath": "../data/promptiter-regression-app/baseline_prompt.txt",
+	"promptiterConfigPath": "../data/promptiter-regression-app/promptiter.json",
 	"seed": 12345,
 	"mode": "fake",
 	"gate": {

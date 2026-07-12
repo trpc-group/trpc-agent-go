@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	tracepkg "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/engine"
 )
@@ -276,4 +277,156 @@ func TestSeverityFromCategory(t *testing.T) {
 	assert.Equal(t, "P1", string(severityFromCategory(AttributionFormatError)))
 	assert.Equal(t, "P2", string(severityFromCategory(AttributionKnowledgeRecallGap)))
 	assert.Equal(t, "P3", string(severityFromCategory(AttributionResponseMismatch)))
+}
+
+func TestExtractInvocationEvidenceWithTrace(t *testing.T) {
+	caseResult := &engine.CaseResult{
+		EvalSetID:  "test_set",
+		EvalCaseID: "case_with_trace",
+		Trace: &tracepkg.Trace{
+			Steps: []tracepkg.Step{
+				{
+					Output: &tracepkg.Snapshot{
+						Text: `{"tool_calls": [{"name": "search", "arguments": {"query": "tRPC"}}]}`,
+					},
+				},
+			},
+		},
+	}
+	metric := engine.MetricResult{
+		MetricName: "tool_call_metric",
+		Score:      0.0,
+		Status:     status.EvalStatusFailed,
+		Reason:     "expected tool call with different arguments",
+	}
+
+	evidence := extractInvocationEvidence(*caseResult, metric)
+	assert.True(t, evidence.ToolCallPresent)
+	assert.Equal(t, "search", evidence.ActualToolName)
+	assert.NotNil(t, evidence.ActualArguments)
+	assert.Equal(t, "tRPC", evidence.ActualArguments["query"])
+	assert.True(t, evidence.ExpectedToolCall)
+}
+
+func TestExtractInvocationEvidenceOpenAIToolCall(t *testing.T) {
+	caseResult := &engine.CaseResult{
+		EvalSetID:  "test_set",
+		EvalCaseID: "case_openai_tool_call",
+		Trace: &tracepkg.Trace{
+			Steps: []tracepkg.Step{
+				{
+					Output: &tracepkg.Snapshot{
+						Text: `{"tool_calls": [{"function": {"name": "get_weather", "arguments": {"city": "Beijing"}}}]}`,
+					},
+				},
+			},
+		},
+	}
+	metric := engine.MetricResult{
+		MetricName: "tool_call_metric",
+		Score:      0.0,
+		Status:     status.EvalStatusFailed,
+		Reason:     "",
+	}
+
+	evidence := extractInvocationEvidence(*caseResult, metric)
+	assert.True(t, evidence.ToolCallPresent)
+	assert.Equal(t, "get_weather", evidence.ActualToolName)
+	assert.Equal(t, "Beijing", evidence.ActualArguments["city"])
+	assert.False(t, evidence.ExpectedToolCall)
+}
+
+func TestExtractInvocationEvidenceExpectedTool(t *testing.T) {
+	caseResult := &engine.CaseResult{
+		EvalSetID:  "test_set",
+		EvalCaseID: "case_expected_tool",
+	}
+	metric := engine.MetricResult{
+		MetricName: "tool_call_metric",
+		Score:      0.0,
+		Status:     status.EvalStatusFailed,
+		Reason:     "expected tool call 'search', but no tool was called",
+	}
+
+	evidence := extractInvocationEvidence(*caseResult, metric)
+	assert.False(t, evidence.ToolCallPresent)
+	assert.True(t, evidence.ExpectedToolCall)
+	assert.Equal(t, "search", evidence.ExpectedToolName)
+}
+
+func TestExtractInvocationEvidenceNoToolCall(t *testing.T) {
+	caseResult := &engine.CaseResult{
+		EvalSetID:  "test_set",
+		EvalCaseID: "case_no_tool_call",
+	}
+	metric := engine.MetricResult{
+		MetricName: "final_response",
+		Score:      0.0,
+		Status:     status.EvalStatusFailed,
+		Reason:     "response mismatch",
+	}
+
+	evidence := extractInvocationEvidence(*caseResult, metric)
+	assert.False(t, evidence.ToolCallPresent)
+	assert.False(t, evidence.ExpectedToolCall)
+}
+
+func TestParseToolCallsFromText(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected []string
+	}{
+		{
+			name:     "standard tool_calls format",
+			input:    `{"tool_calls": [{"name": "search", "arguments": {"q": "test"}}]}`,
+			expected: []string{"search"},
+		},
+		{
+			name:     "OpenAI format",
+			input:    `{"tool_calls": [{"function": {"name": "get_info", "arguments": {"id": 1}}}]}`,
+			expected: []string{"get_info"},
+		},
+		{
+			name:     "single tool call",
+			input:    `{"name": "calc", "arguments": {"expr": "1+1"}}`,
+			expected: []string{"calc"},
+		},
+		{
+			name:     "invalid JSON",
+			input:    `not valid json`,
+			expected: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			calls := parseToolCallsFromText(tt.input)
+			var names []string
+			for _, c := range calls {
+				names = append(names, c.Name)
+			}
+			assert.Equal(t, tt.expected, names)
+		})
+	}
+}
+
+func TestExtractExpectedToolName(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"expected tool 'search'", "search"},
+		{"should call weather_api", "weather_api"},
+		{"missing tool calculator", "calculator"},
+		{"expected to call get_data", "get_data"},
+		{"some other error", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			result := extractExpectedToolName(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
 }

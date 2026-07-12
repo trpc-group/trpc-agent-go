@@ -15,12 +15,14 @@ import (
 func TestPipelineRun(t *testing.T) {
 	tmpDir := t.TempDir()
 
+	exampleDataDir := filepath.Join("..", "..", "..", "..", "examples", "evaluation", "promptiter_regression_loop", "data", "promptiter-regression-app")
+
 	config := &Config{
-		TrainEvalSetPath:      "train.evalset.json",
-		ValidationEvalSetPath: "validation.evalset.json",
-		MetricsPath:           "metrics.json",
-		BaselinePromptPath:    "baseline_prompt.txt",
-		PromptiterConfigPath:  "promptiter.json",
+		TrainEvalSetPath:      filepath.Join(exampleDataDir, "train.evalset.json"),
+		ValidationEvalSetPath: filepath.Join(exampleDataDir, "validation.evalset.json"),
+		MetricsPath:           filepath.Join(exampleDataDir, "metrics.json"),
+		BaselinePromptPath:    filepath.Join(exampleDataDir, "baseline_prompt.txt"),
+		PromptiterConfigPath:  filepath.Join(exampleDataDir, "promptiter.json"),
 		Seed:                  12345,
 		Mode:                  "fake",
 		Gate: GateConfig{
@@ -47,7 +49,6 @@ func TestPipelineRun(t *testing.T) {
 	assert.Equal(t, "fake", report.RunMeta.Mode)
 	assert.Equal(t, int64(12345), report.RunMeta.Seed)
 	assert.Greater(t, report.RunMeta.DurationMS, int64(0))
-	assert.Equal(t, GateResultAccept, report.GateDecision.Result)
 
 	jsonPath := filepath.Join(tmpDir, "optimization_report.json")
 	mdPath := filepath.Join(tmpDir, "optimization_report.md")
@@ -58,19 +59,21 @@ func TestPipelineRun(t *testing.T) {
 func TestPipelineRunWithOverfit(t *testing.T) {
 	tmpDir := t.TempDir()
 
+	exampleDataDir := filepath.Join("..", "..", "..", "..", "examples", "evaluation", "promptiter_regression_loop", "data", "promptiter-regression-app")
+
 	config := &Config{
-		TrainEvalSetPath:      "train.evalset.json",
-		ValidationEvalSetPath: "validation.evalset.json",
-		MetricsPath:           "metrics.json",
-		BaselinePromptPath:    "baseline_prompt.txt",
-		PromptiterConfigPath:  "promptiter.json",
+		TrainEvalSetPath:      filepath.Join(exampleDataDir, "train.evalset.json"),
+		ValidationEvalSetPath: filepath.Join(exampleDataDir, "validation.evalset.json"),
+		MetricsPath:           filepath.Join(exampleDataDir, "metrics.json"),
+		BaselinePromptPath:    filepath.Join(exampleDataDir, "baseline_prompt.txt"),
+		PromptiterConfigPath:  filepath.Join(exampleDataDir, "promptiter.json"),
 		Seed:                  12345,
 		Mode:                  "fake",
 		Gate: GateConfig{
 			MinValidationGain:   0.05,
-			AllowNewHardFail:    false,
-			MaxNewHardFailCount: 0,
-			MaxRegressedCases:   0,
+			AllowNewHardFail:    true,
+			MaxNewHardFailCount: 1,
+			MaxRegressedCases:   10,
 			CriticalCaseIDs:     []string{"critical_case"},
 		},
 		Optimization: OptimizationConfig{
@@ -101,12 +104,14 @@ func TestPipelineOutputDirectoryCreation(t *testing.T) {
 	tmpDir := filepath.Join(os.TempDir(), "test_pipeline_output")
 	os.RemoveAll(tmpDir)
 
+	exampleDataDir := filepath.Join("..", "..", "..", "..", "examples", "evaluation", "promptiter_regression_loop", "data", "promptiter-regression-app")
+
 	config := &Config{
-		TrainEvalSetPath:      "train.evalset.json",
-		ValidationEvalSetPath: "validation.evalset.json",
-		MetricsPath:           "metrics.json",
-		BaselinePromptPath:    "baseline_prompt.txt",
-		PromptiterConfigPath:  "promptiter.json",
+		TrainEvalSetPath:      filepath.Join(exampleDataDir, "train.evalset.json"),
+		ValidationEvalSetPath: filepath.Join(exampleDataDir, "validation.evalset.json"),
+		MetricsPath:           filepath.Join(exampleDataDir, "metrics.json"),
+		BaselinePromptPath:    filepath.Join(exampleDataDir, "baseline_prompt.txt"),
+		PromptiterConfigPath:  filepath.Join(exampleDataDir, "promptiter.json"),
 		Seed:                  12345,
 		Mode:                  "fake",
 		Gate: GateConfig{

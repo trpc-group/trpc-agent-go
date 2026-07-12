@@ -4,6 +4,7 @@
 package regressionloop
 
 import (
+	"encoding/json"
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
@@ -75,10 +76,104 @@ func classifyFailure(caseResult engine.CaseResult, metric engine.MetricResult, r
 }
 
 func extractInvocationEvidence(caseResult engine.CaseResult, metric engine.MetricResult) *InvocationEvidence {
-	return &InvocationEvidence{
+	evidence := &InvocationEvidence{
 		ToolCallPresent:  false,
 		ExpectedToolCall: false,
 	}
+
+	if caseResult.Trace != nil {
+		for _, step := range caseResult.Trace.Steps {
+			if step.Output != nil && step.Output.Text != "" {
+				toolCalls := parseToolCallsFromText(step.Output.Text)
+				if len(toolCalls) > 0 {
+					evidence.ToolCallPresent = true
+					if evidence.ActualToolName == "" {
+						evidence.ActualToolName = toolCalls[0].Name
+					}
+					if evidence.ActualArguments == nil {
+						evidence.ActualArguments = toolCalls[0].Args
+					}
+				}
+			}
+		}
+	}
+
+	if strings.Contains(strings.ToLower(metric.Reason), "expected tool") ||
+		strings.Contains(strings.ToLower(metric.Reason), "should call") ||
+		strings.Contains(strings.ToLower(metric.Reason), "missing tool") ||
+		strings.Contains(strings.ToLower(metric.Reason), "expected to call") {
+		evidence.ExpectedToolCall = true
+		if evidence.ExpectedToolName == "" {
+			evidence.ExpectedToolName = extractExpectedToolName(metric.Reason)
+		}
+	}
+
+	return evidence
+}
+
+type parsedToolCall struct {
+	Name string                 `json:"name"`
+	Args map[string]interface{} `json:"arguments"`
+}
+
+func parseToolCallsFromText(text string) []parsedToolCall {
+	var toolCallWrapper struct {
+		ToolCalls []parsedToolCall `json:"tool_calls"`
+	}
+	if err := json.Unmarshal([]byte(text), &toolCallWrapper); err == nil && len(toolCallWrapper.ToolCalls) > 0 && toolCallWrapper.ToolCalls[0].Name != "" {
+		return toolCallWrapper.ToolCalls
+	}
+
+	var openAIToolCalls struct {
+		ToolCalls []struct {
+			Function struct {
+				Name      string          `json:"name"`
+				Arguments json.RawMessage `json:"arguments"`
+			} `json:"function"`
+		} `json:"tool_calls"`
+	}
+	if err := json.Unmarshal([]byte(text), &openAIToolCalls); err == nil && len(openAIToolCalls.ToolCalls) > 0 && openAIToolCalls.ToolCalls[0].Function.Name != "" {
+		var calls []parsedToolCall
+		for _, tc := range openAIToolCalls.ToolCalls {
+			parsedArgs := make(map[string]interface{})
+			if tc.Function.Arguments != nil {
+				if err := json.Unmarshal(tc.Function.Arguments, &parsedArgs); err != nil {
+					var argsStr string
+					if err := json.Unmarshal(tc.Function.Arguments, &argsStr); err == nil {
+						parsedArgs = map[string]interface{}{"raw": argsStr}
+					}
+				}
+			}
+			calls = append(calls, parsedToolCall{Name: tc.Function.Name, Args: parsedArgs})
+		}
+		return calls
+	}
+
+	var singleToolCall struct {
+		Name      string                 `json:"name"`
+		Arguments map[string]interface{} `json:"arguments"`
+	}
+	if err := json.Unmarshal([]byte(text), &singleToolCall); err == nil && singleToolCall.Name != "" {
+		return []parsedToolCall{{Name: singleToolCall.Name, Args: singleToolCall.Arguments}}
+	}
+
+	return nil
+}
+
+func extractExpectedToolName(reason string) string {
+	patterns := []string{"expected tool call ", "expected tool ", "should call ", "missing tool ", "expected to call "}
+	for _, pattern := range patterns {
+		idx := strings.Index(strings.ToLower(reason), strings.ToLower(pattern))
+		if idx != -1 {
+			name := strings.TrimSpace(reason[idx+len(pattern):])
+			if endIdx := strings.IndexAny(name, ",."); endIdx != -1 {
+				name = name[:endIdx]
+			}
+			name = strings.Trim(name, "'\"")
+			return name
+		}
+	}
+	return ""
 }
 
 func severityFromCategory(category AttributionCategory) promptiter.LossSeverity {
