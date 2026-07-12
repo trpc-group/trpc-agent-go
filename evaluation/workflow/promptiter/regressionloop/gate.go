@@ -7,27 +7,40 @@ import (
 	"fmt"
 )
 
-func EvaluateGate(config GateConfig, baselineScore, candidateScore float64, deltas []CaseDelta) GateDecision {
+func EvaluateGate(config GateConfig, baselineValScore, candidateValScore, baselineTrainScore, candidateTrainScore float64, deltas []CaseDelta, totalCost float64, totalCalls int, totalLatencyMS int64) GateDecision {
 	ruleResults := []GateRuleResult{}
 	rejectionReasons := []string{}
 	acceptanceReasons := []string{}
 
-	scoreDelta := candidateScore - baselineScore
+	valScoreDelta := candidateValScore - baselineValScore
+	trainScoreDelta := candidateTrainScore - baselineTrainScore
 
 	if config.MinValidationGain > 0 {
-		passed, reason := checkValidationGainThreshold(scoreDelta, config.MinValidationGain)
+		passed, reason := checkValidationGainThreshold(valScoreDelta, config.MinValidationGain)
 		ruleResults = append(ruleResults, GateRuleResult{
 			RuleType:    GateRuleValidationGainThreshold,
 			Passed:      passed,
 			Reason:      reason,
 			Threshold:   config.MinValidationGain,
-			ActualValue: scoreDelta,
+			ActualValue: valScoreDelta,
 		})
 		if !passed {
 			rejectionReasons = append(rejectionReasons, reason)
 		} else {
 			acceptanceReasons = append(acceptanceReasons, reason)
 		}
+	}
+
+	passed, reason := checkOverfitDetection(trainScoreDelta, valScoreDelta)
+	ruleResults = append(ruleResults, GateRuleResult{
+		RuleType:    GateRuleOverfitDetection,
+		Passed:      passed,
+		Reason:      reason,
+		Threshold:   0,
+		ActualValue: valScoreDelta - trainScoreDelta,
+	})
+	if !passed {
+		rejectionReasons = append(rejectionReasons, reason)
 	}
 
 	if !config.AllowNewHardFail {
@@ -90,6 +103,48 @@ func EvaluateGate(config GateConfig, baselineScore, candidateScore float64, delt
 		}
 	}
 
+	if config.MaxCost > 0 && totalCost > 0 {
+		passed, reason := checkCostBudget(totalCost, config.MaxCost)
+		ruleResults = append(ruleResults, GateRuleResult{
+			RuleType:    GateRuleCostValidation,
+			Passed:      passed,
+			Reason:      reason,
+			Threshold:   config.MaxCost,
+			ActualValue: totalCost,
+		})
+		if !passed {
+			rejectionReasons = append(rejectionReasons, reason)
+		}
+	}
+
+	if config.MaxCalls > 0 && totalCalls > 0 {
+		passed, reason := checkCallsBudget(totalCalls, config.MaxCalls)
+		ruleResults = append(ruleResults, GateRuleResult{
+			RuleType:    GateRuleCallsBudget,
+			Passed:      passed,
+			Reason:      reason,
+			Threshold:   float64(config.MaxCalls),
+			ActualValue: float64(totalCalls),
+		})
+		if !passed {
+			rejectionReasons = append(rejectionReasons, reason)
+		}
+	}
+
+	if config.MaxLatencyMS > 0 && totalLatencyMS > 0 {
+		passed, reason := checkLatencyBudget(totalLatencyMS, int64(config.MaxLatencyMS))
+		ruleResults = append(ruleResults, GateRuleResult{
+			RuleType:    GateRuleLatencyBudget,
+			Passed:      passed,
+			Reason:      reason,
+			Threshold:   float64(config.MaxLatencyMS),
+			ActualValue: float64(totalLatencyMS),
+		})
+		if !passed {
+			rejectionReasons = append(rejectionReasons, reason)
+		}
+	}
+
 	result := GateResultAccept
 	if len(rejectionReasons) > 0 {
 		result = GateResultReject
@@ -101,9 +156,9 @@ func EvaluateGate(config GateConfig, baselineScore, candidateScore float64, delt
 		RuleResults:       ruleResults,
 		RejectionReasons:  rejectionReasons,
 		AcceptanceReasons: acceptanceReasons,
-		ScoreDelta:        scoreDelta,
-		BaselineScore:     baselineScore,
-		CandidateScore:    candidateScore,
+		ScoreDelta:        valScoreDelta,
+		BaselineScore:     baselineValScore,
+		CandidateScore:    candidateValScore,
 	}
 }
 
@@ -189,15 +244,49 @@ func EvaluateEngineGate(policy AcceptancePolicy, baselineScore, candidateScore f
 	}
 
 	return GateDecision{
-		Result:           result,
-		Stage:            "engine_gate",
-		RuleResults:      []GateRuleResult{{RuleType: GateRuleValidationGainThreshold, Passed: accepted, Reason: reason, Threshold: policy.MinScoreGain, ActualValue: scoreDelta}},
-		ScoreDelta:       scoreDelta,
-		BaselineScore:    baselineScore,
-		CandidateScore:   candidateScore,
+		Result:         result,
+		Stage:          "engine_gate",
+		RuleResults:    []GateRuleResult{{RuleType: GateRuleValidationGainThreshold, Passed: accepted, Reason: reason, Threshold: policy.MinScoreGain, ActualValue: scoreDelta}},
+		ScoreDelta:     scoreDelta,
+		BaselineScore:  baselineScore,
+		CandidateScore: candidateScore,
 	}
 }
 
 type AcceptancePolicy struct {
 	MinScoreGain float64
+}
+
+func checkOverfitDetection(trainDelta, valDelta float64) (bool, string) {
+	if trainDelta > 0.05 && valDelta < -0.02 {
+		return false, fmt.Sprintf("overfit detected: train improved %.4f but validation degraded %.4f", trainDelta, valDelta)
+	}
+	if trainDelta > 0.1 && valDelta < 0.01 {
+		return false, fmt.Sprintf("overfit detected: train improved %.4f but validation barely improved %.4f", trainDelta, valDelta)
+	}
+	if trainDelta > valDelta*2 && valDelta < 0.05 {
+		return false, fmt.Sprintf("overfit detected: train improvement %.4f is %.1fx validation improvement %.4f", trainDelta, trainDelta/valDelta, valDelta)
+	}
+	return true, fmt.Sprintf("no overfit: train improved %.4f, validation improved %.4f", trainDelta, valDelta)
+}
+
+func checkCostBudget(totalCost, maxCost float64) (bool, string) {
+	if totalCost <= maxCost {
+		return true, fmt.Sprintf("cost %.2f within budget %.2f", totalCost, maxCost)
+	}
+	return false, fmt.Sprintf("cost %.2f exceeds budget %.2f", totalCost, maxCost)
+}
+
+func checkCallsBudget(totalCalls, maxCalls int) (bool, string) {
+	if totalCalls <= maxCalls {
+		return true, fmt.Sprintf("calls %d within budget %d", totalCalls, maxCalls)
+	}
+	return false, fmt.Sprintf("calls %d exceeds budget %d", totalCalls, maxCalls)
+}
+
+func checkLatencyBudget(totalLatencyMS, maxLatencyMS int64) (bool, string) {
+	if totalLatencyMS <= maxLatencyMS {
+		return true, fmt.Sprintf("latency %dms within budget %dms", totalLatencyMS, maxLatencyMS)
+	}
+	return false, fmt.Sprintf("latency %dms exceeds budget %dms", totalLatencyMS, maxLatencyMS)
 }

@@ -5,24 +5,45 @@
 	"cases": [
 		{
 			"evalCaseId": "train_01_simple",
-			"name": "Simple Task",
+			"name": "Simple Task - Optimizable",
 			"input": "What is the capital of France?",
 			"expectedOutput": "Paris",
 			"metrics": ["final_response", "format_validator"]
 		},
 		{
 			"evalCaseId": "train_02_tool_call",
-			"name": "Tool Call Task",
+			"name": "Tool Call Task - Optimizable",
 			"input": "Search for information about tRPC",
 			"expectedOutput": "tRPC is a high-performance RPC framework",
 			"metrics": ["tool_call_metric", "final_response"]
 		},
 		{
 			"evalCaseId": "train_03_knowledge",
-			"name": "Knowledge Recall Task",
+			"name": "Knowledge Recall Task - Overfit Risk",
 			"input": "What is the meaning of 'regression' in machine learning?",
 			"expectedOutput": "Regression is a supervised learning task for predicting continuous values",
 			"metrics": ["knowledge_recall_score", "final_response"]
+		},
+		{
+			"evalCaseId": "train_04_format_strict",
+			"name": "Strict Format Task - Hard",
+			"input": "Return JSON with fields 'id' (number) and 'name' (string)",
+			"expectedOutput": "{\"id\": 1, \"name\": \"test\"}",
+			"metrics": ["format_validator", "final_response"]
+		},
+		{
+			"evalCaseId": "train_05_router",
+			"name": "Router Task - Variable",
+			"input": "Route to the weather handler",
+			"expectedOutput": "Weather handler selected",
+			"metrics": ["router_metric", "final_response"]
+		},
+		{
+			"evalCaseId": "train_06_complex_query",
+			"name": "Complex Query - High Variance",
+			"input": "Analyze the impact of AI on software development productivity",
+			"expectedOutput": "AI significantly improves development efficiency through automation and assistance",
+			"metrics": ["final_response", "knowledge_recall_score"]
 		}
 	]
 }

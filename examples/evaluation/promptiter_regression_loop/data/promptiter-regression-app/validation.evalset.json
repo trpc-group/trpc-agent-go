@@ -1,28 +1,49 @@
 {
 	"evalSetId": "validation_set",
 	"name": "Validation Evaluation Set",
-	"description": "Validation evaluation cases for regression loop",
+	"description": "Validation evaluation cases for regression loop - includes optimizable, ineffective, and overfit-risk cases",
 	"cases": [
 		{
-			"evalCaseId": "val_01_format",
-			"name": "Format Validation",
+			"evalCaseId": "val_01_format_optimizable",
+			"name": "Format Validation - Optimizable",
 			"input": "Return a JSON object with 'name' and 'value' fields",
 			"expectedOutput": "{\"name\": \"test\", \"value\": 42}",
 			"metrics": ["format_validator", "final_response"]
 		},
 		{
-			"evalCaseId": "val_02_protected_format",
-			"name": "Protected Format Task",
+			"evalCaseId": "val_02_protected_critical",
+			"name": "Protected Critical Case - Must Not Regress",
 			"input": "Format the number 1234 as currency",
 			"expectedOutput": "$1,234.00",
 			"metrics": ["format_validator", "final_response"]
 		},
 		{
-			"evalCaseId": "val_03_router",
-			"name": "Router Validation",
+			"evalCaseId": "val_03_router_ineffective",
+			"name": "Router Task - Optimization Ineffective",
 			"input": "Route this request to the appropriate handler",
 			"expectedOutput": "Request routed successfully",
 			"metrics": ["router_metric", "final_response"]
+		},
+		{
+			"evalCaseId": "val_04_overfit_risk",
+			"name": "Overfit Risk Case - Training Specific",
+			"input": "Answer with exactly three words",
+			"expectedOutput": "Three word answer",
+			"metrics": ["final_response", "format_validator"]
+		},
+		{
+			"evalCaseId": "val_05_knowledge_general",
+			"name": "General Knowledge - Transfer Test",
+			"input": "What is the boiling point of water at sea level?",
+			"expectedOutput": "100 degrees Celsius",
+			"metrics": ["knowledge_recall_score", "final_response"]
+		},
+		{
+			"evalCaseId": "val_06_complex_reasoning",
+			"name": "Complex Reasoning - Hard",
+			"input": "If a train travels 100 km in 2 hours, what is its average speed?",
+			"expectedOutput": "50 km/h",
+			"metrics": ["final_response"]
 		}
 	]
 }

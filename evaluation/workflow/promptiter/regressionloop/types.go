@@ -42,6 +42,8 @@ const (
 	GateRuleResourceBudget              GateRuleType = "resource_budget"
 	GateRuleCostValidation              GateRuleType = "cost_validation"
 	GateRuleLatencyBudget               GateRuleType = "latency_budget"
+	GateRuleOverfitDetection            GateRuleType = "overfit_detection"
+	GateRuleCallsBudget                 GateRuleType = "calls_budget"
 )
 
 type GateResultType string

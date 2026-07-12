@@ -399,7 +399,17 @@ func (p *Pipeline) generateImprovedEvaluationResult(baseline *engine.EvaluationR
 
 func (p *Pipeline) S5DeltaAndGate(ctx *PipelineContext) error {
 	ctx.CaseDeltas = ComputeDeltas(ctx.BaselineVal, ctx.CandidateVal)
-	decision := EvaluateGate(p.config.Gate, ctx.BaselineVal.OverallScore, ctx.CandidateVal.OverallScore, ctx.CaseDeltas)
+	decision := EvaluateGate(
+		p.config.Gate,
+		ctx.BaselineVal.OverallScore,
+		ctx.CandidateVal.OverallScore,
+		ctx.BaselineTrain.OverallScore,
+		ctx.CandidateTrain.OverallScore,
+		ctx.CaseDeltas,
+		ctx.TotalCost,
+		ctx.TotalCalls,
+		ctx.TotalLatencyMS,
+	)
 	ctx.GateDecision = &decision
 	return nil
 }

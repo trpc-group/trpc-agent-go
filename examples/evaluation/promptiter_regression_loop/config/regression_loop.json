@@ -10,12 +10,12 @@
 		"minValidationGain": 0.05,
 		"allowNewHardFail": false,
 		"maxNewHardFailCount": 0,
-		"maxRegressedCases": 10,
-		"protectedCaseIds": [],
-		"criticalCaseIds": ["val_02_protected_format"],
-		"maxCost": 100.0,
-		"maxCalls": 1000,
-		"maxLatencyMs": 180000
+		"maxRegressedCases": 3,
+		"protectedCaseIds": ["val_02_protected_critical"],
+		"criticalCaseIds": ["val_02_protected_critical", "val_05_knowledge_general"],
+		"maxCost": 20.0,
+		"maxCalls": 50,
+		"maxLatencyMs": 10000
 	},
 	"optimization": {
 		"maxRounds": 3,
