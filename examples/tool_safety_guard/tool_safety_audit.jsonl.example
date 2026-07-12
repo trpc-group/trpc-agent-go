@@ -1,0 +1,3 @@
+{"timestamp":"2026-07-13T03:24:00Z","tool_name":"workspace_exec","decision":"allow","risk_level":"low","rule_id":"ALLOW_POLICY","backend":"workspaceexec","duration_micros":40,"redacted":false,"blocked":false}
+{"timestamp":"2026-07-13T03:24:00Z","tool_name":"host_exec","decision":"deny","risk_level":"critical","rule_id":"DENIED_COMMAND","backend":"hostexec","duration_micros":25,"redacted":false,"blocked":true}
+{"timestamp":"2026-07-13T03:24:00Z","tool_name":"workspace_exec","decision":"deny","risk_level":"critical","rule_id":"NETWORK_NOT_ALLOWLISTED","backend":"workspaceexec","duration_micros":31,"redacted":false,"blocked":true}

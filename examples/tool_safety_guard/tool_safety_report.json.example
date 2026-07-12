@@ -1,0 +1,48 @@
+{
+  "generated_at": "2026-07-13T03:24:00Z",
+  "policy": "tool_safety_policy.json",
+  "samples": 12,
+  "matched_expected": 12,
+  "results": [
+    {
+      "tool_name": "workspace_exec",
+      "command": "go test ./...",
+      "backend": "workspaceexec",
+      "decision": "allow",
+      "risk_level": "low",
+      "rule_id": "ALLOW_POLICY",
+      "evidence": "command satisfies configured policy",
+      "recommendation": "execute only in the configured sandbox",
+      "blocked": false,
+      "redacted": false,
+      "duration_micros": 40,
+      "findings": [],
+      "span_attributes": {
+        "tool.safety.backend": "workspaceexec",
+        "tool.safety.decision": "allow",
+        "tool.safety.risk_level": "low",
+        "tool.safety.rule_id": "ALLOW_POLICY"
+      }
+    },
+    {
+      "tool_name": "host_exec",
+      "command": "rm -rf /tmp/project",
+      "backend": "hostexec",
+      "decision": "deny",
+      "risk_level": "critical",
+      "rule_id": "DENIED_COMMAND",
+      "evidence": "rm",
+      "recommendation": "remove the denied command",
+      "blocked": true,
+      "redacted": false,
+      "duration_micros": 25,
+      "findings": [{"decision":"deny","risk_level":"critical","rule_id":"DENIED_COMMAND","evidence":"rm","recommendation":"remove the denied command"}],
+      "span_attributes": {
+        "tool.safety.backend": "hostexec",
+        "tool.safety.decision": "deny",
+        "tool.safety.risk_level": "critical",
+        "tool.safety.rule_id": "DENIED_COMMAND"
+      }
+    }
+  ]
+}
