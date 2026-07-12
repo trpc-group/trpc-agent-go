@@ -77,6 +77,14 @@ func TestSearchV2Response_UnmarshalWrapped(t *testing.T) {
 	require.Len(t, resp.Memories, 1)
 }
 
+func TestSearchV2Response_UnmarshalOSSResults(t *testing.T) {
+	var resp searchV2Response
+	require.NoError(t, resp.UnmarshalJSON([]byte(`{"results":[{"id":"a","memory":"m","score":0.5}]}`)))
+	require.Len(t, resp.Memories, 1)
+	assert.Equal(t, "a", resp.Memories[0].ID)
+	assert.Equal(t, "m", resp.Memories[0].Memory)
+}
+
 func TestSearchV2Response_UnmarshalInvalid(t *testing.T) {
 	var resp searchV2Response
 	assert.Error(t, resp.UnmarshalJSON([]byte(`not-json`)))

@@ -1174,7 +1174,10 @@ OpenAI SDK 自动重试以下错误：
 - **500+ Server Errors**：服务器内部错误（5xx）
 - **网络连接错误**：无响应或连接失败
 
-**注意**：SDK 默认最大重试次数为 2 次。
+**注意**：SDK 默认最大重试次数为 2 次。这表示初始请求失败后最多再重试
+2 次，因此一次调用默认最多会发起 3 次 HTTP 请求。`openaiopt.WithMaxRetries(n)`
+中的 `n` 指重试次数，不是总请求次数；设置为 `0` 可关闭 SDK 自动重试，
+只发送初始请求。
 
 ##### 重试策略
 
@@ -1214,6 +1217,18 @@ llm := openai.New("gpt-4o-mini",
 )
 ```
 
+**关闭重试**：
+
+```go
+// 需要完全关闭 SDK 自动重试的场景
+llm := openai.New("gpt-4o-mini",
+    openai.WithOpenAIOptions(
+        openaiopt.WithMaxRetries(0),  // 不重试，只发起一次请求
+        openaiopt.WithRequestTimeout(10*time.Second),
+    ),
+)
+```
+
 ##### 工作原理
 
 重试机制的执行流程：
@@ -1246,6 +1261,7 @@ llm := openai.New("gpt-4o-mini",
 - **无框架重试**：框架本身不实现重试逻辑
 - **客户端级重试**：所有重试由 OpenAI 客户端处理
 - **配置透传**：使用 `WithOpenAIOptions` 配置重试行为
+- **关闭重试**：设置 `openaiopt.WithMaxRetries(0)` 可关闭 SDK 自动重试
 - **自动处理**：速率限制（429）自动处理，无需额外代码
 
 ##### 使用示例

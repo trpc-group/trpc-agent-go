@@ -2370,6 +2370,88 @@ func TestWorker_ApplyUpdates_AllowsEvolutionSkill(t *testing.T) {
 	pub.mu.Unlock()
 }
 
+func TestWorker_ApplyDeletions_SkipsNonEvolutionSkill(t *testing.T) {
+	root := t.TempDir()
+	managedDir := filepath.Join(root, "skills", "evolution")
+	pub := &mockPublisher{}
+	repo := &mockSkillRepo{
+		summaries: []skill.Summary{
+			{Name: "User Skill", Description: "user-authored skill"},
+		},
+		bodies: map[string]string{"User Skill": "body"},
+		paths: map[string]string{
+			"User Skill": filepath.Join(root, "skills", "local", "user-skill"),
+		},
+	}
+	rev := &mockReviewer{
+		decision: &ReviewDecision{
+			Deletions: []string{"User Skill"},
+		},
+	}
+	w := newWorker(workerConfig{
+		Reviewer:         rev,
+		Publisher:        pub,
+		ReviewPolicy:     alwaysReviewPolicy{},
+		SkillRepo:        repo,
+		ManagedSkillsDir: managedDir,
+	})
+
+	sess := newTestSession()
+	addEvents(sess,
+		model.Message{Role: model.RoleUser, Content: "delete user skill"},
+		model.Message{Role: model.RoleAssistant, Content: "ok"},
+	)
+	w.processJob(&pendingJob{ctx: context.Background(), job: LearningJob{Session: sess}})
+
+	pub.mu.Lock()
+	assert.Empty(t, pub.deletions, "delete to user-authored skill should be skipped")
+	pub.mu.Unlock()
+	repo.mu.Lock()
+	assert.Equal(t, 0, repo.refreshed, "repo should not refresh when deletion was skipped")
+	repo.mu.Unlock()
+}
+
+func TestWorker_ApplyDeletions_AllowsEvolutionSkill(t *testing.T) {
+	root := t.TempDir()
+	managedDir := filepath.Join(root, "skills", "evolution")
+	pub := &mockPublisher{}
+	repo := &mockSkillRepo{
+		summaries: []skill.Summary{
+			{Name: "Learned Analysis", Description: "evolution skill"},
+		},
+		bodies: map[string]string{"Learned Analysis": "body"},
+		paths: map[string]string{
+			"Learned Analysis": filepath.Join(managedDir, "learned-analysis"),
+		},
+	}
+	rev := &mockReviewer{
+		decision: &ReviewDecision{
+			Deletions: []string{"Learned Analysis"},
+		},
+	}
+	w := newWorker(workerConfig{
+		Reviewer:         rev,
+		Publisher:        pub,
+		ReviewPolicy:     alwaysReviewPolicy{},
+		SkillRepo:        repo,
+		ManagedSkillsDir: managedDir,
+	})
+
+	sess := newTestSession()
+	addEvents(sess,
+		model.Message{Role: model.RoleUser, Content: "delete learned skill"},
+		model.Message{Role: model.RoleAssistant, Content: "ok"},
+	)
+	w.processJob(&pendingJob{ctx: context.Background(), job: LearningJob{Session: sess}})
+
+	pub.mu.Lock()
+	require.Equal(t, []string{"Learned Analysis"}, pub.deletions, "delete to evolution skill should be allowed")
+	pub.mu.Unlock()
+	repo.mu.Lock()
+	assert.Equal(t, 1, repo.refreshed)
+	repo.mu.Unlock()
+}
+
 func TestWorker_ApplyUpdates_NoIsolationWhenManagedDirEmpty(t *testing.T) {
 	pub := &mockPublisher{}
 	repo := &mockSkillRepo{

@@ -382,6 +382,20 @@ func adminRuntimeConfigSectionSpecs() []adminRuntimeConfigSectionSpec {
 					"hunyuan",
 					"glm",
 				),
+				adminRuntimeBoolField(
+					"model.text_only_content",
+					"Text-Only Message Content",
+					"Drop non-text user content parts for text-only providers.",
+					[]adminRuntimeConfigKeyRef{
+						adminRuntimeKey("model"),
+						adminRuntimeKey("text_only_content"),
+					},
+					func(opts runOptions) string {
+						return strconv.FormatBool(
+							opts.OpenAITextOnlyMessageContent,
+						)
+					},
+				),
 			},
 		},
 		{
@@ -392,7 +406,9 @@ func adminRuntimeConfigSectionSpecs() []adminRuntimeConfigSectionSpec {
 				adminRuntimeNumberField(
 					"agent.max_llm_calls",
 					"Max LLM Calls",
-					"Limit LLM calls per invocation; 0 is unlimited.",
+					"Limit agent-facing LLM calls per invocation; "+
+						"auxiliary summary and memory calls are excluded; "+
+						"0 is unlimited.",
 					[]adminRuntimeConfigKeyRef{
 						adminRuntimeKey("agent"),
 						adminRuntimeKey("max_llm_calls"),

@@ -17,6 +17,9 @@ The integration works in two parts:
    `memory_search` and (optionally) `memory_load`. Write tools such as
    `memory_add` / `memory_update` / `memory_delete` are intentionally not
    exposed because mem0 handles the write side natively.
+3. **Optional preload** — When `llmagent.WithPreloadMemory(N)` is enabled,
+   the Runner can use the same mem0 service as a read-only memory source
+   because it implements `memory.Reader`.
 
 ### Architecture
 
@@ -46,17 +49,19 @@ ingest → mem0 extraction → memory retrieval.
 ## Prerequisites
 
 - Go 1.21 or later
-- A valid [mem0 API key](https://app.mem0.ai/)
+- A valid [mem0 API key](https://app.mem0.ai/) for the hosted platform, or a
+  self-hosted Mem0 OSS server
 - A valid OpenAI-compatible API key (for the chat model)
 
 ## Environment Variables
 
 | Variable          | Required | Description                            | Default                 |
 | ----------------- | -------- | -------------------------------------- | ----------------------- |
-| `MEM0_API_KEY`    | Yes      | API key for mem0                       |                         |
+| `MEM0_API_KEY`    | Yes*     | API key for mem0. Optional only when `MEM0_SELF_HOSTED_OSS=true` and the server disables auth | |
 | `OPENAI_API_KEY`  | Yes      | API key for the chat model             |                         |
 | `MEM0_HOST`       | No       | mem0 API base URL                      | `https://api.mem0.ai`   |
 | `MEM0_BASE_URL`   | No       | Alias for `MEM0_HOST`                  |                         |
+| `MEM0_SELF_HOSTED_OSS` | No   | Set to `true` for the self-hosted OSS REST API | `false` |
 | `MEM0_ORG_ID`     | No       | mem0 organization ID                   |                         |
 | `MEM0_PROJECT_ID` | No       | mem0 project ID                        |                         |
 | `OPENAI_BASE_URL` | No       | Base URL for the model API endpoint    | `https://api.openai.com/v1` |
@@ -89,12 +94,46 @@ go run .
 go run . -model gpt-4o-mini
 ```
 
-### Self-hosted mem0
+### Self-hosted Mem0 OSS
 
 ```bash
-export MEM0_HOST="https://your-mem0-instance.example.com"
+export MEM0_SELF_HOSTED_OSS=true
+export MEM0_HOST="http://localhost:8888" # Optional; this is the OSS default.
+# Optional when the OSS server runs with AUTH_DISABLED=true.
+export MEM0_API_KEY="your-oss-api-key"
 go run .
 ```
+
+Self-hosted OSS uses the OSS REST API paths (`/memories`, `/search`) and
+`X-API-Key` authentication. When `MEM0_SELF_HOSTED_OSS=true` and `MEM0_HOST`
+is unset, the adapter defaults to `http://localhost:8888` and refuses to use
+the hosted-platform default host. It does not support hosted-platform
+`MEM0_ORG_ID` / `MEM0_PROJECT_ID` scoping.
+
+The adapter writes the tRPC app name to `metadata.trpc_app_name` because the
+OSS REST API does not have a top-level `app_id`. By default, reads and searches
+only return memories with matching `trpc_app_name` to preserve app isolation.
+Existing OSS memories without that metadata are hidden until they are reingested
+or backfilled. For migrations, opt in with
+`WithSelfHostedOSSIncludeUnscopedMemories()` to also include records with no
+`trpc_app_name`; records tagged for another app remain hidden.
+
+The OSS `GET /memories` endpoint is capped at 1000 user-level results and is
+not pageable in the current server API. It also cannot express
+`metadata.trpc_app_name` as a server-side filter. `ReadMemories` therefore
+requires a positive limit no larger than 1000 and applies app isolation as a
+best-effort local filter over the first 1000 OSS records returned for the user.
+
+When running the official Mem0 OSS server, configure the server-side LLM and
+embedder separately if your deployment uses different endpoints or API keys.
+For example, start the server with `AUTH_DISABLED=true` for local development,
+then call `POST /configure` on the OSS server and set:
+
+- `llm.provider=openai` with the LLM model, base URL, and API key.
+- `embedder.provider=openai` with the embedding model, base URL, and API key.
+
+The Go adapter only talks to the Mem0 REST API. It does not read or write the
+server's internal vector database directly.
 
 ### Expected Output
 
@@ -137,6 +176,7 @@ agent := llmagent.New(
     "assistant",
     llmagent.WithModel(openai.New("deepseek-v4-flash")),
     llmagent.WithTools(mem0Svc.Tools()),
+    llmagent.WithPreloadMemory(10), // Optional read-only preload budget.
 )
 
 // 3. Create the runner with session ingestion enabled.
@@ -155,6 +195,8 @@ Key points:
   (enable with `memorymem0.WithLoadToolEnabled(true)`).
 - `runner.WithSessionIngestor(mem0Svc)` hooks the mem0 service into the
   runner's post-turn lifecycle via the `session.Ingestor` interface.
+- `llmagent.WithPreloadMemory(N)` can preload mem0 memories without configuring
+  `runner.WithMemoryService(...)`; use a positive budget for production.
 - Mem0 performs its own extraction with `infer: true` — no local LLM
   extractor is needed.
 
@@ -190,6 +232,8 @@ The mem0 service accepts the following options:
 | ------------------------- | ---------------------------------------------- | ---------------------- |
 | `WithAPIKey(key)`         | mem0 API key                                   | (required)             |
 | `WithHost(url)`           | mem0 API base URL                              | `https://api.mem0.ai`  |
+| `WithSelfHostedOSS()`    | Use the self-hosted Mem0 OSS REST API          | disabled; host defaults to `http://localhost:8888` when enabled |
+| `WithSelfHostedOSSIncludeUnscopedMemories()` | Include legacy OSS records that lack `metadata.trpc_app_name` | disabled |
 | `WithOrgProject(o, p)`   | Organization and project IDs                   |                        |
 | `WithAsyncMode(bool)`    | Send ingest requests in async mode             | `true`                 |
 | `WithVersion(v)`         | mem0 ingest API version                        | `v2`                   |

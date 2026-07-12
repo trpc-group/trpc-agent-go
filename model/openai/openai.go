@@ -331,6 +331,10 @@ func New(name string, opts ...Option) *Model {
 	if o.TailoringStrategy == nil {
 		o.TailoringStrategy = model.NewMiddleOutStrategy(o.TokenCounter)
 	}
+	variantCfg := variantConfigs[o.Variant]
+	if o.textOnlyMessageContent != nil {
+		variantCfg.textOnlyMessageContent = *o.textOnlyMessageContent
+	}
 
 	return &Model{
 		client:                     client,
@@ -347,7 +351,7 @@ func New(name string, opts ...Option) *Model {
 		chatTelemetry:              o.ChatTelemetry,
 		extraFields:                o.ExtraFields,
 		variant:                    o.Variant,
-		variantConfig:              variantConfigs[o.Variant],
+		variantConfig:              variantCfg,
 		reasoningContentBackfill:   o.ReasoningContentBackfill,
 		batchCompletionWindow:      o.BatchCompletionWindow,
 		batchMetadata:              o.BatchMetadata,
@@ -675,7 +679,7 @@ func (m *Model) effectiveOutputReserveTokens(request *model.Request) int {
 		return reserve
 	}
 	if request.MaxTokens != nil {
-		if mt := model.ClampMaxTokensForModel(m.name, request.MaxTokens); mt != nil && *mt > reserve {
+		if mt := imodel.ClampMaxTokensForModel(m.name, request.MaxTokens); mt != nil && *mt > reserve {
 			reserve = *mt
 		}
 	}
@@ -764,7 +768,7 @@ func (m *Model) buildChatRequest(request *model.Request) (*openai.ChatCompletion
 
 	// MaxTokens is deprecated and not compatible with o-series models.
 	// Use MaxCompletionTokens instead.
-	if mt := model.ClampMaxTokensForModel(m.name, request.MaxTokens); mt != nil {
+	if mt := imodel.ClampMaxTokensForModel(m.name, request.MaxTokens); mt != nil {
 		chatRequest.MaxCompletionTokens = openai.Int(int64(*mt))
 	}
 	if request.Temperature != nil {

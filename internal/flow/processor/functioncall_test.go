@@ -31,6 +31,11 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge"
+	knowledgedoc "trpc.group/trpc-go/trpc-agent-go/knowledge/document"
+	knowledgegraph "trpc.group/trpc-go/trpc-agent-go/knowledge/graph"
+	knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
+	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/plugin"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -101,6 +106,43 @@ type mockCallableTool struct {
 func (m *mockCallableTool) Declaration() *tool.Declaration { return m.declaration }
 func (m *mockCallableTool) Call(ctx context.Context, args []byte) (any, error) {
 	return m.callFn(ctx, args)
+}
+
+type autoMemoryPollutionTestKnowledge struct{}
+
+func (k autoMemoryPollutionTestKnowledge) Search(
+	context.Context,
+	*knowledge.SearchRequest,
+) (*knowledge.SearchResult, error) {
+	return &knowledge.SearchResult{
+		Documents: []*knowledge.Result{
+			{
+				Document: &knowledgedoc.Document{
+					ID:      "doc-1",
+					Content: "external context",
+				},
+				Score: 1,
+			},
+		},
+	}, nil
+}
+
+type autoMemoryPollutionTestGraphKnowledge struct {
+	autoMemoryPollutionTestKnowledge
+}
+
+func (k autoMemoryPollutionTestGraphKnowledge) Traverse(
+	context.Context,
+	*knowledgegraph.TraverseQuery,
+) (*knowledgegraph.TraverseResult, error) {
+	return nil, nil
+}
+
+func (k autoMemoryPollutionTestGraphKnowledge) FindPaths(
+	context.Context,
+	*knowledgegraph.PathQuery,
+) (*knowledgegraph.PathResult, error) {
+	return nil, nil
 }
 
 type permissionMockTool struct {
@@ -224,6 +266,139 @@ func TestExecuteSingleToolCallSequential_DisableTracingSkipsSpanCreation(t *test
 	require.NoError(t, err)
 	require.NotNil(t, toolEvent)
 	require.Empty(t, recorder.Ended())
+}
+
+func TestExecuteSingleToolCallSequential_MarksAutoMemoryPolluted(t *testing.T) {
+	tests := []struct {
+		name        string
+		toolName    string
+		toolFactory func(t *testing.T) tool.Tool
+		wantMark    bool
+	}{
+		{name: "knowledge search", toolName: "knowledge_search", wantMark: true},
+		{
+			name:     "agentic filter knowledge search",
+			toolName: "knowledge_search_with_agentic_filter",
+			wantMark: true,
+		},
+		{name: "prefixed knowledge search", toolName: "docs_knowledge_search", wantMark: true},
+		{
+			name:     "prefixed agentic filter knowledge search",
+			toolName: "docs_knowledge_search_with_agentic_filter",
+			wantMark: true,
+		},
+		{
+			name:     "renamed knowledge search",
+			toolName: "docs_search",
+			toolFactory: func(t *testing.T) tool.Tool {
+				t.Helper()
+				return knowledgetool.NewKnowledgeSearchTool(
+					autoMemoryPollutionTestKnowledge{},
+					knowledgetool.WithToolName("docs_search"),
+				)
+			},
+			wantMark: true,
+		},
+		{
+			name:     "graph tool set search",
+			toolName: "graph_search",
+			toolFactory: func(t *testing.T) tool.Tool {
+				t.Helper()
+				return toolFromSet(
+					t,
+					knowledgetool.NewGraphToolSet(
+						autoMemoryPollutionTestGraphKnowledge{},
+						nil,
+					),
+					"graph_search",
+				)
+			},
+			wantMark: true,
+		},
+		{
+			name:     "code graph tool set search",
+			toolName: "code_graph_search",
+			toolFactory: func(t *testing.T) tool.Tool {
+				t.Helper()
+				return toolFromSet(
+					t,
+					knowledgetool.NewCodeGraphSearchTool(
+						autoMemoryPollutionTestGraphKnowledge{},
+					),
+					"code_graph_search",
+				)
+			},
+			wantMark: true,
+		},
+		{name: "memory search", toolName: "memory_search"},
+		{name: "session search", toolName: "session_search"},
+		{name: "transfer", toolName: "transfer_to_agent"},
+		{name: "tool search", toolName: "tool_search"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := NewFunctionCallResponseProcessor(false, nil)
+			invocation := agent.NewInvocation()
+			invocation.Session = session.NewSession("test-app", "user-1", "session-1")
+			response := &model.Response{}
+			toolCall := model.ToolCall{
+				ID: "call-1",
+				Function: model.FunctionDefinitionParam{
+					Name:      tt.toolName,
+					Arguments: []byte(`{"query":"hello"}`),
+				},
+			}
+			tl := tool.Tool(&mockCallableTool{
+				declaration: &tool.Declaration{Name: tt.toolName},
+				callFn: func(context.Context, []byte) (any, error) {
+					return "ok", nil
+				},
+			})
+			if tt.toolFactory != nil {
+				tl = tt.toolFactory(t)
+			}
+			tools := map[string]tool.Tool{
+				tt.toolName: tl,
+			}
+			eventChan := make(chan *event.Event, 1)
+
+			toolEvent, err := p.executeSingleToolCallSequential(
+				context.Background(),
+				invocation,
+				response,
+				tools,
+				eventChan,
+				0,
+				toolCall,
+			)
+
+			require.NoError(t, err)
+			require.NotNil(t, toolEvent)
+			gotState, stateOK := invocation.Session.GetState(memory.SessionStateKeyMemoryMode)
+			gotDelta, deltaOK := toolEvent.StateDelta[memory.SessionStateKeyMemoryMode]
+			if tt.wantMark {
+				require.True(t, stateOK)
+				assert.Equal(t, memory.MemoryModePolluted, string(gotState))
+				require.True(t, deltaOK)
+				assert.Equal(t, memory.MemoryModePolluted, string(gotDelta))
+				return
+			}
+			assert.False(t, stateOK)
+			assert.False(t, deltaOK)
+		})
+	}
+}
+
+func toolFromSet(t *testing.T, set tool.ToolSet, name string) tool.Tool {
+	t.Helper()
+	for _, tl := range itool.NewNamedToolSet(set).Tools(context.Background()) {
+		if tl.Declaration().Name == name {
+			return tl
+		}
+	}
+	t.Fatalf("tool %q not found", name)
+	return nil
 }
 
 func TestExecuteSingleToolCallSequential_AddsToolCallArgsExtension(t *testing.T) {
@@ -1405,6 +1580,12 @@ func TestStateDeltaSessionHelpers_EdgeCases(t *testing.T) {
 	require.Nil(t, invocationView(nil))
 	preserveStateDeltaInvocationDefaults(nil, baseInv)
 	preserveStateDeltaInvocationDefaults(agent.NewInvocation(), nil)
+	memoryReader := &mockMemoryService{}
+	viewInv := agent.NewInvocation()
+	baseWithMemoryReader := agent.NewInvocation()
+	baseWithMemoryReader.MemoryReader = memoryReader
+	preserveStateDeltaInvocationDefaults(viewInv, baseWithMemoryReader)
+	require.Same(t, memoryReader, viewInv.MemoryReader)
 
 	current := session.StateMap{
 		baseKey:    []byte("base"),
@@ -4483,6 +4664,131 @@ func TestExecuteToolCall_ToolNotFound_ReturnsErrorChoice(t *testing.T) {
 	require.True(t, shouldIgnoreError)
 	require.Contains(t, err.Error(), ErrorToolNotFound)
 	require.Nil(t, choices)
+}
+
+func TestExecuteToolCall_ToolNotFoundSuggestsSimilarTool(t *testing.T) {
+	ctx := context.Background()
+	p := NewFunctionCallResponseProcessor(false, nil)
+	inv := &agent.Invocation{Model: &mockModel{}}
+	tools := map[string]tool.Tool{
+		"alpha_tool": &mockTool{name: "alpha_tool"},
+		"web_fetch":  &mockTool{name: "web_fetch"},
+	}
+	call := model.ToolCall{
+		ID: "call-duck",
+		Function: model.FunctionDefinitionParam{
+			Name:      "alpha_too",
+			Arguments: []byte(`{}`),
+		},
+	}
+
+	_, choices, _, shouldIgnoreError, _, err := p.executeToolCall(
+		ctx, inv, call, tools, 0, nil,
+	)
+
+	require.True(t, shouldIgnoreError)
+	require.Nil(t, choices)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), ErrorToolNotFound)
+	require.Contains(t, err.Error(), "alpha_too")
+	require.Contains(t, err.Error(), `did you mean "alpha_tool"?`)
+}
+
+func TestExecuteToolCall_ToolNotFoundOmitsDistantSuggestions(t *testing.T) {
+	ctx := context.Background()
+	p := NewFunctionCallResponseProcessor(false, nil)
+	inv := &agent.Invocation{Model: &mockModel{}}
+	tools := map[string]tool.Tool{
+		"web_fetch": &mockTool{name: "web_fetch"},
+	}
+	call := model.ToolCall{
+		ID: "call-missing",
+		Function: model.FunctionDefinitionParam{
+			Name:      "totally_missing",
+			Arguments: []byte(`{}`),
+		},
+	}
+
+	_, choices, _, shouldIgnoreError, _, err := p.executeToolCall(
+		ctx, inv, call, tools, 0, nil,
+	)
+
+	require.True(t, shouldIgnoreError)
+	require.Nil(t, choices)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), ErrorToolNotFound)
+	require.Contains(t, err.Error(), "totally_missing")
+	require.NotContains(t, err.Error(), "did you mean")
+}
+
+func TestExecuteToolCall_ToolNameSuggestionsCanBeDisabled(t *testing.T) {
+	ctx := context.Background()
+	p := NewFunctionCallResponseProcessor(
+		false,
+		nil,
+		WithToolNameSuggestions(0, 0),
+	)
+	inv := &agent.Invocation{Model: &mockModel{}}
+	tools := map[string]tool.Tool{
+		"alpha_tool": &mockTool{name: "alpha_tool"},
+	}
+	call := model.ToolCall{
+		ID: "call-missing",
+		Function: model.FunctionDefinitionParam{
+			Name:      "alpha_too",
+			Arguments: []byte(`{}`),
+		},
+	}
+
+	_, choices, _, shouldIgnoreError, _, err := p.executeToolCall(
+		ctx, inv, call, tools, 0, nil,
+	)
+
+	require.True(t, shouldIgnoreError)
+	require.Nil(t, choices)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), ErrorToolNotFound)
+	require.Contains(t, err.Error(), "alpha_too")
+	require.NotContains(t, err.Error(), "did you mean")
+}
+
+func TestToolNotFoundError(t *testing.T) {
+	tools := map[string]tool.Tool{
+		"alpha_took":   &mockTool{name: "alpha_took"},
+		"alpha_tool":   &mockTool{name: "alpha_tool"},
+		"alpha_town":   &mockTool{name: "alpha_town"},
+		"exec_command": &mockTool{name: "exec_command"},
+		"tool_xyz":     &mockTool{name: "tool_xyz"},
+		"web_fetch":    &mockTool{name: "web_fetch"},
+	}
+	options := defaultToolNameSuggestionOptions()
+
+	require.Equal(t, ErrorToolNotFound, toolNotFoundError("", tools, options))
+	require.Equal(
+		t,
+		`Error: tool not found: alpha_too; did you mean one of `+
+			`"alpha_took", "alpha_tool", "alpha_town"?`,
+		toolNotFoundError("alpha_too", tools, options),
+	)
+	require.Equal(
+		t,
+		"Error: tool not found: browser_navigate",
+		toolNotFoundError("browser_navigate", tools, options),
+	)
+
+	malformed := "exec_exec_commandcommand</arg_key><arg_value>" +
+		strings.Repeat("script ", 80)
+	got := toolNotFoundError(malformed, tools, options)
+	require.Contains(t, got, `did you mean "exec_command"?`)
+	require.Contains(t, got, "exec_exec_commandcommand")
+	require.NotContains(t, got, strings.Repeat("script ", 40))
+}
+
+func TestToolNameEditDistance(t *testing.T) {
+	require.Equal(t, 0, toolNameEditDistance("web_fetch", "web_fetch"))
+	require.Equal(t, 1, toolNameEditDistance("alpha_too", "alpha_tool"))
+	require.Equal(t, 3, toolNameEditDistance("", "abc"))
+	require.Equal(t, 3, toolNameEditDistance("abc", ""))
 }
 
 func TestFindCompatibleTool(t *testing.T) {

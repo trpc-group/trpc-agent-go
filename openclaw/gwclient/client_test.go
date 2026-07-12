@@ -115,6 +115,31 @@ func TestClient_SendMessage_Success(t *testing.T) {
 	require.Equal(t, "req-1", rsp.RequestID)
 }
 
+func TestClient_SendMessage_LargeInlineFile(t *testing.T) {
+	t.Parallel()
+
+	srv, err := gateway.New(&stubRunner{})
+	require.NoError(t, err)
+
+	cli, err := New(srv.Handler(), srv.MessagesPath(), srv.CancelPath())
+	require.NoError(t, err)
+
+	rsp, err := cli.SendMessage(context.Background(), MessageRequest{
+		From: "u1",
+		ContentParts: []gwproto.ContentPart{{
+			Type: gwproto.PartTypeFile,
+			File: &gwproto.FilePart{
+				Filename: "large.txt",
+				Data:     bytes.Repeat([]byte("a"), 2<<20),
+				Format:   "text/plain",
+			},
+		}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, rsp.StatusCode)
+	require.Equal(t, "ok", rsp.Reply)
+}
+
 func TestClient_SendMessage_IncludesUsage(t *testing.T) {
 	t.Parallel()
 

@@ -1180,7 +1180,11 @@ The OpenAI SDK automatically retries the following errors:
 - **500+ Server Errors**: Internal server errors (5xx)
 - **Network Connection Errors**: No response or connection failure
 
-**Note**: SDK default maximum retry count is 2.
+**Note**: The SDK default maximum retry count is 2. This means the initial
+request can be retried up to 2 times, for a default maximum of 3 HTTP request
+attempts per call. The `n` in `openaiopt.WithMaxRetries(n)` is the retry count,
+not the total request count. Set it to `0` to disable SDK automatic retries and
+send only the initial request.
 
 ##### Retry Strategies
 
@@ -1220,6 +1224,18 @@ llm := openai.New("gpt-4o-mini",
 )
 ```
 
+**Disable Retry**:
+
+```go
+// For scenarios that must disable SDK automatic retries.
+llm := openai.New("gpt-4o-mini",
+    openai.WithOpenAIOptions(
+        openaiopt.WithMaxRetries(0),  // No retries; send one request only.
+        openaiopt.WithRequestTimeout(10*time.Second),
+    ),
+)
+```
+
 ##### How It Works
 
 Retry mechanism execution flow:
@@ -1252,6 +1268,7 @@ Key design:
 - **No Framework Retry**: Framework itself does not implement retry logic
 - **Client-level Retry**: All retry is handled by OpenAI client
 - **Configuration Pass-through**: Use `WithOpenAIOptions` to configure retry behavior
+- **Disable Retry**: Set `openaiopt.WithMaxRetries(0)` to disable SDK automatic retries
 - **Automatic Handling**: Rate limiting (429) is automatically handled without additional code
 
 ##### Usage Example
