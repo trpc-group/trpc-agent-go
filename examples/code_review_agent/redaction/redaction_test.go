@@ -40,13 +40,38 @@ func TestRedactSecrets_APIKey(t *testing.T) {
 }
 
 func TestRedactSecrets_JWT(t *testing.T) {
-	input := "Token = \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c\""
-	redacted := RedactSecrets(input)
-	if redacted == input {
-		t.Error("Expected JWT token to be redacted")
+	testCases := []struct {
+		name       string
+		input      string
+		wantRedact bool
+	}{
+		{
+			name:       "three-segment JWT",
+			input:      "Token = \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c\"",
+			wantRedact: true,
+		},
+		{
+			name:       "two-segment JWT",
+			input:      "Token = \"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ\"",
+			wantRedact: true,
+		},
+		{
+			name:       "JWT without quotes",
+			input:      "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c",
+			wantRedact: true,
+		},
 	}
-	if len(redacted) > len(input) {
-		t.Error("Redacted output should not be longer than input")
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			redacted := RedactSecrets(tc.input)
+			if tc.wantRedact && redacted == tc.input {
+				t.Errorf("Expected JWT token to be redacted")
+			}
+			if len(redacted) > len(tc.input) {
+				t.Errorf("Redacted output should not be longer than input")
+			}
+		})
 	}
 }
 

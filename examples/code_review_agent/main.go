@@ -418,10 +418,8 @@ func runCodeReview(diffPath, repoPath, outputDir, dbPath string, dryRun bool) er
 }
 
 func validatePath(path string) error {
-	if strings.Contains(path, "..") {
-		return fmt.Errorf("path traversal detected: %s", path)
-	}
-	if strings.HasPrefix(path, "/") && strings.Contains(path[1:], "/../") {
+	cleanPath := filepath.Clean(path)
+	if strings.Contains(cleanPath, "..") {
 		return fmt.Errorf("path traversal detected: %s", path)
 	}
 	return nil
