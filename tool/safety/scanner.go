@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/netip"
 	"net/url"
 	"path"
 	"regexp"
@@ -1010,6 +1011,18 @@ func scanNetworkCommandSegments(cmds [][]string, p Policy) []Finding {
 			continue
 		}
 		cmd := commandBase(argv[0])
+		if cmd == "curl" {
+			for _, host := range curlConnectionOverrideHosts(argv[1:]) {
+				if domainAllowed(host, p.AllowedDomains) {
+					continue
+				}
+				findings = append(findings, finding(ruleNetworkEgress,
+					"network_egress", RiskCritical, host,
+					"add the domain to allowed_domains or remove the outbound network call",
+					p.NonWhitelistedNetworkAction))
+			}
+			continue
+		}
 		if cmd != "ssh" && cmd != "scp" && cmd != "sftp" {
 			continue
 		}
@@ -1022,8 +1035,102 @@ func scanNetworkCommandSegments(cmds [][]string, p Policy) []Finding {
 				"add the domain to allowed_domains or remove the outbound network call",
 				p.NonWhitelistedNetworkAction))
 		}
+		for _, evidence := range sshLikeUnsafeOptionEvidence(cmd, argv[1:]) {
+			findings = append(findings, finding(ruleNetworkEgress,
+				"network_egress", RiskHigh, evidence,
+				"review external SSH configuration or helper programs before execution",
+				DecisionAsk))
+		}
 	}
 	return findings
+}
+
+func curlConnectionOverrideHosts(args []string) []string {
+	var out []string
+	pending := ""
+	for _, raw := range args {
+		arg := strings.Trim(strings.TrimSpace(raw), `"'`)
+		if shellSeparatorToken(arg) {
+			break
+		}
+		arg = strings.Trim(arg, ";|&")
+		if arg == "" {
+			continue
+		}
+		if pending != "" {
+			out = append(out, curlHostsFromOptionOperand(pending, arg)...)
+			pending = ""
+			continue
+		}
+		name, value, hasValue := strings.Cut(arg, "=")
+		switch name {
+		case "--connect-to", "--resolve":
+			if hasValue {
+				out = append(out, curlHostsFromOptionOperand(name, value)...)
+			} else {
+				pending = name
+			}
+		}
+	}
+	return uniqueStrings(out)
+}
+
+func curlHostsFromOptionOperand(option, operand string) []string {
+	switch option {
+	case "--connect-to":
+		if host := curlConnectToHost(operand); host != "" {
+			return []string{host}
+		}
+	case "--resolve":
+		return curlResolveHosts(operand)
+	}
+	return nil
+}
+
+func curlConnectToHost(value string) string {
+	fields := splitColonFields(value)
+	if len(fields) < 4 {
+		return ""
+	}
+	return hostFromNetworkTarget(fields[2])
+}
+
+func curlResolveHosts(value string) []string {
+	value = strings.TrimPrefix(strings.TrimSpace(value), "+")
+	fields := splitColonFields(value)
+	if len(fields) < 3 {
+		return nil
+	}
+	var out []string
+	for _, addr := range strings.Split(strings.Join(fields[2:], ":"), ",") {
+		if host := hostFromNetworkTarget(addr); host != "" {
+			out = append(out, host)
+		}
+	}
+	return uniqueStrings(out)
+}
+
+func splitColonFields(value string) []string {
+	var fields []string
+	start := 0
+	bracketDepth := 0
+	for i, r := range value {
+		switch r {
+		case '[':
+			bracketDepth++
+		case ']':
+			if bracketDepth > 0 {
+				bracketDepth--
+			}
+		case ':':
+			if bracketDepth == 0 {
+				fields = append(fields, value[start:i])
+				start = i + 1
+			}
+		}
+	}
+	fields = append(fields, value[start:])
+	return fields
 }
 
 func schemelessNetworkHosts(text string) []string {
@@ -1165,6 +1272,76 @@ func hostsFromSSHConfigOption(option string) []string {
 	}
 }
 
+func sshLikeUnsafeOptionEvidence(cmd string, args []string) []string {
+	var out []string
+	optionsEnded := false
+	pendingOption := ""
+	for _, raw := range args {
+		arg := strings.Trim(strings.TrimSpace(raw), `"'`)
+		if shellSeparatorToken(arg) {
+			break
+		}
+		arg = strings.Trim(arg, ";|&")
+		if arg == "" {
+			continue
+		}
+		if pendingOption != "" {
+			out = append(out, unsafeSSHOptionEvidence(cmd, pendingOption, arg)...)
+			pendingOption = ""
+			continue
+		}
+		if !optionsEnded && arg == "--" {
+			optionsEnded = true
+			continue
+		}
+		if optionsEnded || !strings.HasPrefix(arg, "-") {
+			continue
+		}
+		opt := strings.TrimLeft(arg, "-")
+		for i := 0; i < len(opt); i++ {
+			if !sshLikeOptionNeedsOperand(cmd, opt[i]) {
+				continue
+			}
+			if operand := opt[i+1:]; operand != "" {
+				out = append(out, unsafeSSHOptionEvidence(cmd, opt[i:i+1], operand)...)
+			} else {
+				pendingOption = opt[i : i+1]
+			}
+			break
+		}
+	}
+	return uniqueStrings(out)
+}
+
+func unsafeSSHOptionEvidence(cmd, opt, operand string) []string {
+	opt = strings.TrimLeft(opt, "-")
+	switch opt {
+	case "F":
+		return []string{cmd + " -F " + operand}
+	case "S":
+		if cmd == "scp" || cmd == "sftp" {
+			return []string{cmd + " -S " + operand}
+		}
+	case "o":
+		if strings.EqualFold(sshConfigOptionName(operand), "include") {
+			return []string{cmd + " -o " + operand}
+		}
+	}
+	return nil
+}
+
+func sshConfigOptionName(option string) string {
+	name, _, ok := strings.Cut(option, "=")
+	if ok {
+		return strings.TrimSpace(name)
+	}
+	fields := strings.Fields(option)
+	if len(fields) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(fields[0])
+}
+
 func hostsFromSSHForward(value string) []string {
 	value = strings.TrimSpace(value)
 	fields := strings.Fields(value)
@@ -1266,6 +1443,18 @@ func hostFromSchemelessTarget(target string) string {
 		return ""
 	}
 	return target
+}
+
+func hostFromNetworkTarget(target string) string {
+	target = strings.TrimSpace(target)
+	target = strings.Trim(target, "[]")
+	if target == "" {
+		return ""
+	}
+	if addr, err := netip.ParseAddr(target); err == nil {
+		return strings.ToLower(addr.String())
+	}
+	return hostFromSchemelessTarget(target)
 }
 
 func looksLikeHost(host string) bool {

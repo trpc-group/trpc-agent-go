@@ -366,6 +366,60 @@ func TestScannerAdditionalBranches(t *testing.T) {
 	require.True(t, hasRule(report, ruleNetworkEgress))
 }
 
+func TestCurlConnectionOverrideHostsCheckedAgainstAllowlist(t *testing.T) {
+	p := DefaultPolicy()
+	p.AllowedCommands = []string{"curl"}
+	p.AllowedDomains = []string{"allowed.example"}
+	scanner := NewScanner(p)
+
+	tests := []struct {
+		command  string
+		evidence string
+	}{
+		{
+			command: "curl --connect-to allowed.example:443:evil.example:443 " +
+				"https://allowed.example/path",
+			evidence: "evil.example",
+		},
+		{
+			command: "curl --connect-to=allowed.example:443:evil.example:443 " +
+				"https://allowed.example/path",
+			evidence: "evil.example",
+		},
+		{
+			command: "curl --resolve allowed.example:443:203.0.113.10 " +
+				"https://allowed.example/path",
+			evidence: "203.0.113.10",
+		},
+		{
+			command: "curl --resolve=+allowed.example:443:203.0.113.10 " +
+				"https://allowed.example/path",
+			evidence: "203.0.113.10",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.command, func(t *testing.T) {
+			report := scanner.Scan(context.Background(), Request{
+				ToolName: "workspace_exec",
+				Backend:  BackendWorkspaceExec,
+				Command:  tc.command,
+			})
+			require.Equal(t, DecisionDeny, report.Decision, report.Findings)
+			require.True(t, hasRule(report, ruleNetworkEgress), report.Findings)
+			require.True(t, hasFindingEvidence(report, ruleNetworkEgress, tc.evidence), report.Findings)
+		})
+	}
+
+	report := scanner.Scan(context.Background(), Request{
+		ToolName: "workspace_exec",
+		Backend:  BackendWorkspaceExec,
+		Command: "curl --connect-to allowed.example:443:mirror.allowed.example:443 " +
+			"https://allowed.example/path",
+	})
+	require.Equal(t, DecisionAllow, report.Decision, report.Findings)
+	require.False(t, hasRule(report, ruleNetworkEgress), report.Findings)
+}
+
 func TestSSHLikeHostsFindRemoteTargets(t *testing.T) {
 	require.Equal(t,
 		[]string{"evil.example"},
@@ -433,7 +487,7 @@ func TestSSHLikeHostsFindRemoteTargets(t *testing.T) {
 
 func TestSSHLikeOptionHostsCheckedAgainstAllowlist(t *testing.T) {
 	p := DefaultPolicy()
-	p.AllowedCommands = append(p.AllowedCommands, "ssh", "scp")
+	p.AllowedCommands = append(p.AllowedCommands, "ssh", "scp", "sftp")
 	p.DeniedCommands = []string{}
 	p.AllowedDomains = []string{"allowed.example"}
 	scanner := NewScanner(p)
@@ -495,6 +549,34 @@ func TestSSHLikeOptionHostsCheckedAgainstAllowlist(t *testing.T) {
 	})
 	require.Equal(t, DecisionAllow, report.Decision)
 	require.False(t, hasRule(report, ruleNetworkEgress), report.Findings)
+}
+
+func TestSSHLikeUnsafeOptionsNeedReview(t *testing.T) {
+	p := DefaultPolicy()
+	p.AllowedCommands = append(p.AllowedCommands, "ssh", "scp", "sftp")
+	p.DeniedCommands = []string{}
+	p.AllowedDomains = []string{"allowed.example"}
+	scanner := NewScanner(p)
+
+	tests := []string{
+		"ssh -F /tmp/ssh_config allowed.example",
+		"ssh -F/tmp/ssh_config allowed.example",
+		"ssh -o Include=/tmp/ssh_config allowed.example",
+		`ssh -o "Include /tmp/ssh_config" allowed.example`,
+		"scp -S /tmp/proxy ./x allowed.example:/tmp/x",
+		"sftp -S/tmp/proxy allowed.example",
+	}
+	for _, command := range tests {
+		t.Run(command, func(t *testing.T) {
+			report := scanner.Scan(context.Background(), Request{
+				ToolName: "workspace_exec",
+				Backend:  BackendWorkspaceExec,
+				Command:  command,
+			})
+			require.Equal(t, DecisionAsk, report.Decision, report.Findings)
+			require.True(t, hasRule(report, ruleNetworkEgress), report.Findings)
+		})
+	}
 }
 
 func hasFindingEvidence(report Report, rule, evidence string) bool {
