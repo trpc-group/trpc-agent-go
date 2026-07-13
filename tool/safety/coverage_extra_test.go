@@ -686,6 +686,8 @@ func TestSSHLikeUnsafeOptionsNeedReview(t *testing.T) {
 		{command: "ssh -F/tmp/ssh_config allowed.example", evidence: "ssh -F /tmp/ssh_config"},
 		{command: "ssh -o Include=/tmp/ssh_config allowed.example", evidence: "ssh -o Include=/tmp/ssh_config"},
 		{command: `ssh -o "Include /tmp/ssh_config" allowed.example`, evidence: "ssh -o Include /tmp/ssh_config"},
+		{command: "ssh -o ProxyCommand=/tmp/proxy allowed.example", evidence: "ssh -o ProxyCommand=/tmp/proxy"},
+		{command: `ssh -o "ProxyCommand /tmp/proxy" allowed.example`, evidence: "ssh -o ProxyCommand /tmp/proxy"},
 		{command: "scp -S /tmp/proxy ./x allowed.example:/tmp/x", evidence: "scp -S /tmp/proxy"},
 		{command: "sftp -S/tmp/proxy allowed.example", evidence: "sftp -S /tmp/proxy"},
 	}

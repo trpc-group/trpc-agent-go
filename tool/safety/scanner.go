@@ -1593,16 +1593,11 @@ func hostsFromSSHLikeOptionOperand(cmd, opt, operand string) []string {
 }
 
 func hostsFromSSHConfigOption(option string) []string {
-	name, value, ok := strings.Cut(option, "=")
+	name, value, ok := sshConfigOptionNameValue(option)
 	if !ok {
-		fields := strings.Fields(option)
-		if len(fields) < 2 {
-			return nil
-		}
-		name = fields[0]
-		value = strings.Join(fields[1:], " ")
+		return nil
 	}
-	switch strings.ToLower(strings.TrimSpace(name)) {
+	switch strings.ToLower(name) {
 	case "hostname":
 		if host := hostFromSSHLikeTarget(value); host != "" {
 			return []string{host}
@@ -1670,7 +1665,12 @@ func unsafeSSHOptionEvidence(cmd, opt, operand string) []string {
 			return []string{cmd + " -S " + operand}
 		}
 	case "o":
-		if strings.EqualFold(sshConfigOptionName(operand), "include") {
+		name, value, ok := sshConfigOptionNameValue(operand)
+		switch {
+		case strings.EqualFold(name, "include"):
+			return []string{cmd + " -o " + operand}
+		case ok && strings.EqualFold(name, "proxycommand") &&
+			strings.TrimSpace(value) != "" && len(schemelessNetworkHosts(value)) == 0:
 			return []string{cmd + " -o " + operand}
 		}
 	}
@@ -1678,15 +1678,24 @@ func unsafeSSHOptionEvidence(cmd, opt, operand string) []string {
 }
 
 func sshConfigOptionName(option string) string {
+	name, _, _ := sshConfigOptionNameValue(option)
+	return name
+}
+
+func sshConfigOptionNameValue(option string) (string, string, bool) {
 	name, _, ok := strings.Cut(option, "=")
 	if ok {
-		return strings.TrimSpace(name)
+		_, value, _ := strings.Cut(option, "=")
+		return strings.TrimSpace(name), strings.TrimSpace(value), true
 	}
 	fields := strings.Fields(option)
 	if len(fields) == 0 {
-		return ""
+		return "", "", false
 	}
-	return strings.TrimSpace(fields[0])
+	if len(fields) < 2 {
+		return strings.TrimSpace(fields[0]), "", false
+	}
+	return strings.TrimSpace(fields[0]), strings.TrimSpace(strings.Join(fields[1:], " ")), true
 }
 
 func hostsFromSSHForward(value string) []string {
