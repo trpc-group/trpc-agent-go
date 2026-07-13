@@ -284,6 +284,10 @@ type CompletionTokensDetails struct {
 
 对于 OpenAI-compatible 服务，返回中的 `completion_tokens_details.reasoning_tokens` 会映射到 `Usage.CompletionTokensDetails.ReasoningTokens`。当服务方没有消耗或没有上报 reasoning tokens 时，该值可能为 `0`；如果希望 reasoning 模型进入推理行为，请按模型能力设置 `ReasoningEffort` 和/或 `ThinkingEnabled`。
 
+### 提示词缓存（Prompt caching）
+
+供应商会缓存请求里最长的稳定前缀（系统提示词、工具定义、靠前的历史）。任何让这段前缀每轮改写的内容——注入的当前时间（`WithAddCurrentTime`）、值不断变化的 instruction 占位符——都会让缓存悄悄失效、整段前缀按原价重新计费。缓存友好的写法（包括用"当前时间工具"替代时间注入）见 [`examples/promptcache`](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/promptcache)。
+
 ## OpenAI Model
 
 ### 模型名称参数

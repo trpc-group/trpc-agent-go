@@ -747,6 +747,12 @@ func WithDescription(description string) Option {
 // The template uses the same placeholder subset as the internal prompt state
 // adapter in `internal/prompt/adapter/state`. See `Render` there for supported
 // placeholder forms and resolution rules.
+//
+// Note: placeholders re-render on every turn, so a value that changes between
+// turns rewrites the instruction and invalidates the provider's prompt-cache
+// prefix the same way an inline timestamp does. Keep fast-changing values out
+// of the instruction (expose them as tools or message content) if you rely on
+// prompt caching.
 func WithInstruction(instruction string) Option {
 	return func(opts *Options) {
 		opts.Instruction = instruction
@@ -1603,6 +1609,13 @@ func newStructuredOutput(name string, schema map[string]any, strict bool, descri
 }
 
 // WithAddCurrentTime adds the current time to the system prompt if true.
+//
+// Note: the injected time changes the system prompt and therefore invalidates
+// the provider's prompt-cache prefix — once per day with the default
+// date-only format, on every turn with a time-of-day format (see
+// WithTimeFormat). If you rely on prompt caching, prefer exposing a
+// current-time tool instead; examples/promptcache/timeprocessor demonstrates
+// the trade-off.
 func WithAddCurrentTime(addCurrentTime bool) Option {
 	return func(opts *Options) {
 		opts.AddCurrentTime = addCurrentTime

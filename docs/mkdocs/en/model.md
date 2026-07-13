@@ -286,6 +286,10 @@ type CompletionTokensDetails struct {
 
 For OpenAI-compatible providers, `completion_tokens_details.reasoning_tokens` is mapped to `Usage.CompletionTokensDetails.ReasoningTokens`. The value may be `0` when the provider does not spend or report reasoning tokens; for reasoning models, set `ReasoningEffort` and/or `ThinkingEnabled` when you want to request reasoning behavior.
 
+### Prompt caching
+
+Providers cache the longest stable prefix of the request (system prompt, tools, early history). Anything that rewrites that prefix every turn — an injected current time (`WithAddCurrentTime`), an instruction placeholder whose value keeps changing — silently defeats the cache and re-bills the full prefix. See [`examples/promptcache`](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/promptcache) for cache-friendly patterns, including replacing the injected time with a current-time tool.
+
 ## OpenAI Model
 
 ### Model Name Parameter
