@@ -670,8 +670,34 @@ func TestVerifyColumns_Scenarios(t *testing.T) {
 			datetimePrecisions: map[string]any{
 				"created_at": int64(0),
 			},
-			wantError:            false,
-			wantErrorLogContains: "column test_table.created_at uses TIMESTAMP(0), expected TIMESTAMP(6)",
+			wantError: false,
+			wantErrorLogContains: "review and run: ALTER TABLE `test_table` MODIFY COLUMN `created_at` " +
+				"TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6);",
+		},
+		{
+			name: "multiple timestamp precision mismatches use one alter statement",
+			expectedColumns: []tableColumn{
+				{"created_at", "timestamp", false},
+				{"updated_at", "timestamp", false},
+				{"expires_at", "timestamp", true},
+			},
+			actualColumns: map[string]tableColumn{
+				"created_at": {"created_at", "timestamp", false},
+				"updated_at": {"updated_at", "timestamp", false},
+				"expires_at": {"expires_at", "timestamp", true},
+			},
+			datetimePrecisions: map[string]any{
+				"created_at": int64(0),
+				"updated_at": int64(0),
+				"expires_at": int64(0),
+			},
+			wantError: false,
+			wantErrorLogContains: "ALTER TABLE `test_table` " +
+				"MODIFY COLUMN `created_at` TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6), " +
+				"MODIFY COLUMN `updated_at` TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) " +
+				"ON UPDATE CURRENT_TIMESTAMP(6), " +
+				"MODIFY COLUMN `expires_at` " +
+				"TIMESTAMP(6) NULL DEFAULT NULL;",
 		},
 		{
 			name: "missing column",

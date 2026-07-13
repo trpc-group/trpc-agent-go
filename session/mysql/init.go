@@ -676,6 +676,23 @@ func (s *Service) tableExists(ctx context.Context, tableName string) (bool, erro
 	return count > 0, nil
 }
 
+func alterTimestampPrecisionClause(column tableColumn) string {
+	definition := "TIMESTAMP(6)"
+	switch column.name {
+	case "created_at":
+		definition += " NOT NULL DEFAULT CURRENT_TIMESTAMP(6)"
+	case "updated_at":
+		definition += " NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6)"
+	default:
+		if column.nullable {
+			definition += " NULL DEFAULT NULL"
+		} else {
+			definition += " NOT NULL"
+		}
+	}
+	return fmt.Sprintf("MODIFY COLUMN `%s` %s", column.name, definition)
+}
+
 // verifyColumns verifies column types and nullability, and logs an error when
 // timestamp precision differs from TIMESTAMP(6).
 func (s *Service) verifyColumns(ctx context.Context, tableName string, expectedColumns []tableColumn) error {
@@ -705,6 +722,9 @@ func (s *Service) verifyColumns(ctx context.Context, tableName string, expectedC
 		return fmt.Errorf("query columns failed: %w", err)
 	}
 
+	var timestampMismatches []string
+	var timestampAlterClauses []string
+
 	// Check each expected column
 	for _, expected := range expectedColumns {
 		actual, exists := actualColumns[expected.name]
@@ -724,13 +744,8 @@ func (s *Service) verifyColumns(ctx context.Context, tableName string, expectedC
 				if precision.Valid {
 					actualType = fmt.Sprintf("TIMESTAMP(%d)", precision.Int64)
 				}
-				log.ErrorfContext(
-					ctx,
-					"column %s.%s uses %s, expected TIMESTAMP(6); timestamp precision mismatch may cause incorrect time comparisons",
-					tableName,
-					expected.name,
-					actualType,
-				)
+				timestampMismatches = append(timestampMismatches, fmt.Sprintf("%s uses %s", expected.name, actualType))
+				timestampAlterClauses = append(timestampAlterClauses, alterTimestampPrecisionClause(expected))
 			}
 		}
 
@@ -739,6 +754,16 @@ func (s *Service) verifyColumns(ctx context.Context, tableName string, expectedC
 			return fmt.Errorf("column %s.%s nullable mismatch: got %v, expected %v",
 				tableName, expected.name, actual.nullable, expected.nullable)
 		}
+	}
+	if len(timestampMismatches) > 0 {
+		log.ErrorfContext(
+			ctx,
+			"table %s has timestamp precision mismatches: %s; expected TIMESTAMP(6); mismatches may cause incorrect time comparisons or ordering; review and run: ALTER TABLE `%s` %s;",
+			tableName,
+			strings.Join(timestampMismatches, ", "),
+			tableName,
+			strings.Join(timestampAlterClauses, ", "),
+		)
 	}
 
 	return nil
