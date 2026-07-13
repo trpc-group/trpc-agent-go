@@ -16,6 +16,7 @@ import (
 	"image/color"
 	"image/png"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -234,17 +235,21 @@ func TestRunOCRTimeout(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	cmd := writeShellScript(t, dir, "tesseract-slow", `
+	script := writeShellScript(t, dir, "tesseract-slow", `
 sleep 1
 `)
+	// Invoke the fresh script through sh to avoid Linux ETXTBSY races when a
+	// newly written file is executed directly.
+	shell, err := exec.LookPath("sh")
+	require.NoError(t, err)
 
 	tool, err := newInspector(Config{
 		AllowedDirs:      []string{dir},
-		TesseractCommand: cmd,
+		TesseractCommand: shell,
 		Timeout:          time.Millisecond,
 	})
 	require.NoError(t, err)
-	_, err = tool.runOCR(context.Background(), "sample.png", inspectRequest{})
+	_, err = tool.runOCR(context.Background(), script, inspectRequest{})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "timed out")
 }
