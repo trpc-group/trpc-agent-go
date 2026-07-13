@@ -570,7 +570,7 @@ func (s *Service) initDB(ctx context.Context) error {
 	}
 
 	// Verify schema. Column type/nullability drift is fatal, timestamp
-	// precision drift is logged as a warning, and index drift follows the
+	// precision drift is logged as an error, and index drift follows the
 	// policy documented by verifyIndexes.
 	if err := s.verifySchema(ctx); err != nil {
 		return fmt.Errorf("schema verification failed: %w", err)
@@ -676,8 +676,8 @@ func (s *Service) tableExists(ctx context.Context, tableName string) (bool, erro
 	return count > 0, nil
 }
 
-// verifyColumns verifies column types and nullability, and warns when timestamp
-// precision differs from TIMESTAMP(6).
+// verifyColumns verifies column types and nullability, and logs an error when
+// timestamp precision differs from TIMESTAMP(6).
 func (s *Service) verifyColumns(ctx context.Context, tableName string, expectedColumns []tableColumn) error {
 	// Get actual columns from database
 	actualColumns := make(map[string]tableColumn)
@@ -724,7 +724,7 @@ func (s *Service) verifyColumns(ctx context.Context, tableName string, expectedC
 				if precision.Valid {
 					actualType = fmt.Sprintf("TIMESTAMP(%d)", precision.Int64)
 				}
-				log.WarnfContext(
+				log.ErrorfContext(
 					ctx,
 					"column %s.%s uses %s, expected TIMESTAMP(6); timestamp precision mismatch may cause incorrect time comparisons",
 					tableName,

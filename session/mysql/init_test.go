@@ -624,13 +624,13 @@ func TestVerifyIndexes_Scenarios(t *testing.T) {
 
 func TestVerifyColumns_Scenarios(t *testing.T) {
 	tests := []struct {
-		name                string
-		expectedColumns     []tableColumn
-		actualColumns       map[string]tableColumn
-		datetimePrecisions  map[string]any
-		wantError           bool
-		wantErrContains     string
-		wantWarningContains string
+		name                 string
+		expectedColumns      []tableColumn
+		actualColumns        map[string]tableColumn
+		datetimePrecisions   map[string]any
+		wantError            bool
+		wantErrContains      string
+		wantErrorLogContains string
 	}{
 		{
 			name: "all columns correct",
@@ -660,7 +660,7 @@ func TestVerifyColumns_Scenarios(t *testing.T) {
 			wantError: false,
 		},
 		{
-			name: "timestamp precision mismatch warns",
+			name: "timestamp precision mismatch logs error",
 			expectedColumns: []tableColumn{
 				{"created_at", "timestamp", false},
 			},
@@ -670,8 +670,8 @@ func TestVerifyColumns_Scenarios(t *testing.T) {
 			datetimePrecisions: map[string]any{
 				"created_at": int64(0),
 			},
-			wantError:           false,
-			wantWarningContains: "column test_table.created_at uses TIMESTAMP(0), expected TIMESTAMP(6)",
+			wantError:            false,
+			wantErrorLogContains: "column test_table.created_at uses TIMESTAMP(0), expected TIMESTAMP(6)",
 		},
 		{
 			name: "missing column",
@@ -719,13 +719,13 @@ func TestVerifyColumns_Scenarios(t *testing.T) {
 
 			s := createTestService(t, db)
 			ctx := context.Background()
-			originalWarnfContext := agentlog.WarnfContext
-			var warnings []string
-			agentlog.WarnfContext = func(_ context.Context, format string, args ...any) {
-				warnings = append(warnings, fmt.Sprintf(format, args...))
+			originalErrorfContext := agentlog.ErrorfContext
+			var errorLogs []string
+			agentlog.ErrorfContext = func(_ context.Context, format string, args ...any) {
+				errorLogs = append(errorLogs, fmt.Sprintf(format, args...))
 			}
 			defer func() {
-				agentlog.WarnfContext = originalWarnfContext
+				agentlog.ErrorfContext = originalErrorfContext
 			}()
 
 			tableName := "test_table"
@@ -757,11 +757,11 @@ func TestVerifyColumns_Scenarios(t *testing.T) {
 			} else {
 				assert.NoError(t, err)
 			}
-			if tt.wantWarningContains == "" {
-				assert.Empty(t, warnings)
+			if tt.wantErrorLogContains == "" {
+				assert.Empty(t, errorLogs)
 			} else {
-				require.Len(t, warnings, 1)
-				assert.Contains(t, warnings[0], tt.wantWarningContains)
+				require.Len(t, errorLogs, 1)
+				assert.Contains(t, errorLogs[0], tt.wantErrorLogContains)
 			}
 			assert.NoError(t, mock.ExpectationsWereMet())
 		})
