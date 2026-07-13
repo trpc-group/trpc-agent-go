@@ -92,12 +92,11 @@ func (f PromptApplierFunc) EvaluationOptions(request EvaluationRequest) ([]evalu
 	return f(request)
 }
 
-// TextPromptSurfaceApplier applies the source prompt to configured prompt surfaces.
-// Instruction/global-instruction surfaces are direct text replacements. Few-shot,
-// tool, and skill surfaces receive deterministic text-derived runtime patches for
-// local regression loops; production integrations can still provide a custom
-// PromptApplier when they need to preserve existing tools, skills, or model
-// instances.
+// TextPromptSurfaceApplier applies the source prompt to configured prompt surfaces
+// during baseline evaluation. Instruction/global-instruction surfaces are direct
+// text replacements. Few-shot, tool, and skill surfaces receive deterministic
+// text-derived runtime patches for local regression loops; the built-in PromptIter
+// profile path still requires custom integrations for skill and model targets.
 type TextPromptSurfaceApplier struct {
 	SurfaceIDs []string
 }
@@ -207,7 +206,7 @@ func promptSurfaceValue(
 			Tools: []astructure.ToolRef{{ID: partOrNode(part, nodeID), Description: prompt}},
 		}, nil
 	case astructure.SurfaceTypeSkill:
-		return astructure.SurfaceValue{}, errors.New("skill surface requires a custom prompt adapter")
+		return astructure.SurfaceValue{}, errors.New("skill surface requires a custom PromptIterator/profile path")
 	case astructure.SurfaceTypeModel:
 		return astructure.SurfaceValue{}, errors.New("model surface requires a concrete model adapter")
 	default:

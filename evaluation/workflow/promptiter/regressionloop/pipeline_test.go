@@ -409,6 +409,42 @@ func TestPipelinePropagatesPromptProfileAndReportErrors(t *testing.T) {
 	assert.ErrorContains(t, err, "write JSON report")
 }
 
+func TestPipelineDocumentsSkillTargetRequiresCustomPromptIteratorProfilePath(t *testing.T) {
+	dir := t.TempDir()
+	promptPath := filepath.Join(dir, "prompt.txt")
+	metricsPath := filepath.Join(dir, "metrics.json")
+	require.NoError(t, os.WriteFile(promptPath, []byte("prompt"), 0o644))
+	require.NoError(t, os.WriteFile(metricsPath, []byte(`{"metrics":[]}`), 0o644))
+	iterator := &capturingPromptIterator{}
+	cfg := Config{
+		AppName:             "app",
+		PromptSource:        promptPath,
+		MetricsPath:         metricsPath,
+		TrainEvalSetID:      "train",
+		ValidationEvalSetID: "validation",
+		OutputJSON:          filepath.Join(dir, "report.json"),
+		OutputMarkdown:      filepath.Join(dir, "report.md"),
+		TargetSurfaceIDs:    []string{"agent#skill.refund_policy"},
+		PromptIter:          PromptIterConfig{MaxRounds: 1},
+	}
+	_, err := Pipeline{
+		Evaluator: &scriptedEvaluator{
+			results: map[Phase]*promptiterengine.EvaluationResult{
+				PhaseBaselineTrain: evalResult("train", []caseSpec{
+					{id: "case", metric: "m", score: 1, status: status.EvalStatusPassed},
+				}),
+				PhaseBaselineValidation: evalResult("validation", []caseSpec{
+					{id: "case", metric: "m", score: 1, status: status.EvalStatusPassed},
+				}),
+			},
+		},
+		PromptIterator: iterator,
+	}.Run(context.Background(), cfg)
+	assert.ErrorContains(t, err, "build initial prompt profile")
+	assert.ErrorContains(t, err, "skill surface requires a custom PromptIterator/profile path")
+	assert.Nil(t, iterator.request)
+}
+
 func TestPipelinePropagatesEvaluatorAndIteratorErrors(t *testing.T) {
 	dir := t.TempDir()
 	promptPath := filepath.Join(dir, "prompt.txt")

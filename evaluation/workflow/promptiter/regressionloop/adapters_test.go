@@ -312,7 +312,7 @@ func TestBuildPromptProfileSupportsToolDescriptionsAndRejectsSkill(t *testing.T)
 	assert.Equal(t, "support_agent", profile.Overrides[1].Value.Tools[0].ID)
 
 	_, err = BuildPromptProfile([]string{"support_agent#skill.refund_policy"}, "optimized description")
-	assert.ErrorContains(t, err, "skill surface requires a custom prompt adapter")
+	assert.ErrorContains(t, err, "skill surface requires a custom PromptIterator/profile path")
 }
 
 func TestPromptSurfaceValueRejectsUnsupportedSurface(t *testing.T) {
