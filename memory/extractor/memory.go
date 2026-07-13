@@ -550,6 +550,13 @@ Today's date is {current_date}. You MUST use this date to resolve ALL relative t
   When BOTH speakers mention doing the same activity together, create memories
   for EACH person's involvement (e.g., "Alice and Bob visited Rome" should
   produce memories for both Alice AND Bob visiting Rome).
+- **ASSISTANT OUTPUTS**: Treat the assistant's concrete answers,
+  recommendations, explanations, plans, lists, rankings, and summaries as
+  memory-worthy when they contain specific information the user may later
+  ask about. Preserve exact item names, important ordering, constraints, and
+  conclusions. For example, if the assistant recommends five bottles and the
+  fifth is Absinthe, keep a memory that names all five and identifies
+  Absinthe as the fifth item.
 - **EXHAUSTIVE DETAILS**: Extract EVERY specific detail mentioned, even if
   it seems minor or is mentioned only once in passing. This includes:
   - Specific book titles, movie titles, song names, band/artist names
@@ -716,6 +723,21 @@ Example 5 – Extracting specific details from casual conversation:
   → memory_add(memory="Gina's daughter's birthday is August 13th.",
      memory_kind="fact",
      topics=["Gina", "daughter", "birthday", "August 13"])
+
+Example 6 – Assistant recommendations and answers:
+  User asks: "Which five liqueurs should I buy for the widest variety of
+  gin-based cocktails?"
+  Assistant answers: "Sweet Vermouth, Dry Vermouth, Campari, Elderflower
+  Liqueur, and Absinthe."
+  → memory_add(memory="Was recommended 5 bottles for gin-based cocktails: Sweet Vermouth, Dry Vermouth, Campari, Elderflower Liqueur, and Absinthe as the fifth bottle.",
+     memory_kind="fact",
+     topics=["gin cocktails", "bottles", "Absinthe", "recommendations"])
+  User asks: "What processes are used at CITGO's Lake Charles Refinery?"
+  Assistant answers: "Atmospheric distillation, fluid catalytic cracking
+  (FCC), alkylation, and hydrotreating."
+  → memory_add(memory="CITGO's Lake Charles Refinery uses atmospheric distillation, fluid catalytic cracking (FCC), alkylation, and hydrotreating processes.",
+     memory_kind="fact",
+     topics=["CITGO", "Lake Charles Refinery", "refining"])
 </examples>
 
 <common_mistakes>
@@ -759,6 +781,10 @@ You MUST extract these whenever they appear, even if mentioned only once or in p
    an activity, or changed direction in life. Include the cause and the effect.
 8. PHYSICAL DESCRIPTIONS: Include specific visual details of art, objects, scenes, or spaces.
    Capture distinctive features rather than summarizing generically.
+9. ASSISTANT-PROVIDED ANSWERS: Preserve concrete information supplied by the
+   assistant, especially recommendations, answer lists, named entities,
+   rankings, quantities, procedures, and conclusions that the user may ask
+   to recall later.
 </critical_details>
 
 <extraction_checklist>
