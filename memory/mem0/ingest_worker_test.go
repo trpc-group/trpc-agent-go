@@ -188,7 +188,7 @@ func TestIngestWorker_Ingest_CreatesAndTerminalStatus(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.Equal(t, int32(1), atomic.LoadInt32(&createCalls))
-	assert.Equal(t, "2024-01-02T03:04:05Z", gotBody["timestamp"])
+	assert.Equal(t, float64(1704164645), gotBody["timestamp"])
 	meta, ok := gotBody["metadata"].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, "2024-01-02T03:04:05Z", meta["timestamp"])

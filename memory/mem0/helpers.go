@@ -122,10 +122,10 @@ func mem0TimestampFromMetadata(meta map[string]any) any {
 	}
 	switch v := value.(type) {
 	case string:
-		if strings.TrimSpace(v) == "" {
-			return nil
+		if t, ok := parseMem0Time(v); ok {
+			return t.Unix()
 		}
-		return v
+		return nil
 	case int, int8, int16, int32, int64,
 		uint, uint8, uint16, uint32, uint64,
 		float32, float64:
