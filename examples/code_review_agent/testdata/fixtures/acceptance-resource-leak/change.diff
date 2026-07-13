@@ -1,0 +1,20 @@
+diff --git a/file.go b/file.go
+--- a/file.go
++++ b/file.go
+@@ -8,7 +8,14 @@
+ package resourceleak
+ 
+-import "os"
++import (
++	"io"
++	"os"
++)
+ 
+ func Read(path string) ([]byte, error) {
+-	return os.ReadFile(path)
++	file, err := os.Open(path)
++	if err != nil {
++		return nil, err
++	}
++	return io.ReadAll(file)
+ }

@@ -1,0 +1,14 @@
+{
+  "name": "acceptance-secret-redaction",
+  "description": "A synthetic OpenAI-shaped key must remain detectable as a finding while its plaintext is masked everywhere outside the repo snapshot.",
+  "expected_categories": ["sensitive_info"],
+  "expected_result_kind": "finding",
+  "sandbox_expectation": "success",
+  "changed_files": ["config.go"],
+  "minimum_secret_signals": 1,
+  "forbidden_plaintext": ["sk-fixture0123456789abcd"],
+  "required_snapshot_fragments": {
+    "config.go": ["sk-fixture0123456789abcd"]
+  },
+  "forbidden_snapshot_fragments": {}
+}

@@ -1,0 +1,16 @@
+{
+  "name": "acceptance-context-leak",
+  "description": "A goroutine waits on a jobs channel without observing the supplied context cancellation signal.",
+  "expected_categories": ["concurrency"],
+  "expected_result_kind": "finding",
+  "sandbox_expectation": "success",
+  "changed_files": ["worker.go"],
+  "minimum_secret_signals": 0,
+  "forbidden_plaintext": [],
+  "required_snapshot_fragments": {
+    "worker.go": ["go func()", "for range jobs"]
+  },
+  "forbidden_snapshot_fragments": {
+    "worker.go": ["ctx.Done()"]
+  }
+}

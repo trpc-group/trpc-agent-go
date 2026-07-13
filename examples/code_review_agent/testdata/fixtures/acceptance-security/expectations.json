@@ -1,0 +1,14 @@
+{
+  "name": "acceptance-security",
+  "description": "User input is passed to a shell command, creating a direct command-injection risk.",
+  "expected_categories": ["security"],
+  "expected_result_kind": "finding",
+  "sandbox_expectation": "success",
+  "changed_files": ["command.go"],
+  "minimum_secret_signals": 0,
+  "forbidden_plaintext": [],
+  "required_snapshot_fragments": {
+    "command.go": ["exec.Command(\"sh\", \"-c\", input)"]
+  },
+  "forbidden_snapshot_fragments": {}
+}

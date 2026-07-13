@@ -1,0 +1,15 @@
+{
+  "name": "acceptance-clean",
+  "description": "A small implementation change accompanied by a matching unit test; no finding is expected.",
+  "expected_categories": [],
+  "expected_result_kind": "none",
+  "sandbox_expectation": "success",
+  "changed_files": ["calculator.go", "calculator_test.go"],
+  "minimum_secret_signals": 0,
+  "forbidden_plaintext": [],
+  "required_snapshot_fragments": {
+    "calculator.go": ["func Subtract(a, b int) int"],
+    "calculator_test.go": ["func TestSubtract(t *testing.T)"]
+  },
+  "forbidden_snapshot_fragments": {}
+}

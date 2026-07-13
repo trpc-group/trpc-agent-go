@@ -1,0 +1,19 @@
+diff --git a/worker.go b/worker.go
+--- a/worker.go
++++ b/worker.go
+@@ -9,12 +9,9 @@ package contextleak
+ 
+ import "context"
+ 
+ func Start(ctx context.Context, jobs <-chan int) {
+-	for {
+-		select {
+-		case <-ctx.Done():
+-			return
+-		case <-jobs:
++	go func() {
++		for range jobs {
+ 		}
+-	}
++	}()
+ }

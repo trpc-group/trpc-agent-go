@@ -1,0 +1,14 @@
+{
+  "name": "acceptance-missing-tests",
+  "description": "Production behavior gains a new branch without any corresponding test change.",
+  "expected_categories": ["tests"],
+  "expected_result_kind": "warning",
+  "sandbox_expectation": "success",
+  "changed_files": ["discount.go"],
+  "minimum_secret_signals": 0,
+  "forbidden_plaintext": [],
+  "required_snapshot_fragments": {
+    "discount.go": ["if total > 100", "return total - 10"]
+  },
+  "forbidden_snapshot_fragments": {}
+}

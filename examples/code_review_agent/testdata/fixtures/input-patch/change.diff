@@ -1,0 +1,10 @@
+diff --git a/internal/value.go b/internal/value.go
+--- a/internal/value.go
++++ b/internal/value.go
+@@ -1,3 +1,5 @@
+ package internal
+ 
+-func Value() int { return 1 }
++func Value() int {
++	return 2
++}
