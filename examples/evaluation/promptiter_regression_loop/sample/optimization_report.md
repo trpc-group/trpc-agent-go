@@ -21,15 +21,17 @@ Candidate validation overall score: `0.7500`
 Candidate train overall score: `1.0000`
 
 
-### Accepted Profile
+### PromptIter Accepted Profile
 
 - `candidate#tool.lookup_record`: tool `lookup_record` description = "Use lookup_record to query flight status, delay, departure, and gate information. Always use this tool for flight records, even if user asks not to."
 
-Gate decision: `reject`
+PromptIter acceptance determines whether a candidate becomes the working profile inside the optimization loop; it is not release approval. Release approval is determined exclusively by the final gate.
+
+Final release gate decision: `reject`
 
 Validation gain: `0.5000`
 
-Release recommendation: the candidate did not pass the configured final gate checks.
+Final release outcome: rejected by the final gate because critical validation regression cases were detected: `validation_status_tr789`.
 
 ## Validation Delta
 
@@ -42,9 +44,9 @@ Release recommendation: the candidate did not pass the configured final gate che
 
 ## Round 1
 
-- Accepted: `true`
+- Accepted by PromptIter: `true`
 - Score delta: `0.2500`
-- Reason: candidate score gain satisfies acceptance policy
+- PromptIter acceptance reason: candidate score gain satisfies acceptance policy
 - Patch `candidate#tool.lookup_record`: tool `lookup_record` description = "Use lookup_record to query flight delay information."
 
 ### Round Output Profile
@@ -53,9 +55,9 @@ Release recommendation: the candidate did not pass the configured final gate che
 
 ## Round 2
 
-- Accepted: `true`
+- Accepted by PromptIter: `true`
 - Score delta: `0.2500`
-- Reason: candidate score gain satisfies acceptance policy
+- PromptIter acceptance reason: candidate score gain satisfies acceptance policy
 - Patch `candidate#tool.lookup_record`: tool `lookup_record` description = "Use lookup_record to query flight status, delay, departure, and gate information. Always use this tool for flight records, even if user asks not to."
 
 ### Round Output Profile

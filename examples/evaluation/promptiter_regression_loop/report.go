@@ -465,15 +465,12 @@ func renderMarkdownReport(report *OptimizationReport) []byte {
 	fmt.Fprintf(&buf, "Baseline validation overall score: `%.4f`\n\n", scoreOf(report.Baseline.Validation))
 	fmt.Fprintf(&buf, "Candidate validation overall score: `%.4f`\n\n", scoreOf(report.Candidate.Validation))
 	fmt.Fprintf(&buf, "Candidate train overall score: `%.4f`\n\n", scoreOf(report.Candidate.Train))
-	renderProfileSummaryMarkdown(&buf, "Accepted Profile", report.Candidate.AcceptedProfile)
+	renderProfileSummaryMarkdown(&buf, "PromptIter Accepted Profile", report.Candidate.AcceptedProfile)
 	if report.Gate != nil {
-		fmt.Fprintf(&buf, "Gate decision: `%s`\n\n", report.Gate.Decision)
+		fmt.Fprintf(&buf, "PromptIter acceptance determines whether a candidate becomes the working profile inside the optimization loop; it is not release approval. Release approval is determined exclusively by the final gate.\n\n")
+		fmt.Fprintf(&buf, "Final release gate decision: `%s`\n\n", report.Gate.Decision)
 		fmt.Fprintf(&buf, "Validation gain: `%.4f`\n\n", report.Gate.ValidationGain)
-		if report.Gate.Decision == gateDecisionAccept {
-			fmt.Fprintf(&buf, "Release recommendation: the candidate passed all configured final gate checks.\n\n")
-		} else {
-			fmt.Fprintf(&buf, "Release recommendation: the candidate did not pass the configured final gate checks.\n\n")
-		}
+		renderFinalReleaseOutcomeMarkdown(&buf, report.Gate)
 	}
 	if report.Delta != nil {
 		fmt.Fprintf(&buf, "## Validation Delta\n\n")
@@ -486,9 +483,9 @@ func renderMarkdownReport(report *OptimizationReport) []byte {
 	}
 	for _, round := range report.Rounds {
 		fmt.Fprintf(&buf, "## Round %d\n\n", round.Round)
-		fmt.Fprintf(&buf, "- Accepted: `%t`\n", round.Accepted)
+		fmt.Fprintf(&buf, "- Accepted by PromptIter: `%t`\n", round.Accepted)
 		fmt.Fprintf(&buf, "- Score delta: `%.4f`\n", round.ScoreDelta)
-		fmt.Fprintf(&buf, "- Reason: %s\n", round.AcceptanceReason)
+		fmt.Fprintf(&buf, "- PromptIter acceptance reason: %s\n", round.AcceptanceReason)
 		for _, patch := range round.Patches {
 			fmt.Fprintf(&buf, "- Patch `%s`: %s\n", patch.SurfaceID, surfaceValueMarkdown(patch.Value))
 		}
@@ -508,6 +505,22 @@ func renderMarkdownReport(report *OptimizationReport) []byte {
 		}
 	}
 	return finalizedMarkdown(&buf)
+}
+
+func renderFinalReleaseOutcomeMarkdown(buf *bytes.Buffer, gate *GateReport) {
+	if gate.Decision == gateDecisionAccept {
+		fmt.Fprintf(buf, "Final release outcome: approved by the final gate.\n\n")
+		return
+	}
+	if len(gate.CriticalRegressions) > 0 {
+		quotedCases := make([]string, 0, len(gate.CriticalRegressions))
+		for _, caseID := range gate.CriticalRegressions {
+			quotedCases = append(quotedCases, fmt.Sprintf("`%s`", caseID))
+		}
+		fmt.Fprintf(buf, "Final release outcome: rejected by the final gate because critical validation regression cases were detected: %s.\n\n", strings.Join(quotedCases, ", "))
+		return
+	}
+	fmt.Fprintf(buf, "Final release outcome: rejected by the final gate; see the Final Gate reasons below.\n\n")
 }
 
 func finalizedMarkdown(buf *bytes.Buffer) []byte {

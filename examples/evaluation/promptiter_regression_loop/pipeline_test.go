@@ -477,39 +477,41 @@ func TestTraceSmokeMarkdownOmitsOptimizationDecision(t *testing.T) {
 	require.Contains(t, markdown, "## Trace Smoke")
 	require.Contains(t, markdown, traceSmokeSkipReason)
 	require.NotContains(t, markdown, "Candidate validation overall score")
-	require.NotContains(t, markdown, "Gate decision")
+	require.NotContains(t, markdown, "Final release gate decision")
 }
 
 func TestMarkdownGateDecisionSummaryUsesActualGateReasons(t *testing.T) {
 	tests := []struct {
-		name            string
-		decision        string
-		reason          string
-		expectedSummary string
+		name                string
+		decision            string
+		reason              string
+		criticalRegressions []string
+		expectedSummary     string
 	}{
 		{
 			name:            "accepted",
 			decision:        gateDecisionAccept,
 			reason:          "all configured checks passed",
-			expectedSummary: "the candidate passed all configured final gate checks",
+			expectedSummary: "Final release outcome: approved by the final gate.",
 		},
 		{
 			name:            "low gain rejected",
 			decision:        gateDecisionReject,
 			reason:          "validation gain 0.0100 is below minimum 0.0500",
-			expectedSummary: "the candidate did not pass the configured final gate checks",
+			expectedSummary: "Final release outcome: rejected by the final gate; see the Final Gate reasons below.",
 		},
 		{
-			name:            "critical regression rejected",
-			decision:        gateDecisionReject,
-			reason:          "critical regression cases: [critical]",
-			expectedSummary: "the candidate did not pass the configured final gate checks",
+			name:                "critical regression rejected",
+			decision:            gateDecisionReject,
+			reason:              "critical regression cases: [critical]",
+			criticalRegressions: []string{"critical"},
+			expectedSummary:     "Final release outcome: rejected by the final gate because critical validation regression cases were detected: `critical`.",
 		},
 		{
 			name:            "model call budget rejected",
 			decision:        gateDecisionReject,
 			reason:          "model calls 6 exceeds maximum 5",
-			expectedSummary: "the candidate did not pass the configured final gate checks",
+			expectedSummary: "Final release outcome: rejected by the final gate; see the Final Gate reasons below.",
 		},
 	}
 	for _, tt := range tests {
@@ -517,8 +519,9 @@ func TestMarkdownGateDecisionSummaryUsesActualGateReasons(t *testing.T) {
 			report := &OptimizationReport{
 				Mode: fakeMode,
 				Gate: &GateReport{
-					Decision: tt.decision,
-					Reasons:  []string{tt.reason},
+					Decision:            tt.decision,
+					Reasons:             []string{tt.reason},
+					CriticalRegressions: tt.criticalRegressions,
 				},
 			}
 			markdown := string(renderMarkdownReport(report))
@@ -527,6 +530,36 @@ func TestMarkdownGateDecisionSummaryUsesActualGateReasons(t *testing.T) {
 			require.NotContains(t, markdown, "Train and validation aggregate scores improved")
 		})
 	}
+}
+
+func TestMarkdownClarifiesPromptIterAcceptanceIsNotReleaseApproval(t *testing.T) {
+	report := &OptimizationReport{
+		Mode: fakeMode,
+		Candidate: ReportCandidate{
+			AcceptedProfile: &ProfileSummary{Overrides: []SurfaceOverrideSummary{}},
+		},
+		Rounds: []ReportRound{
+			{
+				Round:            1,
+				Accepted:         true,
+				AcceptanceReason: "candidate score gain satisfies acceptance policy",
+			},
+		},
+		Gate: &GateReport{
+			Decision:            gateDecisionReject,
+			Reasons:             []string{"critical regression cases: [critical]"},
+			CriticalRegressions: []string{"critical"},
+		},
+	}
+	markdown := string(renderMarkdownReport(report))
+	require.Contains(t, markdown, "### PromptIter Accepted Profile")
+	require.Contains(t, markdown, "- Accepted by PromptIter: `true`")
+	require.Contains(t, markdown, "- PromptIter acceptance reason: candidate score gain satisfies acceptance policy")
+	require.Contains(t, markdown, "it is not release approval")
+	require.Contains(t, markdown, "Final release gate decision: `reject`")
+	require.Contains(t, markdown, "critical validation regression cases were detected: `critical`")
+	require.NotContains(t, markdown, "\n### Accepted Profile\n")
+	require.NotContains(t, markdown, "\n- Accepted: `true`\n")
 }
 
 func TestFinalGateConfigDefaultsAndOverrides(t *testing.T) {
