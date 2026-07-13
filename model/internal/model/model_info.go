@@ -526,6 +526,7 @@ var ModelContextWindows = map[string]int{
 	"moonshot-v1-128k-vision-preview": 131072,
 
 	// MiniMax — https://platform.minimax.io/docs/guides/text-generation
+	"minimax-m3":             1000000,
 	"minimax-m2.7":           204800,
 	"minimax-m2.7-highspeed": 204800,
 	"minimax-m2.5":           204800,
