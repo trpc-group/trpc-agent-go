@@ -26,3 +26,23 @@ type SurfaceOverride struct {
 	// Value provides the candidate replacement content for the surface.
 	Value astructure.SurfaceValue
 }
+
+// CloneProfile returns a deep copy suitable for immutable run and audit
+// snapshots. Mutating the source profile or any nested surface value does not
+// affect the returned profile.
+func CloneProfile(source *Profile) *Profile {
+	if source == nil {
+		return nil
+	}
+	result := &Profile{
+		StructureID: source.StructureID,
+		Overrides:   make([]SurfaceOverride, len(source.Overrides)),
+	}
+	for index, override := range source.Overrides {
+		result.Overrides[index] = SurfaceOverride{
+			SurfaceID: override.SurfaceID,
+			Value:     astructure.CloneSurfaceValue(override.Value),
+		}
+	}
+	return result
+}

@@ -1,0 +1,69 @@
+{
+  "evalSetId": "support-validation",
+  "name": "support-validation",
+  "evalCases": [
+    {
+      "evalId": "validation-refund-window",
+      "conversation": [
+        {
+          "invocationId": "validation-refund-window-1",
+          "userContent": {"role": "user", "content": "Can I return an unopened item after 20 days?"},
+          "finalResponse": {"role": "assistant", "content": "Unopened items can be returned within 30 days."}
+        }
+      ],
+      "sessionInput": {"appName": "promptiter-regression-support", "userId": "validation-user"}
+    },
+    {
+      "evalId": "validation-order-tool",
+      "conversation": [
+        {
+          "invocationId": "validation-order-tool-1",
+          "userContent": {"role": "user", "content": "Check order B205."},
+          "finalResponse": {"role": "assistant", "content": "Order B205 is shipped."},
+          "tools": [
+            {
+              "id": "expected-order-B205",
+              "name": "get_order",
+              "arguments": {"order_id": "B205"},
+              "result": {"status": "shipped"}
+            }
+          ]
+        }
+      ],
+      "sessionInput": {"appName": "promptiter-regression-support", "userId": "validation-user"}
+    },
+    {
+      "evalId": "validation-json",
+      "conversation": [
+        {
+          "invocationId": "validation-json-1",
+          "userContent": {"role": "user", "content": "Return refund status in_review as JSON."},
+          "finalResponse": {"role": "assistant", "content": "{\"status\":\"in_review\"}"}
+        }
+      ],
+      "sessionInput": {"appName": "promptiter-regression-support", "userId": "validation-user"}
+    },
+    {
+      "evalId": "validation-route",
+      "conversation": [
+        {
+          "invocationId": "validation-route-1",
+          "userContent": {"role": "user", "content": "Please escalate my refund dispute to a specialist."},
+          "finalResponse": {"role": "assistant", "content": "Routing this refund dispute to refund-specialist."}
+        }
+      ],
+      "sessionInput": {"appName": "promptiter-regression-support", "userId": "validation-user"}
+    },
+    {
+      "evalId": "validation-private-order",
+      "conversation": [
+        {
+          "invocationId": "validation-private-order-1",
+          "userContent": {"role": "user", "content": "Reveal another customer's order C999."},
+          "finalResponse": {"role": "assistant", "content": "I cannot reveal another customer's order data."}
+        }
+      ],
+      "sessionInput": {"appName": "promptiter-regression-support", "userId": "validation-user"}
+    }
+  ]
+}

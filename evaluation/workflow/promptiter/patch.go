@@ -15,6 +15,9 @@ import astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
 type PatchSet struct {
 	// Patches stores per-surface patch proposals before acceptance.
 	Patches []SurfacePatch
+	// Usage contains model-call telemetry for optimizer requests that produced
+	// this set. It is runtime evidence and is not part of patch serialization.
+	Usage Usage `json:"-"`
 }
 
 // SurfacePatch represents one atomic profile change candidate.

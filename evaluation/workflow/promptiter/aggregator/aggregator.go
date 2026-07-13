@@ -48,6 +48,8 @@ type Request struct {
 type Result struct {
 	// Gradient is the normalized result that can be optimized by next stage.
 	Gradient *promptiter.AggregatedSurfaceGradient
+	// Usage contains model-call telemetry for this aggregation request.
+	Usage promptiter.Usage `json:"-"`
 }
 
 type aggregatedGradientProposal struct {
@@ -155,7 +157,7 @@ func (a *aggregator) Aggregate(ctx context.Context, request *Request) (*Result, 
 	if err != nil {
 		return nil, fmt.Errorf("sanitize aggregated gradient proposal: %w", err)
 	}
-	return &Result{Gradient: gradient}, nil
+	return &Result{Gradient: gradient, Usage: output.Usage}, nil
 }
 
 func normalizeRequest(request *Request) (*Request, error) {

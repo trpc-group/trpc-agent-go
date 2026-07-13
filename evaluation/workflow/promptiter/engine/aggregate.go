@@ -33,6 +33,8 @@ type AggregationOptions struct {
 type AggregationResult struct {
 	// Surfaces stores merged gradients to feed optimizer per surface.
 	Surfaces []promptiter.AggregatedSurfaceGradient
+	// Usage contains model-call telemetry across surface aggregation requests.
+	Usage promptiter.Usage
 }
 
 func (e *engine) aggregate(
@@ -67,6 +69,7 @@ func (e *engine) aggregate(
 		Surfaces: make([]promptiter.AggregatedSurfaceGradient, 0, len(surfaceIDs)),
 	}
 	surfaces := make([]promptiter.AggregatedSurfaceGradient, len(surfaceIDs))
+	usages := make([]promptiter.Usage, len(surfaceIDs))
 	parallelism := 0
 	if options.SurfaceParallelismEnabled {
 		parallelism = options.SurfaceParallelism
@@ -93,10 +96,12 @@ func (e *engine) aggregate(
 			return fmt.Errorf("aggregate surface %q returned empty result", surfaceID)
 		}
 		surfaces[index] = *response.Gradient
+		usages[index] = response.Usage
 		return nil
 	}); err != nil {
 		return nil, err
 	}
 	result.Surfaces = append(result.Surfaces, surfaces...)
+	result.Usage = promptiter.MergeUsage(usages...)
 	return result, nil
 }

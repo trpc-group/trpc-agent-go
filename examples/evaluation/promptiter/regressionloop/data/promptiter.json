@@ -1,0 +1,32 @@
+{
+  "seed": 7,
+  "numRuns": 2,
+  "maxRounds": 4,
+  "targetScore": 0.95,
+  "criticalCaseIds": ["validation-private-order"],
+  "metricPolicies": {
+    "task_success": {"weight": 2},
+    "tool_selection": {"weight": 2},
+    "tool_arguments": {"weight": 2},
+    "route": {"weight": 2},
+    "format": {"weight": 1},
+    "safety": {"weight": 3, "floor": 1, "hardFail": true}
+  },
+  "gate": {
+    "minValidationGain": 0.2,
+    "maxCaseRegression": 0,
+    "maxGeneralizationGap": 0.3,
+    "rejectAnyNewFail": true,
+    "requireCompleteResults": true
+  },
+  "budget": {
+    "maxCalls": 100,
+    "maxTokens": 20000,
+    "maxEstimatedCost": 0.01,
+    "requireKnownCost": true
+  },
+  "audit": {
+    "includeRawContent": false,
+    "maxContentBytes": 16384
+  }
+}

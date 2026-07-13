@@ -207,6 +207,13 @@ func cloneSurfaceValue(value SurfaceValue) SurfaceValue {
 	return cloned
 }
 
+// CloneSurfaceValue returns a deep copy of a surface value, including nested
+// model headers, few-shot messages, tool schemas, and JSON-compatible schema
+// values.
+func CloneSurfaceValue(value SurfaceValue) SurfaceValue {
+	return cloneSurfaceValue(value)
+}
+
 func cloneToolRefs(refs []ToolRef) []ToolRef {
 	if len(refs) == 0 {
 		return nil
@@ -281,7 +288,84 @@ func cloneSchemaValue(value any) any {
 	case []byte:
 		return append([]byte(nil), current...)
 	default:
-		return current
+		return cloneJSONValue(reflect.ValueOf(current)).Interface()
+	}
+}
+
+// cloneJSONValue preserves concrete map and slice types while recursively
+// copying their contents. Schema defaults are expected to be JSON-compatible;
+// scalar and unsupported values are immutable and therefore returned as-is.
+func cloneJSONValue(value reflect.Value) reflect.Value {
+	return cloneJSONValueAtDepth(value, 0)
+}
+
+func cloneJSONValueAtDepth(value reflect.Value, depth int) reflect.Value {
+	if !value.IsValid() {
+		return value
+	}
+	// JSON-compatible schema values should be acyclic. Keep a defensive depth
+	// bound so malformed programmatic values cannot overflow the stack while a
+	// profile is being snapshotted.
+	if depth > 64 {
+		return value
+	}
+	switch value.Kind() {
+	case reflect.Interface:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		cloned := cloneJSONValueAtDepth(value.Elem(), depth+1)
+		result := reflect.New(value.Type()).Elem()
+		result.Set(cloned)
+		return result
+	case reflect.Pointer:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		result := reflect.New(value.Type().Elem())
+		result.Elem().Set(cloneJSONValueAtDepth(value.Elem(), depth+1))
+		return result
+	case reflect.Map:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		result := reflect.MakeMapWithSize(value.Type(), value.Len())
+		iterator := value.MapRange()
+		for iterator.Next() {
+			result.SetMapIndex(iterator.Key(), cloneJSONValueAtDepth(iterator.Value(), depth+1))
+		}
+		return result
+	case reflect.Slice:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		result := reflect.MakeSlice(value.Type(), value.Len(), value.Len())
+		for index := 0; index < value.Len(); index++ {
+			result.Index(index).Set(cloneJSONValueAtDepth(value.Index(index), depth+1))
+		}
+		return result
+	case reflect.Array:
+		result := reflect.New(value.Type()).Elem()
+		for index := 0; index < value.Len(); index++ {
+			result.Index(index).Set(cloneJSONValueAtDepth(value.Index(index), depth+1))
+		}
+		return result
+	case reflect.Struct:
+		// Copy the full value first so unexported fields remain intact, then
+		// recursively own exported fields that may contain maps, slices, or
+		// pointers.
+		result := reflect.New(value.Type()).Elem()
+		result.Set(value)
+		for index := 0; index < value.NumField(); index++ {
+			field := result.Field(index)
+			if !field.CanSet() || value.Type().Field(index).PkgPath != "" {
+				continue
+			}
+			field.Set(cloneJSONValueAtDepth(value.Field(index), depth+1))
+		}
+		return result
+	default:
+		return value
 	}
 }
 

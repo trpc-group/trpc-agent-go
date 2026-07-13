@@ -41,10 +41,14 @@ func (e *engine) optimize(
 		return nil, errors.New("optimizer is nil")
 	}
 	if aggregation == nil || len(aggregation.Surfaces) == 0 {
-		return &promptiter.PatchSet{Patches: []promptiter.SurfacePatch{}}, nil
+		return &promptiter.PatchSet{
+			Patches: []promptiter.SurfacePatch{},
+			Usage:   promptiter.Usage{Complete: true},
+		}, nil
 	}
 	overrideIndex := buildOverrideIndex(profile)
 	patches := make([]promptiter.SurfacePatch, len(aggregation.Surfaces))
+	usages := make([]promptiter.Usage, len(aggregation.Surfaces))
 	parallelism := 0
 	if options.SurfaceParallelismEnabled {
 		parallelism = options.SurfaceParallelism
@@ -72,6 +76,7 @@ func (e *engine) optimize(
 			return fmt.Errorf("optimize surface %q returned empty result", aggregatedSurface.SurfaceID)
 		}
 		patches[index] = *response.Patch
+		usages[index] = response.Usage
 		return nil
 	}); err != nil {
 		return nil, err
@@ -79,5 +84,8 @@ func (e *engine) optimize(
 	sort.SliceStable(patches, func(i, j int) bool {
 		return patches[i].SurfaceID < patches[j].SurfaceID
 	})
-	return &promptiter.PatchSet{Patches: patches}, nil
+	return &promptiter.PatchSet{
+		Patches: patches,
+		Usage:   promptiter.MergeUsage(usages...),
+	}, nil
 }

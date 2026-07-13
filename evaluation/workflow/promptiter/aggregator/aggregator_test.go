@@ -215,6 +215,7 @@ func TestAggregateUsesRunnerStructuredOutput(t *testing.T) {
 				},
 			},
 		},
+		Usage: promptiter.Usage{Calls: 1},
 	}, rsp)
 }
 

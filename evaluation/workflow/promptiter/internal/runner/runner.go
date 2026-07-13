@@ -13,7 +13,9 @@ import (
 	"errors"
 	"fmt"
 
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 // Output stores the structured and textual outputs collected from one runner invocation.
@@ -22,6 +24,13 @@ type Output struct {
 	StructuredOutput any
 	// FinalContent keeps the latest textual assistant content emitted by the runner.
 	FinalContent string
+	// Usage contains model-call telemetry observed while consuming the stream.
+	Usage promptiter.Usage
+}
+
+type callUsage struct {
+	done  bool
+	usage *model.Usage
 }
 
 // CaptureOutput consumes one runner event stream and extracts common output artifacts.
@@ -30,6 +39,8 @@ func CaptureOutput(events <-chan *event.Event) (*Output, error) {
 		return nil, errors.New("runner event stream is nil")
 	}
 	output := &Output{}
+	calls := make(map[string]*callUsage)
+	anonymousCall := 0
 	for evt := range events {
 		if evt == nil {
 			continue
@@ -40,6 +51,7 @@ func CaptureOutput(events <-chan *event.Event) (*Output, error) {
 			}
 			return nil, errors.New("runner returned error event")
 		}
+		captureCallUsage(evt, calls, &anonymousCall)
 		if evt.StructuredOutput != nil {
 			output.StructuredOutput = evt.StructuredOutput
 		}
@@ -47,5 +59,63 @@ func CaptureOutput(events <-chan *event.Event) (*Output, error) {
 			output.FinalContent = evt.Choices[0].Message.Content
 		}
 	}
+	output.Usage = summarizeCallUsage(calls)
 	return output, nil
+}
+
+func captureCallUsage(
+	evt *event.Event,
+	calls map[string]*callUsage,
+	anonymousCall *int,
+) {
+	if evt == nil || evt.Response == nil || evt.IsRunnerCompletion() || evt.IsToolResultResponse() {
+		return
+	}
+	response := evt.Response
+	// Some runners emit a separate structured-output carrier with no model
+	// response identity, choices, error, or usage. It is not another model call.
+	if response.ID == "" && len(response.Choices) == 0 && response.Error == nil && response.Usage == nil {
+		return
+	}
+	if !response.Done && response.Usage == nil {
+		return
+	}
+	key := response.ID
+	if key == "" {
+		if !response.Done {
+			return
+		}
+		*anonymousCall++
+		key = fmt.Sprintf("anonymous-%d", *anonymousCall)
+	}
+	state := calls[key]
+	if state == nil {
+		state = &callUsage{}
+		calls[key] = state
+	}
+	state.done = state.done || response.Done
+	if response.Usage != nil {
+		usage := *response.Usage
+		state.usage = &usage
+	}
+}
+
+func summarizeCallUsage(calls map[string]*callUsage) promptiter.Usage {
+	if len(calls) == 0 {
+		return promptiter.Usage{Complete: true}
+	}
+	result := promptiter.Usage{Calls: len(calls), Complete: true}
+	for _, call := range calls {
+		if call == nil || !call.done || call.usage == nil {
+			result.Complete = false
+			continue
+		}
+		result.PromptTokens += int64(call.usage.PromptTokens)
+		result.CompletionTokens += int64(call.usage.CompletionTokens)
+		result.TotalTokens += int64(call.usage.TotalTokens)
+	}
+	if result.TotalTokens == 0 {
+		result.TotalTokens = result.PromptTokens + result.CompletionTokens
+	}
+	return result
 }
