@@ -14,6 +14,7 @@ import (
 	"sort"
 )
 
+// 置信度阈值
 const confidenceThreshold = 0.6
 
 // Dedup removes duplicate findings keyed by file, line, and category.
@@ -22,6 +23,7 @@ func Dedup(items []Finding) []Finding {
 	out := make([]Finding, 0, len(items))
 	for _, f := range items {
 		key := fmt.Sprintf("%s:%d:%s", f.File, f.Line, f.Category)
+		// 只保留第一次出现的问题
 		if _, ok := seen[key]; ok {
 			continue
 		}

@@ -1,0 +1,29 @@
+{
+  "task_id": "a8f4c0f1-ca14-4d4f-b07e-fdeec27275ef",
+  "status": "completed",
+  "input_summary": "changed files: internal/worker/poller.go",
+  "findings": [
+    {
+      "severity": "high",
+      "category": "concurrency",
+      "file": "internal/worker/poller.go",
+      "line": 18,
+      "title": "Goroutine may leak without cancellation",
+      "evidence": "\tgo func() {",
+      "recommendation": "Pass context with cancel and ensure goroutines exit when ctx.Done() fires.",
+      "confidence": 0.8,
+      "source": "rule",
+      "rule_id": "CONC-001"
+    }
+  ],
+  "warnings": [],
+  "metrics": {
+    "total_duration_ms": 0,
+    "finding_count": 1,
+    "warning_count": 0,
+    "severity_counts": {
+      "high": 1
+    }
+  },
+  "dry_run": true
+}

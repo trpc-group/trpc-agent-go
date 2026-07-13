@@ -1,0 +1,14 @@
+{
+  "task_id": "ae61e184-f978-47fe-a30f-cbb02b791ef6",
+  "status": "completed",
+  "input_summary": "changed files: internal/user/service.go",
+  "findings": [],
+  "warnings": [],
+  "metrics": {
+    "total_duration_ms": 0,
+    "finding_count": 0,
+    "warning_count": 0,
+    "severity_counts": {}
+  },
+  "dry_run": true
+}

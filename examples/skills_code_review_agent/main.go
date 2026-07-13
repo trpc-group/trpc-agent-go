@@ -39,6 +39,7 @@ func main() {
 }
 
 func run(ctx context.Context) error {
+	// 创建输出目录
 	if err := os.MkdirAll(*flagOutputDir, 0o755); err != nil {
 		return fmt.Errorf("create output dir: %w", err)
 	}
@@ -51,7 +52,7 @@ func run(ctx context.Context) error {
 		DBPath:    *flagDBPath,
 		OutputDir: *flagOutputDir,
 	}
-
+	// run的核心
 	result, err := pipeline.Run(ctx, opts)
 	if err != nil {
 		return err

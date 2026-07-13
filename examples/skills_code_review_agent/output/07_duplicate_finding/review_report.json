@@ -1,0 +1,29 @@
+{
+  "task_id": "b9e391a8-47db-4216-a212-d4b7d0609000",
+  "status": "completed",
+  "input_summary": "changed files: internal/auth/query.go",
+  "findings": [
+    {
+      "severity": "high",
+      "category": "security",
+      "file": "internal/auth/query.go",
+      "line": 10,
+      "title": "Potential SQL injection via string concatenation",
+      "evidence": "\tquery := \"SELECT id, name FROM users WHERE id = \" + userID; _ = exec.Command(\"sh\", \"-c\", userID+\"x\")",
+      "recommendation": "Use parameterized queries or prepared statements instead of concatenating SQL strings.",
+      "confidence": 0.9,
+      "source": "rule",
+      "rule_id": "SEC-001"
+    }
+  ],
+  "warnings": [],
+  "metrics": {
+    "total_duration_ms": 1,
+    "finding_count": 1,
+    "warning_count": 0,
+    "severity_counts": {
+      "high": 1
+    }
+  },
+  "dry_run": true
+}

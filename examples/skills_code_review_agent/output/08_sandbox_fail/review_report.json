@@ -1,0 +1,29 @@
+{
+  "task_id": "8ff37b2c-2575-45a8-bee1-7aef22d71c07",
+  "status": "completed",
+  "input_summary": "changed files: internal/handler/upload.go",
+  "findings": [
+    {
+      "severity": "medium",
+      "category": "error_handling",
+      "file": "internal/handler/upload.go",
+      "line": 21,
+      "title": "Error ignored or not handled",
+      "evidence": "\t\t_ = err",
+      "recommendation": "Handle or return errors explicitly; avoid blank error branches.",
+      "confidence": 0.9,
+      "source": "rule",
+      "rule_id": "ERR-001"
+    }
+  ],
+  "warnings": [],
+  "metrics": {
+    "total_duration_ms": 0,
+    "finding_count": 1,
+    "warning_count": 0,
+    "severity_counts": {
+      "medium": 1
+    }
+  },
+  "dry_run": true
+}

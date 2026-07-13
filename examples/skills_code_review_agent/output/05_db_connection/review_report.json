@@ -1,0 +1,29 @@
+{
+  "task_id": "9cca69e0-ec5e-40fc-a53f-dcd45cb55179",
+  "status": "completed",
+  "input_summary": "changed files: internal/store/order.go",
+  "findings": [
+    {
+      "severity": "high",
+      "category": "resource",
+      "file": "internal/store/order.go",
+      "line": 21,
+      "title": "Database transaction without commit or rollback",
+      "evidence": "\ttx, err := s.db.Begin()",
+      "recommendation": "Always commit or rollback transactions in a defer/finally block.",
+      "confidence": 0.85,
+      "source": "rule",
+      "rule_id": "DB-001"
+    }
+  ],
+  "warnings": [],
+  "metrics": {
+    "total_duration_ms": 0,
+    "finding_count": 1,
+    "warning_count": 0,
+    "severity_counts": {
+      "high": 1
+    }
+  },
+  "dry_run": true
+}

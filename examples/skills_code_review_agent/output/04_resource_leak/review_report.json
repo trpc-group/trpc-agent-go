@@ -1,0 +1,29 @@
+{
+  "task_id": "ecfeba3c-748f-4193-8e20-bb725db9f5e6",
+  "status": "completed",
+  "input_summary": "changed files: internal/io/loader.go",
+  "findings": [
+    {
+      "severity": "high",
+      "category": "resource",
+      "file": "internal/io/loader.go",
+      "line": 12,
+      "title": "Resource opened without deferred close",
+      "evidence": "\tf, err := os.Open(path)",
+      "recommendation": "Use defer to close files, connections, or rows promptly after open.",
+      "confidence": 0.85,
+      "source": "rule",
+      "rule_id": "RES-001"
+    }
+  ],
+  "warnings": [],
+  "metrics": {
+    "total_duration_ms": 0,
+    "finding_count": 1,
+    "warning_count": 0,
+    "severity_counts": {
+      "high": 1
+    }
+  },
+  "dry_run": true
+}

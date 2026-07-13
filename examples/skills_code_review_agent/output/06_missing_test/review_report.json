@@ -1,0 +1,29 @@
+{
+  "task_id": "648c1d1d-2cc6-40ae-b046-15f2d6f14f48",
+  "status": "completed",
+  "input_summary": "changed files: internal/billing/calculator.go",
+  "findings": [
+    {
+      "severity": "low",
+      "category": "testing",
+      "file": "internal/billing/calculator.go",
+      "line": 3,
+      "title": "Exported function added without corresponding test changes",
+      "evidence": "func CalculateTotal(amount int, tax int) int {",
+      "recommendation": "Add unit tests covering the new exported function behavior.",
+      "confidence": 0.7,
+      "source": "rule",
+      "rule_id": "TEST-001"
+    }
+  ],
+  "warnings": [],
+  "metrics": {
+    "total_duration_ms": 0,
+    "finding_count": 1,
+    "warning_count": 0,
+    "severity_counts": {
+      "low": 1
+    }
+  },
+  "dry_run": true
+}

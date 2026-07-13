@@ -1,0 +1,13 @@
+diff --git a/internal/io/loader.go b/internal/io/loader.go
+--- a/internal/io/loader.go
++++ b/internal/io/loader.go
+@@ -10,6 +10,10 @@ import (
+ 
+ func LoadConfig(path string) ([]byte, error) {
++	f, err := os.Open(path)
++	if err != nil {
++		return nil, err
++	}
+ 	data, err := os.ReadFile(path)
+ 	if err != nil {
+ 		return nil, err
