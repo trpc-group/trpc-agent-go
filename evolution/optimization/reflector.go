@@ -178,25 +178,9 @@ func applyReflection(
 }
 
 func generateText(ctx context.Context, m model.Model, req *model.Request) (string, error) {
-	type generationResult struct {
-		responses <-chan *model.Response
-		err       error
-	}
-	resultCh := make(chan generationResult, 1)
-	go func() {
-		responses, err := m.GenerateContent(ctx, req)
-		resultCh <- generationResult{responses: responses, err: err}
-	}()
-
-	var responses <-chan *model.Response
-	select {
-	case <-ctx.Done():
-		return "", ctx.Err()
-	case result := <-resultCh:
-		if result.err != nil {
-			return "", result.err
-		}
-		responses = result.responses
+	responses, err := m.GenerateContent(ctx, req)
+	if err != nil {
+		return "", err
 	}
 	if responses == nil {
 		return "", errors.New("model returned a nil response channel")
@@ -277,12 +261,13 @@ func jsonCandidates(raw string) []string {
 
 func truncateReflectionField(value string) string {
 	value = strings.TrimSpace(value)
-	if len(value) <= reflectionFieldMaxChars {
+	runes := []rune(value)
+	if len(runes) <= reflectionFieldMaxChars {
 		return value
 	}
 	head := reflectionFieldMaxChars * 3 / 4
 	tail := reflectionFieldMaxChars - head
-	return value[:head] + "\n...[truncated]...\n" + value[len(value)-tail:]
+	return string(runes[:head]) + "\n...[truncated]...\n" + string(runes[len(runes)-tail:])
 }
 
 func trimStrings(values []string) []string {

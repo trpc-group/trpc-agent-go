@@ -11,8 +11,10 @@ package optimization
 import (
 	"context"
 	"errors"
+	"math"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -112,6 +114,10 @@ func TestReflectorParsingAndModelFailures(t *testing.T) {
 	long := strings.Repeat("x", reflectionFieldMaxChars+100)
 	assert.Contains(t, truncateReflectionField(long), "[truncated]")
 	assert.Equal(t, "short", truncateReflectionField(" short "))
+	unicodeLong := strings.Repeat("界", reflectionFieldMaxChars+100)
+	unicodeTruncated := truncateReflectionField(unicodeLong)
+	assert.True(t, utf8.ValidString(unicodeTruncated))
+	assert.Contains(t, unicodeTruncated, "[truncated]")
 
 	_, err = (&llmReflector{}).propose(context.Background(), reflectionInput{})
 	require.ErrorContains(t, err, "nil reflection model")
@@ -203,5 +209,7 @@ func TestNewValidatesOnlyUserFacingDependenciesAndOptions(t *testing.T) {
 	assert.Equal(t, 0.1, optimizer.opts.minimumHoldoutImprovement)
 	assert.Equal(t, int64(9), optimizer.opts.randomSeed)
 	_, err = New(modelStub, evaluator, WithMinimumHoldoutImprovement(-0.1))
+	require.ErrorContains(t, err, "holdout improvement")
+	_, err = New(modelStub, evaluator, WithMinimumHoldoutImprovement(math.NaN()))
 	require.ErrorContains(t, err, "holdout improvement")
 }

@@ -157,10 +157,15 @@ The optimizer:
    Pareto coverage;
 5. compares the final candidate with the seed on an unseen holdout split; and
 6. optionally submits the candidate to the existing revision store. External
-   submissions always stop at `pending_approval` and never update the live
-   skill directly.
+   submissions initially stop at `pending_approval` and never update the live
+   skill directly. By default they remain there until reviewed. If the service
+   enables `WithApprovalTimeout`, the existing auto-expiration sweeper may
+   later promote and publish a stale revision without human approval.
 
-Only the task-specific evaluator is supplied by the application:
+The application supplies both a task-specific evaluator and a reflection
+`model.Model`. Configure the reflection model with the same provider adapters
+used by other agents; it may be the task model or a separate reviewer model.
+The evaluator is the only new domain-specific integration:
 
 ```go
 type benchmarkEvaluator struct {
@@ -207,6 +212,14 @@ result, err := optimizer.Optimize(ctx, optimization.Request{
         Holdout:    holdoutCases,
     },
 })
+if err != nil {
+    return err
+}
+fmt.Printf("selected skill %q; validation=%.3f holdout=%.3f\n",
+    result.Spec.Name,
+    result.CandidateValidation.Score,
+    result.CandidateHoldout.Score,
+)
 ```
 
 Case IDs must be unique across splits. Scores must be finite and normalized to

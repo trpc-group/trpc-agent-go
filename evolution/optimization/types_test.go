@@ -85,6 +85,13 @@ func TestValidateSpecRejectsMalformedOrOversizedCandidates(t *testing.T) {
 		})
 	}
 	require.NoError(t, validateSpec(testSeedSpec()))
+	assert.Equal(t, 7, specSize(&evolution.SkillSpec{
+		Name:        "界",
+		Description: "说明",
+		WhenToUse:   "用",
+		Steps:       []string{"步骤"},
+		Pitfalls:    []string{"坑"},
+	}))
 }
 
 func TestNewEvaluationBatchValidatesEvaluatorContract(t *testing.T) {

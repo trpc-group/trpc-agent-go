@@ -13,6 +13,7 @@ package optimization
 import (
 	"context"
 	"errors"
+	"math"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/evolution"
@@ -213,7 +214,8 @@ func New(
 	if o.reflectionBatchSize <= 0 {
 		return nil, errors.New("evolution optimization: reflection batch size must be positive")
 	}
-	if o.minimumHoldoutImprovement < 0 || o.minimumHoldoutImprovement > 1 {
+	if math.IsNaN(o.minimumHoldoutImprovement) ||
+		o.minimumHoldoutImprovement < 0 || o.minimumHoldoutImprovement > 1 {
 		return nil, errors.New("evolution optimization: holdout improvement must be between 0 and 1")
 	}
 	return &Optimizer{

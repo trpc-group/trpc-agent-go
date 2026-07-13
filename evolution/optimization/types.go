@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"unicode/utf8"
 
 	"trpc.group/trpc-go/trpc-agent-go/evolution"
 )
@@ -230,12 +231,14 @@ func specSize(spec *evolution.SkillSpec) int {
 	if spec == nil {
 		return 0
 	}
-	size := len(spec.Name) + len(spec.Description) + len(spec.WhenToUse)
+	size := utf8.RuneCountInString(spec.Name) +
+		utf8.RuneCountInString(spec.Description) +
+		utf8.RuneCountInString(spec.WhenToUse)
 	for _, value := range spec.Steps {
-		size += len(value)
+		size += utf8.RuneCountInString(value)
 	}
 	for _, value := range spec.Pitfalls {
-		size += len(value)
+		size += utf8.RuneCountInString(value)
 	}
 	return size
 }

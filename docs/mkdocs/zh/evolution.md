@@ -154,10 +154,14 @@ GEPA，但不依赖 DSPy、Python 或 companion process。
    下严格优于 parent 才进入候选池；
 4. 维护逐 case validation winner，并按 Pareto coverage 采样后续 parent；
 5. 搜索结束后才在不可见的 holdout split 上配对比较 baseline/final candidate；
-6. 可选地把通过 holdout 的候选接回现有 revision store。外部候选始终停在
-   `pending_approval`，不会直接修改 live skill。
+6. 可选地把通过 holdout 的候选接回现有 revision store。外部候选提交时先停在
+   `pending_approval`，不会直接修改 live skill；默认会一直等待审批。但如果 service
+   启用了 `WithApprovalTimeout`，现有 auto-expiration sweeper 之后可能在没有人工审批的
+   情况下把过期 revision promote 并发布。
 
-应用只需要实现与任务相关的 evaluator：
+应用需要提供与任务相关的 evaluator 和用于反思的 `model.Model`。reflection model
+使用框架现有 provider adapter 配置，可以与任务模型相同，也可以是独立 reviewer
+模型；evaluator 是唯一需要新增的领域适配：
 
 ```go
 type benchmarkEvaluator struct {
@@ -204,6 +208,14 @@ result, err := optimizer.Optimize(ctx, optimization.Request{
         Holdout:    holdoutCases,
     },
 })
+if err != nil {
+    return err
+}
+fmt.Printf("selected skill %q; validation=%.3f holdout=%.3f\n",
+    result.Spec.Name,
+    result.CandidateValidation.Score,
+    result.CandidateHoldout.Score,
+)
 ```
 
 三个 split 的 case ID 不能重复，score 必须是 `[0,1]` 内的有限数值。提交 revision
