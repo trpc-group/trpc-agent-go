@@ -738,6 +738,8 @@ single `invocation.Message` if the session has no events). `RunWithMessages`
 still sets `invocation.Message` to the latest user turn so graph/flow agents
 that inspect it continue to work.
 
+If the upstream application persists the complete history and Runner should not retain Sessions across requests, inject `session/noop` and pass the updated complete history through `RunWithMessages` on every request. Noop keeps the transient Session required by a single `Run`, but it does not restore data from a previous run. See [No Persistence (Noop)](./session/noop.md).
+
 ### User Message Rewriting
 
 `agent.WithUserMessageRewriter(...)` rewrites the current-turn user message
