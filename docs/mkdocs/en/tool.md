@@ -2078,7 +2078,7 @@ ts := toolsearch.New(
     toolsearch.WithToolboxes(boxes),
     toolsearch.WithInvocationMode(toolsearch.DispatchToolCalls),
 )
-// The model always sees exactly two function tools: tool_search + call_tool.
+// The deferred tool surface always consists of tool_search + call_tool; preset tools remain advertised separately.
 // Each tool_search result includes the target tool's input_schema so the
 // model can build the params object for the following call_tool invocation.
 ```

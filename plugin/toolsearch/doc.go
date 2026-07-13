@@ -108,10 +108,12 @@
 //   - call_tool — invoke a loaded tool by its exact name with a params
 //     object matching that schema.
 //
-// DispatchToolCalls keeps the advertised tool count constant (two) no matter
-// how many deferred tools are loaded, which some backends handle better than a
-// growing tool list. call_tool enforces the same permission and loaded-set
-// guards as a direct deferred-tool call.
+// DispatchToolCalls keeps the deferred-tool footprint constant at two; the
+// total advertised tool count is the number of preset tools plus the two
+// dispatch entry points, no matter how many deferred tools are loaded. This
+// fixed footprint can be easier for some backends to handle than a growing
+// tool list. call_tool enforces the same permission and loaded-set guards as
+// a direct deferred-tool call.
 //
 //	plugin := toolsearch.New(presetTools,
 //	    toolsearch.WithToolboxes(boxes),

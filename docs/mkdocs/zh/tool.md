@@ -1899,7 +1899,7 @@ ts := toolsearch.New(
     toolsearch.WithToolboxes(boxes),
     toolsearch.WithInvocationMode(toolsearch.DispatchToolCalls),
 )
-// 此时模型永远只看到两个 function tool：tool_search + call_tool；
+// 延迟工具部分始终只暴露 tool_search + call_tool，preset 工具仍单独声明
 // tool_search 的每条结果都会带上目标工具的 input_schema，供 call_tool 的 params 使用。
 ```
 

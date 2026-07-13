@@ -91,9 +91,10 @@ const (
 	// model must invoke them through call_tool, passing the tool_name and a
 	// params object matching the schema tool_search returned.
 	//
-	// This keeps the advertised tool count constant (two) regardless of how
-	// many deferred tools the model has loaded, which some backends handle
-	// better than a growing tool list.
+	// This keeps the deferred-tool footprint constant at two regardless of
+	// how many deferred tools the model has loaded; the total advertised tool
+	// count includes preset tools plus these two dispatch entry points. Some
+	// backends handle this fixed footprint better than a growing tool list.
 	DispatchToolCalls InvocationMode = 1
 )
 
@@ -217,8 +218,10 @@ func WithCatalogInDescription(enabled bool) Option {
 //     result carries the matched tool's input_schema) and call_tool (invoke a
 //     previously loaded tool by its exact name, passing a params object that
 //     matches that schema). Loaded deferred tools are NOT injected as
-//     individual function tools, so the advertised tool count stays constant
-//     (two) no matter how many deferred tools the model has loaded.
+//     individual function tools, so the deferred-tool footprint stays
+//     constant at two; the total advertised tool count is preset tools
+//     plus these two dispatch entry points, no matter how many deferred
+//     tools the model has loaded.
 //
 // The tool_search description is adjusted per mode: in DispatchToolCalls it
 // steers the model toward call_tool instead of a direct call.

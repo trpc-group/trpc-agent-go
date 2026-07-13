@@ -109,9 +109,25 @@ type ToolKnowledge struct {
 	store    vectorstore.VectorStore
 	embedder embedder.Embedder
 
+	// indexed maps a tool name to the fingerprint of its stored embedding.
+	// Keeping the fingerprint (not just a presence bit) lets upsert detect
+	// snapshots that raced a concurrent prune+forget or a fingerprint bump.
 	mu      sync.Mutex
-	indexed map[string]struct{} // tool names already embedded into the store
+	indexed map[string]string
 }
+
+// candidateTool pairs a tool with the fingerprint observed under the
+// snapshot lock. upsert compares it against indexed and the verifier before
+// (re)embedding.
+type candidateTool struct {
+	tool        tool.Tool
+	fingerprint string
+}
+
+// candidateVerifier reports whether name@fp is still authoritative in the
+// Plugin index; a false return tells upsert to skip publishing so a stale
+// snapshot cannot revive a forgotten vector.
+type candidateVerifier func(name, fp string) bool
 
 // ToolKnowledgeOption configures a ToolKnowledge.
 type ToolKnowledgeOption func(*ToolKnowledge)
@@ -133,7 +149,7 @@ func NewToolKnowledge(e embedder.Embedder, opts ...ToolKnowledgeOption) (*ToolKn
 	k := &ToolKnowledge{
 		store:    inmemory.New(),
 		embedder: e,
-		indexed:  make(map[string]struct{}),
+		indexed:  make(map[string]string),
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -143,28 +159,49 @@ func NewToolKnowledge(e embedder.Embedder, opts ...ToolKnowledgeOption) (*ToolKn
 	return k, nil
 }
 
-// upsert embeds and stores any tools not already indexed, folding embedding
-// token usage into usage. Tools are keyed by name, so re-indexing is a no-op.
-func (k *ToolKnowledge) upsert(ctx context.Context, tools map[string]tool.Tool, usage *model.Usage) error {
+// upsert (re)embeds tools whose fingerprint differs from the indexed one,
+// folding embedding token usage into usage. Matching fingerprints are a
+// no-op. When verify is non-nil it is consulted before publishing so a
+// stale snapshot cannot resurrect a vector a concurrent forget just dropped.
+// On a fingerprint change the old document is deleted before Add to keep the
+// store free of duplicates across backends with differing Add semantics.
+func (k *ToolKnowledge) upsert(
+	ctx context.Context,
+	tools map[string]candidateTool,
+	verify candidateVerifier,
+	usage *model.Usage,
+) error {
 	k.mu.Lock()
 	defer k.mu.Unlock()
-	for name, t := range tools {
-		if t == nil {
+	for name, ct := range tools {
+		if ct.tool == nil {
 			continue
 		}
-		if _, ok := k.indexed[name]; ok {
+		cur, existed := k.indexed[name]
+		if existed && cur == ct.fingerprint {
 			continue
 		}
-		embedding, u, err := k.embedder.GetEmbeddingWithUsage(ctx, toolToText(t))
+		if verify != nil && !verify(name, ct.fingerprint) {
+			log.DebugfContext(ctx, "skip stale embed for tool %s", name)
+			continue
+		}
+		embedding, u, err := k.embedder.GetEmbeddingWithUsage(ctx, toolToText(ct.tool))
 		if err != nil {
 			return err
 		}
-		log.DebugfContext(ctx, "add embedded tool %s", name)
 		addEmbedderUsage(usage, u)
+		if existed {
+			if derr := k.store.Delete(ctx, name); derr != nil {
+				log.DebugfContext(ctx, "drop stale embedded tool %s: %v", name, derr)
+			}
+			log.DebugfContext(ctx, "refresh embedded tool %s", name)
+		} else {
+			log.DebugfContext(ctx, "add embedded tool %s", name)
+		}
 		if err := k.store.Add(ctx, &document.Document{ID: name}, embedding); err != nil {
 			return err
 		}
-		k.indexed[name] = struct{}{}
+		k.indexed[name] = ct.fingerprint
 	}
 	return nil
 }
@@ -298,7 +335,7 @@ func (p *Plugin) searchToolsByEmbedding(
 	usage := &model.Usage{}
 	defer p.recordUsage(ctx, usage)
 
-	if err := p.knowledge.upsert(ctx, candidateTools, usage); err != nil {
+	if err := p.knowledge.upsert(ctx, candidateTools, p.verifyCandidate, usage); err != nil {
 		return nil, nil, "", fmt.Errorf("tool search: embedding tools: %w", err)
 	}
 
@@ -343,12 +380,14 @@ func (p *Plugin) searchToolsByEmbedding(
 	return selected, overflow, "", nil
 }
 
-// embeddingCandidates resolves the candidate tools for an embedding search under
-// a single read lock: the namespace's tools when namespace is set (with the same
-// unknown-namespace guard as resolveSelection), otherwise every deferred tool.
-// Permission-denied tools are excluded so their name/description is never sent
-// to a remote embedder.
-func (p *Plugin) embeddingCandidates(namespace string, allAllowed map[string]bool) (map[string]tool.Tool, string) {
+// embeddingCandidates resolves candidate tools for an embedding search under
+// a single read lock: the namespace's tools when namespace is set (with the
+// same unknown-namespace guard as resolveSelection), otherwise every deferred
+// tool. Permission-denied tools are excluded so their name/description is
+// never sent to a remote embedder. Each entry carries the fingerprint
+// observed under the lock; upsert uses it via verifyCandidate to detect
+// snapshots that raced a concurrent refresh.
+func (p *Plugin) embeddingCandidates(namespace string, allAllowed map[string]bool) (map[string]candidateTool, string) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 
@@ -365,14 +404,54 @@ func (p *Plugin) embeddingCandidates(namespace string, allAllowed map[string]boo
 		names = box.toolNames
 	}
 
-	tools := make(map[string]tool.Tool, len(names))
+	tools := make(map[string]candidateTool, len(names))
 	for name := range names {
 		if allAllowed != nil && !allAllowed[name] {
 			continue
 		}
-		if t, ok := p.toolBox[name]; ok {
-			tools[name] = t
+		t, ok := p.toolBox[name]
+		if !ok {
+			continue
+		}
+		tools[name] = candidateTool{
+			tool:        t,
+			fingerprint: p.currentFingerprintLocked(name, t),
 		}
 	}
 	return tools, ""
+}
+
+// currentFingerprintLocked returns the fingerprint of name in the Plugin
+// index while p.mu is held. MCP toolboxes reuse box.mcp.fingerprints (the
+// same digest ensureMCPListed compares to decide forgets); static toolboxes
+// hash the current declaration on the fly.
+func (p *Plugin) currentFingerprintLocked(name string, t tool.Tool) string {
+	if ns, ok := p.namespaceByTool[name]; ok {
+		if box := p.toolboxByName[ns]; box != nil && box.mcp != nil {
+			if fp, ok := box.mcp.fingerprints[name]; ok {
+				return fp
+			}
+		}
+	}
+	if t == nil {
+		return ""
+	}
+	return declarationFingerprint(t.Declaration())
+}
+
+// verifyCandidate reports whether name@fp is still an authoritative deferred
+// tool. It closes the TOCTOU window between embeddingCandidates and upsert:
+// a concurrent ensureMCPListed that pruned name or bumped its fingerprint
+// makes this return false, so upsert skips publishing the stale vector.
+func (p *Plugin) verifyCandidate(name, fp string) bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	t, ok := p.toolBox[name]
+	if !ok {
+		return false
+	}
+	if _, isDeferred := p.deferredNames[name]; !isDeferred {
+		return false
+	}
+	return p.currentFingerprintLocked(name, t) == fp
 }

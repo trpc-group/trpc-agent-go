@@ -760,3 +760,179 @@ func TestRenderToolboxCatalog_MatchesInvocationMode(t *testing.T) {
 	// needed to build call_tool params, matching toolSearchCallToolDescription.
 	assert.Contains(t, dispatchCatalog, "input_schema")
 }
+
+// TestMCPToolbox_StaleSnapshotUpsertIsRejected pins the TOCTOU fix for the
+// snapshot / prune|refresh / upsert race. In both cases Search A snapshots T
+// before a concurrent refresh mutates the Plugin index; the pre-fix upsert
+// would blindly (re-)publish T from the stale snapshot. verifyCandidate must
+// reject the publish so the stale vector cannot resurrect a forgotten name
+// or clobber a freshly-installed fingerprint.
+func TestMCPToolbox_StaleSnapshotUpsertIsRejected(t *testing.T) {
+	const renamed = "mcp__weather__get_forecast"
+
+	tests := []struct {
+		name string
+		// nextTools is what the server lists after Search A's snapshot.
+		nextTools func() []tool.Tool
+		// runFreshSearch controls whether a follow-up search re-embeds the
+		// new declaration before Search A's stale upsert runs (only makes
+		// sense for the refresh case).
+		runFreshSearch bool
+		// assertFinal validates indexed[renamed] after the stale upsert.
+		// staleFP is what Search A had captured before the refresh.
+		assertFinal func(t *testing.T, k *ToolKnowledge, staleFP string)
+	}{
+		{
+			name: "pruned tool is not resurrected",
+			nextTools: func() []tool.Tool {
+				return []tool.Tool{newTestTool("list_alerts", "list severe weather alerts")}
+			},
+			assertFinal: func(t *testing.T, k *ToolKnowledge, _ string) {
+				k.mu.Lock()
+				defer k.mu.Unlock()
+				_, ok := k.indexed[renamed]
+				assert.False(t, ok,
+					"stale-snapshot upsert must not repopulate indexed[T] after forget")
+			},
+		},
+		{
+			name:           "refreshed fingerprint is not overwritten",
+			runFreshSearch: true,
+			nextTools: func() []tool.Tool {
+				return []tool.Tool{newTestTool("get_forecast", "get the updated weather forecast")}
+			},
+			assertFinal: func(t *testing.T, k *ToolKnowledge, staleFP string) {
+				k.mu.Lock()
+				defer k.mu.Unlock()
+				finalFP := k.indexed[renamed]
+				assert.NotEqual(t, staleFP, finalFP,
+					"declaration change must bump the fingerprint tracked in indexed")
+				assert.NotEmpty(t, finalFP,
+					"fresh fingerprint must remain installed after stale upsert")
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ts := &fakeToolSet{
+				name:  "weather",
+				tools: []tool.Tool{newTestTool("get_forecast", "get the weather forecast")},
+			}
+			counter := &countingEmbedder{}
+			k, err := NewToolKnowledge(counter)
+			require.NoError(t, err)
+
+			p := New(nil,
+				WithToolKnowledge(k),
+				WithMCPToolboxes([]MCPToolbox{
+					{ServerName: "weather", ToolSet: ts},
+				}),
+			)
+			ctx, _ := ctxWithInvocation()
+
+			// Prime: list + embed T once under its original declaration.
+			callSearch(t, ctx, p, toolSearchInput{Namespace: "weather", Queries: []string{"forecast"}})
+			require.Equal(t, 1, counter.docCount(), "prime step must embed exactly once")
+
+			// Search A snapshots candidates before the refresh runs.
+			snapshot, errPayload := p.embeddingCandidates("weather", nil)
+			require.Empty(t, errPayload)
+			require.Contains(t, snapshot, renamed)
+			staleFP := snapshot[renamed].fingerprint
+
+			// Refresh mutates the Plugin index (prune or fingerprint bump).
+			ts.setTools(tc.nextTools())
+			p.materializeAllMCP(ctx)
+
+			// Optionally let a fresh search publish the new embedding so the
+			// stale upsert has something concrete to try to clobber.
+			if tc.runFreshSearch {
+				callSearch(t, ctx, p, toolSearchInput{Namespace: "weather", Queries: []string{"forecast"}})
+			}
+
+			// Search A's upsert on the stale snapshot must not re-embed T.
+			embedsBefore := counter.docCount()
+			usage := &model.Usage{}
+			require.NoError(t, k.upsert(ctx, snapshot, p.verifyCandidate, usage))
+			assert.Equal(t, embedsBefore, counter.docCount(),
+				"stale-snapshot upsert must not re-embed T")
+
+			tc.assertFinal(t, k, staleFP)
+		})
+	}
+}
+
+// TestMCPToolbox_ConcurrentRefreshAndSearch stresses the interleaving of MCP
+// refresh (prune + forget) and semantic search (snapshot + upsert). After
+// the storm, every entry in k.indexed must still be an authoritative deferred
+// tool with a matching fingerprint; any leak means a stale snapshot slipped
+// past verifyCandidate.
+func TestMCPToolbox_ConcurrentRefreshAndSearch(t *testing.T) {
+	// Two declarations rotate so refresh flips between them; either is a
+	// legal "current" state, and a third case prunes get_forecast entirely.
+	toolA := newTestTool("get_forecast", "declaration A")
+	toolB := newTestTool("get_forecast", "declaration B")
+	ts := &fakeToolSet{name: "weather", tools: []tool.Tool{toolA}}
+
+	counter := &countingEmbedder{}
+	k, err := NewToolKnowledge(counter)
+	require.NoError(t, err)
+
+	p := New(nil,
+		WithToolKnowledge(k),
+		WithMCPToolboxes([]MCPToolbox{
+			{ServerName: "weather", ToolSet: ts},
+		}),
+	)
+	ctx, _ := ctxWithInvocation()
+
+	// Prime so the first refresh takes the "fingerprint changed" branch too.
+	callSearch(t, ctx, p, toolSearchInput{Namespace: "weather", Queries: []string{"forecast"}})
+
+	const iterations = 200
+	var wg sync.WaitGroup
+
+	// Refresher: alternate the server-side declaration and materialize.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			switch i % 3 {
+			case 0:
+				ts.setTools([]tool.Tool{toolA})
+			case 1:
+				ts.setTools([]tool.Tool{toolB})
+			case 2:
+				ts.setTools([]tool.Tool{newTestTool("list_alerts", "alerts")})
+			}
+			p.materializeAllMCP(ctx)
+		}
+	}()
+
+	// Searcher: repeatedly run semantic search through candidates + upsert.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			callSearch(t, ctx, p, toolSearchInput{Namespace: "weather", Queries: []string{"forecast"}})
+		}
+	}()
+
+	wg.Wait()
+
+	// Invariant: every indexed entry must still be authoritative under the
+	// current Plugin state. A violation means a stale snapshot slipped past.
+	k.mu.Lock()
+	snapshot := make(map[string]string, len(k.indexed))
+	for name, fp := range k.indexed {
+		snapshot[name] = fp
+	}
+	k.mu.Unlock()
+
+	for name, fp := range snapshot {
+		assert.True(t, p.verifyCandidate(name, fp),
+			"indexed entry %q@%s must remain authoritative in the Plugin index",
+			name, fp)
+	}
+}
