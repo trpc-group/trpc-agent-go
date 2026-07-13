@@ -11,6 +11,7 @@ package evolution
 
 import (
 	"context"
+	"errors"
 	"hash/fnv"
 	"os"
 	"path/filepath"
@@ -667,7 +668,7 @@ func (w *worker) applySkillsWithGate(ctx context.Context, skills []*SkillSpec, e
 		if spec == nil {
 			continue
 		}
-		rev := w.buildRevision(spec, RevisionActionCreate, "")
+		rev := w.buildRevision(spec, RevisionActionCreate)
 		if w.processRevision(ctx, rev, existing, RevisionActionCreate, outcome, scope, scoped) {
 			mutated = true
 		}
@@ -691,7 +692,7 @@ func (w *worker) applyUpdatesWithGate(ctx context.Context, updates []*SkillUpdat
 		}
 		spec := *upd.NewSpec
 		spec.Name = upd.Name // force stable on-disk name
-		rev := w.buildRevision(&spec, RevisionActionUpdate, upd.Name)
+		rev := w.buildRevision(&spec, RevisionActionUpdate)
 		if w.processRevision(ctx, rev, existing, RevisionActionUpdate, outcome, scope, scoped) {
 			mutated = true
 		}
@@ -718,8 +719,8 @@ func (w *worker) applyDeletionsWithGate(ctx context.Context, names []string, exi
 }
 
 // buildRevision constructs a fresh Revision for a create or update.
-func (w *worker) buildRevision(spec *SkillSpec, action RevisionAction, parentName string) *Revision {
-	rev := &Revision{
+func (w *worker) buildRevision(spec *SkillSpec, action RevisionAction) *Revision {
+	return &Revision{
 		SkillID:    skillIDFromName(spec.Name),
 		TargetName: spec.Name,
 		RevisionID: newRevisionID(),
@@ -729,10 +730,6 @@ func (w *worker) buildRevision(spec *SkillSpec, action RevisionAction, parentNam
 		Status:     RevisionPending,
 		CreatedAt:  time.Now().UTC(),
 	}
-	if parentName != "" {
-		rev.ParentID = skillIDFromName(parentName)
-	}
-	return rev
 }
 
 func (w *worker) buildDeleteRevision(name string) *Revision {
@@ -752,6 +749,7 @@ func (w *worker) buildDeleteRevision(name string) *Revision {
 // updated (so the worker knows to refresh the repository).
 func (w *worker) processRevision(ctx context.Context, rev *Revision, existing []ExistingSkill, actionLabel RevisionAction, outcome *Outcome, scope skill.SkillScope, scoped bool) bool {
 	w.bumpGateMetric(func(m *approvalGateCounters) { m.CandidatesSeen++ })
+	w.populateParentRevisionID(ctx, rev, scope, scoped)
 	store, err := w.candidateStoreForScope(scope, scoped)
 	if err != nil {
 		log.WarnfContext(ctx, "evolution: resolve candidate store failed: %v", err)
@@ -789,9 +787,47 @@ func (w *worker) processRevision(ctx context.Context, rev *Revision, existing []
 	return w.publishRevision(ctx, rev, actionLabel, gatePassed, scope, scoped, store)
 }
 
+func (w *worker) populateParentRevisionID(
+	ctx context.Context,
+	rev *Revision,
+	scope skill.SkillScope,
+	scoped bool,
+) {
+	if rev == nil || rev.Action != RevisionActionUpdate || rev.ParentID != "" {
+		return
+	}
+	pointer, err := w.activePointerForScope(scope, scoped)
+	if err != nil {
+		log.WarnfContext(ctx, "evolution: resolve parent active pointer failed: %v", err)
+		return
+	}
+	if pointer == nil {
+		return
+	}
+	parentID, err := pointer.Get(ctx, rev.SkillID)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			log.WarnfContext(ctx, "evolution: read parent active pointer failed: %v", err)
+		}
+		return
+	}
+	rev.ParentID = parentID
+}
+
 // runGates evaluates spec, safety, and effectiveness gates in order.
 // Returns true if all gates pass (or if no gates are configured).
 func (w *worker) runGates(ctx context.Context, rev *Revision, existing []ExistingSkill, outcome *Outcome) bool {
+	passed := w.runAutomaticGates(ctx, rev, existing, outcome)
+	// Human gate. Only runs when all automatic gates passed.
+	if passed && w.humanGate != nil {
+		if !w.runHumanGate(ctx, rev, outcome) {
+			passed = false
+		}
+	}
+	return passed
+}
+
+func (w *worker) runAutomaticGates(ctx context.Context, rev *Revision, existing []ExistingSkill, outcome *Outcome) bool {
 	passed := true
 	if rev.Action != RevisionActionDelete && w.specGate != nil {
 		if !w.runSpecGate(ctx, rev, existing) {
@@ -806,12 +842,6 @@ func (w *worker) runGates(ctx context.Context, rev *Revision, existing []Existin
 	// Effectiveness gate. Only runs when spec+safety passed.
 	if passed && w.effectivenessGate != nil {
 		if !w.runEffectivenessGate(ctx, rev, outcome) {
-			passed = false
-		}
-	}
-	// Human gate. Only runs when all automatic gates passed.
-	if passed && w.humanGate != nil {
-		if !w.runHumanGate(ctx, rev, outcome) {
 			passed = false
 		}
 	}

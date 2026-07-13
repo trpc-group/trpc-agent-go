@@ -139,6 +139,81 @@ evoSvc := evolution.NewService(reviewerModel,
 )
 ```
 
+## Offline Reflective Optimization
+
+The asynchronous reviewer learns one candidate from one completed session.
+For skills that have a repeatable benchmark, `evolution/optimization` adds a
+separate pure-Go search loop inspired by GEPA. It does not require DSPy,
+Python, or a companion process.
+
+The optimizer:
+
+1. evaluates the seed skill on a validation split;
+2. evaluates a Pareto-selected parent on a feedback minibatch and sends the
+   score, output, evaluator feedback, and redacted trace to a reflection model;
+3. changes exactly one `SkillSpec` component and accepts the child only when it
+   strictly improves the paired minibatch;
+4. tracks per-case validation winners and samples parents by instance-level
+   Pareto coverage;
+5. compares the final candidate with the seed on an unseen holdout split; and
+6. optionally submits the candidate to the existing revision store. External
+   submissions always stop at `pending_approval` and never update the live
+   skill directly.
+
+Only the task-specific evaluator is supplied by the application:
+
+```go
+type benchmarkEvaluator struct {
+    // runner/sandbox/test harness dependencies
+}
+
+func (e *benchmarkEvaluator) Evaluate(
+    ctx context.Context,
+    candidate *evolution.SkillSpec,
+    cases []optimization.Case,
+    seed int64,
+) ([]optimization.Evaluation, error) {
+    // Load candidate in an isolated repository, run every case, and return
+    // one normalized [0,1] score plus actionable feedback/trace per case.
+    return evaluations, nil
+}
+```
+
+Create and run the optimizer:
+
+```go
+optimizer, err := optimization.New(
+    reflectionModel,
+    evaluator,
+    optimization.WithMaxIterations(10),
+    optimization.WithReflectionBatchSize(3),
+    optimization.WithRandomSeed(7),
+    optimization.WithStoreDir("./evolution/experiments"),
+    optimization.WithEvolutionService(evoSvc),
+)
+if err != nil {
+    return err
+}
+
+result, err := optimizer.Optimize(ctx, optimization.Request{
+    Seed:             baselineSpec,
+    ParentRevisionID: activeRevisionID,
+    Submit:           true,
+    Dataset: optimization.Dataset{
+        ID:         "managed-skill-regression",
+        Version:    "v1",
+        Feedback:   feedbackCases,
+        Validation: validationCases,
+        Holdout:    holdoutCases,
+    },
+})
+```
+
+Case IDs must be unique across splits. Scores must be finite and normalized to
+`[0,1]`. Submission requires at least ten cases in each split. Keep holdout
+cases hidden from the search, redact secrets from feedback and traces, and run
+candidate agents without production credentials or side-effecting tools.
+
 ## Review Policy
 
 Evolution decides whether to review after each task completion. The built-in `DefaultReviewPolicy` triggers when any of these conditions hold:
@@ -206,7 +281,7 @@ Deterministic content safety scan:
 Outcome-based quality check:
 
 - Session result `fail` or `agent_error` → revision rejected
-- Session score < 80 → revision held in `pending_eval`
+- Normalized session score < 0.8 → revision held in `pending_eval`
 
 Requires an Outcome to be attached to the learning job:
 
@@ -215,7 +290,7 @@ evoSvc.EnqueueLearningJob(ctx, evolution.LearningJob{
     Session: sess,
     Outcome: &evolution.Outcome{
         Status: evolution.OutcomeSuccess,
-        Score:  floatPtr(95.0), // 0-100
+        Score:  floatPtr(0.95), // normalized to 0-1
         Notes:  "all assertions passed",
     },
 })

@@ -98,6 +98,7 @@ const (
 	AuditActionDelete  AuditAction = "delete"
 	AuditActionPromote AuditAction = "promote"
 	AuditActionReject  AuditAction = "reject"
+	AuditActionSubmit  AuditAction = "submit"
 )
 
 // Revision is an immutable snapshot of a SkillSpec plus the metadata
@@ -127,6 +128,22 @@ type Revision struct {
 	SafetyReport        *SafetyReport        `json:"safety_report,omitempty"`
 	EffectivenessReport *EffectivenessReport `json:"effectiveness_report,omitempty"`
 	HumanReport         *HumanReport         `json:"human_report,omitempty"`
+	Evidence            *RevisionEvidence    `json:"evidence,omitempty"`
+}
+
+// RevisionEvidence records reproducible evaluation evidence attached to an
+// externally submitted revision. Large traces stay in the experiment store;
+// the revision only carries the identifiers and aggregate scores required for
+// approval and audit.
+type RevisionEvidence struct {
+	ExperimentID   string             `json:"experiment_id,omitempty"`
+	DatasetID      string             `json:"dataset_id,omitempty"`
+	DatasetVersion string             `json:"dataset_version,omitempty"`
+	BaselineScore  float64            `json:"baseline_score,omitempty"`
+	CandidateScore float64            `json:"candidate_score,omitempty"`
+	Delta          float64            `json:"delta,omitempty"`
+	CaseCount      int                `json:"case_count,omitempty"`
+	Objectives     map[string]float64 `json:"objectives,omitempty"`
 }
 
 // SpecReport is the deterministic SpecGate verdict.

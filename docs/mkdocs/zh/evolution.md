@@ -139,6 +139,77 @@ evoSvc := evolution.NewService(reviewerModel,
 )
 ```
 
+## 离线反思式优化
+
+异步 Reviewer 解决的是“从一次已完成 session 中提炼一个候选”。对于已经有可重复
+benchmark 的 skill，`evolution/optimization` 提供独立的纯 Go 搜索闭环，机制参考
+GEPA，但不依赖 DSPy、Python 或 companion process。
+
+优化器会：
+
+1. 先在 validation split 上评估 baseline skill；
+2. 按实例级 Pareto 选择 parent，在 feedback minibatch 上执行，并把 score、output、
+   evaluator feedback 和脱敏 trace 交给 reflection model；
+3. 每次只修改一个 `SkillSpec` component，且 child 只有在同一 minibatch、同一 seed
+   下严格优于 parent 才进入候选池；
+4. 维护逐 case validation winner，并按 Pareto coverage 采样后续 parent；
+5. 搜索结束后才在不可见的 holdout split 上配对比较 baseline/final candidate；
+6. 可选地把通过 holdout 的候选接回现有 revision store。外部候选始终停在
+   `pending_approval`，不会直接修改 live skill。
+
+应用只需要实现与任务相关的 evaluator：
+
+```go
+type benchmarkEvaluator struct {
+    // runner/sandbox/test harness 依赖
+}
+
+func (e *benchmarkEvaluator) Evaluate(
+    ctx context.Context,
+    candidate *evolution.SkillSpec,
+    cases []optimization.Case,
+    seed int64,
+) ([]optimization.Evaluation, error) {
+    // 在隔离仓库中加载 candidate，执行每个 case，并为每个 case 返回
+    // 一个 [0,1] 归一化分数及可操作的 feedback/trace。
+    return evaluations, nil
+}
+```
+
+创建并运行优化器：
+
+```go
+optimizer, err := optimization.New(
+    reflectionModel,
+    evaluator,
+    optimization.WithMaxIterations(10),
+    optimization.WithReflectionBatchSize(3),
+    optimization.WithRandomSeed(7),
+    optimization.WithStoreDir("./evolution/experiments"),
+    optimization.WithEvolutionService(evoSvc),
+)
+if err != nil {
+    return err
+}
+
+result, err := optimizer.Optimize(ctx, optimization.Request{
+    Seed:             baselineSpec,
+    ParentRevisionID: activeRevisionID,
+    Submit:           true,
+    Dataset: optimization.Dataset{
+        ID:         "managed-skill-regression",
+        Version:    "v1",
+        Feedback:   feedbackCases,
+        Validation: validationCases,
+        Holdout:    holdoutCases,
+    },
+})
+```
+
+三个 split 的 case ID 不能重复，score 必须是 `[0,1]` 内的有限数值。提交 revision
+时每个 split 至少需要 10 个 case。holdout 必须对搜索不可见；feedback/trace 需要先
+脱敏；candidate agent 应在无生产凭据、无副作用工具的隔离环境中执行。
+
 ## 触发条件
 
 Evolution 在 runner 完成每个任务后自动判断是否 review。内置 `DefaultReviewPolicy` 在以下任一条件满足时触发：
@@ -214,7 +285,7 @@ evolution.WithSafetyGate(evolution.NewDefaultSafetyGate())
 基于 session outcome 的效果评估：
 
 - session 结果为 `fail` 或 `agent_error` → revision 被拒绝（不从失败中学错误流程）
-- session score < 80 → revision 进入 `pending_eval`（可配置阈值）
+- 归一化 session score < 0.8 → revision 进入 `pending_eval`（可配置阈值）
 
 ```go
 evolution.WithEffectivenessGate(evolution.NewOutcomeBasedEffectivenessGate())
@@ -228,7 +299,7 @@ evoSvc.EnqueueLearningJob(ctx, evolution.LearningJob{
     Session: sess,
     Outcome: &evolution.Outcome{
         Status: evolution.OutcomeSuccess, // success / fail / partial / agent_error
-        Score:  floatPtr(95.0),           // 0-100
+        Score:  floatPtr(0.95),           // 归一化到 0-1
         Notes:  "all assertions passed",
     },
 })

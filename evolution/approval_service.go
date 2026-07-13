@@ -483,6 +483,7 @@ func cloneRevision(rev *Revision) *Revision {
 		report.Reasons = append([]string(nil), rev.HumanReport.Reasons...)
 		cp.HumanReport = &report
 	}
+	cp.Evidence = cloneRevisionEvidence(rev.Evidence)
 	return &cp
 }
 
