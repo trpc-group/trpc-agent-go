@@ -606,6 +606,9 @@ func TestExtractor_BuildSystemPrompt_WithExistingMemories(t *testing.T) {
 	assert.Contains(t, prompt, "on 2023-05-08")
 	assert.Contains(t, prompt, "**ASSISTANT OUTPUTS**")
 	assert.Contains(t, prompt, "Absinthe as the fifth item")
+	assert.Contains(t, prompt, "Structured deliverables drafted")
+	assert.Contains(t, prompt, "numbered or bulleted")
+	assert.Contains(t, prompt, "objectives")
 	assert.Contains(t, prompt, "</existing_memories>")
 }
 

@@ -557,6 +557,10 @@ Today's date is {current_date}. You MUST use this date to resolve ALL relative t
   conclusions. For example, if the assistant recommends five bottles and the
   fifth is Absinthe, keep a memory that names all five and identifies
   Absinthe as the fifth item.
+  Structured deliverables drafted by the assistant, such as proposals,
+  plans, itineraries, recipes, rubrics, policies, and design specs, are also
+  memory-worthy. Preserve section headings and numbered or bulleted
+  objectives, requirements, decisions, steps, or recommendations.
 - **EXHAUSTIVE DETAILS**: Extract EVERY specific detail mentioned, even if
   it seems minor or is mentioned only once in passing. This includes:
   - Specific book titles, movie titles, song names, band/artist names
