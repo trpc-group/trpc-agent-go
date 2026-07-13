@@ -139,9 +139,9 @@ type RevisionEvidence struct {
 	ExperimentID   string             `json:"experiment_id,omitempty"`
 	DatasetID      string             `json:"dataset_id,omitempty"`
 	DatasetVersion string             `json:"dataset_version,omitempty"`
-	BaselineScore  float64            `json:"baseline_score,omitempty"`
-	CandidateScore float64            `json:"candidate_score,omitempty"`
-	Delta          float64            `json:"delta,omitempty"`
+	BaselineScore  float64            `json:"baseline_score"`
+	CandidateScore float64            `json:"candidate_score"`
+	Delta          float64            `json:"delta"`
 	CaseCount      int                `json:"case_count,omitempty"`
 	Objectives     map[string]float64 `json:"objectives,omitempty"`
 }

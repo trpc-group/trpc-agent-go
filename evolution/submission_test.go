@@ -10,6 +10,7 @@ package evolution
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -195,6 +196,16 @@ func TestSubmissionCloneAndEvidenceNilPaths(t *testing.T) {
 	cloned.Pitfalls[0] = "Changed."
 	assert.Equal(t, "First.", spec.Steps[0])
 	assert.Equal(t, "Avoid aliases.", spec.Pitfalls[0])
+}
+
+func TestRevisionEvidencePreservesZeroScoresInJSON(t *testing.T) {
+	payload, err := json.Marshal(&RevisionEvidence{})
+	require.NoError(t, err)
+	assert.JSONEq(t, `{
+		"baseline_score": 0,
+		"candidate_score": 0,
+		"delta": 0
+	}`, string(payload))
 }
 
 func TestSubmitRevisionRequiresScopeForScopedService(t *testing.T) {
