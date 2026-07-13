@@ -67,7 +67,7 @@ func runTraceSmokePipeline(ctx context.Context, cfg RunConfig) (*PipelineResult,
 	if err != nil {
 		return nil, fmt.Errorf("evaluate trace smoke: %w", err)
 	}
-	latency := time.Since(evaluationStart)
+	latencyMs := reportLatencyMs(time.Since(evaluationStart), cfg.SampleReport)
 	observations := runtime.model.observations()
 	if observations.RequestCount != 0 {
 		return nil, fmt.Errorf("trace smoke unexpectedly invoked model %d time(s)", observations.RequestCount)
@@ -87,7 +87,7 @@ func runTraceSmokePipeline(ctx context.Context, cfg RunConfig) (*PipelineResult,
 			Mode:           cfg.Mode,
 			Seed:           deterministicSeed,
 			ModelConfig:    fakeModelConfigSummary(),
-			LatencyMs:      latency.Milliseconds(),
+			LatencyMs:      latencyMs,
 			ModelCallCount: observations.RequestCount,
 		},
 	)

@@ -715,14 +715,14 @@
       "validation gain 0.5000 satisfies minimum 0.0500",
       "new hard fail cases: [validation_status_tr789]",
       "critical regression cases: [validation_status_tr789]",
-      "optimization latency 29ms is within maximum 180000ms",
+      "optimization latency 0ms is within maximum 180000ms",
       "model calls 29 is within maximum 100",
       "cost check skipped (fake mode)"
     ],
     "validationGain": 0.5,
     "minValidationGain": 0.05,
     "maxDurationMs": 180000,
-    "latencyMs": 29,
+    "latencyMs": 0,
     "maxModelCalls": 100,
     "modelCallCount": 29,
     "criticalCaseIds": [
@@ -1019,7 +1019,7 @@
   "cost": {
     "totalUsd": 0
   },
-  "latencyMs": 29,
+  "latencyMs": 0,
   "modelCallCount": 29,
   "pending": []
 }

@@ -29,7 +29,10 @@ The demo also accepts:
 -output-dir ./output
 -prompt-path ./config/baseline_prompt.txt
 -config-path ./config/promptiter.json
+-sample-report
 ```
+
+By default, both modes record measured wall-clock latency. `-sample-report` normalizes report latency to `0ms` so checked-in snapshots are reproducible; it is explicit and does not depend on the output directory name.
 
 `fake` is the default mode and is the main closed-loop acceptance path. `trace-smoke` is a compatibility smoke test; it replays recorded actual invocations from `evalMode: "trace"` cases and explicitly skips optimization because replayed traces cannot prove that a new prompt patch changes candidate inference.
 
@@ -54,10 +57,10 @@ The fake model reads only user messages, tool descriptions, and tool results. It
 The checked-in sample snapshot under `sample/` is refreshed only with an explicit output directory:
 
 ```bash
-go run . -mode fake -output-dir ./sample
+go run . -mode fake -output-dir ./sample -sample-report
 ```
 
-It intentionally ends with `gate.decision = "reject"`: train reaches `1.0` and validation rises from `0.25` to `0.75`, but `validation_status_tr789` becomes a new hard fail and critical regression. Normal runs do not overwrite this snapshot.
+The committed sample uses the normalized `0ms` latency in the top-level report, final gate, and gate reason. It intentionally ends with `gate.decision = "reject"`: train reaches `1.0` and validation rises from `0.25` to `0.75`, but `validation_status_tr789` becomes a new hard fail and critical regression. Normal runs do not overwrite this snapshot.
 
 ## Trace Smoke Mode
 

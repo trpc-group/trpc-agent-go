@@ -68,7 +68,7 @@ Release recommendation: the candidate did not pass the configured final gate che
 - validation gain 0.5000 satisfies minimum 0.0500
 - new hard fail cases: [validation_status_tr789]
 - critical regression cases: [validation_status_tr789]
-- optimization latency 29ms is within maximum 180000ms
+- optimization latency 0ms is within maximum 180000ms
 - model calls 29 is within maximum 100
 - cost check skipped (fake mode)
 

@@ -18,6 +18,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
@@ -110,9 +111,10 @@ func TestRunFakePipelineEndToEnd(t *testing.T) {
 func TestRunTraceSmokePipelineEndToEnd(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "")
 	result, err := runTraceSmokePipeline(context.Background(), RunConfig{
-		Mode:      traceSmokeMode,
-		DataDir:   "./data",
-		OutputDir: t.TempDir(),
+		Mode:         traceSmokeMode,
+		DataDir:      "./data",
+		OutputDir:    t.TempDir(),
+		SampleReport: true,
 	})
 	require.NoError(t, err)
 	require.Nil(t, result.Run)
@@ -140,8 +142,50 @@ func TestRunTraceSmokePipelineEndToEnd(t *testing.T) {
 	}))
 	require.Zero(t, result.ModelObservations.RequestCount)
 	require.Zero(t, result.Report.ModelCallCount)
+	require.Zero(t, result.Report.LatencyMs)
 	require.FileExists(t, result.ReportJSONPath)
 	require.FileExists(t, result.ReportMarkdownPath)
+}
+
+func TestReportLatencyMs(t *testing.T) {
+	require.Equal(t, int64(42), reportLatencyMs(42*time.Millisecond, false))
+	require.Equal(t, sampleReportLatencyMs, reportLatencyMs(42*time.Millisecond, true))
+}
+
+func TestSampleReportSnapshotIsStableAndUpToDate(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "")
+	runSample := func(outputDir string) ([]byte, []byte) {
+		result, err := runFakePipeline(context.Background(), RunConfig{
+			Mode:         fakeMode,
+			DataDir:      "./data",
+			OutputDir:    outputDir,
+			PromptPath:   "./config/baseline_prompt.txt",
+			ConfigPath:   "./config/promptiter.json",
+			SampleReport: true,
+		})
+		require.NoError(t, err)
+		require.Zero(t, result.Report.LatencyMs)
+		require.NotNil(t, result.Report.Gate)
+		require.Zero(t, result.Report.Gate.LatencyMs)
+		require.Contains(t, result.Report.Gate.Reasons, "optimization latency 0ms is within maximum 180000ms")
+		jsonContent, err := os.ReadFile(result.ReportJSONPath)
+		require.NoError(t, err)
+		markdownContent, err := os.ReadFile(result.ReportMarkdownPath)
+		require.NoError(t, err)
+		return jsonContent, markdownContent
+	}
+
+	firstJSON, firstMarkdown := runSample(t.TempDir())
+	secondJSON, secondMarkdown := runSample(t.TempDir())
+	require.Equal(t, firstJSON, secondJSON)
+	require.Equal(t, firstMarkdown, secondMarkdown)
+
+	checkedInJSON, err := os.ReadFile("./sample/optimization_report.json")
+	require.NoError(t, err)
+	checkedInMarkdown, err := os.ReadFile("./sample/optimization_report.md")
+	require.NoError(t, err)
+	require.Equal(t, checkedInJSON, firstJSON)
+	require.Equal(t, checkedInMarkdown, firstMarkdown)
 }
 
 func TestPromptReadHashAndNeutralDefaultPrompt(t *testing.T) {
