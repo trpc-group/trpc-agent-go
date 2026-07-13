@@ -128,6 +128,9 @@ func expectLimitedEventRefs(
 	limit int,
 	refs ...eventRef,
 ) *sqlmock.ExpectedQuery {
+	if t, ok := afterTime.(time.Time); ok {
+		afterTime = sessionEventBoundary(t)
+	}
 	rows := sqlmock.NewRows([]string{"id", "created_at"})
 	for _, ref := range refs {
 		rows.AddRow(ref.id, ref.createdAt)
@@ -144,6 +147,9 @@ func expectLimitedEventRefsWithTimestamp(
 	limit int,
 	refs ...eventRef,
 ) *sqlmock.ExpectedQuery {
+	if t, ok := afterTime.(time.Time); ok {
+		afterTime = sessionEventBoundary(t)
+	}
 	rows := sqlmock.NewRows([]string{"id", "created_at", "event_timestamp"})
 	for _, ref := range refs {
 		rows.AddRow(ref.id, ref.createdAt, ref.eventTimestamp.Format(time.RFC3339Nano))
@@ -190,6 +196,9 @@ func expectNoUserAnchor(
 	sessionCreatedAt driver.Value,
 	extraArgs ...driver.Value,
 ) *sqlmock.ExpectedQuery {
+	if t, ok := sessionCreatedAt.(time.Time); ok {
+		sessionCreatedAt = sessionEventBoundary(t)
+	}
 	args := []driver.Value{key.AppName, key.UserID, key.SessionID, sessionCreatedAt}
 	args = append(args, extraArgs...)
 	args = append(args, userAnchorSearchBatchSize)
@@ -204,6 +213,9 @@ func expectNoUserAnchorWithTimestamp(
 	sessionCreatedAt driver.Value,
 	extraArgs ...driver.Value,
 ) *sqlmock.ExpectedQuery {
+	if t, ok := sessionCreatedAt.(time.Time); ok {
+		sessionCreatedAt = sessionEventBoundary(t)
+	}
 	args := []driver.Value{key.AppName, key.UserID, key.SessionID, sessionCreatedAt}
 	args = append(args, extraArgs...)
 	args = append(args, userAnchorSearchBatchSize)
@@ -219,6 +231,9 @@ func expectPreviousEventRefs(
 	before *eventRef,
 	refs ...eventRef,
 ) *sqlmock.ExpectedQuery {
+	if t, ok := sessionCreatedAt.(time.Time); ok {
+		sessionCreatedAt = sessionEventBoundary(t)
+	}
 	args := []driver.Value{key.AppName, key.UserID, key.SessionID, sessionCreatedAt}
 	if before != nil {
 		args = append(args, before.createdAt)

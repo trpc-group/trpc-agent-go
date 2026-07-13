@@ -612,6 +612,19 @@ func (s *Service) deleteSessionState(ctx context.Context, key session.Key) error
 	return nil
 }
 
+// eventPredatesSession reports whether an event belongs to an earlier
+// incarnation of a session. Some existing MySQL schemas store event times at
+// second precision while session state times retain microseconds. Normalize
+// the session boundary to the lower precision so an event created in the same
+// second is not incorrectly discarded.
+func sessionEventBoundary(sessionCreatedAt time.Time) time.Time {
+	return sessionCreatedAt.Truncate(time.Second)
+}
+
+func eventPredatesSession(eventCreatedAt, sessionCreatedAt time.Time) bool {
+	return eventCreatedAt.Before(sessionEventBoundary(sessionCreatedAt))
+}
+
 // getEventsList loads events for multiple sessions in batch.
 // sessionCreatedAts is used to filter out events created before the session was (re)created,
 // which handles the case where an expired session is overwritten but old events still exist.
@@ -685,7 +698,7 @@ func (s *Service) getEventsList(
 		keyStr := fmt.Sprintf("%s:%s:%s", appName, userID, sessionID)
 
 		if sessCreatedAt, ok := sessionCreatedAtMap[keyStr]; ok {
-			if eventCreatedAt.Before(sessCreatedAt) {
+			if eventPredatesSession(eventCreatedAt, sessCreatedAt) {
 				return nil
 			}
 		}
@@ -743,7 +756,7 @@ func (s *Service) getLimitedSessionEvents(
 	if filterAfterTime.IsZero() && s.opts.sessionTTL > 0 {
 		filterAfterTime = time.Now().Add(-s.opts.sessionTTL)
 	}
-	queryAfterTime := maxTime(filterAfterTime, sessionCreatedAt)
+	queryAfterTime := maxTime(filterAfterTime, sessionEventBoundary(sessionCreatedAt))
 
 	refs, err := s.getRecentEventRefs(ctx, key, queryAfterTime, restoreAfterTime, limit)
 	if err != nil {
@@ -1008,6 +1021,7 @@ func (s *Service) getPreviousEventRefs(
 	eventAfterTime time.Time,
 	before *eventRef,
 ) ([]eventRef, error) {
+	sessionCreatedAt = sessionEventBoundary(sessionCreatedAt)
 	if !eventAfterTime.IsZero() {
 		return s.getEventRefsWithTimestamp(
 			ctx,
@@ -1169,8 +1183,9 @@ func (s *Service) getPagedEvents(
 	if afterTime.IsZero() && s.opts.sessionTTL > 0 {
 		afterTime = time.Now().Add(-s.opts.sessionTTL)
 	}
-	if sessionCreatedAt.After(afterTime) {
-		afterTime = sessionCreatedAt
+	sessionBoundary := sessionEventBoundary(sessionCreatedAt)
+	if sessionBoundary.After(afterTime) {
+		afterTime = sessionBoundary
 	}
 
 	// Phase 1: fetch only ordering metadata with ORDER BY + LIMIT/OFFSET.

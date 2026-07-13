@@ -305,6 +305,67 @@ func TestGetEventsList(t *testing.T) {
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 
+	t.Run("KeepsEventTruncatedToSessionCreationSecond", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		defer db.Close()
+
+		s := createTestService(t, db)
+		key := session.Key{AppName: "app1", UserID: "user1", SessionID: "sess1"}
+		sessionCreatedAt := time.Date(2026, time.July, 13, 19, 2, 24, 222256000, time.UTC)
+		eventCreatedAt := sessionCreatedAt.Truncate(time.Second)
+		evt := event.NewResponseEvent("inv-1", "author1", &model.Response{
+			Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "user message"}}},
+		})
+		evtBytes, err := json.Marshal(evt)
+		require.NoError(t, err)
+
+		rows := sqlmock.NewRows([]string{"app_name", "user_id", "session_id", "event", "created_at"}).
+			AddRow(key.AppName, key.UserID, key.SessionID, evtBytes, eventCreatedAt)
+		mock.ExpectQuery("SELECT app_name, user_id, session_id, event, created_at FROM").
+			WithArgs(key.AppName, key.UserID, key.SessionID, key.UserID).
+			WillReturnRows(rows)
+
+		result, err := s.getEventsList(
+			context.Background(), []session.Key{key}, []time.Time{sessionCreatedAt}, 0, time.Time{}, nil,
+		)
+		require.NoError(t, err)
+		require.Len(t, result, 1)
+		require.Len(t, result[0], 1)
+		assert.Equal(t, "inv-1", result[0][0].InvocationID)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("DropsEventBeforeSessionCreationSecond", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		defer db.Close()
+
+		s := createTestService(t, db)
+		key := session.Key{AppName: "app1", UserID: "user1", SessionID: "sess1"}
+		sessionCreatedAt := time.Date(2026, time.July, 13, 19, 2, 24, 222256000, time.UTC)
+		eventCreatedAt := sessionCreatedAt.Truncate(time.Second).Add(-time.Second)
+		evt := event.NewResponseEvent("inv-old", "author1", &model.Response{
+			Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "old user message"}}},
+		})
+		evtBytes, err := json.Marshal(evt)
+		require.NoError(t, err)
+
+		rows := sqlmock.NewRows([]string{"app_name", "user_id", "session_id", "event", "created_at"}).
+			AddRow(key.AppName, key.UserID, key.SessionID, evtBytes, eventCreatedAt)
+		mock.ExpectQuery("SELECT app_name, user_id, session_id, event, created_at FROM").
+			WithArgs(key.AppName, key.UserID, key.SessionID, key.UserID).
+			WillReturnRows(rows)
+
+		result, err := s.getEventsList(
+			context.Background(), []session.Key{key}, []time.Time{sessionCreatedAt}, 0, time.Time{}, nil,
+		)
+		require.NoError(t, err)
+		require.Len(t, result, 1)
+		assert.Empty(t, result[0])
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
 	t.Run("WithLimit", func(t *testing.T) {
 		db, mock, err := sqlmock.New()
 		require.NoError(t, err)
@@ -489,7 +550,7 @@ func TestGetEventsList(t *testing.T) {
 			AddRow(int64(10), newer).
 			AddRow(int64(11), older)
 		mock.ExpectQuery("SELECT id, created_at FROM").
-			WithArgs("app1", "user1", "sess1", createdAt, 2, 1).
+			WithArgs("app1", "user1", "sess1", sessionEventBoundary(createdAt), 2, 1).
 			WillReturnRows(idRows)
 
 		// Phase 2: fetch events by IDs. Return order is deliberately not the
@@ -543,7 +604,7 @@ func TestGetEventsList(t *testing.T) {
 			AddRow(int64(2), now.Add(-time.Minute)).
 			AddRow(int64(1), now.Add(-2*time.Minute))
 		mock.ExpectQuery("SELECT id, created_at FROM").
-			WithArgs("app1", "user1", "sess1", createdAt, 3, 0).
+			WithArgs("app1", "user1", "sess1", sessionEventBoundary(createdAt), 3, 0).
 			WillReturnRows(idRows)
 
 		eventRows := sqlmock.NewRows([]string{"id", "event"}).
@@ -589,7 +650,7 @@ func TestGetEventsList(t *testing.T) {
 			AddRow(int64(10), newer).
 			AddRow(int64(11), older)
 		mock.ExpectQuery("SELECT id, created_at FROM").
-			WithArgs("app1", "user1", "sess1", createdAt, 2, 1).
+			WithArgs("app1", "user1", "sess1", sessionEventBoundary(createdAt), 2, 1).
 			WillReturnRows(idRows)
 
 		eventRows := sqlmock.NewRows([]string{"id", "event"}).
@@ -766,7 +827,7 @@ func TestGetSessionEvents_DelegatesToPagedEvents(t *testing.T) {
 	evt2Bytes, _ := json.Marshal(evt2)
 
 	mock.ExpectQuery("SELECT id, created_at FROM").
-		WithArgs(key.AppName, key.UserID, key.SessionID, createdAt, 2, 0).
+		WithArgs(key.AppName, key.UserID, key.SessionID, sessionEventBoundary(createdAt), 2, 0).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).
 			AddRow(int64(2), newer).
 			AddRow(int64(1), older))
@@ -891,7 +952,7 @@ func TestLimitedEventHelpers_ErrorsAndBoundaries(t *testing.T) {
 
 		s := createTestService(t, db)
 		mock.ExpectQuery(regexp.QuoteMeta("SELECT id, created_at FROM session_events")).
-			WithArgs(key.AppName, key.UserID, key.SessionID, createdAt, userAnchorSearchBatchSize).
+			WithArgs(key.AppName, key.UserID, key.SessionID, sessionEventBoundary(createdAt), userAnchorSearchBatchSize).
 			WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(1)))
 
 		anchor, ok, err := s.getLastUserEventBeforeRefs(

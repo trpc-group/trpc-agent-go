@@ -172,7 +172,7 @@ LIMIT 1`,
 		key.AppName,
 		key.UserID,
 		key.SessionID,
-		sessionCreatedAt,
+		sessionEventBoundary(sessionCreatedAt),
 		anchorEventID,
 	)
 	if err != nil {
@@ -272,7 +272,7 @@ LIMIT ?`,
 		key.AppName,
 		key.UserID,
 		key.SessionID,
-		sessionCreatedAt,
+		sessionEventBoundary(sessionCreatedAt),
 		cursorCreatedAt,
 		eventWindowBatchSize,
 	)
