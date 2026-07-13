@@ -276,6 +276,16 @@ func graphHasNonEmptyStringAttr(attrs []attribute.KeyValue, key string) bool {
 	return false
 }
 
+func graphCountAttr(attrs []attribute.KeyValue, key string) int {
+	count := 0
+	for _, kv := range attrs {
+		if string(kv.Key) == key {
+			count++
+		}
+	}
+	return count
+}
+
 func TestWorkflowTypeFromNodeType(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -2032,6 +2042,80 @@ func TestExecuteModelAndProcessResponses_UsesConfigFallbackForSparseStableTraceM
 	require.True(t, graphHasAttr(span.attrs, semconvtrace.KeyGenAIRequestModel, modelImpl.Info().Name))
 }
 
+func TestExecuteModelAndProcessResponses_ProgressivelyCompletesInvocationTraceMetadataOnRecordingSpan(t *testing.T) {
+	modelImpl := &multiResponseModel{
+		responses: []*model.Response{
+			{
+				IsPartial: true,
+				Choices: []model.Choice{
+					{Message: model.NewAssistantMessage("partial-1")},
+				},
+			},
+			{
+				IsPartial: true,
+				Choices: []model.Choice{
+					{Message: model.NewAssistantMessage("partial-2")},
+				},
+			},
+			{
+				Done: true,
+				Choices: []model.Choice{
+					{Message: model.NewAssistantMessage("done")},
+				},
+			},
+		},
+	}
+	invocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-trace-progressive"),
+	)
+	var callbackCount int
+	callbacks := model.NewCallbacks().RegisterAfterModel(
+		func(ctx context.Context, args *model.AfterModelArgs) (*model.AfterModelResult, error) {
+			callbackCount++
+			if callbackCount == 2 {
+				invocation.Session = &session.Session{
+					ID:     "sess-trace-progressive",
+					UserID: "user-trace-progressive",
+				}
+			}
+			return nil, nil
+		},
+	)
+	span := newGraphRecordingSpan()
+	resp, err := executeModelAndProcessResponses(
+		agent.NewInvocationContext(context.Background(), invocation),
+		modelExecutionConfig{
+			Invocation:     invocation,
+			ModelCallbacks: callbacks,
+			LLMModel:       modelImpl,
+			Request: &model.Request{
+				Messages: []model.Message{model.NewUserMessage("hi")},
+			},
+			InvocationID: invocation.InvocationID,
+			Span:         span,
+			NodeID:       "llm",
+		},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.Equal(t, 3, callbackCount)
+
+	require.True(t, graphHasAttr(span.attrs, semconvtrace.KeyInvocationID, invocation.InvocationID))
+	require.True(t, graphHasAttr(span.attrs, semconvtrace.KeyGenAIConversationID, "sess-trace-progressive"))
+	require.True(t, graphHasAttr(span.attrs, semconvtrace.KeyRunnerUserID, "user-trace-progressive"))
+	require.True(t, graphHasAttr(span.attrs, semconvtrace.KeyGenAIRequestModel, modelImpl.Info().Name))
+
+	// Session metadata is补全 on the second chunk; only the last two TraceChat chunk writes emit it.
+	require.Equal(t, 2, graphCountAttr(span.attrs, semconvtrace.KeyGenAIConversationID))
+	require.Equal(t, 2, graphCountAttr(span.attrs, semconvtrace.KeyRunnerUserID))
+	require.Equal(t, 3, graphCountAttr(span.attrs, semconvtrace.KeyInvocationID))
+	require.Equal(t, 3, graphCountAttr(span.attrs, semconvtrace.KeyGenAIRequestModel))
+
+	// Request payload is committed once for the whole streaming span.
+	require.Equal(t, 1, graphCountAttr(span.attrs, semconvtrace.KeyGenAIInputMessages))
+	require.Equal(t, 1, graphCountAttr(span.attrs, semconvtrace.KeyLLMRequest))
+}
+
 func TestExecuteModelAndProcessResponses_RefreshesStableTraceMetadataAfterInPlaceInvocationUpdate(t *testing.T) {
 	modelImpl := &captureModel{}
 	invocation := agent.NewInvocation(
@@ -3201,6 +3285,7 @@ func TestTraceProcessedModelResponse_DisableTracing(t *testing.T) {
 
 	traceProcessedModelResponse(
 		noop.Span{},
+		&itelemetry.ChatTraceState{},
 		tracker,
 		invocation,
 		&model.Request{},
