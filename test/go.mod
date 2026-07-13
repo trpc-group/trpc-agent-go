@@ -128,4 +128,10 @@ replace trpc.group/trpc-go/trpc-agent-go/session/sqlite => ../session/sqlite
 
 replace trpc.group/trpc-go/trpc-agent-go/storage/redis => ../storage/redis
 
+replace trpc.group/trpc-go/trpc-agent-go/storage/clickhouse => ../storage/clickhouse
+
+replace trpc.group/trpc-go/trpc-agent-go/storage/mysql => ../storage/mysql
+
+replace trpc.group/trpc-go/trpc-agent-go/storage/postgres => ../storage/postgres
+
 replace trpc.group/trpc-go/trpc-agent-go/storage/mongodb => ../storage/mongodb

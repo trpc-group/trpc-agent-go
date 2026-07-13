@@ -15,7 +15,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"math"
 	"sort"
 	"strings"
 	"time"
@@ -535,7 +534,9 @@ func normalizeTrackPayload(raw json.RawMessage) string {
 		return "{}"
 	}
 	var v any
-	if err := json.Unmarshal(raw, &v); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	if err := dec.Decode(&v); err != nil {
 		return string(bytes.TrimSpace(raw))
 	}
 	v = scrubVolatileNumbers(v, "")
@@ -556,14 +557,14 @@ func scrubVolatileNumbers(v any, key string) any {
 			out[i] = scrubVolatileNumbers(child, key)
 		}
 		return out
-	case float64:
+	case json.Number:
 		lower := strings.ToLower(key)
 		if strings.Contains(lower, "duration") ||
 			strings.Contains(lower, "elapsed") ||
 			strings.Contains(lower, "latency") {
 			return "<duration>"
 		}
-		return math.Round(x*1000) / 1000
+		return x
 	default:
 		return v
 	}

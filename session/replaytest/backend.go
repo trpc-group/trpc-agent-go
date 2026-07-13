@@ -966,7 +966,6 @@ func updateFileMemory(
 		return
 	}
 	entry := fileMemoryEntry(key, spec)
-	entry.ID = stableID(key.AppName, key.UserID, spec.Content, strings.Join(spec.Topics, ","), "")
 	*entries = deleteMemory(*entries, logicalIDs[spec.ID])
 	*entries = upsertMemory(*entries, entry)
 	logicalIDs[spec.ID] = entry.ID
@@ -1459,8 +1458,9 @@ func fileMemoryEntry(key session.Key, spec *MemorySpec) *memory.Entry {
 	if m.Kind == "" {
 		m.Kind = memory.KindFact
 	}
+	metadata := normalizedMemoryMetadata(m.Kind, m.EventTime, m.Participants, m.Location)
 	return &memory.Entry{
-		ID:        stableID(key.AppName, key.UserID, spec.Content, strings.Join(topics, ","), string(m.Kind)),
+		ID:        stableMemoryID(key.AppName, key.UserID, spec.Content, topics, metadata),
 		AppName:   key.AppName,
 		UserID:    key.UserID,
 		Memory:    m,

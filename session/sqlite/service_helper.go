@@ -265,7 +265,7 @@ ORDER BY updated_at DESC, session_id DESC`, s.tableSessionStates)
 	out := make([]*session.Session, 0, len(sessStates))
 	for i, st := range sessStates {
 		var sums map[string]*session.Summary
-		if len(eventsList[i]) > 0 {
+		if len(summariesList[i]) > 0 {
 			sums = summariesList[i]
 		}
 		sess := session.NewSession(

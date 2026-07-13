@@ -1189,8 +1189,10 @@ func TestNormalizeEdgeBranches(t *testing.T) {
 	if payloadType(`{"type":42}`) != "" {
 		t.Fatalf("non-string payload type should be ignored")
 	}
-	payload := normalizeTrackPayload([]byte(`{"latency_ms":1.2,"count":1.23456,"items":[{"elapsed":3.4}]}`))
-	if !strings.Contains(payload, `\u003cduration\u003e`) || !strings.Contains(payload, `"count":1.235`) {
+	payload := normalizeTrackPayload([]byte(`{"latency_ms":1.2,"count":1.23456,"id":9007199254740993,"items":[{"elapsed":3.4}]}`))
+	if !strings.Contains(payload, `\u003cduration\u003e`) ||
+		!strings.Contains(payload, `"count":1.23456`) ||
+		!strings.Contains(payload, `"id":9007199254740993`) {
 		t.Fatalf("volatile number normalization failed: %s", payload)
 	}
 }
