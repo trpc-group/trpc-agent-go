@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
 // WriteReports writes JSON and Markdown reports to disk.
@@ -51,7 +52,7 @@ func MarkdownReport(report *Report) string {
 	}
 	fmt.Fprintf(&buf, "# Optimization Report\n\n")
 	fmt.Fprintf(&buf, "Decision: **%s**\n\n", decision)
-	fmt.Fprintf(&buf, "App: `%s`\n\n", report.Run.AppName)
+	fmt.Fprintf(&buf, "App: %s\n\n", markdownInlineCode(report.Run.AppName))
 	fmt.Fprintf(&buf, "Seed: `%d`\n\n", report.Run.Seed)
 	fmt.Fprintf(&buf, "Runner: `%s`\n\n", report.Run.Runner.Mode)
 	fmt.Fprintf(&buf, "Duration: `%dms`\n\n", report.Run.DurationMS)
@@ -66,14 +67,14 @@ func MarkdownReport(report *Report) string {
 	fmt.Fprintf(&buf, "- Accepted: `%t`\n", report.GateDecision.Accepted)
 	fmt.Fprintf(&buf, "- Validation score delta: `%.2f`\n", report.GateDecision.ScoreDelta)
 	for _, reason := range report.GateDecision.Reasons {
-		fmt.Fprintf(&buf, "- Reason: %s\n", reason)
+		fmt.Fprintf(&buf, "- Reason: %s\n", markdownText(reason))
 	}
 	fmt.Fprintf(&buf, "\n## Validation Delta\n\n")
 	fmt.Fprintf(&buf, "| Case | Baseline | Candidate | Delta | Transition | New hard fail | Critical regression |\n")
 	fmt.Fprintf(&buf, "| --- | ---: | ---: | ---: | --- | --- | --- |\n")
 	for _, delta := range report.Delta.Cases {
-		fmt.Fprintf(&buf, "| `%s` | %.2f | %.2f | %.2f | `%s` | `%t` | `%t` |\n",
-			delta.EvalID,
+		fmt.Fprintf(&buf, "| %s | %.2f | %.2f | %.2f | `%s` | `%t` | `%t` |\n",
+			markdownTableCell(delta.EvalID),
 			delta.BaselineScore,
 			delta.CandidateScore,
 			delta.ScoreDelta,
@@ -90,9 +91,9 @@ func MarkdownReport(report *Report) string {
 	for _, candidate := range report.Candidates {
 		fmt.Fprintf(&buf, "### Round %d\n\n", candidate.Round)
 		fmt.Fprintf(&buf, "- Accepted: `%t`\n", candidate.GateDecision.Accepted)
-		fmt.Fprintf(&buf, "- Prompt: `%s`\n", candidate.Prompt)
+		fmt.Fprintf(&buf, "- Prompt:\n\n%s\n", markdownCodeBlock(candidate.Prompt))
 		for _, reason := range candidate.GateDecision.Reasons {
-			fmt.Fprintf(&buf, "- Gate reason: %s\n", reason)
+			fmt.Fprintf(&buf, "- Gate reason: %s\n", markdownText(reason))
 		}
 		fmt.Fprintf(&buf, "\n")
 	}
@@ -102,9 +103,56 @@ func MarkdownReport(report *Report) string {
 	fmt.Fprintf(&buf, "- Total latency: `%dms`\n", report.LatencySummary.TotalMS)
 	fmt.Fprintf(&buf, "\n## Artifacts\n\n")
 	for _, artifact := range report.Artifacts {
-		fmt.Fprintf(&buf, "- `%s`\n", artifact)
+		fmt.Fprintf(&buf, "- %s\n", markdownInlineCode(artifact))
 	}
 	return buf.String()
+}
+
+func markdownText(value string) string {
+	value = strings.ReplaceAll(value, "\\", "\\\\")
+	value = strings.ReplaceAll(value, "`", "\\`")
+	value = strings.ReplaceAll(value, "|", "\\|")
+	value = strings.ReplaceAll(value, "\r\n", "<br>")
+	return strings.ReplaceAll(value, "\n", "<br>")
+}
+
+func markdownTableCell(value string) string {
+	return markdownText(value)
+}
+
+func markdownInlineCode(value string) string {
+	value = strings.ReplaceAll(value, "\r\n", " ")
+	value = strings.ReplaceAll(value, "\n", " ")
+	fence := strings.Repeat("`", longestBacktickRun(value)+1)
+	if len(fence) < 1 {
+		fence = "`"
+	}
+	return fence + value + fence
+}
+
+func markdownCodeBlock(value string) string {
+	fenceLength := longestBacktickRun(value) + 1
+	if fenceLength < 3 {
+		fenceLength = 3
+	}
+	fence := strings.Repeat("`", fenceLength)
+	return fence + "text\n" + value + "\n" + fence
+}
+
+func longestBacktickRun(value string) int {
+	longest := 0
+	current := 0
+	for _, r := range value {
+		if r == '`' {
+			current++
+			if current > longest {
+				longest = current
+			}
+			continue
+		}
+		current = 0
+	}
+	return longest
 }
 
 // BuildAttributionStats counts categories across all report evaluations.

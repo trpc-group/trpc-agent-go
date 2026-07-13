@@ -42,3 +42,23 @@ func TestEvaluateGateRejectsRegressionAndBudgets(t *testing.T) {
 		decision.FailedRules,
 	)
 }
+
+func TestEvaluateGateRejectsMismatchedValidationCases(t *testing.T) {
+	decision := EvaluateGate(
+		GatePolicy{MinValidationScoreGain: 0.05, AllowNewHardFails: true},
+		evalSummary(0.7),
+		evalSummary(0.8),
+		[]CaseDelta{
+			{EvalID: "baseline-only", Transition: TransitionMissing},
+			{EvalID: "candidate-only", Transition: TransitionMissing},
+		},
+		CostSummary{},
+		LatencySummary{},
+	)
+
+	assert.False(t, decision.Accepted)
+	assert.Contains(t, decision.FailedRules, "validation_case_coverage")
+	assert.Contains(t, decision.Reasons, "baseline and candidate validation sets differ by 2 case(s)")
+	assert.NotContains(t, decision.FailedRules, "no_new_hard_fails")
+	assert.NotContains(t, decision.FailedRules, "critical_case_non_regression")
+}

@@ -50,3 +50,24 @@ func TestComputeDeltasClassifiesTransitions(t *testing.T) {
 	assert.Equal(t, 1, summary.NewHardFails)
 	assert.Equal(t, 1, summary.CriticalRegressions)
 }
+
+func TestComputeDeltasMarksCasesMissingFromEitherSide(t *testing.T) {
+	baseline := evalSummary(0.5,
+		caseResult("shared", 0.5, true),
+		caseResult("baseline-only", 0.4, false),
+	)
+	candidate := evalSummary(0.6,
+		caseResult("shared", 0.6, true),
+		caseResult("candidate-only", 0.7, true),
+	)
+
+	deltas, _ := ComputeDeltas(baseline, candidate, nil)
+	byID := map[string]CaseDelta{}
+	for _, delta := range deltas {
+		byID[delta.EvalID] = delta
+	}
+
+	assert.Equal(t, TransitionMissing, byID["baseline-only"].Transition)
+	assert.Equal(t, TransitionMissing, byID["candidate-only"].Transition)
+	assert.Equal(t, TransitionImproved, byID["shared"].Transition)
+}

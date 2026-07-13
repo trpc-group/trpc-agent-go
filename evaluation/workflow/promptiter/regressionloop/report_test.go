@@ -42,6 +42,24 @@ func TestWriteReportsRejectsNilReport(t *testing.T) {
 	require.ErrorContains(t, err, "report is nil")
 }
 
+func TestMarkdownReportEscapesDynamicText(t *testing.T) {
+	report := sampleReport()
+	report.Run.AppName = "app`name\nnext"
+	report.GateDecision.Reasons = []string{"reason | with `code`\nnext"}
+	report.Delta.Cases[0].EvalID = "case|`id`\nnext"
+	report.Candidates[0].Prompt = "first `line` | value\n```\nlast"
+	report.Candidates[0].GateDecision.Reasons = []string{"gate | reason\nnext"}
+	report.Artifacts = []string{"path`name\nnext"}
+
+	markdown := MarkdownReport(report)
+	assert.Contains(t, markdown, "App: ``app`name next``")
+	assert.Contains(t, markdown, "- Reason: reason \\| with \\`code\\`<br>next")
+	assert.Contains(t, markdown, "| case\\|\\`id\\`<br>next |")
+	assert.Contains(t, markdown, "````text\nfirst `line` | value\n```\nlast\n````")
+	assert.Contains(t, markdown, "- Gate reason: gate \\| reason<br>next")
+	assert.Contains(t, markdown, "- ``path`name next``")
+}
+
 func sampleReport() *Report {
 	base := evalSummary(0.6, caseResult("case", 0.6, true))
 	candidate := evalSummary(0.8, caseResult("case", 0.8, true))

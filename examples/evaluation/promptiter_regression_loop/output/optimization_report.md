@@ -29,9 +29,9 @@ Duration: `0ms`
 
 | Case | Baseline | Candidate | Delta | Transition | New hard fail | Critical regression |
 | --- | ---: | ---: | ---: | --- | --- | --- |
-| `val_json_receipt` | 0.80 | 0.85 | 0.05 | `improved` | `false` | `false` |
-| `val_route_skill` | 0.65 | 0.82 | 0.17 | `newly_passed` | `false` | `false` |
-| `val_tool_selection` | 0.50 | 0.92 | 0.42 | `newly_passed` | `false` | `false` |
+| val_json_receipt | 0.80 | 0.85 | 0.05 | `improved` | `false` | `false` |
+| val_route_skill | 0.65 | 0.82 | 0.17 | `newly_passed` | `false` | `false` |
+| val_tool_selection | 0.50 | 0.92 | 0.42 | `newly_passed` | `false` | `false` |
 
 ## Failure Attribution
 
@@ -46,19 +46,31 @@ Duration: `0ms`
 ### Round 1
 
 - Accepted: `true`
-- Prompt: `SUCCESS_PROMPT: call tools only when needed, preserve final answer format, and verify numeric facts.`
+- Prompt:
+
+```text
+SUCCESS_PROMPT: call tools only when needed, preserve final answer format, and verify numeric facts.
+```
 - Gate reason: candidate satisfies all acceptance gates
 
 ### Round 2
 
 - Accepted: `false`
-- Prompt: `INEFFECTIVE_PROMPT: be helpful and concise.`
+- Prompt:
+
+```text
+INEFFECTIVE_PROMPT: be helpful and concise.
+```
 - Gate reason: validation score gain 0.0067 is below threshold 0.0500
 
 ### Round 3
 
 - Accepted: `false`
-- Prompt: `OVERFIT_PROMPT: optimize train cases aggressively even if validation formatting changes.`
+- Prompt:
+
+```text
+OVERFIT_PROMPT: optimize train cases aggressively even if validation formatting changes.
+```
 - Gate reason: validation score gain -0.1167 is below threshold 0.0500
 - Gate reason: candidate introduced 1 new hard fail(s)
 - Gate reason: candidate regressed 1 critical case(s)
@@ -71,5 +83,5 @@ Duration: `0ms`
 
 ## Artifacts
 
-- `./output/optimization_report.json`
-- `./output/optimization_report.md`
+- `promptiter_regression_loop/output/optimization_report.json`
+- `promptiter_regression_loop/output/optimization_report.md`

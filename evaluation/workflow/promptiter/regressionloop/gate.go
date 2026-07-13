@@ -24,6 +24,16 @@ func EvaluateGate(policy GatePolicy, baseline, candidate EvaluationSummary, delt
 			policy.MinValidationScoreGain,
 		))
 	}
+	missingCases := countMissingValidationCases(deltas)
+	if missingCases == 0 {
+		decision.PassedRules = append(decision.PassedRules, "validation_case_coverage")
+	} else {
+		decision.FailedRules = append(decision.FailedRules, "validation_case_coverage")
+		decision.Reasons = append(decision.Reasons, fmt.Sprintf(
+			"baseline and candidate validation sets differ by %d case(s)",
+			missingCases,
+		))
+	}
 	if !policy.AllowNewHardFails {
 		newHardFails := countNewHardFails(deltas)
 		if newHardFails == 0 {
@@ -87,6 +97,16 @@ func countCriticalRegressions(deltas []CaseDelta) int {
 	count := 0
 	for _, delta := range deltas {
 		if delta.CriticalRegression {
+			count++
+		}
+	}
+	return count
+}
+
+func countMissingValidationCases(deltas []CaseDelta) int {
+	count := 0
+	for _, delta := range deltas {
+		if delta.Transition == TransitionMissing {
 			count++
 		}
 	}
