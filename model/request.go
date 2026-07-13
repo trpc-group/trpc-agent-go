@@ -456,6 +456,50 @@ type GenerationConfig struct {
 	// ThinkingLevel controls the qualitative thinking level for providers that support it.
 	// Gemini 3 uses this field for thinkingConfig.thinkingLevel.
 	ThinkingLevel *string `json:"thinking_level,omitempty"`
+
+	// ToolChoice constrains which tool the model may call for this request
+	// without changing Tools. Keeping the Tools slice stable preserves the
+	// provider's prompt-cache prefix (the tools block renders first in the
+	// request) and avoids confusing the model when history references a tool
+	// that is no longer listed.
+	//
+	// nil means provider default (equivalent to "auto"). Adapters that cannot
+	// express a requested mode ignore the field and log at debug level.
+	//
+	// Note: ToolChoiceRequired and ToolChoiceFunction stay in effect for every
+	// subsequent request until cleared — a forced choice left set after the
+	// tool result loops the model forever. Callers that force a tool for one
+	// step (e.g. from a BeforeModel callback) must reset the field afterwards.
+	ToolChoice *ToolChoice `json:"tool_choice,omitempty"`
+}
+
+// Tool choice modes understood by ToolChoice.Mode.
+const (
+	// ToolChoiceAuto lets the model decide freely (provider default).
+	ToolChoiceAuto = "auto"
+	// ToolChoiceNone forbids tool calls for this request.
+	ToolChoiceNone = "none"
+	// ToolChoiceRequired forces the model to call some tool.
+	ToolChoiceRequired = "required"
+	// ToolChoiceFunction forces the model to call one named tool.
+	ToolChoiceFunction = "function"
+)
+
+// ToolChoice constrains tool selection for one request without mutating the
+// tool list. Provider mapping:
+//
+//	Mode       OpenAI-compatible   Anthropic          Gemini
+//	auto       "auto"              {"type":"auto"}    mode AUTO
+//	none       "none"              {"type":"none"}    mode NONE
+//	required   "required"          {"type":"any"}     mode ANY
+//	function   named function      {"type":"tool"}    mode ANY + allowed_function_names
+type ToolChoice struct {
+	// Mode is one of ToolChoiceAuto, ToolChoiceNone, ToolChoiceRequired or
+	// ToolChoiceFunction. The zero value behaves like ToolChoiceAuto.
+	Mode string `json:"mode"`
+	// FunctionName names the forced tool. Required when Mode is
+	// ToolChoiceFunction, ignored otherwise.
+	FunctionName string `json:"function_name,omitempty"`
 }
 
 // GenerationConfigPatch selectively overrides fields in GenerationConfig.
@@ -482,6 +526,9 @@ type GenerationConfigPatch struct {
 	ThinkingEnabled  *bool    `json:"thinking_enabled,omitempty"`
 	ThinkingTokens   *int     `json:"thinking_tokens,omitempty"`
 	ThinkingLevel    *string  `json:"thinking_level,omitempty"`
+	// ToolChoice overrides the tool-choice constraint. nil means "do not
+	// override"; a pointer to the zero value resets the constraint to auto.
+	ToolChoice *ToolChoice `json:"tool_choice,omitempty"`
 }
 
 // ApplyGenerationConfigPatch applies patch to base and returns the merged
@@ -528,6 +575,9 @@ func ApplyGenerationConfigPatch(
 	}
 	if patch.ThinkingLevel != nil {
 		base.ThinkingLevel = patch.ThinkingLevel
+	}
+	if patch.ToolChoice != nil {
+		base.ToolChoice = patch.ToolChoice
 	}
 	return base
 }

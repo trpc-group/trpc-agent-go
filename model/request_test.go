@@ -1173,3 +1173,24 @@ func TestRole_ToolRole(t *testing.T) {
 	assert.Equal(t, "tool", role.String())
 	assert.True(t, role.IsValid())
 }
+
+func TestApplyGenerationConfigPatchToolChoice(t *testing.T) {
+	base := GenerationConfig{}
+	// nil patch field: do not override.
+	got := ApplyGenerationConfigPatch(base, GenerationConfigPatch{})
+	if got.ToolChoice != nil {
+		t.Fatalf("nil patch must not set ToolChoice, got %+v", got.ToolChoice)
+	}
+	// pointer patch overrides.
+	forced := &ToolChoice{Mode: ToolChoiceFunction, FunctionName: "get_weather"}
+	got = ApplyGenerationConfigPatch(base, GenerationConfigPatch{ToolChoice: forced})
+	if got.ToolChoice == nil || got.ToolChoice.FunctionName != "get_weather" {
+		t.Fatalf("patch must override ToolChoice, got %+v", got.ToolChoice)
+	}
+	// zero-value pointer resets to auto semantics.
+	base.ToolChoice = forced
+	got = ApplyGenerationConfigPatch(base, GenerationConfigPatch{ToolChoice: &ToolChoice{}})
+	if got.ToolChoice == nil || got.ToolChoice.Mode != "" {
+		t.Fatalf("zero-value patch must reset the constraint, got %+v", got.ToolChoice)
+	}
+}

@@ -82,6 +82,21 @@ func TestWithCallOptions_MergesCustomAgentConfigs(t *testing.T) {
 	require.Equal(t, callOptsTestMaxTokens, *patch.MaxTokens)
 }
 
+func TestWithCallOptions_ToolChoiceOnlyPatchIsPreserved(t *testing.T) {
+	runOpts := agent.RunOptions{}
+	WithCallOptions(
+		WithCallGenerationConfigPatch(model.GenerationConfigPatch{
+			ToolChoice: &model.ToolChoice{Mode: model.ToolChoiceFunction, FunctionName: "get_weather"},
+		}),
+	)(&runOpts)
+
+	opts := graphCallOptionsFromConfigs(runOpts.CustomAgentConfigs)
+	require.NotNil(t, opts)
+	patch := generationPatchForNode(opts, "")
+	require.NotNil(t, patch.ToolChoice)
+	require.Equal(t, "get_weather", patch.ToolChoice.FunctionName)
+}
+
 func TestWithCallOptions_ThinkingLevelOnlyPatchIsPreserved(t *testing.T) {
 	runOpts := agent.RunOptions{}
 	WithCallOptions(

@@ -676,6 +676,7 @@ func (m *Model) buildChatConfig(request *model.Request) *genai.GenerateContentCo
 			},
 		}
 	}
+	applyToolChoice(chatRequest, request.ToolChoice)
 
 	// Set response_format for native structured outputs when requested.
 	if request.StructuredOutput != nil &&
@@ -1019,4 +1020,33 @@ func (m *Model) convertContentPart(part model.ContentPart) *genai.Part {
 		return genai.NewPartFromBytes(part.File.Data, part.File.MimeType)
 	}
 	return nil
+}
+
+// applyToolChoice maps the provider-agnostic tool-choice constraint onto
+// Gemini's function calling config. The "function" mode uses ANY plus
+// AllowedFunctionNames, which is Gemini's way to force one named tool.
+// Unknown modes are ignored with a debug log.
+func applyToolChoice(chatRequest *genai.GenerateContentConfig, tc *model.ToolChoice) {
+	if tc == nil {
+		return
+	}
+	fc := &genai.FunctionCallingConfig{}
+	switch tc.Mode {
+	case "", model.ToolChoiceAuto:
+		fc.Mode = genai.FunctionCallingConfigModeAuto
+	case model.ToolChoiceNone:
+		fc.Mode = genai.FunctionCallingConfigModeNone
+	case model.ToolChoiceRequired:
+		fc.Mode = genai.FunctionCallingConfigModeAny
+	case model.ToolChoiceFunction:
+		fc.Mode = genai.FunctionCallingConfigModeAny
+		fc.AllowedFunctionNames = []string{tc.FunctionName}
+	default:
+		log.Debugf("gemini: unsupported tool choice mode %q, ignoring", tc.Mode)
+		return
+	}
+	if chatRequest.ToolConfig == nil {
+		chatRequest.ToolConfig = &genai.ToolConfig{}
+	}
+	chatRequest.ToolConfig.FunctionCallingConfig = fc
 }

@@ -798,6 +798,7 @@ func (m *Model) buildChatRequest(request *model.Request) (*openai.ChatCompletion
 	if request.ReasoningEffort != nil {
 		chatRequest.ReasoningEffort = shared.ReasoningEffort(*request.ReasoningEffort)
 	}
+	applyToolChoice(chatRequest, request.ToolChoice)
 	opts := m.buildThinkingOption(request)
 	// Add model-level extra fields to the request.
 	for key, value := range m.extraFields {
@@ -3086,4 +3087,35 @@ func normalizeEmbeddedErrorCode(raw json.RawMessage) string {
 		return n.String()
 	}
 	return ""
+}
+
+// applyToolChoice maps the provider-agnostic tool-choice constraint onto the
+// OpenAI-compatible tool_choice field. Unknown modes are ignored with a debug
+// log so requests keep working against adapters/providers that predate a mode.
+func applyToolChoice(chatRequest *openai.ChatCompletionNewParams, tc *model.ToolChoice) {
+	if tc == nil {
+		return
+	}
+	switch tc.Mode {
+	case "", model.ToolChoiceAuto:
+		chatRequest.ToolChoice = openai.ChatCompletionToolChoiceOptionUnionParam{
+			OfAuto: openai.String("auto"),
+		}
+	case model.ToolChoiceNone:
+		chatRequest.ToolChoice = openai.ChatCompletionToolChoiceOptionUnionParam{
+			OfAuto: openai.String("none"),
+		}
+	case model.ToolChoiceRequired:
+		chatRequest.ToolChoice = openai.ChatCompletionToolChoiceOptionUnionParam{
+			OfAuto: openai.String("required"),
+		}
+	case model.ToolChoiceFunction:
+		chatRequest.ToolChoice = openai.ChatCompletionToolChoiceOptionUnionParam{
+			OfChatCompletionNamedToolChoice: &openai.ChatCompletionNamedToolChoiceParam{
+				Function: openai.ChatCompletionNamedToolChoiceFunctionParam{Name: tc.FunctionName},
+			},
+		}
+	default:
+		log.Debugf("openai: unsupported tool choice mode %q, ignoring", tc.Mode)
+	}
 }

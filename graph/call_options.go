@@ -305,7 +305,8 @@ func isEmptyGenPatch(p model.GenerationConfigPatch) bool {
 		p.ReasoningEffort == nil &&
 		p.ThinkingEnabled == nil &&
 		p.ThinkingTokens == nil &&
-		p.ThinkingLevel == nil
+		p.ThinkingLevel == nil &&
+		p.ToolChoice == nil
 }
 
 func cloneGenPatch(
@@ -355,6 +356,9 @@ func mergeGenPatch(
 	}
 	if override.ThinkingLevel != nil {
 		out.ThinkingLevel = override.ThinkingLevel
+	}
+	if override.ToolChoice != nil {
+		out.ToolChoice = override.ToolChoice
 	}
 	return out
 }

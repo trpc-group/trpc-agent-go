@@ -328,6 +328,7 @@ func (m *Model) buildChatRequest(request *model.Request) (*anthropic.MessageNewP
 	if len(request.Stop) > 0 {
 		chatRequest.StopSequences = append(chatRequest.StopSequences, request.Stop...)
 	}
+	applyToolChoice(chatRequest, request.ToolChoice)
 	if err := m.applyThinkingConfig(chatRequest, request); err != nil {
 		return nil, err
 	}
@@ -1434,4 +1435,26 @@ func convertSystemMessageContent(message model.Message) ([]anthropic.TextBlockPa
 		}
 	}
 	return blocks, nil
+}
+
+// applyToolChoice maps the provider-agnostic tool-choice constraint onto
+// Anthropic's tool_choice union. Unknown modes are ignored with a debug log.
+func applyToolChoice(chatRequest *anthropic.MessageNewParams, tc *model.ToolChoice) {
+	if tc == nil {
+		return
+	}
+	switch tc.Mode {
+	case "", model.ToolChoiceAuto:
+		chatRequest.ToolChoice = anthropic.ToolChoiceUnionParam{OfAuto: &anthropic.ToolChoiceAutoParam{}}
+	case model.ToolChoiceNone:
+		chatRequest.ToolChoice = anthropic.ToolChoiceUnionParam{OfNone: &anthropic.ToolChoiceNoneParam{}}
+	case model.ToolChoiceRequired:
+		chatRequest.ToolChoice = anthropic.ToolChoiceUnionParam{OfAny: &anthropic.ToolChoiceAnyParam{}}
+	case model.ToolChoiceFunction:
+		chatRequest.ToolChoice = anthropic.ToolChoiceUnionParam{
+			OfTool: &anthropic.ToolChoiceToolParam{Name: tc.FunctionName},
+		}
+	default:
+		log.Debugf("anthropic: unsupported tool choice mode %q, ignoring", tc.Mode)
+	}
 }
