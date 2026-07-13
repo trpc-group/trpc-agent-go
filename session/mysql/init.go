@@ -569,7 +569,9 @@ func (s *Service) initDB(ctx context.Context) error {
 		}
 	}
 
-	// Verify schema (column drift is fatal; index drift is logged as warnings).
+	// Verify schema. Column type/nullability drift is fatal, timestamp
+	// precision drift is logged as a warning, and index drift follows the
+	// policy documented by verifyIndexes.
 	if err := s.verifySchema(ctx); err != nil {
 		return fmt.Errorf("schema verification failed: %w", err)
 	}
@@ -674,13 +676,16 @@ func (s *Service) tableExists(ctx context.Context, tableName string) (bool, erro
 	return count > 0, nil
 }
 
-// verifyColumns verifies that table columns match expectations.
+// verifyColumns verifies column types and nullability, and warns when timestamp
+// precision differs from TIMESTAMP(6).
 func (s *Service) verifyColumns(ctx context.Context, tableName string, expectedColumns []tableColumn) error {
 	// Get actual columns from database
 	actualColumns := make(map[string]tableColumn)
+	actualDatetimePrecisions := make(map[string]sql.NullInt64)
 	err := s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
 		var name, dataType, isNullable string
-		if err := rows.Scan(&name, &dataType, &isNullable); err != nil {
+		var datetimePrecision sql.NullInt64
+		if err := rows.Scan(&name, &dataType, &isNullable, &datetimePrecision); err != nil {
 			return err
 		}
 		actualColumns[name] = tableColumn{
@@ -688,8 +693,9 @@ func (s *Service) verifyColumns(ctx context.Context, tableName string, expectedC
 			dataType: dataType,
 			nullable: isNullable == "YES",
 		}
+		actualDatetimePrecisions[name] = datetimePrecision
 		return nil
-	}, `SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE
+	}, `SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, DATETIME_PRECISION
 		FROM information_schema.columns
 		WHERE table_schema = DATABASE()
 		AND table_name = ?
@@ -710,6 +716,22 @@ func (s *Service) verifyColumns(ctx context.Context, tableName string, expectedC
 		if actual.dataType != expected.dataType {
 			return fmt.Errorf("column %s.%s has type %s, expected %s",
 				tableName, expected.name, actual.dataType, expected.dataType)
+		}
+		if expected.dataType == "timestamp" {
+			precision := actualDatetimePrecisions[expected.name]
+			if !precision.Valid || precision.Int64 != 6 {
+				actualType := "TIMESTAMP"
+				if precision.Valid {
+					actualType = fmt.Sprintf("TIMESTAMP(%d)", precision.Int64)
+				}
+				log.WarnfContext(
+					ctx,
+					"column %s.%s uses %s, expected TIMESTAMP(6); timestamp precision mismatch may cause incorrect time comparisons",
+					tableName,
+					expected.name,
+					actualType,
+				)
+			}
 		}
 
 		// Check nullable
