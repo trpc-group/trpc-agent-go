@@ -687,6 +687,7 @@ func TestSSHLikeUnsafeOptionsNeedReview(t *testing.T) {
 		{command: "ssh -o Include=/tmp/ssh_config allowed.example", evidence: "ssh -o Include=/tmp/ssh_config"},
 		{command: `ssh -o "Include /tmp/ssh_config" allowed.example`, evidence: "ssh -o Include /tmp/ssh_config"},
 		{command: "ssh -o ProxyCommand=/tmp/proxy allowed.example", evidence: "ssh -o ProxyCommand=/tmp/proxy"},
+		{command: "ssh -oProxyCommand=/tmp/proxy allowed.example", evidence: "ssh -o ProxyCommand=/tmp/proxy"},
 		{command: `ssh -o "ProxyCommand /tmp/proxy" allowed.example`, evidence: "ssh -o ProxyCommand /tmp/proxy"},
 		{command: "scp -S /tmp/proxy ./x allowed.example:/tmp/x", evidence: "scp -S /tmp/proxy"},
 		{command: "sftp -S/tmp/proxy allowed.example", evidence: "sftp -S /tmp/proxy"},
@@ -702,6 +703,14 @@ func TestSSHLikeUnsafeOptionsNeedReview(t *testing.T) {
 			require.True(t, hasFindingEvidence(report, ruleNetworkEgress, tc.evidence), report.Findings)
 		})
 	}
+
+	report := scanner.Scan(context.Background(), Request{
+		ToolName: "workspace_exec",
+		Backend:  BackendWorkspaceExec,
+		Args:     []string{"ssh", "-o", "ProxyCommand=/tmp/proxy", "allowed.example"},
+	})
+	require.Equal(t, DecisionAsk, report.Decision, report.Findings)
+	require.True(t, hasFindingEvidence(report, ruleNetworkEgress, "ssh -o ProxyCommand=/tmp/proxy"), report.Findings)
 }
 
 func hasFindingEvidence(report Report, rule, evidence string) bool {
