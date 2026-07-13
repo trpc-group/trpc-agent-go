@@ -10,6 +10,8 @@
 package anthropic
 
 import (
+	"context"
+	"strings"
 	"testing"
 
 	anthropic "github.com/anthropics/anthropic-sdk-go"
@@ -51,5 +53,17 @@ func TestApplyToolChoice(t *testing.T) {
 	if req.ToolChoice.OfAuto != nil || req.ToolChoice.OfAny != nil ||
 		req.ToolChoice.OfTool != nil || req.ToolChoice.OfNone != nil {
 		t.Fatalf("unknown mode must be ignored: %+v", req.ToolChoice)
+	}
+}
+
+func TestGenerateContentRejectsEmptyFunctionName(t *testing.T) {
+	m := New("claude-test-model")
+	_, err := m.GenerateContent(context.Background(), &model.Request{
+		GenerationConfig: model.GenerationConfig{
+			ToolChoice: &model.ToolChoice{Mode: model.ToolChoiceFunction},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "function name") {
+		t.Fatalf("empty function name must fail fast with a framework error, got %v", err)
 	}
 }

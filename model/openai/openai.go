@@ -469,6 +469,9 @@ func (m *Model) prepareChatRequest(
 	if err := validateLogprobsConfig(request); err != nil {
 		return nil, nil, err
 	}
+	if err := request.ToolChoice.Validate(); err != nil {
+		return nil, nil, err
+	}
 	// Optimize message structure for cache if enabled.
 	if m.optimizeForCache {
 		request.Messages = m.optimizeMessagesForCache(request.Messages)

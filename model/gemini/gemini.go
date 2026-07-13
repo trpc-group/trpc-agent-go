@@ -175,6 +175,9 @@ func (m *Model) GenerateContent(
 	if request == nil {
 		return nil, errors.New("request cannot be nil")
 	}
+	if err := request.ToolChoice.Validate(); err != nil {
+		return nil, err
+	}
 	// Apply token tailoring if configured.
 	m.applyTokenTailoring(ctx, request)
 	chatRequest := m.convertMessages(request.Messages)

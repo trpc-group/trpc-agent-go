@@ -283,6 +283,9 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 
 // buildChatRequest builds the chat request for the Anthropic API.
 func (m *Model) buildChatRequest(request *model.Request) (*anthropic.MessageNewParams, error) {
+	if err := request.ToolChoice.Validate(); err != nil {
+		return nil, err
+	}
 	// Convert messages to Anthropic format.
 	messages, systemPrompts, err := convertMessages(request.Messages)
 	if err != nil {

@@ -10,6 +10,8 @@
 package openai
 
 import (
+	"context"
+	"strings"
 	"testing"
 
 	openai "github.com/openai/openai-go"
@@ -48,5 +50,17 @@ func TestApplyToolChoice(t *testing.T) {
 	applyToolChoice(req, &model.ToolChoice{Mode: "bogus"})
 	if req.ToolChoice.OfAuto.Valid() || req.ToolChoice.OfChatCompletionNamedToolChoice != nil {
 		t.Fatalf("unknown mode must be ignored: %+v", req.ToolChoice)
+	}
+}
+
+func TestGenerateContentRejectsEmptyFunctionName(t *testing.T) {
+	m := New("default-model")
+	_, err := m.GenerateContent(context.Background(), &model.Request{
+		GenerationConfig: model.GenerationConfig{
+			ToolChoice: &model.ToolChoice{Mode: model.ToolChoiceFunction},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "function name") {
+		t.Fatalf("empty function name must fail fast with a framework error, got %v", err)
 	}
 }

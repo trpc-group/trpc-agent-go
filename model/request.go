@@ -11,6 +11,7 @@ package model
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -500,6 +501,22 @@ type ToolChoice struct {
 	// FunctionName names the forced tool. Required when Mode is
 	// ToolChoiceFunction, ignored otherwise.
 	FunctionName string `json:"function_name,omitempty"`
+}
+
+// Validate rejects tool-choice values that no provider can accept. It is
+// nil-safe so adapters can call it unconditionally. Unknown modes are NOT
+// rejected here — adapters ignore them with a debug log so newer modes can
+// degrade gracefully on older adapters; an empty function name in function
+// mode is invalid everywhere and fails fast with a deterministic error
+// instead of a provider-side one.
+func (tc *ToolChoice) Validate() error {
+	if tc == nil {
+		return nil
+	}
+	if tc.Mode == ToolChoiceFunction && strings.TrimSpace(tc.FunctionName) == "" {
+		return errors.New("tool_choice: function mode requires a non-empty function name")
+	}
+	return nil
 }
 
 // GenerationConfigPatch selectively overrides fields in GenerationConfig.

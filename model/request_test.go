@@ -1194,3 +1194,32 @@ func TestApplyGenerationConfigPatchToolChoice(t *testing.T) {
 		t.Fatalf("zero-value patch must reset the constraint, got %+v", got.ToolChoice)
 	}
 }
+
+func TestToolChoiceValidate(t *testing.T) {
+	var nilTC *ToolChoice
+	if err := nilTC.Validate(); err != nil {
+		t.Fatalf("nil tool choice must validate: %v", err)
+	}
+	ok := []*ToolChoice{
+		{},
+		{Mode: ToolChoiceAuto},
+		{Mode: ToolChoiceNone},
+		{Mode: ToolChoiceRequired},
+		{Mode: ToolChoiceFunction, FunctionName: "get_weather"},
+		{Mode: "future-mode"}, // unknown modes degrade at the adapter, not here
+	}
+	for _, tc := range ok {
+		if err := tc.Validate(); err != nil {
+			t.Fatalf("%+v must validate: %v", tc, err)
+		}
+	}
+	bad := []*ToolChoice{
+		{Mode: ToolChoiceFunction},
+		{Mode: ToolChoiceFunction, FunctionName: "   "},
+	}
+	for _, tc := range bad {
+		if err := tc.Validate(); err == nil {
+			t.Fatalf("%+v must be rejected", tc)
+		}
+	}
+}
