@@ -68,6 +68,10 @@ func ParseDiff(diffContent string) (*DiffResult, error) {
 	result := &DiffResult{}
 	scanner := bufio.NewScanner(strings.NewReader(diffContent))
 
+	const maxBufferSize = 4 * 1024 * 1024
+	buf := make([]byte, 0, bufio.MaxScanTokenSize)
+	scanner.Buffer(buf, maxBufferSize)
+
 	var currentFile *DiffFile
 	var currentHunk *DiffHunk
 	inHunk := false
@@ -183,6 +187,10 @@ func ParseDiff(diffContent string) (*DiffResult, error) {
 
 	for i := range result.Files {
 		result.Files[i].GoPackage = extractGoPackage(result.Files[i].NewPath)
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("scan diff content: %w", err)
 	}
 
 	return result, nil

@@ -13,7 +13,7 @@ echo "=== Running Static Analysis ===" > out/static_analysis.txt
 
 if [ -f "$DIFF_FILE" ]; then
     echo "Parsing diff file: $DIFF_FILE" >> out/static_analysis.txt
-    changed_files=$(bash scripts/parse_diff.sh "$DIFF_FILE" | grep -v "^---")
+    changed_files=$(bash scripts/parse_diff.sh "$DIFF_FILE" | grep -v "^---" || true)
     echo "Changed files:" >> out/static_analysis.txt
     echo "$changed_files" >> out/static_analysis.txt
     

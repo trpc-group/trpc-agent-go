@@ -31,7 +31,10 @@ Capabilities
 
 Security Limits
 
-- All commands run in isolated sandbox environment
+- **Default behavior**: By default, sandbox execution is disabled and will fail unless explicitly enabled
+- **Isolation modes**:
+  - **--unsafe-local / UNSAFE_LOCAL_SANDBOX=true**: Commands run directly on the host system via `exec.CommandContext`, no container isolation
+  - **Container/E2B backend**: Not implemented yet; requires future integration
 - Command timeout: 60 seconds per execution
 - Output size limit: 1MB per command
 - High-risk commands require human review
