@@ -622,6 +622,11 @@ For EPISODES (memory_kind="episode"):
   text. Resolve them to absolute dates using today's date ({current_date}).
   Example: if today is 2024-06-10 and user says "yesterday",
   that means 2024-06-09. Write "on 2024-06-09" in the memory text.
+- If a newly mentioned visit, outing, meeting, purchase, class, presentation,
+  exhibition, recommendation, or other concrete experience has no explicit
+  date in the message, use today's date ({current_date}) as the event_time
+  and include "on {current_date}" in the memory text. The conversation's
+  reference date is the observation date for such session-scoped events.
 - When the conversation explicitly mentions a date or year (e.g., "in 2022",
   "on May 7, 2023"), preserve that original date in BOTH the memory text
   and event_time field.

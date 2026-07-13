@@ -602,6 +602,8 @@ func TestExtractor_BuildSystemPrompt_WithExistingMemories(t *testing.T) {
 	assert.Contains(t, prompt, "memory_delete")
 	assert.Contains(t, prompt, "duplicate")
 	assert.Contains(t, prompt, "different-day episodes")
+	assert.Contains(t, prompt, "session-scoped events")
+	assert.Contains(t, prompt, "on 2023-05-08")
 	assert.Contains(t, prompt, "**ASSISTANT OUTPUTS**")
 	assert.Contains(t, prompt, "Absinthe as the fifth item")
 	assert.Contains(t, prompt, "</existing_memories>")
