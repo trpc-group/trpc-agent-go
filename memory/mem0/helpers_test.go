@@ -115,6 +115,18 @@ func TestParseMem0Times(t *testing.T) {
 	})
 }
 
+func TestMem0TimestampFromMetadata(t *testing.T) {
+	assert.Nil(t, mem0TimestampFromMetadata(nil))
+	assert.Nil(t, mem0TimestampFromMetadata(map[string]any{"timestamp": ""}))
+	assert.Nil(t, mem0TimestampFromMetadata(map[string]any{"timestamp": []string{"x"}}))
+	assert.Equal(t, "2024-01-02T03:04:05Z", mem0TimestampFromMetadata(map[string]any{
+		"timestamp": "2024-01-02T03:04:05Z",
+	}))
+	assert.Equal(t, float64(1704164645), mem0TimestampFromMetadata(map[string]any{
+		"timestamp": float64(1704164645),
+	}))
+}
+
 // --- toEntry ---
 
 func TestToEntry(t *testing.T) {

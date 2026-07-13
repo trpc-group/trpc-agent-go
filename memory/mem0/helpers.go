@@ -29,6 +29,7 @@ const (
 	metadataKeyTRPCEventTime    = "trpc_event_time"
 	metadataKeyTRPCParticipants = "trpc_participants"
 	metadataKeyTRPCLocation     = "trpc_location"
+	metadataKeyMem0Timestamp    = "timestamp"
 
 	pathV1Memories  = "/v1/memories/"
 	pathV2Search    = "/v2/memories/search/"
@@ -109,6 +110,29 @@ func withTRPCAppMetadata(meta map[string]any, appName string) map[string]any {
 	}
 	out[metadataKeyTRPCAppName] = appName
 	return out
+}
+
+func mem0TimestampFromMetadata(meta map[string]any) any {
+	if len(meta) == 0 {
+		return nil
+	}
+	value, ok := meta[metadataKeyMem0Timestamp]
+	if !ok || value == nil {
+		return nil
+	}
+	switch v := value.(type) {
+	case string:
+		if strings.TrimSpace(v) == "" {
+			return nil
+		}
+		return v
+	case int, int8, int16, int32, int64,
+		uint, uint8, uint16, uint32, uint64,
+		float32, float64:
+		return v
+	default:
+		return nil
+	}
 }
 
 func recordMatchesTRPCApp(rec *memoryRecord, appName string, includeUnscoped bool) bool {
