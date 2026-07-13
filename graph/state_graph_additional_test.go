@@ -2105,7 +2105,7 @@ func TestExecuteModelAndProcessResponses_ProgressivelyCompletesInvocationTraceMe
 	require.True(t, graphHasAttr(span.attrs, semconvtrace.KeyRunnerUserID, "user-trace-progressive"))
 	require.True(t, graphHasAttr(span.attrs, semconvtrace.KeyGenAIRequestModel, modelImpl.Info().Name))
 
-	// Session metadata is补全 on the second chunk; only the last two TraceChunk calls emit it.
+	// Session metadata is补全 on the second chunk; only the last two TraceChat chunk writes emit it.
 	require.Equal(t, 2, graphCountAttr(span.attrs, semconvtrace.KeyGenAIConversationID))
 	require.Equal(t, 2, graphCountAttr(span.attrs, semconvtrace.KeyRunnerUserID))
 	require.Equal(t, 3, graphCountAttr(span.attrs, semconvtrace.KeyInvocationID))

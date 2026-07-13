@@ -5040,9 +5040,9 @@ func traceProcessedModelResponse(
 	if tracker != nil {
 		ttfb = tracker.FirstTokenTimeDuration()
 	}
-	traceState.CommitRequest(span, request, "")
-	traceState.TraceChunk(span, &itelemetry.TraceChunkAttributes{
+	traceState.TraceChat(span, &itelemetry.TraceChatAttributes{
 		Invocation:       invocation,
+		Request:          request,
 		Response:         response,
 		EventID:          lastEvent.ID,
 		TimeToFirstToken: ttfb,

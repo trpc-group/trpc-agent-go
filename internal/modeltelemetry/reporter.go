@@ -107,9 +107,9 @@ func (r *Reporter) TrackResponse(response *model.Response) {
 		if r.tracker != nil {
 			ttfb = r.tracker.FirstTokenTimeDuration()
 		}
-		r.traceState.CommitRequest(r.span, r.request, "")
-		r.traceState.TraceChunk(r.span, &itelemetry.TraceChunkAttributes{
+		r.traceState.TraceChat(r.span, &itelemetry.TraceChatAttributes{
 			Invocation:       r.invocation,
+			Request:          r.request,
 			Response:         response,
 			TimeToFirstToken: ttfb,
 		})

@@ -160,22 +160,22 @@ type ChatTraceState struct {
 	cachedPolicy     *SpanAttributePolicy
 }
 
-// TraceChunkAttributes contains per-response chunk trace inputs.
-type TraceChunkAttributes struct {
+// traceChunkAttributes contains per-response chunk trace inputs.
+type traceChunkAttributes struct {
 	Invocation       *agent.Invocation
 	Response         *model.Response
 	EventID          string
 	TimeToFirstToken time.Duration
 }
 
-// CommitRequest writes base chat and request attributes for a chat span.
+// commitRequest writes base chat and request attributes for a chat span.
 //
 // Request payload attributes are committed once while the global span attribute
 // policy pointer remains unchanged. If the policy pointer changes, request
 // attributes are rebuilt and written again under the new policy. Base chat
 // attributes may be rewritten on those refreshes. When req is nil, only base
 // attributes are written and request commit state is not latched.
-func (s *ChatTraceState) CommitRequest(span trace.Span, req *model.Request, taskType string) {
+func (s *ChatTraceState) commitRequest(span trace.Span, req *model.Request, taskType string) {
 	if !span.IsRecording() {
 		return
 	}
@@ -203,8 +203,8 @@ func (s *ChatTraceState) CommitRequest(span trace.Span, req *model.Request, task
 	}
 }
 
-// TraceChunk writes invocation, chunk metadata, and response attributes.
-func (s *ChatTraceState) TraceChunk(span trace.Span, attributes *TraceChunkAttributes) {
+// traceChunk writes invocation, chunk metadata, and response attributes.
+func (s *ChatTraceState) traceChunk(span trace.Span, attributes *traceChunkAttributes) {
 	if !span.IsRecording() || attributes == nil {
 		return
 	}
@@ -226,7 +226,7 @@ func (s *ChatTraceState) TraceChunk(span trace.Span, attributes *TraceChunkAttri
 	}
 }
 
-// TraceChat traces the invocation of an LLM call using reusable per-span state.
+// TraceChat is the single entry point for stateful streaming chat traces.
 func (s *ChatTraceState) TraceChat(span trace.Span, attributes *TraceChatAttributes) {
 	traceChatWithState(span, attributes, s)
 }
@@ -560,8 +560,8 @@ func traceChatWithState(span trace.Span, attributes *TraceChatAttributes, state 
 		return
 	}
 
-	state.CommitRequest(span, attributes.Request, attributes.TaskType)
-	state.TraceChunk(span, &TraceChunkAttributes{
+	state.commitRequest(span, attributes.Request, attributes.TaskType)
+	state.traceChunk(span, &traceChunkAttributes{
 		Invocation:       attributes.Invocation,
 		Response:         attributes.Response,
 		EventID:          attributes.EventID,
