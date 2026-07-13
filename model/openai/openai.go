@@ -2644,32 +2644,53 @@ func convertChatCompletionChoiceLogprobs(
 		Content: make([]model.TokenLogprob, len(logprobs.Content)),
 	}
 	for i, token := range logprobs.Content {
-		converted.Content[i] = model.TokenLogprob{
-			Token:       token.Token,
-			Logprob:     token.Logprob,
-			Bytes:       int64SliceToIntSlice(token.Bytes),
-			TopLogprobs: make([]model.TopLogprob, len(token.TopLogprobs)),
-		}
-		for j, top := range token.TopLogprobs {
-			converted.Content[i].TopLogprobs[j] = model.TopLogprob{
-				Token:   top.Token,
-				Logprob: top.Logprob,
-				Bytes:   int64SliceToIntSlice(top.Bytes),
-			}
-		}
+		converted.Content[i] = convertChatCompletionTokenLogprob(token)
 	}
 	return converted
 }
 
-func int64SliceToIntSlice(values []int64) []int {
-	if values == nil {
-		return nil
+func convertChatCompletionTokenLogprob(
+	token openai.ChatCompletionTokenLogprob,
+) model.TokenLogprob {
+	totalBytes := len(token.Bytes)
+	for _, top := range token.TopLogprobs {
+		totalBytes += len(top.Bytes)
 	}
-	converted := make([]int, len(values))
-	for i, value := range values {
-		converted[i] = int(value)
+	bytesArena := make([]int, totalBytes)
+	bytesOffset := 0
+
+	converted := model.TokenLogprob{
+		Token:       token.Token,
+		Logprob:     token.Logprob,
+		TopLogprobs: make([]model.TopLogprob, len(token.TopLogprobs)),
+	}
+	converted.Bytes, bytesOffset = copyLogprobBytes(bytesArena, bytesOffset, token.Bytes)
+	for i, top := range token.TopLogprobs {
+		converted.TopLogprobs[i] = model.TopLogprob{
+			Token:   top.Token,
+			Logprob: top.Logprob,
+		}
+		converted.TopLogprobs[i].Bytes, bytesOffset = copyLogprobBytes(
+			bytesArena,
+			bytesOffset,
+			top.Bytes,
+		)
 	}
 	return converted
+}
+
+func copyLogprobBytes(arena []int, offset int, values []int64) ([]int, int) {
+	if values == nil {
+		return nil, offset
+	}
+	start := offset
+	for i, value := range values {
+		arena[start+i] = int(value)
+	}
+	offset += len(values)
+	// Limit capacity so appending to one token's bytes cannot overwrite the
+	// adjacent bytes stored in the same arena.
+	return arena[start:offset:offset], offset
 }
 
 // FileOptions is the options for file operations.
