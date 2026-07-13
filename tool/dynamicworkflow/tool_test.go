@@ -917,6 +917,90 @@ func TestWorkflowStreamableCallSynchronizesWithRunner(t *testing.T) {
 	}
 }
 
+func TestWorkflowSharedInstanceWaitsForPerCallSynchronization(t *testing.T) {
+	childStarted := make(chan string, 2)
+	child := &testAgent{name: "reviewer"}
+	child.runFn = func(_ context.Context, inv *agent.Invocation) (<-chan *event.Event, error) {
+		childStarted <- inv.Message.Content
+		out := make(chan *event.Event, 1)
+		out <- testAgentFinalEvent(inv.InvocationID, "reviewer", inv.Message.Content+" answer")
+		close(out)
+		return out, nil
+	}
+	workflow, err := NewTool(scriptedRuntime{run: func(
+		ctx context.Context,
+		handler CallHandler,
+	) (Result, error) {
+		for i, input := range []string{"first", "second"} {
+			_, callErr := handler.HandleWorkflowCall(ctx, Call{
+				ID:   fmt.Sprintf("agent-%d", i+1),
+				Kind: CallKindAgent,
+				Name: "reviewer",
+				Args: json.RawMessage(fmt.Sprintf(
+					`{"input":%q,"options":{"instance_id":"shared"}}`,
+					input,
+				)),
+			})
+			if callErr != nil {
+				return Result{}, callErr
+			}
+		}
+		return Result{Value: json.RawMessage(`{"ok":true}`)}, nil
+	}}, []agent.Agent{child})
+	require.NoError(t, err)
+	parent := agent.NewInvocation(
+		agent.WithInvocationAgent(&testAgent{name: "root"}),
+		agent.WithInvocationSession(&session.Session{ID: "session-1", AppName: "app", UserID: "user"}),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), parent)
+	flushRequests := make(chan *flush.FlushRequest, 1)
+	flush.Attach(ctx, parent, flushRequests)
+	defer flush.Clear(parent)
+	reader, err := workflow.(tool.StreamableTool).StreamableCall(
+		ctx,
+		[]byte(`{"code":"return None"}`),
+	)
+	require.NoError(t, err)
+	defer reader.Close()
+
+	start := receiveWorkflowEvent(t, reader)
+	require.True(t, isWorkflowSyncEvent(parent, start))
+	require.NoError(t, parent.NotifyCompletion(
+		ctx,
+		agent.GetAppendEventNoticeKey(start.ID),
+	))
+	require.Equal(t, "first", <-childStarted)
+	firstEvent := receiveWorkflowEvent(t, reader)
+	require.Equal(t, "first answer", eventPrimaryAssistantContent(firstEvent))
+	firstCallSync := receiveWorkflowEvent(t, reader)
+	require.True(t, isWorkflowSyncEvent(parent, firstCallSync))
+
+	select {
+	case input := <-childStarted:
+		t.Fatalf("second shared-instance call started before synchronization: %q", input)
+	case <-time.After(20 * time.Millisecond):
+	}
+	require.NoError(t, parent.NotifyCompletion(
+		ctx,
+		agent.GetAppendEventNoticeKey(firstCallSync.ID),
+	))
+	select {
+	case input := <-childStarted:
+		require.Equal(t, "second", input)
+	case <-time.After(time.Second):
+		t.Fatal("second shared-instance call did not start after synchronization")
+	}
+}
+
+func receiveWorkflowEvent(t *testing.T, reader *tool.StreamReader) *event.Event {
+	t.Helper()
+	chunk, err := reader.Recv()
+	require.NoError(t, err)
+	evt, ok := chunk.Content.(*event.Event)
+	require.True(t, ok)
+	return evt
+}
+
 func isWorkflowSyncEvent(parent *agent.Invocation, evt *event.Event) bool {
 	return parent != nil &&
 		evt != nil &&
@@ -1119,6 +1203,85 @@ func TestWorkflowStreamedCompletionIsReleasedByRunner(t *testing.T) {
 		}
 	}
 	require.Equal(t, 1, childFinalCount)
+}
+
+func TestWorkflowSharedInstanceWaitsForStreamedHistory(t *testing.T) {
+	var calls int
+	historySeen := make(chan bool, 1)
+	child := &testAgent{name: "reviewer"}
+	child.runFn = func(_ context.Context, inv *agent.Invocation) (<-chan *event.Event, error) {
+		calls++
+		if calls == 2 {
+			seen := false
+			if inv.Session != nil {
+				stored := inv.Session.GetEvents()
+				for i := range stored {
+					if content, ok := assistantEventContent(&stored[i]); ok && content == "first answer" {
+						seen = true
+						break
+					}
+				}
+			}
+			historySeen <- seen
+		}
+		content := "first answer"
+		if calls == 2 {
+			content = "second answer"
+		}
+		out := make(chan *event.Event, 1)
+		out <- testAgentFinalEvent(inv.InvocationID, "reviewer", content)
+		close(out)
+		return out, nil
+	}
+	workflow, err := NewTool(scriptedRuntime{run: func(
+		ctx context.Context,
+		handler CallHandler,
+	) (Result, error) {
+		for i, input := range []string{"first", "second"} {
+			_, callErr := handler.HandleWorkflowCall(ctx, Call{
+				ID:   fmt.Sprintf("agent-%d", i+1),
+				Kind: CallKindAgent,
+				Name: "reviewer",
+				Args: json.RawMessage(fmt.Sprintf(
+					`{"input":%q,"options":{"instance_id":"shared"}}`,
+					input,
+				)),
+			})
+			if callErr != nil {
+				return Result{}, callErr
+			}
+		}
+		return Result{Value: json.RawMessage(`{"ok":true}`)}, nil
+	}}, []agent.Agent{child})
+	require.NoError(t, err)
+	root := llmagent.New(
+		"root",
+		llmagent.WithModel(&toolCallingThenFinalModel{
+			toolName:  "run_workflow",
+			arguments: []byte(`{"code":"return None"}`),
+		}),
+		llmagent.WithTools([]tool.Tool{workflow}),
+	)
+	service := sessioninmemory.NewSessionService()
+	r := runner.NewRunner("dynamic-workflow-history-test", root, runner.WithSessionService(service))
+	defer r.Close()
+
+	events, err := r.Run(
+		context.Background(),
+		"user",
+		"session",
+		model.NewUserMessage("start"),
+	)
+	require.NoError(t, err)
+	for range events {
+	}
+
+	select {
+	case seen := <-historySeen:
+		require.True(t, seen, "second call did not observe first call's assistant history")
+	case <-time.After(time.Second):
+		t.Fatal("second shared-instance call was not observed")
+	}
 }
 
 func eventPrimaryAssistantContent(evt *event.Event) string {

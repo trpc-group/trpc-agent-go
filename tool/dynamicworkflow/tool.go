@@ -16,7 +16,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"sync/atomic"
 
 	"github.com/google/uuid"
 
@@ -171,7 +170,7 @@ func (t *workflowTool) Call(ctx context.Context, raw []byte) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return t.execute(ctx, parent, code, nil)
+	return t.execute(ctx, parent, code, nil, nil)
 }
 
 // StreamableCall executes a workflow and streams child Agent events.
@@ -188,6 +187,7 @@ func (t *workflowTool) StreamableCall(
 	runnerOwnsEvents := flush.IsAttached(parent)
 	go func() {
 		defer stream.Writer.Close()
+		var synchronizeEvents func() error
 		if runnerOwnsEvents {
 			if err := waitForRunnerStream(
 				runCtx,
@@ -198,14 +198,20 @@ func (t *workflowTool) StreamableCall(
 				sendWorkflowStreamError(runCtx, stream.Writer, err)
 				return
 			}
+			synchronizeEvents = func() error {
+				return waitForRunnerStream(
+					runCtx,
+					parent,
+					t.cfg.name,
+					stream.Writer,
+				)
+			}
 		}
-		var streamedChildEvent atomic.Bool
 		result, err := t.execute(
 			runCtx,
 			parent,
 			code,
 			func(evt *event.Event) error {
-				streamedChildEvent.Store(true)
 				if stream.Writer.Send(tool.StreamChunk{Content: evt}, nil) {
 					return context.Canceled
 				}
@@ -217,17 +223,8 @@ func (t *workflowTool) StreamableCall(
 				}
 				return nil
 			},
+			synchronizeEvents,
 		)
-		if streamedChildEvent.Load() && runnerOwnsEvents {
-			if barrierErr := waitForRunnerStream(
-				runCtx,
-				parent,
-				t.cfg.name,
-				stream.Writer,
-			); barrierErr != nil && err == nil {
-				err = barrierErr
-			}
-		}
 		if err != nil {
 			sendWorkflowStreamError(runCtx, stream.Writer, err)
 			return
@@ -311,15 +308,17 @@ func (t *workflowTool) execute(
 	parent *agent.Invocation,
 	code string,
 	emitEvent func(*event.Event) error,
+	synchronizeEvents func() error,
 ) (Result, error) {
 	gateway := &workflowGateway{
-		parent:     parent,
-		agents:     t.agents,
-		tools:      t.tools,
-		workflow:   uuid.NewString(),
-		toolName:   t.cfg.name,
-		emitEvent:  emitEvent,
-		agentSlots: make(chan struct{}, defaultMaxConcurrentAgents),
+		parent:            parent,
+		agents:            t.agents,
+		tools:             t.tools,
+		workflow:          uuid.NewString(),
+		toolName:          t.cfg.name,
+		emitEvent:         emitEvent,
+		synchronizeEvents: synchronizeEvents,
+		agentSlots:        make(chan struct{}, defaultMaxConcurrentAgents),
 	}
 	if emitEvent == nil {
 		if err := flush.Invoke(ctx, parent); err != nil {
@@ -345,12 +344,13 @@ func sendWorkflowStreamError(
 }
 
 type workflowGateway struct {
-	parent    *agent.Invocation
-	agents    map[string]agentTemplate
-	tools     map[string]tool.CallableTool
-	workflow  string
-	toolName  string
-	emitEvent func(*event.Event) error
+	parent            *agent.Invocation
+	agents            map[string]agentTemplate
+	tools             map[string]tool.CallableTool
+	workflow          string
+	toolName          string
+	emitEvent         func(*event.Event) error
+	synchronizeEvents func() error
 
 	agentSlots    chan struct{}
 	instanceLocks sync.Map
@@ -503,9 +503,18 @@ func (g *workflowGateway) callAgent(ctx context.Context, call Call) (json.RawMes
 	if err != nil {
 		return nil, fmt.Errorf("dynamicworkflow: run agent %q: %w", req.templateName, err)
 	}
-	result, err := g.collectChildResult(childCtx, child, events)
-	if err != nil {
-		return nil, fmt.Errorf("dynamicworkflow: collect agent %q: %w", req.templateName, err)
+	result, collectErr := g.collectChildResult(childCtx, child, events)
+	if g.synchronizeEvents != nil {
+		if err := g.synchronizeEvents(); err != nil {
+			return nil, fmt.Errorf(
+				"dynamicworkflow: synchronize agent %q events: %w",
+				req.templateName,
+				err,
+			)
+		}
+	}
+	if collectErr != nil {
+		return nil, fmt.Errorf("dynamicworkflow: collect agent %q: %w", req.templateName, collectErr)
 	}
 	result.HistoryKey = childKey
 	if child.Session != nil {
