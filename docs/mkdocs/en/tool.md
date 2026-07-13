@@ -2033,9 +2033,10 @@ Recommended usage guidelines:
    exactly two function tools — `tool_search` (discover + load, each result
    carries the matched tool's `input_schema`) and `call_tool` (invoke a
    loaded tool by name with a `params` object matching that schema). The
-   advertised tool count then stays constant (two) no matter how many
-   deferred tools have been loaded, which some backends handle better than a
-   growing tool list.
+   deferred tools always occupy only `tool_search` and `call_tool` (two
+   function tools); preset tools are still declared separately. This keeps
+   the deferred-tool footprint constant regardless of how many are loaded,
+   which some backends handle better than a growing tool list.
 
 > Tip: keep the preset tool list passed to `toolsearch.New(presetTools, ...)`
 > consistent with `llmagent.WithTools(presetTools)`. The former indexes preset

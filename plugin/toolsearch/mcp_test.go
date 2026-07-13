@@ -130,23 +130,25 @@ func TestMCPToolbox_BlocksUnloadedTool(t *testing.T) {
 	assert.Contains(t, res.CustomResult.(string), "not loaded yet")
 }
 
-func TestMCPToolbox_RetriesAfterEmptyListing(t *testing.T) {
+// TestMCPToolbox_LaterListingSurfacesNewTools verifies the next non-empty
+// listing is reflected immediately.
+func TestMCPToolbox_LaterListingSurfacesNewTools(t *testing.T) {
 	ts := &fakeToolSet{
 		name:     "weather",
 		tools:    []tool.Tool{newTestTool("get_forecast", "forecast")},
-		emptyFor: 1, // first listing fails (server down), second succeeds
+		emptyFor: 1, // first listing sees no tools, second lists get_forecast
 	}
 	p := New(nil, WithMCPToolboxes([]MCPToolbox{
 		{ServerName: "weather", ToolSet: ts},
 	}))
 	ctx, _ := ctxWithInvocation()
 
-	// First search sees a down server: no tools, namespace not yet registered.
+	// First search: server exposes no tools yet.
 	raw, err := p.searchTools(ctx, toolSearchInput{Namespace: "weather"})
 	require.NoError(t, err)
 	assert.NotContains(t, raw, "get_forecast")
 
-	// Second search retries and now lists the tool.
+	// Second search: the new tool is picked up.
 	res := callSearch(t, ctx, p, toolSearchInput{Namespace: "weather"})
 	assert.Equal(t, []string{"mcp__weather__get_forecast"}, toolNames(res.Tools))
 }
@@ -301,11 +303,15 @@ func TestMCPToolbox_RefreshesChangedAndRemovedTools(t *testing.T) {
 	_, stillInBox := p.toolboxByName["weather"].toolNames["mcp__weather__get_alerts"]
 	assert.False(t, stillInBox, "pruned tool must leave the namespace membership set")
 
-	// beforeTool must no longer treat the pruned tool as a deferred one: without
-	// an owning namespace it should fall through untouched (no "not loaded" gate).
+	// beforeTool must guard against a stale wrapper of the pruned tool: the
+	// name still parses as mcp__weather__get_alerts and its namespace is a
+	// registered MCP server, so the callback intercepts the call with the
+	// "not loaded yet" guidance instead of letting a stale wrapper picked
+	// up earlier this turn execute.
 	bt, err := p.beforeTool(ctx, &tool.BeforeToolArgs{ToolName: "mcp__weather__get_alerts"})
 	require.NoError(t, err)
-	assert.Nil(t, bt, "pruned tool must not be intercepted as a deferred call")
+	require.NotNil(t, bt, "pruned MCP tool must be intercepted, not passed through")
+	assert.Contains(t, bt.CustomResult.(string), "not loaded yet")
 
 	// The catalog rendered for the model reflects only the current snapshot.
 	req := &model.Request{
@@ -317,11 +323,11 @@ func TestMCPToolbox_RefreshesChangedAndRemovedTools(t *testing.T) {
 	assert.NotContains(t, req.Messages[0].Content, "mcp__weather__get_alerts")
 }
 
-// TestMCPToolbox_EmptyListingKeepsPreviousSnapshot ensures a transient empty
-// listing (e.g. a server temporarily unavailable) does not wipe the previously
-// indexed tools — pruning only takes effect on a non-empty authoritative
-// listing.
-func TestMCPToolbox_EmptyListingKeepsPreviousSnapshot(t *testing.T) {
+// TestMCPToolbox_EmptyListingPreservesSnapshot verifies that an empty listing
+// is treated as a transient failure of the MCP server: the previously indexed
+// tools stay visible/callable rather than being wiped, and a subsequent
+// non-empty listing restores the normal reconciliation behaviour.
+func TestMCPToolbox_EmptyListingPreservesSnapshot(t *testing.T) {
 	ts := &fakeToolSet{
 		name:  "weather",
 		tools: []tool.Tool{newTestTool("get_forecast", "forecast")},
@@ -335,11 +341,33 @@ func TestMCPToolbox_EmptyListingKeepsPreviousSnapshot(t *testing.T) {
 	callSearch(t, ctx, p, toolSearchInput{Namespace: "weather"})
 	require.True(t, p.isDeferred("mcp__weather__get_forecast"))
 
-	// Server returns nothing (transient failure). The previous snapshot stays.
+	// Server temporarily reports an empty directory (transient failure). The
+	// stale entry MUST stay indexed so a brief outage does not wipe the
+	// namespace and force re-embedding on recovery.
 	ts.setTools(nil)
 	callSearch(t, ctx, p, toolSearchInput{Namespace: "weather"})
 	assert.True(t, p.isDeferred("mcp__weather__get_forecast"),
-		"empty listing must not prune previously indexed tools")
+		"empty listing must be treated as transient and preserve the previous snapshot")
+
+	_, stillIndexed := p.toolBox["mcp__weather__get_forecast"]
+	assert.True(t, stillIndexed, "empty listing must not evict tools from toolBox")
+
+	req := &model.Request{
+		Messages: []model.Message{{Role: model.RoleSystem, Content: Placeholder}},
+	}
+	_, err := p.beforeModel(ctx, &model.BeforeModelArgs{Request: req})
+	require.NoError(t, err)
+	assert.Contains(t, req.Messages[0].Content, "mcp__weather__get_forecast",
+		"catalog must retain the last known snapshot across a transient empty listing")
+
+	// A subsequent non-empty listing resumes normal reconciliation: replacing
+	// the tool set now genuinely prunes the old entry.
+	ts.setTools([]tool.Tool{newTestTool("get_alerts", "alerts")})
+	callSearch(t, ctx, p, toolSearchInput{Namespace: "weather"})
+	assert.False(t, p.isDeferred("mcp__weather__get_forecast"),
+		"non-empty listing must resume normal prune behaviour")
+	assert.True(t, p.isDeferred("mcp__weather__get_alerts"),
+		"new tool from the recovered listing must be indexed")
 }
 
 func TestParseMCPName(t *testing.T) {
@@ -570,4 +598,165 @@ func TestParseToolName_MCPAndCamelCase(t *testing.T) {
 	for name, want := range cases {
 		assert.Equal(t, want, parseToolName(name).Parts, name)
 	}
+}
+
+// TestMCPToolbox_LoadedToolPrunedMidTurnIsBlocked verifies stale MCP names
+// are blocked even if a stale wrapper was injected earlier in the turn.
+func TestMCPToolbox_LoadedToolPrunedMidTurnIsBlocked(t *testing.T) {
+	ts := &fakeToolSet{
+		name:  "billing",
+		tools: []tool.Tool{newTestTool("create_invoice", "create an invoice")},
+	}
+	p := New(nil, WithMCPToolboxes([]MCPToolbox{
+		{ServerName: "billing", ToolSet: ts},
+	}))
+	ctx, inv := ctxWithInvocation()
+
+	// Turn N: model calls tool_search and loads mcp__billing__create_invoice.
+	res := callSearch(t, ctx, p, toolSearchInput{Namespace: "billing", Queries: []string{"invoice"}})
+	require.Equal(t, []string{"mcp__billing__create_invoice"}, toolNames(res.Tools))
+
+	// Turn N+1: beforeModel injects the loaded tool's schema into req.Tools.
+	req := &model.Request{}
+	_, err := p.beforeModel(ctx, &model.BeforeModelArgs{Request: req})
+	require.NoError(t, err)
+	_, injected := req.Tools["mcp__billing__create_invoice"]
+	require.True(t, injected, "loaded MCP tool schema must be injected before the server prunes it")
+
+	// Server prunes this tool but still lists something else, so the empty-
+	// listing transient-failure guard does not kick in and the prune actually
+	// takes effect.
+	ts.setTools([]tool.Tool{newTestTool("list_invoices", "list existing invoices")})
+
+	// A downstream materialize (e.g. another beforeModel or a materializeAllMCP
+	// triggered by any subsequent read path) removes the tool from the index
+	// while req.Tools still carries the earlier wrapper.
+	p.materializeAllMCP(ctx)
+	assert.False(t, p.isDeferred("mcp__billing__create_invoice"),
+		"pruned tool must leave the deferred index")
+
+	// The model then tries to call the stale name. beforeTool must block it:
+	// isDeferred() is now false but isStaleMCPTool() catches an MCP-prefixed
+	// name owned by a registered namespace whose current listing no longer
+	// exposes it.
+	bt, err := p.beforeTool(ctx, &tool.BeforeToolArgs{ToolName: "mcp__billing__create_invoice"})
+	require.NoError(t, err)
+	require.NotNil(t, bt, "stale MCP tool call must be intercepted")
+	assert.Contains(t, bt.CustomResult.(string), "not loaded yet")
+
+	// And a fresh beforeModel this turn must not re-inject the stale wrapper
+	// (single materialize + single schema-injection pass keeps the request
+	// consistent with the current snapshot).
+	req = &model.Request{}
+	_, err = p.beforeModel(ctx, &model.BeforeModelArgs{Request: req})
+	require.NoError(t, err)
+	_, stillInjected := req.Tools["mcp__billing__create_invoice"]
+	assert.False(t, stillInjected,
+		"beforeModel must not inject a schema for a tool absent from the current snapshot")
+
+	// Session state may still list the loaded name (persistence outlives a
+	// listing), but the callback layer keeps the model from invoking it.
+	assert.Contains(t, p.loadDiscoveredTools(ctx, inv), "mcp__billing__create_invoice")
+}
+
+// TestMCPToolbox_UnchangedToolKeepsEmbedding verifies unchanged declarations
+// do not trigger re-embedding across repeated listings.
+func TestMCPToolbox_UnchangedToolKeepsEmbedding(t *testing.T) {
+	tool1 := newTestTool("get_forecast", "get the weather forecast")
+	ts := &fakeToolSet{name: "weather", tools: []tool.Tool{tool1}}
+
+	counter := &countingEmbedder{}
+	k, err := NewToolKnowledge(counter)
+	require.NoError(t, err)
+
+	p := New(nil,
+		WithToolKnowledge(k),
+		WithMCPToolboxes([]MCPToolbox{
+			{ServerName: "weather", ToolSet: ts},
+		}),
+	)
+	ctx, _ := ctxWithInvocation()
+
+	// First listing indexes the tool; first embedding search embeds it once.
+	res := callSearch(t, ctx, p, toolSearchInput{Namespace: "weather", Queries: []string{"forecast"}})
+	require.Equal(t, []string{"mcp__weather__get_forecast"}, toolNames(res.Tools))
+	docEmbeddingsAfterFirst := counter.docCount()
+	require.Equal(t, 1, docEmbeddingsAfterFirst, "first listing must embed once")
+
+	// Several unchanged re-listings: each one used to forget-and-re-embed
+	// every fresh name, blowing away the cached embedding on every turn. The
+	// fingerprint gate must recognize declarations are unchanged and leave
+	// the store alone.
+	for i := 0; i < 3; i++ {
+		callSearch(t, ctx, p, toolSearchInput{Namespace: "weather", Queries: []string{"forecast"}})
+	}
+	assert.Equal(t, docEmbeddingsAfterFirst, counter.docCount(),
+		"unchanged tool declarations must not trigger re-embedding")
+
+	// Now genuinely change the declaration: the fingerprint diverges and
+	// forget-then-upsert re-embeds exactly once.
+	ts.setTools([]tool.Tool{newTestTool("get_forecast", "get the updated weather forecast")})
+	callSearch(t, ctx, p, toolSearchInput{Namespace: "weather", Queries: []string{"forecast"}})
+	assert.Equal(t, docEmbeddingsAfterFirst+1, counter.docCount(),
+		"changed declaration must be re-embedded exactly once")
+}
+
+// countingEmbedder counts document embeddings for cache-invalidation tests.
+type countingEmbedder struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (e *countingEmbedder) GetEmbedding(ctx context.Context, text string) ([]float64, error) {
+	v, _, err := e.GetEmbeddingWithUsage(ctx, text)
+	return v, err
+}
+
+func (e *countingEmbedder) GetEmbeddingWithUsage(ctx context.Context, text string) ([]float64, map[string]any, error) {
+	usage := map[string]any{"prompt_tokens": int64(1), "total_tokens": int64(1)}
+	// Count only tool-document embeddings (prefixed with "Tool: ").
+	if len(text) >= 6 && text[:6] == "Tool: " {
+		e.mu.Lock()
+		e.calls++
+		e.mu.Unlock()
+	}
+	return []float64{1, 0, 0}, usage, nil
+}
+
+func (e *countingEmbedder) GetDimensions() int { return 3 }
+
+func (e *countingEmbedder) docCount() int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.calls
+}
+
+// TestRenderToolboxCatalog_MatchesInvocationMode verifies catalog guidance
+// matches the active invocation mode.
+func TestRenderToolboxCatalog_MatchesInvocationMode(t *testing.T) {
+	tools := []tool.Tool{newTestTool("create_invoice", "make an invoice")}
+
+	native := New(nil, WithToolboxes([]Toolbox{
+		{Name: "billing", Description: "invoices", Tools: tools},
+	}))
+	nativeCatalog := native.renderToolboxCatalog(nil)
+	assert.Contains(t, nativeCatalog, "call it directly",
+		"native mode catalog must instruct direct calls")
+	assert.NotContains(t, nativeCatalog, "`call_tool`",
+		"native mode catalog must not mention call_tool")
+
+	dispatch := New(nil,
+		WithInvocationMode(DispatchToolCalls),
+		WithToolboxes([]Toolbox{
+			{Name: "billing", Description: "invoices", Tools: tools},
+		}),
+	)
+	dispatchCatalog := dispatch.renderToolboxCatalog(nil)
+	assert.Contains(t, dispatchCatalog, "`call_tool`",
+		"dispatch mode catalog must instruct call_tool")
+	assert.NotContains(t, dispatchCatalog, "call it directly",
+		"dispatch mode catalog must not tell the model to call the tool directly")
+	// The dispatch catalog must reinforce that tool_search returns the schema
+	// needed to build call_tool params, matching toolSearchCallToolDescription.
+	assert.Contains(t, dispatchCatalog, "input_schema")
 }

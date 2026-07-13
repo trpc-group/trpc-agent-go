@@ -461,18 +461,14 @@ func (p *Plugin) beforeModel(
 		args.Request.Tools = make(map[string]tool.Tool)
 	}
 
+	// Materialize all MCP servers once per turn before schema injection and
+	// catalog rendering, so both observe one consistent snapshot.
+	p.materializeAllMCP(ctx)
+
 	// Inject schemas for the deferred tools loaded so far. In call_tool mode the
 	// model invokes loaded tools through call_tool instead of as individual
-	// function tools, so we skip this injection — but still materialize the MCP
-	// servers backing loaded tools so their schemas are ready for tool_search to
-	// surface and for call_tool to resolve.
+	// function tools, so we skip this injection.
 	discoveredTools := p.loadDiscoveredTools(ctx, inv)
-
-	// A loaded MCP tool's schema lives behind its server's listing. The loaded
-	// set survives in session state across process restarts, so the owning
-	// servers may not be listed in this Plugin instance yet — materialize them
-	// before injecting schemas.
-	p.materializeByToolNames(ctx, discoveredTools)
 
 	// Fetch all deferred-tool permissions once; reused for discovered filtering
 	// and catalog rendering.
@@ -482,19 +478,16 @@ func (p *Plugin) beforeModel(
 	if p.invocationMode != DispatchToolCalls {
 		p.mu.RLock()
 		for _, toolName := range discoveredTools {
+			// Inject only tools still present in the current snapshot.
+			if _, alreadySet := args.Request.Tools[toolName]; alreadySet {
+				continue
+			}
 			if t, exists := p.toolBox[toolName]; exists {
-				if _, toolExists := args.Request.Tools[toolName]; !toolExists {
-					args.Request.Tools[toolName] = t
-				}
+				args.Request.Tools[toolName] = t
 			}
 		}
 		p.mu.RUnlock()
 	}
-
-	// Eagerly list all MCP servers so their tools appear in the catalog on
-	// every model request (used by both system-prompt injection and the
-	// catalog-in-description mode below).
-	p.materializeAllMCP(ctx)
 
 	// Always inject the tool_search function tool. When catalogInDescription
 	// is enabled, wrap it with a per-turn description that carries the
@@ -549,8 +542,23 @@ func (p *Plugin) beforeTool(
 	// a renamed MCP tool (mcp__server__tool) before any search touched the
 	// server, so materialize the owning server first; otherwise it would not be
 	// recognized as deferred and the unloaded-tool guard would be skipped.
+	// After materializing, also block stale MCP names — those that belong to a
+	// registered MCP namespace but are absent from the current snapshot (server
+	// pruned them on the latest listing).
 	if server, _, ok := parseMCPName(toolName); ok {
 		p.materializeNamespace(ctx, server)
+
+		p.mu.RLock()
+		box, known := p.toolboxByName[server]
+		_, indexed := p.deferredNames[toolName]
+		p.mu.RUnlock()
+
+		if known && box.isMCP() && !indexed {
+			log.WarnfContext(ctx, "[%s] blocked stale MCP tool call: %s", p.name, toolName)
+			return &tool.BeforeToolResult{
+				CustomResult: fmt.Sprintf(unloadedToolErrorTemplate, toolName),
+			}, nil
+		}
 	}
 
 	// Only intercept deferred tools.
@@ -736,8 +744,13 @@ func (p *Plugin) renderToolboxCatalog(allDeferredAllowed map[string]bool) string
 	}
 
 	sb.WriteString("<toolbox-catalog>\n")
+	// Keep catalog invocation guidance consistent with the active mode.
+	invocationHint := "call it directly."
+	if p.invocationMode == DispatchToolCalls {
+		invocationHint = "invoke it with `call_tool` (pass tool_name + params matching the input_schema returned by tool_search)."
+	}
 	sb.WriteString(
-		"Deferred tools — NOT yet callable. Load one via `tool_search` first, then call it directly. " +
+		"Deferred tools — NOT yet callable. Load one via `tool_search` first, then " + invocationHint + " " +
 			"Format: `- <namespace> (<domain>) — <tools>`; \"(no namespace)\" tools need no namespace argument.")
 	sb.WriteString("\n\n")
 	if len(defaultTools) > 0 {

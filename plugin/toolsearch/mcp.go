@@ -10,6 +10,9 @@ package toolsearch
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"strings"
 
@@ -39,10 +42,13 @@ type MCPToolbox struct {
 	ToolSet tool.ToolSet
 }
 
-// mcpSource holds the real-time listing state for an MCP-backed toolbox.
+// mcpSource holds runtime listing state for an MCP-backed toolbox.
 type mcpSource struct {
 	serverName string
 	toolSet    tool.ToolSet
+	// Fingerprint by renamed tool name; used to forget embeddings only on
+	// declaration change/removal.
+	fingerprints map[string]string
 }
 
 // WithMCPToolboxes registers one or more MCP servers as deferred namespaces.
@@ -79,24 +85,24 @@ func (p *Plugin) registerMCPToolbox(box MCPToolbox) {
 		name:        name,
 		description: box.Description,
 		toolNames:   make(map[string]struct{}),
-		mcp:         &mcpSource{serverName: name, toolSet: box.ToolSet},
+		mcp: &mcpSource{
+			serverName:   name,
+			toolSet:      box.ToolSet,
+			fingerprints: make(map[string]string),
+		},
 	}
 	p.toolboxByName[name] = idx
 	p.toolboxes = append(p.toolboxes, idx)
 }
 
-// ensureMCPListed lists an MCP toolbox's ToolSet and refreshes its indexed
-// tools to match the server's current snapshot: same-namespace entries are
-// replaced (so schema/implementation updates propagate) and names no longer
-// returned are pruned. It is a no-op for non-MCP toolboxes.
-//
-// An empty listing is treated as a transient failure (e.g. server temporarily
-// unavailable) and leaves the previous snapshot untouched, matching the
-// long-standing retry behavior; a non-empty listing is the authoritative fresh
-// snapshot for this namespace.
-//
-// Tools(ctx) is invoked without holding the lock — it may perform network I/O —
-// and the result is committed under the write lock.
+// ensureMCPListed syncs one MCP namespace to the latest listing:
+// add/update current tools and prune missing ones. An empty listing is treated
+// as a transient failure and skipped so a temporarily unreachable MCP server
+// does not wipe the previously indexed tools; a server that truly wants to
+// publish an empty directory should surface that through its own signaling
+// rather than an ambiguous empty slice.
+// Listing I/O runs outside lock; index updates run under lock; vector-store
+// forget runs after unlock.
 func (p *Plugin) ensureMCPListed(ctx context.Context, box *toolboxIndex) {
 	if !box.isMCP() {
 		return
@@ -110,17 +116,21 @@ func (p *Plugin) ensureMCPListed(ctx context.Context, box *toolboxIndex) {
 	}
 
 	// Build the fresh set of renamed tools outside the lock (cheap, no I/O).
-	fresh := make(map[string]tool.Tool, len(tools))
+	type freshEntry struct {
+		tool tool.Tool
+		fp   string
+	}
+	fresh := make(map[string]freshEntry, len(tools))
 	for _, t := range tools {
 		if t == nil {
 			continue
 		}
 		renamed := newRenamedTool(t, box.mcp.serverName)
-		fresh[renamed.Declaration().Name] = renamed
+		decl := renamed.Declaration()
+		fresh[decl.Name] = freshEntry{tool: renamed, fp: declarationFingerprint(decl)}
 	}
 
 	p.mu.Lock()
-	defer p.mu.Unlock()
 
 	// Prune tools that were previously indexed for this namespace but are no
 	// longer returned by the server. Collisions from other namespaces never
@@ -132,46 +142,80 @@ func (p *Plugin) ensureMCPListed(ctx context.Context, box *toolboxIndex) {
 		}
 		p.unindexTool(name)
 		delete(box.toolNames, name)
+		delete(box.mcp.fingerprints, name)
 		pruned = append(pruned, name)
 	}
 
 	// Add or refresh every tool in the fresh listing. Refreshing rebinds
 	// toolBox/allMeta to the latest wrapper so a server-side schema or
-	// implementation update immediately supersedes the stale one.
-	var added, refreshed int
-	for name, renamed := range fresh {
+	// implementation update immediately supersedes the stale one. Only tools
+	// whose declaration fingerprint actually changed are collected for
+	// forgetting so unchanged entries keep their embedding across listings.
+	var (
+		added, refreshed int
+		changed          []string
+	)
+	for name, entry := range fresh {
 		if existingNS, dup := p.namespaceByTool[name]; dup && existingNS != box.name {
 			log.Errorf("[%s] MCP tool %q collides with namespace %q; kept %q",
 				p.name, name, box.name, existingNS)
 			continue
 		}
-		if _, existed := box.toolNames[name]; existed {
-			refreshed++
+		if oldFP, existed := box.mcp.fingerprints[name]; existed {
+			if oldFP != entry.fp {
+				refreshed++
+				changed = append(changed, name)
+			}
+			// unchanged: do not touch the embedding index.
 		} else {
 			added++
+			// Newly added tools do not need forgetting: they were never indexed.
 		}
-		p.indexTool(renamed)
+		p.indexTool(entry.tool)
 		p.deferredNames[name] = struct{}{}
 		p.namespaceByTool[name] = box.name
 		box.toolNames[name] = struct{}{}
+		box.mcp.fingerprints[name] = entry.fp
 	}
 
-	// A refreshed tool's schema/description may have changed, and a pruned
-	// tool must not leak into future embedding searches. Forget both so the
-	// embedding index re-embeds refreshed tools and drops removed ones.
+	// Build the forget list while still holding the lock, and snapshot the
+	// indexed count for logging because it is racy to read after unlock.
+	// box.mcp.serverName and p.knowledge are set once at registration and never
+	// mutated afterwards, so they are safe to read post-unlock.
+	var forget []string
 	if p.knowledge != nil {
-		forget := make([]string, 0, len(fresh)+len(pruned))
-		for name := range fresh {
-			forget = append(forget, name)
-		}
-		forget = append(forget, pruned...)
-		if len(forget) > 0 {
-			p.knowledge.forget(ctx, forget)
-		}
+		forget = append(append(forget, changed...), pruned...)
+	}
+	indexedCount := len(box.toolNames)
+
+	// Explicit Unlock (not defer): vector-store I/O below must run outside the
+	// write lock so a slow/failing store never stalls a concurrent listing or
+	// catalog render.
+	p.mu.Unlock()
+
+	if p.knowledge != nil && len(forget) > 0 {
+		p.knowledge.forget(ctx, forget)
 	}
 
 	log.Infof("[%s] listed MCP server %q: %d tools (added=%d refreshed=%d pruned=%d)",
-		p.name, box.mcp.serverName, len(box.toolNames), added, refreshed, len(pruned))
+		p.name, box.mcp.serverName, indexedCount, added, refreshed, len(pruned))
+}
+
+// declarationFingerprint hashes a declaration for change detection across
+// listings, so unchanged tools can keep cached embeddings. On marshal failure
+// it falls back to hashing the tool name so the return value always has the
+// same shape (hex-encoded sha256) and cannot accidentally equal a valid hash
+// from the happy path.
+func declarationFingerprint(decl *tool.Declaration) string {
+	if decl == nil {
+		return ""
+	}
+	data, err := json.Marshal(decl)
+	if err != nil {
+		data = []byte("name:" + decl.Name)
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
 }
 
 // materializeNamespace lists the MCP server backing a namespace, if any, so its

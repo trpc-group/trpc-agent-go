@@ -1863,7 +1863,7 @@ r := runner.NewRunner("app", ag, runner.WithPlugins(ts))
 
 4. **打开 `WithCatalogInDescription`，把目录挂到工具描述里。** 开启后，延迟工具目录会在每一轮被嵌入到 `tool_search` 的 tool description 中，而不会再注入到 system prompt（即使 prompt 中有 `{deferred_tools_section}` 占位符，也会被清除，避免泄漏）。当业务侧希望 system prompt 保持稳定（利于 prompt caching），或某些模型后端更偏好把目录放在工具旁边时，可以使用这个选项。
 
-5. **通过 `WithInvocationMode` 选择调用方式。** 默认的 `toolsearch.NativeToolCalls` 会把每一个已加载的延迟工具作为独立的 function tool 暴露给模型，由模型直接按名字调用。切换成 `toolsearch.DispatchToolCalls` 之后，整个延迟工具集只对模型暴露两个 function tool：`tool_search`（检索 + 加载，且每条搜索结果都会附带匹配工具的 `input_schema`），以及 `call_tool`（按工具名调用，`params` 字段需与该 schema 匹配）。此时无论已加载多少延迟工具，声明给模型的 function tool 数量始终是 2 个，对声明工具数量敏感的后端会更友好。
+5. **通过 `WithInvocationMode` 选择调用方式。** 默认的 `toolsearch.NativeToolCalls` 会把每一个已加载的延迟工具作为独立的 function tool 暴露给模型，由模型直接按名字调用。切换成 `toolsearch.DispatchToolCalls` 之后，整个延迟工具集只对模型暴露两个 function tool：`tool_search`（检索 + 加载，且每条搜索结果都会附带匹配工具的 `input_schema`），以及 `call_tool`（按工具名调用，`params` 字段需与该 schema 匹配）。此时无论已加载多少延迟工具，延迟工具部分始终只占用 `tool_search` 和 `call_tool` 两个 function tool，preset 工具仍单独声明；对声明工具数量敏感的后端会更友好。
 
 > 提示：传给 `toolsearch.New(presetTools, ...)` 与 `llmagent.WithTools(presetTools)` 的 preset 工具列表建议保持一致——前者用于把 preset 工具建入索引，让 `tool_search` 也能检索到它们；后者用于让 agent 在对话中直接调用。两者不一致时 preset 工具仍可用，只是可能无法通过 `tool_search` 搜索命中。
 
