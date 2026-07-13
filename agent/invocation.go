@@ -65,10 +65,6 @@ const (
 	// session after the function-call processor clones the invocation
 	// session for state-delta isolation.
 	liveSessionStateKey = "__live_session__"
-	// forwardEventStateKey is the invocation state key used by internal
-	// eventstream attachment (see internal/state/eventstream).
-	forwardEventStateKey = "__forward_event__"
-
 	// streamHubStateKey is the invocation state key used by the graph to
 	// share ephemeral streams across node invocations within the same run.
 	streamHubStateKey = "__graph_stream_hub__"
@@ -1711,7 +1707,6 @@ func isCloneStateKey(key string) bool {
 		barrierStateKey,
 		appenderStateKey,
 		liveSessionStateKey,
-		forwardEventStateKey,
 		streamHubStateKey,
 		surfaceRootNodeIDStateKey,
 		teamMemberTraceRootStateKey:

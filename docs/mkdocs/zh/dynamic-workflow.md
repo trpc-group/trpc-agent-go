@@ -27,7 +27,7 @@
         ↓
       Go 进程内运行已注册的基础 Agent
         ↓
-      子 Agent 事件继续进入 Runner event stream / Session Service
+      子 Agent 事件继续进入同一个 event stream / Session Service
         ↓
       汇总结果并返回给根 Agent
 ```
@@ -41,10 +41,9 @@
 如果流程稳定、确定、强业务约束，应直接写应用 Go 代码。如果只是普通工具之间的
 循环、分支或 JSON 转换，应优先使用更轻量的 `execute_tool_code`。
 
-Python 是当前内置运行时的工程选择，不是动态工作流的本质约束。workflow 代码不是
-一段脱离框架的普通脚本，也不是在脚本里直接调用某个 Agent SDK；它始终通过显式
-bridge/RPC 回到 Go 进程，由 Go 侧继续运行已注册的 Agent 和工具。因此使用 Go 作为
-workflow 语言也不会获得直接访问宿主进程对象的优势。
+workflow 语言是 Runtime 的选择，不是 Dynamic Workflow 的本质约束。当前内置
+Runtime 使用 Python；对已注册 Agent 和工具的调用会通过显式 bridge/RPC 回到 Go
+宿主，而不是在脚本中运行另一套 Agent SDK。
 
 ## 最小接入
 
@@ -296,21 +295,17 @@ facts = await call_tool("search_catalog", query="trail backpack")
 
 ## 事件、Session 与执行边界
 
-Dynamic Workflow 第一版是前台、一次性执行。workflow 代码只负责表达编排逻辑；
-真正的子 Agent 执行仍发生在 Go 进程里。`agent(...)` 不是脚本里断开框架联系的
-一次普通 SDK 调用，而是一次通过 bridge/RPC 回到宿主侧的 Agent 调用。
-
-实现上，子 Agent 会从父 invocation 派生出新的 invocation：它复用父执行里的
-Session、SessionService、Plugin 和事件转发通道，但拥有新的 InvocationID、输入
-Message、ParentMetadata 和独立的 event filter key。因此，子 Agent 的 LLM 上下文和
-事件分支仍然是隔离的，不会简单混进根 Agent 的当前提示词上下文。
-
-因此，子 Agent 的输出事件会继续回到当前 Runner 的事件流里：
+Dynamic Workflow 采用前台、一次性执行。workflow 代码负责表达编排逻辑，已注册的
+Agent 和工具仍在 Go 宿主中运行。每次子 Agent 调用都有隔离的对话上下文，同时仍属于
+当前运行。因此：
 
 - 前端可以从同一个 event stream 看到子 Agent 输出和工具调用进度。
 - 配置的 Session Service 会持久化这些事件。
 - `parallel` 分支的事件可能交错出现；这是实时流语义，不影响
   `parallel(...)` 返回值仍按输入顺序排列。
+
+event stream 遵循框架统一的流式消费约定：持续消费直到运行结束；如果提前停止，应取消
+本次运行的 context。
 
 这也是 Dynamic Workflow 和“让模型写一个普通脚本自己跑完”的关键区别：临时
 workflow 具备代码的灵活性，但 Agent 执行、工具边界、事件流和 Session 持久化仍由
@@ -338,21 +333,6 @@ Go 框架掌控。
 
 ## 后续计划：文件化 workflow
 
-这一节是后续设计备忘，普通使用者可以跳过。
-
-当前版本是一次性的：模型把 inline workflow 代码传给 `run_workflow` 并立即执行。
-
-后续可以扩展文件化执行，让 workflow 脚本像普通 workspace 文件一样被写入、
-编辑、review 和重复运行。这个方向应作为 `run_workflow` 的 source 选择扩展，
-而不是在本包里引入完整的 workflow 管理系统。
-
-关键约束：
-
-- 未来入参应在 inline `code` 与 workspace `file` 中二选一，并可加 JSON `args`。
-- 文件路径应是 workspace 相对路径，不是任意宿主机路径。
-- file resolver 应复用父 invocation 的 `codeexecutor` workspace。
-- workflow 工具只负责运行已有脚本，不负责提供脚本创作 API。
-- 文件化 workflow 持久化的是脚本源码，不是执行状态；resume、checkpoint、发布、
-  跨节点存储都需要单独设计。
-- 文件化版本仍应保留当前 Runtime 边界：只能编排已注册 Agent 和显式授权的宿主工具，
-  不能因此获得无边界文件系统或 shell 访问。
+后续的 source 选择扩展可以允许 `run_workflow` 在 inline code 与 workspace 相对路径的
+脚本之间二选一，并接受可选 JSON 参数。它应复用配置的 workspace 抽象，并与脚本创作、
+执行状态持久化、resume、checkpoint 和分发等能力保持独立。

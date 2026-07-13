@@ -1824,9 +1824,9 @@ func recordWrappedEventTelemetry(
 			fullRespEvent = evt
 		}
 	}
-	if evt.Error != nil {
+	if evt.Response != nil && evt.Response.Error != nil {
 		*responseErrorType = itelemetry.FormatResponseErrorLabel(
-			evt.Error,
+			evt.Response.Error,
 			model.ErrorTypeRunError,
 		)
 	}
