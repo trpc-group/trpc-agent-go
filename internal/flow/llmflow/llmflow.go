@@ -813,6 +813,7 @@ type streamingResponseProcessor struct {
 	eventChan               chan<- *event.Event
 	span                    oteltrace.Span
 	startedSpan             bool
+	chatTraceState          itelemetry.ChatTraceState
 	tracker                 *itelemetry.ChatMetricsTracker
 	timingInfo              *model.TimingInfo
 	partialUsageState       responseusage.PartialState
@@ -1066,7 +1067,7 @@ func (p *streamingResponseProcessor) traceChat(
 	if p.tracker != nil {
 		ttfb = p.tracker.FirstTokenTimeDuration()
 	}
-	itelemetry.TraceChat(p.span, &itelemetry.TraceChatAttributes{
+	p.chatTraceState.TraceChat(p.span, &itelemetry.TraceChatAttributes{
 		Invocation: observabilityInvocationForCurrent(
 			eventInvocation,
 			p.observabilityInvocation,
