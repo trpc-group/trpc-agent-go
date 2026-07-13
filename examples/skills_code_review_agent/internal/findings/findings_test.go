@@ -43,7 +43,7 @@ func TestBuildMetrics(t *testing.T) {
 		{Severity: "high"},
 		{Severity: "medium"},
 	}
-	m := BuildMetrics(confirmed, []Finding{{}}, 120)
+	m := BuildMetrics(confirmed, []Finding{{}}, MetricsInput{TotalDurationMs: 120})
 	if m.FindingCount != 3 || m.WarningCount != 1 || m.TotalDurationMs != 120 {
 		t.Fatalf("metrics = %+v", m)
 	}

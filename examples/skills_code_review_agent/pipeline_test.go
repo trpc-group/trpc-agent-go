@@ -91,9 +91,25 @@ func TestPipelineSandboxFailFixture(t *testing.T) {
 		OutputDir: filepath.Join(dir, "output"),
 	})
 	if err != nil {
-		t.Fatalf("Run should not fail without sandbox: %v", err)
+		t.Fatalf("Run should not fail when sandbox check fails: %v", err)
 	}
 	if result.TaskID == "" {
 		t.Fatal("expected task id")
+	}
+
+	store, err := storage.NewSQLiteStore("file:" + filepath.Join(dir, "reviews.db") + "?_busy_timeout=5000")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+	review, err := store.GetReview(context.Background(), result.TaskID)
+	if err != nil {
+		t.Fatalf("GetReview: %v", err)
+	}
+	if len(review.SandboxRuns) != 1 || review.SandboxRuns[0].Status != "failed" {
+		t.Fatalf("sandbox runs = %+v", review.SandboxRuns)
+	}
+	if len(review.PermissionDecisions) < 2 {
+		t.Fatalf("permission decisions = %d, want at least 2", len(review.PermissionDecisions))
 	}
 }

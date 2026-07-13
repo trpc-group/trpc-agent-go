@@ -19,16 +19,19 @@ import (
 	"path/filepath"
 
 	"trpc.group/trpc-go/trpc-agent-go/examples/skills_code_review_agent/internal/pipeline"
+	"trpc.group/trpc-go/trpc-agent-go/examples/skills_code_review_agent/internal/sandbox"
 )
 
-// 定义命令行参数
 var (
-	flagDiffFile  = flag.String("diff-file", "", "path to unified diff file")
-	flagRepoPath  = flag.String("repo-path", "", "git repository path for workspace changes")
-	flagFixture   = flag.String("fixture", "", "fixture name under fixtures/ (without .diff)")
-	flagDryRun    = flag.Bool("dry-run", true, "run deterministic rule-only review without LLM")
-	flagDBPath    = flag.String("db-path", "reviews.db", "sqlite database path")
-	flagOutputDir = flag.String("output-dir", "output", "directory for review reports")
+	flagDiffFile    = flag.String("diff-file", "", "path to unified diff file")
+	flagRepoPath    = flag.String("repo-path", "", "git repository path for workspace changes")
+	flagFixture     = flag.String("fixture", "", "fixture name under fixtures/ (without .diff)")
+	flagDryRun      = flag.Bool("dry-run", true, "run deterministic rule-only review without LLM")
+	flagDBPath      = flag.String("db-path", "reviews.db", "sqlite database path")
+	flagOutputDir   = flag.String("output-dir", "output", "directory for review reports")
+	flagSkillsRoot  = flag.String("skills-root", "skills", "skills root directory")
+	flagRuntime     = flag.String("runtime", "local", "sandbox runtime: local|container|skip")
+	flagSkipSandbox = flag.Bool("skip-sandbox", false, "skip sandbox execution")
 )
 
 func main() {
@@ -39,20 +42,22 @@ func main() {
 }
 
 func run(ctx context.Context) error {
-	// 创建输出目录
 	if err := os.MkdirAll(*flagOutputDir, 0o755); err != nil {
 		return fmt.Errorf("create output dir: %w", err)
 	}
 
 	opts := pipeline.Options{
-		DiffFile:  *flagDiffFile,
-		RepoPath:  *flagRepoPath,
-		Fixture:   *flagFixture,
-		DryRun:    *flagDryRun,
-		DBPath:    *flagDBPath,
-		OutputDir: *flagOutputDir,
+		DiffFile:    *flagDiffFile,
+		RepoPath:    *flagRepoPath,
+		Fixture:     *flagFixture,
+		DryRun:      *flagDryRun,
+		DBPath:      *flagDBPath,
+		OutputDir:   *flagOutputDir,
+		SkillsRoot:  *flagSkillsRoot,
+		Runtime:     sandbox.Runtime(*flagRuntime),
+		SkipSandbox: *flagSkipSandbox,
 	}
-	// run的核心
+
 	result, err := pipeline.Run(ctx, opts)
 	if err != nil {
 		return err

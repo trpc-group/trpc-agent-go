@@ -61,6 +61,7 @@ func TestSQLiteStoreSaveAndGet(t *testing.T) {
 			FindingCount:    1,
 			WarningCount:    1,
 			SeverityCounts:  map[string]int{"high": 1},
+			ExceptionCounts: map[string]int{},
 		},
 		Artifacts: []ArtifactRecord{
 			{ID: uuid.NewString(), TaskID: taskID, Name: "review_report.json", Content: `{"ok":true}`},

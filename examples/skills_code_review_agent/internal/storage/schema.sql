@@ -32,7 +32,11 @@ CREATE TABLE IF NOT EXISTS review_metrics (
     finding_count INTEGER NOT NULL,
     warning_count INTEGER NOT NULL,
     total_duration_ms INTEGER NOT NULL,
+    sandbox_duration_ms INTEGER NOT NULL DEFAULT 0,
+    tool_call_count INTEGER NOT NULL DEFAULT 0,
+    permission_deny_count INTEGER NOT NULL DEFAULT 0,
     severity_json TEXT NOT NULL,
+    exception_json TEXT NOT NULL DEFAULT '{}',
     FOREIGN KEY (task_id) REFERENCES review_tasks(id)
 );
 
@@ -45,6 +49,28 @@ CREATE TABLE IF NOT EXISTS artifacts (
     FOREIGN KEY (task_id) REFERENCES review_tasks(id)
 );
 
--- Phase 2 tables (reserved):
--- CREATE TABLE sandbox_runs (...);
--- CREATE TABLE permission_decisions (...);
+-- Sandbox execution records.
+CREATE TABLE IF NOT EXISTS sandbox_runs (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    command TEXT NOT NULL,
+    runtime TEXT NOT NULL,
+    status TEXT NOT NULL,
+    exit_code INTEGER NOT NULL,
+    duration_ms INTEGER NOT NULL,
+    stdout TEXT,
+    stderr TEXT,
+    error_type TEXT,
+    FOREIGN KEY (task_id) REFERENCES review_tasks(id)
+);
+
+-- Permission / filter decisions.
+CREATE TABLE IF NOT EXISTS permission_decisions (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    tool_name TEXT NOT NULL,
+    command TEXT NOT NULL,
+    action TEXT NOT NULL,
+    reason TEXT,
+    FOREIGN KEY (task_id) REFERENCES review_tasks(id)
+);

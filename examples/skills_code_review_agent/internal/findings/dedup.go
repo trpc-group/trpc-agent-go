@@ -68,16 +68,34 @@ func Merge(slices ...[]Finding) []Finding {
 	return out
 }
 
+// MetricsInput carries optional monitoring fields for BuildMetrics.
+type MetricsInput struct {
+	TotalDurationMs     int
+	SandboxDurationMs   int
+	ToolCallCount       int
+	PermissionDenyCount int
+	ExceptionCounts     map[string]int
+}
+
 // BuildMetrics computes review metrics from confirmed findings and warnings.
-func BuildMetrics(confirmed, warnings []Finding, durationMs int) ReviewMetrics {
+// 指標
+func BuildMetrics(confirmed, warnings []Finding, in MetricsInput) ReviewMetrics {
 	counts := make(map[string]int)
 	for _, f := range confirmed {
 		counts[f.Severity]++
 	}
+	exceptions := in.ExceptionCounts
+	if exceptions == nil {
+		exceptions = map[string]int{}
+	}
 	return ReviewMetrics{
-		TotalDurationMs: durationMs,
-		FindingCount:    len(confirmed),
-		WarningCount:    len(warnings),
-		SeverityCounts:  counts,
+		TotalDurationMs:     in.TotalDurationMs,
+		SandboxDurationMs:   in.SandboxDurationMs,
+		FindingCount:        len(confirmed),
+		WarningCount:        len(warnings),
+		ToolCallCount:       in.ToolCallCount,
+		PermissionDenyCount: in.PermissionDenyCount,
+		SeverityCounts:      counts,
+		ExceptionCounts:     exceptions,
 	}
 }

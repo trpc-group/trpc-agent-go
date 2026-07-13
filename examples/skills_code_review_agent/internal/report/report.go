@@ -77,15 +77,47 @@ func WriteMarkdown(path string, result *findings.ReviewResult) error {
 
 	b.WriteString("## Monitoring\n\n")
 	b.WriteString(fmt.Sprintf("- Total duration: %d ms\n", result.Metrics.TotalDurationMs))
-	b.WriteString(fmt.Sprintf("- Tool calls: 0 (dry-run rule-only)\n"))
-	b.WriteString(fmt.Sprintf("- Permission denials: 0\n"))
-	b.WriteString(fmt.Sprintf("- Sandbox runs: 0\n\n"))
+	b.WriteString(fmt.Sprintf("- Sandbox duration: %d ms\n", result.Metrics.SandboxDurationMs))
+	b.WriteString(fmt.Sprintf("- Tool calls: %d\n", result.Metrics.ToolCallCount))
+	b.WriteString(fmt.Sprintf("- Permission denials: %d\n", result.Metrics.PermissionDenyCount))
+	if len(result.Metrics.ExceptionCounts) > 0 {
+		b.WriteString("- Exception types:\n")
+		for k, v := range result.Metrics.ExceptionCounts {
+			b.WriteString(fmt.Sprintf("  - %s: %d\n", k, v))
+		}
+	}
+	b.WriteString("\n")
 
 	b.WriteString("## Sandbox Execution\n\n")
-	b.WriteString("No sandbox execution in Phase 1 dry-run mode.\n\n")
+	if len(result.SandboxRuns) == 0 {
+		b.WriteString("No sandbox runs recorded.\n\n")
+	} else {
+		for i, run := range result.SandboxRuns {
+			b.WriteString(fmt.Sprintf("%d. `%s` (%s) — **%s** exit=%d duration=%dms\n",
+				i+1, run.Command, run.Runtime, run.Status, run.ExitCode, run.DurationMs))
+			if run.ErrorType != "" {
+				b.WriteString(fmt.Sprintf("   - error_type: %s\n", run.ErrorType))
+			}
+			if run.Stderr != "" {
+				b.WriteString(fmt.Sprintf("   - stderr: `%s`\n", run.Stderr))
+			}
+		}
+		b.WriteString("\n")
+	}
 
 	b.WriteString("## Governance\n\n")
-	b.WriteString("No permission or filter decisions in Phase 1 dry-run mode.\n\n")
+	if len(result.PermissionDecisions) == 0 {
+		b.WriteString("No permission decisions recorded.\n\n")
+	} else {
+		for i, d := range result.PermissionDecisions {
+			b.WriteString(fmt.Sprintf("%d. [%s] `%s` → **%s**", i+1, d.ToolName, d.Command, d.Action))
+			if d.Reason != "" {
+				b.WriteString(fmt.Sprintf(" (%s)", d.Reason))
+			}
+			b.WriteString("\n")
+		}
+		b.WriteString("\n")
+	}
 
 	b.WriteString("## Recommendations\n\n")
 	if len(result.Findings) == 0 && len(result.Warnings) == 0 {

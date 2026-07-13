@@ -25,19 +25,45 @@ type ArtifactRecord struct {
 	Content string
 }
 
+// PermissionRecord stores a permission gate decision.
+type PermissionRecord struct {
+	ID       string
+	TaskID   string
+	ToolName string
+	Command  string
+	Action   string
+	Reason   string
+}
+
+// SandboxRunRecord stores a sandbox execution attempt.
+type SandboxRunRecord struct {
+	ID         string
+	TaskID     string
+	Command    string
+	Runtime    string
+	Status     string
+	ExitCode   int
+	DurationMs int
+	Stdout     string
+	Stderr     string
+	ErrorType  string
+}
+
 // ReviewRecord is the persisted review snapshot.
 type ReviewRecord struct {
-	TaskID       string
-	Status       string
-	InputSummary string
-	RepoPath     string
-	CreatedAt    time.Time
-	FinishedAt   time.Time
-	DurationMs   int
-	Findings     []findings.Finding
-	Warnings     []findings.Finding
-	Metrics      findings.ReviewMetrics
-	Artifacts    []ArtifactRecord
+	TaskID              string
+	Status              string
+	InputSummary        string
+	RepoPath            string
+	CreatedAt           time.Time
+	FinishedAt          time.Time
+	DurationMs          int
+	Findings            []findings.Finding
+	Warnings            []findings.Finding
+	Metrics             findings.ReviewMetrics
+	Artifacts           []ArtifactRecord
+	PermissionDecisions []PermissionRecord
+	SandboxRuns         []SandboxRunRecord
 }
 
 // Store persists and retrieves review records.

@@ -89,14 +89,25 @@ VALUES (?, ?, ?, ?, ?, ?, ?)`,
 	if err != nil {
 		return fmt.Errorf("marshal severity: %w", err)
 	}
+	exceptionJSON, err := json.Marshal(review.Metrics.ExceptionCounts)
+	if err != nil {
+		return fmt.Errorf("marshal exceptions: %w", err)
+	}
 	_, err = tx.ExecContext(ctx, `
-INSERT INTO review_metrics (task_id, finding_count, warning_count, total_duration_ms, severity_json)
-VALUES (?, ?, ?, ?, ?)`,
+INSERT INTO review_metrics (
+	task_id, finding_count, warning_count, total_duration_ms,
+	sandbox_duration_ms, tool_call_count, permission_deny_count,
+	severity_json, exception_json
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		review.TaskID,
 		review.Metrics.FindingCount,
 		review.Metrics.WarningCount,
 		review.Metrics.TotalDurationMs,
+		review.Metrics.SandboxDurationMs,
+		review.Metrics.ToolCallCount,
+		review.Metrics.PermissionDenyCount,
 		string(severityJSON),
+		string(exceptionJSON),
 	)
 	if err != nil {
 		return fmt.Errorf("insert metrics: %w", err)
@@ -113,6 +124,28 @@ VALUES (?, ?, ?, ?)`,
 		)
 		if err != nil {
 			return fmt.Errorf("insert artifact: %w", err)
+		}
+	}
+
+	for _, p := range review.PermissionDecisions {
+		_, err = tx.ExecContext(ctx, `
+INSERT INTO permission_decisions (id, task_id, tool_name, command, action, reason)
+VALUES (?, ?, ?, ?, ?, ?)`,
+			p.ID, p.TaskID, p.ToolName, p.Command, p.Action, p.Reason,
+		)
+		if err != nil {
+			return fmt.Errorf("insert permission decision: %w", err)
+		}
+	}
+
+	for _, r := range review.SandboxRuns {
+		_, err = tx.ExecContext(ctx, `
+INSERT INTO sandbox_runs (id, task_id, command, runtime, status, exit_code, duration_ms, stdout, stderr, error_type)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			r.ID, r.TaskID, r.Command, r.Runtime, r.Status, r.ExitCode, r.DurationMs, r.Stdout, r.Stderr, r.ErrorType,
+		)
+		if err != nil {
+			return fmt.Errorf("insert sandbox run: %w", err)
 		}
 	}
 
@@ -197,19 +230,30 @@ FROM findings WHERE task_id = ? ORDER BY file, line`, taskID)
 	}
 
 	var (
-		findingCount, warningCount, metricsDuration int
-		severityJSON                                string
+		findingCount, warningCount, metricsDuration                      int
+		sandboxDuration, toolCalls, permissionDenies                     int
+		severityJSON, exceptionJSON                                      string
 	)
 	if err := s.db.QueryRowContext(ctx, `
-SELECT finding_count, warning_count, total_duration_ms, severity_json
+SELECT finding_count, warning_count, total_duration_ms,
+       sandbox_duration_ms, tool_call_count, permission_deny_count,
+       severity_json, exception_json
 FROM review_metrics WHERE task_id = ?`, taskID).Scan(
-		&findingCount, &warningCount, &metricsDuration, &severityJSON,
+		&findingCount, &warningCount, &metricsDuration,
+		&sandboxDuration, &toolCalls, &permissionDenies,
+		&severityJSON, &exceptionJSON,
 	); err != nil {
 		return nil, fmt.Errorf("get metrics: %w", err)
 	}
 	severityCounts := map[string]int{}
 	if err := json.Unmarshal([]byte(severityJSON), &severityCounts); err != nil {
 		return nil, fmt.Errorf("unmarshal severity: %w", err)
+	}
+	exceptionCounts := map[string]int{}
+	if exceptionJSON != "" {
+		if err := json.Unmarshal([]byte(exceptionJSON), &exceptionCounts); err != nil {
+			return nil, fmt.Errorf("unmarshal exceptions: %w", err)
+		}
 	}
 
 	artifactRows, err := s.db.QueryContext(ctx, `
@@ -232,6 +276,46 @@ SELECT id, name, content FROM artifacts WHERE task_id = ?`, taskID)
 		return nil, err
 	}
 
+	permRows, err := s.db.QueryContext(ctx, `
+SELECT id, tool_name, command, action, reason
+FROM permission_decisions WHERE task_id = ?`, taskID)
+	if err != nil {
+		return nil, fmt.Errorf("query permissions: %w", err)
+	}
+	defer permRows.Close()
+	var permissions []PermissionRecord
+	for permRows.Next() {
+		var p PermissionRecord
+		if err := permRows.Scan(&p.ID, &p.ToolName, &p.Command, &p.Action, &p.Reason); err != nil {
+			return nil, fmt.Errorf("scan permission: %w", err)
+		}
+		p.TaskID = taskID
+		permissions = append(permissions, p)
+	}
+	if err := permRows.Err(); err != nil {
+		return nil, err
+	}
+
+	sbRows, err := s.db.QueryContext(ctx, `
+SELECT id, command, runtime, status, exit_code, duration_ms, stdout, stderr, error_type
+FROM sandbox_runs WHERE task_id = ?`, taskID)
+	if err != nil {
+		return nil, fmt.Errorf("query sandbox runs: %w", err)
+	}
+	defer sbRows.Close()
+	var sandboxRuns []SandboxRunRecord
+	for sbRows.Next() {
+		var r SandboxRunRecord
+		if err := sbRows.Scan(&r.ID, &r.Command, &r.Runtime, &r.Status, &r.ExitCode, &r.DurationMs, &r.Stdout, &r.Stderr, &r.ErrorType); err != nil {
+			return nil, fmt.Errorf("scan sandbox run: %w", err)
+		}
+		r.TaskID = taskID
+		sandboxRuns = append(sandboxRuns, r)
+	}
+	if err := sbRows.Err(); err != nil {
+		return nil, err
+	}
+
 	return &ReviewRecord{
 		TaskID:       taskID,
 		Status:       status,
@@ -243,12 +327,18 @@ SELECT id, name, content FROM artifacts WHERE task_id = ?`, taskID)
 		Findings:     confirmed,
 		Warnings:     warnings,
 		Metrics: findings.ReviewMetrics{
-			TotalDurationMs: metricsDuration,
-			FindingCount:    findingCount,
-			WarningCount:    warningCount,
-			SeverityCounts:  severityCounts,
+			TotalDurationMs:     metricsDuration,
+			SandboxDurationMs:   sandboxDuration,
+			FindingCount:        findingCount,
+			WarningCount:        warningCount,
+			ToolCallCount:       toolCalls,
+			PermissionDenyCount: permissionDenies,
+			SeverityCounts:      severityCounts,
+			ExceptionCounts:     exceptionCounts,
 		},
-		Artifacts: artifacts,
+		Artifacts:           artifacts,
+		PermissionDecisions: permissions,
+		SandboxRuns:         sandboxRuns,
 	}, nil
 }
 
