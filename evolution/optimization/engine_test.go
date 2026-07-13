@@ -136,6 +136,8 @@ func TestOptimizerRunsReflectiveParetoLoopAndRecordsExperiment(t *testing.T) {
 	assert.Equal(t, 2, result.CandidateCount)
 	assert.Equal(t, 12, result.MetricCalls)
 	assert.Equal(t, "max_iterations", result.StopReason)
+	assert.True(t, result.PromotionEligible)
+	assert.Equal(t, "holdout requirements satisfied", result.PromotionReason)
 
 	require.Len(t, evaluator.calls, 6)
 	assert.Equal(t, evaluator.calls[0].seed, evaluator.calls[3].seed,
@@ -175,6 +177,8 @@ func TestOptimizerRejectsCandidateWithoutStrictMinibatchImprovement(t *testing.T
 	assert.Equal(t, testSeedSpec(), result.Spec)
 	assert.Equal(t, 1, result.CandidateCount)
 	assert.Equal(t, 6, result.MetricCalls)
+	assert.False(t, result.PromotionEligible)
+	assert.Contains(t, result.PromotionReason, "no accepted candidate")
 }
 
 func TestOptimizerReservesMetricBudgetForHoldout(t *testing.T) {
@@ -237,6 +241,7 @@ func TestOptimizerSubmitsImprovedCandidateForApproval(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NotNil(t, result.Revision)
+	assert.True(t, result.PromotionEligible)
 	assert.Equal(t, evolution.RevisionPendingApproval, result.Revision.Status)
 	assert.Equal(t, "rev-parent", result.Revision.ParentID)
 	assert.Equal(t, result.ExperimentID, result.Revision.Evidence.ExperimentID)
@@ -379,13 +384,25 @@ func TestSubmissionPolicyRejectsRegressionWithoutCallingService(t *testing.T) {
 	require.NoError(t, optimizer.submitCandidate(
 		context.Background(), req, seed, seed, baseline, baseline, result,
 	))
+	assert.False(t, result.PromotionEligible)
 	assert.Contains(t, result.SubmissionReason, "no accepted candidate")
+
+	noHoldout := req
+	noHoldout.Dataset.Holdout = nil
+	result = &Result{}
+	require.NoError(t, optimizer.submitCandidate(
+		context.Background(), noHoldout, seed, best,
+		evaluationBatch{}, evaluationBatch{}, result,
+	))
+	assert.False(t, result.PromotionEligible)
+	assert.Contains(t, result.SubmissionReason, "no holdout")
 
 	optimizer.opts.minimumHoldoutImprovement = 0.3
 	result = &Result{BaselineHoldout: baseline.summary(), CandidateHoldout: candidateBatch.summary()}
 	require.NoError(t, optimizer.submitCandidate(
 		context.Background(), req, seed, best, baseline, candidateBatch, result,
 	))
+	assert.False(t, result.PromotionEligible)
 	assert.Contains(t, result.SubmissionReason, "below required")
 
 	regressedResults := append([]Evaluation(nil), candidateBatch.ordered...)
@@ -397,6 +414,7 @@ func TestSubmissionPolicyRejectsRegressionWithoutCallingService(t *testing.T) {
 	require.NoError(t, optimizer.submitCandidate(
 		context.Background(), req, seed, best, baseline, regressed, result,
 	))
+	assert.False(t, result.PromotionEligible)
 	assert.Contains(t, result.SubmissionReason, "critical holdout case regressed")
 
 	caseID, regressedCase := criticalRegression(cases, baseline, candidateBatch)

@@ -107,6 +107,8 @@ type Result struct {
 	CandidateCount      int                  `json:"candidate_count"`
 	MetricCalls         int                  `json:"metric_calls"`
 	StopReason          string               `json:"stop_reason"`
+	PromotionEligible   bool                 `json:"promotion_eligible"`
+	PromotionReason     string               `json:"promotion_reason"`
 	SubmissionReason    string               `json:"submission_reason,omitempty"`
 	Revision            *evolution.Revision  `json:"revision,omitempty"`
 }

@@ -98,6 +98,9 @@ func (o *Optimizer) Optimize(
 	if err != nil {
 		return nil, err
 	}
+	o.assessPromotion(
+		req, run.seed, best, baselineHoldout, candidateHoldout, result,
+	)
 	result.MetricCalls = run.budget.used
 	if req.Submit {
 		if err := o.submitCandidate(
@@ -522,27 +525,12 @@ func (o *Optimizer) submitCandidate(
 	candidateHoldout evaluationBatch,
 	result *Result,
 ) error {
-	if best.id == seed.id {
-		result.SubmissionReason = "no accepted candidate improved validation"
+	o.assessPromotion(req, seed, best, baselineHoldout, candidateHoldout, result)
+	if !result.PromotionEligible {
+		result.SubmissionReason = result.PromotionReason
 		return nil
 	}
 	delta := result.CandidateHoldout.Score - result.BaselineHoldout.Score
-	if delta < o.opts.minimumHoldoutImprovement {
-		result.SubmissionReason = fmt.Sprintf(
-			"holdout delta %.4f is below required %.4f",
-			delta,
-			o.opts.minimumHoldoutImprovement,
-		)
-		return nil
-	}
-	if caseID, regressed := criticalRegression(
-		req.Dataset.Holdout,
-		baselineHoldout,
-		candidateHoldout,
-	); regressed {
-		result.SubmissionReason = "critical holdout case regressed: " + caseID
-		return nil
-	}
 	revision, err := evolution.SubmitRevision(ctx, o.opts.evolutionService, evolution.RevisionRequest{
 		Scope:    req.Scope,
 		Source:   "genetic-pareto:" + result.ExperimentID,
@@ -566,6 +554,44 @@ func (o *Optimizer) submitCandidate(
 	result.Revision = revision
 	result.SubmissionReason = "revision submitted with status " + string(revision.Status)
 	return nil
+}
+
+func (o *Optimizer) assessPromotion(
+	req Request,
+	seed *candidate,
+	best *candidate,
+	baselineHoldout evaluationBatch,
+	candidateHoldout evaluationBatch,
+	result *Result,
+) {
+	result.PromotionEligible = false
+	if best.id == seed.id {
+		result.PromotionReason = "no accepted candidate improved validation"
+		return
+	}
+	if len(req.Dataset.Holdout) == 0 {
+		result.PromotionReason = "no holdout split configured"
+		return
+	}
+	delta := result.CandidateHoldout.Score - result.BaselineHoldout.Score
+	if delta < o.opts.minimumHoldoutImprovement {
+		result.PromotionReason = fmt.Sprintf(
+			"holdout delta %.4f is below required %.4f",
+			delta,
+			o.opts.minimumHoldoutImprovement,
+		)
+		return
+	}
+	if caseID, regressed := criticalRegression(
+		req.Dataset.Holdout,
+		baselineHoldout,
+		candidateHoldout,
+	); regressed {
+		result.PromotionReason = "critical holdout case regressed: " + caseID
+		return
+	}
+	result.PromotionEligible = true
+	result.PromotionReason = "holdout requirements satisfied"
 }
 
 func criticalRegression(

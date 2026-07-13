@@ -211,15 +211,19 @@ result, err := optimizer.Optimize(ctx, optimization.Request{
 if err != nil {
     return err
 }
-fmt.Printf("selected skill %q; validation=%.3f holdout=%.3f\n",
+fmt.Printf("selected skill %q; validation=%.3f holdout=%.3f; promote=%t (%s)\n",
     result.Spec.Name,
     result.CandidateValidation.Score,
     result.CandidateHoldout.Score,
+    result.PromotionEligible,
+    result.PromotionReason,
 )
 ```
 
 三个 split 的 case ID 不能重复，score 必须是 `[0,1]` 内的有限数值。提交 revision
-时每个 split 至少需要 10 个 case。holdout 必须对搜索不可见；feedback/trace 需要先
+即使 `Submit=false`，结果也会填充 `PromotionEligible` 和 `PromotionReason`，调用方
+无需重复实现 holdout 阈值与 critical case 策略。提交 revision 时每个 split 至少需要
+10 个 case。holdout 必须对搜索不可见；feedback/trace 需要先
 脱敏；candidate agent 应在无生产凭据、无副作用工具的隔离环境中执行。
 
 ## 触发条件

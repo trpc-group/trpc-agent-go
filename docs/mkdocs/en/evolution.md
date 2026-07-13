@@ -215,17 +215,22 @@ result, err := optimizer.Optimize(ctx, optimization.Request{
 if err != nil {
     return err
 }
-fmt.Printf("selected skill %q; validation=%.3f holdout=%.3f\n",
+fmt.Printf("selected skill %q; validation=%.3f holdout=%.3f; promote=%t (%s)\n",
     result.Spec.Name,
     result.CandidateValidation.Score,
     result.CandidateHoldout.Score,
+    result.PromotionEligible,
+    result.PromotionReason,
 )
 ```
 
 Case IDs must be unique across splits. Scores must be finite and normalized to
-`[0,1]`. Submission requires at least ten cases in each split. Keep holdout
-cases hidden from the search, redact secrets from feedback and traces, and run
-candidate agents without production credentials or side-effecting tools.
+`[0,1]`. `PromotionEligible` and `PromotionReason` are populated even when
+`Submit` is false, so callers do not need to duplicate the holdout threshold
+and critical-case policy. Submission requires at least ten cases in each split.
+Keep holdout cases hidden from the search, redact secrets from feedback and
+traces, and run candidate agents without production credentials or
+side-effecting tools.
 
 ## Review Policy
 
