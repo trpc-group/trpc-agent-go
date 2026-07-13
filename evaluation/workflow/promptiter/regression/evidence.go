@@ -180,7 +180,7 @@ func adaptCase(
 			continue
 		}
 		if audit.IncludeRawContent && result.Input == "" {
-			result.Input = input
+			result.Input = sanitizeContent(audit, input)
 		}
 		if observationHasExecutionError(observation) {
 			result.Passed = false

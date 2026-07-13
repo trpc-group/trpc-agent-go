@@ -587,6 +587,7 @@ func TestScenarioAuditRedactsSecretsAndOwnsCandidateSnapshot(t *testing.T) {
 	candidate.Overrides = append(candidate.Overrides, modelOverride)
 	source := promptIterResult(baseline, candidate, true)
 	trainRun := source.Rounds[0].Train.EvalSets[0].Cases[0].RunDetails[0].Inference
+	trainRun.Inferences[0].UserContent.Content = "api_key=input-secret"
 	trainRun.Inferences[0].Tools = []*evalset.Tool{{
 		Name:      "lookup",
 		Arguments: map[string]any{"access_token": "tool-argument-secret"},
@@ -612,7 +613,7 @@ func TestScenarioAuditRedactsSecretsAndOwnsCandidateSnapshot(t *testing.T) {
 	for _, secret := range []string{
 		"prompt-secret", "candidate-secret", "model-secret", "header-secret",
 		"url-user", "url-password", "url-secret",
-		"tool-argument-secret", "tool-result-secret", "response-secret",
+		"tool-argument-secret", "tool-result-secret", "response-secret", "input-secret",
 		"unserializable-argument-secret", "unserializable-result-secret",
 		"trace-input-secret", "trace-output-secret",
 	} {

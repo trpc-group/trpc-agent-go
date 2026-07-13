@@ -182,6 +182,14 @@ func TestScenarioMalformedEvaluationEvidenceIsRejectedAtDeltaBoundary(t *testing
 	}
 }
 
+func TestNewNormalizesInvalidEpsilon(t *testing.T) {
+	for _, epsilon := range []float64{-1, math.NaN(), math.Inf(1), math.Inf(-1)} {
+		if actual := New(epsilon).Epsilon; actual != 0 {
+			t.Fatalf("epsilon %v normalized to %v, want 0", epsilon, actual)
+		}
+	}
+}
+
 func snapshot(
 	passed bool,
 	score float64,

@@ -13,9 +13,12 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/regression"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/regression/report"
 )
@@ -99,7 +102,7 @@ func TestRegressionLoopScenariosUseEvaluationAndPromptIter(t *testing.T) {
 }
 
 func TestSampleReportMatchesCurrentSuccessScenario(t *testing.T) {
-	generated, _, err := run(context.Background(), "success", "sample-success", t.TempDir(), "data")
+	generated, _, err := run(context.Background(), "success", "artifact-check", t.TempDir(), "data")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,11 +133,9 @@ func TestSampleReportMatchesCurrentSuccessScenario(t *testing.T) {
 	if err := json.Unmarshal(sampleJSON, &sample); err != nil {
 		t.Fatal(err)
 	}
-	if sample.SchemaVersion != "1" || sample.Decision != generated.Decision ||
-		len(sample.Candidates) != len(generated.Candidates) ||
-		sample.SelectedCandidateID != generated.SelectedCandidateID {
+	if !reflect.DeepEqual(normalizeRunResult(sample), normalizeRunResult(decoded)) {
 		t.Fatalf("checked-in JSON sample is stale: sample=%+v generated=%+v",
-			sample, generated)
+			sample, decoded)
 	}
 	if sample.Candidates[3].Train == nil || sample.Candidates[3].TrainDelta == nil {
 		t.Fatal("checked-in JSON sample omits final candidate train evidence")
@@ -159,6 +160,58 @@ func TestSampleReportMatchesCurrentSuccessScenario(t *testing.T) {
 	if strings.Contains(value, "Candidate training evidence is unavailable") {
 		t.Fatal("final candidate still lacks train evidence")
 	}
+}
+
+func TestEvaluateContractRejectsUnexpectedAndExtraToolCalls(t *testing.T) {
+	tool := func(name string, arguments any) *evalset.Tool {
+		return &evalset.Tool{Name: name, Arguments: arguments}
+	}
+	tests := []struct {
+		name     string
+		metric   string
+		actual   *evalset.Invocation
+		expected *evalset.Invocation
+		passed   bool
+	}{
+		{
+			name: "selection rejects tool when none expected", metric: "tool_selection",
+			actual: &evalset.Invocation{Tools: []*evalset.Tool{tool("get_order", nil)}},
+		},
+		{
+			name: "arguments reject tool when none expected", metric: "tool_arguments",
+			actual: &evalset.Invocation{Tools: []*evalset.Tool{tool("get_order", nil)}},
+		},
+		{
+			name: "selection rejects extra tools", metric: "tool_selection",
+			actual:   &evalset.Invocation{Tools: []*evalset.Tool{tool("get_order", nil), tool("lookup", nil)}},
+			expected: &evalset.Invocation{Tools: []*evalset.Tool{tool("get_order", nil)}},
+		},
+		{
+			name: "arguments reject extra tools", metric: "tool_arguments",
+			actual:   &evalset.Invocation{Tools: []*evalset.Tool{tool("get_order", map[string]any{"id": "1"}), tool("lookup", nil)}},
+			expected: &evalset.Invocation{Tools: []*evalset.Tool{tool("get_order", map[string]any{"id": "1"})}},
+		},
+		{
+			name: "one matching tool passes", metric: "tool_selection",
+			actual:   &evalset.Invocation{Tools: []*evalset.Tool{tool("get_order", nil)}},
+			expected: &evalset.Invocation{Tools: []*evalset.Tool{tool("get_order", nil)}}, passed: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			passed, _ := evaluateContract(test.metric, test.actual, test.expected)
+			if passed != test.passed {
+				t.Fatalf("passed = %v, want %v", passed, test.passed)
+			}
+		})
+	}
+}
+
+func normalizeRunResult(value regression.RunResult) regression.RunResult {
+	value.StartedAt = time.Time{}
+	value.EndedAt = time.Time{}
+	value.Usage.Latency = 0
+	return value
 }
 
 func assertProgressiveSuccess(t *testing.T, result *regression.RunResult) {
@@ -201,6 +254,9 @@ func assertProgressiveSuccess(t *testing.T, result *regression.RunResult) {
 		if !passedGateRule(final.Gate, rule) {
 			t.Fatalf("final candidate did not pass %q: %+v", rule, final.Gate)
 		}
+	}
+	if !passedGateRule(final.Gate, "profile_changed") {
+		t.Fatalf("final candidate did not pass profile_changed: %+v", final.Gate)
 	}
 }
 

@@ -1,4 +1,4 @@
-# Prompt optimization report: sample-success
+# Prompt optimization report: artifact-check
 
 - Status: `succeeded`
 - Decision: `accepted`
@@ -7,9 +7,9 @@
 - Random seed: `not applied` (configured value: `7`)
 - Audit runs: `2`
 - Deterministic runtime: `true`
-- Started: `2026-07-13 03:09:18.413 UTC`
-- Finished: `2026-07-13 03:09:18.417 UTC`
-- Duration: `3.836 ms`
+- Started: `2026-07-13 11:34:46.303 UTC`
+- Finished: `2026-07-13 11:34:46.306 UTC`
+- Duration: `2.222 ms`
 
 ## PromptIter execution
 
@@ -107,6 +107,7 @@ Decision: `rejected`
 | Rule | Pass | Observed | Threshold | Reason |
 |---|---:|---|---|---|
 | target_surface_scope | true | true | true |  |
+| profile_changed | true | true | true |  |
 | complete_results | true | true | true |  |
 | new_failures | true | 0 | 0 |  |
 | new_hard_failures | true | 0 | 0 |  |
@@ -159,6 +160,7 @@ Decision: `rejected`
 | Rule | Pass | Observed | Threshold | Reason |
 |---|---:|---|---|---|
 | target_surface_scope | true | true | true |  |
+| profile_changed | true | true | true |  |
 | complete_results | true | true | true |  |
 | new_failures | true | 0 | 0 |  |
 | new_hard_failures | true | 0 | 0 |  |
@@ -212,6 +214,7 @@ Decision: `rejected`
 | Rule | Pass | Observed | Threshold | Reason |
 |---|---:|---|---|---|
 | target_surface_scope | true | true | true |  |
+| profile_changed | true | true | true |  |
 | complete_results | true | true | true |  |
 | new_failures | true | 0 | 0 |  |
 | new_hard_failures | true | 0 | 0 |  |
@@ -266,6 +269,7 @@ Decision: `accepted`
 | Rule | Pass | Observed | Threshold | Reason |
 |---|---:|---|---|---|
 | target_surface_scope | true | true | true |  |
+| profile_changed | true | true | true |  |
 | complete_results | true | true | true |  |
 | new_failures | true | 0 | 0 |  |
 | new_hard_failures | true | 0 | 0 |  |
@@ -283,4 +287,4 @@ Decision: `accepted`
 
 ## Usage
 
-Calls: 90; tokens: 6094; estimated cost: 0.000000 (known: true); latency: 22.09816ms; complete: true; source: `deterministic_example`.
+Calls: 90; tokens: 6094; estimated cost: 0.000000 (known: true); latency: 50.037ms; complete: true; source: `deterministic_example`.

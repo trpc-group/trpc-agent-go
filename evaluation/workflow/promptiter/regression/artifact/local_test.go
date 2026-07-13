@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -27,10 +28,41 @@ func TestNewStoreRejectsEmptyRoot(t *testing.T) {
 	}
 }
 
+func TestLocalStoreFileAndDirectoryHelpers(t *testing.T) {
+	defaultOperations := (&Store{}).effectiveBundleOperations()
+	if defaultOperations.mkdirTemp == nil || defaultOperations.syncDirectory == nil {
+		t.Fatal("zero store did not fall back to default operations")
+	}
+	customOperations := defaultOperations
+	store := &Store{bundleOps: customOperations}
+	if store.effectiveBundleOperations().mkdirTemp == nil {
+		t.Fatal("custom operations were not retained")
+	}
+
+	directory := t.TempDir()
+	if err := syncDirectory(directory); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" {
+		if err := syncDirectory(filepath.Join(directory, "missing")); err == nil {
+			t.Fatal("syncDirectory accepted a missing directory")
+		}
+	}
+
+	path := filepath.Join(directory, "report.json")
+	if err := writeSyncedFile(path, []byte("content")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeSyncedFile(path, []byte("content")); err == nil {
+		t.Fatal("writeSyncedFile overwrote an existing report")
+	}
+}
+
 func TestWriteReportsDoesNotExposePartialRunWhenStorageFails(t *testing.T) {
 	tests := []struct {
-		name      string
-		configure func(*Store)
+		name              string
+		configure         func(*Store)
+		bundleIsPublished bool
 	}{
 		{
 			name: "report file persistence fails",
@@ -66,7 +98,8 @@ func TestWriteReportsDoesNotExposePartialRunWhenStorageFails(t *testing.T) {
 			},
 		},
 		{
-			name: "published directory cannot be made durable",
+			name:              "published directory cannot be made durable",
+			bundleIsPublished: true,
 			configure: func(store *Store) {
 				original := store.bundleOps.syncDirectory
 				store.bundleOps.syncDirectory = func(path string) error {
@@ -96,7 +129,12 @@ func TestWriteReportsDoesNotExposePartialRunWhenStorageFails(t *testing.T) {
 			if err == nil || files != nil {
 				t.Fatalf("files=%v err=%v, want failed atomic publication", files, err)
 			}
-			if _, statErr := os.Lstat(filepath.Join(store.root, result.RunID)); !errors.Is(statErr, os.ErrNotExist) {
+			_, statErr := os.Lstat(filepath.Join(store.root, result.RunID))
+			if test.bundleIsPublished {
+				if statErr != nil {
+					t.Fatalf("published report directory was removed: %v", statErr)
+				}
+			} else if !errors.Is(statErr, os.ErrNotExist) {
 				t.Fatalf("partial report directory is visible: %v", statErr)
 			}
 			entries, readErr := os.ReadDir(store.root)
@@ -323,6 +361,79 @@ func TestScenarioConcurrentReportPublishersConvergeOnOneCompleteBundle(t *testin
 	}
 }
 
+func TestWriteReportsWaitsForPublicationToFinishBeforeReadingBundle(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalSync := store.bundleOps.syncDirectory
+	published := make(chan struct{})
+	release := make(chan struct{})
+	store.bundleOps.syncDirectory = func(path string) error {
+		if path == store.root {
+			select {
+			case <-published:
+			default:
+				close(published)
+			}
+			<-release
+		}
+		return originalSync(path)
+	}
+	result := &regression.RunResult{
+		RunID: "serialized-run",
+		Spec:  &regression.RunSpec{Runtime: regression.RuntimePolicy{NumRuns: 1}},
+	}
+	first := make(chan error, 1)
+	go func() {
+		_, err := WriteReports(context.Background(), store, result)
+		first <- err
+	}()
+	<-published
+	second := make(chan error, 1)
+	go func() {
+		_, err := WriteReports(context.Background(), store, result)
+		second <- err
+	}()
+	select {
+	case err := <-second:
+		t.Fatalf("second writer returned before publication completed: %v", err)
+	default:
+	}
+	close(release)
+	if err := <-first; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-second; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWriteReportsPreservesBundleConflictWhenPublicationLosesRace(t *testing.T) {
+	root := t.TempDir()
+	store, err := NewStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "run"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "run", "optimization_report.json"), []byte("different"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "run", "optimization_report.md"), []byte("different"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	store.bundleOps.rename = func(string, string) error { return errors.New("publish raced") }
+	_, err = WriteReports(context.Background(), store, &regression.RunResult{
+		RunID: "run",
+		Spec:  &regression.RunSpec{Runtime: regression.RuntimePolicy{NumRuns: 1}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "already exists with different content") {
+		t.Fatalf("error = %v, want immutable bundle conflict", err)
+	}
+}
+
 func TestWriteReportsRejectsIncompleteInputs(t *testing.T) {
 	store, err := NewStore(t.TempDir())
 	if err != nil {
@@ -349,7 +460,7 @@ func TestScenarioRunIDCannotCreateNestedOrEscapingReportDirectory(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, runID := range []string{"nested/run", `nested\run`, ".."} {
+	for _, runID := range []string{"nested/run", `nested\run`, ".", "..", "CON", "report."} {
 		t.Run(runID, func(t *testing.T) {
 			_, err := WriteReports(context.Background(), store, &regression.RunResult{
 				RunID: runID,

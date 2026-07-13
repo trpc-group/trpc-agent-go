@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 )
 
 // File describes one content-addressed artifact.
@@ -31,8 +32,15 @@ type File struct {
 
 // Store writes immutable files beneath one root directory.
 type Store struct {
-	root      string
-	bundleOps bundleOperations
+	root        string
+	bundleOps   bundleOperations
+	bundleLocks map[string]*bundleLock
+	bundleMu    sync.Mutex
+}
+
+type bundleLock struct {
+	mu    sync.Mutex
+	users int
 }
 
 type bundleOperations struct {
@@ -76,7 +84,33 @@ func NewStore(root string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve artifact root symlinks: %w", err)
 	}
-	return &Store{root: resolved, bundleOps: defaultBundleOperations()}, nil
+	return &Store{
+		root:        resolved,
+		bundleOps:   defaultBundleOperations(),
+		bundleLocks: make(map[string]*bundleLock),
+	}, nil
+}
+
+func (s *Store) lockBundle(directory string) func() {
+	s.bundleMu.Lock()
+	lock := s.bundleLocks[directory]
+	if lock == nil {
+		lock = &bundleLock{}
+		s.bundleLocks[directory] = lock
+	}
+	lock.users++
+	s.bundleMu.Unlock()
+
+	lock.mu.Lock()
+	return func() {
+		lock.mu.Unlock()
+		s.bundleMu.Lock()
+		lock.users--
+		if lock.users == 0 {
+			delete(s.bundleLocks, directory)
+		}
+		s.bundleMu.Unlock()
+	}
 }
 
 // Write atomically creates a file and refuses different content at the same name.

@@ -303,7 +303,15 @@ func evaluateContract(
 		)
 	case "tool_selection":
 		if expected == nil || len(expected.Tools) == 0 {
-			return true, ""
+			passed := toolCount(actual) == 0
+			return passed, mismatchReason(
+				passed, "unexpected tool calls", "0", fmt.Sprint(toolCount(actual)),
+			)
+		}
+		if toolCount(actual) != len(expected.Tools) {
+			return false, mismatchReason(
+				false, "tool call count mismatch", fmt.Sprint(len(expected.Tools)), fmt.Sprint(toolCount(actual)),
+			)
 		}
 		actualName := firstToolName(actual)
 		expectedName := firstToolName(expected)
@@ -313,7 +321,15 @@ func evaluateContract(
 		)
 	case "tool_arguments":
 		if expected == nil || len(expected.Tools) == 0 {
-			return true, ""
+			passed := toolCount(actual) == 0
+			return passed, mismatchReason(
+				passed, "unexpected tool calls", "0", fmt.Sprint(toolCount(actual)),
+			)
+		}
+		if toolCount(actual) != len(expected.Tools) {
+			return false, mismatchReason(
+				false, "tool call count mismatch", fmt.Sprint(len(expected.Tools)), fmt.Sprint(toolCount(actual)),
+			)
 		}
 		actualArguments := firstToolArguments(actual)
 		expectedArguments := firstToolArguments(expected)
@@ -348,6 +364,13 @@ func evaluateContract(
 	default:
 		return false, fmt.Sprintf("unsupported metric %q", metricName)
 	}
+}
+
+func toolCount(invocation *evalset.Invocation) int {
+	if invocation == nil {
+		return 0
+	}
+	return len(invocation.Tools)
 }
 
 func finalResponse(invocation *evalset.Invocation) string {

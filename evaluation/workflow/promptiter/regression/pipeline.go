@@ -415,15 +415,16 @@ func (a *analyzer) auditRound(
 		result.Spec.TargetSurfaceID,
 	)
 	gateDecision, err := a.deps.Gate.Decide(&GateInput{
-		Spec:                   result.Spec,
-		PromptIterAccepted:     candidate.PromptIterAccepted,
-		PromptIterReason:       candidate.PromptIterReason,
-		CandidateProfileValid:  profileValid,
-		CandidateProfileReason: profileReason,
-		CandidateValidation:    validation,
-		TrainDelta:             candidate.TrainDelta,
-		ValidationDelta:        validationDelta,
-		TotalUsage:             result.Usage,
+		Spec:                    result.Spec,
+		PromptIterAccepted:      candidate.PromptIterAccepted,
+		PromptIterReason:        candidate.PromptIterReason,
+		CandidateProfileValid:   profileValid,
+		CandidateProfileReason:  profileReason,
+		CandidateProfileChanged: candidate.ProfileChanged,
+		CandidateValidation:     validation,
+		TrainDelta:              candidate.TrainDelta,
+		ValidationDelta:         validationDelta,
+		TotalUsage:              result.Usage,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("gate round %d: %w", round.Round, err)

@@ -88,6 +88,8 @@ func (b *decisionBuilder) addQualityRules(input *regression.GateInput) {
 	}
 	b.add("target_surface_scope", input.CandidateProfileValid, input.CandidateProfileValid, true,
 		input.CandidateProfileReason, false)
+	b.add("profile_changed", input.CandidateProfileChanged, input.CandidateProfileChanged, true,
+		"candidate does not change the configured target surface", false)
 	complete := input.ValidationDelta.Complete
 	if input.TrainDelta != nil {
 		complete = complete && input.TrainDelta.Complete

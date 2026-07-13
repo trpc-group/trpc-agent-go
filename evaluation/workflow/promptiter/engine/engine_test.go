@@ -516,14 +516,13 @@ func TestRunAcceptsFirstRoundAndStopsAfterRejectedNextRound(t *testing.T) {
 		"accepted prompt",
 		"accepted prompt",
 		"rejected prompt",
-		"rejected prompt",
 	}, evalService.profiles)
 	assert.Len(t, result.Rounds, 2)
 	assert.Equal(t, "accepted prompt", profileText(result.AcceptedProfile))
 	assert.True(t, result.Rounds[0].Acceptance.Accepted)
 	assert.False(t, result.Rounds[1].Acceptance.Accepted)
 	assert.Equal(t, "max rounds without acceptance reached", result.Rounds[1].Stop.Reason)
-	assert.NotNil(t, result.Rounds[1].CandidateTrain)
+	assert.Nil(t, result.Rounds[1].CandidateTrain)
 	assert.Len(t, backward.requests, 2)
 	assert.Equal(t, "base prompt", *backward.requests[0].Surfaces[0].Value.Text)
 	assert.Equal(t, "accepted prompt", *backward.requests[1].Surfaces[0].Value.Text)
@@ -537,6 +536,8 @@ func TestRunAcceptsFirstRoundAndStopsAfterRejectedNextRound(t *testing.T) {
 	assert.Equal(t, 2.0, *result.Configuration.StopPolicy.TargetScore)
 	assert.Equal(t, []string{testSurfaceID}, result.Configuration.TargetSurfaceIDs,
 		"retained configuration must not alias the caller's request")
+	assert.False(t, result.Configuration.RetainAuditEvidence)
+	assert.False(t, result.Configuration.EvaluateFinalCandidateTrain)
 }
 
 func TestRunAllowsToolSurfaceInTraceWhenTargetingInstruction(t *testing.T) {
@@ -779,8 +780,9 @@ func TestRunObserverReceivesRuntimeEvents(t *testing.T) {
 		StopPolicy: StopPolicy{
 			MaxRoundsWithoutAcceptance: 1,
 		},
-		MaxRounds:        1,
-		TargetSurfaceIDs: []string{testSurfaceID},
+		EvaluateFinalCandidateTrain: true,
+		MaxRounds:                   1,
+		TargetSurfaceIDs:            []string{testSurfaceID},
 	}, WithObserver(func(ctx context.Context, event *Event) error {
 		_ = ctx
 		if assert.NotNil(t, event) {
@@ -867,9 +869,10 @@ func TestRunPassesEvalCaseIDsToTrainAndValidationInputs(t *testing.T) {
 					EvalCaseIDs: []string{"validation_case_1"},
 				},
 			},
-			InitialProfile:   runtimeProfileFromSnapshot(t, testStructureSnapshot(t)),
-			MaxRounds:        1,
-			TargetSurfaceIDs: []string{testSurfaceID},
+			InitialProfile:              runtimeProfileFromSnapshot(t, testStructureSnapshot(t)),
+			EvaluateFinalCandidateTrain: true,
+			MaxRounds:                   1,
+			TargetSurfaceIDs:            []string{testSurfaceID},
 		})
 		require.NoError(t, err)
 		require.NotNil(t, result)
@@ -893,9 +896,10 @@ func TestRunPassesEvalCaseIDsToTrainAndValidationInputs(t *testing.T) {
 					EvalSetID: "validation",
 				},
 			},
-			InitialProfile:   runtimeProfileFromSnapshot(t, testStructureSnapshot(t)),
-			MaxRounds:        1,
-			TargetSurfaceIDs: []string{testSurfaceID},
+			InitialProfile:              runtimeProfileFromSnapshot(t, testStructureSnapshot(t)),
+			EvaluateFinalCandidateTrain: true,
+			MaxRounds:                   1,
+			TargetSurfaceIDs:            []string{testSurfaceID},
 		})
 		var noFilter []string
 		require.NoError(t, err)
@@ -919,9 +923,10 @@ func TestRunPassesEvalCaseIDsToTrainAndValidationInputs(t *testing.T) {
 					EvalCaseIDs: []string{},
 				},
 			},
-			InitialProfile:   runtimeProfileFromSnapshot(t, testStructureSnapshot(t)),
-			MaxRounds:        1,
-			TargetSurfaceIDs: []string{testSurfaceID},
+			InitialProfile:              runtimeProfileFromSnapshot(t, testStructureSnapshot(t)),
+			EvaluateFinalCandidateTrain: true,
+			MaxRounds:                   1,
+			TargetSurfaceIDs:            []string{testSurfaceID},
 		})
 		var noFilter []string
 		require.NoError(t, err)
@@ -993,8 +998,9 @@ func TestRunCompilesProfileIntoEvaluationRunOptions(t *testing.T) {
 		AcceptancePolicy: AcceptancePolicy{
 			MinScoreGain: 0.1,
 		},
-		MaxRounds:        1,
-		TargetSurfaceIDs: []string{testSurfaceID},
+		EvaluateFinalCandidateTrain: true,
+		MaxRounds:                   1,
+		TargetSurfaceIDs:            []string{testSurfaceID},
 	})
 	assert.NoError(t, err)
 	assert.Len(t, result.Rounds, 1)
@@ -2035,6 +2041,41 @@ func TestAdaptEvaluationCaseResultUsesAggregateMetricsAcrossRepeatedRuns(t *test
 	assert.Equal(t, 0.5, result.Metrics[0].Score)
 	assert.Equal(t, status.EvalStatusFailed, result.Metrics[0].Status)
 	assert.Equal(t, "second run failed the quality contract", result.Metrics[0].Reason)
+	assert.Nil(t, result.RunDetails)
+	assert.Nil(t, result.RunResults)
+	require.NotNil(t, result.MetricTraces["quality"])
+	assert.Equal(t, "second output", result.MetricTraces["quality"].Steps[0].Output.Text)
+
+	audited, err := adaptEvaluationCaseResultWithAuditEvidence(structure, "validation", evalCase, true)
+	require.NoError(t, err)
+	assert.Len(t, audited.RunDetails, 2)
+	assert.Len(t, audited.RunResults, 2)
+	evalCase.RunDetails[0].Inference.SessionID = "mutated"
+	evalCase.EvalCaseResults[0].OverallEvalMetricResults[0].Score = 0
+	assert.Equal(t, "session_first", audited.RunDetails[0].Inference.SessionID)
+	assert.Equal(t, .9, audited.RunResults[0].OverallEvalMetricResults[0].Score)
+}
+
+func TestLossUsesTraceForTheRunThatFailedEachMetric(t *testing.T) {
+	result, err := (&engine{}).loss(&EvaluationResult{EvalSets: []EvalSetResult{{
+		EvalSetID: "train",
+		Cases: []CaseResult{{
+			EvalSetID: "train", EvalCaseID: "case_1",
+			Metrics: []MetricResult{
+				{MetricName: "quality", Status: status.EvalStatusFailed, Reason: "quality failed"},
+				{MetricName: "safety", Status: status.EvalStatusFailed, Reason: "safety failed"},
+			},
+			MetricTraces: map[string]*atrace.Trace{
+				"quality": {Steps: []atrace.Step{{StepID: "quality-step"}}},
+				"safety":  {Steps: []atrace.Step{{StepID: "safety-step"}}},
+			},
+		}},
+	}}})
+	require.NoError(t, err)
+	require.Len(t, result, 1)
+	require.Len(t, result[0].TerminalLosses, 2)
+	assert.Equal(t, "quality-step", result[0].TerminalLosses[0].StepID)
+	assert.Equal(t, "safety-step", result[0].TerminalLosses[1].StepID)
 }
 
 func TestRunRejectsEmptyValidationEvalSets(t *testing.T) {
@@ -3467,6 +3508,16 @@ func TestLossStopAndEventHelpers(t *testing.T) {
 			return &value
 		}(),
 	}, 0, 0.8)
+	require.NotNil(t, decision)
+	assert.True(t, decision.ShouldStop)
+	assert.Equal(t, "target score reached", decision.Reason)
+	decision = (&engine{}).stop(4, 4, StopPolicy{
+		MaxRoundsWithoutAcceptance: 1,
+		TargetScore: func() *float64 {
+			value := 0.8
+			return &value
+		}(),
+	}, 1, 0.8)
 	require.NotNil(t, decision)
 	assert.True(t, decision.ShouldStop)
 	assert.Equal(t, "target score reached", decision.Reason)

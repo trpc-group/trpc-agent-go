@@ -41,13 +41,14 @@ const (
 	supportAgentName = "support-agent"
 	appName          = "promptiter-regression-support"
 	baseInstruction  = "You are a customer-support agent."
+	defaultConfigDir = "promptiter/regressionloop/data"
 )
 
 func main() {
 	scenario := flag.String("scenario", "success", "deterministic optimizer scenario: success, no-effect, or overfit")
 	runID := flag.String("run-id", "", "unique immutable run identifier; generated when empty")
 	output := flag.String("output", "output", "artifact output directory")
-	config := flag.String("config", "promptiter/regressionloop/data", "directory containing eval sets, metrics, optimizer config, and baseline prompt")
+	config := flag.String("config", defaultConfigDir, "directory containing eval sets, metrics, optimizer config, and baseline prompt")
 	flag.Parse()
 	resolvedRunID := *runID
 	if resolvedRunID == "" {
@@ -253,6 +254,8 @@ func buildEngineRequest(loaded *inputs, runtime *exampleRuntime, scenario string
 			NumRuns:                  loaded.config.NumRuns,
 			TraceUsageCoversAllCalls: true,
 		},
+		RetainAuditEvidence:         true,
+		EvaluateFinalCandidateTrain: true,
 		// The deterministic fake engine explores every candidate. The stricter
 		// regression gate below is the production write-back decision.
 		AcceptancePolicy: acceptance,

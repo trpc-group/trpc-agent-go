@@ -329,15 +329,16 @@ type GateRuleResult struct {
 
 // GateInput contains the evidence needed for one candidate decision.
 type GateInput struct {
-	Spec                   *RunSpec
-	PromptIterAccepted     bool
-	PromptIterReason       string
-	CandidateProfileValid  bool
-	CandidateProfileReason string
-	CandidateValidation    *EvaluationSnapshot
-	TrainDelta             *DeltaReport
-	ValidationDelta        *DeltaReport
-	TotalUsage             UsageSummary
+	Spec                    *RunSpec
+	PromptIterAccepted      bool
+	PromptIterReason        string
+	CandidateProfileValid   bool
+	CandidateProfileReason  string
+	CandidateProfileChanged bool
+	CandidateValidation     *EvaluationSnapshot
+	TrainDelta              *DeltaReport
+	ValidationDelta         *DeltaReport
+	TotalUsage              UsageSummary
 }
 
 // GateDecision is the accepted, rejected, or inconclusive gate result.

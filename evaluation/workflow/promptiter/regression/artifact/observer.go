@@ -53,6 +53,9 @@ type bundleFile struct {
 }
 
 func validateRunDirectoryName(runID string) error {
+	if runID == "." || runID == ".." {
+		return fmt.Errorf("invalid run id %q: reserved path component", runID)
+	}
 	if err := regression.ValidateRunID(runID); err != nil {
 		return fmt.Errorf("invalid run id %q: %w", runID, err)
 	}
@@ -67,6 +70,8 @@ func (s *Store) writeBundle(
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	unlock := s.lockBundle(directory)
+	defer unlock()
 	finalDirectory, err := s.path(directory)
 	if err != nil {
 		return nil, err
@@ -107,29 +112,23 @@ func (s *Store) writeBundle(
 	if err := operations.rename(temporaryDirectory, finalDirectory); err != nil {
 		if existing, verifyErr := verifyBundle(finalDirectory, directory, values); verifyErr == nil {
 			return existing, nil
+		} else if !errors.Is(verifyErr, os.ErrNotExist) {
+			return nil, errors.Join(
+				fmt.Errorf("commit report bundle: %w", err),
+				verifyErr,
+			)
 		}
 		return nil, fmt.Errorf("commit report bundle: %w", err)
 	}
 	committed = true
 	if err := operations.syncDirectory(s.root); err != nil {
-		committed = false
-		rollbackErr := operations.removeAll(finalDirectory)
-		if rollbackErr != nil {
-			return nil, errors.Join(
-				fmt.Errorf("sync artifact root: %w", err),
-				fmt.Errorf("rollback report bundle: %w", rollbackErr),
-			)
-		}
-		return nil, fmt.Errorf("sync artifact root: %w", err)
+		// The rename already made this immutable bundle visible. Deleting it here
+		// can race with another writer that has verified the same bundle.
+		return nil, fmt.Errorf("sync artifact root after publishing report bundle: %w", err)
 	}
 	files, err := verifyBundle(finalDirectory, directory, values)
 	if err != nil {
-		committed = false
-		rollbackErr := operations.removeAll(finalDirectory)
-		if rollbackErr != nil {
-			return nil, errors.Join(err, fmt.Errorf("rollback report bundle: %w", rollbackErr))
-		}
-		return nil, err
+		return nil, fmt.Errorf("verify published report bundle: %w", err)
 	}
 	return files, nil
 }

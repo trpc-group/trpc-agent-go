@@ -61,6 +61,14 @@ type RunRequest struct {
 	AcceptancePolicy AcceptancePolicy
 	// StopPolicy controls termination conditions between rounds.
 	StopPolicy StopPolicy
+	// RetainAuditEvidence retains repeated evaluation observations in the final
+	// RunResult. It is disabled by default because those observations can contain
+	// complete prompts, responses, and tool payloads.
+	RetainAuditEvidence bool
+	// EvaluateFinalCandidateTrain evaluates the terminal round's output profile
+	// on the training sets. It is disabled by default to avoid an extra model
+	// call and event for ordinary PromptIter runs.
+	EvaluateFinalCandidateTrain bool
 	// MaxRounds is the hard cap for outer optimization iterations.
 	MaxRounds int
 	// TargetSurfaceIDs limits this run to optimizing only the listed surfaces.
@@ -139,14 +147,16 @@ type RunResult struct {
 // RunConfiguration stores the effective PromptIter execution policy retained
 // with a completed run for reproducibility and audit validation.
 type RunConfiguration struct {
-	EvaluationOptions  EvaluationOptions
-	BackwardOptions    BackwardOptions
-	AggregationOptions AggregationOptions
-	OptimizerOptions   OptimizerOptions
-	AcceptancePolicy   AcceptancePolicy
-	StopPolicy         StopPolicy
-	MaxRounds          int
-	TargetSurfaceIDs   []string
+	EvaluationOptions           EvaluationOptions
+	BackwardOptions             BackwardOptions
+	AggregationOptions          AggregationOptions
+	OptimizerOptions            OptimizerOptions
+	AcceptancePolicy            AcceptancePolicy
+	StopPolicy                  StopPolicy
+	RetainAuditEvidence         bool
+	EvaluateFinalCandidateTrain bool
+	MaxRounds                   int
+	TargetSurfaceIDs            []string
 }
 
 // RoundResult captures all observable state for one optimization round.
@@ -268,6 +278,7 @@ func (e *engine) run(
 		request.Teacher,
 		request.Judge,
 		evaluationOptions,
+		request.RetainAuditEvidence,
 	))
 	if err != nil {
 		return nil, fmt.Errorf("evaluate accepted baseline profile: %w", err)
@@ -319,13 +330,14 @@ func (e *engine) run(
 			roundsWithoutAcceptance,
 			effectiveScore,
 		)
-		if roundResult.Stop.ShouldStop {
+		if roundResult.Stop.ShouldStop && request.EvaluateFinalCandidateTrain {
 			candidateTrain, err := e.evaluate(ctx, structure, e.newEvaluationRequest(
 				request.Train,
 				roundResult.OutputProfile,
 				request.Teacher,
 				request.Judge,
 				evaluationOptions,
+				request.RetainAuditEvidence,
 			))
 			if err != nil {
 				return nil, fmt.Errorf(
@@ -460,14 +472,16 @@ func effectiveRunConfiguration(request *RunRequest) RunConfiguration {
 		stopPolicy.TargetScore = &targetScore
 	}
 	return RunConfiguration{
-		EvaluationOptions:  evaluationOptions,
-		BackwardOptions:    request.BackwardOptions,
-		AggregationOptions: request.AggregationOptions,
-		OptimizerOptions:   request.OptimizerOptions,
-		AcceptancePolicy:   request.AcceptancePolicy,
-		StopPolicy:         stopPolicy,
-		MaxRounds:          request.MaxRounds,
-		TargetSurfaceIDs:   append([]string(nil), request.TargetSurfaceIDs...),
+		EvaluationOptions:           evaluationOptions,
+		BackwardOptions:             request.BackwardOptions,
+		AggregationOptions:          request.AggregationOptions,
+		OptimizerOptions:            request.OptimizerOptions,
+		AcceptancePolicy:            request.AcceptancePolicy,
+		StopPolicy:                  stopPolicy,
+		RetainAuditEvidence:         request.RetainAuditEvidence,
+		EvaluateFinalCandidateTrain: request.EvaluateFinalCandidateTrain,
+		MaxRounds:                   request.MaxRounds,
+		TargetSurfaceIDs:            append([]string(nil), request.TargetSurfaceIDs...),
 	}
 }
 
@@ -521,6 +535,7 @@ func (e *engine) executeRound(
 		request.Teacher,
 		request.Judge,
 		evaluationOptions,
+		request.RetainAuditEvidence,
 	))
 	if err != nil {
 		return nil, 0, fmt.Errorf("evaluate train round %d: %w", roundNumber, err)
@@ -600,6 +615,7 @@ func (e *engine) executeRound(
 		request.Teacher,
 		request.Judge,
 		evaluationOptions,
+		request.RetainAuditEvidence,
 	))
 	if err != nil {
 		return nil, 0, fmt.Errorf("evaluate validation round %d: %w", roundNumber, err)
@@ -628,13 +644,15 @@ func (e *engine) newEvaluationRequest(
 	teacher runner.Runner,
 	judge runner.Runner,
 	options EvaluationOptions,
+	retainAuditEvidence bool,
 ) *EvaluationRequest {
 	return &EvaluationRequest{
-		EvalSets: inputs,
-		Profile:  profile,
-		Teacher:  teacher,
-		Judge:    judge,
-		Options:  options,
+		EvalSets:            inputs,
+		Profile:             profile,
+		Teacher:             teacher,
+		Judge:               judge,
+		Options:             options,
+		RetainAuditEvidence: retainAuditEvidence,
 	}
 }
 

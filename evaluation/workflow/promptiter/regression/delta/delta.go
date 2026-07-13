@@ -26,7 +26,7 @@ type Engine struct {
 
 // New creates a delta engine.
 func New(epsilon float64) *Engine {
-	if epsilon < 0 {
+	if math.IsNaN(epsilon) || math.IsInf(epsilon, 0) || epsilon < 0 {
 		epsilon = 0
 	}
 	return &Engine{Epsilon: epsilon}

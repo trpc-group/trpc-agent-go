@@ -23,6 +23,14 @@ import (
 
 var runIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 
+var windowsReservedRunIDNames = map[string]struct{}{
+	"AUX": {}, "CON": {}, "NUL": {}, "PRN": {},
+	"COM1": {}, "COM2": {}, "COM3": {}, "COM4": {}, "COM5": {},
+	"COM6": {}, "COM7": {}, "COM8": {}, "COM9": {},
+	"LPT1": {}, "LPT2": {}, "LPT3": {}, "LPT4": {}, "LPT5": {},
+	"LPT6": {}, "LPT7": {}, "LPT8": {}, "LPT9": {},
+}
+
 // Validate checks the audit contract before PromptIter evidence is consumed.
 func (s *RunSpec) Validate() error {
 	if s == nil {
@@ -47,13 +55,15 @@ func (s *RunSpec) Validate() error {
 	if s.Runtime.NumRuns <= 0 {
 		return errors.New("num runs must be greater than zero")
 	}
-	if s.Gate.MinValidationGain < 0 || s.Gate.MaxCaseRegression < 0 ||
+	if !finite(s.Gate.MinValidationGain) || !finite(s.Gate.MaxCaseRegression) ||
+		!finite(s.Gate.MaxGeneralizationGap) || !finite(s.Gate.MaxScoreStdDev) ||
+		s.Gate.MinValidationGain < 0 || s.Gate.MaxCaseRegression < 0 ||
 		s.Gate.MaxGeneralizationGap < 0 || s.Gate.MaxScoreStdDev < 0 {
-		return errors.New("gate limits must be non-negative")
+		return errors.New("gate limits must be finite and non-negative")
 	}
 	if s.Budget.MaxCalls < 0 || s.Budget.MaxTokens < 0 ||
-		s.Budget.MaxEstimatedCost < 0 || s.Budget.MaxWallTime < 0 {
-		return errors.New("budget limits must be non-negative")
+		!finite(s.Budget.MaxEstimatedCost) || s.Budget.MaxEstimatedCost < 0 || s.Budget.MaxWallTime < 0 {
+		return errors.New("budget limits must be finite and non-negative")
 	}
 	if s.Audit.MaxContentBytes < 0 {
 		return errors.New("audit max content bytes must be non-negative")
@@ -85,6 +95,13 @@ func (s *RunSpec) Validate() error {
 func ValidateRunID(value string) error {
 	if !runIDPattern.MatchString(value) {
 		return errors.New("run id must be 1-128 characters using letters, digits, dot, underscore, or hyphen")
+	}
+	if strings.HasSuffix(value, ".") {
+		return errors.New("run id must not end with a dot")
+	}
+	name, _, _ := strings.Cut(value, ".")
+	if _, reserved := windowsReservedRunIDNames[strings.ToUpper(name)]; reserved {
+		return errors.New("run id must not use a Windows reserved device name")
 	}
 	return nil
 }

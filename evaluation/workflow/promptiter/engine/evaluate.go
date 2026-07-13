@@ -11,6 +11,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -54,6 +55,10 @@ type EvaluationRequest struct {
 	Judge runner.Runner
 	// Options controls evaluation parallelism.
 	Options EvaluationOptions
+	// RetainAuditEvidence preserves raw repeated-run observations in the
+	// returned result. The engine still obtains transient run details to extract
+	// loss traces when this is false.
+	RetainAuditEvidence bool
 }
 
 // MetricResult stores one metric measurement for an evaluated case.
@@ -82,9 +87,14 @@ type CaseResult struct {
 	SessionID string
 	// Trace records the first node-level execution path used by backward propagation.
 	Trace *atrace.Trace
-	// RunDetails preserves every repeated inference observation for audit and attribution.
+	// MetricTraces associates each aggregate failed metric with a trace from a
+	// run that actually failed that metric.
+	MetricTraces map[string]*atrace.Trace
+	// RunDetails preserves every repeated inference observation only when audit
+	// evidence retention is explicitly enabled.
 	RunDetails []*evaluation.EvaluationCaseRunDetails
-	// RunResults preserves per-run metric outcomes for stability analysis.
+	// RunResults preserves per-run metric outcomes only when audit evidence
+	// retention is explicitly enabled.
 	RunResults []*evalresult.EvalCaseResult
 	// Metrics stores all metric outputs for this case.
 	Metrics []MetricResult
@@ -142,7 +152,9 @@ func (e *engine) evaluate(
 		if err != nil {
 			return nil, err
 		}
-		evalSetResult, err := adaptEvaluationSetResult(structure, input.EvalSetID, genericResult)
+		evalSetResult, err := adaptEvaluationSetResultWithAuditEvidence(
+			structure, input.EvalSetID, genericResult, request.RetainAuditEvidence,
+		)
 		if err != nil {
 			return nil, err
 		}
@@ -234,6 +246,15 @@ func adaptEvaluationSetResult(
 	evalSetID string,
 	result *evaluation.EvaluationResult,
 ) (*EvalSetResult, error) {
+	return adaptEvaluationSetResultWithAuditEvidence(structure, evalSetID, result, false)
+}
+
+func adaptEvaluationSetResultWithAuditEvidence(
+	structure *profilecompiler.Structure,
+	evalSetID string,
+	result *evaluation.EvaluationResult,
+	retainAuditEvidence bool,
+) (*EvalSetResult, error) {
 	if result == nil {
 		return nil, errors.New("evaluation result is nil")
 	}
@@ -256,7 +277,9 @@ func adaptEvaluationSetResult(
 		if evalCase == nil {
 			continue
 		}
-		converted, err := adaptEvaluationCaseResult(structure, evalSetID, evalCase)
+		converted, err := adaptEvaluationCaseResultWithAuditEvidence(
+			structure, evalSetID, evalCase, retainAuditEvidence,
+		)
 		if err != nil {
 			return nil, err
 		}
@@ -362,6 +385,15 @@ func adaptEvaluationCaseResult(
 	evalSetID string,
 	evalCase *evaluation.EvaluationCaseResult,
 ) (*CaseResult, error) {
+	return adaptEvaluationCaseResultWithAuditEvidence(structure, evalSetID, evalCase, false)
+}
+
+func adaptEvaluationCaseResultWithAuditEvidence(
+	structure *profilecompiler.Structure,
+	evalSetID string,
+	evalCase *evaluation.EvaluationCaseResult,
+	retainAuditEvidence bool,
+) (*CaseResult, error) {
 	if evalCase == nil {
 		return nil, errors.New("evaluation case result is nil")
 	}
@@ -394,6 +426,12 @@ func adaptEvaluationCaseResult(
 			err,
 		)
 	}
+	metricTraces, err := failedMetricTraces(structure, evalCase)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"resolve failed metric traces for eval case %q: %w", evalCase.EvalCaseID, err,
+		)
+	}
 	// MetricResults is the Evaluation Service's aggregate across all configured
 	// runs. PromptIter loss extraction, acceptance, regression deltas, and the
 	// human report must use this same evidence. Per-run results remain available
@@ -409,15 +447,102 @@ func adaptEvaluationCaseResult(
 			err,
 		)
 	}
-	return &CaseResult{
-		EvalSetID:  evalSetID,
-		EvalCaseID: evalCase.EvalCaseID,
-		SessionID:  sessionID,
-		Trace:      trace,
-		RunDetails: append([]*evaluation.EvaluationCaseRunDetails(nil), evalCase.RunDetails...),
-		RunResults: append([]*evalresult.EvalCaseResult(nil), evalCase.EvalCaseResults...),
-		Metrics:    metrics,
-	}, nil
+	result := &CaseResult{
+		EvalSetID:    evalSetID,
+		EvalCaseID:   evalCase.EvalCaseID,
+		SessionID:    sessionID,
+		Trace:        trace,
+		MetricTraces: metricTraces,
+		Metrics:      metrics,
+	}
+	if retainAuditEvidence {
+		runDetails, err := cloneRunDetails(evalCase.RunDetails)
+		if err != nil {
+			return nil, fmt.Errorf("clone run details for audit: %w", err)
+		}
+		runResults, err := cloneRunResults(evalCase.EvalCaseResults)
+		if err != nil {
+			return nil, fmt.Errorf("clone run results for audit: %w", err)
+		}
+		result.RunDetails = runDetails
+		result.RunResults = runResults
+	}
+	return result, nil
+}
+
+func cloneRunDetails(
+	source []*evaluation.EvaluationCaseRunDetails,
+) ([]*evaluation.EvaluationCaseRunDetails, error) {
+	encoded, err := json.Marshal(source)
+	if err != nil {
+		return nil, err
+	}
+	var result []*evaluation.EvaluationCaseRunDetails
+	if err := json.Unmarshal(encoded, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func cloneRunResults(
+	source []*evalresult.EvalCaseResult,
+) ([]*evalresult.EvalCaseResult, error) {
+	encoded, err := json.Marshal(source)
+	if err != nil {
+		return nil, err
+	}
+	var result []*evalresult.EvalCaseResult
+	if err := json.Unmarshal(encoded, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func failedMetricTraces(
+	structure *profilecompiler.Structure,
+	evalCase *evaluation.EvaluationCaseResult,
+) (map[string]*atrace.Trace, error) {
+	if evalCase == nil {
+		return nil, errors.New("evaluation case result is nil")
+	}
+	detailsByRunID := make(map[int]*evaluation.EvaluationCaseRunDetails, len(evalCase.RunDetails))
+	for index, detail := range evalCase.RunDetails {
+		if detail == nil || detail.RunID <= 0 {
+			return nil, fmt.Errorf("run detail at index %d is invalid", index)
+		}
+		if _, exists := detailsByRunID[detail.RunID]; exists {
+			return nil, fmt.Errorf("duplicate run detail id %d", detail.RunID)
+		}
+		detailsByRunID[detail.RunID] = detail
+	}
+	traces := make(map[string]*atrace.Trace)
+	for _, aggregateMetric := range evalCase.MetricResults {
+		if aggregateMetric == nil || aggregateMetric.EvalStatus != status.EvalStatusFailed {
+			continue
+		}
+		for _, run := range evalCase.EvalCaseResults {
+			if run == nil {
+				continue
+			}
+			if !runFailsAnyMetric(run, map[string]struct{}{aggregateMetric.MetricName: {}}) {
+				continue
+			}
+			detail := detailsByRunID[run.RunID]
+			if detail == nil {
+				return nil, fmt.Errorf("run result id %d has no matching run detail", run.RunID)
+			}
+			trace, _, err := extractInferenceTraceDetails(structure, evalCase.EvalCaseID, detail.Inference)
+			if err != nil {
+				return nil, fmt.Errorf("extract trace for metric %q run %d: %w", aggregateMetric.MetricName, run.RunID, err)
+			}
+			traces[aggregateMetric.MetricName] = trace
+			break
+		}
+		if traces[aggregateMetric.MetricName] == nil {
+			return nil, fmt.Errorf("failed metric %q has no failing run evidence", aggregateMetric.MetricName)
+		}
+	}
+	return traces, nil
 }
 
 func representativeRunEvidence(

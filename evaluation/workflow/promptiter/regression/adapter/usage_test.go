@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	atrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
@@ -53,6 +55,37 @@ func TestSummarizeUsagePrefersEngineWideTelemetry(t *testing.T) {
 		usage.Source != "promptiter_engine" || usage.Latency != 3*time.Second {
 		t.Fatalf("unexpected engine usage: %+v", usage)
 	}
+}
+
+func TestSummarizeUsageRejectsInvalidInputs(t *testing.T) {
+	negativeCost := -0.01
+	_, err := SummarizeUsage(nil, 0, nil)
+	require.ErrorContains(t, err, "PromptIter result is nil")
+
+	_, err = SummarizeUsage(&engine.RunResult{Usage: promptiter.Usage{Calls: 1}}, 0, &negativeCost)
+	require.ErrorContains(t, err, "estimated cost must be non-negative")
+
+	_, err = SummarizeUsage(&engine.RunResult{}, 0, &negativeCost)
+	require.ErrorContains(t, err, "estimated cost must be non-negative")
+}
+
+func TestSummarizeUsageFallsBackToStepUsageAndDerivedTotal(t *testing.T) {
+	result := &engine.RunResult{BaselineValidation: &engine.EvaluationResult{
+		EvalSets: []engine.EvalSetResult{{Cases: []engine.CaseResult{{
+			RunDetails: []*evaluation.EvaluationCaseRunDetails{{Inference: &evaluation.EvaluationInferenceDetails{
+				ExecutionTraces: []*atrace.Trace{{Steps: []atrace.Step{
+					{Usage: &model.Usage{PromptTokens: 2, CompletionTokens: 3}},
+					{},
+				}}},
+			}}},
+		}}}},
+	}}
+	usage, err := SummarizeUsage(result, 0, nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, usage.Calls)
+	require.Equal(t, int64(2), usage.InputTokens)
+	require.Equal(t, int64(3), usage.OutputTokens)
+	require.Equal(t, int64(5), usage.TotalTokens)
 }
 
 func usageEvaluation(inputTokens, outputTokens int) *engine.EvaluationResult {
