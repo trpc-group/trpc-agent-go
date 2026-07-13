@@ -3069,7 +3069,7 @@ safety boundaries.</p>
 </span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10"></a>        ↓
 </span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11"></a>      registered base Agents run inside the Go process
 </span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12"></a>        ↓
-</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13"></a>      child Agent events still enter Runner event stream / Session Service
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13"></a>      child Agent events remain in the same event stream / Session Service
 </span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14"></a>        ↓
 </span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15"></a>      workflow returns the combined result to the root Agent
 </span></code></pre></div></td></tr></table></div>
@@ -3079,13 +3079,10 @@ safety boundaries.</p>
 <p>Stable, deterministic, strongly constrained business processes should still be
 application Go code. For loops, branches, or JSON conversion across ordinary
 tools, prefer the lighter <code>execute_tool_code</code> capability.</p>
-<p>Python is the engineering choice of the current built-in runtime, not the core
-constraint of Dynamic Workflow. Workflow code is not an ordinary script that
-breaks away from the framework, and it does not directly call an Agent SDK from
-inside the script. It always crosses an explicit bridge/RPC back into the Go
-process, where registered Agents and tools continue to run. Using Go as the
-workflow language would therefore not provide direct access to in-process host
-objects.</p>
+<p>The workflow language is a Runtime choice rather than a constraint of Dynamic
+Workflow. The current built-in Runtime uses Python. Calls to registered Agents
+and tools cross an explicit bridge/RPC back into the Go host instead of running
+through a separate Agent SDK inside the script.</p>
 <h2 id="minimal-setup">Minimal setup</h2>
 <p>The minimal setup registers one neutral base Agent and attaches <code>run_workflow</code>
 to the root Agent.</p>
@@ -3433,19 +3430,10 @@ explicitly pass those tools when creating <code>run_workflow</code>:</p>
 <code>WithCodeCallableTools</code>. They create recursive or mixed control-flow
 boundaries. Workflows should call child Agents through <code>agent(...)</code>.</p>
 <h2 id="events-session-and-execution-boundary">Events, Session, and execution boundary</h2>
-<p>The first version of Dynamic Workflow is foreground and one-shot. Workflow code
-only expresses the orchestration logic; the actual child Agent execution still
-happens inside the Go process. In other words, <code>agent(...)</code> is not an ordinary
-SDK call from a disconnected script. It is a bridge/RPC call back into the
-host-side Agent runtime.</p>
-<p>Implementation-wise, each child Agent is derived from the parent invocation as
-a new invocation: it reuses the parent execution's Session, SessionService,
-Plugins, and event-forwarding path, but receives a new InvocationID, input
-Message, ParentMetadata, and independent event filter key. Therefore the child
-Agent's LLM context and event branch remain isolated instead of being simply
-merged into the root Agent's current prompt context.</p>
-<p>Therefore, child Agent output events are still sent through the current Runner
-event stream:</p>
+<p>Dynamic Workflow is foreground and one-shot. Workflow code expresses the
+orchestration logic, while registered Agents and tools continue to run in the
+Go host. Each child Agent call has an isolated conversation context and remains
+part of the current run. Therefore:</p>
 <ul>
 <li>Frontends can observe child Agent output and tool-call progress from the same
   event stream.</li>
@@ -3454,6 +3442,8 @@ event stream:</p>
   semantics and does not change that <code>parallel(...)</code> results are returned in
   input order.</li>
 </ul>
+<p>The event stream follows the framework's normal streaming contract: consume it
+until the run finishes, or cancel the run context when stopping early.</p>
 <p>This is the key difference from asking the model to write and run an ordinary
 standalone script: the temporary workflow gets code-level flexibility, while
 Agent execution, tool boundaries, event streaming, and Session persistence
@@ -3494,28 +3484,10 @@ the model's choice harder.</p>
 <p>See the runnable
 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/dynamicworkflow">Dynamic Workflow Agent example</a>.</p>
 <h2 id="roadmap-note-file-backed-workflows">Roadmap note: file-backed workflows</h2>
-<p>This section is a future-design note. Most users can skip it.</p>
-<p>The current version is one-shot: the model passes inline workflow code to
-<code>run_workflow</code> and runs it immediately.</p>
-<p>A future extension may support file-backed execution, where workflow scripts
-can be written, edited, reviewed, and re-run as normal workspace files. This
-should be a source-selection extension of <code>run_workflow</code>, not a full workflow
-management system in this package.</p>
-<p>Key constraints:</p>
-<ul>
-<li>Future inputs should choose exactly one of inline <code>code</code> or workspace <code>file</code>,
-  with optional JSON <code>args</code>.</li>
-<li>File paths should be workspace-relative, not arbitrary host paths.</li>
-<li>The file resolver should reuse the parent invocation's <code>codeexecutor</code>
-  workspace.</li>
-<li>The workflow tool should run existing scripts, not provide a script-authoring
-  API.</li>
-<li>File-backed workflows persist script source, not execution state; resume,
-  checkpoints, publishing, and cross-node storage need separate designs.</li>
-<li>The file-backed version should preserve the current Runtime boundary: it may
-  orchestrate registered Agents and explicitly granted host tools, but it
-  should not gain unrestricted filesystem or shell access.</li>
-</ul>
+<p>A future source-selection extension may let <code>run_workflow</code> choose either inline
+code or a workspace-relative script with optional JSON arguments. It should use
+the configured workspace abstraction and remain separate from script authoring,
+execution-state persistence, resume, checkpoint, and distribution concerns.</p>
 
 
 
@@ -3538,7 +3510,7 @@ management system in this package.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="July 9, 2026 03:44:20 UTC">2026-07-09 03:44:20</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="July 13, 2026 02:41:18 UTC">2026-07-13 02:41:18</span>
   </span>
 
     
