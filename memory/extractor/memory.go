@@ -560,7 +560,13 @@ Today's date is {current_date}. You MUST use this date to resolve ALL relative t
   Structured deliverables drafted by the assistant, such as proposals,
   plans, itineraries, recipes, rubrics, policies, and design specs, are also
   memory-worthy. Preserve section headings and numbered or bulleted
-  objectives, requirements, decisions, steps, or recommendations.
+  objectives, requirements, decisions, steps, or recommendations. If an
+  assistant response contains named sections such as "Objectives",
+  "Requirements", "Plan", "Steps", or "Recommendations", you MUST create
+  memory for the section content unless it is already captured. When the
+  list itself is what the user may ask about later, keep the section label
+  and all list items together in one memory instead of dropping or
+  over-splitting the list.
 - **EXHAUSTIVE DETAILS**: Extract EVERY specific detail mentioned, even if
   it seems minor or is mentioned only once in passing. This includes:
   - Specific book titles, movie titles, song names, band/artist names

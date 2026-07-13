@@ -609,6 +609,8 @@ func TestExtractor_BuildSystemPrompt_WithExistingMemories(t *testing.T) {
 	assert.Contains(t, prompt, "Structured deliverables drafted")
 	assert.Contains(t, prompt, "numbered or bulleted")
 	assert.Contains(t, prompt, "objectives")
+	assert.Contains(t, prompt, "you MUST create")
+	assert.Contains(t, prompt, "all list items together")
 	assert.Contains(t, prompt, "</existing_memories>")
 }
 
