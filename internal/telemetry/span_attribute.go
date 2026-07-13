@@ -37,6 +37,15 @@ func appendStringAttribute(
 	marshal func() ([]byte, error),
 ) []attribute.KeyValue {
 	rule := Resolve(operation, key)
+	return appendStringAttributeWithRule(attrs, operation, key, notSerializable, marshal, rule)
+}
+
+func appendStringAttributeWithRule(
+	attrs []attribute.KeyValue,
+	operation, key, notSerializable string,
+	marshal func() ([]byte, error),
+	rule AttributeRule,
+) []attribute.KeyValue {
 	if rule.Action == AttributeDrop {
 		return attrs
 	}
