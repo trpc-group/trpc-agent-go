@@ -11,6 +11,7 @@ package evolution
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -206,6 +207,33 @@ func TestRevisionEvidencePreservesZeroScoresInJSON(t *testing.T) {
 		"candidate_score": 0,
 		"delta": 0
 	}`, string(payload))
+}
+
+func TestRevisionEvidenceValidation(t *testing.T) {
+	require.NoError(t, validateRevisionEvidence(nil))
+	require.NoError(t, validateRevisionEvidence(&RevisionEvidence{
+		BaselineScore:  0.2,
+		CandidateScore: 0.8,
+		Delta:          0.6,
+		CaseCount:      10,
+		Objectives:     map[string]float64{"duration": 2.5},
+	}))
+	tests := []struct {
+		name     string
+		evidence *RevisionEvidence
+		message  string
+	}{
+		{"baseline", &RevisionEvidence{BaselineScore: math.NaN()}, "baseline score"},
+		{"candidate", &RevisionEvidence{CandidateScore: 2}, "candidate score"},
+		{"delta", &RevisionEvidence{Delta: math.Inf(1)}, "delta"},
+		{"cases", &RevisionEvidence{CaseCount: -1}, "case count"},
+		{"objective", &RevisionEvidence{Objectives: map[string]float64{"cost": math.NaN()}}, "objective"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.ErrorContains(t, validateRevisionEvidence(test.evidence), test.message)
+		})
+	}
 }
 
 func TestSubmitRevisionRequiresScopeForScopedService(t *testing.T) {

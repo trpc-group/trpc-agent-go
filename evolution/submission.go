@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"strings"
 	"time"
@@ -106,7 +107,37 @@ func validateRevisionRequest(req RevisionRequest) (RevisionAction, error) {
 	if action == RevisionActionCreate && strings.TrimSpace(req.ParentID) != "" {
 		return "", errors.New("evolution: submit revision: create revision must not have a parent")
 	}
+	if err := validateRevisionEvidence(req.Evidence); err != nil {
+		return "", fmt.Errorf("evolution: submit revision: invalid evidence: %w", err)
+	}
 	return action, nil
+}
+
+func validateRevisionEvidence(evidence *RevisionEvidence) error {
+	if evidence == nil {
+		return nil
+	}
+	for name, score := range map[string]float64{
+		"baseline score":  evidence.BaselineScore,
+		"candidate score": evidence.CandidateScore,
+	} {
+		if math.IsNaN(score) || math.IsInf(score, 0) || score < 0 || score > 1 {
+			return fmt.Errorf("%s must be finite and within [0, 1]", name)
+		}
+	}
+	if math.IsNaN(evidence.Delta) || math.IsInf(evidence.Delta, 0) ||
+		evidence.Delta < -1 || evidence.Delta > 1 {
+		return errors.New("delta must be finite and within [-1, 1]")
+	}
+	if evidence.CaseCount < 0 {
+		return errors.New("case count must not be negative")
+	}
+	for name, value := range evidence.Objectives {
+		if math.IsNaN(value) || math.IsInf(value, 0) {
+			return fmt.Errorf("objective %q must be finite", name)
+		}
+	}
+	return nil
 }
 
 func (w *worker) submissionResources(
