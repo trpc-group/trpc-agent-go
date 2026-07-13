@@ -28,6 +28,26 @@ type CallableTool interface {
 	Tool
 }
 
+// ExecutionToolKind identifies a tool that can start a program or execute
+// source code. It is deliberately a capability marker rather than a tool-name
+// convention: callers may rename tools without accidentally bypassing safety
+// policy.
+type ExecutionToolKind string
+
+const (
+	ExecutionToolKindWorkspaceShell ExecutionToolKind = "workspace_shell"
+	ExecutionToolKindHostShell      ExecutionToolKind = "host_shell"
+	ExecutionToolKindCode           ExecutionToolKind = "code"
+)
+
+// ExecutionTool is implemented only by tools that execute programs or code.
+// Permission adapters use it to avoid applying command policy to ordinary
+// file, search, and network tools.
+type ExecutionTool interface {
+	Tool
+	ExecutionToolKind() ExecutionToolKind
+}
+
 // StreamableTool defines the interface for tools that support streaming operations.
 // This interface extends the basic CallableTool interface to provide streaming capabilities,
 // allowing tools to return data progressively rather than all at once.

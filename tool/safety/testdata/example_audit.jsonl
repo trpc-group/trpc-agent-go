@@ -1,0 +1,3 @@
+{"timestamp":"2026-07-13T07:49:52.4514101Z","tool_name":"workspace_exec","backend":"workspaceexec","decision":"allow","risk_level":"none","duration_ms":0,"redacted":false,"intercepted":false}
+{"timestamp":"2026-07-13T07:49:52.4514101Z","tool_name":"workspace_exec","backend":"workspaceexec","decision":"ask","risk_level":"medium","rule_ids":["dependency-change"],"duration_ms":0,"redacted":false,"intercepted":true}
+{"timestamp":"2026-07-13T07:49:52.4514101Z","tool_name":"workspace_exec","backend":"workspaceexec","decision":"deny","risk_level":"critical","rule_ids":["command-policy-denied","dangerous-delete"],"duration_ms":0,"redacted":false,"intercepted":true}

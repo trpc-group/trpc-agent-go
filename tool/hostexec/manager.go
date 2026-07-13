@@ -55,8 +55,9 @@ type execParams struct {
 	Pty        bool
 	Background bool
 
-	YieldMs  *int
-	TimeoutS *int
+	YieldMs   *int
+	TimeoutS  *int
+	TimeoutMS *int
 }
 
 type execResult struct {
@@ -98,6 +99,9 @@ func (m *manager) exec(
 		timeoutS = *params.TimeoutS
 	}
 	timeout := timeoutDuration(timeoutS)
+	if params.TimeoutMS != nil && *params.TimeoutMS > 0 {
+		timeout = time.Duration(*params.TimeoutMS) * time.Millisecond
+	}
 
 	if !params.Background && yieldMs == 0 && !params.Pty {
 		out, code, err := runForeground(

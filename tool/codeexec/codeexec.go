@@ -79,6 +79,12 @@ type executeCodeTool struct {
 	cfg      config
 }
 
+// ExecutionToolKind marks this tool as a code-execution tool even when it is
+// configured with a non-default declaration name.
+func (*executeCodeTool) ExecutionToolKind() tool.ExecutionToolKind {
+	return tool.ExecutionToolKindCode
+}
+
 // Declaration returns the tool's declaration.
 func (t *executeCodeTool) Declaration() *tool.Declaration {
 	langEnum := make([]any, len(t.cfg.languages))

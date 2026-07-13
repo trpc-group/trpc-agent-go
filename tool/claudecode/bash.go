@@ -23,7 +23,7 @@ import (
 )
 
 func newBashTool(runtime *runtime) (tool.Tool, error) {
-	return function.NewFunctionTool(
+	return &bashTool{CallableTool: function.NewFunctionTool(
 		func(ctx context.Context, in bashInput) (bashOutput, error) {
 			if in.RunInBackground {
 				return runBackgroundCommand(runtime, in.Command)
@@ -32,7 +32,15 @@ func newBashTool(runtime *runtime) (tool.Tool, error) {
 		},
 		function.WithName(toolBash),
 		function.WithDescription(bashDescription()),
-	), nil
+	)}, nil
+}
+
+// bashTool preserves the function-tool behavior while identifying Bash as an
+// execution surface to permission and execution-policy adapters.
+type bashTool struct{ tool.CallableTool }
+
+func (*bashTool) ExecutionToolKind() tool.ExecutionToolKind {
+	return tool.ExecutionToolKindHostShell
 }
 
 func runForegroundCommand(ctx context.Context, runtime *runtime, in bashInput) (bashOutput, error) {
