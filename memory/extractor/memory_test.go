@@ -303,6 +303,27 @@ func TestExtractor_Extract_DoesNotRetryUnstructuredEmptyOutput(t *testing.T) {
 	assert.Equal(t, 1, m.called)
 }
 
+func TestExtractor_Extract_PreservesStructuredOutputAfterEmptyRetry(t *testing.T) {
+	empty := []*model.Response{{
+		Choices: []model.Choice{{Message: model.NewAssistantMessage("No operations.")}},
+	}}
+	m := &sequenceModel{responses: [][]*model.Response{empty, empty}}
+	e := NewExtractor(m)
+
+	ops, err := e.Extract(context.Background(), []model.Message{
+		model.NewUserMessage("List the options."),
+		model.NewAssistantMessage("1. Alpha\n2. Beta\n3. Gamma\n4. Delta"),
+	}, nil)
+
+	require.NoError(t, err)
+	require.Len(t, ops, 1)
+	assert.Equal(t, OperationAdd, ops[0].Type)
+	assert.Equal(t, memory.KindFact, ops[0].MemoryKind)
+	assert.Contains(t, ops[0].Memory, "Assistant provided this structured response:")
+	assert.Contains(t, ops[0].Memory, "4. Delta")
+	assert.Len(t, m.requests, 2)
+}
+
 func TestHasStructuredAssistantOutput(t *testing.T) {
 	t.Parallel()
 

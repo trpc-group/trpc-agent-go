@@ -137,10 +137,15 @@ func (e *memoryExtractor) Extract(
 	retryMessages := append([]model.Message(nil), req.Messages...)
 	retryMessages[0].Content += "\n" + emptyStructuredOutputRetryPrompt
 	log.DebugfContext(ctx, "extractor: retrying empty extraction for structured assistant output")
-	return e.extractRequest(ctx, &model.Request{
+	retryOps, err := e.extractRequest(ctx, &model.Request{
 		Messages: retryMessages,
 		Tools:    tools,
 	})
+	if err != nil || len(retryOps) > 0 {
+		return retryOps, err
+	}
+	log.DebugfContext(ctx, "extractor: preserving structured assistant output after empty retry")
+	return structuredAssistantFallbackOps(messages), nil
 }
 
 const emptyStructuredOutputRetryPrompt = `<empty_extraction_retry>
@@ -209,21 +214,41 @@ func (e *memoryExtractor) extractRequest(
 }
 
 func hasStructuredAssistantOutput(messages []model.Message) bool {
+	return len(structuredAssistantOutputs(messages)) > 0
+}
+
+func structuredAssistantOutputs(messages []model.Message) []string {
+	var outputs []string
 	for _, msg := range messages {
 		if msg.Role != model.RoleAssistant {
 			continue
 		}
+		text := extractionMessageText(msg)
 		items := 0
-		for _, line := range strings.Split(extractionMessageText(msg), "\n") {
+		for _, line := range strings.Split(text, "\n") {
 			if isStructuredListItem(line) {
 				items++
 				if items >= 4 {
-					return true
+					outputs = append(outputs, strings.TrimSpace(text))
+					break
 				}
 			}
 		}
 	}
-	return false
+	return outputs
+}
+
+func structuredAssistantFallbackOps(messages []model.Message) []*Operation {
+	outputs := structuredAssistantOutputs(messages)
+	ops := make([]*Operation, 0, len(outputs))
+	for _, output := range outputs {
+		ops = append(ops, &Operation{
+			Type:       OperationAdd,
+			Memory:     "Assistant provided this structured response:\n" + output,
+			MemoryKind: memory.KindFact,
+		})
+	}
+	return ops
 }
 
 func extractionMessageText(msg model.Message) string {
