@@ -1940,12 +1940,16 @@ request := &model.Request{
 Kimi K2.6 在多轮对话间保留推理内容，可显式传入完整的服务方扩展：
 
 ```go
-openai.WithExtraFields(map[string]any{
-    "thinking": map[string]string{
-        "type": "enabled",
-        "keep": "all",
-    },
-})
+llm := openai.New(
+    "kimi-k2.6",
+    openai.WithVariant(openai.VariantKimi),
+    openai.WithExtraFields(map[string]any{
+        "thinking": map[string]string{
+            "type": "enabled",
+            "keep": "all",
+        },
+    }),
+)
 ```
 
 #### 8. 流式工具调用增量：ShowToolCallDelta

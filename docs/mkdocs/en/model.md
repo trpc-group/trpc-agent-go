@@ -1958,12 +1958,16 @@ For Kimi models that require thinking to remain enabled, leave
 turns, pass the complete provider extension explicitly:
 
 ```go
-openai.WithExtraFields(map[string]any{
-    "thinking": map[string]string{
-        "type": "enabled",
-        "keep": "all",
-    },
-})
+llm := openai.New(
+    "kimi-k2.6",
+    openai.WithVariant(openai.VariantKimi),
+    openai.WithExtraFields(map[string]any{
+        "thinking": map[string]string{
+            "type": "enabled",
+            "keep": "all",
+        },
+    }),
+)
 ```
 
 #### 8. Streaming Tool Call Deltas: ShowToolCallDelta
