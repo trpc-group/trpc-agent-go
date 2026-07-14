@@ -4,6 +4,7 @@ go 1.24.4
 
 replace (
 	trpc.group/trpc-go/trpc-agent-go => ../
+	trpc.group/trpc-go/trpc-agent-go/codeexecutor/container => ../codeexecutor/container
 	trpc.group/trpc-go/trpc-agent-go/codeexecutor/jupyter => ../codeexecutor/jupyter
 	trpc.group/trpc-go/trpc-agent-go/evaluation => ../evaluation
 	trpc.group/trpc-go/trpc-agent-go/model/anthropic => ../model/anthropic
@@ -18,12 +19,14 @@ require (
 	github.com/getkin/kin-openapi v0.133.0
 	github.com/go-openapi/testify/v2 v2.0.2
 	github.com/google/uuid v1.6.0
+	github.com/mattn/go-sqlite3 v1.14.32
 	github.com/openai/openai-go v1.12.0
 	go.opentelemetry.io/otel v1.41.0
 	go.opentelemetry.io/otel/metric v1.41.0
 	go.opentelemetry.io/otel/trace v1.41.0
 	trpc.group/trpc-go/trpc-a2a-go v0.2.5
 	trpc.group/trpc-go/trpc-agent-go v0.8.0
+	trpc.group/trpc-go/trpc-agent-go/codeexecutor/container v1.1.2-0.20260108033914-7a20241f1ad5
 	trpc.group/trpc-go/trpc-agent-go/codeexecutor/jupyter v1.1.2-0.20260108033914-7a20241f1ad5
 	trpc.group/trpc-go/trpc-agent-go/evaluation v1.1.2-0.20260108033914-7a20241f1ad5
 	trpc.group/trpc-go/trpc-agent-go/tool/openapi v1.1.2-0.20260108033914-7a20241f1ad5

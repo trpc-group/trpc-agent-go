@@ -1,0 +1,10 @@
+diff --git a/broken/broken.go b/broken/broken.go
+--- a/broken/broken.go
++++ b/broken/broken.go
+@@ -1,3 +1,7 @@
+ package broken
+ 
++func Broken() {
++	if true {
++		return
++}
