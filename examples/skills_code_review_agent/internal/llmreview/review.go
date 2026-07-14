@@ -44,12 +44,13 @@ type Options struct {
 	Model        string
 	RuleFindings []findings.Finding
 	Timeout      time.Duration
+	FakeModel    bool
 }
 
 // Run executes the LLM agent review and returns supplemental findings.
 func Run(ctx context.Context, opts Options) ([]findings.Finding, error) {
-	if strings.TrimSpace(os.Getenv("OPENAI_API_KEY")) == "" {
-		return nil, fmt.Errorf("OPENAI_API_KEY is required when --dry-run=false")
+	if !opts.FakeModel && strings.TrimSpace(os.Getenv("OPENAI_API_KEY")) == "" {
+		return nil, fmt.Errorf("OPENAI_API_KEY is required when --dry-run=false (or use --fake-model)")
 	}
 	if opts.Timeout <= 0 {
 		opts.Timeout = 2 * time.Minute
@@ -79,9 +80,15 @@ func Run(ctx context.Context, opts Options) ([]findings.Finding, error) {
 
 	maxTokens := 2048
 	temperature := 0.1
+	var mdl model.Model
+	if opts.FakeModel {
+		mdl = newFakeReviewModel()
+	} else {
+		mdl = openai.New(opts.Model)
+	}
 	agt := llmagent.New(
 		agentName,
-		llmagent.WithModel(openai.New(opts.Model)),
+		llmagent.WithModel(mdl),
 		llmagent.WithSkills(repo),
 		llmagent.WithSkillToolProfile(llmagent.SkillToolProfileFull),
 		llmagent.WithCodeExecutor(codeExec),

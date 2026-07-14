@@ -38,10 +38,10 @@ Scripts complement regex rules; failures are recorded but do not abort the revie
 | Check | Command | Notes |
 |-------|---------|-------|
 | Diff validation | `bash scripts/run_checks.sh work/inputs/changes.diff` | Unified diff format, line limit (5000), ignored-error signal (exit 2) |
-| Static analysis | `go vet ./...` | Runs in workspace `work/repo/` when `--repo-path` is set |
-| Tests | `go test ./...` | Documented in SKILL.md; enable when repo is staged |
+| Static analysis | `go vet ./...` | Workspace `work/repo/` when `--repo-path` is set |
+| Tests | `go test ./...` | Same as above when repo is staged |
 
-**Runtime:** production should use `--runtime=container` (isolated workspace). `--runtime=local` is dev fallback only.
+**Runtime:** production → `--runtime=container` (image `golang:1.24-bookworm`) or `--runtime=e2b` (`E2B_API_KEY`). `--runtime=local` is dev fallback only.
 
 **PermissionPolicy:** high-risk commands (`rm -rf`, `curl\|bash`, `git push`) are **denied** before sandbox execution. Allowed: skill scripts, `go vet`, `go test`.
 

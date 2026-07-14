@@ -42,6 +42,7 @@ type Options struct {
 	Runtime     sandbox.Runtime
 	SkipSandbox bool
 	Model       string
+	FakeModel   bool
 }
 
 // Result contains paths and identifiers produced by a run.
@@ -69,7 +70,7 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	}
 
 	raw := rules.Analyze(parsed)
-	if !opts.DryRun {
+	if opts.FakeModel || !opts.DryRun {
 		llmFindings, err := llmreview.Run(ctx, llmreview.Options{
 			TaskID:       taskID,
 			DiffRaw:      parsed.Raw,
@@ -78,6 +79,7 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 			Runtime:      runtime,
 			Model:        opts.Model,
 			RuleFindings: raw,
+			FakeModel:    opts.FakeModel,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("llm review: %w", err)

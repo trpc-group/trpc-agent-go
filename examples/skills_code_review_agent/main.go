@@ -33,6 +33,7 @@ var (
 	flagRuntime     = flag.String("runtime", "local", "sandbox runtime: local|container|skip")
 	flagSkipSandbox = flag.Bool("skip-sandbox", false, "skip sandbox execution")
 	flagModel       = flag.String("model", "gpt-4o-mini", "LLM model when --dry-run=false")
+	flagFakeModel   = flag.Bool("fake-model", false, "run Agent path with mock model (no API key)")
 )
 
 func main() {
@@ -58,6 +59,7 @@ func run(ctx context.Context) error {
 		Runtime:     sandbox.Runtime(*flagRuntime),
 		SkipSandbox: *flagSkipSandbox,
 		Model:       *flagModel,
+		FakeModel:   *flagFakeModel,
 	}
 
 	result, err := pipeline.Run(ctx, opts)

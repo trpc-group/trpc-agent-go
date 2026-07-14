@@ -17,6 +17,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	containerexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/container"
+	e2bexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/e2b"
 	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
 )
 
@@ -33,14 +34,9 @@ type workspaceExecutor interface {
 func NewCodeExecutor(opts Options) (codeexecutor.CodeExecutor, error) {
 	switch opts.Runtime {
 	case RuntimeContainer:
-		skillsRoot, err := filepath.Abs(opts.SkillsRoot)
-		if err != nil {
-			return nil, err
-		}
-		return containerexec.New(
-			containerexec.WithBindMount(skillsRoot, "/opt/trpc-agent/skills", "ro"),
-			containerexec.WithAutoInputs(true),
-		)
+		return newContainerCodeExecutor(opts.SkillsRoot)
+	case RuntimeE2B:
+		return e2bexec.New()
 	case RuntimeSkip, RuntimeLocal:
 		return localexec.New(
 			localexec.WithTimeout(opts.Timeout),
@@ -58,7 +54,7 @@ type runEnv struct {
 }
 
 func prepareRunEnv(ctx context.Context, opts Options) (*runEnv, func(), error) {
-	if opts.Runtime != RuntimeLocal && opts.Runtime != RuntimeContainer {
+	if !isWorkspaceRuntime(opts.Runtime) {
 		return &runEnv{}, func() {}, nil
 	}
 
@@ -81,14 +77,17 @@ func prepareRunEnv(ctx context.Context, opts Options) (*runEnv, func(), error) {
 func newWorkspaceExecutor(opts Options) (workspaceExecutor, error) {
 	switch opts.Runtime {
 	case RuntimeContainer:
-		skillsRoot, err := filepath.Abs(opts.SkillsRoot)
+		ex, err := newContainerCodeExecutor(opts.SkillsRoot)
 		if err != nil {
 			return nil, err
 		}
-		return containerexec.New(
-			containerexec.WithBindMount(skillsRoot, "/opt/trpc-agent/skills", "ro"),
-			containerexec.WithAutoInputs(true),
-		)
+		return asWorkspaceExecutor(ex)
+	case RuntimeE2B:
+		ex, err := e2bexec.New()
+		if err != nil {
+			return nil, fmt.Errorf("e2b sandbox: %w (set E2B_API_KEY)", err)
+		}
+		return asWorkspaceExecutor(ex)
 	case RuntimeLocal:
 		return localexec.New(
 			localexec.WithTimeout(opts.Timeout),
@@ -97,6 +96,14 @@ func newWorkspaceExecutor(opts Options) (workspaceExecutor, error) {
 	default:
 		return nil, fmt.Errorf("unsupported runtime: %s", opts.Runtime)
 	}
+}
+
+func isWorkspaceRuntime(r Runtime) bool {
+	return r == RuntimeLocal || r == RuntimeContainer || r == RuntimeE2B
+}
+
+func isIsolatedRuntime(r Runtime) bool {
+	return r == RuntimeContainer || r == RuntimeE2B
 }
 
 func sandboxEnv() map[string]string {
@@ -127,3 +134,7 @@ func ResolveSkillsRoot(root string) string {
 	}
 	return root
 }
+
+// Ensure container.CodeExecutor is a workspaceExecutor at compile time.
+var _ workspaceExecutor = (*containerexec.CodeExecutor)(nil)
+

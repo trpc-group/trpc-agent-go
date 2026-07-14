@@ -12,7 +12,7 @@ Deterministic Go code review helpers for tRPC-Agent-Go CR Agent (rules + sandbox
 1. Stage the unified diff at `work/inputs/changes.diff`.
 2. Load rules from `docs/rules.md` when needed.
 3. Run sandbox checks via `scripts/run_checks.sh`.
-4. Optionally run `go vet` when a Go module workspace is staged under `work/repo/` (`go test` documented in `docs/rules.md`).
+4. Optionally run `go vet` and `go test` when a Go module workspace is staged under `work/repo/`.
 
 ## Commands
 

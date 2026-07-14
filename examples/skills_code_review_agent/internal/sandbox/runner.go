@@ -40,6 +40,7 @@ type Runtime string
 const (
 	RuntimeLocal     Runtime = "local"
 	RuntimeContainer Runtime = "container"
+	RuntimeE2B       Runtime = "e2b"
 	RuntimeSkip      Runtime = "skip"
 )
 
@@ -167,11 +168,10 @@ func buildPlannedCommands(opts Options) []plannedCommand {
 		})
 	}
 	if opts.RepoPath != "" {
-		cmds = append(cmds, plannedCommand{
-			ToolName: "workspace_exec",
-			Command:  "go vet ./...",
-			Execute:  true,
-		})
+		cmds = append(cmds,
+			plannedCommand{ToolName: "workspace_exec", Command: "go vet ./...", Execute: true},
+			plannedCommand{ToolName: "workspace_exec", Command: "go test ./...", Execute: true},
+		)
 	}
 	return cmds
 }
@@ -214,22 +214,15 @@ func executePlanned(ctx context.Context, opts Options, command string, env *runE
 			if err == nil {
 				return runRec, nil
 			}
-			if opts.Runtime == RuntimeContainer {
+			if isIsolatedRuntime(opts.Runtime) {
 				return runRec, err
 			}
 		}
 		return runSkillChecksDirect(opts, rec)
 	case strings.HasPrefix(command, "go vet"):
-		if env != nil && env.ready {
-			runRec, err := runGoVetInWorkspace(ctx, opts, env, rec)
-			if err == nil {
-				return runRec, nil
-			}
-			if opts.Runtime == RuntimeContainer {
-				return runRec, err
-			}
-		}
-		return runGoVetDirect(ctx, opts, rec)
+		return runGoCommand(ctx, opts, env, rec, "vet")
+	case strings.HasPrefix(command, "go test"):
+		return runGoCommand(ctx, opts, env, rec, "test")
 	default:
 		rec.Status = "failed"
 		rec.ErrorType = "unsupported_command"
@@ -278,10 +271,23 @@ func runSkillChecksDirect(opts Options, rec RunRecord) (RunRecord, error) {
 	return rec, nil
 }
 
-func runGoVetInWorkspace(ctx context.Context, opts Options, env *runEnv, rec RunRecord) (RunRecord, error) {
+func runGoCommand(ctx context.Context, opts Options, env *runEnv, rec RunRecord, subcmd string) (RunRecord, error) {
+	if env != nil && env.ready {
+		runRec, err := runGoInWorkspace(ctx, opts, env, rec, subcmd)
+		if err == nil {
+			return runRec, nil
+		}
+		if isIsolatedRuntime(opts.Runtime) {
+			return runRec, err
+		}
+	}
+	return runGoDirect(ctx, opts, rec, subcmd)
+}
+
+func runGoInWorkspace(ctx context.Context, opts Options, env *runEnv, rec RunRecord, subcmd string) (RunRecord, error) {
 	result, err := env.exec.RunProgram(ctx, env.ws, codeexecutor.RunProgramSpec{
 		Cmd:      "go",
-		Args:     []string{"vet", "./..."},
+		Args:     []string{subcmd, "./..."},
 		Cwd:      "work/repo",
 		Timeout:  opts.Timeout,
 		CleanEnv: true,
@@ -293,7 +299,7 @@ func runGoVetInWorkspace(ctx context.Context, opts Options, env *runEnv, rec Run
 	if result.TimedOut {
 		rec.Status = "timeout"
 		rec.ErrorType = "timeout"
-		return rec, fmt.Errorf("go vet timeout")
+		return rec, fmt.Errorf("go %s timeout", subcmd)
 	}
 	if err != nil || result.ExitCode != 0 {
 		rec.Status = "failed"
@@ -301,29 +307,29 @@ func runGoVetInWorkspace(ctx context.Context, opts Options, env *runEnv, rec Run
 		if err != nil {
 			return rec, err
 		}
-		return rec, fmt.Errorf("go vet exit code %d", result.ExitCode)
+		return rec, fmt.Errorf("go %s exit code %d", subcmd, result.ExitCode)
 	}
 	return rec, nil
 }
 
-func runGoVetDirect(ctx context.Context, opts Options, rec RunRecord) (RunRecord, error) {
+func runGoDirect(ctx context.Context, opts Options, rec RunRecord, subcmd string) (RunRecord, error) {
 	repo := opts.RepoPath
 	if repo == "" {
 		rec.Status = "failed"
 		rec.ErrorType = "stage_error"
-		return rec, fmt.Errorf("repo path required for go vet")
+		return rec, fmt.Errorf("repo path required for go %s", subcmd)
 	}
 	tctx, cancel := context.WithTimeout(ctx, opts.Timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(tctx, "go", "vet", "./...")
+	cmd := exec.CommandContext(tctx, "go", subcmd, "./...")
 	cmd.Dir = repo
 	out, err := cmd.CombinedOutput()
 	rec.Stdout = truncate(string(out))
 	if tctx.Err() == context.DeadlineExceeded {
 		rec.Status = "timeout"
 		rec.ErrorType = "timeout"
-		return rec, fmt.Errorf("go vet timeout")
+		return rec, fmt.Errorf("go %s timeout", subcmd)
 	}
 	if err != nil {
 		rec.Status = "failed"

@@ -15,6 +15,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -45,7 +46,35 @@ func (s *SQLiteStore) Init(ctx context.Context) error {
 	if _, err := s.db.ExecContext(ctx, schemaSQL); err != nil {
 		return fmt.Errorf("init schema: %w", err)
 	}
+	return s.migrate(ctx)
+}
+
+func (s *SQLiteStore) migrate(ctx context.Context) error {
+	// Best-effort column adds for databases created before Phase 2 metrics.
+	alters := []string{
+		`ALTER TABLE review_metrics ADD COLUMN sandbox_duration_ms INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE review_metrics ADD COLUMN tool_call_count INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE review_metrics ADD COLUMN permission_deny_count INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE review_metrics ADD COLUMN exception_json TEXT NOT NULL DEFAULT '{}'`,
+		`ALTER TABLE sandbox_runs ADD COLUMN runtime TEXT NOT NULL DEFAULT 'local'`,
+		`ALTER TABLE sandbox_runs ADD COLUMN error_type TEXT`,
+	}
+	for _, stmt := range alters {
+		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
+			if !isSQLiteDuplicateColumn(err) {
+				return fmt.Errorf("migrate: %w", err)
+			}
+		}
+	}
 	return nil
+}
+
+func isSQLiteDuplicateColumn(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "duplicate column name")
 }
 
 // SaveReview persists a review record and related rows.
