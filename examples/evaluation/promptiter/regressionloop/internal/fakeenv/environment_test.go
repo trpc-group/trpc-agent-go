@@ -268,6 +268,10 @@ func TestResourceMeterMeasuresPerProfileUsage(t *testing.T) {
 	if baselineMeasurement.Usage.TokenUsageAvailable || v1Measurement.Usage.TokenUsageAvailable {
 		t.Fatal("fake evaluator unexpectedly reports token usage")
 	}
+	total := environment.Evaluator.Total()
+	if total.Usage.EvaluationCaseRuns != 6 || total.Usage.ModelCalls != 8 || total.Usage.ToolCalls != 2 || total.LatencySeconds != 0.114 || total.Cost != 0.0084 {
+		t.Fatalf("unexpected cumulative resources: %#v", total)
+	}
 }
 
 func copyFixture(t *testing.T) (string, *config.Config) {

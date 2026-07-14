@@ -13,6 +13,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"testing"
+
+	atrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/engine"
 )
 
 func TestReportJSONMarkdownAndBackwardCompatibility(t *testing.T) {
@@ -49,6 +54,24 @@ func TestReportJSONMarkdownAndBackwardCompatibility(t *testing.T) {
 	}
 }
 
+func TestSummarizeEvaluationIncludesTraceAndToolEvidence(t *testing.T) {
+	actual := &evalset.Invocation{Tools: []*evalset.Tool{{Name: "actual"}}}
+	expected := &evalset.Invocation{Tools: []*evalset.Tool{{Name: "expected"}}}
+	result := &engine.EvaluationResult{EvalSets: []engine.EvalSetResult{{Cases: []engine.CaseResult{{
+		EvalCaseID:        "case",
+		Trace:             &atrace.Trace{Steps: []atrace.Step{{AgentName: "agent", NodeID: "node", AppliedSurfaceIDs: []string{"surface"}}}},
+		Metrics:           []engine.MetricResult{{MetricName: "quality", Score: 1, Status: status.EvalStatusPassed}},
+		ActualInvocations: []*evalset.Invocation{nil, actual}, ExpectedInvocations: []*evalset.Invocation{nil, expected},
+	}}}}}
+	summary := SummarizeEvaluation(result, nil)
+	if len(summary.PerCase) != 1 || len(summary.PerCase[0].Trace) != 1 {
+		t.Fatalf("trace summary = %#v", summary.PerCase)
+	}
+	if len(summary.PerCase[0].Tools.Actual) != 1 || len(summary.PerCase[0].Tools.Expected) != 1 {
+		t.Fatalf("tool summary = %#v", summary.PerCase[0].Tools)
+	}
+}
+
 func TestFailureAttributionStats(t *testing.T) {
 	snapshot := EvaluationSnapshot{PerCase: []CaseSummary{
 		{CaseID: "one", FailureReasons: []FailureReason{{Code: FailureFinalResponseMismatch}, {Code: FailureToolArgumentError}, {Code: FailureToolArgumentError}}},
@@ -73,5 +96,19 @@ func TestMarkdownIncludesFailureAttributionSummary(t *testing.T) {
 		if !bytes.Contains(markdown, []byte(expected)) {
 			t.Errorf("markdown missing %q", expected)
 		}
+	}
+}
+
+func TestSummarizeEvaluationExcludesNotEvaluatedMetricsFromAverage(t *testing.T) {
+	result := &engine.EvaluationResult{EvalSets: []engine.EvalSetResult{{Cases: []engine.CaseResult{{
+		EvalCaseID: "case",
+		Metrics: []engine.MetricResult{
+			{MetricName: "evaluated", Score: 0.8, Status: status.EvalStatusPassed},
+			{MetricName: "skipped", Score: 0, Status: status.EvalStatusNotEvaluated},
+		},
+	}}}}}
+	summary := SummarizeEvaluation(result, nil)
+	if len(summary.PerCase) != 1 || summary.PerCase[0].Score != 0.8 {
+		t.Fatalf("case summary = %#v, want score 0.8", summary.PerCase)
 	}
 }

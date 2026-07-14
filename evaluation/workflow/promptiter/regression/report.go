@@ -131,6 +131,7 @@ type Report struct {
 	TargetSurfaceIDs        []string                `json:"targetSurfaceIds"`
 	Timing                  Timing                  `json:"timing"`
 	Usage                   Usage                   `json:"usage"`
+	LatencySeconds          float64                 `json:"latencySeconds"`
 	EstimatedCost           EstimatedCost           `json:"estimatedCost"`
 	Baseline                BaselineSnapshot        `json:"baseline"`
 	Rounds                  []RoundReport           `json:"rounds"`
@@ -151,6 +152,7 @@ func SummarizeEvaluation(result *engine.EvaluationResult, reasons []CaseAttribut
 	}
 	for _, set := range result.EvalSets {
 		for _, evalCase := range set.Cases {
+			evaluated := 0
 			item := CaseSummary{
 				CaseID: evalCase.EvalCaseID, Passed: len(evalCase.Metrics) > 0, Metrics: []MetricSummary{},
 				FailureReasons: reasonIndex[evalCase.EvalCaseID], Trace: summarizeTrace(evalCase.Trace),
@@ -162,11 +164,12 @@ func SummarizeEvaluation(result *engine.EvaluationResult, reasons []CaseAttribut
 				}
 				if metric.Status != status.EvalStatusNotEvaluated {
 					item.Score += metric.Score
+					evaluated++
 				}
 				item.Metrics = append(item.Metrics, MetricSummary{Name: metric.MetricName, Score: metric.Score, Status: string(metric.Status), Reason: metric.Reason})
 			}
-			if len(evalCase.Metrics) > 0 {
-				item.Score /= float64(len(evalCase.Metrics))
+			if evaluated > 0 {
+				item.Score /= float64(evaluated)
 			}
 			if item.FailureReasons == nil {
 				item.FailureReasons = []FailureReason{}
@@ -261,7 +264,7 @@ func Markdown(value *Report) []byte {
 	fmt.Fprintf(&out, "Recommended: **%t**\n\nPerformed: **%t**\n\nAccepted profile: `%s`\n", value.WriteBack.RecommendedForWriteBack, value.WriteBack.Performed, value.WriteBack.AcceptedProfileRef)
 	fmt.Fprintln(&out, "\n## Usage and Cost")
 	fmt.Fprintln(&out)
-	fmt.Fprintf(&out, "Evaluation case runs: `%d`; model calls: `%d`; tool calls: `%d`; retries: `%d`.\n\nEstimated cost: `%.4f %s` (%s).\n", value.Usage.EvaluationCaseRuns, value.Usage.ModelCalls, value.Usage.ToolCalls, value.Usage.Retries, value.EstimatedCost.Amount, value.EstimatedCost.Currency, value.EstimatedCost.Source)
+	fmt.Fprintf(&out, "Evaluation case runs: `%d`; model calls: `%d`; tool calls: `%d`; retries: `%d`.\n\nDeterministic evaluation latency: `%.4fs`.\n\nEstimated cost: `%.4f %s` (%s).\n", value.Usage.EvaluationCaseRuns, value.Usage.ModelCalls, value.Usage.ToolCalls, value.Usage.Retries, value.LatencySeconds, value.EstimatedCost.Amount, value.EstimatedCost.Currency, value.EstimatedCost.Source)
 	return out.Bytes()
 }
 

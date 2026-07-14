@@ -254,12 +254,19 @@ func (e *Evaluator) Measure(evalSetID string, profile *promptiter.Profile) regre
 	return e.meter.Measure(evalSetID, profileVersion(profile))
 }
 
-// TotalModelCalls returns the actual deterministic model invocation count.
-func (e *Evaluator) TotalModelCalls() int { return e.ModelCalls() }
-
-// TotalCost returns deterministic cost derived from actual model and tool calls.
-func (e *Evaluator) TotalCost() float64 {
-	return float64(e.ModelCalls())*fakeModelCallCost + float64(e.meter.TotalToolCalls())*fakeToolCallCost
+// Total returns the cumulative deterministic resources consumed by the run.
+func (e *Evaluator) Total() regression.ResourceMeasurement {
+	caseRuns, toolCalls := e.meter.Totals()
+	modelCalls := e.ModelCalls()
+	return regression.ResourceMeasurement{
+		Usage: regression.Usage{
+			EvaluationCaseRuns: caseRuns,
+			ModelCalls:         modelCalls,
+			ToolCalls:          toolCalls,
+		},
+		LatencySeconds: float64(caseRuns)*fakeCaseLatency + float64(modelCalls)*fakeModelCallLatency + float64(toolCalls)*fakeToolCallLatency,
+		Cost:           float64(modelCalls)*fakeModelCallCost + float64(toolCalls)*fakeToolCallCost,
+	}
 }
 
 const (
@@ -276,6 +283,7 @@ type meteredEvaluator struct {
 	evaluationMu   sync.Mutex
 	mu             sync.Mutex
 	measurements   map[string]regression.ResourceMeasurement
+	totalCaseRuns  int
 	totalToolCalls int
 }
 
@@ -302,6 +310,7 @@ func (m *meteredEvaluator) Evaluate(ctx context.Context, evalSetID string, optio
 	}
 	m.mu.Lock()
 	m.measurements[measurementKey(evalSetID, version)] = measurement
+	m.totalCaseRuns += caseRuns
 	m.totalToolCalls += toolCalls
 	m.mu.Unlock()
 	return result, nil
@@ -313,10 +322,10 @@ func (m *meteredEvaluator) Measure(evalSetID, version string) regression.Resourc
 	return m.measurements[measurementKey(evalSetID, version)]
 }
 
-func (m *meteredEvaluator) TotalToolCalls() int {
+func (m *meteredEvaluator) Totals() (caseRuns, toolCalls int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.totalToolCalls
+	return m.totalCaseRuns, m.totalToolCalls
 }
 
 func changedProfileVersion(before, after map[string]int) (string, int) {

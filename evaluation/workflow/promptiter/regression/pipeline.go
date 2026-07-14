@@ -35,14 +35,14 @@ type ProfileEvaluator interface {
 	EvaluateProfile(context.Context, string, *promptiter.Profile) (*engine.EvaluationResult, error)
 }
 
-// ResourceMeter returns profile-scoped resource, latency, and cost measurements.
-// Implementations may return zero values when a measurement is unavailable.
+// ResourceMeter returns profile-scoped samples and authoritative cumulative
+// resource, latency, and cost totals for one pipeline run.
 type ResourceMeter interface {
 	Measure(evalSetID string, profile *promptiter.Profile) ResourceMeasurement
-	TotalModelCalls() int
+	Total() ResourceMeasurement
 }
 
-// ResourceMeasurement captures one profile and eval-set execution budget sample.
+// ResourceMeasurement captures resource, latency, and cost usage.
 type ResourceMeasurement struct {
 	Usage          Usage
 	LatencySeconds float64
@@ -64,6 +64,7 @@ type Config struct {
 	SaveArtifacts           bool
 	BaselineProfileRef      string
 	PerformedWriteBack      bool
+	ExpectedAgentName       string
 	ExpectedAgentNames      map[string]string
 }
 
@@ -104,8 +105,8 @@ func Run(ctx context.Context, options Options) (*Report, error) {
 	measurementsInitialized := false
 	noRelease := 0
 	rounds := make([]RoundReport, 0, options.Config.MaxRounds)
-	totalUsage := Usage{}
 	for roundNumber := 1; roundNumber <= options.Config.MaxRounds; roundNumber++ {
+		roundStartMeasurement := options.Meter.Total()
 		runResult, err := options.Engine.Run(ctx, &engine.RunRequest{
 			Train:            []engine.EvalSetInput{{EvalSetID: options.Config.TrainEvalSetID}},
 			Validation:       []engine.EvalSetInput{{EvalSetID: options.Config.ValidationEvalSetID}},
@@ -137,6 +138,7 @@ func Run(ctx context.Context, options Options) (*Report, error) {
 		if err != nil {
 			return nil, fmt.Errorf("evaluate candidate train round %d: %w", roundNumber, err)
 		}
+		roundMeasurement := measurementDelta(roundStartMeasurement, options.Meter.Total())
 		searchValidationMeasurement := options.Meter.Measure(options.Config.ValidationEvalSetID, searchProfile)
 		candidateValidationMeasurement := options.Meter.Measure(options.Config.ValidationEvalSetID, round.OutputProfile)
 		searchTrainMeasurement := options.Meter.Measure(options.Config.TrainEvalSetID, searchProfile)
@@ -166,32 +168,22 @@ func Run(ctx context.Context, options Options) (*Report, error) {
 		roundReport := RoundReport{
 			Round: roundNumber, PromptIterAccepted: round.Acceptance.Accepted,
 			PromptIterReasons: []string{round.Acceptance.Reason},
-			Train:             summarizeEvaluationWithResources(candidateTrain, candidateTrainMeasurement, options.Config.EstimatedCost, options.Config.ExpectedAgentNames),
-			Validation:        summarizeEvaluationWithResources(round.Validation, candidateValidationMeasurement, options.Config.EstimatedCost, options.Config.ExpectedAgentNames),
+			Train:             summarizeEvaluationWithResources(candidateTrain, candidateTrainMeasurement, options.Config.EstimatedCost, options.Config.ExpectedAgentName, options.Config.ExpectedAgentNames),
+			Validation:        summarizeEvaluationWithResources(round.Validation, candidateValidationMeasurement, options.Config.EstimatedCost, options.Config.ExpectedAgentName, options.Config.ExpectedAgentNames),
 			Delta:             DeltaBundle{AgainstInitial: againstInitial, AgainstRoundInput: againstInput, AgainstLastReleased: againstReleased},
 			Resources: EvaluationResourceComparison{
 				Train:      resourceComparison(releasedTrainMeasurement, candidateTrainMeasurement, options.Config.EstimatedCost),
 				Validation: resourceComparison(releasedValidationMeasurement, candidateValidationMeasurement, options.Config.EstimatedCost),
 			},
 			ReleaseGate:    decision,
-			EstimatedCost:  costSnapshot(candidateValidationMeasurement.Cost, options.Config.EstimatedCost),
-			LatencySeconds: candidateValidationMeasurement.LatencySeconds, Artifacts: references,
+			EstimatedCost:  costSnapshot(roundMeasurement.Cost, options.Config.EstimatedCost),
+			LatencySeconds: roundMeasurement.LatencySeconds, Artifacts: references,
+			Usage: roundMeasurement.Usage,
 		}
 		if err := persistRound(options, roundNumber, searchProfile, round.OutputProfile, candidateTrain, round.Validation, roundReport.Delta, decision); err != nil {
 			return nil, err
 		}
 		rounds = append(rounds, roundReport)
-		roundUsage := Usage{EvaluationCaseRuns: countCases(runResult.BaselineValidation) + countCases(round.Train) + countCases(round.Validation) + countCases(candidateTrain)}
-		for _, measurement := range []ResourceMeasurement{searchValidationMeasurement, candidateValidationMeasurement, searchTrainMeasurement, candidateTrainMeasurement} {
-			roundUsage.ModelCalls += measurement.Usage.ModelCalls
-			roundUsage.ToolCalls += measurement.Usage.ToolCalls
-			roundUsage.InputTokens += measurement.Usage.InputTokens
-			roundUsage.OutputTokens += measurement.Usage.OutputTokens
-			roundUsage.Retries += measurement.Usage.Retries
-			roundUsage.TokenUsageAvailable = roundUsage.TokenUsageAvailable || measurement.Usage.TokenUsageAvailable
-		}
-		rounds[len(rounds)-1].Usage = roundUsage
-		addUsage(&totalUsage, roundUsage)
 		if decision.Accepted {
 			releasedProfile = round.OutputProfile
 			releasedTrain = candidateTrain
@@ -211,20 +203,21 @@ func Run(ctx context.Context, options Options) (*Report, error) {
 		}
 	}
 	finished := now()
-	totalUsage.ModelCalls = options.Meter.TotalModelCalls()
+	totalMeasurement := options.Meter.Total()
 	baseline := BaselineSnapshot{
-		Train:      summarizeEvaluationWithResources(initialTrain, initialTrainMeasurement, options.Config.EstimatedCost, options.Config.ExpectedAgentNames),
-		Validation: summarizeEvaluationWithResources(initialValidation, initialValidationMeasurement, options.Config.EstimatedCost, options.Config.ExpectedAgentNames),
+		Train:      summarizeEvaluationWithResources(initialTrain, initialTrainMeasurement, options.Config.EstimatedCost, options.Config.ExpectedAgentName, options.Config.ExpectedAgentNames),
+		Validation: summarizeEvaluationWithResources(initialValidation, initialValidationMeasurement, options.Config.EstimatedCost, options.Config.ExpectedAgentName, options.Config.ExpectedAgentNames),
 		Artifacts:  ArtifactReferences{InputProfile: "baseline/input_profile.json", TrainEvaluation: "baseline/train_evaluation.json", ValidationEvaluation: "baseline/validation_evaluation.json"},
 	}
 	report := &Report{
 		Version: 1, Seed: options.Config.Seed, ModelConfig: options.Config.ModelConfig,
 		TargetSurfaceIDs: append([]string(nil), options.Config.TargetSurfaceIDs...),
 		Timing:           Timing{StartedAt: started, FinishedAt: finished, DurationSeconds: finished.Sub(started).Seconds()},
-		Usage:            totalUsage, EstimatedCost: costSnapshot(totalMeasuredCost(options.Meter), options.Config.EstimatedCost),
-		Baseline:  baseline,
-		Rounds:    rounds,
-		WriteBack: WriteBackDecision{RecommendedForWriteBack: releasedProfile != initialProfile && releasedRef != baselineRef, Performed: options.Config.PerformedWriteBack, AcceptedProfileRef: filepath.ToSlash(releasedRef)},
+		Usage:            totalMeasurement.Usage, LatencySeconds: totalMeasurement.LatencySeconds,
+		EstimatedCost: costSnapshot(totalMeasurement.Cost, options.Config.EstimatedCost),
+		Baseline:      baseline,
+		Rounds:        rounds,
+		WriteBack:     WriteBackDecision{RecommendedForWriteBack: releasedProfile != initialProfile && releasedRef != baselineRef, Performed: options.Config.PerformedWriteBack, AcceptedProfileRef: filepath.ToSlash(releasedRef)},
 	}
 	report.FailureAttributionStats = buildFailureAttributionStats(report.Baseline, report.Rounds)
 	if err := persistReport(options.Artifacts, report); err != nil {
@@ -233,8 +226,8 @@ func Run(ctx context.Context, options Options) (*Report, error) {
 	return report, nil
 }
 
-func summarizeEvaluationWithResources(result *engine.EvaluationResult, measurement ResourceMeasurement, cost EstimatedCost, expectedAgentNames map[string]string) EvaluationSnapshot {
-	summary := SummarizeEvaluation(result, AttributeFailures(result, AttributionOptions{ExpectedAgentNames: expectedAgentNames}))
+func summarizeEvaluationWithResources(result *engine.EvaluationResult, measurement ResourceMeasurement, cost EstimatedCost, expectedAgentName string, expectedAgentNames map[string]string) EvaluationSnapshot {
+	summary := SummarizeEvaluation(result, AttributeFailures(result, AttributionOptions{ExpectedAgentName: expectedAgentName, ExpectedAgentNames: expectedAgentNames}))
 	summary.Resources = ResourceSnapshot{
 		Usage: measurement.Usage, LatencySeconds: measurement.LatencySeconds,
 		EstimatedCost: costSnapshot(measurement.Cost, cost),
@@ -268,11 +261,20 @@ func resourceSnapshot(measurement ResourceMeasurement, cost EstimatedCost) Resou
 	return ResourceSnapshot{Usage: measurement.Usage, LatencySeconds: measurement.LatencySeconds, EstimatedCost: costSnapshot(measurement.Cost, cost)}
 }
 
-func totalMeasuredCost(meter ResourceMeter) float64 {
-	if provider, ok := meter.(interface{ TotalCost() float64 }); ok {
-		return provider.TotalCost()
+func measurementDelta(before, after ResourceMeasurement) ResourceMeasurement {
+	return ResourceMeasurement{
+		Usage: Usage{
+			EvaluationCaseRuns:  after.Usage.EvaluationCaseRuns - before.Usage.EvaluationCaseRuns,
+			ModelCalls:          after.Usage.ModelCalls - before.Usage.ModelCalls,
+			ToolCalls:           after.Usage.ToolCalls - before.Usage.ToolCalls,
+			InputTokens:         after.Usage.InputTokens - before.Usage.InputTokens,
+			OutputTokens:        after.Usage.OutputTokens - before.Usage.OutputTokens,
+			Retries:             after.Usage.Retries - before.Usage.Retries,
+			TokenUsageAvailable: after.Usage.TokenUsageAvailable,
+		},
+		LatencySeconds: after.LatencySeconds - before.LatencySeconds,
+		Cost:           after.Cost - before.Cost,
 	}
-	return 0
 }
 
 func validateOptions(options Options) error {
@@ -376,14 +378,4 @@ func evaluationComplete(expected, actual *engine.EvaluationResult) bool {
 		}
 	}
 	return true
-}
-
-func addUsage(total *Usage, value Usage) {
-	total.EvaluationCaseRuns += value.EvaluationCaseRuns
-	total.ModelCalls += value.ModelCalls
-	total.ToolCalls += value.ToolCalls
-	total.InputTokens += value.InputTokens
-	total.OutputTokens += value.OutputTokens
-	total.Retries += value.Retries
-	total.TokenUsageAvailable = total.TokenUsageAvailable || value.TokenUsageAvailable
 }

@@ -25,6 +25,7 @@
     "retries": 0,
     "tokenUsageAvailable": false
   },
+  "latencySeconds": 0.714,
   "estimatedCost": {
     "currency": "USD",
     "amount": 0.0534,
@@ -1123,7 +1124,7 @@
       },
       "usage": {
         "evaluationCaseRuns": 12,
-        "modelCalls": 16,
+        "modelCalls": 17,
         "toolCalls": 4,
         "inputTokens": 0,
         "outputTokens": 0,
@@ -1132,10 +1133,10 @@
       },
       "estimatedCost": {
         "currency": "USD",
-        "amount": 0.0042,
+        "amount": 0.0178,
         "source": "fake-model"
       },
-      "latencySeconds": 0.057,
+      "latencySeconds": 0.23800000000000002,
       "artifacts": {
         "inputProfile": "round_1/input_profile.json",
         "candidateProfile": "round_1/candidate_profile.json",
@@ -1771,7 +1772,7 @@
       },
       "usage": {
         "evaluationCaseRuns": 12,
-        "modelCalls": 16,
+        "modelCalls": 17,
         "toolCalls": 4,
         "inputTokens": 0,
         "outputTokens": 0,
@@ -1780,10 +1781,10 @@
       },
       "estimatedCost": {
         "currency": "USD",
-        "amount": 0.0042,
+        "amount": 0.0178,
         "source": "fake-model"
       },
-      "latencySeconds": 0.057,
+      "latencySeconds": 0.23800000000000002,
       "artifacts": {
         "inputProfile": "round_2/input_profile.json",
         "candidateProfile": "round_2/candidate_profile.json",
@@ -2426,7 +2427,7 @@
       },
       "usage": {
         "evaluationCaseRuns": 12,
-        "modelCalls": 16,
+        "modelCalls": 17,
         "toolCalls": 4,
         "inputTokens": 0,
         "outputTokens": 0,
@@ -2435,10 +2436,10 @@
       },
       "estimatedCost": {
         "currency": "USD",
-        "amount": 0.0042,
+        "amount": 0.017800000000000003,
         "source": "fake-model"
       },
-      "latencySeconds": 0.057,
+      "latencySeconds": 0.23799999999999993,
       "artifacts": {
         "inputProfile": "round_3/input_profile.json",
         "candidateProfile": "round_3/candidate_profile.json",

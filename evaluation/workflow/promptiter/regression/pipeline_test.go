@@ -95,6 +95,76 @@ func TestRejectedSearchProfileDoesNotBecomeReleaseBaseline(t *testing.T) {
 	}
 }
 
+func TestValidateOptionsRejectsInvalidConfiguration(t *testing.T) {
+	valid := Options{
+		Config: Config{TrainEvalSetID: "train", ValidationEvalSetID: "validation", MaxRounds: 1, MaxRoundsWithoutRelease: 1, TargetSurfaceIDs: []string{"agent#instruction"}},
+		Engine: &pipelineEngine{}, Evaluator: pipelineEvaluator{}, Meter: pipelineMeter{}, InitialProfile: testProfile("initial"),
+		Artifacts: &memoryArtifacts{files: map[string][]byte{}},
+	}
+	tests := []struct {
+		name   string
+		change func(*Options)
+	}{
+		{name: "missing dependency", change: func(options *Options) { options.Engine = nil }},
+		{name: "missing eval set", change: func(options *Options) { options.Config.TrainEvalSetID = "" }},
+		{name: "invalid rounds", change: func(options *Options) { options.Config.MaxRounds = 0 }},
+		{name: "invalid release limit", change: func(options *Options) { options.Config.MaxRoundsWithoutRelease = 0 }},
+		{name: "missing target", change: func(options *Options) { options.Config.TargetSurfaceIDs = nil }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			options := valid
+			test.change(&options)
+			if err := validateOptions(options); err == nil {
+				t.Fatal("validateOptions succeeded")
+			}
+		})
+	}
+}
+
+func TestEvaluationCompleteRejectsIncompleteResults(t *testing.T) {
+	complete := pipelineEvaluation(1, status.EvalStatusPassed)
+	if !evaluationComplete(complete, complete) {
+		t.Fatal("complete evaluation was rejected")
+	}
+	if evaluationComplete(nil, complete) {
+		t.Fatal("missing expected evaluation was accepted")
+	}
+	missingCase := &engine.EvaluationResult{EvalSets: []engine.EvalSetResult{{EvalSetID: "set"}}}
+	if evaluationComplete(complete, missingCase) {
+		t.Fatal("missing case was accepted")
+	}
+	missingMetrics := pipelineEvaluation(1, status.EvalStatusPassed)
+	missingMetrics.EvalSets[0].Cases[0].Metrics = nil
+	if evaluationComplete(complete, missingMetrics) {
+		t.Fatal("case without metrics was accepted")
+	}
+	notEvaluated := pipelineEvaluation(0, status.EvalStatusNotEvaluated)
+	if evaluationComplete(complete, notEvaluated) {
+		t.Fatal("not-evaluated metric was accepted")
+	}
+}
+
+func TestMeasurementDeltaAndDisabledArtifactPersistence(t *testing.T) {
+	before := ResourceMeasurement{Usage: Usage{EvaluationCaseRuns: 1, ModelCalls: 2, ToolCalls: 3}, LatencySeconds: 4, Cost: 5}
+	after := ResourceMeasurement{Usage: Usage{EvaluationCaseRuns: 3, ModelCalls: 5, ToolCalls: 7}, LatencySeconds: 10, Cost: 13}
+	delta := measurementDelta(before, after)
+	if delta.Usage.EvaluationCaseRuns != 2 || delta.Usage.ModelCalls != 3 || delta.Usage.ToolCalls != 4 || delta.LatencySeconds != 6 || delta.Cost != 8 {
+		t.Fatalf("unexpected measurement delta: %#v", delta)
+	}
+	artifacts := &memoryArtifacts{files: map[string][]byte{}}
+	options := Options{Config: Config{SaveArtifacts: false}, Artifacts: artifacts}
+	if err := persistBaseline(options, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := persistRound(options, 1, nil, nil, nil, nil, DeltaBundle{}, GateDecision{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(artifacts.files) != 0 {
+		t.Fatalf("disabled persistence wrote %#v", artifacts.files)
+	}
+}
+
 func runLastReleasedBaselineScenario(t *testing.T) (*Report, []*engine.RunRequest) {
 	t.Helper()
 	initial := testProfile("initial")
@@ -187,7 +257,9 @@ type pipelineMeter struct{}
 func (pipelineMeter) Measure(string, *promptiter.Profile) ResourceMeasurement {
 	return ResourceMeasurement{}
 }
-func (pipelineMeter) TotalModelCalls() int { return 4 }
+func (pipelineMeter) Total() ResourceMeasurement {
+	return ResourceMeasurement{Usage: Usage{ModelCalls: 4}}
+}
 
 type profilePipelineMeter struct {
 	measurements map[string]ResourceMeasurement
@@ -196,7 +268,9 @@ type profilePipelineMeter struct {
 func (m profilePipelineMeter) Measure(_ string, profile *promptiter.Profile) ResourceMeasurement {
 	return m.measurements[profileTextForTest(profile)]
 }
-func (profilePipelineMeter) TotalModelCalls() int { return 37 }
+func (profilePipelineMeter) Total() ResourceMeasurement {
+	return ResourceMeasurement{Usage: Usage{ModelCalls: 37}}
+}
 
 type memoryArtifacts struct{ files map[string][]byte }
 

@@ -130,4 +130,6 @@ Accepted profile: `round_1/candidate_profile.json`
 
 Evaluation case runs: `36`; model calls: `51`; tool calls: `12`; retries: `0`.
 
+Deterministic evaluation latency: `0.7140s`.
+
 Estimated cost: `0.0534 USD` (fake-model).
