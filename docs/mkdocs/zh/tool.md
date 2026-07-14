@@ -824,6 +824,29 @@ agent := llmagent.New("mcp-assistant",
     llmagent.WithToolSets([]tool.ToolSet{mcpToolSet}))
 ```
 
+### 工具名前缀
+
+通过 `WithToolSets` 把 MCP ToolSet 挂到 `LLMAgent` 上时，框架会用
+`NamedToolSet` 包装它。模型侧看到的工具名为
+`{toolSetName}_{远端工具名}`，实际 MCP `tools/call` 仍使用远端原始名称。
+
+- 默认 ToolSet 名为 `"mcp"`，远端工具 `search` 会暴露为 `mcp_search`。
+- 挂载多个 MCP ToolSet 时，请用 `mcp.WithName(...)` 为每个 ToolSet 设置
+  不同名称。若都使用默认名，可能出现前缀冲突（例如两个 server 都有
+  `search`，模型侧都会显示为 `mcp_search`）。
+- 当 `ToolSet.Name()` 为空时不加前缀（`NewMCPToolSet` 默认不会为空）。
+
+```go
+githubToolSet := mcp.NewMCPToolSet(githubCfg, mcp.WithName("github"))
+slackToolSet := mcp.NewMCPToolSet(slackCfg, mcp.WithName("slack"))
+
+agent := llmagent.New("multi-mcp",
+    llmagent.WithModel(model),
+    llmagent.WithToolSets([]tool.ToolSet{githubToolSet, slackToolSet}),
+)
+// 模型可见名称：github_search、slack_search、...
+```
+
 ### MCP Annotations 与权限 Metadata
 
 当远端 MCP server 在 `tools/list` 中返回 tool annotations 时，直接通过
