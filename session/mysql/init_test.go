@@ -671,7 +671,10 @@ func TestVerifyColumns_Scenarios(t *testing.T) {
 				"created_at": int64(0),
 			},
 			wantError: false,
-			wantErrorLogContains: "review and run: ALTER TABLE `test_table` MODIFY COLUMN `created_at` " +
+			wantErrorLogContains: "canonical schema migration template (review SHOW CREATE TABLE first; " +
+				"preserve any custom defaults, ON UPDATE clauses, comments, and other column attributes; " +
+				"changing timestamp precision may rebuild the table and block writes): " +
+				"ALTER TABLE `test_table` MODIFY COLUMN `created_at` " +
 				"TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6);",
 		},
 		{

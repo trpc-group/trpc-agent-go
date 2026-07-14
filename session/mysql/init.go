@@ -758,7 +758,11 @@ func (s *Service) verifyColumns(ctx context.Context, tableName string, expectedC
 	if len(timestampMismatches) > 0 {
 		log.ErrorfContext(
 			ctx,
-			"table %s has timestamp precision mismatches: %s; expected TIMESTAMP(6); mismatches may cause incorrect time comparisons or ordering; review and run: ALTER TABLE `%s` %s;",
+			"table %s has timestamp precision mismatches: %s; expected TIMESTAMP(6); "+
+				"mismatches may cause incorrect time comparisons or ordering; canonical schema migration template "+
+				"(review SHOW CREATE TABLE first; preserve any custom defaults, ON UPDATE clauses, comments, "+
+				"and other column attributes; changing timestamp precision may rebuild the table and block writes): "+
+				"ALTER TABLE `%s` %s;",
 			tableName,
 			strings.Join(timestampMismatches, ", "),
 			tableName,
