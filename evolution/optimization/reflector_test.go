@@ -179,6 +179,7 @@ func TestLLMReflectorChangesOnlySelectedComponent(t *testing.T) {
 	assert.Contains(t, modelStub.request.Messages[0].Content, "one case")
 	assert.Contains(t, modelStub.request.Messages[0].Content, "smallest sufficient mutation")
 	assert.Contains(t, modelStub.request.Messages[0].Content, "smallest valid schema")
+	assert.Contains(t, modelStub.request.Messages[0].Content, "different tool contracts")
 	assert.Contains(t, modelStub.request.Messages[1].Content, "<untrusted_evaluation_records>")
 }
 
