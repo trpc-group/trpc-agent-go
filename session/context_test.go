@@ -350,6 +350,64 @@ func TestHydrateEmptyMaskedStateList(t *testing.T) {
 	}
 }
 
+func newToolCallEvent(id string, toolCallIDs ...string) event.Event {
+	calls := make([]model.ToolCall, len(toolCallIDs))
+	for i, callID := range toolCallIDs {
+		calls[i] = model.ToolCall{
+			ID: callID,
+			Function: model.FunctionDefinitionParam{
+				Name: "lookup",
+			},
+		}
+	}
+	return event.Event{
+		ID:     id,
+		Author: "assistant",
+		Response: &model.Response{
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:      model.RoleAssistant,
+					ToolCalls: calls,
+				},
+			}},
+		},
+	}
+}
+
+func newToolResultEvent(id, toolCallID, content string) event.Event {
+	return event.Event{
+		ID:     id,
+		Author: "tool",
+		Response: &model.Response{
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:    model.RoleTool,
+					ToolID:  toolCallID,
+					Content: content,
+				},
+			}},
+		},
+	}
+}
+
+func TestMaskEvents_expandsToolCallRound(t *testing.T) {
+	sess := NewSession("app", "user", "tool-round")
+	sess.Events = []event.Event{
+		newTestEvent("user-1"),
+		newToolCallEvent("call-1", "tc-1"),
+		newToolResultEvent("result-1", "tc-1", "answer"),
+	}
+
+	masked := sess.MaskEvents("result-1")
+	if masked != 2 {
+		t.Fatalf("expected call+result masked, got %d", masked)
+	}
+	visible := sess.GetVisibleEvents()
+	if len(visible) != 1 || visible[0].ID != "user-1" {
+		t.Fatalf("expected only user event visible, got %v", visible)
+	}
+}
+
 func TestHydrateSkipsEmptyMaskedIDs(t *testing.T) {
 	sess := NewSession("app", "user", "sess-skip-empty-id")
 	sess.Events = []event.Event{newTestEvent("e1"), newTestEvent("e2")}

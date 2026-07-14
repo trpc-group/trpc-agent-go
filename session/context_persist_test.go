@@ -96,6 +96,27 @@ func TestPersistMaskedEvents(t *testing.T) {
 		}
 	})
 
+	t.Run("drops stale mask IDs removed from events", func(t *testing.T) {
+		sess := session.NewSession(key.AppName, key.UserID, key.SessionID)
+		sess.Events = []event.Event{
+			newPersistTestEvent("e1"),
+			newPersistTestEvent("e2"),
+		}
+		sess.MaskEvents("e1", "e2")
+		sess.Events = []event.Event{newPersistTestEvent("e2")}
+
+		if err := sess.PersistMaskedEvents(ctx, nil, key); err != nil {
+			t.Fatal(err)
+		}
+		stored, ok := sess.GetState(session.MaskedEventsStateKey)
+		if !ok {
+			t.Fatal("expected masked events in local state")
+		}
+		if string(stored) != `["e2"]` {
+			t.Fatalf("expected stale e1 dropped, got %s", stored)
+		}
+	})
+
 	t.Run("nil session", func(t *testing.T) {
 		var sess *session.Session
 		if err := sess.PersistMaskedEvents(ctx, nil, key); err != nil {

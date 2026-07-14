@@ -23,6 +23,7 @@ import (
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
@@ -84,10 +85,114 @@ func NewDeleteContextTool() tool.CallableTool {
 		function.WithDescription(
 			"Remove specific events from your visible context to free up space. "+
 				"Events are soft-hidden (preserved for audit) but no longer sent to the LLM. "+
-				"Use this after extracting key information into notes to reduce context pressure. "+
-				"Pass the event IDs you want to hide.",
+				"Use list_context first to obtain event_ids, then call this after extracting "+
+				"key information into notes to reduce context pressure.",
 		),
 	)
+}
+
+// --- list_context tool ---
+
+// ListContextInput is the input for the list_context tool (empty — no args).
+type ListContextInput struct{}
+
+// ContextEventEntry summarises one LLM-visible session event.
+type ContextEventEntry struct {
+	ID      string `json:"id"`
+	Author  string `json:"author,omitempty"`
+	Kind    string `json:"kind"`
+	Preview string `json:"preview,omitempty"`
+}
+
+// ListContextOutput is the output for the list_context tool.
+type ListContextOutput struct {
+	Events []ContextEventEntry `json:"events"`
+	Count  int                 `json:"count"`
+}
+
+const listContextPreviewMaxRunes = 120
+
+// NewListContextTool creates a tool that lists visible session events with
+// stable IDs so the model can pass them to delete_context.
+func NewListContextTool() tool.CallableTool {
+	return function.NewFunctionTool(
+		func(ctx context.Context, _ ListContextInput) (ListContextOutput, error) {
+			sess := sessionFromContext(ctx)
+			if sess == nil {
+				return ListContextOutput{Events: []ContextEventEntry{}}, nil
+			}
+
+			visible := sess.GetVisibleEvents()
+			entries := make([]ContextEventEntry, 0, len(visible))
+			for _, evt := range visible {
+				entries = append(entries, ContextEventEntry{
+					ID:      evt.ID,
+					Author:  evt.Author,
+					Kind:    contextEventKind(evt),
+					Preview: contextEventPreview(evt),
+				})
+			}
+
+			return ListContextOutput{
+				Events: entries,
+				Count:  len(entries),
+			}, nil
+		},
+		function.WithName("list_context"),
+		function.WithDescription(
+			"List visible session events with stable event IDs, authors, kinds, "+
+				"and short previews. Call this before delete_context so you can "+
+				"pass real event_ids instead of guessing.",
+		),
+	)
+}
+
+func contextEventKind(evt event.Event) string {
+	if evt.Response == nil {
+		return "other"
+	}
+	if evt.IsToolCallResponse() {
+		return "tool_call"
+	}
+	if evt.IsToolResultResponse() {
+		return "tool_result"
+	}
+	if evt.IsUserMessage() {
+		return "user"
+	}
+	if len(evt.Response.Choices) > 0 {
+		role := evt.Response.Choices[0].Message.Role
+		if role != "" {
+			return string(role)
+		}
+	}
+	return "assistant"
+}
+
+func contextEventPreview(evt event.Event) string {
+	if evt.Response == nil || len(evt.Response.Choices) == 0 {
+		return ""
+	}
+	choice := evt.Response.Choices[0]
+	content := strings.TrimSpace(choice.Message.Content)
+	if content == "" {
+		content = strings.TrimSpace(choice.Delta.Content)
+	}
+	if content == "" && len(choice.Message.ToolCalls) > 0 {
+		content = choice.Message.ToolCalls[0].Function.Name
+	}
+	if content == "" && choice.Message.ToolID != "" {
+		content = choice.Message.ToolID
+	}
+	if content == "" {
+		return ""
+	}
+	flat := strings.Join(strings.Fields(content), " ")
+	runes := []rune(flat)
+	if len(runes) <= listContextPreviewMaxRunes {
+		return flat
+	}
+	return string(runes[:listContextPreviewMaxRunes]) + "…"
 }
 
 // --- check_budget tool ---
@@ -360,6 +465,7 @@ func NewNotesIndexTool() tool.CallableTool {
 // Tools returns all context management tools as a convenience.
 func Tools() []tool.Tool {
 	return []tool.Tool{
+		NewListContextTool(),
 		NewDeleteContextTool(),
 		NewCheckBudgetTool(),
 		NewNoteTool(),
