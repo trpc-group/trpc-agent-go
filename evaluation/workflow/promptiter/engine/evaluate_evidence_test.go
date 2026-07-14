@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 )
 
@@ -37,5 +38,21 @@ func TestCaseResultEvidenceJSONCompatibility(t *testing.T) {
 	}
 	if _, ok := decoded["expectedInvocations"]; !ok {
 		t.Fatal("expected invocation evidence was omitted")
+	}
+}
+
+func TestExpectedInvocationsFiltersUnavailableEvidence(t *testing.T) {
+	if got := expectedInvocations(nil); got != nil {
+		t.Fatalf("nil result evidence = %#v", got)
+	}
+	expected := &evalset.Invocation{InvocationID: "expected"}
+	result := &evalresult.EvalCaseResult{EvalMetricResultPerInvocation: []*evalresult.EvalMetricResultPerInvocation{
+		nil,
+		{},
+		{ExpectedInvocation: expected},
+	}}
+	got := expectedInvocations(result)
+	if len(got) != 1 || got[0] != expected {
+		t.Fatalf("expected invocation evidence = %#v", got)
 	}
 }
