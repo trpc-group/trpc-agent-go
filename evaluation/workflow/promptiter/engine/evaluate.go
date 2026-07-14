@@ -19,6 +19,7 @@ import (
 	atrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 	"trpc.group/trpc-go/trpc-agent-go/internal/profilecompiler"
@@ -73,6 +74,12 @@ type CaseResult struct {
 	Trace *atrace.Trace
 	// Metrics stores all metric outputs for this case.
 	Metrics []MetricResult
+	// ActualInvocations contains the optional agent outputs used by metric evaluators.
+	// It is omitted from serialized results when run details are unavailable.
+	ActualInvocations []*evalset.Invocation `json:"actualInvocations,omitempty"`
+	// ExpectedInvocations contains the optional reference outputs paired with
+	// ActualInvocations. It is omitted from serialized results when unavailable.
+	ExpectedInvocations []*evalset.Invocation `json:"expectedInvocations,omitempty"`
 }
 
 // EvalSetResult stores aggregate scores and per-case results for one set.
@@ -316,12 +323,27 @@ func adaptEvaluationCaseResult(
 		)
 	}
 	return &CaseResult{
-		EvalSetID:  evalSetID,
-		EvalCaseID: evalCase.EvalCaseID,
-		SessionID:  sessionID,
-		Trace:      trace,
-		Metrics:    metrics,
+		EvalSetID:           evalSetID,
+		EvalCaseID:          evalCase.EvalCaseID,
+		SessionID:           sessionID,
+		Trace:               trace,
+		Metrics:             metrics,
+		ActualInvocations:   append([]*evalset.Invocation(nil), runDetail.Inference.Inferences...),
+		ExpectedInvocations: expectedInvocations(runResult),
 	}, nil
+}
+
+func expectedInvocations(result *evalresult.EvalCaseResult) []*evalset.Invocation {
+	if result == nil {
+		return nil
+	}
+	expected := make([]*evalset.Invocation, 0, len(result.EvalMetricResultPerInvocation))
+	for _, perInvocation := range result.EvalMetricResultPerInvocation {
+		if perInvocation != nil && perInvocation.ExpectedInvocation != nil {
+			expected = append(expected, perInvocation.ExpectedInvocation)
+		}
+	}
+	return expected
 }
 
 func extractInferenceTraceDetails(
