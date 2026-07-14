@@ -51,6 +51,31 @@ func TestParseReviewDiffExtractsFilesHunksAndCandidateLines(t *testing.T) {
 	}
 }
 
+func TestParseReviewDiffMarksDeletedFileAsUnavailableInRepoSnapshot(t *testing.T) {
+	raw := []byte("diff --git a/obsolete.go b/obsolete.go\n" +
+		"deleted file mode 100644\n" +
+		"--- a/obsolete.go\n" +
+		"+++ /dev/null\n" +
+		"@@ -1,2 +0,0 @@\n" +
+		"-package obsolete\n" +
+		"-const value = 1\n")
+
+	parsed, _, _, err := parseReviewDiff(raw, nil, true, redact.New())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parsed.ChangedFiles) != 1 {
+		t.Fatalf("changed files = %#v, want one deleted file", parsed.ChangedFiles)
+	}
+	file := parsed.ChangedFiles[0]
+	if file.Status != "deleted" {
+		t.Fatalf("status = %q, want deleted", file.Status)
+	}
+	if file.HasCompleteContext {
+		t.Fatal("deleted file should not be marked available in the post-change repository snapshot")
+	}
+}
+
 func TestParseReviewDiffAppliesExactPathScope(t *testing.T) {
 	raw := []byte("diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -1 +1 @@\n-package a\n+package aa\n" +
 		"diff --git a/b.go b/b.go\n--- a/b.go\n+++ b/b.go\n@@ -1 +1 @@\n-package b\n+package bb\n")

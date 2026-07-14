@@ -23,11 +23,75 @@ func TestBuildReviewMessageHonorsUTF8ByteBudget(t *testing.T) {
 		}},
 	}
 	limits := Limits{MaxMessageBytes: 256, MaxFiles: 1, MaxHunks: 1, MaxHunkBytes: 64}
-	message := buildReviewMessage(InputKindDiffFile, ReviewModePatchOnly, parsed, limits)
+	message := buildReviewMessage(InputKindDiffFile, ReviewModePatchOnly, nil, parsed, limits)
 	if len(message) > limits.MaxMessageBytes {
 		t.Fatalf("message length = %d, want at most %d", len(message), limits.MaxMessageBytes)
 	}
 	if !utf8.ValidString(message) {
 		t.Fatal("message truncation produced invalid UTF-8")
+	}
+}
+
+func TestBuildReviewMessageUsesModeSpecificWorkspaceInstructions(t *testing.T) {
+	parsed := parsedInput{
+		ChangedFiles: []ChangedFile{{Path: "calculator.go"}},
+	}
+
+	patchOnly := buildReviewMessage(InputKindDiffFile, ReviewModePatchOnly, nil, parsed, Limits{})
+	if !strings.Contains(patchOnly, "Inspect the complete diff through workspace_exec before forming conclusions.") {
+		t.Fatalf("patch-only message does not contain diff-only instruction:\n%s", patchOnly)
+	}
+	if strings.Contains(patchOnly, "Inspect the complete diff and repository snapshot") {
+		t.Fatalf("patch-only message requires an unavailable repository snapshot:\n%s", patchOnly)
+	}
+
+	repoBacked := buildReviewMessage(InputKindRepoPath, ReviewModeRepoBacked, nil, parsed, Limits{})
+	if !strings.Contains(repoBacked, "Inspect the complete diff and relevant files in the repository snapshot through workspace_exec before forming conclusions.") {
+		t.Fatalf("repo-backed message does not contain scoped repository instruction:\n%s", repoBacked)
+	}
+}
+
+func TestBuildReviewMessageExplainsScopeAndNavigationFields(t *testing.T) {
+	parsed := parsedInput{
+		ChangedFiles: []ChangedFile{{
+			Path:               "internal/calculator.go",
+			HasCompleteContext: true,
+		}},
+		ChangedHunks: []ChangedHunk{{
+			ID:             "internal/calculator.go:8:1",
+			File:           "internal/calculator.go",
+			Body:           "+func Subtract(a, b int) int { return a - b }",
+			CandidateLines: []int{11},
+		}},
+		GoPackages: []GoPackage{{
+			Directory:   "internal",
+			PackageName: "calculator",
+			Complete:    true,
+		}},
+	}
+	message := buildReviewMessage(
+		InputKindRepoPath,
+		ReviewModeRepoBacked,
+		[]string{"internal/calculator.go", "internal/calculator_test.go"},
+		parsed,
+		Limits{},
+	)
+
+	for _, want := range []string{
+		"Review scope (requested paths):\n- internal/calculator.go\n- internal/calculator_test.go",
+		"complete_file_available=true",
+		"package_context_complete=true",
+		"Hunk previews:",
+		"candidate_lines identify added or modified new-file lines; they are not confirmed findings.",
+		"candidate_lines=[11]",
+	} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("message does not contain %q:\n%s", want, message)
+		}
+	}
+	for _, old := range []string{"full_context=", " complete=", "Selected hunks:"} {
+		if strings.Contains(message, old) {
+			t.Fatalf("message still contains ambiguous label %q:\n%s", old, message)
+		}
 	}
 }

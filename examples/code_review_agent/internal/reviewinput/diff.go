@@ -149,14 +149,15 @@ func parseFileDiff(
 	sanitizer *redact.Sanitizer,
 ) (changedFile ChangedFile, hunks []ChangedHunk, signals []SecretSignal) {
 	stat := fd.Stat()
+	status := diffStatus(oldPath, newPath)
 	changedFile = ChangedFile{
 		Path:               filePath,
 		OldPath:            oldPath,
-		Status:             diffStatus(oldPath, newPath),
+		Status:             status,
 		Language:           languageForPath(filePath),
 		IsGo:               strings.HasSuffix(filePath, ".go"),
 		IsTest:             strings.HasSuffix(filePath, "_test.go"),
-		HasCompleteContext: repoBacked,
+		HasCompleteContext: repoBacked && status != "deleted",
 		HunkCount:          len(fd.Hunks),
 		AddedLines:         int(stat.Added),
 		ChangedLines:       int(stat.Changed),

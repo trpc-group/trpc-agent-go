@@ -21,12 +21,22 @@ const (
 // buildReviewMessage supplies bounded navigation rather than duplicating the
 // complete diff in model context. Omitted detail remains available at the
 // stable workspace paths declared in the same message.
-func buildReviewMessage(kind, mode string, parsed parsedInput, limits Limits) string {
+func buildReviewMessage(kind, mode string, paths []string, parsed parsedInput, limits Limits) string {
 	limits = limits.withDefaults()
 	var b strings.Builder
 	fmt.Fprintf(&b, "Review this code change using the code-review Skill.\n\n")
 	fmt.Fprintf(&b, "Input:\n- source: %s\n- mode: %s\n- changed files: %d\n- changed hunks: %d\n- Go packages: %d\n",
 		kind, mode, len(parsed.ChangedFiles), len(parsed.ChangedHunks), len(parsed.GoPackages))
+	if len(paths) > 0 {
+		fmt.Fprintf(&b, "\nReview scope (requested paths):\n")
+		pathLimit := min(len(paths), limits.MaxFiles)
+		for _, requestedPath := range paths[:pathLimit] {
+			fmt.Fprintf(&b, "- %s\n", requestedPath)
+		}
+		if omitted := len(paths) - pathLimit; omitted > 0 {
+			fmt.Fprintf(&b, "- ... %d additional requested paths omitted from this message\n", omitted)
+		}
+	}
 	fmt.Fprintf(&b, "\nWorkspace:\n- complete masked diff: work/inputs/change.diff\n")
 	if mode == ReviewModeRepoBacked {
 		fmt.Fprintf(&b, "- repository snapshot: work/inputs/repo\n")
@@ -37,7 +47,7 @@ func buildReviewMessage(kind, mode string, parsed parsedInput, limits Limits) st
 	fmt.Fprintf(&b, "\nChanged files:\n")
 	fileLimit := min(len(parsed.ChangedFiles), limits.MaxFiles)
 	for _, file := range parsed.ChangedFiles[:fileLimit] {
-		fmt.Fprintf(&b, "- %s: %s, hunks=%d, +%d ~%d -%d, full_context=%t\n",
+		fmt.Fprintf(&b, "- %s: %s, hunks=%d, +%d ~%d -%d, complete_file_available=%t\n",
 			file.Path, file.Status, file.HunkCount, file.AddedLines, file.ChangedLines,
 			file.DeletedLines, file.HasCompleteContext)
 	}
@@ -49,7 +59,7 @@ func buildReviewMessage(kind, mode string, parsed parsedInput, limits Limits) st
 		fmt.Fprintf(&b, "\nGo packages:\n")
 		packageLimit := min(len(parsed.GoPackages), limits.MaxFiles)
 		for _, pkg := range parsed.GoPackages[:packageLimit] {
-			fmt.Fprintf(&b, "- dir=%s package=%s module=%s test_arg=%s complete=%t\n",
+			fmt.Fprintf(&b, "- dir=%s package=%s module=%s test_arg=%s package_context_complete=%t\n",
 				pkg.Directory, pkg.PackageName, pkg.ModulePath, pkg.SuggestedTestArg, pkg.Complete)
 		}
 		if omitted := len(parsed.GoPackages) - packageLimit; omitted > 0 {
@@ -65,7 +75,8 @@ func buildReviewMessage(kind, mode string, parsed parsedInput, limits Limits) st
 		}
 	}
 
-	fmt.Fprintf(&b, "\nSelected hunks:\n")
+	fmt.Fprintf(&b, "\nHunk previews:\n")
+	fmt.Fprintf(&b, "candidate_lines identify added or modified new-file lines; they are not confirmed findings.\n")
 	hunkLimit := min(len(parsed.ChangedHunks), limits.MaxHunks)
 	for _, hunk := range parsed.ChangedHunks[:hunkLimit] {
 		body := hunk.Body
@@ -85,7 +96,12 @@ func buildReviewMessage(kind, mode string, parsed parsedInput, limits Limits) st
 	if b.Len() > limits.MaxMessageBytes {
 		return truncateWithNotice(b.String(), limits.MaxMessageBytes, messageTruncationNotice)
 	}
-	fmt.Fprintf(&b, "\nInspect the complete diff and repository snapshot through workspace_exec before forming conclusions. Base every finding on changed hunks or observed tool output, then submit the result through submit_review_results.\n")
+	if mode == ReviewModeRepoBacked {
+		fmt.Fprintf(&b, "\nInspect the complete diff and relevant files in the repository snapshot through workspace_exec before forming conclusions.")
+	} else {
+		fmt.Fprintf(&b, "\nInspect the complete diff through workspace_exec before forming conclusions.")
+	}
+	fmt.Fprintf(&b, " Base every finding on changed hunks or observed tool output, then submit the result through submit_review_results.\n")
 	return truncateWithNotice(b.String(), limits.MaxMessageBytes, messageTruncationNotice)
 }
 

@@ -118,7 +118,7 @@ func (p *Preparer) Prepare(ctx context.Context, scope TaskScope, spec Spec) (pre
 	return &PreparedInput{
 		InputKind:       resolved.inputKind,
 		ReviewMode:      mode,
-		Message:         buildReviewMessage(resolved.inputKind, mode, parsed, p.config.Limits),
+		Message:         buildReviewMessage(resolved.inputKind, mode, resolved.paths, parsed, p.config.Limits),
 		SummaryJSON:     string(summaryJSON),
 		ArtifactName:    inputArtifactName,
 		ArtifactVersion: version,

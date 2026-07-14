@@ -50,7 +50,7 @@ func TestPrepareDiffOnlyBuildsArtifactMessageAndBootstrap(t *testing.T) {
 
 	prepared, err := preparer.Prepare(context.Background(), TaskScope{
 		TaskID: "task-1", AppName: "app", UserID: "user",
-	}, Spec{DiffFile: diffPath})
+	}, Spec{DiffFile: diffPath, Paths: []string{"foo.go"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,6 +64,9 @@ func TestPrepareDiffOnlyBuildsArtifactMessageAndBootstrap(t *testing.T) {
 	}
 	if strings.Contains(prepared.Message, "review_context.json") {
 		t.Fatal("Agent message references review_context.json")
+	}
+	if !strings.Contains(prepared.Message, "Review scope (requested paths):\n- foo.go") {
+		t.Fatalf("Agent message does not contain the requested path scope:\n%s", prepared.Message)
 	}
 	if len(prepared.Bootstrap.Files) != 1 || prepared.Bootstrap.Files[0].Target != "work/inputs/change.diff" {
 		t.Fatalf("bootstrap files = %#v", prepared.Bootstrap.Files)
