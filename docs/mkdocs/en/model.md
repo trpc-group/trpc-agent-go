@@ -288,7 +288,7 @@ For OpenAI-compatible providers, `completion_tokens_details.reasoning_tokens` is
 
 ### Prompt caching
 
-Providers cache the longest stable prefix of the request (system prompt, tools, early history). The cache misses whenever the rendered prefix text changes: an injected current time changes it as often as its format resolves (`WithAddCurrentTime` is date-only by default — one miss per day; a time-of-day format misses every turn), and an instruction placeholder whose value changes between turns has the same effect. Each miss reprocesses the full prefix without the cache discount (cache read/write/miss pricing varies by provider). See [`examples/promptcache`](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/promptcache) for cache-friendly patterns, including replacing the injected time with a current-time tool.
+Providers cache the longest stable prefix of the request (system prompt, tools, early history). The cache misses whenever the rendered prefix text changes: an injected current time rewrites it as often as its formatted value changes (`WithAddCurrentTime` is date-only by default — once per day; finer formats change more often, potentially every turn for second-level formats), and an instruction placeholder whose value changes between turns has the same effect. From the first changed token onward, the request is reprocessed under the provider's cache-miss/write or standard input pricing — the exact pricing and cache granularity vary by provider. See [`examples/promptcache`](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/promptcache) for cache-friendly patterns, including replacing the injected time with a current-time tool.
 
 ## OpenAI Model
 

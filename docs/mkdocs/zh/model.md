@@ -286,7 +286,7 @@ type CompletionTokensDetails struct {
 
 ### 提示词缓存（Prompt caching）
 
-供应商会缓存请求里最长的稳定前缀（系统提示词、工具定义、靠前的历史）。**渲染出的前缀文本一变，缓存就失效**：注入的当前时间按其格式粒度改变前缀（`WithAddCurrentTime` 默认只到日期——每天失效一次；带时分秒的格式则每轮失效），值在轮次间变化的 instruction 占位符同理。每次失效，整段前缀都会失去缓存折扣、按未命中的价格重新处理（缓存读/写/未命中的具体计价因供应商而异）。缓存友好的写法（包括用"当前时间工具"替代时间注入）见 [`examples/promptcache`](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/promptcache)。
+供应商会缓存请求里最长的稳定前缀（系统提示词、工具定义、靠前的历史）。**渲染出的前缀文本一变，缓存就失效**：注入的当前时间按其格式化值的变化频率改写前缀（`WithAddCurrentTime` 默认只到日期——每天一次；更细的格式变化更频繁，秒级格式可能每轮都变），值在轮次间变化的 instruction 占位符同理。从第一个发生变化的 token 起，请求按供应商的缓存未命中/写入或标准输入价重新处理——具体计价与缓存粒度因供应商而异。缓存友好的写法（包括用"当前时间工具"替代时间注入）见 [`examples/promptcache`](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/promptcache)。
 
 ## OpenAI Model
 
