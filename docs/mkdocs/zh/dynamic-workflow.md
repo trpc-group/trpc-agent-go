@@ -344,7 +344,7 @@ workflow guest，否则不要直接传宿主进程的 `os.Environ()`；这层过
 默认不要向同一个根 Agent 同时暴露 `execute_tool_code` 和 `run_workflow`。
 两者都是代码编排路径，同时暴露会增加模型选择难度。
 
-完整可运行代码见 [Dynamic Workflow Agent 示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/dynamicworkflow)。
+完整可运行代码见 [Dynamic Workflow 基础示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/dynamicworkflow/basic)。
 
 ## 后续计划：文件化 workflow
 

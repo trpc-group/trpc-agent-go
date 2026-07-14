@@ -388,7 +388,7 @@ Agent by default. Both are Python orchestration paths, and exposing both makes
 the model's choice harder.
 
 See the runnable
-[Dynamic Workflow Agent example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/dynamicworkflow).
+[basic Dynamic Workflow Agent example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/dynamicworkflow/basic).
 
 ## Roadmap note: file-backed workflows
 
