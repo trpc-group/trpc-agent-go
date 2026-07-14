@@ -271,9 +271,10 @@ func WithShowToolCallDelta(show bool) Option {
 func WithStreamRetry(maxRetries int, baseBackoff, maxBackoff time.Duration) Option {
 	return func(opts *options) {
 		opts.streamRetryEnabled = true
-		if maxRetries != 0 {
-			opts.streamMaxRetries = maxRetries
-		}
+		// Always assign so a later WithStreamRetry(0) can restore the documented
+		// default after an earlier WithStreamRetry(N). Zero-option New() still
+		// never retries because streamRetryEnabled stays false unless opted in.
+		opts.streamMaxRetries = maxRetries
 		if baseBackoff > 0 {
 			opts.streamRetryBaseBackoff = baseBackoff
 		}

@@ -175,6 +175,11 @@ func TestWithStreamRetry_ZeroPreservesDefault(t *testing.T) {
 	assert.Equal(t, defaultStreamMaxRetries, m.effectiveStreamMaxRetries())
 }
 
+func TestWithStreamRetry_ZeroRestoresDefaultAfterCustom(t *testing.T) {
+	m := New("claude-test", WithStreamRetry(5, 0, 0), WithStreamRetry(0, 0, 0))
+	assert.Equal(t, defaultStreamMaxRetries, m.effectiveStreamMaxRetries())
+}
+
 func TestNew_ZeroOptionsDisablesStreamRetry(t *testing.T) {
 	m := New("claude-test")
 	assert.Zero(t, m.effectiveStreamMaxRetries())
