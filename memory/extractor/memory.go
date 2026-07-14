@@ -129,6 +129,32 @@ func (e *memoryExtractor) Extract(
 		Messages: e.buildMessages(ctx, messages, existing),
 		Tools:    tools,
 	}
+	ops, err := e.extractRequest(ctx, req)
+	if err != nil || len(ops) > 0 || !hasStructuredAssistantOutput(messages) {
+		return ops, err
+	}
+
+	retryMessages := append([]model.Message(nil), req.Messages...)
+	retryMessages[0].Content += "\n" + emptyStructuredOutputRetryPrompt
+	log.DebugfContext(ctx, "extractor: retrying empty extraction for structured assistant output")
+	return e.extractRequest(ctx, &model.Request{
+		Messages: retryMessages,
+		Tools:    tools,
+	})
+}
+
+const emptyStructuredOutputRetryPrompt = `<empty_extraction_retry>
+The assistant response contains a structured list, but the previous pass emitted
+no memory operation. Re-check every list item and preserve concrete names,
+facts, ordering, role mappings, and option-to-attribute mappings with
+memory_add. Emit no tool call only when the list truly contains no reusable
+information.
+</empty_extraction_retry>`
+
+func (e *memoryExtractor) extractRequest(
+	ctx context.Context,
+	req *model.Request,
+) ([]*Operation, error) {
 
 	// Call model.
 	ctx, rspChan, err := e.runBeforeModelCallbacks(ctx, req)
@@ -180,6 +206,54 @@ func (e *memoryExtractor) Extract(
 			}
 		}
 	}
+}
+
+func hasStructuredAssistantOutput(messages []model.Message) bool {
+	for _, msg := range messages {
+		if msg.Role != model.RoleAssistant {
+			continue
+		}
+		items := 0
+		for _, line := range strings.Split(extractionMessageText(msg), "\n") {
+			if isStructuredListItem(line) {
+				items++
+				if items >= 4 {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func extractionMessageText(msg model.Message) string {
+	parts := make([]string, 0, 1+len(msg.ContentParts))
+	if text := strings.TrimSpace(msg.Content); text != "" {
+		parts = append(parts, text)
+	}
+	for _, part := range msg.ContentParts {
+		if part.Type == model.ContentTypeText && part.Text != nil {
+			if text := strings.TrimSpace(*part.Text); text != "" {
+				parts = append(parts, text)
+			}
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
+func isStructuredListItem(line string) bool {
+	line = strings.TrimSpace(line)
+	for _, prefix := range []string{"- ", "* ", "+ ", "• "} {
+		if strings.HasPrefix(line, prefix) {
+			return true
+		}
+	}
+	i := 0
+	for i < len(line) && line[i] >= '0' && line[i] <= '9' {
+		i++
+	}
+	return i > 0 && i+1 < len(line) &&
+		(line[i] == '.' || line[i] == ')') && line[i+1] == ' '
 }
 
 // SetPrompt updates the extractor's prompt dynamically.

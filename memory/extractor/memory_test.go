@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -55,6 +56,33 @@ func (m *mockModel) Info() model.Info {
 
 type blockingModel struct {
 	name string
+}
+
+type sequenceModel struct {
+	responses [][]*model.Response
+	requests  []*model.Request
+}
+
+func (m *sequenceModel) GenerateContent(
+	_ context.Context,
+	request *model.Request,
+) (<-chan *model.Response, error) {
+	index := len(m.requests)
+	m.requests = append(m.requests, request)
+	var responses []*model.Response
+	if index < len(m.responses) {
+		responses = m.responses[index]
+	}
+	ch := make(chan *model.Response, len(responses))
+	for _, response := range responses {
+		ch <- response
+	}
+	close(ch)
+	return ch, nil
+}
+
+func (m *sequenceModel) Info() model.Info {
+	return model.Info{Name: "sequence-model"}
 }
 
 func (m *blockingModel) GenerateContent(
@@ -232,6 +260,65 @@ func TestExtractor_Extract_ResponseError(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "model error")
 	assert.Nil(t, ops)
+}
+
+func TestExtractor_Extract_RetriesEmptyStructuredAssistantOutput(t *testing.T) {
+	args, err := json.Marshal(map[string]any{
+		"memory":      "Recommended routes: River Loop, Cedar Ridge, Meadow View, and Eagle Peak.",
+		"memory_kind": "fact",
+	})
+	require.NoError(t, err)
+	m := &sequenceModel{responses: [][]*model.Response{
+		{{Choices: []model.Choice{{Message: model.NewAssistantMessage("No operations.")}}}},
+		{{Choices: []model.Choice{{Message: model.Message{ToolCalls: []model.ToolCall{
+			makeToolCall(memory.AddToolName, args),
+		}}}}}},
+	}}
+	e := NewExtractor(m)
+
+	ops, err := e.Extract(context.Background(), []model.Message{
+		model.NewUserMessage("Which routes should I consider?"),
+		model.NewAssistantMessage("- River Loop\n- Cedar Ridge\n- Meadow View\n- Eagle Peak"),
+	}, nil)
+
+	require.NoError(t, err)
+	require.Len(t, ops, 1)
+	require.Len(t, m.requests, 2)
+	assert.Contains(t, m.requests[1].Messages[0].Content, emptyStructuredOutputRetryPrompt)
+}
+
+func TestExtractor_Extract_DoesNotRetryUnstructuredEmptyOutput(t *testing.T) {
+	m := &mockModel{name: "test-model", responses: []*model.Response{
+		{Choices: []model.Choice{{Message: model.NewAssistantMessage("No operations.")}}},
+	}}
+	e := NewExtractor(m)
+
+	ops, err := e.Extract(context.Background(), []model.Message{
+		model.NewUserMessage("Thanks"),
+		model.NewAssistantMessage("You are welcome."),
+	}, nil)
+
+	require.NoError(t, err)
+	assert.Empty(t, ops)
+	assert.Equal(t, 1, m.called)
+}
+
+func TestHasStructuredAssistantOutput(t *testing.T) {
+	t.Parallel()
+
+	assert.True(t, hasStructuredAssistantOutput([]model.Message{
+		model.NewAssistantMessage("1. first\n2. second\n3. third\n4. fourth"),
+	}))
+	assert.True(t, hasStructuredAssistantOutput([]model.Message{
+		model.NewAssistantMessage("• first\n• second\n• third\n• fourth"),
+	}))
+	assert.False(t, hasStructuredAssistantOutput([]model.Message{
+		model.NewAssistantMessage("- first\n- second\n- third"),
+	}))
+	assert.False(t, hasStructuredAssistantOutput([]model.Message{
+		model.NewUserMessage("- first\n- second\n- third\n- fourth"),
+	}))
+	assert.True(t, strings.Contains(emptyStructuredOutputRetryPrompt, "role mappings"))
 }
 
 func TestExtractor_Extract_BeforeModelCallback_ModifiesRequest(t *testing.T) {
