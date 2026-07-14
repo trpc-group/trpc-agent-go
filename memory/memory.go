@@ -34,6 +34,9 @@ const (
 	// SessionStateKeyAutoMemoryLastExtractAt stores the last included event
 	// timestamp for auto memory extraction.
 	SessionStateKeyAutoMemoryLastExtractAt = "memory:last_extract_at"
+	// SessionStateKeyAutoMemoryLastError stores the most recent asynchronous
+	// extraction or persistence error. A new job clears the prior value.
+	SessionStateKeyAutoMemoryLastError = "memory:last_extract_error"
 	// SessionStateKeyMemoryMode stores session-scoped memory generation mode.
 	SessionStateKeyMemoryMode = "memory:mode"
 	// MemoryModePolluted means the session consumed external context and should

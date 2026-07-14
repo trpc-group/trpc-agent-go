@@ -11,6 +11,7 @@ package memory
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"maps"
@@ -310,6 +311,7 @@ func (w *AutoMemoryWorker) EnqueueJob(ctx context.Context, sess *session.Session
 		LatestTs: latestTs,
 		Messages: messages,
 	}
+	clearLastExtractError(sess)
 	if w.tryEnqueueJob(ctx, userKey, job) {
 		return nil
 	}
@@ -327,8 +329,10 @@ func (w *AutoMemoryWorker) EnqueueJob(ctx context.Context, sess *session.Session
 	syncCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
 	defer cancel()
 	if err := w.createAutoMemory(syncCtx, userKey, messages); err != nil {
+		writeLastExtractError(sess, err)
 		return err
 	}
+	clearLastExtractError(sess)
 	writeLastExtractAt(sess, latestTs)
 	return nil
 }
@@ -366,9 +370,16 @@ func (w *AutoMemoryWorker) tryEnqueueJob(
 func (w *AutoMemoryWorker) processJob(job *MemoryJob) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.ErrorfContext(context.Background(), log.PanicPrefix+" panic in memory worker: %v", r)
+			err := fmt.Errorf("panic in memory worker: %v", r)
+			log.ErrorfContext(context.Background(), log.PanicPrefix+" %v", err)
+			if job != nil {
+				writeLastExtractError(job.Session, err)
+			}
 		}
 	}()
+	if job == nil {
+		return
+	}
 	ctx := job.Ctx
 	if ctx == nil {
 		ctx = context.Background()
@@ -388,8 +399,10 @@ func (w *AutoMemoryWorker) processJob(job *MemoryJob) {
 	if err := w.createAutoMemory(ctx, job.UserKey, job.Messages); err != nil {
 		log.WarnfContext(ctx, "auto_memory: job failed for user %s/%s: %v",
 			job.UserKey.AppName, job.UserKey.UserID, err)
+		writeLastExtractError(job.Session, err)
 		return
 	}
+	clearLastExtractError(job.Session)
 	writeLastExtractAt(job.Session, job.LatestTs)
 }
 
@@ -438,11 +451,15 @@ func (w *AutoMemoryWorker) createAutoMemory(
 	ops = w.reconcileOps(ctx, userKey, ops)
 
 	// Execute operations.
-	for _, op := range ops {
-		w.executeOperation(ctx, userKey, op)
+	var operationErrs []error
+	for i, op := range ops {
+		if err := w.executeOperation(ctx, userKey, op); err != nil {
+			operationErrs = append(operationErrs,
+				fmt.Errorf("operation %d: %w", i, err))
+		}
 	}
 
-	return nil
+	return errors.Join(operationErrs...)
 }
 
 // searchRelevantMemories builds a query from the conversation messages
@@ -554,7 +571,10 @@ func (w *AutoMemoryWorker) executeOperation(
 	ctx context.Context,
 	userKey memory.UserKey,
 	op *extractor.Operation,
-) {
+) error {
+	if op == nil {
+		return errors.New("nil memory operation")
+	}
 	if et := w.config.EnabledTools; et != nil {
 		if name, ok := operationToolName[op.Type]; ok {
 			if _, enabled := et[name]; !enabled {
@@ -562,7 +582,7 @@ func (w *AutoMemoryWorker) executeOperation(
 					"auto_memory: skipping disabled %s "+
 						"operation for user %s/%s",
 					op.Type, userKey.AppName, userKey.UserID)
-				return
+				return nil
 			}
 		}
 	}
@@ -577,7 +597,9 @@ func (w *AutoMemoryWorker) executeOperation(
 				"auto_memory: add memory failed "+
 					"for user %s/%s: %v",
 				userKey.AppName, userKey.UserID, err)
+			return fmt.Errorf("add memory: %w", err)
 		}
+		return nil
 	case extractor.OperationUpdate:
 		memKey := memory.Key{
 			AppName:  userKey.AppName,
@@ -585,39 +607,44 @@ func (w *AutoMemoryWorker) executeOperation(
 			MemoryID: op.MemoryID,
 		}
 		ep := opToMetadata(op)
-		if err := w.operator.UpdateMemory(ctx, memKey,
+		err := w.operator.UpdateMemory(ctx, memKey,
 			op.Memory, op.Topics,
-			memory.WithUpdateMetadata(ep)); err != nil {
-			if isMemoryNotFoundError(err) {
-				if !w.isToolEnabled(memory.AddToolName) {
-					log.DebugfContext(ctx,
-						"auto_memory: update-not-found "+
-							"fallback skipped (add disabled)"+
-							" for user %s/%s, memory_id=%s",
-						userKey.AppName, userKey.UserID,
-						op.MemoryID)
-					return
-				}
-				if addErr := w.operator.AddMemory(
-					ctx, userKey, op.Memory, op.Topics,
-					memory.WithMetadata(ep),
-				); addErr != nil {
-					log.WarnfContext(ctx,
-						"auto_memory: update missing, "+
-							"add memory failed for user "+
-							"%s/%s, memory_id=%s: %v",
-						userKey.AppName, userKey.UserID,
-						op.MemoryID, addErr,
-					)
-				}
-				return
-			}
-			log.WarnfContext(ctx,
-				"auto_memory: update memory failed "+
-					"for user %s/%s, memory_id=%s: %v",
-				userKey.AppName, userKey.UserID,
-				op.MemoryID, err)
+			memory.WithUpdateMetadata(ep))
+		if err == nil {
+			return nil
 		}
+		if isMemoryNotFoundError(err) {
+			if !w.isToolEnabled(memory.AddToolName) {
+				log.DebugfContext(ctx,
+					"auto_memory: update-not-found "+
+						"fallback skipped (add disabled)"+
+						" for user %s/%s, memory_id=%s",
+					userKey.AppName, userKey.UserID,
+					op.MemoryID)
+				return nil
+			}
+			if addErr := w.operator.AddMemory(
+				ctx, userKey, op.Memory, op.Topics,
+				memory.WithMetadata(ep),
+			); addErr != nil {
+				log.WarnfContext(ctx,
+					"auto_memory: update missing, "+
+						"add memory failed for user "+
+						"%s/%s, memory_id=%s: %v",
+					userKey.AppName, userKey.UserID,
+					op.MemoryID, addErr,
+				)
+				return fmt.Errorf("update missing memory %s: add fallback: %w",
+					op.MemoryID, addErr)
+			}
+			return nil
+		}
+		log.WarnfContext(ctx,
+			"auto_memory: update memory failed "+
+				"for user %s/%s, memory_id=%s: %v",
+			userKey.AppName, userKey.UserID,
+			op.MemoryID, err)
+		return fmt.Errorf("update memory %s: %w", op.MemoryID, err)
 	case extractor.OperationDelete:
 		memKey := memory.Key{
 			AppName:  userKey.AppName,
@@ -627,15 +654,20 @@ func (w *AutoMemoryWorker) executeOperation(
 		if err := w.operator.DeleteMemory(ctx, memKey); err != nil {
 			log.WarnfContext(ctx, "auto_memory: delete memory failed for user %s/%s, memory_id=%s: %v",
 				userKey.AppName, userKey.UserID, op.MemoryID, err)
+			return fmt.Errorf("delete memory %s: %w", op.MemoryID, err)
 		}
+		return nil
 	case extractor.OperationClear:
 		if err := w.operator.ClearMemories(ctx, userKey); err != nil {
 			log.WarnfContext(ctx, "auto_memory: clear memories failed for user %s/%s: %v",
 				userKey.AppName, userKey.UserID, err)
+			return fmt.Errorf("clear memories: %w", err)
 		}
+		return nil
 	default:
 		log.WarnfContext(ctx, "auto_memory: unknown operation type '%s' for user %s/%s",
 			op.Type, userKey.AppName, userKey.UserID)
+		return nil
 	}
 }
 
@@ -681,8 +713,25 @@ func readLastExtractAt(sess *session.Session) time.Time {
 // writeLastExtractAt writes the last auto memory extraction timestamp to session state.
 // The timestamp represents the last included event's timestamp for incremental extraction.
 func writeLastExtractAt(sess *session.Session, ts time.Time) {
+	if sess == nil {
+		return
+	}
 	sess.SetState(memory.SessionStateKeyAutoMemoryLastExtractAt,
 		[]byte(ts.UTC().Format(time.RFC3339Nano)))
+}
+
+func writeLastExtractError(sess *session.Session, err error) {
+	if sess == nil || err == nil {
+		return
+	}
+	sess.SetState(memory.SessionStateKeyAutoMemoryLastError, []byte(err.Error()))
+}
+
+func clearLastExtractError(sess *session.Session) {
+	if sess == nil {
+		return
+	}
+	sess.DeleteState(memory.SessionStateKeyAutoMemoryLastError)
 }
 
 // scanDeltaSince scans session events since the given timestamp and extracts messages.

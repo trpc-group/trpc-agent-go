@@ -42,6 +42,7 @@ func appendSessionMessage(sess *session.Session, ts time.Time, msg model.Message
 type mockExtractor struct {
 	ops             []*extractor.Operation
 	err             error
+	panicValue      any
 	captureExisting func([]*memory.Entry)
 }
 
@@ -50,6 +51,9 @@ func (m *mockExtractor) Extract(
 	messages []model.Message,
 	existing []*memory.Entry,
 ) ([]*extractor.Operation, error) {
+	if m.panicValue != nil {
+		panic(m.panicValue)
+	}
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -381,11 +385,16 @@ func TestAutoMemoryWorker_EnqueueJob_SyncFallback(t *testing.T) {
 
 	sess := newTestSession("test-app", "user-1")
 	appendSessionMessage(sess, time.Now(), model.NewUserMessage("hello"))
+	sess.SetState(memory.SessionStateKeyAutoMemoryLastError, []byte("stale"))
 
 	err := worker.EnqueueJob(context.Background(), sess)
 
 	assert.NoError(t, err)
 	assert.Equal(t, 1, op.addCalls)
+	_, ok := sess.GetState(memory.SessionStateKeyAutoMemoryLastError)
+	assert.False(t, ok)
+	_, ok = sess.GetState(memory.SessionStateKeyAutoMemoryLastExtractAt)
+	assert.True(t, ok)
 }
 
 func TestAutoMemoryWorker_EnqueueJob_DisableOnExternalContext(t *testing.T) {
@@ -665,6 +674,25 @@ func TestAutoMemoryWorker_ExecuteOperation_Add(t *testing.T) {
 	assert.Equal(t, 1, op.addCalls)
 }
 
+func TestAutoMemoryWorker_CreateAutoMemory_OperationErrors(t *testing.T) {
+	ext := &mockExtractor{ops: []*extractor.Operation{
+		{Type: extractor.OperationAdd, Memory: "Test memory."},
+		{Type: extractor.OperationClear},
+	}}
+	op := newMockOperator()
+	op.addErr = errors.New("add error")
+	op.clearErr = errors.New("clear error")
+	worker := NewAutoMemoryWorker(AutoMemoryConfig{Extractor: ext}, op)
+
+	err := worker.createAutoMemory(
+		context.Background(),
+		memory.UserKey{AppName: "test-app", UserID: "user-1"},
+		[]model.Message{model.NewUserMessage("hello")},
+	)
+	require.ErrorContains(t, err, "add error")
+	require.ErrorContains(t, err, "clear error")
+}
+
 func TestAutoMemoryWorker_ExecuteOperation_Update(t *testing.T) {
 	op := newMockOperator()
 	worker := &AutoMemoryWorker{operator: op}
@@ -719,14 +747,14 @@ func TestAutoMemoryWorker_ExecuteOperation_Errors(t *testing.T) {
 		op.addErr = errors.New("add error")
 		worker := &AutoMemoryWorker{operator: op}
 
-		// Should not panic.
-		worker.executeOperation(context.Background(), memory.UserKey{
+		err := worker.executeOperation(context.Background(), memory.UserKey{
 			AppName: "test-app",
 			UserID:  "user-1",
 		}, &extractor.Operation{
 			Type:   extractor.OperationAdd,
 			Memory: "Test memory.",
 		})
+		require.ErrorContains(t, err, "add error")
 	})
 
 	t.Run("update error", func(t *testing.T) {
@@ -734,8 +762,7 @@ func TestAutoMemoryWorker_ExecuteOperation_Errors(t *testing.T) {
 		op.updateErr = errors.New("update error")
 		worker := &AutoMemoryWorker{operator: op}
 
-		// Should not panic.
-		worker.executeOperation(context.Background(), memory.UserKey{
+		err := worker.executeOperation(context.Background(), memory.UserKey{
 			AppName: "test-app",
 			UserID:  "user-1",
 		}, &extractor.Operation{
@@ -743,6 +770,7 @@ func TestAutoMemoryWorker_ExecuteOperation_Errors(t *testing.T) {
 			MemoryID: "mem-123",
 			Memory:   "Updated memory.",
 		})
+		require.ErrorContains(t, err, "update error")
 	})
 
 	t.Run("delete error", func(t *testing.T) {
@@ -750,14 +778,26 @@ func TestAutoMemoryWorker_ExecuteOperation_Errors(t *testing.T) {
 		op.deleteErr = errors.New("delete error")
 		worker := &AutoMemoryWorker{operator: op}
 
-		// Should not panic.
-		worker.executeOperation(context.Background(), memory.UserKey{
+		err := worker.executeOperation(context.Background(), memory.UserKey{
 			AppName: "test-app",
 			UserID:  "user-1",
 		}, &extractor.Operation{
 			Type:     extractor.OperationDelete,
 			MemoryID: "mem-456",
 		})
+		require.ErrorContains(t, err, "delete error")
+	})
+
+	t.Run("clear error", func(t *testing.T) {
+		op := newMockOperator()
+		op.clearErr = errors.New("clear error")
+		worker := &AutoMemoryWorker{operator: op}
+
+		err := worker.executeOperation(context.Background(), memory.UserKey{
+			AppName: "test-app",
+			UserID:  "user-1",
+		}, &extractor.Operation{Type: extractor.OperationClear})
+		require.ErrorContains(t, err, "clear error")
 	})
 }
 
@@ -942,6 +982,11 @@ func TestAutoMemoryWorker_ProcessJob_DefaultTimeout(t *testing.T) {
 	})
 
 	assert.Equal(t, 1, op.addCalls)
+}
+
+func TestAutoMemoryWorker_ProcessJob_NilJob(t *testing.T) {
+	worker := NewAutoMemoryWorker(AutoMemoryConfig{}, newMockOperator())
+	worker.processJob(nil)
 }
 
 func TestAutoMemoryWorker_TryEnqueueJob_CancelledContext(t *testing.T) {
@@ -1330,6 +1375,9 @@ func TestAutoMemoryWorker_EnqueueJob_SyncFallback_Error(t *testing.T) {
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "extract failed")
+	raw, ok := sess.GetState(memory.SessionStateKeyAutoMemoryLastError)
+	require.True(t, ok)
+	assert.Contains(t, string(raw), "extract failed")
 }
 
 func TestAutoMemoryWorker_ProcessJob_CreateAutoMemoryError(t *testing.T) {
@@ -1358,6 +1406,76 @@ func TestAutoMemoryWorker_ProcessJob_CreateAutoMemoryError(t *testing.T) {
 
 	// lastExtractAt should NOT be written on failure.
 	_, ok := sess.GetState(memory.SessionStateKeyAutoMemoryLastExtractAt)
+	assert.False(t, ok)
+	raw, ok := sess.GetState(memory.SessionStateKeyAutoMemoryLastError)
+	require.True(t, ok)
+	assert.Contains(t, string(raw), "extract failed")
+}
+
+func TestAutoMemoryWorker_ProcessJob_PersistenceError(t *testing.T) {
+	ext := &mockExtractor{ops: []*extractor.Operation{{
+		Type:   extractor.OperationAdd,
+		Memory: "Test memory.",
+	}}}
+	op := newMockOperator()
+	op.addErr = errors.New("embedding failed")
+	worker := NewAutoMemoryWorker(AutoMemoryConfig{
+		Extractor:        ext,
+		MemoryJobTimeout: time.Second,
+	}, op)
+	sess := newTestSession("test-app", "user-1")
+
+	worker.processJob(&MemoryJob{
+		Ctx:      context.Background(),
+		UserKey:  memory.UserKey{AppName: "test-app", UserID: "user-1"},
+		Session:  sess,
+		LatestTs: time.Now(),
+		Messages: []model.Message{model.NewUserMessage("hello")},
+	})
+
+	_, ok := sess.GetState(memory.SessionStateKeyAutoMemoryLastExtractAt)
+	assert.False(t, ok)
+	raw, ok := sess.GetState(memory.SessionStateKeyAutoMemoryLastError)
+	require.True(t, ok)
+	assert.Contains(t, string(raw), "embedding failed")
+}
+
+func TestAutoMemoryWorker_ProcessJob_PanicRecordsError(t *testing.T) {
+	worker := NewAutoMemoryWorker(AutoMemoryConfig{
+		Extractor:        &mockExtractor{panicValue: "extractor panic"},
+		MemoryJobTimeout: time.Second,
+	}, newMockOperator())
+	sess := newTestSession("test-app", "user-1")
+
+	worker.processJob(&MemoryJob{
+		Ctx:      context.Background(),
+		UserKey:  memory.UserKey{AppName: "test-app", UserID: "user-1"},
+		Session:  sess,
+		LatestTs: time.Now(),
+		Messages: []model.Message{model.NewUserMessage("hello")},
+	})
+
+	raw, ok := sess.GetState(memory.SessionStateKeyAutoMemoryLastError)
+	require.True(t, ok)
+	assert.Contains(t, string(raw), "extractor panic")
+}
+
+func TestLastExtractErrorState(t *testing.T) {
+	writeLastExtractError(nil, errors.New("ignored"))
+	clearLastExtractError(nil)
+
+	sess := newTestSession("test-app", "user-1")
+	writeLastExtractError(sess, nil)
+	_, ok := sess.GetState(memory.SessionStateKeyAutoMemoryLastError)
+	assert.False(t, ok)
+
+	writeLastExtractError(sess, errors.New("persist failed"))
+	raw, ok := sess.GetState(memory.SessionStateKeyAutoMemoryLastError)
+	require.True(t, ok)
+	assert.Equal(t, "persist failed", string(raw))
+
+	clearLastExtractError(sess)
+	_, ok = sess.GetState(memory.SessionStateKeyAutoMemoryLastError)
 	assert.False(t, ok)
 }
 
