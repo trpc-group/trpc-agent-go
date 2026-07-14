@@ -544,7 +544,7 @@ func Run(ctx context.Context, opts Options) (result Result, err error) {
 		return Result{}, failTask(err)
 	}
 	if err := st.FinishTask(ctx, task.ID, task.Status, "", finishedAt); err != nil {
-		return Result{}, err
+		return Result{}, failTask(err)
 	}
 	return Result{
 		TaskID:       task.ID,
