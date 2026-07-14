@@ -16,17 +16,22 @@ import (
 
 // FixedSizeChunking implements a chunking strategy that splits text into fixed-size chunks.
 type FixedSizeChunking struct {
-	chunkSize int
-	overlap   int
+	chunkSize  int
+	overlap    int
+	overlapSet bool
 }
 
 // Option represents a functional option for configuring FixedSizeChunking.
 type Option func(*FixedSizeChunking)
 
 // WithChunkSize sets the maximum size of each chunk in characters.
+// A custom chunk size does not inherit the default overlap unless WithOverlap is also provided.
 func WithChunkSize(size int) Option {
 	return func(fsc *FixedSizeChunking) {
 		fsc.chunkSize = size
+		if !fsc.overlapSet {
+			fsc.overlap = 0
+		}
 	}
 }
 
@@ -34,6 +39,7 @@ func WithChunkSize(size int) Option {
 func WithOverlap(overlap int) Option {
 	return func(fsc *FixedSizeChunking) {
 		fsc.overlap = overlap
+		fsc.overlapSet = true
 	}
 }
 

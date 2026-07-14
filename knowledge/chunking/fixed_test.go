@@ -156,3 +156,17 @@ func TestFixedSizeChunking_WithoutOverlapUnchanged(t *testing.T) {
 		chunks[2].Content,
 	})
 }
+
+func TestFixedSizeChunking_CustomSizeWithoutOverlap(t *testing.T) {
+	doc := &document.Document{ID: "custom-size", Content: "abcdefghijklmnopqrstuvwxyz"}
+	fsc := NewFixedSizeChunking(WithChunkSize(10))
+
+	chunks, err := fsc.Chunk(doc)
+	require.NoError(t, err)
+	require.Zero(t, fsc.overlap)
+	require.Equal(t, []string{"abcdefghij", "klmnopqrst", "uvwxyz"}, []string{
+		chunks[0].Content,
+		chunks[1].Content,
+		chunks[2].Content,
+	})
+}
