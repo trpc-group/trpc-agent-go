@@ -387,6 +387,30 @@ func (p *Plugin) callToolFn(ctx context.Context, input callToolInput) (any, erro
 
 	callable, ok := target.(tool.CallableTool)
 	if !ok {
+		// Fall back to StreamableTool: it is an independent framework interface
+		// (does not embed CallableTool), so a tool that only streams is still a
+		// valid deferred tool. Aggregate the stream into a single envelope so
+		// call_tool — which speaks the CallableTool contract — can return a
+		// one-shot value. Order is preserved via the "chunks" slice.
+		if streamable, isStream := target.(tool.StreamableTool); isStream {
+			params := input.Params
+			if params == nil {
+				params = map[string]any{}
+			}
+			rawArgs, err := json.Marshal(params)
+			if err != nil {
+				return map[string]any{
+					"status":  "error",
+					"message": fmt.Sprintf("Failed to encode params: %v", err),
+				}, nil
+			}
+			log.InfofContext(ctx, "[%s] call_tool aggregating stream from %s", p.name, canonical)
+			result, err := aggregateStream(ctx, streamable, rawArgs)
+			if err != nil {
+				return nil, err
+			}
+			return result, nil
+		}
 		return map[string]any{
 			"status":  "error",
 			"message": fmt.Sprintf("Tool %q is not callable.", canonical),

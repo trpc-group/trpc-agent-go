@@ -14,7 +14,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"strings"
+	"sync"
 
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -46,6 +48,12 @@ type MCPToolbox struct {
 type mcpSource struct {
 	serverName string
 	toolSet    tool.ToolSet
+	// listMu serializes list-and-apply for this namespace so two concurrent
+	// refreshes cannot commit their snapshots in reverse order. Without it, a
+	// slow request holding an older server view could acquire p.mu after a
+	// newer request and restore removed tools or overwrite a newer declaration
+	// and fingerprint.
+	listMu sync.Mutex
 	// Fingerprint by renamed tool name; used to forget embeddings only on
 	// declaration change/removal.
 	fingerprints map[string]string
@@ -107,6 +115,14 @@ func (p *Plugin) ensureMCPListed(ctx context.Context, box *toolboxIndex) {
 	if !box.isMCP() {
 		return
 	}
+
+	// Serialize list-and-apply per namespace so concurrent refreshes cannot
+	// commit their snapshots in reverse order. The list call and the index
+	// mutation are treated as one atomic unit here; the write to p.mu happens
+	// inside, and any embedding-store forget also runs before this returns so
+	// a later refresh always observes the previous one's final state.
+	box.mcp.listMu.Lock()
+	defer box.mcp.listMu.Unlock()
 
 	tools := box.mcp.toolSet.Tools(ctx)
 	if len(tools) == 0 {
@@ -331,10 +347,17 @@ func (t *renamedTool) Declaration() *tool.Declaration {
 // Original returns the wrapped tool so framework unwrapping can reach it.
 func (t *renamedTool) Original() tool.Tool { return t.original }
 
-// Call delegates to the original tool.
+// Call delegates to the original tool. If the original tool is only a
+// StreamableTool (not a CallableTool), the stream is drained and its chunks
+// are aggregated so the caller — typically the dispatch-mode call_tool, which
+// speaks the CallableTool contract — still gets a well-formed result. Stream
+// errors are surfaced as the Call error.
 func (t *renamedTool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
 	if callable, ok := t.original.(tool.CallableTool); ok {
 		return callable.Call(ctx, jsonArgs)
+	}
+	if streamable, ok := t.original.(tool.StreamableTool); ok {
+		return aggregateStream(ctx, streamable, jsonArgs)
 	}
 	return nil, errors.New("tool is not callable")
 }
@@ -355,4 +378,34 @@ func (t *renamedTool) ToolMetadata() tool.ToolMetadata {
 // StreamableCall delegates to the original streamable tool.
 func (t *streamableRenamedTool) StreamableCall(ctx context.Context, jsonArgs []byte) (*tool.StreamReader, error) {
 	return t.streamable.StreamableCall(ctx, jsonArgs)
+}
+
+// aggregateStream drains a StreamableTool into a single result envelope. It
+// exists because CallableTool consumers (notably dispatch mode's call_tool)
+// need a one-shot value even when the underlying tool only streams. The
+// aggregated shape preserves per-chunk content order in a "chunks" slice so
+// the model can still reason about the sequence; termination is signalled by
+// the natural end of iteration (io.EOF) rather than an explicit event.
+func aggregateStream(ctx context.Context, st tool.StreamableTool, jsonArgs []byte) (any, error) {
+	reader, err := st.StreamableCall(ctx, jsonArgs)
+	if err != nil {
+		return nil, err
+	}
+	defer reader.Close()
+
+	chunks := make([]any, 0, 4)
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		chunk, err := reader.Recv()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		chunks = append(chunks, chunk.Content)
+	}
+	return map[string]any{"chunks": chunks}, nil
 }

@@ -13,6 +13,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -935,4 +936,191 @@ func TestMCPToolbox_ConcurrentRefreshAndSearch(t *testing.T) {
 			"indexed entry %q@%s must remain authoritative in the Plugin index",
 			name, fp)
 	}
+}
+
+// streamOnlyTool is a Tool that implements StreamableTool but not CallableTool,
+// used to verify the dispatch-mode call_tool / rename-wrapper Call contract for
+// tools that only speak the streaming interface.
+type streamOnlyTool struct {
+	name   string
+	desc   string
+	chunks []string
+}
+
+func (s *streamOnlyTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{
+		Name:        s.name,
+		Description: s.desc,
+		InputSchema: &tool.Schema{Type: "object"},
+	}
+}
+
+func (s *streamOnlyTool) StreamableCall(ctx context.Context, jsonArgs []byte) (*tool.StreamReader, error) {
+	stream := tool.NewStream(len(s.chunks) + 1)
+	go func() {
+		defer stream.Writer.Close()
+		for _, c := range s.chunks {
+			stream.Writer.Send(tool.StreamChunk{Content: c}, nil)
+		}
+	}()
+	return stream.Reader, nil
+}
+
+// TestMCPRenamedTool_StreamOnlyCallAggregates verifies that Call on a renamed
+// wrapper whose underlying tool is StreamableTool-only drains the stream and
+// aggregates chunks in order — instead of returning "tool is not callable".
+// StreamableTool is an independent framework interface, so a stream-only tool
+// stays a first-class deferred tool.
+func TestMCPRenamedTool_StreamOnlyCallAggregates(t *testing.T) {
+	orig := &streamOnlyTool{name: "stream_it", desc: "d", chunks: []string{"a", "b", "c"}}
+	renamed := newRenamedTool(orig, "svc")
+	// Sanity: the wrapper must not skip streaming for a genuinely streaming tool.
+	_, isStream := renamed.(tool.StreamableTool)
+	require.True(t, isStream, "renamed wrapper must expose StreamableTool for a streaming original")
+
+	callable, ok := renamed.(tool.CallableTool)
+	require.True(t, ok, "renamed wrapper must always expose CallableTool")
+
+	res, err := callable.Call(context.Background(), []byte(`{}`))
+	require.NoError(t, err)
+	envelope, ok := res.(map[string]any)
+	require.True(t, ok, "aggregated stream must be map envelope, got %T", res)
+	chunks, ok := envelope["chunks"].([]any)
+	require.True(t, ok, "aggregated envelope must carry chunks slice, got %T", envelope["chunks"])
+	assert.Equal(t, []any{"a", "b", "c"}, chunks, "chunk order must be preserved")
+}
+
+// TestPlugin_CallToolFn_StreamOnlyToolInDispatchMode verifies that in
+// DispatchToolCalls mode, call_tool can invoke a deferred tool that only
+// implements StreamableTool. Without stream support, dispatch mode would reject
+// the tool as "not callable" — a regression from NativeToolCalls, where the
+// framework routes streaming tools through their StreamableCall path.
+func TestPlugin_CallToolFn_StreamOnlyToolInDispatchMode(t *testing.T) {
+	streamTool := &streamOnlyTool{name: "stream_it", desc: "d", chunks: []string{"x", "y"}}
+	p := New(nil,
+		WithInvocationMode(DispatchToolCalls),
+		WithDeferredTools([]tool.Tool{streamTool}),
+	)
+	ctx, inv := ctxWithInvocation()
+
+	// Load the tool via tool_search so the loaded-set guard passes.
+	p.appendDiscoveredTools(ctx, inv, []string{"stream_it"})
+
+	res, err := p.callToolFn(ctx, callToolInput{ToolName: "stream_it", Params: map[string]any{}})
+	require.NoError(t, err)
+	envelope, ok := res.(map[string]any)
+	require.True(t, ok, "call_tool must return aggregated envelope for stream-only tool, got %T", res)
+	chunks, ok := envelope["chunks"].([]any)
+	require.True(t, ok, "envelope must carry chunks slice")
+	assert.Equal(t, []any{"x", "y"}, chunks, "stream order must be preserved through call_tool")
+	// No error status should be reported for the stream-only path.
+	if status, ok := envelope["status"].(string); ok {
+		assert.NotEqual(t, "error", status, "stream-only tool must not be treated as not callable")
+	}
+}
+
+// blockingToolSet is a fake ToolSet whose Tools() call is gated on a per-call
+// release channel, so a test can control the interleaving of concurrent
+// refreshes on the same MCP namespace.
+type blockingToolSet struct {
+	name    string
+	mu      sync.Mutex
+	queue   []releaseStep // FIFO of listings this ToolSet will serve
+	entered chan struct{} // signals when a call entered Tools()
+}
+
+// releaseStep parameterizes a single Tools() call.
+type releaseStep struct {
+	release chan struct{} // caller unblocks Tools() by closing this
+	tools   []tool.Tool   // what to return after unblocking
+}
+
+func (b *blockingToolSet) Name() string { return b.name }
+func (b *blockingToolSet) Close() error { return nil }
+func (b *blockingToolSet) Tools(context.Context) []tool.Tool {
+	b.mu.Lock()
+	if len(b.queue) == 0 {
+		b.mu.Unlock()
+		return nil
+	}
+	step := b.queue[0]
+	b.queue = b.queue[1:]
+	b.mu.Unlock()
+	if b.entered != nil {
+		b.entered <- struct{}{}
+	}
+	<-step.release
+	// Copy so a concurrent test mutation cannot race iteration downstream.
+	out := make([]tool.Tool, len(step.tools))
+	copy(out, step.tools)
+	return out
+}
+
+// TestMCPToolbox_SerializeRefreshesPerNamespace verifies that two concurrent
+// refreshes on the same MCP namespace apply atomically and in the order the
+// listMu is granted, so an older listing released later than a newer one can
+// never overtake the newer commit. Without per-namespace serialization, the
+// slower listing could acquire p.mu after the faster one and restore removed
+// tools or overwrite a newer declaration.
+//
+// This test releases the FIRST listing first (natural FIFO), so its refresh
+// commits first; the SECOND listing then commits and its snapshot must be the
+// final visible state. If serialization were broken and the two applies
+// interleaved, the final state could contain tools from both snapshots.
+func TestMCPToolbox_SerializeRefreshesPerNamespace(t *testing.T) {
+	oldTool := newTestTool("old_forecast", "old")
+	newTool := newTestTool("new_forecast", "new")
+
+	firstRelease := make(chan struct{})
+	secondRelease := make(chan struct{})
+	ts := &blockingToolSet{
+		name:    "weather",
+		entered: make(chan struct{}, 2),
+		queue: []releaseStep{
+			{release: firstRelease, tools: []tool.Tool{oldTool}},
+			{release: secondRelease, tools: []tool.Tool{newTool}},
+		},
+	}
+
+	p := New(nil, WithMCPToolboxes([]MCPToolbox{
+		{ServerName: "weather", ToolSet: ts},
+	}))
+	ctx, _ := ctxWithInvocation()
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); p.materializeAllMCP(ctx) }()
+
+	// Wait for the first call to enter Tools() so the ordering is deterministic.
+	select {
+	case <-ts.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first Tools() never entered")
+	}
+	go func() { defer wg.Done(); p.materializeAllMCP(ctx) }()
+
+	// Release both listings; the second refresh holds behind listMu until the
+	// first fully applies, so the second snapshot is guaranteed to be the
+	// final visible state.
+	close(firstRelease)
+	// Wait for the second call to enter Tools() as well before releasing it,
+	// so both refreshes are truly in-flight.
+	select {
+	case <-ts.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("second Tools() never entered")
+	}
+	close(secondRelease)
+	wg.Wait()
+
+	// Atomic apply invariant: the two snapshots must NOT mix. And because the
+	// second refresh commits after the first (serialized), the final state
+	// must be exactly the newer snapshot.
+	p.mu.RLock()
+	_, hasOld := p.deferredNames["mcp__weather__old_forecast"]
+	_, hasNew := p.deferredNames["mcp__weather__new_forecast"]
+	p.mu.RUnlock()
+	assert.False(t, hasOld && hasNew, "concurrent MCP refreshes must not produce a mixed state")
+	assert.True(t, hasNew, "final state must reflect the newer snapshot after serialized apply")
+	assert.False(t, hasOld, "older snapshot must not persist after the newer one commits")
 }
