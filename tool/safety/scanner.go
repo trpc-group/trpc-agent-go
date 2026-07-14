@@ -10,9 +10,11 @@ package safety
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/url"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -551,7 +553,34 @@ func (s *DefaultScanner) scanCode(req ScanRequest) []Finding {
 }
 
 func (s *DefaultScanner) scanUnknownArguments(req ScanRequest) []Finding {
-	return s.scanTextForUnknownRisk(req, string(req.RawArguments))
+	rawFindings := s.scanTextForUnknownRisk(req, string(req.RawArguments))
+	var decoded any
+	if err := json.Unmarshal(req.RawArguments, &decoded); err != nil {
+		return rawFindings
+	}
+	findings := append(rawFindings, s.scanDecodedUnknownArguments(req, decoded)...)
+	return dedupeFindings(findings)
+}
+
+func (s *DefaultScanner) scanDecodedUnknownArguments(req ScanRequest, value any) []Finding {
+	switch v := value.(type) {
+	case string:
+		return s.scanTextForUnknownRisk(req, v)
+	case []any:
+		var findings []Finding
+		for _, item := range v {
+			findings = append(findings, s.scanDecodedUnknownArguments(req, item)...)
+		}
+		return findings
+	case map[string]any:
+		var findings []Finding
+		for _, item := range v {
+			findings = append(findings, s.scanDecodedUnknownArguments(req, item)...)
+		}
+		return findings
+	default:
+		return nil
+	}
 }
 
 func (s *DefaultScanner) scanTextForUnknownRisk(req ScanRequest, text string) []Finding {
@@ -752,20 +781,17 @@ func normalizeCommand(cmd string) string {
 }
 
 func sensitivePathMatch(arg, denied string) bool {
-	arg = strings.Trim(strings.TrimSpace(arg), `"'`)
-	arg = strings.ReplaceAll(arg, "\\", "/")
-	denied = strings.ReplaceAll(strings.TrimSpace(denied), "\\", "/")
-	if denied == "" || arg == "" {
+	if strings.TrimSpace(arg) == "" || strings.TrimSpace(denied) == "" {
 		return false
 	}
-	argLower := strings.ToLower(arg)
-	deniedLower := strings.ToLower(denied)
-	if strings.Contains(argLower, deniedLower) {
-		return true
-	}
-	if strings.HasPrefix(deniedLower, "~/") &&
-		strings.Contains(argLower, strings.TrimPrefix(deniedLower, "~/")) {
-		return true
+	deniedNeedles := sensitivePathNeedles(denied)
+	for _, candidate := range sensitivePathCandidates(arg) {
+		candidateLower := strings.ToLower(candidate)
+		for _, deniedNeedle := range deniedNeedles {
+			if deniedNeedle != "" && strings.Contains(candidateLower, deniedNeedle) {
+				return true
+			}
+		}
 	}
 	return false
 }
@@ -1006,7 +1032,187 @@ func redactSensitivePath(text, denied string) string {
 		trimmed := strings.TrimPrefix(slashed, "~/")
 		out = replaceFold(out, trimmed, "<redacted>")
 	}
+	out = redactNormalizedSensitiveTokens(out, denied)
 	return out
+}
+
+func redactNormalizedSensitiveTokens(text, denied string) string {
+	needles := sensitivePathNeedles(denied)
+	if len(needles) == 0 {
+		return text
+	}
+	var b strings.Builder
+	start := 0
+	for _, span := range sensitiveTokenSpans(text) {
+		b.WriteString(text[start:span[0]])
+		token := text[span[0]:span[1]]
+		redacted, ok := redactSensitiveToken(token, needles)
+		if ok {
+			b.WriteString(redacted)
+		} else {
+			b.WriteString(token)
+		}
+		start = span[1]
+	}
+	b.WriteString(text[start:])
+	return b.String()
+}
+
+func redactSensitiveToken(token string, deniedNeedles []string) (string, bool) {
+	candidates := []struct {
+		text  string
+		start int
+		end   int
+	}{
+		{text: token, start: 0, end: len(token)},
+	}
+	if idx := strings.Index(token, "="); idx >= 0 && idx+1 < len(token) {
+		candidates = append(candidates, struct {
+			text  string
+			start int
+			end   int
+		}{
+			text:  token[idx+1:],
+			start: idx + 1,
+			end:   len(token),
+		})
+	}
+	for _, candidate := range candidates {
+		for _, normalized := range sensitivePathCandidates(candidate.text) {
+			lower := strings.ToLower(normalized)
+			for _, deniedNeedle := range deniedNeedles {
+				if deniedNeedle != "" && strings.Contains(lower, deniedNeedle) {
+					return token[:candidate.start] + "<redacted>" + token[candidate.end:], true
+				}
+			}
+		}
+	}
+	return token, false
+}
+
+func sensitivePathNeedles(denied string) []string {
+	var needles []string
+	add := func(value string) {
+		value = strings.ToLower(strings.TrimSpace(value))
+		if value == "" {
+			return
+		}
+		for _, existing := range needles {
+			if existing == value {
+				return
+			}
+		}
+		needles = append(needles, value)
+	}
+	raw := slashNormalizedPathText(denied)
+	add(raw)
+	add(normalizePathForMatch(raw))
+	if strings.HasPrefix(raw, "~/") {
+		add(strings.TrimPrefix(raw, "~/"))
+	}
+	normalized := normalizePathForMatch(raw)
+	if strings.HasPrefix(normalized, "~/") {
+		add(strings.TrimPrefix(normalized, "~/"))
+	}
+	return needles
+}
+
+func sensitivePathCandidates(text string) []string {
+	base := slashNormalizedPathText(text)
+	if base == "" {
+		return nil
+	}
+	var candidates []string
+	add := func(value string) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		for _, existing := range candidates {
+			if existing == value {
+				return
+			}
+		}
+		candidates = append(candidates, value)
+	}
+	add(base)
+	if isPathLikeCandidate(base) {
+		add(normalizePathForMatch(base))
+	}
+	if looksFreeFormText(base) {
+		for _, span := range sensitiveTokenSpans(base) {
+			token := base[span[0]:span[1]]
+			add(token)
+			if idx := strings.Index(token, "="); idx >= 0 && idx+1 < len(token) {
+				token = token[idx+1:]
+				add(token)
+			}
+			if isPathLikeCandidate(token) {
+				add(normalizePathForMatch(token))
+			}
+		}
+	}
+	return candidates
+}
+
+func slashNormalizedPathText(text string) string {
+	return strings.ReplaceAll(strings.Trim(strings.TrimSpace(text), `"'`), "\\", "/")
+}
+
+func normalizePathForMatch(value string) string {
+	value = slashNormalizedPathText(value)
+	if value == "" {
+		return ""
+	}
+	switch {
+	case strings.HasPrefix(value, "~/"):
+		return "~/" + strings.TrimPrefix(path.Clean("/"+strings.TrimPrefix(value, "~/")), "/")
+	case strings.HasPrefix(value, "/"):
+		return path.Clean(value)
+	case len(value) >= 3 && value[1] == ':' && value[2] == '/':
+		return value[:2] + path.Clean(value[2:])
+	default:
+		return path.Clean(value)
+	}
+}
+
+func isPathLikeCandidate(value string) bool {
+	if value == "" || strings.ContainsAny(value, "\r\n\t ") {
+		return false
+	}
+	return strings.ContainsAny(value, `/\`) ||
+		strings.HasPrefix(value, "~") ||
+		strings.HasPrefix(value, ".")
+}
+
+func looksFreeFormText(value string) bool {
+	return strings.ContainsAny(value, "\r\n\t ") ||
+		strings.ContainsAny(value, "|&;()[]{}<>,")
+}
+
+func sensitiveTokenSpans(text string) [][2]int {
+	var spans [][2]int
+	start := -1
+	for i, r := range text {
+		if isSensitiveTokenSeparator(r) {
+			if start >= 0 {
+				spans = append(spans, [2]int{start, i})
+				start = -1
+			}
+			continue
+		}
+		if start < 0 {
+			start = i
+		}
+	}
+	if start >= 0 {
+		spans = append(spans, [2]int{start, len(text)})
+	}
+	return spans
+}
+
+func isSensitiveTokenSeparator(r rune) bool {
+	return unicode.IsSpace(r) || strings.ContainsRune(`|&;()[]{}<>,`, r)
 }
 
 func replaceFold(s, old, new string) string {
@@ -1028,6 +1234,27 @@ func replaceFold(s, old, new string) string {
 		s = s[cut:]
 		lower = lower[cut:]
 	}
+}
+
+func dedupeFindings(findings []Finding) []Finding {
+	seen := make(map[string]struct{}, len(findings))
+	out := make([]Finding, 0, len(findings))
+	for _, finding := range findings {
+		key := strings.Join([]string{
+			finding.RuleID,
+			string(finding.RiskLevel),
+			string(finding.Decision),
+			finding.Evidence,
+			finding.Recommendation,
+			strconv.FormatBool(finding.Redacted),
+		}, "\x00")
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, finding)
+	}
+	return out
 }
 
 var dangerousCommandTextSubstrings = []string{

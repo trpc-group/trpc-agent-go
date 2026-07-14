@@ -613,6 +613,88 @@ func TestDefaultScanner_NetworkAndCodeEdges(t *testing.T) {
 	})
 }
 
+func TestDefaultScanner_UnknownArgumentsAndSensitivePathRegressions(t *testing.T) {
+	scanner := MustDefaultScanner(Policy{})
+
+	t.Run("unknown arguments decode escaped dangerous command", func(t *testing.T) {
+		report, err := scanner.Scan(context.Background(), ScanRequest{
+			ToolName:     "mcp_call",
+			Backend:      BackendUnknown,
+			RawArguments: []byte(`{"command":"rm\u0020-rf\u0020/"}`),
+		})
+		require.NoError(t, err)
+		require.Equal(t, DecisionNeedsHumanReview, report.Decision)
+		require.Equal(t, "unknown.dangerous_command", report.RuleID)
+	})
+
+	t.Run("unknown arguments decode escaped URL and sensitive path", func(t *testing.T) {
+		urlReport, err := scanner.Scan(context.Background(), ScanRequest{
+			ToolName:     "mcp_call",
+			Backend:      BackendUnknown,
+			RawArguments: []byte(`{"url":"https:\/\/evil.example\/a.sh"}`),
+		})
+		require.NoError(t, err)
+		require.Equal(t, DecisionNeedsHumanReview, urlReport.Decision)
+		require.Equal(t, "unknown.requires_review", urlReport.RuleID)
+
+		pathReport, err := scanner.Scan(context.Background(), ScanRequest{
+			ToolName:     "mcp_call",
+			Backend:      BackendUnknown,
+			RawArguments: []byte(`{"path":"\/etc\/passwd"}`),
+		})
+		require.NoError(t, err)
+		require.Equal(t, DecisionNeedsHumanReview, pathReport.Decision)
+		require.Equal(t, "unknown.sensitive_path", pathReport.RuleID)
+		require.True(t, pathReport.Redacted)
+	})
+
+	t.Run("normalized sensitive paths are denied", func(t *testing.T) {
+		for _, command := range []string{
+			"cat /etc/./passwd",
+			"cat /etc//passwd",
+		} {
+			report, err := scanner.Scan(context.Background(), ScanRequest{
+				ToolName: "workspace_exec",
+				Backend:  BackendWorkspace,
+				Command:  command,
+			})
+			require.NoError(t, err)
+			require.Equal(t, DecisionDeny, report.Decision)
+			require.Equal(t, "path.sensitive_credentials", report.RuleID)
+			require.True(t, report.Redacted)
+		}
+	})
+
+	t.Run("cwd traversal is normalized before matching denied paths", func(t *testing.T) {
+		report, err := scanner.Scan(context.Background(), ScanRequest{
+			ToolName: "workspace_exec",
+			Backend:  BackendWorkspace,
+			Command:  "cat ../../etc/passwd",
+			Cwd:      "/tmp/work",
+		})
+		require.NoError(t, err)
+		require.Equal(t, DecisionDeny, report.Decision)
+		require.Equal(t, "path.sensitive_credentials", report.RuleID)
+		require.True(t, report.Redacted)
+	})
+
+	t.Run("report redaction covers normalized equivalent spellings", func(t *testing.T) {
+		report, err := scanner.Scan(context.Background(), ScanRequest{
+			ToolName: "workspace_exec",
+			Backend:  BackendWorkspace,
+			Command:  "cat /etc/./passwd && cat /etc//passwd",
+		})
+		require.NoError(t, err)
+		require.True(t, report.Redacted)
+		require.NotContains(t, report.Command, "/etc/./passwd")
+		require.NotContains(t, report.Command, "/etc//passwd")
+		require.NotContains(t, report.Command, "/etc/passwd")
+		require.NotContains(t, report.Evidence, "/etc/./passwd")
+		require.NotContains(t, report.Evidence, "/etc//passwd")
+		require.NotContains(t, report.Evidence, "/etc/passwd")
+	})
+}
+
 func TestDefaultScanner_HelperEdges(t *testing.T) {
 	require.False(t, deleteTargetIsSystemPath(""))
 	require.False(t, deleteTargetIsSystemPath("-f"))
@@ -642,9 +724,12 @@ func TestDefaultScanner_HelperEdges(t *testing.T) {
 	require.False(t, ok)
 
 	require.True(t, sensitivePathMatch("foo/.ssh/id_ed25519", "~/.ssh"))
+	require.True(t, sensitivePathMatch("/etc/./passwd", "/etc/passwd"))
+	require.True(t, sensitivePathMatch("/etc//passwd", "/etc/passwd"))
 	require.False(t, sensitivePathMatch("", "~/.ssh"))
 	require.Equal(t, "plain", redactSensitivePath("plain", ""))
 	require.Equal(t, "<redacted>/id_rsa", redactSensitivePath("C:/Users/me/.ssh/id_rsa", `C:\Users\me\.ssh`))
+	require.Equal(t, "cat <redacted>", redactSensitivePath("cat /etc/./passwd", "/etc/passwd"))
 }
 
 func TestDefaultScanner_RedactsReportCommandAndEvidence(t *testing.T) {
