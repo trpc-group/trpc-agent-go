@@ -4255,6 +4255,28 @@ func TestMiniMaxFileDeletionBodyConvertor(t *testing.T) {
 			miniMaxFilePurpose,
 		)),
 	)
+
+	for _, tt := range []struct {
+		name   string
+		fileID string
+		want   json.Number
+	}{
+		{name: "leading plus", fileID: "+123", want: "123"},
+		{name: "leading zeros", fileID: "00123", want: "123"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			body := miniMaxFileDeletionBodyConvertor(
+				nil,
+				tt.fileID,
+				miniMaxFilePurpose,
+			)
+			decoder := json.NewDecoder(bytes.NewReader(body))
+			decoder.UseNumber()
+			var payload map[string]any
+			require.NoError(t, decoder.Decode(&payload))
+			require.Equal(t, tt.want, payload["file_id"])
+		})
+	}
 }
 
 // TestUploadFile_Success tests UploadFile with a temp file and mock server.
@@ -4444,6 +4466,36 @@ func TestDeleteFile_MiniMaxDefaults(t *testing.T) {
 		WithBaseURL(server.URL+"/v1"),
 	)
 	require.NoError(t, m.DeleteFile(context.Background(), "123"))
+}
+
+func TestDeleteFile_CustomBodyDoesNotForceJSONContentType(t *testing.T) {
+	const body = "file_id=123"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodPost, r.Method)
+		require.NotEqual(t, "application/json", r.Header.Get("Content-Type"))
+		got, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		require.Equal(t, body, string(got))
+
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{
+			"file_id": 123,
+			"base_resp": {"status_code": 0, "status_msg": "success"}
+		}`)
+	}))
+	defer server.Close()
+
+	m := New(
+		"MiniMax-M3",
+		WithVariant(VariantMiniMax),
+		WithAPIKey("test-key"),
+		WithBaseURL(server.URL+"/v1"),
+	)
+	require.NoError(t, m.DeleteFile(
+		context.Background(),
+		"123",
+		WithBody([]byte(body)),
+	))
 }
 
 // TestModel_GenerateContent_Streaming_FinalReasoningAggregated

@@ -187,8 +187,11 @@ func miniMaxFileDeletionBodyConvertor(
 		return body
 	}
 	id := strings.TrimSpace(fileID)
-	if _, err := strconv.ParseInt(id, 10, 64); err != nil {
+	parsedID, err := strconv.ParseInt(id, 10, 64)
+	if err != nil {
 		id = strconv.Quote(id)
+	} else {
+		id = strconv.FormatInt(parsedID, 10)
 	}
 	return []byte(`{"file_id":` + id + `,"purpose":` +
 		strconv.Quote(string(purpose)) + `}`)
@@ -3009,6 +3012,7 @@ func (m *Model) DeleteFile(ctx context.Context, fileID string, opts ...FileOptio
 	for _, opt := range opts {
 		opt(fileOpts)
 	}
+	bodyProvided := fileOpts.Body != nil
 	fileOpts.Body = m.variantConfig.fileDeletionBodyConvertor(
 		fileOpts.Body,
 		fileID,
@@ -3028,7 +3032,7 @@ func (m *Model) DeleteFile(ctx context.Context, fileID string, opts ...FileOptio
 			if fileOpts.Body != nil {
 				r.Body = io.NopCloser(bytes.NewReader(fileOpts.Body))
 				r.ContentLength = int64(len(fileOpts.Body))
-				if r.Header.Get("Content-Type") == "" {
+				if !bodyProvided && r.Header.Get("Content-Type") == "" {
 					r.Header.Set("Content-Type", "application/json")
 				}
 			}
