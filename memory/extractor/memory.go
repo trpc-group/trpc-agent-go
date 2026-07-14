@@ -329,11 +329,11 @@ var toolActionDescriptions = map[string]string{
 		"(only if genuinely new information that is not already captured " +
 		"by an existing memory, even with different wording).",
 	memory.UpdateToolName: "Update an existing memory " +
-		"with new or corrected information. " +
-		"Prefer updating over adding a near-duplicate.",
+		"with corrected wording or a replacement current-state summary. " +
+		"Do not overwrite dated historical states such as previous goals.",
 	memory.DeleteToolName: "Delete a memory " +
 		"when the user asks to forget something, or when it is " +
-		"clearly outdated or contradicted by newer information.",
+		"clearly a mistaken extraction. Do not delete useful historical states.",
 	memory.ClearToolName: "Clear all memories " +
 		"only when the user explicitly asks to forget everything.",
 }
@@ -502,10 +502,12 @@ Today's date is {current_date}. You MUST use this date to resolve ALL relative t
    memory already captures the same fact, preference, relationship, or event,
    do NOT call memory_add again. Rewording, repeated mentions, extra
    adjectives, tense changes, topic synonyms, or slightly different phrasing
-   do NOT make it new. If the stored memory is wrong, outdated, or genuinely
-   superseded but should still exist as the current memory, use memory_update
-   instead. If the memory should be removed entirely, use memory_delete. If
-   the conversation only repeats what is already stored, emit no tool call
+   do NOT make it new. If the stored memory has a wording mistake or should
+   become a current-state summary, use memory_update. If the conversation
+   reveals a later state, changed preference, updated goal, or revised plan,
+   preserve the prior dated state as history and add a separate memory for
+   the new state. If the memory should be removed entirely, use memory_delete.
+   If the conversation only repeats what is already stored, emit no tool call
    for that item.
 4. Call multiple tools in parallel to handle all necessary changes at once.
 </instructions>
@@ -530,6 +532,15 @@ Today's date is {current_date}. You MUST use this date to resolve ALL relative t
   supporting signals and do NOT mean two different-day episodes are the same
   memory. When it is a duplicate, emit no tool call. When it corrects or
   replaces an existing memory, use memory_update.
+- **STATE CHANGES AND HISTORY**: Do NOT treat every changed fact as a
+  duplicate to overwrite. If a person changes a goal, preference, plan,
+  status, location, job, ownership, habit, or count over time, keep the old
+  dated state when it may answer "previous", "before", "used to", "formerly",
+  "earlier", "old", or timeline questions. Add the new state with its own
+  date instead of deleting or overwriting the old one. Use memory_update only
+  to fix an incorrect extraction, merge duplicate wording, or maintain an
+  explicitly current-state summary that still does not erase the historical
+  memory.
 - **NO SUBJECT PREFIX**: Create memories as brief, concise statements that
   directly describe attributes or facts WITHOUT a subject prefix. Omit
   "User", "The user", or any equivalent pronoun/noun at the start, because
@@ -554,9 +565,25 @@ Today's date is {current_date}. You MUST use this date to resolve ALL relative t
   recommendations, explanations, plans, lists, rankings, and summaries as
   memory-worthy when they contain specific information the user may later
   ask about. Preserve exact item names, important ordering, constraints, and
-  conclusions. For example, if the assistant recommends five bottles and the
-  fifth is Absinthe, keep a memory that names all five and identifies
-  Absinthe as the fifth item.
+  conclusions. When multiple named options have distinguishing attributes,
+  preserve the option-to-attribute mapping instead of flattening the answer
+  into a list of names. This is mandatory: when the source gives each name a
+  description, capability, location, reason, compatibility constraint, or
+  other identifying detail, every name-to-detail mapping must survive in the
+  memory. Do not shorten the memory by dropping those descriptions. For
+  example, if one camera is weather-sealed and another is best in low light,
+  retain which attribute belongs to which camera. If the assistant recommends
+  five hiking routes and the fifth is Eagle Peak, keep a memory that names all
+  five and identifies Eagle Peak as the fifth item.
+  When the user asks for a recommendation, reminder, recipe ingredient,
+  option, or advice and the assistant answers with concrete options, create
+  a separate memory for what was recommended. Do not only store the user's
+  later plan or choice. If the assistant says "the Aurora X or Nightjar Pro
+  would work well", preserve both as assistant-recommended options.
+  Treat separate assistant answers or lists with different subjects or goals
+  as independent memories, even when they share a broad domain. A later list
+  must not update or delete an earlier list unless it explicitly corrects or
+  revises that same answer.
   Structured deliverables drafted by the assistant, such as proposals,
   plans, itineraries, recipes, rubrics, policies, and design specs, are also
   memory-worthy. Preserve section headings and numbered or bulleted
@@ -596,9 +623,10 @@ Today's date is {current_date}. You MUST use this date to resolve ALL relative t
   in existing memories rather than inventing synonyms. For example, if
   existing memories use "work", do not use "job" or "career" for the
   same concept.
-- When a fact has genuinely CHANGED (e.g., user got a new job), update
-  the existing memory. But if the conversation reveals a NEW fact, even
-  on a related topic, create a NEW memory — do not merge into existing ones.
+- When a fact has genuinely CHANGED (e.g., user got a new job), add a new
+  dated memory for the changed state and keep the earlier dated state unless
+  it was simply wrong. You may also update a separate current-state summary,
+  but do not erase the historical memory.
 - Use delete when the user explicitly asks to forget something, or when
   a memory should be removed entirely rather than corrected or replaced
   (for example, a mistaken extraction, a withdrawn fact, or stale detail
@@ -740,22 +768,42 @@ Example 5 – Extracting specific details from casual conversation:
      topics=["Gina", "daughter", "birthday", "August 13"])
 
 Example 6 – Assistant recommendations and answers:
-  User asks: "Which five liqueurs should I buy for the widest variety of
-  gin-based cocktails?"
-  Assistant answers: "Sweet Vermouth, Dry Vermouth, Campari, Elderflower
-  Liqueur, and Absinthe."
-  → memory_add(memory="Was recommended 5 bottles for gin-based cocktails: Sweet Vermouth, Dry Vermouth, Campari, Elderflower Liqueur, and Absinthe as the fifth bottle.",
+  User asks: "Which five hiking routes should I consider for the weekend?"
+  Assistant answers: "River Loop, Cedar Ridge, Granite Pass, Meadow View,
+  and Eagle Peak."
+  → memory_add(memory="Was recommended 5 weekend hiking routes: River Loop, Cedar Ridge, Granite Pass, Meadow View, and Eagle Peak as the fifth route.",
      memory_kind="fact",
-     topics=["gin cocktails", "bottles", "Absinthe", "recommendations"])
+     topics=["hiking", "routes", "Eagle Peak", "recommendations"])
   User asks: "What processes are used at CITGO's Lake Charles Refinery?"
   Assistant answers: "Atmospheric distillation, fluid catalytic cracking
   (FCC), alkylation, and hydrotreating."
   → memory_add(memory="CITGO's Lake Charles Refinery uses atmospheric distillation, fluid catalytic cracking (FCC), alkylation, and hydrotreating processes.",
      memory_kind="fact",
      topics=["CITGO", "Lake Charles Refinery", "refining"])
+
+Example 7 – Changed goal with historical state:
+  Existing memory: "[goal-history] Planned to complete a 10 km race before the end of 2023. (event_time=2023-06-16)"
+  User says on 2023-09-30: "I'm still aiming to complete a 15 km race
+  eventually, it's just not the main focus this weekend."
+  → keep goal-history unchanged because it answers previous-goal questions.
+  → memory_add(memory="Aimed to complete a 15 km race eventually as of 2023-09-30.",
+     memory_kind="fact", event_time="2023-09-30",
+     topics=["running", "15 km race", "goal"])
+
+Example 8 – Assistant recommendation options:
+  User asks: "Which camera should I take for a rainy night shoot?"
+  Assistant answers: "Aurora X is weather-sealed; Nightjar Pro is best in
+  low light; TrailCam Mini is the lightest option."
+  → memory_add(memory="Was recommended cameras for a rainy night shoot: Aurora X is weather-sealed; Nightjar Pro is best in low light; TrailCam Mini is the lightest option.",
+     memory_kind="fact", topics=["cameras", "Aurora X", "Nightjar Pro", "TrailCam Mini"])
 </examples>
 
 <common_mistakes>
+Tool arguments are structured fields. The memory argument must contain only
+the natural-language memory statement. Never put argument syntax such as
+memory_kind=, event_time=, participants=, location=, or topics= inside the
+memory text.
+
 NEVER write these in memory text -- always resolve relative times to absolute dates:
   BAD: "Melanie painted a lake sunrise last year."
   GOOD: "Melanie painted a lake sunrise in 2022." (if today is 2023-06-10)
@@ -806,6 +854,8 @@ You MUST extract these whenever they appear, even if mentioned only once or in p
 After extracting memories, do a FINAL CHECK. Re-read each turn and verify:
 - Did I extract information from ALL speakers, not just the primary one?
 - Did I capture every specific name, title, number, and place mentioned?
+- For every list of named options with descriptions, does the memory preserve
+  each option's description and identifying attributes, not only its name?
 - Did I create separate memories for each distinct event, fact, or opinion?
 - Did I resolve all relative time references to absolute dates?
 - Did I miss any items, activities, or relationships mentioned in passing?

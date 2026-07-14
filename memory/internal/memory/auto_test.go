@@ -2012,10 +2012,10 @@ func TestReconcileOps_SkipScoreWithNewTopics(t *testing.T) {
 	assert.Contains(t, out[0].Topics, "engineering")
 }
 
-// TestReconcileOps_RewriteAsUpdateOnMidSignal verifies that an Add
-// whose best candidate sits in the update band (via Score or Jaccard)
-// is rewritten into an Update targeting that candidate.
-func TestReconcileOps_RewriteAsUpdateOnMidSignal(t *testing.T) {
+// TestReconcileOps_KeepsAddOnModerateSimilarity verifies that reconcile
+// does not infer a destructive Update from topical relatedness. The
+// extractor remains responsible for explicitly requesting updates.
+func TestReconcileOps_KeepsAddOnModerateSimilarity(t *testing.T) {
 	op := newMockOperator()
 	op.searchResults = []*memory.Entry{{
 		ID:      "mem-loc",
@@ -2024,7 +2024,7 @@ func TestReconcileOps_RewriteAsUpdateOnMidSignal(t *testing.T) {
 			Memory: "User lives in Portland",
 			Topics: []string{"location"},
 		},
-		Score: 0.65, // mid band, Jaccard is also mid+.
+		Score: 0.65,
 	}}
 	worker := NewAutoMemoryWorker(AutoMemoryConfig{}, op)
 
@@ -2035,11 +2035,8 @@ func TestReconcileOps_RewriteAsUpdateOnMidSignal(t *testing.T) {
 	}}
 	out := worker.reconcileOps(context.Background(), reconcileUserKey(), ops)
 	require.Len(t, out, 1)
-	assert.Equal(t, extractor.OperationUpdate, out[0].Type)
-	assert.Equal(t, "mem-loc", out[0].MemoryID)
-	assert.Contains(t, out[0].Topics, "location")
-	assert.Contains(t, out[0].Topics, "oregon")
-	// Update must carry the fresh wording.
+	assert.Equal(t, extractor.OperationAdd, out[0].Type)
+	assert.Empty(t, out[0].MemoryID)
 	assert.Equal(t, "Lives in Portland Oregon", out[0].Memory)
 }
 
@@ -2065,6 +2062,39 @@ func TestReconcileOps_KeepsOpWhenNotSimilar(t *testing.T) {
 		Topics: []string{"education"},
 	}}
 	out := worker.reconcileOps(context.Background(), reconcileUserKey(), ops)
+	require.Len(t, out, 1)
+	assert.Equal(t, extractor.OperationAdd, out[0].Type)
+	assert.Empty(t, out[0].MemoryID)
+}
+
+func TestReconcileOps_KeepsDistinctListsWithHighTopicScore(t *testing.T) {
+	existing := "Was recommended 10 popular Portland venues for indie artists: " +
+		"Mississippi Studios, Doug Fir Lounge, Wonder Ballroom, Crystal Ballroom, " +
+		"Holocene, Aladdin Theater, The Old Church, The Liquor Store, " +
+		"Alberta Street Pub, and Revolution Hall."
+	incoming := "Was recommended 10 notable indie artists from Portland: " +
+		"The Decemberists, Modest Mouse, Typhoon, STRFKR, Blitzen Trapper, " +
+		"Grouper, Black Belt Eagle Scout, Wild Ones, Y La Bamba, and Elliott Smith."
+	require.Less(t, tokenJaccard(incoming, existing), reconcileScoreJaccardFloor)
+
+	op := newMockOperator()
+	op.searchResults = []*memory.Entry{{
+		ID:      "mem-venues",
+		AppName: "app", UserID: "u1",
+		Memory: &memory.Memory{
+			Memory: existing,
+			Topics: []string{"Portland", "indie music", "venues"},
+		},
+		Score: 0.95,
+	}}
+	worker := NewAutoMemoryWorker(AutoMemoryConfig{}, op)
+	in := []*extractor.Operation{{
+		Type:   extractor.OperationAdd,
+		Memory: incoming,
+		Topics: []string{"Portland", "indie music", "artists"},
+	}}
+
+	out := worker.reconcileOps(context.Background(), reconcileUserKey(), in)
 	require.Len(t, out, 1)
 	assert.Equal(t, extractor.OperationAdd, out[0].Type)
 	assert.Empty(t, out[0].MemoryID)
@@ -2206,7 +2236,7 @@ func TestReconcileOps_AddEnabledUpdateDisabled(t *testing.T) {
 			Memory: "User lives in Portland",
 			Topics: []string{"location"},
 		},
-		Score: 0.65, // mid-band, would normally become an Update.
+		Score: 0.95,
 	}}
 	worker := NewAutoMemoryWorker(AutoMemoryConfig{
 		EnabledTools: map[string]struct{}{
@@ -2262,15 +2292,16 @@ func TestReconcileOps_PreservesExistingKind(t *testing.T) {
 // TestReconcileDecisionTier verifies that the tier helper respects
 // both signal bars and returns the highest tier any signal earns.
 func TestReconcileDecisionTier(t *testing.T) {
-	// Clear skip via score.
-	assert.Equal(t, reconcileTierSkip, reconcileDecisionTier(0.95, 0.0))
+	// Score requires a minimum amount of lexical corroboration.
+	assert.Equal(t, reconcileTierNone, reconcileDecisionTier(0.95, 0.0))
+	assert.Equal(t, reconcileTierSkip,
+		reconcileDecisionTier(0.95, reconcileScoreJaccardFloor))
 	// Clear skip via jaccard.
 	assert.Equal(t, reconcileTierSkip, reconcileDecisionTier(0.0, 0.80))
-	// Update band via score.
-	assert.Equal(t, reconcileTierUpdate, reconcileDecisionTier(0.70, 0.0))
-	// Update band via jaccard.
-	assert.Equal(t, reconcileTierUpdate, reconcileDecisionTier(0.0, 0.50))
-	// Below everything.
+	// Moderate score and overlap are insufficient for destructive merge.
+	assert.Equal(t, reconcileTierNone,
+		reconcileDecisionTier(0.70, reconcileScoreJaccardFloor))
+	assert.Equal(t, reconcileTierNone, reconcileDecisionTier(0.0, 0.50))
 	assert.Equal(t, reconcileTierNone, reconcileDecisionTier(0.30, 0.20))
 }
 
@@ -2284,11 +2315,8 @@ func TestReconcileOps_PrefersHigherTierCandidate(t *testing.T) {
 	op.searchResults = []*memory.Entry{
 		{
 			// Token overlap with the incoming text is meaningful but
-			// still below reconcileJaccardMid, so this entry sits in
-			// tier "none". The previous fixture accidentally crossed
-			// the mid bar and only exercised skip-vs-update ordering;
-			// this wording makes the regression actually hit the
-			// documented below-threshold shadowing scenario.
+			// below the near-duplicate bar, so this entry sits in tier
+			// "none".
 			ID:      "mem-weak",
 			AppName: "app", UserID: "u1",
 			Memory: &memory.Memory{
@@ -2298,13 +2326,13 @@ func TestReconcileOps_PrefersHigherTierCandidate(t *testing.T) {
 			Score: 0.20,
 		},
 		{
-			// Vector-backed duplicate: Score crosses the skip bar so
-			// this entry is tier "skip" and must win the pick even
-			// though its Jaccard with the incoming text is tiny.
+			// Vector-backed duplicate: Score crosses the skip bar and
+			// token overlap clears the corroboration floor, so this
+			// entry is tier "skip" and must win the pick.
 			ID:      "mem-strong",
 			AppName: "app", UserID: "u1",
 			Memory: &memory.Memory{
-				Memory: "completely different wording here",
+				Memory: "foo bar alternate wording",
 				Topics: []string{"x"},
 			},
 			Score: 0.95,
