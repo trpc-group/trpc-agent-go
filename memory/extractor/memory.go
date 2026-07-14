@@ -329,8 +329,9 @@ var toolActionDescriptions = map[string]string{
 		"(only if genuinely new information that is not already captured " +
 		"by an existing memory, even with different wording).",
 	memory.UpdateToolName: "Update an existing memory " +
-		"with corrected wording or a replacement current-state summary. " +
-		"Do not overwrite dated historical states such as previous goals.",
+		"only to correct mistaken wording or merge a true duplicate. " +
+		"When a value, status, preference, habit, frequency, or count changes, " +
+		"add the new dated state and keep the prior state unchanged.",
 	memory.DeleteToolName: "Delete a memory " +
 		"when the user asks to forget something, or when it is " +
 		"clearly a mistaken extraction. Do not delete useful historical states.",
@@ -503,10 +504,11 @@ Today's date is {current_date}. You MUST use this date to resolve ALL relative t
    do NOT call memory_add again. Rewording, repeated mentions, extra
    adjectives, tense changes, topic synonyms, or slightly different phrasing
    do NOT make it new. If the stored memory has a wording mistake or should
-   become a current-state summary, use memory_update. If the conversation
-   reveals a later state, changed preference, updated goal, or revised plan,
-   preserve the prior dated state as history and add a separate memory for
-   the new state. If the memory should be removed entirely, use memory_delete.
+   be merged with a true duplicate, use memory_update. If the conversation
+   reveals a later state, changed preference, updated goal, revised plan,
+   habit, frequency, or count, NEVER update the prior memory. Preserve it as
+   history and add a separate dated memory for the new state. If the memory
+   should be removed entirely, use memory_delete.
    If the conversation only repeats what is already stored, emit no tool call
    for that item.
 4. Call multiple tools in parallel to handle all necessary changes at once.
@@ -796,6 +798,15 @@ Example 8 – Assistant recommendation options:
   low light; TrailCam Mini is the lightest option."
   → memory_add(memory="Was recommended cameras for a rainy night shoot: Aurora X is weather-sealed; Nightjar Pro is best in low light; TrailCam Mini is the lightest option.",
      memory_kind="fact", topics=["cameras", "Aurora X", "Nightjar Pro", "TrailCam Mini"])
+
+Example 9 – Changed recurring habit with historical state:
+  Existing memory: "[exercise-frequency] Exercises with friends every week."
+  User says on 2024-08-04: "I am meeting them every other week now."
+  → keep exercise-frequency unchanged because it answers previous-frequency
+    questions. The new frequency is a changed state, not a correction.
+  → memory_add(memory="Exercises with friends every other week as of 2024-08-04.",
+     memory_kind="fact", event_time="2024-08-04",
+     topics=["exercise", "friends", "frequency"])
 </examples>
 
 <common_mistakes>
