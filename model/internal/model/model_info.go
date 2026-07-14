@@ -35,6 +35,9 @@ var ModelContextWindows = map[string]int{
 	"o3":         200000, // https://developers.openai.com/api/docs/models/o3
 	"o4-mini":    200000, // https://developers.openai.com/api/docs/models/o4-mini
 
+	// 1,047,576 follows OpenAI Agents SDK compaction metadata:
+	// https://github.com/openai/openai-agents-python/blob/main/src/agents/sandbox/capabilities/compaction.py
+
 	// OpenAI GPT-5.6
 	"gpt-5.6":       1047576, // Alias for GPT-5.6 Sol — https://developers.openai.com/api/docs/models/gpt-5.6-sol
 	"gpt-5.6-sol":   1047576, // https://developers.openai.com/api/docs/models/gpt-5.6-sol
