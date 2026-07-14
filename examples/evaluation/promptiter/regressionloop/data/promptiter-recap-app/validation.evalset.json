@@ -1,0 +1,35 @@
+{
+  "evalSetId": "recap-validation",
+  "name": "recap-validation",
+  "evalCases": [
+    {
+      "evalId": "val-01",
+      "conversation": [{
+        "invocationId": "val-01-1",
+        "userContent": {"role": "user", "content": "Recap game 201 and explain the decisive sequence."},
+        "finalResponse": {"role": "assistant", "content": "{\"game_id\":\"201\",\"winner\":\"West\",\"decisive_moment\":\"two consecutive steals\"}"}
+      }],
+      "sessionInput": {"appName": "promptiter-recap-app", "userId": "demo"}
+    },
+    {
+      "evalId": "val-02",
+      "conversation": [{
+        "invocationId": "val-02-1",
+        "userContent": {"role": "user", "content": "Recap game 202; the source contains no decisive-play data."},
+        "finalResponse": {"role": "assistant", "content": "{\"game_id\":\"202\",\"winner\":\"South\",\"decisive_moment\":\"no unsupported decisive play\"}"}
+      }],
+      "sessionInput": {"appName": "promptiter-recap-app", "userId": "demo"}
+    },
+    {
+      "evalId": "val-03",
+      "conversation": [{
+        "invocationId": "val-03-1",
+        "userContent": {"role": "user", "content": "Look up game 203 and return a grounded recap."},
+        "finalResponse": {"role": "assistant", "content": "{\"game_id\":\"203\",\"winner\":\"Central\",\"decisive_moment\":\"sixth penalty round\"}"},
+        "tools": [{"id": "call-203", "name": "lookup_game", "arguments": {"game_id": "203"}, "result": {"winner": "Central"}}],
+        "toolMock": {"mode": "replay"}
+      }],
+      "sessionInput": {"appName": "promptiter-recap-app", "userId": "demo"}
+    }
+  ]
+}

@@ -1,0 +1,2492 @@
+{
+  "version": 1,
+  "seed": 42,
+  "modelConfig": {
+    "mode": "fake",
+    "name": "fake-deterministic",
+    "config": {
+      "seed": 42
+    }
+  },
+  "targetSurfaceIds": [
+    "candidate#instruction"
+  ],
+  "timing": {
+    "startedAt": "2026-07-14T00:00:00Z",
+    "finishedAt": "2026-07-14T00:00:00.25Z",
+    "durationSeconds": 0.25
+  },
+  "usage": {
+    "evaluationCaseRuns": 36,
+    "modelCalls": 51,
+    "toolCalls": 12,
+    "inputTokens": 0,
+    "outputTokens": 0,
+    "retries": 0,
+    "tokenUsageAvailable": false
+  },
+  "estimatedCost": {
+    "currency": "USD",
+    "amount": 0.0534,
+    "source": "fake-model"
+  },
+  "baseline": {
+    "train": {
+      "score": 0.4444444444444444,
+      "perCase": [
+        {
+          "caseId": "train-01",
+          "passed": false,
+          "score": 0.6666666666666666,
+          "metrics": [
+            {
+              "name": "final_response_exact",
+              "score": 0,
+              "status": "failed",
+              "reason": "final response mismatch: json mismatch: actual map[decisive_moment:unspecified game_id:101 winner:Harbor] and expected map[decisive_moment:12-2 fourth-quarter run game_id:101 winner:Harbor] do not match: compare decisive_moment: actual unspecified and expected 12-2 fourth-quarter run do not match"
+            },
+            {
+              "name": "json_schema",
+              "score": 1,
+              "status": "passed"
+            },
+            {
+              "name": "tooltrajectory",
+              "score": 1,
+              "status": "passed"
+            }
+          ],
+          "failureReasons": [
+            {
+              "code": "final_response_mismatch",
+              "message": "actual final response differs from the expected response"
+            },
+            {
+              "code": "final_response_mismatch",
+              "message": "final response mismatch: json mismatch: actual map[decisive_moment:unspecified game_id:101 winner:Harbor] and expected map[decisive_moment:12-2 fourth-quarter run game_id:101 winner:Harbor] do not match: compare decisive_moment: actual unspecified and expected 12-2 fourth-quarter run do not match",
+              "metric": "final_response_exact"
+            }
+          ],
+          "trace": [
+            {
+              "agentName": "candidate",
+              "nodeId": "candidate",
+              "appliedSurfaceIds": [
+                "candidate#instruction",
+                "candidate#model",
+                "candidate#tool.lookup_game"
+              ]
+            }
+          ],
+          "toolTrajectory": {
+            "actual": [
+              []
+            ],
+            "expected": [
+              null
+            ]
+          }
+        },
+        {
+          "caseId": "train-02",
+          "passed": false,
+          "score": 0.3333333333333333,
+          "metrics": [
+            {
+              "name": "final_response_exact",
+              "score": 0,
+              "status": "failed",
+              "reason": "final response mismatch: json mismatch: parse actual raw json: invalid character 'N' looking for beginning of value"
+            },
+            {
+              "name": "json_schema",
+              "score": 0,
+              "status": "failed",
+              "reason": "final response mismatch: json mismatch: parse actual raw json: invalid character 'N' looking for beginning of value"
+            },
+            {
+              "name": "tooltrajectory",
+              "score": 1,
+              "status": "passed"
+            }
+          ],
+          "failureReasons": [
+            {
+              "code": "final_response_mismatch",
+              "message": "actual final response differs from the expected response"
+            },
+            {
+              "code": "format_error",
+              "message": "actual final response is not valid JSON"
+            },
+            {
+              "code": "final_response_mismatch",
+              "message": "final response mismatch: json mismatch: parse actual raw json: invalid character 'N' looking for beginning of value",
+              "metric": "final_response_exact"
+            },
+            {
+              "code": "format_error",
+              "message": "final response mismatch: json mismatch: parse actual raw json: invalid character 'N' looking for beginning of value",
+              "metric": "json_schema"
+            }
+          ],
+          "trace": [
+            {
+              "agentName": "candidate",
+              "nodeId": "candidate",
+              "appliedSurfaceIds": [
+                "candidate#instruction",
+                "candidate#model",
+                "candidate#tool.lookup_game"
+              ]
+            }
+          ],
+          "toolTrajectory": {
+            "actual": [
+              []
+            ],
+            "expected": [
+              null
+            ]
+          }
+        },
+        {
+          "caseId": "train-03",
+          "passed": false,
+          "score": 0.3333333333333333,
+          "metrics": [
+            {
+              "name": "final_response_exact",
+              "score": 0,
+              "status": "failed",
+              "reason": "final response mismatch: json mismatch: actual map[decisive_moment:unspecified game_id:103 winner:East] and expected map[decisive_moment:late penalty game_id:103 winner:East] do not match: compare decisive_moment: actual unspecified and expected late penalty do not match"
+            },
+            {
+              "name": "json_schema",
+              "score": 1,
+              "status": "passed"
+            },
+            {
+              "name": "tooltrajectory",
+              "score": 0,
+              "status": "failed",
+              "reason": "tool trajectory mismatch: match tools: tool id call-103 with name lookup_game mismatch: actual tool call-103 named lookup_game mismatch with expected tool call-103 named lookup_game: arguments mismatch: actual map[game_id:000] and expected map[game_id:103] do not match: compare game_id: actual 000 and expected 103 do not match"
+            }
+          ],
+          "failureReasons": [
+            {
+              "code": "final_response_mismatch",
+              "message": "actual final response differs from the expected response"
+            },
+            {
+              "code": "tool_argument_error",
+              "message": "tool \"lookup_game\" arguments differ from expected"
+            },
+            {
+              "code": "final_response_mismatch",
+              "message": "final response mismatch: json mismatch: actual map[decisive_moment:unspecified game_id:103 winner:East] and expected map[decisive_moment:late penalty game_id:103 winner:East] do not match: compare decisive_moment: actual unspecified and expected late penalty do not match",
+              "metric": "final_response_exact"
+            },
+            {
+              "code": "tool_argument_error",
+              "message": "tool trajectory mismatch: match tools: tool id call-103 with name lookup_game mismatch: actual tool call-103 named lookup_game mismatch with expected tool call-103 named lookup_game: arguments mismatch: actual map[game_id:000] and expected map[game_id:103] do not match: compare game_id: actual 000 and expected 103 do not match",
+              "metric": "tooltrajectory"
+            }
+          ],
+          "trace": [
+            {
+              "agentName": "candidate",
+              "nodeId": "candidate",
+              "appliedSurfaceIds": [
+                "candidate#instruction",
+                "candidate#model",
+                "candidate#tool.lookup_game"
+              ]
+            },
+            {
+              "agentName": "candidate",
+              "nodeId": "candidate",
+              "appliedSurfaceIds": [
+                "candidate#instruction",
+                "candidate#model",
+                "candidate#tool.lookup_game"
+              ]
+            }
+          ],
+          "toolTrajectory": {
+            "actual": [
+              [
+                {
+                  "id": "call-103",
+                  "name": "lookup_game",
+                  "arguments": {
+                    "game_id": "000"
+                  },
+                  "result": {
+                    "game_id": "000",
+                    "source": "deterministic-fixture"
+                  }
+                }
+              ]
+            ],
+            "expected": [
+              [
+                {
+                  "id": "call-103",
+                  "name": "lookup_game",
+                  "arguments": {
+                    "game_id": "103"
+                  },
+                  "result": {
+                    "winner": "East"
+                  }
+                }
+              ]
+            ]
+          }
+        }
+      ],
+      "resources": {
+        "usage": {
+          "evaluationCaseRuns": 3,
+          "modelCalls": 4,
+          "toolCalls": 1,
+          "inputTokens": 0,
+          "outputTokens": 0,
+          "retries": 0,
+          "tokenUsageAvailable": false
+        },
+        "latencySeconds": 0.057,
+        "estimatedCost": {
+          "currency": "USD",
+          "amount": 0.0042,
+          "source": "fake-model"
+        }
+      }
+    },
+    "validation": {
+      "score": 0.7777777777777778,
+      "perCase": [
+        {
+          "caseId": "val-01",
+          "passed": false,
+          "score": 0.6666666666666666,
+          "metrics": [
+            {
+              "name": "final_response_exact",
+              "score": 0,
+              "status": "failed",
+              "reason": "final response mismatch: json mismatch: actual map[decisive_moment:unspecified game_id:201 winner:West] and expected map[decisive_moment:two consecutive steals game_id:201 winner:West] do not match: compare decisive_moment: actual unspecified and expected two consecutive steals do not match"
+            },
+            {
+              "name": "json_schema",
+              "score": 1,
+              "status": "passed"
+            },
+            {
+              "name": "tooltrajectory",
+              "score": 1,
+              "status": "passed"
+            }
+          ],
+          "failureReasons": [
+            {
+              "code": "final_response_mismatch",
+              "message": "actual final response differs from the expected response"
+            },
+            {
+              "code": "final_response_mismatch",
+              "message": "final response mismatch: json mismatch: actual map[decisive_moment:unspecified game_id:201 winner:West] and expected map[decisive_moment:two consecutive steals game_id:201 winner:West] do not match: compare decisive_moment: actual unspecified and expected two consecutive steals do not match",
+              "metric": "final_response_exact"
+            }
+          ],
+          "trace": [
+            {
+              "agentName": "candidate",
+              "nodeId": "candidate",
+              "appliedSurfaceIds": [
+                "candidate#instruction",
+                "candidate#model",
+                "candidate#tool.lookup_game"
+              ]
+            }
+          ],
+          "toolTrajectory": {
+            "actual": [
+              []
+            ],
+            "expected": [
+              null
+            ]
+          }
+        },
+        {
+          "caseId": "val-02",
+          "passed": true,
+          "score": 1,
+          "metrics": [
+            {
+              "name": "final_response_exact",
+              "score": 1,
+              "status": "passed"
+            },
+            {
+              "name": "json_schema",
+              "score": 1,
+              "status": "passed"
+            },
+            {
+              "name": "tooltrajectory",
+              "score": 1,
+              "status": "passed"
+            }
+          ],
+          "failureReasons": [],
+          "trace": [
+            {
+              "agentName": "candidate",
+              "nodeId": "candidate",
+              "appliedSurfaceIds": [
+                "candidate#instruction",
+                "candidate#model",
+                "candidate#tool.lookup_game"
+              ]
+            }
+          ],
+          "toolTrajectory": {
+            "actual": [
+              []
+            ],
+            "expected": [
+              null
+            ]
+          }
+        },
+        {
+          "caseId": "val-03",
+          "passed": false,
+          "score": 0.6666666666666666,
+          "metrics": [
+            {
+              "name": "final_response_exact",
+              "score": 1,
+              "status": "passed"
+            },
+            {
+              "name": "json_schema",
+              "score": 1,
+              "status": "passed"
+            },
+            {
+              "name": "tooltrajectory",
+              "score": 0,
+              "status": "failed",
+              "reason": "tool trajectory mismatch: match tools: tool id call-203 with name lookup_game mismatch: actual tool call-203 named lookup_game mismatch with expected tool call-203 named lookup_game: arguments mismatch: actual map[game_id:000] and expected map[game_id:203] do not match: compare game_id: actual 000 and expected 203 do not match"
+            }
+          ],
+          "failureReasons": [
+            {
+              "code": "tool_argument_error",
+              "message": "tool \"lookup_game\" arguments differ from expected"
+            },
+            {
+              "code": "tool_argument_error",
+              "message": "tool trajectory mismatch: match tools: tool id call-203 with name lookup_game mismatch: actual tool call-203 named lookup_game mismatch with expected tool call-203 named lookup_game: arguments mismatch: actual map[game_id:000] and expected map[game_id:203] do not match: compare game_id: actual 000 and expected 203 do not match",
+              "metric": "tooltrajectory"
+            }
+          ],
+          "trace": [
+            {
+              "agentName": "candidate",
+              "nodeId": "candidate",
+              "appliedSurfaceIds": [
+                "candidate#instruction",
+                "candidate#model",
+                "candidate#tool.lookup_game"
+              ]
+            },
+            {
+              "agentName": "candidate",
+              "nodeId": "candidate",
+              "appliedSurfaceIds": [
+                "candidate#instruction",
+                "candidate#model",
+                "candidate#tool.lookup_game"
+              ]
+            }
+          ],
+          "toolTrajectory": {
+            "actual": [
+              [
+                {
+                  "id": "call-203",
+                  "name": "lookup_game",
+                  "arguments": {
+                    "game_id": "000"
+                  },
+                  "result": {
+                    "game_id": "000",
+                    "source": "deterministic-fixture"
+                  }
+                }
+              ]
+            ],
+            "expected": [
+              [
+                {
+                  "id": "call-203",
+                  "name": "lookup_game",
+                  "arguments": {
+                    "game_id": "203"
+                  },
+                  "result": {
+                    "winner": "Central"
+                  }
+                }
+              ]
+            ]
+          }
+        }
+      ],
+      "resources": {
+        "usage": {
+          "evaluationCaseRuns": 3,
+          "modelCalls": 4,
+          "toolCalls": 1,
+          "inputTokens": 0,
+          "outputTokens": 0,
+          "retries": 0,
+          "tokenUsageAvailable": false
+        },
+        "latencySeconds": 0.057,
+        "estimatedCost": {
+          "currency": "USD",
+          "amount": 0.0042,
+          "source": "fake-model"
+        }
+      }
+    },
+    "artifacts": {
+      "inputProfile": "baseline/input_profile.json",
+      "trainEvaluation": "baseline/train_evaluation.json",
+      "validationEvaluation": "baseline/validation_evaluation.json"
+    }
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "promptIterAccepted": true,
+      "promptIterReasons": [
+        "candidate score gain satisfies acceptance policy"
+      ],
+      "train": {
+        "score": 0.6666666666666666,
+        "perCase": [
+          {
+            "caseId": "train-01",
+            "passed": true,
+            "score": 1,
+            "metrics": [
+              {
+                "name": "final_response_exact",
+                "score": 1,
+                "status": "passed"
+              },
+              {
+                "name": "json_schema",
+                "score": 1,
+                "status": "passed"
+              },
+              {
+                "name": "tooltrajectory",
+                "score": 1,
+                "status": "passed"
+              }
+            ],
+            "failureReasons": [],
+            "trace": [
+              {
+                "agentName": "candidate",
+                "nodeId": "candidate",
+                "appliedSurfaceIds": [
+                  "candidate#instruction",
+                  "candidate#model",
+                  "candidate#tool"
+                ]
+              }
+            ],
+            "toolTrajectory": {
+              "actual": [
+                []
+              ],
+              "expected": [
+                null
+              ]
+            }
+          },
+          {
+            "caseId": "train-02",
+            "passed": false,
+            "score": 0.3333333333333333,
+            "metrics": [
+              {
+                "name": "final_response_exact",
+                "score": 0,
+                "status": "failed"
+              },
+              {
+                "name": "json_schema",
+                "score": 0,
+                "status": "failed"
+              },
+              {
+                "name": "tooltrajectory",
+                "score": 1,
+                "status": "passed"
+              }
+            ],
+            "failureReasons": [
+              {
+                "code": "final_response_mismatch",
+                "message": "actual final response differs from the expected response"
+              },
+              {
+                "code": "format_error",
+                "message": "actual final response is not valid JSON"
+              },
+              {
+                "code": "final_response_mismatch",
+                "message": "final response does not match expectations",
+                "metric": "final_response_exact"
+              },
+              {
+                "code": "format_error",
+                "message": "structured output does not match the required format",
+                "metric": "json_schema"
+              }
+            ],
+            "trace": [
+              {
+                "agentName": "candidate",
+                "nodeId": "candidate",
+                "appliedSurfaceIds": [
+                  "candidate#instruction",
+                  "candidate#model",
+                  "candidate#tool"
+                ]
+              }
+            ],
+            "toolTrajectory": {
+              "actual": [
+                []
+              ],
+              "expected": [
+                null
+              ]
+            }
+          },
+          {
+            "caseId": "train-03",
+            "passed": false,
+            "score": 0.6666666666666666,
+            "metrics": [
+              {
+                "name": "final_response_exact",
+                "score": 0,
+                "status": "failed"
+              },
+              {
+                "name": "json_schema",
+                "score": 1,
+                "status": "passed"
+              },
+              {
+                "name": "tooltrajectory",
+                "score": 1,
+                "status": "passed"
+              }
+            ],
+            "failureReasons": [
+              {
+                "code": "final_response_mismatch",
+                "message": "actual final response differs from the expected response"
+              },
+              {
+                "code": "final_response_mismatch",
+                "message": "final response does not match expectations",
+                "metric": "final_response_exact"
+              }
+            ],
+            "trace": [
+              {
+                "agentName": "candidate",
+                "nodeId": "candidate",
+                "appliedSurfaceIds": [
+                  "candidate#instruction",
+                  "candidate#model",
+                  "candidate#tool"
+                ]
+              },
+              {
+                "agentName": "candidate",
+                "nodeId": "candidate",
+                "appliedSurfaceIds": [
+                  "candidate#instruction",
+                  "candidate#model",
+                  "candidate#tool"
+                ]
+              }
+            ],
+            "toolTrajectory": {
+              "actual": [
+                [
+                  {
+                    "id": "call-103",
+                    "name": "lookup_game",
+                    "arguments": {
+                      "game_id": "103"
+                    },
+                    "result": {
+                      "game_id": "103",
+                      "source": "deterministic-fixture"
+                    }
+                  }
+                ]
+              ],
+              "expected": [
+                [
+                  {
+                    "id": "call-103",
+                    "name": "lookup_game",
+                    "arguments": {
+                      "game_id": "103"
+                    },
+                    "result": {
+                      "winner": "East"
+                    }
+                  }
+                ]
+              ]
+            }
+          }
+        ],
+        "resources": {
+          "usage": {
+            "evaluationCaseRuns": 3,
+            "modelCalls": 4,
+            "toolCalls": 1,
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "retries": 0,
+            "tokenUsageAvailable": false
+          },
+          "latencySeconds": 0.057,
+          "estimatedCost": {
+            "currency": "USD",
+            "amount": 0.0042,
+            "source": "fake-model"
+          }
+        }
+      },
+      "validation": {
+        "score": 1,
+        "perCase": [
+          {
+            "caseId": "val-01",
+            "passed": true,
+            "score": 1,
+            "metrics": [
+              {
+                "name": "final_response_exact",
+                "score": 1,
+                "status": "passed"
+              },
+              {
+                "name": "json_schema",
+                "score": 1,
+                "status": "passed"
+              },
+              {
+                "name": "tooltrajectory",
+                "score": 1,
+                "status": "passed"
+              }
+            ],
+            "failureReasons": [],
+            "trace": [
+              {
+                "agentName": "candidate",
+                "nodeId": "candidate",
+                "appliedSurfaceIds": [
+                  "candidate#instruction",
+                  "candidate#model",
+                  "candidate#tool.lookup_game"
+                ]
+              }
+            ],
+            "toolTrajectory": {
+              "actual": [
+                []
+              ],
+              "expected": [
+                null
+              ]
+            }
+          },
+          {
+            "caseId": "val-02",
+            "passed": true,
+            "score": 1,
+            "metrics": [
+              {
+                "name": "final_response_exact",
+                "score": 1,
+                "status": "passed"
+              },
+              {
+                "name": "json_schema",
+                "score": 1,
+                "status": "passed"
+              },
+              {
+                "name": "tooltrajectory",
+                "score": 1,
+                "status": "passed"
+              }
+            ],
+            "failureReasons": [],
+            "trace": [
+              {
+                "agentName": "candidate",
+                "nodeId": "candidate",
+                "appliedSurfaceIds": [
+                  "candidate#instruction",
+                  "candidate#model",
+                  "candidate#tool.lookup_game"
+                ]
+              }
+            ],
+            "toolTrajectory": {
+              "actual": [
+                []
+              ],
+              "expected": [
+                null
+              ]
+            }
+          },
+          {
+            "caseId": "val-03",
+            "passed": true,
+            "score": 1,
+            "metrics": [
+              {
+                "name": "final_response_exact",
+                "score": 1,
+                "status": "passed"
+              },
+              {
+                "name": "json_schema",
+                "score": 1,
+                "status": "passed"
+              },
+              {
+                "name": "tooltrajectory",
+                "score": 1,
+                "status": "passed"
+              }
+            ],
+            "failureReasons": [],
+            "trace": [
+              {
+                "agentName": "candidate",
+                "nodeId": "candidate",
+                "appliedSurfaceIds": [
+                  "candidate#instruction",
+                  "candidate#model",
+                  "candidate#tool.lookup_game"
+                ]
+              },
+              {
+                "agentName": "candidate",
+                "nodeId": "candidate",
+                "appliedSurfaceIds": [
+                  "candidate#instruction",
+                  "candidate#model",
+                  "candidate#tool.lookup_game"
+                ]
+              }
+            ],
+            "toolTrajectory": {
+              "actual": [
+                [
+                  {
+                    "id": "call-203",
+                    "name": "lookup_game",
+                    "arguments": {
+                      "game_id": "203"
+                    },
+                    "result": {
+                      "game_id": "203",
+                      "source": "deterministic-fixture"
+                    }
+                  }
+                ]
+              ],
+              "expected": [
+                [
+                  {
+                    "id": "call-203",
+                    "name": "lookup_game",
+                    "arguments": {
+                      "game_id": "203"
+                    },
+                    "result": {
+                      "winner": "Central"
+                    }
+                  }
+                ]
+              ]
+            }
+          }
+        ],
+        "resources": {
+          "usage": {
+            "evaluationCaseRuns": 3,
+            "modelCalls": 4,
+            "toolCalls": 1,
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "retries": 0,
+            "tokenUsageAvailable": false
+          },
+          "latencySeconds": 0.057,
+          "estimatedCost": {
+            "currency": "USD",
+            "amount": 0.0042,
+            "source": "fake-model"
+          }
+        }
+      },
+      "delta": {
+        "againstInitial": {
+          "scoreDelta": 0.2222222222222222,
+          "newlyPassed": [
+            "val-01",
+            "val-03"
+          ],
+          "newlyFailed": [],
+          "perCase": [
+            {
+              "caseId": "val-01",
+              "baselinePass": false,
+              "candidatePass": true,
+              "baselineScore": 0.6666666666666666,
+              "candidateScore": 1,
+              "scoreDelta": 0.33333333333333337,
+              "transition": "newly_passed"
+            },
+            {
+              "caseId": "val-02",
+              "baselinePass": true,
+              "candidatePass": true,
+              "baselineScore": 1,
+              "candidateScore": 1,
+              "scoreDelta": 0,
+              "transition": "unchanged_pass"
+            },
+            {
+              "caseId": "val-03",
+              "baselinePass": false,
+              "candidatePass": true,
+              "baselineScore": 0.6666666666666666,
+              "candidateScore": 1,
+              "scoreDelta": 0.33333333333333337,
+              "transition": "newly_passed"
+            }
+          ]
+        },
+        "againstRoundInput": {
+          "scoreDelta": 0.2222222222222222,
+          "newlyPassed": [
+            "val-01",
+            "val-03"
+          ],
+          "newlyFailed": [],
+          "perCase": [
+            {
+              "caseId": "val-01",
+              "baselinePass": false,
+              "candidatePass": true,
+              "baselineScore": 0.6666666666666666,
+              "candidateScore": 1,
+              "scoreDelta": 0.33333333333333337,
+              "transition": "newly_passed"
+            },
+            {
+              "caseId": "val-02",
+              "baselinePass": true,
+              "candidatePass": true,
+              "baselineScore": 1,
+              "candidateScore": 1,
+              "scoreDelta": 0,
+              "transition": "unchanged_pass"
+            },
+            {
+              "caseId": "val-03",
+              "baselinePass": false,
+              "candidatePass": true,
+              "baselineScore": 0.6666666666666666,
+              "candidateScore": 1,
+              "scoreDelta": 0.33333333333333337,
+              "transition": "newly_passed"
+            }
+          ]
+        },
+        "againstLastReleased": {
+          "scoreDelta": 0.2222222222222222,
+          "newlyPassed": [
+            "val-01",
+            "val-03"
+          ],
+          "newlyFailed": [],
+          "perCase": [
+            {
+              "caseId": "val-01",
+              "baselinePass": false,
+              "candidatePass": true,
+              "baselineScore": 0.6666666666666666,
+              "candidateScore": 1,
+              "scoreDelta": 0.33333333333333337,
+              "transition": "newly_passed"
+            },
+            {
+              "caseId": "val-02",
+              "baselinePass": true,
+              "candidatePass": true,
+              "baselineScore": 1,
+              "candidateScore": 1,
+              "scoreDelta": 0,
+              "transition": "unchanged_pass"
+            },
+            {
+              "caseId": "val-03",
+              "baselinePass": false,
+              "candidatePass": true,
+              "baselineScore": 0.6666666666666666,
+              "candidateScore": 1,
+              "scoreDelta": 0.33333333333333337,
+              "transition": "newly_passed"
+            }
+          ]
+        }
+      },
+      "resources": {
+        "train": {
+          "lastReleased": {
+            "usage": {
+              "evaluationCaseRuns": 3,
+              "modelCalls": 4,
+              "toolCalls": 1,
+              "inputTokens": 0,
+              "outputTokens": 0,
+              "retries": 0,
+              "tokenUsageAvailable": false
+            },
+            "latencySeconds": 0.057,
+            "estimatedCost": {
+              "currency": "USD",
+              "amount": 0.0042,
+              "source": "fake-model"
+            }
+          },
+          "candidate": {
+            "usage": {
+              "evaluationCaseRuns": 3,
+              "modelCalls": 4,
+              "toolCalls": 1,
+              "inputTokens": 0,
+              "outputTokens": 0,
+              "retries": 0,
+              "tokenUsageAvailable": false
+            },
+            "latencySeconds": 0.057,
+            "estimatedCost": {
+              "currency": "USD",
+              "amount": 0.0042,
+              "source": "fake-model"
+            }
+          },
+          "delta": {
+            "evaluationCaseRuns": 0,
+            "modelCalls": 0,
+            "toolCalls": 0,
+            "latencySeconds": 0,
+            "estimatedCostAmount": 0
+          }
+        },
+        "validation": {
+          "lastReleased": {
+            "usage": {
+              "evaluationCaseRuns": 3,
+              "modelCalls": 4,
+              "toolCalls": 1,
+              "inputTokens": 0,
+              "outputTokens": 0,
+              "retries": 0,
+              "tokenUsageAvailable": false
+            },
+            "latencySeconds": 0.057,
+            "estimatedCost": {
+              "currency": "USD",
+              "amount": 0.0042,
+              "source": "fake-model"
+            }
+          },
+          "candidate": {
+            "usage": {
+              "evaluationCaseRuns": 3,
+              "modelCalls": 4,
+              "toolCalls": 1,
+              "inputTokens": 0,
+              "outputTokens": 0,
+              "retries": 0,
+              "tokenUsageAvailable": false
+            },
+            "latencySeconds": 0.057,
+            "estimatedCost": {
+              "currency": "USD",
+              "amount": 0.0042,
+              "source": "fake-model"
+            }
+          },
+          "delta": {
+            "evaluationCaseRuns": 0,
+            "modelCalls": 0,
+            "toolCalls": 0,
+            "latencySeconds": 0,
+            "estimatedCostAmount": 0
+          }
+        }
+      },
+      "releaseGate": {
+        "accepted": true,
+        "reasons": [
+          "all_release_gate_checks_passed"
+        ],
+        "checks": {
+          "costBudget": {
+            "passed": true,
+            "observed": "cost increase 0.000000, maximum 0.000000"
+          },
+          "criticalCases": {
+            "passed": true,
+            "observed": "1 critical policies"
+          },
+          "evaluationCompleteness": {
+            "passed": true,
+            "observed": "train 3/3 complete=true, validation 3/3 complete=true"
+          },
+          "latencyBudget": {
+            "passed": true,
+            "observed": "latency increase 0.0000s, maximum 1.0000s"
+          },
+          "minValidationGain": {
+            "passed": true,
+            "observed": "validation delta 0.2222, required 0.0500"
+          },
+          "modelCallBudget": {
+            "passed": true,
+            "observed": "model call increase 0, maximum 0"
+          },
+          "newHardFailures": {
+            "passed": true,
+            "observed": "0 new failures, maximum 0"
+          },
+          "noGeneralization": {
+            "passed": true,
+            "observed": "train delta 0.2222, validation delta 0.2222"
+          },
+          "overfitting": {
+            "passed": true,
+            "observed": "train delta 0.2222, validation delta 0.2222"
+          },
+          "toolCallBudget": {
+            "passed": true,
+            "observed": "tool call increase 0, maximum 2"
+          },
+          "validationRegression": {
+            "passed": true,
+            "observed": "validation delta 0.2222"
+          }
+        }
+      },
+      "usage": {
+        "evaluationCaseRuns": 12,
+        "modelCalls": 16,
+        "toolCalls": 4,
+        "inputTokens": 0,
+        "outputTokens": 0,
+        "retries": 0,
+        "tokenUsageAvailable": false
+      },
+      "estimatedCost": {
+        "currency": "USD",
+        "amount": 0.0042,
+        "source": "fake-model"
+      },
+      "latencySeconds": 0.057,
+      "artifacts": {
+        "inputProfile": "round_1/input_profile.json",
+        "candidateProfile": "round_1/candidate_profile.json",
+        "trainEvaluation": "round_1/train_evaluation.json",
+        "validationEvaluation": "round_1/validation_evaluation.json",
+        "delta": "round_1/delta.json",
+        "gate": "round_1/gate.json"
+      }
+    },
+    {
+      "round": 2,
+      "promptIterAccepted": true,
+      "promptIterReasons": [
+        "candidate score gain satisfies acceptance policy"
+      ],
+      "train": {
+        "score": 0.8888888888888888,
+        "perCase": [
+          {
+            "caseId": "train-01",
+            "passed": true,
+            "score": 1,
+            "metrics": [
+              {
+                "name": "final_response_exact",
+                "score": 1,
+                "status": "passed"
+              },
+              {
+                "name": "json_schema",
+                "score": 1,
+                "status": "passed"
+              },
+              {
+                "name": "tooltrajectory",
+                "score": 1,
+                "status": "passed"
+              }
+            ],
+            "failureReasons": [],
+            "trace": [
+              {
+                "agentName": "candidate",
+                "nodeId": "candidate",
+                "appliedSurfaceIds": [
+                  "candidate#instruction",
+                  "candidate#model",
+                  "candidate#tool"
+                ]
+              }
+            ],
+            "toolTrajectory": {
+              "actual": [
+                []
+              ],
+              "expected": [
+                null
+              ]
+            }
+          },
+          {
+            "caseId": "train-02",
+            "passed": true,
+            "score": 1,
+            "metrics": [
+              {
+                "name": "final_response_exact",
+                "score": 1,
+                "status": "passed"
+              },
+              {
+                "name": "json_schema",
+                "score": 1,
+                "status": "passed"
+              },
+              {
+                "name": "tooltrajectory",
+                "score": 1,
+                "status": "passed"
+              }
+            ],
+            "failureReasons": [],
+            "trace": [
+              {
+                "agentName": "candidate",
+                "nodeId": "candidate",
+                "appliedSurfaceIds": [
+                  "candidate#instruction",
+                  "candidate#model",
+                  "candidate#tool"
+                ]
+              }
+            ],
+            "toolTrajectory": {
+              "actual": [
+                []
+              ],
+              "expected": [
+                null
+              ]
+            }
+          },
+          {
+            "caseId": "train-03",
+            "passed": false,
+            "score": 0.6666666666666666,
+            "metrics": [
+              {
+                "name": "final_response_exact",
+                "score": 0,
+                "status": "failed"
+              },
+              {
+                "name": "json_schema",
+                "score": 1,
+                "status": "passed"
+              },
+              {
+                "name": "tooltrajectory",
+                "score": 1,
+                "status": "passed"
+              }
+            ],
+            "failureReasons": [
+              {
+                "code": "final_response_mismatch",
+                "message": "actual final response differs from the expected response"
+              },
+              {
+                "code": "final_response_mismatch",
+                "message": "final response does not match expectations",
+                "metric": "final_response_exact"
+              }
+            ],
+            "trace": [
+              {
+                "agentName": "candidate",
+                "nodeId": "candidate",
+                "appliedSurfaceIds": [
+                  "candidate#instruction",
+                  "candidate#model",
+                  "candidate#tool"
+                ]
+              },
+              {
+                "agentName": "candidate",
+                "nodeId": "candidate",
+                "appliedSurfaceIds": [
+                  "candidate#instruction",
+                  "candidate#model",
+                  "candidate#tool"
+                ]
+              }
+            ],
+            "toolTrajectory": {
+              "actual": [
+                [
+                  {
+                    "id": "call-103",
+                    "name": "lookup_game",
+                    "arguments": {
+                      "game_id": "103"
+                    },
+                    "result": {
+                      "game_id": "103",
+                      "source": "deterministic-fixture"
+                    }
+                  }
+                ]
+              ],
+              "expected": [
+                [
+                  {
+                    "id": "call-103",
+                    "name": "lookup_game",
+                    "arguments": {
+                      "game_id": "103"
+                    },
+                    "result": {
+                      "winner": "East"
+                    }
+                  }
+                ]
+              ]
+            }
+          }
+        ],
+        "resources": {
+          "usage": {
+            "evaluationCaseRuns": 3,
+            "modelCalls": 4,
+            "toolCalls": 1,
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "retries": 0,
+            "tokenUsageAvailable": false
+          },
+          "latencySeconds": 0.057,
+          "estimatedCost": {
+            "currency": "USD",
+            "amount": 0.0042,
+            "source": "fake-model"
+          }
+        }
+      },
+      "validation": {
+        "score": 1,
+        "perCase": [
+          {
+            "caseId": "val-01",
+            "passed": true,
+            "score": 1,
+            "metrics": [
+              {
+                "name": "final_response_exact",
+                "score": 1,
+                "status": "passed"
+              },
+              {
+                "name": "json_schema",
+                "score": 1,
+                "status": "passed"
+              },
+              {
+                "name": "tooltrajectory",
+                "score": 1,
+                "status": "passed"
+              }
+            ],
+            "failureReasons": [],
+            "trace": [
+              {
+                "agentName": "candidate",
+                "nodeId": "candidate",
+                "appliedSurfaceIds": [
+                  "candidate#instruction",
+                  "candidate#model",
+                  "candidate#tool.lookup_game"
+                ]
+              }
+            ],
+            "toolTrajectory": {
+              "actual": [
+                []
+              ],
+              "expected": [
+                null
+              ]
+            }
+          },
+          {
+            "caseId": "val-02",
+            "passed": true,
+            "score": 1,
+            "metrics": [
+              {
+                "name": "final_response_exact",
+                "score": 1,
+                "status": "passed"
+              },
+              {
+                "name": "json_schema",
+                "score": 1,
+                "status": "passed"
+              },
+              {
+                "name": "tooltrajectory",
+                "score": 1,
+                "status": "passed"
+              }
+            ],
+            "failureReasons": [],
+            "trace": [
+              {
+                "agentName": "candidate",
+                "nodeId": "candidate",
+                "appliedSurfaceIds": [
+                  "candidate#instruction",
+                  "candidate#model",
+                  "candidate#tool.lookup_game"
+                ]
+              }
+            ],
+            "toolTrajectory": {
+              "actual": [
+                []
+              ],
+              "expected": [
+                null
+              ]
+            }
+          },
+          {
+            "caseId": "val-03",
+            "passed": true,
+            "score": 1,
+            "metrics": [
+              {
+                "name": "final_response_exact",
+                "score": 1,
+                "status": "passed"
+              },
+              {
+                "name": "json_schema",
+                "score": 1,
+                "status": "passed"
+              },
+              {
+                "name": "tooltrajectory",
+                "score": 1,
+                "status": "passed"
+              }
+            ],
+            "failureReasons": [],
+            "trace": [
+              {
+                "agentName": "candidate",
+                "nodeId": "candidate",
+                "appliedSurfaceIds": [
+                  "candidate#instruction",
+                  "candidate#model",
+                  "candidate#tool.lookup_game"
+                ]
+              },
+              {
+                "agentName": "candidate",
+                "nodeId": "candidate",
+                "appliedSurfaceIds": [
+                  "candidate#instruction",
+                  "candidate#model",
+                  "candidate#tool.lookup_game"
+                ]
+              }
+            ],
+            "toolTrajectory": {
+              "actual": [
+                [
+                  {
+                    "id": "call-203",
+                    "name": "lookup_game",
+                    "arguments": {
+                      "game_id": "203"
+                    },
+                    "result": {
+                      "game_id": "203",
+                      "source": "deterministic-fixture"
+                    }
+                  }
+                ]
+              ],
+              "expected": [
+                [
+                  {
+                    "id": "call-203",
+                    "name": "lookup_game",
+                    "arguments": {
+                      "game_id": "203"
+                    },
+                    "result": {
+                      "winner": "Central"
+                    }
+                  }
+                ]
+              ]
+            }
+          }
+        ],
+        "resources": {
+          "usage": {
+            "evaluationCaseRuns": 3,
+            "modelCalls": 4,
+            "toolCalls": 1,
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "retries": 0,
+            "tokenUsageAvailable": false
+          },
+          "latencySeconds": 0.057,
+          "estimatedCost": {
+            "currency": "USD",
+            "amount": 0.0042,
+            "source": "fake-model"
+          }
+        }
+      },
+      "delta": {
+        "againstInitial": {
+          "scoreDelta": 0.2222222222222222,
+          "newlyPassed": [
+            "val-01",
+            "val-03"
+          ],
+          "newlyFailed": [],
+          "perCase": [
+            {
+              "caseId": "val-01",
+              "baselinePass": false,
+              "candidatePass": true,
+              "baselineScore": 0.6666666666666666,
+              "candidateScore": 1,
+              "scoreDelta": 0.33333333333333337,
+              "transition": "newly_passed"
+            },
+            {
+              "caseId": "val-02",
+              "baselinePass": true,
+              "candidatePass": true,
+              "baselineScore": 1,
+              "candidateScore": 1,
+              "scoreDelta": 0,
+              "transition": "unchanged_pass"
+            },
+            {
+              "caseId": "val-03",
+              "baselinePass": false,
+              "candidatePass": true,
+              "baselineScore": 0.6666666666666666,
+              "candidateScore": 1,
+              "scoreDelta": 0.33333333333333337,
+              "transition": "newly_passed"
+            }
+          ]
+        },
+        "againstRoundInput": {
+          "scoreDelta": 0,
+          "newlyPassed": [],
+          "newlyFailed": [],
+          "perCase": [
+            {
+              "caseId": "val-01",
+              "baselinePass": true,
+              "candidatePass": true,
+              "baselineScore": 1,
+              "candidateScore": 1,
+              "scoreDelta": 0,
+              "transition": "unchanged_pass"
+            },
+            {
+              "caseId": "val-02",
+              "baselinePass": true,
+              "candidatePass": true,
+              "baselineScore": 1,
+              "candidateScore": 1,
+              "scoreDelta": 0,
+              "transition": "unchanged_pass"
+            },
+            {
+              "caseId": "val-03",
+              "baselinePass": true,
+              "candidatePass": true,
+              "baselineScore": 1,
+              "candidateScore": 1,
+              "scoreDelta": 0,
+              "transition": "unchanged_pass"
+            }
+          ]
+        },
+        "againstLastReleased": {
+          "scoreDelta": 0,
+          "newlyPassed": [],
+          "newlyFailed": [],
+          "perCase": [
+            {
+              "caseId": "val-01",
+              "baselinePass": true,
+              "candidatePass": true,
+              "baselineScore": 1,
+              "candidateScore": 1,
+              "scoreDelta": 0,
+              "transition": "unchanged_pass"
+            },
+            {
+              "caseId": "val-02",
+              "baselinePass": true,
+              "candidatePass": true,
+              "baselineScore": 1,
+              "candidateScore": 1,
+              "scoreDelta": 0,
+              "transition": "unchanged_pass"
+            },
+            {
+              "caseId": "val-03",
+              "baselinePass": true,
+              "candidatePass": true,
+              "baselineScore": 1,
+              "candidateScore": 1,
+              "scoreDelta": 0,
+              "transition": "unchanged_pass"
+            }
+          ]
+        }
+      },
+      "resources": {
+        "train": {
+          "lastReleased": {
+            "usage": {
+              "evaluationCaseRuns": 3,
+              "modelCalls": 4,
+              "toolCalls": 1,
+              "inputTokens": 0,
+              "outputTokens": 0,
+              "retries": 0,
+              "tokenUsageAvailable": false
+            },
+            "latencySeconds": 0.057,
+            "estimatedCost": {
+              "currency": "USD",
+              "amount": 0.0042,
+              "source": "fake-model"
+            }
+          },
+          "candidate": {
+            "usage": {
+              "evaluationCaseRuns": 3,
+              "modelCalls": 4,
+              "toolCalls": 1,
+              "inputTokens": 0,
+              "outputTokens": 0,
+              "retries": 0,
+              "tokenUsageAvailable": false
+            },
+            "latencySeconds": 0.057,
+            "estimatedCost": {
+              "currency": "USD",
+              "amount": 0.0042,
+              "source": "fake-model"
+            }
+          },
+          "delta": {
+            "evaluationCaseRuns": 0,
+            "modelCalls": 0,
+            "toolCalls": 0,
+            "latencySeconds": 0,
+            "estimatedCostAmount": 0
+          }
+        },
+        "validation": {
+          "lastReleased": {
+            "usage": {
+              "evaluationCaseRuns": 3,
+              "modelCalls": 4,
+              "toolCalls": 1,
+              "inputTokens": 0,
+              "outputTokens": 0,
+              "retries": 0,
+              "tokenUsageAvailable": false
+            },
+            "latencySeconds": 0.057,
+            "estimatedCost": {
+              "currency": "USD",
+              "amount": 0.0042,
+              "source": "fake-model"
+            }
+          },
+          "candidate": {
+            "usage": {
+              "evaluationCaseRuns": 3,
+              "modelCalls": 4,
+              "toolCalls": 1,
+              "inputTokens": 0,
+              "outputTokens": 0,
+              "retries": 0,
+              "tokenUsageAvailable": false
+            },
+            "latencySeconds": 0.057,
+            "estimatedCost": {
+              "currency": "USD",
+              "amount": 0.0042,
+              "source": "fake-model"
+            }
+          },
+          "delta": {
+            "evaluationCaseRuns": 0,
+            "modelCalls": 0,
+            "toolCalls": 0,
+            "latencySeconds": 0,
+            "estimatedCostAmount": 0
+          }
+        }
+      },
+      "releaseGate": {
+        "accepted": false,
+        "reasons": [
+          "min_validation_gain_not_met",
+          "no_generalization"
+        ],
+        "checks": {
+          "costBudget": {
+            "passed": true,
+            "observed": "cost increase 0.000000, maximum 0.000000"
+          },
+          "criticalCases": {
+            "passed": true,
+            "observed": "1 critical policies"
+          },
+          "evaluationCompleteness": {
+            "passed": true,
+            "observed": "train 3/3 complete=true, validation 3/3 complete=true"
+          },
+          "latencyBudget": {
+            "passed": true,
+            "observed": "latency increase 0.0000s, maximum 1.0000s"
+          },
+          "minValidationGain": {
+            "passed": false,
+            "observed": "validation delta 0.0000, required 0.0500"
+          },
+          "modelCallBudget": {
+            "passed": true,
+            "observed": "model call increase 0, maximum 0"
+          },
+          "newHardFailures": {
+            "passed": true,
+            "observed": "0 new failures, maximum 0"
+          },
+          "noGeneralization": {
+            "passed": false,
+            "observed": "train delta 0.2222, validation delta 0.0000"
+          },
+          "overfitting": {
+            "passed": true,
+            "observed": "train delta 0.2222, validation delta 0.0000"
+          },
+          "toolCallBudget": {
+            "passed": true,
+            "observed": "tool call increase 0, maximum 2"
+          },
+          "validationRegression": {
+            "passed": true,
+            "observed": "validation delta 0.0000"
+          }
+        }
+      },
+      "usage": {
+        "evaluationCaseRuns": 12,
+        "modelCalls": 16,
+        "toolCalls": 4,
+        "inputTokens": 0,
+        "outputTokens": 0,
+        "retries": 0,
+        "tokenUsageAvailable": false
+      },
+      "estimatedCost": {
+        "currency": "USD",
+        "amount": 0.0042,
+        "source": "fake-model"
+      },
+      "latencySeconds": 0.057,
+      "artifacts": {
+        "inputProfile": "round_2/input_profile.json",
+        "candidateProfile": "round_2/candidate_profile.json",
+        "trainEvaluation": "round_2/train_evaluation.json",
+        "validationEvaluation": "round_2/validation_evaluation.json",
+        "delta": "round_2/delta.json",
+        "gate": "round_2/gate.json"
+      }
+    },
+    {
+      "round": 3,
+      "promptIterAccepted": true,
+      "promptIterReasons": [
+        "candidate score gain satisfies acceptance policy"
+      ],
+      "train": {
+        "score": 1,
+        "perCase": [
+          {
+            "caseId": "train-01",
+            "passed": true,
+            "score": 1,
+            "metrics": [
+              {
+                "name": "final_response_exact",
+                "score": 1,
+                "status": "passed"
+              },
+              {
+                "name": "json_schema",
+                "score": 1,
+                "status": "passed"
+              },
+              {
+                "name": "tooltrajectory",
+                "score": 1,
+                "status": "passed"
+              }
+            ],
+            "failureReasons": [],
+            "trace": [
+              {
+                "agentName": "candidate",
+                "nodeId": "candidate",
+                "appliedSurfaceIds": [
+                  "candidate#instruction",
+                  "candidate#model",
+                  "candidate#tool"
+                ]
+              }
+            ],
+            "toolTrajectory": {
+              "actual": [
+                []
+              ],
+              "expected": [
+                null
+              ]
+            }
+          },
+          {
+            "caseId": "train-02",
+            "passed": true,
+            "score": 1,
+            "metrics": [
+              {
+                "name": "final_response_exact",
+                "score": 1,
+                "status": "passed"
+              },
+              {
+                "name": "json_schema",
+                "score": 1,
+                "status": "passed"
+              },
+              {
+                "name": "tooltrajectory",
+                "score": 1,
+                "status": "passed"
+              }
+            ],
+            "failureReasons": [],
+            "trace": [
+              {
+                "agentName": "candidate",
+                "nodeId": "candidate",
+                "appliedSurfaceIds": [
+                  "candidate#instruction",
+                  "candidate#model",
+                  "candidate#tool"
+                ]
+              }
+            ],
+            "toolTrajectory": {
+              "actual": [
+                []
+              ],
+              "expected": [
+                null
+              ]
+            }
+          },
+          {
+            "caseId": "train-03",
+            "passed": true,
+            "score": 1,
+            "metrics": [
+              {
+                "name": "final_response_exact",
+                "score": 1,
+                "status": "passed"
+              },
+              {
+                "name": "json_schema",
+                "score": 1,
+                "status": "passed"
+              },
+              {
+                "name": "tooltrajectory",
+                "score": 1,
+                "status": "passed"
+              }
+            ],
+            "failureReasons": [],
+            "trace": [
+              {
+                "agentName": "candidate",
+                "nodeId": "candidate",
+                "appliedSurfaceIds": [
+                  "candidate#instruction",
+                  "candidate#model",
+                  "candidate#tool"
+                ]
+              },
+              {
+                "agentName": "candidate",
+                "nodeId": "candidate",
+                "appliedSurfaceIds": [
+                  "candidate#instruction",
+                  "candidate#model",
+                  "candidate#tool"
+                ]
+              }
+            ],
+            "toolTrajectory": {
+              "actual": [
+                [
+                  {
+                    "id": "call-103",
+                    "name": "lookup_game",
+                    "arguments": {
+                      "game_id": "103"
+                    },
+                    "result": {
+                      "game_id": "103",
+                      "source": "deterministic-fixture"
+                    }
+                  }
+                ]
+              ],
+              "expected": [
+                [
+                  {
+                    "id": "call-103",
+                    "name": "lookup_game",
+                    "arguments": {
+                      "game_id": "103"
+                    },
+                    "result": {
+                      "winner": "East"
+                    }
+                  }
+                ]
+              ]
+            }
+          }
+        ],
+        "resources": {
+          "usage": {
+            "evaluationCaseRuns": 3,
+            "modelCalls": 4,
+            "toolCalls": 1,
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "retries": 0,
+            "tokenUsageAvailable": false
+          },
+          "latencySeconds": 0.057,
+          "estimatedCost": {
+            "currency": "USD",
+            "amount": 0.0042,
+            "source": "fake-model"
+          }
+        }
+      },
+      "validation": {
+        "score": 0.8888888888888888,
+        "perCase": [
+          {
+            "caseId": "val-01",
+            "passed": true,
+            "score": 1,
+            "metrics": [
+              {
+                "name": "final_response_exact",
+                "score": 1,
+                "status": "passed"
+              },
+              {
+                "name": "json_schema",
+                "score": 1,
+                "status": "passed"
+              },
+              {
+                "name": "tooltrajectory",
+                "score": 1,
+                "status": "passed"
+              }
+            ],
+            "failureReasons": [],
+            "trace": [
+              {
+                "agentName": "candidate",
+                "nodeId": "candidate",
+                "appliedSurfaceIds": [
+                  "candidate#instruction",
+                  "candidate#model",
+                  "candidate#tool.lookup_game"
+                ]
+              }
+            ],
+            "toolTrajectory": {
+              "actual": [
+                []
+              ],
+              "expected": [
+                null
+              ]
+            }
+          },
+          {
+            "caseId": "val-02",
+            "passed": true,
+            "score": 1,
+            "metrics": [
+              {
+                "name": "final_response_exact",
+                "score": 1,
+                "status": "passed"
+              },
+              {
+                "name": "json_schema",
+                "score": 1,
+                "status": "passed"
+              },
+              {
+                "name": "tooltrajectory",
+                "score": 1,
+                "status": "passed"
+              }
+            ],
+            "failureReasons": [],
+            "trace": [
+              {
+                "agentName": "candidate",
+                "nodeId": "candidate",
+                "appliedSurfaceIds": [
+                  "candidate#instruction",
+                  "candidate#model",
+                  "candidate#tool.lookup_game"
+                ]
+              }
+            ],
+            "toolTrajectory": {
+              "actual": [
+                []
+              ],
+              "expected": [
+                null
+              ]
+            }
+          },
+          {
+            "caseId": "val-03",
+            "passed": false,
+            "score": 0.6666666666666666,
+            "metrics": [
+              {
+                "name": "final_response_exact",
+                "score": 1,
+                "status": "passed"
+              },
+              {
+                "name": "json_schema",
+                "score": 1,
+                "status": "passed"
+              },
+              {
+                "name": "tooltrajectory",
+                "score": 0,
+                "status": "failed",
+                "reason": "tool trajectory mismatch: match tools: tool id call-203 with name lookup_game mismatch: actual tool call-203 named lookup_game mismatch with expected tool call-203 named lookup_game: arguments mismatch: actual map[game_id:000] and expected map[game_id:203] do not match: compare game_id: actual 000 and expected 203 do not match"
+              }
+            ],
+            "failureReasons": [
+              {
+                "code": "tool_argument_error",
+                "message": "tool \"lookup_game\" arguments differ from expected"
+              },
+              {
+                "code": "tool_argument_error",
+                "message": "tool trajectory mismatch: match tools: tool id call-203 with name lookup_game mismatch: actual tool call-203 named lookup_game mismatch with expected tool call-203 named lookup_game: arguments mismatch: actual map[game_id:000] and expected map[game_id:203] do not match: compare game_id: actual 000 and expected 203 do not match",
+                "metric": "tooltrajectory"
+              }
+            ],
+            "trace": [
+              {
+                "agentName": "candidate",
+                "nodeId": "candidate",
+                "appliedSurfaceIds": [
+                  "candidate#instruction",
+                  "candidate#model",
+                  "candidate#tool.lookup_game"
+                ]
+              },
+              {
+                "agentName": "candidate",
+                "nodeId": "candidate",
+                "appliedSurfaceIds": [
+                  "candidate#instruction",
+                  "candidate#model",
+                  "candidate#tool.lookup_game"
+                ]
+              }
+            ],
+            "toolTrajectory": {
+              "actual": [
+                [
+                  {
+                    "id": "call-203",
+                    "name": "lookup_game",
+                    "arguments": {
+                      "game_id": "000"
+                    },
+                    "result": {
+                      "game_id": "000",
+                      "source": "deterministic-fixture"
+                    }
+                  }
+                ]
+              ],
+              "expected": [
+                [
+                  {
+                    "id": "call-203",
+                    "name": "lookup_game",
+                    "arguments": {
+                      "game_id": "203"
+                    },
+                    "result": {
+                      "winner": "Central"
+                    }
+                  }
+                ]
+              ]
+            }
+          }
+        ],
+        "resources": {
+          "usage": {
+            "evaluationCaseRuns": 3,
+            "modelCalls": 4,
+            "toolCalls": 1,
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "retries": 0,
+            "tokenUsageAvailable": false
+          },
+          "latencySeconds": 0.057,
+          "estimatedCost": {
+            "currency": "USD",
+            "amount": 0.0042,
+            "source": "fake-model"
+          }
+        }
+      },
+      "delta": {
+        "againstInitial": {
+          "scoreDelta": 0.11111111111111105,
+          "newlyPassed": [
+            "val-01"
+          ],
+          "newlyFailed": [],
+          "perCase": [
+            {
+              "caseId": "val-01",
+              "baselinePass": false,
+              "candidatePass": true,
+              "baselineScore": 0.6666666666666666,
+              "candidateScore": 1,
+              "scoreDelta": 0.33333333333333337,
+              "transition": "newly_passed"
+            },
+            {
+              "caseId": "val-02",
+              "baselinePass": true,
+              "candidatePass": true,
+              "baselineScore": 1,
+              "candidateScore": 1,
+              "scoreDelta": 0,
+              "transition": "unchanged_pass"
+            },
+            {
+              "caseId": "val-03",
+              "baselinePass": false,
+              "candidatePass": false,
+              "baselineScore": 0.6666666666666666,
+              "candidateScore": 0.6666666666666666,
+              "scoreDelta": 0,
+              "transition": "unchanged_fail"
+            }
+          ]
+        },
+        "againstRoundInput": {
+          "scoreDelta": -0.11111111111111116,
+          "newlyPassed": [],
+          "newlyFailed": [
+            "val-03"
+          ],
+          "perCase": [
+            {
+              "caseId": "val-01",
+              "baselinePass": true,
+              "candidatePass": true,
+              "baselineScore": 1,
+              "candidateScore": 1,
+              "scoreDelta": 0,
+              "transition": "unchanged_pass"
+            },
+            {
+              "caseId": "val-02",
+              "baselinePass": true,
+              "candidatePass": true,
+              "baselineScore": 1,
+              "candidateScore": 1,
+              "scoreDelta": 0,
+              "transition": "unchanged_pass"
+            },
+            {
+              "caseId": "val-03",
+              "baselinePass": true,
+              "candidatePass": false,
+              "baselineScore": 1,
+              "candidateScore": 0.6666666666666666,
+              "scoreDelta": -0.33333333333333337,
+              "transition": "newly_failed"
+            }
+          ]
+        },
+        "againstLastReleased": {
+          "scoreDelta": -0.11111111111111116,
+          "newlyPassed": [],
+          "newlyFailed": [
+            "val-03"
+          ],
+          "perCase": [
+            {
+              "caseId": "val-01",
+              "baselinePass": true,
+              "candidatePass": true,
+              "baselineScore": 1,
+              "candidateScore": 1,
+              "scoreDelta": 0,
+              "transition": "unchanged_pass"
+            },
+            {
+              "caseId": "val-02",
+              "baselinePass": true,
+              "candidatePass": true,
+              "baselineScore": 1,
+              "candidateScore": 1,
+              "scoreDelta": 0,
+              "transition": "unchanged_pass"
+            },
+            {
+              "caseId": "val-03",
+              "baselinePass": true,
+              "candidatePass": false,
+              "baselineScore": 1,
+              "candidateScore": 0.6666666666666666,
+              "scoreDelta": -0.33333333333333337,
+              "transition": "newly_failed"
+            }
+          ]
+        }
+      },
+      "resources": {
+        "train": {
+          "lastReleased": {
+            "usage": {
+              "evaluationCaseRuns": 3,
+              "modelCalls": 4,
+              "toolCalls": 1,
+              "inputTokens": 0,
+              "outputTokens": 0,
+              "retries": 0,
+              "tokenUsageAvailable": false
+            },
+            "latencySeconds": 0.057,
+            "estimatedCost": {
+              "currency": "USD",
+              "amount": 0.0042,
+              "source": "fake-model"
+            }
+          },
+          "candidate": {
+            "usage": {
+              "evaluationCaseRuns": 3,
+              "modelCalls": 4,
+              "toolCalls": 1,
+              "inputTokens": 0,
+              "outputTokens": 0,
+              "retries": 0,
+              "tokenUsageAvailable": false
+            },
+            "latencySeconds": 0.057,
+            "estimatedCost": {
+              "currency": "USD",
+              "amount": 0.0042,
+              "source": "fake-model"
+            }
+          },
+          "delta": {
+            "evaluationCaseRuns": 0,
+            "modelCalls": 0,
+            "toolCalls": 0,
+            "latencySeconds": 0,
+            "estimatedCostAmount": 0
+          }
+        },
+        "validation": {
+          "lastReleased": {
+            "usage": {
+              "evaluationCaseRuns": 3,
+              "modelCalls": 4,
+              "toolCalls": 1,
+              "inputTokens": 0,
+              "outputTokens": 0,
+              "retries": 0,
+              "tokenUsageAvailable": false
+            },
+            "latencySeconds": 0.057,
+            "estimatedCost": {
+              "currency": "USD",
+              "amount": 0.0042,
+              "source": "fake-model"
+            }
+          },
+          "candidate": {
+            "usage": {
+              "evaluationCaseRuns": 3,
+              "modelCalls": 4,
+              "toolCalls": 1,
+              "inputTokens": 0,
+              "outputTokens": 0,
+              "retries": 0,
+              "tokenUsageAvailable": false
+            },
+            "latencySeconds": 0.057,
+            "estimatedCost": {
+              "currency": "USD",
+              "amount": 0.0042,
+              "source": "fake-model"
+            }
+          },
+          "delta": {
+            "evaluationCaseRuns": 0,
+            "modelCalls": 0,
+            "toolCalls": 0,
+            "latencySeconds": 0,
+            "estimatedCostAmount": 0
+          }
+        }
+      },
+      "releaseGate": {
+        "accepted": false,
+        "reasons": [
+          "min_validation_gain_not_met",
+          "new_hard_failure",
+          "overfitting",
+          "validation_regression",
+          "critical_case_regression:val-03"
+        ],
+        "checks": {
+          "costBudget": {
+            "passed": true,
+            "observed": "cost increase 0.000000, maximum 0.000000"
+          },
+          "criticalCases": {
+            "passed": false,
+            "observed": "1 critical policies"
+          },
+          "evaluationCompleteness": {
+            "passed": true,
+            "observed": "train 3/3 complete=true, validation 3/3 complete=true"
+          },
+          "latencyBudget": {
+            "passed": true,
+            "observed": "latency increase 0.0000s, maximum 1.0000s"
+          },
+          "minValidationGain": {
+            "passed": false,
+            "observed": "validation delta -0.1111, required 0.0500"
+          },
+          "modelCallBudget": {
+            "passed": true,
+            "observed": "model call increase 0, maximum 0"
+          },
+          "newHardFailures": {
+            "passed": false,
+            "observed": "1 new failures, maximum 0"
+          },
+          "noGeneralization": {
+            "passed": true,
+            "observed": "train delta 0.3333, validation delta -0.1111"
+          },
+          "overfitting": {
+            "passed": false,
+            "observed": "train delta 0.3333, validation delta -0.1111"
+          },
+          "toolCallBudget": {
+            "passed": true,
+            "observed": "tool call increase 0, maximum 2"
+          },
+          "validationRegression": {
+            "passed": false,
+            "observed": "validation delta -0.1111"
+          }
+        }
+      },
+      "usage": {
+        "evaluationCaseRuns": 12,
+        "modelCalls": 16,
+        "toolCalls": 4,
+        "inputTokens": 0,
+        "outputTokens": 0,
+        "retries": 0,
+        "tokenUsageAvailable": false
+      },
+      "estimatedCost": {
+        "currency": "USD",
+        "amount": 0.0042,
+        "source": "fake-model"
+      },
+      "latencySeconds": 0.057,
+      "artifacts": {
+        "inputProfile": "round_3/input_profile.json",
+        "candidateProfile": "round_3/candidate_profile.json",
+        "trainEvaluation": "round_3/train_evaluation.json",
+        "validationEvaluation": "round_3/validation_evaluation.json",
+        "delta": "round_3/delta.json",
+        "gate": "round_3/gate.json"
+      }
+    }
+  ],
+  "failureAttributionStats": {
+    "baselineTrain": {
+      "final_response_mismatch": 3,
+      "format_error": 1,
+      "tool_argument_error": 1
+    },
+    "baselineValidation": {
+      "final_response_mismatch": 1,
+      "tool_argument_error": 1
+    },
+    "rounds": [
+      {
+        "round": 1,
+        "candidateTrain": {
+          "final_response_mismatch": 2,
+          "format_error": 1
+        },
+        "candidateValidation": {}
+      },
+      {
+        "round": 2,
+        "candidateTrain": {
+          "final_response_mismatch": 1
+        },
+        "candidateValidation": {}
+      },
+      {
+        "round": 3,
+        "candidateTrain": {},
+        "candidateValidation": {
+          "tool_argument_error": 1
+        }
+      }
+    ]
+  },
+  "writeBack": {
+    "recommendedForWriteBack": true,
+    "performed": false,
+    "acceptedProfileRef": "round_1/candidate_profile.json"
+  }
+}

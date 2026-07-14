@@ -1,0 +1,35 @@
+{
+  "evalSetId": "recap-train",
+  "name": "recap-train",
+  "evalCases": [
+    {
+      "evalId": "train-01",
+      "conversation": [{
+        "invocationId": "train-01-1",
+        "userContent": {"role": "user", "content": "Recap game 101 and emphasize the fourth-quarter comeback."},
+        "finalResponse": {"role": "assistant", "content": "{\"game_id\":\"101\",\"winner\":\"Harbor\",\"decisive_moment\":\"12-2 fourth-quarter run\"}"}
+      }],
+      "sessionInput": {"appName": "promptiter-recap-app", "userId": "demo"}
+    },
+    {
+      "evalId": "train-02",
+      "conversation": [{
+        "invocationId": "train-02-1",
+        "userContent": {"role": "user", "content": "Return a JSON recap for game 102."},
+        "finalResponse": {"role": "assistant", "content": "{\"game_id\":\"102\",\"winner\":\"North\",\"decisive_moment\":\"overtime goal\"}"}
+      }],
+      "sessionInput": {"appName": "promptiter-recap-app", "userId": "demo"}
+    },
+    {
+      "evalId": "train-03",
+      "conversation": [{
+        "invocationId": "train-03-1",
+        "userContent": {"role": "user", "content": "Look up game 103 and recap it."},
+        "finalResponse": {"role": "assistant", "content": "{\"game_id\":\"103\",\"winner\":\"East\",\"decisive_moment\":\"late penalty\"}"},
+        "tools": [{"id": "call-103", "name": "lookup_game", "arguments": {"game_id": "103"}, "result": {"winner": "East"}}],
+        "toolMock": {"mode": "replay"}
+      }],
+      "sessionInput": {"appName": "promptiter-recap-app", "userId": "demo"}
+    }
+  ]
+}

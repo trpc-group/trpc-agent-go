@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "seed": 42,
+  "mode": "fake",
+  "prompt": {
+    "sourceFile": "baseline.prompt.txt",
+    "targetSurfaceIds": ["candidate#instruction"],
+    "writeBack": false
+  },
+  "evaluation": {
+    "trainEvalSetId": "recap-train",
+    "validationEvalSetId": "recap-validation",
+    "trainFile": "train.evalset.json",
+    "validationFile": "validation.evalset.json",
+    "metricsFile": "recap.metrics.json",
+    "traceMode": true
+  },
+  "optimization": {
+    "maxRounds": 3,
+    "maxRoundsWithoutAcceptance": 2,
+    "minScoreGain": 0.05
+  },
+  "gate": {
+    "minValidationScoreGain": 0.05,
+    "maxNewHardFailures": 0,
+    "rejectValidationRegression": true,
+    "criticalCases": [
+      {"caseId": "val-03", "mustPass": true, "maxScoreDrop": 0.0}
+    ],
+    "requireCompleteEvaluation": true,
+    "maxLatencyIncreaseSeconds": 1.0,
+    "maxModelCallIncrease": 0,
+    "maxToolCallIncrease": 2,
+    "maxCostIncrease": 0.0
+  },
+  "audit": {
+    "outputDir": "../../output",
+    "saveRoundArtifacts": true
+  }
+}
