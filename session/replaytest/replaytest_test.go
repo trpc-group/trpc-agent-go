@@ -12,9 +12,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -73,6 +75,59 @@ func TestNormalizerNormalize(t *testing.T) {
 	require.Equal(t, 1, *branchSummary.LastEventIndex)
 	require.Equal(t, map[string]any{"status": "ok"}, snapshot.Tracks["tool"][0].Payload)
 	require.Equal(t, "not configured", snapshot.Unsupported["ttl"])
+}
+
+func TestNormalizerPreservesEventAndMemoryIdentity(t *testing.T) {
+	normalize := func(eventIDs, memoryIDs []string) Snapshot {
+		events := make([]event.Event, len(eventIDs))
+		memories := make([]*memory.Entry, len(memoryIDs))
+		for i := range eventIDs {
+			events[i] = event.Event{ID: eventIDs[i], Author: fmt.Sprintf("event-%d", i)}
+		}
+		for i := range memoryIDs {
+			memories[i] = &memory.Entry{
+				ID: memoryIDs[i], Memory: &memory.Memory{Memory: fmt.Sprintf("memory-%d", i)},
+			}
+		}
+		sess := session.NewSession("app", "user", "identity", session.WithSessionEvents(events))
+		snapshot, err := DefaultNormalizer().Normalize(sess, memories, nil)
+		require.NoError(t, err)
+		return snapshot
+	}
+
+	baseline := normalize([]string{"event-a", "event-b"}, []string{"memory-a", "memory-b"})
+	require.Equal(t, "event-000", baseline.Events[0]["id"])
+	require.Equal(t, "event-001", baseline.Events[1]["id"])
+	require.Equal(t, "memory-000", baseline.Memories[0].ID)
+	require.Equal(t, "memory-001", baseline.Memories[1].ID)
+
+	tests := []struct {
+		name      string
+		eventIDs  []string
+		memoryIDs []string
+		eventID   any
+		memoryID  string
+	}{
+		{
+			name: "duplicate IDs", eventIDs: []string{"event-x", "event-x"},
+			memoryIDs: []string{"memory-x", "memory-x"}, eventID: "event-000", memoryID: "memory-000",
+		},
+		{
+			name: "missing IDs", eventIDs: []string{"event-x", ""},
+			memoryIDs: []string{"memory-x", ""}, eventID: "", memoryID: "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			candidate := normalize(tt.eventIDs, tt.memoryIDs)
+			require.Equal(t, tt.eventID, candidate.Events[1]["id"])
+			require.Equal(t, tt.memoryID, candidate.Memories[1].ID)
+			diffs, err := Compare("identity", "baseline", "candidate", baseline, candidate, nil)
+			require.NoError(t, err)
+			requireDiffAtPath(t, diffs, "$.events[1].id")
+			requireDiffAtPath(t, diffs, "$.memories[1].id")
+		})
+	}
 }
 
 func TestNormalizerToolIdentifiersAndJSONPayloads(t *testing.T) {
@@ -166,6 +221,38 @@ func TestNormalizerToolIdentifiersAndJSONPayloads(t *testing.T) {
 	responseContent := responseMessage["content"].(map[string]any)
 	require.Equal(t, true, responseContent["ok"])
 	require.Equal(t, largeInteger, responseContent["large"])
+}
+
+func TestNormalizerAvoidsAliasShapedRawIDCollisions(t *testing.T) {
+	toolCallEvent := event.New("invocation", "assistant", event.WithResponse(&model.Response{
+		Choices: []model.Choice{{Message: model.Message{
+			Role: model.RoleAssistant,
+			ToolCalls: []model.ToolCall{
+				{ID: "backend-tool-call", Type: "function"},
+				{ID: "tool-call-000", Type: "function"},
+			},
+		}}},
+	}))
+	require.NoError(t, event.SetExtension(toolCallEvent, event.ToolCallArgsExtensionKey, map[string]any{
+		"backend-tool-call": map[string]any{"value": "first"},
+		"tool-call-000":     map[string]any{"value": "second"},
+	}))
+	sess := session.NewSession("app", "user", "alias-collision",
+		session.WithSessionEvents([]event.Event{*toolCallEvent}),
+	)
+
+	snapshot, err := DefaultNormalizer().Normalize(sess, nil, nil)
+	require.NoError(t, err)
+	choices := snapshot.Events[0]["choices"].([]any)
+	message := choices[0].(map[string]any)["message"].(map[string]any)
+	toolCalls := message["tool_calls"].([]any)
+	require.Equal(t, "tool-call-000", toolCalls[0].(map[string]any)["id"])
+	require.Equal(t, "tool-call-001", toolCalls[1].(map[string]any)["id"])
+
+	extensions := snapshot.Events[0]["extensions"].(map[string]any)
+	toolArgs := extensions[event.ToolCallArgsExtensionKey].(map[string]any)
+	require.Equal(t, "first", toolArgs["tool-call-000"].(map[string]any)["value"])
+	require.Equal(t, "second", toolArgs["tool-call-001"].(map[string]any)["value"])
 }
 
 func TestNormalizeTracksUsesStableTrackOrder(t *testing.T) {
@@ -557,6 +644,42 @@ func TestHarnessRunAndWriteReport(t *testing.T) {
 	_, err = (Harness{Backends: backends[:1]}).Run(ctx, Case{Name: "bad", Run: func(context.Context, Backend) error { return nil }})
 	require.ErrorContains(t, err, "at least two")
 	require.Error(t, WriteReport("", Report{}))
+}
+
+func TestWriteReportConcurrentWriters(t *testing.T) {
+	const writers = 32
+	path := filepath.Join(t.TempDir(), "report.json")
+	start := make(chan struct{})
+	errors := make(chan error, writers)
+	var wait sync.WaitGroup
+	for i := 1; i <= writers; i++ {
+		version := i
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			<-start
+			errors <- WriteReport(path, Report{
+				Version: version,
+				Cases:   []CaseReport{{Name: fmt.Sprintf("writer-%d", version)}},
+			})
+		}()
+	}
+	close(start)
+	wait.Wait()
+	close(errors)
+	for err := range errors {
+		require.NoError(t, err)
+	}
+
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err)
+	var report Report
+	require.NoError(t, json.Unmarshal(raw, &report))
+	require.Len(t, report.Cases, 1)
+	require.Equal(t, fmt.Sprintf("writer-%d", report.Version), report.Cases[0].Name)
+	matches, err := filepath.Glob(filepath.Join(filepath.Dir(path), ".replay-report-*.tmp"))
+	require.NoError(t, err)
+	require.Empty(t, matches)
 }
 
 func TestSnapshotCloneCaptureAndBackendValidation(t *testing.T) {
@@ -986,11 +1109,15 @@ func TestWriteReportFailureCases(t *testing.T) {
 		require.ErrorContains(t, err, "create report directory")
 	})
 
-	t.Run("write temporary file", func(t *testing.T) {
+	t.Run("ignore stale legacy temporary file", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "report.json")
-		require.NoError(t, os.Mkdir(path+".tmp", 0o755))
-		err := WriteReport(path, Report{})
-		require.ErrorContains(t, err, "write replay report")
+		require.NoError(t, os.WriteFile(path+".tmp", []byte("stale"), 0o600))
+		require.NoError(t, WriteReport(path, Report{}))
+		raw, err := os.ReadFile(path)
+		require.NoError(t, err)
+		var report Report
+		require.NoError(t, json.Unmarshal(raw, &report))
+		require.Equal(t, 1, report.Version)
 	})
 
 	t.Run("publish report", func(t *testing.T) {

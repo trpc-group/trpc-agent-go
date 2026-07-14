@@ -285,11 +285,20 @@ func WriteReport(path string, report Report) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return fmt.Errorf("create report directory: %w", err)
 	}
-	temporary := path + ".tmp"
-	if err := os.WriteFile(temporary, append(raw, '\n'), 0o600); err != nil {
+	temporary, err := os.CreateTemp(filepath.Dir(path), ".replay-report-*.tmp")
+	if err != nil {
 		return fmt.Errorf("write replay report: %w", err)
 	}
-	if err := os.Rename(temporary, path); err != nil {
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	if _, err := temporary.Write(append(raw, '\n')); err != nil {
+		temporary.Close()
+		return fmt.Errorf("write replay report: %w", err)
+	}
+	if err := temporary.Close(); err != nil {
+		return fmt.Errorf("write replay report: %w", err)
+	}
+	if err := os.Rename(temporaryPath, path); err != nil {
 		return fmt.Errorf("publish replay report: %w", err)
 	}
 	return nil

@@ -53,9 +53,10 @@ func (n Normalizer) normalize(
 	}
 	invocations := make(map[string]string)
 	toolCalls := make(map[string]string)
+	eventAliases := make(map[string]string)
 	var err error
 	if capabilitySupported(capabilities, CapabilityEvents) {
-		events, err = n.normalizeEvents(sess.Events, invocations, toolCalls)
+		events, err = n.normalizeEvents(sess.Events, eventAliases, invocations, toolCalls)
 	}
 	if err != nil {
 		return Snapshot{}, err
@@ -89,6 +90,7 @@ func (n Normalizer) normalize(
 
 func (n Normalizer) normalizeEvents(
 	events []event.Event,
+	eventAliases map[string]string,
 	invocations map[string]string,
 	toolCalls map[string]string,
 ) ([]map[string]any, error) {
@@ -102,13 +104,11 @@ func (n Normalizer) normalizeEvents(
 		if err := decodeJSON(raw, &value); err != nil {
 			return nil, fmt.Errorf("decode event %d: %w", i, err)
 		}
-		value["id"] = fmt.Sprintf("event-%03d", i)
+		value["id"] = stableAliasOrEmpty(events[i].ID, eventAliases, "event")
 		delete(value, "timestamp")
 		delete(value, "requestID")
 		delete(value, "created")
 		delete(value, "response")
-		aliasMapValue(value, "invocationId", invocations, "invocation")
-		aliasMapValue(value, "parentInvocationId", invocations, "invocation")
 		normalizeEventToolData(value, toolCalls)
 		if events[i].StateDelta != nil {
 			value["stateDelta"] = normalizeState(events[i].StateDelta)
@@ -169,7 +169,11 @@ func normalizeBytes(raw []byte) any {
 }
 
 func normalizeMemories(entries []*memory.Entry, unordered bool) ([]MemorySnapshot, error) {
-	result := make([]MemorySnapshot, 0, len(entries))
+	type normalizedMemory struct {
+		rawID    string
+		snapshot MemorySnapshot
+	}
+	normalized := make([]normalizedMemory, 0, len(entries))
 	for rank, entry := range entries {
 		if entry == nil {
 			return nil, fmt.Errorf("memory %d is nil", rank)
@@ -191,20 +195,23 @@ func normalizeMemories(entries []*memory.Entry, unordered bool) ([]MemorySnapsho
 		if entry.Memory.EventTime != nil {
 			item.EventTime = entry.Memory.EventTime.UTC().Format(time.RFC3339Nano)
 		}
-		result = append(result, item)
+		normalized = append(normalized, normalizedMemory{rawID: entry.ID, snapshot: item})
 	}
 	if unordered {
-		for i := range result {
-			result[i].Rank = -1
+		for i := range normalized {
+			normalized[i].snapshot.Rank = -1
 		}
-		sort.Slice(result, func(i, j int) bool {
-			left, _ := json.Marshal(result[i])
-			right, _ := json.Marshal(result[j])
+		sort.Slice(normalized, func(i, j int) bool {
+			left, _ := json.Marshal(normalized[i].snapshot)
+			right, _ := json.Marshal(normalized[j].snapshot)
 			return string(left) < string(right)
 		})
 	}
-	for i := range result {
-		result[i].ID = fmt.Sprintf("memory-%03d", i)
+	result := make([]MemorySnapshot, len(normalized))
+	aliases := make(map[string]string)
+	for i := range normalized {
+		normalized[i].snapshot.ID = stableAliasOrEmpty(normalized[i].rawID, aliases, "memory")
+		result[i] = normalized[i].snapshot
 	}
 	return result, nil
 }
@@ -334,7 +341,6 @@ func normalizeEventToolData(value map[string]any, toolCalls map[string]string) {
 		choice, _ := rawChoice.(map[string]any)
 		for _, messageKey := range []string{"message", "delta"} {
 			message, _ := choice[messageKey].(map[string]any)
-			aliasMapValue(message, "tool_id", toolCalls, "tool-call")
 			if role, _ := message["role"].(string); role == "tool" {
 				if content, ok := message["content"].(string); ok {
 					message["content"] = normalizeBytes([]byte(content))
@@ -376,14 +382,27 @@ func stableAlias(original string, aliases map[string]string, prefix string) stri
 	if alias, exists := aliases[original]; exists {
 		return alias
 	}
-	for _, alias := range aliases {
-		if alias == original {
-			return original
+	for index := len(aliases); ; index++ {
+		alias := fmt.Sprintf("%s-%03d", prefix, index)
+		collision := false
+		for _, existing := range aliases {
+			if existing == alias {
+				collision = true
+				break
+			}
+		}
+		if !collision {
+			aliases[original] = alias
+			return alias
 		}
 	}
-	alias := fmt.Sprintf("%s-%03d", prefix, len(aliases))
-	aliases[original] = alias
-	return alias
+}
+
+func stableAliasOrEmpty(original string, aliases map[string]string, prefix string) string {
+	if original == "" {
+		return ""
+	}
+	return stableAlias(original, aliases, prefix)
 }
 
 func normalizeKnownIdentifiers(value any, invocations, toolCalls map[string]string) {
