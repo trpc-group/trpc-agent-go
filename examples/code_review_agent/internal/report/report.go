@@ -58,14 +58,101 @@ func BuildMetrics(taskID string, started time.Time, findings []review.Finding, r
 
 // JSON renders a redacted pretty JSON report.
 func JSON(r review.Report) ([]byte, error) {
+	r = redactedReport(r)
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetIndent("", "  ")
 	if err := enc.Encode(r); err != nil {
 		return nil, err
 	}
-	redacted := redact.Text(buf.String())
-	return []byte(redacted.Text), nil
+	return buf.Bytes(), nil
+}
+
+func redactedReport(in review.Report) review.Report {
+	out := in
+	out.Task.Error = redactString(in.Task.Error)
+	out.Summary = redactString(in.Summary)
+	out.Plan.Model = redactString(in.Plan.Model)
+	out.Plan.Provider = redactString(in.Plan.Provider)
+	out.Plan.Source = redactString(in.Plan.Source)
+	out.Plan.Skill = redactString(in.Plan.Skill)
+	out.Plan.Runtime = redactString(in.Plan.Runtime)
+	out.Plan.Commands = redactStrings(in.Plan.Commands)
+	out.Plan.RuleSources = redactStrings(in.Plan.RuleSources)
+	out.ChangedFiles = make([]review.DiffFile, len(in.ChangedFiles))
+	for index, file := range in.ChangedFiles {
+		out.ChangedFiles[index] = file
+		out.ChangedFiles[index].OldPath = redactString(file.OldPath)
+		out.ChangedFiles[index].NewPath = redactString(file.NewPath)
+		out.ChangedFiles[index].PackageDir = redactString(file.PackageDir)
+		out.ChangedFiles[index].Hunks = make([]review.DiffHunk, len(file.Hunks))
+		for hunkIndex, hunk := range file.Hunks {
+			out.ChangedFiles[index].Hunks[hunkIndex] = hunk
+			out.ChangedFiles[index].Hunks[hunkIndex].Lines = make([]review.DiffLine, len(hunk.Lines))
+			for lineIndex, line := range hunk.Lines {
+				out.ChangedFiles[index].Hunks[hunkIndex].Lines[lineIndex] = line
+				out.ChangedFiles[index].Hunks[hunkIndex].Lines[lineIndex].Content = redactString(line.Content)
+			}
+		}
+	}
+	out.Findings = make([]review.Finding, len(in.Findings))
+	for index, finding := range in.Findings {
+		out.Findings[index] = finding
+		out.Findings[index].Title = redactString(finding.Title)
+		out.Findings[index].Category = redactString(finding.Category)
+		out.Findings[index].File = redactString(finding.File)
+		out.Findings[index].Evidence = redactString(finding.Evidence)
+		out.Findings[index].Recommendation = redactString(finding.Recommendation)
+		out.Findings[index].Source = redactString(finding.Source)
+		out.Findings[index].RuleID = redactString(finding.RuleID)
+		out.Findings[index].Status = redactString(finding.Status)
+		out.Findings[index].Fingerprint = redactString(finding.Fingerprint)
+	}
+	out.SandboxRuns = make([]review.SandboxRun, len(in.SandboxRuns))
+	for index, run := range in.SandboxRuns {
+		out.SandboxRuns[index] = run
+		out.SandboxRuns[index].Runtime = redactString(run.Runtime)
+		out.SandboxRuns[index].Command = redactString(run.Command)
+		out.SandboxRuns[index].Status = redactString(run.Status)
+		out.SandboxRuns[index].StdoutRedacted = redactString(run.StdoutRedacted)
+		out.SandboxRuns[index].StderrRedacted = redactString(run.StderrRedacted)
+		out.SandboxRuns[index].ErrorType = redactString(run.ErrorType)
+	}
+	out.PermissionDecisions = make([]review.PermissionDecisionRecord, len(in.PermissionDecisions))
+	for index, decision := range in.PermissionDecisions {
+		out.PermissionDecisions[index] = decision
+		out.PermissionDecisions[index].ToolName = redactString(decision.ToolName)
+		out.PermissionDecisions[index].Command = redactString(decision.Command)
+		out.PermissionDecisions[index].FrameworkAction = redactString(decision.FrameworkAction)
+		out.PermissionDecisions[index].SafetyDecision = redactString(decision.SafetyDecision)
+		out.PermissionDecisions[index].RiskLevel = redactString(decision.RiskLevel)
+		out.PermissionDecisions[index].RuleID = redactString(decision.RuleID)
+		out.PermissionDecisions[index].Reason = redactString(decision.Reason)
+	}
+	out.Artifacts = append([]review.ArtifactRecord(nil), in.Artifacts...)
+	for index, artifact := range out.Artifacts {
+		out.Artifacts[index].Kind = redactString(artifact.Kind)
+		out.Artifacts[index].Path = redactString(artifact.Path)
+		out.Artifacts[index].MimeType = redactString(artifact.MimeType)
+		out.Artifacts[index].SHA256 = redactString(artifact.SHA256)
+	}
+	out.Conclusion = redactString(in.Conclusion)
+	return out
+}
+
+func redactString(value string) string {
+	return redact.Text(value).Text
+}
+
+func redactStrings(values []string) []string {
+	if values == nil {
+		return nil
+	}
+	redacted := make([]string, len(values))
+	for index, value := range values {
+		redacted[index] = redactString(value)
+	}
+	return redacted
 }
 
 // Markdown renders a redacted Markdown report.

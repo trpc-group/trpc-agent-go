@@ -9,6 +9,7 @@
 package report
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -47,6 +48,47 @@ func TestRenderReportsRedactSecrets(t *testing.T) {
 	for _, data := range [][]byte{jsonBytes, mdBytes} {
 		if strings.Contains(string(data), "supersecretvalue") {
 			t.Fatalf("report leaked secret: %s", data)
+		}
+	}
+}
+
+func TestJSONRedactsQuotedSecretsBeforeEscaping(t *testing.T) {
+	secrets := []string{"quoted-password-value", "quoted-token-value", "quoted-api-key-value"}
+	r := review.Report{
+		Task: review.ReviewTask{ID: "task-quoted", Status: review.TaskStatusPassed},
+		Summary: `password="quoted-password-value" token="quoted-token-value" api_key="quoted-api-key-value"
+json={"note":"quoted-value"}`,
+		Findings: []review.Finding{{
+			File:           "pkg/config.go",
+			Evidence:       `password="quoted-password-value"`,
+			Recommendation: `rotate token="quoted-token-value" and api_key="quoted-api-key-value"`,
+		}},
+	}
+	jsonBytes, err := JSON(r)
+	if err != nil {
+		t.Fatalf("JSON() error = %v", err)
+	}
+	if !json.Valid(jsonBytes) {
+		t.Fatalf("JSON() returned invalid JSON: %s", jsonBytes)
+	}
+	for _, secret := range secrets {
+		if strings.Contains(string(jsonBytes), secret) {
+			t.Fatalf("JSON report leaked quoted secret %q: %s", secret, jsonBytes)
+		}
+	}
+
+	outDir := t.TempDir()
+	artifacts, err := Write(outDir, r, time.Unix(1, 0))
+	if err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	raw, err := os.ReadFile(artifacts[0].Path)
+	if err != nil {
+		t.Fatalf("ReadFile(JSON artifact) error = %v", err)
+	}
+	for _, secret := range secrets {
+		if strings.Contains(string(raw), secret) {
+			t.Fatalf("JSON artifact leaked quoted secret %q: %s", secret, raw)
 		}
 	}
 }
