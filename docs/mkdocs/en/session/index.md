@@ -17,10 +17,10 @@ Within the same conversation, it enables natural continuity between turns, preve
 - **Event Limit**: Controls the maximum number of events stored per session to prevent memory overflow
 - **Event Pagination**: PostgreSQL/MySQL support paged history reads for `GetSession`
 - **TTL Management**: Supports automatic expiration and cleanup of session data
-- **Flexible Persistence**: Supports no persistence through Noop, plus Memory, SQLite, Redis, PostgreSQL, PGVector, MySQL, and ClickHouse
+- **Flexible Persistence**: Supports no persistence through Noop, plus Memory, SQLite, Redis, PostgreSQL, PGVector, MySQL, ClickHouse, and MongoDB
 - **Concurrency Safe**: Built-in read-write locks ensure safe concurrent access
 - **Automatic Management**: Automatically handles session creation, loading, and updates when integrated with Runner
-- **Soft Delete Support**: SQLite/PostgreSQL/PGVector/MySQL/ClickHouse support soft delete for data recovery
+- **Soft Delete Support**: SQLite/PostgreSQL/PGVector/MySQL/ClickHouse/MongoDB support soft delete for data recovery
 - **Multimodal Externalization**: Optionally externalizes inline image/audio/file payloads in session events to Artifact storage
 
 ## Quick Start
@@ -29,7 +29,7 @@ Within the same conversation, it enables natural continuity between turns, preve
 
 Session management in tRPC-Agent-Go is integrated into the Runner via `runner.WithSessionService`. The Runner automatically handles session creation, loading, updating, and persistence.
 
-**Supported Persistence Modes:** [Noop](noop.md) (no persistence), Memory, SQLite, Redis, PostgreSQL, PGVector, MySQL, ClickHouse
+**Supported Persistence Modes:** [Noop](noop.md) (no persistence), Memory, SQLite, Redis, PostgreSQL, PGVector, MySQL, ClickHouse, MongoDB
 
 **Default Behavior:** If `runner.WithSessionService` is not configured, the Runner defaults to in-memory storage, and data will be lost after process restart.
 
@@ -386,10 +386,11 @@ TTL is only refreshed on **write operations** (e.g., CreateSession, AppendEvent,
 | PGVector | Periodic scan (soft/hard delete) | Yes |
 | MySQL | Periodic scan (soft/hard delete) | Yes |
 | ClickHouse | Application-level cleanup + Native TTL | Yes |
+| MongoDB | TTL indexes + periodic event/track cleanup | Yes |
 
 ## Storage Backend Comparison
 
-tRPC-Agent-Go provides a no-persistence mode and seven session storage backends for different scenarios:
+tRPC-Agent-Go provides a no-persistence mode and eight session storage backends for different scenarios:
 
 | Storage Type | Use Case | Persistence | Distributed | Complex Queries |
 | --- | --- | --- | --- | --- |
@@ -401,6 +402,7 @@ tRPC-Agent-Go provides a no-persistence mode and seven session storage backends 
 | [PGVector](pgvector.md) | Production, semantic recall | ✅ | ✅ | ✅ |
 | [MySQL](mysql.md) | Production, complex queries | ✅ | ✅ | ✅ |
 | [ClickHouse](clickhouse.md) | Production, massive data | ✅ | ✅ | ✅ |
+| [MongoDB](mongodb.md) | Production, document storage | ✅ | ✅ | ✅ |
 
 ## Hook Capabilities
 
@@ -458,7 +460,7 @@ sessionService := inmemory.NewSessionService(
 
 **Chain of Responsibility**: Hooks form a chain via `next()`. You can return early to short-circuit subsequent logic, and errors propagate upward.
 
-**Cross-Backend Consistency**: All storage backends (Memory, SQLite, Redis, PostgreSQL, PGVector, MySQL, ClickHouse) have unified Hook support. Simply inject Hook slices when constructing the service — the usage is identical across all backends.
+**Cross-Backend Consistency**: All storage backends (Memory, SQLite, Redis, PostgreSQL, PGVector, MySQL, ClickHouse, MongoDB) have unified Hook support. Simply inject Hook slices when constructing the service — the usage is identical across all backends.
 
 ## Advanced Usage
 
@@ -703,6 +705,7 @@ Not all storage backends implement `TrackService`. A type assertion is required:
 | PostgreSQL | ✅ |
 | PGVector | ✅ |
 | MySQL | ✅ |
+| MongoDB | ✅ |
 | ClickHouse | ❌ |
 
 **Basic usage**:
@@ -764,6 +767,7 @@ See [PGVector Session](pgvector.md) for configuration details, indexing behavior
 - [PGVector Session](pgvector.md) - PostgreSQL session storage with semantic recall
 - [MySQL Storage](mysql.md) - Relational database storage
 - [ClickHouse Storage](clickhouse.md) - Massive data storage
+- [MongoDB Storage](mongodb.md) - Distributed document database storage
 
 ## References
 

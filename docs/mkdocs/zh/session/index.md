@@ -17,10 +17,10 @@ Session 用于管理当前会话的上下文，隔离维度为 `<appName, userID
 - **事件限制**：控制每个会话存储的最大事件数量，防止内存溢出
 - **事件分页**：PostgreSQL/MySQL 支持 `GetSession` 历史事件分页读取
 - **TTL 管理**：支持会话数据的自动过期清理
-- **灵活的持久化方式**：支持 Noop 无持久化，以及内存、SQLite、Redis、PostgreSQL、PGVector、MySQL、ClickHouse 存储
+- **灵活的持久化方式**：支持 Noop 无持久化，以及内存、SQLite、Redis、PostgreSQL、PGVector、MySQL、ClickHouse、MongoDB 存储
 - **并发安全**：内置读写锁保证并发访问安全
 - **自动管理**：集成 Runner 后自动处理会话创建、加载和更新
-- **软删除支持**：SQLite/PostgreSQL/PGVector/MySQL/ClickHouse 支持软删除，数据可恢复
+- **软删除支持**：SQLite/PostgreSQL/PGVector/MySQL/ClickHouse/MongoDB 支持软删除，数据可恢复
 - **内容外存**：可选地将 session event 中的 inline image/audio/file payload 外存到 Artifact 存储
 
 ## 快速开始
@@ -29,7 +29,7 @@ Session 用于管理当前会话的上下文，隔离维度为 `<appName, userID
 
 tRPC-Agent-Go 的会话管理通过 `runner.WithSessionService` 集成到 Runner 中，Runner 会自动处理会话的创建、加载、更新和持久化。
 
-**支持的持久化方式：** [Noop](noop.md)（无持久化）、内存（Memory）、SQLite、Redis、PostgreSQL、PGVector、MySQL、ClickHouse
+**支持的持久化方式：** [Noop](noop.md)（无持久化）、内存（Memory）、SQLite、Redis、PostgreSQL、PGVector、MySQL、ClickHouse、MongoDB
 
 **默认行为：** 如果不配置 `runner.WithSessionService`，Runner 会默认使用内存存储（Memory），数据在进程重启后会丢失。
 
@@ -388,10 +388,11 @@ TTL 仅在**写操作**时刷新（如 CreateSession、AppendEvent、UpdateSessi
 | PGVector | 定期扫描（软删除或硬删除） | 是 |
 | MySQL | 定期扫描（软删除或硬删除） | 是 |
 | ClickHouse | 应用层清理 + Native TTL | 是 |
+| MongoDB | TTL 索引 + 定期清理事件与 Track 事件 | 是 |
 
 ## 存储后端对比
 
-tRPC-Agent-Go 提供无持久化模式和七种会话存储后端，满足不同场景需求：
+tRPC-Agent-Go 提供无持久化模式和八种会话存储后端，满足不同场景需求：
 
 | 存储类型 | 适用场景 | 持久化 | 分布式 | 复杂查询 |
 | --- | --- | --- | --- | --- |
@@ -403,6 +404,7 @@ tRPC-Agent-Go 提供无持久化模式和七种会话存储后端，满足不同
 | [PGVector](pgvector.md) | 生产环境、语义召回 | ✅ | ✅ | ✅ |
 | [MySQL](mysql.md) | 生产环境、复杂查询 | ✅ | ✅ | ✅ |
 | [ClickHouse](clickhouse.md) | 生产环境、海量日志 | ✅ | ✅ | ✅ |
+| [MongoDB](mongodb.md) | 生产环境、文档存储 | ✅ | ✅ | ✅ |
 
 ## Hook 能力
 
@@ -462,7 +464,7 @@ sessionService := inmemory.NewSessionService(
 
 **责任链执行**：Hook 通过 `next()` 形成链式调用，可提前返回以短路后续逻辑，错误会向上传递。
 
-**跨后端一致**：内存、SQLite、Redis、PostgreSQL、PGVector、MySQL、ClickHouse 所有存储后端均已统一接入 Hook 机制，构造服务时注入 Hook 切片即可，使用方式完全一致。
+**跨后端一致**：内存、SQLite、Redis、PostgreSQL、PGVector、MySQL、ClickHouse、MongoDB 所有存储后端均已统一接入 Hook 机制，构造服务时注入 Hook 切片即可，使用方式完全一致。
 
 ## 高级用法
 
@@ -714,6 +716,7 @@ type TrackService interface {
 | PostgreSQL 存储 | ✅ |
 | PGVector | ✅ |
 | MySQL 存储 | ✅ |
+| MongoDB 存储 | ✅ |
 | ClickHouse 存储 | ❌ |
 
 **基本用法**：
@@ -775,6 +778,7 @@ system prompt 中。
 - [PGVector 会话存储](pgvector.md) - 基于 PostgreSQL 的语义会话检索
 - [MySQL 存储](mysql.md) - 关系型数据库存储
 - [ClickHouse 存储](clickhouse.md) - 海量数据存储
+- [MongoDB 存储](mongodb.md) - 分布式文档数据库存储
 
 ## 参考资源
 
