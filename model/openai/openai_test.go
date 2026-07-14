@@ -4135,6 +4135,128 @@ func TestUploadFileData_Success(t *testing.T) {
 	assert.Equalf(t, "file_test_1", id, "expected id=file_test_1, got %s", id)
 }
 
+func TestUploadFileData_MiniMaxDefaults(t *testing.T) {
+	const fileID = "9223372036854775807"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodPost, r.Method)
+		require.Equal(t, miniMaxFileUploadPath, r.URL.Path)
+		require.NoError(t, r.ParseMultipartForm(10<<20))
+		require.Equal(
+			t,
+			string(miniMaxFilePurpose),
+			r.MultipartForm.Value["purpose"][0],
+		)
+		files := r.MultipartForm.File["file"]
+		require.Len(t, files, 1)
+		require.Equal(t, "clip.mp4", files[0].Filename)
+
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{
+			"file": {
+				"file_id": %s,
+				"bytes": 5,
+				"created_at": 123,
+				"filename": "clip.mp4",
+				"purpose": "video_understanding"
+			},
+			"base_resp": {"status_code": 0, "status_msg": "success"}
+		}`, fileID)
+	}))
+	defer server.Close()
+
+	m := New(
+		"MiniMax-M3",
+		WithVariant(VariantMiniMax),
+		WithAPIKey("test-key"),
+		WithBaseURL(server.URL+"/v1"),
+	)
+	id, err := m.UploadFileData(
+		context.Background(),
+		"clip.mp4",
+		[]byte("video"),
+	)
+	require.NoError(t, err)
+	require.Equal(t, fileID, id)
+}
+
+func TestMiniMaxFileIDExtractor(t *testing.T) {
+	tests := []struct {
+		name    string
+		raw     string
+		nilFile bool
+		want    string
+		wantErr string
+	}{
+		{name: "nil response", nilFile: true, wantErr: "empty response"},
+		{name: "openai id", raw: `{"id":"file_1"}`, want: "file_1"},
+		{name: "missing file", raw: `{}`, wantErr: "missing file"},
+		{name: "invalid file", raw: `{"file":"bad"}`, wantErr: "decode minimax file upload response"},
+		{name: "missing file id", raw: `{"file":{}}`, wantErr: "missing file_id"},
+		{name: "empty string file id", raw: `{"file":{"file_id":""}}`, wantErr: "empty file_id"},
+		{name: "string file id", raw: `{"file":{"file_id":"123"}}`, want: "123"},
+		{name: "invalid file id", raw: `{"file":{"file_id":true}}`, wantErr: "decode minimax file_id"},
+		{name: "numeric file id", raw: `{"file":{"file_id":123}}`, want: "123"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var file *openai.FileObject
+			if !tt.nilFile {
+				file = &openai.FileObject{}
+				require.NoError(t, json.Unmarshal([]byte(tt.raw), file))
+			}
+			got, err := miniMaxFileIDExtractor(file)
+			if tt.wantErr != "" {
+				require.ErrorContains(t, err, tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestUploadedFileID(t *testing.T) {
+	m := &Model{}
+	id, err := m.uploadedFileID(&openai.FileObject{ID: "file_1"})
+	require.NoError(t, err)
+	require.Equal(t, "file_1", id)
+
+	_, err = m.uploadedFileID(nil)
+	require.ErrorContains(t, err, "empty response")
+}
+
+func TestMiniMaxFileDeletionBodyConvertor(t *testing.T) {
+	custom := []byte(`{"custom":true}`)
+	require.Equal(
+		t,
+		custom,
+		miniMaxFileDeletionBodyConvertor(
+			custom,
+			"123",
+			miniMaxFilePurpose,
+		),
+	)
+	require.JSONEq(
+		t,
+		`{"file_id":123,"purpose":"video_understanding"}`,
+		string(miniMaxFileDeletionBodyConvertor(
+			nil,
+			"123",
+			miniMaxFilePurpose,
+		)),
+	)
+	require.JSONEq(
+		t,
+		`{"file_id":"file_123","purpose":"video_understanding"}`,
+		string(miniMaxFileDeletionBodyConvertor(
+			nil,
+			"file_123",
+			miniMaxFilePurpose,
+		)),
+	)
+}
+
 // TestUploadFile_Success tests UploadFile with a temp file and mock server.
 func TestUploadFile_Success(t *testing.T) {
 	tmp, err := os.CreateTemp(t.TempDir(), "batch_input_*.jsonl")
@@ -4293,6 +4415,35 @@ func TestDeleteFile_Success(t *testing.T) {
 	m := New("test-model", WithAPIKey("k"), WithBaseURL(server.URL))
 	err := m.DeleteFile(context.Background(), "file_z")
 	require.NoErrorf(t, err, "DeleteFile failed: %v", err)
+}
+
+func TestDeleteFile_MiniMaxDefaults(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodPost, r.Method)
+		require.Equal(t, miniMaxFileDeletePath, r.URL.Path)
+		require.Equal(t, "application/json", r.Header.Get("Content-Type"))
+		decoder := json.NewDecoder(r.Body)
+		decoder.UseNumber()
+		var body map[string]any
+		require.NoError(t, decoder.Decode(&body))
+		require.Equal(t, json.Number("123"), body["file_id"])
+		require.Equal(t, string(miniMaxFilePurpose), body["purpose"])
+
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{
+			"file_id": 123,
+			"base_resp": {"status_code": 0, "status_msg": "success"}
+		}`)
+	}))
+	defer server.Close()
+
+	m := New(
+		"MiniMax-M3",
+		WithVariant(VariantMiniMax),
+		WithAPIKey("test-key"),
+		WithBaseURL(server.URL+"/v1"),
+	)
+	require.NoError(t, m.DeleteFile(context.Background(), "123"))
 }
 
 // TestModel_GenerateContent_Streaming_FinalReasoningAggregated

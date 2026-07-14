@@ -1838,6 +1838,7 @@ The framework currently supports the following Variants:
 - Automatically inferred for the official `api.minimax.io` and `api.minimaxi.com` hosts
 - Serializes the thinking toggle as `{"thinking": {"type": "adaptive"}}` when enabled and `{"thinking": {"type": "disabled"}}` when disabled
 - Keeps MiniMax's native `<think>...</think>` content unchanged so interleaved thinking can be replayed across tool calls
+- Uses MiniMax's `/v1/files/upload` and `/v1/files/delete` endpoints, with `video_understanding` as the default purpose
 
 ##### 7.2. Usage
 

@@ -1821,6 +1821,7 @@ Variant 机制是 Model 模块的重要优化，用于处理不同 OpenAI 兼容
 - 对官方 `api.minimax.io` 和 `api.minimaxi.com` host 自动推断
 - 开启思考时序列化为 `{"thinking": {"type": "adaptive"}}`，关闭时序列化为 `{"thinking": {"type": "disabled"}}`
 - 保持 MiniMax 原生 `<think>...</think>` 内容不变，以便工具调用间完整回传交错思考
+- 文件上传和删除使用 MiniMax 的 `/v1/files/upload` 与 `/v1/files/delete` 接口，默认 purpose 为 `video_understanding`
 
 ##### 7.2. 使用方式
 

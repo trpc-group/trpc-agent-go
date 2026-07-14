@@ -60,6 +60,9 @@ const (
 	defaultMiniMaxBaseURL string = "https://api.minimax.io/v1"
 	miniMaxAPIHost        string = "api.minimax.io"
 	miniMaxCNAPIHost      string = "api.minimaxi.com"
+	miniMaxFileUploadPath string = "/v1/files/upload"
+	miniMaxFileDeletePath string = "/v1/files/delete"
+	miniMaxFilePurpose           = openai.FilePurpose("video_understanding")
 )
 
 // Variant represents different model variants with specific behaviors.
@@ -132,6 +135,7 @@ type variantConfig struct {
 	fileDeletionMethod         string
 	fileDeletionBodyConvertor  fileDeletionBodyConvertor
 	fileUploadRequestConvertor fileUploadRequestConvertor
+	fileIDExtractor            fileIDExtractor
 	// Whether to skip file type in content parts for this variant.
 	skipFileTypeInContent bool
 	// Whether user message content must be reduced to text only.
@@ -156,14 +160,74 @@ type variantConfig struct {
 	// content only when content is empty and the response has no tool calls.
 	reasoningContentAsContentFallback bool
 }
-type fileDeletionBodyConvertor func(body []byte, fileID string) []byte
+type fileDeletionBodyConvertor func(
+	body []byte,
+	fileID string,
+	purpose openai.FilePurpose,
+) []byte
 
 // defaultFileDeletionBodyConvertor is the default file deletion body converter.
-var defaultFileDeletionBodyConvertor = func(body []byte, fileID string) []byte {
+var defaultFileDeletionBodyConvertor = func(
+	body []byte,
+	_ string,
+	_ openai.FilePurpose,
+) []byte {
 	return body
 }
 
 type fileUploadRequestConvertor func(r *http.Request, file *os.File, fileOpts *FileOptions) (*http.Request, error)
+type fileIDExtractor func(file *openai.FileObject) (string, error)
+
+func miniMaxFileDeletionBodyConvertor(
+	body []byte,
+	fileID string,
+	purpose openai.FilePurpose,
+) []byte {
+	if body != nil {
+		return body
+	}
+	id := strings.TrimSpace(fileID)
+	if _, err := strconv.ParseInt(id, 10, 64); err != nil {
+		id = strconv.Quote(id)
+	}
+	return []byte(`{"file_id":` + id + `,"purpose":` +
+		strconv.Quote(string(purpose)) + `}`)
+}
+
+func miniMaxFileIDExtractor(file *openai.FileObject) (string, error) {
+	if file == nil {
+		return "", fmt.Errorf("minimax file upload returned an empty response")
+	}
+	if file.ID != "" {
+		return file.ID, nil
+	}
+	nested, ok := file.JSON.ExtraFields["file"]
+	if !ok {
+		return "", fmt.Errorf("minimax file upload response is missing file")
+	}
+	var payload struct {
+		FileID json.RawMessage `json:"file_id"`
+	}
+	if err := json.Unmarshal([]byte(nested.Raw()), &payload); err != nil {
+		return "", fmt.Errorf("decode minimax file upload response: %w", err)
+	}
+	rawID := strings.TrimSpace(string(payload.FileID))
+	if rawID == "" || rawID == "null" {
+		return "", fmt.Errorf("minimax file upload response is missing file_id")
+	}
+	if strings.HasPrefix(rawID, `"`) {
+		var id string
+		_ = json.Unmarshal(payload.FileID, &id)
+		if strings.TrimSpace(id) == "" {
+			return "", fmt.Errorf("minimax file upload response has an empty file_id")
+		}
+		return id, nil
+	}
+	if _, err := strconv.ParseInt(rawID, 10, 64); err != nil {
+		return "", fmt.Errorf("decode minimax file_id %q: %w", rawID, err)
+	}
+	return rawID, nil
+}
 
 // variantConfigs maps variant names to their configurations.
 var variantConfigs = map[Variant]variantConfig{
@@ -198,7 +262,11 @@ var variantConfigs = map[Variant]variantConfig{
 		filePurpose:           openai.FilePurpose("file-extract"),
 		fileDeletionMethod:    http.MethodPost,
 		skipFileTypeInContent: true,
-		fileDeletionBodyConvertor: func(body []byte, fileID string) []byte {
+		fileDeletionBodyConvertor: func(
+			body []byte,
+			fileID string,
+			_ openai.FilePurpose,
+		) []byte {
 			if body != nil {
 				return body
 			}
@@ -266,10 +334,13 @@ var variantConfigs = map[Variant]variantConfig{
 		reasoningContentAsContentFallback: true,
 	},
 	VariantMiniMax: {
-		filePurpose:               openai.FilePurposeUserData,
-		fileDeletionMethod:        http.MethodDelete,
+		fileUploadPath:            miniMaxFileUploadPath,
+		fileDeletionPath:          miniMaxFileDeletePath,
+		filePurpose:               miniMaxFilePurpose,
+		fileDeletionMethod:        http.MethodPost,
 		skipFileTypeInContent:     false,
-		fileDeletionBodyConvertor: defaultFileDeletionBodyConvertor,
+		fileDeletionBodyConvertor: miniMaxFileDeletionBodyConvertor,
+		fileIDExtractor:           miniMaxFileIDExtractor,
 		apiKeyName:                miniMaxAPIKeyName,
 		defaultBaseURL:            defaultMiniMaxBaseURL,
 		thinkingEnabledKey:        thinkingKey,
@@ -2771,6 +2842,16 @@ func WithFileBaseURL(url string) FileOption {
 	}
 }
 
+func (m *Model) uploadedFileID(file *openai.FileObject) (string, error) {
+	if m.variantConfig.fileIDExtractor != nil {
+		return m.variantConfig.fileIDExtractor(file)
+	}
+	if file == nil {
+		return "", fmt.Errorf("file upload returned an empty response")
+	}
+	return file.ID, nil
+}
+
 // UploadFile uploads a file to OpenAI and returns the file ID.
 // The file can then be referenced in messages using AddFileID().
 func (m *Model) UploadFile(ctx context.Context, filePath string, opts ...FileOption) (string, error) {
@@ -2828,13 +2909,13 @@ func (m *Model) UploadFile(ctx context.Context, filePath string, opts ...FileOpt
 		if err != nil {
 			return "", fmt.Errorf("failed to upload file: %w", err)
 		}
-		return fileObj.ID, nil
+		return m.uploadedFileID(fileObj)
 	}
 	fileObj, err := m.client.Files.New(ctx, fileParams, middlewareOpt)
 	if err != nil {
 		return "", fmt.Errorf("failed to upload file: %w", err)
 	}
-	return fileObj.ID, nil
+	return m.uploadedFileID(fileObj)
 }
 
 // UploadFileData uploads file data to OpenAI and returns the file ID.
@@ -2909,25 +2990,30 @@ func (m *Model) UploadFileData(
 		if err != nil {
 			return "", fmt.Errorf("failed to upload file data: %w", err)
 		}
-		return fileObj.ID, nil
+		return m.uploadedFileID(fileObj)
 	}
 	fileObj, err := m.client.Files.New(ctx, fileParams, middlewareOpt)
 	if err != nil {
 		return "", fmt.Errorf("failed to upload file data: %w", err)
 	}
-	return fileObj.ID, nil
+	return m.uploadedFileID(fileObj)
 }
 
 // DeleteFile deletes a file from OpenAI.
 func (m *Model) DeleteFile(ctx context.Context, fileID string, opts ...FileOption) error {
 	fileOpts := &FileOptions{
-		Path:   m.variantConfig.fileDeletionPath,
-		Method: m.variantConfig.fileDeletionMethod,
+		Path:    m.variantConfig.fileDeletionPath,
+		Purpose: m.variantConfig.filePurpose,
+		Method:  m.variantConfig.fileDeletionMethod,
 	}
 	for _, opt := range opts {
 		opt(fileOpts)
 	}
-	fileOpts.Body = m.variantConfig.fileDeletionBodyConvertor(fileOpts.Body, fileID)
+	fileOpts.Body = m.variantConfig.fileDeletionBodyConvertor(
+		fileOpts.Body,
+		fileID,
+		fileOpts.Purpose,
+	)
 	// Create middleware to handle custom options.
 	middlewareOpt := openaiopt.WithMiddleware(
 		func(r *http.Request, next openaiopt.MiddlewareNext) (*http.Response, error) {
@@ -2942,6 +3028,9 @@ func (m *Model) DeleteFile(ctx context.Context, fileID string, opts ...FileOptio
 			if fileOpts.Body != nil {
 				r.Body = io.NopCloser(bytes.NewReader(fileOpts.Body))
 				r.ContentLength = int64(len(fileOpts.Body))
+				if r.Header.Get("Content-Type") == "" {
+					r.Header.Set("Content-Type", "application/json")
+				}
 			}
 			return next(r)
 		})
