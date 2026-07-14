@@ -109,6 +109,11 @@ allowed/denied commands, limits and secret patterns **without touching code**:
 | `default_decision_on_parse_failure` | `deny` (default) or `ask` for unparsable commands |
 | `risk_overrides` | bump/lower a rule's risk by id |
 
+Output is capped at execution time by the AfterTool callback; the actual command
+timeout is enforced by the executor itself (`RunProgramSpec.Timeout`), so the
+guard only flags an oversized *requested* timeout for review rather than
+duplicating that enforcement.
+
 ## Backend boundaries
 
 | Aspect | `workspace_exec` | `exec_command` (hostexec) |

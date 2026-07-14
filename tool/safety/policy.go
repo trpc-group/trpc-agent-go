@@ -55,7 +55,8 @@ type LimitsPolicy struct {
 	// MaxOutputBytes caps an exec tool's captured output. It is enforced at
 	// execution time by the AfterTool output-limit callback
 	// (PermissionPolicy.OutputLimitCallback), which truncates output beyond
-	// this size. Zero disables the cap.
+	// this size. Zero is treated as unset and defaults to 1 MiB; set a negative
+	// value to disable the cap.
 	MaxOutputBytes int64 `json:"max_output_bytes" yaml:"max_output_bytes"`
 }
 

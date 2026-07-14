@@ -9,6 +9,7 @@
 package safety
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -36,7 +37,9 @@ import (
 //	runner.Run(ctx, user, session, msg,
 //	    agent.WithToolPermissionPolicyFunc(pol.CheckToolPermission))
 //
-// A zero MaxOutputBytes disables the callback (returns a no-op).
+// Register this callback LAST: returning a truncated result short-circuits the
+// remaining AfterTool callbacks. A negative MaxOutputBytes disables the cap;
+// zero is treated as unset and defaults to 1 MiB (see LimitsPolicy).
 func (p *PermissionPolicy) OutputLimitCallback() tool.AfterToolCallbackStructured {
 	limit := p.scanner.policy.Limits.MaxOutputBytes
 	return func(_ context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
@@ -60,21 +63,38 @@ func (p *PermissionPolicy) OutputLimitCallback() tool.AfterToolCallbackStructure
 // for any exec result shape that carries an "output" string, preserving the
 // result's other fields and adding an "output_truncated" marker. It returns the
 // possibly-replaced result and whether a truncation happened.
+//
+// Replacing the typed result with a map is safe: RunAfterTool passes the
+// original args.Result to every callback (it does not feed one callback's
+// CustomResult into the next) and stops at the first CustomResult, so no later
+// callback ever receives this map; the framework then serialises it to JSON for
+// the model, where it is identical to the original result apart from the
+// truncated output and the added marker.
 func limitResultOutput(result any, max int64) (any, bool) {
 	blob, err := json.Marshal(result)
 	if err != nil {
 		return result, false
 	}
+	// UseNumber keeps numeric fields (exit_code, offset, ...) exact instead of
+	// widening them to float64, so the re-serialised result matches the original.
+	dec := json.NewDecoder(bytes.NewReader(blob))
+	dec.UseNumber()
 	var m map[string]any
-	if err := json.Unmarshal(blob, &m); err != nil {
+	if err := dec.Decode(&m); err != nil {
 		return result, false
 	}
 	out, ok := m["output"].(string)
 	if !ok || int64(len(out)) <= max {
 		return result, false
 	}
-	m["output"] = truncateUTF8(out, int(max)) +
-		fmt.Sprintf("\n...[truncated by tool safety guard: output exceeded max_output_bytes=%d]", max)
+	marker := fmt.Sprintf("\n...[truncated by tool safety guard: output exceeded max_output_bytes=%d]", max)
+	// Budget for the marker so the final output field stays within the cap
+	// (best-effort: a cap smaller than the marker itself cannot be honoured).
+	budget := max - int64(len(marker))
+	if budget < 0 {
+		budget = 0
+	}
+	m["output"] = truncateUTF8(out, int(budget)) + marker
 	m["output_truncated"] = true
 	return m, true
 }
