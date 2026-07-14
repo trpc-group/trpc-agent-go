@@ -616,6 +616,26 @@ func TestDefaultScanner_NetworkAndCodeEdges(t *testing.T) {
 func TestDefaultScanner_UnknownArgumentsAndSensitivePathRegressions(t *testing.T) {
 	scanner := MustDefaultScanner(Policy{})
 
+	t.Run("unknown arguments dedupe raw and decoded findings", func(t *testing.T) {
+		report, err := scanner.Scan(context.Background(), ScanRequest{
+			ToolName:     "mcp_call",
+			Backend:      BackendUnknown,
+			RawArguments: []byte(`{"command":"rm -rf /"}`),
+		})
+		require.NoError(t, err)
+		require.Equal(t, DecisionNeedsHumanReview, report.Decision)
+		require.Equal(t, "unknown.dangerous_command", report.RuleID)
+		require.Len(t, report.Findings, 1)
+		require.Equal(t, Finding{
+			RuleID:         "unknown.dangerous_command",
+			RiskLevel:      RiskCritical,
+			Decision:       DecisionNeedsHumanReview,
+			Evidence:       "unknown tool contains dangerous command-like content",
+			Recommendation: "review unknown open-world tools before execution",
+			Redacted:       false,
+		}, report.Findings[0])
+	})
+
 	t.Run("unknown arguments decode escaped dangerous command", func(t *testing.T) {
 		report, err := scanner.Scan(context.Background(), ScanRequest{
 			ToolName:     "mcp_call",
@@ -646,6 +666,19 @@ func TestDefaultScanner_UnknownArgumentsAndSensitivePathRegressions(t *testing.T
 		require.Equal(t, DecisionNeedsHumanReview, pathReport.Decision)
 		require.Equal(t, "unknown.sensitive_path", pathReport.RuleID)
 		require.True(t, pathReport.Redacted)
+	})
+
+	t.Run("unknown arguments decode nested object array strings recursively", func(t *testing.T) {
+		report, err := scanner.Scan(context.Background(), ScanRequest{
+			ToolName:     "mcp_call",
+			Backend:      BackendUnknown,
+			RawArguments: []byte(`{"outer":[{"inner":{"command":"rm\u0020-rf\u0020/"}}]}`),
+		})
+		require.NoError(t, err)
+		require.Equal(t, DecisionNeedsHumanReview, report.Decision)
+		require.Equal(t, "unknown.dangerous_command", report.RuleID)
+		require.Len(t, report.Findings, 1)
+		require.Equal(t, "unknown tool contains dangerous command-like content", report.Findings[0].Evidence)
 	})
 
 	t.Run("normalized sensitive paths are denied", func(t *testing.T) {
