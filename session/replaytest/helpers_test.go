@@ -1,3 +1,11 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
 //go:build cgo
 
 package replaytest
@@ -28,6 +36,16 @@ func makeBackends(t *testing.T, key session.Key) []Backend {
 	sqliteBackend.SessKey = func() session.Key { return key }
 
 	return []Backend{*inMemBackend, *sqliteBackend}
+}
+
+// leakySessionService wraps session.Service to make DeleteSession a no-op,
+// so sessions persist after cleanup and VerifyCleanup detects a leak.
+type leakySessionService struct {
+	session.Service
+}
+
+func (l *leakySessionService) DeleteSession(ctx context.Context, key session.Key, opts ...session.Option) error {
+	return nil // no-op: don't actually delete, causing a leak
 }
 
 // requireNoUnexpectedDiff asserts that a CaseResult has no unexpected diffs.

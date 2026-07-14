@@ -1,3 +1,11 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
 //go:build cgo
 
 package replaytest
@@ -1017,9 +1025,7 @@ func TestCheckpoint_SaveAndExists(t *testing.T) {
 // --- RunSuite tests ---
 
 func TestHarness_RunSuite(t *testing.T) {
-	key1 := sessKey("suite-1")
-	key2 := sessKey("suite-2")
-	backends := makeBackends(t, key1)
+	backends := makeBackends(t, sessKey("suite"))
 	normalizer := NewNormalizer(DefaultNormalizerConfig())
 	h := Harness{Backends: backends, Normalizer: normalizer}
 	cases := []Case{
@@ -1027,22 +1033,30 @@ func TestHarness_RunSuite(t *testing.T) {
 			Name:         "suite_case1",
 			RequiredCaps: []string{CapEvents},
 			Run: func(ctx context.Context, backend Backend) error {
-				backend.SessKey = func() session.Key { return key1 }
-				backend.Sess.CreateSession(ctx, key1, nil)
-				sess, _ := backend.Sess.GetSession(ctx, key1)
-				backend.Sess.AppendEvent(ctx, sess, newUserEvent("hello"))
-				return nil
+				key := backend.SessKey()
+				if _, err := backend.Sess.CreateSession(ctx, key, nil); err != nil {
+					return err
+				}
+				sess, err := backend.Sess.GetSession(ctx, key)
+				if err != nil {
+					return err
+				}
+				return backend.Sess.AppendEvent(ctx, sess, newUserEvent("hello"))
 			},
 		},
 		{
 			Name:         "suite_case2",
 			RequiredCaps: []string{CapEvents},
 			Run: func(ctx context.Context, backend Backend) error {
-				backend.SessKey = func() session.Key { return key2 }
-				backend.Sess.CreateSession(ctx, key2, nil)
-				sess, _ := backend.Sess.GetSession(ctx, key2)
-				backend.Sess.AppendEvent(ctx, sess, newAssistantEvent("world"))
-				return nil
+				key := backend.SessKey()
+				if _, err := backend.Sess.CreateSession(ctx, key, nil); err != nil {
+					return err
+				}
+				sess, err := backend.Sess.GetSession(ctx, key)
+				if err != nil {
+					return err
+				}
+				return backend.Sess.AppendEvent(ctx, sess, newAssistantEvent("world"))
 			},
 		},
 	}
@@ -1050,6 +1064,10 @@ func TestHarness_RunSuite(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, report)
 	assert.Equal(t, 2, report.Summary.TotalCases)
+	// Verify both cases passed, confirming per-case session isolation worked.
+	for _, r := range report.Cases {
+		assert.Equal(t, StatusPass, r.Status, "case %s should pass", r.Name)
+	}
 }
 
 // --- RunID tests ---
@@ -1616,8 +1634,8 @@ func TestHarness_RecordCBFailure(t *testing.T) {
 }
 
 func TestHarness_WriteReport_ErrorPath(t *testing.T) {
-	// Writing to a path under a non-existent drive/directory should fail on Windows.
-	err := WriteReport("Z:\\nonexistent\\deep\\path\\report.json", Report{})
+	// NUL bytes in path are invalid on all platforms (Linux, macOS, Windows).
+	err := WriteReport("invalid\x00path\x00report.json", Report{})
 	assert.Error(t, err)
 }
 
@@ -5073,10 +5091,12 @@ func TestHarness_Run_CleanupWithVerifyLeakWarning(t *testing.T) {
 	// This exercises the logf line for LEAK WARNING.
 	key := sessKey("leak-warn")
 	backends := makeBackends(t, key)
+	// Wrap the first backend's Sess so DeleteSession is a no-op,
+	// causing the session to persist and VerifyCleanup to detect a leak.
+	backends[0].Sess = &leakySessionService{Service: backends[0].Sess}
 	var logs []string
 	normalizer := NewNormalizer(DefaultNormalizerConfig())
 
-	// Create a session that won't be cleaned up properly.
 	h := Harness{
 		Backends:   backends,
 		Normalizer: normalizer,
@@ -5088,16 +5108,28 @@ func TestHarness_Run_CleanupWithVerifyLeakWarning(t *testing.T) {
 		Name:         "leak_warn_test",
 		RequiredCaps: []string{CapEvents},
 		Run: func(ctx context.Context, backend Backend) error {
-			backend.SessKey = func() session.Key { return key }
-			backend.Sess.CreateSession(ctx, key, nil)
-			sess, _ := backend.Sess.GetSession(ctx, key)
+			key := backend.SessKey()
+			if _, err := backend.Sess.CreateSession(ctx, key, nil); err != nil {
+				return err
+			}
+			sess, err := backend.Sess.GetSession(ctx, key)
+			if err != nil {
+				return err
+			}
 			return backend.Sess.AppendEvent(ctx, sess, newUserEvent("hello"))
 		},
 	}
 	_, err := h.Run(context.Background(), c)
 	require.NoError(t, err)
-	// The logf should have captured cleanup/leak messages.
-	_ = logs
+	// Verify that LEAK WARNING was logged when VerifyCleanup detects a leak.
+	found := false
+	for _, line := range logs {
+		if strings.Contains(line, "LEAK") {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "expected LEAK WARNING in logs, got: %v", logs)
 }
 
 func TestRetry_RetryOperationWithMetrics_AllAttemptsFail(t *testing.T) {
