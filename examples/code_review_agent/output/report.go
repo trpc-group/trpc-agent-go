@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -23,13 +24,38 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/telemetry"
 )
 
+func escapeMarkdown(s string) string {
+	s = strings.ReplaceAll(s, "\\", "\\\\")
+	s = strings.ReplaceAll(s, "`", "\\`")
+	s = strings.ReplaceAll(s, "#", "\\#")
+	s = strings.ReplaceAll(s, "*", "\\*")
+	return s
+}
+
+func findLongestBacktickSequence(s string) int {
+	re := regexp.MustCompile("`+")
+	matches := re.FindAllString(s, -1)
+	maxLen := 0
+	for _, match := range matches {
+		if len(match) > maxLen {
+			maxLen = len(match)
+		}
+	}
+	return maxLen
+}
+
+func getCodeFence(s string) string {
+	longest := findLongestBacktickSequence(s)
+	return strings.Repeat("`", longest+1)
+}
+
 func GenerateReportContent(taskID string, diff *parser.DiffResult, findings []storage.Finding,
 	metricsSummary telemetry.MetricsSummary, sandboxRuns []storage.SandboxRun,
 	permissionRecords []storage.PermissionRecord) string {
 
 	var report strings.Builder
 	report.WriteString("# Code Review Report\n\n")
-	report.WriteString(fmt.Sprintf("**Task ID:** %s\n\n", taskID))
+	report.WriteString(fmt.Sprintf("**Task ID:** %s\n\n", escapeMarkdown(taskID)))
 	report.WriteString(fmt.Sprintf("**Generated:** %s\n\n", time.Now().Format(time.RFC3339)))
 
 	report.WriteString("## Summary\n\n")
@@ -50,7 +76,7 @@ func GenerateReportContent(taskID string, diff *parser.DiffResult, findings []st
 		})
 		for _, severity := range severities {
 			count := metricsSummary.FindingsBySeverity[severity]
-			report.WriteString(fmt.Sprintf("- **%s:** %d\n", severity, count))
+			report.WriteString(fmt.Sprintf("- **%s:** %d\n", escapeMarkdown(string(severity)), count))
 		}
 		report.WriteString("\n")
 	}
@@ -58,17 +84,17 @@ func GenerateReportContent(taskID string, diff *parser.DiffResult, findings []st
 	if len(findings) > 0 {
 		report.WriteString("## Findings\n\n")
 		for _, f := range findings {
-			report.WriteString(fmt.Sprintf("### [%s] %s\n\n", f.Severity, f.Message))
-			report.WriteString(fmt.Sprintf("- **File:** %s\n", f.Filepath))
+			report.WriteString(fmt.Sprintf("### [%s] %s\n\n", escapeMarkdown(string(f.Severity)), escapeMarkdown(f.Message)))
+			report.WriteString(fmt.Sprintf("- **File:** %s\n", escapeMarkdown(f.Filepath)))
 			report.WriteString(fmt.Sprintf("- **Line:** %d\n", f.LineNumber))
-			report.WriteString(fmt.Sprintf("- **Rule:** %s\n", f.RuleID))
-			report.WriteString(fmt.Sprintf("- **Category:** %s\n", f.Category))
+			report.WriteString(fmt.Sprintf("- **Rule:** %s\n", escapeMarkdown(f.RuleID)))
+			report.WriteString(fmt.Sprintf("- **Category:** %s\n", escapeMarkdown(string(f.Category))))
 			report.WriteString(fmt.Sprintf("- **Confidence:** %.2f\n", f.Confidence))
 			if f.Evidence != "" {
-				report.WriteString(fmt.Sprintf("- **Evidence:** `%s`\n", truncate(f.Evidence, 100)))
+				report.WriteString(fmt.Sprintf("- **Evidence:** `%s`\n", escapeMarkdown(truncate(f.Evidence, 100))))
 			}
 			if f.Suggestion != "" {
-				report.WriteString(fmt.Sprintf("- **Suggestion:** %s\n", f.Suggestion))
+				report.WriteString(fmt.Sprintf("- **Suggestion:** %s\n", escapeMarkdown(f.Suggestion)))
 			}
 			if f.NeedsReview {
 				report.WriteString("- **Requires Manual Review:** Yes\n")
@@ -80,17 +106,21 @@ func GenerateReportContent(taskID string, diff *parser.DiffResult, findings []st
 	if len(sandboxRuns) > 0 {
 		report.WriteString("## Sandbox Executions\n\n")
 		for _, run := range sandboxRuns {
-			report.WriteString(fmt.Sprintf("### Command: %s\n\n", run.Command))
+			report.WriteString(fmt.Sprintf("### Command: %s\n\n", escapeMarkdown(run.Command)))
 			report.WriteString(fmt.Sprintf("- **Exit Code:** %d\n", run.ExitCode))
 			report.WriteString(fmt.Sprintf("- **Duration:** %dms\n", run.DurationMs))
 			if run.TimedOut {
 				report.WriteString("- **Timed Out:** Yes\n")
 			}
 			if run.Output != "" {
-				report.WriteString(fmt.Sprintf("- **Output:**\n```\n%s\n```\n", truncate(run.Output, 500)))
+				output := truncate(run.Output, 500)
+				fence := getCodeFence(output)
+				report.WriteString(fmt.Sprintf("- **Output:**\n%s\n%s\n%s\n", fence, output, fence))
 			}
 			if run.Error != "" {
-				report.WriteString(fmt.Sprintf("- **Error:**\n```\n%s\n```\n", truncate(run.Error, 500)))
+				errorMsg := truncate(run.Error, 500)
+				fence := getCodeFence(errorMsg)
+				report.WriteString(fmt.Sprintf("- **Error:**\n%s\n%s\n%s\n", fence, errorMsg, fence))
 			}
 			report.WriteString("\n")
 		}
@@ -99,9 +129,9 @@ func GenerateReportContent(taskID string, diff *parser.DiffResult, findings []st
 	if len(permissionRecords) > 0 {
 		report.WriteString("## Permission Records\n\n")
 		for _, record := range permissionRecords {
-			report.WriteString(fmt.Sprintf("- **Command:** `%s`\n", truncate(record.Command, 50)))
-			report.WriteString(fmt.Sprintf("  - **Action:** %s\n", record.Action))
-			report.WriteString(fmt.Sprintf("  - **Reason:** %s\n\n", record.Reason))
+			report.WriteString(fmt.Sprintf("- **Command:** `%s`\n", escapeMarkdown(truncate(record.Command, 50))))
+			report.WriteString(fmt.Sprintf("  - **Action:** %s\n", escapeMarkdown(record.Action)))
+			report.WriteString(fmt.Sprintf("  - **Reason:** %s\n\n", escapeMarkdown(record.Reason)))
 		}
 	}
 

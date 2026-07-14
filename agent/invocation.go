@@ -2275,7 +2275,7 @@ func (inv *Invocation) NotifyCompletion(ctx context.Context, key string) error {
 		return fmt.Errorf("invocation is nil")
 	}
 	if inv.noticeMu == nil {
-		inv.noticeMu = &sync.Mutex{}
+		return fmt.Errorf("noticeMu is uninitialized, please use agent.NewInvocation or Clone method to create Invocation")
 	}
 	inv.noticeMu.Lock()
 	defer inv.noticeMu.Unlock()
@@ -2310,11 +2310,8 @@ func (inv *Invocation) NotifyCompletion(ctx context.Context, key string) error {
 // The 'Invocation' instance created via the NewInvocation method ​​should be disposed​​
 // upon completion to prevent resource leaks.
 func (inv *Invocation) CleanupNotice(ctx context.Context) {
-	if inv == nil {
+	if inv == nil || inv.noticeMu == nil {
 		return
-	}
-	if inv.noticeMu == nil {
-		inv.noticeMu = &sync.Mutex{}
 	}
 	inv.noticeMu.Lock()
 	defer inv.noticeMu.Unlock()

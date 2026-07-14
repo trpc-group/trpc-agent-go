@@ -569,7 +569,8 @@ func TestInvocation_NotifyCompletion_Panic(t *testing.T) {
 	inv := &Invocation{}
 
 	err := inv.NotifyCompletion(context.Background(), "test-key")
-	require.NoError(t, err)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "noticeMu is uninitialized")
 }
 
 func TestInvocation_AddNoticeChannelAndWait_Panic(t *testing.T) {
@@ -1653,24 +1654,25 @@ func TestWithUserMessageRewriter(t *testing.T) {
 	}, msgs)
 }
 
-// TestNotifyCompletion_UninitializedNoticeMu tests the fallback initialization
-// of noticeMu when Invocation is created directly without NewInvocation.
+// TestNotifyCompletion_UninitializedNoticeMu tests that NotifyCompletion returns an error
+// when Invocation is created directly without NewInvocation.
 func TestNotifyCompletion_UninitializedNoticeMu(t *testing.T) {
 	inv := &Invocation{InvocationID: "test", AgentName: "test"}
 
 	err := inv.NotifyCompletion(context.Background(), "test-key")
-	require.NoError(t, err)
-	require.NotNil(t, inv.noticeMu)
-	require.NotNil(t, inv.noticeChannels)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "noticeMu is uninitialized")
+	require.Nil(t, inv.noticeMu)
+	require.Nil(t, inv.noticeChannels)
 }
 
-// TestCleanupNotice_UninitializedNoticeMu tests the fallback initialization
-// of noticeMu when CleanupNotice is called on an Invocation with uninitialized noticeMu.
+// TestCleanupNotice_UninitializedNoticeMu tests that CleanupNotice is a no-op
+// when called on an Invocation with uninitialized noticeMu.
 func TestCleanupNotice_UninitializedNoticeMu(t *testing.T) {
 	inv := &Invocation{InvocationID: "test", AgentName: "test"}
 
 	inv.CleanupNotice(context.Background())
-	require.NotNil(t, inv.noticeMu)
+	require.Nil(t, inv.noticeMu)
 }
 
 // TestNotifyCompletion_NilInvocation tests the nil check in NotifyCompletion.

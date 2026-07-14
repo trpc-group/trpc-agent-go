@@ -219,7 +219,8 @@ func TestPermissionPolicy_CheckCommand_PathPrefix(t *testing.T) {
 		{"/usr/bin/go vet ./...", ActionAllow},
 		{"/usr/bin/rm file.txt", ActionDeny},
 		{"./go test ./...", ActionAllow},
-		{"/bin/bash -c 'echo test'", ActionAllow},
+		{"/bin/bash -c 'echo test'", ActionReview},
+		{"/bin/bash -c 'rm -rf /'", ActionDeny},
 		{"/usr/bin/sudo ls", ActionDeny},
 	}
 

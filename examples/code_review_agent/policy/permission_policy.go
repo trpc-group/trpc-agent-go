@@ -136,6 +136,40 @@ func (p *PermissionPolicy) CheckCommand(command string) PermissionResult {
 		}
 	}
 
+	if executableName == "bash" || executableName == "sh" {
+		if len(cmdArgs) >= 2 && (cmdArgs[1] == "-c" || cmdArgs[1] == "--command") {
+			if len(cmdArgs) >= 3 {
+				innerCmd := strings.Join(cmdArgs[2:], " ")
+				innerCmd = strings.Trim(innerCmd, "'\"")
+				innerCmdLow := strings.ToLower(innerCmd)
+				for _, denied := range p.deniedCommands {
+					deniedLow := strings.ToLower(denied)
+					if strings.Contains(innerCmdLow, deniedLow) {
+						return PermissionResult{
+							Action:  ActionDeny,
+							Reason:  "Dangerous command in shell script",
+							Command: cmd,
+						}
+					}
+				}
+				for _, pattern := range p.highRiskPatterns {
+					if pattern.MatchString(innerCmdLow) {
+						return PermissionResult{
+							Action:  ActionReview,
+							Reason:  "High-risk pattern in shell script",
+							Command: cmd,
+						}
+					}
+				}
+			}
+			return PermissionResult{
+				Action:  ActionReview,
+				Reason:  "Shell script execution requires manual review",
+				Command: cmd,
+			}
+		}
+	}
+
 	for _, pattern := range p.highRiskPatterns {
 		if pattern.MatchString(lowerCmd) {
 			return PermissionResult{

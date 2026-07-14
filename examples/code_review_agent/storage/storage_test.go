@@ -375,19 +375,19 @@ func TestSQLiteStorage_CreateAndGetArtifacts(t *testing.T) {
 	}
 
 	if len(artifacts) != 1 {
-		t.Errorf("Expected 1 artifact, got %d", len(artifacts))
+		t.Fatalf("Expected 1 artifact, got %d", len(artifacts))
 	}
 
 	if artifacts[0].Name != "diff_file.diff" {
-		t.Errorf("Expected Name 'diff_file.diff', got '%s'", artifacts[0].Name)
+		t.Fatalf("Expected Name 'diff_file.diff', got '%s'", artifacts[0].Name)
 	}
 
 	if artifacts[0].ContentType != "text/plain" {
-		t.Errorf("Expected ContentType 'text/plain', got '%s'", artifacts[0].ContentType)
+		t.Fatalf("Expected ContentType 'text/plain', got '%s'", artifacts[0].ContentType)
 	}
 
 	if artifacts[0].Size != 1024 {
-		t.Errorf("Expected Size 1024, got %d", artifacts[0].Size)
+		t.Fatalf("Expected Size 1024, got %d", artifacts[0].Size)
 	}
 }
 
@@ -440,19 +440,19 @@ func TestSQLiteStorage_CreateAndGetTelemetryMetrics(t *testing.T) {
 	}
 
 	if len(results) != 1 {
-		t.Errorf("Expected 1 telemetry metrics entry, got %d", len(results))
+		t.Fatalf("Expected 1 telemetry metrics entry, got %d", len(results))
 	}
 
 	if results[0].TotalFindings != 15 {
-		t.Errorf("Expected TotalFindings 15, got %d", results[0].TotalFindings)
+		t.Fatalf("Expected TotalFindings 15, got %d", results[0].TotalFindings)
 	}
 
 	if results[0].SandboxExecutions != 3 {
-		t.Errorf("Expected SandboxExecutions 3, got %d", results[0].SandboxExecutions)
+		t.Fatalf("Expected SandboxExecutions 3, got %d", results[0].SandboxExecutions)
 	}
 
 	if results[0].PermissionBlocks != 2 {
-		t.Errorf("Expected PermissionBlocks 2, got %d", results[0].PermissionBlocks)
+		t.Fatalf("Expected PermissionBlocks 2, got %d", results[0].PermissionBlocks)
 	}
 }
 

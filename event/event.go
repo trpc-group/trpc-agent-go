@@ -444,11 +444,13 @@ func redactedEventForLogging(e *Event) Event {
 	return redacted
 }
 
-func tryEmitReadyEvent(ctx context.Context, ch chan<- *Event, e *Event) (bool, error) {
+func tryEmitReadyEvent(ctx context.Context, ch chan<- *Event, e *Event) (handled bool, err error) {
 	eventStr := snapshotEvent(e)
 	defer func() {
 		if r := recover(); r != nil {
 			log.WarnfContext(ctx, "EmitEventWithTimeout: recovered from panic sending to closed channel: %v, event: %s", r, eventStr)
+			handled = true
+			err = fmt.Errorf("panic sending to closed channel: %v", r)
 		}
 	}()
 	select {
@@ -456,7 +458,7 @@ func tryEmitReadyEvent(ctx context.Context, ch chan<- *Event, e *Event) (bool, e
 		log.TracefContext(ctx, "EmitEventWithTimeout: event sent, event: %s", eventStr)
 		return true, nil
 	case <-ctx.Done():
-		err := ctx.Err()
+		err = ctx.Err()
 		redactedEvent := redactedEventForLogging(e)
 		log.WarnfContext(
 			ctx,
@@ -472,7 +474,7 @@ func tryEmitReadyEvent(ctx context.Context, ch chan<- *Event, e *Event) (bool, e
 
 // EmitEventWithTimeout sends an event to the channel with optional timeout.
 func EmitEventWithTimeout(ctx context.Context, ch chan<- *Event,
-	e *Event, timeout time.Duration) error {
+	e *Event, timeout time.Duration) (err error) {
 	if e == nil || ch == nil {
 		return nil
 	}
@@ -481,7 +483,7 @@ func EmitEventWithTimeout(ctx context.Context, ch chan<- *Event,
 	// rather than attempting to send. This avoids a racy select where both
 	// the send and the ctx.Done() cases are ready, which could otherwise
 	// result in emitting an event after cancellation.
-	if err := ctx.Err(); err != nil {
+	if err = ctx.Err(); err != nil {
 		redactedEvent := redactedEventForLogging(e)
 		log.WarnfContext(
 			ctx,
@@ -503,13 +505,14 @@ func EmitEventWithTimeout(ctx context.Context, ch chan<- *Event,
 		defer func() {
 			if r := recover(); r != nil {
 				log.WarnfContext(ctx, "EmitEventWithTimeout: recovered from panic sending to closed channel (blocking): %v, event: %s", r, eventStr)
+				err = fmt.Errorf("panic sending to closed channel: %v", r)
 			}
 		}()
 		select {
 		case ch <- e:
 			log.TracefContext(ctx, "EmitEventWithTimeout: event sent, event: %s", eventStr)
 		case <-ctx.Done():
-			err := ctx.Err()
+			err = ctx.Err()
 			redactedEvent := redactedEventForLogging(e)
 			log.WarnfContext(
 				ctx,
@@ -532,13 +535,14 @@ func EmitEventWithTimeout(ctx context.Context, ch chan<- *Event,
 	defer func() {
 		if r := recover(); r != nil {
 			log.WarnfContext(ctx, "EmitEventWithTimeout: recovered from panic sending to closed channel (timeout): %v, event: %s", r, eventStr)
+			err = fmt.Errorf("panic sending to closed channel: %v", r)
 		}
 	}()
 	select {
 	case ch <- e:
 		log.TracefContext(ctx, "EmitEventWithTimeout: event sent, event: %s", eventStr)
 	case <-ctx.Done():
-		err := ctx.Err()
+		err = ctx.Err()
 		redactedEvent := redactedEventForLogging(e)
 		log.WarnfContext(
 			ctx,

@@ -286,7 +286,9 @@ func runCodeReview(diffPath, repoPath, outputDir, dbPath string, dryRun bool) er
 			Reason:    result.Reason,
 			CreatedAt: time.Now(),
 		}
-		db.CreatePermissionRecord(ctx, record)
+		if err := db.CreatePermissionRecord(ctx, record); err != nil {
+			return fmt.Errorf("create permission record: %w", err)
+		}
 
 		if result.Action == policy.ActionDeny {
 			log.Printf("Command denied: %s", cmd)
@@ -307,26 +309,31 @@ func runCodeReview(diffPath, repoPath, outputDir, dbPath string, dryRun bool) er
 			continue
 		}
 
+		redactedOutput := redaction.RedactSecrets(sandboxResult.Output)
+		redactedError := redaction.RedactSecrets(sandboxResult.Error)
+
 		runRecord := storage.SandboxRun{
 			ID:         uuid.New().String(),
 			TaskID:     taskID,
 			Command:    cmd,
-			Output:     sandboxResult.Output,
-			Error:      sandboxResult.Error,
+			Output:     redactedOutput,
+			Error:      redactedError,
 			ExitCode:   sandboxResult.ExitCode,
 			TimedOut:   sandboxResult.TimedOut,
 			DurationMs: int64(sandboxResult.Duration / time.Millisecond),
 			CreatedAt:  time.Now(),
 		}
-		db.CreateSandboxRun(ctx, runRecord)
+		if err := db.CreateSandboxRun(ctx, runRecord); err != nil {
+			return fmt.Errorf("create sandbox run: %w", err)
+		}
 
 		metrics.RecordSandboxExecution(sandboxResult.Duration)
 		metrics.RecordToolCall()
 
 		if sandboxResult.ExitCode != 0 {
 			log.Printf("Command failed with exit code %d", sandboxResult.ExitCode)
-			log.Printf("Output: %s", sandboxResult.Output)
-			log.Printf("Error: %s", sandboxResult.Error)
+			log.Printf("Output: %s", redactedOutput)
+			log.Printf("Error: %s", redactedError)
 		}
 	}
 
@@ -345,7 +352,7 @@ func runCodeReview(diffPath, repoPath, outputDir, dbPath string, dryRun bool) er
 		findings[i].Suggestion = redaction.RedactFindingContent(findings[i].Suggestion)
 
 		if err := db.CreateFinding(ctx, findings[i]); err != nil {
-			log.Printf("Warning: Failed to save finding: %v", err)
+			return fmt.Errorf("create finding: %w", err)
 		}
 
 		metrics.RecordFinding(findings[i].Severity)

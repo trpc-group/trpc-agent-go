@@ -1022,11 +1022,12 @@ func TestTryEmitReadyEvent_ClosedChannel(t *testing.T) {
 
 	evt := New("inv-closed", "author")
 
-	// This should not panic, and should return false (event not sent)
+	// This should not panic, and should return true with an error
 	// The recover() catches the panic from sending to closed channel
 	handled, err := tryEmitReadyEvent(context.Background(), ch, evt)
-	require.False(t, handled, "event should not be sent to closed channel")
-	require.NoError(t, err, "should not return error on closed channel")
+	require.True(t, handled, "should be handled (recovered from panic)")
+	require.Error(t, err, "should return error on closed channel")
+	require.Contains(t, err.Error(), "panic sending to closed channel")
 }
 
 // TestEmitEventWithTimeout_ClosedChannel tests that EmitEventWithTimeout recovers from
@@ -1038,11 +1039,10 @@ func TestEmitEventWithTimeout_ClosedChannel(t *testing.T) {
 	evt := New("inv-closed-timeout", "author")
 
 	// This should not panic even when sending to a closed channel
-	// The recover() catches the panic and logs a warning instead
+	// The recover() catches the panic and returns an error
 	err := EmitEventWithTimeout(context.Background(), ch, evt, 10*time.Millisecond)
-	// The function may or may not return an error depending on the exact path,
-	// but the important thing is it should not panic
-	_ = err // We only care that it doesn't panic
+	require.Error(t, err, "should return error on closed channel")
+	require.Contains(t, err.Error(), "panic sending to closed channel")
 }
 
 // TestEmitEventWithTimeout_NoTimeout_BlockingSendClosedChannel tests the recover() logic
@@ -1061,5 +1061,6 @@ func TestEmitEventWithTimeout_NoTimeout_BlockingSendClosedChannel(t *testing.T) 
 
 	// This should trigger the blocking send path (line 508-521) and recover from panic
 	err := EmitEventWithTimeout(context.Background(), ch, evt, EmitWithoutTimeout)
-	_ = err // We only care that it doesn't panic
+	require.Error(t, err, "should return error on closed channel")
+	require.Contains(t, err.Error(), "panic sending to closed channel")
 }

@@ -168,7 +168,17 @@ func TestMetrics_ConcurrentAccess(t *testing.T) {
 
 	summary := m.GetSummary()
 	expected := numGoroutines * operationsPerGoroutine
+	expectedTime := time.Duration(expected) * 1 * time.Millisecond
 
+	if summary.TotalReviewTime != expectedTime {
+		t.Errorf("Expected TotalReviewTime %v, got %v", expectedTime, summary.TotalReviewTime)
+	}
+	if summary.SandboxExecutionTime != expectedTime {
+		t.Errorf("Expected SandboxExecutionTime %v, got %v", expectedTime, summary.SandboxExecutionTime)
+	}
+	if summary.SandboxExecutions != expected {
+		t.Errorf("Expected SandboxExecutions %d, got %d", expected, summary.SandboxExecutions)
+	}
 	if summary.ToolCalls != expected {
 		t.Errorf("Expected ToolCalls %d, got %d", expected, summary.ToolCalls)
 	}
@@ -177,6 +187,9 @@ func TestMetrics_ConcurrentAccess(t *testing.T) {
 	}
 	if summary.TotalFindings != expected {
 		t.Errorf("Expected TotalFindings %d, got %d", expected, summary.TotalFindings)
+	}
+	if summary.FindingsBySeverity[storage.SeverityHigh] != expected {
+		t.Errorf("Expected FindingsBySeverity[HIGH] %d, got %d", expected, summary.FindingsBySeverity[storage.SeverityHigh])
 	}
 	if summary.Errors != expected {
 		t.Errorf("Expected Errors %d, got %d", expected, summary.Errors)

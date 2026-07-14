@@ -18,6 +18,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -46,6 +47,7 @@ type SandboxResult struct {
 	TimedOut    bool
 	Duration    time.Duration
 	SandboxType SandboxType
+	Skipped     bool
 }
 
 type Sandbox interface {
@@ -57,6 +59,30 @@ type Sandbox interface {
 
 type LocalSandbox struct {
 	workDir string
+}
+
+type boundedBuffer struct {
+	Limit int
+	buf   bytes.Buffer
+}
+
+func (b *boundedBuffer) Write(p []byte) (int, error) {
+	if b.Limit > 0 && b.buf.Len()+len(p) > b.Limit {
+		remaining := b.Limit - b.buf.Len()
+		if remaining > 0 {
+			b.buf.Write(p[:remaining])
+		}
+		return len(p), nil
+	}
+	return b.buf.Write(p)
+}
+
+func (b *boundedBuffer) String() string {
+	s := b.buf.String()
+	if b.Limit > 0 && len(s) >= b.Limit {
+		return s + "... [truncated]"
+	}
+	return s
 }
 
 func NewLocalSandbox(workDir string) (*LocalSandbox, error) {
@@ -104,16 +130,35 @@ func (s *LocalSandbox) RunCommand(ctx context.Context, command string, config Sa
 		cmd = exec.CommandContext(ctx, args[0], args[1:]...)
 	}
 	cmd.Dir = s.workDir
+	cmd.Env = filterEnv(os.Environ(), config.EnvWhitelist)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
-	if len(config.EnvWhitelist) > 0 {
-		cmd.Env = filterEnv(os.Environ(), config.EnvWhitelist)
-	}
-
-	var stdout, stderr bytes.Buffer
+	var stdout, stderr boundedBuffer
+	stdout.Limit = config.OutputSizeLimit
+	stderr.Limit = config.OutputSizeLimit
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	err := cmd.Run()
+	if err := cmd.Start(); err != nil {
+		return SandboxResult{
+			Error:       err.Error(),
+			ExitCode:    -1,
+			Duration:    time.Since(start),
+			TimedOut:    ctx.Err() == context.DeadlineExceeded,
+			SandboxType: SandboxTypeLocal,
+		}, nil
+	}
+
+	pid := cmd.Process.Pid
+
+	go func() {
+		<-ctx.Done()
+		syscall.Kill(-pid, syscall.SIGTERM)
+		time.Sleep(100 * time.Millisecond)
+		syscall.Kill(-pid, syscall.SIGKILL)
+	}()
+
+	err := cmd.Wait()
 
 	duration := time.Since(start)
 
@@ -132,19 +177,9 @@ func (s *LocalSandbox) RunCommand(ctx context.Context, command string, config Sa
 		}
 	}
 
-	output := stdout.String()
-	if config.OutputSizeLimit > 0 && len(output) > config.OutputSizeLimit {
-		output = output[:config.OutputSizeLimit] + "... [truncated]"
-	}
-
-	errOutput := stderr.String()
-	if config.OutputSizeLimit > 0 && len(errOutput) > config.OutputSizeLimit {
-		errOutput = errOutput[:config.OutputSizeLimit] + "... [truncated]"
-	}
-
 	return SandboxResult{
-		Output:      output,
-		Error:       errOutput,
+		Output:      stdout.String(),
+		Error:       stderr.String(),
 		ExitCode:    exitCode,
 		TimedOut:    ctx.Err() == context.DeadlineExceeded,
 		Duration:    duration,
@@ -161,16 +196,35 @@ func (s *LocalSandbox) ExecuteScript(ctx context.Context, scriptPath string, arg
 	cmdArgs := append([]string{scriptPath}, args...)
 	cmd := exec.CommandContext(ctx, "bash", cmdArgs...)
 	cmd.Dir = s.workDir
+	cmd.Env = filterEnv(os.Environ(), config.EnvWhitelist)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
-	if len(config.EnvWhitelist) > 0 {
-		cmd.Env = filterEnv(os.Environ(), config.EnvWhitelist)
-	}
-
-	var stdout, stderr bytes.Buffer
+	var stdout, stderr boundedBuffer
+	stdout.Limit = config.OutputSizeLimit
+	stderr.Limit = config.OutputSizeLimit
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	err := cmd.Run()
+	if err := cmd.Start(); err != nil {
+		return SandboxResult{
+			Error:       err.Error(),
+			ExitCode:    -1,
+			Duration:    time.Since(start),
+			TimedOut:    ctx.Err() == context.DeadlineExceeded,
+			SandboxType: SandboxTypeLocal,
+		}, nil
+	}
+
+	pid := cmd.Process.Pid
+
+	go func() {
+		<-ctx.Done()
+		syscall.Kill(-pid, syscall.SIGTERM)
+		time.Sleep(100 * time.Millisecond)
+		syscall.Kill(-pid, syscall.SIGKILL)
+	}()
+
+	err := cmd.Wait()
 
 	duration := time.Since(start)
 
@@ -189,19 +243,9 @@ func (s *LocalSandbox) ExecuteScript(ctx context.Context, scriptPath string, arg
 		}
 	}
 
-	output := stdout.String()
-	if config.OutputSizeLimit > 0 && len(output) > config.OutputSizeLimit {
-		output = output[:config.OutputSizeLimit] + "... [truncated]"
-	}
-
-	errOutput := stderr.String()
-	if config.OutputSizeLimit > 0 && len(errOutput) > config.OutputSizeLimit {
-		errOutput = errOutput[:config.OutputSizeLimit] + "... [truncated]"
-	}
-
 	return SandboxResult{
-		Output:      output,
-		Error:       errOutput,
+		Output:      stdout.String(),
+		Error:       stderr.String(),
 		ExitCode:    exitCode,
 		TimedOut:    ctx.Err() == context.DeadlineExceeded,
 		Duration:    duration,
@@ -227,10 +271,11 @@ func (s *NoopSandbox) RunCommand(ctx context.Context, command string, config San
 	return SandboxResult{
 		Output:      "",
 		Error:       "",
-		ExitCode:    0,
+		ExitCode:    -2,
 		TimedOut:    false,
 		Duration:    0,
 		SandboxType: SandboxTypeNoop,
+		Skipped:     true,
 	}, nil
 }
 
@@ -238,10 +283,11 @@ func (s *NoopSandbox) ExecuteScript(ctx context.Context, scriptPath string, args
 	return SandboxResult{
 		Output:      "",
 		Error:       "",
-		ExitCode:    0,
+		ExitCode:    -2,
 		TimedOut:    false,
 		Duration:    0,
 		SandboxType: SandboxTypeNoop,
+		Skipped:     true,
 	}, nil
 }
 
@@ -268,14 +314,14 @@ func filterEnv(env []string, whitelist []string) []string {
 
 func parseShellCommand(cmd string) []string {
 	var args []string
-	var current []byte
+	var current strings.Builder
 	inSingleQuote := false
 	inDoubleQuote := false
 	escape := false
 
 	for _, c := range cmd {
 		if escape {
-			current = append(current, byte(c))
+			current.WriteRune(c)
 			escape = false
 			continue
 		}
@@ -296,18 +342,18 @@ func parseShellCommand(cmd string) []string {
 		}
 
 		if (c == ' ' || c == '\t' || c == '\n') && !inSingleQuote && !inDoubleQuote {
-			if len(current) > 0 {
-				args = append(args, string(current))
-				current = current[:0]
+			if current.Len() > 0 {
+				args = append(args, current.String())
+				current.Reset()
 			}
 			continue
 		}
 
-		current = append(current, byte(c))
+		current.WriteRune(c)
 	}
 
-	if len(current) > 0 {
-		args = append(args, string(current))
+	if current.Len() > 0 {
+		args = append(args, current.String())
 	}
 
 	return args
