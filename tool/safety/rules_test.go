@@ -470,8 +470,8 @@ func TestHostExecRiskRule_E2BPassthrough(t *testing.T) {
 
 func TestHostExecRiskRule_UnknownExecutorIsTreatedAsLocal(t *testing.T) {
 	rule := NewHostExecRiskRule()
-	// A typo or newly introduced backend must not bypass host-risk checks.
-	if result := rule.Check(ScanInput{Command: "sudo ls", ExecutorType: "locla"}); result == nil {
+	// An unknown or newly introduced backend must not bypass host-risk checks.
+	if result := rule.Check(ScanInput{Command: "sudo ls", ExecutorType: "unknown"}); result == nil {
 		t.Error("unknown executor type should be treated conservatively as local")
 	}
 }
