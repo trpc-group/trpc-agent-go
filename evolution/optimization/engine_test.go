@@ -13,6 +13,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -104,7 +105,7 @@ func (e *scoringEvaluator) Evaluate(
 	for _, item := range cases {
 		call.caseIDs = append(call.caseIDs, item.ID)
 		score := 0.2
-		if !e.equalScore && strings.Contains(spec.Description, "improved") {
+		if !e.equalScore && improvedSpec(spec) {
 			score = 0.8
 		}
 		results = append(results, Evaluation{
@@ -120,6 +121,16 @@ func (e *scoringEvaluator) Evaluate(
 	}
 	e.calls = append(e.calls, call)
 	return results, nil
+}
+
+func improvedSpec(spec *evolution.SkillSpec) bool {
+	if spec == nil {
+		return false
+	}
+	return strings.Contains(spec.Description, "improved") ||
+		strings.Contains(spec.WhenToUse, "improved") ||
+		slices.Contains(spec.Steps, "Check the improved result.") ||
+		slices.Contains(spec.Pitfalls, "Avoid the observed failure.")
 }
 
 func TestOptimizerRunsReflectiveParetoLoopAndRecordsExperiment(t *testing.T) {
@@ -141,7 +152,8 @@ func TestOptimizerRunsReflectiveParetoLoopAndRecordsExperiment(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	assert.Equal(t, "improved reusable workflow", result.Spec.Description)
+	assert.Contains(t, result.Spec.Steps, "Check the improved result.")
+	assert.Equal(t, "baseline reusable workflow", result.Spec.Description)
 	assert.Equal(t, 0.2, result.BaselineValidation.Score)
 	assert.Equal(t, 0.8, result.CandidateValidation.Score)
 	assert.Equal(t, 0.2, result.BaselineHoldout.Score)

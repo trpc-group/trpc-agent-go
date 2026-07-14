@@ -26,10 +26,10 @@ const maxSpecChars = 64 * 1024
 type component int
 
 const (
-	componentDescription component = iota
-	componentWhenToUse
-	componentSteps
+	componentSteps component = iota
 	componentPitfalls
+	componentWhenToUse
+	componentDescription
 	componentCount
 )
 
