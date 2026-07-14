@@ -1813,6 +1813,15 @@ Variant 机制是 Model 模块的重要优化，用于处理不同 OpenAI 兼容
 - 使用 GLM 的 `thinking` 对象格式序列化思考开关
 - 当部分 GLM 网关把最终答案放在 `reasoning_content` 且 `content` 为空时，框架会将其回退为可见内容
 
+**6. VariantMiniMax**
+
+- MiniMax OpenAI 兼容接口适配
+- 默认 BaseURL：`https://api.minimax.io/v1`
+- API Key 环境变量名：`MINIMAX_API_KEY`
+- 对官方 `api.minimax.io` 和 `api.minimaxi.com` host 自动推断
+- 开启思考时序列化为 `{"thinking": {"type": "adaptive"}}`，关闭时序列化为 `{"thinking": {"type": "disabled"}}`
+- 保持 MiniMax 原生 `<think>...</think>` 内容不变，以便工具调用间完整回传交错思考
+
 ##### 7.2. 使用方式
 
 **使用示例**：
@@ -1832,6 +1841,11 @@ model := openai.New("deepseek-v4-flash",
     openai.WithBaseURL("https://api.deepseek.com/v1"),
     openai.WithAPIKey("your-api-key"),
     openai.WithVariant(openai.VariantDeepSeek), // 指定 DeepSeek
+)
+
+// 使用 MiniMax OpenAI 兼容接口
+model = openai.New("MiniMax-M3",
+    openai.WithVariant(openai.VariantMiniMax), // 自动读取 MINIMAX_API_KEY
 )
 ```
 
@@ -1864,6 +1878,9 @@ message := model.Message{
 # DeepSeek 自动配置
 export DEEPSEEK_API_KEY="your-api-key"
 # 无需显式调用 WithAPIKey，框架会自动读取
+
+# MiniMax 自动配置
+export MINIMAX_API_KEY="your-api-key"
 ```
 
 ```go
@@ -1893,6 +1910,7 @@ model := openai.New("deepseek-v4-flash",
 | `VariantHunyuan` | `"thinking": {"type": "enabled"}` |
 | `VariantGLM` | `"thinking": {"type": "enabled"}` |
 | `VariantQwen` | `"enable_thinking": true` |
+| `VariantMiniMax` | `"thinking": {"type": "adaptive"}` |
 
 例如，通过官方 DeepSeek API 确定性地开启思考：
 
@@ -1917,6 +1935,13 @@ request := &model.Request{
 ```
 
 `ThinkingEnabled` 只适用于提供显式思考开关的模型；如果模型只支持推理预算，请改用 `ReasoningEffort`。对实现上述思考开关格式的外部服务，通常显式设置对应 `Variant` 和 `ThinkingEnabled` 即可。如果代理网关使用了不同字段或需要额外参数，可以通过 `openai.WithExtraFields(...)` 添加或覆盖服务方特有字段。
+
+对 MiniMax-M3，`ThinkingEnabled=false` 会发送
+`thinking.type=disabled`；MiniMax M2.x 虽然接受该值，但仍会继续思考。
+适配器有意不设置 `reasoning_split`：MiniMax 原生 OpenAI 格式会把推理保留在
+assistant `content` 的 `<think>...</think>` 中，框架会在工具调用历史中原样保存。
+返回工具结果前，不应删除 assistant 历史中的这些标签。服务方的多轮要求参见
+[MiniMax OpenAI SDK 文档](https://platform.minimax.io/docs/api-reference/text-openai-api)。
 
 #### 8. 流式工具调用增量：ShowToolCallDelta
 

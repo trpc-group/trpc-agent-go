@@ -57,6 +57,7 @@ func TestMain(m *testing.M) {
 func TestNew(t *testing.T) {
 	var testKey = "test-key"
 	t.Setenv(deepSeekAPIKeyName, testKey)
+	t.Setenv(miniMaxAPIKeyName, testKey)
 	tests := []struct {
 		name       string
 		modelName  string
@@ -94,6 +95,49 @@ func TestNew(t *testing.T) {
 			expectOpts: []Option{
 				WithAPIKey(testKey),
 				WithBaseURL(defaultDeepSeekBaseURL),
+			},
+		},
+		{
+			name:      "variant minimax",
+			modelName: "MiniMax-M3",
+			opts: []Option{
+				WithVariant(VariantMiniMax),
+			},
+			expectOpts: []Option{
+				WithAPIKey(testKey),
+				WithBaseURL(defaultMiniMaxBaseURL),
+			},
+		},
+		{
+			name:      "does not infer minimax from official model name",
+			modelName: "MiniMax-M3",
+			opts: []Option{
+				WithAPIKey(testKey),
+			},
+			expectOpts: nil,
+		},
+		{
+			name:      "infers minimax from international api base url",
+			modelName: "custom-model",
+			opts: []Option{
+				WithBaseURL("https://api.minimax.io/v1"),
+			},
+			expectOpts: []Option{
+				WithAPIKey(testKey),
+				WithBaseURL("https://api.minimax.io/v1"),
+				WithVariant(VariantMiniMax),
+			},
+		},
+		{
+			name:      "infers minimax from china api base url",
+			modelName: "custom-model",
+			opts: []Option{
+				WithBaseURL("https://api.minimaxi.com/v1"),
+			},
+			expectOpts: []Option{
+				WithAPIKey(testKey),
+				WithBaseURL("https://api.minimaxi.com/v1"),
+				WithVariant(VariantMiniMax),
 			},
 		},
 		{
@@ -228,6 +272,46 @@ func TestIsDeepSeekBaseURL(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.Equal(t, tt.want, isDeepSeekBaseURL(tt.rawURL))
+		})
+	}
+}
+
+func TestIsMiniMaxBaseURL(t *testing.T) {
+	tests := []struct {
+		name   string
+		rawURL string
+		want   bool
+	}{
+		{
+			name:   "matches international api host",
+			rawURL: "https://api.minimax.io/v1",
+			want:   true,
+		},
+		{
+			name:   "matches china api host after trim and lowercase",
+			rawURL: " HTTPS://API.MINIMAXI.COM/V1 ",
+			want:   true,
+		},
+		{
+			name:   "does not match platform host",
+			rawURL: "https://platform.minimax.io/v1",
+			want:   false,
+		},
+		{
+			name:   "does not match custom proxy host",
+			rawURL: "https://minimax-proxy.internal/v1",
+			want:   false,
+		},
+		{
+			name:   "parse error does not fall back to substring match",
+			rawURL: "https://api.minimax.io/%zz",
+			want:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, isMiniMaxBaseURL(tt.rawURL))
 		})
 	}
 }
@@ -3735,6 +3819,99 @@ func TestModel_GenerateContent_HunyuanThinkingPayload(t *testing.T) {
 	}
 }
 
+func TestModel_GenerateContent_MiniMaxThinkingPayload(t *testing.T) {
+	tests := []struct {
+		name    string
+		enabled bool
+		want    string
+	}{
+		{
+			name:    "enabled uses adaptive",
+			enabled: true,
+			want:    "adaptive",
+		},
+		{
+			name:    "disabled",
+			enabled: false,
+			want:    "disabled",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			const nativeContent = "<think>reasoning</think>answer"
+			var captured map[string]any
+			server := httptest.NewServer(http.HandlerFunc(
+				func(w http.ResponseWriter, r *http.Request) {
+					if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+						http.Error(w, "not found", http.StatusNotFound)
+						return
+					}
+					require.NoError(t, json.NewDecoder(r.Body).Decode(&captured))
+					w.Header().Set("Content-Type", "application/json")
+					fmt.Fprintf(w, `{
+						"id": "test",
+						"object": "chat.completion",
+						"created": 1699200000,
+						"model": "MiniMax-M3",
+						"choices": [{
+							"index": 0,
+							"message": {
+								"role": "assistant",
+								"content": %q
+							},
+							"finish_reason": "stop"
+						}]
+					}`, nativeContent)
+				},
+			))
+			defer server.Close()
+
+			m := New(
+				"MiniMax-M3",
+				WithVariant(VariantMiniMax),
+				WithBaseURL(server.URL),
+				WithAPIKey("test-key"),
+			)
+			req := &model.Request{
+				Messages: []model.Message{
+					model.NewUserMessage("hi"),
+				},
+				GenerationConfig: model.GenerationConfig{
+					ThinkingEnabled: &tt.enabled,
+				},
+			}
+			ch, err := m.GenerateContent(context.Background(), req)
+			require.NoError(t, err)
+			var finalContent string
+			for resp := range ch {
+				require.Nil(t, resp.Error)
+				if len(resp.Choices) > 0 {
+					finalContent = resp.Choices[0].Message.Content
+				}
+			}
+
+			thinking, ok := captured[thinkingKey].(map[string]any)
+			require.True(t, ok)
+			require.Equal(t, tt.want, thinking["type"])
+			require.NotContains(t, captured, model.ThinkingEnabledKey)
+			require.NotContains(t, captured, "reasoning_split")
+			require.Equal(t, nativeContent, finalContent)
+
+			replayed := m.convertMessages([]model.Message{{
+				Role:    model.RoleAssistant,
+				Content: finalContent,
+			}})
+			require.Len(t, replayed, 1)
+			replayedJSON, err := json.Marshal(replayed[0])
+			require.NoError(t, err)
+			var replayedBody map[string]any
+			require.NoError(t, json.Unmarshal(replayedJSON, &replayedBody))
+			require.Equal(t, nativeContent, replayedBody["content"])
+		})
+	}
+}
+
 // TestModel_GenerateContent_NonStreaming_ToolCallNoID_Synthesized verifies that
 // when the provider omits tool_call.id in a non-streaming response, we synthesize
 // a stable ID (auto_call_<index>). This covers the non-streaming code path in
@@ -4552,6 +4729,14 @@ func TestWithVariant(t *testing.T) {
 			opts.Variant,
 			"expected variant to be VariantGLM",
 		)
+		assert.True(t, opts.variantSet, "expected variantSet to be true")
+	})
+
+	t.Run("minimax variant", func(t *testing.T) {
+		opts := &options{}
+		WithVariant(VariantMiniMax)(opts)
+
+		assert.Equal(t, VariantMiniMax, opts.Variant, "expected variant to be VariantMiniMax")
 		assert.True(t, opts.variantSet, "expected variantSet to be true")
 	})
 
@@ -7503,6 +7688,13 @@ func TestBuildThinkingOption(t *testing.T) {
 			thinkingEnabled: &trueVal,
 			wantKeys:        []string{thinkingKey},
 			wantValues:      []any{map[string]string{"type": "enabled"}},
+		},
+		{
+			name:            "MiniMax variant with thinking enabled",
+			variant:         VariantMiniMax,
+			thinkingEnabled: &trueVal,
+			wantKeys:        []string{thinkingKey},
+			wantValues:      []any{map[string]string{"type": "adaptive"}},
 		},
 		{
 			name:            "OpenAI variant with thinking enabled",

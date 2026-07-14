@@ -54,6 +54,12 @@ const (
 	//nolint:gosec
 	qwenAPIKeyName     string = "DASHSCOPE_API_KEY"
 	defaultQwenBaseURL string = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+
+	//nolint:gosec
+	miniMaxAPIKeyName     string = "MINIMAX_API_KEY"
+	defaultMiniMaxBaseURL string = "https://api.minimax.io/v1"
+	miniMaxAPIHost        string = "api.minimax.io"
+	miniMaxCNAPIHost      string = "api.minimaxi.com"
 )
 
 // Variant represents different model variants with specific behaviors.
@@ -74,6 +80,8 @@ const (
 	// VariantGLM is the GLM OpenAI-compatible variant. Some GLM gateways
 	// return the visible final answer in reasoning_content with empty content.
 	VariantGLM Variant = "glm"
+	// VariantMiniMax is the MiniMax OpenAI-compatible variant.
+	VariantMiniMax Variant = "minimax"
 )
 
 // thinkingValueConvertor converts ThinkingEnabled bool to the variant-specific value.
@@ -96,6 +104,19 @@ var thinkingTypeValueConvertor = func(enabled bool) any {
 	thinkingType := thinkingTypeDisabled
 	if enabled {
 		thinkingType = thinkingTypeEnabled
+	}
+	return map[string]string{"type": thinkingType}
+}
+
+// miniMaxThinkingValueConvertor converts to MiniMax's thinking-toggle format.
+var miniMaxThinkingValueConvertor = func(enabled bool) any {
+	const (
+		thinkingTypeAdaptive = "adaptive"
+		thinkingTypeDisabled = "disabled"
+	)
+	thinkingType := thinkingTypeDisabled
+	if enabled {
+		thinkingType = thinkingTypeAdaptive
 	}
 	return map[string]string{"type": thinkingType}
 }
@@ -244,6 +265,16 @@ var variantConfigs = map[Variant]variantConfig{
 		thinkingValueConvertor:            thinkingTypeValueConvertor,
 		reasoningContentAsContentFallback: true,
 	},
+	VariantMiniMax: {
+		filePurpose:               openai.FilePurposeUserData,
+		fileDeletionMethod:        http.MethodDelete,
+		skipFileTypeInContent:     false,
+		fileDeletionBodyConvertor: defaultFileDeletionBodyConvertor,
+		apiKeyName:                miniMaxAPIKeyName,
+		defaultBaseURL:            defaultMiniMaxBaseURL,
+		thinkingEnabledKey:        thinkingKey,
+		thinkingValueConvertor:    miniMaxThinkingValueConvertor,
+	},
 }
 
 // Model implements the model.Model interface for OpenAI API.
@@ -377,10 +408,21 @@ func inferVariant(baseURL string) Variant {
 	if isDeepSeekBaseURL(baseURL) {
 		return VariantDeepSeek
 	}
+	if isMiniMaxBaseURL(baseURL) {
+		return VariantMiniMax
+	}
 	return VariantOpenAI
 }
 
 func isDeepSeekBaseURL(raw string) bool {
+	return baseURLMatchesHost(raw, deepSeekAPIHost)
+}
+
+func isMiniMaxBaseURL(raw string) bool {
+	return baseURLMatchesHost(raw, miniMaxAPIHost, miniMaxCNAPIHost)
+}
+
+func baseURLMatchesHost(raw string, hosts ...string) bool {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
 		return false
@@ -389,7 +431,12 @@ func isDeepSeekBaseURL(raw string) bool {
 	if err != nil {
 		return false
 	}
-	return strings.EqualFold(parsed.Hostname(), deepSeekAPIHost)
+	for _, host := range hosts {
+		if strings.EqualFold(parsed.Hostname(), host) {
+			return true
+		}
+	}
+	return false
 }
 
 // Info implements the model.Model interface.
