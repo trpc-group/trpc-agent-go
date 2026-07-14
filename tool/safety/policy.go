@@ -52,9 +52,10 @@ type DependencyPolicy struct {
 type LimitsPolicy struct {
 	// MaxTimeoutSec is the largest accepted requested timeout, in seconds.
 	MaxTimeoutSec int `json:"max_timeout_sec" yaml:"max_timeout_sec"`
-	// MaxOutputBytes is an advisory maximum captured-output size for the
-	// executor/runtime to enforce at execution time; the static guard does not
-	// (and cannot) cap output, so this field is informational to the scanner.
+	// MaxOutputBytes caps an exec tool's captured output. It is enforced at
+	// execution time by the AfterTool output-limit callback
+	// (PermissionPolicy.OutputLimitCallback), which truncates output beyond
+	// this size. Zero disables the cap.
 	MaxOutputBytes int64 `json:"max_output_bytes" yaml:"max_output_bytes"`
 }
 

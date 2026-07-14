@@ -75,6 +75,20 @@ runner.Run(ctx, userID, sessionID, msg,
     agent.WithToolPermissionPolicyFunc(pol.CheckToolPermission))
 ```
 
+The permission policy is the **before-execution** gate. For the
+**during-execution** half of the resource limit, register the AfterTool
+output-limit callback, which truncates an exec tool's output once it exceeds
+`limits.max_output_bytes`:
+
+```go
+ag := llmagent.New("agent",
+    llmagent.WithTools(tools),
+    llmagent.WithToolCallbacks(&tool.Callbacks{
+        AfterTool: []tool.AfterToolCallbackStructured{pol.OutputLimitCallback()},
+    }),
+)
+```
+
 See [`examples/toolpolicy`](../toolpolicy) for the run-level policy wiring in a
 full agent loop.
 
@@ -90,7 +104,7 @@ allowed/denied commands, limits and secret patterns **without touching code**:
 | `network.allowed_domains` | hosts a network command may reach; others are denied |
 | `dependency_install.patterns` | install invocations that require review |
 | `limits.max_timeout_sec` | requested timeouts above this are flagged for review |
-| `limits.max_output_bytes` | advisory only — surfaced for the executor/runtime to enforce; the static guard does not cap output |
+| `limits.max_output_bytes` | exec-tool output above this is truncated at runtime by the AfterTool `OutputLimitCallback` |
 | `secret_patterns` | inline-secret regexes used for detection and redaction |
 | `default_decision_on_parse_failure` | `deny` (default) or `ask` for unparsable commands |
 | `risk_overrides` | bump/lower a rule's risk by id |
