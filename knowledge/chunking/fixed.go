@@ -73,51 +73,25 @@ func (f *FixedSizeChunking) Chunk(doc *document.Document) ([]*document.Document,
 		return []*document.Document{chunk}, nil
 	}
 
-	// Use UTF-8 safe splitting to ensure proper character boundaries.
-	textChunks := encoding.SafeSplitBySize(content, f.chunkSize)
-
 	var chunks []*document.Document
-	for i, chunkText := range textChunks {
-		chunk := createChunk(doc, chunkText, i+1)
-		chunks = append(chunks, chunk)
+	if f.chunkSize <= 0 || f.overlap <= 0 {
+		// Use UTF-8 safe splitting to ensure proper character boundaries.
+		textChunks := encoding.SafeSplitBySize(content, f.chunkSize)
+		for i, chunkText := range textChunks {
+			chunks = append(chunks, createChunk(doc, chunkText, i+1))
+		}
+		return chunks, nil
 	}
 
-	// Apply overlap if specified.
-	if f.overlap > 0 {
-		chunks = f.applyOverlap(chunks)
+	// Build overlapping windows directly so overlap stays within chunkSize.
+	contentRunes := []rune(content)
+	step := f.chunkSize - f.overlap
+	for start, chunkNumber := 0, 1; start < len(contentRunes); start, chunkNumber = start+step, chunkNumber+1 {
+		end := min(start+f.chunkSize, len(contentRunes))
+		chunks = append(chunks, createChunk(doc, string(contentRunes[start:end]), chunkNumber))
+		if end == len(contentRunes) {
+			break
+		}
 	}
 	return chunks, nil
-}
-
-// applyOverlap applies overlap between consecutive chunks while maintaining UTF-8 safety.
-func (f *FixedSizeChunking) applyOverlap(chunks []*document.Document) []*document.Document {
-	if len(chunks) <= 1 {
-		return chunks
-	}
-
-	overlappedChunks := []*document.Document{chunks[0]}
-	for i := 1; i < len(chunks); i++ {
-		prevText := chunks[i-1].Content
-
-		// Get overlap text safely.
-		overlapText := encoding.SafeOverlap(prevText, f.overlap)
-
-		// Create new metadata for overlapped chunk.
-		metadata := make(map[string]any)
-		for k, v := range chunks[i].Metadata {
-			metadata[k] = v
-		}
-
-		overlappedContent := overlapText + chunks[i].Content
-		overlappedChunk := &document.Document{
-			ID:        chunks[i].ID,
-			Name:      chunks[i].Name,
-			Content:   overlappedContent,
-			Metadata:  metadata,
-			CreatedAt: chunks[i].CreatedAt,
-			UpdatedAt: chunks[i].UpdatedAt,
-		}
-		overlappedChunks = append(overlappedChunks, overlappedChunk)
-	}
-	return overlappedChunks
 }

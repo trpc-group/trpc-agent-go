@@ -12,9 +12,11 @@ package chunking
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 )
 
 func TestFixedSizeChunking_Errors(t *testing.T) {
@@ -92,16 +94,65 @@ func TestFixedSizeChunking_SplitOverlap(t *testing.T) {
 	chunks, err := fsc.Chunk(doc)
 	require.NoError(t, err)
 	require.Greater(t, len(chunks), 1, "expected multiple chunks due to small chunk size")
+	contents := make([]string, 0, len(chunks))
+	for _, chunk := range chunks {
+		contents = append(contents, chunk.Content)
+	}
+	require.Equal(t, []string{"abcdefgh", "ghijabcd", "cdefghij", "ijabcdef", "efghij"}, contents)
 
-	// Verify the first chunk does not exceed chunkSize.
-	require.LessOrEqual(t, len(chunks[0].Content), chunkSize)
+	for i, chunk := range chunks {
+		chunkRunes := utf8.RuneCountInString(chunk.Content)
+		require.LessOrEqual(t, chunkRunes, chunkSize, "chunk %d exceeds chunk size", i)
+		require.Equal(t, chunkRunes, chunk.Metadata[source.MetaChunkSize])
+		if i == 0 {
+			continue
+		}
 
-	// Ensure overlap between consecutive chunks.
-	for i := 1; i < len(chunks); i++ {
+		// Ensure overlap between consecutive chunks.
 		prev := chunks[i-1].Content
-		curr := chunks[i].Content
-		suffix := prev[len(prev)-overlap:]
-		prefix := curr[:overlap]
+		curr := chunk.Content
+		suffix := string([]rune(prev)[utf8.RuneCountInString(prev)-overlap:])
+		prefix := string([]rune(curr)[:overlap])
 		require.Equal(t, suffix, prefix, "chunks do not overlap as expected")
 	}
+
+	reconstructed := []rune(chunks[0].Content)
+	for _, chunk := range chunks[1:] {
+		reconstructed = append(reconstructed, []rune(chunk.Content)[overlap:]...)
+	}
+	require.Equal(t, content, string(reconstructed))
+}
+
+func TestFixedSizeChunking_UnicodeOverlapWithinChunkSize(t *testing.T) {
+	const (
+		chunkSize = 4
+		overlap   = 1
+	)
+	doc := &document.Document{ID: "unicode", Content: "甲乙丙丁戊己庚辛"}
+	fsc := NewFixedSizeChunking(WithChunkSize(chunkSize), WithOverlap(overlap))
+
+	chunks, err := fsc.Chunk(doc)
+	require.NoError(t, err)
+	require.Equal(t, []string{"甲乙丙丁", "丁戊己庚", "庚辛"}, []string{
+		chunks[0].Content,
+		chunks[1].Content,
+		chunks[2].Content,
+	})
+	for i, chunk := range chunks {
+		require.True(t, utf8.ValidString(chunk.Content))
+		require.LessOrEqual(t, utf8.RuneCountInString(chunk.Content), chunkSize, "chunk %d exceeds chunk size", i)
+	}
+}
+
+func TestFixedSizeChunking_WithoutOverlapUnchanged(t *testing.T) {
+	doc := &document.Document{ID: "no-overlap", Content: "abcdefghij"}
+	fsc := NewFixedSizeChunking(WithChunkSize(4), WithOverlap(0))
+
+	chunks, err := fsc.Chunk(doc)
+	require.NoError(t, err)
+	require.Equal(t, []string{"abcd", "efgh", "ij"}, []string{
+		chunks[0].Content,
+		chunks[1].Content,
+		chunks[2].Content,
+	})
 }
