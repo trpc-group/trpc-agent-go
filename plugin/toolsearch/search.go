@@ -264,11 +264,14 @@ type toolSearchInput struct {
 // Argument routing lives in resolveSelection.
 func (p *Plugin) searchTools(ctx context.Context, input toolSearchInput) (string, error) {
 	maxResults := input.MaxResults
-	if maxResults <= 0 {
-		maxResults = p.maxResults
-	}
+	// The maxMaxResults ceiling guards only the value the model supplies at
+	// runtime; it is applied before the default fallback so a developer's
+	// explicit WithMaxResults(n) is a deliberate choice and honored as-is.
 	if maxResults > maxMaxResults {
 		maxResults = maxMaxResults
+	}
+	if maxResults <= 0 {
+		maxResults = p.maxResults
 	}
 
 	req := searchRequest{

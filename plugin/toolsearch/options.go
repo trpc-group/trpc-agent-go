@@ -145,7 +145,10 @@ func WithName(name string) Option {
 	}
 }
 
-// WithMaxResults sets the default maximum number of keyword-search results.
+// WithMaxResults sets the default maximum number of keyword-search results used
+// when the model does not supply max_results. Unlike a model-supplied value,
+// this configured default is not capped by the per-request ceiling, so a value
+// above that ceiling takes effect. Non-positive values are ignored.
 func WithMaxResults(n int) Option {
 	return func(o *options) {
 		if n > 0 {

@@ -122,7 +122,7 @@ func (p *Plugin) ensureMCPListed(ctx context.Context, box *toolboxIndex) {
 	}
 	fresh := make(map[string]freshEntry, len(tools))
 	for _, t := range tools {
-		if t == nil {
+		if t == nil || t.Declaration() == nil {
 			continue
 		}
 		renamed := newRenamedTool(t, box.mcp.serverName)
