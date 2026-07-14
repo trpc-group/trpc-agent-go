@@ -206,7 +206,7 @@ var Case08_Track = &Case{
 //
 // 顺序并不依赖 goroutine 调度或 sleep：appendConcurrently 用同步屏障保证
 // append 按本声明的顺序进入后端，因此 InMemory（到达顺序）与 SQLite
-//（wall-clock created_at 排序）得到一致的事件序。
+// （wall-clock created_at 排序）得到一致的事件序。
 var Case09_ConcurrentAppend = &Case{
 	Name: "case09_concurrent_append",
 	Ops: []Op{

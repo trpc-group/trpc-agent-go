@@ -10,9 +10,9 @@ replace trpc.group/trpc-go/trpc-agent-go/memory/sqlite => ../../memory/sqlite
 
 require (
 	github.com/mattn/go-sqlite3 v1.14.32
-	trpc.group/trpc-go/trpc-agent-go v1.6.1-0.20260311094958-7b74ee59e339
-	trpc.group/trpc-go/trpc-agent-go/memory/sqlite v1.6.1-0.20260311094958-7b74ee59e339
-	trpc.group/trpc-go/trpc-agent-go/session/sqlite v1.6.1-0.20260311094958-7b74ee59e339
+	trpc.group/trpc-go/trpc-agent-go v1.10.0
+	trpc.group/trpc-go/trpc-agent-go/memory/sqlite v1.10.0
+	trpc.group/trpc-go/trpc-agent-go/session/sqlite v1.10.0
 )
 
 require (
