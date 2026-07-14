@@ -26,6 +26,46 @@ func (failingAuditWriter) WriteAuditEvent(context.Context, AuditEvent) error {
 	return errors.New("audit sink failed")
 }
 
+func TestBlockedError(t *testing.T) {
+	report := Report{
+		Decision:       DecisionDeny,
+		RiskLevel:      RiskCritical,
+		RuleIDs:        []string{RuleDangerousDelete},
+		Recommendation: "do not delete recursively",
+	}
+	err := NewBlockedError(report)
+	if !errors.Is(err, ErrBlocked) {
+		t.Fatalf("NewBlockedError did not wrap ErrBlocked: %v", err)
+	}
+	var blocked *BlockedError
+	if !errors.As(err, &blocked) {
+		t.Fatalf("NewBlockedError type = %T, want *BlockedError", err)
+	}
+	if blocked.Report.Decision != DecisionDeny ||
+		blocked.Report.RiskLevel != RiskCritical ||
+		blocked.Report.RuleIDs[0] != RuleDangerousDelete {
+		t.Fatalf("blocked report = %#v", blocked.Report)
+	}
+	msg := err.Error()
+	for _, want := range []string{
+		string(DecisionDeny),
+		string(RiskCritical),
+		RuleDangerousDelete,
+		"do not delete recursively",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("blocked error %q missing %q", msg, want)
+		}
+	}
+	if blocked.Unwrap() != ErrBlocked {
+		t.Fatalf("Unwrap() = %v, want ErrBlocked", blocked.Unwrap())
+	}
+	var nilBlocked *BlockedError
+	if nilBlocked.Error() != ErrBlocked.Error() {
+		t.Fatalf("nil BlockedError Error() = %q, want %q", nilBlocked.Error(), ErrBlocked.Error())
+	}
+}
+
 func TestZeroPolicyUsesConservativeCommandDefaults(t *testing.T) {
 	scanner, err := NewScanner(Policy{})
 	if err != nil {
@@ -291,6 +331,26 @@ func TestBackendResourceAndNetworkBranches(t *testing.T) {
 			rule: RuleHostBackground,
 		},
 		{
+			name: "host tty asks by default",
+			req: ExecutionRequest{
+				ToolName: "exec_command",
+				Backend:  BackendHostExec,
+				Command:  "echo ok",
+				TTY:      true,
+			},
+			rule: RuleHostPTY,
+		},
+		{
+			name: "workspace background",
+			req: ExecutionRequest{
+				ToolName:   "workspace_exec",
+				Backend:    BackendWorkspaceExec,
+				Command:    "echo ok",
+				Background: true,
+			},
+			rule: RuleHostBackground,
+		},
+		{
 			name: "host timeout",
 			req: ExecutionRequest{
 				ToolName:  "exec_command",
@@ -345,6 +405,9 @@ func TestBackendResourceAndNetworkBranches(t *testing.T) {
 			}
 			if !contains(report.RuleIDs, tc.rule) {
 				t.Fatalf("rules = %v, want %s", report.RuleIDs, tc.rule)
+			}
+			if tc.name == "host tty asks by default" && report.Decision != DecisionAsk {
+				t.Fatalf("host tty decision = %s, want ask", report.Decision)
 			}
 		})
 	}
@@ -427,6 +490,70 @@ func TestScannerReviewRegressionCases(t *testing.T) {
 	}
 	if got := moveRuleFirst([]string{"a", "b", "a"}, "a"); strings.Join(got, ",") != "a,b" {
 		t.Fatalf("moveRuleFirst duplicated primary: %v", got)
+	}
+}
+
+func TestSafetyHelperBranches(t *testing.T) {
+	pathCases := []struct {
+		in   string
+		want string
+	}{
+		{in: "id_ed25519", want: "id_ed25519"},
+		{in: "secret.yaml", want: "secret.yaml"},
+		{in: "plainword", want: ""},
+		{in: "--flag", want: ""},
+		{in: "https://example.test/file.env", want: ""},
+	}
+	for _, tc := range pathCases {
+		t.Run("path "+tc.in, func(t *testing.T) {
+			if got := normalizePathToken(tc.in); got != tc.want {
+				t.Fatalf("normalizePathToken(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+	if !isKnownSensitiveBareFilename("ID_RSA") {
+		t.Fatalf("expected uppercase sensitive key filename to match")
+	}
+	if isKnownSensitiveBareFilename("notes") {
+		t.Fatalf("ordinary filename matched sensitive filename list")
+	}
+
+	commandCases := []struct {
+		cmd      string
+		wantRule string
+		wantCat  Category
+	}{
+		{cmd: "curl", wantRule: RuleNetworkDeniedDomain, wantCat: CategoryNetwork},
+		{cmd: "rm", wantRule: RuleDangerousDelete, wantCat: CategoryDangerousCommand},
+		{cmd: "sudo", wantRule: RuleHostPrivilege, wantCat: CategoryHostExec},
+		{cmd: "custom", wantRule: RuleHumanReview, wantCat: CategoryDangerousCommand},
+	}
+	for _, tc := range commandCases {
+		t.Run("command "+tc.cmd, func(t *testing.T) {
+			if got := ruleForDeniedCommand(tc.cmd); got != tc.wantRule {
+				t.Fatalf("ruleForDeniedCommand(%q) = %q, want %q", tc.cmd, got, tc.wantRule)
+			}
+			if got := categoryForCommand(tc.cmd); got != tc.wantCat {
+				t.Fatalf("categoryForCommand(%q) = %q, want %q", tc.cmd, got, tc.wantCat)
+			}
+		})
+	}
+
+	looksLikeCases := []struct {
+		line string
+		want bool
+	}{
+		{line: "", want: false},
+		{line: "not a command", want: false},
+		{line: "go test ./tool/safety", want: true},
+		{line: "value > 0", want: true},
+	}
+	for _, tc := range looksLikeCases {
+		t.Run("looks "+tc.line, func(t *testing.T) {
+			if got := looksLikeCommand(tc.line); got != tc.want {
+				t.Fatalf("looksLikeCommand(%q) = %v, want %v", tc.line, got, tc.want)
+			}
+		})
 	}
 }
 
