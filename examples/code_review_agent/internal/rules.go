@@ -76,10 +76,7 @@ func (e *RuleEngine) Run(files []DiffFile) []Finding {
 					continue
 				}
 				for _, rule := range e.rules {
-					// Skip test-missing rule for non-go files.
-					if !isGo && rule.ID() != "TEST_MISSING" {
-						continue
-					}
+					// Every configured rule analyzes Go source only.
 					if !isGo {
 						continue
 					}

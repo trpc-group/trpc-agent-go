@@ -459,6 +459,7 @@ func parseTime(s string) time.Time {
 // ScanResult holds the result of a scan query for convenience.
 type ScanResult struct {
 	TaskID      string
+	Task        *ReviewTask
 	Findings    []Finding
 	SandboxRuns []SandboxRun
 	Artifacts   []Artifact
@@ -485,6 +486,7 @@ func (s *SQLiteStorage) ScanTask(ctx context.Context, taskID string) (*ScanResul
 	}
 	return &ScanResult{
 		TaskID:      taskID,
+		Task:        task,
 		Findings:    findings,
 		SandboxRuns: runs,
 		Artifacts:   artifacts,

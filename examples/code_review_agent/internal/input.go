@@ -27,6 +27,13 @@ const maxInputDiffBytes = 16 * 1024 * 1024
 // paths. Git is invoked without external diff helpers or optional locks.
 func LoadReviewInput(ctx context.Context, input ReviewInput) ([]byte, string, error) {
 	if input.DiffFile != "" {
+		info, err := os.Stat(input.DiffFile)
+		if err != nil {
+			return nil, "", fmt.Errorf("stat diff file: %w", err)
+		}
+		if info.Size() > maxInputDiffBytes {
+			return nil, "", fmt.Errorf("diff exceeds %d-byte limit", maxInputDiffBytes)
+		}
 		data, err := os.ReadFile(input.DiffFile)
 		if err != nil {
 			return nil, "", fmt.Errorf("read diff file: %w", err)

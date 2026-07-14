@@ -173,9 +173,6 @@ func (s *Sandbox) Execute(
 // buildEnv returns a filtered environment containing only whitelisted
 // variables.
 func (s *Sandbox) buildEnv() []string {
-	if len(s.config.AllowedEnvVars) == 0 {
-		return os.Environ()
-	}
 	var env []string
 	for _, key := range s.config.AllowedEnvVars {
 		if val, ok := os.LookupEnv(key); ok {

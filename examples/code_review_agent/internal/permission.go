@@ -143,7 +143,7 @@ func (p *PermissionPolicy) Decide(cmd string) (Decision, string) {
 	}
 
 	// Check for shell metacharacters that could bypass restrictions.
-	if strings.ContainsAny(cmd, "|&;`$()") {
+	if strings.ContainsAny(cmd, "|&;`$()<>") {
 		// Allow simple pipe only if both sides are in allowed list.
 		return DecisionAsk,
 			"command contains shell metacharacters, needs review"

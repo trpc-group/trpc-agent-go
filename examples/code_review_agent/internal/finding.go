@@ -107,16 +107,33 @@ var severityOrder = map[string]int{
 
 func sortFindings(f []Finding) {
 	sort.Slice(f, func(i, j int) bool {
-		si := severityOrder[f[i].Severity]
-		sj := severityOrder[f[j].Severity]
+		si := severityRank(f[i].Severity)
+		sj := severityRank(f[j].Severity)
 		if si != sj {
 			return si < sj
 		}
 		if f[i].File != f[j].File {
 			return f[i].File < f[j].File
 		}
-		return f[i].Line < f[j].Line
+		if f[i].Line != f[j].Line {
+			return f[i].Line < f[j].Line
+		}
+		left := []string{f[i].Category, f[i].RuleID, f[i].Title, f[i].Evidence, f[i].ID}
+		right := []string{f[j].Category, f[j].RuleID, f[j].Title, f[j].Evidence, f[j].ID}
+		for index := range left {
+			if left[index] != right[index] {
+				return left[index] < right[index]
+			}
+		}
+		return false
 	})
+}
+
+func severityRank(severity string) int {
+	if rank, ok := severityOrder[severity]; ok {
+		return rank
+	}
+	return len(severityOrder)
 }
 
 // CountBySeverity returns a map of severity → count.

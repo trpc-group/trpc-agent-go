@@ -69,15 +69,31 @@ func (r *DBConnectionLeakRule) Check(file DiffFile, hunk DiffHunk, line DiffLine
 	}
 
 	// rows from Query() should also be closed.
-	if reDBQuery.MatchString(content) && !strings.Contains(content, "defer") {
-		findings = append(findings, Finding{
-			Severity: SeverityMedium,
-			Title:    "Query result rows not closed with defer",
-			Evidence: content,
-			Recommendation: "Add `defer rows.Close()` after Query() to " +
-				"release database resources.",
-			Confidence: 0.7,
-		})
+	if reDBQuery.MatchString(content) {
+		hasDeferClose := false
+		for i, candidate := range hunk.Lines {
+			if candidate.Number != line.Number || candidate.Type != line.Type {
+				continue
+			}
+			for j := i + 1; j < len(hunk.Lines) && j <= i+10; j++ {
+				next := hunk.Lines[j].Content
+				if strings.Contains(next, "defer") && strings.Contains(next, "Close") {
+					hasDeferClose = true
+					break
+				}
+			}
+			break
+		}
+		if !hasDeferClose {
+			findings = append(findings, Finding{
+				Severity: SeverityMedium,
+				Title:    "Query result rows not closed with defer",
+				Evidence: content,
+				Recommendation: "Add `defer rows.Close()` after Query() to " +
+					"release database resources.",
+				Confidence: 0.7,
+			})
+		}
 	}
 
 	return findings

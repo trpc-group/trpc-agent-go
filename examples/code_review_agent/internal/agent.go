@@ -84,13 +84,21 @@ func NewReviewAgentWithConfig(storage Storage, sandboxCfg SandboxConfig) *Review
 }
 
 // Review runs the full code review pipeline on the given input.
-func (a *ReviewAgent) Review(ctx context.Context, input ReviewInput) (*ReviewResult, error) {
+func (a *ReviewAgent) Review(ctx context.Context, input ReviewInput) (result *ReviewResult, err error) {
 	taskID := input.TaskID
 	if taskID == "" {
 		taskID = "review-" + uuid.NewString()[:8]
 	}
 
 	monitor := NewMonitor(taskID)
+	taskPersisted := false
+	defer func() {
+		if err != nil && taskPersisted {
+			_ = a.storage.UpdateTaskStatus(
+				ctx, taskID, "failed", time.Now(), monitor.Finalize().TotalDurationMs,
+			)
+		}
+	}()
 
 	// 1. Create review task.
 	task := &ReviewTask{
@@ -106,12 +114,11 @@ func (a *ReviewAgent) Review(ctx context.Context, input ReviewInput) (*ReviewRes
 	if err := a.storage.SaveTask(ctx, task); err != nil {
 		return nil, fmt.Errorf("save task: %w", err)
 	}
+	taskPersisted = true
 
 	// 2. Parse diff.
 	diffContent, inputType, err := LoadReviewInput(ctx, input)
 	if err != nil {
-		task.Status = "failed"
-		_ = a.storage.UpdateTaskStatus(ctx, taskID, "failed", time.Now(), monitor.Finalize().TotalDurationMs)
 		return nil, err
 	}
 	task.InputType = inputType

@@ -77,6 +77,10 @@ func main() {
 	if *repoPath != "" {
 		sandboxCfg.WorkDir = *repoPath
 	}
+	if !*dryRun && *repoPath == "" {
+		fmt.Fprintln(os.Stderr, "Error: --repo-path is required when sandbox checks are enabled")
+		os.Exit(1)
+	}
 
 	// Create agent. Dry-run never initializes Docker, while non-dry production
 	// runs default to the repository's network-disabled container executor.
@@ -97,10 +101,6 @@ func main() {
 		agent = internal.NewReviewAgentWithSandbox(storage, containerSandbox)
 	} else {
 		agent = internal.NewReviewAgentWithConfig(storage, sandboxCfg)
-	}
-	if !*dryRun && *repoPath == "" {
-		fmt.Fprintln(os.Stderr, "Error: --repo-path is required when sandbox checks are enabled")
-		os.Exit(1)
 	}
 
 	// Run review.
