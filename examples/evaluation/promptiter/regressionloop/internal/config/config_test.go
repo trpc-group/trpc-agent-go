@@ -20,7 +20,7 @@ func TestLoadSampleConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if cfg.Seed != 42 || cfg.Optimization.MaxRounds != 3 || cfg.Prompt.WriteBack {
+	if cfg.Seed != 42 || cfg.Optimization.MaxRounds != 3 || cfg.Evaluation.ExpectedAgentName != "candidate" {
 		t.Fatalf("unexpected config: %#v", cfg)
 	}
 }
@@ -43,9 +43,12 @@ func TestValidateRejectsInvalidConfigurations(t *testing.T) {
 		{"same sets", func(c *Config) { c.Evaluation.ValidationEvalSetID = c.Evaluation.TrainEvalSetID }},
 		{"rounds", func(c *Config) { c.Optimization.MaxRounds = 0 }},
 		{"nan", func(c *Config) { c.Optimization.MinScoreGain = math.NaN() }},
+		{"nan latency budget", func(c *Config) { c.Gate.MaxLatencyIncrease = math.NaN() }},
+		{"nan cost budget", func(c *Config) { c.Gate.MaxCostIncrease = math.NaN() }},
 		{"negative counts", func(c *Config) { c.Gate.MaxNewHardFailures = -1 }},
 		{"nan p0 drop", func(c *Config) { c.Gate.CriticalCases[0].MaxScoreDrop = math.NaN() }},
 		{"empty target", func(c *Config) { c.Prompt.TargetSurfaceIDs = nil }},
+		{"empty expected agent", func(c *Config) { c.Evaluation.ExpectedAgentName = "" }},
 		{"missing p0", func(c *Config) { c.Gate.CriticalCases[0].CaseID = "missing" }},
 		{"output covers input", func(c *Config) { c.Audit.OutputDir = "." }},
 	}

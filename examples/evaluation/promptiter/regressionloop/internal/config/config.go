@@ -29,7 +29,6 @@ type Config struct {
 	Prompt  struct {
 		SourceFile       string   `json:"sourceFile"`
 		TargetSurfaceIDs []string `json:"targetSurfaceIds"`
-		WriteBack        bool     `json:"writeBack"`
 	} `json:"prompt"`
 	Evaluation struct {
 		TrainEvalSetID      string `json:"trainEvalSetId"`
@@ -38,6 +37,7 @@ type Config struct {
 		ValidationFile      string `json:"validationFile"`
 		MetricsFile         string `json:"metricsFile"`
 		TraceMode           bool   `json:"traceMode"`
+		ExpectedAgentName   string `json:"expectedAgentName"`
 	} `json:"evaluation"`
 	Optimization struct {
 		MaxRounds                  int     `json:"maxRounds"`
@@ -101,8 +101,10 @@ func (c *Config) validateBasic() error {
 		return errors.New("score thresholds must be finite")
 	case c.Gate.MaxNewHardFailures < 0, c.Gate.MaxToolCallIncrease < 0, c.Gate.MaxModelCallIncrease < 0:
 		return errors.New("gate count thresholds must be non-negative")
-	case c.Gate.MaxLatencyIncrease < 0, c.Gate.MaxCostIncrease < 0:
-		return errors.New("gate budgets must be non-negative")
+	case !finite(c.Gate.MaxLatencyIncrease), !finite(c.Gate.MaxCostIncrease), c.Gate.MaxLatencyIncrease < 0, c.Gate.MaxCostIncrease < 0:
+		return errors.New("gate budgets must be finite and non-negative")
+	case strings.TrimSpace(c.Evaluation.ExpectedAgentName) == "":
+		return errors.New("expected agent name must not be empty")
 	case len(c.Prompt.TargetSurfaceIDs) == 0:
 		return errors.New("target surface ids must not be empty")
 	case strings.TrimSpace(c.Prompt.SourceFile) == "":

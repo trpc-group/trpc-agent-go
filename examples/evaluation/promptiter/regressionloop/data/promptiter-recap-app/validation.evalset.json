@@ -26,8 +26,7 @@
         "invocationId": "val-03-1",
         "userContent": {"role": "user", "content": "Look up game 203 and return a grounded recap."},
         "finalResponse": {"role": "assistant", "content": "{\"game_id\":\"203\",\"winner\":\"Central\",\"decisive_moment\":\"sixth penalty round\"}"},
-        "tools": [{"id": "call-203", "name": "lookup_game", "arguments": {"game_id": "203"}, "result": {"winner": "Central"}}],
-        "toolMock": {"mode": "replay"}
+        "tools": [{"id": "call-203", "name": "lookup_game", "arguments": {"game_id": "203"}, "result": {"winner": "Central"}}]
       }],
       "sessionInput": {"appName": "promptiter-recap-app", "userId": "demo"}
     }

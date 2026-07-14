@@ -4,8 +4,7 @@
   "mode": "fake",
   "prompt": {
     "sourceFile": "baseline.prompt.txt",
-    "targetSurfaceIds": ["candidate#instruction"],
-    "writeBack": false
+    "targetSurfaceIds": ["candidate#instruction"]
   },
   "evaluation": {
     "trainEvalSetId": "recap-train",
@@ -13,12 +12,13 @@
     "trainFile": "train.evalset.json",
     "validationFile": "validation.evalset.json",
     "metricsFile": "recap.metrics.json",
-    "traceMode": true
+    "traceMode": true,
+    "expectedAgentName": "candidate"
   },
   "optimization": {
     "maxRounds": 3,
     "maxRoundsWithoutAcceptance": 2,
-    "minScoreGain": 0.05
+    "minScoreGain": -1.0
   },
   "gate": {
     "minValidationScoreGain": 0.05,

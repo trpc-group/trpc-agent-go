@@ -26,6 +26,18 @@ import (
 
 var updateGolden = flag.Bool("update", false, "update expected optimization reports")
 
+func TestPipelineConfigUsesOptimizationMinScoreGain(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Optimization.MinScoreGain = 0.125
+	cfg.Evaluation.ExpectedAgentName = "candidate"
+	if got := pipelineConfig(cfg).PromptIterMinScoreGain; got != 0.125 {
+		t.Fatalf("PromptIterMinScoreGain = %v, want 0.125", got)
+	}
+	if got := pipelineConfig(cfg).ExpectedAgentName; got != "candidate" {
+		t.Fatalf("ExpectedAgentName = %q, want candidate", got)
+	}
+}
+
 func TestDeterministicEndToEnd(t *testing.T) {
 	wallStart := time.Now()
 	configPath := filepath.Join("data", "promptiter-recap-app", "promptiter.json")
@@ -87,6 +99,24 @@ func TestDeterministicEndToEnd(t *testing.T) {
 	if got := report.Rounds[2].Delta.AgainstLastReleased.ScoreDelta; got >= 0 {
 		t.Fatalf("round 3 was not compared with the last released profile: delta=%v", got)
 	}
+	var roundCaseRuns, roundModelCalls, roundToolCalls int
+	var roundLatency, roundCost float64
+	for _, round := range report.Rounds {
+		if round.Usage.ModelCalls != 17 {
+			t.Fatalf("round %d model calls = %d, want 16 evaluation calls plus 1 optimizer call", round.Round, round.Usage.ModelCalls)
+		}
+		roundCaseRuns += round.Usage.EvaluationCaseRuns
+		roundModelCalls += round.Usage.ModelCalls
+		roundToolCalls += round.Usage.ToolCalls
+		roundLatency += round.LatencySeconds
+		roundCost += round.EstimatedCost.Amount
+	}
+	if roundCaseRuns != report.Usage.EvaluationCaseRuns || roundModelCalls != report.Usage.ModelCalls || roundToolCalls != report.Usage.ToolCalls {
+		t.Fatalf("round usage does not sum to report usage: rounds=(%d,%d,%d), report=%#v", roundCaseRuns, roundModelCalls, roundToolCalls, report.Usage)
+	}
+	if !closeEnough(roundLatency, report.LatencySeconds) || !closeEnough(roundCost, report.EstimatedCost.Amount) {
+		t.Fatalf("round resources do not sum to report totals: latency=%v/%v cost=%v/%v", roundLatency, report.LatencySeconds, roundCost, report.EstimatedCost.Amount)
+	}
 	for _, path := range []string{
 		"baseline/input_profile.json", "baseline/train_evaluation.json", "baseline/validation_evaluation.json",
 		"round_1/input_profile.json", "round_1/candidate_profile.json", "round_1/train_evaluation.json",
@@ -122,6 +152,11 @@ func TestDeterministicEndToEnd(t *testing.T) {
 			t.Errorf("%s differs from golden; run go test . -update", name)
 		}
 	}
+}
+
+func closeEnough(left, right float64) bool {
+	delta := left - right
+	return delta > -1e-12 && delta < 1e-12
 }
 
 func TestAddedEvalCaseChangesReport(t *testing.T) {

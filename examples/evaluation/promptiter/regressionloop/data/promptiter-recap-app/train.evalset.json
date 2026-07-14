@@ -26,8 +26,7 @@
         "invocationId": "train-03-1",
         "userContent": {"role": "user", "content": "Look up game 103 and recap it."},
         "finalResponse": {"role": "assistant", "content": "{\"game_id\":\"103\",\"winner\":\"East\",\"decisive_moment\":\"late penalty\"}"},
-        "tools": [{"id": "call-103", "name": "lookup_game", "arguments": {"game_id": "103"}, "result": {"winner": "East"}}],
-        "toolMock": {"mode": "replay"}
+        "tools": [{"id": "call-103", "name": "lookup_game", "arguments": {"game_id": "103"}, "result": {"winner": "East"}}]
       }],
       "sessionInput": {"appName": "promptiter-recap-app", "userId": "demo"}
     }

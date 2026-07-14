@@ -49,6 +49,7 @@ type CaseAttribution struct {
 
 // AttributionOptions supplies optional expected routing evidence.
 type AttributionOptions struct {
+	ExpectedAgentName  string
 	ExpectedAgentNames map[string]string
 }
 
@@ -60,7 +61,11 @@ func AttributeFailures(result *engine.EvaluationResult, options AttributionOptio
 	out := make([]CaseAttribution, 0)
 	for _, set := range result.EvalSets {
 		for _, evalCase := range set.Cases {
-			reasons := attributeCase(evalCase, options.ExpectedAgentNames[evalCase.EvalCaseID])
+			expectedAgent := options.ExpectedAgentName
+			if value, ok := options.ExpectedAgentNames[evalCase.EvalCaseID]; ok {
+				expectedAgent = value
+			}
+			reasons := attributeCase(evalCase, expectedAgent)
 			if len(reasons) > 0 {
 				out = append(out, CaseAttribution{CaseID: evalCase.EvalCaseID, Reasons: reasons})
 			}
@@ -213,7 +218,7 @@ func classifyMetric(metricName, rawReason string) (string, string) {
 		return FailureToolCallError, fallbackMessage(rawReason, "tool trajectory does not match the expected call")
 	case strings.Contains(name, "final") || strings.Contains(name, "rouge"):
 		return FailureFinalResponseMismatch, fallbackMessage(rawReason, "final response does not match expectations")
-	case strings.Contains(name, "retriev") || strings.Contains(name, "knowledge") || strings.Contains(reason, "knowledge"):
+	case strings.Contains(name, "retrieve") || strings.Contains(name, "retrieval") || strings.Contains(name, "knowledge") || strings.Contains(reason, "knowledge"):
 		return FailureKnowledgeGap, fallbackMessage(rawReason, "required knowledge was not retrieved")
 	case strings.Contains(reason, "route") || strings.Contains(reason, "agent"):
 		return FailureRoutingError, fallbackMessage(rawReason, "an unexpected route handled the request")

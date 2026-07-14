@@ -75,13 +75,10 @@ func pipelineConfig(cfg *config.Config) regression.Config {
 		ValidationEvalSetID: cfg.Evaluation.ValidationEvalSetID,
 		TargetSurfaceIDs:    append([]string(nil), cfg.Prompt.TargetSurfaceIDs...),
 		MaxRounds:           cfg.Optimization.MaxRounds, MaxRoundsWithoutRelease: cfg.Optimization.MaxRoundsWithoutAcceptance,
-		PromptIterMinScoreGain: regression.CandidatePassThroughGain, ReleaseGate: cfg.Gate,
+		PromptIterMinScoreGain: cfg.Optimization.MinScoreGain, ReleaseGate: cfg.Gate,
 		ModelConfig:   regression.ModelConfig{Mode: cfg.Mode, Name: "fake-deterministic", Config: map[string]any{"seed": cfg.Seed}},
 		EstimatedCost: regression.EstimatedCost{Currency: "USD", Amount: 0, Source: "fake-model"},
 		SaveArtifacts: cfg.Audit.SaveRoundArtifacts, BaselineProfileRef: "baseline/input_profile.json",
-		PerformedWriteBack: false, ExpectedAgentNames: map[string]string{
-			"train-01": "candidate", "train-02": "candidate", "train-03": "candidate",
-			"val-01": "candidate", "val-02": "candidate", "val-03": "candidate",
-		},
+		PerformedWriteBack: false, ExpectedAgentName: cfg.Evaluation.ExpectedAgentName,
 	}
 }
