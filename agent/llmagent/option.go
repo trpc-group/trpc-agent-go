@@ -762,7 +762,8 @@ func WithInstruction(instruction string) Option {
 // WithGlobalInstruction sets the global instruction template of the agent.
 // The template uses the same placeholder subset as the internal prompt state
 // adapter in `internal/prompt/adapter/state`. See `Render` there for supported
-// placeholder forms and resolution rules.//
+// placeholder forms and resolution rules.
+//
 // Note: placeholders here re-render on every request; see the prompt-cache
 // caveat on WithInstruction — a value that changes between turns invalidates
 // the provider's prompt-cache prefix the same way.
@@ -776,7 +777,8 @@ func WithGlobalInstruction(instruction string) Option {
 // Values use the same placeholder subset as the internal prompt state adapter
 // in `internal/prompt/adapter/state`. See `Render` there for supported
 // placeholder forms and resolution rules.
-// Key: model.Info().Name, Value: instruction text.//
+// Key: model.Info().Name, Value: instruction text.
+//
 // Note: placeholders here re-render on every request; see the prompt-cache
 // caveat on WithInstruction — a value that changes between turns invalidates
 // the provider's prompt-cache prefix the same way.
@@ -790,7 +792,8 @@ func WithModelInstructions(instructions map[string]string) Option {
 // overrides. Values use the same placeholder subset as the internal prompt
 // state adapter in `internal/prompt/adapter/state`. See `Render` there for
 // supported placeholder forms and resolution rules.
-// Key: model.Info().Name, Value: system prompt text.//
+// Key: model.Info().Name, Value: system prompt text.
+//
 // Note: placeholders here re-render on every request; see the prompt-cache
 // caveat on WithInstruction — a value that changes between turns invalidates
 // the provider's prompt-cache prefix the same way.
