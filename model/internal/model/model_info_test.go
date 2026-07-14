@@ -47,6 +47,16 @@ func TestResolveContextWindow(t *testing.T) {
 			expected:  400000,
 		},
 		{
+			name:      "exact match - GPT-5.6 alias",
+			modelName: "gpt-5.6",
+			expected:  1050000,
+		},
+		{
+			name:      "exact match - GPT-5.6 Terra",
+			modelName: "gpt-5.6-terra",
+			expected:  1050000,
+		},
+		{
 			name:      "exact match - GPT-5.4",
 			modelName: "gpt-5.4",
 			expected:  1050000,
@@ -55,6 +65,11 @@ func TestResolveContextWindow(t *testing.T) {
 			name:      "exact match - GPT-5.4-pro",
 			modelName: "gpt-5.4-pro",
 			expected:  1050000,
+		},
+		{
+			name:      "exact match - GPT-5.3-Codex",
+			modelName: "gpt-5.3-codex",
+			expected:  400000,
 		},
 		{
 			name:      "exact match - GPT-5.2-codex",
@@ -89,6 +104,26 @@ func TestResolveContextWindow(t *testing.T) {
 		{
 			name:      "exact match - Claude Sonnet 4.6",
 			modelName: "claude-sonnet-4-6",
+			expected:  1000000,
+		},
+		{
+			name:      "exact match - Claude Fable 5",
+			modelName: "claude-fable-5",
+			expected:  1000000,
+		},
+		{
+			name:      "exact match - Claude Mythos 5",
+			modelName: "claude-mythos-5",
+			expected:  1000000,
+		},
+		{
+			name:      "exact match - Claude Sonnet 5",
+			modelName: "claude-sonnet-5",
+			expected:  1000000,
+		},
+		{
+			name:      "exact match - Claude Opus 4.8 alias",
+			modelName: "claude-opus-4-8",
 			expected:  1000000,
 		},
 		{
@@ -194,6 +229,16 @@ func TestResolveContextWindow(t *testing.T) {
 		{
 			name:      "exact match - Kimi K2.6",
 			modelName: "kimi-k2.6",
+			expected:  256000,
+		},
+		{
+			name:      "exact match - Kimi K2.7 Code",
+			modelName: "kimi-k2.7-code",
+			expected:  256000,
+		},
+		{
+			name:      "exact match - Kimi K2.7 Code HighSpeed",
+			modelName: "kimi-k2.7-code-highspeed",
 			expected:  256000,
 		},
 		{
@@ -539,7 +584,13 @@ func TestResolveMaxOutputTokens(t *testing.T) {
 		{name: "prefix o1-mini snapshot", modelName: "o1-mini-2024-09-12", expected: 65536},
 		{name: "exact gpt-5.2", modelName: "gpt-5.2", expected: 128000},
 		{name: "exact gpt-5.2 chat latest", modelName: "gpt-5.2-chat-latest", expected: 16384},
+		{name: "exact gpt-5.6 alias", modelName: "gpt-5.6", expected: 128000},
+		{name: "exact gpt-5.6 Luna", modelName: "gpt-5.6-luna", expected: 128000},
+		{name: "exact gpt-5.3 Codex", modelName: "gpt-5.3-codex", expected: 128000},
 		{name: "gpt-5.4 mini", modelName: "gpt-5.4-mini", expected: 128000},
+		{name: "claude fable 5", modelName: "claude-fable-5", expected: 128000},
+		{name: "claude mythos 5", modelName: "claude-mythos-5", expected: 128000},
+		{name: "claude sonnet 5", modelName: "claude-sonnet-5", expected: 128000},
 		{name: "claude opus 4.8", modelName: "claude-opus-4-8", expected: 128000},
 		{name: "claude sonnet 4.6", modelName: "claude-sonnet-4-6", expected: 128000},
 		{name: "claude 3.7 sonnet", modelName: "claude-3-7-sonnet-20250219", expected: 64000},
