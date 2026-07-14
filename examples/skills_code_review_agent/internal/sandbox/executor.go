@@ -25,7 +25,30 @@ type workspaceExecutor interface {
 	CreateWorkspace(ctx context.Context, execID string, pol codeexecutor.WorkspacePolicy) (codeexecutor.Workspace, error)
 	Cleanup(ctx context.Context, ws codeexecutor.Workspace) error
 	PutFiles(ctx context.Context, ws codeexecutor.Workspace, files []codeexecutor.PutFile) error
+	PutDirectory(ctx context.Context, ws codeexecutor.Workspace, hostPath, to string) error
 	RunProgram(ctx context.Context, ws codeexecutor.Workspace, spec codeexecutor.RunProgramSpec) (codeexecutor.RunResult, error)
+}
+
+// NewCodeExecutor builds the sandbox backend for the selected runtime.
+func NewCodeExecutor(opts Options) (codeexecutor.CodeExecutor, error) {
+	switch opts.Runtime {
+	case RuntimeContainer:
+		skillsRoot, err := filepath.Abs(opts.SkillsRoot)
+		if err != nil {
+			return nil, err
+		}
+		return containerexec.New(
+			containerexec.WithBindMount(skillsRoot, "/opt/trpc-agent/skills", "ro"),
+			containerexec.WithAutoInputs(true),
+		)
+	case RuntimeSkip, RuntimeLocal:
+		return localexec.New(
+			localexec.WithTimeout(opts.Timeout),
+			localexec.WithWorkspaceAutoInputs(false),
+		), nil
+	default:
+		return nil, fmt.Errorf("unsupported runtime: %s", opts.Runtime)
+	}
 }
 
 type runEnv struct {
@@ -83,7 +106,8 @@ func sandboxEnv() map[string]string {
 	}
 }
 
-func resolveSkillsRoot(root string) string {
+// ResolveSkillsRoot finds the skills directory containing code-review.
+func ResolveSkillsRoot(root string) string {
 	if stat, err := os.Stat(filepath.Join(root, skillName)); err == nil && stat.IsDir() {
 		return root
 	}

@@ -22,6 +22,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/examples/skills_code_review_agent/internal/diff"
 	"trpc.group/trpc-go/trpc-agent-go/examples/skills_code_review_agent/internal/findings"
+	"trpc.group/trpc-go/trpc-agent-go/examples/skills_code_review_agent/internal/llmreview"
 	"trpc.group/trpc-go/trpc-agent-go/examples/skills_code_review_agent/internal/redact"
 	"trpc.group/trpc-go/trpc-agent-go/examples/skills_code_review_agent/internal/report"
 	"trpc.group/trpc-go/trpc-agent-go/examples/skills_code_review_agent/internal/rules"
@@ -40,6 +41,7 @@ type Options struct {
 	SkillsRoot  string
 	Runtime     sandbox.Runtime
 	SkipSandbox bool
+	Model       string
 }
 
 // Result contains paths and identifiers produced by a run.
@@ -58,10 +60,6 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	}
 
 	taskID := uuid.NewString()
-	raw := rules.Analyze(parsed)
-	merged := findings.Dedup(findings.Merge(raw))
-	confirmed, warnings := findings.Partition(merged)
-
 	runtime := opts.Runtime
 	if runtime == "" {
 		runtime = sandbox.RuntimeLocal
@@ -69,6 +67,25 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	if opts.SkipSandbox {
 		runtime = sandbox.RuntimeSkip
 	}
+
+	raw := rules.Analyze(parsed)
+	if !opts.DryRun {
+		llmFindings, err := llmreview.Run(ctx, llmreview.Options{
+			TaskID:       taskID,
+			DiffRaw:      parsed.Raw,
+			InputSummary: parsed.Summary(),
+			SkillsRoot:   opts.SkillsRoot,
+			Runtime:      runtime,
+			Model:        opts.Model,
+			RuleFindings: raw,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("llm review: %w", err)
+		}
+		raw = findings.Merge(raw, llmFindings)
+	}
+	merged := findings.Dedup(raw)
+	confirmed, warnings := findings.Partition(merged)
 
 	var sandboxResult *sandbox.Result
 	if runtime != sandbox.RuntimeSkip {

@@ -12,7 +12,6 @@ package sandbox
 import (
 	"context"
 	"fmt"
-	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -99,12 +98,11 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	if opts.SkillsRoot == "" {
 		opts.SkillsRoot = "skills"
 	}
-	opts.SkillsRoot = resolveSkillsRoot(opts.SkillsRoot)
+	opts.SkillsRoot = ResolveSkillsRoot(opts.SkillsRoot)
 
 	start := time.Now()
 	out := &Result{Exceptions: map[string]int{}}
 
-	// 創建workspace & sandbox
 	env, cleanup, err := prepareRunEnv(ctx, opts)
 	if err != nil {
 		if opts.Runtime == RuntimeContainer {
@@ -216,13 +214,19 @@ func executePlanned(ctx context.Context, opts Options, command string, env *runE
 			if err == nil {
 				return runRec, nil
 			}
+			if opts.Runtime == RuntimeContainer {
+				return runRec, err
+			}
 		}
 		return runSkillChecksDirect(opts, rec)
 	case strings.HasPrefix(command, "go vet"):
-		if env != nil && env.ready && opts.Runtime == RuntimeLocal {
+		if env != nil && env.ready {
 			runRec, err := runGoVetInWorkspace(ctx, opts, env, rec)
 			if err == nil {
 				return runRec, nil
+			}
+			if opts.Runtime == RuntimeContainer {
+				return runRec, err
 			}
 		}
 		return runGoVetDirect(ctx, opts, rec)
@@ -343,55 +347,22 @@ func stageWorkspace(ctx context.Context, exec workspaceExecutor, ws codeexecutor
 			return err
 		}
 	}
-	if opts.Runtime == RuntimeLocal {
-		skillSrc := filepath.Join(opts.SkillsRoot, skillName)
-		if stat, err := os.Stat(skillSrc); err == nil && stat.IsDir() {
-			if err := copyTree(skillSrc, filepath.Join(ws.Path, "skills", skillName)); err != nil {
-				return fmt.Errorf("stage skill: %w", err)
-			}
+	skillSrc := filepath.Join(opts.SkillsRoot, skillName)
+	if stat, err := os.Stat(skillSrc); err == nil && stat.IsDir() {
+		if err := exec.PutDirectory(ctx, ws, skillSrc, filepath.Join("skills", skillName)); err != nil {
+			return fmt.Errorf("stage skill: %w", err)
 		}
 	}
 	if opts.RepoPath != "" {
-		if err := copyTree(opts.RepoPath, filepath.Join(ws.Path, "work", "repo")); err != nil {
+		repo, err := filepath.Abs(opts.RepoPath)
+		if err != nil {
+			return fmt.Errorf("resolve repo path: %w", err)
+		}
+		if err := exec.PutDirectory(ctx, ws, repo, filepath.Join("work", "repo")); err != nil {
 			return fmt.Errorf("stage repo: %w", err)
 		}
 	}
 	return nil
-}
-
-func copyTree(src, dst string) error {
-	info, err := os.Stat(src)
-	if err != nil {
-		return err
-	}
-	if !info.IsDir() {
-		return fmt.Errorf("not a directory: %s", src)
-	}
-	return filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(src, path)
-		if err != nil {
-			return err
-		}
-		target := filepath.Join(dst, rel)
-		if d.IsDir() {
-			return os.MkdirAll(target, 0o755)
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return err
-		}
-		mode := fs.FileMode(0o644)
-		if strings.HasSuffix(path, ".sh") {
-			mode = 0o755
-		}
-		return os.WriteFile(target, data, mode)
-	})
 }
 
 // 截断最大输出

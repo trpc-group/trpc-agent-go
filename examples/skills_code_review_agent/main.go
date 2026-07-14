@@ -32,6 +32,7 @@ var (
 	flagSkillsRoot  = flag.String("skills-root", "skills", "skills root directory")
 	flagRuntime     = flag.String("runtime", "local", "sandbox runtime: local|container|skip")
 	flagSkipSandbox = flag.Bool("skip-sandbox", false, "skip sandbox execution")
+	flagModel       = flag.String("model", "gpt-4o-mini", "LLM model when --dry-run=false")
 )
 
 func main() {
@@ -56,6 +57,7 @@ func run(ctx context.Context) error {
 		SkillsRoot:  *flagSkillsRoot,
 		Runtime:     sandbox.Runtime(*flagRuntime),
 		SkipSandbox: *flagSkipSandbox,
+		Model:       *flagModel,
 	}
 
 	result, err := pipeline.Run(ctx, opts)
