@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	dockercontainer "github.com/docker/docker/api/types/container"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	containerexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/container"
 	e2bexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/e2b"
@@ -109,7 +110,15 @@ func runLocal(ctx context.Context, repoPath string, command string, timeout time
 
 func runContainer(ctx context.Context, cfg Config, command string) review.SandboxRun {
 	start := time.Now()
-	exec, err := containerexec.New()
+	exec, err := containerexec.New(
+		containerexec.WithContainerConfig(dockercontainer.Config{
+			Image:      "golang:1.24",
+			WorkingDir: "/",
+			Cmd:        []string{"tail", "-f", "/dev/null"},
+			Tty:        true,
+			OpenStdin:  true,
+		}),
+	)
 	if err != nil {
 		return failedRun(command, start, err)
 	}
@@ -158,6 +167,7 @@ func runEngine(ctx context.Context, eng codeexecutor.Engine, cfg Config, command
 		Cmd:      parts[0],
 		Args:     parts[1:],
 		Cwd:      codeexecutor.DirWork,
+		Env:      sandboxEnv(cfg),
 		Timeout:  cfg.Timeout,
 		CleanEnv: true,
 	})
@@ -177,6 +187,18 @@ func runEngine(ctx context.Context, eng codeexecutor.Engine, cfg Config, command
 		run.Error = redaction.RedactText(err.Error())
 	}
 	return run
+}
+
+func sandboxEnv(cfg Config) map[string]string {
+	if cfg.SandboxKind != "container" {
+		return nil
+	}
+	return map[string]string{
+		"GOCACHE": "/tmp/go-build",
+		"GOPATH":  "/tmp/go",
+		"HOME":    "/tmp",
+		"PATH":    "/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+	}
 }
 
 func runFromOutput(command string, start time.Time, output []byte, exitCode int, ctxErr error, err error) review.SandboxRun {
