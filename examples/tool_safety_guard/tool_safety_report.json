@@ -160,6 +160,15 @@
           "command \"bash\" is not in allowed_commands"
         ],
         "recommendation": "Use an allowed command or update allowed_commands in the policy."
+      },
+      {
+        "decision": "deny",
+        "risk_level": "high",
+        "rule_id": "shell.unresolved_wrapper",
+        "evidence": [
+          "command wrapper \"bash\" cannot be inspected reliably"
+        ],
+        "recommendation": "Pass the effective command directly or use an audited workspace script."
       }
     ]
   },

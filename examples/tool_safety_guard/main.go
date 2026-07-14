@@ -154,11 +154,12 @@ var samples = []safety.Request{
 		Command:  "yes x | head -c 9999999",
 	},
 	{
-		ToolName:   "exec_command",
-		Backend:    safety.BackendHostExec,
-		Command:    "tail -f app.log",
-		TTY:        true,
-		Background: true,
+		ToolName:       "exec_command",
+		Backend:        safety.BackendHostExec,
+		Command:        "tail -f app.log",
+		TimeoutSeconds: 300,
+		TTY:            true,
+		Background:     true,
 	},
 	{
 		ToolName: "execute_code",

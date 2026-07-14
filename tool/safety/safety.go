@@ -11,6 +11,7 @@
 package safety
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,6 +29,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"trpc.group/trpc-go/trpc-agent-go/internal/shellsafe"
+	"trpc.group/trpc-go/trpc-agent-go/tool/hostexec"
 )
 
 const (
@@ -65,11 +67,13 @@ type RiskLevel string
 
 // Policy controls how commands and scripts are scanned.
 type Policy struct {
-	AllowedCommands      []string `json:"allowed_commands,omitempty" yaml:"allowed_commands,omitempty"`
-	DeniedCommands       []string `json:"denied_commands,omitempty" yaml:"denied_commands,omitempty"`
-	DeniedPaths          []string `json:"denied_paths,omitempty" yaml:"denied_paths,omitempty"`
-	NetworkAllowlist     []string `json:"network_allowlist,omitempty" yaml:"network_allowlist,omitempty"`
-	MaxTimeoutSeconds    int      `json:"max_timeout_seconds,omitempty" yaml:"max_timeout_seconds,omitempty"`
+	AllowedCommands   []string `json:"allowed_commands,omitempty" yaml:"allowed_commands,omitempty"`
+	DeniedCommands    []string `json:"denied_commands,omitempty" yaml:"denied_commands,omitempty"`
+	DeniedPaths       []string `json:"denied_paths,omitempty" yaml:"denied_paths,omitempty"`
+	NetworkAllowlist  []string `json:"network_allowlist,omitempty" yaml:"network_allowlist,omitempty"`
+	MaxTimeoutSeconds int      `json:"max_timeout_seconds,omitempty" yaml:"max_timeout_seconds,omitempty"`
+	// MaxOutputBytes validates a cap declared by the request. Executors remain
+	// responsible for enforcing that cap while collecting output.
 	MaxOutputBytes       int64    `json:"max_output_bytes,omitempty" yaml:"max_output_bytes,omitempty"`
 	EnvAllowlist         []string `json:"env_allowlist,omitempty" yaml:"env_allowlist,omitempty"`
 	ReviewCommands       []string `json:"review_commands,omitempty" yaml:"review_commands,omitempty"`
@@ -125,24 +129,21 @@ func LoadPolicy(path string) (Policy, error) {
 	if err != nil {
 		return Policy{}, err
 	}
-	var raw map[string]any
-	switch strings.ToLower(filepath.Ext(path)) {
-	case ".json":
-		err = json.Unmarshal(b, &raw)
-	case ".yaml", ".yml", "":
-		err = yaml.Unmarshal(b, &raw)
-	default:
-		err = fmt.Errorf("unsupported policy extension %q", filepath.Ext(path))
+	ext := strings.ToLower(filepath.Ext(path))
+	if ext != ".json" && ext != ".yaml" && ext != ".yml" && ext != "" {
+		return Policy{}, fmt.Errorf("unsupported policy extension %q", filepath.Ext(path))
 	}
-	if err != nil {
+
+	p := DefaultPolicy()
+	if err := decodePolicy(b, ext, &p); err != nil {
 		return Policy{}, err
 	}
-	p := DefaultPolicy()
-	switch strings.ToLower(filepath.Ext(path)) {
+	var raw map[string]any
+	switch ext {
 	case ".json":
-		err = json.Unmarshal(b, &p)
+		err = json.Unmarshal(b, &raw)
 	default:
-		err = yaml.Unmarshal(b, &p)
+		err = yaml.Unmarshal(b, &raw)
 	}
 	if err != nil {
 		return Policy{}, err
@@ -154,6 +155,39 @@ func LoadPolicy(path string) (Policy, error) {
 		p.denyOnParseErrorSet = true
 	}
 	return p, nil
+}
+
+func decodePolicy(data []byte, ext string, policy *Policy) error {
+	if ext == ".json" {
+		decoder := json.NewDecoder(bytes.NewReader(data))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(policy); err != nil {
+			return err
+		}
+		if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+			if err == nil {
+				return errors.New("policy must contain a single JSON object")
+			}
+			return err
+		}
+		return nil
+	}
+	if len(bytes.TrimSpace(data)) == 0 {
+		return nil
+	}
+
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(policy); err != nil {
+		return err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return errors.New("policy must contain a single YAML document")
+		}
+		return err
+	}
+	return nil
 }
 
 func (p Policy) withDefaults() Policy {
@@ -214,10 +248,12 @@ type Request struct {
 	Metadata       ToolMetadata      `json:"metadata,omitempty"`
 	Backend        string            `json:"backend,omitempty"`
 	TimeoutSeconds int               `json:"timeout_seconds,omitempty"`
-	MaxOutputBytes int64             `json:"max_output_bytes,omitempty"`
-	Background     bool              `json:"background,omitempty"`
-	TTY            bool              `json:"tty,omitempty"`
-	CodeBlocks     []CodeBlock       `json:"code_blocks,omitempty"`
+	// MaxOutputBytes is a caller-declared execution cap. A scan validates the
+	// value but does not truncate executor output itself.
+	MaxOutputBytes int64       `json:"max_output_bytes,omitempty"`
+	Background     bool        `json:"background,omitempty"`
+	TTY            bool        `json:"tty,omitempty"`
+	CodeBlocks     []CodeBlock `json:"code_blocks,omitempty"`
 }
 
 // Finding is one matched safety rule.
@@ -387,13 +423,14 @@ func (s scanner) scanRequestEnvelope(req Request) []Finding {
 				"session id and cleanup plan.",
 		))
 	}
-	if req.TimeoutSeconds > s.policy.MaxTimeoutSeconds {
+	timeoutSeconds := effectiveTimeoutSeconds(req)
+	if timeoutSeconds > s.policy.MaxTimeoutSeconds {
 		findings = append(findings, newFinding(
 			DecisionDeny,
 			RiskHigh,
 			"resource.timeout_exceeded",
 			[]string{fmt.Sprintf("timeout %ds exceeds policy max %ds",
-				req.TimeoutSeconds, s.policy.MaxTimeoutSeconds)},
+				timeoutSeconds, s.policy.MaxTimeoutSeconds)},
 			"Use a shorter timeout or update the safety policy after review.",
 		))
 	}
@@ -408,6 +445,13 @@ func (s scanner) scanRequestEnvelope(req Request) []Finding {
 		))
 	}
 	return findings
+}
+
+func effectiveTimeoutSeconds(req Request) int {
+	if req.Backend == BackendHostExec && req.TimeoutSeconds <= 0 {
+		return hostexec.DefaultTimeoutSeconds
+	}
+	return req.TimeoutSeconds
 }
 
 func (s scanner) reportFromFindings(
@@ -586,18 +630,6 @@ func (s scanner) scanParsedCommands(pipe *shellsafe.Pipeline) []Finding {
 		if len(argv) == 0 {
 			continue
 		}
-		name := commandName(argv[0])
-		full := strings.Join(argv, " ")
-		findings = append(findings, s.scanDeniedCommand(name)...)
-		if len(s.policy.AllowedCommands) > 0 && !s.commandAllowed(argv[0]) {
-			findings = append(findings, newFinding(
-				DecisionDeny,
-				RiskMedium,
-				"policy.command_not_allowed",
-				[]string{fmt.Sprintf("command %q is not in allowed_commands", argv[0])},
-				"Use an allowed command or update allowed_commands in the policy.",
-			))
-		}
 		if containsEnvSplitString(argv) {
 			findings = append(findings, newFinding(
 				DecisionDeny,
@@ -608,15 +640,36 @@ func (s scanner) scanParsedCommands(pipe *shellsafe.Pipeline) []Finding {
 					"command and arguments directly.",
 			))
 		}
-		findings = append(findings, s.scanDangerousCommand(name, argv)...)
-		findings = append(findings, s.scanReviewCommand(full)...)
-		for _, effective := range commandChain(argv)[1:] {
+		chain := commandChain(argv)
+		for _, effective := range chain {
 			effectiveName := commandName(effective[0])
 			findings = append(findings, s.scanDeniedCommand(effectiveName)...)
+			if len(s.policy.AllowedCommands) > 0 &&
+				!s.commandAllowed(effective[0]) {
+				findings = append(findings, newFinding(
+					DecisionDeny,
+					RiskMedium,
+					"policy.command_not_allowed",
+					[]string{fmt.Sprintf(
+						"command %q is not in allowed_commands", effective[0])},
+					"Use an allowed command or update allowed_commands in the policy.",
+				))
+			}
 			findings = append(findings,
 				s.scanDangerousCommand(effectiveName, effective)...)
 			findings = append(findings,
 				s.scanReviewCommand(strings.Join(effective, " "))...)
+		}
+		last := chain[len(chain)-1]
+		if isUnresolvedReexecWrapper(commandName(last[0])) {
+			findings = append(findings, newFinding(
+				DecisionDeny,
+				RiskHigh,
+				"shell.unresolved_wrapper",
+				[]string{fmt.Sprintf(
+					"command wrapper %q cannot be inspected reliably", last[0])},
+				"Pass the effective command directly or use an audited workspace script.",
+			))
 		}
 		findings = append(findings, s.scanDeniedPaths(argv)...)
 	}
@@ -647,7 +700,7 @@ func (s scanner) scanDangerousCommand(name string, argv []string) []Finding {
 			"Do not run recursive forced deletion through tool execution.",
 		))
 	}
-	if name == "chmod" && containsArg(argv, "-R") {
+	if name == "chmod" && recursiveChmod(argv) {
 		findings = append(findings, newFinding(
 			DecisionNeedsHumanReview,
 			RiskHigh,
@@ -657,6 +710,22 @@ func (s scanner) scanDangerousCommand(name string, argv []string) []Finding {
 		))
 	}
 	return findings
+}
+
+func recursiveChmod(argv []string) bool {
+	for _, arg := range argv[1:] {
+		if arg == "--" {
+			return false
+		}
+		if arg == "--recursive" || strings.HasPrefix(arg, "--recursive=") {
+			return true
+		}
+		if strings.HasPrefix(arg, "-") && !strings.HasPrefix(arg, "--") &&
+			strings.ContainsRune(arg[1:], 'R') {
+			return true
+		}
+	}
+	return false
 }
 
 func destructiveRM(argv []string) bool {
@@ -798,10 +867,20 @@ func normalizePathForMatch(path string) string {
 func (s scanner) scanNetwork(command string) []Finding {
 	var findings []Finding
 	networkCommand := networkCommandRE.MatchString(command)
+	var remapTargets []string
+	unresolvedRemap := false
 	if pipe, err := shellsafe.Parse(command); err == nil {
 		for _, argv := range pipe.Commands {
 			if containsNetworkCommand(argv) {
 				networkCommand = true
+			}
+			for _, effective := range commandChain(argv) {
+				if commandName(effective[0]) != "curl" {
+					continue
+				}
+				targets, unresolved := curlRemapTargets(effective)
+				remapTargets = append(remapTargets, targets...)
+				unresolvedRemap = unresolvedRemap || unresolved
 			}
 		}
 	}
@@ -809,6 +888,7 @@ func (s scanner) scanNetwork(command string) []Finding {
 	if networkCommand {
 		targets = extractURLs(command)
 	}
+	targets = append(targets, remapTargets...)
 	checkedHosts := make(map[string]struct{})
 	for _, raw := range targets {
 		host := hostOf(raw)
@@ -838,7 +918,110 @@ func (s scanner) scanNetwork(command string) []Finding {
 			"Review the target manually or provide an explicit whitelisted URL.",
 		))
 	}
+	if unresolvedRemap {
+		findings = append(findings, newFinding(
+			DecisionNeedsHumanReview,
+			RiskHigh,
+			"network.unresolved_curl_remap",
+			[]string{"curl remapping option has no reliably parseable replacement target"},
+			"Review --connect-to and --resolve values manually or remove the remapping option.",
+		))
+	}
 	return findings
+}
+
+func curlRemapTargets(argv []string) ([]string, bool) {
+	var targets []string
+	unresolved := false
+	for i := 1; i < len(argv); i++ {
+		option, value, matched := curlRemapOption(argv[i])
+		if !matched {
+			continue
+		}
+		if value == "" {
+			if i+1 >= len(argv) {
+				unresolved = true
+				continue
+			}
+			i++
+			value = argv[i]
+		}
+		parsed, ok := parseCurlRemapValue(option, value)
+		if !ok {
+			unresolved = true
+			continue
+		}
+		targets = append(targets, parsed...)
+	}
+	return targets, unresolved
+}
+
+func curlRemapOption(arg string) (string, string, bool) {
+	for _, option := range []string{"--connect-to", "--resolve"} {
+		if arg == option {
+			return option, "", true
+		}
+		if strings.HasPrefix(arg, option+"=") {
+			return option, strings.TrimPrefix(arg, option+"="), true
+		}
+	}
+	return "", "", false
+}
+
+func parseCurlRemapValue(option, value string) ([]string, bool) {
+	parts := splitOutsideBrackets(value, ':')
+	switch option {
+	case "--connect-to":
+		if len(parts) != 4 {
+			return nil, false
+		}
+		if parts[2] == "" {
+			return nil, true
+		}
+		return []string{parts[2]}, true
+	case "--resolve":
+		if strings.HasPrefix(value, "-") {
+			return nil, true
+		}
+		if len(parts) != 3 || parts[2] == "" {
+			return nil, false
+		}
+		addresses := strings.Split(strings.TrimPrefix(parts[2], "+"), ",")
+		for _, address := range addresses {
+			if address == "" {
+				return nil, false
+			}
+		}
+		return addresses, true
+	default:
+		return nil, false
+	}
+}
+
+func splitOutsideBrackets(value string, separator byte) []string {
+	parts := make([]string, 0, 4)
+	start := 0
+	bracketDepth := 0
+	for i := 0; i < len(value); i++ {
+		switch value[i] {
+		case '[':
+			bracketDepth++
+		case ']':
+			if bracketDepth == 0 {
+				return nil
+			}
+			bracketDepth--
+		default:
+			if value[i] == separator && bracketDepth == 0 {
+				parts = append(parts, value[start:i])
+				start = i + 1
+			}
+		}
+	}
+	if bracketDepth != 0 {
+		return nil
+	}
+	return append(parts, value[start:])
 }
 
 func extractURLs(s string) []string {
@@ -948,6 +1131,11 @@ func unwrapCommand(argv []string) []string {
 		return unwrapOptionCommand(argv, true)
 	}
 	return argv
+}
+
+func isUnresolvedReexecWrapper(name string) bool {
+	_, ok := unresolvedReexecWrappers[name]
+	return ok
 }
 
 func unwrapEnvCommand(argv []string) []string {
@@ -1242,8 +1430,69 @@ func (s scanner) scanCodeBlock(req Request, block CodeBlock) []Finding {
 			"Review code that bridges from code execution into shell execution.",
 		))
 	}
+	findings = append(findings, s.scanCodePaths(code)...)
 	findings = append(findings, s.scanNetwork(code)...)
+	findings = append(findings, s.scanCodeNetwork(code)...)
 	findings = append(findings, s.scanResourcePatterns(lower)...)
+	return findings
+}
+
+func (s scanner) scanCodePaths(code string) []Finding {
+	var findings []Finding
+	for _, literal := range codeStringLiterals(code) {
+		if !s.pathDenied(literal) {
+			continue
+		}
+		findings = append(findings, newFinding(
+			DecisionDeny,
+			RiskCritical,
+			"sensitive.path_access",
+			[]string{fmt.Sprintf("code block references denied path %q", literal)},
+			"Do not access system paths, SSH material, credentials, or secrets from code execution.",
+		))
+	}
+	return findings
+}
+
+func codeStringLiterals(code string) []string {
+	matches := codeStringLiteralRE.FindAllStringSubmatch(code, -1)
+	literals := make([]string, 0, len(matches))
+	for _, match := range matches {
+		for _, candidate := range match[1:] {
+			if candidate != "" {
+				literals = append(literals, candidate)
+				break
+			}
+		}
+	}
+	return literals
+}
+
+func (s scanner) scanCodeNetwork(code string) []Finding {
+	var findings []Finding
+	checkedHosts := make(map[string]struct{})
+	for _, match := range codeNetworkCallRE.FindAllStringSubmatch(code, -1) {
+		if len(match) != 2 || strings.Contains(match[1], "://") {
+			continue
+		}
+		host := hostOf(match[1])
+		if host == "" {
+			continue
+		}
+		if _, ok := checkedHosts[host]; ok {
+			continue
+		}
+		checkedHosts[host] = struct{}{}
+		if !s.hostAllowed(host) {
+			findings = append(findings, newFinding(
+				DecisionDeny,
+				RiskHigh,
+				"network.non_whitelisted_domain",
+				[]string{fmt.Sprintf("domain %q is not in network_allowlist", host)},
+				"Use a whitelisted domain or update network_allowlist after review.",
+			))
+		}
+	}
 	return findings
 }
 
@@ -1437,18 +1686,12 @@ func commandToken(name string) string {
 func commandName(name string) string {
 	name = strings.TrimSpace(strings.Trim(name, `"'`))
 	name = strings.ReplaceAll(name, "\\", "/")
-	base := filepath.Base(name)
+	base := strings.ToLower(filepath.Base(name))
 	base = strings.TrimSuffix(base, ".exe")
 	base = strings.TrimSuffix(base, ".cmd")
 	base = strings.TrimSuffix(base, ".bat")
 	base = strings.TrimSuffix(base, ".com")
-	return strings.ToLower(base)
-}
-
-func containsArg(argv []string, want string) bool {
-	return slices.ContainsFunc(argv, func(arg string) bool {
-		return arg == want
-	})
+	return base
 }
 
 func newFinding(
@@ -1468,6 +1711,15 @@ func newFinding(
 }
 
 var (
+	unresolvedReexecWrappers = map[string]struct{}{
+		"sh": {}, "bash": {}, "zsh": {}, "ash": {}, "dash": {},
+		"ksh": {}, "mksh": {}, "fish": {}, "pwsh": {}, "powershell": {},
+		"cmd": {}, "busybox": {}, "toybox": {}, "eval": {}, "exec": {},
+		"source": {}, ".": {}, "builtin": {}, "xargs": {}, "sudo": {},
+		"su": {}, "doas": {}, "setsid": {}, "unshare": {}, "chroot": {},
+		"runuser": {}, "time": {}, "ionice": {}, "taskset": {}, "stdbuf": {},
+		"strace": {}, "ltrace": {}, "script": {}, "flock": {},
+	}
 	networkCommandRE = regexp.MustCompile(
 		`(?i)(?:^|[;&|]\s*)["']?(?:(?:[a-z]:)?[^\s"';&|]*[/\\])?(?:curl|wget|nc|netcat|ssh|scp|rsync)(?:\.exe|\.cmd|\.bat|\.com)?["']?(?:\s|$)`)
 	explicitURLRE = regexp.MustCompile(
@@ -1490,6 +1742,10 @@ var (
 		`(?i)(sk-[A-Za-z0-9_-]{12,}|ghp_[A-Za-z0-9_]{12,}|xox[baprs]-[A-Za-z0-9-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY-----)`)
 	secretNameValueRE = regexp.MustCompile(
 		`(?i)(api[_-]?key|token|password|passwd|secret|private[_-]?key|credential)=([^ \t\n\r;&|]+)`)
+	codeStringLiteralRE = regexp.MustCompile(
+		`(?s)(?:"((?:\\.|[^"\\])*)"|'((?:\\.|[^'\\])*)')`)
+	codeNetworkCallRE = regexp.MustCompile(
+		`(?i)\b(?:socket\.(?:create_connection|getaddrinfo)|[a-z_][a-z0-9_]*\.connect|http\.client\.(?:http|https)connection)\s*\(\s*\(?\s*["']([^"']+)["']`)
 )
 
 func looksSensitive(text string) bool {
