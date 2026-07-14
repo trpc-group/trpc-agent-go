@@ -60,7 +60,7 @@ func NewClient(client redis.UniversalClient, cfg Config) *Client {
 // is set it uses Script.Eval directly, suited to proxy/cluster backends whose script
 // cache is not reliably kept (e.g. a Tendis cluster fronted by twemproxy).
 func (c *Client) runScript(
-	ctx context.Context, script *redis.Script, keys []string, args ...interface{},
+	ctx context.Context, script *redis.Script, keys []string, args ...any,
 ) *redis.Cmd {
 	if c.cfg.DisableScriptCache {
 		return script.Eval(ctx, c.client, keys, args...)

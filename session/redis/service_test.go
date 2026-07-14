@@ -1073,6 +1073,9 @@ func TestService_WithDisableScriptCache(t *testing.T) {
 	require.NoError(t, err)
 	defer service.Close()
 
+	recorder := &scriptCommandRecorder{}
+	service.redisClient.AddHook(recorder)
+
 	ctx := context.Background()
 	key := session.Key{AppName: "app", UserID: "u1", SessionID: "s1"}
 
@@ -1082,6 +1085,7 @@ func TestService_WithDisableScriptCache(t *testing.T) {
 
 	evt := createTestEvent("e1", "agent", "hello", time.Now(), true)
 	require.NoError(t, service.AppendEvent(ctx, sess, evt))
+	assert.Equal(t, []string{"eval"}, recorder.snapshot())
 
 	got, err := service.GetSession(ctx, key)
 	require.NoError(t, err)
@@ -1093,6 +1097,67 @@ func TestService_WithDisableScriptCache(t *testing.T) {
 	sessions, err := service.ListSessions(ctx, session.UserKey{AppName: "app", UserID: "u1"})
 	require.NoError(t, err)
 	assert.Len(t, sessions, 1)
+}
+
+func TestService_UsesScriptCacheByDefault(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	service, err := NewService(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer service.Close()
+
+	recorder := &scriptCommandRecorder{}
+	service.redisClient.AddHook(recorder)
+
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "s1"}
+	sess, err := service.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	evt := createTestEvent("e1", "agent", "hello", time.Now(), true)
+	require.NoError(t, service.AppendEvent(ctx, sess, evt))
+	assert.Equal(t, []string{"evalsha", "eval"}, recorder.snapshot())
+}
+
+type scriptCommandRecorder struct {
+	mu       sync.Mutex
+	commands []string
+}
+
+func (h *scriptCommandRecorder) DialHook(next redis.DialHook) redis.DialHook {
+	return next
+}
+
+func (h *scriptCommandRecorder) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
+	return func(ctx context.Context, cmd redis.Cmder) error {
+		h.record(cmd.Name())
+		return next(ctx, cmd)
+	}
+}
+
+func (h *scriptCommandRecorder) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
+	return func(ctx context.Context, cmds []redis.Cmder) error {
+		for _, cmd := range cmds {
+			h.record(cmd.Name())
+		}
+		return next(ctx, cmds)
+	}
+}
+
+func (h *scriptCommandRecorder) record(command string) {
+	if command != "eval" && command != "evalsha" {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.commands = append(h.commands, command)
+}
+
+func (h *scriptCommandRecorder) snapshot() []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]string(nil), h.commands...)
 }
 
 // setupTestRedis creates a miniredis instance and returns its URL and cleanup function.
