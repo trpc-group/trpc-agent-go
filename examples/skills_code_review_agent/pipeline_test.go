@@ -24,11 +24,11 @@ import (
 
 func TestPipelineAllFixtures(t *testing.T) {
 	cases := []struct {
-		fixture      string
-		minFindings  int
-		maxFindings  int
-		mustRules    []string
-		sandboxFail  bool
+		fixture     string
+		minFindings int
+		maxFindings int
+		mustRules   []string
+		sandboxFail bool
 	}{
 		{fixture: "01_clean", maxFindings: 0},
 		{fixture: "02_security", minFindings: 2, mustRules: []string{"SEC-001", "SENS-001"}},

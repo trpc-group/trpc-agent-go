@@ -148,4 +148,3 @@ func CloseCodeExecutor(exec codeexecutor.CodeExecutor) error {
 
 // Ensure container.CodeExecutor is a workspaceExecutor at compile time.
 var _ workspaceExecutor = (*containerexec.CodeExecutor)(nil)
-

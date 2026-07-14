@@ -259,9 +259,9 @@ FROM findings WHERE task_id = ? ORDER BY file, line`, taskID)
 	}
 
 	var (
-		findingCount, warningCount, metricsDuration                      int
-		sandboxDuration, toolCalls, permissionDenies                     int
-		severityJSON, exceptionJSON                                      string
+		findingCount, warningCount, metricsDuration  int
+		sandboxDuration, toolCalls, permissionDenies int
+		severityJSON, exceptionJSON                  string
 	)
 	if err := s.db.QueryRowContext(ctx, `
 SELECT finding_count, warning_count, total_duration_ms,

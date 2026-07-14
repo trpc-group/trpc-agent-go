@@ -61,15 +61,15 @@ type ReviewMetrics struct {
 // ReviewResult is the final structured output of a review run.
 // 输出结果
 type ReviewResult struct {
-	TaskID              string                `json:"task_id"`
-	Status              string                `json:"status"`
-	InputSummary        string                `json:"input_summary"`
-	RepoPath            string                `json:"repo_path,omitempty"`
-	Findings            []Finding             `json:"findings"`
-	Warnings            []Finding             `json:"warnings"`
-	PermissionDecisions []PermissionDecision  `json:"permission_decisions,omitempty"`
-	SandboxRuns         []SandboxRunSummary   `json:"sandbox_runs,omitempty"`
-	Metrics             ReviewMetrics         `json:"metrics"`
-	DryRun              bool                  `json:"dry_run"`
-	SandboxRuntime      string                `json:"sandbox_runtime,omitempty"`
+	TaskID              string               `json:"task_id"`
+	Status              string               `json:"status"`
+	InputSummary        string               `json:"input_summary"`
+	RepoPath            string               `json:"repo_path,omitempty"`
+	Findings            []Finding            `json:"findings"`
+	Warnings            []Finding            `json:"warnings"`
+	PermissionDecisions []PermissionDecision `json:"permission_decisions,omitempty"`
+	SandboxRuns         []SandboxRunSummary  `json:"sandbox_runs,omitempty"`
+	Metrics             ReviewMetrics        `json:"metrics"`
+	DryRun              bool                 `json:"dry_run"`
+	SandboxRuntime      string               `json:"sandbox_runtime,omitempty"`
 }
