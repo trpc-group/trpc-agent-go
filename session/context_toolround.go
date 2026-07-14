@@ -24,64 +24,90 @@ func expandMaskIDsForToolRounds(events []event.Event, ids []string) []string {
 		return ids
 	}
 
-	requested := make(map[string]struct{}, len(ids))
-	for _, id := range ids {
-		if id != "" {
-			requested[id] = struct{}{}
-		}
-	}
+	requested := toStringSet(ids)
 	if len(requested) == 0 {
 		return ids
 	}
 
-	indexByID := make(map[string]int, len(events))
-	for i, evt := range events {
-		if evt.ID != "" {
-			indexByID[evt.ID] = i
-		}
-	}
-
+	indexByID := eventIndexByID(events)
 	matches := toolResponseMatchesByCallEvent(events)
-	expanded := make(map[string]struct{}, len(requested))
-	for id := range requested {
-		expanded[id] = struct{}{}
-	}
+	callByResult := callIndexByResultIndex(matches)
+	expanded := copyStringSet(requested)
 
 	for id := range requested {
 		idx, ok := indexByID[id]
 		if !ok || idx < 0 || idx >= len(events) {
 			continue
 		}
-		evt := events[idx]
-		if evt.Response == nil {
-			continue
-		}
-		if evt.IsToolCallResponse() {
-			for _, match := range matches[idx] {
-				if match.eventIndex >= 0 && match.eventIndex < len(events) {
-					expanded[events[match.eventIndex].ID] = struct{}{}
-				}
-			}
-			continue
-		}
-		if !evt.IsToolResultResponse() {
-			continue
-		}
-		for callIdx, callMatches := range matches {
-			for _, match := range callMatches {
-				if match.eventIndex != idx {
-					continue
-				}
-				if callIdx >= 0 && callIdx < len(events) {
-					expanded[events[callIdx].ID] = struct{}{}
-				}
-			}
-		}
+		addPairedToolRoundIDs(events, idx, matches, callByResult, expanded)
 	}
 
+	return orderedExpandedIDs(ids, expanded)
+}
+
+func eventIndexByID(events []event.Event) map[string]int {
+	indexByID := make(map[string]int, len(events))
+	for i, evt := range events {
+		if evt.ID != "" {
+			indexByID[evt.ID] = i
+		}
+	}
+	return indexByID
+}
+
+func copyStringSet(src map[string]struct{}) map[string]struct{} {
+	dst := make(map[string]struct{}, len(src))
+	for id := range src {
+		dst[id] = struct{}{}
+	}
+	return dst
+}
+
+func callIndexByResultIndex(
+	matches map[int][]matchedToolResponseEvent,
+) map[int]int {
+	callByResult := make(map[int]int, len(matches))
+	for callIdx, callMatches := range matches {
+		for _, match := range callMatches {
+			callByResult[match.eventIndex] = callIdx
+		}
+	}
+	return callByResult
+}
+
+func addPairedToolRoundIDs(
+	events []event.Event,
+	idx int,
+	matches map[int][]matchedToolResponseEvent,
+	callByResult map[int]int,
+	expanded map[string]struct{},
+) {
+	evt := events[idx]
+	if evt.Response == nil {
+		return
+	}
+	if evt.IsToolCallResponse() {
+		for _, match := range matches[idx] {
+			if match.eventIndex >= 0 && match.eventIndex < len(events) {
+				expanded[events[match.eventIndex].ID] = struct{}{}
+			}
+		}
+		return
+	}
+	if !evt.IsToolResultResponse() {
+		return
+	}
+	callIdx, ok := callByResult[idx]
+	if !ok || callIdx < 0 || callIdx >= len(events) {
+		return
+	}
+	expanded[events[callIdx].ID] = struct{}{}
+}
+
+func orderedExpandedIDs(original []string, expanded map[string]struct{}) []string {
 	out := make([]string, 0, len(expanded))
 	seen := make(map[string]struct{}, len(expanded))
-	for _, id := range ids {
+	for _, id := range original {
 		if _, ok := expanded[id]; !ok {
 			continue
 		}
@@ -128,27 +154,39 @@ func toolResponseMatchesByCallEvent(events []event.Event) map[int][]matchedToolR
 		if !evt.IsToolResultResponse() {
 			continue
 		}
-		for choiceIndex, choice := range evt.Response.Choices {
-			responseID := toolResponseIDFromChoice(choice)
-			if responseID == "" {
-				continue
-			}
-			for j := len(pendingCallRounds) - 1; j >= 0; j-- {
-				if _, ok := pendingCallRounds[j].pendingIDs[responseID]; !ok {
-					continue
-				}
-				delete(pendingCallRounds[j].pendingIDs, responseID)
-				callIdx := pendingCallRounds[j].eventIndex
-				responseMatchesByCallEvent[callIdx] = appendToolResponseMatch(
-					responseMatchesByCallEvent[callIdx],
-					i,
-					choiceIndex,
-				)
-				break
-			}
-		}
+		matchPendingToolResults(evt, i, pendingCallRounds, responseMatchesByCallEvent)
 	}
 	return responseMatchesByCallEvent
+}
+
+func matchPendingToolResults(
+	evt event.Event,
+	resultIdx int,
+	pendingCallRounds []struct {
+		eventIndex int
+		pendingIDs map[string]struct{}
+	},
+	responseMatchesByCallEvent map[int][]matchedToolResponseEvent,
+) {
+	for choiceIndex, choice := range evt.Response.Choices {
+		responseID := toolResponseIDFromChoice(choice)
+		if responseID == "" {
+			continue
+		}
+		for j := len(pendingCallRounds) - 1; j >= 0; j-- {
+			if _, ok := pendingCallRounds[j].pendingIDs[responseID]; !ok {
+				continue
+			}
+			delete(pendingCallRounds[j].pendingIDs, responseID)
+			callIdx := pendingCallRounds[j].eventIndex
+			responseMatchesByCallEvent[callIdx] = appendToolResponseMatch(
+				responseMatchesByCallEvent[callIdx],
+				resultIdx,
+				choiceIndex,
+			)
+			break
+		}
+	}
 }
 
 func toolResponseIDFromChoice(choice model.Choice) string {

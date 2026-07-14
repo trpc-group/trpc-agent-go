@@ -506,6 +506,62 @@ func TestListContextTool(t *testing.T) {
 			t.Fatalf("expected empty list, got %+v", out)
 		}
 	})
+
+	t.Run("delta tool call and tool id populate preview", func(t *testing.T) {
+		sess := session.NewSession("app", "user", "lc-delta")
+		sess.Events = []event.Event{
+			{
+				ID:     "call-delta",
+				Author: "assistant",
+				Response: &model.Response{
+					Choices: []model.Choice{{
+						Delta: model.Message{
+							Role: model.RoleAssistant,
+							ToolCalls: []model.ToolCall{{
+								ID: "tc-1",
+								Function: model.FunctionDefinitionParam{
+									Name: "lookup_weather",
+								},
+							}},
+						},
+					}},
+				},
+			},
+			{
+				ID:     "result-delta",
+				Author: "tool",
+				Response: &model.Response{
+					Choices: []model.Choice{{
+						Delta: model.Message{
+							Role:   model.RoleTool,
+							ToolID: "tc-1",
+						},
+					}},
+				},
+			},
+		}
+		ctx := ctxWithSession(sess)
+
+		tool := NewListContextTool()
+		result, err := tool.Call(ctx, []byte(`{}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := result.(ListContextOutput)
+		if out.Count != 2 {
+			t.Fatalf("expected 2 events, got %+v", out)
+		}
+		previews := map[string]string{}
+		for _, e := range out.Events {
+			previews[e.ID] = e.Preview
+		}
+		if previews["call-delta"] != "lookup_weather" {
+			t.Fatalf("expected delta tool-call preview, got %q", previews["call-delta"])
+		}
+		if previews["result-delta"] != "tc-1" {
+			t.Fatalf("expected delta tool-id preview, got %q", previews["result-delta"])
+		}
+	})
 }
 
 // --- Tools() convenience ---

@@ -181,8 +181,14 @@ func contextEventPreview(evt event.Event) string {
 	if content == "" && len(choice.Message.ToolCalls) > 0 {
 		content = choice.Message.ToolCalls[0].Function.Name
 	}
+	if content == "" && len(choice.Delta.ToolCalls) > 0 {
+		content = choice.Delta.ToolCalls[0].Function.Name
+	}
 	if content == "" && choice.Message.ToolID != "" {
 		content = choice.Message.ToolID
+	}
+	if content == "" && choice.Delta.ToolID != "" {
+		content = choice.Delta.ToolID
 	}
 	if content == "" {
 		return ""
