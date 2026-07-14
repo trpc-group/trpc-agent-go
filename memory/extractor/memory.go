@@ -331,7 +331,8 @@ var toolActionDescriptions = map[string]string{
 	memory.UpdateToolName: "Update an existing memory " +
 		"only to correct mistaken wording or merge a true duplicate. " +
 		"When a value, status, preference, habit, frequency, or count changes, " +
-		"add the new dated state and keep the prior state unchanged.",
+		"add a self-contained new dated state with all identifying qualifiers " +
+		"and keep the prior state unchanged.",
 	memory.DeleteToolName: "Delete a memory " +
 		"when the user asks to forget something, or when it is " +
 		"clearly a mistaken extraction. Do not delete useful historical states.",
@@ -543,6 +544,11 @@ Today's date is {current_date}. You MUST use this date to resolve ALL relative t
   to fix an incorrect extraction, merge duplicate wording, or maintain an
   explicitly current-state summary that still does not erase the historical
   memory.
+- **SELF-CONTAINED STATE**: A changed-state memory must still identify exactly
+  what changed. Carry forward every unchanged entity, activity, person,
+  location, unit, scope, and other qualifier supplied by the conversation or
+  relevant existing memory. Never shorten a new state to only its changed
+  value or frequency if that makes the fact ambiguous on its own.
 - **NO SUBJECT PREFIX**: Create memories as brief, concise statements that
   directly describe attributes or facts WITHOUT a subject prefix. Omit
   "User", "The user", or any equivalent pronoun/noun at the start, because
@@ -800,13 +806,16 @@ Example 8 – Assistant recommendation options:
      memory_kind="fact", topics=["cameras", "Aurora X", "Nightjar Pro", "TrailCam Mini"])
 
 Example 9 – Changed recurring habit with historical state:
-  Existing memory: "[exercise-frequency] Exercises with friends every week."
-  User says on 2024-08-04: "I am meeting them every other week now."
-  → keep exercise-frequency unchanged because it answers previous-frequency
-    questions. The new frequency is a changed state, not a correction.
-  → memory_add(memory="Exercises with friends every other week as of 2024-08-04.",
+  Existing memory: "[run-frequency] Runs with a training group every week."
+  User says on 2024-08-04: "I am meeting the group for runs at Riverside Park
+  every other week now."
+  → keep run-frequency unchanged because it answers previous-frequency
+    questions. The new frequency is a changed state, not a correction, and
+    its activity, group, and location must remain in the new memory.
+  → memory_add(memory="Runs with the training group at Riverside Park every other week as of 2024-08-04.",
      memory_kind="fact", event_time="2024-08-04",
-     topics=["exercise", "friends", "frequency"])
+     location="Riverside Park",
+     topics=["running", "training group", "Riverside Park", "frequency"])
 </examples>
 
 <common_mistakes>
