@@ -85,7 +85,7 @@ func (s *DurableStore) CreateTask(ctx context.Context, task review.ReviewTask) e
 	return s.flush()
 }
 
-func (s *DurableStore) FinishTask(ctx context.Context, taskID string, status string, errText string) error {
+func (s *DurableStore) FinishTask(ctx context.Context, taskID string, status string, errText string, finishedAt time.Time) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -96,7 +96,11 @@ func (s *DurableStore) FinishTask(ctx context.Context, taskID string, status str
 		return fmt.Errorf("finish task: task %q not found", taskID)
 	}
 	task.Status = status
-	finishedAt := time.Now().UTC()
+	if finishedAt.IsZero() {
+		finishedAt = time.Now().UTC()
+	} else {
+		finishedAt = finishedAt.UTC()
+	}
 	task.FinishedAt = &finishedAt
 	task.Error = redact.Text(errText).Text
 	s.data.Tasks[taskID] = task

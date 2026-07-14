@@ -106,7 +106,8 @@ func TestDurableStorePersistsReviewRecords(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("SaveReport() error = %v", err)
 	}
-	if err := s.FinishTask(ctx, task.ID, review.TaskStatusPassed, ""); err != nil {
+	finishedAt := time.Unix(4, 0).UTC()
+	if err := s.FinishTask(ctx, task.ID, review.TaskStatusPassed, "", finishedAt); err != nil {
 		t.Fatalf("FinishTask() error = %v", err)
 	}
 	if err := s.Close(); err != nil {
@@ -124,6 +125,9 @@ func TestDurableStorePersistsReviewRecords(t *testing.T) {
 	}
 	if loaded.Task.Status != review.TaskStatusPassed {
 		t.Fatalf("loaded status = %q, want passed", loaded.Task.Status)
+	}
+	if loaded.Task.FinishedAt == nil || !loaded.Task.FinishedAt.Equal(finishedAt) {
+		t.Fatalf("loaded finished_at = %v, want %v", loaded.Task.FinishedAt, finishedAt)
 	}
 	if len(loaded.Findings) != 1 || len(loaded.SandboxRuns) != 1 ||
 		len(loaded.PermissionDecisions) != 1 || len(loaded.Artifacts) != 1 {
@@ -216,5 +220,41 @@ func TestReviewTaskOmitsZeroFinishedAt(t *testing.T) {
 	}
 	if strings.Contains(string(raw), "finished_at") {
 		t.Fatalf("unfinished task serialized finished_at: %s", raw)
+	}
+}
+
+func TestDurableStoreFinishTaskUsesProvidedTimestamp(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "review_agent.db")
+	s, err := NewSQLite(ctx, path)
+	if err != nil {
+		t.Fatalf("NewSQLite() error = %v", err)
+	}
+	defer s.Close()
+
+	task := review.ReviewTask{
+		ID:        "task-1",
+		Status:    review.TaskStatusRunning,
+		InputType: review.InputTypeFixture,
+		DiffHash:  "hash",
+		StartedAt: time.Unix(1, 0).UTC(),
+	}
+	if err := s.CreateTask(ctx, task); err != nil {
+		t.Fatalf("CreateTask() error = %v", err)
+	}
+	finishedAt := time.Date(2026, 7, 6, 1, 2, 3, 0, time.UTC)
+	if err := s.FinishTask(ctx, task.ID, review.TaskStatusFailed, "boom", finishedAt); err != nil {
+		t.Fatalf("FinishTask() error = %v", err)
+	}
+
+	loaded, err := s.LoadTaskReport(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("LoadTaskReport() error = %v", err)
+	}
+	if loaded.Task.FinishedAt == nil || !loaded.Task.FinishedAt.Equal(finishedAt) {
+		t.Fatalf("loaded finished_at = %v, want %v", loaded.Task.FinishedAt, finishedAt)
+	}
+	if loaded.Task.Error != "boom" {
+		t.Fatalf("loaded error = %q, want boom", loaded.Task.Error)
 	}
 }

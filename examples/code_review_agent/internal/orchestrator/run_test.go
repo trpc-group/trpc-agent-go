@@ -11,6 +11,7 @@ package orchestrator
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -24,6 +25,12 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/review"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/store"
 )
+
+type plannerFunc func(ctx context.Context, req PlanRequest) (review.ReviewPlan, error)
+
+func (f plannerFunc) PlanReview(ctx context.Context, req PlanRequest) (review.ReviewPlan, error) {
+	return f(ctx, req)
+}
 
 func TestRunAllowsFakeRuntimeWithoutModel(t *testing.T) {
 	outDir := t.TempDir()
@@ -61,7 +68,17 @@ func TestRunRequiresModelForNonFakeRuntime(t *testing.T) {
 	if !strings.Contains(err.Error(), "model orchestration requires --model or MODEL") {
 		t.Fatalf("Run() error = %q, want missing model message", err)
 	}
-	assertFailedTaskStored(t, dbPath)
+	assertStoredTask(t, dbPath, fixedTestTime(), func(report store.TaskReport) {
+		if report.Task.Status != review.TaskStatusFailed {
+			t.Fatalf("stored task status = %q, want failed", report.Task.Status)
+		}
+		if !strings.Contains(report.Task.Error, "model orchestration requires --model or MODEL") {
+			t.Fatalf("stored task error = %q, want missing model message", report.Task.Error)
+		}
+		if report.Task.FinishedAt == nil || report.Task.FinishedAt.IsZero() {
+			t.Fatal("stored task finished_at = nil/zero, want non-zero")
+		}
+	})
 }
 
 func TestRunRecordsConfiguredModelPlan(t *testing.T) {
@@ -264,6 +281,108 @@ func TestRunTaskIDIncludesFullRunTimestamp(t *testing.T) {
 	}
 }
 
+func TestValidateRuntimePolicyRejectsUntrustedLocalRuntime(t *testing.T) {
+	if err := validateRuntimePolicy("local", false); err == nil {
+		t.Fatal("validateRuntimePolicy(local, false) error = nil, want rejection")
+	}
+	if err := validateRuntimePolicy("LOCAL", true); err != nil {
+		t.Fatalf("validateRuntimePolicy(LOCAL, true) error = %v, want nil", err)
+	}
+	if err := validateRuntimePolicy("fake", false); err != nil {
+		t.Fatalf("validateRuntimePolicy(fake, false) error = %v, want nil", err)
+	}
+}
+
+func TestRunRejectsLocalRuntimeWithoutTrustedOptIn(t *testing.T) {
+	outDir := t.TempDir()
+	calledPlanner := false
+	_, err := Run(context.Background(), Options{
+		FixtureDir: filepath.Join("..", "..", "testdata", "fixtures"),
+		OutDir:     outDir,
+		DBPath:     filepath.Join(outDir, "review_agent.db"),
+		Runtime:    "local",
+		Now:        fixedTestTime(),
+		Planner: plannerFunc(func(ctx context.Context, req PlanRequest) (review.ReviewPlan, error) {
+			calledPlanner = true
+			return review.ReviewPlan{}, errors.New("planner should not be called")
+		}),
+	})
+	if err == nil {
+		t.Fatal("Run() error = nil, want local runtime rejection")
+	}
+	if !strings.Contains(err.Error(), "--allow-trusted-local") {
+		t.Fatalf("Run() error = %q, want allow-trusted-local guidance", err)
+	}
+	if calledPlanner {
+		t.Fatal("planner was called for rejected local runtime")
+	}
+}
+
+func TestRunFinishesFailedTaskAfterCancellation(t *testing.T) {
+	outDir := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	_, err := Run(ctx, Options{
+		FixtureDir: filepath.Join("..", "..", "testdata", "fixtures"),
+		OutDir:     outDir,
+		DBPath:     filepath.Join(outDir, "review_agent.db"),
+		Runtime:    "fake",
+		Now:        fixedTestTime(),
+		Planner: plannerFunc(func(ctx context.Context, req PlanRequest) (review.ReviewPlan, error) {
+			cancel()
+			<-ctx.Done()
+			return review.ReviewPlan{}, ctx.Err()
+		}),
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run() error = %v, want context.Canceled", err)
+	}
+	assertStoredTask(t, filepath.Join(outDir, "review_agent.db"), fixedTestTime(), func(report store.TaskReport) {
+		if report.Task.Status != review.TaskStatusFailed {
+			t.Fatalf("stored task status = %q, want failed", report.Task.Status)
+		}
+		if report.Task.FinishedAt == nil || report.Task.FinishedAt.IsZero() {
+			t.Fatal("stored task finished_at = nil/zero, want non-zero")
+		}
+		if !strings.Contains(report.Task.Error, context.Canceled.Error()) {
+			t.Fatalf("stored task error = %q, want context canceled", report.Task.Error)
+		}
+	})
+}
+
+func TestRunUsesSharedInjectedCompletionTimestamp(t *testing.T) {
+	outDir := t.TempDir()
+	startedAt := fixedTestTime()
+	finishedAt := startedAt.Add(42 * time.Second)
+	result, err := Run(context.Background(), Options{
+		FixtureDir: filepath.Join("..", "..", "testdata", "fixtures"),
+		OutDir:     outDir,
+		DBPath:     filepath.Join(outDir, "review_agent.db"),
+		Runtime:    "fake",
+		Now:        startedAt,
+		FinishedAt: finishedAt,
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Report.Task.FinishedAt == nil || !result.Report.Task.FinishedAt.Equal(finishedAt) {
+		t.Fatalf("report finished_at = %v, want %v", result.Report.Task.FinishedAt, finishedAt)
+	}
+	if result.Report.Metrics.TotalDurationMillis != finishedAt.Sub(startedAt).Milliseconds() {
+		t.Fatalf("total duration ms = %d, want %d", result.Report.Metrics.TotalDurationMillis, finishedAt.Sub(startedAt).Milliseconds())
+	}
+	for _, artifact := range result.Report.Artifacts {
+		if !artifact.CreatedAt.Equal(finishedAt) {
+			t.Fatalf("artifact %s created_at = %v, want %v", artifact.Kind, artifact.CreatedAt, finishedAt)
+		}
+	}
+	assertStoredTask(t, filepath.Join(outDir, "review_agent.db"), startedAt, func(report store.TaskReport) {
+		if report.Task.FinishedAt == nil || !report.Task.FinishedAt.Equal(finishedAt) {
+			t.Fatalf("stored task finished_at = %v, want %v", report.Task.FinishedAt, finishedAt)
+		}
+	})
+}
+
 func TestSummarizeOutcomeWarnsForFileListInput(t *testing.T) {
 	summary := summarizeOutcome(
 		inputsource.Source{Type: review.InputTypeFileList},
@@ -336,7 +455,7 @@ func TestHasExactModuleDeclRejectsNestedModulePrefixes(t *testing.T) {
 	}
 }
 
-func assertFailedTaskStored(t *testing.T, dbPath string) {
+func assertStoredTask(t *testing.T, dbPath string, startedAt time.Time, assert func(report store.TaskReport)) {
 	t.Helper()
 	st, err := store.NewSQLite(context.Background(), dbPath)
 	if err != nil {
@@ -349,16 +468,11 @@ func assertFailedTaskStored(t *testing.T, dbPath string) {
 	if err != nil {
 		t.Fatalf("inputsource.Read() error = %v", err)
 	}
-	report, err := st.LoadTaskReport(context.Background(), runTaskID(input.Diff, fixedTestTime()))
+	report, err := st.LoadTaskReport(context.Background(), runTaskID(input.Diff, startedAt))
 	if err != nil {
 		t.Fatalf("LoadTaskReport() error = %v", err)
 	}
-	if report.Task.Status != review.TaskStatusFailed {
-		t.Fatalf("stored task status = %q, want failed", report.Task.Status)
-	}
-	if !strings.Contains(report.Task.Error, "model orchestration requires --model or MODEL") {
-		t.Fatalf("stored task error = %q, want missing model message", report.Task.Error)
-	}
+	assert(report)
 }
 
 func fixedTestTime() time.Time {

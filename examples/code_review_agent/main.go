@@ -23,15 +23,16 @@ import (
 
 func main() {
 	var (
-		fixtureDir = flag.String("fixture-dir", "testdata/fixtures", "directory containing diff fixtures")
-		diffFile   = flag.String("diff-file", "", "git or raw unified diff file to review")
-		repoPath   = flag.String("repo-path", "", "repository path whose git workspace diff should be reviewed")
-		fileList   = flag.String("file-list", "", "newline-delimited changed file path list")
-		outDir     = flag.String("out-dir", "./out", "directory for reports and the default SQLite database")
-		dbPath     = flag.String("db-path", "", "SQLite database path; defaults to <out-dir>/review_agent.db")
-		modelName  = flag.String("model", os.Getenv("MODEL"), "OpenAI-compatible model name")
-		runtime    = flag.String("runtime", "container", "workspace runtime: container, e2b, local, or fake")
-		timeout    = flag.Duration("sandbox-timeout", 30*time.Second, "per-command sandbox timeout")
+		fixtureDir        = flag.String("fixture-dir", "testdata/fixtures", "directory containing diff fixtures")
+		diffFile          = flag.String("diff-file", "", "git or raw unified diff file to review")
+		repoPath          = flag.String("repo-path", "", "repository path whose git workspace diff should be reviewed")
+		fileList          = flag.String("file-list", "", "newline-delimited changed file path list")
+		outDir            = flag.String("out-dir", "./out", "directory for reports and the default SQLite database")
+		dbPath            = flag.String("db-path", "", "SQLite database path; defaults to <out-dir>/review_agent.db")
+		modelName         = flag.String("model", os.Getenv("MODEL"), "OpenAI-compatible model name")
+		runtime           = flag.String("runtime", "container", "workspace runtime: container, e2b, local, or fake")
+		allowTrustedLocal = flag.Bool("allow-trusted-local", false, "allow trusted local host execution for explicitly trusted review input")
+		timeout           = flag.Duration("sandbox-timeout", 30*time.Second, "per-command sandbox timeout")
 	)
 	flag.Parse()
 
@@ -41,15 +42,16 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	result, err := orchestrator.Run(ctx, orchestrator.Options{
-		FixtureDir:     *fixtureDir,
-		DiffFile:       *diffFile,
-		RepoPath:       *repoPath,
-		FileList:       *fileList,
-		OutDir:         *outDir,
-		DBPath:         *dbPath,
-		Model:          *modelName,
-		Runtime:        *runtime,
-		SandboxTimeout: *timeout,
+		FixtureDir:        *fixtureDir,
+		DiffFile:          *diffFile,
+		RepoPath:          *repoPath,
+		FileList:          *fileList,
+		OutDir:            *outDir,
+		DBPath:            *dbPath,
+		Model:             *modelName,
+		Runtime:           *runtime,
+		AllowTrustedLocal: *allowTrustedLocal,
+		SandboxTimeout:    *timeout,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "run review: %v\n", err)

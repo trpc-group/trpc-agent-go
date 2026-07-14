@@ -10,6 +10,7 @@ package store
 
 import (
 	"context"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/review"
 )
@@ -46,7 +47,7 @@ type TaskReport struct {
 type Store interface {
 	Close() error
 	CreateTask(ctx context.Context, task review.ReviewTask) error
-	FinishTask(ctx context.Context, taskID string, status string, errText string) error
+	FinishTask(ctx context.Context, taskID string, status string, errText string, finishedAt time.Time) error
 	RecordInput(ctx context.Context, input InputRecord) error
 	RecordSandboxRun(ctx context.Context, run review.SandboxRun) error
 	RecordPermissionDecision(ctx context.Context, decision review.PermissionDecisionRecord) error

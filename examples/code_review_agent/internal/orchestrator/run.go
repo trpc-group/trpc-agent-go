@@ -46,6 +46,7 @@ const (
 	defaultMaxSandboxOutput = 4096
 	defaultSkillName        = "code-review"
 	defaultSandboxTimeout   = 30 * time.Second
+	failedTaskFinishTimeout = 3 * time.Second
 	containerSandboxImage   = "golang:1.24"
 	containerGoBuildCache   = "/tmp/go-build"
 	containerGoModCache     = "/go/pkg/mod"
@@ -62,17 +63,19 @@ var defaultSandboxCommands = []string{
 
 // Options configures one review run.
 type Options struct {
-	FixtureDir     string
-	DiffFile       string
-	FileList       string
-	OutDir         string
-	DBPath         string
-	Model          string
-	Runtime        string
-	RepoPath       string
-	SandboxTimeout time.Duration
-	Now            time.Time
-	Planner        Planner
+	FixtureDir        string
+	DiffFile          string
+	FileList          string
+	OutDir            string
+	DBPath            string
+	Model             string
+	Runtime           string
+	RepoPath          string
+	AllowTrustedLocal bool
+	SandboxTimeout    time.Duration
+	Now               time.Time
+	FinishedAt        time.Time
+	Planner           Planner
 }
 
 // Result is returned by the orchestrator after reports are written.
@@ -380,10 +383,26 @@ func Run(ctx context.Context, opts Options) (result Result, err error) {
 	if opts.SandboxTimeout == 0 {
 		opts.SandboxTimeout = defaultSandboxTimeout
 	}
-	fixedNow := !opts.Now.IsZero()
 	now := opts.Now
 	if now.IsZero() {
 		now = time.Now().UTC()
+	} else {
+		now = now.UTC()
+	}
+	var resolvedFinishedAt time.Time
+	resolveFinishedAt := func() time.Time {
+		if !resolvedFinishedAt.IsZero() {
+			return resolvedFinishedAt
+		}
+		switch {
+		case !opts.FinishedAt.IsZero():
+			resolvedFinishedAt = opts.FinishedAt.UTC()
+		case !opts.Now.IsZero():
+			resolvedFinishedAt = opts.Now.UTC()
+		default:
+			resolvedFinishedAt = time.Now().UTC()
+		}
+		return resolvedFinishedAt
 	}
 
 	input, err := inputsource.Read(ctx, inputsource.Options{
@@ -426,7 +445,9 @@ func Run(ctx context.Context, opts Options) (result Result, err error) {
 		if runErr == nil {
 			return nil
 		}
-		if finishErr := st.FinishTask(ctx, task.ID, review.TaskStatusFailed, runErr.Error()); finishErr != nil {
+		finishCtx, cancel := failedTaskContext(ctx)
+		defer cancel()
+		if finishErr := st.FinishTask(finishCtx, task.ID, review.TaskStatusFailed, runErr.Error(), resolveFinishedAt()); finishErr != nil {
 			return errors.Join(runErr, fmt.Errorf("finish failed task: %w", finishErr))
 		}
 		return runErr
@@ -447,6 +468,9 @@ func Run(ctx context.Context, opts Options) (result Result, err error) {
 		ChangedFilesJSON: string(changedFilesJSON),
 		RedactedDiff:     redactedDiff.Text,
 	}); err != nil {
+		return Result{}, failTask(err)
+	}
+	if err := validateRuntimePolicy(opts.Runtime, opts.AllowTrustedLocal); err != nil {
 		return Result{}, failTask(err)
 	}
 
@@ -470,7 +494,7 @@ func Run(ctx context.Context, opts Options) (result Result, err error) {
 		return Result{}, failTask(err)
 	}
 
-	decisions, runs, err := executePlannedCommands(ctx, st, task.ID, opts.Runtime, plan.Commands, now, opts.SandboxTimeout, input.WorkDir)
+	decisions, runs, err := executePlannedCommands(ctx, st, task.ID, opts.Runtime, opts.AllowTrustedLocal, plan.Commands, now, opts.SandboxTimeout, input.WorkDir)
 	if err != nil {
 		return Result{}, failTask(err)
 	}
@@ -480,12 +504,13 @@ func Run(ctx context.Context, opts Options) (result Result, err error) {
 		}
 	}
 
+	finishedAt := resolveFinishedAt()
 	metrics := report.BuildMetrics(task.ID, task.StartedAt, findings, runs, decisions, redactedDiff.Count+countFindingRedactions(findings))
-	if fixedNow {
+	metrics.TotalDurationMillis = finishedAt.Sub(task.StartedAt).Milliseconds()
+	if metrics.TotalDurationMillis < 0 {
 		metrics.TotalDurationMillis = 0
 	}
 	task.Status = statusFor(findings, runs)
-	finishedAt := now.UTC()
 	task.FinishedAt = &finishedAt
 	conclusion := conclusionFor(task.Status, findings, runs)
 	r := review.Report{
@@ -499,7 +524,7 @@ func Run(ctx context.Context, opts Options) (result Result, err error) {
 		Metrics:             metrics,
 		Conclusion:          conclusion,
 	}
-	artifacts, err := report.Write(opts.OutDir, r, now)
+	artifacts, err := report.Write(opts.OutDir, r, finishedAt)
 	if err != nil {
 		return Result{}, failTask(err)
 	}
@@ -518,7 +543,7 @@ func Run(ctx context.Context, opts Options) (result Result, err error) {
 	}); err != nil {
 		return Result{}, failTask(err)
 	}
-	if err := st.FinishTask(ctx, task.ID, task.Status, ""); err != nil {
+	if err := st.FinishTask(ctx, task.ID, task.Status, "", finishedAt); err != nil {
 		return Result{}, err
 	}
 	return Result{
@@ -582,7 +607,7 @@ func summarizeOutcome(input inputsource.Source, files []review.DiffFile, finding
 	return summary
 }
 
-func executePlannedCommands(ctx context.Context, st store.Store, taskID string, runtimeName string, commands []string, now time.Time, timeout time.Duration, workDir string) ([]review.PermissionDecisionRecord, []review.SandboxRun, error) {
+func executePlannedCommands(ctx context.Context, st store.Store, taskID string, runtimeName string, allowTrustedLocal bool, commands []string, now time.Time, timeout time.Duration, workDir string) ([]review.PermissionDecisionRecord, []review.SandboxRun, error) {
 	if len(commands) == 0 {
 		commands = newSandboxWorkspace(workDir).commandAllowlist()
 	}
@@ -623,7 +648,7 @@ func executePlannedCommands(ctx context.Context, st store.Store, taskID string, 
 		}
 		if runtime == nil {
 			var initRun *review.SandboxRun
-			runtime, cleanup, initRun = runtimeForName(ctx, runtimeName, taskID, suffix, timeout, workDir)
+			runtime, cleanup, initRun = runtimeForName(ctx, runtimeName, taskID, suffix, timeout, workDir, allowTrustedLocal)
 			if initRun != nil {
 				runs = append(runs, *initRun)
 			}
@@ -648,7 +673,7 @@ func countFindingRedactions(findings []review.Finding) int {
 	return count
 }
 
-func runtimeForName(ctx context.Context, name string, taskID string, suffix string, timeout time.Duration, workDir string) (sandboxrun.Runtime, func(), *review.SandboxRun) {
+func runtimeForName(ctx context.Context, name string, taskID string, suffix string, timeout time.Duration, workDir string, allowTrustedLocal bool) (sandboxrun.Runtime, func(), *review.SandboxRun) {
 	normalized := strings.ToLower(strings.TrimSpace(name))
 	if normalized == "" {
 		normalized = "container"
@@ -656,7 +681,7 @@ func runtimeForName(ctx context.Context, name string, taskID string, suffix stri
 	if normalized == "fake" {
 		return sandboxrun.FakeRuntime{RuntimeName: normalized}, nil, nil
 	}
-	rt, cleanup, err := newWorkspaceRuntime(ctx, normalized, taskID, timeout, workDir)
+	rt, cleanup, err := newWorkspaceRuntime(ctx, normalized, taskID, timeout, workDir, allowTrustedLocal)
 	if err != nil {
 		run := review.SandboxRun{
 			ID:             taskID + "-sandbox-init-" + suffix,
@@ -672,7 +697,7 @@ func runtimeForName(ctx context.Context, name string, taskID string, suffix stri
 	return rt, cleanup, nil
 }
 
-func newWorkspaceRuntime(ctx context.Context, runtimeName string, taskID string, timeout time.Duration, workDir string) (sandboxrun.Runtime, func(), error) {
+func newWorkspaceRuntime(ctx context.Context, runtimeName string, taskID string, timeout time.Duration, workDir string, allowTrustedLocal bool) (sandboxrun.Runtime, func(), error) {
 	workspace := newSandboxWorkspace(workDir)
 	repoRoot, err := workspace.root()
 	if err != nil {
@@ -682,6 +707,9 @@ func newWorkspaceRuntime(ctx context.Context, runtimeName string, taskID string,
 	var closeFn func() error
 	switch runtimeName {
 	case "local":
+		if err := validateRuntimePolicy(runtimeName, allowTrustedLocal); err != nil {
+			return nil, nil, err
+		}
 		exec := localexec.New(
 			localexec.WithWorkDir(repoRoot),
 			localexec.WithTimeout(timeout),
@@ -750,6 +778,18 @@ func newWorkspaceRuntime(ctx context.Context, runtimeName string, taskID string,
 		Timeout:     timeout,
 		Env:         workspaceRuntimeEnv(runtimeName),
 	}, cleanup, nil
+}
+
+func validateRuntimePolicy(runtimeName string, allowTrustedLocal bool) error {
+	normalized := strings.ToLower(strings.TrimSpace(runtimeName))
+	if normalized != "local" || allowTrustedLocal {
+		return nil
+	}
+	return fmt.Errorf("runtime %q is disabled for untrusted review input; rerun only for explicitly trusted input with AllowTrustedLocal or --allow-trusted-local", normalized)
+}
+
+func failedTaskContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), failedTaskFinishTimeout)
 }
 
 func containerConfig() tcontainer.Config {
