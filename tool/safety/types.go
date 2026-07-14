@@ -112,21 +112,24 @@ type Finding struct {
 
 // Report is the structured safety scan result.
 type Report struct {
-	ToolName       string        `json:"tool_name"`
-	ToolCallID     string        `json:"tool_call_id,omitempty"`
-	Backend        Backend       `json:"backend"`
-	Command        string        `json:"command,omitempty"`
-	Decision       Decision      `json:"decision"`
-	RiskLevel      RiskLevel     `json:"risk_level"`
-	RuleID         string        `json:"rule_id,omitempty"`
-	Evidence       string        `json:"evidence,omitempty"`
-	Recommendation string        `json:"recommendation,omitempty"`
-	Blocked        bool          `json:"blocked"`
-	Redacted       bool          `json:"redacted"`
-	Findings       []Finding     `json:"findings,omitempty"`
-	Duration       time.Duration `json:"-"`
-	DurationMS     int64         `json:"duration_ms"`
-	AuditError     string        `json:"audit_error,omitempty"`
+	ToolName       string    `json:"tool_name"`
+	ToolCallID     string    `json:"tool_call_id,omitempty"`
+	Backend        Backend   `json:"backend"`
+	Command        string    `json:"command,omitempty"`
+	Decision       Decision  `json:"decision"`
+	RiskLevel      RiskLevel `json:"risk_level"`
+	RuleID         string    `json:"rule_id,omitempty"`
+	Evidence       string    `json:"evidence,omitempty"`
+	Recommendation string    `json:"recommendation,omitempty"`
+	// AuditDeniedPaths optionally carries denied-path context so audit
+	// persistence can redact scanner-controlled recommendation strings.
+	AuditDeniedPaths []string      `json:"-"`
+	Blocked          bool          `json:"blocked"`
+	Redacted         bool          `json:"redacted"`
+	Findings         []Finding     `json:"findings,omitempty"`
+	Duration         time.Duration `json:"-"`
+	DurationMS       int64         `json:"duration_ms"`
+	AuditError       string        `json:"audit_error,omitempty"`
 }
 
 // ToolSafetyAttributes returns short OpenTelemetry attributes for the report.

@@ -285,3 +285,35 @@ func TestJSONLAuditWriter_WritesRedactedEvent(t *testing.T) {
 	require.Contains(t, buf.String(), `"tool_name":"workspace_exec"`)
 	require.Contains(t, buf.String(), `"redacted":true`)
 }
+
+func TestPermissionPolicy_AuditWriterRedactsScannerRecommendation(t *testing.T) {
+	var audit bytes.Buffer
+	sensitivePath := "/srv/team/private/secrets"
+	recommendation := "remove password=hunter2 from " +
+		sensitivePath + "/api.env before retry"
+	policy := NewPermissionPolicy(
+		ScannerFunc(func(context.Context, ScanRequest) (Report, error) {
+			return Report{
+				ToolName:         "custom",
+				Backend:          BackendUnknown,
+				Decision:         DecisionAsk,
+				RiskLevel:        RiskHigh,
+				RuleID:           "custom.sensitive",
+				Recommendation:   recommendation,
+				AuditDeniedPaths: []string{sensitivePath},
+				Blocked:          true,
+			}, nil
+		}),
+		WithAuditWriter(NewJSONLAuditWriter(&audit)),
+	)
+	decision, err := policy.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:  "custom",
+		Arguments: []byte(`{"text":"download"}`),
+	})
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionAsk, decision.Action)
+	require.NotContains(t, audit.String(), "hunter2")
+	require.NotContains(t, audit.String(), sensitivePath)
+	require.Contains(t, audit.String(), `"recommendation":"remove \u003credacted\u003e from \u003credacted\u003e/api.env before retry"`)
+	require.Contains(t, audit.String(), `"redacted":true`)
+}

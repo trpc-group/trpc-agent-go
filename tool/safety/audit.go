@@ -12,6 +12,8 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -79,6 +81,7 @@ func (w *JSONLAuditWriter) WriteAuditEvent(
 }
 
 func auditEventFromReport(report Report) AuditEvent {
+	recommendation, recommendationRedacted := redactAuditRecommendation(report)
 	return AuditEvent{
 		Time:             time.Now().UTC(),
 		ToolName:         report.ToolName,
@@ -90,7 +93,40 @@ func auditEventFromReport(report Report) AuditEvent {
 		RuleID:           report.RuleID,
 		DurationMS:       report.DurationMS,
 		Blocked:          report.Blocked,
-		Redacted:         report.Redacted,
-		Recommendation:   report.Recommendation,
+		Redacted:         report.Redacted || recommendationRedacted,
+		Recommendation:   recommendation,
 	}
+}
+
+func redactAuditRecommendation(report Report) (string, bool) {
+	out, redacted := redactReportTextWithDeniedPaths(
+		report.Recommendation,
+		auditDeniedPaths(report),
+	)
+	return singleLine(out), redacted
+}
+
+func auditDeniedPaths(report Report) []string {
+	if report.AuditDeniedPaths != nil {
+		return append([]string(nil), report.AuditDeniedPaths...)
+	}
+	return append([]string(nil), DefaultPolicy().DeniedPaths...)
+}
+
+func redactReportTextWithDeniedPaths(text string, deniedPaths []string) (string, bool) {
+	out, redacted := redactString(text)
+	sort.SliceStable(deniedPaths, func(i, j int) bool {
+		return len(deniedPaths[i]) > len(deniedPaths[j])
+	})
+	for _, denied := range deniedPaths {
+		if strings.TrimSpace(denied) == "" {
+			continue
+		}
+		next := redactSensitivePath(out, denied)
+		if next != out {
+			redacted = true
+			out = next
+		}
+	}
+	return out, redacted
 }

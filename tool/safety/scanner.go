@@ -17,7 +17,6 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -60,6 +59,7 @@ func (s *DefaultScanner) Scan(ctx context.Context, req ScanRequest) (Report, err
 	}
 	findings := s.scanRequest(ctx, req)
 	report := buildReport(req, findings, time.Since(start))
+	report.AuditDeniedPaths = append([]string(nil), s.policy.DeniedPaths...)
 	report.Command, report.Redacted = s.redactReportText(report.Command)
 	if report.Evidence != "" {
 		var redacted bool
@@ -996,22 +996,7 @@ func (s *DefaultScanner) textMentionsDeniedPath(text string) bool {
 }
 
 func (s *DefaultScanner) redactReportText(text string) (string, bool) {
-	out, redacted := redactString(text)
-	deniedPaths := append([]string(nil), s.policy.DeniedPaths...)
-	sort.SliceStable(deniedPaths, func(i, j int) bool {
-		return len(deniedPaths[i]) > len(deniedPaths[j])
-	})
-	for _, denied := range deniedPaths {
-		if strings.TrimSpace(denied) == "" {
-			continue
-		}
-		next := redactSensitivePath(out, denied)
-		if next != out {
-			redacted = true
-			out = next
-		}
-	}
-	return out, redacted
+	return redactReportTextWithDeniedPaths(text, append([]string(nil), s.policy.DeniedPaths...))
 }
 
 func redactSensitivePath(text, denied string) string {
