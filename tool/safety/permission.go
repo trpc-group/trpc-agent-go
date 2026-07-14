@@ -154,6 +154,13 @@ func (p *permissionPolicy) CheckToolPermission(
 			}
 			return p.finish(ctx, final)
 		}
+		if !report.Decision.Valid() {
+			failure := invalidScannerDecisionReport(scanReq, report)
+			if i == 0 || reportRank(failure) > reportRank(final) {
+				final = failure
+			}
+			return p.finish(ctx, final)
+		}
 		if i == 0 || reportRank(report) > reportRank(final) {
 			final = report
 		}
@@ -199,15 +206,48 @@ func auditDeniedPathsForScanner(scanner Scanner) []string {
 	return append([]string(nil), DefaultPolicy().DeniedPaths...)
 }
 
+func invalidScannerDecisionReport(scanReq ScanRequest, report Report) Report {
+	toolName := report.ToolName
+	if toolName == "" {
+		toolName = scanReq.ToolName
+	}
+	toolCallID := report.ToolCallID
+	if toolCallID == "" {
+		toolCallID = scanReq.ToolCallID
+	}
+	backend := report.Backend
+	if !backend.Valid() {
+		backend = scanReq.Backend
+	}
+	command := report.Command
+	if command == "" {
+		command = scanReq.Command
+	}
+	return Report{
+		ToolName:       toolName,
+		ToolCallID:     toolCallID,
+		Backend:        backend,
+		Command:        command,
+		Decision:       DecisionDeny,
+		RiskLevel:      RiskHigh,
+		RuleID:         "scanner.invalid_decision",
+		Evidence:       fmt.Sprintf("scanner returned invalid decision %q", report.Decision),
+		Recommendation: "fix scanner decision before tool execution",
+		Blocked:        true,
+	}
+}
+
 func permissionDecisionForReport(report Report) tool.PermissionDecision {
 	reason := PermissionReason(report)
 	switch report.Decision {
+	case DecisionAllow:
+		return tool.AllowPermission()
 	case DecisionDeny:
 		return tool.DenyPermission(reason)
 	case DecisionAsk, DecisionNeedsHumanReview:
 		return tool.AskPermission(reason)
 	default:
-		return tool.AllowPermission()
+		return tool.DenyPermission(reason)
 	}
 }
 

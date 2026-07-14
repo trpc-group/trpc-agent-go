@@ -162,6 +162,60 @@ func TestPermissionPolicy_ScannerErrorStillAuditsAndObserves(t *testing.T) {
 	require.Contains(t, audit.String(), `"rule_id":"scanner.error"`)
 }
 
+func TestPermissionPolicy_ZeroValueScannerDecisionFailsClosed(t *testing.T) {
+	var observed Report
+	var audit bytes.Buffer
+	policy := NewPermissionPolicy(
+		ScannerFunc(func(context.Context, ScanRequest) (Report, error) {
+			return Report{}, nil
+		}),
+		WithAuditWriter(NewJSONLAuditWriter(&audit)),
+		WithReportObserver(func(_ context.Context, report Report) {
+			observed = report
+		}),
+	)
+	decision, err := policy.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:  "workspace_exec",
+		Arguments: []byte(`{"command":"go test ./..."}`),
+	})
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionDeny, decision.Action)
+	require.Equal(t, DecisionDeny, observed.Decision)
+	require.Equal(t, "scanner.invalid_decision", observed.RuleID)
+	require.Equal(t, RiskHigh, observed.RiskLevel)
+	require.True(t, observed.Blocked)
+	require.Contains(t, observed.Evidence, `scanner returned invalid decision ""`)
+	require.Contains(t, audit.String(), `"rule_id":"scanner.invalid_decision"`)
+	require.Contains(t, audit.String(), `"decision":"deny"`)
+}
+
+func TestPermissionPolicy_UnsupportedScannerDecisionFailsClosed(t *testing.T) {
+	var observed Report
+	var audit bytes.Buffer
+	policy := NewPermissionPolicy(
+		ScannerFunc(func(context.Context, ScanRequest) (Report, error) {
+			return Report{Decision: Decision("unexpected")}, nil
+		}),
+		WithAuditWriter(NewJSONLAuditWriter(&audit)),
+		WithReportObserver(func(_ context.Context, report Report) {
+			observed = report
+		}),
+	)
+	decision, err := policy.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:  "workspace_exec",
+		Arguments: []byte(`{"command":"go test ./..."}`),
+	})
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionDeny, decision.Action)
+	require.Equal(t, DecisionDeny, observed.Decision)
+	require.Equal(t, "scanner.invalid_decision", observed.RuleID)
+	require.Equal(t, RiskHigh, observed.RiskLevel)
+	require.True(t, observed.Blocked)
+	require.Contains(t, observed.Evidence, `scanner returned invalid decision "unexpected"`)
+	require.Contains(t, audit.String(), `"rule_id":"scanner.invalid_decision"`)
+	require.Contains(t, audit.String(), `"decision":"deny"`)
+}
+
 func TestPermissionPolicy_UsesBackendResolverAndNilFallbacks(t *testing.T) {
 	allowPolicy := NewPermissionPolicy(nil)
 	decision, err := allowPolicy.CheckToolPermission(context.Background(), nil)
@@ -207,6 +261,8 @@ func TestPermissionHelpers(t *testing.T) {
 	require.Equal(t, tool.PermissionActionAllow, permissionDecisionForReport(Report{Decision: DecisionAllow}).Action)
 	require.Equal(t, tool.PermissionActionDeny, permissionDecisionForReport(Report{Decision: DecisionDeny}).Action)
 	require.Equal(t, tool.PermissionActionAsk, permissionDecisionForReport(Report{Decision: DecisionNeedsHumanReview}).Action)
+	require.Equal(t, tool.PermissionActionDeny, permissionDecisionForReport(Report{}).Action)
+	require.Equal(t, tool.PermissionActionDeny, permissionDecisionForReport(Report{Decision: Decision("unexpected")}).Action)
 	require.Equal(t, string(tool.PermissionActionDeny), permissionAction(DecisionDeny))
 	require.Equal(t, string(tool.PermissionActionAsk), permissionAction(DecisionNeedsHumanReview))
 	require.Equal(t, string(tool.PermissionActionAllow), permissionAction(DecisionAllow))
