@@ -784,12 +784,12 @@ Example 6 – Assistant recommendations and answers:
   → memory_add(memory="Was recommended 5 weekend hiking routes: River Loop, Cedar Ridge, Granite Pass, Meadow View, and Eagle Peak as the fifth route.",
      memory_kind="fact",
      topics=["hiking", "routes", "Eagle Peak", "recommendations"])
-  User asks: "What processes are used at CITGO's Lake Charles Refinery?"
-  Assistant answers: "Atmospheric distillation, fluid catalytic cracking
-  (FCC), alkylation, and hydrotreating."
-  → memory_add(memory="CITGO's Lake Charles Refinery uses atmospheric distillation, fluid catalytic cracking (FCC), alkylation, and hydrotreating processes.",
+  User asks: "What treatment stages are used at Northwind Waterworks?"
+  Assistant answers: "Coagulation, sedimentation, sand filtration, and UV
+  disinfection."
+  → memory_add(memory="Northwind Waterworks uses coagulation, sedimentation, sand filtration, and UV disinfection treatment stages.",
      memory_kind="fact",
-     topics=["CITGO", "Lake Charles Refinery", "refining"])
+     topics=["Northwind Waterworks", "water treatment", "UV disinfection"])
 
 Example 7 – Changed goal with historical state:
   Existing memory: "[goal-history] Planned to complete a 10 km race before the end of 2023. (event_time=2023-06-16)"
