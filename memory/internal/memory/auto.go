@@ -836,6 +836,12 @@ func (w *AutoMemoryWorker) decideAddOp(
 		}
 		j := tokenJaccard(op.Memory, c.Memory.Memory)
 		tier := reconcileDecisionTier(c.Score, j)
+		// A prior dated state is not a duplicate candidate. Keeping it in
+		// the skip tier could shadow an exact same-time duplicate returned
+		// later by a backend with a slightly lower score.
+		if isDistinctDatedState(op, c.Memory) {
+			tier = reconcileTierNone
+		}
 		if best == nil ||
 			tier > bestTier ||
 			(tier == bestTier &&
@@ -847,6 +853,18 @@ func (w *AutoMemoryWorker) decideAddOp(
 		}
 	}
 	if best == nil || best.Memory == nil || best.ID == "" {
+		return op
+	}
+	// A dated Add that differs from the closest entry's event time is a
+	// historical state, not a duplicate. Changed counts, frequencies, goals,
+	// and preferences often retain almost identical wording, so lexical or
+	// vector similarity alone would otherwise discard the newer state.
+	if isDistinctDatedState(op, best.Memory) {
+		log.DebugfContext(ctx,
+			"auto_memory: reconcile preserve dated state for user %s/%s "+
+				"(best=%s score=%.3f jaccard=%.3f)",
+			userKey.AppName, userKey.UserID,
+			best.ID, best.Score, bestJaccard)
 		return op
 	}
 
@@ -873,6 +891,17 @@ func (w *AutoMemoryWorker) decideAddOp(
 	default:
 		return op
 	}
+}
+
+// isDistinctDatedState reports whether an Add describes a state at a different
+// point in time from the closest stored memory. An undated candidate cannot
+// establish a transition. A dated candidate is retained when the existing
+// entry is undated because dropping it would lose the only temporal marker.
+func isDistinctDatedState(op *extractor.Operation, existing *memory.Memory) bool {
+	if op == nil || op.EventTime == nil || existing == nil {
+		return false
+	}
+	return existing.EventTime == nil || !op.EventTime.Equal(*existing.EventTime)
 }
 
 // tokenJaccard returns the token-level Jaccard similarity between two
