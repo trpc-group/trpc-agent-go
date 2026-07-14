@@ -220,8 +220,13 @@ type Report struct {
 func Compare(caseName, backend string, a, b Snapshot) []Difference {
 	a = Normalize(a)
 	b = Normalize(b)
+	unsupported := b.Unsupported
+	// Unsupported describes backend capabilities rather than replayed data, so it
+	// controls diff classification and is not itself part of the comparison.
+	a.Unsupported = nil
+	b.Unsupported = nil
 	var out []Difference
-	walk(caseName, backend, a.SessionID, "session", "", toAny(a), toAny(b), &out)
+	walk(caseName, backend, a.SessionID, "session", "", toAny(a), toAny(b), unsupported, &out)
 	return out
 }
 func toAny(v any) any {
@@ -230,7 +235,7 @@ func toAny(v any) any {
 	_ = json.Unmarshal(data, &out)
 	return out
 }
-func walk(c, backend, sid, locator, path string, a, b any, out *[]Difference) {
+func walk(c, backend, sid, locator, path string, a, b any, unsupported map[string]string, out *[]Difference) {
 	am, aok := a.(map[string]any)
 	bm, bok := b.(map[string]any)
 	if aok && bok {
@@ -248,7 +253,7 @@ func walk(c, backend, sid, locator, path string, a, b any, out *[]Difference) {
 		sort.Strings(list)
 		for _, k := range list {
 			next := path + "/" + k
-			walk(c, backend, sid, identify(locator, k, am[k], bm[k]), next, am[k], bm[k], out)
+			walk(c, backend, sid, identify(locator, k, am[k], bm[k]), next, am[k], bm[k], unsupported, out)
 		}
 		return
 	}
@@ -267,15 +272,26 @@ func walk(c, backend, sid, locator, path string, a, b any, out *[]Difference) {
 			if i < len(bb) {
 				bv = bb[i]
 			}
-			walk(c, backend, sid, elementLocator(locator, i, av, bv), fmt.Sprintf("%s/%d", path, i), av, bv, out)
+			walk(c, backend, sid, elementLocator(locator, i, av, bv), fmt.Sprintf("%s/%d", path, i), av, bv, unsupported, out)
 		}
 		return
 	}
 	aj, _ := json.Marshal(a)
 	bj, _ := json.Marshal(b)
 	if string(aj) != string(bj) {
-		*out = append(*out, Difference{Case: c, Backend: backend, SessionID: sid, Locator: locator, Path: path, Baseline: a, Compared: b, Explanation: "normalized values differ"})
+		allowed, explanation := unsupportedDifference(path, unsupported)
+		*out = append(*out, Difference{Case: c, Backend: backend, SessionID: sid, Locator: locator, Path: path, Baseline: a, Compared: b, Allowed: allowed, Explanation: explanation})
 	}
+}
+
+func unsupportedDifference(path string, unsupported map[string]string) (bool, string) {
+	for prefix, reason := range unsupported {
+		prefix = "/" + strings.Trim(strings.TrimSpace(prefix), "/")
+		if path == prefix || strings.HasPrefix(path, prefix+"/") {
+			return true, reason
+		}
+	}
+	return false, "normalized values differ"
 }
 func elementLocator(kind string, index int, a, b any) string {
 	m, _ := a.(map[string]any)

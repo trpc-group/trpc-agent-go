@@ -50,3 +50,27 @@ func TestNormalization(t *testing.T) {
 		t.Fatal(d)
 	}
 }
+
+func TestUnsupportedCapabilityMarksMatchingDiffAllowed(t *testing.T) {
+	a := Cases()[7].Build()
+	b := clone(a)
+	b.Tracks[0].Error = "not persisted"
+	b.Unsupported = map[string]string{"/tracks": "backend does not persist track details"}
+
+	d := Compare("unsupported-track", "limited", a, b)
+	if len(d) != 1 || !d[0].Allowed || d[0].Explanation != b.Unsupported["/tracks"] {
+		t.Fatalf("expected documented track difference to be allowed: %+v", d)
+	}
+}
+
+func TestUnsupportedCapabilityDoesNotAllowOtherDiffs(t *testing.T) {
+	a := Cases()[5].Build()
+	b := clone(a)
+	b.Summaries[0].Text = "lost"
+	b.Unsupported = map[string]string{"/tracks": "backend does not persist tracks"}
+
+	d := Compare("summary-loss", "limited", a, b)
+	if len(d) != 1 || d[0].Allowed {
+		t.Fatalf("unrelated data loss must remain disallowed: %+v", d)
+	}
+}
