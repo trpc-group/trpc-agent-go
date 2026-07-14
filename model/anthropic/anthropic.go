@@ -82,6 +82,7 @@ type Model struct {
 
 	// Stream retry configuration. See WithStreamRetry for semantics.
 	streamMaxRetries       int
+	streamRetryEnabled     bool
 	streamRetryBaseBackoff time.Duration
 	streamRetryMaxBackoff  time.Duration
 }
@@ -136,6 +137,7 @@ func New(name string, opts ...Option) *Model {
 		explicitMaxTokens:          o.explicitMaxTokens,
 		showToolCallDelta:          o.showToolCallDelta,
 		streamMaxRetries:           o.streamMaxRetries,
+		streamRetryEnabled:         o.streamRetryEnabled,
 		streamRetryBaseBackoff:     o.streamRetryBaseBackoff,
 		streamRetryMaxBackoff:      o.streamRetryMaxBackoff,
 	}
@@ -729,8 +731,12 @@ func (m *Model) handleStreamingResponse(
 }
 
 // effectiveStreamMaxRetries resolves the retry budget for handleStreamingResponse.
-// Zero uses the package default; negative disables retries.
+// Stream retries are disabled unless WithStreamRetry was used. When enabled,
+// zero uses defaultStreamMaxRetries and negative disables retries.
 func (m *Model) effectiveStreamMaxRetries() int {
+	if !m.streamRetryEnabled {
+		return 0
+	}
 	if m.streamMaxRetries < 0 {
 		return 0
 	}

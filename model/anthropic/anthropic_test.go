@@ -2202,6 +2202,48 @@ const sseFullSuccess = ssePrelude +
 	"event: message_stop\n" +
 	"data: {\"type\":\"message_stop\"}\n\n"
 
+// Test_HandleStreamingResponse_ZeroOptionsSingleAttempt verifies that a model
+// constructed without WithStreamRetry makes exactly one streaming HTTP call
+// and surfaces the first transport failure (legacy at-most-once behaviour).
+func Test_HandleStreamingResponse_ZeroOptionsSingleAttempt(t *testing.T) {
+	var attempts int32
+	orig := model.DefaultNewHTTPClient
+	t.Cleanup(func() { model.DefaultNewHTTPClient = orig })
+	model.DefaultNewHTTPClient = func(_ ...HTTPClientOption) model.HTTPClient {
+		return &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+			atomic.AddInt32(&attempts, 1)
+			h := make(http.Header)
+			h.Set("Content-Type", "text/event-stream")
+			body := &errReadCloser{
+				pre: []byte(ssePrelude),
+				err: fmt.Errorf("read: connection reset by peer"),
+			}
+			return &http.Response{StatusCode: 200, Header: h, Body: body}, nil
+		})}
+	}
+
+	m := New(
+		"claude-test",
+		WithHTTPClientOptions(),
+		WithAnthropicClientOptions(anthropicopt.WithMaxRetries(0)),
+	)
+
+	ctx := context.Background()
+	responseChan := make(chan *model.Response, 16)
+	m.handleStreamingResponse(ctx, anthropic.MessageNewParams{}, responseChan)
+	close(responseChan)
+
+	var sawErr bool
+	for r := range responseChan {
+		if r.Error != nil {
+			sawErr = true
+		}
+	}
+	require.True(t, sawErr, "zero-option model should surface the stream error")
+	require.Equal(t, int32(1), atomic.LoadInt32(&attempts),
+		"zero-option model must not retry streaming requests")
+}
+
 // Test_HandleStreamingResponse_RetriesMidStreamTCPRST simulates the exact
 // failure mode the production trace exposed: the HTTP request returns 200 OK
 // and starts streaming, then the TCP connection dies (connection reset by
