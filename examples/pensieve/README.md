@@ -6,6 +6,7 @@ Demonstrates the [Pensieve paradigm](https://arxiv.org/abs/2602.12108): the LLM 
 
 | Tool | Purpose |
 |------|---------|
+| `list_context` | List visible events with stable IDs for pruning |
 | `check_budget` | Report total, visible, and masked event counts |
 | `note` | Save a distilled fact to session state |
 | `notes_index` | List note keys and short previews cheaply |

@@ -469,11 +469,57 @@ func mustCallNotesIndex(t *testing.T, ctx context.Context) NotesIndexOutput {
 	return result.(NotesIndexOutput)
 }
 
+// --- list_context tests ---
+
+func TestListContextTool(t *testing.T) {
+	t.Run("returns visible event IDs", func(t *testing.T) {
+		sess := session.NewSession("app", "user", "lc1")
+		sess.Events = []event.Event{
+			newTestEvent("e1"),
+			newTestEvent("e2"),
+		}
+		sess.MaskEvents("e1")
+		ctx := ctxWithSession(sess)
+
+		tool := NewListContextTool()
+		result, err := tool.Call(ctx, []byte(`{}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := result.(ListContextOutput)
+		if out.Count != 1 || len(out.Events) != 1 {
+			t.Fatalf("expected 1 visible event, got %+v", out)
+		}
+		if out.Events[0].ID != "e2" {
+			t.Fatalf("expected e2, got %+v", out.Events[0])
+		}
+	})
+
+	t.Run("no session returns empty list", func(t *testing.T) {
+		tool := NewListContextTool()
+		result, err := tool.Call(context.Background(), []byte(`{}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := result.(ListContextOutput)
+		if out.Count != 0 || len(out.Events) != 0 {
+			t.Fatalf("expected empty list, got %+v", out)
+		}
+	})
+}
+
 // --- Tools() convenience ---
 
 func TestToolsReturnsAllContextTools(t *testing.T) {
 	tools := Tools()
-	expected := []string{"delete_context", "check_budget", "note", "read_notes", "notes_index"}
+	expected := []string{
+		"list_context",
+		"delete_context",
+		"check_budget",
+		"note",
+		"read_notes",
+		"notes_index",
+	}
 	if len(tools) != len(expected) {
 		t.Fatalf("expected %d tools, got %d", len(expected), len(tools))
 	}

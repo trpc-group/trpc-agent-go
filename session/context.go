@@ -44,8 +44,10 @@ func (sess *Session) MaskEvents(ids ...string) int {
 		existingIDs[e.ID] = struct{}{}
 	}
 
+	idsToMask := expandMaskIDsForToolRounds(sess.Events, ids)
+
 	masked := 0
-	for _, id := range ids {
+	for _, id := range idsToMask {
 		if _, exists := existingIDs[id]; exists && !sess.maskedEventIDs[id] {
 			sess.maskedEventIDs[id] = true
 			masked++
@@ -253,8 +255,18 @@ func (sess *Session) maskedEventIDListLocked() []string {
 	if len(sess.maskedEventIDs) == 0 {
 		return nil
 	}
+	present := make(map[string]struct{}, len(sess.Events))
+	for _, e := range sess.Events {
+		if e.ID != "" {
+			present[e.ID] = struct{}{}
+		}
+	}
 	ids := make([]string, 0, len(sess.maskedEventIDs))
 	for id := range sess.maskedEventIDs {
+		if _, ok := present[id]; !ok {
+			delete(sess.maskedEventIDs, id)
+			continue
+		}
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
