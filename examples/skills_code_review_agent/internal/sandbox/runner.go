@@ -23,7 +23,6 @@ import (
 	"github.com/google/uuid"
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
-	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -33,7 +32,6 @@ const (
 )
 
 var (
-	// 高风险命令
 	denyRE = regexp.MustCompile(`(?i)(rm\s+-rf|curl\s+[^\s|]+\s*\|\s*(ba)?sh|git\s+push|wget\s+[^\s|]+\s*\|\s*(ba)?sh)`)
 )
 
@@ -101,9 +99,21 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	if opts.SkillsRoot == "" {
 		opts.SkillsRoot = "skills"
 	}
+	opts.SkillsRoot = resolveSkillsRoot(opts.SkillsRoot)
 
 	start := time.Now()
 	out := &Result{Exceptions: map[string]int{}}
+
+	// 創建workspace & sandbox
+	env, cleanup, err := prepareRunEnv(ctx, opts)
+	if err != nil {
+		if opts.Runtime == RuntimeContainer {
+			out.Exceptions["workspace_error"]++
+		}
+		env = &runEnv{}
+	} else if cleanup != nil {
+		defer cleanup()
+	}
 
 	for _, pc := range buildPlannedCommands(opts) {
 		decision := checkPermission(pc.ToolName, pc.Command)
@@ -126,7 +136,7 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 			continue
 		}
 
-		runRec, err := executePlanned(ctx, opts, pc.Command)
+		runRec, err := executePlanned(ctx, opts, pc.Command, env)
 		out.Runs = append(out.Runs, runRec)
 		out.ToolCalls++
 		if err != nil {
@@ -141,7 +151,7 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 type plannedCommand struct {
 	ToolName string
 	Command  string
-	Execute  bool // 是否执行
+	Execute  bool
 }
 
 func buildPlannedCommands(opts Options) []plannedCommand {
@@ -186,7 +196,7 @@ func checkPermission(toolName, command string) tool.PermissionDecision {
 	}
 }
 
-func executePlanned(ctx context.Context, opts Options, command string) (RunRecord, error) {
+func executePlanned(ctx context.Context, opts Options, command string, env *runEnv) (RunRecord, error) {
 	rec := RunRecord{
 		ID:      uuid.NewString(),
 		TaskID:  opts.TaskID,
@@ -201,18 +211,21 @@ func executePlanned(ctx context.Context, opts Options, command string) (RunRecor
 
 	switch {
 	case strings.HasPrefix(command, "bash scripts/run_checks.sh"):
-		stdout, stderr, code := runChecks(opts.DiffRaw)
-		rec.Stdout = truncate(stdout)
-		rec.Stderr = truncate(stderr)
-		rec.ExitCode = code
-		if code != 0 {
-			rec.Status = "failed"
-			rec.ErrorType = "check_failed"
-			return rec, fmt.Errorf("sandbox check failed with exit code %d", code)
+		if env != nil && env.ready {
+			runRec, err := runSkillChecksInWorkspace(ctx, opts, env, rec)
+			if err == nil {
+				return runRec, nil
+			}
 		}
-		return rec, nil
+		return runSkillChecksDirect(opts, rec)
 	case strings.HasPrefix(command, "go vet"):
-		return runGoVet(ctx, opts, rec)
+		if env != nil && env.ready && opts.Runtime == RuntimeLocal {
+			runRec, err := runGoVetInWorkspace(ctx, opts, env, rec)
+			if err == nil {
+				return runRec, nil
+			}
+		}
+		return runGoVetDirect(ctx, opts, rec)
 	default:
 		rec.Status = "failed"
 		rec.ErrorType = "unsupported_command"
@@ -220,7 +233,76 @@ func executePlanned(ctx context.Context, opts Options, command string) (RunRecor
 	}
 }
 
-func runGoVet(ctx context.Context, opts Options, rec RunRecord) (RunRecord, error) {
+func runSkillChecksInWorkspace(ctx context.Context, opts Options, env *runEnv, rec RunRecord) (RunRecord, error) {
+	script := filepath.ToSlash(filepath.Join("skills", skillName, "scripts", "run_checks.sh"))
+	result, err := env.exec.RunProgram(ctx, env.ws, codeexecutor.RunProgramSpec{
+		Cmd:      "bash",
+		Args:     []string{script, "work/inputs/changes.diff"},
+		Timeout:  opts.Timeout,
+		CleanEnv: true,
+		Env:      sandboxEnv(),
+	})
+	rec.Stdout = truncate(result.Stdout)
+	rec.Stderr = truncate(result.Stderr)
+	rec.ExitCode = result.ExitCode
+	if result.TimedOut {
+		rec.Status = "timeout"
+		rec.ErrorType = "timeout"
+		return rec, fmt.Errorf("sandbox timeout")
+	}
+	if err != nil || result.ExitCode != 0 {
+		rec.Status = "failed"
+		rec.ErrorType = "check_failed"
+		if err != nil {
+			return rec, err
+		}
+		return rec, fmt.Errorf("sandbox exit code %d", result.ExitCode)
+	}
+	return rec, nil
+}
+
+func runSkillChecksDirect(opts Options, rec RunRecord) (RunRecord, error) {
+	stdout, stderr, code := runChecks(opts.DiffRaw)
+	rec.Stdout = truncate(stdout)
+	rec.Stderr = truncate(stderr)
+	rec.ExitCode = code
+	if code != 0 {
+		rec.Status = "failed"
+		rec.ErrorType = "check_failed"
+		return rec, fmt.Errorf("sandbox check failed with exit code %d", code)
+	}
+	return rec, nil
+}
+
+func runGoVetInWorkspace(ctx context.Context, opts Options, env *runEnv, rec RunRecord) (RunRecord, error) {
+	result, err := env.exec.RunProgram(ctx, env.ws, codeexecutor.RunProgramSpec{
+		Cmd:      "go",
+		Args:     []string{"vet", "./..."},
+		Cwd:      "work/repo",
+		Timeout:  opts.Timeout,
+		CleanEnv: true,
+		Env:      sandboxEnv(),
+	})
+	rec.Stdout = truncate(result.Stdout)
+	rec.Stderr = truncate(result.Stderr)
+	rec.ExitCode = result.ExitCode
+	if result.TimedOut {
+		rec.Status = "timeout"
+		rec.ErrorType = "timeout"
+		return rec, fmt.Errorf("go vet timeout")
+	}
+	if err != nil || result.ExitCode != 0 {
+		rec.Status = "failed"
+		rec.ErrorType = "check_failed"
+		if err != nil {
+			return rec, err
+		}
+		return rec, fmt.Errorf("go vet exit code %d", result.ExitCode)
+	}
+	return rec, nil
+}
+
+func runGoVetDirect(ctx context.Context, opts Options, rec RunRecord) (RunRecord, error) {
 	repo := opts.RepoPath
 	if repo == "" {
 		rec.Status = "failed"
@@ -253,14 +335,7 @@ func runGoVet(ctx context.Context, opts Options, rec RunRecord) (RunRecord, erro
 	return rec, nil
 }
 
-// StageSkill copies the code-review skill tree into a workspace (for container runtime).
-// 複製skill到workspace
-func StageSkill(skillsRoot, wsPath string) error {
-	skillSrc := filepath.Join(skillsRoot, skillName)
-	return copyTree(skillSrc, filepath.Join(wsPath, "skills", skillName))
-}
-
-func stageWorkspace(ctx context.Context, exec *localexec.CodeExecutor, ws codeexecutor.Workspace, opts Options) error {
+func stageWorkspace(ctx context.Context, exec workspaceExecutor, ws codeexecutor.Workspace, opts Options) error {
 	if strings.TrimSpace(opts.DiffRaw) != "" {
 		if err := exec.PutFiles(ctx, ws, []codeexecutor.PutFile{
 			{Path: "work/inputs/changes.diff", Content: []byte(opts.DiffRaw), Mode: 0o644},
@@ -268,8 +343,13 @@ func stageWorkspace(ctx context.Context, exec *localexec.CodeExecutor, ws codeex
 			return err
 		}
 	}
-	if err := copyTree(filepath.Join(opts.SkillsRoot, skillName), filepath.Join(ws.Path, "skills", skillName)); err != nil {
-		return fmt.Errorf("stage skill: %w", err)
+	if opts.Runtime == RuntimeLocal {
+		skillSrc := filepath.Join(opts.SkillsRoot, skillName)
+		if stat, err := os.Stat(skillSrc); err == nil && stat.IsDir() {
+			if err := copyTree(skillSrc, filepath.Join(ws.Path, "skills", skillName)); err != nil {
+				return fmt.Errorf("stage skill: %w", err)
+			}
+		}
 	}
 	if opts.RepoPath != "" {
 		if err := copyTree(opts.RepoPath, filepath.Join(ws.Path, "work", "repo")); err != nil {
