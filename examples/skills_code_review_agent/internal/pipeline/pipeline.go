@@ -68,6 +68,9 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	if opts.SkipSandbox {
 		runtime = sandbox.RuntimeSkip
 	}
+	if err := sandbox.ValidateRuntime(runtime); err != nil {
+		return nil, err
+	}
 
 	raw := rules.Analyze(parsed)
 	if opts.FakeModel || !opts.DryRun {
@@ -91,13 +94,17 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 
 	var sandboxResult *sandbox.Result
 	if runtime != sandbox.RuntimeSkip {
-		sandboxResult, _ = sandbox.Run(ctx, sandbox.Options{
+		var err error
+		sandboxResult, err = sandbox.Run(ctx, sandbox.Options{
 			TaskID:     taskID,
 			DiffRaw:    parsed.Raw,
 			RepoPath:   opts.RepoPath,
 			SkillsRoot: opts.SkillsRoot,
 			Runtime:    runtime,
 		})
+		if err != nil {
+			return nil, fmt.Errorf("sandbox: %w", err)
+		}
 	}
 	if sandboxResult == nil {
 		sandboxResult = &sandbox.Result{Exceptions: map[string]int{}}

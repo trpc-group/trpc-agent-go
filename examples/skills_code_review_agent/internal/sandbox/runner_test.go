@@ -48,6 +48,17 @@ func TestRunChecksIgnoredError(t *testing.T) {
 	}
 }
 
+func TestRunInvalidRuntime(t *testing.T) {
+	_, err := Run(t.Context(), Options{
+		TaskID:  "task-1",
+		DiffRaw: "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -1 +1 @@\n+x\n",
+		Runtime: Runtime("bogus"),
+	})
+	if err == nil {
+		t.Fatal("expected error for invalid runtime")
+	}
+}
+
 func TestRunSandboxFailureDoesNotPanic(t *testing.T) {
 	result, err := Run(t.Context(), Options{
 		TaskID:  "task-1",

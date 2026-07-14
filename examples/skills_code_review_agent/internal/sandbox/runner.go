@@ -88,8 +88,21 @@ type Result struct {
 	Exceptions  map[string]int
 }
 
+// ValidateRuntime reports whether r is a supported sandbox runtime.
+func ValidateRuntime(r Runtime) error {
+	switch r {
+	case RuntimeLocal, RuntimeContainer, RuntimeE2B, RuntimeSkip:
+		return nil
+	default:
+		return fmt.Errorf("unsupported sandbox runtime: %q", r)
+	}
+}
+
 // Run executes permission checks and allowed sandbox commands.
 func Run(ctx context.Context, opts Options) (*Result, error) {
+	if err := ValidateRuntime(opts.Runtime); err != nil {
+		return nil, err
+	}
 	if opts.Runtime == RuntimeSkip {
 		return &Result{Exceptions: map[string]int{}}, nil
 	}

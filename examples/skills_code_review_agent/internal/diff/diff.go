@@ -176,10 +176,10 @@ func LoadFromRepo(repoPath string) (*Diff, error) {
 		return nil, fmt.Errorf("repo path is not a git repository: %w", err)
 	}
 	var buf bytes.Buffer
-	for _, args := range [][]string{ // 遍历diff命令
-		{"diff", "HEAD"},
+	for _, args := range [][]string{
+		{"diff"},
 		{"diff", "--cached"},
-	} { // 执行diff命令
+	} {
 		cmd := exec.Command("git", args...)
 		cmd.Dir = repoPath
 		out, err := cmd.Output() // 执行命令
