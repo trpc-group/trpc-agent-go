@@ -408,6 +408,18 @@ func TestContainerHostConfigDisablesNetworkEgress(t *testing.T) {
 	if cfg.Privileged {
 		t.Fatal("Privileged = true, want false")
 	}
+	if cfg.Resources.Memory != int64(512<<20) {
+		t.Fatalf("Memory = %d, want %d", cfg.Resources.Memory, int64(512<<20))
+	}
+	if cfg.Resources.NanoCPUs != containerCPULimit {
+		t.Fatalf("NanoCPUs = %d, want %d", cfg.Resources.NanoCPUs, containerCPULimit)
+	}
+	if cfg.Resources.PidsLimit == nil || *cfg.Resources.PidsLimit != containerPIDsLimit {
+		t.Fatalf("PidsLimit = %v, want %d", cfg.Resources.PidsLimit, containerPIDsLimit)
+	}
+	if got := cfg.StorageOpt["size"]; got != containerStorageLimit {
+		t.Fatalf("StorageOpt[size] = %q, want %q", got, containerStorageLimit)
+	}
 }
 
 func TestContainerConfigUsesGo124Image(t *testing.T) {
@@ -420,24 +432,21 @@ func TestContainerConfigUsesGo124Image(t *testing.T) {
 	}
 }
 
-func TestContainerBindMountsKeepHostPathsReadOnly(t *testing.T) {
+func TestContainerBindMountsDoNotExposeHostModuleCache(t *testing.T) {
 	t.Setenv("GOMODCACHE", "/host/go/pkg/mod")
 	t.Setenv("GOCACHE", "/host/go-build")
 
 	got := containerBindMounts("/repo")
 	want := []bindMount{
 		{HostPath: "/repo", ContainerPath: "/workspace", Mode: "ro"},
-		{HostPath: "/host/go/pkg/mod", ContainerPath: containerGoModCache, Mode: "ro"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("containerBindMounts() = %#v, want %#v", got, want)
 	}
-}
-
-func TestHostGoEnvPrefersEnvironment(t *testing.T) {
-	t.Setenv("GOMODCACHE", "/from/env")
-	if got := hostGoEnv("GOMODCACHE"); got != "/from/env" {
-		t.Fatalf("hostGoEnv() = %q, want /from/env", got)
+	for _, mount := range got {
+		if mount.ContainerPath == containerGoModCache {
+			t.Fatalf("containerBindMounts() exposed module cache: %#v", mount)
+		}
 	}
 }
 

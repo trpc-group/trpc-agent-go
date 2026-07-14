@@ -19,7 +19,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"path"
 	"path/filepath"
 	"sort"
@@ -47,6 +46,9 @@ const (
 	defaultSkillName        = "code-review"
 	defaultSandboxTimeout   = 30 * time.Second
 	failedTaskFinishTimeout = 3 * time.Second
+	containerCPULimit       = int64(1_000_000_000)
+	containerPIDsLimit      = int64(128)
+	containerStorageLimit   = "512m"
 	containerSandboxImage   = "golang:1.24"
 	containerGoBuildCache   = "/tmp/go-build"
 	containerGoModCache     = "/go/pkg/mod"
@@ -803,27 +805,26 @@ func containerConfig() tcontainer.Config {
 }
 
 func containerHostConfig() tcontainer.HostConfig {
+	pidsLimit := containerPIDsLimit
 	return tcontainer.HostConfig{
 		AutoRemove:  true,
 		Privileged:  false,
 		NetworkMode: "none",
+		Resources: tcontainer.Resources{
+			Memory:    int64(512 << 20),
+			NanoCPUs:  containerCPULimit,
+			PidsLimit: &pidsLimit,
+		},
+		StorageOpt: map[string]string{"size": containerStorageLimit},
 	}
 }
 
 func containerBindMounts(repoRoot string) []bindMount {
-	mounts := []bindMount{{
+	return []bindMount{{
 		HostPath:      repoRoot,
 		ContainerPath: "/workspace",
 		Mode:          "ro",
 	}}
-	if hostModCache := hostGoEnv("GOMODCACHE"); hostModCache != "" {
-		mounts = append(mounts, bindMount{
-			HostPath:      hostModCache,
-			ContainerPath: containerGoModCache,
-			Mode:          "ro",
-		})
-	}
-	return mounts
 }
 
 func workspaceRuntimeEnv(runtimeName string) map[string]string {
@@ -847,17 +848,6 @@ func workspaceRuntimeEnv(runtimeName string) map[string]string {
 		setDefaultEnv(env, "GOTOOLCHAIN", "local")
 	}
 	return env
-}
-
-func hostGoEnv(key string) string {
-	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
-		return value
-	}
-	output, err := exec.Command("go", "env", key).Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(output))
 }
 
 func setDefaultEnv(env map[string]string, key string, value string) {
