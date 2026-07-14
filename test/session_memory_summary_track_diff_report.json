@@ -1,0 +1,279 @@
+{
+  "report_id": "replay-v2",
+  "version": "v2",
+  "run_id": "20260714-140743-61196-LAPTOP-5F85UBKS",
+  "backends": [
+    "inmemory",
+    "sqlite"
+  ],
+  "cases": [
+    {
+      "name": "case01_single_turn",
+      "status": "pass",
+      "duration": "5.3714ms",
+      "sections_compared": 5,
+      "sections_skipped": 0,
+      "capabilities": {
+        "inmemory": {
+          "event_state_delta_null": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "events": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "memory": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "state": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "summary": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "track": {
+            "supported": true,
+            "allowed_diff": false
+          }
+        },
+        "sqlite": {
+          "event_state_delta_null": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "events": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "memory": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "state": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "summary": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "track": {
+            "supported": true,
+            "allowed_diff": false
+          }
+        }
+      },
+      "snapshot_fingerprint": "sha256:108ef740dac7f72247b078db7fee561f526d487b0887f2fa14c348a89ad50ff9",
+      "backend_metrics": [
+        {
+          "name": "inmemory",
+          "run_duration": 1000000,
+          "capture_duration": 2000000,
+          "snapshot_size": 256,
+          "event_count": 2
+        },
+        {
+          "name": "sqlite",
+          "run_duration": 2000000,
+          "capture_duration": 3000000,
+          "snapshot_size": 312,
+          "event_count": 2
+        }
+      ]
+    },
+    {
+      "name": "case04_state_update",
+      "status": "fail",
+      "diffs": [
+        {
+          "case": "case04_state_update",
+          "session_id": "",
+          "backend_a": "inmemory",
+          "backend_b": "sqlite",
+          "section": "state",
+          "path": "$.state.k1",
+          "value_a": "v1-new",
+          "value_b": "v1",
+          "baseline_present": true,
+          "compared_present": true,
+          "severity": "major",
+          "explanation": "unexpected backend mismatch"
+        }
+      ],
+      "duration": "",
+      "sections_compared": 5,
+      "sections_skipped": 0,
+      "backend_metrics": [
+        {
+          "name": "inmemory",
+          "run_duration": 3000000,
+          "capture_duration": 1000000,
+          "snapshot_size": 128,
+          "event_count": 0
+        },
+        {
+          "name": "sqlite",
+          "run_duration": 5000000,
+          "capture_duration": 2000000,
+          "snapshot_size": 156,
+          "event_count": 0
+        }
+      ]
+    },
+    {
+      "name": "case06_summary",
+      "status": "fail",
+      "diffs": [
+        {
+          "case": "case06_summary",
+          "session_id": "report-case06",
+          "backend_a": "inmemory",
+          "backend_b": "sqlite",
+          "section": "summaries",
+          "path": "$.summaries[\"\"].text",
+          "value_a": "summary-of-10-events",
+          "value_b": "summary-of-10-evnts",
+          "baseline_present": true,
+          "compared_present": true,
+          "allowed": true,
+          "severity": "minor",
+          "explanation": "summary text differs due to truncation",
+          "summary_filter_key": ""
+        }
+      ],
+      "duration": "",
+      "sections_compared": 5,
+      "sections_skipped": 0,
+      "backend_metrics": [
+        {
+          "name": "inmemory",
+          "run_duration": 4000000,
+          "capture_duration": 2000000,
+          "snapshot_size": 480,
+          "event_count": 10
+        },
+        {
+          "name": "sqlite",
+          "run_duration": 6000000,
+          "capture_duration": 3000000,
+          "snapshot_size": 512,
+          "event_count": 10
+        }
+      ]
+    },
+    {
+      "name": "case08_track_events",
+      "status": "fail",
+      "diffs": [
+        {
+          "case": "case08_track_events",
+          "session_id": "",
+          "backend_a": "inmemory",
+          "backend_b": "sqlite",
+          "section": "tracks",
+          "path": "$.tracks[\"agent-run\"][1].payload.status",
+          "value_a": "ok",
+          "value_b": {
+            "__missing": true
+          },
+          "baseline_present": true,
+          "compared_present": false,
+          "severity": "critical",
+          "explanation": "unexpected backend mismatch",
+          "track_name": "agent-run"
+        }
+      ],
+      "duration": "",
+      "sections_compared": 0,
+      "sections_skipped": 0,
+      "backend_metrics": [
+        {
+          "name": "inmemory",
+          "run_duration": 2000000,
+          "capture_duration": 1000000,
+          "snapshot_size": 200,
+          "event_count": 0
+        },
+        {
+          "name": "sqlite",
+          "run_duration": 3000000,
+          "capture_duration": 2000000,
+          "snapshot_size": 220,
+          "event_count": 0
+        }
+      ]
+    },
+    {
+      "name": "case11_state_delta_null",
+      "status": "fail",
+      "diffs": [
+        {
+          "case": "case11_state_delta_null",
+          "session_id": "",
+          "backend_a": "inmemory",
+          "backend_b": "sqlite",
+          "section": "events",
+          "path": "$.events[1].stateDelta.k2",
+          "value_a": {
+            "__missing": true
+          },
+          "value_b": null,
+          "baseline_present": false,
+          "compared_present": true,
+          "severity": "critical",
+          "explanation": "unexpected backend mismatch",
+          "event_index": 1
+        }
+      ],
+      "duration": "",
+      "sections_compared": 5,
+      "sections_skipped": 0,
+      "backend_metrics": [
+        {
+          "name": "inmemory",
+          "run_duration": 1000000,
+          "capture_duration": 1000000,
+          "snapshot_size": 180,
+          "event_count": 2
+        },
+        {
+          "name": "sqlite",
+          "run_duration": 2000000,
+          "capture_duration": 2000000,
+          "snapshot_size": 200,
+          "event_count": 2
+        }
+      ]
+    },
+    {
+      "name": "case12_inconclusive",
+      "status": "inconclusive",
+      "duration": "",
+      "sections_compared": 0,
+      "sections_skipped": 0,
+      "skipped_backends": {
+        "sqlite": [
+          "summary",
+          "track"
+        ]
+      }
+    }
+  ],
+  "summary": {
+    "total_cases": 6,
+    "passed_cases": 1,
+    "failed_cases": 4,
+    "skipped_cases": 0,
+    "inconclusive_cases": 1,
+    "total_diffs": 4,
+    "allowed_diffs": 1,
+    "critical_diffs": 2,
+    "major_diffs": 1,
+    "minor_diffs": 1
+  }
+}
+// sha256:f309b1a9010e215835cb5aeb37348df3d01e39f3a9f6cf401a6f17bda249cf0d
