@@ -66,5 +66,4 @@ If Runner only needs to restore prior turns while the process remains alive, use
 
 ## Related Examples
 
-- [Noop Session example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/session/simple)
-- [RunWithMessages example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/runwithmessages)
+- [Noop + RunWithMessages example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/runwithmessages)

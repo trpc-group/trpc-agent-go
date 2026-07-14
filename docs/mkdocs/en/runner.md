@@ -721,8 +721,8 @@ msgs := []model.Message{
 ch, err := runner.RunWithMessages(ctx, r, userID, sessionID, msgs, agent.WithRequestID("request-ID"))
 ```
 
-Example: `examples/runwithmessages` (uses `RunWithMessages`; runner auto-seeds and
-continues reusing the session)
+Example: `examples/runwithmessages` (uses `session/noop` and passes the
+caller-owned complete history to `RunWithMessages` on every request)
 
 Option B: Pass via RunOption explicitly (same philosophy as ADK Python)
 

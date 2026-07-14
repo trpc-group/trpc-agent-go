@@ -66,5 +66,4 @@ Noop 只控制 Session Service。它不会禁用独立配置的 Memory、Artifac
 
 ## 相关示例
 
-- [Noop Session 示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/session/simple)
-- [RunWithMessages 示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/runwithmessages)
+- [Noop + RunWithMessages 示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/runwithmessages)

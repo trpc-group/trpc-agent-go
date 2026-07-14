@@ -772,7 +772,6 @@ See [PGVector Session](pgvector.md) for configuration details, indexing behavior
 ## References
 
 - [Session Examples](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/runner)
-- [Noop Session Example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/session/simple)
-- [RunWithMessages Example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/runwithmessages)
+- [Noop + RunWithMessages Example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/runwithmessages)
 - [Summary Examples](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/summary)
 - [Hook Examples](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/session/hook)

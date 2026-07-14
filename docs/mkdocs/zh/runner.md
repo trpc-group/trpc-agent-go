@@ -694,7 +694,8 @@ msgs := []model.Message{
 ch, err := runner.RunWithMessages(ctx, r, userID, sessionID, msgs, agent.WithRequestID("request-ID"))
 ```
 
-示例：`examples/runwithmessages`（使用 `RunWithMessages`；Runner 会 auto-seed 并复用 Session）
+示例：`examples/runwithmessages`（使用 `session/noop`，并在每次请求中通过
+`RunWithMessages` 传入业务侧维护的完整历史）
 
 方式 B：通过 RunOption 显式传入（与 Python ADK 一致的理念）
 

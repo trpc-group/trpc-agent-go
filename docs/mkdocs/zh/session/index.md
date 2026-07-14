@@ -783,7 +783,6 @@ system prompt 中。
 ## 参考资源
 
 - [会话示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/runner)
-- [Noop Session 示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/session/simple)
-- [RunWithMessages 示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/runwithmessages)
+- [Noop + RunWithMessages 示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/runwithmessages)
 - [摘要示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/summary)
 - [Hook 示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/session/hook)
