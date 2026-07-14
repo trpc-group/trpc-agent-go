@@ -10,6 +10,7 @@ package replaytest
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
@@ -44,16 +45,20 @@ func SaveGoldenTrace(dir string, trace *GoldenTrace) error {
 	return os.Rename(tmpPath, path)
 }
 
-// LoadGoldenTrace loads a golden trace from disk. Returns (nil, false) if not found.
-func LoadGoldenTrace(dir, caseName string) (*GoldenTrace, bool) {
+// LoadGoldenTrace loads a golden trace from disk. Returns (nil, false, nil) if not found.
+// Returns a non-nil error if the file exists but contains corrupted JSON.
+func LoadGoldenTrace(dir, caseName string) (*GoldenTrace, bool, error) {
 	path := GoldenTracePath(dir, caseName)
 	b, err := os.ReadFile(path)
 	if err != nil {
-		return nil, false
+		if os.IsNotExist(err) {
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("read golden trace: %w", err)
 	}
 	var gt GoldenTrace
 	if err := json.Unmarshal(b, &gt); err != nil {
-		return nil, false
+		return nil, false, fmt.Errorf("parse golden trace %s: %w", caseName, err)
 	}
-	return &gt, true
+	return &gt, true, nil
 }

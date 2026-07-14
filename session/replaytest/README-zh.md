@@ -63,7 +63,7 @@ $env:CGO_ENABLED="1"; go test ./session/replaytest/ -v
 InMemory vs InMemory（无需 CGO）：
 
 ```bash
-$env:REPLAY_BACKEND="inmemory"; go test ./session/replaytest/ -v -run TestReplay_All
+go test ./session/replaytest/ -v -run TestReplay_Smoke_InMemorySelfVerify
 ```
 
 ### 运行单个用例
@@ -181,7 +181,7 @@ CGO_ENABLED=1 go test ./session/replaytest/ -v -run TestReplay_All
 | Diff 类型 | Case | 路径 | 基准值 (value_a) | 对比值 (value_b) | allowed | 严重级别 | 解释 |
 |-----------|------|------|------------------|------------------|---------|----------|------|
 | 状态覆盖丢失 | case04 | `$.state.k1` | `"v1-new"` | `"v1"` | false | major | 状态覆盖未生效 |
-| 摘要文本截断 | case06 | `$.summaries[""].text` | `"summary-of-10-events"` | `"summary-of-10-evnts"` | true | minor | 摘要文本因截断差异 |
+| 摘要文本截断 | case06 | `$.summaries[""].text` | `"summary-of-10-events"` | `"summary-of-10-events-truncated"` | true | minor | 摘要文本因截断差异 |
 | Track 字段缺失 | case08 | `$.tracks["agent-run"][1].payload.status` | `"ok"` | `{"__missing":true}` | false | critical | Track payload 字段在后端中缺失 |
 | StateDelta 语义差异 | case11 | `$.events[1].stateDelta.k2` | `{"__missing":true}` | `null` | false | critical | MissingValue（字段缺失）vs nil（显式 null）|
 | 后端能力不足 | case12 | — | — | — | — | — | SQLite 不支持 summary/track |
@@ -220,7 +220,7 @@ CGO_ENABLED=1 go test ./session/replaytest/ -v -run TestReplay_All
 | 正常 case 误报率 ≤ 5% | ✅ | 15/15 正常 case 零 diff，误报率 0% |
 | summary 丢失/覆盖错误/归属 session 错误检出率 100%，Go 还需覆盖 filter-key 错误 | ✅ | `TestReplay_SummaryFaultsDetected` 验证 summary_lost、summary_text_wrong、summary_filter_key_wrong、summary_boundary_mismatch 四类全部检出 |
 | 差异报告能定位 session id/event index/summary id/filter-key/字段路径/两个后端的值；Go 还需支持 track name/memory id | ✅ | Diff 结构包含 Case/SessionID/EventIndex/MemoryID/TrackName/SummaryKey/Path/ValueA/ValueB |
-| 轻量[knowledge](knowledge)模式完整运行耗时 ≤ 30 秒 | ✅ | `real 8.09s`（含 race detector），远低于 30 秒阈值 |
+| 轻量模式完整运行耗时 ≤ 30 秒 | ✅ | `real 8.09s`（含 race detector），远低于 30 秒阈值 |
 
 ## BackendFactory 接口
 

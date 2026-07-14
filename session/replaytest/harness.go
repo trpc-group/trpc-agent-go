@@ -224,11 +224,16 @@ func (h Harness) Run(ctx context.Context, replayCase Case) (CaseResult, error) {
 		}
 	} else {
 		// Concurrent capture for 3+ backends.
-		snapResults := make([]capturedSnapshot, len(h.Backends))
+		type backendCapture struct {
+			snap  capturedSnapshot
+			local CaseResult
+		}
+		snapResults := make([]backendCapture, len(h.Backends))
 		g, gCtx := errgroup.WithContext(ctx)
 		for i, backend := range h.Backends {
 			i, backend := i, backend
 			g.Go(func() error {
+				local := result // copy
 				// Check capability support under the group context.
 				unsupported := unsupportedRequiredCapabilities(replayCase, backend)
 				if len(unsupported) > 0 {
@@ -236,15 +241,17 @@ func (h Harness) Run(ctx context.Context, replayCase Case) (CaseResult, error) {
 						return &ReplayError{Kind: ErrCaseValidation, Backend: backend.Name, Case: replayCase.Name,
 							Cause: fmt.Errorf("baseline backend %q does not support required capabilities %v", backend.Name, unsupported)}
 					}
-					result.SkippedBackends[backend.Name] = unsupported
+					local.SkippedBackends[backend.Name] = unsupported
+					snapResults[i].local = local
 					return nil
 				}
-				snap, err := h.captureOnBackend(gCtx, replayCase, backend, normalizer, retry, timeout, maxSnapSize, i, &result)
+				snap, err := h.captureOnBackend(gCtx, replayCase, backend, normalizer, retry, timeout, maxSnapSize, i, &local)
 				if err != nil {
 					return err
 				}
+				snapResults[i].local = local
 				if snap != nil {
-					snapResults[i] = *snap
+					snapResults[i].snap = *snap
 				}
 				return nil
 			})
@@ -252,11 +259,42 @@ func (h Harness) Run(ctx context.Context, replayCase Case) (CaseResult, error) {
 		if err := g.Wait(); err != nil {
 			return result, err
 		}
-		for _, snap := range snapResults {
-			if snap.backendName != "" {
-				snapshots = append(snapshots, snap)
+		// Merge per-backend local results into shared result.
+		for _, bc := range snapResults {
+			for k, v := range bc.local.SkippedBackends {
+				result.SkippedBackends[k] = v
+			}
+			if bc.local.Capabilities != nil {
+				if result.Capabilities == nil {
+					result.Capabilities = make(map[string]map[string]CapabilityDesc)
+				}
+				for k, v := range bc.local.Capabilities {
+					result.Capabilities[k] = v
+				}
+			}
+			if bc.local.PanicRecovered != nil {
+				result.PanicRecovered = bc.local.PanicRecovered
+				result.PanicStack = bc.local.PanicStack
+			}
+			if bc.local.Status == StatusSkip {
+				result.Status = StatusSkip
+				result.SkipReason = bc.local.SkipReason
+			}
+			for _, m := range bc.local.BackendMetrics {
+				result.BackendMetrics = append(result.BackendMetrics, m)
+			}
+			if bc.snap.backendName != "" {
+				snapshots = append(snapshots, bc.snap)
 			}
 		}
+	}
+
+	// If the context was cancelled during capture, preserve StatusSkip.
+	if ctx.Err() != nil {
+		result.Status = StatusSkip
+		result.SkipReason = ctx.Err().Error()
+		result.Duration = time.Since(start).String()
+		return result, nil
 	}
 
 	if len(snapshots) < 2 {
@@ -360,7 +398,10 @@ func (h Harness) Run(ctx context.Context, replayCase Case) (CaseResult, error) {
 
 	// Golden trace regression check.
 	if h.GoldenDir != "" && !h.UpdateGolden {
-		golden, found := LoadGoldenTrace(h.GoldenDir, replayCase.Name)
+		golden, found, err := LoadGoldenTrace(h.GoldenDir, replayCase.Name)
+		if err != nil {
+			h.logf("replay: %v", err)
+		}
 		if found && len(golden.Snapshots) > 0 {
 			goldenDiffs, err := Compare(replayCase.Name, "golden", snapshots[0].backendName,
 				golden.Snapshots[0], snapshots[0].snapshot, h.Allowed)
@@ -540,6 +581,26 @@ func (h Harness) captureOnBackend(
 	}, nil
 }
 
+// backendsForCase creates a copy of each backend with a unique SessKey derived
+// from the case name, preventing cross-case session key pollution when running
+// cases in parallel.
+func (h Harness) backendsForCase(c Case) []Backend {
+	backends := make([]Backend, len(h.Backends))
+	for i, b := range h.Backends {
+		backends[i] = b
+		if b.SessKey != nil {
+			origKey := b.SessKey()
+			caseKey := session.Key{
+				AppName:   origKey.AppName,
+				UserID:    origKey.UserID,
+				SessionID: origKey.SessionID + "-" + c.Name,
+			}
+			backends[i].SessKey = func() session.Key { return caseKey }
+		}
+	}
+	return backends
+}
+
 // RunSuite runs multiple cases with checkpoint/resume support, circuit breaker,
 // and optional parallel execution. Completed case names and results are persisted
 // in checkpointDir; on resume, those cases are skipped and their results loaded.
@@ -548,6 +609,15 @@ func (h Harness) RunSuite(ctx context.Context, cases []Case, checkpointDir strin
 		if err := os.MkdirAll(checkpointDir, 0o755); err != nil {
 			return nil, fmt.Errorf("create checkpoint directory: %w", err)
 		}
+	}
+
+	// Check for duplicate case names.
+	caseNames := make(map[string]bool, len(cases))
+	for _, c := range cases {
+		if caseNames[c.Name] {
+			return nil, fmt.Errorf("duplicate case name: %q", c.Name)
+		}
+		caseNames[c.Name] = true
 	}
 
 	suiteStart := time.Now()
@@ -610,6 +680,9 @@ func (h Harness) RunSuite(ctx context.Context, cases []Case, checkpointDir strin
 		}
 	} else {
 		// Parallel execution with worker pool.
+		suiteCtx, suiteCancel := context.WithCancel(ctx)
+		defer suiteCancel()
+
 		type indexedResult struct {
 			index  int
 			result CaseResult
@@ -647,7 +720,25 @@ func (h Harness) RunSuite(ctx context.Context, cases []Case, checkpointDir strin
 				defer wg.Done()
 				for idx := range caseCh {
 					c := runnableCases[idx]
-					result, err := h.Run(ctx, c)
+					// Use isolated backends instances per case to prevent
+					// cross-case session key pollution in parallel execution.
+					caseHarness := Harness{
+						Backends:                  h.backendsForCase(c),
+						Normalizer:                h.Normalizer,
+						Allowed:                   c.AllowedDiffs,
+						Logf:                      h.Logf,
+						Timeout:                   h.Timeout,
+						Retry:                     h.Retry,
+						MaxSnapshotSize:           h.MaxSnapshotSize,
+						SnapshotDir:               h.SnapshotDir,
+						GoldenDir:                 h.GoldenDir,
+						UpdateGolden:              h.UpdateGolden,
+						CircuitBreakerMaxFailures: h.CircuitBreakerMaxFailures,
+						MaxMemoryUsagePct:         h.MaxMemoryUsagePct,
+						Parallelism:               1,
+						ProgressFunc:              h.ProgressFunc,
+					}
+					result, err := caseHarness.Run(suiteCtx, c)
 					resultCh <- indexedResult{index: idx, result: result, err: err}
 				}
 			}()
@@ -667,6 +758,8 @@ func (h Harness) RunSuite(ctx context.Context, cases []Case, checkpointDir strin
 			if ir.err != nil {
 				h.recordCBFailure(cb, ir.err)
 				// Cancel remaining work on first error.
+				suiteCancel()
+				wg.Wait()
 				return nil, fmt.Errorf("run case %q: %w", runnableCases[ir.index].Name, ir.err)
 			}
 			h.recordCBSuccess(cb, ir.result)
@@ -761,6 +854,8 @@ func (h Harness) saveCheckpointAndProgress(checkpointDir, caseName string, resul
 }
 
 // executeRunWithProtection runs a Case.Run function with panic recovery and timeout.
+// The goroutine communicates its outcome via a buffered channel so that on timeout
+// the function can return without the goroutine racing to write to the shared result.
 func (h Harness) executeRunWithProtection(
 	ctx context.Context,
 	replayCase Case,
@@ -771,24 +866,36 @@ func (h Harness) executeRunWithProtection(
 	caseCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	done := make(chan error, 1)
+	type runOutcome struct {
+		err            error
+		panicRecovered any
+		panicStack     string
+	}
+	outcomeCh := make(chan runOutcome, 1)
+
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				result.PanicRecovered = r
-				result.PanicStack = string(debug.Stack())
-				done <- nil
+				outcomeCh <- runOutcome{panicRecovered: r, panicStack: string(debug.Stack())}
 			}
 		}()
-		done <- replayCase.Run(caseCtx, backend)
+		outcomeCh <- runOutcome{err: replayCase.Run(caseCtx, backend)}
 	}()
 
 	select {
-	case err := <-done:
-		if err != nil {
-			return fmt.Errorf("run on %s: %w", backend.Name, err)
+	case outcome := <-outcomeCh:
+		if outcome.panicRecovered != nil {
+			result.PanicRecovered = outcome.panicRecovered
+			result.PanicStack = outcome.panicStack
+			return nil
+		}
+		if outcome.err != nil {
+			return fmt.Errorf("run on %s: %w", backend.Name, outcome.err)
 		}
 	case <-caseCtx.Done():
+		// Context cancelled or timed out. The goroutine may still be running,
+		// but it writes to the buffered outcomeCh so there is no data race
+		// on the shared result after we return.
 		if caseCtx.Err() == context.DeadlineExceeded {
 			return fmt.Errorf("run on %s: timed out after %s", backend.Name, timeout)
 		}
@@ -1195,10 +1302,11 @@ func ReadReportWithVerify(path string) (*Report, error) {
 func GenerateReport(results []CaseResult, backends []string) *Report {
 	now := time.Now()
 	hostname, _ := os.Hostname()
+	runID := fmt.Sprintf("%s-%d-%s", now.Format("20060102-150405"), os.Getpid(), hostname)
 	report := &Report{
-		ReportID:    fmt.Sprintf("replay-%s", "v2"),
+		ReportID:    runID,
 		Version:     "v2",
-		RunID:       fmt.Sprintf("%s-%d-%s", now.Format("20060102-150405"), os.Getpid(), hostname),
+		RunID:       runID,
 		GeneratedAt: &now,
 		Backends:    backends,
 		Cases:       results,
@@ -1243,8 +1351,13 @@ func validateCase(replayCase Case) error {
 	if strings.TrimSpace(replayCase.Name) == "" {
 		return fmt.Errorf("replay case requires a name")
 	}
-	if replayCase.Run == nil && len(replayCase.Ops) == 0 && len(replayCase.ParallelGroups) == 0 {
-		return fmt.Errorf("replay case %q requires Run function, Ops, or ParallelGroups", replayCase.Name)
+	if replayCase.Run == nil {
+		// Ops and ParallelGroups are reserved for future declarative execution.
+		// Currently only Run is supported; reject cases that rely on Ops alone.
+		if len(replayCase.Ops) > 0 || len(replayCase.ParallelGroups) > 0 {
+			return fmt.Errorf("replay case %q uses Ops/ParallelGroups without Run; declarative execution is not yet implemented, use Run instead", replayCase.Name)
+		}
+		return fmt.Errorf("replay case %q requires a Run function", replayCase.Name)
 	}
 	seen := make(map[string]struct{}, len(replayCase.RequiredCaps))
 	for _, cap := range replayCase.RequiredCaps {

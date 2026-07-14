@@ -104,13 +104,13 @@ func (n *Normalizer) Normalize(
 	unsupported := caps.UnsupportedList()
 
 	return Snapshot{
-		Events:    events,
-		State:     state,
-		AppState:  appState,
-		UserState: userState,
-		Memories:  memSnap,
-		Summaries: sumSnap,
-		Tracks:    trackSnap,
+		Events:      events,
+		State:       state,
+		AppState:    appState,
+		UserState:   userState,
+		Memories:    memSnap,
+		Summaries:   sumSnap,
+		Tracks:      trackSnap,
 		Unsupported: unsupported,
 	}, nil
 }
@@ -119,6 +119,11 @@ func (n *Normalizer) normalizeEvents(
 	events []event.Event,
 	aliases *IDAliasMap,
 ) ([]map[string]any, error) {
+	volatileSet := make(map[string]struct{}, len(n.config.VolatilePayloadKeys))
+	for _, key := range n.config.VolatilePayloadKeys {
+		volatileSet[key] = struct{}{}
+	}
+
 	result := make([]map[string]any, 0, len(events))
 
 	for i := range events {
@@ -161,7 +166,7 @@ func (n *Normalizer) normalizeEvents(
 		if events[i].Extensions != nil {
 			extensions := make(map[string]any, len(events[i].Extensions))
 			for key, raw := range events[i].Extensions {
-				decoded := decodeBytes(raw)
+				decoded := decodeBytesWithOmit(raw, volatileSet)
 				if key == event.ToolCallArgsExtensionKey {
 					decoded = aliasMapKeys(decoded, aliases, "tool-call")
 				}
@@ -179,7 +184,7 @@ func (n *Normalizer) normalizeEvents(
 		// Recursively alias known identifiers in nested structures.
 		normalizeKnownIdentifiers(value, aliases)
 
-		result = append(result, normalizeJSONMap(value, nil))
+		result = append(result, normalizeJSONMap(value, volatileSet))
 	}
 	return result, nil
 }
@@ -342,6 +347,15 @@ func (n *Normalizer) normalizeTracks(
 			result[string(name)] = nil
 			continue
 		}
+		// Sort track events by timestamp for deterministic ordering
+		// across backends that may return events in different orders (ASC vs DESC).
+		// Using timestamp instead of content-based sorting prevents cascading
+		// misalignment when events have genuine content differences between backends:
+		// a content-based sort would place differing events at different indices,
+		// causing walkDiff's index comparison to report multiple false-positive diffs.
+		sort.SliceStable(history.Events, func(i, j int) bool {
+			return history.Events[i].Timestamp.Before(history.Events[j].Timestamp)
+		})
 		events := make([]TrackSnapshot, 0, len(history.Events))
 		for _, trackEvent := range history.Events {
 			var payload any
@@ -355,13 +369,6 @@ func (n *Normalizer) normalizeTracks(
 				Payload: payload,
 			})
 		}
-		// Sort track events by JSON representation for deterministic ordering
-		// across backends that may return events in different orders (ASC vs DESC).
-		sort.Slice(events, func(i, j int) bool {
-			pi, _ := json.Marshal(events[i])
-			pj, _ := json.Marshal(events[j])
-			return string(pi) < string(pj)
-		})
 		result[string(name)] = events
 	}
 	return result
@@ -500,6 +507,19 @@ func decodeBytes(raw []byte) any {
 	var value any
 	if decodeJSON(raw, &value) == nil {
 		return normalizeJSON(value, nil)
+	}
+	return string(raw)
+}
+
+// decodeBytesWithOmit is like decodeBytes but passes the omit set to normalizeJSON
+// so that volatile payload keys are stripped from the decoded value.
+func decodeBytesWithOmit(raw []byte, omit map[string]struct{}) any {
+	if raw == nil {
+		return nil
+	}
+	var value any
+	if decodeJSON(raw, &value) == nil {
+		return normalizeJSON(value, omit)
 	}
 	return string(raw)
 }

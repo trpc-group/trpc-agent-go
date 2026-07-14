@@ -82,121 +82,61 @@ func userKey() memory.UserKey {
 	return memory.UserKey{AppName: "replay-test", UserID: "user"}
 }
 
-func newUserEvent(content string) *event.Event {
-	return event.New("inv-001", "user",
+// newResponseEvent creates an event with a model.Response payload.
+// This is the shared boilerplate for all response-based event constructors.
+func newResponseEvent(author string, msg model.Message) *event.Event {
+	return event.New("inv-001", author,
 		event.WithResponse(&model.Response{
-			Object: model.ObjectTypeChatCompletion,
-			Choices: []model.Choice{{
-				Index: 0,
-				Message: model.Message{
-					Role:    model.RoleUser,
-					Content: content,
-				},
-			}},
+			Object:  model.ObjectTypeChatCompletion,
+			Choices: []model.Choice{{Index: 0, Message: msg}},
 		}),
 	)
+}
+
+func newUserEvent(content string) *event.Event {
+	return newResponseEvent("user", model.Message{Role: model.RoleUser, Content: content})
 }
 
 func newAssistantEvent(content string) *event.Event {
-	return event.New("inv-001", "assistant",
-		event.WithResponse(&model.Response{
-			Object: model.ObjectTypeChatCompletion,
-			Choices: []model.Choice{{
-				Index: 0,
-				Message: model.Message{
-					Role:    model.RoleAssistant,
-					Content: content,
-				},
-			}},
-		}),
-	)
+	return newResponseEvent("assistant", model.Message{Role: model.RoleAssistant, Content: content})
 }
 
 func newAssistantEventWithExtensions(content string, extensions map[string]json.RawMessage) *event.Event {
-	e := event.New("inv-001", "assistant",
-		event.WithResponse(&model.Response{
-			Object: model.ObjectTypeChatCompletion,
-			Choices: []model.Choice{{
-				Index: 0,
-				Message: model.Message{
-					Role:    model.RoleAssistant,
-					Content: content,
-				},
-			}},
-		}),
-	)
+	e := newResponseEvent("assistant", model.Message{Role: model.RoleAssistant, Content: content})
 	e.Extensions = extensions
 	return e
 }
 
 func newAssistantEventWithStateDelta(content string, delta map[string][]byte) *event.Event {
-	e := event.New("inv-001", "assistant",
-		event.WithResponse(&model.Response{
-			Object: model.ObjectTypeChatCompletion,
-			Choices: []model.Choice{{
-				Index: 0,
-				Message: model.Message{
-					Role:    model.RoleAssistant,
-					Content: content,
-				},
-			}},
-		}),
-	)
+	e := newResponseEvent("assistant", model.Message{Role: model.RoleAssistant, Content: content})
 	e.StateDelta = delta
 	return e
 }
 
 func newToolCallEvent(toolName, argsJSON, toolCallID string) *event.Event {
-	return event.New("inv-001", "assistant",
-		event.WithResponse(&model.Response{
-			Object: model.ObjectTypeChatCompletion,
-			Choices: []model.Choice{{
-				Index: 0,
-				Message: model.Message{
-					Role: model.RoleAssistant,
-					ToolCalls: []model.ToolCall{{
-						ID:   toolCallID,
-						Type: "function",
-						Function: model.FunctionDefinitionParam{
-							Name:      toolName,
-							Arguments: []byte(argsJSON),
-						},
-					}},
-				},
-			}},
-		}),
-	)
+	return newResponseEvent("assistant", model.Message{
+		Role: model.RoleAssistant,
+		ToolCalls: []model.ToolCall{{
+			ID:   toolCallID,
+			Type: "function",
+			Function: model.FunctionDefinitionParam{
+				Name:      toolName,
+				Arguments: []byte(argsJSON),
+			},
+		}},
+	})
 }
 
 func newToolResponseEvent(toolCallID, toolName, resultJSON string) *event.Event {
-	return event.New("inv-001", "tool",
-		event.WithResponse(&model.Response{
-			Object: model.ObjectTypeChatCompletion,
-			Choices: []model.Choice{{
-				Index: 0,
-				Message: model.Message{
-					Role:    model.RoleTool,
-					Content: resultJSON,
-					ToolID:  toolCallID,
-				},
-			}},
-		}),
-	)
+	return newResponseEvent("tool", model.Message{
+		Role:    model.RoleTool,
+		Content: resultJSON,
+		ToolID:  toolCallID,
+	})
 }
 
 func newEventWithBranchTagFilterKey(author, branch, tag, filterKey, content string) *event.Event {
-	e := event.New("inv-001", author,
-		event.WithResponse(&model.Response{
-			Object: model.ObjectTypeChatCompletion,
-			Choices: []model.Choice{{
-				Index: 0,
-				Message: model.Message{
-					Role:    model.Role(author),
-					Content: content,
-				},
-			}},
-		}),
-	)
+	e := newResponseEvent(author, model.Message{Role: model.Role(author), Content: content})
 	e.Branch = branch
 	e.Tag = tag
 	e.FilterKey = filterKey

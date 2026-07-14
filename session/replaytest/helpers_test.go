@@ -54,7 +54,7 @@ func injectDrift(snap *Snapshot, section string, mutate func(any) any) {
 		}
 	case "memories":
 		if len(snap.Memories) > 0 {
-			snap.Memories[0].Content = fmt.Sprintf("%s-drifted", snap.Memories[0].Content)
+			snap.Memories[0].Content = fmt.Sprintf("%v", mutate(snap.Memories[0].Content))
 		}
 	case "summaries":
 		for k, s := range snap.Summaries {

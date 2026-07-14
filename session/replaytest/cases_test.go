@@ -1,3 +1,11 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
 //go:build cgo
 
 package replaytest
@@ -6,7 +14,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -44,11 +51,17 @@ func case01SingleTurn() Case {
 		RequiredCaps: []string{CapEvents},
 		Run: func(ctx context.Context, backend Backend) error {
 			key := backend.SessKey()
-			backend.Sess.CreateSession(ctx, key, nil)
-			sess, _ := backend.Sess.GetSession(ctx, key)
-			backend.Sess.AppendEvent(ctx, sess, newUserEvent("Hello, world!"))
-			backend.Sess.AppendEvent(ctx, sess, newAssistantEvent("Hi there!"))
-			return nil
+			if _, err := backend.Sess.CreateSession(ctx, key, nil); err != nil {
+				return err
+			}
+			sess, err := backend.Sess.GetSession(ctx, key)
+			if err != nil {
+				return err
+			}
+			if err := backend.Sess.AppendEvent(ctx, sess, newUserEvent("Hello, world!")); err != nil {
+				return err
+			}
+			return backend.Sess.AppendEvent(ctx, sess, newAssistantEvent("Hi there!"))
 		},
 	}
 }
@@ -59,11 +72,20 @@ func case02MultiTurn() Case {
 		RequiredCaps: []string{CapEvents},
 		Run: func(ctx context.Context, backend Backend) error {
 			key := backend.SessKey()
-			backend.Sess.CreateSession(ctx, key, nil)
-			sess, _ := backend.Sess.GetSession(ctx, key)
+			if _, err := backend.Sess.CreateSession(ctx, key, nil); err != nil {
+				return err
+			}
+			sess, err := backend.Sess.GetSession(ctx, key)
+			if err != nil {
+				return err
+			}
 			for i := 0; i < 5; i++ {
-				backend.Sess.AppendEvent(ctx, sess, newUserEvent(fmt.Sprintf("Q%d", i+1)))
-				backend.Sess.AppendEvent(ctx, sess, newAssistantEvent(fmt.Sprintf("A%d", i+1)))
+				if err := backend.Sess.AppendEvent(ctx, sess, newUserEvent(fmt.Sprintf("Q%d", i+1))); err != nil {
+					return err
+				}
+				if err := backend.Sess.AppendEvent(ctx, sess, newAssistantEvent(fmt.Sprintf("A%d", i+1))); err != nil {
+					return err
+				}
 			}
 			return nil
 		},
@@ -76,13 +98,23 @@ func case03ToolCallCrossRef() Case {
 		RequiredCaps: []string{CapEvents},
 		Run: func(ctx context.Context, backend Backend) error {
 			key := backend.SessKey()
-			backend.Sess.CreateSession(ctx, key, nil)
-			sess, _ := backend.Sess.GetSession(ctx, key)
-			backend.Sess.AppendEvent(ctx, sess, newUserEvent("What's the weather?"))
-			backend.Sess.AppendEvent(ctx, sess, newToolCallEvent("get_weather", `{"city":"Beijing"}`, "tc-001"))
-			backend.Sess.AppendEvent(ctx, sess, newToolResponseEvent("tc-001", "get_weather", `{"temp":25}`))
-			backend.Sess.AppendEvent(ctx, sess, newAssistantEvent("It's 25\u00b0C."))
-			return nil
+			if _, err := backend.Sess.CreateSession(ctx, key, nil); err != nil {
+				return err
+			}
+			sess, err := backend.Sess.GetSession(ctx, key)
+			if err != nil {
+				return err
+			}
+			if err := backend.Sess.AppendEvent(ctx, sess, newUserEvent("What's the weather?")); err != nil {
+				return err
+			}
+			if err := backend.Sess.AppendEvent(ctx, sess, newToolCallEvent("get_weather", `{"city":"Beijing"}`, "tc-001")); err != nil {
+				return err
+			}
+			if err := backend.Sess.AppendEvent(ctx, sess, newToolResponseEvent("tc-001", "get_weather", `{"temp":25}`)); err != nil {
+				return err
+			}
+			return backend.Sess.AppendEvent(ctx, sess, newAssistantEvent("It's 25\u00b0C."))
 		},
 	}
 }
@@ -93,11 +125,16 @@ func case04StateUpdateOverwriteDelete() Case {
 		RequiredCaps: []string{CapState},
 		Run: func(ctx context.Context, backend Backend) error {
 			key := backend.SessKey()
-			backend.Sess.CreateSession(ctx, key, session.StateMap{"k1": []byte("v1"), "k2": []byte("v2")})
-			backend.Sess.UpdateSessionState(ctx, key, session.StateMap{"k1": []byte("v1-new")})
-			backend.Sess.UpdateSessionState(ctx, key, session.StateMap{"k3": []byte("v3")})
-			backend.Sess.UpdateSessionState(ctx, key, session.StateMap{"k2": nil})
-			return nil
+			if _, err := backend.Sess.CreateSession(ctx, key, session.StateMap{"k1": []byte("v1"), "k2": []byte("v2")}); err != nil {
+				return err
+			}
+			if err := backend.Sess.UpdateSessionState(ctx, key, session.StateMap{"k1": []byte("v1-new")}); err != nil {
+				return err
+			}
+			if err := backend.Sess.UpdateSessionState(ctx, key, session.StateMap{"k3": []byte("v3")}); err != nil {
+				return err
+			}
+			return backend.Sess.UpdateSessionState(ctx, key, session.StateMap{"k2": nil})
 		},
 	}
 }
@@ -110,16 +147,19 @@ func case05MemorySearchAndScore() Case {
 		UnorderedMemories: true,
 		Run: func(ctx context.Context, backend Backend) error {
 			uk := memory.UserKey{AppName: backend.SessKey().AppName, UserID: backend.SessKey().UserID}
-			backend.Mem.AddMemory(ctx, uk, "User prefers dark mode", []string{"preference"})
-			backend.Mem.AddMemory(ctx, uk, "User is a Go developer", []string{"fact"})
-			backend.Mem.AddMemory(ctx, uk, "User went hiking at Mt. Fuji with Alice", []string{"episode"},
+			if err := backend.Mem.AddMemory(ctx, uk, "User prefers dark mode", []string{"preference"}); err != nil {
+				return err
+			}
+			if err := backend.Mem.AddMemory(ctx, uk, "User is a Go developer", []string{"fact"}); err != nil {
+				return err
+			}
+			return backend.Mem.AddMemory(ctx, uk, "User went hiking at Mt. Fuji with Alice", []string{"episode"},
 				memory.WithMetadata(&memory.Metadata{
 					Kind:         memory.KindEpisode,
 					EventTime:    &epTime,
 					Participants: []string{"Alice"},
 					Location:     "Mt. Fuji",
 				}))
-			return nil
 		},
 	}
 }
@@ -130,15 +170,25 @@ func case06SummaryFilterAndUpdate() Case {
 		RequiredCaps: []string{CapSummary},
 		Run: func(ctx context.Context, backend Backend) error {
 			key := backend.SessKey()
-			backend.Sess.CreateSession(ctx, key, nil)
-			sess, _ := backend.Sess.GetSession(ctx, key)
-			for i := 0; i < 5; i++ {
-				backend.Sess.AppendEvent(ctx, sess, newUserEvent(fmt.Sprintf("Q%d", i+1)))
-				backend.Sess.AppendEvent(ctx, sess, newAssistantEvent(fmt.Sprintf("A%d", i+1)))
+			if _, err := backend.Sess.CreateSession(ctx, key, nil); err != nil {
+				return err
 			}
-			backend.Sess.CreateSessionSummary(ctx, sess, "", true)
-			backend.Sess.CreateSessionSummary(ctx, sess, "branch-a", true)
-			return nil
+			sess, err := backend.Sess.GetSession(ctx, key)
+			if err != nil {
+				return err
+			}
+			for i := 0; i < 5; i++ {
+				if err := backend.Sess.AppendEvent(ctx, sess, newUserEvent(fmt.Sprintf("Q%d", i+1))); err != nil {
+					return err
+				}
+				if err := backend.Sess.AppendEvent(ctx, sess, newAssistantEvent(fmt.Sprintf("A%d", i+1))); err != nil {
+					return err
+				}
+			}
+			if err := backend.Sess.CreateSessionSummary(ctx, sess, "", true); err != nil {
+				return err
+			}
+			return backend.Sess.CreateSessionSummary(ctx, sess, "branch-a", true)
 		},
 	}
 }
@@ -155,21 +205,36 @@ func case07SummaryEventWindowRecovery() Case {
 		},
 		Run: func(ctx context.Context, backend Backend) error {
 			key := backend.SessKey()
-			backend.Sess.CreateSession(ctx, key, nil)
-			sess, _ := backend.Sess.GetSession(ctx, key)
+			if _, err := backend.Sess.CreateSession(ctx, key, nil); err != nil {
+				return err
+			}
+			sess, err := backend.Sess.GetSession(ctx, key)
+			if err != nil {
+				return err
+			}
 			for i := 0; i < 20; i++ {
 				if i%2 == 0 {
-					backend.Sess.AppendEvent(ctx, sess, newUserEvent(fmt.Sprintf("Q%d", i/2+1)))
+					if err := backend.Sess.AppendEvent(ctx, sess, newUserEvent(fmt.Sprintf("Q%d", i/2+1))); err != nil {
+						return err
+					}
 				} else {
-					backend.Sess.AppendEvent(ctx, sess, newAssistantEvent(fmt.Sprintf("A%d", i/2+1)))
+					if err := backend.Sess.AppendEvent(ctx, sess, newAssistantEvent(fmt.Sprintf("A%d", i/2+1))); err != nil {
+						return err
+					}
 				}
 			}
-			backend.Sess.CreateSessionSummary(ctx, sess, "", true)
+			if err := backend.Sess.CreateSessionSummary(ctx, sess, "", true); err != nil {
+				return err
+			}
 			for i := 0; i < 5; i++ {
 				if i%2 == 0 {
-					backend.Sess.AppendEvent(ctx, sess, newUserEvent(fmt.Sprintf("Q%d", 11+i/2)))
+					if err := backend.Sess.AppendEvent(ctx, sess, newUserEvent(fmt.Sprintf("Q%d", 11+i/2))); err != nil {
+						return err
+					}
 				} else {
-					backend.Sess.AppendEvent(ctx, sess, newAssistantEvent(fmt.Sprintf("A%d", 11+i/2)))
+					if err := backend.Sess.AppendEvent(ctx, sess, newAssistantEvent(fmt.Sprintf("A%d", 11+i/2))); err != nil {
+						return err
+					}
 				}
 			}
 			return nil
@@ -183,18 +248,26 @@ func case08TrackStatusAndError() Case {
 		RequiredCaps: []string{CapTrack},
 		Run: func(ctx context.Context, backend Backend) error {
 			key := backend.SessKey()
-			backend.Sess.CreateSession(ctx, key, nil)
-			sess, _ := backend.Sess.GetSession(ctx, key)
-			backend.Track.AppendTrackEvent(ctx, sess, newTrackEvent("agent-run", `{"type":"start","invocation_id":"inv-1"}`))
-			backend.Track.AppendTrackEvent(ctx, sess, newTrackEventWithVolatile("agent-run", map[string]any{
+			if _, err := backend.Sess.CreateSession(ctx, key, nil); err != nil {
+				return err
+			}
+			sess, err := backend.Sess.GetSession(ctx, key)
+			if err != nil {
+				return err
+			}
+			if err := backend.Track.AppendTrackEvent(ctx, sess, newTrackEvent("agent-run", `{"type":"start","invocation_id":"inv-1"}`)); err != nil {
+				return err
+			}
+			if err := backend.Track.AppendTrackEvent(ctx, sess, newTrackEventWithVolatile("agent-run", map[string]any{
 				"type":          "end",
 				"invocation_id": "inv-1",
 				"status":        "ok",
 				"duration":      1234.5,
 				"latency_ms":    5678,
-			}))
-			backend.Track.AppendTrackEvent(ctx, sess, newTrackEvent("agent-run", `{"type":"error","invocation_id":"inv-2","error":"timeout"}`))
-			return nil
+			})); err != nil {
+				return err
+			}
+			return backend.Track.AppendTrackEvent(ctx, sess, newTrackEvent("agent-run", `{"type":"error","invocation_id":"inv-2","error":"timeout"}`))
 		},
 	}
 }
@@ -206,14 +279,18 @@ func case09ConcurrentToolInterleaving() Case {
 		CountOnly:    true,
 		Run: func(ctx context.Context, backend Backend) error {
 			key := backend.SessKey()
-			backend.Sess.CreateSession(ctx, key, nil)
-			sess, _ := backend.Sess.GetSession(ctx, key)
-			// Append 15 events sequentially (3 logical "threads" x 5 events each).
-			// Session.AppendEvent is not goroutine-safe, so we serialize here.
-			// CountOnly mode verifies event counts match across backends.
+			if _, err := backend.Sess.CreateSession(ctx, key, nil); err != nil {
+				return err
+			}
+			sess, err := backend.Sess.GetSession(ctx, key)
+			if err != nil {
+				return err
+			}
 			for gIdx := 0; gIdx < 3; gIdx++ {
 				for i := 0; i < 5; i++ {
-					backend.Sess.AppendEvent(ctx, sess, newUserEvent(fmt.Sprintf("g%d-e%d", gIdx, i)))
+					if err := backend.Sess.AppendEvent(ctx, sess, newUserEvent(fmt.Sprintf("g%d-e%d", gIdx, i))); err != nil {
+						return err
+					}
 				}
 			}
 			return nil
@@ -227,20 +304,38 @@ func case10FailureRecoveryWithoutDuplicates() Case {
 		RequiredCaps: []string{CapEvents, CapSummary},
 		Run: func(ctx context.Context, backend Backend) error {
 			key := backend.SessKey()
-			backend.Sess.CreateSession(ctx, key, nil)
-			sess, _ := backend.Sess.GetSession(ctx, key)
+			if _, err := backend.Sess.CreateSession(ctx, key, nil); err != nil {
+				return err
+			}
+			sess, err := backend.Sess.GetSession(ctx, key)
+			if err != nil {
+				return err
+			}
 			// Duplicate events.
-			backend.Sess.AppendEvent(ctx, sess, newUserEvent("duplicate-test"))
-			backend.Sess.AppendEvent(ctx, sess, newUserEvent("duplicate-test"))
-			backend.Sess.AppendEvent(ctx, sess, newUserEvent("duplicate-test"))
+			if err := backend.Sess.AppendEvent(ctx, sess, newUserEvent("duplicate-test")); err != nil {
+				return err
+			}
+			if err := backend.Sess.AppendEvent(ctx, sess, newUserEvent("duplicate-test")); err != nil {
+				return err
+			}
+			if err := backend.Sess.AppendEvent(ctx, sess, newUserEvent("duplicate-test")); err != nil {
+				return err
+			}
 			// State overwrite.
-			backend.Sess.UpdateSessionState(ctx, key, session.StateMap{"retry-key": []byte("first-attempt")})
-			backend.Sess.UpdateSessionState(ctx, key, session.StateMap{"retry-key": []byte("retry-value")})
+			if err := backend.Sess.UpdateSessionState(ctx, key, session.StateMap{"retry-key": []byte("first-attempt")}); err != nil {
+				return err
+			}
+			if err := backend.Sess.UpdateSessionState(ctx, key, session.StateMap{"retry-key": []byte("retry-value")}); err != nil {
+				return err
+			}
 			// Summary created twice (idempotent).
-			backend.Sess.AppendEvent(ctx, sess, newAssistantEvent("after-dup"))
-			backend.Sess.CreateSessionSummary(ctx, sess, "", true)
-			backend.Sess.CreateSessionSummary(ctx, sess, "", true)
-			return nil
+			if err := backend.Sess.AppendEvent(ctx, sess, newAssistantEvent("after-dup")); err != nil {
+				return err
+			}
+			if err := backend.Sess.CreateSessionSummary(ctx, sess, "", true); err != nil {
+				return err
+			}
+			return backend.Sess.CreateSessionSummary(ctx, sess, "", true)
 		},
 	}
 }
@@ -251,11 +346,14 @@ func case11StateDeltaNull() Case {
 		RequiredCaps: []string{CapState, CapEvents},
 		Run: func(ctx context.Context, backend Backend) error {
 			key := backend.SessKey()
-			backend.Sess.CreateSession(ctx, key, session.StateMap{"k1": []byte("v1"), "k2": []byte("v2")})
-			sess, _ := backend.Sess.GetSession(ctx, key)
-			// StateDelta with nil value (delete semantics).
-			backend.Sess.AppendEvent(ctx, sess, newEventWithStateDeltaNull("delta-null", "k2"))
-			return nil
+			if _, err := backend.Sess.CreateSession(ctx, key, session.StateMap{"k1": []byte("v1"), "k2": []byte("v2")}); err != nil {
+				return err
+			}
+			sess, err := backend.Sess.GetSession(ctx, key)
+			if err != nil {
+				return err
+			}
+			return backend.Sess.AppendEvent(ctx, sess, newEventWithStateDeltaNull("delta-null", "k2"))
 		},
 	}
 }
@@ -267,20 +365,31 @@ func case12BoundaryAndError() Case {
 		Run: func(ctx context.Context, backend Backend) error {
 			key := backend.SessKey()
 			// Empty state.
-			backend.Sess.CreateSession(ctx, key, session.StateMap{})
-			sess, _ := backend.Sess.GetSession(ctx, key)
+			if _, err := backend.Sess.CreateSession(ctx, key, session.StateMap{}); err != nil {
+				return err
+			}
+			sess, err := backend.Sess.GetSession(ctx, key)
+			if err != nil {
+				return err
+			}
 			// Event with extensions.
 			extData, _ := json.Marshal(map[string]string{"custom-key": "custom-value"})
-			backend.Sess.AppendEvent(ctx, sess, newAssistantEventWithExtensions("with-ext", map[string]json.RawMessage{
+			if err := backend.Sess.AppendEvent(ctx, sess, newAssistantEventWithExtensions("with-ext", map[string]json.RawMessage{
 				"custom-namespace": extData,
-			}))
+			})); err != nil {
+				return err
+			}
 			// Event with branch/tag/filterKey.
-			backend.Sess.AppendEvent(ctx, sess, newEventWithBranchTagFilterKey("user", "branch-a", "code_execution_code", "filter/alpha", "request with branch"))
+			if err := backend.Sess.AppendEvent(ctx, sess, newEventWithBranchTagFilterKey("user", "branch-a", "code_execution_code", "filter/alpha", "request with branch")); err != nil {
+				return err
+			}
 			// Past EventTime.
-			_, _ = backend.Sess.GetSession(ctx, key, session.WithEventTime(time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)))
+			if _, err := backend.Sess.GetSession(ctx, key, session.WithEventTime(time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC))); err != nil {
+				return err
+			}
 			// Large EventNum.
-			_, _ = backend.Sess.GetSession(ctx, key, session.WithEventNum(9999))
-			return nil
+			_, err = backend.Sess.GetSession(ctx, key, session.WithEventNum(9999))
+			return err
 		},
 	}
 }
@@ -292,13 +401,14 @@ func case13StateDelete() Case {
 		Run: func(ctx context.Context, backend Backend) error {
 			key := backend.SessKey()
 			// Create session with initial state.
-			backend.Sess.CreateSession(ctx, key, session.StateMap{
-				"keep":    []byte("stay"),
+			if _, err := backend.Sess.CreateSession(ctx, key, session.StateMap{
+				"keep":      []byte("stay"),
 				"to_delete": []byte("gone"),
-			})
+			}); err != nil {
+				return err
+			}
 			// Delete a key by setting it to nil.
-			backend.Sess.UpdateSessionState(ctx, key, session.StateMap{"to_delete": nil})
-			return nil
+			return backend.Sess.UpdateSessionState(ctx, key, session.StateMap{"to_delete": nil})
 		},
 	}
 }
@@ -344,25 +454,41 @@ func case15SummaryFilterKey() Case {
 				Section: "summaries", Path: `$.summaries["branch-a"].updated_at_event_index`,
 				Reason: "InMemory vs SQLite summary boundary index timing",
 			},
+			{
+				BackendA: "inmemory", BackendB: "inmemory-b",
+				Section: "summaries", Path: `$.summaries["branch-a"].cutoff_at_event_index`,
+				Reason: "InMemory summary boundary index varies between instances",
+			},
+			{
+				BackendA: "inmemory", BackendB: "inmemory-b",
+				Section: "summaries", Path: `$.summaries["branch-a"].updated_at_event_index`,
+				Reason: "InMemory summary boundary index varies between instances",
+			},
 		},
 		Run: func(ctx context.Context, backend Backend) error {
 			key := backend.SessKey()
-			backend.Sess.CreateSession(ctx, key, nil)
-			sess, _ := backend.Sess.GetSession(ctx, key)
+			if _, err := backend.Sess.CreateSession(ctx, key, nil); err != nil {
+				return err
+			}
+			sess, err := backend.Sess.GetSession(ctx, key)
+			if err != nil {
+				return err
+			}
 			// Append events with explicit filterKey set.
 			for i := 0; i < 5; i++ {
-				// Events with filterKey "branch-a" — only these feed the "branch-a" summary.
 				e := newEventWithBranchTagFilterKey("user", "branch-a", "", "branch-a", fmt.Sprintf("branch-a-q%d", i+1))
-				backend.Sess.AppendEvent(ctx, sess, e)
+				if err := backend.Sess.AppendEvent(ctx, sess, e); err != nil {
+					return err
+				}
 			}
 			for i := 0; i < 3; i++ {
-				// Events with filterKey "branch-b".
 				e := newEventWithBranchTagFilterKey("user", "branch-b", "", "branch-b", fmt.Sprintf("branch-b-q%d", i+1))
-				backend.Sess.AppendEvent(ctx, sess, e)
+				if err := backend.Sess.AppendEvent(ctx, sess, e); err != nil {
+					return err
+				}
 			}
-			// Create summary with filterKey="branch-a" — only branch-a events are summarized.
-			backend.Sess.CreateSessionSummary(ctx, sess, "branch-a", true)
-			return nil
+			// Create summary with filterKey="branch-a".
+			return backend.Sess.CreateSessionSummary(ctx, sess, "branch-a", true)
 		},
 	}
 }
@@ -502,7 +628,7 @@ func TestReplay_ReportWithDiffs(t *testing.T) {
 	driftedSnap06, _ := baselineSnap06.Clone()
 	// Inject drift: summary text has a typo.
 	for k, s := range driftedSnap06.Summaries {
-		s.Text = "summary-of-10-evnts"
+		s.Text = "summary-of-10-events-truncated"
 		driftedSnap06.Summaries[k] = s
 	}
 	allowed06 := []AllowedDiff{
@@ -547,9 +673,10 @@ func TestReplay_ReportWithDiffs(t *testing.T) {
 	}
 	diffs08, _ := Compare("case08_track_events", backends08[0].Name, backends08[1].Name, baselineSnap08, driftedSnap08, nil)
 	result08 := CaseResult{
-		Name:   "case08_track_events",
-		Status: StatusFail,
-		Diffs:  diffs08,
+		Name:             "case08_track_events",
+		Status:           StatusFail,
+		SectionsCompared: 5,
+		Diffs:            diffs08,
 		BackendMetrics: []BackendMetric{
 			{Name: "inmemory", RunDuration: 2 * time.Millisecond, CaptureDuration: 1 * time.Millisecond, SnapshotSize: 200},
 			{Name: "sqlite", RunDuration: 3 * time.Millisecond, CaptureDuration: 2 * time.Millisecond, SnapshotSize: 220},
@@ -607,11 +734,7 @@ func TestReplay_ReportWithDiffs(t *testing.T) {
 	report := GenerateReport(results, []string{"inmemory", "sqlite"})
 	report.GeneratedAt = nil
 
-	sampleDir := filepath.Join("..", "..", "test")
-	if err := os.MkdirAll(sampleDir, 0o755); err != nil {
-		t.Fatalf("failed to create sample dir: %v", err)
-	}
-	samplePath := filepath.Join(sampleDir, "session_memory_summary_track_diff_report.json")
+	samplePath := filepath.Join(t.TempDir(), "session_memory_summary_track_diff_report.json")
 	require.NoError(t, WriteReport(samplePath, *report))
 	t.Logf("Sample diff report written to %s", samplePath)
 
@@ -675,13 +798,16 @@ func TestReplay_ConsistencyDetectsInjectedDrift(t *testing.T) {
 	backend.Sess.AppendEvent(context.Background(), sess, newAssistantEvent("hi"))
 	backend.Sess.CreateSessionSummary(context.Background(), sess, "", true)
 	backend.Track.AppendTrackEvent(context.Background(), sess, newTrackEvent("agent-run", `{"type":"start"}`))
+	// Add memory data so the "memories" drift section is testable.
+	uk := memory.UserKey{AppName: key.AppName, UserID: key.UserID}
+	backend.Mem.AddMemory(context.Background(), uk, "User prefers dark mode", []string{"preference"})
 
 	normalizer := NewNormalizer(DefaultNormalizerConfig())
 	baseline, err := Capture(context.Background(), backend, CaptureOptions{NormalizerConfig: DefaultNormalizerConfig()}, normalizer)
 	require.NoError(t, err)
 
 	// Test drift detection per section.
-	sections := []string{"events", "state", "summaries", "tracks"}
+	sections := []string{"events", "state", "memories", "summaries", "tracks"}
 	for _, section := range sections {
 		section := section
 		t.Run(section, func(t *testing.T) {

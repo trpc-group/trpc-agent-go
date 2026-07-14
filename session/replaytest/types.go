@@ -11,6 +11,7 @@ package replaytest
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"sync"
@@ -148,7 +149,60 @@ func (s Snapshot) Clone() (Snapshot, error) {
 	if err := json.Unmarshal(raw, &cloned); err != nil {
 		return Snapshot{}, fmt.Errorf("unmarshal snapshot clone: %w", err)
 	}
+	restoreMissingInSnapshot(&cloned)
 	return cloned, nil
+}
+
+// restoreMissingInSnapshot walks generic map/slice fields and restores
+// MissingValue sentinels that were lost during JSON round-trip.
+// MissingValue marshals as {"__missing":true}, but json.Unmarshal into
+// map[string]any produces a regular map, not a MissingValue instance.
+func restoreMissingInSnapshot(s *Snapshot) {
+	for _, m := range s.Events {
+		restoreMissingInMap(m)
+	}
+	restoreMissingInMap(s.State)
+	restoreMissingInMap(s.AppState)
+	restoreMissingInMap(s.UserState)
+	for range s.Summaries {
+		// SummarySnapshot has no generic map fields that need restoration.
+	}
+	for _, events := range s.Tracks {
+		for i := range events {
+			events[i].Payload = restoreMissingInAny(events[i].Payload)
+		}
+	}
+}
+
+// restoreMissingInMap walks a map[string]any in place and replaces any
+// map[string]any{"__missing": true} with MissingValue{}.
+func restoreMissingInMap(m map[string]any) {
+	if m == nil {
+		return
+	}
+	for k, v := range m {
+		m[k] = restoreMissingInAny(v)
+	}
+}
+
+// restoreMissingInAny walks a generic value and replaces any
+// map[string]any{"__missing": true} with MissingValue{}.
+func restoreMissingInAny(v any) any {
+	switch tv := v.(type) {
+	case map[string]any:
+		if len(tv) == 1 && tv["__missing"] == true {
+			return MissingValue{}
+		}
+		restoreMissingInMap(tv)
+		return tv
+	case []any:
+		for i, elem := range tv {
+			tv[i] = restoreMissingInAny(elem)
+		}
+		return tv
+	default:
+		return v
+	}
 }
 
 // MemorySnapshot is the normalized representation of a memory.Entry.
@@ -385,10 +439,7 @@ func (b *Backend) Cleanup(ctx context.Context, key session.Key, userKey memory.U
 			errs = append(errs, fmt.Errorf("ClearMemories: %w", err))
 		}
 	}
-	if len(errs) > 0 {
-		return fmt.Errorf("cleanup: %v", errs)
-	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // VerifyCleanup checks that no test data remains after cleanup.

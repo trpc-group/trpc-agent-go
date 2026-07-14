@@ -1,7 +1,7 @@
 {
   "report_id": "replay-v2",
   "version": "v2",
-  "run_id": "20260714-185954-47384-LAPTOP-5F85UBKS",
+  "run_id": "20260714-212957-63420-LAPTOP-5F85UBKS",
   "backends": [
     "inmemory",
     "sqlite"
@@ -10,7 +10,7 @@
     {
       "name": "case01_single_turn",
       "status": "pass",
-      "duration": "755.7µs",
+      "duration": "3.2508ms",
       "sections_compared": 5,
       "sections_skipped": 0,
       "capabilities": {
@@ -136,7 +136,7 @@
           "section": "summaries",
           "path": "$.summaries[\"\"].text",
           "value_a": "summary-of-10-events",
-          "value_b": "summary-of-10-evnts",
+          "value_b": "summary-of-10-events-truncated",
           "baseline_present": true,
           "compared_present": true,
           "allowed": true,
@@ -276,4 +276,4 @@
     "minor_diffs": 1
   }
 }
-// sha256:c14162c3b93e537b47cb5fa5e562d72ba4bf12f8fc7aba49b0e32d9b66fa6937
+// sha256:70de2f0cd5a8972703746a15ab330eb92768fea5f20b35ec2dbaa635ae5e345c

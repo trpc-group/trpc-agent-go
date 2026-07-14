@@ -14,14 +14,15 @@ replace (
 require (
 	github.com/alicebob/miniredis/v2 v2.35.0
 	github.com/mattn/go-sqlite3 v1.14.32
+	github.com/redis/go-redis/v9 v9.11.0
 	github.com/stretchr/testify v1.11.1
 	golang.org/x/sync v0.11.0
 	trpc.group/trpc-go/trpc-agent-go v1.6.1-0.20260311094958-7b74ee59e339
-	trpc.group/trpc-go/trpc-agent-go/session/clickhouse v0.0.0
-	trpc.group/trpc-go/trpc-agent-go/session/mysql v0.0.0
-	trpc.group/trpc-go/trpc-agent-go/session/postgres v0.0.0
-	trpc.group/trpc-go/trpc-agent-go/session/redis v0.0.0
-	trpc.group/trpc-go/trpc-agent-go/session/sqlite v0.0.0
+	trpc.group/trpc-go/trpc-agent-go/session/clickhouse v1.10.0
+	trpc.group/trpc-go/trpc-agent-go/session/mysql v1.10.0
+	trpc.group/trpc-go/trpc-agent-go/session/postgres v1.10.0
+	trpc.group/trpc-go/trpc-agent-go/session/redis v1.10.0
+	trpc.group/trpc-go/trpc-agent-go/session/sqlite v1.10.0
 )
 
 require (
@@ -49,7 +50,6 @@ require (
 	github.com/paulmach/orb v0.11.1 // indirect
 	github.com/pierrec/lz4/v4 v4.1.22 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
-	github.com/redis/go-redis/v9 v9.11.0 // indirect
 	github.com/segmentio/asm v1.2.0 // indirect
 	github.com/shopspring/decimal v1.4.0 // indirect
 	github.com/vcaesar/cedar v0.20.2 // indirect

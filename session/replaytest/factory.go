@@ -55,6 +55,24 @@ func defaultSessKey() session.Key {
 	return session.Key{AppName: "replay-test", UserID: "user", SessionID: "session"}
 }
 
+// defaultWarmUp is the standard warm-up function for external backends.
+// It creates, reads, and deletes a session to verify basic connectivity.
+func defaultWarmUp(ctx context.Context, b Backend) error {
+	key := b.SessKey()
+	sess, err := b.Sess.CreateSession(ctx, key, nil)
+	if err != nil {
+		return fmt.Errorf("warmup create: %w", err)
+	}
+	if _, err := b.Sess.GetSession(ctx, key); err != nil {
+		return fmt.Errorf("warmup get: %w", err)
+	}
+	if err := b.Sess.DeleteSession(ctx, key); err != nil {
+		return fmt.Errorf("warmup delete: %w", err)
+	}
+	_ = sess
+	return nil
+}
+
 // inMemoryFactory creates an InMemory session backend.
 type inMemoryFactory struct{}
 
@@ -214,25 +232,15 @@ func (redisFactory) Create(_ context.Context, t *testing.T) *Backend {
 		Caps:    AllCapabilities(),
 		SessKey: defaultSessKey,
 		Probe: func(ctx context.Context) error {
-			client := redis.NewClient(&redis.Options{Addr: url})
+			opts, err := redis.ParseURL(url)
+			if err != nil {
+				return fmt.Errorf("parse redis URL: %w", err)
+			}
+			client := redis.NewClient(opts)
 			defer client.Close()
 			return client.Ping(ctx).Err()
 		},
-		WarmUp: func(ctx context.Context, b Backend) error {
-			key := b.SessKey()
-			sess, err := b.Sess.CreateSession(ctx, key, nil)
-			if err != nil {
-				return fmt.Errorf("warmup create: %w", err)
-			}
-			if _, err := b.Sess.GetSession(ctx, key); err != nil {
-				return fmt.Errorf("warmup get: %w", err)
-			}
-			if err := b.Sess.DeleteSession(ctx, key); err != nil {
-				return fmt.Errorf("warmup delete: %w", err)
-			}
-			_ = sess
-			return nil
-		},
+		WarmUp: defaultWarmUp,
 	}
 }
 
@@ -282,7 +290,7 @@ func (postgresFactory) Create(_ context.Context, t *testing.T) *Backend {
 		Caps:    AllCapabilities(),
 		SessKey: defaultSessKey,
 		Probe: func(ctx context.Context) error {
-			db, err := sql.Open("postgres", dsn)
+			db, err := sql.Open("pgx", dsn)
 			if err != nil {
 				return err
 			}
@@ -291,21 +299,7 @@ func (postgresFactory) Create(_ context.Context, t *testing.T) *Backend {
 			defer cancel()
 			return db.PingContext(pingCtx)
 		},
-		WarmUp: func(ctx context.Context, b Backend) error {
-			key := b.SessKey()
-			sess, err := b.Sess.CreateSession(ctx, key, nil)
-			if err != nil {
-				return fmt.Errorf("warmup create: %w", err)
-			}
-			if _, err := b.Sess.GetSession(ctx, key); err != nil {
-				return fmt.Errorf("warmup get: %w", err)
-			}
-			if err := b.Sess.DeleteSession(ctx, key); err != nil {
-				return fmt.Errorf("warmup delete: %w", err)
-			}
-			_ = sess
-			return nil
-		},
+		WarmUp: defaultWarmUp,
 	}
 }
 
@@ -364,21 +358,7 @@ func (mysqlFactory) Create(_ context.Context, t *testing.T) *Backend {
 			defer cancel()
 			return db.PingContext(pingCtx)
 		},
-		WarmUp: func(ctx context.Context, b Backend) error {
-			key := b.SessKey()
-			sess, err := b.Sess.CreateSession(ctx, key, nil)
-			if err != nil {
-				return fmt.Errorf("warmup create: %w", err)
-			}
-			if _, err := b.Sess.GetSession(ctx, key); err != nil {
-				return fmt.Errorf("warmup get: %w", err)
-			}
-			if err := b.Sess.DeleteSession(ctx, key); err != nil {
-				return fmt.Errorf("warmup delete: %w", err)
-			}
-			_ = sess
-			return nil
-		},
+		WarmUp: defaultWarmUp,
 	}
 }
 
@@ -438,21 +418,7 @@ func (clickhouseFactory) Create(_ context.Context, t *testing.T) *Backend {
 			defer cancel()
 			return db.PingContext(pingCtx)
 		},
-		WarmUp: func(ctx context.Context, b Backend) error {
-			key := b.SessKey()
-			sess, err := b.Sess.CreateSession(ctx, key, nil)
-			if err != nil {
-				return fmt.Errorf("warmup create: %w", err)
-			}
-			if _, err := b.Sess.GetSession(ctx, key); err != nil {
-				return fmt.Errorf("warmup get: %w", err)
-			}
-			if err := b.Sess.DeleteSession(ctx, key); err != nil {
-				return fmt.Errorf("warmup delete: %w", err)
-			}
-			_ = sess
-			return nil
-		},
+		WarmUp: defaultWarmUp,
 	}
 }
 
