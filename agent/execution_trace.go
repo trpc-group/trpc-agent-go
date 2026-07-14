@@ -113,11 +113,10 @@ func InvocationTeamMemberTraceRoot(inv *Invocation) string {
 func StartExecutionTraceStep(
 	inv *Invocation,
 	nodeID string,
-	nodeType string,
 	input *trace.Snapshot,
 	predecessors []string,
 ) string {
-	if inv == nil || nodeID == "" || nodeType == "" {
+	if inv == nil || nodeID == "" {
 		return ""
 	}
 	inv.initializeExecutionTrace()
@@ -142,7 +141,6 @@ func StartExecutionTraceStep(
 		AgentName:          inv.AgentName,
 		Branch:             inv.Branch,
 		NodeID:             nodeID,
-		NodeType:           nodeType,
 		StartedAt:          time.Now(),
 		PredecessorStepIDs: preds,
 		Input:              input,

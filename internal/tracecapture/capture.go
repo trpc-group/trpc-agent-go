@@ -185,6 +185,20 @@ func (c *Capture) setStepInput(stepID string, input *trace.Snapshot) {
 	c.steps[idx].Input = cloneSnapshot(input)
 }
 
+// setStepNodeType updates the semantic node type of one recorded step.
+func (c *Capture) setStepNodeType(stepID string, nodeType string) {
+	if c == nil || stepID == "" || nodeType == "" {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	idx, ok := c.stepIndexByID[stepID]
+	if !ok {
+		return
+	}
+	c.steps[idx].NodeType = nodeType
+}
+
 // SetStepAppliedSurfaceIDs updates the applied surface ids of one recorded step.
 func (c *Capture) SetStepAppliedSurfaceIDs(stepID string, surfaceIDs []string) {
 	if c == nil || stepID == "" {

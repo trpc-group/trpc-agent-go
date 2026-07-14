@@ -620,18 +620,20 @@ func ensureInvocationTraceStepForTest(
 	input string,
 ) tracecapture.StepLease {
 	nodeID := agent.InvocationTraceNodeID(inv)
-	return tracecapture.EnsureInvocationStep(
-		agent.NewInvocationContext(context.Background(), inv),
+	traceCtx := agent.NewInvocationContext(context.Background(), inv)
+	lease := tracecapture.EnsureInvocationStep(
+		traceCtx,
 		func() string {
 			return agent.StartExecutionTraceStep(
 				inv,
 				nodeID,
-				"llm",
 				&atrace.Snapshot{Text: input},
 				nil,
 			)
 		},
 	)
+	tracecapture.SetStepNodeType(traceCtx, lease.StepID, "llm")
+	return lease
 }
 
 func TestRunOneStep_UpdatesCurrentExecutionTraceStepOnSuccess(t *testing.T) {

@@ -3382,7 +3382,6 @@ func TestBuildAgentInvocationWithStateAndScope_PropagatesExecutionTraceMetadata(
 	rootStepID := agent.StartExecutionTraceStep(
 		parent,
 		agent.InvocationTraceNodeID(parent),
-		"agent",
 		nil,
 		nil,
 	)
@@ -3445,7 +3444,6 @@ func TestBuildAgentInvocationWithStateAndScope_PrefersCurrentTraceStepBinding(t 
 	firstStepID := agent.StartExecutionTraceStep(
 		parent,
 		agent.InvocationTraceNodeID(parent),
-		"agent",
 		nil,
 		nil,
 	)
@@ -3453,7 +3451,6 @@ func TestBuildAgentInvocationWithStateAndScope_PrefersCurrentTraceStepBinding(t 
 	secondStepID := agent.StartExecutionTraceStep(
 		parent,
 		agent.InvocationTraceNodeID(parent),
-		"agent",
 		nil,
 		nil,
 	)

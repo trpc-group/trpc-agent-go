@@ -23,6 +23,14 @@ func TestInvocationStepOwnsBorrowsAndReleases(t *testing.T) {
 	capture := tracecapture.New("root", "inv", "session", time.Now())
 	binding := tracecapture.NewStepBinding()
 	ctx := tracecapture.AttachInvocationRuntime(context.Background(), binding, capture)
+	empty := tracecapture.EnsureInvocationStep(ctx, nil)
+	require.Empty(t, empty.StepID)
+	require.False(t, empty.Owns)
+	noStep := tracecapture.EnsureInvocationStep(ctx, func() string {
+		return ""
+	})
+	require.Empty(t, noStep.StepID)
+	require.False(t, noStep.Owns)
 
 	starts := 0
 	start := func() string {
@@ -82,6 +90,7 @@ func TestInvocationStepUpdatesCurrentCaptureStep(t *testing.T) {
 
 	tracecapture.SetInvocationStepInput(ctx, &atrace.Snapshot{Text: "first request"})
 	tracecapture.SetInvocationStepInput(ctx, &atrace.Snapshot{Text: "last request"})
+	tracecapture.SetStepNodeType(ctx, stepID, "llm")
 	tracecapture.MergeInvocationStepAppliedSurfaceIDs(ctx, []string{"surface-b", "surface-a", "surface-b"})
 	tracecapture.MergeInvocationStepAppliedSurfaceIDs(ctx, []string{"surface-a", "surface-c"})
 	tracecapture.AddInvocationStepUsage(ctx, &model.Usage{
@@ -101,6 +110,7 @@ func TestInvocationStepUpdatesCurrentCaptureStep(t *testing.T) {
 	require.Len(t, result.Steps, 1)
 	step := result.Steps[0]
 	require.Equal(t, "last request", step.Input.Text)
+	require.Equal(t, "llm", step.NodeType)
 	require.Equal(t, []string{"surface-b", "surface-a", "surface-c"}, step.AppliedSurfaceIDs)
 	require.Equal(t, &model.Usage{
 		PromptTokens:     9,
@@ -134,4 +144,37 @@ func TestInvocationRuntimeMasksParent(t *testing.T) {
 	result := parentCapture.Build(atrace.TraceStatusCompleted, time.Now())
 	require.Len(t, result.Steps, 1)
 	require.Equal(t, "parent input", result.Steps[0].Input.Text)
+}
+
+func TestInvocationStepHelpersIgnoreMissingRuntimeAndStep(t *testing.T) {
+	plainCtx := context.Background()
+	tracecapture.BindInvocationStep(plainCtx, "missing")
+	tracecapture.SetInvocationStepInput(plainCtx, &atrace.Snapshot{Text: "ignored"})
+	tracecapture.SetStepNodeType(plainCtx, "missing", "llm")
+	tracecapture.MergeInvocationStepAppliedSurfaceIDs(plainCtx, []string{"ignored"})
+	tracecapture.AddInvocationStepUsage(plainCtx, &model.Usage{TotalTokens: 1})
+	capture := tracecapture.New("root", "inv", "session", time.Now())
+	ctxWithoutBinding := tracecapture.AttachInvocationRuntime(context.Background(), nil, capture)
+	tracecapture.BindInvocationStep(ctxWithoutBinding, "missing")
+	stepID := capture.StartStep(tracecapture.StartStepInput{
+		InvocationID: "inv",
+		AgentName:    "root",
+		NodeID:       "root/node",
+		Input:        &atrace.Snapshot{Text: "initial"},
+	})
+	ctx := tracecapture.AttachInvocationRuntime(
+		context.Background(),
+		tracecapture.NewStepBinding(),
+		capture,
+	)
+	tracecapture.SetStepNodeType(ctx, "", "llm")
+	tracecapture.SetStepNodeType(ctx, stepID, "")
+	tracecapture.SetStepNodeType(ctx, "missing", "llm")
+	tracecapture.SetStepNodeType(ctx, stepID, "agent")
+	result := capture.Build(atrace.TraceStatusCompleted, time.Now())
+	require.Len(t, result.Steps, 1)
+	require.Equal(t, "initial", result.Steps[0].Input.Text)
+	require.Equal(t, "agent", result.Steps[0].NodeType)
+	require.Nil(t, result.Steps[0].Usage)
+	require.Empty(t, result.Steps[0].AppliedSurfaceIDs)
 }

@@ -32,6 +32,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
 	istructure "trpc.group/trpc-go/trpc-agent-go/internal/structure"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
+	"trpc.group/trpc-go/trpc-agent-go/internal/tracecapture"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -2873,12 +2874,16 @@ func (e *Executor) initializeNodeContext(
 	traceStepID := agent.StartExecutionTraceStep(
 		invocation,
 		e.traceNodeIDForTask(invocation, t),
-		nodeType.String(),
 		inputSnapshot,
 		t.PredecessorStepIDs,
 	)
 	e.recordTraceSourceStepIDs(execCtx, t.TaskID, []string{traceStepID})
 	if traceStepID != "" {
+		tracecapture.SetStepNodeType(
+			agent.NewInvocationContext(ctx, invocation),
+			traceStepID,
+			nodeType.String(),
+		)
 		stateCopy[currentTraceStepIDStateKey] = traceStepID
 	}
 	metricRecorder := e.newWorkflowMetricRecorder(invocation, execCtx, t.NodeID, nodeType, nodeStart)

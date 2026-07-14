@@ -132,6 +132,15 @@ func SetInvocationStepInput(ctx context.Context, input *atrace.Snapshot) {
 	capture.setStepInput(stepID, input)
 }
 
+// SetStepNodeType sets one recorded step's semantic node type.
+func SetStepNodeType(ctx context.Context, stepID string, nodeType string) {
+	runtime, ok := invocationRuntimeFromContext(ctx)
+	if !ok || runtime.capture == nil || stepID == "" || nodeType == "" {
+		return
+	}
+	runtime.capture.setStepNodeType(stepID, nodeType)
+}
+
 // MergeInvocationStepAppliedSurfaceIDs merges applied surface IDs into the
 // current step in stable first-seen order.
 func MergeInvocationStepAppliedSurfaceIDs(ctx context.Context, surfaceIDs []string) {
