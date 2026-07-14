@@ -9,12 +9,14 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -490,7 +492,16 @@ func readPromptIterConfigWithHash(path string) (promptIterFileConfig, string, er
 	if len(strings.TrimSpace(string(content))) == 0 {
 		return cfg, "", errors.New("promptiter config is empty")
 	}
-	if err := json.Unmarshal(content, &cfg); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(content))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&cfg); err != nil {
+		return cfg, "", fmt.Errorf("decode config %s: %w", path, err)
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return cfg, "", fmt.Errorf("decode config %s: multiple JSON values", path)
+		}
 		return cfg, "", fmt.Errorf("decode config %s: %w", path, err)
 	}
 	if cfg.MaxRounds <= 0 {

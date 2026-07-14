@@ -86,18 +86,20 @@ type CostSummary struct {
 }
 
 type GateReport struct {
-	Decision               string   `json:"decision"`
-	Reasons                []string `json:"reasons"`
-	ValidationGain         float64  `json:"validationGain"`
-	MinValidationGain      float64  `json:"minValidationGain"`
-	MaxDurationMs          int64    `json:"maxDurationMs"`
-	LatencyMs              int64    `json:"latencyMs"`
-	MaxModelCalls          int      `json:"maxModelCalls"`
-	ModelCallCount         int      `json:"modelCallCount"`
-	CriticalCaseIDs        []string `json:"criticalCaseIds"`
-	NewHardFails           []string `json:"newHardFails"`
-	CriticalRegressions    []string `json:"criticalRegressions"`
-	CostCheckSkippedReason string   `json:"costCheckSkippedReason"`
+	Decision                   string   `json:"decision"`
+	Reasons                    []string `json:"reasons"`
+	ValidationGain             float64  `json:"validationGain"`
+	MinValidationGain          float64  `json:"minValidationGain"`
+	MaxDurationMs              int64    `json:"maxDurationMs"`
+	LatencyMs                  int64    `json:"latencyMs"`
+	MaxModelCalls              int      `json:"maxModelCalls"`
+	ModelCallCount             int      `json:"modelCallCount"`
+	CriticalCaseIDs            []string `json:"criticalCaseIds"`
+	RejectOnNewHardFail        bool     `json:"rejectOnNewHardFail"`
+	RejectOnCriticalRegression bool     `json:"rejectOnCriticalRegression"`
+	NewHardFails               []string `json:"newHardFails"`
+	CriticalRegressions        []string `json:"criticalRegressions"`
+	CostCheckSkippedReason     string   `json:"costCheckSkippedReason"`
 }
 
 type FailureAttribution struct {
@@ -255,18 +257,20 @@ func buildGateReport(
 	}
 	foundCritical := make(map[string]struct{}, len(criticalSet))
 	report := &GateReport{
-		Decision:               gateDecisionAccept,
-		Reasons:                []string{},
-		ValidationGain:         candidate.OverallScore - baseline.OverallScore,
-		MinValidationGain:      cfg.MinValidationGain,
-		MaxDurationMs:          cfg.MaxDurationMs,
-		LatencyMs:              latencyMs,
-		MaxModelCalls:          cfg.MaxModelCalls,
-		ModelCallCount:         modelCallCount,
-		CriticalCaseIDs:        append([]string(nil), cfg.CriticalCaseIDs...),
-		NewHardFails:           []string{},
-		CriticalRegressions:    []string{},
-		CostCheckSkippedReason: "cost check skipped (fake mode)",
+		Decision:                   gateDecisionAccept,
+		Reasons:                    []string{},
+		ValidationGain:             candidate.OverallScore - baseline.OverallScore,
+		MinValidationGain:          cfg.MinValidationGain,
+		MaxDurationMs:              cfg.MaxDurationMs,
+		LatencyMs:                  latencyMs,
+		MaxModelCalls:              cfg.MaxModelCalls,
+		ModelCallCount:             modelCallCount,
+		CriticalCaseIDs:            append([]string(nil), cfg.CriticalCaseIDs...),
+		RejectOnNewHardFail:        cfg.RejectOnNewHardFail,
+		RejectOnCriticalRegression: cfg.RejectOnCriticalRegression,
+		NewHardFails:               []string{},
+		CriticalRegressions:        []string{},
+		CostCheckSkippedReason:     "cost check skipped (fake mode)",
 	}
 	reject := false
 	if report.ValidationGain+epsilon() < cfg.MinValidationGain {
@@ -293,27 +297,31 @@ func buildGateReport(
 			return nil, fmt.Errorf("critical case %q not found in validation delta", id)
 		}
 	}
-	if len(report.NewHardFails) > 0 {
-		report.Reasons = append(report.Reasons, fmt.Sprintf("new hard fail cases: %v", report.NewHardFails))
-		if cfg.RejectOnNewHardFail {
-			reject = true
-		}
-	} else {
+	if len(report.NewHardFails) == 0 {
 		report.Reasons = append(report.Reasons, "no new hard fail")
+	} else if cfg.RejectOnNewHardFail {
+		reject = true
+		report.Reasons = append(report.Reasons, fmt.Sprintf("new hard fail cases: %v", report.NewHardFails))
+	} else {
+		report.Reasons = append(report.Reasons, fmt.Sprintf("new hard fail cases detected but not enforced: %v", report.NewHardFails))
 	}
-	if len(report.CriticalRegressions) > 0 {
+	if len(report.CriticalRegressions) == 0 {
+		report.Reasons = append(report.Reasons, "no critical regression")
+	} else if cfg.RejectOnCriticalRegression {
+		reject = true
 		report.Reasons = append(report.Reasons, fmt.Sprintf("critical regression cases: %v", report.CriticalRegressions))
-		if cfg.RejectOnCriticalRegression {
+	} else {
+		report.Reasons = append(report.Reasons, fmt.Sprintf("critical regression cases detected but not enforced: %v", report.CriticalRegressions))
+	}
+	if cfg.MaxDurationMs > 0 {
+		if latencyMs > cfg.MaxDurationMs {
 			reject = true
+			report.Reasons = append(report.Reasons, fmt.Sprintf("optimization latency %dms exceeds maximum %dms", latencyMs, cfg.MaxDurationMs))
+		} else {
+			report.Reasons = append(report.Reasons, fmt.Sprintf("optimization latency %dms is within maximum %dms", latencyMs, cfg.MaxDurationMs))
 		}
 	} else {
-		report.Reasons = append(report.Reasons, "no critical regression")
-	}
-	if cfg.MaxDurationMs > 0 && latencyMs > cfg.MaxDurationMs {
-		reject = true
-		report.Reasons = append(report.Reasons, fmt.Sprintf("optimization latency %dms exceeds maximum %dms", latencyMs, cfg.MaxDurationMs))
-	} else {
-		report.Reasons = append(report.Reasons, fmt.Sprintf("optimization latency %dms is within maximum %dms", latencyMs, cfg.MaxDurationMs))
+		report.Reasons = append(report.Reasons, "latency budget check skipped")
 	}
 	if cfg.MaxModelCalls > 0 && modelCallCount > cfg.MaxModelCalls {
 		reject = true

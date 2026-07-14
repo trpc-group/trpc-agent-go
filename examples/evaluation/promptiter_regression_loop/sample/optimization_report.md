@@ -9,6 +9,7 @@ Mode: `fake`
 - PromptIter config SHA-256: `72c920d7cf8470c845a3dcca50b7bc4dea8ace772366ba59f71adedcb7bb714d`
 - Model: `phase4v2-fake-model` (deterministic=`true`, temperature=`0.0`, max tokens=`1024`, stream=`false`)
 - PromptIter: max rounds=`2`, min score gain=`0.1000`, target score=`1.0000`, max rounds without acceptance=`0`
+- Final gate: rejectOnNewHardFail=`true`, rejectOnCriticalRegression=`true`, maxDurationMs=`180000`, maxModelCalls=`100`
 
 Single round: `false`
 

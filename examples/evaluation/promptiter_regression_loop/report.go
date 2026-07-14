@@ -555,6 +555,14 @@ func renderAuditSummaryMarkdown(buf *bytes.Buffer, report *OptimizationReport) {
 			report.PromptIterConfig.MaxRoundsWithoutAcceptance,
 		)
 	}
+	if report.Gate != nil {
+		fmt.Fprintf(buf, "- Final gate: rejectOnNewHardFail=`%t`, rejectOnCriticalRegression=`%t`, maxDurationMs=`%d`, maxModelCalls=`%d`\n",
+			report.Gate.RejectOnNewHardFail,
+			report.Gate.RejectOnCriticalRegression,
+			report.Gate.MaxDurationMs,
+			report.Gate.MaxModelCalls,
+		)
+	}
 	fmt.Fprintf(buf, "\n")
 }
 

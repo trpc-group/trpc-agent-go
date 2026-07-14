@@ -728,6 +728,8 @@
     "criticalCaseIds": [
       "validation_status_tr789"
     ],
+    "rejectOnNewHardFail": true,
+    "rejectOnCriticalRegression": true,
     "newHardFails": [
       "validation_status_tr789"
     ],

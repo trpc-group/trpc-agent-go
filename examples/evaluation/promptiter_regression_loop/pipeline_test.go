@@ -406,12 +406,18 @@ func TestReportSchema(t *testing.T) {
 	require.Contains(t, decoded, "pending")
 	require.Contains(t, decoded, "latencyMs")
 	require.Contains(t, decoded, "modelCallCount")
+	gate := decoded["gate"].(map[string]any)
+	require.Contains(t, gate, "rejectOnNewHardFail")
+	require.Contains(t, gate, "rejectOnCriticalRegression")
 	candidate := decoded["candidate"].(map[string]any)
 	require.Contains(t, candidate, "acceptedProfile")
 	rounds := decoded["rounds"].([]any)
 	require.Contains(t, rounds[0].(map[string]any), "outputProfile")
 	patches := rounds[0].(map[string]any)["patches"].([]any)
 	require.Contains(t, patches[0].(map[string]any), "value")
+	markdown, err := os.ReadFile(result.ReportMarkdownPath)
+	require.NoError(t, err)
+	require.Contains(t, string(markdown), "- Final gate: rejectOnNewHardFail=`true`, rejectOnCriticalRegression=`true`, maxDurationMs=`180000`, maxModelCalls=`100`")
 }
 
 func TestTraceSmokeAdapterUsesRunDetailsExecutionTrace(t *testing.T) {
@@ -669,6 +675,37 @@ func TestPromptIterConfigNewFieldsAndLegacyCompatibility(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, emptyCritical.FinalGate.CriticalCaseIDs)
 	require.Empty(t, emptyCritical.FinalGate.resolved().CriticalCaseIDs)
+
+	blankConfigPath := filepath.Join(configDir, "blank.json")
+	require.NoError(t, os.WriteFile(blankConfigPath, []byte(" \n\t"), 0o644))
+	_, err = readPromptIterConfig(blankConfigPath)
+	require.ErrorContains(t, err, "promptiter config is empty")
+
+	unknownTopLevelPath := filepath.Join(configDir, "unknown-top-level.json")
+	require.NoError(t, os.WriteFile(unknownTopLevelPath, []byte(`{
+  "maxRounds": 2,
+  "unknownReleasePolicy": true
+}`), 0o644))
+	_, err = readPromptIterConfig(unknownTopLevelPath)
+	require.ErrorContains(t, err, `unknown field "unknownReleasePolicy"`)
+
+	unknownMaxModelCallsPath := filepath.Join(configDir, "unknown-max-model-calls.json")
+	require.NoError(t, os.WriteFile(unknownMaxModelCallsPath, []byte(`{
+  "finalGate": {
+    "maxModelCall": 11
+  }
+}`), 0o644))
+	_, err = readPromptIterConfig(unknownMaxModelCallsPath)
+	require.ErrorContains(t, err, `unknown field "maxModelCall"`)
+
+	unknownRejectPolicyPath := filepath.Join(configDir, "unknown-reject-policy.json")
+	require.NoError(t, os.WriteFile(unknownRejectPolicyPath, []byte(`{
+  "finalGate": {
+    "rejectOnNewHardFailure": false
+  }
+}`), 0o644))
+	_, err = readPromptIterConfig(unknownRejectPolicyPath)
+	require.ErrorContains(t, err, `unknown field "rejectOnNewHardFailure"`)
 }
 
 func TestRunOptionsForAcceptedProfileValidation(t *testing.T) {
@@ -819,38 +856,58 @@ func TestFinalGateDecisions(t *testing.T) {
 	require.Equal(t, gateDecisionReject, gate.Decision)
 	require.Contains(t, gate.CriticalRegressions, "critical")
 
-	nonRejectingCfg := cfg
-	nonRejectingCfg.RejectOnNewHardFail = false
-	nonRejectingCfg.RejectOnCriticalRegression = false
-	nonRejectingBaseline := summaryFromCases("validation",
+	nonEnforcingCfg := cfg
+	nonEnforcingCfg.RejectOnNewHardFail = false
+	nonEnforcingCfg.RejectOnCriticalRegression = false
+	nonEnforcingBaseline := summaryFromCases("validation",
 		reportCase("critical", 0.5, false),
-		reportCase("regular", 1, true),
-		reportCase("helper_a", 0, false),
-		reportCase("helper_b", 0, false),
+		reportCase("hard_fail", 1, true),
+		reportCase("improved", 0, false),
+		reportCase("steady", 0, false),
 	)
-	nonRejectingCandidate := summaryFromCases("validation",
-		reportCase("critical", 0.25, false),
-		reportCase("regular", 0, false),
-		reportCase("helper_a", 1, true),
-		reportCase("helper_b", 1, true),
+	nonEnforcingCandidate := summaryFromCases("validation",
+		reportCase("critical", 0, false),
+		reportCase("hard_fail", 0, false),
+		reportCase("improved", 1, true),
+		reportCase("steady", 1, true),
 	)
-	nonRejectingDelta, err := buildValidationDelta(nonRejectingBaseline, nonRejectingCandidate)
+	nonEnforcingDelta, err := buildValidationDelta(nonEnforcingBaseline, nonEnforcingCandidate)
 	require.NoError(t, err)
-	gate, err = buildGateReport(nonRejectingBaseline, nonRejectingCandidate, nonRejectingDelta, nonRejectingCfg, 10, 5, fakeMode)
+	gate, err = buildGateReport(nonEnforcingBaseline, nonEnforcingCandidate, nonEnforcingDelta, nonEnforcingCfg, 10, 5, fakeMode)
 	require.NoError(t, err)
 	require.Equal(t, gateDecisionAccept, gate.Decision)
-	require.Contains(t, gate.NewHardFails, "regular")
+	require.False(t, gate.RejectOnNewHardFail)
+	require.False(t, gate.RejectOnCriticalRegression)
+	require.NotEmpty(t, gate.NewHardFails)
+	require.Contains(t, gate.NewHardFails, "hard_fail")
 	require.Contains(t, gate.CriticalRegressions, "critical")
-	require.Contains(t, gate.Reasons, "new hard fail cases: [regular]")
-	require.Contains(t, gate.Reasons, "critical regression cases: [critical]")
-	require.NotContains(t, gate.Reasons, "no new hard fail")
-	require.NotContains(t, gate.Reasons, "no critical regression")
+	require.Contains(t, gate.Reasons, "new hard fail cases detected but not enforced: [critical hard_fail]")
+	require.Contains(t, gate.Reasons, "critical regression cases detected but not enforced: [critical]")
+	rawGate, err := json.Marshal(gate)
+	require.NoError(t, err)
+	var serializedGate map[string]any
+	require.NoError(t, json.Unmarshal(rawGate, &serializedGate))
+	require.Equal(t, false, serializedGate["rejectOnNewHardFail"])
+	require.Equal(t, false, serializedGate["rejectOnCriticalRegression"])
+	require.NotEmpty(t, serializedGate["newHardFails"])
+	require.NotEmpty(t, serializedGate["criticalRegressions"])
 
 	latencyCfg := cfg
 	latencyCfg.MaxDurationMs = 1
 	gate, err = buildGateReport(baseline, candidate, delta, latencyCfg, 2, 5, fakeMode)
 	require.NoError(t, err)
 	require.Equal(t, gateDecisionReject, gate.Decision)
+
+	latencyCfg.MaxDurationMs = 0
+	gate, err = buildGateReport(baseline, candidate, delta, latencyCfg, 2, 5, fakeMode)
+	require.NoError(t, err)
+	require.Equal(t, gateDecisionAccept, gate.Decision)
+	require.Contains(t, gate.Reasons, "latency budget check skipped")
+	latencyCfg.MaxDurationMs = -1
+	gate, err = buildGateReport(baseline, candidate, delta, latencyCfg, 2, 5, fakeMode)
+	require.NoError(t, err)
+	require.Equal(t, gateDecisionAccept, gate.Decision)
+	require.Contains(t, gate.Reasons, "latency budget check skipped")
 
 	callBudgetCfg := cfg
 	callBudgetCfg.MaxModelCalls = 5
