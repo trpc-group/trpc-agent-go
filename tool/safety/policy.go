@@ -150,8 +150,8 @@ func (m *pathMatcher) match(normArg string) bool {
 
 // LoadPolicy reads a policy from a .yaml/.yml or .json file, applies defaults
 // for any unset essential fields and compiles its lookup structures. Unknown
-// fields are rejected so a misspelled security key (e.g. denied_commmands) fails
-// loudly instead of silently leaving that protection empty.
+// fields are rejected so a mistyped security key (e.g. denied_command instead of
+// denied_commands) fails loudly instead of silently leaving that protection empty.
 func LoadPolicy(filePath string) (*Policy, error) {
 	data, err := os.ReadFile(filePath) //nolint:gosec // operator-provided config path
 	if err != nil {

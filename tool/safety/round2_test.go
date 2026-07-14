@@ -54,12 +54,12 @@ func TestEvenBackslashNotContinuation(t *testing.T) {
 func TestLoadPolicyRejectsUnknownFields(t *testing.T) {
 	dir := t.TempDir()
 	badYAML := filepath.Join(dir, "p.yaml")
-	os.WriteFile(badYAML, []byte("version: 1\ndenied_commmands: [rm]\n"), 0o600)
+	os.WriteFile(badYAML, []byte("version: 1\ndenied_command: [rm]\n"), 0o600)
 	if _, err := LoadPolicy(badYAML); err == nil {
 		t.Error("misspelled yaml field should fail policy load")
 	}
 	badJSON := filepath.Join(dir, "p.json")
-	os.WriteFile(badJSON, []byte(`{"version":1,"denied_commmands":["rm"]}`), 0o600)
+	os.WriteFile(badJSON, []byte(`{"version":1,"denied_command":["rm"]}`), 0o600)
 	if _, err := LoadPolicy(badJSON); err == nil {
 		t.Error("misspelled json field should fail policy load")
 	}
