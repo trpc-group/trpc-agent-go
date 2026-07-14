@@ -54,6 +54,12 @@ const (
 	//nolint:gosec
 	qwenAPIKeyName     string = "DASHSCOPE_API_KEY"
 	defaultQwenBaseURL string = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+
+	//nolint:gosec
+	kimiAPIKeyName     string = "MOONSHOT_API_KEY"
+	defaultKimiBaseURL string = "https://api.moonshot.ai/v1"
+	kimiAPIHost        string = "api.moonshot.ai"
+	kimiCNAPIHost      string = "api.moonshot.cn"
 )
 
 // Variant represents different model variants with specific behaviors.
@@ -74,6 +80,8 @@ const (
 	// VariantGLM is the GLM OpenAI-compatible variant. Some GLM gateways
 	// return the visible final answer in reasoning_content with empty content.
 	VariantGLM Variant = "glm"
+	// VariantKimi is the Kimi OpenAI-compatible variant.
+	VariantKimi Variant = "kimi"
 )
 
 // thinkingValueConvertor converts ThinkingEnabled bool to the variant-specific value.
@@ -244,6 +252,16 @@ var variantConfigs = map[Variant]variantConfig{
 		thinkingValueConvertor:            thinkingTypeValueConvertor,
 		reasoningContentAsContentFallback: true,
 	},
+	VariantKimi: {
+		filePurpose:               openai.FilePurpose("file-extract"),
+		fileDeletionMethod:        http.MethodDelete,
+		skipFileTypeInContent:     false,
+		fileDeletionBodyConvertor: defaultFileDeletionBodyConvertor,
+		apiKeyName:                kimiAPIKeyName,
+		defaultBaseURL:            defaultKimiBaseURL,
+		thinkingEnabledKey:        thinkingKey,
+		thinkingValueConvertor:    thinkingTypeValueConvertor,
+	},
 }
 
 // Model implements the model.Model interface for OpenAI API.
@@ -377,10 +395,21 @@ func inferVariant(baseURL string) Variant {
 	if isDeepSeekBaseURL(baseURL) {
 		return VariantDeepSeek
 	}
+	if isKimiBaseURL(baseURL) {
+		return VariantKimi
+	}
 	return VariantOpenAI
 }
 
 func isDeepSeekBaseURL(raw string) bool {
+	return baseURLMatchesHost(raw, deepSeekAPIHost)
+}
+
+func isKimiBaseURL(raw string) bool {
+	return baseURLMatchesHost(raw, kimiAPIHost, kimiCNAPIHost)
+}
+
+func baseURLMatchesHost(raw string, hosts ...string) bool {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
 		return false
@@ -389,7 +418,12 @@ func isDeepSeekBaseURL(raw string) bool {
 	if err != nil {
 		return false
 	}
-	return strings.EqualFold(parsed.Hostname(), deepSeekAPIHost)
+	for _, host := range hosts {
+		if strings.EqualFold(parsed.Hostname(), host) {
+			return true
+		}
+	}
+	return false
 }
 
 // Info implements the model.Model interface.

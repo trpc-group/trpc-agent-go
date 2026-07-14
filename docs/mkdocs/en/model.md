@@ -1830,6 +1830,15 @@ The framework currently supports the following Variants:
 - Serializes the thinking toggle using GLM's `thinking` object format
 - Falls back to exposing `reasoning_content` as visible content when some GLM gateways return an empty `content` field without tool calls
 
+**6. VariantKimi**
+
+- Kimi Open Platform adaptation
+- Default BaseURL: `https://api.moonshot.ai/v1`
+- API Key environment variable name: `MOONSHOT_API_KEY`
+- Automatically inferred for the official `api.moonshot.ai` and `api.moonshot.cn` hosts
+- Serializes the thinking toggle as `{"thinking": {"type": "enabled"}}`
+- Uses `file-extract` as the default file upload purpose
+
 ##### 7.2. Usage
 
 **Usage Example**：
@@ -1849,6 +1858,11 @@ model := openai.New("deepseek-v4-flash",
     openai.WithBaseURL("https://api.deepseek.com/v1"),
     openai.WithAPIKey("your-api-key"),
     openai.WithVariant(openai.VariantDeepSeek), // Specify the DeepSeek variant
+)
+
+// Use the Kimi Open Platform
+model = openai.New("kimi-k2.6",
+    openai.WithVariant(openai.VariantKimi), // Reads MOONSHOT_API_KEY automatically
 )
 ```
 
@@ -1881,6 +1895,9 @@ For certain Variants, the framework supports reading configuration from environm
 # DeepSeek
 export DEEPSEEK_API_KEY="your-api-key"
 # No need to call WithAPIKey explicitly; the framework reads it automatically
+
+# Kimi
+export MOONSHOT_API_KEY="your-api-key"
 ```
 
 ```go
@@ -1910,6 +1927,7 @@ The OpenAI-compatible variants serialize `ThinkingEnabled=true` as follows:
 | `VariantHunyuan` | `"thinking": {"type": "enabled"}` |
 | `VariantGLM` | `"thinking": {"type": "enabled"}` |
 | `VariantQwen` | `"enable_thinking": true` |
+| `VariantKimi` | `"thinking": {"type": "enabled"}` |
 
 For example, to deterministically enable thinking through the official DeepSeek API:
 
@@ -1934,6 +1952,19 @@ request := &model.Request{
 ```
 
 `ThinkingEnabled` applies only to models that expose an explicit thinking toggle; use `ReasoningEffort` instead when a model exposes only a reasoning budget. For external services that implement one of the thinking-toggle formats above, explicitly setting the matching `Variant` and `ThinkingEnabled` is usually sufficient. If a gateway uses a different field or requires additional parameters, use `openai.WithExtraFields(...)` to add or override provider-specific fields.
+
+For Kimi models that require thinking to remain enabled, leave
+`ThinkingEnabled` unset. To preserve reasoning across Kimi K2.6 conversation
+turns, pass the complete provider extension explicitly:
+
+```go
+openai.WithExtraFields(map[string]any{
+    "thinking": map[string]string{
+        "type": "enabled",
+        "keep": "all",
+    },
+})
+```
 
 #### 8. Streaming Tool Call Deltas: ShowToolCallDelta
 

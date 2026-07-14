@@ -517,6 +517,8 @@ const (
 	qwenAPIHost     = "dashscope.aliyuncs.com"
 	hunyuanAPIHost  = "api.hunyuan.cloud.tencent.com"
 	glmAPIHost      = "open.bigmodel.cn"
+	kimiAPIHost     = "api.moonshot.ai"
+	kimiCNAPIHost   = "api.moonshot.cn"
 
 	openAIAPIKeyEnvName  = "OPENAI_API_KEY"
 	openAIBaseURLEnvName = "OPENAI_BASE_URL"
@@ -4031,7 +4033,8 @@ func parseOpenAIVariant(
 		openai.VariantDeepSeek,
 		openai.VariantHunyuan,
 		openai.VariantQwen,
-		openai.VariantGLM:
+		openai.VariantGLM,
+		openai.VariantKimi:
 		return variant, nil
 	default:
 		return "", fmt.Errorf("unsupported openai variant: %s", raw)
@@ -4086,6 +4089,9 @@ func inferOpenAIVariant(baseURL string) openai.Variant {
 		return openai.VariantHunyuan
 	case strings.EqualFold(host, glmAPIHost):
 		return openai.VariantGLM
+	case strings.EqualFold(host, kimiAPIHost),
+		strings.EqualFold(host, kimiCNAPIHost):
+		return openai.VariantKimi
 	default:
 		return openai.VariantOpenAI
 	}
