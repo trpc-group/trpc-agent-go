@@ -2873,7 +2873,7 @@ func (e *Executor) initializeNodeContext(
 	traceStepID := agent.StartExecutionTraceStep(
 		invocation,
 		e.traceNodeIDForTask(invocation, t),
-		nodeType.String(),
+		string(istructure.NormalizeNodeKind(nodeType.String())),
 		inputSnapshot,
 		t.PredecessorStepIDs,
 	)
