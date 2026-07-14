@@ -1772,7 +1772,7 @@ model := anthropic.New("claude-sonnet-4-0",
 
 #### 7. Variant 优化：平台特有行为适配
 
-Variant 机制是 Model 模块的重要优化，用于处理不同 OpenAI 兼容平台的特有行为差异。通过指定不同的 Variant，框架能够自动适配各平台的 API 差异，特别是文件上传、删除和处理逻辑。
+Variant 机制是 Model 模块的重要优化，用于处理不同 OpenAI 兼容平台的特有行为差异。通过指定不同的 Variant，框架能够自动适配各平台的 API 差异，包括文件处理和思考开关字段的序列化格式。
 
 ##### 7.1. 支持的 Variant 类型
 
@@ -1806,6 +1806,12 @@ Variant 机制是 Model 模块的重要优化，用于处理不同 OpenAI 兼容
 - 默认 BaseURL：`https://dashscope.aliyuncs.com/compatible-mode/v1`
 - API Key 环境变量名：`DASHSCOPE_API_KEY`
 - 其他行为与标准 OpenAI 一致
+
+**5. VariantGLM（智谱 GLM）**
+
+- GLM OpenAI-compatible 接口适配
+- 使用 GLM 的 `thinking` 对象格式序列化思考开关
+- 当部分 GLM 网关把最终答案放在 `reasoning_content` 且 `content` 为空时，框架会将其回退为可见内容
 
 ##### 7.2. 使用方式
 
@@ -1868,6 +1874,49 @@ model := openai.New("deepseek-v4-flash",
     openai.WithVariant(openai.VariantDeepSeek), // 自动读取 DEEPSEEK_API_KEY
 )
 ```
+
+##### 7.4. 思考开关与 Variant
+
+`Variant` 和 `GenerationConfig.ThinkingEnabled` 负责不同的事情：
+
+- `WithVariant(...)` 选择服务方协议，决定思考开关应使用哪个字段和 JSON 格式；
+- `ThinkingEnabled` 决定是否显式开启或关闭思考。
+
+仅设置 `Variant` **不会自动发送思考开关**。当 `ThinkingEnabled == nil` 时，框架不发送任何开关字段，由服务方使用默认值。即使某个服务方当前默认开启思考，如果调用方需要确定性行为，也应显式设置 `ThinkingEnabled`。
+
+各 OpenAI-compatible Variant 的序列化结果如下：
+
+| Variant | `ThinkingEnabled=true` 的请求字段 |
+| --- | --- |
+| `VariantOpenAI` | `"thinking_enabled": true` |
+| `VariantDeepSeek` | `"thinking": {"type": "enabled"}` |
+| `VariantHunyuan` | `"thinking": {"type": "enabled"}` |
+| `VariantGLM` | `"thinking": {"type": "enabled"}` |
+| `VariantQwen` | `"enable_thinking": true` |
+
+例如，通过官方 DeepSeek API 确定性地开启思考：
+
+```go
+thinking := true
+
+llm := openai.New("deepseek-v4-flash",
+    openai.WithBaseURL("https://api.deepseek.com"),
+    openai.WithAPIKey("your-api-key"),
+    openai.WithVariant(openai.VariantDeepSeek),
+)
+
+request := &model.Request{
+    Messages: []model.Message{
+        model.NewUserMessage("分析这个问题。"),
+    },
+    GenerationConfig: model.GenerationConfig{
+        Stream:          true,
+        ThinkingEnabled: &thinking,
+    },
+}
+```
+
+`ThinkingEnabled` 只适用于提供显式思考开关的模型；如果模型只支持推理预算，请改用 `ReasoningEffort`。对实现上述思考开关格式的外部服务，通常显式设置对应 `Variant` 和 `ThinkingEnabled` 即可。如果代理网关使用了不同字段或需要额外参数，可以通过 `openai.WithExtraFields(...)` 添加或覆盖服务方特有字段。
 
 #### 8. 流式工具调用增量：ShowToolCallDelta
 
