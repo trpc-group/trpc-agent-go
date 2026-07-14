@@ -132,9 +132,7 @@ func (sqliteFactory) Create(_ context.Context, t *testing.T) *Backend {
 
 // miniredisFactory creates a Redis session backend backed by an in-process miniredis server.
 // Always available — no external Redis instance needed.
-type miniredisFactory struct {
-	url string
-}
+type miniredisFactory struct{}
 
 func (miniredisFactory) Kind() string               { return "miniredis" }
 func (miniredisFactory) Capabilities() Capabilities { return AllCapabilities() }

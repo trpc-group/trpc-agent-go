@@ -93,27 +93,6 @@ func HasUnexpectedDiff(result CaseResult) bool {
 	return false
 }
 
-// HasAllowedDiff reports whether a CaseResult contains at least one allowed diff.
-func HasAllowedDiff(result CaseResult) bool {
-	for _, diff := range result.Diffs {
-		if diff.Allowed {
-			return true
-		}
-	}
-	return false
-}
-
-// AllowedDiffCount returns the number of allowed diffs in a CaseResult.
-func AllowedDiffCount(result CaseResult) int {
-	n := 0
-	for _, diff := range result.Diffs {
-		if diff.Allowed {
-			n++
-		}
-	}
-	return n
-}
-
 func walkDiff(path string, left, right any, add func(string, any, any)) {
 	if reflect.DeepEqual(left, right) {
 		return
@@ -390,11 +369,6 @@ func sectionForCapability(cap string) string {
 	}
 }
 
-// AllowedDiffValidateSections adds app_state and user_state to the valid section set.
-func AllowedDiffValidateSections() []string {
-	return []string{"events", "state", "memories", "summaries", "tracks", "app_state", "user_state"}
-}
-
 func extractSessionID(left, right Snapshot) string {
 	// Try to find session_id in summaries.
 	for _, s := range left.Summaries {
@@ -419,8 +393,8 @@ func compareScopedStates(
 ) []Diff {
 	var diffs []Diff
 	for _, section := range []struct {
-		name string
-		left map[string]any
+		name  string
+		left  map[string]any
 		right map[string]any
 	}{
 		{"app_state", left.AppState, right.AppState},

@@ -1,7 +1,7 @@
 {
   "report_id": "replay-v2",
   "version": "v2",
-  "run_id": "20260714-140743-61196-LAPTOP-5F85UBKS",
+  "run_id": "20260714-185954-47384-LAPTOP-5F85UBKS",
   "backends": [
     "inmemory",
     "sqlite"
@@ -10,7 +10,7 @@
     {
       "name": "case01_single_turn",
       "status": "pass",
-      "duration": "5.3714ms",
+      "duration": "755.7µs",
       "sections_compared": 5,
       "sections_skipped": 0,
       "capabilities": {
@@ -276,4 +276,4 @@
     "minor_diffs": 1
   }
 }
-// sha256:f309b1a9010e215835cb5aeb37348df3d01e39f3a9f6cf401a6f17bda249cf0d
+// sha256:c14162c3b93e537b47cb5fa5e562d72ba4bf12f8fc7aba49b0e32d9b66fa6937

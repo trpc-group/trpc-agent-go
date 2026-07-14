@@ -1013,15 +1013,6 @@ func memoryPressureCheck(maxUsagePct float64) error {
 
 // --- Snapshot Crash Recovery ---
 
-// saveSnapshotAtomic writes a snapshot JSON file atomically via .tmp + rename.
-func saveSnapshotAtomic(path string, snapshot *Snapshot) error {
-	b, err := json.MarshalIndent(snapshot, "", "  ")
-	if err != nil {
-		return err
-	}
-	return saveBytesAtomic(path, b)
-}
-
 // saveBytesAtomic writes raw bytes atomically via .tmp + rename.
 func saveBytesAtomic(path string, data []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
