@@ -66,6 +66,8 @@ redaction.
 ## Policy
 
 `tool_safety_policy.yaml` controls allowed commands, denied commands, denied
-paths, network allowlists, maximum timeout, maximum output size, environment
-variable allowlist, and commands that require human review. Changing those
-fields does not require code changes.
+paths, network allowlists, maximum timeout, caller-declared output caps,
+environment variable allowlist, and commands that require human review. The
+output-cap policy validates requests whose executor already enforces a byte
+cap; the built-in adapters do not claim a byte limit because their schemas do
+not expose one. Changing those fields does not require code changes.

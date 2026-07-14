@@ -25,6 +25,8 @@ type PermissionOption func(*PermissionPolicy)
 // PermissionRequestParser converts a framework permission request into a
 // safety scan request. Extensions can use one for MCP, Skill, or custom
 // command-execution tools whose arguments do not match a built-in backend.
+// A parser may set Request.MaxOutputBytes when its executor enforces that cap;
+// the built-in adapters do not expose a byte-cap argument.
 type PermissionRequestParser func(
 	req *tool.PermissionRequest,
 ) (Request, bool, error)

@@ -50,6 +50,7 @@ network_allowlist:
   - pypi.org
   - files.pythonhosted.org
 max_timeout_seconds: 300
+# Validates a request cap; the executor must enforce the declared byte limit.
 max_output_bytes: 4194304
 env_allowlist:
   - PATH

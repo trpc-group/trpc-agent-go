@@ -133,11 +133,12 @@ func TestScanRequiredSamples(t *testing.T) {
 		{
 			name: "hostexec long session",
 			req: Request{
-				ToolName:   "exec_command",
-				Backend:    BackendHostExec,
-				Command:    "tail -f app.log",
-				TTY:        true,
-				Background: true,
+				ToolName:       "exec_command",
+				Backend:        BackendHostExec,
+				Command:        "tail -f app.log",
+				TimeoutSeconds: DefaultPolicy().MaxTimeoutSeconds,
+				TTY:            true,
+				Background:     true,
 			},
 			decision: DecisionNeedsHumanReview,
 			ruleID:   "hostexec.long_session",
@@ -257,6 +258,57 @@ func TestLoadPolicyCanDisableParseErrorDeny(t *testing.T) {
 	}, policy)
 	if report.Decision != DecisionAsk || report.RuleID != "shellsafe.parse_error" {
 		t.Fatalf("unexpected report: %+v", report)
+	}
+}
+
+func TestLoadPolicyRejectsUnknownFields(t *testing.T) {
+	tests := []struct {
+		name     string
+		filename string
+		content  string
+	}{
+		{
+			name:     "JSON allowlist typo",
+			filename: "policy.json",
+			content:  `{"allowed_command":["go"]}`,
+		},
+		{
+			name:     "JSON denylist typo",
+			filename: "policy.json",
+			content:  `{"denied_command":["sudo"]}`,
+		},
+		{
+			name:     "JSON resource typo",
+			filename: "policy.json",
+			content:  `{"max_timeout_second":30}`,
+		},
+		{
+			name:     "YAML allowlist typo",
+			filename: "policy.yaml",
+			content:  "allowed_command:\n  - go\n",
+		},
+		{
+			name:     "YAML denylist typo",
+			filename: "policy.yaml",
+			content:  "denied_command:\n  - sudo\n",
+		},
+		{
+			name:     "YAML resource typo",
+			filename: "policy.yaml",
+			content:  "max_output_byte: 1024\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), tt.filename)
+			if err := os.WriteFile(path, []byte(tt.content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := LoadPolicy(path); err == nil {
+				t.Fatal("LoadPolicy unknown field error = nil")
+			}
+		})
 	}
 }
 
@@ -384,6 +436,69 @@ func TestWrappedCommandsApplyPolicyToEffectiveCommand(t *testing.T) {
 	}
 }
 
+func TestWrappedCommandsApplyAllowlistToEveryCommand(t *testing.T) {
+	policy := DefaultPolicy()
+	policy.AllowedCommands = []string{"env", "timeout"}
+	for _, command := range []string{
+		"env python payload.py",
+		"env timeout 5 python payload.py",
+	} {
+		t.Run(command, func(t *testing.T) {
+			report := Scan(Request{
+				ToolName: "workspace_exec",
+				Backend:  BackendWorkspaceExec,
+				Command:  command,
+			}, policy)
+			if report.Decision != DecisionDeny ||
+				report.RuleID != "policy.command_not_allowed" ||
+				!strings.Contains(strings.Join(report.Evidence, " "), "python") {
+				t.Fatalf("effective command should be rejected by allowlist: %+v", report)
+			}
+		})
+	}
+}
+
+func TestUnresolvedCommandWrappersFailClosed(t *testing.T) {
+	tests := []struct {
+		name        string
+		destructive string
+		network     string
+	}{
+		{name: "xargs", destructive: "xargs sudo id", network: "xargs curl evil.example"},
+		{name: "setsid", destructive: "setsid sudo id", network: "setsid curl evil.example"},
+		{name: "unshare", destructive: "unshare sudo id", network: "unshare curl evil.example"},
+		{name: "chroot", destructive: "chroot work sudo id", network: "chroot work curl evil.example"},
+		{name: "runuser", destructive: "runuser -u nobody -- sudo id", network: "runuser -u nobody -- curl evil.example"},
+		{name: "time", destructive: "time sudo id", network: "time curl evil.example"},
+		{name: "ionice", destructive: "ionice sudo id", network: "ionice curl evil.example"},
+		{name: "taskset", destructive: "taskset 1 sudo id", network: "taskset 1 curl evil.example"},
+		{name: "stdbuf", destructive: "stdbuf -o0 sudo id", network: "stdbuf -o0 curl evil.example"},
+		{name: "strace", destructive: "strace sudo id", network: "strace curl evil.example"},
+		{name: "ltrace", destructive: "ltrace sudo id", network: "ltrace curl evil.example"},
+		{name: "script", destructive: `script -c "sudo id" audit.log`, network: `script -c "curl evil.example" audit.log`},
+		{name: "flock", destructive: "flock lockfile sudo id", network: "flock lockfile curl evil.example"},
+	}
+
+	for _, tt := range tests {
+		for scenario, command := range map[string]string{
+			"destructive": tt.destructive,
+			"network":     tt.network,
+		} {
+			t.Run(tt.name+"/"+scenario, func(t *testing.T) {
+				report := Scan(Request{
+					ToolName: "workspace_exec",
+					Backend:  BackendWorkspaceExec,
+					Command:  command,
+				}, DefaultPolicy())
+				if report.Decision != DecisionDeny ||
+					!reportHasRule(report, "shell.unresolved_wrapper") {
+					t.Fatalf("unresolved wrapper should fail closed: %+v", report)
+				}
+			})
+		}
+	}
+}
+
 func TestNetworkCommandsRejectLoopbackTargets(t *testing.T) {
 	commands := []string{
 		"/usr/bin/curl 127.0.0.1",
@@ -401,6 +516,74 @@ func TestNetworkCommandsRejectLoopbackTargets(t *testing.T) {
 				t.Fatalf("loopback network target should be denied: %+v", report)
 			}
 		})
+	}
+}
+
+func TestCurlRemappingOptionsValidateReplacementTarget(t *testing.T) {
+	tests := []struct {
+		name     string
+		command  string
+		decision Decision
+		ruleID   string
+	}{
+		{
+			name: "connect-to denied host",
+			command: "curl --connect-to api.github.com:443:evil.example:443 " +
+				"https://api.github.com/repos",
+			decision: DecisionDeny,
+			ruleID:   "network.non_whitelisted_domain",
+		},
+		{
+			name: "connect-to allowed host assignment",
+			command: "curl --connect-to=api.github.com:443:github.com:443 " +
+				"https://api.github.com/repos",
+			decision: DecisionAllow,
+		},
+		{
+			name: "resolve denied address",
+			command: "curl --resolve api.github.com:443:203.0.113.10 " +
+				"https://api.github.com/repos",
+			decision: DecisionDeny,
+			ruleID:   "network.non_whitelisted_domain",
+		},
+		{
+			name: "malformed remap requires review",
+			command: "curl --connect-to broken " +
+				"https://api.github.com/repos",
+			decision: DecisionNeedsHumanReview,
+			ruleID:   "network.unresolved_curl_remap",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			report := Scan(Request{
+				ToolName: "workspace_exec",
+				Backend:  BackendWorkspaceExec,
+				Command:  tt.command,
+			}, DefaultPolicy())
+			if report.Decision != tt.decision || report.RuleID != tt.ruleID {
+				t.Fatalf("unexpected curl remapping report: %+v", report)
+			}
+		})
+	}
+}
+
+func TestParseCurlRemapValueHandlesBracketedAddresses(t *testing.T) {
+	targets, ok := parseCurlRemapValue(
+		"--connect-to",
+		"api.github.com:443:[2001:db8::1]:443",
+	)
+	if !ok || !slices.Equal(targets, []string{"[2001:db8::1]"}) {
+		t.Fatalf("connect-to targets = %q, ok = %v", targets, ok)
+	}
+
+	targets, ok = parseCurlRemapValue(
+		"--resolve",
+		"api.github.com:443:[2001:db8::1],203.0.113.10",
+	)
+	if !ok || !slices.Equal(targets, []string{"[2001:db8::1]", "203.0.113.10"}) {
+		t.Fatalf("resolve targets = %q, ok = %v", targets, ok)
 	}
 }
 
@@ -654,6 +837,130 @@ func TestPermissionPolicyMapsReviewToAsk(t *testing.T) {
 	}
 }
 
+func TestPermissionPolicyResolvesHostExecDefaultTimeout(t *testing.T) {
+	tests := []struct {
+		name string
+		args string
+	}{
+		{name: "omitted", args: `{"command":"go test ./..."}`},
+		{name: "zero", args: `{"command":"go test ./...","timeout_sec":0}`},
+		{name: "negative", args: `{"command":"go test ./...","timeout_sec":-1}`},
+	}
+
+	policy := NewPermissionPolicy(DefaultPolicy())
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			decision, err := policy.CheckToolPermission(
+				context.Background(),
+				&tool.PermissionRequest{
+					ToolName:  "exec_command",
+					Arguments: []byte(tt.args),
+				},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if decision.Action != tool.PermissionActionDeny ||
+				!strings.Contains(decision.Reason, "resource.timeout_exceeded") ||
+				!strings.Contains(decision.Reason, "1800s") {
+				t.Fatalf("hostexec default timeout should be denied: %+v", decision)
+			}
+		})
+	}
+
+	decision, err := policy.CheckToolPermission(
+		context.Background(),
+		&tool.PermissionRequest{
+			ToolName:  "exec_command",
+			Arguments: []byte(`{"command":"go test ./...","timeout_sec":300}`),
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Action != tool.PermissionActionAllow {
+		t.Fatalf("bounded hostexec timeout should be allowed: %+v", decision)
+	}
+}
+
+func TestPermissionPolicyChecksNonShellCodePathsAndNetwork(t *testing.T) {
+	tests := []struct {
+		name string
+		code string
+		rule string
+	}{
+		{
+			name: "denied Python path",
+			code: `print(open('/etc/passwd').read())`,
+			rule: "sensitive.path_access",
+		},
+		{
+			name: "non-allowlisted Python socket",
+			code: `socket.create_connection(('evil.example', 443))`,
+			rule: "network.non_whitelisted_domain",
+		},
+	}
+
+	policy := NewPermissionPolicy(DefaultPolicy())
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			args, err := json.Marshal(map[string]any{
+				"code_blocks": []map[string]string{{
+					"language": "python",
+					"code":     tt.code,
+				}},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			decision, err := policy.CheckToolPermission(
+				context.Background(),
+				&tool.PermissionRequest{
+					ToolName:  "execute_code",
+					Arguments: args,
+				},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if decision.Action != tool.PermissionActionDeny ||
+				!strings.Contains(decision.Reason, tt.rule) {
+				t.Fatalf("non-shell code policy was not enforced: %+v", decision)
+			}
+		})
+	}
+}
+
+func TestPermissionPolicyValidatesDeclaredCustomOutputCap(t *testing.T) {
+	policyConfig := DefaultPolicy()
+	policyConfig.MaxOutputBytes = 1024
+	policy := NewPermissionPolicy(
+		policyConfig,
+		WithPermissionRequestParser(
+			"custom_exec",
+			func(req *tool.PermissionRequest) (Request, bool, error) {
+				return Request{
+					ToolName:       req.ToolName,
+					Backend:        "custom",
+					Command:        "go test ./...",
+					MaxOutputBytes: 2048,
+				}, true, nil
+			},
+		),
+	)
+	decision, err := policy.CheckToolPermission(
+		context.Background(),
+		&tool.PermissionRequest{ToolName: "custom_exec"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Action != tool.PermissionActionDeny ||
+		!strings.Contains(decision.Reason, "resource.output_limit_exceeded") {
+		t.Fatalf("declared custom output cap should be validated: %+v", decision)
+	}
+}
+
 func TestPermissionPolicyUsesExtensionRequestParser(t *testing.T) {
 	parserCalled := false
 	policy := NewPermissionPolicy(
@@ -893,6 +1200,38 @@ func TestRequestFromPermissionRequestParsesExecMetadata(t *testing.T) {
 	}
 }
 
+func TestBuiltInPermissionRequestsDoNotClaimOutputByteCap(t *testing.T) {
+	tests := []struct {
+		name string
+		args string
+	}{
+		{name: "workspace_exec", args: `{"command":"go test ./..."}`},
+		{name: "exec_command", args: `{"command":"go test ./..."}`},
+		{
+			name: "execute_code",
+			args: `{"code_blocks":[{"language":"python","code":"print(1)"}]}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req, ok, err := RequestFromPermissionRequest(&tool.PermissionRequest{
+				ToolName:  tt.name,
+				Arguments: []byte(tt.args),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !ok {
+				t.Fatal("RequestFromPermissionRequest() ok = false")
+			}
+			if req.MaxOutputBytes != 0 {
+				t.Fatalf("built-in request output cap = %d, want undeclared", req.MaxOutputBytes)
+			}
+		})
+	}
+}
+
 func TestRequestFromPermissionRequestParsesTTYAndTimeoutSec(t *testing.T) {
 	req, ok, err := RequestFromPermissionRequest(&tool.PermissionRequest{
 		ToolName: "workspace_exec",
@@ -1100,6 +1439,16 @@ func TestScanAdditionalRuleBranches(t *testing.T) {
 			ruleID: "dangerous.recursive_chmod",
 		},
 		{
+			name:   "recursive chmod clustered option",
+			cmd:    "chmod -Rv 777 .",
+			ruleID: "dangerous.recursive_chmod",
+		},
+		{
+			name:   "recursive chmod long option",
+			cmd:    "chmod --recursive 777 .",
+			ruleID: "dangerous.recursive_chmod",
+		},
+		{
 			name:   "network command without target",
 			cmd:    "curl --head",
 			ruleID: "network.unresolved_target",
@@ -1247,11 +1596,27 @@ func TestScanHighConcurrencyNeedsReview(t *testing.T) {
 	report := Scan(Request{
 		ToolName: "workspace_exec",
 		Backend:  BackendWorkspaceExec,
-		Command:  "printf jobs | xargs -P 64 -n 1 echo",
+		Command:  "parallel -j 64 echo ::: a b c",
 	}, DefaultPolicy())
 	if report.Decision != DecisionNeedsHumanReview ||
 		report.RuleID != "resource.high_concurrency" {
 		t.Fatalf("unexpected report: %+v", report)
+	}
+}
+
+func TestCommandNameStripsExecutableSuffixCaseInsensitively(t *testing.T) {
+	tests := map[string]string{
+		"DD.EXE":          "dd",
+		"Curl.ExE":        "curl",
+		"SCRIPT.CMD":      "script",
+		"Tool.BaT":        "tool",
+		"utility.CoM":     "utility",
+		`C:\\Bin\\DD.EXE`: "dd",
+	}
+	for input, want := range tests {
+		if got := commandName(input); got != want {
+			t.Fatalf("commandName(%q) = %q, want %q", input, got, want)
+		}
 	}
 }
 
