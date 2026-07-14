@@ -178,6 +178,9 @@ func LoadPolicyJSON(r io.Reader) (Policy, error) {
 	if err := dec.Decode(&p); err != nil {
 		return Policy{}, err
 	}
+	if err := requireJSONEOF(dec); err != nil {
+		return Policy{}, err
+	}
 	p = p.WithDefaults()
 	return p, p.Validate()
 }
@@ -188,6 +191,9 @@ func LoadPolicyYAML(r io.Reader) (Policy, error) {
 	dec := yaml.NewDecoder(r)
 	dec.KnownFields(true)
 	if err := dec.Decode(&p); err != nil {
+		return Policy{}, err
+	}
+	if err := requireYAMLEOF(dec); err != nil {
 		return Policy{}, err
 	}
 	p = p.WithDefaults()
@@ -220,4 +226,30 @@ func cleanStringList(in []string) []string {
 		}
 	}
 	return out
+}
+
+func requireJSONEOF(dec *json.Decoder) error {
+	var extra any
+	err := dec.Decode(&extra)
+	switch {
+	case err == io.EOF:
+		return nil
+	case err == nil:
+		return fmt.Errorf("policy JSON must contain exactly one document")
+	default:
+		return fmt.Errorf("policy JSON must contain exactly one document: %w", err)
+	}
+}
+
+func requireYAMLEOF(dec *yaml.Decoder) error {
+	var extra any
+	err := dec.Decode(&extra)
+	switch {
+	case err == io.EOF:
+		return nil
+	case err == nil:
+		return fmt.Errorf("policy YAML must contain exactly one document")
+	default:
+		return fmt.Errorf("policy YAML must contain exactly one document: %w", err)
+	}
 }

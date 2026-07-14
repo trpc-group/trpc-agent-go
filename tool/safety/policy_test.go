@@ -43,6 +43,81 @@ func TestLoadPolicyJSON_RejectsInvalidDecision(t *testing.T) {
 	require.ErrorContains(t, err, "invalid decision")
 }
 
+func TestLoadPolicyJSON_RejectsTrailingInput(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		err   string
+	}{
+		{
+			name:  "concatenated objects",
+			input: `{"allowed_commands":["go"]}{"allowed_commands":["git"]}`,
+			err:   "exactly one document",
+		},
+		{
+			name:  "non whitespace garbage",
+			input: `{"allowed_commands":["go"]}garbage`,
+			err:   "exactly one document",
+		},
+		{
+			name:  "trailing whitespace allowed",
+			input: "{\"allowed_commands\":[\"go\"]}\n \t",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			policy, err := LoadPolicyJSON(strings.NewReader(tc.input))
+			if tc.err == "" {
+				require.NoError(t, err)
+				require.Equal(t, []string{"go"}, policy.AllowedCommands)
+				return
+			}
+			require.ErrorContains(t, err, tc.err)
+		})
+	}
+}
+
+func TestLoadPolicyYAML_RejectsTrailingDocuments(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		err   string
+	}{
+		{
+			name: "multiple documents",
+			input: `
+allowed_commands:
+  - go
+---
+allowed_commands:
+  - git
+`,
+			err: "exactly one document",
+		},
+		{
+			name: "trailing whitespace allowed",
+			input: `
+allowed_commands:
+  - go
+
+`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			policy, err := LoadPolicyYAML(strings.NewReader(tc.input))
+			if tc.err == "" {
+				require.NoError(t, err)
+				require.Equal(t, []string{"go"}, policy.AllowedCommands)
+				return
+			}
+			require.ErrorContains(t, err, tc.err)
+		})
+	}
+}
+
 func TestLoadPolicyFile_DispatchesByExtension(t *testing.T) {
 	dir := t.TempDir()
 	jsonPath := filepath.Join(dir, "policy.json")
