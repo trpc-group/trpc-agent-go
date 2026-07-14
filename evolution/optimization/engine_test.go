@@ -399,7 +399,7 @@ func TestOptimizerReturnsHoldoutEvaluationErrors(t *testing.T) {
 	})
 }
 
-func TestSubmissionPolicyRejectsRegressionWithoutCallingService(t *testing.T) {
+func TestPromotionPolicyRejectsRegressionWithoutCallingService(t *testing.T) {
 	cases := makeCases("holdout", 10)
 	cases[0].Critical = true
 	baseline := mustBatch(t, cases, 0.5)
@@ -410,28 +410,36 @@ func TestSubmissionPolicyRejectsRegressionWithoutCallingService(t *testing.T) {
 	req := Request{Dataset: Dataset{ID: "dataset", Version: "v1", Holdout: cases}}
 
 	optimizer := &Optimizer{opts: defaultOptions()}
+	assessAndSubmit := func(
+		req Request,
+		seed, best *candidate,
+		baseline, candidateBatch evaluationBatch,
+		result *Result,
+	) {
+		optimizer.assessPromotion(
+			req, seed, best, baseline, candidateBatch, result,
+		)
+		require.NoError(t, optimizer.submitCandidate(
+			context.Background(), req, best, result,
+		))
+	}
 	result := &Result{BaselineHoldout: baseline.summary(), CandidateHoldout: candidateBatch.summary()}
-	require.NoError(t, optimizer.submitCandidate(
-		context.Background(), req, seed, seed, baseline, baseline, result,
-	))
+	assessAndSubmit(req, seed, seed, baseline, baseline, result)
 	assert.False(t, result.PromotionEligible)
 	assert.Contains(t, result.SubmissionReason, "no accepted candidate")
 
 	noHoldout := req
 	noHoldout.Dataset.Holdout = nil
 	result = &Result{}
-	require.NoError(t, optimizer.submitCandidate(
-		context.Background(), noHoldout, seed, best,
-		evaluationBatch{}, evaluationBatch{}, result,
-	))
+	assessAndSubmit(
+		noHoldout, seed, best, evaluationBatch{}, evaluationBatch{}, result,
+	)
 	assert.False(t, result.PromotionEligible)
 	assert.Contains(t, result.SubmissionReason, "no holdout")
 
 	optimizer.opts.minimumHoldoutImprovement = 0.3
 	result = &Result{BaselineHoldout: baseline.summary(), CandidateHoldout: candidateBatch.summary()}
-	require.NoError(t, optimizer.submitCandidate(
-		context.Background(), req, seed, best, baseline, candidateBatch, result,
-	))
+	assessAndSubmit(req, seed, best, baseline, candidateBatch, result)
 	assert.False(t, result.PromotionEligible)
 	assert.Contains(t, result.SubmissionReason, "below required")
 
@@ -441,9 +449,7 @@ func TestSubmissionPolicyRejectsRegressionWithoutCallingService(t *testing.T) {
 	require.NoError(t, err)
 	optimizer.opts.minimumHoldoutImprovement = 0
 	result = &Result{BaselineHoldout: baseline.summary(), CandidateHoldout: regressed.summary()}
-	require.NoError(t, optimizer.submitCandidate(
-		context.Background(), req, seed, best, baseline, regressed, result,
-	))
+	assessAndSubmit(req, seed, best, baseline, regressed, result)
 	assert.False(t, result.PromotionEligible)
 	assert.Contains(t, result.SubmissionReason, "critical holdout case regressed")
 

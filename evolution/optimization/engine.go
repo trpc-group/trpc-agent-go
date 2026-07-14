@@ -104,7 +104,7 @@ func (o *Optimizer) Optimize(
 	result.MetricCalls = run.budget.used
 	if req.Submit {
 		if err := o.submitCandidate(
-			runCtx, req, run.seed, best, baselineHoldout, candidateHoldout, result,
+			runCtx, req, best, result,
 		); err != nil {
 			return nil, err
 		}
@@ -519,13 +519,9 @@ func (o *Optimizer) evaluate(
 func (o *Optimizer) submitCandidate(
 	ctx context.Context,
 	req Request,
-	seed *candidate,
 	best *candidate,
-	baselineHoldout evaluationBatch,
-	candidateHoldout evaluationBatch,
 	result *Result,
 ) error {
-	o.assessPromotion(req, seed, best, baselineHoldout, candidateHoldout, result)
 	if !result.PromotionEligible {
 		result.SubmissionReason = result.PromotionReason
 		return nil
