@@ -285,9 +285,14 @@ func TestNewSandbox_SafeMode(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	t.Setenv("UNSAFE_LOCAL_SANDBOX", "")
-	_, err = NewSandbox(tmpDir)
-	if err == nil {
-		t.Error("Expected error when UNSAFE_LOCAL_SANDBOX is not set")
+	sandbox, err := NewSandbox(tmpDir)
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	defer sandbox.Close()
+
+	if sandbox.GetType() != SandboxTypeNoop {
+		t.Errorf("Expected sandbox type %s, got %s", SandboxTypeNoop, sandbox.GetType())
 	}
 }
 

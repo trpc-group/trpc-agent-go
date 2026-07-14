@@ -27,6 +27,7 @@ const (
 	SandboxTypeE2B       SandboxType = "e2b"
 	SandboxTypeContainer SandboxType = "container"
 	SandboxTypeLocal     SandboxType = "local"
+	SandboxTypeNoop      SandboxType = "noop"
 )
 
 type SandboxConfig struct {
@@ -216,6 +217,42 @@ func (s *LocalSandbox) GetType() SandboxType {
 	return SandboxTypeLocal
 }
 
+type NoopSandbox struct{}
+
+func NewNoopSandbox() *NoopSandbox {
+	return &NoopSandbox{}
+}
+
+func (s *NoopSandbox) RunCommand(ctx context.Context, command string, config SandboxConfig) (SandboxResult, error) {
+	return SandboxResult{
+		Output:      "",
+		Error:       "",
+		ExitCode:    0,
+		TimedOut:    false,
+		Duration:    0,
+		SandboxType: SandboxTypeNoop,
+	}, nil
+}
+
+func (s *NoopSandbox) ExecuteScript(ctx context.Context, scriptPath string, args []string, config SandboxConfig) (SandboxResult, error) {
+	return SandboxResult{
+		Output:      "",
+		Error:       "",
+		ExitCode:    0,
+		TimedOut:    false,
+		Duration:    0,
+		SandboxType: SandboxTypeNoop,
+	}, nil
+}
+
+func (s *NoopSandbox) Close() error {
+	return nil
+}
+
+func (s *NoopSandbox) GetType() SandboxType {
+	return SandboxTypeNoop
+}
+
 func filterEnv(env []string, whitelist []string) []string {
 	var result []string
 	for _, e := range env {
@@ -288,7 +325,8 @@ func NewSandboxWithConfig(workDir string, config SandboxConfig) (Sandbox, error)
 		return NewLocalSandbox(workDir)
 	}
 
-	return nil, fmt.Errorf("sandbox requires --unsafe-local flag or UNSAFE_LOCAL_SANDBOX=true environment variable")
+	log.Printf("Using no-op sandbox (dry-run mode) - commands will not be executed")
+	return NewNoopSandbox(), nil
 }
 
 var DefaultConfig = SandboxConfig{

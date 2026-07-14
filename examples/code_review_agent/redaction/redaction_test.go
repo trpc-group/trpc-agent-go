@@ -10,6 +10,7 @@
 package redaction
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -36,6 +37,30 @@ func TestRedactSecrets_APIKey(t *testing.T) {
 		if tc.expected && redacted == tc.input {
 			t.Errorf("Expected secrets to be redacted in %q", tc.input)
 		}
+	}
+}
+
+func TestRedactSecrets_KeyValuePatterns(t *testing.T) {
+	testCases := []struct {
+		input       string
+		wantRedact  bool
+		secretValue string
+	}{
+		{"api_key = \"my-secret-key-1234\"", true, "my-secret-key-1234"},
+		{"password = \"supersecret123\"", true, "supersecret123"},
+		{"AWS_SECRET_ACCESS_KEY = \"wJalrXUtnFEMI/K7MDENG\"", true, "wJalrXUtnFEMI/K7MDENG"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.input, func(t *testing.T) {
+			redacted := RedactSecrets(tc.input)
+			if tc.wantRedact && redacted == tc.input {
+				t.Errorf("Expected secrets to be redacted")
+			}
+			if strings.Contains(redacted, tc.secretValue) {
+				t.Errorf("Expected secret value %q to be redacted, but it appears in output: %q", tc.secretValue, redacted)
+			}
+		})
 	}
 }
 

@@ -178,6 +178,7 @@ func TestRuleDetector_DetectInCode_AllRules(t *testing.T) {
 		{"JWT token", `token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.test"`, "JWT_TOKEN", storage.SeverityHigh, storage.CategorySecurity},
 		{"SQL injection", `fmt.Sprintf("SELECT * FROM users WHERE id=%s", id)`, "SQL_INJECTION", storage.SeverityHigh, storage.CategorySecurity},
 		{"missing close", "f, _ := os.Open(path)", "MISSING_CLOSE", storage.SeverityMedium, storage.CategoryReliability},
+		{"defer in loop", "for i := 0; i < 10; i++ {\n    f, _ := os.Open(path)\n    defer f.Close()\n}", "DEFER_IN_LOOP", storage.SeverityHigh, storage.CategoryReliability},
 	}
 
 	for _, tc := range testCases {

@@ -61,8 +61,14 @@ func RedactSecrets(input string) string {
 			}
 
 			if valueStart == -1 {
-				valueStart = indices[2]
-				valueEnd = indices[3]
+				lastGroupIdx := len(indices) / 2
+				if lastGroupIdx >= 2 {
+					valueStart = indices[(lastGroupIdx-1)*2]
+					valueEnd = indices[(lastGroupIdx-1)*2+1]
+				} else {
+					valueStart = indices[2]
+					valueEnd = indices[3]
+				}
 			}
 
 			if valueStart == -1 || valueEnd == -1 || valueStart >= valueEnd {

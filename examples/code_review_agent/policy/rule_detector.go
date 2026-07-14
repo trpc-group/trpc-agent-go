@@ -59,7 +59,7 @@ var rules = []Rule{
 		Description: "Detects defer statements inside loops which can cause resource leaks",
 		Severity:    storage.SeverityHigh,
 		Category:    storage.CategoryReliability,
-		Pattern:     regexp.MustCompile(`^\s*for\s+.*\{[\s\S]*?^\s*defer\s+`),
+		Pattern:     regexp.MustCompile(`(?m)^\s*for\s+.*\{[\s\S]*?^\s*defer\s+`),
 		Confidence:  0.95,
 		NeedsReview: false,
 		Suggestion:  "Move defer outside the loop or use a helper function inside the loop",
