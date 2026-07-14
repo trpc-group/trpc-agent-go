@@ -80,8 +80,11 @@ func (w *JSONLAuditWriter) WriteAuditEvent(
 	return nil
 }
 
-func auditEventFromReport(report Report) AuditEvent {
-	recommendation, recommendationRedacted := redactAuditRecommendation(report)
+func auditEventFromReport(report Report, deniedPaths []string) AuditEvent {
+	recommendation, recommendationRedacted := redactAuditRecommendation(
+		report.Recommendation,
+		deniedPaths,
+	)
 	return AuditEvent{
 		Time:             time.Now().UTC(),
 		ToolName:         report.ToolName,
@@ -98,19 +101,9 @@ func auditEventFromReport(report Report) AuditEvent {
 	}
 }
 
-func redactAuditRecommendation(report Report) (string, bool) {
-	out, redacted := redactReportTextWithDeniedPaths(
-		report.Recommendation,
-		auditDeniedPaths(report),
-	)
+func redactAuditRecommendation(recommendation string, deniedPaths []string) (string, bool) {
+	out, redacted := redactReportTextWithDeniedPaths(recommendation, deniedPaths)
 	return singleLine(out), redacted
-}
-
-func auditDeniedPaths(report Report) []string {
-	if report.AuditDeniedPaths != nil {
-		return append([]string(nil), report.AuditDeniedPaths...)
-	}
-	return append([]string(nil), DefaultPolicy().DeniedPaths...)
 }
 
 func redactReportTextWithDeniedPaths(text string, deniedPaths []string) (string, bool) {

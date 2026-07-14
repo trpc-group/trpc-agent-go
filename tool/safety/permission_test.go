@@ -288,20 +288,19 @@ func TestJSONLAuditWriter_WritesRedactedEvent(t *testing.T) {
 
 func TestPermissionPolicy_AuditWriterRedactsScannerRecommendation(t *testing.T) {
 	var audit bytes.Buffer
-	sensitivePath := "/srv/team/private/secrets"
+	sensitivePath := "/etc/passwd"
 	recommendation := "remove password=hunter2 from " +
-		sensitivePath + "/api.env before retry"
+		sensitivePath + " before retry"
 	policy := NewPermissionPolicy(
 		ScannerFunc(func(context.Context, ScanRequest) (Report, error) {
 			return Report{
-				ToolName:         "custom",
-				Backend:          BackendUnknown,
-				Decision:         DecisionAsk,
-				RiskLevel:        RiskHigh,
-				RuleID:           "custom.sensitive",
-				Recommendation:   recommendation,
-				AuditDeniedPaths: []string{sensitivePath},
-				Blocked:          true,
+				ToolName:       "custom",
+				Backend:        BackendUnknown,
+				Decision:       DecisionAsk,
+				RiskLevel:      RiskHigh,
+				RuleID:         "custom.sensitive",
+				Recommendation: recommendation,
+				Blocked:        true,
 			}, nil
 		}),
 		WithAuditWriter(NewJSONLAuditWriter(&audit)),
@@ -314,6 +313,25 @@ func TestPermissionPolicy_AuditWriterRedactsScannerRecommendation(t *testing.T) 
 	require.Equal(t, tool.PermissionActionAsk, decision.Action)
 	require.NotContains(t, audit.String(), "hunter2")
 	require.NotContains(t, audit.String(), sensitivePath)
-	require.Contains(t, audit.String(), `"recommendation":"remove \u003credacted\u003e from \u003credacted\u003e/api.env before retry"`)
+	require.Contains(t, audit.String(), `"recommendation":"remove \u003credacted\u003e from \u003credacted\u003e before retry"`)
 	require.Contains(t, audit.String(), `"redacted":true`)
+}
+
+func TestAuditEventFromReport_DefaultScannerExplicitEmptyDeniedPathsStayEmpty(t *testing.T) {
+	scanner := MustDefaultScanner(Policy{
+		DisableDefaultDenies: true,
+		DeniedPaths:          []string{},
+	})
+	event := auditEventFromReport(Report{
+		ToolName:       "workspace_exec",
+		Backend:        BackendWorkspace,
+		Decision:       DecisionAsk,
+		RiskLevel:      RiskHigh,
+		Recommendation: "remove password=hunter2 from /etc/passwd before retry",
+		Blocked:        true,
+	}, auditDeniedPathsForScanner(scanner))
+	require.NotContains(t, event.Recommendation, "hunter2")
+	require.Contains(t, event.Recommendation, "/etc/passwd")
+	require.True(t, event.Redacted)
+	require.Empty(t, auditDeniedPathsForScanner(scanner))
 }

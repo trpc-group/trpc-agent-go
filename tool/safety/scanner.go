@@ -59,7 +59,6 @@ func (s *DefaultScanner) Scan(ctx context.Context, req ScanRequest) (Report, err
 	}
 	findings := s.scanRequest(ctx, req)
 	report := buildReport(req, findings, time.Since(start))
-	report.AuditDeniedPaths = append([]string(nil), s.policy.DeniedPaths...)
 	report.Command, report.Redacted = s.redactReportText(report.Command)
 	if report.Evidence != "" {
 		var redacted bool
