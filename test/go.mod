@@ -5,12 +5,15 @@ go 1.24.4
 require (
 	github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20260305114736-115a967b66a9
 	github.com/alicebob/miniredis/v2 v2.35.0
+	github.com/mattn/go-sqlite3 v1.14.32
 	github.com/r3labs/sse/v2 v2.10.0
 	github.com/stretchr/testify v1.11.1
 	trpc.group/trpc-go/trpc-agent-go v0.2.0
+	trpc.group/trpc-go/trpc-agent-go/memory/sqlite v1.10.0
 	trpc.group/trpc-go/trpc-agent-go/server/agui v0.0.0-20260108131845-87b14951638b
 	trpc.group/trpc-go/trpc-agent-go/session/mongodb v0.0.0
 	trpc.group/trpc-go/trpc-agent-go/session/redis v0.0.0
+	trpc.group/trpc-go/trpc-agent-go/session/sqlite v1.10.0
 )
 
 require (
@@ -84,3 +87,7 @@ replace trpc.group/trpc-go/trpc-agent-go/session/mongodb => ../session/mongodb
 replace trpc.group/trpc-go/trpc-agent-go/storage/redis => ../storage/redis
 
 replace trpc.group/trpc-go/trpc-agent-go/storage/mongodb => ../storage/mongodb
+
+replace trpc.group/trpc-go/trpc-agent-go/memory/sqlite => ../memory/sqlite
+
+replace trpc.group/trpc-go/trpc-agent-go/session/sqlite => ../session/sqlite
