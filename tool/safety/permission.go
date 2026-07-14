@@ -156,10 +156,7 @@ func (p *permissionPolicy) CheckToolPermission(
 		}
 		if !report.Decision.Valid() {
 			failure := invalidScannerDecisionReport(scanReq, report)
-			if i == 0 || reportRank(failure) > reportRank(final) {
-				final = failure
-			}
-			return p.finish(ctx, final)
+			return p.finish(ctx, failure)
 		}
 		if i == 0 || reportRank(report) > reportRank(final) {
 			final = report

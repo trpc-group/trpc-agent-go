@@ -216,6 +216,57 @@ func TestPermissionPolicy_UnsupportedScannerDecisionFailsClosed(t *testing.T) {
 	require.Contains(t, audit.String(), `"decision":"deny"`)
 }
 
+func TestPermissionPolicy_InvalidLaterScannerDecisionOverridesEarlierRankedReport(t *testing.T) {
+	var observed Report
+	var audit bytes.Buffer
+	var scans int
+	policy := NewPermissionPolicy(
+		ScannerFunc(func(_ context.Context, req ScanRequest) (Report, error) {
+			scans++
+			switch scans {
+			case 1:
+				return Report{
+					ToolName:       req.ToolName,
+					ToolCallID:     req.ToolCallID,
+					Backend:        req.Backend,
+					Decision:       DecisionDeny,
+					RiskLevel:      RiskCritical,
+					RuleID:         "first.critical_deny",
+					Recommendation: "block the first code block",
+					Blocked:        true,
+				}, nil
+			case 2:
+				return Report{}, nil
+			default:
+				t.Fatalf("unexpected extra scan %d", scans)
+				return Report{}, nil
+			}
+		}),
+		WithAuditWriter(NewJSONLAuditWriter(&audit)),
+		WithReportObserver(func(_ context.Context, report Report) {
+			observed = report
+		}),
+	)
+	decision, err := policy.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName: "execute_code",
+		Arguments: []byte(`{"code_blocks":[` +
+			`{"language":"python","code":"print('first')" },` +
+			`{"language":"python","code":"print('second')"}` +
+			`]}`),
+	})
+	require.NoError(t, err)
+	require.Equal(t, 2, scans)
+	require.Equal(t, tool.PermissionActionDeny, decision.Action)
+	require.Equal(t, DecisionDeny, observed.Decision)
+	require.Equal(t, "scanner.invalid_decision", observed.RuleID)
+	require.Equal(t, RiskHigh, observed.RiskLevel)
+	require.True(t, observed.Blocked)
+	require.Contains(t, observed.Evidence, `scanner returned invalid decision ""`)
+	require.Contains(t, audit.String(), `"rule_id":"scanner.invalid_decision"`)
+	require.Contains(t, audit.String(), `"decision":"deny"`)
+	require.NotContains(t, audit.String(), `"rule_id":"first.critical_deny"`)
+}
+
 func TestPermissionPolicy_UsesBackendResolverAndNilFallbacks(t *testing.T) {
 	allowPolicy := NewPermissionPolicy(nil)
 	decision, err := allowPolicy.CheckToolPermission(context.Background(), nil)
