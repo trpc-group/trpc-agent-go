@@ -42,7 +42,11 @@ func main() {
 	defer audit.Close()
 	writer := bufio.NewWriter(audit)
 	defer writer.Flush()
-	report := SafetyReport{time.Now().UTC().Format(time.RFC3339Nano), *policyPath, len(samples), 0, nil}
+	report := SafetyReport{
+		GeneratedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		Policy:      *policyPath,
+		Samples:     len(samples),
+	}
 	guard := NewGuard(policy)
 	for _, sample := range samples {
 		result := guard.Scan(sample.Request)
@@ -50,11 +54,24 @@ func main() {
 		if result.Decision == sample.ExpectedDecision {
 			report.MatchedExpected++
 		}
-		event := AuditEvent{time.Now().UTC().Format(time.RFC3339Nano), sample.Request.ToolName, result.Decision, result.RiskLevel, result.RuleID, sample.Request.Backend, result.DurationMicros, result.Redacted, result.Blocked}
-		line, _ := json.Marshal(event)
-		_, _ = writer.Write(append(line, '\n'))
+		event := AuditEvent{
+			Timestamp:      time.Now().UTC().Format(time.RFC3339Nano),
+			ToolName:       sample.Request.ToolName,
+			Decision:       result.Decision,
+			RiskLevel:      result.RiskLevel,
+			RuleID:         result.RuleID,
+			Backend:        sample.Request.Backend,
+			DurationMicros: result.DurationMicros,
+			Redacted:       result.Redacted,
+			Blocked:        result.Blocked,
+		}
+		line, e := json.Marshal(event)
+		must(e)
+		_, e = writer.Write(append(line, '\n'))
+		must(e)
 	}
-	out, _ := json.MarshalIndent(report, "", "  ")
+	out, e := json.MarshalIndent(report, "", "  ")
+	must(e)
 	must(os.WriteFile(*reportPath, append(out, '\n'), 0o644))
 	fmt.Printf("samples=%d expected=%d duration audited\n", report.Samples, report.MatchedExpected)
 }

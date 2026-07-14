@@ -78,11 +78,38 @@ func LoadPolicy(path string) (Policy, error) {
 	return p, e
 }
 
-type Guard struct{ policy Policy }
+type deniedCommandPattern struct {
+	command string
+	pattern *regexp.Regexp
+}
 
-func NewGuard(p Policy) *Guard { return &Guard{policy: p} }
+type Guard struct {
+	policy         Policy
+	deniedPatterns []deniedCommandPattern
+}
 
-var secretRE = regexp.MustCompile(`(?i)(api[_-]?key|token|password|secret)\s*[=:]\s*[^\s]+`)
+func NewGuard(p Policy) *Guard {
+	g := &Guard{policy: p}
+	for _, command := range p.DeniedCommands {
+		command = strings.ToLower(command)
+		g.deniedPatterns = append(g.deniedPatterns, deniedCommandPattern{
+			command: command,
+			pattern: regexp.MustCompile(`(^|[;&|\n]\s*)` + regexp.QuoteMeta(command) + `(\s|$)`),
+		})
+	}
+	return g
+}
+
+var (
+	secretRE             = regexp.MustCompile(`(?i)(api[_-]?key|token|password|secret)\s*[=:]\s*[^\s]+`)
+	destructiveCommandRE = regexp.MustCompile(`\brm\s+[^\n]*(?:-rf|-fr)|\b(?:mkfs|dd)\b`)
+	secretReadRE         = regexp.MustCompile(`(?i)(cat|type|grep|less|head|tail)\s+[^\n]*(\.env|credentials|id_rsa|\.ssh)`)
+	networkCommandRE     = regexp.MustCompile(`\b(curl|wget|nc|netcat|ssh)\b`)
+	shellWrapperRE       = regexp.MustCompile(`\b(?:sh|bash|cmd|powershell)\s+(?:-c|/c|-command)\b|\beval\b`)
+	dependencyChangeRE   = regexp.MustCompile(`\b(go\s+install|npm\s+install|pip\s+install|apt(?:-get)?\s+install)\b`)
+	unboundedExecutionRE = regexp.MustCompile(`\b(while\s+true|for\s*\(\s*;\s*;|yes\b|fork\s*bomb)`)
+	sleepRE              = regexp.MustCompile(`\bsleep\s+(\d+)`)
+)
 
 func redact(s string) (string, bool) {
 	out := secretRE.ReplaceAllStringFunc(s, func(v string) string {
@@ -100,7 +127,7 @@ func (g *Guard) Scan(req Request) ScanResult {
 	add := func(decision, risk, id, evidence, recommendation string) {
 		ev, changed := redact(evidence)
 		r.Redacted = r.Redacted || changed
-		r.Findings = append(r.Findings, Finding{decision, risk, id, ev, recommendation})
+		r.Findings = append(r.Findings, Finding{Decision: decision, RiskLevel: risk, RuleID: id, Evidence: ev, Recommendation: recommendation})
 	}
 	lower := strings.ToLower(req.Command)
 	tokens := strings.Fields(lower)
@@ -108,12 +135,12 @@ func (g *Guard) Scan(req Request) ScanResult {
 	if len(tokens) > 0 {
 		base = strings.Trim(tokens[0], "'\"")
 	}
-	for _, cmd := range g.policy.DeniedCommands {
-		if base == strings.ToLower(cmd) || regexp.MustCompile(`(^|[;&|]\s*)`+regexp.QuoteMeta(strings.ToLower(cmd))+`(\s|$)`).MatchString(lower) {
-			add("deny", "critical", "DENIED_COMMAND", cmd, "remove the denied command")
+	for _, denied := range g.deniedPatterns {
+		if base == denied.command || denied.pattern.MatchString(lower) {
+			add("deny", "critical", "DENIED_COMMAND", denied.command, "remove the denied command")
 		}
 	}
-	if regexp.MustCompile(`\brm\s+[^\n]*(?:-rf|-fr)|\b(?:mkfs|dd)\b`).MatchString(lower) {
+	if destructiveCommandRE.MatchString(lower) {
 		add("deny", "critical", "DESTRUCTIVE_COMMAND", req.Command, "do not run destructive filesystem commands")
 	}
 	for _, path := range g.policy.ForbiddenPaths {
@@ -121,10 +148,10 @@ func (g *Guard) Scan(req Request) ScanResult {
 			add("deny", "critical", "FORBIDDEN_PATH", path, "remove access to the protected path")
 		}
 	}
-	if regexp.MustCompile(`(?i)(cat|type|grep|less|head|tail)\s+[^\n]*(\.env|credentials|id_rsa|\.ssh)`).MatchString(req.Command) {
+	if secretReadRE.MatchString(req.Command) {
 		add("deny", "critical", "SECRET_READ", req.Command, "use a secret provider instead of reading credential files")
 	}
-	if regexp.MustCompile(`\b(curl|wget|nc|netcat|ssh)\b`).MatchString(lower) {
+	if networkCommandRE.MatchString(lower) {
 		hosts := extractHosts(req.Command)
 		if len(hosts) == 0 {
 			add("ask", "high", "NETWORK_UNPARSED", req.Command, "provide a literal allowlisted HTTPS URL")
@@ -135,19 +162,19 @@ func (g *Guard) Scan(req Request) ScanResult {
 			}
 		}
 	}
-	if regexp.MustCompile(`\b(?:sh|bash|cmd|powershell)\s+(?:-c|/c|-command)\b|\beval\b`).MatchString(lower) {
+	if shellWrapperRE.MatchString(lower) {
 		add("ask", "high", "SHELL_WRAPPER", req.Command, "expand and review the wrapped command before execution")
 	}
 	if strings.ContainsAny(req.Command, "`$") || strings.Contains(req.Command, "|") || strings.ContainsAny(req.Command, ";><") {
 		add("ask", "high", "SHELL_METACHAR", req.Command, "use argv execution without shell metacharacters")
 	}
-	if regexp.MustCompile(`\b(go\s+install|npm\s+install|pip\s+install|apt(?:-get)?\s+install)\b`).MatchString(lower) {
+	if dependencyChangeRE.MatchString(lower) {
 		add("ask", "high", "DEPENDENCY_CHANGE", req.Command, "pin and review dependencies in an isolated build environment")
 	}
-	if regexp.MustCompile(`\b(while\s+true|for\s*\(\s*;\s*;|yes\b|fork\s*bomb)`).MatchString(lower) {
+	if unboundedExecutionRE.MatchString(lower) {
 		add("deny", "critical", "UNBOUNDED_EXECUTION", req.Command, "replace unbounded work with a bounded operation")
 	}
-	if m := regexp.MustCompile(`\bsleep\s+(\d+)`).FindStringSubmatch(lower); len(m) > 1 {
+	if m := sleepRE.FindStringSubmatch(lower); len(m) > 1 {
 		n, _ := strconv.Atoi(m[1])
 		if n > g.policy.MaxTimeoutSeconds {
 			add("ask", "medium", "LONG_RUNNING", m[0], "reduce duration below the configured timeout")
@@ -217,7 +244,17 @@ type Executor func(context.Context, Request) (string, error)
 func (g *Guard) Wrap(next Executor, audit func(AuditEvent) error) Executor {
 	return func(ctx context.Context, req Request) (string, error) {
 		result := g.Scan(req)
-		event := AuditEvent{time.Now().UTC().Format(time.RFC3339Nano), req.ToolName, result.Decision, result.RiskLevel, result.RuleID, req.Backend, result.DurationMicros, result.Redacted, result.Blocked}
+		event := AuditEvent{
+			Timestamp:      time.Now().UTC().Format(time.RFC3339Nano),
+			ToolName:       req.ToolName,
+			Decision:       result.Decision,
+			RiskLevel:      result.RiskLevel,
+			RuleID:         result.RuleID,
+			Backend:        req.Backend,
+			DurationMicros: result.DurationMicros,
+			Redacted:       result.Redacted,
+			Blocked:        result.Blocked,
+		}
 		if e := audit(event); e != nil {
 			return "", e
 		}
