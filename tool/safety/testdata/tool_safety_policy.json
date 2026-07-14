@@ -7,6 +7,7 @@
     "host": ["exec_command"],
     "code": ["execute_code"]
   },
+  "workspace_isolated": false,
   "commands": {
     "allowed": ["go", "git", "ls", "cat", "echo", "grep", "sed", "awk", "jq",
                 "python3", "curl", "wget", "pip", "pip3", "sleep", "yes"],

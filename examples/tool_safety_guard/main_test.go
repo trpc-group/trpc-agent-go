@@ -10,6 +10,9 @@ package main
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -55,5 +58,43 @@ func TestDemoPolicyDecisions(t *testing.T) {
 				t.Errorf("decision = %q, want %q", decision.Action, tc.want)
 			}
 		})
+	}
+}
+
+// TestAuditFileAppendsAcrossRuns pins WithAuditFile's append contract for the
+// example: pre-existing audit entries must survive a run — the demo no longer
+// deletes the caller-selected audit path.
+func TestAuditFileAppendsAcrossRuns(t *testing.T) {
+	auditPath := filepath.Join(t.TempDir(), "audit.jsonl")
+	pre := `{"pre":"existing-entry"}` + "\n"
+	if err := os.WriteFile(auditPath, []byte(pre), 0o644); err != nil {
+		t.Fatalf("seed audit file: %v", err)
+	}
+
+	guard, err := safety.NewGuard(
+		safety.WithPolicyFile("tool_safety_policy.yaml"),
+		safety.WithAuditFile(auditPath),
+	)
+	if err != nil {
+		t.Fatalf("NewGuard: %v", err)
+	}
+	req := &tool.PermissionRequest{ToolName: "workspace_exec", Arguments: []byte(`{"command":"go test ./..."}`)}
+	if _, err := guard.CheckToolPermission(context.Background(), req); err != nil {
+		t.Fatalf("CheckToolPermission: %v", err)
+	}
+	if err := guard.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	data, err := os.ReadFile(auditPath)
+	if err != nil {
+		t.Fatalf("read audit file: %v", err)
+	}
+	if !strings.HasPrefix(string(data), pre) {
+		t.Errorf("pre-existing audit entry was destroyed; file now starts with %q",
+			string(data[:min(len(data), 40)]))
+	}
+	if len(data) <= len(pre) {
+		t.Errorf("no new audit event appended after the seed entry")
 	}
 }

@@ -21,8 +21,9 @@ Flags:
 - `-policy` — path to the policy file (default: `tool_safety_policy.yaml` next
   to the source).
 - `-audit` — path to the JSONL audit output (default:
-  `tool_safety_audit.jsonl` next to the source; git-ignored, regenerated each
-  run).
+  `tool_safety_audit.jsonl` next to the source; git-ignored). Events are
+  **appended**, matching `WithAuditFile`'s contract, so existing entries
+  survive a re-run; delete the file yourself if you want a fresh log.
 
 ## What it shows
 

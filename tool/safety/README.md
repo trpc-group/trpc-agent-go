@@ -46,7 +46,7 @@ second gate.
 | 3 | network | `R-NET-001` | download commands targeting a non-whitelisted host, including curl egress-redirect options (`--connect-to`, `--resolve`, `-x/--proxy`, `--url`, `--dns-servers`, `--doh-url`) parsed for their real target across `flag value`, `flag=value` and bundled/inline short-flag (`-sx`, `-xhost`) forms. `--resolve` uses an option-specific `[+]host:port:addr[,addr]` parser so an **unbracketed IPv6** rewrite target (`--resolve github.com:443:2001:db8::1`) is extracted whole instead of being shattered on its colons. Fails closed on the opaque `-K/--config` file (incl. `-sK`); optionally fails closed on curl's **implicit default config** (see below). The non-curl download commands get the same treatment: host-bearing options (`ssh/scp -J` jump hosts, `ssh -W/-L/-R` forwarding specs, `nc -x` proxy) are parsed for their real targets across space/inline/bundled forms, and opaque egress controls (`wget -e/--execute/--config/-i/--input-file`, `ssh/scp -o/-F`, `scp/sftp -S`) **fail closed** because their config file / rc directive / URL list / transport program can redirect egress invisibly. Raw and bracketed IPv6 operands (`nc 2001:db8::1`, `[2001:db8::1]:443`, `user@[2001:db8::1]:`) are parsed as whole addresses instead of being truncated at the first colon. A download command with **no extractable target at all** falls back to review instead of silently allowing. URLs embedded in non-shell `execute_code` source are checked against the same whitelist | medium → high |
 | 4 | shell_bypass | `R-SHELL-001` | unparsable commands (`$()`, backticks, `$VAR`, redirection, subshell) and shell wrappers / re-executing builtins (`bash -c`, `eval`, `xargs`, `env CMD`) that can bypass the allow/deny list; non-shell `execute_code` source that bridges into shell execution (`os.system`, `subprocess.`, `exec(`, `child_process`) → review | medium → high |
 | 4b | command_policy | `R-CMD-001` | a plain, parseable command that is simply **not in `commands.allowed`** (an allow-list miss, not a bypass); with the opt-in `commands.review_pipelines` knob, any multi-segment pipeline / chain → review | medium → high |
-| 5 | host_risk | `R-HOST-001` | host backend background / PTY sessions, `sudo`/`su`/`nohup` | high → critical |
+| 5 | host_risk | `R-HOST-001` | background / PTY sessions and `sudo`/`su`/`nohup` on the host backend — **and on the workspace backend unless the policy declares `workspace_isolated: true`**, because workspace_exec can be backed by `codeexecutor/local`, which runs directly on the host | high → critical |
 | 6 | dependency | `R-DEP-001` | configured installer subcommands (`pip install`, `go install`, ...) | medium |
 | 7 | resource_abuse | `R-RES-001` | over-budget timeout, long `sleep`, `yes`, infinite-loop patterns, `head -c` beyond `max_output_bytes`, explicit high/unlimited concurrency (`xargs -P`, `parallel -j`), interpreter string-multiplication output (`print("x" * 10000000)`) | medium → high |
 | 8 | secret_leak | `R-SECRET-001` | secret-like values in the command or env — provider token shapes (AWS, GitHub, `sk-`, Slack `xox`), private-key material, bearer headers, plus a name-based `password=`/`api_key=`/`token=` key=value heuristic; the env key participates in the match (also sets `redacted`) | medium |
@@ -74,28 +74,37 @@ subset, not the reference. Key fields:
 - `backends` — tool name → backend identifier. Defaults cover the real tool
   names; **override here if a host/code tool was renamed via `WithName`**, since
   an unmapped tool is allowed without scanning.
+- `workspace_isolated` (default `false`) — declares that the workspace backend
+  really runs inside a sandbox (container/e2b). The guard cannot see the
+  executor behind `workspace_exec`, and `codeexecutor/local` runs commands
+  directly on the host, so the host-risk rule (`R-HOST-001`) applies to the
+  workspace backend too until this is explicitly set. **Fail closed:** only set
+  it to `true` when the deployment genuinely isolates workspace execution.
 - `commands.allowed` / `commands.denied` — handed to `internal/shellsafe`;
   `commands.review_pipelines` (opt-in) routes any multi-segment pipeline to
   review.
 - `denied_subcommands`, `forbidden_paths`, `network.*`, `resources.*`,
   `env.*`, `secrets.patterns`, `rule_overrides`.
 
-`max_output_bytes` is checked statically only where the requested size is
-explicit in the command (`head -c N`); output size is otherwise unknowable
-before the command runs, so the byte cap is passed through for the **runtime**
-to enforce (workspaceexec / sandbox). `env.allowed_keys` *is* enforced
-statically as a soft check (`R-ENV-001` flags non-whitelisted keys); the guard
-cannot strip a key, so real env isolation is still the runtime's job.
+`max_output_bytes` is a **static heuristic only**: it is checked where the
+requested size is explicit in the command (`head -c N`). The guard does **not**
+pass this value to workspaceexec / hostexec / the sandbox — an arbitrary
+command can still emit more than it. If you need a hard output cap, configure
+the executor's own limit separately (e.g. the sandbox's resource limits);
+keeping the two values in sync is the operator's job. `env.allowed_keys` *is*
+enforced statically as a soft check (`R-ENV-001` flags non-whitelisted keys);
+the guard cannot strip a key, so real env isolation is still the runtime's
+job.
 
 ## workspace vs host security boundary
 
 | Dimension | `workspace_exec` | host `exec_command` |
 |-----------|------------------|---------------------|
-| Isolation | sandboxed workspace, path-restricted | direct host shell |
-| PTY long session | lower risk | `R-HOST-001` → deny by default |
-| Background process | reclaimed with the session | residual-process risk → `deny_background_on_host` |
+| Isolation | **depends on the executor**: a container/e2b workspace is sandboxed, `codeexecutor/local` is the host. The guard treats it as host-like until `workspace_isolated: true` is declared | direct host shell |
+| PTY long session | `R-HOST-001` unless `workspace_isolated` | `R-HOST-001` → deny by default |
+| Background process | `deny_background_on_host` applies unless `workspace_isolated`; a real sandbox reclaims the process with the session | residual-process risk → `deny_background_on_host` |
 | Privilege | usually none | `sudo`/`su` → critical |
-| Output / timeout | `max_timeout_sec` flagged statically; `max_output_bytes` enforced at runtime | same + process cleanup |
+| Output / timeout | `max_timeout_sec` / explicit `head -c` flagged statically; a hard output cap must be configured on the executor itself (the guard does not wire `max_output_bytes` through) | same + process cleanup |
 | Env exposure | non-whitelisted keys flagged (`R-ENV-001`); actual isolation by the runtime | same, but a larger host blast radius |
 
 hostexec is a **ToolSet** (`exec_command` + `write_stdin` + `kill_session` +
@@ -168,8 +177,10 @@ Explicit limitations:
   rely on the sandbox. Do not assume code execution gets the same protection as
   shell commands.
 - **Resource-abuse rules are best-effort.** String heuristics (`while true`,
-  `yes`, `sleep N`) are easily evaded; the real enforcement is the runtime
-  timeout / output cap in workspaceexec and the sandbox.
+  `yes`, `sleep N`) are easily evaded, and `max_output_bytes` only catches an
+  explicitly requested size (`head -c N`). The guard does not configure the
+  runtime: the real timeout / output enforcement is the executor's own limits
+  (workspaceexec, the sandbox), which must be set up separately.
 - **hostexec PTY long sessions** are intercepted only at the establishment
   point; in-session input is not inspected.
 - **curl's implicit default config is invisible to the guard.** Beyond the

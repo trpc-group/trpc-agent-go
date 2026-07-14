@@ -9,9 +9,13 @@
 package safety
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -95,8 +99,10 @@ type NetworkPolicy struct {
 }
 
 // ResourcePolicy configures resource-abuse limits. Static detection here is
-// best-effort; the real enforcement is the runtime timeout / output cap in
-// workspaceexec and the sandbox.
+// best-effort (MaxOutputBytes, for example, only catches a size that is
+// explicit in the command, such as "head -c N"); the guard does not wire these
+// values into the runtime, so the executor's own timeout / output limits must
+// be configured separately for real enforcement.
 type ResourcePolicy struct {
 	MaxTimeoutSec        int  `yaml:"max_timeout_sec" json:"max_timeout_sec"`
 	MaxOutputBytes       int  `yaml:"max_output_bytes" json:"max_output_bytes"`
@@ -134,10 +140,18 @@ type Override struct {
 // changes allow/deny lists, forbidden paths, the network whitelist and limits
 // without code changes.
 type Policy struct {
-	Version           int                 `yaml:"version" json:"version"`
-	UnparsableAction  Action              `yaml:"unparsable_action" json:"unparsable_action"`
-	DefaultAction     Action              `yaml:"default_action" json:"default_action"`
-	Backends          map[string][]string `yaml:"backends" json:"backends"`
+	Version          int                 `yaml:"version" json:"version"`
+	UnparsableAction Action              `yaml:"unparsable_action" json:"unparsable_action"`
+	DefaultAction    Action              `yaml:"default_action" json:"default_action"`
+	Backends         map[string][]string `yaml:"backends" json:"backends"`
+	// WorkspaceIsolated declares that the tools mapped to the workspace backend
+	// really run inside sandbox isolation (container, e2b, ...). The guard sees
+	// only the tool's argument schema, not the executor behind it, and
+	// workspace_exec can be backed by codeexecutor/local, which starts the
+	// command directly on the host. The host-risk rule (R-HOST-001:
+	// background/PTY denial, sudo/nohup) therefore also applies to the
+	// workspace backend unless this is explicitly set to true (fail closed).
+	WorkspaceIsolated bool                `yaml:"workspace_isolated" json:"workspace_isolated"`
 	Commands          CommandPolicy       `yaml:"commands" json:"commands"`
 	DeniedSubcommands []Subcommand        `yaml:"denied_subcommands" json:"denied_subcommands"`
 	ForbiddenPaths    []string            `yaml:"forbidden_paths" json:"forbidden_paths"`
@@ -221,22 +235,30 @@ func defaultSecretPatterns() []string {
 }
 
 // LoadPolicy reads a YAML or JSON policy file, layers it over DefaultPolicy and
-// compiles it. A bad regex or glob in the file surfaces as an error here, at
-// startup, rather than at request time.
-func LoadPolicy(path string) (*Policy, error) {
-	raw, err := os.ReadFile(path)
+// compiles it. Decoding is strict: an unknown field (a typo such as
+// network.download_command) is rejected at load time instead of silently
+// producing a weaker policy than the operator configured. A bad regex or glob
+// in the file also surfaces as an error here, at startup, rather than at
+// request time.
+func LoadPolicy(policyPath string) (*Policy, error) {
+	raw, err := os.ReadFile(policyPath)
 	if err != nil {
-		return nil, fmt.Errorf("read policy %q: %w", path, err)
+		return nil, fmt.Errorf("read policy %q: %w", policyPath, err)
 	}
 	p := DefaultPolicy()
-	switch ext := strings.ToLower(filepath.Ext(path)); ext {
+	switch ext := strings.ToLower(filepath.Ext(policyPath)); ext {
 	case ".yaml", ".yml":
-		if err := yaml.Unmarshal(raw, &p); err != nil {
-			return nil, fmt.Errorf("parse yaml policy %q: %w", path, err)
+		dec := yaml.NewDecoder(bytes.NewReader(raw))
+		dec.KnownFields(true)
+		// io.EOF marks an empty document; the defaults stand.
+		if err := dec.Decode(&p); err != nil && !errors.Is(err, io.EOF) {
+			return nil, fmt.Errorf("parse yaml policy %q: %w", policyPath, err)
 		}
 	case ".json":
-		if err := json.Unmarshal(raw, &p); err != nil {
-			return nil, fmt.Errorf("parse json policy %q: %w", path, err)
+		dec := json.NewDecoder(bytes.NewReader(raw))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&p); err != nil {
+			return nil, fmt.Errorf("parse json policy %q: %w", policyPath, err)
 		}
 	default:
 		return nil, fmt.Errorf(
@@ -254,6 +276,14 @@ func LoadPolicy(path string) (*Policy, error) {
 func (p *Policy) compile() error {
 	var c compiledPolicy
 	var err error
+	switch p.Version {
+	case 0:
+		// Unset: a programmatically built policy may leave the zero value.
+		p.Version = 1
+	case 1:
+	default:
+		return fmt.Errorf("unsupported policy version %d (want 1)", p.Version)
+	}
 	if p.UnparsableAction, err = resolveAction(p.UnparsableAction, ActionDeny); err != nil {
 		return fmt.Errorf("unparsable_action: %w", err)
 	}
@@ -372,12 +402,31 @@ func (p *Policy) shellPolicy() shellsafe.Policy {
 	return p.compiled.shellPolicy
 }
 
+// hostRiskBackend reports whether backend executes with host-level risk for
+// the host-risk rule: the host backend always, and the workspace backend
+// unless the policy explicitly declares it sandboxed (workspace_isolated).
+// workspace_exec is an argument schema, not an isolation guarantee — a
+// deployment backed by codeexecutor/local runs the command directly on the
+// host.
+func (p *Policy) hostRiskBackend(backend string) bool {
+	switch backend {
+	case BackendHost:
+		return true
+	case BackendWorkspace:
+		return !p.WorkspaceIsolated
+	default:
+		return false
+	}
+}
+
 // forbiddenMatch reports whether candidate (an argv word or cwd) hits any
 // forbidden path. Non-glob entries also match as a directory prefix, so
-// "~/.ssh" matches "~/.ssh/id_rsa". It returns the matched pattern for use as
-// finding evidence.
+// "~/.ssh" matches "~/.ssh/id_rsa". The candidate is lexically normalized
+// first (separators and dot segments), so "/etc/../etc/shadow" cannot dodge a
+// "/etc/shadow" pattern. It returns the matched pattern for use as finding
+// evidence.
 func (p *Policy) forbiddenMatch(candidate string) (string, bool) {
-	cand := filepath.ToSlash(strings.TrimSpace(candidate))
+	cand := normalizePathCandidate(candidate)
 	if cand == "" {
 		return "", false
 	}
@@ -387,6 +436,20 @@ func (p *Policy) forbiddenMatch(candidate string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// normalizePathCandidate normalizes a path candidate before matching:
+// backslashes become slashes (the scanned command may target a Windows path
+// even when the guard runs elsewhere, where filepath.ToSlash is a no-op) and
+// "." / ".." segments are resolved lexically. The same representation feeds
+// forbidden-path matching and, via the caller, keeps deny rules aligned with
+// how the OS resolves the path.
+func normalizePathCandidate(candidate string) string {
+	cand := strings.ReplaceAll(strings.TrimSpace(candidate), "\\", "/")
+	if cand == "" {
+		return ""
+	}
+	return path.Clean(cand)
 }
 
 // domainAllowed reports whether host is in the network allow list. host should

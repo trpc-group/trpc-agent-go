@@ -71,7 +71,7 @@ const (
 	recNetwork     = "Target host is not in network.allowed_domains; add it to the whitelist or use a vetted download script."
 	recShellBypass = "Wrap complex shell usage in an auditable workspace script and add it to allowed_commands."
 	recCommandPol  = "Command is not in commands.allowed; add it to the allow list if it is expected, or keep it blocked."
-	recHost        = "Host-shell background/PTY/privilege use is high risk; prefer the sandboxed workspace_exec backend."
+	recHost        = "Background/PTY/privilege use outside a sandbox is high risk; run under an isolating executor (and set workspace_isolated only when the workspace tool truly is sandboxed)."
 	recDependency  = "Dependency installs mutate the environment; vendor dependencies or run installs in a sandbox."
 	recResource    = "Command may exhaust resources; lower the timeout/output or rely on sandbox runtime limits."
 	recSecret      = "Command/env contains a secret-like value; pass secrets via a secret store, not inline." //nolint:gosec // G101 false positive: a recommendation string, not a credential.
@@ -585,19 +585,27 @@ func hasNonOptionOperand(args []string) bool {
 	return false
 }
 
-// ruleHostRisk only applies to the host backend: background/PTY sessions and
-// privilege escalation are higher risk on the host shell than in the sandbox.
+// ruleHostRisk applies to backends that execute on the host: the host backend
+// always, and the workspace backend unless the policy declares it sandboxed
+// (workspace_isolated: true). The tool name alone proves nothing about
+// isolation — workspace_exec backed by codeexecutor/local starts the command
+// directly on the host, where background/PTY sessions and privilege
+// escalation are exactly as risky as on the host shell.
 func ruleHostRisk(c ruleCtx) []Finding {
-	if c.backend != BackendHost {
+	if !c.policy.hostRiskBackend(c.backend) {
 		return nil
+	}
+	where := "host shell"
+	if c.backend == BackendWorkspace {
+		where = "workspace backend without declared sandbox isolation"
 	}
 	var out []Finding
 	r := c.policy.Resources
 	if c.er.Background && r.DenyBackgroundOnHost {
-		out = append(out, hostFinding(RiskHigh, "background process on host shell"))
+		out = append(out, hostFinding(RiskHigh, "background process on "+where))
 	}
 	if c.er.PTY && r.DenyPTYOnHost {
-		out = append(out, hostFinding(RiskHigh, "PTY/TTY session on host shell"))
+		out = append(out, hostFinding(RiskHigh, "PTY/TTY session on "+where))
 	}
 	if c.pipe != nil {
 		for _, argv := range c.pipe.Commands {
@@ -952,8 +960,12 @@ var windowsSystemDirs = []string{
 func isRootOrSystem(p string) bool {
 	// Normalize separators explicitly: the scanned command may target a
 	// Windows path even when the guard runs on Linux, where filepath.ToSlash
-	// is a no-op for backslashes.
+	// is a no-op for backslashes. Dot segments are resolved lexically so
+	// "/tmp/../etc" is recognized as the /etc it resolves to.
 	clean := strings.TrimSpace(strings.ReplaceAll(p, "\\", "/"))
+	if clean != "" {
+		clean = path.Clean(clean)
+	}
 	clean = strings.TrimRight(clean, "/")
 	if clean == "" || p == "/" {
 		return true
@@ -979,8 +991,9 @@ func isRootOrSystem(p string) bool {
 
 func pathCandidates(c ruleCtx) []string {
 	var out []string
-	if strings.TrimSpace(c.er.Cwd) != "" {
-		out = append(out, c.er.Cwd)
+	cwd := strings.TrimSpace(c.er.Cwd)
+	if cwd != "" {
+		out = append(out, cwd)
 	}
 	if c.pipe != nil {
 		for _, argv := range c.pipe.Commands {
@@ -992,10 +1005,39 @@ func pathCandidates(c ruleCtx) []string {
 				if p := fileURIPath(a); p != "" {
 					out = append(out, p)
 				}
+				// A relative path is what the OS resolves against cwd: add the
+				// resolved form so "cat ../../etc/shadow" run from /var/www
+				// matches an absolute forbidden pattern too.
+				if j := resolveAgainstCwd(cwd, a); j != "" {
+					out = append(out, j)
+				}
 			}
 		}
 	}
 	return out
+}
+
+// resolveAgainstCwd joins a relative, path-like argument onto the request's
+// working directory (path.Join also resolves the dot segments), or returns ""
+// when the argument is not a relative path. Only arguments containing a
+// separator are resolved: a bare word ("cat", "id_rsa") is already matched in
+// its raw form by the **-globs, and gluing every word onto cwd would only add
+// noise.
+func resolveAgainstCwd(cwd, arg string) string {
+	if cwd == "" {
+		return ""
+	}
+	a := strings.ReplaceAll(strings.TrimSpace(arg), "\\", "/")
+	if a == "" || strings.HasPrefix(a, "-") || !strings.Contains(a, "/") {
+		return ""
+	}
+	// Absolute paths, home-rooted paths, drive-letter paths and URLs are not
+	// cwd-relative.
+	if strings.HasPrefix(a, "/") || strings.HasPrefix(a, "~") ||
+		strings.Contains(a, "://") || (len(a) >= 2 && a[1] == ':') {
+		return ""
+	}
+	return path.Join(strings.ReplaceAll(cwd, "\\", "/"), a)
 }
 
 // fileURIPath extracts the filesystem path from a file: URI embedded in an
@@ -1018,16 +1060,49 @@ func fileURIPath(a string) string {
 	return u.Opaque
 }
 
-// argsHavePrefix reports whether args, after skipping leading option flags,
-// begins with the prefix sequence (e.g. "install").
+// argsHavePrefix reports whether args, after the leading option flags, begins
+// with the prefix sequence (e.g. "install"). A leading option's arity is
+// unknown to the guard ("go -C /tmp install" carries a value in the next
+// token, "pip -q install" does not), so both readings of every leading option
+// are explored: standing alone, or consuming the following token as its value
+// (skipped when the value is already inline via "="). Over-matching is
+// accepted — a value that happens to spell the subcommand flags a benign call
+// for review — because under-matching would let "go -C /tmp install" bypass a
+// configured denial.
 func argsHavePrefix(args, prefix []string) bool {
 	if len(prefix) == 0 {
 		return false
 	}
-	i := 0
-	for i < len(args) && strings.HasPrefix(args[i], "-") {
-		i++
+	// BFS over the positions where the subcommand could start; each leading
+	// option branches into its boolean and value-consuming readings.
+	starts := []int{0}
+	seen := map[int]bool{0: true}
+	for n := 0; n < len(starts); n++ {
+		i := starts[n]
+		if i >= len(args) {
+			continue
+		}
+		if !strings.HasPrefix(args[i], "-") {
+			if prefixMatchesAt(args, prefix, i) {
+				return true
+			}
+			continue
+		}
+		if !seen[i+1] {
+			seen[i+1] = true
+			starts = append(starts, i+1)
+		}
+		if !strings.Contains(args[i], "=") && !seen[i+2] {
+			seen[i+2] = true
+			starts = append(starts, i+2)
+		}
 	}
+	return false
+}
+
+// prefixMatchesAt reports whether args[i:] begins with the prefix sequence,
+// case-insensitively.
+func prefixMatchesAt(args, prefix []string, i int) bool {
 	if i+len(prefix) > len(args) {
 		return false
 	}

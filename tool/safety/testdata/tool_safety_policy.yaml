@@ -15,6 +15,14 @@ backends:
   host: [exec_command]
   code: [execute_code]
 
+# The guard cannot see which executor backs workspace_exec, and
+# codeexecutor/local runs commands directly on the host. The host-risk rule
+# (R-HOST-001: background/PTY denial, sudo/nohup) therefore also applies to
+# the workspace backend unless this is explicitly set to true. Only declare
+# isolation when the workspace tool genuinely runs in a sandbox
+# (container/e2b).
+workspace_isolated: false
+
 # Allowed binaries. Note download tools (curl/wget) and installers (pip) are
 # allowed here so the network/dependency rules can govern *what* they do; their
 # destinations and subcommands are still policed below.

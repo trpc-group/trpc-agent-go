@@ -217,6 +217,12 @@ func TestRuleDependencyWithLeadingFlags(t *testing.T) {
 	if !hasRule(findings, ruleDepID) {
 		t.Errorf("missing R-DEP-001 with leading flag: %+v", findings)
 	}
+	// A leading option that consumes a value must not hide the subcommand:
+	// "go -C /tmp install pkg" is a valid spelling of "go install".
+	findings, _ = scanCmd(t, p, BackendWorkspace, "go -C /tmp install example.com/pkg@v1")
+	if !hasRule(findings, ruleDepID) {
+		t.Errorf("missing R-DEP-001 for option-value form (go -C dir install): %+v", findings)
+	}
 }
 
 func TestUnparsableFailsClosed(t *testing.T) {
@@ -369,6 +375,11 @@ func TestHostsFromColonSpec(t *testing.T) {
 	got = hostsFromColonSpec("example.com:443:[2001:db8::1]")
 	if len(got) != 2 || got[0] != "2001:db8::1" || got[1] != "example.com" {
 		t.Errorf("bracketed IPv6 hosts = %v, want [2001:db8::1 example.com]", got)
+	}
+	// Host-bearing specs accept single-label hostnames; pure numbers stay ports.
+	got = hostsFromColonSpec("relay:8080")
+	if len(got) != 1 || got[0] != "relay" {
+		t.Errorf("single-label proxy hosts = %v, want [relay]", got)
 	}
 }
 
@@ -1047,5 +1058,134 @@ func TestBareHostNetworkDeny(t *testing.T) {
 		if !hasRule(findings, ruleNetworkID) {
 			t.Errorf("%q: missing R-NET-001: %+v", cmd, findings)
 		}
+	}
+}
+
+// TestSingleLabelHostBearingOptionDeny pins that an explicit connection target
+// in a host-bearing option is whitelist-checked even when it is a single-label
+// hostname: "curl --proxy=relay https://github.com/x" really connects to relay
+// (resolved via local DNS or /etc/hosts), so the dotted-domain heuristic used
+// for ambiguous operands must not apply to option values that are network
+// targets by contract.
+func TestSingleLabelHostBearingOptionDeny(t *testing.T) {
+	p := loadExamplePolicy(t) // allows github.com; on_non_whitelisted: deny
+	cases := []struct {
+		name string
+		cmd  string
+	}{
+		{"proxy equals single label", `curl --proxy=relay https://github.com/x`},
+		{"proxy space single label", `curl -x relay https://github.com/x`},
+		{"proxy inline short flag", `curl -xrelay https://github.com/x`},
+		{"url equals single label", `curl --url=localhost`},
+		{"url space single label", `curl --url localhost`},
+		{"connect-to single label target", `curl --connect-to github.com:443:relay:443 https://github.com/a`},
+		{"resolve single label addr", `curl --resolve github.com:443:relay https://github.com/a`},
+		{"ssh jump single label", `ssh -J relay github.com`},
+		{"nc proxy single label", `nc -x relay:1080 github.com 443`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			findings, decision := scanCmd(t, p, BackendWorkspace, tc.cmd)
+			if decision != DecisionDeny {
+				t.Errorf("decision = %q, want deny (findings: %+v)", decision, findings)
+			}
+			if !hasRule(findings, ruleNetworkID) {
+				t.Errorf("missing R-NET-001 for single-label target: %+v", findings)
+			}
+		})
+	}
+}
+
+// TestSingleLabelOperandStillAmbiguous pins that a bare single-label operand
+// keeps the dotted-domain heuristic: "curl relay" is not extracted as a host
+// (the token is as likely a filename), so it falls back to the
+// no-parseable-target review instead of a host-based deny.
+func TestSingleLabelOperandStillAmbiguous(t *testing.T) {
+	p := loadExamplePolicy(t)
+	findings, decision := scanCmd(t, p, BackendWorkspace, "curl relay")
+	if decision != DecisionReview {
+		t.Errorf("decision = %q, want needs_human_review (findings: %+v)", decision, findings)
+	}
+}
+
+// TestWorkspaceHostRiskWithoutIsolation pins that workspace_exec is not
+// treated as sandboxed by the tool name alone: with deny_background_on_host /
+// deny_pty_on_host configured and no declared isolation, a background/PTY
+// workspace call is denied exactly like the host backend, because the backend
+// may be codeexecutor/local running directly on the host. Declaring
+// workspace_isolated: true restores the sandbox exemption.
+func TestWorkspaceHostRiskWithoutIsolation(t *testing.T) {
+	p := loadExamplePolicy(t) // deny_background_on_host / deny_pty_on_host: true
+	if p.WorkspaceIsolated {
+		t.Fatalf("workspace_isolated should default to false (fail closed)")
+	}
+	req := ExecRequest{Command: "sleep 5", Background: true, PTY: true}
+	findings, decision, _ := p.scan(req, BackendWorkspace)
+	if decision != DecisionDeny {
+		t.Errorf("decision = %q, want deny for background/PTY on undeclared workspace: %+v",
+			decision, findings)
+	}
+	if !hasRule(findings, ruleHostID) {
+		t.Errorf("missing R-HOST-001 for local-backed workspace: %+v", findings)
+	}
+
+	// nohup detaches on the host just the same when the workspace is local.
+	findings, _, _ = p.scan(ExecRequest{Command: "nohup sleep 5"}, BackendWorkspace)
+	if !hasRule(findings, ruleHostID) {
+		t.Errorf("missing R-HOST-001 for nohup on undeclared workspace: %+v", findings)
+	}
+
+	// A declared sandbox restores the workspace exemption.
+	p.WorkspaceIsolated = true
+	findings, decision, _ = p.scan(req, BackendWorkspace)
+	if decision != DecisionAllow {
+		t.Errorf("decision = %q, want allow with workspace_isolated: true: %+v",
+			decision, findings)
+	}
+}
+
+// TestForbiddenPathTraversalDeny pins that forbidden-path matching sees the
+// path the OS will resolve, not the literal argv spelling: dot segments,
+// duplicate slashes and cwd-relative traversal must all hit the configured
+// pattern.
+func TestForbiddenPathTraversalDeny(t *testing.T) {
+	p := loadExamplePolicy(t) // forbids /etc/shadow, ~/.ssh, **/id_rsa
+	cases := []struct {
+		name string
+		req  ExecRequest
+	}{
+		{"dot segments", ExecRequest{Command: "cat /etc/../etc/shadow"}},
+		{"double slash", ExecRequest{Command: "cat //etc//shadow"}},
+		{"current-dir segment", ExecRequest{Command: "cat /etc/./shadow"}},
+		{"relative traversal against cwd",
+			ExecRequest{Command: "cat ../../../etc/shadow", Cwd: "/var/www/app"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			findings, decision, _ := p.scan(tc.req, BackendWorkspace)
+			if decision != DecisionDeny {
+				t.Errorf("decision = %q, want deny (findings: %+v)", decision, findings)
+			}
+			if !hasRule(findings, ruleCredID) {
+				t.Errorf("missing R-CRED-001: %+v", findings)
+			}
+		})
+	}
+}
+
+// TestDangerousDeleteTraversalDeny pins that the system-path check resolves
+// dot segments: "rm -rf /tmp/../etc" destroys /etc just as surely as
+// "rm -rf /etc".
+func TestDangerousDeleteTraversalDeny(t *testing.T) {
+	p := loadExamplePolicy(t)
+	findings, decision := scanCmd(t, p, BackendWorkspace, "rm -rf /tmp/../etc")
+	if decision != DecisionDeny {
+		t.Errorf("decision = %q, want deny: %+v", decision, findings)
+	}
+	if !hasRule(findings, ruleDangerousID) {
+		t.Errorf("missing R-DEL-001 for traversal to a system dir: %+v", findings)
+	}
+	if !isRootOrSystem("/tmp/../etc") {
+		t.Errorf("isRootOrSystem(/tmp/../etc) = false, want true")
 	}
 }

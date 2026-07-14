@@ -253,3 +253,114 @@ func TestDomainAllowed(t *testing.T) {
 		}
 	}
 }
+
+// TestLoadPolicyRejectsUnknownFields pins strict decoding: a typo such as
+// network.download_command must fail at load time instead of silently leaving
+// DownloadCommands empty and disabling the network rule the operator believes
+// is configured.
+func TestLoadPolicyRejectsUnknownFields(t *testing.T) {
+	dir := t.TempDir()
+	cases := []struct {
+		name    string
+		file    string
+		content string
+	}{
+		{"yaml top-level typo", "top.yaml", "forbidden_pathz:\n  - /etc/shadow\n"},
+		{"yaml nested typo", "nested.yaml", "network:\n  download_command: [curl]\n"},
+		{"yaml resources typo", "res.yaml", "resources:\n  max_output_byte: 10\n"},
+		{"json top-level typo", "top.json", `{"forbidden_pathz": ["/etc/shadow"]}`},
+		{"json nested typo", "nested.json", `{"network": {"download_command": ["curl"]}}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(dir, tc.file)
+			if err := os.WriteFile(path, []byte(tc.content), 0o644); err != nil {
+				t.Fatalf("write policy: %v", err)
+			}
+			if _, err := LoadPolicy(path); err == nil {
+				t.Errorf("LoadPolicy should reject the unknown field in %q", tc.content)
+			}
+			// The same failure must surface through NewGuard, so a guard cannot
+			// come up on a silently weakened policy.
+			if _, err := NewGuard(WithPolicyFile(path)); err == nil {
+				t.Errorf("NewGuard should fail on the unknown field in %q", tc.content)
+			}
+		})
+	}
+}
+
+// TestLoadPolicyEmptyYAMLUsesDefaults pins that an empty (comment-only) YAML
+// policy file still loads: strict decoding rejects unknown fields, not the
+// absence of fields.
+func TestLoadPolicyEmptyYAMLUsesDefaults(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "empty.yaml")
+	if err := os.WriteFile(path, []byte("# defaults only\n"), 0o644); err != nil {
+		t.Fatalf("write policy: %v", err)
+	}
+	p, err := LoadPolicy(path)
+	if err != nil {
+		t.Fatalf("LoadPolicy: %v", err)
+	}
+	if p.UnparsableAction != ActionDeny {
+		t.Errorf("empty policy should keep the fail-closed defaults")
+	}
+}
+
+// TestCompileRejectsUnsupportedVersion pins version validation: an unknown
+// version fails at compile time; the zero value (a programmatically built
+// policy) is normalized to the current version.
+func TestCompileRejectsUnsupportedVersion(t *testing.T) {
+	p := DefaultPolicy()
+	p.Version = 2
+	err := p.compile()
+	if err == nil {
+		t.Fatalf("compile should reject version 2")
+	}
+	if !strings.Contains(err.Error(), "unsupported policy version") {
+		t.Errorf("error = %v, want unsupported-version error", err)
+	}
+
+	unset := DefaultPolicy()
+	unset.Version = 0
+	if err := unset.compile(); err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	if unset.Version != 1 {
+		t.Errorf("version = %d, want 1 (zero value normalized)", unset.Version)
+	}
+
+	path := filepath.Join(t.TempDir(), "v2.yaml")
+	if err := os.WriteFile(path, []byte("version: 2\n"), 0o644); err != nil {
+		t.Fatalf("write policy: %v", err)
+	}
+	if _, err := LoadPolicy(path); err == nil {
+		t.Errorf("LoadPolicy should reject version 2")
+	}
+}
+
+// TestForbiddenMatchNormalizesPaths pins the lexical normalization: dot
+// segments, duplicate slashes and backslash separators must not dodge a
+// forbidden pattern.
+func TestForbiddenMatchNormalizesPaths(t *testing.T) {
+	p := DefaultPolicy()
+	p.ForbiddenPaths = []string{"~/.ssh", "**/.env", "/etc/shadow"}
+	if err := p.compile(); err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	hits := []string{
+		"/etc/../etc/shadow",
+		"//etc//shadow",
+		"/etc/./shadow",
+		"~/.ssh/../.ssh/id_rsa",
+		`C:\repo\app\.env`,
+	}
+	for _, c := range hits {
+		if _, ok := p.forbiddenMatch(c); !ok {
+			t.Errorf("forbiddenMatch(%q) = false, want true", c)
+		}
+	}
+	// Traversal that leaves the forbidden tree must not match.
+	if pat, ok := p.forbiddenMatch("/etc/shadow/../hosts"); ok {
+		t.Errorf("forbiddenMatch(/etc/shadow/../hosts) = true (pattern %q), want false", pat)
+	}
+}

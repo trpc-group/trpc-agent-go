@@ -183,6 +183,20 @@ func TestArgsHavePrefix(t *testing.T) {
 	if argsHavePrefix([]string{"list"}, []string{"install"}) {
 		t.Errorf("non-matching prefix should not match")
 	}
+	// A leading option that consumes the next token as its value must not
+	// hide the subcommand: "go -C /tmp install pkg".
+	if !argsHavePrefix([]string{"-C", "/tmp", "install", "pkg"}, []string{"install"}) {
+		t.Errorf("option value before the subcommand must not hide it")
+	}
+	// An inline "=" value never consumes the following token.
+	if !argsHavePrefix([]string{"--dir=/tmp", "install"}, []string{"install"}) {
+		t.Errorf("inline option value must not consume the next token")
+	}
+	// A non-option operand that does not match stops the scan: "go build
+	// install" is not "go install".
+	if argsHavePrefix([]string{"build", "install"}, []string{"install"}) {
+		t.Errorf("an unmatched operand must stop the prefix scan")
+	}
 }
 
 // TestGuardCodeBackend exercises the execute_code path end to end: a secret in

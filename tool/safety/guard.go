@@ -26,15 +26,17 @@ import (
 	"io"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 // Guard is a tool.PermissionPolicy that enforces the safety policy before a
 // tool executes.
 type Guard struct {
-	policy     *Policy
-	audit      *AuditWriter
-	reportSink func(Report)
+	policy       *Policy
+	audit        *AuditWriter
+	auditErrFunc func(error)
+	reportSink   func(Report)
 }
 
 // Option configures a Guard.
@@ -88,6 +90,18 @@ func WithAuditFile(path string) Option {
 			return err
 		}
 		g.audit = aw
+		return nil
+	}
+}
+
+// WithAuditErrorHandler registers fn to receive every audit write failure
+// (disk full, closed writer, quota). Without a handler, failures are logged as
+// warnings; either way the tool decision itself is still returned — the audit
+// trail is best-effort by design, but its loss is never silent. The callback
+// may be invoked concurrently and must be safe for concurrent use.
+func WithAuditErrorHandler(fn func(error)) Option {
+	return func(g *Guard) error {
+		g.auditErrFunc = fn
 		return nil
 	}
 }
@@ -150,8 +164,9 @@ func (g *Guard) CheckToolPermission(
 
 // finalize builds the report, redacts it, emits the audit event and span
 // attributes, invokes the report sink and maps the decision to a
-// tool.PermissionDecision. Audit failures are best-effort and never block the
-// call.
+// tool.PermissionDecision. An audit write failure never blocks the call, but
+// it is surfaced through WithAuditErrorHandler (or a log warning by default)
+// so a broken audit trail cannot go unnoticed.
 func (g *Guard) finalize(
 	ctx context.Context,
 	toolName, backend string,
@@ -164,7 +179,13 @@ func (g *Guard) finalize(
 	report := buildReport(toolName, backend, er, findings, decision, risk, time.Since(start))
 	g.policy.redactReport(&report)
 	if g.audit != nil {
-		_ = g.audit.Write(report)
+		if err := g.audit.Write(report); err != nil {
+			if g.auditErrFunc != nil {
+				g.auditErrFunc(err)
+			} else {
+				log.Warnf("safety guard: audit write failed for tool %q: %v", toolName, err)
+			}
+		}
 	}
 	writeSpanAttrs(ctx, report)
 	if g.reportSink != nil {

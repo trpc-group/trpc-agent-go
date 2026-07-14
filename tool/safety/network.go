@@ -27,6 +27,9 @@ var (
 	urlRe      = regexp.MustCompile(`(?i)\b[a-z][a-z0-9+.-]*://[^\s'"]+`)
 	userHostRe = regexp.MustCompile(`^[A-Za-z0-9._%+-]+@([A-Za-z0-9.-]+)(?::.*)?$`)
 	domainRe   = regexp.MustCompile(`(?i)^[a-z0-9.-]+$`)
+	// labelRe matches one DNS label: a single-label hostname such as
+	// "localhost", "relay" or an intranet/docker service name.
+	labelRe = regexp.MustCompile(`(?i)^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
 )
 
 // optClass classifies an option of a non-curl download command for the network
@@ -370,8 +373,22 @@ func hostFromURL(a string) string {
 // bareHost extracts a single host from a "host[:port][/path]" operand. It strips
 // the port and path and drops non-host tokens (relative paths, user@path forms,
 // pure ports). Both domains and raw IPs are accepted so "ssh 1.2.3.4" cannot
-// bypass the whitelist.
+// bypass the whitelist. Ambiguous operands keep the dotted-domain heuristic
+// (a bare word like "README" must not be treated as a host); use
+// bareHostTarget when the surrounding option already declares the value a
+// network target.
 func bareHost(a string) []string {
+	return bareHostAs(a, domainOrIP)
+}
+
+// bareHostTarget is bareHost for host-bearing option values: the option
+// contract already establishes the value as a connection target, so a valid
+// single-label hostname ("localhost", "relay") is accepted too.
+func bareHostTarget(a string) []string {
+	return bareHostAs(a, hostTargetLike)
+}
+
+func bareHostAs(a string, accept func(string) bool) []string {
 	// A raw IPv6 literal ("nc 2001:db8::1") is all colons: it must parse as a
 	// whole before the port stripping below shatters it at the first colon.
 	if net.ParseIP(a) != nil {
@@ -396,7 +413,7 @@ func bareHost(a string) []string {
 	if host == "" || strings.ContainsRune(host, '@') {
 		return nil
 	}
-	if domainLike(host) || net.ParseIP(host) != nil {
+	if accept(host) {
 		return []string{host}
 	}
 	return nil
@@ -443,14 +460,21 @@ func hostsFromCurlValue(flag, val string) []string {
 		if h := hostFromURL(val); h != "" {
 			return []string{h}
 		}
-		return bareHost(val)
+		// The option itself declares its value a network target, so a
+		// single-label host ("--url=localhost") is accepted, unlike the
+		// dotted-domain heuristic applied to ambiguous operands.
+		return bareHostTarget(val)
 	}
 	return nil
 }
 
 // hostsFromColonSpec extracts host/IP-like tokens from a colon/comma-separated
 // spec, honoring bracketed IPv6 literals. Numeric-only fields (ports) are
-// dropped. It is deliberately over-inclusive: extracting every host/IP field so
+// dropped. Every caller hands it a host-bearing option value (proxy address,
+// connect-to/forwarding spec, jump-hop list), so single-label hostnames
+// ("relay", "localhost") are accepted alongside dotted domains and IPs: an
+// explicit connection target must not dodge the whitelist just because it has
+// no dot. It is deliberately over-inclusive: extracting every host/IP field so
 // that any non-whitelisted destination in the spec trips the network rule.
 func hostsFromColonSpec(spec string) []string {
 	var hosts []string
@@ -477,7 +501,7 @@ func hostsFromColonSpec(spec string) []string {
 		if f = strings.TrimSpace(f); f == "" {
 			continue
 		}
-		if domainLike(f) || net.ParseIP(f) != nil {
+		if hostTargetLike(f) {
 			hosts = append(hosts, f)
 		}
 	}
@@ -520,9 +544,9 @@ func hostsFromResolveSpec(val string) []string {
 
 // cleanHostField normalizes a single --resolve host/address field: it strips a
 // leading "+", surrounding IPv6 brackets and surrounding whitespace, then keeps
-// the value only if it is a domain or a parseable IP (so ports and empty fields
-// are dropped). Unbracketed IPv6 literals survive because net.ParseIP accepts
-// them.
+// the value only if it is a domain, single-label host or a parseable IP (so
+// ports and empty fields are dropped). Unbracketed IPv6 literals survive
+// because net.ParseIP accepts them.
 func cleanHostField(f string) string {
 	f = strings.TrimSpace(f)
 	f = strings.TrimPrefix(f, "+")
@@ -532,7 +556,7 @@ func cleanHostField(f string) string {
 	if f == "" {
 		return ""
 	}
-	if domainLike(f) || net.ParseIP(f) != nil {
+	if hostTargetLike(f) {
 		return f
 	}
 	return ""
@@ -573,5 +597,25 @@ func curlDefaultConfigDisabled(args []string) bool {
 
 func domainLike(s string) bool {
 	return strings.Contains(s, ".") && domainRe.MatchString(s) &&
+		strings.ContainsAny(s, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
+}
+
+// domainOrIP is the acceptance predicate for ambiguous operands: a dotted
+// domain or an IP. A bare word without a dot is not treated as a host, so
+// "cat README" cannot trip the network rule.
+func domainOrIP(s string) bool {
+	return domainLike(s) || net.ParseIP(s) != nil
+}
+
+// hostTargetLike is the acceptance predicate for host-bearing option values
+// (proxy, connect-to, jump host, --url): the option contract already
+// establishes the value as a network target, so a valid single-label hostname
+// ("relay", "localhost") is accepted too. A pure number is still a port, not a
+// host.
+func hostTargetLike(s string) bool {
+	if domainOrIP(s) {
+		return true
+	}
+	return labelRe.MatchString(s) &&
 		strings.ContainsAny(s, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
 }

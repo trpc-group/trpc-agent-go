@@ -11,6 +11,7 @@ package safety
 import (
 	"bytes"
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -209,5 +210,41 @@ func TestWithPolicyDeepCopyIsolation(t *testing.T) {
 	}
 	if dec.Action != tool.PermissionActionDeny {
 		t.Errorf("decision = %q, want deny; caller mutation leaked into guard policy", dec.Action)
+	}
+}
+
+// failingWriter always fails, simulating a full disk / closed sink.
+type failingWriter struct{}
+
+func (failingWriter) Write(p []byte) (int, error) {
+	return 0, errors.New("disk full")
+}
+
+// TestAuditWriteFailureSurfaced pins that a broken audit sink is not silent:
+// the registered error handler receives every write failure while the tool
+// decision itself is still returned.
+func TestAuditWriteFailureSurfaced(t *testing.T) {
+	var got error
+	g, err := NewGuard(
+		WithPolicyFile(filepath.Join("testdata", "tool_safety_policy.yaml")),
+		WithAuditWriter(failingWriter{}),
+		WithAuditErrorHandler(func(e error) { got = e }),
+	)
+	if err != nil {
+		t.Fatalf("NewGuard: %v", err)
+	}
+	req := &tool.PermissionRequest{ToolName: "workspace_exec", Arguments: []byte(`{"command":"go test ./..."}`)}
+	dec, err := g.CheckToolPermission(context.Background(), req)
+	if err != nil {
+		t.Fatalf("CheckToolPermission: %v", err)
+	}
+	if dec.Action != tool.PermissionActionAllow {
+		t.Errorf("audit failure must not change the decision, got %q", dec.Action)
+	}
+	if got == nil {
+		t.Fatalf("audit error handler was not called")
+	}
+	if !strings.Contains(got.Error(), "disk full") {
+		t.Errorf("handler error = %v, want the writer failure", got)
 	}
 }
