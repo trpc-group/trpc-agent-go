@@ -77,6 +77,7 @@ func Run(ctx context.Context, opts Options) ([]findings.Finding, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create code executor: %w", err)
 	}
+	defer func() { _ = sandbox.CloseCodeExecutor(codeExec) }()
 
 	maxTokens := 2048
 	temperature := 0.1

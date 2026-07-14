@@ -36,7 +36,7 @@ func TestPipelineAllFixtures(t *testing.T) {
 		{fixture: "04_resource_leak", minFindings: 1, maxFindings: 1, mustRules: []string{"RES-001"}},
 		{fixture: "05_db_connection", minFindings: 1, maxFindings: 1, mustRules: []string{"DB-001"}},
 		{fixture: "06_missing_test", minFindings: 1, maxFindings: 1, mustRules: []string{"TEST-001"}},
-		{fixture: "07_duplicate_finding", minFindings: 1, maxFindings: 1, mustRules: []string{"SEC-001"}},
+		{fixture: "07_duplicate_finding", minFindings: 2, maxFindings: 2, mustRules: []string{"SEC-001", "SEC-002"}},
 		{fixture: "08_sandbox_fail", minFindings: 1, maxFindings: 1, mustRules: []string{"ERR-001"}, sandboxFail: true},
 	}
 
@@ -172,8 +172,11 @@ func TestPipelineDuplicateFixture(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetReview: %v", err)
 	}
-	if len(review.Findings) != 1 {
-		t.Fatalf("deduped findings = %d, want 1", len(review.Findings))
+	if len(review.Findings) != 2 {
+		t.Fatalf("deduped findings = %d, want 2 distinct rules on same line", len(review.Findings))
+	}
+	if !hasRule(review.Findings, "SEC-001") || !hasRule(review.Findings, "SEC-002") {
+		t.Fatalf("findings = %+v", review.Findings)
 	}
 }
 

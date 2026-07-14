@@ -23,6 +23,17 @@ func TestDedup(t *testing.T) {
 	}
 }
 
+func TestDedupKeepsDistinctRulesOnSameLine(t *testing.T) {
+	items := []Finding{
+		{File: "a.go", Line: 10, Category: "concurrency", RuleID: "CONC-001"},
+		{File: "a.go", Line: 10, Category: "concurrency", RuleID: "CONC-002"},
+	}
+	got := Dedup(items)
+	if len(got) != 2 {
+		t.Fatalf("dedup len = %d, want 2", len(got))
+	}
+}
+
 func TestPartition(t *testing.T) {
 	items := []Finding{
 		{Confidence: 0.9, Title: "high"},

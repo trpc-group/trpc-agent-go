@@ -11,13 +11,14 @@ package llmreview
 
 import (
 	"context"
+	"sync/atomic"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 type fakeReviewModel struct {
-	step int
+	step atomic.Int32
 }
 
 func newFakeReviewModel() *fakeReviewModel {
@@ -32,9 +33,9 @@ func (m *fakeReviewModel) GenerateContent(
 	ctx context.Context,
 	_ *model.Request,
 ) (<-chan *model.Response, error) {
-	m.step++
+	step := m.step.Add(1)
 	content := "[]"
-	if m.step == 1 {
+	if step == 1 {
 		content = `[{"severity":"medium","category":"testing","file":"review.go","line":1,"title":"Fake model supplemental check","evidence":"fake-model run","recommendation":"Replace with real LLM in production.","confidence":0.55,"rule_id":"LLM-001","source":"llm"}]`
 	}
 	rsp := &model.Response{

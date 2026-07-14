@@ -83,11 +83,18 @@ func TestAnalyzeDuplicateDedup(t *testing.T) {
 		t.Fatalf("raw findings = %d, want at least 2 before dedup", len(raw))
 	}
 	got := findings.Dedup(raw)
-	if len(got) != 1 {
-		t.Fatalf("dedup findings = %+v, want 1", got)
+	if len(got) != 2 {
+		t.Fatalf("dedup findings = %+v, want 2 distinct rules", got)
 	}
-	if got[0].Category != "security" {
-		t.Fatalf("category = %q", got[0].Category)
+	ruleIDs := map[string]struct{}{}
+	for _, f := range got {
+		ruleIDs[f.RuleID] = struct{}{}
+	}
+	if _, ok := ruleIDs["SEC-001"]; !ok {
+		t.Fatal("missing SEC-001 after dedup")
+	}
+	if _, ok := ruleIDs["SEC-002"]; !ok {
+		t.Fatal("missing SEC-002 after dedup")
 	}
 }
 

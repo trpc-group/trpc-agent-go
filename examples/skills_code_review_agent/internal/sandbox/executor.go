@@ -135,6 +135,17 @@ func ResolveSkillsRoot(root string) string {
 	return root
 }
 
+// CloseCodeExecutor releases container or E2B backends when they support Close.
+func CloseCodeExecutor(exec codeexecutor.CodeExecutor) error {
+	if exec == nil {
+		return nil
+	}
+	if c, ok := exec.(interface{ Close() error }); ok {
+		return c.Close()
+	}
+	return nil
+}
+
 // Ensure container.CodeExecutor is a workspaceExecutor at compile time.
 var _ workspaceExecutor = (*containerexec.CodeExecutor)(nil)
 

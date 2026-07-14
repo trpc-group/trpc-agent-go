@@ -257,30 +257,46 @@ func (d *Diff) Summary() string {
 }
 
 // InferGoPackage infers the Go import path for a file.
-// 过滤查询条件 去除 a/ b/
 func InferGoPackage(file string, repoPath string) string {
-	file = strings.TrimPrefix(file, "a/")
-	file = strings.TrimPrefix(file, "b/")
-	file = filepath.ToSlash(file) // 转换为斜杠路径
-	if !strings.HasSuffix(file, ".go") {
+	clean, err := sanitizeRepoRelativePath(file)
+	if err != nil {
+		return ""
+	}
+	if !strings.HasSuffix(clean, ".go") {
 		return ""
 	}
 	if repoPath != "" {
-		if pkg, err := lookupGoPackage(repoPath, file); err == nil && pkg != "" {
+		if pkg, err := lookupGoPackage(repoPath, clean); err == nil && pkg != "" {
 			return pkg
 		}
 	}
-	dir := filepath.Dir(file)
+	dir := filepath.Dir(clean)
 	if dir == "." {
 		return "."
 	}
 	return filepath.ToSlash(dir)
 }
 
-// 找go包
+func sanitizeRepoRelativePath(file string) (string, error) {
+	file = strings.TrimPrefix(file, "a/")
+	file = strings.TrimPrefix(file, "b/")
+	file = filepath.ToSlash(filepath.Clean(file))
+	if file == ".." || strings.HasPrefix(file, "../") || strings.Contains(file, "/../") {
+		return "", fmt.Errorf("path escapes repository: %s", file)
+	}
+	return file, nil
+}
+
 func lookupGoPackage(repoPath, file string) (string, error) {
-	dir := filepath.Dir(file)                                            // 获取文件所在目录
-	cmd := exec.Command("go", "list", "-f", "{{.ImportPath}}", "./"+dir) // 列出go包
+	clean, err := sanitizeRepoRelativePath(file)
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Dir(clean)
+	if dir == ".." || strings.HasPrefix(dir, "../") || strings.Contains(dir, "/../") {
+		return "", fmt.Errorf("path escapes repository: %s", dir)
+	}
+	cmd := exec.Command("go", "list", "-f", "{{.ImportPath}}", "./"+dir)
 	cmd.Dir = repoPath
 	out, err := cmd.Output()
 	if err != nil {

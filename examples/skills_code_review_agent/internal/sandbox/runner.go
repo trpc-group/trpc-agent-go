@@ -31,7 +31,7 @@ const (
 )
 
 var (
-	denyRE = regexp.MustCompile(`(?i)(rm\s+-rf|curl\s+[^\s|]+\s*\|\s*(ba)?sh|git\s+push|wget\s+[^\s|]+\s*\|\s*(ba)?sh)`)
+	denyRE = regexp.MustCompile(`(?i)(rm\s+-rf|(?:curl|wget)\s+[^\n|]*\|\s*(?:ba)?sh|git\s+push)`)
 )
 
 // Runtime selects the workspace backend.
@@ -119,8 +119,8 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 
 	env, cleanup, err := prepareRunEnv(ctx, opts)
 	if err != nil {
-		if opts.Runtime == RuntimeContainer {
-			out.Exceptions["workspace_error"]++
+		if isIsolatedRuntime(opts.Runtime) {
+			return nil, fmt.Errorf("prepare workspace: %w", err)
 		}
 		env = &runEnv{}
 	} else if cleanup != nil {
@@ -208,6 +208,13 @@ func checkPermission(toolName, command string) tool.PermissionDecision {
 }
 
 func executePlanned(ctx context.Context, opts Options, command string, env *runEnv) (RunRecord, error) {
+	start := time.Now()
+	rec, err := executePlannedOnce(ctx, opts, command, env)
+	rec.DurationMs = int(time.Since(start).Milliseconds())
+	return rec, err
+}
+
+func executePlannedOnce(ctx context.Context, opts Options, command string, env *runEnv) (RunRecord, error) {
 	rec := RunRecord{
 		ID:      uuid.NewString(),
 		TaskID:  opts.TaskID,
@@ -215,10 +222,6 @@ func executePlanned(ctx context.Context, opts Options, command string, env *runE
 		Runtime: string(opts.Runtime),
 		Status:  "completed",
 	}
-	runStart := time.Now()
-	defer func() {
-		rec.DurationMs = int(time.Since(runStart).Milliseconds())
-	}()
 
 	switch {
 	case strings.HasPrefix(command, "bash scripts/run_checks.sh"):
@@ -231,6 +234,9 @@ func executePlanned(ctx context.Context, opts Options, command string, env *runE
 				return runRec, err
 			}
 		}
+		if isolatedWorkspaceRequired(opts, env) {
+			return failIsolatedWorkspace(rec)
+		}
 		return runSkillChecksDirect(opts, rec)
 	case strings.HasPrefix(command, "go vet"):
 		return runGoCommand(ctx, opts, env, rec, "vet")
@@ -241,6 +247,16 @@ func executePlanned(ctx context.Context, opts Options, command string, env *runE
 		rec.ErrorType = "unsupported_command"
 		return rec, fmt.Errorf("unsupported command: %s", command)
 	}
+}
+
+func isolatedWorkspaceRequired(opts Options, env *runEnv) bool {
+	return isIsolatedRuntime(opts.Runtime) && (env == nil || !env.ready)
+}
+
+func failIsolatedWorkspace(rec RunRecord) (RunRecord, error) {
+	rec.Status = "failed"
+	rec.ErrorType = "workspace_error"
+	return rec, fmt.Errorf("isolated workspace unavailable")
 }
 
 func runSkillChecksInWorkspace(ctx context.Context, opts Options, env *runEnv, rec RunRecord) (RunRecord, error) {
@@ -293,6 +309,9 @@ func runGoCommand(ctx context.Context, opts Options, env *runEnv, rec RunRecord,
 		if isIsolatedRuntime(opts.Runtime) {
 			return runRec, err
 		}
+	}
+	if isolatedWorkspaceRequired(opts, env) {
+		return failIsolatedWorkspace(rec)
 	}
 	return runGoDirect(ctx, opts, rec, subcmd)
 }

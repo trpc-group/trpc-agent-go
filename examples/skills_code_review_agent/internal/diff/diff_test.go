@@ -127,3 +127,9 @@ func TestInferGoPackage(t *testing.T) {
 		t.Fatalf("package = %q, want %q", got, want)
 	}
 }
+
+func TestInferGoPackageRejectsPathEscape(t *testing.T) {
+	if got := InferGoPackage("b/../outside.go", t.TempDir()); got != "" {
+		t.Fatalf("package = %q, want empty for escaped path", got)
+	}
+}
