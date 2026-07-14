@@ -65,6 +65,46 @@ func TestAnalyzeAcceptedRun(t *testing.T) {
 	}
 }
 
+func TestAnalyzeFailsClosedOnNonSucceededStatus(t *testing.T) {
+	// A still-running (or failed/canceled) run may already carry an accepted
+	// round; it must not be reported as released.
+	for _, st := range []engine.RunStatus{engine.RunStatusRunning, engine.RunStatusFailed, engine.RunStatusCanceled} {
+		result := acceptedRunFixture()
+		result.Status = st
+		report, err := Analyze(result, Options{Gate: ReleaseGate{MinTotalGain: 0.5, MaxRounds: 4}})
+		if err != nil {
+			t.Fatalf("analyze: %v", err)
+		}
+		if report.Gate.Released {
+			t.Fatalf("status %q must not release, reasons=%v", st, report.Gate.Reasons)
+		}
+	}
+}
+
+func TestAnalyzeFailsClosedOnSlimmedResult(t *testing.T) {
+	// A slimmed RunResult keeps aggregate scores but omits per-case data, so
+	// regressions cannot be verified; the gate must fail closed rather than
+	// release on aggregate gain alone.
+	slim := func(score float64) *engine.EvaluationResult {
+		return &engine.EvaluationResult{
+			OverallScore: score,
+			EvalSets:     []engine.EvalSetResult{{EvalSetID: "validation", OverallScore: score}},
+		}
+	}
+	result := &engine.RunResult{
+		Status:             engine.RunStatusSucceeded,
+		BaselineValidation: slim(0.0),
+		Rounds:             []engine.RoundResult{lossRound(1, slim(1.0), true, 1.0)},
+	}
+	report, err := Analyze(result, Options{Gate: ReleaseGate{MinTotalGain: 0.5, MaxRounds: 4}})
+	if err != nil {
+		t.Fatalf("analyze: %v", err)
+	}
+	if report.Gate.Released {
+		t.Fatalf("slimmed result must not release, reasons=%v", report.Gate.Reasons)
+	}
+}
+
 func TestAnalyzeNil(t *testing.T) {
 	if _, err := Analyze(nil, Options{}); err == nil {
 		t.Fatalf("expected error for nil result")

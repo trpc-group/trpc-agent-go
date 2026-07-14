@@ -133,9 +133,9 @@
   },
   "cost": {
     "rounds": 1,
-    "teacherCalls": 9,
+    "evaluatedCases": 9,
     "estimated": true,
-    "note": "teacher calls derived from evaluated cases across baseline and rounds"
+    "note": "evaluated case count across baseline and rounds; not model/teacher call accounting"
   },
   "rounds": [
     {

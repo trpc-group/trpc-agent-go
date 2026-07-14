@@ -37,5 +37,5 @@ Terminal-loss severity (training signal): unknown=3
 ## Cost (estimated)
 
 - rounds: 1
-- teacher calls: 9
-- note: teacher calls derived from evaluated cases across baseline and rounds
+- evaluated cases: 9
+- note: evaluated case count across baseline and rounds; not model/teacher call accounting

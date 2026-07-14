@@ -50,6 +50,12 @@ func Analyze(result *engine.RunResult, opts Options) (*Report, error) {
 
 	totalGain := candidate.OverallScore - baseline.OverallScore
 	gate := opts.Gate.Evaluate(acceptedRound > 0, totalGain, len(result.Rounds), delta)
+	// Fail closed: a release can only be trusted when the run finished
+	// successfully and both phases carry comparable per-case data. A still-running
+	// or failed run may retain an accepted round, and a slimmed RunResult that
+	// omits evaluation cases would hide regressions and release on aggregate gain
+	// alone — both must be rejected rather than released.
+	gate = applyReleasePreconditions(gate, result, candidateValidation)
 
 	return &Report{
 		App:      opts.App,
@@ -70,19 +76,52 @@ func Analyze(result *engine.RunResult, opts Options) (*Report, error) {
 	}, nil
 }
 
-// costReport estimates cost from observable counts; the engine result has no
-// token accounting, so teacher calls are derived from rounds x evaluated cases.
+// applyReleasePreconditions forces the gate closed when the result cannot
+// support a trustworthy release decision: the run must have completed
+// successfully, and both phases must carry comparable per-case data.
+func applyReleasePreconditions(gate GateResult, result *engine.RunResult, candidate *engine.EvaluationResult) GateResult {
+	if result.Status != engine.RunStatusSucceeded {
+		gate.Released = false
+		gate.Reasons = append(gate.Reasons, fmt.Sprintf("run did not complete successfully (status %q)", result.Status))
+		return gate
+	}
+	if !hasComparableCases(result.BaselineValidation) || !hasComparableCases(candidate) {
+		gate.Released = false
+		gate.Reasons = append(gate.Reasons, "per-case results unavailable; cannot verify regressions")
+	}
+	return gate
+}
+
+// hasComparableCases reports whether the result carries at least one case with
+// metric data (a slimmed result that omits cases returns false).
+func hasComparableCases(result *engine.EvaluationResult) bool {
+	if result == nil {
+		return false
+	}
+	for _, set := range result.EvalSets {
+		for _, evalCase := range set.Cases {
+			if len(evalCase.Metrics) > 0 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// costReport summarizes cost from observable counts; the engine result carries
+// no token or call accounting, so this reports the number of evaluated cases
+// (not teacher/model calls, which the deterministic example never issues).
 func costReport(result *engine.RunResult) CostReport {
 	rounds := len(result.Rounds)
-	teacherCalls := caseCount(result.BaselineValidation)
+	evaluatedCases := caseCount(result.BaselineValidation)
 	for _, round := range result.Rounds {
-		teacherCalls += caseCount(round.Train) + caseCount(round.Validation)
+		evaluatedCases += caseCount(round.Train) + caseCount(round.Validation)
 	}
 	return CostReport{
-		Rounds:       rounds,
-		TeacherCalls: teacherCalls,
-		Estimated:    true,
-		Note:         "teacher calls derived from evaluated cases across baseline and rounds",
+		Rounds:         rounds,
+		EvaluatedCases: evaluatedCases,
+		Estimated:      true,
+		Note:           "evaluated case count across baseline and rounds; not model/teacher call accounting",
 	}
 }
 
@@ -167,8 +206,8 @@ func (r *Report) Markdown() string {
 	b.WriteString("\n")
 
 	fmt.Fprintf(&b, "## Cost (estimated)\n\n")
-	fmt.Fprintf(&b, "- rounds: %d\n- teacher calls: %d\n- note: %s\n",
-		r.Cost.Rounds, r.Cost.TeacherCalls, r.Cost.Note)
+	fmt.Fprintf(&b, "- rounds: %d\n- evaluated cases: %d\n- note: %s\n",
+		r.Cost.Rounds, r.Cost.EvaluatedCases, r.Cost.Note)
 	return b.String()
 }
 

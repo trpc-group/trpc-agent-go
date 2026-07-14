@@ -147,13 +147,15 @@ type GateResult struct {
 	Reasons  []string `json:"reasons"`
 }
 
-// CostReport summarizes run cost. Values are estimated from observable counts
-// because the engine result carries no token accounting.
+// CostReport summarizes run cost from observable counts because the engine
+// result carries no token or model-call accounting.
 type CostReport struct {
-	Rounds       int    `json:"rounds"`
-	TeacherCalls int    `json:"teacherCalls"`
-	Estimated    bool   `json:"estimated"`
-	Note         string `json:"note,omitempty"`
+	Rounds int `json:"rounds"`
+	// EvaluatedCases is the number of cases scored across baseline and rounds. It
+	// is not a model/teacher call count (the deterministic example issues none).
+	EvaluatedCases int    `json:"evaluatedCases"`
+	Estimated      bool   `json:"estimated"`
+	Note           string `json:"note,omitempty"`
 }
 
 // RoundReport summarizes one optimization round.
