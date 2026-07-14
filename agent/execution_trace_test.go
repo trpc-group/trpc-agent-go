@@ -57,6 +57,7 @@ func TestClone_PreservesExecutionTraceCaptureAndEntryPredecessors(t *testing.T) 
 	rootStepID := StartExecutionTraceStep(
 		root,
 		InvocationTraceNodeID(root),
+		"agent",
 		&atrace.Snapshot{Text: "root input"},
 		nil,
 	)
@@ -70,6 +71,7 @@ func TestClone_PreservesExecutionTraceCaptureAndEntryPredecessors(t *testing.T) 
 	childStepID := StartExecutionTraceStep(
 		child,
 		InvocationTraceNodeID(child),
+		"agent",
 		&atrace.Snapshot{Text: "child input"},
 		nil,
 	)
@@ -151,6 +153,7 @@ func TestExecutionTrace_LazilyInitializesForDirectInvocationLiteral(t *testing.T
 	stepID := StartExecutionTraceStep(
 		inv,
 		InvocationTraceNodeID(inv),
+		"agent",
 		&atrace.Snapshot{Text: "input"},
 		nil,
 	)
@@ -161,6 +164,14 @@ func TestExecutionTrace_LazilyInitializesForDirectInvocationLiteral(t *testing.T
 	require.Len(t, executionTrace.Steps, 1)
 	assert.Equal(t, "assistant", executionTrace.RootAgentName)
 	assert.Equal(t, "assistant", executionTrace.Steps[0].NodeID)
+	assert.Equal(t, "agent", executionTrace.Steps[0].NodeType)
+	assert.Empty(t, StartExecutionTraceStep(
+		inv,
+		InvocationTraceNodeID(inv),
+		"",
+		nil,
+		nil,
+	))
 }
 
 func TestNextExecutionTracePredecessors_UsesNestedChildInvocationTerminals(t *testing.T) {
@@ -172,6 +183,7 @@ func TestNextExecutionTracePredecessors_UsesNestedChildInvocationTerminals(t *te
 	rootStepID := StartExecutionTraceStep(
 		root,
 		InvocationTraceNodeID(root),
+		"agent",
 		&atrace.Snapshot{Text: "root input"},
 		nil,
 	)
@@ -189,6 +201,7 @@ func TestNextExecutionTracePredecessors_UsesNestedChildInvocationTerminals(t *te
 	leafStepID := StartExecutionTraceStep(
 		leaf,
 		InvocationTraceNodeID(leaf),
+		"agent",
 		&atrace.Snapshot{Text: "leaf input"},
 		nil,
 	)
@@ -207,7 +220,7 @@ func TestWithExecutionTraceEnabled_SetsRunOptions(t *testing.T) {
 func TestExecutionTraceHelpers_HandleNilAndDisabledInvocation(t *testing.T) {
 	var nilInv *Invocation
 	assert.Empty(t, InvocationTraceNodeID(nilInv))
-	assert.Empty(t, StartExecutionTraceStep(nilInv, "assistant", nil, nil))
+	assert.Empty(t, StartExecutionTraceStep(nilInv, "assistant", "agent", nil, nil))
 	FinishExecutionTraceStep(nilInv, "step-1", nil, nil)
 	SetExecutionTraceStepAppliedSurfaceIDs(nilInv, "step-1")
 	SetExecutionTraceStepUsage(nilInv, "step-1", &model.Usage{TotalTokens: 1})
@@ -219,8 +232,8 @@ func TestExecutionTraceHelpers_HandleNilAndDisabledInvocation(t *testing.T) {
 		WithInvocationMessage(model.NewUserMessage("hello")),
 	)
 	assert.False(t, executionTraceEnabled(disabled))
-	assert.Empty(t, StartExecutionTraceStep(disabled, "assistant", nil, nil))
-	assert.Empty(t, StartExecutionTraceStep(disabled, "", nil, nil))
+	assert.Empty(t, StartExecutionTraceStep(disabled, "assistant", "agent", nil, nil))
+	assert.Empty(t, StartExecutionTraceStep(disabled, "", "agent", nil, nil))
 	FinishExecutionTraceStep(disabled, "step-1", nil, nil)
 	FinishExecutionTraceStep(disabled, "", nil, nil)
 	SetExecutionTraceStepAppliedSurfaceIDs(disabled, "step-1")
@@ -237,7 +250,7 @@ func TestExecutionTraceHelpers_RecordStepErrorAndUtilityBranches(t *testing.T) {
 		AgentName:    "assistant",
 		RunOptions:   RunOptions{ExecutionTraceEnabled: true},
 	}
-	stepID := StartExecutionTraceStep(inv, InvocationTraceNodeID(inv), &atrace.Snapshot{Text: "input"}, []string{"entry"})
+	stepID := StartExecutionTraceStep(inv, InvocationTraceNodeID(inv), "agent", &atrace.Snapshot{Text: "input"}, []string{"entry"})
 	require.NotEmpty(t, stepID)
 	FinishExecutionTraceStep(inv, stepID, &atrace.Snapshot{Text: "output"}, errors.New("boom"))
 	executionTrace := BuildExecutionTrace(inv, atrace.TraceStatusFailed)
@@ -262,6 +275,7 @@ func TestExecutionTraceHelpers_RecordAppliedSurfaceIDs(t *testing.T) {
 	stepID := StartExecutionTraceStep(
 		inv,
 		InvocationTraceNodeID(inv),
+		"agent",
 		&atrace.Snapshot{Text: "input"},
 		nil,
 	)
@@ -283,6 +297,7 @@ func TestExecutionTraceHelpers_RecordStepUsage(t *testing.T) {
 	stepID := StartExecutionTraceStep(
 		inv,
 		InvocationTraceNodeID(inv),
+		"agent",
 		&atrace.Snapshot{Text: "input"},
 		nil,
 	)
@@ -307,6 +322,7 @@ func TestExecutionTraceHelpers_SetAppliedSurfaceIDs_IgnoresNilAgent(t *testing.T
 	stepID := StartExecutionTraceStep(
 		inv,
 		InvocationTraceNodeID(inv),
+		"agent",
 		&atrace.Snapshot{Text: "input"},
 		nil,
 	)

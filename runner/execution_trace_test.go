@@ -10,6 +10,7 @@ package runner
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"testing"
@@ -107,6 +108,12 @@ func TestRunnerCompletion_LLMRunProducesOneRealExecutionStep(t *testing.T) {
 		"session-1",
 		model.NewUserMessage("hello trace"),
 		agent.WithExecutionTraceEnabled(true),
+		agent.WithUserMessageRewriter(func(
+			context.Context,
+			*agent.UserMessageRewriteArgs,
+		) ([]model.Message, error) {
+			return []model.Message{model.NewUserMessage("rewritten trace")}, nil
+		}),
 	)
 	require.NoError(t, err)
 	var completion *event.Event
@@ -117,17 +124,235 @@ func TestRunnerCompletion_LLMRunProducesOneRealExecutionStep(t *testing.T) {
 	}
 	require.NotNil(t, completion)
 	require.NotNil(t, completion.ExecutionTrace)
+	assert.Equal(
+		t,
+		model.NewUserMessage("hello trace"),
+		executionTraceSnapshotMessage(t, completion.ExecutionTrace.Input),
+	)
+	assert.Equal(
+		t,
+		model.NewAssistantMessage("done"),
+		executionTraceSnapshotMessage(t, completion.ExecutionTrace.Output),
+	)
 	require.Len(t, completion.ExecutionTrace.Steps, 1)
 	step := completion.ExecutionTrace.Steps[0]
 	assert.Equal(t, completion.InvocationID, step.InvocationID)
 	assert.Equal(t, "assistant", step.AgentName)
 	assert.Equal(t, "assistant", step.NodeID)
+	assert.Equal(t, "llm", step.NodeType)
 	assert.Empty(t, step.PredecessorStepIDs)
 	require.NotNil(t, step.Input)
 	require.NotNil(t, step.Output)
-	assert.Contains(t, step.Input.Text, "hello trace")
+	assert.Contains(t, step.Input.Text, "rewritten trace")
 	assert.Contains(t, step.Output.Text, "done")
 	assert.Empty(t, step.Error)
+}
+
+func TestExecutionTraceOutputSnapshot_UsesOnlyCompletedRootOutput(t *testing.T) {
+	loop := &eventLoopContext{
+		graphCompletionSeen: true,
+		finalChoices: []model.Choice{{
+			Message: model.NewAssistantMessage("graph final"),
+		}},
+		fallbackChoices: []model.Choice{{
+			Message: model.NewAssistantMessage("intermediate"),
+		}},
+	}
+	completed := executionTraceOutputSnapshot(
+		loop,
+		atrace.TraceStatusCompleted,
+		nil,
+		false,
+	)
+	assert.Equal(
+		t,
+		model.NewAssistantMessage("graph final"),
+		executionTraceSnapshotMessage(t, completed),
+	)
+	assert.Nil(t, executionTraceOutputSnapshot(
+		loop,
+		atrace.TraceStatusFailed,
+		nil,
+		false,
+	))
+	assert.Nil(t, executionTraceOutputSnapshot(
+		loop,
+		atrace.TraceStatusIncomplete,
+		nil,
+		false,
+	))
+}
+
+func TestExecutionTraceOutputSnapshot_GraphWithoutFinalAnswerOmitsIntermediate(t *testing.T) {
+	loop := &eventLoopContext{
+		graphCompletionSeen: true,
+		fallbackChoices: []model.Choice{{
+			Message: model.NewAssistantMessage("intermediate"),
+		}},
+	}
+	assert.Nil(t, executionTraceOutputSnapshot(
+		loop,
+		atrace.TraceStatusCompleted,
+		map[string][]byte{"other": []byte(`"state"`)},
+		false,
+	))
+}
+
+func TestCaptureCompletionFallback_CompleteResponseInvalidatesGraphResult(t *testing.T) {
+	loop := &eventLoopContext{
+		graphCompletionSeen: true,
+		finalStateDelta: map[string][]byte{
+			graph.StateKeyLastResponse: []byte(`"graph final"`),
+		},
+		finalChoices: []model.Choice{{
+			Message: model.NewAssistantMessage("graph final"),
+		}},
+	}
+	r := &runner{}
+	r.captureCompletionFallback(loop, event.NewResponseEvent(
+		"inv-1",
+		"root",
+		&model.Response{Done: true},
+	))
+	assert.True(t, loop.graphCompletionSeen)
+	assert.Nil(t, loop.finalStateDelta)
+	assert.Nil(t, loop.finalChoices)
+
+	r.captureCompletionFallback(loop, event.NewResponseEvent(
+		"inv-1",
+		"root",
+		&model.Response{
+			Done:      true,
+			IsPartial: true,
+			Choices: []model.Choice{{
+				Message: model.NewAssistantMessage("partial"),
+			}},
+		},
+	))
+	assert.True(t, loop.graphCompletionSeen)
+
+	r.captureCompletionFallback(loop, event.NewResponseEvent(
+		"inv-1",
+		"root",
+		&model.Response{
+			Done: true,
+			Choices: []model.Choice{{
+				Message: model.NewAssistantMessage("root final"),
+			}},
+		},
+	))
+	assert.False(t, loop.graphCompletionSeen)
+	assert.Nil(t, loop.finalStateDelta)
+	assert.Nil(t, loop.finalChoices)
+	snapshot := executionTraceOutputSnapshot(
+		loop,
+		atrace.TraceStatusCompleted,
+		nil,
+		false,
+	)
+	assert.Equal(
+		t,
+		model.NewAssistantMessage("root final"),
+		executionTraceSnapshotMessage(t, snapshot),
+	)
+}
+
+func TestExecutionTraceOutputSnapshot_ResumeSnapshotOnlyUsesAuthoritativeChoices(t *testing.T) {
+	loop := &eventLoopContext{
+		invocation: agent.NewInvocation(
+			agent.WithInvocationRunOptions(agent.NewRunOptions(
+				agent.WithRuntimeState(graph.State{
+					graph.StateKeyCommand: graph.NewResumeCommand().WithResume("approve"),
+				}),
+			)),
+		),
+		graphCompletionSeen:     true,
+		baselineFinalResponseID: "resp-1",
+		priorAssistantResponseIDs: map[string]struct{}{
+			"resp-1": {},
+		},
+		finalChoices: []model.Choice{{
+			Message: model.NewAssistantMessage("historical"),
+		}},
+	}
+	finalStateDelta := map[string][]byte{
+		graph.StateKeyLastResponseID: []byte(`"resp-1"`),
+	}
+	traceSnapshotOnly := graph.CompletionSnapshotOnlyFromStateDelta(finalStateDelta) ||
+		shouldMarkCompletionSnapshotOnly(loop, loop.finalChoices, finalStateDelta)
+	require.True(t, traceSnapshotOnly)
+	assert.Nil(t, executionTraceOutputSnapshot(
+		loop,
+		atrace.TraceStatusCompleted,
+		finalStateDelta,
+		traceSnapshotOnly,
+	))
+
+	metadataStateDelta := map[string][]byte{}
+	graph.SetCompletionSnapshotOnlyInStateDelta(metadataStateDelta, true)
+	assert.Nil(t, executionTraceOutputSnapshot(
+		loop,
+		atrace.TraceStatusCompleted,
+		metadataStateDelta,
+		graph.CompletionSnapshotOnlyFromStateDelta(metadataStateDelta),
+	))
+}
+
+func TestCaptureGraphCompletionClonesChoices(t *testing.T) {
+	text := "original"
+	contentRef := &model.ContentRef{ArtifactRef: "artifact://trace@1"}
+	evt := event.NewResponseEvent("inv-1", "graph", &model.Response{
+		Choices: []model.Choice{{Message: model.Message{
+			Role: model.RoleAssistant,
+			ContentParts: []model.ContentPart{{
+				Type:       model.ContentTypeText,
+				Text:       &text,
+				ContentRef: contentRef,
+			}},
+		}}},
+	})
+	_, choices := (&runner{}).captureGraphCompletion(evt)
+	require.Len(t, choices, 1)
+	changed := "changed"
+	evt.Response.Choices[0].Message.ContentParts[0].Text = &changed
+	evt.Response.Choices[0].Message.ContentParts[0].ContentRef.ArtifactRef = "artifact://changed@2"
+	assert.Equal(t, "original", *choices[0].Message.ContentParts[0].Text)
+	assert.Equal(t, "artifact://trace@1", choices[0].Message.ContentParts[0].ContentRef.ArtifactRef)
+}
+
+func TestCaptureCompletionFallbackAcceptsContentParts(t *testing.T) {
+	text := "rich output"
+	evt := event.NewResponseEvent("inv-1", "assistant", &model.Response{
+		Done: true,
+		Choices: []model.Choice{{Message: model.Message{
+			Role: model.RoleAssistant,
+			ContentParts: []model.ContentPart{{
+				Type: model.ContentTypeText,
+				Text: &text,
+			}},
+		}}},
+	})
+	loop := &eventLoopContext{}
+	(&runner{}).captureCompletionFallback(loop, evt)
+	require.Len(t, loop.fallbackChoices, 1)
+	snapshot := executionTraceOutputSnapshot(
+		loop,
+		atrace.TraceStatusCompleted,
+		nil,
+		false,
+	)
+	assert.Equal(t, evt.Response.Choices[0].Message, executionTraceSnapshotMessage(t, snapshot))
+}
+
+func executionTraceSnapshotMessage(
+	t *testing.T,
+	snapshot *atrace.Snapshot,
+) model.Message {
+	t.Helper()
+	require.NotNil(t, snapshot)
+	var message model.Message
+	require.NoError(t, json.Unmarshal([]byte(snapshot.Text), &message))
+	return message
 }
 
 func TestRunnerCompletion_ExecutionTraceCarriesUsage(t *testing.T) {
@@ -580,106 +805,9 @@ func TestRunnerCompletion_GraphAgentNodePropagatesTraceMetadataToChildAgent(t *t
 	require.NotNil(t, trace)
 	require.Len(t, trace.Steps, 1)
 	step := trace.Steps[0]
-	assert.Equal(t, "delegate", step.AgentName)
+	assert.Equal(t, "assistant", step.AgentName)
 	assert.Equal(t, "assistant/delegate", step.NodeID)
 	assert.Empty(t, step.PredecessorStepIDs)
-}
-
-func TestRunnerCompletion_GraphAgentNodePropagatesComplexChildGraphTrace(t *testing.T) {
-	childBuilder := graph.NewStateGraph(graph.NewStateSchema())
-	childBuilder.AddNode("plan", func(context.Context, graph.State) (any, error) {
-		return graph.State{"plan": true}, nil
-	})
-	childBuilder.AddNode("write", func(context.Context, graph.State) (any, error) {
-		return graph.State{"write": true}, nil
-	})
-	childBuilder.SetEntryPoint("plan")
-	childBuilder.AddEdge("plan", "write")
-	childBuilder.SetFinishPoint("write")
-	childAgent, err := graphagent.New("worker_flow", childBuilder.MustCompile(), graphagent.WithMaxConcurrency(1))
-	require.NoError(t, err)
-	parentBuilder := graph.NewStateGraph(graph.NewStateSchema())
-	parentBuilder.AddNode("start", func(context.Context, graph.State) (any, error) {
-		return graph.State{"start": true}, nil
-	})
-	parentBuilder.AddAgentNode("worker_flow")
-	parentBuilder.AddNode("after", func(context.Context, graph.State) (any, error) {
-		return graph.State{"after": true}, nil
-	})
-	parentBuilder.SetEntryPoint("start")
-	parentBuilder.AddEdge("start", "worker_flow")
-	parentBuilder.AddEdge("worker_flow", "after")
-	parentBuilder.SetFinishPoint("after")
-	parentAgent, err := graphagent.New("assistant", parentBuilder.MustCompile(), graphagent.WithSubAgents([]agent.Agent{childAgent}))
-	require.NoError(t, err)
-	r := NewRunner("app", parentAgent, WithSessionService(sessioninmemory.NewSessionService()))
-	eventCh, err := r.Run(
-		context.Background(),
-		"user-1",
-		"session-1",
-		model.NewUserMessage("hello complex delegated graph"),
-		agent.WithExecutionTraceEnabled(true),
-	)
-	require.NoError(t, err)
-	trace := collectRunnerCompletionEvent(t, eventCh).ExecutionTrace
-	require.NotNil(t, trace)
-	require.Len(t, trace.Steps, 4)
-	startStep := requireTraceStepByNodeID(t, trace, "assistant/start")
-	planStep := requireTraceStepByNodeID(t, trace, "assistant/worker_flow/plan")
-	writeStep := requireTraceStepByNodeID(t, trace, "assistant/worker_flow/write")
-	afterStep := requireTraceStepByNodeID(t, trace, "assistant/after")
-	requireNoTraceStepByNodeID(t, trace, "assistant/worker_flow")
-	assert.Empty(t, startStep.PredecessorStepIDs)
-	assert.Equal(t, []string{startStep.StepID}, planStep.PredecessorStepIDs)
-	assert.Equal(t, []string{planStep.StepID}, writeStep.PredecessorStepIDs)
-	assert.Equal(t, []string{writeStep.StepID}, afterStep.PredecessorStepIDs)
-}
-
-func TestRunnerCompletion_GraphAgentNodePropagatesNestedAgentTrace(t *testing.T) {
-	middleBuilder := graph.NewStateGraph(graph.NewStateSchema())
-	middleBuilder.AddAgentNode("leaf")
-	middleBuilder.SetEntryPoint("leaf")
-	middleBuilder.SetFinishPoint("leaf")
-	leafAgent := llmagent.New("leaf", llmagent.WithModel(&staticModel{name: "leaf-model", content: "leaf"}))
-	middleAgent, err := graphagent.New(
-		"middle_flow",
-		middleBuilder.MustCompile(),
-		graphagent.WithSubAgents([]agent.Agent{leafAgent}),
-	)
-	require.NoError(t, err)
-	parentBuilder := graph.NewStateGraph(graph.NewStateSchema())
-	parentBuilder.AddNode("start", func(context.Context, graph.State) (any, error) {
-		return graph.State{"start": true}, nil
-	})
-	parentBuilder.AddAgentNode("middle_flow")
-	parentBuilder.AddNode("after", func(context.Context, graph.State) (any, error) {
-		return graph.State{"after": true}, nil
-	})
-	parentBuilder.SetEntryPoint("start")
-	parentBuilder.AddEdge("start", "middle_flow")
-	parentBuilder.AddEdge("middle_flow", "after")
-	parentBuilder.SetFinishPoint("after")
-	parentAgent, err := graphagent.New("assistant", parentBuilder.MustCompile(), graphagent.WithSubAgents([]agent.Agent{middleAgent}))
-	require.NoError(t, err)
-	r := NewRunner("app", parentAgent, WithSessionService(sessioninmemory.NewSessionService()))
-	eventCh, err := r.Run(
-		context.Background(),
-		"user-1",
-		"session-1",
-		model.NewUserMessage("hello nested delegated graph"),
-		agent.WithExecutionTraceEnabled(true),
-	)
-	require.NoError(t, err)
-	trace := collectRunnerCompletionEvent(t, eventCh).ExecutionTrace
-	require.NotNil(t, trace)
-	require.Len(t, trace.Steps, 3)
-	startStep := requireTraceStepByNodeID(t, trace, "assistant/start")
-	leafStep := requireTraceStepByNodeID(t, trace, "assistant/middle_flow/leaf")
-	afterStep := requireTraceStepByNodeID(t, trace, "assistant/after")
-	requireNoTraceStepByNodeID(t, trace, "assistant/middle_flow")
-	assert.Empty(t, startStep.PredecessorStepIDs)
-	assert.Equal(t, []string{startStep.StepID}, leafStep.PredecessorStepIDs)
-	assert.Equal(t, []string{leafStep.StepID}, afterStep.PredecessorStepIDs)
 }
 
 func collectRunnerCompletionEvent(t *testing.T, eventCh <-chan *event.Event) *event.Event {
@@ -692,24 +820,6 @@ func collectRunnerCompletionEvent(t *testing.T, eventCh <-chan *event.Event) *ev
 	}
 	require.NotNil(t, completion)
 	return completion
-}
-
-func requireTraceStepByNodeID(t *testing.T, trace *atrace.Trace, nodeID string) atrace.Step {
-	t.Helper()
-	for _, step := range trace.Steps {
-		if step.NodeID == nodeID {
-			return step
-		}
-	}
-	require.Failf(t, "missing trace step", "node=%s steps=%v", nodeID, trace.Steps)
-	return atrace.Step{}
-}
-
-func requireNoTraceStepByNodeID(t *testing.T, trace *atrace.Trace, nodeID string) {
-	t.Helper()
-	for _, step := range trace.Steps {
-		require.NotEqual(t, nodeID, step.NodeID)
-	}
 }
 
 func findTraceStepByPredecessor(

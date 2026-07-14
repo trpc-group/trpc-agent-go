@@ -994,19 +994,18 @@ func (e *Executor) buildExecutionContext(
 	channelManager := e.buildChannelManager()
 
 	execCtx := &ExecutionContext{
-		Graph:                       e.graph,
-		State:                       state,
-		EventChan:                   eventChan,
-		InvocationID:                invocationID,
-		resumed:                     resumed,
-		versionsSeen:                versionsSeen,
-		lastCheckpoint:              lastCheckpoint,
-		channels:                    channelManager,
-		traceChannelSources:         make(map[string][]string),
-		traceChannelSourceSteps:     make(map[string]int),
-		traceBarrierChannelSources:  make(map[string]map[string][]string),
-		traceSourceStepIDsByTaskID:  make(map[string][]string),
-		traceAgentNodeTasksByNodeID: make(map[string]*traceTaskRegistryEntry),
+		Graph:                      e.graph,
+		State:                      state,
+		EventChan:                  eventChan,
+		InvocationID:               invocationID,
+		resumed:                    resumed,
+		versionsSeen:               versionsSeen,
+		lastCheckpoint:             lastCheckpoint,
+		channels:                   channelManager,
+		traceChannelSources:        make(map[string][]string),
+		traceChannelSourceSteps:    make(map[string]int),
+		traceBarrierChannelSources: make(map[string]map[string][]string),
+		traceSourceStepIDsByTaskID: make(map[string][]string),
 	}
 
 	// For resumed executions, seed channel versions from the last checkpoint so
@@ -2591,7 +2590,6 @@ func (e *Executor) executeStep(
 ) error {
 	// Emit execution step event.
 	e.emitExecutionStepEvent(ctx, invocation, execCtx, tasks, step)
-	sameNodeDuplicateTasks := sameNodeDuplicateTaskSet(tasks)
 	workerCount := e.workerCount(len(tasks))
 	tasksCh := make(chan *Task, workerCount)
 	results := make(chan error, len(tasks))
@@ -2609,7 +2607,6 @@ func (e *Executor) executeStep(
 					t,
 					step,
 					report,
-					sameNodeDuplicateTasks[t],
 				)
 				if err != nil {
 					results <- err
@@ -2630,30 +2627,6 @@ func (e *Executor) executeStep(
 		}
 	}
 	return nil
-}
-
-func sameNodeDuplicateTaskSet(tasks []*Task) map[*Task]bool {
-	counts := make(map[string]int, len(tasks))
-	for _, task := range tasks {
-		if task == nil || task.NodeID == "" {
-			continue
-		}
-		counts[task.NodeID]++
-	}
-	var duplicateTasks map[*Task]bool
-	for _, task := range tasks {
-		if task == nil {
-			continue
-		}
-		if counts[task.NodeID] <= 1 {
-			continue
-		}
-		if duplicateTasks == nil {
-			duplicateTasks = make(map[*Task]bool)
-		}
-		duplicateTasks[task] = true
-	}
-	return duplicateTasks
 }
 
 func (e *Executor) workerCount(taskCount int) int {
@@ -2682,7 +2655,6 @@ func (e *Executor) executeStepTask(
 	t *Task,
 	step int,
 	report *stepExecutionReport,
-	sameNodeDuplicate bool,
 ) (err error) {
 	runCtx := agent.CloneContext(ctx)
 	defer func() {
@@ -2710,7 +2682,6 @@ func (e *Executor) executeStepTask(
 		t,
 		step,
 		report,
-		sameNodeDuplicate,
 	)
 	if err == nil && report != nil && t != nil {
 		report.markCompleted(t)
@@ -2829,15 +2800,11 @@ func (e *Executor) executeSingleTask(
 	t *Task,
 	step int,
 	report *stepExecutionReport,
-	sameNodeDuplicate bool,
 ) error {
 	// Initialize node execution context with retry policies and metadata.
-	nodeCtx := e.initializeNodeContext(ctx, invocation, execCtx, t, step, sameNodeDuplicate)
+	nodeCtx := e.initializeNodeContext(ctx, invocation, execCtx, t, step)
 	if execCtx != nil && t != nil && t.TaskID != "" {
 		defer e.clearTraceSourceStepIDs(execCtx, t.TaskID)
-	}
-	if nodeCtx != nil && nodeCtx.traceTask != nil {
-		defer e.unregisterAgentNodeTraceTask(execCtx, t.NodeID, nodeCtx.traceTask)
 	}
 	if report != nil && nodeCtx != nil && t != nil {
 		report.recordInput(t, nodeCtx.stateCopy)
@@ -2847,7 +2814,7 @@ func (e *Executor) executeSingleTask(
 	if handled, err := e.runBeforeCallbacks(
 		ctx, invocation, nodeCtx.mergedCallbacks, nodeCtx.callbackCtx,
 		nodeCtx.stateCopy, execCtx, t, nodeCtx.nodeType, nodeCtx.nodeStart,
-		nodeCtx.metricRecorder, step, nodeCtx.traceStepID, nodeCtx.traceTask,
+		nodeCtx.metricRecorder, step, nodeCtx.traceStepID,
 	); handled || err != nil {
 		return err
 	}
@@ -2884,7 +2851,6 @@ func (e *Executor) initializeNodeContext(
 	execCtx *ExecutionContext,
 	t *Task,
 	step int,
-	sameNodeDuplicate bool,
 ) *nodeExecutionContext {
 	// Get node type and determine retry policies for metadata.
 	nodeType := e.getNodeType(t.NodeID)
@@ -2904,25 +2870,16 @@ func (e *Executor) initializeNodeContext(
 	stateCopy := e.buildTaskStateCopy(execCtx, t)
 	mergedCallbacks := e.getMergedCallbacks(stateCopy, t.NodeID)
 	inputSnapshot := traceSnapshotFromValue(stateCopy)
-	traceStepID := ""
-	var traceTask *traceTaskMetadata
-	if e.canCreateTransparentAgentNodeCandidate(invocation, execCtx, t, nodeType, nodePolicies, mergedCallbacks, sameNodeDuplicate) {
-		traceTask = newTraceTaskMetadata(execCtx, t.TaskID, t.NodeID, t.PredecessorStepIDs, inputSnapshot)
-		if !e.registerAgentNodeTraceTask(execCtx, traceTask) {
-			traceTask = nil
-		}
-	}
-	if traceTask == nil {
-		traceStepID = agent.StartExecutionTraceStep(
-			invocation,
-			e.traceNodeIDForTask(invocation, t),
-			inputSnapshot,
-			t.PredecessorStepIDs,
-		)
-		e.recordTraceSourceStepIDs(execCtx, t.TaskID, []string{traceStepID})
-		if traceStepID != "" {
-			stateCopy[currentTraceStepIDStateKey] = traceStepID
-		}
+	traceStepID := agent.StartExecutionTraceStep(
+		invocation,
+		e.traceNodeIDForTask(invocation, t),
+		nodeType.String(),
+		inputSnapshot,
+		t.PredecessorStepIDs,
+	)
+	e.recordTraceSourceStepIDs(execCtx, t.TaskID, []string{traceStepID})
+	if traceStepID != "" {
+		stateCopy[currentTraceStepIDStateKey] = traceStepID
 	}
 	metricRecorder := e.newWorkflowMetricRecorder(invocation, execCtx, t.NodeID, nodeType, nodeStart)
 	return &nodeExecutionContext{
@@ -2934,58 +2891,7 @@ func (e *Executor) initializeNodeContext(
 		mergedCallbacks: mergedCallbacks,
 		traceStepID:     traceStepID,
 		metricRecorder:  metricRecorder,
-		traceTask:       traceTask,
 	}
-}
-
-func (e *Executor) canCreateTransparentAgentNodeCandidate(
-	invocation *agent.Invocation,
-	execCtx *ExecutionContext,
-	t *Task,
-	nodeType NodeType,
-	nodePolicies []RetryPolicy,
-	callbacks *NodeCallbacks,
-	sameNodeDuplicate bool,
-) bool {
-	if invocation == nil || execCtx == nil || t == nil || t.TaskID == "" {
-		return false
-	}
-	node, ok := e.graph.Node(t.NodeID)
-	if !ok || node == nil || nodeType != NodeTypeAgent || !node.traceTransparent {
-		return false
-	}
-	if !invocation.RunOptions.ExecutionTraceEnabled || sameNodeDuplicate {
-		return false
-	}
-	if len(nodePolicies) > 0 || hasEffectiveNodeCallbacks(callbacks) {
-		return false
-	}
-	if e.getEffectiveCachePolicy(t.NodeID) != nil || node.agentOutputMapper != nil {
-		return false
-	}
-	if hasEffectiveAgentCallbacks(pluginAgentCallbacksFromInvocation(invocation)) {
-		return false
-	}
-	return true
-}
-
-func hasEffectiveNodeCallbacks(callbacks *NodeCallbacks) bool {
-	return callbacks != nil &&
-		(len(callbacks.BeforeNode) > 0 ||
-			len(callbacks.AfterNode) > 0 ||
-			len(callbacks.OnNodeError) > 0 ||
-			len(callbacks.AgentEvent) > 0)
-}
-
-func hasEffectiveAgentCallbacks(callbacks *agent.Callbacks) bool {
-	return callbacks != nil && (len(callbacks.BeforeAgent) > 0 || len(callbacks.AfterAgent) > 0)
-}
-
-func pluginAgentCallbacksFromInvocation(invocation *agent.Invocation) *agent.Callbacks {
-	if invocation == nil || invocation.Plugins == nil {
-		return nil
-	}
-	return invocation.Plugins.AgentCallbacks()
 }
 
 // getNodeRetryPolicies retrieves retry policies for the given node.
@@ -3084,7 +2990,6 @@ func (e *Executor) handleCachedResult(
 		step,
 		nodeCtx.metricRecorder,
 	); err != nil {
-		e.ensureTraceSourceForTask(invocation, execCtx, t, result, err, nodeCtx.traceTask)
 		agent.FinishExecutionTraceStep(invocation, nodeCtx.traceStepID, traceSnapshotFromValue(result), err)
 		return err
 	} else if res != nil {
@@ -3093,7 +2998,6 @@ func (e *Executor) handleCachedResult(
 	e.syncResumeState(execCtx, nodeCtx.stateCopy)
 
 	// Handle result and process channel writes.
-	e.ensureTraceSourceForTask(invocation, execCtx, t, result, nil, nodeCtx.traceTask)
 	routed, herr := e.handleNodeResult(
 		ctx,
 		invocation,
@@ -3103,7 +3007,12 @@ func (e *Executor) handleCachedResult(
 		step,
 	)
 	if herr != nil {
-		e.ensureTraceSourceForTask(invocation, execCtx, t, result, herr, nodeCtx.traceTask)
+		agent.FinishExecutionTraceStep(
+			invocation,
+			nodeCtx.traceStepID,
+			traceSnapshotFromValue(result),
+			herr,
+		)
 		nodeCtx.metricRecorder.recordError(ctx, herr)
 		return herr
 	}
@@ -3114,7 +3023,6 @@ func (e *Executor) handleCachedResult(
 	// Process conditional edges after node execution.
 	if !routed {
 		if perr := e.processConditionalEdges(ctx, invocation, execCtx, t, step); perr != nil {
-			e.ensureTraceSourceForTask(invocation, execCtx, t, result, perr, nodeCtx.traceTask)
 			agent.FinishExecutionTraceStep(invocation, nodeCtx.traceStepID, traceSnapshotFromValue(result), perr)
 			nodeCtx.metricRecorder.recordError(ctx, perr)
 			return fmt.Errorf("conditional edge processing failed for node %s: %w", t.NodeID, perr)
@@ -3141,7 +3049,6 @@ type nodeExecutionContext struct {
 	mergedCallbacks *NodeCallbacks
 	traceStepID     string
 	metricRecorder  *workflowMetricRecorder
-	traceTask       *traceTaskMetadata
 }
 
 type workflowMetricRecorder struct {
@@ -3209,13 +3116,11 @@ func (e *Executor) executeTaskWithRetry(
 		shouldRetry, retryErr := e.evaluateRetryDecision(ctx, invocation, execCtx, t, step, nodeCtx, retryCtx)
 		if !shouldRetry {
 			if IsInterruptError(retryErr) {
-				e.ensureTraceSourceForTask(invocation, execCtx, t, result, retryErr, nodeCtx.traceTask)
 				nodeCtx.metricRecorder.recordError(ctx, retryErr)
 				agent.FinishExecutionTraceStep(invocation, nodeCtx.traceStepID, traceSnapshotFromValue(result), retryErr)
 				return retryErr
 			}
 			if !errors.Is(retryErr, err) {
-				e.ensureTraceSourceForTask(invocation, execCtx, t, result, retryErr, nodeCtx.traceTask)
 				nodeCtx.metricRecorder.recordError(ctx, retryErr)
 				agent.FinishExecutionTraceStep(invocation, nodeCtx.traceStepID, traceSnapshotFromValue(result), retryErr)
 				return retryErr
@@ -3274,7 +3179,6 @@ func (e *Executor) finalizeSuccessfulExecution(
 		step,
 		nodeCtx.metricRecorder,
 	); aerr != nil {
-		e.ensureTraceSourceForTask(invocation, execCtx, t, result, aerr, nodeCtx.traceTask)
 		agent.FinishExecutionTraceStep(invocation, nodeCtx.traceStepID, traceSnapshotFromValue(result), aerr)
 		return aerr
 	} else if res != nil {
@@ -3283,7 +3187,6 @@ func (e *Executor) finalizeSuccessfulExecution(
 	e.syncResumeState(execCtx, nodeCtx.stateCopy)
 
 	// Handle result and process channel writes.
-	e.ensureTraceSourceForTask(invocation, execCtx, t, result, nil, nodeCtx.traceTask)
 	routed, herr := e.handleNodeResult(
 		ctx,
 		invocation,
@@ -3293,7 +3196,12 @@ func (e *Executor) finalizeSuccessfulExecution(
 		step,
 	)
 	if herr != nil {
-		e.ensureTraceSourceForTask(invocation, execCtx, t, result, herr, nodeCtx.traceTask)
+		agent.FinishExecutionTraceStep(
+			invocation,
+			nodeCtx.traceStepID,
+			traceSnapshotFromValue(result),
+			herr,
+		)
 		nodeCtx.metricRecorder.recordError(ctx, herr)
 		return herr
 	}
@@ -3322,7 +3230,6 @@ func (e *Executor) finalizeSuccessfulExecution(
 	// Process conditional edges after node execution.
 	if !routed {
 		if perr := e.processConditionalEdges(ctx, invocation, execCtx, t, step); perr != nil {
-			e.ensureTraceSourceForTask(invocation, execCtx, t, result, perr, nodeCtx.traceTask)
 			agent.FinishExecutionTraceStep(invocation, nodeCtx.traceStepID, traceSnapshotFromValue(result), perr)
 			nodeCtx.metricRecorder.recordError(ctx, perr)
 			return fmt.Errorf("conditional edge processing failed for node %s: %w", t.NodeID, perr)
@@ -3355,11 +3262,6 @@ func (e *Executor) finalizeFailedExecution(
 			traceStepID = nodeCtx.traceStepID
 			nodeCtx.metricRecorder.recordError(ctx, retryErr)
 		}
-		var traceTask *traceTaskMetadata
-		if nodeCtx != nil {
-			traceTask = nodeCtx.traceTask
-		}
-		e.ensureTraceSourceForTask(invocation, execCtx, t, result, retryErr, traceTask)
 		agent.FinishExecutionTraceStep(invocation, traceStepID, traceSnapshotFromValue(result), retryErr)
 		return retryErr
 	}
@@ -3379,13 +3281,11 @@ func (e *Executor) finalizeFailedExecution(
 		nodeCtx.metricRecorder,
 	)
 	if aerr != nil {
-		e.ensureTraceSourceForTask(invocation, execCtx, t, result, aerr, nodeCtx.traceTask)
 		agent.FinishExecutionTraceStep(invocation, nodeCtx.traceStepID, traceSnapshotFromValue(result), aerr)
 		nodeCtx.metricRecorder.recordError(ctx, aerr)
 		return aerr
 	}
 	if !overridden {
-		e.ensureTraceSourceForTask(invocation, execCtx, t, result, retryErr, nodeCtx.traceTask)
 		agent.FinishExecutionTraceStep(invocation, nodeCtx.traceStepID, traceSnapshotFromValue(result), retryErr)
 		nodeCtx.metricRecorder.recordError(ctx, retryErr)
 		return retryErr
@@ -3411,7 +3311,6 @@ func (e *Executor) finalizeRecoveredExecution(
 	nodeCtx *nodeExecutionContext,
 ) error {
 	e.syncResumeState(execCtx, nodeCtx.stateCopy)
-	e.ensureTraceSourceForTask(invocation, execCtx, t, result, nil, nodeCtx.traceTask)
 	routed, herr := e.handleNodeResult(
 		ctx,
 		invocation,
@@ -3421,7 +3320,6 @@ func (e *Executor) finalizeRecoveredExecution(
 		step,
 	)
 	if herr != nil {
-		e.ensureTraceSourceForTask(invocation, execCtx, t, result, herr, nodeCtx.traceTask)
 		agent.FinishExecutionTraceStep(invocation, nodeCtx.traceStepID, traceSnapshotFromValue(result), herr)
 		nodeCtx.metricRecorder.recordError(ctx, herr)
 		return herr
@@ -3437,7 +3335,6 @@ func (e *Executor) finalizeRecoveredExecution(
 			t,
 			step,
 		); err != nil {
-			e.ensureTraceSourceForTask(invocation, execCtx, t, result, err, nodeCtx.traceTask)
 			agent.FinishExecutionTraceStep(invocation, nodeCtx.traceStepID, traceSnapshotFromValue(result), err)
 			nodeCtx.metricRecorder.recordError(ctx, err)
 			return fmt.Errorf(
@@ -3616,7 +3513,7 @@ func (e *Executor) waitBeforeRetry(
 // getNodeType retrieves the node type for a given node ID.
 func (e *Executor) getNodeType(nodeID string) NodeType {
 	node, exists := e.graph.Node(nodeID)
-	if !exists {
+	if !exists || node == nil || node.Type == "" {
 		return NodeTypeFunction // Default fallback.
 	}
 	return node.Type
@@ -3835,14 +3732,12 @@ func (e *Executor) runBeforeCallbacks(
 	metricRecorder *workflowMetricRecorder,
 	step int,
 	traceStepID string,
-	traceTask *traceTaskMetadata,
 ) (bool, error) {
 	if callbacks == nil {
 		return false, nil
 	}
 	customResult, err := callbacks.RunBeforeNode(ctx, cbCtx, stateCopy)
 	if err != nil {
-		e.ensureTraceSourceForTask(invocation, execCtx, t, nil, err, traceTask)
 		agent.FinishExecutionTraceStep(invocation, traceStepID, nil, err)
 		callbacks.RunOnNodeError(ctx, cbCtx, stateCopy, err)
 		e.syncResumeState(execCtx, stateCopy)
@@ -3857,7 +3752,6 @@ func (e *Executor) runBeforeCallbacks(
 		return false, nil
 	}
 	e.syncResumeState(execCtx, stateCopy)
-	e.ensureTraceSourceForTask(invocation, execCtx, t, customResult, nil, traceTask)
 	routed, err := e.handleNodeResult(
 		ctx,
 		invocation,
@@ -3867,7 +3761,6 @@ func (e *Executor) runBeforeCallbacks(
 		step,
 	)
 	if err != nil {
-		e.ensureTraceSourceForTask(invocation, execCtx, t, customResult, err, traceTask)
 		agent.FinishExecutionTraceStep(invocation, traceStepID, traceSnapshotFromValue(customResult), err)
 		metricRecorder.recordError(ctx, err)
 		return true, err
@@ -3876,7 +3769,6 @@ func (e *Executor) runBeforeCallbacks(
 	// We need to skip intermediate nodes after routed.
 	if !routed {
 		if err := e.processConditionalEdges(ctx, invocation, execCtx, t, step); err != nil {
-			e.ensureTraceSourceForTask(invocation, execCtx, t, customResult, err, traceTask)
 			agent.FinishExecutionTraceStep(invocation, traceStepID, traceSnapshotFromValue(customResult), err)
 			metricRecorder.recordError(ctx, err)
 			return true, fmt.Errorf("conditional edge processing failed for node %s: %w", t.NodeID, err)
@@ -4245,39 +4137,6 @@ func (e *Executor) handleNodeResult(
 	}
 
 	return routed, nil
-}
-
-func (e *Executor) ensureTraceSourceForTask(
-	invocation *agent.Invocation,
-	execCtx *ExecutionContext,
-	t *Task,
-	result any,
-	stepErr error,
-	traceTask *traceTaskMetadata,
-) {
-	if execCtx == nil || t == nil || t.TaskID == "" || traceTask == nil {
-		return
-	}
-	snapshot := traceTask.snapshot()
-	if snapshot.claimed && !snapshot.fallbackToWrapper && len(snapshot.childTerminalStepIDs) > 0 {
-		if stepErr != nil {
-			traceStepID := traceTask.materializePostChildStep(invocation, snapshot.childTerminalStepIDs)
-			if traceStepID == "" {
-				return
-			}
-			agent.FinishExecutionTraceStep(invocation, traceStepID, traceSnapshotFromValue(result), stepErr)
-			e.recordTraceSourceStepIDs(execCtx, t.TaskID, []string{traceStepID})
-			return
-		}
-		e.recordTraceSourceStepIDs(execCtx, t.TaskID, snapshot.childTerminalStepIDs)
-		return
-	}
-	traceStepID := traceTask.materializeWrapper(invocation)
-	if traceStepID == "" {
-		return
-	}
-	agent.FinishExecutionTraceStep(invocation, traceStepID, traceSnapshotFromValue(result), stepErr)
-	e.recordTraceSourceStepIDs(execCtx, t.TaskID, []string{traceStepID})
 }
 
 // resolveTargetByEnds resolves a symbolic target name using the node's per-node

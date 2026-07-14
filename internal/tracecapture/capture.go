@@ -26,6 +26,7 @@ type StartStepInput struct {
 	AgentName          string
 	Branch             string
 	NodeID             string
+	NodeType           string
 	StartedAt          time.Time
 	PredecessorStepIDs []string
 	AppliedSurfaceIDs  []string
@@ -120,6 +121,7 @@ func (c *Capture) StartStep(in StartStepInput) string {
 		AgentName:          in.AgentName,
 		Branch:             in.Branch,
 		NodeID:             in.NodeID,
+		NodeType:           in.NodeType,
 		StartedAt:          in.StartedAt,
 		PredecessorStepIDs: slices.Clone(in.PredecessorStepIDs),
 		AppliedSurfaceIDs:  slices.Clone(in.AppliedSurfaceIDs),
@@ -169,6 +171,20 @@ func (c *Capture) FinishStep(
 	c.steps[idx].Error = errText
 }
 
+// setStepInput updates the input snapshot of one recorded step.
+func (c *Capture) setStepInput(stepID string, input *trace.Snapshot) {
+	if c == nil || stepID == "" {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	idx, ok := c.stepIndexByID[stepID]
+	if !ok {
+		return
+	}
+	c.steps[idx].Input = cloneSnapshot(input)
+}
+
 // SetStepAppliedSurfaceIDs updates the applied surface ids of one recorded step.
 func (c *Capture) SetStepAppliedSurfaceIDs(stepID string, surfaceIDs []string) {
 	if c == nil || stepID == "" {
@@ -181,6 +197,43 @@ func (c *Capture) SetStepAppliedSurfaceIDs(stepID string, surfaceIDs []string) {
 		return
 	}
 	c.steps[idx].AppliedSurfaceIDs = slices.Clone(surfaceIDs)
+}
+
+// mergeStepAppliedSurfaceIDs merges surface ids in stable first-seen order.
+func (c *Capture) mergeStepAppliedSurfaceIDs(stepID string, surfaceIDs []string) {
+	if c == nil || stepID == "" {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	idx, ok := c.stepIndexByID[stepID]
+	if !ok {
+		return
+	}
+	if len(c.steps[idx].AppliedSurfaceIDs) == 0 && len(surfaceIDs) == 0 {
+		return
+	}
+	merged := make(
+		[]string,
+		0,
+		len(c.steps[idx].AppliedSurfaceIDs)+len(surfaceIDs),
+	)
+	seen := make(map[string]struct{}, cap(merged))
+	for _, surfaceID := range c.steps[idx].AppliedSurfaceIDs {
+		if _, exists := seen[surfaceID]; exists {
+			continue
+		}
+		seen[surfaceID] = struct{}{}
+		merged = append(merged, surfaceID)
+	}
+	for _, surfaceID := range surfaceIDs {
+		if _, exists := seen[surfaceID]; exists {
+			continue
+		}
+		seen[surfaceID] = struct{}{}
+		merged = append(merged, surfaceID)
+	}
+	c.steps[idx].AppliedSurfaceIDs = merged
 }
 
 // SetStepUsage updates token usage for one recorded step.
@@ -196,6 +249,21 @@ func (c *Capture) SetStepUsage(stepID string, usage *model.Usage) {
 		return
 	}
 	c.steps[idx].Usage = usage
+}
+
+// addStepUsage accumulates token usage for one recorded step.
+func (c *Capture) addStepUsage(stepID string, usage *model.Usage) {
+	usage = traceStepUsage(usage)
+	if c == nil || stepID == "" || usage == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	idx, ok := c.stepIndexByID[stepID]
+	if !ok {
+		return
+	}
+	c.steps[idx].Usage = addUsage(c.steps[idx].Usage, usage)
 }
 
 func traceStepUsage(usage *model.Usage) *model.Usage {
@@ -324,6 +392,7 @@ func cloneStep(step trace.Step) trace.Step {
 		AgentName:          step.AgentName,
 		Branch:             step.Branch,
 		NodeID:             step.NodeID,
+		NodeType:           step.NodeType,
 		StartedAt:          step.StartedAt,
 		EndedAt:            step.EndedAt,
 		PredecessorStepIDs: slices.Clone(step.PredecessorStepIDs),

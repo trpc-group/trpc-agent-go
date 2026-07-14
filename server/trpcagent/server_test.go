@@ -57,7 +57,7 @@ func (f *fakeStructureAgent) Run(_ context.Context, inv *agent.Invocation) (<-ch
 		return nil, f.runErr
 	}
 	if f.traceUsage != nil {
-		stepID := agent.StartExecutionTraceStep(inv, "writer", &atrace.Snapshot{Text: inv.Message.Content}, nil)
+		stepID := agent.StartExecutionTraceStep(inv, "writer", "llm", &atrace.Snapshot{Text: inv.Message.Content}, nil)
 		agent.SetExecutionTraceStepUsage(inv, stepID, f.traceUsage)
 		agent.FinishExecutionTraceStep(inv, stepID, &atrace.Snapshot{Text: "patched reply"}, nil)
 	}
@@ -156,6 +156,7 @@ func TestServerRunCompilesProfileAndReturnsTrace(t *testing.T) {
 			{
 				StepID:            "s1",
 				NodeID:            "writer",
+				NodeType:          "llm",
 				AppliedSurfaceIDs: []string{"writer#instruction"},
 				Usage:             &model.Usage{PromptTokens: 3, CompletionTokens: 4, TotalTokens: 7},
 			},
@@ -197,6 +198,8 @@ func TestServerRunCompilesProfileAndReturnsTrace(t *testing.T) {
 	assert.True(t, response.Events[len(response.Events)-1].IsRunnerCompletion())
 	require.NotNil(t, response.ExecutionTrace)
 	assert.Equal(t, 7, response.ExecutionTrace.Usage.TotalTokens)
+	require.Len(t, response.ExecutionTrace.Steps, 1)
+	assert.Equal(t, "llm", response.ExecutionTrace.Steps[0].NodeType)
 	assert.Equal(t, "prompt-engine", ag.userID)
 	assert.Equal(t, "session-1", ag.sessionID)
 	assert.Equal(t, model.NewUserMessage("match_001"), ag.message)

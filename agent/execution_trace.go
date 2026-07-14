@@ -113,10 +113,11 @@ func InvocationTeamMemberTraceRoot(inv *Invocation) string {
 func StartExecutionTraceStep(
 	inv *Invocation,
 	nodeID string,
+	nodeType string,
 	input *trace.Snapshot,
 	predecessors []string,
 ) string {
-	if inv == nil || nodeID == "" {
+	if inv == nil || nodeID == "" || nodeType == "" {
 		return ""
 	}
 	inv.initializeExecutionTrace()
@@ -141,6 +142,7 @@ func StartExecutionTraceStep(
 		AgentName:          inv.AgentName,
 		Branch:             inv.Branch,
 		NodeID:             nodeID,
+		NodeType:           nodeType,
 		StartedAt:          time.Now(),
 		PredecessorStepIDs: preds,
 		Input:              input,
@@ -308,6 +310,21 @@ func (inv *Invocation) executionTraceFields() (*tracecapture.Capture, string) {
 	inv.traceMu.Lock()
 	defer inv.traceMu.Unlock()
 	return inv.traceCapture, inv.traceNodeID
+}
+
+func (inv *Invocation) executionTraceRuntimeFields() (
+	*tracecapture.StepBinding,
+	*tracecapture.Capture,
+) {
+	if inv == nil || !inv.RunOptions.ExecutionTraceEnabled {
+		return nil, nil
+	}
+	inv.traceMu.Lock()
+	defer inv.traceMu.Unlock()
+	if inv.executionTraceStepBinding == nil {
+		inv.executionTraceStepBinding = tracecapture.NewStepBinding()
+	}
+	return inv.executionTraceStepBinding, inv.traceCapture
 }
 
 func cloneStringSlice(values []string) []string {
