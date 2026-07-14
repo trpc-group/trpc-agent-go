@@ -10,11 +10,28 @@ package safety
 
 import (
 	"net/url"
+	"path"
 	"strconv"
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/internal/shellsafe"
 )
+
+// shellsafeWrapperPolicy is a deny-only policy whose single sentinel entry never
+// matches a real command; it exists only to activate internal/shellsafe's
+// implicit-deny set (shell wrappers plus re-executing and stateful builtins:
+// sh/eval/command/env/xargs/trap/alias/export/cd/printf/...). On an
+// already-parseable line, a non-nil CheckCommand result therefore means such a
+// wrapper/builtin is present. Delegating to shellsafe keeps this in lockstep
+// with the framework's own deny set instead of a hand-maintained copy.
+var shellsafeWrapperPolicy = shellsafe.PolicyFromLists(nil, []string{"\x00safety-wrapper-sentinel"})
+
+// lineHasShellWrapper reports whether a parseable command line contains a shell
+// wrapper or re-executing/stateful builtin from shellsafe's implicit-deny set.
+// Only call it on lines that already parsed (parsePipeline succeeded).
+func lineHasShellWrapper(line string) bool {
+	return shellsafe.CheckCommand(line, shellsafeWrapperPolicy) != nil
+}
 
 // windowsExecExts are stripped from command names so "curl.exe" matches "curl".
 var windowsExecExts = []string{".exe", ".cmd", ".bat", ".com", ".ps1"}
@@ -43,12 +60,21 @@ func commandBase(s string) string {
 }
 
 // normalizePathArg canonicalises a path argument for denied-path matching:
-// forward slashes, unquoted, with $HOME / ${HOME} folded to "~".
+// forward slashes, unquoted, $HOME / ${HOME} folded to "~", and "." / ".."
+// segments collapsed so /tmp/../etc/shadow resolves like /etc/shadow.
 func normalizePathArg(s string) string {
 	s = strings.Trim(strings.TrimSpace(s), `"'`)
+	if s == "" {
+		return ""
+	}
 	s = strings.ReplaceAll(s, "\\", "/")
 	s = strings.ReplaceAll(s, "${HOME}", "~")
 	s = strings.ReplaceAll(s, "$HOME", "~")
+	// Collapse dot segments. URLs are left alone: path.Clean would corrupt the
+	// scheme's "//" and a URL never matches a filesystem denied path anyway.
+	if !strings.Contains(s, "://") {
+		s = path.Clean(s)
+	}
 	return s
 }
 
@@ -76,8 +102,11 @@ func splitScriptLines(script string) []string {
 		if pending.Len() == 0 && (trimmed == "" || strings.HasPrefix(trimmed, "#")) {
 			continue
 		}
-		if strings.HasSuffix(ln, "\\") {
-			pending.WriteString(strings.TrimSuffix(ln, "\\"))
+		// A trailing backslash escapes the newline (line continuation) only when
+		// the run of trailing backslashes is odd; an even run is literal
+		// backslashes and the shell runs the next line as a separate command.
+		if trailingBackslashes(ln)%2 == 1 {
+			pending.WriteString(ln[:len(ln)-1])
 			pending.WriteString(" ")
 			continue
 		}
@@ -92,6 +121,15 @@ func splitScriptLines(script string) []string {
 		lines = append(lines, rest)
 	}
 	return lines
+}
+
+// trailingBackslashes counts the run of "\" characters at the end of s.
+func trailingBackslashes(s string) int {
+	n := 0
+	for i := len(s) - 1; i >= 0 && s[i] == '\\'; i-- {
+		n++
+	}
+	return n
 }
 
 // isFlag reports whether an argv token is an option flag.
@@ -163,7 +201,7 @@ func extractHosts(argv []string) []string {
 			if _, err := strconv.Atoi(a); err == nil {
 				continue // bare port
 			}
-			if h := hostFromToken(a); h != "" {
+			if h, _ := hostFromToken(a); h != "" {
 				return []string{h}
 			}
 			return []string{strings.ToLower(strings.Trim(a, `"'`))}
@@ -171,14 +209,14 @@ func extractHosts(argv []string) []string {
 		return nil
 	}
 	// Multi-target tools (curl/wget/ssh/scp/...): every referenced host, so a
-	// benign host cannot mask a second non-allowlisted exfil target. Host
-	// candidates are the raw operands and option values (--url=host, user@host)
-	// but NOT curl @file upload operands (@payload.json), which are local files
-	// — those are only path candidates, handled by deniedPathAccess.
+	// benign host cannot mask a second non-allowlisted exfil target. Only
+	// operands that EXPLICITLY mark a host position count — scheme URLs
+	// (https://h) and user@host forms — so a local file operand (release.tar.gz,
+	// archive.tar.gz) is not misread as a non-allowlisted host and denied.
 	var hosts []string
 	seen := make(map[string]struct{})
-	add := func(h string) {
-		if h == "" {
+	add := func(h string, explicit bool) {
+		if h == "" || !explicit {
 			return
 		}
 		if _, ok := seen[h]; ok {
@@ -201,18 +239,18 @@ func extractHosts(argv []string) []string {
 	return hosts
 }
 
-// hostFromToken extracts a hostname from a single token, or "" if the token is
-// not host-like. A token that explicitly marks a host position — a scheme URL
-// (curl http://h) or a user@host form (scp f user@h:/p) — yields its host even
-// when single-label, so short intranet exfil hosts are not missed. A bare
-// token must contain a dot (or be localhost) to avoid mistaking flag values
-// like "POST"/"GET" for hosts.
-func hostFromToken(a string) string {
+// hostFromToken extracts a hostname from a single token and reports whether the
+// token EXPLICITLY marked a host position — a scheme URL (curl http://h) or a
+// user@host form (scp f user@h:/p). A bare dotted token (example.com,
+// release.tar.gz) is returned with explicit=false: callers that must not
+// confuse a local filename with a host (multi-target host extraction) require
+// explicit=true, while the single-host nc/telnet path accepts the operand
+// regardless.
+func hostFromToken(a string) (host string, explicit bool) {
 	a = strings.Trim(a, `"'`)
-	explicit := false
 	if i := strings.Index(a, "://"); i >= 0 {
 		if u, err := url.Parse(a); err == nil && u.Hostname() != "" {
-			return strings.ToLower(u.Hostname())
+			return strings.ToLower(u.Hostname()), true
 		}
 		a = a[i+3:]
 		explicit = true
@@ -229,10 +267,10 @@ func hostFromToken(a string) string {
 	}
 	a = strings.ToLower(strings.TrimSpace(a))
 	if a == "" {
-		return ""
+		return "", false
 	}
 	if explicit || a == "localhost" || strings.Contains(a, ".") {
-		return a
+		return a, explicit
 	}
-	return ""
+	return "", false
 }

@@ -9,6 +9,7 @@
 package safety
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -148,24 +149,30 @@ func (m *pathMatcher) match(normArg string) bool {
 }
 
 // LoadPolicy reads a policy from a .yaml/.yml or .json file, applies defaults
-// for any unset essential fields and compiles its lookup structures.
-func LoadPolicy(path string) (*Policy, error) {
-	data, err := os.ReadFile(path) //nolint:gosec // operator-provided config path
+// for any unset essential fields and compiles its lookup structures. Unknown
+// fields are rejected so a misspelled security key (e.g. denied_commmands) fails
+// loudly instead of silently leaving that protection empty.
+func LoadPolicy(filePath string) (*Policy, error) {
+	data, err := os.ReadFile(filePath) //nolint:gosec // operator-provided config path
 	if err != nil {
-		return nil, fmt.Errorf("safety: read policy %q: %w", path, err)
+		return nil, fmt.Errorf("safety: read policy %q: %w", filePath, err)
 	}
 	var p Policy
-	switch strings.ToLower(filepath.Ext(path)) {
+	switch strings.ToLower(filepath.Ext(filePath)) {
 	case ".yaml", ".yml":
-		if err := yaml.Unmarshal(data, &p); err != nil {
-			return nil, fmt.Errorf("safety: parse yaml policy %q: %w", path, err)
+		dec := yaml.NewDecoder(bytes.NewReader(data))
+		dec.KnownFields(true)
+		if err := dec.Decode(&p); err != nil {
+			return nil, fmt.Errorf("safety: parse yaml policy %q: %w", filePath, err)
 		}
 	case ".json":
-		if err := json.Unmarshal(data, &p); err != nil {
-			return nil, fmt.Errorf("safety: parse json policy %q: %w", path, err)
+		dec := json.NewDecoder(bytes.NewReader(data))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&p); err != nil {
+			return nil, fmt.Errorf("safety: parse json policy %q: %w", filePath, err)
 		}
 	default:
-		return nil, fmt.Errorf("safety: unsupported policy extension %q (use .yaml/.yml/.json)", filepath.Ext(path))
+		return nil, fmt.Errorf("safety: unsupported policy extension %q (use .yaml/.yml/.json)", filepath.Ext(filePath))
 	}
 	if err := p.compile(); err != nil {
 		return nil, err
@@ -190,29 +197,19 @@ func DefaultPolicy() *Policy {
 		EnforceAllowlist:              false,
 		DefaultDecisionOnParseFailure: DecisionDeny,
 		AllowedCommands:               []string{"go", "git", "ls", "cat", "grep", "echo", "gofmt", "test", "head", "tail", "wc", "sed", "awk"},
-		DeniedCommands:                []string{"rm", "dd", "mkfs", "shred", "shutdown", "reboot", "mkfs.ext4"},
-		DeniedPathPatterns: []string{
-			"~/.ssh", "**/id_rsa", "**/id_ed25519", "**/*.pem",
-			"**/.env*", "/etc/shadow", "~/.aws/credentials", "~/.netrc",
-			"~/.docker/config.json",
-		},
+		DeniedCommands:                defaultDeniedCommands(),
+		DeniedPathPatterns:            defaultDeniedPathPatterns(),
 		Network: NetworkPolicy{
 			Commands:       defaultNetworkCommands(),
-			AllowedDomains: []string{"github.com", "proxy.golang.org", "goproxy.cn", "pkg.go.dev"},
+			AllowedDomains: defaultAllowedDomains(),
 		},
 		DependencyInstall: DependencyPolicy{
 			Decision: DecisionAsk,
 			Patterns: defaultDependencyRules(),
 		},
-		Limits:       LimitsPolicy{MaxTimeoutSec: 120, MaxOutputBytes: 1 << 20},
-		EnvWhitelist: []string{"PATH", "HOME", "GOFLAGS", "GOCACHE", "GOPATH"},
-		SecretPatterns: []SecretPattern{
-			// Broad key=value form first so it masks the whole assignment
-			// before narrower fixed-shape patterns match a prefix.
-			{Name: "generic_secret", Regex: `(?i)(api[_-]?key|token|secret|password|passwd|pwd)\s*[=:]\s*['"]?[^\s'"]{6,}`},
-			{Name: "aws_access_key", Regex: `AKIA[0-9A-Z]{16}`},
-			{Name: "private_key", Regex: `-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----`},
-		},
+		Limits:         LimitsPolicy{MaxTimeoutSec: 120, MaxOutputBytes: 1 << 20},
+		EnvWhitelist:   defaultEnvWhitelist(),
+		SecretPatterns: defaultSecretPatterns(),
 	}
 	if err := p.compile(); err != nil {
 		// DefaultPolicy is built from constant, valid data; a failure here is a
@@ -224,6 +221,36 @@ func DefaultPolicy() *Policy {
 
 func defaultNetworkCommands() []string {
 	return []string{"curl", "wget", "nc", "ncat", "ssh", "scp", "sftp", "telnet", "socat"}
+}
+
+func defaultDeniedCommands() []string {
+	return []string{"rm", "dd", "mkfs", "shred", "shutdown", "reboot", "mkfs.ext4"}
+}
+
+func defaultDeniedPathPatterns() []string {
+	return []string{
+		"~/.ssh", "**/id_rsa", "**/id_ed25519", "**/*.pem",
+		"**/.env*", "/etc/shadow", "~/.aws/credentials", "~/.netrc",
+		"~/.docker/config.json",
+	}
+}
+
+func defaultAllowedDomains() []string {
+	return []string{"github.com", "proxy.golang.org", "goproxy.cn", "pkg.go.dev"}
+}
+
+func defaultEnvWhitelist() []string {
+	return []string{"PATH", "HOME", "GOFLAGS", "GOCACHE", "GOPATH"}
+}
+
+func defaultSecretPatterns() []SecretPattern {
+	return []SecretPattern{
+		// Broad key=value form first so it masks the whole assignment before
+		// narrower fixed-shape patterns match a prefix.
+		{Name: "generic_secret", Regex: `(?i)(api[_-]?key|token|secret|password|passwd|pwd)\s*[=:]\s*['"]?[^\s'"]{6,}`},
+		{Name: "aws_access_key", Regex: `AKIA[0-9A-Z]{16}`},
+		{Name: "private_key", Regex: `-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----`},
+	}
 }
 
 func defaultDependencyRules() []DependencyRule {
@@ -263,8 +290,21 @@ func (p *Policy) applyDefaults() {
 	if p.Limits.MaxOutputBytes == 0 {
 		p.Limits.MaxOutputBytes = 1 << 20
 	}
-	if len(p.SecretPatterns) == 0 {
-		p.SecretPatterns = DefaultPolicy().SecretPatterns
+	// Security-critical lists are defaulted only when ABSENT (nil), so a minimal
+	// policy such as {version: 1} keeps the core deny protections instead of
+	// silently allowing reboot / /etc/shadow, while an explicit empty list
+	// ([]) is still honoured as a deliberate opt-out.
+	if p.DeniedCommands == nil {
+		p.DeniedCommands = defaultDeniedCommands()
+	}
+	if p.DeniedPathPatterns == nil {
+		p.DeniedPathPatterns = defaultDeniedPathPatterns()
+	}
+	if p.EnvWhitelist == nil {
+		p.EnvWhitelist = defaultEnvWhitelist()
+	}
+	if p.SecretPatterns == nil {
+		p.SecretPatterns = defaultSecretPatterns()
 	}
 }
 

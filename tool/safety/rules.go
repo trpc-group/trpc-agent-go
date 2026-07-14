@@ -39,7 +39,10 @@ const (
 	RuleTimeoutExceeds     = "res.timeout_exceeds"
 	RuleOutputFlood        = "res.output_flood"
 	RulePythonDangerousAPI = "code.dangerous_api"
+	RuleForeignCodeUnknown = "code.unanalyzed"
 	RuleUnparsableArgs     = "args.unparsable"
+	RuleShellBuiltin       = "shell.builtin"
+	RulePolicyInvalid      = "policy.invalid"
 )
 
 var (

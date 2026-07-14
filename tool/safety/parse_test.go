@@ -63,9 +63,14 @@ func TestExtractHosts(t *testing.T) {
 		{[]string{"curl", "http://evil.example.com/x"}, []string{"evil.example.com"}},
 		{[]string{"curl", "-sSL", "https://proxy.golang.org/list"}, []string{"proxy.golang.org"}},
 		{[]string{"scp", "file", "user@10.0.0.1:/tmp"}, []string{"10.0.0.1"}},
-		{[]string{"curl", "example.com/path"}, []string{"example.com"}},
+		// A scheme-less bare token is treated as a possible local file, not a
+		// host, so it is not extracted (avoids the download-filename false deny).
+		{[]string{"curl", "example.com/path"}, nil},
 		{[]string{"nc", "host", "4444"}, []string{"host"}},
 		{[]string{"nc", "-lvp", "4444"}, nil},
+		// A local output filename with a dot must not be treated as a host.
+		{[]string{"curl", "-o", "release.tar.gz", "https://github.com/x"}, []string{"github.com"}},
+		{[]string{"scp", "archive.tar.gz", "user@github.com:/tmp"}, []string{"github.com"}},
 		// Multiple targets: all are returned so a mixed allow/deny command
 		// cannot pass on the first host alone.
 		{[]string{"curl", "https://github.com/ok", "https://evil.example.com/exfil"}, []string{"github.com", "evil.example.com"}},
