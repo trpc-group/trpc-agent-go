@@ -25,8 +25,9 @@
 //
 // # Concepts
 //
-//   - Preset tools are passed to New and stay available as usual; they are
-//     searchable but never deferred.
+//   - Preset tools are passed to New and stay available as usual; they can be
+//     resolved by exact tool_names but are not discoverable through keyword
+//     queries or embedding search, and never deferred.
 //   - Deferred tools are registered via WithDeferredTools or WithToolboxes. They
 //     are not advertised to the model until loaded through tool_search.
 //   - A Toolbox groups semantically-related deferred tools under a namespace.

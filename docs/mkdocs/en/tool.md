@@ -1927,7 +1927,9 @@ and the loaded set is persisted in session state under the key
 **Core concepts:**
 
 - **Preset tools** are passed to `toolsearch.New(presetTools, ...)`. They are
-  always advertised (like normal tools) and searchable, but never deferred.
+  always advertised (like normal tools) and can be loaded by exact name via
+  `tool_names`, but are never deferred. Preset tools are **not** discoverable
+  through keyword queries or embedding search — only deferred tools are.
 - **Deferred tools** are registered via `WithToolboxes` or `WithDeferredTools`.
   They are not advertised until the model loads them through `tool_search`.
 - A **Toolbox** groups semantically-related deferred tools under a namespace.
@@ -2040,9 +2042,11 @@ Recommended usage guidelines:
 
 > Tip: keep the preset tool list passed to `toolsearch.New(presetTools, ...)`
 > consistent with `llmagent.WithTools(presetTools)`. The former indexes preset
-> tools so `tool_search` can retrieve them; the latter lets the agent call
-> them directly during a turn. If the two lists diverge, preset tools remain
-> callable but may not surface in `tool_search` results.
+> tools so they can be resolved by exact `tool_names`; the latter lets the
+> agent call them directly during a turn. If the two lists diverge, preset
+> tools remain callable but may not be resolvable via `tool_names`. Note that
+> preset tools are never discoverable through keyword queries or embedding
+> search — only deferred tools participate in those paths.
 
 ##### `WithMCPToolboxes` Example
 
@@ -2179,7 +2183,8 @@ selection" to "deferred tools loaded on demand". Migration cheat sheet:
   `tool_search` description.
 - **`WithAlwaysInclude(...)` removed**: pass those tools as **preset tools**
   to `toolsearch.New(presetTools, ...)`. Preset tools are always advertised
-  to the model and remain searchable through `tool_search`.
+  to the model, can be resolved by exact `tool_names`, but are not
+  discoverable through keyword queries or embedding search.
 - **`WithFailOpen()` removed**: if using embedding-based semantic search,
   use `WithEmbeddingFailOpen()` to fall back to keyword matching on embedding
   failure.
