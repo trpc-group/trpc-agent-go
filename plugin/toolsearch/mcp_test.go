@@ -292,13 +292,13 @@ func TestMCPToolbox_RefreshesChangedAndRemovedTools(t *testing.T) {
 		"pruned tool must disappear from search results")
 
 	// The refreshed wrapper carries the new description.
-	got := p.toolBox["mcp__weather__get_forecast"]
+	got := p.toolsByName["mcp__weather__get_forecast"]
 	require.NotNil(t, got)
 	assert.Equal(t, "return the updated weather forecast", got.Declaration().Description)
 
 	// The pruned tool is gone from every index.
-	_, stillIndexed := p.toolBox["mcp__weather__get_alerts"]
-	assert.False(t, stillIndexed, "pruned tool must be removed from toolBox")
+	_, stillIndexed := p.toolsByName["mcp__weather__get_alerts"]
+	assert.False(t, stillIndexed, "pruned tool must be removed from toolsByName")
 	assert.False(t, p.isDeferred("mcp__weather__get_alerts"), "pruned tool must be un-deferred")
 	_, stillInBox := p.toolboxByName["weather"].toolNames["mcp__weather__get_alerts"]
 	assert.False(t, stillInBox, "pruned tool must leave the namespace membership set")
@@ -349,8 +349,8 @@ func TestMCPToolbox_EmptyListingPreservesSnapshot(t *testing.T) {
 	assert.True(t, p.isDeferred("mcp__weather__get_forecast"),
 		"empty listing must be treated as transient and preserve the previous snapshot")
 
-	_, stillIndexed := p.toolBox["mcp__weather__get_forecast"]
-	assert.True(t, stillIndexed, "empty listing must not evict tools from toolBox")
+	_, stillIndexed := p.toolsByName["mcp__weather__get_forecast"]
+	assert.True(t, stillIndexed, "empty listing must not evict tools from toolsByName")
 
 	req := &model.Request{
 		Messages: []model.Message{{Role: model.RoleSystem, Content: Placeholder}},
@@ -666,11 +666,11 @@ func TestMCPToolbox_UnchangedToolKeepsEmbedding(t *testing.T) {
 	ts := &fakeToolSet{name: "weather", tools: []tool.Tool{tool1}}
 
 	counter := &countingEmbedder{}
-	k, err := NewToolKnowledge(counter)
+	k, err := NewSemanticToolIndex(counter)
 	require.NoError(t, err)
 
 	p := New(nil,
-		WithToolKnowledge(k),
+		WithSemanticToolIndex(k),
 		WithMCPToolboxes([]MCPToolbox{
 			{ServerName: "weather", ToolSet: ts},
 		}),
@@ -780,14 +780,14 @@ func TestMCPToolbox_StaleSnapshotUpsertIsRejected(t *testing.T) {
 		runFreshSearch bool
 		// assertFinal validates indexed[renamed] after the stale upsert.
 		// staleFP is what Search A had captured before the refresh.
-		assertFinal func(t *testing.T, k *ToolKnowledge, staleFP string)
+		assertFinal func(t *testing.T, k *SemanticToolIndex, staleFP string)
 	}{
 		{
 			name: "pruned tool is not resurrected",
 			nextTools: func() []tool.Tool {
 				return []tool.Tool{newTestTool("list_alerts", "list severe weather alerts")}
 			},
-			assertFinal: func(t *testing.T, k *ToolKnowledge, _ string) {
+			assertFinal: func(t *testing.T, k *SemanticToolIndex, _ string) {
 				k.mu.Lock()
 				defer k.mu.Unlock()
 				_, ok := k.indexed[renamed]
@@ -801,7 +801,7 @@ func TestMCPToolbox_StaleSnapshotUpsertIsRejected(t *testing.T) {
 			nextTools: func() []tool.Tool {
 				return []tool.Tool{newTestTool("get_forecast", "get the updated weather forecast")}
 			},
-			assertFinal: func(t *testing.T, k *ToolKnowledge, staleFP string) {
+			assertFinal: func(t *testing.T, k *SemanticToolIndex, staleFP string) {
 				k.mu.Lock()
 				defer k.mu.Unlock()
 				finalFP := k.indexed[renamed]
@@ -820,11 +820,11 @@ func TestMCPToolbox_StaleSnapshotUpsertIsRejected(t *testing.T) {
 				tools: []tool.Tool{newTestTool("get_forecast", "get the weather forecast")},
 			}
 			counter := &countingEmbedder{}
-			k, err := NewToolKnowledge(counter)
+			k, err := NewSemanticToolIndex(counter)
 			require.NoError(t, err)
 
 			p := New(nil,
-				WithToolKnowledge(k),
+				WithSemanticToolIndex(k),
 				WithMCPToolboxes([]MCPToolbox{
 					{ServerName: "weather", ToolSet: ts},
 				}),
@@ -876,11 +876,11 @@ func TestMCPToolbox_ConcurrentRefreshAndSearch(t *testing.T) {
 	ts := &fakeToolSet{name: "weather", tools: []tool.Tool{toolA}}
 
 	counter := &countingEmbedder{}
-	k, err := NewToolKnowledge(counter)
+	k, err := NewSemanticToolIndex(counter)
 	require.NoError(t, err)
 
 	p := New(nil,
-		WithToolKnowledge(k),
+		WithSemanticToolIndex(k),
 		WithMCPToolboxes([]MCPToolbox{
 			{ServerName: "weather", ToolSet: ts},
 		}),

@@ -304,11 +304,12 @@ func (p *Plugin) searchTools(ctx context.Context, input toolSearchInput) (string
 		selectedTools, overflow []string
 		errPayload              string
 	)
-	// Embedding path: when a ToolKnowledge is configured (WithToolKnowledge) and
-	// the model issued a keyword query, rank deferred tools by semantic (vector)
-	// similarity instead of the built-in keyword text matching. Exact tool_names
-	// loads and namespace-only listings keep the deterministic index path.
-	useEmbedding := p.knowledge != nil && !req.isSelect() && req.hasQuery()
+	// Embedding path: when a SemanticToolIndex is configured
+	// (WithSemanticToolIndex) and the model issued a keyword query, rank
+	// deferred tools by semantic (vector) similarity instead of the built-in
+	// keyword text matching. Exact tool_names loads and namespace-only
+	// listings keep the deterministic index path.
+	useEmbedding := p.semanticIndex != nil && !req.isSelect() && req.hasQuery()
 	if useEmbedding {
 		var err error
 		selectedTools, overflow, errPayload, err = p.searchToolsByEmbedding(ctx, req, allAllowed)
@@ -496,7 +497,7 @@ func (p *Plugin) searchToolsByQueries(namespace string, queries []string, maxRes
 	candidates := make([]candidate, 0, len(best))
 	for name, score := range best {
 		partsLen := 0
-		if meta := p.allMeta[name]; meta != nil {
+		if meta := p.metaByName[name]; meta != nil {
 			partsLen = len(meta.Parts)
 		}
 		candidates = append(candidates, candidate{name: name, score: score, partsLen: partsLen})
@@ -528,7 +529,8 @@ const namespaceBiasFloor = 1
 // and, when namespace is empty, also returns a per-namespace bias derived from
 // the queries. With a namespace, only that toolbox's tools are candidates;
 // without one, every deferred tool participates and the bias tiebreaks tools
-// whose owning toolbox description matches the queries.
+// whose owning toolbox description matches the queries. Preset tools are
+// excluded from both branches; load them via exact tool_names.
 func (p *Plugin) candidateSetWithBias(
 	namespace string,
 	queries []string,
@@ -625,7 +627,7 @@ func (p *Plugin) scoreQueryInto(candidatesSet map[string]struct{}, query string,
 	patterns := compileTermPatterns(scoringTerms)
 
 	for name := range candidatesSet {
-		meta := p.allMeta[name]
+		meta := p.metaByName[name]
 		if meta == nil {
 			continue
 		}
@@ -717,7 +719,7 @@ func (p *Plugin) formatSearchResult(
 	p.mu.RLock()
 	for _, name := range tools {
 		desc := ""
-		if meta, ok := p.allMeta[name]; ok {
+		if meta, ok := p.metaByName[name]; ok {
 			desc = meta.Description
 		}
 		_, loaded := previouslyLoaded[name]
@@ -731,7 +733,7 @@ func (p *Plugin) formatSearchResult(
 		// individual function, so surface its input schema here for building
 		// call_tool params.
 		if p.invocationMode == DispatchToolCalls {
-			if t, ok := p.toolBox[name]; ok && t != nil {
+			if t, ok := p.toolsByName[name]; ok && t != nil {
 				if decl := t.Declaration(); decl != nil {
 					summary.InputSchema = decl.InputSchema
 				}

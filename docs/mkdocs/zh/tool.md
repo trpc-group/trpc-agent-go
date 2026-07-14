@@ -1847,7 +1847,7 @@ ts := toolsearch.New(
             Tools:       crmTools,
         },
     }),
-    toolsearch.WithMaxTools(5), // 单次搜索最多返回的工具数
+    toolsearch.WithMaxResults(5), // 单次搜索最多返回的工具数
 )
 
 r := runner.NewRunner("app", ag, runner.WithPlugins(ts))
@@ -1928,17 +1928,17 @@ ts := toolsearch.New(presetTools,
 | ⭐ `WithToolboxes([]Toolbox{...})` | 按 namespace 分组注册延迟工具（推荐）。`Toolbox.Name` 为空会被跳过。 |
 | `WithDeferredTools([]tool.Tool{...})` | 注册没有业务 namespace 的延迟工具，可与 `WithToolboxes` 共存。 |
 | `WithMCPToolboxes([]MCPToolbox{...})` | 将 MCP server（`tool.ToolSet`）注册为延迟 namespace；每次请求都会重新列出工具并重命名为 `mcp__<ServerName>__<tool>`。 |
-| `WithMaxTools(n)` | 关键字搜索单次返回的匹配数上限（默认 `5`，硬上限 `10`；超过硬上限部分会以 name-only 形式作为附加候选返回）。 |
+| `WithMaxResults(n)` | 关键字搜索单次返回的匹配数上限（默认 `5`，硬上限 `10`；超过硬上限部分会以 name-only 形式作为附加候选返回）。 |
 | `WithToolPermissionFilter(fn)` | 按调用者过滤延迟工具，影响目录、搜索和调用；不影响 preset 工具。 |
 | `WithCatalogInDescription(true)` | 把目录渲染进 `tool_search` 的 description，而不是 system prompt。 |
 | `WithInvocationMode(mode)` | `NativeToolCalls`（默认）或 `DispatchToolCalls`。 |
-| `WithToolKnowledge(k)` | 用 embedding 语义搜索为 `queries` 分支打分。 |
-| `WithEmbeddingFailOpen()` | Embedding 失败时回退到内置关键字匹配（仅当 `WithToolKnowledge` 开启时生效）。 |
+| `WithSemanticToolIndex(idx)` | 用 embedding 语义搜索为 `queries` 分支打分。 |
+| `WithEmbeddingFailOpen()` | Embedding 失败时回退到内置关键字匹配（仅当 `WithSemanticToolIndex` 开启时生效）。 |
 | `WithName(name)` | 覆盖插件默认名 `tool_search`（同一 Runner 内需唯一）。 |
 
 ##### 语义（Embedding）搜索
 
-默认情况下，`tool_search` 的 `queries` 路径使用内置的关键字匹配来打分。通过 `WithToolKnowledge(...)` 可以切换成基于 embedding 的语义搜索：每个延迟工具的名称、描述、参数 schema 会被写入向量库，关键字查询将改用向量相似度而不是字面重合度进行排序。按 `tool_names` 精确加载和按 namespace 列出的路径不受影响，仍走确定性索引。
+默认情况下，`tool_search` 的 `queries` 路径使用内置的关键字匹配来打分。通过 `WithSemanticToolIndex(...)` 可以切换成基于 embedding 的语义搜索：每个延迟工具的名称、描述、参数 schema 会被写入向量库，关键字查询将改用向量相似度而不是字面重合度进行排序。按 `tool_names` 精确加载和按 namespace 列出的路径不受影响，仍走确定性索引。
 
 ```go
 import (
@@ -1947,7 +1947,7 @@ import (
     vectorinmemory "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/inmemory"
 )
 
-toolKnowledge, err := toolsearch.NewToolKnowledge(
+semanticIndex, err := toolsearch.NewSemanticToolIndex(
     openaiembedder.New(openaiembedder.WithModel(openaiembedder.ModelTextEmbedding3Small)),
     toolsearch.WithVectorStore(vectorinmemory.New()), // 可选，默认使用内存向量库
 )
@@ -1955,8 +1955,8 @@ if err != nil { /* handle */ }
 
 ts := toolsearch.New(presetTools,
     toolsearch.WithToolboxes(boxes),
-    toolsearch.WithToolKnowledge(toolKnowledge),
-    toolsearch.WithMaxTools(5),
+    toolsearch.WithSemanticToolIndex(semanticIndex),
+    toolsearch.WithMaxResults(5),
     toolsearch.WithEmbeddingFailOpen(), // embedding 失败时回退到关键字匹配
 )
 ```
@@ -1978,10 +1978,11 @@ if usage, ok := toolsearch.ToolSearchUsageFromContext(ctx); ok && usage != nil {
 本次为 break change，从「自动 TopK 工具筛选」改为「延迟工具按需加载」。对照关系：
 
 - **构造函数**：`toolsearch.New(model, ...)` → `toolsearch.New(presetTools, WithToolboxes(...) / WithDeferredTools(...))`。新签名不再需要 `model`，也不再返回 `error`。
-- **`WithMaxTools(n)` 语义变更**：从「筛给主模型的 TopK 上限」变为「`tool_search` 单次关键字搜索返回的匹配数上限」（默认 5，硬上限 10）。
+- **`WithMaxResults(n)` 语义变更**：从「筛给主模型的 TopK 上限」变为「`tool_search` 单次关键字搜索返回的匹配数上限」（默认 5，硬上限 10）；此选项即旧版本的 `WithMaxTools`，本次同时更名。
 - **`WithSystemPrompt(...)`** 已移除：改为在 `llmagent.WithInstruction` 中放置占位符 `{deferred_tools_section}`，或使用 `WithCatalogInDescription(true)` 把目录嵌入到 `tool_search` 的 description。
 - **`WithAlwaysInclude(...)`** 已移除：改为把这些工具作为 **preset 工具** 传入 `toolsearch.New(presetTools, ...)`——preset 工具始终暴露给模型，可通过精确 `tool_names` 解析，但无法通过 keyword 查询或 embedding 搜索发现。
 - **`WithFailOpen()`** 已移除：若使用 embedding 语义搜索，可用 `WithEmbeddingFailOpen()` 在 embedding 失败时回退到关键字匹配。
+- **Embedding 索引 API 更名**：类型 `ToolKnowledge` → `SemanticToolIndex`；构造器 `NewToolKnowledge` → `NewSemanticToolIndex`；插件 Option `WithToolKnowledge` → `WithSemanticToolIndex`。语义与用法不变，直接替换标识符即可。
 - **Per-Agent BeforeModel Callback** 用法（旧文档中的方案 B，`tc.Callback()` 挂到 `RegisterBeforeModel`）已下线；现只保留 Runner Plugin 形态。
 
 #### 基本用法

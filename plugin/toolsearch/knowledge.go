@@ -25,7 +25,7 @@ import (
 )
 
 // This file backs the tool_search "queries" path with embedding-based semantic
-// search, enabled via WithToolKnowledge. See doc.go for the user-facing
+// search, enabled via WithSemanticToolIndex. See doc.go for the user-facing
 // overview. Exact tool_names loads and namespace-only listings keep the
 // deterministic index path in search.go.
 
@@ -56,8 +56,9 @@ func withUsageAccumulator(ctx context.Context) context.Context {
 }
 
 // ToolSearchUsageFromContext returns a snapshot of the embedding token usage
-// accumulated by tool_search this turn. ok is true only when WithToolKnowledge
-// is configured (which seeds the accumulator at BeforeModel time).
+// accumulated by tool_search this turn. ok is true only when
+// WithSemanticToolIndex is configured (which seeds the accumulator at
+// BeforeModel time).
 func ToolSearchUsageFromContext(ctx context.Context) (*model.Usage, bool) {
 	acc, ok := ctx.Value(usageContextKey{}).(*usageAccumulator)
 	if !ok {
@@ -100,12 +101,12 @@ func usageTokens(v any) int {
 	}
 }
 
-// --- ToolKnowledge: embedding index over deferred tools ---
+// --- SemanticToolIndex: embedding index over deferred tools ---
 
-// ToolKnowledge stores deferred tools and their embeddings in a vector store,
-// enabling semantic keyword search from tool_search. Build one with
-// NewToolKnowledge and pass it to New via WithToolKnowledge.
-type ToolKnowledge struct {
+// SemanticToolIndex stores deferred tools and their embeddings in a vector
+// store, enabling semantic keyword search from tool_search. Build one with
+// NewSemanticToolIndex and pass it to New via WithSemanticToolIndex.
+type SemanticToolIndex struct {
 	store    vectorstore.VectorStore
 	embedder embedder.Embedder
 
@@ -129,24 +130,24 @@ type candidateTool struct {
 // snapshot cannot revive a forgotten vector.
 type candidateVerifier func(name, fp string) bool
 
-// ToolKnowledgeOption configures a ToolKnowledge.
-type ToolKnowledgeOption func(*ToolKnowledge)
+// SemanticToolIndexOption configures a SemanticToolIndex.
+type SemanticToolIndexOption func(*SemanticToolIndex)
 
-// WithVectorStore sets the vector store for the ToolKnowledge (default: inmemory).
-func WithVectorStore(s vectorstore.VectorStore) ToolKnowledgeOption {
-	return func(k *ToolKnowledge) {
+// WithVectorStore sets the vector store for the SemanticToolIndex (default: inmemory).
+func WithVectorStore(s vectorstore.VectorStore) SemanticToolIndexOption {
+	return func(k *SemanticToolIndex) {
 		if s != nil {
 			k.store = s
 		}
 	}
 }
 
-// NewToolKnowledge creates a ToolKnowledge backed by embedder e.
-func NewToolKnowledge(e embedder.Embedder, opts ...ToolKnowledgeOption) (*ToolKnowledge, error) {
+// NewSemanticToolIndex creates a SemanticToolIndex backed by embedder e.
+func NewSemanticToolIndex(e embedder.Embedder, opts ...SemanticToolIndexOption) (*SemanticToolIndex, error) {
 	if e == nil {
-		return nil, fmt.Errorf("tool knowledge: embedder is nil")
+		return nil, fmt.Errorf("semantic tool index: embedder is nil")
 	}
-	k := &ToolKnowledge{
+	k := &SemanticToolIndex{
 		store:    inmemory.New(),
 		embedder: e,
 		indexed:  make(map[string]string),
@@ -165,7 +166,7 @@ func NewToolKnowledge(e embedder.Embedder, opts ...ToolKnowledgeOption) (*ToolKn
 // stale snapshot cannot resurrect a vector a concurrent forget just dropped.
 // On a fingerprint change the old document is deleted before Add to keep the
 // store free of duplicates across backends with differing Add semantics.
-func (k *ToolKnowledge) upsert(
+func (k *SemanticToolIndex) upsert(
 	ctx context.Context,
 	tools map[string]candidateTool,
 	verify candidateVerifier,
@@ -211,7 +212,7 @@ func (k *ToolKnowledge) upsert(
 // removed tool no longer surfaces in semantic search results. Missing entries
 // (never indexed, or already removed by a concurrent call) are ignored so
 // callers can pass a superset without pre-checking.
-func (k *ToolKnowledge) forget(ctx context.Context, names []string) {
+func (k *SemanticToolIndex) forget(ctx context.Context, names []string) {
 	if len(names) == 0 {
 		return
 	}
@@ -234,7 +235,7 @@ func (k *ToolKnowledge) forget(ctx context.Context, names []string) {
 // searchNames embeds query and returns candidate tool names ordered by
 // descending vector similarity, scoped to candidateIDs. Token usage is folded
 // into usage.
-func (k *ToolKnowledge) searchNames(
+func (k *SemanticToolIndex) searchNames(
 	ctx context.Context,
 	query string,
 	candidateIDs []string,
@@ -335,7 +336,7 @@ func (p *Plugin) searchToolsByEmbedding(
 	usage := &model.Usage{}
 	defer p.recordUsage(ctx, usage)
 
-	if err := p.knowledge.upsert(ctx, candidateTools, p.verifyCandidate, usage); err != nil {
+	if err := p.semanticIndex.upsert(ctx, candidateTools, p.verifyCandidate, usage); err != nil {
 		return nil, nil, "", fmt.Errorf("tool search: embedding tools: %w", err)
 	}
 
@@ -351,7 +352,7 @@ func (p *Plugin) searchToolsByEmbedding(
 		if q = strings.TrimSpace(q); q == "" {
 			continue
 		}
-		names, serr := p.knowledge.searchNames(ctx, q, candidateIDs, len(candidateIDs), usage)
+		names, serr := p.semanticIndex.searchNames(ctx, q, candidateIDs, len(candidateIDs), usage)
 		if serr != nil {
 			return nil, nil, "", fmt.Errorf("tool search: semantic search: %w", serr)
 		}
@@ -386,7 +387,8 @@ func (p *Plugin) searchToolsByEmbedding(
 // tool. Permission-denied tools are excluded so their name/description is
 // never sent to a remote embedder. Each entry carries the fingerprint
 // observed under the lock; upsert uses it via verifyCandidate to detect
-// snapshots that raced a concurrent refresh.
+// snapshots that raced a concurrent refresh. Preset tools are never included
+// and therefore never embedded.
 func (p *Plugin) embeddingCandidates(namespace string, allAllowed map[string]bool) (map[string]candidateTool, string) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -409,7 +411,7 @@ func (p *Plugin) embeddingCandidates(namespace string, allAllowed map[string]boo
 		if allAllowed != nil && !allAllowed[name] {
 			continue
 		}
-		t, ok := p.toolBox[name]
+		t, ok := p.toolsByName[name]
 		if !ok {
 			continue
 		}
@@ -446,7 +448,7 @@ func (p *Plugin) currentFingerprintLocked(name string, t tool.Tool) string {
 func (p *Plugin) verifyCandidate(name, fp string) bool {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	t, ok := p.toolBox[name]
+	t, ok := p.toolsByName[name]
 	if !ok {
 		return false
 	}

@@ -557,7 +557,7 @@ func TestToolSearchAccuracy(t *testing.T) {
 	cases := accuracyCases()
 	t.Logf("toolboxes=%d default_deferred=%d cases=%d", len(boxes), len(defs), len(cases))
 
-	searchPlugin := New(preset, WithToolboxes(boxes), WithDeferredTools(defs), WithMaxTools(5), WithCatalogInDescription(false))
+	searchPlugin := New(preset, WithToolboxes(boxes), WithDeferredTools(defs), WithMaxResults(5), WithCatalogInDescription(false))
 	intercept := newInterceptPlugin(boxes, defs)
 
 	results := make([]caseResult, len(cases))

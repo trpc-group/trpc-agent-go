@@ -339,6 +339,43 @@ func TestBeforeTool_IgnoresPresetTool(t *testing.T) {
 	assert.Nil(t, res)
 }
 
+// TestPreset_NotSurfacedByKeywordQuery asserts a preset tool is never
+// returned by a keyword query, even when its description matches the query
+// tokens verbatim. Guards the deferred-only candidate set in
+// candidateSetWithBias.
+func TestPreset_NotSurfacedByKeywordQuery(t *testing.T) {
+	preset := newTestTool("send_invoice_email", "send an invoice email to a customer")
+	deferred := newTestTool("create_invoice", "create an invoice for a customer")
+	p := New(
+		[]tool.Tool{preset},
+		WithDeferredTools([]tool.Tool{deferred}),
+	)
+	ctx, _ := ctxWithInvocation()
+
+	res := callSearch(t, ctx, p, toolSearchInput{Queries: []string{"invoice", "email"}})
+
+	names := toolNames(res.Tools)
+	assert.NotContains(t, names, "send_invoice_email",
+		"preset must never appear in a keyword-query result — it is not in the deferred candidate set")
+	assert.NotContains(t, res.AdditionalCandidates, "send_invoice_email",
+		"preset must never appear in additional_candidates either")
+	assert.Contains(t, names, "create_invoice",
+		"the deferred tool must still be resolved through the query path")
+}
+
+// TestPreset_ResolvableByExactToolNames asserts a preset can still be loaded
+// by exact tool_names, via the "preset tools pass through" branch in
+// selectToolsByName.
+func TestPreset_ResolvableByExactToolNames(t *testing.T) {
+	preset := newTestTool("send_invoice_email", "send an invoice email to a customer")
+	p := New([]tool.Tool{preset})
+	ctx, _ := ctxWithInvocation()
+
+	res := callSearch(t, ctx, p, toolSearchInput{ToolNames: []string{"send_invoice_email"}})
+	assert.Equal(t, []string{"send_invoice_email"}, toolNames(res.Tools),
+		"exact tool_names must resolve preset tools (not only deferred tools)")
+}
+
 func TestPermissionFilter_HidesAndBlocks(t *testing.T) {
 	filter := func(ctx context.Context, names []string) map[string]bool {
 		out := make(map[string]bool, len(names))
@@ -489,14 +526,6 @@ func TestRegister_NilCases(t *testing.T) {
 	// should not panic
 }
 
-func TestAfterTool(t *testing.T) {
-	p := New(nil)
-	ctx, _ := ctxWithInvocation()
-	res, err := p.afterTool(ctx, &tool.AfterToolArgs{})
-	require.NoError(t, err)
-	require.NotNil(t, res)
-}
-
 func TestIsDefaultOnly(t *testing.T) {
 	// WithDeferredTools alone → only _default toolbox.
 	p := New(nil, WithDeferredTools([]tool.Tool{newTestTool("t1", "d1")}))
@@ -575,11 +604,11 @@ func TestBeforeModel_CatalogInDescription(t *testing.T) {
 	assert.Contains(t, found.Declaration().Description, "<toolbox-catalog>")
 }
 
-func TestBeforeModel_WithKnowledge(t *testing.T) {
+func TestBeforeModel_WithSemanticToolIndex(t *testing.T) {
 	emb := &fakeEmbedder{vectors: map[string][]float64{}}
-	k, err := NewToolKnowledge(emb, WithVectorStore(inmemory.New()))
+	k, err := NewSemanticToolIndex(emb, WithVectorStore(inmemory.New()))
 	require.NoError(t, err)
-	p := New(nil, WithToolKnowledge(k))
+	p := New(nil, WithSemanticToolIndex(k))
 	ctx, _ := ctxWithInvocation()
 
 	res, err := p.beforeModel(ctx, &model.BeforeModelArgs{Request: &model.Request{}})
@@ -909,7 +938,7 @@ func TestPermissionFilter_PreRanking(t *testing.T) {
 	}
 	p := New(nil,
 		WithToolPermissionFilter(filter),
-		WithMaxTools(1),
+		WithMaxResults(1),
 		WithToolboxes([]Toolbox{{
 			Name: "ns",
 			Tools: []tool.Tool{
@@ -950,7 +979,7 @@ func TestPermissionFilter_PreRanking_ListNamespace(t *testing.T) {
 	}
 	p := New(nil,
 		WithToolPermissionFilter(filter),
-		WithMaxTools(1),
+		WithMaxResults(1),
 		WithToolboxes([]Toolbox{{
 			Name: "ns",
 			Tools: []tool.Tool{

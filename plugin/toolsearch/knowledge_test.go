@@ -55,11 +55,11 @@ func newKnowledgePlugin(t *testing.T) *Plugin {
 		toolToText(weather):  {1, 0, 0},
 		toolToText(timeTool): {0, 1, 0},
 	}}
-	k, err := NewToolKnowledge(emb, WithVectorStore(inmemory.New()))
+	k, err := NewSemanticToolIndex(emb, WithVectorStore(inmemory.New()))
 	require.NoError(t, err)
 
 	return New(nil,
-		WithToolKnowledge(k),
+		WithSemanticToolIndex(k),
 		WithToolboxes([]Toolbox{{
 			Name:        "utility",
 			Description: "everyday helpers",
@@ -68,8 +68,8 @@ func newKnowledgePlugin(t *testing.T) *Plugin {
 	)
 }
 
-func TestNewToolKnowledge_NilEmbedder(t *testing.T) {
-	_, err := NewToolKnowledge(nil)
+func TestNewSemanticToolIndex_NilEmbedder(t *testing.T) {
+	_, err := NewSemanticToolIndex(nil)
 	require.Error(t, err)
 }
 
@@ -141,7 +141,7 @@ func TestEmbeddingSearch_RecordsUsage(t *testing.T) {
 }
 
 func TestKeywordPathUnaffectedWithoutKnowledge(t *testing.T) {
-	// No WithToolKnowledge → the built-in keyword matching still runs.
+	// No WithSemanticToolIndex → the built-in keyword matching still runs.
 	p := New(nil, WithToolboxes([]Toolbox{{
 		Name:  "utility",
 		Tools: []tool.Tool{newTestTool("get_weather", "weather forecast")},
@@ -187,8 +187,8 @@ type errTest string
 
 func (e errTest) Error() string { return string(e) }
 
-func TestWithMaxTools_CapsResults(t *testing.T) {
-	// WithMaxTools caps the number of tools loaded with schemas.
+func TestWithMaxResults_CapsResults(t *testing.T) {
+	// WithMaxResults caps the number of tools loaded with schemas.
 	weather := newTestTool("get_weather", "weather forecast")
 	timeTool := newTestTool("get_time", "current time")
 	emb := &fakeEmbedder{vectors: map[string][]float64{
@@ -196,27 +196,27 @@ func TestWithMaxTools_CapsResults(t *testing.T) {
 		toolToText(weather):  {1, 0, 0},
 		toolToText(timeTool): {0, 1, 0},
 	}}
-	k, err := NewToolKnowledge(emb, WithVectorStore(inmemory.New()))
+	k, err := NewSemanticToolIndex(emb, WithVectorStore(inmemory.New()))
 	require.NoError(t, err)
 
 	p := New(nil,
-		WithToolKnowledge(k),
-		WithMaxTools(1),
+		WithSemanticToolIndex(k),
+		WithMaxResults(1),
 		WithToolboxes([]Toolbox{{Name: "utility", Tools: []tool.Tool{weather, timeTool}}}),
 	)
 	ctx, _ := ctxWithInvocation()
 	res := callSearch(t, ctx, p, toolSearchInput{Namespace: "utility", Queries: []string{"helper"}})
-	assert.Len(t, res.Tools, 1, "WithMaxTools(1) caps schema-loaded tools")
+	assert.Len(t, res.Tools, 1, "WithMaxResults(1) caps schema-loaded tools")
 	assert.Len(t, res.AdditionalCandidates, 1)
 }
 
 func TestWithEmbeddingFailOpen_FallsBackToKeyword(t *testing.T) {
 	weather := newTestTool("get_weather", "weather forecast")
-	k, err := NewToolKnowledge(failingEmbedder{}, WithVectorStore(inmemory.New()))
+	k, err := NewSemanticToolIndex(failingEmbedder{}, WithVectorStore(inmemory.New()))
 	require.NoError(t, err)
 
 	p := New(nil,
-		WithToolKnowledge(k),
+		WithSemanticToolIndex(k),
 		WithEmbeddingFailOpen(),
 		WithToolboxes([]Toolbox{{Name: "utility", Tools: []tool.Tool{weather}}}),
 	)
@@ -230,11 +230,11 @@ func TestWithEmbeddingFailOpen_FallsBackToKeyword(t *testing.T) {
 
 func TestWithoutFailOpen_EmbeddingErrorPropagates(t *testing.T) {
 	weather := newTestTool("get_weather", "weather forecast")
-	k, err := NewToolKnowledge(failingEmbedder{}, WithVectorStore(inmemory.New()))
+	k, err := NewSemanticToolIndex(failingEmbedder{}, WithVectorStore(inmemory.New()))
 	require.NoError(t, err)
 
 	p := New(nil,
-		WithToolKnowledge(k),
+		WithSemanticToolIndex(k),
 		WithToolboxes([]Toolbox{{Name: "utility", Tools: []tool.Tool{weather}}}),
 	)
 	ctx, _ := ctxWithInvocation()
@@ -283,11 +283,11 @@ func TestEmbeddingSearch_QueryMatchesParameterOnly(t *testing.T) {
 		toolToText(statusTool): {0, 1, 0},
 		"electronic mail":      {1, 0, 0},
 	}}
-	k, err := NewToolKnowledge(emb, WithVectorStore(inmemory.New()))
+	k, err := NewSemanticToolIndex(emb, WithVectorStore(inmemory.New()))
 	require.NoError(t, err)
 
 	p := New(nil,
-		WithToolKnowledge(k),
+		WithSemanticToolIndex(k),
 		WithToolboxes([]Toolbox{{
 			Name:        "crm",
 			Description: "customer management",
@@ -301,4 +301,45 @@ func TestEmbeddingSearch_QueryMatchesParameterOnly(t *testing.T) {
 	res := callSearch(t, ctx, p, toolSearchInput{Queries: []string{"electronic mail"}, MaxResults: 1})
 	require.Len(t, res.Tools, 1)
 	assert.Equal(t, "create_customer", res.Tools[0].Name)
+}
+
+// TestEmbeddingSearch_PresetNotEmbedded asserts a preset tool is never
+// embedded, uploaded to the vector store, or returned by the embedding path,
+// even when its text yields the strongest match. Guards embeddingCandidates.
+func TestEmbeddingSearch_PresetNotEmbedded(t *testing.T) {
+	preset := newTestTool("preset_weather", "weather forecast (preset)")
+	deferred := newTestTool("get_weather", "weather forecast")
+
+	// Give preset and deferred the same "weather" vector; a candidate-set
+	// leak would surface the preset.
+	emb := &fakeEmbedder{vectors: map[string][]float64{
+		"weather":            {1, 0, 0},
+		toolToText(deferred): {1, 0, 0},
+		toolToText(preset):   {1, 0, 0},
+	}}
+	k, err := NewSemanticToolIndex(emb, WithVectorStore(inmemory.New()))
+	require.NoError(t, err)
+
+	p := New(
+		[]tool.Tool{preset},
+		WithSemanticToolIndex(k),
+		WithToolboxes([]Toolbox{{
+			Name:        "utility",
+			Description: "everyday helpers",
+			Tools:       []tool.Tool{deferred},
+		}}),
+	)
+	ctx, _ := ctxWithInvocation()
+
+	res := callSearch(t, ctx, p, toolSearchInput{Queries: []string{"weather"}})
+
+	// Collect every name surfaced to the model on this search path.
+	surfaced := append([]string{}, res.AdditionalCandidates...)
+	for _, s := range res.Tools {
+		surfaced = append(surfaced, s.Name)
+	}
+	assert.NotContains(t, surfaced, "preset_weather",
+		"preset must never appear in an embedding-search result — it is not in the deferred candidate set")
+	assert.Contains(t, surfaced, "get_weather",
+		"the deferred tool must still be surfaced by the embedding path")
 }

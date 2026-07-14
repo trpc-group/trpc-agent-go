@@ -113,12 +113,13 @@ type options struct {
 	// invocationMode selects how loaded deferred tools are invoked. See the
 	// InvocationMode docs for details. Defaults to NativeToolCalls.
 	invocationMode InvocationMode
-	// toolKnowledge, when set via WithToolKnowledge, switches the tool_search
-	// "queries" path from keyword matching to embedding-based semantic search.
-	toolKnowledge *ToolKnowledge
+	// semanticIndex, when set via WithSemanticToolIndex, switches the
+	// tool_search "queries" path from keyword matching to embedding-based
+	// semantic search.
+	semanticIndex *SemanticToolIndex
 	// embeddingFailOpen, when true, makes an embedding-search failure fall
 	// back to the built-in keyword matching instead of returning an error to
-	// the model. It has no effect unless WithToolKnowledge is also set.
+	// the model. It has no effect unless WithSemanticToolIndex is also set.
 	embeddingFailOpen bool
 }
 
@@ -144,8 +145,8 @@ func WithName(name string) Option {
 	}
 }
 
-// WithMaxTools sets the default maximum number of keyword-search results.
-func WithMaxTools(n int) Option {
+// WithMaxResults sets the default maximum number of keyword-search results.
+func WithMaxResults(n int) Option {
 	return func(o *options) {
 		if n > 0 {
 			o.maxResults = n
@@ -231,20 +232,20 @@ func WithInvocationMode(mode InvocationMode) Option {
 	}
 }
 
-// WithToolKnowledge enables embedding-based semantic search for the tool_search
-// "queries" path. When set, keyword queries the model sends to tool_search are
-// ranked by vector similarity against the deferred tools' embedded
-// name/description/parameters (see NewToolKnowledge), instead of the built-in
-// keyword text matching. Exact tool_names loads and namespace-only listings are
-// unaffected.
-func WithToolKnowledge(k *ToolKnowledge) Option {
-	return func(o *options) { o.toolKnowledge = k }
+// WithSemanticToolIndex enables embedding-based semantic search for the
+// tool_search "queries" path. When set, keyword queries the model sends to
+// tool_search are ranked by vector similarity against the deferred tools'
+// embedded name/description/parameters (see NewSemanticToolIndex), instead of
+// the built-in keyword text matching. Exact tool_names loads and
+// namespace-only listings are unaffected.
+func WithSemanticToolIndex(k *SemanticToolIndex) Option {
+	return func(o *options) { o.semanticIndex = k }
 }
 
 // WithEmbeddingFailOpen makes an embedding-search failure "fail open": instead
 // of returning an error to the model, tool_search falls back to the built-in
 // keyword matching so tools stay reachable. It has no effect unless
-// WithToolKnowledge is also set.
+// WithSemanticToolIndex is also set.
 func WithEmbeddingFailOpen() Option {
 	return func(o *options) { o.embeddingFailOpen = true }
 }

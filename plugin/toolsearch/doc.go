@@ -70,19 +70,19 @@
 // # Semantic (embedding) search
 //
 // By default the tool_search "queries" path ranks deferred tools with built-in
-// keyword text matching. Passing WithToolKnowledge switches it to embedding-
-// based semantic search: each deferred tool's name, description, and parameters
-// are embedded into a vector store, and a keyword query is ranked by vector
-// similarity instead of literal term overlap. Exact tool_names loads and
-// namespace-only listings still use the deterministic index path.
+// keyword text matching. Passing WithSemanticToolIndex switches it to
+// embedding-based semantic search: each deferred tool's name, description, and
+// parameters are embedded into a vector store, and a keyword query is ranked
+// by vector similarity instead of literal term overlap. Exact tool_names loads
+// and namespace-only listings still use the deterministic index path.
 //
-//	toolKnowledge, err := toolsearch.NewToolKnowledge(
+//	semanticIndex, err := toolsearch.NewSemanticToolIndex(
 //	    openaiembedder.New(openaiembedder.WithModel(openaiembedder.ModelTextEmbedding3Small)),
 //	    toolsearch.WithVectorStore(vectorinmemory.New()), // optional; defaults to in-memory
 //	)
 //	plugin := toolsearch.New(presetTools,
-//	    toolsearch.WithToolKnowledge(toolKnowledge),
-//	    toolsearch.WithMaxTools(3), // cap schema-loaded results
+//	    toolsearch.WithSemanticToolIndex(semanticIndex),
+//	    toolsearch.WithMaxResults(3), // cap schema-loaded results
 //	    toolsearch.WithEmbeddingFailOpen(),  // on embedding failure, fall back to keyword search
 //	    toolsearch.WithToolboxes(boxes),
 //	)

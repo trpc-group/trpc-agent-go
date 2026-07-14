@@ -51,8 +51,8 @@ type Plugin struct {
 	// mu guards the index maps; MCP toolboxes mutate them at runtime when a
 	// server is listed lazily, and a single Plugin is shared across goroutines.
 	mu               sync.RWMutex
-	toolBox          map[string]tool.Tool
-	allMeta          map[string]*toolMetadata
+	toolsByName      map[string]tool.Tool
+	metaByName       map[string]*toolMetadata
 	nameByLower      map[string]string
 	deferredNames    map[string]struct{}
 	toolboxes        []*toolboxIndex
@@ -74,10 +74,10 @@ type Plugin struct {
 	// default) each loaded deferred tool is advertised individually.
 	invocationMode InvocationMode
 
-	// knowledge, when non-nil, backs the tool_search "queries" path with
+	// semanticIndex, when non-nil, backs the tool_search "queries" path with
 	// embedding-based semantic search over the deferred tools instead of the
-	// built-in keyword text matching. It is configured via WithToolKnowledge.
-	knowledge *ToolKnowledge
+	// built-in keyword text matching. It is configured via WithSemanticToolIndex.
+	semanticIndex *SemanticToolIndex
 	// embeddingFailOpen, when true, makes an embedding-search failure fall back
 	// to the built-in keyword matching instead of surfacing the error.
 	embeddingFailOpen bool
@@ -101,15 +101,19 @@ type toolboxIndex struct {
 // compile-time check.
 var _ plugin.Plugin = (*Plugin)(nil)
 
-// New creates a tool-search plugin. presetTools are always available and
-// searchable; deferred tools are registered through WithDeferredTools or
-// WithToolboxes options.
+// New creates a tool-search plugin.
+//
+// Preset tools are always visible to the model (advertised via
+// llmagent.WithTools) and resolvable by exact tool_names, but are excluded
+// from keyword and embedding search candidate sets.
+// Deferred tools are registered via WithDeferredTools or WithToolboxes and
+// are the sole population for query and embedding search.
 func New(presetTools []tool.Tool, opts ...Option) *Plugin {
 	o := newOptions(opts...)
 	p := &Plugin{
 		name:                 o.name,
-		toolBox:              make(map[string]tool.Tool),
-		allMeta:              make(map[string]*toolMetadata),
+		toolsByName:          make(map[string]tool.Tool),
+		metaByName:           make(map[string]*toolMetadata),
 		nameByLower:          make(map[string]string),
 		deferredNames:        make(map[string]struct{}),
 		toolboxByName:        make(map[string]*toolboxIndex),
@@ -118,7 +122,7 @@ func New(presetTools []tool.Tool, opts ...Option) *Plugin {
 		permissionFilter:     o.permissionFilter,
 		catalogInDescription: o.catalogInDescription,
 		invocationMode:       o.invocationMode,
-		knowledge:            o.toolKnowledge,
+		semanticIndex:        o.semanticIndex,
 		embeddingFailOpen:    o.embeddingFailOpen,
 	}
 
@@ -165,23 +169,18 @@ func (p *Plugin) Register(r *plugin.Registry) {
 	}
 	r.BeforeModel(p.beforeModel)
 	r.BeforeTool(p.beforeTool)
-	r.AfterTool(p.afterTool)
 }
 
-func (p *Plugin) afterTool(
-	ctx context.Context,
-	args *tool.AfterToolArgs,
-) (*tool.AfterToolResult, error) {
-	return &tool.AfterToolResult{}, nil
-}
-
-// indexTool registers a tool into toolBox and pre-computes its search metadata.
+// indexTool registers a tool into the name-keyed maps (toolsByName,
+// metaByName, nameByLower) and pre-computes its search metadata. It does not
+// touch deferredNames or namespaceByTool, so preset tools indexed through
+// this method alone stay out of the query and embedding candidate sets.
 func (p *Plugin) indexTool(t tool.Tool) {
 	decl := t.Declaration()
 	name := decl.Name
 	parsed := parseToolName(name)
-	p.toolBox[name] = t
-	p.allMeta[name] = &toolMetadata{
+	p.toolsByName[name] = t
+	p.metaByName[name] = &toolMetadata{
 		Parts:       parsed.Parts,
 		Full:        parsed.Full,
 		Description: decl.Description,
@@ -197,8 +196,8 @@ func (p *Plugin) indexTool(t tool.Tool) {
 // stale entry stops being surfaced or callable. The caller must hold p.mu
 // (write).
 func (p *Plugin) unindexTool(name string) {
-	delete(p.toolBox, name)
-	delete(p.allMeta, name)
+	delete(p.toolsByName, name)
+	delete(p.metaByName, name)
 	delete(p.nameByLower, strings.ToLower(name))
 	delete(p.deferredNames, name)
 	delete(p.namespaceByTool, name)
@@ -320,7 +319,7 @@ func (p *Plugin) callToolFn(ctx context.Context, input callToolInput) (any, erro
 	canonical, known := p.nameByLower[strings.ToLower(name)]
 	var target tool.Tool
 	if known {
-		target = p.toolBox[canonical]
+		target = p.toolsByName[canonical]
 	}
 	_, isDeferred := p.deferredNames[canonical]
 	p.mu.RUnlock()
@@ -482,7 +481,7 @@ func (p *Plugin) beforeModel(
 			if _, alreadySet := args.Request.Tools[toolName]; alreadySet {
 				continue
 			}
-			if t, exists := p.toolBox[toolName]; exists {
+			if t, exists := p.toolsByName[toolName]; exists {
 				args.Request.Tools[toolName] = t
 			}
 		}
@@ -522,7 +521,7 @@ func (p *Plugin) beforeModel(
 	// When embedding search is enabled, seed a usage accumulator into the
 	// context and hand it downstream. tool_search calls this turn fold their
 	// embedding token usage into it, readable via ToolSearchUsageFromContext.
-	if p.knowledge != nil {
+	if p.semanticIndex != nil {
 		return &model.BeforeModelResult{Context: withUsageAccumulator(ctx)}, nil
 	}
 	return nil, nil

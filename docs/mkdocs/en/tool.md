@@ -1986,7 +1986,7 @@ ts := toolsearch.New(
             Tools:       crmTools,
         },
     }),
-    toolsearch.WithMaxTools(5), // cap the number of tools returned per search
+    toolsearch.WithMaxResults(5), // cap the number of tools returned per search
 )
 
 r := runner.NewRunner("app", ag, runner.WithPlugins(ts))
@@ -2112,18 +2112,18 @@ ts := toolsearch.New(presetTools,
 | ⭐ `WithToolboxes([]Toolbox{...})` | Register deferred tools grouped by namespace (recommended). Entries with an empty `Name` are skipped. |
 | `WithDeferredTools([]tool.Tool{...})` | Register deferred tools that do not belong to any namespace. Coexists with `WithToolboxes`. |
 | `WithMCPToolboxes([]MCPToolbox{...})` | Register a `tool.ToolSet`-shaped MCP client as a deferred namespace; tools are listed on every request and renamed to `mcp__<ServerName>__<tool>`. |
-| `WithMaxTools(n)` | Cap the number of matches returned by a keyword search (default `5`, hard ceiling `10`; extra matches are returned as name-only additional candidates). |
+| `WithMaxResults(n)` | Cap the number of matches returned by a keyword search (default `5`, hard ceiling `10`; extra matches are returned as name-only additional candidates). |
 | `WithToolPermissionFilter(fn)` | Per-caller allow-list applied to catalog, search, and call time. Does not affect preset tools. |
 | `WithCatalogInDescription(true)` | Render the catalog into the `tool_search` description instead of the system prompt. |
 | `WithInvocationMode(mode)` | `NativeToolCalls` (default) or `DispatchToolCalls`. |
-| `WithToolKnowledge(k)` | Rank the `queries` path with embedding-based semantic search. |
-| `WithEmbeddingFailOpen()` | On embedding failure, fall back to keyword matching (only effective when `WithToolKnowledge` is set). |
+| `WithSemanticToolIndex(idx)` | Rank the `queries` path with embedding-based semantic search. |
+| `WithEmbeddingFailOpen()` | On embedding failure, fall back to keyword matching (only effective when `WithSemanticToolIndex` is set). |
 | `WithName(name)` | Override the default plugin name `tool_search` (must be unique within a Runner). |
 
 ##### Semantic (Embedding) Search
 
 By default the `tool_search` `queries` path ranks deferred tools with a
-built-in keyword matcher. Passing `WithToolKnowledge(...)` switches ranking to
+built-in keyword matcher. Passing `WithSemanticToolIndex(...)` switches ranking to
 embedding-based semantic search: each deferred tool's name, description, and
 parameter schema are embedded into a vector store, and a keyword query is
 ranked by vector similarity instead of literal term overlap. Exact
@@ -2137,7 +2137,7 @@ import (
     vectorinmemory "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/inmemory"
 )
 
-toolKnowledge, err := toolsearch.NewToolKnowledge(
+semanticIndex, err := toolsearch.NewSemanticToolIndex(
     openaiembedder.New(openaiembedder.WithModel(openaiembedder.ModelTextEmbedding3Small)),
     toolsearch.WithVectorStore(vectorinmemory.New()), // optional; defaults to in-memory
 )
@@ -2145,8 +2145,8 @@ if err != nil { /* handle */ }
 
 ts := toolsearch.New(presetTools,
     toolsearch.WithToolboxes(boxes),
-    toolsearch.WithToolKnowledge(toolKnowledge),
-    toolsearch.WithMaxTools(5),
+    toolsearch.WithSemanticToolIndex(semanticIndex),
+    toolsearch.WithMaxResults(5),
     toolsearch.WithEmbeddingFailOpen(), // fall back to keyword matching on embedding failure
 )
 ```
@@ -2174,9 +2174,10 @@ selection" to "deferred tools loaded on demand". Migration cheat sheet:
   `toolsearch.New(presetTools, WithToolboxes(...) / WithDeferredTools(...))`.
   The new signature no longer takes a `model` argument and no longer returns
   an `error`.
-- **`WithMaxTools(n)` semantics changed**: from "TopK cap on tools passed to
+- **`WithMaxResults(n)` semantics changed**: from "TopK cap on tools passed to
   the main model" to "cap on matches returned by a single `tool_search`
-  keyword search" (default `5`, hard ceiling `10`).
+  keyword search" (default `5`, hard ceiling `10`). This option was
+  previously named `WithMaxTools`; it is renamed in this release.
 - **`WithSystemPrompt(...)` removed**: place the placeholder
   `{deferred_tools_section}` in `llmagent.WithInstruction` instead, or use
   `WithCatalogInDescription(true)` to render the catalog into the
@@ -2188,6 +2189,10 @@ selection" to "deferred tools loaded on demand". Migration cheat sheet:
 - **`WithFailOpen()` removed**: if using embedding-based semantic search,
   use `WithEmbeddingFailOpen()` to fall back to keyword matching on embedding
   failure.
+- **Embedding index API renamed**: type `ToolKnowledge` → `SemanticToolIndex`;
+  constructor `NewToolKnowledge` → `NewSemanticToolIndex`; plugin option
+  `WithToolKnowledge` → `WithSemanticToolIndex`. Semantics and usage are
+  unchanged — just swap the identifiers.
 - **Per-Agent BeforeModel Callback usage** (previously "Option B", registering
   `tc.Callback()` via `RegisterBeforeModel`) is dropped. Only the Runner
   Plugin form is supported.

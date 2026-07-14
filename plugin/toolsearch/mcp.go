@@ -147,7 +147,7 @@ func (p *Plugin) ensureMCPListed(ctx context.Context, box *toolboxIndex) {
 	}
 
 	// Add or refresh every tool in the fresh listing. Refreshing rebinds
-	// toolBox/allMeta to the latest wrapper so a server-side schema or
+	// toolsByName/metaByName to the latest wrapper so a server-side schema or
 	// implementation update immediately supersedes the stale one. Only tools
 	// whose declaration fingerprint actually changed are collected for
 	// forgetting so unchanged entries keep their embedding across listings.
@@ -180,10 +180,10 @@ func (p *Plugin) ensureMCPListed(ctx context.Context, box *toolboxIndex) {
 
 	// Build the forget list while still holding the lock, and snapshot the
 	// indexed count for logging because it is racy to read after unlock.
-	// box.mcp.serverName and p.knowledge are set once at registration and never
-	// mutated afterwards, so they are safe to read post-unlock.
+	// box.mcp.serverName and p.semanticIndex are set once at registration and
+	// never mutated afterwards, so they are safe to read post-unlock.
 	var forget []string
-	if p.knowledge != nil {
+	if p.semanticIndex != nil {
 		forget = append(append(forget, changed...), pruned...)
 	}
 	indexedCount := len(box.toolNames)
@@ -193,8 +193,8 @@ func (p *Plugin) ensureMCPListed(ctx context.Context, box *toolboxIndex) {
 	// catalog render.
 	p.mu.Unlock()
 
-	if p.knowledge != nil && len(forget) > 0 {
-		p.knowledge.forget(ctx, forget)
+	if p.semanticIndex != nil && len(forget) > 0 {
+		p.semanticIndex.forget(ctx, forget)
 	}
 
 	log.Infof("[%s] listed MCP server %q: %d tools (added=%d refreshed=%d pruned=%d)",
