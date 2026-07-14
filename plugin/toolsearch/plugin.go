@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"sort"
 	"strings"
 	"sync"
@@ -43,6 +44,11 @@ const toolSearchCallToolDescription = `Load deferred tools from <toolbox-catalog
 const callToolDescription = `Invoke a deferred tool that tool_search has already loaded. Pass its exact "tool_name" (as returned by tool_search) and a "params" object matching that tool's input_schema. If the tool is not loaded yet, call tool_search first.`
 
 const unloadedToolErrorTemplate = `Tool %[1]q is not loaded yet. Call tool_search with tool_names=["%[1]s"] first, then retry this call.`
+
+// discoveredLockShards bounds the sharded-mutex table used to serialize
+// per-session appendDiscoveredTools. 128 keeps memory O(1) with negligible
+// cross-session collision cost (each session still writes its own state key).
+const discoveredLockShards = 128
 
 // Plugin is a tool-search engine that defers tools behind a tool_search function
 // and a system-prompt catalog, loading them on demand.
@@ -82,11 +88,11 @@ type Plugin struct {
 	// to the built-in keyword matching instead of surfacing the error.
 	embeddingFailOpen bool
 
-	// discoveredMuBySession serializes appendDiscoveredTools per session so
-	// concurrent tool_search calls on cloned invocations sharing the same
-	// *session.Session don't clobber each other's newly-loaded tool.
-	// Keyed by session.Key; values are *sync.Mutex.
-	discoveredMuBySession sync.Map
+	// discoveredLocks serializes appendDiscoveredTools per session via a fixed
+	// sharded mutex table (session key hashed into a shard), so concurrent
+	// tool_search calls on cloned invocations sharing the same session don't
+	// clobber each other and memory stays O(1) regardless of session churn.
+	discoveredLocks [discoveredLockShards]sync.Mutex
 }
 
 // toolboxIndex holds catalog metadata and an O(1) membership set for a namespace.
@@ -127,9 +133,12 @@ func New(presetTools []tool.Tool, opts ...Option) *Plugin {
 	}
 
 	for _, t := range presetTools {
-		if t != nil {
-			p.indexTool(t)
+		// Skip a nil tool or one with a nil declaration: indexTool dereferences
+		// the declaration, and a tool that cannot describe itself is unusable.
+		if t == nil || t.Declaration() == nil {
+			continue
 		}
+		p.indexTool(t)
 	}
 	// WithDeferredTools bypasses the empty-name guard below: the internal
 	// default namespace deliberately uses "" as its sentinel, but user-supplied
@@ -223,7 +232,7 @@ func (p *Plugin) registerToolbox(name, description string, tools []tool.Tool) {
 	}
 
 	for _, t := range tools {
-		if t == nil {
+		if t == nil || t.Declaration() == nil {
 			continue
 		}
 		toolName := t.Declaration().Name
@@ -232,6 +241,15 @@ func (p *Plugin) registerToolbox(name, description string, tools []tool.Tool) {
 				log.Errorf("[%s] tool %q registered into multiple namespaces (%q kept, %q ignored)",
 					p.name, toolName, existingNS, name)
 			}
+			continue
+		}
+		// A tool already indexed as a preset (present in toolsByName but with no
+		// namespace) must stay a preset: always visible and never deferred. Pulling
+		// it into the deferred population here would hide it behind tool_search,
+		// contradicting the preset contract, so keep it as a preset and skip.
+		if _, isPreset := p.toolsByName[toolName]; isPreset {
+			log.Errorf("[%s] tool %q is a preset tool; ignoring its toolbox registration in %q",
+				p.name, toolName, name)
 			continue
 		}
 		p.indexTool(t)
@@ -796,22 +814,20 @@ func (p *Plugin) loadDiscoveredTools(ctx context.Context, inv *agent.Invocation)
 	return toolNames
 }
 
-// discoveredToolsLock returns the per-session mutex used by
-// appendDiscoveredTools. Different sessions never contend.
+// discoveredToolsLock returns a sharded mutex for the invocation's session,
+// selected by FNV-1a hashing the session key into discoveredLocks.
 func (p *Plugin) discoveredToolsLock(inv *agent.Invocation) *sync.Mutex {
 	if inv == nil || inv.Session == nil {
 		return nil
 	}
-	key := session.Key{
-		AppName:   inv.Session.AppName,
-		UserID:    inv.Session.UserID,
-		SessionID: inv.Session.ID,
-	}
-	if v, ok := p.discoveredMuBySession.Load(key); ok {
-		return v.(*sync.Mutex)
-	}
-	actual, _ := p.discoveredMuBySession.LoadOrStore(key, &sync.Mutex{})
-	return actual.(*sync.Mutex)
+	h := fnv.New32a()
+	// NUL separator avoids collisions from concatenated key fields.
+	_, _ = h.Write([]byte(inv.Session.AppName))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(inv.Session.UserID))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(inv.Session.ID))
+	return &p.discoveredLocks[h.Sum32()%discoveredLockShards]
 }
 
 // saveDiscoveredTools writes the loaded deferred-tool names back into session
