@@ -175,3 +175,38 @@ func TestParseIgnoresBlankSeparatorsInsideHunk(t *testing.T) {
 		t.Fatalf("added line Content = %q", got)
 	}
 }
+
+func TestParseGitQuotedRenamePaths(t *testing.T) {
+	raw := "diff --git \"a/pkg/my file\\t\\346\\226\\207.go\" \"b/pkg/new file\\t\\346\\226\\207.go\"\n" +
+		"similarity index 80%\n" +
+		"rename from pkg/my file\\t\\346\\226\\207.go\n" +
+		"rename to pkg/new file\\t\\346\\226\\207.go\n" +
+		"--- \"a/pkg/my file\\t\\346\\226\\207.go\"\n" +
+		"+++ \"b/pkg/new file\\t\\346\\226\\207.go\"\n" +
+		"@@ -1 +1 @@\n" +
+		"-package old\n" +
+		"+package new\n"
+	files, err := Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("len(files) = %d, want 1", len(files))
+	}
+	wantOld := "pkg/my file\t文.go"
+	wantNew := "pkg/new file\t文.go"
+	if files[0].OldPath != wantOld || files[0].NewPath != wantNew {
+		t.Fatalf("paths = %q/%q, want %q/%q", files[0].OldPath, files[0].NewPath, wantOld, wantNew)
+	}
+	if files[0].PackageDir != "pkg" {
+		t.Fatalf("PackageDir = %q, want pkg", files[0].PackageDir)
+	}
+
+	decoded, _, err := parseGitPathToken("\"a/pkg/dir\\\\name.go\"")
+	if err != nil {
+		t.Fatalf("parseGitPathToken() error = %v", err)
+	}
+	if decoded != "a/pkg/dir\\name.go" {
+		t.Fatalf("decoded backslash path = %q, want %q", decoded, "a/pkg/dir\\name.go")
+	}
+}

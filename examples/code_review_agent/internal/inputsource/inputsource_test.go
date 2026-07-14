@@ -16,6 +16,7 @@ import (
 	"strings"
 	"testing"
 
+	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/diffparse"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/review"
 )
 
@@ -62,6 +63,62 @@ func TestReadFileList(t *testing.T) {
 	}
 	if got, want := strings.Join(src.FileList, ","), "pkg/a.go,pkg/b_test.go"; got != want {
 		t.Fatalf("FileList = %q, want %q", got, want)
+	}
+}
+
+func TestReadFileListAssociatesRepositoryWorkspace(t *testing.T) {
+	repo := t.TempDir()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "files.txt")
+	if err := os.WriteFile(path, []byte("pkg/my file.go\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	src, err := Read(context.Background(), Options{FileList: path, RepoPath: repo})
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	wantRepo, err := filepath.Abs(repo)
+	if err != nil {
+		t.Fatalf("Abs(repo) error = %v", err)
+	}
+	if src.RepoPath != wantRepo || src.WorkDir != wantRepo {
+		t.Fatalf("workspace = %q/%q, want %q/%q", src.RepoPath, src.WorkDir, wantRepo, wantRepo)
+	}
+	if len(src.FileList) != 1 || src.FileList[0] != "pkg/my file.go" {
+		t.Fatalf("FileList = %#v, want exact path", src.FileList)
+	}
+	if !strings.Contains(src.Summary, wantRepo) {
+		t.Fatalf("Summary = %q, want repository path", src.Summary)
+	}
+}
+
+func TestUntrackedFileDiffQuotesAndPreservesSpecialPath(t *testing.T) {
+	repo := t.TempDir()
+	file := filepath.ToSlash(filepath.Join("pkg", "my file "+string([]byte{0xe6, 0x96, 0x87})+".go"))
+	abs := filepath.Join(repo, filepath.FromSlash(file))
+	if err := os.MkdirAll(filepath.Dir(abs), 0o700); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(abs, []byte("package pkg\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	diff, err := untrackedFileDiff(repo, file)
+	if err != nil {
+		t.Fatalf("untrackedFileDiff() error = %v", err)
+	}
+	if !strings.Contains(diff, "\"a/pkg/my file \\346\\226\\207.go\"") {
+		t.Fatalf("generated diff did not use Git C-style quoting:\n%s", diff)
+	}
+	tabPath := "b/pkg/tab\t" + string([]byte{0xe6, 0x96, 0x87}) + ".go"
+	if got, want := gitQuotePath(tabPath), "\"b/pkg/tab\\t\\346\\226\\207.go\""; got != want {
+		t.Fatalf("gitQuotePath() = %q, want %q", got, want)
+	}
+	files, err := diffparse.Parse(diff)
+	if err != nil {
+		t.Fatalf("Parse(generated diff) error = %v", err)
+	}
+	if len(files) != 1 || files[0].NewPath != filepath.ToSlash(file) {
+		t.Fatalf("parsed generated path = %#v, want %q", files, filepath.ToSlash(file))
 	}
 }
 

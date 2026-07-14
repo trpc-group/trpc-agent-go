@@ -604,6 +604,9 @@ func summarizeDiff(input inputsource.Source, files []review.DiffFile) string {
 func summarizeOutcome(input inputsource.Source, files []review.DiffFile, findings []review.Finding, runs []review.SandboxRun, plan review.ReviewPlan) string {
 	summary := fmt.Sprintf("Model plan %q coordinated skill %q for %d changed files, produced %d findings, and recorded %d sandbox runs.", plan.Model, plan.Skill, len(files), len(findings), len(runs))
 	if input.Type == review.InputTypeFileList {
+		if input.RepoPath != "" {
+			return summary + fmt.Sprintf(" File-list input supplies path context only for repository %s; content-based deterministic rules require diff input.", input.RepoPath)
+		}
 		return summary + " File-list input supplies path context only; content-based deterministic rules require diff input."
 	}
 	return summary

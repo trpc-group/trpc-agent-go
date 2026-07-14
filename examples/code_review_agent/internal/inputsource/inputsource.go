@@ -50,16 +50,16 @@ func Read(ctx context.Context, opts Options) (Source, error) {
 		return Source{}, err
 	}
 	selected := configured(opts)
-	if len(selected) > 1 {
+	if strings.TrimSpace(opts.DiffFile) != "" && (strings.TrimSpace(opts.RepoPath) != "" || strings.TrimSpace(opts.FileList) != "") {
 		return Source{}, fmt.Errorf("choose only one input source: %s", strings.Join(selected, ", "))
 	}
 	switch {
 	case strings.TrimSpace(opts.DiffFile) != "":
 		return readDiffFile(opts.DiffFile)
+	case strings.TrimSpace(opts.FileList) != "":
+		return readFileList(opts.FileList, opts.RepoPath)
 	case strings.TrimSpace(opts.RepoPath) != "":
 		return readRepoDiff(ctx, opts.RepoPath)
-	case strings.TrimSpace(opts.FileList) != "":
-		return readFileList(opts.FileList)
 	default:
 		dir := opts.FixtureDir
 		if dir == "" {
@@ -218,7 +218,7 @@ func splitNUL(raw []byte) []string {
 	parts := bytes.Split(raw, []byte{0})
 	files := make([]string, 0, len(parts))
 	for _, part := range parts {
-		file := filepath.ToSlash(strings.TrimSpace(string(part)))
+		file := filepath.ToSlash(string(part))
 		if file != "" {
 			files = append(files, file)
 		}
@@ -243,12 +243,12 @@ func untrackedFileDiff(repoPath string, file string) (string, error) {
 		return "", fmt.Errorf("read untracked file %s: %w", file, err)
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "diff --git a/%s b/%s\n", file, file)
+	fmt.Fprintf(&b, "diff --git %s %s\n", gitQuotePath("a/"+file), gitQuotePath("b/"+file))
 	fmt.Fprintf(&b, "new file mode 100644\n")
 	fmt.Fprintf(&b, "--- /dev/null\n")
-	fmt.Fprintf(&b, "+++ b/%s\n", file)
+	fmt.Fprintf(&b, "+++ %s\n", gitQuotePath("b/"+file))
 	if bytes.Contains(raw, []byte{0}) {
-		fmt.Fprintf(&b, "Binary files /dev/null and b/%s differ\n", file)
+		fmt.Fprintf(&b, "Binary files /dev/null and %s differ\n", gitQuotePath("b/"+file))
 		return b.String(), nil
 	}
 	lines, noNewline := diffLines(string(raw))
@@ -273,10 +273,10 @@ func untrackedSymlinkDiff(abs string, file string) (string, error) {
 	}
 	target = filepath.ToSlash(target)
 	var b strings.Builder
-	fmt.Fprintf(&b, "diff --git a/%s b/%s\n", file, file)
+	fmt.Fprintf(&b, "diff --git %s %s\n", gitQuotePath("a/"+file), gitQuotePath("b/"+file))
 	fmt.Fprintf(&b, "new file mode 120000\n")
 	fmt.Fprintf(&b, "--- /dev/null\n")
-	fmt.Fprintf(&b, "+++ b/%s\n", file)
+	fmt.Fprintf(&b, "+++ %s\n", gitQuotePath("b/"+file))
 	fmt.Fprintf(&b, "@@ -0,0 +1 @@\n")
 	fmt.Fprintf(&b, "+%s\n", target)
 	return b.String(), nil
@@ -294,23 +294,98 @@ func diffLines(text string) ([]string, bool) {
 	return strings.Split(text, "\n"), noNewline
 }
 
-func readFileList(path string) (Source, error) {
+func readFileList(path string, repoPath string) (Source, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return Source{}, fmt.Errorf("read file list: %w", err)
 	}
 	var files []string
 	for _, line := range strings.Split(string(raw), "\n") {
-		file := filepath.ToSlash(strings.TrimSpace(line))
-		if file == "" || strings.HasPrefix(file, "#") {
+		file := strings.TrimSuffix(line, "\r")
+		trimmed := strings.TrimSpace(file)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
 			continue
 		}
-		files = append(files, file)
+		files = append(files, filepath.ToSlash(file))
 	}
 	sort.Strings(files)
+	absRepo, err := resolveRepoPath(repoPath)
+	if err != nil {
+		return Source{}, err
+	}
+	summary := fmt.Sprintf("Loaded %d changed file paths from %s for planning and sandbox context; content-based deterministic rules require diff input.", len(files), filepath.Base(path))
+	if absRepo != "" {
+		summary = fmt.Sprintf("Loaded %d changed file paths from %s for repository %s for planning and sandbox context; content-based deterministic rules require diff input.", len(files), filepath.Base(path), absRepo)
+	}
 	return Source{
 		Type:     review.InputTypeFileList,
 		FileList: files,
-		Summary:  fmt.Sprintf("Loaded %d changed file paths from %s for planning and sandbox context; content-based deterministic rules require diff input.", len(files), filepath.Base(path)),
+		RepoPath: absRepo,
+		WorkDir:  absRepo,
+		Summary:  summary,
 	}, nil
+}
+
+func resolveRepoPath(repoPath string) (string, error) {
+	if strings.TrimSpace(repoPath) == "" {
+		return "", nil
+	}
+	abs, err := filepath.Abs(repoPath)
+	if err != nil {
+		return "", fmt.Errorf("resolve repo path: %w", err)
+	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		return "", fmt.Errorf("stat repo path: %w", err)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("repo path %s is not a directory", abs)
+	}
+	return abs, nil
+}
+
+func gitQuotePath(path string) string {
+	needsQuote := false
+	for index := 0; index < len(path); index++ {
+		value := path[index]
+		if value <= ' ' || value == 0x7f || value >= 0x80 || value == '"' || value == '\\' {
+			needsQuote = true
+			break
+		}
+	}
+	if !needsQuote {
+		return path
+	}
+	var quoted strings.Builder
+	quoted.WriteByte('"')
+	for index := 0; index < len(path); index++ {
+		value := path[index]
+		switch value {
+		case '"', '\\':
+			quoted.WriteByte('\\')
+			quoted.WriteByte(value)
+		case '\a':
+			quoted.WriteString(`\a`)
+		case '\b':
+			quoted.WriteString(`\b`)
+		case '\t':
+			quoted.WriteString(`\t`)
+		case '\n':
+			quoted.WriteString(`\n`)
+		case '\v':
+			quoted.WriteString(`\v`)
+		case '\f':
+			quoted.WriteString(`\f`)
+		case '\r':
+			quoted.WriteString(`\r`)
+		default:
+			if value < 0x20 || value >= 0x7f {
+				fmt.Fprintf(&quoted, `\%03o`, value)
+			} else {
+				quoted.WriteByte(value)
+			}
+		}
+	}
+	quoted.WriteByte('"')
+	return quoted.String()
 }

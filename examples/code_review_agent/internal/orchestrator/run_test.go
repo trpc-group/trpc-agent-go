@@ -397,6 +397,49 @@ func TestSummarizeOutcomeWarnsForFileListInput(t *testing.T) {
 	}
 }
 
+func TestFileListReviewUsesSelectedRepositoryWorkspace(t *testing.T) {
+	targetRepo := t.TempDir()
+	listDir := t.TempDir()
+	fileList := filepath.Join(listDir, "files.txt")
+	if err := os.WriteFile(fileList, []byte("pkg/a.go\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(file list) error = %v", err)
+	}
+	outDir := t.TempDir()
+	var plannedWorkDir string
+	result, err := Run(context.Background(), Options{
+		FileList: fileList,
+		RepoPath: targetRepo,
+		OutDir:   outDir,
+		DBPath:   filepath.Join(outDir, "review_agent.db"),
+		Runtime:  "fake",
+		Now:      fixedTestTime(),
+		Planner: plannerFunc(func(ctx context.Context, req PlanRequest) (review.ReviewPlan, error) {
+			plannedWorkDir = req.WorkDir
+			return review.ReviewPlan{Model: "test", Provider: "test", Source: "test", Skill: defaultSkillName, Runtime: "fake"}, nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	wantRepo, err := filepath.Abs(targetRepo)
+	if err != nil {
+		t.Fatalf("Abs(target repo) error = %v", err)
+	}
+	if plannedWorkDir != wantRepo {
+		t.Fatalf("planner WorkDir = %q, want %q", plannedWorkDir, wantRepo)
+	}
+	if result.Report.Task.RepoPath != wantRepo {
+		t.Fatalf("task RepoPath = %q, want %q", result.Report.Task.RepoPath, wantRepo)
+	}
+	if !strings.Contains(result.Report.Summary, wantRepo) {
+		t.Fatalf("report summary = %q, want repository path", result.Report.Summary)
+	}
+	workspace := newSandboxWorkspace(plannedWorkDir)
+	if got := workspace.runtimeCwd("container"); got != "work" {
+		t.Fatalf("container CWD = %q, want work", got)
+	}
+}
+
 func TestContainerHostConfigDisablesNetworkEgress(t *testing.T) {
 	cfg := containerHostConfig()
 	if cfg.NetworkMode != "none" {

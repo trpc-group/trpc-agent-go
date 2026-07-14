@@ -44,7 +44,9 @@ func Parse(diff string) ([]review.DiffFile, error) {
 		case strings.HasPrefix(line, "diff --git "):
 			files = append(files, review.DiffFile{})
 			current = &files[len(files)-1]
-			parseDiffGitLine(current, line)
+			if err := parseDiffGitLine(current, line); err != nil {
+				return nil, err
+			}
 			currentHunk = nil
 		case strings.HasPrefix(line, "new file mode "):
 			if current == nil {
@@ -125,13 +127,96 @@ func isDiffHunkLine(line string) bool {
 	}
 }
 
-func parseDiffGitLine(file *review.DiffFile, line string) {
-	parts := strings.Fields(line)
-	if len(parts) >= 4 {
-		file.OldPath = cleanDiffPath(parts[2])
-		file.NewPath = cleanDiffPath(parts[3])
+func parseDiffGitLine(file *review.DiffFile, line string) error {
+	parts, err := parseGitPathTokens(strings.TrimPrefix(line, "diff --git "))
+	if err != nil {
+		return fmt.Errorf("parse diff git paths: %w", err)
+	}
+	if len(parts) >= 2 {
+		file.OldPath = normalizeDiffPath(parts[0])
+		file.NewPath = normalizeDiffPath(parts[1])
 		file.PackageDir = inferPackageDir(file.NewPath)
 	}
+	return nil
+}
+
+func parseGitPathTokens(raw string) ([]string, error) {
+	var paths []string
+	for strings.TrimSpace(raw) != "" {
+		path, rest, err := parseGitPathToken(raw)
+		if err != nil {
+			return nil, err
+		}
+		paths = append(paths, path)
+		raw = rest
+	}
+	return paths, nil
+}
+
+func parseGitPathToken(raw string) (string, string, error) {
+	raw = strings.TrimLeft(raw, " \t")
+	if raw == "" {
+		return "", "", fmt.Errorf("missing Git path token")
+	}
+	if raw[0] != '"' {
+		end := strings.IndexAny(raw, " \t")
+		if end < 0 {
+			return raw, "", nil
+		}
+		return raw[:end], raw[end:], nil
+	}
+
+	var decoded strings.Builder
+	for index := 1; index < len(raw); index++ {
+		switch raw[index] {
+		case '"':
+			return decoded.String(), raw[index+1:], nil
+		case '\\':
+			value, next, err := decodeGitEscape(raw, index+1)
+			if err != nil {
+				return "", "", err
+			}
+			decoded.WriteByte(value)
+			index = next - 1
+		default:
+			decoded.WriteByte(raw[index])
+		}
+	}
+	return "", "", fmt.Errorf("unterminated quoted Git path")
+}
+
+func decodeGitEscape(raw string, index int) (byte, int, error) {
+	if index >= len(raw) {
+		return 0, 0, fmt.Errorf("unterminated Git path escape")
+	}
+	switch raw[index] {
+	case 'a':
+		return '\a', index + 1, nil
+	case 'b':
+		return '\b', index + 1, nil
+	case 't':
+		return '\t', index + 1, nil
+	case 'n':
+		return '\n', index + 1, nil
+	case 'v':
+		return '\v', index + 1, nil
+	case 'f':
+		return '\f', index + 1, nil
+	case 'r':
+		return '\r', index + 1, nil
+	case '\\', '"':
+		return raw[index], index + 1, nil
+	}
+	if raw[index] < '0' || raw[index] > '7' {
+		return 0, 0, fmt.Errorf("unsupported Git path escape \\%c", raw[index])
+	}
+	value := byte(0)
+	end := index
+	for end < len(raw) && end < index+3 && raw[end] >= '0' && raw[end] <= '7' {
+		value = value*8 + raw[end] - '0'
+		end++
+	}
+	return value, end, nil
 }
 
 func parseHunkHeader(line string) (review.DiffHunk, int, int, error) {
@@ -187,12 +272,13 @@ func parseDiffLine(line string, oldLine int, newLine int) (review.DiffLine, int,
 
 func cleanDiffPath(path string) string {
 	path = strings.TrimSpace(path)
-	if index := strings.IndexAny(path, "\t"); index >= 0 {
-		path = path[:index]
+	if decoded, _, err := parseGitPathToken(path); err == nil {
+		path = decoded
 	}
-	if fields := strings.Fields(path); len(fields) > 0 {
-		path = fields[0]
-	}
+	return normalizeDiffPath(path)
+}
+
+func normalizeDiffPath(path string) string {
 	if path == "/dev/null" {
 		return ""
 	}
