@@ -52,7 +52,11 @@ The two flags have separate roles:
 - `-variant` selects the provider protocol and controls how the request field is serialized.
 - `-thinking` explicitly enables or disables thinking.
 
-For deterministic behavior, pass both values. A variant by itself does not enable thinking; if `ThinkingEnabled` is left unset in application code, the provider applies its own default. The built-in variants serialize the switch as follows:
+For deterministic behavior in application code, configure both `Variant` and
+`ThinkingEnabled`. A variant by itself does not enable thinking; if
+`ThinkingEnabled` is left unset, the provider applies its own default. This
+demo defaults `-thinking` to `true`, so omitting that CLI flag still sends the
+enabled toggle. The built-in variants serialize the switch as follows:
 
 | Variant | Enabled request field |
 | ------- | --------------------- |
