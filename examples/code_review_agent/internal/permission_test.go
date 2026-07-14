@@ -87,6 +87,12 @@ func TestPermissionPolicy_AskUnknownCmd(t *testing.T) {
 	require.Contains(t, reason, "not in the allowed list")
 }
 
+func TestPermissionPolicy_ReviewShellCommandString(t *testing.T) {
+	p := NewDefaultPermissionPolicy()
+	decision, _ := p.Decide("bash -c rm -rf /workspace")
+	require.Equal(t, DecisionNeedsHumanReview, decision)
+}
+
 func TestPermissionPolicy_EmptyCommand(t *testing.T) {
 	p := NewDefaultPermissionPolicy()
 	d, _ := p.Decide("")

@@ -438,7 +438,7 @@ func (s *SQLiteStorage) Close() error {
 	return nil
 }
 
-func formatTimePtr(t *time.Time) interface{} {
+func formatTimePtr(t *time.Time) any {
 	if t == nil {
 		return nil
 	}

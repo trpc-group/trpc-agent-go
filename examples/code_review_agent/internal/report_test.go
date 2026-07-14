@@ -38,7 +38,7 @@ func TestGenerateJSONReport(t *testing.T) {
 	require.Contains(t, jsonStr, "SQL_INJECTION")
 
 	// Verify it's valid JSON.
-	var parsed map[string]interface{}
+	var parsed map[string]any
 	require.NoError(t, json.Unmarshal([]byte(jsonStr), &parsed))
 	require.Equal(t, "test-1", parsed["task_id"])
 }

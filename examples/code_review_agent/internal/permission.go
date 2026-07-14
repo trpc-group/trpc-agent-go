@@ -117,6 +117,15 @@ func (p *PermissionPolicy) Decide(cmd string) (Decision, string) {
 			"command '" + base + "' is in the denied list (high risk)"
 	}
 
+	// Shell command strings bypass the base-command policy because the actual
+	// executable appears inside the -c payload. Require review before allowing
+	// any shell interpreter to evaluate such a string.
+	if (base == "bash" || base == "sh" || base == "zsh") &&
+		len(parts) > 1 && parts[1] == "-c" {
+		return DecisionNeedsHumanReview,
+			"shell -c evaluates a command string and needs human review"
+	}
+
 	// Check for specific dangerous git subcommands.
 	if base == "git" && len(parts) > 1 {
 		sub := parts[1]
