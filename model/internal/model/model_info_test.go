@@ -49,22 +49,32 @@ func TestResolveContextWindow(t *testing.T) {
 		{
 			name:      "exact match - GPT-5.6 alias",
 			modelName: "gpt-5.6",
-			expected:  1050000,
+			expected:  1047576,
 		},
 		{
 			name:      "exact match - GPT-5.6 Terra",
 			modelName: "gpt-5.6-terra",
-			expected:  1050000,
+			expected:  1047576,
 		},
 		{
 			name:      "exact match - GPT-5.4",
 			modelName: "gpt-5.4",
-			expected:  1050000,
+			expected:  1047576,
 		},
 		{
 			name:      "exact match - GPT-5.4-pro",
 			modelName: "gpt-5.4-pro",
-			expected:  1050000,
+			expected:  1047576,
+		},
+		{
+			name:      "exact match - GPT-5.5",
+			modelName: "gpt-5.5",
+			expected:  1047576,
+		},
+		{
+			name:      "exact match - GPT-5.5-pro",
+			modelName: "gpt-5.5-pro",
+			expected:  1047576,
 		},
 		{
 			name:      "exact match - GPT-5.3-Codex",
@@ -319,7 +329,17 @@ func TestResolveContextWindow(t *testing.T) {
 		{
 			name:      "longest prefix match - GPT-5.4 snapshot",
 			modelName: "gpt-5.4-2026-03-05",
-			expected:  1050000,
+			expected:  1047576,
+		},
+		{
+			name:      "longest prefix match - GPT-5.5 snapshot",
+			modelName: "gpt-5.5-2026-04-23",
+			expected:  1047576,
+		},
+		{
+			name:      "longest prefix match - GPT-5.6 snapshot",
+			modelName: "gpt-5.6-sol-2026-07-09",
+			expected:  1047576,
 		},
 		{
 			name:      "longest prefix match - GPT-5.4 mini snapshot",
