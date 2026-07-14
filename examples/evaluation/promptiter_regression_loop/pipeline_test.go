@@ -819,6 +819,33 @@ func TestFinalGateDecisions(t *testing.T) {
 	require.Equal(t, gateDecisionReject, gate.Decision)
 	require.Contains(t, gate.CriticalRegressions, "critical")
 
+	nonRejectingCfg := cfg
+	nonRejectingCfg.RejectOnNewHardFail = false
+	nonRejectingCfg.RejectOnCriticalRegression = false
+	nonRejectingBaseline := summaryFromCases("validation",
+		reportCase("critical", 0.5, false),
+		reportCase("regular", 1, true),
+		reportCase("helper_a", 0, false),
+		reportCase("helper_b", 0, false),
+	)
+	nonRejectingCandidate := summaryFromCases("validation",
+		reportCase("critical", 0.25, false),
+		reportCase("regular", 0, false),
+		reportCase("helper_a", 1, true),
+		reportCase("helper_b", 1, true),
+	)
+	nonRejectingDelta, err := buildValidationDelta(nonRejectingBaseline, nonRejectingCandidate)
+	require.NoError(t, err)
+	gate, err = buildGateReport(nonRejectingBaseline, nonRejectingCandidate, nonRejectingDelta, nonRejectingCfg, 10, 5, fakeMode)
+	require.NoError(t, err)
+	require.Equal(t, gateDecisionAccept, gate.Decision)
+	require.Contains(t, gate.NewHardFails, "regular")
+	require.Contains(t, gate.CriticalRegressions, "critical")
+	require.Contains(t, gate.Reasons, "new hard fail cases: [regular]")
+	require.Contains(t, gate.Reasons, "critical regression cases: [critical]")
+	require.NotContains(t, gate.Reasons, "no new hard fail")
+	require.NotContains(t, gate.Reasons, "no critical regression")
+
 	latencyCfg := cfg
 	latencyCfg.MaxDurationMs = 1
 	gate, err = buildGateReport(baseline, candidate, delta, latencyCfg, 2, 5, fakeMode)

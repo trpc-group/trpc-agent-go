@@ -293,15 +293,19 @@ func buildGateReport(
 			return nil, fmt.Errorf("critical case %q not found in validation delta", id)
 		}
 	}
-	if cfg.RejectOnNewHardFail && len(report.NewHardFails) > 0 {
-		reject = true
+	if len(report.NewHardFails) > 0 {
 		report.Reasons = append(report.Reasons, fmt.Sprintf("new hard fail cases: %v", report.NewHardFails))
+		if cfg.RejectOnNewHardFail {
+			reject = true
+		}
 	} else {
 		report.Reasons = append(report.Reasons, "no new hard fail")
 	}
-	if cfg.RejectOnCriticalRegression && len(report.CriticalRegressions) > 0 {
-		reject = true
+	if len(report.CriticalRegressions) > 0 {
 		report.Reasons = append(report.Reasons, fmt.Sprintf("critical regression cases: %v", report.CriticalRegressions))
+		if cfg.RejectOnCriticalRegression {
+			reject = true
+		}
 	} else {
 		report.Reasons = append(report.Reasons, "no critical regression")
 	}
