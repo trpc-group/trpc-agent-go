@@ -331,7 +331,7 @@ func assertExpectedReplayCaseDrift(
 			Section: "events", Path: "$.events[6].author", EventIndex: replayInt(6),
 		},
 		"failure_recovery_without_duplicates": {
-			Section: "memories", Path: "$.memories[1]", MemoryID: "memory-001",
+			Section: "memories", Path: "$.memories[1]", MemoryID: "memory-000",
 		},
 	}[caseName]
 	if expected.Section == "" {
