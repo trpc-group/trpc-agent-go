@@ -11,6 +11,7 @@
 package opensandbox
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 )
@@ -39,11 +40,37 @@ const minimalCleanPATH = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 // is false and there is nothing to inject; a clean token always
 // contains at least PATH.
 //
+// All environment variable names (keys) are validated against the POSIX
+// shell identifier rule [A-Za-z_][A-Za-z0-9_]*. A key containing shell
+// metacharacters (e.g. "X; touch /tmp/pwned #") would be interpolated
+// raw into the command string, allowing command injection through the
+// outer `bash -c`. envToken rejects such keys with an error so
+// RunProgram can surface them before the command is sent.
+//
 // Note: OpenSandbox's RunCommandRequest has an Envs field, but Envs
 // is additive (merged into the sandbox process env) and cannot express
 // `env -i`, so CleanEnv is still realized through the `env -i` prefix
 // in the command string. The Envs field is left nil.
-func envToken(base, spec map[string]string, clean bool) string {
+func envToken(base, spec map[string]string, clean bool) (string, error) {
+	// Validate all keys before building the token so we never emit a
+	// partially-constructed, potentially dangerous command string.
+	for k := range base {
+		if !validEnvName(k) {
+			return "", fmt.Errorf(
+				"opensandbox: invalid environment variable name %q in base env "+
+					"(must match [A-Za-z_][A-Za-z0-9_]*)", k,
+			)
+		}
+	}
+	for k := range spec {
+		if !validEnvName(k) {
+			return "", fmt.Errorf(
+				"opensandbox: invalid environment variable name %q in spec env "+
+					"(must match [A-Za-z_][A-Za-z0-9_]*)", k,
+			)
+		}
+	}
+
 	parts := make([]string, 0, len(base)+len(spec))
 	for _, k := range sortedEnvKeys(base) {
 		if _, ok := spec[k]; ok {
@@ -61,12 +88,37 @@ func envToken(base, spec map[string]string, clean bool) string {
 				parts...,
 			)
 		}
-		return "env -i " + strings.Join(parts, " ") + " "
+		return "env -i " + strings.Join(parts, " ") + " ", nil
 	}
 	if len(parts) == 0 {
-		return ""
+		return "", nil
 	}
-	return "env " + strings.Join(parts, " ") + " "
+	return "env " + strings.Join(parts, " ") + " ", nil
+}
+
+// validEnvName reports whether name is a valid POSIX shell environment
+// variable identifier: it must start with a letter or underscore, and
+// contain only letters, digits, and underscores. Empty strings and
+// names containing shell metacharacters (spaces, ;, =, $, etc.) are
+// rejected to prevent command injection through the env-assignment
+// token spliced into the outer `bash -c` command string.
+func validEnvName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for i, r := range name {
+		if i == 0 {
+			if !((r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || r == '_') {
+				return false
+			}
+		} else {
+			if !((r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') ||
+				(r >= '0' && r <= '9') || r == '_') {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // hasPathKey reports whether the effective environment (base entries

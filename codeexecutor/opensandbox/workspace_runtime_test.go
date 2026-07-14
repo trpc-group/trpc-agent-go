@@ -29,6 +29,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	osb "github.com/alibaba/OpenSandbox/sdks/sandbox/go"
+
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 )
 
@@ -66,6 +68,11 @@ type mockOpenSandboxServer struct {
 	// "timeout" in the code field so isTimeoutErr returns true. Used to
 	// test RunProgram timeout handling.
 	runError error
+	// executionError, when non-nil, sends an error event with the
+	// given name/value/traceback instead of the normal exit-code-based
+	// error. Used to test RunProgram's handling of non-numeric
+	// execution errors (where ExitCode stays nil).
+	executionError *executionErrorSpec
 	// forceInfraExit, when true, forces infrastructure commands (mkdir,
 	// rm, chmod — those without `&& cd `) to use the configured exitCode
 	// instead of forcing 0. Used to test runBash error paths.
@@ -134,6 +141,19 @@ func (m *mockOpenSandboxServer) setRunError(err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.runError = err
+}
+
+// executionErrorSpec configures a non-numeric error event for testing.
+type executionErrorSpec struct {
+	Name      string
+	Value     string
+	Traceback []string
+}
+
+func (m *mockOpenSandboxServer) setExecutionError(name, value string, traceback []string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.executionError = &executionErrorSpec{Name: name, Value: value, Traceback: traceback}
 }
 
 func (m *mockOpenSandboxServer) setForceInfraExit(b bool) {
@@ -462,7 +482,16 @@ func (m *mockOpenSandboxServer) handleCommand(w http.ResponseWriter, r *http.Req
 		// the exit_code field; it only defaults to 0 when no error
 		// occurred. The error event's evalue is parsed as the exit
 		// code by the SDK's error handler.
-		if exitCode != nil && *exitCode != 0 {
+		if m.executionError != nil {
+			ee := m.executionError
+			tb, _ := json.Marshal(ee.Traceback)
+			fmt.Fprintf(w, `{"type":"error","ename":%q,"evalue":%q,"traceback":%s}`,
+				ee.Name, ee.Value, tb)
+			fmt.Fprint(w, "\n\n")
+			if flusher != nil {
+				flusher.Flush()
+			}
+		} else if exitCode != nil && *exitCode != 0 {
 			fmt.Fprintf(w, `{"type":"error","ename":"ExitError","evalue":"%d"}`, *exitCode)
 			fmt.Fprint(w, "\n\n")
 			if flusher != nil {
@@ -2185,7 +2214,7 @@ func TestReadFile_KnownSizeFallback(t *testing.T) {
 	m.setDownloadData("/tmp/run/ws_x/data.txt", []byte("hello"))
 
 	// Call readFile with knownSize=0 to exercise the fallback.
-	data, size, err := r.readFile(
+	data, size, truncated, err := r.readFile(
 		context.Background(), sb, "/tmp/run/ws_x/data.txt",
 		maxReadSizeBytes, 0,
 	)
@@ -2193,4 +2222,361 @@ func TestReadFile_KnownSizeFallback(t *testing.T) {
 	assert.Equal(t, []byte("hello"), data)
 	assert.Equal(t, int64(5), size,
 		"size should fall back to len(data) when knownSize <= 0")
+	assert.False(t, truncated, "small file should not be truncated")
+}
+
+// --- R3: CleanEnv wraps outer bash ---
+
+// TestRunProgram_CleanEnv_WrapsOuterBash verifies that when
+// CleanEnv=true, the outer wrapper bash is launched via
+// `env -i PATH=... bash --norc --noprofile -c` so BASH_ENV and
+// LD_PRELOAD cannot inject into the clean-env boundary.
+func TestRunProgram_CleanEnv_WrapsOuterBash(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	m.setStdout("ok")
+	zero := 0
+	m.setExitCode(zero)
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	ws, err := exec.CreateWorkspace(context.Background(), "exec-1", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+
+	_, err = exec.RunProgram(context.Background(), ws, codeexecutor.RunProgramSpec{
+		Cmd:      "echo",
+		Args:     []string{"hi"},
+		CleanEnv: true,
+		Timeout:  5 * time.Second,
+	})
+	require.NoError(t, err)
+
+	cmd := m.lastCommand()
+	assert.True(t, strings.HasPrefix(cmd, "env -i PATH="),
+		"CleanEnv command should start with env -i PATH=, got: %s", cmd)
+	assert.Contains(t, cmd, "bash --norc --noprofile -c",
+		"CleanEnv command should wrap with bash --norc --noprofile -c")
+}
+
+// TestRunProgram_CleanEnv_NoClean_RegularBash verifies that without
+// CleanEnv, the command is wrapped in a plain `bash -c` (no env -i).
+func TestRunProgram_CleanEnv_NoClean_RegularBash(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	m.setStdout("ok")
+	zero := 0
+	m.setExitCode(zero)
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	ws, err := exec.CreateWorkspace(context.Background(), "exec-1", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+
+	_, err = exec.RunProgram(context.Background(), ws, codeexecutor.RunProgramSpec{
+		Cmd:      "echo",
+		Args:     []string{"hi"},
+		CleanEnv: false,
+		Timeout:  5 * time.Second,
+	})
+	require.NoError(t, err)
+
+	cmd := m.lastCommand()
+	assert.True(t, strings.HasPrefix(cmd, "bash -c "),
+		"non-CleanEnv command should start with bash -c, got: %s", cmd)
+	assert.NotContains(t, cmd, "env -i",
+		"non-CleanEnv command should not contain env -i")
+}
+
+// --- R4: Collect aggregate file-count limit ---
+
+// TestCollect_AggregateLimits_FileCount verifies that Collect stops
+// after maxCollectFiles files, preventing model-generated code from
+// exhausting host memory by creating thousands of matching files.
+func TestCollect_AggregateLimits_FileCount(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	ws, err := exec.CreateWorkspace(context.Background(), "exec-1", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+
+	// Generate more file names than maxCollectFiles (100).
+	names := make([]string, 150)
+	for i := 0; i < 150; i++ {
+		names[i] = fmt.Sprintf("file_%03d.txt", i)
+	}
+	m.setSearchResults(names)
+	// Seed download data for each file so readFile succeeds.
+	for _, name := range names {
+		p := filepath.ToSlash(filepath.Join(ws.Path, name))
+		m.setDownloadData(p, []byte("x"))
+	}
+
+	files, err := exec.Collect(context.Background(), ws, []string{"*"})
+	require.NoError(t, err)
+	assert.LessOrEqual(t, len(files), maxCollectFiles,
+		"Collect should stop at maxCollectFiles")
+}
+
+// --- R5: RunProgram bounded output ---
+
+// TestRunProgram_BoundedOutput verifies that RunProgram caps stdout
+// at maxCommandOutputBytes and appends a truncation marker, so a
+// command that prints continuously cannot exhaust host memory.
+func TestRunProgram_BoundedOutput(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	m.setStdout(strings.Repeat("A", 2*1024*1024)) // 2 MiB > 1 MiB cap
+	zero := 0
+	m.setExitCode(zero)
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	ws, err := exec.CreateWorkspace(context.Background(), "exec-1", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+
+	res, err := exec.RunProgram(context.Background(), ws, codeexecutor.RunProgramSpec{
+		Cmd:     "yes",
+		Timeout: 5 * time.Second,
+	})
+	require.NoError(t, err)
+	assert.LessOrEqual(t, len(res.Stdout), maxCommandOutputBytes+100,
+		"stdout should be capped at maxCommandOutputBytes plus truncation marker")
+	assert.Contains(t, res.Stdout, "[output truncated:",
+		"truncated stdout should contain a truncation marker")
+}
+
+// --- U2: ExecutionError mapped to stderr ---
+
+// TestRunProgram_ExecutionError_MappedToStderr verifies that when the
+// sandbox sends an error event with a non-numeric evalue (e.g.
+// "RuntimeError: process failed to start"), RunProgram maps the
+// error details to res.Stderr and sets ExitCode to -1 (the nil
+// fallback), so callers see the actual error instead of just "[exit -1]".
+func TestRunProgram_ExecutionError_MappedToStderr(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	m.setExecutionError("RuntimeError", "process failed to start", []string{"line 1", "line 2"})
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	ws, err := exec.CreateWorkspace(context.Background(), "exec-1", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+
+	res, err := exec.RunProgram(context.Background(), ws, codeexecutor.RunProgramSpec{
+		Cmd:     "python",
+		Args:    []string{"bad.py"},
+		Timeout: 5 * time.Second,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, -1, res.ExitCode,
+		"non-numeric evalue should fall back to ExitCode -1")
+	assert.Contains(t, res.Stderr, "RuntimeError")
+	assert.Contains(t, res.Stderr, "process failed to start")
+	assert.Contains(t, res.Stderr, "line 1")
+	assert.Contains(t, res.Stderr, "line 2")
+}
+
+// --- U3: isTimeoutErr structured type assertions ---
+
+// mockNetTimeoutError implements net.Error for testing isTimeoutErr's
+// net.Error path without depending on a real network timeout.
+type mockNetTimeoutError struct{}
+
+func (e *mockNetTimeoutError) Error() string   { return "network timeout" }
+func (e *mockNetTimeoutError) Timeout() bool   { return true }
+func (e *mockNetTimeoutError) Temporary() bool { return false }
+
+// TestIsTimeoutErr_Structured verifies that isTimeoutErr uses
+// structured type assertions (context.DeadlineExceeded, net.Error,
+// osb.APIError.Code) rather than string matching, so unrelated
+// errors containing "timeout" in their message are not misclassified.
+func TestIsTimeoutErr_Structured(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"context deadline exceeded", context.DeadlineExceeded, true},
+		{"net.Error timeout", &mockNetTimeoutError{}, true},
+		{"APIError code=timeout", &osb.APIError{Response: osb.ErrorResponse{Code: "timeout"}}, true},
+		{"APIError code=500", &osb.APIError{Response: osb.ErrorResponse{Code: "500"}}, false},
+		{"upstream timeout string", fmt.Errorf("upstream timeout"), false},
+		{"504 gateway timeout string", fmt.Errorf("504 gateway timeout"), false},
+		{"nil", nil, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, isTimeoutErr(tt.err))
+		})
+	}
+}
+
+// --- U4: unique run directory per RunProgram call ---
+
+// TestRunProgram_UniqueRunDir verifies that each RunProgram call
+// creates a unique run directory (run_<timestamp>_<seq>), so
+// concurrent or sequential commands don't overwrite each other's
+// scratch files.
+func TestRunProgram_UniqueRunDir(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	m.setStdout("ok")
+	zero := 0
+	m.setExitCode(zero)
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	ws, err := exec.CreateWorkspace(context.Background(), "exec-1", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+
+	_, err = exec.RunProgram(context.Background(), ws, codeexecutor.RunProgramSpec{
+		Cmd:     "echo",
+		Args:    []string{"first"},
+		Timeout: 5 * time.Second,
+	})
+	require.NoError(t, err)
+
+	_, err = exec.RunProgram(context.Background(), ws, codeexecutor.RunProgramSpec{
+		Cmd:     "echo",
+		Args:    []string{"second"},
+		Timeout: 5 * time.Second,
+	})
+	require.NoError(t, err)
+
+	// Filter captured commands for RunProgram commands (containing
+	// "&& cd ", the RunProgram marker).
+	var runCmds []string
+	for _, cmd := range m.commands {
+		if strings.Contains(cmd, "&& cd ") {
+			runCmds = append(runCmds, cmd)
+		}
+	}
+	require.Len(t, runCmds, 2, "expected two RunProgram commands")
+
+	// Extract the run_<timestamp>_<seq> directory name from each.
+	runDirRe := regexp.MustCompile(`run_\d+_\d+`)
+	dir1 := runDirRe.FindString(runCmds[0])
+	dir2 := runDirRe.FindString(runCmds[1])
+	require.NotEmpty(t, dir1, "first command should contain a run_ dir")
+	require.NotEmpty(t, dir2, "second command should contain a run_ dir")
+	assert.NotEqual(t, dir1, dir2,
+		"each RunProgram call should create a unique run directory")
+}
+
+// --- U5: readFile handles stale knownSize ---
+
+// TestReadFile_StaleSize verifies that readFile handles a stale
+// knownSize (smaller than the actual file) by using max(knownSize,
+// readBytes) so the SizeBytes reflects the real content size even
+// when SearchFiles metadata is outdated.
+func TestReadFile_StaleSize(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	ws, err := exec.CreateWorkspace(context.Background(), "exec-1", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+
+	// Seed a 5 MiB file but pass knownSize=1 (stale) to readFile.
+	filePath := filepath.ToSlash(filepath.Join(ws.Path, "big.txt"))
+	m.setDownloadData(filePath, make([]byte, 5*1024*1024))
+
+	r := exec.ensureRuntime()
+	sb, err := r.sandbox()
+	require.NoError(t, err)
+
+	data, size, truncated, err := r.readFile(
+		context.Background(), sb, filePath,
+		maxReadSizeBytes, 1, // knownSize=1 (stale)
+	)
+	require.NoError(t, err)
+	// size must not be smaller than the actual content read.
+	assert.GreaterOrEqual(t, size, int64(len(data)),
+		"size should not be smaller than len(data)")
+	// 5 MiB file read with 4 MiB limit must be truncated.
+	assert.True(t, truncated, "5 MiB file with 4 MiB limit must be truncated")
+	assert.Equal(t, int64(maxReadSizeBytes), int64(len(data)),
+		"data should be capped at maxReadSizeBytes")
+}
+
+// TestReadFile_ShrunkFile_NoFalsePositiveTruncated verifies that when
+// a file shrinks between SearchFiles (knownSize large) and DownloadFile
+// (actual content smaller), Truncated is false — not a false positive
+// based on stale knownSize > len(data).
+func TestReadFile_ShrunkFile_NoFalsePositiveTruncated(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	ws, err := exec.CreateWorkspace(context.Background(), "exec-shrink", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+
+	// Seed a 10-byte file but pass knownSize=100 (stale, file shrank).
+	filePath := filepath.ToSlash(filepath.Join(ws.Path, "small.txt"))
+	m.setDownloadData(filePath, []byte("0123456789")) // 10 bytes
+
+	r := exec.ensureRuntime()
+	sb, err := r.sandbox()
+	require.NoError(t, err)
+
+	data, size, truncated, err := r.readFile(
+		context.Background(), sb, filePath,
+		maxReadSizeBytes, 100, // knownSize=100 (stale, file shrank to 10)
+	)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("0123456789"), data)
+	// size = max(100, 10) = 100 (stale metadata preserved)
+	assert.Equal(t, int64(100), size,
+		"size should be max(knownSize, readBytes) = 100")
+	// Truncated must be false: readBytes=10 < limit, so we reached EOF.
+	// The file was NOT truncated, even though stale knownSize > len(data).
+	assert.False(t, truncated,
+		"shrunk file must not be falsely marked truncated")
+}
+
+// TestCollect_RemainingZero_BreaksBeforeReadFile verifies that when
+// the aggregate byte budget is exhausted, Collect stops rather than
+// passing limit=0 to readFile (which would fall back to maxReadSizeBytes
+// and read beyond the budget).
+func TestCollect_RemainingZero_BreaksBeforeReadFile(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	ws, err := exec.CreateWorkspace(context.Background(), "exec-budget", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+
+	// Seed enough files to exceed maxCollectTotalBytes (64 MiB).
+	// Each file is maxReadSizeBytes (4 MiB). 17 files = 68 MiB > 64 MiB.
+	// The 17th file's remaining budget would be 64 - 16*4 = 0 MiB.
+	// Without the remaining<=0 break, readFile would be called with
+	// limit=0, fall back to maxReadSizeBytes, and read 4 MiB beyond
+	// the budget.
+	var searchPaths []string
+	for i := 0; i < 17; i++ {
+		fname := fmt.Sprintf("file_%02d.txt", i)
+		fpath := filepath.ToSlash(filepath.Join(ws.Path, fname))
+		m.setDownloadData(fpath, make([]byte, maxReadSizeBytes))
+		searchPaths = append(searchPaths, fname)
+	}
+	m.setSearchResults(searchPaths)
+
+	files, err := exec.Collect(context.Background(), ws, []string{"*.txt"})
+	require.NoError(t, err)
+	// At most 16 files (16 * 4 MiB = 64 MiB = budget). The 17th file
+	// would exceed the budget and must not be included.
+	assert.LessOrEqual(t, len(files), 16,
+		"Collect must not exceed maxCollectTotalBytes budget")
+	// Total content must not exceed the budget.
+	var totalBytes int64
+	for _, f := range files {
+		totalBytes += int64(len(f.Content))
+	}
+	assert.LessOrEqual(t, totalBytes, int64(maxCollectTotalBytes),
+		"total bytes must not exceed maxCollectTotalBytes")
 }

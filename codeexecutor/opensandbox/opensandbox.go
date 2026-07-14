@@ -116,14 +116,37 @@ func WithExecutionTimeout(t time.Duration) Option {
 }
 
 // WithEnvVars sets environment variables injected into the sandbox at
-// start.
+// start. The caller-provided map is copied so subsequent mutations to
+// the original map do not affect the executor.
 func WithEnvVars(vars map[string]string) Option {
-	return func(c *CodeExecutor) { c.envVars = vars }
+	return func(c *CodeExecutor) {
+		if vars == nil {
+			c.envVars = nil
+			return
+		}
+		copied := make(map[string]string, len(vars))
+		for k, v := range vars {
+			copied[k] = v
+		}
+		c.envVars = copied
+	}
 }
 
-// WithMetadata attaches metadata to the sandbox.
+// WithMetadata attaches metadata to the sandbox. The caller-provided
+// map is copied so subsequent mutations to the original map do not
+// affect the executor.
 func WithMetadata(meta map[string]string) Option {
-	return func(c *CodeExecutor) { c.metadata = meta }
+	return func(c *CodeExecutor) {
+		if meta == nil {
+			c.metadata = nil
+			return
+		}
+		copied := make(map[string]string, len(meta))
+		for k, v := range meta {
+			copied[k] = v
+		}
+		c.metadata = copied
+	}
 }
 
 // WithHTTPClient overrides the underlying HTTP client used by the
@@ -137,10 +160,20 @@ func WithHTTPClient(h *http.Client) Option {
 }
 
 // WithHeaders sets additional HTTP headers applied to every API call.
-// The caller-provided map is used as-is; do not mutate it after passing
-// it to New.
+// The caller-provided map is copied so subsequent mutations to the
+// original map do not affect the executor.
 func WithHeaders(headers map[string]string) Option {
-	return func(c *CodeExecutor) { c.headers = headers }
+	return func(c *CodeExecutor) {
+		if headers == nil {
+			c.headers = nil
+			return
+		}
+		copied := make(map[string]string, len(headers))
+		for k, v := range headers {
+			copied[k] = v
+		}
+		c.headers = copied
+	}
 }
 
 // WithSandboxID connects to an existing sandbox instead of creating a
@@ -171,10 +204,21 @@ func WithUseServerProxy(b bool) Option {
 // hostnames returned by the server; values are the replacements.
 // Example: WithEndpointHostRewrite(map[string]string{"host.docker.internal": "localhost"}).
 //
-// The caller-provided map is used as-is; do not mutate it after passing
-// it to New. This option maps to osb.ConnectionConfig.EndpointHostRewrite.
+// The caller-provided map is copied so subsequent mutations to the
+// original map do not affect the executor. This option maps to
+// osb.ConnectionConfig.EndpointHostRewrite.
 func WithEndpointHostRewrite(rewrites map[string]string) Option {
-	return func(c *CodeExecutor) { c.endpointHostRewrite = rewrites }
+	return func(c *CodeExecutor) {
+		if rewrites == nil {
+			c.endpointHostRewrite = nil
+			return
+		}
+		copied := make(map[string]string, len(rewrites))
+		for k, v := range rewrites {
+			copied[k] = v
+		}
+		c.endpointHostRewrite = copied
+	}
 }
 
 // WithSandboxRunBase sets the base directory **inside the sandbox**
@@ -329,6 +373,22 @@ func NewWithContext(ctx context.Context, opts ...Option) (*CodeExecutor, error) 
 		return nil, err
 	}
 
+	// Validate sandbox-level env var names for contract consistency
+	// with envToken's validation of spec.Env. WithEnvVars does not go
+	// through bash -c concatenation (the SDK serializes Env as JSON),
+	// so this is not a shell-injection defense; however, rejecting
+	// invalid names here keeps the two env-entry paths consistent and
+	// prevents a future refactor that reuses c.envVars in a command
+	// string from reintroducing the U1 injection vector.
+	for k := range c.envVars {
+		if !validEnvName(k) {
+			return nil, fmt.Errorf(
+				"opensandbox: invalid environment variable name %q in WithEnvVars "+
+					"(must match [A-Za-z_][A-Za-z0-9_]*)", k,
+			)
+		}
+	}
+
 	// WithRequestTimeout(0) means "keep the SDK default"; resolve it
 	// now so the clamp below and the RunProgram budget check both see
 	// the actual timeout value rather than a sentinel 0 that would
@@ -453,6 +513,19 @@ func (c *CodeExecutor) ExecuteCode(
 
 	execID := input.ExecutionID
 	if execID == "" {
+		if c.workspacePersistence == WorkspacePersistencePerSession {
+			// In PerSession mode, a random fallback would produce a
+			// different workspace hash on every call, defeating
+			// persistence and leaking workspaces (PerSession skips
+			// auto-cleanup). Require the caller to provide a stable
+			// session-derived ID.
+			return codeexecutor.CodeExecutionResult{}, errors.New(
+				"opensandbox: ExecutionID must not be empty when using " +
+					"WorkspacePersistencePerSession; provide a stable " +
+					"session-derived ID so the workspace can be reused " +
+					"across turns",
+			)
+		}
 		execID = fmt.Sprintf("exec_%d", time.Now().UnixNano())
 	}
 
@@ -516,8 +589,13 @@ func (c *CodeExecutor) ExecuteCode(
 		if res.Stderr != "" {
 			appendStderr(&out, res.Stderr)
 		}
-		if res.ExitCode != 0 {
-			fmt.Fprintf(&out, "[exit %d] %s\n", res.ExitCode, res.Stderr)
+		if res.TimedOut {
+			fmt.Fprintf(&out, "[timeout: execution exceeded %s]\n", c.executionTimeout)
+		}
+		if res.ExitCode != 0 && !res.TimedOut {
+			// Don't repeat stderr here — it was already written via
+			// appendStderr above. Only add the exit status line.
+			fmt.Fprintf(&out, "[exit %d]\n", res.ExitCode)
 		}
 	}
 
@@ -668,16 +746,13 @@ func (c *CodeExecutor) ExecuteInline(
 // scrubbed) spec.Env and a minimal PATH, so the program does not
 // inherit the sandbox process environment.
 //
-// Scope note: RunProgram wraps the user command in `bash -c` for
-// stdin process substitution and stdout/stderr framing. That framing
-// shell still inherits the sandbox environment because `env -i` is
-// spliced into the inner command, not the outer `bash -c`. This is
-// not a model-injection vector: the sandbox environment is fixed by
-// the image / WithEnvVars at sandbox creation (operator-controlled),
-// and model-supplied env (spec.Env) is confined to the `env -i`
-// invocation rather than the framing shell. The SupportsCleanEnv
-// contract is about the spawned program's environment, which `env -i`
-// satisfies.
+// Scope note: when CleanEnv is requested, RunProgram wraps the outer
+// `bash -c` in `env -i PATH=... bash --norc --noprofile -c '...'` so
+// the framing shell itself starts with a minimal environment. This
+// prevents BASH_ENV (if set in the sandbox env) from sourcing an
+// arbitrary file and LD_PRELOAD from being loaded before the inner
+// `env -i` command runs. When CleanEnv is false, the outer bash
+// inherits the sandbox environment as before.
 func (c *CodeExecutor) Engine() codeexecutor.Engine {
 	rt := c.ensureRuntime()
 	return codeexecutor.NewEngineWithCapabilities(

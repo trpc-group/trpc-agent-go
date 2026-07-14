@@ -20,11 +20,13 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net"
 	"net/http"
 	"os"
 	"path"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	osb "github.com/alibaba/OpenSandbox/sdks/sandbox/go"
@@ -56,6 +58,20 @@ const (
 	// Maximum bytes read back from the sandbox for a single file when
 	// collecting outputs.
 	maxReadSizeBytes = 4 * 1024 * 1024 // 4 MiB
+
+	// Aggregate limits for Collect: at most maxCollectFiles files and
+	// maxCollectTotalBytes total content are returned, preventing
+	// model-generated code from creating thousands of matching files
+	// and exhausting host memory. Consistent with other executors
+	// (container, e2b, local) which use the same defaults.
+	maxCollectFiles      = 100
+	maxCollectTotalBytes = 64 * 1024 * 1024 // 64 MiB
+
+	// Maximum bytes of stdout/stderr accumulated in host memory per
+	// RunProgram call. Without this, a continuously-printing remote
+	// command can consume unbounded host memory even with an execution
+	// timeout.
+	maxCommandOutputBytes = 1024 * 1024 // 1 MiB each for stdout and stderr
 )
 
 // workspaceRuntime implements WorkspaceManager / WorkspaceFS /
@@ -63,6 +79,11 @@ const (
 type workspaceRuntime struct {
 	ce  *CodeExecutor
 	cfg runtimeConfig
+
+	// runSeq generates monotonically increasing run-directory IDs to
+	// guarantee uniqueness even when two RunProgram calls land in the
+	// same nanosecond. Uses atomic for concurrent safety.
+	runSeq uint64
 }
 
 type runtimeConfig struct {
@@ -530,7 +551,14 @@ func (r *workspaceRuntime) Collect(
 
 	out := make([]codeexecutor.File, 0, len(resolvedPaths))
 	seen := map[string]bool{}
+	var totalBytes int64
 	for _, fr := range resolvedPaths {
+		// Stop when the aggregate file-count or total-byte budget is
+		// reached. Without this, model-generated code can create
+		// thousands of matching files and exhaust host memory.
+		if len(out) >= maxCollectFiles || totalBytes >= maxCollectTotalBytes {
+			break
+		}
 		rel := strings.TrimPrefix(fr.path, ws.Path+"/")
 		if rel == fr.path {
 			rel = filepath.ToSlash(fr.path)
@@ -542,17 +570,30 @@ func (r *workspaceRuntime) Collect(
 			continue
 		}
 		seen[rel] = true
-		data, size, err := r.readFile(ctx, sb, fr.path, maxReadSizeBytes, fr.size)
+		// Cap the per-file read against the remaining total budget
+		// so a single large file cannot consume the entire budget.
+		remaining := maxCollectTotalBytes - totalBytes
+		if remaining <= 0 {
+			// Budget exhausted — stop to avoid passing limit=0 to
+			// readFile, whose <= 0 fallback would read up to
+			// maxReadSizeBytes (4 MiB) beyond the budget.
+			break
+		}
+		if remaining > maxReadSizeBytes {
+			remaining = maxReadSizeBytes
+		}
+		data, size, truncated, err := r.readFile(ctx, sb, fr.path, remaining, fr.size)
 		if err != nil {
 			return nil, err
 		}
+		totalBytes += int64(len(data))
 		mime := http.DetectContentType(data)
 		out = append(out, codeexecutor.File{
 			Name:      rel,
 			Content:   string(data),
 			MIMEType:  mime,
 			SizeBytes: size,
-			Truncated: size > int64(len(data)),
+			Truncated: truncated,
 		})
 	}
 	return out, nil
@@ -697,25 +738,9 @@ func (r *workspaceRuntime) RunProgram(
 		}
 	}
 
-	cwd := ws.Path
-	if spec.Cwd != "" {
-		cwd = path.Join(ws.Path, filepath.ToSlash(spec.Cwd))
-		// Reject a Cwd that escapes the workspace before emitting `cd`.
-		// Without this a direct RunProgram caller could run anywhere
-		// inside the sandbox by passing spec.Cwd = "../../etc".
-		if !pathUnder(cwd, ws.Path) {
-			return codeexecutor.RunResult{}, fmt.Errorf(
-				"opensandbox: spec.Cwd %q escapes workspace", spec.Cwd,
-			)
-		}
-		// Also resolve symlinks: a symlink inside the workspace
-		// pointing to an external directory would pass the lexical
-		// check above but cause `cd` to land outside the workspace.
-		resolved, err := r.resolveSandboxPath(ctx, cwd, ws.Path)
-		if err != nil {
-			return codeexecutor.RunResult{}, err
-		}
-		cwd = resolved
+	cwd, err := r.resolveRunCwd(ctx, ws, spec.Cwd)
+	if err != nil {
+		return codeexecutor.RunResult{}, err
 	}
 
 	skillsDir := path.Join(ws.Path, codeexecutor.DirSkills)
@@ -723,7 +748,7 @@ func (r *workspaceRuntime) RunProgram(
 	outDir := path.Join(ws.Path, codeexecutor.DirOut)
 	runDir := path.Join(
 		ws.Path, codeexecutor.DirRuns,
-		"run_"+time.Now().Format("20060102T150405.000"),
+		fmt.Sprintf("run_%d_%d", time.Now().UnixNano(), atomic.AddUint64(&r.runSeq, 1)),
 	)
 	baseEnv := map[string]string{
 		codeexecutor.WorkspaceEnvDirKey: ws.Path,
@@ -732,7 +757,10 @@ func (r *workspaceRuntime) RunProgram(
 		codeexecutor.EnvOutputDir:       outDir,
 		codeexecutor.EnvRunDir:          runDir,
 	}
-	envAssign := envToken(baseEnv, spec.Env, spec.CleanEnv)
+	envAssign, err := envToken(baseEnv, spec.Env, spec.CleanEnv)
+	if err != nil {
+		return codeexecutor.RunResult{}, err
+	}
 
 	quotedCmd := shellQuote(spec.Cmd)
 	var quotedArgs strings.Builder
@@ -759,7 +787,21 @@ func (r *workspaceRuntime) RunProgram(
 		envAssign, quotedCmd, quotedArgs.String(),
 		stdinRedir,
 	)
-	command = "bash -c " + shellQuote(command)
+	// When CleanEnv is requested, the outer wrapper bash must also
+	// start with a minimal environment. Without this, BASH_ENV (if set
+	// in the sandbox env) would cause bash to source an arbitrary file
+	// before the inner `env -i` command runs, and LD_PRELOAD would be
+	// loaded by the dynamic linker before bash starts. Using
+	// `env -i PATH=... bash --norc --noprofile` ensures the wrapper
+	// shell inherits nothing from the sandbox environment and skips
+	// startup files. SupportsCleanEnv: true is a security gate for
+	// command-policy mode, so this boundary must be real.
+	if spec.CleanEnv {
+		command = "env -i PATH=" + shellQuote(minimalCleanPATH) +
+			" bash --norc --noprofile -c " + shellQuote(command)
+	} else {
+		command = "bash -c " + shellQuote(command)
+	}
 
 	req := osb.RunCommandRequest{
 		Command: command,
@@ -771,22 +813,43 @@ func (r *workspaceRuntime) RunProgram(
 	}
 
 	start := time.Now()
-	exec, runErr := sb.RunCommandWithOpts(ctx, req, nil)
+	// Use ExecutionHandlers with SkipAccumulation to prevent the SDK
+	// from accumulating unbounded stdout/stderr in the Execution
+	// struct. Instead, we copy into our own capped buffers and stop
+	// accepting data once the cap is reached. This bounds host memory
+	// even when a remote command prints continuously.
+	var (
+		stdoutBuf cappedBuffer
+		stderrBuf cappedBuffer
+	)
+	handlers := &osb.ExecutionHandlers{
+		OnStdout: func(m osb.OutputMessage) error {
+			stdoutBuf.write(m.Text)
+			return nil
+		},
+		OnStderr: func(m osb.OutputMessage) error {
+			stderrBuf.write(m.Text)
+			return nil
+		},
+		SkipAccumulation: true,
+	}
+	exec, runErr := sb.RunCommandWithOpts(ctx, req, handlers)
 	dur := time.Since(start)
 
 	res := codeexecutor.RunResult{
 		Duration: dur,
 	}
+	res.Stdout = stdoutBuf.string()
+	res.Stderr = stderrBuf.string()
 	if exec != nil {
-		res.Stdout = exec.Text()
-		var stderrB strings.Builder
-		for _, m := range exec.Stderr {
-			if stderrB.Len() > 0 {
-				stderrB.WriteByte('\n')
-			}
-			stderrB.WriteString(m.Text)
+		// exec.Error carries structured error information (exception
+		// name, value, traceback) from SSE error events. Without this,
+		// a non-numeric evalue would leave ExitCode nil and Stderr
+		// empty, causing ExecuteCode to report only "[exit -1]" and
+		// discard the actual error details.
+		if exec.Error != nil {
+			res.Stderr = formatExecutionError(exec.Error, res.Stderr)
 		}
-		res.Stderr = stderrB.String()
 		if exec.ExitCode != nil {
 			res.ExitCode = *exec.ExitCode
 		} else {
@@ -805,6 +868,65 @@ func (r *workspaceRuntime) RunProgram(
 		return res, runErr
 	}
 	return res, nil
+}
+
+// resolveRunCwd resolves the working directory for a RunProgram call.
+// If specCwd is empty, ws.Path is used. Otherwise the path is joined
+// under ws.Path, lexically validated against workspace escape, and
+// resolved through the sandbox to defeat symlinks pointing outside.
+func (r *workspaceRuntime) resolveRunCwd(
+	ctx context.Context,
+	ws codeexecutor.Workspace,
+	specCwd string,
+) (string, error) {
+	if specCwd == "" {
+		return ws.Path, nil
+	}
+	cwd := path.Join(ws.Path, filepath.ToSlash(specCwd))
+	// Reject a Cwd that escapes the workspace before emitting `cd`.
+	// Without this a direct RunProgram caller could run anywhere
+	// inside the sandbox by passing spec.Cwd = "../../etc".
+	if !pathUnder(cwd, ws.Path) {
+		return "", fmt.Errorf(
+			"opensandbox: spec.Cwd %q escapes workspace", specCwd,
+		)
+	}
+	// Also resolve symlinks: a symlink inside the workspace
+	// pointing to an external directory would pass the lexical
+	// check above but cause `cd` to land outside the workspace.
+	resolved, err := r.resolveSandboxPath(ctx, cwd, ws.Path)
+	if err != nil {
+		return "", err
+	}
+	return resolved, nil
+}
+
+// formatExecutionError renders an SDK ExecutionError (exception name,
+// value, traceback from SSE error events) into stderr text, preserving
+// any stderr already captured from the streaming output. Without this,
+// a non-numeric evalue leaves ExitCode nil and Stderr empty, causing
+// ExecuteCode to report only "[exit -1]" and discard the actual error
+// details.
+func formatExecutionError(e *osb.ExecutionError, existingStderr string) string {
+	var eb strings.Builder
+	if existingStderr != "" {
+		eb.WriteString(existingStderr)
+		eb.WriteByte('\n')
+	}
+	if e.Name != "" {
+		eb.WriteString(e.Name)
+		if e.Value != "" {
+			eb.WriteString(": ")
+			eb.WriteString(e.Value)
+		}
+	} else if e.Value != "" {
+		eb.WriteString(e.Value)
+	}
+	if len(e.Traceback) > 0 {
+		eb.WriteByte('\n')
+		eb.WriteString(strings.Join(e.Traceback, "\n"))
+	}
+	return eb.String()
 }
 
 // ExecuteInline writes each code block into the sandbox workspace and
@@ -932,40 +1054,64 @@ func (r *workspaceRuntime) runBash(
 	if req.Timeout <= 0 {
 		req.Timeout = int64(defaultRunTimeout / time.Millisecond)
 	}
-	exec, err := sb.RunCommandWithOpts(ctx, req, nil)
+	// Use ExecutionHandlers with SkipAccumulation to prevent the SDK
+	// from accumulating unbounded stdout/stderr in the Execution
+	// struct. runBash is used by infrastructure commands (mkdir,
+	// chmod -R, rm -rf, readlink -f) that can produce large output on
+	// pathological filesystems (e.g. chmod -R on a workspace with
+	// millions of files). Without this, the SDK's Execution struct
+	// would accumulate all output in memory.
+	var (
+		stdoutBuf cappedBuffer
+		stderrBuf cappedBuffer
+	)
+	handlers := &osb.ExecutionHandlers{
+		OnStdout: func(m osb.OutputMessage) error {
+			stdoutBuf.write(m.Text)
+			return nil
+		},
+		OnStderr: func(m osb.OutputMessage) error {
+			stderrBuf.write(m.Text)
+			return nil
+		},
+		SkipAccumulation: true,
+	}
+	exec, err := sb.RunCommandWithOpts(ctx, req, handlers)
 	if err != nil {
 		if exec != nil {
-			return exec.Text(), err
+			return stdoutBuf.string(), err
 		}
 		return "", err
 	}
 	if exec.ExitCode != nil && *exec.ExitCode != 0 {
-		var stderrB strings.Builder
-		for _, m := range exec.Stderr {
-			if stderrB.Len() > 0 {
-				stderrB.WriteByte('\n')
-			}
-			stderrB.WriteString(m.Text)
-		}
-		return exec.Text(), fmt.Errorf(
+		return stdoutBuf.string(), fmt.Errorf(
 			"opensandbox: bash exit %d: %s",
-			*exec.ExitCode, stderrB.String(),
+			*exec.ExitCode, stderrBuf.string(),
 		)
 	}
-	return exec.Text(), nil
+	return stdoutBuf.string(), nil
 }
 
 // readFile reads up to limit bytes from a remote path via the SDK's
-// DownloadFile API. Returns the data and the file's full size (which
-// may exceed len(data) when truncated). knownSize is the real file
-// size from SearchFiles metadata; when positive it is used as the
-// returned size so callers get an accurate SizeBytes even for files
-// larger than limit. When knownSize is non-positive, the size falls
-// back to the number of bytes actually read (capped at limit+1).
+// DownloadFile API. Returns the data, the file's full size (which
+// may exceed len(data) when truncated), and a truncated flag. knownSize
+// is the real file size from SearchFiles metadata; when positive it is
+// used as the returned size so callers get an accurate SizeBytes even
+// for files larger than limit. When knownSize is non-positive, the size
+// falls back to the number of bytes actually read (capped at limit+1).
+//
+// The returned size is always at least len(data) to prevent stale
+// metadata from making SizeBytes smaller than the actual content read.
+//
+// Truncated is true only when the read actually hit the limit+1 cap
+// (proving the file is at least limit+1 bytes). This avoids false
+// positives when the file shrank between SearchFiles and DownloadFile:
+// in that case readBytes < limit, so the read reached EOF and the file
+// was not truncated — even though stale knownSize may exceed len(data).
 func (r *workspaceRuntime) readFile(
 	ctx context.Context, sb *osb.Sandbox, full string, limit int64,
 	knownSize int64,
-) ([]byte, int64, error) {
+) ([]byte, int64, bool, error) {
 	if limit <= 0 {
 		limit = maxReadSizeBytes
 	}
@@ -974,7 +1120,7 @@ func (r *workspaceRuntime) readFile(
 	rangeHeader := fmt.Sprintf("bytes=0-%d", limit)
 	rc, err := sb.DownloadFile(ctx, full, rangeHeader)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, false, err
 	}
 	defer rc.Close()
 	// Cap the read at limit+1 bytes regardless of whether the server
@@ -983,18 +1129,27 @@ func (r *workspaceRuntime) readFile(
 	// the truncation check below fires.
 	data, err := io.ReadAll(io.LimitReader(rc, limit+1))
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, false, err
+	}
+	readBytes := int64(len(data))
+	// Truncated iff we read the full limit+1 bytes, proving the file
+	// is at least limit+1 bytes long. This is the only reliable signal:
+	// comparing knownSize to len(data) produces false positives when
+	// the file shrank between SearchFiles and DownloadFile.
+	truncated := readBytes > limit
+	if truncated {
+		data = data[:limit]
 	}
 	// Prefer the real size from SearchFiles metadata; fall back to
 	// the byte count we actually read when metadata is unavailable.
+	// Use max(knownSize, readBytes) — readBytes (before truncation)
+	// so hitting the limit+1 detection is reflected in size even when
+	// knownSize is stale (file grew between SearchFiles and Download).
 	size := knownSize
-	if size <= 0 {
-		size = int64(len(data))
+	if size < readBytes {
+		size = readBytes
 	}
-	if int64(len(data)) > limit {
-		data = data[:limit]
-	}
-	return data, size, nil
+	return data, size, truncated, nil
 }
 
 // fileSearchResult carries a file path and its real size as reported
@@ -1167,13 +1322,40 @@ func (r *workspaceRuntime) resolveSandboxAncestor(
 	return path.Join(resolved, filepath.ToSlash(rel)), nil
 }
 
+// isTimeoutErr reports whether err represents a command execution
+// timeout (as opposed to an infrastructure/network failure). It uses
+// structured type assertions rather than string matching to avoid
+// misclassifying unrelated errors that happen to contain "timeout" in
+// their message (e.g. "504 gateway timeout", "upstream timeout").
 func isTimeoutErr(err error) bool {
 	if err == nil {
 		return false
 	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "timeout") ||
-		strings.Contains(msg, "deadline exceeded")
+	// context.DeadlineExceeded is the canonical signal for a
+	// context.Timeout cancellation, including our own execution timeout.
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	// net.Error.Timeout() covers network-level timeouts from the HTTP
+	// client (e.g. request deadline). This is narrower than string
+	// matching because it only returns true for errors that implement
+	// net.Error AND report Timeout() == true.
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+	// For SDK APIError, check the structured code field rather than
+	// searching the error message. The mock server returns
+	// {"code":"timeout",...} for command execution timeouts; we match
+	// that specific code here. A 504 gateway timeout would have a
+	// different code and should NOT be classified as a command timeout.
+	var apiErr *osb.APIError
+	if errors.As(err, &apiErr) {
+		if strings.EqualFold(apiErr.Response.Code, "timeout") {
+			return true
+		}
+	}
+	return false
 }
 
 // b64encode is a thin wrapper around base64 encoding used for stdin
@@ -1216,4 +1398,32 @@ func shellQuote(s string) string {
 	}
 	q := strings.ReplaceAll(s, "'", "'\\''")
 	return "'" + q + "'"
+}
+
+// cappedBuffer accumulates string data up to maxCommandOutputBytes,
+// then drops further writes and appends a truncation marker. Used by
+// RunProgram's ExecutionHandlers to bound stdout/stderr memory.
+type cappedBuffer struct {
+	buf       strings.Builder
+	truncated bool
+}
+
+func (b *cappedBuffer) write(s string) {
+	if b.truncated {
+		return
+	}
+	if b.buf.Len()+len(s) > maxCommandOutputBytes {
+		remaining := maxCommandOutputBytes - b.buf.Len()
+		if remaining > 0 {
+			b.buf.WriteString(s[:remaining])
+		}
+		fmt.Fprintf(&b.buf, "\n[output truncated: exceeded %d bytes]\n", maxCommandOutputBytes)
+		b.truncated = true
+		return
+	}
+	b.buf.WriteString(s)
+}
+
+func (b *cappedBuffer) string() string {
+	return b.buf.String()
 }

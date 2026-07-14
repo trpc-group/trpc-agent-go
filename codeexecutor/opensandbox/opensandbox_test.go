@@ -12,6 +12,7 @@ package opensandbox
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -101,14 +102,16 @@ func TestEnvToken(t *testing.T) {
 	spec := map[string]string{"FOO": "bar"}
 
 	// Non-clean: "env WORKSPACE_DIR='/ws' FOO='bar' "
-	got := envToken(base, spec, false)
+	got, err := envToken(base, spec, false)
+	require.NoError(t, err)
 	assert.Contains(t, got, "env ")
 	assert.Contains(t, got, "WORKSPACE_DIR='/ws'")
 	assert.Contains(t, got, "FOO='bar'")
 	assert.True(t, endsWithSpace(got))
 
 	// Clean: "env -i PATH='...' WORKSPACE_DIR='/ws' FOO='bar' "
-	gotClean := envToken(base, spec, true)
+	gotClean, err := envToken(base, spec, true)
+	require.NoError(t, err)
 	assert.Contains(t, gotClean, "env -i ")
 	assert.Contains(t, gotClean, "PATH=")
 	assert.Contains(t, gotClean, "WORKSPACE_DIR='/ws'")
@@ -116,13 +119,39 @@ func TestEnvToken(t *testing.T) {
 
 	// Clean with PATH in spec: minimalCleanPATH should NOT be injected.
 	specWithPath := map[string]string{"PATH": "/custom/bin"}
-	gotCleanPath := envToken(base, specWithPath, true)
+	gotCleanPath, err := envToken(base, specWithPath, true)
+	require.NoError(t, err)
 	assert.Contains(t, gotCleanPath, "env -i ")
 	assert.Contains(t, gotCleanPath, "PATH='/custom/bin'")
 	assert.NotContains(t, gotCleanPath, minimalCleanPATH)
 
 	// Non-clean with no entries: empty string.
-	assert.Equal(t, "", envToken(nil, nil, false))
+	gotEmpty, err := envToken(nil, nil, false)
+	require.NoError(t, err)
+	assert.Equal(t, "", gotEmpty)
+}
+
+// TestEnvToken_RejectsInvalidVarName verifies that envToken rejects
+// environment variable names containing shell metacharacters, preventing
+// command injection through the env-assignment token.
+func TestEnvToken_RejectsInvalidVarName(t *testing.T) {
+	invalidNames := []string{
+		"A;touch /tmp/pwned",
+		"X=$(touch /tmp/pwned)",
+		"X Y",
+		"X=Y",
+		"X\nPATH",
+		"",
+		"1ABC",
+	}
+	for _, name := range invalidNames {
+		_, err := envToken(nil, map[string]string{name: "v"}, false)
+		assert.Error(t, err, "expected error for invalid env name %q", name)
+		assert.Contains(t, err.Error(), "invalid environment variable name")
+	}
+	// Also test invalid base key.
+	_, err := envToken(map[string]string{"BAD;KEY": "v"}, nil, false)
+	assert.Error(t, err)
 }
 
 func TestShellQuote(t *testing.T) {
@@ -943,4 +972,176 @@ func TestNew_WithSandboxRunBase_RejectsInvalid(t *testing.T) {
 	m.mu.Unlock()
 	assert.Equal(t, 0, createCalls,
 		"validateRunBase must reject before CreateSandbox is called")
+}
+
+// TestExecuteCode_PerSession_EmptyExecID_ReturnsError verifies that
+// in PerSession mode, an empty ExecutionID is rejected with a clear
+// error rather than generating a random fallback (which would defeat
+// workspace persistence and leak workspaces). The error must fire
+// before CreateWorkspace is called.
+func TestExecuteCode_PerSession_EmptyExecID_ReturnsError(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	u, err := url.Parse(m.server.URL)
+	require.NoError(t, err)
+	exec, err := New(
+		WithDomain(u.Host),
+		WithProtocol("http"),
+		WithAPIKey("test-key"),
+		WithWorkspacePersistence(WorkspacePersistencePerSession),
+	)
+	require.NoError(t, err)
+	defer exec.Close()
+
+	createCallsBefore := m.createCalls
+	cmdsBefore := len(m.commands)
+
+	_, err = exec.ExecuteCode(context.Background(), codeexecutor.CodeExecutionInput{
+		ExecutionID: "",
+		CodeBlocks: []codeexecutor.CodeBlock{
+			{Language: "bash", Code: "echo ok"},
+		},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must not be empty")
+	// No workspace creation should have occurred — the empty-execID
+	// check fires before CreateWorkspace.
+	assert.Equal(t, createCallsBefore, m.createCalls,
+		"no additional sandbox creation should occur when execID is empty")
+	assert.Equal(t, cmdsBefore, len(m.commands),
+		"no workspace creation commands should be sent when execID is empty")
+}
+
+// TestExecuteCode_TimedOut_SurfacesTimeout verifies that when a
+// RunProgram command times out, ExecuteCode surfaces the timeout via
+// the result output (not as a returned error) with a "[timeout:"
+// marker so callers can distinguish timeouts from successes.
+func TestExecuteCode_TimedOut_SurfacesTimeout(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	m.setRunError(fmt.Errorf("command timeout exceeded"))
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	res, err := exec.ExecuteCode(context.Background(), codeexecutor.CodeExecutionInput{
+		ExecutionID: "exec-timeout-surface",
+		CodeBlocks: []codeexecutor.CodeBlock{
+			{Language: "bash", Code: "echo ok"},
+		},
+	})
+	require.NoError(t, err, "timeout should be surfaced via result, not error")
+	assert.Contains(t, res.Output, "[timeout:",
+		"output should contain a timeout marker")
+}
+
+// TestExecuteCode_NonZeroExit_StderrNotDuplicated verifies that when
+// a command exits non-zero with stderr, the stderr text is not
+// duplicated in the output. The "[exit N]" line must be a bare
+// status marker, not followed by the stderr text.
+func TestExecuteCode_NonZeroExit_StderrNotDuplicated(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	m.setStdout("ok")
+	m.setExitCode(1)
+	m.setStderr("permission denied")
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	res, err := exec.ExecuteCode(context.Background(), codeexecutor.CodeExecutionInput{
+		ExecutionID: "exec-stderr-dup",
+		CodeBlocks: []codeexecutor.CodeBlock{
+			{Language: "bash", Code: "echo ok"},
+		},
+	})
+	require.NoError(t, err)
+	// "permission denied" should appear exactly once — in the
+	// [stderr] line, not duplicated after [exit 1].
+	assert.Equal(t, 1, strings.Count(res.Output, "permission denied"),
+		"stderr text should appear exactly once in output")
+	assert.Contains(t, res.Output, "[exit 1]")
+	assert.NotContains(t, res.Output, "[exit 1] permission denied",
+		"exit status line should not be followed by stderr text")
+}
+
+// TestNew_WithEnvVars_RejectsInvalidVarName verifies that
+// NewWithContext validates sandbox-level env var names for contract
+// consistency with envToken's validation of spec.Env.
+func TestNew_WithEnvVars_RejectsInvalidVarName(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	u, err := url.Parse(m.server.URL)
+	require.NoError(t, err)
+
+	_, err = New(
+		WithDomain(u.Host),
+		WithProtocol("http"),
+		WithAPIKey("test-key"),
+		WithEnvVars(map[string]string{"BAD;KEY": "v"}),
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid environment variable name")
+	assert.Contains(t, err.Error(), "WithEnvVars")
+	// Sandbox must not be created when validation fails.
+	assert.Equal(t, 0, m.createCalls,
+		"invalid env var name must be rejected before CreateSandbox")
+}
+
+// TestNew_WithHeaders_DoesNotAliasCallerMap verifies that WithHeaders
+// copies the caller's map so subsequent mutations to the original map
+// do not affect the executor. Without the copy, mutating headers after
+// construction would silently change which HTTP headers are sent, and
+// concurrent mutation would be a data race.
+func TestNew_WithHeaders_DoesNotAliasCallerMap(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	u, err := url.Parse(m.server.URL)
+	require.NoError(t, err)
+
+	headers := map[string]string{"X-Test": "1"}
+	exec, err := New(
+		WithDomain(u.Host),
+		WithProtocol("http"),
+		WithAPIKey("test-key"),
+		WithHeaders(headers),
+	)
+	require.NoError(t, err)
+	defer exec.Close()
+
+	// Mutate the original map after construction.
+	headers["X-Test"] = "mutated"
+	delete(headers, "X-Test")
+	headers["X-Evil"] = "yes"
+
+	// The executor's headers must be unaffected.
+	assert.Equal(t, map[string]string{"X-Test": "1"}, exec.headers,
+		"WithHeaders must copy the caller's map")
+}
+
+// TestNew_WithEndpointHostRewrite_DoesNotAliasCallerMap verifies that
+// WithEndpointHostRewrite copies the caller's map so subsequent
+// mutations to the original map do not affect the executor.
+func TestNew_WithEndpointHostRewrite_DoesNotAliasCallerMap(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	u, err := url.Parse(m.server.URL)
+	require.NoError(t, err)
+
+	rewrites := map[string]string{"host.docker.internal": "localhost"}
+	exec, err := New(
+		WithDomain(u.Host),
+		WithProtocol("http"),
+		WithAPIKey("test-key"),
+		WithEndpointHostRewrite(rewrites),
+	)
+	require.NoError(t, err)
+	defer exec.Close()
+
+	// Mutate the original map after construction.
+	rewrites["host.docker.internal"] = "evil.example.com"
+	rewrites["attacker.com"] = "localhost"
+
+	// The executor's rewrites must be unaffected.
+	assert.Equal(t, map[string]string{"host.docker.internal": "localhost"},
+		exec.endpointHostRewrite,
+		"WithEndpointHostRewrite must copy the caller's map")
 }
