@@ -283,6 +283,17 @@ func TestNetworkAccessRule_AllowlistStillDeniesUnknown(t *testing.T) {
 	}
 }
 
+func TestNetworkAccessRule_MixedAllowlistUnlistedHostsDeny(t *testing.T) {
+	rule := NewNetworkAccessRuleWithAllowlist([]string{"github.com"})
+	res := rule.Check(ScanInput{Command: "curl https://github.com/foo/bar https://evil.example.com/x"})
+	if res == nil {
+		t.Fatal("expected deny for mixed allowlisted and unlisted hosts, got nil")
+	}
+	if res.Decision != DecisionDeny {
+		t.Errorf("expected DecisionDeny for mixed hosts, got %s", res.Decision)
+	}
+}
+
 func TestNetworkAccessRule_DenylistTakesPrecedence(t *testing.T) {
 	rule := NewNetworkAccessRuleWithAllowlist([]string{"github.com"}).
 		WithDeniedDomains([]string{"evil.github.com"})
@@ -447,6 +458,21 @@ func TestHostExecRiskRule_ContainerPassthrough(t *testing.T) {
 	rule := NewHostExecRiskRule()
 	if result := rule.Check(ScanInput{Command: "sudo ls", ExecutorType: "container"}); result != nil {
 		t.Errorf("container executor should allow, got %+v", result)
+	}
+}
+
+func TestHostExecRiskRule_E2BPassthrough(t *testing.T) {
+	rule := NewHostExecRiskRule()
+	if result := rule.Check(ScanInput{Command: "sudo ls", ExecutorType: "e2b"}); result != nil {
+		t.Errorf("e2b executor should allow, got %+v", result)
+	}
+}
+
+func TestHostExecRiskRule_UnknownExecutorIsTreatedAsLocal(t *testing.T) {
+	rule := NewHostExecRiskRule()
+	// A typo or newly introduced backend must not bypass host-risk checks.
+	if result := rule.Check(ScanInput{Command: "sudo ls", ExecutorType: "locla"}); result == nil {
+		t.Error("unknown executor type should be treated conservatively as local")
 	}
 }
 

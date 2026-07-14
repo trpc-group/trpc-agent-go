@@ -200,10 +200,6 @@ type policyConfig struct {
 	DeniedDomains []string `yaml:"denied_domains"     json:"denied_domains"`
 	// AllowedDomains is the network domain allow list.
 	AllowedDomains []string `yaml:"allowed_domains"    json:"allowed_domains"`
-	// MaxTimeoutSeconds is the maximum command execution timeout in seconds.
-	MaxTimeoutSeconds int `yaml:"max_timeout_seconds" json:"max_timeout_seconds"`
-	// MaxOutputBytes is the maximum output size in bytes.
-	MaxOutputBytes int `yaml:"max_output_bytes"    json:"max_output_bytes"`
 }
 
 // containsSubstring checks whether any pattern in patterns appears in s.

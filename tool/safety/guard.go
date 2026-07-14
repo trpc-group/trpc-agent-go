@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -90,12 +91,17 @@ func (g *Guard) CheckToolPermission(ctx context.Context, req *tool.PermissionReq
 	res := g.scanner.Scan(input)
 
 	switch res.Decision {
+	case DecisionAllow:
+		return tool.AllowPermission(), nil
 	case DecisionDeny:
 		return tool.DenyPermission(res.Reason), nil
 	case DecisionAsk:
 		return tool.AskPermission(res.Reason), nil
 	default:
-		return tool.AllowPermission(), nil
+		// Decision is an exported string type and Rule is a public extension
+		// point; a custom rule or version mismatch can return an unknown
+		// value. Treat it as denial so the safety boundary never fails open.
+		return tool.DenyPermission(fmt.Sprintf("unknown safety decision %q", res.Decision)), nil
 	}
 }
 

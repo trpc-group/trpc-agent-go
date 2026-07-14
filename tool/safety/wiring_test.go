@@ -441,3 +441,196 @@ func (n *nilDeclTool) Declaration() *tool.Declaration { return nil }
 func (n *nilDeclTool) Call(_ context.Context, _ []byte) (any, error) {
 	return map[string]string{"ok": "nil_decl"}, nil
 }
+
+// streamableStub is a streamable-only tool (no Call method).
+type streamableStub struct {
+	name        string
+	streamCount int
+	lastArgs    []byte
+}
+
+func (s *streamableStub) Declaration() *tool.Declaration {
+	return &tool.Declaration{Name: s.name}
+}
+
+func (s *streamableStub) StreamableCall(_ context.Context, args []byte) (*tool.StreamReader, error) {
+	s.lastArgs = append([]byte(nil), args...)
+	s.streamCount++
+	return tool.NewStream(1).Reader, nil
+}
+
+// combinedStub implements both CallableTool and StreamableTool.
+type combinedStub struct {
+	name        string
+	callCount   int
+	streamCount int
+	lastArgs    []byte
+}
+
+func (s *combinedStub) Declaration() *tool.Declaration {
+	return &tool.Declaration{Name: s.name}
+}
+
+func (s *combinedStub) Call(_ context.Context, args []byte) (any, error) {
+	s.lastArgs = append([]byte(nil), args...)
+	s.callCount++
+	return map[string]string{"ok": "call"}, nil
+}
+
+func (s *combinedStub) StreamableCall(_ context.Context, args []byte) (*tool.StreamReader, error) {
+	s.lastArgs = append([]byte(nil), args...)
+	s.streamCount++
+	return tool.NewStream(1).Reader, nil
+}
+
+// permissionCheckerStub implements tool.PermissionChecker and denies everything.
+type permissionCheckerStub struct {
+	stubTool
+	checked bool
+}
+
+func (s *permissionCheckerStub) CheckPermission(_ context.Context, _ *tool.PermissionRequest) (tool.PermissionDecision, error) {
+	s.checked = true
+	return tool.DenyPermission("inner permission checker denied"), nil
+}
+
+// metadataStub publishes ToolMetadata.
+type metadataStub struct {
+	stubTool
+	meta tool.ToolMetadata
+}
+
+func (s *metadataStub) ToolMetadata() tool.ToolMetadata { return s.meta }
+
+func TestWrapTools_StreamableOnlyToolIsGuarded(t *testing.T) {
+	inner := &streamableStub{name: "stream_only"}
+	guard := NewGuard(WithRules(NewDangerousCommandRule()))
+
+	wrapped := WrapTools([]tool.Tool{inner}, guard)
+	if len(wrapped) != 1 {
+		t.Fatalf("expected 1 tool, got %d", len(wrapped))
+	}
+	st, ok := wrapped[0].(tool.StreamableTool)
+	if !ok {
+		t.Fatalf("expected StreamableTool, got %T", wrapped[0])
+	}
+	_, err := st.StreamableCall(context.Background(), jsonCommandArgs("rm -rf /"))
+	if err == nil {
+		t.Fatal("expected deny error for dangerous streamable command")
+	}
+	if inner.streamCount != 0 {
+		t.Errorf("inner streamable tool must NOT be called on deny, got %d", inner.streamCount)
+	}
+}
+
+func TestWrapTools_CombinedToolPreservesBothPaths(t *testing.T) {
+	inner := &combinedStub{name: "combined"}
+	guard := NewGuard(WithRules(NewDangerousCommandRule()))
+
+	wrapped := WrapTools([]tool.Tool{inner}, guard)
+	if len(wrapped) != 1 {
+		t.Fatalf("expected 1 tool, got %d", len(wrapped))
+	}
+	ct, callable := wrapped[0].(tool.CallableTool)
+	st, streamable := wrapped[0].(tool.StreamableTool)
+	if !callable || !streamable {
+		t.Fatalf("expected combined wrapper to implement both CallableTool and StreamableTool, got callable=%v streamable=%v", callable, streamable)
+	}
+
+	// Deny path on Call.
+	out, err := ct.Call(context.Background(), jsonCommandArgs("rm -rf /"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, ok := out.(tool.PermissionResult); !ok {
+		t.Errorf("expected PermissionResult on deny, got %T", out)
+	}
+	if inner.callCount != 0 {
+		t.Errorf("inner Call must not run on deny, got %d", inner.callCount)
+	}
+
+	// Deny path on StreamableCall.
+	_, err = st.StreamableCall(context.Background(), jsonCommandArgs("rm -rf /"))
+	if err == nil {
+		t.Fatal("expected deny error for dangerous streamable command")
+	}
+	if inner.streamCount != 0 {
+		t.Errorf("inner StreamableCall must not run on deny, got %d", inner.streamCount)
+	}
+
+	// Allow path on Call.
+	_, _ = ct.Call(context.Background(), jsonCommandArgs("ls"))
+	if inner.callCount != 1 {
+		t.Errorf("inner Call should run on allow, got %d", inner.callCount)
+	}
+}
+
+func TestWrapTool_CombinedToolReturnsCombinedWrapper(t *testing.T) {
+	inner := &combinedStub{name: "combined"}
+	guard := NewGuard(WithRules(NewDangerousCommandRule()))
+
+	wrapped := WrapTool(inner, guard)
+	if _, ok := wrapped.(*GuardedCombinedTool); !ok {
+		t.Fatalf("expected *GuardedCombinedTool, got %T", wrapped)
+	}
+}
+
+func TestGuardedTool_PreservesPermissionChecker(t *testing.T) {
+	inner := &permissionCheckerStub{stubTool: stubTool{name: "permissioned"}}
+	guard := NewGuard(WithRules(NewDangerousCommandRule()))
+
+	wrapped := WrapTool(inner, guard).(*GuardedTool)
+	checker, ok := tool.Tool(wrapped).(tool.PermissionChecker)
+	if !ok {
+		t.Fatal("wrapped tool should implement PermissionChecker")
+	}
+	dec, err := checker.CheckPermission(context.Background(), &tool.PermissionRequest{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if dec.Action != tool.PermissionActionDeny {
+		t.Errorf("expected inner checker denial, got %s", dec.Action)
+	}
+	if !inner.checked {
+		t.Error("inner CheckPermission was not called")
+	}
+}
+
+func TestGuardedTool_PreservesToolMetadata(t *testing.T) {
+	inner := &metadataStub{
+		stubTool: stubTool{name: "meta_tool"},
+		meta:     tool.ToolMetadata{ReadOnly: true, Destructive: true},
+	}
+	guard := NewGuard()
+
+	wrapped := WrapTool(inner, guard).(*GuardedTool)
+	provider, ok := tool.Tool(wrapped).(tool.MetadataProvider)
+	if !ok {
+		t.Fatal("wrapped tool should implement MetadataProvider")
+	}
+	got := provider.ToolMetadata()
+	if got != inner.meta {
+		t.Errorf("metadata not preserved: got %+v, want %+v", got, inner.meta)
+	}
+}
+
+func TestGuardedTool_UnknownDecisionDenies(t *testing.T) {
+	inner := &stubTool{name: "exec_command", desc: "stub"}
+	guard := NewGuard(WithRules(unknownDecisionRule{}))
+
+	wrapped := WrapTool(inner, guard)
+	out, err := wrapped.Call(context.Background(), jsonCommandArgs("ls"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if inner.callCount != 0 {
+		t.Error("inner tool must not be called on unknown decision")
+	}
+	res, ok := out.(tool.PermissionResult)
+	if !ok {
+		t.Fatalf("expected PermissionResult, got %T", out)
+	}
+	if res.Status != tool.PermissionResultStatusDenied {
+		t.Errorf("expected denied, got %s", res.Status)
+	}
+}

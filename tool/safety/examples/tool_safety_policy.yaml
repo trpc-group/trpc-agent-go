@@ -65,9 +65,3 @@ denied_paths:
 # denied_domains:
 #   - evil.com
 #   - malware.org
-
-# 最大命令执行超时（秒），默认 300
-max_timeout_seconds: 300
-
-# 最大输出大小（字节），默认 10MB
-max_output_bytes: 10485760

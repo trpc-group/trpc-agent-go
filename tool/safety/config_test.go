@@ -22,9 +22,6 @@ func TestLoadPolicyFile_Valid(t *testing.T) {
 	if policy == nil {
 		t.Fatal("policy is nil")
 	}
-	if policy.MaxTimeoutSeconds == 0 {
-		t.Error("MaxTimeoutSeconds should have default")
-	}
 	if len(policy.DeniedCommands) == 0 {
 		t.Error("DeniedCommands should have entries")
 	}
@@ -78,6 +75,9 @@ func TestNewReport_Ask(t *testing.T) {
 	if report.Decision != DecisionAsk {
 		t.Error("ask decision should be preserved")
 	}
+	if !report.Blocked {
+		t.Error("ask should be reported as blocked/intercepted")
+	}
 }
 
 func TestNewAuditEvent(t *testing.T) {
@@ -123,11 +123,8 @@ func TestDefaultPolicy(t *testing.T) {
 	if len(p.DeniedCommands) == 0 {
 		t.Error("default policy should have denied_commands")
 	}
-	if p.MaxTimeoutSeconds == 0 {
-		t.Error("default policy should have timeout")
-	}
-	if p.MaxOutputBytes == 0 {
-		t.Error("default policy should have max output bytes")
+	if len(p.DeniedPaths) == 0 {
+		t.Error("default policy should have denied_paths")
 	}
 }
 
@@ -149,20 +146,19 @@ func TestLoadPolicyFile_InvalidYAML(t *testing.T) {
 	}
 }
 
-func TestLoadPolicyFile_EmptyDefaultsToSensibleValues(t *testing.T) {
-	// Load with a YAML that has empty MaxTimeoutSeconds/MaxOutputBytes
-	// to exercise the zero-value default path.
+func TestLoadPolicyFile_EmptyFileUsesDefaults(t *testing.T) {
+	// An empty YAML file should still inherit DefaultPolicy values.
 	tmpDir := t.TempDir()
 	path := tmpDir + "/empty.yaml"
-	os.WriteFile(path, []byte("max_timeout_seconds: 0\nmax_output_bytes: 0\n"), 0644)
+	os.WriteFile(path, []byte("\n"), 0644)
 	p, err := LoadPolicyFile(path)
 	if err != nil {
 		t.Fatalf("LoadPolicyFile: %v", err)
 	}
-	if p.MaxTimeoutSeconds == 0 {
-		t.Error("MaxTimeoutSeconds should have been defaulted")
+	if len(p.DeniedCommands) == 0 {
+		t.Error("DeniedCommands should have been defaulted")
 	}
-	if p.MaxOutputBytes == 0 {
-		t.Error("MaxOutputBytes should have been defaulted")
+	if len(p.DeniedPaths) == 0 {
+		t.Error("DeniedPaths should have been defaulted")
 	}
 }

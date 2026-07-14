@@ -319,8 +319,9 @@ type NetworkAccessRule struct {
 	// dangerousCmds is the set of command names that perform outbound
 	// network access. Matching is case-insensitive substring.
 	dangerousCmds []string
-	// allowedDomains downgrades a match to DecisionAsk when the target
-	// host is in this list. Supports wildcard "*.example.com" entries.
+	// allowedDomains downgrades a match to DecisionAsk when every target
+	// host in the command is in this list. Supports wildcard "*.example.com"
+	// entries.
 	allowedDomains []string
 	// deniedDomains is an explicit deny list of hosts. A match here takes
 	// precedence over the allow list, returning DecisionDeny.
@@ -449,8 +450,10 @@ func (r *NetworkAccessRule) ID() string { return "network_002" }
 // Check inspects the input for network access keywords.
 //
 // If a keyword matches, the rule inspects the command for any URL/host
-// arguments. When the host is in the configured allow list, the rule returns
-// DecisionAsk (human review) instead of DecisionDeny.
+// arguments. When every parsed host is in the configured allow list, the
+// rule returns DecisionAsk (human review) instead of DecisionDeny. If a
+// host is missing from the allow list, or if any host matches the deny
+// list, the result remains DecisionDeny.
 func (r *NetworkAccessRule) Check(input ScanInput) *ScanResult {
 	cmd := combineInput(input)
 	if cmd == "" {
@@ -470,14 +473,18 @@ func (r *NetworkAccessRule) Check(input ScanInput) *ScanResult {
 				Reason:    "network access to denied host: " + kw,
 			}
 		}
-		// If a host in the command matches the allow list, downgrade to ask.
+		// Only downgrade to ask when at least one host was parsed and every
+		// parsed network target matches the allow list. Mixed allow-listed
+		// and unlisted hosts keep the deny result to prevent operators from
+		// approving an escalation that silently omits dangerous destinations.
 		if r.matchesAllowlist(cmd) {
+			hosts := parseHosts(cmd)
 			return &ScanResult{
 				Decision:  DecisionAsk,
 				RiskLevel: RiskMedium,
 				RuleID:    r.ID(),
 				Evidence:  kw,
-				Reason:    "network access to allowlisted host: " + kw,
+				Reason:    "network access to allowlisted hosts: " + strings.Join(hosts, ", "),
 			}
 		}
 		return &ScanResult{
@@ -602,12 +609,14 @@ func hostMatchesPattern(host, pattern string) bool {
 	return strings.HasSuffix(host, "."+pattern)
 }
 
-// matchesAllowlist reports whether any host in cmd is in the configured
-// allow list. Hosts are extracted by parseHosts, and each host is matched
-// against every pattern with hostMatchesPattern (exact match or valid
-// "*.example.com" subdomain). Substring matching has been removed because
-// it accepted "evilgithub.com" against "github.com" and similar evasion
-// patterns called out in the policy-aware review on PR #2044.
+// matchesAllowlist reports whether every host extracted from cmd is in
+// the configured allow list. Hosts are extracted by parseHosts, and each
+// host is matched against every pattern with hostMatchesPattern (exact
+// match or valid "*.example.com" subdomain). Substring matching has been
+// removed because it accepted "evilgithub.com" against "github.com" and
+// similar evasion patterns called out in the policy-aware review on PR
+// #2044. A command that contains a mix of allow-listed and unlisted hosts
+// returns false so the caller keeps the deny result.
 func (r *NetworkAccessRule) matchesAllowlist(cmd string) bool {
 	if len(r.allowedDomains) == 0 {
 		return false
@@ -616,18 +625,23 @@ func (r *NetworkAccessRule) matchesAllowlist(cmd string) bool {
 	if len(hosts) == 0 {
 		return false
 	}
-	for _, pattern := range r.allowedDomains {
-		pattern = strings.ToLower(strings.TrimSpace(pattern))
-		if pattern == "" {
-			continue
-		}
-		for _, h := range hosts {
+	for _, h := range hosts {
+		matched := false
+		for _, pattern := range r.allowedDomains {
+			pattern = strings.ToLower(strings.TrimSpace(pattern))
+			if pattern == "" {
+				continue
+			}
 			if hostMatchesPattern(h, pattern) {
-				return true
+				matched = true
+				break
 			}
 		}
+		if !matched {
+			return false
+		}
 	}
-	return false
+	return true
 }
 
 // matchesDenylist reports whether any host in cmd is in the configured
@@ -785,9 +799,13 @@ func NewHostExecRiskRule() *HostExecRiskRule {
 // ID returns the unique identifier of this rule.
 func (r *HostExecRiskRule) ID() string { return "hostexec_005" }
 
-// Check inspects the input for host execution risk keywords. Skipped for container executors.
+// Check inspects the input for host execution risk keywords. Skipped only
+// for explicitly recognized isolated backends (container, e2b). Unknown
+// executor types are treated conservatively as local execution until their
+// isolation contract is defined, so a typo or new backend cannot bypass
+// host-risk checks.
 func (r *HostExecRiskRule) Check(input ScanInput) *ScanResult {
-	if input.ExecutorType != "local" && input.ExecutorType != "" {
+	if input.ExecutorType == "container" || input.ExecutorType == "e2b" {
 		return nil
 	}
 	cmd := combineInput(input)

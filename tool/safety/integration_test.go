@@ -145,8 +145,8 @@ func TestIntegration_FullPipeline_AskReview(t *testing.T) {
 	if report.Decision != DecisionAsk {
 		t.Errorf("expected ask, got %s", report.Decision)
 	}
-	if report.Blocked {
-		t.Error("ask result should not have blocked=true")
+	if !report.Blocked {
+		t.Error("ask result should be reported as blocked/intercepted")
 	}
 }
 

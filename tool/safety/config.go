@@ -39,12 +39,6 @@ type PolicyFile struct {
 	AllowedDomains []string `yaml:"allowed_domains" json:"allowed_domains,omitempty"`
 	// DeniedDomains is the network domain deny list.
 	DeniedDomains []string `yaml:"denied_domains" json:"denied_domains,omitempty"`
-	// MaxTimeoutSeconds is the maximum command execution timeout in seconds.
-	MaxTimeoutSeconds int `yaml:"max_timeout_seconds" json:"max_timeout_seconds"`
-	// MaxOutputBytes is the maximum output size in bytes.
-	MaxOutputBytes int `yaml:"max_output_bytes" json:"max_output_bytes"`
-	// AllowedEnvVars is the environment variable allow list.
-	AllowedEnvVars []string `yaml:"allowed_env_vars" json:"allowed_env_vars,omitempty"`
 }
 
 // DefaultPolicy returns a sensible default policy.
@@ -62,8 +56,6 @@ func DefaultPolicy() PolicyFile {
 			"~/.ssh", "~/.aws",
 			".env",
 		},
-		MaxTimeoutSeconds: 300,
-		MaxOutputBytes:    10 * 1024 * 1024, // 10MB
 	}
 }
 
@@ -78,12 +70,6 @@ func LoadPolicyFile(path string) (*PolicyFile, error) {
 	p := DefaultPolicy() // Start from defaults, not zero.
 	if err := yaml.Unmarshal(data, &p); err != nil {
 		return nil, fmt.Errorf("parse policy file %s: %w", path, err)
-	}
-	if p.MaxTimeoutSeconds == 0 {
-		p.MaxTimeoutSeconds = 300
-	}
-	if p.MaxOutputBytes == 0 {
-		p.MaxOutputBytes = 10 * 1024 * 1024
 	}
 	return &p, nil
 }
@@ -149,7 +135,9 @@ func NewReport(result *ScanResult, input ScanInput, toolName string, dur time.Du
 	r.RuleID = result.RuleID
 	r.Evidence = result.Evidence
 	r.Reason = result.Reason
-	r.Blocked = result.Decision == DecisionDeny
+	// Any non-allow decision (deny or ask) intercepts execution, so
+	// Blocked must reflect that contract in reports, audit logs, and spans.
+	r.Blocked = result.Decision != DecisionAllow
 
 	switch result.Decision {
 	case DecisionDeny:

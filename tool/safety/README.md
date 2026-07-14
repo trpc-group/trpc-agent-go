@@ -89,8 +89,6 @@ denied_commands:
 denied_paths:
   - ~/.ssh
   - .env
-max_timeout_seconds: 300
-max_output_bytes: 10485760
 ```
 
 ```go
