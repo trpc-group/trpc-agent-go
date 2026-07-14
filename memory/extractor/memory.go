@@ -332,7 +332,7 @@ var toolActionDescriptions = map[string]string{
 		"only to correct mistaken wording or merge a true duplicate. " +
 		"When a value, status, preference, habit, frequency, or count changes, " +
 		"add a self-contained new dated state with all identifying qualifiers " +
-		"and keep the prior state unchanged.",
+		"and the prior value when known, and keep the prior state unchanged.",
 	memory.DeleteToolName: "Delete a memory " +
 		"when the user asks to forget something, or when it is " +
 		"clearly a mistaken extraction. Do not delete useful historical states.",
@@ -548,7 +548,9 @@ Today's date is {current_date}. You MUST use this date to resolve ALL relative t
   what changed. Carry forward every unchanged entity, activity, person,
   location, unit, scope, and other qualifier supplied by the conversation or
   relevant existing memory. Never shorten a new state to only its changed
-  value or frequency if that makes the fact ambiguous on its own.
+  value or frequency if that makes the fact ambiguous on its own. When the
+  prior value is known, include the transition direction in the new memory
+  (for example, "now X, changed from Y") while retaining the prior memory.
 - **NO SUBJECT PREFIX**: Create memories as brief, concise statements that
   directly describe attributes or facts WITHOUT a subject prefix. Omit
   "User", "The user", or any equivalent pronoun/noun at the start, because
@@ -812,7 +814,7 @@ Example 9 – Changed recurring habit with historical state:
   → keep run-frequency unchanged because it answers previous-frequency
     questions. The new frequency is a changed state, not a correction, and
     its activity, group, and location must remain in the new memory.
-  → memory_add(memory="Runs with the training group at Riverside Park every other week as of 2024-08-04.",
+  → memory_add(memory="Runs with the training group at Riverside Park every other week as of 2024-08-04, changed from every week.",
      memory_kind="fact", event_time="2024-08-04",
      location="Riverside Park",
      topics=["running", "training group", "Riverside Park", "frequency"])

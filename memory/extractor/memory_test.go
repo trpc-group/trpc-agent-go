@@ -611,6 +611,7 @@ func TestExtractor_BuildSystemPrompt_WithExistingMemories(t *testing.T) {
 	assert.Contains(t, prompt, "SELF-CONTAINED STATE")
 	assert.Contains(t, prompt, "Carry forward every unchanged entity")
 	assert.Contains(t, prompt, "Riverside Park every other week as of 2024-08-04")
+	assert.Contains(t, prompt, "changed from every week")
 	assert.Contains(t, prompt, "new frequency is a changed state, not a correction")
 	assert.NotContains(t, prompt, "replacement current-state summary")
 	assert.Contains(t, prompt, "Do not only store the user's")
