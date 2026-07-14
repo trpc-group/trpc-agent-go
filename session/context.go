@@ -208,9 +208,10 @@ func (sess *Session) maskedEventsPayload() ([]byte, error) {
 
 	sess.ensureMaskedEventsFromState()
 
-	sess.EventMu.RLock()
+	// Write lock: maskedEventIDListLocked may prune stale IDs from the set.
+	sess.EventMu.Lock()
 	ids := sess.maskedEventIDListLocked()
-	sess.EventMu.RUnlock()
+	sess.EventMu.Unlock()
 
 	return marshalMaskedEventIDs(ids)
 }
@@ -251,6 +252,9 @@ func (sess *Session) ensureMaskedEventsFromStateLocked() {
 	}
 }
 
+// maskedEventIDListLocked returns current mask IDs still present in sess.Events
+// and deletes stale IDs. Caller must hold EventMu write lock — this helper mutates
+// maskedEventIDs.
 func (sess *Session) maskedEventIDListLocked() []string {
 	if len(sess.maskedEventIDs) == 0 {
 		return nil
