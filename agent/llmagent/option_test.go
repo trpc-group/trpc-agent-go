@@ -157,6 +157,18 @@ func TestWithToolResultCompactionConfig(t *testing.T) {
 	require.NotNil(t, opts.ToolResultCompactionConfig)
 }
 
+func TestWithImageURLFailureContinuationOptions(t *testing.T) {
+	opts := defaultOptions
+	require.False(t, opts.ImageURLFailureContinuation)
+	require.NotEmpty(t, DefaultImageURLFailureContinuationPlaceholder)
+
+	WithImageURLFailureContinuation(true)(&opts)
+	require.True(t, opts.ImageURLFailureContinuation)
+
+	WithImageURLFailureContinuationPlaceholder("[missing image]")(&opts)
+	require.Equal(t, "[missing image]", opts.ImageURLFailureContinuationPlaceholder)
+}
+
 func TestWithMessageFilterMode(t *testing.T) {
 	tests := []struct {
 		name                   string

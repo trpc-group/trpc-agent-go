@@ -514,6 +514,43 @@ func TestBuildRequestProcessors_EventMessageProjectorWiring(
 	require.Equal(t, "projected", got.Content)
 }
 
+func TestBuildRequestProcessors_ImageURLFailureContinuationWiring(
+	t *testing.T,
+) {
+	opts := defaultOptions
+	WithImageURLFailureContinuation(true)(&opts)
+	WithImageURLFailureContinuationPlaceholder("[missing image]")(&opts)
+
+	procs := buildRequestProcessors("tester", &opts)
+	var crp *processor.ContentRequestProcessor
+	for _, p := range procs {
+		if v, ok := p.(*processor.ContentRequestProcessor); ok {
+			crp = v
+		}
+	}
+
+	require.NotNil(t, crp)
+	require.True(t, crp.ImageURLFailureContinuation)
+	require.Equal(t, "[missing image]", crp.ImageURLFailureContinuationPlaceholder)
+}
+
+func TestBuildRequestProcessors_ImageURLFailureContinuationDefaultOff(
+	t *testing.T,
+) {
+	opts := defaultOptions
+
+	procs := buildRequestProcessors("tester", &opts)
+	var crp *processor.ContentRequestProcessor
+	for _, p := range procs {
+		if v, ok := p.(*processor.ContentRequestProcessor); ok {
+			crp = v
+		}
+	}
+
+	require.NotNil(t, crp)
+	require.False(t, crp.ImageURLFailureContinuation)
+}
+
 func TestBuildRequestProcessors_PostToolPromptInjection(t *testing.T) {
 	const (
 		systemContent = "system"

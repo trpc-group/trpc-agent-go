@@ -28,6 +28,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
 	iflow "trpc.group/trpc-go/trpc-agent-go/internal/flow"
+	"trpc.group/trpc-go/trpc-agent-go/internal/imageinput"
 	"trpc.group/trpc-go/trpc-agent-go/internal/util/message"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
@@ -226,6 +227,12 @@ type ContentRequestProcessor struct {
 	// EventMessageProjector rewrites one event-derived message before it
 	// is appended to the model request.
 	EventMessageProjector EventMessageProjector
+	// ImageURLFailureContinuation replaces session-marked unavailable historical
+	// image parts with a text placeholder in later model-facing request views.
+	ImageURLFailureContinuation bool
+	// ImageURLFailureContinuationPlaceholder overrides the unavailable image part
+	// placeholder when ImageURLFailureContinuation is enabled.
+	ImageURLFailureContinuationPlaceholder string
 	// ContextCompactionConfig controls request-side historical tool-result
 	// compaction before messages are sent to the model.
 	ContextCompactionConfig ContextCompactionConfig
@@ -475,6 +482,23 @@ func WithEventMessageProjector(
 	}
 }
 
+// WithImageURLFailureContinuation controls whether session-marked unavailable
+// historical image parts are replaced before messages are appended to later
+// requests.
+func WithImageURLFailureContinuation(enabled bool) ContentOption {
+	return func(p *ContentRequestProcessor) {
+		p.ImageURLFailureContinuation = enabled
+	}
+}
+
+// WithImageURLFailureContinuationPlaceholder sets the placeholder used for
+// session-marked unavailable image parts. Empty keeps the default placeholder.
+func WithImageURLFailureContinuationPlaceholder(placeholder string) ContentOption {
+	return func(p *ContentRequestProcessor) {
+		p.ImageURLFailureContinuationPlaceholder = placeholder
+	}
+}
+
 // WithEnableContextCompaction toggles prompt-side context compaction during
 // history projection. Historical oversized tool results can be compacted
 // regardless of whether AddSessionSummary is enabled.
@@ -678,6 +702,7 @@ func (p *ContentRequestProcessor) ProcessRequest(
 		msg := p.projectEventMessage(
 			invocation,
 			event.Event{},
+			0,
 			invocation.Message,
 		)
 		msg = annotateUserMessageWithAttachedFiles(msg)
@@ -1334,7 +1359,7 @@ func (p *ContentRequestProcessor) getIncrementMessagesAfterCutoff(
 			ev = p.convertForeignEvent(&ev)
 		}
 		if len(ev.Choices) > 0 {
-			for _, choice := range ev.Choices {
+			for choiceIndex, choice := range ev.Choices {
 				msg := choice.Message
 				// Apply reasoning content stripping based on mode.
 				msg = p.processReasoningContent(
@@ -1343,7 +1368,7 @@ func (p *ContentRequestProcessor) getIncrementMessagesAfterCutoff(
 					currentRequestID,
 					requestHasToolCalls(toolCallRequestIDs, evt.RequestID),
 				)
-				msg = p.projectEventMessage(inv, evt, msg)
+				msg = p.projectEventMessage(inv, evt, choiceIndex, msg)
 				if message.IsEmptyAssistantMessage(msg) {
 					continue
 				}
@@ -1901,12 +1926,47 @@ func (p *ContentRequestProcessor) processReasoningContent(
 func (p *ContentRequestProcessor) projectEventMessage(
 	inv *agent.Invocation,
 	evt event.Event,
+	choiceIndex int,
 	msg model.Message,
 ) model.Message {
-	if p == nil || p.EventMessageProjector == nil {
+	if p == nil {
 		return msg
 	}
-	return p.EventMessageProjector(inv, evt, msg)
+	isCurrentInvocationMessage := isCurrentInvocationMessageProjection(
+		evt,
+		inv,
+		msg,
+	)
+	if p.EventMessageProjector != nil {
+		msg = p.EventMessageProjector(inv, evt, msg)
+	}
+	if p.ImageURLFailureContinuation &&
+		inv != nil &&
+		!isCurrentInvocationMessage {
+		msg = imageinput.ProjectUnavailableImageURLs(
+			inv.Session,
+			evt,
+			choiceIndex,
+			msg,
+			p.ImageURLFailureContinuationPlaceholder,
+		)
+	}
+	return msg
+}
+
+func isCurrentInvocationMessageProjection(
+	evt event.Event,
+	inv *agent.Invocation,
+	msg model.Message,
+) bool {
+	if inv == nil || !invocationMessageEqual(inv.Message, msg) {
+		return false
+	}
+	if evt.RequestID == "" && evt.InvocationID == "" {
+		return true
+	}
+	return evt.RequestID == inv.RunOptions.RequestID &&
+		evt.InvocationID == inv.InvocationID
 }
 
 // getCurrentInvocationMessages gets messages only from the current invocation.
@@ -2022,7 +2082,7 @@ func (p *ContentRequestProcessor) projectMessagesForEvent(
 	}
 
 	var messages []model.Message
-	for _, choice := range ev.Choices {
+	for choiceIndex, choice := range ev.Choices {
 		msg := choice.Message
 		msg = p.processReasoningContent(
 			msg,
@@ -2030,7 +2090,7 @@ func (p *ContentRequestProcessor) projectMessagesForEvent(
 			currentRequestID,
 			requestHasToolCalls(toolCallRequestIDs, evt.RequestID),
 		)
-		msg = p.projectEventMessage(inv, evt, msg)
+		msg = p.projectEventMessage(inv, evt, choiceIndex, msg)
 		if message.IsEmptyAssistantMessage(msg) {
 			continue
 		}

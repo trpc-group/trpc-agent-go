@@ -134,6 +134,34 @@ model := openai.New("deepseek-v4-flash",
 // 其他平台配置类似，只需修改模型名称、BaseURL和APIKey，无需额外字段
 ```
 
+### 模型侧图片 URL 失败后的会话继续
+
+URL 形式的图片即使 Agent 运行环境可以访问，也可能在模型服务侧访问失败。框架不会替业务下载、校验、代理或存储图片；这些能力属于业务层，因为 Agent 运行环境的网络连通性与模型服务的网络连通性并不等价。
+
+LLM Agent 默认不启用图片 URL 失败后的会话继续能力。需要让同一 session 的后续请求继续推进时，业务可以显式开启。开启后，当模型调用返回图片 URL 拉取、访问或解码类错误时，框架会把匹配到的历史 URL-backed image part 位置记录到 session state。后续同一 session 的请求在构造模型请求前，只会把这些已标记的历史 image part 替换为文本占位，但不会修改原始持久化的用户事件。失败的本次模型调用不会被重试；这个选项只影响后续轮次。如果用户在后续消息里重新发送同一个图片 URL，这个当前输入会保持原样发送。
+
+```go
+agent := llmagent.New(
+    "vision-agent",
+    llmagent.WithModel(openai.New(os.Getenv("MODEL_NAME"))),
+    llmagent.WithImageURLFailureContinuation(true),
+    llmagent.WithImageURLFailureContinuationPlaceholder(
+        "[Image unavailable: the model could not access the earlier image URL.]",
+    ),
+)
+```
+
+如果业务层希望完全自行处理失败图片 URL，保持默认配置即可：
+
+```go
+agent := llmagent.New(
+    "vision-agent",
+    llmagent.WithModel(openai.New(os.Getenv("MODEL_NAME"))),
+)
+```
+
+这个会话继续能力刻意保持收敛：它只响应看起来与图片相关的模型错误，并且只改变后续发送给模型的请求视图。它不会修复 URL、拉取图片，也不会从 session 中删除原始事件。
+
 ## 核心接口设计
 
 ### Model 接口

@@ -275,6 +275,7 @@ func New(name string, opts ...Option) *LLMAgent {
 		SyncSummaryIntraRun:             options.SyncSummaryIntraRun,
 		EnableContextCompaction:         options.EnableContextCompaction,
 		ContextCompactionThresholdRatio: options.ContextCompactionThresholdRatio,
+		ImageURLFailureContinuation:     options.ImageURLFailureContinuation,
 	}
 	if len(options.toolActivationRules) > 0 {
 		flowOpts.ToolActivationApplier = a.applyToolActivation
@@ -468,6 +469,12 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 		),
 		processor.WithPreloadSessionRecallSearchMode(
 			options.PreloadSessionRecallSearchMode,
+		),
+		processor.WithImageURLFailureContinuation(
+			options.ImageURLFailureContinuation,
+		),
+		processor.WithImageURLFailureContinuationPlaceholder(
+			options.ImageURLFailureContinuationPlaceholder,
 		),
 		processor.WithEventMessageProjector(
 			processor.EventMessageProjector(

@@ -29,6 +29,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/toolsnapshot"
+	"trpc.group/trpc-go/trpc-agent-go/internal/imageinput"
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonmap"
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonrepair"
 	"trpc.group/trpc-go/trpc-agent-go/internal/modelcontext"
@@ -88,6 +89,7 @@ type Options struct {
 	EnableContextCompaction         bool
 	ContextCompactionThresholdRatio float64
 	ToolActivationApplier           ToolActivationApplier
+	ImageURLFailureContinuation     bool
 }
 
 // ToolActivationApplier applies invocation-specific tool activation.
@@ -120,6 +122,7 @@ type Flow struct {
 	enableContextCompaction         bool
 	contextCompactionThresholdRatio float64
 	toolActivationApplier           ToolActivationApplier
+	imageURLFailureContinuation     bool
 }
 
 type contextCompactionTailProcessor interface {
@@ -155,15 +158,16 @@ func New(
 	opts Options,
 ) *Flow {
 	return &Flow{
-		requestProcessors:       requestProcessors,
-		responseProcessors:      responseProcessors,
-		channelBufferSize:       opts.ChannelBufferSize,
-		modelCallbacks:          opts.ModelCallbacks,
-		baseModelResolver:       opts.BaseModelResolver,
-		modelSelector:           opts.ModelSelector,
-		syncSummaryIntraRun:     opts.SyncSummaryIntraRun,
-		enableContextCompaction: opts.EnableContextCompaction,
-		toolActivationApplier:   opts.ToolActivationApplier,
+		requestProcessors:           requestProcessors,
+		responseProcessors:          responseProcessors,
+		channelBufferSize:           opts.ChannelBufferSize,
+		modelCallbacks:              opts.ModelCallbacks,
+		baseModelResolver:           opts.BaseModelResolver,
+		modelSelector:               opts.ModelSelector,
+		syncSummaryIntraRun:         opts.SyncSummaryIntraRun,
+		enableContextCompaction:     opts.EnableContextCompaction,
+		toolActivationApplier:       opts.ToolActivationApplier,
+		imageURLFailureContinuation: opts.ImageURLFailureContinuation,
 		contextCompactionThresholdRatio: normalizeContextCompactionThresholdRatio(
 			opts.ContextCompactionThresholdRatio,
 		),
@@ -711,6 +715,7 @@ func (f *Flow) runOneStep(
 	// 2. Call LLM (get response sequence).
 	ctx, responseSeq, err := f.callLLM(ctx, invocation, llmRequest, callModel)
 	if err != nil {
+		f.maybeMarkUnavailableImageURLs(ctx, invocation, llmRequest, err, nil)
 		agent.FinishExecutionTraceStep(invocation, stepID, nil, err)
 		return nil, err
 	}
@@ -929,6 +934,15 @@ func (p *streamingResponseProcessor) process(
 	response = p.applyCallbackResponse(response, customResp, callbackTimingAttachment)
 	responseusage.AttachTiming(response, p.timingInfo, &p.partialUsageState)
 	p.repairToolCallArguments(response)
+	if response != nil && response.Error != nil {
+		p.flow.maybeMarkUnavailableImageURLs(
+			p.ctx,
+			eventInvocation,
+			p.llmRequest,
+			response.Error,
+			response.Error,
+		)
+	}
 	llmResponseEvent := p.emitLLMResponse(
 		eventInvocation,
 		response,
@@ -979,6 +993,41 @@ func (p *streamingResponseProcessor) recordResponseStats(response *model.Respons
 	}
 	if response.IsToolCallResponse() || response.IsToolResultResponse() {
 		p.toolResponseCount++
+	}
+}
+
+func (f *Flow) maybeMarkUnavailableImageURLs(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	llmRequest *model.Request,
+	err error,
+	respErr *model.ResponseError,
+) {
+	if f == nil || !f.imageURLFailureContinuation ||
+		!imageinput.IsImageURLFailureForRequest(err, respErr, llmRequest) {
+		return
+	}
+	count, markErr := imageinput.MarkUnavailableImageURLsFromRequest(
+		ctx,
+		invocation,
+		llmRequest,
+		err,
+		respErr,
+	)
+	if markErr != nil {
+		log.WarnfContext(
+			ctx,
+			"mark unavailable image URLs failed: %v",
+			markErr,
+		)
+		return
+	}
+	if count > 0 {
+		log.DebugfContext(
+			ctx,
+			"marked %d unavailable image URL(s) for later session continuation",
+			count,
+		)
 	}
 }
 

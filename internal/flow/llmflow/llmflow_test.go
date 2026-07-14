@@ -30,6 +30,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
+	"trpc.group/trpc-go/trpc-agent-go/internal/imageinput"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/steer"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryfork"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
@@ -1992,6 +1993,7 @@ func runInvocationWithUserMessage(m model.Model, opts ...agent.InvocationOptions
 // mockModel implements model.Model for testing
 type mockModel struct {
 	ShouldError bool
+	Err         error
 	responses   []*model.Response
 	currentIdx  int
 	mu          sync.Mutex
@@ -2055,6 +2057,9 @@ func (m *mockModel) Info() model.Info {
 
 func (m *mockModel) GenerateContent(ctx context.Context, req *model.Request) (<-chan *model.Response, error) {
 	if m.ShouldError {
+		if m.Err != nil {
+			return nil, m.Err
+		}
 		return nil, errors.New("mock model error")
 	}
 	m.recordRequest(req)
@@ -3556,6 +3561,92 @@ func TestFlow_callLLM_ModelError(t *testing.T) {
 	_, ch, err := f.callLLM(context.Background(), inv, req, inv.Model)
 	require.Error(t, err)
 	require.Nil(t, ch)
+}
+
+func TestFlow_RunOneStep_MarksImageURLOnModelError(t *testing.T) {
+	const imageURL = "https://example.invalid/image.png"
+	msg := model.NewUserMessage("look at this")
+	msg.AddImageURL(imageURL, "auto")
+	sess := &session.Session{
+		ID:      "sess",
+		AppName: "app",
+		UserID:  "user",
+		Events: []event.Event{*event.NewResponseEvent(
+			"inv",
+			"user",
+			&model.Response{
+				Choices: []model.Choice{{Message: msg}},
+			},
+		)},
+	}
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationMessage(msg),
+		agent.WithInvocationModel(&mockModel{
+			ShouldError: true,
+			Err:         errors.New("400 failed to fetch image url"),
+		}),
+	)
+	inv.InvocationID = "inv"
+	inv.RunOptions.RequestID = "req"
+	f := New(
+		[]flow.RequestProcessor{&seedMessagesRequestProcessor{
+			messages: []model.Message{msg},
+		}},
+		nil,
+		Options{ImageURLFailureContinuation: true},
+	)
+
+	_, err := f.runOneStep(context.Background(), inv, make(chan *event.Event, 8))
+
+	require.Error(t, err)
+	require.Contains(t, imageinput.UnavailableImageURLSet(sess), imageURL)
+}
+
+func TestFlow_RunOneStep_MarksImageURLOnResponseError(t *testing.T) {
+	const imageURL = "https://example.invalid/image.png"
+	msg := model.NewUserMessage("look at this")
+	msg.AddImageURL(imageURL, "auto")
+	sess := &session.Session{
+		ID:      "sess",
+		AppName: "app",
+		UserID:  "user",
+		Events: []event.Event{*event.NewResponseEvent(
+			"inv",
+			"user",
+			&model.Response{
+				Choices: []model.Choice{{Message: msg}},
+			},
+		)},
+	}
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationMessage(msg),
+		agent.WithInvocationModel(&mockModel{
+			responses: []*model.Response{{
+				Done: true,
+				Error: &model.ResponseError{
+					Message: "failed to fetch image url",
+					Type:    model.ErrorTypeAPIError,
+				},
+			}},
+		}),
+	)
+	inv.InvocationID = "inv"
+	inv.RunOptions.RequestID = "req"
+	f := New(
+		[]flow.RequestProcessor{&seedMessagesRequestProcessor{
+			messages: []model.Message{msg},
+		}},
+		nil,
+		Options{ImageURLFailureContinuation: true},
+	)
+
+	lastEvent, err := f.runOneStep(context.Background(), inv, make(chan *event.Event, 8))
+
+	require.NoError(t, err)
+	require.NotNil(t, lastEvent)
+	require.Contains(t, imageinput.UnavailableImageURLSet(sess), imageURL)
 }
 
 func TestFlow_RunOneStep_ModelSelectorSelectsBeforePreprocess(t *testing.T) {

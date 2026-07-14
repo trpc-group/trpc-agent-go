@@ -18,6 +18,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
+	"trpc.group/trpc-go/trpc-agent-go/internal/imageinput"
 	"trpc.group/trpc-go/trpc-agent-go/internal/skillprofile"
 	"trpc.group/trpc-go/trpc-agent-go/internal/structuredoutput"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
@@ -150,6 +151,12 @@ type EventMessageProjector func(
 	evt event.Event,
 	msg model.Message,
 ) model.Message
+
+const (
+	// DefaultImageURLFailureContinuationPlaceholder is the default text used
+	// in later model requests after a prior model-side image URL failure.
+	DefaultImageURLFailureContinuationPlaceholder = imageinput.DefaultUnavailableImageURLPlaceholder
+)
 
 // ToolResultCompactionSkipRecentFunc determines how many recent events should
 // be protected from historical tool-result compaction.
@@ -438,6 +445,13 @@ type Options struct {
 	// EventMessageProjector rewrites one event-derived message before it
 	// is appended to the model request.
 	EventMessageProjector EventMessageProjector
+	// ImageURLFailureContinuation records model-side image URL failures in
+	// session state so later turns can continue without re-sending failed
+	// historical image parts.
+	ImageURLFailureContinuation bool
+	// ImageURLFailureContinuationPlaceholder overrides the text used when a
+	// failed image part is projected into later model requests.
+	ImageURLFailureContinuationPlaceholder string
 	// StructuredOutput defines how the model should produce structured output in normal runs.
 	StructuredOutput *model.StructuredOutput
 	// StructuredOutputType is the reflect.Type of the example pointer used to generate the schema.
@@ -1804,6 +1818,25 @@ func WithEventMessageProjector(
 ) Option {
 	return func(opts *Options) {
 		opts.EventMessageProjector = projector
+	}
+}
+
+// WithImageURLFailureContinuation records model-side image URL access/decode
+// failures so later turns in the same session can continue without re-sending
+// failed historical image parts. It does not retry the failed model call. Disabled by
+// default.
+func WithImageURLFailureContinuation(enabled bool) Option {
+	return func(opts *Options) {
+		opts.ImageURLFailureContinuation = enabled
+	}
+}
+
+// WithImageURLFailureContinuationPlaceholder sets the placeholder used in later
+// model request views for image parts that previously failed at the model
+// service. Empty keeps DefaultImageURLFailureContinuationPlaceholder.
+func WithImageURLFailureContinuationPlaceholder(placeholder string) Option {
+	return func(opts *Options) {
+		opts.ImageURLFailureContinuationPlaceholder = placeholder
 	}
 }
 
