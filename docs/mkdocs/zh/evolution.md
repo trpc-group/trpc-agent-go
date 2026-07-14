@@ -180,9 +180,16 @@ func (e *benchmarkEvaluator) Evaluate(
 }
 ```
 
-创建并运行优化器：
+revision submission 是独立于异步 session learning 的可选能力。默认 service 实现了
+`evolution.RevisionSubmitter`，但自定义 `evolution.Service` 可以不实现。应用应当在
+装配阶段只解析一次该能力，这样配置错误会在开始优化前暴露：
 
 ```go
+revisionSubmitter, ok := evoSvc.(evolution.RevisionSubmitter)
+if !ok {
+    return fmt.Errorf("evolution service does not support revision submission")
+}
+
 optimizer, err := optimization.New(
     reflectionModel,
     evaluator,
@@ -190,7 +197,7 @@ optimizer, err := optimization.New(
     optimization.WithReflectionBatchSize(3),
     optimization.WithRandomSeed(7),
     optimization.WithStoreDir("./evolution/experiments"),
-    optimization.WithEvolutionService(evoSvc),
+    optimization.WithRevisionSubmitter(revisionSubmitter),
 )
 if err != nil {
     return err
@@ -219,6 +226,8 @@ fmt.Printf("selected skill %q; validation=%.3f holdout=%.3f; promote=%t (%s)\n",
     result.PromotionReason,
 )
 ```
+
+optimizer 只借用 submitter；`evoSvc` 的生命周期仍由应用管理并显式关闭。
 
 三个 split 的 case ID 不能重复，score 必须是 `[0,1]` 内的有限数值。提交 revision
 即使 `Submit=false`，结果也会填充 `PromotionEligible` 和 `PromotionReason`，调用方

@@ -122,8 +122,8 @@ func (o *Optimizer) validateRun(req Request) error {
 	if err := validateRequest(req); err != nil {
 		return fmt.Errorf("evolution optimization: %w", err)
 	}
-	if req.Submit && o.opts.evolutionService == nil {
-		return errors.New("evolution optimization: submission requested without an evolution service")
+	if req.Submit && o.opts.revisionSubmitter == nil {
+		return errors.New("evolution optimization: submission requested without a revision submitter")
 	}
 	return nil
 }
@@ -531,7 +531,7 @@ func (o *Optimizer) submitCandidate(
 		return nil
 	}
 	delta := result.CandidateHoldout.Score - result.BaselineHoldout.Score
-	revision, err := evolution.SubmitRevision(ctx, o.opts.evolutionService, evolution.RevisionRequest{
+	revision, err := o.opts.revisionSubmitter.SubmitRevision(ctx, evolution.RevisionRequest{
 		Scope:    req.Scope,
 		Source:   "genetic-pareto:" + result.ExperimentID,
 		Action:   evolution.RevisionActionUpdate,

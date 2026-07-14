@@ -32,27 +32,15 @@ type RevisionRequest struct {
 	Evidence *RevisionEvidence
 }
 
-type revisionSubmitter interface {
+// RevisionSubmitter accepts externally evaluated skill candidates and sends
+// them through revision validation, quality gates, and approval. It is kept
+// separate from Service because session learning and revision submission are
+// independent capabilities.
+type RevisionSubmitter interface {
 	SubmitRevision(context.Context, RevisionRequest) (*Revision, error)
 }
 
-// SubmitRevision submits an evaluated candidate through the optional
-// submission capability implemented by NewService. Keeping this capability
-// outside Service preserves compatibility with custom Service implementations.
-func SubmitRevision(
-	ctx context.Context,
-	svc Service,
-	req RevisionRequest,
-) (*Revision, error) {
-	if svc == nil {
-		return nil, errors.New("evolution: submit revision: nil service")
-	}
-	submitter, ok := svc.(revisionSubmitter)
-	if !ok {
-		return nil, errors.New("evolution: submit revision: service does not support submissions")
-	}
-	return submitter.SubmitRevision(ctx, req)
-}
+var _ RevisionSubmitter = (*service)(nil)
 
 func (s *service) SubmitRevision(
 	ctx context.Context,

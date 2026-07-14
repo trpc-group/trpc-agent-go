@@ -123,7 +123,7 @@ type options struct {
 	randomSeed                int64
 	timeLimit                 time.Duration
 	storeDir                  string
-	evolutionService          evolution.Service
+	revisionSubmitter         evolution.RevisionSubmitter
 	minimumHoldoutImprovement float64
 }
 
@@ -171,10 +171,11 @@ func WithStoreDir(dir string) Option {
 	return func(o *options) { o.storeDir = dir }
 }
 
-// WithEvolutionService enables optional submission into the existing
-// revision, gate, approval, publish, and rollback lifecycle.
-func WithEvolutionService(svc evolution.Service) Option {
-	return func(o *options) { o.evolutionService = svc }
+// WithRevisionSubmitter enables optional submission into a revision
+// governance lifecycle. The optimizer borrows submitter and does not manage
+// its lifecycle.
+func WithRevisionSubmitter(submitter evolution.RevisionSubmitter) Option {
+	return func(o *options) { o.revisionSubmitter = submitter }
 }
 
 // WithMinimumHoldoutImprovement sets the required absolute paired holdout

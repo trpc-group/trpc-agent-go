@@ -67,6 +67,19 @@ type stagedEvaluator struct {
 	base   scoringEvaluator
 }
 
+type recordingRevisionSubmitter struct {
+	delegate evolution.RevisionSubmitter
+	requests []evolution.RevisionRequest
+}
+
+func (s *recordingRevisionSubmitter) SubmitRevision(
+	ctx context.Context,
+	req evolution.RevisionRequest,
+) (*evolution.Revision, error) {
+	s.requests = append(s.requests, req)
+	return s.delegate.SubmitRevision(ctx, req)
+}
+
 func (e *stagedEvaluator) Evaluate(
 	ctx context.Context,
 	spec *evolution.SkillSpec,
@@ -223,7 +236,10 @@ func TestOptimizerSubmitsImprovedCandidateForApproval(t *testing.T) {
 	opts := defaultOptions()
 	opts.maxIterations = 1
 	opts.reflectionBatchSize = 2
-	opts.evolutionService = svc
+	submitter, ok := svc.(evolution.RevisionSubmitter)
+	require.True(t, ok)
+	recordingSubmitter := &recordingRevisionSubmitter{delegate: submitter}
+	WithRevisionSubmitter(recordingSubmitter)(&opts)
 	optimizer := &Optimizer{
 		reflector: improvingReflector{},
 		evaluator: evaluator,
@@ -246,6 +262,8 @@ func TestOptimizerSubmitsImprovedCandidateForApproval(t *testing.T) {
 	assert.Equal(t, "rev-parent", result.Revision.ParentID)
 	assert.Equal(t, result.ExperimentID, result.Revision.Evidence.ExperimentID)
 	assert.Contains(t, result.SubmissionReason, "pending_approval")
+	require.Len(t, recordingSubmitter.requests, 1)
+	assert.Equal(t, "rev-parent", recordingSubmitter.requests[0].ParentID)
 
 	stored, err := store.ReadRevision(
 		context.Background(), result.Revision.SkillID, result.Revision.RevisionID,
@@ -327,7 +345,7 @@ func TestOptimizerReturnsFatalInitializationAndEvaluationErrors(t *testing.T) {
 			Holdout:    makeCases("holdout", 10),
 		},
 	})
-	require.ErrorContains(t, err, "without an evolution service")
+	require.ErrorContains(t, err, "without a revision submitter")
 
 	seedFailure := &stagedEvaluator{failAt: 1}
 	optimizer = &Optimizer{reflector: improvingReflector{}, evaluator: seedFailure, opts: defaultOptions()}

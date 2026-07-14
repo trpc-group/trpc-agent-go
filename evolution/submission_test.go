@@ -35,13 +35,12 @@ func (p *submissionPublisher) UpsertSkill(context.Context, *SkillSpec) error {
 
 func (*submissionPublisher) DeleteSkill(context.Context, string) error { return nil }
 
-type serviceWithoutSubmission struct{}
-
-func (serviceWithoutSubmission) EnqueueLearningJob(context.Context, LearningJob) error {
-	return nil
+func revisionSubmitterForTest(t *testing.T, svc Service) RevisionSubmitter {
+	t.Helper()
+	submitter, ok := svc.(RevisionSubmitter)
+	require.True(t, ok)
+	return submitter
 }
-
-func (serviceWithoutSubmission) Close() error { return nil }
 
 func TestSubmitRevisionHoldsEvaluatedCandidateForApproval(t *testing.T) {
 	ctx := context.Background()
@@ -78,7 +77,7 @@ func TestSubmitRevisionHoldsEvaluatedCandidateForApproval(t *testing.T) {
 		CaseCount:      10,
 		Objectives:     map[string]float64{"correctness": 0.9},
 	}
-	rev, err := SubmitRevision(ctx, svc, RevisionRequest{
+	rev, err := revisionSubmitterForTest(t, svc).SubmitRevision(ctx, RevisionRequest{
 		Source:   "genetic-pareto:experiment-1",
 		Action:   RevisionActionUpdate,
 		ParentID: "rev-parent",
@@ -121,7 +120,7 @@ func TestSubmitRevisionPersistsAutomaticGateRejection(t *testing.T) {
 	)
 	t.Cleanup(func() { require.NoError(t, svc.Close()) })
 
-	rev, err := SubmitRevision(ctx, svc, RevisionRequest{
+	rev, err := revisionSubmitterForTest(t, svc).SubmitRevision(ctx, RevisionRequest{
 		Spec: &SkillSpec{
 			Name:        "Invalid Candidate",
 			Description: "Only one step.",
@@ -139,16 +138,10 @@ func TestSubmitRevisionPersistsAutomaticGateRejection(t *testing.T) {
 	assert.Equal(t, RevisionRejected, stored.Status)
 }
 
-func TestSubmitRevisionRequiresOptionalCapabilityAndStore(t *testing.T) {
-	_, err := SubmitRevision(context.Background(), nil, RevisionRequest{})
-	require.ErrorContains(t, err, "nil service")
-
-	_, err = SubmitRevision(context.Background(), serviceWithoutSubmission{}, RevisionRequest{})
-	require.ErrorContains(t, err, "does not support submissions")
-
+func TestSubmitRevisionRequiresStore(t *testing.T) {
 	svc := NewService(nil)
 	t.Cleanup(func() { require.NoError(t, svc.Close()) })
-	_, err = SubmitRevision(context.Background(), svc, RevisionRequest{
+	_, err := revisionSubmitterForTest(t, svc).SubmitRevision(context.Background(), RevisionRequest{
 		Spec: &SkillSpec{
 			Name:        "No Store",
 			Description: "No candidate store configured.",
@@ -160,14 +153,15 @@ func TestSubmitRevisionRequiresOptionalCapabilityAndStore(t *testing.T) {
 }
 
 func TestSubmitRevisionValidatesRequestAndServiceState(t *testing.T) {
-	_, err := SubmitRevision(context.Background(), &service{}, RevisionRequest{})
+	_, err := (&service{}).SubmitRevision(context.Background(), RevisionRequest{})
 	require.ErrorContains(t, err, "service is not initialized")
 
 	svc := NewService(nil)
 	t.Cleanup(func() { require.NoError(t, svc.Close()) })
-	_, err = SubmitRevision(context.Background(), svc, RevisionRequest{})
+	submitter := revisionSubmitterForTest(t, svc)
+	_, err = submitter.SubmitRevision(context.Background(), RevisionRequest{})
 	require.ErrorContains(t, err, "nil skill spec")
-	_, err = SubmitRevision(context.Background(), svc, RevisionRequest{
+	_, err = submitter.SubmitRevision(context.Background(), RevisionRequest{
 		Action: RevisionActionDelete,
 		Spec: &SkillSpec{
 			Name:        "Unsupported Action",
@@ -244,7 +238,7 @@ func TestSubmitRevisionRequiresScopeForScopedService(t *testing.T) {
 	)
 	t.Cleanup(func() { require.NoError(t, svc.Close()) })
 
-	_, err := SubmitRevision(context.Background(), svc, RevisionRequest{
+	_, err := revisionSubmitterForTest(t, svc).SubmitRevision(context.Background(), RevisionRequest{
 		Spec: &SkillSpec{
 			Name:        "Scoped Skill",
 			Description: "Requires an app scope.",
@@ -295,14 +289,15 @@ func TestSubmitRevisionRejectsInvalidLineage(t *testing.T) {
 		Steps:       []string{"First.", "Second."},
 	}
 
-	_, err := SubmitRevision(context.Background(), svc, RevisionRequest{
+	submitter := revisionSubmitterForTest(t, svc)
+	_, err := submitter.SubmitRevision(context.Background(), RevisionRequest{
 		Action:   RevisionActionUpdate,
 		ParentID: "missing-parent",
 		Spec:     spec,
 	})
 	require.ErrorContains(t, err, "does not exist")
 
-	_, err = SubmitRevision(context.Background(), svc, RevisionRequest{
+	_, err = submitter.SubmitRevision(context.Background(), RevisionRequest{
 		Action:   RevisionActionCreate,
 		ParentID: "unexpected-parent",
 		Spec:     spec,

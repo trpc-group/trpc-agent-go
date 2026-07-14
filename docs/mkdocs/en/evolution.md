@@ -184,9 +184,18 @@ func (e *benchmarkEvaluator) Evaluate(
 }
 ```
 
-Create and run the optimizer:
+Revision submission is a separate optional capability from asynchronous session
+learning. The default service implements `evolution.RevisionSubmitter`, while a
+custom `evolution.Service` may omit it. Resolve that capability once during
+application wiring so a configuration error is found before an optimization
+run starts:
 
 ```go
+revisionSubmitter, ok := evoSvc.(evolution.RevisionSubmitter)
+if !ok {
+    return fmt.Errorf("evolution service does not support revision submission")
+}
+
 optimizer, err := optimization.New(
     reflectionModel,
     evaluator,
@@ -194,7 +203,7 @@ optimizer, err := optimization.New(
     optimization.WithReflectionBatchSize(3),
     optimization.WithRandomSeed(7),
     optimization.WithStoreDir("./evolution/experiments"),
-    optimization.WithEvolutionService(evoSvc),
+    optimization.WithRevisionSubmitter(revisionSubmitter),
 )
 if err != nil {
     return err
@@ -223,6 +232,9 @@ fmt.Printf("selected skill %q; validation=%.3f holdout=%.3f; promote=%t (%s)\n",
     result.PromotionReason,
 )
 ```
+
+The optimizer borrows the submitter. The application still owns and closes
+`evoSvc`.
 
 Case IDs must be unique across splits. Scores must be finite and normalized to
 `[0,1]`. `PromotionEligible` and `PromotionReason` are populated even when

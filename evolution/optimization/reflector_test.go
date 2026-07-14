@@ -199,7 +199,7 @@ func TestNewValidatesOnlyUserFacingDependenciesAndOptions(t *testing.T) {
 		WithMaxMetricCalls(50),
 		WithTimeLimit(0),
 		WithStoreDir(t.TempDir()),
-		WithEvolutionService(nil),
+		WithRevisionSubmitter(nil),
 		WithMinimumHoldoutImprovement(0.1),
 		WithRandomSeed(9),
 	)
