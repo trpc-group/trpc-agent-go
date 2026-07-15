@@ -57,6 +57,9 @@ The built-in content extractor currently provided in this repository is `Docling
 
 If you want to try it locally, you can start `Docling Serve` with Docker:
 
+[Docling Serve](https://github.com/docling-project/docling-serve) provides the
+HTTP service used by this Extractor.
+
 ```bash
 docker run -p 5001:5001 ghcr.io/docling-project/docling-serve
 ```

@@ -57,6 +57,9 @@ URL -> 下载响应体 -> Extractor -> markdown -> Markdown Reader -> MarkdownCh
 
 如果你想在本地快速体验，可以直接用 Docker 启动 `Docling Serve`：
 
+[Docling Serve](https://github.com/docling-project/docling-serve) 提供该
+Extractor 调用的 HTTP 服务。
+
 ```bash
 docker run -p 5001:5001 ghcr.io/docling-project/docling-serve
 ```
