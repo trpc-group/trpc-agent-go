@@ -473,25 +473,26 @@ func TestA2AAgent_AnonymousCookiesSerializeConcurrentInitialAcquisition(t *testi
 		CreatedAt: createdAt,
 	}
 
-	runAnonymous := func(invocationID string) {
-		t.Helper()
+	runAnonymous := func(invocationID string) error {
 		eventChan, runErr := a.Run(context.Background(), &agent.Invocation{
 			InvocationID: invocationID,
 			Session:      sess,
 			Message:      model.NewUserMessage("test message"),
 		})
-		require.NoError(t, runErr)
+		if runErr != nil {
+			return runErr
+		}
 		for evt := range eventChan {
-			if evt != nil && evt.Response != nil {
-				require.Nil(t, evt.Response.Error)
+			if evt != nil && evt.Response != nil && evt.Response.Error != nil {
+				return fmt.Errorf("response error: %v", evt.Response.Error)
 			}
 		}
+		return nil
 	}
 
-	firstDone := make(chan struct{})
+	firstDone := make(chan error, 1)
 	go func() {
-		defer close(firstDone)
-		runAnonymous("first")
+		firstDone <- runAnonymous("first")
 	}()
 	select {
 	case <-firstRequestStarted:
@@ -499,10 +500,9 @@ func TestA2AAgent_AnonymousCookiesSerializeConcurrentInitialAcquisition(t *testi
 		t.Fatal("first anonymous request did not start")
 	}
 
-	secondDone := make(chan struct{})
+	secondDone := make(chan error, 1)
 	go func() {
-		defer close(secondDone)
-		runAnonymous("second")
+		secondDone <- runAnonymous("second")
 	}()
 	select {
 	case <-secondRequestObserved:
@@ -510,12 +510,14 @@ func TestA2AAgent_AnonymousCookiesSerializeConcurrentInitialAcquisition(t *testi
 	}
 	close(releaseFirstRequest)
 	select {
-	case <-firstDone:
+	case err := <-firstDone:
+		require.NoError(t, err)
 	case <-time.After(time.Second):
 		t.Fatal("first anonymous request did not finish")
 	}
 	select {
-	case <-secondDone:
+	case err := <-secondDone:
+		require.NoError(t, err)
 	case <-time.After(time.Second):
 		t.Fatal("second anonymous request did not finish")
 	}
@@ -1151,6 +1153,8 @@ func TestAnonymousCookieStateRejectsInvalidValues(t *testing.T) {
 	_, ok = state.load()
 	require.False(t, ok)
 	state.capture("not-anonymous")
+	_, stored := state.session.GetState(state.key)
+	require.False(t, stored)
 
 	state.session.SetState(state.key, []byte("invalid-cookie"))
 	_, ok = state.load()
