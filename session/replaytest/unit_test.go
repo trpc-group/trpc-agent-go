@@ -13,7 +13,9 @@ package replaytest
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -22,11 +24,17 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/alicebob/miniredis/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	chstorage "trpc.group/trpc-go/trpc-agent-go/storage/clickhouse"
+	mystorage "trpc.group/trpc-go/trpc-agent-go/storage/mysql"
+	pgstorage "trpc.group/trpc-go/trpc-agent-go/storage/postgres"
 )
 
 // --- IDAliasMap tests ---
@@ -5368,6 +5376,9 @@ func TestHarness_RunSuite_ReportSuiteDuration(t *testing.T) {
 			Run: func(ctx context.Context, backend Backend) error {
 				backend.SessKey = func() session.Key { return key }
 				backend.Sess.CreateSession(ctx, key, nil)
+				// Sleep briefly to ensure SuiteDuration is measurable across
+				// platforms with coarse clock resolution (e.g. Windows ~15ms).
+				time.Sleep(20 * time.Millisecond)
 				return nil
 			},
 		},
@@ -5526,4 +5537,870 @@ func TestFactory_DefaultWarmUp_Success(t *testing.T) {
 	backend := inMemoryFactory{}.Create(context.Background(), t)
 	err := defaultWarmUp(context.Background(), *backend)
 	assert.NoError(t, err)
+}
+
+// --- External factory Create coverage tests ---
+
+// TestFactory_RedisFactory_Create_WithMiniredis covers the full Create path
+// of redisFactory by using an in-process miniredis server. This exercises
+// service creation, cleanup registration, Backend construction, Probe, and WarmUp.
+func TestFactory_RedisFactory_Create_WithMiniredis(t *testing.T) {
+	mr, err := miniredis.Run()
+	require.NoError(t, err)
+	defer mr.Close()
+
+	t.Setenv("TRPC_AGENT_REPLAY_REDIS_URL", "redis://"+mr.Addr())
+
+	b := redisFactory{}.Create(context.Background(), t)
+	require.NotNil(t, b)
+	assert.Equal(t, "redis", b.Name)
+	require.NotNil(t, b.Sess)
+	require.NotNil(t, b.Track)
+	require.NotNil(t, b.Mem)
+	require.NotNil(t, b.SessKey)
+	require.NotNil(t, b.Probe)
+	require.NotNil(t, b.WarmUp)
+
+	// Probe should succeed against miniredis.
+	ctx := context.Background()
+	assert.NoError(t, b.Probe(ctx))
+
+	// WarmUp should succeed against miniredis (create → get → delete).
+	assert.NoError(t, b.WarmUp(ctx, *b))
+}
+
+// TestFactory_FakeSummarizer_SetPromptSetModel covers the SetPrompt and
+// SetModel methods of fakeSummarizer which are no-ops but required by the
+// summary.SessionSummarizer interface.
+func TestFactory_FakeSummarizer_SetPromptSetModel(t *testing.T) {
+	s := &fakeSummarizer{}
+	s.SetPrompt("test-prompt")
+	s.SetModel(nil)
+	// These are no-ops; the test just exercises the methods for coverage.
+	assert.Nil(t, s.Metadata())
+}
+
+// --- WriteReport additional coverage tests ---
+
+// TestHarness_WriteReport_EmptyVersion covers the path where report.Version
+// is empty and gets defaulted to "v2".
+func TestHarness_WriteReport_EmptyVersion(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "report.json")
+	err := WriteReport(path, Report{RunID: "test-run"})
+	require.NoError(t, err)
+
+	// Read back and verify version was set.
+	report, err := ReadReportWithVerify(path)
+	require.NoError(t, err)
+	assert.Equal(t, "v2", report.Version)
+}
+
+// TestHarness_WriteReport_MarshalError covers the JSON marshal error path
+// by passing a report with an unmarshallable field.
+func TestHarness_WriteReport_MarshalError(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "report.json")
+	// A channel cannot be marshaled to JSON.
+	report := Report{
+		Version: "v2",
+		Cases: []CaseResult{
+			{PanicRecovered: make(chan int)},
+		},
+	}
+	err := WriteReport(path, report)
+	assert.Error(t, err)
+}
+
+// TestHarness_WriteReport_MkdirError covers the directory creation error path.
+func TestHarness_WriteReport_MkdirError(t *testing.T) {
+	// Use a NUL byte in path to trigger mkdir error on all platforms.
+	err := WriteReport("invalid\x00dir\x00/report.json", Report{Version: "v2"})
+	assert.Error(t, err)
+}
+
+// TestHarness_WriteReport_TempFileError covers the temp file creation error
+// path by pointing to a directory that doesn't exist and can't be created.
+func TestHarness_WriteReport_TempFileError(t *testing.T) {
+	// On Windows, a path with a colon in a directory component is invalid.
+	// On Linux/macOS, a path under a non-existent deeply nested path that
+	// MkdirAll fails on (e.g., /proc/...) triggers the error.
+	// Using NUL byte is the most portable way.
+	err := WriteReport("invalid\x00name/report.json", Report{Version: "v2"})
+	assert.Error(t, err)
+}
+
+// TestHarness_WriteReport_SuccessAndReadBack covers the full happy path
+// of WriteReport including fsync, close, and rename, then reads it back.
+func TestHarness_WriteReport_SuccessAndReadBack(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "subdir", "report.json")
+
+	report := Report{
+		Version:  "v2",
+		RunID:    "run-123",
+		Backends: []string{"inmemory", "sqlite"},
+		Summary: ReportSummary{
+			TotalCases:   5,
+			PassedCases:  4,
+			FailedCases:  1,
+			SkippedCases: 0,
+		},
+		Cases: []CaseResult{
+			{Name: "case1", Status: StatusPass, Duration: "1ms"},
+			{Name: "case2", Status: StatusFail, Duration: "2ms"},
+		},
+	}
+	err := WriteReport(path, report)
+	require.NoError(t, err)
+
+	// Verify file exists.
+	_, err = os.Stat(path)
+	require.NoError(t, err)
+
+	// Read back with checksum verification.
+	readBack, err := ReadReportWithVerify(path)
+	require.NoError(t, err)
+	assert.Equal(t, "v2", readBack.Version)
+	assert.Equal(t, "run-123", readBack.RunID)
+	assert.Equal(t, 5, readBack.Summary.TotalCases)
+	require.Len(t, readBack.Cases, 2)
+	assert.Equal(t, "case1", readBack.Cases[0].Name)
+}
+
+// TestHarness_ReadReport_Success covers the ReadReport function (without
+// checksum verification) on a file written by WriteReport.
+func TestHarness_ReadReport_Success(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "report.json")
+
+	err := WriteReport(path, Report{Version: "v2", RunID: "read-test"})
+	require.NoError(t, err)
+
+	report, err := ReadReport(path)
+	require.NoError(t, err)
+	assert.Equal(t, "v2", report.Version)
+	assert.Equal(t, "read-test", report.RunID)
+}
+
+// TestHarness_ReadReport_UnmarshalError covers the JSON unmarshal error path.
+func TestHarness_ReadReport_UnmarshalError(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bad.json")
+	err := os.WriteFile(path, []byte("{invalid json}"), 0o644)
+	require.NoError(t, err)
+
+	_, err = ReadReport(path)
+	assert.Error(t, err)
+}
+
+// TestHarness_ReadReportWithVerify_BadChecksum covers the checksum mismatch path.
+func TestHarness_ReadReportWithVerify_BadChecksum(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "tampered.json")
+	// Write a valid report, then tamper with the checksum.
+	err := WriteReport(path, Report{Version: "v2", RunID: "tamper-test"})
+	require.NoError(t, err)
+
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err)
+	// Replace the checksum with a fake one.
+	lines := strings.Split(string(raw), "\n")
+	for i, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), "// sha256:") {
+			lines[i] = "// sha256:0000000000000000000000000000000000000000000000000000000000000000"
+		}
+	}
+	err = os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0o644)
+	require.NoError(t, err)
+
+	_, err = ReadReportWithVerify(path)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "checksum mismatch")
+}
+
+// TestHarness_ReadReportWithVerify_UnsupportedVersion covers the version
+// guard path that rejects unknown schema versions.
+func TestHarness_ReadReportWithVerify_UnsupportedVersion(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "badversion.json")
+	// Write a report-like file with an unsupported version.
+	// Compute the correct checksum so the checksum check passes,
+	// allowing the version guard to be reached.
+	jsonContent := `{"version":"v99","run_id":"test"}`
+	checksum := sha256.Sum256([]byte(jsonContent))
+	content := jsonContent + "\n// sha256:" + fmt.Sprintf("%x", checksum) + "\n"
+	err := os.WriteFile(path, []byte(content), 0o644)
+	require.NoError(t, err)
+
+	_, err = ReadReportWithVerify(path)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported report version")
+}
+
+// --- Run function additional coverage tests ---
+
+// TestHarness_Run_ConcurrentCapture covers the 3+ backend concurrent capture
+// path in Run, which uses errgroup for parallel execution.
+func TestHarness_Run_ConcurrentCapture(t *testing.T) {
+	key := sessKey("concurrent-capture")
+	backends := makeBackends(t, key)
+	// Add a third backend to trigger the concurrent path (>2 backends).
+	third := inMemoryFactory{}.Create(context.Background(), t)
+	third.Name = "inmemory-3"
+	third.SessKey = func() session.Key { return key }
+	backends = append(backends, *third)
+
+	normalizer := NewNormalizer(DefaultNormalizerConfig())
+	harness := Harness{
+		Backends:   backends,
+		Normalizer: normalizer,
+	}
+	c := Case{
+		Name:         "concurrent_capture_case",
+		RequiredCaps: []string{CapEvents},
+		Run: func(ctx context.Context, backend Backend) error {
+			backend.SessKey = func() session.Key { return key }
+			backend.Sess.CreateSession(ctx, key, nil)
+			sess, _ := backend.Sess.GetSession(ctx, key)
+			backend.Sess.AppendEvent(ctx, sess, newUserEvent("hello"))
+			return nil
+		},
+	}
+	result, err := harness.Run(context.Background(), c)
+	require.NoError(t, err)
+	assert.Equal(t, StatusPass, result.Status)
+	require.Len(t, result.BackendMetrics, 3)
+}
+
+// TestHarness_Run_ConcurrentCaptureWithSkippedBackend covers the concurrent
+// capture path where a non-baseline backend is skipped due to missing capabilities.
+func TestHarness_Run_ConcurrentCaptureWithSkippedBackend(t *testing.T) {
+	key := sessKey("concurrent-skip")
+	backends := makeBackends(t, key)
+	// Add a third backend that lacks summary capability.
+	third := inMemoryFactory{}.Create(context.Background(), t)
+	third.Name = "inmemory-nosummary"
+	third.SessKey = func() session.Key { return key }
+	third.Caps = Capabilities{
+		CapEvents:              {Supported: true},
+		CapState:               {Supported: true},
+		CapMemory:              {Supported: true},
+		CapSummary:             {Supported: false, Reason: "disabled for test"},
+		CapTrack:               {Supported: true},
+		CapEventStateDeltaNull: {Supported: true},
+	}
+	backends = append(backends, *third)
+
+	normalizer := NewNormalizer(DefaultNormalizerConfig())
+	harness := Harness{
+		Backends:   backends,
+		Normalizer: normalizer,
+	}
+	c := Case{
+		Name:         "concurrent_skip_case",
+		RequiredCaps: []string{CapSummary},
+		Run: func(ctx context.Context, backend Backend) error {
+			backend.SessKey = func() session.Key { return key }
+			backend.Sess.CreateSession(ctx, key, nil)
+			return nil
+		},
+	}
+	result, err := harness.Run(context.Background(), c)
+	// Should be inconclusive since the third backend is skipped.
+	require.NoError(t, err)
+	assert.Contains(t, result.SkippedBackends, "inmemory-nosummary")
+}
+
+// TestHarness_Run_MemoryPressureSkip_LowThreshold covers the memory pressure check path
+// that skips capture when heap usage exceeds the threshold.
+func TestHarness_Run_MemoryPressureSkip_LowThreshold(t *testing.T) {
+	key := sessKey("mem-pressure")
+	backends := makeBackends(t, key)
+	normalizer := NewNormalizer(DefaultNormalizerConfig())
+	harness := Harness{
+		Backends:          backends,
+		Normalizer:        normalizer,
+		MaxMemoryUsagePct: 0.0001, // Extremely low threshold to force skip.
+	}
+	c := Case{
+		Name:         "mem_pressure_case",
+		RequiredCaps: []string{CapEvents},
+		Run: func(ctx context.Context, backend Backend) error {
+			return nil
+		},
+	}
+	result, err := harness.Run(context.Background(), c)
+	require.NoError(t, err)
+	assert.Equal(t, StatusSkip, result.Status)
+	assert.Contains(t, result.SkipReason, "memory pressure")
+}
+
+// TestHarness_Run_SnapshotFingerprint covers the snapshot fingerprint computation
+// path that computes a SHA-256 hash of the baseline snapshot.
+func TestHarness_Run_SnapshotFingerprint(t *testing.T) {
+	key := sessKey("fingerprint-test")
+	backends := makeBackends(t, key)
+	normalizer := NewNormalizer(DefaultNormalizerConfig())
+	harness := Harness{
+		Backends:   backends,
+		Normalizer: normalizer,
+	}
+	c := Case{
+		Name:         "fingerprint_case",
+		RequiredCaps: []string{CapEvents},
+		Run: func(ctx context.Context, backend Backend) error {
+			backend.SessKey = func() session.Key { return key }
+			backend.Sess.CreateSession(ctx, key, nil)
+			sess, _ := backend.Sess.GetSession(ctx, key)
+			backend.Sess.AppendEvent(ctx, sess, newUserEvent("fingerprint"))
+			return nil
+		},
+	}
+	result, err := harness.Run(context.Background(), c)
+	require.NoError(t, err)
+	assert.NotEmpty(t, result.SnapshotFingerprint)
+	assert.True(t, strings.HasPrefix(result.SnapshotFingerprint, "sha256:"))
+}
+
+// TestHarness_Run_SectionsCount covers the sectionsCompared and sectionsSkipped
+// counting logic by using a backend with limited capabilities.
+func TestHarness_Run_SectionsCount(t *testing.T) {
+	key := sessKey("sections-count")
+	backends := makeBackends(t, key)
+	// Restrict the baseline backend's capabilities to test section counting.
+	backends[0].Caps = Capabilities{
+		CapEvents:              {Supported: true},
+		CapState:               {Supported: true},
+		CapMemory:              {Supported: false, Reason: "test"},
+		CapSummary:             {Supported: false, Reason: "test"},
+		CapTrack:               {Supported: false, Reason: "test"},
+		CapEventStateDeltaNull: {Supported: true},
+	}
+	backends[1].Caps = backends[0].Caps
+
+	normalizer := NewNormalizer(DefaultNormalizerConfig())
+	harness := Harness{
+		Backends:   backends,
+		Normalizer: normalizer,
+	}
+	c := Case{
+		Name:         "sections_count_case",
+		RequiredCaps: []string{CapEvents},
+		Run: func(ctx context.Context, backend Backend) error {
+			backend.SessKey = func() session.Key { return key }
+			backend.Sess.CreateSession(ctx, key, nil)
+			sess, _ := backend.Sess.GetSession(ctx, key)
+			backend.Sess.AppendEvent(ctx, sess, newUserEvent("count"))
+			return nil
+		},
+	}
+	result, err := harness.Run(context.Background(), c)
+	require.NoError(t, err)
+	assert.Equal(t, StatusPass, result.Status)
+}
+
+// TestHarness_Run_ParallelCompare covers the parallel comparison path for
+// 4+ snapshots (which requires 4+ backends).
+func TestHarness_Run_ParallelCompare(t *testing.T) {
+	key := sessKey("parallel-compare")
+	backends := makeBackends(t, key)
+	// Add two more backends to reach 4 total, triggering parallel comparison.
+	for i := 2; i < 4; i++ {
+		extra := inMemoryFactory{}.Create(context.Background(), t)
+		extra.Name = fmt.Sprintf("inmemory-%d", i)
+		extra.SessKey = func() session.Key { return key }
+		backends = append(backends, *extra)
+	}
+
+	normalizer := NewNormalizer(DefaultNormalizerConfig())
+	harness := Harness{
+		Backends:   backends,
+		Normalizer: normalizer,
+	}
+	c := Case{
+		Name:         "parallel_compare_case",
+		RequiredCaps: []string{CapEvents},
+		Run: func(ctx context.Context, backend Backend) error {
+			backend.SessKey = func() session.Key { return key }
+			backend.Sess.CreateSession(ctx, key, nil)
+			sess, _ := backend.Sess.GetSession(ctx, key)
+			backend.Sess.AppendEvent(ctx, sess, newUserEvent("parallel"))
+			return nil
+		},
+	}
+	result, err := harness.Run(context.Background(), c)
+	require.NoError(t, err)
+	assert.Equal(t, StatusPass, result.Status)
+	require.Len(t, result.BackendMetrics, 4)
+}
+
+// TestHarness_saveCheckpointResult_MarshalError covers the fallback path
+// in saveCheckpointResult when json.Marshal fails.
+func TestHarness_saveCheckpointResult_MarshalError(t *testing.T) {
+	dir := t.TempDir()
+	// CaseResult with a channel field cannot be marshaled.
+	result := CaseResult{
+		Name:           "marshal-error-case",
+		Status:         StatusPass,
+		PanicRecovered: make(chan int),
+	}
+	err := saveCheckpointResult(dir, "marshal-error-case", result)
+	// Should fall back to simple done-marker and not return an error.
+	assert.NoError(t, err)
+	// Verify the done marker was created.
+	assert.True(t, checkpointExists(dir, "marshal-error-case"))
+}
+
+// TestHarness_saveCheckpointAndProgress covers the saveCheckpointAndProgress
+// helper that saves both checkpoint and result.
+func TestHarness_saveCheckpointAndProgress(t *testing.T) {
+	dir := t.TempDir()
+	result := CaseResult{
+		Name:   "checkpoint-progress-case",
+		Status: StatusPass,
+	}
+	h := Harness{}
+	h.saveCheckpointAndProgress(dir, "checkpoint-progress-case", result, 3, 10)
+
+	// Verify the result can be loaded back (uses .result.json format).
+	loaded, ok := loadCheckpointResult(dir, "checkpoint-progress-case")
+	require.True(t, ok)
+	assert.Equal(t, "checkpoint-progress-case", loaded.Name)
+	assert.Equal(t, StatusPass, loaded.Status)
+}
+
+// TestHarness_saveCheckpointAndProgress_WithProgressFunc covers the
+// ProgressFunc callback invocation path.
+func TestHarness_saveCheckpointAndProgress_WithProgressFunc(t *testing.T) {
+	dir := t.TempDir()
+	var progressCalled bool
+	var progressCompleted int
+	var progressTotal int
+	h := Harness{
+		ProgressFunc: func(completed, total int, r CaseResult) {
+			progressCalled = true
+			progressCompleted = completed
+			progressTotal = total
+		},
+	}
+	result := CaseResult{
+		Name:   "progress-func-case",
+		Status: StatusPass,
+	}
+	h.saveCheckpointAndProgress(dir, "progress-func-case", result, 7, 15)
+	assert.True(t, progressCalled)
+	assert.Equal(t, 7, progressCompleted)
+	assert.Equal(t, 15, progressTotal)
+}
+
+// TestHarness_validateRequiredCapabilities_BaselineUnsupported covers the
+// path where the baseline backend (index 0) doesn't support required capabilities.
+func TestHarness_validateRequiredCapabilities_BaselineUnsupported(t *testing.T) {
+	key := sessKey("baseline-unsupported")
+	backends := makeBackends(t, key)
+	// Remove summary capability from the baseline.
+	backends[0].Caps[CapSummary] = CapabilityDesc{Supported: false, Reason: "baseline lacks summary"}
+
+	c := Case{
+		Name:         "baseline_unsupported_case",
+		RequiredCaps: []string{CapSummary},
+		Run: func(ctx context.Context, backend Backend) error {
+			return nil
+		},
+	}
+	normalizer := NewNormalizer(DefaultNormalizerConfig())
+	harness := Harness{
+		Backends:   backends,
+		Normalizer: normalizer,
+	}
+	_, err := harness.Run(context.Background(), c)
+	require.Error(t, err)
+	re, ok := err.(*ReplayError)
+	require.True(t, ok)
+	assert.Equal(t, ErrCaseValidation, re.Kind)
+}
+
+// --- Mock storage clients for DB factory Create coverage ---
+
+// mockPgClient implements pgstorage.Client for testing.
+type mockPgClient struct{}
+
+func (m *mockPgClient) ExecContext(_ context.Context, _ string, _ ...any) (sql.Result, error) {
+	return nil, nil
+}
+func (m *mockPgClient) Query(_ context.Context, _ pgstorage.HandlerFunc, _ string, _ ...any) error {
+	return nil
+}
+func (m *mockPgClient) Transaction(_ context.Context, _ pgstorage.TxFunc) error { return nil }
+func (m *mockPgClient) Close() error                                            { return nil }
+
+// mockMySQLClient implements mystorage.Client for testing.
+type mockMySQLClient struct{}
+
+func (m *mockMySQLClient) Exec(_ context.Context, _ string, _ ...any) (sql.Result, error) {
+	return nil, nil
+}
+func (m *mockMySQLClient) Query(_ context.Context, _ mystorage.NextFunc, _ string, _ ...any) error {
+	return nil
+}
+func (m *mockMySQLClient) QueryRow(_ context.Context, _ []any, _ string, _ ...any) error {
+	return nil
+}
+func (m *mockMySQLClient) Transaction(_ context.Context, _ mystorage.TxFunc, _ ...mystorage.TxOption) error {
+	return nil
+}
+func (m *mockMySQLClient) Close() error { return nil }
+
+// mockCHClient implements chstorage.Client for testing.
+type mockCHClient struct{}
+
+func (m *mockCHClient) Exec(_ context.Context, _ string, _ ...any) error { return nil }
+func (m *mockCHClient) Query(_ context.Context, _ string, _ ...any) (driver.Rows, error) {
+	return nil, nil
+}
+func (m *mockCHClient) QueryRow(_ context.Context, _ []any, _ string, _ ...any) error {
+	return nil
+}
+func (m *mockCHClient) QueryToStruct(_ context.Context, _ any, _ string, _ ...any) error {
+	return nil
+}
+func (m *mockCHClient) QueryToStructs(_ context.Context, _ any, _ string, _ ...any) error {
+	return nil
+}
+func (m *mockCHClient) BatchInsert(_ context.Context, _ string, _ chstorage.BatchFn, _ ...driver.PrepareBatchOption) error {
+	return nil
+}
+func (m *mockCHClient) AsyncInsert(_ context.Context, _ string, _ bool, _ ...any) error {
+	return nil
+}
+func (m *mockCHClient) Close() error { return nil }
+
+// TestFactory_PostgresFactory_Create_WithSkipDBInit covers the postgres
+// factory Create method by injecting a mock client builder and using
+// TRPC_AGENT_REPLAY_SKIP_DB_INIT to skip database initialization.
+func TestFactory_PostgresFactory_Create_WithSkipDBInit(t *testing.T) {
+	// Save and restore the original client builder.
+	origBuilder := pgstorage.GetClientBuilder()
+	defer pgstorage.SetClientBuilder(origBuilder)
+
+	pgstorage.SetClientBuilder(func(_ context.Context, _ ...pgstorage.ClientBuilderOpt) (pgstorage.Client, error) {
+		return &mockPgClient{}, nil
+	})
+
+	t.Setenv("REPLAY_BACKEND", "postgres")
+	t.Setenv("TRPC_AGENT_REPLAY_POSTGRES_DSN", "postgres://fake:5432/testdb")
+	t.Setenv("TRPC_AGENT_REPLAY_SKIP_DB_INIT", "1")
+
+	// Use ResolvePair to get the factory.
+	primary, target := ResolvePair(t)
+	assert.Equal(t, "inmemory", primary.Kind())
+	assert.Equal(t, "postgres", target.Kind())
+
+	backend := target.Create(context.Background(), t)
+	require.NotNil(t, backend)
+	assert.Equal(t, "postgres", backend.Name)
+	assert.NotNil(t, backend.Sess)
+	assert.NotNil(t, backend.Mem)
+	assert.NotNil(t, backend.SessKey)
+	assert.NotNil(t, backend.Probe)
+	assert.NotNil(t, backend.WarmUp)
+	assert.True(t, backend.Caps.Has(CapEvents))
+	assert.True(t, backend.Caps.Has(CapState))
+	assert.True(t, backend.Caps.Has(CapMemory))
+	assert.True(t, backend.Caps.Has(CapSummary))
+	assert.True(t, backend.Caps.Has(CapTrack))
+}
+
+// TestFactory_MysqlFactory_Create_WithSkipDBInit covers the mysql
+// factory Create method by injecting a mock client builder and using
+// TRPC_AGENT_REPLAY_SKIP_DB_INIT to skip database initialization.
+func TestFactory_MysqlFactory_Create_WithSkipDBInit(t *testing.T) {
+	origBuilder := mystorage.GetClientBuilder()
+	defer mystorage.SetClientBuilder(origBuilder)
+
+	mystorage.SetClientBuilder(func(_ ...mystorage.ClientBuilderOpt) (mystorage.Client, error) {
+		return &mockMySQLClient{}, nil
+	})
+
+	t.Setenv("REPLAY_BACKEND", "mysql")
+	t.Setenv("TRPC_AGENT_REPLAY_MYSQL_DSN", "test:test@tcp(localhost:3306)/testdb")
+	t.Setenv("TRPC_AGENT_REPLAY_SKIP_DB_INIT", "1")
+
+	primary, target := ResolvePair(t)
+	assert.Equal(t, "inmemory", primary.Kind())
+	assert.Equal(t, "mysql", target.Kind())
+
+	backend := target.Create(context.Background(), t)
+	require.NotNil(t, backend)
+	assert.Equal(t, "mysql", backend.Name)
+	assert.NotNil(t, backend.Sess)
+	assert.NotNil(t, backend.Mem)
+	assert.NotNil(t, backend.SessKey)
+	assert.NotNil(t, backend.Probe)
+	assert.NotNil(t, backend.WarmUp)
+	assert.True(t, backend.Caps.Has(CapEvents))
+	assert.True(t, backend.Caps.Has(CapTrack))
+}
+
+// TestFactory_ClickhouseFactory_Create_WithSkipDBInit covers the clickhouse
+// factory Create method by injecting a mock client builder and using
+// TRPC_AGENT_REPLAY_SKIP_DB_INIT to skip database initialization.
+func TestFactory_ClickhouseFactory_Create_WithSkipDBInit(t *testing.T) {
+	origBuilder := chstorage.GetClientBuilder()
+	defer chstorage.SetClientBuilder(origBuilder)
+
+	chstorage.SetClientBuilder(func(_ ...chstorage.ClientBuilderOpt) (chstorage.Client, error) {
+		return &mockCHClient{}, nil
+	})
+
+	t.Setenv("REPLAY_BACKEND", "clickhouse")
+	t.Setenv("TRPC_AGENT_REPLAY_CLICKHOUSE_DSN", "clickhouse://localhost:9000")
+	t.Setenv("TRPC_AGENT_REPLAY_SKIP_DB_INIT", "1")
+
+	primary, target := ResolvePair(t)
+	assert.Equal(t, "inmemory", primary.Kind())
+	assert.Equal(t, "clickhouse", target.Kind())
+
+	backend := target.Create(context.Background(), t)
+	require.NotNil(t, backend)
+	assert.Equal(t, "clickhouse", backend.Name)
+	assert.NotNil(t, backend.Sess)
+	assert.NotNil(t, backend.Mem)
+	assert.NotNil(t, backend.SessKey)
+	assert.NotNil(t, backend.Probe)
+	assert.NotNil(t, backend.WarmUp)
+	assert.True(t, backend.Caps.Has(CapEvents))
+	assert.False(t, backend.Caps.Has(CapTrack))
+}
+
+// TestFactory_PostgresFactory_KindAndCapabilities covers the Kind and
+// Capabilities methods of postgresFactory.
+func TestFactory_PostgresFactory_KindAndCapabilities(t *testing.T) {
+	t.Setenv("REPLAY_BACKEND", "postgres")
+	primary, target := ResolvePair(t)
+	_ = primary
+	assert.Equal(t, "postgres", target.Kind())
+	caps := target.Capabilities()
+	assert.True(t, caps.Has(CapEvents))
+	assert.True(t, caps.Has(CapState))
+	assert.True(t, caps.Has(CapMemory))
+	assert.True(t, caps.Has(CapSummary))
+	assert.True(t, caps.Has(CapTrack))
+	assert.True(t, caps.Has(CapEventStateDeltaNull))
+}
+
+// TestFactory_MysqlFactory_KindAndCapabilities covers the Kind and
+// Capabilities methods of mysqlFactory.
+func TestFactory_MysqlFactory_KindAndCapabilities(t *testing.T) {
+	t.Setenv("REPLAY_BACKEND", "mysql")
+	primary, target := ResolvePair(t)
+	_ = primary
+	assert.Equal(t, "mysql", target.Kind())
+	caps := target.Capabilities()
+	assert.True(t, caps.Has(CapEvents))
+	assert.True(t, caps.Has(CapTrack))
+}
+
+// TestFactory_ClickhouseFactory_KindAndCapabilities covers the Kind and
+// Capabilities methods of clickhouseFactory.
+func TestFactory_ClickhouseFactory_KindAndCapabilities(t *testing.T) {
+	t.Setenv("REPLAY_BACKEND", "clickhouse")
+	primary, target := ResolvePair(t)
+	_ = primary
+	assert.Equal(t, "clickhouse", target.Kind())
+	caps := target.Capabilities()
+	assert.True(t, caps.Has(CapEvents))
+	assert.False(t, caps.Has(CapTrack))
+}
+
+// --- Additional coverage for types.go, diff.go, harness.go ---
+
+// TestIDAliasMap_LookupAllCategories covers all switch cases in Lookup.
+func TestIDAliasMap_LookupAllCategories(t *testing.T) {
+	m := NewIDAliasMap()
+
+	// Register IDs in each category.
+	eventAlias := m.Alias("evt-1", "event")
+	toolAlias := m.Alias("tool-1", "tool-call")
+	invAlias := m.Alias("inv-1", "invocation")
+	memAlias := m.Alias("mem-1", "memory")
+
+	// Lookup each category.
+	assert.Equal(t, eventAlias, m.Lookup("evt-1", "event"))
+	assert.Equal(t, toolAlias, m.Lookup("tool-1", "tool-call"))
+	assert.Equal(t, invAlias, m.Lookup("inv-1", "invocation"))
+	assert.Equal(t, memAlias, m.Lookup("mem-1", "memory"))
+
+	// Unknown category returns "".
+	assert.Equal(t, "", m.Lookup("evt-1", "unknown"))
+	// Unregistered ID returns "".
+	assert.Equal(t, "", m.Lookup("never-seen", "event"))
+	// Empty original returns "".
+	assert.Equal(t, "", m.Lookup("", "event"))
+}
+
+// TestSnapshot_Clone_MarshalError covers the marshal error path of Clone
+// by putting an unmarshallable value (channel) in the State map.
+func TestSnapshot_Clone_MarshalError(t *testing.T) {
+	s := Snapshot{
+		State: map[string]any{"bad": make(chan int)},
+	}
+	_, err := s.Clone()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "marshal snapshot clone")
+}
+
+// TestSnapshot_Clone_Success covers the happy path of Clone including
+// restoreMissingInSnapshot.
+func TestSnapshot_Clone_Success(t *testing.T) {
+	s := Snapshot{
+		Events: []map[string]any{
+			{"id": "event-000", "type": "message"},
+		},
+		State: map[string]any{"key": "value"},
+		Memories: []MemorySnapshot{
+			{ID: "memory-000", Content: "test memory"},
+		},
+	}
+	cloned, err := s.Clone()
+	require.NoError(t, err)
+	assert.Equal(t, "event-000", cloned.Events[0]["id"])
+	assert.Equal(t, "value", cloned.State["key"])
+	assert.Equal(t, "memory-000", cloned.Memories[0].ID)
+}
+
+// errorSessionService wraps mockSessionService to return an error from DeleteSession.
+type errorSessionService struct {
+	mockSessionService
+	deleteErr error
+}
+
+func (m *errorSessionService) DeleteSession(_ context.Context, _ session.Key, _ ...session.Option) error {
+	return m.deleteErr
+}
+
+// errorMemoryService wraps an inmemory service to return an error from ClearMemories.
+type errorMemoryService struct {
+	memory.Service
+	clearErr error
+}
+
+func (m *errorMemoryService) ClearMemories(_ context.Context, _ memory.UserKey) error {
+	return m.clearErr
+}
+
+// TestBackend_Cleanup_SessError covers the DeleteSession error path.
+func TestBackend_Cleanup_SessError(t *testing.T) {
+	backend := Backend{
+		Name: "test",
+		Sess: &errorSessionService{deleteErr: errors.New("delete failed")},
+		Mem:  nil, // no memory service
+	}
+	err := backend.Cleanup(context.Background(), session.Key{}, memory.UserKey{})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "DeleteSession")
+}
+
+// TestBackend_Cleanup_MemError covers the ClearMemories error path.
+func TestBackend_Cleanup_MemError(t *testing.T) {
+	backend := Backend{
+		Name: "test",
+		Sess: nil, // no session service
+		Mem:  &errorMemoryService{Service: inmemory.NewMemoryService(), clearErr: errors.New("clear failed")},
+	}
+	err := backend.Cleanup(context.Background(), session.Key{}, memory.UserKey{})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "ClearMemories")
+}
+
+// TestBackend_Cleanup_BothErrors covers both error paths simultaneously.
+func TestBackend_Cleanup_BothErrors(t *testing.T) {
+	backend := Backend{
+		Name: "test",
+		Sess: &errorSessionService{deleteErr: errors.New("delete failed")},
+		Mem:  &errorMemoryService{Service: inmemory.NewMemoryService(), clearErr: errors.New("clear failed")},
+	}
+	err := backend.Cleanup(context.Background(), session.Key{}, memory.UserKey{})
+	assert.Error(t, err)
+}
+
+// TestSaveBytesAtomic_MkdirError covers the MkdirAll error path.
+func TestSaveBytesAtomic_MkdirError(t *testing.T) {
+	// NUL byte in path triggers mkdir error on all platforms.
+	err := saveBytesAtomic("invalid\x00dir\x00/file.json", []byte("data"))
+	assert.Error(t, err)
+}
+
+// TestSaveBytesAtomic_Success covers the happy path.
+func TestSaveBytesAtomic_Success(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "subdir", "file.json")
+	err := saveBytesAtomic(path, []byte(`{"key":"value"}`))
+	require.NoError(t, err)
+
+	// Verify file was written.
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, `{"key":"value"}`, string(data))
+}
+
+// TestContextPathKey_BracketQuotedKey covers the bracket-quoted key parsing
+// branch of contextPathKey.
+func TestContextPathKey_BracketQuotedKey(t *testing.T) {
+	// Test simple key (dot path).
+	key, ok := contextPathKey("state.foo", "state")
+	assert.True(t, ok)
+	assert.Equal(t, "foo", key)
+
+	// Test simple key with nested path (dot path, truncated at next . or [).
+	key, ok = contextPathKey("state.foo.bar", "state")
+	assert.True(t, ok)
+	assert.Equal(t, "foo", key)
+
+	// Test bracket-quoted key (bracket path).
+	key, ok = contextPathKey(`state["complex.key"]`, "state")
+	assert.True(t, ok)
+	assert.Equal(t, "complex.key", key)
+
+	// Test no match (rest == path, prefix not found).
+	_, ok = contextPathKey("events", "state")
+	assert.False(t, ok)
+
+	// Test rest is empty (path == prefix).
+	_, ok = contextPathKey("state", "state")
+	assert.False(t, ok)
+
+	// Test non-bracket, non-dot prefix (rest doesn't start with . or [").
+	_, ok = contextPathKey("statexyz", "state")
+	assert.False(t, ok)
+
+	// Test bracket without closing quote.
+	_, ok = contextPathKey(`state["unclosed`, "state")
+	assert.False(t, ok)
+
+	// Test bracket with escaped quote.
+	key, ok = contextPathKey(`state["esca\"ped"]`, "state")
+	assert.True(t, ok)
+	assert.Equal(t, `esca"ped`, key)
+
+	// Test bracket with missing closing bracket.
+	_, ok = contextPathKey(`state["foo"`, "state")
+	assert.False(t, ok)
+}
+
+// TestToGeneric_MarshalError covers the marshal error path.
+func TestToGeneric_MarshalError(t *testing.T) {
+	_, err := toGeneric(make(chan int))
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "marshal snapshot")
+}
+
+// TestToGeneric_Success covers the happy path.
+func TestToGeneric_Success(t *testing.T) {
+	result, err := toGeneric(map[string]any{"key": "value", "num": 42})
+	require.NoError(t, err)
+	m, ok := result.(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "value", m["key"])
 }

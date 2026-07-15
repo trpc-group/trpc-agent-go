@@ -234,6 +234,9 @@ func (h Harness) Run(ctx context.Context, replayCase Case) (CaseResult, error) {
 			i, backend := i, backend
 			g.Go(func() error {
 				local := result // copy
+				// Deep-copy maps to avoid concurrent map writes.
+				local.SkippedBackends = make(map[string][]string)
+				local.Capabilities = make(map[string]map[string]CapabilityDesc)
 				// Check capability support under the group context.
 				unsupported := unsupportedRequiredCapabilities(replayCase, backend)
 				if len(unsupported) > 0 {

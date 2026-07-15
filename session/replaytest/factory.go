@@ -264,10 +264,14 @@ func (postgresFactory) Create(_ context.Context, t *testing.T) *Backend {
 	if dsn == "" {
 		t.Skip("TRPC_AGENT_REPLAY_POSTGRES_DSN not set, skipping Postgres backend")
 	}
-	svc, err := spostgres.NewService(
+	pgOpts := []spostgres.ServiceOpt{
 		spostgres.WithPostgresClientDSN(dsn),
 		spostgres.WithSummarizer(&fakeSummarizer{}),
-	)
+	}
+	if os.Getenv("TRPC_AGENT_REPLAY_SKIP_DB_INIT") != "" {
+		pgOpts = append(pgOpts, spostgres.WithSkipDBInit(true))
+	}
+	svc, err := spostgres.NewService(pgOpts...)
 	if err != nil {
 		t.Fatalf("create postgres session service: %v", err)
 	}
@@ -323,10 +327,14 @@ func (mysqlFactory) Create(_ context.Context, t *testing.T) *Backend {
 	if dsn == "" {
 		t.Skip("TRPC_AGENT_REPLAY_MYSQL_DSN not set, skipping MySQL backend")
 	}
-	svc, err := smysql.NewService(
+	myOpts := []smysql.ServiceOpt{
 		smysql.WithMySQLClientDSN(dsn),
 		smysql.WithSummarizer(&fakeSummarizer{}),
-	)
+	}
+	if os.Getenv("TRPC_AGENT_REPLAY_SKIP_DB_INIT") != "" {
+		myOpts = append(myOpts, smysql.WithSkipDBInit(true))
+	}
+	svc, err := smysql.NewService(myOpts...)
 	if err != nil {
 		t.Fatalf("create mysql session service: %v", err)
 	}
@@ -383,10 +391,14 @@ func (clickhouseFactory) Create(_ context.Context, t *testing.T) *Backend {
 	if dsn == "" {
 		t.Skip("TRPC_AGENT_REPLAY_CLICKHOUSE_DSN not set, skipping ClickHouse backend")
 	}
-	svc, err := sclickhouse.NewService(
+	chOpts := []sclickhouse.ServiceOpt{
 		sclickhouse.WithClickHouseDSN(dsn),
 		sclickhouse.WithSummarizer(&fakeSummarizer{}),
-	)
+	}
+	if os.Getenv("TRPC_AGENT_REPLAY_SKIP_DB_INIT") != "" {
+		chOpts = append(chOpts, sclickhouse.WithSkipDBInit(true))
+	}
+	svc, err := sclickhouse.NewService(chOpts...)
 	if err != nil {
 		t.Fatalf("create clickhouse session service: %v", err)
 	}
