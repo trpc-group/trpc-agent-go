@@ -19,8 +19,10 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	agenttrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
+	"trpc.group/trpc-go/trpc-agent-go/internal/tracecapture"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
@@ -104,18 +106,42 @@ func hasSpanAttr(attrs []attribute.KeyValue, key string, value string) bool {
 
 func TestLLMAgent_Run_BeforeCallbackCust(t *testing.T) {
 	cb := agent.NewCallbacks()
+	var afterCalls int
 	cb.RegisterBeforeAgent(func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
 		return &model.Response{Object: "before", Done: true}, nil
+	})
+	cb.RegisterAfterAgent(func(ctx context.Context, inv *agent.Invocation, err error) (*model.Response, error) {
+		afterCalls++
+		return nil, nil
 	})
 
 	a := New("agent", WithAgentCallbacks(cb))
 	// Replace flow to avoid heavy deps.
 	a.flow = &mockFlow{done: true}
 
-	evts, err := a.Run(context.Background(), &agent.Invocation{InvocationID: "id", AgentName: "agent"})
+	inv := agent.NewInvocation(
+		agent.WithInvocationID("id"),
+		agent.WithInvocationMessage(model.NewUserMessage("hello")),
+		agent.WithInvocationRunOptions(agent.RunOptions{ExecutionTraceEnabled: true}),
+	)
+	evts, err := a.Run(context.Background(), inv)
 	require.NoError(t, err)
-	first := <-evts
+	var got []*event.Event
+	for evt := range evts {
+		got = append(got, evt)
+	}
+	require.Len(t, got, 1)
+	first := got[0]
 	require.Equal(t, "before", first.Object)
+	require.Zero(t, afterCalls, "before-agent custom responses must skip after-agent callbacks")
+
+	executionTrace := agent.BuildExecutionTrace(inv, agenttrace.TraceStatusCompleted)
+	require.NotNil(t, executionTrace)
+	require.Len(t, executionTrace.Steps, 1)
+	require.False(t, executionTrace.Steps[0].EndedAt.IsZero())
+	require.Equal(t, "llm", executionTrace.Steps[0].NodeType)
+	require.Contains(t, executionTrace.Steps[0].Input.Text, "hello")
+	require.Contains(t, executionTrace.Steps[0].Output.Text, "before")
 }
 
 func TestLLMAgent_Run_BeforeCallbackErr(t *testing.T) {
@@ -127,8 +153,84 @@ func TestLLMAgent_Run_BeforeCallbackErr(t *testing.T) {
 	a := New("agent", WithAgentCallbacks(cb))
 	a.flow = &mockFlow{done: true}
 
-	_, err := a.Run(context.Background(), &agent.Invocation{InvocationID: "id", AgentName: "agent"})
+	inv := agent.NewInvocation(
+		agent.WithInvocationID("id"),
+		agent.WithInvocationMessage(model.NewUserMessage("hello")),
+		agent.WithInvocationRunOptions(agent.RunOptions{ExecutionTraceEnabled: true}),
+	)
+	_, err := a.Run(context.Background(), inv)
 	require.Error(t, err)
+
+	executionTrace := agent.BuildExecutionTrace(inv, agenttrace.TraceStatusFailed)
+	require.NotNil(t, executionTrace)
+	require.Len(t, executionTrace.Steps, 1)
+	require.False(t, executionTrace.Steps[0].EndedAt.IsZero())
+	require.Contains(t, executionTrace.Steps[0].Error, context.Canceled.Error())
+}
+
+func TestLLMAgent_Run_BorrowedExecutionTraceStepIsNotFinished(t *testing.T) {
+	a := New("agent")
+	a.flow = &mockFlow{done: true}
+	inv := agent.NewInvocation(
+		agent.WithInvocationID("borrowed-trace-step"),
+		agent.WithInvocationMessage(model.NewUserMessage("hello")),
+		agent.WithInvocationRunOptions(agent.RunOptions{ExecutionTraceEnabled: true}),
+	)
+	traceCtx := agent.NewInvocationContext(context.Background(), inv)
+	ownerLease := tracecapture.EnsureInvocationStep(
+		traceCtx,
+		func() string {
+			return agent.StartExecutionTraceStep(
+				inv,
+				"agent",
+				&agenttrace.Snapshot{Text: "wrapper input"},
+				nil,
+			)
+		},
+	)
+	require.True(t, ownerLease.Owns)
+	tracecapture.SetStepNodeType(traceCtx, ownerLease.StepID, "agent")
+
+	events, err := a.Run(context.Background(), inv)
+	require.NoError(t, err)
+	for range events {
+	}
+
+	executionTrace := agent.BuildExecutionTrace(inv, agenttrace.TraceStatusCompleted)
+	require.NotNil(t, executionTrace)
+	require.Len(t, executionTrace.Steps, 1)
+	require.Equal(t, "agent", executionTrace.Steps[0].NodeType)
+	require.True(t, executionTrace.Steps[0].EndedAt.IsZero())
+
+	agent.FinishExecutionTraceStep(inv, ownerLease.StepID, nil, nil)
+	tracecapture.ReleaseInvocationStep(ownerLease)
+}
+
+func TestLLMAgent_Run_SameInvocationTwiceCreatesTwoSteps(t *testing.T) {
+	a := New("agent")
+	a.flow = &mockFlow{done: true}
+	inv := agent.NewInvocation(
+		agent.WithInvocationID("reused-invocation"),
+		agent.WithInvocationMessage(model.NewUserMessage("hello")),
+		agent.WithInvocationRunOptions(agent.RunOptions{ExecutionTraceEnabled: true}),
+	)
+
+	for i := 0; i < 2; i++ {
+		events, err := a.Run(context.Background(), inv)
+		require.NoError(t, err)
+		for range events {
+		}
+	}
+
+	executionTrace := agent.BuildExecutionTrace(inv, agenttrace.TraceStatusCompleted)
+	require.NotNil(t, executionTrace)
+	require.Len(t, executionTrace.Steps, 2)
+	require.NotEqual(t, executionTrace.Steps[0].StepID, executionTrace.Steps[1].StepID)
+	require.Equal(t, executionTrace.Steps[0].NodeID, executionTrace.Steps[1].NodeID)
+	require.Equal(t, "llm", executionTrace.Steps[0].NodeType)
+	require.Equal(t, "llm", executionTrace.Steps[1].NodeType)
+	require.False(t, executionTrace.Steps[0].EndedAt.IsZero())
+	require.False(t, executionTrace.Steps[1].EndedAt.IsZero())
 }
 
 func TestLLMAgent_Run_FlowAndAfterCb(t *testing.T) {

@@ -11,6 +11,8 @@ package agent
 
 import (
 	"context"
+
+	"trpc.group/trpc-go/trpc-agent-go/internal/tracecapture"
 )
 
 // InvocationContext carries the invocation information.
@@ -21,8 +23,10 @@ type invocationKey struct{}
 
 // NewInvocationContext creates a new InvocationContext.
 func NewInvocationContext(ctx context.Context, invocation *Invocation) *InvocationContext {
+	binding, capture := invocation.executionTraceRuntimeFields()
+	ctx = context.WithValue(ctx, invocationKey{}, invocation)
 	return &InvocationContext{
-		Context: context.WithValue(ctx, invocationKey{}, invocation),
+		Context: tracecapture.AttachInvocationRuntime(ctx, binding, capture),
 	}
 }
 
