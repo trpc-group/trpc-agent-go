@@ -4016,7 +4016,14 @@ func TestContentRequestProcessor_getIncrementMessages_BoundedResumeTail(t *testi
 		assert.Equal(t, model.RoleTool, messages[2].Role)
 		assert.Equal(t, toolResult1.ToolID, messages[2].ToolID)
 		assert.Equal(t, toolResult1.ToolName, messages[2].ToolName)
-		assert.Contains(t, messages[2].Content, compactedToolResultPlaceholder)
+		expectedCompactedResult := recoverableToolResultPlaceholder(
+			toolResultRecoveryRefForMessage(
+				sess.Events[2],
+				toolResult1,
+				"current_invocation_summary",
+			),
+		)
+		assert.Equal(t, expectedCompactedResult, messages[2].Content)
 		assert.NotContains(t, messages[2].Content, toolResult1.Content)
 		assert.Equal(t, toolCall2.Content, messages[3].Content)
 		assert.Equal(t, toolCall2.ToolCalls, messages[3].ToolCalls)
@@ -4099,6 +4106,8 @@ func TestCompactResumeToolRoundPreservesCompactionSemantics(t *testing.T) {
 
 	t.Run("only an individually oversized result is compacted", func(t *testing.T) {
 		tail := newTail("small result", "large result")
+		largeResultEvent := tail[1]
+		largeResult := largeResultEvent.Choices[1].Message
 		got := compactResumeToolRound(
 			context.Background(),
 			tail,
@@ -4112,8 +4121,17 @@ func TestCompactResumeToolRoundPreservesCompactionSemantics(t *testing.T) {
 		)
 
 		require.Equal(t, "small result", got[1].Choices[0].Message.Content)
-		require.Contains(t, got[1].Choices[1].Message.Content,
-			compactedToolResultPlaceholder)
+		expectedCompactedResult := recoverableToolResultPlaceholder(
+			toolResultRecoveryRefForMessage(
+				largeResultEvent,
+				largeResult,
+				"current_invocation_summary",
+			),
+		)
+		require.Equal(t, expectedCompactedResult,
+			got[1].Choices[1].Message.Content)
+		require.NotContains(t, got[1].Choices[1].Message.Content,
+			largeResult.Content)
 		for _, call := range got[0].Choices[0].Message.ToolCalls {
 			require.Equal(t, arguments, call.Function.Arguments)
 		}
