@@ -239,8 +239,9 @@ func (e *memoryExtractor) Metadata() map[string]any {
 // when the final message role is neither user nor tool. Some
 // model providers (e.g. Anthropic/Claude) reject requests
 // whose last message has role=assistant.
-const extractionUserSuffix = "Extract and manage memories " +
-	"from the conversation above."
+const extractionUserSuffix = "Extract and manage memories from both the user " +
+	"and assistant messages above. Preserve concrete answers produced by the " +
+	"assistant; ignore generic acknowledgments and filler."
 
 // buildMessages builds messages for auto memory extraction.
 func (e *memoryExtractor) buildMessages(
@@ -550,6 +551,16 @@ Today's date is {current_date}. You MUST use this date to resolve ALL relative t
   When BOTH speakers mention doing the same activity together, create memories
   for EACH person's involvement (e.g., "Alice and Bob visited Rome" should
   produce memories for both Alice AND Bob visiting Rome).
+- **ASSISTANT OUTPUTS**: Preserve concrete information produced by the
+  assistant that the user may refer to later, including named answers,
+  recommendations, lists, plans, procedures, decisions, and computed results.
+  Keep identifying names, ordering, and item-to-detail relationships. Do not
+  store generic acknowledgments, filler, or descriptions of assistant behavior.
+- **CLAIM FIDELITY**: Preserve the source claim's action, modality, negation,
+  quantity, and entity relationships. Do not replace a performed action with
+  mere awareness, strengthen a possibility into a fact, or detach an example
+  from the action it exemplifies. Resolve pronouns and local references from
+  the conversation so each memory remains self-contained.
 - **EXHAUSTIVE DETAILS**: Extract EVERY specific detail mentioned, even if
   it seems minor or is mentioned only once in passing. This includes:
   - Specific book titles, movie titles, song names, band/artist names
