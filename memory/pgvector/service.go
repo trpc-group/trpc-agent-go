@@ -716,6 +716,12 @@ func (s *Service) executeVectorSearch(
 // defaultRRFK is the standard Reciprocal Rank Fusion constant.
 const defaultRRFK = imemory.DefaultHybridRRFK
 
+// keywordTSQuerySQL turns the normalized lexemes in a natural-language query
+// into alternatives. plainto_tsquery joins them with AND, which commonly
+// produces no keyword candidates for conversational questions.
+const keywordTSQuerySQL = "to_tsquery('english', replace(strip(" +
+	"to_tsvector('english', $1))::text, ' ', ' | '))"
+
 // executeKeywordSearch runs a full-text search using PostgreSQL
 // tsvector/tsquery alongside the vector search results.
 func (s *Service) executeKeywordSearch(
@@ -737,10 +743,10 @@ func (s *Service) executeKeywordSearch(
 		"SELECT memory_id, app_name, user_id, memory_content, topics, "+
 			"memory_kind, event_time, participants, location, "+
 			"created_at, updated_at, "+
-			"ts_rank(search_vector, plainto_tsquery('english', $1)) AS similarity "+
+			"ts_rank(search_vector, %s) AS similarity "+
 			"FROM %s WHERE app_name = $2 AND user_id = $3 "+
-			"AND search_vector @@ plainto_tsquery('english', $1)",
-		s.tableName,
+			"AND search_vector @@ %s",
+		keywordTSQuerySQL, s.tableName, keywordTSQuerySQL,
 	)
 	if s.opts.softDelete {
 		searchQuery.WriteString(" AND deleted_at IS NULL")

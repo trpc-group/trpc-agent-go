@@ -2419,6 +2419,38 @@ func TestExecuteKeywordSearch(t *testing.T) {
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 
+	t.Run("natural language query matches any normalized term", func(t *testing.T) {
+		db, mock := setupMockDB(t)
+		defer db.Close()
+
+		svc := setupMockService(t, db, mock, WithSkipDBInit(true))
+		defer svc.Close()
+
+		now := time.Date(2024, 5, 7, 0, 0, 0, 0, time.UTC)
+		mock.ExpectQuery("ts_rank\\(search_vector, to_tsquery.*\\|.*").
+			WithArgs("museums I visited", "test-app", "u1").
+			WillReturnRows(sqlmock.NewRows(
+				[]string{"memory_id", "app_name", "user_id", "memory_content", "topics",
+					"memory_kind", "event_time", "participants", "location",
+					"created_at", "updated_at", "similarity"},
+			).AddRow(
+				"mem-1", "test-app", "u1", "Visited the Science Museum",
+				pq.Array([]string{"museum"}), "fact", nil, pq.Array([]string{}), "",
+				now, now, 0.42,
+			))
+
+		results, err := svc.executeKeywordSearch(
+			context.Background(),
+			memory.UserKey{AppName: "test-app", UserID: "u1"},
+			memory.SearchOptions{Query: "museums I visited", HybridSearch: true},
+			5,
+		)
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+		assert.Equal(t, "mem-1", results[0].ID)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
 	t.Run("query errors are non-fatal", func(t *testing.T) {
 		db, mock := setupMockDB(t)
 		defer db.Close()
