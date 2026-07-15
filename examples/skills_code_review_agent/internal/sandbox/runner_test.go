@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -77,6 +78,59 @@ func TestCollectRepoStagePathsIncludesDiffChangedFile(t *testing.T) {
 	}
 	if _, ok := got["new.go"]; !ok {
 		t.Fatalf("new.go from diff missing from %v", paths)
+	}
+}
+
+func TestCollectRepoStagePathsRejectsPathTraversalFromDiff(t *testing.T) {
+	dir := t.TempDir()
+	runGit(t, dir, "init")
+	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatalf("write main.go: %v", err)
+	}
+	runGit(t, dir, "add", "main.go")
+	runGit(t, dir, "-c", "user.email=test@example.com", "-c", "user.name=test", "commit", "-m", "init")
+
+	diffRaw := `--- a/main.go
++++ b/../../../outside.go
+@@ -1 +1 @@
+ package main
+`
+	paths, err := collectRepoStagePaths(dir, diffRaw)
+	if err != nil {
+		t.Fatalf("collectRepoStagePaths failed: %v", err)
+	}
+	for _, p := range paths {
+		if strings.Contains(p, "..") {
+			t.Fatalf("path traversal path staged: %v", paths)
+		}
+	}
+	if len(paths) != 1 || paths[0] != "main.go" {
+		t.Fatalf("paths = %v, want only main.go", paths)
+	}
+}
+
+func TestCollectRepoStagePathsSkipsSymlink(t *testing.T) {
+	dir := t.TempDir()
+	runGit(t, dir, "init")
+	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatalf("write main.go: %v", err)
+	}
+	secret := filepath.Join(dir, "secret.txt")
+	if err := os.WriteFile(secret, []byte("secret\n"), 0o644); err != nil {
+		t.Fatalf("write secret: %v", err)
+	}
+	if err := os.Symlink(secret, filepath.Join(dir, "link.go")); err != nil {
+		t.Skipf("skip symlink test: %v", err)
+	}
+	runGit(t, dir, "add", "main.go", "link.go")
+	runGit(t, dir, "-c", "user.email=test@example.com", "-c", "user.name=test", "commit", "-m", "init")
+
+	paths, err := collectRepoStagePaths(dir, "")
+	if err != nil {
+		t.Fatalf("collectRepoStagePaths failed: %v", err)
+	}
+	if len(paths) != 1 || paths[0] != "main.go" {
+		t.Fatalf("paths = %v, want only main.go without symlink", paths)
 	}
 }
 

@@ -35,8 +35,19 @@ func TestParseUnifiedDiff_PlainUnifiedDiff(t *testing.T) {
 	if d.Files[0].OldPath != "old.go" || d.Files[0].NewPath != "new.go" {
 		t.Fatalf("paths = old:%q new:%q", d.Files[0].OldPath, d.Files[0].NewPath)
 	}
-	if len(d.Files[0].Hunks) != 1 || len(d.Files[0].Hunks[0].AddedLines) != 1 {
+	if len(d.Files[0].Hunks) != 1 {
 		t.Fatalf("hunks = %+v", d.Files[0].Hunks)
+	}
+	h := d.Files[0].Hunks[0]
+	if len(h.AddedLines) != 1 {
+		t.Fatalf("added lines = %+v", h.AddedLines)
+	}
+	added := h.AddedLines[0]
+	if added.Line != 2 {
+		t.Fatalf("added line number = %d, want 2", added.Line)
+	}
+	if added.Content != `import "fmt"` {
+		t.Fatalf("added content = %q, want import \"fmt\"", added.Content)
 	}
 }
 

@@ -54,7 +54,9 @@ func collectRepoStagePaths(repoPath, diffRaw string) ([]string, error) {
 			return nil, err
 		}
 		for _, p := range tracked {
-			paths[p] = struct{}{}
+			if isSafeRepoRelativePath(p) {
+				paths[p] = struct{}{}
+			}
 		}
 	} else {
 		walked, err := walkRepoFiles(repoPath)
@@ -62,26 +64,33 @@ func collectRepoStagePaths(repoPath, diffRaw string) ([]string, error) {
 			return nil, err
 		}
 		for _, p := range walked {
-			paths[p] = struct{}{}
+			if isSafeRepoRelativePath(p) {
+				paths[p] = struct{}{}
+			}
 		}
 	}
 
 	if strings.TrimSpace(diffRaw) != "" {
 		if parsed, err := diff.ParseUnifiedDiff(diffRaw); err == nil {
 			for _, changed := range parsed.ChangedFiles() {
-				paths[changed] = struct{}{}
+				if isSafeRepoRelativePath(changed) {
+					paths[changed] = struct{}{}
+				}
 			}
 		}
 	}
 
 	out := make([]string, 0, len(paths))
 	for rel := range paths {
-		if isExcludedRepoPath(rel) {
+		if !isSafeRepoRelativePath(rel) || isExcludedRepoPath(rel) {
 			continue
 		}
-		full := filepath.Join(repoPath, filepath.FromSlash(rel))
-		info, err := os.Stat(full)
-		if err != nil || info.IsDir() {
+		full, ok := resolveRepoFilePath(repoPath, rel)
+		if !ok {
+			continue
+		}
+		info, err := os.Lstat(full)
+		if err != nil || !info.Mode().IsRegular() {
 			continue
 		}
 		out = append(out, rel)
@@ -110,7 +119,15 @@ func stageCleanRepo(
 
 	files := make([]codeexecutor.PutFile, 0, len(paths))
 	for _, rel := range paths {
-		data, err := os.ReadFile(filepath.Join(repoPath, filepath.FromSlash(rel)))
+		full, ok := resolveRepoFilePath(repoPath, rel)
+		if !ok {
+			continue
+		}
+		info, err := os.Lstat(full)
+		if err != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		data, err := os.ReadFile(full)
 		if err != nil {
 			continue
 		}
@@ -164,6 +181,12 @@ func walkRepoFiles(repoPath string) ([]string, error) {
 			}
 			return nil
 		}
+		if d.Type()&os.ModeSymlink != 0 {
+			return nil
+		}
+		if !d.Type().IsRegular() {
+			return nil
+		}
 		rel, err := filepath.Rel(repoPath, path)
 		if err != nil {
 			return err
@@ -172,6 +195,32 @@ func walkRepoFiles(repoPath string) ([]string, error) {
 		return nil
 	})
 	return files, err
+}
+
+// isSafeRepoRelativePath 用 filepath.IsLocal 拒绝 ../ 等路径逃逸。
+func isSafeRepoRelativePath(rel string) bool {
+	rel = filepath.ToSlash(strings.TrimSpace(rel))
+	if rel == "" || rel == "." {
+		return false
+	}
+	if filepath.IsAbs(filepath.FromSlash(rel)) {
+		return false
+	}
+	return filepath.IsLocal(rel)
+}
+
+// resolveRepoFilePath 把相对路径解析到 repo 内绝对路径，并确认未逃出仓库根目录。
+func resolveRepoFilePath(repoPath, rel string) (string, bool) {
+	if !isSafeRepoRelativePath(rel) {
+		return "", false
+	}
+	repoClean := filepath.Clean(repoPath)
+	full := filepath.Clean(filepath.Join(repoClean, filepath.FromSlash(rel)))
+	prefix := repoClean + string(os.PathSeparator)
+	if full != repoClean && !strings.HasPrefix(full, prefix) {
+		return "", false
+	}
+	return full, true
 }
 
 func isExcludedRepoPath(rel string) bool {
