@@ -227,19 +227,22 @@ type NormalizedValue struct {
 
 // NormalizedEvent is a stable event representation.
 type NormalizedEvent struct {
-	ID         string                     `json:"id,omitempty"`
-	Index      int                        `json:"index"`
-	Author     string                     `json:"author"`
-	Role       string                     `json:"role"`
-	Content    string                     `json:"content,omitempty"`
-	ToolCalls  []NormalizedToolCall       `json:"tool_calls,omitempty"`
-	ToolID     string                     `json:"tool_id,omitempty"`
-	ToolName   string                     `json:"tool_name,omitempty"`
-	Branch     string                     `json:"branch,omitempty"`
-	Tag        string                     `json:"tag,omitempty"`
-	FilterKey  string                     `json:"filter_key,omitempty"`
-	StateDelta map[string]NormalizedValue `json:"state_delta,omitempty"`
-	Extensions map[string]string          `json:"extensions,omitempty"`
+	ID           string                     `json:"id,omitempty"`
+	Index        int                        `json:"index"`
+	InvocationID string                     `json:"invocation_id,omitempty"`
+	Author       string                     `json:"author"`
+	Object       string                     `json:"object,omitempty"`
+	Done         bool                       `json:"done,omitempty"`
+	Role         string                     `json:"role"`
+	Content      string                     `json:"content,omitempty"`
+	ToolCalls    []NormalizedToolCall       `json:"tool_calls,omitempty"`
+	ToolID       string                     `json:"tool_id,omitempty"`
+	ToolName     string                     `json:"tool_name,omitempty"`
+	Branch       string                     `json:"branch,omitempty"`
+	Tag          string                     `json:"tag,omitempty"`
+	FilterKey    string                     `json:"filter_key,omitempty"`
+	StateDelta   map[string]NormalizedValue `json:"state_delta,omitempty"`
+	Extensions   map[string]string          `json:"extensions,omitempty"`
 }
 
 // NormalizedToolCall is a stable tool call representation.

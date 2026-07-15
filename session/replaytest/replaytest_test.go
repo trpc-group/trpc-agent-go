@@ -15,7 +15,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -380,31 +379,140 @@ func TestValidateReplaySnapshotUsesSummaryWriteTimeCutoff(t *testing.T) {
 	}
 }
 
-func TestApplyConcurrentOperationsCommitsOutOfListedOrder(t *testing.T) {
-	var mu sync.Mutex
-	var got []OperationKind
-	err := applyConcurrentOperations([]Operation{
+func TestApplyConcurrentOperationsLetsCallsOverlap(t *testing.T) {
+	ops := []Operation{
 		{Kind: OpSetState},
 		{Kind: OpAppendEvent},
 		{Kind: OpAppendTrack},
-	}, func(op Operation) error {
-		mu.Lock()
-		got = append(got, op.Kind)
-		mu.Unlock()
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("applyConcurrentOperations() error = %v", err)
 	}
-	want := []OperationKind{OpAppendTrack, OpAppendEvent, OpSetState}
-	if len(got) != len(want) {
-		t.Fatalf("commit order length = %d, want %d: %v", len(got), len(want), got)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("commit order = %v, want deterministic interleaving %v", got, want)
+	entered := make(chan OperationKind, len(ops))
+	release := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- applyConcurrentOperations(ops, func(op Operation) error {
+			entered <- op.Kind
+			<-release
+			return nil
+		})
+	}()
+
+	for range ops {
+		select {
+		case <-entered:
+		case <-time.After(time.Second):
+			close(release)
+			t.Fatalf("concurrent operation did not enter before another operation returned")
 		}
 	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatalf("applyConcurrentOperations() error = %v", err)
+	}
+}
+
+func TestNormalizeEventPreservesCorrelationFields(t *testing.T) {
+	evt, err := eventFromSpec(EventSpec{
+		LogicalID:    "tool-response",
+		InvocationID: "inv-tool-response",
+		Author:       "tool",
+		Role:         model.RoleTool,
+		Content:      "ok",
+		ToolID:       "call-1",
+		ToolName:     "lookup",
+		Object:       model.ObjectTypeToolResponse,
+		Done:         true,
+	}, 0)
+	if err != nil {
+		t.Fatalf("eventFromSpec() error = %v", err)
+	}
+	got := normalizeEvent(0, *evt)
+	if got.InvocationID != "inv-tool-response" ||
+		got.Object != model.ObjectTypeToolResponse ||
+		!got.Done {
+		t.Fatalf("normalized correlation fields = %+v", got)
+	}
+
+	base := &Snapshot{Events: []NormalizedEvent{got}}
+	compare := cloneSnapshot(base)
+	compare.Events[0].InvocationID = "wrong"
+	compare.Events[0].Object = model.ObjectTypeChatCompletion
+	compare.Events[0].Done = false
+	diffs := CompareSnapshots(base, compare)
+	for _, want := range []string{"invocation_id", "object", "done"} {
+		if !containsField(diffs, want) {
+			t.Fatalf("diffs do not include %q: %+v", want, diffs)
+		}
+	}
+}
+
+func TestNormalizeMemoryQueriesPreservesSearchOrderAndLimit(t *testing.T) {
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+	left := &memory.Entry{
+		ID:      "left",
+		AppName: key.AppName,
+		UserID:  key.UserID,
+		Memory:  &memory.Memory{Memory: "alpha left", Topics: []string{"alpha"}},
+		Score:   0.99,
+	}
+	right := &memory.Entry{
+		ID:      "right",
+		AppName: key.AppName,
+		UserID:  key.UserID,
+		Memory:  &memory.Memory{Memory: "alpha right", Topics: []string{"alpha"}},
+		Score:   0.72,
+	}
+	leftNorm, _ := normalizeMemoryEntry(left, nil)
+	rightNorm, _ := normalizeMemoryEntry(right, nil)
+	entries := []*memory.Entry{left, right}
+	wantFirst := left.Memory.Memory
+	if leftNorm.StableID < rightNorm.StableID {
+		entries = []*memory.Entry{right, left}
+		wantFirst = right.Memory.Memory
+	}
+
+	svc := &orderedSearchMemoryService{entries: entries}
+	queries, err := normalizeMemoryQueries(context.Background(), svc, key, []MemoryQuerySpec{{
+		Name:  "alpha",
+		Query: "alpha",
+		Limit: 1,
+	}}, ReplayCase{})
+	if err != nil {
+		t.Fatalf("normalizeMemoryQueries() error = %v", err)
+	}
+	if svc.options.Query != "alpha" || svc.options.MaxResults != 1 {
+		t.Fatalf("search options = %+v, want query alpha and max results 1", svc.options)
+	}
+	if len(queries) != 1 || len(queries[0].Results) != 1 {
+		t.Fatalf("limited query results = %+v", queries)
+	}
+	if got := queries[0].Results[0].Content; got != wantFirst {
+		t.Fatalf("query result order was normalized away: got %q, want %q", got, wantFirst)
+	}
+	if queries[0].Results[0].ScoreBand == "" {
+		t.Fatalf("query result score band was cleared: %+v", queries[0].Results[0])
+	}
+}
+
+type orderedSearchMemoryService struct {
+	memory.Service
+	entries []*memory.Entry
+	options memory.SearchOptions
+}
+
+func (s *orderedSearchMemoryService) SearchMemories(
+	ctx context.Context,
+	userKey memory.UserKey,
+	query string,
+	opts ...memory.SearchOption,
+) ([]*memory.Entry, error) {
+	s.options = memory.ResolveSearchOptions(query, opts)
+	limit := len(s.entries)
+	if s.options.MaxResults > 0 && s.options.MaxResults < limit {
+		limit = s.options.MaxResults
+	}
+	out := make([]*memory.Entry, limit)
+	copy(out, s.entries[:limit])
+	return out, nil
 }
 
 func TestNormalizerCanonicalizesJSONAndDurations(t *testing.T) {

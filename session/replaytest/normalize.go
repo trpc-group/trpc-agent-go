@@ -21,6 +21,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	meminmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -54,9 +55,6 @@ func normalizeSession(
 	s.AppName = sess.AppName
 	s.UserID = sess.UserID
 	events := sess.GetEvents()
-	for _, evt := range events {
-		s.EventOrder = append(s.EventOrder, stableEventOrderID(evt))
-	}
 	if normalizeEventOrder {
 		sort.SliceStable(events, func(i, j int) bool {
 			left := events[i].Timestamp
@@ -66,6 +64,10 @@ func normalizeSession(
 			}
 			return left.Before(right)
 		})
+	} else {
+		for _, evt := range events {
+			s.EventOrder = append(s.EventOrder, stableEventOrderID(evt))
+		}
 	}
 	eventRefs := make(map[string]normalizedEventRef, len(events))
 	for i, evt := range events {
@@ -87,14 +89,17 @@ func normalizeSession(
 
 func normalizeEvent(index int, evt event.Event) NormalizedEvent {
 	out := NormalizedEvent{
-		ID:        stableEventOrderID(evt),
-		Index:     index,
-		Author:    evt.Author,
-		Branch:    evt.Branch,
-		Tag:       evt.Tag,
-		FilterKey: evt.FilterKey,
+		ID:           stableEventOrderID(evt),
+		Index:        index,
+		InvocationID: evt.InvocationID,
+		Author:       evt.Author,
+		Branch:       evt.Branch,
+		Tag:          evt.Tag,
+		FilterKey:    evt.FilterKey,
 	}
 	if evt.Response != nil && len(evt.Response.Choices) > 0 {
+		out.Object = evt.Response.Object
+		out.Done = evt.Response.Done
 		msg := evt.Response.Choices[0].Message
 		if msg.Role == "" {
 			msg = evt.Response.Choices[0].Delta
@@ -218,8 +223,6 @@ func normalizeMemorySearchResults(entries []*memory.Entry) []NormalizedMemory {
 			out = append(out, normalized)
 		}
 	}
-	clearMemoryScoreBands(out)
-	sortNormalizedMemories(out)
 	return out
 }
 
@@ -291,14 +294,11 @@ func normalizeMemoryQueries(
 	}
 	out := make([]NormalizedMemoryQuery, 0, len(queries))
 	for _, query := range queries {
-		entries, err := svc.SearchMemories(ctx, userKey(key), query.Query)
+		entries, err := svc.SearchMemories(ctx, userKey(key), query.Query, memorySearchOptions(query)...)
 		if err != nil {
 			return nil, err
 		}
 		results := normalizeMemorySearchResultsWithCase(entries, caseDef)
-		if query.Limit > 0 && len(results) > query.Limit {
-			results = results[:query.Limit]
-		}
 		out = append(out, NormalizedMemoryQuery{
 			Name:    query.Name,
 			Query:   query.Query,
@@ -306,6 +306,18 @@ func normalizeMemoryQueries(
 		})
 	}
 	return out, nil
+}
+
+func memorySearchOptions(query MemoryQuerySpec) []memory.SearchOption {
+	if query.Limit <= 0 {
+		return nil
+	}
+	return []memory.SearchOption{
+		memory.WithSearchOptions(memory.SearchOptions{
+			Query:      query.Query,
+			MaxResults: query.Limit,
+		}),
+	}
 }
 
 func normalizeFileMemoryQueries(
@@ -319,33 +331,8 @@ func normalizeFileMemoryQueries(
 	}
 	out := make([]NormalizedMemoryQuery, 0, len(queries))
 	for _, query := range queries {
-		matched := make([]*memory.Entry, 0, len(entries))
-		terms := strings.Fields(strings.ToLower(query.Query))
-		for _, entry := range entries {
-			if entry == nil || entry.Memory == nil {
-				continue
-			}
-			if entry.AppName != key.AppName || entry.UserID != key.UserID {
-				continue
-			}
-			haystack := strings.ToLower(entry.Memory.Memory + " " + strings.Join(entry.Memory.Topics, " "))
-			ok := true
-			for _, term := range terms {
-				if !strings.Contains(haystack, term) {
-					ok = false
-					break
-				}
-			}
-			if ok {
-				cloned := *entry
-				cloned.Score = 1
-				matched = append(matched, &cloned)
-			}
-		}
+		matched := searchFileMemoryEntries(key, entries, query)
 		results := normalizeMemorySearchResultsWithCase(matched, caseDef)
-		if query.Limit > 0 && len(results) > query.Limit {
-			results = results[:query.Limit]
-		}
 		out = append(out, NormalizedMemoryQuery{
 			Name:    query.Name,
 			Query:   query.Query,
@@ -353,6 +340,61 @@ func normalizeFileMemoryQueries(
 		})
 	}
 	return out
+}
+
+func searchFileMemoryEntries(
+	key session.Key,
+	entries []*memory.Entry,
+	query MemoryQuerySpec,
+) []*memory.Entry {
+	svc := meminmemory.NewMemoryService()
+	defer svc.Close()
+	for _, entry := range entries {
+		if entry == nil || entry.Memory == nil {
+			continue
+		}
+		if entry.AppName != key.AppName || entry.UserID != key.UserID {
+			continue
+		}
+		if err := svc.AddMemory(
+			context.Background(),
+			userKey(key),
+			entry.Memory.Memory,
+			entry.Memory.Topics,
+			memoryEntryAddOptions(entry)...,
+		); err != nil {
+			return nil
+		}
+	}
+	matched, err := svc.SearchMemories(
+		context.Background(),
+		userKey(key),
+		query.Query,
+		memorySearchOptions(query)...,
+	)
+	if err != nil {
+		return nil
+	}
+	return matched
+}
+
+func memoryEntryAddOptions(entry *memory.Entry) []memory.AddOption {
+	if entry == nil || entry.Memory == nil {
+		return nil
+	}
+	metadata := &memory.Metadata{
+		Kind:         entry.Memory.Kind,
+		EventTime:    entry.Memory.EventTime,
+		Participants: entry.Memory.Participants,
+		Location:     entry.Memory.Location,
+	}
+	if metadata.Kind == "" &&
+		metadata.EventTime == nil &&
+		len(metadata.Participants) == 0 &&
+		metadata.Location == "" {
+		return nil
+	}
+	return []memory.AddOption{memory.WithMetadata(metadata)}
 }
 
 func normalizeMemorySearchResultsWithCase(entries []*memory.Entry, caseDef ReplayCase) []NormalizedMemory {
@@ -364,15 +406,7 @@ func normalizeMemorySearchResultsWithCase(entries []*memory.Entry, caseDef Repla
 			out = append(out, normalized)
 		}
 	}
-	clearMemoryScoreBands(out)
-	sortNormalizedMemories(out)
 	return out
-}
-
-func clearMemoryScoreBands(results []NormalizedMemory) {
-	for i := range results {
-		results[i].ScoreBand = ""
-	}
 }
 
 func sortNormalizedMemories(results []NormalizedMemory) {

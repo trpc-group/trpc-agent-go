@@ -65,11 +65,26 @@ func runOptionalSQLReplay(t *testing.T, name string, cases []replaytest.ReplayCa
 
 func replayCasesWithUniqueApp(backend string) []replaytest.ReplayCase {
 	cases := replaytest.PublicCases()
-	appName := fmt.Sprintf("replay-%s-%d", backend, time.Now().UnixNano())
+	appNamePrefix := fmt.Sprintf("replay-%s-%d", backend, time.Now().UnixNano())
 	for i := range cases {
-		cases[i].Key.AppName = appName
+		cases[i].Key.AppName = fmt.Sprintf("%s-%02d", appNamePrefix, i)
 	}
 	return cases
+}
+
+func TestReplayCasesWithUniqueAppIsolatesMemoryScope(t *testing.T) {
+	cases := replayCasesWithUniqueApp("unit")
+	seen := make(map[string]string, len(cases))
+	for _, c := range cases {
+		scope := c.Key.AppName + "/" + c.Key.UserID
+		if previous := seen[scope]; previous != "" {
+			t.Fatalf("cases %q and %q share memory scope %q", previous, c.Name, scope)
+		}
+		seen[scope] = c.Name
+	}
+	if len(seen) != len(cases) {
+		t.Fatalf("unique memory scopes = %d, want %d", len(seen), len(cases))
+	}
 }
 
 func newPostgresReplayBackend(dsn string) replaytest.Backend {

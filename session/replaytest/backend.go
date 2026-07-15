@@ -274,7 +274,9 @@ type serviceRun struct {
 	deleteSessionState func(context.Context, session.Key, string) error
 	clearSessionState  func(context.Context, session.Key) error
 	sess               *session.Session
+	sessMu             sync.Mutex
 	logicalMemoryIDs   map[string]string
+	logicalMemoryIDsMu sync.Mutex
 	seenEvents         map[string]struct{}
 	seenEventsMu       sync.Mutex
 	eventSeq           int
@@ -324,10 +326,7 @@ func (r *serviceRun) applyEventOperation(op Operation) error {
 
 func (r *serviceRun) applyConcurrentOperation(ops []Operation) error {
 	ops = assignConcurrentSequences(ops, &r.eventSeq)
-	var applyMu sync.Mutex
 	return applyConcurrentOperations(ops, func(op Operation) error {
-		applyMu.Lock()
-		defer applyMu.Unlock()
 		return r.applyOperation(op)
 	})
 }
@@ -346,7 +345,9 @@ func (r *serviceRun) applyStateOperation(op Operation) error {
 		); err != nil {
 			return err
 		}
+		r.sessMu.Lock()
 		r.sess.SetState(op.State.Key, value)
+		r.sessMu.Unlock()
 	case OpDeleteState:
 		if op.State == nil {
 			return nil
@@ -355,7 +356,9 @@ func (r *serviceRun) applyStateOperation(op Operation) error {
 			if err := r.deleteSessionState(r.ctx, r.caseDef.Key, op.State.Key); err != nil {
 				return err
 			}
+			r.sessMu.Lock()
 			r.sess.DeleteState(op.State.Key)
+			r.sessMu.Unlock()
 			return nil
 		}
 		r.recordUnsupported(CapabilityStateDelete)
@@ -364,7 +367,9 @@ func (r *serviceRun) applyStateOperation(op Operation) error {
 			if err := r.clearSessionState(r.ctx, r.caseDef.Key); err != nil {
 				return err
 			}
+			r.sessMu.Lock()
 			r.sess.State = make(session.StateMap)
+			r.sessMu.Unlock()
 			return nil
 		}
 		r.recordUnsupported(CapabilityStateClear)
@@ -407,7 +412,9 @@ func (r *serviceRun) addMemory(spec *MemorySpec) error {
 	if err != nil {
 		return err
 	}
+	r.logicalMemoryIDsMu.Lock()
 	r.logicalMemoryIDs[spec.ID] = id
+	r.logicalMemoryIDsMu.Unlock()
 	return nil
 }
 
@@ -415,13 +422,16 @@ func (r *serviceRun) updateMemory(spec *MemorySpec) error {
 	if spec == nil {
 		return nil
 	}
+	r.logicalMemoryIDsMu.Lock()
+	memoryID := r.logicalMemoryIDs[spec.ID]
+	r.logicalMemoryIDsMu.Unlock()
 	result := &memory.UpdateResult{}
 	err := r.memories.UpdateMemory(
 		r.ctx,
 		memory.Key{
 			AppName:  r.caseDef.Key.AppName,
 			UserID:   r.caseDef.Key.UserID,
-			MemoryID: r.logicalMemoryIDs[spec.ID],
+			MemoryID: memoryID,
 		},
 		spec.Content,
 		spec.Topics,
@@ -431,7 +441,9 @@ func (r *serviceRun) updateMemory(spec *MemorySpec) error {
 		return err
 	}
 	if result.MemoryID != "" {
+		r.logicalMemoryIDsMu.Lock()
 		r.logicalMemoryIDs[spec.ID] = result.MemoryID
+		r.logicalMemoryIDsMu.Unlock()
 	}
 	return nil
 }
@@ -440,10 +452,13 @@ func (r *serviceRun) deleteMemory(spec *MemorySpec) error {
 	if spec == nil {
 		return nil
 	}
+	r.logicalMemoryIDsMu.Lock()
+	memoryID := r.logicalMemoryIDs[spec.ID]
+	r.logicalMemoryIDsMu.Unlock()
 	return r.memories.DeleteMemory(r.ctx, memory.Key{
 		AppName:  r.caseDef.Key.AppName,
 		UserID:   r.caseDef.Key.UserID,
-		MemoryID: r.logicalMemoryIDs[spec.ID],
+		MemoryID: memoryID,
 	})
 }
 
@@ -501,17 +516,19 @@ func (r *serviceRun) runCapabilityProbes(snapshot *Snapshot) error {
 }
 
 type inMemoryRun struct {
-	backend          *inMemoryBackend
-	ctx              context.Context
-	caseDef          ReplayCase
-	sessions         *sessinmemory.SessionService
-	memories         memory.Service
-	sess             *session.Session
-	logicalMemoryIDs map[string]string
-	seenEvents       map[string]struct{}
-	seenEventsMu     sync.Mutex
-	eventSeq         int
-	unsupported      []UnsupportedFeature
+	backend            *inMemoryBackend
+	ctx                context.Context
+	caseDef            ReplayCase
+	sessions           *sessinmemory.SessionService
+	memories           memory.Service
+	sess               *session.Session
+	sessMu             sync.Mutex
+	logicalMemoryIDs   map[string]string
+	logicalMemoryIDsMu sync.Mutex
+	seenEvents         map[string]struct{}
+	seenEventsMu       sync.Mutex
+	eventSeq           int
+	unsupported        []UnsupportedFeature
 }
 
 func (r *inMemoryRun) applyOperations() error {
@@ -562,10 +579,7 @@ func (r *inMemoryRun) applyEventOperation(op Operation) error {
 
 func (r *inMemoryRun) applyConcurrentOperation(ops []Operation) error {
 	ops = assignConcurrentSequences(ops, &r.eventSeq)
-	var applyMu sync.Mutex
 	return applyConcurrentOperations(ops, func(op Operation) error {
-		applyMu.Lock()
-		defer applyMu.Unlock()
 		return r.applyOperation(op)
 	})
 }
@@ -584,7 +598,9 @@ func (r *inMemoryRun) applyStateOperation(op Operation) error {
 		); err != nil {
 			return err
 		}
+		r.sessMu.Lock()
 		r.sess.SetState(op.State.Key, value)
+		r.sessMu.Unlock()
 	case OpDeleteState:
 		if op.State != nil {
 			r.recordUnsupported(CapabilityStateDelete)
@@ -599,6 +615,8 @@ func (r *inMemoryRun) applyEventStateOracle(spec *EventSpec) {
 	if spec == nil || len(spec.StateDelta) == 0 {
 		return
 	}
+	r.sessMu.Lock()
+	defer r.sessMu.Unlock()
 	for key, value := range spec.StateDelta {
 		r.sess.SetState(key, cloneRaw(value))
 	}
@@ -639,7 +657,9 @@ func (r *inMemoryRun) addMemory(spec *MemorySpec) error {
 	if err != nil {
 		return err
 	}
+	r.logicalMemoryIDsMu.Lock()
 	r.logicalMemoryIDs[spec.ID] = id
+	r.logicalMemoryIDsMu.Unlock()
 	return nil
 }
 
@@ -647,13 +667,16 @@ func (r *inMemoryRun) updateMemory(spec *MemorySpec) error {
 	if spec == nil {
 		return nil
 	}
+	r.logicalMemoryIDsMu.Lock()
+	memoryID := r.logicalMemoryIDs[spec.ID]
+	r.logicalMemoryIDsMu.Unlock()
 	result := &memory.UpdateResult{}
 	err := r.memories.UpdateMemory(
 		r.ctx,
 		memory.Key{
 			AppName:  r.caseDef.Key.AppName,
 			UserID:   r.caseDef.Key.UserID,
-			MemoryID: r.logicalMemoryIDs[spec.ID],
+			MemoryID: memoryID,
 		},
 		spec.Content,
 		spec.Topics,
@@ -663,7 +686,9 @@ func (r *inMemoryRun) updateMemory(spec *MemorySpec) error {
 		return err
 	}
 	if result.MemoryID != "" {
+		r.logicalMemoryIDsMu.Lock()
 		r.logicalMemoryIDs[spec.ID] = result.MemoryID
+		r.logicalMemoryIDsMu.Unlock()
 	}
 	return nil
 }
@@ -672,10 +697,13 @@ func (r *inMemoryRun) deleteMemory(spec *MemorySpec) error {
 	if spec == nil {
 		return nil
 	}
+	r.logicalMemoryIDsMu.Lock()
+	memoryID := r.logicalMemoryIDs[spec.ID]
+	r.logicalMemoryIDsMu.Unlock()
 	return r.memories.DeleteMemory(r.ctx, memory.Key{
 		AppName:  r.caseDef.Key.AppName,
 		UserID:   r.caseDef.Key.UserID,
-		MemoryID: r.logicalMemoryIDs[spec.ID],
+		MemoryID: memoryID,
 	})
 }
 
@@ -1027,25 +1055,19 @@ func applyConcurrentOperations(ops []Operation, apply func(Operation) error) err
 	}
 	var wg sync.WaitGroup
 	errs := make(chan error, len(ops))
-	turns := make([]chan struct{}, len(ops))
-	for i := range turns {
-		turns[i] = make(chan struct{})
-	}
-	for i, op := range ops {
-		i, op := i, op
+	start := make(chan struct{})
+	for _, op := range ops {
+		op := op
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			<-turns[i]
-			if i > 0 {
-				defer close(turns[i-1])
-			}
+			<-start
 			if err := apply(op); err != nil {
 				errs <- err
 			}
 		}()
 	}
-	close(turns[len(ops)-1])
+	close(start)
 	wg.Wait()
 	close(errs)
 	for err := range errs {
