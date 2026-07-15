@@ -188,6 +188,10 @@ func TestServerRunCompilesProfileAndReturnsTrace(t *testing.T) {
 		RunOptions: runOptions{
 			RequestID:             "req-1",
 			ExecutionTraceEnabled: true,
+			RuntimeState: map[string]any{
+				"ignore": true,
+				"source": "promptiter",
+			},
 		},
 	})
 	req := httptest.NewRequest(http.MethodPost, path, body)
@@ -209,6 +213,8 @@ func TestServerRunCompilesProfileAndReturnsTrace(t *testing.T) {
 	assert.Equal(t, "sports-agent", ag.runOptions.AppName)
 	assert.Equal(t, "req-1", ag.runOptions.RequestID)
 	assert.True(t, ag.runOptions.ExecutionTraceEnabled)
+	assert.Equal(t, true, ag.runOptions.RuntimeState["ignore"])
+	assert.Equal(t, "promptiter", ag.runOptions.RuntimeState["source"])
 	assert.True(t, surfacepatch.ToolSurfaceTracingEnabled(ag.runOptions.CustomAgentConfigs))
 	patch, ok := surfacepatch.PatchForNode(ag.runOptions.CustomAgentConfigs, "writer")
 	require.True(t, ok)
