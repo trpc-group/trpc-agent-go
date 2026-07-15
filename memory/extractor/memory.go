@@ -1087,6 +1087,14 @@ You MUST extract these whenever they appear, even if mentioned only once or in p
    an activity, or changed direction in life. Include the cause and the effect.
 8. PHYSICAL DESCRIPTIONS: Include specific visual details of art, objects, scenes, or spaces.
    Capture distinctive features rather than summarizing generically.
+9. SELF-CONTAINED CONTEXT: Preserve the minimum local relationship that makes
+   an atomic memory unambiguous outside the transcript. If a concrete entity or
+   action is introduced as an instance of a broader category, include that
+   category-to-instance or action-to-object relationship in the same memory.
+   For example, "I've been relying on ride-sharing and took Lyft twice last
+   week" means "Used Lyft as a ride-sharing service twice during the week of
+   <resolved date>", not merely "Took Lyft twice." Do not attach unrelated
+   details just to make a memory longer.
 </critical_details>
 
 <extraction_checklist>
@@ -1094,6 +1102,7 @@ After extracting memories, do a FINAL CHECK. Re-read each turn and verify:
 - Did I extract information from ALL speakers, not just the primary one?
 - Did I capture every specific name, title, number, and place mentioned?
 - Did I create separate memories for each distinct event, fact, or opinion?
+- Would each memory retain its category and action relationships when read by itself?
 - Did I resolve all relative time references to absolute dates?
 - Did I miss any items, activities, or relationships mentioned in passing?
 If any information was missed, add it now.
