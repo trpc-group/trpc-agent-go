@@ -24,6 +24,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/sqldb"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/session/internal/schemaversion"
 	isummary "trpc.group/trpc-go/trpc-agent-go/session/internal/summary"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/clickhouse"
 )
@@ -143,6 +144,7 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		s.startCleanupRoutine()
 	}
 
+	schemaversion.Register("trpc.group/trpc-go/trpc-agent-go/session/clickhouse", SchemaVersion)
 	return s, nil
 }
 

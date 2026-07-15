@@ -18,6 +18,9 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/log"
 )
 
+// SchemaVersion is the canonical persistence schema version expected by this backend.
+const SchemaVersion = "v1"
+
 // SQL templates for table creation (ClickHouse syntax)
 // Most tables use updated_at as the ReplacingMergeTree version column. Session
 // summaries keep updated_at as the semantic summary cutoff and use version_at

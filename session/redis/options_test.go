@@ -26,9 +26,16 @@ func (f *fakeRedisOptionsSummarizer) ShouldSummarize(sess *session.Session) bool
 func (f *fakeRedisOptionsSummarizer) Summarize(ctx context.Context, sess *session.Session) (string, error) {
 	return "test summary", nil
 }
+
 func (f *fakeRedisOptionsSummarizer) SetPrompt(prompt string)  {}
 func (f *fakeRedisOptionsSummarizer) SetModel(m model.Model)   {}
 func (f *fakeRedisOptionsSummarizer) Metadata() map[string]any { return map[string]any{"test": "data"} }
+
+func TestSchemaVersionForCompatMode(t *testing.T) {
+	require.Equal(t, SchemaVersion, schemaVersionForCompatMode(CompatModeNone))
+	require.Equal(t, SchemaVersion, schemaVersionForCompatMode(CompatModeLegacy))
+	require.Equal(t, legacySchemaVersion, schemaVersionForCompatMode(CompatModeTransition))
+}
 
 func TestWithAsyncSummaryNum(t *testing.T) {
 	tests := []struct {

@@ -20,6 +20,9 @@ import (
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/postgres"
 )
 
+// SchemaVersion is the canonical persistence schema version expected by this backend.
+const SchemaVersion = "v1"
+
 // SQL templates for table creation
 const (
 	sqlCreateSessionStatesTable = `

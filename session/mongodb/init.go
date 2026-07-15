@@ -20,6 +20,9 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/sqldb"
 )
 
+// SchemaVersion is the canonical persistence schema version expected by this backend.
+const SchemaVersion = "v1"
+
 // ensureIndexes creates the indexes required by the session backend.
 //
 // All unique indexes filter on active documents so soft-deleted documents do

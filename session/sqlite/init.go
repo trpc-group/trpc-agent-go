@@ -18,6 +18,9 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/sqldb"
 )
 
+// SchemaVersion is the canonical persistence schema version expected by this backend.
+const SchemaVersion = "v1"
+
 const (
 	sqlCreateSessionStatesTable = `
 CREATE TABLE IF NOT EXISTS {{TABLE_NAME}} (

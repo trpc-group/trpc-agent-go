@@ -21,6 +21,9 @@ import (
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/postgres"
 )
 
+// SchemaVersion is the canonical persistence schema version expected by this backend.
+const SchemaVersion = "v1"
+
 // initDB initializes the database schema including pgvector
 // extension, tables, indexes, and HNSW vector index.
 func (s *Service) initDB(ctx context.Context) error {

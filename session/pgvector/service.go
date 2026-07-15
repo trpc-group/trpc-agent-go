@@ -25,6 +25,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/session/internal/schemaversion"
 	isummary "trpc.group/trpc-go/trpc-agent-go/session/internal/summary"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/postgres"
 )
@@ -243,6 +244,7 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		s.startCleanupRoutine()
 	}
 
+	schemaversion.Register("trpc.group/trpc-go/trpc-agent-go/session/pgvector", SchemaVersion)
 	return s, nil
 }
 

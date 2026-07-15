@@ -26,6 +26,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/hook"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/sqldb"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/session/internal/schemaversion"
 	isummary "trpc.group/trpc-go/trpc-agent-go/session/internal/summary"
 )
 
@@ -164,6 +165,7 @@ func NewService(db *sql.DB, options ...ServiceOpt) (*Service, error) {
 		s.startCleanupRoutine()
 	}
 
+	schemaversion.Register("trpc.group/trpc-go/trpc-agent-go/session/sqlite", SchemaVersion)
 	return s, nil
 }
 

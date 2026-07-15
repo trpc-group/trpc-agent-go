@@ -23,6 +23,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/hook"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/session/internal/schemaversion"
 	"trpc.group/trpc-go/trpc-agent-go/session/internal/sessionopt"
 	isummary "trpc.group/trpc-go/trpc-agent-go/session/internal/summary"
 	"trpc.group/trpc-go/trpc-agent-go/session/redis/internal/hashidx"
@@ -30,6 +31,13 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session/redis/internal/zset"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/redis"
 	atrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
+)
+
+const (
+	// SchemaVersion is the current hashidx persistence schema version.
+	SchemaVersion = "v2"
+	// legacySchemaVersion is the zset persistence schema version used in transition mode.
+	legacySchemaVersion = "v1"
 )
 
 var (
@@ -179,7 +187,18 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		s.asyncWorker.Start()
 	}
 
+	schemaversion.Register(
+		"trpc.group/trpc-go/trpc-agent-go/session/redis",
+		schemaVersionForCompatMode(opts.compatMode),
+	)
 	return s, nil
+}
+
+func schemaVersionForCompatMode(mode CompatMode) string {
+	if mode == CompatModeTransition {
+		return legacySchemaVersion
+	}
+	return SchemaVersion
 }
 
 // checkSessionExists checks if session exists in zset and hashidx using pipeline.

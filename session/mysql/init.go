@@ -21,6 +21,9 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/log"
 )
 
+// SchemaVersion is the canonical persistence schema version expected by this backend.
+const SchemaVersion = "v1"
+
 // SQL templates for table creation (MySQL syntax)
 const (
 	sqlCreateSessionStatesTable = `
