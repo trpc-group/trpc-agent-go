@@ -2419,7 +2419,7 @@ func TestExecuteKeywordSearch(t *testing.T) {
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 
-	t.Run("natural language query matches any normalized term", func(t *testing.T) {
+	t.Run("natural language query prefers adjacent content phrases", func(t *testing.T) {
 		db, mock := setupMockDB(t)
 		defer db.Close()
 
@@ -2427,8 +2427,8 @@ func TestExecuteKeywordSearch(t *testing.T) {
 		defer svc.Close()
 
 		now := time.Date(2024, 5, 7, 0, 0, 0, 0, time.UTC)
-		mock.ExpectQuery("ts_rank\\(search_vector, to_tsquery.*\\|.*").
-			WithArgs("museums I visited", "test-app", "u1").
+		mock.ExpectQuery("ts_rank\\(search_vector, websearch_to_tsquery").
+			WithArgs(`"museums visited"`, "test-app", "u1").
 			WillReturnRows(sqlmock.NewRows(
 				[]string{"memory_id", "app_name", "user_id", "memory_content", "topics",
 					"memory_kind", "event_time", "participants", "location",
@@ -2437,6 +2437,42 @@ func TestExecuteKeywordSearch(t *testing.T) {
 				"mem-1", "test-app", "u1", "Visited the Science Museum",
 				pq.Array([]string{"museum"}), "fact", nil, pq.Array([]string{}), "",
 				now, now, 0.42,
+			))
+
+		results, err := svc.executeKeywordSearch(
+			context.Background(),
+			memory.UserKey{AppName: "test-app", UserID: "u1"},
+			memory.SearchOptions{Query: "museums I visited", HybridSearch: true},
+			5,
+		)
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+		assert.Equal(t, "mem-1", results[0].ID)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("falls back to any normalized term when no phrase matches", func(t *testing.T) {
+		db, mock := setupMockDB(t)
+		defer db.Close()
+
+		svc := setupMockService(t, db, mock, WithSkipDBInit(true))
+		defer svc.Close()
+
+		now := time.Date(2024, 5, 7, 0, 0, 0, 0, time.UTC)
+		columns := []string{
+			"memory_id", "app_name", "user_id", "memory_content", "topics",
+			"memory_kind", "event_time", "participants", "location",
+			"created_at", "updated_at", "similarity",
+		}
+		mock.ExpectQuery("websearch_to_tsquery").
+			WithArgs(`"museums visited"`, "test-app", "u1").
+			WillReturnRows(sqlmock.NewRows(columns))
+		mock.ExpectQuery("ts_rank\\(search_vector, to_tsquery.*\\|.*").
+			WithArgs("museums I visited", "test-app", "u1").
+			WillReturnRows(sqlmock.NewRows(columns).AddRow(
+				"mem-1", "test-app", "u1", "Visited the Science Museum",
+				pq.Array([]string{"museum"}), "fact", nil,
+				pq.Array([]string{}), "", now, now, 0.42,
 			))
 
 		results, err := svc.executeKeywordSearch(
@@ -2471,6 +2507,19 @@ func TestExecuteKeywordSearch(t *testing.T) {
 		assert.Empty(t, results)
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
+}
+
+func TestBuildKeywordPhraseQuery(t *testing.T) {
+	t.Parallel()
+
+	query := buildKeywordPhraseQuery(
+		"How many different types of food delivery services have I used recently?",
+	)
+	assert.Contains(t, query, `"food delivery"`)
+	assert.Contains(t, query, `"delivery services"`)
+	assert.NotContains(t, query, "how")
+	assert.NotContains(t, query, "have")
+	assert.Empty(t, buildKeywordPhraseQuery("Kyoto"))
 }
 
 func TestExecuteVectorSearch_OrderByEventTimeUsesSimilarityFirst(t *testing.T) {

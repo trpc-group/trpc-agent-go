@@ -716,11 +716,23 @@ func (s *Service) executeVectorSearch(
 // defaultRRFK is the standard Reciprocal Rank Fusion constant.
 const defaultRRFK = imemory.DefaultHybridRRFK
 
-// keywordTSQuerySQL turns the normalized lexemes in a natural-language query
-// into alternatives. plainto_tsquery joins them with AND, which commonly
-// produces no keyword candidates for conversational questions.
-const keywordTSQuerySQL = "to_tsquery('english', replace(strip(" +
+// keywordFallbackTSQuerySQL turns normalized lexemes into alternatives. It is
+// used only when no adjacent content phrase matches.
+const keywordFallbackTSQuerySQL = "to_tsquery('english', replace(strip(" +
 	"to_tsvector('english', $1))::text, ' ', ' | '))"
+
+const keywordPhraseTSQuerySQL = "websearch_to_tsquery('english', $1)"
+
+const maxKeywordPhraseTokens = 16
+
+var keywordQuestionStopwords = map[string]struct{}{
+	"about": {}, "can": {}, "could": {}, "did": {}, "do": {},
+	"does": {}, "had": {}, "has": {}, "have": {}, "how": {},
+	"i": {}, "me": {}, "mine": {}, "my": {}, "please": {},
+	"remind": {}, "should": {}, "tell": {}, "what": {}, "when": {},
+	"where": {}, "which": {}, "who": {}, "why": {}, "would": {},
+	"you": {}, "your": {}, "yours": {},
+}
 
 // executeKeywordSearch runs a full-text search using PostgreSQL
 // tsvector/tsquery alongside the vector search results.
@@ -734,6 +746,36 @@ func (s *Service) executeKeywordSearch(
 	if query == "" {
 		return []*memory.Entry{}, nil
 	}
+	if phraseQuery := buildKeywordPhraseQuery(query); phraseQuery != "" {
+		results, err := s.executeKeywordSearchQuery(
+			ctx, userKey, opts, maxResults,
+			phraseQuery, keywordPhraseTSQuerySQL,
+		)
+		if err != nil {
+			return []*memory.Entry{}, nil
+		}
+		if len(results) > 0 {
+			return results, nil
+		}
+	}
+	results, err := s.executeKeywordSearchQuery(
+		ctx, userKey, opts, maxResults,
+		query, keywordFallbackTSQuerySQL,
+	)
+	if err != nil {
+		return []*memory.Entry{}, nil
+	}
+	return results, nil
+}
+
+func (s *Service) executeKeywordSearchQuery(
+	ctx context.Context,
+	userKey memory.UserKey,
+	opts memory.SearchOptions,
+	maxResults int,
+	query string,
+	tsQuerySQL string,
+) ([]*memory.Entry, error) {
 
 	var searchQuery strings.Builder
 	args := []any{query, userKey.AppName, userKey.UserID}
@@ -746,7 +788,7 @@ func (s *Service) executeKeywordSearch(
 			"ts_rank(search_vector, %s) AS similarity "+
 			"FROM %s WHERE app_name = $2 AND user_id = $3 "+
 			"AND search_vector @@ %s",
-		keywordTSQuerySQL, s.tableName, keywordTSQuerySQL,
+		tsQuerySQL, s.tableName, tsQuerySQL,
 	)
 	if s.opts.softDelete {
 		searchQuery.WriteString(" AND deleted_at IS NULL")
@@ -788,11 +830,51 @@ func (s *Service) executeKeywordSearch(
 		return nil
 	}, searchQuery.String(), args...)
 
-	if err != nil {
-		// Keyword search failure is non-fatal; log and return empty.
-		return []*memory.Entry{}, nil
+	return results, err
+}
+
+func buildKeywordPhraseQuery(query string) string {
+	tokens := imemory.BuildSearchTokens(query)
+	filtered := make([]string, 0, min(len(tokens), maxKeywordPhraseTokens))
+	for _, token := range tokens {
+		token = strings.TrimSpace(strings.ToLower(token))
+		if token == "" {
+			continue
+		}
+		if _, ok := keywordQuestionStopwords[token]; ok {
+			continue
+		}
+		if len(filtered) == maxKeywordPhraseTokens {
+			break
+		}
+		filtered = append(filtered, token)
 	}
-	return results, nil
+	if len(filtered) < 2 {
+		return ""
+	}
+
+	phrases := make([]string, 0, len(filtered)-1)
+	seen := make(map[string]struct{}, len(filtered)-1)
+	for index := 0; index+1 < len(filtered); index++ {
+		left := escapeWebSearchPhraseToken(filtered[index])
+		right := escapeWebSearchPhraseToken(filtered[index+1])
+		if left == "" || right == "" {
+			continue
+		}
+		phrase := `"` + left + " " + right + `"`
+		if _, ok := seen[phrase]; ok {
+			continue
+		}
+		seen[phrase] = struct{}{}
+		phrases = append(phrases, phrase)
+	}
+	return strings.Join(phrases, " OR ")
+}
+
+func escapeWebSearchPhraseToken(token string) string {
+	token = strings.ReplaceAll(token, `\`, " ")
+	token = strings.ReplaceAll(token, `"`, " ")
+	return strings.Join(strings.Fields(token), " ")
 }
 
 // mergeHybridResults combines vector and keyword search results using
