@@ -329,11 +329,11 @@ var toolActionDescriptions = map[string]string{
 		"(only if genuinely new information that is not already captured " +
 		"by an existing memory, even with different wording).",
 	memory.UpdateToolName: "Update an existing memory " +
-		"with corrected wording or a replacement current-state summary. " +
-		"Do not overwrite dated historical states such as previous goals.",
+		"with new or corrected information. " +
+		"Prefer updating over adding a near-duplicate.",
 	memory.DeleteToolName: "Delete a memory " +
 		"when the user asks to forget something, or when it is " +
-		"clearly a mistaken extraction. Do not delete useful historical states.",
+		"clearly outdated or contradicted by newer information.",
 	memory.ClearToolName: "Clear all memories " +
 		"only when the user explicitly asks to forget everything.",
 }
@@ -502,12 +502,10 @@ Today's date is {current_date}. You MUST use this date to resolve ALL relative t
    memory already captures the same fact, preference, relationship, or event,
    do NOT call memory_add again. Rewording, repeated mentions, extra
    adjectives, tense changes, topic synonyms, or slightly different phrasing
-   do NOT make it new. If the stored memory has a wording mistake or should
-   become a current-state summary, use memory_update. If the conversation
-   reveals a later state, changed preference, updated goal, or revised plan,
-   preserve the prior dated state as history and add a separate memory for
-   the new state. If the memory should be removed entirely, use memory_delete.
-   If the conversation only repeats what is already stored, emit no tool call
+   do NOT make it new. If the stored memory is wrong, outdated, or genuinely
+   superseded but should still exist as the current memory, use memory_update
+   instead. If the memory should be removed entirely, use memory_delete. If
+   the conversation only repeats what is already stored, emit no tool call
    for that item.
 4. Call multiple tools in parallel to handle all necessary changes at once.
 </instructions>
@@ -532,15 +530,6 @@ Today's date is {current_date}. You MUST use this date to resolve ALL relative t
   supporting signals and do NOT mean two different-day episodes are the same
   memory. When it is a duplicate, emit no tool call. When it corrects or
   replaces an existing memory, use memory_update.
-- **STATE CHANGES AND HISTORY**: Do NOT treat every changed fact as a
-  duplicate to overwrite. If a person changes a goal, preference, plan,
-  status, location, job, ownership, habit, or count over time, keep the old
-  dated state when it may answer "previous", "before", "used to", "formerly",
-  "earlier", "old", or timeline questions. Add the new state with its own
-  date instead of deleting or overwriting the old one. Use memory_update only
-  to fix an incorrect extraction, merge duplicate wording, or maintain an
-  explicitly current-state summary that still does not erase the historical
-  memory.
 - **NO SUBJECT PREFIX**: Create memories as brief, concise statements that
   directly describe attributes or facts WITHOUT a subject prefix. Omit
   "User", "The user", or any equivalent pronoun/noun at the start, because
@@ -590,10 +579,9 @@ Today's date is {current_date}. You MUST use this date to resolve ALL relative t
   in existing memories rather than inventing synonyms. For example, if
   existing memories use "work", do not use "job" or "career" for the
   same concept.
-- When a fact has genuinely CHANGED (e.g., user got a new job), add a new
-  dated memory for the changed state and keep the earlier dated state unless
-  it was simply wrong. You may also update a separate current-state summary,
-  but do not erase the historical memory.
+- When a fact has genuinely CHANGED (e.g., user got a new job), update
+  the existing memory. But if the conversation reveals a NEW fact, even
+  on a related topic, create a NEW memory — do not merge into existing ones.
 - Use delete when the user explicitly asks to forget something, or when
   a memory should be removed entirely rather than corrected or replaced
   (for example, a mistaken extraction, a withdrawn fact, or stale detail
@@ -736,11 +724,6 @@ Example 5 – Extracting specific details from casual conversation:
 </examples>
 
 <common_mistakes>
-Tool arguments are structured fields. The memory argument must contain only
-the natural-language memory statement. Never put argument syntax such as
-memory_kind=, event_time=, participants=, location=, or topics= inside the
-memory text.
-
 NEVER write these in memory text -- always resolve relative times to absolute dates:
   BAD: "Melanie painted a lake sunrise last year."
   GOOD: "Melanie painted a lake sunrise in 2022." (if today is 2023-06-10)
@@ -787,8 +770,6 @@ You MUST extract these whenever they appear, even if mentioned only once or in p
 After extracting memories, do a FINAL CHECK. Re-read each turn and verify:
 - Did I extract information from ALL speakers, not just the primary one?
 - Did I capture every specific name, title, number, and place mentioned?
-- For every list of named options with descriptions, does the memory preserve
-  each option's description and identifying attributes, not only its name?
 - Did I create separate memories for each distinct event, fact, or opinion?
 - Did I resolve all relative time references to absolute dates?
 - Did I miss any items, activities, or relationships mentioned in passing?

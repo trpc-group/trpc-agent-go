@@ -2185,23 +2185,18 @@ func TestReconcileOps_KeepsOpWhenNotSimilar(t *testing.T) {
 	assert.Empty(t, out[0].MemoryID)
 }
 
-func TestReconcileOps_KeepsDistinctListsWithHighTopicScore(t *testing.T) {
-	existing := "Was recommended 10 popular Portland venues for indie artists: " +
-		"Mississippi Studios, Doug Fir Lounge, Wonder Ballroom, Crystal Ballroom, " +
-		"Holocene, Aladdin Theater, The Old Church, The Liquor Store, " +
-		"Alberta Street Pub, and Revolution Hall."
-	incoming := "Was recommended 10 notable indie artists from Portland: " +
-		"The Decemberists, Modest Mouse, Typhoon, STRFKR, Blitzen Trapper, " +
-		"Grouper, Black Belt Eagle Scout, Wild Ones, Y La Bamba, and Elliott Smith."
+func TestReconcileOps_KeepsDistinctFactsWithHighTopicScore(t *testing.T) {
+	existing := "Attended a religious service at a cathedral on February 1."
+	incoming := "Interested in charities that provide food and shelter during Lent."
 	require.Less(t, tokenJaccard(incoming, existing), reconcileScoreJaccardFloor)
 
 	op := newMockOperator()
 	op.searchResults = []*memory.Entry{{
-		ID:      "mem-venues",
+		ID:      "mem-service",
 		AppName: "app", UserID: "u1",
 		Memory: &memory.Memory{
 			Memory: existing,
-			Topics: []string{"Portland", "indie music", "venues"},
+			Topics: []string{"religion", "community"},
 		},
 		Score: 0.95,
 	}}
@@ -2209,7 +2204,7 @@ func TestReconcileOps_KeepsDistinctListsWithHighTopicScore(t *testing.T) {
 	in := []*extractor.Operation{{
 		Type:   extractor.OperationAdd,
 		Memory: incoming,
-		Topics: []string{"Portland", "indie music", "artists"},
+		Topics: []string{"religion", "community", "charity"},
 	}}
 
 	out := worker.reconcileOps(context.Background(), reconcileUserKey(), in)
