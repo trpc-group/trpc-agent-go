@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -122,6 +123,18 @@ func TestReadRepoPathInGitWorktreeSubdirectoryUsesGitDiff(t *testing.T) {
 	}
 	if len(diff) != 0 {
 		t.Fatalf("committed files in a Git worktree subdirectory must not be synthesized as new: %s", diff)
+	}
+}
+
+func TestGitDiffArgsDisableRepoConfiguredHelpers(t *testing.T) {
+	t.Parallel()
+
+	got := gitDiffArgs("/tmp/repo", "base", "head")
+	want := []string{
+		"-C", "/tmp/repo", "diff", "--no-ext-diff", "--no-textconv", "--unified=3", "base...head",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("git diff args = %#v, want %#v", got, want)
 	}
 }
 

@@ -83,11 +83,7 @@ func diffFromRepo(repoPath string, baseRef string, headRef string) ([]byte, erro
 		return nil, errors.New("repo path is required")
 	}
 	if isGitWorktree(repoPath) {
-		args := []string{"-C", repoPath, "diff", "--unified=3"}
-		if strings.TrimSpace(baseRef) != "" && strings.TrimSpace(headRef) != "" {
-			args = append(args, strings.TrimSpace(baseRef)+"..."+strings.TrimSpace(headRef))
-		}
-		cmd := exec.Command("git", args...)
+		cmd := exec.Command("git", gitDiffArgs(repoPath, baseRef, headRef)...)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			return nil, fmt.Errorf("git diff: %w: %s", err, string(out))
@@ -95,6 +91,14 @@ func diffFromRepo(repoPath string, baseRef string, headRef string) ([]byte, erro
 		return out, nil
 	}
 	return diffFromDirectory(repoPath)
+}
+
+func gitDiffArgs(repoPath string, baseRef string, headRef string) []string {
+	args := []string{"-C", repoPath, "diff", "--no-ext-diff", "--no-textconv", "--unified=3"}
+	if strings.TrimSpace(baseRef) != "" && strings.TrimSpace(headRef) != "" {
+		args = append(args, strings.TrimSpace(baseRef)+"..."+strings.TrimSpace(headRef))
+	}
+	return args
 }
 
 func isGitWorktree(repoPath string) bool {
