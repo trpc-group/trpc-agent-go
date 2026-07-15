@@ -640,6 +640,72 @@ func TestSessionSummarizer_BoundsOversizedStandaloneRequest(t *testing.T) {
 	require.LessOrEqual(t, tokens, 700)
 }
 
+func TestSessionSummarizer_BoundsOnlyStandaloneConversationContent(t *testing.T) {
+	capture := &cacheSafeCaptureModel{
+		response:      "bounded standalone summary",
+		contextWindow: 1000,
+	}
+	s := NewSummarizer(
+		capture,
+		WithPrompt(
+			"fixed-prefix\n<conversation>\n{conversation_text}\n"+
+				"</conversation>\nfixed-suffix",
+		),
+	)
+	oversized := strings.Repeat("large-event ", 1000)
+	sess := &session.Session{
+		ID:     "oversized-fixed-prompt",
+		Events: []event.Event{newEventWithContent(oversized)},
+	}
+
+	text, err := s.Summarize(context.Background(), sess)
+	require.NoError(t, err)
+	require.Equal(t, "bounded standalone summary", text)
+	require.NotNil(t, capture.request)
+	require.Len(t, capture.request.Messages, 1)
+	require.True(t, strings.HasPrefix(
+		capture.request.Messages[0].Content,
+		"fixed-prefix\n<conversation>\n",
+	))
+	require.True(t, strings.HasSuffix(
+		capture.request.Messages[0].Content,
+		"\n</conversation>\nfixed-suffix",
+	))
+	require.Contains(t, capture.request.Messages[0].Content,
+		summaryConversationOmitted)
+}
+
+func TestSessionSummarizer_RetriesEmptyStandaloneSummary(t *testing.T) {
+	capture := &retrySummaryModel{
+		contextWindow: 1000,
+		responses: []*model.Response{
+			{Done: true},
+			{
+				Done: true,
+				Choices: []model.Choice{{
+					Message: model.NewAssistantMessage("standalone retry summary"),
+				}},
+			},
+		},
+	}
+	s := NewSummarizer(capture)
+	sess := &session.Session{
+		ID: "standalone-empty-retry",
+		Events: []event.Event{newEventWithContent(
+			"event text for standalone fallback",
+		)},
+	}
+
+	text, err := s.Summarize(context.Background(), sess)
+	require.NoError(t, err)
+	require.Equal(t, "standalone retry summary", text)
+	require.Len(t, capture.requests, 2)
+	require.Contains(t, capture.requests[0].Messages[0].Content,
+		"event text for standalone fallback")
+	require.Contains(t, capture.requests[1].Messages[0].Content,
+		"event text for standalone fallback")
+}
+
 func TestEnsureSummaryRequestFitsDropsOldestCompleteRound(t *testing.T) {
 	s := NewSummarizer(&cacheSafeCaptureModel{}).(*sessionSummarizer)
 	request := &model.Request{Messages: []model.Message{

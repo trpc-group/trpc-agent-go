@@ -1638,71 +1638,103 @@ func compactResumeToolRound(
 	tail map[int]event.Event,
 	cfg ContextCompactionConfig,
 ) map[int]event.Event {
-	if len(tail) == 0 || cfg.ToolResultMaxTokens <= 0 {
+	if len(tail) == 0 || !cfg.Enabled || cfg.ToolResultMaxTokens <= 0 {
 		return tail
 	}
 	indices := make([]int, 0, len(tail))
-	var messages []model.Message
 	for index := range tail {
 		indices = append(indices, index)
 	}
 	sort.Ints(indices)
-	for _, index := range indices {
-		for _, choice := range tail[index].Choices {
-			messages = append(messages, choice.Message)
-		}
-	}
-	tokens, err := cfg.TokenCounter.CountTokensRange(
-		ctx,
-		messages,
-		0,
-		len(messages),
-	)
-	if err != nil || tokens <= cfg.ToolResultMaxTokens {
-		return tail
-	}
 
-	compacted := make(map[int]event.Event, len(tail))
+	var compacted map[int]event.Event
 	for _, index := range indices {
 		evt := tail[index]
 		response := evt.Response.Clone()
+		changed := false
 		for choiceIndex := range response.Choices {
 			choice := &response.Choices[choiceIndex]
-			compactResumeToolCallArguments(&choice.Message)
-			compactResumeToolCallArguments(&choice.Delta)
-			if choice.Message.Role == model.RoleTool &&
-				choice.Message.ToolID != "" &&
-				!cfg.keepToolResult(choice.Message) {
-				choice.Message.Content = recoverableToolResultPlaceholder(
-					cfg.recoveryRefForMessage(
-						evt,
-						choice.Message,
-						"current_invocation_summary",
-					),
-				)
-				choice.Message.ContentParts = nil
-				choice.Message.ReasoningContent = ""
-				choice.Message.ReasoningSignature = ""
+			if compactOversizedResumeToolCallArguments(
+				ctx,
+				&choice.Message,
+				cfg,
+			) {
+				changed = true
+			}
+			if compactOversizedResumeToolCallArguments(
+				ctx,
+				&choice.Delta,
+				cfg,
+			) {
+				changed = true
+			}
+			message := choice.Message
+			if message.Role != model.RoleTool || message.ToolID == "" ||
+				cfg.keepToolResult(message) {
+				continue
+			}
+			tokens, err := cfg.TokenCounter.CountTokens(ctx, message)
+			if err != nil || tokens <= cfg.ToolResultMaxTokens {
+				continue
+			}
+			compactedMessage := &choice.Message
+			compactedMessage.Content = recoverableToolResultPlaceholder(
+				cfg.recoveryRefForMessage(
+					evt,
+					message,
+					"current_invocation_summary",
+				),
+			)
+			compactedMessage.ContentParts = nil
+			compactedMessage.ReasoningContent = ""
+			compactedMessage.ReasoningSignature = ""
+			changed = true
+		}
+		if !changed {
+			continue
+		}
+		if compacted == nil {
+			compacted = make(map[int]event.Event, len(tail))
+			for tailIndex, tailEvent := range tail {
+				compacted[tailIndex] = tailEvent
 			}
 		}
 		evt.Response = response
 		compacted[index] = evt
 	}
+	if compacted == nil {
+		return tail
+	}
 	return compacted
 }
 
-func compactResumeToolCallArguments(message *model.Message) {
+func compactOversizedResumeToolCallArguments(
+	ctx context.Context,
+	message *model.Message,
+	cfg ContextCompactionConfig,
+) bool {
 	if message == nil {
-		return
+		return false
 	}
+	changed := false
 	for i := range message.ToolCalls {
-		if len(message.ToolCalls[i].Function.Arguments) == 0 {
+		arguments := message.ToolCalls[i].Function.Arguments
+		if len(arguments) == 0 {
+			continue
+		}
+		tokens, err := cfg.TokenCounter.CountTokens(
+			ctx,
+			model.NewUserMessage(string(arguments)),
+		)
+		if err != nil || tokens <= cfg.ToolResultMaxTokens {
 			continue
 		}
 		message.ToolCalls[i].Function.Arguments = []byte(
 			compactedToolArgumentsPlaceholder,
 		)
+		changed = true
 	}
+	return changed
 }
 
 func (p *ContentRequestProcessor) contextCompactionConfigForInvocation(
@@ -2534,7 +2566,7 @@ func eventWouldCompactCurrentToolResult(
 	evt event.Event,
 	cfg ContextCompactionConfig,
 ) bool {
-	if cfg.ToolResultMaxTokens <= 0 {
+	if !cfg.Enabled || cfg.ToolResultMaxTokens <= 0 {
 		return false
 	}
 	for _, choice := range evt.Choices {

@@ -343,8 +343,60 @@ func TestSessionSummarizer_ModelCallbacks_Before_CustomResponseSkipsModel(t *tes
 	summary, err := s.Summarize(context.Background(), sess)
 	require.NoError(t, err)
 	assert.Equal(t, "FROM_CALLBACK", summary)
-	assert.NotContains(t, callbackInput, summaryConversationOmitted)
-	assert.Greater(t, strings.Count(callbackInput, "oversized-origin"), 900)
+	assert.Contains(t, callbackInput, summaryConversationOmitted)
+	assert.Less(t, strings.Count(callbackInput, "oversized-origin"), 900)
+}
+
+func TestSessionSummarizer_ModelCallbacks_Before_AppliesToFallbackRequest(
+	t *testing.T,
+) {
+	const sentinel = "callback-applied"
+	maxTokens := 77
+	callbacks := model.NewCallbacks().RegisterBeforeModel(
+		func(
+			_ context.Context,
+			args *model.BeforeModelArgs,
+		) (*model.BeforeModelResult, error) {
+			args.Request.GenerationConfig.MaxTokens = &maxTokens
+			if args.Request.Headers == nil {
+				args.Request.Headers = make(map[string]string)
+			}
+			args.Request.Headers["X-Summary-Callback"] = sentinel
+			return nil, nil
+		},
+	)
+	capture := &cacheSafeCaptureModel{
+		response:      "summary",
+		contextWindow: 1000,
+	}
+	s := NewSummarizer(
+		capture,
+		WithCacheSafeForking(true),
+		WithModelCallbacks(callbacks),
+	)
+	oversized := strings.Repeat("oversized-origin ", 1000)
+	parent := &model.Request{Messages: []model.Message{
+		model.NewSystemMessage("stable system"),
+		model.NewUserMessage(oversized),
+	}}
+	ctx := ContextWithCacheSafeForkRequest(context.Background(), parent)
+	sess := &session.Session{
+		ID:     "fallback-callback",
+		Events: []event.Event{newEventWithContent(oversized)},
+	}
+
+	summary, err := s.Summarize(ctx, sess)
+	require.NoError(t, err)
+	require.Equal(t, "summary", summary)
+	require.NotNil(t, capture.request)
+	require.Len(t, capture.request.Messages, 1)
+	require.Contains(t, capture.request.Messages[0].Content,
+		summaryConversationOmitted)
+	require.NotNil(t, capture.request.GenerationConfig.MaxTokens)
+	require.Equal(t, maxTokens,
+		*capture.request.GenerationConfig.MaxTokens)
+	require.Equal(t, sentinel,
+		capture.request.Headers["X-Summary-Callback"])
 }
 
 func TestSessionSummarizer_ModelCallbacks_After_OverridesResponse(t *testing.T) {

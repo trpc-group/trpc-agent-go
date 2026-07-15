@@ -975,6 +975,7 @@ func TestProcessRequest_SessionSummary_ResumesLatestCoveredToolRound(t *testing.
 	}
 	p := NewContentRequestProcessor(
 		WithAddSessionSummary(true),
+		WithEnableContextCompaction(true),
 		WithContextCompactionToolResultMaxTokens(10),
 	)
 	p.ProcessRequest(context.Background(), inv, req, nil)
@@ -993,11 +994,9 @@ func TestProcessRequest_SessionSummary_ResumesLatestCoveredToolRound(t *testing.
 	require.Equal(t, "Starting with step 1.", req.Messages[2].Content)
 	require.Len(t, req.Messages[2].ToolCalls, 1)
 	require.Equal(t, "call_1", req.Messages[2].ToolCalls[0].ID)
-	require.JSONEq(
-		t,
-		compactedToolArgumentsPlaceholder,
-		string(req.Messages[2].ToolCalls[0].Function.Arguments),
-	)
+	require.JSONEq(t, `{"step":1}`, string(
+		req.Messages[2].ToolCalls[0].Function.Arguments,
+	))
 	require.Equal(t, model.RoleTool, req.Messages[3].Role)
 	require.Equal(t, "call_1", req.Messages[3].ToolID)
 	require.Equal(t, "step_worker", req.Messages[3].ToolName)
@@ -1213,7 +1212,10 @@ func TestContentRequestProcessor_HasCompactedCurrentInvocationToolResults(t *tes
 	})
 
 	t.Run("detects compacted tool result", func(t *testing.T) {
-		p := NewContentRequestProcessor(WithContextCompactionToolResultMaxTokens(1))
+		p := NewContentRequestProcessor(
+			WithEnableContextCompaction(true),
+			WithContextCompactionToolResultMaxTokens(1),
+		)
 		inv := agent.NewInvocation(
 			agent.WithInvocationID("inv1"),
 			agent.WithInvocationRunOptions(agent.RunOptions{RequestID: "req1"}),
@@ -1265,6 +1267,7 @@ func TestContentRequestProcessor_HasCompactedCurrentInvocationToolResults(t *tes
 		}
 		p := NewContentRequestProcessor(
 			WithBranchFilterMode(BranchFilterModeExact),
+			WithEnableContextCompaction(true),
 			WithContextCompactionKeepToolNames("session_load"),
 			WithContextCompactionToolResultMaxTokens(1),
 		)
@@ -1300,6 +1303,7 @@ func TestContentRequestProcessor_HasCompactedCurrentInvocationToolResults(t *tes
 
 	t.Run("ignores kept tool result", func(t *testing.T) {
 		p := NewContentRequestProcessor(
+			WithEnableContextCompaction(true),
 			WithContextCompactionKeepToolNames("session_load"),
 		)
 		inv := agent.NewInvocation(
@@ -1347,7 +1351,10 @@ func TestContentRequestProcessor_HasCompactedCurrentInvocationToolResults(t *tes
 	})
 
 	t.Run("detects compacted tool result in later choice", func(t *testing.T) {
-		p := NewContentRequestProcessor(WithContextCompactionToolResultMaxTokens(1))
+		p := NewContentRequestProcessor(
+			WithEnableContextCompaction(true),
+			WithContextCompactionToolResultMaxTokens(1),
+		)
 		inv := agent.NewInvocation(
 			agent.WithInvocationID("inv1"),
 			agent.WithInvocationRunOptions(agent.RunOptions{RequestID: "req1"}),

@@ -452,7 +452,7 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 
 	maxInputTokens := m.InputTokenBudget(ctx, request)
 	if m.maxInputTokens <= 0 {
-		log.Debugf("auto-calculated max input tokens: model=%s, maxInputTokens=%d",
+		log.DebugfContext(ctx, "auto-calculated max input tokens: model=%s, maxInputTokens=%d",
 			m.name, maxInputTokens)
 	}
 

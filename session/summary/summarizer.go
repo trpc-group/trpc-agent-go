@@ -934,7 +934,6 @@ func (s *sessionSummarizer) runSummaryAttempts(
 		return result.ctx, result.summaryText, result.response, nil
 	}
 	if result.custom || !shouldRetrySummary(
-		result.mode,
 		result.summaryText,
 		result.err,
 		result.response,
@@ -984,13 +983,12 @@ func (s *sessionSummarizer) runSummaryAttempts(
 }
 
 func shouldRetrySummary(
-	mode string,
 	summaryText string,
 	err error,
 	response *model.Response,
 ) bool {
 	return isSummaryContextLengthError(err, response) ||
-		(mode == callModeCacheSafeFork && summaryText == "")
+		(err == nil && summaryText == "")
 }
 
 func summaryAttemptError(err error, conversationText string) error {
@@ -1023,6 +1021,26 @@ func (s *sessionSummarizer) runSummaryAttempt(
 	ensureTimingInfo func(*model.Response),
 ) summaryAttemptResult {
 	result := summaryAttemptResult{ctx: ctx, mode: mode}
+	result.budget = s.summaryRequestInputBudget(ctx, request)
+	if budgetLimit > 0 && budgetLimit < result.budget {
+		result.budget = budgetLimit
+	}
+	prepared, preparedMode, err := s.prepareSummaryRequest(
+		ctx,
+		request,
+		mode,
+		conversationText,
+		result.budget,
+	)
+	if err != nil {
+		result.err = fmt.Errorf("prepare summary request: %w", err)
+		return result
+	}
+	if prepared != request {
+		*request = *prepared
+	}
+	result.mode = preparedMode
+
 	ctx, responseChan, err := s.runBeforeModelCallbacks(ctx, request)
 	result.ctx = ctx
 	if err != nil {
@@ -1036,24 +1054,18 @@ func (s *sessionSummarizer) runSummaryAttempt(
 		if budgetLimit > 0 && budgetLimit < result.budget {
 			result.budget = budgetLimit
 		}
-		prepared, preparedMode, fitErr := s.prepareSummaryRequest(
+		if fitErr := s.ensureSummaryRequestFits(
 			ctx,
 			request,
-			mode,
-			conversationText,
+			false,
 			result.budget,
-		)
-		if fitErr != nil {
+		); fitErr != nil {
 			result.err = fmt.Errorf(
 				"summary request no longer fits after before-model callbacks: %w",
 				fitErr,
 			)
 			return result
 		}
-		if prepared != request {
-			*request = *prepared
-		}
-		result.mode = preparedMode
 		s.recordReportCall(ctx, request, result.mode)
 		responseChan, err = s.model.GenerateContent(ctx, request)
 		if err != nil {
@@ -1193,9 +1205,9 @@ func (s *sessionSummarizer) prepareSummaryRequest(
 	budget int,
 ) (*model.Request, string, error) {
 	if mode == callModeStandalone {
-		bounded, err := boundStandaloneSummaryRequest(
+		bounded, err := s.buildBoundedStandaloneSummaryRequest(
 			ctx,
-			request,
+			conversationText,
 			budget,
 		)
 		return bounded, mode, err
@@ -1232,36 +1244,16 @@ func (s *sessionSummarizer) buildBoundedStandaloneSummaryRequest(
 	if err != nil {
 		return nil, err
 	}
-	return boundStandaloneSummaryRequest(ctx, request, budget)
-}
-
-func boundStandaloneSummaryRequest(
-	ctx context.Context,
-	request *model.Request,
-	budget int,
-) (*model.Request, error) {
 	if fits, err := summaryRequestFits(ctx, request, budget); err != nil {
 		return nil, err
 	} else if fits {
 		return request, nil
 	}
 
-	if request == nil || len(request.Messages) == 0 {
-		return nil, errors.New("standalone summary request has no messages")
+	minimal, err := s.buildStandaloneSummaryRequest("")
+	if err != nil {
+		return nil, err
 	}
-	messageIndex := -1
-	for i := len(request.Messages) - 1; i >= 0; i-- {
-		if request.Messages[i].Role == model.RoleUser {
-			messageIndex = i
-			break
-		}
-	}
-	if messageIndex < 0 {
-		return nil, errors.New("standalone summary request has no user message")
-	}
-	content := request.Messages[messageIndex].Content
-	minimal := cloneRequestForCacheSafeFork(request)
-	minimal.Messages[messageIndex].Content = ""
 	minimalTokens, err := countSummaryRequestTokens(ctx, minimal)
 	if err != nil {
 		return nil, err
@@ -1274,16 +1266,17 @@ func boundStandaloneSummaryRequest(
 		)
 	}
 
-	runes := []rune(content)
+	runes := []rune(conversationText)
 	best := (*model.Request)(nil)
 	low, high := 1, len(runes)
 	for low <= high {
 		mid := low + (high-low)/2
-		candidate := cloneRequestForCacheSafeFork(request)
-		candidate.Messages[messageIndex].Content = truncateSummaryConversation(
-			runes,
-			mid,
+		candidate, buildErr := s.buildStandaloneSummaryRequest(
+			truncateSummaryConversation(runes, mid),
 		)
+		if buildErr != nil {
+			return nil, buildErr
+		}
 		fits, countErr := summaryRequestFits(ctx, candidate, budget)
 		if countErr != nil {
 			return nil, countErr
@@ -1364,6 +1357,17 @@ func (s *sessionSummarizer) ensureSummaryRequestFits(
 	if tokens <= budget {
 		return nil
 	}
+	// Prefer dropping source rounds already represented by newer context before
+	// erasing payloads from the latest complete round.
+	for dropOldestSummarySourceRound(request) {
+		tokens, err = countSummaryRequestTokens(ctx, request)
+		if err != nil {
+			return fmt.Errorf("count pruned summary request tokens: %w", err)
+		}
+		if tokens <= budget {
+			return nil
+		}
+	}
 	candidates, err := summaryToolPayloadCandidates(ctx, request.Messages)
 	if err != nil {
 		return fmt.Errorf("build summary payload candidates: %w", err)
@@ -1373,15 +1377,6 @@ func (s *sessionSummarizer) ensureSummaryRequestFits(
 		tokens, err = countSummaryRequestTokens(ctx, request)
 		if err != nil {
 			return fmt.Errorf("count compacted summary request tokens: %w", err)
-		}
-		if tokens <= budget {
-			return nil
-		}
-	}
-	for dropOldestSummarySourceRound(request) {
-		tokens, err = countSummaryRequestTokens(ctx, request)
-		if err != nil {
-			return fmt.Errorf("count pruned summary request tokens: %w", err)
 		}
 		if tokens <= budget {
 			return nil
