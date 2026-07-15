@@ -73,7 +73,7 @@ func LoadPolicyFile(path string) (*PolicyFile, error) {
 		p := DefaultPolicy()
 		return &p, nil
 	}
-	// Use KnownFields(true) so misspelled policy keys (e.g. "denyed_commands")
+	// Use KnownFields(true) so misspelled policy keys (e.g. "not_a_valid_key")
 	// fail loudly instead of silently disabling a guard rule.
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
