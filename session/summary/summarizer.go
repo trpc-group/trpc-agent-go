@@ -10,6 +10,7 @@ package summary
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -994,7 +995,7 @@ func (s *sessionSummarizer) buildSummaryRequest(
 ) (*model.Request, string, error) {
 	if s.cacheSafeForking {
 		if parent, ok := CacheSafeForkRequestFromContext(ctx); ok {
-			request, err := s.buildCacheSafeForkRequest(ctx, parent)
+			request, err := s.buildCacheSafeForkRequest(parent)
 			return request, callModeCacheSafeFork, err
 		}
 		log.DebugfContext(ctx, "cache-safe summary forking requested but no parent request is available; falling back to standalone summary request")
@@ -1014,15 +1015,10 @@ func (s *sessionSummarizer) buildSummaryRequest(
 		return nil, "", fmt.Errorf("render user prompt: %w", err)
 	}
 	messages = append(messages, model.NewUserMessage(userPrompt))
-	request := newSummaryRequest(messages)
-	if err := s.ensureSummaryRequestFits(ctx, request, false); err != nil {
-		return nil, "", err
-	}
-	return request, callModeStandalone, nil
+	return newSummaryRequest(messages), callModeStandalone, nil
 }
 
 func (s *sessionSummarizer) buildCacheSafeForkRequest(
-	ctx context.Context,
 	parent *model.Request,
 ) (*model.Request, error) {
 	request := cloneRequestForCacheSafeFork(parent)
@@ -1039,9 +1035,6 @@ func (s *sessionSummarizer) buildCacheSafeForkRequest(
 	request.Messages = append(request.Messages, model.NewUserMessage(userPrompt))
 	request.GenerationConfig.Stream = false
 	request.StructuredOutput = nil
-	if err := s.ensureSummaryRequestFits(ctx, request, true); err != nil {
-		return nil, err
-	}
 	return request, nil
 }
 
@@ -1075,6 +1068,13 @@ func (s *sessionSummarizer) ensureSummaryRequestFits(
 	// A summary never calls tools. Once the cache-safe request is already too
 	// large, prefer correctness over preserving the tool schema cache key.
 	request.Tools = nil
+	tokens, err = countSummaryRequestTokens(ctx, request)
+	if err != nil {
+		return fmt.Errorf("count summary request without tools: %w", err)
+	}
+	if tokens <= budget {
+		return nil
+	}
 	candidates, err := summaryToolPayloadCandidates(ctx, request.Messages)
 	if err != nil {
 		return fmt.Errorf("build summary payload candidates: %w", err)
@@ -1112,15 +1112,50 @@ func countSummaryRequestTokens(
 	ctx context.Context,
 	request *model.Request,
 ) (int, error) {
-	if request == nil || len(request.Messages) == 0 {
+	if request == nil {
 		return 0, nil
 	}
-	return getTokenCounter().CountTokensRange(
-		ctx,
-		request.Messages,
-		0,
-		len(request.Messages),
-	)
+	counter := getTokenCounter()
+	tokens := 0
+	if len(request.Messages) > 0 {
+		var err error
+		tokens, err = counter.CountTokensRange(
+			ctx,
+			request.Messages,
+			0,
+			len(request.Messages),
+		)
+		if err != nil {
+			return 0, err
+		}
+	}
+
+	toolNames := make([]string, 0, len(request.Tools))
+	for name := range request.Tools {
+		toolNames = append(toolNames, name)
+	}
+	sort.Strings(toolNames)
+	for _, name := range toolNames {
+		declaration := any(name)
+		if summaryTool := request.Tools[name]; summaryTool != nil {
+			if declared := summaryTool.Declaration(); declared != nil {
+				declaration = declared
+			}
+		}
+		encoded, err := json.Marshal(declaration)
+		if err != nil {
+			return 0, fmt.Errorf("marshal tool declaration %q: %w", name, err)
+		}
+		toolTokens, err := counter.CountTokens(
+			ctx,
+			model.NewSystemMessage(string(encoded)),
+		)
+		if err != nil {
+			return 0, fmt.Errorf("count tool declaration %q: %w", name, err)
+		}
+		tokens += toolTokens
+	}
+	return tokens, nil
 }
 
 func summaryToolPayloadCandidates(

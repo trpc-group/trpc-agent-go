@@ -327,11 +327,16 @@ func TestSessionSummarizer_ModelCallbacks_Before_CustomResponseSkipsModel(t *tes
 			}, nil
 		},
 	)
-	s := NewSummarizer(&panicGenerateModel{}, WithModelCallbacks(callbacks))
+	s := NewSummarizer(
+		&panicGenerateModel{contextWindow: 1000},
+		WithModelCallbacks(callbacks),
+	)
 
 	sess := &session.Session{
-		ID:     "sess",
-		Events: []event.Event{newEventWithContent("origin")},
+		ID: "sess",
+		Events: []event.Event{newEventWithContent(
+			strings.Repeat("oversized-origin ", 1000),
+		)},
 	}
 	summary, err := s.Summarize(context.Background(), sess)
 	require.NoError(t, err)

@@ -460,6 +460,35 @@ func TestSessionSummarizer_CacheSafeForking(t *testing.T) {
 		require.Len(t, parent.Tools, 1)
 	})
 
+	t.Run("drops tool schemas only when they exceed the request budget", func(t *testing.T) {
+		capture := &cacheSafeCaptureModel{
+			response:      "summary without tool schemas",
+			contextWindow: 1000,
+		}
+		s := NewSummarizer(capture, WithCacheSafeForking(true))
+		parent := &model.Request{
+			Messages: []model.Message{
+				model.NewSystemMessage("stable system"),
+				model.NewUserMessage("small conversation"),
+			},
+			Tools: map[string]tool.Tool{
+				"large_schema": &testTool{
+					name:        "large_schema",
+					description: strings.Repeat("schema-description ", 1000),
+				},
+			},
+		}
+		ctx := ContextWithCacheSafeForkRequest(context.Background(), parent)
+
+		text, err := s.Summarize(ctx, newTestSession())
+		require.NoError(t, err)
+		require.Equal(t, "summary without tool schemas", text)
+		require.NotNil(t, capture.request)
+		require.Nil(t, capture.request.Tools)
+		require.Equal(t, "small conversation", capture.request.Messages[1].Content)
+		require.Len(t, parent.Tools, 1, "parent request must not be mutated")
+	})
+
 	t.Run("rejects a cache-safe request without conversation content", func(t *testing.T) {
 		capture := &cacheSafeCaptureModel{response: "must not be called"}
 		s := NewSummarizer(capture, WithCacheSafeForking(true))
@@ -568,11 +597,12 @@ func (m *cacheSafeCaptureModel) GenerateContent(
 }
 
 type testTool struct {
-	name string
+	name        string
+	description string
 }
 
 func (t *testTool) Declaration() *tool.Declaration {
-	return &tool.Declaration{Name: t.name}
+	return &tool.Declaration{Name: t.name, Description: t.description}
 }
 
 func TestSessionSummarizer_Summarize_NilModel(t *testing.T) {
