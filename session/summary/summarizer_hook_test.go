@@ -10,6 +10,7 @@ package summary
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -216,10 +217,15 @@ func TestSessionSummarizer_PostHook_ErrorBehavior(t *testing.T) {
 	})
 }
 
-type panicGenerateModel struct{}
+type panicGenerateModel struct {
+	contextWindow int
+}
 
 func (m *panicGenerateModel) Info() model.Info {
-	return model.Info{Name: "panic-generate"}
+	return model.Info{
+		Name:          "panic-generate",
+		ContextWindow: m.contextWindow,
+	}
 }
 
 func (m *panicGenerateModel) GenerateContent(
@@ -275,6 +281,34 @@ func TestSessionSummarizer_ModelCallbacks_Before_ModifiesRequest(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, summary, "MODIFIED")
 	assert.NotContains(t, summary, "origin")
+}
+
+func TestSessionSummarizer_ModelCallbacks_Before_RejectsOversizedRequest(
+	t *testing.T,
+) {
+	callbacks := model.NewCallbacks().RegisterBeforeModel(
+		func(
+			_ context.Context,
+			args *model.BeforeModelArgs,
+		) (*model.BeforeModelResult, error) {
+			args.Request.Messages = append(
+				args.Request.Messages,
+				model.NewSystemMessage(strings.Repeat("callback-content ", 1000)),
+			)
+			return nil, nil
+		},
+	)
+	s := NewSummarizer(
+		&panicGenerateModel{contextWindow: 1000},
+		WithModelCallbacks(callbacks),
+	)
+	sess := &session.Session{
+		ID:     "sess",
+		Events: []event.Event{newEventWithContent("origin")},
+	}
+
+	_, err := s.Summarize(context.Background(), sess)
+	require.ErrorContains(t, err, "no longer fits after before-model callbacks")
 }
 
 func TestSessionSummarizer_ModelCallbacks_Before_CustomResponseSkipsModel(t *testing.T) {

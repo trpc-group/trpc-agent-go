@@ -3873,7 +3873,7 @@ func TestContentRequestProcessor_shouldIncludeEvent(t *testing.T) {
 	}
 }
 
-func TestContentRequestProcessor_getIncrementMessages_SummaryPreservesToolState(t *testing.T) {
+func TestContentRequestProcessor_getIncrementMessages_SummaryIsHardBoundary(t *testing.T) {
 	baseTime := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
 	userMsg := model.NewUserMessage("run the task")
 	toolCall1 := model.Message{
@@ -4003,22 +4003,11 @@ func TestContentRequestProcessor_getIncrementMessages_SummaryPreservesToolState(
 		},
 	)
 
-	if assert.Len(t, messages, 5) {
+	if assert.Len(t, messages, 3) {
 		assert.True(t, model.MessagesEqual(userMsg, messages[0]))
-		assert.Equal(t, toolCall1.Content, messages[1].Content)
-		assert.Equal(t, toolCall1.ReasoningContent, messages[1].ReasoningContent)
-		assert.Equal(t, toolCall1.ToolCalls, messages[1].ToolCalls)
-		assert.Equal(t, model.RoleTool, messages[2].Role)
-		assert.Equal(t, toolResult1.ToolID, messages[2].ToolID)
-		assert.Equal(t, toolResult1.ToolName, messages[2].ToolName)
-		assert.Contains(t, messages[2].Content, compactedToolResultPlaceholder)
-		assert.Contains(t, messages[2].Content, "event_id: tool-result-1")
-		assert.Contains(t, messages[2].Content, "tool_call_id: call_1")
-		assert.Contains(t, messages[2].Content, "tool_name: step_worker")
-		assert.NotContains(t, messages[2].Content, toolResult1.Content)
-		assert.Equal(t, toolCall2.Content, messages[3].Content)
-		assert.Equal(t, toolCall2.ToolCalls, messages[3].ToolCalls)
-		assert.True(t, model.MessagesEqual(toolResult2, messages[4]))
+		assert.Equal(t, toolCall2.Content, messages[1].Content)
+		assert.Equal(t, toolCall2.ToolCalls, messages[1].ToolCalls)
+		assert.True(t, model.MessagesEqual(toolResult2, messages[2]))
 	}
 }
 

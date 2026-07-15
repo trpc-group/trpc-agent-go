@@ -1245,18 +1245,10 @@ func (p *ContentRequestProcessor) getIncrementMessagesAfterCutoff(
 		filter,
 		eventCutoff,
 	)
+	// The summary cutoff is a hard projection boundary. Covered exchanges are
+	// not restored merely because they belong to the current invocation. The
+	// only exception below repairs a tool call whose result crosses the cutoff.
 	for i, evt := range sessionEvents {
-		if compactedEvt, ok := p.compactCurrentInvocationEvent(
-			evt,
-			i,
-			inv,
-			req,
-			filter,
-			eventCutoff,
-		); ok {
-			events = append(events, compactedEvt)
-			continue
-		}
 		shouldInclude, isInvocationMessage := p.shouldIncludeEvent(
 			evt,
 			i,
@@ -1484,105 +1476,6 @@ func addToolCallIDToRestore(
 	ids[toolCallID] = struct{}{}
 }
 
-// compactCurrentInvocationEvent preserves the minimum structured state needed
-// for same-turn tool loops after a summary has already absorbed earlier
-// invocation history. Assistant tool-call messages are kept intact, while
-// oversized tool results are replaced with a small placeholder that points the
-// model at the summary for details.
-func (p *ContentRequestProcessor) compactCurrentInvocationEvent(
-	evt event.Event,
-	eventIndex int,
-	inv *agent.Invocation,
-	req *model.Request,
-	filter string,
-	cutoff eventHistoryCutoff,
-) (event.Event, bool) {
-	if cutoff.IsZero() || inv == nil {
-		return event.Event{}, false
-	}
-	if evt.RequestID != inv.RunOptions.RequestID ||
-		evt.InvocationID != inv.InvocationID {
-		return event.Event{}, false
-	}
-	if !cutoff.excludesEvent(eventIndex, evt) {
-		return event.Event{}, false
-	}
-	if !isEventEligibleForInclusion(evt) {
-		return event.Event{}, false
-	}
-	if !p.passTimelineFilter(evt, inv) || !p.passBranchFilter(evt, filter) {
-		return event.Event{}, false
-	}
-
-	cfg := normalizeContextCompactionConfig(
-		p.contextCompactionConfigForInvocation(inv, req),
-	)
-	var compactedChoices []model.Choice
-	for _, choice := range evt.Choices {
-		msg, ok := compactedCurrentInvocationMessage(
-			choice.Message,
-			evt,
-			cfg,
-		)
-		if !ok {
-			continue
-		}
-		compactedChoices = append(compactedChoices, model.Choice{
-			Index:   choice.Index,
-			Message: msg,
-		})
-	}
-	if len(compactedChoices) == 0 {
-		return event.Event{}, false
-	}
-
-	compacted := evt
-	compacted.Response = &model.Response{
-		Done:    evt.Response.Done,
-		Object:  evt.Response.Object,
-		Choices: compactedChoices,
-	}
-	return compacted, true
-}
-
-func compactedCurrentInvocationMessage(
-	msg model.Message,
-	evt event.Event,
-	cfg ContextCompactionConfig,
-) (model.Message, bool) {
-	switch {
-	case len(msg.ToolCalls) > 0:
-		return model.Message{
-			Role:             msg.Role,
-			Content:          msg.Content,
-			ContentParts:     msg.ContentParts,
-			ReasoningContent: msg.ReasoningContent,
-			ToolCalls:        msg.ToolCalls,
-		}, true
-	case msg.Role == model.RoleTool && msg.ToolID != "":
-		if cfg.keepToolResult(msg) {
-			return msg, true
-		}
-		if !shouldCompactCurrentInvocationToolResult(msg, cfg) {
-			return msg, true
-		}
-		return model.Message{
-			Role: msg.Role,
-			Content: recoverableToolResultPlaceholder(
-				cfg.recoveryRefForMessage(
-					evt,
-					msg,
-					"current_invocation_summary",
-				),
-			),
-			ToolID:   msg.ToolID,
-			ToolName: msg.ToolName,
-		}, true
-	default:
-		return model.Message{}, false
-	}
-}
-
 func (p *ContentRequestProcessor) contextCompactionConfigForInvocation(
 	inv *agent.Invocation,
 	req *model.Request,
@@ -1626,24 +1519,6 @@ func toolHasName(tl tool.Tool, name string) bool {
 	}
 	decl := tl.Declaration()
 	return decl != nil && decl.Name == name
-}
-
-func shouldCompactCurrentInvocationToolResult(
-	msg model.Message,
-	cfg ContextCompactionConfig,
-) bool {
-	if cfg.ToolResultMaxTokens <= 0 {
-		return false
-	}
-	counter := cfg.TokenCounter
-	if counter == nil {
-		counter = model.NewSimpleTokenCounter()
-	}
-	tokens, err := counter.CountTokens(context.Background(), msg)
-	if err != nil {
-		return false
-	}
-	return tokens > cfg.ToolResultMaxTokens
 }
 
 func annotateUserMessagesWithAttachedFiles(
@@ -2350,9 +2225,9 @@ func isCurrentInvocationUserMessage(evt event.Event, inv *agent.Invocation) bool
 		evt.Choices[0].Message.Role == model.RoleUser
 }
 
-// hasCompactedCurrentInvocationToolResults reports whether same-invocation tool
-// result events before the active summary cutoff are actually compacted out of
-// the raw prompt history.
+// hasCompactedCurrentInvocationToolResults reports whether the active summary
+// covers same-invocation tool results. Covered results are omitted from raw
+// prompt history, but callers still need to preserve post-tool control state.
 func (p *ContentRequestProcessor) hasCompactedCurrentInvocationToolResults(
 	inv *agent.Invocation,
 	since time.Time,
@@ -2394,37 +2269,17 @@ func (p *ContentRequestProcessor) hasCompactedCurrentInvocationToolResultsAfterC
 		if !p.passBranchFilter(evt, filter) {
 			continue
 		}
-		if eventHasCompactedCurrentInvocationToolResult(
-			evt,
-			p.ContextCompactionConfig,
-		) {
+		if eventHasToolResult(evt) {
 			return true
 		}
 	}
 	return false
 }
 
-func eventHasCompactedCurrentInvocationToolResult(
-	evt event.Event,
-	cfg ContextCompactionConfig,
-) bool {
-	cfg = normalizeContextCompactionConfig(cfg)
+func eventHasToolResult(evt event.Event) bool {
 	for _, choice := range evt.Choices {
 		msg := choice.Message
-		if msg.Role != model.RoleTool || msg.ToolID == "" {
-			continue
-		}
-		compacted, ok := compactedCurrentInvocationMessage(msg, evt, cfg)
-		if !ok {
-			continue
-		}
-		if !strings.HasPrefix(
-			strings.TrimSpace(compacted.Content),
-			compactedToolResultPlaceholder,
-		) {
-			continue
-		}
-		if msg.Content != compacted.Content || len(msg.ContentParts) > 0 {
+		if msg.Role == model.RoleTool && msg.ToolID != "" {
 			return true
 		}
 	}

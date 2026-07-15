@@ -12,12 +12,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/modelcontext"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -69,6 +71,15 @@ const (
 	authorSystem = "system"
 	// authorUnknown is the unknown author.
 	authorUnknown = "unknown"
+
+	// summaryRequestInputRatio keeps summary requests below the model's
+	// context limit so provider-level generic tailoring does not remove the
+	// conversation that the summarizer is supposed to read.
+	summaryRequestInputRatio = 0.7
+
+	summaryToolArgumentsOmitted = `{"_trpc_summary_note":"tool arguments omitted to fit the summary context"}`
+	summaryToolResultOmittedFmt = "[Tool result omitted to fit the summary context; " +
+		"tool_name=%q, tool_call_id=%q. The tool call completed before summarization.]"
 )
 
 // formatResponseError formats a model.ResponseError into a human-readable error.
@@ -894,6 +905,17 @@ func (s *sessionSummarizer) generateSummary(
 	}
 
 	if responseChan == nil {
+		if fitErr := s.ensureSummaryRequestFits(
+			ctx,
+			request,
+			mode == callModeCacheSafeFork,
+		); fitErr != nil {
+			err = fmt.Errorf(
+				"summary request no longer fits after before-model callbacks: %w",
+				fitErr,
+			)
+			return ctx, "", err
+		}
 		s.recordReportCall(ctx, request, mode)
 		responseChan, cbErr = s.model.GenerateContent(ctx, request)
 		if cbErr != nil {
@@ -972,7 +994,7 @@ func (s *sessionSummarizer) buildSummaryRequest(
 ) (*model.Request, string, error) {
 	if s.cacheSafeForking {
 		if parent, ok := CacheSafeForkRequestFromContext(ctx); ok {
-			request, err := s.buildCacheSafeForkRequest(parent)
+			request, err := s.buildCacheSafeForkRequest(ctx, parent)
 			return request, callModeCacheSafeFork, err
 		}
 		log.DebugfContext(ctx, "cache-safe summary forking requested but no parent request is available; falling back to standalone summary request")
@@ -992,13 +1014,23 @@ func (s *sessionSummarizer) buildSummaryRequest(
 		return nil, "", fmt.Errorf("render user prompt: %w", err)
 	}
 	messages = append(messages, model.NewUserMessage(userPrompt))
-	return newSummaryRequest(messages), callModeStandalone, nil
+	request := newSummaryRequest(messages)
+	if err := s.ensureSummaryRequestFits(ctx, request, false); err != nil {
+		return nil, "", err
+	}
+	return request, callModeStandalone, nil
 }
 
-func (s *sessionSummarizer) buildCacheSafeForkRequest(parent *model.Request) (*model.Request, error) {
+func (s *sessionSummarizer) buildCacheSafeForkRequest(
+	ctx context.Context,
+	parent *model.Request,
+) (*model.Request, error) {
 	request := cloneRequestForCacheSafeFork(parent)
 	if request == nil {
 		return nil, errors.New("parent request is nil")
+	}
+	if !hasSummarySourceContent(request.Messages) {
+		return nil, errors.New("cache-safe summary request has no conversation content")
 	}
 	userPrompt, err := s.buildCacheSafeForkPrompt()
 	if err != nil {
@@ -1007,7 +1039,167 @@ func (s *sessionSummarizer) buildCacheSafeForkRequest(parent *model.Request) (*m
 	request.Messages = append(request.Messages, model.NewUserMessage(userPrompt))
 	request.GenerationConfig.Stream = false
 	request.StructuredOutput = nil
+	if err := s.ensureSummaryRequestFits(ctx, request, true); err != nil {
+		return nil, err
+	}
 	return request, nil
+}
+
+type summaryPayloadCandidate struct {
+	messageIndex int
+	replacement  model.Message
+	savedTokens  int
+}
+
+func (s *sessionSummarizer) ensureSummaryRequestFits(
+	ctx context.Context,
+	request *model.Request,
+	compactToolPayloads bool,
+) error {
+	budget := s.summaryRequestInputBudget()
+	tokens, err := countSummaryRequestTokens(ctx, request)
+	if err != nil {
+		return fmt.Errorf("count summary request tokens: %w", err)
+	}
+	if tokens <= budget {
+		return nil
+	}
+	if !compactToolPayloads {
+		return fmt.Errorf(
+			"summary request input too large: estimated %d tokens exceeds budget %d",
+			tokens,
+			budget,
+		)
+	}
+
+	// A summary never calls tools. Once the cache-safe request is already too
+	// large, prefer correctness over preserving the tool schema cache key.
+	request.Tools = nil
+	candidates, err := summaryToolPayloadCandidates(ctx, request.Messages)
+	if err != nil {
+		return fmt.Errorf("build summary payload candidates: %w", err)
+	}
+	for _, candidate := range candidates {
+		request.Messages[candidate.messageIndex] = candidate.replacement
+		tokens, err = countSummaryRequestTokens(ctx, request)
+		if err != nil {
+			return fmt.Errorf("count compacted summary request tokens: %w", err)
+		}
+		if tokens <= budget {
+			return nil
+		}
+	}
+	return fmt.Errorf(
+		"cache-safe summary request input too large after compacting tool payloads: estimated %d tokens exceeds budget %d",
+		tokens,
+		budget,
+	)
+}
+
+func (s *sessionSummarizer) summaryRequestInputBudget() int {
+	contextWindow := defaultContextThresholdFallbackWindow
+	if resolved, ok := modelcontext.ResolveContextWindow(s.model); ok {
+		contextWindow = resolved
+	}
+	budget := int(float64(contextWindow) * summaryRequestInputRatio)
+	if budget < 1 {
+		return 1
+	}
+	return budget
+}
+
+func countSummaryRequestTokens(
+	ctx context.Context,
+	request *model.Request,
+) (int, error) {
+	if request == nil || len(request.Messages) == 0 {
+		return 0, nil
+	}
+	return getTokenCounter().CountTokensRange(
+		ctx,
+		request.Messages,
+		0,
+		len(request.Messages),
+	)
+}
+
+func summaryToolPayloadCandidates(
+	ctx context.Context,
+	messages []model.Message,
+) ([]summaryPayloadCandidate, error) {
+	counter := getTokenCounter()
+	candidates := make([]summaryPayloadCandidate, 0, len(messages))
+	for i, message := range messages {
+		replacement, ok := compactSummaryToolPayload(message)
+		if !ok {
+			continue
+		}
+		before, err := counter.CountTokens(ctx, message)
+		if err != nil {
+			return nil, err
+		}
+		after, err := counter.CountTokens(ctx, replacement)
+		if err != nil {
+			return nil, err
+		}
+		if before <= after {
+			continue
+		}
+		candidates = append(candidates, summaryPayloadCandidate{
+			messageIndex: i,
+			replacement:  replacement,
+			savedTokens:  before - after,
+		})
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return candidates[i].savedTokens > candidates[j].savedTokens
+	})
+	return candidates, nil
+}
+
+func compactSummaryToolPayload(message model.Message) (model.Message, bool) {
+	switch {
+	case message.Role == model.RoleTool && message.ToolID != "":
+		replacement := cloneMessageForCacheSafeFork(message)
+		replacement.Content = fmt.Sprintf(
+			summaryToolResultOmittedFmt,
+			message.ToolName,
+			message.ToolID,
+		)
+		replacement.ContentParts = nil
+		replacement.ReasoningContent = ""
+		replacement.ReasoningSignature = ""
+		return replacement, true
+	case len(message.ToolCalls) > 0:
+		replacement := cloneMessageForCacheSafeFork(message)
+		changed := false
+		for i := range replacement.ToolCalls {
+			if len(replacement.ToolCalls[i].Function.Arguments) == 0 {
+				continue
+			}
+			replacement.ToolCalls[i].Function.Arguments = []byte(
+				summaryToolArgumentsOmitted,
+			)
+			changed = true
+		}
+		return replacement, changed
+	default:
+		return model.Message{}, false
+	}
+}
+
+func hasSummarySourceContent(messages []model.Message) bool {
+	for _, message := range messages {
+		if message.Role == model.RoleSystem {
+			continue
+		}
+		if strings.TrimSpace(message.Content) != "" ||
+			len(message.ContentParts) > 0 ||
+			len(message.ToolCalls) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func newSummaryRequest(messages []model.Message) *model.Request {

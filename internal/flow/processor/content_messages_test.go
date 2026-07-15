@@ -885,7 +885,7 @@ func TestProcessRequest_SessionSummary_MergesIntoSystemMessage(t *testing.T) {
 	require.Equal(t, "current request", req3.Messages[3].Content)
 }
 
-func TestProcessRequest_SessionSummary_CompactsSameTurnToolHistory(t *testing.T) {
+func TestProcessRequest_SessionSummary_OmitsCoveredSameTurnToolHistory(t *testing.T) {
 	baseTime := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
 	userMsg := model.NewUserMessage("run the task")
 	toolCallMsg := model.Message{
@@ -983,27 +983,15 @@ func TestProcessRequest_SessionSummary_CompactsSameTurnToolHistory(t *testing.T)
 	require.True(t, ok)
 	require.Equal(t, true, raw)
 
-	require.Len(t, req.Messages, 4)
+	require.Len(t, req.Messages, 2)
 	require.Equal(t, model.RoleSystem, req.Messages[0].Role)
 	require.Contains(t, req.Messages[0].Content, "system prompt")
 	require.Contains(t, req.Messages[0].Content,
 		"step 1 completed successfully")
 	require.True(t, model.MessagesEqual(userMsg, req.Messages[1]))
-	require.Equal(t, model.RoleAssistant, req.Messages[2].Role)
-	require.Equal(t, "Starting with step 1.", req.Messages[2].Content)
-	require.Len(t, req.Messages[2].ToolCalls, 1)
-	require.Equal(t, "call_1", req.Messages[2].ToolCalls[0].ID)
-	require.Equal(t, model.RoleTool, req.Messages[3].Role)
-	require.Equal(t, "call_1", req.Messages[3].ToolID)
-	require.Equal(t, "step_worker", req.Messages[3].ToolName)
-	require.Contains(t, req.Messages[3].Content, compactedToolResultPlaceholder)
-	require.Contains(t, req.Messages[3].Content, "event_id: tool-result-1")
-	require.Contains(t, req.Messages[3].Content, "tool_call_id: call_1")
-	require.Contains(t, req.Messages[3].Content, "tool_name: step_worker")
-	require.NotContains(t, req.Messages[3].Content, "large-result;")
 }
 
-func TestProcessRequest_SessionSummary_PreservesSmallSameTurnToolHistory(t *testing.T) {
+func TestProcessRequest_SessionSummary_OmitsSmallSameTurnToolHistory(t *testing.T) {
 	baseTime := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
 	userMsg := model.NewUserMessage("run the task")
 	toolCallMsg := model.Message{
@@ -1029,6 +1017,11 @@ func TestProcessRequest_SessionSummary_PreservesSmallSameTurnToolHistory(t *test
 			"test-agent": {
 				Summary:   "step 1 completed successfully",
 				UpdatedAt: baseTime.Add(2 * time.Second),
+				Boundary: session.NewSummaryBoundaryWithEventID(
+					"test-agent",
+					baseTime.Add(2*time.Second),
+					"evt-tool-result",
+				),
 			},
 		},
 		Events: []event.Event{
@@ -1087,14 +1080,12 @@ func TestProcessRequest_SessionSummary_PreservesSmallSameTurnToolHistory(t *test
 	p := NewContentRequestProcessor(WithAddSessionSummary(true))
 	p.ProcessRequest(context.Background(), inv, req, nil)
 
-	_, ok := inv.GetState(contentHasCompactedToolResultsStateKey)
-	require.False(t, ok)
+	raw, ok := inv.GetState(contentHasCompactedToolResultsStateKey)
+	require.True(t, ok)
+	require.Equal(t, true, raw)
 
-	require.Len(t, req.Messages, 4)
-	require.Equal(t, model.RoleTool, req.Messages[3].Role)
-	require.Equal(t, "call_1", req.Messages[3].ToolID)
-	require.Equal(t, "step_worker", req.Messages[3].ToolName)
-	require.Equal(t, "small result", req.Messages[3].Content)
+	require.Len(t, req.Messages, 2)
+	require.True(t, model.MessagesEqual(userMsg, req.Messages[1]))
 }
 
 func TestContentRequestProcessor_HasCompactedCurrentInvocationToolResults(t *testing.T) {
@@ -1282,7 +1273,7 @@ func TestContentRequestProcessor_HasCompactedCurrentInvocationToolResults(t *tes
 		require.True(t, p.hasCompactedCurrentInvocationToolResults(inv, since))
 	})
 
-	t.Run("ignores kept tool result", func(t *testing.T) {
+	t.Run("detects summary-covered kept tool result", func(t *testing.T) {
 		p := NewContentRequestProcessor(
 			WithContextCompactionKeepToolNames("session_load"),
 		)
@@ -1327,7 +1318,7 @@ func TestContentRequestProcessor_HasCompactedCurrentInvocationToolResults(t *tes
 				},
 			}),
 		)
-		require.False(t, p.hasCompactedCurrentInvocationToolResults(inv, since))
+		require.True(t, p.hasCompactedCurrentInvocationToolResults(inv, since))
 	})
 
 	t.Run("detects compacted tool result in later choice", func(t *testing.T) {

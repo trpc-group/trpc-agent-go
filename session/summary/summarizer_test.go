@@ -407,6 +407,110 @@ func TestSessionSummarizer_CacheSafeForking(t *testing.T) {
 		require.Equal(t, model.RoleUser, capture.request.Messages[0].Role)
 		require.Contains(t, capture.request.Messages[0].Content, "event text for standalone fallback")
 	})
+
+	t.Run("compacts tool payloads before the cache-safe request overflows", func(t *testing.T) {
+		capture := &cacheSafeCaptureModel{
+			response:      "bounded fork summary",
+			contextWindow: 1000,
+		}
+		s := NewSummarizer(capture, WithCacheSafeForking(true))
+		arguments := []byte(`{"input":"` + strings.Repeat("argument-", 600) + `"}`)
+		toolResult := strings.Repeat("tool-result-", 800)
+		parent := &model.Request{
+			Messages: []model.Message{
+				model.NewSystemMessage("stable system"),
+				model.NewUserMessage("keep this user request"),
+				{
+					Role: model.RoleAssistant,
+					ToolCalls: []model.ToolCall{{
+						Type: "function",
+						ID:   "call-1",
+						Function: model.FunctionDefinitionParam{
+							Name:      "lookup",
+							Arguments: arguments,
+						},
+					}},
+				},
+				model.NewToolMessage("call-1", "lookup", toolResult),
+			},
+			Tools: map[string]tool.Tool{"lookup": &testTool{name: "lookup"}},
+		}
+		ctx := ContextWithCacheSafeForkRequest(context.Background(), parent)
+
+		text, err := s.Summarize(ctx, newTestSession())
+		require.NoError(t, err)
+		require.Equal(t, "bounded fork summary", text)
+		require.NotNil(t, capture.request)
+		require.Nil(t, capture.request.Tools)
+		require.Len(t, capture.request.Messages, 5)
+		require.Equal(t, "keep this user request", capture.request.Messages[1].Content)
+		require.JSONEq(
+			t,
+			summaryToolArgumentsOmitted,
+			string(capture.request.Messages[2].ToolCalls[0].Function.Arguments),
+		)
+		require.Contains(t, capture.request.Messages[3].Content, "Tool result omitted")
+		require.NotContains(t, capture.request.Messages[3].Content, "tool-result-")
+		tokens, err := countSummaryRequestTokens(context.Background(), capture.request)
+		require.NoError(t, err)
+		require.LessOrEqual(t, tokens, 700)
+
+		require.Equal(t, arguments, parent.Messages[2].ToolCalls[0].Function.Arguments)
+		require.Equal(t, toolResult, parent.Messages[3].Content)
+		require.Len(t, parent.Tools, 1)
+	})
+
+	t.Run("rejects a cache-safe request without conversation content", func(t *testing.T) {
+		capture := &cacheSafeCaptureModel{response: "must not be called"}
+		s := NewSummarizer(capture, WithCacheSafeForking(true))
+		parent := &model.Request{
+			Messages: []model.Message{model.NewSystemMessage("system only")},
+		}
+		ctx := ContextWithCacheSafeForkRequest(context.Background(), parent)
+
+		_, err := s.Summarize(ctx, newTestSession())
+		require.ErrorContains(t, err, "no conversation content")
+		require.Nil(t, capture.request)
+	})
+
+	t.Run("rejects unshrinkable cache-safe content before calling the model", func(t *testing.T) {
+		capture := &cacheSafeCaptureModel{
+			response:      "must not be called",
+			contextWindow: 1000,
+		}
+		s := NewSummarizer(capture, WithCacheSafeForking(true))
+		parent := &model.Request{Messages: []model.Message{
+			model.NewSystemMessage("stable system"),
+			model.NewUserMessage(strings.Repeat("oversized-user-content ", 1000)),
+		}}
+		ctx := ContextWithCacheSafeForkRequest(context.Background(), parent)
+
+		_, err := s.Summarize(ctx, newTestSession())
+		require.ErrorContains(t, err, "too large after compacting tool payloads")
+		require.Nil(t, capture.request)
+	})
+}
+
+func TestSessionSummarizer_RejectsOversizedStandaloneRequest(t *testing.T) {
+	capture := &cacheSafeCaptureModel{
+		response:      "must not be called",
+		contextWindow: 1000,
+	}
+	s := NewSummarizer(
+		capture,
+		WithPrompt("Conversation:\n{conversation_text}\n\nSummary:"),
+	)
+	sess := &session.Session{ID: "oversized", Events: []event.Event{{
+		Author:    "user",
+		Timestamp: time.Now(),
+		Response: &model.Response{Choices: []model.Choice{{
+			Message: model.NewUserMessage(strings.Repeat("large-event ", 1000)),
+		}}},
+	}}}
+
+	_, err := s.Summarize(context.Background(), sess)
+	require.ErrorContains(t, err, "summary request input too large")
+	require.Nil(t, capture.request)
 }
 
 // fakeModel is a minimal model that returns the conversation content back to simulate LLM.
@@ -438,12 +542,13 @@ func (f *fakeModel) GenerateContent(ctx context.Context, req *model.Request) (<-
 }
 
 type cacheSafeCaptureModel struct {
-	request  *model.Request
-	response string
+	request       *model.Request
+	response      string
+	contextWindow int
 }
 
 func (m *cacheSafeCaptureModel) Info() model.Info {
-	return model.Info{Name: "capture"}
+	return model.Info{Name: "capture", ContextWindow: m.contextWindow}
 }
 
 func (m *cacheSafeCaptureModel) GenerateContent(
