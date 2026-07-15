@@ -2412,7 +2412,7 @@ func TestExecuteKeywordSearch(t *testing.T) {
 			context.Background(),
 			memory.UserKey{AppName: "test-app", UserID: "u1"},
 			memory.SearchOptions{Query: "   "},
-			5,
+			1,
 		)
 		require.NoError(t, err)
 		assert.Empty(t, results)
@@ -2520,6 +2520,18 @@ func TestBuildKeywordPhraseQuery(t *testing.T) {
 	assert.NotContains(t, query, "how")
 	assert.NotContains(t, query, "have")
 	assert.Empty(t, buildKeywordPhraseQuery("Kyoto"))
+}
+
+func TestMergeKeywordSearchResults(t *testing.T) {
+	t.Parallel()
+
+	phrase := []*memory.Entry{{ID: "phrase"}, {ID: "shared"}}
+	fallback := []*memory.Entry{{ID: "shared"}, {ID: "fallback"}}
+	got := mergeKeywordSearchResults(phrase, fallback, 3)
+	require.Len(t, got, 3)
+	assert.Equal(t, []string{"phrase", "shared", "fallback"}, []string{
+		got[0].ID, got[1].ID, got[2].ID,
+	})
 }
 
 func TestExecuteVectorSearch_OrderByEventTimeUsesSimilarityFirst(t *testing.T) {

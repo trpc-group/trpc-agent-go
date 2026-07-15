@@ -746,26 +746,29 @@ func (s *Service) executeKeywordSearch(
 	if query == "" {
 		return []*memory.Entry{}, nil
 	}
+	var phraseResults []*memory.Entry
 	if phraseQuery := buildKeywordPhraseQuery(query); phraseQuery != "" {
 		results, err := s.executeKeywordSearchQuery(
 			ctx, userKey, opts, maxResults,
 			phraseQuery, keywordPhraseTSQuerySQL,
 		)
-		if err != nil {
-			return []*memory.Entry{}, nil
+		if err == nil {
+			phraseResults = results
 		}
-		if len(results) > 0 {
+		if maxResults > 0 && len(phraseResults) >= maxResults {
 			return results, nil
 		}
 	}
-	results, err := s.executeKeywordSearchQuery(
+	fallbackResults, err := s.executeKeywordSearchQuery(
 		ctx, userKey, opts, maxResults,
 		query, keywordFallbackTSQuerySQL,
 	)
 	if err != nil {
-		return []*memory.Entry{}, nil
+		return phraseResults, nil
 	}
-	return results, nil
+	return mergeKeywordSearchResults(
+		phraseResults, fallbackResults, maxResults,
+	), nil
 }
 
 func (s *Service) executeKeywordSearchQuery(
@@ -875,6 +878,35 @@ func escapeWebSearchPhraseToken(token string) string {
 	token = strings.ReplaceAll(token, `\`, " ")
 	token = strings.ReplaceAll(token, `"`, " ")
 	return strings.Join(strings.Fields(token), " ")
+}
+
+func mergeKeywordSearchResults(
+	phraseResults []*memory.Entry,
+	fallbackResults []*memory.Entry,
+	maxResults int,
+) []*memory.Entry {
+	capacity := len(phraseResults) + len(fallbackResults)
+	if maxResults > 0 {
+		capacity = min(capacity, maxResults)
+	}
+	merged := make([]*memory.Entry, 0, capacity)
+	seen := make(map[string]struct{}, len(phraseResults)+len(fallbackResults))
+	for _, results := range [][]*memory.Entry{phraseResults, fallbackResults} {
+		for _, result := range results {
+			if result == nil {
+				continue
+			}
+			if _, ok := seen[result.ID]; ok {
+				continue
+			}
+			seen[result.ID] = struct{}{}
+			merged = append(merged, result)
+			if maxResults > 0 && len(merged) == maxResults {
+				return merged
+			}
+		}
+	}
+	return merged
 }
 
 // mergeHybridResults combines vector and keyword search results using
