@@ -148,6 +148,33 @@ func TestRunnerCompletion_LLMRunProducesOneRealExecutionStep(t *testing.T) {
 	assert.Empty(t, step.Error)
 }
 
+func TestRunnerCompletion_RunWithMessagesCapturesHistoryInput(t *testing.T) {
+	ag := llmagent.New("assistant", llmagent.WithModel(&staticModel{name: "trace-model", content: "done"}))
+	r := NewRunner("app", ag, WithSessionService(sessioninmemory.NewSessionService()))
+	messages := []model.Message{
+		model.NewSystemMessage("system seed"),
+		model.NewUserMessage("first user"),
+		model.NewAssistantMessage("first assistant"),
+		model.NewUserMessage("latest user"),
+	}
+	eventCh, err := RunWithMessages(
+		context.Background(),
+		r,
+		"user-1",
+		"session-1",
+		messages,
+		agent.WithExecutionTraceEnabled(true),
+	)
+	require.NoError(t, err)
+	completion := collectRunnerCompletionEvent(t, eventCh)
+	require.NotNil(t, completion.ExecutionTrace)
+	got := executionTraceSnapshotMessages(t, completion.ExecutionTrace.Input)
+	require.Len(t, got, len(messages))
+	for i := range messages {
+		assert.Equal(t, messages[i], got[i])
+	}
+}
+
 func TestExecutionTraceOutputSnapshot_UsesOnlyCompletedRootOutput(t *testing.T) {
 	loop := &eventLoopContext{
 		graphCompletionSeen: true,
@@ -353,6 +380,17 @@ func executionTraceSnapshotMessage(
 	var message model.Message
 	require.NoError(t, json.Unmarshal([]byte(snapshot.Text), &message))
 	return message
+}
+
+func executionTraceSnapshotMessages(
+	t *testing.T,
+	snapshot *atrace.Snapshot,
+) []model.Message {
+	t.Helper()
+	require.NotNil(t, snapshot)
+	var messages []model.Message
+	require.NoError(t, json.Unmarshal([]byte(snapshot.Text), &messages))
+	return messages
 }
 
 func TestRunnerCompletion_ExecutionTraceCarriesUsage(t *testing.T) {

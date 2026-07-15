@@ -548,7 +548,7 @@ func (r *runner) Run(
 	r.applyRunnerRunDefaults(&ro)
 	var executionTraceInput *trace.Snapshot
 	if ro.ExecutionTraceEnabled {
-		executionTraceInput = executionTraceMessageSnapshot(message)
+		executionTraceInput = executionTraceInputSnapshot(message, ro)
 	}
 
 	// Resolve per-request app name override. When the caller provides an
@@ -3001,6 +3001,21 @@ func resolveExecutionTraceStatus(loop *eventLoopContext, ctxErr error) trace.Tra
 
 func executionTraceMessageSnapshot(message model.Message) *trace.Snapshot {
 	data, err := json.Marshal(message)
+	if err != nil {
+		return nil
+	}
+	return &trace.Snapshot{Text: string(data)}
+}
+
+func executionTraceInputSnapshot(message model.Message, ro agent.RunOptions) *trace.Snapshot {
+	if len(ro.Messages) == 0 {
+		return executionTraceMessageSnapshot(message)
+	}
+	messages := append([]model.Message(nil), ro.Messages...)
+	if model.HasPayload(message) && shouldAppendUserMessage(message, ro.Messages) {
+		messages = append(messages, message)
+	}
+	data, err := json.Marshal(messages)
 	if err != nil {
 		return nil
 	}
