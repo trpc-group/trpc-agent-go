@@ -64,13 +64,21 @@ func Parse(diff string) ([]review.DiffFile, error) {
 				current = &files[len(files)-1]
 				currentHunk = nil
 			}
-			current.OldPath = cleanDiffPath(strings.TrimPrefix(line, "--- "))
+			oldPath, err := cleanDiffPath(strings.TrimPrefix(line, "--- "))
+			if err != nil {
+				return nil, fmt.Errorf("parse old path header: %w", err)
+			}
+			current.OldPath = oldPath
 			current.IsNew = current.OldPath == ""
 		case strings.HasPrefix(line, "+++ "):
 			if current == nil {
 				continue
 			}
-			current.NewPath = cleanDiffPath(strings.TrimPrefix(line, "+++ "))
+			newPath, err := cleanDiffPath(strings.TrimPrefix(line, "+++ "))
+			if err != nil {
+				return nil, fmt.Errorf("parse new path header: %w", err)
+			}
+			current.NewPath = newPath
 			current.IsDeleted = current.NewPath == ""
 			current.PackageDir = inferPackageDir(firstNonEmpty(current.NewPath, current.OldPath))
 		case strings.HasPrefix(line, "@@ "):
@@ -132,11 +140,12 @@ func parseDiffGitLine(file *review.DiffFile, line string) error {
 	if err != nil {
 		return fmt.Errorf("parse diff git paths: %w", err)
 	}
-	if len(parts) >= 2 {
-		file.OldPath = normalizeDiffPath(parts[0])
-		file.NewPath = normalizeDiffPath(parts[1])
-		file.PackageDir = inferPackageDir(file.NewPath)
+	if len(parts) != 2 {
+		return fmt.Errorf("parse diff git paths: expected exactly 2 paths, got %d", len(parts))
 	}
+	file.OldPath = normalizeDiffPath(parts[0])
+	file.NewPath = normalizeDiffPath(parts[1])
+	file.PackageDir = inferPackageDir(file.NewPath)
 	return nil
 }
 
@@ -270,12 +279,13 @@ func parseDiffLine(line string, oldLine int, newLine int) (review.DiffLine, int,
 	}
 }
 
-func cleanDiffPath(path string) string {
+func cleanDiffPath(path string) (string, error) {
 	path = strings.TrimSpace(path)
-	if decoded, _, err := parseGitPathToken(path); err == nil {
-		path = decoded
+	decoded, _, err := parseGitPathToken(path)
+	if err != nil {
+		return "", fmt.Errorf("decode diff path: %w", err)
 	}
-	return normalizeDiffPath(path)
+	return normalizeDiffPath(decoded), nil
 }
 
 func normalizeDiffPath(path string) string {

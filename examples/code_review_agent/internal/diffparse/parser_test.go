@@ -10,6 +10,7 @@ package diffparse
 
 import (
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -208,5 +209,33 @@ func TestParseGitQuotedRenamePaths(t *testing.T) {
 	}
 	if decoded != "a/pkg/dir\\name.go" {
 		t.Fatalf("decoded backslash path = %q, want %q", decoded, "a/pkg/dir\\name.go")
+	}
+}
+
+func TestParseRejectsMalformedGitPathHeaders(t *testing.T) {
+	for name, raw := range map[string]string{
+		"one path":    "diff --git a/pkg/a.go\n",
+		"three paths": "diff --git a/pkg/a.go b/pkg/a.go c/pkg/a.go\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := Parse(raw)
+			if err == nil {
+				t.Fatal("Parse() error = nil, want malformed path header error")
+			}
+			if !strings.Contains(err.Error(), "expected exactly 2 paths") {
+				t.Fatalf("Parse() error = %q, want exact path count error", err)
+			}
+		})
+	}
+}
+
+func TestParsePropagatesMalformedQuotedFileHeader(t *testing.T) {
+	raw := "--- a/pkg/a.go\n+++ \"b/pkg/bad\\q.go\"\n@@ -1 +1 @@\n package pkg\n"
+	_, err := Parse(raw)
+	if err == nil {
+		t.Fatal("Parse() error = nil, want quoted path decoding error")
+	}
+	if !strings.Contains(err.Error(), "parse new path header") || !strings.Contains(err.Error(), "unsupported Git path escape") {
+		t.Fatalf("Parse() error = %q, want wrapped path decoding error", err)
 	}
 }

@@ -55,7 +55,11 @@ func TestRenderReportsRedactSecrets(t *testing.T) {
 func TestJSONRedactsQuotedSecretsBeforeEscaping(t *testing.T) {
 	secrets := []string{"quoted-password-value", "quoted-token-value", "quoted-api-key-value"}
 	r := review.Report{
-		Task: review.ReviewTask{ID: "task-quoted", Status: review.TaskStatusPassed},
+		Task: review.ReviewTask{
+			ID:       "task-quoted",
+			Status:   review.TaskStatusPassed,
+			RepoPath: filepath.Join("tmp", "token=quoted-token-value"),
+		},
 		Summary: `password="quoted-password-value" token="quoted-token-value" api_key="quoted-api-key-value"
 json={"note":"quoted-value"}`,
 		Findings: []review.Finding{{

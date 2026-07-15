@@ -70,6 +70,7 @@ func JSON(r review.Report) ([]byte, error) {
 
 func redactedReport(in review.Report) review.Report {
 	out := in
+	out.Task.RepoPath = redactString(in.Task.RepoPath)
 	out.Task.Error = redactString(in.Task.Error)
 	out.Summary = redactString(in.Summary)
 	out.Plan.Model = redactString(in.Plan.Model)
