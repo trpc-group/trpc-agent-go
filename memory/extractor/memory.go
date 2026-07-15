@@ -181,7 +181,11 @@ func (e *memoryExtractor) ExtractOperationStages(
 			"assistant result extraction failed: %w", err,
 		)
 	}
-	return ops, uniqueExtractionOperations(ops, resultOps), nil
+	resultOps = filterGroundedAssistantResultOperations(
+		ctx, messages, resultOps,
+	)
+	ops, resultOps = routeAssistantResultOperations(ops, resultOps)
+	return ops, resultOps, nil
 }
 
 func (e *memoryExtractor) generateOperations(
@@ -521,6 +525,9 @@ func (e *memoryExtractor) buildSystemPrompt(
 	if policyPrompt := updatePolicyPrompt(e.updatePolicy); policyPrompt != "" {
 		sb.WriteString(policyPrompt)
 	}
+	if e.extractAssistantResults {
+		sb.WriteString(primaryAssistantResultDelegationPrompt)
+	}
 
 	// Append available actions.
 	sb.WriteString("\n<available_actions>\n")
@@ -659,6 +666,9 @@ tutorial prose, brainstorming without a selected result, or acknowledgments.
   memory containing all three material-to-property recommendations. Merely
   storing that the user is comparing materials is incomplete.
 - Preserve exact names, quantities, negation, modality, and relationships.
+- Every number, amount, range, percentage, date, duration, and measurement in
+  a result must appear in the assistant's direct response. Never invent a
+  missing estimate, fill in an unspecified price, or infer a new quantity.
 - Do not store hidden reasoning, unrequested generic teaching, every explored
   alternative, repeated explanation, acknowledgments, or filler.
 - Do not reject a requested transformation merely because its source material

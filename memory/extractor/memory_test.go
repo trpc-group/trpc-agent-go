@@ -270,12 +270,114 @@ func TestExtractor_AssistantResultExtractionSecondPass(t *testing.T) {
 	require.Len(t, m.requests, 2)
 	assert.NotContains(t, m.requests[0].Messages[0].Content,
 		"<assistant_result_extraction>")
+	assert.Contains(t, m.requests[0].Messages[0].Content,
+		"<assistant_result_delegation>")
 	assert.Contains(t, m.requests[1].Messages[0].Content,
 		"<assistant_result_extraction>")
 	assert.Len(t, m.requests[1].Tools, 1)
 	assert.Contains(t, m.requests[1].Tools, memory.AddToolName)
 	assert.Equal(t, model.RoleUser,
 		m.requests[1].Messages[len(m.requests[1].Messages)-1].Role)
+}
+
+func TestExtractor_AssistantResultStageOwnsNearDuplicate(t *testing.T) {
+	primaryArgs, err := json.Marshal(map[string]any{
+		"memory": "Assistant recommended resources for front-end and back-end development: Codecademy for HTML, CSS, and JavaScript; Node.js, Python, SQL, and Java for back-end.",
+	})
+	require.NoError(t, err)
+	resultArgs, err := json.Marshal(map[string]any{
+		"memory": "Assistant recommended resources for front-end and back-end development: Codecademy for HTML, CSS, and JavaScript; Node.js, Python, SQL, and Java for back-end development.",
+	})
+	require.NoError(t, err)
+	m := &sequenceModel{
+		name: "test-model",
+		responses: [][]*model.Response{
+			{{Choices: []model.Choice{{Message: model.Message{ToolCalls: []model.ToolCall{
+				makeToolCall(memory.AddToolName, primaryArgs),
+			}}}}}},
+			{{Choices: []model.Choice{{Message: model.Message{ToolCalls: []model.ToolCall{
+				makeToolCall(memory.AddToolName, resultArgs),
+			}}}}}},
+		},
+	}
+	e := NewExtractor(
+		m, WithAssistantResultExtraction(true),
+	).(*memoryExtractor)
+
+	primary, assistantResults, err := e.ExtractOperationStages(
+		context.Background(),
+		[]model.Message{
+			model.NewUserMessage("Which development resources should I use?"),
+			model.NewAssistantMessage("Use Codecademy and learn Node.js, Python, SQL, and Java."),
+		},
+		nil,
+	)
+	require.NoError(t, err)
+	assert.Empty(t, primary)
+	require.Len(t, assistantResults, 1)
+	assert.Equal(t,
+		"Assistant recommended resources for front-end and back-end development: Codecademy for HTML, CSS, and JavaScript; Node.js, Python, SQL, and Java for back-end development.",
+		assistantResults[0].Memory,
+	)
+}
+
+func TestRouteAssistantResultOperationsMergesTopics(t *testing.T) {
+	primary := &Operation{
+		Type:   OperationAdd,
+		Memory: "Assistant recommended Go and Python backend courses.",
+		Topics: []string{"backend", "courses"},
+	}
+	result := &Operation{
+		Type:   OperationAdd,
+		Memory: "Assistant recommended Go and Python backend courses.",
+		Topics: []string{"Go", "courses"},
+	}
+
+	gotPrimary, gotResults := routeAssistantResultOperations(
+		[]*Operation{primary}, []*Operation{result},
+	)
+	assert.Empty(t, gotPrimary)
+	require.Len(t, gotResults, 1)
+	assert.Equal(t, []string{"Go", "courses", "backend"}, gotResults[0].Topics)
+	assert.NotSame(t, result, gotResults[0])
+}
+
+func TestRouteAssistantResultOperationsKeepsDistinctPrimaryFact(t *testing.T) {
+	primary := &Operation{
+		Type:   OperationAdd,
+		Memory: "Wants to learn Python for backend development.",
+	}
+	result := &Operation{
+		Type:   OperationAdd,
+		Memory: "Assistant recommended Python, SQL, and Java courses.",
+	}
+
+	gotPrimary, gotResults := routeAssistantResultOperations(
+		[]*Operation{primary}, []*Operation{result},
+	)
+	require.Len(t, gotPrimary, 1)
+	require.Len(t, gotResults, 1)
+	assert.Same(t, primary, gotPrimary[0])
+	assert.Same(t, result, gotResults[0])
+}
+
+func TestRouteAssistantResultOperationsKeepsUserFactMisclassifiedByResult(t *testing.T) {
+	primary := &Operation{
+		Type:   OperationAdd,
+		Memory: "Bought snacks and drinks for the team event.",
+	}
+	result := &Operation{
+		Type:   OperationAdd,
+		Memory: "Bought snacks and drinks for the team event.",
+	}
+
+	gotPrimary, gotResults := routeAssistantResultOperations(
+		[]*Operation{primary}, []*Operation{result},
+	)
+	require.Len(t, gotPrimary, 1)
+	require.Len(t, gotResults, 1)
+	assert.Same(t, primary, gotPrimary[0])
+	assert.Same(t, result, gotResults[0])
 }
 
 func TestExtractor_AssistantResultExtractionStages(t *testing.T) {
@@ -318,6 +420,91 @@ func TestExtractor_AssistantResultExtractionStages(t *testing.T) {
 		"Recommended backend languages: Go and Python.",
 		assistantResults[0].Memory,
 	)
+}
+
+func TestExtractor_AssistantResultExtractionRejectsUngroundedAmounts(t *testing.T) {
+	resultArgs, err := json.Marshal(map[string]any{
+		"memory": "Airport Limousine Bus costs about $10-20.",
+	})
+	require.NoError(t, err)
+	m := &sequenceModel{
+		name: "test-model",
+		responses: [][]*model.Response{
+			nil,
+			{{Choices: []model.Choice{{Message: model.Message{ToolCalls: []model.ToolCall{
+				makeToolCall(memory.AddToolName, resultArgs),
+			}}}}}},
+		},
+	}
+	e := NewExtractor(
+		m, WithAssistantResultExtraction(true),
+	).(*memoryExtractor)
+
+	primary, assistantResults, err := e.ExtractOperationStages(
+		context.Background(),
+		[]model.Message{
+			model.NewUserMessage("My friend thinks the bus costs $10."),
+			model.NewAssistantMessage(
+				"The Airport Limousine Bus is cheaper than a taxi, but its price was not specified.",
+			),
+		},
+		nil,
+	)
+	require.NoError(t, err)
+	assert.Empty(t, primary)
+	assert.Empty(t, assistantResults)
+	assert.Len(t, m.requests, 2)
+}
+
+func TestFilterGroundedAssistantResultOperations(t *testing.T) {
+	messages := []model.Message{
+		model.NewUserMessage("My friend says the bus is $10."),
+		model.NewAssistantMessage(
+			"A taxi costs $140 - $180 and takes about 60 minutes.",
+		),
+	}
+	operations := []*Operation{
+		{Memory: "Taxi fare estimate: $140-180."},
+		{Memory: "The trip takes 60 minutes."},
+		{Memory: "The trip takes 45 minutes."},
+		{Memory: "Options: (1) train; (2) taxi."},
+		{Memory: "Airport Limousine Bus costs $10."},
+		{Memory: "Taxi fare estimate: USD 140 to 180."},
+		nil,
+	}
+
+	got := filterGroundedAssistantResultOperations(
+		context.Background(), messages, operations,
+	)
+	require.Len(t, got, 5)
+	assert.Same(t, operations[0], got[0])
+	assert.Same(t, operations[1], got[1])
+	assert.Same(t, operations[2], got[2])
+	assert.Same(t, operations[3], got[3])
+	assert.Same(t, operations[5], got[4])
+}
+
+func TestFilterGroundedAssistantResultOperations_NormalizesCurrencies(t *testing.T) {
+	messages := []model.Message{
+		model.NewAssistantMessage(
+			"Passes cost ¥2,800, 15€, £12, and 20 USD.",
+		),
+	}
+	operations := []*Operation{
+		{Memory: "The passes cost JPY 2800."},
+		{Memory: "The passes cost EUR 15."},
+		{Memory: "The passes cost 12 GBP."},
+		{Memory: "The passes cost $20."},
+		{Memory: "A premium pass costs €20."},
+	}
+
+	got := filterGroundedAssistantResultOperations(
+		context.Background(), messages, operations,
+	)
+	require.Len(t, got, 4)
+	for i := range got {
+		assert.Same(t, operations[i], got[i])
+	}
 }
 
 func TestExtractor_AssistantResultExtractionFailure(t *testing.T) {
