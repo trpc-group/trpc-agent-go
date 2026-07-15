@@ -2175,3 +2175,50 @@ func TestGetCurrentInvocationMessages_MaskedEventsExcluded(t *testing.T) {
 	require.Equal(t, "hello", req.Messages[0].Content)
 	require.Equal(t, "final answer", req.Messages[1].Content)
 }
+
+func TestProcessRequest_SessionSummary_InvalidatedWhenEventsMasked(t *testing.T) {
+	sess := session.NewSession("app", "user", "mask-summary-test")
+	sess.Summaries = map[string]*session.Summary{
+		"test-agent": {
+			Summary:   "Secret from masked history",
+			UpdatedAt: time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC),
+		},
+	}
+	sess.Events = []event.Event{
+		{
+			ID:     "e1",
+			Author: "user",
+			Response: &model.Response{
+				Done:    true,
+				Choices: []model.Choice{{Index: 0, Message: model.NewUserMessage("hello")}},
+			},
+		},
+		{
+			ID:     "e2",
+			Author: "test-agent",
+			Response: &model.Response{
+				Done:    true,
+				Choices: []model.Choice{{Index: 0, Message: model.NewAssistantMessage("answer")}},
+			},
+		},
+	}
+	sess.MaskEvents("e2")
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationEventFilterKey("test-agent"),
+		agent.WithInvocationMessage(model.NewUserMessage("current")),
+	)
+	inv.AgentName = "test-agent"
+
+	req := &model.Request{}
+	p := NewContentRequestProcessor(WithAddSessionSummary(true))
+	p.ProcessRequest(context.Background(), inv, req, nil)
+
+	raw, ok := inv.GetState(contentHasSessionSummaryStateKey)
+	require.False(t, ok, "masked events should invalidate cached session summary")
+	require.Empty(t, raw)
+	for _, msg := range req.Messages {
+		require.NotContains(t, msg.Content, "Secret from masked history")
+	}
+}

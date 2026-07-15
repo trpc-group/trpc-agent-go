@@ -30,7 +30,6 @@ func (sess *Session) MaskEvents(ids ...string) int {
 	}
 
 	sess.EventMu.Lock()
-	defer sess.EventMu.Unlock()
 
 	sess.ensureMaskedEventsFromStateLocked()
 
@@ -44,6 +43,19 @@ func (sess *Session) MaskEvents(ids ...string) int {
 		existingIDs[e.ID] = struct{}{}
 	}
 
+	masked := sess.maskEventsLocked(ids, existingIDs)
+	sess.EventMu.Unlock()
+
+	if masked > 0 {
+		sess.invalidateSummaries()
+	}
+	return masked
+}
+
+func (sess *Session) maskEventsLocked(
+	ids []string,
+	existingIDs map[string]struct{},
+) int {
 	idsToMask := expandMaskIDsForToolRounds(sess.Events, ids)
 
 	masked := 0
@@ -175,6 +187,66 @@ func (sess *Session) SyncMaskedEventsToState() ([]byte, error) {
 	return payload, nil
 }
 
+// MaskAndPersistEvents masks events, persists the updated mask set, and only
+// commits the in-memory mask (and summary invalidation) after persistence
+// succeeds. On persistence failure the prior mask set is restored.
+func (sess *Session) MaskAndPersistEvents(
+	ctx context.Context,
+	svc Service,
+	key Key,
+	ids ...string,
+) (int, error) {
+	if sess == nil || len(ids) == 0 {
+		return 0, nil
+	}
+
+	sess.EventMu.Lock()
+
+	sess.ensureMaskedEventsFromStateLocked()
+
+	snapshot := sess.cloneMaskedEventIDsLocked()
+
+	if sess.maskedEventIDs == nil {
+		sess.maskedEventIDs = make(map[string]bool, len(ids))
+	}
+
+	existingIDs := make(map[string]struct{}, len(sess.Events))
+	for _, e := range sess.Events {
+		existingIDs[e.ID] = struct{}{}
+	}
+
+	masked := sess.maskEventsLocked(ids, existingIDs)
+	if masked == 0 {
+		sess.EventMu.Unlock()
+		return 0, nil
+	}
+
+	payload, err := sess.marshalMaskedEventIDsLocked()
+	if err != nil {
+		sess.restoreMaskedEventIDsLocked(snapshot)
+		sess.EventMu.Unlock()
+		return 0, err
+	}
+
+	if svc != nil {
+		if err := svc.UpdateSessionState(ctx, key, StateMap{
+			MaskedEventsStateKey: payload,
+		}); err != nil {
+			sess.restoreMaskedEventIDsLocked(snapshot)
+			sess.EventMu.Unlock()
+			return 0, fmt.Errorf("update session state for masked events: %w", err)
+		}
+	}
+
+	sess.SetState(MaskedEventsStateKey, payload)
+	sess.EventMu.Unlock()
+
+	if masked > 0 {
+		sess.invalidateSummaries()
+	}
+	return masked, nil
+}
+
 // PersistMaskedEvents writes the masked-event set to session state and, when
 // svc is non-nil, persists it through the session service.
 func (sess *Session) PersistMaskedEvents(
@@ -208,11 +280,14 @@ func (sess *Session) maskedEventsPayload() ([]byte, error) {
 
 	sess.ensureMaskedEventsFromState()
 
-	// Write lock: maskedEventIDListLocked may prune stale IDs from the set.
 	sess.EventMu.Lock()
-	ids := sess.maskedEventIDListLocked()
+	payload, err := sess.marshalMaskedEventIDsLocked()
 	sess.EventMu.Unlock()
+	return payload, err
+}
 
+func (sess *Session) marshalMaskedEventIDsLocked() ([]byte, error) {
+	ids := sess.maskedEventIDListLocked()
 	return marshalMaskedEventIDs(ids)
 }
 
@@ -252,29 +327,55 @@ func (sess *Session) ensureMaskedEventsFromStateLocked() {
 	}
 }
 
-// maskedEventIDListLocked returns current mask IDs still present in sess.Events
-// and deletes stale IDs. Caller must hold EventMu write lock — this helper mutates
-// maskedEventIDs.
+// maskedEventIDListLocked returns all persisted mask IDs. IDs for events outside
+// the currently loaded window are retained so partial session reloads do not
+// drop masks for older history. Caller must hold EventMu write lock.
 func (sess *Session) maskedEventIDListLocked() []string {
 	if len(sess.maskedEventIDs) == 0 {
 		return nil
 	}
-	present := make(map[string]struct{}, len(sess.Events))
-	for _, e := range sess.Events {
-		if e.ID != "" {
-			present[e.ID] = struct{}{}
-		}
-	}
 	ids := make([]string, 0, len(sess.maskedEventIDs))
 	for id := range sess.maskedEventIDs {
-		if _, ok := present[id]; !ok {
-			delete(sess.maskedEventIDs, id)
+		if id == "" {
 			continue
 		}
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
 	return ids
+}
+
+func (sess *Session) cloneMaskedEventIDsLocked() map[string]bool {
+	if len(sess.maskedEventIDs) == 0 {
+		return nil
+	}
+	out := make(map[string]bool, len(sess.maskedEventIDs))
+	for id, masked := range sess.maskedEventIDs {
+		out[id] = masked
+	}
+	return out
+}
+
+func (sess *Session) restoreMaskedEventIDsLocked(snapshot map[string]bool) {
+	if len(snapshot) == 0 {
+		sess.maskedEventIDs = nil
+		return
+	}
+	sess.maskedEventIDs = make(map[string]bool, len(snapshot))
+	for id, masked := range snapshot {
+		sess.maskedEventIDs[id] = masked
+	}
+}
+
+// invalidateSummaries drops cached session summaries so masked event content
+// cannot leak back through a summary generated before masking.
+func (sess *Session) invalidateSummaries() {
+	if sess == nil {
+		return
+	}
+	sess.SummariesMu.Lock()
+	defer sess.SummariesMu.Unlock()
+	sess.Summaries = nil
 }
 
 func marshalMaskedEventIDs(ids []string) ([]byte, error) {
