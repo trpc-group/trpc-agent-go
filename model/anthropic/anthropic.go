@@ -638,9 +638,9 @@ func (m *Model) handleStreamingResponse(
 			m.sendErrorResponse(ctx, responseChan, model.ErrorTypeStreamError, streamErr)
 			return
 		}
-		// Only retry transport-level errors that look transient. Authentic
-		// 4xx-style failures (bad request, invalid api key) should fail fast.
-		if !isStreamRetryableError(streamErr) {
+		// Only retry transport-level errors that look transient when stream
+		// retry is enabled. Zero-option models surface the original error.
+		if !isStreamRetryableError(streamErr) || maxRetries == 0 {
 			m.runChatStreamCompleteCallback(ctx, &chatRequest, nil, streamErr)
 			m.sendErrorResponse(ctx, responseChan, model.ErrorTypeStreamError, streamErr)
 			return
@@ -683,6 +683,19 @@ func (m *Model) effectiveStreamMaxRetries() int {
 	return m.streamMaxRetries
 }
 
+// streamingRequestOptions returns per-request options for streaming calls.
+// When outer stream retry is enabled, SDK-level retries are disabled so the
+// documented WithStreamRetry budget is not multiplied by the client default.
+func (m *Model) streamingRequestOptions() []option.RequestOption {
+	if !m.streamRetryEnabled {
+		return m.anthropicRequestOptions
+	}
+	opts := make([]option.RequestOption, 0, len(m.anthropicRequestOptions)+1)
+	opts = append(opts, m.anthropicRequestOptions...)
+	opts = append(opts, option.WithMaxRetries(0))
+	return opts
+}
+
 // runStreamingAttempt performs a single streaming attempt and returns:
 //   - finalResponse: the terminal response when streaming completed cleanly
 //     (caller is responsible for delivering it to responseChan).
@@ -696,7 +709,8 @@ func (m *Model) runStreamingAttempt(
 	chatRequest anthropic.MessageNewParams,
 	responseChan chan<- *model.Response,
 ) (finalResponse *model.Response, callbackAcc *anthropic.Message, streamErr error, sawCallerOutput bool) {
-	stream := m.client.Messages.NewStreaming(ctx, chatRequest, m.anthropicRequestOptions...)
+	streamOpts := m.streamingRequestOptions()
+	stream := m.client.Messages.NewStreaming(ctx, chatRequest, streamOpts...)
 	defer stream.Close()
 	acc := newStreamingMessageAccumulator()
 
@@ -797,11 +811,25 @@ var streamRetryableHTTPStatusCodes = []string{
 	"529", // anthropic-specific "overloaded" status code
 }
 
+// isStreamRetryableHTTPStatusCode reports whether an HTTP status is transient.
+func isStreamRetryableHTTPStatusCode(status int) bool {
+	switch status {
+	case 502, 503, 504, 529:
+		return true
+	default:
+		return false
+	}
+}
+
 // isStreamRetryableError returns true when the given streaming-attempt error
 // looks like a transient transport/server condition that should be retried.
 func isStreamRetryableError(err error) bool {
 	if err == nil {
 		return false
+	}
+	var apiErr *anthropic.Error
+	if errors.As(err, &apiErr) && apiErr.StatusCode != 0 {
+		return isStreamRetryableHTTPStatusCode(apiErr.StatusCode)
 	}
 	msg := strings.ToLower(err.Error())
 	for _, p := range streamRetryableErrorPatterns {
@@ -810,27 +838,27 @@ func isStreamRetryableError(err error) bool {
 		}
 	}
 	for _, code := range streamRetryableHTTPStatusCodes {
-		if containsIsolatedToken(msg, code) {
+		if containsHTTPStatusContext(msg, code) {
 			return true
 		}
 	}
 	return false
 }
 
-// containsIsolatedToken reports whether token appears in msg without being
-// embedded in a longer digit sequence (e.g. match "503" but not "5031").
-func containsIsolatedToken(msg, token string) bool {
-	if token == "" {
+// containsHTTPStatusContext reports whether code appears in msg with explicit
+// HTTP-status phrasing (not bare port/path numbers in URLs).
+func containsHTTPStatusContext(msg, code string) bool {
+	if code == "" {
 		return false
 	}
-	for i := 0; i+len(token) <= len(msg); i++ {
-		if msg[i:i+len(token)] != token {
-			continue
-		}
-		beforeDigit := i > 0 && msg[i-1] >= '0' && msg[i-1] <= '9'
-		after := i + len(token)
-		afterDigit := after < len(msg) && msg[after] >= '0' && msg[after] <= '9'
-		if !beforeDigit && !afterDigit {
+	markers := []string{
+		"status " + code,
+		"http status " + code,
+		"http " + code + " ",
+		": " + code + " ",
+	}
+	for _, marker := range markers {
+		if strings.Contains(msg, marker) {
 			return true
 		}
 	}
