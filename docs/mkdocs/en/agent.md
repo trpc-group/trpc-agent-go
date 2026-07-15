@@ -1536,7 +1536,7 @@ Execution traces are attached to the runner completion event as an in-memory art
 Each recorded step carries stable fields such as:
 
 - `NodeID`: the static node path for the executed node
-- `NodeType`: the node's semantic type, such as `function`, `llm`, `tool`, `agent`, `join`, or `router`
+- `NodeType`: the node's semantic type (`function`, `llm`, `tool`, or `agent`), matching the node kind in the static structure
 - `PredecessorStepIDs`: the direct step dependencies in this run
 - `Input` and `Output`: stable text snapshots captured for the step
 - `Error`: the terminal step error, when the step fails

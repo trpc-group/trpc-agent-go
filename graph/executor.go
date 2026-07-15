@@ -2882,7 +2882,7 @@ func (e *Executor) initializeNodeContext(
 		tracecapture.SetStepNodeType(
 			agent.NewInvocationContext(ctx, invocation),
 			traceStepID,
-			nodeType.String(),
+			string(istructure.NormalizeNodeKind(nodeType.String())),
 		)
 		stateCopy[currentTraceStepIDStateKey] = traceStepID
 	}

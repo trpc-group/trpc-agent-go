@@ -52,8 +52,8 @@ type Step struct {
 	AgentName          string
 	Branch             string
 	NodeID             string
-	// NodeType is the semantic type of the executed node. Common framework
-	// values include function, llm, tool, agent, join, and router.
+	// NodeType is the semantic type of the executed node and matches the node
+	// kind in the static structure: function, llm, tool, or agent.
 	NodeType           string
 	StartedAt          time.Time
 	EndedAt            time.Time
