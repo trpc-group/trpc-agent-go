@@ -80,6 +80,10 @@ type Harness struct {
 	// It receives the completed case count and total case count.
 	// Optional; useful for CI progress reporting.
 	ProgressFunc func(completed, total int, result CaseResult)
+	// memoryCheckFn overrides the default memory pressure check for testing.
+	// When set, this function is called instead of reading runtime.MemStats.
+	// It returns an error if memory pressure is too high, or nil otherwise.
+	memoryCheckFn func(maxUsagePct float64) error
 }
 
 func (h Harness) logf(format string, args ...any) {
@@ -197,7 +201,11 @@ func (h Harness) Run(ctx context.Context, replayCase Case) (CaseResult, error) {
 
 	// Memory pressure check before capture — skip if heap is overloaded.
 	if maxMemPct > 0 {
-		if err := memoryPressureCheck(maxMemPct); err != nil {
+		checkFn := memoryPressureCheck
+		if h.memoryCheckFn != nil {
+			checkFn = h.memoryCheckFn
+		}
+		if err := checkFn(maxMemPct); err != nil {
 			h.logf("replay: case=%s skipping capture: %v", replayCase.Name, err)
 			result.Status = StatusSkip
 			result.SkipReason = err.Error()
@@ -1180,6 +1188,10 @@ func loadCheckpointResult(dir, caseName string) (CaseResult, bool) {
 
 // --- Report I/O ---
 
+// createTempFile is the function used by WriteReport to create a temp file.
+// It can be overridden in tests to inject failures.
+var createTempFile = os.CreateTemp
+
 // WriteReport atomically writes an indented JSON report with SHA-256 checksum footer.
 // Uses fsync for durability before atomic rename.
 func WriteReport(path string, report Report) error {
@@ -1204,7 +1216,7 @@ func WriteReport(path string, report Report) error {
 	}
 
 	// Write to temp file, fsync, then rename atomically.
-	f, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*.tmp")
+	f, err := createTempFile(filepath.Dir(path), filepath.Base(path)+".*.tmp")
 	if err != nil {
 		return &ReplayError{Kind: ErrReportWrite, Cause: fmt.Errorf("create temp report file: %w", err)}
 	}

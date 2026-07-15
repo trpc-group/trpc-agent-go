@@ -5620,13 +5620,16 @@ func TestHarness_WriteReport_MkdirError(t *testing.T) {
 }
 
 // TestHarness_WriteReport_TempFileError covers the temp file creation error
-// path by pointing to a directory that doesn't exist and can't be created.
+// path by injecting a failing createTempFile function.
 func TestHarness_WriteReport_TempFileError(t *testing.T) {
-	// On Windows, a path with a colon in a directory component is invalid.
-	// On Linux/macOS, a path under a non-existent deeply nested path that
-	// MkdirAll fails on (e.g., /proc/...) triggers the error.
-	// Using NUL byte is the most portable way.
-	err := WriteReport("invalid\x00name/report.json", Report{Version: "v2"})
+	orig := createTempFile
+	defer func() { createTempFile = orig }()
+	createTempFile = func(_ string, _ string) (*os.File, error) {
+		return nil, errors.New("injected CreateTemp failure")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "report.json")
+	err := WriteReport(path, Report{Version: "v2"})
 	assert.Error(t, err)
 }
 
@@ -5807,8 +5810,9 @@ func TestHarness_Run_ConcurrentCaptureWithSkippedBackend(t *testing.T) {
 		},
 	}
 	result, err := harness.Run(context.Background(), c)
-	// Should be inconclusive since the third backend is skipped.
 	require.NoError(t, err)
+	// Two backends ran successfully (comparable), one was skipped → StatusMixed.
+	assert.Equal(t, StatusMixed, result.Status)
 	assert.Contains(t, result.SkippedBackends, "inmemory-nosummary")
 }
 
@@ -5821,7 +5825,10 @@ func TestHarness_Run_MemoryPressureSkip_LowThreshold(t *testing.T) {
 	harness := Harness{
 		Backends:          backends,
 		Normalizer:        normalizer,
-		MaxMemoryUsagePct: 0.0001, // Extremely low threshold to force skip.
+		MaxMemoryUsagePct: 0.85,
+		memoryCheckFn: func(_ float64) error {
+			return fmt.Errorf("memory pressure too high: 99.9%% heap usage")
+		},
 	}
 	c := Case{
 		Name:         "mem_pressure_case",
@@ -5898,6 +5905,9 @@ func TestHarness_Run_SectionsCount(t *testing.T) {
 	result, err := harness.Run(context.Background(), c)
 	require.NoError(t, err)
 	assert.Equal(t, StatusPass, result.Status)
+	// CapEvents+CapState supported → 2 compared; CapMemory+CapSummary+CapTrack unsupported → 3 skipped.
+	assert.Equal(t, 2, result.SectionsCompared)
+	assert.Equal(t, 3, result.SectionsSkipped)
 }
 
 // TestHarness_Run_ParallelCompare covers the parallel comparison path for
@@ -6316,13 +6326,17 @@ func TestBackend_Cleanup_MemError(t *testing.T) {
 
 // TestBackend_Cleanup_BothErrors covers both error paths simultaneously.
 func TestBackend_Cleanup_BothErrors(t *testing.T) {
+	errDelete := errors.New("delete failed")
+	errClear := errors.New("clear failed")
 	backend := Backend{
 		Name: "test",
-		Sess: &errorSessionService{deleteErr: errors.New("delete failed")},
-		Mem:  &errorMemoryService{Service: inmemory.NewMemoryService(), clearErr: errors.New("clear failed")},
+		Sess: &errorSessionService{deleteErr: errDelete},
+		Mem:  &errorMemoryService{Service: inmemory.NewMemoryService(), clearErr: errClear},
 	}
 	err := backend.Cleanup(context.Background(), session.Key{}, memory.UserKey{})
 	assert.Error(t, err)
+	assert.True(t, errors.Is(err, errDelete), "should wrap delete error")
+	assert.True(t, errors.Is(err, errClear), "should wrap clear error")
 }
 
 // TestSaveBytesAtomic_MkdirError covers the MkdirAll error path.

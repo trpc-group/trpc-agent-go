@@ -12,6 +12,7 @@ replace (
 )
 
 require (
+	github.com/ClickHouse/clickhouse-go/v2 v2.34.0
 	github.com/alicebob/miniredis/v2 v2.35.0
 	github.com/mattn/go-sqlite3 v1.14.32
 	github.com/redis/go-redis/v9 v9.11.0
@@ -23,12 +24,14 @@ require (
 	trpc.group/trpc-go/trpc-agent-go/session/postgres v1.10.0
 	trpc.group/trpc-go/trpc-agent-go/session/redis v1.10.0
 	trpc.group/trpc-go/trpc-agent-go/session/sqlite v1.10.0
+	trpc.group/trpc-go/trpc-agent-go/storage/clickhouse v1.1.2-0.20260108033914-7a20241f1ad5
+	trpc.group/trpc-go/trpc-agent-go/storage/mysql v0.5.0
+	trpc.group/trpc-go/trpc-agent-go/storage/postgres v0.8.0
 )
 
 require (
 	filippo.io/edwards25519 v1.1.1 // indirect
 	github.com/ClickHouse/ch-go v0.65.1 // indirect
-	github.com/ClickHouse/clickhouse-go/v2 v2.34.0 // indirect
 	github.com/andybalholm/brotli v1.1.1 // indirect
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
@@ -79,8 +82,5 @@ require (
 	google.golang.org/protobuf v1.34.2 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	trpc.group/trpc-go/trpc-a2a-go v0.2.5 // indirect
-	trpc.group/trpc-go/trpc-agent-go/storage/clickhouse v1.1.2-0.20260108033914-7a20241f1ad5 // indirect
-	trpc.group/trpc-go/trpc-agent-go/storage/mysql v0.5.0 // indirect
-	trpc.group/trpc-go/trpc-agent-go/storage/postgres v0.8.0 // indirect
 	trpc.group/trpc-go/trpc-agent-go/storage/redis v0.0.3 // indirect
 )
