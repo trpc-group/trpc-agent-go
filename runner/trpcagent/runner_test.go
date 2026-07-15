@@ -91,6 +91,10 @@ func TestRunPostsRequestAndConvertsResponseEvents(t *testing.T) {
 	runOpts := []agent.RunOption{
 		agent.WithRequestID("req-1"),
 		agent.WithExecutionTraceEnabled(true),
+		agent.MergeRuntimeState(map[string]any{
+			"ignore": true,
+			"source": "promptiter",
+		}),
 	}
 	events, err := runner.Run(
 		context.Background(),
@@ -107,6 +111,8 @@ func TestRunPostsRequestAndConvertsResponseEvents(t *testing.T) {
 	assert.Equal(t, model.NewUserMessage("match_001"), got.Input)
 	assert.Equal(t, "req-1", got.RunOptions.RequestID)
 	assert.True(t, got.RunOptions.ExecutionTraceEnabled)
+	assert.Equal(t, true, got.RunOptions.RuntimeState["ignore"])
+	assert.Equal(t, "promptiter", got.RunOptions.RuntimeState["source"])
 	assert.True(t, gotEvents[0].IsToolCallResponse())
 	assert.True(t, gotEvents[1].IsToolResultResponse())
 	assert.Equal(t, model.ObjectTypeChatCompletion, gotEvents[2].Object)
