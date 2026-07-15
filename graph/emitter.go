@@ -11,6 +11,7 @@ package graph
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -237,8 +238,11 @@ func (e *eventEmitter) emitWithRecover(evt *event.Event) (err error) {
 		}
 	}()
 
-	_ = event.EmitEventWithTimeout(e.ctx, e.eventChan, evt, e.timeout)
-	return nil
+	err = event.EmitEventWithTimeout(e.ctx, e.eventChan, evt, e.timeout)
+	if err != nil && strings.Contains(err.Error(), "panic sending to closed channel") {
+		return nil
+	}
+	return err
 }
 
 // noopEmitter is a no-op implementation of EventEmitter.
