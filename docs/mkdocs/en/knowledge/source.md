@@ -427,3 +427,36 @@ import (
 ```
 
 > **Note**: Readers for other formats (.txt/.md/.csv/.json, etc.) are automatically registered and don't need manual import.
+
+### Complex and Scanned PDFs
+
+The built-in PDF Reader primarily extracts the PDF text layer. It works well
+for documents with simple layouts and a clear text order, but may not preserve
+the reading order or document structure of multi-column layouts, tables,
+scanned documents, or image-based PDFs.
+
+For these PDFs, use the [Docling Extractor](extractor.md) instead:
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/knowledge/extractor/docling"
+    filesource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/file"
+
+    // Register the markdown reader for Docling output.
+    _ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/markdown"
+)
+
+ext := docling.New(
+    docling.WithEndpoint("http://localhost:5001"),
+)
+defer ext.Close()
+
+src := filesource.New(
+    []string{"./document.pdf"},
+    filesource.WithExtractor(ext),
+)
+```
+
+Docling also includes OCR support for scanned and image-based PDFs. See the
+[Extractor documentation](extractor.md) for deployment instructions and the
+complete example.

@@ -421,3 +421,34 @@ import (
 ```
 
 > **注意**：其他格式（.txt/.md/.csv/.json 等）的 reader 已自动注册，无需手动引入。
+
+### 复杂版面与扫描 PDF
+
+内置 PDF Reader 主要提取 PDF 的文本层，适合版面简单、文本顺序清晰的
+文档。对于多栏排版、表格、扫描件或图片型 PDF，提取结果可能无法完整保留
+阅读顺序和文档结构。
+
+对于这类 PDF，推荐改用 [Docling Extractor](extractor.md)：
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/knowledge/extractor/docling"
+    filesource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/file"
+
+    // 注册 Markdown Reader，用于读取 Docling 的输出。
+    _ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/markdown"
+)
+
+ext := docling.New(
+    docling.WithEndpoint("http://localhost:5001"),
+)
+defer ext.Close()
+
+src := filesource.New(
+    []string{"./document.pdf"},
+    filesource.WithExtractor(ext),
+)
+```
+
+Docling 自带 OCR 能力，可用于扫描件和图片型 PDF。部署方式和完整示例请参阅
+[Extractor 文档](extractor.md)。
