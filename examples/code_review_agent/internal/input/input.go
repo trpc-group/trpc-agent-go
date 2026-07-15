@@ -82,7 +82,7 @@ func diffFromRepo(repoPath string, baseRef string, headRef string) ([]byte, erro
 	if repoPath == "" {
 		return nil, errors.New("repo path is required")
 	}
-	if _, err := os.Stat(filepath.Join(repoPath, ".git")); err == nil {
+	if isGitWorktree(repoPath) {
 		args := []string{"-C", repoPath, "diff", "--unified=3"}
 		if strings.TrimSpace(baseRef) != "" && strings.TrimSpace(headRef) != "" {
 			args = append(args, strings.TrimSpace(baseRef)+"..."+strings.TrimSpace(headRef))
@@ -94,6 +94,15 @@ func diffFromRepo(repoPath string, baseRef string, headRef string) ([]byte, erro
 		}
 		return out, nil
 	}
+	return diffFromDirectory(repoPath)
+}
+
+func isGitWorktree(repoPath string) bool {
+	out, err := exec.Command("git", "-C", repoPath, "rev-parse", "--is-inside-work-tree").Output()
+	return err == nil && strings.TrimSpace(string(out)) == "true"
+}
+
+func diffFromDirectory(repoPath string) ([]byte, error) {
 	var b strings.Builder
 	entries, err := os.ReadDir(repoPath)
 	if err != nil {
@@ -108,16 +117,7 @@ func diffFromRepo(repoPath string, baseRef string, headRef string) ([]byte, erro
 		if err != nil {
 			continue
 		}
-		lines := strings.Split(string(content), "\n")
-		fmt.Fprintf(&b, "diff --git a/%s b/%s\n", entry.Name(), entry.Name())
-		fmt.Fprintf(&b, "--- /dev/null\n+++ b/%s\n", entry.Name())
-		fmt.Fprintf(&b, "@@ -0,0 +1,%d @@\n", len(lines))
-		for _, line := range lines {
-			if line == "" {
-				continue
-			}
-			fmt.Fprintf(&b, "+%s\n", line)
-		}
+		diffForNewFile(&b, entry.Name(), content)
 	}
 	return []byte(b.String()), nil
 }
@@ -172,26 +172,25 @@ func resolveListedFile(name string, baseDir string, restrictToBase bool) (string
 
 func diffForNewFile(b *strings.Builder, name string, content []byte) {
 	display := filepath.ToSlash(strings.TrimPrefix(filepath.Clean(name), string(filepath.Separator)))
-	lines := strings.Split(strings.ReplaceAll(string(content), "\r\n", "\n"), "\n")
+	lines := contentLines(content)
 	fmt.Fprintf(b, "diff --git a/%s b/%s\n", display, display)
 	fmt.Fprintf(b, "--- /dev/null\n+++ b/%s\n", display)
-	fmt.Fprintf(b, "@@ -0,0 +1,%d @@\n", nonEmptyLineCount(lines))
+	fmt.Fprintf(b, "@@ -0,0 +1,%d @@\n", len(lines))
 	for _, line := range lines {
-		if line == "" {
-			continue
-		}
 		fmt.Fprintf(b, "+%s\n", line)
 	}
 }
 
-func nonEmptyLineCount(lines []string) int {
-	count := 0
-	for _, line := range lines {
-		if line != "" {
-			count++
-		}
+func contentLines(content []byte) []string {
+	text := strings.ReplaceAll(string(content), "\r\n", "\n")
+	if text == "" {
+		return nil
 	}
-	return count
+	lines := strings.Split(text, "\n")
+	if strings.HasSuffix(text, "\n") {
+		return lines[:len(lines)-1]
+	}
+	return lines
 }
 
 // Metadata 从 diff 输入中提取最小 Go 工程元数据。
