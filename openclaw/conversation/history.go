@@ -16,6 +16,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	utilmessage "trpc.group/trpc-go/trpc-agent-go/internal/util/message"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -72,8 +73,8 @@ func BuildInjectedContextMessages(
 		boundary,
 		normalizeActorLabels(opts.LabelOverrides),
 	)
-	if opts.MaxHistoryRuns > 0 && len(history) > opts.MaxHistoryRuns {
-		history = history[len(history)-opts.MaxHistoryRuns:]
+	if opts.MaxHistoryRuns > 0 {
+		history = trimVisibleHistory(history, opts.MaxHistoryRuns)
 	}
 	out = append(out, history...)
 	if len(out) == 0 {
@@ -193,6 +194,37 @@ func buildVisibleHistoryAfterEvent(
 		out = append(out, msgs...)
 	}
 	return out, foundBoundary
+}
+
+func trimVisibleHistory(
+	messages []model.Message,
+	limit int,
+) []model.Message {
+	if limit <= 0 || len(messages) <= limit {
+		return messages
+	}
+	start := len(messages) - limit
+	if messages[start].Role != model.RoleTool ||
+		messages[start].ToolID == "" {
+		return messages[start:]
+	}
+
+	truncatedToolIDs := make(map[string]struct{})
+	for i := 0; i < start; i++ {
+		for _, toolCall := range messages[i].ToolCalls {
+			if toolCall.ID != "" {
+				truncatedToolIDs[toolCall.ID] = struct{}{}
+			}
+		}
+	}
+	for start < len(messages) &&
+		messages[start].Role == model.RoleTool {
+		if _, ok := truncatedToolIDs[messages[start].ToolID]; !ok {
+			break
+		}
+		start++
+	}
+	return messages[start:]
 }
 
 func buildTurns(
@@ -407,14 +439,15 @@ func ProjectEventMessage(
 func visibleAssistantMessages(evt event.Event) []model.Message {
 	out := make([]model.Message, 0, len(evt.Response.Choices))
 	for _, choice := range evt.Response.Choices {
-		text := renderAssistantMessage(choice.Message)
-		if text == "" {
+		// Keep tool rounds and reasoning intact across shared-history runs.
+		msg := choice.Message
+		if !msg.Role.IsValid() {
+			msg.Role = model.RoleAssistant
+		}
+		if utilmessage.IsEmptyAssistantMessage(msg) {
 			continue
 		}
-		out = append(
-			out,
-			model.NewAssistantMessage(text),
-		)
+		out = append(out, msg)
 	}
 	return out
 }
