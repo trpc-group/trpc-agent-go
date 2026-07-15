@@ -251,6 +251,8 @@ func cloneExecutionTrace(executionTrace *trace.Trace) *trace.Trace {
 		StartedAt:        executionTrace.StartedAt,
 		EndedAt:          executionTrace.EndedAt,
 		Status:           executionTrace.Status,
+		Input:            cloneExecutionTraceSnapshot(executionTrace.Input),
+		Output:           cloneExecutionTraceSnapshot(executionTrace.Output),
 		Usage:            cloneUsage(executionTrace.Usage),
 		Steps:            make([]trace.Step, 0, len(executionTrace.Steps)),
 	}
@@ -271,6 +273,7 @@ func cloneExecutionTraceStep(step trace.Step) trace.Step {
 		AgentName:          step.AgentName,
 		Branch:             step.Branch,
 		NodeID:             step.NodeID,
+		NodeType:           step.NodeType,
 		StartedAt:          step.StartedAt,
 		EndedAt:            step.EndedAt,
 		PredecessorStepIDs: append(
