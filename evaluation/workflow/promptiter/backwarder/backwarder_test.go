@@ -590,8 +590,9 @@ func TestBackwardRejectsInvalidResultOutput(t *testing.T) {
 
 		rsp, err := bw.Backward(context.Background(), newRestrictedInstructionRequest())
 
-		// LLM 幻觉出 allowed surface 集合外的 id：该 gradient 被 drop；
-		// 这是唯一一条 gradient，drop 后 result 全空 → 走 "backward result is empty" 兜底。
+		// LLM hallucinates an id outside the allowed surface set: that gradient
+		// is dropped. Since it's the only gradient, result becomes fully empty
+		// and falls through to the "backward result is empty" fatal path.
 		assert.Error(t, err)
 		assert.Nil(t, rsp)
 		assert.Contains(t, err.Error(), "backward result is empty")
