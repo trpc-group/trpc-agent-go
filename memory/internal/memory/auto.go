@@ -34,6 +34,8 @@ const (
 
 	memoryNotFoundErrSubstr = "memory with id"
 	memoryNotFoundErrMarker = "not found"
+
+	sessionStateKeyAutoMemoryLastError = "memory:last_extract_error"
 )
 
 // reconcile tuning constants.
@@ -724,14 +726,14 @@ func writeLastExtractError(sess *session.Session, err error) {
 	if sess == nil || err == nil {
 		return
 	}
-	sess.SetState(memory.SessionStateKeyAutoMemoryLastError, []byte(err.Error()))
+	sess.SetState(sessionStateKeyAutoMemoryLastError, []byte(err.Error()))
 }
 
 func clearLastExtractError(sess *session.Session) {
 	if sess == nil {
 		return
 	}
-	sess.DeleteState(memory.SessionStateKeyAutoMemoryLastError)
+	sess.DeleteState(sessionStateKeyAutoMemoryLastError)
 }
 
 // scanDeltaSince scans session events since the given timestamp and extracts messages.

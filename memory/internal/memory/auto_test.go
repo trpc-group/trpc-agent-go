@@ -385,13 +385,13 @@ func TestAutoMemoryWorker_EnqueueJob_SyncFallback(t *testing.T) {
 
 	sess := newTestSession("test-app", "user-1")
 	appendSessionMessage(sess, time.Now(), model.NewUserMessage("hello"))
-	sess.SetState(memory.SessionStateKeyAutoMemoryLastError, []byte("stale"))
+	sess.SetState(sessionStateKeyAutoMemoryLastError, []byte("stale"))
 
 	err := worker.EnqueueJob(context.Background(), sess)
 
 	assert.NoError(t, err)
 	assert.Equal(t, 1, op.addCalls)
-	_, ok := sess.GetState(memory.SessionStateKeyAutoMemoryLastError)
+	_, ok := sess.GetState(sessionStateKeyAutoMemoryLastError)
 	assert.False(t, ok)
 	_, ok = sess.GetState(memory.SessionStateKeyAutoMemoryLastExtractAt)
 	assert.True(t, ok)
@@ -1375,7 +1375,7 @@ func TestAutoMemoryWorker_EnqueueJob_SyncFallback_Error(t *testing.T) {
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "extract failed")
-	raw, ok := sess.GetState(memory.SessionStateKeyAutoMemoryLastError)
+	raw, ok := sess.GetState(sessionStateKeyAutoMemoryLastError)
 	require.True(t, ok)
 	assert.Contains(t, string(raw), "extract failed")
 }
@@ -1407,7 +1407,7 @@ func TestAutoMemoryWorker_ProcessJob_CreateAutoMemoryError(t *testing.T) {
 	// lastExtractAt should NOT be written on failure.
 	_, ok := sess.GetState(memory.SessionStateKeyAutoMemoryLastExtractAt)
 	assert.False(t, ok)
-	raw, ok := sess.GetState(memory.SessionStateKeyAutoMemoryLastError)
+	raw, ok := sess.GetState(sessionStateKeyAutoMemoryLastError)
 	require.True(t, ok)
 	assert.Contains(t, string(raw), "extract failed")
 }
@@ -1435,7 +1435,7 @@ func TestAutoMemoryWorker_ProcessJob_PersistenceError(t *testing.T) {
 
 	_, ok := sess.GetState(memory.SessionStateKeyAutoMemoryLastExtractAt)
 	assert.False(t, ok)
-	raw, ok := sess.GetState(memory.SessionStateKeyAutoMemoryLastError)
+	raw, ok := sess.GetState(sessionStateKeyAutoMemoryLastError)
 	require.True(t, ok)
 	assert.Contains(t, string(raw), "embedding failed")
 }
@@ -1455,7 +1455,7 @@ func TestAutoMemoryWorker_ProcessJob_PanicRecordsError(t *testing.T) {
 		Messages: []model.Message{model.NewUserMessage("hello")},
 	})
 
-	raw, ok := sess.GetState(memory.SessionStateKeyAutoMemoryLastError)
+	raw, ok := sess.GetState(sessionStateKeyAutoMemoryLastError)
 	require.True(t, ok)
 	assert.Contains(t, string(raw), "extractor panic")
 }
@@ -1466,16 +1466,16 @@ func TestLastExtractErrorState(t *testing.T) {
 
 	sess := newTestSession("test-app", "user-1")
 	writeLastExtractError(sess, nil)
-	_, ok := sess.GetState(memory.SessionStateKeyAutoMemoryLastError)
+	_, ok := sess.GetState(sessionStateKeyAutoMemoryLastError)
 	assert.False(t, ok)
 
 	writeLastExtractError(sess, errors.New("persist failed"))
-	raw, ok := sess.GetState(memory.SessionStateKeyAutoMemoryLastError)
+	raw, ok := sess.GetState(sessionStateKeyAutoMemoryLastError)
 	require.True(t, ok)
 	assert.Equal(t, "persist failed", string(raw))
 
 	clearLastExtractError(sess)
-	_, ok = sess.GetState(memory.SessionStateKeyAutoMemoryLastError)
+	_, ok = sess.GetState(sessionStateKeyAutoMemoryLastError)
 	assert.False(t, ok)
 }
 
