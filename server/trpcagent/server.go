@@ -158,6 +158,7 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	runOptions = append(runOptions, agent.WithRequestID(req.RunOptions.RequestID))
+	runOptions = append(runOptions, agent.MergeRuntimeState(req.RunOptions.RuntimeState))
 	runOptions = append(runOptions, agent.WithAppName(s.appName))
 	eventCh, err := s.runner.Run(ctx, req.Session.UserID, req.Session.SessionID, req.Input, runOptions...)
 	if err != nil {
