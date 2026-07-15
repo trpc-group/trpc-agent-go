@@ -46,7 +46,7 @@ func (c *Client) AppendTrackEvent(ctx context.Context, key session.Key, trackEve
 	}
 	scriptSHA, err := luaAppendTrackEvent.Load(ctx, c.client).Result()
 	if err != nil {
-		return fmt.Errorf("load append track script: %w", err)
+		return fmt.Errorf("append track event: load script: %w", err)
 	}
 
 	retryDelay := 5 * time.Millisecond
