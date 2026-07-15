@@ -151,10 +151,9 @@ func TestDeleteContextTool(t *testing.T) {
 		if _, ok := sess.GetState(session.MaskedEventsStateKey); ok {
 			t.Fatal("masked events state should not be written when persist fails")
 		}
-		// In-memory mask still applies for the current session instance.
 		visible := sess.GetVisibleEvents()
-		if len(visible) != 1 || visible[0].ID != "e2" {
-			t.Fatalf("expected in-memory mask to remain, got %v", visible)
+		if len(visible) != 2 {
+			t.Fatalf("expected mask rollback after persist failure, got %v", visible)
 		}
 	})
 }

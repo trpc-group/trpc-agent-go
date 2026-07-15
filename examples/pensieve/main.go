@@ -165,11 +165,14 @@ func (c *pensieveChat) drainResponse(events <-chan *event.Event) error {
 	fmt.Print("Assistant: ")
 	var started bool
 	for evt := range events {
+		if evt == nil {
+			continue
+		}
 		if evt.Error != nil {
 			fmt.Printf("\nError: %s\n", evt.Error.Message)
 			continue
 		}
-		if len(evt.Response.Choices) == 0 {
+		if evt.Response == nil || len(evt.Response.Choices) == 0 {
 			continue
 		}
 		choice := evt.Response.Choices[0]

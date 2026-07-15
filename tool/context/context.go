@@ -66,13 +66,18 @@ func NewDeleteContextTool() tool.CallableTool {
 				}, nil
 			}
 
-			masked := inv.Session.MaskEvents(input.EventIDs...)
 			key := session.Key{
 				AppName:   inv.Session.AppName,
 				UserID:    inv.Session.UserID,
 				SessionID: inv.Session.ID,
 			}
-			if err := inv.Session.PersistMaskedEvents(ctx, inv.SessionService, key); err != nil {
+			masked, err := inv.Session.MaskAndPersistEvents(
+				ctx,
+				inv.SessionService,
+				key,
+				input.EventIDs...,
+			)
+			if err != nil {
 				return DeleteContextOutput{}, fmt.Errorf("persist masked events: %w", err)
 			}
 
