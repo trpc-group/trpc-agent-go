@@ -67,17 +67,10 @@ func assistantResultSourceText(messages []model.Message) string {
 			len(message.ToolCalls) > 0 {
 			continue
 		}
-		if text := strings.TrimSpace(message.Content); text != "" {
-			source.WriteString(text)
-			source.WriteByte('\n')
-		}
+		appendSourceText(&source, message.Content)
 		for _, part := range message.ContentParts {
-			if part.Type != model.ContentTypeText || part.Text == nil {
-				continue
-			}
-			if text := strings.TrimSpace(*part.Text); text != "" {
-				source.WriteString(text)
-				source.WriteByte('\n')
+			if part.Type == model.ContentTypeText && part.Text != nil {
+				appendSourceText(&source, *part.Text)
 			}
 		}
 	}

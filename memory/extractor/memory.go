@@ -165,6 +165,9 @@ func (e *memoryExtractor) ExtractOperationStages(
 		Tools:    filterTools(backgroundTools, e.effectiveEnabledTools()),
 	}
 	ctx, ops, err := e.generateOperations(ctx, primaryRequest)
+	qualifyOperationsWithGroundedTopics(
+		conversationSourceText(messages), ops,
+	)
 	if err != nil || !e.shouldExtractAssistantResult(messages) {
 		return ops, nil, err
 	}
@@ -183,6 +186,9 @@ func (e *memoryExtractor) ExtractOperationStages(
 	}
 	resultOps = filterGroundedAssistantResultOperations(
 		ctx, messages, resultOps,
+	)
+	qualifyOperationsWithGroundedTopics(
+		assistantResultSourceText(messages), resultOps,
 	)
 	ops, resultOps = routeAssistantResultOperations(ops, resultOps)
 	return ops, resultOps, nil
