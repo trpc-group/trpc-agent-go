@@ -164,9 +164,11 @@ func WithSessionReconnectConfig(config SessionReconnectConfig) ToolSetOption {
 	}
 }
 
-// WithName sets the name of the MCP toolset for identification and conflict resolution.
-// This name will be used when implementing tool name prefixing to avoid conflicts
-// between tools from different toolsets.
+// WithName sets the ToolSet name used for model-visible tool name prefixing.
+// When an MCP ToolSet is attached to an LLMAgent, the framework wraps it with
+// NamedToolSet and exposes each tool as {name}_{remoteToolName} (for example,
+// WithName("github") + remote tool "search" becomes "github_search"). Use a
+// distinct name for each MCP ToolSet to avoid collisions; the default is "mcp".
 func WithName(name string) ToolSetOption {
 	return func(c *toolSetConfig) {
 		c.name = name
