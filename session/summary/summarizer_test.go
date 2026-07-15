@@ -489,6 +489,29 @@ func TestSessionSummarizer_CacheSafeForking(t *testing.T) {
 		require.Len(t, parent.Tools, 1, "parent request must not be mutated")
 	})
 
+	t.Run("honors a provider input budget below the fallback ratio", func(t *testing.T) {
+		capture := &cacheSafeCaptureModel{
+			response:      "provider-budget summary",
+			contextWindow: 1000,
+			inputBudget:   220,
+		}
+		s := NewSummarizer(capture, WithCacheSafeForking(true))
+		oversized := strings.Repeat("provider-budget-content ", 200)
+		parent := &model.Request{Messages: []model.Message{
+			model.NewSystemMessage("stable system"),
+			model.NewUserMessage(oversized),
+		}}
+		ctx := ContextWithCacheSafeForkRequest(context.Background(), parent)
+		sess := &session.Session{ID: "provider-budget", Events: []event.Event{newEventWithContent(oversized)}}
+
+		text, err := s.Summarize(ctx, sess)
+		require.NoError(t, err)
+		require.Equal(t, "provider-budget summary", text)
+		tokens, err := countSummaryRequestTokens(context.Background(), capture.request)
+		require.NoError(t, err)
+		require.LessOrEqual(t, tokens, 220)
+	})
+
 	t.Run("rejects a cache-safe request without conversation content", func(t *testing.T) {
 		capture := &cacheSafeCaptureModel{response: "must not be called"}
 		s := NewSummarizer(capture, WithCacheSafeForking(true))
@@ -502,27 +525,97 @@ func TestSessionSummarizer_CacheSafeForking(t *testing.T) {
 		require.Nil(t, capture.request)
 	})
 
-	t.Run("rejects unshrinkable cache-safe content before calling the model", func(t *testing.T) {
+	t.Run("falls back to a bounded standalone request for oversized source content", func(t *testing.T) {
 		capture := &cacheSafeCaptureModel{
-			response:      "must not be called",
+			response:      "bounded standalone summary",
 			contextWindow: 1000,
 		}
 		s := NewSummarizer(capture, WithCacheSafeForking(true))
+		oversized := strings.Repeat("oversized-user-content ", 1000)
 		parent := &model.Request{Messages: []model.Message{
 			model.NewSystemMessage("stable system"),
-			model.NewUserMessage(strings.Repeat("oversized-user-content ", 1000)),
+			model.NewUserMessage(oversized),
 		}}
 		ctx := ContextWithCacheSafeForkRequest(context.Background(), parent)
+		sess := &session.Session{ID: "oversized-cache-safe", Events: []event.Event{newEventWithContent(oversized)}}
 
-		_, err := s.Summarize(ctx, newTestSession())
-		require.ErrorContains(t, err, "too large after compacting tool payloads")
-		require.Nil(t, capture.request)
+		text, err := s.Summarize(ctx, sess)
+		require.NoError(t, err)
+		require.Equal(t, "bounded standalone summary", text)
+		require.NotNil(t, capture.request)
+		require.Len(t, capture.request.Messages, 1)
+		require.Contains(t, capture.request.Messages[0].Content, summaryConversationOmitted)
+		require.NotContains(t, capture.request.Messages[0].Content, "Summarize the user, assistant")
+		tokens, err := countSummaryRequestTokens(context.Background(), capture.request)
+		require.NoError(t, err)
+		require.LessOrEqual(t, tokens, 700)
 	})
 }
 
-func TestSessionSummarizer_RejectsOversizedStandaloneRequest(t *testing.T) {
+func TestSessionSummarizer_RetriesCacheSafeFailureWithStandaloneSource(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		firstResponse *model.Response
+	}{
+		{
+			name: "empty summary",
+			firstResponse: &model.Response{
+				Done: true,
+			},
+		},
+		{
+			name: "context overflow",
+			firstResponse: func() *model.Response {
+				code := "context_length_exceeded"
+				return &model.Response{
+					Done: true,
+					Error: &model.ResponseError{
+						Message: "maximum context length exceeded",
+						Code:    &code,
+					},
+				}
+			}(),
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			capture := &retrySummaryModel{
+				contextWindow: 1000,
+				responses: []*model.Response{
+					test.firstResponse,
+					{
+						Done: true,
+						Choices: []model.Choice{{
+							Message: model.NewAssistantMessage("standalone retry summary"),
+						}},
+					},
+				},
+			}
+			s := NewSummarizer(capture, WithCacheSafeForking(true))
+			parent := &model.Request{Messages: []model.Message{
+				model.NewSystemMessage("stable system"),
+				model.NewUserMessage("source conversation"),
+			}}
+			ctx := ContextWithCacheSafeForkRequest(context.Background(), parent)
+
+			sess := &session.Session{
+				ID:     "retry-summary",
+				Events: []event.Event{newEventWithContent("event text for retry")},
+			}
+			text, err := s.Summarize(ctx, sess)
+			require.NoError(t, err)
+			require.Equal(t, "standalone retry summary", text)
+			require.Len(t, capture.requests, 2)
+			require.Len(t, capture.requests[0].Messages, 3)
+			require.Len(t, capture.requests[1].Messages, 1)
+			require.Contains(t, capture.requests[1].Messages[0].Content, "event text")
+			require.NotContains(t, capture.requests[1].Messages[0].Content, "Summarize the user, assistant")
+		})
+	}
+}
+
+func TestSessionSummarizer_BoundsOversizedStandaloneRequest(t *testing.T) {
 	capture := &cacheSafeCaptureModel{
-		response:      "must not be called",
+		response:      "bounded standalone summary",
 		contextWindow: 1000,
 	}
 	s := NewSummarizer(
@@ -537,9 +630,54 @@ func TestSessionSummarizer_RejectsOversizedStandaloneRequest(t *testing.T) {
 		}}},
 	}}}
 
-	_, err := s.Summarize(context.Background(), sess)
-	require.ErrorContains(t, err, "summary request input too large")
-	require.Nil(t, capture.request)
+	text, err := s.Summarize(context.Background(), sess)
+	require.NoError(t, err)
+	require.Equal(t, "bounded standalone summary", text)
+	require.NotNil(t, capture.request)
+	require.Contains(t, capture.request.Messages[0].Content, summaryConversationOmitted)
+	tokens, err := countSummaryRequestTokens(context.Background(), capture.request)
+	require.NoError(t, err)
+	require.LessOrEqual(t, tokens, 700)
+}
+
+func TestEnsureSummaryRequestFitsDropsOldestCompleteRound(t *testing.T) {
+	s := NewSummarizer(&cacheSafeCaptureModel{}).(*sessionSummarizer)
+	request := &model.Request{Messages: []model.Message{
+		model.NewSystemMessage("stable system"),
+		model.NewUserMessage(strings.Repeat("old source ", 400)),
+		{
+			Role: model.RoleAssistant,
+			ToolCalls: []model.ToolCall{{
+				ID: "old-call",
+				Function: model.FunctionDefinitionParam{
+					Name:      "lookup",
+					Arguments: []byte(`{"query":"old"}`),
+				},
+			}},
+		},
+		model.NewToolMessage("old-call", "lookup", "old result"),
+		model.NewUserMessage("latest source"),
+		model.NewAssistantMessage("latest answer"),
+		model.NewUserMessage("Summarize the conversation above."),
+	}}
+
+	err := s.ensureSummaryRequestFits(
+		context.Background(),
+		request,
+		true,
+		200,
+	)
+	require.NoError(t, err)
+	require.Len(t, request.Messages, 4)
+	require.Equal(t, model.RoleSystem, request.Messages[0].Role)
+	require.Equal(t, "latest source", request.Messages[1].Content)
+	require.Equal(t, "latest answer", request.Messages[2].Content)
+	require.Equal(t, "Summarize the conversation above.", request.Messages[3].Content)
+	for _, message := range request.Messages {
+		require.NotContains(t, message.Content, "old source")
+		require.Empty(t, message.ToolCalls)
+		require.NotEqual(t, "old-call", message.ToolID)
+	}
 }
 
 // fakeModel is a minimal model that returns the conversation content back to simulate LLM.
@@ -574,6 +712,7 @@ type cacheSafeCaptureModel struct {
 	request       *model.Request
 	response      string
 	contextWindow int
+	inputBudget   int
 }
 
 func (m *cacheSafeCaptureModel) Info() model.Info {
@@ -592,6 +731,39 @@ func (m *cacheSafeCaptureModel) GenerateContent(
 			Message: model.Message{Role: model.RoleAssistant, Content: m.response},
 		}},
 	}
+	close(ch)
+	return ch, nil
+}
+
+func (m *cacheSafeCaptureModel) InputTokenBudget(
+	context.Context,
+	*model.Request,
+) int {
+	return m.inputBudget
+}
+
+type retrySummaryModel struct {
+	contextWindow int
+	requests      []*model.Request
+	responses     []*model.Response
+}
+
+func (m *retrySummaryModel) Info() model.Info {
+	return model.Info{Name: "retry-summary", ContextWindow: m.contextWindow}
+}
+
+func (m *retrySummaryModel) GenerateContent(
+	_ context.Context,
+	request *model.Request,
+) (<-chan *model.Response, error) {
+	m.requests = append(m.requests, cloneRequestForCacheSafeFork(request))
+	response := &model.Response{Done: true}
+	if len(m.responses) > 0 {
+		response = m.responses[0]
+		m.responses = m.responses[1:]
+	}
+	ch := make(chan *model.Response, 1)
+	ch <- response
 	close(ch)
 	return ch, nil
 }

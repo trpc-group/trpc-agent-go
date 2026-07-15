@@ -312,11 +312,13 @@ func TestSessionSummarizer_ModelCallbacks_Before_RejectsOversizedRequest(
 }
 
 func TestSessionSummarizer_ModelCallbacks_Before_CustomResponseSkipsModel(t *testing.T) {
+	var callbackInput string
 	callbacks := model.NewCallbacks().RegisterBeforeModel(
 		func(
 			ctx context.Context,
 			args *model.BeforeModelArgs,
 		) (*model.BeforeModelResult, error) {
+			callbackInput = args.Request.Messages[0].Content
 			return &model.BeforeModelResult{
 				CustomResponse: &model.Response{
 					Done: true,
@@ -341,6 +343,8 @@ func TestSessionSummarizer_ModelCallbacks_Before_CustomResponseSkipsModel(t *tes
 	summary, err := s.Summarize(context.Background(), sess)
 	require.NoError(t, err)
 	assert.Equal(t, "FROM_CALLBACK", summary)
+	assert.NotContains(t, callbackInput, summaryConversationOmitted)
+	assert.Greater(t, strings.Count(callbackInput, "oversized-origin"), 900)
 }
 
 func TestSessionSummarizer_ModelCallbacks_After_OverridesResponse(t *testing.T) {

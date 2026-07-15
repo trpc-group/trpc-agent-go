@@ -63,7 +63,8 @@ func WithSystemPrompt(prompt string) Option {
 // parent model request is available in the context. When enabled, the
 // summarizer clones the parent request and appends a compacting user message
 // instead of sending a standalone summary prompt. If no parent request is
-// available, summarization falls back to the standalone prompt path.
+// available, or the parent cannot fit the summary model's input budget,
+// summarization falls back to a bounded standalone prompt.
 //
 // This is disabled by default.
 func WithCacheSafeForking(enable bool) Option {
