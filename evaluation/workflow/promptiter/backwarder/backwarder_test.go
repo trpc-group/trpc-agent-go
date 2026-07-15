@@ -976,9 +976,9 @@ func TestNormalizeRequestAndSanitizeBackwardResult(t *testing.T) {
 	result, err = sanitizeBackwardResult(request, nil)
 	assert.Nil(t, result)
 	assert.EqualError(t, err, "backward result is nil")
-	// LLM 幻觉出 request Predecessors 集合外的 step id：单条 drop；
-	// 若这是唯一的 propagation，sanitize 后 upstream/gradients 都空，
-	// sanitizeBackwardResult 走 "backward result is empty" 兜底 fatal。
+	// LLM hallucinates a step id outside request Predecessors: single drop;
+	// if this is the only propagation, sanitize leaves upstream/gradients empty,
+	// so sanitizeBackwardResult falls through to "backward result is empty" fatal.
 	result, err = sanitizeBackwardResult(request, &Result{
 		Upstream: []Propagation{
 			{
@@ -991,7 +991,7 @@ func TestNormalizeRequestAndSanitizeBackwardResult(t *testing.T) {
 	})
 	assert.Nil(t, result)
 	assert.EqualError(t, err, "backward result is empty")
-	// 同上：surface id 幻觉，单条 drop → 剩下全空 → empty result。
+	// Same for surface id hallucination: single drop -> all empty -> empty result.
 	result, err = sanitizeBackwardResult(request, &Result{
 		Gradients: []promptiter.SurfaceGradient{
 			{SurfaceID: "surf_2", Gradient: "wrong target"},
@@ -999,10 +999,10 @@ func TestNormalizeRequestAndSanitizeBackwardResult(t *testing.T) {
 	})
 	assert.Nil(t, result)
 	assert.EqualError(t, err, "backward result is empty")
-	// 幻觉与合法混合：只 drop 幻觉那条，合法的保留。
+	// Mixed hallucinated + valid entries: only the hallucinated ones are dropped.
 	result, err = sanitizeBackwardResult(request, &Result{
 		Gradients: []promptiter.SurfaceGradient{
-			{SurfaceID: "surf_2", Gradient: "wrong target"}, // 幻觉，drop
+			{SurfaceID: "surf_2", Gradient: "wrong target"}, // hallucinated, drop
 			{SurfaceID: "surf_1", Gradient: "keep me", Severity: promptiter.LossSeverityP1},
 		},
 		Upstream: []Propagation{
