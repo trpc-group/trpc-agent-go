@@ -10,6 +10,7 @@ package safety
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -679,6 +680,32 @@ func TestDefaultScanner_UnknownArgumentsAndSensitivePathRegressions(t *testing.T
 		require.Equal(t, "unknown.dangerous_command", report.RuleID)
 		require.Len(t, report.Findings, 1)
 		require.Equal(t, "unknown tool contains dangerous command-like content", report.Findings[0].Evidence)
+	})
+
+	t.Run("oversized unknown arguments return bounded scan finding without decode", func(t *testing.T) {
+		scanner := MustDefaultScanner(Policy{MaxCommandBytes: 32})
+		rawArguments := []byte(`{"command":"rm\u0020-rf\u0020/","padding":"` + strings.Repeat("a", 64) + `"}`)
+
+		report, err := scanner.Scan(context.Background(), ScanRequest{
+			ToolName:     "mcp_call",
+			Backend:      BackendUnknown,
+			RawArguments: rawArguments,
+		})
+		require.NoError(t, err)
+		require.Equal(t, DecisionNeedsHumanReview, report.Decision)
+		require.Equal(t, "unknown.bounded_scan", report.RuleID)
+		require.False(t, report.Redacted)
+		require.Len(t, report.Findings, 1)
+		require.Equal(t, Finding{
+			RuleID:         "unknown.bounded_scan",
+			RiskLevel:      RiskHigh,
+			Decision:       DecisionNeedsHumanReview,
+			Evidence:       fmt.Sprintf("raw arguments have %d bytes, exceeds max_command_bytes=32", len(rawArguments)),
+			Recommendation: "review large unknown tool arguments manually before execution",
+			Redacted:       false,
+		}, report.Findings[0])
+		require.NotContains(t, report.Evidence, `rm\u0020-rf\u0020/`)
+		require.NotContains(t, report.Evidence, strings.Repeat("a", 16))
 	})
 
 	t.Run("normalized sensitive paths are denied", func(t *testing.T) {

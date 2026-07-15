@@ -552,6 +552,15 @@ func (s *DefaultScanner) scanCode(req ScanRequest) []Finding {
 }
 
 func (s *DefaultScanner) scanUnknownArguments(req ScanRequest) []Finding {
+	if s.policy.MaxCommandBytes > 0 && len(req.RawArguments) > s.policy.MaxCommandBytes {
+		return []Finding{{
+			RuleID:         "unknown.bounded_scan",
+			RiskLevel:      RiskHigh,
+			Decision:       DecisionNeedsHumanReview,
+			Evidence:       fmt.Sprintf("raw arguments have %d bytes, exceeds max_command_bytes=%d", len(req.RawArguments), s.policy.MaxCommandBytes),
+			Recommendation: "review large unknown tool arguments manually before execution",
+		}}
+	}
 	rawFindings := s.scanTextForUnknownRisk(req, string(req.RawArguments))
 	var decoded any
 	if err := json.Unmarshal(req.RawArguments, &decoded); err != nil {
