@@ -1,0 +1,11 @@
+diff --git a/resource.go b/resource.go
+index 1111111..2222222 100644
+--- a/resource.go
++++ b/resource.go
+@@ -1,2 +1,6 @@
+ package foo
++
++func Open() *os.File {
++	f, _ := os.Open("x")
++	return f
++}

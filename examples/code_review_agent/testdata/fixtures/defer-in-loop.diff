@@ -1,0 +1,11 @@
+diff --git a/loop.go b/loop.go
+--- a/loop.go
++++ b/loop.go
+@@ -1,3 +1,8 @@
+ package sample
+ 
++func CloseAll(files []io.Closer) {
++	for _, file := range files {
++		defer file.Close()
++	}
++}

@@ -1,0 +1,199 @@
+//
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+
+package review
+
+import (
+	"bytes"
+	"encoding/json"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func TestSkillFilesExist(t *testing.T) {
+	skillRoot, err := SkillRoot()
+	if err != nil {
+		t.Fatalf("SkillRoot returned error: %v", err)
+	}
+	for _, rel := range []string{
+		"scripts/check.sh",
+		"scripts/check_rules.py",
+		"scripts/check_fallback.go",
+	} {
+		if _, err := os.Stat(filepath.Join(skillRoot, rel)); err != nil {
+			t.Fatalf("expected skill file %s: %v", rel, err)
+		}
+	}
+}
+
+// TestSkillCheckScriptFallsBackToGoWhenPythonUnavailable 固定 Go 回退路径。
+func TestSkillCheckScriptFallsBackToGoWhenPythonUnavailable(t *testing.T) {
+	t.Parallel()
+
+	skillRoot, err := SkillRoot()
+	if err != nil {
+		t.Fatalf("SkillRoot returned error: %v", err)
+	}
+	repoRoot := filepath.Dir(filepath.Dir(skillRoot))
+	diff, err := os.ReadFile(filepath.Join(repoRoot, "testdata", "fixtures", "secret.diff"))
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+
+	bashPath := mustLookPath(t, "bash")
+	tempBin := t.TempDir()
+	linkTool(t, tempBin, "go")
+	linkTool(t, tempBin, "mktemp")
+	linkTool(t, tempBin, "cat")
+	linkTool(t, tempBin, "rm")
+
+	cmd := exec.Command(bashPath, filepath.Join(skillRoot, "scripts", "check.sh"))
+	cmd.Stdin = bytes.NewReader(diff)
+	cmd.Env = append(os.Environ(),
+		"PATH="+tempBin,
+		"GOCACHE="+filepath.Join(t.TempDir(), "gocache"),
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("check.sh fallback failed: %v\n%s", err, out)
+	}
+
+	var payload struct {
+		Findings []Finding `json:"findings"`
+	}
+	if err := json.Unmarshal(out, &payload); err != nil {
+		t.Fatalf("unmarshal check output: %v\n%s", err, out)
+	}
+	if len(payload.Findings) != 1 || payload.Findings[0].RuleID != "secret-leak" {
+		t.Fatalf("expected secret-leak finding from Go fallback, got %+v", payload.Findings)
+	}
+}
+
+// TestSkillCheckScriptDetectsSecretShapes 固定 Skill 规则的密钥覆盖面。
+func TestSkillCheckScriptDetectsSecretShapes(t *testing.T) {
+	t.Parallel()
+
+	skillRoot, err := SkillRoot()
+	if err != nil {
+		t.Fatalf("SkillRoot returned error: %v", err)
+	}
+	repoRoot := filepath.Dir(filepath.Dir(skillRoot))
+	diff, err := os.ReadFile(filepath.Join(repoRoot, "testdata", "fixtures", "secret-shapes.diff"))
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+
+	cmd := exec.Command(mustLookPath(t, "bash"), filepath.Join(skillRoot, "scripts", "check.sh"))
+	cmd.Stdin = bytes.NewReader(diff)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("check.sh failed: %v\n%s", err, out)
+	}
+
+	var payload struct {
+		Findings []Finding `json:"findings"`
+	}
+	if err := json.Unmarshal(out, &payload); err != nil {
+		t.Fatalf("unmarshal check output: %v\n%s", err, out)
+	}
+	if got := countSkillRule(payload.Findings, "secret-leak"); got != 6 {
+		t.Fatalf("expected six high-confidence secret findings, got %d: %+v", got, payload.Findings)
+	}
+	for _, raw := range []string{
+		"sk-proj-1234567890abcdef",
+		"llm-live-1234567890abcdef",
+		"sk-1234567890abcdef",
+		"github_pat_1234567890abcdef1234567890abcdef",
+		"abc.def.ghi",
+		"plain-password",
+		"dummy",
+	} {
+		if strings.Contains(string(out), raw) {
+			t.Fatalf("check.sh output leaked or overreported raw value %q: %s", raw, out)
+		}
+	}
+}
+
+func TestSkillRulesKeepDifferentLinesAndHonorFollowingCleanup(t *testing.T) {
+	t.Parallel()
+
+	skillRoot, err := SkillRoot()
+	if err != nil {
+		t.Fatalf("SkillRoot returned error: %v", err)
+	}
+	diff := "diff --git a/sample.go b/sample.go\n--- a/sample.go\n+++ b/sample.go\n@@ -1 +1,12 @@\n package sample\n" +
+		"+func sample(ctx context.Context) {\n" +
+		"+  _, stop := context.WithCancel(ctx)\n" +
+		"+  defer stop()\n" +
+		"+  first, _ := os.Open(\"first\")\n" +
+		"+  defer first.Close()\n" +
+		"+  second, _ := os.Open(\"second\")\n" +
+		"+  panic(\"one\")\n" +
+		"+  panic(\"two\")\n" +
+		"+  exec.Command(\"git\", args...)\n" +
+		"+  exec.Command(\"git\", \"branch-\"+args[0])\n" +
+		"+}\n"
+	cmd := exec.Command(mustLookPath(t, "bash"), filepath.Join(skillRoot, "scripts", "check.sh"))
+	cmd.Stdin = strings.NewReader(diff)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("check.sh failed: %v\n%s", err, out)
+	}
+	var payload struct {
+		Findings []Finding `json:"findings"`
+	}
+	if err := json.Unmarshal(out, &payload); err != nil {
+		t.Fatalf("unmarshal output: %v\n%s", err, out)
+	}
+	if got := countSkillRule(payload.Findings, "panic-direct"); got != 2 {
+		t.Fatalf("expected two panic findings, got %d: %+v", got, payload.Findings)
+	}
+	if got := countSkillRule(payload.Findings, "resource-leak"); got != 1 {
+		t.Fatalf("expected only second file to leak, got %d: %+v", got, payload.Findings)
+	}
+	for _, ruleID := range []string{"context-leak", "command-injection"} {
+		if got := countSkillRule(payload.Findings, ruleID); got != 0 {
+			t.Fatalf("unexpected %s finding: %+v", ruleID, payload.Findings)
+		}
+	}
+}
+
+func countSkillRule(findings []Finding, ruleID string) int {
+	total := 0
+	for _, finding := range findings {
+		if finding.RuleID == ruleID {
+			total++
+		}
+	}
+	return total
+}
+
+// mustLookPath 查找测试工具。
+func mustLookPath(t *testing.T, name string) string {
+	t.Helper()
+	path, err := exec.LookPath(name)
+	if err != nil {
+		t.Skipf("%s not available: %v", name, err)
+	}
+	return path
+}
+
+// linkTool 构造受控 PATH。
+func linkTool(t *testing.T, dir string, name string) {
+	t.Helper()
+	target := mustLookPath(t, name)
+	link := filepath.Join(dir, name)
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatalf("link %s: %v", name, err)
+	}
+}

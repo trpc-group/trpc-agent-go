@@ -1,0 +1,11 @@
+diff --git a/context.go b/context.go
+index 1111111..2222222 100644
+--- a/context.go
++++ b/context.go
+@@ -1,2 +1,6 @@
+ package foo
++
++func Handle() {
++	_, cancel := context.WithTimeout(context.Background(), 0)
++	_ = cancel
++}

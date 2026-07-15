@@ -1,0 +1,8 @@
+diff --git a/todo.go b/todo.go
+index 1111111..2222222 100644
+--- a/todo.go
++++ b/todo.go
+@@ -1,2 +1,4 @@
+ package foo
++
++// TODO(you): wire the real implementation

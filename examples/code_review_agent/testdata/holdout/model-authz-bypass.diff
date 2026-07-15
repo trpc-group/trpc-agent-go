@@ -1,0 +1,13 @@
+diff --git a/authz_policy.go b/authz_policy.go
+--- a/authz_policy.go
++++ b/authz_policy.go
+@@ -6,6 +6,9 @@ func canRead(user User, doc Document) bool {
+ 	if user.Role == "admin" {
+ 		return true
+ 	}
++	// CR_AGENT_FAKE_MODEL_HIGH CR_AGENT_FAKE_MODEL_AUTHZ_BYPASS: empty owner now allows every non-admin read path.
++	if doc.OwnerID == "" {
++		return true
++	}
+ 	return user.ID == doc.OwnerID
+ }
