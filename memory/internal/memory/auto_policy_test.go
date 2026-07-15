@@ -10,6 +10,7 @@ package memory
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -23,15 +24,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
-
-type policyExtractor struct {
-	*mockExtractor
-	updatePolicy extractor.UpdatePolicy
-}
-
-func (e *policyExtractor) UpdatePolicy() extractor.UpdatePolicy {
-	return e.updatePolicy
-}
 
 type countingOperator struct {
 	*mockOperator
@@ -48,7 +40,69 @@ func (o *countingOperator) SearchMemories(
 	return o.mockOperator.SearchMemories(ctx, userKey, query, opts...)
 }
 
-func TestConservativePolicy_AliceTimeEnrichmentUpdates(t *testing.T) {
+func newExtractorWithOperation(
+	t *testing.T,
+	policy extractor.UpdatePolicy,
+	op *extractor.Operation,
+) *extractor.Extractor {
+	t.Helper()
+	args := make(map[string]any)
+	var toolName string
+	switch op.Type {
+	case extractor.OperationAdd:
+		toolName = memory.AddToolName
+		args["memory"] = op.Memory
+	case extractor.OperationUpdate:
+		toolName = memory.UpdateToolName
+		args["memory_id"] = op.MemoryID
+		args["memory"] = op.Memory
+	case extractor.OperationDelete:
+		toolName = memory.DeleteToolName
+		args["memory_id"] = op.MemoryID
+	case extractor.OperationClear:
+		toolName = memory.ClearToolName
+	default:
+		t.Fatalf("unsupported operation type %q", op.Type)
+	}
+	if len(op.Topics) > 0 {
+		args["topics"] = op.Topics
+	}
+	if op.MemoryKind != "" {
+		args["memory_kind"] = string(op.MemoryKind)
+	}
+	if op.EventTime != nil {
+		args["event_time"] = op.EventTime.Format(time.RFC3339Nano)
+	}
+	if len(op.Participants) > 0 {
+		args["participants"] = op.Participants
+	}
+	if op.Location != "" {
+		args["location"] = op.Location
+	}
+	payload, err := json.Marshal(args)
+	require.NoError(t, err)
+	return extractor.NewExtractor(
+		newMockModelWithToolCalls([]model.ToolCall{{
+			Type: "function",
+			Function: model.FunctionDefinitionParam{
+				Name:      toolName,
+				Arguments: payload,
+			},
+		}}),
+		extractor.WithUpdatePolicy(policy),
+	)
+}
+
+func TestUpdatePolicyFor_UsesBuiltInExtractorPolicy(t *testing.T) {
+	builtin := extractor.NewExtractor(
+		nil,
+		extractor.WithUpdatePolicy(extractor.UpdatePolicyStrict),
+	)
+	assert.Equal(t, extractor.UpdatePolicyStrict, updatePolicyFor(builtin))
+	assert.Equal(t, extractor.UpdatePolicyCompatible, updatePolicyFor(&mockExtractor{}))
+}
+
+func TestStrictPolicy_AliceTimeEnrichmentUpdates(t *testing.T) {
 	oldTime := time.Date(2025, 12, 1, 0, 0, 0, 0, time.UTC)
 	newTime := time.Date(2025, 12, 1, 16, 0, 0, 0, time.UTC)
 	existing := []*memory.Entry{{
@@ -68,14 +122,14 @@ func TestConservativePolicy_AliceTimeEnrichmentUpdates(t *testing.T) {
 		EventTime:  &newTime,
 	}
 	worker := NewAutoMemoryWorker(AutoMemoryConfig{}, newMockOperator())
-	out := worker.reconcileConservativeOps(context.Background(), reconcileUserKey(), []*extractor.Operation{op}, existing)
+	out := worker.reconcileStrictOps(context.Background(), reconcileUserKey(), []*extractor.Operation{op}, existing)
 	require.Len(t, out, 1)
 	assert.Equal(t, extractor.OperationUpdate, out[0].Type)
 	assert.Equal(t, "alice-visit", out[0].MemoryID)
 	assert.Equal(t, &newTime, out[0].EventTime)
 }
 
-func TestConservativePolicy_ExactDuplicateIgnoresTopicDrift(t *testing.T) {
+func TestStrictPolicy_ExactDuplicateIgnoresTopicDrift(t *testing.T) {
 	existing := []*memory.Entry{{
 		ID: "same",
 		Memory: &memory.Memory{
@@ -91,11 +145,11 @@ func TestConservativePolicy_ExactDuplicateIgnoresTopicDrift(t *testing.T) {
 		MemoryKind: memory.KindFact,
 	}
 	worker := NewAutoMemoryWorker(AutoMemoryConfig{}, newMockOperator())
-	out := worker.reconcileConservativeOps(context.Background(), reconcileUserKey(), []*extractor.Operation{op}, existing)
+	out := worker.reconcileStrictOps(context.Background(), reconcileUserKey(), []*extractor.Operation{op}, existing)
 	assert.Empty(t, out)
 }
 
-func TestConservativePolicy_ChangesRemainAdditive(t *testing.T) {
+func TestStrictPolicy_ChangesRemainAdditive(t *testing.T) {
 	tests := []struct {
 		name    string
 		oldText string
@@ -143,7 +197,7 @@ func TestConservativePolicy_ChangesRemainAdditive(t *testing.T) {
 				EventTime:  test.newTime,
 			}
 			worker := NewAutoMemoryWorker(AutoMemoryConfig{}, newMockOperator())
-			out := worker.reconcileConservativeOps(
+			out := worker.reconcileStrictOps(
 				context.Background(), reconcileUserKey(), []*extractor.Operation{op}, existing,
 			)
 			require.Len(t, out, 1)
@@ -152,7 +206,7 @@ func TestConservativePolicy_ChangesRemainAdditive(t *testing.T) {
 	}
 }
 
-func TestConservativePolicy_DifferentEventDateRemainsAdditive(t *testing.T) {
+func TestStrictPolicy_DifferentEventDateRemainsAdditive(t *testing.T) {
 	oldTime := time.Date(2025, 12, 1, 16, 0, 0, 0, time.UTC)
 	newTime := time.Date(2025, 12, 2, 16, 0, 0, 0, time.UTC)
 	existing := []*memory.Entry{{
@@ -170,14 +224,14 @@ func TestConservativePolicy_DifferentEventDateRemainsAdditive(t *testing.T) {
 		EventTime:  &newTime,
 	}
 	worker := NewAutoMemoryWorker(AutoMemoryConfig{}, newMockOperator())
-	out := worker.reconcileConservativeOps(
+	out := worker.reconcileStrictOps(
 		context.Background(), reconcileUserKey(), []*extractor.Operation{op}, existing,
 	)
 	require.Len(t, out, 1)
 	assert.Equal(t, extractor.OperationAdd, out[0].Type)
 }
 
-func TestConservativePolicy_UnsafeModelUpdateBecomesAdd(t *testing.T) {
+func TestStrictPolicy_UnsafeModelUpdateBecomesAdd(t *testing.T) {
 	existing := []*memory.Entry{{
 		ID: "job",
 		Memory: &memory.Memory{
@@ -192,26 +246,26 @@ func TestConservativePolicy_UnsafeModelUpdateBecomesAdd(t *testing.T) {
 		MemoryKind: memory.KindFact,
 	}
 	worker := NewAutoMemoryWorker(AutoMemoryConfig{}, newMockOperator())
-	out := worker.reconcileConservativeOps(context.Background(), reconcileUserKey(), []*extractor.Operation{op}, existing)
+	out := worker.reconcileStrictOps(context.Background(), reconcileUserKey(), []*extractor.Operation{op}, existing)
 	require.Len(t, out, 1)
 	assert.Equal(t, extractor.OperationAdd, out[0].Type)
 	assert.Empty(t, out[0].MemoryID)
 }
 
-func TestDisabledPolicy_ConvertsUpdateToAdd(t *testing.T) {
+func TestAddOnlyPolicy_ConvertsUpdateToAdd(t *testing.T) {
 	worker := NewAutoMemoryWorker(AutoMemoryConfig{}, newMockOperator())
 	op := &extractor.Operation{
 		Type:     extractor.OperationUpdate,
 		MemoryID: "old",
 		Memory:   "new content",
 	}
-	out := worker.disableExtractedUpdates(context.Background(), reconcileUserKey(), []*extractor.Operation{op})
+	out := worker.applyAddOnlyPolicy(context.Background(), reconcileUserKey(), []*extractor.Operation{op})
 	require.Len(t, out, 1)
 	assert.Equal(t, extractor.OperationAdd, out[0].Type)
 	assert.Empty(t, out[0].MemoryID)
 }
 
-func TestConservativePolicy_DoesNotSearchPerOperation(t *testing.T) {
+func TestStrictPolicy_DoesNotSearchPerOperation(t *testing.T) {
 	existing := &memory.Entry{
 		ID:      "alice-visit",
 		AppName: "app",
@@ -224,14 +278,11 @@ func TestConservativePolicy_DoesNotSearchPerOperation(t *testing.T) {
 	baseOperator := newMockOperator()
 	baseOperator.searchResults = []*memory.Entry{existing}
 	operator := &countingOperator{mockOperator: baseOperator}
-	ext := &policyExtractor{
-		mockExtractor: &mockExtractor{ops: []*extractor.Operation{{
-			Type:       extractor.OperationAdd,
-			Memory:     "Alice visited Bob at 4pm on December 1st, 2025.",
-			MemoryKind: memory.KindFact,
-		}}},
-		updatePolicy: extractor.UpdatePolicyConservative,
-	}
+	ext := newExtractorWithOperation(t, extractor.UpdatePolicyStrict, &extractor.Operation{
+		Type:       extractor.OperationAdd,
+		Memory:     "Alice visited Bob at 4pm on December 1st, 2025.",
+		MemoryKind: memory.KindFact,
+	})
 	worker := NewAutoMemoryWorker(AutoMemoryConfig{Extractor: ext}, operator)
 	require.NoError(t, worker.createAutoMemory(context.Background(), reconcileUserKey(), []model.Message{
 		model.NewUserMessage("Alice visited Bob at 4pm on December 1st, 2025."),
@@ -240,7 +291,7 @@ func TestConservativePolicy_DoesNotSearchPerOperation(t *testing.T) {
 	assert.Equal(t, 1, operator.updateCalls)
 }
 
-func TestUpdatePolicies_PreserveLegacySearchBehavior(t *testing.T) {
+func TestUpdatePolicies_PreserveCompatibleSearchBehavior(t *testing.T) {
 	existing := &memory.Entry{
 		ID: "stored",
 		Memory: &memory.Memory{
@@ -256,16 +307,16 @@ func TestUpdatePolicies_PreserveLegacySearchBehavior(t *testing.T) {
 		addCalls    int
 	}{
 		{
-			name:   "legacy keeps per-add reconciliation",
-			policy: extractor.UpdatePolicyLegacy,
+			name:   "compatible keeps per-add reconciliation",
+			policy: extractor.UpdatePolicyCompatible,
 			operation: &extractor.Operation{
 				Type: extractor.OperationAdd, Memory: "User likes tea.",
 			},
 			searchCalls: 2,
 		},
 		{
-			name:   "disabled converts update without reconciliation",
-			policy: extractor.UpdatePolicyDisabled,
+			name:   "add-only converts update without reconciliation",
+			policy: extractor.UpdatePolicyAddOnly,
 			operation: &extractor.Operation{
 				Type: extractor.OperationUpdate, MemoryID: "stored", Memory: "User likes coffee.",
 			},
@@ -278,10 +329,7 @@ func TestUpdatePolicies_PreserveLegacySearchBehavior(t *testing.T) {
 			baseOperator := newMockOperator()
 			baseOperator.searchResults = []*memory.Entry{existing}
 			operator := &countingOperator{mockOperator: baseOperator}
-			ext := &policyExtractor{
-				mockExtractor: &mockExtractor{ops: []*extractor.Operation{test.operation}},
-				updatePolicy:  test.policy,
-			}
+			ext := newExtractorWithOperation(t, test.policy, test.operation)
 			worker := NewAutoMemoryWorker(AutoMemoryConfig{Extractor: ext}, operator)
 			require.NoError(t, worker.createAutoMemory(
 				context.Background(),
@@ -378,7 +426,7 @@ func TestExecuteOperation_DeleteRetryIsIdempotent(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestAutoMemoryWorker_LegacyPersistenceFailureRemainsBestEffort(t *testing.T) {
+func TestAutoMemoryWorker_CompatiblePersistenceFailureRemainsBestEffort(t *testing.T) {
 	operator := newMockOperator()
 	operator.addErr = assert.AnError
 	ext := &mockExtractor{ops: []*extractor.Operation{
@@ -402,16 +450,13 @@ func TestAutoMemoryWorker_LegacyPersistenceFailureRemainsBestEffort(t *testing.T
 	assert.Equal(t, 1, operator.updateCalls)
 }
 
-func TestAutoMemoryWorker_ConservativePersistenceFailureDoesNotAdvanceWatermark(t *testing.T) {
+func TestAutoMemoryWorker_StrictPersistenceFailureDoesNotAdvanceWatermark(t *testing.T) {
 	operator := newMockOperator()
 	operator.addErr = assert.AnError
-	ext := &policyExtractor{
-		mockExtractor: &mockExtractor{ops: []*extractor.Operation{{
-			Type:   extractor.OperationAdd,
-			Memory: "User likes tea.",
-		}}},
-		updatePolicy: extractor.UpdatePolicyConservative,
-	}
+	ext := newExtractorWithOperation(t, extractor.UpdatePolicyStrict, &extractor.Operation{
+		Type:   extractor.OperationAdd,
+		Memory: "User likes tea.",
+	})
 	worker := NewAutoMemoryWorker(AutoMemoryConfig{Extractor: ext}, operator)
 	sess := newTestSession("app", "u1")
 	appendSessionMessage(sess, time.Now(), model.NewUserMessage("I like tea."))

@@ -442,10 +442,10 @@ func (w *AutoMemoryWorker) createAutoMemory(
 	// Execute operations.
 	for _, op := range ops {
 		if err := w.executeOperation(ctx, userKey, op); err != nil {
-			// Preserve the legacy best-effort behavior for existing users.
-			if updatePolicy == extractor.UpdatePolicyLegacy {
+			// Preserve the compatible best-effort behavior for existing users.
+			if updatePolicy == extractor.UpdatePolicyCompatible {
 				log.WarnfContext(ctx,
-					"auto_memory: legacy operation failed for user %s/%s: %v",
+					"auto_memory: compatible operation failed for user %s/%s: %v",
 					userKey.AppName, userKey.UserID, err,
 				)
 				continue
@@ -470,7 +470,7 @@ func (w *AutoMemoryWorker) searchRelevantMemories(
 	messages []model.Message,
 ) ([]*memory.Entry, error) {
 	query := buildSearchQuery(messages)
-	if updatePolicyFor(w.config.Extractor) != extractor.UpdatePolicyLegacy {
+	if updatePolicyFor(w.config.Extractor) != extractor.UpdatePolicyCompatible {
 		query = buildPolicySearchQuery(messages)
 	}
 	if query == "" {

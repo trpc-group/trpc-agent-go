@@ -40,8 +40,8 @@ const (
 	metadataKeyUpdatePolicy   = "update_policy"
 )
 
-// memoryExtractor implements the MemoryExtractor interface.
-type memoryExtractor struct {
+// Extractor is the default LLM-backed MemoryExtractor implementation.
+type Extractor struct {
 	model    model.Model
 	prompt   string
 	checkers []Checker
@@ -54,13 +54,15 @@ type memoryExtractor struct {
 	modelCallbacks *model.Callbacks
 }
 
-// Option is a function that configures a MemoryExtractor.
-type Option func(*memoryExtractor)
+var _ MemoryExtractor = (*Extractor)(nil)
+
+// Option configures an Extractor.
+type Option func(*Extractor)
 
 // WithPrompt sets the custom prompt for memory extraction.
 // The prompt will be used as the system message when calling the LLM.
 func WithPrompt(prompt string) Option {
-	return func(e *memoryExtractor) {
+	return func(e *Extractor) {
 		if prompt != "" {
 			e.prompt = prompt
 		}
@@ -72,7 +74,7 @@ func WithPrompt(prompt string) Option {
 // When checkers are configured, ShouldExtract returns true only if all
 // checkers pass.
 func WithChecker(c Checker) Option {
-	return func(e *memoryExtractor) {
+	return func(e *Extractor) {
 		if c != nil {
 			e.checkers = append(e.checkers, c)
 		}
@@ -82,16 +84,8 @@ func WithChecker(c Checker) Option {
 // WithModelCallbacks sets model callbacks for memory extraction.
 // Only structured callbacks are supported.
 func WithModelCallbacks(callbacks *model.Callbacks) Option {
-	return func(e *memoryExtractor) {
+	return func(e *Extractor) {
 		e.modelCallbacks = callbacks
-	}
-}
-
-// WithUpdatePolicy configures how auto memory handles extracted updates.
-// Omitting this option preserves the legacy behavior.
-func WithUpdatePolicy(policy UpdatePolicy) Option {
-	return func(e *memoryExtractor) {
-		e.updatePolicy = normalizeUpdatePolicy(policy)
 	}
 }
 
@@ -99,7 +93,7 @@ func WithUpdatePolicy(policy UpdatePolicy) Option {
 // Any checker passing will trigger extraction.
 // This replaces any previously configured checkers.
 func WithCheckersAny(checks ...Checker) Option {
-	return func(e *memoryExtractor) {
+	return func(e *Extractor) {
 		if len(checks) > 0 {
 			e.checkers = []Checker{ChecksAny(checks...)}
 		}
@@ -107,10 +101,11 @@ func WithCheckersAny(checks ...Checker) Option {
 }
 
 // NewExtractor creates a new memory extractor.
-func NewExtractor(m model.Model, opts ...Option) MemoryExtractor {
-	e := &memoryExtractor{
-		model:  m,
-		prompt: defaultPrompt,
+func NewExtractor(m model.Model, opts ...Option) *Extractor {
+	e := &Extractor{
+		model:        m,
+		prompt:       defaultPrompt,
+		updatePolicy: UpdatePolicyCompatible,
 	}
 	for _, opt := range opts {
 		opt(e)
@@ -119,7 +114,7 @@ func NewExtractor(m model.Model, opts ...Option) MemoryExtractor {
 }
 
 // Extract analyzes the conversation and returns memory operations.
-func (e *memoryExtractor) Extract(
+func (e *Extractor) Extract(
 	ctx context.Context,
 	messages []model.Message,
 	existing []*memory.Entry,
@@ -194,14 +189,14 @@ func (e *memoryExtractor) Extract(
 }
 
 // SetPrompt updates the extractor's prompt dynamically.
-func (e *memoryExtractor) SetPrompt(prompt string) {
+func (e *Extractor) SetPrompt(prompt string) {
 	if prompt != "" {
 		e.prompt = prompt
 	}
 }
 
 // SetModel updates the extractor's model dynamically.
-func (e *memoryExtractor) SetModel(m model.Model) {
+func (e *Extractor) SetModel(m model.Model) {
 	if m != nil {
 		e.model = m
 	}
@@ -210,7 +205,7 @@ func (e *memoryExtractor) SetModel(m model.Model) {
 // SetEnabledTools updates the enabled tool flags for background
 // operations. The map is defensively copied to prevent external
 // mutation.
-func (e *memoryExtractor) SetEnabledTools(
+func (e *Extractor) SetEnabledTools(
 	enabled map[string]struct{},
 ) {
 	e.enabledTools = maps.Clone(enabled)
@@ -219,7 +214,7 @@ func (e *memoryExtractor) SetEnabledTools(
 // ShouldExtract checks if extraction should be triggered based on context.
 // Returns true if extraction should proceed, false to skip.
 // When no checkers are configured, always returns true.
-func (e *memoryExtractor) ShouldExtract(ctx *ExtractionContext) bool {
+func (e *Extractor) ShouldExtract(ctx *ExtractionContext) bool {
 	if len(e.checkers) == 0 {
 		return true
 	}
@@ -233,7 +228,7 @@ func (e *memoryExtractor) ShouldExtract(ctx *ExtractionContext) bool {
 }
 
 // Metadata returns metadata about the extractor configuration.
-func (e *memoryExtractor) Metadata() map[string]any {
+func (e *Extractor) Metadata() map[string]any {
 	var modelName string
 	modelAvailable := false
 	if e.model != nil {
@@ -244,15 +239,10 @@ func (e *memoryExtractor) Metadata() map[string]any {
 		metadataKeyModelName:      modelName,
 		metadataKeyModelAvailable: modelAvailable,
 	}
-	if e.updatePolicy != UpdatePolicyLegacy {
-		metadata[metadataKeyUpdatePolicy] = e.updatePolicy
+	if policy := e.UpdatePolicy(); policy != UpdatePolicyCompatible {
+		metadata[metadataKeyUpdatePolicy] = policy
 	}
 	return metadata
-}
-
-// UpdatePolicy returns the configured auto-memory update policy.
-func (e *memoryExtractor) UpdatePolicy() UpdatePolicy {
-	return e.updatePolicy
 }
 
 // extractionUserSuffix is appended as a trailing user message
@@ -263,7 +253,7 @@ const extractionUserSuffix = "Extract and manage memories " +
 	"from the conversation above."
 
 // buildMessages builds messages for auto memory extraction.
-func (e *memoryExtractor) buildMessages(
+func (e *Extractor) buildMessages(
 	ctx context.Context,
 	messages []model.Message,
 	existing []*memory.Entry,
@@ -305,7 +295,7 @@ const currentDatePlaceholder = "{current_date}"
 // and available actions based on enabled tools.
 // refDate is substituted into the prompt's {current_date} placeholder
 // so the extractor can resolve relative time references.
-func (e *memoryExtractor) buildSystemPrompt(
+func (e *Extractor) buildSystemPrompt(
 	refDate time.Time,
 	existing []*memory.Entry,
 ) string {
@@ -345,35 +335,6 @@ func (e *memoryExtractor) buildSystemPrompt(
 	return sb.String()
 }
 
-func (e *memoryExtractor) updatePolicyPromptBlock() string {
-	switch e.updatePolicy {
-	case UpdatePolicyConservative:
-		return `
-
-<update_policy>
-- Preserve long-term history. Use memory_update only when the new memory is
-  the same fact or event with additional non-conflicting detail and retains
-  every material detail from the existing memory.
-- Use memory_add for corrections, state changes, different events, or any
-  uncertain match. Never delete a memory merely because newer information
-  differs from it.
-- Emit no operation for an exact duplicate.
-</update_policy>
-`
-	case UpdatePolicyDisabled:
-		return `
-
-<update_policy>
-- Preserve long-term history and use memory_add for new information.
-- Do not use memory_update. Emit no operation for an exact duplicate.
-- Never delete a memory merely because newer information differs from it.
-</update_policy>
-`
-	default:
-		return ""
-	}
-}
-
 // toolActionDescriptions maps background tool names to their
 // one-line descriptions shown in the system prompt.
 var toolActionDescriptions = map[string]string{
@@ -400,7 +361,7 @@ var toolActionOrder = []string{
 
 // availableActionsBlock returns the text lines describing which
 // memory tools the model is allowed to call.
-func (e *memoryExtractor) availableActionsBlock() string {
+func (e *Extractor) availableActionsBlock() string {
 	var sb strings.Builder
 	for _, name := range toolActionOrder {
 		// Skip tools that are disabled.
@@ -422,7 +383,7 @@ func (e *memoryExtractor) availableActionsBlock() string {
 }
 
 // parseToolCall parses a tool call and returns a memory operation.
-func (e *memoryExtractor) parseToolCall(
+func (e *Extractor) parseToolCall(
 	ctx context.Context,
 	call model.ToolCall,
 ) *Operation {
@@ -438,16 +399,7 @@ func (e *memoryExtractor) parseToolCall(
 	return op
 }
 
-func normalizeUpdatePolicy(policy UpdatePolicy) UpdatePolicy {
-	switch policy {
-	case UpdatePolicyConservative, UpdatePolicyDisabled:
-		return policy
-	default:
-		return UpdatePolicyLegacy
-	}
-}
-
-func (e *memoryExtractor) runBeforeModelCallbacks(
+func (e *Extractor) runBeforeModelCallbacks(
 	ctx context.Context,
 	request *model.Request,
 ) (context.Context, <-chan *model.Response, error) {
@@ -482,7 +434,7 @@ func modelErrFromResponse(resp *model.Response) error {
 	return fmt.Errorf("%s: %s", resp.Error.Type, resp.Error.Message)
 }
 
-func (e *memoryExtractor) runAfterModelCallbacks(
+func (e *Extractor) runAfterModelCallbacks(
 	ctx context.Context,
 	request *model.Request,
 	response *model.Response,

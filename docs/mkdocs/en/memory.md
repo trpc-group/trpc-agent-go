@@ -285,17 +285,17 @@ The built-in extractor keeps its historical behavior unless a policy is
 explicitly configured. Existing applications therefore require no migration:
 
 ```go
-// Legacy behavior: unchanged.
+// Compatible behavior: unchanged.
 memExtractor := extractor.NewExtractor(extractorModel)
 ```
 
-For applications that prefer additive long-term history, enable the update
+For applications that prefer preserving long-term history, enable the update
 policy explicitly:
 
 ```go
 memExtractor := extractor.NewExtractor(
     extractorModel,
-    extractor.WithUpdatePolicy(extractor.UpdatePolicyConservative),
+    extractor.WithUpdatePolicy(extractor.UpdatePolicyStrict),
 )
 ```
 
@@ -305,14 +305,14 @@ the existing tool semantics.
 
 | Update policy | Auto extraction behavior |
 | --- | --- |
-| `UpdatePolicyLegacy` | Uses the historical similarity-based reconciliation. This is the default and zero value. |
-| `UpdatePolicyConservative` | Drops exact duplicates, updates only when the new memory preserves the old fact or event and adds non-conflicting detail, and keeps changes or uncertain matches as separate entries. |
-| `UpdatePolicyDisabled` | Converts extractor-generated updates to adds and does not reconcile extracted adds into updates. |
+| `UpdatePolicyCompatible` | Uses the existing similarity-based reconciliation. This is the default. |
+| `UpdatePolicyStrict` | Drops exact duplicates, updates only when the new memory preserves the old fact or event and adds non-conflicting detail, and keeps changes or uncertain matches as separate entries. |
+| `UpdatePolicyAddOnly` | Converts extractor-generated updates to adds and does not reconcile extracted adds into updates. |
 
-Conservative reconciliation compares only the existing entries already
+Strict reconciliation compares only the existing entries already
 supplied to the extractor. Retrieval scores rank candidates but cannot by
-themselves authorize an update or drop. Subjects, event identity, meaningful
-old tokens, numbers, dates, negation, participants, and locations must remain
+themselves authorize an update or drop. Event identity, meaningful old tokens,
+numbers, dates, negation, participants, and locations must remain
 compatible. Topics are merged only after an update has passed these checks.
 For example, adding a time to the same dated visit may update that visit;
 changing an employer or describing a visit on another date creates a new
@@ -320,12 +320,12 @@ entry.
 
 The update policy does not change `memory.Service`, `MemoryExtractor`, the stored
 JSON representation, memory IDs, or database schemas. It does not rewrite
-existing entries. With a non-legacy update policy, persistence failures are
+existing entries. With a non-compatible update policy, persistence failures are
 returned by Auto extraction and do not advance its session watermark, so a
-retry can process the same events. Legacy mode retains its historical
+retry can process the same events. Compatible mode retains its existing
 best-effort persistence behavior.
 
-To roll back, remove the option or set it to its `Legacy` value. No data
+To roll back, remove the option or set it to `UpdatePolicyCompatible`. No data
 migration is required.
 
 ### Configuration Comparison

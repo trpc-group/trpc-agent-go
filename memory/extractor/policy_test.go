@@ -13,54 +13,57 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
-func TestExtractorUpdatePolicy_DefaultsToLegacy(t *testing.T) {
+func TestExtractorUpdatePolicy_DefaultsToCompatible(t *testing.T) {
 	ext := NewExtractor(nil)
-	updateProvider, ok := ext.(UpdatePolicyProvider)
-	require.True(t, ok)
-	assert.Equal(t, UpdatePolicyLegacy, updateProvider.UpdatePolicy())
+	assert.Equal(t, UpdatePolicyCompatible, ext.UpdatePolicy())
+	assert.NotContains(t, ext.Metadata(), metadataKeyUpdatePolicy)
+}
+
+func TestExtractorUpdatePolicy_ZeroValueUsesCompatible(t *testing.T) {
+	var ext Extractor
+	assert.Equal(t, UpdatePolicyCompatible, ext.UpdatePolicy())
 	assert.NotContains(t, ext.Metadata(), metadataKeyUpdatePolicy)
 }
 
 func TestExtractorUpdatePolicy_OptIn(t *testing.T) {
 	ext := NewExtractor(
 		nil,
-		WithUpdatePolicy(UpdatePolicyConservative),
+		WithUpdatePolicy(UpdatePolicyStrict),
 	)
-	assert.Equal(t, UpdatePolicyConservative, ext.(UpdatePolicyProvider).UpdatePolicy())
-	assert.Equal(t, UpdatePolicyConservative, ext.Metadata()[metadataKeyUpdatePolicy])
+	assert.Equal(t, UpdatePolicyStrict, ext.UpdatePolicy())
+	assert.Equal(t, UpdatePolicyStrict, ext.Metadata()[metadataKeyUpdatePolicy])
 }
 
-func TestExtractorUpdatePolicy_InvalidValueUsesLegacy(t *testing.T) {
+func TestExtractorUpdatePolicy_InvalidValueUsesCompatible(t *testing.T) {
 	ext := NewExtractor(
 		nil,
 		WithUpdatePolicy(UpdatePolicy("invalid")),
 	)
-	assert.Equal(t, UpdatePolicyLegacy, ext.(UpdatePolicyProvider).UpdatePolicy())
+	assert.Equal(t, UpdatePolicyCompatible, ext.UpdatePolicy())
 }
 
 func TestUpdatePolicyPromptBlock_IsOptIn(t *testing.T) {
-	legacy := &memoryExtractor{}
-	assert.Empty(t, legacy.updatePolicyPromptBlock())
+	compatible := &Extractor{updatePolicy: UpdatePolicyCompatible}
+	assert.Empty(t, compatible.updatePolicyPromptBlock())
 
-	conservative := &memoryExtractor{updatePolicy: UpdatePolicyConservative}
-	assert.Contains(t, conservative.updatePolicyPromptBlock(), "Preserve long-term history")
-	assert.Contains(t, conservative.updatePolicyPromptBlock(), "Use memory_add for corrections")
+	strict := &Extractor{updatePolicy: UpdatePolicyStrict}
+	assert.Contains(t, strict.updatePolicyPromptBlock(), "Preserve long-term history")
+	assert.Contains(t, strict.updatePolicyPromptBlock(), "Use memory_add for corrections")
 
-	disabled := &memoryExtractor{updatePolicy: UpdatePolicyDisabled}
-	assert.Contains(t, disabled.updatePolicyPromptBlock(), "Do not use memory_update")
+	addOnly := &Extractor{updatePolicy: UpdatePolicyAddOnly}
+	assert.Contains(t, addOnly.updatePolicyPromptBlock(), "Do not use memory_update")
 }
 
 func TestExtractorPolicies_InvalidToolCallsRemainNonFatal(t *testing.T) {
 	policies := []UpdatePolicy{
-		UpdatePolicyLegacy,
-		UpdatePolicyConservative,
-		UpdatePolicyDisabled,
+		UpdatePolicyCompatible,
+		UpdatePolicyStrict,
+		UpdatePolicyAddOnly,
 	}
 	calls := []model.ToolCall{
 		makeToolCall(memory.AddToolName, []byte(`{`)),
@@ -68,7 +71,7 @@ func TestExtractorPolicies_InvalidToolCallsRemainNonFatal(t *testing.T) {
 	}
 
 	for _, policy := range policies {
-		ext := &memoryExtractor{updatePolicy: policy}
+		ext := &Extractor{updatePolicy: policy}
 		for _, call := range calls {
 			assert.Nil(t, ext.parseToolCall(context.Background(), call))
 		}

@@ -24,8 +24,8 @@ import (
 )
 
 const (
-	conservativeOldCoverage       = 0.95
-	conservativeNewCoverage       = 0.70
+	strictOldCoverage             = 0.95
+	strictNewCoverage             = 0.70
 	maxAutoMemorySearchQueryBytes = 7 * 1024
 	searchQueryOmissionMarker     = "\n...\n"
 )
@@ -43,7 +43,7 @@ var (
 	capitalizedTokenPattern = regexp.MustCompile(`\b[A-Z][A-Za-z0-9_-]*\b`)
 )
 
-type conservativeCandidate struct {
+type strictCandidate struct {
 	entry       *memory.Entry
 	duplicate   bool
 	oldCoverage float64
@@ -51,15 +51,18 @@ type conservativeCandidate struct {
 }
 
 func updatePolicyFor(ext extractor.MemoryExtractor) extractor.UpdatePolicy {
-	provider, ok := ext.(extractor.UpdatePolicyProvider)
+	builtin, ok := ext.(*extractor.Extractor)
 	if !ok {
-		return extractor.UpdatePolicyLegacy
+		return extractor.UpdatePolicyCompatible
 	}
-	switch provider.UpdatePolicy() {
-	case extractor.UpdatePolicyConservative, extractor.UpdatePolicyDisabled:
-		return provider.UpdatePolicy()
+	policy := builtin.UpdatePolicy()
+	switch policy {
+	case extractor.UpdatePolicyCompatible,
+		extractor.UpdatePolicyStrict,
+		extractor.UpdatePolicyAddOnly:
+		return policy
 	default:
-		return extractor.UpdatePolicyLegacy
+		return extractor.UpdatePolicyCompatible
 	}
 }
 
@@ -70,16 +73,16 @@ func (w *AutoMemoryWorker) applyUpdatePolicy(
 	existing []*memory.Entry,
 ) []*extractor.Operation {
 	switch updatePolicyFor(w.config.Extractor) {
-	case extractor.UpdatePolicyConservative:
-		return w.reconcileConservativeOps(ctx, userKey, ops, existing)
-	case extractor.UpdatePolicyDisabled:
-		return w.disableExtractedUpdates(ctx, userKey, ops)
+	case extractor.UpdatePolicyStrict:
+		return w.reconcileStrictOps(ctx, userKey, ops, existing)
+	case extractor.UpdatePolicyAddOnly:
+		return w.applyAddOnlyPolicy(ctx, userKey, ops)
 	default:
 		return w.reconcileOps(ctx, userKey, ops)
 	}
 }
 
-func (w *AutoMemoryWorker) disableExtractedUpdates(
+func (w *AutoMemoryWorker) applyAddOnlyPolicy(
 	ctx context.Context,
 	userKey memory.UserKey,
 	ops []*extractor.Operation,
@@ -97,7 +100,7 @@ func (w *AutoMemoryWorker) disableExtractedUpdates(
 		add.Type = extractor.OperationAdd
 		add.MemoryID = ""
 		log.DebugfContext(ctx,
-			"auto_memory: update policy disabled; converting update to add for user %s/%s",
+			"auto_memory: add-only policy; converting update to add for user %s/%s",
 			userKey.AppName, userKey.UserID,
 		)
 		out = append(out, &add)
@@ -105,7 +108,7 @@ func (w *AutoMemoryWorker) disableExtractedUpdates(
 	return out
 }
 
-func (w *AutoMemoryWorker) reconcileConservativeOps(
+func (w *AutoMemoryWorker) reconcileStrictOps(
 	ctx context.Context,
 	userKey memory.UserKey,
 	ops []*extractor.Operation,
@@ -124,9 +127,9 @@ func (w *AutoMemoryWorker) reconcileConservativeOps(
 		}
 		switch op.Type {
 		case extractor.OperationAdd:
-			out = appendConservativeAdd(ctx, w, userKey, out, op, existing)
+			out = appendStrictAdd(ctx, w, userKey, out, op, existing)
 		case extractor.OperationUpdate:
-			out = appendConservativeUpdate(ctx, w, userKey, out, op, byID[op.MemoryID])
+			out = appendStrictUpdate(ctx, w, userKey, out, op, byID[op.MemoryID])
 		default:
 			out = append(out, op)
 		}
@@ -134,7 +137,7 @@ func (w *AutoMemoryWorker) reconcileConservativeOps(
 	return out
 }
 
-func appendConservativeAdd(
+func appendStrictAdd(
 	ctx context.Context,
 	w *AutoMemoryWorker,
 	userKey memory.UserKey,
@@ -145,25 +148,25 @@ func appendConservativeAdd(
 	if !w.isToolEnabled(memory.AddToolName) {
 		return append(out, op)
 	}
-	match := selectConservativeCandidate(op, existing)
+	match := selectStrictCandidate(op, existing)
 	if match == nil {
-		logConservativeDecision(ctx, userKey, op, nil, "add", "no safe candidate")
+		logStrictDecision(ctx, userKey, op, nil, "add", "no safe candidate")
 		return append(out, op)
 	}
 	if match.duplicate {
-		logConservativeDecision(ctx, userKey, op, match, "no-op", "exact duplicate")
+		logStrictDecision(ctx, userKey, op, match, "no-op", "exact duplicate")
 		return out
 	}
 	if !w.isToolEnabled(memory.UpdateToolName) {
-		logConservativeDecision(ctx, userKey, op, match, "add", "update tool disabled")
+		logStrictDecision(ctx, userKey, op, match, "add", "update tool disabled")
 		return append(out, op)
 	}
 	updated := toUpdateOp(op, match.entry)
-	logConservativeDecision(ctx, userKey, op, match, "update", "strict enrichment")
+	logStrictDecision(ctx, userKey, op, match, "update", "strict enrichment")
 	return append(out, updated)
 }
 
-func appendConservativeUpdate(
+func appendStrictUpdate(
 	ctx context.Context,
 	w *AutoMemoryWorker,
 	userKey memory.UserKey,
@@ -171,41 +174,41 @@ func appendConservativeUpdate(
 	op *extractor.Operation,
 	existing *memory.Entry,
 ) []*extractor.Operation {
-	match := classifyConservativeCandidate(op, existing)
+	match := classifyStrictCandidate(op, existing)
 	if match != nil && match.duplicate {
-		logConservativeDecision(ctx, userKey, op, match, "no-op", "exact duplicate")
+		logStrictDecision(ctx, userKey, op, match, "no-op", "exact duplicate")
 		return out
 	}
 	if match != nil && w.isToolEnabled(memory.UpdateToolName) {
 		updated := toUpdateOp(op, existing)
-		logConservativeDecision(ctx, userKey, op, match, "update", "strict enrichment")
+		logStrictDecision(ctx, userKey, op, match, "update", "strict enrichment")
 		return append(out, updated)
 	}
 	add := *op
 	add.Type = extractor.OperationAdd
 	add.MemoryID = ""
-	logConservativeDecision(ctx, userKey, op, match, "add", "unsafe or unknown update target")
+	logStrictDecision(ctx, userKey, op, match, "add", "unsafe or unknown update target")
 	return append(out, &add)
 }
 
-func selectConservativeCandidate(
+func selectStrictCandidate(
 	op *extractor.Operation,
 	existing []*memory.Entry,
-) *conservativeCandidate {
-	var best *conservativeCandidate
+) *strictCandidate {
+	var best *strictCandidate
 	for _, entry := range existing {
-		candidate := classifyConservativeCandidate(op, entry)
+		candidate := classifyStrictCandidate(op, entry)
 		if candidate == nil {
 			continue
 		}
-		if best == nil || conservativeCandidateLess(best, candidate) {
+		if best == nil || strictCandidateLess(best, candidate) {
 			best = candidate
 		}
 	}
 	return best
 }
 
-func conservativeCandidateLess(left, right *conservativeCandidate) bool {
+func strictCandidateLess(left, right *strictCandidate) bool {
 	if left.duplicate != right.duplicate {
 		return right.duplicate
 	}
@@ -218,15 +221,15 @@ func conservativeCandidateLess(left, right *conservativeCandidate) bool {
 	return left.entry.Score < right.entry.Score
 }
 
-func classifyConservativeCandidate(
+func classifyStrictCandidate(
 	op *extractor.Operation,
 	entry *memory.Entry,
-) *conservativeCandidate {
+) *strictCandidate {
 	if op == nil || entry == nil || entry.Memory == nil || entry.ID == "" {
 		return nil
 	}
 	if exactMemoryDuplicate(op, entry.Memory) {
-		return &conservativeCandidate{
+		return &strictCandidate{
 			entry:       entry,
 			duplicate:   true,
 			oldCoverage: 1,
@@ -237,7 +240,7 @@ func classifyConservativeCandidate(
 		return nil
 	}
 	oldCoverage, newCoverage := directionalTokenCoverage(entry.Memory.Memory, op.Memory)
-	if oldCoverage < conservativeOldCoverage || newCoverage < conservativeNewCoverage {
+	if oldCoverage < strictOldCoverage || newCoverage < strictNewCoverage {
 		return nil
 	}
 	if !materialTokensPreserved(entry.Memory.Memory, op.Memory) {
@@ -252,7 +255,7 @@ func classifyConservativeCandidate(
 	if changeMarkerPattern.MatchString(op.Memory) && !changeMarkerPattern.MatchString(entry.Memory.Memory) {
 		return nil
 	}
-	return &conservativeCandidate{
+	return &strictCandidate{
 		entry:       entry,
 		oldCoverage: oldCoverage,
 		newCoverage: newCoverage,
@@ -431,7 +434,7 @@ func stringSet(values []string) map[string]struct{} {
 
 // buildPolicySearchQuery includes both conversational roles and bounds the
 // derived retrieval query. It is used only by opt-in update policies so the
-// legacy query remains byte-for-byte compatible.
+// compatible query remains byte-for-byte identical to the existing behavior.
 func buildPolicySearchQuery(messages []model.Message) string {
 	parts := make([]string, 0, len(messages))
 	for _, msg := range messages {
@@ -477,23 +480,23 @@ func utf8SuffixBoundary(text string, start int) int {
 	return start
 }
 
-func logConservativeDecision(
+func logStrictDecision(
 	ctx context.Context,
 	userKey memory.UserKey,
 	op *extractor.Operation,
-	match *conservativeCandidate,
+	match *strictCandidate,
 	action string,
 	reason string,
 ) {
 	if match == nil {
 		log.DebugfContext(ctx,
-			"auto_memory: conservative decision action=%s reason=%s user=%s/%s operation=%s",
+			"auto_memory: strict decision action=%s reason=%s user=%s/%s operation=%s",
 			action, reason, userKey.AppName, userKey.UserID, op.Type,
 		)
 		return
 	}
 	log.DebugfContext(ctx,
-		"auto_memory: conservative decision action=%s reason=%s user=%s/%s operation=%s candidate=%s old_coverage=%.3f new_coverage=%.3f",
+		"auto_memory: strict decision action=%s reason=%s user=%s/%s operation=%s candidate=%s old_coverage=%.3f new_coverage=%.3f",
 		action, reason, userKey.AppName, userKey.UserID, op.Type,
 		match.entry.ID, match.oldCoverage, match.newCoverage,
 	)
