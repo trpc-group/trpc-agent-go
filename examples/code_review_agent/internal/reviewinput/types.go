@@ -37,11 +37,11 @@ const (
 // Spec expresses the user's input choice. InputKind is derived by
 // the preparer so callers cannot create contradictory states.
 type Spec struct {
-	DiffFile  string
-	RepoPath  string
-	Fixture   string
-	Paths     []string
-	PathsFile string
+	DiffFile  string   // Path to diff file
+	RepoPath  string   // Path to repository
+	Fixture   string   // Name of fixture to use
+	Paths     []string // Specific file paths to review
+	PathsFile string   // Path to file containing file paths to review (one path per line)
 }
 
 // TaskScope is the stable identity shared by Review Store, Session Service,

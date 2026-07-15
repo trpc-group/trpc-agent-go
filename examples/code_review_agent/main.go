@@ -25,6 +25,7 @@ import (
 )
 
 var (
+	mode      = flag.String("mode", "", "set to fake-model to run a registered deterministic fixture scenario")
 	modelName = flag.String("model", "deepseek-v4-flash", "model name for agent")
 	apiKey    = flag.String("api-key", "", "API key for the model")
 	baseURL   = flag.String("base-url", "", "Base URL for the model")
@@ -44,9 +45,9 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, os.Kill)
 	defer stop()
 
-	// The same sanitizer is deliberately shared by input preparation, tool
-	// callbacks, Review Store writers, and Session's final persistence hook.
-	// One rule set keeps model-visible and durable representations consistent.
+	// Sanitizer is shared by input preparation, tool callbacks, Review Store
+	// writers, and Session's final persistence hook. One rule set keeps
+	// model-visible and durable representations consistent.
 	sanitizer := redact.New()
 	persistenceResources, err := persistence.Open(
 		ctx,
@@ -62,6 +63,7 @@ func main() {
 		}
 	}()
 
+	// Create review agent with dependencies and configuration
 	reviewAgent, err := reviewer.NewReviewer(
 		reviewer.Dependencies{
 			Store:           persistenceResources.ReviewStore,
@@ -70,6 +72,7 @@ func main() {
 			Sanitizer:       sanitizer,
 		},
 		reviewer.Config{
+			Mode: *mode,
 			Model: reviewer.ModelConfig{
 				Name:    *modelName,
 				BaseURL: *baseURL,
@@ -84,6 +87,7 @@ func main() {
 		log.Fatalf("Failed to create review agent: %v", err)
 	}
 
+	// Run code review
 	err = reviewAgent.Review(ctx, reviewinput.Spec{
 		DiffFile:  *diffFile,
 		RepoPath:  *repoPath,

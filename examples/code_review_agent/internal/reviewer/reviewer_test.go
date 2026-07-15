@@ -20,6 +20,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/artifact/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
+	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/fakemodel"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/persistence"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/redact"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/reviewinput"
@@ -28,6 +29,66 @@ import (
 
 	_ "modernc.org/sqlite"
 )
+
+func TestNewReviewModelDefaultsToConfiguredRealModel(t *testing.T) {
+	r := &reviewer{config: Config{Model: ModelConfig{
+		Name:    "real-model",
+		APIKey:  "test-key",
+		BaseURL: "https://example.invalid",
+	}}}
+	got, err := r.newReviewModel("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Info().Name != "real-model" {
+		t.Fatalf("model name = %q, want real-model", got.Info().Name)
+	}
+}
+
+func TestNewReviewModelSelectsFixtureFakeModel(t *testing.T) {
+	r := &reviewer{config: Config{Mode: "fake-model"}}
+	got, err := r.newReviewModel("acceptance-security")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake, ok := got.(*fakemodel.FakeModel)
+	if !ok {
+		t.Fatalf("model type = %T, want *fakemodel.FakeModel", got)
+	}
+	if fake.Fixture() != "acceptance-security" {
+		t.Fatalf("fixture = %q, want acceptance-security", fake.Fixture())
+	}
+}
+
+func TestNewReviewModelRequiresFixtureForFakeModel(t *testing.T) {
+	r := &reviewer{config: Config{Mode: "fake-model"}}
+	_, err := r.newReviewModel("")
+	if err == nil || !strings.Contains(err.Error(), "fixture") {
+		t.Fatalf("newReviewModel error = %v, want fixture requirement", err)
+	}
+}
+
+func TestNewReviewModelUsesConfiguredRealModelForOtherModes(t *testing.T) {
+	for _, mode := range []string{"fake", "real"} {
+		t.Run(mode, func(t *testing.T) {
+			r := &reviewer{config: Config{
+				Mode: mode,
+				Model: ModelConfig{
+					Name:    "real-model",
+					APIKey:  "test-key",
+					BaseURL: "https://example.invalid",
+				},
+			}}
+			got, err := r.newReviewModel("acceptance-clean")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Info().Name != "real-model" {
+				t.Fatalf("model name = %q, want real-model", got.Info().Name)
+			}
+		})
+	}
+}
 
 func TestReviewRecordsInputPreparationFailureOnTask(t *testing.T) {
 	ctx := context.Background()

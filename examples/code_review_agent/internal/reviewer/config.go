@@ -9,13 +9,15 @@
 
 package reviewer
 
-// Config contains model and sandbox settings for one reviewer instance.
+// Config contains model selection and sandbox settings for one reviewer instance.
 type Config struct {
+	Mode    string
 	Model   ModelConfig
 	Sandbox SandboxConfig
 }
 
-// ModelConfig identifies the DeepSeek-compatible model endpoint.
+// ModelConfig identifies the DeepSeek-compatible model endpoint used when the
+// fake-model mode is not selected.
 type ModelConfig struct {
 	Name    string
 	BaseURL string

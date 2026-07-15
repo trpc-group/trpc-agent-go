@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/fakemodel"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/redact"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/reviewinput"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/store"
@@ -110,6 +111,7 @@ func (r *reviewer) Review(ctx context.Context, spec reviewinput.Spec) (retErr er
 		taskID    = fmt.Sprintf("review-%d", time.Now().UnixNano())
 		sessionID = taskID
 	)
+
 	inputKind, err := r.inputs.InputKind(spec)
 	if err != nil {
 		return err
@@ -153,7 +155,7 @@ func (r *reviewer) Review(ctx context.Context, spec reviewinput.Spec) (retErr er
 		return err
 	}
 
-	reviewRunner, err := r.newRunner(prepared.Bootstrap)
+	reviewRunner, err := r.newRunner(prepared.Bootstrap, spec.Fixture)
 	if err != nil {
 		return err
 	}
@@ -231,12 +233,14 @@ func withWorkspaceArtifactContext(
 // newRunner constructs the framework execution graph for exactly one prepared
 // input. Keeping this in reviewer makes lifecycle and close ordering visible in
 // one place while reviewinput hides all input-specific mechanics.
-func (r *reviewer) newRunner(bootstrap codeexecutor.WorkspaceBootstrapSpec) (reviewRunner runner.Runner, err error) {
-	modelInstance := openai.New(r.config.Model.Name,
-		openai.WithAPIKey(r.config.Model.APIKey),
-		openai.WithBaseURL(r.config.Model.BaseURL),
-		openai.WithVariant(openai.VariantDeepSeek),
-	)
+func (r *reviewer) newRunner(
+	bootstrap codeexecutor.WorkspaceBootstrapSpec,
+	fixture string,
+) (reviewRunner runner.Runner, err error) {
+	modelInstance, err := r.newReviewModel(fixture)
+	if err != nil {
+		return nil, err
+	}
 	generationConfig := model.GenerationConfig{
 		Stream:          true,
 		ThinkingEnabled: model.BoolPtr(true),
@@ -265,6 +269,49 @@ func (r *reviewer) newRunner(bootstrap codeexecutor.WorkspaceBootstrapSpec) (rev
 		runner.WithSessionService(r.dependencies.SessionService),
 		runner.WithArtifactService(r.dependencies.ArtifactService),
 	), nil
+}
+
+func (r *reviewer) newReviewModel(fixture string) (configured model.Model, err error) {
+	switch r.config.Mode {
+	case "fake-model":
+		if fixture == "" {
+			return nil, errors.New("fixture is required when mode is fake-model")
+		}
+		return fakemodel.NewForFixture(fixture)
+	default:
+		return openai.New(
+			r.config.Model.Name,
+			openai.WithAPIKey(r.config.Model.APIKey),
+			openai.WithBaseURL(r.config.Model.BaseURL),
+			openai.WithVariant(openai.VariantDeepSeek),
+		), nil
+	}
+}
+
+// Dependencies contains the durable services and shared sanitizer required to
+// construct a task-scoped Agent and Runner after review input is prepared.
+type Dependencies struct {
+	Store           ReviewStore
+	SessionService  session.Service
+	ArtifactService artifact.Service
+	Sanitizer       *redact.Sanitizer
+}
+
+// Validate checks that all required dependencies are provided
+func (d Dependencies) Validate() error {
+	if d.Store == nil {
+		return errors.New("review store is required")
+	}
+	if d.SessionService == nil {
+		return errors.New("session service is required")
+	}
+	if d.ArtifactService == nil {
+		return errors.New("artifact service is required")
+	}
+	if d.Sanitizer == nil {
+		return errors.New("sanitizer is required")
+	}
+	return nil
 }
 
 // getSkillRepos return a skills repository
@@ -315,30 +362,4 @@ func getCodeexecutor(pwd, sandbox string) (executor codeexecutor.CodeExecutor, e
 	}
 
 	return executor, nil
-}
-
-// Dependencies contains the durable services and shared sanitizer required to
-// construct a task-scoped Agent and Runner after review input is prepared.
-type Dependencies struct {
-	Store           ReviewStore
-	SessionService  session.Service
-	ArtifactService artifact.Service
-	Sanitizer       *redact.Sanitizer
-}
-
-// Validate checks that all required dependencies are provided
-func (d Dependencies) Validate() error {
-	if d.Store == nil {
-		return errors.New("review store is required")
-	}
-	if d.SessionService == nil {
-		return errors.New("session service is required")
-	}
-	if d.ArtifactService == nil {
-		return errors.New("artifact service is required")
-	}
-	if d.Sanitizer == nil {
-		return errors.New("sanitizer is required")
-	}
-	return nil
 }
