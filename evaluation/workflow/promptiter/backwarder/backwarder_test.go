@@ -590,9 +590,11 @@ func TestBackwardRejectsInvalidResultOutput(t *testing.T) {
 
 		rsp, err := bw.Backward(context.Background(), newRestrictedInstructionRequest())
 
+		// LLM 幻觉出 allowed surface 集合外的 id：该 gradient 被 drop；
+		// 这是唯一一条 gradient，drop 后 result 全空 → 走 "backward result is empty" 兜底。
 		assert.Error(t, err)
 		assert.Nil(t, rsp)
-		assert.Contains(t, err.Error(), "allowed gradient surfaces")
+		assert.Contains(t, err.Error(), "backward result is empty")
 	})
 
 	t.Run("unknown predecessor step id", func(t *testing.T) {
@@ -974,6 +976,9 @@ func TestNormalizeRequestAndSanitizeBackwardResult(t *testing.T) {
 	result, err = sanitizeBackwardResult(request, nil)
 	assert.Nil(t, result)
 	assert.EqualError(t, err, "backward result is nil")
+	// LLM 幻觉出 request Predecessors 集合外的 step id：单条 drop；
+	// 若这是唯一的 propagation，sanitize 后 upstream/gradients 都空，
+	// sanitizeBackwardResult 走 "backward result is empty" 兜底 fatal。
 	result, err = sanitizeBackwardResult(request, &Result{
 		Upstream: []Propagation{
 			{
@@ -985,14 +990,32 @@ func TestNormalizeRequestAndSanitizeBackwardResult(t *testing.T) {
 		},
 	})
 	assert.Nil(t, result)
-	assert.EqualError(t, err, `sanitize propagation: sanitize propagation predecessor step id: propagation predecessor step id "missing" is not part of request predecessors`)
+	assert.EqualError(t, err, "backward result is empty")
+	// 同上：surface id 幻觉，单条 drop → 剩下全空 → empty result。
 	result, err = sanitizeBackwardResult(request, &Result{
 		Gradients: []promptiter.SurfaceGradient{
 			{SurfaceID: "surf_2", Gradient: "wrong target"},
 		},
 	})
 	assert.Nil(t, result)
-	assert.EqualError(t, err, `sanitize surface gradient: sanitize gradient surface id: gradient surface id "surf_2" is not part of allowed gradient surfaces`)
+	assert.EqualError(t, err, "backward result is empty")
+	// 幻觉与合法混合：只 drop 幻觉那条，合法的保留。
+	result, err = sanitizeBackwardResult(request, &Result{
+		Gradients: []promptiter.SurfaceGradient{
+			{SurfaceID: "surf_2", Gradient: "wrong target"}, // 幻觉，drop
+			{SurfaceID: "surf_1", Gradient: "keep me", Severity: promptiter.LossSeverityP1},
+		},
+		Upstream: []Propagation{
+			{PredecessorStepID: "missing", Gradients: []GradientPacket{{Gradient: "hallucinated"}}}, // drop
+			{PredecessorStepID: "pred_1", Gradients: []GradientPacket{{Gradient: "keep me"}}},
+		},
+	})
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Len(t, result.Gradients, 1)
+	assert.Equal(t, "surf_1", result.Gradients[0].SurfaceID)
+	assert.Len(t, result.Upstream, 1)
+	assert.Equal(t, "pred_1", result.Upstream[0].PredecessorStepID)
 	result, err = sanitizeBackwardResult(request, &Result{
 		Gradients: []promptiter.SurfaceGradient{
 			{SurfaceID: "surf_1", Gradient: "keep this", Severity: promptiter.LossSeverityP1},

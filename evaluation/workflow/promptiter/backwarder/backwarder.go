@@ -503,6 +503,14 @@ func sanitizeSurfaceGradient(
 			request.StepID,
 		)
 	}
+	// LLM 有时会幻觉出 request AllowedGradientSurfaceIDs 集合外的 surface id。
+	// 单条 drop（keep=false），不 kill 整轮 sanitize —— sanitizeBackwardResult
+	// 最终若 gradients + upstream 都空，会在末尾 "backward result is empty" 兜底 fatal。
+	if gradient.SurfaceID != "" {
+		if _, ok := surfaceIndex[gradient.SurfaceID]; !ok {
+			return promptiter.SurfaceGradient{}, false, nil
+		}
+	}
 	surfaceID, err := sanitizeGradientSurfaceID(surfaceIndex, gradient.SurfaceID)
 	if err != nil {
 		return promptiter.SurfaceGradient{}, false, fmt.Errorf("sanitize gradient surface id: %w", err)
@@ -522,6 +530,14 @@ func sanitizePropagation(
 	predecessorIndex map[string]Predecessor,
 	propagation Propagation,
 ) (Propagation, bool, error) {
+	// LLM 有时会幻觉出 request Predecessors 集合外的 step id。
+	// 单条 drop（keep=false），不 kill 整轮 sanitize —— sanitizeBackwardResult
+	// 最终若 gradients + upstream 都空，会在末尾 "backward result is empty" 兜底 fatal。
+	if propagation.PredecessorStepID != "" {
+		if _, ok := predecessorIndex[propagation.PredecessorStepID]; !ok {
+			return Propagation{}, false, nil
+		}
+	}
 	predecessorStepID, err := sanitizePropagationPredecessorStepID(predecessorIndex, propagation.PredecessorStepID)
 	if err != nil {
 		return Propagation{}, false, fmt.Errorf("sanitize propagation predecessor step id: %w", err)
