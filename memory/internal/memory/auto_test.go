@@ -44,6 +44,7 @@ type mockExtractor struct {
 	err             error
 	panicValue      any
 	captureExisting func([]*memory.Entry)
+	metadata        map[string]any
 }
 
 func (m *mockExtractor) Extract(
@@ -72,7 +73,7 @@ func (m *mockExtractor) SetPrompt(prompt string) {}
 func (m *mockExtractor) SetModel(model model.Model) {}
 
 func (m *mockExtractor) Metadata() map[string]any {
-	return map[string]any{}
+	return m.metadata
 }
 
 // mockOperator is a mock implementation of MemoryOperator.
@@ -2130,10 +2131,9 @@ func TestReconcileOps_SkipScoreWithNewTopics(t *testing.T) {
 	assert.Contains(t, out[0].Topics, "engineering")
 }
 
-// TestReconcileOps_KeepsAddOnModerateSimilarity verifies that reconcile
-// does not infer a destructive Update from topical relatedness. The
-// extractor remains responsible for explicitly requesting updates.
-func TestReconcileOps_KeepsAddOnModerateSimilarity(t *testing.T) {
+// TestReconcileOps_RewriteAsUpdateOnMidSignal locks the default policy to the
+// historical reconcile behavior for compatibility.
+func TestReconcileOps_RewriteAsUpdateOnMidSignal(t *testing.T) {
 	op := newMockOperator()
 	op.searchResults = []*memory.Entry{{
 		ID:      "mem-loc",
@@ -2153,8 +2153,10 @@ func TestReconcileOps_KeepsAddOnModerateSimilarity(t *testing.T) {
 	}}
 	out := worker.reconcileOps(context.Background(), reconcileUserKey(), ops)
 	require.Len(t, out, 1)
-	assert.Equal(t, extractor.OperationAdd, out[0].Type)
-	assert.Empty(t, out[0].MemoryID)
+	assert.Equal(t, extractor.OperationUpdate, out[0].Type)
+	assert.Equal(t, "mem-loc", out[0].MemoryID)
+	assert.Contains(t, out[0].Topics, "location")
+	assert.Contains(t, out[0].Topics, "oregon")
 	assert.Equal(t, "Lives in Portland Oregon", out[0].Memory)
 }
 
@@ -2185,13 +2187,10 @@ func TestReconcileOps_KeepsOpWhenNotSimilar(t *testing.T) {
 	assert.Empty(t, out[0].MemoryID)
 }
 
-func TestReconcileOps_KeepsDistinctFactsWithHighTopicScore(t *testing.T) {
+func TestHistoryPolicy_KeepsDistinctFactsWithHighTopicScore(t *testing.T) {
 	existing := "Attended a religious service at a cathedral on February 1."
 	incoming := "Interested in charities that provide food and shelter during Lent."
-	require.Less(t, tokenJaccard(incoming, existing), reconcileScoreJaccardFloor)
-
-	op := newMockOperator()
-	op.searchResults = []*memory.Entry{{
+	stored := []*memory.Entry{{
 		ID:      "mem-service",
 		AppName: "app", UserID: "u1",
 		Memory: &memory.Memory{
@@ -2200,14 +2199,17 @@ func TestReconcileOps_KeepsDistinctFactsWithHighTopicScore(t *testing.T) {
 		},
 		Score: 0.95,
 	}}
-	worker := NewAutoMemoryWorker(AutoMemoryConfig{}, op)
+	worker := NewAutoMemoryWorker(AutoMemoryConfig{}, newMockOperator())
+	worker.updatePolicy = extractor.UpdatePolicyHistoryPreserving
 	in := []*extractor.Operation{{
 		Type:   extractor.OperationAdd,
 		Memory: incoming,
 		Topics: []string{"religion", "community", "charity"},
 	}}
 
-	out := worker.reconcileOps(context.Background(), reconcileUserKey(), in)
+	out := worker.applyUpdatePolicy(
+		context.Background(), reconcileUserKey(), in, stored,
+	)
 	require.Len(t, out, 1)
 	assert.Equal(t, extractor.OperationAdd, out[0].Type)
 	assert.Empty(t, out[0].MemoryID)
@@ -2405,16 +2407,15 @@ func TestReconcileOps_PreservesExistingKind(t *testing.T) {
 // TestReconcileDecisionTier verifies that the tier helper respects
 // both signal bars and returns the highest tier any signal earns.
 func TestReconcileDecisionTier(t *testing.T) {
-	// Score requires a minimum amount of lexical corroboration.
-	assert.Equal(t, reconcileTierNone, reconcileDecisionTier(0.95, 0.0))
-	assert.Equal(t, reconcileTierSkip,
-		reconcileDecisionTier(0.95, reconcileScoreJaccardFloor))
+	// Clear skip via score.
+	assert.Equal(t, reconcileTierSkip, reconcileDecisionTier(0.95, 0.0))
 	// Clear skip via jaccard.
 	assert.Equal(t, reconcileTierSkip, reconcileDecisionTier(0.0, 0.80))
-	// Moderate score and overlap are insufficient for destructive merge.
-	assert.Equal(t, reconcileTierNone,
-		reconcileDecisionTier(0.70, reconcileScoreJaccardFloor))
-	assert.Equal(t, reconcileTierNone, reconcileDecisionTier(0.0, 0.50))
+	// Update band via score.
+	assert.Equal(t, reconcileTierUpdate, reconcileDecisionTier(0.70, 0.0))
+	// Update band via jaccard.
+	assert.Equal(t, reconcileTierUpdate, reconcileDecisionTier(0.0, 0.50))
+	// Below everything.
 	assert.Equal(t, reconcileTierNone, reconcileDecisionTier(0.30, 0.20))
 }
 

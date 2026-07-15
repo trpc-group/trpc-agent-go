@@ -146,6 +146,60 @@ func TestNewExtractor(t *testing.T) {
 	})
 }
 
+func TestExtractor_UpdatePolicyOptions(t *testing.T) {
+	m := &mockModel{name: "test-model"}
+
+	tests := []struct {
+		name string
+		in   UpdatePolicy
+		want UpdatePolicy
+	}{
+		{name: "default", want: UpdatePolicyReconcile},
+		{name: "reconcile", in: UpdatePolicyReconcile, want: UpdatePolicyReconcile},
+		{name: "history preserving", in: UpdatePolicyHistoryPreserving, want: UpdatePolicyHistoryPreserving},
+		{name: "add only", in: UpdatePolicyAddOnly, want: UpdatePolicyAddOnly},
+		{name: "unknown", in: UpdatePolicy("custom"), want: UpdatePolicyReconcile},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var e MemoryExtractor
+			if tt.name == "default" {
+				e = NewExtractor(m)
+			} else {
+				e = NewExtractor(m, WithUpdatePolicy(tt.in))
+			}
+			meta := e.Metadata()
+			assert.Equal(t, string(tt.want), meta[metadataKeyUpdatePolicy])
+		})
+	}
+
+	history := NewExtractor(m,
+		WithUpdatePolicy(UpdatePolicyHistoryPreserving)).(*memoryExtractor)
+	assert.Contains(t,
+		history.buildSystemPrompt(time.Now(), nil),
+		`<update_policy name="history-preserving">`,
+	)
+	addOnly := NewExtractor(m,
+		WithUpdatePolicy(UpdatePolicyAddOnly)).(*memoryExtractor)
+	assert.Contains(t,
+		addOnly.buildSystemPrompt(time.Now(), nil),
+		`<update_policy name="add-only">`,
+	)
+}
+
+func TestExtractor_AssistantResultExtractionOption(t *testing.T) {
+	e := NewExtractor(
+		&mockModel{name: "test-model"},
+		WithAssistantResultExtraction(true),
+	).(*memoryExtractor)
+	meta := e.Metadata()
+	assert.Equal(t, true, meta[metadataKeyAssistantResults])
+
+	prompt := e.buildSystemPrompt(time.Date(2024, 6, 10, 0, 0, 0, 0, time.UTC), nil)
+	assert.Contains(t, prompt, "<assistant_result_extraction>")
+	assert.Contains(t, prompt, "requested extraction, classification, or transformation")
+}
+
 func TestExtractor_Extract_NoModel(t *testing.T) {
 	e := NewExtractor(nil)
 	ops, err := e.Extract(context.Background(), []model.Message{
@@ -602,10 +656,8 @@ func TestExtractor_BuildSystemPrompt_WithExistingMemories(t *testing.T) {
 	assert.Contains(t, prompt, "memory_delete")
 	assert.Contains(t, prompt, "duplicate")
 	assert.Contains(t, prompt, "different-day episodes")
-	assert.Contains(t, prompt, "session-scoped events")
-	assert.Contains(t, prompt, "**ASSISTANT OUTPUTS**")
-	assert.Contains(t, prompt, "**CLAIM FIDELITY**")
-	assert.Contains(t, prompt, "on 2023-05-08")
+	assert.NotContains(t, prompt, "<assistant_result_extraction>")
+	assert.NotContains(t, prompt, "<update_policy")
 	assert.Contains(t, prompt, "</existing_memories>")
 }
 
@@ -797,6 +849,16 @@ func TestExtractor_AvailableActionsBlock(t *testing.T) {
 		ext.SetEnabledTools(nil)
 	})
 
+	t.Run("add-only policy exposes only add", func(t *testing.T) {
+		addOnly := NewExtractor(m,
+			WithUpdatePolicy(UpdatePolicyAddOnly)).(*memoryExtractor)
+		block := addOnly.availableActionsBlock()
+		assert.Contains(t, block, memory.AddToolName)
+		assert.NotContains(t, block, memory.UpdateToolName)
+		assert.NotContains(t, block, memory.DeleteToolName)
+		assert.NotContains(t, block, memory.ClearToolName)
+	})
+
 	t.Run("tool in order but not in descriptions", func(t *testing.T) {
 		// Temporarily add a name to toolActionOrder that has no description.
 		origOrder := toolActionOrder
@@ -848,6 +910,19 @@ func TestExtractor_Extract_FilteredTools(t *testing.T) {
 	for name := range m.lastRequest.Tools {
 		assert.Equal(t, memory.AddToolName, name)
 	}
+}
+
+func TestExtractor_Extract_AddOnlyTools(t *testing.T) {
+	m := newMockModelWithToolCalls(nil)
+	e := NewExtractor(m, WithUpdatePolicy(UpdatePolicyAddOnly))
+
+	_, err := e.Extract(context.Background(), []model.Message{
+		model.NewUserMessage("I love coffee."),
+	}, nil)
+	require.NoError(t, err)
+	require.NotNil(t, m.lastRequest)
+	assert.Len(t, m.lastRequest.Tools, 1)
+	assert.Contains(t, m.lastRequest.Tools, memory.AddToolName)
 }
 
 func TestExtractor_EnabledToolsConfigurer(t *testing.T) {

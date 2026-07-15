@@ -64,11 +64,10 @@ const (
 //     different filler words" cases that low BM25/vector scores miss
 //     on their own.
 //
-// Token overlap may independently establish a near-duplicate. Search
-// score requires a small amount of token overlap as corroboration,
-// because embeddings often rate distinct facts in the same broad topic
-// highly. In ambiguous cases, retaining an extra memory is safer than
-// destructively merging unrelated information.
+// A candidate is treated as a near-duplicate when either signal
+// crosses its threshold (logical OR). This keeps reconcile effective
+// on both backend families without forcing callers to distinguish
+// them or tune backend-specific parameters.
 const (
 	// reconcileTopK caps how many candidates SearchMemories is asked to
 	// return per reconcile probe. Keeping this small bounds the extra
@@ -80,16 +79,21 @@ const (
 	// rewritten into a topic-only update.
 	reconcileSkipScore = 0.90
 
+	// reconcileUpdateScore: below skip but above update means the
+	// stored memory is close enough to be refreshed with the new
+	// wording / topics via an update.
+	reconcileUpdateScore = 0.60
+
 	// reconcileJaccardHigh: token overlap strong enough that the two
 	// texts almost certainly describe the same fact. Treated the same
 	// as crossing reconcileSkipScore.
 	reconcileJaccardHigh = 0.70
 
-	// reconcileScoreJaccardFloor is the minimum lexical corroboration
-	// required before a search Score may trigger a skip or update. It
-	// prevents broad topical similarity alone from collapsing distinct
-	// memories, such as two different recommendation lists in one domain.
-	reconcileScoreJaccardFloor = 0.20
+	// reconcileJaccardMid: meaningful token overlap that warrants an
+	// update even when the Score signal is weak. Primarily helps
+	// keyword-backed stores where BM25 tends to land in the 0.4–0.6
+	// band on paraphrases.
+	reconcileJaccardMid = 0.40
 
 	// reconcileMinProbeScore is passed as SimilarityThreshold to
 	// SearchMemories so the backend can stop scanning once candidates
@@ -102,8 +106,9 @@ const (
 // shadowed by a weaker-signal candidate with slightly higher token
 // overlap but no threshold crossing.
 const (
-	reconcileTierNone = iota
-	reconcileTierSkip
+	reconcileTierNone   = 0
+	reconcileTierUpdate = 1
+	reconcileTierSkip   = 2
 )
 
 // reconcileDecisionTier classifies a candidate against the reconcile
@@ -112,9 +117,10 @@ const (
 // "skip" / "update" / "keep" mean.
 func reconcileDecisionTier(score, jaccard float64) int {
 	switch {
-	case jaccard >= reconcileJaccardHigh ||
-		(score >= reconcileSkipScore && jaccard >= reconcileScoreJaccardFloor):
+	case score >= reconcileSkipScore || jaccard >= reconcileJaccardHigh:
 		return reconcileTierSkip
+	case score >= reconcileUpdateScore || jaccard >= reconcileJaccardMid:
+		return reconcileTierUpdate
 	default:
 		return reconcileTierNone
 	}
@@ -190,12 +196,13 @@ type MemoryOperator interface {
 
 // AutoMemoryWorker manages async memory extraction workers.
 type AutoMemoryWorker struct {
-	config   AutoMemoryConfig
-	operator MemoryOperator
-	jobChans []chan *MemoryJob
-	wg       sync.WaitGroup
-	mu       sync.RWMutex
-	started  bool
+	config       AutoMemoryConfig
+	operator     MemoryOperator
+	updatePolicy extractor.UpdatePolicy
+	jobChans     []chan *MemoryJob
+	wg           sync.WaitGroup
+	mu           sync.RWMutex
+	started      bool
 }
 
 // NewAutoMemoryWorker creates a new auto memory worker.
@@ -207,8 +214,9 @@ func NewAutoMemoryWorker(
 ) *AutoMemoryWorker {
 	config.EnabledTools = maps.Clone(config.EnabledTools)
 	return &AutoMemoryWorker{
-		config:   config,
-		operator: operator,
+		config:       config,
+		operator:     operator,
+		updatePolicy: updatePolicyFromMetadata(config.Extractor),
 	}
 }
 
@@ -450,7 +458,7 @@ func (w *AutoMemoryWorker) createAutoMemory(
 	// separate rows. Any failure inside reconcile is non-fatal: the
 	// original ops slice is used and the worker keeps its pre-reconcile
 	// behavior.
-	ops = w.reconcileOps(ctx, userKey, ops)
+	ops = w.applyUpdatePolicy(ctx, userKey, ops, existing)
 
 	// Execute operations.
 	var operationErrs []error
@@ -477,6 +485,10 @@ func (w *AutoMemoryWorker) searchRelevantMemories(
 	messages []model.Message,
 ) ([]*memory.Entry, error) {
 	query := buildSearchQuery(messages)
+	if w.updatePolicy == extractor.UpdatePolicyHistoryPreserving ||
+		w.updatePolicy == extractor.UpdatePolicyAddOnly {
+		query = buildPolicySearchQuery(messages)
+	}
 	if query == "" {
 		return nil, nil
 	}
@@ -845,10 +857,8 @@ func (w *AutoMemoryWorker) reconcileOps(
 }
 
 // decideAddOp inspects the store for memories similar to op.Memory and
-// returns either the original op (keep as Add), a topic-merging Update
-// for a near-duplicate, or nil (drop the redundant Add). Reconcile does
-// not infer an Update from moderate similarity: related memories may
-// describe distinct events, plans, recommendations, or historical states.
+// returns either the original op (keep as Add), a rewritten op (Update
+// merging topics), or nil (drop the redundant Add).
 func (w *AutoMemoryWorker) decideAddOp(
 	ctx context.Context,
 	userKey memory.UserKey,
@@ -901,9 +911,9 @@ func (w *AutoMemoryWorker) decideAddOp(
 		return op
 	}
 
-	// Classify with token overlap either acting independently or
-	// corroborating a strong backend score. A score alone can represent
-	// topical relatedness rather than duplicate content.
+	// Classify with two independent signals in logical OR so both
+	// vector-backed and keyword-backed stores see reconcile kick in
+	// on the same kinds of near-duplicates.
 	switch bestTier {
 	case reconcileTierSkip:
 		if hasNewTopics(best.Memory.Topics, op.Topics) {
@@ -920,6 +930,14 @@ func (w *AutoMemoryWorker) decideAddOp(
 			userKey.AppName, userKey.UserID,
 			best.ID, best.Score, bestJaccard)
 		return nil
+
+	case reconcileTierUpdate:
+		log.DebugfContext(ctx,
+			"auto_memory: reconcile rewrite add as update for user "+
+				"%s/%s (best=%s score=%.3f jaccard=%.3f)",
+			userKey.AppName, userKey.UserID,
+			best.ID, best.Score, bestJaccard)
+		return toUpdateOp(op, best)
 
 	default:
 		return op

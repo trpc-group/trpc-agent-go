@@ -49,6 +49,22 @@ type MemoryExtractor interface {
 	Metadata() map[string]any
 }
 
+// UpdatePolicy controls how automatic extraction reconciles new information
+// with existing memories. Unknown values fall back to UpdatePolicyReconcile.
+type UpdatePolicy string
+
+const (
+	// UpdatePolicyReconcile preserves the existing automatic reconciliation
+	// behavior, including merging moderately similar memories.
+	UpdatePolicyReconcile UpdatePolicy = "reconcile"
+	// UpdatePolicyHistoryPreserving updates only strict enrichments and keeps
+	// changed states or uncertain matches as separate memories.
+	UpdatePolicyHistoryPreserving UpdatePolicy = "history-preserving"
+	// UpdatePolicyAddOnly permits automatic extraction to add memories or skip
+	// duplicates, but never to update, delete, or clear stored memories.
+	UpdatePolicyAddOnly UpdatePolicy = "add-only"
+)
+
 // Operation represents a memory operation to be executed.
 type Operation struct {
 	// Type is the type of operation (add, update, delete).

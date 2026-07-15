@@ -35,15 +35,19 @@ func referenceDate(ctx context.Context) time.Time {
 
 // Common metadata field keys.
 const (
-	metadataKeyModelName      = "model_name"
-	metadataKeyModelAvailable = "model_available"
+	metadataKeyModelName        = "model_name"
+	metadataKeyModelAvailable   = "model_available"
+	metadataKeyUpdatePolicy     = "update_policy"
+	metadataKeyAssistantResults = "assistant_result_extraction"
 )
 
 // memoryExtractor implements the MemoryExtractor interface.
 type memoryExtractor struct {
-	model    model.Model
-	prompt   string
-	checkers []Checker
+	model                   model.Model
+	prompt                  string
+	checkers                []Checker
+	updatePolicy            UpdatePolicy
+	extractAssistantResults bool
 
 	enabledTools map[string]struct{}
 
@@ -61,6 +65,23 @@ func WithPrompt(prompt string) Option {
 		if prompt != "" {
 			e.prompt = prompt
 		}
+	}
+}
+
+// WithUpdatePolicy sets the built-in policy used to reconcile extracted
+// operations with stored memories. Unknown values use UpdatePolicyReconcile.
+func WithUpdatePolicy(policy UpdatePolicy) Option {
+	return func(e *memoryExtractor) {
+		e.updatePolicy = normalizeUpdatePolicy(policy)
+	}
+}
+
+// WithAssistantResultExtraction controls whether concrete results produced by
+// the assistant are eligible for memory extraction. It is disabled by default
+// to preserve the existing extractor behavior.
+func WithAssistantResultExtraction(enabled bool) Option {
+	return func(e *memoryExtractor) {
+		e.extractAssistantResults = enabled
 	}
 }
 
@@ -98,8 +119,9 @@ func WithCheckersAny(checks ...Checker) Option {
 // NewExtractor creates a new memory extractor.
 func NewExtractor(m model.Model, opts ...Option) MemoryExtractor {
 	e := &memoryExtractor{
-		model:  m,
-		prompt: defaultPrompt,
+		model:        m,
+		prompt:       defaultPrompt,
+		updatePolicy: UpdatePolicyReconcile,
 	}
 	for _, opt := range opts {
 		opt(e)
@@ -121,10 +143,7 @@ func (e *memoryExtractor) Extract(
 	}
 
 	// Build request with tool declarations.
-	tools := backgroundTools
-	if len(e.enabledTools) > 0 {
-		tools = filterTools(backgroundTools, e.enabledTools)
-	}
+	tools := filterTools(backgroundTools, e.effectiveEnabledTools())
 	req := &model.Request{
 		Messages: e.buildMessages(ctx, messages, existing),
 		Tools:    tools,
@@ -230,8 +249,10 @@ func (e *memoryExtractor) Metadata() map[string]any {
 		modelAvailable = true
 	}
 	return map[string]any{
-		metadataKeyModelName:      modelName,
-		metadataKeyModelAvailable: modelAvailable,
+		metadataKeyModelName:        modelName,
+		metadataKeyModelAvailable:   modelAvailable,
+		metadataKeyUpdatePolicy:     string(e.updatePolicy),
+		metadataKeyAssistantResults: e.extractAssistantResults,
 	}
 }
 
@@ -239,9 +260,13 @@ func (e *memoryExtractor) Metadata() map[string]any {
 // when the final message role is neither user nor tool. Some
 // model providers (e.g. Anthropic/Claude) reject requests
 // whose last message has role=assistant.
-const extractionUserSuffix = "Extract and manage memories from both the user " +
-	"and assistant messages above. Preserve concrete answers produced by the " +
-	"assistant; ignore generic acknowledgments and filler."
+const extractionUserSuffix = "Extract and manage memories " +
+	"from the conversation above."
+
+const assistantExtractionUserSuffix = "Extract and manage memories from both " +
+	"the user and assistant messages above. Preserve concrete results that the " +
+	"user explicitly requested; ignore reasoning, generic teaching, " +
+	"acknowledgments, and filler."
 
 // buildMessages builds messages for auto memory extraction.
 func (e *memoryExtractor) buildMessages(
@@ -271,8 +296,12 @@ func (e *memoryExtractor) buildMessages(
 	if last := result[len(result)-1]; last.Role != model.RoleUser &&
 		last.Role != model.RoleTool &&
 		len(last.ToolCalls) == 0 {
+		suffix := extractionUserSuffix
+		if e.extractAssistantResults {
+			suffix = assistantExtractionUserSuffix
+		}
 		result = append(result,
-			model.NewUserMessage(extractionUserSuffix))
+			model.NewUserMessage(suffix))
 	}
 
 	return result
@@ -302,6 +331,12 @@ func (e *memoryExtractor) buildSystemPrompt(
 		renderedPrompt = e.prompt
 	}
 	sb.WriteString(renderedPrompt)
+	if e.extractAssistantResults {
+		sb.WriteString(assistantResultExtractionPrompt)
+	}
+	if policyPrompt := updatePolicyPrompt(e.updatePolicy); policyPrompt != "" {
+		sb.WriteString(policyPrompt)
+	}
 
 	// Append available actions.
 	sb.WriteString("\n<available_actions>\n")
@@ -352,11 +387,8 @@ var toolActionOrder = []string{
 func (e *memoryExtractor) availableActionsBlock() string {
 	var sb strings.Builder
 	for _, name := range toolActionOrder {
-		// Skip tools that are disabled.
-		if e.enabledTools != nil {
-			if _, ok := e.enabledTools[name]; !ok {
-				continue
-			}
+		if !e.actionEnabled(name) {
+			continue
 		}
 		desc, ok := toolActionDescriptions[name]
 		if !ok {
@@ -369,6 +401,86 @@ func (e *memoryExtractor) availableActionsBlock() string {
 	}
 	return sb.String()
 }
+
+func (e *memoryExtractor) effectiveEnabledTools() map[string]struct{} {
+	if e.updatePolicy != UpdatePolicyAddOnly {
+		return e.enabledTools
+	}
+	if e.enabledTools != nil {
+		if _, ok := e.enabledTools[memory.AddToolName]; !ok {
+			return map[string]struct{}{}
+		}
+	}
+	return map[string]struct{}{memory.AddToolName: {}}
+}
+
+func (e *memoryExtractor) actionEnabled(name string) bool {
+	if e.updatePolicy == UpdatePolicyAddOnly && name != memory.AddToolName {
+		return false
+	}
+	if e.enabledTools == nil {
+		return true
+	}
+	_, ok := e.enabledTools[name]
+	return ok
+}
+
+func normalizeUpdatePolicy(policy UpdatePolicy) UpdatePolicy {
+	switch policy {
+	case UpdatePolicyHistoryPreserving, UpdatePolicyAddOnly:
+		return policy
+	default:
+		return UpdatePolicyReconcile
+	}
+}
+
+func updatePolicyPrompt(policy UpdatePolicy) string {
+	switch normalizeUpdatePolicy(policy) {
+	case UpdatePolicyHistoryPreserving:
+		return historyPreservingPrompt
+	case UpdatePolicyAddOnly:
+		return addOnlyPrompt
+	default:
+		return ""
+	}
+}
+
+const assistantResultExtractionPrompt = `
+
+<assistant_result_extraction>
+- Store a concrete result the user explicitly requested and may refer to later,
+  such as a named answer, concise recommendation, final list or ordering, plan,
+  calculation, or requested extraction, classification, or transformation.
+- Keep a cohesive result in one memory when splitting it would lose set
+  membership, ordering, or item-to-detail relationships.
+- Preserve exact names, quantities, negation, modality, and relationships.
+- Do not store hidden reasoning, generic teaching, every explored alternative,
+  repeated explanation, acknowledgments, or filler.
+- Do not reject a requested transformation merely because its source material
+  is not personal. Before emitting no operation, check whether the assistant
+  produced a direct result the user could ask about later.
+</assistant_result_extraction>
+`
+
+const historyPreservingPrompt = `
+
+<update_policy name="history-preserving">
+- Update an existing memory only when the new text strictly enriches the same
+  fact or episode while retaining every material old detail.
+- Keep changed states, corrections, conflicting claims, and uncertain matches
+  as separate memories so history is not overwritten.
+- Skip exact duplicates. Explicit forget requests may still delete or clear.
+</update_policy>
+`
+
+const addOnlyPrompt = `
+
+<update_policy name="add-only">
+- You may only add genuinely new memories. Skip exact duplicates.
+- Never update, delete, or clear a stored memory. Changed or corrected states
+  must be added separately so earlier history remains intact.
+</update_policy>
+`
 
 // parseToolCall parses a tool call and returns a memory operation.
 func (e *memoryExtractor) parseToolCall(ctx context.Context, call model.ToolCall) *Operation {
@@ -551,16 +663,6 @@ Today's date is {current_date}. You MUST use this date to resolve ALL relative t
   When BOTH speakers mention doing the same activity together, create memories
   for EACH person's involvement (e.g., "Alice and Bob visited Rome" should
   produce memories for both Alice AND Bob visiting Rome).
-- **ASSISTANT OUTPUTS**: Preserve concrete information produced by the
-  assistant that the user may refer to later, including named answers,
-  recommendations, lists, plans, procedures, decisions, and computed results.
-  Keep identifying names, ordering, and item-to-detail relationships. Do not
-  store generic acknowledgments, filler, or descriptions of assistant behavior.
-- **CLAIM FIDELITY**: Preserve the source claim's action, modality, negation,
-  quantity, and entity relationships. Do not replace a performed action with
-  mere awareness, strengthen a possibility into a fact, or detach an example
-  from the action it exemplifies. Resolve pronouns and local references from
-  the conversation so each memory remains self-contained.
 - **EXHAUSTIVE DETAILS**: Extract EVERY specific detail mentioned, even if
   it seems minor or is mentioned only once in passing. This includes:
   - Specific book titles, movie titles, song names, band/artist names
@@ -626,11 +728,6 @@ For EPISODES (memory_kind="episode"):
   text. Resolve them to absolute dates using today's date ({current_date}).
   Example: if today is 2024-06-10 and user says "yesterday",
   that means 2024-06-09. Write "on 2024-06-09" in the memory text.
-- If a newly mentioned visit, outing, meeting, purchase, class, presentation,
-  exhibition, recommendation, or other concrete experience has no explicit
-  date in the message, use today's date ({current_date}) as the event_time
-  and include "on {current_date}" in the memory text. The conversation's
-  reference date is the observation date for such session-scoped events.
 - When the conversation explicitly mentions a date or year (e.g., "in 2022",
   "on May 7, 2023"), preserve that original date in BOTH the memory text
   and event_time field.
