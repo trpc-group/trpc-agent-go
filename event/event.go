@@ -369,6 +369,9 @@ func NewResponseEvent(invocationID, author string, response *model.Response,
 // DefaultEmitTimeoutErr is the default error returned when a wait notice times out.
 var DefaultEmitTimeoutErr = NewEmitEventTimeoutError("emit event timeout.")
 
+// ErrClosedChannelSend is returned when a panic occurs due to sending to a closed channel.
+var ErrClosedChannelSend = errors.New("panic sending to closed channel")
+
 // EmitEventTimeoutError represents an error that signals the emit event timeout.
 type EmitEventTimeoutError struct {
 	// Message contains the stop reason
@@ -453,7 +456,7 @@ func tryEmitReadyEvent(ctx context.Context, ch chan<- *Event, e *Event) (handled
 			redactedEvent := redactedEventForLogging(e)
 			log.WarnfContext(ctx, "tryEmitReadyEvent: recovered from panic sending to closed channel: %v, event: %+v", r, redactedEvent)
 			handled = true
-			err = fmt.Errorf("panic sending to closed channel: %v", r)
+			err = fmt.Errorf("%w: %v", ErrClosedChannelSend, r)
 		}
 	}()
 	select {
@@ -515,7 +518,7 @@ func EmitEventWithTimeout(ctx context.Context, ch chan<- *Event,
 		if r := recover(); r != nil {
 			redactedEvent := redactedEventForLogging(e)
 			log.WarnfContext(ctx, "EmitEventWithTimeout: recovered from panic sending to closed channel: %v, event: %+v", r, redactedEvent)
-			err = fmt.Errorf("panic sending to closed channel: %v", r)
+			err = fmt.Errorf("%w: %v", ErrClosedChannelSend, r)
 		}
 	}()
 

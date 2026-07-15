@@ -11,7 +11,7 @@ package graph
 
 import (
 	"context"
-	"strings"
+	"errors"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -239,7 +239,7 @@ func (e *eventEmitter) emitWithRecover(evt *event.Event) (err error) {
 	}()
 
 	err = event.EmitEventWithTimeout(e.ctx, e.eventChan, evt, e.timeout)
-	if err != nil && strings.Contains(err.Error(), "panic sending to closed channel") {
+	if err != nil && errors.Is(err, event.ErrClosedChannelSend) {
 		return nil
 	}
 	return err
