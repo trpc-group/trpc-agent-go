@@ -448,17 +448,17 @@ func redactedEventForLogging(e *Event) Event {
 }
 
 func tryEmitReadyEvent(ctx context.Context, ch chan<- *Event, e *Event) (handled bool, err error) {
-	eventStr := snapshotEvent(e)
 	defer func() {
 		if r := recover(); r != nil {
-			log.WarnfContext(ctx, "tryEmitReadyEvent: recovered from panic sending to closed channel: %v, event: %s", r, eventStr)
+			redactedEvent := redactedEventForLogging(e)
+			log.WarnfContext(ctx, "tryEmitReadyEvent: recovered from panic sending to closed channel: %v, event: %+v", r, redactedEvent)
 			handled = true
 			err = fmt.Errorf("panic sending to closed channel: %v", r)
 		}
 	}()
 	select {
 	case ch <- e:
-		log.TracefContext(ctx, "tryEmitReadyEvent: event sent, event: %s", eventStr)
+		log.TracefContext(ctx, "tryEmitReadyEvent: event sent, event: %s", snapshotEvent(e))
 		return true, nil
 	case <-ctx.Done():
 		err = ctx.Err()
