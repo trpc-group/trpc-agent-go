@@ -760,6 +760,7 @@ func (r *runner) Run(
 		invocation.CleanupNotice(execCtx)
 		return nil, err
 	}
+	executionTraceInput = resolveExecutionTraceInvocationInputSnapshot(invocation, executionTraceInput)
 
 	// Process the agent events and emit them to the output channel.
 	return r.processAgentEvents(
@@ -1765,6 +1766,31 @@ func (r *runner) applyEventPluginsNoSpan(
 	return updated
 }
 
+func (r *runner) applyAfterRunPlugins(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	completionEvent *event.Event,
+) {
+	if invocation == nil || invocation.Plugins == nil || completionEvent == nil {
+		return
+	}
+	hooks, ok := invocation.Plugins.(afterRunManager)
+	if !ok {
+		return
+	}
+	completionSnapshot := completionEvent.Clone()
+	if completionSnapshot != nil {
+		completionSnapshot.ID = completionEvent.ID
+	}
+	args := &plugin.AfterRunArgs{
+		Invocation:      invocation,
+		CompletionEvent: completionSnapshot,
+	}
+	if err := hooks.AfterRun(context.WithoutCancel(ctx), args); err != nil {
+		log.ErrorfContext(ctx, "plugin AfterRun failed: %v", err)
+	}
+}
+
 func copyEventInvocationFields(dst *event.Event, src *event.Event) {
 	if dst == nil || src == nil {
 		return
@@ -2657,8 +2683,8 @@ func (r *runner) captureCompletionFallback(
 	if loop == nil || agentEvent == nil {
 		return
 	}
-	graphCompletionEvent := isGraphCompletionSnapshotEvent(agentEvent)
-	if !graphCompletionEvent && len(agentEvent.StateDelta) > 0 {
+	graphEvent := isGraphCompletionSnapshotEvent(agentEvent)
+	if !graphEvent && len(agentEvent.StateDelta) > 0 {
 		loop.fallbackStateDelta = mergeCompletionFallbackStateDelta(
 			loop.fallbackStateDelta,
 			agentEvent.StateDelta,
@@ -2670,14 +2696,14 @@ func (r *runner) captureCompletionFallback(
 	hasAssistantPayload := eventHasAssistantMessageContent(agentEvent)
 	// Any later complete non-graph response invalidates the captured graph
 	// result. Only a new assistant payload switches output selection to fallback.
-	if loop.graphCompletionSeen && !graphCompletionEvent {
+	if loop.graphCompletionSeen && !graphEvent {
 		loop.finalStateDelta = nil
 		loop.finalChoices = nil
 		if hasAssistantPayload {
 			loop.graphCompletionSeen = false
 		}
 	}
-	if !graphCompletionEvent &&
+	if !graphEvent &&
 		len(agentEvent.Response.Choices) > 0 &&
 		hasAssistantPayload {
 		loop.fallbackChoices = cloneChoices(agentEvent.Response.Choices)
@@ -2891,6 +2917,7 @@ func (r *runner) emitRunnerCompletion(ctx context.Context, loop *eventLoopContex
 			traceSnapshotOnly,
 		)
 	}
+	r.applyAfterRunPlugins(ctx, loop.invocation, runnerCompletionEvent)
 
 	// Append runner completion event to session.
 	persistRunnerCompletionEvent := runnerCompletionEvent
@@ -3020,6 +3047,19 @@ func executionTraceInputSnapshot(message model.Message, ro agent.RunOptions) *tr
 		return nil
 	}
 	return &trace.Snapshot{Text: string(data)}
+}
+
+func resolveExecutionTraceInvocationInputSnapshot(
+	invocation *agent.Invocation,
+	current *trace.Snapshot,
+) *trace.Snapshot {
+	if current != nil {
+		return current
+	}
+	if invocation == nil || !invocation.RunOptions.ExecutionTraceEnabled {
+		return nil
+	}
+	return executionTraceMessageSnapshot(invocation.Message)
 }
 
 func executionTraceOutputSnapshot(
