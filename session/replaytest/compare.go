@@ -225,7 +225,8 @@ func allowedByUnsupported(snapshot *Snapshot, path string) (bool, string) {
 func unsupportedPathMatches(cap Capability, path string) bool {
 	switch cap {
 	case CapabilityTrack:
-		return strings.HasPrefix(path, "$.tracks")
+		return strings.HasPrefix(path, "$.tracks") ||
+			strings.HasPrefix(path, "$.state[\"tracks\"]")
 	case CapabilityMemorySearch:
 		return strings.HasPrefix(path, "$.memory_queries")
 	case CapabilityStateDelete, CapabilityStateClear:

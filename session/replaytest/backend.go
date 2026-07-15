@@ -315,10 +315,14 @@ func (r *serviceRun) applyOperation(op Operation) error {
 }
 
 func (r *serviceRun) applyEventOperation(op Operation) error {
-	if op.Kind == OpRetryEvent {
-		return appendEventRetry(r.ctx, r.sessions, r.sess, op.Event, r.seenEvents, &r.seenEventsMu, &r.eventSeq)
+	sess, err := r.sessionForBackend()
+	if err != nil {
+		return err
 	}
-	if err := appendEventOnce(r.ctx, r.sessions, r.sess, op.Event, r.seenEvents, &r.seenEventsMu, &r.eventSeq); err != nil {
+	if op.Kind == OpRetryEvent {
+		return appendEventRetry(r.ctx, r.sessions, sess, op.Event, r.seenEvents, &r.seenEventsMu, &r.eventSeq)
+	}
+	if err := appendEventOnce(r.ctx, r.sessions, sess, op.Event, r.seenEvents, &r.seenEventsMu, &r.eventSeq); err != nil {
 		return err
 	}
 	return nil
@@ -466,9 +470,13 @@ func (r *serviceRun) applySummaryOperation(op Operation) error {
 	if op.Summary == nil {
 		return nil
 	}
+	sess, err := r.sessionForBackend()
+	if err != nil {
+		return err
+	}
 	if err := r.sessions.CreateSessionSummary(
 		r.ctx,
-		r.sess,
+		sess,
 		op.Summary.FilterKey,
 		op.Summary.Force,
 	); err != nil {
@@ -478,7 +486,9 @@ func (r *serviceRun) applySummaryOperation(op Operation) error {
 	if err != nil {
 		return err
 	}
+	r.sessMu.Lock()
 	r.sess = fresh
+	r.sessMu.Unlock()
 	return nil
 }
 
@@ -494,7 +504,28 @@ func (r *serviceRun) applyTrackOperation(op Operation) error {
 	if err != nil {
 		return err
 	}
-	return r.tracks.AppendTrackEvent(r.ctx, r.sess, trackEvent)
+	sess, err := r.sessionForBackend()
+	if err != nil {
+		return err
+	}
+	return r.tracks.AppendTrackEvent(r.ctx, sess, trackEvent)
+}
+
+func (r *serviceRun) sessionForBackend() (*session.Session, error) {
+	r.sessMu.Lock()
+	hasSession := r.sess != nil
+	r.sessMu.Unlock()
+	if !hasSession {
+		return nil, fmt.Errorf("service backend %q has no active session", r.backend.Name())
+	}
+	sess, err := r.sessions.GetSession(r.ctx, r.caseDef.Key)
+	if err != nil {
+		return nil, err
+	}
+	if sess == nil {
+		return nil, fmt.Errorf("service backend %q returned nil session", r.backend.Name())
+	}
+	return sess.Clone(), nil
 }
 
 func (r *serviceRun) recordUnsupported(cap Capability) {
@@ -563,14 +594,18 @@ func (r *inMemoryRun) applyOperation(op Operation) error {
 }
 
 func (r *inMemoryRun) applyEventOperation(op Operation) error {
+	sess, err := r.sessionForBackend()
+	if err != nil {
+		return err
+	}
 	if op.Kind == OpRetryEvent {
-		if err := appendEventRetry(r.ctx, r.sessions, r.sess, op.Event, r.seenEvents, &r.seenEventsMu, &r.eventSeq); err != nil {
+		if err := appendEventRetry(r.ctx, r.sessions, sess, op.Event, r.seenEvents, &r.seenEventsMu, &r.eventSeq); err != nil {
 			return err
 		}
 		r.applyEventStateOracle(op.Event)
 		return nil
 	}
-	if err := appendEventOnce(r.ctx, r.sessions, r.sess, op.Event, r.seenEvents, &r.seenEventsMu, &r.eventSeq); err != nil {
+	if err := appendEventOnce(r.ctx, r.sessions, sess, op.Event, r.seenEvents, &r.seenEventsMu, &r.eventSeq); err != nil {
 		return err
 	}
 	r.applyEventStateOracle(op.Event)
@@ -711,9 +746,13 @@ func (r *inMemoryRun) applySummaryOperation(op Operation) error {
 	if op.Summary == nil {
 		return nil
 	}
+	sess, err := r.sessionForBackend()
+	if err != nil {
+		return err
+	}
 	if err := r.sessions.CreateSessionSummary(
 		r.ctx,
-		r.sess,
+		sess,
 		op.Summary.FilterKey,
 		op.Summary.Force,
 	); err != nil {
@@ -723,7 +762,9 @@ func (r *inMemoryRun) applySummaryOperation(op Operation) error {
 	if err != nil {
 		return err
 	}
+	r.sessMu.Lock()
 	r.sess = fresh
+	r.sessMu.Unlock()
 	return nil
 }
 
@@ -735,7 +776,28 @@ func (r *inMemoryRun) applyTrackOperation(op Operation) error {
 	if err != nil {
 		return err
 	}
-	return r.sessions.AppendTrackEvent(r.ctx, r.sess, trackEvent)
+	sess, err := r.sessionForBackend()
+	if err != nil {
+		return err
+	}
+	return r.sessions.AppendTrackEvent(r.ctx, sess, trackEvent)
+}
+
+func (r *inMemoryRun) sessionForBackend() (*session.Session, error) {
+	r.sessMu.Lock()
+	hasSession := r.sess != nil
+	r.sessMu.Unlock()
+	if !hasSession {
+		return nil, fmt.Errorf("in-memory replay backend has no active session")
+	}
+	sess, err := r.sessions.GetSession(r.ctx, r.caseDef.Key)
+	if err != nil {
+		return nil, err
+	}
+	if sess == nil {
+		return nil, fmt.Errorf("in-memory replay backend returned nil session")
+	}
+	return sess.Clone(), nil
 }
 
 func (r *inMemoryRun) recordUnsupported(cap Capability) {

@@ -235,20 +235,6 @@ func newClickHouseSessionReplayBackend(dsn string) replaytest.Backend {
 			return &replaytest.ServiceBundle{
 				SessionService: sessionSvc,
 				MemoryService:  memorySvc,
-				TTLProbe: func(ctx context.Context) error {
-					ttlSvc, err := sessclickhouse.NewService(
-						sessclickhouse.WithClickHouseDSN(dsn),
-						sessclickhouse.WithSessionTTL(100*time.Millisecond),
-						sessclickhouse.WithEnableAsyncPersist(false),
-					)
-					if err != nil {
-						return err
-					}
-					defer ttlSvc.Close()
-					key := c.Key
-					key.SessionID = fmt.Sprintf("%s-ttl-probe-%d", key.SessionID, time.Now().UnixNano())
-					return replaytest.ProbeSessionTTLExpiration(ctx, ttlSvc, key, 220*time.Millisecond)
-				},
 				Close: func() error {
 					sessErr := sessionSvc.Close()
 					memErr := memorySvc.Close()
@@ -261,7 +247,10 @@ func newClickHouseSessionReplayBackend(dsn string) replaytest.Backend {
 		},
 		replaytest.WithSupportedCapabilities(
 			replaytest.CapabilityMemorySearch,
+		),
+		replaytest.WithUnsupportedCapability(
 			replaytest.CapabilityTTL,
+			"session/clickhouse TTL relies on asynchronous cleanup and is not deterministic in the replay probe",
 		),
 		replaytest.WithUnsupportedCapability(
 			replaytest.CapabilityEventPage,

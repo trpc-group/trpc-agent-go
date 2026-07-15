@@ -367,7 +367,7 @@ func TestValidateReplaySnapshotUsesSummaryWriteTimeCutoff(t *testing.T) {
 	if got, want := base.Summaries[0].CutoffEventRef, "event[missing]"; got != want {
 		t.Fatalf("summary cutoff = %s, want %s", got, want)
 	}
-	if got, want := base.Summaries[0].UpdatedAt, "2099-01-01T00:00:03Z"; got != want {
+	if got, want := base.Summaries[0].UpdatedAt, "2030-01-01T00:00:03Z"; got != want {
 		t.Fatalf("summary updated_at = %s, want %s", got, want)
 	}
 

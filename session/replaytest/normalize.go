@@ -26,7 +26,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
-var replayEventBaseTime = time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC)
+var replayEventBaseTime = time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
 
 type normalizedEventRef struct {
 	Index int
