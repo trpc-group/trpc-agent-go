@@ -472,7 +472,13 @@ func TestPermissionPolicy_AuditRedactionDoesNotMutateSharedDeniedPaths(t *testin
 	require.Equal(t, []string{"secret", "/etc/passwd", "/very/long/sensitive/path"}, p.auditDeniedPaths)
 
 	const workers = 16
+	type workerResult struct {
+		decision tool.PermissionDecision
+		err      error
+	}
+
 	var wg sync.WaitGroup
+	results := make(chan workerResult, workers)
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
 		go func() {
@@ -481,10 +487,19 @@ func TestPermissionPolicy_AuditRedactionDoesNotMutateSharedDeniedPaths(t *testin
 				ToolName:  "workspace_exec",
 				Arguments: []byte(`{"command":"echo ok"}`),
 			})
-			require.NoError(t, err)
-			require.Equal(t, tool.PermissionActionAllow, decision.Action)
+			results <- workerResult{
+				decision: decision,
+				err:      err,
+			}
 		}()
 	}
 	wg.Wait()
+	close(results)
+
+	for result := range results {
+		require.NoError(t, result.err)
+		require.Equal(t, tool.PermissionActionAllow, result.decision.Action)
+	}
+
 	require.Equal(t, []string{"secret", "/etc/passwd", "/very/long/sensitive/path"}, p.auditDeniedPaths)
 }
