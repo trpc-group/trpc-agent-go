@@ -348,7 +348,7 @@ const markdownTemplate = `# Prompt 优化报告
 | case | 变化 | baseline | 候选 | Δ分数 | 候选侧根因 |
 |---|---|---|---|---|---|
 {{- range .Delta.Validation }}
-| {{ .EvalCaseID }} | {{ .Kind }} | {{ passFail .BaselinePass }} {{ printf "%.2f" .BaselineScore }} | {{ passFail .CandidatePass }} {{ printf "%.2f" .CandidateScore }} | {{ printf "%+.2f" .ScoreDelta }} | {{ rootCauses .CandidateAttribution }} |
+| {{ escapeTable .EvalCaseID }} | {{ escapeTable .Kind }} | {{ passFail .BaselinePass }} {{ printf "%.2f" .BaselineScore }} | {{ passFail .CandidatePass }} {{ printf "%.2f" .CandidateScore }} | {{ printf "%+.2f" .ScoreDelta }} | {{ escapeTable (rootCauses .CandidateAttribution) }} |
 {{- end }}
 {{ if .Delta.Train }}
 ## 逐 case delta（train）
@@ -356,7 +356,7 @@ const markdownTemplate = `# Prompt 优化报告
 | case | 变化 | baseline | 候选 | Δ分数 |
 |---|---|---|---|---|
 {{- range .Delta.Train }}
-| {{ .EvalCaseID }} | {{ .Kind }} | {{ passFail .BaselinePass }} {{ printf "%.2f" .BaselineScore }} | {{ passFail .CandidatePass }} {{ printf "%.2f" .CandidateScore }} | {{ printf "%+.2f" .ScoreDelta }} |
+| {{ escapeTable .EvalCaseID }} | {{ escapeTable .Kind }} | {{ passFail .BaselinePass }} {{ printf "%.2f" .BaselineScore }} | {{ passFail .CandidatePass }} {{ printf "%.2f" .CandidateScore }} | {{ printf "%+.2f" .ScoreDelta }} |
 {{- end }}
 {{ end }}
 ## 失败归因
@@ -396,7 +396,7 @@ baseline 失败 {{ len .Attribution.Baseline }} 例，候选失败 {{ len .Attri
 | 规则 | 实测 | 阈值 | 结果 | 说明 |
 |---|---|---|---|---|
 {{- range .Gate.Rules }}
-| {{ .Name }} | {{ .Observed }} | {{ .Threshold }} | {{ if .Passed }}通过{{ else }}**未通过**{{ end }} | {{ .Reason }} |
+| {{ escapeTable .Name }} | {{ escapeTable .Observed }} | {{ escapeTable .Threshold }} | {{ if .Passed }}通过{{ else }}**未通过**{{ end }} | {{ escapeTable .Reason }} |
 {{- end }}
 
 ## 轮次时间线
@@ -425,9 +425,7 @@ baseline 失败 {{ len .Attribution.Baseline }} 例，候选失败 {{ len .Attri
 {{- if and .Candidate .Candidate.Prompt }}
 ## 候选 prompt 全文
 
-` + "```" + `
-{{ .Candidate.Prompt }}
-` + "```" + `
+{{ codeBlock "" .Candidate.Prompt }}
 {{- end }}
 `
 
@@ -473,6 +471,37 @@ func RenderMarkdown(report *Report) (string, error) {
 				}
 			}
 			return present
+		},
+		// codeBlock renders a fenced code block whose fence is longer than any
+		// backtick run inside the code, preventing model output from closing the
+		// fence and injecting arbitrary Markdown into the audit report.
+		"codeBlock": func(language, code string) string {
+			maxRun := 0
+			currentRun := 0
+			for _, r := range code {
+				if r == '`' {
+					currentRun++
+					if currentRun > maxRun {
+						maxRun = currentRun
+					}
+				} else {
+					currentRun = 0
+				}
+			}
+			fenceLen := maxRun + 1
+			if fenceLen < 3 {
+				fenceLen = 3
+			}
+			fence := strings.Repeat("`", fenceLen)
+			return fence + language + "\n" + code + "\n" + fence
+		},
+		// escapeTable escapes pipe characters in values rendered inside Markdown
+		// table cells so that external eval data (case IDs, reasons, evidence)
+		// cannot distort the table structure.
+		"escapeTable": func(value any) string {
+			text := fmt.Sprint(value)
+			text = strings.ReplaceAll(text, "|", "\\|")
+			return strings.ReplaceAll(text, "\n", " ")
 		},
 	}).Parse(markdownTemplate)
 	if err != nil {
@@ -521,8 +550,8 @@ type auditWriter struct {
 	roundDurations map[int]time.Duration
 }
 
-func newAuditWriter(outputDir string, tracker *CostTracker) (*auditWriter, error) {
-	dir := filepath.Join(outputDir, "audit")
+func newAuditWriter(outputDir, runID string, tracker *CostTracker) (*auditWriter, error) {
+	dir := filepath.Join(outputDir, "audit", runID)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("create audit dir %q: %w", dir, err)
 	}

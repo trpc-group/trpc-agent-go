@@ -53,7 +53,7 @@ func runExamplePipeline(t *testing.T, config *Config, inputs *resolvedInputs, ou
 		OutputDir: outputDir,
 		Mode:      ModeFake,
 		Components: Components{
-			CandidateAgent: NewAgent(NewModel(""), inputs.baselinePrompt),
+			CandidateAgent: NewAgent(NewModel(""), inputs.baselinePrompt, nil),
 			Backwarder:     NewBackwarder(),
 			Aggregator:     NewAggregator(),
 			Optimizer:      NewOptimizer(),
@@ -177,24 +177,25 @@ func TestPipelineRunFakeMode(t *testing.T) {
 
 	// Audit trail: run meta, baseline artifacts, attribution, gate decision,
 	// and per-round event files.
+	auditDir := filepath.Join(outputDir, "audit", result.RunID)
 	for _, path := range []string{
 		filepath.Join(outputDir, "optimization_report.json"),
 		filepath.Join(outputDir, "optimization_report.md"),
-		filepath.Join(outputDir, "audit", "run_meta.json"),
-		filepath.Join(outputDir, "audit", "baseline_train.json"),
-		filepath.Join(outputDir, "audit", "baseline_train_attribution.json"),
-		filepath.Join(outputDir, "audit", "baseline_validation.json"),
-		filepath.Join(outputDir, "audit", "baseline_validation_attribution.json"),
-		filepath.Join(outputDir, "audit", "candidates.json"),
-		filepath.Join(outputDir, "audit", "gate_decision.json"),
-		filepath.Join(outputDir, "audit", "round_1", "round_patch_set.json"),
-		filepath.Join(outputDir, "audit", "round_1", "round_validation.json"),
-		filepath.Join(outputDir, "audit", "round_1", "cost.json"),
+		filepath.Join(auditDir, "run_meta.json"),
+		filepath.Join(auditDir, "baseline_train.json"),
+		filepath.Join(auditDir, "baseline_train_attribution.json"),
+		filepath.Join(auditDir, "baseline_validation.json"),
+		filepath.Join(auditDir, "baseline_validation_attribution.json"),
+		filepath.Join(auditDir, "candidates.json"),
+		filepath.Join(auditDir, "gate_decision.json"),
+		filepath.Join(auditDir, "round_1", "round_patch_set.json"),
+		filepath.Join(auditDir, "round_1", "round_validation.json"),
+		filepath.Join(auditDir, "round_1", "cost.json"),
 	} {
 		assert.FileExists(t, path)
 	}
 	var meta RunMeta
-	content, err := os.ReadFile(filepath.Join(outputDir, "audit", "run_meta.json"))
+	content, err := os.ReadFile(filepath.Join(auditDir, "run_meta.json"))
 	require.NoError(t, err)
 	require.NoError(t, json.Unmarshal(content, &meta))
 	assert.Equal(t, config.Seed, meta.Seed)
@@ -212,7 +213,7 @@ func TestTraceModeEvalSetRunsWithoutInference(t *testing.T) {
 	tracker := NewCostTracker()
 	candidateRunner := tracker.Wrap(
 		"candidate",
-		runner.NewRunner(dataAppName, NewAgent(NewModel(""), "任意指令，trace 模式下不应被调用")),
+		runner.NewRunner(dataAppName, NewAgent(NewModel(""), "任意指令，trace 模式下不应被调用", nil)),
 	)
 	t.Cleanup(func() { candidateRunner.Close() })
 	evalSetManager := evalsetlocal.New(evalset.WithBaseDir(testDataDir))

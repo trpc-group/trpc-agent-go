@@ -51,18 +51,20 @@ var orderData = map[string]orderRecord{
 	"ORD-1070": {Status: "已发货", Amount: "66.00", ETA: "2026-07-12"},
 }
 
-// NewAgent builds the candidate order assistant. The instruction is
-// the surface under optimization; the model decides fake or real sourcing.
-func NewAgent(candidateModel model.Model, instruction string) agent.Agent {
+// NewAgent builds the candidate order assistant. The instruction and the
+// tool descriptions are the surfaces under optimization; toolDescriptions
+// carries write-back overrides from a previously accepted profile (nil keeps
+// the in-code baseline descriptions). The model decides fake or real sourcing.
+func NewAgent(candidateModel model.Model, instruction string, toolDescriptions map[string]string) agent.Agent {
 	queryOrderTool := function.NewFunctionTool(
 		queryOrder,
 		function.WithName(ToolQueryOrder),
-		function.WithDescription(baselineQueryOrderDescription),
+		function.WithDescription(toolDescription(toolDescriptions, ToolQueryOrder, baselineQueryOrderDescription)),
 	)
 	queryLogisticsTool := function.NewFunctionTool(
 		queryLogistics,
 		function.WithName(ToolQueryLogistics),
-		function.WithDescription(baselineQueryLogisticsDescription),
+		function.WithDescription(toolDescription(toolDescriptions, ToolQueryLogistics, baselineQueryLogisticsDescription)),
 	)
 	maxTokens := 1024
 	temperature := 0.0
@@ -108,6 +110,18 @@ type logisticsQueryResult struct {
 	OrderID        string `json:"order_id"`
 	LastCheckpoint string `json:"last_checkpoint"`
 	Note           string `json:"note"`
+}
+
+// toolDescription returns the override from toolDescriptions when present,
+// otherwise the baseline default. This lets write-back persist and restore
+// non-instruction overrides across runs.
+func toolDescription(descriptions map[string]string, toolID, baseline string) string {
+	if descriptions != nil {
+		if override, ok := descriptions[toolID]; ok && override != "" {
+			return override
+		}
+	}
+	return baseline
 }
 
 func queryLogistics(_ context.Context, args orderQueryArgs) (logisticsQueryResult, error) {

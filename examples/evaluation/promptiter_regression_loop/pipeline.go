@@ -99,6 +99,14 @@ const (
 	StatusRejected = "rejected"
 )
 
+// Names of the deployable candidate artifacts under the output dir and the
+// write-back profile persisted next to the prompt source.
+const (
+	candidatePromptFileName  = "candidate_prompt.txt"
+	candidateProfileFileName = "candidate_profile.json"
+	baselineProfileFileName  = "baseline_profile.json"
+)
+
 // Result is the terminal outcome of one pipeline execution. A gate rejection
 // is a normal business result, not an execution error.
 type Result struct {
@@ -151,17 +159,18 @@ func runPipeline(ctx context.Context, opts Options) (*Result, error) {
 	}
 	logger := opts.Logger
 	inputs := opts.Inputs
-	if err := os.MkdirAll(opts.OutputDir, 0o755); err != nil {
-		return nil, fmt.Errorf("create output dir %q: %w", opts.OutputDir, err)
+	if err := prepareOutputDir(opts.OutputDir); err != nil {
+		return nil, err
 	}
 
 	tracker := opts.Tracker
-	audit, err := newAuditWriter(opts.OutputDir, tracker)
+	runID := newRunID()
+	audit, err := newAuditWriter(opts.OutputDir, runID, tracker)
 	if err != nil {
 		return nil, err
 	}
 	result := &Result{
-		RunID:          newRunID(),
+		RunID:          runID,
 		StartedAt:      time.Now(),
 		StageDurations: make(map[string]time.Duration),
 	}
@@ -346,6 +355,24 @@ func runPipeline(ctx context.Context, opts Options) (*Result, error) {
 	return result, nil
 }
 
+// prepareOutputDir creates the output directory and removes the deployable
+// candidate artifacts a previous run may have left behind. The paths are
+// stable across runs, so without this cleanup a rejecting rerun would leave
+// the previously accepted candidate_prompt.txt / candidate_profile.json next
+// to its rejection report, and consumers of the stable paths could deploy a
+// stale candidate despite the latest gate decision.
+func prepareOutputDir(outputDir string) error {
+	if err := os.MkdirAll(outputDir, 0o755); err != nil {
+		return fmt.Errorf("create output dir %q: %w", outputDir, err)
+	}
+	for _, name := range []string{candidatePromptFileName, candidateProfileFileName} {
+		if err := os.Remove(filepath.Join(outputDir, name)); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove stale candidate artifact %q: %w", name, err)
+		}
+	}
+	return nil
+}
+
 // buildAttributor loads metric definitions and expected invocations, then
 // constructs the attribution rule engine.
 func buildAttributor(
@@ -465,10 +492,13 @@ func buildCandidates(
 // writeCandidatePrompt persists the accepted candidate. The full profile
 // (every accepted surface override, e.g. tool descriptions) always lands in
 // candidate_profile.json; the instruction text additionally lands in
-// candidate_prompt.txt (and over the baseline source when write-back is on).
-// The engine normalizes away no-op overrides, so an accepted profile whose
-// patches only touched non-instruction surfaces legitimately carries no
-// instruction text: that keeps the baseline prompt in force.
+// candidate_prompt.txt. The engine normalizes away no-op overrides, so an
+// accepted profile whose patches only touched non-instruction surfaces
+// legitimately carries no instruction text: that keeps the baseline prompt in
+// force. Write-back persists the complete gate-approved profile as the next
+// baseline: the instruction text over the prompt source and the full profile
+// to baseline_profile.json beside it, which resolveInputs reloads on the next
+// run so non-instruction overrides are not silently lost.
 func writeCandidatePrompt(opts Options, inputs *resolvedInputs, result *Result, decision *GateDecision) error {
 	var profile *promptiter.Profile
 	for _, candidate := range result.Candidates {
@@ -480,7 +510,7 @@ func writeCandidatePrompt(opts Options, inputs *resolvedInputs, result *Result, 
 	if profile == nil {
 		return fmt.Errorf("selected round %d has no profile", decision.SelectedRound)
 	}
-	profilePath := filepath.Join(opts.OutputDir, "candidate_profile.json")
+	profilePath := filepath.Join(opts.OutputDir, candidateProfileFileName)
 	profileContent, err := json.MarshalIndent(profile, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal candidate profile: %w", err)
@@ -499,17 +529,21 @@ func writeCandidatePrompt(opts Options, inputs *resolvedInputs, result *Result, 
 			break
 		}
 	}
-	if promptText == "" {
-		return nil
-	}
-	result.CandidatePrompt = promptText
-	result.CandidatePromptPath = filepath.Join(opts.OutputDir, "candidate_prompt.txt")
-	if err := os.WriteFile(result.CandidatePromptPath, []byte(promptText+"\n"), 0o644); err != nil {
-		return fmt.Errorf("write candidate prompt: %w", err)
+	if promptText != "" {
+		result.CandidatePrompt = promptText
+		result.CandidatePromptPath = filepath.Join(opts.OutputDir, candidatePromptFileName)
+		if err := os.WriteFile(result.CandidatePromptPath, []byte(promptText+"\n"), 0o644); err != nil {
+			return fmt.Errorf("write candidate prompt: %w", err)
+		}
 	}
 	if opts.WriteBack {
-		if err := os.WriteFile(inputs.promptSourcePath, []byte(promptText+"\n"), 0o644); err != nil {
-			return fmt.Errorf("write back baseline prompt: %w", err)
+		if promptText != "" {
+			if err := os.WriteFile(inputs.promptSourcePath, []byte(promptText+"\n"), 0o644); err != nil {
+				return fmt.Errorf("write back baseline prompt: %w", err)
+			}
+		}
+		if err := os.WriteFile(inputs.baselineProfilePath, append(profileContent, '\n'), 0o644); err != nil {
+			return fmt.Errorf("write back baseline profile: %w", err)
 		}
 	}
 	return nil
@@ -596,6 +630,13 @@ type resolvedInputs struct {
 	promptSourcePath      string
 	baselinePrompt        string
 	targetSurfaceIDs      []string
+	// baselineProfilePath is where write-back persists the full accepted
+	// profile so the next run starts from the candidate that passed the gate.
+	baselineProfilePath string
+	// baselineToolDescriptions carries accepted tool-description overrides
+	// loaded from the baseline profile, keyed by tool name. Nil when no
+	// previous run wrote back a profile.
+	baselineToolDescriptions map[string]string
 }
 
 func validateOptions(opts *Options) error {
@@ -661,6 +702,11 @@ func resolveInputs(dataDir string, config *Config) (*resolvedInputs, error) {
 		return nil, fmt.Errorf("baseline prompt %q is empty", inputs.promptSourcePath)
 	}
 	inputs.baselinePrompt = strings.TrimSpace(string(prompt))
+	inputs.baselineProfilePath = filepath.Join(filepath.Dir(inputs.promptSourcePath), baselineProfileFileName)
+	inputs.baselineToolDescriptions, err = loadBaselineProfile(inputs.baselineProfilePath, config)
+	if err != nil {
+		return nil, err
+	}
 	for _, surface := range config.TargetSurfaces {
 		surfaceID, err := surface.ID()
 		if err != nil {
@@ -669,6 +715,49 @@ func resolveInputs(dataDir string, config *Config) (*resolvedInputs, error) {
 		inputs.targetSurfaceIDs = append(inputs.targetSurfaceIDs, surfaceID)
 	}
 	return inputs, nil
+}
+
+// loadBaselineProfile reads the write-back profile persisted by a previously
+// accepted run, so a rerun starts from the exact profile that passed the gate
+// instead of the in-code constants. The instruction override inside the
+// profile is skipped: the prompt source file stays the instruction source of
+// truth (write-back updates both from the same accepted profile). It returns
+// the tool-description overrides keyed by tool name; a missing file means no
+// previous write-back and yields nil.
+func loadBaselineProfile(path string, config *Config) (map[string]string, error) {
+	content, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read baseline profile %q: %w", path, err)
+	}
+	profile := &promptiter.Profile{}
+	if err := json.Unmarshal(content, profile); err != nil {
+		return nil, fmt.Errorf("decode baseline profile %q: %w", path, err)
+	}
+	instructionSurfaceID, err := instructionTargetSurfaceID(config)
+	if err != nil {
+		return nil, err
+	}
+	descriptions := make(map[string]string)
+	for _, override := range profile.Overrides {
+		switch {
+		case override.SurfaceID == instructionSurfaceID:
+			// The prompt source file carries the instruction text.
+		case len(override.Value.Tools) > 0:
+			for _, toolRef := range override.Value.Tools {
+				descriptions[toolRef.ID] = toolRef.Description
+			}
+		default:
+			return nil, fmt.Errorf(
+				"baseline profile %q override %q is neither the instruction surface nor a tool surface; "+
+					"this example's agent builder cannot restore it",
+				path, override.SurfaceID,
+			)
+		}
+	}
+	return descriptions, nil
 }
 
 // newRunID builds a time-based unique run identifier for the audit trail.
