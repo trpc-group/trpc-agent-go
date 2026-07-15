@@ -162,6 +162,18 @@ type EnabledToolsConfigurer interface {
 	SetEnabledTools(enabled map[string]struct{})
 }
 
+// stagedOperationExtractor is implemented by the built-in extractor when it
+// can distinguish ordinary user memories from assistant-produced results.
+// Keeping this capability internal avoids expanding MemoryExtractor for a
+// policy choice that custom extractors do not need to implement.
+type stagedOperationExtractor interface {
+	ExtractOperationStages(
+		ctx context.Context,
+		messages []model.Message,
+		existing []*memory.Entry,
+	) (primary, assistantResults []*extractor.Operation, err error)
+}
+
 // ConfigureExtractorEnabledTools passes enabled tool flags to the
 // extractor if it implements EnabledToolsConfigurer.
 func ConfigureExtractorEnabledTools(
@@ -445,8 +457,12 @@ func (w *AutoMemoryWorker) createAutoMemory(
 		return fmt.Errorf("auto_memory: prepare existing memories failed: %w", err)
 	}
 
-	// Extract memory operations.
-	ops, err := w.config.Extractor.Extract(ctx, messages, existing)
+	// Extract memory operations. The built-in extractor exposes assistant
+	// results as a separate stage so they can retain historical answers without
+	// changing reconciliation for ordinary user memories.
+	ops, assistantResults, err := extractOperationStages(
+		ctx, w.config.Extractor, messages, existing,
+	)
 	if err != nil {
 		log.WarnfContext(ctx, "auto_memory: extraction failed for user %s/%s: %v",
 			userKey.AppName, userKey.UserID, err)
@@ -459,6 +475,10 @@ func (w *AutoMemoryWorker) createAutoMemory(
 	// original ops slice is used and the worker keeps its pre-reconcile
 	// behavior.
 	ops = w.applyUpdatePolicy(ctx, userKey, ops, existing)
+	assistantResults = w.applyAssistantResultPolicy(
+		ctx, userKey, assistantResults, existing,
+	)
+	ops = append(ops, assistantResults...)
 
 	// Execute operations.
 	var operationErrs []error
@@ -470,6 +490,19 @@ func (w *AutoMemoryWorker) createAutoMemory(
 	}
 
 	return errors.Join(operationErrs...)
+}
+
+func extractOperationStages(
+	ctx context.Context,
+	ext extractor.MemoryExtractor,
+	messages []model.Message,
+	existing []*memory.Entry,
+) ([]*extractor.Operation, []*extractor.Operation, error) {
+	if staged, ok := ext.(stagedOperationExtractor); ok {
+		return staged.ExtractOperationStages(ctx, messages, existing)
+	}
+	ops, err := ext.Extract(ctx, messages, existing)
+	return ops, nil, err
 }
 
 // searchRelevantMemories builds a query from the conversation messages

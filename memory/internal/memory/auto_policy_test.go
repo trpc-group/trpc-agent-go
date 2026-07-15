@@ -51,6 +51,52 @@ func TestUpdatePolicyFromMetadata(t *testing.T) {
 	assert.Equal(t, extractor.UpdatePolicyReconcile, updatePolicyFromMetadata(nil))
 }
 
+func TestAssistantResultPolicyPreservesDistinctResult(t *testing.T) {
+	stored := []*memory.Entry{{
+		ID: "tips",
+		Memory: &memory.Memory{
+			Memory: "Tips: learn Ruby, Python, and PHP.",
+		},
+		Score: 0.8,
+	}}
+	incoming := []*extractor.Operation{{
+		Type:   extractor.OperationAdd,
+		Memory: "Resources: Codecademy, FreeCodeCamp, and The Odin Project.",
+	}}
+	op := newMockOperator()
+	op.searchResults = stored
+	worker := NewAutoMemoryWorker(AutoMemoryConfig{}, op)
+
+	ordinary := worker.applyUpdatePolicy(
+		context.Background(), reconcileUserKey(), incoming, stored,
+	)
+	require.Len(t, ordinary, 1)
+	assert.Equal(t, extractor.OperationUpdate, ordinary[0].Type)
+	assert.Equal(t, "tips", ordinary[0].MemoryID)
+
+	assistantResult := worker.applyAssistantResultPolicy(
+		context.Background(), reconcileUserKey(), incoming, stored,
+	)
+	require.Len(t, assistantResult, 1)
+	assert.Equal(t, extractor.OperationAdd, assistantResult[0].Type)
+	assert.Empty(t, assistantResult[0].MemoryID)
+
+	assert.Nil(t, worker.applyAssistantResultPolicy(
+		context.Background(), reconcileUserKey(), nil, stored,
+	))
+	worker.updatePolicy = extractor.UpdatePolicyAddOnly
+	assistantResult = worker.applyAssistantResultPolicy(
+		context.Background(), reconcileUserKey(), []*extractor.Operation{{
+			Type:     extractor.OperationUpdate,
+			MemoryID: "tips",
+			Memory:   "Updated recommendation.",
+		}}, stored,
+	)
+	require.Len(t, assistantResult, 1)
+	assert.Equal(t, extractor.OperationAdd, assistantResult[0].Type)
+	assert.Empty(t, assistantResult[0].MemoryID)
+}
+
 func TestHistoryPreservingPolicy_StrictEnrichmentUpdates(t *testing.T) {
 	oldTime := time.Date(2025, 12, 1, 0, 0, 0, 0, time.UTC)
 	newTime := time.Date(2025, 12, 1, 16, 0, 0, 0, time.UTC)
@@ -135,6 +181,85 @@ func TestHistoryPreservingPolicy_ExactDuplicateIsNoOp(t *testing.T) {
 		existing,
 	)
 	assert.Empty(t, out)
+}
+
+func TestHistoryPreservingPolicy_UpdateOperations(t *testing.T) {
+	existing := []*memory.Entry{{
+		ID: "trip",
+		Memory: &memory.Memory{
+			Memory: "Alice visited Paris in May.",
+			Kind:   memory.KindFact,
+		},
+	}}
+	worker := NewAutoMemoryWorker(AutoMemoryConfig{}, newMockOperator())
+	worker.updatePolicy = extractor.UpdatePolicyHistoryPreserving
+
+	duplicate := worker.applyUpdatePolicy(
+		context.Background(), reconcileUserKey(),
+		[]*extractor.Operation{{
+			Type:     extractor.OperationUpdate,
+			MemoryID: "trip",
+			Memory:   "Alice visited Paris in May.",
+		}}, existing,
+	)
+	assert.Empty(t, duplicate)
+
+	enrichment := worker.applyUpdatePolicy(
+		context.Background(), reconcileUserKey(),
+		[]*extractor.Operation{{
+			Type:     extractor.OperationUpdate,
+			MemoryID: "trip",
+			Memory:   "Alice visited Paris in May 2025.",
+		}}, existing,
+	)
+	require.Len(t, enrichment, 1)
+	assert.Equal(t, extractor.OperationUpdate, enrichment[0].Type)
+	assert.Equal(t, "trip", enrichment[0].MemoryID)
+}
+
+func TestHistoryCandidateLess(t *testing.T) {
+	entry := func(score float64) *memory.Entry {
+		return &memory.Entry{Score: score}
+	}
+	assert.True(t, historyCandidateLess(
+		&historyCandidate{}, &historyCandidate{duplicate: true},
+	))
+	assert.True(t, historyCandidateLess(
+		&historyCandidate{oldCoverage: 0.8},
+		&historyCandidate{oldCoverage: 0.9},
+	))
+	assert.True(t, historyCandidateLess(
+		&historyCandidate{oldCoverage: 0.9, newCoverage: 0.8},
+		&historyCandidate{oldCoverage: 0.9, newCoverage: 0.9},
+	))
+	assert.True(t, historyCandidateLess(
+		&historyCandidate{oldCoverage: 0.9, newCoverage: 0.9, entry: entry(0.7)},
+		&historyCandidate{oldCoverage: 0.9, newCoverage: 0.9, entry: entry(0.8)},
+	))
+}
+
+func TestMetadataIdentityCompatibleParticipantSubset(t *testing.T) {
+	entry := &memory.Entry{Memory: &memory.Memory{
+		Memory:       "Alice met Bob.",
+		Kind:         memory.KindFact,
+		Participants: []string{"Alice"},
+	}}
+	assert.True(t, metadataIdentityCompatible(
+		&extractor.Operation{
+			Memory:       "Alice met Bob in Paris.",
+			MemoryKind:   memory.KindFact,
+			Participants: []string{"Alice", "Bob"},
+		},
+		entry.Memory,
+	))
+	assert.False(t, metadataIdentityCompatible(
+		&extractor.Operation{
+			Memory:       "Bob met Carol.",
+			MemoryKind:   memory.KindFact,
+			Participants: []string{"Bob", "Carol"},
+		},
+		entry.Memory,
+	))
 }
 
 func TestAddOnlyPolicy_EnforcesAllowedOperationsAndDeduplicates(t *testing.T) {

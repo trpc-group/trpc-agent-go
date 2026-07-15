@@ -47,6 +47,25 @@ type mockExtractor struct {
 	metadata        map[string]any
 }
 
+type mockStagedExtractor struct {
+	*mockExtractor
+	assistantOps []*extractor.Operation
+}
+
+func (m *mockStagedExtractor) ExtractOperationStages(
+	ctx context.Context,
+	messages []model.Message,
+	existing []*memory.Entry,
+) ([]*extractor.Operation, []*extractor.Operation, error) {
+	if m.err != nil {
+		return nil, nil, m.err
+	}
+	if m.captureExisting != nil {
+		m.captureExisting(existing)
+	}
+	return m.ops, m.assistantOps, nil
+}
+
 func (m *mockExtractor) Extract(
 	ctx context.Context,
 	messages []model.Message,
@@ -218,6 +237,35 @@ func TestNewAutoMemoryWorker(t *testing.T) {
 	assert.Equal(t, ext, worker.config.Extractor)
 	assert.Equal(t, op, worker.operator)
 	assert.False(t, worker.started)
+}
+
+func TestExtractOperationStages(t *testing.T) {
+	primary := []*extractor.Operation{{
+		Type: extractor.OperationAdd, Memory: "User prefers Go.",
+	}}
+	assistantResults := []*extractor.Operation{{
+		Type: extractor.OperationAdd, Memory: "Recommended Python.",
+	}}
+	messages := []model.Message{model.NewUserMessage("What should I learn?")}
+
+	custom := &mockExtractor{ops: primary}
+	gotPrimary, gotResults, err := extractOperationStages(
+		context.Background(), custom, messages, nil,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, primary, gotPrimary)
+	assert.Nil(t, gotResults)
+
+	staged := &mockStagedExtractor{
+		mockExtractor: &mockExtractor{ops: primary},
+		assistantOps:  assistantResults,
+	}
+	gotPrimary, gotResults, err = extractOperationStages(
+		context.Background(), staged, messages, nil,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, primary, gotPrimary)
+	assert.Equal(t, assistantResults, gotResults)
 }
 
 func TestAutoMemoryWorker_StartStop(t *testing.T) {

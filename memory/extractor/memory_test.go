@@ -278,6 +278,48 @@ func TestExtractor_AssistantResultExtractionSecondPass(t *testing.T) {
 		m.requests[1].Messages[len(m.requests[1].Messages)-1].Role)
 }
 
+func TestExtractor_AssistantResultExtractionStages(t *testing.T) {
+	primaryArgs, err := json.Marshal(map[string]any{
+		"memory": "Wants to learn backend development.",
+	})
+	require.NoError(t, err)
+	resultArgs, err := json.Marshal(map[string]any{
+		"memory": "Recommended backend languages: Go and Python.",
+	})
+	require.NoError(t, err)
+	m := &sequenceModel{
+		name: "test-model",
+		responses: [][]*model.Response{
+			{{Choices: []model.Choice{{Message: model.Message{ToolCalls: []model.ToolCall{
+				makeToolCall(memory.AddToolName, primaryArgs),
+			}}}}}},
+			{{Choices: []model.Choice{{Message: model.Message{ToolCalls: []model.ToolCall{
+				makeToolCall(memory.AddToolName, resultArgs),
+			}}}}}},
+		},
+	}
+	e := NewExtractor(
+		m, WithAssistantResultExtraction(true),
+	).(*memoryExtractor)
+
+	primary, assistantResults, err := e.ExtractOperationStages(
+		context.Background(),
+		[]model.Message{
+			model.NewUserMessage("Which backend languages should I learn?"),
+			model.NewAssistantMessage("Start with Go or Python."),
+		},
+		nil,
+	)
+	require.NoError(t, err)
+	require.Len(t, primary, 1)
+	require.Len(t, assistantResults, 1)
+	assert.Equal(t, "Wants to learn backend development.", primary[0].Memory)
+	assert.Equal(t,
+		"Recommended backend languages: Go and Python.",
+		assistantResults[0].Memory,
+	)
+}
+
 func TestExtractor_AssistantResultExtractionFailure(t *testing.T) {
 	m := &sequenceModel{
 		name:      "test-model",

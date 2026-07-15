@@ -93,6 +93,21 @@ func (w *AutoMemoryWorker) applyUpdatePolicy(
 	}
 }
 
+func (w *AutoMemoryWorker) applyAssistantResultPolicy(
+	ctx context.Context,
+	userKey memory.UserKey,
+	ops []*extractor.Operation,
+	existing []*memory.Entry,
+) []*extractor.Operation {
+	if len(ops) == 0 {
+		return nil
+	}
+	if w.updatePolicy == extractor.UpdatePolicyAddOnly {
+		return w.applyAddOnlyPolicy(ctx, userKey, ops, existing)
+	}
+	return w.applyHistoryPreservingPolicy(ctx, userKey, ops, existing)
+}
+
 func (w *AutoMemoryWorker) applyHistoryPreservingPolicy(
 	ctx context.Context,
 	userKey memory.UserKey,

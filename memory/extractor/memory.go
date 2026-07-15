@@ -135,11 +135,29 @@ func (e *memoryExtractor) Extract(
 	messages []model.Message,
 	existing []*memory.Entry,
 ) ([]*Operation, error) {
+	primary, assistantResults, err := e.ExtractOperationStages(
+		ctx, messages, existing,
+	)
+	if err != nil {
+		return primary, err
+	}
+	return mergeExtractionOperations(primary, assistantResults), nil
+}
+
+// ExtractOperationStages keeps built-in assistant-result operations separate
+// so the auto-memory worker can reconcile them without weakening the policy
+// used for ordinary user memories. The concrete extractor is private; this is
+// an internal capability rather than an extension point for custom extractors.
+func (e *memoryExtractor) ExtractOperationStages(
+	ctx context.Context,
+	messages []model.Message,
+	existing []*memory.Entry,
+) ([]*Operation, []*Operation, error) {
 	if e.model == nil {
-		return nil, errors.New("no model configured for memory extraction")
+		return nil, nil, errors.New("no model configured for memory extraction")
 	}
 	if len(messages) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	primaryRequest := &model.Request{
@@ -148,7 +166,7 @@ func (e *memoryExtractor) Extract(
 	}
 	ctx, ops, err := e.generateOperations(ctx, primaryRequest)
 	if err != nil || !e.shouldExtractAssistantResult(messages) {
-		return ops, err
+		return ops, nil, err
 	}
 
 	resultRequest := &model.Request{
@@ -159,9 +177,11 @@ func (e *memoryExtractor) Extract(
 	}
 	_, resultOps, err := e.generateOperations(ctx, resultRequest)
 	if err != nil {
-		return nil, fmt.Errorf("assistant result extraction failed: %w", err)
+		return nil, nil, fmt.Errorf(
+			"assistant result extraction failed: %w", err,
+		)
 	}
-	return mergeExtractionOperations(ops, resultOps), nil
+	return ops, uniqueExtractionOperations(ops, resultOps), nil
 }
 
 func (e *memoryExtractor) generateOperations(
@@ -403,23 +423,39 @@ func (e *memoryExtractor) buildAssistantResultSystemPrompt(
 }
 
 func mergeExtractionOperations(primary, result []*Operation) []*Operation {
-	merged := append([]*Operation(nil), primary...)
-	for _, candidate := range result {
+	return append(
+		append([]*Operation(nil), primary...),
+		uniqueExtractionOperations(primary, result)...,
+	)
+}
+
+func uniqueExtractionOperations(
+	existing, candidates []*Operation,
+) []*Operation {
+	unique := make([]*Operation, 0, len(candidates))
+	for _, candidate := range candidates {
 		if candidate == nil {
 			continue
 		}
-		duplicate := false
-		for _, existing := range merged {
-			if sameExtractionOperation(existing, candidate) {
-				duplicate = true
-				break
-			}
-		}
+		duplicate := extractionOperationExists(existing, candidate) ||
+			extractionOperationExists(unique, candidate)
 		if !duplicate {
-			merged = append(merged, candidate)
+			unique = append(unique, candidate)
 		}
 	}
-	return merged
+	return unique
+}
+
+func extractionOperationExists(
+	operations []*Operation,
+	candidate *Operation,
+) bool {
+	for _, operation := range operations {
+		if sameExtractionOperation(operation, candidate) {
+			return true
+		}
+	}
+	return false
 }
 
 func sameExtractionOperation(left, right *Operation) bool {
