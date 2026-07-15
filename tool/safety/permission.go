@@ -156,6 +156,9 @@ func (p *permissionPolicy) CheckToolPermission(
 		}
 		if !report.Decision.Valid() {
 			failure := invalidScannerDecisionReport(scanReq, report)
+			if i > 0 && reportRank(final) > reportRank(failure) {
+				return p.finish(ctx, final)
+			}
 			return p.finish(ctx, failure)
 		}
 		if i == 0 || reportRank(report) > reportRank(final) {
@@ -180,7 +183,7 @@ func (p *permissionPolicy) finish(
 		report.Decision == DecisionAllow {
 		return tool.PermissionDecision{}, auditErr
 	}
-	return permissionDecisionForReport(report), nil
+	return permissionDecisionForReport(report, p.auditDeniedPaths), nil
 }
 
 func (p *permissionPolicy) writeAudit(
@@ -234,8 +237,11 @@ func invalidScannerDecisionReport(scanReq ScanRequest, report Report) Report {
 	}
 }
 
-func permissionDecisionForReport(report Report) tool.PermissionDecision {
-	reason := PermissionReason(report)
+func permissionDecisionForReport(
+	report Report,
+	deniedPaths []string,
+) tool.PermissionDecision {
+	reason := permissionReasonForDeniedPaths(report, deniedPaths)
 	switch report.Decision {
 	case DecisionAllow:
 		return tool.AllowPermission()
@@ -250,16 +256,21 @@ func permissionDecisionForReport(report Report) tool.PermissionDecision {
 
 // PermissionReason renders a short, redacted reason for non-allow decisions.
 func PermissionReason(report Report) string {
+	return permissionReasonForDeniedPaths(report, nil)
+}
+
+func permissionReasonForDeniedPaths(report Report, deniedPaths []string) string {
 	if report.RuleID == "" && report.Decision == DecisionAllow {
 		return ""
 	}
+	recommendation, _ := redactAuditRecommendation(report.Recommendation, deniedPaths)
 	return fmt.Sprintf(
 		"tool_safety: decision=%s; risk=%s; rule=%s; backend=%s; recommendation=%s",
 		report.Decision,
 		report.RiskLevel,
 		report.RuleID,
 		report.Backend,
-		singleLine(report.Recommendation),
+		recommendation,
 	)
 }
 

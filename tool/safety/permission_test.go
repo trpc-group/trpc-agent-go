@@ -217,7 +217,7 @@ func TestPermissionPolicy_UnsupportedScannerDecisionFailsClosed(t *testing.T) {
 	require.Contains(t, audit.String(), `"decision":"deny"`)
 }
 
-func TestPermissionPolicy_InvalidLaterScannerDecisionOverridesEarlierRankedReport(t *testing.T) {
+func TestPermissionPolicy_InvalidLaterScannerDecisionPreservesEarlierStricterReport(t *testing.T) {
 	var observed Report
 	var audit bytes.Buffer
 	var scans int
@@ -259,13 +259,15 @@ func TestPermissionPolicy_InvalidLaterScannerDecisionOverridesEarlierRankedRepor
 	require.Equal(t, 2, scans)
 	require.Equal(t, tool.PermissionActionDeny, decision.Action)
 	require.Equal(t, DecisionDeny, observed.Decision)
-	require.Equal(t, "scanner.invalid_decision", observed.RuleID)
-	require.Equal(t, RiskHigh, observed.RiskLevel)
+	require.Equal(t, "first.critical_deny", observed.RuleID)
+	require.Equal(t, RiskCritical, observed.RiskLevel)
 	require.True(t, observed.Blocked)
-	require.Contains(t, observed.Evidence, `scanner returned invalid decision ""`)
-	require.Contains(t, audit.String(), `"rule_id":"scanner.invalid_decision"`)
+	require.Contains(t, decision.Reason, "rule=first.critical_deny")
+	require.Contains(t, decision.Reason, "recommendation=block the first code block")
+	require.Contains(t, audit.String(), `"rule_id":"first.critical_deny"`)
 	require.Contains(t, audit.String(), `"decision":"deny"`)
-	require.NotContains(t, audit.String(), `"rule_id":"first.critical_deny"`)
+	require.NotContains(t, audit.String(), `"rule_id":"scanner.invalid_decision"`)
+	require.NotContains(t, decision.Reason, "scanner.invalid_decision")
 }
 
 func TestPermissionPolicy_UsesBackendResolverAndNilFallbacks(t *testing.T) {
@@ -310,11 +312,11 @@ func TestPermissionPolicy_UsesBackendResolverAndNilFallbacks(t *testing.T) {
 }
 
 func TestPermissionHelpers(t *testing.T) {
-	require.Equal(t, tool.PermissionActionAllow, permissionDecisionForReport(Report{Decision: DecisionAllow}).Action)
-	require.Equal(t, tool.PermissionActionDeny, permissionDecisionForReport(Report{Decision: DecisionDeny}).Action)
-	require.Equal(t, tool.PermissionActionAsk, permissionDecisionForReport(Report{Decision: DecisionNeedsHumanReview}).Action)
-	require.Equal(t, tool.PermissionActionDeny, permissionDecisionForReport(Report{}).Action)
-	require.Equal(t, tool.PermissionActionDeny, permissionDecisionForReport(Report{Decision: Decision("unexpected")}).Action)
+	require.Equal(t, tool.PermissionActionAllow, permissionDecisionForReport(Report{Decision: DecisionAllow}, nil).Action)
+	require.Equal(t, tool.PermissionActionDeny, permissionDecisionForReport(Report{Decision: DecisionDeny}, nil).Action)
+	require.Equal(t, tool.PermissionActionAsk, permissionDecisionForReport(Report{Decision: DecisionNeedsHumanReview}, nil).Action)
+	require.Equal(t, tool.PermissionActionDeny, permissionDecisionForReport(Report{}, nil).Action)
+	require.Equal(t, tool.PermissionActionDeny, permissionDecisionForReport(Report{Decision: Decision("unexpected")}, nil).Action)
 	require.Equal(t, string(tool.PermissionActionDeny), permissionAction(DecisionDeny))
 	require.Equal(t, string(tool.PermissionActionAsk), permissionAction(DecisionNeedsHumanReview))
 	require.Equal(t, string(tool.PermissionActionAllow), permissionAction(DecisionAllow))
@@ -327,6 +329,19 @@ func TestPermissionHelpers(t *testing.T) {
 		Backend:        BackendHost,
 		Recommendation: "token=abc123\nretry",
 	}))
+	report := Report{
+		Decision:       DecisionAsk,
+		RiskLevel:      RiskHigh,
+		RuleID:         "x",
+		Backend:        BackendHost,
+		Recommendation: "review /etc/passwd and token=abc123",
+	}
+	require.Contains(t, PermissionReason(report), "/etc/passwd")
+	require.NotContains(
+		t,
+		permissionDecisionForReport(report, []string{"/etc/passwd"}).Reason,
+		"/etc/passwd",
+	)
 }
 
 func TestJSONLAuditWriter_NilCancelledAndShortWrite(t *testing.T) {
@@ -421,6 +436,7 @@ func TestPermissionPolicy_AuditWriterRedactsScannerRecommendation(t *testing.T) 
 	require.Equal(t, tool.PermissionActionAsk, decision.Action)
 	require.NotContains(t, audit.String(), "hunter2")
 	require.NotContains(t, audit.String(), sensitivePath)
+	require.NotContains(t, decision.Reason, sensitivePath)
 	require.Contains(t, audit.String(), `"recommendation":"remove \u003credacted\u003e from \u003credacted\u003e before retry"`)
 	require.Contains(t, audit.String(), `"redacted":true`)
 }
