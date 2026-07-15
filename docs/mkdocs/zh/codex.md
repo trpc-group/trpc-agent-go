@@ -2,7 +2,7 @@
 
 ## 概述
 
-tRPC-Agent-Go 提供了 `Codex` 的 `Agent` 实现，通过执行本地 Codex CLI 的 `codex exec --json` 获取 JSONL 事件流，并映射为框架事件。
+tRPC-Agent-Go 提供了 `Codex` 的 `Agent` 实现，通过执行本地 Codex CLI 的 `codex exec --json` 获取 JSONL 事件流，并实时映射为框架事件。
 
 该实现的主要用途包括：
 
@@ -77,7 +77,7 @@ ag, err := codex.New(
 
 ## 事件映射
 
-该 Agent 只发出工具事件与最终响应事件，不发出中间 reasoning 事件。
+该 Agent 会实时发出工具事件与错误事件，并在 Codex turn 完成后发出最终响应事件；不发出中间 reasoning 事件。
 
 | Codex JSONL 输出 | 框架事件 |
 | --- | --- |
@@ -85,6 +85,7 @@ ag, err := codex.New(
 | `item.type == "command_execution"` | tool-call 与 tool-result response 事件 |
 | `item.type == "mcp_tool_call"` | tool-call 与 tool-result response 事件 |
 | `web_search`、`file_change`、`image_view`、`image_generation` 等内置工具 item | tool-call 与 tool-result response 事件 |
+| `type == "turn.failed"` 或 `type == "error"` | error response 事件 |
 | `item.type == "agent_message"` | final response 内容 |
 | `type == "turn.completed"` | final response usage |
 
@@ -128,4 +129,4 @@ ag, err := codex.New(
 | `WithExtraArgs(args...)` | 在可选 resume session id 前追加 `codex exec` flags。 |
 | `WithEnv(env...)` | 追加 CLI 环境变量。格式为 `KEY=VALUE`。 |
 | `WithWorkDir(dir)` | 设置 CLI 进程工作目录。 |
-| `WithRawOutputHook(hook)` | 观测 raw stdout/stderr。回调会在 CLI 结束后、解析前调用。 |
+| `WithRawOutputHook(hook)` | 观测 raw stdout/stderr。回调会在 CLI 结束后、流式事件发出后调用；如果返回错误，会追加错误事件并跳过最终 assistant response。 |

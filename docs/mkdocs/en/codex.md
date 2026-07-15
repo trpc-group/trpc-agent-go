@@ -2,7 +2,7 @@
 
 ## Overview
 
-tRPC-Agent-Go provides a `Codex` `Agent` implementation. It executes a local Codex CLI with `codex exec --json`, parses the JSONL event stream, and maps Codex activity into framework events.
+tRPC-Agent-Go provides a `Codex` `Agent` implementation. It executes a local Codex CLI with `codex exec --json`, parses the JSONL event stream, and maps Codex activity into framework events as the stream arrives.
 
 The primary use cases include:
 
@@ -77,7 +77,7 @@ If multiple external skill repositories are configured for that Codex CLI enviro
 
 ## Event mapping
 
-The agent emits tool events and one final response event. It does not emit intermediate reasoning events.
+The agent emits tool and error events as Codex JSONL records arrive, then emits the final response after the Codex turn completes. It does not emit intermediate reasoning events.
 
 | Codex JSONL output | Framework event |
 | --- | --- |
@@ -85,6 +85,7 @@ The agent emits tool events and one final response event. It does not emit inter
 | `item.type == "command_execution"` | tool-call and tool-result response events |
 | `item.type == "mcp_tool_call"` | tool-call and tool-result response events |
 | Built-in tool items such as `web_search`, `file_change`, `image_view`, and `image_generation` | tool-call and tool-result response events |
+| `type == "turn.failed"` or `type == "error"` | error response event |
 | `item.type == "agent_message"` | final response event content |
 | `type == "turn.completed"` | final response usage |
 
@@ -128,4 +129,4 @@ ag, err := codex.New(
 | `WithExtraArgs(args...)` | Appends `codex exec` flags before the optional resume session id. |
 | `WithEnv(env...)` | Adds CLI environment variables. Use `KEY=VALUE`. |
 | `WithWorkDir(dir)` | Sets the CLI process working directory. |
-| `WithRawOutputHook(hook)` | Observes raw stdout and stderr. The hook runs after the CLI finishes and before parsing. |
+| `WithRawOutputHook(hook)` | Observes raw stdout and stderr. The hook runs after the CLI finishes and after streamed transcript events are emitted; returning an error appends an error event and skips the final assistant response. |

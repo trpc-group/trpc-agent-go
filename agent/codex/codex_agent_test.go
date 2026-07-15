@@ -10,6 +10,7 @@
 package codex
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -17,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -27,21 +29,33 @@ import (
 
 // scriptedRunner is a deterministic commandRunner used for unit tests.
 type scriptedRunner struct {
-	mu    sync.Mutex
-	calls []command
-	run   func(command) ([]byte, []byte, error)
+	mu     sync.Mutex
+	calls  []command
+	run    func(command) ([]byte, []byte, error)
+	stream func(command, commandOutputHandler) commandResult
 }
 
 // Run implements commandRunner.
-func (r *scriptedRunner) Run(ctx context.Context, cmd command) ([]byte, []byte, error) {
+func (r *scriptedRunner) Run(ctx context.Context, cmd command, onStdoutLine commandOutputHandler) commandResult {
 	r.mu.Lock()
 	r.calls = append(r.calls, cmd)
 	run := r.run
+	stream := r.stream
 	r.mu.Unlock()
-	if run == nil {
-		return nil, nil, nil
+	if stream != nil {
+		return stream(cmd, onStdoutLine)
 	}
-	return run(cmd)
+	if run == nil {
+		return commandResult{}
+	}
+	stdout, stderr, runErr := run(cmd)
+	outputErr := emitScriptedStdout(stdout, onStdoutLine)
+	return commandResult{
+		stdout:    stdout,
+		stderr:    stderr,
+		runErr:    runErr,
+		outputErr: outputErr,
+	}
 }
 
 // Calls returns a snapshot of captured command invocations.
@@ -60,6 +74,25 @@ func drainEvents(ch <-chan *event.Event) []*event.Event {
 		events = append(events, e)
 	}
 	return events
+}
+
+// emitScriptedStdout forwards captured stdout to the command output handler.
+func emitScriptedStdout(stdout []byte, onStdoutLine commandOutputHandler) error {
+	if onStdoutLine == nil {
+		return nil
+	}
+	for len(stdout) > 0 {
+		idx := bytes.IndexByte(stdout, '\n')
+		if idx < 0 {
+			return onStdoutLine(stdout)
+		}
+		line := stdout[:idx+1]
+		stdout = stdout[idx+1:]
+		if err := onStdoutLine(line); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // newTestInvocation creates a test invocation with a user prompt.
@@ -118,6 +151,57 @@ func TestCodexAgent_Run_CreateParsesEventsAndStoresThread(t *testing.T) {
 	require.Equal(t, "codex", calls[0].bin)
 	require.Equal(t, []string{"exec", "--json"}, calls[0].args)
 	require.Equal(t, "Run printf.", string(calls[0].stdin))
+}
+
+func TestCodexAgent_Run_StreamsToolEventBeforeCommandReturns(t *testing.T) {
+	ctx := context.Background()
+	sess := session.NewSession("app", "user", "sess-stream-1")
+	inv := newTestInvocation("inv-stream-1", sess, "Run slow command.")
+	release := make(chan struct{})
+	returned := make(chan struct{})
+	firstLine := []byte(`{"type":"item.started","item":{"id":"item_0","type":"command_execution","command":"sleep 1","status":"in_progress"}}` + "\n")
+	rest := []byte(`{"type":"item.completed","item":{"id":"item_0","type":"command_execution","command":"sleep 1","aggregated_output":"done","exit_code":0,"status":"completed"}}` + "\n" +
+		`{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"finished"}}` + "\n" +
+		`{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":2}}` + "\n")
+	runner := &scriptedRunner{
+		stream: func(cmd command, onStdoutLine commandOutputHandler) commandResult {
+			stdout := append([]byte(nil), firstLine...)
+			if err := onStdoutLine(firstLine); err != nil {
+				close(returned)
+				return commandResult{stdout: stdout, outputErr: err}
+			}
+			<-release
+			stdout = append(stdout, rest...)
+			outputErr := emitScriptedStdout(rest, onStdoutLine)
+			close(returned)
+			return commandResult{stdout: stdout, outputErr: outputErr}
+		},
+	}
+	ag, err := New(withCommandRunner(runner))
+	require.NoError(t, err)
+	ch, err := ag.Run(ctx, inv)
+	require.NoError(t, err)
+	var first *event.Event
+	select {
+	case first = <-ch:
+	case <-time.After(time.Second):
+		require.FailNow(t, "timed out waiting for streamed tool event")
+	}
+	require.True(t, first.IsToolCallResponse())
+	require.Equal(t, "sleep 1", commandArg(t, first))
+	select {
+	case <-returned:
+		require.FailNow(t, "command returned before the test released it")
+	default:
+	}
+	close(release)
+	events := append([]*event.Event{first}, drainEvents(ch)...)
+	require.Len(t, events, 3)
+	require.True(t, events[1].IsToolResultResponse())
+	require.Equal(t, "done", events[1].Choices[0].Message.Content)
+	require.True(t, events[2].IsFinalResponse())
+	require.Equal(t, "finished", events[2].Choices[0].Message.Content)
+	require.Equal(t, 3, events[2].Usage.TotalTokens)
 }
 
 func TestCodexAgent_Run_ResumeFromSessionState(t *testing.T) {
@@ -250,7 +334,7 @@ func TestCodexAgent_Run_RawOutputHookReceivesCommandError(t *testing.T) {
 	runErr := errors.New("exit 1")
 	runner := &scriptedRunner{
 		run: func(cmd command) ([]byte, []byte, error) {
-			return []byte("stdout text"), []byte("stderr text"), runErr
+			return nil, []byte("stderr text"), runErr
 		},
 	}
 	var got RawOutputHookArgs
@@ -268,12 +352,12 @@ func TestCodexAgent_Run_RawOutputHookReceivesCommandError(t *testing.T) {
 	require.Len(t, events, 1)
 	require.ErrorIs(t, got.Error, runErr)
 	require.Equal(t, "--help", got.Prompt)
-	require.Equal(t, "stdout text", string(got.Stdout))
+	require.Empty(t, string(got.Stdout))
 	require.Equal(t, "stderr text", string(got.Stderr))
 	require.NotNil(t, events[0].Error)
 	require.Equal(t, model.ErrorTypeRunError, events[0].Error.Type)
-	require.Equal(t, "stdout text\nstderr text", events[0].Error.Message)
-	require.Equal(t, "stdout text\nstderr text", events[0].Choices[0].Message.Content)
+	require.Equal(t, "stderr text", events[0].Error.Message)
+	require.Equal(t, "stderr text", events[0].Choices[0].Message.Content)
 	calls := runner.Calls()
 	require.Len(t, calls, 1)
 	require.Equal(t, []string{"exec", "--json"}, calls[0].args)
@@ -300,15 +384,17 @@ func TestCodexAgent_Run_RawOutputHookError(t *testing.T) {
 	ch, err := ag.Run(ctx, inv)
 	require.NoError(t, err)
 	events := drainEvents(ch)
-	require.Len(t, events, 1)
-	require.True(t, events[0].IsFinalResponse())
-	require.Equal(t, model.ObjectTypeError, events[0].Object)
-	require.NotNil(t, events[0].Error)
-	require.Equal(t, model.ErrorTypeFlowError, events[0].Error.Type)
-	require.Contains(t, events[0].Error.Message, "raw output hook")
-	require.Contains(t, events[0].Error.Message, "hook failed")
-	require.Contains(t, events[0].Choices[0].Message.Content, "thread-hook-2")
-	require.Contains(t, events[0].Choices[0].Message.Content, "warn")
+	require.Len(t, events, 3)
+	require.True(t, events[0].IsToolCallResponse())
+	require.True(t, events[1].IsToolResultResponse())
+	require.True(t, events[2].IsFinalResponse())
+	require.Equal(t, model.ObjectTypeError, events[2].Object)
+	require.NotNil(t, events[2].Error)
+	require.Equal(t, model.ErrorTypeFlowError, events[2].Error.Type)
+	require.Contains(t, events[2].Error.Message, "raw output hook")
+	require.Contains(t, events[2].Error.Message, "hook failed")
+	require.Contains(t, events[2].Choices[0].Message.Content, "thread-hook-2")
+	require.Contains(t, events[2].Choices[0].Message.Content, "warn")
 }
 
 func TestCodexAgent_InfoAndRunnerArgs(t *testing.T) {
@@ -375,35 +461,35 @@ func TestCodexAgent_Run_ValidationErrors(t *testing.T) {
 func TestExecCommandRunner_Run(t *testing.T) {
 	tmp := t.TempDir()
 	runner := execCommandRunner{}
-	stdout, stderr, err := runner.Run(context.Background(), command{
+	result := runner.Run(context.Background(), command{
 		bin:  "sh",
 		args: []string{"-c", "printf \"$FOO\""},
 		env:  []string{"FOO=bar"},
-	})
-	require.NoError(t, err)
-	require.Equal(t, "bar", string(stdout))
-	require.Empty(t, string(stderr))
-	stdout, stderr, err = runner.Run(context.Background(), command{
+	}, nil)
+	require.NoError(t, result.err())
+	require.Equal(t, "bar", string(result.stdout))
+	require.Empty(t, string(result.stderr))
+	result = runner.Run(context.Background(), command{
 		bin:   "sh",
 		args:  []string{"-c", "cat"},
 		stdin: []byte("--help"),
-	})
-	require.NoError(t, err)
-	require.Equal(t, "--help", string(stdout))
-	require.Empty(t, string(stderr))
-	stdout, stderr, err = runner.Run(context.Background(), command{
+	}, nil)
+	require.NoError(t, result.err())
+	require.Equal(t, "--help", string(result.stdout))
+	require.Empty(t, string(result.stderr))
+	result = runner.Run(context.Background(), command{
 		bin:  "sh",
 		args: []string{"-c", "pwd"},
 		dir:  tmp,
-	})
-	require.NoError(t, err)
-	got := strings.TrimSpace(string(stdout))
+	}, nil)
+	require.NoError(t, result.err())
+	got := strings.TrimSpace(string(result.stdout))
 	gotResolved, err := filepath.EvalSymlinks(got)
 	require.NoError(t, err)
 	wantResolved, err := filepath.EvalSymlinks(tmp)
 	require.NoError(t, err)
 	require.Equal(t, wantResolved, gotResolved)
-	require.Empty(t, string(stderr))
+	require.Empty(t, string(result.stderr))
 }
 
 func TestParseTranscriptEvents_CompletedToolWithoutStarted(t *testing.T) {
@@ -476,6 +562,21 @@ func TestParseTranscriptEvents_SkillToolMapping(t *testing.T) {
 	require.Equal(t, "debug", directArgs.Skill)
 	require.Equal(t, "", directArgs.Command)
 	require.Equal(t, "ok", result.Events[1].Choices[0].Message.Content)
+}
+
+func TestParseTranscriptEvents_ErrorEventMapping(t *testing.T) {
+	transcript := `{"type":"turn.failed","error":{"message":"turn failed","code":"bad_turn"}}
+{"type":"error","message":"top-level error"}`
+	result, err := parseTranscriptEvents([]byte(transcript), "inv-parse-error-1", "codex")
+	require.NoError(t, err)
+	require.Len(t, result.Events, 2)
+	require.Equal(t, model.ObjectTypeError, result.Events[0].Object)
+	require.Equal(t, model.ErrorTypeRunError, result.Events[0].Error.Type)
+	require.Equal(t, "turn failed", result.Events[0].Error.Message)
+	require.NotNil(t, result.Events[0].Error.Code)
+	require.Equal(t, "bad_turn", *result.Events[0].Error.Code)
+	require.Equal(t, "top-level error", result.Events[1].Error.Message)
+	require.Equal(t, "top-level error", result.Error.Message)
 }
 
 func TestTranscriptHelpers_Fallbacks(t *testing.T) {

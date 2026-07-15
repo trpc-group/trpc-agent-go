@@ -25,6 +25,8 @@ const (
 	codexEventItemStarted    = "item.started"
 	codexEventItemCompleted  = "item.completed"
 	codexEventTurnCompleted  = "turn.completed"
+	codexEventTurnFailed     = "turn.failed"
+	codexEventError          = "error"
 	codexItemAgentMessage    = "agent_message"
 	codexItemCommand         = "command_execution"
 	codexItemMCPToolCall     = "mcp_tool_call"
@@ -38,10 +40,13 @@ const (
 
 // codexEvent represents one top-level JSONL event produced by Codex CLI.
 type codexEvent struct {
-	Type     string      `json:"type,omitempty"`
-	ThreadID string      `json:"thread_id,omitempty"`
-	Item     *codexItem  `json:"item,omitempty"`
-	Usage    *codexUsage `json:"usage,omitempty"`
+	Type     string          `json:"type,omitempty"`
+	ThreadID string          `json:"thread_id,omitempty"`
+	Item     *codexItem      `json:"item,omitempty"`
+	Usage    *codexUsage     `json:"usage,omitempty"`
+	Message  string          `json:"message,omitempty"`
+	Code     string          `json:"code,omitempty"`
+	Error    json.RawMessage `json:"error,omitempty"`
 }
 
 // codexItem carries one Codex turn item.
@@ -86,12 +91,88 @@ type codexUsage struct {
 	ReasoningOutputTokens int `json:"reasoning_output_tokens,omitempty"`
 }
 
+// codexError carries error details from Codex JSONL events.
+type codexError struct {
+	Type    string `json:"type,omitempty"`
+	Message string `json:"message,omitempty"`
+	Code    string `json:"code,omitempty"`
+}
+
 // transcriptResult is the framework event projection of one Codex JSONL transcript.
 type transcriptResult struct {
 	Events       []*event.Event
 	FinalMessage string
 	ThreadID     string
 	Usage        *model.Usage
+	Error        *model.ResponseError
+}
+
+// transcriptStream incrementally maps Codex JSONL records to framework events.
+type transcriptStream struct {
+	invocationID string
+	author       string
+	result       *transcriptResult
+	toolNames    map[string]string
+}
+
+// newTranscriptStream creates an incremental transcript mapper.
+func newTranscriptStream(invocationID, author string) *transcriptStream {
+	return &transcriptStream{
+		invocationID: invocationID,
+		author:       author,
+		result:       &transcriptResult{},
+		toolNames:    make(map[string]string),
+	}
+}
+
+// Result returns the accumulated transcript state.
+func (s *transcriptStream) Result() *transcriptResult {
+	if s == nil || s.result == nil {
+		return &transcriptResult{}
+	}
+	return s.result
+}
+
+// HandleLine processes one Codex JSONL stdout line.
+func (s *transcriptStream) HandleLine(line []byte) ([]*event.Event, error) {
+	trimmed := bytes.TrimSpace(line)
+	if len(trimmed) == 0 {
+		return nil, nil
+	}
+	var rec codexEvent
+	if err := json.Unmarshal(trimmed, &rec); err != nil {
+		return nil, err
+	}
+	return s.HandleRecord(rec), nil
+}
+
+// HandleRecord processes one decoded Codex event record.
+func (s *transcriptStream) HandleRecord(rec codexEvent) []*event.Event {
+	if s == nil {
+		return nil
+	}
+	switch rec.Type {
+	case codexEventThreadStarted:
+		s.result.ThreadID = strings.TrimSpace(rec.ThreadID)
+	case codexEventTurnCompleted:
+		s.result.Usage = rec.Usage.toModelUsage()
+	case codexEventItemStarted:
+		evt := toolCallEventFromItem(s.invocationID, s.author, rec.Item, s.toolNames)
+		if evt != nil {
+			s.result.Events = append(s.result.Events, evt)
+			return []*event.Event{evt}
+		}
+	case codexEventItemCompleted:
+		events := completedEventsFromItem(s.invocationID, s.author, rec.Item, s.toolNames, s.result)
+		s.result.Events = append(s.result.Events, events...)
+		return events
+	case codexEventTurnFailed, codexEventError:
+		evt := errorEventFromRecord(s.invocationID, s.author, rec)
+		s.result.Error = evt.Response.Error
+		s.result.Events = append(s.result.Events, evt)
+		return []*event.Event{evt}
+	}
+	return nil
 }
 
 // parseTranscriptEvents parses Codex CLI JSONL events into framework events.
@@ -100,25 +181,11 @@ func parseTranscriptEvents(stdout []byte, invocationID, author string) (*transcr
 	if err != nil {
 		return nil, err
 	}
-	result := &transcriptResult{}
-	toolNames := make(map[string]string)
+	stream := newTranscriptStream(invocationID, author)
 	for _, rec := range records {
-		switch rec.Type {
-		case codexEventThreadStarted:
-			result.ThreadID = strings.TrimSpace(rec.ThreadID)
-		case codexEventTurnCompleted:
-			result.Usage = rec.Usage.toModelUsage()
-		case codexEventItemStarted:
-			evt := toolCallEventFromItem(invocationID, author, rec.Item, toolNames)
-			if evt != nil {
-				result.Events = append(result.Events, evt)
-			}
-		case codexEventItemCompleted:
-			events := completedEventsFromItem(invocationID, author, rec.Item, toolNames, result)
-			result.Events = append(result.Events, events...)
-		}
+		stream.HandleRecord(rec)
 	}
-	return result, nil
+	return stream.Result(), nil
 }
 
 // parseTranscriptRecords decodes Codex JSONL output.
@@ -195,6 +262,78 @@ func completedEventsFromItem(invocationID, author string, item *codexItem, toolN
 	}
 	events = append(events, newToolResultEvent(invocationID, author, toolID, toolName, toolResult(item)))
 	return events
+}
+
+// errorEventFromRecord creates a framework error event from a Codex failure record.
+func errorEventFromRecord(invocationID, author string, rec codexEvent) *event.Event {
+	responseErr := responseErrorFromRecord(rec)
+	rsp := &model.Response{
+		Object: model.ObjectTypeError,
+		Done:   true,
+		Choices: []model.Choice{
+			{
+				Index: 0,
+				Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: responseErr.Message,
+				},
+			},
+		},
+		Error: responseErr,
+	}
+	return event.NewResponseEvent(invocationID, author, rsp)
+}
+
+// responseErrorFromRecord extracts error details from a Codex failure record.
+func responseErrorFromRecord(rec codexEvent) *model.ResponseError {
+	msg := strings.TrimSpace(rec.Message)
+	errType := strings.TrimSpace(rec.Type)
+	code := strings.TrimSpace(rec.Code)
+	if len(normalizeJSON(rec.Error)) > 0 {
+		payloadMsg, payloadType, payloadCode := decodeErrorPayload(rec.Error)
+		if strings.TrimSpace(payloadMsg) != "" {
+			msg = payloadMsg
+		}
+		if strings.TrimSpace(payloadType) != "" {
+			errType = payloadType
+		}
+		if strings.TrimSpace(payloadCode) != "" {
+			code = payloadCode
+		}
+	}
+	if msg == "" {
+		msg = strings.TrimSpace(rec.Type)
+	}
+	rspErr := &model.ResponseError{
+		Type:    model.ErrorTypeRunError,
+		Message: msg,
+	}
+	if errType != "" && errType != codexEventTurnFailed && errType != codexEventError {
+		rspErr.Type = errType
+	}
+	if code != "" {
+		rspErr.Code = &code
+	}
+	return rspErr
+}
+
+// decodeErrorPayload decodes a Codex error payload into message, type, and code.
+func decodeErrorPayload(raw json.RawMessage) (string, string, string) {
+	trimmed := normalizeJSON(raw)
+	if len(trimmed) == 0 {
+		return "", "", ""
+	}
+	if trimmed[0] == '"' {
+		var text string
+		if err := json.Unmarshal(trimmed, &text); err == nil {
+			return text, "", ""
+		}
+	}
+	var payload codexError
+	if err := json.Unmarshal(trimmed, &payload); err == nil {
+		return payload.Message, payload.Type, payload.Code
+	}
+	return string(trimmed), "", ""
 }
 
 // isToolItem reports whether a Codex item should be mapped as a framework tool event.
