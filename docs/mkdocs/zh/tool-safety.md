@@ -68,6 +68,11 @@ events, err := runner.Run(ctx, userID, sessionID, message,
 应用自定义的工具名可以通过
 `safety.WithToolBackend("custom_shell", safety.BackendWorkspaceExec)` 映射到对应 backend。
 
+`PermissionPolicy` 扫描的是模型可见的原始参数。对于 `hostexec`，
+`WithBaseDir` 这类工具本地配置只有内置工具自身知道；如果策略判断需要使用
+解析后的宿主机工作目录，而不是原始 `workdir` 参数，应同时启用
+`hostexec.WithSafetyScanner`。
+
 `deny` 会阻止执行，并向模型返回结构化的 denied 工具结果。`ask` 也会阻止执行，
 并返回 approval-required 工具结果；如果应用有审批 UI，应在 policy 内完成审批，
 并只在审批通过后返回 `allow`。

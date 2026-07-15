@@ -78,6 +78,11 @@ the PermissionPolicy constructor to load and validate the policy directly.
 Application-specific tool names can be mapped to a backend with
 `safety.WithToolBackend("custom_shell", safety.BackendWorkspaceExec)`.
 
+`PermissionPolicy` scans the raw model-visible arguments. For `hostexec`,
+tool-local options such as `WithBaseDir` are only available inside the built-in
+tool. Enable `hostexec.WithSafetyScanner` when policy decisions must use the
+resolved host working directory instead of the raw `workdir` argument.
+
 `deny` prevents execution and returns a structured denied tool result. `ask`
 prevents execution and returns an approval-required tool result; applications
 with an approval UI should perform approval in the policy and only return

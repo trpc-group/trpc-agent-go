@@ -69,6 +69,11 @@ The bridge parses model-visible tool calls before execution:
 - Custom tool names can be mapped with `WithToolBackend` when an application
   wraps these execution surfaces behind its own tool names.
 
+`PermissionPolicy` scans the raw model-visible arguments. For `hostexec`,
+tool-local options such as `WithBaseDir` are only available inside the built-in
+tool. Enable `hostexec.WithSafetyScanner` when policy decisions must use the
+resolved host working directory instead of the raw `workdir` argument.
+
 Unsupported tools are not blocked by the library defaults. Production
 deployments should set `unknown_tool_action: ask` or `deny`, and can also set
 `fail_closed_on_unsupported_backend` when every executable tool is expected to
