@@ -53,6 +53,11 @@ type Diff struct {
 // 匹配hunk头  获得开始删除和开始添加的行号
 var hunkHeaderRE = regexp.MustCompile(`^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@`)
 
+const (
+	maxDiffLines = 5000
+	maxDiffBytes = maxDiffLines * 512
+)
+
 // 解析行为
 // ParseUnifiedDiff parses unified diff content.
 func ParseUnifiedDiff(content string) (*Diff, error) {
@@ -164,6 +169,13 @@ func ParseUnifiedDiff(content string) (*Diff, error) {
 
 // LoadFromFile reads and parses a diff file. //解析入口
 func LoadFromFile(path string) (*Diff, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, fmt.Errorf("read diff file: %w", err)
+	}
+	if info.Size() > maxDiffBytes {
+		return nil, fmt.Errorf("diff file too large: %d > %d", info.Size(), maxDiffBytes)
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read diff file: %w", err)
@@ -174,9 +186,9 @@ func LoadFromFile(path string) (*Diff, error) {
 // LoadFromRepo loads git workspace changes from a repository path.
 // 从git仓库加载变更
 func LoadFromRepo(repoPath string) (*Diff, error) {
-	repoPath = filepath.Clean(repoPath)                                 // 清理路径
-	if _, err := os.Stat(filepath.Join(repoPath, ".git")); err != nil { // 检查是否是git仓库
-		return nil, fmt.Errorf("repo path is not a git repository: %w", err)
+	repoPath = filepath.Clean(repoPath)
+	if !isGitRepo(repoPath) {
+		return nil, fmt.Errorf("repo path is not a git repository")
 	}
 	var buf bytes.Buffer
 	for _, args := range [][]string{
@@ -234,6 +246,11 @@ func (d *Diff) ChangedFiles() []string {
 		if path == "" || path == "/dev/null" {
 			continue
 		}
+		if clean, err := SanitizeRepoRelativePath(path); err != nil {
+			continue
+		} else {
+			path = clean
+		}
 		if _, ok := seen[path]; ok {
 			continue
 		}
@@ -261,7 +278,7 @@ func (d *Diff) Summary() string {
 
 // InferGoPackage infers the Go import path for a file.
 func InferGoPackage(file string, repoPath string) string {
-	clean, err := sanitizeRepoRelativePath(file)
+	clean, err := SanitizeRepoRelativePath(file)
 	if err != nil {
 		return ""
 	}
@@ -280,9 +297,24 @@ func InferGoPackage(file string, repoPath string) string {
 	return filepath.ToSlash(dir)
 }
 
+// SanitizeRepoRelativePath 拒绝绝对路径与 ../ 逃逸。
+func SanitizeRepoRelativePath(file string) (string, error) {
+	return sanitizeRepoRelativePath(file)
+}
+
 func sanitizeRepoRelativePath(file string) (string, error) {
 	file = strings.TrimPrefix(file, "a/")
 	file = strings.TrimPrefix(file, "b/")
+	file = filepath.ToSlash(strings.TrimSpace(file))
+	if file == "" || file == "." {
+		return "", fmt.Errorf("empty path")
+	}
+	if filepath.IsAbs(filepath.FromSlash(file)) {
+		return "", fmt.Errorf("absolute path not allowed: %s", file)
+	}
+	if !filepath.IsLocal(file) {
+		return "", fmt.Errorf("path escapes repository: %s", file)
+	}
 	file = filepath.ToSlash(filepath.Clean(file))
 	if file == ".." || strings.HasPrefix(file, "../") || strings.Contains(file, "/../") {
 		return "", fmt.Errorf("path escapes repository: %s", file)
@@ -291,7 +323,7 @@ func sanitizeRepoRelativePath(file string) (string, error) {
 }
 
 func lookupGoPackage(repoPath, file string) (string, error) {
-	clean, err := sanitizeRepoRelativePath(file)
+	clean, err := SanitizeRepoRelativePath(file)
 	if err != nil {
 		return "", err
 	}
@@ -312,15 +344,28 @@ func lookupGoPackage(repoPath, file string) (string, error) {
 func normalizePath(raw string) string {
 	raw = strings.TrimSpace(raw)
 	if raw == "/dev/null" {
-		// 无修改   删除/增加文件 占位符/ 不处理
 		return raw
 	}
 	if strings.HasPrefix(raw, "a/") || strings.HasPrefix(raw, "b/") {
-		// 去除a/或b/
-		return raw[2:]
+		raw = raw[2:]
 	}
 	if strings.HasPrefix(raw, "+++ ") || strings.HasPrefix(raw, "--- ") {
-		return strings.TrimSpace(raw[4:])
+		raw = strings.TrimSpace(raw[4:])
 	}
-	return raw
+	if clean, err := sanitizeRepoRelativePath(raw); err != nil {
+		return ""
+	} else {
+		return clean
+	}
+}
+
+func isGitRepo(repoPath string) bool {
+	info, err := os.Lstat(filepath.Join(repoPath, ".git"))
+	if err != nil {
+		return false
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return false
+	}
+	return info.IsDir() || info.Mode().IsRegular()
 }

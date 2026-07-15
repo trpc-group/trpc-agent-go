@@ -14,8 +14,16 @@ import (
 	"fmt"
 	"strings"
 
+	"trpc.group/trpc-go/trpc-agent-go/examples/skills_code_review_agent/internal/diff"
 	"trpc.group/trpc-go/trpc-agent-go/examples/skills_code_review_agent/internal/findings"
 )
+
+var validSeverities = map[string]struct{}{
+	"critical": {},
+	"high":     {},
+	"medium":   {},
+	"low":      {},
+}
 
 // ParseFindings extracts structured findings from an LLM response.
 func ParseFindings(content string) ([]findings.Finding, error) {
@@ -35,12 +43,42 @@ func ParseFindings(content string) ([]findings.Finding, error) {
 	if err := json.Unmarshal([]byte(content[start:end+1]), &items); err != nil {
 		return nil, fmt.Errorf("decode llm findings: %w", err)
 	}
+	out := make([]findings.Finding, 0, len(items))
 	for i := range items {
-		if items[i].Source == "" {
-			items[i].Source = "llm"
+		if normalized, ok := normalizeFinding(items[i]); ok {
+			out = append(out, normalized)
 		}
 	}
-	return items, nil
+	return out, nil
+}
+
+func normalizeFinding(f findings.Finding) (findings.Finding, bool) {
+	if strings.TrimSpace(f.Title) == "" {
+		return f, false
+	}
+	if strings.TrimSpace(f.File) != "" {
+		clean, err := diff.SanitizeRepoRelativePath(f.File)
+		if err != nil {
+			return f, false
+		}
+		f.File = clean
+	}
+	if f.Line < 0 {
+		return f, false
+	}
+	if _, ok := validSeverities[f.Severity]; !ok {
+		f.Severity = "low"
+	}
+	if f.Confidence < 0 {
+		f.Confidence = 0
+	}
+	if f.Confidence > 1 {
+		f.Confidence = 1
+	}
+	if f.Source == "" {
+		f.Source = "llm"
+	}
+	return f, true
 }
 
 func stripCodeFence(content string) string {

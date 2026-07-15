@@ -47,3 +47,28 @@ func TestParseFindingsEmpty(t *testing.T) {
 		t.Fatalf("len = %d, want 0", len(items))
 	}
 }
+
+func TestParseFindingsRejectsEscapedFilePath(t *testing.T) {
+	raw := `[{"severity":"critical","category":"security","file":"../../../etc/passwd","line":1,"title":"bad","evidence":"x","recommendation":"y","confidence":0.99,"rule_id":"SEC-999"}]`
+	items, err := ParseFindings(raw)
+	if err != nil {
+		t.Fatalf("ParseFindings: %v", err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("len = %d, want 0 for escaped file path", len(items))
+	}
+}
+
+func TestParseFindingsClampsConfidence(t *testing.T) {
+	raw := `[{"severity":"high","category":"security","file":"a.go","line":1,"title":"issue","evidence":"x","recommendation":"y","confidence":9.9,"rule_id":"SEC-001"}]`
+	items, err := ParseFindings(raw)
+	if err != nil {
+		t.Fatalf("ParseFindings: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("len = %d, want 1", len(items))
+	}
+	if items[0].Confidence != 1 {
+		t.Fatalf("confidence = %v, want 1", items[0].Confidence)
+	}
+}

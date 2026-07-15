@@ -16,7 +16,8 @@ if [[ "$line_count" -gt "$MAX_LINES" ]]; then
   exit 2
 fi
 
-if ! grep -q '^diff --git ' "$DIFF_FILE"; then
+if ! grep -q '^diff --git ' "$DIFF_FILE" \
+  && ! { grep -q '^--- ' "$DIFF_FILE" && grep -q '^+++ ' "$DIFF_FILE" && grep -q '^@@ ' "$DIFF_FILE"; }; then
   echo "error: not a unified diff" >&2
   exit 2
 fi

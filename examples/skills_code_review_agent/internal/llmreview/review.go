@@ -40,7 +40,6 @@ type Options struct {
 	DiffRaw      string
 	InputSummary string
 	SkillsRoot   string
-	Runtime      sandbox.Runtime
 	Model        string
 	RuleFindings []findings.Finding
 	Timeout      time.Duration
@@ -68,17 +67,6 @@ func Run(ctx context.Context, opts Options) ([]findings.Finding, error) {
 		return nil, fmt.Errorf("load skills: %w", err)
 	}
 
-	codeExec, err := sandbox.NewCodeExecutor(sandbox.Options{
-		TaskID:     opts.TaskID,
-		SkillsRoot: opts.SkillsRoot,
-		Runtime:    opts.Runtime,
-		Timeout:    opts.Timeout,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("create code executor: %w", err)
-	}
-	defer func() { _ = sandbox.CloseCodeExecutor(codeExec) }()
-
 	maxTokens := 2048
 	temperature := 0.1
 	var mdl model.Model
@@ -91,10 +79,8 @@ func Run(ctx context.Context, opts Options) ([]findings.Finding, error) {
 		agentName,
 		llmagent.WithModel(mdl),
 		llmagent.WithSkills(repo),
-		// 只暴露 skill_load 等知识工具；skill_run 由 pipeline sandbox 走 PermissionPolicy。
+		// 仅 skill_load；不挂 CodeExecutor，避免 workspace_exec 绕过 sandbox PermissionPolicy。
 		llmagent.WithSkillToolProfile(llmagent.SkillToolProfileKnowledgeOnly),
-		llmagent.WithCodeExecutor(codeExec),
-		llmagent.WithEnableCodeExecutionResponseProcessor(false),
 		llmagent.WithGenerationConfig(model.GenerationConfig{
 			MaxTokens:   &maxTokens,
 			Temperature: &temperature,

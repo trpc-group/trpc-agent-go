@@ -182,6 +182,63 @@ func TestRunChecksCleanDiff(t *testing.T) {
 	}
 }
 
+func TestRunChecksPlainUnifiedDiff(t *testing.T) {
+	diff := `--- old.go
++++ new.go
+@@ -1,3 +1,4 @@
+ package main
++import "fmt"
+ func main() {}
+`
+	stdout, stderr, code := runChecks(diff)
+	if code != 0 {
+		t.Fatalf("code = %d stderr = %q", code, stderr)
+	}
+	if stdout == "" {
+		t.Fatal("expected stdout")
+	}
+}
+
+func TestResolveDefaultRuntime(t *testing.T) {
+	if got := ResolveDefaultRuntime("", RuntimeLocal); got != RuntimeLocal {
+		t.Fatalf("explicit local = %q", got)
+	}
+	if got := ResolveDefaultRuntime("/repo", RuntimeLocal); got != RuntimeLocal {
+		t.Fatalf("explicit local with repo = %q", got)
+	}
+	if got := ResolveDefaultRuntime("/repo", ""); got != RuntimeContainer {
+		t.Fatalf("repo default = %q, want container", got)
+	}
+	if got := ResolveDefaultRuntime("", ""); got != RuntimeLocal {
+		t.Fatalf("empty default = %q, want local", got)
+	}
+}
+
+func TestRunIsolatedSetupFailureReturnsResult(t *testing.T) {
+	t.Setenv("E2B_API_KEY", "")
+	result, err := Run(context.Background(), Options{
+		TaskID:  "task-1",
+		DiffRaw: "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -1 +1 @@\n+x\n",
+		Runtime: RuntimeE2B,
+	})
+	if err != nil {
+		t.Fatalf("Run should return completed result, got error: %v", err)
+	}
+	if result.Exceptions["workspace_error"] == 0 {
+		t.Fatalf("exceptions = %+v, want workspace_error", result.Exceptions)
+	}
+	found := false
+	for _, r := range result.Runs {
+		if r.Status == "failed" && r.ErrorType == "workspace_error" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("runs = %+v", result.Runs)
+	}
+}
+
 func TestRunChecksIgnoredError(t *testing.T) {
 	diff := "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -1 +1 @@\n+_ = err\n"
 	_, _, code := runChecks(diff)

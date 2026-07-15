@@ -115,7 +115,7 @@ func sandboxEnv() map[string]string {
 
 // ResolveSkillsRoot finds the skills directory containing code-review.
 func ResolveSkillsRoot(root string) string {
-	if stat, err := os.Stat(filepath.Join(root, skillName)); err == nil && stat.IsDir() {
+	if isSafeSkillDir(filepath.Join(root, skillName)) {
 		return root
 	}
 	cwd, err := os.Getwd()
@@ -124,7 +124,7 @@ func ResolveSkillsRoot(root string) string {
 	}
 	for dir := cwd; ; dir = filepath.Dir(dir) {
 		candidate := filepath.Join(dir, "skills")
-		if stat, err := os.Stat(filepath.Join(candidate, skillName)); err == nil && stat.IsDir() {
+		if isSafeSkillDir(filepath.Join(candidate, skillName)) {
 			return candidate
 		}
 		parent := filepath.Dir(dir)
@@ -133,6 +133,14 @@ func ResolveSkillsRoot(root string) string {
 		}
 	}
 	return root
+}
+
+func isSafeSkillDir(path string) bool {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return false
+	}
+	return info.IsDir() && info.Mode()&os.ModeSymlink == 0
 }
 
 // CloseCodeExecutor releases container or E2B backends when they support Close.

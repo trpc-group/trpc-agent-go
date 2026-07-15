@@ -21,7 +21,6 @@ const maxDiffLines = 5000
 var ignoredErrRE = regexp.MustCompile(`^\+.*_\s*=\s*err`)
 
 // runChecks validates diff content (mirrors scripts/run_checks.sh).
-// 檢驗是否是git 的 Diff文件
 func runChecks(diff string) (stdout, stderr string, exitCode int) {
 	diff = strings.TrimSpace(diff)
 	if diff == "" {
@@ -30,6 +29,9 @@ func runChecks(diff string) (stdout, stderr string, exitCode int) {
 	scanner := bufio.NewScanner(strings.NewReader(diff))
 	lines := 0
 	hasGitHeader := false
+	hasMinusHeader := false
+	hasPlusHeader := false
+	hasHunk := false
 	for scanner.Scan() {
 		lines++
 		if lines > maxDiffLines {
@@ -39,6 +41,15 @@ func runChecks(diff string) (stdout, stderr string, exitCode int) {
 		if strings.HasPrefix(line, "diff --git ") {
 			hasGitHeader = true
 		}
+		if strings.HasPrefix(line, "--- ") {
+			hasMinusHeader = true
+		}
+		if strings.HasPrefix(line, "+++ ") {
+			hasPlusHeader = true
+		}
+		if strings.HasPrefix(line, "@@ ") {
+			hasHunk = true
+		}
 		if ignoredErrRE.MatchString(line) {
 			return "", "sandbox check: ignored error pattern in diff", 2
 		}
@@ -46,7 +57,7 @@ func runChecks(diff string) (stdout, stderr string, exitCode int) {
 	if err := scanner.Err(); err != nil {
 		return "", err.Error(), 2
 	}
-	if !hasGitHeader {
+	if !hasGitHeader && !(hasMinusHeader && hasPlusHeader && hasHunk) {
 		return "", "error: not a unified diff", 2
 	}
 	return fmt.Sprintf("sandbox checks passed (%d diff lines)", lines), "", 0

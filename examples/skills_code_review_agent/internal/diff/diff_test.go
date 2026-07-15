@@ -168,3 +168,24 @@ func TestInferGoPackageRejectsPathEscape(t *testing.T) {
 		t.Fatalf("package = %q, want empty for escaped path", got)
 	}
 }
+
+func TestChangedFilesRejectsPathEscape(t *testing.T) {
+	d, err := ParseUnifiedDiff(`--- a/../../../outside.go
++++ b/../../../outside.go
+@@ -1 +1 @@
+ package main
+`)
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	files := d.ChangedFiles()
+	if len(files) != 0 {
+		t.Fatalf("changed files = %v, want none for escaped path", files)
+	}
+}
+
+func TestSanitizeRepoRelativePathRejectsAbsolute(t *testing.T) {
+	if _, err := SanitizeRepoRelativePath("/etc/passwd"); err == nil {
+		t.Fatal("expected error for absolute path")
+	}
+}

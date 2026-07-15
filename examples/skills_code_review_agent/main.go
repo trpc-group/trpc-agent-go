@@ -30,7 +30,7 @@ var (
 	flagDBPath      = flag.String("db-path", "reviews.db", "sqlite database path")
 	flagOutputDir   = flag.String("output-dir", "output", "directory for review reports")
 	flagSkillsRoot  = flag.String("skills-root", "skills", "skills root directory")
-	flagRuntime     = flag.String("runtime", "local", "sandbox runtime: local|container|skip")
+	flagRuntime     = flag.String("runtime", "", "sandbox runtime: local|container|e2b|skip (default: container with --repo-path, else local)")
 	flagSkipSandbox = flag.Bool("skip-sandbox", false, "skip sandbox execution")
 	flagModel       = flag.String("model", "gpt-4o-mini", "LLM model when --dry-run=false")
 	flagFakeModel   = flag.Bool("fake-model", false, "run Agent path with mock model (no API key)")
@@ -56,7 +56,7 @@ func run(ctx context.Context) error {
 		DBPath:      *flagDBPath,
 		OutputDir:   *flagOutputDir,
 		SkillsRoot:  *flagSkillsRoot,
-		Runtime:     sandbox.Runtime(*flagRuntime),
+		Runtime:     sandbox.ResolveDefaultRuntime(*flagRepoPath, sandbox.Runtime(*flagRuntime)),
 		SkipSandbox: *flagSkipSandbox,
 		Model:       *flagModel,
 		FakeModel:   *flagFakeModel,

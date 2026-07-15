@@ -10,9 +10,9 @@
 package sandbox
 
 import (
+	"bytes"
 	"context"
 	"fmt"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
@@ -88,6 +88,17 @@ type Result struct {
 	Exceptions  map[string]int
 }
 
+// ResolveDefaultRuntime 在未显式指定 runtime 时，repo 执行默认走隔离 sandbox。
+func ResolveDefaultRuntime(repoPath string, explicit Runtime) Runtime {
+	if explicit != "" {
+		return explicit
+	}
+	if strings.TrimSpace(repoPath) != "" {
+		return RuntimeContainer
+	}
+	return RuntimeLocal
+}
+
 // ValidateRuntime reports whether r is a supported sandbox runtime.
 func ValidateRuntime(r Runtime) error {
 	switch r {
@@ -120,9 +131,11 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	env, cleanup, err := prepareRunEnv(ctx, opts)
 	if err != nil {
 		if isIsolatedRuntime(opts.Runtime) {
-			return nil, fmt.Errorf("prepare workspace: %w", err)
+			// 隔离 runtime 准备失败时仍返回完成态 Result，不回退到宿主机执行。
+			env = &runEnv{ready: false}
+		} else {
+			env = &runEnv{}
 		}
-		env = &runEnv{}
 	} else if cleanup != nil {
 		defer cleanup()
 	}
@@ -356,8 +369,11 @@ func runGoDirect(ctx context.Context, opts Options, rec RunRecord, subcmd string
 
 	cmd := exec.CommandContext(tctx, "go", subcmd, "./...")
 	cmd.Dir = repo
-	out, err := cmd.CombinedOutput()
-	rec.Stdout = truncate(string(out))
+	var out limitedBuffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	err := cmd.Run()
+	rec.Stdout = truncate(out.String())
 	if tctx.Err() == context.DeadlineExceeded {
 		rec.Status = "timeout"
 		rec.ErrorType = "timeout"
@@ -386,7 +402,7 @@ func stageWorkspace(ctx context.Context, exec workspaceExecutor, ws codeexecutor
 		}
 	}
 	skillSrc := filepath.Join(opts.SkillsRoot, skillName)
-	if stat, err := os.Stat(skillSrc); err == nil && stat.IsDir() {
+	if isSafeSkillDir(skillSrc) {
 		if err := exec.PutDirectory(ctx, ws, skillSrc, filepath.Join("skills", skillName)); err != nil {
 			return fmt.Errorf("stage skill: %w", err)
 		}
@@ -405,4 +421,23 @@ func truncate(s string) string {
 		return s
 	}
 	return s[:maxOutputBytes] + "\n...<truncated>"
+}
+
+type limitedBuffer struct {
+	buf bytes.Buffer
+}
+
+func (b *limitedBuffer) String() string {
+	return b.buf.String()
+}
+
+func (b *limitedBuffer) Write(p []byte) (int, error) {
+	remaining := maxOutputBytes + 1 - b.buf.Len()
+	if remaining <= 0 {
+		return len(p), nil
+	}
+	if len(p) > remaining {
+		p = p[:remaining]
+	}
+	return b.buf.Write(p)
 }

@@ -61,10 +61,7 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	}
 
 	taskID := uuid.NewString()
-	runtime := opts.Runtime
-	if runtime == "" {
-		runtime = sandbox.RuntimeLocal
-	}
+	runtime := sandbox.ResolveDefaultRuntime(opts.RepoPath, opts.Runtime)
 	if opts.SkipSandbox {
 		runtime = sandbox.RuntimeSkip
 	}
@@ -79,7 +76,6 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 			DiffRaw:      parsed.Raw,
 			InputSummary: parsed.Summary(),
 			SkillsRoot:   opts.SkillsRoot,
-			Runtime:      runtime,
 			Model:        opts.Model,
 			RuleFindings: raw,
 			FakeModel:    opts.FakeModel,

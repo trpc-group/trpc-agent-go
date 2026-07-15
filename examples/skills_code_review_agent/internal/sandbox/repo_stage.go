@@ -12,6 +12,7 @@ package sandbox
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,6 +22,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/examples/skills_code_review_agent/internal/diff"
 )
+
+const maxStageFileBytes = 4 << 20
 
 // 常见密钥文件名模式，避免把本地凭据带进 sandbox。
 var secretNamePatterns = []string{
@@ -127,7 +130,7 @@ func stageCleanRepo(
 		if err != nil || !info.Mode().IsRegular() {
 			continue
 		}
-		data, err := os.ReadFile(full)
+		data, err := readRegularFile(full, maxStageFileBytes)
 		if err != nil {
 			continue
 		}
@@ -144,8 +147,14 @@ func stageCleanRepo(
 }
 
 func isGitRepo(repoPath string) bool {
-	_, err := os.Stat(filepath.Join(repoPath, ".git"))
-	return err == nil
+	info, err := os.Lstat(filepath.Join(repoPath, ".git"))
+	if err != nil {
+		return false
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return false
+	}
+	return info.IsDir() || info.Mode().IsRegular()
 }
 
 func gitTrackedFiles(repoPath string) ([]string, error) {
@@ -238,4 +247,20 @@ func isExcludedRepoPath(rel string) bool {
 		}
 	}
 	return false
+}
+
+func readRegularFile(path string, maxBytes int64) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("not a regular file: %s", path)
+	}
+	if info.Size() > maxBytes {
+		return nil, fmt.Errorf("file too large: %s", path)
+	}
+	return io.ReadAll(io.LimitReader(f, maxBytes))
 }
