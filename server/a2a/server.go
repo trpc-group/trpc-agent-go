@@ -211,7 +211,12 @@ func buildA2AServer(options *options) (*a2a.A2AServer, error) {
 	basePath := extractBasePath(ia2a.NormalizeURL(agentCard.URL))
 
 	opts := []a2a.Option{
-		a2a.WithMiddleWare(anonymousUserCookieMiddleware{userIDHeader: userIDHeader}),
+		a2a.WithMiddleWare(anonymousUserCookieMiddleware{
+			userIDHeader: userIDHeader,
+			secureCookie: anonymousCookieSecureForAgentURL(
+				agentCard.URL,
+			),
+		}),
 		a2a.WithAuthProvider(&defaultAuthProvider{userIDHeader: userIDHeader}),
 		a2a.WithBasePath(basePath),
 		a2a.WithMiddleWare(&traceContextMiddleware{}),

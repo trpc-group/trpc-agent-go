@@ -818,19 +818,11 @@ func TestDefaultAuthProvider_AnonymousUserGenerationError(t *testing.T) {
 }
 
 func TestAnonymousUserCookieMiddleware_CookieAttributes(t *testing.T) {
-	middleware := anonymousUserCookieMiddleware{userIDHeader: serverUserIDHeader}
-	handler := middleware.Wrap(
-		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			cookie, err := r.Cookie(anonymousUserIDCookie)
-			assert.NoError(t, err)
-			assert.True(t, isAnonymousUserID(cookie.Value))
-		}),
-	)
-
 	tests := []struct {
-		name       string
-		target     string
-		wantSecure bool
+		name         string
+		target       string
+		secureCookie bool
+		wantSecure   bool
 	}{
 		{
 			name:       "secure for TLS request",
@@ -842,10 +834,27 @@ func TestAnonymousUserCookieMiddleware_CookieAttributes(t *testing.T) {
 			target:     "http://example.com/test",
 			wantSecure: false,
 		},
+		{
+			name:         "secure for proxy terminated HTTPS endpoint",
+			target:       "http://example.com/test",
+			secureCookie: true,
+			wantSecure:   true,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			middleware := anonymousUserCookieMiddleware{
+				userIDHeader: serverUserIDHeader,
+				secureCookie: tt.secureCookie,
+			}
+			handler := middleware.Wrap(
+				http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					cookie, err := r.Cookie(anonymousUserIDCookie)
+					assert.NoError(t, err)
+					assert.True(t, isAnonymousUserID(cookie.Value))
+				}),
+			)
 			req := httptest.NewRequest(http.MethodGet, tt.target, nil)
 			rr := httptest.NewRecorder()
 
@@ -863,6 +872,36 @@ func TestAnonymousUserCookieMiddleware_CookieAttributes(t *testing.T) {
 				assert.Equal(t, tt.wantSecure, anonymousCookie.Secure)
 				assert.Equal(t, http.SameSiteLaxMode, anonymousCookie.SameSite)
 			}
+		})
+	}
+}
+
+func TestAnonymousCookieSecureForAgentURL(t *testing.T) {
+	tests := []struct {
+		name     string
+		agentURL string
+		want     bool
+	}{
+		{
+			name:     "https public URL",
+			agentURL: "https://example.com/a2a",
+			want:     true,
+		},
+		{
+			name:     "http public URL",
+			agentURL: "http://example.com/a2a",
+			want:     false,
+		},
+		{
+			name:     "host without scheme",
+			agentURL: "example.com/a2a",
+			want:     false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, anonymousCookieSecureForAgentURL(tt.agentURL))
 		})
 	}
 }

@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"trpc.group/trpc-go/trpc-a2a-go/auth"
@@ -123,6 +124,7 @@ type defaultAuthProvider struct {
 
 type anonymousUserCookieMiddleware struct {
 	userIDHeader string
+	secureCookie bool
 }
 
 func (m anonymousUserCookieMiddleware) Wrap(next http.Handler) http.Handler {
@@ -139,7 +141,7 @@ func (m anonymousUserCookieMiddleware) Wrap(next http.Handler) http.Handler {
 				Path:     "/",
 				HttpOnly: true,
 				SameSite: http.SameSiteLaxMode,
-				Secure:   r.TLS != nil,
+				Secure:   m.secureCookie || r.TLS != nil,
 			})
 			r = r.Clone(r.Context())
 			r.AddCookie(&http.Cookie{Name: anonymousUserIDCookie, Value: userID})
@@ -198,6 +200,14 @@ func isAnonymousUserID(userID string) bool {
 	encoded := strings.TrimPrefix(userID, anonymousUserIDPrefix)
 	decoded, err := hex.DecodeString(encoded)
 	return err == nil && len(decoded) == 16
+}
+
+func anonymousCookieSecureForAgentURL(agentURL string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(agentURL))
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(parsed.Scheme, "https")
 }
 
 type options struct {

@@ -11,12 +11,14 @@
 package a2aagent
 
 import (
-	"container/list"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
-	"net/http/cookiejar"
+	"net/url"
+	"path"
 	"strings"
 	"sync"
 	"time"
@@ -37,15 +39,19 @@ import (
 	itrace "trpc.group/trpc-go/trpc-agent-go/internal/trace"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 const (
-	defaultStreamingChannelSize     = 1024
-	defaultNonStreamingChannelSize  = 10
-	defaultAnonymousClientCacheSize = 1024
-	defaultUserIDHeader             = "X-User-ID"
+	defaultStreamingChannelSize         = 1024
+	defaultNonStreamingChannelSize      = 10
+	defaultUserIDHeader                 = "X-User-ID"
+	anonymousUserIDCookieName           = "trpc_agent_a2a_anon"
+	anonymousUserIDPrefix               = "A2A_ANONYMOUS_"
+	anonymousUserIDCookieStateKeyPrefix = "trpc.agent.a2a.anonymous_user_id_cookie."
+	anonymousUserIDCookieEncodedBytes   = 16
 )
 
 // A2AAgent is an agent that communicates with a remote A2A agent via A2A protocol.
@@ -68,22 +74,11 @@ type A2AAgent struct {
 
 	a2aClient    *client.A2AClient
 	a2aClientURL string
-
-	anonymousClientsMu       sync.Mutex
-	anonymousClients         map[anonymousClientScope]*list.Element
-	anonymousClientsLRU      *list.List
-	anonymousClientCacheSize int
 }
 
-type anonymousClientScope struct {
-	appName           string
-	sessionID         string
-	createdAtUnixNano int64
-}
-
-type anonymousClientCacheEntry struct {
-	scope  anonymousClientScope
-	client *client.A2AClient
+type invocationA2AClient struct {
+	client          *client.A2AClient
+	anonymousCookie *anonymousCookieState
 }
 
 // New creates a new A2AAgent.
@@ -171,53 +166,24 @@ func New(opts ...Option) (*A2AAgent, error) {
 	return agent, nil
 }
 
-var newCookieJar = cookiejar.New
-
 func (r *A2AAgent) clientForInvocation(
 	invocation *agent.Invocation,
-) (*client.A2AClient, error) {
+) (*invocationA2AClient, error) {
 	if !needsAnonymousClient(invocation) || r.a2aClientURL == "" {
-		return r.a2aClient, nil
+		return &invocationA2AClient{client: r.a2aClient}, nil
 	}
-
-	scope, ok := anonymousScopeFromInvocation(invocation)
-	if !ok {
-		return r.newAnonymousClient()
-	}
-
-	r.anonymousClientsMu.Lock()
-	defer r.anonymousClientsMu.Unlock()
-	if element := r.anonymousClients[scope]; element != nil {
-		r.anonymousClientsLRU.MoveToFront(element)
-		return element.Value.(*anonymousClientCacheEntry).client, nil
-	}
-	a2aClient, err := r.newAnonymousClient()
+	anonymousCookie := newAnonymousCookieState(
+		anonymousSessionFromInvocation(invocation),
+		anonymousCookieStateKey(r.a2aClientURL),
+	)
+	a2aClient, err := r.newAnonymousClient(anonymousCookie)
 	if err != nil {
 		return nil, err
 	}
-	if r.anonymousClients == nil {
-		r.anonymousClients = make(map[anonymousClientScope]*list.Element)
-		r.anonymousClientsLRU = list.New()
-	}
-	element := r.anonymousClientsLRU.PushFront(&anonymousClientCacheEntry{
-		scope:  scope,
-		client: a2aClient,
-	})
-	r.anonymousClients[scope] = element
-
-	cacheSize := r.anonymousClientCacheSize
-	if cacheSize <= 0 {
-		cacheSize = defaultAnonymousClientCacheSize
-	}
-	if len(r.anonymousClients) > cacheSize {
-		oldest := r.anonymousClientsLRU.Back()
-		r.anonymousClientsLRU.Remove(oldest)
-		delete(
-			r.anonymousClients,
-			oldest.Value.(*anonymousClientCacheEntry).scope,
-		)
-	}
-	return a2aClient, nil
+	return &invocationA2AClient{
+		client:          a2aClient,
+		anonymousCookie: anonymousCookie,
+	}, nil
 }
 
 func needsAnonymousClient(invocation *agent.Invocation) bool {
@@ -226,37 +192,23 @@ func needsAnonymousClient(invocation *agent.Invocation) bool {
 		strings.TrimSpace(invocation.Session.UserID) == ""
 }
 
-func anonymousScopeFromInvocation(
-	invocation *agent.Invocation,
-) (anonymousClientScope, bool) {
+func anonymousSessionFromInvocation(invocation *agent.Invocation) *session.Session {
 	if invocation == nil ||
 		invocation.Session == nil {
-		return anonymousClientScope{}, false
+		return nil
 	}
-	appName := strings.TrimSpace(invocation.Session.AppName)
-	sessionID := strings.TrimSpace(invocation.Session.ID)
-	if appName == "" ||
-		sessionID == "" ||
-		invocation.Session.CreatedAt.IsZero() {
-		return anonymousClientScope{}, false
-	}
-	return anonymousClientScope{
-		appName:           appName,
-		sessionID:         sessionID,
-		createdAtUnixNano: invocation.Session.CreatedAt.UnixNano(),
-	}, true
+	return invocation.Session
 }
 
-func (r *A2AAgent) newAnonymousClient() (*client.A2AClient, error) {
-	jar, err := newCookieJar(nil)
-	if err != nil {
-		return nil, fmt.Errorf("create anonymous cookie jar: %w", err)
-	}
+func (r *A2AAgent) newAnonymousClient(
+	anonymousCookie *anonymousCookieState,
+) (*client.A2AClient, error) {
 	opts := make([]client.Option, 0, len(r.extraA2AOptions)+1)
-	opts = append(opts,
-		client.WithHTTPClient(&http.Client{Jar: jar}),
-	)
 	opts = append(opts, r.extraA2AOptions...)
+	opts = append(opts, client.WithHTTPReqHandler(&anonymousCookieHTTPReqHandler{
+		cookie: anonymousCookie,
+		scope:  anonymousCookieURLScopeFromAgentURL(r.a2aClientURL),
+	}))
 	a2aClient, err := client.NewA2AClient(r.a2aClientURL, opts...)
 	if err != nil {
 		return nil, fmt.Errorf(
@@ -268,22 +220,261 @@ func (r *A2AAgent) newAnonymousClient() (*client.A2AClient, error) {
 	return a2aClient, nil
 }
 
+type anonymousCookieState struct {
+	session *session.Session
+	key     string
+
+	mu       sync.Mutex
+	captured string
+}
+
+func newAnonymousCookieState(sess *session.Session, key string) *anonymousCookieState {
+	return &anonymousCookieState{session: sess, key: key}
+}
+
+func (s *anonymousCookieState) load() (string, bool) {
+	if s == nil || s.session == nil || s.key == "" {
+		return "", false
+	}
+	raw, ok := s.session.GetState(s.key)
+	if !ok {
+		return "", false
+	}
+	cookieValue := strings.TrimSpace(string(raw))
+	if !isAnonymousUserIDCookieValue(cookieValue) {
+		return "", false
+	}
+	return cookieValue, true
+}
+
+func (s *anonymousCookieState) capture(cookieValue string) {
+	if s == nil || s.key == "" {
+		return
+	}
+	cookieValue = strings.TrimSpace(cookieValue)
+	if !isAnonymousUserIDCookieValue(cookieValue) {
+		return
+	}
+	s.mu.Lock()
+	s.captured = cookieValue
+	s.mu.Unlock()
+	if s.session != nil {
+		s.session.SetState(s.key, []byte(cookieValue))
+	}
+}
+
+func (s *anonymousCookieState) stateDelta() map[string][]byte {
+	if s == nil || s.key == "" {
+		return nil
+	}
+	s.mu.Lock()
+	cookieValue := s.captured
+	s.mu.Unlock()
+	if !isAnonymousUserIDCookieValue(cookieValue) {
+		return nil
+	}
+	return map[string][]byte{
+		s.key: []byte(cookieValue),
+	}
+}
+
+func anonymousCookieStateKey(agentURL string) string {
+	scope := canonicalAnonymousCookieStateScope(agentURL)
+	sum := sha256.Sum256([]byte(scope))
+	return anonymousUserIDCookieStateKeyPrefix + hex.EncodeToString(sum[:])
+}
+
+func canonicalAnonymousCookieStateScope(agentURL string) string {
+	normalized := ia2a.NormalizeURL(strings.TrimSpace(agentURL))
+	parsed, err := url.Parse(normalized)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return strings.TrimRight(normalized, "/")
+	}
+	parsed.Scheme = strings.ToLower(parsed.Scheme)
+	parsed.Host = strings.ToLower(parsed.Host)
+	parsed.Path = canonicalAnonymousCookieURLPath(parsed)
+	parsed.RawPath = ""
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	return parsed.String()
+}
+
+type anonymousCookieHTTPReqHandler struct {
+	cookie *anonymousCookieState
+	scope  anonymousCookieURLScope
+}
+
+func (h *anonymousCookieHTTPReqHandler) Handle(
+	ctx context.Context,
+	httpClient *http.Client,
+	req *http.Request,
+) (*http.Response, error) {
+	if req == nil {
+		return nil, errors.New("a2a anonymous cookie handler: request is nil")
+	}
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
+	// Session state owns anonymous identity; a shared user-supplied Jar must
+	// not replay another local session's remote principal.
+	requestClient := *httpClient
+	requestClient.Jar = &anonymousCookieJar{
+		base:   httpClient.Jar,
+		cookie: h.cookie,
+		scope:  h.scope,
+	}
+	return requestClient.Do(req.Clone(ctx))
+}
+
+type anonymousCookieJar struct {
+	base   http.CookieJar
+	cookie *anonymousCookieState
+	scope  anonymousCookieURLScope
+}
+
+func (j *anonymousCookieJar) SetCookies(u *url.URL, cookies []*http.Cookie) {
+	if len(cookies) == 0 {
+		return
+	}
+	forwarded := make([]*http.Cookie, 0, len(cookies))
+	for _, cookie := range cookies {
+		if cookie == nil {
+			continue
+		}
+		if cookie.Name == anonymousUserIDCookieName {
+			if j.cookie != nil && j.scope.matches(u) {
+				j.cookie.capture(cookie.Value)
+			}
+			continue
+		}
+		forwarded = append(forwarded, cookie)
+	}
+	if j.base == nil || len(forwarded) == 0 {
+		return
+	}
+	j.base.SetCookies(u, forwarded)
+}
+
+func (j *anonymousCookieJar) Cookies(u *url.URL) []*http.Cookie {
+	var cookies []*http.Cookie
+	if j.base != nil {
+		for _, cookie := range j.base.Cookies(u) {
+			if cookie == nil || cookie.Name == anonymousUserIDCookieName {
+				continue
+			}
+			cookies = append(cookies, cookie)
+		}
+	}
+	if j.cookie != nil {
+		if cookieValue, ok := j.cookie.load(); ok && j.scope.matches(u) {
+			cookies = append(cookies, &http.Cookie{
+				Name:  anonymousUserIDCookieName,
+				Value: cookieValue,
+			})
+		}
+	}
+	return cookies
+}
+
+type anonymousCookieURLScope struct {
+	scheme string
+	host   string
+	path   string
+}
+
+func anonymousCookieURLScopeFromAgentURL(agentURL string) anonymousCookieURLScope {
+	scope := canonicalAnonymousCookieStateScope(agentURL)
+	parsed, err := url.Parse(scope)
+	if err != nil {
+		return anonymousCookieURLScope{}
+	}
+	return anonymousCookieURLScope{
+		scheme: parsed.Scheme,
+		host:   parsed.Host,
+		path:   parsed.Path,
+	}
+}
+
+func (s anonymousCookieURLScope) matches(u *url.URL) bool {
+	if u == nil || s.scheme == "" || s.host == "" {
+		return false
+	}
+	if !strings.EqualFold(u.Scheme, s.scheme) ||
+		!strings.EqualFold(u.Host, s.host) {
+		return false
+	}
+	basePath := s.path
+	if basePath == "" {
+		return true
+	}
+	reqPath := canonicalAnonymousCookieURLPath(u)
+	return reqPath == basePath || strings.HasPrefix(reqPath, basePath+"/")
+}
+
+func canonicalAnonymousCookieURLPath(u *url.URL) string {
+	if u == nil {
+		return ""
+	}
+	urlPath := u.EscapedPath()
+	if urlPath == "" {
+		urlPath = u.Path
+	}
+	if unescaped, err := url.PathUnescape(urlPath); err == nil {
+		urlPath = unescaped
+	}
+	cleaned := path.Clean("/" + strings.TrimPrefix(urlPath, "/"))
+	if cleaned == "/" {
+		return ""
+	}
+	return strings.TrimRight(cleaned, "/")
+}
+
+func isAnonymousUserIDCookieValue(value string) bool {
+	if !strings.HasPrefix(value, anonymousUserIDPrefix) {
+		return false
+	}
+	encoded := strings.TrimPrefix(value, anonymousUserIDPrefix)
+	decoded, err := hex.DecodeString(encoded)
+	return err == nil && len(decoded) == anonymousUserIDCookieEncodedBytes
+}
+
+func applyAnonymousCookieStateDelta(
+	evt *event.Event,
+	anonymousCookie *anonymousCookieState,
+) {
+	delta := anonymousCookie.stateDelta()
+	if len(delta) == 0 || evt == nil {
+		return
+	}
+	if evt.StateDelta == nil {
+		evt.StateDelta = make(map[string][]byte, len(delta))
+	}
+	for key, value := range delta {
+		evt.StateDelta[key] = value
+	}
+}
+
 // sendErrorEvent sends an error event to the event channel.
 func (r *A2AAgent) sendErrorEvent(
 	ctx context.Context,
 	eventChan chan<- *event.Event,
 	invocation *agent.Invocation,
 	err error,
+	anonymousCookie ...*anonymousCookieState,
 ) *model.ResponseError {
 	respErr := model.ResponseErrorFromError(err, model.ErrorTypeRunError)
-	agent.EmitEvent(ctx, invocation, eventChan, event.New(
+	evt := event.New(
 		invocation.InvocationID,
 		r.name,
 		event.WithResponse(&model.Response{
 			Object: model.ObjectTypeError,
 			Error:  respErr,
 		}),
-	))
+	)
+	if len(anonymousCookie) > 0 {
+		applyAnonymousCookieStateDelta(evt, anonymousCookie[0])
+	}
+	agent.EmitEvent(ctx, invocation, eventChan, evt)
 	return respErr
 }
 
@@ -337,7 +528,7 @@ func (r *A2AAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-cha
 		}
 		return nil, err
 	}
-	a2aClient, err := r.clientForInvocation(invocation)
+	invocationClient, err := r.clientForInvocation(invocation)
 	if err != nil {
 		if startedSpan {
 			span.SetStatus(codes.Error, err.Error())
@@ -346,7 +537,7 @@ func (r *A2AAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-cha
 		}
 		return nil, err
 	}
-	if a2aClient == nil {
+	if invocationClient == nil || invocationClient.client == nil {
 		err = errors.New("A2A client is nil")
 		if startedSpan {
 			span.SetStatus(codes.Error, err.Error())
@@ -359,9 +550,19 @@ func (r *A2AAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-cha
 		eventChan <-chan *event.Event
 	)
 	if useStreaming {
-		eventChan, err = r.runStreamingWithClient(ctx, invocation, a2aClient)
+		eventChan, err = r.runStreamingWithClient(
+			ctx,
+			invocation,
+			invocationClient.client,
+			invocationClient.anonymousCookie,
+		)
 	} else {
-		eventChan, err = r.runNonStreamingWithClient(ctx, invocation, a2aClient)
+		eventChan, err = r.runNonStreamingWithClient(
+			ctx,
+			invocation,
+			invocationClient.client,
+			invocationClient.anonymousCookie,
+		)
 	}
 	if err != nil {
 		if startedSpan {
@@ -497,13 +698,14 @@ func matchStateKeys(pattern string, src map[string]any, dst map[string]any) {
 
 // runStreaming handles streaming A2A communication
 func (r *A2AAgent) runStreaming(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
-	return r.runStreamingWithClient(ctx, invocation, r.a2aClient)
+	return r.runStreamingWithClient(ctx, invocation, r.a2aClient, nil)
 }
 
 func (r *A2AAgent) runStreamingWithClient(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	a2aClient *client.A2AClient,
+	anonymousCookie *anonymousCookieState,
 ) (<-chan *event.Event, error) {
 	if r.eventConverter == nil {
 		return nil, fmt.Errorf("event converter not set")
@@ -512,7 +714,7 @@ func (r *A2AAgent) runStreamingWithClient(
 	runCtx := agent.CloneContext(ctx)
 	go func(ctx context.Context) {
 		defer close(eventChan)
-		r.executeStreaming(ctx, invocation, eventChan, a2aClient)
+		r.executeStreaming(ctx, invocation, eventChan, a2aClient, anonymousCookie)
 	}(runCtx)
 	return eventChan, nil
 }
@@ -523,6 +725,7 @@ func (r *A2AAgent) executeStreaming(
 	invocation *agent.Invocation,
 	eventChan chan<- *event.Event,
 	a2aClient *client.A2AClient,
+	anonymousCookie *anonymousCookieState,
 ) {
 	a2aMessage, err := r.buildA2AMessage(invocation, true)
 	if err != nil {
@@ -531,6 +734,7 @@ func (r *A2AAgent) executeStreaming(
 			eventChan,
 			invocation,
 			fmt.Errorf("failed to construct A2A message: %w", err),
+			anonymousCookie,
 		)
 		return
 	}
@@ -553,6 +757,7 @@ func (r *A2AAgent) executeStreaming(
 				r.agentCard.URL,
 				err,
 			),
+			anonymousCookie,
 		)
 		return
 	}
@@ -562,6 +767,7 @@ func (r *A2AAgent) executeStreaming(
 		invocation,
 		eventChan,
 		streamChan,
+		anonymousCookie,
 	)
 	if streamResult.terminalError != nil {
 		return
@@ -572,6 +778,7 @@ func (r *A2AAgent) executeStreaming(
 		eventChan,
 		streamResult.responseID,
 		streamResult.aggregatedContent,
+		anonymousCookie,
 	)
 }
 
@@ -612,6 +819,7 @@ func (r *A2AAgent) processStreamingEvents(
 	invocation *agent.Invocation,
 	eventChan chan<- *event.Event,
 	streamChan <-chan protocol.StreamingMessageEvent,
+	anonymousCookie *anonymousCookieState,
 ) streamingEventResult {
 	var result streamingEventResult
 	var contentBuilder strings.Builder
@@ -629,6 +837,7 @@ func (r *A2AAgent) processStreamingEvents(
 				eventChan,
 				invocation,
 				fmt.Errorf("custom event converter failed: %w", err),
+				anonymousCookie,
 			)
 			result.aggregatedContent = contentBuilder.String()
 			return result
@@ -650,6 +859,7 @@ func (r *A2AAgent) processStreamingEvents(
 					currentResponseID,
 					evt.Timestamp,
 					&contentBuilder,
+					anonymousCookie,
 				)
 			}
 			var terminalError *model.ResponseError
@@ -660,12 +870,14 @@ func (r *A2AAgent) processStreamingEvents(
 				evt,
 				result.responseID,
 				&contentBuilder,
+				anonymousCookie,
 			)
 			if terminalError != nil {
 				result.aggregatedContent = contentBuilder.String()
 				result.terminalError = terminalError
 				return result
 			}
+			applyAnonymousCookieStateDelta(evt, anonymousCookie)
 			agent.EmitEvent(ctx, invocation, eventChan, evt)
 			if evt.Response != nil &&
 				evt.Response.Error != nil &&
@@ -690,6 +902,7 @@ func (r *A2AAgent) flushBufferedContent(
 	responseID string,
 	anchorTimestamp time.Time,
 	contentBuilder *strings.Builder,
+	anonymousCookie *anonymousCookieState,
 ) {
 	if contentBuilder == nil || contentBuilder.Len() == 0 {
 		return
@@ -722,6 +935,7 @@ func (r *A2AAgent) flushBufferedContent(
 		}),
 	)
 	evt.Timestamp = flushTime
+	applyAnonymousCookieStateDelta(evt, anonymousCookie)
 	agent.EmitEvent(ctx, invocation, eventChan, evt)
 }
 
@@ -734,6 +948,7 @@ func (r *A2AAgent) aggregateEventContent(
 	evt *event.Event,
 	responseID string,
 	contentBuilder *strings.Builder,
+	anonymousCookie *anonymousCookieState,
 ) (string, *model.ResponseError) {
 	if evt.Response == nil || evt.Response.Error != nil {
 		return responseID, nil
@@ -754,6 +969,7 @@ func (r *A2AAgent) aggregateEventContent(
 				eventChan,
 				invocation,
 				fmt.Errorf("streaming resp handler failed: %w", err),
+				anonymousCookie,
 			)
 			return responseID, respErr
 		}
@@ -773,8 +989,9 @@ func (r *A2AAgent) emitFinalEvent(
 	eventChan chan<- *event.Event,
 	responseID string,
 	aggregatedContent string,
+	anonymousCookie *anonymousCookieState,
 ) {
-	agent.EmitEvent(ctx, invocation, eventChan, event.New(
+	evt := event.New(
 		invocation.InvocationID,
 		r.name,
 		event.WithResponse(&model.Response{
@@ -791,18 +1008,21 @@ func (r *A2AAgent) emitFinalEvent(
 				},
 			}},
 		}),
-	))
+	)
+	applyAnonymousCookieStateDelta(evt, anonymousCookie)
+	agent.EmitEvent(ctx, invocation, eventChan, evt)
 }
 
 // runNonStreaming handles non-streaming A2A communication
 func (r *A2AAgent) runNonStreaming(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
-	return r.runNonStreamingWithClient(ctx, invocation, r.a2aClient)
+	return r.runNonStreamingWithClient(ctx, invocation, r.a2aClient, nil)
 }
 
 func (r *A2AAgent) runNonStreamingWithClient(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	a2aClient *client.A2AClient,
+	anonymousCookie *anonymousCookieState,
 ) (<-chan *event.Event, error) {
 	eventChan := make(chan *event.Event, defaultNonStreamingChannelSize)
 	runCtx := agent.CloneContext(ctx)
@@ -817,6 +1037,7 @@ func (r *A2AAgent) runNonStreamingWithClient(
 				eventChan,
 				invocation,
 				fmt.Errorf("failed to construct A2A message: %w", err),
+				anonymousCookie,
 			)
 			return
 		}
@@ -836,6 +1057,7 @@ func (r *A2AAgent) runNonStreamingWithClient(
 					r.agentCard.URL,
 					err,
 				),
+				anonymousCookie,
 			)
 			return
 		}
@@ -849,12 +1071,14 @@ func (r *A2AAgent) runNonStreamingWithClient(
 				eventChan,
 				invocation,
 				fmt.Errorf("custom event converter failed: %w", err),
+				anonymousCookie,
 			)
 			return
 		}
 
 		// Emit all events
 		for _, evt := range events {
+			applyAnonymousCookieStateDelta(evt, anonymousCookie)
 			agent.EmitEvent(ctx, invocation, eventChan, evt)
 		}
 	}(runCtx)

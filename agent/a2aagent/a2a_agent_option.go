@@ -259,6 +259,12 @@ func WithCustomA2AConverter(converter InvocationA2AConverter) Option {
 }
 
 // WithA2AClientExtraOptions adds extra options to the A2A client.
+//
+// For anonymous invocations, A2AAgent installs an internal HTTP request handler
+// to persist only the anonymous identity cookie in session state. Custom HTTP
+// clients, transports, timeouts, and non-anonymous cookies are preserved, but a
+// client.WithHTTPReqHandler option is not used on anonymous calls because the
+// upstream client does not expose request-handler composition.
 func WithA2AClientExtraOptions(opts ...client.Option) Option {
 	return func(a *A2AAgent) {
 		a.extraA2AOptions = append(a.extraA2AOptions, opts...)
