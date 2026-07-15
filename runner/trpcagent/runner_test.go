@@ -511,9 +511,12 @@ func TestRunInteroperatesWithServerTRPCAgent(t *testing.T) {
 		RootInvocationID: "inv-1",
 		SessionID:        "session-1",
 		Status:           atrace.TraceStatusCompleted,
+		Input:            &atrace.Snapshot{Text: "input"},
+		Output:           &atrace.Snapshot{Text: "patched reply"},
 		Steps: []atrace.Step{{
 			StepID:            "step-1",
 			NodeID:            "writer",
+			NodeType:          "llm",
 			AppliedSurfaceIDs: []string{"writer#instruction"},
 		}},
 	}
@@ -554,6 +557,10 @@ func TestRunInteroperatesWithServerTRPCAgent(t *testing.T) {
 	assert.True(t, gotEvents[1].IsRunnerCompletion())
 	require.NotNil(t, gotEvents[1].ExecutionTrace)
 	assert.Equal(t, "inv-1", gotEvents[1].ExecutionTrace.RootInvocationID)
+	assert.Equal(t, &atrace.Snapshot{Text: "input"}, gotEvents[1].ExecutionTrace.Input)
+	assert.Equal(t, &atrace.Snapshot{Text: "patched reply"}, gotEvents[1].ExecutionTrace.Output)
+	require.Len(t, gotEvents[1].ExecutionTrace.Steps, 1)
+	assert.Equal(t, "llm", gotEvents[1].ExecutionTrace.Steps[0].NodeType)
 	require.Len(t, serverRunner.runOptions, 1)
 	assert.True(t, serverRunner.runOptions[0].ExecutionTraceEnabled)
 	assert.NotEmpty(t, serverRunner.runOptions[0].RequestID)

@@ -546,6 +546,10 @@ func (r *runner) Run(
 		ro.RequestID = uuid.NewString()
 	}
 	r.applyRunnerRunDefaults(&ro)
+	var executionTraceInput *trace.Snapshot
+	if ro.ExecutionTraceEnabled {
+		executionTraceInput = executionTraceInputSnapshot(message, ro)
+	}
 
 	// Resolve per-request app name override. When the caller provides an
 	// AppName via RunOption, it takes precedence over the runner default so
@@ -765,6 +769,7 @@ func (r *runner) Run(
 		agentEventCh,
 		flushChan,
 		handle,
+		executionTraceInput,
 	), nil
 }
 
@@ -1227,6 +1232,7 @@ type eventLoopContext struct {
 	fallbackResponseID                 string
 	fallbackStateDelta                 map[string][]byte
 	finalError                         *model.ResponseError
+	executionTraceInput                *trace.Snapshot
 	graphCompletionSeen                bool
 	freshAssistantContentProduced      bool
 	persistedAssistantResponseIDs      map[string]struct{}
@@ -1277,6 +1283,7 @@ func (r *runner) processAgentEvents(
 	agentEventCh <-chan *event.Event,
 	flushChan chan *flush.FlushRequest,
 	handle *runHandle,
+	executionTraceInput *trace.Snapshot,
 ) chan *event.Event {
 	processedEventCh := make(chan *event.Event, cap(agentEventCh))
 	loop := &eventLoopContext{
@@ -1286,6 +1293,7 @@ func (r *runner) processAgentEvents(
 		flushChan:                 flushChan,
 		processedEventCh:          processedEventCh,
 		runHandle:                 handle,
+		executionTraceInput:       executionTraceInput,
 		baselineFinalResponseID:   baselineFinalResponseID(sess, invocation.RunOptions.RuntimeState),
 		priorAssistantResponseIDs: collectPriorAssistantResponseIDs(sess),
 		streamFilter: graph.NewStreamModeFilter(
@@ -1839,7 +1847,7 @@ func eventHasAssistantMessageContent(e *event.Event) bool {
 	}
 	for _, choice := range e.Response.Choices {
 		msg := choice.Message
-		if msg.Role == model.RoleAssistant && msg.Content != "" {
+		if msg.Role == model.RoleAssistant && model.HasPayload(msg) {
 			return true
 		}
 	}
@@ -2637,7 +2645,7 @@ func (r *runner) captureGraphCompletion(
 
 	var finalChoices []model.Choice
 	if agentEvent.Response != nil && len(agentEvent.Response.Choices) > 0 {
-		finalChoices = agentEvent.Response.Choices
+		finalChoices = cloneChoices(agentEvent.Response.Choices)
 	}
 	return finalStateDelta, finalChoices
 }
@@ -2659,14 +2667,19 @@ func (r *runner) captureCompletionFallback(
 	if agentEvent.Response == nil || agentEvent.IsPartial {
 		return
 	}
-	// A later visible terminal response supersedes any earlier hidden graph completion snapshot.
+	hasAssistantPayload := eventHasAssistantMessageContent(agentEvent)
+	// Any later complete non-graph response invalidates the captured graph
+	// result. Only a new assistant payload switches output selection to fallback.
 	if loop.graphCompletionSeen && !graphCompletionEvent {
 		loop.finalStateDelta = nil
 		loop.finalChoices = nil
+		if hasAssistantPayload {
+			loop.graphCompletionSeen = false
+		}
 	}
 	if !graphCompletionEvent &&
 		len(agentEvent.Response.Choices) > 0 &&
-		eventHasAssistantMessageContent(agentEvent) {
+		hasAssistantPayload {
 		loop.fallbackChoices = cloneChoices(agentEvent.Response.Choices)
 		loop.fallbackResponseID = agentEvent.Response.ID
 	}
@@ -2857,10 +2870,27 @@ func (r *runner) emitRunnerCompletion(ctx context.Context, loop *eventLoopContex
 			true,
 		)
 	}
+	executionTraceStatus := resolveExecutionTraceStatus(loop, ctx.Err())
 	runnerCompletionEvent.ExecutionTrace = agent.BuildExecutionTrace(
 		loop.invocation,
-		resolveExecutionTraceStatus(loop, ctx.Err()),
+		executionTraceStatus,
 	)
+	if runnerCompletionEvent.ExecutionTrace != nil {
+		traceSnapshotOnly := graph.CompletionSnapshotOnlyFromStateDelta(
+			runnerCompletionEvent.StateDelta,
+		) || shouldMarkCompletionSnapshotOnly(
+			loop,
+			finalChoices,
+			finalStateDelta,
+		)
+		runnerCompletionEvent.ExecutionTrace.Input = loop.executionTraceInput
+		runnerCompletionEvent.ExecutionTrace.Output = executionTraceOutputSnapshot(
+			loop,
+			executionTraceStatus,
+			finalStateDelta,
+			traceSnapshotOnly,
+		)
+	}
 
 	// Append runner completion event to session.
 	persistRunnerCompletionEvent := runnerCompletionEvent
@@ -2967,6 +2997,64 @@ func resolveExecutionTraceStatus(loop *eventLoopContext, ctxErr error) trace.Tra
 		return trace.TraceStatusIncomplete
 	}
 	return trace.TraceStatusCompleted
+}
+
+func executionTraceMessageSnapshot(message model.Message) *trace.Snapshot {
+	data, err := json.Marshal(message)
+	if err != nil {
+		return nil
+	}
+	return &trace.Snapshot{Text: string(data)}
+}
+
+func executionTraceInputSnapshot(message model.Message, ro agent.RunOptions) *trace.Snapshot {
+	if len(ro.Messages) == 0 {
+		return executionTraceMessageSnapshot(message)
+	}
+	messages := append([]model.Message(nil), ro.Messages...)
+	if model.HasPayload(message) && shouldAppendUserMessage(message, ro.Messages) {
+		messages = append(messages, message)
+	}
+	data, err := json.Marshal(messages)
+	if err != nil {
+		return nil
+	}
+	return &trace.Snapshot{Text: string(data)}
+}
+
+func executionTraceOutputSnapshot(
+	loop *eventLoopContext,
+	status trace.TraceStatus,
+	finalStateDelta map[string][]byte,
+	traceSnapshotOnly bool,
+) *trace.Snapshot {
+	if loop == nil || status != trace.TraceStatusCompleted || traceSnapshotOnly {
+		return nil
+	}
+	if loop.graphCompletionSeen {
+		if snapshot := executionTraceChoicesSnapshot(loop.finalChoices); snapshot != nil {
+			return snapshot
+		}
+		if finalText := finalResponseTextFromStateDelta(loop.finalStateDelta); finalText != "" {
+			return executionTraceMessageSnapshot(model.NewAssistantMessage(finalText))
+		}
+		return nil
+	}
+	if finalText := finalResponseTextFromStateDelta(finalStateDelta); finalText != "" {
+		return executionTraceMessageSnapshot(model.NewAssistantMessage(finalText))
+	}
+	return executionTraceChoicesSnapshot(loop.fallbackChoices)
+}
+
+func executionTraceChoicesSnapshot(choices []model.Choice) *trace.Snapshot {
+	for _, choice := range choices {
+		if choice.Message.Role != model.RoleAssistant ||
+			!model.HasPayload(choice.Message) {
+			continue
+		}
+		return executionTraceMessageSnapshot(choice.Message)
+	}
+	return nil
 }
 
 // propagateGraphCompletion propagates graph-level completion data (state delta
@@ -3237,6 +3325,10 @@ func cloneContentParts(parts []model.ContentPart) []model.ContentPart {
 			file := *part.File
 			file.Data = append([]byte(nil), part.File.Data...)
 			cloned[i].File = &file
+		}
+		if part.ContentRef != nil {
+			contentRef := *part.ContentRef
+			cloned[i].ContentRef = &contentRef
 		}
 	}
 	return cloned
