@@ -509,10 +509,10 @@ func EmitEventWithTimeout(ctx context.Context, ch chan<- *Event,
 	// Slow path: blocking send with optional timeout.
 	// Use a direct blocking select with recover() to handle closed channel panics.
 	// This avoids goroutine leaks when timeout or ctx.Done() fires before the send completes.
-	eventStr := snapshotEvent(e)
 	defer func() {
 		if r := recover(); r != nil {
-			log.WarnfContext(ctx, "EmitEventWithTimeout: recovered from panic sending to closed channel: %v, event: %s", r, eventStr)
+			redactedEvent := redactedEventForLogging(e)
+			log.WarnfContext(ctx, "EmitEventWithTimeout: recovered from panic sending to closed channel: %v, event: %+v", r, redactedEvent)
 			err = fmt.Errorf("panic sending to closed channel: %v", r)
 		}
 	}()
@@ -520,7 +520,7 @@ func EmitEventWithTimeout(ctx context.Context, ch chan<- *Event,
 	if timeout == EmitWithoutTimeout {
 		select {
 		case ch <- e:
-			log.TracefContext(ctx, "EmitEventWithTimeout: event sent, event: %s", eventStr)
+			log.TracefContext(ctx, "EmitEventWithTimeout: event sent, event: %s", snapshotEvent(e))
 			return nil
 		case <-ctx.Done():
 			err = ctx.Err()
@@ -539,7 +539,7 @@ func EmitEventWithTimeout(ctx context.Context, ch chan<- *Event,
 	defer timer.Stop()
 	select {
 	case ch <- e:
-		log.TracefContext(ctx, "EmitEventWithTimeout: event sent, event: %s", eventStr)
+		log.TracefContext(ctx, "EmitEventWithTimeout: event sent, event: %s", snapshotEvent(e))
 		return nil
 	case <-ctx.Done():
 		err = ctx.Err()
