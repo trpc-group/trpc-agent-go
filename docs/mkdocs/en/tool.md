@@ -2197,6 +2197,29 @@ selection" to "deferred tools loaded on demand". Migration cheat sheet:
   `tc.Callback()` via `RegisterBeforeModel`) is dropped. Only the Runner
   Plugin form is supported.
 
+##### Benchmark & Configuration Recipes
+
+`plugin/toolsearch` is wired into
+[trpc-agent-go-benchmark/toolsearch](https://github.com/trpc-group/trpc-agent-go-benchmark/tree/main/toolsearch),
+which measures how different configurations affect **tool-selection
+accuracy**, **prompt token cost** and **end-to-end latency** on realistic
+tool inventories. See the README under that directory for datasets,
+scripts and result tables — you can reproduce the runs or plug in your
+own tool catalog for comparison.
+
+Typical starting points, chosen based on scale and runtime constraints:
+
+| Scenario | Deferred tools | Recommended config | Notes |
+| --- | --- | --- | --- |
+| Small, well-named set | ≤ 20 | `WithDeferredTools(...)` + default keyword search | No namespaces / embedding — lowest integration cost |
+| Multiple domains, colliding names | 20 – 100 | `WithToolboxes([]Toolbox{...})` + keyword search | Namespaces isolate similar tools across domains |
+| Large scale with semantic queries | 100+ | `WithToolboxes` + `WithSemanticToolIndex(...)` + `WithEmbeddingFailOpen()` | Vector similarity scoring with keyword fallback on embedding failure |
+| Backends sensitive to declared tool count | any | `WithInvocationMode(toolsearch.DispatchToolCalls)` | Deferred set collapses behind `tool_search` + `call_tool` |
+| Prompt-cache friendly | any | `WithCatalogInDescription(true)` | Catalog travels with the `tool_search` description; system prompt stays stable |
+| Multi-tenant / RBAC | any | any of the above + `WithToolPermissionFilter(fn)` | Uniformly filters catalog, search results and invocation |
+
+> `WithMaxResults(n)` defaults to 5 with a hard cap of 10; extras beyond the cap are surfaced as name-only candidates.
+
 #### Basic Usage
 
 **1. Exclude Specific Tools (Exclude Filter)**

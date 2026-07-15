@@ -1985,6 +1985,23 @@ if usage, ok := toolsearch.ToolSearchUsageFromContext(ctx); ok && usage != nil {
 - **Embedding 索引 API 更名**：类型 `ToolKnowledge` → `SemanticToolIndex`；构造器 `NewToolKnowledge` → `NewSemanticToolIndex`；插件 Option `WithToolKnowledge` → `WithSemanticToolIndex`。语义与用法不变，直接替换标识符即可。
 - **Per-Agent BeforeModel Callback** 用法（旧文档中的方案 B，`tc.Callback()` 挂到 `RegisterBeforeModel`）已下线；现只保留 Runner Plugin 形态。
 
+##### 评测与配置建议
+
+`plugin/toolsearch` 已接入 [trpc-agent-go-benchmark/toolsearch](https://github.com/trpc-group/trpc-agent-go-benchmark/tree/main/toolsearch)，在真实工具集合上度量不同配置对**工具选中准确率**、**prompt token** 和**端到端延迟**的影响。数据集、评测脚本与结果表见该目录下的 README，可按其中说明自行复现或替换成自己的工具库对比。
+
+面对不同规模与运行环境，可参考以下典型配置组合：
+
+| 场景 | 延迟工具规模 | 建议配置 | 说明 |
+| --- | --- | --- | --- |
+| 少量、命名清晰 | ≤ 20 | `WithDeferredTools(...)` + 默认关键字搜索 | 无需 namespace 与 embedding，接入成本最低 |
+| 多业务域、有同名/近义工具 | 20 ~ 100 | `WithToolboxes([]Toolbox{...})` + 默认关键字搜索 | 用 namespace 隔离，避免不同业务域下相似工具串扰 |
+| 大规模 & 语义化查询 | 100+ | `WithToolboxes` + `WithSemanticToolIndex(...)` + `WithEmbeddingFailOpen()` | 使用 embedding 语义相似度打分，embedding 失败自动回退到关键字匹配 |
+| 对声明工具数量敏感的后端 | 任意 | `WithInvocationMode(toolsearch.DispatchToolCalls)` | 延迟工具集统一收敛为 `tool_search` + `call_tool` 两个 function tool |
+| 需要 prompt cache 命中 | 任意 | `WithCatalogInDescription(true)` | 目录挂到 `tool_search` 的 description，system prompt 保持稳定 |
+| 多租户 / RBAC | 任意 | 上述任意组合 + `WithToolPermissionFilter(fn)` | 目录、搜索结果、执行三处统一按调用者过滤 |
+
+> `WithMaxResults(n)` 默认 5、硬上限 10（超出部分以 name-only 形式作为附加候选返回）。
+
 #### 基本用法
 
 **1. 排除特定工具（Exclude Filter）**
