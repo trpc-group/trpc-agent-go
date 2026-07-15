@@ -12,7 +12,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"strings"
 	"testing"
 	"time"
 
@@ -56,33 +55,6 @@ func (m *mockModel) Info() model.Info {
 
 type blockingModel struct {
 	name string
-}
-
-type sequenceModel struct {
-	responses [][]*model.Response
-	requests  []*model.Request
-}
-
-func (m *sequenceModel) GenerateContent(
-	_ context.Context,
-	request *model.Request,
-) (<-chan *model.Response, error) {
-	index := len(m.requests)
-	m.requests = append(m.requests, request)
-	var responses []*model.Response
-	if index < len(m.responses) {
-		responses = m.responses[index]
-	}
-	ch := make(chan *model.Response, len(responses))
-	for _, response := range responses {
-		ch <- response
-	}
-	close(ch)
-	return ch, nil
-}
-
-func (m *sequenceModel) Info() model.Info {
-	return model.Info{Name: "sequence-model"}
 }
 
 func (m *blockingModel) GenerateContent(
@@ -260,86 +232,6 @@ func TestExtractor_Extract_ResponseError(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "model error")
 	assert.Nil(t, ops)
-}
-
-func TestExtractor_Extract_RetriesEmptyStructuredAssistantOutput(t *testing.T) {
-	args, err := json.Marshal(map[string]any{
-		"memory":      "Recommended routes: River Loop, Cedar Ridge, Meadow View, and Eagle Peak.",
-		"memory_kind": "fact",
-	})
-	require.NoError(t, err)
-	m := &sequenceModel{responses: [][]*model.Response{
-		{{Choices: []model.Choice{{Message: model.NewAssistantMessage("No operations.")}}}},
-		{{Choices: []model.Choice{{Message: model.Message{ToolCalls: []model.ToolCall{
-			makeToolCall(memory.AddToolName, args),
-		}}}}}},
-	}}
-	e := NewExtractor(m)
-
-	ops, err := e.Extract(context.Background(), []model.Message{
-		model.NewUserMessage("Which routes should I consider?"),
-		model.NewAssistantMessage("- River Loop\n- Cedar Ridge\n- Meadow View\n- Eagle Peak"),
-	}, nil)
-
-	require.NoError(t, err)
-	require.Len(t, ops, 1)
-	require.Len(t, m.requests, 2)
-	assert.Contains(t, m.requests[1].Messages[0].Content, emptyStructuredOutputRetryPrompt)
-}
-
-func TestExtractor_Extract_DoesNotRetryUnstructuredEmptyOutput(t *testing.T) {
-	m := &mockModel{name: "test-model", responses: []*model.Response{
-		{Choices: []model.Choice{{Message: model.NewAssistantMessage("No operations.")}}},
-	}}
-	e := NewExtractor(m)
-
-	ops, err := e.Extract(context.Background(), []model.Message{
-		model.NewUserMessage("Thanks"),
-		model.NewAssistantMessage("You are welcome."),
-	}, nil)
-
-	require.NoError(t, err)
-	assert.Empty(t, ops)
-	assert.Equal(t, 1, m.called)
-}
-
-func TestExtractor_Extract_PreservesStructuredOutputAfterEmptyRetry(t *testing.T) {
-	empty := []*model.Response{{
-		Choices: []model.Choice{{Message: model.NewAssistantMessage("No operations.")}},
-	}}
-	m := &sequenceModel{responses: [][]*model.Response{empty, empty}}
-	e := NewExtractor(m)
-
-	ops, err := e.Extract(context.Background(), []model.Message{
-		model.NewUserMessage("List the options."),
-		model.NewAssistantMessage("1. Alpha\n2. Beta\n3. Gamma\n4. Delta"),
-	}, nil)
-
-	require.NoError(t, err)
-	require.Len(t, ops, 1)
-	assert.Equal(t, OperationAdd, ops[0].Type)
-	assert.Equal(t, memory.KindFact, ops[0].MemoryKind)
-	assert.Contains(t, ops[0].Memory, "Assistant provided this structured response:")
-	assert.Contains(t, ops[0].Memory, "4. Delta")
-	assert.Len(t, m.requests, 2)
-}
-
-func TestHasStructuredAssistantOutput(t *testing.T) {
-	t.Parallel()
-
-	assert.True(t, hasStructuredAssistantOutput([]model.Message{
-		model.NewAssistantMessage("1. first\n2. second\n3. third\n4. fourth"),
-	}))
-	assert.True(t, hasStructuredAssistantOutput([]model.Message{
-		model.NewAssistantMessage("• first\n• second\n• third\n• fourth"),
-	}))
-	assert.False(t, hasStructuredAssistantOutput([]model.Message{
-		model.NewAssistantMessage("- first\n- second\n- third"),
-	}))
-	assert.False(t, hasStructuredAssistantOutput([]model.Message{
-		model.NewUserMessage("- first\n- second\n- third\n- fourth"),
-	}))
-	assert.True(t, strings.Contains(emptyStructuredOutputRetryPrompt, "role mappings"))
 }
 
 func TestExtractor_Extract_BeforeModelCallback_ModifiesRequest(t *testing.T) {
@@ -715,32 +607,13 @@ func TestExtractor_BuildSystemPrompt_WithExistingMemories(t *testing.T) {
 	assert.Contains(t, prompt, "keep the earlier dated state")
 	assert.Contains(t, prompt, "10 km race")
 	assert.Contains(t, prompt, "15 km race")
-	assert.Contains(t, prompt, "Changed recurring habit")
-	assert.Contains(t, prompt, "SELF-CONTAINED STATE")
-	assert.Contains(t, prompt, "Carry forward every unchanged entity")
-	assert.Contains(t, prompt, "Riverside Park every other week as of 2024-08-04")
-	assert.Contains(t, prompt, "changed from every week")
-	assert.Contains(t, prompt, "new frequency is a changed state, not a correction")
-	assert.NotContains(t, prompt, "replacement current-state summary")
 	assert.Contains(t, prompt, "Do not only store the user's")
 	assert.Contains(t, prompt, "Aurora X")
 	assert.Contains(t, prompt, "Nightjar Pro")
 	assert.Contains(t, prompt, "session-scoped events")
 	assert.Contains(t, prompt, "on 2023-05-08")
 	assert.Contains(t, prompt, "**ASSISTANT OUTPUTS**")
-	assert.Contains(t, prompt, "option-to-attribute mapping")
-	assert.Contains(t, prompt, "weather-sealed")
-	assert.Contains(t, prompt, "every name-to-detail mapping must survive")
-	assert.Contains(t, prompt, "not only its name")
-	assert.Contains(t, prompt, "different subjects or goals")
-	assert.Contains(t, prompt, "must not update or delete an earlier list")
-	assert.Contains(t, prompt, "memory argument must contain only")
-	assert.Contains(t, prompt, "Eagle Peak as the fifth item")
-	assert.Contains(t, prompt, "Structured deliverables drafted")
-	assert.Contains(t, prompt, "numbered or bulleted")
-	assert.Contains(t, prompt, "objectives")
-	assert.Contains(t, prompt, "you MUST create")
-	assert.Contains(t, prompt, "all list items together")
+	assert.Contains(t, prompt, "Absinthe as the fifth item")
 	assert.Contains(t, prompt, "</existing_memories>")
 }
 

@@ -129,37 +129,6 @@ func (e *memoryExtractor) Extract(
 		Messages: e.buildMessages(ctx, messages, existing),
 		Tools:    tools,
 	}
-	ops, err := e.extractRequest(ctx, req)
-	if err != nil || len(ops) > 0 || !hasStructuredAssistantOutput(messages) {
-		return ops, err
-	}
-
-	retryMessages := append([]model.Message(nil), req.Messages...)
-	retryMessages[0].Content += "\n" + emptyStructuredOutputRetryPrompt
-	log.DebugfContext(ctx, "extractor: retrying empty extraction for structured assistant output")
-	retryOps, err := e.extractRequest(ctx, &model.Request{
-		Messages: retryMessages,
-		Tools:    tools,
-	})
-	if err != nil || len(retryOps) > 0 {
-		return retryOps, err
-	}
-	log.DebugfContext(ctx, "extractor: preserving structured assistant output after empty retry")
-	return structuredAssistantFallbackOps(messages), nil
-}
-
-const emptyStructuredOutputRetryPrompt = `<empty_extraction_retry>
-The assistant response contains a structured list, but the previous pass emitted
-no memory operation. Re-check every list item and preserve concrete names,
-facts, ordering, role mappings, and option-to-attribute mappings with
-memory_add. Emit no tool call only when the list truly contains no reusable
-information.
-</empty_extraction_retry>`
-
-func (e *memoryExtractor) extractRequest(
-	ctx context.Context,
-	req *model.Request,
-) ([]*Operation, error) {
 
 	// Call model.
 	ctx, rspChan, err := e.runBeforeModelCallbacks(ctx, req)
@@ -211,74 +180,6 @@ func (e *memoryExtractor) extractRequest(
 			}
 		}
 	}
-}
-
-func hasStructuredAssistantOutput(messages []model.Message) bool {
-	return len(structuredAssistantOutputs(messages)) > 0
-}
-
-func structuredAssistantOutputs(messages []model.Message) []string {
-	var outputs []string
-	for _, msg := range messages {
-		if msg.Role != model.RoleAssistant {
-			continue
-		}
-		text := extractionMessageText(msg)
-		items := 0
-		for _, line := range strings.Split(text, "\n") {
-			if isStructuredListItem(line) {
-				items++
-				if items >= 4 {
-					outputs = append(outputs, strings.TrimSpace(text))
-					break
-				}
-			}
-		}
-	}
-	return outputs
-}
-
-func structuredAssistantFallbackOps(messages []model.Message) []*Operation {
-	outputs := structuredAssistantOutputs(messages)
-	ops := make([]*Operation, 0, len(outputs))
-	for _, output := range outputs {
-		ops = append(ops, &Operation{
-			Type:       OperationAdd,
-			Memory:     "Assistant provided this structured response:\n" + output,
-			MemoryKind: memory.KindFact,
-		})
-	}
-	return ops
-}
-
-func extractionMessageText(msg model.Message) string {
-	parts := make([]string, 0, 1+len(msg.ContentParts))
-	if text := strings.TrimSpace(msg.Content); text != "" {
-		parts = append(parts, text)
-	}
-	for _, part := range msg.ContentParts {
-		if part.Type == model.ContentTypeText && part.Text != nil {
-			if text := strings.TrimSpace(*part.Text); text != "" {
-				parts = append(parts, text)
-			}
-		}
-	}
-	return strings.Join(parts, "\n")
-}
-
-func isStructuredListItem(line string) bool {
-	line = strings.TrimSpace(line)
-	for _, prefix := range []string{"- ", "* ", "+ ", "• "} {
-		if strings.HasPrefix(line, prefix) {
-			return true
-		}
-	}
-	i := 0
-	for i < len(line) && line[i] >= '0' && line[i] <= '9' {
-		i++
-	}
-	return i > 0 && i+1 < len(line) &&
-		(line[i] == '.' || line[i] == ')') && line[i+1] == ' '
 }
 
 // SetPrompt updates the extractor's prompt dynamically.
@@ -428,10 +329,8 @@ var toolActionDescriptions = map[string]string{
 		"(only if genuinely new information that is not already captured " +
 		"by an existing memory, even with different wording).",
 	memory.UpdateToolName: "Update an existing memory " +
-		"only to correct mistaken wording or merge a true duplicate. " +
-		"When a value, status, preference, habit, frequency, or count changes, " +
-		"add a self-contained new dated state with all identifying qualifiers " +
-		"and the prior value when known, and keep the prior state unchanged.",
+		"with corrected wording or a replacement current-state summary. " +
+		"Do not overwrite dated historical states such as previous goals.",
 	memory.DeleteToolName: "Delete a memory " +
 		"when the user asks to forget something, or when it is " +
 		"clearly a mistaken extraction. Do not delete useful historical states.",
@@ -604,11 +503,10 @@ Today's date is {current_date}. You MUST use this date to resolve ALL relative t
    do NOT call memory_add again. Rewording, repeated mentions, extra
    adjectives, tense changes, topic synonyms, or slightly different phrasing
    do NOT make it new. If the stored memory has a wording mistake or should
-   be merged with a true duplicate, use memory_update. If the conversation
-   reveals a later state, changed preference, updated goal, revised plan,
-   habit, frequency, or count, NEVER update the prior memory. Preserve it as
-   history and add a separate dated memory for the new state. If the memory
-   should be removed entirely, use memory_delete.
+   become a current-state summary, use memory_update. If the conversation
+   reveals a later state, changed preference, updated goal, or revised plan,
+   preserve the prior dated state as history and add a separate memory for
+   the new state. If the memory should be removed entirely, use memory_delete.
    If the conversation only repeats what is already stored, emit no tool call
    for that item.
 4. Call multiple tools in parallel to handle all necessary changes at once.
@@ -643,13 +541,6 @@ Today's date is {current_date}. You MUST use this date to resolve ALL relative t
   to fix an incorrect extraction, merge duplicate wording, or maintain an
   explicitly current-state summary that still does not erase the historical
   memory.
-- **SELF-CONTAINED STATE**: A changed-state memory must still identify exactly
-  what changed. Carry forward every unchanged entity, activity, person,
-  location, unit, scope, and other qualifier supplied by the conversation or
-  relevant existing memory. Never shorten a new state to only its changed
-  value or frequency if that makes the fact ambiguous on its own. When the
-  prior value is known, include the transition direction in the new memory
-  (for example, "now X, changed from Y") while retaining the prior memory.
 - **NO SUBJECT PREFIX**: Create memories as brief, concise statements that
   directly describe attributes or facts WITHOUT a subject prefix. Omit
   "User", "The user", or any equivalent pronoun/noun at the start, because
@@ -674,35 +565,9 @@ Today's date is {current_date}. You MUST use this date to resolve ALL relative t
   recommendations, explanations, plans, lists, rankings, and summaries as
   memory-worthy when they contain specific information the user may later
   ask about. Preserve exact item names, important ordering, constraints, and
-  conclusions. When multiple named options have distinguishing attributes,
-  preserve the option-to-attribute mapping instead of flattening the answer
-  into a list of names. This is mandatory: when the source gives each name a
-  description, capability, location, reason, compatibility constraint, or
-  other identifying detail, every name-to-detail mapping must survive in the
-  memory. Do not shorten the memory by dropping those descriptions. For
-  example, if one camera is weather-sealed and another is best in low light,
-  retain which attribute belongs to which camera. If the assistant recommends
-  five hiking routes and the fifth is Eagle Peak, keep a memory that names all
-  five and identifies Eagle Peak as the fifth item.
-  When the user asks for a recommendation, reminder, recipe ingredient,
-  option, or advice and the assistant answers with concrete options, create
-  a separate memory for what was recommended. Do not only store the user's
-  later plan or choice. If the assistant says "the Aurora X or Nightjar Pro
-  would work well", preserve both as assistant-recommended options.
-  Treat separate assistant answers or lists with different subjects or goals
-  as independent memories, even when they share a broad domain. A later list
-  must not update or delete an earlier list unless it explicitly corrects or
-  revises that same answer.
-  Structured deliverables drafted by the assistant, such as proposals,
-  plans, itineraries, recipes, rubrics, policies, and design specs, are also
-  memory-worthy. Preserve section headings and numbered or bulleted
-  objectives, requirements, decisions, steps, or recommendations. If an
-  assistant response contains named sections such as "Objectives",
-  "Requirements", "Plan", "Steps", or "Recommendations", you MUST create
-  memory for the section content unless it is already captured. When the
-  list itself is what the user may ask about later, keep the section label
-  and all list items together in one memory instead of dropping or
-  over-splitting the list.
+  conclusions. For example, if the assistant recommends five bottles and the
+  fifth is Absinthe, keep a memory that names all five and identifies
+  Absinthe as the fifth item.
 - **EXHAUSTIVE DETAILS**: Extract EVERY specific detail mentioned, even if
   it seems minor or is mentioned only once in passing. This includes:
   - Specific book titles, movie titles, song names, band/artist names
@@ -883,12 +748,12 @@ Example 6 – Assistant recommendations and answers:
   → memory_add(memory="Was recommended 5 weekend hiking routes: River Loop, Cedar Ridge, Granite Pass, Meadow View, and Eagle Peak as the fifth route.",
      memory_kind="fact",
      topics=["hiking", "routes", "Eagle Peak", "recommendations"])
-  User asks: "What treatment stages are used at Northwind Waterworks?"
-  Assistant answers: "Coagulation, sedimentation, sand filtration, and UV
-  disinfection."
-  → memory_add(memory="Northwind Waterworks uses coagulation, sedimentation, sand filtration, and UV disinfection treatment stages.",
+  User asks: "What processes are used at CITGO's Lake Charles Refinery?"
+  Assistant answers: "Atmospheric distillation, fluid catalytic cracking
+  (FCC), alkylation, and hydrotreating."
+  → memory_add(memory="CITGO's Lake Charles Refinery uses atmospheric distillation, fluid catalytic cracking (FCC), alkylation, and hydrotreating processes.",
      memory_kind="fact",
-     topics=["Northwind Waterworks", "water treatment", "UV disinfection"])
+     topics=["CITGO", "Lake Charles Refinery", "refining"])
 
 Example 7 – Changed goal with historical state:
   Existing memory: "[goal-history] Planned to complete a 10 km race before the end of 2023. (event_time=2023-06-16)"
@@ -905,18 +770,6 @@ Example 8 – Assistant recommendation options:
   low light; TrailCam Mini is the lightest option."
   → memory_add(memory="Was recommended cameras for a rainy night shoot: Aurora X is weather-sealed; Nightjar Pro is best in low light; TrailCam Mini is the lightest option.",
      memory_kind="fact", topics=["cameras", "Aurora X", "Nightjar Pro", "TrailCam Mini"])
-
-Example 9 – Changed recurring habit with historical state:
-  Existing memory: "[run-frequency] Runs with a training group every week."
-  User says on 2024-08-04: "I am meeting the group for runs at Riverside Park
-  every other week now."
-  → keep run-frequency unchanged because it answers previous-frequency
-    questions. The new frequency is a changed state, not a correction, and
-    its activity, group, and location must remain in the new memory.
-  → memory_add(memory="Runs with the training group at Riverside Park every other week as of 2024-08-04, changed from every week.",
-     memory_kind="fact", event_time="2024-08-04",
-     location="Riverside Park",
-     topics=["running", "training group", "Riverside Park", "frequency"])
 </examples>
 
 <common_mistakes>
