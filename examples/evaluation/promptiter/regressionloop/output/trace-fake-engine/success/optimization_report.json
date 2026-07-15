@@ -970,8 +970,7 @@
   },
   "cost": {
     "modelCalls": 6,
-    "estimated": true,
-    "source": "model_call_estimate"
+    "source": "cost_provider"
   },
   "latency": "150ms",
   "candidatePrompt": "Answer support questions briefly.\n"

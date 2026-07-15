@@ -82,7 +82,7 @@ func TestComputeDeltaTreatsAddedFailedMetricAsNewFailure(t *testing.T) {
 	assert.True(t, added.Critical)
 }
 
-func TestComputeDeltaCoversAddedPassedZeroAndDroppedFailedZero(t *testing.T) {
+func TestComputeDeltaTreatsDroppedFailedZeroMetricAsNewFailure(t *testing.T) {
 	baseline := evalResult("validation", []caseSpec{
 		{id: "dropped_failed_zero", metric: "rubric", score: 0, status: status.EvalStatusFailed},
 	})
@@ -90,10 +90,14 @@ func TestComputeDeltaCoversAddedPassedZeroAndDroppedFailedZero(t *testing.T) {
 		{id: "added_passed_zero", metric: "optional", score: 0, status: status.EvalStatusPassed},
 	})
 	delta := ComputeDelta(baseline, candidate, nil)
-	assert.Equal(t, 2, delta.Summary.Unchanged)
+	assert.Equal(t, 1, delta.Summary.NewlyFailed)
+	assert.Equal(t, 1, delta.Summary.Unchanged)
+	kinds := map[string]DeltaKind{}
 	for _, item := range delta.Cases {
-		assert.Equal(t, DeltaUnchanged, item.Kind)
+		kinds[item.EvalCaseID] = item.Kind
 	}
+	assert.Equal(t, DeltaNewlyFailed, kinds["dropped_failed_zero"])
+	assert.Equal(t, DeltaUnchanged, kinds["added_passed_zero"])
 
 	delta = ComputeDelta(
 		evalResult("validation", []caseSpec{
@@ -105,7 +109,7 @@ func TestComputeDeltaCoversAddedPassedZeroAndDroppedFailedZero(t *testing.T) {
 		nil,
 	)
 	assert.Equal(t, 1, delta.Summary.ScoreUp)
-	assert.Equal(t, 1, delta.Summary.ScoreDown)
+	assert.Equal(t, 1, delta.Summary.NewlyFailed)
 }
 
 func TestUnionMetricKeysSortsByEvalSetBeforeCase(t *testing.T) {

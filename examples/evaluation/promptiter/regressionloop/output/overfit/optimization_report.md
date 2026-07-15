@@ -6,7 +6,7 @@
 - Accepted validation score: `0.500`
 - Candidate validation score: `0.500`
 - Validation delta: `+0.167`
-- Cost: `6` model calls (estimated), source `model_call_estimate`
+- Cost: `6` model calls, source `cost_provider`
 - Latency: `150ms`
 
 > `Accepted validation` is the last profile accepted by PromptIter. `Candidate validation` is the final audited candidate, even when PromptIter or the outer gate rejects it.
@@ -79,6 +79,6 @@ Baseline failures: `5`; candidate failures: `2`; combined: `7`.
 
 ## Candidate Prompt Rejected By Gate
 
-```text
+````text
 OVERFIT_PROMPT: optimize train failures aggressively, even if validation policy dates change.
-```
+````

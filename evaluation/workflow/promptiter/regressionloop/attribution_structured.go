@@ -217,9 +217,9 @@ func classifyToolDiff(actualTools, expectedTools []structuredToolCall) (FailureC
 	if !reflect.DeepEqual(actualNames, expectedNames) {
 		return FailureToolCallError, true
 	}
-	for _, expected := range expectedTools {
-		actual, ok := firstToolByName(actualTools, expected.Name)
-		if !ok {
+	for i, expected := range expectedTools {
+		actual := actualTools[i]
+		if actual.Name != expected.Name {
 			return FailureToolCallError, true
 		}
 		if !jsonValuesEqual(actual.Arguments, expected.Arguments) {
@@ -409,15 +409,6 @@ func toolNameCounts(tools []structuredToolCall) map[string]int {
 		}
 	}
 	return counts
-}
-
-func firstToolByName(tools []structuredToolCall, name string) (structuredToolCall, bool) {
-	for _, tool := range tools {
-		if strings.TrimSpace(tool.Name) == strings.TrimSpace(name) {
-			return tool, true
-		}
-	}
-	return structuredToolCall{}, false
 }
 
 func toolNames(tools []structuredToolCall) []string {

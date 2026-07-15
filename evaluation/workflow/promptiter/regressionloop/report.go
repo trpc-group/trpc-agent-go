@@ -323,9 +323,29 @@ func RenderMarkdown(report OptimizationReport) string {
 		if !report.GateDecision.Accepted {
 			title = "Candidate Prompt Rejected By Gate"
 		}
-		fmt.Fprintf(&b, "## %s\n\n```text\n%s\n```\n", title, report.CandidatePrompt)
+		fence := markdownFence(report.CandidatePrompt)
+		fmt.Fprintf(&b, "## %s\n\n%stext\n%s\n%s\n", title, fence, report.CandidatePrompt, fence)
 	}
 	return b.String()
+}
+
+func markdownFence(text string) string {
+	longest := 0
+	current := 0
+	for _, r := range text {
+		if r == '`' {
+			current++
+			if current > longest {
+				longest = current
+			}
+			continue
+		}
+		current = 0
+	}
+	if longest < 3 {
+		longest = 3
+	}
+	return strings.Repeat("`", longest+1)
 }
 
 func renderAttributionSummary(b *bytes.Buffer, summary AttributionSummary) {

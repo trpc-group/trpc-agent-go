@@ -2306,24 +2306,46 @@ func TestCalculateEvaluationScore(t *testing.T) {
 }
 
 func TestAdaptMetricResults(t *testing.T) {
-	metrics, err := adaptMetricResults([]*evalresult.EvalMetricResult{
-		nil,
-		{
-			MetricName: "quality",
-			Score:      0.7,
-			EvalStatus: status.EvalStatusPassed,
-			Details: &evalresult.EvalMetricResultDetails{
-				Reason: "  accepted  ",
+	actual := &evalset.Invocation{InvocationID: "actual-2"}
+	expected := &evalset.Invocation{InvocationID: "expected-2"}
+	metrics, err := adaptMetricResults(
+		[]*evalresult.EvalMetricResult{
+			nil,
+			{
+				MetricName: "quality",
+				Score:      0.7,
+				EvalStatus: status.EvalStatusPassed,
+				Details: &evalresult.EvalMetricResultDetails{
+					Reason: "  accepted  ",
+				},
 			},
 		},
-	})
+		[]*evalresult.EvalMetricResultPerInvocation{
+			{
+				ActualInvocation:   &evalset.Invocation{InvocationID: "actual-1"},
+				ExpectedInvocation: &evalset.Invocation{InvocationID: "expected-1"},
+				EvalMetricResults: []*evalresult.EvalMetricResult{
+					{MetricName: "quality", EvalStatus: status.EvalStatusFailed},
+				},
+			},
+			{
+				ActualInvocation:   actual,
+				ExpectedInvocation: expected,
+				EvalMetricResults: []*evalresult.EvalMetricResult{
+					{MetricName: "quality", EvalStatus: status.EvalStatusPassed},
+				},
+			},
+		},
+	)
 	assert.NoError(t, err)
 	assert.Equal(t, []MetricResult{
 		{
-			MetricName: "quality",
-			Score:      0.7,
-			Status:     status.EvalStatusPassed,
-			Reason:     "accepted",
+			MetricName:         "quality",
+			Score:              0.7,
+			Status:             status.EvalStatusPassed,
+			Reason:             "accepted",
+			ActualInvocation:   actual,
+			ExpectedInvocation: expected,
 		},
 	}, metrics)
 	metrics, err = adaptMetricResults([]*evalresult.EvalMetricResult{
@@ -2332,7 +2354,7 @@ func TestAdaptMetricResults(t *testing.T) {
 			Score:      0.1,
 			EvalStatus: status.EvalStatusFailed,
 		},
-	})
+	}, nil)
 	assert.Nil(t, metrics)
 	assert.EqualError(t, err, `metric "quality" is missing loss reason`)
 }
@@ -2499,6 +2521,9 @@ func TestAdaptEvaluationCaseResultPreservesPerInvocationEvidence(t *testing.T) {
 					{
 						ActualInvocation:   actual,
 						ExpectedInvocation: expected,
+						EvalMetricResults: []*evalresult.EvalMetricResult{
+							{MetricName: "quality", EvalStatus: status.EvalStatusPassed},
+						},
 					},
 				},
 			},
@@ -2515,6 +2540,129 @@ func TestAdaptEvaluationCaseResultPreservesPerInvocationEvidence(t *testing.T) {
 	require.NoError(t, err)
 	assert.Same(t, actual, result.ActualInvocation)
 	assert.Same(t, expected, result.ExpectedInvocation)
+	assert.Same(t, actual, result.Metrics[0].ActualInvocation)
+	assert.Same(t, expected, result.Metrics[0].ExpectedInvocation)
+}
+
+func TestAdaptEvaluationCaseResultUsesFailingInvocationForMetricEvidence(t *testing.T) {
+	structure, structureErr := profilecompiler.NewStructure(testStructureSnapshot(t))
+	require.NoError(t, structureErr)
+	firstActual := &evalset.Invocation{InvocationID: "actual-1"}
+	secondActual := &evalset.Invocation{InvocationID: "actual-2"}
+	secondExpected := &evalset.Invocation{InvocationID: "expected-2"}
+	result, err := adaptEvaluationCaseResult(structure, "validation", &evaluation.EvaluationCaseResult{
+		EvalCaseID: "case_1",
+		EvalCaseResults: []*evalresult.EvalCaseResult{
+			{
+				RunID: 1,
+				OverallEvalMetricResults: []*evalresult.EvalMetricResult{
+					{
+						MetricName: "quality",
+						Score:      0,
+						EvalStatus: status.EvalStatusFailed,
+						Details:    &evalresult.EvalMetricResultDetails{Reason: "second turn failed"},
+					},
+				},
+				EvalMetricResultPerInvocation: []*evalresult.EvalMetricResultPerInvocation{
+					{
+						ActualInvocation: firstActual,
+						EvalMetricResults: []*evalresult.EvalMetricResult{
+							{MetricName: "quality", EvalStatus: status.EvalStatusPassed},
+						},
+					},
+					{
+						ActualInvocation:   secondActual,
+						ExpectedInvocation: secondExpected,
+						EvalMetricResults: []*evalresult.EvalMetricResult{
+							{MetricName: "quality", EvalStatus: status.EvalStatusFailed},
+						},
+					},
+				},
+			},
+		},
+		RunDetails: []*evaluation.EvaluationCaseRunDetails{
+			{
+				RunID: 1,
+				Inference: &evaluation.EvaluationInferenceDetails{
+					ExecutionTraces: []*atrace.Trace{{
+						SessionID: "session",
+						Steps: []atrace.Step{
+							{StepID: "step_1", NodeID: "node_1", AppliedSurfaceIDs: []string{testSurfaceID}},
+						},
+					}},
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, result.Metrics, 1)
+	assert.Same(t, firstActual, result.ActualInvocation)
+	assert.Same(t, secondActual, result.Metrics[0].ActualInvocation)
+	assert.Same(t, secondExpected, result.Metrics[0].ExpectedInvocation)
+}
+
+func TestAdaptEvaluationCaseResultDisambiguatesFailedInvocationsByReason(t *testing.T) {
+	structure, structureErr := profilecompiler.NewStructure(testStructureSnapshot(t))
+	require.NoError(t, structureErr)
+	firstActual := &evalset.Invocation{InvocationID: "actual-1"}
+	secondActual := &evalset.Invocation{InvocationID: "actual-2"}
+	secondExpected := &evalset.Invocation{InvocationID: "expected-2"}
+	result, err := adaptEvaluationCaseResult(structure, "validation", &evaluation.EvaluationCaseResult{
+		EvalCaseID: "case_1",
+		EvalCaseResults: []*evalresult.EvalCaseResult{
+			{
+				RunID: 1,
+				OverallEvalMetricResults: []*evalresult.EvalMetricResult{
+					{
+						MetricName: "quality",
+						Score:      0,
+						EvalStatus: status.EvalStatusFailed,
+						Details:    &evalresult.EvalMetricResultDetails{Reason: "second turn failed"},
+					},
+				},
+				EvalMetricResultPerInvocation: []*evalresult.EvalMetricResultPerInvocation{
+					{
+						ActualInvocation: firstActual,
+						EvalMetricResults: []*evalresult.EvalMetricResult{
+							{
+								MetricName: "quality",
+								EvalStatus: status.EvalStatusFailed,
+								Details:    &evalresult.EvalMetricResultDetails{Reason: "first turn failed"},
+							},
+						},
+					},
+					{
+						ActualInvocation:   secondActual,
+						ExpectedInvocation: secondExpected,
+						EvalMetricResults: []*evalresult.EvalMetricResult{
+							{
+								MetricName: "quality",
+								EvalStatus: status.EvalStatusFailed,
+								Details:    &evalresult.EvalMetricResultDetails{Reason: "second turn failed"},
+							},
+						},
+					},
+				},
+			},
+		},
+		RunDetails: []*evaluation.EvaluationCaseRunDetails{
+			{
+				RunID: 1,
+				Inference: &evaluation.EvaluationInferenceDetails{
+					ExecutionTraces: []*atrace.Trace{{
+						SessionID: "session",
+						Steps: []atrace.Step{
+							{StepID: "step_1", NodeID: "node_1", AppliedSurfaceIDs: []string{testSurfaceID}},
+						},
+					}},
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, result.Metrics, 1)
+	assert.Same(t, secondActual, result.Metrics[0].ActualInvocation)
+	assert.Same(t, secondExpected, result.Metrics[0].ExpectedInvocation)
 }
 
 func TestAdaptEvaluationSetResultValidationErrors(t *testing.T) {

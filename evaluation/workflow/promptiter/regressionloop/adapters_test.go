@@ -24,8 +24,9 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 	promptiterengine "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/engine"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/surfacepatch"
+	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/model"
-	"trpc.group/trpc-go/trpc-agent-go/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 
 	"github.com/stretchr/testify/assert"
@@ -69,6 +70,9 @@ func TestAdaptEvaluationResultConvertsScoresAndRunDetails(t *testing.T) {
 								ExpectedInvocation: &evalset.Invocation{
 									FinalResponse: assistantMessage("expected"),
 								},
+								EvalMetricResults: []*evalresult.EvalMetricResult{
+									{MetricName: "final_response", EvalStatus: status.EvalStatusFailed},
+								},
 							},
 						},
 					},
@@ -84,6 +88,111 @@ func TestAdaptEvaluationResultConvertsScoresAndRunDetails(t *testing.T) {
 	assert.Equal(t, "answer mismatch", result.EvalSets[0].Cases[0].Metrics[0].Reason)
 	assert.Equal(t, "actual", result.EvalSets[0].Cases[0].ActualInvocation.FinalResponse.Content)
 	assert.Equal(t, "expected", result.EvalSets[0].Cases[0].ExpectedInvocation.FinalResponse.Content)
+	assert.Equal(t, "actual", result.EvalSets[0].Cases[0].Metrics[0].ActualInvocation.FinalResponse.Content)
+	assert.Equal(t, "expected", result.EvalSets[0].Cases[0].Metrics[0].ExpectedInvocation.FinalResponse.Content)
+}
+
+func TestAdaptEvaluationResultUsesFailingInvocationForMetricEvidence(t *testing.T) {
+	firstActual := &evalset.Invocation{InvocationID: "actual-1"}
+	secondActual := &evalset.Invocation{InvocationID: "actual-2"}
+	secondExpected := &evalset.Invocation{InvocationID: "expected-2"}
+	result, err := AdaptEvaluationResult(&evaluation.EvaluationResult{
+		EvalSetID: "validation",
+		EvalCases: []*evaluation.EvaluationCaseResult{
+			{
+				EvalCaseID: "case",
+				MetricResults: []*evalresult.EvalMetricResult{
+					{
+						MetricName: "quality",
+						Score:      0,
+						EvalStatus: status.EvalStatusFailed,
+						Details:    &evalresult.EvalMetricResultDetails{Reason: "second turn failed"},
+					},
+				},
+				EvalCaseResults: []*evalresult.EvalCaseResult{
+					{
+						EvalMetricResultPerInvocation: []*evalresult.EvalMetricResultPerInvocation{
+							{
+								ActualInvocation: firstActual,
+								EvalMetricResults: []*evalresult.EvalMetricResult{
+									{MetricName: "quality", EvalStatus: status.EvalStatusPassed},
+								},
+							},
+							{
+								ActualInvocation:   secondActual,
+								ExpectedInvocation: secondExpected,
+								EvalMetricResults: []*evalresult.EvalMetricResult{
+									{MetricName: "quality", EvalStatus: status.EvalStatusFailed},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, result.EvalSets, 1)
+	require.Len(t, result.EvalSets[0].Cases, 1)
+	require.Len(t, result.EvalSets[0].Cases[0].Metrics, 1)
+	assert.Same(t, firstActual, result.EvalSets[0].Cases[0].ActualInvocation)
+	assert.Same(t, secondActual, result.EvalSets[0].Cases[0].Metrics[0].ActualInvocation)
+	assert.Same(t, secondExpected, result.EvalSets[0].Cases[0].Metrics[0].ExpectedInvocation)
+}
+
+func TestAdaptEvaluationResultDisambiguatesFailedInvocationsByReason(t *testing.T) {
+	firstActual := &evalset.Invocation{InvocationID: "actual-1"}
+	secondActual := &evalset.Invocation{InvocationID: "actual-2"}
+	secondExpected := &evalset.Invocation{InvocationID: "expected-2"}
+	result, err := AdaptEvaluationResult(&evaluation.EvaluationResult{
+		EvalSetID: "validation",
+		EvalCases: []*evaluation.EvaluationCaseResult{
+			{
+				EvalCaseID: "case",
+				MetricResults: []*evalresult.EvalMetricResult{
+					{
+						MetricName: "quality",
+						Score:      0,
+						EvalStatus: status.EvalStatusFailed,
+						Details:    &evalresult.EvalMetricResultDetails{Reason: "second turn failed"},
+					},
+				},
+				EvalCaseResults: []*evalresult.EvalCaseResult{
+					{
+						EvalMetricResultPerInvocation: []*evalresult.EvalMetricResultPerInvocation{
+							{
+								ActualInvocation: firstActual,
+								EvalMetricResults: []*evalresult.EvalMetricResult{
+									{
+										MetricName: "quality",
+										EvalStatus: status.EvalStatusFailed,
+										Details:    &evalresult.EvalMetricResultDetails{Reason: "first turn failed"},
+									},
+								},
+							},
+							{
+								ActualInvocation:   secondActual,
+								ExpectedInvocation: secondExpected,
+								EvalMetricResults: []*evalresult.EvalMetricResult{
+									{
+										MetricName: "quality",
+										EvalStatus: status.EvalStatusFailed,
+										Details:    &evalresult.EvalMetricResultDetails{Reason: "second turn failed"},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, result.EvalSets, 1)
+	require.Len(t, result.EvalSets[0].Cases, 1)
+	require.Len(t, result.EvalSets[0].Cases[0].Metrics, 1)
+	assert.Same(t, secondActual, result.EvalSets[0].Cases[0].Metrics[0].ActualInvocation)
+	assert.Same(t, secondExpected, result.EvalSets[0].Cases[0].Metrics[0].ExpectedInvocation)
 }
 
 func TestEnginePromptIteratorRejectsNilEngine(t *testing.T) {
@@ -212,11 +321,81 @@ func TestEvaluationServiceEvaluatorPatchesPromptThroughEvaluationService(t *test
 	assert.NotEmpty(t, runOptions.CustomAgentConfigs)
 }
 
-func TestTextPromptSurfaceApplierSupportsToolDescriptionSurface(t *testing.T) {
-	options, err := TextPromptSurfaceApplier{SurfaceIDs: []string{"support_agent#tool.lookup"}}.
-		EvaluationOptions(EvaluationRequest{Prompt: "prompt"})
+func TestTextPromptSurfaceApplierPreservesCallableToolAndSiblings(t *testing.T) {
+	lookupCalled := false
+	siblingCalled := false
+	lookupTool := adapterCallableTool{
+		decl: &tool.Declaration{
+			Name:        "lookup",
+			Description: "old lookup description",
+			InputSchema: &tool.Schema{
+				Type: "object",
+				Properties: map[string]*tool.Schema{
+					"id": {Type: "string", Description: "old id"},
+				},
+			},
+		},
+		call: func(_ context.Context, raw []byte) (any, error) {
+			lookupCalled = true
+			assert.JSONEq(t, `{"id":"A"}`, string(raw))
+			return "lookup:A", nil
+		},
+	}
+	siblingTool := adapterCallableTool{
+		decl: &tool.Declaration{Name: "sibling", Description: "sibling description"},
+		call: func(context.Context, []byte) (any, error) {
+			siblingCalled = true
+			return "sibling", nil
+		},
+	}
+	runOption, err := promptSurfaceRunOption("support_agent#tool.lookup", "patched lookup description")
 	require.NoError(t, err)
-	assert.NotEmpty(t, options)
+	opts := agent.NewRunOptions(runOption)
+	patch, ok := surfacepatch.PatchForNode(opts.CustomAgentConfigs, "support_agent")
+	require.True(t, ok)
+	declarations, ok := patch.ToolDeclarations()
+	require.True(t, ok)
+	effectiveTools := itool.ApplyDeclarations([]tool.Tool{lookupTool, siblingTool}, declarations)
+
+	toolsByName := toolsByDeclarationName(effectiveTools)
+	require.Contains(t, toolsByName, "lookup")
+	require.Contains(t, toolsByName, "sibling")
+	assert.Equal(t, "patched lookup description", toolsByName["lookup"].Declaration().Description)
+	require.NotNil(t, toolsByName["lookup"].Declaration().InputSchema)
+	assert.Equal(t, "old id", toolsByName["lookup"].Declaration().InputSchema.Properties["id"].Description)
+
+	lookupCallable, ok := toolsByName["lookup"].(tool.CallableTool)
+	require.True(t, ok)
+	lookupResult, err := lookupCallable.Call(context.Background(), []byte(`{"id":"A"}`))
+	require.NoError(t, err)
+	assert.Equal(t, "lookup:A", lookupResult)
+	assert.True(t, lookupCalled)
+
+	siblingCallable, ok := toolsByName["sibling"].(tool.CallableTool)
+	require.True(t, ok)
+	siblingResult, err := siblingCallable.Call(context.Background(), []byte(`{}`))
+	require.NoError(t, err)
+	assert.Equal(t, "sibling", siblingResult)
+	assert.True(t, siblingCalled)
+}
+
+func TestTextPromptSurfaceApplierAppliesProfileWithoutPromptText(t *testing.T) {
+	profile, err := BuildPromptProfile([]string{"support_agent#tool.lookup"}, "patched lookup description")
+	require.NoError(t, err)
+	options, err := TextPromptSurfaceApplier{SurfaceIDs: []string{"support_agent#tool.lookup"}}.
+		EvaluationOptions(EvaluationRequest{Profile: profile})
+	require.NoError(t, err)
+	require.Len(t, options, 1)
+}
+
+func TestTextPromptSurfaceApplierRejectsUnsupportedBuiltInSurfaces(t *testing.T) {
+	_, err := TextPromptSurfaceApplier{SurfaceIDs: []string{"support_agent#few_shot"}}.
+		EvaluationOptions(EvaluationRequest{Prompt: "prompt"})
+	assert.ErrorContains(t, err, "custom PromptIterator/PromptApplier integration")
+
+	_, err = TextPromptSurfaceApplier{SurfaceIDs: []string{"support_agent#instruction", "router#instruction"}}.
+		EvaluationOptions(EvaluationRequest{Prompt: "prompt"})
+	assert.ErrorContains(t, err, "requires exactly one target surface id")
 }
 
 func TestTextPromptSurfaceApplierNoopsForEmptyInputs(t *testing.T) {
@@ -249,18 +428,20 @@ func TestPromptSurfaceRunOptionPatchesAgentRunOptions(t *testing.T) {
 	assert.NotEmpty(t, opts.CustomAgentConfigs)
 }
 
-func TestPromptSurfaceRunOptionSupportsRemainingSurfaceTypesAndErrors(t *testing.T) {
+func TestPromptSurfaceRunOptionSupportsTextSurfaceTypesAndErrors(t *testing.T) {
 	for _, surfaceID := range []string{
 		"support_agent#global_instruction",
-		"support_agent#few_shot",
-		"support_agent#skill.refund_policy",
-		"support_agent#tool.billing_lookup",
 	} {
 		runOption, err := promptSurfaceRunOption(surfaceID, "prompt")
 		require.NoError(t, err, surfaceID)
 		assert.NotEmpty(t, agent.NewRunOptions(runOption).CustomAgentConfigs)
 	}
-	_, err := promptSurfaceRunOption("bad-surface", "prompt")
+	runOption, err := promptSurfaceRunOption("support_agent#tool.billing_lookup", "prompt")
+	require.NoError(t, err)
+	assert.NotEmpty(t, agent.NewRunOptions(runOption).CustomAgentConfigs)
+	_, err = promptSurfaceRunOption("support_agent#skill.refund_policy", "prompt")
+	assert.ErrorContains(t, err, "custom PromptIterator/PromptApplier integration")
+	_, err = promptSurfaceRunOption("bad-surface", "prompt")
 	assert.ErrorContains(t, err, "invalid prompt surface id")
 	_, err = promptSurfaceRunOption("support_agent#unknown", "prompt")
 	assert.ErrorContains(t, err, "not a supported prompt surface")
@@ -268,17 +449,17 @@ func TestPromptSurfaceRunOptionSupportsRemainingSurfaceTypesAndErrors(t *testing
 
 func TestBuildTextPromptProfileUsesPromptSourceText(t *testing.T) {
 	profile, err := BuildTextPromptProfile(
-		[]string{"support_agent#instruction", "support_agent#global_instruction"},
+		[]string{"support_agent#instruction"},
 		"baseline prompt\n",
 	)
 	require.NoError(t, err)
 	require.NotNil(t, profile)
-	require.Len(t, profile.Overrides, 2)
+	require.Len(t, profile.Overrides, 1)
 	require.NotNil(t, profile.Overrides[0].Value.Text)
 	assert.Equal(t, "baseline prompt\n", *profile.Overrides[0].Value.Text)
 }
 
-func TestBuildPromptProfileCoversEmptyInvalidFewShotAndModel(t *testing.T) {
+func TestBuildPromptProfileCoversEmptyInvalidAndUnsupportedSurfaces(t *testing.T) {
 	profile, err := BuildPromptProfile([]string{"support_agent#instruction"}, "")
 	require.NoError(t, err)
 	assert.Nil(t, profile)
@@ -287,11 +468,17 @@ func TestBuildPromptProfileCoversEmptyInvalidFewShotAndModel(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, profile)
 
-	profile, err = BuildPromptProfile([]string{"support_agent#few_shot"}, "few shot prompt")
+	_, err = BuildPromptProfile([]string{"support_agent#instruction", "support_agent#global_instruction"}, "prompt")
+	assert.ErrorContains(t, err, "requires exactly one target surface id")
+
+	_, err = BuildPromptProfile([]string{"support_agent#few_shot"}, "few shot prompt")
+	assert.ErrorContains(t, err, "custom PromptIterator/PromptApplier integration")
+
+	profile, err = BuildPromptProfile([]string{"support_agent#tool.billing_lookup"}, "prompt")
 	require.NoError(t, err)
-	require.NotNil(t, profile)
 	require.Len(t, profile.Overrides, 1)
-	require.Len(t, profile.Overrides[0].Value.FewShot, 1)
+	assert.Equal(t, "billing_lookup", profile.Overrides[0].Value.Tools[0].ID)
+	assert.Equal(t, "prompt", profile.Overrides[0].Value.Tools[0].Description)
 
 	_, err = BuildPromptProfile([]string{"support_agent#model"}, "prompt")
 	assert.ErrorContains(t, err, "model surface")
@@ -299,46 +486,33 @@ func TestBuildPromptProfileCoversEmptyInvalidFewShotAndModel(t *testing.T) {
 	assert.ErrorContains(t, err, "invalid prompt surface id")
 }
 
-func TestBuildPromptProfileSupportsToolDescriptionsAndRejectsSkill(t *testing.T) {
-	profile, err := BuildPromptProfile(
-		[]string{"support_agent#tool.billing_lookup", "support_agent#tool"},
-		"optimized description",
-	)
-	require.NoError(t, err)
-	require.NotNil(t, profile)
-	require.Len(t, profile.Overrides, 2)
-	assert.Equal(t, "billing_lookup", profile.Overrides[0].Value.Tools[0].ID)
-	assert.Equal(t, "optimized description", profile.Overrides[0].Value.Tools[0].Description)
-	assert.Equal(t, "support_agent", profile.Overrides[1].Value.Tools[0].ID)
-
-	_, err = BuildPromptProfile([]string{"support_agent#skill.refund_policy"}, "optimized description")
-	assert.ErrorContains(t, err, "skill surface requires a custom PromptIterator/profile path")
-}
-
 func TestPromptSurfaceValueRejectsUnsupportedSurface(t *testing.T) {
 	_, err := promptSurfaceValue("agent", astructure.SurfaceType("bad"), "", "prompt")
 	assert.ErrorContains(t, err, "unsupported surface type")
 }
 
-func TestPromptDerivedToolAndSkillRepository(t *testing.T) {
-	toolRef := promptDescriptionTool{declaration: tool.Declaration{Name: "lookup", Description: "desc"}}
-	require.NotNil(t, toolRef.Declaration())
-	assert.Equal(t, "lookup", toolRef.Declaration().Name)
+func toolsByDeclarationName(tools []tool.Tool) map[string]tool.Tool {
+	byName := make(map[string]tool.Tool, len(tools))
+	for _, candidate := range tools {
+		if candidate == nil || candidate.Declaration() == nil {
+			continue
+		}
+		byName[candidate.Declaration().Name] = candidate
+	}
+	return byName
+}
 
-	repo := singleSkillRepository{summary: skill.Summary{Name: "refund", Description: "refund desc"}}
-	assert.Equal(t, []skill.Summary{{Name: "refund", Description: "refund desc"}}, repo.Summaries())
-	got, err := repo.Get("")
-	require.NoError(t, err)
-	assert.Equal(t, "refund desc", got.Body)
-	got, err = repo.Get("refund")
-	require.NoError(t, err)
-	assert.Equal(t, "refund", got.Summary.Name)
-	_, err = repo.Get("missing")
-	assert.ErrorContains(t, err, "not found")
-	_, err = repo.Path("")
-	assert.ErrorContains(t, err, "no filesystem path")
-	_, err = repo.Path("missing")
-	assert.ErrorContains(t, err, "not found")
+type adapterCallableTool struct {
+	decl *tool.Declaration
+	call func(context.Context, []byte) (any, error)
+}
+
+func (t adapterCallableTool) Declaration() *tool.Declaration {
+	return t.decl
+}
+
+func (t adapterCallableTool) Call(ctx context.Context, args []byte) (any, error) {
+	return t.call(ctx, args)
 }
 
 func TestAdaptEvaluationResultRejectsNilAndNoScores(t *testing.T) {

@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 	promptiterengine "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/engine"
 )
 
@@ -50,6 +51,7 @@ type EvaluationRequest struct {
 	Phase     Phase
 	EvalSetID string
 	Prompt    string
+	Profile   *promptiter.Profile
 	Config    Config
 	Metrics   []MetricDefinition
 }
@@ -95,10 +97,15 @@ func (p Pipeline) Run(ctx context.Context, cfg Config) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
+	initialProfile, err := BuildPromptProfile(cfg.TargetSurfaceIDs, prompt)
+	if err != nil {
+		return nil, fmt.Errorf("build initial prompt profile: %w", err)
+	}
 	baselineTrain, err := p.Evaluator.Evaluate(ctx, EvaluationRequest{
 		Phase:     PhaseBaselineTrain,
 		EvalSetID: cfg.TrainEvalSetID,
 		Prompt:    prompt,
+		Profile:   initialProfile,
 		Config:    cfg,
 		Metrics:   metrics,
 	})
@@ -109,6 +116,7 @@ func (p Pipeline) Run(ctx context.Context, cfg Config) (*Result, error) {
 		Phase:     PhaseBaselineValidation,
 		EvalSetID: cfg.ValidationEvalSetID,
 		Prompt:    prompt,
+		Profile:   initialProfile,
 		Config:    cfg,
 		Metrics:   metrics,
 	})
@@ -127,10 +135,6 @@ func (p Pipeline) Run(ctx context.Context, cfg Config) (*Result, error) {
 		AttributeFailuresWithOptions(ctx, baselineValidation, attributionOptions)...,
 	)
 	request := cfg.BuildRunRequest(BuildLossHints(trainAttributions))
-	initialProfile, err := BuildPromptProfile(cfg.TargetSurfaceIDs, prompt)
-	if err != nil {
-		return nil, fmt.Errorf("build initial prompt profile: %w", err)
-	}
 	request.InitialProfile = initialProfile
 	promptIterRun, err := p.PromptIterator.Run(ctx, request)
 	if err != nil {
@@ -177,20 +181,19 @@ func (p Pipeline) evaluateFinalCandidate(
 	run *promptiterengine.RunResult,
 	metrics []MetricDefinition,
 ) (*promptiterengine.EvaluationResult, bool, error) {
-	candidate, err := candidateTextOverride(run)
-	if err != nil {
-		return nil, false, err
-	}
-	if candidate.Text == "" {
+	candidateProfile := finalCandidateProfile(run)
+	if candidateProfile == nil || len(candidateProfile.Overrides) == 0 {
 		return nil, false, nil
 	}
-	if err := validateCandidateTextTarget(candidate.SurfaceID, cfg.TargetSurfaceIDs); err != nil {
+	if err := validateCandidateProfileTargets(candidateProfile, cfg.TargetSurfaceIDs); err != nil {
 		return nil, false, err
 	}
+	candidatePrompt, _ := profilePromptText(candidateProfile)
 	result, err := p.Evaluator.Evaluate(ctx, EvaluationRequest{
 		Phase:     PhaseCandidateValidation,
 		EvalSetID: cfg.ValidationEvalSetID,
-		Prompt:    candidate.Text,
+		Prompt:    candidatePrompt,
+		Profile:   candidateProfile,
 		Config:    cfg,
 		Metrics:   metrics,
 	})
@@ -200,18 +203,36 @@ func (p Pipeline) evaluateFinalCandidate(
 	return result, true, nil
 }
 
-func validateCandidateTextTarget(candidateSurfaceID string, targetSurfaceIDs []string) error {
+func finalCandidateProfile(run *promptiterengine.RunResult) *promptiter.Profile {
+	if run == nil {
+		return nil
+	}
+	for i := len(run.Rounds) - 1; i >= 0; i-- {
+		if run.Rounds[i].OutputProfile != nil && len(run.Rounds[i].OutputProfile.Overrides) > 0 {
+			return run.Rounds[i].OutputProfile
+		}
+	}
+	return run.AcceptedProfile
+}
+
+func validateCandidateProfileTargets(profile *promptiter.Profile, targetSurfaceIDs []string) error {
+	if profile == nil || len(profile.Overrides) == 0 {
+		return nil
+	}
 	if len(targetSurfaceIDs) != 1 {
 		return fmt.Errorf(
-			"candidate text override %q requires exactly one matching target surface id; got %v",
-			candidateSurfaceID,
+			"candidate profile requires exactly one matching target surface id; got %v",
 			targetSurfaceIDs,
 		)
 	}
 	targetSurfaceID := strings.TrimSpace(targetSurfaceIDs[0])
-	if strings.TrimSpace(candidateSurfaceID) != targetSurfaceID {
+	if len(profile.Overrides) != 1 {
+		return fmt.Errorf("candidate profile has multiple overrides; got %d", len(profile.Overrides))
+	}
+	candidateSurfaceID := strings.TrimSpace(profile.Overrides[0].SurfaceID)
+	if candidateSurfaceID != targetSurfaceID {
 		return fmt.Errorf(
-			"candidate text override surface %q does not match configured target surface %q",
+			"candidate profile surface %q does not match configured target surface %q",
 			candidateSurfaceID,
 			targetSurfaceID,
 		)
@@ -244,13 +265,14 @@ func estimateCost(run *promptiterengine.RunResult, reranCandidateValidation ...b
 }
 
 func normalizeProviderCost(cost, fallback CostSummary) CostSummary {
+	measuredModelCalls := cost.ModelCalls > 0
 	if cost.ModelCalls == 0 {
 		cost.ModelCalls = fallback.ModelCalls
 	}
 	if cost.Amount != 0 || cost.Currency != "" {
 		cost.AmountMeasured = true
 	}
-	cost.Estimated = false
+	cost.Estimated = !measuredModelCalls
 	if cost.Source == "" {
 		cost.Source = CostSourceProvider
 	}

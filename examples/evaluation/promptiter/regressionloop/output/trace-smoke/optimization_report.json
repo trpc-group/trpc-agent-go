@@ -513,7 +513,7 @@
       "validation score gain 0.000 \u003c threshold 0.050",
       "no newly failed validation metrics",
       "critical cases did not regress",
-      "model calls 3 within budget 10"
+      "model calls 6 within budget 10"
     ]
   },
   "baselineFailureAttributions": [
@@ -783,9 +783,8 @@
     }
   },
   "cost": {
-    "modelCalls": 3,
-    "estimated": true,
-    "source": "model_call_estimate"
+    "modelCalls": 6,
+    "source": "cost_provider"
   },
   "latency": "150ms"
 }

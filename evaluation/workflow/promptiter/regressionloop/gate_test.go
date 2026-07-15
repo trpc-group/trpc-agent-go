@@ -21,7 +21,7 @@ func TestEvaluateGateAcceptsCleanValidationGain(t *testing.T) {
 		GateConfig{MinValidationScoreGain: 0.1, RequireEngineAccepted: true, MaxModelCalls: 10},
 		true,
 		DeltaReport{OverallScoreDelta: 0.2},
-		CostSummary{ModelCalls: 5},
+		CostSummary{ModelCalls: 5, Source: CostSourceProvider},
 		Duration{},
 	)
 	assert.True(t, decision.Accepted)
@@ -81,6 +81,34 @@ func TestEvaluateGateOnlyBlocksConfiguredHardFailMetrics(t *testing.T) {
 	)
 	assert.False(t, decision.Accepted)
 	assert.Contains(t, decision.Reasons, "1 newly failed hard validation metrics: [hard_case/final_response]")
+}
+
+func TestEvaluateGateRejectsMissingCandidateMetricEvenWhenNotConfiguredHard(t *testing.T) {
+	decision := EvaluateGate(
+		GateConfig{
+			MinValidationScoreGain: 0.1,
+			HardFailMetricNames:    []string{"final_response"},
+		},
+		true,
+		DeltaReport{
+			OverallScoreDelta: 0.2,
+			Summary:           DeltaSummary{NewlyFailed: 1},
+			Cases: []CaseDelta{
+				{
+					EvalCaseID:      "required_case",
+					MetricName:      "rubric",
+					BaselineStatus:  "failed",
+					CandidateStatus: statusAbsent,
+					Kind:            DeltaNewlyFailed,
+				},
+			},
+		},
+		CostSummary{},
+		Duration{},
+	)
+	assert.False(t, decision.Accepted)
+	assert.Contains(t, decision.Reasons, "candidate validation missing baseline metrics: [required_case/rubric]")
+	assert.Contains(t, decision.Reasons, "no newly failed hard validation metrics; 1 non-hard validation metrics newly failed")
 }
 
 func TestEvaluateGateRejectsCriticalCaseScoreDown(t *testing.T) {
@@ -153,10 +181,32 @@ func TestEvaluateGateRejectsBudgets(t *testing.T) {
 		GateConfig{MaxModelCalls: 2, MaxCost: 0.01, MaxLatency: &maxLatency},
 		true,
 		DeltaReport{},
-		CostSummary{ModelCalls: 3, Amount: 0.02, AmountMeasured: true},
+		CostSummary{ModelCalls: 3, Amount: 0.02, AmountMeasured: true, Source: CostSourceProvider},
 		Duration{Duration: 2 * time.Second},
 	)
 	assert.False(t, decision.Accepted)
+}
+
+func TestEvaluateGateRejectsMaxModelCallsWithoutMeasuredProviderCount(t *testing.T) {
+	decision := EvaluateGate(
+		GateConfig{MaxModelCalls: 10},
+		true,
+		DeltaReport{},
+		CostSummary{ModelCalls: 5, Estimated: true, Source: CostSourceModelCallEstimate},
+		Duration{},
+	)
+	assert.False(t, decision.Accepted)
+	assert.Contains(t, decision.Reasons, "model call count unavailable; configure CostProvider to enforce maxModelCalls")
+
+	decision = EvaluateGate(
+		GateConfig{MaxModelCalls: 10},
+		true,
+		DeltaReport{},
+		CostSummary{ModelCalls: 5, Estimated: true, Source: CostSourceProvider},
+		Duration{},
+	)
+	assert.False(t, decision.Accepted)
+	assert.Contains(t, decision.Reasons, "model call count unavailable; configure CostProvider to enforce maxModelCalls")
 }
 
 func TestEvaluateGateRejectsMaxCostWithoutMeasuredAmount(t *testing.T) {
@@ -196,7 +246,7 @@ func TestEvaluateGateAllowsConfiguredNewFailuresAndBudgetsWithinLimit(t *testing
 			OverallScoreDelta: 0.2,
 			Summary:           DeltaSummary{NewlyFailed: 1},
 		},
-		CostSummary{ModelCalls: 5, Amount: 0.5, AmountMeasured: true},
+		CostSummary{ModelCalls: 5, Amount: 0.5, AmountMeasured: true, Source: CostSourceProvider},
 		Duration{Duration: 500 * time.Millisecond},
 	)
 	assert.True(t, decision.Accepted)

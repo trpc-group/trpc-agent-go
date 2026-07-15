@@ -53,6 +53,18 @@ func TestRenderMarkdownContainsDecisionAndDelta(t *testing.T) {
 	assert.Contains(t, md, "`0.2500`")
 }
 
+func TestRenderMarkdownUsesFenceLongerThanCandidatePromptBackticks(t *testing.T) {
+	report := OptimizationReport{
+		Metadata:        RunMetadata{AppName: "app"},
+		GateDecision:    GateDecision{Accepted: false, Reasons: []string{"reject"}},
+		CandidatePrompt: "Use this example:\n```go\nfmt.Println(\"x\")\n```\n# not a heading\n<div>not html</div>",
+	}
+	md := RenderMarkdown(report)
+	assert.Contains(t, md, "````text\nUse this example:")
+	assert.Contains(t, md, "\n````\n")
+	assert.NotContains(t, md, "\n```text\nUse this example:")
+}
+
 func TestMarkdownCellEscapesAndTruncatesUnicode(t *testing.T) {
 	got := markdownCell("字段|值 " + strings.Repeat("长", 200))
 	assert.Contains(t, got, `字段\|值`)

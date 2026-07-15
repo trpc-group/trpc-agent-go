@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
 	promptiterengine "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/engine"
 )
 
@@ -85,6 +86,9 @@ func (c Config) Validate() error {
 			errs = append(errs, errors.New("target surface id is empty"))
 		}
 	}
+	if err := validateBuiltInTargetSurfaces(c.TargetSurfaceIDs); err != nil {
+		errs = append(errs, err)
+	}
 	if c.PromptIter.MaxRounds <= 0 {
 		errs = append(errs, errors.New("promptiter max rounds must be greater than 0"))
 	}
@@ -111,6 +115,32 @@ func (c Config) Validate() error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+func validateBuiltInTargetSurfaces(surfaceIDs []string) error {
+	if len(surfaceIDs) == 0 {
+		return nil
+	}
+	if len(surfaceIDs) != 1 {
+		return fmt.Errorf("built-in regression loop requires exactly one target surface id; got %v", surfaceIDs)
+	}
+	surfaceID := strings.TrimSpace(surfaceIDs[0])
+	if surfaceID == "" {
+		return nil
+	}
+	_, surfaceType, _, err := parsePromptSurfaceID(surfaceID)
+	if err != nil {
+		return err
+	}
+	if surfaceType != astructure.SurfaceTypeInstruction &&
+		surfaceType != astructure.SurfaceTypeGlobalInstruction &&
+		surfaceType != astructure.SurfaceTypeTool {
+		return fmt.Errorf(
+			"built-in regression loop supports only instruction, global_instruction, or tool target surfaces; got %q",
+			surfaceID,
+		)
+	}
+	return nil
 }
 
 // BuildRunRequest builds a PromptIter RunRequest from the config and train loss hints.

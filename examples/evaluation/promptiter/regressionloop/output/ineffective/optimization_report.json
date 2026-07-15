@@ -1057,8 +1057,7 @@
   },
   "cost": {
     "modelCalls": 6,
-    "estimated": true,
-    "source": "model_call_estimate"
+    "source": "cost_provider"
   },
   "latency": "150ms",
   "candidatePrompt": "INEFFECTIVE_PROMPT: be helpful, concise, and friendly."

@@ -147,14 +147,7 @@ func addedMetricKind(cand promptiterengine.MetricResult) DeltaKind {
 }
 
 func droppedMetricKind(base promptiterengine.MetricResult) DeltaKind {
-	switch {
-	case base.Status == status.EvalStatusPassed:
-		return DeltaNewlyFailed
-	case base.Score > scoreEpsilon:
-		return DeltaScoreDown
-	default:
-		return DeltaUnchanged
-	}
+	return DeltaNewlyFailed
 }
 
 func addDeltaSummary(summary *DeltaSummary, kind DeltaKind) {

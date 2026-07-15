@@ -120,24 +120,30 @@ func AttributeFailuresWithOptions(
 				if reason == "" {
 					reason = fmt.Sprintf("metric %q failed without a detailed reason", metric.MetricName)
 				}
+				actualInvocation := metric.ActualInvocation
+				expectedInvocation := metric.ExpectedInvocation
+				if actualInvocation == nil && expectedInvocation == nil {
+					actualInvocation = evalCase.ActualInvocation
+					expectedInvocation = evalCase.ExpectedInvocation
+				}
 				category, confidence, method := classifyFailure(
 					metric.MetricName,
 					reason,
 					evalCase.Trace,
-					evalCase.ActualInvocation,
-					evalCase.ExpectedInvocation,
+					actualInvocation,
+					expectedInvocation,
 					hints,
 					metricSignals,
 				)
 				evidence := buildEvidence(metric, evalCase.Trace)
-				evidence = append(evidence, structuredEvidence(evalCase.ActualInvocation, evalCase.ExpectedInvocation)...)
+				evidence = append(evidence, structuredEvidence(actualInvocation, expectedInvocation)...)
 				secondaryCategories := secondaryFailureCategories(
 					category,
 					metric.MetricName,
 					reason,
 					evalCase.Trace,
-					evalCase.ActualInvocation,
-					evalCase.ExpectedInvocation,
+					actualInvocation,
+					expectedInvocation,
 					hints,
 					metricSignals,
 				)

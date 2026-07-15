@@ -45,6 +45,10 @@ func EvaluateGate(
 			cfg.MinValidationScoreGain,
 		))
 	}
+	if missing := missingCandidateMetrics(delta); len(missing) > 0 {
+		accepted = false
+		reasons = append(reasons, fmt.Sprintf("candidate validation missing baseline metrics: %v", missing))
+	}
 	hardFailures := hardFailRegressions(delta, cfg.HardFailMetricNames)
 	if len(hardFailures) == 0 && delta.Summary.NewlyFailed == 0 {
 		reasons = append(reasons, "no newly failed validation metrics")
@@ -82,7 +86,10 @@ func EvaluateGate(
 		}
 	}
 	if cfg.MaxModelCalls > 0 {
-		if cost.ModelCalls <= cfg.MaxModelCalls {
+		if !hasMeasuredModelCalls(cost) {
+			accepted = false
+			reasons = append(reasons, "model call count unavailable; configure CostProvider to enforce maxModelCalls")
+		} else if cost.ModelCalls <= cfg.MaxModelCalls {
 			reasons = append(reasons, fmt.Sprintf(
 				"model calls %d within budget %d",
 				cost.ModelCalls,
@@ -121,6 +128,21 @@ func EvaluateGate(
 
 func hasMeasuredAmount(cost CostSummary) bool {
 	return cost.AmountMeasured || cost.Amount > 0
+}
+
+func hasMeasuredModelCalls(cost CostSummary) bool {
+	return cost.Source == CostSourceProvider && !cost.Estimated && cost.ModelCalls > 0
+}
+
+func missingCandidateMetrics(delta DeltaReport) []string {
+	missing := make([]string, 0)
+	for _, item := range delta.Cases {
+		if item.BaselineStatus == statusAbsent || item.CandidateStatus != statusAbsent {
+			continue
+		}
+		missing = append(missing, fmt.Sprintf("%s/%s", item.EvalCaseID, item.MetricName))
+	}
+	return missing
 }
 
 func hardFailRegressions(delta DeltaReport, hardFailMetricNames []string) []string {

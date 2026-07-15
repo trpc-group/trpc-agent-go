@@ -146,6 +146,37 @@ func TestStructuredDiffOverridesConfiguredMetricHint(t *testing.T) {
 	assert.Contains(t, attrs[0].SecondaryCategories, FailureKnowledgeRecallGap)
 }
 
+func TestAttributeFailuresUsesMetricLevelInvocationEvidence(t *testing.T) {
+	result := structuredEvalResult("validation", []promptiterengine.CaseResult{
+		{
+			EvalCaseID: "case",
+			ActualInvocation: &evalset.Invocation{
+				Tools: []*evalset.Tool{{Name: "billing_lookup", Arguments: map[string]any{"invoice_id": "A-1"}}},
+			},
+			ExpectedInvocation: &evalset.Invocation{
+				Tools: []*evalset.Tool{{Name: "billing_lookup", Arguments: map[string]any{"invoice_id": "A-1"}}},
+			},
+			Metrics: []promptiterengine.MetricResult{
+				{
+					MetricName: "tool_trajectory",
+					Status:     status.EvalStatusFailed,
+					Reason:     "second turn failed",
+					ActualInvocation: &evalset.Invocation{
+						Tools: []*evalset.Tool{{Name: "search_orders", Arguments: map[string]any{"invoice_id": "A-2"}}},
+					},
+					ExpectedInvocation: &evalset.Invocation{
+						Tools: []*evalset.Tool{{Name: "billing_lookup", Arguments: map[string]any{"invoice_id": "A-2"}}},
+					},
+				},
+			},
+		},
+	})
+	attrs := AttributeFailures(result)
+	require.Len(t, attrs, 1)
+	assert.Equal(t, FailureToolCallError, attrs[0].Category)
+	assert.Contains(t, attrs[0].Evidence, "actual_tools=search_orders")
+}
+
 func TestAttributeFailuresAddsSecondaryCategories(t *testing.T) {
 	result := evalResult("validation", []caseSpec{
 		{
@@ -687,6 +718,56 @@ func TestAttributeFailuresUsesStructuredToolDiff(t *testing.T) {
 	assert.Equal(t, FailureToolCallError, byCase["wrong_tool"].Category)
 	assert.Equal(t, FailureToolCallError, byCase["unexpected_tool"].Category)
 	assert.Equal(t, FailureToolArgumentError, byCase["bad_args"].Category)
+}
+
+func TestAttributeFailuresMatchesRepeatedToolCallsIndividually(t *testing.T) {
+	result := structuredEvalResult("validation", []promptiterengine.CaseResult{
+		{
+			EvalCaseID: "repeated_ok",
+			ActualInvocation: &evalset.Invocation{
+				Tools: []*evalset.Tool{
+					{Name: "lookup", Arguments: map[string]any{"id": "A"}},
+					{Name: "lookup", Arguments: map[string]any{"id": "B"}},
+				},
+			},
+			ExpectedInvocation: &evalset.Invocation{
+				Tools: []*evalset.Tool{
+					{Name: "lookup", Arguments: map[string]any{"id": "A"}},
+					{Name: "lookup", Arguments: map[string]any{"id": "B"}},
+				},
+			},
+			Metrics: []promptiterengine.MetricResult{
+				{MetricName: "tool_trajectory", Status: status.EvalStatusFailed, Reason: "judge failed"},
+			},
+		},
+		{
+			EvalCaseID: "repeated_bad_second",
+			ActualInvocation: &evalset.Invocation{
+				Tools: []*evalset.Tool{
+					{Name: "lookup", Arguments: map[string]any{"id": "A"}},
+					{Name: "lookup", Arguments: map[string]any{"id": "C"}},
+				},
+			},
+			ExpectedInvocation: &evalset.Invocation{
+				Tools: []*evalset.Tool{
+					{Name: "lookup", Arguments: map[string]any{"id": "A"}},
+					{Name: "lookup", Arguments: map[string]any{"id": "B"}},
+				},
+			},
+			Metrics: []promptiterengine.MetricResult{
+				{MetricName: "tool_trajectory", Status: status.EvalStatusFailed, Reason: "judge failed"},
+			},
+		},
+	})
+	attrs := AttributeFailures(result)
+	require.Len(t, attrs, 2)
+	byCase := map[string]CaseAttribution{}
+	for _, attr := range attrs {
+		byCase[attr.EvalCaseID] = attr
+	}
+	assert.NotEqual(t, "structured_diff", byCase["repeated_ok"].Method)
+	assert.Equal(t, FailureToolArgumentError, byCase["repeated_bad_second"].Category)
+	assert.Equal(t, "structured_diff", byCase["repeated_bad_second"].Method)
 }
 
 func TestAttributeFailuresUsesStructuredFormatRouteAndFinalDiff(t *testing.T) {

@@ -49,6 +49,15 @@ func TestConfigValidateRequiresCoreInputs(t *testing.T) {
 	cfg.Gate.HardFailMetricNames = nil
 	cfg.TargetSurfaceIDs = []string{"agent#instruction", " "}
 	assert.ErrorContains(t, cfg.Validate(), "target surface id is empty")
+
+	cfg.TargetSurfaceIDs = []string{"agent#instruction", "router#instruction"}
+	assert.ErrorContains(t, cfg.Validate(), "requires exactly one target surface id")
+
+	cfg.TargetSurfaceIDs = []string{"agent#tool.lookup"}
+	require.NoError(t, cfg.Validate())
+
+	cfg.TargetSurfaceIDs = []string{"agent#global_instruction"}
+	require.NoError(t, cfg.Validate())
 }
 
 func TestConfigValidateReportsAllMissingCoreInputs(t *testing.T) {

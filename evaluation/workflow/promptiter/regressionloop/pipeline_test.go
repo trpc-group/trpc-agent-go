@@ -137,17 +137,30 @@ func TestPipelineUsesCostProviderWithEstimatedModelCallFallback(t *testing.T) {
 	assert.Equal(t, 123, result.Report.Cost.Tokens)
 	assert.Equal(t, 0.25, result.Report.Cost.Amount)
 	assert.Equal(t, CostSourceProvider, result.Report.Cost.Source)
+	assert.True(t, result.Report.Cost.Estimated)
+	assert.True(t, result.Report.GateDecision.Accepted)
+
+	pipeline.CostProvider = staticCostProvider{summary: CostSummary{
+		ModelCalls: 5,
+		Tokens:     123,
+		Amount:     0.25,
+		Currency:   "USD",
+	}}
+	cfg.Gate.MaxModelCalls = 5
+	result, err = pipeline.Run(context.Background(), cfg)
+	require.NoError(t, err)
 	assert.False(t, result.Report.Cost.Estimated)
 	assert.True(t, result.Report.GateDecision.Accepted)
 
 	pipeline.CostProvider = staticCostProvider{summary: CostSummary{Tokens: 123}}
+	cfg.Gate.MaxModelCalls = 0
 	result, err = pipeline.Run(context.Background(), cfg)
 	require.NoError(t, err)
 	assert.False(t, result.Report.GateDecision.Accepted)
 	assert.Contains(t, result.Report.GateDecision.Reasons, "cost amount unavailable; configure CostProvider to enforce maxCost")
 }
 
-func TestPipelineRejectsFinalCandidateProfilesItCannotRepresentAsSinglePrompt(t *testing.T) {
+func TestPipelineRejectsFinalCandidateProfileTargetMismatch(t *testing.T) {
 	dir := t.TempDir()
 	promptPath := filepath.Join(dir, "prompt.txt")
 	metricsPath := filepath.Join(dir, "metrics.json")
@@ -195,7 +208,7 @@ func TestPipelineRejectsFinalCandidateProfilesItCannotRepresentAsSinglePrompt(t 
 		PromptIterator: iterator,
 		Clock:          &sequenceClock{times: []time.Time{time.Unix(1, 0), time.Unix(2, 0)}},
 	}.Run(context.Background(), cfg)
-	assert.ErrorContains(t, err, "candidate profile contains non-text override")
+	assert.ErrorContains(t, err, "does not match configured target surface")
 }
 
 func TestPipelineRejectsCandidateTextWhenTargetSurfaceIdentityIsAmbiguous(t *testing.T) {
@@ -207,7 +220,7 @@ func TestPipelineRejectsCandidateTextWhenTargetSurfaceIdentityIsAmbiguous(t *tes
 		{
 			name:             "multiple configured targets",
 			targetSurfaceIDs: []string{"agent#instruction", "router#instruction"},
-			wantErr:          "requires exactly one matching target surface id",
+			wantErr:          "requires exactly one target surface id",
 		},
 		{
 			name:             "single target mismatch",
@@ -265,7 +278,11 @@ func TestPipelineRejectsCandidateTextWhenTargetSurfaceIdentityIsAmbiguous(t *tes
 				Clock:          &sequenceClock{times: []time.Time{time.Unix(1, 0), time.Unix(2, 0)}},
 			}.Run(context.Background(), cfg)
 			assert.ErrorContains(t, err, tt.wantErr)
-			require.Len(t, evaluator.requests, 2)
+			if len(tt.targetSurfaceIDs) == 1 {
+				require.Len(t, evaluator.requests, 2)
+			} else {
+				assert.Empty(t, evaluator.requests)
+			}
 		})
 	}
 }
@@ -338,6 +355,71 @@ func TestPipelineRerunsFinalCandidateValidation(t *testing.T) {
 	assert.Equal(t, 6, result.Report.Cost.ModelCalls)
 }
 
+func TestPipelineRerunsFinalToolCandidateValidation(t *testing.T) {
+	dir := t.TempDir()
+	promptPath := filepath.Join(dir, "prompt.txt")
+	metricsPath := filepath.Join(dir, "metrics.json")
+	require.NoError(t, os.WriteFile(promptPath, []byte("baseline tool description"), 0o644))
+	require.NoError(t, os.WriteFile(metricsPath, []byte(`{"metrics":[]}`), 0o644))
+	iterator := &capturingPromptIterator{
+		result: &promptiterengine.RunResult{
+			Status: promptiterengine.RunStatusSucceeded,
+			Rounds: []promptiterengine.RoundResult{
+				{
+					Round: 1,
+					OutputProfile: &promptiter.Profile{Overrides: []promptiter.SurfaceOverride{
+						{
+							SurfaceID: "agent#tool.lookup",
+							Value: astructure.SurfaceValue{
+								Tools: []astructure.ToolRef{{ID: "lookup", Description: "candidate tool description"}},
+							},
+						},
+					}},
+					Acceptance: &promptiterengine.AcceptanceDecision{Accepted: true},
+				},
+			},
+		},
+	}
+	evaluator := &scriptedEvaluator{
+		results: map[Phase]*promptiterengine.EvaluationResult{
+			PhaseBaselineTrain: evalResult("train", []caseSpec{
+				{id: "train_case", metric: "metric", score: 1, status: status.EvalStatusPassed},
+			}),
+			PhaseBaselineValidation: evalResult("validation", []caseSpec{
+				{id: "validation_case", metric: "metric", score: 0, status: status.EvalStatusFailed},
+			}),
+			PhaseCandidateValidation: evalResult("validation", []caseSpec{
+				{id: "validation_case", metric: "metric", score: 1, status: status.EvalStatusPassed},
+			}),
+		},
+	}
+	cfg := Config{
+		AppName:             "app",
+		PromptSource:        promptPath,
+		MetricsPath:         metricsPath,
+		TrainEvalSetID:      "train",
+		ValidationEvalSetID: "validation",
+		OutputJSON:          filepath.Join(dir, "optimization_report.json"),
+		OutputMarkdown:      filepath.Join(dir, "optimization_report.md"),
+		TargetSurfaceIDs:    []string{"agent#tool.lookup"},
+		PromptIter:          PromptIterConfig{MaxRounds: 1},
+		Gate:                GateConfig{RequireEngineAccepted: false},
+	}
+	result, err := Pipeline{
+		Evaluator:      evaluator,
+		PromptIterator: iterator,
+		Clock:          &sequenceClock{times: []time.Time{time.Unix(1, 0), time.Unix(2, 0)}},
+	}.Run(context.Background(), cfg)
+	require.NoError(t, err)
+	require.Len(t, evaluator.requests, 3)
+	require.NotNil(t, evaluator.requests[2].Profile)
+	assert.Equal(t, "agent#tool.lookup", evaluator.requests[2].Profile.Overrides[0].SurfaceID)
+	assert.Empty(t, evaluator.requests[2].Prompt)
+	require.NotNil(t, result.Report.CandidateValidation)
+	assert.Equal(t, 1.0, result.Report.CandidateValidation.OverallScore)
+	assert.Equal(t, 1, result.Report.Delta.Summary.NewlyPassed)
+}
+
 func TestPipelineRejectsMissingCollaboratorsAndMetricsPath(t *testing.T) {
 	cfg := Config{
 		AppName:             "app",
@@ -400,7 +482,7 @@ func TestPipelinePropagatesPromptProfileAndReportErrors(t *testing.T) {
 		},
 	}
 	_, err = pipeline.Run(context.Background(), cfg)
-	assert.ErrorContains(t, err, "build initial prompt profile")
+	assert.ErrorContains(t, err, "supports only instruction, global_instruction, or tool")
 
 	cfg.TargetSurfaceIDs = []string{"agent#instruction"}
 	cfg.OutputJSON = filepath.Join(dir, "json-dir")
@@ -440,8 +522,7 @@ func TestPipelineDocumentsSkillTargetRequiresCustomPromptIteratorProfilePath(t *
 		},
 		PromptIterator: iterator,
 	}.Run(context.Background(), cfg)
-	assert.ErrorContains(t, err, "build initial prompt profile")
-	assert.ErrorContains(t, err, "skill surface requires a custom PromptIterator/profile path")
+	assert.ErrorContains(t, err, "supports only instruction, global_instruction, or tool")
 	assert.Nil(t, iterator.request)
 }
 

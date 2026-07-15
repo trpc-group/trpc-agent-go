@@ -170,9 +170,18 @@ func runPipeline(
 	pipeline := regressionloop.Pipeline{
 		Evaluator:      evaluator,
 		PromptIterator: iterator,
+		CostProvider:   staticCostProvider{summary: regressionloop.CostSummary{ModelCalls: 6}},
 		Clock:          &fixedClock{now: time.Date(2026, 7, 10, 8, 0, 0, 0, time.UTC)},
 	}
 	return pipeline.Run(ctx, cfg)
+}
+
+type staticCostProvider struct {
+	summary regressionloop.CostSummary
+}
+
+func (p staticCostProvider) CostSummary() regressionloop.CostSummary {
+	return p.summary
 }
 
 func selectedScenarios(configScenario, flagScenario, mode string) []string {
