@@ -320,8 +320,10 @@ entry.
 
 The update policy does not change `memory.Service`, `MemoryExtractor`, the stored
 JSON representation, memory IDs, or database schemas. It does not rewrite
-existing entries. Persistence failures are returned by Auto extraction and do
-not advance its session watermark, so a retry can process the same events.
+existing entries. With a non-legacy update policy, persistence failures are
+returned by Auto extraction and do not advance its session watermark, so a
+retry can process the same events. Legacy mode retains its historical
+best-effort persistence behavior.
 
 To roll back, remove the option or set it to its `Legacy` value. No data
 migration is required.

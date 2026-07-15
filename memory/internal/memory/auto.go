@@ -436,11 +436,20 @@ func (w *AutoMemoryWorker) createAutoMemory(
 		return fmt.Errorf("auto_memory: extract failed: %w", err)
 	}
 
+	updatePolicy := updatePolicyFor(w.config.Extractor)
 	ops = w.applyUpdatePolicy(ctx, userKey, ops, existing)
 
 	// Execute operations.
 	for _, op := range ops {
 		if err := w.executeOperation(ctx, userKey, op); err != nil {
+			// Preserve the legacy best-effort behavior for existing users.
+			if updatePolicy == extractor.UpdatePolicyLegacy {
+				log.WarnfContext(ctx,
+					"auto_memory: legacy operation failed for user %s/%s: %v",
+					userKey.AppName, userKey.UserID, err,
+				)
+				continue
+			}
 			return err
 		}
 	}

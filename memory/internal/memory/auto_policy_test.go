@@ -378,13 +378,40 @@ func TestExecuteOperation_DeleteRetryIsIdempotent(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestAutoMemoryWorker_PersistenceFailureDoesNotAdvanceWatermark(t *testing.T) {
+func TestAutoMemoryWorker_LegacyPersistenceFailureRemainsBestEffort(t *testing.T) {
 	operator := newMockOperator()
 	operator.addErr = assert.AnError
-	ext := &mockExtractor{ops: []*extractor.Operation{{
-		Type:   extractor.OperationAdd,
-		Memory: "User likes tea.",
-	}}}
+	ext := &mockExtractor{ops: []*extractor.Operation{
+		{
+			Type:   extractor.OperationAdd,
+			Memory: "User likes tea.",
+		},
+		{
+			Type:     extractor.OperationUpdate,
+			MemoryID: "existing-memory",
+			Memory:   "User likes green tea.",
+		},
+	}}
+	worker := NewAutoMemoryWorker(AutoMemoryConfig{Extractor: ext}, operator)
+	sess := newTestSession("app", "u1")
+	appendSessionMessage(sess, time.Now(), model.NewUserMessage("I like tea."))
+
+	require.NoError(t, worker.EnqueueJob(context.Background(), sess))
+	_, ok := sess.GetState(memory.SessionStateKeyAutoMemoryLastExtractAt)
+	assert.True(t, ok)
+	assert.Equal(t, 1, operator.updateCalls)
+}
+
+func TestAutoMemoryWorker_ConservativePersistenceFailureDoesNotAdvanceWatermark(t *testing.T) {
+	operator := newMockOperator()
+	operator.addErr = assert.AnError
+	ext := &policyExtractor{
+		mockExtractor: &mockExtractor{ops: []*extractor.Operation{{
+			Type:   extractor.OperationAdd,
+			Memory: "User likes tea.",
+		}}},
+		updatePolicy: extractor.UpdatePolicyConservative,
+	}
 	worker := NewAutoMemoryWorker(AutoMemoryConfig{Extractor: ext}, operator)
 	sess := newTestSession("app", "u1")
 	appendSessionMessage(sess, time.Now(), model.NewUserMessage("I like tea."))
