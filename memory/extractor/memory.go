@@ -37,6 +37,7 @@ func referenceDate(ctx context.Context) time.Time {
 const (
 	metadataKeyModelName      = "model_name"
 	metadataKeyModelAvailable = "model_available"
+	metadataKeyUpdatePolicy   = "update_policy"
 )
 
 // memoryExtractor implements the MemoryExtractor interface.
@@ -44,6 +45,8 @@ type memoryExtractor struct {
 	model    model.Model
 	prompt   string
 	checkers []Checker
+
+	updatePolicy UpdatePolicy
 
 	enabledTools map[string]struct{}
 
@@ -81,6 +84,14 @@ func WithChecker(c Checker) Option {
 func WithModelCallbacks(callbacks *model.Callbacks) Option {
 	return func(e *memoryExtractor) {
 		e.modelCallbacks = callbacks
+	}
+}
+
+// WithUpdatePolicy configures how auto memory handles extracted updates.
+// Omitting this option preserves the legacy behavior.
+func WithUpdatePolicy(policy UpdatePolicy) Option {
+	return func(e *memoryExtractor) {
+		e.updatePolicy = normalizeUpdatePolicy(policy)
 	}
 }
 
@@ -229,10 +240,19 @@ func (e *memoryExtractor) Metadata() map[string]any {
 		modelName = e.model.Info().Name
 		modelAvailable = true
 	}
-	return map[string]any{
+	metadata := map[string]any{
 		metadataKeyModelName:      modelName,
 		metadataKeyModelAvailable: modelAvailable,
 	}
+	if e.updatePolicy != UpdatePolicyLegacy {
+		metadata[metadataKeyUpdatePolicy] = e.updatePolicy
+	}
+	return metadata
+}
+
+// UpdatePolicy returns the configured auto-memory update policy.
+func (e *memoryExtractor) UpdatePolicy() UpdatePolicy {
+	return e.updatePolicy
 }
 
 // extractionUserSuffix is appended as a trailing user message
@@ -301,6 +321,9 @@ func (e *memoryExtractor) buildSystemPrompt(
 		renderedPrompt = e.prompt
 	}
 	sb.WriteString(renderedPrompt)
+	if policyBlock := e.updatePolicyPromptBlock(); policyBlock != "" {
+		sb.WriteString(policyBlock)
+	}
 
 	// Append available actions.
 	sb.WriteString("\n<available_actions>\n")
@@ -320,6 +343,35 @@ func (e *memoryExtractor) buildSystemPrompt(
 	}
 
 	return sb.String()
+}
+
+func (e *memoryExtractor) updatePolicyPromptBlock() string {
+	switch e.updatePolicy {
+	case UpdatePolicyConservative:
+		return `
+
+<update_policy>
+- Preserve long-term history. Use memory_update only when the new memory is
+  the same fact or event with additional non-conflicting detail and retains
+  every material detail from the existing memory.
+- Use memory_add for corrections, state changes, different events, or any
+  uncertain match. Never delete a memory merely because newer information
+  differs from it.
+- Emit no operation for an exact duplicate.
+</update_policy>
+`
+	case UpdatePolicyDisabled:
+		return `
+
+<update_policy>
+- Preserve long-term history and use memory_add for new information.
+- Do not use memory_update. Emit no operation for an exact duplicate.
+- Never delete a memory merely because newer information differs from it.
+</update_policy>
+`
+	default:
+		return ""
+	}
 }
 
 // toolActionDescriptions maps background tool names to their
@@ -370,13 +422,29 @@ func (e *memoryExtractor) availableActionsBlock() string {
 }
 
 // parseToolCall parses a tool call and returns a memory operation.
-func (e *memoryExtractor) parseToolCall(ctx context.Context, call model.ToolCall) *Operation {
+func (e *memoryExtractor) parseToolCall(
+	ctx context.Context,
+	call model.ToolCall,
+) *Operation {
 	var args map[string]any
 	if err := json.Unmarshal(call.Function.Arguments, &args); err != nil {
 		log.WarnfContext(ctx, "extractor: failed to parse tool args: %v", err)
 		return nil
 	}
-	return parseToolCallArgs(call.Function.Name, args)
+	op := parseToolCallArgs(call.Function.Name, args)
+	if op == nil {
+		log.WarnfContext(ctx, "extractor: invalid %s arguments", call.Function.Name)
+	}
+	return op
+}
+
+func normalizeUpdatePolicy(policy UpdatePolicy) UpdatePolicy {
+	switch policy {
+	case UpdatePolicyConservative, UpdatePolicyDisabled:
+		return policy
+	default:
+		return UpdatePolicyLegacy
+	}
 }
 
 func (e *memoryExtractor) runBeforeModelCallbacks(

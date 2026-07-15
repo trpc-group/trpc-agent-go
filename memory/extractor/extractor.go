@@ -49,6 +49,26 @@ type MemoryExtractor interface {
 	Metadata() map[string]any
 }
 
+// UpdatePolicy controls how auto memory handles potential updates.
+// The zero value preserves the legacy reconciliation behavior.
+type UpdatePolicy string
+
+const (
+	// UpdatePolicyLegacy preserves the existing auto-memory behavior.
+	UpdatePolicyLegacy UpdatePolicy = ""
+	// UpdatePolicyConservative updates only strict, non-conflicting enrichments.
+	UpdatePolicyConservative UpdatePolicy = "conservative"
+	// UpdatePolicyDisabled converts auto-extracted updates into additive writes.
+	UpdatePolicyDisabled UpdatePolicy = "disabled"
+)
+
+// UpdatePolicyProvider optionally declares an extractor's update policy.
+// Extractors that do not implement this interface retain legacy behavior.
+type UpdatePolicyProvider interface {
+	// UpdatePolicy returns the policy for auto-extracted memory operations.
+	UpdatePolicy() UpdatePolicy
+}
+
 // Operation represents a memory operation to be executed.
 type Operation struct {
 	// Type is the type of operation (add, update, delete).

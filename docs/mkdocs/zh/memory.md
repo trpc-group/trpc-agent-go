@@ -262,6 +262,46 @@ Agent：你好张三！很高兴认识腾讯的朋友。今天有什么可以帮
 （后台：提取器分析对话并自动创建记忆，用户无感知）
 ```
 
+### 可选的自动更新策略
+
+内置提取器只有在显式配置策略时才启用新行为。未配置 option 的现有应用
+继续使用历史逻辑，不需要迁移：
+
+```go
+// 保持原有行为。
+memExtractor := extractor.NewExtractor(extractorModel)
+```
+
+需要尽量保留长期历史时，可以显式开启 update policy：
+
+```go
+memExtractor := extractor.NewExtractor(
+    extractorModel,
+    extractor.WithUpdatePolicy(extractor.UpdatePolicyConservative),
+)
+```
+
+Update policy 只约束后台 Auto extraction 产生的操作。Agent 或应用显式调用
+`memory_update` 时，工具语义保持不变。
+
+| Update policy | Auto extraction 行为 |
+| --- | --- |
+| `UpdatePolicyLegacy` | 使用原有的相似度 reconcile 逻辑；这是默认值和零值。 |
+| `UpdatePolicyConservative` | 完全重复时不写入；只有新记忆保留旧事实或事件并增加无冲突细节时才更新；发生变化或无法确认时追加新条目。 |
+| `UpdatePolicyDisabled` | 将提取器生成的 update 转为 add，并且不把提取出的 add reconcile 为 update。 |
+
+保守 reconcile 只比较已经提供给 extractor 的 existing entries。检索分数只能用于
+候选排序，不能单独决定 update 或丢弃。主体、事件身份、有意义的旧 token、数值、
+日期、否定关系、参与者和地点必须兼容；topics 只有在 update 已通过检查后才合并。
+例如，同一次且同一日期的访问补充具体时刻可以更新；更换雇主或另一个日期的访问
+会追加为新条目。
+
+该 update policy 不会修改 `memory.Service`、`MemoryExtractor`、持久化 JSON、memory ID
+或数据库 schema，也不会重写存量记忆。Auto extraction 的持久化错误会返回给调用方，
+并且不会推进 session watermark，因此重试仍会处理同一批事件。
+
+回退时删除该 option，或将其设置为 `Legacy` 值即可，不需要数据迁移。
+
 ### 两种模式配置对比
 
 | 步骤         | 工具驱动模式（Agentic）             | 自动提取模式（Auto）                   |

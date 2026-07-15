@@ -279,6 +279,53 @@ Agent: Nice to meet you, Alice! It's great to connect with someone from TechCorp
 (Background: Extractor analyzes conversation and creates memory automatically)
 ```
 
+### Opt-in Auto Update Policy
+
+The built-in extractor keeps its historical behavior unless a policy is
+explicitly configured. Existing applications therefore require no migration:
+
+```go
+// Legacy behavior: unchanged.
+memExtractor := extractor.NewExtractor(extractorModel)
+```
+
+For applications that prefer additive long-term history, enable the update
+policy explicitly:
+
+```go
+memExtractor := extractor.NewExtractor(
+    extractorModel,
+    extractor.WithUpdatePolicy(extractor.UpdatePolicyConservative),
+)
+```
+
+The update policies affect only operations produced by background Auto
+extraction. An agent or application explicitly calling `memory_update` keeps
+the existing tool semantics.
+
+| Update policy | Auto extraction behavior |
+| --- | --- |
+| `UpdatePolicyLegacy` | Uses the historical similarity-based reconciliation. This is the default and zero value. |
+| `UpdatePolicyConservative` | Drops exact duplicates, updates only when the new memory preserves the old fact or event and adds non-conflicting detail, and keeps changes or uncertain matches as separate entries. |
+| `UpdatePolicyDisabled` | Converts extractor-generated updates to adds and does not reconcile extracted adds into updates. |
+
+Conservative reconciliation compares only the existing entries already
+supplied to the extractor. Retrieval scores rank candidates but cannot by
+themselves authorize an update or drop. Subjects, event identity, meaningful
+old tokens, numbers, dates, negation, participants, and locations must remain
+compatible. Topics are merged only after an update has passed these checks.
+For example, adding a time to the same dated visit may update that visit;
+changing an employer or describing a visit on another date creates a new
+entry.
+
+The update policy does not change `memory.Service`, `MemoryExtractor`, the stored
+JSON representation, memory IDs, or database schemas. It does not rewrite
+existing entries. Persistence failures are returned by Auto extraction and do
+not advance its session watermark, so a retry can process the same events.
+
+To roll back, remove the option or set it to its `Legacy` value. No data
+migration is required.
+
 ### Configuration Comparison
 
 | Step                | Agentic Mode                        | Auto Mode                              |
