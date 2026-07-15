@@ -294,6 +294,28 @@ func TestMCPToolResult_MarshalJSON(t *testing.T) {
 	}
 }
 
+func TestMCPToolResult_MarshalJSON_EmptyContentAsArray(t *testing.T) {
+	tests := []struct {
+		name   string
+		result *mcpToolResult
+	}{
+		{name: "nil result", result: nil},
+		{name: "nil content", result: &mcpToolResult{}},
+		{name: "empty content", result: &mcpToolResult{Content: []mcp.Content{}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data, err := tt.result.MarshalJSON()
+			if err != nil {
+				t.Fatalf("MarshalJSON failed: %v", err)
+			}
+			if string(data) != "[]" {
+				t.Fatalf("expected empty JSON array, got %q", string(data))
+			}
+		})
+	}
+}
+
 func TestMCPToolResult_GetCallbackResult(t *testing.T) {
 	expected := []mcp.Content{mcp.NewTextContent("hello")}
 	result := &mcpToolResult{
