@@ -37,17 +37,18 @@ session/replaytest/
 
 ## Quick Start
 
-All commands should be run from the **repository root** directory.
+All commands should be run from the **`session/replaytest`** directory (it has its own `go.mod`).
 
 ### Lightweight Mode (Default)
 
 Uses only InMemory + SQLite, no external dependencies, runs in <3 seconds:
 
 ```bash
+cd session/replaytest
 # Linux/macOS:
-CGO_ENABLED=1 go test ./session/replaytest/ -v
+CGO_ENABLED=1 go test . -v
 # Windows PowerShell:
-$env:CGO_ENABLED="1"; go test ./session/replaytest/ -v
+$env:CGO_ENABLED="1"; go test . -v
 ```
 
 ### Self-Verify Mode
@@ -55,25 +56,29 @@ $env:CGO_ENABLED="1"; go test ./session/replaytest/ -v
 InMemory vs InMemory (no CGO required):
 
 ```bash
-$env:REPLAY_BACKEND="inmemory"; go test ./session/replaytest/ -v -run TestReplay_All
+cd session/replaytest
+$env:REPLAY_BACKEND="inmemory"; go test . -v -run TestReplay_All
 ```
 
 ### Run a Single Case
 
 ```bash
-$env:CGO_ENABLED="1"; go test ./session/replaytest/ -v -run "TestReplay_All/case01"
+cd session/replaytest
+$env:CGO_ENABLED="1"; go test . -v -run "TestReplay_All/case01"
 ```
 
 ### Generate Diff Report
 
 ```bash
-$env:CGO_ENABLED="1"; go test ./session/replaytest/ -v -run TestReplay_Report
+cd session/replaytest
+$env:CGO_ENABLED="1"; go test . -v -run TestReplay_Report
 ```
 
 ### Race Detection
 
 ```bash
-$env:CGO_ENABLED="1"; go test ./session/replaytest/ -race -v
+cd session/replaytest
+$env:CGO_ENABLED="1"; go test . -race -v
 ```
 
 ## Backend Integration
@@ -187,9 +192,9 @@ Key fields:
 - `backend_metrics`: Per-case timing data and retry metrics
 - `skipped_backends`: Backend → unsupported capability list
 - `inconclusive_cases`: Count of cases with insufficient valid backends
-- Checksum footer: `// sha256:<hex>` for integrity verification
+- Checksum sidecar: `<report>.sha256` file alongside the JSON report for integrity verification
 
-`ReadReportWithVerify` recomputes the checksum and rejects corrupted files. A version guard rejects unknown schema versions.
+`ReadReportWithVerify` recomputes the checksum from the sidecar and rejects corrupted files. The report file itself is valid JSON. A version guard rejects unknown schema versions.
 
 ## Acceptance Results
 

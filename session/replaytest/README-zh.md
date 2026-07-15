@@ -45,17 +45,18 @@ session/replaytest/
 
 ## 快速开始
 
-所有命令应从**仓库根目录**运行。SQLite 后端需要 `CGO_ENABLED=1`。
+所有命令应从 **`session/replaytest`** 目录运行（该目录有独立的 `go.mod`）。SQLite 后端需要 `CGO_ENABLED=1`。
 
 ### 轻量模式（默认）
 
 仅使用 InMemory + SQLite，无需外部依赖，运行时间 <3 秒：
 
 ```bash
+cd session/replaytest
 # Linux/macOS：
-CGO_ENABLED=1 go test ./session/replaytest/ -v
+CGO_ENABLED=1 go test . -v
 # Windows PowerShell：
-$env:CGO_ENABLED="1"; go test ./session/replaytest/ -v
+$env:CGO_ENABLED="1"; go test . -v
 ```
 
 ### 自我验证模式
@@ -63,25 +64,29 @@ $env:CGO_ENABLED="1"; go test ./session/replaytest/ -v
 InMemory vs InMemory（无需 CGO）：
 
 ```bash
-go test ./session/replaytest/ -v -run TestReplay_Smoke_InMemorySelfVerify
+cd session/replaytest
+go test . -v -run TestReplay_Smoke_InMemorySelfVerify
 ```
 
 ### 运行单个用例
 
 ```bash
-$env:CGO_ENABLED="1"; go test ./session/replaytest/ -v -run "TestReplay_All/case01"
+cd session/replaytest
+$env:CGO_ENABLED="1"; go test . -v -run "TestReplay_All/case01"
 ```
 
 ### 生成差异报告
 
 ```bash
-$env:CGO_ENABLED="1"; go test ./session/replaytest/ -v -run TestReplay_Report
+cd session/replaytest
+$env:CGO_ENABLED="1"; go test . -v -run TestReplay_Report
 ```
 
 ### 竞态检测
 
 ```bash
-$env:CGO_ENABLED="1"; go test ./session/replaytest/ -race -v
+cd session/replaytest
+$env:CGO_ENABLED="1"; go test . -race -v
 ```
 
 ## 后端接入说明
@@ -195,9 +200,9 @@ CGO_ENABLED=1 go test ./session/replaytest/ -v -run TestReplay_All
 - `backend_metrics`：每个 Case 的计时数据和重试指标
 - `skipped_backends`：后端 → 不支持能力列表的映射
 - `inconclusive_cases`：有效后端不足的 Case 数量
-- 校验和尾部：`// sha256:<hex>` 用于完整性验证
+- 校验和伴生文件：`<report>.sha256` 文件与 JSON 报告并存，用于完整性验证
 
-`ReadReportWithVerify` 会重新计算校验和并拒绝损坏的文件。版本守卫会拒绝未知的 Schema 版本。
+`ReadReportWithVerify` 会从伴生文件重新计算校验和并拒绝损坏的文件。报告文件本身是合法 JSON。版本守卫会拒绝未知的 Schema 版本。
 
 ## 验收结果
 

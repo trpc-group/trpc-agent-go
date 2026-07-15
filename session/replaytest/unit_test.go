@@ -1093,11 +1093,12 @@ func TestReadReportWithVerify_VersionGuard(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "report.json")
 
-	// Write a report with v1 version manually.
+	// Write a report with v1 version manually, with sidecar checksum.
 	raw := `{"report_id":"replay-v1","version":"v1","backends":["a"],"cases":[],"summary":{"total_cases":0}}`
-	checksum := fmt.Sprintf("%x", sha256.Sum256([]byte(raw)))
-	content := raw + "\n// sha256:" + checksum + "\n"
-	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+	fileContent := []byte(raw + "\n")
+	checksum := fmt.Sprintf("%x", sha256.Sum256(fileContent))
+	require.NoError(t, os.WriteFile(path, fileContent, 0o644))
+	require.NoError(t, os.WriteFile(path+".sha256", []byte(fmt.Sprintf("%s  report.json\n", checksum)), 0o644))
 
 	_, err := ReadReportWithVerify(path)
 	assert.Error(t, err)
@@ -2697,13 +2698,24 @@ func TestNormalize_DecodeJSON_ValidInput(t *testing.T) {
 	assert.Equal(t, "value", target["key"])
 }
 
-func TestNormalize_StripChecksumFooter(t *testing.T) {
-	input := `{"version":"v2"}
-// sha256:abc123
-`
-	result := stripChecksumFooter([]byte(input))
-	assert.NotContains(t, string(result), "sha256")
-	assert.Contains(t, string(result), "version")
+func TestNormalize_WriteReport_ValidJSON(t *testing.T) {
+	// Verify that WriteReport produces valid JSON (no checksum footer mixed in).
+	dir := t.TempDir()
+	path := filepath.Join(dir, "report.json")
+	require.NoError(t, WriteReport(path, Report{Version: "v2"}))
+
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err)
+	// The report file must be valid JSON.
+	var parsed map[string]any
+	assert.NoError(t, json.Unmarshal(raw, &parsed))
+	// The checksum is in a sidecar, not in the report.
+	assert.NotContains(t, string(raw), "// sha256:")
+
+	// The sidecar file should exist and contain the checksum.
+	sha256Raw, err := os.ReadFile(path + ".sha256")
+	require.NoError(t, err)
+	assert.Contains(t, string(sha256Raw), "report.json")
 }
 
 func TestNormalize_LastEventAtOrBefore(t *testing.T) {
@@ -3683,10 +3695,13 @@ func TestWriteReport_FullFsyncPath(t *testing.T) {
 	err := WriteReport(path, report)
 	require.NoError(t, err)
 
-	// Verify the report was written with checksum.
+	// Verify the report was written as valid JSON with sidecar checksum.
 	data, err := os.ReadFile(path)
 	require.NoError(t, err)
-	assert.Contains(t, string(data), "// sha256:")
+	assert.NotContains(t, string(data), "// sha256:")
+	sha256Data, err := os.ReadFile(path + ".sha256")
+	require.NoError(t, err)
+	assert.Contains(t, string(sha256Data), "report.json")
 
 	// Verify via ReadReportWithVerify.
 	verified, err := ReadReportWithVerify(path)
@@ -4268,9 +4283,9 @@ func TestReadReportWithVerify_BadChecksum(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "bad-checksum.json")
 	raw, _ := json.MarshalIndent(&Report{Version: "v2", ReportID: "test"}, "", "  ")
-	content := append(raw, '\n')
-	content = append(content, []byte("// sha256:babadchecksum\n")...)
-	os.WriteFile(path, content, 0o644)
+	require.NoError(t, os.WriteFile(path, append(raw, '\n'), 0o644))
+	// Write a sidecar with a wrong checksum.
+	require.NoError(t, os.WriteFile(path+".sha256", []byte("babadchecksum  bad-checksum.json\n"), 0o644))
 	_, err := ReadReportWithVerify(path)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "checksum mismatch")
@@ -5701,21 +5716,12 @@ func TestHarness_ReadReport_UnmarshalError(t *testing.T) {
 func TestHarness_ReadReportWithVerify_BadChecksum(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "tampered.json")
-	// Write a valid report, then tamper with the checksum.
+	// Write a valid report, then tamper with the sidecar checksum.
 	err := WriteReport(path, Report{Version: "v2", RunID: "tamper-test"})
 	require.NoError(t, err)
 
-	raw, err := os.ReadFile(path)
-	require.NoError(t, err)
-	// Replace the checksum with a fake one.
-	lines := strings.Split(string(raw), "\n")
-	for i, line := range lines {
-		if strings.HasPrefix(strings.TrimSpace(line), "// sha256:") {
-			lines[i] = "// sha256:0000000000000000000000000000000000000000000000000000000000000000"
-		}
-	}
-	err = os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0o644)
-	require.NoError(t, err)
+	// Replace the sidecar checksum with a fake one.
+	require.NoError(t, os.WriteFile(path+".sha256", []byte("0000000000000000000000000000000000000000000000000000000000000000  tampered.json\n"), 0o644))
 
 	_, err = ReadReportWithVerify(path)
 	assert.Error(t, err)
@@ -5731,12 +5737,12 @@ func TestHarness_ReadReportWithVerify_UnsupportedVersion(t *testing.T) {
 	// Compute the correct checksum so the checksum check passes,
 	// allowing the version guard to be reached.
 	jsonContent := `{"version":"v99","run_id":"test"}`
-	checksum := sha256.Sum256([]byte(jsonContent))
-	content := jsonContent + "\n// sha256:" + fmt.Sprintf("%x", checksum) + "\n"
-	err := os.WriteFile(path, []byte(content), 0o644)
-	require.NoError(t, err)
+	fileContent := []byte(jsonContent + "\n")
+	checksum := sha256.Sum256(fileContent)
+	require.NoError(t, os.WriteFile(path, fileContent, 0o644))
+	require.NoError(t, os.WriteFile(path+".sha256", []byte(fmt.Sprintf("%x  badversion.json\n", checksum)), 0o644))
 
-	_, err = ReadReportWithVerify(path)
+	_, err := ReadReportWithVerify(path)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported report version")
 }

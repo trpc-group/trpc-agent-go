@@ -106,7 +106,9 @@ func (h Harness) Run(ctx context.Context, replayCase Case) (CaseResult, error) {
 	if len(h.Backends) < 2 {
 		return CaseResult{}, &ReplayError{Kind: ErrCaseValidation, Cause: fmt.Errorf("replay harness requires at least two backends")}
 	}
-	if err := validateAllowedDiffs(h.Allowed); err != nil {
+	// Merge case-level and harness-level allowed diffs.
+	mergedAllowed := mergeAllowedDiffs(h.Allowed, replayCase.AllowedDiffs)
+	if err := validateAllowedDiffs(mergedAllowed); err != nil {
 		return CaseResult{}, &ReplayError{Kind: ErrCaseValidation, Case: replayCase.Name, Cause: err}
 	}
 	if err := validateBackends(h.Backends); err != nil {
@@ -115,6 +117,9 @@ func (h Harness) Run(ctx context.Context, replayCase Case) (CaseResult, error) {
 	if err := validateRequiredCapabilities(replayCase, h.Backends); err != nil {
 		return CaseResult{}, &ReplayError{Kind: ErrCaseValidation, Case: replayCase.Name, Cause: err}
 	}
+
+	// Use mergedAllowed for all comparisons within this Run invocation.
+	allowed := mergedAllowed
 
 	timeout := h.Timeout
 	if timeout <= 0 {
@@ -356,7 +361,7 @@ func (h Harness) Run(ctx context.Context, replayCase Case) (CaseResult, error) {
 				snapshots[i].backendName,
 				baseline.snapshot,
 				snapshots[i].snapshot,
-				h.Allowed,
+				allowed,
 			)
 			if err != nil {
 				return result, &ReplayError{Kind: ErrComparison, Case: replayCase.Name, Cause: err}
@@ -369,7 +374,7 @@ func (h Harness) Run(ctx context.Context, replayCase Case) (CaseResult, error) {
 				snapshots[i].backendName,
 				baseline.snapshot,
 				snapshots[i].snapshot,
-				h.Allowed,
+				allowed,
 			)...)
 		}
 	} else {
@@ -387,7 +392,7 @@ func (h Harness) Run(ctx context.Context, replayCase Case) (CaseResult, error) {
 					snapshots[idx].backendName,
 					baseline.snapshot,
 					snapshots[idx].snapshot,
-					h.Allowed,
+					allowed,
 				)
 				ch <- compareResult{diffs: caseDiffs, err: err}
 			}(i)
@@ -1192,7 +1197,9 @@ func loadCheckpointResult(dir, caseName string) (CaseResult, bool) {
 // It can be overridden in tests to inject failures.
 var createTempFile = os.CreateTemp
 
-// WriteReport atomically writes an indented JSON report with SHA-256 checksum footer.
+// WriteReport atomically writes an indented JSON report alongside a SHA-256
+// checksum sidecar file. The report file is valid JSON; the checksum is stored
+// in a separate .sha256 file with the same base name.
 // Uses fsync for durability before atomic rename.
 func WriteReport(path string, report Report) error {
 	if path == "" {
@@ -1205,11 +1212,10 @@ func WriteReport(path string, report Report) error {
 	if err != nil {
 		return &ReplayError{Kind: ErrReportWrite, Cause: fmt.Errorf("marshal replay report: %w", err)}
 	}
-	// Compute checksum over the raw JSON bytes (without trailing newline or footer).
+	// Compute checksum over the raw JSON bytes.
 	// Invariant: ReadReportWithVerify must recompute on the same JSON bytes.
-	checksum := sha256.Sum256(raw)
 	content := append(raw, '\n')
-	content = append(content, []byte(fmt.Sprintf("// sha256:%x\n", checksum))...)
+	checksum := sha256.Sum256(content)
 
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return &ReplayError{Kind: ErrReportWrite, Cause: fmt.Errorf("create report directory: %w", err)}
@@ -1245,65 +1251,53 @@ func WriteReport(path string, report Report) error {
 		cleanup()
 		return &ReplayError{Kind: ErrReportWrite, Cause: fmt.Errorf("rename %s to %s: %w", tempName, path, err)}
 	}
+
+	// Write checksum sidecar file (same directory, .sha256 extension).
+	sha256Path := path + ".sha256"
+	sha256Content := fmt.Sprintf("%x  %s\n", checksum, filepath.Base(path))
+	if err := os.WriteFile(sha256Path, []byte(sha256Content), 0o644); err != nil {
+		// Non-fatal: the report itself is valid; log but don't fail.
+		_ = err
+	}
+
 	return nil
 }
 
-// ReadReport reads a JSON report from disk, stripping any checksum footer.
+// ReadReport reads a JSON report from disk.
 func ReadReport(path string) (*Report, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read replay report: %w", err)
 	}
-	jsonData := stripChecksumFooter(raw)
 	var report Report
-	if err := json.Unmarshal(jsonData, &report); err != nil {
+	if err := json.Unmarshal(raw, &report); err != nil {
 		return nil, fmt.Errorf("unmarshal replay report: %w", err)
 	}
 	return &report, nil
 }
 
-// stripChecksumFooter removes the "// sha256:..." footer appended by WriteReport.
-func stripChecksumFooter(raw []byte) []byte {
-	lines := strings.Split(string(raw), "\n")
-	var jsonLines []string
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "// sha256:") {
-			break
-		}
-		jsonLines = append(jsonLines, line)
-	}
-	return []byte(strings.Join(jsonLines, "\n"))
-}
-
-// ReadReportWithVerify reads a report, verifies the SHA-256 checksum footer,
+// ReadReportWithVerify reads a report, verifies the SHA-256 checksum sidecar,
 // and checks the report version.
 func ReadReportWithVerify(path string) (*Report, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read replay report: %w", err)
 	}
-	// Split JSON from checksum footer.
-	lines := strings.Split(string(raw), "\n")
-	var jsonLines []string
-	var storedChecksum string
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "// sha256:") {
-			storedChecksum = strings.TrimPrefix(trimmed, "// sha256:")
-			break
-		}
-		jsonLines = append(jsonLines, line)
-	}
-	jsonData := []byte(strings.Join(jsonLines, "\n"))
-	if storedChecksum != "" {
-		computed := fmt.Sprintf("%x", sha256.Sum256(jsonData))
-		if computed != storedChecksum {
-			return nil, fmt.Errorf("report checksum mismatch: computed %s, stored %s", computed, storedChecksum)
+	// Verify checksum from sidecar file if present.
+	sha256Path := path + ".sha256"
+	if sha256Raw, err := os.ReadFile(sha256Path); err == nil {
+		// Sidecar format: "<hex_checksum>  <filename>\n"
+		parts := strings.SplitN(strings.TrimSpace(string(sha256Raw)), "  ", 2)
+		if len(parts) >= 1 {
+			storedChecksum := parts[0]
+			computed := fmt.Sprintf("%x", sha256.Sum256(raw))
+			if computed != storedChecksum {
+				return nil, fmt.Errorf("report checksum mismatch: computed %s, stored %s", computed, storedChecksum)
+			}
 		}
 	}
 	var report Report
-	if err := json.Unmarshal(jsonData, &report); err != nil {
+	if err := json.Unmarshal(raw, &report); err != nil {
 		return nil, fmt.Errorf("unmarshal replay report: %w", err)
 	}
 	// Version guard: reject unknown versions to prevent silent misinterpretation.
@@ -1361,6 +1355,21 @@ func GenerateReport(results []CaseResult, backends []string) *Report {
 }
 
 // --- Validation helpers ---
+
+// mergeAllowedDiffs combines harness-level and case-level allowed diffs.
+// Case-level rules are appended after harness-level rules.
+func mergeAllowedDiffs(harness, caseLevel []AllowedDiff) []AllowedDiff {
+	if len(harness) == 0 {
+		return caseLevel
+	}
+	if len(caseLevel) == 0 {
+		return harness
+	}
+	merged := make([]AllowedDiff, 0, len(harness)+len(caseLevel))
+	merged = append(merged, harness...)
+	merged = append(merged, caseLevel...)
+	return merged
+}
 
 func validateCase(replayCase Case) error {
 	if strings.TrimSpace(replayCase.Name) == "" {

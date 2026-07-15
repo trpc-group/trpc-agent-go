@@ -420,7 +420,9 @@ func case14StateScopes() Case {
 		Run: func(ctx context.Context, backend Backend) error {
 			key := backend.SessKey()
 			// Create session (establishes appName + userID).
-			backend.Sess.CreateSession(ctx, key, nil)
+			if _, err := backend.Sess.CreateSession(ctx, key, nil); err != nil {
+				return err
+			}
 			// Update AppState: app-scoped state shared across sessions.
 			if err := backend.Sess.UpdateAppState(ctx, key.AppName, session.StateMap{
 				"theme": []byte("dark"),
