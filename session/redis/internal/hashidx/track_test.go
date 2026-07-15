@@ -104,6 +104,36 @@ func TestClient_AppendTrackEvent_PreservesExistingTTLWithoutRefresh(t *testing.T
 	assert.Contains(t, tracks, session.Track("alpha"))
 }
 
+func TestClient_AppendTrackEvent_MergesTrackState(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "trk-merge"}
+
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	alphaTracks, err := json.Marshal([]string{"alpha"})
+	require.NoError(t, err)
+	require.NoError(t, c.AppendTrackEvent(ctx, key, &session.TrackEvent{
+		Track:     "alpha",
+		Payload:   json.RawMessage(`"alpha"`),
+		Timestamp: time.Now(),
+	}, alphaTracks))
+
+	betaOnlyTracks, err := json.Marshal([]string{"beta"})
+	require.NoError(t, err)
+	require.NoError(t, c.AppendTrackEvent(ctx, key, &session.TrackEvent{
+		Track:     "beta",
+		Payload:   json.RawMessage(`"beta"`),
+		Timestamp: time.Now(),
+	}, betaOnlyTracks))
+
+	tracks, err := c.ListTracksForSession(ctx, key)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []session.Track{"alpha", "beta"}, tracks)
+}
+
 func TestClient_GetTrackEvents(t *testing.T) {
 	_, rdb := setupMiniredis(t)
 	c := NewClient(rdb, defaultConfig())
