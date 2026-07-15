@@ -84,6 +84,38 @@ func (m *nilChannelModel) Info() model.Info {
 	return model.Info{Name: m.name}
 }
 
+type sequenceModel struct {
+	name      string
+	responses [][]*model.Response
+	errors    []error
+	requests  []*model.Request
+}
+
+func (m *sequenceModel) GenerateContent(
+	ctx context.Context,
+	request *model.Request,
+) (<-chan *model.Response, error) {
+	index := len(m.requests)
+	m.requests = append(m.requests, request)
+	if index < len(m.errors) && m.errors[index] != nil {
+		return nil, m.errors[index]
+	}
+	var responses []*model.Response
+	if index < len(m.responses) {
+		responses = m.responses[index]
+	}
+	ch := make(chan *model.Response, len(responses))
+	for _, response := range responses {
+		ch <- response
+	}
+	close(ch)
+	return ch, nil
+}
+
+func (m *sequenceModel) Info() model.Info {
+	return model.Info{Name: m.name}
+}
+
 // newMockModelWithToolCalls creates a mock model that returns tool calls.
 func newMockModelWithToolCalls(toolCalls []model.ToolCall) *mockModel {
 	return &mockModel{
@@ -195,10 +227,110 @@ func TestExtractor_AssistantResultExtractionOption(t *testing.T) {
 	meta := e.Metadata()
 	assert.Equal(t, true, meta[metadataKeyAssistantResults])
 
-	prompt := e.buildSystemPrompt(time.Date(2024, 6, 10, 0, 0, 0, 0, time.UTC), nil)
+	refDate := time.Date(2024, 6, 10, 0, 0, 0, 0, time.UTC)
+	assert.NotContains(t, e.buildSystemPrompt(refDate, nil),
+		"<assistant_result_extraction>")
+	prompt := e.buildAssistantResultSystemPrompt(refDate, nil)
 	assert.Contains(t, prompt, "<assistant_result_extraction>")
-	assert.Contains(t, prompt, "DIRECT-REQUEST PRIORITY")
+	assert.Contains(t, prompt, "MANDATORY DIRECT-RESULT CHECK")
 	assert.Contains(t, prompt, "requested extraction, classification, or transformation")
+	assert.Contains(t, prompt, "Do not store general definitions")
+}
+
+func TestExtractor_AssistantResultExtractionSecondPass(t *testing.T) {
+	primaryArgs, err := json.Marshal(map[string]any{
+		"memory": "Wants to learn backend development.",
+	})
+	require.NoError(t, err)
+	resultArgs, err := json.Marshal(map[string]any{
+		"memory": "Recommended backend languages: Go, Java, and Python.",
+	})
+	require.NoError(t, err)
+	m := &sequenceModel{
+		name: "test-model",
+		responses: [][]*model.Response{
+			{{Choices: []model.Choice{{Message: model.Message{ToolCalls: []model.ToolCall{
+				makeToolCall(memory.AddToolName, primaryArgs),
+			}}}}}},
+			{{Choices: []model.Choice{{Message: model.Message{ToolCalls: []model.ToolCall{
+				makeToolCall(memory.AddToolName, resultArgs),
+			}}}}}},
+		},
+	}
+	e := NewExtractor(m, WithAssistantResultExtraction(true))
+
+	ops, err := e.Extract(context.Background(), []model.Message{
+		model.NewUserMessage("Which backend languages should I learn?"),
+		model.NewAssistantMessage("Start with Go, Java, or Python."),
+	}, nil)
+	require.NoError(t, err)
+	require.Len(t, ops, 2)
+	assert.Equal(t, "Wants to learn backend development.", ops[0].Memory)
+	assert.Equal(t, "Recommended backend languages: Go, Java, and Python.", ops[1].Memory)
+	require.Len(t, m.requests, 2)
+	assert.NotContains(t, m.requests[0].Messages[0].Content,
+		"<assistant_result_extraction>")
+	assert.Contains(t, m.requests[1].Messages[0].Content,
+		"<assistant_result_extraction>")
+	assert.Len(t, m.requests[1].Tools, 1)
+	assert.Contains(t, m.requests[1].Tools, memory.AddToolName)
+	assert.Equal(t, model.RoleUser,
+		m.requests[1].Messages[len(m.requests[1].Messages)-1].Role)
+}
+
+func TestExtractor_AssistantResultExtractionFailure(t *testing.T) {
+	m := &sequenceModel{
+		name:      "test-model",
+		responses: [][]*model.Response{nil, nil},
+		errors:    []error{nil, errors.New("result model error")},
+	}
+	e := NewExtractor(m, WithAssistantResultExtraction(true))
+
+	ops, err := e.Extract(context.Background(), []model.Message{
+		model.NewUserMessage("What should I learn?"),
+		model.NewAssistantMessage("Learn Go."),
+	}, nil)
+	require.ErrorContains(t, err, "assistant result extraction failed")
+	assert.Nil(t, ops)
+	assert.Len(t, m.requests, 2)
+}
+
+func TestExtractor_AssistantResultExtractionRequiresAdd(t *testing.T) {
+	m := &sequenceModel{name: "test-model", responses: [][]*model.Response{nil}}
+	e := NewExtractor(m, WithAssistantResultExtraction(true)).(*memoryExtractor)
+	e.SetEnabledTools(map[string]struct{}{memory.UpdateToolName: {}})
+
+	_, err := e.Extract(context.Background(), []model.Message{
+		model.NewUserMessage("What should I learn?"),
+		model.NewAssistantMessage("Learn Go."),
+	}, nil)
+	require.NoError(t, err)
+	assert.Len(t, m.requests, 1)
+}
+
+func TestMergeExtractionOperations(t *testing.T) {
+	primary := &Operation{
+		Type:         OperationAdd,
+		Memory:       "Recommended Go and Python.",
+		Topics:       []string{"languages"},
+		Participants: []string{"Alice"},
+	}
+	duplicate := *primary
+	duplicate.Memory = "  recommended go AND python. "
+	duplicate.Topics = []string{"recommendations"}
+
+	merged := mergeExtractionOperations(
+		[]*Operation{primary},
+		[]*Operation{&duplicate},
+	)
+	require.Len(t, merged, 1)
+	assert.Same(t, primary, merged[0])
+
+	eventTime := time.Date(2024, 6, 10, 0, 0, 0, 0, time.UTC)
+	differentEvent := duplicate
+	differentEvent.EventTime = &eventTime
+	merged = mergeExtractionOperations(merged, []*Operation{&differentEvent})
+	assert.Len(t, merged, 2)
 }
 
 func TestExtractor_Extract_NoModel(t *testing.T) {

@@ -76,8 +76,8 @@ func WithUpdatePolicy(policy UpdatePolicy) Option {
 	}
 }
 
-// WithAssistantResultExtraction controls whether concrete results produced by
-// the assistant are eligible for memory extraction. It is disabled by default
+// WithAssistantResultExtraction controls a dedicated second extraction pass
+// for concrete results produced by the assistant. It is disabled by default
 // to preserve the existing extractor behavior.
 func WithAssistantResultExtraction(enabled bool) Option {
 	return func(e *memoryExtractor) {
@@ -142,27 +142,45 @@ func (e *memoryExtractor) Extract(
 		return nil, nil
 	}
 
-	// Build request with tool declarations.
-	tools := filterTools(backgroundTools, e.effectiveEnabledTools())
-	req := &model.Request{
+	primaryRequest := &model.Request{
 		Messages: e.buildMessages(ctx, messages, existing),
-		Tools:    tools,
+		Tools:    filterTools(backgroundTools, e.effectiveEnabledTools()),
+	}
+	ctx, ops, err := e.generateOperations(ctx, primaryRequest)
+	if err != nil || !e.shouldExtractAssistantResult(messages) {
+		return ops, err
 	}
 
-	// Call model.
+	resultRequest := &model.Request{
+		Messages: e.buildAssistantResultMessages(ctx, messages, existing),
+		Tools: filterTools(backgroundTools, map[string]struct{}{
+			memory.AddToolName: {},
+		}),
+	}
+	_, resultOps, err := e.generateOperations(ctx, resultRequest)
+	if err != nil {
+		return nil, fmt.Errorf("assistant result extraction failed: %w", err)
+	}
+	return mergeExtractionOperations(ops, resultOps), nil
+}
+
+func (e *memoryExtractor) generateOperations(
+	ctx context.Context,
+	req *model.Request,
+) (context.Context, []*Operation, error) {
 	ctx, rspChan, err := e.runBeforeModelCallbacks(ctx, req)
 	if err != nil {
-		return nil, err
+		return ctx, nil, err
 	}
 	if rspChan == nil {
 		rspChan, err = e.model.GenerateContent(ctx, req)
 		if err != nil {
 			log.WarnfContext(ctx, "extractor: model call failed: %v", err)
-			return nil, fmt.Errorf("model call failed: %w", err)
+			return ctx, nil, fmt.Errorf("model call failed: %w", err)
 		}
 	}
 	if rspChan == nil {
-		return nil, errors.New("model returned nil response channel")
+		return ctx, nil, errors.New("model returned nil response channel")
 	}
 
 	// Parse tool calls into operations.
@@ -170,20 +188,20 @@ func (e *memoryExtractor) Extract(
 	for {
 		select {
 		case <-ctx.Done():
-			return nil, fmt.Errorf("memory extraction canceled: %w", ctx.Err())
+			return ctx, nil, fmt.Errorf("memory extraction canceled: %w", ctx.Err())
 		case rsp, ok := <-rspChan:
 			if !ok {
-				return ops, nil
+				return ctx, ops, nil
 			}
 			ctx, rsp, err = e.runAfterModelCallbacks(ctx, req, rsp)
 			if err != nil {
-				return nil, err
+				return ctx, nil, err
 			}
 			if rsp == nil {
 				continue
 			}
 			if rsp.Error != nil {
-				return nil, fmt.Errorf("model error: %s", rsp.Error.Message)
+				return ctx, nil, fmt.Errorf("model error: %s", rsp.Error.Message)
 			}
 			if len(rsp.Choices) == 0 {
 				continue
@@ -264,9 +282,9 @@ const extractionUserSuffix = "Extract and manage memories " +
 	"from the conversation above."
 
 const assistantExtractionUserSuffix = "Extract and manage memories from both " +
-	"the user and assistant messages above. Preserve concrete results that the " +
-	"user explicitly requested; ignore reasoning, unrequested generic teaching, " +
-	"acknowledgments, and filler."
+	"the user and assistant messages above, but output only concrete results " +
+	"provided by the assistant in direct response to the user's request. Do not " +
+	"output the user's request, goal, or interests by themselves."
 
 // buildMessages builds messages for auto memory extraction.
 func (e *memoryExtractor) buildMessages(
@@ -296,15 +314,148 @@ func (e *memoryExtractor) buildMessages(
 	if last := result[len(result)-1]; last.Role != model.RoleUser &&
 		last.Role != model.RoleTool &&
 		len(last.ToolCalls) == 0 {
-		suffix := extractionUserSuffix
-		if e.extractAssistantResults {
-			suffix = assistantExtractionUserSuffix
-		}
 		result = append(result,
-			model.NewUserMessage(suffix))
+			model.NewUserMessage(extractionUserSuffix))
 	}
 
 	return result
+}
+
+func (e *memoryExtractor) shouldExtractAssistantResult(
+	messages []model.Message,
+) bool {
+	if !e.extractAssistantResults || !e.actionEnabled(memory.AddToolName) {
+		return false
+	}
+	var hasUser, hasAssistant bool
+	for _, message := range messages {
+		switch message.Role {
+		case model.RoleUser:
+			hasUser = hasUser || messageHasText(message)
+		case model.RoleAssistant:
+			hasAssistant = hasAssistant ||
+				(messageHasText(message) && len(message.ToolCalls) == 0)
+		}
+	}
+	return hasUser && hasAssistant
+}
+
+func (e *memoryExtractor) buildAssistantResultMessages(
+	ctx context.Context,
+	messages []model.Message,
+	existing []*memory.Entry,
+) []model.Message {
+	result := []model.Message{model.NewSystemMessage(
+		e.buildAssistantResultSystemPrompt(referenceDate(ctx), existing),
+	)}
+	for _, message := range messages {
+		if message.Role != model.RoleUser && message.Role != model.RoleAssistant {
+			continue
+		}
+		if message.ToolID != "" || len(message.ToolCalls) > 0 ||
+			!messageHasText(message) {
+			continue
+		}
+		result = append(result, message)
+	}
+	result = append(result, model.NewUserMessage(assistantExtractionUserSuffix))
+	return result
+}
+
+func messageHasText(message model.Message) bool {
+	if strings.TrimSpace(message.Content) != "" {
+		return true
+	}
+	for _, part := range message.ContentParts {
+		if part.Type == model.ContentTypeText && part.Text != nil &&
+			strings.TrimSpace(*part.Text) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func (e *memoryExtractor) buildAssistantResultSystemPrompt(
+	refDate time.Time,
+	existing []*memory.Entry,
+) string {
+	var sb strings.Builder
+	sb.WriteString(strings.ReplaceAll(
+		assistantResultExtractionPrompt,
+		currentDatePlaceholder,
+		refDate.UTC().Format(time.DateOnly),
+	))
+	sb.WriteString("\n<available_actions>\n- ")
+	sb.WriteString(memory.AddToolName)
+	sb.WriteString(": ")
+	sb.WriteString(toolActionDescriptions[memory.AddToolName])
+	sb.WriteString("\n</available_actions>\n")
+	if len(existing) > 0 {
+		sb.WriteString("\n<existing_memories>\n")
+		for _, entry := range existing {
+			if entry != nil && entry.Memory != nil {
+				sb.WriteString(formatExistingMemory(entry))
+			}
+		}
+		sb.WriteString("</existing_memories>\n")
+	}
+	return sb.String()
+}
+
+func mergeExtractionOperations(primary, result []*Operation) []*Operation {
+	merged := append([]*Operation(nil), primary...)
+	for _, candidate := range result {
+		if candidate == nil {
+			continue
+		}
+		duplicate := false
+		for _, existing := range merged {
+			if sameExtractionOperation(existing, candidate) {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			merged = append(merged, candidate)
+		}
+	}
+	return merged
+}
+
+func sameExtractionOperation(left, right *Operation) bool {
+	if left == nil || right == nil || left.Type != right.Type ||
+		left.MemoryID != right.MemoryID || left.MemoryKind != right.MemoryKind ||
+		!strings.EqualFold(strings.TrimSpace(left.Memory), strings.TrimSpace(right.Memory)) ||
+		!strings.EqualFold(strings.TrimSpace(left.Location), strings.TrimSpace(right.Location)) ||
+		!sameOptionalTime(left.EventTime, right.EventTime) {
+		return false
+	}
+	return equalFoldedStringSets(left.Participants, right.Participants)
+}
+
+func sameOptionalTime(left, right *time.Time) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return left.Equal(*right)
+}
+
+func equalFoldedStringSets(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	values := make(map[string]int, len(left))
+	for _, value := range left {
+		values[strings.ToLower(strings.TrimSpace(value))]++
+	}
+	for _, value := range right {
+		key := strings.ToLower(strings.TrimSpace(value))
+		if values[key] == 0 {
+			return false
+		}
+		values[key]--
+	}
+	return true
 }
 
 // currentDatePlaceholder is replaced in the prompt template with
@@ -331,9 +482,6 @@ func (e *memoryExtractor) buildSystemPrompt(
 		renderedPrompt = e.prompt
 	}
 	sb.WriteString(renderedPrompt)
-	if e.extractAssistantResults {
-		sb.WriteString(assistantResultExtractionPrompt)
-	}
 	if policyPrompt := updatePolicyPrompt(e.updatePolicy); policyPrompt != "" {
 		sb.WriteString(policyPrompt)
 	}
@@ -446,20 +594,34 @@ func updatePolicyPrompt(policy UpdatePolicy) string {
 }
 
 const assistantResultExtractionPrompt = `
+You are an Assistant Result Memory Manager.
+Today's date is {current_date}.
+Extract ONLY concrete results that the assistant provided in direct response
+to the user's request. Do not extract the user's request, goal, preference, or
+interest by itself; the normal memory pass handles user information.
+
+Eligible results are named answers, recommendations or shortlists, ordered
+plans, decisions, calculations, and requested extractions, classifications, or
+transformations. Do not store general definitions, explanatory background,
+tutorial prose, brainstorming without a selected result, or acknowledgments.
 
 <assistant_result_extraction>
-- DIRECT-REQUEST PRIORITY: When the user asks for advice, tips, an answer, a
-  list, or a transformation, preserve the assistant's concrete named items and
-  conclusion even when the response is educational, generally applicable, or
-  based on non-personal source material. This priority overrides the exclusion
-  of generic teaching below.
 - Store a concrete result the user explicitly requested and may refer to later,
   such as a named answer, concise recommendation, final list or ordering, plan,
   calculation, or requested extraction, classification, or transformation.
+- MANDATORY DIRECT-RESULT CHECK: Before finishing, inspect the assistant's
+  direct answer separately. If it contains concrete named items or a conclusion
+  requested by the user, emit a memory for that result even when the response
+  is educational, generally applicable, or based on non-personal material.
+  Do not emit only the user's goal while dropping the answer to that goal.
 - Keep a cohesive result in one memory when splitting it would lose set
   membership, ordering, or item-to-detail relationships. For a long response,
   store one concise memory containing the requested answer rather than every
-  explanation supporting it.
+  supporting explanation.
+- Example: if a user asks which materials to compare and the assistant answers
+  "steel for strength, aluminum for weight, and wood for cost", store one
+  memory containing all three material-to-property recommendations. Merely
+  storing that the user is comparing materials is incomplete.
 - Preserve exact names, quantities, negation, modality, and relationships.
 - Do not store hidden reasoning, unrequested generic teaching, every explored
   alternative, repeated explanation, acknowledgments, or filler.
