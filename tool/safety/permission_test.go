@@ -334,9 +334,18 @@ func TestPermissionHelpers(t *testing.T) {
 		RiskLevel:      RiskHigh,
 		RuleID:         "x",
 		Backend:        BackendHost,
+		Recommendation: "review <redacted> and token=<redacted>",
+	}
+	require.NotContains(t, PermissionReason(report), "/etc/passwd")
+	require.Contains(t, PermissionReason(report), "<redacted>")
+
+	report = Report{
+		Decision:       DecisionAsk,
+		RiskLevel:      RiskHigh,
+		RuleID:         "x",
+		Backend:        BackendHost,
 		Recommendation: "review /etc/passwd and token=abc123",
 	}
-	require.Contains(t, PermissionReason(report), "/etc/passwd")
 	require.NotContains(
 		t,
 		permissionDecisionForReport(report, []string{"/etc/passwd"}).Reason,
