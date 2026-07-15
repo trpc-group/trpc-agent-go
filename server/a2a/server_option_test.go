@@ -897,6 +897,11 @@ func TestAnonymousCookieSecureForAgentURL(t *testing.T) {
 			agentURL: "example.com/a2a",
 			want:     false,
 		},
+		{
+			name:     "invalid URL",
+			agentURL: "%",
+			want:     false,
+		},
 	}
 
 	for _, tt := range tests {

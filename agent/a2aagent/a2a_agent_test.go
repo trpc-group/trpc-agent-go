@@ -219,13 +219,12 @@ func TestNew(t *testing.T) {
 }
 
 func TestA2AAgent_AnonymousCookiesAreSessionScoped(t *testing.T) {
-	const cookieName = "trpc_agent_a2a_anon"
+	const cookieName = anonymousUserIDCookieName
 
 	var (
 		mu              sync.Mutex
 		nextCookieID    int
 		receivedCookies []string
-		otherCookies    []string
 		serverURL       string
 	)
 	handlerErrs := make(chan error, 1)
@@ -249,13 +248,8 @@ func TestA2AAgent_AnonymousCookiesAreSessionScoped(t *testing.T) {
 			if cookie, err := r.Cookie(cookieName); err == nil {
 				cookieValue = cookie.Value
 			}
-			otherCookieValue := ""
-			if cookie, err := r.Cookie("other_cookie"); err == nil {
-				otherCookieValue = cookie.Value
-			}
 			mu.Lock()
 			receivedCookies = append(receivedCookies, cookieValue)
-			otherCookies = append(otherCookies, otherCookieValue)
 			if cookieValue == "" {
 				nextCookieID++
 				cookieValue = anonymousTestCookieValue(nextCookieID)
@@ -386,7 +380,7 @@ func applyEventStateDeltas(sess *session.Session, events []*event.Event) {
 }
 
 func TestA2AAgent_AnonymousCookieStateIsScopedByRemoteAgentURL(t *testing.T) {
-	const cookieName = "trpc_agent_a2a_anon"
+	const cookieName = anonymousUserIDCookieName
 
 	type recordingServer struct {
 		srv         *httptest.Server
@@ -617,6 +611,133 @@ func TestAnonymousCookieJarDoesNotReplayOrCaptureOutsideRemoteScope(t *testing.T
 	)
 }
 
+func TestAnonymousCookieStateRejectsInvalidValues(t *testing.T) {
+	var nilState *anonymousCookieState
+	_, ok := nilState.load()
+	require.False(t, ok)
+	nilState.capture(anonymousTestCookieValue(1))
+	require.Nil(t, nilState.stateDelta())
+
+	state := newAnonymousCookieState(&session.Session{}, "state-key")
+	_, ok = state.load()
+	require.False(t, ok)
+	state.capture("not-anonymous")
+	require.Nil(t, state.stateDelta())
+
+	state.session.SetState(state.key, []byte("invalid-cookie"))
+	_, ok = state.load()
+	require.False(t, ok)
+
+	state.capture("  " + anonymousTestCookieValue(2) + "  ")
+	value, ok := state.load()
+	require.True(t, ok)
+	require.Equal(t, anonymousTestCookieValue(2), value)
+	require.Equal(t, map[string][]byte{
+		state.key: []byte(anonymousTestCookieValue(2)),
+	}, state.stateDelta())
+
+	withoutSession := newAnonymousCookieState(nil, "state-key")
+	withoutSession.capture(anonymousTestCookieValue(3))
+	require.Equal(t, map[string][]byte{
+		withoutSession.key: []byte(anonymousTestCookieValue(3)),
+	}, withoutSession.stateDelta())
+}
+
+func TestAnonymousCookieJarHandlesCookieBoundaries(t *testing.T) {
+	parseURL := func(raw string) *url.URL {
+		parsed, err := url.Parse(raw)
+		require.NoError(t, err)
+		return parsed
+	}
+	agentURL := "https://example.com/a2a"
+	remoteURL := parseURL(agentURL)
+	state := newAnonymousCookieState(&session.Session{}, anonymousCookieStateKey(agentURL))
+	jar := &anonymousCookieJar{
+		cookie: state,
+		scope:  anonymousCookieURLScopeFromAgentURL(agentURL),
+	}
+
+	jar.SetCookies(remoteURL, nil)
+	jar.SetCookies(remoteURL, []*http.Cookie{nil})
+	jar.SetCookies(remoteURL, []*http.Cookie{{
+		Name:  anonymousUserIDCookieName,
+		Value: anonymousTestCookieValue(1),
+	}})
+	captured, ok := state.load()
+	require.True(t, ok)
+	require.Equal(t, anonymousTestCookieValue(1), captured)
+
+	base, err := cookiejar.New(nil)
+	require.NoError(t, err)
+	base.SetCookies(remoteURL, []*http.Cookie{
+		{Name: anonymousUserIDCookieName, Value: "foreign"},
+		{Name: "other_cookie", Value: "kept"},
+	})
+	jar.base = base
+	jar.SetCookies(remoteURL, []*http.Cookie{{Name: "other_cookie", Value: "updated"}})
+
+	seen := make(map[string]string)
+	for _, cookie := range jar.Cookies(remoteURL) {
+		seen[cookie.Name] = cookie.Value
+	}
+	require.Equal(t, map[string]string{
+		anonymousUserIDCookieName: anonymousTestCookieValue(1),
+		"other_cookie":            "updated",
+	}, seen)
+
+	jar.cookie = nil
+	seen = make(map[string]string)
+	for _, cookie := range jar.Cookies(remoteURL) {
+		seen[cookie.Name] = cookie.Value
+	}
+	require.Equal(t, map[string]string{"other_cookie": "updated"}, seen)
+}
+
+func TestAnonymousCookieRequestHandlerBoundaries(t *testing.T) {
+	handler := &anonymousCookieHTTPReqHandler{}
+	_, err := handler.Handle(context.Background(), nil, nil)
+	require.EqualError(t, err, "a2a anonymous cookie handler: request is nil")
+
+	state := newAnonymousCookieState(&session.Session{}, anonymousCookieStateKey("http://example.com"))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.SetCookie(w, &http.Cookie{
+			Name:  anonymousUserIDCookieName,
+			Value: anonymousTestCookieValue(4),
+		})
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer srv.Close()
+
+	handler = &anonymousCookieHTTPReqHandler{
+		cookie: state,
+		scope:  anonymousCookieURLScopeFromAgentURL(srv.URL),
+	}
+	req, err := http.NewRequest(http.MethodGet, srv.URL, nil)
+	require.NoError(t, err)
+	resp, err := handler.Handle(context.Background(), nil, req)
+	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
+	captured, ok := state.load()
+	require.True(t, ok)
+	require.Equal(t, anonymousTestCookieValue(4), captured)
+}
+
+func TestAnonymousCookieURLScopeBoundaries(t *testing.T) {
+	require.Equal(t, "", canonicalAnonymousCookieURLPath(nil))
+	require.Equal(t, "http://%", canonicalAnonymousCookieStateScope("%"))
+	require.Equal(t, anonymousCookieURLScope{}, anonymousCookieURLScopeFromAgentURL("%"))
+
+	scope := anonymousCookieURLScopeFromAgentURL("HTTPS://EXAMPLE.COM/a2a/")
+	require.True(t, scope.matches(&url.URL{Scheme: "https", Host: "example.com", Path: "/a2a/message"}))
+	require.False(t, scope.matches(nil))
+	require.False(t, scope.matches(&url.URL{Scheme: "http", Host: "example.com", Path: "/a2a/message"}))
+	require.False(t, scope.matches(&url.URL{Scheme: "https", Host: "other.example.com", Path: "/a2a/message"}))
+	require.False(t, scope.matches(&url.URL{Scheme: "https", Host: "example.com", Path: "/other"}))
+
+	rootScope := anonymousCookieURLScopeFromAgentURL("https://example.com")
+	require.True(t, rootScope.matches(&url.URL{Scheme: "https", Host: "example.com", Path: "/anything"}))
+}
+
 func TestA2AAgent_AnonymousClientWithoutSessionIsEphemeral(
 	t *testing.T,
 ) {
@@ -633,7 +754,7 @@ func TestA2AAgent_AnonymousClientWithoutSessionIsEphemeral(
 }
 
 func TestA2AAgent_CustomHTTPClientJarDoesNotCollapseAnonymousSessions(t *testing.T) {
-	const cookieName = "trpc_agent_a2a_anon"
+	const cookieName = anonymousUserIDCookieName
 
 	var (
 		mu              sync.Mutex
