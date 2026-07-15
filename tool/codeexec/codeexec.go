@@ -276,6 +276,7 @@ func (t *executeCodeTool) scanOutput(
 	if t == nil || t.cfg.safety == nil {
 		return result
 	}
+	policy := t.cfg.safety.Policy()
 	if result.Output != "" {
 		report := t.cfg.safety.ScanOutput(ctx, safety.Request{
 			ToolName: t.cfg.name,
@@ -285,8 +286,9 @@ func (t *executeCodeTool) scanOutput(
 			},
 		}, result.Output)
 		if report.Redacted {
-			result.Output, _ = safety.RedactText(result.Output, t.cfg.safety.Policy())
+			result.Output, _ = safety.RedactText(result.Output, policy)
 		}
+		result.Output, _ = safety.TruncateOutput(result.Output, policy)
 	}
 	for i := range result.OutputFiles {
 		if result.OutputFiles[i].Content == "" {
@@ -303,8 +305,16 @@ func (t *executeCodeTool) scanOutput(
 		if report.Redacted {
 			result.OutputFiles[i].Content, _ = safety.RedactText(
 				result.OutputFiles[i].Content,
-				t.cfg.safety.Policy(),
+				policy,
 			)
+		}
+		if content, truncated := safety.TruncateOutput(
+			result.OutputFiles[i].Content,
+			policy,
+		); truncated {
+			result.OutputFiles[i].Content = content
+			result.OutputFiles[i].SizeBytes = int64(len(content))
+			result.OutputFiles[i].Truncated = true
 		}
 	}
 	return result

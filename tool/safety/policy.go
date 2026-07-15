@@ -39,6 +39,7 @@ type Policy struct {
 	NonWhitelistedNetworkAction    Decision         `json:"non_whitelisted_network_action" yaml:"non_whitelisted_network_action"`
 	DependencyInstallAction        Decision         `json:"dependency_install_action" yaml:"dependency_install_action"`
 	ShellBypassAction              Decision         `json:"shell_bypass_action" yaml:"shell_bypass_action"`
+	InteractiveStdinAction         Decision         `json:"interactive_stdin_action" yaml:"interactive_stdin_action"`
 	DisallowedEnvironmentAction    Decision         `json:"disallowed_environment_action" yaml:"disallowed_environment_action"`
 	SensitivePathReadAction        Decision         `json:"sensitive_path_read_action" yaml:"sensitive_path_read_action"`
 	ReviewShellPipelines           bool             `json:"review_shell_pipelines" yaml:"review_shell_pipelines"`
@@ -74,6 +75,7 @@ type PolicyConfig struct {
 	NonWhitelistedNetworkAction    *Decision         `json:"non_whitelisted_network_action" yaml:"non_whitelisted_network_action"`
 	DependencyInstallAction        *Decision         `json:"dependency_install_action" yaml:"dependency_install_action"`
 	ShellBypassAction              *Decision         `json:"shell_bypass_action" yaml:"shell_bypass_action"`
+	InteractiveStdinAction         *Decision         `json:"interactive_stdin_action" yaml:"interactive_stdin_action"`
 	DisallowedEnvironmentAction    *Decision         `json:"disallowed_environment_action" yaml:"disallowed_environment_action"`
 	SensitivePathReadAction        *Decision         `json:"sensitive_path_read_action" yaml:"sensitive_path_read_action"`
 	ReviewShellPipelines           *bool             `json:"review_shell_pipelines" yaml:"review_shell_pipelines"`
@@ -121,6 +123,7 @@ func DefaultPolicy() Policy {
 		NonWhitelistedNetworkAction:  DecisionDeny,
 		DependencyInstallAction:      DecisionAsk,
 		ShellBypassAction:            DecisionAsk,
+		InteractiveStdinAction:       DecisionAsk,
 		DisallowedEnvironmentAction:  DecisionAsk,
 		SensitivePathReadAction:      DecisionDeny,
 		ReviewShellPipelines:         true,
@@ -190,6 +193,8 @@ func normalizePolicy(p Policy, preserveBoolFalse, preserveZeroLimits bool) Polic
 	p.DependencyInstallAction = normalizeDecision(
 		p.DependencyInstallAction, def.DependencyInstallAction)
 	p.ShellBypassAction = normalizeDecision(p.ShellBypassAction, def.ShellBypassAction)
+	p.InteractiveStdinAction = normalizeDecision(
+		p.InteractiveStdinAction, def.InteractiveStdinAction)
 	p.DisallowedEnvironmentAction = normalizeDecision(
 		p.DisallowedEnvironmentAction, def.DisallowedEnvironmentAction)
 	p.SensitivePathReadAction = normalizeDecision(
@@ -267,6 +272,9 @@ func applyPolicyConfigDecisions(p *Policy, cfg PolicyConfig) {
 	}
 	if cfg.ShellBypassAction != nil {
 		p.ShellBypassAction = *cfg.ShellBypassAction
+	}
+	if cfg.InteractiveStdinAction != nil {
+		p.InteractiveStdinAction = *cfg.InteractiveStdinAction
 	}
 	if cfg.DisallowedEnvironmentAction != nil {
 		p.DisallowedEnvironmentAction = *cfg.DisallowedEnvironmentAction
@@ -371,6 +379,7 @@ func validatePolicy(p Policy) error {
 		"non_whitelisted_network_action": p.NonWhitelistedNetworkAction,
 		"dependency_install_action":      p.DependencyInstallAction,
 		"shell_bypass_action":            p.ShellBypassAction,
+		"interactive_stdin_action":       p.InteractiveStdinAction,
 		"disallowed_environment_action":  p.DisallowedEnvironmentAction,
 		"sensitive_path_read_action":     p.SensitivePathReadAction,
 	} {

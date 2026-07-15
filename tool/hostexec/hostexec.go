@@ -298,11 +298,11 @@ func (t *execCommandTool) Call(
 		return nil, errors.New(errCommandRequired)
 	}
 
-	if err := t.checkSafety(ctx, in); err != nil {
-		return nil, err
-	}
 	workdir, err := resolveWorkdir(in.Workdir, t.baseDir)
 	if err != nil {
+		return nil, err
+	}
+	if err := t.checkSafety(ctx, in, workdir); err != nil {
 		return nil, err
 	}
 	yield := firstInt(in.YieldTimeMS, in.YieldMs)
@@ -323,7 +323,11 @@ func (t *execCommandTool) Call(
 	return t.scanExecOutput(ctx, res), nil
 }
 
-func (t *execCommandTool) checkSafety(ctx context.Context, in execInput) error {
+func (t *execCommandTool) checkSafety(
+	ctx context.Context,
+	in execInput,
+	effectiveWorkdir string,
+) error {
 	if t == nil || t.safety == nil {
 		return nil
 	}
@@ -331,11 +335,12 @@ func (t *execCommandTool) checkSafety(ctx context.Context, in execInput) error {
 	if v := firstInt(in.TimeoutSec, in.TimeoutSecOld); v != nil {
 		timeout = *v
 	}
+	timeout = safety.EffectiveHostExecTimeoutSec(timeout)
 	report := t.safety.Scan(ctx, safety.Request{
 		ToolName:   toolExecCommand,
 		Backend:    safety.BackendHostExec,
 		Command:    in.Command,
-		Cwd:        in.Workdir,
+		Cwd:        effectiveWorkdir,
 		Env:        in.Env,
 		TimeoutSec: timeout,
 		Background: in.Background,
@@ -354,6 +359,7 @@ func (t *execCommandTool) scanExecOutput(
 	if t == nil || t.safety == nil || res.Output == "" {
 		return mapExecResult(res)
 	}
+	policy := t.safety.Policy()
 	report := t.safety.ScanOutput(ctx, safety.Request{
 		ToolName: toolExecCommand,
 		Backend:  safety.BackendHostExec,
@@ -362,8 +368,9 @@ func (t *execCommandTool) scanExecOutput(
 		},
 	}, res.Output)
 	if report.Redacted {
-		res.Output, _ = safety.RedactText(res.Output, t.safety.Policy())
+		res.Output, _ = safety.RedactText(res.Output, policy)
 	}
+	res.Output, _ = safety.TruncateOutput(res.Output, policy)
 	return mapExecResult(res)
 }
 
@@ -504,7 +511,6 @@ func (t *writeStdinTool) checkSafety(
 			"session_id":        sessionID,
 			"interactive_stdin": "true",
 		},
-		TTY: true,
 	})
 	if report.Blocked {
 		return safety.NewBlockedError(report)
@@ -520,6 +526,7 @@ func (t *writeStdinTool) scanPollOutput(
 	if t == nil || t.safety == nil || poll.Output == "" {
 		return mapPollResult(sessionID, poll)
 	}
+	policy := t.safety.Policy()
 	report := t.safety.ScanOutput(ctx, safety.Request{
 		ToolName: toolWriteStdin,
 		Backend:  safety.BackendHostExec,
@@ -528,8 +535,9 @@ func (t *writeStdinTool) scanPollOutput(
 		},
 	}, poll.Output)
 	if report.Redacted {
-		poll.Output, _ = safety.RedactText(poll.Output, t.safety.Policy())
+		poll.Output, _ = safety.RedactText(poll.Output, policy)
 	}
+	poll.Output, _ = safety.TruncateOutput(poll.Output, policy)
 	return mapPollResult(sessionID, poll)
 }
 
@@ -728,10 +736,10 @@ func resolveWorkdir(
 		s = filepath.Join(home, strings.TrimPrefix(s, "~/"))
 	}
 	if baseDir != "" && !filepath.IsAbs(s) {
-		return filepath.Join(baseDir, s), nil
+		return filepath.Abs(filepath.Clean(filepath.Join(baseDir, s)))
 	}
 	if filepath.IsAbs(s) {
-		return s, nil
+		return filepath.Clean(s), nil
 	}
 	return filepath.Abs(s)
 }

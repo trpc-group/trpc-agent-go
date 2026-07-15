@@ -462,7 +462,6 @@ func parseWriteStdin(name string, backend Backend, args []byte) (Request, error)
 			"session_id":        firstNonEmpty(in.SessionID, in.SessionIDOld),
 			"interactive_stdin": "true",
 		},
-		TTY: true,
 	}, nil
 }
 
@@ -510,6 +509,7 @@ func parseHostExec(name string, args []byte) (Request, error) {
 	} else if in.TimeoutSecOld != nil {
 		timeout = *in.TimeoutSecOld
 	}
+	timeout = EffectiveHostExecTimeoutSec(timeout)
 	return Request{
 		ToolName:   name,
 		Backend:    BackendHostExec,

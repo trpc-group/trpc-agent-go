@@ -705,7 +705,6 @@ func (t *ExecTool) checkStdinSafety(
 			"session_id":        sessionID,
 			"interactive_stdin": "true",
 		},
-		TTY: true,
 	})
 	if report.Blocked {
 		return safety.NewBlockedError(report)
@@ -717,6 +716,7 @@ func (t *ExecTool) scanOutput(ctx context.Context, out execOutput) execOutput {
 	if t == nil || t.safetyScanner == nil || out.Output == "" {
 		return out
 	}
+	policy := t.safetyScanner.Policy()
 	report := t.safetyScanner.ScanOutput(ctx, safety.Request{
 		ToolName: "workspace_exec",
 		Backend:  safety.BackendWorkspaceExec,
@@ -725,8 +725,9 @@ func (t *ExecTool) scanOutput(ctx context.Context, out execOutput) execOutput {
 		},
 	}, out.Output)
 	if report.Redacted {
-		out.Output, _ = safety.RedactText(out.Output, t.safetyScanner.Policy())
+		out.Output, _ = safety.RedactText(out.Output, policy)
 	}
+	out.Output, _ = safety.TruncateOutput(out.Output, policy)
 	return out
 }
 

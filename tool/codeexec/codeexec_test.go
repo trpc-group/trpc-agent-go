@@ -147,6 +147,35 @@ func TestExecuteCodeSafetyScannerRedactsOutputAndArtifacts(t *testing.T) {
 	require.Equal(t, "[REDACTED]", out.OutputFiles[0].Content)
 }
 
+func TestExecuteCodeSafetyScannerTruncatesOversizedOutputAndArtifacts(t *testing.T) {
+	policy := safety.DefaultPolicy()
+	policy.MaxOutputBytes = 10
+	exec := &mockCodeExecutor{
+		result: codeexecutor.CodeExecutionResult{
+			Output: "0123456789x",
+			OutputFiles: []codeexecutor.File{{
+				Name:     "large.txt",
+				Content:  "abcdefghijx",
+				MIMEType: "text/plain",
+			}},
+		},
+	}
+	tl := NewTool(exec, WithSafetyScanner(safety.NewScanner(policy)))
+
+	result, err := tl.Call(context.Background(), []byte(`{
+		"code_blocks":[{"language":"python","code":"print('ok')"}]
+	}`))
+	require.NoError(t, err)
+	out, ok := result.(codeexecutor.CodeExecutionResult)
+	require.True(t, ok)
+	require.Len(t, out.Output, 10)
+	require.Equal(t, "0123456789", out.Output)
+	require.Len(t, out.OutputFiles[0].Content, 10)
+	require.Equal(t, "abcdefghij", out.OutputFiles[0].Content)
+	require.True(t, out.OutputFiles[0].Truncated)
+	require.EqualValues(t, 10, out.OutputFiles[0].SizeBytes)
+}
+
 func TestExecuteCodeTool_Call(t *testing.T) {
 	t.Run("successful execution", func(t *testing.T) {
 		exec := &mockCodeExecutor{

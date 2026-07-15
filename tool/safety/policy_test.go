@@ -37,6 +37,17 @@ parse_error_action: deny
 	require.Equal(t, DecisionDeny, p.ParseErrorAction)
 }
 
+func TestLoadPolicyYAMLOverridesInteractiveStdinAction(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "tool_safety_policy.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(`
+interactive_stdin_action: allow
+`), 0o600))
+	p, err := LoadPolicy(path)
+	require.NoError(t, err)
+	require.Equal(t, DecisionAllow, p.InteractiveStdinAction)
+}
+
 func TestProgrammaticPartialPolicyKeepsDefaultGuardrails(t *testing.T) {
 	p := Policy{
 		AllowedCommands: []string{"rm"},

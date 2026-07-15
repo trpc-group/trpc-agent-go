@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"trpc.group/trpc-go/trpc-agent-go/internal/shellsafe"
 )
@@ -43,6 +44,11 @@ const (
 	ruleInteractiveStdin   = "TSG-SHELL-004"
 	ruleUnknownBackend     = "TSG-BACKEND-001"
 	ruleAuditFailure       = "TSG-AUDIT-001"
+
+	// DefaultHostExecTimeoutSec matches tool/hostexec's runtime default.
+	DefaultHostExecTimeoutSec = 1_800
+
+	outputTruncatedMarker = "\n[TRUNCATED: output exceeded max_output_bytes]\n"
 )
 
 var (
@@ -151,7 +157,9 @@ func scanExecutableInputs(req Request, p Policy) []Finding {
 	if len(req.Args) > 0 {
 		findings = append(findings, scanArgv(req.Args, p)...)
 	}
-	if shouldScanStdinAsCommand(req) {
+	if isInteractiveStdin(req) {
+		findings = append(findings, scanInteractiveStdinCommandRisks(req.Stdin, p)...)
+	} else if shouldScanStdinAsCommand(req) {
 		findings = append(findings, scanCommand(req.Stdin, p)...)
 	}
 	findings = append(findings, scanUnknownRawArgs(req.RawArgs, p)...)
@@ -171,7 +179,7 @@ func scanRequestContext(req Request, texts []string, p Policy) []Finding {
 	findings = append(findings, scanSecrets(texts, p)...)
 	findings = append(findings, scanResourceHints(req, texts, p)...)
 	findings = append(findings, scanHostExec(req, p)...)
-	findings = append(findings, scanInteractiveStdin(req)...)
+	findings = append(findings, scanInteractiveStdin(req, p)...)
 	return findings
 }
 
@@ -187,6 +195,7 @@ func (s *Scanner) ScanOutput(ctx context.Context, req Request, output string) Re
 	if len(findings) == 0 {
 		findings = append(findings, scanSensitivePaths([]string{output}, p)...)
 	}
+	findings = append(findings, scanOutputSize(output, p)...)
 	if req.Backend == "" {
 		req.Backend = BackendUnknown
 	}
@@ -198,6 +207,56 @@ func (s *Scanner) ScanOutput(ctx context.Context, req Request, output string) Re
 	}
 	_ = ctx
 	return report
+}
+
+// EffectiveHostExecTimeoutSec returns the timeout that hostexec will actually
+// apply for an input timeout value.
+func EffectiveHostExecTimeoutSec(timeoutSec int) int {
+	if timeoutSec <= 0 {
+		return DefaultHostExecTimeoutSec
+	}
+	return timeoutSec
+}
+
+// TruncateOutput applies policy.MaxOutputBytes to returned tool output.
+func TruncateOutput(output string, policy Policy) (string, bool) {
+	p := policy.Normalize()
+	if p.MaxOutputBytes <= 0 || len(output) <= p.MaxOutputBytes {
+		return output, false
+	}
+	suffix := ""
+	if p.MaxOutputBytes > len(outputTruncatedMarker) {
+		suffix = outputTruncatedMarker
+	}
+	prefixLimit := p.MaxOutputBytes - len(suffix)
+	if prefixLimit < 0 {
+		prefixLimit = p.MaxOutputBytes
+	}
+	return trimStringBytes(output, prefixLimit) + suffix, true
+}
+
+func trimStringBytes(s string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	if len(s) <= limit {
+		return s
+	}
+	end := 0
+	for i, r := range s {
+		size := utf8.RuneLen(r)
+		if size < 0 {
+			size = 1
+		}
+		if i+size > limit {
+			break
+		}
+		end = i + size
+	}
+	if end == 0 {
+		return s[:limit]
+	}
+	return s[:end]
 }
 
 func reportWithAuditFailure(req Request, findings []Finding, start time.Time, p Policy, err error) Report {
@@ -479,9 +538,6 @@ func shouldScanStdinAsCommand(req Request) bool {
 	if strings.TrimSpace(req.Stdin) == "" {
 		return false
 	}
-	if req.Metadata["interactive_stdin"] == "true" {
-		return strings.Contains(req.Stdin, "\n")
-	}
 	text := strings.ToLower(req.Command)
 	return strings.Contains(text, " sh") ||
 		strings.Contains(text, " bash") ||
@@ -491,6 +547,32 @@ func shouldScanStdinAsCommand(req Request) bool {
 		strings.Contains(text, "| bash") ||
 		strings.Contains(text, "python -") ||
 		strings.Contains(text, "python3 -")
+}
+
+func isInteractiveStdin(req Request) bool {
+	return strings.TrimSpace(req.Stdin) != "" &&
+		req.Metadata["interactive_stdin"] == "true"
+}
+
+func scanInteractiveStdinCommandRisks(stdin string, p Policy) []Finding {
+	if strings.TrimSpace(stdin) == "" {
+		return nil
+	}
+	var findings []Finding
+	pipe, err := shellsafe.Parse(stdin)
+	if err == nil {
+		findings = append(findings, scanCommandSegments(pipe.Commands, p)...)
+		findings = append(findings, scanNetworkCommandSegments(pipe.Commands, p)...)
+		if p.ReviewShellPipelines && len(pipe.Commands) > 1 {
+			findings = append(findings, finding(rulePipeline, "shell_pipeline",
+				RiskMedium, stdin,
+				"review multi-segment stdin because pipes can hide data movement",
+				DecisionAsk))
+		}
+	}
+	findings = append(findings, scanShellBypassText(stdin, p)...)
+	findings = append(findings, scanNetworkText(stdin, p)...)
+	return findings
 }
 
 func scanCommandSegments(cmds [][]string, p Policy) []Finding {
@@ -722,6 +804,17 @@ func scanResourceHints(req Request, texts []string, p Policy) []Finding {
 	return findings
 }
 
+func scanOutputSize(output string, p Policy) []Finding {
+	if p.MaxOutputBytes <= 0 || len(output) <= p.MaxOutputBytes {
+		return nil
+	}
+	return []Finding{finding(ruleResourceOutput,
+		"resource_abuse", RiskMedium,
+		fmt.Sprintf("output_bytes=%d exceeds max_output_bytes=%d", len(output), p.MaxOutputBytes),
+		"truncate output before returning it to the model or raise max_output_bytes after review",
+		DecisionAllow)}
+}
+
 func scanHostExec(req Request, p Policy) []Finding {
 	if req.Backend != BackendHostExec {
 		return nil
@@ -742,15 +835,15 @@ func scanHostExec(req Request, p Policy) []Finding {
 	return findings
 }
 
-func scanInteractiveStdin(req Request) []Finding {
+func scanInteractiveStdin(req Request, p Policy) []Finding {
 	if strings.TrimSpace(req.Stdin) == "" ||
-		req.Metadata["interactive_stdin"] != "true" {
+		!isInteractiveStdin(req) {
 		return nil
 	}
 	return []Finding{finding(ruleInteractiveStdin,
 		"shell_bypass", RiskMedium, "interactive stdin write",
 		"review interactive stdin writes because commands can be split across chunks",
-		DecisionAsk)}
+		p.InteractiveStdinAction)}
 }
 
 func scanSecrets(texts []string, p Policy) []Finding {

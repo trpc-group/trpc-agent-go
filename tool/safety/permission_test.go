@@ -165,6 +165,24 @@ func TestPermissionPolicyMapsSkillCommandTools(t *testing.T) {
 	require.Contains(t, decision.Reason, ruleInteractiveStdin)
 }
 
+func TestParseHostExecAppliesEffectiveDefaultTimeout(t *testing.T) {
+	tests := []struct {
+		name string
+		args []byte
+	}{
+		{name: "omitted", args: []byte(`{"command":"echo ok"}`)},
+		{name: "zero", args: []byte(`{"command":"echo ok","timeout_sec":0}`)},
+		{name: "negative", args: []byte(`{"command":"echo ok","timeout_sec":-1}`)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req, err := parseHostExec("exec_command", tt.args)
+			require.NoError(t, err)
+			require.Equal(t, DefaultHostExecTimeoutSec, req.TimeoutSec)
+		})
+	}
+}
+
 func TestPermissionPolicyMapsMCPCommandTools(t *testing.T) {
 	pp := NewPermissionPolicy(WithPolicy(DefaultPolicy()))
 	decision, err := pp.CheckToolPermission(context.Background(), &tool.PermissionRequest{

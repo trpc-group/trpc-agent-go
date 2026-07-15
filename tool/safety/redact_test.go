@@ -74,6 +74,20 @@ func TestScannerScansOutputForSecretLeakage(t *testing.T) {
 	require.NotContains(t, report.Findings[0].Evidence, "super-secret")
 }
 
+func TestScannerScansOutputForMaxOutputBytes(t *testing.T) {
+	policy := DefaultPolicy()
+	policy.MaxOutputBytes = 10
+	report := NewScanner(policy).ScanOutput(context.Background(), Request{
+		ToolName: "workspace_exec",
+		Backend:  BackendWorkspaceExec,
+	}, "0123456789x")
+	require.Equal(t, DecisionAllow, report.Decision)
+	require.False(t, report.Blocked)
+	require.False(t, report.Redacted)
+	require.Equal(t, ruleResourceOutput, report.Findings[0].RuleID)
+	require.Contains(t, report.Findings[0].Evidence, "output_bytes=11")
+}
+
 func TestScannerRedactsCommonSecretShapes(t *testing.T) {
 	tests := []struct {
 		name   string
