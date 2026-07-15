@@ -265,7 +265,7 @@ const extractionUserSuffix = "Extract and manage memories " +
 
 const assistantExtractionUserSuffix = "Extract and manage memories from both " +
 	"the user and assistant messages above. Preserve concrete results that the " +
-	"user explicitly requested; ignore reasoning, generic teaching, " +
+	"user explicitly requested; ignore reasoning, unrequested generic teaching, " +
 	"acknowledgments, and filler."
 
 // buildMessages builds messages for auto memory extraction.
@@ -448,14 +448,21 @@ func updatePolicyPrompt(policy UpdatePolicy) string {
 const assistantResultExtractionPrompt = `
 
 <assistant_result_extraction>
+- DIRECT-REQUEST PRIORITY: When the user asks for advice, tips, an answer, a
+  list, or a transformation, preserve the assistant's concrete named items and
+  conclusion even when the response is educational, generally applicable, or
+  based on non-personal source material. This priority overrides the exclusion
+  of generic teaching below.
 - Store a concrete result the user explicitly requested and may refer to later,
   such as a named answer, concise recommendation, final list or ordering, plan,
   calculation, or requested extraction, classification, or transformation.
 - Keep a cohesive result in one memory when splitting it would lose set
-  membership, ordering, or item-to-detail relationships.
+  membership, ordering, or item-to-detail relationships. For a long response,
+  store one concise memory containing the requested answer rather than every
+  explanation supporting it.
 - Preserve exact names, quantities, negation, modality, and relationships.
-- Do not store hidden reasoning, generic teaching, every explored alternative,
-  repeated explanation, acknowledgments, or filler.
+- Do not store hidden reasoning, unrequested generic teaching, every explored
+  alternative, repeated explanation, acknowledgments, or filler.
 - Do not reject a requested transformation merely because its source material
   is not personal. Before emitting no operation, check whether the assistant
   produced a direct result the user could ask about later.

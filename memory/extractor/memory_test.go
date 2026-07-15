@@ -197,6 +197,7 @@ func TestExtractor_AssistantResultExtractionOption(t *testing.T) {
 
 	prompt := e.buildSystemPrompt(time.Date(2024, 6, 10, 0, 0, 0, 0, time.UTC), nil)
 	assert.Contains(t, prompt, "<assistant_result_extraction>")
+	assert.Contains(t, prompt, "DIRECT-REQUEST PRIORITY")
 	assert.Contains(t, prompt, "requested extraction, classification, or transformation")
 }
 
