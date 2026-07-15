@@ -40,7 +40,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolcall"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolsurface"
 	itrace "trpc.group/trpc-go/trpc-agent-go/internal/trace"
-	"trpc.group/trpc-go/trpc-agent-go/internal/tracecapture"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -316,7 +315,7 @@ func recoverFlowRunPanic(
 		model.ErrorTypeFlowError,
 		fmt.Sprintf(flowRunPanicErrFmt, recovered),
 	)
-	agent.EmitEvent(ctx, invocation, eventChan, errorEvent)
+	_ = agent.EmitEvent(ctx, invocation, eventChan, errorEvent)
 }
 
 func flowInvocationID(invocation *agent.Invocation) string {
@@ -344,17 +343,15 @@ func traceSnapshotFromMessages(messages []model.Message) *atrace.Snapshot {
 	return &atrace.Snapshot{Text: string(bytes)}
 }
 
-func executionTraceAppliedSurfaceIDs(invocation *agent.Invocation) []string {
-	if invocation == nil || invocation.Agent == nil {
+func traceSnapshotFromEvent(evt *event.Event) *atrace.Snapshot {
+	if evt == nil || evt.Response == nil {
 		return nil
 	}
-	reporter, ok := invocation.Agent.(interface {
-		ExecutionTraceAppliedSurfaceIDs(inv *agent.Invocation) []string
-	})
-	if !ok {
+	bytes, err := json.Marshal(evt.Response)
+	if err != nil {
 		return nil
 	}
-	return reporter.ExecutionTraceAppliedSurfaceIDs(invocation)
+	return &atrace.Snapshot{Text: string(bytes)}
 }
 
 func (f *Flow) maybeConsumeQueuedUserMessages(
@@ -642,9 +639,7 @@ func runModelSelector(
 	return selector(ctx, invocation)
 }
 
-// runOneStep executes one LLM call cycle. Despite the legacy name, this is
-// not a structural execution-trace Step; every cycle updates the Step owned by
-// the surrounding agent run.
+// runOneStep executes one step of the flow (one LLM call cycle).
 // Returns the last event generated, or nil if no events.
 func (f *Flow) runOneStep(
 	ctx context.Context,
@@ -697,6 +692,13 @@ func (f *Flow) runOneStep(
 		return lastEvent, nil
 	}
 	observabilityInvocation := invocationViewForModel(invocation, callModel)
+	stepID := agent.StartExecutionTraceStep(
+		invocation,
+		agent.InvocationTraceNodeID(invocation),
+		traceSnapshotFromMessages(llmRequest.Messages),
+		nil,
+	)
+	agent.SetExecutionTraceStepAppliedSurfaceIDs(invocation, stepID)
 	var span oteltrace.Span
 	var modelName string
 	if callModel != nil {
@@ -707,22 +709,10 @@ func (f *Flow) runOneStep(
 		defer span.End()
 	}
 	// 2. Call LLM (get response sequence).
-	ctx, responseSeq, modelCalled, err := f.callLLM(ctx, invocation, llmRequest, callModel)
+	ctx, responseSeq, err := f.callLLM(ctx, invocation, llmRequest, callModel)
 	if err != nil {
+		agent.FinishExecutionTraceStep(invocation, stepID, nil, err)
 		return nil, err
-	}
-	var lastCompleteUsage *model.Usage
-	if modelCalled && invocation != nil && invocation.RunOptions.ExecutionTraceEnabled {
-		modelResponseSeq := responseSeq
-		responseSeq = func(yield func(*model.Response) bool) {
-			modelResponseSeq(func(response *model.Response) bool {
-				if response != nil && !response.IsPartial && response.Usage != nil {
-					usage := *response.Usage
-					lastCompleteUsage = &usage
-				}
-				return yield(response)
-			})
-		}
 	}
 	// 3. Process streaming responses.
 	lastEvent, err = f.processStreamingResponses(
@@ -735,11 +725,9 @@ func (f *Flow) runOneStep(
 		span,
 		startedSpan,
 	)
-	if lastCompleteUsage != nil {
-		tracecapture.AddInvocationStepUsage(
-			agent.NewInvocationContext(ctx, invocation),
-			lastCompleteUsage,
-		)
+	agent.FinishExecutionTraceStep(invocation, stepID, traceSnapshotFromEvent(lastEvent), err)
+	if lastEvent != nil && lastEvent.Response != nil {
+		agent.SetExecutionTraceStepUsage(invocation, stepID, lastEvent.Response.Usage)
 	}
 	return lastEvent, err
 }
@@ -825,7 +813,6 @@ type streamingResponseProcessor struct {
 	eventChan               chan<- *event.Event
 	span                    oteltrace.Span
 	startedSpan             bool
-	chatTraceState          itelemetry.ChatTraceState
 	tracker                 *itelemetry.ChatMetricsTracker
 	timingInfo              *model.TimingInfo
 	partialUsageState       responseusage.PartialState
@@ -1079,7 +1066,7 @@ func (p *streamingResponseProcessor) traceChat(
 	if p.tracker != nil {
 		ttfb = p.tracker.FirstTokenTimeDuration()
 	}
-	p.chatTraceState.TraceChat(p.span, &itelemetry.TraceChatAttributes{
+	itelemetry.TraceChat(p.span, &itelemetry.TraceChatAttributes{
 		Invocation: observabilityInvocationForCurrent(
 			eventInvocation,
 			p.observabilityInvocation,
@@ -2193,7 +2180,7 @@ func (f *Flow) callLLM(
 	invocation *agent.Invocation,
 	llmRequest *model.Request,
 	callModel model.Model,
-) (context.Context, model.Seq[*model.Response], bool, error) {
+) (context.Context, model.Seq[*model.Response], error) {
 	ctx, span, started := startLatencySpan(
 		ctx,
 		invocation,
@@ -2211,7 +2198,7 @@ func (f *Flow) callLLM(
 	}()
 	if callModel == nil {
 		err = errors.New("no model available for LLM call")
-		return ctx, nil, false, err
+		return ctx, nil, err
 	}
 	log.DebugfContext(
 		ctx,
@@ -2222,39 +2209,24 @@ func (f *Flow) callLLM(
 	// configured (<= 0), this is a no-op and preserves existing behavior.
 	if err = invocation.IncLLMCallCount(); err != nil {
 		log.Errorf("LLM call limit exceeded for agent %s: %v", invocation.AgentName, err)
-		return ctx, nil, false, err
+		return ctx, nil, err
 	}
 	// Run before model callbacks if they exist.
 	ctx, customResp, err := f.runBeforeModelCallbacks(ctx, invocation, llmRequest)
 	if err != nil {
-		return ctx, nil, false, err
+		return ctx, nil, err
 	}
 	if customResp != nil {
 		return ctx, func(yield func(*model.Response) bool) {
 			yield(customResp)
-		}, false, nil
-	}
-	if llmRequest == nil || len(llmRequest.Messages) == 0 {
-		err = errors.New(errMsgNoLLMMessages)
-		return ctx, nil, false, err
-	}
-	if invocation != nil && invocation.RunOptions.ExecutionTraceEnabled {
-		traceCtx := agent.NewInvocationContext(ctx, invocation)
-		tracecapture.SetInvocationStepInput(
-			traceCtx,
-			traceSnapshotFromMessages(llmRequest.Messages),
-		)
-		tracecapture.MergeInvocationStepAppliedSurfaceIDs(
-			traceCtx,
-			executionTraceAppliedSurfaceIDs(invocation),
-		)
+		}, nil
 	}
 	summaryfork.Attach(invocation, llmRequest)
 	seq, err := f.generateContentSeq(ctx, invocation, llmRequest, callModel)
 	if err != nil {
-		return ctx, nil, true, err
+		return ctx, nil, err
 	}
-	return ctx, seq, true, nil
+	return ctx, seq, nil
 }
 
 func (f *Flow) runBeforeModelCallbacks(
