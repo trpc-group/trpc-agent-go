@@ -315,7 +315,7 @@ func recoverFlowRunPanic(
 		model.ErrorTypeFlowError,
 		fmt.Sprintf(flowRunPanicErrFmt, recovered),
 	)
-	agent.EmitEvent(ctx, invocation, eventChan, errorEvent)
+	_ = agent.EmitEvent(ctx, invocation, eventChan, errorEvent)
 }
 
 func flowInvocationID(invocation *agent.Invocation) string {
