@@ -294,9 +294,24 @@ func TestToStringSlice(t *testing.T) {
 			expected: []string{"a", "b"},
 		},
 		{
-			name:     "non-slice input",
-			input:    "not a slice",
-			expected: []string{},
+			name:     "plain string",
+			input:    "food delivery",
+			expected: []string{"food delivery"},
+		},
+		{
+			name:     "comma-separated string",
+			input:    "Domino's Pizza, food delivery, pizza",
+			expected: []string{"Domino's Pizza", "food delivery", "pizza"},
+		},
+		{
+			name:     "quoted comma-separated string",
+			input:    `nuts", "food preferences", "dislikes`,
+			expected: []string{"nuts", "food preferences", "dislikes"},
+		},
+		{
+			name:     "native string slice",
+			input:    []string{"a", "b"},
+			expected: []string{"a", "b"},
 		},
 		{
 			name:     "int slice",

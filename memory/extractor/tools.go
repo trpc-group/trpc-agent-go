@@ -9,6 +9,8 @@
 package extractor
 
 import (
+	"strings"
+
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	memorytool "trpc.group/trpc-go/trpc-agent-go/memory/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -149,14 +151,33 @@ func toStringSlice(v any) []string {
 	if v == nil {
 		return []string{}
 	}
-	arr, ok := v.([]any)
-	if !ok {
+	switch values := v.(type) {
+	case []string:
+		return append([]string(nil), values...)
+	case []any:
+		result := make([]string, 0, len(values))
+		for _, item := range values {
+			if s, ok := item.(string); ok {
+				result = append(result, s)
+			}
+		}
+		return result
+	case string:
+		return splitStringList(values)
+	default:
 		return []string{}
 	}
-	result := make([]string, 0, len(arr))
-	for _, item := range arr {
-		if s, ok := item.(string); ok {
-			result = append(result, s)
+}
+
+func splitStringList(value string) []string {
+	parts := strings.FieldsFunc(value, func(r rune) bool {
+		return r == ',' || r == ';' || r == '\n'
+	})
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.Trim(part, " \t\r\n\"[]")
+		if part != "" {
+			result = append(result, part)
 		}
 	}
 	return result

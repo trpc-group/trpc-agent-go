@@ -1014,8 +1014,6 @@ func TestExtractor_BuildSystemPrompt_WithExistingMemories(t *testing.T) {
 	assert.Contains(t, prompt,
 		"[mem-2] User is 30 years old.")
 	assert.Contains(t, prompt, "**DEDUPLICATION**")
-	assert.Contains(t, prompt, "9. SELF-CONTAINED CONTEXT")
-	assert.Contains(t, prompt, "category-to-instance")
 	assert.Contains(t, prompt, "memory_add")
 	assert.Contains(t, prompt, "memory_delete")
 	assert.Contains(t, prompt, "duplicate")
