@@ -3873,7 +3873,7 @@ func TestContentRequestProcessor_shouldIncludeEvent(t *testing.T) {
 	}
 }
 
-func TestContentRequestProcessor_getIncrementMessages_SummaryIsHardBoundary(t *testing.T) {
+func TestContentRequestProcessor_getIncrementMessages_BoundedResumeTail(t *testing.T) {
 	baseTime := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
 	userMsg := model.NewUserMessage("run the task")
 	toolCall1 := model.Message{
@@ -4003,12 +4003,122 @@ func TestContentRequestProcessor_getIncrementMessages_SummaryIsHardBoundary(t *t
 		},
 	)
 
-	if assert.Len(t, messages, 3) {
+	if assert.Len(t, messages, 5) {
 		assert.True(t, model.MessagesEqual(userMsg, messages[0]))
-		assert.Equal(t, toolCall2.Content, messages[1].Content)
-		assert.Equal(t, toolCall2.ToolCalls, messages[1].ToolCalls)
-		assert.True(t, model.MessagesEqual(toolResult2, messages[2]))
+		assert.Equal(t, toolCall1.Content, messages[1].Content)
+		assert.Equal(t, toolCall1.ReasoningContent, messages[1].ReasoningContent)
+		assert.Equal(t, "call_1", messages[1].ToolCalls[0].ID)
+		assert.JSONEq(
+			t,
+			compactedToolArgumentsPlaceholder,
+			string(messages[1].ToolCalls[0].Function.Arguments),
+		)
+		assert.Equal(t, model.RoleTool, messages[2].Role)
+		assert.Equal(t, toolResult1.ToolID, messages[2].ToolID)
+		assert.Equal(t, toolResult1.ToolName, messages[2].ToolName)
+		assert.Contains(t, messages[2].Content, compactedToolResultPlaceholder)
+		assert.NotContains(t, messages[2].Content, toolResult1.Content)
+		assert.Equal(t, toolCall2.Content, messages[3].Content)
+		assert.Equal(t, toolCall2.ToolCalls, messages[3].ToolCalls)
+		assert.True(t, model.MessagesEqual(toolResult2, messages[4]))
 	}
+}
+
+func TestContentRequestProcessor_LatestCompleteToolRoundBeforeCutoff(t *testing.T) {
+	baseTime := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	toolCallEvent := func(id string, callIDs ...string) event.Event {
+		calls := make([]model.ToolCall, 0, len(callIDs))
+		for _, callID := range callIDs {
+			calls = append(calls, model.ToolCall{
+				ID: callID,
+				Function: model.FunctionDefinitionParam{
+					Name:      "worker",
+					Arguments: []byte(`{"value":"payload"}`),
+				},
+			})
+		}
+		return event.Event{
+			ID:           id,
+			RequestID:    "req1",
+			InvocationID: "inv1",
+			Timestamp:    baseTime,
+			Version:      event.CurrentVersion,
+			Response: &model.Response{
+				ID:    "response-" + id,
+				Model: "provider-model",
+				Done:  true,
+				Choices: []model.Choice{{
+					Index: 7,
+					Message: model.Message{
+						Role:      model.RoleAssistant,
+						ToolCalls: calls,
+					},
+				}},
+			},
+		}
+	}
+	toolResultEvent := func(id string, callIDs ...string) event.Event {
+		choices := make([]model.Choice, 0, len(callIDs))
+		for i, callID := range callIDs {
+			choices = append(choices, model.Choice{
+				Index:   i,
+				Message: model.NewToolMessage(callID, "worker", "result"),
+			})
+		}
+		return event.Event{
+			ID:           id,
+			RequestID:    "req1",
+			InvocationID: "inv1",
+			Timestamp:    baseTime,
+			Version:      event.CurrentVersion,
+			Response: &model.Response{
+				Done:    true,
+				Object:  model.ObjectTypeToolResponse,
+				Choices: choices,
+			},
+		}
+	}
+	events := []event.Event{
+		toolCallEvent("call-old", "old"),
+		toolResultEvent("result-old", "old"),
+		toolCallEvent("call-new", "new-a", "new-b"),
+		toolResultEvent("result-new", "new-a", "new-b"),
+	}
+	for i := range events {
+		events[i].Timestamp = baseTime.Add(time.Duration(i) * time.Second)
+	}
+	sess := &session.Session{Events: events}
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationID("inv1"),
+		agent.WithInvocationRunOptions(agent.RunOptions{RequestID: "req1"}),
+	)
+	p := NewContentRequestProcessor()
+	cutoff := newEventHistoryCutoff(
+		events,
+		summaryHistoryCutoff{
+			at:          events[3].Timestamp,
+			lastEventID: events[3].ID,
+		},
+	)
+
+	tail := p.latestCompleteToolRoundBeforeCutoff(
+		events,
+		inv,
+		nil,
+		"",
+		cutoff,
+	)
+	require.Len(t, tail, 2)
+	require.NotContains(t, tail, 0)
+	require.NotContains(t, tail, 1)
+	require.Contains(t, tail, 2)
+	require.Contains(t, tail, 3)
+	require.Equal(t, "response-call-new", tail[2].Response.ID)
+	require.Equal(t, "provider-model", tail[2].Response.Model)
+	require.Equal(t, 7, tail[2].Response.Choices[0].Index)
+	require.Len(t, tail[2].Response.Choices[0].Message.ToolCalls, 2)
+	require.Len(t, tail[3].Response.Choices, 2)
 }
 
 func TestContentRequestProcessor_getIncrementMessages_ExactBoundaryKeepsSameTimestampTail(t *testing.T) {

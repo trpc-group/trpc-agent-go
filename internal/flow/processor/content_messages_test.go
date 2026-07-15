@@ -885,7 +885,7 @@ func TestProcessRequest_SessionSummary_MergesIntoSystemMessage(t *testing.T) {
 	require.Equal(t, "current request", req3.Messages[3].Content)
 }
 
-func TestProcessRequest_SessionSummary_OmitsCoveredSameTurnToolHistory(t *testing.T) {
+func TestProcessRequest_SessionSummary_ResumesLatestCoveredToolRound(t *testing.T) {
 	baseTime := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
 	userMsg := model.NewUserMessage("run the task")
 	toolCallMsg := model.Message{
@@ -983,15 +983,35 @@ func TestProcessRequest_SessionSummary_OmitsCoveredSameTurnToolHistory(t *testin
 	require.True(t, ok)
 	require.Equal(t, true, raw)
 
-	require.Len(t, req.Messages, 2)
+	require.Len(t, req.Messages, 4)
 	require.Equal(t, model.RoleSystem, req.Messages[0].Role)
 	require.Contains(t, req.Messages[0].Content, "system prompt")
 	require.Contains(t, req.Messages[0].Content,
 		"step 1 completed successfully")
 	require.True(t, model.MessagesEqual(userMsg, req.Messages[1]))
+	require.Equal(t, model.RoleAssistant, req.Messages[2].Role)
+	require.Equal(t, "Starting with step 1.", req.Messages[2].Content)
+	require.Len(t, req.Messages[2].ToolCalls, 1)
+	require.Equal(t, "call_1", req.Messages[2].ToolCalls[0].ID)
+	require.JSONEq(
+		t,
+		compactedToolArgumentsPlaceholder,
+		string(req.Messages[2].ToolCalls[0].Function.Arguments),
+	)
+	require.Equal(t, model.RoleTool, req.Messages[3].Role)
+	require.Equal(t, "call_1", req.Messages[3].ToolID)
+	require.Equal(t, "step_worker", req.Messages[3].ToolName)
+	require.Contains(t, req.Messages[3].Content, compactedToolResultPlaceholder)
+	require.NotContains(t, req.Messages[3].Content, "large-result;")
+	require.Equal(
+		t,
+		`{"step":1}`,
+		string(sess.Events[1].Choices[0].Message.ToolCalls[0].Function.Arguments),
+		"resume-tail compaction must not mutate session history",
+	)
 }
 
-func TestProcessRequest_SessionSummary_OmitsSmallSameTurnToolHistory(t *testing.T) {
+func TestProcessRequest_SessionSummary_PreservesSmallLatestToolRound(t *testing.T) {
 	baseTime := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
 	userMsg := model.NewUserMessage("run the task")
 	toolCallMsg := model.Message{
@@ -1081,11 +1101,16 @@ func TestProcessRequest_SessionSummary_OmitsSmallSameTurnToolHistory(t *testing.
 	p.ProcessRequest(context.Background(), inv, req, nil)
 
 	raw, ok := inv.GetState(contentHasCompactedToolResultsStateKey)
-	require.True(t, ok)
-	require.Equal(t, true, raw)
+	require.False(t, ok)
+	require.Nil(t, raw)
 
-	require.Len(t, req.Messages, 2)
+	require.Len(t, req.Messages, 4)
 	require.True(t, model.MessagesEqual(userMsg, req.Messages[1]))
+	require.Equal(t, toolCallMsg.ToolCalls, req.Messages[2].ToolCalls)
+	require.Equal(t, model.RoleTool, req.Messages[3].Role)
+	require.Equal(t, "call_1", req.Messages[3].ToolID)
+	require.Equal(t, "step_worker", req.Messages[3].ToolName)
+	require.Equal(t, "small result", req.Messages[3].Content)
 }
 
 func TestContentRequestProcessor_HasCompactedCurrentInvocationToolResults(t *testing.T) {
@@ -1273,7 +1298,7 @@ func TestContentRequestProcessor_HasCompactedCurrentInvocationToolResults(t *tes
 		require.True(t, p.hasCompactedCurrentInvocationToolResults(inv, since))
 	})
 
-	t.Run("detects summary-covered kept tool result", func(t *testing.T) {
+	t.Run("ignores kept tool result", func(t *testing.T) {
 		p := NewContentRequestProcessor(
 			WithContextCompactionKeepToolNames("session_load"),
 		)
@@ -1318,7 +1343,7 @@ func TestContentRequestProcessor_HasCompactedCurrentInvocationToolResults(t *tes
 				},
 			}),
 		)
-		require.True(t, p.hasCompactedCurrentInvocationToolResults(inv, since))
+		require.False(t, p.hasCompactedCurrentInvocationToolResults(inv, since))
 	})
 
 	t.Run("detects compacted tool result in later choice", func(t *testing.T) {

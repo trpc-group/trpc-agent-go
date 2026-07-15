@@ -591,6 +591,7 @@ const (
 		"the previous tool call " +
 		"succeeded, but its payload was compacted to preserve context. " +
 		"Use the available summary or recovery hints before repeating work."
+	compactedToolArgumentsPlaceholder = `{"_trpc_context_note":"tool arguments omitted; call completed before summary"}`
 )
 
 const (
@@ -1245,10 +1246,18 @@ func (p *ContentRequestProcessor) getIncrementMessagesAfterCutoff(
 		filter,
 		eventCutoff,
 	)
-	// The summary cutoff is a hard projection boundary. Covered exchanges are
-	// not restored merely because they belong to the current invocation. The
-	// only exception below repairs a tool call whose result crosses the cutoff.
+	resumeTail := p.latestCompleteToolRoundBeforeCutoff(
+		sessionEvents,
+		inv,
+		req,
+		filter,
+		eventCutoff,
+	)
 	for i, evt := range sessionEvents {
+		if resumed, ok := resumeTail[i]; ok {
+			events = append(events, resumed)
+			continue
+		}
 		shouldInclude, isInvocationMessage := p.shouldIncludeEvent(
 			evt,
 			i,
@@ -1474,6 +1483,226 @@ func addToolCallIDToRestore(
 		idsByEvent[eventIndex] = ids
 	}
 	ids[toolCallID] = struct{}{}
+}
+
+// latestCompleteToolRoundBeforeCutoff returns a bounded resume tail for the
+// most recent completed tool round in the current invocation. Earlier covered
+// rounds remain represented only by the session summary.
+func (p *ContentRequestProcessor) latestCompleteToolRoundBeforeCutoff(
+	events []event.Event,
+	inv *agent.Invocation,
+	req *model.Request,
+	filter string,
+	cutoff eventHistoryCutoff,
+) map[int]event.Event {
+	if cutoff.IsZero() || inv == nil {
+		return nil
+	}
+	include := func(index int, evt event.Event) bool {
+		return p.isCoveredCurrentInvocationEvent(
+			index,
+			evt,
+			inv,
+			filter,
+			cutoff,
+		)
+	}
+	matchesByCall := toolResponseMatchesByCallEventFiltered(events, include)
+	bestCall, bestMatches := latestCompleteToolRoundMatch(
+		events,
+		matchesByCall,
+	)
+	if bestCall < 0 {
+		return nil
+	}
+	tail := buildResumeToolRound(events, bestCall, bestMatches)
+	return compactResumeToolRound(
+		context.Background(),
+		tail,
+		normalizeContextCompactionConfig(
+			p.contextCompactionConfigForInvocation(inv, req),
+		),
+	)
+}
+
+func (p *ContentRequestProcessor) isCoveredCurrentInvocationEvent(
+	index int,
+	evt event.Event,
+	inv *agent.Invocation,
+	filter string,
+	cutoff eventHistoryCutoff,
+) bool {
+	return evt.RequestID == inv.RunOptions.RequestID &&
+		evt.InvocationID == inv.InvocationID &&
+		cutoff.excludesEvent(index, evt) &&
+		p.canMatchToolRound(evt, inv, filter)
+}
+
+func latestCompleteToolRoundMatch(
+	events []event.Event,
+	matchesByCall map[int][]matchedToolResponseEvent,
+) (int, []matchedToolResponseEvent) {
+	bestCall, bestEnd := -1, -1
+	var bestMatches []matchedToolResponseEvent
+	for callIndex, matches := range matchesByCall {
+		if callIndex < 0 || callIndex >= len(events) || len(matches) == 0 {
+			continue
+		}
+		if !allToolCallIDsMatched(
+			events[callIndex].GetToolCallIDs(),
+			events,
+			matches,
+		) {
+			continue
+		}
+		end := callIndex
+		for _, match := range matches {
+			if match.eventIndex > end {
+				end = match.eventIndex
+			}
+		}
+		if end < bestEnd || (end == bestEnd && callIndex <= bestCall) {
+			continue
+		}
+		bestCall, bestEnd, bestMatches = callIndex, end, matches
+	}
+	return bestCall, bestMatches
+}
+
+func buildResumeToolRound(
+	events []event.Event,
+	callIndex int,
+	matches []matchedToolResponseEvent,
+) map[int]event.Event {
+	if callIndex < 0 || callIndex >= len(events) {
+		return nil
+	}
+	callEvent, ok := toolCallEventForResumeTail(events[callIndex])
+	if !ok {
+		return nil
+	}
+	tail := map[int]event.Event{callIndex: callEvent}
+	for _, match := range matches {
+		filtered := filterToolResponseEvent(events, match)
+		if filtered.Response == nil || len(filtered.Response.Choices) == 0 {
+			continue
+		}
+		tail[match.eventIndex] = filtered
+	}
+	return tail
+}
+
+func toolCallEventForResumeTail(evt event.Event) (event.Event, bool) {
+	if evt.Response == nil {
+		return event.Event{}, false
+	}
+	response := evt.Response.Clone()
+	response.Choices = response.Choices[:0]
+	for _, choice := range evt.Response.Choices {
+		if len(choice.Message.ToolCalls) == 0 && len(choice.Delta.ToolCalls) == 0 {
+			continue
+		}
+		choice.Message.ToolCalls = cloneToolCallsForResumeTail(
+			choice.Message.ToolCalls,
+		)
+		choice.Delta.ToolCalls = cloneToolCallsForResumeTail(
+			choice.Delta.ToolCalls,
+		)
+		response.Choices = append(response.Choices, choice)
+	}
+	if len(response.Choices) == 0 {
+		return event.Event{}, false
+	}
+	cloned := evt
+	cloned.Response = response
+	return cloned, true
+}
+
+func cloneToolCallsForResumeTail(toolCalls []model.ToolCall) []model.ToolCall {
+	if toolCalls == nil {
+		return nil
+	}
+	cloned := make([]model.ToolCall, len(toolCalls))
+	for i := range toolCalls {
+		cloned[i] = toolCalls[i]
+		cloned[i].Function.Arguments = append(
+			[]byte(nil),
+			toolCalls[i].Function.Arguments...,
+		)
+	}
+	return cloned
+}
+
+func compactResumeToolRound(
+	ctx context.Context,
+	tail map[int]event.Event,
+	cfg ContextCompactionConfig,
+) map[int]event.Event {
+	if len(tail) == 0 || cfg.ToolResultMaxTokens <= 0 {
+		return tail
+	}
+	indices := make([]int, 0, len(tail))
+	var messages []model.Message
+	for index := range tail {
+		indices = append(indices, index)
+	}
+	sort.Ints(indices)
+	for _, index := range indices {
+		for _, choice := range tail[index].Choices {
+			messages = append(messages, choice.Message)
+		}
+	}
+	tokens, err := cfg.TokenCounter.CountTokensRange(
+		ctx,
+		messages,
+		0,
+		len(messages),
+	)
+	if err != nil || tokens <= cfg.ToolResultMaxTokens {
+		return tail
+	}
+
+	compacted := make(map[int]event.Event, len(tail))
+	for _, index := range indices {
+		evt := tail[index]
+		response := evt.Response.Clone()
+		for choiceIndex := range response.Choices {
+			choice := &response.Choices[choiceIndex]
+			compactResumeToolCallArguments(&choice.Message)
+			compactResumeToolCallArguments(&choice.Delta)
+			if choice.Message.Role == model.RoleTool &&
+				choice.Message.ToolID != "" &&
+				!cfg.keepToolResult(choice.Message) {
+				choice.Message.Content = recoverableToolResultPlaceholder(
+					cfg.recoveryRefForMessage(
+						evt,
+						choice.Message,
+						"current_invocation_summary",
+					),
+				)
+				choice.Message.ContentParts = nil
+				choice.Message.ReasoningContent = ""
+				choice.Message.ReasoningSignature = ""
+			}
+		}
+		evt.Response = response
+		compacted[index] = evt
+	}
+	return compacted
+}
+
+func compactResumeToolCallArguments(message *model.Message) {
+	if message == nil {
+		return
+	}
+	for i := range message.ToolCalls {
+		if len(message.ToolCalls[i].Function.Arguments) == 0 {
+			continue
+		}
+		message.ToolCalls[i].Function.Arguments = []byte(
+			compactedToolArgumentsPlaceholder,
+		)
+	}
 }
 
 func (p *ContentRequestProcessor) contextCompactionConfigForInvocation(
@@ -2225,9 +2454,8 @@ func isCurrentInvocationUserMessage(evt event.Event, inv *agent.Invocation) bool
 		evt.Choices[0].Message.Role == model.RoleUser
 }
 
-// hasCompactedCurrentInvocationToolResults reports whether the active summary
-// covers same-invocation tool results. Covered results are omitted from raw
-// prompt history, but callers still need to preserve post-tool control state.
+// hasCompactedCurrentInvocationToolResults reports whether the bounded resume
+// tail replaces a same-invocation tool result payload with a summary marker.
 func (p *ContentRequestProcessor) hasCompactedCurrentInvocationToolResults(
 	inv *agent.Invocation,
 	since time.Time,
@@ -2254,32 +2482,69 @@ func (p *ContentRequestProcessor) hasCompactedCurrentInvocationToolResultsAfterC
 	events := sessionEventsSnapshot(inv.Session)
 	eventCutoff := newEventHistoryCutoff(events, cutoff)
 
+	resumeTail := p.latestCompleteToolRoundBeforeCutoff(
+		events,
+		inv,
+		nil,
+		filter,
+		eventCutoff,
+	)
+	for _, evt := range resumeTail {
+		if eventHasCompactedToolResult(evt) {
+			return true
+		}
+	}
+	// Keep the predicate useful for callers inspecting partially persisted
+	// histories where the matching tool-call event is not available yet.
 	for i, evt := range events {
 		if evt.RequestID != inv.RunOptions.RequestID ||
-			evt.InvocationID != inv.InvocationID {
+			evt.InvocationID != inv.InvocationID ||
+			!eventCutoff.excludesEvent(i, evt) ||
+			!isEventEligibleForInclusion(evt) ||
+			!p.passBranchFilter(evt, filter) {
 			continue
 		}
-		if !eventCutoff.excludesEvent(i, evt) {
-			continue
-		}
-		if !isEventEligibleForInclusion(evt) ||
-			len(evt.Choices) == 0 {
-			continue
-		}
-		if !p.passBranchFilter(evt, filter) {
-			continue
-		}
-		if eventHasToolResult(evt) {
+		if eventWouldCompactCurrentToolResult(
+			context.Background(),
+			evt,
+			normalizeContextCompactionConfig(p.ContextCompactionConfig),
+		) {
 			return true
 		}
 	}
 	return false
 }
 
-func eventHasToolResult(evt event.Event) bool {
+func eventHasCompactedToolResult(evt event.Event) bool {
 	for _, choice := range evt.Choices {
 		msg := choice.Message
-		if msg.Role == model.RoleTool && msg.ToolID != "" {
+		if msg.Role == model.RoleTool && msg.ToolID != "" &&
+			strings.HasPrefix(
+				strings.TrimSpace(msg.Content),
+				compactedToolResultPlaceholder,
+			) {
+			return true
+		}
+	}
+	return false
+}
+
+func eventWouldCompactCurrentToolResult(
+	ctx context.Context,
+	evt event.Event,
+	cfg ContextCompactionConfig,
+) bool {
+	if cfg.ToolResultMaxTokens <= 0 {
+		return false
+	}
+	for _, choice := range evt.Choices {
+		msg := choice.Message
+		if msg.Role != model.RoleTool || msg.ToolID == "" ||
+			cfg.keepToolResult(msg) {
+			continue
+		}
+		tokens, err := cfg.TokenCounter.CountTokens(ctx, msg)
+		if err == nil && tokens > cfg.ToolResultMaxTokens {
 			return true
 		}
 	}
