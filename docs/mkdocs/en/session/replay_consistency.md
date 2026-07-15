@@ -68,12 +68,12 @@ Snapshots include these sections:
 
 - `session`: session ID, app, and user ID
 - `events`: messages, tool calls, tool responses, branch, filter key, tag, state delta, extensions, and actions
-- `state`: visible merged session/app/user/temp state
+- `state`: visible merged session/app/user/temp state, normalized as tagged byte values so nil, JSON, UTF-8 text, and binary bytes remain distinct
 - `memory`: content, topics, and metadata; raw memory IDs are only used for report context
 - `summary`: `Session.Summaries[filterKey]`, summary text, topics, boundary metadata, and `GetSessionSummaryText`
-- `tracks`: track name, event order, payload, and timestamp
+- `tracks`: track name, each embedded event track, event order, payload, and timestamp
 
-Generated fields such as event IDs, response IDs, timestamps, and backend-generated memory IDs are normalized. Business-field differences are not allowed by default.
+Generated fields such as event IDs, response IDs, timestamps, and backend-generated memory IDs are normalized. JSON normalization uses `json.Decoder.UseNumber` so large integers remain precise. Business-field differences are not allowed by default.
 
 ## Summary And Track Strategy
 
@@ -92,6 +92,7 @@ A non-empty summary boundary anchor that cannot be mapped to the current snapsho
 Track comparison covers:
 
 - track name
+- each `TrackEvent.Track` value
 - event order within each track
 - canonical JSON payload
 - fixed timestamp
@@ -102,7 +103,7 @@ Note that `AppendTrackEvent` maintains `state["tracks"]`. When debugging track d
 
 The test harness includes three kinds of anomaly injection:
 
-- snapshot mutation: partial event loss, summary loss, wrong session attribution, wrong summary filter key, track payload drift, and track order drift
+- snapshot mutation: partial event loss, summary loss, wrong session attribution, wrong summary filter key, large JSON-number drift, state byte representation drift, track payload drift, embedded track drift, and track order drift
 - SQLite/public API injection: duplicate event, state pollution, memory pollution, and summary overwrite
 - SQLite/storage injection: a duplicate memory row that simulates a backend retry bug or duplicate retry effect and verifies that it is reported as an unallowed memory diff
 
@@ -127,7 +128,7 @@ Example:
 Rules:
 
 - `section` is required and cannot be empty or `*`
-- `path` is required and cannot be empty or a single `*`
+- `path` is required and cannot be empty or a pure wildcard such as `*`, `**`, or `***`
 - `backend_a` and `backend_b` are required and cannot be empty or `*`
 - `reason` is required and cannot be blank
 - backend pairs match in either order

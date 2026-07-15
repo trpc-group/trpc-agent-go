@@ -16,6 +16,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -100,8 +101,14 @@ type trackSnapshot struct {
 }
 
 type trackEventSnapshot struct {
+	Track     string `json:"track,omitempty"`
 	Payload   any    `json:"payload,omitempty"`
 	Timestamp string `json:"timestamp,omitempty"`
+}
+
+type replayStateBytesSnapshot struct {
+	Kind  string `json:"kind"`
+	Value any    `json:"value,omitempty"`
 }
 
 type diffEntry struct {
@@ -366,7 +373,7 @@ func normalizeReplayEvents(events []event.Event) []replayEventSnapshot {
 			panic(fmt.Sprintf("marshal replay event: %v", err))
 		}
 		var normalized map[string]any
-		if err := json.Unmarshal(encoded, &normalized); err != nil {
+		if err := decodeReplayJSON(encoded, &normalized); err != nil {
 			panic(fmt.Sprintf("unmarshal replay event: %v", err))
 		}
 		delete(normalized, "id")
@@ -397,21 +404,27 @@ func normalizeReplayState(state session.StateMap) map[string]any {
 
 func normalizeReplayBytes(value []byte) any {
 	if value == nil {
-		return nil
+		return replayStateBytesSnapshot{Kind: "nil"}
 	}
 	trimmed := bytes.TrimSpace(value)
 	if len(trimmed) > 0 {
 		var decoded any
-		if err := json.Unmarshal(trimmed, &decoded); err == nil {
-			return canonicalReplayJSON(decoded)
+		if err := decodeReplayJSON(trimmed, &decoded); err == nil {
+			return replayStateBytesSnapshot{
+				Kind:  "json",
+				Value: canonicalReplayJSON(decoded),
+			}
 		}
 	}
 	if utf8.Valid(value) {
-		return string(value)
+		return replayStateBytesSnapshot{
+			Kind:  "utf8",
+			Value: string(value),
+		}
 	}
-	return map[string]string{
-		"encoding": "base64",
-		"value":    base64.StdEncoding.EncodeToString(value),
+	return replayStateBytesSnapshot{
+		Kind:  "base64",
+		Value: base64.StdEncoding.EncodeToString(value),
 	}
 }
 
@@ -420,10 +433,26 @@ func normalizeReplayRawJSON(value json.RawMessage) any {
 		return nil
 	}
 	var decoded any
-	if err := json.Unmarshal(value, &decoded); err == nil {
+	if err := decodeReplayJSON(value, &decoded); err == nil {
 		return canonicalReplayJSON(decoded)
 	}
 	return normalizeReplayBytes(value)
+}
+
+func decodeReplayJSON(data []byte, out any) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	if err := decoder.Decode(out); err != nil {
+		return err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("unexpected trailing JSON value")
+		}
+		return fmt.Errorf("decode trailing JSON value: %w", err)
+	}
+	return nil
 }
 
 func canonicalReplayJSON(value any) any {
@@ -440,6 +469,8 @@ func canonicalReplayJSON(value any) any {
 			out[i] = canonicalReplayJSON(value)
 		}
 		return out
+	case json.Number:
+		return json.Number(typed.String())
 	default:
 		return value
 	}
@@ -535,6 +566,7 @@ func normalizeReplayTracks(tracks map[session.Track]*session.TrackEvents) []trac
 		if events != nil {
 			for _, evt := range events.Events {
 				snapshot.Events = append(snapshot.Events, trackEventSnapshot{
+					Track:     string(evt.Track),
 					Payload:   normalizeReplayRawJSON(evt.Payload),
 					Timestamp: normalizeReplayTime(evt.Timestamp),
 				})
@@ -639,10 +671,10 @@ func replayJSONValue(value any) any {
 		panic(fmt.Sprintf("marshal replay diff value: %v", err))
 	}
 	var out any
-	if err := json.Unmarshal(encoded, &out); err != nil {
+	if err := decodeReplayJSON(encoded, &out); err != nil {
 		panic(fmt.Sprintf("unmarshal replay diff value: %v", err))
 	}
-	return out
+	return canonicalReplayJSON(out)
 }
 
 func recursiveReplayDiff(path string, left any, right any) []replayValueDiff {
@@ -898,7 +930,7 @@ func (rule allowedDiffRule) matchesReplayDiff(entry diffEntry) bool {
 	backendB := strings.TrimSpace(rule.BackendB)
 	reason := strings.TrimSpace(rule.Reason)
 	if section == "" || section == "*" ||
-		path == "" || path == "*" ||
+		path == "" || !replayAllowedPathHasLiteral(path) ||
 		backendA == "" || backendA == "*" ||
 		backendB == "" || backendB == "*" ||
 		reason == "" {
@@ -911,6 +943,10 @@ func (rule allowedDiffRule) matchesReplayDiff(entry diffEntry) bool {
 		return false
 	}
 	return replayBackendRuleMatches(backendA, backendB, entry.BackendA, entry.BackendB)
+}
+
+func replayAllowedPathHasLiteral(path string) bool {
+	return strings.TrimSpace(strings.ReplaceAll(path, "*", "")) != ""
 }
 
 func replayBackendRuleMatches(ruleA string, ruleB string, entryA string, entryB string) bool {
@@ -1695,6 +1731,15 @@ func replayTextPtr(value string) *string {
 	return &value
 }
 
+func TestReplayConsistencyBackends_ExpectedLightweightMatrix(t *testing.T) {
+	backends := makeReplayBackends(t)
+	names := make([]string, 0, len(backends))
+	for _, backend := range backends {
+		names = append(names, backend.name)
+	}
+	require.Equal(t, []string{"in_memory", "sqlite"}, names)
+}
+
 func TestReplayConsistencySmoke_BackendsConstructUseAndClose(t *testing.T) {
 	ctx := context.Background()
 	backends := makeReplayBackends(t)
@@ -1759,7 +1804,6 @@ func TestReplayConsistencyMatrix_BasicCases(t *testing.T) {
 	ctx := context.Background()
 	backends := makeReplayBackends(t)
 	cases := basicReplayCases()
-	reportPath := replayDiffReportPath()
 
 	var allDiffs []diffEntry
 	for _, tc := range cases {
@@ -1781,11 +1825,48 @@ func TestReplayConsistencyMatrix_BasicCases(t *testing.T) {
 		})
 	}
 
+	require.Falsef(t, hasReplayUnallowedDiffs(allDiffs), "unexpected replay diffs: %+v", allDiffs)
 	require.NoError(t, writeReplayDiffReport("", allDiffs))
-	encoded, err := os.ReadFile(reportPath)
-	require.NoError(t, err)
-	require.JSONEq(t, "[]", string(encoded))
-	require.Empty(t, allDiffs)
+}
+
+func TestReplayConsistencyMatrix_AllowsExplicitAllowedDiff(t *testing.T) {
+	ctx := context.Background()
+	reportPath := filepath.Join(t.TempDir(), "replay-allowed-matrix-report.json")
+	t.Setenv("TRPC_AGENT_REPLAY_REPORT_PATH", reportPath)
+	const reason = "known matrix fixture state drift"
+
+	tc := replayCaseByName(t, "single_turn")
+	tc.allowedDiffs = []allowedDiffRule{{
+		Section:  "state",
+		Path:     "$.state.allowed",
+		BackendA: "in_memory",
+		BackendB: "sqlite",
+		Reason:   reason,
+	}}
+	diffs := runReplayCaseWithBackendInjection(
+		t,
+		ctx,
+		tc,
+		"sqlite",
+		func(t *testing.T, ctx context.Context, backend backendBundle, key session.Key) {
+			require.NoError(t, backend.sessionService.UpdateSessionState(
+				ctx,
+				key,
+				session.StateMap{"allowed": []byte(`{"n":1}`)},
+			))
+		},
+	)
+	require.NotEmpty(t, diffs)
+	require.Falsef(t, hasReplayUnallowedDiffs(diffs), "unexpected replay diffs: %+v", diffs)
+	diff := requireReplayDiff(t, diffs, "state", "$.state.allowed", nil)
+	require.True(t, diff.Allowed)
+	require.Equal(t, reason, diff.Reason)
+
+	require.NoError(t, writeReplayDiffReport("", diffs))
+	report := requireReplayReportFields(t, reportPath)
+	require.Len(t, report, len(diffs))
+	require.Equal(t, true, report[0]["allowed"])
+	require.Equal(t, reason, report[0]["reason"])
 }
 
 func requireReplayCaseIsolation(
@@ -2267,7 +2348,7 @@ func TestReplayConsistencySnapshotNormalize_UsesSummaryLastEventAnchor(t *testin
 			right,
 			nil,
 		)
-		requireSummaryLastEventIndexDiff(t, diffs, float64(0), replayMissingValue())
+		requireSummaryLastEventIndexDiff(t, diffs, json.Number("0"), replayMissingValue())
 	})
 
 	t.Run("unmatched anchor uses sentinel", func(t *testing.T) {
@@ -2297,8 +2378,132 @@ func TestReplayConsistencySnapshotNormalize_UsesSummaryLastEventAnchor(t *testin
 			right,
 			nil,
 		)
-		requireSummaryLastEventIndexDiff(t, diffs, float64(0), float64(-1))
+		requireSummaryLastEventIndexDiff(t, diffs, json.Number("0"), json.Number("-1"))
 	})
+}
+
+func TestReplayConsistencySnapshotNormalize_PreservesLargeJSONNumbers(t *testing.T) {
+	const (
+		leftBig  = "9007199254740992"
+		rightBig = "9007199254740993"
+	)
+	left := newReplaySnapshotFixture(
+		"left",
+		`{"big":`+leftBig+`}`,
+		`{"big":`+leftBig+`}`,
+		"raw-left",
+	)
+	right := newReplaySnapshotFixture(
+		"left",
+		`{"big":`+rightBig+`}`,
+		`{"big":`+rightBig+`}`,
+		"raw-left",
+	)
+
+	diffs := diffReplaySnapshots(
+		"large-json-number",
+		left.Session.ID,
+		"in_memory",
+		"sqlite",
+		left,
+		right,
+		nil,
+	)
+	require.NotEmpty(t, diffs)
+
+	eventExtensionDiff := requireReplayDiff(
+		t,
+		diffs,
+		"events",
+		"$.events[0].extensions.fixture.big",
+		map[string]any{"event_index": 0},
+	)
+	require.Equal(t, json.Number(leftBig), eventExtensionDiff.Left)
+	require.Equal(t, json.Number(rightBig), eventExtensionDiff.Right)
+
+	eventStateDiff := requireReplayDiff(
+		t,
+		diffs,
+		"events",
+		"$.events[0].stateDelta.json.value.big",
+		map[string]any{"event_index": 0},
+	)
+	require.Equal(t, json.Number(leftBig), eventStateDiff.Left)
+	require.Equal(t, json.Number(rightBig), eventStateDiff.Right)
+
+	stateDiff := requireReplayDiff(t, diffs, "state", "$.state.json.value.big", nil)
+	require.Equal(t, json.Number(leftBig), stateDiff.Left)
+	require.Equal(t, json.Number(rightBig), stateDiff.Right)
+
+	trackDiff := requireReplayDiff(
+		t,
+		diffs,
+		"tracks",
+		"$.tracks[0].events[0].payload.big",
+		map[string]any{
+			"track_name":        "tool",
+			"track_event_index": 0,
+		},
+	)
+	require.Equal(t, json.Number(leftBig), trackDiff.Left)
+	require.Equal(t, json.Number(rightBig), trackDiff.Right)
+}
+
+func TestReplayConsistencySnapshotNormalize_PreservesStateByteDistinctions(t *testing.T) {
+	tests := []struct {
+		name      string
+		left      []byte
+		right     []byte
+		wantLeft  string
+		wantRight string
+	}{
+		{
+			name:      "raw utf8 string versus json string",
+			left:      []byte("hello"),
+			right:     []byte(`"hello"`),
+			wantLeft:  "utf8",
+			wantRight: "json",
+		},
+		{
+			name:      "nil versus json null",
+			left:      nil,
+			right:     []byte("null"),
+			wantLeft:  "nil",
+			wantRight: "json",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			left := replaySnapshot{
+				Session: replaySessionSnapshot{ID: "session-1", App: "replay-app", UserID: "user-1"},
+				State:   normalizeReplayState(session.StateMap{"value": tt.left}),
+				Memory:  []replayMemorySnapshot{},
+				Summary: map[string]summaryEntry{},
+				Tracks:  []trackSnapshot{},
+			}
+			right := replaySnapshot{
+				Session: replaySessionSnapshot{ID: "session-1", App: "replay-app", UserID: "user-1"},
+				State:   normalizeReplayState(session.StateMap{"value": tt.right}),
+				Memory:  []replayMemorySnapshot{},
+				Summary: map[string]summaryEntry{},
+				Tracks:  []trackSnapshot{},
+			}
+
+			diffs := diffReplaySnapshots(
+				tt.name,
+				left.Session.ID,
+				"in_memory",
+				"sqlite",
+				left,
+				right,
+				nil,
+			)
+			diff := requireReplayDiff(t, diffs, "state", "$.state.value.kind", nil)
+			require.Equal(t, tt.wantLeft, diff.Left)
+			require.Equal(t, tt.wantRight, diff.Right)
+		})
+	}
 }
 
 func TestReplayConsistencySnapshotDiff_MutationsHavePrecisePaths(t *testing.T) {
@@ -2321,9 +2526,15 @@ func TestReplayConsistencySnapshotDiff_MutationsHavePrecisePaths(t *testing.T) {
 		{
 			name:    "state json field",
 			section: "state",
-			path:    "$.state.json.a",
+			path:    "$.state.json.value.a",
 			mutate: func(snapshot *replaySnapshot) {
-				snapshot.State["json"] = map[string]any{"a": float64(2), "b": float64(2)}
+				snapshot.State["json"] = replayStateBytesSnapshot{
+					Kind: "json",
+					Value: map[string]any{
+						"a": json.Number("2"),
+						"b": json.Number("2"),
+					},
+				}
 			},
 		},
 		{
@@ -2355,9 +2566,21 @@ func TestReplayConsistencySnapshotDiff_MutationsHavePrecisePaths(t *testing.T) {
 			path:    "$.tracks[0].events[0].payload.a",
 			mutate: func(snapshot *replaySnapshot) {
 				snapshot.Tracks[0].Events[0].Payload = map[string]any{
-					"a": float64(2),
-					"b": float64(2),
+					"a": json.Number("2"),
+					"b": json.Number("2"),
 				}
+			},
+			expectedContext: map[string]any{
+				"track_name":        "tool",
+				"track_event_index": 0,
+			},
+		},
+		{
+			name:    "track embedded field",
+			section: "tracks",
+			path:    "$.tracks[0].events[0].track",
+			mutate: func(snapshot *replaySnapshot) {
+				snapshot.Tracks[0].Events[0].Track = "wrong-track"
 			},
 			expectedContext: map[string]any{
 				"track_name":        "tool",
@@ -2454,8 +2677,8 @@ func TestReplayConsistencyAnomaly_SnapshotMutations(t *testing.T) {
 			pathGlob: "$.tracks[0].events[0].payload.a",
 			mutate: func(snapshot *replaySnapshot) {
 				snapshot.Tracks[0].Events[0].Payload = map[string]any{
-					"a": float64(99),
-					"b": float64(2),
+					"a": json.Number("99"),
+					"b": json.Number("2"),
 				}
 			},
 			context: map[string]any{
@@ -2469,9 +2692,10 @@ func TestReplayConsistencyAnomaly_SnapshotMutations(t *testing.T) {
 			pathGlob: "$.tracks[0].events[0]*",
 			mutate: func(snapshot *replaySnapshot) {
 				snapshot.Tracks[0].Events = append(snapshot.Tracks[0].Events, trackEventSnapshot{
+					Track: "tool",
 					Payload: map[string]any{
-						"a": float64(3),
-						"b": float64(4),
+						"a": json.Number("3"),
+						"b": json.Number("4"),
 					},
 					Timestamp: normalizeReplayTime(replayBaseTime.Add(10 * time.Second)),
 				})
@@ -2710,6 +2934,26 @@ func TestReplayConsistencyAllowedDiffRules_RequireExplicitMatch(t *testing.T) {
 			rules: []allowedDiffRule{{
 				Section:  "memory",
 				Path:     "*",
+				BackendA: "in_memory",
+				BackendB: "sqlite",
+				Reason:   "too broad",
+			}},
+		},
+		{
+			name: "double path wildcard rejected",
+			rules: []allowedDiffRule{{
+				Section:  "memory",
+				Path:     "**",
+				BackendA: "in_memory",
+				BackendB: "sqlite",
+				Reason:   "too broad",
+			}},
+		},
+		{
+			name: "triple path wildcard rejected",
+			rules: []allowedDiffRule{{
+				Section:  "memory",
+				Path:     "***",
 				BackendA: "in_memory",
 				BackendB: "sqlite",
 				Reason:   "too broad",

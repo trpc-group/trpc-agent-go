@@ -68,12 +68,12 @@ snapshot 覆盖以下 section：
 
 - `session`：session ID、app、user ID
 - `events`：消息、工具调用、工具响应、branch、filter key、tag、state delta、extensions、actions
-- `state`：session/app/user/temp state 合并后的可见状态
+- `state`：session/app/user/temp state 合并后的可见状态，并以带标签的 byte value 表示，确保 nil、JSON、UTF-8 文本和二进制字节可区分
 - `memory`：content、topics、metadata；raw memory ID 只用于 report 定位
 - `summary`：`Session.Summaries[filterKey]`、summary text、topics、boundary metadata、`GetSessionSummaryText`
-- `tracks`：track name、event order、payload、timestamp
+- `tracks`：track name、每个事件内嵌的 track、event order、payload、timestamp
 
-生成型字段通过 normalize 处理，例如 event ID、response ID、timestamp 和后端生成的 memory ID。业务字段差异不会默认放行。
+生成型字段通过 normalize 处理，例如 event ID、response ID、timestamp 和后端生成的 memory ID。JSON 归一化使用 `json.Decoder.UseNumber`，避免大整数精度丢失。业务字段差异不会默认放行。
 
 ## Summary 与 Track 策略
 
@@ -92,6 +92,7 @@ summary 比较重点：
 track 比较重点：
 
 - track name
+- 每个 `TrackEvent.Track` 值
 - 同一 track 下事件顺序
 - payload canonical JSON
 - 固定 timestamp
@@ -102,7 +103,7 @@ track 比较重点：
 
 测试框架包含三类异常注入：
 
-- snapshot mutation：partial event loss、summary loss、wrong session attribution、wrong summary filter key、track payload drift、track order drift
+- snapshot mutation：partial event loss、summary loss、wrong session attribution、wrong summary filter key、large JSON-number drift、state byte representation drift、track payload drift、embedded track drift、track order drift
 - SQLite/public API injection：duplicate event、state pollution、memory pollution、summary overwrite
 - SQLite/storage injection：直接注入 duplicate memory row，用于模拟 backend retry bug 或 duplicate retry effect，并验证它会被报告为 unallowed memory diff
 
@@ -127,7 +128,7 @@ track 比较重点：
 规则：
 
 - `section` 必填，不能是空字符串或 `*`
-- `path` 必填，不能是空字符串或单独 `*`
+- `path` 必填，不能是空字符串，也不能是 `*`、`**`、`***` 这类纯通配符
 - `backend_a` 和 `backend_b` 必填，不能是空字符串或 `*`
 - `reason` 必填且不能为空白
 - backend pair 支持左右顺序互换
