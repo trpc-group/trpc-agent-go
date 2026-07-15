@@ -114,12 +114,36 @@ func (a TextPromptSurfaceApplier) EvaluationOptions(request EvaluationRequest) (
 		if err != nil {
 			return nil, err
 		}
+	} else if err := validatePromptApplierProfileTargets(profile, a.SurfaceIDs); err != nil {
+		return nil, err
 	}
 	runOptions, err := promptSurfaceRunOptions(profile)
 	if err != nil {
 		return nil, err
 	}
 	return []evaluation.Option{evaluation.WithRunOptions(runOptions...)}, nil
+}
+
+func validatePromptApplierProfileTargets(profile *promptiter.Profile, surfaceIDs []string) error {
+	if profile == nil {
+		return nil
+	}
+	if len(surfaceIDs) != 1 {
+		return fmt.Errorf("built-in prompt applier requires exactly one target surface id; got %v", surfaceIDs)
+	}
+	if len(profile.Overrides) != 1 {
+		return fmt.Errorf("prompt applier profile requires exactly one override; got %d", len(profile.Overrides))
+	}
+	targetSurfaceID := strings.TrimSpace(surfaceIDs[0])
+	profileSurfaceID := strings.TrimSpace(profile.Overrides[0].SurfaceID)
+	if profileSurfaceID != targetSurfaceID {
+		return fmt.Errorf(
+			"prompt applier profile surface %q does not match configured target surface %q",
+			profileSurfaceID,
+			targetSurfaceID,
+		)
+	}
+	return nil
 }
 
 func promptSurfaceRunOptions(profile *promptiter.Profile) ([]agent.RunOption, error) {
@@ -274,6 +298,8 @@ func AdaptEvaluationResult(result *evaluation.EvaluationResult) (*promptiterengi
 			continue
 		}
 		metrics := make([]promptiterengine.MetricResult, 0, len(evalCase.MetricResults))
+		firstEvidenceRunID := 0
+		failedEvidenceRunID := 0
 		for _, metric := range evalCase.MetricResults {
 			if metric == nil || metric.EvalStatus == status.EvalStatusNotEvaluated {
 				continue
@@ -282,20 +308,32 @@ func AdaptEvaluationResult(result *evaluation.EvaluationResult) (*promptiterengi
 			if metric.Details != nil {
 				reason = metric.Details.Reason
 			}
-			actualInvocation, expectedInvocation := invocationPairForMetric(metric, evalCase)
+			evidence := invocationEvidenceForMetric(metric, evalCase)
+			if evidence.runID != 0 {
+				if firstEvidenceRunID == 0 {
+					firstEvidenceRunID = evidence.runID
+				}
+				if failedEvidenceRunID == 0 && metric.EvalStatus == status.EvalStatusFailed {
+					failedEvidenceRunID = evidence.runID
+				}
+			}
 			metrics = append(metrics, promptiterengine.MetricResult{
 				MetricName:         metric.MetricName,
 				Score:              metric.Score,
 				Status:             metric.EvalStatus,
 				Reason:             reason,
-				ActualInvocation:   actualInvocation,
-				ExpectedInvocation: expectedInvocation,
+				ActualInvocation:   evidence.actual,
+				ExpectedInvocation: evidence.expected,
 			})
 			totalScore += metric.Score
 			totalMetrics++
 		}
-		sessionID, trace := firstRunDetails(evalCase.RunDetails)
-		actualInvocation, expectedInvocation := firstInvocationPair(evalCase)
+		evidenceRunID := firstEvidenceRunID
+		if failedEvidenceRunID != 0 {
+			evidenceRunID = failedEvidenceRunID
+		}
+		sessionID, trace := runDetailsForRun(evalCase.RunDetails, evidenceRunID)
+		actualInvocation, expectedInvocation := firstInvocationPairForRun(evalCase, evidenceRunID)
 		cases = append(cases, promptiterengine.CaseResult{
 			EvalSetID:          result.EvalSetID,
 			EvalCaseID:         evalCase.EvalCaseID,
@@ -336,17 +374,21 @@ func firstRunDetails(details []*evaluation.EvaluationCaseRunDetails) (string, *a
 	return "", nil
 }
 
-func invocationPairForMetric(
+type metricInvocationEvidence struct {
+	actual   *evalset.Invocation
+	expected *evalset.Invocation
+	runID    int
+}
+
+func invocationEvidenceForMetric(
 	result *evalresult.EvalMetricResult,
 	evalCase *evaluation.EvaluationCaseResult,
-) (*evalset.Invocation, *evalset.Invocation) {
+) metricInvocationEvidence {
 	if result == nil || evalCase == nil {
-		return nil, nil
+		return metricInvocationEvidence{}
 	}
-	var firstActual *evalset.Invocation
-	var firstExpected *evalset.Invocation
-	var statusActual *evalset.Invocation
-	var statusExpected *evalset.Invocation
+	var first metricInvocationEvidence
+	var statusMatch metricInvocationEvidence
 	for _, caseResult := range evalCase.EvalCaseResults {
 		if caseResult == nil {
 			continue
@@ -359,24 +401,27 @@ func invocationPairForMetric(
 				if metric == nil || metric.MetricName != result.MetricName {
 					continue
 				}
-				if firstActual == nil && firstExpected == nil {
-					firstActual = perInvocation.ActualInvocation
-					firstExpected = perInvocation.ExpectedInvocation
+				evidence := metricInvocationEvidence{
+					actual:   perInvocation.ActualInvocation,
+					expected: perInvocation.ExpectedInvocation,
+					runID:    caseResult.RunID,
+				}
+				if first.actual == nil && first.expected == nil {
+					first = evidence
 				}
 				if metricMatchesAggregate(result, metric) {
-					return perInvocation.ActualInvocation, perInvocation.ExpectedInvocation
+					return evidence
 				}
-				if statusActual == nil && statusExpected == nil && metric.EvalStatus == result.EvalStatus {
-					statusActual = perInvocation.ActualInvocation
-					statusExpected = perInvocation.ExpectedInvocation
+				if statusMatch.actual == nil && statusMatch.expected == nil && metric.EvalStatus == result.EvalStatus {
+					statusMatch = evidence
 				}
 			}
 		}
 	}
-	if statusActual != nil || statusExpected != nil {
-		return statusActual, statusExpected
+	if statusMatch.actual != nil || statusMatch.expected != nil {
+		return statusMatch
 	}
-	return firstActual, firstExpected
+	return first
 }
 
 func metricMatchesAggregate(aggregate, candidate *evalresult.EvalMetricResult) bool {
@@ -401,11 +446,18 @@ func metricReason(metric *evalresult.EvalMetricResult) string {
 }
 
 func firstInvocationPair(evalCase *evaluation.EvaluationCaseResult) (*evalset.Invocation, *evalset.Invocation) {
+	return firstInvocationPairForRun(evalCase, 0)
+}
+
+func firstInvocationPairForRun(evalCase *evaluation.EvaluationCaseResult, runID int) (*evalset.Invocation, *evalset.Invocation) {
 	if evalCase == nil {
 		return nil, nil
 	}
 	for _, caseResult := range evalCase.EvalCaseResults {
 		if caseResult == nil {
+			continue
+		}
+		if runID != 0 && caseResult.RunID != runID {
 			continue
 		}
 		for _, perInvocation := range caseResult.EvalMetricResultPerInvocation {
@@ -417,5 +469,31 @@ func firstInvocationPair(evalCase *evaluation.EvaluationCaseResult) (*evalset.In
 			}
 		}
 	}
+	if runID != 0 {
+		return firstInvocationPairForRun(evalCase, 0)
+	}
 	return nil, nil
+}
+
+func runDetailsForRun(details []*evaluation.EvaluationCaseRunDetails, runID int) (string, *atrace.Trace) {
+	if runID != 0 {
+		for _, detail := range details {
+			if detail == nil || detail.RunID != runID || detail.Inference == nil {
+				continue
+			}
+			return inferenceDetails(detail.Inference)
+		}
+	}
+	return firstRunDetails(details)
+}
+
+func inferenceDetails(inference *evaluation.EvaluationInferenceDetails) (string, *atrace.Trace) {
+	if inference == nil {
+		return "", nil
+	}
+	var trace *atrace.Trace
+	if len(inference.ExecutionTraces) > 0 {
+		trace = inference.ExecutionTraces[0]
+	}
+	return inference.SessionID, trace
 }

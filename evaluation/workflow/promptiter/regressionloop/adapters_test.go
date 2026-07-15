@@ -22,6 +22,7 @@ import (
 	evalsetinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/service"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 	promptiterengine "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/engine"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/surfacepatch"
@@ -193,6 +194,88 @@ func TestAdaptEvaluationResultDisambiguatesFailedInvocationsByReason(t *testing.
 	require.Len(t, result.EvalSets[0].Cases[0].Metrics, 1)
 	assert.Same(t, secondActual, result.EvalSets[0].Cases[0].Metrics[0].ActualInvocation)
 	assert.Same(t, secondExpected, result.EvalSets[0].Cases[0].Metrics[0].ExpectedInvocation)
+}
+
+func TestAdaptEvaluationResultKeepsMetricEvidenceAndTraceInSameRun(t *testing.T) {
+	firstActual := &evalset.Invocation{InvocationID: "actual-run-1"}
+	secondActual := &evalset.Invocation{InvocationID: "actual-run-2"}
+	secondExpected := &evalset.Invocation{InvocationID: "expected-run-2"}
+	result, err := AdaptEvaluationResult(&evaluation.EvaluationResult{
+		EvalSetID: "validation",
+		EvalCases: []*evaluation.EvaluationCaseResult{
+			{
+				EvalCaseID: "case",
+				MetricResults: []*evalresult.EvalMetricResult{
+					{
+						MetricName: "quality",
+						Score:      0,
+						EvalStatus: status.EvalStatusFailed,
+						Details:    &evalresult.EvalMetricResultDetails{Reason: "run 2 failed"},
+					},
+				},
+				RunDetails: []*evaluation.EvaluationCaseRunDetails{
+					{
+						RunID: 1,
+						Inference: &evaluation.EvaluationInferenceDetails{
+							SessionID:       "session-run-1",
+							ExecutionTraces: []*atrace.Trace{{SessionID: "trace-run-1"}},
+						},
+					},
+					{
+						RunID: 2,
+						Inference: &evaluation.EvaluationInferenceDetails{
+							SessionID:       "session-run-2",
+							ExecutionTraces: []*atrace.Trace{{SessionID: "trace-run-2"}},
+						},
+					},
+				},
+				EvalCaseResults: []*evalresult.EvalCaseResult{
+					{
+						RunID: 1,
+						EvalMetricResultPerInvocation: []*evalresult.EvalMetricResultPerInvocation{
+							{
+								ActualInvocation: firstActual,
+								EvalMetricResults: []*evalresult.EvalMetricResult{
+									{
+										MetricName: "quality",
+										EvalStatus: status.EvalStatusFailed,
+										Details:    &evalresult.EvalMetricResultDetails{Reason: "run 1 failed"},
+									},
+								},
+							},
+						},
+					},
+					{
+						RunID: 2,
+						EvalMetricResultPerInvocation: []*evalresult.EvalMetricResultPerInvocation{
+							{
+								ActualInvocation:   secondActual,
+								ExpectedInvocation: secondExpected,
+								EvalMetricResults: []*evalresult.EvalMetricResult{
+									{
+										MetricName: "quality",
+										EvalStatus: status.EvalStatusFailed,
+										Details:    &evalresult.EvalMetricResultDetails{Reason: "run 2 failed"},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, result.EvalSets, 1)
+	require.Len(t, result.EvalSets[0].Cases, 1)
+	gotCase := result.EvalSets[0].Cases[0]
+	assert.Equal(t, "session-run-2", gotCase.SessionID)
+	require.NotNil(t, gotCase.Trace)
+	assert.Equal(t, "trace-run-2", gotCase.Trace.SessionID)
+	assert.Same(t, secondActual, gotCase.ActualInvocation)
+	require.Len(t, gotCase.Metrics, 1)
+	assert.Same(t, secondActual, gotCase.Metrics[0].ActualInvocation)
+	assert.Same(t, secondExpected, gotCase.Metrics[0].ExpectedInvocation)
 }
 
 func TestEnginePromptIteratorRejectsNilEngine(t *testing.T) {
@@ -386,6 +469,29 @@ func TestTextPromptSurfaceApplierAppliesProfileWithoutPromptText(t *testing.T) {
 		EvaluationOptions(EvaluationRequest{Profile: profile})
 	require.NoError(t, err)
 	require.Len(t, options, 1)
+}
+
+func TestTextPromptSurfaceApplierRejectsMismatchedProfileTargets(t *testing.T) {
+	profile, err := BuildPromptProfile([]string{"support_agent#tool.lookup"}, "patched lookup description")
+	require.NoError(t, err)
+	_, err = TextPromptSurfaceApplier{SurfaceIDs: []string{"support_agent#tool.search"}}.
+		EvaluationOptions(EvaluationRequest{Profile: profile})
+	assert.ErrorContains(t, err, `profile surface "support_agent#tool.lookup" does not match configured target surface "support_agent#tool.search"`)
+
+	text := "prompt"
+	multiProfile := &promptiter.Profile{Overrides: []promptiter.SurfaceOverride{
+		{
+			SurfaceID: "support_agent#instruction",
+			Value:     astructure.SurfaceValue{Text: &text},
+		},
+		{
+			SurfaceID: "router#instruction",
+			Value:     astructure.SurfaceValue{Text: &text},
+		},
+	}}
+	_, err = TextPromptSurfaceApplier{SurfaceIDs: []string{"support_agent#instruction"}}.
+		EvaluationOptions(EvaluationRequest{Profile: multiProfile})
+	assert.ErrorContains(t, err, "profile requires exactly one override")
 }
 
 func TestTextPromptSurfaceApplierRejectsUnsupportedBuiltInSurfaces(t *testing.T) {

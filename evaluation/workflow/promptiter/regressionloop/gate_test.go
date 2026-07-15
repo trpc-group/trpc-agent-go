@@ -185,6 +185,9 @@ func TestEvaluateGateRejectsBudgets(t *testing.T) {
 		Duration{Duration: 2 * time.Second},
 	)
 	assert.False(t, decision.Accepted)
+	assert.Contains(t, decision.Reasons, "model calls 3 exceed budget 2")
+	assert.Contains(t, decision.Reasons, "cost 0.0200 exceeds budget 0.0100")
+	assert.Contains(t, decision.Reasons, "latency 2s exceeds budget 1s")
 }
 
 func TestEvaluateGateRejectsMaxModelCallsWithoutMeasuredProviderCount(t *testing.T) {
