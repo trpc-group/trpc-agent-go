@@ -669,6 +669,50 @@ func TestDefaultScanner_UnknownArgumentsAndSensitivePathRegressions(t *testing.T
 		require.True(t, pathReport.Redacted)
 	})
 
+	t.Run("unknown arguments decode escaped dangerous command key", func(t *testing.T) {
+		report, err := scanner.Scan(context.Background(), ScanRequest{
+			ToolName:     "mcp_call",
+			Backend:      BackendUnknown,
+			RawArguments: []byte(`{"rm\u0020-rf\u0020/":true}`),
+		})
+		require.NoError(t, err)
+		require.Equal(t, DecisionNeedsHumanReview, report.Decision)
+		require.Equal(t, "unknown.dangerous_command", report.RuleID)
+		require.Len(t, report.Findings, 1)
+		require.Equal(t, "unknown.dangerous_command", report.Findings[0].RuleID)
+	})
+
+	t.Run("unknown arguments decode escaped sensitive path key", func(t *testing.T) {
+		report, err := scanner.Scan(context.Background(), ScanRequest{
+			ToolName:     "mcp_call",
+			Backend:      BackendUnknown,
+			RawArguments: []byte(`{"\/home\/user\/.ssh\/id_rsa":"x"}`),
+		})
+		require.NoError(t, err)
+		require.Equal(t, DecisionNeedsHumanReview, report.Decision)
+		require.Equal(t, "unknown.sensitive_path", report.RuleID)
+		require.True(t, report.Redacted)
+		require.Len(t, report.Findings, 1)
+		require.Equal(t, "unknown.sensitive_path", report.Findings[0].RuleID)
+	})
+
+	t.Run("unknown arguments decode object keys in sorted deterministic order", func(t *testing.T) {
+		report, err := scanner.Scan(context.Background(), ScanRequest{
+			ToolName: "mcp_call",
+			Backend:  BackendUnknown,
+			RawArguments: []byte(
+				`{"rm\u0020-rf\u0020/":true,"\/home\/user\/.ssh\/id_rsa":"x"}`,
+			),
+		})
+		require.NoError(t, err)
+		require.Equal(t, DecisionNeedsHumanReview, report.Decision)
+		require.Equal(t, "unknown.sensitive_path", report.RuleID)
+		require.True(t, report.Redacted)
+		require.Len(t, report.Findings, 2)
+		require.Equal(t, "unknown.sensitive_path", report.Findings[0].RuleID)
+		require.Equal(t, "unknown.dangerous_command", report.Findings[1].RuleID)
+	})
+
 	t.Run("unknown arguments decode nested object array strings recursively", func(t *testing.T) {
 		report, err := scanner.Scan(context.Background(), ScanRequest{
 			ToolName:     "mcp_call",

@@ -17,6 +17,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -582,7 +583,14 @@ func (s *DefaultScanner) scanDecodedUnknownArguments(req ScanRequest, value any)
 		return findings
 	case map[string]any:
 		var findings []Finding
-		for _, item := range v {
+		keys := make([]string, 0, len(v))
+		for key := range v {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			findings = append(findings, s.scanTextForUnknownRisk(req, key)...)
+			item := v[key]
 			findings = append(findings, s.scanDecodedUnknownArguments(req, item)...)
 		}
 		return findings
