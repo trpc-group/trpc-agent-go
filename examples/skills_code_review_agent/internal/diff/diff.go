@@ -100,13 +100,16 @@ func ParseUnifiedDiff(content string) (*Diff, error) {
 			flushFile()
 			current = &FileChange{}
 		case strings.HasPrefix(line, "--- "):
-			if current != nil {
-				current.OldPath = normalizePath(strings.TrimPrefix(line, "--- "))
+			if current == nil {
+				flushFile()
+				current = &FileChange{}
 			}
+			current.OldPath = normalizePath(strings.TrimPrefix(line, "--- "))
 		case strings.HasPrefix(line, "+++ "):
-			if current != nil {
-				current.NewPath = normalizePath(strings.TrimPrefix(line, "+++ "))
+			if current == nil {
+				current = &FileChange{}
 			}
+			current.NewPath = normalizePath(strings.TrimPrefix(line, "+++ "))
 			// hunk头
 		case strings.HasPrefix(line, "@@ "):
 			flushHunk()

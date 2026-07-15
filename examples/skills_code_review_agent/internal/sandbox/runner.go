@@ -392,11 +392,7 @@ func stageWorkspace(ctx context.Context, exec workspaceExecutor, ws codeexecutor
 		}
 	}
 	if opts.RepoPath != "" {
-		repo, err := filepath.Abs(opts.RepoPath)
-		if err != nil {
-			return fmt.Errorf("resolve repo path: %w", err)
-		}
-		if err := exec.PutDirectory(ctx, ws, repo, filepath.Join("work", "repo")); err != nil {
+		if err := stageCleanRepo(ctx, exec, ws, opts.RepoPath, opts.DiffRaw); err != nil {
 			return fmt.Errorf("stage repo: %w", err)
 		}
 	}

@@ -91,7 +91,8 @@ func Run(ctx context.Context, opts Options) ([]findings.Finding, error) {
 		agentName,
 		llmagent.WithModel(mdl),
 		llmagent.WithSkills(repo),
-		llmagent.WithSkillToolProfile(llmagent.SkillToolProfileFull),
+		// 只暴露 skill_load 等知识工具；skill_run 由 pipeline sandbox 走 PermissionPolicy。
+		llmagent.WithSkillToolProfile(llmagent.SkillToolProfileKnowledgeOnly),
 		llmagent.WithCodeExecutor(codeExec),
 		llmagent.WithEnableCodeExecutionResponseProcessor(false),
 		llmagent.WithGenerationConfig(model.GenerationConfig{
@@ -137,8 +138,7 @@ You are a Go code review agent.
 Workflow:
 1. Load the "code-review" skill with skill_load when you need rule references.
 2. Analyze the unified diff and any rule-engine findings provided by the user.
-3. Optionally run skill_run for: bash scripts/run_checks.sh work/inputs/changes.diff
-4. Return ONLY a JSON array of additional findings not already covered by rule findings.
+3. Return ONLY a JSON array of additional findings not already covered by rule findings.
 
 Each finding object must include:
 severity, category, file, line, title, evidence, recommendation, confidence, rule_id, source.

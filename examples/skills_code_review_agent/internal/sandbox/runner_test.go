@@ -11,10 +11,83 @@ package sandbox
 
 import (
 	"context"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"testing"
 
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
+
+func TestCollectRepoStagePathsExcludesGitAndSecrets(t *testing.T) {
+	dir := t.TempDir()
+	runGit(t, dir, "init")
+	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatalf("write main.go: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("SECRET=1\n"), 0o644); err != nil {
+		t.Fatalf("write .env: %v", err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, ".git", "extra"), 0o755); err != nil {
+		t.Fatalf("mkdir .git/extra: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".git", "extra", "config"), []byte("hidden\n"), 0o644); err != nil {
+		t.Fatalf("write git config: %v", err)
+	}
+	runGit(t, dir, "add", "main.go", ".env")
+	runGit(t, dir, "-c", "user.email=test@example.com", "-c", "user.name=test", "commit", "-m", "init")
+
+	paths, err := collectRepoStagePaths(dir, "")
+	if err != nil {
+		t.Fatalf("collectRepoStagePaths failed: %v", err)
+	}
+	if len(paths) != 1 || paths[0] != "main.go" {
+		t.Fatalf("paths = %v, want only main.go", paths)
+	}
+}
+
+func TestCollectRepoStagePathsIncludesDiffChangedFile(t *testing.T) {
+	dir := t.TempDir()
+	runGit(t, dir, "init")
+	if err := os.WriteFile(filepath.Join(dir, "tracked.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatalf("write tracked.go: %v", err)
+	}
+	runGit(t, dir, "add", "tracked.go")
+	runGit(t, dir, "-c", "user.email=test@example.com", "-c", "user.name=test", "commit", "-m", "init")
+
+	untracked := filepath.Join(dir, "new.go")
+	if err := os.WriteFile(untracked, []byte("package main\n"), 0o644); err != nil {
+		t.Fatalf("write new.go: %v", err)
+	}
+	diffRaw := `--- /dev/null
++++ b/new.go
+@@ -0,0 +1 @@
++package main
+`
+	paths, err := collectRepoStagePaths(dir, diffRaw)
+	if err != nil {
+		t.Fatalf("collectRepoStagePaths failed: %v", err)
+	}
+	got := make(map[string]struct{}, len(paths))
+	for _, p := range paths {
+		got[p] = struct{}{}
+	}
+	if _, ok := got["tracked.go"]; !ok {
+		t.Fatalf("tracked.go missing from %v", paths)
+	}
+	if _, ok := got["new.go"]; !ok {
+		t.Fatalf("new.go from diff missing from %v", paths)
+	}
+}
+
+func runGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v failed: %v\n%s", args, err, out)
+	}
+}
 
 func TestCheckPermissionDeniesHighRisk(t *testing.T) {
 	decision := checkPermission("workspace_exec", "rm -rf /tmp")

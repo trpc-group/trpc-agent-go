@@ -16,6 +16,30 @@ import (
 	"testing"
 )
 
+func TestParseUnifiedDiff_PlainUnifiedDiff(t *testing.T) {
+	// 非 git 前缀的普通 unified diff（直接以 --- / +++ 开头）
+	content := `--- old.go
++++ new.go
+@@ -1,3 +1,4 @@
+ package main
++import "fmt"
+ func main() {}
+`
+	d, err := ParseUnifiedDiff(content)
+	if err != nil {
+		t.Fatalf("ParseUnifiedDiff failed: %v", err)
+	}
+	if len(d.Files) != 1 {
+		t.Fatalf("files = %d, want 1", len(d.Files))
+	}
+	if d.Files[0].OldPath != "old.go" || d.Files[0].NewPath != "new.go" {
+		t.Fatalf("paths = old:%q new:%q", d.Files[0].OldPath, d.Files[0].NewPath)
+	}
+	if len(d.Files[0].Hunks) != 1 || len(d.Files[0].Hunks[0].AddedLines) != 1 {
+		t.Fatalf("hunks = %+v", d.Files[0].Hunks)
+	}
+}
+
 func TestParseUnifiedDiff_SingleFile(t *testing.T) {
 	content := `diff --git a/pkg/user.go b/pkg/user.go
 --- a/pkg/user.go
