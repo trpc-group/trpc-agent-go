@@ -561,13 +561,6 @@ Today's date is {current_date}. You MUST use this date to resolve ALL relative t
   When BOTH speakers mention doing the same activity together, create memories
   for EACH person's involvement (e.g., "Alice and Bob visited Rome" should
   produce memories for both Alice AND Bob visiting Rome).
-- **ASSISTANT OUTPUTS**: Treat the assistant's concrete answers,
-  recommendations, explanations, plans, lists, rankings, and summaries as
-  memory-worthy when they contain specific information the user may later
-  ask about. Preserve exact item names, important ordering, constraints, and
-  conclusions. For example, if the assistant recommends five bottles and the
-  fifth is Absinthe, keep a memory that names all five and identifies
-  Absinthe as the fifth item.
 - **EXHAUSTIVE DETAILS**: Extract EVERY specific detail mentioned, even if
   it seems minor or is mentioned only once in passing. This includes:
   - Specific book titles, movie titles, song names, band/artist names
@@ -740,36 +733,6 @@ Example 5 – Extracting specific details from casual conversation:
   → memory_add(memory="Gina's daughter's birthday is August 13th.",
      memory_kind="fact",
      topics=["Gina", "daughter", "birthday", "August 13"])
-
-Example 6 – Assistant recommendations and answers:
-  User asks: "Which five hiking routes should I consider for the weekend?"
-  Assistant answers: "River Loop, Cedar Ridge, Granite Pass, Meadow View,
-  and Eagle Peak."
-  → memory_add(memory="Was recommended 5 weekend hiking routes: River Loop, Cedar Ridge, Granite Pass, Meadow View, and Eagle Peak as the fifth route.",
-     memory_kind="fact",
-     topics=["hiking", "routes", "Eagle Peak", "recommendations"])
-  User asks: "What processes are used at CITGO's Lake Charles Refinery?"
-  Assistant answers: "Atmospheric distillation, fluid catalytic cracking
-  (FCC), alkylation, and hydrotreating."
-  → memory_add(memory="CITGO's Lake Charles Refinery uses atmospheric distillation, fluid catalytic cracking (FCC), alkylation, and hydrotreating processes.",
-     memory_kind="fact",
-     topics=["CITGO", "Lake Charles Refinery", "refining"])
-
-Example 7 – Changed goal with historical state:
-  Existing memory: "[goal-history] Planned to complete a 10 km race before the end of 2023. (event_time=2023-06-16)"
-  User says on 2023-09-30: "I'm still aiming to complete a 15 km race
-  eventually, it's just not the main focus this weekend."
-  → keep goal-history unchanged because it answers previous-goal questions.
-  → memory_add(memory="Aimed to complete a 15 km race eventually as of 2023-09-30.",
-     memory_kind="fact", event_time="2023-09-30",
-     topics=["running", "15 km race", "goal"])
-
-Example 8 – Assistant recommendation options:
-  User asks: "Which camera should I take for a rainy night shoot?"
-  Assistant answers: "Aurora X is weather-sealed; Nightjar Pro is best in
-  low light; TrailCam Mini is the lightest option."
-  → memory_add(memory="Was recommended cameras for a rainy night shoot: Aurora X is weather-sealed; Nightjar Pro is best in low light; TrailCam Mini is the lightest option.",
-     memory_kind="fact", topics=["cameras", "Aurora X", "Nightjar Pro", "TrailCam Mini"])
 </examples>
 
 <common_mistakes>
@@ -818,10 +781,6 @@ You MUST extract these whenever they appear, even if mentioned only once or in p
    an activity, or changed direction in life. Include the cause and the effect.
 8. PHYSICAL DESCRIPTIONS: Include specific visual details of art, objects, scenes, or spaces.
    Capture distinctive features rather than summarizing generically.
-9. ASSISTANT-PROVIDED ANSWERS: Preserve concrete information supplied by the
-   assistant, especially recommendations, answer lists, named entities,
-   rankings, quantities, procedures, and conclusions that the user may ask
-   to recall later.
 </critical_details>
 
 <extraction_checklist>

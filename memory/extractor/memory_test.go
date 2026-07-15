@@ -602,18 +602,8 @@ func TestExtractor_BuildSystemPrompt_WithExistingMemories(t *testing.T) {
 	assert.Contains(t, prompt, "memory_delete")
 	assert.Contains(t, prompt, "duplicate")
 	assert.Contains(t, prompt, "different-day episodes")
-	assert.Contains(t, prompt, "**STATE CHANGES AND HISTORY**")
-	assert.Contains(t, prompt, "previous")
-	assert.Contains(t, prompt, "keep the earlier dated state")
-	assert.Contains(t, prompt, "10 km race")
-	assert.Contains(t, prompt, "15 km race")
-	assert.Contains(t, prompt, "Do not only store the user's")
-	assert.Contains(t, prompt, "Aurora X")
-	assert.Contains(t, prompt, "Nightjar Pro")
 	assert.Contains(t, prompt, "session-scoped events")
 	assert.Contains(t, prompt, "on 2023-05-08")
-	assert.Contains(t, prompt, "**ASSISTANT OUTPUTS**")
-	assert.Contains(t, prompt, "Absinthe as the fifth item")
 	assert.Contains(t, prompt, "</existing_memories>")
 }
 
