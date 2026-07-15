@@ -963,7 +963,7 @@ func TestRunner_Run_WithRunStructuredOutputJSON_SupportsPointerSliceAndArrayFiel
 	require.NoError(t, err)
 	var structured any
 	for evt := range eventCh {
-		require.Nil(t, evt.Error, "unexpected runner event error: %+v", evt.Error)
+		require.Nil(t, evt.Error, "unexpected runner completion event error: %+v", evt.Error)
 		if evt.StructuredOutput != nil {
 			structured = evt.StructuredOutput
 		}
@@ -1029,7 +1029,7 @@ func TestRunner_Run_WithRunStructuredOutputJSON_SupportsPointerSliceAndArrayFiel
 	require.NoError(t, err)
 	var structured any
 	for evt := range eventCh {
-		require.Nil(t, evt.Error, "unexpected runner event error: %+v", evt.Error)
+		require.Nil(t, evt.Error, "unexpected runner completion event error: %+v", evt.Error)
 		if evt.StructuredOutput != nil {
 			structured = evt.StructuredOutput
 		}
@@ -1124,7 +1124,7 @@ func TestRunner_Run_WithRunStructuredOutputJSONSchema_LegacyNonStrictPointerSlic
 	require.NoError(t, err)
 	var structured any
 	for evt := range eventCh {
-		require.Nil(t, evt.Error, "unexpected runner event error: %+v", evt.Error)
+		require.Nil(t, evt.Error, "unexpected runner completion event error: %+v", evt.Error)
 		if evt.StructuredOutput != nil {
 			structured = evt.StructuredOutput
 		}
@@ -1190,7 +1190,7 @@ func TestRunner_Run_WithRunStructuredOutputJSON_SupportsStringMap_RealOpenAI(
 	require.NoError(t, err)
 	var structured any
 	for evt := range eventCh {
-		require.Nil(t, evt.Error, "unexpected runner event error: %+v", evt.Error)
+		require.Nil(t, evt.Error, "unexpected runner completion event error: %+v", evt.Error)
 		if evt.StructuredOutput != nil {
 			structured = evt.StructuredOutput
 		}
@@ -1451,6 +1451,71 @@ func TestRunner_WithPlugins_AppliesHooks(t *testing.T) {
 	}
 }
 
+func TestRunner_WithPlugins_AfterRunReceivesFinalizedCompletionClone(t *testing.T) {
+	const mutatedTag = "after-run-mutated"
+	const mutatedInput = "after-run-mutated-input"
+	const mutatedOutput = "after-run-mutated-output"
+	var afterRunEvent *event.Event
+	p := &testPlugin{
+		name: "after-run",
+		reg: func(r *plugin.Registry) {
+			r.AfterRun(func(ctx context.Context, args *plugin.AfterRunArgs) error {
+				if args == nil {
+					return nil
+				}
+				afterRunEvent = args.CompletionEvent
+				if args.CompletionEvent != nil {
+					args.CompletionEvent.Tag = mutatedTag
+				}
+				if args.CompletionEvent != nil && args.CompletionEvent.ExecutionTrace != nil {
+					trace := args.CompletionEvent.ExecutionTrace
+					if trace.Input != nil {
+						trace.Input.Text = mutatedInput
+					}
+					if trace.Output != nil {
+						trace.Output.Text = mutatedOutput
+					}
+				}
+				return nil
+			})
+		},
+	}
+	sessionService := sessioninmemory.NewSessionService()
+	ag := &mockAgent{name: "test-agent"}
+	r := NewRunner(
+		"test-app",
+		ag,
+		WithSessionService(sessionService),
+		WithPlugins(p),
+	)
+	ch, err := r.Run(
+		context.Background(),
+		"u",
+		"s",
+		model.NewUserMessage("hi"),
+		agent.WithExecutionTraceEnabled(true),
+	)
+	require.NoError(t, err)
+	var completion *event.Event
+	for evt := range ch {
+		if evt != nil && evt.IsRunnerCompletion() {
+			completion = evt
+		}
+	}
+	require.NotNil(t, afterRunEvent)
+	require.True(t, afterRunEvent.IsRunnerCompletion())
+	require.NotNil(t, afterRunEvent.ExecutionTrace)
+	require.NotNil(t, afterRunEvent.ExecutionTrace.Input)
+	require.NotNil(t, afterRunEvent.ExecutionTrace.Output)
+	require.NotNil(t, completion)
+	require.NotEqual(t, mutatedTag, completion.Tag)
+	require.NotNil(t, completion.ExecutionTrace)
+	require.NotNil(t, completion.ExecutionTrace.Input)
+	require.NotNil(t, completion.ExecutionTrace.Output)
+	require.NotEqual(t, mutatedInput, completion.ExecutionTrace.Input.Text)
+	require.NotEqual(t, mutatedOutput, completion.ExecutionTrace.Output.Text)
+}
+
 type closeableTestPlugin struct {
 	testPlugin
 	closed bool
@@ -1466,6 +1531,7 @@ type chainTestPluginManager struct {
 	modelCallbacks *model.Callbacks
 	toolCallbacks  *tool.Callbacks
 	eventHook      func(context.Context, *agent.Invocation, *event.Event) (*event.Event, error)
+	afterRunHook   func(context.Context, *plugin.AfterRunArgs) error
 	closeHook      func(context.Context) error
 }
 
@@ -1490,6 +1556,16 @@ func (m *chainTestPluginManager) OnEvent(
 		return e, nil
 	}
 	return m.eventHook(ctx, invocation, e)
+}
+
+func (m *chainTestPluginManager) AfterRun(
+	ctx context.Context,
+	args *plugin.AfterRunArgs,
+) error {
+	if m.afterRunHook == nil {
+		return nil
+	}
+	return m.afterRunHook(ctx, args)
 }
 
 func (m *chainTestPluginManager) Close(ctx context.Context) error {
@@ -1574,6 +1650,10 @@ func TestPluginManagerChain_RunsCallbacksInManagerOrder(t *testing.T) {
 	eventOut, err := chain.OnEvent(context.Background(), nil, &event.Event{Tag: "start"})
 	require.NoError(t, err)
 	require.Equal(t, "start-first-second", eventOut.Tag)
+	afterRun, ok := chain.(afterRunManager)
+	require.True(t, ok)
+	err = afterRun.AfterRun(context.Background(), &plugin.AfterRunArgs{})
+	require.NoError(t, err)
 	require.Equal(t, []string{
 		"first:before-agent",
 		"second:before-agent",
@@ -1589,6 +1669,8 @@ func TestPluginManagerChain_RunsCallbacksInManagerOrder(t *testing.T) {
 		"second:after-tool",
 		"first:event",
 		"second:event",
+		"first:after-run",
+		"second:after-run",
 	}, order)
 }
 
@@ -1645,6 +1727,23 @@ func TestPluginManagerChain_OnEventStopsOnError(t *testing.T) {
 	require.Nil(t, got)
 }
 
+func TestPluginManagerChain_AfterRunContinuesAndJoinsErrors(t *testing.T) {
+	expected := errors.New("after run failed")
+	called := false
+	chain := pluginManagerChain{
+		&chainTestPluginManager{afterRunHook: func(context.Context, *plugin.AfterRunArgs) error {
+			return expected
+		}},
+		&chainTestPluginManager{afterRunHook: func(context.Context, *plugin.AfterRunArgs) error {
+			called = true
+			return nil
+		}},
+	}
+	err := chain.AfterRun(context.Background(), &plugin.AfterRunArgs{})
+	require.ErrorIs(t, err, expected)
+	require.True(t, called)
+}
+
 func newChainTestPluginManager(name string, order *[]string) *chainTestPluginManager {
 	agentCallbacks := agent.NewCallbacks()
 	agentCallbacks.RegisterBeforeAgent(func(context.Context, *agent.BeforeAgentArgs) (*agent.BeforeAgentResult, error) {
@@ -1681,6 +1780,10 @@ func newChainTestPluginManager(name string, order *[]string) *chainTestPluginMan
 			*order = append(*order, name+":event")
 			e.Tag += "-" + name
 			return e, nil
+		},
+		afterRunHook: func(context.Context, *plugin.AfterRunArgs) error {
+			*order = append(*order, name+":after-run")
+			return nil
 		},
 	}
 }
@@ -2656,26 +2759,26 @@ func TestRunner_GraphCompletionPropagation(t *testing.T) {
 	require.NotEmpty(t, events, "Should receive events")
 
 	// Find the runner completion event (should be the last one).
-	var runnerCompletionEvent *event.Event
+	var runnerEvent *event.Event
 	for i := len(events) - 1; i >= 0; i-- {
 		if events[i].Object == model.ObjectTypeRunnerCompletion {
-			runnerCompletionEvent = events[i]
+			runnerEvent = events[i]
 			break
 		}
 	}
 
-	require.NotNil(t, runnerCompletionEvent, "Should have runner completion event")
+	require.NotNil(t, runnerEvent, "Should have runner completion event")
 
 	// Verify that the state delta was propagated.
-	assert.NotNil(t, runnerCompletionEvent.StateDelta, "State delta should be propagated")
-	assert.Equal(t, "final_value", string(runnerCompletionEvent.StateDelta["final_key"]),
+	assert.NotNil(t, runnerEvent.StateDelta, "State delta should be propagated")
+	assert.Equal(t, "final_value", string(runnerEvent.StateDelta["final_key"]),
 		"State delta should contain the final key-value pair")
 
 	// Verify that the final choices were propagated.
-	assert.NotEmpty(t, runnerCompletionEvent.Response.Choices,
+	assert.NotEmpty(t, runnerEvent.Response.Choices,
 		"Final choices should be propagated")
 	assert.Equal(t, "Graph execution completed",
-		runnerCompletionEvent.Response.Choices[0].Message.Content,
+		runnerEvent.Response.Choices[0].Message.Content,
 		"Final message content should match")
 }
 
@@ -2715,15 +2818,15 @@ func TestRunner_GraphCompletionSessionStateFiltersSnapshotKeys(t *testing.T) {
 			)
 			require.NoError(t, err)
 
-			var runnerCompletionEvent *event.Event
+			var runnerEvent *event.Event
 			for ev := range eventCh {
 				if ev != nil && ev.Object == model.ObjectTypeRunnerCompletion {
-					runnerCompletionEvent = ev
+					runnerEvent = ev
 				}
 			}
-			require.NotNil(t, runnerCompletionEvent)
-			require.Equal(t, lastResponse, runnerCompletionEvent.StateDelta[graph.StateKeyLastResponse])
-			require.Contains(t, runnerCompletionEvent.StateDelta, graph.StateKeyMessages)
+			require.NotNil(t, runnerEvent)
+			require.Equal(t, lastResponse, runnerEvent.StateDelta[graph.StateKeyLastResponse])
+			require.Contains(t, runnerEvent.StateDelta, graph.StateKeyMessages)
 
 			sess, err := sessionService.GetSession(context.Background(), session.Key{
 				AppName:   "test-app",
@@ -3889,7 +3992,7 @@ func (m *graphCompletionMockAgent) Run(
 			"final_key": []byte("final_value"),
 		}
 	}
-	graphCompletionEvent := &event.Event{
+	graphEvent := &event.Event{
 		Response: &model.Response{
 			ID:     "graph-completion",
 			Object: "graph.execution",
@@ -3912,15 +4015,15 @@ func (m *graphCompletionMockAgent) Run(
 	}
 	if m.visibleCompletion {
 		visible, ok := graph.VisibleGraphCompletionEventForAuthor(
-			graphCompletionEvent,
+			graphEvent,
 			m.name,
 		)
 		if ok {
-			graphCompletionEvent = visible
+			graphEvent = visible
 		}
 	}
 
-	eventCh <- graphCompletionEvent
+	eventCh <- graphEvent
 	close(eventCh)
 
 	return eventCh, nil
@@ -3994,7 +4097,7 @@ func (m *dedupGraphCompletionAgent) Run(
 		Timestamp:    time.Now(),
 	}
 
-	graphCompletionEvent := &event.Event{
+	graphEvent := &event.Event{
 		Response: &model.Response{
 			ID:     graphEventID,
 			Object: graph.ObjectTypeGraphExecution,
@@ -4017,7 +4120,7 @@ func (m *dedupGraphCompletionAgent) Run(
 	}
 
 	eventCh <- assistantEvent
-	eventCh <- graphCompletionEvent
+	eventCh <- graphEvent
 	close(eventCh)
 	return eventCh, nil
 }
@@ -4072,7 +4175,7 @@ func (m *mismatchedIDGraphCompletionAgent) Run(
 		ID:           "assistant-event-id",
 		Timestamp:    time.Now(),
 	}
-	graphCompletionEvent := &event.Event{
+	graphEvent := &event.Event{
 		Response: &model.Response{
 			ID:     "graph-event-id",
 			Object: graph.ObjectTypeGraphExecution,
@@ -4091,7 +4194,7 @@ func (m *mismatchedIDGraphCompletionAgent) Run(
 		Timestamp:    time.Now(),
 	}
 	eventCh <- assistantEvent
-	eventCh <- graphCompletionEvent
+	eventCh <- graphEvent
 	close(eventCh)
 	return eventCh, nil
 }
@@ -5509,7 +5612,7 @@ func TestShouldClearRunnerCompletionChoicesInSession_FallsBackToChoiceSignatureW
 	))
 }
 
-func TestShouldClearRunnerCompletionChoicesInSession_DedupsByPersistedResponseIDEvenWhenGraphCompletionEventIsVisible(
+func TestShouldClearRunnerCompletionChoicesInSession_DedupsByPersistedResponseIDEvenWhenGraphEventIsVisible(
 	t *testing.T,
 ) {
 	loop := &eventLoopContext{
@@ -11032,10 +11135,10 @@ func TestRunner_WithAppName_IsolatesDifferentProjects(t *testing.T) {
 	assert.Nil(t, sessDefault, "default app name should have no session")
 }
 
-// TestRunner_WithAppName_CompletionEventAuthor verifies that the runner
+// TestRunner_WithAppName_EventAuthor verifies that the runner
 // completion event uses the overridden app name as its Author, not the
 // runner's default app name.
-func TestRunner_WithAppName_CompletionEventAuthor(t *testing.T) {
+func TestRunner_WithAppName_EventAuthor(t *testing.T) {
 	const (
 		defaultAppName  = "default-app"
 		overrideAppName = "tenant-x"
