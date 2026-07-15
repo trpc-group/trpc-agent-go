@@ -1029,7 +1029,10 @@ func (r *workspaceRuntime) ExecuteInline(
 	}
 
 	var (
-		allOut, allErr strings.Builder
+		// Use cappedOutputBuffer (not strings.Builder) so a long
+		// sequence of verbose blocks cannot exhaust host memory.
+		// Consistent with ExecuteCode, which uses the same cap.
+		allOut, allErr cappedOutputBuffer
 		// Aggregate the last non-zero exit code across blocks so the
 		// caller can detect a failed block via RunResult.ExitCode.
 		// 0 means "no block reported a non-zero exit".
@@ -1128,9 +1131,6 @@ func (r *workspaceRuntime) runBash(
 	req := osb.RunCommandRequest{
 		Command: "bash -c " + shellQuote(script),
 		Timeout: int64(timeout / time.Millisecond),
-	}
-	if req.Timeout <= 0 {
-		req.Timeout = int64(defaultRunTimeout / time.Millisecond)
 	}
 	// Use ExecutionHandlers with SkipAccumulation to prevent the SDK
 	// from accumulating unbounded stdout/stderr in the Execution
@@ -1244,13 +1244,15 @@ type fileSearchResult struct {
 // with their real sizes. SearchFiles matches a single glob per call,
 // so we iterate over patterns and dedup results.
 //
-// The total result count is capped at maxCollectFiles+1: the +1 lets
-// the caller (Collect) detect that the cap was hit and stop early.
-// Without this, model-generated code could create tens of thousands
-// of matching files; SearchFiles would return all of them, and the
-// subsequent resolveSandboxPaths batch (which shell-quotes every path
-// into a single command string) would exceed ARG_MAX or take
-// minutes to execute.
+// The total result count is capped at maxCollectFiles+1: once the cap
+// is exceeded, enumeration stops early to avoid wasting bandwidth and
+// command-string size on files that Collect will never return. The +1
+// margin lets the caller (Collect) observe that the cap was reached
+// (len(paths) > maxCollectFiles) and behave accordingly. Without this
+// cap, model-generated code could create tens of thousands of matching
+// files; SearchFiles would return all of them, and the subsequent
+// resolveSandboxPaths batch (which shell-quotes every path into a
+// single command string) would exceed ARG_MAX or take minutes.
 func (r *workspaceRuntime) listFilesByGlob(
 	ctx context.Context, wsPath string, patterns []string,
 ) ([]fileSearchResult, error) {
