@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -441,4 +442,33 @@ func TestAuditEventFromReport_DefaultScannerExplicitEmptyDeniedPathsStayEmpty(t 
 	require.Contains(t, event.Recommendation, "/etc/passwd")
 	require.True(t, event.Redacted)
 	require.Empty(t, auditDeniedPathsForScanner(scanner))
+}
+
+func TestPermissionPolicy_AuditRedactionDoesNotMutateSharedDeniedPaths(t *testing.T) {
+	policy := NewPermissionPolicy(
+		MustDefaultScanner(Policy{
+			DeniedPaths: []string{"secret", "/etc/passwd", "/very/long/sensitive/path"},
+		}),
+		WithAuditWriter(NewJSONLAuditWriter(&bytes.Buffer{})),
+	)
+	p, ok := policy.(*permissionPolicy)
+	require.True(t, ok)
+	require.Equal(t, []string{"secret", "/etc/passwd", "/very/long/sensitive/path"}, p.auditDeniedPaths)
+
+	const workers = 16
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			decision, err := policy.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+				ToolName:  "workspace_exec",
+				Arguments: []byte(`{"command":"echo ok"}`),
+			})
+			require.NoError(t, err)
+			require.Equal(t, tool.PermissionActionAllow, decision.Action)
+		}()
+	}
+	wg.Wait()
+	require.Equal(t, []string{"secret", "/etc/passwd", "/very/long/sensitive/path"}, p.auditDeniedPaths)
 }

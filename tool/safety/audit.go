@@ -108,6 +108,7 @@ func redactAuditRecommendation(recommendation string, deniedPaths []string) (str
 
 func redactReportTextWithDeniedPaths(text string, deniedPaths []string) (string, bool) {
 	out, redacted := redactString(text)
+	deniedPaths = append([]string(nil), deniedPaths...)
 	sort.SliceStable(deniedPaths, func(i, j int) bool {
 		return len(deniedPaths[i]) > len(deniedPaths[j])
 	})
