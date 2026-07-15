@@ -11,10 +11,12 @@ package imageinspect
 
 import (
 	"context"
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -233,17 +235,21 @@ func TestRunOCRTimeout(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	cmd := writeShellScript(t, dir, "tesseract-slow", `
+	script := writeShellScript(t, dir, "tesseract-slow", `
 sleep 1
 `)
+	// Invoke the fresh script through sh to avoid Linux ETXTBSY races when a
+	// newly written file is executed directly.
+	shell, err := exec.LookPath("sh")
+	require.NoError(t, err)
 
 	tool, err := newInspector(Config{
 		AllowedDirs:      []string{dir},
-		TesseractCommand: cmd,
+		TesseractCommand: shell,
 		Timeout:          time.Millisecond,
 	})
 	require.NoError(t, err)
-	_, err = tool.runOCR(context.Background(), "sample.png", inspectRequest{})
+	_, err = tool.runOCR(context.Background(), script, inspectRequest{})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "timed out")
 }
@@ -406,6 +412,73 @@ func TestResolveAllowedRelativePathRejectsDuplicateBasenames(t *testing.T) {
 	require.Contains(t, err.Error(), "multiple files")
 }
 
+func TestResolveAllowedRelativePathFindsPreferredOutputBeforeLargeWalk(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	many := filepath.Join(dir, "many")
+	require.NoError(t, os.MkdirAll(many, 0o755))
+	for n := 0; n <= maxBasenameSearchEntries; n++ {
+		require.NoError(
+			t,
+			os.WriteFile(
+				filepath.Join(many, fmt.Sprintf("file-%05d.txt", n)),
+				[]byte("x"),
+				0o644,
+			),
+		)
+	}
+	target := filepath.Join(dir, "workspaces", "scratch", "out", "shot.png")
+	require.NoError(t, os.MkdirAll(filepath.Dir(target), 0o755))
+	writeTestPNG(t, target, image.Rect(0, 0, 1, 1))
+
+	tool, err := newInspector(Config{AllowedDirs: []string{dir}})
+	require.NoError(t, err)
+	got, err := tool.resolvePath("shot.png")
+	require.NoError(t, err)
+	require.Equal(t, target, got)
+}
+
+func TestResolvePreferredBasenameRejectsDuplicatePreferredOutputs(t *testing.T) {
+	t.Parallel()
+
+	first := t.TempDir()
+	second := t.TempDir()
+	for _, dir := range []string{first, second} {
+		target := filepath.Join(dir, "workspaces", "scratch", "out", "same.png")
+		require.NoError(t, os.MkdirAll(filepath.Dir(target), 0o755))
+		writeTestPNG(t, target, image.Rect(0, 0, 1, 1))
+	}
+
+	tool, err := newInspector(Config{AllowedDirs: []string{first, second}})
+	require.NoError(t, err)
+	_, err = tool.resolvePath("same.png")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "multiple files")
+}
+
+func TestResolvePreferredBasenameRejectsEscapingSymlink(t *testing.T) {
+	t.Parallel()
+
+	allowed := t.TempDir()
+	outside := t.TempDir()
+	outsidePath := filepath.Join(outside, "shot.png")
+	writeTestPNG(t, outsidePath, image.Rect(0, 0, 1, 1))
+
+	preferred := filepath.Join(allowed, "workspaces", "scratch", "out")
+	require.NoError(t, os.MkdirAll(preferred, 0o755))
+	require.NoError(
+		t,
+		os.Symlink(outsidePath, filepath.Join(preferred, "shot.png")),
+	)
+
+	tool, err := newInspector(Config{AllowedDirs: []string{allowed}})
+	require.NoError(t, err)
+	_, err = tool.resolvePath("shot.png")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "outside allowed_dirs")
+}
+
 func TestResolveAllowedRelativePathMissesDeletedAllowedDir(t *testing.T) {
 	t.Parallel()
 
@@ -493,7 +566,9 @@ func writeShellScript(
 	t.Helper()
 
 	path := filepath.Join(dir, name)
+	tmpPath := path + ".tmp"
 	content := "#!/bin/sh\n" + body
-	require.NoError(t, os.WriteFile(path, []byte(content), 0o755))
+	require.NoError(t, os.WriteFile(tmpPath, []byte(content), 0o755))
+	require.NoError(t, os.Rename(tmpPath, path))
 	return path
 }

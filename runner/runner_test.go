@@ -4539,6 +4539,16 @@ func TestRunnerLatencyDiagnosticHelpers(t *testing.T) {
 		t,
 		runnerHasAttr(eventAttrs, "runner.event.state_delta_keys", 1),
 	)
+	stateOnlyAttrs := runnerEventAttrs(&event.Event{
+		ID:         "state-only",
+		StateDelta: map[string][]byte{"state": []byte(`"updated"`)},
+	})
+	require.True(t, runnerHasAttr(stateOnlyAttrs, "runner.event.id", "state-only"))
+	require.True(t, runnerHasAttr(stateOnlyAttrs, "runner.event.state_delta_keys", 1))
+	require.True(t, runnerHasAttr(stateOnlyAttrs, "runner.event.object", ""))
+	require.True(t, runnerHasAttr(stateOnlyAttrs, "runner.event.partial", false))
+	require.True(t, runnerHasAttr(stateOnlyAttrs, "runner.event.done", false))
+	require.False(t, runnerHasAttrKey(stateOnlyAttrs, "runner.event.choices"))
 	require.Nil(t, runnerEventAttrs(nil))
 
 	require.True(t, runnerTraceEventDetails(nil))
@@ -4560,6 +4570,15 @@ func runnerHasAttr(attrs []attribute.KeyValue, key string, want any) bool {
 	for _, kv := range attrs {
 		if string(kv.Key) == key &&
 			fmt.Sprint(kv.Value.AsInterface()) == fmt.Sprint(want) {
+			return true
+		}
+	}
+	return false
+}
+
+func runnerHasAttrKey(attrs []attribute.KeyValue, key string) bool {
+	for _, kv := range attrs {
+		if string(kv.Key) == key {
 			return true
 		}
 	}
@@ -7140,6 +7159,93 @@ func TestRunner_InterruptedAssistantPluginRunsOnce(t *testing.T) {
 	require.Equal(t, "hello!", sess.Events[1].Choices[0].Message.Content)
 }
 
+func TestRunner_DynamicWorkflowChildDoesNotOverrideRootCompletion(t *testing.T) {
+	stripParentMetadata := &testPlugin{
+		name: "strip-parent-metadata",
+		reg: func(registry *plugin.Registry) {
+			registry.OnEvent(func(
+				_ context.Context,
+				_ *agent.Invocation,
+				evt *event.Event,
+			) (*event.Event, error) {
+				if evt.ParentMetadata == nil {
+					return evt, nil
+				}
+				replacement := evt.Clone()
+				replacement.ParentMetadata = nil
+				return replacement, nil
+			})
+		},
+	}
+	service := sessioninmemory.NewSessionService()
+	sess, err := service.CreateSession(
+		context.Background(),
+		session.Key{AppName: "app", UserID: "user", SessionID: "session"},
+		session.StateMap{},
+	)
+	require.NoError(t, err)
+	rr := NewRunner(
+		"app",
+		&noOpAgent{name: "root"},
+		WithSessionService(service),
+	).(*runner)
+	inv := agent.NewInvocation(
+		agent.WithInvocationAgent(&noOpAgent{name: "root"}),
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationSessionService(service),
+	)
+	inv.Plugins = plugin.MustNewManager(stripParentMetadata)
+	loop := &eventLoopContext{
+		sess:             sess,
+		invocation:       inv,
+		processedEventCh: make(chan *event.Event, 2),
+		streamFilter:     graph.NewStreamModeFilter(false, nil),
+	}
+
+	childEvent := event.NewResponseEvent(
+		"child-invocation",
+		"child",
+		&model.Response{
+			ID:   "child-response",
+			Done: true,
+			Choices: []model.Choice{{Index: 0, Message: model.Message{
+				Role: model.RoleAssistant, Content: "child result",
+			}}},
+		},
+	)
+	childEvent.ParentInvocationID = inv.InvocationID
+	childEvent.ParentMetadata = &event.ParentInvocationMetadata{
+		TriggerType: event.TriggerTypeDynamicWorkflow,
+		TriggerID:   "workflow/call-1",
+		TriggerName: "run_workflow",
+	}
+	require.NoError(t, rr.processSingleAgentEvent(
+		context.Background(), loop, childEvent,
+	))
+	require.Empty(t, loop.fallbackChoices)
+	require.Empty(t, loop.fallbackResponseID)
+	emittedChild := <-loop.processedEventCh
+	require.Nil(t, emittedChild.ParentMetadata)
+
+	rootEvent := event.NewResponseEvent(
+		inv.InvocationID,
+		"root",
+		&model.Response{
+			ID:   "root-response",
+			Done: true,
+			Choices: []model.Choice{{Index: 0, Message: model.Message{
+				Role: model.RoleAssistant, Content: "root result",
+			}}},
+		},
+	)
+	require.NoError(t, rr.processSingleAgentEvent(
+		context.Background(), loop, rootEvent,
+	))
+	require.Equal(t, "root-response", loop.fallbackResponseID)
+	require.Equal(t, "root result", assistantChoicePrimaryContent(loop.fallbackChoices))
+	require.Len(t, loop.processedEventCh, 1)
+}
+
 func TestRunner_RoutedSessionPersistsInterruptedPartialAssistant(t *testing.T) {
 	svc := &mockSessionService{}
 	rootSess := session.NewSession("app", "u", "root")
@@ -8854,8 +8960,7 @@ func TestProcessAgentEvents_EmitEventErrorBranch_Direct(t *testing.T) {
 
 	agentCh := make(chan *event.Event)
 	flushCh := make(chan *flush.FlushRequest)
-	// No Attach needed because processAgentEvents will attach using this channel.
-	processed := rr.processAgentEvents(ctx, sess, inv, agentCh, flushCh, nil)
+	processed := rr.processAgentEvents(ctx, sess, inv, agentCh, flushCh, nil, nil)
 	// Send one event, then close agentCh
 	go func() {
 		agentCh <- &event.Event{Response: &model.Response{Done: true, Choices: []model.Choice{{Index: 0, Message: model.NewAssistantMessage("x")}}}}

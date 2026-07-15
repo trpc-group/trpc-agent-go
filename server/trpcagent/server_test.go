@@ -26,6 +26,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/profilecompiler"
 	"trpc.group/trpc-go/trpc-agent-go/internal/surfacepatch"
+	"trpc.group/trpc-go/trpc-agent-go/internal/tracecapture"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -44,7 +45,7 @@ type fakeStructureAgent struct {
 	traceUsage *model.Usage
 }
 
-func (f *fakeStructureAgent) Run(_ context.Context, inv *agent.Invocation) (<-chan *event.Event, error) {
+func (f *fakeStructureAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *event.Event, error) {
 	if inv != nil {
 		if inv.Session != nil {
 			f.userID = inv.Session.UserID
@@ -57,7 +58,9 @@ func (f *fakeStructureAgent) Run(_ context.Context, inv *agent.Invocation) (<-ch
 		return nil, f.runErr
 	}
 	if f.traceUsage != nil {
+		traceCtx := agent.NewInvocationContext(ctx, inv)
 		stepID := agent.StartExecutionTraceStep(inv, "writer", &atrace.Snapshot{Text: inv.Message.Content}, nil)
+		tracecapture.SetStepNodeType(traceCtx, stepID, "llm")
 		agent.SetExecutionTraceStepUsage(inv, stepID, f.traceUsage)
 		agent.FinishExecutionTraceStep(inv, stepID, &atrace.Snapshot{Text: "patched reply"}, nil)
 	}
@@ -156,6 +159,7 @@ func TestServerRunCompilesProfileAndReturnsTrace(t *testing.T) {
 			{
 				StepID:            "s1",
 				NodeID:            "writer",
+				NodeType:          "llm",
 				AppliedSurfaceIDs: []string{"writer#instruction"},
 				Usage:             &model.Usage{PromptTokens: 3, CompletionTokens: 4, TotalTokens: 7},
 			},
@@ -197,6 +201,8 @@ func TestServerRunCompilesProfileAndReturnsTrace(t *testing.T) {
 	assert.True(t, response.Events[len(response.Events)-1].IsRunnerCompletion())
 	require.NotNil(t, response.ExecutionTrace)
 	assert.Equal(t, 7, response.ExecutionTrace.Usage.TotalTokens)
+	require.Len(t, response.ExecutionTrace.Steps, 1)
+	assert.Equal(t, "llm", response.ExecutionTrace.Steps[0].NodeType)
 	assert.Equal(t, "prompt-engine", ag.userID)
 	assert.Equal(t, "session-1", ag.sessionID)
 	assert.Equal(t, model.NewUserMessage("match_001"), ag.message)

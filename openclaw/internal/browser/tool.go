@@ -14,9 +14,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/log"
@@ -298,6 +301,7 @@ type input struct {
 type Tool struct {
 	defaultProfile  string
 	evaluateEnabled bool
+	screenshotDir   string
 	navigation      navigationPolicy
 	hostServer      *serverTargetConfig
 	sandboxServer   *serverTargetConfig
@@ -343,7 +347,7 @@ func NewTool(cfg Config) (*Tool, error) {
 		}
 	}
 
-	return newToolWithDrivers(
+	tool := newToolWithDrivers(
 		resolved.DefaultProfile,
 		resolved.EvaluateEnabled,
 		resolved.Navigation,
@@ -352,7 +356,9 @@ func NewTool(cfg Config) (*Tool, error) {
 		resolved.NodeTargets,
 		profiles,
 		drivers,
-	), nil
+	)
+	tool.screenshotDir = resolved.ScreenshotDir
+	return tool, nil
 }
 
 func newToolWithDrivers(
@@ -385,8 +391,26 @@ func (t *Tool) Declaration() *tool.Declaration {
 		InputSchema: browserSchema(
 			t.evaluateEnabled,
 			t.driverTypeForProfile(t.defaultProfile),
+			t.browserTargetDescription(),
 		),
 	}
+}
+
+func (t *Tool) browserTargetDescription() string {
+	description := "Browser target. Omit for the default host browser."
+	targets := make([]string, 0, 2)
+	if hasServerTarget(t.sandboxServer) {
+		targets = append(targets, targetSandbox)
+	}
+	if hasNodeServerTarget(t.nodeTargets) {
+		targets = append(targets, targetNode)
+	}
+	if len(targets) == 0 {
+		return description + " No non-default browser targets are configured."
+	}
+	sort.Strings(targets)
+	return description + " Available non-default targets: " +
+		strings.Join(targets, ", ") + "."
 }
 
 // Close releases browser profile drivers owned by this tool.
@@ -431,7 +455,7 @@ func browserDescription(evaluateEnabled bool) string {
 		"direct inspection of local or generated files. Do not " +
 		"navigate to file://, data:, or ad hoc localhost/127.0.0.1 " +
 		"URLs unless the runtime configuration explicitly exposes " +
-		"that server; normal browser policy may block those paths. " +
+		"that file root or server; normal browser policy may block those paths. " +
 		"For local images, PDFs, audio, video, or generated " +
 		"artifacts, use file/document/exec tools and MEDIA or " +
 		"MEDIA_DIR outputs instead. Prefer snapshot + act for UI " +
@@ -711,7 +735,11 @@ func (r *cancelCleanupRegistry) register(profile string) bool {
 	return true
 }
 
-func browserSchema(evaluateEnabled bool, driverType string) *tool.Schema {
+func browserSchema(
+	evaluateEnabled bool,
+	driverType string,
+	targetDescription string,
+) *tool.Schema {
 	actionDescription := "Browser action. Supported actions include: " +
 		strings.Join(visibleActionsForDriver(
 			driverType,
@@ -775,11 +803,8 @@ func browserSchema(evaluateEnabled bool, driverType string) *tool.Schema {
 	}
 
 	properties := map[string]*tool.Schema{
-		"action": stringSchema(actionDescription),
-		"target": stringSchema(
-			"Browser target. Omit for default host; only use " +
-				"sandbox or node when configured.",
-		),
+		"action":         stringSchema(actionDescription),
+		"target":         stringSchema(targetDescription),
 		"node":           stringSchema("Node browser target."),
 		"profile":        stringSchema("Browser profile name."),
 		"targetUrl":      stringSchema("Alias for browser URL."),
@@ -817,10 +842,13 @@ func browserSchema(evaluateEnabled bool, driverType string) *tool.Schema {
 			Type:                 "object",
 			AdditionalProperties: true,
 		},
-		"path":        stringSchema("Download output path."),
-		"paths":       stringArraySchema("Upload paths."),
-		"inputRef":    stringSchema("Upload input ref."),
-		"filename":    stringSchema("Optional output filename."),
+		"path":     stringSchema("Download output path."),
+		"paths":    stringArraySchema("Upload paths."),
+		"inputRef": stringSchema("Upload input ref."),
+		"filename": stringSchema(
+			"Optional output filename. When browser screenshot_dir is " +
+				"configured, relative screenshot filenames are saved there.",
+		),
 		"timeoutMs":   numberSchema("Timeout in milliseconds."),
 		"clear":       boolSchema("Clear existing override."),
 		"accept":      boolSchema("Dialog accept flag."),
@@ -1080,10 +1108,11 @@ func (t *Tool) handleProfiles(
 	sort.Strings(names)
 
 	out := Result{
-		Action:          actionProfiles,
-		DefaultProfile:  t.defaultProfile,
-		Driver:          ToolName,
-		EvaluateEnabled: t.evaluateEnabled,
+		Action:           actionProfiles,
+		DefaultProfile:   t.defaultProfile,
+		Driver:           ToolName,
+		EvaluateEnabled:  t.evaluateEnabled,
+		NavigationPolicy: navigationPolicyInfo(t.navigation),
 		Supported: visibleActionsForDriver(
 			t.driverTypeForProfile(t.defaultProfile),
 			t.evaluateEnabled,
@@ -1095,11 +1124,12 @@ func (t *Tool) handleProfiles(
 		cfg := t.profiles[name]
 		driverType := t.driverTypeForProfile(name)
 		info := ProfileInfo{
-			Name:        name,
-			Description: cfg.Description,
-			Default:     name == t.defaultProfile,
-			Driver:      driverType,
-			Supported:   visibleActionsForDriver(driverType, t.evaluateEnabled),
+			Name:             name,
+			Description:      cfg.Description,
+			Default:          name == t.defaultProfile,
+			Driver:           driverType,
+			Supported:        visibleActionsForDriver(driverType, t.evaluateEnabled),
+			NavigationPolicy: out.NavigationPolicy,
 		}
 		drv := t.statusDriver(name, cfg)
 		if drv != nil {
@@ -1114,6 +1144,26 @@ func (t *Tool) handleProfiles(
 		out.Profiles = append(out.Profiles, info)
 	}
 	return out
+}
+
+func navigationPolicyInfo(policy navigationPolicy) *NavigationPolicyInfo {
+	if len(policy.AllowedDomains) == 0 &&
+		len(policy.BlockedDomains) == 0 &&
+		!policy.AllowLoopback &&
+		!policy.AllowPrivateNet &&
+		!policy.AllowFileURLs &&
+		len(policy.AllowedFileRoots) == 0 {
+		return nil
+	}
+	return &NavigationPolicyInfo{
+		AllowedDomains:       append([]string(nil), policy.AllowedDomains...),
+		BlockedDomains:       append([]string(nil), policy.BlockedDomains...),
+		AllowLoopback:        policy.AllowLoopback,
+		AllowPrivateNetworks: policy.AllowPrivateNet,
+		AllowFileURLs:        policy.AllowFileURLs,
+		AllowRootFileURLs:    len(policy.AllowedFileRoots) > 0,
+		AllowedFileRoots:     append([]string(nil), policy.AllowedFileRoots...),
+	}
 }
 
 func (t *Tool) statusDriver(
@@ -1414,6 +1464,67 @@ func (t *Tool) handleSnapshot(
 	return result, nil
 }
 
+func (t *Tool) resolveScreenshotFilename(
+	filename string,
+	imageType string,
+) (string, error) {
+	filename = strings.TrimSpace(filename)
+	screenshotDir := strings.TrimSpace(t.screenshotDir)
+	if screenshotDir == "" {
+		return filename, nil
+	}
+	if filename == "" {
+		filename = "screenshot-" + time.Now().UTC().Format(
+			"20060102T150405.000000000",
+		) + "." + screenshotExtension(imageType)
+	}
+	if filepath.IsAbs(filename) {
+		return filename, nil
+	}
+	cleaned := filepath.Clean(filename)
+	if cleaned == "." {
+		return "", nil
+	}
+	if cleaned == ".." ||
+		strings.HasPrefix(cleaned, ".."+string(os.PathSeparator)) {
+		return "", fmt.Errorf(
+			"browser screenshot filename %q escapes screenshot_dir",
+			filename,
+		)
+	}
+	root, err := filepath.Abs(screenshotDir)
+	if err != nil {
+		return "", fmt.Errorf("resolve browser screenshot_dir: %w", err)
+	}
+	root = filepath.Clean(root)
+	target := filepath.Clean(filepath.Join(root, cleaned))
+	if !pathInDir(target, root) {
+		return "", fmt.Errorf(
+			"browser screenshot filename %q escapes screenshot_dir",
+			filename,
+		)
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return "", fmt.Errorf("create browser screenshot dir: %w", err)
+	}
+	return target, nil
+}
+
+func screenshotExtension(imageType string) string {
+	switch strings.ToLower(strings.TrimSpace(imageType)) {
+	case "jpeg", "jpg":
+		return "jpg"
+	case "webp":
+		return "webp"
+	default:
+		return "png"
+	}
+}
+
+func pathInDir(path string, dir string) bool {
+	return path == dir || strings.HasPrefix(path, dir+string(os.PathSeparator))
+}
+
 func (t *Tool) handleScreenshot(
 	ctx context.Context,
 	profile string,
@@ -1429,7 +1540,11 @@ func (t *Tool) handleScreenshot(
 	if in.FullPage != nil {
 		args["fullPage"] = *in.FullPage
 	}
-	if filename := strings.TrimSpace(in.Filename); filename != "" {
+	filename, err := t.resolveScreenshotFilename(in.Filename, in.Type)
+	if err != nil {
+		return Result{}, err
+	}
+	if filename != "" {
 		args["filename"] = filename
 	}
 	if ref := strings.TrimSpace(in.Ref); ref != "" {

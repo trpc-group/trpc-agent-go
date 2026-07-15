@@ -318,6 +318,48 @@ func TestInferTraceConversationClearsActualToolMockWhenConversationHasNoToolMock
 	assert.Equal(t, 0, pluginCount)
 }
 
+func TestInferTraceConversationExpectedRunnerErrorPreservesExecutionTraces(t *testing.T) {
+	ctx := context.Background()
+	executionTrace := &agenttrace.Trace{RootInvocationID: "trace-root", SessionID: "session"}
+	svc := &local{}
+	evalCase := &evalset.EvalCase{
+		EvalID:                "case",
+		EvalMode:              evalset.EvalModeTrace,
+		ExpectedRunnerEnabled: true,
+		ActualConversation: []*evalset.Invocation{{
+			InvocationID:   "actual",
+			UserContent:    &model.Message{Role: model.RoleUser, Content: "question"},
+			FinalResponse:  &model.Message{Role: model.RoleAssistant, Content: "actual"},
+			ExecutionTrace: executionTrace,
+		}},
+		SessionInput: &evalset.SessionInput{UserID: "demo-user"},
+	}
+
+	inferenceResult, expectedInferences, err := svc.inferTraceConversation(ctx, evalCase, "session", &service.Options{})
+
+	require.ErrorContains(t, err, "expected runner is nil")
+	assert.Nil(t, expectedInferences)
+	require.NotNil(t, inferenceResult)
+	if assert.Len(t, inferenceResult.ExecutionTraces, 1) {
+		assert.Same(t, executionTrace, inferenceResult.ExecutionTraces[0])
+	}
+}
+
+func TestExecutionTracesFromInvocationsHandlesEmptyAndNilInvocations(t *testing.T) {
+	assert.Nil(t, executionTracesFromInvocations(nil))
+
+	executionTrace := &agenttrace.Trace{RootInvocationID: "trace-root", SessionID: "session"}
+	traces := executionTracesFromInvocations([]*evalset.Invocation{
+		nil,
+		{ExecutionTrace: executionTrace},
+	})
+
+	if assert.Len(t, traces, 2) {
+		assert.Nil(t, traces[0])
+		assert.Same(t, executionTrace, traces[1])
+	}
+}
+
 type fakeEvaluator struct {
 	name   string
 	result *evaluator.EvaluateResult
@@ -2236,6 +2278,9 @@ func TestLocalInferenceTraceModeUsesConfiguredActualConversation(t *testing.T) {
 	_, err := mgr.Create(ctx, appName, evalSetID)
 	assert.NoError(t, err)
 
+	executionTrace := &agenttrace.Trace{RootInvocationID: "trace-root-1", SessionID: "trace-session-1"}
+	actualInvocation := makeActualInvocation("trace-inv-1", "prompt", "answer")
+	actualInvocation.ExecutionTrace = executionTrace
 	traceCase := &evalset.EvalCase{
 		EvalID:   caseID,
 		EvalMode: evalset.EvalModeTrace,
@@ -2243,7 +2288,7 @@ func TestLocalInferenceTraceModeUsesConfiguredActualConversation(t *testing.T) {
 			makeInvocation("trace-inv-1", "prompt"),
 		},
 		ActualConversation: []*evalset.Invocation{
-			makeActualInvocation("trace-inv-1", "prompt", "answer"),
+			actualInvocation,
 		},
 		SessionInput: &evalset.SessionInput{AppName: appName, UserID: "demo-user", State: map[string]any{}},
 	}
@@ -2263,6 +2308,10 @@ func TestLocalInferenceTraceModeUsesConfiguredActualConversation(t *testing.T) {
 	assert.Equal(t, "trace-inv-1", results[0].Inferences[0].InvocationID)
 	assert.NotNil(t, results[0].Inferences[0].FinalResponse)
 	assert.Equal(t, "answer", results[0].Inferences[0].FinalResponse.Content)
+	if assert.Len(t, results[0].ExecutionTraces, 1) {
+		assert.Equal(t, executionTrace.RootInvocationID, results[0].ExecutionTraces[0].RootInvocationID)
+		assert.Equal(t, executionTrace.SessionID, results[0].ExecutionTraces[0].SessionID)
+	}
 
 	runnerStub.mu.Lock()
 	callCount := len(runnerStub.calls)

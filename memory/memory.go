@@ -34,6 +34,11 @@ const (
 	// SessionStateKeyAutoMemoryLastExtractAt stores the last included event
 	// timestamp for auto memory extraction.
 	SessionStateKeyAutoMemoryLastExtractAt = "memory:last_extract_at"
+	// SessionStateKeyMemoryMode stores session-scoped memory generation mode.
+	SessionStateKeyMemoryMode = "memory:mode"
+	// MemoryModePolluted means the session consumed external context and should
+	// no longer be used for automatic memory extraction.
+	MemoryModePolluted = "polluted"
 )
 
 var (
@@ -152,8 +157,24 @@ func ResolveSearchOptions(
 	return o
 }
 
+// Reader defines read-only memory operations.
+type Reader interface {
+	// ReadMemories reads memories for a user.
+	ReadMemories(ctx context.Context, userKey UserKey,
+		limit int) ([]*Entry, error)
+
+	// SearchMemories searches memories for a user.
+	// Options may include WithSearchOptions for advanced
+	// filtering (kind, time range, hybrid search, etc.).
+	SearchMemories(ctx context.Context, userKey UserKey,
+		query string, opts ...SearchOption) ([]*Entry, error)
+}
+
 // Service defines the interface for memory service operations.
 type Service interface {
+	// Reader provides read-only memory access used by preload and memory tools.
+	Reader
+
 	// AddMemory adds or updates a memory for a user (idempotent).
 	// Options may include WithMetadata for episodic metadata.
 	AddMemory(ctx context.Context, userKey UserKey, memory string,
@@ -170,16 +191,6 @@ type Service interface {
 
 	// ClearMemories clears all memories for a user.
 	ClearMemories(ctx context.Context, userKey UserKey) error
-
-	// ReadMemories reads memories for a user.
-	ReadMemories(ctx context.Context, userKey UserKey,
-		limit int) ([]*Entry, error)
-
-	// SearchMemories searches memories for a user.
-	// Options may include WithSearchOptions for advanced
-	// filtering (kind, time range, hybrid search, etc.).
-	SearchMemories(ctx context.Context, userKey UserKey,
-		query string, opts ...SearchOption) ([]*Entry, error)
 
 	// Tools returns the list of available memory tools.
 	Tools() []tool.Tool

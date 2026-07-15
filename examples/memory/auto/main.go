@@ -17,19 +17,29 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"hash/fnv"
 	"log"
+	"math"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
+	knowledgefile "trpc.group/trpc-go/trpc-agent-go/knowledge/source/file"
+	knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
+	knowledgeinmemory "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 
 	util "trpc.group/trpc-go/trpc-agent-go/examples/memory"
 )
@@ -61,6 +71,16 @@ var (
 		"Memory service type: inmemory, sqlite, sqlitevec, redis, "+
 			"postgres, pgvector, mysql, mysqlvec",
 	)
+	enableKnowledge = flag.Bool(
+		"knowledge",
+		false,
+		"Enable a small local knowledge base with knowledge_search",
+	)
+	disableAutoMemoryOnExternalContext = flag.Bool(
+		"disable-auto-memory-on-external-context",
+		false,
+		"Stop future auto-memory extraction after knowledge_search is used",
+	)
 )
 
 func main() {
@@ -76,6 +96,8 @@ func main() {
 	memoryType := util.MemoryType(*memType)
 	fmt.Printf("Memory Service: %s\n", memoryType)
 	fmt.Printf("Streaming: %t\n", *streaming)
+	fmt.Printf("Knowledge: %t\n", *enableKnowledge)
+	fmt.Printf("Disable Auto Memory On External Context: %t\n", *disableAutoMemoryOnExternalContext)
 	fmt.Println(strings.Repeat("=", 50))
 	fmt.Println()
 	fmt.Println("💡 Auto memory mode extracts user information automatically.")
@@ -84,12 +106,14 @@ func main() {
 	fmt.Println()
 
 	chat := &autoMemoryChat{
-		modelName:      *modelName,
-		extractorModel: extractorModel,
-		memoryType:     memoryType,
-		appName:        appName,
-		streaming:      *streaming,
-		debug:          *debug,
+		modelName:                          *modelName,
+		extractorModel:                     extractorModel,
+		memoryType:                         memoryType,
+		appName:                            appName,
+		streaming:                          *streaming,
+		debug:                              *debug,
+		enableKnowledge:                    *enableKnowledge,
+		disableAutoMemoryOnExternalContext: *disableAutoMemoryOnExternalContext,
 	}
 
 	if err := chat.run(); err != nil {
@@ -99,16 +123,19 @@ func main() {
 
 // autoMemoryChat manages the conversation with auto memory capabilities.
 type autoMemoryChat struct {
-	modelName      string
-	extractorModel string
-	memoryType     util.MemoryType
-	appName        string
-	streaming      bool
-	debug          bool
-	runner         runner.Runner
-	memoryService  memory.Service
-	userID         string
-	sessionID      string
+	modelName                          string
+	extractorModel                     string
+	memoryType                         util.MemoryType
+	appName                            string
+	streaming                          bool
+	debug                              bool
+	enableKnowledge                    bool
+	disableAutoMemoryOnExternalContext bool
+	runner                             runner.Runner
+	memoryService                      memory.Service
+	sessionService                     session.Service
+	userID                             string
+	sessionID                          string
 }
 
 // run starts the interactive chat session.
@@ -129,8 +156,98 @@ const (
 	agentName = "memory-assistant"
 )
 
+func buildLocalKnowledgeTools(ctx context.Context) ([]tool.Tool, error) {
+	dataPath, err := localKnowledgeDataPath()
+	if err != nil {
+		return nil, err
+	}
+	fileSrc := knowledgefile.New(
+		[]string{dataPath},
+		knowledgefile.WithName("local docs"),
+	)
+	kb := knowledge.New(
+		knowledge.WithVectorStore(knowledgeinmemory.New()),
+		knowledge.WithEmbedder(deterministicEmbedder{}),
+		knowledge.WithSources([]source.Source{fileSrc}),
+	)
+	if err := kb.Load(
+		ctx,
+		knowledge.WithShowProgress(false),
+		knowledge.WithShowStats(false),
+	); err != nil {
+		return nil, err
+	}
+	return []tool.Tool{
+		knowledgetool.NewKnowledgeSearchTool(
+			kb,
+			knowledgetool.WithMaxResults(3),
+		),
+	}, nil
+}
+
+func localKnowledgeDataPath() (string, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	candidates := []string{
+		filepath.Join(cwd, "../../knowledge/exampledata/file/other.md"),
+		filepath.Join(cwd, "../knowledge/exampledata/file/other.md"),
+		filepath.Join(cwd, "examples/knowledge/exampledata/file/other.md"),
+	}
+	for _, candidate := range candidates {
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate, nil
+		}
+	}
+	return "", fmt.Errorf("local knowledge data file not found from %s", cwd)
+}
+
+type deterministicEmbedder struct{}
+
+func (deterministicEmbedder) GetEmbedding(
+	_ context.Context,
+	text string,
+) ([]float64, error) {
+	return deterministicEmbedding(text), nil
+}
+
+func (deterministicEmbedder) GetEmbeddingWithUsage(
+	ctx context.Context,
+	text string,
+) ([]float64, map[string]any, error) {
+	embedding, err := deterministicEmbedder{}.GetEmbedding(ctx, text)
+	return embedding, nil, err
+}
+
+func (deterministicEmbedder) GetDimensions() int {
+	return 32
+}
+
+func deterministicEmbedding(text string) []float64 {
+	const dims = 32
+	vector := make([]float64, dims)
+	for _, token := range strings.Fields(strings.ToLower(text)) {
+		h := fnv.New32a()
+		_, _ = h.Write([]byte(token))
+		vector[int(h.Sum32())%dims]++
+	}
+	var norm float64
+	for _, value := range vector {
+		norm += value * value
+	}
+	if norm == 0 {
+		return vector
+	}
+	norm = math.Sqrt(norm)
+	for i := range vector {
+		vector[i] /= norm
+	}
+	return vector
+}
+
 // setup creates the runner with LLM agent and auto memory extraction.
-func (c *autoMemoryChat) setup(_ context.Context) error {
+func (c *autoMemoryChat) setup(ctx context.Context) error {
 	// Create models.
 	chatModel := openai.New(c.modelName)
 	extractModel := openai.New(c.extractorModel)
@@ -160,10 +277,11 @@ func (c *autoMemoryChat) setup(_ context.Context) error {
 	// search and clear tools remain available. Load tool is also hidden in auto mode.
 	var err error
 	c.memoryService, err = util.NewMemoryServiceByType(c.memoryType, util.MemoryServiceConfig{
-		Extractor:        memExtractor,
-		AsyncMemoryNum:   3,
-		MemoryQueueSize:  100,
-		MemoryJobTimeout: 30 * time.Second,
+		Extractor:                          memExtractor,
+		AsyncMemoryNum:                     3,
+		MemoryQueueSize:                    100,
+		MemoryJobTimeout:                   30 * time.Second,
+		DisableAutoMemoryOnExternalContext: c.disableAutoMemoryOnExternalContext,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create memory service: %w", err)
@@ -194,13 +312,23 @@ func (c *autoMemoryChat) setup(_ context.Context) error {
 		})
 	}
 
+	tools := c.memoryService.Tools()
+	if c.enableKnowledge {
+		knowledgeTools, err := buildLocalKnowledgeTools(ctx)
+		if err != nil {
+			_ = c.memoryService.Close()
+			return fmt.Errorf("failed to build local knowledge tools: %w", err)
+		}
+		tools = append(tools, knowledgeTools...)
+	}
+
 	llmAgent := llmagent.New(
 		agentName,
 		llmagent.WithModel(chatModel),
 		llmagent.WithDescription("A helpful AI assistant with automatic memory. "+
 			"I learn about you from our conversations automatically."),
 		llmagent.WithGenerationConfig(genConfig),
-		llmagent.WithTools(c.memoryService.Tools()),
+		llmagent.WithTools(tools),
 		llmagent.WithModelCallbacks(modelCallbacks),
 		// Memory preloading injects memories into the system prompt before
 		// each request.
@@ -215,10 +343,11 @@ func (c *autoMemoryChat) setup(_ context.Context) error {
 
 	// Create runner with memory service.
 	// The runner will automatically trigger memory extraction after responses.
+	c.sessionService = sessioninmemory.NewSessionService()
 	c.runner = runner.NewRunner(
 		appName,
 		llmAgent,
-		runner.WithSessionService(sessioninmemory.NewSessionService()),
+		runner.WithSessionService(c.sessionService),
 		runner.WithMemoryService(c.memoryService),
 	)
 
@@ -233,6 +362,7 @@ func (c *autoMemoryChat) startChat(ctx context.Context) error {
 
 	fmt.Println("💡 Special commands:")
 	fmt.Println("   /memory   - Show what the system remembers about you")
+	fmt.Println("   /state    - Show current memory guard session state")
 	fmt.Println("   /new      - Start a new session")
 	fmt.Println("   /exit     - End the conversation")
 	fmt.Println()
@@ -254,6 +384,9 @@ func (c *autoMemoryChat) startChat(ctx context.Context) error {
 			return nil
 		case "/memory":
 			c.showMemories(ctx)
+			continue
+		case "/state":
+			c.showState(ctx)
 			continue
 		case "/new":
 			c.startNewSession()
@@ -302,6 +435,33 @@ func (c *autoMemoryChat) showMemories(ctx context.Context) {
 		}
 	}
 	fmt.Println()
+}
+
+// showState displays memory guard state for the current session.
+func (c *autoMemoryChat) showState(ctx context.Context) {
+	if c.sessionService == nil {
+		fmt.Println("memory:mode = <session service unavailable>")
+		return
+	}
+	sess, err := c.sessionService.GetSession(ctx, session.Key{
+		AppName:   c.appName,
+		UserID:    c.userID,
+		SessionID: c.sessionID,
+	})
+	if err != nil {
+		fmt.Printf("❌ Failed to read session state: %v\n", err)
+		return
+	}
+	if sess == nil {
+		fmt.Println("memory:mode = <session not found>")
+		return
+	}
+	mode, ok := sess.GetState(memory.SessionStateKeyMemoryMode)
+	if !ok || len(mode) == 0 {
+		fmt.Println("memory:mode = <unset>")
+		return
+	}
+	fmt.Printf("memory:mode = %s\n", string(mode))
 }
 
 // processMessage handles a single message exchange.
@@ -391,7 +551,7 @@ func (c *autoMemoryChat) handleToolCalls(evt *event.Event, assistantStarted bool
 	if assistantStarted {
 		fmt.Printf("\n")
 	}
-	fmt.Printf("🔧 Memory tool calls:\n")
+	fmt.Printf("🔧 Tool calls:\n")
 	for _, toolCall := range evt.Response.Choices[0].Message.ToolCalls {
 		fmt.Printf("   • %s (ID: %s)\n", toolCall.Function.Name, toolCall.ID)
 		if len(toolCall.Function.Arguments) > 0 {

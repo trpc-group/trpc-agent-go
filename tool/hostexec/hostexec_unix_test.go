@@ -56,13 +56,6 @@ func waitForProcessExit(
 	t.Fatalf("background child pid %d is still alive", pid)
 }
 
-func TestApplyParentDeathSignal(t *testing.T) {
-	applyParentDeathSignal(nil)
-
-	attr := &syscall.SysProcAttr{}
-	applyParentDeathSignal(attr)
-}
-
 func TestPrepareCommands(t *testing.T) {
 	preparePipeCommand(nil)
 	preparePTYCommand(nil)

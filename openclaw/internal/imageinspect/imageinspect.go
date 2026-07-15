@@ -42,6 +42,15 @@ const (
 	maxBasenameSearchEntries = 10000
 )
 
+var preferredBasenameSubdirs = []string{
+	filepath.Join("workspaces", "scratch", "out"),
+	filepath.Join("workspaces", "scratch"),
+	filepath.Join("runtime", "tmp"),
+	"artifacts",
+	"downloads",
+	"out",
+}
+
 // Config configures the image inspection tool.
 type Config struct {
 	AllowedDirs      []string      `yaml:"allowed_dirs,omitempty"`
@@ -289,6 +298,9 @@ func (i *inspector) resolveAllowedRelativePath(
 	if strings.Contains(cleaned, string(os.PathSeparator)) {
 		return "", false, nil
 	}
+	if path, ok, err := i.resolvePreferredBasename(cleaned); ok || err != nil {
+		return path, ok, err
+	}
 	var match string
 	visited := 0
 	for _, dir := range i.allowedDirs {
@@ -332,6 +344,42 @@ func (i *inspector) resolveAllowedRelativePath(
 		}
 	}
 	return "", true, fmt.Errorf("path %q is outside allowed_dirs", raw)
+}
+
+func (i *inspector) resolvePreferredBasename(
+	basename string,
+) (string, bool, error) {
+	var match string
+	for _, dir := range i.allowedDirs {
+		for _, subdir := range preferredBasenameSubdirs {
+			candidate := filepath.Clean(filepath.Join(dir, subdir, basename))
+			if !pathInAllowedDir(candidate, dir) || !fileExists(candidate) {
+				continue
+			}
+			real, err := filepath.EvalSymlinks(candidate)
+			if err != nil {
+				return "", true, fmt.Errorf("resolve image path: %w", err)
+			}
+			real = filepath.Clean(real)
+			if !pathInAllowedDir(real, dir) {
+				return "", true, fmt.Errorf(
+					"path %q is outside allowed_dirs",
+					basename,
+				)
+			}
+			if match != "" && match != real {
+				return "", true, fmt.Errorf(
+					"multiple files named %q in preferred allowed_dirs",
+					basename,
+				)
+			}
+			match = real
+		}
+	}
+	if match == "" {
+		return "", false, nil
+	}
+	return match, true, nil
 }
 
 func pathInAllowedDir(path string, dir string) bool {

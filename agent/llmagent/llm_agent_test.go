@@ -1958,7 +1958,7 @@ func TestLLMAgent_SetModelInstructions(t *testing.T) {
 
 // TestHaveCustomResponseError tests the Error method of haveCustomResponseError.
 func TestHaveCustomResponseError(t *testing.T) {
-	err := &haveCustomResponseError{EventChan: make(<-chan *event.Event)}
+	err := &haveCustomResponseError{eventChan: make(<-chan *event.Event)}
 	require.Equal(t, "custom response provided, returning early", err.Error())
 }
 
