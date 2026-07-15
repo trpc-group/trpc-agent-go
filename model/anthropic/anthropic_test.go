@@ -2666,6 +2666,158 @@ func Test_HandleStreamingResponse_RetryInvokesStreamCompleteCallbackOnce(t *test
 	require.Equal(t, int32(2), atomic.LoadInt32(&attempts))
 }
 
+func Test_effectiveStreamMaxRetries_PositiveOverride(t *testing.T) {
+	m := New("claude-test", WithStreamRetry(7, 0, 0))
+	assert.Equal(t, 7, m.effectiveStreamMaxRetries())
+}
+
+func Test_streamRetryBackoff_DefaultAndCustom(t *testing.T) {
+	defaultModel := New("claude-test")
+	assert.Equal(t, defaultStreamRetryBaseBackoff, defaultModel.streamRetryBackoff(1))
+	assert.Equal(t, defaultStreamRetryBaseBackoff*2, defaultModel.streamRetryBackoff(2))
+	assert.Equal(t, defaultStreamRetryMaxBackoff, defaultModel.streamRetryBackoff(20))
+
+	customModel := New("claude-test", WithStreamRetry(5, 10*time.Millisecond, 15*time.Millisecond))
+	assert.Equal(t, 10*time.Millisecond, customModel.streamRetryBackoff(1))
+	assert.Equal(t, 15*time.Millisecond, customModel.streamRetryBackoff(3))
+}
+
+func Test_isStreamRetryableError_NilAndTransportPatterns(t *testing.T) {
+	require.False(t, isStreamRetryableError(nil))
+	require.True(t, isStreamRetryableError(fmt.Errorf("read: connection reset by peer")))
+	require.True(t, isStreamRetryableError(fmt.Errorf("http2: server sent GOAWAY")))
+}
+
+func Test_containsIsolatedToken_EmptyToken(t *testing.T) {
+	require.False(t, containsIsolatedToken("status 503", ""))
+}
+
+func Test_HandleStreamingResponse_DoesNotRetryAfterPartialDelivery(t *testing.T) {
+	partialThenRST := ssePrelude +
+		"event: content_block_start\n" +
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}` + "\n\n" +
+		"event: content_block_delta\n" +
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello"}}` + "\n\n"
+
+	var attempts int32
+	orig := model.DefaultNewHTTPClient
+	t.Cleanup(func() { model.DefaultNewHTTPClient = orig })
+	model.DefaultNewHTTPClient = func(_ ...HTTPClientOption) model.HTTPClient {
+		return &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+			atomic.AddInt32(&attempts, 1)
+			h := make(http.Header)
+			h.Set("Content-Type", "text/event-stream")
+			body := &errReadCloser{
+				pre: []byte(partialThenRST),
+				err: fmt.Errorf("read tcp: read: connection reset by peer"),
+			}
+			return &http.Response{StatusCode: 200, Header: h, Body: body}, nil
+		})}
+	}
+
+	m := New(
+		"claude-test",
+		WithHTTPClientOptions(),
+		WithAnthropicClientOptions(anthropicopt.WithMaxRetries(0)),
+		WithStreamRetry(3, 1*time.Millisecond, 5*time.Millisecond),
+	)
+
+	responseChan := make(chan *model.Response, 8)
+	m.handleStreamingResponse(context.Background(), anthropic.MessageNewParams{}, responseChan)
+	close(responseChan)
+
+	var sawErr bool
+	for r := range responseChan {
+		if r.Error != nil {
+			sawErr = true
+		}
+	}
+	require.True(t, sawErr)
+	require.Equal(t, int32(1), atomic.LoadInt32(&attempts),
+		"must not retry after the caller already received a partial chunk")
+}
+
+func Test_HandleStreamingResponse_CancelDuringRetryBackoff(t *testing.T) {
+	var attempts int32
+	orig := model.DefaultNewHTTPClient
+	t.Cleanup(func() { model.DefaultNewHTTPClient = orig })
+	model.DefaultNewHTTPClient = func(_ ...HTTPClientOption) model.HTTPClient {
+		return &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+			atomic.AddInt32(&attempts, 1)
+			return nil, fmt.Errorf("write tcp: write: broken pipe")
+		})}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		time.Sleep(5 * time.Millisecond)
+		cancel()
+	}()
+
+	callbackCalled := make(chan struct{})
+	var callbackErr error
+	m := New(
+		"claude-test",
+		WithHTTPClientOptions(),
+		WithAnthropicClientOptions(anthropicopt.WithMaxRetries(0)),
+		WithStreamRetry(5, 50*time.Millisecond, 100*time.Millisecond),
+		WithChatStreamCompleteCallback(func(_ context.Context,
+			_ *anthropic.MessageNewParams, _ *anthropic.Message, err error) {
+			callbackErr = err
+			close(callbackCalled)
+		}),
+	)
+
+	responseChan := make(chan *model.Response, 4)
+	m.handleStreamingResponse(ctx, anthropic.MessageNewParams{}, responseChan)
+	close(responseChan)
+
+	for range responseChan {
+	}
+	select {
+	case <-callbackCalled:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for stream complete callback")
+	}
+	require.ErrorIs(t, callbackErr, context.Canceled)
+	require.Equal(t, int32(1), atomic.LoadInt32(&attempts))
+}
+
+func Test_HandleStreamingResponse_ContextCancelWhileSendingFinalResponse(t *testing.T) {
+	orig := model.DefaultNewHTTPClient
+	t.Cleanup(func() { model.DefaultNewHTTPClient = orig })
+	model.DefaultNewHTTPClient = func(_ ...HTTPClientOption) model.HTTPClient {
+		return &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+			h := make(http.Header)
+			h.Set("Content-Type", "text/event-stream")
+			return &http.Response{
+				StatusCode: 200,
+				Header:     h,
+				Body:       io.NopCloser(strings.NewReader(sseFullSuccess)),
+			}, nil
+		})}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	responseChan := make(chan *model.Response, 1)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		m := New("claude-test", WithHTTPClientOptions())
+		m.handleStreamingResponse(ctx, anthropic.MessageNewParams{}, responseChan)
+	}()
+
+	<-responseChan // consume the partial chunk so the handler blocks on the final response
+	cancel()
+	<-done
+	close(responseChan)
+
+	for range responseChan {
+	}
+}
+
 func Test_HTTPClientOptions_AndAnthropicClientOptions(t *testing.T) {
 	// Use WithHTTPClientOptions to inject custom Transport without overriding DefaultNewHTTPClient.
 	// Also call WithHTTPClientName and WithAnthropicClientOptions to cover these paths.
