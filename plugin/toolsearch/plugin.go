@@ -331,8 +331,22 @@ func (p *Plugin) callToolFn(ctx context.Context, input callToolInput) (any, erro
 		p.materializeNamespace(ctx, server)
 	}
 
-	// Resolve to the canonical (indexed) name. Preset tools are callable too, but
-	// call_tool is intended for deferred tools; a non-deferred hit still works.
+	target, canonical, isDeferred, errResp := p.resolveCallToolTarget(name)
+	if errResp != nil {
+		return errResp, nil
+	}
+
+	if errResp := p.checkCallToolGuardrails(ctx, canonical, isDeferred); errResp != nil {
+		return errResp, nil
+	}
+
+	return p.invokeResolvedTool(ctx, target, canonical, input.Params)
+}
+
+// resolveCallToolTarget resolves a caller-supplied tool name to its canonical
+// entry in the plugin's index. It returns an error envelope when the name is
+// unknown or the tool is not registered.
+func (p *Plugin) resolveCallToolTarget(name string) (tool.Tool, string, bool, map[string]any) {
 	p.mu.RLock()
 	canonical, known := p.nameByLower[strings.ToLower(name)]
 	var target tool.Tool
@@ -342,82 +356,63 @@ func (p *Plugin) callToolFn(ctx context.Context, input callToolInput) (any, erro
 	_, isDeferred := p.deferredNames[canonical]
 	p.mu.RUnlock()
 	if !known || target == nil {
-		return map[string]any{
+		return nil, "", false, map[string]any{
 			"status":  "error",
 			"message": fmt.Sprintf("Unknown tool %q. Use tool_search to find the correct tool name.", name),
-		}, nil
+		}
+	}
+	return target, canonical, isDeferred, nil
+}
+
+// checkCallToolGuardrails runs the permission and loaded-set checks that mirror
+// beforeTool for direct deferred-tool calls. Preset (non-deferred) tools bypass
+// both checks. Returns a non-nil error envelope when a check fails.
+func (p *Plugin) checkCallToolGuardrails(ctx context.Context, canonical string, isDeferred bool) map[string]any {
+	if !isDeferred {
+		return nil
 	}
 
 	// Permission check precedes the loaded check, matching beforeTool: never
 	// reveal a "load this tool" hint for a tool the caller may not use.
-	if isDeferred && p.permissionFilter != nil {
+	if p.permissionFilter != nil {
 		if allowed := p.permissionFilter(ctx, []string{canonical}); !allowed[canonical] {
 			log.WarnfContext(ctx, "[%s] call_tool blocked due to permission: %s", p.name, canonical)
 			return map[string]any{
 				"status":  "error",
 				"message": fmt.Sprintf("You do not have permission to use the %q tool.", canonical),
-			}, nil
+			}
 		}
 	}
 
 	// Deferred tools must have been loaded via tool_search first.
-	if isDeferred {
-		inv, ok := agent.InvocationFromContext(ctx)
-		if !ok || inv == nil {
-			return map[string]any{
-				"status":  "error",
-				"message": fmt.Sprintf(unloadedToolErrorTemplate, canonical),
-			}, nil
-		}
-		loaded := false
-		for _, n := range p.loadDiscoveredTools(ctx, inv) {
-			if n == canonical {
-				loaded = true
-				break
-			}
-		}
-		if !loaded {
-			log.WarnfContext(ctx, "[%s] call_tool on unloaded deferred tool: %s", p.name, canonical)
-			return map[string]any{
-				"status":  "error",
-				"message": fmt.Sprintf(unloadedToolErrorTemplate, canonical),
-			}, nil
-		}
-	}
-
-	callable, ok := target.(tool.CallableTool)
-	if !ok {
-		// Fall back to StreamableTool: it is an independent framework interface
-		// (does not embed CallableTool), so a tool that only streams is still a
-		// valid deferred tool. Aggregate the stream into a single envelope so
-		// call_tool — which speaks the CallableTool contract — can return a
-		// one-shot value. Order is preserved via the "chunks" slice.
-		if streamable, isStream := target.(tool.StreamableTool); isStream {
-			params := input.Params
-			if params == nil {
-				params = map[string]any{}
-			}
-			rawArgs, err := json.Marshal(params)
-			if err != nil {
-				return map[string]any{
-					"status":  "error",
-					"message": fmt.Sprintf("Failed to encode params: %v", err),
-				}, nil
-			}
-			log.InfofContext(ctx, "[%s] call_tool aggregating stream from %s", p.name, canonical)
-			result, err := aggregateStream(ctx, streamable, rawArgs)
-			if err != nil {
-				return nil, err
-			}
-			return result, nil
-		}
+	inv, ok := agent.InvocationFromContext(ctx)
+	if !ok || inv == nil {
 		return map[string]any{
 			"status":  "error",
-			"message": fmt.Sprintf("Tool %q is not callable.", canonical),
-		}, nil
+			"message": fmt.Sprintf(unloadedToolErrorTemplate, canonical),
+		}
 	}
+	for _, n := range p.loadDiscoveredTools(ctx, inv) {
+		if n == canonical {
+			return nil
+		}
+	}
+	log.WarnfContext(ctx, "[%s] call_tool on unloaded deferred tool: %s", p.name, canonical)
+	return map[string]any{
+		"status":  "error",
+		"message": fmt.Sprintf(unloadedToolErrorTemplate, canonical),
+	}
+}
 
-	params := input.Params
+// invokeResolvedTool dispatches to CallableTool when available, falling back
+// to StreamableTool (aggregated to a one-shot value) so a stream-only deferred
+// tool is still reachable through call_tool.
+func (p *Plugin) invokeResolvedTool(
+	ctx context.Context,
+	target tool.Tool,
+	canonical string,
+	params map[string]any,
+) (any, error) {
 	if params == nil {
 		params = map[string]any{}
 	}
@@ -429,8 +424,29 @@ func (p *Plugin) callToolFn(ctx context.Context, input callToolInput) (any, erro
 		}, nil
 	}
 
-	log.InfofContext(ctx, "[%s] call_tool invoking %s", p.name, canonical)
-	return callable.Call(ctx, rawArgs)
+	if callable, ok := target.(tool.CallableTool); ok {
+		log.InfofContext(ctx, "[%s] call_tool invoking %s", p.name, canonical)
+		return callable.Call(ctx, rawArgs)
+	}
+
+	// Fall back to StreamableTool: it is an independent framework interface
+	// (does not embed CallableTool), so a tool that only streams is still a
+	// valid deferred tool. Aggregate the stream into a single envelope so
+	// call_tool — which speaks the CallableTool contract — can return a
+	// one-shot value. Order is preserved via the "chunks" slice.
+	if streamable, ok := target.(tool.StreamableTool); ok {
+		log.InfofContext(ctx, "[%s] call_tool aggregating stream from %s", p.name, canonical)
+		result, err := aggregateStream(ctx, streamable, rawArgs)
+		if err != nil {
+			return nil, err
+		}
+		return result, nil
+	}
+
+	return map[string]any{
+		"status":  "error",
+		"message": fmt.Sprintf("Tool %q is not callable.", canonical),
+	}, nil
 }
 
 // isDefaultOnly reports whether the only registered toolbox is the legacy
