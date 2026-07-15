@@ -5803,6 +5803,12 @@ func TestTool_ChildInvocationOptions_ClearsInheritedToolRunOptions(t *testing.T)
 	require.NotNil(t, parentInv.RunOptions.ToolFilter)
 }
 
+func TestClearInheritedToolRunOptions_Nil(t *testing.T) {
+	require.NotPanics(t, func() {
+		clearInheritedToolRunOptions(nil)
+	})
+}
+
 func TestTool_WithPinModel_Disabled_PreservesModelName(t *testing.T) {
 	mockAgent := &mockAgent{
 		name:        "test-agent",
