@@ -11,6 +11,13 @@ func (s *Scanner) scanBackend(req ExecutionRequest) []Finding {
 	var findings []Finding
 	switch req.Backend {
 	case BackendHostExec:
+		findings = append(findings, finding(
+			RuleHostDefault, CategoryHostExec, RiskMedium,
+			s.policy.BackendRules.HostExec.DefaultAction,
+			"hostexec request is subject to the host execution default action",
+			"backend",
+			"Require explicit approval for host execution unless policy allows it.",
+		))
 		if req.TTY {
 			action := DecisionAsk
 			if s.policy.BackendRules.HostExec.DenyTTY {

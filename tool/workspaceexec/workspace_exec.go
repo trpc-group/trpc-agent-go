@@ -592,10 +592,16 @@ func (t *ExecTool) Call(ctx context.Context, args []byte) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	var out execOutput
 	if t.sessional {
-		return t.callSessional(ctx, req)
+		out, err = t.callSessional(ctx, req)
+	} else {
+		out, err = t.callNonSessional(ctx, req)
 	}
-	return t.callNonSessional(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	return t.sanitizeOutput(out), nil
 }
 
 func parseExecInput(args []byte) (execInput, error) {
@@ -926,7 +932,14 @@ func (t *WriteStdinTool) Call(ctx context.Context, args []byte) (any, error) {
 			out.SessionID = sessionID
 		}
 	}
-	return out, nil
+	return t.exec.sanitizeOutput(out), nil
+}
+
+func (t *ExecTool) sanitizeOutput(out execOutput) execOutput {
+	if t != nil && t.safetyScanner != nil {
+		out.Output = t.safetyScanner.SanitizeOutput(out.Output)
+	}
+	return out
 }
 
 // Call terminates a running workspace_exec session.

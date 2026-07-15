@@ -174,6 +174,7 @@ func sampleScanner(tb testing.TB) *Scanner {
 	if err != nil {
 		tb.Fatal(err)
 	}
+	policy.Audit.Enabled = false
 	scanner, err := NewScanner(policy)
 	if err != nil {
 		tb.Fatal(err)

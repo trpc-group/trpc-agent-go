@@ -15,7 +15,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/tool/safety"
 )
@@ -24,7 +23,7 @@ func main() {
 	policyPath := flag.String("policy", "examples/tool_safety_guard/tool_safety_policy.yaml", "safety policy path")
 	samplesDir := flag.String("samples", "examples/tool_safety_guard/samples", "sample request directory")
 	reportPath := flag.String("report", "examples/tool_safety_guard/tool_safety_report.json", "report output path")
-	auditPath := flag.String("audit", "examples/tool_safety_guard/tool_safety_audit.jsonl", "audit output path")
+	auditPath := flag.String("audit", "", "override audit output path")
 	flag.Parse()
 
 	if err := run(*policyPath, *samplesDir, *reportPath, *auditPath); err != nil {
@@ -38,16 +37,15 @@ func run(policyPath, samplesDir, reportPath, auditPath string) error {
 	if err != nil {
 		return fmt.Errorf("load policy: %w", err)
 	}
+	if auditPath != "" {
+		policy.Audit.Enabled = true
+		policy.Audit.Path = auditPath
+	}
 	scanner, err := safety.NewScanner(policy)
 	if err != nil {
 		return fmt.Errorf("create scanner: %w", err)
 	}
-	auditFile, err := os.Create(auditPath)
-	if err != nil {
-		return fmt.Errorf("create audit: %w", err)
-	}
-	defer auditFile.Close()
-	writer := safety.NewJSONLWriter(auditFile)
+	defer scanner.Close()
 
 	files, err := filepath.Glob(filepath.Join(samplesDir, "*.json"))
 	if err != nil {
@@ -71,9 +69,6 @@ func run(policyPath, samplesDir, reportPath, auditPath string) error {
 		if err != nil {
 			return fmt.Errorf("%s: %w", file, err)
 		}
-		if err := writer.WriteAuditEvent(context.Background(), auditEvent(report)); err != nil {
-			return err
-		}
 		reports = append(reports, report)
 		fmt.Printf("%s\t%s\t%s\t%s\n", req.ID, report.Decision, report.RiskLevel, first(report.RuleIDs))
 	}
@@ -82,27 +77,6 @@ func run(policyPath, samplesDir, reportPath, auditPath string) error {
 		return err
 	}
 	return os.WriteFile(reportPath, append(out, '\n'), 0o600)
-}
-
-func auditEvent(report safety.Report) safety.AuditEvent {
-	return safety.AuditEvent{
-		Timestamp:  reportTime(),
-		RequestID:  report.RequestID,
-		ToolName:   report.ToolName,
-		Backend:    report.Backend,
-		Decision:   report.Decision,
-		RiskLevel:  report.RiskLevel,
-		RuleID:     first(report.RuleIDs),
-		AllRuleIDs: report.RuleIDs,
-		DurationMS: report.DurationMS,
-		Blocked:    report.Blocked,
-		Redacted:   report.Redacted,
-		Summary:    report.Recommendation,
-	}
-}
-
-func reportTime() time.Time {
-	return time.Now().UTC()
 }
 
 func first(in []string) string {

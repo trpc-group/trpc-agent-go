@@ -15,23 +15,52 @@ import (
 	"github.com/bmatcuk/doublestar/v4"
 )
 
-func (s *Scanner) scanForbiddenPaths(args []string, loc string) []Finding {
+func (s *Scanner) scanCwd(cwd string) []Finding {
+	clean := normalizePathToken(cwd)
+	if clean == "" || !isForbiddenPath(clean, s.policy.ForbiddenPaths) {
+		return nil
+	}
+	return []Finding{finding(
+		RuleForbiddenPath, CategoryDangerousCommand, RiskCritical, DecisionDeny,
+		"forbidden working directory: "+clean,
+		"cwd",
+		"Use a working directory outside forbidden system and credential paths.",
+	)}
+}
+
+func (s *Scanner) scanForbiddenPathsInCwd(args []string, cwd, loc string) []Finding {
 	var findings []Finding
 	for _, arg := range args {
 		clean := normalizePathToken(arg)
 		if clean == "" {
 			continue
 		}
-		if isForbiddenPath(clean, s.policy.ForbiddenPaths) {
+		candidates := []string{clean}
+		if resolved := resolvePathAgainstCwd(clean, cwd); resolved != "" && resolved != clean {
+			candidates = append(candidates, resolved)
+		}
+		for _, candidate := range candidates {
+			if !isForbiddenPath(candidate, s.policy.ForbiddenPaths) {
+				continue
+			}
 			findings = append(findings, finding(
 				RuleForbiddenPath, CategoryDangerousCommand, RiskCritical, DecisionDeny,
-				"forbidden path referenced: "+clean,
+				"forbidden path referenced: "+candidate,
 				loc,
 				"Do not access credentials, private keys, system paths, or workspace escape paths.",
 			))
+			break
 		}
 	}
 	return findings
+}
+
+func resolvePathAgainstCwd(path, cwd string) string {
+	cleanCwd := normalizePathToken(cwd)
+	if cleanCwd == "" || filepath.IsAbs(path) || strings.HasPrefix(path, "~") {
+		return ""
+	}
+	return filepath.ToSlash(filepath.Clean(filepath.Join(cleanCwd, path)))
 }
 
 func normalizePathToken(s string) string {

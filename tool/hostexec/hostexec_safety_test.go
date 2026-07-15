@@ -50,3 +50,74 @@ func TestExecCommandTool_SafetyScannerBlocksBeforeHostShell(t *testing.T) {
 		t.Fatalf("error = %v, want rule %s", err, safety.RuleDangerousDelete)
 	}
 }
+
+func TestExecCommandTool_SafetyScannerSanitizesOutput(t *testing.T) {
+	policy := safety.DefaultPolicy()
+	policy.BackendRules.HostExec.DefaultAction = safety.DecisionAllow
+	policy.ResourceLimits.MaxOutputBytes = 24
+	policy.ForbiddenPaths = []string{".env"}
+	scanner, err := safety.NewScanner(policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = scanner.Close() })
+	set, err := NewToolSet(
+		WithBaseDir(t.TempDir()),
+		WithSafetyScanner(scanner),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer set.Close()
+	var execTool tool.CallableTool
+	for _, tl := range set.Tools(context.Background()) {
+		if decl := tl.Declaration(); decl != nil && decl.Name == toolExecCommand {
+			execTool = tl.(tool.CallableTool)
+		}
+	}
+	if execTool == nil {
+		t.Fatal("exec_command tool not found")
+	}
+	got, err := execTool.Call(context.Background(), []byte(`{
+		"command": "echo 012345678901234567890123456789"
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, _ := got.(map[string]any)["output"].(string)
+	if len(output) > 24 || !strings.Contains(output, "[truncated]") {
+		t.Fatalf("output = %q, want capped output", output)
+	}
+}
+
+func TestExecCommandTool_SafetyScannerBlocksForbiddenWorkdir(t *testing.T) {
+	policy := safety.DefaultPolicy()
+	policy.BackendRules.HostExec.DefaultAction = safety.DecisionAllow
+	scanner, err := safety.NewScanner(policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = scanner.Close() })
+	set, err := NewToolSet(WithSafetyScanner(scanner))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer set.Close()
+	var execTool tool.CallableTool
+	for _, tl := range set.Tools(context.Background()) {
+		if decl := tl.Declaration(); decl != nil && decl.Name == toolExecCommand {
+			execTool = tl.(tool.CallableTool)
+		}
+	}
+	if execTool == nil {
+		t.Fatal("exec_command tool not found")
+	}
+	_, err = execTool.Call(context.Background(), []byte(`{
+		"command": "cat ssh_config",
+		"workdir": "/etc/ssh"
+	}`))
+	if err == nil || !errors.Is(err, safety.ErrBlocked) ||
+		!strings.Contains(err.Error(), safety.RuleForbiddenPath) {
+		t.Fatalf("error = %v, want forbidden workdir block", err)
+	}
+}

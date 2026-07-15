@@ -86,7 +86,7 @@ type AuditConfig struct {
 
 // RedactionConfig configures sensitive-value redaction.
 type RedactionConfig struct {
-	Enabled       bool     `json:"enabled" yaml:"enabled"`
+	Enabled       *bool    `json:"enabled,omitempty" yaml:"enabled,omitempty"`
 	Replacement   string   `json:"replacement" yaml:"replacement"`
 	ExtraPatterns []string `json:"extra_patterns" yaml:"extra_patterns"`
 }
@@ -163,7 +163,7 @@ func DefaultPolicy() Policy {
 			FailClosed: true,
 		},
 		Redaction: RedactionConfig{
-			Enabled:     true,
+			Enabled:     boolPointer(true),
 			Replacement: "[REDACTED]",
 		},
 		Rules: map[string]RulePolicyOverride{},
@@ -216,9 +216,8 @@ func (p Policy) normalized() (Policy, error) {
 	if p.Redaction.Replacement == "" {
 		p.Redaction.Replacement = def.Redaction.Replacement
 	}
-	if !p.Redaction.Enabled && len(p.Redaction.ExtraPatterns) == 0 &&
-		p.Redaction.Replacement == def.Redaction.Replacement {
-		p.Redaction.Enabled = true
+	if p.Redaction.Enabled == nil {
+		p.Redaction.Enabled = boolPointer(true)
 	}
 	if p.Rules == nil {
 		p.Rules = map[string]RulePolicyOverride{}
@@ -233,6 +232,10 @@ func (p Policy) normalized() (Policy, error) {
 	p.DeniedNetworkDomains = cleanStrings(p.DeniedNetworkDomains)
 	p.EnvAllowlist = cleanStrings(p.EnvAllowlist)
 	return p, nil
+}
+
+func boolPointer(v bool) *bool {
+	return &v
 }
 
 func (p Policy) validate() error {

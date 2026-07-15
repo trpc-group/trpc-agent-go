@@ -11,11 +11,13 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -450,7 +452,8 @@ func TestScannerReviewRegressionCases(t *testing.T) {
 				Language: "html",
 				Script:   "<div>safe</div>",
 			},
-			wantDecision: DecisionAllow,
+			wantDecision: DecisionAsk,
+			wantRule:     RuleCodeExecLanguage,
 		},
 		{
 			name: "shell script still scans commands",
@@ -678,5 +681,284 @@ func TestReportHelpersAndContextCancellation(t *testing.T) {
 	}
 	if _, err := (*Scanner)(nil).Scan(context.Background(), ExecutionRequest{}); err == nil {
 		t.Fatalf("nil scanner did not error")
+	}
+}
+
+func TestScannerPolicyReviewRegressions(t *testing.T) {
+	scanner := MustScanner(DefaultPolicy())
+	tests := []struct {
+		name     string
+		req      ExecutionRequest
+		decision Decision
+		rule     string
+	}{
+		{
+			name: "host default ask",
+			req: ExecutionRequest{
+				ToolName: "exec_command", Backend: BackendHostExec,
+				Command: "go test ./tool/safety",
+			},
+			decision: DecisionAsk,
+			rule:     RuleHostDefault,
+		},
+		{
+			name: "cwd forbidden",
+			req: ExecutionRequest{
+				ToolName: "exec_command", Backend: BackendHostExec,
+				Command: "cat ssh_config", Cwd: "/etc/ssh",
+			},
+			decision: DecisionDeny,
+			rule:     RuleForbiddenPath,
+		},
+		{
+			name: "structured dependency args",
+			req: ExecutionRequest{
+				ToolName: "custom", Backend: BackendWorkspaceExec,
+				Command: "go", Args: []string{"install", "example/module"},
+			},
+			decision: DecisionAsk,
+			rule:     RuleDependencyInstall,
+		},
+		{
+			name: "structured forbidden path args",
+			req: ExecutionRequest{
+				ToolName: "custom", Backend: BackendWorkspaceExec,
+				Command: "cat", Args: []string{"/etc/passwd"},
+			},
+			decision: DecisionDeny,
+			rule:     RuleForbiddenPath,
+		},
+		{
+			name: "process runner wrapper",
+			req: ExecutionRequest{
+				ToolName: "workspace_exec", Backend: BackendWorkspaceExec,
+				Command: "env rm -rf ./data",
+			},
+			decision: DecisionDeny,
+			rule:     RuleShellWrapper,
+		},
+		{
+			name: "path qualified allowlist bypass",
+			req: ExecutionRequest{
+				ToolName: "workspace_exec", Backend: BackendWorkspaceExec,
+				Command: "./git status",
+			},
+			decision: DecisionAsk,
+			rule:     RuleHumanReview,
+		},
+		{
+			name: "unlisted code language",
+			req: ExecutionRequest{
+				ToolName: "execute_code", Backend: BackendCodeExec,
+				Language: "ruby", Script: "puts 'ok'",
+			},
+			decision: DecisionAsk,
+			rule:     RuleCodeExecLanguage,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			report, err := scanner.Scan(context.Background(), tc.req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if report.Decision != tc.decision || !contains(report.RuleIDs, tc.rule) {
+				t.Fatalf("report = %#v, want decision=%s rule=%s", report, tc.decision, tc.rule)
+			}
+		})
+	}
+
+	denyHost := DefaultPolicy()
+	denyHost.BackendRules.HostExec.DefaultAction = DecisionDeny
+	denyHostScanner := MustScanner(denyHost)
+	report, err := denyHostScanner.Scan(context.Background(), ExecutionRequest{
+		ToolName: "exec_command", Backend: BackendHostExec,
+		Command: "go test ./tool/safety",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Decision != DecisionDeny || report.RuleIDs[0] != RuleHostDefault {
+		t.Fatalf("ordinary denied host report = %#v", report)
+	}
+	report, err = denyHostScanner.Scan(context.Background(), ExecutionRequest{
+		ToolName: "exec_command", Backend: BackendHostExec, Command: "rm -rf ./data",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Decision != DecisionDeny || report.RuleIDs[0] != RuleDangerousDelete {
+		t.Fatalf("dangerous host report = %#v", report)
+	}
+
+	exactPath := DefaultPolicy()
+	exactPath.AllowedCommands = []string{"./git"}
+	exactScanner := MustScanner(exactPath)
+	report, err = exactScanner.Scan(context.Background(), ExecutionRequest{
+		ToolName: "workspace_exec", Backend: BackendWorkspaceExec,
+		Command: "./git", Args: []string{"status"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Decision != DecisionAllow {
+		t.Fatalf("explicit path allow report = %#v", report)
+	}
+
+	relativePath := DefaultPolicy()
+	relativePath.ForbiddenPaths = []string{"/safe/blocked/**"}
+	report, err = MustScanner(relativePath).Scan(context.Background(), ExecutionRequest{
+		ToolName: "custom", Backend: BackendWorkspaceExec,
+		Command: "cat", Args: []string{"blocked/file.txt"}, Cwd: "/safe",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Decision != DecisionDeny || !contains(report.RuleIDs, RuleForbiddenPath) {
+		t.Fatalf("cwd-relative path report = %#v", report)
+	}
+
+	allowedLanguage := DefaultPolicy()
+	allowedLanguage.BackendRules.CodeExec.AllowedLanguages = append(
+		allowedLanguage.BackendRules.CodeExec.AllowedLanguages,
+		"ruby",
+	)
+	report, err = MustScanner(allowedLanguage).Scan(context.Background(), ExecutionRequest{
+		ToolName: "execute_code", Backend: BackendCodeExec,
+		Language: "ruby", Script: "puts 'ok'",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Decision != DecisionAllow {
+		t.Fatalf("allowed language report = %#v", report)
+	}
+}
+
+func TestStrictPolicyParsingAndRedactionToggle(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		format string
+		data   string
+	}{
+		{name: "json unknown", format: "json", data: `{"allowed_comands":["go"]}`},
+		{name: "yaml unknown", format: "yaml", data: "resource_limits:\n  max_output_byte: 10\n"},
+		{name: "json trailing", format: "json", data: `{}` + "\n{}"},
+		{name: "yaml trailing", format: "yaml", data: "{}\n---\n{}\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := ParsePolicy([]byte(tc.data), tc.format); err == nil {
+				t.Fatalf("ParsePolicy accepted %q", tc.data)
+			}
+		})
+	}
+
+	zero := MustScanner(Policy{})
+	if len(zero.policy.AllowedCommands) == 0 || len(zero.policy.DeniedCommands) == 0 {
+		t.Fatalf("zero policy did not inherit command defaults: %#v", zero.policy)
+	}
+
+	for _, enabled := range []bool{false, true} {
+		t.Run("redaction "+fmt.Sprint(enabled), func(t *testing.T) {
+			policy := DefaultPolicy()
+			policy.Redaction.Enabled = boolPointer(enabled)
+			report, err := MustScanner(policy).Scan(context.Background(), ExecutionRequest{
+				ToolName: "workspace_exec", Backend: BackendWorkspaceExec,
+				Command: "echo token=super-secret-value",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			containsSecret := strings.Contains(report.Command, "super-secret-value")
+			if containsSecret == enabled {
+				t.Fatalf("enabled=%v command=%q", enabled, report.Command)
+			}
+		})
+	}
+}
+
+func TestPolicyConfiguredAudit(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.jsonl")
+	policy := DefaultPolicy()
+	policy.Audit = AuditConfig{Enabled: true, Path: path, FailClosed: true}
+	scanner, err := NewScanner(policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scanner.Scan(context.Background(), ExecutionRequest{
+		ToolName: "workspace_exec", Backend: BackendWorkspaceExec,
+		Command: "go test ./tool/safety",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := scanner.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := scanner.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(data, []byte(`"tool_name":"workspace_exec"`)) {
+		t.Fatalf("configured audit missing event: %s", data)
+	}
+
+	disabled := DefaultPolicy()
+	disabled.Audit = AuditConfig{Enabled: false, Path: filepath.Join(t.TempDir(), "missing", "audit.jsonl"), FailClosed: true}
+	if scanner, err := NewScanner(disabled); err != nil {
+		t.Fatalf("disabled audit failed: %v", err)
+	} else if err := scanner.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	badPath := filepath.Join(t.TempDir(), "missing", "audit.jsonl")
+	closed := DefaultPolicy()
+	closed.Audit = AuditConfig{Enabled: true, Path: badPath, FailClosed: true}
+	if _, err := NewScanner(closed); err == nil {
+		t.Fatal("fail-closed audit accepted an unwritable path")
+	}
+	open := DefaultPolicy()
+	open.Audit = AuditConfig{Enabled: true, Path: badPath, FailClosed: false}
+	if scanner, err := NewScanner(open); err != nil {
+		t.Fatalf("fail-open audit initialization failed: %v", err)
+	} else if _, err := scanner.Scan(context.Background(), ExecutionRequest{Command: "go test ./tool/safety"}); err != nil {
+		t.Fatalf("fail-open scan failed: %v", err)
+	}
+
+	runtimeFailure := MustScanner(DefaultPolicy())
+	runtimeFailure.audit = failingAuditWriter{}
+	runtimeFailure.auditFailClosed = true
+	if _, err := runtimeFailure.Scan(context.Background(), ExecutionRequest{Command: "go test ./tool/safety"}); err == nil {
+		t.Fatal("runtime audit failure did not fail closed")
+	}
+	runtimeFailure.auditFailClosed = false
+	if _, err := runtimeFailure.Scan(context.Background(), ExecutionRequest{Command: "go test ./tool/safety"}); err != nil {
+		t.Fatalf("runtime audit failure did not fail open: %v", err)
+	}
+}
+
+func TestSanitizeOutputsUsesSharedUTF8ByteBudget(t *testing.T) {
+	policy := DefaultPolicy()
+	policy.ResourceLimits.MaxOutputBytes = 24
+	scanner := MustScanner(policy)
+	parts := scanner.SanitizeOutputs(
+		"token=super-secret-value",
+		strings.Repeat("界", 20),
+	)
+	if len(parts) != 2 || len(parts[0])+len(parts[1]) > 24 {
+		t.Fatalf("sanitized parts exceed budget: %#v", parts)
+	}
+	if strings.Contains(strings.Join(parts, ""), "super-secret-value") {
+		t.Fatalf("sanitized output leaked secret: %#v", parts)
+	}
+	for _, part := range parts {
+		if !utf8.ValidString(part) {
+			t.Fatalf("invalid UTF-8 output %q", part)
+		}
+	}
+	if got := (*Scanner)(nil).SanitizeOutput("unchanged"); got != "unchanged" {
+		t.Fatalf("nil scanner output = %q", got)
 	}
 }

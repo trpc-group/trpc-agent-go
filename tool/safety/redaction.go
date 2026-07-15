@@ -24,6 +24,9 @@ func NewRedactor(cfg RedactionConfig) (*Redactor, error) {
 	if replacement == "" {
 		replacement = "[REDACTED]"
 	}
+	if cfg.Enabled != nil && !*cfg.Enabled {
+		return &Redactor{replacement: replacement}, nil
+	}
 	patterns := []string{
 		`(?i)(api[_-]?key|token|password|passwd|secret|credential)\s*[:=]\s*['"]?[^'"\s]+`,
 		`(?i)(authorization:\s*bearer\s+)[A-Za-z0-9._~+/\-=]+`,

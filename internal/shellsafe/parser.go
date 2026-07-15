@@ -181,6 +181,16 @@ var implicitDeny = map[string]struct{}{
 	"let": {}, "mapfile": {}, "readarray": {},
 }
 
+// IsImplicitlyDeniedCommand reports whether command is a shell wrapper,
+// process runner, or stateful builtin that is denied whenever policy mode is
+// active. Callers use this helper to share the same non-overridable policy
+// instead of maintaining a second wrapper list.
+func IsImplicitlyDeniedCommand(command string) bool {
+	base := basenameForGOOS(strings.TrimSpace(command), runtime.GOOS)
+	_, ok := implicitDeny[normalizeName(base, runtime.GOOS)]
+	return ok
+}
+
 // Policy holds the executable-name allow/deny lists that should be
 // applied to a parsed Pipeline. The two lists use deliberately
 // asymmetric matching so the policy fails closed under workspace-

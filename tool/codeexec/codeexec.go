@@ -235,7 +235,27 @@ func (t *executeCodeTool) Call(ctx context.Context, args []byte) (any, error) {
 		return nil, err
 	}
 
-	return t.executor.ExecuteCode(ctx, input)
+	result, err := t.executor.ExecuteCode(ctx, input)
+	if t.cfg.safety != nil {
+		parts := make([]string, 1, len(result.OutputFiles)+1)
+		parts[0] = result.Output
+		for _, file := range result.OutputFiles {
+			parts = append(parts, file.Content)
+		}
+		sanitized := t.cfg.safety.SanitizeOutputParts(parts...)
+		result.Output = sanitized[0].Value
+		for i := range result.OutputFiles {
+			original := result.OutputFiles[i].Content
+			result.OutputFiles[i].Content = sanitized[i+1].Value
+			if sanitized[i+1].Truncated {
+				if result.OutputFiles[i].SizeBytes == 0 {
+					result.OutputFiles[i].SizeBytes = int64(len(original))
+				}
+				result.OutputFiles[i].Truncated = true
+			}
+		}
+	}
+	return result, err
 }
 
 func (t *executeCodeTool) checkSafety(

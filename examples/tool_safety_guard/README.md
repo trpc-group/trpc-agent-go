@@ -22,6 +22,10 @@ The CLI reads JSON samples and writes:
 - `tool_safety_audit.jsonl`: one audit event per scan with decision, risk level,
   primary rule ID, duration, redaction status, and blocked status.
 
+The scanner writes audit events using the policy's `audit.enabled`, `path`, and
+`fail_closed` settings. The `-audit` flag overrides the configured path and
+enables audit output for that run. The audit file is append-only.
+
 The sample corpus is scan-only. Commands such as `rm -rf`, `curl`, `sudo`, and
 `go install` are never executed by the example.
 
@@ -31,6 +35,11 @@ The guard uses `internal/shellsafe` to conservatively parse shell commands.
 Unsupported shell constructs such as `sh -c`, `bash -c`, `eval`, backticks,
 `$()`, variable expansion, redirection, and background operators become deny or
 ask findings instead of default allow decisions.
+
+Policy parsing rejects unknown fields. Command arguments and working directories
+participate in semantic path and dependency checks, code block languages use the
+configured allowlist, and host execution always applies its backend default
+action.
 
 `tool.PermissionPolicy` is the normal framework interception point. It runs
 after tool arguments are finalized and before the tool executes. `tool.FilterFunc`
@@ -43,6 +52,10 @@ has a wider blast radius: PTY sessions, background jobs, privilege escalation,
 and residual processes require stricter review. `codeexec` backends and
 sandboxes still need runtime isolation for filesystem, process, network, and
 resource controls.
+
+When these tools are configured with the scanner, returned output is redacted
+and bounded by `resource_limits.max_output_bytes`. Each response or session poll
+gets its own byte budget.
 
 This guard cannot replace sandbox isolation. It is a pre-execution policy,
 reporting, audit, and telemetry layer. Production systems should combine it with

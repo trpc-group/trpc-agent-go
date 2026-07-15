@@ -147,7 +147,7 @@ func NewToolSet(opts ...Option) (tool.ToolSet, error) {
 	}
 	set.tools = []tool.Tool{
 		&execCommandTool{mgr: mgr, baseDir: baseDir, safety: cfg.safety},
-		&writeStdinTool{mgr: mgr},
+		&writeStdinTool{mgr: mgr, safety: cfg.safety},
 		&killSessionTool{mgr: mgr},
 	}
 	return set, nil
@@ -297,12 +297,11 @@ func (t *execCommandTool) Call(
 	if strings.TrimSpace(in.Command) == "" {
 		return nil, errors.New(errCommandRequired)
 	}
-	if err := t.checkSafety(ctx, in); err != nil {
-		return nil, err
-	}
-
 	workdir, err := resolveWorkdir(in.Workdir, t.baseDir)
 	if err != nil {
+		return nil, err
+	}
+	if err := t.checkSafety(ctx, in, workdir); err != nil {
 		return nil, err
 	}
 	yield := firstInt(in.YieldTimeMS, in.YieldMs)
@@ -320,10 +319,17 @@ func (t *execCommandTool) Call(
 	if err != nil {
 		return nil, err
 	}
+	if t.safety != nil {
+		res.Output = t.safety.SanitizeOutput(res.Output)
+	}
 	return mapExecResult(res), nil
 }
 
-func (t *execCommandTool) checkSafety(ctx context.Context, in execInput) error {
+func (t *execCommandTool) checkSafety(
+	ctx context.Context,
+	in execInput,
+	workdir string,
+) error {
 	if t.safety == nil {
 		return nil
 	}
@@ -336,7 +342,7 @@ func (t *execCommandTool) checkSafety(ctx context.Context, in execInput) error {
 		ToolName:   toolExecCommand,
 		Backend:    safety.BackendHostExec,
 		Command:    in.Command,
-		Cwd:        in.Workdir,
+		Cwd:        workdir,
 		Env:        in.Env,
 		TimeoutMS:  timeoutMS,
 		TTY:        firstBool(in.TTY, in.PTY),
@@ -352,7 +358,8 @@ func (t *execCommandTool) checkSafety(ctx context.Context, in execInput) error {
 }
 
 type writeStdinTool struct {
-	mgr *manager
+	mgr    *manager
+	safety *safety.Scanner
 }
 
 func (t *writeStdinTool) Declaration() *tool.Declaration {
@@ -456,6 +463,9 @@ func (t *writeStdinTool) Call(
 	poll, err := t.mgr.poll(sessionID, nil)
 	if err != nil {
 		return nil, err
+	}
+	if t.safety != nil {
+		poll.Output = t.safety.SanitizeOutput(poll.Output)
 	}
 	return mapPollResult(sessionID, poll), nil
 }

@@ -20,7 +20,9 @@ const (
 	RuleShellBypassConstruct = "TSG-SHELL-BYPASS-CONSTRUCT" // #nosec G101 -- rule identifier, not a credential.
 	RuleHostPTY              = "TSG-HOSTEXEC-PTY"
 	RuleHostBackground       = "TSG-HOSTEXEC-BACKGROUND"
+	RuleHostDefault          = "TSG-HOSTEXEC-DEFAULT"
 	RuleHostPrivilege        = "TSG-HOSTEXEC-PRIVILEGE"
+	RuleCodeExecLanguage     = "TSG-CODEEXEC-LANGUAGE"
 	RuleDependencyInstall    = "TSG-DEPENDENCY-INSTALL"
 	RuleResourceTimeout      = "TSG-RESOURCE-TIMEOUT"
 	RuleResourceOutput       = "TSG-RESOURCE-OUTPUT"

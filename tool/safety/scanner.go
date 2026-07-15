@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/internal/shellsafe"
@@ -21,9 +22,14 @@ import (
 
 // Scanner scans execution requests before tools run.
 type Scanner struct {
-	policy   Policy
-	redactor *Redactor
-	now      func() time.Time
+	policy          Policy
+	redactor        *Redactor
+	audit           AuditWriter
+	auditClose      func() error
+	auditFailClosed bool
+	closeOnce       sync.Once
+	closeErr        error
+	now             func() time.Time
 }
 
 // NewScanner creates a scanner from policy. Empty policy fields are filled
@@ -37,7 +43,30 @@ func NewScanner(policy Policy) (*Scanner, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Scanner{policy: p, redactor: redactor, now: time.Now}, nil
+	scanner := &Scanner{
+		policy:          p,
+		redactor:        redactor,
+		auditFailClosed: p.Audit.FailClosed,
+		now:             time.Now,
+	}
+	if p.Audit.Enabled {
+		if strings.TrimSpace(p.Audit.Path) == "" {
+			if p.Audit.FailClosed {
+				return nil, fmt.Errorf("audit.enabled requires audit.path")
+			}
+			return scanner, nil
+		}
+		writer, closeFn, err := NewJSONLFileWriter(p.Audit.Path)
+		if err != nil {
+			if p.Audit.FailClosed {
+				return nil, fmt.Errorf("open safety audit: %w", err)
+			}
+			return scanner, nil
+		}
+		scanner.audit = writer
+		scanner.auditClose = closeFn
+	}
+	return scanner, nil
 }
 
 // MustScanner returns a scanner or panics. It is intended for examples.
@@ -70,14 +99,44 @@ func (s *Scanner) Scan(ctx context.Context, req ExecutionRequest) (Report, error
 	commandSummary := firstNonBlank(req.Command, req.Script)
 	findings := s.scanRequest(req)
 	dur := float64(s.now().Sub(start).Microseconds()) / 1000.0
-	return newReport(req, commandSummary, findings, dur, s.redactor), nil
+	report := newReport(req, commandSummary, findings, dur, s.redactor)
+	if s.audit != nil {
+		if err := s.audit.WriteAuditEvent(
+			ctx,
+			auditEventFromReport(s.now(), report),
+		); err != nil && s.auditFailClosed {
+			return report, fmt.Errorf("write safety audit: %w", err)
+		}
+	}
+	return report, nil
+}
+
+// Close releases the policy-configured audit writer, if any.
+func (s *Scanner) Close() error {
+	if s == nil {
+		return nil
+	}
+	s.closeOnce.Do(func() {
+		if s.auditClose != nil {
+			s.closeErr = s.auditClose()
+		}
+	})
+	return s.closeErr
 }
 
 func (s *Scanner) scanRequest(req ExecutionRequest) []Finding {
 	var findings []Finding
 	text := strings.Join([]string{req.Command, strings.Join(req.Args, " "), req.Script, req.Cwd}, "\n")
+	if strings.TrimSpace(req.Cwd) != "" {
+		findings = append(findings, s.scanCwd(req.Cwd)...)
+	}
 	if strings.TrimSpace(req.Command) != "" {
-		findings = append(findings, s.scanCommand(req.Command)...)
+		if len(req.Args) > 0 {
+			argv := append([]string{req.Command}, req.Args...)
+			findings = append(findings, s.scanArgvInCwd(argv, "command", req.Cwd)...)
+		} else {
+			findings = append(findings, s.scanCommandInCwd(req.Command, req.Cwd)...)
+		}
 	}
 	if strings.TrimSpace(req.Script) != "" {
 		findings = append(findings, s.scanScript(req.Script, req.Language)...)
@@ -91,6 +150,10 @@ func (s *Scanner) scanRequest(req ExecutionRequest) []Finding {
 }
 
 func (s *Scanner) scanCommand(command string) []Finding {
+	return s.scanCommandInCwd(command, "")
+}
+
+func (s *Scanner) scanCommandInCwd(command, cwd string) []Finding {
 	var findings []Finding
 	if lim := s.policy.ResourceLimits.MaxCommandBytes; lim > 0 && len(command) > lim {
 		findings = append(findings, finding(
@@ -123,7 +186,7 @@ func (s *Scanner) scanCommand(command string) []Finding {
 			continue
 		}
 		loc := fmt.Sprintf("segment[%d]", i)
-		findings = append(findings, s.scanArgv(argv, loc)...)
+		findings = append(findings, s.scanArgvInCwd(argv, loc, cwd)...)
 	}
 	if strings.Contains(command, "|") {
 		findings = append(findings, finding(
@@ -136,13 +199,13 @@ func (s *Scanner) scanCommand(command string) []Finding {
 	return findings
 }
 
-func (s *Scanner) scanArgv(argv []string, loc string) []Finding {
+func (s *Scanner) scanArgvInCwd(argv []string, loc, cwd string) []Finding {
 	var findings []Finding
 	cmd := normalizeCommandName(argv[0])
-	if isShellWrapper(cmd) {
+	if shellsafe.IsImplicitlyDeniedCommand(argv[0]) {
 		findings = append(findings, finding(
 			RuleShellWrapper, CategoryShellBypass, RiskHigh, DecisionDeny,
-			"shell wrapper command: "+cmd,
+			"shell wrapper or re-executing command: "+strings.TrimSpace(argv[0]),
 			loc,
 			"Do not wrap commands in a shell; provide a directly parseable command instead.",
 		))
@@ -155,10 +218,10 @@ func (s *Scanner) scanArgv(argv []string, loc string) []Finding {
 			"Use an allowed, auditable command or request human approval.",
 		))
 	}
-	if len(s.policy.AllowedCommands) > 0 && !inList(cmd, s.policy.AllowedCommands) {
+	if len(s.policy.AllowedCommands) > 0 && !commandAllowed(argv[0], s.policy.AllowedCommands) {
 		findings = append(findings, finding(
 			RuleHumanReview, CategoryPolicy, RiskMedium, s.policy.DefaultAction,
-			"command is not in allowed_commands: "+cmd,
+			"command is not in allowed_commands: "+strings.TrimSpace(argv[0]),
 			loc,
 			"Add the command to policy only after reviewing its safety boundary.",
 		))
@@ -167,22 +230,25 @@ func (s *Scanner) scanArgv(argv []string, loc string) []Finding {
 	findings = append(findings, s.scanNetworkArgv(argv, loc)...)
 	findings = append(findings, s.scanDependencyArgv(argv, loc)...)
 	findings = append(findings, s.scanResourceArgv(argv, loc)...)
-	findings = append(findings, s.scanForbiddenPaths(argv, loc)...)
+	findings = append(findings, s.scanForbiddenPathsInCwd(argv, cwd, loc)...)
 	return findings
-}
-
-func isShellWrapper(cmd string) bool {
-	switch cmd {
-	case "sh", "bash", "zsh", "dash", "ash", "fish", "pwsh", "powershell", "cmd", "eval":
-		return true
-	default:
-		return false
-	}
 }
 
 func (s *Scanner) scanScript(script, language string) []Finding {
 	var findings []Finding
 	lang := strings.ToLower(strings.TrimSpace(language))
+	for _, part := range strings.Split(lang, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" || languageAllowed(part, s.policy.BackendRules.CodeExec.AllowedLanguages) {
+			continue
+		}
+		findings = append(findings, finding(
+			RuleCodeExecLanguage, CategoryPolicy, RiskMedium, s.policy.DefaultAction,
+			"code execution language is not allowed: "+part,
+			"script.language",
+			"Add the language to backend_rules.codeexec.allowed_languages only after review.",
+		))
+	}
 	if isShellLikeLanguage(lang) {
 		action := s.policy.BackendRules.CodeExec.BashAction
 		if action == "" {
@@ -301,6 +367,22 @@ func normalizeCommandName(s string) string {
 func inList(cmd string, list []string) bool {
 	for _, item := range list {
 		if normalizeCommandName(item) == cmd || strings.EqualFold(strings.TrimSpace(item), cmd) {
+			return true
+		}
+	}
+	return false
+}
+
+func commandAllowed(command string, allowed []string) bool {
+	policy := shellsafe.PolicyFromLists(allowed, nil)
+	return policy.Check(&shellsafe.Pipeline{
+		Commands: [][]string{{strings.TrimSpace(command)}},
+	}) == nil
+}
+
+func languageAllowed(language string, allowed []string) bool {
+	for _, item := range allowed {
+		if strings.EqualFold(strings.TrimSpace(item), language) {
 			return true
 		}
 	}

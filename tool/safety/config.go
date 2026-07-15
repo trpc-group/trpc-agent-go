@@ -8,8 +8,10 @@
 package safety
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,15 +34,47 @@ func ParsePolicy(data []byte, format string) (Policy, error) {
 	var p Policy
 	switch strings.ToLower(format) {
 	case "json":
-		if err := json.Unmarshal(data, &p); err != nil {
+		dec := json.NewDecoder(bytes.NewReader(data))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&p); err != nil {
+			return Policy{}, err
+		}
+		if err := rejectTrailingJSON(dec); err != nil {
 			return Policy{}, err
 		}
 	case "yaml", "yml", "":
-		if err := yaml.Unmarshal(data, &p); err != nil {
+		dec := yaml.NewDecoder(bytes.NewReader(data))
+		dec.KnownFields(true)
+		if err := dec.Decode(&p); err != nil {
+			return Policy{}, err
+		}
+		if err := rejectTrailingYAML(dec); err != nil {
 			return Policy{}, err
 		}
 	default:
 		return Policy{}, fmt.Errorf("unsupported policy format %q", format)
 	}
 	return p.normalized()
+}
+
+func rejectTrailingJSON(dec *json.Decoder) error {
+	var extra any
+	if err := dec.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("policy contains multiple JSON values")
+		}
+		return err
+	}
+	return nil
+}
+
+func rejectTrailingYAML(dec *yaml.Decoder) error {
+	var extra any
+	if err := dec.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("policy contains multiple YAML documents")
+		}
+		return err
+	}
+	return nil
 }
