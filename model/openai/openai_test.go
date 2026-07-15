@@ -4216,6 +4216,48 @@ func TestMiniMaxFileIDExtractor(t *testing.T) {
 	}
 }
 
+func TestMiniMaxFileDeletionResponseValidator(t *testing.T) {
+	tests := []struct {
+		name    string
+		raw     string
+		nilFile bool
+		wantErr string
+	}{
+		{name: "nil response", nilFile: true, wantErr: "empty response"},
+		{name: "missing base response", raw: `{}`, wantErr: "missing base_resp"},
+		{
+			name:    "invalid base response",
+			raw:     `{"base_resp":"invalid"}`,
+			wantErr: "decode minimax file deletion response",
+		},
+		{
+			name: "success",
+			raw:  `{"base_resp":{"status_code":0,"status_msg":"success"}}`,
+		},
+		{
+			name:    "business error",
+			raw:     `{"base_resp":{"status_code":1004,"status_msg":"permission denied"}}`,
+			wantErr: "status_code 1004: permission denied",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var file *openai.FileDeleted
+			if !tt.nilFile {
+				file = &openai.FileDeleted{}
+				require.NoError(t, json.Unmarshal([]byte(tt.raw), file))
+			}
+			err := miniMaxFileDeletionResponseValidator(file)
+			if tt.wantErr != "" {
+				require.ErrorContains(t, err, tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
+
 func TestUploadedFileID(t *testing.T) {
 	m := &Model{}
 	id, err := m.uploadedFileID(&openai.FileObject{ID: "file_1"})
@@ -4466,6 +4508,27 @@ func TestDeleteFile_MiniMaxDefaults(t *testing.T) {
 		WithBaseURL(server.URL+"/v1"),
 	)
 	require.NoError(t, m.DeleteFile(context.Background(), "123"))
+}
+
+func TestDeleteFile_MiniMaxBusinessError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{
+			"file_id": 123,
+			"base_resp": {"status_code": 1004, "status_msg": "permission denied"}
+		}`)
+	}))
+	defer server.Close()
+
+	m := New(
+		"MiniMax-M3",
+		WithVariant(VariantMiniMax),
+		WithAPIKey("test-key"),
+		WithBaseURL(server.URL+"/v1"),
+	)
+	err := m.DeleteFile(context.Background(), "123")
+	require.ErrorContains(t, err, "status_code 1004")
+	require.ErrorContains(t, err, "permission denied")
 }
 
 func TestDeleteFile_CustomBodyDoesNotForceJSONContentType(t *testing.T) {

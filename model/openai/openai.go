@@ -134,6 +134,7 @@ type variantConfig struct {
 	// Default HTTP method for file deletion.
 	fileDeletionMethod         string
 	fileDeletionBodyConvertor  fileDeletionBodyConvertor
+	fileDeletionValidator      fileDeletionResponseValidator
 	fileUploadRequestConvertor fileUploadRequestConvertor
 	fileIDExtractor            fileIDExtractor
 	// Whether to skip file type in content parts for this variant.
@@ -177,6 +178,7 @@ var defaultFileDeletionBodyConvertor = func(
 
 type fileUploadRequestConvertor func(r *http.Request, file *os.File, fileOpts *FileOptions) (*http.Request, error)
 type fileIDExtractor func(file *openai.FileObject) (string, error)
+type fileDeletionResponseValidator func(file *openai.FileDeleted) error
 
 func miniMaxFileDeletionBodyConvertor(
 	body []byte,
@@ -230,6 +232,31 @@ func miniMaxFileIDExtractor(file *openai.FileObject) (string, error) {
 		return "", fmt.Errorf("decode minimax file_id %q: %w", rawID, err)
 	}
 	return rawID, nil
+}
+
+func miniMaxFileDeletionResponseValidator(file *openai.FileDeleted) error {
+	if file == nil {
+		return fmt.Errorf("minimax file deletion returned an empty response")
+	}
+	nested, ok := file.JSON.ExtraFields["base_resp"]
+	if !ok {
+		return fmt.Errorf("minimax file deletion response is missing base_resp")
+	}
+	var response struct {
+		StatusCode int64  `json:"status_code"`
+		StatusMsg  string `json:"status_msg"`
+	}
+	if err := json.Unmarshal([]byte(nested.Raw()), &response); err != nil {
+		return fmt.Errorf("decode minimax file deletion response: %w", err)
+	}
+	if response.StatusCode != 0 {
+		return fmt.Errorf(
+			"minimax file deletion failed with status_code %d: %s",
+			response.StatusCode,
+			response.StatusMsg,
+		)
+	}
+	return nil
 }
 
 // variantConfigs maps variant names to their configurations.
@@ -343,6 +370,7 @@ var variantConfigs = map[Variant]variantConfig{
 		fileDeletionMethod:        http.MethodPost,
 		skipFileTypeInContent:     false,
 		fileDeletionBodyConvertor: miniMaxFileDeletionBodyConvertor,
+		fileDeletionValidator:     miniMaxFileDeletionResponseValidator,
 		fileIDExtractor:           miniMaxFileIDExtractor,
 		apiKeyName:                miniMaxAPIKeyName,
 		defaultBaseURL:            defaultMiniMaxBaseURL,
@@ -3039,9 +3067,14 @@ func (m *Model) DeleteFile(ctx context.Context, fileID string, opts ...FileOptio
 			return next(r)
 		})
 
-	_, err := m.client.Files.Delete(ctx, fileID, middlewareOpt)
+	deleted, err := m.client.Files.Delete(ctx, fileID, middlewareOpt)
 	if err != nil {
 		return fmt.Errorf("failed to delete file: %w", err)
+	}
+	if validate := m.variantConfig.fileDeletionValidator; validate != nil {
+		if err := validate(deleted); err != nil {
+			return fmt.Errorf("failed to delete file: %w", err)
+		}
 	}
 	return nil
 }
