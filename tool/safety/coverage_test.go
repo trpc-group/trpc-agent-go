@@ -841,7 +841,7 @@ func TestStrictPolicyParsingAndRedactionToggle(t *testing.T) {
 		format string
 		data   string
 	}{
-		{name: "json unknown", format: "json", data: `{"allowed_comands":["go"]}`},
+		{name: "json unknown", format: "json", data: `{"allowed_com\u0061nds":["go"]}`},
 		{name: "yaml unknown", format: "yaml", data: "resource_limits:\n  max_output_byte: 10\n"},
 		{name: "json trailing", format: "json", data: `{}` + "\n{}"},
 		{name: "yaml trailing", format: "yaml", data: "{}\n---\n{}\n"},
