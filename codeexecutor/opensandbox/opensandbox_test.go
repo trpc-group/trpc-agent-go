@@ -198,13 +198,6 @@ func TestSortedEnvKeys(t *testing.T) {
 	assert.Equal(t, []string{"a", "b", "c"}, sortedEnvKeys(m))
 }
 
-func TestB64Encode(t *testing.T) {
-	// b64encode must produce standard base64 so `base64 -d` in the
-	// sandbox can decode it.
-	got := b64encode("hello")
-	assert.Equal(t, "aGVsbG8=", got)
-}
-
 // endsWithSpace reports whether s ends with a space byte.
 func endsWithSpace(s string) bool {
 	return len(s) > 0 && s[len(s)-1] == ' '
@@ -730,18 +723,18 @@ func TestNew_RequestTimeout_ZeroResolvesToDefault(t *testing.T) {
 // TestAppendStderr_EdgeCases verifies appendStderr handles empty and
 // multi-line input.
 func TestAppendStderr_EdgeCases(t *testing.T) {
-	var out strings.Builder
+	var out cappedOutputBuffer
 	appendStderr(&out, "")
 	assert.Equal(t, "", out.String())
 
-	var out2 strings.Builder
+	var out2 cappedOutputBuffer
 	appendStderr(&out2, "line1\nline2\n")
 	assert.Equal(t, "[stderr] line1\n[stderr] line2\n", out2.String())
 }
 
 // TestAppendError_Nil verifies appendError skips nil errors.
 func TestAppendError_Nil(t *testing.T) {
-	var out strings.Builder
+	var out cappedOutputBuffer
 	appendError(&out, nil)
 	assert.Equal(t, "", out.String())
 }

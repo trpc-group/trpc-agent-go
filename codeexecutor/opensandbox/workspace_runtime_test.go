@@ -19,6 +19,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -217,12 +218,22 @@ func parseBatchReadlinkPaths(cmd string) []string {
 	return paths
 }
 
-// resolveMockSymlink simulates `readlink -f` against the mock's
-// symlinks map. If the path itself is a symlink, return the target.
-// Otherwise return the path as-is (no further resolution).
+// resolveMockSymlink simulates `readlink -f` / `readlink -m` against
+// the mock's symlinks map. If the path itself is a symlink, return the
+// target (resolving chains up to a reasonable depth). Otherwise return
+// the path as-is.
 func resolveMockSymlink(p string, symlinks map[string]string) string {
-	if target, ok := symlinks[p]; ok {
-		return target
+	seen := map[string]bool{}
+	for i := 0; i < 32; i++ {
+		target, ok := symlinks[p]
+		if !ok {
+			break
+		}
+		if seen[p] {
+			break // symlink loop
+		}
+		seen[p] = true
+		p = target
 	}
 	return p
 }
@@ -413,7 +424,7 @@ func (m *mockOpenSandboxServer) handleCommand(w http.ResponseWriter, r *http.Req
 	// simulates file existence via existingPaths (seeded by
 	// CreateDirectory / UploadFiles) plus symlinks (which always
 	// exist as path entries).
-	if strings.Contains(req.Command, "test -e") {
+	if strings.Contains(req.Command, "test -e") && !strings.Contains(req.Command, "test -L") {
 		m.mu.Lock()
 		existing := m.existingPaths
 		symlinks := m.symlinks
@@ -430,10 +441,46 @@ func (m *mockOpenSandboxServer) handleCommand(w http.ResponseWriter, r *http.Req
 		}
 	}
 
-	// Handle readlink -f calls from resolveSandboxPath /
-	// resolveSandboxPaths. The mock simulates a sandbox filesystem
+	// Handle test -L calls from removeSymlinkIfExists. test -L returns
+	// true only for symlinks (does not follow the link).
+	if strings.Contains(req.Command, "test -L") {
+		m.mu.Lock()
+		symlinks := m.symlinks
+		m.mu.Unlock()
+		p := parseTestEPath(req.Command)
+		stdout = "no"
+		if _, ok := symlinks[p]; ok {
+			stdout = "yes"
+		}
+		if !forceInfraExit {
+			zero := 0
+			exitCode = &zero
+		}
+	}
+
+	// Handle rm -f calls from removeSymlinkIfExists and CreateWorkspace
+	// symlink guard. Remove the path from symlinks and existingPaths.
+	if strings.Contains(req.Command, "rm -f") && !strings.Contains(req.Command, "rm -rf") {
+		m.mu.Lock()
+		p := parseTestEPath(req.Command)
+		delete(m.symlinks, p)
+		delete(m.existingPaths, p)
+		m.mu.Unlock()
+		if !forceInfraExit {
+			zero := 0
+			exitCode = &zero
+		}
+	}
+
+	// Handle readlink -f and readlink -m calls from
+	// resolveSandboxPath / resolveSandboxPaths /
+	// resolveSandboxAncestor. The mock simulates a sandbox filesystem
 	// with symlinks via the symlinks map (seeded via setSymlink).
-	if strings.Contains(req.Command, "readlink -f") {
+	// readlink -m (canonicalize-missing) behaves the same as
+	// readlink -f in the mock: resolve the symlink if it exists,
+	// otherwise return the path as-is.
+	if strings.Contains(req.Command, "readlink -f") ||
+		strings.Contains(req.Command, "readlink -m") {
 		m.mu.Lock()
 		symlinks := m.symlinks
 		m.mu.Unlock()
@@ -1118,10 +1165,13 @@ func TestWorkspace_RunProgram_WithStdin(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// The command sent to the mock should pipe stdin via base64 -d.
+	// The command sent to the mock should redirect stdin from a file
+	// (not embed base64 in the command string, which could exceed
+	// ARG_MAX for large stdin).
 	cmd := m.lastCommand()
-	assert.Contains(t, cmd, "base64 -d", "stdin should be piped through base64 -d")
-	assert.Contains(t, cmd, b64encode("hello"), "command should contain base64-encoded stdin")
+	assert.Contains(t, cmd, "< ", "stdin should be redirected from a file")
+	assert.NotContains(t, cmd, "base64 -d", "stdin should not use base64 embedding")
+	assert.NotContains(t, cmd, "base64", "stdin should not reference base64 at all")
 }
 
 func TestWorkspace_CreateWorkspace_Persist(t *testing.T) {
@@ -2388,20 +2438,32 @@ func (e *mockNetTimeoutError) Error() string   { return "network timeout" }
 func (e *mockNetTimeoutError) Timeout() bool   { return true }
 func (e *mockNetTimeoutError) Temporary() bool { return false }
 
-// TestIsTimeoutErr_Structured verifies that isTimeoutErr uses
-// structured type assertions (context.DeadlineExceeded, net.Error,
-// osb.APIError.Code) rather than string matching, so unrelated
-// errors containing "timeout" in their message are not misclassified.
+// TestIsTimeoutErr_Structured verifies that isTimeoutErr only
+// recognizes SDK APIError with code "timeout" as a program execution
+// timeout. context.DeadlineExceeded (caller-side cancellation) and
+// net.Error.Timeout() (infrastructure timeout) are deliberately NOT
+// classified as program timeouts.
 func TestIsTimeoutErr_Structured(t *testing.T) {
 	tests := []struct {
 		name string
 		err  error
 		want bool
 	}{
-		{"context deadline exceeded", context.DeadlineExceeded, true},
-		{"net.Error timeout", &mockNetTimeoutError{}, true},
+		// Only the SDK's structured APIError with code "timeout" is a
+		// genuine program execution timeout.
 		{"APIError code=timeout", &osb.APIError{Response: osb.ErrorResponse{Code: "timeout"}}, true},
+		{"APIError code=TIMEOUT (case-insensitive)", &osb.APIError{Response: osb.ErrorResponse{Code: "TIMEOUT"}}, true},
+		// context.DeadlineExceeded is a caller-side cancellation, NOT
+		// a program timeout. Treating it as TimedOut would mask
+		// infrastructure-level cancellations.
+		{"context deadline exceeded", context.DeadlineExceeded, false},
+		// net.Error.Timeout() covers HTTP client request deadlines,
+		// connection dial timeouts, etc. These are infrastructure
+		// failures, NOT program execution timeouts.
+		{"net.Error timeout", &mockNetTimeoutError{}, false},
+		// Other APIError codes are not program timeouts.
 		{"APIError code=500", &osb.APIError{Response: osb.ErrorResponse{Code: "500"}}, false},
+		// String matching is never used.
 		{"upstream timeout string", fmt.Errorf("upstream timeout"), false},
 		{"504 gateway timeout string", fmt.Errorf("504 gateway timeout"), false},
 		{"nil", nil, false},
@@ -2579,4 +2641,230 @@ func TestCollect_RemainingZero_BreaksBeforeReadFile(t *testing.T) {
 	}
 	assert.LessOrEqual(t, totalBytes, int64(maxCollectTotalBytes),
 		"total bytes must not exceed maxCollectTotalBytes")
+}
+
+// --- L1: PutFiles final-component symlink removal ---
+
+// TestPutFiles_RemovesPreExistingSymlink verifies that PutFiles
+// removes a pre-existing symlink at the final file path before
+// uploading, preventing writes from following the symlink outside
+// the workspace.
+func TestPutFiles_RemovesPreExistingSymlink(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	m.setExitCode(0)
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	ws, err := exec.CreateWorkspace(context.Background(), "exec-sym", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+
+	// Simulate a pre-existing symlink at the upload target path,
+	// pointing outside the workspace.
+	targetPath := path.Join(ws.Path, "output.txt")
+	m.setSymlink(targetPath, "/etc/passwd")
+
+	// PutFiles should succeed — the symlink is removed before upload.
+	err = exec.PutFiles(context.Background(), ws, []codeexecutor.PutFile{{
+		Path:    "output.txt",
+		Content: []byte("safe content"),
+	}})
+	require.NoError(t, err)
+
+	// The symlink should have been removed (mock tracks this).
+	m.mu.Lock()
+	_, isSymlink := m.symlinks[targetPath]
+	m.mu.Unlock()
+	assert.False(t, isSymlink, "pre-existing symlink should have been removed")
+}
+
+// --- L2: Collect SearchFiles count limit ---
+
+// TestListFilesByGlob_CountLimit verifies that listFilesByGlob stops
+// collecting after maxCollectFiles+1 results, preventing model-
+// generated code from creating thousands of matching files that would
+// exhaust memory or exceed ARG_MAX in the batch readlink command.
+func TestListFilesByGlob_CountLimit(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	ws, err := exec.CreateWorkspace(context.Background(), "exec-cap", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+
+	// Configure search results exceeding maxCollectFiles.
+	var searchPaths []string
+	for i := 0; i < maxCollectFiles+50; i++ {
+		searchPaths = append(searchPaths, fmt.Sprintf("file_%04d.txt", i))
+	}
+	m.setSearchResults(searchPaths)
+
+	// Collect should return at most maxCollectFiles files.
+	files, err := exec.Collect(context.Background(), ws, []string{"*.txt"})
+	require.NoError(t, err)
+	assert.LessOrEqual(t, len(files), maxCollectFiles,
+		"Collect must cap file count at maxCollectFiles")
+}
+
+// --- L3: ErrNotImplementedV1 exported ---
+
+// TestErrNotImplementedV1_Exported verifies that the exported
+// ErrNotImplementedV1 sentinel can be detected with errors.Is from
+// external callers.
+func TestErrNotImplementedV1_Exported(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	ws, err := exec.CreateWorkspace(context.Background(), "exec-v1", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+
+	// StageInputs returns ErrNotImplementedV1.
+	err = exec.StageInputs(context.Background(), ws, nil)
+	assert.ErrorIs(t, err, ErrNotImplementedV1,
+		"StageInputs must return ErrNotImplementedV1 detectable via errors.Is")
+
+	// CollectOutputs returns ErrNotImplementedV1.
+	_, err = exec.CollectOutputs(context.Background(), ws, codeexecutor.OutputSpec{})
+	assert.ErrorIs(t, err, ErrNotImplementedV1,
+		"CollectOutputs must return ErrNotImplementedV1 detectable via errors.Is")
+}
+
+// --- L4: Sub-millisecond timeout rejection ---
+
+// TestRunProgram_SubMillisecondTimeoutRejected verifies that
+// RunProgram rejects timeout values in (0, 1ms) with an explicit
+// error instead of silently truncating to 0 and falling back to
+// defaultRunTimeout (30s).
+func TestRunProgram_SubMillisecondTimeoutRejected(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	ws, err := exec.CreateWorkspace(context.Background(), "exec-subms", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+
+	_, err = exec.RunProgram(context.Background(), ws, codeexecutor.RunProgramSpec{
+		Cmd:     "echo",
+		Timeout: 500 * time.Microsecond,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "below the 1ms API granularity",
+		"sub-millisecond timeout should be rejected with a clear error")
+}
+
+// --- L6: ExecuteCode aggregate output cap ---
+
+// TestExecuteCode_AggregateOutputCap verifies that ExecuteCode caps
+// the total aggregated output across all code blocks, preventing
+// unbounded memory consumption from a long sequence of verbose
+// blocks.
+func TestExecuteCode_AggregateOutputCap(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	// Set stdout to a large value that, when repeated across multiple
+	// blocks, exceeds maxAggregateOutputBytes.
+	m.setStdout(strings.Repeat("x", 1024*1024)) // 1 MiB per block
+	m.setExitCode(0)
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	// Create enough blocks to exceed the 4 MiB aggregate cap.
+	var blocks []codeexecutor.CodeBlock
+	for i := 0; i < 10; i++ {
+		blocks = append(blocks, codeexecutor.CodeBlock{
+			Language: "bash",
+			Code:     "echo test",
+		})
+	}
+
+	result, err := exec.ExecuteCode(context.Background(), codeexecutor.CodeExecutionInput{
+		ExecutionID: "exec-agg",
+		CodeBlocks:  blocks,
+	})
+	require.NoError(t, err)
+	// The output should be capped at approximately maxAggregateOutputBytes
+	// plus the truncation marker. Without the cap, 10 blocks × 1 MiB
+	// = 10 MiB would be accumulated.
+	assert.LessOrEqual(t, len(result.Output), maxAggregateOutputBytes+200,
+		"aggregate output should be capped at maxAggregateOutputBytes + truncation marker")
+	assert.Contains(t, result.Output, "[output truncated",
+		"output should contain truncation marker")
+}
+
+// --- N2: CreateWorkspace meta.json symlink hijack guard ---
+
+// TestCreateWorkspace_MetaJsonSymlinkGuard verifies that
+// CreateWorkspace removes a pre-existing symlink at meta.json
+// before writing the default '{}' content, preventing symlink
+// hijack attacks that would write through the symlink to an
+// external file.
+func TestCreateWorkspace_MetaJsonSymlinkGuard(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	m.setExitCode(0)
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	// Pre-seed a symlink at the meta.json path for a workspace
+	// that CreateWorkspace will create.
+	// We can't know the exact workspace path (it includes a nanosecond
+	// timestamp), but we can verify the CreateWorkspace command
+	// includes the symlink guard by checking the captured commands.
+	_, err := exec.CreateWorkspace(context.Background(), "exec-meta", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+
+	// Verify the CreateWorkspace bash command includes the meta.json
+	// symlink guard: `[ -L ... ] && rm -f ...`
+	m.mu.Lock()
+	commands := append([]string(nil), m.commands...)
+	m.mu.Unlock()
+
+	found := false
+	for _, cmd := range commands {
+		if strings.Contains(cmd, "mkdir -p") && strings.Contains(cmd, codeexecutor.MetaFileName) {
+			assert.Contains(t, cmd, "[ -L ",
+				"CreateWorkspace should check for symlink at "+codeexecutor.MetaFileName)
+			assert.Contains(t, cmd, "rm -f",
+				"CreateWorkspace should remove pre-existing symlink at "+codeexecutor.MetaFileName)
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "CreateWorkspace command should include "+codeexecutor.MetaFileName+" symlink guard")
+}
+
+// --- N3+N4: resolveSandboxAncestor via readlink -m ---
+
+// TestResolveSandboxAncestor_TailSymlinkResolved verifies that
+// resolveSandboxAncestor uses readlink -m to resolve symlinks in
+// existing tail components, not just the nearest existing ancestor.
+// This prevents a symlink at an intermediate path component from
+// causing writes to land outside the workspace.
+func TestResolveSandboxAncestor_TailSymlinkResolved(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	m.setExitCode(0)
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	ws, err := exec.CreateWorkspace(context.Background(), "exec-tail", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+
+	// Create a symlink at ws/subdir pointing to /tmp/outside.
+	// resolveSandboxAncestor for ws/subdir/newfile.txt should resolve
+	// the symlink at ws/subdir and return /tmp/outside/newfile.txt,
+	// which escapes the workspace and should be rejected.
+	m.setSymlink(path.Join(ws.Path, "subdir"), "/tmp/outside")
+
+	// PutFiles should fail because the resolved path escapes the workspace.
+	err = exec.PutFiles(context.Background(), ws, []codeexecutor.PutFile{{
+		Path:    "subdir/newfile.txt",
+		Content: []byte("test"),
+	}})
+	require.Error(t, err, "PutFiles should reject path that resolves outside workspace via tail symlink")
+	assert.Contains(t, err.Error(), "escapes workspace")
 }

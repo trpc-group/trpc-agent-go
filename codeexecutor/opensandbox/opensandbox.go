@@ -550,7 +550,7 @@ func (c *CodeExecutor) ExecuteCode(
 	}
 
 	var (
-		out      strings.Builder
+		out      cappedOutputBuffer
 		outFiles []codeexecutor.File
 	)
 	for i, block := range input.CodeBlocks {
@@ -616,7 +616,7 @@ func (c *CodeExecutor) ExecuteCode(
 
 // appendStderr writes a stderr chunk to the output buffer, prefixing
 // each line so users can distinguish stderr from stdout.
-func appendStderr(out *strings.Builder, line string) {
+func appendStderr(out *cappedOutputBuffer, line string) {
 	if line == "" {
 		return
 	}
@@ -633,7 +633,7 @@ func appendStderr(out *strings.Builder, line string) {
 }
 
 // appendError writes an error to the output buffer in a stable format.
-func appendError(out *strings.Builder, err error) {
+func appendError(out *cappedOutputBuffer, err error) {
 	if err == nil {
 		return
 	}
@@ -710,7 +710,9 @@ func (c *CodeExecutor) Collect(
 
 // StageInputs maps external inputs into the sandbox workspace.
 //
-// Not implemented in v1; returns errNotImplementedV1.
+// Not implemented in v1; returns ErrNotImplementedV1. Callers can
+// detect this with errors.Is(err, ErrNotImplementedV1) and fall back
+// to PutFiles.
 func (c *CodeExecutor) StageInputs(
 	ctx context.Context, ws codeexecutor.Workspace,
 	specs []codeexecutor.InputSpec,
@@ -720,7 +722,9 @@ func (c *CodeExecutor) StageInputs(
 
 // CollectOutputs applies the declarative output spec in the sandbox.
 //
-// Not implemented in v1; returns errNotImplementedV1.
+// Not implemented in v1; returns ErrNotImplementedV1. Callers can
+// detect this with errors.Is(err, ErrNotImplementedV1) and fall back
+// to Collect.
 func (c *CodeExecutor) CollectOutputs(
 	ctx context.Context, ws codeexecutor.Workspace,
 	spec codeexecutor.OutputSpec,
@@ -761,13 +765,28 @@ func (c *CodeExecutor) Engine() codeexecutor.Engine {
 	)
 }
 
+// killTimeout bounds the Kill call in Close so that a sandbox whose
+// DELETE endpoint is hung (e.g. server-side deadlock, network
+// partition) does not block Close indefinitely. 30s matches
+// defaultRmTimeout — long enough for a clean server-side teardown,
+// short enough not to hang the agent process.
+const killTimeout = 30 * time.Second
+
 // Close terminates the owned sandbox (if any). Connected (non-owned)
 // sandboxes are left running.
+//
+// Kill uses context.WithTimeout(context.Background(), killTimeout)
+// rather than context.Background() alone: a bare Background context
+// has no deadline, so a hung DELETE /v1/sandboxes/{id} would block
+// Close forever, leaking the goroutine and any deferred Close callers
+// above it (e.g. agent shutdown).
 func (c *CodeExecutor) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.sbx != nil && c.owned {
-		if err := c.sbx.Kill(context.Background()); err != nil {
+		killCtx, cancel := context.WithTimeout(context.Background(), killTimeout)
+		defer cancel()
+		if err := c.sbx.Kill(killCtx); err != nil {
 			log.Debugf("opensandbox: kill sandbox: %v", err)
 			return err
 		}
@@ -776,5 +795,23 @@ func (c *CodeExecutor) Close() error {
 	return nil
 }
 
-// errNotImplementedV1 is returned by v1 stub methods.
-var errNotImplementedV1 = errors.New("opensandbox: not implemented in v1")
+// ErrNotImplementedV1 is returned by v1 stub methods (StageInputs,
+// CollectOutputs). It is exported so callers can use errors.Is to
+// detect unsupported capabilities and fall back to alternative
+// strategies (e.g. using PutFiles/Collect directly instead of
+// StageInputs/CollectOutputs).
+//
+// Engine() exposes a WorkspaceFS whose StageInputs and CollectOutputs
+// methods return this error. Callers that rely on those methods must
+// check for it:
+//
+//	if err := eng.FS().StageInputs(ctx, ws, specs); err != nil {
+//	    if errors.Is(err, opensandbox.ErrNotImplementedV1) {
+//	        // fall back to PutFiles
+//	    }
+//	}
+var ErrNotImplementedV1 = errors.New("opensandbox: not implemented in v1")
+
+// errNotImplementedV1 is retained as a package-private alias for
+// backward compatibility with existing test assertions.
+var errNotImplementedV1 = ErrNotImplementedV1

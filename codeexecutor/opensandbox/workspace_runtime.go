@@ -14,13 +14,11 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
-	"net"
 	"net/http"
 	"os"
 	"path"
@@ -72,6 +70,14 @@ const (
 	// command can consume unbounded host memory even with an execution
 	// timeout.
 	maxCommandOutputBytes = 1024 * 1024 // 1 MiB each for stdout and stderr
+
+	// Maximum total bytes of aggregated output across all code blocks
+	// in a single ExecuteCode call. Each block's RunProgram already
+	// caps stdout/stderr at maxCommandOutputBytes, but with N blocks
+	// the aggregate could reach N * 2 * maxCommandOutputBytes. This
+	// limit prevents a long sequence of verbose blocks from consuming
+	// unbounded host memory.
+	maxAggregateOutputBytes = 4 * 1024 * 1024 // 4 MiB total
 )
 
 // workspaceRuntime implements WorkspaceManager / WorkspaceFS /
@@ -188,10 +194,24 @@ func (r *workspaceRuntime) CreateWorkspace(
 		sb2.WriteString(shellQuote(d))
 		sb2.WriteByte(' ')
 	}
+	// Guard against symlink hijack on meta.json: if a previous run (or
+	// a malicious actor with write access to the workspace) replaced
+	// meta.json with a symlink pointing to an external file (e.g.
+	// /etc/cron.d/payload), the `[ -f meta.json ]` test would follow
+	// the symlink and see the target's content as existing, so `echo
+	// '{}' > meta.json` would never fire — but a subsequent write to
+	// meta.json would go through the symlink and clobber the external
+	// target. Remove any pre-existing symlink before the existence
+	// check so `echo '{}' >` always creates a fresh regular file.
+	metaPath := path.Join(wsPath, codeexecutor.MetaFileName)
+	sb2.WriteString("; [ -L ")
+	sb2.WriteString(shellQuote(metaPath))
+	sb2.WriteString(" ] && rm -f ")
+	sb2.WriteString(shellQuote(metaPath))
 	sb2.WriteString("; [ -f ")
-	sb2.WriteString(shellQuote(path.Join(wsPath, codeexecutor.MetaFileName)))
+	sb2.WriteString(shellQuote(metaPath))
 	sb2.WriteString(" ] || echo '{}' > ")
-	sb2.WriteString(shellQuote(path.Join(wsPath, codeexecutor.MetaFileName)))
+	sb2.WriteString(shellQuote(metaPath))
 
 	if _, err := r.runBash(ctx, sb2.String(), defaultCreateTimeout); err != nil {
 		return codeexecutor.Workspace{}, err
@@ -274,14 +294,24 @@ func (r *workspaceRuntime) PutFiles(
 		// outside. Use resolveSandboxAncestor (not resolveSandboxPath)
 		// because the parent may not yet exist — e.g. uploading
 		// a/b/c/file.txt where a, b, and c are all new directories.
-		// resolveSandboxAncestor walks up to the nearest existing
-		// ancestor, resolves it with readlink -f, and appends the
-		// non-existent tail back.
 		resolvedParent, err := r.resolveSandboxAncestor(ctx, path.Dir(finalPath), ws.Path)
 		if err != nil {
 			return err
 		}
 		finalPath = path.Join(resolvedParent, path.Base(finalPath))
+		// Guard against the final component being a pre-existing
+		// symlink: resolveSandboxAncestor only resolves symlinks in
+		// components that exist *at call time*, but if the final
+		// component (e.g. "file.txt") already exists as a symlink to
+		// an external path, UploadFiles would follow it and write
+		// outside the workspace. Remove any pre-existing symlink at
+		// the final path so the upload creates a fresh regular file.
+		// This is safe because the caller's intent is to write a new
+		// file at this path — overwriting a symlink with a regular
+		// file is the expected behaviour.
+		if err := r.removeSymlinkIfExists(ctx, finalPath, ws.Path); err != nil {
+			return err
+		}
 		// Ensure the parent directory exists. The SDK's UploadFiles
 		// creates intermediate directories, but we create them
 		// explicitly to be safe across server versions.
@@ -549,7 +579,14 @@ func (r *workspaceRuntime) Collect(
 		return nil, err
 	}
 
-	out := make([]codeexecutor.File, 0, len(resolvedPaths))
+	// Pre-allocate at most maxCollectFiles slots: resolvedPaths may
+	// contain thousands of entries (before the loop below truncates),
+	// and pre-allocating based on the untruncated length wastes memory.
+	cap := len(resolvedPaths)
+	if cap > maxCollectFiles {
+		cap = maxCollectFiles
+	}
+	out := make([]codeexecutor.File, 0, cap)
 	seen := map[string]bool{}
 	var totalBytes int64
 	for _, fr := range resolvedPaths {
@@ -657,7 +694,7 @@ func (r *workspaceRuntime) resolveSandboxPaths(
 
 // StageInputs maps external inputs into the sandbox workspace.
 //
-// Not implemented in v1; returns errNotImplementedV1.
+// Not implemented in v1; returns ErrNotImplementedV1.
 func (r *workspaceRuntime) StageInputs(
 	ctx context.Context,
 	ws codeexecutor.Workspace,
@@ -671,7 +708,7 @@ func (r *workspaceRuntime) StageInputs(
 
 // CollectOutputs applies the declarative output spec in the sandbox.
 //
-// Not implemented in v1; returns errNotImplementedV1.
+// Not implemented in v1; returns ErrNotImplementedV1.
 func (r *workspaceRuntime) CollectOutputs(
 	ctx context.Context,
 	ws codeexecutor.Workspace,
@@ -717,6 +754,20 @@ func (r *workspaceRuntime) RunProgram(
 	timeout := spec.Timeout
 	if timeout <= 0 {
 		timeout = defaultRunTimeout
+	}
+	// Reject sub-millisecond timeouts explicitly. The OpenSandbox API
+	// accepts timeout in integer milliseconds; a value like 500µs would
+	// be truncated to 0 by the integer division below, then silently
+	// fall back to defaultRunTimeout (30s) — a 60000× inflation that
+	// violates the ProgramRunner contract. Values in (0, 1ms) are
+	// almost certainly caller bugs.
+	if timeout > 0 && timeout < time.Millisecond {
+		return codeexecutor.RunResult{}, fmt.Errorf(
+			"opensandbox: spec.Timeout %s is below the 1ms API granularity; "+
+				"the OpenSandbox RunCommand timeout is an integer number of "+
+				"milliseconds and sub-millisecond values would be truncated to 0",
+			timeout,
+		)
 	}
 
 	// The SDK applies ConnectionConfig.RequestTimeout to ALL HTTP
@@ -769,17 +820,34 @@ func (r *workspaceRuntime) RunProgram(
 		quotedArgs.WriteString(shellQuote(a))
 	}
 
+	// Upload stdin as a temp file in the run directory and redirect
+	// from it. This avoids embedding base64-encoded stdin in the
+	// command string, which would inflate the payload by ~33% and
+	// could exceed the OS ARG_MAX limit (typically 128 KiB – 2 MiB)
+	// for large stdin inputs. The temp file is cleaned up with the
+	// runDir by workspace Cleanup.
 	var stdinRedir string
 	if spec.Stdin != "" {
-		// Pipe stdin from a base64-decoded inline payload (no mktemp).
-		b64 := b64encode(spec.Stdin)
-		stdinRedir = " < <(printf %s " + shellQuote(b64) + " | base64 -d)"
+		stdinPath := path.Join(runDir, "stdin")
+		if err := sb.UploadFiles(ctx, []osb.UploadFileEntry{{
+			File: strings.NewReader(spec.Stdin),
+			Options: osb.UploadFileOptions{
+				FileName: "stdin",
+				Metadata: osb.FileMetadata{
+					Path: stdinPath,
+					Mode: osb.OctalMode(0o600),
+				},
+			},
+		}}); err != nil {
+			return codeexecutor.RunResult{}, fmt.Errorf(
+				"opensandbox: upload stdin: %w", err,
+			)
+		}
+		stdinRedir = " < " + shellQuote(stdinPath)
 	}
 
 	// mkdir -p the runDir and outDir so the spawned program can write
 	// scratch/output files without having to create them.
-	// Wrap in `bash -c` because stdinRedir uses bash process
-	// substitution (<(...)) which is not available in /bin/sh.
 	command := fmt.Sprintf(
 		"mkdir -p %s %s && cd %s && %s%s%s%s",
 		shellQuote(runDir), shellQuote(outDir),
@@ -796,6 +864,12 @@ func (r *workspaceRuntime) RunProgram(
 	// shell inherits nothing from the sandbox environment and skips
 	// startup files. SupportsCleanEnv: true is a security gate for
 	// command-policy mode, so this boundary must be real.
+	//
+	// Note: previously the CleanEnv wrapper required bash for process
+	// substitution (<(...)) used by the base64 stdin redirect. Now
+	// that stdin is a file redirect (< path), /bin/sh would suffice,
+	// but we keep bash --norc --noprofile for BASH_ENV/LD_PRELOAD
+	// defense.
 	if spec.CleanEnv {
 		command = "env -i PATH=" + shellQuote(minimalCleanPATH) +
 			" bash --norc --noprofile -c " + shellQuote(command)
@@ -807,9 +881,6 @@ func (r *workspaceRuntime) RunProgram(
 		Command: command,
 		Cwd:     "", // cwd is already handled by `cd` in the command
 		Timeout: int64(timeout / time.Millisecond),
-	}
-	if req.Timeout <= 0 {
-		req.Timeout = int64(defaultRunTimeout / time.Millisecond)
 	}
 
 	start := time.Now()
@@ -1047,6 +1118,13 @@ func (r *workspaceRuntime) runBash(
 	if timeout <= 0 {
 		timeout = defaultRunTimeout
 	}
+	// Reject sub-millisecond timeouts (see RunProgram for rationale).
+	if timeout > 0 && timeout < time.Millisecond {
+		return "", fmt.Errorf(
+			"opensandbox: runBash timeout %s is below the 1ms API granularity",
+			timeout,
+		)
+	}
 	req := osb.RunCommandRequest{
 		Command: "bash -c " + shellQuote(script),
 		Timeout: int64(timeout / time.Millisecond),
@@ -1165,6 +1243,14 @@ type fileSearchResult struct {
 // using the SDK's SearchFiles API and returns absolute file paths
 // with their real sizes. SearchFiles matches a single glob per call,
 // so we iterate over patterns and dedup results.
+//
+// The total result count is capped at maxCollectFiles+1: the +1 lets
+// the caller (Collect) detect that the cap was hit and stop early.
+// Without this, model-generated code could create tens of thousands
+// of matching files; SearchFiles would return all of them, and the
+// subsequent resolveSandboxPaths batch (which shell-quotes every path
+// into a single command string) would exceed ARG_MAX or take
+// minutes to execute.
 func (r *workspaceRuntime) listFilesByGlob(
 	ctx context.Context, wsPath string, patterns []string,
 ) ([]fileSearchResult, error) {
@@ -1182,11 +1268,20 @@ func (r *workspaceRuntime) listFilesByGlob(
 		if p == "" {
 			continue
 		}
+		// Stop early once we've collected enough results. The +1
+		// sentinel lets Collect detect truncation.
+		if len(out) > maxCollectFiles {
+			return out, nil
+		}
 		infos, err := sb.SearchFiles(ctx, wsPath, p)
 		if err != nil {
 			return nil, fmt.Errorf("opensandbox: search files %q: %w", p, err)
 		}
 		for _, fi := range infos {
+			// Stop collecting once we exceed the cap.
+			if len(out) > maxCollectFiles {
+				break
+			}
 			// Skip directories — only collect regular files.
 			if fi.Type == "dir" || fi.Type == "directory" {
 				continue
@@ -1265,90 +1360,133 @@ func (r *workspaceRuntime) resolveSandboxPath(
 	return resolved, nil
 }
 
+// removeSymlinkIfExists checks if targetPath is a symlink (using
+// `test -L`, which does not follow the symlink) and, if so, removes it
+// with `rm -f`. This prevents a pre-existing symlink at the final
+// component of an upload path from redirecting the write to an external
+// location. If targetPath does not exist or is a regular file, this is
+// a no-op.
+//
+// The path is validated against wsBase before the rm to ensure the
+// removal cannot be tricked into deleting files outside the workspace.
+func (r *workspaceRuntime) removeSymlinkIfExists(
+	ctx context.Context, targetPath, wsBase string,
+) error {
+	if !pathUnder(targetPath, wsBase) {
+		// Already caught by earlier validation, but double-check.
+		return fmt.Errorf(
+			"opensandbox: path %q escapes workspace %q", targetPath, wsBase,
+		)
+	}
+	// test -L returns true for symlinks (does not follow). A regular
+	// file or non-existent path returns false. Only remove if it's a
+	// symlink.
+	out, err := r.runBash(ctx,
+		"test -L "+shellQuote(targetPath)+" && echo yes || echo no",
+		defaultCreateTimeout)
+	if err != nil {
+		return fmt.Errorf(
+			"opensandbox: check symlink %q: %w", targetPath, err,
+		)
+	}
+	if strings.TrimSpace(out) == "yes" {
+		if _, err := r.runBash(ctx, "rm -f "+shellQuote(targetPath), defaultRmTimeout); err != nil {
+			return fmt.Errorf(
+				"opensandbox: remove symlink %q: %w", targetPath, err,
+			)
+		}
+	}
+	return nil
+}
+
 // resolveSandboxAncestor resolves the real path of a target that may
 // not yet exist (e.g. a/b/c/file.txt where a, b, and c are all new).
-// It walks up the path until it finds an existing ancestor, resolves
-// that ancestor with readlink -f to follow symlinks, verifies the
-// resolved ancestor is still under wsBase, then appends the
-// non-existent tail components back.
 //
-// This prevents symlink escape via a parent directory that is a
-// symlink to an external location, while still allowing uploads to
-// multi-level new directories (which readlink -f alone would reject
-// because intermediate components don't exist).
+// It uses `readlink -m` (--canonicalize-missing) which resolves
+// symlinks in all *existing* path components (including intermediate
+// and final components that already exist) while leaving non-existent
+// components as-is. This is superior to the old ancestor-walk approach
+// which only resolved the nearest existing ancestor and appended the
+// non-existent tail verbatim — if a tail component was itself an
+// existing symlink (e.g. target=/ws/a/b/c where /ws/a/b is a symlink
+// to /etc and c doesn't exist), the old code would return /ws/a/b/c
+// without resolving the /ws/a/b symlink, allowing writes to land in
+// /etc/c.
+//
+// `readlink -m` also fixes the depth-limit issue: the old code walked
+// up one component at a time, issuing a `test -e` round-trip per
+// level. A deeply nested target (e.g. /a/b/c/.../z/file) required
+// O(depth) remote calls with no upper bound. readlink -m resolves
+// the entire path in a single call.
+//
+// After resolution, the result is verified to be under wsBase to
+// prevent symlink escape.
 func (r *workspaceRuntime) resolveSandboxAncestor(
 	ctx context.Context, target, wsBase string,
 ) (string, error) {
 	target = path.Clean(target)
-	// If target exists, resolve it directly.
-	if out, err := r.runBash(ctx,
-		"test -e "+shellQuote(target)+" && echo yes || echo no",
-		defaultCreateTimeout); err == nil && strings.TrimSpace(out) == "yes" {
-		return r.resolveSandboxPath(ctx, target, wsBase)
-	}
-	// Walk up to find the nearest existing ancestor.
-	dir := path.Dir(target)
-	tail := path.Base(target)
-	for dir != "/" && dir != "." {
-		out, err := r.runBash(ctx,
-			"test -e "+shellQuote(dir)+" && echo yes || echo no",
-			defaultCreateTimeout)
-		if err != nil {
-			return "", fmt.Errorf(
-				"opensandbox: check ancestor %q: %w", dir, err,
-			)
-		}
-		if strings.TrimSpace(out) == "yes" {
-			// Found existing ancestor; resolve it.
-			resolved, err := r.resolveSandboxPath(ctx, dir, wsBase)
-			if err != nil {
-				return "", err
-			}
-			return path.Join(resolved, tail), nil
-		}
-		tail = path.Join(path.Base(dir), tail)
-		dir = path.Dir(dir)
-	}
-	// No existing ancestor found; the workspace root itself should
-	// exist. Resolve wsBase directly.
-	resolved, err := r.resolveSandboxPath(ctx, wsBase, wsBase)
+	// Use readlink -m: canonicalizes existing symlink components,
+	// leaves non-existent components as-is. Unlike readlink -f, it
+	// does not fail when intermediate components don't exist.
+	out, err := r.runBash(ctx, "readlink -m "+shellQuote(target), defaultCreateTimeout)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf(
+			"opensandbox: resolve ancestor %q: %w", target, err,
+		)
 	}
-	rel, err := filepath.Rel(wsBase, target)
-	if err != nil {
-		return "", err
+	resolved := strings.TrimSpace(out)
+	if resolved == "" {
+		return "", fmt.Errorf(
+			"opensandbox: readlink -m returned empty for %q", target,
+		)
 	}
-	return path.Join(resolved, filepath.ToSlash(rel)), nil
+	if !pathUnder(resolved, wsBase) {
+		return "", fmt.Errorf(
+			"opensandbox: resolved path %q escapes workspace %q (symlink?)",
+			resolved, wsBase,
+		)
+	}
+	return resolved, nil
 }
 
 // isTimeoutErr reports whether err represents a command execution
-// timeout (as opposed to an infrastructure/network failure). It uses
-// structured type assertions rather than string matching to avoid
-// misclassifying unrelated errors that happen to contain "timeout" in
-// their message (e.g. "504 gateway timeout", "upstream timeout").
+// timeout (as opposed to an infrastructure/network failure).
+//
+// Only the SDK's structured APIError with code "timeout" is recognized
+// as a program execution timeout. This is the signal sent by the
+// OpenSandbox server when the per-command Timeout (in the
+// RunCommandRequest) is exceeded.
+//
+// The following are deliberately NOT classified as program timeouts,
+// even though they are "timeout-like" errors:
+//
+//   - context.DeadlineExceeded: fires when the *caller's* context
+//     deadline is hit (e.g. agent-level turn timeout, gRPC RPC
+//     deadline). This is a caller-side cancellation, not a sandbox
+//     program timeout. Treating it as TimedOut would mask
+//     infrastructure-level cancellations and mislead the agent into
+//     retrying as if the program simply ran too long.
+//   - net.Error.Timeout(): fires on HTTP client request deadlines,
+//     connection dial timeouts, TLS handshake timeouts, etc. These
+//     are infrastructure failures between the agent and the
+//     OpenSandbox server/proxy, not program execution timeouts.
+//     Treating a 504 gateway timeout or a connection-refused timeout
+//     as TimedOut would hide real infrastructure problems.
+//
+// The SDK's RunCommandWithOpts uses the req.Timeout field (milliseconds)
+// for per-command execution timeout, NOT context.WithTimeout. So a
+// genuine program execution timeout surfaces as an APIError with
+// code "timeout", not as context.DeadlineExceeded.
 func isTimeoutErr(err error) bool {
 	if err == nil {
 		return false
 	}
-	// context.DeadlineExceeded is the canonical signal for a
-	// context.Timeout cancellation, including our own execution timeout.
-	if errors.Is(err, context.DeadlineExceeded) {
-		return true
-	}
-	// net.Error.Timeout() covers network-level timeouts from the HTTP
-	// client (e.g. request deadline). This is narrower than string
-	// matching because it only returns true for errors that implement
-	// net.Error AND report Timeout() == true.
-	var netErr net.Error
-	if errors.As(err, &netErr) && netErr.Timeout() {
-		return true
-	}
-	// For SDK APIError, check the structured code field rather than
-	// searching the error message. The mock server returns
-	// {"code":"timeout",...} for command execution timeouts; we match
-	// that specific code here. A 504 gateway timeout would have a
-	// different code and should NOT be classified as a command timeout.
+	// Only the SDK's structured APIError with code "timeout" is a
+	// genuine program execution timeout. The mock server returns
+	// {"code":"timeout",...} for command execution timeouts; a 504
+	// gateway timeout or connection dial timeout would have a
+	// different code (or not be an APIError at all) and must NOT be
+	// classified as a command timeout.
 	var apiErr *osb.APIError
 	if errors.As(err, &apiErr) {
 		if strings.EqualFold(apiErr.Response.Code, "timeout") {
@@ -1356,13 +1494,6 @@ func isTimeoutErr(err error) bool {
 		}
 	}
 	return false
-}
-
-// b64encode is a thin wrapper around base64 encoding used for stdin
-// redirection. The decoded payload is piped to the spawned program
-// via `base64 -d`, so this must use base64 (not hex).
-func b64encode(s string) string {
-	return base64.StdEncoding.EncodeToString([]byte(s))
 }
 
 // sanitize replaces every character outside [A-Za-z0-9_-] with an
@@ -1425,5 +1556,48 @@ func (b *cappedBuffer) write(s string) {
 }
 
 func (b *cappedBuffer) string() string {
+	return b.buf.String()
+}
+
+// cappedOutputBuffer accumulates string data up to
+// maxAggregateOutputBytes, then drops further writes and appends a
+// truncation marker. Used by ExecuteCode to bound the total aggregated
+// output across all code blocks. Implements io.Writer so fmt.Fprintf
+// can write directly to it.
+type cappedOutputBuffer struct {
+	buf       strings.Builder
+	truncated bool
+}
+
+// Write implements io.Writer.
+func (b *cappedOutputBuffer) Write(p []byte) (int, error) {
+	b.WriteString(string(p))
+	return len(p), nil
+}
+
+// WriteString appends s to the buffer unless the cap has been reached.
+func (b *cappedOutputBuffer) WriteString(s string) {
+	if b.truncated {
+		return
+	}
+	if b.buf.Len()+len(s) > maxAggregateOutputBytes {
+		remaining := maxAggregateOutputBytes - b.buf.Len()
+		if remaining > 0 {
+			b.buf.WriteString(s[:remaining])
+		}
+		fmt.Fprintf(&b.buf, "\n[output truncated: exceeded %d bytes]\n", maxAggregateOutputBytes)
+		b.truncated = true
+		return
+	}
+	b.buf.WriteString(s)
+}
+
+// WriteByte appends a single byte to the buffer.
+func (b *cappedOutputBuffer) WriteByte(c byte) error {
+	b.WriteString(string(c))
+	return nil
+}
+
+func (b *cappedOutputBuffer) String() string {
 	return b.buf.String()
 }
