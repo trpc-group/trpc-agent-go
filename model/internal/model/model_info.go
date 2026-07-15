@@ -35,19 +35,22 @@ var ModelContextWindows = map[string]int{
 	"o3":         200000, // https://developers.openai.com/api/docs/models/o3
 	"o4-mini":    200000, // https://developers.openai.com/api/docs/models/o4-mini
 
+	// 1,047,576 follows OpenAI Agents SDK compaction metadata:
+	// https://github.com/openai/openai-agents-python/blob/main/src/agents/sandbox/capabilities/compaction.py
+
 	// OpenAI GPT-5.6
-	"gpt-5.6":       1050000, // Alias for GPT-5.6 Sol — https://developers.openai.com/api/docs/models/gpt-5.6-sol
-	"gpt-5.6-sol":   1050000, // https://developers.openai.com/api/docs/models/gpt-5.6-sol
-	"gpt-5.6-terra": 1050000, // https://developers.openai.com/api/docs/models/gpt-5.6-terra
-	"gpt-5.6-luna":  1050000, // https://developers.openai.com/api/docs/models/gpt-5.6-luna
+	"gpt-5.6":       1047576, // Alias for GPT-5.6 Sol — https://developers.openai.com/api/docs/models/gpt-5.6-sol
+	"gpt-5.6-sol":   1047576, // https://developers.openai.com/api/docs/models/gpt-5.6-sol
+	"gpt-5.6-terra": 1047576, // https://developers.openai.com/api/docs/models/gpt-5.6-terra
+	"gpt-5.6-luna":  1047576, // https://developers.openai.com/api/docs/models/gpt-5.6-luna
 
 	// OpenAI GPT-5.5
-	"gpt-5.5":     1050000, // https://developers.openai.com/api/docs/models/gpt-5.5
-	"gpt-5.5-pro": 1050000, // https://developers.openai.com/api/docs/models/gpt-5.5-pro
+	"gpt-5.5":     1047576, // https://developers.openai.com/api/docs/models/gpt-5.5
+	"gpt-5.5-pro": 1047576, // https://developers.openai.com/api/docs/models/gpt-5.5-pro
 
 	// OpenAI GPT-5.4
-	"gpt-5.4":      1050000, // https://developers.openai.com/api/docs/models/gpt-5.4
-	"gpt-5.4-pro":  1050000, // https://developers.openai.com/api/docs/models/gpt-5.4-pro
+	"gpt-5.4":      1047576, // https://developers.openai.com/api/docs/models/gpt-5.4
+	"gpt-5.4-pro":  1047576, // https://developers.openai.com/api/docs/models/gpt-5.4-pro
 	"gpt-5.4-mini": 400000,  // https://developers.openai.com/api/docs/models/gpt-5.4-mini
 	"gpt-5.4-nano": 400000,  // https://developers.openai.com/api/docs/models/gpt-5.4-nano
 
