@@ -34,7 +34,7 @@ summarizer := summary.NewSummarizer(
     summary.WithChecksAny(
         summary.CheckEventThreshold(20),
         summary.CheckTokenThreshold(4000),
-        summary.CheckTimeThreshold(5*time.Minute), // Evaluated on summary check; compares the checked session's last event (normally the latest unsummarized event in delta flow)
+        summary.CheckTimeThreshold(5*time.Minute), // Runner path: trigger when the idle gap before the next request exceeds 5 minutes
     ),
     summary.WithMaxSummaryWords(200),
 )
@@ -438,7 +438,7 @@ the caller.
 | `WithEventThreshold(eventCount int)` | Trigger when event count since last summary exceeds threshold |
 | `WithTokenThreshold(tokenCount int)` | Trigger when token count since last summary exceeds threshold |
 | `WithContextThreshold(opts ...ContextThresholdOption)` | Trigger when token count since last summary exceeds a ratio of the current model's context window |
-| `WithTimeThreshold(interval time.Duration)` | Evaluated during summary checks; wraps `CheckTimeThreshold` and triggers when the checked session's last event is older than the interval |
+| `WithTimeThreshold(interval time.Duration)` | In the Runner path, triggers when the idle gap before the current top-level request exceeds the interval; standalone evaluation falls back to last-event age |
 
 Use `WithTokenThreshold` when you want a fixed application-defined token
 threshold, for example "summarize after 4000 new tokens" regardless of which
@@ -689,7 +689,7 @@ type Checker func(sess *session.Session) bool
 | Checker | Description |
 | --- | --- |
 | `CheckEventThreshold(eventCount int)` | Returns true when the number of delta events since the last summary exceeds the threshold |
-| `CheckTimeThreshold(interval time.Duration)` | Returns true when the checked session's last event is older than the interval |
+| `CheckTimeThreshold(interval time.Duration)` | In the Runner summary path, checks the idle gap before the current top-level request; direct calls without a Runner observation retain the last-event-age fallback |
 | `CheckTokenThreshold(tokenCount int)` | Returns true when the estimated token count of delta events since the last summary exceeds the threshold (estimated via `TokenCounter` from extracted conversation text, not `event.Response.Usage.TotalTokens`) |
 | `ChecksAll(checks []Checker)` | Combines multiple Checkers; returns true only when all return true (AND) |
 | `ChecksAny(checks []Checker)` | Combines multiple Checkers; returns true when any returns true (OR) |
@@ -931,10 +931,10 @@ When `WithSyncSummaryIntraRun(true)` is enabled, the Flow synchronously calls `C
 - Event count exceeds threshold (`WithEventThreshold`)
 - Token count exceeds threshold (`WithTokenThreshold`)
 - Token count exceeds the configured ratio of the active model's context window (`WithContextThreshold`)
-- On a summary check, the checked session's last event is older than the interval (`WithTimeThreshold`)
+- The idle gap before the current top-level request exceeds the interval (`WithTimeThreshold` in the Runner path)
 - Custom combined conditions met (`WithChecksAny` / `WithChecksAll`)
 
-`WithTimeThreshold` is not a standalone background timer. The condition is only evaluated when a summary check runs, typically after a conversation turn completes or when you call summary APIs manually. It checks the last event of the session being evaluated; in the Runner's normal delta-summary flow, that session contains only pending events, so this effectively means the latest unsummarized event. For example, `5*time.Minute` means "on the next summary check, if the checked session's last event is already older than 5 minutes, summarize now."
+`WithTimeThreshold` is not a standalone background timer. In the automatic Runner path, the framework records when a top-level request arrives and compares that immutable time with the previous relevant event in the same summary scope. For example, `5*time.Minute` means "when the next top-level request arrives after more than five minutes of scoped inactivity, its summary check may trigger." Model latency and async worker queue time do not count toward the gap. Direct checker or summary API calls without a Runner request observation retain the legacy last-event-age behavior.
 
 ### Same-Run Sync Summary for Long ReAct Loops
 
@@ -1563,7 +1563,7 @@ func main() {
         summary.WithChecksAny(
             summary.CheckEventThreshold(20),
             summary.CheckTokenThreshold(4000),
-            summary.CheckTimeThreshold(5*time.Minute), // Evaluated on summary check; compares the checked session's last event (normally the latest unsummarized event in delta flow)
+            summary.CheckTimeThreshold(5*time.Minute), // Runner path: trigger when the idle gap before the next request exceeds 5 minutes
         ),
     )
 
