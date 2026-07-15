@@ -253,6 +253,8 @@ func cloneExecutionTrace(executionTrace *trace.Trace) *trace.Trace {
 		Status:           executionTrace.Status,
 		Usage:            cloneUsage(executionTrace.Usage),
 		Steps:            make([]trace.Step, 0, len(executionTrace.Steps)),
+		Input:            cloneExecutionTraceSnapshot(executionTrace.Input),
+		Output:           cloneExecutionTraceSnapshot(executionTrace.Output),
 	}
 	for _, step := range executionTrace.Steps {
 		clonedTrace.Steps = append(
@@ -271,6 +273,7 @@ func cloneExecutionTraceStep(step trace.Step) trace.Step {
 		AgentName:          step.AgentName,
 		Branch:             step.Branch,
 		NodeID:             step.NodeID,
+		NodeType:           step.NodeType,
 		StartedAt:          step.StartedAt,
 		EndedAt:            step.EndedAt,
 		PredecessorStepIDs: append(
@@ -444,19 +447,6 @@ func redactedEventForLogging(e *Event) Event {
 	return redacted
 }
 
-func safeSendEvent(ctx context.Context, ch chan<- *Event, e *Event) (err error) {
-	eventStr := snapshotEvent(e)
-	defer func() {
-		if r := recover(); r != nil {
-			log.WarnfContext(ctx, "safeSendEvent: recovered from panic sending to closed channel: %v, event: %s", r, eventStr)
-			err = fmt.Errorf("panic sending to closed channel: %v", r)
-		}
-	}()
-	ch <- e
-	log.TracefContext(ctx, "safeSendEvent: event sent, event: %s", eventStr)
-	return nil
-}
-
 func tryEmitReadyEvent(ctx context.Context, ch chan<- *Event, e *Event) (handled bool, err error) {
 	eventStr := snapshotEvent(e)
 	defer func() {
@@ -517,28 +507,21 @@ func EmitEventWithTimeout(ctx context.Context, ch chan<- *Event,
 	}
 
 	// Slow path: blocking send with optional timeout.
-	// Use safeSendEvent in a separate goroutine so that the send operation
-	// is always protected by its own recover(), regardless of which select
-	// case fires. This guarantees that closed-channel panics never escape
-	// EmitEventWithTimeout.
+	// Use a direct blocking select with recover() to handle closed channel panics.
+	// This avoids goroutine leaks when timeout or ctx.Done() fires before the send completes.
 	eventStr := snapshotEvent(e)
-	sendDone := make(chan error, 1)
-	go func() {
-		sendDone <- safeSendEvent(ctx, ch, e)
+	defer func() {
+		if r := recover(); r != nil {
+			log.WarnfContext(ctx, "EmitEventWithTimeout: recovered from panic sending to closed channel: %v, event: %s", r, eventStr)
+			err = fmt.Errorf("panic sending to closed channel: %v", r)
+		}
 	}()
 
 	if timeout == EmitWithoutTimeout {
-		defer func() {
-			// Double safety net: if somehow a panic escapes the goroutine
-			// (should not happen), catch it here too.
-			if r := recover(); r != nil {
-				log.WarnfContext(ctx, "EmitEventWithTimeout: recovered from panic (blocking fallback): %v, event: %s", r, eventStr)
-				err = fmt.Errorf("panic sending to closed channel: %v", r)
-			}
-		}()
 		select {
-		case err = <-sendDone:
-			return err
+		case ch <- e:
+			log.TracefContext(ctx, "EmitEventWithTimeout: event sent, event: %s", eventStr)
+			return nil
 		case <-ctx.Done():
 			err = ctx.Err()
 			redactedEvent := redactedEventForLogging(e)
@@ -554,17 +537,10 @@ func EmitEventWithTimeout(ctx context.Context, ch chan<- *Event,
 
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
-	defer func() {
-		// Double safety net: if somehow a panic escapes the goroutine
-		// (should not happen), catch it here too.
-		if r := recover(); r != nil {
-			log.WarnfContext(ctx, "EmitEventWithTimeout: recovered from panic (timeout fallback): %v, event: %s", r, eventStr)
-			err = fmt.Errorf("panic sending to closed channel: %v", r)
-		}
-	}()
 	select {
-	case err = <-sendDone:
-		return err
+	case ch <- e:
+		log.TracefContext(ctx, "EmitEventWithTimeout: event sent, event: %s", eventStr)
+		return nil
 	case <-ctx.Done():
 		err = ctx.Err()
 		redactedEvent := redactedEventForLogging(e)
