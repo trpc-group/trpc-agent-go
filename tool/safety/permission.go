@@ -256,7 +256,7 @@ func permissionDecisionForReport(
 
 // PermissionReason renders a short, redacted reason for non-allow decisions.
 func PermissionReason(report Report) string {
-	return permissionReasonForDeniedPaths(report, nil)
+	return permissionReasonForDeniedPaths(report, DefaultPolicy().DeniedPaths)
 }
 
 func permissionReasonForDeniedPaths(report Report, deniedPaths []string) string {
