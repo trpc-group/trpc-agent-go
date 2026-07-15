@@ -614,6 +614,120 @@ func TestGuardedTool_PreservesToolMetadata(t *testing.T) {
 	}
 }
 
+func TestGuardedTool_PreservesOptionalInterfaces(t *testing.T) {
+	inner := &optionalStub{
+		name:              "optional",
+		longRunning:       true,
+		skipSummarization: true,
+	}
+	guard := NewGuard()
+	wrapped := WrapTool(inner, guard).(*GuardedTool)
+
+	if !wrapped.LongRunning() {
+		t.Error("LongRunning should be preserved")
+	}
+	if !wrapped.SkipSummarization() {
+		t.Error("SkipSummarization should be preserved")
+	}
+}
+
+func TestGuardedStreamableTool_PreservesOptionalInterfaces(t *testing.T) {
+	inner := &optionalStreamableStub{
+		name:              "optional_streamable",
+		longRunning:       true,
+		skipSummarization: true,
+	}
+	guard := NewGuard()
+	wrapped := WrapTools([]tool.Tool{inner}, guard)
+	if len(wrapped) != 1 {
+		t.Fatalf("expected 1 tool, got %d", len(wrapped))
+	}
+	st, ok := wrapped[0].(*GuardedStreamableTool)
+	if !ok {
+		t.Fatalf("expected *GuardedStreamableTool, got %T", wrapped[0])
+	}
+	if !st.LongRunning() {
+		t.Error("LongRunning should be preserved")
+	}
+	if !st.SkipSummarization() {
+		t.Error("SkipSummarization should be preserved")
+	}
+}
+
+func TestGuardedCombinedTool_PreservesOptionalInterfaces(t *testing.T) {
+	inner := &optionalCombinedStub{
+		name:              "optional_combined",
+		longRunning:       true,
+		skipSummarization: true,
+	}
+	guard := NewGuard()
+	wrapped := WrapTool(inner, guard).(*GuardedCombinedTool)
+
+	if !wrapped.LongRunning() {
+		t.Error("LongRunning should be preserved")
+	}
+	if !wrapped.SkipSummarization() {
+		t.Error("SkipSummarization should be preserved")
+	}
+}
+
+// optionalStub is a callable tool that also implements LongRunning and SkipSummarization.
+type optionalStub struct {
+	name              string
+	callCount         int
+	longRunning       bool
+	skipSummarization bool
+}
+
+func (s *optionalStub) Declaration() *tool.Declaration { return &tool.Declaration{Name: s.name} }
+func (s *optionalStub) Call(_ context.Context, _ []byte) (any, error) {
+	s.callCount++
+	return map[string]string{"ok": "true"}, nil
+}
+func (s *optionalStub) LongRunning() bool       { return s.longRunning }
+func (s *optionalStub) SkipSummarization() bool { return s.skipSummarization }
+
+// optionalStreamableStub is a streamable tool that also implements LongRunning and SkipSummarization.
+type optionalStreamableStub struct {
+	name              string
+	streamCount       int
+	longRunning       bool
+	skipSummarization bool
+}
+
+func (s *optionalStreamableStub) Declaration() *tool.Declaration {
+	return &tool.Declaration{Name: s.name}
+}
+func (s *optionalStreamableStub) StreamableCall(_ context.Context, _ []byte) (*tool.StreamReader, error) {
+	s.streamCount++
+	return tool.NewStream(1).Reader, nil
+}
+func (s *optionalStreamableStub) LongRunning() bool       { return s.longRunning }
+func (s *optionalStreamableStub) SkipSummarization() bool { return s.skipSummarization }
+
+// optionalCombinedStub implements both CallableTool and StreamableTool plus the optional interfaces.
+type optionalCombinedStub struct {
+	name              string
+	callCount         int
+	streamCount       int
+	longRunning       bool
+	skipSummarization bool
+}
+
+func (s *optionalCombinedStub) Declaration() *tool.Declaration {
+	return &tool.Declaration{Name: s.name}
+}
+func (s *optionalCombinedStub) Call(_ context.Context, _ []byte) (any, error) {
+	s.callCount++
+	return map[string]string{"ok": "true"}, nil
+}
+func (s *optionalCombinedStub) StreamableCall(_ context.Context, _ []byte) (*tool.StreamReader, error) {
+	s.streamCount++
+	return tool.NewStream(1).Reader, nil
+}
+func (s *optionalCombinedStub) LongRunning() bool       { return s.longRunning }
+func (s *optionalCombinedStub) SkipSummarization() bool { return s.skipSummarization }
+
 func TestGuardedTool_UnknownDecisionDenies(t *testing.T) {
 	inner := &stubTool{name: "exec_command", desc: "stub"}
 	guard := NewGuard(WithRules(unknownDecisionRule{}))

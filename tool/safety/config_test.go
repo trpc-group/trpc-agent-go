@@ -10,6 +10,7 @@ package safety
 
 import (
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -160,5 +161,20 @@ func TestLoadPolicyFile_EmptyFileUsesDefaults(t *testing.T) {
 	}
 	if len(p.DeniedPaths) == 0 {
 		t.Error("DeniedPaths should have been defaulted")
+	}
+}
+
+func TestLoadPolicyFile_UnknownFieldRejected(t *testing.T) {
+	// Misspelled policy keys must fail loudly instead of silently disabling
+	// a guard rule. Here "denyed_commands" is a typo of "denied_commands".
+	tmpDir := t.TempDir()
+	path := tmpDir + "/typo.yaml"
+	os.WriteFile(path, []byte("denyed_commands:\n  - rm -rf\n"), 0644)
+	_, err := LoadPolicyFile(path)
+	if err == nil {
+		t.Fatal("expected error for unknown/misspelled policy field")
+	}
+	if !strings.Contains(err.Error(), "denyed_commands") {
+		t.Errorf("error should mention the unknown field, got %q", err.Error())
 	}
 }

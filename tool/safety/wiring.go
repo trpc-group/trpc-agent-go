@@ -320,6 +320,30 @@ func (g *GuardedTool) ToolMetadata() tool.ToolMetadata {
 	return tool.MetadataOf(g.inner)
 }
 
+// LongRunning forwards to the inner tool if it implements the optional
+// LongRunner interface.
+func (g *GuardedTool) LongRunning() bool {
+	if g == nil || g.inner == nil {
+		return false
+	}
+	if lr, ok := g.inner.(interface{ LongRunning() bool }); ok {
+		return lr.LongRunning()
+	}
+	return false
+}
+
+// SkipSummarization forwards to the inner tool if it implements the
+// optional skip-summarization interface.
+func (g *GuardedTool) SkipSummarization() bool {
+	if g == nil || g.inner == nil {
+		return false
+	}
+	if ss, ok := g.inner.(interface{ SkipSummarization() bool }); ok {
+		return ss.SkipSummarization()
+	}
+	return false
+}
+
 // --- GuardedStreamableTool (streamable-only) ---
 
 // Declaration returns the wrapped inner tool's declaration.
@@ -364,6 +388,30 @@ func (g *GuardedStreamableTool) ToolMetadata() tool.ToolMetadata {
 		return tool.ToolMetadata{}
 	}
 	return tool.MetadataOf(g.inner)
+}
+
+// LongRunning forwards to the inner tool if it implements the optional
+// LongRunner interface.
+func (g *GuardedStreamableTool) LongRunning() bool {
+	if g == nil || g.inner == nil {
+		return false
+	}
+	if lr, ok := g.inner.(interface{ LongRunning() bool }); ok {
+		return lr.LongRunning()
+	}
+	return false
+}
+
+// SkipSummarization forwards to the inner tool if it implements the
+// optional skip-summarization interface.
+func (g *GuardedStreamableTool) SkipSummarization() bool {
+	if g == nil || g.inner == nil {
+		return false
+	}
+	if ss, ok := g.inner.(interface{ SkipSummarization() bool }); ok {
+		return ss.SkipSummarization()
+	}
+	return false
 }
 
 // --- GuardedCombinedTool (callable + streamable) ---
@@ -426,6 +474,30 @@ func (g *GuardedCombinedTool) ToolMetadata() tool.ToolMetadata {
 		return tool.ToolMetadata{}
 	}
 	return tool.MetadataOf(g.inner)
+}
+
+// LongRunning forwards to the inner tool if it implements the optional
+// LongRunner interface.
+func (g *GuardedCombinedTool) LongRunning() bool {
+	if g == nil || g.inner == nil {
+		return false
+	}
+	if lr, ok := g.inner.(interface{ LongRunning() bool }); ok {
+		return lr.LongRunning()
+	}
+	return false
+}
+
+// SkipSummarization forwards to the inner tool if it implements the
+// optional skip-summarization interface.
+func (g *GuardedCombinedTool) SkipSummarization() bool {
+	if g == nil || g.inner == nil {
+		return false
+	}
+	if ss, ok := g.inner.(interface{ SkipSummarization() bool }); ok {
+		return ss.SkipSummarization()
+	}
+	return false
 }
 
 // jsonCommandArgs marshals a {"command": <cmd>} JSON object. It is a

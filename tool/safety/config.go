@@ -9,6 +9,7 @@
 package safety
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"time"
@@ -68,7 +69,15 @@ func LoadPolicyFile(path string) (*PolicyFile, error) {
 		return nil, fmt.Errorf("read policy file %s: %w", path, err)
 	}
 	p := DefaultPolicy() // Start from defaults, not zero.
-	if err := yaml.Unmarshal(data, &p); err != nil {
+	if len(bytes.TrimSpace(data)) == 0 {
+		p := DefaultPolicy()
+		return &p, nil
+	}
+	// Use KnownFields(true) so misspelled policy keys (e.g. "denyed_commands")
+	// fail loudly instead of silently disabling a guard rule.
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(&p); err != nil {
 		return nil, fmt.Errorf("parse policy file %s: %w", path, err)
 	}
 	return &p, nil
