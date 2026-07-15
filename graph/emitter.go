@@ -11,6 +11,7 @@ package graph
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -227,11 +228,13 @@ func (e *eventEmitter) Context() context.Context {
 }
 
 // emitWithRecover sends an event to the channel with panic recovery.
+// It guarantees that panics from closed channels are caught and returned as errors,
+// never escaping to the caller.
 func (e *eventEmitter) emitWithRecover(evt *event.Event) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Errorf(log.PanicPrefix+" EventEmitter: recovered from panic while emitting event: %v", r)
-			err = nil // Don't propagate panic as error
+			err = fmt.Errorf("event emitter panic: %v", r)
 		}
 	}()
 
