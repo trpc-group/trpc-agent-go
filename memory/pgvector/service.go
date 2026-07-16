@@ -788,10 +788,11 @@ func (s *Service) executeKeywordSearchQuery(
 		"SELECT memory_id, app_name, user_id, memory_content, topics, "+
 			"memory_kind, event_time, participants, location, "+
 			"created_at, updated_at, "+
-			"ts_rank(search_vector, %s) AS similarity "+
+			"coalesce(ts_rank(search_vector, %s), 0) + "+
+			"coalesce(ts_rank(topic_search_vector, %s), 0) AS similarity "+
 			"FROM %s WHERE app_name = $2 AND user_id = $3 "+
-			"AND search_vector @@ %s",
-		tsQuerySQL, s.tableName, tsQuerySQL,
+			"AND (search_vector @@ %s OR topic_search_vector @@ %s)",
+		tsQuerySQL, tsQuerySQL, s.tableName, tsQuerySQL, tsQuerySQL,
 	)
 	if s.opts.softDelete {
 		searchQuery.WriteString(" AND deleted_at IS NULL")

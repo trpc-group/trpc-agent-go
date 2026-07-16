@@ -1680,13 +1680,19 @@ func TestService_InitDB_Success(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("ALTER TABLE .* ADD COLUMN IF NOT EXISTS search_vector").
 		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("ALTER TABLE .* ADD COLUMN IF NOT EXISTS topic_search_vector").
+		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("CREATE OR REPLACE FUNCTION .*_search_vector_update\\(\\) RETURNS trigger AS").
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("DROP TRIGGER IF EXISTS tsvector_update ON .*").
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").
 		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").
+		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("UPDATE .* SET search_vector = to_tsvector").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("UPDATE .* SET topic_search_vector = to_tsvector").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectClose()
 
@@ -1734,14 +1740,20 @@ func TestService_InitDB_BackfillSearchVectorErrorIsNonFatal(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("ALTER TABLE .* ADD COLUMN IF NOT EXISTS search_vector").
 		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("ALTER TABLE .* ADD COLUMN IF NOT EXISTS topic_search_vector").
+		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("CREATE OR REPLACE FUNCTION .*_search_vector_update\\(\\) RETURNS trigger AS").
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("DROP TRIGGER IF EXISTS tsvector_update ON .*").
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").
 		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").
+		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("UPDATE .* SET search_vector = to_tsvector").
 		WillReturnError(fmt.Errorf("backfill failed"))
+	mock.ExpectExec("UPDATE .* SET topic_search_vector = to_tsvector").
+		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectClose()
 
 	originalBuilder := storage.GetClientBuilder()
@@ -2427,7 +2439,8 @@ func TestExecuteKeywordSearch(t *testing.T) {
 		defer svc.Close()
 
 		now := time.Date(2024, 5, 7, 0, 0, 0, 0, time.UTC)
-		mock.ExpectQuery("ts_rank\\(search_vector, websearch_to_tsquery").
+		mock.ExpectQuery("ts_rank\\(topic_search_vector, websearch_to_tsquery.*"+
+			"topic_search_vector @@ websearch_to_tsquery").
 			WithArgs(`"museums visited"`, "test-app", "u1").
 			WillReturnRows(sqlmock.NewRows(
 				[]string{"memory_id", "app_name", "user_id", "memory_content", "topics",
@@ -2467,7 +2480,8 @@ func TestExecuteKeywordSearch(t *testing.T) {
 		mock.ExpectQuery("websearch_to_tsquery").
 			WithArgs(`"museums visited"`, "test-app", "u1").
 			WillReturnRows(sqlmock.NewRows(columns))
-		mock.ExpectQuery("ts_rank\\(search_vector, to_tsquery.*\\|.*").
+		mock.ExpectQuery("ts_rank\\(topic_search_vector, to_tsquery.*\\|.*"+
+			"topic_search_vector @@ to_tsquery").
 			WithArgs("museums I visited", "test-app", "u1").
 			WillReturnRows(sqlmock.NewRows(columns).AddRow(
 				"mem-1", "test-app", "u1", "Visited the Science Museum",
