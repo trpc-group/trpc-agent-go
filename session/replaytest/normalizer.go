@@ -295,6 +295,14 @@ func normalizeMemory(entry *memory.Entry) {
 	if !entry.UpdatedAt.IsZero() {
 		entry.UpdatedAt = entry.UpdatedAt.UTC()
 	}
+	if entry.Memory.LastUpdated != nil && !entry.Memory.LastUpdated.IsZero() {
+		t := entry.Memory.LastUpdated.UTC()
+		entry.Memory.LastUpdated = &t
+	}
+	if entry.Memory.EventTime != nil && !entry.Memory.EventTime.IsZero() {
+		t := entry.Memory.EventTime.UTC()
+		entry.Memory.EventTime = &t
+	}
 	// Stable semantic ID so backends with random IDs still compare.
 	// Content alone is not enough when two memories share text but differ topics.
 	entry.ID = memorySemanticKey(entry)

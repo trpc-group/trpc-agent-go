@@ -51,6 +51,11 @@ func (h *Harness) AddBackend(b NamedBackend) {
 
 // Run executes cases and returns an aggregated report.
 func (h *Harness) Run(ctx context.Context, cases []ReplayCase) (*Report, error) {
+	for _, tc := range cases {
+		if err := validateAllowedDiffs(tc); err != nil {
+			return nil, err
+		}
+	}
 	results := make([]CaseResult, 0, len(cases))
 	var flat []Diff
 	for _, tc := range cases {
@@ -158,6 +163,20 @@ func (h *Harness) runCase(ctx context.Context, tc ReplayCase) (CaseResult, error
 		cr.Status = StatusPassed
 	}
 	return cr, nil
+}
+
+func validateAllowedDiffs(tc ReplayCase) error {
+	for i, rule := range tc.AllowedDiffs {
+		switch rule.Rule {
+		case RuleIgnore, RuleWithinDelta, RuleNotEmpty, RuleSameType:
+			// ok
+		case "":
+			return fmt.Errorf("case %q AllowedDiffs[%d]: empty rule is not allowed; use %q explicitly", tc.Name, i, RuleIgnore)
+		default:
+			return fmt.Errorf("case %q AllowedDiffs[%d]: unknown rule %q", tc.Name, i, rule.Rule)
+		}
+	}
+	return nil
 }
 
 func hasErrorDiff(diffs []Diff) bool {

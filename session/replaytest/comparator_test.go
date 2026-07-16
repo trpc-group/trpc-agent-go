@@ -182,3 +182,109 @@ func TestComparator_BranchLocalSemantic(t *testing.T) {
 		t.Fatal("expected semantic content mismatch under branch_local")
 	}
 }
+
+func TestComparator_BranchLocalDuplicateIDOccurrence(t *testing.T) {
+	c := NewComparator()
+	tc := ReplayCase{Name: "dup", EventCompareMode: EventCompareBranchLocal}
+	// Same multiset of IDs and branch order, but first occurrence content differs.
+	ea := []event.Event{*UserEvent("same", "first-a"), *UserEvent("same", "second")}
+	ea[0].Branch, ea[1].Branch = "b1", "b1"
+	eb := []event.Event{*UserEvent("same", "first-B"), *UserEvent("same", "second")}
+	eb[0].Branch, eb[1].Branch = "b1", "b1"
+	a := &Snapshot{Backend: "a", Session: &session.Session{Events: ea}}
+	b := &Snapshot{Backend: "b", Session: &session.Session{Events: eb}}
+	n := NewNormalizer()
+	a, _ = n.Normalize(a)
+	b, _ = n.Normalize(b)
+	diffs := c.Compare(tc, a, b, InMemoryProfile(), InMemoryProfile())
+	if ErrorDiffCount(diffs) == 0 {
+		t.Fatalf("expected occurrence-aware semantic mismatch, got none: %+v", diffs)
+	}
+	var hasOcc bool
+	for _, d := range diffs {
+		if !d.Allowed && (contains(d.Path, "id=same#0") || contains(d.Path, "content")) {
+			hasOcc = true
+		}
+	}
+	if !hasOcc {
+		t.Fatalf("expected first-occurrence content path, got %+v", diffs)
+	}
+}
+
+func TestComparator_EventInvocationAndMemoryFields(t *testing.T) {
+	c := NewComparator()
+	tc := ReplayCase{Name: "fields"}
+	ea := *UserEvent("e1", "hi")
+	ea.Tag = "t1"
+	ea.RequiresCompletion = true
+	ea.FilterKey = "fk"
+	ea.Version = 2
+	ea.InvocationID = "inv-a"
+	eb := *UserEvent("e1", "hi")
+	eb.Tag = "t2"
+	eb.RequiresCompletion = false
+	eb.FilterKey = "fk2"
+	eb.Version = 3
+	eb.InvocationID = "inv-b"
+	ts := time.Unix(100, 0).UTC()
+	ts2 := time.Unix(200, 0).UTC()
+	a := &Snapshot{
+		Backend: "a",
+		Session: &session.Session{Events: []event.Event{ea}},
+		Memories: []*memory.Entry{{
+			ID: "m",
+			Memory: &memory.Memory{
+				Memory: "x", Kind: memory.KindFact, Location: "home",
+				EventTime: &ts, LastUpdated: &ts,
+			},
+		}},
+	}
+	b := &Snapshot{
+		Backend: "b",
+		Session: &session.Session{Events: []event.Event{eb}},
+		Memories: []*memory.Entry{{
+			ID: "m",
+			Memory: &memory.Memory{
+				Memory: "x", Kind: memory.KindEpisode, Location: "office",
+				EventTime: &ts2, LastUpdated: &ts2,
+			},
+		}},
+	}
+	n := NewNormalizer()
+	a, _ = n.Normalize(a)
+	b, _ = n.Normalize(b)
+	diffs := c.Compare(tc, a, b, InMemoryProfile(), InMemoryProfile())
+	wantPaths := []string{
+		"events[0].tag",
+		"events[0].requires_completion",
+		"events[0].filter_key",
+		"events[0].version",
+		"events[0].invocation_id",
+		"memories[0].kind",
+		"memories[0].location",
+		"memories[0].event_time",
+		"memories[0].last_updated",
+	}
+	got := map[string]bool{}
+	for _, d := range diffs {
+		if !d.Allowed {
+			got[d.Path] = true
+		}
+	}
+	for _, pth := range wantPaths {
+		if !got[pth] {
+			t.Fatalf("missing path %s in %+v", pth, diffs)
+		}
+	}
+}
+
+func contains(s, sub string) bool {
+	return len(s) >= len(sub) && (s == sub || len(sub) == 0 || (len(s) > 0 && (func() bool {
+		for i := 0; i+len(sub) <= len(s); i++ {
+			if s[i:i+len(sub)] == sub {
+				return true
+			}
+		}
+		return false
+	})()))
+}

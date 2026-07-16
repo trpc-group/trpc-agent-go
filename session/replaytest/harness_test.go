@@ -111,3 +111,15 @@ func TestRunCase_PreservesSkippedWhenSingleBackendRuns(t *testing.T) {
 		t.Fatalf("status=%s want skipped when any backend skipped; reason=%q", cr.Status, cr.Skipped)
 	}
 }
+
+func TestRun_RejectsEmptyAllowedRule(t *testing.T) {
+	h := NewHarness(DefaultHarnessOpts())
+	h.AddBackend(openInMemoryBackend(t))
+	_, err := h.Run(context.Background(), []ReplayCase{{
+		Name:         "bad",
+		AllowedDiffs: []AllowedDiff{{PathPattern: "x", Rule: ""}},
+	}})
+	if err == nil {
+		t.Fatal("expected validation error for empty AllowedDiff rule")
+	}
+}
