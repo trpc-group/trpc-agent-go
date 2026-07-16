@@ -40,6 +40,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/sessionroute"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/steer"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryfork"
+	"trpc.group/trpc-go/trpc-agent-go/internal/summarytrigger"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -530,6 +531,7 @@ func (r *runner) Run(
 	message model.Message,
 	runOpts ...agent.RunOption,
 ) (out <-chan *event.Event, err error) {
+	requestStartedAt := time.Now().UTC()
 	if message.Role == "" && model.HasPayload(message) {
 		log.WarnfContext(
 			ctx,
@@ -569,6 +571,13 @@ func (r *runner) Run(
 	}()
 
 	execCtx, execCancel := r.newExecutionContext(ctx, ro)
+	execCtx = summarytrigger.ContextWithRequestStart(
+		execCtx,
+		summarytrigger.RequestStart{
+			RequestID: ro.RequestID,
+			StartedAt: requestStartedAt,
+		},
+	)
 
 	// Resolve or create the session for this user and conversation.
 	sessionKey := session.Key{

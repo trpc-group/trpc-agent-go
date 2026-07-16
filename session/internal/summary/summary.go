@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/summarytrigger"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	isummaryscope "trpc.group/trpc-go/trpc-agent-go/session/internal/summaryscope"
@@ -326,7 +327,17 @@ func buildSummaryInput(
 		report = &summary.Report{}
 		reportCtx = summary.ContextWithReport(ctx, report)
 	}
-	if !shouldGenerateSummary(reportCtx, m, base, tmp, input, filterKey, force, report) {
+	if !shouldGenerateSummary(
+		reportCtx,
+		m,
+		base,
+		tmp,
+		input,
+		filterKey,
+		force,
+		prev.boundary,
+		report,
+	) {
 		return summaryInput{}, false
 	}
 	return summaryInput{
@@ -346,6 +357,7 @@ func shouldGenerateSummary(
 	input []event.Event,
 	filterKey string,
 	force bool,
+	previousBoundary *session.SummaryBoundary,
 	report *summary.Report,
 ) bool {
 	if force {
@@ -371,7 +383,34 @@ func shouldGenerateSummary(
 			checkTmp = buildFilterSession(base, triggerFilterKey, input)
 		}
 	}
+	attachRequestGapObservation(ctx, base, checkTmp, previousBoundary)
 	return ShouldSummarize(ctx, m, checkTmp)
+}
+
+func attachRequestGapObservation(
+	ctx context.Context,
+	base *session.Session,
+	checkSess *session.Session,
+	previousBoundary *session.SummaryBoundary,
+) {
+	start, ok := summarytrigger.RequestStartFromContext(ctx)
+	if !ok {
+		return
+	}
+	filterKey := isummaryscope.GetScopeFilterKey(checkSess)
+	observation := summarytrigger.ObserveRequestGap(
+		base,
+		start,
+		filterKey,
+	)
+	if previousBoundary != nil {
+		cutoff := previousBoundary.CutoffTime()
+		if !cutoff.IsZero() && !cutoff.Before(start.StartedAt) {
+			observation.Available = false
+			observation.Elapsed = 0
+		}
+	}
+	summarytrigger.SetObservation(checkSess, observation)
 }
 
 // shouldSkipBranchForkFullSessionCascade suppresses only the full-session target
