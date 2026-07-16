@@ -20,20 +20,22 @@ type ReleaseGate struct {
 	AllowNewHardFail bool
 	// ProtectedCaseIDs must never regress (no NewlyFailed and no ScoreDown).
 	ProtectedCaseIDs []string
-	// MaxRounds caps the optimization budget; 0 disables the check.
+	// MaxRounds caps the optimization round budget; 0 disables the check.
 	MaxRounds int
+	// MaxModelCalls caps the total model-call budget; 0 disables the check.
+	MaxModelCalls int
 }
 
 // Evaluate applies the gate to one run. A candidate is releasable only when the
 // engine accepted a profile; without an accepted profile there is nothing to
 // release, regardless of the score gain (which is otherwise zero-gain when the
 // candidate falls back to the baseline).
-func (g ReleaseGate) Evaluate(profileAccepted bool, totalGain float64, rounds int, delta DeltaReport) GateResult {
+func (g ReleaseGate) Evaluate(profileAccepted bool, totalGain float64, rounds, modelCalls int, delta DeltaReport) GateResult {
 	if !profileAccepted {
 		return GateResult{Released: false, Reasons: []string{"no candidate profile was accepted by the engine"}}
 	}
 	released := true
-	reasons := make([]string, 0, 4)
+	reasons := make([]string, 0, 5)
 
 	if totalGain+scoreEpsilon >= g.MinTotalGain {
 		reasons = append(reasons, fmt.Sprintf("total gain %.3f >= threshold %.3f", totalGain, g.MinTotalGain))
@@ -42,13 +44,16 @@ func (g ReleaseGate) Evaluate(profileAccepted bool, totalGain float64, rounds in
 		reasons = append(reasons, fmt.Sprintf("total gain %.3f < threshold %.3f", totalGain, g.MinTotalGain))
 	}
 
-	if delta.Summary.NewlyFailed == 0 {
+	// Count distinct cases with a newly-failed metric, so the reason text ("cases")
+	// matches what is actually measured (DeltaSummary.NewlyFailed is per-metric).
+	newlyFailedCases := newlyFailedCaseCount(delta)
+	if newlyFailedCases == 0 {
 		reasons = append(reasons, "no newly failed cases")
 	} else if g.AllowNewHardFail {
-		reasons = append(reasons, fmt.Sprintf("%d newly failed cases allowed by policy", delta.Summary.NewlyFailed))
+		reasons = append(reasons, fmt.Sprintf("%d newly failed cases allowed by policy", newlyFailedCases))
 	} else {
 		released = false
-		reasons = append(reasons, fmt.Sprintf("%d newly failed cases", delta.Summary.NewlyFailed))
+		reasons = append(reasons, fmt.Sprintf("%d newly failed cases", newlyFailedCases))
 	}
 
 	if regressed := protectedRegressions(g.ProtectedCaseIDs, delta); len(regressed) > 0 {
@@ -67,7 +72,28 @@ func (g ReleaseGate) Evaluate(profileAccepted bool, totalGain float64, rounds in
 		}
 	}
 
+	if g.MaxModelCalls > 0 {
+		if modelCalls <= g.MaxModelCalls {
+			reasons = append(reasons, fmt.Sprintf("model calls %d within budget %d", modelCalls, g.MaxModelCalls))
+		} else {
+			released = false
+			reasons = append(reasons, fmt.Sprintf("model calls %d exceed budget %d", modelCalls, g.MaxModelCalls))
+		}
+	}
+
 	return GateResult{Released: released, Reasons: reasons}
+}
+
+// newlyFailedCaseCount returns the number of distinct eval cases that have at
+// least one newly-failed metric.
+func newlyFailedCaseCount(delta DeltaReport) int {
+	seen := map[string]struct{}{}
+	for _, d := range delta.CaseDeltas {
+		if d.Kind == DeltaNewlyFailed {
+			seen[d.EvalCaseID] = struct{}{}
+		}
+	}
+	return len(seen)
 }
 
 // protectedRegressions returns the protected case IDs that regressed.

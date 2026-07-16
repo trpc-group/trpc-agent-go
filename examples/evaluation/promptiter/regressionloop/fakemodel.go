@@ -13,15 +13,46 @@ import (
 	"errors"
 	"sort"
 	"strings"
+	"sync"
 
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
+
+// callCounter tallies scripted-model invocations per role, so the report can
+// record per-role model calls (candidate/judge/backwarder/aggregator/optimizer).
+type callCounter struct {
+	mu     sync.Mutex
+	counts map[string]int
+}
+
+func newCallCounter() *callCounter {
+	return &callCounter{counts: map[string]int{}}
+}
+
+func (c *callCounter) inc(role string) {
+	c.mu.Lock()
+	c.counts[role]++
+	c.mu.Unlock()
+}
+
+// snapshot returns a copy of the per-role counts.
+func (c *callCounter) snapshot() map[string]int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make(map[string]int, len(c.counts))
+	for role, n := range c.counts {
+		out[role] = n
+	}
+	return out
+}
 
 // scriptedModel is a deterministic model that never calls a real API. It maps
 // one request to one static (or request-derived) assistant content, so the full
 // PromptIter loop can run with no API key.
 type scriptedModel struct {
 	name    string
+	role    string
+	counter *callCounter
 	respond func(*model.Request) (string, error)
 }
 
@@ -32,6 +63,9 @@ func (m *scriptedModel) GenerateContent(
 ) (<-chan *model.Response, error) {
 	if request == nil {
 		return nil, errors.New("scripted model: request is nil")
+	}
+	if m.counter != nil {
+		m.counter.inc(m.role)
 	}
 	content, err := m.respond(request)
 	if err != nil {
@@ -62,9 +96,11 @@ func (m *scriptedModel) Info() model.Info {
 
 // newStaticModel returns a scripted model that ignores the request and always
 // replies with content. Used for the backward / aggregate / optimize workers.
-func newStaticModel(name, content string) model.Model {
+func newStaticModel(counter *callCounter, role, name, content string) model.Model {
 	return &scriptedModel{
-		name: name,
+		name:    name,
+		role:    role,
+		counter: counter,
 		respond: func(*model.Request) (string, error) {
 			return content, nil
 		},
@@ -78,11 +114,13 @@ func newStaticModel(name, content string) model.Model {
 // two gold sets lets one model express every scenario — success (baseline empty,
 // optimized full), ineffective (both empty), and overfit (a case that passes at
 // baseline but not after optimization).
-func newCandidateModel(name, marker, poor string, baselineGolds, optimizedGolds map[string]string) model.Model {
+func newCandidateModel(counter *callCounter, role, name, marker, poor string, baselineGolds, optimizedGolds map[string]string) model.Model {
 	baselineTokens := sortedTokens(baselineGolds)
 	optimizedTokens := sortedTokens(optimizedGolds)
 	return &scriptedModel{
-		name: name,
+		name:    name,
+		role:    role,
+		counter: counter,
 		respond: func(request *model.Request) (string, error) {
 			if strings.Contains(systemText(request), marker) {
 				return lookupGold(userText(request), optimizedTokens, optimizedGolds, poor), nil

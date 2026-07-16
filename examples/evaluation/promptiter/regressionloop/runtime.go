@@ -60,6 +60,7 @@ const optimizedInstruction = marker + " 严格按 \"<胜队>以<比分>战胜<�
 type runtime struct {
 	engine          promptiterengine.Engine
 	targetSurfaceID string
+	calls           *callCounter
 	close           func()
 }
 
@@ -103,11 +104,12 @@ func buildRuntime(ctx context.Context, dataDir, outputDir, instruction string, s
 		return nil, fmt.Errorf("marshal optimize content: %w", err)
 	}
 
-	candidateModel := newCandidateModel("candidate-model", marker, poorRecap, sc.baselineGolds, sc.optimizedGolds)
-	judgeModel := newStaticModel("judge-model", "{}")
-	backwarderModel := newStaticModel("backwarder-model", string(backwardContent))
-	aggregatorModel := newStaticModel("aggregator-model", string(aggregateContent))
-	optimizerModel := newStaticModel("optimizer-model", string(optimizeContent))
+	calls := newCallCounter()
+	candidateModel := newCandidateModel(calls, "candidate", "candidate-model", marker, poorRecap, sc.baselineGolds, sc.optimizedGolds)
+	judgeModel := newStaticModel(calls, "judge", "judge-model", "{}")
+	backwarderModel := newStaticModel(calls, "backwarder", "backwarder-model", string(backwardContent))
+	aggregatorModel := newStaticModel(calls, "aggregator", "aggregator-model", string(aggregateContent))
+	optimizerModel := newStaticModel(calls, "optimizer", "optimizer-model", string(optimizeContent))
 
 	candidateAgent := newCandidateAgent(candidateModel, instruction)
 	judgeAgent := newJudgeAgent(judgeModel)
@@ -187,6 +189,7 @@ func buildRuntime(ctx context.Context, dataDir, outputDir, instruction string, s
 	return &runtime{
 		engine:          engineInstance,
 		targetSurfaceID: targetSurfaceID,
+		calls:           calls,
 		close: func() {
 			agentEvaluator.Close()
 			closeAll()

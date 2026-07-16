@@ -93,9 +93,17 @@ type MetricScore struct {
 
 // CandidateScore summarizes the accepted candidate.
 type CandidateScore struct {
-	OverallScore    float64 `json:"overallScore"`
-	ProfileAccepted bool    `json:"profileAccepted"`
-	AcceptedRound   int     `json:"acceptedRound,omitempty"`
+	OverallScore    float64             `json:"overallScore"`
+	ProfileAccepted bool                `json:"profileAccepted"`
+	AcceptedRound   int                 `json:"acceptedRound,omitempty"`
+	Surfaces        []SurfaceProjection `json:"surfaces,omitempty"`
+}
+
+// SurfaceProjection is a stable, minimal audit view of one optimized surface:
+// only its ID and textual value, never the whole internal profile object.
+type SurfaceProjection struct {
+	SurfaceID string `json:"surfaceId"`
+	Value     string `json:"value"`
 }
 
 // DeltaReport holds per-case deltas and their summary counts.
@@ -147,15 +155,23 @@ type GateResult struct {
 	Reasons  []string `json:"reasons"`
 }
 
-// CostReport summarizes run cost from observable counts because the engine
-// result carries no token or model-call accounting.
+// CostReport summarizes run cost. EvaluatedCases is derived from the result;
+// DurationMs and ModelCalls are measured by the caller (the pure package cannot
+// observe wall-clock or model invocations).
 type CostReport struct {
 	Rounds int `json:"rounds"`
 	// EvaluatedCases is the number of cases scored across baseline and rounds. It
-	// is not a model/teacher call count (the deterministic example issues none).
-	EvaluatedCases int    `json:"evaluatedCases"`
-	Estimated      bool   `json:"estimated"`
-	Note           string `json:"note,omitempty"`
+	// is a case count, not a model/teacher call count.
+	EvaluatedCases int `json:"evaluatedCases"`
+	// DurationMs is the caller-measured wall-clock of the run in milliseconds.
+	DurationMs int64 `json:"durationMs"`
+	// ModelCalls counts model invocations per role (candidate, judge, backwarder,
+	// aggregator, optimizer); empty when the caller does not instrument them.
+	ModelCalls map[string]int `json:"modelCalls,omitempty"`
+	// TotalModelCalls is the sum of ModelCalls.
+	TotalModelCalls int    `json:"totalModelCalls"`
+	Estimated       bool   `json:"estimated"`
+	Note            string `json:"note,omitempty"`
 }
 
 // RoundReport summarizes one optimization round.

@@ -99,8 +99,16 @@
   "cost": {
     "rounds": 2,
     "evaluatedCases": 5,
+    "durationMs": 20,
+    "modelCalls": {
+      "aggregator": 2,
+      "backwarder": 2,
+      "candidate": 5,
+      "optimizer": 2
+    },
+    "totalModelCalls": 11,
     "estimated": true,
-    "note": "evaluated case count across baseline and rounds; not model/teacher call accounting"
+    "note": "evaluated cases is a case count; model calls are counted per role, distinct from cases"
   },
   "rounds": [
     {
@@ -119,10 +127,24 @@
     }
   ],
   "config": {
+    "deterministic": true,
+    "fakeModels": {
+      "marker": "USE_STRUCTURED_RECAP",
+      "roles": [
+        "candidate",
+        "judge",
+        "backwarder",
+        "aggregator",
+        "optimizer"
+      ]
+    },
+    "gateMaxModelCalls": 100,
     "gateMinTotalGain": 0.5,
     "maxRounds": 2,
     "minScoreGain": 0.5,
     "mode": "fake",
+    "randomSeed": 0,
+    "randomSeedApplicable": false,
     "scenario": "attribution",
     "targetSurfaceIds": [
       "candidate#instruction"

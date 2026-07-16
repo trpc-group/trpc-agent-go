@@ -23,6 +23,7 @@ type gateConfig struct {
 	MinTotalGain     float64  `json:"minTotalGain"`
 	AllowNewHardFail bool     `json:"allowNewHardFail"`
 	MaxRounds        int      `json:"maxRounds"`
+	MaxModelCalls    int      `json:"maxModelCalls"`
 	ProtectedCaseIDs []string `json:"protectedCaseIds"`
 }
 
@@ -86,5 +87,6 @@ func (c *loopConfig) releaseGate() regloop.ReleaseGate {
 		AllowNewHardFail: c.Gate.AllowNewHardFail,
 		ProtectedCaseIDs: c.Gate.ProtectedCaseIDs,
 		MaxRounds:        c.Gate.MaxRounds,
+		MaxModelCalls:    c.Gate.MaxModelCalls,
 	}
 }

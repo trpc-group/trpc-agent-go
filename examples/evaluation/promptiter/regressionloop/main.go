@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"log"
 	"path/filepath"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/regloop"
 )
@@ -60,23 +61,37 @@ func run(ctx context.Context, dataDir, outputDir string, sc scenario) error {
 	}
 	defer rt.close()
 
+	start := time.Now()
 	result, err := rt.engine.Run(ctx, buildRunRequest(rt.targetSurfaceID, cfg, sc))
 	if err != nil {
 		return fmt.Errorf("run promptiter: %w", err)
 	}
+	durationMs := time.Since(start).Milliseconds()
 
 	gate := resolveGate(cfg, sc)
 	report, err := regloop.Analyze(result, regloop.Options{
 		App:  appName,
 		Mode: "fake",
 		Gate: gate,
+		Cost: regloop.CostInput{
+			DurationMs: durationMs,
+			ModelCalls: rt.calls.snapshot(),
+		},
 		Config: map[string]any{
-			"mode":             "fake",
-			"scenario":         sc.name,
-			"minScoreGain":     resolveMinScoreGain(cfg, sc),
-			"gateMinTotalGain": gate.MinTotalGain,
-			"maxRounds":        cfg.MaxRounds,
-			"targetSurfaceIds": []string{rt.targetSurfaceID},
+			"mode":                 "fake",
+			"scenario":             sc.name,
+			"deterministic":        true,
+			"randomSeed":           0,
+			"randomSeedApplicable": false,
+			"minScoreGain":         resolveMinScoreGain(cfg, sc),
+			"gateMinTotalGain":     gate.MinTotalGain,
+			"gateMaxModelCalls":    gate.MaxModelCalls,
+			"maxRounds":            cfg.MaxRounds,
+			"targetSurfaceIds":     []string{rt.targetSurfaceID},
+			"fakeModels": map[string]any{
+				"marker": marker,
+				"roles":  []string{"candidate", "judge", "backwarder", "aggregator", "optimizer"},
+			},
 		},
 	})
 	if err != nil {

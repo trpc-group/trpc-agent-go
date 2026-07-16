@@ -89,7 +89,7 @@ func scenarioByName(name string) (scenario, error) {
 			baselineGolds:       goldSubset("88-80"),
 			optimizedGolds:      goldSubset("100-90", "77-70", "3-2", "5-4", "112-108"),
 			engineMinScoreGain:  floatPtr(0.2),
-			gateOverride:        &regloop.ReleaseGate{MinTotalGain: 0.2, AllowNewHardFail: false, MaxRounds: 4},
+			gateOverride:        &regloop.ReleaseGate{MinTotalGain: 0.2, AllowNewHardFail: false, MaxRounds: 4, MaxModelCalls: 100},
 		}, nil
 	case scenarioAttribution:
 		// A dataset whose validation case declares an expected tool call and a

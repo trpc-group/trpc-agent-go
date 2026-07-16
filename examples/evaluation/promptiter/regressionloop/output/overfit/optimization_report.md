@@ -33,9 +33,20 @@ Terminal-loss severity (training signal): unknown=3
   - total gain 0.333 >= threshold 0.200
   - 1 newly failed cases
   - rounds 2 within budget 4
+  - model calls 20 within budget 100
+
+## Accepted candidate
+
+- `candidate#instruction`: USE_STRUCTURED_RECAP 严格按 "<胜队>以<比分>战胜<负队>。" 的格式输出简体中文战报，只输出一句话。
 
 ## Cost (estimated)
 
 - rounds: 2
 - evaluated cases: 15
-- note: evaluated case count across baseline and rounds; not model/teacher call accounting
+- duration: 24 ms
+- model calls: 20
+  - aggregator: 1
+  - backwarder: 3
+  - candidate: 15
+  - optimizer: 1
+- note: evaluated cases is a case count; model calls are counted per role, distinct from cases

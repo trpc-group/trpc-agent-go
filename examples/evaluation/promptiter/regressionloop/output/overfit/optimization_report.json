@@ -48,7 +48,13 @@
   "candidate": {
     "overallScore": 0.6666666666666666,
     "profileAccepted": true,
-    "acceptedRound": 1
+    "acceptedRound": 1,
+    "surfaces": [
+      {
+        "surfaceId": "candidate#instruction",
+        "value": "USE_STRUCTURED_RECAP 严格按 \"\u003c胜队\u003e以\u003c比分\u003e战胜\u003c负队\u003e。\" 的格式输出简体中文战报，只输出一句话。"
+      }
+    ]
   },
   "delta": {
     "caseDeltas": [
@@ -120,14 +126,23 @@
     "reasons": [
       "total gain 0.333 \u003e= threshold 0.200",
       "1 newly failed cases",
-      "rounds 2 within budget 4"
+      "rounds 2 within budget 4",
+      "model calls 20 within budget 100"
     ]
   },
   "cost": {
     "rounds": 2,
     "evaluatedCases": 15,
+    "durationMs": 24,
+    "modelCalls": {
+      "aggregator": 1,
+      "backwarder": 3,
+      "candidate": 15,
+      "optimizer": 1
+    },
+    "totalModelCalls": 20,
     "estimated": true,
-    "note": "evaluated case count across baseline and rounds; not model/teacher call accounting"
+    "note": "evaluated cases is a case count; model calls are counted per role, distinct from cases"
   },
   "rounds": [
     {
@@ -146,10 +161,24 @@
     }
   ],
   "config": {
+    "deterministic": true,
+    "fakeModels": {
+      "marker": "USE_STRUCTURED_RECAP",
+      "roles": [
+        "candidate",
+        "judge",
+        "backwarder",
+        "aggregator",
+        "optimizer"
+      ]
+    },
+    "gateMaxModelCalls": 100,
     "gateMinTotalGain": 0.2,
     "maxRounds": 2,
     "minScoreGain": 0.2,
     "mode": "fake",
+    "randomSeed": 0,
+    "randomSeedApplicable": false,
     "scenario": "overfit",
     "targetSurfaceIds": [
       "candidate#instruction"

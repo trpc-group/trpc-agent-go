@@ -113,8 +113,12 @@ report shows both `responseMismatch` and `toolError` in one live pass.
 Format/knowledge categories activate from the metric reason text; the classifier
 itself is metric-agnostic and unit-tested across all six categories.
 
-## Cost note
+## Cost & audit note
 
-The engine `RunResult` carries no token accounting, so the report's cost is an
-**estimate** derived from observable counts (rounds × evaluated cases) and is
-labelled `"estimated": true`.
+The report's `cost` records observable counts: wall-clock `durationMs`, per-role
+`modelCalls` (candidate/judge/backwarder/aggregator/optimizer — judge is 0 since
+no `llmJudge` metric is configured), and `evaluatedCases` (a case count, kept
+distinct from model calls). The engine carries no token accounting, so `cost` is
+labelled `"estimated": true`. The report also records the accepted candidate's
+surface projection, and the run config (`deterministic`, `randomSeed`, fake-model
+summary) for reproducibility. The gate can enforce a `maxModelCalls` budget.

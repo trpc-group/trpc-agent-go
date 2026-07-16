@@ -31,7 +31,7 @@ func TestCandidateSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
-	candidateModel := newCandidateModel("candidate-model", marker, poorRecap, map[string]string{}, golds)
+	candidateModel := newCandidateModel(nil, "candidate", "candidate-model", marker, poorRecap, map[string]string{}, golds)
 	candidateAgent := newCandidateAgent(candidateModel, cfg.BaselineInstruction)
 	r := runner.NewRunner(appName, candidateAgent)
 	defer r.Close()
@@ -91,7 +91,7 @@ func TestEvaluatorSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
-	candidateModel := newCandidateModel("candidate-model", marker, poorRecap, map[string]string{}, golds)
+	candidateModel := newCandidateModel(nil, "candidate", "candidate-model", marker, poorRecap, map[string]string{}, golds)
 	candidateAgent := newCandidateAgent(candidateModel, cfg.BaselineInstruction)
 	candidateRunner := runner.NewRunner(appName, candidateAgent)
 	defer candidateRunner.Close()

@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strings"
 
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/engine"
 )
 
@@ -30,6 +31,17 @@ type Options struct {
 	Gate ReleaseGate
 	// Config echoes run configuration into the report for auditing.
 	Config map[string]any
+	// Cost carries runtime cost facts the pure package cannot observe.
+	Cost CostInput
+}
+
+// CostInput carries caller-measured cost facts (wall-clock, model calls) that
+// the pure package cannot derive from a RunResult.
+type CostInput struct {
+	// DurationMs is the measured wall-clock of the run in milliseconds.
+	DurationMs int64
+	// ModelCalls counts model invocations per role.
+	ModelCalls map[string]int
 }
 
 // Analyze turns one PromptIter engine RunResult into a full optimization report:
@@ -49,7 +61,8 @@ func Analyze(result *engine.RunResult, opts Options) (*Report, error) {
 	attribution.BySeverity = severityCounts(result.Rounds)
 
 	totalGain := candidate.OverallScore - baseline.OverallScore
-	gate := opts.Gate.Evaluate(acceptedRound > 0, totalGain, len(result.Rounds), delta)
+	modelCalls := totalModelCalls(opts.Cost.ModelCalls)
+	gate := opts.Gate.Evaluate(acceptedRound > 0, totalGain, len(result.Rounds), modelCalls, delta)
 	// Fail closed: a release can only be trusted when the run finished
 	// successfully and both phases carry comparable per-case data. A still-running
 	// or failed run may retain an accepted round, and a slimmed RunResult that
@@ -66,14 +79,42 @@ func Analyze(result *engine.RunResult, opts Options) (*Report, error) {
 			OverallScore:    candidate.OverallScore,
 			ProfileAccepted: acceptedRound > 0,
 			AcceptedRound:   acceptedRound,
+			Surfaces:        candidateSurfaces(result.AcceptedProfile),
 		},
 		Delta:              delta,
 		FailureAttribution: attribution,
 		Gate:               gate,
-		Cost:               costReport(result),
+		Cost:               costReport(result, opts.Cost),
 		Rounds:             roundReports(result),
 		Config:             opts.Config,
 	}, nil
+}
+
+// candidateSurfaces projects the accepted profile down to a stable audit view:
+// each overridden surface's ID and textual value only.
+func candidateSurfaces(profile *promptiter.Profile) []SurfaceProjection {
+	if profile == nil {
+		return nil
+	}
+	surfaces := make([]SurfaceProjection, 0, len(profile.Overrides))
+	for _, override := range profile.Overrides {
+		if override.Value.Text != nil {
+			surfaces = append(surfaces, SurfaceProjection{SurfaceID: override.SurfaceID, Value: *override.Value.Text})
+		}
+	}
+	if len(surfaces) == 0 {
+		return nil
+	}
+	return surfaces
+}
+
+// totalModelCalls sums per-role model call counts.
+func totalModelCalls(calls map[string]int) int {
+	total := 0
+	for _, n := range calls {
+		total += n
+	}
+	return total
 }
 
 // applyReleasePreconditions forces the gate closed when the result cannot
@@ -108,20 +149,23 @@ func hasComparableCases(result *engine.EvaluationResult) bool {
 	return false
 }
 
-// costReport summarizes cost from observable counts; the engine result carries
-// no token or call accounting, so this reports the number of evaluated cases
-// (not teacher/model calls, which the deterministic example never issues).
-func costReport(result *engine.RunResult) CostReport {
+// costReport combines result-derived case counts with caller-measured runtime
+// cost (wall-clock and per-role model calls). EvaluatedCases is a case count,
+// distinct from model calls.
+func costReport(result *engine.RunResult, cost CostInput) CostReport {
 	rounds := len(result.Rounds)
 	evaluatedCases := caseCount(result.BaselineValidation)
 	for _, round := range result.Rounds {
 		evaluatedCases += caseCount(round.Train) + caseCount(round.Validation)
 	}
 	return CostReport{
-		Rounds:         rounds,
-		EvaluatedCases: evaluatedCases,
-		Estimated:      true,
-		Note:           "evaluated case count across baseline and rounds; not model/teacher call accounting",
+		Rounds:          rounds,
+		EvaluatedCases:  evaluatedCases,
+		DurationMs:      cost.DurationMs,
+		ModelCalls:      cost.ModelCalls,
+		TotalModelCalls: totalModelCalls(cost.ModelCalls),
+		Estimated:       true,
+		Note:            "evaluated cases is a case count; model calls are counted per role, distinct from cases",
 	}
 }
 
@@ -205,9 +249,21 @@ func (r *Report) Markdown() string {
 	}
 	b.WriteString("\n")
 
+	if len(r.Candidate.Surfaces) > 0 {
+		fmt.Fprintf(&b, "## Accepted candidate\n\n")
+		for _, s := range r.Candidate.Surfaces {
+			fmt.Fprintf(&b, "- `%s`: %s\n", s.SurfaceID, s.Value)
+		}
+		b.WriteString("\n")
+	}
+
 	fmt.Fprintf(&b, "## Cost (estimated)\n\n")
-	fmt.Fprintf(&b, "- rounds: %d\n- evaluated cases: %d\n- note: %s\n",
-		r.Cost.Rounds, r.Cost.EvaluatedCases, r.Cost.Note)
+	fmt.Fprintf(&b, "- rounds: %d\n- evaluated cases: %d\n- duration: %d ms\n- model calls: %d\n",
+		r.Cost.Rounds, r.Cost.EvaluatedCases, r.Cost.DurationMs, r.Cost.TotalModelCalls)
+	for _, role := range sortedStringKeys(r.Cost.ModelCalls) {
+		fmt.Fprintf(&b, "  - %s: %d\n", role, r.Cost.ModelCalls[role])
+	}
+	fmt.Fprintf(&b, "- note: %s\n", r.Cost.Note)
 	return b.String()
 }
 

@@ -37,4 +37,10 @@ Terminal-loss severity (training signal): unknown=4
 
 - rounds: 2
 - evaluated cases: 5
-- note: evaluated case count across baseline and rounds; not model/teacher call accounting
+- duration: 20 ms
+- model calls: 11
+  - aggregator: 2
+  - backwarder: 2
+  - candidate: 5
+  - optimizer: 2
+- note: evaluated cases is a case count; model calls are counted per role, distinct from cases

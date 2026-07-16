@@ -73,6 +73,37 @@ func TestResolveThresholdsUseConfigByDefault(t *testing.T) {
 	}
 }
 
+// TestRuntimeCountsModelCallsPerRole verifies the audit call accounting: the
+// worker roles are invoked and counted, and judge is never called (no llmJudge
+// metric), so the report's cost data is factual.
+func TestRuntimeCountsModelCallsPerRole(t *testing.T) {
+	sc, err := scenarioByName(scenarioSuccess)
+	if err != nil {
+		t.Fatalf("scenario: %v", err)
+	}
+	cfg, err := loadLoopConfig("./data")
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	rt, err := buildRuntime(context.Background(), "./data", t.TempDir(), cfg.BaselineInstruction, sc)
+	if err != nil {
+		t.Fatalf("build runtime: %v", err)
+	}
+	defer rt.close()
+	if _, err := rt.engine.Run(context.Background(), buildRunRequest(rt.targetSurfaceID, cfg, sc)); err != nil {
+		t.Fatalf("engine run: %v", err)
+	}
+	calls := rt.calls.snapshot()
+	for _, role := range []string{"candidate", "backwarder", "aggregator", "optimizer"} {
+		if calls[role] == 0 {
+			t.Fatalf("%s calls must be counted, got %v", role, calls)
+		}
+	}
+	if calls["judge"] != 0 {
+		t.Fatalf("judge is never invoked (no llmJudge metric), got %d", calls["judge"])
+	}
+}
+
 // TestScenarioSuccess: optimization fixes every case -> accepted and released.
 func TestScenarioSuccess(t *testing.T) {
 	report := analyzeScenario(t, scenarioSuccess)
