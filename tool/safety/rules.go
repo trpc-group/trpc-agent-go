@@ -47,6 +47,7 @@ var systemPathPatterns = []string{
 
 // Scan evaluates the input against policy-denied commands and paths.
 // When no policy entries are configured it falls back to built-in patterns.
+// Scan returns matching deny findings for destructive commands or sensitive paths.
 func (r *DangerousCommandRule) Scan(_ context.Context, input ScanInput, policy PolicyFile) []Finding {
 	text := normalizedScanText(input)
 	var findings []Finding
@@ -360,7 +361,7 @@ var infiniteLoopPatterns = []string{
 	":(){ :|:&};",
 }
 
-var largeSleepRe = regexp.MustCompile(`sleep\s+(\d+)`)
+var largeSleepRe = regexp.MustCompile(`sleep\s+([^\s;&|]+)`)
 
 // Scan detects fork bombs, infinite loops, large sleep values, excessive timeouts,
 // and output redirection patterns.
@@ -387,6 +388,7 @@ func (r *ResourceAbuseRule) Scan(_ context.Context, input ScanInput, policy Poli
 	// Malformed or overflowing values also produce a finding (fail-closed).
 	for _, m := range largeSleepRe.FindAllStringSubmatch(text, -1) {
 		if len(m) >= 2 {
+			sleepValue := m[1]
 			val, err := strconv.Atoi(m[1])
 			if err != nil {
 				// Malformed or overflowing sleep value — flag for review.
@@ -395,8 +397,8 @@ func (r *ResourceAbuseRule) Scan(_ context.Context, input ScanInput, policy Poli
 					RuleName:       r.Name(),
 					RiskLevel:      RiskLevelMedium,
 					Decision:       DecisionAsk,
-					Evidence:       "sleep " + m[1] + " (unparseable)",
-					Recommendation: "The sleep value could not be parsed; review and clarify the duration.",
+					Evidence:       "sleep " + sleepValue + " (unparsable)",
+					Recommendation: "Review the sleep value \"" + sleepValue + "\" and clarify the duration before execution.",
 				})
 				return findings
 			}
@@ -406,8 +408,8 @@ func (r *ResourceAbuseRule) Scan(_ context.Context, input ScanInput, policy Poli
 					RuleName:       r.Name(),
 					RiskLevel:      RiskLevelMedium,
 					Decision:       DecisionAsk,
-					Evidence:       "sleep " + m[1],
-					Recommendation: "Reduce the sleep duration or request human review.",
+					Evidence:       "sleep " + sleepValue,
+					Recommendation: "Reduce the sleep duration \"" + sleepValue + "\" or request human review.",
 				})
 				return findings
 			}

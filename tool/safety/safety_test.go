@@ -10,6 +10,7 @@ package safety
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -421,6 +422,53 @@ func TestScan_ResourceAbuse_LargeSleep(t *testing.T) {
 		}
 	}
 	assert.True(t, found, "expected finding with rule ID R-RES-001")
+}
+
+// TestScan_ResourceAbuse_UnparsableSleep verifies that malformed or overflowing
+// sleep values fail closed and trigger ask.
+func TestScan_ResourceAbuse_UnparsableSleep(t *testing.T) {
+	policy := DefaultPolicy()
+	scanner := NewScanner(policy)
+
+	tests := []struct {
+		name     string
+		command  string
+		evidence string
+	}{
+		{
+			name:     "malformed",
+			command:  "sleep abc",
+			evidence: "sleep abc (unparsable)",
+		},
+		{
+			name:     "overflow",
+			command:  "sleep 999999999999999999999999",
+			evidence: "sleep 999999999999999999999999 (unparsable)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := scanner.Scan(context.Background(), ScanInput{
+				Command:  tt.command,
+				ToolName: "workspace_exec",
+				Backend:  "workspaceexec",
+			})
+
+			assert.Equal(t, DecisionAsk, result.Decision)
+			found := false
+			for _, f := range result.Findings {
+				if f.RuleID == "R-RES-001" {
+					found = true
+					assert.Equal(t, DecisionAsk, f.Decision)
+					assert.Equal(t, tt.evidence, f.Evidence)
+					assert.Contains(t, f.Recommendation, strings.TrimPrefix(strings.TrimSuffix(tt.evidence, " (unparsable)"), "sleep "))
+					break
+				}
+			}
+			assert.True(t, found, "expected finding with rule ID R-RES-001")
+		})
+	}
 }
 
 // TestScan_CodeBlock verifies scanning of code blocks.
