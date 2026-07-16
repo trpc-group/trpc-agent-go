@@ -9,6 +9,7 @@
 package extractor
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -112,6 +113,143 @@ func TestConversationSourceText(t *testing.T) {
 	}
 
 	assert.Equal(t, "user text\nassistant part\n", conversationSourceText(messages))
+}
+
+func TestQualifyOperationsWithGroundedExamples(t *testing.T) {
+	t.Parallel()
+
+	operations := []*Operation{
+		{
+			Type:   OperationAdd,
+			Memory: "Has been relying on food delivery services lately due to being busy.",
+			Topics: []string{"food delivery", "busy schedule"},
+		},
+		{
+			Type:   OperationAdd,
+			Memory: "Discovered Fresh Fusion, which offers pre-made meals.",
+			Topics: []string{"Fresh Fusion", "food delivery", "pre-made meals"},
+		},
+	}
+	source := "I've been relying on food delivery services, like this new one " +
+		"I found called Fresh Fusion - they have great pre-made meals."
+	assert.True(t, sourceLinksExample(source, "food delivery", "Fresh Fusion"))
+
+	qualifyOperationsWithGroundedTopics(source, operations)
+
+	assert.Equal(t,
+		"Has been relying on food delivery services lately due to being busy "+
+			"(including Fresh Fusion).",
+		operations[0].Memory,
+	)
+	assert.Equal(t,
+		"food delivery: Discovered Fresh Fusion, which offers pre-made meals.",
+		operations[1].Memory,
+	)
+	assert.Contains(t, operations[0].Topics, "Fresh Fusion")
+	qualifyOperationsWithGroundedTopics(source, operations)
+	assert.Equal(t, 1, strings.Count(operations[0].Memory, "including Fresh Fusion"))
+	assert.Equal(t, 1, strings.Count(strings.Join(operations[0].Topics, ","), "Fresh Fusion"))
+}
+
+func TestQualifyOperationsRequiresExplicitExampleLink(t *testing.T) {
+	t.Parallel()
+
+	operations := []*Operation{
+		{
+			Type:   OperationAdd,
+			Memory: "Has been relying on food delivery services lately.",
+			Topics: []string{"food delivery", "busy schedule"},
+		},
+		{
+			Type:   OperationAdd,
+			Memory: "Had Domino's Pizza three times last week.",
+			Topics: []string{"Domino's Pizza", "food delivery"},
+		},
+	}
+	source := "I've been relying on food delivery services lately. " +
+		"I had Domino's Pizza three times last week."
+
+	qualifyOperationsWithGroundedTopics(source, operations)
+
+	assert.Equal(t,
+		"food delivery: Had Domino's Pizza three times last week.",
+		operations[1].Memory,
+	)
+}
+
+func TestQualifyOperationsRejectsExampleCueAcrossSentences(t *testing.T) {
+	t.Parallel()
+
+	operations := []*Operation{
+		{
+			Type:   OperationAdd,
+			Memory: "Uses food delivery services.",
+			Topics: []string{"food delivery"},
+		},
+		{
+			Type:   OperationAdd,
+			Memory: "Discovered Fresh Fusion.",
+			Topics: []string{"Fresh Fusion", "food delivery"},
+		},
+	}
+	source := "Uses food delivery, like Uber Eats. Later discovered Fresh Fusion."
+
+	qualifyOperationsWithGroundedTopics(source, operations)
+
+	assert.Equal(t,
+		"food delivery: Discovered Fresh Fusion.",
+		operations[1].Memory,
+	)
+}
+
+func TestQualifyOperationsWithGroundedExamplesPreservesLanguage(t *testing.T) {
+	t.Parallel()
+
+	operations := []*Operation{
+		{
+			Type:   OperationAdd,
+			Memory: "最近因为忙一直依赖外卖服务。",
+			Topics: []string{"外卖"},
+		},
+		{
+			Type:   OperationAdd,
+			Memory: "发现了美团。",
+			Topics: []string{"美团", "外卖"},
+		},
+	}
+	source := "最近因为忙一直依赖外卖服务，比如新发现的美团。"
+	assert.True(t, sourceLinksExample(source, "外卖", "美团"))
+
+	qualifyOperationsWithGroundedTopics(source, operations)
+
+	assert.Equal(t,
+		"最近因为忙一直依赖外卖服务（包括美团）。",
+		operations[0].Memory,
+	)
+	assert.Equal(t,
+		"外卖: 发现了美团。",
+		operations[1].Memory,
+	)
+}
+
+func TestSourceLinksExampleInReverseOrder(t *testing.T) {
+	t.Parallel()
+
+	assert.True(t, sourceLinksExample(
+		"Fresh Fusion is one of the food delivery services I rely on.",
+		"food delivery", "Fresh Fusion",
+	))
+}
+
+func TestAppendGroundedExamplesKeepsLatinPunctuation(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t,
+		"Prefiere cafeterías (including Café Roma).",
+		appendGroundedExamples(
+			"Prefiere cafeterías.", []string{"Café Roma"},
+		),
+	)
 }
 
 func TestContainsTopicUsesWordBoundaries(t *testing.T) {
