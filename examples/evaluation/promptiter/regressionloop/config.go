@@ -67,6 +67,14 @@ func loadLoopConfig(dataDir string) (*loopConfig, error) {
 	if cfg.Gate.MinTotalGain < 0 {
 		return nil, fmt.Errorf("promptiter config: gate.minTotalGain must be >= 0")
 	}
+	// Budgets use 0 = disabled; a negative value is a misconfiguration, not a
+	// silent disable.
+	if cfg.Gate.MaxRounds < 0 {
+		return nil, fmt.Errorf("promptiter config: gate.maxRounds must be >= 0 (0 disables)")
+	}
+	if cfg.Gate.MaxModelCalls < 0 {
+		return nil, fmt.Errorf("promptiter config: gate.maxModelCalls must be >= 0 (0 disables)")
+	}
 	instrPath := filepath.Join(dataDir, appName, "baseline.instruction.txt")
 	instr, err := os.ReadFile(instrPath)
 	if err != nil {

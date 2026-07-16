@@ -61,8 +61,16 @@ func Analyze(result *engine.RunResult, opts Options) (*Report, error) {
 	attribution.BySeverity = severityCounts(result.Rounds)
 
 	totalGain := candidate.OverallScore - baseline.OverallScore
-	modelCalls := totalModelCalls(opts.Cost.ModelCalls)
-	gate := opts.Gate.Evaluate(acceptedRound > 0, totalGain, len(result.Rounds), modelCalls, delta)
+	gate := opts.Gate.Evaluate(GateInput{
+		ProfileAccepted: acceptedRound > 0,
+		TotalGain:       totalGain,
+		Rounds:          len(result.Rounds),
+		ModelCalls:      totalModelCalls(opts.Cost.ModelCalls),
+		// A nil ModelCalls map means the caller did not instrument calls, so the
+		// count is unknown (not a real zero) and a call budget must fail closed.
+		ModelCallsKnown: opts.Cost.ModelCalls != nil,
+		Delta:           delta,
+	})
 	// Fail closed: a release can only be trusted when the run finished
 	// successfully and both phases carry comparable per-case data. A still-running
 	// or failed run may retain an accepted round, and a slimmed RunResult that
@@ -182,8 +190,18 @@ func caseCount(result *engine.EvaluationResult) int {
 
 func roundReports(result *engine.RunResult) []RoundReport {
 	reports := make([]RoundReport, 0, len(result.Rounds))
+	// Each round's delta is measured against the last accepted validation at the
+	// round's start; the first round compares against baseline. A rejected round
+	// does NOT advance this baseline, so the next round still compares against the
+	// last version actually accepted.
+	baseline := result.BaselineValidation
 	for _, round := range result.Rounds {
-		report := RoundReport{Round: round.Round}
+		report := RoundReport{
+			Round:          round.Round,
+			OutputSurfaces: candidateSurfaces(round.OutputProfile),
+			Validation:     phaseScore(round.Validation),
+			Delta:          ComputeDelta(baseline, round.Validation),
+		}
 		if round.Validation != nil {
 			report.ValidationScore = round.Validation.OverallScore
 		}
@@ -191,6 +209,9 @@ func roundReports(result *engine.RunResult) []RoundReport {
 			report.Accepted = round.Acceptance.Accepted
 			report.ScoreDelta = round.Acceptance.ScoreDelta
 			report.Reason = round.Acceptance.Reason
+			if round.Acceptance.Accepted && round.Validation != nil {
+				baseline = round.Validation
+			}
 		}
 		reports = append(reports, report)
 	}

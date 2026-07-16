@@ -26,27 +26,44 @@ type ReleaseGate struct {
 	MaxModelCalls int
 }
 
+// GateInput carries everything the gate needs to decide on one run.
+type GateInput struct {
+	// ProfileAccepted is whether the engine accepted a candidate profile.
+	ProfileAccepted bool
+	// TotalGain is the validation overall-score gain vs baseline.
+	TotalGain float64
+	// Rounds is the number of optimization rounds executed.
+	Rounds int
+	// ModelCalls is the total model-call count; only trusted when ModelCallsKnown.
+	ModelCalls int
+	// ModelCallsKnown is false when the caller did not instrument model calls; a
+	// call budget then cannot be verified and the gate fails closed.
+	ModelCallsKnown bool
+	// Delta is the baseline-vs-candidate per-case delta.
+	Delta DeltaReport
+}
+
 // Evaluate applies the gate to one run. A candidate is releasable only when the
 // engine accepted a profile; without an accepted profile there is nothing to
 // release, regardless of the score gain (which is otherwise zero-gain when the
 // candidate falls back to the baseline).
-func (g ReleaseGate) Evaluate(profileAccepted bool, totalGain float64, rounds, modelCalls int, delta DeltaReport) GateResult {
-	if !profileAccepted {
+func (g ReleaseGate) Evaluate(in GateInput) GateResult {
+	if !in.ProfileAccepted {
 		return GateResult{Released: false, Reasons: []string{"no candidate profile was accepted by the engine"}}
 	}
 	released := true
 	reasons := make([]string, 0, 5)
 
-	if totalGain+scoreEpsilon >= g.MinTotalGain {
-		reasons = append(reasons, fmt.Sprintf("total gain %.3f >= threshold %.3f", totalGain, g.MinTotalGain))
+	if in.TotalGain+scoreEpsilon >= g.MinTotalGain {
+		reasons = append(reasons, fmt.Sprintf("total gain %.3f >= threshold %.3f", in.TotalGain, g.MinTotalGain))
 	} else {
 		released = false
-		reasons = append(reasons, fmt.Sprintf("total gain %.3f < threshold %.3f", totalGain, g.MinTotalGain))
+		reasons = append(reasons, fmt.Sprintf("total gain %.3f < threshold %.3f", in.TotalGain, g.MinTotalGain))
 	}
 
 	// Count distinct cases with a newly-failed metric, so the reason text ("cases")
 	// matches what is actually measured (DeltaSummary.NewlyFailed is per-metric).
-	newlyFailedCases := newlyFailedCaseCount(delta)
+	newlyFailedCases := newlyFailedCaseCount(in.Delta)
 	if newlyFailedCases == 0 {
 		reasons = append(reasons, "no newly failed cases")
 	} else if g.AllowNewHardFail {
@@ -56,7 +73,7 @@ func (g ReleaseGate) Evaluate(profileAccepted bool, totalGain float64, rounds, m
 		reasons = append(reasons, fmt.Sprintf("%d newly failed cases", newlyFailedCases))
 	}
 
-	if regressed := protectedRegressions(g.ProtectedCaseIDs, delta); len(regressed) > 0 {
+	if regressed := protectedRegressions(g.ProtectedCaseIDs, in.Delta); len(regressed) > 0 {
 		released = false
 		reasons = append(reasons, fmt.Sprintf("protected cases regressed: %v", regressed))
 	} else if len(g.ProtectedCaseIDs) > 0 {
@@ -64,20 +81,25 @@ func (g ReleaseGate) Evaluate(profileAccepted bool, totalGain float64, rounds, m
 	}
 
 	if g.MaxRounds > 0 {
-		if rounds <= g.MaxRounds {
-			reasons = append(reasons, fmt.Sprintf("rounds %d within budget %d", rounds, g.MaxRounds))
+		if in.Rounds <= g.MaxRounds {
+			reasons = append(reasons, fmt.Sprintf("rounds %d within budget %d", in.Rounds, g.MaxRounds))
 		} else {
 			released = false
-			reasons = append(reasons, fmt.Sprintf("rounds %d exceed budget %d", rounds, g.MaxRounds))
+			reasons = append(reasons, fmt.Sprintf("rounds %d exceed budget %d", in.Rounds, g.MaxRounds))
 		}
 	}
 
 	if g.MaxModelCalls > 0 {
-		if modelCalls <= g.MaxModelCalls {
-			reasons = append(reasons, fmt.Sprintf("model calls %d within budget %d", modelCalls, g.MaxModelCalls))
-		} else {
+		switch {
+		case !in.ModelCallsKnown:
+			// Fail closed: a call budget cannot be verified without a count.
 			released = false
-			reasons = append(reasons, fmt.Sprintf("model calls %d exceed budget %d", modelCalls, g.MaxModelCalls))
+			reasons = append(reasons, "model call count unavailable; cannot verify call budget")
+		case in.ModelCalls <= g.MaxModelCalls:
+			reasons = append(reasons, fmt.Sprintf("model calls %d within budget %d", in.ModelCalls, g.MaxModelCalls))
+		default:
+			released = false
+			reasons = append(reasons, fmt.Sprintf("model calls %d exceed budget %d", in.ModelCalls, g.MaxModelCalls))
 		}
 	}
 

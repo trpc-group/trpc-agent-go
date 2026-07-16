@@ -43,7 +43,7 @@ Terminal-loss severity (training signal): unknown=3
 
 - rounds: 1
 - evaluated cases: 9
-- duration: 43 ms
+- duration: 0 ms
 - model calls: 14
   - aggregator: 1
   - backwarder: 3

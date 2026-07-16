@@ -9,6 +9,7 @@
 package regloop
 
 import (
+	"strings"
 	"testing"
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
@@ -57,6 +58,63 @@ func TestAttributeCountsOnlyFailures(t *testing.T) {
 	}
 	if len(got.Details) != 2 {
 		t.Fatalf("details=%d want 2 (passed case excluded)", len(got.Details))
+	}
+}
+
+func TestAttributeEmptyReasonGetsFallback(t *testing.T) {
+	result := evalR(0.0, caseR("c1", metricR("final_response_avg_score", 0, status.EvalStatusFailed, "")))
+	got := Attribute(result)
+	if len(got.Details) != 1 {
+		t.Fatalf("want 1 detail, got %d", len(got.Details))
+	}
+	if strings.TrimSpace(got.Details[0].Reason) == "" {
+		t.Fatalf("empty evaluator reason must get a non-empty fallback reason")
+	}
+}
+
+// TestAttributionBenchmarkAccuracy runs the classifier over independent,
+// varied-phrasing evaluator reasons (Chinese/English synonyms, conflicting
+// signals, unknown cases) and asserts a proxy accuracy >= 0.75. It deliberately
+// includes ambiguous cases the heuristic gets wrong, so the score is honest.
+func TestAttributionBenchmarkAccuracy(t *testing.T) {
+	cases := []struct {
+		metric string
+		reason string
+		want   FailureCategory
+	}{
+		{"final_response_avg_score", "final response does not match the expected answer", CategoryResponseMismatch},
+		{"final_response_avg_score", "生成的回复与参考答案不一致", CategoryResponseMismatch},
+		{"rouge_zh_avg", "低 ROUGE 重叠，覆盖不足", CategoryResponseMismatch},
+		{"final_response_avg_score", "output is not valid JSON", CategoryFormatError},
+		{"final_response_avg_score", "回复包含 markdown，应输出纯文本", CategoryFormatError},
+		{"xml_structure", "XML 结构缺少必需字段", CategoryFormatError},
+		{"tool_trajectory_avg_score", "expected a tool call but none was made", CategoryToolError},
+		{"tool_trajectory_avg_score", "agent 未调用工具就直接作答", CategoryToolError},
+		{"tool_trajectory_avg_score", "called the wrong tool for this step", CategoryToolError},
+		{"tool_trajectory_avg_score", "工具参数 city 传错了", CategoryToolArgError},
+		{"tool_trajectory_avg_score", "tool invoked with an invalid argument value", CategoryToolArgError},
+		{"tool_trajectory_avg_score", "转交给了错误的下游节点", CategoryRouteError},
+		{"tool_trajectory_avg_score", "request was misrouted to the summary node", CategoryRouteError},
+		{"route_check", "wrong agent handled the query", CategoryRouteError},
+		{"grounding_avg", "答案缺乏检索到的知识支撑", CategoryKnowledgeRecall},
+		{"hallucination_avg", "response is unsupported by the retrieved context", CategoryKnowledgeRecall},
+		{"final_response_avg_score", "模型凭空编造了事实", CategoryKnowledgeRecall},
+		{"custom_metric", "unexpected internal error during scoring", CategoryOther},
+		{"custom_metric", "评测超时", CategoryOther},
+		// Deliberately ambiguous (heuristic likely misclassifies these):
+		{"final_response_avg_score", "response format looks fine but the number is wrong", CategoryResponseMismatch},
+		{"tool_trajectory_avg_score", "参数没问题，但工具选错了", CategoryToolError},
+	}
+	correct := 0
+	for _, c := range cases {
+		if categorize(c.metric, c.reason) == c.want {
+			correct++
+		}
+	}
+	acc := float64(correct) / float64(len(cases))
+	t.Logf("attribution proxy accuracy: %.2f (%d/%d)", acc, correct, len(cases))
+	if acc < 0.75 {
+		t.Fatalf("attribution proxy accuracy %.2f < 0.75", acc)
 	}
 }
 

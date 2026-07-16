@@ -99,7 +99,7 @@
   "cost": {
     "rounds": 2,
     "evaluatedCases": 5,
-    "durationMs": 20,
+    "durationMs": 0,
     "modelCalls": {
       "aggregator": 2,
       "backwarder": 2,
@@ -116,14 +116,144 @@
       "validationScore": 0,
       "accepted": false,
       "scoreDelta": 0,
-      "reason": "candidate score gain does not satisfy acceptance policy"
+      "reason": "candidate score gain does not satisfy acceptance policy",
+      "outputSurfaces": [
+        {
+          "surfaceId": "candidate#instruction",
+          "value": "USE_STRUCTURED_RECAP 严格按 \"\u003c胜队\u003e以\u003c比分\u003e战胜\u003c负队\u003e。\" 的格式输出简体中文战报，只输出一句话。"
+        }
+      ],
+      "validation": {
+        "overallScore": 0,
+        "evalSets": [
+          {
+            "evalSetId": "attribution-validation",
+            "overallScore": 0,
+            "cases": [
+              {
+                "evalCaseId": "attr_01_calculator",
+                "metrics": [
+                  {
+                    "metricName": "final_response_avg_score",
+                    "score": 0,
+                    "status": "failed",
+                    "reason": "final response mismatch: text mismatch: source 比赛结束。 and target 结果是5。 do not match"
+                  },
+                  {
+                    "metricName": "tool_trajectory_avg_score",
+                    "score": 0,
+                    "status": "failed",
+                    "reason": "tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "delta": {
+        "caseDeltas": [
+          {
+            "evalSetId": "attribution-validation",
+            "evalCaseId": "attr_01_calculator",
+            "metricName": "final_response_avg_score",
+            "baselineScore": 0,
+            "candidateScore": 0,
+            "baselineStatus": "failed",
+            "candidateStatus": "failed",
+            "kind": "Unchanged"
+          },
+          {
+            "evalSetId": "attribution-validation",
+            "evalCaseId": "attr_01_calculator",
+            "metricName": "tool_trajectory_avg_score",
+            "baselineScore": 0,
+            "candidateScore": 0,
+            "baselineStatus": "failed",
+            "candidateStatus": "failed",
+            "kind": "Unchanged"
+          }
+        ],
+        "summary": {
+          "newlyPassed": 0,
+          "newlyFailed": 0,
+          "scoreUp": 0,
+          "scoreDown": 0,
+          "unchanged": 2
+        }
+      }
     },
     {
       "round": 2,
       "validationScore": 0,
       "accepted": false,
       "scoreDelta": 0,
-      "reason": "candidate score gain does not satisfy acceptance policy"
+      "reason": "candidate score gain does not satisfy acceptance policy",
+      "outputSurfaces": [
+        {
+          "surfaceId": "candidate#instruction",
+          "value": "USE_STRUCTURED_RECAP 严格按 \"\u003c胜队\u003e以\u003c比分\u003e战胜\u003c负队\u003e。\" 的格式输出简体中文战报，只输出一句话。"
+        }
+      ],
+      "validation": {
+        "overallScore": 0,
+        "evalSets": [
+          {
+            "evalSetId": "attribution-validation",
+            "overallScore": 0,
+            "cases": [
+              {
+                "evalCaseId": "attr_01_calculator",
+                "metrics": [
+                  {
+                    "metricName": "final_response_avg_score",
+                    "score": 0,
+                    "status": "failed",
+                    "reason": "final response mismatch: text mismatch: source 比赛结束。 and target 结果是5。 do not match"
+                  },
+                  {
+                    "metricName": "tool_trajectory_avg_score",
+                    "score": 0,
+                    "status": "failed",
+                    "reason": "tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "delta": {
+        "caseDeltas": [
+          {
+            "evalSetId": "attribution-validation",
+            "evalCaseId": "attr_01_calculator",
+            "metricName": "final_response_avg_score",
+            "baselineScore": 0,
+            "candidateScore": 0,
+            "baselineStatus": "failed",
+            "candidateStatus": "failed",
+            "kind": "Unchanged"
+          },
+          {
+            "evalSetId": "attribution-validation",
+            "evalCaseId": "attr_01_calculator",
+            "metricName": "tool_trajectory_avg_score",
+            "baselineScore": 0,
+            "candidateScore": 0,
+            "baselineStatus": "failed",
+            "candidateStatus": "failed",
+            "kind": "Unchanged"
+          }
+        ],
+        "summary": {
+          "newlyPassed": 0,
+          "newlyFailed": 0,
+          "scoreUp": 0,
+          "scoreDown": 0,
+          "unchanged": 2
+        }
+      }
     }
   ],
   "config": {

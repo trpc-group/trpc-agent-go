@@ -9,6 +9,7 @@
 package regloop
 
 import (
+	"fmt"
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
@@ -38,7 +39,7 @@ func Attribute(result *engine.EvaluationResult) AttributionReport {
 					EvalCaseID: evalCase.EvalCaseID,
 					MetricName: m.MetricName,
 					Category:   category,
-					Reason:     m.Reason,
+					Reason:     explainReason(m.MetricName, m.Reason),
 				})
 			}
 		}
@@ -50,30 +51,47 @@ func Attribute(result *engine.EvaluationResult) AttributionReport {
 	}
 }
 
-// categorize maps one failed metric to a failure category using the metric name
-// first (tool/response families) and then reason keywords.
+// explainReason returns the evaluator reason, or a stable fallback when it is
+// empty, so every failure carries at least one explainable reason.
+func explainReason(metricName, reason string) string {
+	if strings.TrimSpace(reason) != "" {
+		return reason
+	}
+	return fmt.Sprintf("metric %s failed without evaluator reason", metricName)
+}
+
+// categorize maps one failed metric to a failure category. It checks reason
+// signals (which distinguish argument/route/tool-call failures) before falling
+// back to the metric name and family, so classification does not depend on a
+// single exact keyword.
 func categorize(metricName, reason string) FailureCategory {
 	name := strings.ToLower(metricName)
 	why := strings.ToLower(reason)
+	toolMetric := containsAny(name, "tool_trajectory", "trajectory", "tool")
 
-	if strings.Contains(name, "tool_trajectory") || strings.Contains(name, "trajectory") {
-		switch {
-		case containsAny(why, "argument", "参数", "arg "):
-			return CategoryToolArgError
-		case containsAny(why, "route", "路由", "wrong agent", "transfer"):
-			return CategoryRouteError
-		default:
-			return CategoryToolError
-		}
+	// Tool called with wrong arguments (before the generic tool-call check).
+	if containsAny(why, "argument", "参数", "arg ", "wrong parameter", "错误参数", "invalid arg") {
+		return CategoryToolArgError
 	}
-	if containsAny(why, "format", "格式", "markdown", "schema", "xml", "json") {
+	// Routing / wrong-agent / transfer failures.
+	if containsAny(why, "route", "路由", "wrong agent", "错误的智能体", "错误智能体", "transfer", "转交", "misroute", "dispatch") {
+		return CategoryRouteError
+	}
+	// Missing / wrong tool call (by reason or by tool-family metric).
+	if toolMetric || containsAny(why, "tool call", "tool-call", "工具调用", "missing tool", "未调用工具", "wrong tool", "调错工具", "tool use") {
+		return CategoryToolError
+	}
+	// Format / structure compliance.
+	if containsAny(why, "format", "格式", "markdown", "schema", "xml", "json", "malformed", "结构", "不合法") {
 		return CategoryFormatError
 	}
-	if containsAny(why, "knowledge", "recall", "召回", "grounding", "unsupported", "hallucinat") {
+	// Knowledge recall / grounding.
+	if containsAny(why, "knowledge", "recall", "召回", "grounding", "unsupported", "hallucinat", "知识", "编造", "凭空", "证据不足", "无依据") {
 		return CategoryKnowledgeRecall
 	}
-	if strings.Contains(name, "final_response") || strings.Contains(name, "rouge") ||
-		strings.Contains(name, "response") {
+	// Final-response content mismatch.
+	if containsAny(name, "final_response", "rouge", "response") ||
+		containsAny(why, "mismatch", "不匹配", "答案错误", "回复错误", "内容错误") {
 		return CategoryResponseMismatch
 	}
 	return CategoryOther

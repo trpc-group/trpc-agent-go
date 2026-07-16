@@ -174,11 +174,20 @@ type CostReport struct {
 	Note            string `json:"note,omitempty"`
 }
 
-// RoundReport summarizes one optimization round.
+// RoundReport summarizes one optimization round, including the candidate it
+// produced and how it moved each case relative to the last accepted version.
 type RoundReport struct {
 	Round           int     `json:"round"`
 	ValidationScore float64 `json:"validationScore"`
 	Accepted        bool    `json:"accepted"`
 	ScoreDelta      float64 `json:"scoreDelta"`
 	Reason          string  `json:"reason,omitempty"`
+	// OutputSurfaces is the bounded projection of this round's candidate profile.
+	OutputSurfaces []SurfaceProjection `json:"outputSurfaces,omitempty"`
+	// Validation is this round's candidate validation, per case.
+	Validation PhaseScore `json:"validation"`
+	// Delta compares this round's validation against the last accepted validation
+	// at the round's start (baseline validation for the first round). A rejected
+	// round does not advance that comparison baseline.
+	Delta DeltaReport `json:"delta"`
 }

@@ -36,7 +36,12 @@ func analyzeScenario(t *testing.T, name string) *regloop.Report {
 	if err != nil {
 		t.Fatalf("engine run: %v", err)
 	}
-	report, err := regloop.Analyze(result, regloop.Options{App: appName, Mode: "fake", Gate: resolveGate(cfg, sc)})
+	report, err := regloop.Analyze(result, regloop.Options{
+		App:  appName,
+		Mode: "fake",
+		Gate: resolveGate(cfg, sc),
+		Cost: regloop.CostInput{ModelCalls: rt.calls.snapshot()},
+	})
 	if err != nil {
 		t.Fatalf("analyze: %v", err)
 	}

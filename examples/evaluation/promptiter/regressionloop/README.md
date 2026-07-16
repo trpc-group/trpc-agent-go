@@ -120,5 +120,11 @@ The report's `cost` records observable counts: wall-clock `durationMs`, per-role
 no `llmJudge` metric is configured), and `evaluatedCases` (a case count, kept
 distinct from model calls). The engine carries no token accounting, so `cost` is
 labelled `"estimated": true`. The report also records the accepted candidate's
-surface projection, and the run config (`deterministic`, `randomSeed`, fake-model
-summary) for reproducibility. The gate can enforce a `maxModelCalls` budget.
+surface projection, per-round output surfaces / validation / delta, and the run
+config (`deterministic`, `randomSeed`, fake-model summary) for reproducibility.
+The gate can enforce a `maxModelCalls` budget (and fails closed if a budget is
+set but the call count was not instrumented).
+
+The committed sample reports under [`output/`](./output) are generated with
+`--stable-cost`, which zeroes `durationMs` so the golden files stay
+byte-reproducible; a normal run records the real wall-clock.

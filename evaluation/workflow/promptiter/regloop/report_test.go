@@ -105,6 +105,59 @@ func TestAnalyzeFailsClosedOnSlimmedResult(t *testing.T) {
 	}
 }
 
+func TestRoundReportDeltaUsesLastAcceptedBaseline(t *testing.T) {
+	// round1 improves c1 and is accepted; round2 regresses c1 and is rejected.
+	// round2's delta must compare against round1 (last accepted), not baseline.
+	baseline := evalR(0.0, caseR("c1", metricR("m", 0, status.EvalStatusFailed, "")))
+	v1 := evalR(1.0, caseR("c1", metricR("m", 1, status.EvalStatusPassed, "")))
+	v2 := evalR(0.0, caseR("c1", metricR("m", 0, status.EvalStatusFailed, "")))
+	result := &engine.RunResult{
+		Status:             engine.RunStatusSucceeded,
+		BaselineValidation: baseline,
+		Rounds: []engine.RoundResult{
+			lossRound(1, v1, true, 1.0),
+			lossRound(2, v2, false, -1.0),
+		},
+	}
+	report, err := Analyze(result, Options{Gate: ReleaseGate{MinTotalGain: 0.5}})
+	if err != nil {
+		t.Fatalf("analyze: %v", err)
+	}
+	if report.Rounds[0].Delta.Summary.NewlyPassed != 1 {
+		t.Fatalf("round1 delta want NewlyPassed=1, got %+v", report.Rounds[0].Delta.Summary)
+	}
+	if report.Rounds[1].Delta.Summary.NewlyFailed != 1 {
+		t.Fatalf("round2 delta must compare vs last accepted round1, want NewlyFailed=1, got %+v", report.Rounds[1].Delta.Summary)
+	}
+	if len(report.Rounds[1].Validation.EvalSets) == 0 {
+		t.Fatalf("round validation per-case must be present")
+	}
+}
+
+func TestAnalyzeBudgetFailsClosedWithoutCost(t *testing.T) {
+	// Budget configured but the caller provided no model-call count: fail closed.
+	report, err := Analyze(acceptedRunFixture(), Options{Gate: ReleaseGate{MinTotalGain: 0.5, MaxModelCalls: 100}})
+	if err != nil {
+		t.Fatalf("analyze: %v", err)
+	}
+	if report.Gate.Released {
+		t.Fatalf("budget + unknown calls must fail closed, reasons=%v", report.Gate.Reasons)
+	}
+}
+
+func TestAnalyzeBudgetWithKnownCalls(t *testing.T) {
+	report, err := Analyze(acceptedRunFixture(), Options{
+		Gate: ReleaseGate{MinTotalGain: 0.5, MaxModelCalls: 100},
+		Cost: CostInput{ModelCalls: map[string]int{"candidate": 5}},
+	})
+	if err != nil {
+		t.Fatalf("analyze: %v", err)
+	}
+	if !report.Gate.Released {
+		t.Fatalf("known calls under budget must release, reasons=%v", report.Gate.Reasons)
+	}
+}
+
 func TestAnalyzeNil(t *testing.T) {
 	if _, err := Analyze(nil, Options{}); err == nil {
 		t.Fatalf("expected error for nil result")

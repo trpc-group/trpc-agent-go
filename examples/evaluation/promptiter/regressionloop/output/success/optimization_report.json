@@ -141,7 +141,7 @@
   "cost": {
     "rounds": 1,
     "evaluatedCases": 9,
-    "durationMs": 43,
+    "durationMs": 0,
     "modelCalls": {
       "aggregator": 1,
       "backwarder": 3,
@@ -158,7 +158,95 @@
       "validationScore": 1,
       "accepted": true,
       "scoreDelta": 1,
-      "reason": "candidate score gain satisfies acceptance policy"
+      "reason": "candidate score gain satisfies acceptance policy",
+      "outputSurfaces": [
+        {
+          "surfaceId": "candidate#instruction",
+          "value": "USE_STRUCTURED_RECAP 严格按 \"\u003c胜队\u003e以\u003c比分\u003e战胜\u003c负队\u003e。\" 的格式输出简体中文战报，只输出一句话。"
+        }
+      ],
+      "validation": {
+        "overallScore": 1,
+        "evalSets": [
+          {
+            "evalSetId": "validation",
+            "overallScore": 1,
+            "cases": [
+              {
+                "evalCaseId": "val_01_gold_vs_silver",
+                "metrics": [
+                  {
+                    "metricName": "final_response_avg_score",
+                    "score": 1,
+                    "status": "passed"
+                  }
+                ]
+              },
+              {
+                "evalCaseId": "val_02_fire_vs_ice",
+                "metrics": [
+                  {
+                    "metricName": "final_response_avg_score",
+                    "score": 1,
+                    "status": "passed"
+                  }
+                ]
+              },
+              {
+                "evalCaseId": "val_03_mountain_vs_sea",
+                "metrics": [
+                  {
+                    "metricName": "final_response_avg_score",
+                    "score": 1,
+                    "status": "passed"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "delta": {
+        "caseDeltas": [
+          {
+            "evalSetId": "validation",
+            "evalCaseId": "val_01_gold_vs_silver",
+            "metricName": "final_response_avg_score",
+            "baselineScore": 0,
+            "candidateScore": 1,
+            "baselineStatus": "failed",
+            "candidateStatus": "passed",
+            "kind": "NewlyPassed"
+          },
+          {
+            "evalSetId": "validation",
+            "evalCaseId": "val_02_fire_vs_ice",
+            "metricName": "final_response_avg_score",
+            "baselineScore": 0,
+            "candidateScore": 1,
+            "baselineStatus": "failed",
+            "candidateStatus": "passed",
+            "kind": "NewlyPassed"
+          },
+          {
+            "evalSetId": "validation",
+            "evalCaseId": "val_03_mountain_vs_sea",
+            "metricName": "final_response_avg_score",
+            "baselineScore": 0,
+            "candidateScore": 1,
+            "baselineStatus": "failed",
+            "candidateStatus": "passed",
+            "kind": "NewlyPassed"
+          }
+        ],
+        "summary": {
+          "newlyPassed": 3,
+          "newlyFailed": 0,
+          "scoreUp": 0,
+          "scoreDown": 0,
+          "unchanged": 0
+        }
+      }
     }
   ],
   "config": {

@@ -133,7 +133,7 @@
   "cost": {
     "rounds": 2,
     "evaluatedCases": 15,
-    "durationMs": 24,
+    "durationMs": 0,
     "modelCalls": {
       "aggregator": 1,
       "backwarder": 3,
@@ -150,14 +150,192 @@
       "validationScore": 0.6666666666666666,
       "accepted": true,
       "scoreDelta": 0.3333333333333333,
-      "reason": "candidate score gain satisfies acceptance policy"
+      "reason": "candidate score gain satisfies acceptance policy",
+      "outputSurfaces": [
+        {
+          "surfaceId": "candidate#instruction",
+          "value": "USE_STRUCTURED_RECAP 严格按 \"\u003c胜队\u003e以\u003c比分\u003e战胜\u003c负队\u003e。\" 的格式输出简体中文战报，只输出一句话。"
+        }
+      ],
+      "validation": {
+        "overallScore": 0.6666666666666666,
+        "evalSets": [
+          {
+            "evalSetId": "validation",
+            "overallScore": 0.6666666666666666,
+            "cases": [
+              {
+                "evalCaseId": "val_01_gold_vs_silver",
+                "metrics": [
+                  {
+                    "metricName": "final_response_avg_score",
+                    "score": 0,
+                    "status": "failed",
+                    "reason": "final response mismatch: text mismatch: source 比赛结束。 and target 金队以88-80战胜银队。 do not match"
+                  }
+                ]
+              },
+              {
+                "evalCaseId": "val_02_fire_vs_ice",
+                "metrics": [
+                  {
+                    "metricName": "final_response_avg_score",
+                    "score": 1,
+                    "status": "passed"
+                  }
+                ]
+              },
+              {
+                "evalCaseId": "val_03_mountain_vs_sea",
+                "metrics": [
+                  {
+                    "metricName": "final_response_avg_score",
+                    "score": 1,
+                    "status": "passed"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "delta": {
+        "caseDeltas": [
+          {
+            "evalSetId": "validation",
+            "evalCaseId": "val_01_gold_vs_silver",
+            "metricName": "final_response_avg_score",
+            "baselineScore": 1,
+            "candidateScore": 0,
+            "baselineStatus": "passed",
+            "candidateStatus": "failed",
+            "kind": "NewlyFailed"
+          },
+          {
+            "evalSetId": "validation",
+            "evalCaseId": "val_02_fire_vs_ice",
+            "metricName": "final_response_avg_score",
+            "baselineScore": 0,
+            "candidateScore": 1,
+            "baselineStatus": "failed",
+            "candidateStatus": "passed",
+            "kind": "NewlyPassed"
+          },
+          {
+            "evalSetId": "validation",
+            "evalCaseId": "val_03_mountain_vs_sea",
+            "metricName": "final_response_avg_score",
+            "baselineScore": 0,
+            "candidateScore": 1,
+            "baselineStatus": "failed",
+            "candidateStatus": "passed",
+            "kind": "NewlyPassed"
+          }
+        ],
+        "summary": {
+          "newlyPassed": 2,
+          "newlyFailed": 1,
+          "scoreUp": 0,
+          "scoreDown": 0,
+          "unchanged": 0
+        }
+      }
     },
     {
       "round": 2,
       "validationScore": 0.6666666666666666,
       "accepted": false,
       "scoreDelta": 0,
-      "reason": "candidate score gain does not satisfy acceptance policy"
+      "reason": "candidate score gain does not satisfy acceptance policy",
+      "outputSurfaces": [
+        {
+          "surfaceId": "candidate#instruction",
+          "value": "USE_STRUCTURED_RECAP 严格按 \"\u003c胜队\u003e以\u003c比分\u003e战胜\u003c负队\u003e。\" 的格式输出简体中文战报，只输出一句话。"
+        }
+      ],
+      "validation": {
+        "overallScore": 0.6666666666666666,
+        "evalSets": [
+          {
+            "evalSetId": "validation",
+            "overallScore": 0.6666666666666666,
+            "cases": [
+              {
+                "evalCaseId": "val_01_gold_vs_silver",
+                "metrics": [
+                  {
+                    "metricName": "final_response_avg_score",
+                    "score": 0,
+                    "status": "failed",
+                    "reason": "final response mismatch: text mismatch: source 比赛结束。 and target 金队以88-80战胜银队。 do not match"
+                  }
+                ]
+              },
+              {
+                "evalCaseId": "val_02_fire_vs_ice",
+                "metrics": [
+                  {
+                    "metricName": "final_response_avg_score",
+                    "score": 1,
+                    "status": "passed"
+                  }
+                ]
+              },
+              {
+                "evalCaseId": "val_03_mountain_vs_sea",
+                "metrics": [
+                  {
+                    "metricName": "final_response_avg_score",
+                    "score": 1,
+                    "status": "passed"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "delta": {
+        "caseDeltas": [
+          {
+            "evalSetId": "validation",
+            "evalCaseId": "val_01_gold_vs_silver",
+            "metricName": "final_response_avg_score",
+            "baselineScore": 0,
+            "candidateScore": 0,
+            "baselineStatus": "failed",
+            "candidateStatus": "failed",
+            "kind": "Unchanged"
+          },
+          {
+            "evalSetId": "validation",
+            "evalCaseId": "val_02_fire_vs_ice",
+            "metricName": "final_response_avg_score",
+            "baselineScore": 1,
+            "candidateScore": 1,
+            "baselineStatus": "passed",
+            "candidateStatus": "passed",
+            "kind": "Unchanged"
+          },
+          {
+            "evalSetId": "validation",
+            "evalCaseId": "val_03_mountain_vs_sea",
+            "metricName": "final_response_avg_score",
+            "baselineScore": 1,
+            "candidateScore": 1,
+            "baselineStatus": "passed",
+            "candidateStatus": "passed",
+            "kind": "Unchanged"
+          }
+        ],
+        "summary": {
+          "newlyPassed": 0,
+          "newlyFailed": 0,
+          "scoreUp": 0,
+          "scoreDown": 0,
+          "unchanged": 3
+        }
+      }
     }
   ],
   "config": {

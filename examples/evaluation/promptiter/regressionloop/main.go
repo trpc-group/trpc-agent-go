@@ -28,6 +28,7 @@ var (
 	scenarioName = flag.String("scenario", "success", "Scenario: success | ineffective | overfit | attribution | all")
 	dataDir      = flag.String("data-dir", "./data", "Directory containing eval set and metric files")
 	outputDir    = flag.String("output-dir", "./output", "Directory where reports are written (per scenario)")
+	stableCost   = flag.Bool("stable-cost", false, "Zero durationMs for byte-reproducible committed sample reports")
 )
 
 func main() {
@@ -44,13 +45,13 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
-		if err := run(context.Background(), *dataDir, filepath.Join(*outputDir, sc.name), sc); err != nil {
+		if err := run(context.Background(), *dataDir, filepath.Join(*outputDir, sc.name), sc, *stableCost); err != nil {
 			log.Fatalf("scenario %s: %v", sc.name, err)
 		}
 	}
 }
 
-func run(ctx context.Context, dataDir, outputDir string, sc scenario) error {
+func run(ctx context.Context, dataDir, outputDir string, sc scenario, stableCost bool) error {
 	cfg, err := loadLoopConfig(dataDir)
 	if err != nil {
 		return err
@@ -67,6 +68,11 @@ func run(ctx context.Context, dataDir, outputDir string, sc scenario) error {
 		return fmt.Errorf("run promptiter: %w", err)
 	}
 	durationMs := time.Since(start).Milliseconds()
+	if stableCost {
+		// Committed golden reports must stay byte-reproducible; real runs keep the
+		// measured duration.
+		durationMs = 0
+	}
 
 	gate := resolveGate(cfg, sc)
 	report, err := regloop.Analyze(result, regloop.Options{
