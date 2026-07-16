@@ -395,7 +395,7 @@ func (r *ResourceAbuseRule) Scan(_ context.Context, input ScanInput, policy Poli
 					RuleName:       r.Name(),
 					RiskLevel:      RiskLevelMedium,
 					Decision:       DecisionAsk,
-					Evidence:       "sleep " + m[1] + " (unparsable)",
+					Evidence:       "sleep " + m[1] + " (unparseable)",
 					Recommendation: "The sleep value could not be parsed; review and clarify the duration.",
 				})
 				return findings
