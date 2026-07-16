@@ -228,16 +228,15 @@ func TestExtractor_AssistantResultExtractionOption(t *testing.T) {
 	assert.Equal(t, true, meta[metadataKeyAssistantResults])
 
 	refDate := time.Date(2024, 6, 10, 0, 0, 0, 0, time.UTC)
-	assert.NotContains(t, e.buildSystemPrompt(refDate, nil),
-		"<assistant_result_extraction>")
-	prompt := e.buildAssistantResultSystemPrompt(refDate, nil)
+	prompt := e.buildSystemPrompt(refDate, nil)
 	assert.Contains(t, prompt, "<assistant_result_extraction>")
 	assert.Contains(t, prompt, "MANDATORY DIRECT-RESULT CHECK")
 	assert.Contains(t, prompt, "requested extraction, classification, or transformation")
 	assert.Contains(t, prompt, "Do not store general definitions")
+	assert.Contains(t, prompt, assistantResultAddToolName)
 }
 
-func TestExtractor_AssistantResultExtractionSecondPass(t *testing.T) {
+func TestExtractor_AssistantResultExtractionCombinedPass(t *testing.T) {
 	primaryArgs, err := json.Marshal(map[string]any{
 		"memory": "Wants to learn backend development.",
 	})
@@ -251,9 +250,7 @@ func TestExtractor_AssistantResultExtractionSecondPass(t *testing.T) {
 		responses: [][]*model.Response{
 			{{Choices: []model.Choice{{Message: model.Message{ToolCalls: []model.ToolCall{
 				makeToolCall(memory.AddToolName, primaryArgs),
-			}}}}}},
-			{{Choices: []model.Choice{{Message: model.Message{ToolCalls: []model.ToolCall{
-				makeToolCall(memory.AddToolName, resultArgs),
+				makeToolCall(assistantResultAddToolName, resultArgs),
 			}}}}}},
 		},
 	}
@@ -267,17 +264,13 @@ func TestExtractor_AssistantResultExtractionSecondPass(t *testing.T) {
 	require.Len(t, ops, 2)
 	assert.Equal(t, "Wants to learn backend development.", ops[0].Memory)
 	assert.Equal(t, "Recommended backend languages: Go, Java, and Python.", ops[1].Memory)
-	require.Len(t, m.requests, 2)
-	assert.NotContains(t, m.requests[0].Messages[0].Content,
-		"<assistant_result_extraction>")
+	require.Len(t, m.requests, 1)
 	assert.Contains(t, m.requests[0].Messages[0].Content,
-		"<assistant_result_delegation>")
-	assert.Contains(t, m.requests[1].Messages[0].Content,
 		"<assistant_result_extraction>")
-	assert.Len(t, m.requests[1].Tools, 1)
-	assert.Contains(t, m.requests[1].Tools, memory.AddToolName)
+	assert.Contains(t, m.requests[0].Tools, memory.AddToolName)
+	assert.Contains(t, m.requests[0].Tools, assistantResultAddToolName)
 	assert.Equal(t, model.RoleUser,
-		m.requests[1].Messages[len(m.requests[1].Messages)-1].Role)
+		m.requests[0].Messages[len(m.requests[0].Messages)-1].Role)
 }
 
 func TestExtractor_AssistantResultStageOwnsNearDuplicate(t *testing.T) {
@@ -294,9 +287,7 @@ func TestExtractor_AssistantResultStageOwnsNearDuplicate(t *testing.T) {
 		responses: [][]*model.Response{
 			{{Choices: []model.Choice{{Message: model.Message{ToolCalls: []model.ToolCall{
 				makeToolCall(memory.AddToolName, primaryArgs),
-			}}}}}},
-			{{Choices: []model.Choice{{Message: model.Message{ToolCalls: []model.ToolCall{
-				makeToolCall(memory.AddToolName, resultArgs),
+				makeToolCall(assistantResultAddToolName, resultArgs),
 			}}}}}},
 		},
 	}
@@ -394,9 +385,7 @@ func TestExtractor_AssistantResultExtractionStages(t *testing.T) {
 		responses: [][]*model.Response{
 			{{Choices: []model.Choice{{Message: model.Message{ToolCalls: []model.ToolCall{
 				makeToolCall(memory.AddToolName, primaryArgs),
-			}}}}}},
-			{{Choices: []model.Choice{{Message: model.Message{ToolCalls: []model.ToolCall{
-				makeToolCall(memory.AddToolName, resultArgs),
+				makeToolCall(assistantResultAddToolName, resultArgs),
 			}}}}}},
 		},
 	}
@@ -430,9 +419,8 @@ func TestExtractor_AssistantResultExtractionRejectsUngroundedAmounts(t *testing.
 	m := &sequenceModel{
 		name: "test-model",
 		responses: [][]*model.Response{
-			nil,
 			{{Choices: []model.Choice{{Message: model.Message{ToolCalls: []model.ToolCall{
-				makeToolCall(memory.AddToolName, resultArgs),
+				makeToolCall(assistantResultAddToolName, resultArgs),
 			}}}}}},
 		},
 	}
@@ -453,7 +441,7 @@ func TestExtractor_AssistantResultExtractionRejectsUngroundedAmounts(t *testing.
 	require.NoError(t, err)
 	assert.Empty(t, primary)
 	assert.Empty(t, assistantResults)
-	assert.Len(t, m.requests, 2)
+	assert.Len(t, m.requests, 1)
 }
 
 func TestFilterGroundedAssistantResultOperations(t *testing.T) {
@@ -510,8 +498,8 @@ func TestFilterGroundedAssistantResultOperations_NormalizesCurrencies(t *testing
 func TestExtractor_AssistantResultExtractionFailure(t *testing.T) {
 	m := &sequenceModel{
 		name:      "test-model",
-		responses: [][]*model.Response{nil, nil},
-		errors:    []error{nil, errors.New("result model error")},
+		responses: [][]*model.Response{nil},
+		errors:    []error{errors.New("result model error")},
 	}
 	e := NewExtractor(m, WithAssistantResultExtraction(true))
 
@@ -519,9 +507,9 @@ func TestExtractor_AssistantResultExtractionFailure(t *testing.T) {
 		model.NewUserMessage("What should I learn?"),
 		model.NewAssistantMessage("Learn Go."),
 	}, nil)
-	require.ErrorContains(t, err, "assistant result extraction failed")
+	require.ErrorContains(t, err, "model call failed")
 	assert.Nil(t, ops)
-	assert.Len(t, m.requests, 2)
+	assert.Len(t, m.requests, 1)
 }
 
 func TestExtractor_AssistantResultExtractionRequiresAdd(t *testing.T) {
@@ -535,6 +523,23 @@ func TestExtractor_AssistantResultExtractionRequiresAdd(t *testing.T) {
 	}, nil)
 	require.NoError(t, err)
 	assert.Len(t, m.requests, 1)
+	assert.NotContains(t, m.requests[0].Tools, assistantResultAddToolName)
+	assert.NotContains(t, m.requests[0].Messages[0].Content,
+		"<assistant_result_extraction>")
+}
+
+func TestExtractor_AssistantResultExtractionRequiresAssistantText(t *testing.T) {
+	m := &sequenceModel{name: "test-model", responses: [][]*model.Response{nil}}
+	e := NewExtractor(m, WithAssistantResultExtraction(true))
+
+	_, err := e.Extract(context.Background(), []model.Message{
+		model.NewUserMessage("I started learning Go."),
+	}, nil)
+	require.NoError(t, err)
+	require.Len(t, m.requests, 1)
+	assert.NotContains(t, m.requests[0].Tools, assistantResultAddToolName)
+	assert.NotContains(t, m.requests[0].Messages[0].Content,
+		"<assistant_result_extraction>")
 }
 
 func TestMergeExtractionOperations(t *testing.T) {

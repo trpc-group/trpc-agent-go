@@ -21,6 +21,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/prompt"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 // referenceDate returns the reference date for the extraction.
@@ -76,9 +77,9 @@ func WithUpdatePolicy(policy UpdatePolicy) Option {
 	}
 }
 
-// WithAssistantResultExtraction controls a dedicated second extraction pass
-// for concrete results produced by the assistant. It is disabled by default
-// to preserve the existing extractor behavior.
+// WithAssistantResultExtraction controls extraction of concrete results
+// produced by the assistant. It is disabled by default to preserve the
+// existing extractor behavior.
 func WithAssistantResultExtraction(enabled bool) Option {
 	return func(e *memoryExtractor) {
 		e.extractAssistantResults = enabled
@@ -160,38 +161,57 @@ func (e *memoryExtractor) ExtractOperationStages(
 		return nil, nil, nil
 	}
 
+	includeAssistantResults := e.shouldExtractAssistantResult(messages)
 	primaryRequest := &model.Request{
 		Messages: e.buildMessages(ctx, messages, existing),
-		Tools:    filterTools(backgroundTools, e.effectiveEnabledTools()),
+		Tools:    e.extractionTools(includeAssistantResults),
 	}
 	ctx, ops, err := e.generateOperations(ctx, primaryRequest)
+	primary, assistantResults := splitExtractionOperations(ops)
 	qualifyOperationsWithGroundedTopics(
-		conversationSourceText(messages), ops,
+		conversationSourceText(messages), primary,
 	)
-	if err != nil || !e.shouldExtractAssistantResult(messages) {
-		return ops, nil, err
+	if err != nil || !includeAssistantResults {
+		return primary, assistantResults, err
 	}
+	assistantResults = filterGroundedAssistantResultOperations(
+		ctx, messages, assistantResults,
+	)
+	qualifyOperationsWithGroundedTopics(
+		assistantResultSourceText(messages), assistantResults,
+	)
+	primary, assistantResults = routeAssistantResultOperations(
+		primary, assistantResults,
+	)
+	return primary, assistantResults, nil
+}
 
-	resultRequest := &model.Request{
-		Messages: e.buildAssistantResultMessages(ctx, messages, existing),
-		Tools: filterTools(backgroundTools, map[string]struct{}{
-			memory.AddToolName: {},
-		}),
+func splitExtractionOperations(
+	operations []*Operation,
+) (primary, assistantResults []*Operation) {
+	for _, operation := range operations {
+		if operation != nil && operation.assistantResult {
+			assistantResults = append(assistantResults, operation)
+			continue
+		}
+		primary = append(primary, operation)
 	}
-	_, resultOps, err := e.generateOperations(ctx, resultRequest)
-	if err != nil {
-		return nil, nil, fmt.Errorf(
-			"assistant result extraction failed: %w", err,
-		)
+	return primary, assistantResults
+}
+
+func (e *memoryExtractor) extractionTools(
+	includeAssistantResults bool,
+) map[string]tool.Tool {
+	primary := filterTools(backgroundTools, e.effectiveEnabledTools())
+	if !includeAssistantResults {
+		return primary
 	}
-	resultOps = filterGroundedAssistantResultOperations(
-		ctx, messages, resultOps,
-	)
-	qualifyOperationsWithGroundedTopics(
-		assistantResultSourceText(messages), resultOps,
-	)
-	ops, resultOps = routeAssistantResultOperations(ops, resultOps)
-	return ops, resultOps, nil
+	combined := make(map[string]tool.Tool, len(primary)+1)
+	for name, declaration := range primary {
+		combined[name] = declaration
+	}
+	combined[assistantResultAddToolName] = assistantResultAddTool
+	return combined
 }
 
 func (e *memoryExtractor) generateOperations(
@@ -311,11 +331,6 @@ func (e *memoryExtractor) Metadata() map[string]any {
 const extractionUserSuffix = "Extract and manage memories " +
 	"from the conversation above."
 
-const assistantExtractionUserSuffix = "Extract and manage memories from both " +
-	"the user and assistant messages above, but output only concrete results " +
-	"provided by the assistant in direct response to the user's request. Do not " +
-	"output the user's request, goal, or interests by themselves."
-
 // buildMessages builds messages for auto memory extraction.
 func (e *memoryExtractor) buildMessages(
 	ctx context.Context,
@@ -325,10 +340,13 @@ func (e *memoryExtractor) buildMessages(
 	result := make([]model.Message, 0, len(messages)+2)
 
 	refDate := referenceDate(ctx)
+	includeAssistantResults := e.shouldExtractAssistantResult(messages)
 
 	// Add system prompt with existing memories.
 	result = append(result, model.NewSystemMessage(
-		e.buildSystemPrompt(refDate, existing),
+		e.buildSystemPromptForRequest(
+			refDate, existing, includeAssistantResults,
+		),
 	))
 
 	// Add conversation messages.
@@ -370,28 +388,6 @@ func (e *memoryExtractor) shouldExtractAssistantResult(
 	return hasUser && hasAssistant
 }
 
-func (e *memoryExtractor) buildAssistantResultMessages(
-	ctx context.Context,
-	messages []model.Message,
-	existing []*memory.Entry,
-) []model.Message {
-	result := []model.Message{model.NewSystemMessage(
-		e.buildAssistantResultSystemPrompt(referenceDate(ctx), existing),
-	)}
-	for _, message := range messages {
-		if message.Role != model.RoleUser && message.Role != model.RoleAssistant {
-			continue
-		}
-		if message.ToolID != "" || len(message.ToolCalls) > 0 ||
-			!messageHasText(message) {
-			continue
-		}
-		result = append(result, message)
-	}
-	result = append(result, model.NewUserMessage(assistantExtractionUserSuffix))
-	return result
-}
-
 func messageHasText(message model.Message) bool {
 	if strings.TrimSpace(message.Content) != "" {
 		return true
@@ -403,33 +399,6 @@ func messageHasText(message model.Message) bool {
 		}
 	}
 	return false
-}
-
-func (e *memoryExtractor) buildAssistantResultSystemPrompt(
-	refDate time.Time,
-	existing []*memory.Entry,
-) string {
-	var sb strings.Builder
-	sb.WriteString(strings.ReplaceAll(
-		assistantResultExtractionPrompt,
-		currentDatePlaceholder,
-		refDate.UTC().Format(time.DateOnly),
-	))
-	sb.WriteString("\n<available_actions>\n- ")
-	sb.WriteString(memory.AddToolName)
-	sb.WriteString(": ")
-	sb.WriteString(toolActionDescriptions[memory.AddToolName])
-	sb.WriteString("\n</available_actions>\n")
-	if len(existing) > 0 {
-		sb.WriteString("\n<existing_memories>\n")
-		for _, entry := range existing {
-			if entry != nil && entry.Memory != nil {
-				sb.WriteString(formatExistingMemory(entry))
-			}
-		}
-		sb.WriteString("</existing_memories>\n")
-	}
-	return sb.String()
 }
 
 func mergeExtractionOperations(primary, result []*Operation) []*Operation {
@@ -516,6 +485,18 @@ func (e *memoryExtractor) buildSystemPrompt(
 	refDate time.Time,
 	existing []*memory.Entry,
 ) string {
+	return e.buildSystemPromptForRequest(
+		refDate,
+		existing,
+		e.extractAssistantResults && e.actionEnabled(memory.AddToolName),
+	)
+}
+
+func (e *memoryExtractor) buildSystemPromptForRequest(
+	refDate time.Time,
+	existing []*memory.Entry,
+	includeAssistantResults bool,
+) string {
 	var sb strings.Builder
 
 	dateStr := refDate.UTC().Format(time.DateOnly)
@@ -531,13 +512,13 @@ func (e *memoryExtractor) buildSystemPrompt(
 	if policyPrompt := updatePolicyPrompt(e.updatePolicy); policyPrompt != "" {
 		sb.WriteString(policyPrompt)
 	}
-	if e.extractAssistantResults {
-		sb.WriteString(primaryAssistantResultDelegationPrompt)
+	if includeAssistantResults {
+		sb.WriteString(assistantResultExtractionPrompt)
 	}
 
 	// Append available actions.
 	sb.WriteString("\n<available_actions>\n")
-	sb.WriteString(e.availableActionsBlock())
+	sb.WriteString(e.availableActionsBlockForRequest(includeAssistantResults))
 	sb.WriteString("</available_actions>\n")
 
 	// Append existing memories with topics and episodic metadata so the
@@ -582,6 +563,14 @@ var toolActionOrder = []string{
 // availableActionsBlock returns the text lines describing which
 // memory tools the model is allowed to call.
 func (e *memoryExtractor) availableActionsBlock() string {
+	return e.availableActionsBlockForRequest(
+		e.extractAssistantResults && e.actionEnabled(memory.AddToolName),
+	)
+}
+
+func (e *memoryExtractor) availableActionsBlockForRequest(
+	includeAssistantResults bool,
+) string {
 	var sb strings.Builder
 	for _, name := range toolActionOrder {
 		if !e.actionEnabled(name) {
@@ -592,6 +581,11 @@ func (e *memoryExtractor) availableActionsBlock() string {
 			continue
 		}
 		fmt.Fprintf(&sb, "- %s: %s\n", name, desc)
+	}
+	if includeAssistantResults {
+		fmt.Fprintf(&sb, "- %s: %s\n", assistantResultAddToolName,
+			"Add a concrete result provided by the assistant in direct "+
+				"response to the user's request.")
 	}
 	if sb.Len() == 0 {
 		sb.WriteString("No actions available.\n")
@@ -643,18 +637,19 @@ func updatePolicyPrompt(policy UpdatePolicy) string {
 }
 
 const assistantResultExtractionPrompt = `
-You are an Assistant Result Memory Manager.
-Today's date is {current_date}.
-Extract ONLY concrete results that the assistant provided in direct response
-to the user's request. Do not extract the user's request, goal, preference, or
-interest by itself; the normal memory pass handles user information.
+
+<assistant_result_extraction>
+In addition to normal user-memory extraction, inspect concrete results that
+the assistant provided in direct response to the user's request. Emit those
+results with memory_add_assistant_result, never with memory_add or
+memory_update. Continue to use the normal memory tools for facts, preferences,
+events, goals, corrections, and forget requests supplied by the user.
 
 Eligible results are named answers, recommendations or shortlists, ordered
 plans, decisions, calculations, and requested extractions, classifications, or
 transformations. Do not store general definitions, explanatory background,
 tutorial prose, brainstorming without a selected result, or acknowledgments.
 
-<assistant_result_extraction>
 - Store a concrete result the user explicitly requested and may refer to later,
   such as a named answer, concise recommendation, final list or ordering, plan,
   calculation, or requested extraction, classification, or transformation.

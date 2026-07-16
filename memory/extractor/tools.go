@@ -55,6 +55,16 @@ var backgroundTools = func() map[string]tool.Tool {
 	return tools
 }()
 
+const assistantResultAddToolName = "memory_add_assistant_result"
+
+var assistantResultAddTool = func() tool.Tool {
+	declaration := *memorytool.NewAddTool().Declaration()
+	declaration.Name = assistantResultAddToolName
+	declaration.Description = "Store a concrete result provided by the " +
+		"assistant in direct response to the user's request."
+	return &declarationOnlyTool{decl: &declaration}
+}()
+
 // declarationOnlyTool is a tool that only provides declaration, not callable.
 type declarationOnlyTool struct {
 	decl *tool.Declaration
@@ -79,15 +89,16 @@ const (
 // parseToolCallArgs parses tool call arguments and returns a memory operation.
 func parseToolCallArgs(toolName string, args map[string]any) *Operation {
 	switch toolName {
-	case memory.AddToolName:
+	case memory.AddToolName, assistantResultAddToolName:
 		mem, _ := args[argKeyMemory].(string)
 		if mem == "" {
 			return nil
 		}
 		op := &Operation{
-			Type:   OperationAdd,
-			Memory: mem,
-			Topics: toStringSlice(args[argKeyTopics]),
+			Type:            OperationAdd,
+			Memory:          mem,
+			Topics:          toStringSlice(args[argKeyTopics]),
+			assistantResult: toolName == assistantResultAddToolName,
 		}
 		parseEpisodicArgs(op, args)
 		return op

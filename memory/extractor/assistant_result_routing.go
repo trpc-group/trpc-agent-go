@@ -13,20 +13,6 @@ import (
 	"unicode"
 )
 
-const primaryAssistantResultDelegationPrompt = `
-
-<assistant_result_delegation>
-Concrete answers, recommendations, lists, calculations, and other direct
-results produced by the assistant are handled by a separate extraction pass.
-In this primary pass, do not add or update a memory merely because the current
-assistant response contains one of those results. Focus on information supplied
-by the user, including the user's facts, preferences, events, goals, and
-information the user gives about other people. Continue to honor an explicit
-user request to correct or forget an existing memory, including a previously
-stored assistant result.
-</assistant_result_delegation>
-`
-
 func routeAssistantResultOperations(
 	primary, results []*Operation,
 ) ([]*Operation, []*Operation) {
