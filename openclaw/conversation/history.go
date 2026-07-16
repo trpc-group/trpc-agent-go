@@ -73,7 +73,10 @@ func BuildInjectedContextMessages(
 		boundary,
 		normalizeActorLabels(opts.LabelOverrides),
 	)
-	if opts.MaxHistoryRuns > 0 {
+	// Match the native history path: when summaries are enabled, the
+	// summary boundary already decides which events remain verbatim.
+	// MaxHistoryRuns is only enabled when summary mode is disabled.
+	if !opts.AddSessionSummary && opts.MaxHistoryRuns > 0 {
 		history = trimVisibleHistory(history, opts.MaxHistoryRuns)
 	}
 	out = append(out, history...)

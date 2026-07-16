@@ -12,6 +12,7 @@ package conversation
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -162,7 +163,7 @@ func TestBuildInjectedContextMessages(t *testing.T) {
 
 	got := BuildInjectedContextMessages(sess, HistoryOptions{
 		AddSessionSummary: true,
-		MaxHistoryRuns:    10,
+		MaxHistoryRuns:    1,
 		LabelOverrides: map[string]string{
 			"u2": "Robert",
 		},
@@ -175,6 +176,50 @@ func TestBuildInjectedContextMessages(t *testing.T) {
 	require.Contains(t, got[1].Content, "Message: latest question")
 	require.Equal(t, model.RoleAssistant, got[2].Role)
 	require.Equal(t, "latest answer", got[2].Content)
+}
+
+func TestBuildInjectedContextMessagesSummaryModeKeepsToolHeavyRun(
+	t *testing.T,
+) {
+	base := time.Now().Add(-10 * time.Minute)
+	events := []event.Event{
+		userEvent("u1", "Alice", "inspect everything", base),
+	}
+	for i := 0; i < 26; i++ {
+		callID := fmt.Sprintf("call-%d", i)
+		toolCall := model.Message{
+			Role: model.RoleAssistant,
+			ToolCalls: []model.ToolCall{{
+				ID:   callID,
+				Type: "function",
+				Function: model.FunctionDefinitionParam{
+					Name: "inspect",
+				},
+			}},
+		}
+		events = append(
+			events,
+			messageEvent(
+				authorAssistant,
+				toolCall,
+				base.Add(time.Duration(2*i+1)*time.Second),
+			),
+			messageEvent(
+				authorAssistant,
+				model.NewToolMessage(callID, "inspect", "ok"),
+				base.Add(time.Duration(2*i+2)*time.Second),
+			),
+		)
+	}
+
+	got := BuildInjectedContextMessages(&session.Session{Events: events}, HistoryOptions{
+		AddSessionSummary: true,
+		MaxHistoryRuns:    50,
+	})
+	require.Len(t, got, 53)
+	require.Equal(t, model.RoleUser, got[0].Role)
+	require.Equal(t, model.RoleAssistant, got[1].Role)
+	require.Equal(t, model.RoleTool, got[2].Role)
 }
 
 func TestBuildInjectedContextMessagesPreservesStructuredToolHistory(
