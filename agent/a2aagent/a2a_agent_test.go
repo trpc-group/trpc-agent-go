@@ -549,6 +549,176 @@ func assertAnonymousCookieNotInEvents(
 	}
 }
 
+type anonymousSessionAgentWrapper struct {
+	inner agent.Agent
+}
+
+func (w anonymousSessionAgentWrapper) Run(
+	ctx context.Context,
+	invocation *agent.Invocation,
+) (<-chan *event.Event, error) {
+	if invocation == nil || invocation.Session == nil {
+		return w.inner.Run(ctx, invocation)
+	}
+	anonymousSession := invocation.Session.Clone()
+	anonymousSession.UserID = ""
+	return w.inner.Run(
+		ctx,
+		invocation.Clone(agent.WithInvocationSession(anonymousSession)),
+	)
+}
+
+func (w anonymousSessionAgentWrapper) Tools() []tool.Tool {
+	return w.inner.Tools()
+}
+
+func (w anonymousSessionAgentWrapper) Info() agent.Info {
+	return w.inner.Info()
+}
+
+func (w anonymousSessionAgentWrapper) SubAgents() []agent.Agent {
+	return w.inner.SubAgents()
+}
+
+func (w anonymousSessionAgentWrapper) FindSubAgent(name string) agent.Agent {
+	return w.inner.FindSubAgent(name)
+}
+
+func TestA2AAgent_AnonymousCookiePersistsThroughSessionService(t *testing.T) {
+	const cookieName = anonymousUserIDCookieName
+
+	var (
+		mu              sync.Mutex
+		nextCookieID    int
+		receivedCookies []string
+		serverURL       string
+	)
+	handlerErrs := make(chan error, 1)
+	reportHandlerError := func(err error) {
+		select {
+		case handlerErrs <- err:
+		default:
+		}
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/.well-known/agent-card.json" {
+			if err := json.NewEncoder(w).Encode(server.AgentCard{
+				Name:        "persistent-cookie-agent",
+				Description: "persistent cookie test",
+				URL:         serverURL,
+			}); err != nil {
+				reportHandlerError(fmt.Errorf("encode agent card: %w", err))
+			}
+			return
+		}
+
+		var rpcRequest struct {
+			ID any `json:"id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&rpcRequest); err != nil {
+			reportHandlerError(fmt.Errorf("decode RPC request: %w", err))
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		cookieValue := ""
+		if cookie, err := r.Cookie(cookieName); err == nil {
+			cookieValue = cookie.Value
+		}
+		responseCookieValue := cookieValue
+		mu.Lock()
+		receivedCookies = append(receivedCookies, cookieValue)
+		if cookieValue == "" {
+			nextCookieID++
+			responseCookieValue = anonymousTestCookieValue(nextCookieID)
+		}
+		mu.Unlock()
+		http.SetCookie(w, &http.Cookie{
+			Name:  cookieName,
+			Value: responseCookieValue,
+			Path:  "/",
+		})
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(struct {
+			JSONRPC string           `json:"jsonrpc"`
+			ID      any              `json:"id"`
+			Result  protocol.Message `json:"result"`
+		}{
+			JSONRPC: "2.0",
+			ID:      rpcRequest.ID,
+			Result: protocol.Message{
+				Kind:      protocol.KindMessage,
+				MessageID: "response",
+				Role:      protocol.MessageRoleAgent,
+				Parts: []protocol.Part{
+					protocol.NewTextPart("test response"),
+				},
+			},
+		}); err != nil {
+			reportHandlerError(fmt.Errorf("encode RPC response: %w", err))
+		}
+	}))
+	defer srv.Close()
+	serverURL = srv.URL
+
+	a, err := New(WithAgentCardURL(serverURL))
+	require.NoError(t, err)
+	sessionService := sessionmemory.NewSessionService()
+	r := runner.NewRunner(
+		"app",
+		anonymousSessionAgentWrapper{inner: a},
+		runner.WithSessionService(sessionService),
+	)
+	t.Cleanup(func() { require.NoError(t, r.Close()) })
+
+	run := func(message string) []*event.Event {
+		t.Helper()
+		eventChan, runErr := r.Run(
+			context.Background(),
+			"local-user",
+			"session-a",
+			model.NewUserMessage(message),
+		)
+		require.NoError(t, runErr)
+		var events []*event.Event
+		for evt := range eventChan {
+			events = append(events, evt)
+			if evt != nil && evt.Response != nil {
+				require.Nil(t, evt.Response.Error)
+			}
+		}
+		return events
+	}
+
+	stateKey := anonymousCookieStateKey(serverURL)
+	firstEvents := run("first")
+	assertAnonymousCookieNotInEvents(t, stateKey, firstEvents)
+	persistedSession, err := sessionService.GetSession(context.Background(), session.Key{
+		AppName:   "app",
+		UserID:    "local-user",
+		SessionID: "session-a",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, persistedSession)
+	persistedCookie, ok := persistedSession.GetState(stateKey)
+	require.True(t, ok)
+	require.Equal(t, anonymousTestCookieValue(1), string(persistedCookie))
+
+	secondEvents := run("second")
+	assertAnonymousCookieNotInEvents(t, stateKey, secondEvents)
+
+	select {
+	case handlerErr := <-handlerErrs:
+		require.NoError(t, handlerErr)
+	default:
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	require.Equal(t, []string{
+		"",
+		anonymousTestCookieValue(1),
+	}, receivedCookies)
+}
+
 func TestA2AAgent_AnonymousCookieInitializationDoesNotBlockIndependentScopes(t *testing.T) {
 	const cookieName = anonymousUserIDCookieName
 
@@ -1059,6 +1229,8 @@ func TestAnonymousCookieJarDoesNotReplayOrCaptureOutsideRemoteScope(t *testing.T
 	const agentURL = "https://example.com/a2a"
 	state := newAnonymousCookieState(
 		&session.Session{},
+		nil,
+		nil,
 		anonymousCookieStateKey(agentURL),
 	)
 	jar := &anonymousCookieJar{
@@ -1147,12 +1319,12 @@ func TestAnonymousCookieStateRejectsInvalidValues(t *testing.T) {
 	var nilState *anonymousCookieState
 	_, ok := nilState.load()
 	require.False(t, ok)
-	nilState.capture(anonymousTestCookieValue(1))
+	nilState.capture(context.Background(), anonymousTestCookieValue(1))
 
-	state := newAnonymousCookieState(&session.Session{}, "state-key")
+	state := newAnonymousCookieState(&session.Session{}, nil, nil, "state-key")
 	_, ok = state.load()
 	require.False(t, ok)
-	state.capture("not-anonymous")
+	state.capture(context.Background(), "not-anonymous")
 	_, stored := state.session.GetState(state.key)
 	require.False(t, stored)
 
@@ -1160,7 +1332,7 @@ func TestAnonymousCookieStateRejectsInvalidValues(t *testing.T) {
 	_, ok = state.load()
 	require.False(t, ok)
 
-	state.capture("  " + anonymousTestCookieValue(2) + "  ")
+	state.capture(context.Background(), "  "+anonymousTestCookieValue(2)+"  ")
 	value, ok := state.load()
 	require.True(t, ok)
 	require.Equal(t, anonymousTestCookieValue(2), value)
@@ -1168,8 +1340,8 @@ func TestAnonymousCookieStateRejectsInvalidValues(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, anonymousTestCookieValue(2), string(rawCookie))
 
-	withoutSession := newAnonymousCookieState(nil, "state-key")
-	withoutSession.capture(anonymousTestCookieValue(3))
+	withoutSession := newAnonymousCookieState(nil, nil, nil, "state-key")
+	withoutSession.capture(context.Background(), anonymousTestCookieValue(3))
 	_, ok = withoutSession.load()
 	require.False(t, ok)
 }
@@ -1182,7 +1354,12 @@ func TestAnonymousCookieJarHandlesCookieBoundaries(t *testing.T) {
 	}
 	agentURL := "https://example.com/a2a"
 	remoteURL := parseURL(agentURL)
-	state := newAnonymousCookieState(&session.Session{}, anonymousCookieStateKey(agentURL))
+	state := newAnonymousCookieState(
+		&session.Session{},
+		nil,
+		nil,
+		anonymousCookieStateKey(agentURL),
+	)
 	jar := &anonymousCookieJar{
 		cookie: state,
 		scope:  anonymousCookieURLScopeFromAgentURL(agentURL),
@@ -1229,7 +1406,12 @@ func TestAnonymousCookieRequestHandlerBoundaries(t *testing.T) {
 	_, err := handler.Handle(context.Background(), nil, nil)
 	require.EqualError(t, err, "a2a anonymous cookie handler: request is nil")
 
-	state := newAnonymousCookieState(&session.Session{}, anonymousCookieStateKey("http://example.com"))
+	state := newAnonymousCookieState(
+		&session.Session{},
+		nil,
+		nil,
+		anonymousCookieStateKey("http://example.com"),
+	)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.SetCookie(w, &http.Cookie{
 			Name:  anonymousUserIDCookieName,

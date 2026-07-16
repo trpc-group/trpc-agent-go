@@ -188,6 +188,8 @@ func (r *A2AAgent) clientForInvocation(
 	}
 	anonymousCookie := newAnonymousCookieState(
 		anonymousSessionFromInvocation(invocation),
+		anonymousPersistentSessionFromInvocation(invocation),
+		anonymousSessionServiceFromInvocation(invocation),
 		anonymousCookieStateKey(r.a2aClientURL),
 	)
 	a2aClient, err := r.newAnonymousClient(anonymousCookie)
@@ -212,6 +214,33 @@ func anonymousSessionFromInvocation(invocation *agent.Invocation) *session.Sessi
 		return nil
 	}
 	return invocation.Session
+}
+
+func anonymousSessionServiceFromInvocation(
+	invocation *agent.Invocation,
+) session.Service {
+	if invocation == nil {
+		return nil
+	}
+	return invocation.SessionService
+}
+
+func anonymousPersistentSessionFromInvocation(
+	invocation *agent.Invocation,
+) *session.Session {
+	for current := invocation; current != nil; current = current.GetParentInvocation() {
+		if hasPersistentSessionKey(current.Session) {
+			return current.Session
+		}
+	}
+	return nil
+}
+
+func hasPersistentSessionKey(sess *session.Session) bool {
+	return sess != nil &&
+		strings.TrimSpace(sess.AppName) != "" &&
+		strings.TrimSpace(sess.UserID) != "" &&
+		strings.TrimSpace(sess.ID) != ""
 }
 
 func (r *A2AAgent) newAnonymousClient(
@@ -308,12 +337,24 @@ func a2aClientHTTPReqHandlerType(a2aClient *client.A2AClient) string {
 }
 
 type anonymousCookieState struct {
-	session *session.Session
-	key     string
+	session        *session.Session
+	persistSession *session.Session
+	sessionService session.Service
+	key            string
 }
 
-func newAnonymousCookieState(sess *session.Session, key string) *anonymousCookieState {
-	return &anonymousCookieState{session: sess, key: key}
+func newAnonymousCookieState(
+	sess *session.Session,
+	persistSession *session.Session,
+	sessionService session.Service,
+	key string,
+) *anonymousCookieState {
+	return &anonymousCookieState{
+		session:        sess,
+		persistSession: persistSession,
+		sessionService: sessionService,
+		key:            key,
+	}
 }
 
 func (s *anonymousCookieState) load() (string, bool) {
@@ -331,7 +372,7 @@ func (s *anonymousCookieState) load() (string, bool) {
 	return cookieValue, true
 }
 
-func (s *anonymousCookieState) capture(cookieValue string) {
+func (s *anonymousCookieState) capture(ctx context.Context, cookieValue string) {
 	if s == nil || s.key == "" {
 		return
 	}
@@ -341,6 +382,28 @@ func (s *anonymousCookieState) capture(cookieValue string) {
 	}
 	if s.session != nil {
 		s.session.SetState(s.key, []byte(cookieValue))
+	}
+	s.persist(ctx, cookieValue)
+}
+
+func (s *anonymousCookieState) persist(ctx context.Context, cookieValue string) {
+	if s == nil ||
+		s.sessionService == nil ||
+		!hasPersistentSessionKey(s.persistSession) {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	state := session.StateMap{s.key: []byte(cookieValue)}
+	s.persistSession.SetState(s.key, []byte(cookieValue))
+	key := session.Key{
+		AppName:   s.persistSession.AppName,
+		UserID:    s.persistSession.UserID,
+		SessionID: s.persistSession.ID,
+	}
+	if err := s.sessionService.UpdateSessionState(ctx, key, state); err != nil {
+		log.WarnfContext(ctx, "persist anonymous A2A cookie state skipped or failed: %v", err)
 	}
 }
 
@@ -389,6 +452,7 @@ func (h *anonymousCookieHTTPReqHandler) Handle(
 	// not replay another local session's remote principal.
 	requestClient := *httpClient
 	requestClient.Jar = &anonymousCookieJar{
+		ctx:    ctx,
 		base:   httpClient.Jar,
 		cookie: h.cookie,
 		scope:  h.scope,
@@ -420,6 +484,7 @@ func (h *anonymousCookieHTTPReqHandler) acquireInitializationIfNeeded(
 }
 
 type anonymousCookieJar struct {
+	ctx    context.Context
 	base   http.CookieJar
 	cookie *anonymousCookieState
 	scope  anonymousCookieURLScope
@@ -436,7 +501,7 @@ func (j *anonymousCookieJar) SetCookies(u *url.URL, cookies []*http.Cookie) {
 		}
 		if cookie.Name == anonymousUserIDCookieName {
 			if j.cookie != nil && j.scope.matches(u) {
-				j.cookie.capture(cookie.Value)
+				j.cookie.capture(j.ctx, cookie.Value)
 			}
 			continue
 		}
