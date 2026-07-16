@@ -10,5 +10,6 @@
   {"name":"long-running","expected_decision":"ask","request":{"tool_name":"workspace_exec","command":"sleep 120","backend":"workspaceexec"}},
   {"name":"large-output","expected_decision":"deny","request":{"tool_name":"code_exec","command":"echo data","backend":"codeexec","max_output_bytes":9999999}},
   {"name":"host-pty","expected_decision":"ask","request":{"tool_name":"host_exec","command":"go test ./...","backend":"hostexec","pty":true}},
-  {"name":"manual-review","expected_decision":"ask","request":{"tool_name":"workspace_exec","command":"custom-linter ./...","backend":"workspaceexec","environment":{"UNREVIEWED_TOKEN":"token=abc123"}}}
+  {"name":"manual-review","expected_decision":"ask","request":{"tool_name":"workspace_exec","command":"custom-linter ./...","backend":"workspaceexec","environment":{"UNREVIEWED_TOKEN":"token=abc123"}}},
+  {"name":"protected-working-directory","expected_decision":"deny","request":{"tool_name":"workspace_exec","command":"go test ./...","backend":"workspaceexec","working_dir":"~/.ssh"}}
 ]

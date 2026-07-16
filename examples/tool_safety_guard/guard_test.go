@@ -52,6 +52,14 @@ func TestCriticalDetection(t *testing.T) {
 		}
 	}
 }
+
+func TestForbiddenWorkingDirectory(t *testing.T) {
+	g, _ := loadTest(t)
+	result := g.Scan(Request{ToolName: "workspace_exec", Command: "go test ./...", Backend: "workspaceexec", WorkingDir: "~/.ssh"})
+	if result.Decision != "deny" || result.RuleID != "FORBIDDEN_WORKING_DIR" {
+		t.Fatalf("protected working directory not denied: %+v", result)
+	}
+}
 func TestWrapperBlocksBeforeExecutionAndAudits(t *testing.T) {
 	g, _ := loadTest(t)
 	called := false

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -143,9 +144,14 @@ func (g *Guard) Scan(req Request) ScanResult {
 	if destructiveCommandRE.MatchString(lower) {
 		add("deny", "critical", "DESTRUCTIVE_COMMAND", req.Command, "do not run destructive filesystem commands")
 	}
+	workingDir := strings.ToLower(filepath.ToSlash(filepath.Clean(req.WorkingDir)))
 	for _, path := range g.policy.ForbiddenPaths {
+		normalizedPath := strings.ToLower(filepath.ToSlash(filepath.Clean(path)))
 		if strings.Contains(lower, strings.ToLower(path)) {
 			add("deny", "critical", "FORBIDDEN_PATH", path, "remove access to the protected path")
+		}
+		if req.WorkingDir != "" && strings.Contains(workingDir, normalizedPath) {
+			add("deny", "critical", "FORBIDDEN_WORKING_DIR", req.WorkingDir, "choose a working directory outside protected paths")
 		}
 	}
 	if secretReadRE.MatchString(req.Command) {
