@@ -278,6 +278,37 @@ func TestBuildInjectedContextMessagesSkipsOrphanedToolResults(
 	require.Equal(t, []model.Message{finalAnswer}, got)
 }
 
+func TestTrimVisibleHistory(t *testing.T) {
+	recentUser := model.NewUserMessage("recent question")
+	recentAnswer := model.NewAssistantMessage("recent answer")
+	messages := []model.Message{
+		model.NewAssistantMessage("old answer"),
+		recentUser,
+		recentAnswer,
+	}
+	require.Equal(
+		t,
+		[]model.Message{recentUser, recentAnswer},
+		trimVisibleHistory(messages, 2),
+	)
+
+	unmatchedToolResult := model.NewToolMessage(
+		"unmatched-call",
+		"read_config",
+		`{"enabled":true}`,
+	)
+	messages = []model.Message{
+		model.NewAssistantMessage("old answer"),
+		unmatchedToolResult,
+		recentAnswer,
+	}
+	require.Equal(
+		t,
+		[]model.Message{unmatchedToolResult, recentAnswer},
+		trimVisibleHistory(messages, 2),
+	)
+}
+
 func TestBuildInjectedContextMessagesKeepsSameTimestampAfterBoundary(
 	t *testing.T,
 ) {
@@ -771,6 +802,18 @@ func TestHistoryHelpers_RenderAndFilter(t *testing.T) {
 		},
 	}
 	require.Empty(t, visibleAssistantMessages(reasoningOnly))
+
+	missingRole := event.Event{
+		Author: authorAssistant,
+		Response: &model.Response{
+			Choices: []model.Choice{{
+				Message: model.Message{Content: "answer"},
+			}},
+		},
+	}
+	visible = visibleAssistantMessages(missingRole)
+	require.Len(t, visible, 1)
+	require.Equal(t, model.RoleAssistant, visible[0].Role)
 
 	require.Empty(
 		t,
