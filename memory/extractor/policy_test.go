@@ -19,13 +19,13 @@ import (
 )
 
 func TestExtractorUpdatePolicy_DefaultsToCompatible(t *testing.T) {
-	ext := NewExtractor(nil)
+	ext := NewExtractor(nil).(*memoryExtractor)
 	assert.Equal(t, UpdatePolicyCompatible, ext.UpdatePolicy())
 	assert.NotContains(t, ext.Metadata(), metadataKeyUpdatePolicy)
 }
 
 func TestExtractorUpdatePolicy_ZeroValueUsesCompatible(t *testing.T) {
-	var ext Extractor
+	var ext memoryExtractor
 	assert.Equal(t, UpdatePolicyCompatible, ext.UpdatePolicy())
 	assert.NotContains(t, ext.Metadata(), metadataKeyUpdatePolicy)
 }
@@ -34,7 +34,7 @@ func TestExtractorUpdatePolicy_OptIn(t *testing.T) {
 	ext := NewExtractor(
 		nil,
 		WithUpdatePolicy(UpdatePolicyStrict),
-	)
+	).(*memoryExtractor)
 	assert.Equal(t, UpdatePolicyStrict, ext.UpdatePolicy())
 	assert.Equal(t, UpdatePolicyStrict, ext.Metadata()[metadataKeyUpdatePolicy])
 }
@@ -43,15 +43,15 @@ func TestExtractorUpdatePolicy_InvalidValueUsesCompatible(t *testing.T) {
 	ext := NewExtractor(
 		nil,
 		WithUpdatePolicy(UpdatePolicy("invalid")),
-	)
+	).(*memoryExtractor)
 	assert.Equal(t, UpdatePolicyCompatible, ext.UpdatePolicy())
 }
 
 func TestUpdatePolicyPromptBlock_IsOptIn(t *testing.T) {
-	compatible := &Extractor{updatePolicy: UpdatePolicyCompatible}
+	compatible := &memoryExtractor{updatePolicy: UpdatePolicyCompatible}
 	assert.Empty(t, compatible.updatePolicyPromptBlock())
 
-	strict := &Extractor{updatePolicy: UpdatePolicyStrict}
+	strict := &memoryExtractor{updatePolicy: UpdatePolicyStrict}
 	assert.Contains(t, strict.updatePolicyPromptBlock(), "Preserve long-term history")
 	assert.Contains(t, strict.updatePolicyPromptBlock(), "Use memory_add for corrections")
 	assert.Contains(t, strict.updatePolicyPromptBlock(), "explicitly asks")
@@ -59,7 +59,7 @@ func TestUpdatePolicyPromptBlock_IsOptIn(t *testing.T) {
 		memory.DeleteToolName, "default",
 	), "explicitly asks")
 
-	addOnly := &Extractor{updatePolicy: UpdatePolicyAddOnly}
+	addOnly := &memoryExtractor{updatePolicy: UpdatePolicyAddOnly}
 	assert.Contains(t, addOnly.updatePolicyPromptBlock(), "Use only memory_add")
 	assert.Equal(t, map[string]struct{}{
 		memory.AddToolName: {},
@@ -131,7 +131,7 @@ func TestExtractorPolicies_InvalidToolCallsRemainNonFatal(t *testing.T) {
 	}
 
 	for _, policy := range policies {
-		ext := &Extractor{updatePolicy: policy}
+		ext := &memoryExtractor{updatePolicy: policy}
 		for _, call := range calls {
 			assert.Nil(t, ext.parseToolCall(context.Background(), call))
 		}

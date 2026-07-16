@@ -132,7 +132,7 @@ func TestNewExtractor(t *testing.T) {
 		require.NotNil(t, e)
 
 		// Verify the extractor was created with custom prompt.
-		extractor := e
+		extractor := e.(*memoryExtractor)
 		assert.Equal(t, customPrompt, extractor.prompt)
 	})
 
@@ -141,7 +141,7 @@ func TestNewExtractor(t *testing.T) {
 		require.NotNil(t, e)
 
 		// Verify default prompt is used.
-		extractor := e
+		extractor := e.(*memoryExtractor)
 		assert.Equal(t, defaultPrompt, extractor.prompt)
 	})
 }
@@ -534,7 +534,7 @@ func TestExtractor_Extract_EmptyChoices(t *testing.T) {
 func TestExtractor_SetPrompt(t *testing.T) {
 	m := &mockModel{name: "test-model"}
 	e := NewExtractor(m)
-	extractor := e
+	extractor := e.(*memoryExtractor)
 
 	// Set new prompt.
 	newPrompt := "New extraction prompt."
@@ -573,7 +573,7 @@ func TestExtractor_Metadata_NoModel(t *testing.T) {
 func TestExtractor_BuildSystemPrompt_WithExistingMemories(t *testing.T) {
 	m := &mockModel{name: "test-model"}
 	e := NewExtractor(m)
-	extractor := e
+	extractor := e.(*memoryExtractor)
 
 	refDate := time.Date(2023, 5, 8, 0, 0, 0, 0, time.UTC)
 	existing := []*memory.Entry{
@@ -608,7 +608,7 @@ func TestExtractor_BuildSystemPrompt_WithExistingMemories(t *testing.T) {
 func TestExtractor_BuildSystemPrompt_EmptyExisting(t *testing.T) {
 	m := &mockModel{name: "test-model"}
 	e := NewExtractor(m)
-	extractor := e
+	extractor := e.(*memoryExtractor)
 
 	refDate := time.Date(2023, 5, 8, 0, 0, 0, 0, time.UTC)
 	prompt := extractor.buildSystemPrompt(refDate, nil)
@@ -625,7 +625,7 @@ func TestExtractor_BuildSystemPrompt_EmptyExisting(t *testing.T) {
 func TestExtractor_BuildSystemPrompt_NilMemory(t *testing.T) {
 	m := &mockModel{name: "test-model"}
 	e := NewExtractor(m)
-	extractor := e
+	extractor := e.(*memoryExtractor)
 
 	refDate := time.Date(2023, 5, 8, 0, 0, 0, 0, time.UTC)
 	existing := []*memory.Entry{
@@ -649,7 +649,7 @@ func TestExtractor_BuildSystemPrompt_NilMemory(t *testing.T) {
 func TestExtractor_ParseToolCall_InvalidJSON(t *testing.T) {
 	m := &mockModel{name: "test-model"}
 	e := NewExtractor(m)
-	extractor := e
+	extractor := e.(*memoryExtractor)
 
 	call := model.ToolCall{
 		Type: "function",
@@ -666,7 +666,7 @@ func TestExtractor_ParseToolCall_InvalidJSON(t *testing.T) {
 func TestExtractor_ParseToolCall_UnknownTool(t *testing.T) {
 	m := &mockModel{name: "test-model"}
 	e := NewExtractor(m)
-	ext := e
+	ext := e.(*memoryExtractor)
 
 	args, _ := json.Marshal(map[string]any{
 		"memory": "test",
@@ -686,7 +686,7 @@ func TestExtractor_ParseToolCall_UnknownTool(t *testing.T) {
 func TestExtractor_SetEnabledTools(t *testing.T) {
 	m := &mockModel{name: "test-model"}
 	e := NewExtractor(m)
-	ext := e
+	ext := e.(*memoryExtractor)
 
 	t.Run("set enabled tools", func(t *testing.T) {
 		enabled := map[string]struct{}{
@@ -761,7 +761,7 @@ func TestFilterTools(t *testing.T) {
 func TestExtractor_AvailableActionsBlock(t *testing.T) {
 	m := &mockModel{name: "test-model"}
 	e := NewExtractor(m)
-	ext := e
+	ext := e.(*memoryExtractor)
 
 	t.Run("all tools enabled by default", func(t *testing.T) {
 		block := ext.availableActionsBlock()
@@ -824,7 +824,7 @@ func TestExtractor_Extract_FilteredTools(t *testing.T) {
 		makeToolCall(memory.AddToolName, args),
 	})
 	e := NewExtractor(m)
-	ext := e
+	ext := e.(*memoryExtractor)
 
 	// Only enable add tool.
 	ext.SetEnabledTools(map[string]struct{}{
@@ -856,7 +856,8 @@ func TestExtractor_EnabledToolsConfigurer(t *testing.T) {
 	}
 
 	// Verify the concrete type implements enabledToolsConfigurer.
-	var configurer enabledToolsConfigurer = e
+	configurer, ok := e.(enabledToolsConfigurer)
+	require.True(t, ok)
 
 	enabled := map[string]struct{}{
 		memory.AddToolName: {},
@@ -864,7 +865,7 @@ func TestExtractor_EnabledToolsConfigurer(t *testing.T) {
 	configurer.SetEnabledTools(enabled)
 
 	// Verify through the internal state.
-	ext := e
+	ext := e.(*memoryExtractor)
 	_, hasAdd := ext.enabledTools[memory.AddToolName]
 	assert.True(t, hasAdd)
 }
@@ -895,7 +896,7 @@ func TestInferReferenceDate(t *testing.T) {
 func TestExtractor_BuildSystemPrompt_WithTopics(t *testing.T) {
 	m := &mockModel{name: "test-model"}
 	e := NewExtractor(m)
-	ext := e
+	ext := e.(*memoryExtractor)
 
 	existing := []*memory.Entry{
 		{
@@ -1012,14 +1013,14 @@ func TestExtractor_WithChecker(t *testing.T) {
 
 	t.Run("nil checker is ignored", func(t *testing.T) {
 		e := NewExtractor(m, WithChecker(nil))
-		ext := e
+		ext := e.(*memoryExtractor)
 		assert.Len(t, ext.checkers, 0)
 	})
 
 	t.Run("checker added", func(t *testing.T) {
 		checker := func(ctx *ExtractionContext) bool { return true }
 		e := NewExtractor(m, WithChecker(checker))
-		ext := e
+		ext := e.(*memoryExtractor)
 		assert.Len(t, ext.checkers, 1)
 	})
 }
@@ -1029,7 +1030,7 @@ func TestExtractor_WithCheckersAny(t *testing.T) {
 
 	t.Run("empty checkers is no-op", func(t *testing.T) {
 		e := NewExtractor(m, WithCheckersAny())
-		ext := e
+		ext := e.(*memoryExtractor)
 		assert.Len(t, ext.checkers, 0)
 	})
 
@@ -1064,7 +1065,7 @@ func TestModelErrFromResponse(t *testing.T) {
 
 func TestBuildMessages_TrailingAssistantSuffix(t *testing.T) {
 	m := &mockModel{name: "test-model"}
-	ext := NewExtractor(m)
+	ext := NewExtractor(m).(*memoryExtractor)
 
 	t.Run("ends with assistant appends user", func(t *testing.T) {
 		msgs := []model.Message{

@@ -30,6 +30,14 @@ type countingOperator struct {
 	searchCalls int
 }
 
+type invalidUpdatePolicyExtractor struct {
+	*mockExtractor
+}
+
+func (*invalidUpdatePolicyExtractor) UpdatePolicy() extractor.UpdatePolicy {
+	return extractor.UpdatePolicy("invalid")
+}
+
 func (o *countingOperator) SearchMemories(
 	ctx context.Context,
 	userKey memory.UserKey,
@@ -44,7 +52,7 @@ func newExtractorWithOperation(
 	t *testing.T,
 	policy extractor.UpdatePolicy,
 	op *extractor.Operation,
-) *extractor.Extractor {
+) extractor.MemoryExtractor {
 	t.Helper()
 	args := make(map[string]any)
 	var toolName string
@@ -106,6 +114,9 @@ func TestUpdatePolicyFor_UsesBuiltInExtractorPolicy(t *testing.T) {
 		assert.Equal(t, policy, updatePolicyFor(builtin))
 	}
 	assert.Equal(t, extractor.UpdatePolicyCompatible, updatePolicyFor(&mockExtractor{}))
+	assert.Equal(t, extractor.UpdatePolicyCompatible, updatePolicyFor(
+		&invalidUpdatePolicyExtractor{mockExtractor: &mockExtractor{}},
+	))
 }
 
 func TestStrictPolicy_AliceTimeEnrichmentUpdates(t *testing.T) {

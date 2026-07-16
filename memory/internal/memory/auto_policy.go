@@ -86,12 +86,24 @@ type strictCandidate struct {
 	newCoverage float64
 }
 
+type updatePolicyProvider interface {
+	UpdatePolicy() extractor.UpdatePolicy
+}
+
 func updatePolicyFor(ext extractor.MemoryExtractor) extractor.UpdatePolicy {
-	builtin, ok := ext.(*extractor.Extractor)
+	provider, ok := ext.(updatePolicyProvider)
 	if !ok {
 		return extractor.UpdatePolicyCompatible
 	}
-	return builtin.UpdatePolicy()
+	policy := provider.UpdatePolicy()
+	switch policy {
+	case extractor.UpdatePolicyCompatible,
+		extractor.UpdatePolicyStrict,
+		extractor.UpdatePolicyAddOnly:
+		return policy
+	default:
+		return extractor.UpdatePolicyCompatible
+	}
 }
 
 func (w *AutoMemoryWorker) applyUpdatePolicy(
