@@ -29,6 +29,7 @@ func TestScanner_NewScanner(t *testing.T) {
 // TestScanner_Scan_NoFindings verifies that a safe input produces no findings.
 func TestScanner_Scan_NoFindings(t *testing.T) {
 	policy := DefaultPolicy()
+	policy.DefaultAction = DecisionAllow
 	scanner := NewScanner(policy)
 
 	result := scanner.Scan(context.Background(), ScanInput{
@@ -39,6 +40,21 @@ func TestScanner_Scan_NoFindings(t *testing.T) {
 	assert.Equal(t, RiskLevelInfo, result.RiskLevel)
 	assert.Empty(t, result.Findings)
 	assert.False(t, result.Intercepted)
+}
+
+func TestScanner_Scan_NoFindings_DefaultDeny(t *testing.T) {
+	policy := DefaultPolicy()
+	// DefaultPolicy has DefaultAction=deny, so no findings → deny.
+	scanner := NewScanner(policy)
+
+	result := scanner.Scan(context.Background(), ScanInput{
+		Command: "go test ./...",
+	})
+
+	assert.Equal(t, DecisionDeny, result.Decision)
+	assert.Equal(t, RiskLevelInfo, result.RiskLevel)
+	assert.Empty(t, result.Findings)
+	assert.True(t, result.Intercepted)
 }
 
 // TestScanner_Scan_MultipleFindings_Aggregation verifies that the deny decision

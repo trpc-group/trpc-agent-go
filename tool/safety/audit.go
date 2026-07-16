@@ -53,7 +53,15 @@ func auditEventFromScanResult(result ScanResult, duration time.Duration, redacte
 	ruleID := ""
 	if len(result.Findings) > 0 {
 		// Use the rule ID of the highest-severity finding.
-		ruleID = result.Findings[0].RuleID
+		best := result.Findings[0]
+		bestOrd := riskLevelOrder(best.RiskLevel)
+		for _, f := range result.Findings[1:] {
+			if ord := riskLevelOrder(f.RiskLevel); ord > bestOrd || (ord == bestOrd && decisionOrder(f.Decision) < decisionOrder(best.Decision)) {
+				best = f
+				bestOrd = ord
+			}
+		}
+		ruleID = best.RuleID
 	}
 	return AuditEvent{
 		Timestamp:   time.Now().UTC().Format(time.RFC3339Nano),

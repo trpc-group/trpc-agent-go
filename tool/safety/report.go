@@ -61,7 +61,8 @@ func WriteReportFile(path string, r Report) error {
 	dir := filepath.Dir(path)
 	tmpFile := filepath.Join(dir, filepath.Base(path)+".tmp")
 
-	if err := os.WriteFile(tmpFile, data, 0o644); err != nil {
+	if err := os.WriteFile(tmpFile, data, 0o600); err != nil {
+		os.Remove(tmpFile) // Clean up the temp file on write failure.
 		return fmt.Errorf("write tmp report file: %w", err)
 	}
 

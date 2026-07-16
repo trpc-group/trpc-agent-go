@@ -10,9 +10,11 @@ package safety
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/internal/shellsafe"
@@ -40,11 +42,16 @@ var systemPathPatterns = []string{
 	".env", "credentials",
 }
 
-func (r *DangerousCommandRule) Scan(_ context.Context, input ScanInput, _ PolicyFile) []Finding {
+func (r *DangerousCommandRule) Scan(_ context.Context, input ScanInput, policy PolicyFile) []Finding {
 	text := normalizedScanText(input)
 	var findings []Finding
 
-	for _, pat := range dangerousCmdPatterns {
+	// Use DeniedCommands from the policy (policy-driven).
+	deniedCmds := policy.DeniedCommands
+	if len(deniedCmds) == 0 {
+		deniedCmds = dangerousCmdPatterns
+	}
+	for _, pat := range deniedCmds {
 		if strings.Contains(text, pat) {
 			findings = append(findings, Finding{
 				RuleID:         r.ID(),
@@ -58,8 +65,13 @@ func (r *DangerousCommandRule) Scan(_ context.Context, input ScanInput, _ Policy
 		}
 	}
 
+	// Use DeniedPaths from the policy (policy-driven).
+	deniedPaths := policy.DeniedPaths
+	if len(deniedPaths) == 0 {
+		deniedPaths = systemPathPatterns
+	}
 	normalized := normalizePaths(text)
-	for _, pat := range systemPathPatterns {
+	for _, pat := range deniedPaths {
 		if strings.Contains(normalized, pat) {
 			findings = append(findings, Finding{
 				RuleID:         r.ID(),
@@ -212,9 +224,7 @@ func (r *HostLongSessionRule) Scan(_ context.Context, input ScanInput, policy Po
 	}
 
 	// Detect background/PTY session indicators.
-	hasBackground := input.Env["Background"] == "true"
-	hasPTY := input.Env["PTY"] == "true"
-	if hasBackground && hasPTY {
+	if input.Background && input.PTY {
 		findings = append(findings, Finding{
 			RuleID:         r.ID(),
 			RuleName:       r.Name(),
@@ -241,25 +251,17 @@ func (r *HostLongSessionRule) Scan(_ context.Context, input ScanInput, policy Po
 		}
 	}
 
-	// Detect long timeout.
-	if policy.MaxTimeoutSec > 0 {
-		for _, arg := range input.Args {
-			if strings.HasPrefix(arg, "timeout=") || strings.HasPrefix(arg, "--timeout=") {
-				val := strings.TrimPrefix(arg, "timeout=")
-				val = strings.TrimPrefix(val, "--timeout=")
-				if isLargeTimeout(val, policy.MaxTimeoutSec) {
-					findings = append(findings, Finding{
-						RuleID:         r.ID(),
-						RuleName:       r.Name(),
-						RiskLevel:      RiskLevelMedium,
-						Decision:       DecisionAsk,
-						Evidence:       "timeout=" + val,
-						Recommendation: "Reduce the session timeout or request explicit human review.",
-					})
-					return findings
-				}
-			}
-		}
+	// Detect long timeout via the normalized ScanInput.Timeout field.
+	if policy.MaxTimeoutSec > 0 && input.Timeout > 0 && input.Timeout > policy.MaxTimeoutSec {
+		findings = append(findings, Finding{
+			RuleID:         r.ID(),
+			RuleName:       r.Name(),
+			RiskLevel:      RiskLevelMedium,
+			Decision:       DecisionAsk,
+			Evidence:       fmt.Sprintf("timeout=%d", input.Timeout),
+			Recommendation: "Reduce the session timeout or request explicit human review.",
+		})
+		return findings
 	}
 
 	return findings
@@ -295,8 +297,10 @@ func (r *DependencyInstallRule) Scan(_ context.Context, input ScanInput, policy 
 		if !strings.Contains(text, cmd) {
 			continue
 		}
-		// Exception: if the command is in AllowedCommands, skip.
-		if isCommandAllowed(input.Command, policy.AllowedCommands) {
+		// Exception: if the command executable is in AllowedCommands, skip.
+		// Parse the executable from the full command to match
+		// AllowListMissRule semantics.
+		if isCommandAllowedExecutable(input.Command, policy.AllowedCommands) {
 			return nil
 		}
 		return []Finding{{
@@ -353,38 +357,33 @@ func (r *ResourceAbuseRule) Scan(_ context.Context, input ScanInput, policy Poli
 
 	// Detect large sleep values (>300 s).
 	for _, m := range largeSleepRe.FindAllStringSubmatch(text, -1) {
-		if len(m) >= 2 && parseInt(m[1]) > 300 {
-			findings = append(findings, Finding{
-				RuleID:         r.ID(),
-				RuleName:       r.Name(),
-				RiskLevel:      RiskLevelMedium,
-				Decision:       DecisionAsk,
-				Evidence:       "sleep " + m[1],
-				Recommendation: "Reduce the sleep duration or request human review.",
-			})
-			return findings
+		if len(m) >= 2 {
+			val, err := strconv.Atoi(m[1])
+			if err == nil && val > 300 {
+				findings = append(findings, Finding{
+					RuleID:         r.ID(),
+					RuleName:       r.Name(),
+					RiskLevel:      RiskLevelMedium,
+					Decision:       DecisionAsk,
+					Evidence:       "sleep " + m[1],
+					Recommendation: "Reduce the sleep duration or request human review.",
+				})
+				return findings
+			}
 		}
 	}
 
-	// Detect timeout values exceeding policy.
-	if policy.MaxTimeoutSec > 0 {
-		for _, arg := range input.Args {
-			if strings.HasPrefix(arg, "timeout=") || strings.HasPrefix(arg, "--timeout=") {
-				val := strings.TrimPrefix(arg, "timeout=")
-				val = strings.TrimPrefix(val, "--timeout=")
-				if isLargeTimeout(val, policy.MaxTimeoutSec) {
-					findings = append(findings, Finding{
-						RuleID:         r.ID(),
-						RuleName:       r.Name(),
-						RiskLevel:      RiskLevelMedium,
-						Decision:       DecisionAsk,
-						Evidence:       "timeout=" + val,
-						Recommendation: "Reduce the timeout or request human review.",
-					})
-					return findings
-				}
-			}
-		}
+	// Detect timeout values exceeding policy via the normalized ScanInput.Timeout field.
+	if policy.MaxTimeoutSec > 0 && input.Timeout > 0 && input.Timeout > policy.MaxTimeoutSec {
+		findings = append(findings, Finding{
+			RuleID:         r.ID(),
+			RuleName:       r.Name(),
+			RiskLevel:      RiskLevelMedium,
+			Decision:       DecisionAsk,
+			Evidence:       fmt.Sprintf("timeout=%d", input.Timeout),
+			Recommendation: "Reduce the timeout or request human review.",
+		})
+		return findings
 	}
 
 	// Detect large output redirection.
@@ -629,21 +628,26 @@ func isCommandAllowed(cmd string, allowed []string) bool {
 	return false
 }
 
-// isLargeTimeout reports whether the timeout value string (seconds) exceeds
-// the policy maximum.
-func isLargeTimeout(val string, maxSec int) bool {
-	sec := parseInt(val)
-	return sec > 0 && maxSec > 0 && sec > maxSec
-}
-
-// parseInt parses a decimal integer from s; returns 0 on failure.
-func parseInt(s string) int {
-	n := 0
-	for _, ch := range s {
-		if ch < '0' || ch > '9' {
-			break
-		}
-		n = n*10 + int(ch-'0')
+// isCommandAllowedExecutable parses the command via shellsafe and checks
+// whether the first executable in the pipeline appears in the allowed list.
+// This matches AllowListMissRule semantics. Falls back to isCommandAllowed
+// if the command cannot be parsed.
+func isCommandAllowedExecutable(cmd string, allowed []string) bool {
+	if len(allowed) == 0 {
+		return false
 	}
-	return n
+	pipe, err := shellsafe.Parse(cmd)
+	if err != nil {
+		// Cannot parse; fall back to simple check.
+		return isCommandAllowed(cmd, allowed)
+	}
+	for _, argv := range pipe.Commands {
+		if len(argv) == 0 {
+			continue
+		}
+		if !isCommandAllowed(argv[0], allowed) {
+			return false
+		}
+	}
+	return true
 }

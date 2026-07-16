@@ -191,6 +191,9 @@ func TestExecRequest_ToScanInput(t *testing.T) {
 		Args:       []string{"-v"},
 		WorkDir:    "/workspace",
 		Env:        map[string]string{"GOPATH": "/go"},
+		Timeout:    30,
+		Background: true,
+		PTY:        false,
 		Backend:    "workspaceexec",
 	}
 
@@ -203,6 +206,9 @@ func TestExecRequest_ToScanInput(t *testing.T) {
 	assert.Equal(t, map[string]string{"GOPATH": "/go"}, scanInput.Env)
 	assert.Equal(t, "my_tool", scanInput.ToolName)
 	assert.Equal(t, "workspaceexec", scanInput.Backend)
+	assert.Equal(t, 30, scanInput.Timeout)
+	assert.True(t, scanInput.Background)
+	assert.False(t, scanInput.PTY)
 }
 
 // TestRegisterExtractor verifies that custom extractors can be registered.

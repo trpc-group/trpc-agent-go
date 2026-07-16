@@ -114,7 +114,7 @@ Sandboxing (containers, VMs, cloud sandboxes) provides **runtime isolation**. Th
 
 The guard operates as a pipeline. Each step transforms the data and the pipeline short-circuits on failure (fail-closed).
 
-```
+```text
 ┌──────────┐    ┌─────────────────────┐    ┌──────────┐    ┌──────────┐
 │ Tool Call │───▶│ Guard.Check         │───▶│ Extract  │───▶│  Scan    │
 │ Permission│    │ ToolPermission()    │    │ Request  │    │ (Rules)  │
@@ -414,7 +414,7 @@ The aggregated decision is the finding with the **lowest** order value (highest 
 
 Risk level aggregation uses the opposite direction — the **highest** severity wins:
 
-```
+```text
 critical > high > medium > low > info
 ```
 

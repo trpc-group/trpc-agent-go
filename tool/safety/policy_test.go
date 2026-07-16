@@ -227,3 +227,30 @@ func TestDefaultPolicy_DeniedPaths(t *testing.T) {
 	assert.Contains(t, policy.DeniedPaths, "/etc/shadow")
 	assert.Contains(t, policy.DeniedPaths, "/etc/passwd")
 }
+
+// TestLoadPolicyFromBytes_UnknownJSONKey verifies that unknown keys in JSON are rejected.
+func TestLoadPolicyFromBytes_UnknownJSONKey(t *testing.T) {
+	jsonData := []byte(`{"version":"v1","unknown_field":"test"}`)
+	_, err := LoadPolicyFromBytes(jsonData)
+	assert.Error(t, err, "unknown JSON key should be rejected")
+	assert.Contains(t, err.Error(), "strict validation")
+}
+
+// TestLoadPolicyFromBytes_NegativeMaxTimeout verifies that negative max_timeout_sec is rejected.
+func TestLoadPolicyFromBytes_NegativeMaxTimeout(t *testing.T) {
+	yamlData := []byte(`
+version: v1
+max_timeout_sec: -1
+`)
+	_, err := LoadPolicyFromBytes(yamlData)
+	assert.Error(t, err, "negative max_timeout_sec should be rejected")
+	assert.Contains(t, err.Error(), "max_timeout_sec must be positive")
+}
+
+// TestLoadPolicyFromBytes_ZeroMaxTimeout verifies that zero max_timeout_sec is rejected.
+func TestLoadPolicyFromBytes_ZeroMaxTimeout(t *testing.T) {
+	jsonData := []byte(`{"version":"v1","max_timeout_sec":0}`)
+	_, err := LoadPolicyFromBytes(jsonData)
+	assert.Error(t, err, "zero max_timeout_sec should be rejected")
+	assert.Contains(t, err.Error(), "max_timeout_sec must be positive")
+}

@@ -61,6 +61,12 @@ type ScanInput struct {
 	ToolName string
 	// Backend identifies the execution backend (workspaceexec, hostexec, codeexec).
 	Backend string
+	// Timeout is the requested execution timeout in seconds.
+	Timeout int
+	// Background reports whether the command runs in the background.
+	Background bool
+	// PTY reports whether a pseudo-terminal is requested.
+	PTY bool
 }
 
 // Finding represents a single safety finding from a rule.
@@ -155,7 +161,8 @@ func decisionOrder(d Decision) int {
 	case DecisionAllow:
 		return 3
 	default:
-		return 3
+		// Fail-closed: unrecognized decisions are treated as deny.
+		return 0
 	}
 }
 
@@ -181,6 +188,7 @@ func riskLevelOrder(r RiskLevel) int {
 // aggregateDecision returns the highest-priority Decision from findings.
 // Priority: deny > ask > needs_human_review > allow.
 // If no findings are present, DecisionAllow is returned.
+// Unrecognized decision values are treated as deny (fail-closed).
 func aggregateDecision(findings []Finding) Decision {
 	result := DecisionAllow
 	for _, f := range findings {

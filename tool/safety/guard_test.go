@@ -29,7 +29,7 @@ func TestGuard_ImplementsPermissionPolicy(t *testing.T) {
 // TestGuard_CheckToolPermission_Allow verifies that a safe command is allowed.
 func TestGuard_CheckToolPermission_Allow(t *testing.T) {
 	guard, err := NewGuard(WithPolicy(PolicyFile{
-		DefaultAction:    DecisionDeny,
+		DefaultAction:    DecisionAllow,
 		AllowedCommands:  []string{"go", "git", "echo"},
 		DeniedCommands:   []string{"rm"},
 		NetworkAllowlist: []string{"api.trusted.com"},
@@ -182,7 +182,7 @@ func TestGuard_WithPolicyFile(t *testing.T) {
 
 	yamlData := []byte(`
 version: v1
-default_action: deny
+default_action: allow
 allowed_commands:
   - go
   - echo
@@ -208,27 +208,18 @@ max_timeout_sec: 120
 	assert.Equal(t, tool.PermissionActionAllow, decision.Action)
 }
 
-// TestGuard_WithPolicyFile_NotFound verifies that a missing policy file uses default policy.
+// TestGuard_WithPolicyFile_NotFound verifies that a missing policy file returns an error.
 func TestGuard_WithPolicyFile_NotFound(t *testing.T) {
 	guard, err := NewGuard(WithPolicyFile("/nonexistent/policy.yaml"))
-	require.NoError(t, err)
-	defer guard.Close()
-
-	// Should still work with default policy.
-	args, _ := json.Marshal(map[string]any{
-		"command": "rm -rf /",
-	})
-	decision, err := guard.CheckToolPermission(context.Background(), &tool.PermissionRequest{
-		ToolName:  "workspace_exec",
-		Arguments: args,
-	})
-	require.NoError(t, err)
-	assert.Equal(t, tool.PermissionActionDeny, decision.Action)
+	require.Error(t, err, "WithPolicyFile should return error for missing file")
+	assert.Nil(t, guard)
 }
 
 // TestGuard_UnknownTool verifies that an unknown tool uses generic extraction.
 func TestGuard_UnknownTool(t *testing.T) {
-	guard, err := NewGuard(WithPolicy(DefaultPolicy()))
+	policy := DefaultPolicy()
+	policy.DefaultAction = DecisionAllow
+	guard, err := NewGuard(WithPolicy(policy))
 	require.NoError(t, err)
 	defer guard.Close()
 
@@ -261,7 +252,9 @@ func TestGuard_HostExec(t *testing.T) {
 
 // TestGuard_CodeExec verifies extracting and scanning a codeexec request.
 func TestGuard_CodeExec(t *testing.T) {
-	guard, err := NewGuard(WithPolicy(DefaultPolicy()))
+	policy := DefaultPolicy()
+	policy.DefaultAction = DecisionAllow
+	guard, err := NewGuard(WithPolicy(policy))
 	require.NoError(t, err)
 	defer guard.Close()
 

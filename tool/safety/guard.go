@@ -39,12 +39,15 @@ type Guard struct {
 // Compile-time check that Guard implements tool.PermissionPolicy.
 var _ tool.PermissionPolicy = (*Guard)(nil)
 
-// GuardOption configures a Guard.
-type GuardOption func(*Guard)
+// GuardOption configures a Guard. If the option encounters a configuration
+// error it returns a non-nil error, which causes NewGuard to abort and
+// return that error to the caller.
+type GuardOption func(*Guard) error
 
 // NewGuard creates a new Guard with the given options.
 // By default it uses DefaultPolicy() and NewRedactor().
-// Returns an error if the policy file cannot be loaded.
+// Returns an error if any option reports a configuration error
+// (e.g. policy file not found, audit file cannot be opened).
 func NewGuard(opts ...GuardOption) (*Guard, error) {
 	g := &Guard{
 		scanner:    NewScanner(DefaultPolicy()),
@@ -57,68 +60,77 @@ func NewGuard(opts ...GuardOption) (*Guard, error) {
 		g.extractors[k] = v
 	}
 	for _, opt := range opts {
-		opt(g)
+		if err := opt(g); err != nil {
+			return nil, err
+		}
 	}
 	return g, nil
 }
 
 // WithPolicyFile configures the Guard to load policy from a YAML/JSON file.
+// Returns a configuration error if the file cannot be loaded or parsed.
 func WithPolicyFile(path string) GuardOption {
-	return func(g *Guard) {
+	return func(g *Guard) error {
 		policy, err := LoadPolicyFile(path)
 		if err != nil {
-			// If the file cannot be loaded, keep the default fail-closed policy.
-			return
+			return fmt.Errorf("load policy file %s: %w", path, err)
 		}
 		g.scanner = NewScanner(policy)
+		return nil
 	}
 }
 
 // WithPolicy configures the Guard with an explicit PolicyFile.
 func WithPolicy(p PolicyFile) GuardOption {
-	return func(g *Guard) {
+	return func(g *Guard) error {
 		g.scanner = NewScanner(p)
+		return nil
 	}
 }
 
 // WithAuditFile configures the Guard to write audit events to a file
 // in append mode. If the file does not exist, it is created.
+// Returns a configuration error if the file cannot be opened.
 func WithAuditFile(path string) GuardOption {
-	return func(g *Guard) {
-		f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	return func(g *Guard) error {
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 		if err != nil {
-			return
+			return fmt.Errorf("open audit file %s: %w", path, err)
 		}
 		g.auditFile = f
 		g.auditWriter = NewAuditWriter(f)
 		g.closer = func() {
 			f.Close()
 		}
+		return nil
 	}
 }
 
 // WithAuditWriter configures the Guard to write audit events to an io.Writer.
 func WithAuditWriter(w io.Writer) GuardOption {
-	return func(g *Guard) {
+	return func(g *Guard) error {
 		g.auditWriter = NewAuditWriter(w)
+		return nil
 	}
 }
 
 // WithReportSink configures the Guard to send reports to the given callback
 // after each scan.
 func WithReportSink(fn func(Report)) GuardOption {
-	return func(g *Guard) {
+	return func(g *Guard) error {
 		g.reportSink = fn
+		return nil
 	}
 }
 
 // WithExtractors configures the Guard with custom extractors.
 // The map is copied; later calls do not mutate the Guard.
 func WithExtractors(extractors map[string]Extractor) GuardOption {
-	return func(g *Guard) {
+	return func(g *Guard) error {
 		for k, v := range extractors {
 			g.extractors[k] = v
 		}
+		return nil
 	}
 }
 

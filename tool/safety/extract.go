@@ -47,6 +47,9 @@ func (r ExecRequest) ToScanInput(toolName string) ScanInput {
 		Env:        r.Env,
 		ToolName:   toolName,
 		Backend:    r.Backend,
+		Timeout:    r.Timeout,
+		Background: r.Background,
+		PTY:        r.PTY,
 	}
 }
 

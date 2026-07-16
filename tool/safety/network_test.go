@@ -106,19 +106,21 @@ func TestNetworkEgress_PythonHTTPClient(t *testing.T) {
 	assert.Equal(t, "R-NET-001", findings[0].RuleID)
 }
 
-// TestNetworkEgress_PythonHTTPClient_Allowed verifies Python HTTP calls pass when domain is whitelisted.
+// TestNetworkEgress_PythonHTTPClient_Allowed verifies Python HTTP calls always produce a finding.
 func TestNetworkEgress_PythonHTTPClient_Allowed(t *testing.T) {
 	rule := &NetworkEgressRule{}
 	policy := PolicyFile{
-		NetworkAllowlist: []string{"api.trusted.com", "python-http-client"},
+		NetworkAllowlist: []string{"api.trusted.com"},
 	}
 
 	findings := rule.Scan(context.Background(), ScanInput{
 		CodeBlocks: []string{"import urllib.request\nurllib.request.urlopen('http://api.trusted.com')"},
 	}, policy)
 
-	// python-http-client is in the allowlist so no R-NET-001 for it.
-	assert.Empty(t, findings, "no findings when python-http-client is whitelisted")
+	// Python HTTP client always produces a direct deny finding regardless of allowlist,
+	// since the destination cannot be determined from static analysis.
+	assert.NotEmpty(t, findings, "Python HTTP client should always produce a finding")
+	assert.Equal(t, "R-NET-001", findings[0].RuleID)
 }
 
 // TestNetworkEgress_WildcardAllowlist verifies that wildcard subdomain matching works.

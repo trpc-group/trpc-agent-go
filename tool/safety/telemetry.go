@@ -23,10 +23,19 @@ const (
 // SpanAttributes returns key-value pairs for OTel span attributes from a
 // ScanResult. This does not depend on the OTel SDK directly; callers can
 // use these to set span attributes via their preferred OTel integration.
+// The RuleID is taken from the highest-severity finding.
 func SpanAttributes(result ScanResult) map[string]string {
 	ruleID := ""
 	if len(result.Findings) > 0 {
-		ruleID = result.Findings[0].RuleID
+		best := result.Findings[0]
+		bestOrd := riskLevelOrder(best.RiskLevel)
+		for _, f := range result.Findings[1:] {
+			if ord := riskLevelOrder(f.RiskLevel); ord > bestOrd || (ord == bestOrd && decisionOrder(f.Decision) < decisionOrder(best.Decision)) {
+				best = f
+				bestOrd = ord
+			}
+		}
+		ruleID = best.RuleID
 	}
 	return map[string]string{
 		SpanKeyDecision:  string(result.Decision),

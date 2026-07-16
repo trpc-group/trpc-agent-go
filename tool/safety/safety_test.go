@@ -19,6 +19,7 @@ import (
 // TestScan_SafeCommand verifies that a safe go test command is allowed.
 func TestScan_SafeCommand(t *testing.T) {
 	policy := DefaultPolicy()
+	policy.DefaultAction = DecisionAllow
 	scanner := NewScanner(policy)
 
 	result := scanner.Scan(context.Background(), ScanInput{
@@ -112,6 +113,7 @@ func TestScan_NetworkEgressDenied(t *testing.T) {
 // TestScan_NetworkEgressAllowed verifies that curl to a whitelisted domain is allowed.
 func TestScan_NetworkEgressAllowed(t *testing.T) {
 	policy := DefaultPolicy()
+	policy.DefaultAction = DecisionAllow
 	policy.NetworkAllowlist = []string{"api.trusted.com"}
 	scanner := NewScanner(policy)
 
@@ -361,6 +363,7 @@ func TestScan_AllowListMiss(t *testing.T) {
 // TestScan_AllowListAllowed verifies that commands in the allowed list pass.
 func TestScan_AllowListAllowed(t *testing.T) {
 	policy := DefaultPolicy()
+	policy.DefaultAction = DecisionAllow
 	policy.AllowedCommands = []string{"go", "git", "echo"}
 	scanner := NewScanner(policy)
 
@@ -379,10 +382,11 @@ func TestScan_HostLongSession_BackgroundPTY(t *testing.T) {
 	scanner := NewScanner(policy)
 
 	result := scanner.Scan(context.Background(), ScanInput{
-		Command:  "long_running_task",
-		Env:      map[string]string{"Background": "true", "PTY": "true"},
-		ToolName: "exec_command",
-		Backend:  "hostexec",
+		Command:    "long_running_task",
+		Background: true,
+		PTY:        true,
+		ToolName:   "exec_command",
+		Backend:    "hostexec",
 	})
 
 	assert.Equal(t, DecisionDeny, result.Decision)
@@ -443,7 +447,7 @@ func TestScan_HostLongSession_TimeoutExceeded(t *testing.T) {
 
 	result := scanner.Scan(context.Background(), ScanInput{
 		Command:  "long_task",
-		Args:     []string{"--timeout=600"},
+		Timeout:  600,
 		ToolName: "exec_command",
 		Backend:  "hostexec",
 	})
@@ -496,8 +500,8 @@ func TestScan_MultipleFindings(t *testing.T) {
 // so only an exact match of the full command string would skip R-DEP-001.
 func TestScan_DependencyInstall_Allowed(t *testing.T) {
 	policy := DefaultPolicy()
-	// Put the full command string in AllowedCommands to skip R-DEP-001.
-	policy.AllowedCommands = []string{"pip install requests"}
+	// Put the executable in AllowedCommands to skip R-DEP-001.
+	policy.AllowedCommands = []string{"pip"}
 	scanner := NewScanner(policy)
 
 	result := scanner.Scan(context.Background(), ScanInput{
@@ -649,6 +653,7 @@ func TestScan_ResourceAbuse_ForkBomb(t *testing.T) {
 // TestScan_EmptyInput verifies scanning with empty input returns allow.
 func TestScan_EmptyInput(t *testing.T) {
 	policy := DefaultPolicy()
+	policy.DefaultAction = DecisionAllow
 	scanner := NewScanner(policy)
 
 	result := scanner.Scan(context.Background(), ScanInput{})

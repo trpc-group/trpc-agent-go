@@ -9,6 +9,7 @@
 package safety
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -93,21 +94,45 @@ func LoadPolicyFile(path string) (PolicyFile, error) {
 // The format is auto-detected: if the content parses as valid JSON it is
 // treated as JSON, otherwise YAML. The loaded values are overlaid onto
 // DefaultPolicy so that missing fields retain safe defaults (fail-closed).
+//
+// Strict validation: unknown keys in JSON cause an error, and
+// max_timeout_sec values of zero or negative are rejected.
 func LoadPolicyFromBytes(data []byte) (PolicyFile, error) {
 	base := DefaultPolicy()
 
 	extPolicy := &policyFileRaw{}
-	// Try JSON first; if it fails, fall back to YAML.
-	if err := json.Unmarshal(data, extPolicy); err == nil {
+	// Try JSON first with strict field validation.
+	if json.Valid(data) {
+		dec := json.NewDecoder(bytes.NewReader(data))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(extPolicy); err != nil {
+			return PolicyFile{}, fmt.Errorf("parse policy JSON: strict validation failed: %w", err)
+		}
+		if err := validatePolicyRaw(extPolicy); err != nil {
+			return PolicyFile{}, err
+		}
 		overlayPolicy(&base, extPolicy)
 		return base, nil
 	}
 
+	// YAML has no built-in strict mode for unknown keys, but we still
+	// validate max_timeout_sec.
 	if err := yaml.Unmarshal(data, extPolicy); err != nil {
 		return PolicyFile{}, fmt.Errorf("parse policy: not valid JSON or YAML: %w", err)
 	}
+	if err := validatePolicyRaw(extPolicy); err != nil {
+		return PolicyFile{}, err
+	}
 	overlayPolicy(&base, extPolicy)
 	return base, nil
+}
+
+// validatePolicyRaw validates the raw policy fields before overlaying.
+func validatePolicyRaw(raw *policyFileRaw) error {
+	if raw.MaxTimeoutSec != nil && *raw.MaxTimeoutSec <= 0 {
+		return fmt.Errorf("invalid policy: max_timeout_sec must be positive, got %d", *raw.MaxTimeoutSec)
+	}
+	return nil
 }
 
 // policyFileRaw mirrors PolicyFile but uses pointers for all fields so that

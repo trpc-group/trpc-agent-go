@@ -48,7 +48,8 @@ func NewScannerWithRules(policy PolicyFile, rules []Rule) *Scanner {
 // Scan evaluates all rules against the input and returns a ScanResult.
 // Decision aggregation: deny > ask > needs_human_review > allow.
 // Risk level aggregation: critical > high > medium > low > info.
-// If no findings are produced, the result is DecisionAllow with RiskLevelInfo.
+// If no findings are produced, the decision is taken from
+// policy.DefaultAction (fail-closed when set to DecisionDeny).
 func (s *Scanner) Scan(ctx context.Context, input ScanInput) ScanResult {
 	var allFindings []Finding
 	for _, rule := range s.rules {
@@ -64,8 +65,9 @@ func (s *Scanner) Scan(ctx context.Context, input ScanInput) ScanResult {
 	}
 
 	if len(allFindings) == 0 {
-		result.Decision = DecisionAllow
+		result.Decision = s.policy.DefaultAction
 		result.RiskLevel = RiskLevelInfo
+		result.Intercepted = result.Decision != DecisionAllow
 		return result
 	}
 

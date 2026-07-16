@@ -96,16 +96,33 @@ func extractCurlHosts(args []string) []string {
 			skipNext = true
 			continue
 		}
+		// Handle --url flag: its value may be a bare host or a full URL.
+		if arg == "--url" && i+1 < len(args) {
+			h := hostFromArg(args[i+1])
+			if h != "" {
+				hosts = append(hosts, h)
+			}
+			skipNext = true
+			continue
+		}
+		// Handle --url=value form.
+		if strings.HasPrefix(arg, "--url=") {
+			val := strings.TrimPrefix(arg, "--url=")
+			h := hostFromArg(val)
+			if h != "" {
+				hosts = append(hosts, h)
+			}
+			continue
+		}
 		// Flags that take a value but are not URLs.
 		if flags, ok := urlBearingToolFlags["curl"]; ok {
 			if flags[arg] {
 				skipNext = true
 				continue
 			}
-			// Handle --flag=value form.
+			// Handle --flag=value form for non-URL flags.
 			for f := range flags {
 				if strings.HasPrefix(arg, f+"=") {
-					// Not a URL-bearing value in = form; skip.
 					break
 				}
 			}
@@ -149,15 +166,41 @@ func extractWgetHosts(args []string) []string {
 }
 
 // extractSSHHosts extracts target hostnames from ssh/scp/rsync arguments.
+// It recognizes both "user@host" and bare host arguments, as well as
+// SCP source/destination syntax (user@host:path).
 func extractSSHHosts(args []string) []string {
 	var hosts []string
+	skipNext := false
 	for _, arg := range args {
+		if skipNext {
+			skipNext = false
+			continue
+		}
 		if strings.HasPrefix(arg, "-") {
+			// Flags like -p (port) take a value; skip the next arg.
+			// Handle -p 22 and -p=22 forms.
+			if arg == "-p" || arg == "-P" {
+				skipNext = true
+			}
 			continue
 		}
 		// ssh user@host or scp user@host:path
 		if h, ok := parseUserHost(arg); ok {
 			hosts = append(hosts, h)
+			continue
+		}
+		// SCP destination (no @-sign): host:path
+		if colonIdx := strings.Index(arg, ":"); colonIdx > 0 {
+			candidate := arg[:colonIdx]
+			// Validate the candidate looks like a hostname (not a Windows path like C:).
+			if !strings.Contains(candidate, "/") && candidate != "" {
+				hosts = append(hosts, candidate)
+				continue
+			}
+		}
+		// Bare host argument (e.g. "ssh myhost" without user@).
+		if arg != "" && !strings.Contains(arg, "/") && !strings.Contains(arg, "=") {
+			hosts = append(hosts, arg)
 		}
 	}
 	return hosts
@@ -231,16 +274,23 @@ func (r *NetworkEgressRule) Scan(_ context.Context, input ScanInput, policy Poli
 	text := normalizedScanText(input)
 	allHosts = append(allHosts, extractHostsFromText(text)...)
 
-	// Detect Python HTTP calls in code blocks.
+	// Detect Python HTTP calls in code blocks — produce a finding directly
+	// since we cannot extract the specific URL from Python code.
+	var pythonFindings []Finding
 	for _, block := range input.CodeBlocks {
 		if pythonNetRe.MatchString(block) {
-			// We cannot easily extract the URL from Python calls in code,
-			// so we flag it as accessing an unknown host.
-			allHosts = append(allHosts, "python-http-client")
+			pythonFindings = append(pythonFindings, Finding{
+				RuleID:         r.ID(),
+				RuleName:       r.Name(),
+				RiskLevel:      RiskLevelHigh,
+				Decision:       DecisionDeny,
+				Evidence:       "Python HTTP client detected (unknown destination)",
+				Recommendation: "Add the target domain to network_allowlist in the policy file, or remove the network access.",
+			})
 		}
 	}
 
-	if len(allHosts) == 0 {
+	if len(allHosts) == 0 && len(pythonFindings) == 0 {
 		return nil
 	}
 
@@ -266,6 +316,9 @@ func (r *NetworkEgressRule) Scan(_ context.Context, input ScanInput, policy Poli
 			Recommendation: "Add the domain to network_allowlist in the policy file, or remove the network access.",
 		})
 	}
+
+	// Append Python HTTP findings (these are not domain-based and always deny).
+	findings = append(findings, pythonFindings...)
 
 	return findings
 }
