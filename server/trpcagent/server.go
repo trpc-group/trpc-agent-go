@@ -81,6 +81,12 @@ func (s *Server) BasePath() string {
 	return s.basePath
 }
 
+// AppPath returns the app-specific route prefix exposed by the server.
+func (s *Server) AppPath() string {
+	path, _ := url.JoinPath(s.basePath, s.appName)
+	return path
+}
+
 func (s *Server) setupHandler() error {
 	mux := http.NewServeMux()
 	if s.agent != nil {
