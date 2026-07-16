@@ -1,231 +1,369 @@
 # 回放测试 — 多后端回放一致性测试框架
 
-一个确定性的、基于快照的测试框架，对多个 Session/Memory 后端执行相同操作序列并比对每个中间状态。为生产级稳定性设计，支持原子写入、熔断器、并行执行和校验和验证报告。
+一个确定性的、基于快照的测试框架，对多个 Session / Memory 后端执行同一组操作，
+并对每个中间状态做 diff。它面向生产级回归检查，支持归一化、allowlist diff、
+golden trace、checkpoint、circuit breaker 和机器可读报告。
 
 ## 设计说明
 
-本框架将所有后端数据归一化为纯 JSON `Snapshot` 后再比较，与 Go 结构体布局解耦。
-- 归一化策略包括：
-    - 通过 `IDAliasMap` 将 UUID 替换为稳定别名（如 `event-000`、`tool-call-001`）以保留交叉引用关系；
-    - 将 StateDelta 中 `nil` 值转换为 `MissingValue{}`（序列化为 `{"__missing":true}`），与显式 `null` 区分，精确表达"字段缺失"与"字段存在但值为 null"的语义差异；
-    - 移除 `duration`、`duration_ms`、`elapsed`、`elapsed_ms`、`latency`、`latency_ms` 等易变键；按内容排序 Memory（`UnorderedMemories`）和按 JSON 表示排序 Track 事件。
-- Summary 比较策略将 `UpdatedAt`、`CutoffAt`、`LastEventID` 转换为事件索引进行精确对比，`FilterKey` 要求精确匹配，`Text` 允许通过 `AllowedDiff` 声明已知截断差异。
-- Track 比较策略对每个 Track 名称下的事件序列逐个比较 Payload，自动剥离易变键，按 JSON 排序消除顺序差异。`AllowedDiff` 规则要求精确的 section+path 匹配（禁止通配符）、必须填写原因、双向匹配、强制 section-path 一致性。
-- 后端通过环境变量接入：轻量模式仅需 InMemory+SQLite（CGO），Redis/Postgres/MySQL/ClickHouse 通过对应 DSN 环境变量可选启用。
+框架会先把后端数据归一化成纯 JSON `Snapshot`，再做比较，因此比较逻辑不依赖
+Go 结构体布局。
 
-## 变更内容
+- `IDAliasMap` 会把不稳定 ID 替换成稳定别名，例如 `event-000`、
+  `tool-call-001`，同时保留交叉引用关系。
+- `StateDelta` 里的 `nil` 会归一化成 `MissingValue{}`，序列化为
+  `{"__missing":true}`，从而严格区分“字段缺失”和“字段存在但值为 null”。
+- `duration`、`duration_ms`、`elapsed`、`elapsed_ms`、`latency`、
+  `latency_ms` 等易变字段会在比较前移除。
+- Summary 比较会把时间类元数据转换为 event index，Track 比较会归一化
+  每个事件的 payload。
+- `AllowedDiff` 规则要求精确的 `section + path` 匹配、必填 reason，并校验
+  section/path 一致性。
 
-- 新增可复用的 `session/replaytest`：统一 Capture、Normalize、Compare、精确 allowed diff 与原子 JSON 报告写入
-- 提供 15 个公开 replay case，覆盖普通/多轮/工具对话、State、Memory、Summary、Track、StateDelta null 语义、Scope 状态、Summary filter-key、真实并发和真实失败重试
-- 接入 InMemory + SQLite 轻量矩阵，以及按环境变量启用的 Redis、PostgreSQL、MySQL、ClickHouse 集成测试
-- 区分缺失值与显式 `null`，保留 event index、memory ID、summary filter-key、track name 等精确 locator
-- 引入 `RequiredCapabilities`、`SkippedBackends` 与 `inconclusive`，防止未执行比较或未声明能力被误判为健康
-- 增加中英文运行文档、导航和 `session_memory_summary_track_diff_report.json` 示例
+会影响本 README 所有命令的代码级约束：
 
-修复 #2001
+- 这个模块的测试文件使用 `//go:build cgo`
+- SQLite 使用 `github.com/mattn/go-sqlite3`
+
+因此，下面所有测试命令都应使用 `CGO_ENABLED=1`，包括 InMemory 自检路径。
 
 ## 项目结构
 
 ```text
 session/replaytest/
-├── case.go             # Case、Op 类型定义
-├── normalize.go        # 快照归一化（ID 别名、MissingValue、易变键）
-├── diff.go             # 快照优先的差异比较引擎，含严重级别分类
-├── harness.go          # Harness（Run、RunSuite）、Capture、报告 I/O、重试、检查点
-├── factory.go          # BackendFactory + InMemory / SQLite / miniredis / 外部工厂
-├── golden.go           # Golden Trace 保存/加载/回归检测
-├── types.go            # 共享类型（Snapshot、Backend、Capabilities、RetryPolicy、Report 等）
-├── cases_test.go       # 15 个回放用例 + 漂移检测 + 摘要故障 + 报告测试
-├── helpers_test.go     # 测试辅助工具（事件构建器、断言、makeBackends）
-├── unit_test.go        # 所有组件的单元测试
-├── README-zh.md        # 本文件（中文，含设计说明）
-├── README-en.md        # 英文版（含设计说明）
-└── go.mod              # 独立 Go 模块（导入 session/sqlite）
+├── case.go             # Case 和 operation 类型定义
+├── normalize.go        # Snapshot 归一化
+├── diff.go             # 以 Snapshot 为中心的比较引擎
+├── harness.go          # Run / RunSuite、capture、checkpoint、report I/O
+├── factory.go          # BackendFactory 与后端构造逻辑
+├── golden.go           # Golden trace 保存/加载/回归辅助逻辑
+├── types.go            # 共享类型
+├── cases_test.go       # 公开 replay 回归入口
+├── helpers_test.go     # 测试辅助函数
+├── unit_test.go        # 单元测试和 factory 覆盖测试
+├── README-en.md        # 英文版
+├── README-zh.md        # 本文件
+└── go.mod              # 独立 Go module
 ```
 
 ## 快速开始
 
-所有命令应从 **`session/replaytest`** 目录运行（该目录有独立的 `go.mod`）。SQLite 后端需要 `CGO_ENABLED=1`。
+下面的命令都应从仓库根目录执行。每个命令都显式进入
+`session/replaytest`，可以直接复制粘贴执行。
+
+前置要求：
+
+- Go `1.24.1` 或更高版本
+- 可用的 C toolchain
+- `go` 已经在 `PATH` 中
+
+Windows 示例使用 PowerShell。macOS 和 Linux 示例使用 POSIX shell，例如
+`bash` 或 `zsh`。go 
 
 ### 轻量模式（默认）
 
-仅使用 InMemory + SQLite，无需外部依赖，运行时间 <3 秒：
+这是主回归入口，对应 `TestReplay_All`。它会在 InMemory 和 SQLite 上跑完
+15 个公开 replay case。
 
-```bash
-cd session/replaytest
-# Linux/macOS：
-CGO_ENABLED=1 go test . -v
-# Windows PowerShell：
-$env:CGO_ENABLED="1"; go test . -v
+PowerShell：
+
+```powershell
+Set-Location session/replaytest; $env:CGO_ENABLED = "1"; go test . -v -count=1 -run TestReplay_All
 ```
 
-### 自我验证模式
-
-InMemory vs InMemory（无需 CGO）：
+macOS/Linux：
 
 ```bash
-cd session/replaytest
-go test . -v -run TestReplay_Smoke_InMemorySelfVerify
+cd session/replaytest && CGO_ENABLED=1 go test . -v -count=1 -run TestReplay_All
 ```
 
-### 运行单个用例
+### 自检模式
 
-```bash
-cd session/replaytest
-$env:CGO_ENABLED="1"; go test . -v -run "TestReplay_All/case01"
+这个命令运行 `TestReplay_Smoke_InMemorySelfVerify`，比较两个隔离的
+InMemory backend。虽然不与 SQLite 比较，但由于测试包受 `cgo` build tag
+约束，仍然需要 `CGO_ENABLED=1`。
+
+PowerShell：
+
+```powershell
+Set-Location session/replaytest; $env:CGO_ENABLED = "1"; go test . -v -count=1 -run TestReplay_Smoke_InMemorySelfVerify
 ```
 
-### 生成差异报告
+macOS/Linux：
 
 ```bash
-cd session/replaytest
-$env:CGO_ENABLED="1"; go test . -v -run TestReplay_Report
+cd session/replaytest && CGO_ENABLED=1 go test . -v -count=1 -run TestReplay_Smoke_InMemorySelfVerify
+```
+
+### 运行单个 Case
+
+这个例子只运行 `TestReplay_All` 下的 `case01_single_turn`。
+
+PowerShell：
+
+```powershell
+Set-Location session/replaytest; $env:CGO_ENABLED = "1"; go test . -v -count=1 -run "TestReplay_All/case01_single_turn$"
+```
+
+macOS/Linux：
+
+```bash
+cd session/replaytest && CGO_ENABLED=1 go test . -v -count=1 -run 'TestReplay_All/case01_single_turn$'
+```
+
+### 生成干净报告
+
+这个命令运行 `TestReplay_Report`。报告会写到 Go 的测试临时目录，而不是固定的
+仓库路径。
+
+PowerShell：
+
+```powershell
+Set-Location session/replaytest; $env:CGO_ENABLED = "1"; go test . -v -count=1 -run TestReplay_Report
+```
+
+macOS/Linux：
+
+```bash
+cd session/replaytest && CGO_ENABLED=1 go test . -v -count=1 -run TestReplay_Report
+```
+
+### 生成样例 Diff 报告
+
+这个命令运行 `TestReplay_ReportWithDiffs`。测试日志会打印临时输出路径。
+仓库中还提交了一份样例文件：`test/session_memory_summary_track_diff_report.json`。
+
+PowerShell：
+
+```powershell
+Set-Location session/replaytest; $env:CGO_ENABLED = "1"; go test . -v -count=1 -run TestReplay_ReportWithDiffs
+```
+
+macOS/Linux：
+
+```bash
+cd session/replaytest && CGO_ENABLED=1 go test . -v -count=1 -run TestReplay_ReportWithDiffs
+```
+
+### 运行整个 Module 的测试套件
+
+PowerShell：
+
+```powershell
+Set-Location session/replaytest; $env:CGO_ENABLED = "1"; go test ./... -count=1
+```
+
+macOS/Linux：
+
+```bash
+cd session/replaytest && CGO_ENABLED=1 go test ./... -count=1
 ```
 
 ### 竞态检测
 
-```bash
-cd session/replaytest
-$env:CGO_ENABLED="1"; go test . -race -v
+PowerShell：
+
+```powershell
+Set-Location session/replaytest; $env:CGO_ENABLED = "1"; go test . -race -v -count=1
 ```
 
-## 后端接入说明
+macOS/Linux：
+
+```bash
+cd session/replaytest && CGO_ENABLED=1 go test . -race -v -count=1
+```
+
+## 后端接入
 
 ### 轻量模式
 
-默认无需任何外部服务。框架内置 InMemory 和 SQLite 后端：
+默认回归路径是 InMemory vs SQLite：
 
-- **InMemory**：纯内存实现，零依赖
-- **SQLite**：需要 `CGO_ENABLED=1` 和 C 编译器
+- **InMemory**：纯内存实现
+- **SQLite**：通过 `go-sqlite3` 使用内存 SQLite
 
-### 集成模式（外部后端）
+### 集成 / Factory 检查
 
-通过设置环境变量启用外部数据库后端。框架会自动执行健康检查（Probe）、预热（WarmUp）和泄漏检测（VerifyCleanup）：
+`factory.go` 确实会读取外部后端 DSN 环境变量，但当前公开的 replay 测试入口
+并没有提供“一条 `go test` 命令直接跑完整外部后端矩阵”的路径。当前可直接运行、
+并且已经验证过的公开入口是：
 
-| 环境变量 | 后端 | 说明 |
-|----------|------|------|
-| `TRPC_AGENT_REPLAY_REDIS_URL` | Redis | 为空时自动使用 miniredis（内置模拟） |
-| `TRPC_AGENT_REPLAY_POSTGRES_DSN` | PostgreSQL | 完整连接字符串，如 `postgres://user:pass@localhost:5432/test` |
-| `TRPC_AGENT_REPLAY_MYSQL_DSN` | MySQL | DSN 格式，如 `user:pass@tcp(localhost:3306)/test` |
-| `TRPC_AGENT_REPLAY_CLICKHOUSE_DSN` | ClickHouse | ClickHouse 连接字符串 |
+- 使用进程内 `miniredis` 的 Redis factory 验证
+- Postgres / MySQL / ClickHouse 的 factory / selector 相关测试
 
-**示例：启用 Redis 集成测试**
+#### 无需外部 Redis 的 Redis Factory 验证
 
-```bash
-# 使用本地 Redis
-$env:TRPC_AGENT_REPLAY_REDIS_URL="redis://localhost:6379"; $env:CGO_ENABLED="1"; go test ./session/replaytest/ -v -run TestReplay_Smoke
+这个命令运行 `TestFactory_RedisFactory_Create_WithMiniredis`。
 
-# 使用内置 miniredis（无需 Redis 服务）
-$env:CGO_ENABLED="1"; go test ./session/replaytest/ -v -run TestReplay_Smoke
+PowerShell：
+
+```powershell
+Set-Location session/replaytest; $env:CGO_ENABLED = "1"; go test . -v -count=1 -run TestFactory_RedisFactory_Create_WithMiniredis
 ```
 
-**示例：启用全后端集成测试**
+macOS/Linux：
 
 ```bash
-export TRPC_AGENT_REPLAY_REDIS_URL="redis://localhost:6379"
-export TRPC_AGENT_REPLAY_POSTGRES_DSN="postgres://localhost:5432/test"
-export TRPC_AGENT_REPLAY_MYSQL_DSN="root@tcp(localhost:3306)/test"
-export TRPC_AGENT_REPLAY_CLICKHOUSE_DSN="clickhouse://localhost:9000"
-CGO_ENABLED=1 go test ./session/replaytest/ -v -run TestReplay_All
+cd session/replaytest && CGO_ENABLED=1 go test . -v -count=1 -run TestFactory_RedisFactory_Create_WithMiniredis
 ```
 
-### 其他环境变量
+#### Postgres Factory 构造验证
 
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `REPLAY_BACKEND` | `sqlite` | 目标后端：`inmemory` / `sqlite` |
-| `TRPC_AGENT_REPLAY_REPORT_PATH` | （空） | RunSuite 后差异报告写入路径 |
+这个命令运行 `TestFactory_PostgresFactory_Create_WithSkipDBInit`。
 
-## 15 个回放用例
+PowerShell：
 
-| # | 用例 | 必需能力 | 覆盖范围 |
-|---|------|----------|----------|
-| 1 | 单轮对话 | events | 创建 + 2 个事件 + GetSession |
-| 2 | 多轮对话 | events | 10 个事件序列完整性 |
-| 3 | 工具调用交叉引用 | events | ToolCalls、ToolCallID、Extensions、invocation ID 别名 |
-| 4 | 状态更新 | events, state | 创建带状态、键值、覆盖、通过 nil 删除、通过事件的 StateDelta |
-| 5 | Memory 搜索 | memory | AddMemory、ReadMemories、分数、元数据、无序比较 |
-| 6 | 摘要过滤 | summary | CreateSessionSummary（主摘要 + 分支摘要）、GetSummaryText |
-| 7 | 摘要窗口 | summary | 20 个事件 + 摘要 + 5 个新事件、边界索引（允许差异） |
-| 8 | Track 事件 | track | start/end/error 负载，易变键已移除（`duration`、`latency_ms` 等） |
-| 9 | 事件计数 | events | 15 个事件（3×5）、CountOnly 模式用于跨后端计数验证 |
-| 10 | 故障恢复 | events, summary | 重复事件追加、状态覆盖、幂等摘要，无损坏 |
-| 11 | StateDelta null | events, state | nil StateDelta → MissingValue、CapEventStateDeltaNull |
-| 12 | 边界与错误 | events, state | 空状态、extensions、branch/tag/filterKey、过去的 EventTime、大 EventNum |
-| 13 | 状态删除 | state | 创建带状态的会话，通过设置 nil 删除键 |
-| 14 | 状态作用域 | state | AppState（应用级）和 UserState（用户级）跨会话共享 |
-| 15 | 摘要 filterKey | summary, events | 带 filterKey 的事件、摘要限定到特定 filterKey |
+```powershell
+Set-Location session/replaytest; $env:CGO_ENABLED = "1"; $env:REPLAY_BACKEND = "postgres"; $env:TRPC_AGENT_REPLAY_POSTGRES_DSN = "postgres://localhost:5432/testdb"; $env:TRPC_AGENT_REPLAY_SKIP_DB_INIT = "1"; go test . -v -count=1 -run TestFactory_PostgresFactory_Create_WithSkipDBInit
+```
+
+macOS/Linux：
+
+```bash
+cd session/replaytest && REPLAY_BACKEND=postgres TRPC_AGENT_REPLAY_POSTGRES_DSN='postgres://localhost:5432/testdb' TRPC_AGENT_REPLAY_SKIP_DB_INIT=1 CGO_ENABLED=1 go test . -v -count=1 -run TestFactory_PostgresFactory_Create_WithSkipDBInit
+```
+
+#### MySQL Factory 构造验证
+
+这个命令运行 `TestFactory_MysqlFactory_Create_WithSkipDBInit`。
+
+PowerShell：
+
+```powershell
+Set-Location session/replaytest; $env:CGO_ENABLED = "1"; $env:REPLAY_BACKEND = "mysql"; $env:TRPC_AGENT_REPLAY_MYSQL_DSN = "test:test@tcp(localhost:3306)/testdb"; $env:TRPC_AGENT_REPLAY_SKIP_DB_INIT = "1"; go test . -v -count=1 -run TestFactory_MysqlFactory_Create_WithSkipDBInit
+```
+
+macOS/Linux：
+
+```bash
+cd session/replaytest && REPLAY_BACKEND=mysql TRPC_AGENT_REPLAY_MYSQL_DSN='test:test@tcp(localhost:3306)/testdb' TRPC_AGENT_REPLAY_SKIP_DB_INIT=1 CGO_ENABLED=1 go test . -v -count=1 -run TestFactory_MysqlFactory_Create_WithSkipDBInit
+```
+
+#### ClickHouse Factory 构造验证
+
+这个命令运行 `TestFactory_ClickhouseFactory_Create_WithSkipDBInit`。
+
+PowerShell：
+
+```powershell
+Set-Location session/replaytest; $env:CGO_ENABLED = "1"; $env:REPLAY_BACKEND = "clickhouse"; $env:TRPC_AGENT_REPLAY_CLICKHOUSE_DSN = "clickhouse://localhost:9000"; $env:TRPC_AGENT_REPLAY_SKIP_DB_INIT = "1"; go test . -v -count=1 -run TestFactory_ClickhouseFactory_Create_WithSkipDBInit
+```
+
+macOS/Linux：
+
+```bash
+cd session/replaytest && REPLAY_BACKEND=clickhouse TRPC_AGENT_REPLAY_CLICKHOUSE_DSN='clickhouse://localhost:9000' TRPC_AGENT_REPLAY_SKIP_DB_INIT=1 CGO_ENABLED=1 go test . -v -count=1 -run TestFactory_ClickhouseFactory_Create_WithSkipDBInit
+```
+
+### 环境变量
+
+下面这些环境变量是当前模块真正会读取的：
+
+| 变量 | 使用位置 | 含义 |
+| --- | --- | --- |
+| `REPLAY_BACKEND` | `ResolvePair` | 为 factory 相关 helper 和单测选择目标 backend。支持值：`inmemory`、`sqlite`、`miniredis`、`redis`、`postgres`、`mysql`、`clickhouse`。 |
+| `TRPC_AGENT_REPLAY_REDIS_URL` | `redisFactory`、`ResolveBackends` | 构造真实 Redis backend 时使用的 Redis 连接 URL。 |
+| `TRPC_AGENT_REPLAY_POSTGRES_DSN` | `postgresFactory`、`ResolveBackends` | 构造真实 Postgres backend 时使用的 PostgreSQL DSN。 |
+| `TRPC_AGENT_REPLAY_MYSQL_DSN` | `mysqlFactory`、`ResolveBackends` | 构造真实 MySQL backend 时使用的 MySQL DSN。 |
+| `TRPC_AGENT_REPLAY_CLICKHOUSE_DSN` | `clickhouseFactory`、`ResolveBackends` | 构造真实 ClickHouse backend 时使用的 ClickHouse DSN。 |
+| `TRPC_AGENT_REPLAY_SKIP_DB_INIT` | `postgresFactory`、`mysqlFactory`、`clickhouseFactory` | 设置后在 factory 创建阶段跳过 DB 初始化。 |
+
+当前代码里**不存在**的内容：
+
+- `REPLAY_BACKEND` 不会改变 `TestReplay_All`
+- `TRPC_AGENT_REPLAY_REPORT_PATH` 没有实现
+- 当前模块没有一条公开 replay 命令，可以仅靠导出 DSN 就把完整 replay 矩阵跑到 Redis / Postgres / MySQL / ClickHouse 上
+
+## 15 个 Replay Case
+
+`TestReplay_All` 和 `TestReplay_Smoke_InMemorySelfVerify` 执行的是同样的
+15 个公开 case：
+
+| # | Case | 必需能力 | 覆盖内容 |
+| --- | --- | --- | --- |
+| 1 | `case01_single_turn` | `events` | 创建 session、追加 user/assistant 事件、回读 session |
+| 2 | `case02_multi_turn` | `events` | 10 条事件的多轮顺序完整性 |
+| 3 | `case03_tool_call_cross_ref` | `events` | tool call / tool response 交叉引用归一化 |
+| 4 | `case04_state_update_overwrite_delete` | `state` | state 创建、覆盖、追加、通过 `nil` 删除 |
+| 5 | `case05_memory_search_and_score` | `memory` | memory 写入、metadata、无序比较 |
+| 6 | `case06_summary_filter_and_update` | `summary` | 默认 filterKey 与 branch filterKey 的 summary 生成 |
+| 7 | `case07_summary_event_window_recovery` | `summary`, `events` | 带 allowlist 的 summary 边界恢复 |
+| 8 | `case08_track_status_and_error` | `track` | 去除易变字段后的 track payload 比较 |
+| 9 | `case09_concurrent_tool_interleaving` | `events` | 面向交织场景的 count-only 事件比较 |
+| 10 | `case10_failure_recovery_without_duplicates` | `events`, `summary` | 重复追加、覆盖重试、幂等 summary |
+| 11 | `case11_state_delta_null` | `state`, `events` | `nil` `StateDelta` 归一化为 `MissingValue` |
+| 12 | `case12_boundary_and_error` | `events`, `state` | 空 state、extensions、branch/tag/filterKey、边界读取 |
+| 13 | `case13_state_delete` | `state` | 通过写入 `nil` 删除 state key |
+| 14 | `case14_state_scopes` | `state` | app 级与 user 级 scoped state 抓取 |
+| 15 | `case15_summary_filter_key` | `summary`, `events` | 限定到特定 `filterKey` 的 summary 生成 |
 
 ## 能力声明
 
 | 能力 | 说明 |
-|------|------|
-| `events` | 能存储和检索 Session 事件 |
-| `state` | 能存储和检索 Session 状态 |
-| `memory` | 能存储和检索 Memory 条目 |
-| `summary` | 能创建和检索 Session 摘要 |
-| `track` | 能追加和检索 Track 事件 |
-| `event_state_delta_null` | 支持 StateDelta 中的 nil 值（区分删除和设置为 null） |
+| --- | --- |
+| `events` | 可存储并读取 session event |
+| `state` | 可存储并读取 session state |
+| `memory` | 可存储并读取 memory entry |
+| `summary` | 可创建并读取 session summary |
+| `track` | 可追加并读取 track event |
+| `event_state_delta_null` | 支持 `StateDelta` 中的 `nil` 值 |
 
-当后端缺少必需的能力时，该 Case 将被跳过。如果剩余有效后端少于两个，结果为 `inconclusive` 而非 `pass`，防止因数据不足导致的误报。
+如果某个 backend 缺少 case 要求的能力，该 backend 会跳过该 case。
+如果剩余有效 backend 少于两个，结果将是 `inconclusive` 而不是 `pass`。
 
-## 差异严重级别
+## Diff 严重级别
 
 | 严重级别 | 条件 | 示例 |
-|----------|------|------|
-| `critical` | 数据丢失或缺失段落 | MissingValue vs 值，一个后端缺失事件 |
-| `major` | 值不匹配 | 内容不同，键错误 |
-| `minor` | 允许的差异 | 已知的架构差异，有文档说明的原因 |
+| --- | --- | --- |
+| `critical` | 数据丢失或 section 缺失 | `MissingValue` vs 普通值、一个 backend 缺失 event |
+| `major` | 值不匹配 | 内容错误或 key 错误 |
+| `minor` | 允许的差异 | 已由 `AllowedDiff` 覆盖的已知 backend 差异 |
 
 ## 报告格式
 
-示例报告：`test/session_memory_summary_track_diff_report.json`
+仓库里提交的样例报告是：
 
-该示例报告由 `TestReplay_ReportWithDiffs` 测试使用**真实后端执行数据 + 注入差异**生成，每个 diff 都有测试断言验证。报告内容包含：
+- `test/session_memory_summary_track_diff_report.json`
 
-| Diff 类型 | Case | 路径 | 基准值 (value_a) | 对比值 (value_b) | allowed | 严重级别 | 解释 |
-|-----------|------|------|------------------|------------------|---------|----------|------|
-| 状态覆盖丢失 | case04 | `$.state.k1` | `"v1-new"` | `"v1"` | false | major | 状态覆盖未生效 |
-| 摘要文本截断 | case06 | `$.summaries[""].text` | `"summary-of-10-events"` | `"summary-of-10-events-truncated"` | true | minor | 摘要文本因截断差异 |
-| Track 字段缺失 | case08 | `$.tracks["agent-run"][1].payload.status` | `"ok"` | `{"__missing":true}` | false | critical | Track payload 字段在后端中缺失 |
-| StateDelta 语义差异 | case11 | `$.events[1].stateDelta.k2` | `{"__missing":true}` | `null` | false | critical | MissingValue（字段缺失）vs nil（显式 null）|
-| 后端能力不足 | case12 | — | — | — | — | — | SQLite 不支持 summary/track |
+生成样例 diff 报告的测试是 `TestReplay_ReportWithDiffs`。该测试会把生成的
+JSON 写入临时测试目录，并在日志中打印输出路径。
 
-关键字段：
+`Report` 包含：
 
-- `report_id`：版本戳（`replay-v2`），替代时间戳
-- `version`：Schema 版本（`"v2"`）
-- `run_id`：时间戳-pid-主机名，用于 CI 去重
-- `severity`：每个差异的分类（critical/major/minor）
-- `backend_metrics`：每个 Case 的计时数据和重试指标
-- `skipped_backends`：后端 → 不支持能力列表的映射
-- `inconclusive_cases`：有效后端不足的 Case 数量
-- 校验和伴生文件：`<report>.sha256` 文件与 JSON 报告并存，用于完整性验证
+- `report_id`、`version`、`run_id` 等顶层运行元数据
+- backend 列表
+- `cases` 下的逐 case 结果
+- `summary` 下的聚合统计
+- 每条 diff 的 `severity`、`path`、`section` 和两侧 backend 的值
 
-`ReadReportWithVerify` 会从伴生文件重新计算校验和并拒绝损坏的文件。报告文件本身是合法 JSON。版本守卫会拒绝未知的 Schema 版本。
+`ReadReportWithVerify` 会校验 checksum sidecar，并拒绝损坏文件。
 
 ## 验收结果
 
-| 项目                       | 结果                                                                    |
-| ------------------------ | --------------------------------------------------------------------- |
-| 正常轻量矩阵                   | 15/15 PASS，0 diff，0 inconclusive                                      |
-| 公开 case 注入漂移             | 15/15 检出，并断言 section + path + locator                                 |
-| 细粒度漂移                    | 4 类 Event/State/Memory/Summary/Track + 4 类原始 Summary 故障全部检出          |
-| 轻量模式耗时                   | `real 8.09s`（含 race 检测），低于 30 秒要求                                                |
-| `session/replaytest` 覆盖率 | 68.8%                                                                 |
-| Race 检测                    | 0 data race，全部并发场景通过                                                |
-| go vet                       | 0 warnings（仅 helpers_test.go 中 session.Session 持有锁的拷贝为既有包级问题） |
+更新本 README 时重新执行并通过了以下命令：
+
+| 命令 / 测试 | 结果 |
+| --- | --- |
+| `TestReplay_All` | PASS |
+| `TestReplay_Smoke_InMemorySelfVerify` | PASS |
+| `TestReplay_Report` | PASS |
+| `TestReplay_ReportWithDiffs` | PASS |
+| `TestFactory_RedisFactory_Create_WithMiniredis` | PASS |
+| `TestFactory_PostgresFactory_Create_WithSkipDBInit` | PASS |
+| `TestFactory_MysqlFactory_Create_WithSkipDBInit` | PASS |
+| `TestFactory_ClickhouseFactory_Create_WithSkipDBInit` | PASS |
+| `go test ./... -count=1` | PASS |
+| `go test . -race -v -count=1` | PASS |
 
 ### 验收标准逐项验证
 
 | 验收标准 | 结果 | 说明 |
 | --- | --- | --- |
-| 至少支持 InMemory 与一个持久化后端对比 | ✅ | InMemory + SQLite（`:memory:`）默认配对；环境变量可启用 Redis/PostgreSQL/MySQL/ClickHouse |
-| 10 条公开 replay case 100% 检出人为注入不一致 | ✅ | 15 条 case 全部 PASS；`TestReplay_ConsistencyDetectsInjectedDrift` 验证 events/state/summaries/tracks 四类注入漂移全部检出 |
-| 正常 case 误报率 ≤ 5% | ✅ | 15/15 正常 case 零 diff，误报率 0% |
-| summary 丢失/覆盖错误/归属 session 错误检出率 100%，Go 还需覆盖 filter-key 错误 | ✅ | `TestReplay_SummaryFaultsDetected` 验证 summary_lost、summary_text_wrong、summary_filter_key_wrong、summary_boundary_mismatch 四类全部检出 |
-| 差异报告能定位 session id/event index/summary id/filter-key/字段路径/两个后端的值；Go 还需支持 track name/memory id | ✅ | Diff 结构包含 Case/SessionID/EventIndex/MemoryID/TrackName/SummaryKey/Path/ValueA/ValueB |
-| 轻量模式完整运行耗时 ≤ 30 秒 | ✅ | `real 8.09s`（含 race detector），远低于 30 秒阈值 |
+| module-local 命令可直接复制执行 | PASS | 所有命令都显式进入 `session/replaytest` 后再执行 `go test` |
+| PowerShell 命令有效 | PASS | 更新 README 时已重新执行 |
+| macOS/Linux shell 命令有效 | PASS | 更新 README 时已重新执行 |
+| 中英文 README 命令保持一致 | PASS | 两个文件使用同一组命令 |
+| README 命令与当前公开测试入口一致 | PASS | 只保留了已经验证过的真实测试名 |
 
 ## BackendFactory 接口
 
@@ -237,4 +375,5 @@ type BackendFactory interface {
 }
 ```
 
-要添加新的后端，实现该接口并在 `ResolveBackends` 或 `ResolvePair` 中注册。
+要添加新的 backend，请实现该接口，并在 `ResolveBackends` 或 `ResolvePair`
+中注册。

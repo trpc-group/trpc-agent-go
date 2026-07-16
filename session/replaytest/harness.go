@@ -367,15 +367,6 @@ func (h Harness) Run(ctx context.Context, replayCase Case) (CaseResult, error) {
 				return result, &ReplayError{Kind: ErrComparison, Case: replayCase.Name, Cause: err}
 			}
 			diffs = append(diffs, caseDiffs...)
-			// Compare scoped states (AppState/UserState).
-			diffs = append(diffs, compareScopedStates(
-				replayCase.Name,
-				baseline.backendName,
-				snapshots[i].backendName,
-				baseline.snapshot,
-				snapshots[i].snapshot,
-				allowed,
-			)...)
 		}
 	} else {
 		// Parallel comparison for 4+ snapshots.
@@ -420,7 +411,7 @@ func (h Harness) Run(ctx context.Context, replayCase Case) (CaseResult, error) {
 		}
 		if found && len(golden.Snapshots) > 0 {
 			goldenDiffs, err := Compare(replayCase.Name, "golden", snapshots[0].backendName,
-				golden.Snapshots[0], snapshots[0].snapshot, h.Allowed)
+				golden.Snapshots[0], snapshots[0].snapshot, allowed)
 			if err != nil {
 				h.logf("replay: golden comparison error for %s: %v", replayCase.Name, err)
 			} else if len(goldenDiffs) > 0 {
@@ -736,12 +727,15 @@ func (h Harness) RunSuite(ctx context.Context, cases []Case, checkpointDir strin
 				defer wg.Done()
 				for idx := range caseCh {
 					c := runnableCases[idx]
+					mergedAllowed := mergeAllowedDiffs(h.Allowed, c.AllowedDiffs)
+					caseSpec := c
+					caseSpec.AllowedDiffs = nil
 					// Use isolated backends instances per case to prevent
 					// cross-case session key pollution in parallel execution.
 					caseHarness := Harness{
 						Backends:                  h.backendsForCase(c),
 						Normalizer:                h.Normalizer,
-						Allowed:                   c.AllowedDiffs,
+						Allowed:                   mergedAllowed,
 						Logf:                      h.Logf,
 						Timeout:                   h.Timeout,
 						Retry:                     h.Retry,
@@ -754,7 +748,7 @@ func (h Harness) RunSuite(ctx context.Context, cases []Case, checkpointDir strin
 						Parallelism:               1,
 						ProgressFunc:              h.ProgressFunc,
 					}
-					result, err := caseHarness.Run(suiteCtx, c)
+					result, err := caseHarness.Run(suiteCtx, caseSpec)
 					resultCh <- indexedResult{index: idx, result: result, err: err}
 				}
 			}()

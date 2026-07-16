@@ -1195,6 +1195,32 @@ func (m *mockSessionService) Close() error { return nil }
 // Verify mockSessionService implements session.Service.
 var _ session.Service = (*mockSessionService)(nil)
 
+type staticScopedStateSessionService struct {
+	mockSessionService
+	sess      *session.Session
+	appState  session.StateMap
+	userState session.StateMap
+}
+
+func (s *staticScopedStateSessionService) GetSession(
+	ctx context.Context,
+	key session.Key,
+	opts ...session.Option,
+) (*session.Session, error) {
+	if s.sess != nil {
+		return s.sess.Clone(), nil
+	}
+	return &session.Session{ID: "mock", AppName: key.AppName, UserID: key.UserID}, nil
+}
+
+func (s *staticScopedStateSessionService) ListAppStates(ctx context.Context, appName string) (session.StateMap, error) {
+	return s.appState, nil
+}
+
+func (s *staticScopedStateSessionService) ListUserStates(ctx context.Context, userKey session.UserKey) (session.StateMap, error) {
+	return s.userState, nil
+}
+
 // --- New feature tests ---
 
 func TestHarness_RunSuite_Parallel(t *testing.T) {
@@ -4064,6 +4090,80 @@ func TestHarness_RunSuite_ParallelExecution(t *testing.T) {
 	assert.Equal(t, 2, report.Summary.PassedCases)
 }
 
+func TestHarness_RunSuite_Parallel_MergesHarnessAllowedDiffs(t *testing.T) {
+	key := sessKey("parallel-suite-allowed")
+	normalizer := NewNormalizer(DefaultNormalizerConfig())
+	backends := []Backend{
+		{
+			Name:    "left",
+			Sess:    &mockSessionService{},
+			Caps:    AllCapabilities(),
+			SessKey: func() session.Key { return key },
+			Load: func(ctx context.Context, backend Backend) (*session.Session, []*memory.Entry, error) {
+				return &session.Session{
+					ID:      "left-session",
+					AppName: key.AppName,
+					UserID:  key.UserID,
+					State:   session.StateMap{"k1": []byte("v-left")},
+				}, nil, nil
+			},
+		},
+		{
+			Name:    "right",
+			Sess:    &mockSessionService{},
+			Caps:    AllCapabilities(),
+			SessKey: func() session.Key { return key },
+			Load: func(ctx context.Context, backend Backend) (*session.Session, []*memory.Entry, error) {
+				return &session.Session{
+					ID:      "right-session",
+					AppName: key.AppName,
+					UserID:  key.UserID,
+					State:   session.StateMap{"k1": []byte("v-right")},
+				}, nil, nil
+			},
+		},
+	}
+	h := Harness{
+		Backends:    backends,
+		Normalizer:  normalizer,
+		Parallelism: 2,
+		Allowed: []AllowedDiff{
+			{
+				BackendA: "left",
+				BackendB: "right",
+				Section:  "state",
+				Path:     "$.state.k1",
+				Reason:   "global state drift is allowed",
+			},
+		},
+	}
+	cases := []Case{
+		{
+			Name:         "parallel_allowed_a",
+			RequiredCaps: []string{CapState},
+			Run: func(ctx context.Context, backend Backend) error {
+				return nil
+			},
+		},
+		{
+			Name:         "parallel_allowed_b",
+			RequiredCaps: []string{CapState},
+			Run: func(ctx context.Context, backend Backend) error {
+				return nil
+			},
+		},
+	}
+
+	report, err := h.RunSuite(context.Background(), cases, "")
+	require.NoError(t, err)
+	require.Len(t, report.Cases, 2)
+	for _, result := range report.Cases {
+		require.Len(t, result.Diffs, 1)
+		assert.True(t, result.Diffs[0].Allowed)
+		assert.Equal(t, "global state drift is allowed", result.Diffs[0].Explanation)
+	}
+}
+
 func TestHarness_SaveCheckpointAndProgress(t *testing.T) {
 	key := sessKey("checkpoint-progress")
 	backends := makeBackends(t, key)
@@ -4329,6 +4429,78 @@ func TestHarness_Run_GoldenRegression(t *testing.T) {
 	assert.NotNil(t, result.GoldenDiffs, "should have golden diffs")
 }
 
+func TestHarness_Run_GoldenRegression_UsesMergedAllowedDiffs(t *testing.T) {
+	key := sessKey("golden-regression-allowed")
+	normalizer := NewNormalizer(DefaultNormalizerConfig())
+	goldenDir := t.TempDir()
+	backends := []Backend{
+		{
+			Name:    "baseline",
+			Sess:    &mockSessionService{},
+			Caps:    AllCapabilities(),
+			SessKey: func() session.Key { return key },
+			Load: func(ctx context.Context, backend Backend) (*session.Session, []*memory.Entry, error) {
+				return &session.Session{
+					ID:      "baseline-session",
+					AppName: key.AppName,
+					UserID:  key.UserID,
+					State:   session.StateMap{"k1": []byte("live")},
+				}, nil, nil
+			},
+		},
+		{
+			Name:    "peer",
+			Sess:    &mockSessionService{},
+			Caps:    AllCapabilities(),
+			SessKey: func() session.Key { return key },
+			Load: func(ctx context.Context, backend Backend) (*session.Session, []*memory.Entry, error) {
+				return &session.Session{
+					ID:      "peer-session",
+					AppName: key.AppName,
+					UserID:  key.UserID,
+					State:   session.StateMap{"k1": []byte("live")},
+				}, nil, nil
+			},
+		},
+	}
+	trace := &GoldenTrace{
+		CaseName:  "golden_regression_allowed_test",
+		CreatedAt: time.Now(),
+		Snapshots: []Snapshot{{
+			State: map[string]any{"k1": "golden"},
+		}},
+	}
+	require.NoError(t, SaveGoldenTrace(goldenDir, trace))
+
+	h := Harness{
+		Backends:   backends,
+		Normalizer: normalizer,
+		GoldenDir:  goldenDir,
+	}
+	c := Case{
+		Name:         "golden_regression_allowed_test",
+		RequiredCaps: []string{CapState},
+		AllowedDiffs: []AllowedDiff{
+			{
+				BackendA: "golden",
+				BackendB: "baseline",
+				Section:  "state",
+				Path:     "$.state.k1",
+				Reason:   "golden baseline intentionally differs",
+			},
+		},
+		Run: func(ctx context.Context, backend Backend) error {
+			return nil
+		},
+	}
+
+	result, err := h.Run(context.Background(), c)
+	require.NoError(t, err)
+	require.Len(t, result.GoldenDiffs, 1)
+	assert.True(t, result.GoldenDiffs[0].Allowed)
+	assert.Equal(t, "golden baseline intentionally differs", result.GoldenDiffs[0].Explanation)
+}
+
 func TestNormalize_SnapshotUnsupportedCaps(t *testing.T) {
 	// Test that Unsupported list is populated correctly.
 	caps := Capabilities{
@@ -4361,6 +4533,48 @@ func TestHarness_RunSuite_EmptyCases(t *testing.T) {
 	report, err := h.RunSuite(context.Background(), []Case{}, "")
 	require.NoError(t, err)
 	assert.Equal(t, 0, report.Summary.TotalCases)
+}
+
+func TestHarness_Run_NoDuplicateScopedStateDiffs(t *testing.T) {
+	key := sessKey("scoped-state-single-diff")
+	normalizer := NewNormalizer(DefaultNormalizerConfig())
+	backends := []Backend{
+		{
+			Name: "left",
+			Sess: &staticScopedStateSessionService{
+				sess:     &session.Session{ID: "left", AppName: key.AppName, UserID: key.UserID},
+				appState: session.StateMap{"theme": []byte("dark")},
+			},
+			Caps:    AllCapabilities(),
+			SessKey: func() session.Key { return key },
+		},
+		{
+			Name: "right",
+			Sess: &staticScopedStateSessionService{
+				sess:     &session.Session{ID: "right", AppName: key.AppName, UserID: key.UserID},
+				appState: session.StateMap{"theme": []byte("light")},
+			},
+			Caps:    AllCapabilities(),
+			SessKey: func() session.Key { return key },
+		},
+	}
+	h := Harness{
+		Backends:   backends,
+		Normalizer: normalizer,
+	}
+	c := Case{
+		Name:         "scoped_state_single_diff",
+		RequiredCaps: []string{CapState},
+		Run: func(ctx context.Context, backend Backend) error {
+			return nil
+		},
+	}
+
+	result, err := h.Run(context.Background(), c)
+	require.NoError(t, err)
+	require.Len(t, result.Diffs, 1)
+	assert.Equal(t, "app_state", result.Diffs[0].Section)
+	assert.Equal(t, "$.app_state.theme", result.Diffs[0].Path)
 }
 
 func TestSaveBytesAtomic_NestedDir(t *testing.T) {
