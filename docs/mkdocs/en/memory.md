@@ -306,8 +306,8 @@ the existing tool semantics.
 | Update policy | Auto extraction behavior |
 | --- | --- |
 | `UpdatePolicyCompatible` | Uses the existing similarity-based reconciliation. This is the default. |
-| `UpdatePolicyStrict` | Drops exact duplicates, updates only when the new memory preserves the old fact or event and adds non-conflicting detail, and keeps changes or uncertain matches as separate entries. |
-| `UpdatePolicyAddOnly` | Converts extractor-generated updates to adds and does not reconcile extracted adds into updates. |
+| `UpdatePolicyStrict` | Drops exact duplicates, updates only for non-conflicting enrichment, keeps changes as separate entries, and allows automatic delete/clear only after an explicit user request. |
+| `UpdatePolicyAddOnly` | Emits only non-duplicate adds: updates become adds, while delete and clear operations are filtered. |
 
 Strict reconciliation compares only the existing entries already
 supplied to the extractor. Retrieval scores rank candidates but cannot by
@@ -316,7 +316,9 @@ numbers, dates, negation, participants, and locations must remain
 compatible. Topics are merged only after an update has passed these checks.
 For example, adding a time to the same dated visit may update that visit;
 changing an employer or describing a visit on another date creates a new
-entry.
+entry. Destructive operations are never inferred from contradictions: delete
+requires an explicit user request, and clear requires an explicit request to
+forget all stored information.
 
 The update policy does not change `memory.Service`, `MemoryExtractor`, the stored
 JSON representation, memory IDs, or database schemas. It does not rewrite

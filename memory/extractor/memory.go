@@ -127,13 +127,9 @@ func (e *Extractor) Extract(
 	}
 
 	// Build request with tool declarations.
-	tools := backgroundTools
-	if len(e.enabledTools) > 0 {
-		tools = filterTools(backgroundTools, e.enabledTools)
-	}
 	req := &model.Request{
 		Messages: e.buildMessages(ctx, messages, existing),
-		Tools:    tools,
+		Tools:    e.extractionTools(),
 	}
 
 	// Call model.
@@ -363,6 +359,7 @@ var toolActionOrder = []string{
 // memory tools the model is allowed to call.
 func (e *Extractor) availableActionsBlock() string {
 	var sb strings.Builder
+	policyTools := e.updatePolicyEnabledTools()
 	for _, name := range toolActionOrder {
 		// Skip tools that are disabled.
 		if e.enabledTools != nil {
@@ -370,10 +367,16 @@ func (e *Extractor) availableActionsBlock() string {
 				continue
 			}
 		}
+		if policyTools != nil {
+			if _, ok := policyTools[name]; !ok {
+				continue
+			}
+		}
 		desc, ok := toolActionDescriptions[name]
 		if !ok {
 			continue
 		}
+		desc = e.updatePolicyToolDescription(name, desc)
 		fmt.Fprintf(&sb, "- %s: %s\n", name, desc)
 	}
 	if sb.Len() == 0 {

@@ -8,15 +8,20 @@
 
 package extractor
 
+import (
+	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
+)
+
 // UpdatePolicy controls how the built-in Extractor handles potential updates.
 type UpdatePolicy string
 
 const (
 	// UpdatePolicyCompatible preserves the existing auto-memory behavior.
 	UpdatePolicyCompatible UpdatePolicy = "compatible"
-	// UpdatePolicyStrict updates only strict, non-conflicting enrichments.
+	// UpdatePolicyStrict preserves history and permits only safe enrichments.
 	UpdatePolicyStrict UpdatePolicy = "strict"
-	// UpdatePolicyAddOnly converts auto-extracted updates into additive writes.
+	// UpdatePolicyAddOnly emits only non-duplicate additive writes.
 	UpdatePolicyAddOnly UpdatePolicy = "add-only"
 )
 
@@ -54,6 +59,9 @@ func (e *Extractor) updatePolicyPromptBlock() string {
 - Use memory_add for corrections, state changes, different events, or any
   uncertain match. Never delete a memory merely because newer information
   differs from it.
+- Use memory_delete only when the user explicitly asks to forget or delete
+  information. Use memory_clear only when the user explicitly asks to forget
+  all stored information.
 - Emit no operation for an exact duplicate.
 </update_policy>
 `
@@ -61,12 +69,40 @@ func (e *Extractor) updatePolicyPromptBlock() string {
 		return `
 
 <update_policy>
-- Preserve long-term history and use memory_add for new information.
-- Do not use memory_update. Emit no operation for an exact duplicate.
-- Never delete a memory merely because newer information differs from it.
+- Use only memory_add for new information. Do not use memory_update,
+  memory_delete, or memory_clear.
+- Emit no operation for an exact duplicate.
 </update_policy>
 `
 	default:
 		return ""
 	}
+}
+
+func (e *Extractor) updatePolicyEnabledTools() map[string]struct{} {
+	if e.UpdatePolicy() != UpdatePolicyAddOnly {
+		return nil
+	}
+	return map[string]struct{}{
+		memory.AddToolName: {},
+	}
+}
+
+func (e *Extractor) extractionTools() map[string]tool.Tool {
+	tools := backgroundTools
+	if len(e.enabledTools) > 0 ||
+		(e.UpdatePolicy() != UpdatePolicyCompatible && e.enabledTools != nil) {
+		tools = filterTools(backgroundTools, e.enabledTools)
+	}
+	if policyTools := e.updatePolicyEnabledTools(); policyTools != nil {
+		tools = filterTools(tools, policyTools)
+	}
+	return tools
+}
+
+func (e *Extractor) updatePolicyToolDescription(name, description string) string {
+	if e.UpdatePolicy() == UpdatePolicyStrict && name == memory.DeleteToolName {
+		return "Delete a memory only when the user explicitly asks to forget or delete that information."
+	}
+	return description
 }

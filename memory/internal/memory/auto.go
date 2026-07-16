@@ -437,7 +437,7 @@ func (w *AutoMemoryWorker) createAutoMemory(
 	}
 
 	updatePolicy := updatePolicyFor(w.config.Extractor)
-	ops = w.applyUpdatePolicy(ctx, userKey, ops, existing)
+	ops = w.applyUpdatePolicy(ctx, userKey, ops, existing, messages)
 
 	// Execute operations.
 	for _, op := range ops {

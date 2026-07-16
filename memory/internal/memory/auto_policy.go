@@ -40,7 +40,43 @@ var (
 	negationPattern = regexp.MustCompile(
 		`(?i)(?:\bnot\b|\bno\b|\bnever\b|\bwithout\b|n't|不再|不是|没有|从未|未|无)`,
 	)
-	capitalizedTokenPattern = regexp.MustCompile(`\b[A-Z][A-Za-z0-9_-]*\b`)
+	capitalizedTokenPattern           = regexp.MustCompile(`\b[A-Z][A-Za-z0-9_-]*\b`)
+	negatedDestructiveRequestPatterns = []*regexp.Regexp{
+		regexp.MustCompile(
+			`(?i)\b(?:do\s+not|don't|dont|never|should\s+not|shouldn't)\s+(?:forget|delete|remove|erase|clear)\b`,
+		),
+		regexp.MustCompile(
+			`(?i)\b(?:do\s+not|don't|dont)\s+(?:want|need)\s+(?:me\s+|you\s+)?to\s+(?:forget|delete|remove|erase|clear)\b`,
+		),
+		regexp.MustCompile(`(?:不要|别|请勿|不必|不应该)(?:再)?(?:忘记|删除|移除|清除|清空)`),
+	}
+	explicitDestructiveRequestPatterns = []*regexp.Regexp{
+		regexp.MustCompile(`(?im)^\s*(?:please\s+)?(?:forget|delete|remove|erase|clear)\b`),
+		regexp.MustCompile(`(?i)\bplease\s+(?:forget|delete|remove|erase|clear)\b`),
+		regexp.MustCompile(
+			`(?i)\b(?:can|could|would|will)\s+you\s+(?:please\s+)?(?:forget|delete|remove|erase|clear)\b`,
+		),
+		regexp.MustCompile(
+			`(?i)\bi\s+(?:want|need|would\s+like)\s+you\s+to\s+(?:forget|delete|remove|erase|clear)\b`,
+		),
+		regexp.MustCompile(
+			`(?:^|[\n。！？!?])\s*(?:(?:请|麻烦)(?:你)?|帮我)?(?:忘记|删除|移除|清除|清空)`,
+		),
+		regexp.MustCompile(`(?:我(?:想|希望|要求)(?:让)?你|请你|麻烦你|帮我)(?:忘记|删除|移除|清除|清空)`),
+	}
+	explicitClearAllRequestPatterns = []*regexp.Regexp{
+		regexp.MustCompile(`(?i)\bforget\s+(?:absolutely\s+)?everything\b`),
+		regexp.MustCompile(
+			`(?i)\b(?:delete|remove|erase|clear)\s+(?:(?:all(?:\s+of)?\s+)(?:my\s+)?(?:memories|memory|data|information)|(?:my\s+)?memories|everything)\b`,
+		),
+		regexp.MustCompile(`忘记.{0,8}(?:关于我(?:的)?(?:一切|全部|所有)|(?:一切|全部|所有)(?:记忆|信息|数据)?)`),
+		regexp.MustCompile(`(?:删除|移除|清除|清空).{0,8}(?:(?:全部|所有)(?:的)?(?:记忆|信息|数据)|记忆库)`),
+		regexp.MustCompile(`清空.{0,4}(?:记忆|信息|数据)`),
+	}
+	partialClearRequestPatterns = []*regexp.Regexp{
+		regexp.MustCompile(`(?i)\b(?:except|excluding|other\s+than|but\s+keep)\b`),
+		regexp.MustCompile(`(?:除了|除去|排除).{0,12}(?:以外|之外|外)?|(?:但是|但要|保留).{0,12}`),
+	}
 )
 
 type strictCandidate struct {
@@ -55,15 +91,7 @@ func updatePolicyFor(ext extractor.MemoryExtractor) extractor.UpdatePolicy {
 	if !ok {
 		return extractor.UpdatePolicyCompatible
 	}
-	policy := builtin.UpdatePolicy()
-	switch policy {
-	case extractor.UpdatePolicyCompatible,
-		extractor.UpdatePolicyStrict,
-		extractor.UpdatePolicyAddOnly:
-		return policy
-	default:
-		return extractor.UpdatePolicyCompatible
-	}
+	return builtin.UpdatePolicy()
 }
 
 func (w *AutoMemoryWorker) applyUpdatePolicy(
@@ -71,12 +99,13 @@ func (w *AutoMemoryWorker) applyUpdatePolicy(
 	userKey memory.UserKey,
 	ops []*extractor.Operation,
 	existing []*memory.Entry,
+	messages []model.Message,
 ) []*extractor.Operation {
 	switch updatePolicyFor(w.config.Extractor) {
 	case extractor.UpdatePolicyStrict:
-		return w.reconcileStrictOps(ctx, userKey, ops, existing)
+		return w.reconcileStrictOps(ctx, userKey, ops, existing, messages)
 	case extractor.UpdatePolicyAddOnly:
-		return w.applyAddOnlyPolicy(ctx, userKey, ops)
+		return w.applyAddOnlyPolicy(ctx, userKey, ops, existing)
 	default:
 		return w.reconcileOps(ctx, userKey, ops)
 	}
@@ -86,24 +115,41 @@ func (w *AutoMemoryWorker) applyAddOnlyPolicy(
 	ctx context.Context,
 	userKey memory.UserKey,
 	ops []*extractor.Operation,
+	existing []*memory.Entry,
 ) []*extractor.Operation {
 	out := make([]*extractor.Operation, 0, len(ops))
 	for _, op := range ops {
 		if op == nil {
 			continue
 		}
-		if op.Type != extractor.OperationUpdate {
-			out = append(out, op)
+		var add *extractor.Operation
+		switch op.Type {
+		case extractor.OperationAdd:
+			add = op
+		case extractor.OperationUpdate:
+			converted := *op
+			converted.Type = extractor.OperationAdd
+			converted.MemoryID = ""
+			add = &converted
+			log.DebugfContext(ctx,
+				"auto_memory: add-only policy; converting update to add for user %s/%s",
+				userKey.AppName, userKey.UserID,
+			)
+		default:
+			log.DebugfContext(ctx,
+				"auto_memory: add-only policy; filtering %s operation for user %s/%s",
+				op.Type, userKey.AppName, userKey.UserID,
+			)
 			continue
 		}
-		add := *op
-		add.Type = extractor.OperationAdd
-		add.MemoryID = ""
-		log.DebugfContext(ctx,
-			"auto_memory: add-only policy; converting update to add for user %s/%s",
-			userKey.AppName, userKey.UserID,
-		)
-		out = append(out, &add)
+		if hasExactMemoryDuplicate(add, existing, out) {
+			log.DebugfContext(ctx,
+				"auto_memory: add-only policy; filtering exact duplicate for user %s/%s",
+				userKey.AppName, userKey.UserID,
+			)
+			continue
+		}
+		out = append(out, add)
 	}
 	return out
 }
@@ -113,7 +159,10 @@ func (w *AutoMemoryWorker) reconcileStrictOps(
 	userKey memory.UserKey,
 	ops []*extractor.Operation,
 	existing []*memory.Entry,
+	messages []model.Message,
 ) []*extractor.Operation {
+	allowDelete := hasExplicitDestructiveRequest(messages, extractor.OperationDelete)
+	allowClear := hasExplicitDestructiveRequest(messages, extractor.OperationClear)
 	byID := make(map[string]*memory.Entry, len(existing))
 	for _, entry := range existing {
 		if entry != nil && entry.Memory != nil && entry.ID != "" {
@@ -130,11 +179,107 @@ func (w *AutoMemoryWorker) reconcileStrictOps(
 			out = appendStrictAdd(ctx, w, userKey, out, op, existing)
 		case extractor.OperationUpdate:
 			out = appendStrictUpdate(ctx, w, userKey, out, op, byID[op.MemoryID])
+		case extractor.OperationDelete:
+			if allowDelete {
+				out = append(out, op)
+				continue
+			}
+			logStrictDestructiveRejection(ctx, userKey, op)
+		case extractor.OperationClear:
+			if allowClear {
+				out = append(out, op)
+				continue
+			}
+			logStrictDestructiveRejection(ctx, userKey, op)
 		default:
 			out = append(out, op)
 		}
 	}
 	return out
+}
+
+func hasExactMemoryDuplicate(
+	op *extractor.Operation,
+	existing []*memory.Entry,
+	accepted []*extractor.Operation,
+) bool {
+	for _, entry := range existing {
+		if entry != nil && entry.Memory != nil && exactMemoryDuplicate(op, entry.Memory) {
+			return true
+		}
+	}
+	for _, candidate := range accepted {
+		if candidate != nil && exactMemoryDuplicate(op, operationMemory(candidate)) {
+			return true
+		}
+	}
+	return false
+}
+
+func operationMemory(op *extractor.Operation) *memory.Memory {
+	return &memory.Memory{
+		Memory:       op.Memory,
+		Topics:       op.Topics,
+		Kind:         operationKind(op),
+		EventTime:    op.EventTime,
+		Participants: op.Participants,
+		Location:     op.Location,
+	}
+}
+
+func hasExplicitDestructiveRequest(
+	messages []model.Message,
+	opType extractor.OperationType,
+) bool {
+	for index := len(messages) - 1; index >= 0; index-- {
+		msg := messages[index]
+		if msg.Role != model.RoleUser {
+			continue
+		}
+		text := messageSearchText(msg)
+		negated := false
+		for _, pattern := range negatedDestructiveRequestPatterns {
+			negated = negated || pattern.MatchString(text)
+			text = pattern.ReplaceAllString(text, "")
+		}
+		explicit := matchesAnyPattern(text, explicitDestructiveRequestPatterns)
+		if !explicit && !negated {
+			continue
+		}
+		if !explicit {
+			return false
+		}
+		switch opType {
+		case extractor.OperationDelete:
+			return true
+		case extractor.OperationClear:
+			return matchesAnyPattern(text, explicitClearAllRequestPatterns) &&
+				!matchesAnyPattern(text, partialClearRequestPatterns)
+		default:
+			return false
+		}
+	}
+	return false
+}
+
+func matchesAnyPattern(text string, patterns []*regexp.Regexp) bool {
+	for _, pattern := range patterns {
+		if pattern.MatchString(text) {
+			return true
+		}
+	}
+	return false
+}
+
+func logStrictDestructiveRejection(
+	ctx context.Context,
+	userKey memory.UserKey,
+	op *extractor.Operation,
+) {
+	log.DebugfContext(ctx,
+		"auto_memory: strict policy; filtering %s without explicit user request for user %s/%s",
+		op.Type, userKey.AppName, userKey.UserID,
+	)
 }
 
 func appendStrictAdd(

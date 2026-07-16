@@ -94,11 +94,17 @@ func newExtractorWithOperation(
 }
 
 func TestUpdatePolicyFor_UsesBuiltInExtractorPolicy(t *testing.T) {
-	builtin := extractor.NewExtractor(
-		nil,
-		extractor.WithUpdatePolicy(extractor.UpdatePolicyStrict),
-	)
-	assert.Equal(t, extractor.UpdatePolicyStrict, updatePolicyFor(builtin))
+	for _, policy := range []extractor.UpdatePolicy{
+		extractor.UpdatePolicyCompatible,
+		extractor.UpdatePolicyStrict,
+		extractor.UpdatePolicyAddOnly,
+	} {
+		builtin := extractor.NewExtractor(
+			nil,
+			extractor.WithUpdatePolicy(policy),
+		)
+		assert.Equal(t, policy, updatePolicyFor(builtin))
+	}
 	assert.Equal(t, extractor.UpdatePolicyCompatible, updatePolicyFor(&mockExtractor{}))
 }
 
@@ -122,7 +128,9 @@ func TestStrictPolicy_AliceTimeEnrichmentUpdates(t *testing.T) {
 		EventTime:  &newTime,
 	}
 	worker := NewAutoMemoryWorker(AutoMemoryConfig{}, newMockOperator())
-	out := worker.reconcileStrictOps(context.Background(), reconcileUserKey(), []*extractor.Operation{op}, existing)
+	out := worker.reconcileStrictOps(
+		context.Background(), reconcileUserKey(), []*extractor.Operation{op}, existing, nil,
+	)
 	require.Len(t, out, 1)
 	assert.Equal(t, extractor.OperationUpdate, out[0].Type)
 	assert.Equal(t, "alice-visit", out[0].MemoryID)
@@ -145,7 +153,9 @@ func TestStrictPolicy_ExactDuplicateIgnoresTopicDrift(t *testing.T) {
 		MemoryKind: memory.KindFact,
 	}
 	worker := NewAutoMemoryWorker(AutoMemoryConfig{}, newMockOperator())
-	out := worker.reconcileStrictOps(context.Background(), reconcileUserKey(), []*extractor.Operation{op}, existing)
+	out := worker.reconcileStrictOps(
+		context.Background(), reconcileUserKey(), []*extractor.Operation{op}, existing, nil,
+	)
 	assert.Empty(t, out)
 }
 
@@ -198,7 +208,7 @@ func TestStrictPolicy_ChangesRemainAdditive(t *testing.T) {
 			}
 			worker := NewAutoMemoryWorker(AutoMemoryConfig{}, newMockOperator())
 			out := worker.reconcileStrictOps(
-				context.Background(), reconcileUserKey(), []*extractor.Operation{op}, existing,
+				context.Background(), reconcileUserKey(), []*extractor.Operation{op}, existing, nil,
 			)
 			require.Len(t, out, 1)
 			assert.Equal(t, extractor.OperationAdd, out[0].Type)
@@ -225,7 +235,7 @@ func TestStrictPolicy_DifferentEventDateRemainsAdditive(t *testing.T) {
 	}
 	worker := NewAutoMemoryWorker(AutoMemoryConfig{}, newMockOperator())
 	out := worker.reconcileStrictOps(
-		context.Background(), reconcileUserKey(), []*extractor.Operation{op}, existing,
+		context.Background(), reconcileUserKey(), []*extractor.Operation{op}, existing, nil,
 	)
 	require.Len(t, out, 1)
 	assert.Equal(t, extractor.OperationAdd, out[0].Type)
@@ -246,7 +256,9 @@ func TestStrictPolicy_UnsafeModelUpdateBecomesAdd(t *testing.T) {
 		MemoryKind: memory.KindFact,
 	}
 	worker := NewAutoMemoryWorker(AutoMemoryConfig{}, newMockOperator())
-	out := worker.reconcileStrictOps(context.Background(), reconcileUserKey(), []*extractor.Operation{op}, existing)
+	out := worker.reconcileStrictOps(
+		context.Background(), reconcileUserKey(), []*extractor.Operation{op}, existing, nil,
+	)
 	require.Len(t, out, 1)
 	assert.Equal(t, extractor.OperationAdd, out[0].Type)
 	assert.Empty(t, out[0].MemoryID)
@@ -259,10 +271,182 @@ func TestAddOnlyPolicy_ConvertsUpdateToAdd(t *testing.T) {
 		MemoryID: "old",
 		Memory:   "new content",
 	}
-	out := worker.applyAddOnlyPolicy(context.Background(), reconcileUserKey(), []*extractor.Operation{op})
+	out := worker.applyAddOnlyPolicy(
+		context.Background(), reconcileUserKey(), []*extractor.Operation{op}, nil,
+	)
 	require.Len(t, out, 1)
 	assert.Equal(t, extractor.OperationAdd, out[0].Type)
 	assert.Empty(t, out[0].MemoryID)
+}
+
+func TestCompatiblePolicy_PreservesEveryOperationType(t *testing.T) {
+	worker := newPolicyWorker(extractor.UpdatePolicyCompatible)
+	ops := []*extractor.Operation{
+		{Type: extractor.OperationAdd, Memory: "new memory"},
+		{Type: extractor.OperationUpdate, MemoryID: "stored", Memory: "updated memory"},
+		{Type: extractor.OperationDelete, MemoryID: "stored"},
+		{Type: extractor.OperationClear},
+	}
+	out := worker.applyUpdatePolicy(
+		context.Background(), reconcileUserKey(), ops, nil, nil,
+	)
+	require.Len(t, out, len(ops))
+	for index, op := range ops {
+		assert.Equal(t, op.Type, out[index].Type)
+	}
+}
+
+func TestStrictPolicy_OperationContract(t *testing.T) {
+	worker := newPolicyWorker(extractor.UpdatePolicyStrict)
+	ops := []*extractor.Operation{
+		{Type: extractor.OperationAdd, Memory: "new memory"},
+		{Type: extractor.OperationUpdate, MemoryID: "missing", Memory: "updated memory"},
+		{Type: extractor.OperationDelete, MemoryID: "stored"},
+		{Type: extractor.OperationClear},
+	}
+	out := worker.applyUpdatePolicy(
+		context.Background(), reconcileUserKey(), ops, nil,
+		[]model.Message{model.NewUserMessage("I have changed my preferences.")},
+	)
+	require.Len(t, out, 2)
+	assert.Equal(t, extractor.OperationAdd, out[0].Type)
+	assert.Equal(t, extractor.OperationAdd, out[1].Type)
+
+	out = worker.applyUpdatePolicy(
+		context.Background(), reconcileUserKey(), ops[2:], nil,
+		[]model.Message{model.NewUserMessage("Please forget everything about me.")},
+	)
+	require.Len(t, out, 2)
+	assert.Equal(t, extractor.OperationDelete, out[0].Type)
+	assert.Equal(t, extractor.OperationClear, out[1].Type)
+}
+
+func TestAddOnlyPolicy_OperationContract(t *testing.T) {
+	worker := newPolicyWorker(extractor.UpdatePolicyAddOnly)
+	existing := []*memory.Entry{{
+		ID: "stored",
+		Memory: &memory.Memory{
+			Memory: "existing memory",
+			Kind:   memory.KindFact,
+		},
+	}}
+	ops := []*extractor.Operation{
+		nil,
+		{Type: extractor.OperationAdd, Memory: "existing memory"},
+		{Type: extractor.OperationAdd, Memory: "new memory"},
+		{Type: extractor.OperationAdd, Memory: " NEW memory! "},
+		{Type: extractor.OperationUpdate, MemoryID: "stored", Memory: "existing memory"},
+		{Type: extractor.OperationUpdate, MemoryID: "stored", Memory: "updated memory"},
+		{Type: extractor.OperationDelete, MemoryID: "stored"},
+		{Type: extractor.OperationClear},
+		{Type: extractor.OperationType("unknown")},
+	}
+	out := worker.applyUpdatePolicy(
+		context.Background(), reconcileUserKey(), ops, existing, nil,
+	)
+	require.Len(t, out, 2)
+	assert.Equal(t, extractor.OperationAdd, out[0].Type)
+	assert.Equal(t, "new memory", out[0].Memory)
+	assert.Equal(t, extractor.OperationAdd, out[1].Type)
+	assert.Equal(t, "updated memory", out[1].Memory)
+	assert.Empty(t, out[1].MemoryID)
+}
+
+func TestExplicitDestructiveRequest(t *testing.T) {
+	tests := []struct {
+		name        string
+		messages    []model.Message
+		allowDelete bool
+		allowClear  bool
+	}{
+		{
+			name:        "explicit delete",
+			messages:    []model.Message{model.NewUserMessage("Please forget my coffee preference.")},
+			allowDelete: true,
+		},
+		{
+			name:        "explicit clear",
+			messages:    []model.Message{model.NewUserMessage("Could you please clear all my memories?")},
+			allowDelete: true,
+			allowClear:  true,
+		},
+		{
+			name:        "specific delete cannot authorize clear",
+			messages:    []model.Message{model.NewUserMessage("Delete my coffee preference.")},
+			allowDelete: true,
+		},
+		{
+			name:     "negated request",
+			messages: []model.Message{model.NewUserMessage("Please do not delete my coffee preference.")},
+		},
+		{
+			name:     "assistant request is ignored",
+			messages: []model.Message{model.NewAssistantMessage("Please forget everything about the user.")},
+		},
+		{
+			name:        "explicit chinese delete",
+			messages:    []model.Message{model.NewUserMessage("请删除我的咖啡偏好。")},
+			allowDelete: true,
+		},
+		{
+			name:        "explicit chinese clear",
+			messages:    []model.Message{model.NewUserMessage("请清空所有记忆。")},
+			allowDelete: true,
+			allowClear:  true,
+		},
+		{
+			name:     "negated chinese request",
+			messages: []model.Message{model.NewUserMessage("请不要删除我的咖啡偏好。")},
+		},
+		{
+			name: "latest negation wins",
+			messages: []model.Message{
+				model.NewUserMessage("Please clear all my memories."),
+				model.NewUserMessage("Do not clear my memories."),
+			},
+		},
+		{
+			name: "latest specific request narrows clear",
+			messages: []model.Message{
+				model.NewUserMessage("Please clear all my memories."),
+				model.NewUserMessage("Actually, please delete only my coffee preference."),
+			},
+			allowDelete: true,
+		},
+		{
+			name:        "partial clear does not authorize clear",
+			messages:    []model.Message{model.NewUserMessage("Clear everything except my coffee preference.")},
+			allowDelete: true,
+		},
+		{
+			name:        "partial chinese clear does not authorize clear",
+			messages:    []model.Message{model.NewUserMessage("请清空除了咖啡偏好以外的所有记忆。")},
+			allowDelete: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assert.Equal(t, test.allowDelete, hasExplicitDestructiveRequest(
+				test.messages, extractor.OperationDelete,
+			))
+			assert.Equal(t, test.allowClear, hasExplicitDestructiveRequest(
+				test.messages, extractor.OperationClear,
+			))
+		})
+	}
+	assert.False(t, hasExplicitDestructiveRequest(
+		[]model.Message{model.NewUserMessage("Please forget my coffee preference.")},
+		extractor.OperationType("unknown"),
+	))
+}
+
+func newPolicyWorker(policy extractor.UpdatePolicy) *AutoMemoryWorker {
+	return NewAutoMemoryWorker(AutoMemoryConfig{
+		Extractor: extractor.NewExtractor(
+			nil,
+			extractor.WithUpdatePolicy(policy),
+		),
+	}, newMockOperator())
 }
 
 func TestStrictPolicy_DoesNotSearchPerOperation(t *testing.T) {
@@ -347,6 +531,16 @@ func TestPolicySearchQuery_IncludesAssistantAndBoundsUTF8(t *testing.T) {
 		model.NewUserMessage("user fact"),
 		model.NewAssistantMessage("assistant fact"),
 		model.NewToolMessage("call", "tool", "ignored"),
+		{
+			Role:    model.RoleAssistant,
+			Content: "assistant tool result ignored",
+			ToolID:  "tool-call",
+		},
+		{
+			Role:      model.RoleAssistant,
+			Content:   "assistant tool call ignored",
+			ToolCalls: []model.ToolCall{{Type: "function"}},
+		},
 	})
 	assert.Contains(t, query, "user fact")
 	assert.Contains(t, query, "assistant fact")
@@ -358,6 +552,299 @@ func TestPolicySearchQuery_IncludesAssistantAndBoundsUTF8(t *testing.T) {
 	})
 	assert.LessOrEqual(t, len(query), maxAutoMemorySearchQueryBytes)
 	assert.True(t, utf8.ValidString(query))
+}
+
+func TestStrictPolicy_ToolGatesAndUnknownOperations(t *testing.T) {
+	oldTime := time.Date(2025, 12, 1, 0, 0, 0, 0, time.UTC)
+	newTime := time.Date(2025, 12, 1, 16, 0, 0, 0, time.UTC)
+	existing := &memory.Entry{
+		ID: "visit",
+		Memory: &memory.Memory{
+			Memory:    "Alice visited Bob on December 1st, 2025.",
+			Kind:      memory.KindEpisode,
+			EventTime: &oldTime,
+		},
+	}
+	add := &extractor.Operation{
+		Type:       extractor.OperationAdd,
+		Memory:     "Alice visited Bob at 4pm on December 1st, 2025.",
+		MemoryKind: memory.KindEpisode,
+		EventTime:  &newTime,
+	}
+
+	allDisabled := NewAutoMemoryWorker(AutoMemoryConfig{
+		EnabledTools: map[string]struct{}{},
+	}, newMockOperator())
+	out := appendStrictAdd(
+		context.Background(), allDisabled, reconcileUserKey(), nil, add,
+		[]*memory.Entry{existing},
+	)
+	require.Equal(t, []*extractor.Operation{add}, out)
+
+	addOnly := NewAutoMemoryWorker(AutoMemoryConfig{
+		EnabledTools: map[string]struct{}{memory.AddToolName: {}},
+	}, newMockOperator())
+	out = appendStrictAdd(
+		context.Background(), addOnly, reconcileUserKey(), nil, add,
+		[]*memory.Entry{existing},
+	)
+	require.Equal(t, []*extractor.Operation{add}, out)
+
+	unknown := &extractor.Operation{Type: extractor.OperationType("unknown")}
+	out = allDisabled.reconcileStrictOps(
+		context.Background(), reconcileUserKey(),
+		[]*extractor.Operation{nil, unknown},
+		[]*memory.Entry{nil, {}, {ID: "missing-memory"}}, nil,
+	)
+	require.Equal(t, []*extractor.Operation{unknown}, out)
+}
+
+func TestStrictPolicy_ModelUpdateDecisions(t *testing.T) {
+	oldTime := time.Date(2025, 12, 1, 0, 0, 0, 0, time.UTC)
+	newTime := time.Date(2025, 12, 1, 16, 0, 0, 0, time.UTC)
+	existing := &memory.Entry{
+		ID: "visit",
+		Memory: &memory.Memory{
+			Memory:    "Alice visited Bob on December 1st, 2025.",
+			Kind:      memory.KindEpisode,
+			EventTime: &oldTime,
+		},
+	}
+	worker := NewAutoMemoryWorker(AutoMemoryConfig{}, newMockOperator())
+
+	duplicate := &extractor.Operation{
+		Type:       extractor.OperationUpdate,
+		MemoryID:   existing.ID,
+		Memory:     existing.Memory.Memory,
+		MemoryKind: memory.KindEpisode,
+		EventTime:  &oldTime,
+	}
+	assert.Empty(t, appendStrictUpdate(
+		context.Background(), worker, reconcileUserKey(), nil, duplicate, existing,
+	))
+
+	enrichment := &extractor.Operation{
+		Type:       extractor.OperationUpdate,
+		MemoryID:   existing.ID,
+		Memory:     "Alice visited Bob at 4pm on December 1st, 2025.",
+		MemoryKind: memory.KindEpisode,
+		EventTime:  &newTime,
+	}
+	out := appendStrictUpdate(
+		context.Background(), worker, reconcileUserKey(), nil, enrichment, existing,
+	)
+	require.Len(t, out, 1)
+	assert.Equal(t, extractor.OperationUpdate, out[0].Type)
+	assert.Equal(t, existing.ID, out[0].MemoryID)
+
+	updateDisabled := NewAutoMemoryWorker(AutoMemoryConfig{
+		EnabledTools: map[string]struct{}{memory.AddToolName: {}},
+	}, newMockOperator())
+	out = appendStrictUpdate(
+		context.Background(), updateDisabled, reconcileUserKey(), nil, enrichment, existing,
+	)
+	require.Len(t, out, 1)
+	assert.Equal(t, extractor.OperationAdd, out[0].Type)
+	assert.Empty(t, out[0].MemoryID)
+}
+
+func TestStrictCandidateLess(t *testing.T) {
+	entry := func(score float64) *memory.Entry {
+		return &memory.Entry{Score: score}
+	}
+	tests := []struct {
+		name  string
+		left  *strictCandidate
+		right *strictCandidate
+		want  bool
+	}{
+		{
+			name:  "duplicate wins",
+			left:  &strictCandidate{entry: entry(1)},
+			right: &strictCandidate{entry: entry(0), duplicate: true},
+			want:  true,
+		},
+		{
+			name:  "higher old coverage wins",
+			left:  &strictCandidate{entry: entry(1), oldCoverage: 0.95},
+			right: &strictCandidate{entry: entry(0), oldCoverage: 1},
+			want:  true,
+		},
+		{
+			name: "higher new coverage wins",
+			left: &strictCandidate{
+				entry: entry(1), oldCoverage: 1, newCoverage: 0.8,
+			},
+			right: &strictCandidate{
+				entry: entry(0), oldCoverage: 1, newCoverage: 0.9,
+			},
+			want: true,
+		},
+		{
+			name: "higher score wins",
+			left: &strictCandidate{
+				entry: entry(0.7), oldCoverage: 1, newCoverage: 1,
+			},
+			right: &strictCandidate{
+				entry: entry(0.8), oldCoverage: 1, newCoverage: 1,
+			},
+			want: true,
+		},
+		{
+			name:  "weaker candidate loses",
+			left:  &strictCandidate{entry: entry(1), duplicate: true},
+			right: &strictCandidate{entry: entry(0)},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assert.Equal(t, test.want, strictCandidateLess(test.left, test.right))
+		})
+	}
+}
+
+func TestExactMemoryDuplicate_MetadataContract(t *testing.T) {
+	eventTime := time.Date(2025, 12, 1, 16, 0, 0, 0, time.UTC)
+	otherTime := eventTime.Add(time.Hour)
+	stored := &memory.Memory{
+		Memory:       "Alice visited Bob.",
+		Kind:         memory.KindEpisode,
+		EventTime:    &eventTime,
+		Participants: []string{"Alice", "Bob"},
+		Location:     "Paris",
+	}
+	base := extractor.Operation{
+		Memory:       " alice VISITED bob ",
+		MemoryKind:   memory.KindEpisode,
+		EventTime:    &eventTime,
+		Participants: []string{"bob", "alice"},
+		Location:     " paris ",
+	}
+	assert.True(t, exactMemoryDuplicate(&base, stored))
+
+	tests := []struct {
+		name   string
+		mutate func(*extractor.Operation)
+	}{
+		{name: "text", mutate: func(op *extractor.Operation) { op.Memory = "different" }},
+		{name: "kind", mutate: func(op *extractor.Operation) { op.MemoryKind = memory.KindFact }},
+		{name: "time", mutate: func(op *extractor.Operation) { op.EventTime = &otherTime }},
+		{name: "participants", mutate: func(op *extractor.Operation) { op.Participants = []string{"Alice"} }},
+		{name: "location", mutate: func(op *extractor.Operation) { op.Location = "London" }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			op := base
+			test.mutate(&op)
+			assert.False(t, exactMemoryDuplicate(&op, stored))
+		})
+	}
+}
+
+func TestMetadataIdentityCompatible(t *testing.T) {
+	eventTime := time.Date(2025, 12, 1, 16, 0, 0, 0, time.UTC)
+	otherDay := eventTime.Add(24 * time.Hour)
+	stored := &memory.Memory{
+		Kind:         memory.KindEpisode,
+		EventTime:    &eventTime,
+		Participants: []string{"Alice"},
+		Location:     "Paris",
+	}
+	base := extractor.Operation{
+		MemoryKind:   memory.KindEpisode,
+		EventTime:    &eventTime,
+		Participants: []string{"Alice", "Bob"},
+		Location:     " paris ",
+	}
+	assert.True(t, metadataIdentityCompatible(&base, stored))
+
+	tests := []struct {
+		name   string
+		mutate func(*extractor.Operation)
+	}{
+		{name: "kind", mutate: func(op *extractor.Operation) { op.MemoryKind = memory.KindFact }},
+		{name: "event date", mutate: func(op *extractor.Operation) { op.EventTime = &otherDay }},
+		{name: "participants", mutate: func(op *extractor.Operation) { op.Participants = []string{"Bob"} }},
+		{name: "location", mutate: func(op *extractor.Operation) { op.Location = "London" }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			op := base
+			test.mutate(&op)
+			assert.False(t, metadataIdentityCompatible(&op, stored))
+		})
+	}
+}
+
+func TestClassifyStrictCandidate_RejectsSemanticConflicts(t *testing.T) {
+	entry := func(text string) *memory.Entry {
+		return &memory.Entry{
+			ID: "candidate",
+			Memory: &memory.Memory{
+				Memory: text,
+				Kind:   memory.KindFact,
+			},
+		}
+	}
+	op := func(text string) *extractor.Operation {
+		return &extractor.Operation{
+			Type:       extractor.OperationAdd,
+			Memory:     text,
+			MemoryKind: memory.KindFact,
+		}
+	}
+	tests := []struct {
+		name string
+		old  string
+		new  string
+	}{
+		{
+			name: "critical value format changed",
+			old:  "Alice records the detailed family appointment at 4:00 in the shared calendar for everyone to review before the weekly planning meeting.",
+			new:  "Alice records the detailed family appointment in the shared calendar at 4 00 for everyone to review before the weekly planning meeting.",
+		},
+		{
+			name: "negation count changed",
+			old:  "Alice is not available for the detailed family planning meeting in the shared office calendar this week.",
+			new:  "Alice is not not available for the detailed family planning meeting in the shared office calendar this week.",
+		},
+		{
+			name: "new state change marker",
+			old:  "Alice stores the detailed family travel plans in the shared office cabinet for everyone to review before each meeting.",
+			new:  "Alice now stores the detailed family travel plans in the shared office cabinet for everyone to review before each meeting.",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assert.Nil(t, classifyStrictCandidate(op(test.new), entry(test.old)))
+		})
+	}
+}
+
+func TestPolicyComparisonHelpers(t *testing.T) {
+	eventTime := time.Date(2025, 12, 1, 16, 0, 0, 0, time.UTC)
+	sameTime := eventTime
+	otherTime := eventTime.Add(time.Hour)
+	assert.True(t, equalOptionalTime(nil, nil))
+	assert.False(t, equalOptionalTime(nil, &eventTime))
+	assert.True(t, equalOptionalTime(&eventTime, &sameTime))
+	assert.False(t, equalOptionalTime(&eventTime, &otherTime))
+
+	assert.True(t, equalStringSet([]string{" Alice ", "BOB"}, []string{"bob", "alice"}))
+	assert.False(t, equalStringSet([]string{"Alice"}, []string{"Alice", "Bob"}))
+	assert.False(t, equalStringSet([]string{"Alice", "Bob"}, []string{"Alice", "Carol"}))
+	assert.True(t, isStringSubset([]string{"Alice"}, []string{"Bob", "alice"}))
+	assert.False(t, isStringSubset([]string{"Alice"}, []string{"Bob"}))
+
+	oldCoverage, newCoverage := directionalTokenCoverage("", "new memory")
+	assert.Zero(t, oldCoverage)
+	assert.Zero(t, newCoverage)
+	assert.True(t, criticalValuesPreserved("Meeting at 4:00 pm", "Meeting at 4:00 pm today"))
+	assert.False(t, criticalValuesPreserved("Meeting at 4:00 pm", "Meeting today"))
+	assert.Equal(t, "not|not", negationSignature("Not ready and NOT available"))
+
+	assert.Equal(t, 1, utf8PrefixBoundary("a中", 2))
+	assert.Equal(t, 3, utf8SuffixBoundary("中a", 1))
 }
 
 func TestExecuteOperation_ReturnsPersistenceErrors(t *testing.T) {
