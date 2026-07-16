@@ -519,6 +519,8 @@ const (
 	glmAPIHost       = "open.bigmodel.cn"
 	miniMaxAPIHost   = "api.minimax.io"
 	miniMaxCNAPIHost = "api.minimaxi.com"
+	kimiAPIHost      = "api.moonshot.ai"
+	kimiCNAPIHost    = "api.moonshot.cn"
 
 	openAIAPIKeyEnvName  = "OPENAI_API_KEY"
 	openAIBaseURLEnvName = "OPENAI_BASE_URL"
@@ -4034,7 +4036,8 @@ func parseOpenAIVariant(
 		openai.VariantHunyuan,
 		openai.VariantQwen,
 		openai.VariantGLM,
-		openai.VariantMiniMax:
+		openai.VariantMiniMax,
+		openai.VariantKimi:
 		return variant, nil
 	default:
 		return "", fmt.Errorf("unsupported openai variant: %s", raw)
@@ -4092,6 +4095,9 @@ func inferOpenAIVariant(baseURL string) openai.Variant {
 	case strings.EqualFold(host, miniMaxAPIHost),
 		strings.EqualFold(host, miniMaxCNAPIHost):
 		return openai.VariantMiniMax
+	case strings.EqualFold(host, kimiAPIHost),
+		strings.EqualFold(host, kimiCNAPIHost):
+		return openai.VariantKimi
 	default:
 		return openai.VariantOpenAI
 	}

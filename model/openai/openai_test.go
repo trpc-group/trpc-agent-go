@@ -58,6 +58,7 @@ func TestNew(t *testing.T) {
 	var testKey = "test-key"
 	t.Setenv(deepSeekAPIKeyName, testKey)
 	t.Setenv(miniMaxAPIKeyName, testKey)
+	t.Setenv(kimiAPIKeyName, testKey)
 	tests := []struct {
 		name       string
 		modelName  string
@@ -117,6 +118,25 @@ func TestNew(t *testing.T) {
 			expectOpts: nil,
 		},
 		{
+			name:      "variant kimi",
+			modelName: "kimi-k2.6",
+			opts: []Option{
+				WithVariant(VariantKimi),
+			},
+			expectOpts: []Option{
+				WithAPIKey(testKey),
+				WithBaseURL(defaultKimiBaseURL),
+			},
+		},
+		{
+			name:      "does not infer kimi from official model name",
+			modelName: "kimi-k2.6",
+			opts: []Option{
+				WithAPIKey(testKey),
+			},
+			expectOpts: nil,
+		},
+		{
 			name:      "infers minimax from international api base url",
 			modelName: "custom-model",
 			opts: []Option{
@@ -138,6 +158,30 @@ func TestNew(t *testing.T) {
 				WithAPIKey(testKey),
 				WithBaseURL("https://api.minimaxi.com/v1"),
 				WithVariant(VariantMiniMax),
+			},
+		},
+		{
+			name:      "infers kimi from international api base url",
+			modelName: "custom-model",
+			opts: []Option{
+				WithBaseURL("https://api.moonshot.ai/v1"),
+			},
+			expectOpts: []Option{
+				WithAPIKey(testKey),
+				WithBaseURL("https://api.moonshot.ai/v1"),
+				WithVariant(VariantKimi),
+			},
+		},
+		{
+			name:      "infers kimi from china api base url",
+			modelName: "custom-model",
+			opts: []Option{
+				WithBaseURL("https://api.moonshot.cn/v1"),
+			},
+			expectOpts: []Option{
+				WithAPIKey(testKey),
+				WithBaseURL("https://api.moonshot.cn/v1"),
+				WithVariant(VariantKimi),
 			},
 		},
 		{
@@ -312,6 +356,46 @@ func TestIsMiniMaxBaseURL(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.Equal(t, tt.want, isMiniMaxBaseURL(tt.rawURL))
+		})
+	}
+}
+
+func TestIsKimiBaseURL(t *testing.T) {
+	tests := []struct {
+		name   string
+		rawURL string
+		want   bool
+	}{
+		{
+			name:   "matches international api host",
+			rawURL: "https://api.moonshot.ai/v1",
+			want:   true,
+		},
+		{
+			name:   "matches china api host after trim and lowercase",
+			rawURL: " HTTPS://API.MOONSHOT.CN/V1 ",
+			want:   true,
+		},
+		{
+			name:   "does not match platform host",
+			rawURL: "https://platform.moonshot.ai/v1",
+			want:   false,
+		},
+		{
+			name:   "does not match custom proxy host",
+			rawURL: "https://moonshot-proxy.internal/v1",
+			want:   false,
+		},
+		{
+			name:   "parse error does not fall back to substring match",
+			rawURL: "https://api.moonshot.ai/%zz",
+			want:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, isKimiBaseURL(tt.rawURL))
 		})
 	}
 }
@@ -3912,6 +3996,81 @@ func TestModel_GenerateContent_MiniMaxThinkingPayload(t *testing.T) {
 	}
 }
 
+func TestModel_GenerateContent_KimiThinkingPayload(t *testing.T) {
+	tests := []struct {
+		name    string
+		enabled bool
+		want    string
+	}{
+		{
+			name:    "enabled",
+			enabled: true,
+			want:    "enabled",
+		},
+		{
+			name:    "disabled",
+			enabled: false,
+			want:    "disabled",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var captured map[string]any
+			server := httptest.NewServer(http.HandlerFunc(
+				func(w http.ResponseWriter, r *http.Request) {
+					if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+						http.Error(w, "not found", http.StatusNotFound)
+						return
+					}
+					require.NoError(t, json.NewDecoder(r.Body).Decode(&captured))
+					w.Header().Set("Content-Type", "application/json")
+					fmt.Fprint(w, `{
+						"id": "test",
+						"object": "chat.completion",
+						"created": 1699200000,
+						"model": "kimi-k2.6",
+						"choices": [{
+							"index": 0,
+							"message": {
+								"role": "assistant",
+								"content": "ok"
+							},
+							"finish_reason": "stop"
+						}]
+					}`)
+				},
+			))
+			defer server.Close()
+
+			m := New(
+				"kimi-k2.6",
+				WithVariant(VariantKimi),
+				WithBaseURL(server.URL),
+				WithAPIKey("test-key"),
+			)
+			req := &model.Request{
+				Messages: []model.Message{
+					model.NewUserMessage("hi"),
+				},
+				GenerationConfig: model.GenerationConfig{
+					ThinkingEnabled: &tt.enabled,
+				},
+			}
+			ch, err := m.GenerateContent(context.Background(), req)
+			require.NoError(t, err)
+			for resp := range ch {
+				require.Nil(t, resp.Error)
+			}
+
+			thinking, ok := captured[thinkingKey].(map[string]any)
+			require.True(t, ok)
+			require.Equal(t, tt.want, thinking["type"])
+			require.NotContains(t, captured, model.ThinkingEnabledKey)
+		})
+	}
+}
+
 // TestModel_GenerateContent_NonStreaming_ToolCallNoID_Synthesized verifies that
 // when the provider omits tool_call.id in a non-streaming response, we synthesize
 // a stable ID (auto_call_<index>). This covers the non-streaming code path in
@@ -4319,6 +4478,47 @@ func TestMiniMaxFileDeletionBodyConvertor(t *testing.T) {
 			require.Equal(t, tt.want, payload["file_id"])
 		})
 	}
+}
+
+func TestUploadFileData_KimiDefaults(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodPost, r.Method)
+		require.Equal(t, "/v1/files", r.URL.Path)
+		require.NoError(t, r.ParseMultipartForm(10<<20))
+		require.Equal(
+			t,
+			"file-extract",
+			r.MultipartForm.Value["purpose"][0],
+		)
+		files := r.MultipartForm.File["file"]
+		require.Len(t, files, 1)
+		require.Equal(t, "notes.txt", files[0].Filename)
+
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{
+			"id":"file_kimi_1",
+			"object":"file",
+			"bytes":5,
+			"created_at":123,
+			"filename":"notes.txt",
+			"purpose":"file-extract"
+		}`)
+	}))
+	defer server.Close()
+
+	m := New(
+		"kimi-k2.6",
+		WithVariant(VariantKimi),
+		WithAPIKey("test-key"),
+		WithBaseURL(server.URL+"/v1"),
+	)
+	id, err := m.UploadFileData(
+		context.Background(),
+		"notes.txt",
+		[]byte("hello"),
+	)
+	require.NoError(t, err)
+	require.Equal(t, "file_kimi_1", id)
 }
 
 // TestUploadFile_Success tests UploadFile with a temp file and mock server.
@@ -5003,6 +5203,14 @@ func TestWithVariant(t *testing.T) {
 		WithVariant(VariantMiniMax)(opts)
 
 		assert.Equal(t, VariantMiniMax, opts.Variant, "expected variant to be VariantMiniMax")
+		assert.True(t, opts.variantSet, "expected variantSet to be true")
+	})
+
+	t.Run("kimi variant", func(t *testing.T) {
+		opts := &options{}
+		WithVariant(VariantKimi)(opts)
+
+		assert.Equal(t, VariantKimi, opts.Variant, "expected variant to be VariantKimi")
 		assert.True(t, opts.variantSet, "expected variantSet to be true")
 	})
 
@@ -7961,6 +8169,13 @@ func TestBuildThinkingOption(t *testing.T) {
 			thinkingEnabled: &trueVal,
 			wantKeys:        []string{thinkingKey},
 			wantValues:      []any{map[string]string{"type": "adaptive"}},
+		},
+		{
+			name:            "Kimi variant with thinking enabled",
+			variant:         VariantKimi,
+			thinkingEnabled: &trueVal,
+			wantKeys:        []string{thinkingKey},
+			wantValues:      []any{map[string]string{"type": "enabled"}},
 		},
 		{
 			name:            "OpenAI variant with thinking enabled",

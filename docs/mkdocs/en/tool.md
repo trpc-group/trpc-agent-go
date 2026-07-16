@@ -846,6 +846,33 @@ agent := llmagent.New("mcp-assistant",
     llmagent.WithToolSets([]tool.ToolSet{mcpToolSet}))
 ```
 
+### Tool Name Prefixing
+
+When an MCP ToolSet is wired into an `LLMAgent` via `WithToolSets`, the
+framework wraps it with `NamedToolSet`. The model sees each remote tool under
+`{toolSetName}_{remoteToolName}` while the underlying MCP `tools/call` still
+uses the original remote name.
+
+- Default ToolSet name is `"mcp"`, so a remote tool `search` becomes
+  `mcp_search`.
+- Set a distinct name per MCP server with `mcp.WithName(...)` when you attach
+  multiple ToolSets. Reusing the default for every server can produce duplicate
+  prefixed names (for example, two servers both exposing `search` would both
+  appear as `mcp_search`).
+- If `ToolSet.Name()` is empty, no prefix is applied (not the default for
+  `NewMCPToolSet`).
+
+```go
+githubToolSet := mcp.NewMCPToolSet(githubCfg, mcp.WithName("github"))
+slackToolSet := mcp.NewMCPToolSet(slackCfg, mcp.WithName("slack"))
+
+agent := llmagent.New("multi-mcp",
+    llmagent.WithModel(model),
+    llmagent.WithToolSets([]tool.ToolSet{githubToolSet, slackToolSet}),
+)
+// Model-visible names: github_search, slack_search, ...
+```
+
 ### MCP Annotations and Permission Metadata
 
 When a remote MCP server returns tool annotations from `tools/list`, direct

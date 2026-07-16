@@ -320,6 +320,7 @@ func WithExtraFields(extraFields map[string]any) Option {
 // - VariantQwen: Qwen-compatible request behavior.
 // - VariantGLM: GLM-compatible request and response behavior.
 // - VariantMiniMax: MiniMax-compatible request behavior.
+// - VariantKimi: Kimi-compatible request and file behavior.
 func WithVariant(variant Variant) Option {
 	return func(opts *options) {
 		opts.Variant = variant

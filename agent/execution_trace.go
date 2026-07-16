@@ -310,6 +310,21 @@ func (inv *Invocation) executionTraceFields() (*tracecapture.Capture, string) {
 	return inv.traceCapture, inv.traceNodeID
 }
 
+func (inv *Invocation) executionTraceRuntimeFields() (
+	*tracecapture.StepBinding,
+	*tracecapture.Capture,
+) {
+	if inv == nil || !inv.RunOptions.ExecutionTraceEnabled {
+		return nil, nil
+	}
+	inv.traceMu.Lock()
+	defer inv.traceMu.Unlock()
+	if inv.executionTraceStepBinding == nil {
+		inv.executionTraceStepBinding = tracecapture.NewStepBinding()
+	}
+	return inv.executionTraceStepBinding, inv.traceCapture
+}
+
 func cloneStringSlice(values []string) []string {
 	if len(values) == 0 {
 		return nil

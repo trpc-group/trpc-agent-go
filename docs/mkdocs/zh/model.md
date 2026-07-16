@@ -1813,7 +1813,16 @@ Variant 机制是 Model 模块的重要优化，用于处理不同 OpenAI 兼容
 - 使用 GLM 的 `thinking` 对象格式序列化思考开关
 - 当部分 GLM 网关把最终答案放在 `reasoning_content` 且 `content` 为空时，框架会将其回退为可见内容
 
-**6. VariantMiniMax**
+**6. VariantKimi**
+
+- Kimi 开放平台适配
+- 默认 BaseURL：`https://api.moonshot.ai/v1`
+- API Key 环境变量名：`MOONSHOT_API_KEY`
+- 对官方 `api.moonshot.ai` 和 `api.moonshot.cn` host 自动推断
+- 将思考开关序列化为 `{"thinking": {"type": "enabled"}}`
+- 文件上传默认使用 `file-extract` purpose
+
+**7. VariantMiniMax**
 
 - MiniMax OpenAI 兼容接口适配
 - 默认 BaseURL：`https://api.minimax.io/v1`
@@ -1842,6 +1851,11 @@ model := openai.New("deepseek-v4-flash",
     openai.WithBaseURL("https://api.deepseek.com/v1"),
     openai.WithAPIKey("your-api-key"),
     openai.WithVariant(openai.VariantDeepSeek), // 指定 DeepSeek
+)
+
+// 使用 Kimi 开放平台
+model = openai.New("kimi-k2.6",
+    openai.WithVariant(openai.VariantKimi), // 自动读取 MOONSHOT_API_KEY
 )
 
 // 使用 MiniMax OpenAI 兼容接口
@@ -1880,6 +1894,9 @@ message := model.Message{
 export DEEPSEEK_API_KEY="your-api-key"
 # 无需显式调用 WithAPIKey，框架会自动读取
 
+# Kimi 自动配置
+export MOONSHOT_API_KEY="your-api-key"
+
 # MiniMax 自动配置
 export MINIMAX_API_KEY="your-api-key"
 ```
@@ -1911,6 +1928,7 @@ model := openai.New("deepseek-v4-flash",
 | `VariantHunyuan` | `"thinking": {"type": "enabled"}` |
 | `VariantGLM` | `"thinking": {"type": "enabled"}` |
 | `VariantQwen` | `"enable_thinking": true` |
+| `VariantKimi` | `"thinking": {"type": "enabled"}` |
 | `VariantMiniMax` | `"thinking": {"type": "adaptive"}` |
 
 例如，通过官方 DeepSeek API 确定性地开启思考：
@@ -1936,6 +1954,22 @@ request := &model.Request{
 ```
 
 `ThinkingEnabled` 只适用于提供显式思考开关的模型；如果模型只支持推理预算，请改用 `ReasoningEffort`。对实现上述思考开关格式的外部服务，通常显式设置对应 `Variant` 和 `ThinkingEnabled` 即可。如果代理网关使用了不同字段或需要额外参数，可以通过 `openai.WithExtraFields(...)` 添加或覆盖服务方特有字段。
+
+对于要求始终开启思考的 Kimi 模型，应省略 `ThinkingEnabled`。如需让
+Kimi K2.6 在多轮对话间保留推理内容，可显式传入完整的服务方扩展：
+
+```go
+llm := openai.New(
+    "kimi-k2.6",
+    openai.WithVariant(openai.VariantKimi),
+    openai.WithExtraFields(map[string]any{
+        "thinking": map[string]string{
+            "type": "enabled",
+            "keep": "all",
+        },
+    }),
+)
+```
 
 对 MiniMax-M3，`ThinkingEnabled=false` 会发送
 `thinking.type=disabled`；MiniMax M2.x 虽然接受该值，但仍会继续思考。

@@ -63,7 +63,8 @@ func WithSystemPrompt(prompt string) Option {
 // parent model request is available in the context. When enabled, the
 // summarizer clones the parent request and appends a compacting user message
 // instead of sending a standalone summary prompt. If no parent request is
-// available, summarization falls back to the standalone prompt path.
+// available, or the parent cannot fit the summary model's input budget,
+// summarization falls back to a bounded standalone prompt.
 //
 // This is disabled by default.
 func WithCacheSafeForking(enable bool) Option {
@@ -144,7 +145,9 @@ func WithEventThreshold(eventCount int) Option {
 	}
 }
 
-// WithTimeThreshold appends a time-based check.
+// WithTimeThreshold appends a time-based check. The built-in Runner path uses
+// the idle gap before the current top-level request; standalone evaluation
+// preserves CheckTimeThreshold's last-event-age fallback.
 // Note: all checks in a summarizer are combined with global AND semantics.
 // If you call multiple threshold options (e.g. event + time), all must pass.
 func WithTimeThreshold(interval time.Duration) Option {

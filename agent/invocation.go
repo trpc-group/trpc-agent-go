@@ -191,6 +191,10 @@ type Invocation struct {
 	entryPredecessorStepIDs []string
 	// traceNodeID stores the mounted static root node id for this invocation.
 	traceNodeID string
+	// executionTraceStepBinding is the internal ownership bridge for the
+	// structural trace step represented by this invocation. Derived invocations
+	// bind their own structural visit explicitly.
+	executionTraceStepBinding *tracecapture.StepBinding
 
 	// state stores invocation-scoped state data (lazy initialized).
 	// Can be used by callbacks, middleware, or any invocation-scoped logic.
