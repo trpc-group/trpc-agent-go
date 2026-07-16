@@ -10,6 +10,7 @@ package tool
 
 import (
 	"context"
+	"errors"
 	"fmt"
 )
 
@@ -183,6 +184,82 @@ type ToolResultSanitizer interface {
 // sanitizer failure; callers must fail closed in that case.
 type ToolErrorSanitizer interface {
 	SanitizeToolError(ctx context.Context, args *AfterToolArgs) (error, error)
+}
+
+// ComposeToolResultSanitizers applies every non-nil sanitizer in order. Each
+// sanitizer receives the previous sanitizer's result. Any failure stops the
+// chain so an unsanitized value cannot escape.
+func ComposeToolResultSanitizers(sanitizers ...ToolResultSanitizer) ToolResultSanitizer {
+	filtered := make([]ToolResultSanitizer, 0, len(sanitizers))
+	for _, sanitizer := range sanitizers {
+		if sanitizer != nil {
+			filtered = append(filtered, sanitizer)
+		}
+	}
+	if len(filtered) == 0 {
+		return nil
+	}
+	return toolResultSanitizerChain(filtered)
+}
+
+type toolResultSanitizerChain []ToolResultSanitizer
+
+func (chain toolResultSanitizerChain) SanitizeToolResult(
+	ctx context.Context,
+	args *AfterToolArgs,
+) (any, error) {
+	if args == nil {
+		return nil, errors.New("tool: nil result sanitizer arguments")
+	}
+	current := args.Result
+	for _, sanitizer := range chain {
+		next := *args
+		next.Result = current
+		var err error
+		current, err = sanitizer.SanitizeToolResult(ctx, &next)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return current, nil
+}
+
+// ComposeToolErrorSanitizers applies every non-nil error sanitizer in order.
+// Each sanitizer receives the previous sanitized error; any failure is
+// fail-closed.
+func ComposeToolErrorSanitizers(sanitizers ...ToolErrorSanitizer) ToolErrorSanitizer {
+	filtered := make([]ToolErrorSanitizer, 0, len(sanitizers))
+	for _, sanitizer := range sanitizers {
+		if sanitizer != nil {
+			filtered = append(filtered, sanitizer)
+		}
+	}
+	if len(filtered) == 0 {
+		return nil
+	}
+	return toolErrorSanitizerChain(filtered)
+}
+
+type toolErrorSanitizerChain []ToolErrorSanitizer
+
+func (chain toolErrorSanitizerChain) SanitizeToolError(
+	ctx context.Context,
+	args *AfterToolArgs,
+) (error, error) {
+	if args == nil {
+		return nil, errors.New("tool: nil error sanitizer arguments")
+	}
+	current := args.Error
+	for _, sanitizer := range chain {
+		next := *args
+		next.Error = current
+		var err error
+		current, err = sanitizer.SanitizeToolError(ctx, &next)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return current, nil
 }
 
 // PermissionPolicyFunc adapts a function into PermissionPolicy.

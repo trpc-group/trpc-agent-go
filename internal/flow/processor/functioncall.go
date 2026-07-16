@@ -12,6 +12,7 @@ package processor
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -118,6 +119,7 @@ type toolResult struct {
 	err        error
 	stateDelta *toolEventStateDelta
 	toolArgs   []byte
+	sanitizer  tool.ToolResultSanitizer
 }
 
 // Default message used when transferring to a sub-agent without an explicit message.
@@ -501,11 +503,14 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsWithRequest(
 		}
 		toolResults = append(toolResults, result)
 	}
-	toolCallResponsesEvents := p.attachStateDeltaToToolResults(
+	toolCallResponsesEvents, err := p.attachStateDeltaToToolResults(
 		ctx,
 		invocation,
 		toolResults,
 	)
+	if err != nil {
+		return nil, err
+	}
 
 	if len(toolCallResponsesEvents) == 0 && invocation != nil {
 		for _, tc := range toolCalls {
@@ -554,29 +559,64 @@ func (p *FunctionCallResponseProcessor) applyAfterToolMessagesHooks(
 	if !ok {
 		return nil
 	}
+	var requestTools map[string]tool.Tool
+	if req != nil {
+		requestTools = req.Tools
+	}
+	toolCalls := toolCallsFromResponse(llmResponse)
+	resultSanitizer := toolResultSanitizerForCalls(invocation, requestTools, toolCalls)
+	ctx = withToolResultSanitizer(
+		ctx,
+		resultSanitizer,
+	)
+	if sanitizer := toolErrorSanitizerForCalls(
+		invocation, requestTools, toolCalls,
+	); sanitizer != nil {
+		ctx = context.WithValue(ctx, toolErrorSanitizerContextKey{}, sanitizer)
+	}
 	toolResultMessages := toolResultMessagesFromEvent(toolResultEvent)
 	if len(toolResultMessages) == 0 {
 		return nil
+	}
+	hookEvent := toolResultEvent
+	if resultSanitizer != nil {
+		hookEvent = toolResultEvent.Clone()
 	}
 	args := &plugin.AfterToolMessagesArgs{
 		Invocation:         invocation,
 		Request:            req,
 		ToolCallResponse:   llmResponse,
-		ToolResultEvent:    toolResultEvent,
+		ToolResultEvent:    hookEvent,
 		Messages:           afterToolMessagesView(req, llmResponse, toolResultMessages),
-		ToolCalls:          toolCallsFromResponse(llmResponse),
+		ToolCalls:          toolCalls,
 		ToolResultMessages: cloneModelMessages(toolResultMessages),
 	}
 	result, err := hooks.AfterToolMessages(ctx, args)
 	if err != nil {
+		toolCall := model.ToolCall{Function: model.FunctionDefinitionParam{Name: "after_tool_messages"}}
+		if len(args.ToolCalls) > 0 {
+			toolCall = args.ToolCalls[0]
+		}
+		err, sanitizeErr := sanitizeInvocationToolError(
+			ctx, invocation, toolCall, nil, nil, nil, err,
+		)
+		if sanitizeErr != nil {
+			return fmt.Errorf("tool error sanitizer: %w", sanitizeErr)
+		}
 		return err
 	}
 	if result == nil || len(result.ToolResultMessages) == 0 {
 		return nil
 	}
+	safeMessages, err := sanitizeToolMessagesForCalls(
+		ctx, invocation, requestTools, args.ToolCalls, result.ToolResultMessages,
+	)
+	if err != nil {
+		return err
+	}
 	choices, err := replacementToolChoices(
 		toolResultEvent.Response.Choices,
-		result.ToolResultMessages,
+		safeMessages,
 	)
 	if err != nil {
 		return err
@@ -775,11 +815,14 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequential(
 	if result.event == nil {
 		return nil, err
 	}
-	toolEvents := p.attachStateDeltaToToolResults(
+	toolEvents, sanitizeErr := p.attachStateDeltaToToolResults(
 		ctx,
 		invocation,
 		[]toolResult{result},
 	)
+	if sanitizeErr != nil {
+		return nil, sanitizeErr
+	}
 	if len(toolEvents) == 0 {
 		return nil, err
 	}
@@ -809,6 +852,9 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequentialResult(
 			index,
 			eventChan,
 		)
+	observableArgs := observableToolArguments(
+		invocation, tools[toolCall.Function.Name], modifiedArgs,
+	)
 	if err != nil {
 		if shouldIgnoreError {
 			// Create error choice for ignorable errors
@@ -827,11 +873,14 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequentialResult(
 		tools,
 		toolCall,
 		index,
-		modifiedArgs,
+		observableArgs,
 		skipSummarization,
 	)
 	if toolEvent == nil {
-		return toolResult{index: index, toolArgs: modifiedArgs}, nil
+		return toolResult{
+			index: index, toolArgs: observableArgs,
+			sanitizer: effectiveToolResultSanitizer(invocation, tools[toolCall.Function.Name]),
+		}, nil
 	}
 	decl := p.lookupDeclaration(tools, toolCall.Function.Name)
 	var stateDelta *toolEventStateDelta
@@ -845,7 +894,7 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequentialResult(
 		stateDelta = p.buildToolEventStateDelta(
 			ctx,
 			invocation,
-			modifiedArgs,
+			observableArgs,
 			choices,
 		)
 	}
@@ -868,7 +917,7 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequentialResult(
 	}
 
 	if startedSpan {
-		itelemetry.TraceToolCall(span, sess, decl, modifiedArgs, toolEvent, err)
+		itelemetry.TraceToolCall(span, sess, decl, observableArgs, toolEvent, err)
 	}
 	itelemetry.ReportExecuteToolMetrics(ctx, itelemetry.ExecuteToolAttributes{
 		RequestModelName: modelName,
@@ -883,7 +932,8 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequentialResult(
 		index:      index,
 		event:      toolEvent,
 		stateDelta: stateDelta,
-		toolArgs:   modifiedArgs,
+		toolArgs:   observableArgs,
+		sanitizer:  effectiveToolResultSanitizer(invocation, tools[toolCall.Function.Name]),
 	}, nil
 }
 
@@ -1010,11 +1060,14 @@ func (p *FunctionCallResponseProcessor) executeToolCallsInParallel(
 	// collector typically just sees ctx.Done()).
 	err := firstNonNilErr(g.Wait(), drainErr)
 
-	toolCallResponsesEvents := p.attachStateDeltaToToolResults(
+	toolCallResponsesEvents, sanitizeErr := p.attachStateDeltaToToolResults(
 		ctx,
 		invocation,
 		toolResults,
 	)
+	if sanitizeErr != nil {
+		return nil, sanitizeErr
+	}
 	if len(toolCallResponsesEvents) == 0 && invocation != nil {
 		for _, tc := range toolCalls {
 			tl, ok := tools[tc.Function.Name]
@@ -1069,30 +1122,39 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 	// surfaced as a tool error in the merged response (no sibling cancel).
 	defer func() {
 		if r := recover(); r != nil {
+			panicDetail := fmt.Sprint(r)
+			if effectiveToolResultSanitizer(invocation, tools[tc.Function.Name]) != nil ||
+				effectiveToolErrorSanitizer(invocation, tools[tc.Function.Name]) != nil {
+				panicDetail = "details redacted by tool safety policy"
+			}
 			log.ErrorfContext(
 				ctx,
-				log.PanicPrefix+" Tool execution panic for %s (index: %d, ID: %s, agent: %s): %v",
+				log.PanicPrefix+" Tool execution panic for %s (index: %d, ID: %s, agent: %s): %s",
 				tc.Function.Name,
 				index,
 				tc.ID,
 				invocation.AgentName,
-				r,
+				panicDetail,
 			)
 			errorChoice := p.createErrorChoice(
-				index, tc.ID, fmt.Sprintf("tool execution panic: %v", r),
+				index, tc.ID, "tool execution panic: "+panicDetail,
 			)
 			errorChoice.Message.ToolName = tc.Function.Name
 			errorEvent := newToolCallResponseEvent(
 				invocation, llmResponse, []model.Choice{*errorChoice},
 			)
-			annotateToolCallArgs(errorEvent, tc, toolArgs)
+			observableArgs := observableToolArguments(
+				invocation, tools[tc.Function.Name], toolArgs,
+			)
+			annotateToolCallArgs(errorEvent, tc, observableArgs)
 			if tc.Function.Name == transfer.TransferToolName {
 				errorEvent.Tag = event.TransferTag
 			}
 			p.sendToolResult(ctx, resultChan, toolResult{
-				index:    index,
-				event:    errorEvent,
-				toolArgs: toolArgs,
+				index:     index,
+				event:     errorEvent,
+				toolArgs:  observableArgs,
+				sanitizer: effectiveToolResultSanitizer(invocation, tools[tc.Function.Name]),
 			})
 			// Recovered panic — do NOT cancel siblings.
 			rerr = nil
@@ -1115,6 +1177,9 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 			eventChan,
 		)
 	toolArgs = modifiedArgs
+	observableArgs := observableToolArguments(
+		invocation, tools[tc.Function.Name], modifiedArgs,
+	)
 	// Handle errors based on whether they are ignorable or critical.
 	if err != nil {
 		log.ErrorfContext(
@@ -1133,7 +1198,7 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 		errorEvent := newToolCallResponseEvent(
 			invocation, llmResponse, []model.Choice{*errorChoice},
 		)
-		annotateToolCallArgs(errorEvent, tc, modifiedArgs)
+		annotateToolCallArgs(errorEvent, tc, observableArgs)
 		errorEvent = p.decorateToolCallResponseEvent(
 			errorEvent,
 			tools,
@@ -1147,10 +1212,11 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 			returnErr = err
 		}
 		p.sendToolResult(ctx, resultChan, toolResult{
-			index:    index,
-			event:    errorEvent,
-			err:      returnErr,
-			toolArgs: modifiedArgs,
+			index:     index,
+			event:     errorEvent,
+			err:       returnErr,
+			toolArgs:  observableArgs,
+			sanitizer: effectiveToolResultSanitizer(invocation, tools[tc.Function.Name]),
 		})
 		// Return the critical error so the errgroup cancels siblings.
 		// Ignorable errors return nil here and travel only via toolResult.err.
@@ -1166,13 +1232,14 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 		tools,
 		tc,
 		index,
-		modifiedArgs,
+		observableArgs,
 		skipSummarization,
 	)
 	if toolCallResponseEvent == nil {
 		p.sendToolResult(ctx, resultChan, toolResult{
-			index:    index,
-			toolArgs: modifiedArgs,
+			index:     index,
+			toolArgs:  observableArgs,
+			sanitizer: effectiveToolResultSanitizer(invocation, tools[tc.Function.Name]),
 		})
 		return nil
 	}
@@ -1204,11 +1271,11 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 	stateDelta := p.buildToolEventStateDelta(
 		ctx,
 		invocation,
-		modifiedArgs,
+		observableArgs,
 		choices,
 	)
 	if startedSpan {
-		itelemetry.TraceToolCall(span, sess, decl, modifiedArgs, toolCallResponseEvent, err)
+		itelemetry.TraceToolCall(span, sess, decl, observableArgs, toolCallResponseEvent, err)
 	}
 	itelemetry.ReportExecuteToolMetrics(ctx, itelemetry.ExecuteToolAttributes{
 		RequestModelName: modelName,
@@ -1225,7 +1292,8 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 			index:      index,
 			event:      toolCallResponseEvent,
 			stateDelta: stateDelta,
-			toolArgs:   modifiedArgs,
+			toolArgs:   observableArgs,
+			sanitizer:  effectiveToolResultSanitizer(invocation, tools[tc.Function.Name]),
 		},
 	)
 	return nil
@@ -1610,7 +1678,7 @@ func (p *FunctionCallResponseProcessor) attachStateDeltaToToolResults(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	results []toolResult,
-) []*event.Event {
+) ([]*event.Event, error) {
 	var priorStateDelta []*event.Event
 	events := make([]*event.Event, 0, len(results))
 	for i := 0; i < len(results); i++ {
@@ -1639,6 +1707,15 @@ func (p *FunctionCallResponseProcessor) attachStateDeltaToToolResults(
 			)
 		}
 		p.runPostToolResultHooks(ctx, invocation, result.event)
+		sanitizeCtx := withToolResultSanitizer(ctx, result.sanitizer)
+		if err := sanitizeInvocationToolEvent(
+			sanitizeCtx,
+			invocation,
+			result.event,
+			result.toolArgs,
+		); err != nil {
+			return nil, err
+		}
 		if len(result.event.StateDelta) > 0 {
 			priorStateDelta = append(
 				priorStateDelta,
@@ -1647,7 +1724,7 @@ func (p *FunctionCallResponseProcessor) attachStateDeltaToToolResults(
 		}
 		events = append(events, result.event)
 	}
-	return events
+	return events, nil
 }
 
 func (p *FunctionCallResponseProcessor) runPostToolResultHooks(
@@ -1821,13 +1898,24 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 		return ctx, nil, toolCall.Function.Arguments, shouldIgnoreError,
 			false, err
 	}
+	ctx = withEffectiveToolSanitizers(ctx, invocation, tl)
 
-	log.DebugfContext(
-		ctx,
-		"Executing tool %s with args: %s",
-		toolCall.Function.Name,
-		string(toolCall.Function.Arguments),
-	)
+	if effectiveToolResultSanitizer(invocation, tl) == nil &&
+		effectiveToolErrorSanitizer(invocation, tl) == nil {
+		log.DebugfContext(
+			ctx,
+			"Executing tool %s with args: %s",
+			toolCall.Function.Name,
+			string(toolCall.Function.Arguments),
+		)
+	} else {
+		log.DebugfContext(
+			ctx,
+			"Executing tool %s with %d argument bytes (content redacted)",
+			toolCall.Function.Name,
+			len(toolCall.Function.Arguments),
+		)
+	}
 
 	// Execute the tool with callbacks.
 	ctx, result, modifiedArgs, suppressDefaultToolMessage,
@@ -1839,6 +1927,26 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 		eventChan,
 	)
 	ctx = withResolvedToolContext(ctx, tl)
+	result, sanitizeErr := sanitizeInvocationToolResult(
+		ctx,
+		invocation,
+		toolCall,
+		tl.Declaration(),
+		modifiedArgs,
+		result,
+		err,
+	)
+	if sanitizeErr != nil {
+		return ctx, nil, modifiedArgs, false, skipSummarization,
+			fmt.Errorf("tool result sanitizer: %w", sanitizeErr)
+	}
+	err, sanitizeErr = sanitizeInvocationToolError(
+		ctx, invocation, toolCall, tl.Declaration(), modifiedArgs, result, err,
+	)
+	if sanitizeErr != nil {
+		return ctx, nil, modifiedArgs, false, skipSummarization,
+			fmt.Errorf("tool error sanitizer: %w", sanitizeErr)
+	}
 	// Only return error when it's a stop error
 	if err != nil {
 		if _, ok := agent.AsStopError(err); ok {
@@ -1911,14 +2019,299 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 		return ctx, nil, modifiedArgs, true, skipSummarization, cbErr
 	}
 
-	log.DebugfContext(
-		ctx,
-		"CallableTool %s executed successfully, result: %s",
-		toolCall.Function.Name,
-		defaultMsg.Content,
-	)
+	if effectiveToolResultSanitizer(invocation, tl) == nil {
+		log.DebugfContext(
+			ctx,
+			"CallableTool %s executed successfully, result: %s",
+			toolCall.Function.Name,
+			defaultMsg.Content,
+		)
+	} else {
+		log.DebugfContext(
+			ctx,
+			"CallableTool %s executed successfully (result content redacted)",
+			toolCall.Function.Name,
+		)
+	}
 
 	return ctx, choices, modifiedArgs, true, skipSummarization, nil
+}
+
+func sanitizeInvocationToolResult(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	toolCall model.ToolCall,
+	declaration *tool.Declaration,
+	arguments []byte,
+	result any,
+	runErr error,
+) (any, error) {
+	sanitizer := toolResultSanitizerFromContext(ctx, invocation)
+	if sanitizer == nil {
+		return result, nil
+	}
+	return sanitizer.SanitizeToolResult(ctx, &tool.AfterToolArgs{
+		ToolCallID:  toolCall.ID,
+		ToolName:    toolCall.Function.Name,
+		Declaration: declaration,
+		Arguments:   arguments,
+		Result:      result,
+		Error:       runErr,
+		Meta:        extractMetaFromResult(result),
+	})
+}
+
+func sanitizeInvocationToolError(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	toolCall model.ToolCall,
+	declaration *tool.Declaration,
+	arguments []byte,
+	result any,
+	runErr error,
+) (error, error) {
+	sanitizer := toolErrorSanitizerFromContext(ctx, invocation)
+	if sanitizer == nil {
+		return runErr, nil
+	}
+	_, wasStopError := agent.AsStopError(runErr)
+	safeErr, err := sanitizer.SanitizeToolError(ctx, &tool.AfterToolArgs{
+		ToolCallID: toolCall.ID, ToolName: toolCall.Function.Name,
+		Declaration: declaration, Arguments: arguments,
+		Result: result, Error: runErr, Meta: extractMetaFromResult(result),
+	})
+	if err != nil || !wasStopError {
+		return safeErr, err
+	}
+	message := "tool execution stopped"
+	if safeErr != nil {
+		message = safeErr.Error()
+	}
+	return agent.NewStopError(message), nil
+}
+
+func invocationToolResultSanitizer(invocation *agent.Invocation) tool.ToolResultSanitizer {
+	if invocation == nil || invocation.RunOptions.ToolPermissionPolicy == nil {
+		return nil
+	}
+	sanitizer, _ := invocation.RunOptions.ToolPermissionPolicy.(tool.ToolResultSanitizer)
+	return sanitizer
+}
+
+func invocationToolErrorSanitizer(invocation *agent.Invocation) tool.ToolErrorSanitizer {
+	if invocation == nil || invocation.RunOptions.ToolPermissionPolicy == nil {
+		return nil
+	}
+	sanitizer, _ := invocation.RunOptions.ToolPermissionPolicy.(tool.ToolErrorSanitizer)
+	return sanitizer
+}
+
+func observableToolArguments(
+	invocation *agent.Invocation,
+	t tool.Tool,
+	arguments []byte,
+) []byte {
+	if effectiveToolResultSanitizer(invocation, t) == nil &&
+		effectiveToolErrorSanitizer(invocation, t) == nil {
+		return arguments
+	}
+	digest := sha256.Sum256(arguments)
+	return []byte(fmt.Sprintf(`{"redacted":true,"sha256":"%x"}`, digest))
+}
+
+func effectiveToolResultSanitizer(
+	invocation *agent.Invocation,
+	t tool.Tool,
+) tool.ToolResultSanitizer {
+	policy := toolLocalPermissionPolicy(t)
+	local, _ := policy.(tool.ToolResultSanitizer)
+	return tool.ComposeToolResultSanitizers(
+		invocationToolResultSanitizer(invocation), local,
+	)
+}
+
+func effectiveToolErrorSanitizer(
+	invocation *agent.Invocation,
+	t tool.Tool,
+) tool.ToolErrorSanitizer {
+	policy := toolLocalPermissionPolicy(t)
+	local, _ := policy.(tool.ToolErrorSanitizer)
+	return tool.ComposeToolErrorSanitizers(
+		invocationToolErrorSanitizer(invocation), local,
+	)
+}
+
+func toolLocalPermissionPolicy(t tool.Tool) tool.PermissionPolicy {
+	if t == nil {
+		return nil
+	}
+	provider, _ := itool.ResolveSemantic(t).(tool.PermissionPolicyProvider)
+	if provider == nil {
+		return nil
+	}
+	return provider.ToolPermissionPolicy()
+}
+
+type toolSanitizerInvocationContextKey struct{}
+type toolResultSanitizerContextKey struct{}
+type toolErrorSanitizerContextKey struct{}
+
+func withInvocationToolSanitizers(
+	ctx context.Context,
+	invocation *agent.Invocation,
+) context.Context {
+	resultSanitizer := invocationToolResultSanitizer(invocation)
+	errorSanitizer := invocationToolErrorSanitizer(invocation)
+	if resultSanitizer == nil && errorSanitizer == nil {
+		return ctx
+	}
+	ctx = context.WithValue(ctx, toolSanitizerInvocationContextKey{}, invocation)
+	ctx = withToolResultSanitizer(ctx, resultSanitizer)
+	if errorSanitizer != nil {
+		ctx = context.WithValue(ctx, toolErrorSanitizerContextKey{}, errorSanitizer)
+	}
+	ctx = context.WithValue(ctx, redactToolExecutionLogContextKey{}, true)
+	return tool.WithRedactedToolCallbackPanics(ctx)
+}
+
+func withEffectiveToolSanitizers(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	tl tool.Tool,
+) context.Context {
+	ctx = withInvocationToolSanitizers(ctx, invocation)
+	resultSanitizer := effectiveToolResultSanitizer(invocation, tl)
+	errorSanitizer := effectiveToolErrorSanitizer(invocation, tl)
+	if resultSanitizer == nil && errorSanitizer == nil {
+		return ctx
+	}
+	ctx = withToolResultSanitizer(ctx, resultSanitizer)
+	if errorSanitizer != nil {
+		ctx = context.WithValue(ctx, toolErrorSanitizerContextKey{}, errorSanitizer)
+	}
+	ctx = context.WithValue(ctx, redactToolExecutionLogContextKey{}, true)
+	return tool.WithRedactedToolCallbackPanics(ctx)
+}
+
+func withToolResultSanitizer(
+	ctx context.Context,
+	sanitizer tool.ToolResultSanitizer,
+) context.Context {
+	if sanitizer == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, toolResultSanitizerContextKey{}, sanitizer)
+}
+
+func toolResultSanitizerFromContext(
+	ctx context.Context,
+	invocation *agent.Invocation,
+) tool.ToolResultSanitizer {
+	if ctx != nil {
+		if sanitizer, ok := ctx.Value(toolResultSanitizerContextKey{}).(tool.ToolResultSanitizer); ok {
+			return sanitizer
+		}
+	}
+	return invocationToolResultSanitizer(invocation)
+}
+
+func toolErrorSanitizerFromContext(
+	ctx context.Context,
+	invocation *agent.Invocation,
+) tool.ToolErrorSanitizer {
+	if ctx != nil {
+		if sanitizer, ok := ctx.Value(toolErrorSanitizerContextKey{}).(tool.ToolErrorSanitizer); ok {
+			return sanitizer
+		}
+	}
+	return invocationToolErrorSanitizer(invocation)
+}
+
+func toolResultSanitizerForCalls(
+	invocation *agent.Invocation,
+	tools map[string]tool.Tool,
+	calls []model.ToolCall,
+) tool.ToolResultSanitizer {
+	sanitizers := []tool.ToolResultSanitizer{invocationToolResultSanitizer(invocation)}
+	for _, call := range calls {
+		policy := toolLocalPermissionPolicy(tools[call.Function.Name])
+		sanitizer, _ := policy.(tool.ToolResultSanitizer)
+		sanitizers = append(sanitizers, sanitizer)
+	}
+	return tool.ComposeToolResultSanitizers(sanitizers...)
+}
+
+func toolErrorSanitizerForCalls(
+	invocation *agent.Invocation,
+	tools map[string]tool.Tool,
+	calls []model.ToolCall,
+) tool.ToolErrorSanitizer {
+	sanitizers := []tool.ToolErrorSanitizer{invocationToolErrorSanitizer(invocation)}
+	for _, call := range calls {
+		policy := toolLocalPermissionPolicy(tools[call.Function.Name])
+		sanitizer, _ := policy.(tool.ToolErrorSanitizer)
+		sanitizers = append(sanitizers, sanitizer)
+	}
+	return tool.ComposeToolErrorSanitizers(sanitizers...)
+}
+
+func sanitizeToolMessagesForCalls(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	tools map[string]tool.Tool,
+	calls []model.ToolCall,
+	messages []model.Message,
+) ([]model.Message, error) {
+	byID := make(map[string]model.ToolCall, len(calls))
+	for _, call := range calls {
+		if call.ID == "" {
+			return nil, errors.New("after tool messages: tool call missing id")
+		}
+		if _, exists := byID[call.ID]; exists {
+			return nil, fmt.Errorf("after tool messages: duplicate tool call id %q", call.ID)
+		}
+		byID[call.ID] = call
+	}
+	safe := make([]model.Message, 0, len(messages))
+	for _, message := range messages {
+		call, ok := byID[message.ToolID]
+		if !ok {
+			return nil, fmt.Errorf("after tool messages: unknown tool id %q", message.ToolID)
+		}
+		t := tools[call.Function.Name]
+		callCtx := withEffectiveToolSanitizers(ctx, invocation, t)
+		var declaration *tool.Declaration
+		if t != nil {
+			declaration = t.Declaration()
+		}
+		one, err := sanitizeInvocationToolMessages(
+			callCtx, invocation, call, declaration, call.Function.Arguments,
+			[]model.Message{message},
+		)
+		if err != nil {
+			return nil, err
+		}
+		safe = append(safe, one...)
+	}
+	return safe, nil
+}
+
+func sanitizerInvocationFromContext(ctx context.Context) *agent.Invocation {
+	invocation, _ := ctx.Value(toolSanitizerInvocationContextKey{}).(*agent.Invocation)
+	return invocation
+}
+
+func sanitizeToolCallbackError(
+	ctx context.Context,
+	toolCall model.ToolCall,
+	declaration *tool.Declaration,
+	result any,
+	err error,
+) (error, error) {
+	return sanitizeInvocationToolError(
+		ctx, sanitizerInvocationFromContext(ctx), toolCall, declaration,
+		toolCall.Function.Arguments, result, err,
+	)
 }
 
 func (p *FunctionCallResponseProcessor) buildToolResultChoices(
@@ -2197,7 +2590,11 @@ func (p *FunctionCallResponseProcessor) applyToolResultMessagesCallback(
 		},
 	)
 	if cbErr != nil {
-		log.Errorf("ToolResultMessages callback failed for %s: %v", toolCall.Function.Name, cbErr)
+		cbErr, sanitizeErr := sanitizeToolCallbackError(ctx, toolCall, tl.Declaration(), result, cbErr)
+		if sanitizeErr != nil {
+			return nil, false, fmt.Errorf("tool error sanitizer: %w", sanitizeErr)
+		}
+		logToolExecutionError(ctx, "ToolResultMessages callback", toolCall.Function.Name, cbErr)
 		return nil, false, fmt.Errorf("tool callback error: %w", cbErr)
 	}
 
@@ -2216,6 +2613,13 @@ func (p *FunctionCallResponseProcessor) applyToolResultMessagesCallback(
 	if len(msgs) == 0 {
 		return nil, false, nil
 	}
+	msgs, cbErr = sanitizeInvocationToolMessages(
+		ctx, sanitizerInvocationFromContext(ctx), toolCall,
+		tl.Declaration(), modifiedArgs, msgs,
+	)
+	if cbErr != nil {
+		return nil, false, cbErr
+	}
 
 	customChoices := make([]model.Choice, 0, len(msgs))
 	for _, msg := range msgs {
@@ -2228,6 +2632,194 @@ func (p *FunctionCallResponseProcessor) applyToolResultMessagesCallback(
 	// When a callback is provided and returns non-empty messages,
 	// the framework defers entirely to the callback for correctness.
 	return customChoices, true, nil
+}
+
+func sanitizeInvocationToolMessages(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	toolCall model.ToolCall,
+	declaration *tool.Declaration,
+	arguments []byte,
+	messages []model.Message,
+) ([]model.Message, error) {
+	sanitizer := toolResultSanitizerFromContext(ctx, invocation)
+	if sanitizer == nil {
+		return messages, nil
+	}
+	sanitized, err := sanitizer.SanitizeToolResult(ctx, &tool.AfterToolArgs{
+		ToolCallID: toolCall.ID, ToolName: toolCall.Function.Name,
+		Declaration: declaration, Arguments: arguments, Result: messages,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("tool result sanitizer: %w", err)
+	}
+	data, err := json.Marshal(sanitized)
+	if err != nil {
+		return nil, fmt.Errorf("marshal sanitized tool messages: %w", err)
+	}
+	var safe []model.Message
+	if err := json.Unmarshal(data, &safe); err != nil {
+		return nil, fmt.Errorf("decode sanitized tool messages: %w", err)
+	}
+	return safe, nil
+}
+
+func sanitizeInvocationToolEvent(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	ev *event.Event,
+	arguments []byte,
+) error {
+	if ev == nil || toolResultSanitizerFromContext(ctx, invocation) == nil {
+		return nil
+	}
+	toolCall := toolCallFromResultEvent(ev)
+	if ev.Response != nil {
+		safe, err := sanitizeInvocationToolTypedValue(
+			ctx, invocation, toolCall, arguments, *ev.Response,
+		)
+		if err != nil {
+			return err
+		}
+		*ev.Response = safe
+	}
+	if len(ev.StateDelta) > 0 {
+		safe, err := sanitizeInvocationToolByteMap(
+			ctx, invocation, toolCall, arguments, ev.StateDelta,
+		)
+		if err != nil {
+			return err
+		}
+		ev.StateDelta = safe
+	}
+	if len(ev.Extensions) > 0 {
+		raw := make(map[string][]byte, len(ev.Extensions))
+		for key, value := range ev.Extensions {
+			raw[key] = value
+		}
+		safe, err := sanitizeInvocationToolByteMap(
+			ctx, invocation, toolCall, arguments, raw,
+		)
+		if err != nil {
+			return err
+		}
+		ev.Extensions = make(map[string]json.RawMessage, len(safe))
+		for key, value := range safe {
+			ev.Extensions[key] = value
+		}
+	}
+	metadata := struct {
+		RequestID          string
+		InvocationID       string
+		ParentInvocationID string
+		ParentMetadata     *event.ParentInvocationMetadata
+		Author             string
+		ID                 string
+		Branch             string
+		Tag                string
+		LongRunningToolIDs map[string]struct{}
+		FilterKey          string
+	}{
+		ev.RequestID, ev.InvocationID, ev.ParentInvocationID,
+		ev.ParentMetadata, ev.Author, ev.ID, ev.Branch, ev.Tag,
+		ev.LongRunningToolIDs, ev.FilterKey,
+	}
+	safeMetadata, err := sanitizeInvocationToolTypedValue(
+		ctx, invocation, toolCall, arguments, metadata,
+	)
+	if err != nil {
+		return err
+	}
+	ev.RequestID = safeMetadata.RequestID
+	ev.InvocationID = safeMetadata.InvocationID
+	ev.ParentInvocationID = safeMetadata.ParentInvocationID
+	ev.ParentMetadata = safeMetadata.ParentMetadata
+	ev.Author = safeMetadata.Author
+	ev.ID = safeMetadata.ID
+	ev.Branch = safeMetadata.Branch
+	ev.Tag = safeMetadata.Tag
+	ev.LongRunningToolIDs = safeMetadata.LongRunningToolIDs
+	ev.FilterKey = safeMetadata.FilterKey
+	if ev.StructuredOutput != nil {
+		safe, err := sanitizeInvocationToolResult(
+			ctx, invocation, toolCall, nil, arguments,
+			ev.StructuredOutput, nil,
+		)
+		if err != nil {
+			return fmt.Errorf("tool result sanitizer: %w", err)
+		}
+		ev.StructuredOutput = safe
+	}
+	if ev.ExecutionTrace != nil {
+		safe, err := sanitizeInvocationToolTypedValue(
+			ctx, invocation, toolCall, arguments, ev.ExecutionTrace,
+		)
+		if err != nil {
+			return err
+		}
+		ev.ExecutionTrace = safe
+	}
+	return nil
+}
+
+func sanitizeInvocationToolTypedValue[T any](
+	ctx context.Context,
+	invocation *agent.Invocation,
+	toolCall model.ToolCall,
+	arguments []byte,
+	value T,
+) (T, error) {
+	var zero T
+	sanitized, err := sanitizeInvocationToolResult(
+		ctx, invocation, toolCall, nil, arguments, value, nil,
+	)
+	if err != nil {
+		return zero, fmt.Errorf("tool result sanitizer: %w", err)
+	}
+	data, err := json.Marshal(sanitized)
+	if err != nil {
+		return zero, fmt.Errorf("marshal sanitized tool event field: %w", err)
+	}
+	var safe T
+	if err := json.Unmarshal(data, &safe); err != nil {
+		return zero, fmt.Errorf("decode sanitized tool event field: %w", err)
+	}
+	return safe, nil
+}
+
+func sanitizeInvocationToolByteMap(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	toolCall model.ToolCall,
+	arguments []byte,
+	value map[string][]byte,
+) (map[string][]byte, error) {
+	sanitized, err := sanitizeInvocationToolResult(
+		ctx, invocation, toolCall, nil, arguments, value, nil,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("tool result sanitizer: %w", err)
+	}
+	safe, ok := sanitized.(map[string][]byte)
+	if !ok {
+		return nil, fmt.Errorf("sanitized tool byte map has type %T", sanitized)
+	}
+	return safe, nil
+}
+
+func toolCallFromResultEvent(ev *event.Event) model.ToolCall {
+	call := model.ToolCall{Function: model.FunctionDefinitionParam{Name: "tool_result"}}
+	if ev == nil {
+		return call
+	}
+	for _, msg := range toolResultMessagesFromEvent(ev) {
+		call.ID = msg.ToolID
+		if msg.ToolName != "" {
+			call.Function.Name = msg.ToolName
+		}
+		break
+	}
+	return call
 }
 
 func ensureToolResultMessageName(
@@ -2326,12 +2918,11 @@ func (p *FunctionCallResponseProcessor) runBeforeToolPluginCallbacks(
 	}
 	result, err := callbacks.RunBeforeTool(ctx, args)
 	if err != nil {
-		log.ErrorfContext(
-			ctx,
-			"Before tool plugin failed for %s: %v",
-			toolCall.Function.Name,
-			err,
-		)
+		err, sanitizeErr := sanitizeToolCallbackError(ctx, toolCall, toolDeclaration, nil, err)
+		if sanitizeErr != nil {
+			return ctx, toolCall, nil, fmt.Errorf("tool error sanitizer: %w", sanitizeErr)
+		}
+		logToolExecutionError(ctx, "Before tool plugin", toolCall.Function.Name, err)
 		return ctx, toolCall, nil,
 			fmt.Errorf("tool callback error: %w", err)
 	}
@@ -2364,12 +2955,11 @@ func (p *FunctionCallResponseProcessor) runBeforeToolCallbacks(
 	}
 	result, err := p.toolCallbacks.RunBeforeTool(ctx, args)
 	if err != nil {
-		log.ErrorfContext(
-			ctx,
-			"Before tool callback failed for %s: %v",
-			toolCall.Function.Name,
-			err,
-		)
+		err, sanitizeErr := sanitizeToolCallbackError(ctx, toolCall, toolDeclaration, nil, err)
+		if sanitizeErr != nil {
+			return ctx, toolCall, nil, fmt.Errorf("tool error sanitizer: %w", sanitizeErr)
+		}
+		logToolExecutionError(ctx, "Before tool callback", toolCall.Function.Name, err)
 		return ctx, toolCall, nil,
 			fmt.Errorf("tool callback error: %w", err)
 	}
@@ -2414,12 +3004,11 @@ func (p *FunctionCallResponseProcessor) runAfterToolPluginCallbacks(
 	}
 	afterResult, err := callbacks.RunAfterTool(ctx, args)
 	if err != nil {
-		log.ErrorfContext(
-			ctx,
-			"After tool plugin failed for %s: %v",
-			toolCall.Function.Name,
-			err,
-		)
+		err, sanitizeErr := sanitizeToolCallbackError(ctx, toolCall, toolDeclaration, toolResult, err)
+		if sanitizeErr != nil {
+			return ctx, toolResult, false, false, fmt.Errorf("tool error sanitizer: %w", sanitizeErr)
+		}
+		logToolExecutionError(ctx, "After tool plugin", toolCall.Function.Name, err)
 		return ctx, toolResult, false, false,
 			fmt.Errorf("tool callback error: %w", err)
 	}
@@ -2456,12 +3045,11 @@ func (p *FunctionCallResponseProcessor) runAfterToolCallbacks(
 	}
 	afterResult, err := p.toolCallbacks.RunAfterTool(ctx, args)
 	if err != nil {
-		log.ErrorfContext(
-			ctx,
-			"After tool callback failed for %s: %v",
-			toolCall.Function.Name,
-			err,
-		)
+		err, sanitizeErr := sanitizeToolCallbackError(ctx, toolCall, toolDeclaration, toolResult, err)
+		if sanitizeErr != nil {
+			return ctx, toolResult, false, fmt.Errorf("tool error sanitizer: %w", sanitizeErr)
+		}
+		logToolExecutionError(ctx, "After tool callback", toolCall.Function.Name, err)
 		return ctx, toolResult, false,
 			fmt.Errorf("tool callback error: %w", err)
 	}
@@ -2505,6 +3093,7 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 ) (context.Context, any, []byte, bool, bool, error) {
 	// Inject tool call ID into context for callbacks to use.
 	ctx = context.WithValue(ctx, tool.ContextKeyToolCallID{}, toolCall.ID)
+	ctx = withEffectiveToolSanitizers(ctx, invocation, tl)
 	// Repair tool call arguments in place when needed.
 	if jsonrepair.IsToolCallArgumentsJSONRepairEnabled(invocation) {
 		jsonrepair.RepairToolCallArgumentsInPlace(ctx, &toolCall)
@@ -2517,6 +3106,7 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 		toolCall,
 		toolDeclaration,
 	)
+	ctx = withEffectiveToolSanitizers(ctx, invocation, tl)
 	if err != nil {
 		return ctx, nil, toolCall.Function.Arguments, false, false, err
 	}
@@ -2531,6 +3121,7 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 		toolCall,
 		toolDeclaration,
 	)
+	ctx = withEffectiveToolSanitizers(ctx, invocation, tl)
 	if err != nil {
 		return ctx, nil, toolCall.Function.Arguments, false, false, err
 	}
@@ -2564,17 +3155,7 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 		tl,
 		eventChan,
 	)
-	if toolErr != nil {
-		log.WarnfContext(
-			ctx,
-			"tool execute failed, function name: %v, arguments: %s, "+
-				"result: %v, err: %v",
-			toolCall.Function.Name,
-			string(toolCall.Function.Arguments),
-			toolResult,
-			toolErr,
-		)
-	}
+	logToolCallFailure(ctx, invocation, toolCall, toolResult, toolErr)
 	ctx, toolResult, pluginOverride, skipSummarization, err :=
 		p.runAfterToolPluginCallbacks(
 			ctx,
@@ -2584,6 +3165,7 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 			toolResult,
 			toolErr,
 		)
+	ctx = withEffectiveToolSanitizers(ctx, invocation, tl)
 	if err != nil {
 		return ctx, toolResult, toolCall.Function.Arguments,
 			suppressDefaultToolMessage, skipSummarization, err
@@ -2606,6 +3188,7 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 		toolResult,
 		toolErr,
 	)
+	ctx = withEffectiveToolSanitizers(ctx, invocation, tl)
 	if err != nil {
 		return ctx, toolResult, toolCall.Function.Arguments,
 			suppressDefaultToolMessage, skipSummarization || localSkip, err
@@ -2624,6 +3207,35 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 		suppressDefaultToolMessage, skipSummarization || localSkip, toolErr
 }
 
+func logToolCallFailure(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	toolCall model.ToolCall,
+	toolResult any,
+	toolErr error,
+) {
+	if toolErr != nil && toolResultSanitizerFromContext(ctx, invocation) == nil &&
+		toolErrorSanitizerFromContext(ctx, invocation) == nil {
+		log.WarnfContext(
+			ctx,
+			"tool execute failed, function name: %v, arguments: %s, "+
+				"result: %v, err: %v",
+			toolCall.Function.Name,
+			string(toolCall.Function.Arguments),
+			toolResult,
+			toolErr,
+		)
+	} else if toolErr != nil {
+		log.WarnfContext(
+			ctx,
+			"tool execute failed, function name: %v, error type: %T "+
+				"(arguments, result, and error content redacted)",
+			toolCall.Function.Name,
+			toolErr,
+		)
+	}
+}
+
 func (p *FunctionCallResponseProcessor) checkToolPermission(
 	ctx context.Context,
 	invocation *agent.Invocation,
@@ -2640,17 +3252,22 @@ func (p *FunctionCallResponseProcessor) checkToolPermission(
 		Arguments:   toolCall.Function.Arguments,
 		Metadata:    tool.MetadataOf(semanticTool),
 	}
+	decisions := []tool.PermissionDecision{tool.AllowPermission()}
 	if checker, ok := semanticTool.(tool.PermissionChecker); ok {
 		decision, err := checker.CheckPermission(ctx, req)
-		result, err := normalizeToolPermissionResult(req, decision, err)
-		if result != nil || err != nil {
-			return result, err
+		if err != nil {
+			return nil, err
 		}
+		decisions = append(decisions, decision)
 	}
-	if invocation == nil || invocation.RunOptions.ToolPermissionPolicy == nil {
-		return nil, nil
+	if invocation != nil && invocation.RunOptions.ToolPermissionPolicy != nil {
+		decision, err := invocation.RunOptions.ToolPermissionPolicy.CheckToolPermission(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+		decisions = append(decisions, decision)
 	}
-	decision, err := invocation.RunOptions.ToolPermissionPolicy.CheckToolPermission(ctx, req)
+	decision, err := tool.MostRestrictivePermissionDecision(decisions...)
 	return normalizeToolPermissionResult(req, decision, err)
 }
 
@@ -2731,6 +3348,15 @@ func (f *FunctionCallResponseProcessor) executeTool(
 	tl tool.Tool,
 	eventChan chan<- *event.Event,
 ) (context.Context, any, bool, error) {
+	if invocation != nil {
+		ctx = tool.WithPermissionPolicyContext(
+			ctx, invocation.RunOptions.ToolPermissionPolicy,
+		)
+	}
+	if toolResultSanitizerFromContext(ctx, invocation) != nil ||
+		toolErrorSanitizerFromContext(ctx, invocation) != nil {
+		ctx = context.WithValue(ctx, redactToolExecutionLogContextKey{}, true)
+	}
 	// Prefer streaming execution if the tool supports it.
 	if streamable, ok := streamableTool(tl); ok {
 		return f.executeStreamableTool(
@@ -2755,12 +3381,7 @@ func (p *FunctionCallResponseProcessor) executeCallableTool(
 	if p.toolRetryPolicy == nil {
 		result, err := tl.Call(callCtx, toolCall.Function.Arguments)
 		if err != nil {
-			log.ErrorfContext(
-				ctx,
-				"CallableTool execution failed for %s: %v",
-				toolCall.Function.Name,
-				err,
-			)
+			logToolExecutionError(ctx, "CallableTool", toolCall.Function.Name, err)
 			return ctx, nil, fmt.Errorf("%s: %w", ErrorCallableToolExecution, err)
 		}
 		return ctx, result, nil
@@ -2782,15 +3403,20 @@ func (p *FunctionCallResponseProcessor) executeCallableTool(
 		},
 	})
 	if runResult.Error != nil {
-		log.ErrorfContext(
-			ctx,
-			"CallableTool execution failed for %s: %v",
-			toolCall.Function.Name,
-			runResult.Error,
-		)
+		logToolExecutionError(ctx, "CallableTool", toolCall.Function.Name, runResult.Error)
 		return ctx, nil, fmt.Errorf("%s: %w", ErrorCallableToolExecution, runResult.Error)
 	}
 	return ctx, runResult.Result, nil
+}
+
+type redactToolExecutionLogContextKey struct{}
+
+func logToolExecutionError(ctx context.Context, kind, name string, err error) {
+	if redacted, _ := ctx.Value(redactToolExecutionLogContextKey{}).(bool); redacted {
+		log.ErrorfContext(ctx, "%s execution failed for %s: error type %T (content redacted)", kind, name, err)
+		return
+	}
+	log.ErrorfContext(ctx, "%s execution failed for %s: %v", kind, name, err)
 }
 
 func extractResultError(result any) bool {
@@ -2895,12 +3521,7 @@ func (f *FunctionCallResponseProcessor) executeStreamableTool(
 		toolCall.Function.Arguments,
 	)
 	if err != nil {
-		log.ErrorfContext(
-			ctx,
-			"StreamableTool execution failed for %s: %v",
-			toolCall.Function.Name,
-			err,
-		)
+		logToolExecutionError(ctx, "StreamableTool", toolCall.Function.Name, err)
 		return ctx, nil, false, fmt.Errorf("%s: %w", ErrorStreamableToolExecution, err)
 	}
 	defer reader.Close()
@@ -2978,14 +3599,16 @@ func (f *FunctionCallResponseProcessor) consumeStream(
 			break
 		}
 		if err != nil {
-			log.ErrorfContext(
-				ctx,
-				"StreamableTool execution failed for %s: receive chunk "+
-					"from stream reader failed: %v, may merge "+
-					"incomplete data",
-				toolCall.Function.Name,
-				err,
-			)
+			if toolResultSanitizerFromContext(ctx, invocation) != nil ||
+				toolErrorSanitizerFromContext(ctx, invocation) != nil {
+				log.ErrorfContext(ctx,
+					"StreamableTool execution failed for %s: receive chunk error type %T (content redacted)",
+					toolCall.Function.Name, err)
+			} else {
+				log.ErrorfContext(ctx,
+					"StreamableTool execution failed for %s: receive chunk from stream reader failed: %v, may merge incomplete data",
+					toolCall.Function.Name, err)
+			}
 			break
 		}
 
@@ -3450,6 +4073,7 @@ func (f *FunctionCallResponseProcessor) processStreamChunk(
 	if ev, ok := chunk.Content.(*event.Event); ok {
 		return f.handleStreamInnerEvent(
 			ctx,
+			invocation,
 			eventChan,
 			contents,
 			innerEventState,
@@ -3523,12 +4147,26 @@ func (f *FunctionCallResponseProcessor) handleFinalResultChunk(
 	if finalChunk == nil || len(finalChunk.stateDelta) == 0 || eventChan == nil {
 		return nil
 	}
+	if toolResultSanitizerFromContext(ctx, invocation) != nil {
+		safeDelta, err := sanitizeInvocationToolByteMap(
+			ctx,
+			invocation,
+			toolCall,
+			toolCall.Function.Arguments,
+			finalChunk.stateDelta,
+		)
+		if err != nil {
+			return err
+		}
+		finalChunk.stateDelta = safeDelta
+	}
 	deltaEvent := f.buildStateDeltaToolResponseEvent(invocation, toolCall, finalChunk.stateDelta)
 	return agent.EmitEvent(ctx, invocation, eventChan, deltaEvent)
 }
 
 func (f *FunctionCallResponseProcessor) handleStreamInnerEvent(
 	ctx context.Context,
+	invocation *agent.Invocation,
 	eventChan chan<- *event.Event,
 	contents *[]any,
 	innerEventState *streamInnerEventState,
@@ -3543,7 +4181,7 @@ func (f *FunctionCallResponseProcessor) handleStreamInnerEvent(
 		ev,
 		innerTextMode,
 	)
-	if shouldEmit {
+	if shouldEmit && toolResultSanitizerFromContext(ctx, invocation) == nil {
 		if err := event.EmitEvent(ctx, eventChan, filteredEvent); err != nil {
 			return err
 		}
@@ -3695,6 +4333,9 @@ func (f *FunctionCallResponseProcessor) handlePlainStreamChunk(
 		return nil
 	}
 	*contents = append(*contents, text)
+	if toolResultSanitizerFromContext(ctx, invocation) != nil {
+		return nil
+	}
 	if eventChan == nil {
 		return nil
 	}

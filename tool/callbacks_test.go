@@ -145,6 +145,23 @@ func TestRunToolResultMessages_PanicRecovery(t *testing.T) {
 	require.Contains(t, err.Error(), toolResultMessagesCallbackPanic)
 }
 
+func TestRunToolResultMessages_PanicRecoveryRedactsSafetyContext(t *testing.T) {
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterToolResultMessages(func(
+		context.Context,
+		*tool.ToolResultMessagesInput,
+	) (any, error) {
+		panic("password=supersecret")
+	})
+	ctx := tool.WithRedactedToolCallbackPanics(context.Background())
+	_, err := callbacks.RunToolResultMessages(ctx, &tool.ToolResultMessagesInput{
+		ToolCallID: "call-1", ToolName: "test-tool",
+	})
+	require.Error(t, err)
+	require.NotContains(t, err.Error(), "supersecret")
+	require.Contains(t, err.Error(), "details redacted")
+}
+
 func TestRegisterBeforeTool(t *testing.T) {
 	callbacks := tool.NewCallbacks()
 

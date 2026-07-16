@@ -10,6 +10,8 @@ package tool
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"testing"
 )
 
@@ -55,6 +57,42 @@ func (resultSanitizer) SanitizeToolResult(
 	args *AfterToolArgs,
 ) (any, error) {
 	return args.Result, nil
+}
+
+type suffixResultSanitizer string
+
+func (s suffixResultSanitizer) SanitizeToolResult(
+	_ context.Context,
+	args *AfterToolArgs,
+) (any, error) {
+	return args.Result.(string) + string(s), nil
+}
+
+type suffixErrorSanitizer string
+
+func (s suffixErrorSanitizer) SanitizeToolError(
+	_ context.Context,
+	args *AfterToolArgs,
+) (error, error) {
+	return fmt.Errorf("%s%s", args.Error, s), nil
+}
+
+type resultSanitizerFunc func(context.Context, *AfterToolArgs) (any, error)
+
+func (f resultSanitizerFunc) SanitizeToolResult(
+	ctx context.Context,
+	args *AfterToolArgs,
+) (any, error) {
+	return f(ctx, args)
+}
+
+type errorSanitizerFunc func(context.Context, *AfterToolArgs) (error, error)
+
+func (f errorSanitizerFunc) SanitizeToolError(
+	ctx context.Context,
+	args *AfterToolArgs,
+) (error, error) {
+	return f(ctx, args)
 }
 
 func (d *deferredTool) Declaration() *Declaration {
@@ -178,5 +216,154 @@ func TestToolResultSanitizerContract(t *testing.T) {
 	}
 	if gotMap, ok := got.(map[string]any); !ok || gotMap["safe"] != true {
 		t.Fatalf("unexpected sanitized result: %#v", got)
+	}
+}
+
+func TestComposeToolSanitizersPreservesOrder(t *testing.T) {
+	resultSanitizer := ComposeToolResultSanitizers(
+		suffixResultSanitizer("-first"), suffixResultSanitizer("-second"),
+	)
+	result, err := resultSanitizer.SanitizeToolResult(
+		context.Background(), &AfterToolArgs{Result: "value"},
+	)
+	if err != nil || result != "value-first-second" {
+		t.Fatalf("composed result = %#v, %v", result, err)
+	}
+	errorSanitizer := ComposeToolErrorSanitizers(
+		suffixErrorSanitizer("-first"), suffixErrorSanitizer("-second"),
+	)
+	safeErr, err := errorSanitizer.SanitizeToolError(
+		context.Background(), &AfterToolArgs{Error: errors.New("value")},
+	)
+	if err != nil || safeErr.Error() != "value-first-second" {
+		t.Fatalf("composed error = %v, %v", safeErr, err)
+	}
+}
+
+func TestComposeToolResultSanitizersFailsClosed(t *testing.T) {
+	wantErr := errors.New("result sanitizer unavailable")
+	var calls []string
+	sanitizer := ComposeToolResultSanitizers(
+		nil,
+		resultSanitizerFunc(func(_ context.Context, args *AfterToolArgs) (any, error) {
+			calls = append(calls, "first")
+			if args.Result != "raw" {
+				t.Fatalf("first result = %#v", args.Result)
+			}
+			return "first-safe", nil
+		}),
+		resultSanitizerFunc(func(_ context.Context, args *AfterToolArgs) (any, error) {
+			calls = append(calls, "second")
+			if args.Result != "first-safe" {
+				t.Fatalf("second result = %#v", args.Result)
+			}
+			return "must-not-escape", wantErr
+		}),
+		resultSanitizerFunc(func(_ context.Context, _ *AfterToolArgs) (any, error) {
+			calls = append(calls, "third")
+			return "unexpected", nil
+		}),
+	)
+	args := &AfterToolArgs{ToolName: "sensitive", Result: "raw"}
+	got, err := sanitizer.SanitizeToolResult(context.Background(), args)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("error = %v, want %v", err, wantErr)
+	}
+	if got != nil {
+		t.Fatalf("failed chain returned %#v, want nil", got)
+	}
+	if fmt.Sprint(calls) != "[first second]" {
+		t.Fatalf("calls = %v", calls)
+	}
+	if args.Result != "raw" {
+		t.Fatalf("composition mutated caller args: %#v", args.Result)
+	}
+}
+
+func TestComposeToolErrorSanitizersFailsClosed(t *testing.T) {
+	rawErr := errors.New("password=raw")
+	firstSafeErr := errors.New("password=first-safe")
+	wantErr := errors.New("error sanitizer unavailable")
+	var calls []string
+	sanitizer := ComposeToolErrorSanitizers(
+		nil,
+		errorSanitizerFunc(func(_ context.Context, args *AfterToolArgs) (error, error) {
+			calls = append(calls, "first")
+			if !errors.Is(args.Error, rawErr) {
+				t.Fatalf("first error = %v", args.Error)
+			}
+			return firstSafeErr, nil
+		}),
+		errorSanitizerFunc(func(_ context.Context, args *AfterToolArgs) (error, error) {
+			calls = append(calls, "second")
+			if !errors.Is(args.Error, firstSafeErr) {
+				t.Fatalf("second error = %v", args.Error)
+			}
+			return errors.New("must-not-escape"), wantErr
+		}),
+		errorSanitizerFunc(func(_ context.Context, _ *AfterToolArgs) (error, error) {
+			calls = append(calls, "third")
+			return errors.New("unexpected"), nil
+		}),
+	)
+	args := &AfterToolArgs{ToolName: "sensitive", Error: rawErr}
+	got, err := sanitizer.SanitizeToolError(context.Background(), args)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("error = %v, want %v", err, wantErr)
+	}
+	if got != nil {
+		t.Fatalf("failed chain returned %v, want nil", got)
+	}
+	if fmt.Sprint(calls) != "[first second]" {
+		t.Fatalf("calls = %v", calls)
+	}
+	if !errors.Is(args.Error, rawErr) {
+		t.Fatalf("composition mutated caller args: %v", args.Error)
+	}
+}
+
+func TestComposeToolSanitizersEmptyAndNilArguments(t *testing.T) {
+	if ComposeToolResultSanitizers(nil) != nil {
+		t.Fatal("empty result sanitizer chain must be nil")
+	}
+	if ComposeToolErrorSanitizers(nil) != nil {
+		t.Fatal("empty error sanitizer chain must be nil")
+	}
+	_, err := ComposeToolResultSanitizers(
+		resultSanitizer{},
+	).SanitizeToolResult(context.Background(), nil)
+	if err == nil {
+		t.Fatal("nil result sanitizer arguments must fail closed")
+	}
+	_, err = ComposeToolErrorSanitizers(
+		suffixErrorSanitizer("-one"),
+	).SanitizeToolError(context.Background(), nil)
+	if err == nil {
+		t.Fatal("nil error sanitizer arguments must fail closed")
+	}
+}
+
+func TestComposeSingleToolSanitizerIsolatesArguments(t *testing.T) {
+	args := &AfterToolArgs{ToolName: "original", Result: "raw", Error: errors.New("raw")}
+	resultSanitizer := ComposeToolResultSanitizers(resultSanitizerFunc(
+		func(_ context.Context, next *AfterToolArgs) (any, error) {
+			next.ToolName = "mutated"
+			return "safe", nil
+		},
+	))
+	if got, err := resultSanitizer.SanitizeToolResult(context.Background(), args); err != nil || got != "safe" {
+		t.Fatalf("single result sanitizer = %#v, %v", got, err)
+	}
+	errorSanitizer := ComposeToolErrorSanitizers(errorSanitizerFunc(
+		func(_ context.Context, next *AfterToolArgs) (error, error) {
+			next.ToolName = "mutated"
+			return errors.New("safe"), nil
+		},
+	))
+	if got, err := errorSanitizer.SanitizeToolError(context.Background(), args); err != nil || got.Error() != "safe" {
+		t.Fatalf("single error sanitizer = %v, %v", got, err)
+	}
+	if args.ToolName != "original" {
+		t.Fatalf("single sanitizer mutated caller arguments: %+v", args)
 	}
 }

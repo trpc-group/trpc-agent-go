@@ -402,17 +402,37 @@ func recoverToolCallbackPanic(
 		return
 	}
 
-	stack := debug.Stack()
+	detail := fmt.Sprint(recovered)
+	stack := string(debug.Stack())
+	if ToolCallbackPanicsRedacted(ctx) {
+		detail = "details redacted by tool safety policy"
+		stack = "stack redacted by tool safety policy"
+	}
 	log.ErrorfContext(
 		ctx,
 		callbackPanicLogFmt,
 		stage,
 		toolCallID,
 		toolName,
-		recovered,
-		string(stack),
+		detail,
+		stack,
 	)
-	*errp = fmt.Errorf(callbackPanicErrFmt, stage, recovered)
+	*errp = fmt.Errorf(callbackPanicErrFmt, stage, detail)
+}
+
+type redactToolCallbackPanicContextKey struct{}
+
+// WithRedactedToolCallbackPanics prevents callback panic values and stacks
+// from being logged when a tool safety sanitizer is active.
+func WithRedactedToolCallbackPanics(ctx context.Context) context.Context {
+	return context.WithValue(ctx, redactToolCallbackPanicContextKey{}, true)
+}
+
+// ToolCallbackPanicsRedacted reports whether callback panic diagnostics must
+// remain metadata-only.
+func ToolCallbackPanicsRedacted(ctx context.Context) bool {
+	redacted, _ := ctx.Value(redactToolCallbackPanicContextKey{}).(bool)
+	return redacted
 }
 
 func (c *Callbacks) runBeforeToolCallback(
