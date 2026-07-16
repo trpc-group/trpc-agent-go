@@ -25,7 +25,10 @@ import (
 // Rule ID: R-NET-001.
 type NetworkEgressRule struct{}
 
-func (r *NetworkEgressRule) ID() string   { return "R-NET-001" }
+// ID returns the rule identifier "R-NET-001".
+func (r *NetworkEgressRule) ID() string { return "R-NET-001" }
+
+// Name returns the human-readable rule name.
 func (r *NetworkEgressRule) Name() string { return "Network Egress" }
 
 // networkToolPatterns maps tool names to a flag indicating they always

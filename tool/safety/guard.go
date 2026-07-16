@@ -61,6 +61,7 @@ func NewGuard(opts ...GuardOption) (*Guard, error) {
 	}
 	for _, opt := range opts {
 		if err := opt(g); err != nil {
+			g.closer()
 			return nil, err
 		}
 	}

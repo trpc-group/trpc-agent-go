@@ -28,7 +28,10 @@ import (
 // Rule ID: R-DEL-001.
 type DangerousCommandRule struct{}
 
-func (r *DangerousCommandRule) ID() string   { return "R-DEL-001" }
+// ID returns the rule identifier "R-DEL-001".
+func (r *DangerousCommandRule) ID() string { return "R-DEL-001" }
+
+// Name returns the human-readable rule name.
 func (r *DangerousCommandRule) Name() string { return "Dangerous Command" }
 
 var dangerousCmdPatterns = []string{
@@ -42,6 +45,8 @@ var systemPathPatterns = []string{
 	".env", "credentials",
 }
 
+// Scan evaluates the input against policy-denied commands and paths.
+// When no policy entries are configured it falls back to built-in patterns.
 func (r *DangerousCommandRule) Scan(_ context.Context, input ScanInput, policy PolicyFile) []Finding {
 	text := normalizedScanText(input)
 	var findings []Finding
@@ -96,7 +101,10 @@ func (r *DangerousCommandRule) Scan(_ context.Context, input ScanInput, policy P
 // Rule ID: R-CRED-001.
 type CredentialAccessRule struct{}
 
-func (r *CredentialAccessRule) ID() string   { return "R-CRED-001" }
+// ID returns the rule identifier "R-CRED-001".
+func (r *CredentialAccessRule) ID() string { return "R-CRED-001" }
+
+// Name returns the human-readable rule name.
 func (r *CredentialAccessRule) Name() string { return "Credential Access" }
 
 var credPathPatterns = []string{
@@ -110,6 +118,7 @@ var credPathPatterns = []string{
 	"/etc/ssh/",
 }
 
+// Scan checks the input text for credential file path patterns.
 func (r *CredentialAccessRule) Scan(_ context.Context, input ScanInput, _ PolicyFile) []Finding {
 	text := normalizePaths(normalizedScanText(input))
 	var findings []Finding
@@ -139,7 +148,10 @@ func (r *CredentialAccessRule) Scan(_ context.Context, input ScanInput, _ Policy
 // Rule ID: R-SHELL-001.
 type ShellBypassRule struct{}
 
-func (r *ShellBypassRule) ID() string   { return "R-SHELL-001" }
+// ID returns the rule identifier "R-SHELL-001".
+func (r *ShellBypassRule) ID() string { return "R-SHELL-001" }
+
+// Name returns the human-readable rule name.
 func (r *ShellBypassRule) Name() string { return "Shell Bypass" }
 
 var shellWrapperCmds = []string{
@@ -147,6 +159,7 @@ var shellWrapperCmds = []string{
 	"nohup ", "xargs ", "env ",
 }
 
+// Scan detects unsafe shell constructs via shellsafe.Parse and shell wrapper commands.
 func (r *ShellBypassRule) Scan(_ context.Context, input ScanInput, _ PolicyFile) []Finding {
 	text := normalizedScanText(input)
 	var findings []Finding
@@ -193,12 +206,17 @@ func (r *ShellBypassRule) Scan(_ context.Context, input ScanInput, _ PolicyFile)
 // Rule ID: R-HOST-001.
 type HostLongSessionRule struct{}
 
-func (r *HostLongSessionRule) ID() string   { return "R-HOST-001" }
+// ID returns the rule identifier "R-HOST-001".
+func (r *HostLongSessionRule) ID() string { return "R-HOST-001" }
+
+// Name returns the human-readable rule name.
 func (r *HostLongSessionRule) Name() string { return "Host Long Session" }
 
 var privilegeEscalationCmds = []string{"sudo ", "su ", "doas "}
 var processResidueCmds = []string{"nohup ", "disown ", "daemon "}
 
+// Scan checks for privilege escalation, background PTY sessions, process residue
+// commands, and excessive timeouts in host-exec backend calls.
 func (r *HostLongSessionRule) Scan(_ context.Context, input ScanInput, policy PolicyFile) []Finding {
 	// This rule only applies to the hostexec backend.
 	if input.Backend != "hostexec" {
@@ -275,7 +293,10 @@ func (r *HostLongSessionRule) Scan(_ context.Context, input ScanInput, policy Po
 // Rule ID: R-DEP-001.
 type DependencyInstallRule struct{}
 
-func (r *DependencyInstallRule) ID() string   { return "R-DEP-001" }
+// ID returns the rule identifier "R-DEP-001".
+func (r *DependencyInstallRule) ID() string { return "R-DEP-001" }
+
+// Name returns the human-readable rule name.
 func (r *DependencyInstallRule) Name() string { return "Dependency Install" }
 
 var dependencyInstallCmds = []string{
@@ -290,6 +311,8 @@ var dependencyInstallCmds = []string{
 	"pip install --user",
 }
 
+// Scan detects package installation commands and flags them for review,
+// unless the command executable is in the policy's AllowedCommands list.
 func (r *DependencyInstallRule) Scan(_ context.Context, input ScanInput, policy PolicyFile) []Finding {
 	text := normalizedScanText(input)
 
@@ -324,7 +347,10 @@ func (r *DependencyInstallRule) Scan(_ context.Context, input ScanInput, policy 
 // Rule ID: R-RES-001.
 type ResourceAbuseRule struct{}
 
-func (r *ResourceAbuseRule) ID() string   { return "R-RES-001" }
+// ID returns the rule identifier "R-RES-001".
+func (r *ResourceAbuseRule) ID() string { return "R-RES-001" }
+
+// Name returns the human-readable rule name.
 func (r *ResourceAbuseRule) Name() string { return "Resource Abuse" }
 
 var infiniteLoopPatterns = []string{
@@ -336,6 +362,8 @@ var infiniteLoopPatterns = []string{
 
 var largeSleepRe = regexp.MustCompile(`sleep\s+(\d+)`)
 
+// Scan detects fork bombs, infinite loops, large sleep values, excessive timeouts,
+// and output redirection patterns.
 func (r *ResourceAbuseRule) Scan(_ context.Context, input ScanInput, policy PolicyFile) []Finding {
 	text := normalizedScanText(input)
 	var findings []Finding
@@ -356,10 +384,23 @@ func (r *ResourceAbuseRule) Scan(_ context.Context, input ScanInput, policy Poli
 	}
 
 	// Detect large sleep values (>300 s).
+	// Malformed or overflowing values also produce a finding (fail-closed).
 	for _, m := range largeSleepRe.FindAllStringSubmatch(text, -1) {
 		if len(m) >= 2 {
 			val, err := strconv.Atoi(m[1])
-			if err == nil && val > 300 {
+			if err != nil {
+				// Malformed or overflowing sleep value — flag for review.
+				findings = append(findings, Finding{
+					RuleID:         r.ID(),
+					RuleName:       r.Name(),
+					RiskLevel:      RiskLevelMedium,
+					Decision:       DecisionAsk,
+					Evidence:       "sleep " + m[1] + " (unparseable)",
+					Recommendation: "The sleep value could not be parsed; review and clarify the duration.",
+				})
+				return findings
+			}
+			if val > 300 {
 				findings = append(findings, Finding{
 					RuleID:         r.ID(),
 					RuleName:       r.Name(),
@@ -410,7 +451,10 @@ func (r *ResourceAbuseRule) Scan(_ context.Context, input ScanInput, policy Poli
 // Rule ID: R-SECRET-001.
 type SecretLeakageRule struct{}
 
-func (r *SecretLeakageRule) ID() string   { return "R-SECRET-001" }
+// ID returns the rule identifier "R-SECRET-001".
+func (r *SecretLeakageRule) ID() string { return "R-SECRET-001" }
+
+// Name returns the human-readable rule name.
 func (r *SecretLeakageRule) Name() string { return "Secret Leakage" }
 
 var (
@@ -429,6 +473,8 @@ var (
 	longTokenRe = regexp.MustCompile(`[A-Za-z0-9]{32,}`)
 )
 
+// Scan checks the input text for API keys, private keys, tokens, passwords,
+// and other secret patterns using regular expression matching.
 func (r *SecretLeakageRule) Scan(_ context.Context, input ScanInput, _ PolicyFile) []Finding {
 	text := normalizedScanText(input)
 	var findings []Finding
@@ -483,9 +529,14 @@ func (r *SecretLeakageRule) Scan(_ context.Context, input ScanInput, _ PolicyFil
 // Rule ID: R-CMD-001.
 type AllowListMissRule struct{}
 
-func (r *AllowListMissRule) ID() string   { return "R-CMD-001" }
+// ID returns the rule identifier "R-CMD-001".
+func (r *AllowListMissRule) ID() string { return "R-CMD-001" }
+
+// Name returns the human-readable rule name.
 func (r *AllowListMissRule) Name() string { return "Allow-List Miss" }
 
+// Scan denies commands whose executable is not in the policy's AllowedCommands
+// list. Only active when AllowedCommands is non-empty.
 func (r *AllowListMissRule) Scan(_ context.Context, input ScanInput, policy PolicyFile) []Finding {
 	// Only active when AllowedCommands is non-empty.
 	if len(policy.AllowedCommands) == 0 {
@@ -530,9 +581,13 @@ func (r *AllowListMissRule) Scan(_ context.Context, input ScanInput, policy Poli
 // Rule ID: R-ENV-001.
 type EnvPolicyRule struct{}
 
-func (r *EnvPolicyRule) ID() string   { return "R-ENV-001" }
+// ID returns the rule identifier "R-ENV-001".
+func (r *EnvPolicyRule) ID() string { return "R-ENV-001" }
+
+// Name returns the human-readable rule name.
 func (r *EnvPolicyRule) Name() string { return "Env Policy" }
 
+// Scan checks environment variables against denied and allowed lists.
 func (r *EnvPolicyRule) Scan(_ context.Context, input ScanInput, policy PolicyFile) []Finding {
 	var findings []Finding
 
@@ -581,9 +636,13 @@ func (r *EnvPolicyRule) Scan(_ context.Context, input ScanInput, policy PolicyFi
 // Rule ID: R-ASK-001.
 type AskForReviewRule struct{}
 
-func (r *AskForReviewRule) ID() string   { return "R-ASK-001" }
+// ID returns the rule identifier "R-ASK-001".
+func (r *AskForReviewRule) ID() string { return "R-ASK-001" }
+
+// Name returns the human-readable rule name.
 func (r *AskForReviewRule) Name() string { return "Ask For Review" }
 
+// Scan flags tool calls whose name appears in the policy's AskForReviewTools list.
 func (r *AskForReviewRule) Scan(_ context.Context, input ScanInput, policy PolicyFile) []Finding {
 	for _, tool := range policy.AskForReviewTools {
 		if input.ToolName == tool {
@@ -638,7 +697,11 @@ func isCommandAllowedExecutable(cmd string, allowed []string) bool {
 	}
 	pipe, err := shellsafe.Parse(cmd)
 	if err != nil {
-		// Cannot parse; fall back to simple check.
+		// Cannot parse the command; fall back to whole-string matching via
+		// isCommandAllowed. This asymmetry is intentional and fail-closed:
+		// successful parsing requires *every* pipeline command's executable
+		// to be allowed, while parse failure only checks the raw string,
+		// which is less precise but still conservative.
 		return isCommandAllowed(cmd, allowed)
 	}
 	for _, argv := range pipe.Commands {
