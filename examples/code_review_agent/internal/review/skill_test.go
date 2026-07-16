@@ -124,6 +124,46 @@ func TestSkillCheckScriptDetectsSecretShapes(t *testing.T) {
 	}
 }
 
+func TestSkillCheckScriptReportsMissingTestHintForAnyGoFile(t *testing.T) {
+	t.Parallel()
+
+	skillRoot, err := SkillRoot()
+	if err != nil {
+		t.Fatalf("SkillRoot returned error: %v", err)
+	}
+	diff := "diff --git a/internal/handler.go b/internal/handler.go\n" +
+		"--- a/internal/handler.go\n+++ b/internal/handler.go\n" +
+		"@@ -0,0 +1,3 @@\n+package internal\n+\n+func Handle() {}\n"
+	for _, tc := range []struct {
+		name string
+		env  []string
+	}{
+		{name: "python"},
+		{name: "go fallback", env: fallbackScriptEnv(t)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := exec.Command(mustLookPath(t, "bash"), filepath.Join(skillRoot, "scripts", "check.sh"))
+			cmd.Stdin = strings.NewReader(diff)
+			if tc.env != nil {
+				cmd.Env = tc.env
+			}
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("check.sh failed: %v\n%s", err, out)
+			}
+			var payload struct {
+				Warnings []Finding `json:"warnings"`
+			}
+			if err := json.Unmarshal(out, &payload); err != nil {
+				t.Fatalf("unmarshal check output: %v\n%s", err, out)
+			}
+			if got := countSkillRule(payload.Warnings, "missing-test-hint"); got != 1 {
+				t.Fatalf("expected missing-test-hint for a non-fixture Go file, got %d: %+v", got, payload.Warnings)
+			}
+		})
+	}
+}
+
 func TestSkillRulesKeepDifferentLinesAndHonorFollowingCleanup(t *testing.T) {
 	t.Parallel()
 
@@ -196,4 +236,16 @@ func linkTool(t *testing.T, dir string, name string) {
 	if err := os.Symlink(target, link); err != nil {
 		t.Fatalf("link %s: %v", name, err)
 	}
+}
+
+func fallbackScriptEnv(t *testing.T) []string {
+	t.Helper()
+	tempBin := t.TempDir()
+	for _, name := range []string{"go", "mktemp", "cat", "rm"} {
+		linkTool(t, tempBin, name)
+	}
+	return append(os.Environ(),
+		"PATH="+tempBin,
+		"GOCACHE="+filepath.Join(t.TempDir(), "gocache"),
+	)
 }

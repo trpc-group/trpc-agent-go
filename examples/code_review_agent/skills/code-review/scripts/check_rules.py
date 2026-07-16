@@ -319,7 +319,7 @@ with open(path, "r", encoding="utf-8", errors="replace") as f:
                             "String concatenation in a loop may allocate repeatedly", text,
                             "Use strings.Builder or bytes.Buffer for repeated string assembly.",
                             "string-concat-loop", status="needs_human_review", confidence="low")
-            if current_file in ("foo.go", "service.go") and not current_file.endswith("_test.go") and text.startswith("func ") and "error" not in text:
+            if current_file.endswith(".go") and not current_file.endswith("_test.go") and text.startswith("func ") and "error" not in text:
                 add_warning("low", "testing", current_file, new_line,
                             "New function may need a focused test", text,
                             "Add a unit test that exercises the new path.",

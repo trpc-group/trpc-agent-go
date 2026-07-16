@@ -161,7 +161,7 @@ func main() {
 					})
 				}
 			}
-			if (currentFile == "foo.go" || currentFile == "service.go") &&
+			if strings.HasSuffix(currentFile, ".go") &&
 				!strings.HasSuffix(currentFile, "_test.go") && strings.HasPrefix(text, "func ") &&
 				!strings.Contains(text, "error") {
 				addWarning("low", "testing", "New function may need a focused test",
