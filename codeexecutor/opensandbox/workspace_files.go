@@ -191,111 +191,134 @@ func (r *workspaceRuntime) walkAndUpload(
 	sb *osb.Sandbox,
 	hostRoot, destRoot string,
 ) error {
-	var (
-		entries   []osb.UploadFileEntry
-		openFiles []*os.File
-	)
-	// flushBatch uploads the current batch and closes all its file
-	// handles. Called when the batch reaches uploadBatchSize and once
-	// more after the walk finishes.
-	//
-	// Before each upload, pre-existing symlinks at every target path
-	// are removed in a single bash call. In PerSession mode,
-	// previously executed code may have left symlinks at nested
-	// destinations pointing outside the workspace; without this guard,
-	// UploadFiles would follow them and write outside the workspace.
-	// This mirrors the per-file removeSymlinkIfExists guard in
-	// PutFiles, but batches the check into one bash call per upload
-	// batch to avoid 2N round-trips for N files.
-	flushBatch := func() error {
-		if len(entries) == 0 {
-			return nil
-		}
-		var rm strings.Builder
-		rm.WriteString("for p in")
-		for _, e := range entries {
-			rm.WriteByte(' ')
-			rm.WriteString(shellQuote(e.Options.Metadata.Path))
-		}
-		rm.WriteString("; do [ -L \"$p\" ] && rm -f \"$p\"; done")
-		if _, err := r.runBash(ctx, rm.String(), defaultCreateTimeout); err != nil {
-			return fmt.Errorf("opensandbox: batch remove symlinks before upload: %w", err)
-		}
-		err := sb.UploadFiles(ctx, entries)
-		for _, f := range openFiles {
-			_ = f.Close()
-		}
-		entries = entries[:0]
-		openFiles = openFiles[:0]
-		return err
-	}
+	uploader := &batchUploader{r: r, sb: sb}
 	walkErr := filepath.WalkDir(hostRoot, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		rel, err := filepath.Rel(hostRoot, p)
-		if err != nil {
-			return err
-		}
-		if rel == "." {
-			return nil
-		}
-		remotePath := path.Join(destRoot, filepath.ToSlash(rel))
-
-		if d.IsDir() {
-			if err := sb.CreateDirectory(ctx, remotePath, osb.OctalMode(0o755)); err != nil {
-				return fmt.Errorf("create directory %s: %w", remotePath, err)
-			}
-			return nil
-		}
-
-		info, err := d.Info()
-		if err != nil {
-			return err
-		}
-		if !shouldUploadFile(info) {
-			return nil
-		}
-		parent := path.Dir(remotePath)
-		if parent != "." && parent != "/" && parent != destRoot {
-			if err := sb.CreateDirectory(ctx, parent, osb.OctalMode(0o755)); err != nil {
-				return fmt.Errorf("create directory %s: %w", parent, err)
-			}
-		}
-		mode := info.Mode().Perm()
-		if mode == 0 {
-			mode = 0o644
-		}
-		f, err := os.Open(p)
-		if err != nil {
-			return err
-		}
-		openFiles = append(openFiles, f)
-		entries = append(entries, osb.UploadFileEntry{
-			File: f,
-			Options: osb.UploadFileOptions{
-				FileName: path.Base(remotePath),
-				Metadata: osb.FileMetadata{
-					Path: remotePath,
-					Mode: osb.OctalMode(mode),
-				},
-			},
-		})
-		// Upload and close this batch once it reaches the size limit.
-		if len(entries) >= uploadBatchSize {
-			return flushBatch()
-		}
-		return nil
+		return uploader.visit(ctx, hostRoot, destRoot, p, d)
 	})
 	if walkErr != nil {
-		// Close any pending handles on error.
-		for _, f := range openFiles {
-			_ = f.Close()
-		}
+		uploader.closePending()
 		return fmt.Errorf("opensandbox: walk and upload %s: %w", hostRoot, walkErr)
 	}
 	// Flush any remaining entries after the walk completes.
-	return flushBatch()
+	return uploader.flush(ctx)
+}
+
+// batchUploader accumulates files opened during a WalkDir and uploads
+// them in batches of uploadBatchSize. Each flush removes pre-existing
+// symlinks at every target path in a single bash call before upload,
+// then closes all file handles in the batch.
+type batchUploader struct {
+	r         *workspaceRuntime
+	sb        *osb.Sandbox
+	entries   []osb.UploadFileEntry
+	openFiles []*os.File
+}
+
+// visit handles one WalkDir entry: creates directories, skips
+// non-regular files, opens regular files, and flushes a batch when it
+// reaches uploadBatchSize.
+func (u *batchUploader) visit(
+	ctx context.Context,
+	hostRoot, destRoot, p string,
+	d fs.DirEntry,
+) error {
+	rel, err := filepath.Rel(hostRoot, p)
+	if err != nil {
+		return err
+	}
+	if rel == "." {
+		return nil
+	}
+	remotePath := path.Join(destRoot, filepath.ToSlash(rel))
+
+	if d.IsDir() {
+		if err := u.sb.CreateDirectory(ctx, remotePath, osb.OctalMode(0o755)); err != nil {
+			return fmt.Errorf("create directory %s: %w", remotePath, err)
+		}
+		return nil
+	}
+
+	info, err := d.Info()
+	if err != nil {
+		return err
+	}
+	if !shouldUploadFile(info) {
+		return nil
+	}
+	parent := path.Dir(remotePath)
+	if parent != "." && parent != "/" && parent != destRoot {
+		if err := u.sb.CreateDirectory(ctx, parent, osb.OctalMode(0o755)); err != nil {
+			return fmt.Errorf("create directory %s: %w", parent, err)
+		}
+	}
+	mode := info.Mode().Perm()
+	if mode == 0 {
+		mode = 0o644
+	}
+	f, err := os.Open(p)
+	if err != nil {
+		return err
+	}
+	u.openFiles = append(u.openFiles, f)
+	u.entries = append(u.entries, osb.UploadFileEntry{
+		File: f,
+		Options: osb.UploadFileOptions{
+			FileName: path.Base(remotePath),
+			Metadata: osb.FileMetadata{
+				Path: remotePath,
+				Mode: osb.OctalMode(mode),
+			},
+		},
+	})
+	// Upload and close this batch once it reaches the size limit.
+	if len(u.entries) >= uploadBatchSize {
+		return u.flush(ctx)
+	}
+	return nil
+}
+
+// flush uploads the current batch and closes all its file handles.
+// Called when the batch reaches uploadBatchSize and once more after
+// the walk finishes.
+//
+// Before each upload, pre-existing symlinks at every target path are
+// removed in a single bash call. In PerSession mode, previously
+// executed code may have left symlinks at nested destinations pointing
+// outside the workspace; without this guard, UploadFiles would follow
+// them and write outside the workspace. This mirrors the per-file
+// removeSymlinkIfExists guard in PutFiles, but batches the check into
+// one bash call per upload batch to avoid 2N round-trips for N files.
+func (u *batchUploader) flush(ctx context.Context) error {
+	if len(u.entries) == 0 {
+		return nil
+	}
+	var rm strings.Builder
+	rm.WriteString("for p in")
+	for _, e := range u.entries {
+		rm.WriteByte(' ')
+		rm.WriteString(shellQuote(e.Options.Metadata.Path))
+	}
+	rm.WriteString("; do [ -L \"$p\" ] && rm -f \"$p\"; done")
+	if _, err := u.r.runBash(ctx, rm.String(), defaultCreateTimeout); err != nil {
+		u.closePending()
+		return fmt.Errorf("opensandbox: batch remove symlinks before upload: %w", err)
+	}
+	err := u.sb.UploadFiles(ctx, u.entries)
+	u.closePending()
+	return err
+}
+
+// closePending closes all open file handles in the current batch and
+// resets the batch state. Safe to call multiple times.
+func (u *batchUploader) closePending() {
+	for _, f := range u.openFiles {
+		_ = f.Close()
+	}
+	u.entries = u.entries[:0]
+	u.openFiles = u.openFiles[:0]
 }
 
 // StageDirectory stages a directory with options (ReadOnly).
