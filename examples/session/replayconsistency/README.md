@@ -8,6 +8,11 @@ summary plus truncated events, tracks, concurrent ordering, and retry recovery.
 
 From this directory:
 
+This example is intended to run inside the trpc-agent-go repository. Its
+`go.mod` uses relative `replace` directives for the root, Session SQLite, and
+Memory SQLite modules; copying this directory outside the monorepo will break
+module resolution unless those replacements are removed or adjusted.
+
 ```bash
 # normal replay: expects no differences
 go run . --output report.json

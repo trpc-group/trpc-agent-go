@@ -31,6 +31,8 @@ func TestServiceBackendsReplayThroughRealAPIs(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		t.Cleanup(func() { _ = memoryBackend.Close() })
+		t.Cleanup(func() { _ = sqliteBackend.Close() })
 		if err := memoryBackend.Save(tc.Build()); err != nil {
 			t.Fatal(err)
 		}
@@ -48,12 +50,33 @@ func TestServiceBackendsReplayThroughRealAPIs(t *testing.T) {
 		if diffs := Compare(tc.Name, sqliteBackend.Name(), left, right); len(diffs) != 0 {
 			t.Fatalf("%s backend mismatch: %+v", tc.Name, diffs)
 		}
+		for _, result := range []struct {
+			name     string
+			snapshot Snapshot
+		}{{memoryBackend.Name(), left}, {sqliteBackend.Name(), right}} {
+			for _, diff := range Compare(tc.Name, result.name, tc.Build(), result.snapshot) {
+				if !diff.Allowed {
+					t.Fatalf("%s lost modeled data in %s: %+v", tc.Name, result.name, diff)
+				}
+			}
+		}
 		if err := memoryBackend.Close(); err != nil {
 			t.Fatal(err)
 		}
 		if err := sqliteBackend.Close(); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestServiceBackendPropagatesJSONConversionErrors(t *testing.T) {
+	backend := NewInMemoryBackend()
+	t.Cleanup(func() { _ = backend.Close() })
+	fixture := base("invalid-json", Event{
+		Seq: 1, Role: "assistant", Extensions: map[string]any{"bad": make(chan int)},
+	})
+	if err := backend.Save(fixture); err == nil {
+		t.Fatal("expected unsupported JSON value to fail replay")
 	}
 }
 func TestNormalization(t *testing.T) {
