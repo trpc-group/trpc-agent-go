@@ -1,0 +1,13 @@
+diff --git a/calc/calc.go b/calc/calc.go
+index 1111111..2222222 100644
+--- a/calc/calc.go
++++ b/calc/calc.go
+@@ -1,5 +1,8 @@
+ package calc
+
+ func Mul(a, b int) int {
++    if a == 1 {
++        return b
++    }
+     return a * b
+ }

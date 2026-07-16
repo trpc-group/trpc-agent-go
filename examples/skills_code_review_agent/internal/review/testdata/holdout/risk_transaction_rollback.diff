@@ -1,0 +1,12 @@
+diff --git a/service/tx.go b/service/tx.go
+--- a/service/tx.go
++++ b/service/tx.go
+@@ -1,2 +1,10 @@
+ package service
+
++func Save(ctx context.Context, db *sql.DB) error {
++	tx, err := db.BeginTx(ctx, nil)
++	if err != nil { return err }
++	if _, err := tx.ExecContext(ctx, "insert into t values(1)"); err != nil { return err }
++	return tx.Commit()
++}

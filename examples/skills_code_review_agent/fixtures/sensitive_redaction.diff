@@ -1,0 +1,13 @@
+diff --git a/client/client.go b/client/client.go
+index 1111111..2222222 100644
+--- a/client/client.go
++++ b/client/client.go
+@@ -1,5 +1,8 @@
+ package client
+
+ func Header() string {
++    password := "super-secret-password"
++    token := "ghp_1234567890abcdefghijklmnopqrstuvwxyz"
++    _ = password + token
+     return ""
+ }

@@ -1,0 +1,185 @@
+{
+  "task": {
+    "id": "review-golden",
+    "status": "completed",
+    "started_at": "2026-07-15T00:00:00Z",
+    "ended_at": "2026-07-15T00:00:00Z",
+    "input_mode": "fixture:security_issue"
+  },
+  "input": {
+    "files_changed": 1,
+    "go_files": 1,
+    "added_lines": 2,
+    "deleted_lines": 0
+  },
+  "packages": [
+    {
+      "package_path": "service",
+      "package_name": "service",
+      "files": [
+        "service/config.go"
+      ]
+    }
+  ],
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "security",
+      "file": "service/config.go",
+      "line": 7,
+      "title": "Hard-coded secret or credential-like value",
+      "evidence": "const apiKey = [REDACTED]",
+      "recommendation": "Move secrets to a managed secret store or environment variable and rotate any exposed value.",
+      "confidence": 0.95,
+      "source": "rule",
+      "rule_id": "go/security/secret-literal",
+      "fingerprint": "586f94d64a314a4fdbfc630d470a932fcf0713c2f62c9e712303712843fab4e8"
+    }
+  ],
+  "warnings": [],
+  "needs_human_review": [
+    {
+      "severity": "low",
+      "category": "test_coverage",
+      "file": "service/config.go",
+      "line": 1,
+      "title": "Production Go change has no accompanying test change",
+      "evidence": "No *_test.go file changed in this diff.",
+      "recommendation": "Add or update focused tests for changed behavior, especially error and lifecycle paths.",
+      "confidence": 0.64,
+      "source": "rule",
+      "rule_id": "go/test/missing-test-change",
+      "fingerprint": "9f81497b112a414e3ca8931be1d0cf723b4df8bd25b43fad6f6f02866bdbb7d3"
+    }
+  ],
+  "sandbox_runs": [
+    {
+      "id": "run-golden",
+      "task_id": "review-golden",
+      "command": "bash",
+      "args": [
+        "skills/code-review/scripts/diff_summary.sh",
+        "work/change.diff",
+        "out/diff_summary.json"
+      ],
+      "executor": "fake",
+      "status": "skipped",
+      "exit_code": 0,
+      "stderr": "sandbox command skipped by dry-run/fake executor after permission decision",
+      "error_type": "dry_run",
+      "started_at": "2026-07-15T00:00:00Z",
+      "duration_ms": 0,
+      "timed_out": false,
+      "output_truncated": false
+    },
+    {
+      "id": "run-golden",
+      "task_id": "review-golden",
+      "command": "go",
+      "args": [
+        "test",
+        "./...",
+        "vet",
+        "./...",
+        "staticcheck",
+        "./..."
+      ],
+      "executor": "fake",
+      "status": "skipped",
+      "exit_code": 0,
+      "stderr": "repo path not provided; repository Go checks skipped in dry-run/fake executor",
+      "error_type": "no_repo_path",
+      "started_at": "2026-07-15T00:00:00Z",
+      "duration_ms": 0,
+      "timed_out": false,
+      "output_truncated": false
+    }
+  ],
+  "permission_decisions": [
+    {
+      "id": "perm-golden",
+      "task_id": "review-golden",
+      "tool": "workspace_exec",
+      "command": "bash skills/code-review/scripts/diff_summary.sh work/change.diff out/diff_summary.json",
+      "action": "allow",
+      "disposition": "allow",
+      "created_at": "2026-07-15T00:00:00Z"
+    }
+  ],
+  "permission_summary": {
+    "allow_count": 1,
+    "deny_count": 0,
+    "ask_count": 0,
+    "needs_human_review_count": 0
+  },
+  "artifacts": [
+    {
+      "id": "artifact-golden",
+      "task_id": "review-golden",
+      "name": "review_report.json",
+      "path": "review_report.json",
+      "mime_type": "application/json",
+      "size_bytes": 0,
+      "created_at": "2026-07-15T00:00:00Z"
+    },
+    {
+      "id": "artifact-golden",
+      "task_id": "review-golden",
+      "name": "review_report.md",
+      "path": "review_report.md",
+      "mime_type": "text/markdown",
+      "size_bytes": 0,
+      "created_at": "2026-07-15T00:00:00Z"
+    },
+    {
+      "id": "artifact-golden",
+      "task_id": "review-golden",
+      "name": "review_diagnostics.json",
+      "path": "review_diagnostics.json",
+      "mime_type": "application/json",
+      "size_bytes": 0,
+      "created_at": "2026-07-15T00:00:00Z"
+    },
+    {
+      "id": "artifact-golden",
+      "task_id": "review-golden",
+      "name": "review_report.zh.md",
+      "path": "review_report.zh.md",
+      "mime_type": "text/markdown",
+      "size_bytes": 0,
+      "created_at": "2026-07-15T00:00:00Z"
+    }
+  ],
+  "artifact_policy": {
+    "max_artifacts": 5,
+    "max_bytes_per_file": 1048576,
+    "allowed_file_names": [
+      "review_report.json",
+      "review_report.md",
+      "review_diagnostics.json",
+      "review_report.zh.md",
+      "diff_summary.json"
+    ],
+    "retained_count": 4,
+    "rejected_count": 0
+  },
+  "metrics": {
+    "total_duration_ms": 0,
+    "sandbox_duration_ms": 0,
+    "tool_call_count": 0,
+    "permission_deny_count": 0,
+    "permission_ask_count": 0,
+    "finding_count": 1,
+    "warning_count": 0,
+    "needs_human_review_count": 1,
+    "severity_counts": {
+      "critical": 1,
+      "low": 1
+    },
+    "error_type_counts": {
+      "dry_run": 1,
+      "no_repo_path": 1
+    }
+  },
+  "conclusion": "Critical security findings were detected. Do not merge until the listed secret or credential issues are remediated and rotated."
+}

@@ -1,0 +1,27 @@
+diff --git a/service/handler.go b/service/handler.go
+index 1111111..2222222 100644
+--- a/service/handler.go
++++ b/service/handler.go
+@@ -1,5 +1,8 @@
+ package service
+
+ func Add(a, b int) int {
++    if a == 0 {
++        return b
++    }
+     return a + b
+ }
+diff --git a/service/handler_test.go b/service/handler_test.go
+index 3333333..4444444 100644
+--- a/service/handler_test.go
++++ b/service/handler_test.go
+@@ -1,5 +1,9 @@
+ package service
+
+ import "testing"
+
++func TestAddZero(t *testing.T) {
++    if Add(0, 2) != 2 { t.Fatal("bad sum") }
++}
++
+ func TestAdd(t *testing.T) {}

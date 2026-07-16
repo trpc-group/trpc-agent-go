@@ -1,0 +1,192 @@
+{
+  "task": {
+    "id": "review-d40f63208646f9202f58c5d7",
+    "status": "completed",
+    "started_at": "2026-07-15T19:49:42.330523+08:00",
+    "ended_at": "2026-07-15T19:50:48.110079+08:00",
+    "input_mode": "container-smoke"
+  },
+  "input": {
+    "files_changed": 2,
+    "go_files": 2,
+    "added_lines": 10,
+    "deleted_lines": 0
+  },
+  "packages": [
+    {
+      "package_path": "calc",
+      "package_name": "calc",
+      "files": [
+        "calc/calc.go",
+        "calc/calc_test.go"
+      ]
+    }
+  ],
+  "findings": [],
+  "warnings": [],
+  "needs_human_review": [],
+  "sandbox_runs": [
+    {
+      "id": "run-6e71d03d12c34cac5cb3a303",
+      "task_id": "review-d40f63208646f9202f58c5d7",
+      "command": "bash",
+      "args": [
+        "skills/code-review/scripts/diff_summary.sh",
+        "work/change.diff",
+        "out/diff_summary.json"
+      ],
+      "executor": "container",
+      "status": "success",
+      "exit_code": 0,
+      "started_at": "2026-07-15T19:50:44.673999+08:00",
+      "duration_ms": 42,
+      "timed_out": false,
+      "output_truncated": false
+    },
+    {
+      "id": "run-1c26b05ac966799c8aa9cd46",
+      "task_id": "review-d40f63208646f9202f58c5d7",
+      "command": "go",
+      "args": [
+        "test",
+        "./..."
+      ],
+      "executor": "container",
+      "status": "success",
+      "exit_code": 0,
+      "stdout": "ok  \texample.com/container-smoke/calc\t0.001s\n",
+      "started_at": "2026-07-15T19:50:44.716168+08:00",
+      "duration_ms": 2130,
+      "timed_out": false,
+      "output_truncated": false
+    },
+    {
+      "id": "run-6c2370e68a00969a64e5d5ec",
+      "task_id": "review-d40f63208646f9202f58c5d7",
+      "command": "go",
+      "args": [
+        "vet",
+        "./..."
+      ],
+      "executor": "container",
+      "status": "success",
+      "exit_code": 0,
+      "started_at": "2026-07-15T19:50:46.846165+08:00",
+      "duration_ms": 368,
+      "timed_out": false,
+      "output_truncated": false
+    },
+    {
+      "id": "run-fef54d43ad9611c872a2595b",
+      "task_id": "review-d40f63208646f9202f58c5d7",
+      "command": "staticcheck",
+      "args": [
+        "./..."
+      ],
+      "executor": "container",
+      "status": "success",
+      "exit_code": 0,
+      "started_at": "2026-07-15T19:50:47.214443+08:00",
+      "duration_ms": 833,
+      "timed_out": false,
+      "output_truncated": false
+    }
+  ],
+  "permission_decisions": [
+    {
+      "id": "perm-2baf9c337fe0c7afb249587c",
+      "task_id": "review-d40f63208646f9202f58c5d7",
+      "tool": "workspace_exec",
+      "command": "bash skills/code-review/scripts/diff_summary.sh work/change.diff out/diff_summary.json",
+      "action": "allow",
+      "disposition": "allow",
+      "created_at": "2026-07-15T19:50:44.673998+08:00"
+    },
+    {
+      "id": "perm-f55655fdce90e3d1f6978301",
+      "task_id": "review-d40f63208646f9202f58c5d7",
+      "tool": "workspace_exec",
+      "command": "go test ./...",
+      "action": "allow",
+      "disposition": "allow",
+      "created_at": "2026-07-15T19:50:44.716166+08:00"
+    },
+    {
+      "id": "perm-b38320e5a47e1be468909591",
+      "task_id": "review-d40f63208646f9202f58c5d7",
+      "tool": "workspace_exec",
+      "command": "go vet ./...",
+      "action": "allow",
+      "disposition": "allow",
+      "created_at": "2026-07-15T19:50:46.846154+08:00"
+    },
+    {
+      "id": "perm-3df72ec1f995091ff9fea399",
+      "task_id": "review-d40f63208646f9202f58c5d7",
+      "tool": "workspace_exec",
+      "command": "staticcheck ./...",
+      "action": "allow",
+      "disposition": "allow",
+      "created_at": "2026-07-15T19:50:47.214442+08:00"
+    }
+  ],
+  "permission_summary": {
+    "allow_count": 4,
+    "deny_count": 0,
+    "ask_count": 0,
+    "needs_human_review_count": 0
+  },
+  "artifacts": [
+    {
+      "id": "artifact-c77295898f3f657f170494cc",
+      "task_id": "review-d40f63208646f9202f58c5d7",
+      "name": "diff_summary.json",
+      "path": "out/diff_summary.json",
+      "mime_type": "text/plain; charset=utf-8",
+      "size_bytes": 67,
+      "created_at": "2026-07-15T19:50:48.079576+08:00"
+    },
+    {
+      "id": "artifact-51b0bdbb8d17b38f70d0ba7e",
+      "task_id": "review-d40f63208646f9202f58c5d7",
+      "name": "review_report.json",
+      "path": "output/container-smoke-latest/review_report.json",
+      "mime_type": "application/json",
+      "size_bytes": 4405,
+      "created_at": "2026-07-15T19:50:48.11579+08:00"
+    },
+    {
+      "id": "artifact-3d10f01114d4b44a8aa5a71e",
+      "task_id": "review-d40f63208646f9202f58c5d7",
+      "name": "review_report.md",
+      "path": "output/container-smoke-latest/review_report.md",
+      "mime_type": "text/markdown",
+      "size_bytes": 1763,
+      "created_at": "2026-07-15T19:50:48.115795+08:00"
+    }
+  ],
+  "artifact_policy": {
+    "max_artifacts": 3,
+    "max_bytes_per_file": 1048576,
+    "allowed_file_names": [
+      "review_report.json",
+      "review_report.md",
+      "diff_summary.json"
+    ],
+    "retained_count": 3,
+    "rejected_count": 0
+  },
+  "metrics": {
+    "total_duration_ms": 65780,
+    "sandbox_duration_ms": 3373,
+    "tool_call_count": 4,
+    "permission_deny_count": 0,
+    "permission_ask_count": 0,
+    "finding_count": 0,
+    "warning_count": 0,
+    "needs_human_review_count": 0,
+    "severity_counts": {},
+    "error_type_counts": {}
+  },
+  "conclusion": "No high-confidence code review issues were detected. Review sandbox warnings before merging if any checks were skipped or unavailable."
+}

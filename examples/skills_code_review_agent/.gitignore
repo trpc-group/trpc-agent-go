@@ -1,0 +1,17 @@
+*.sqlite
+output/fixtures/
+output/config-demo/
+output/fake-fail/
+output/check-*/
+output/container-smoke/
+output/container-smoke-cn/
+output/container-repo-smoke/
+output/container-staticcheck-smoke/
+output/container-proof-*/
+output/audit-container-smoke/
+output/integration-proof/
+!sandbox/
+!sandbox/Dockerfile
+
+output/final-*/
+output/verify-*/
