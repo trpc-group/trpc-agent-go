@@ -14,11 +14,12 @@ import (
 
 // ReplayCase is one deterministic public replay scenario.
 type ReplayCase struct {
-	Name         string
-	Description  string
-	Steps        []Step
-	RequiredCaps Caps
-	AllowedDiffs []AllowedDiff
+	Name             string
+	Description      string
+	Steps            []Step
+	RequiredCaps     Caps
+	AllowedDiffs     []AllowedDiff
+	EventCompareMode EventCompareMode // empty means global ordered compare
 }
 
 // Caps declares backend capabilities required by a case.
@@ -111,6 +112,17 @@ type BackendProfile struct {
 	SupportsAsyncSummary bool
 	SupportsMemory       bool
 }
+
+// EventCompareMode controls how session events are compared.
+type EventCompareMode string
+
+const (
+	// EventCompareGlobalOrdered compares events by global index order.
+	EventCompareGlobalOrdered EventCompareMode = "global_ordered"
+	// EventCompareBranchLocal relaxes global interleaving but still compares
+	// event semantics after aligning by logical ID within each branch.
+	EventCompareBranchLocal EventCompareMode = "branch_local"
+)
 
 // Status constants used in CaseResult / Report.
 const (

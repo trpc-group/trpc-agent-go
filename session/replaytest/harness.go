@@ -106,9 +106,12 @@ func (h *Harness) runCase(ctx context.Context, tc ReplayCase) (CaseResult, error
 		return cr, nil
 	}
 
-	// Single-backend self-check: always pass when only one backend executed.
+	// Single-backend self-check: pass when only one backend executed,
+	// but keep StatusSkipped if any other backend was capability-skipped.
 	if len(snaps) == 1 {
-		cr.Status = StatusPassed
+		if cr.Status != StatusSkipped {
+			cr.Status = StatusPassed
+		}
 		return cr, nil
 	}
 

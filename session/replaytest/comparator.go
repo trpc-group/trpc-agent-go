@@ -72,9 +72,9 @@ func (c *Comparator) Compare(
 	if b.Session != nil {
 		eventsB = b.Session.Events
 	}
-	// concurrent_interleaved: compare branch-local order only
-	if tc.Name == "concurrent_interleaved" {
-		diffs = append(diffs, compareBranchLocal(tc, backendA, backendB, sessionID, eventsA, eventsB)...)
+	// Event comparison: branch_local relaxes global interleaving only.
+	if tc.EventCompareMode == EventCompareBranchLocal {
+		diffs = append(diffs, compareBranchLocalSemantic(tc, backendA, backendB, sessionID, eventsA, eventsB)...)
 	} else {
 		if len(eventsA) != len(eventsB) {
 			add(Diff{
@@ -87,61 +87,13 @@ func (c *Comparator) Compare(
 		n := min(len(eventsA), len(eventsB))
 		for i := 0; i < n; i++ {
 			iCopy := i
-			ea, eb := eventsA[i], eventsB[i]
-			if ea.ID != eb.ID {
-				add(Diff{
-					Path:        fmt.Sprintf("events[%d].id", i),
-					EventIndex:  &iCopy,
-					Baseline:    ea.ID,
-					Actual:      eb.ID,
-					Explanation: "event logical id mismatch",
-				})
-			}
-			if ea.Author != eb.Author {
-				add(Diff{
-					Path:        fmt.Sprintf("events[%d].author", i),
-					EventIndex:  &iCopy,
-					Baseline:    ea.Author,
-					Actual:      eb.Author,
-					Explanation: "event author mismatch",
-				})
-			}
-			if ea.Branch != eb.Branch {
-				add(Diff{
-					Path:        fmt.Sprintf("events[%d].branch", i),
-					EventIndex:  &iCopy,
-					Baseline:    ea.Branch,
-					Actual:      eb.Branch,
-					Explanation: "event branch mismatch",
-				})
-			}
-			ca, cb := messageContent(ea), messageContent(eb)
-			if ca != cb {
-				add(Diff{
-					Path:        fmt.Sprintf("events[%d].response.choices[0].message.content", i),
-					EventIndex:  &iCopy,
-					Baseline:    ca,
-					Actual:      cb,
-					Explanation: "event content mismatch",
-				})
-			}
-			if !reflect.DeepEqual(toolCalls(ea), toolCalls(eb)) {
-				add(Diff{
-					Path:        fmt.Sprintf("events[%d].response.choices[0].message.tool_calls", i),
-					EventIndex:  &iCopy,
-					Baseline:    toolCalls(ea),
-					Actual:      toolCalls(eb),
-					Explanation: "tool calls mismatch",
-				})
-			}
-			if !bytes.Equal(encodeStateDelta(ea.StateDelta), encodeStateDelta(eb.StateDelta)) {
-				add(Diff{
-					Path:        fmt.Sprintf("events[%d].state_delta", i),
-					EventIndex:  &iCopy,
-					Baseline:    ea.StateDelta,
-					Actual:      eb.StateDelta,
-					Explanation: "state delta mismatch",
-				})
+			for _, d := range compareEventSemantics(i, eventsA[i], eventsB[i], sessionID) {
+				d.CaseName = tc.Name
+				d.BackendA, d.BackendB = backendA, backendB
+				if d.EventIndex == nil {
+					d.EventIndex = &iCopy
+				}
+				diffs = append(diffs, d)
 			}
 		}
 	}
@@ -214,6 +166,33 @@ func (c *Comparator) Compare(
 				Explanation:      "summary text overwrite/mismatch",
 			})
 		}
+		if !reflect.DeepEqual(sa.Topics, sb.Topics) {
+			add(Diff{
+				Path:             fmt.Sprintf("summaries[%q].topics", fk),
+				SummaryFilterKey: fk,
+				Baseline:         sa.Topics,
+				Actual:           sb.Topics,
+				Explanation:      "summary topics mismatch",
+			})
+		}
+		if !sa.UpdatedAt.Equal(sb.UpdatedAt) {
+			add(Diff{
+				Path:             fmt.Sprintf("summaries[%q].updated_at", fk),
+				SummaryFilterKey: fk,
+				Baseline:         sa.UpdatedAt,
+				Actual:           sb.UpdatedAt,
+				Explanation:      "summary timestamp mismatch",
+			})
+		}
+		if !reflect.DeepEqual(sa.Boundary, sb.Boundary) {
+			add(Diff{
+				Path:             fmt.Sprintf("summaries[%q].boundary", fk),
+				SummaryFilterKey: fk,
+				Baseline:         sa.Boundary,
+				Actual:           sb.Boundary,
+				Explanation:      "summary boundary mismatch",
+			})
+		}
 	}
 
 	// Tracks
@@ -258,11 +237,30 @@ func (c *Comparator) Compare(
 					Explanation: "track payload mismatch",
 				})
 			}
+			if !ta.Events[i].Timestamp.Equal(tb.Events[i].Timestamp) {
+				add(Diff{
+					Path:        fmt.Sprintf("tracks[%q].events[%d].timestamp", name, i),
+					TrackName:   string(name),
+					Baseline:    ta.Events[i].Timestamp,
+					Actual:      tb.Events[i].Timestamp,
+					Explanation: "track timestamp mismatch",
+				})
+			}
 		}
 	}
 
 	// Memories
 	diffs = append(diffs, compareMemories(tc, backendA, backendB, sessionID, a.Memories, b.Memories)...)
+
+	// Snapshot errors
+	if !reflect.DeepEqual(a.Errors, b.Errors) {
+		add(Diff{
+			Path:        "errors",
+			Baseline:    a.Errors,
+			Actual:      b.Errors,
+			Explanation: "snapshot errors mismatch",
+		})
+	}
 
 	return markAllowed(diffs, tc.AllowedDiffs)
 }
@@ -397,6 +395,33 @@ func compareMemories(tc ReplayCase, backendA, backendB, sessionID string, a, b [
 				Explanation: "memory topics mismatch",
 			})
 		}
+		pa, pb := memoryParticipants(a[i]), memoryParticipants(b[i])
+		if !reflect.DeepEqual(pa, pb) {
+			diffs = append(diffs, Diff{
+				CaseName:    tc.Name,
+				BackendA:    backendA,
+				BackendB:    backendB,
+				SessionID:   sessionID,
+				MemoryID:    id,
+				Path:        fmt.Sprintf("memories[%d].participants", i),
+				Baseline:    pa,
+				Actual:      pb,
+				Explanation: "memory participants mismatch",
+			})
+		}
+		if !memoryTimeEqual(a[i], b[i]) {
+			diffs = append(diffs, Diff{
+				CaseName:    tc.Name,
+				BackendA:    backendA,
+				BackendB:    backendB,
+				SessionID:   sessionID,
+				MemoryID:    id,
+				Path:        fmt.Sprintf("memories[%d].timestamps", i),
+				Baseline:    memoryTimestamps(a[i]),
+				Actual:      memoryTimestamps(b[i]),
+				Explanation: "memory timestamps mismatch",
+			})
+		}
 	}
 	return diffs
 }
@@ -408,8 +433,98 @@ func memoryTopics(e *memory.Entry) []string {
 	return append([]string(nil), e.Memory.Topics...)
 }
 
-func compareBranchLocal(tc ReplayCase, backendA, backendB, sessionID string, a, b []event.Event) []Diff {
+func compareEventSemantics(index int, ea, eb event.Event, sessionID string) []Diff {
 	var diffs []Diff
+	iCopy := index
+	add := func(path string, baseline, actual any, explanation string) {
+		diffs = append(diffs, Diff{
+			SessionID:   sessionID,
+			EventIndex:  &iCopy,
+			Path:        path,
+			Baseline:    baseline,
+			Actual:      actual,
+			Explanation: explanation,
+		})
+	}
+	if ea.ID != eb.ID {
+		add(fmt.Sprintf("events[%d].id", index), ea.ID, eb.ID, "event logical id mismatch")
+	}
+	if ea.Author != eb.Author {
+		add(fmt.Sprintf("events[%d].author", index), ea.Author, eb.Author, "event author mismatch")
+	}
+	if ea.Branch != eb.Branch {
+		add(fmt.Sprintf("events[%d].branch", index), ea.Branch, eb.Branch, "event branch mismatch")
+	}
+	if !ea.Timestamp.Equal(eb.Timestamp) {
+		add(fmt.Sprintf("events[%d].timestamp", index), ea.Timestamp, eb.Timestamp, "event timestamp mismatch")
+	}
+	ca, cb := messageContent(ea), messageContent(eb)
+	if ca != cb {
+		add(fmt.Sprintf("events[%d].response.choices[0].message.content", index), ca, cb, "event content mismatch")
+	}
+	if !reflect.DeepEqual(toolCalls(ea), toolCalls(eb)) {
+		add(fmt.Sprintf("events[%d].response.choices[0].message.tool_calls", index), toolCalls(ea), toolCalls(eb), "tool calls mismatch")
+	}
+	if !bytes.Equal(encodeStateDelta(ea.StateDelta), encodeStateDelta(eb.StateDelta)) {
+		add(fmt.Sprintf("events[%d].state_delta", index), ea.StateDelta, eb.StateDelta, "state delta mismatch")
+	}
+	if !reflect.DeepEqual(ea.Extensions, eb.Extensions) {
+		add(fmt.Sprintf("events[%d].extensions", index), ea.Extensions, eb.Extensions, "event extensions mismatch")
+	}
+	if !responseTimestampEqual(ea, eb) {
+		add(fmt.Sprintf("events[%d].response.timestamp", index), responseTimestamp(ea), responseTimestamp(eb), "response timestamp mismatch")
+	}
+	return diffs
+}
+
+func responseTimestamp(e event.Event) any {
+	if e.Response == nil {
+		return nil
+	}
+	return e.Response.Timestamp
+}
+
+func responseTimestampEqual(a, b event.Event) bool {
+	if a.Response == nil && b.Response == nil {
+		return true
+	}
+	if a.Response == nil || b.Response == nil {
+		return false
+	}
+	return a.Response.Timestamp.Equal(b.Response.Timestamp)
+}
+
+// compareBranchLocalSemantic relaxes global interleaving: align by logical ID
+// and reuse full semantic comparison, while still checking branch-local order.
+func compareBranchLocalSemantic(tc ReplayCase, backendA, backendB, sessionID string, a, b []event.Event) []Diff {
+	var diffs []Diff
+	indexA := map[string]event.Event{}
+	indexB := map[string]event.Event{}
+	for _, e := range a {
+		indexA[e.ID] = e
+	}
+	for _, e := range b {
+		indexB[e.ID] = e
+	}
+	setA, setB := map[string]struct{}{}, map[string]struct{}{}
+	for id := range indexA {
+		setA[id] = struct{}{}
+	}
+	for id := range indexB {
+		setB[id] = struct{}{}
+	}
+	if !reflect.DeepEqual(setA, setB) {
+		diffs = append(diffs, Diff{
+			CaseName:    tc.Name,
+			BackendA:    backendA,
+			BackendB:    backendB,
+			SessionID:   sessionID,
+			Path:        "events.key_set",
+			Baseline:    keysOf(setA),
+			Actual:      keysOf(setB),
+			Explanation: "global event key set mismatch",
+		})
+	}
 	group := func(events []event.Event) map[string][]string {
 		m := map[string][]string{}
 		for _, e := range events {
@@ -422,15 +537,15 @@ func compareBranchLocal(tc ReplayCase, backendA, backendB, sessionID string, a, 
 		return m
 	}
 	ga, gb := group(a), group(b)
-	keys := map[string]struct{}{}
+	branches := map[string]struct{}{}
 	for k := range ga {
-		keys[k] = struct{}{}
+		branches[k] = struct{}{}
 	}
 	for k := range gb {
-		keys[k] = struct{}{}
+		branches[k] = struct{}{}
 	}
-	sorted := make([]string, 0, len(keys))
-	for k := range keys {
+	sorted := make([]string, 0, len(branches))
+	for k := range branches {
 		sorted = append(sorted, k)
 	}
 	sort.Strings(sorted)
@@ -448,27 +563,46 @@ func compareBranchLocal(tc ReplayCase, backendA, backendB, sessionID string, a, 
 			})
 		}
 	}
-	// full key sets must match
-	setA, setB := map[string]struct{}{}, map[string]struct{}{}
-	for _, e := range a {
-		setA[e.ID] = struct{}{}
+	ids := make([]string, 0, len(indexA))
+	for id := range indexA {
+		if _, ok := indexB[id]; ok {
+			ids = append(ids, id)
+		}
 	}
-	for _, e := range b {
-		setB[e.ID] = struct{}{}
-	}
-	if !reflect.DeepEqual(setA, setB) {
-		diffs = append(diffs, Diff{
-			CaseName:    tc.Name,
-			BackendA:    backendA,
-			BackendB:    backendB,
-			SessionID:   sessionID,
-			Path:        "events.key_set",
-			Baseline:    keysOf(setA),
-			Actual:      keysOf(setB),
-			Explanation: "global event key set mismatch",
-		})
+	sort.Strings(ids)
+	for i, id := range ids {
+		for _, d := range compareEventSemantics(i, indexA[id], indexB[id], sessionID) {
+			d.CaseName = tc.Name
+			d.BackendA, d.BackendB = backendA, backendB
+			d.Path = strings.Replace(d.Path, fmt.Sprintf("events[%d]", i), fmt.Sprintf("events[id=%s]", id), 1)
+			diffs = append(diffs, d)
+		}
 	}
 	return diffs
+}
+
+func memoryParticipants(e *memory.Entry) []string {
+	if e == nil || e.Memory == nil {
+		return nil
+	}
+	return append([]string(nil), e.Memory.Participants...)
+}
+
+func memoryTimestamps(e *memory.Entry) map[string]any {
+	if e == nil {
+		return nil
+	}
+	return map[string]any{"created_at": e.CreatedAt, "updated_at": e.UpdatedAt}
+}
+
+func memoryTimeEqual(a, b *memory.Entry) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return a.CreatedAt.Equal(b.CreatedAt) && a.UpdatedAt.Equal(b.UpdatedAt)
 }
 
 func keysOf(m map[string]struct{}) []string {
@@ -555,7 +689,7 @@ func matchPath(pattern, p string) bool {
 
 func ruleApplies(rule AllowedDiff, d Diff) bool {
 	switch rule.Rule {
-	case RuleIgnore, "":
+	case RuleIgnore:
 		return true
 	case RuleNotEmpty:
 		return !isEmpty(d.Baseline) && !isEmpty(d.Actual)

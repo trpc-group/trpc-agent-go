@@ -289,17 +289,27 @@ func normalizeMemory(entry *memory.Entry) {
 	}
 	sort.Strings(entry.Memory.Topics)
 	sort.Strings(entry.Memory.Participants)
-	if entry.CreatedAt.IsZero() == false {
+	if !entry.CreatedAt.IsZero() {
 		entry.CreatedAt = entry.CreatedAt.UTC()
 	}
-	if entry.UpdatedAt.IsZero() == false {
+	if !entry.UpdatedAt.IsZero() {
 		entry.UpdatedAt = entry.UpdatedAt.UTC()
 	}
-	// Stable ID from content when backends generate random IDs.
-	if content := memoryContent(entry); content != "" {
-		sum := sha1.Sum([]byte(content))
-		entry.ID = "mem-" + hex.EncodeToString(sum[:8])
+	// Stable semantic ID so backends with random IDs still compare.
+	// Content alone is not enough when two memories share text but differ topics.
+	entry.ID = memorySemanticKey(entry)
+}
+
+func memorySemanticKey(entry *memory.Entry) string {
+	if entry == nil || entry.Memory == nil {
+		return ""
 	}
+	m := entry.Memory
+	payload := m.Memory + "\x00" + strings.Join(append([]string(nil), m.Topics...), ",") +
+		"\x00" + strings.Join(append([]string(nil), m.Participants...), ",") +
+		"\x00" + m.Location + "\x00" + string(m.Kind)
+	sum := sha1.Sum([]byte(payload))
+	return "mem-" + hex.EncodeToString(sum[:8])
 }
 
 func memoryContent(entry *memory.Entry) string {

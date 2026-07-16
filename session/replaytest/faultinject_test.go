@@ -125,3 +125,34 @@ func TestFaultInjection_AgainstLiveInMemoryReplay(t *testing.T) {
 		t.Fatalf("expected overwrite summary detection, diffs=%+v", diffs)
 	}
 }
+
+func TestInjectFault_EmptyDropsError(t *testing.T) {
+	snap := &Snapshot{Session: &session.Session{}}
+	for _, kind := range []FaultKind{FaultDropSummary, FaultDropTrack, FaultDropMemory} {
+		if err := InjectFault(snap, kind); err == nil {
+			t.Fatalf("%s expected error on empty", kind)
+		}
+	}
+}
+
+func TestInjectFault_WrongSummaryFilterKeyDeterministic(t *testing.T) {
+	snap := &Snapshot{Session: &session.Session{
+		Summaries: map[string]*session.Summary{
+			"z": {Summary: "z"},
+			"a": {Summary: "a"},
+		},
+	}}
+	if err := InjectFault(snap, FaultWrongSummaryFilterKey); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := snap.Session.Summaries["wrong-filter-key"]; !ok {
+		t.Fatalf("missing rekeyed summary: %+v", snap.Session.Summaries)
+	}
+	// lexicographically first key "a" should be moved
+	if _, ok := snap.Session.Summaries["a"]; ok {
+		t.Fatal("key a should have been rekeyed")
+	}
+	if _, ok := snap.Session.Summaries["z"]; !ok {
+		t.Fatal("key z should remain")
+	}
+}

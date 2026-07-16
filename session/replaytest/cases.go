@@ -188,8 +188,9 @@ func CaseTrackEvents() ReplayCase {
 func CaseConcurrentInterleaved() ReplayCase {
 	key := SessionKeyFor("concurrent_interleaved")
 	return ReplayCase{
-		Name:        "concurrent_interleaved",
-		Description: "interleaved branches keep local order",
+		Name:             "concurrent_interleaved",
+		EventCompareMode: EventCompareBranchLocal,
+		Description:      "interleaved branches keep local order",
 		Steps: []Step{
 			AppendEventStep{StepKey: "c10.a.1", SessionKey: key, Event: BranchEvent("c10.a.1", "branchA", "a1")},
 			AppendEventStep{StepKey: "c10.b.1", SessionKey: key, Event: BranchEvent("c10.b.1", "branchB", "b1")},

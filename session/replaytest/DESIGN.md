@@ -78,3 +78,8 @@ Env placeholders:
 - `REPLAYTEST_CLICKHOUSE_DSN`
 
 Adapters can register through `NamedBackend` without changing this package.
+
+## Event comparison modes
+
+- Default (`EventCompareGlobalOrdered` / empty): compare events by global index order.
+- `EventCompareBranchLocal`: used by `concurrent_interleaved`. Global interleaving is relaxed; comparison still aligns events by logical ID and checks full semantics (content, tool calls, state delta, timestamps, extensions), plus branch-local order and the global key set.

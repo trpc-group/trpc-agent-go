@@ -64,3 +64,50 @@ func TestAllCasesCount(t *testing.T) {
 		t.Fatalf("expected >=11 cases, got %d", n)
 	}
 }
+
+func TestRunCase_PreservesSkippedWhenSingleBackendRuns(t *testing.T) {
+	// Single backend missing memory -> entire case skipped.
+	h := NewHarness(DefaultHarnessOpts())
+	b := openInMemoryBackend(t)
+	b.Name = "inmemory"
+	b.MemoryService = nil
+	b.Profile.SupportsMemory = false
+	h.AddBackend(b)
+
+	tc := ReplayCase{
+		Name:         "needs_memory",
+		RequiredCaps: Caps{NeedsMemory: true},
+	}
+	cr, err := h.runCase(context.Background(), tc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cr.Status != StatusSkipped {
+		t.Fatalf("status=%s want skipped (%s)", cr.Status, cr.Skipped)
+	}
+
+	// One capable backend + one skipped backend -> keep StatusSkipped
+	// even when only one snapshot is available for comparison.
+	h2 := NewHarness(DefaultHarnessOpts())
+	partial := openInMemoryBackend(t)
+	partial.Name = "partial"
+	partial.MemoryService = nil
+	partial.Profile.SupportsMemory = false
+	full := openInMemoryBackend(t)
+	full.Name = "full"
+	h2.AddBackend(partial)
+	h2.AddBackend(full)
+	h2.opts.ReferenceBackend = "full"
+
+	tc2 := ReplayCase{
+		Name:         "needs_memory_partial",
+		RequiredCaps: Caps{NeedsMemory: true},
+	}
+	cr, err = h2.runCase(context.Background(), tc2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cr.Status != StatusSkipped {
+		t.Fatalf("status=%s want skipped when any backend skipped; reason=%q", cr.Status, cr.Skipped)
+	}
+}

@@ -7,6 +7,7 @@ package replaytest
 
 import (
 	"fmt"
+	"sort"
 
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -71,6 +72,9 @@ func InjectFault(snap *Snapshot, kind FaultKind) error {
 		if snap.Session == nil {
 			return fmt.Errorf("no session")
 		}
+		if len(snap.Session.Summaries) == 0 {
+			return fmt.Errorf("no summaries to drop")
+		}
 		snap.Session.Summaries = map[string]*session.Summary{}
 	case FaultOverwriteSummary:
 		if snap.Session == nil {
@@ -95,11 +99,17 @@ func InjectFault(snap *Snapshot, kind FaultKind) error {
 			sum = v
 			delete(snap.Session.Summaries, "")
 		} else {
-			for k, v := range snap.Session.Summaries {
-				sum = v
-				delete(snap.Session.Summaries, k)
-				break
+			keys := make([]string, 0, len(snap.Session.Summaries))
+			for k := range snap.Session.Summaries {
+				keys = append(keys, k)
 			}
+			sort.Strings(keys)
+			if len(keys) == 0 {
+				return fmt.Errorf("no summary to rekey")
+			}
+			k := keys[0]
+			sum = snap.Session.Summaries[k]
+			delete(snap.Session.Summaries, k)
 		}
 		if sum == nil {
 			return fmt.Errorf("no summary to rekey")
@@ -117,6 +127,9 @@ func InjectFault(snap *Snapshot, kind FaultKind) error {
 		if snap.Session == nil {
 			return fmt.Errorf("no session")
 		}
+		if len(snap.Session.Tracks) == 0 {
+			return fmt.Errorf("no tracks to drop")
+		}
 		snap.Session.Tracks = map[session.Track]*session.TrackEvents{}
 	case FaultMutateMemoryContent:
 		if len(snap.Memories) == 0 || snap.Memories[0] == nil || snap.Memories[0].Memory == nil {
@@ -128,6 +141,9 @@ func InjectFault(snap *Snapshot, kind FaultKind) error {
 		cp.Memory = &m
 		snap.Memories[0] = &cp
 	case FaultDropMemory:
+		if len(snap.Memories) == 0 {
+			return fmt.Errorf("no memories to drop")
+		}
 		snap.Memories = nil
 	case FaultReorderEvents:
 		if snap.Session == nil || len(snap.Session.Events) < 2 {
