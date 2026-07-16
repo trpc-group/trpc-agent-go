@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -52,11 +53,17 @@ type execParams struct {
 	Command    string
 	Workdir    string
 	Env        map[string]string
+	SafetyEnv  map[string]string
+	CleanEnv   bool
 	Pty        bool
 	Background bool
 
 	YieldMs  *int
 	TimeoutS *int
+	// MaxTimeout is an optional safety ceiling with sub-second precision.
+	MaxTimeout time.Duration
+
+	MaxOutputBytes int64
 }
 
 type execResult struct {
@@ -93,11 +100,7 @@ func (m *manager) exec(
 		yieldMs = *params.YieldMs
 	}
 
-	timeoutS := defaultTimeoutS
-	if params.TimeoutS != nil && *params.TimeoutS > 0 {
-		timeoutS = *params.TimeoutS
-	}
-	timeout := timeoutDuration(timeoutS)
+	timeout := execTimeout(params)
 
 	if !params.Background && yieldMs == 0 && !params.Pty {
 		out, code, err := runForeground(
@@ -167,6 +170,18 @@ func (m *manager) exec(
 			Output:    sess.pollTail(defaultLogTail),
 		}, nil
 	}
+}
+
+func execTimeout(params execParams) time.Duration {
+	timeoutS := defaultTimeoutS
+	if params.TimeoutS != nil && *params.TimeoutS > 0 {
+		timeoutS = *params.TimeoutS
+	}
+	timeout := timeoutDuration(timeoutS)
+	if params.MaxTimeout > 0 && params.MaxTimeout < timeout {
+		return params.MaxTimeout
+	}
+	return timeout
 }
 
 func runForeground(
@@ -256,6 +271,22 @@ func mergedEnv(
 	return out
 }
 
+func explicitEnv(env map[string]string) []string {
+	if len(env) == 0 {
+		return []string{}
+	}
+	keys := make([]string, 0, len(env))
+	for key := range env {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	out := make([]string, 0, len(keys))
+	for _, key := range keys {
+		out = append(out, fmt.Sprintf("%s=%s", key, env[key]))
+	}
+	return out
+}
+
 func setEnv(env []string, key string, value string) []string {
 	prefix := fmt.Sprintf("%s=", key)
 	for i := range env {
@@ -316,9 +347,13 @@ func startSession(
 		return nil, err
 	}
 	cmd.Dir = params.Workdir
-	cmd.Env = mergedEnv(baseEnv, params.Env)
+	if params.CleanEnv {
+		cmd.Env = explicitEnv(params.Env)
+	} else {
+		cmd.Env = mergedEnv(baseEnv, params.Env)
+	}
 
-	sess := newSession(id, params.Command, maxLines)
+	sess := newSession(id, params.Command, maxLines, params.MaxOutputBytes)
 	sess.cancel = cancel
 	sess.cmd = cmd
 

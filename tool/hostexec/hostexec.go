@@ -21,7 +21,9 @@ import (
 	"strings"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/internal/envscrub"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/safety"
 )
 
 const (
@@ -48,6 +50,7 @@ type config struct {
 	maxLines int
 	jobTTL   time.Duration
 	baseEnv  map[string]string
+	safety   *safety.Guard
 }
 
 // Option configures the hostexec tool set.
@@ -95,6 +98,14 @@ func WithBaseEnv(env map[string]string) Option {
 	}
 }
 
+// WithSafetyGuard enables pre-execution scanning and output redaction.
+// Without this option hostexec preserves its historical behavior.
+func WithSafetyGuard(guard *safety.Guard) Option {
+	return func(c *config) {
+		c.safety = guard
+	}
+}
+
 func defaultConfig() config {
 	return config{
 		baseDir: defaultBaseDir,
@@ -136,8 +147,8 @@ func NewToolSet(opts ...Option) (tool.ToolSet, error) {
 		set.name = defaultToolSetName
 	}
 	set.tools = []tool.Tool{
-		&execCommandTool{mgr: mgr, baseDir: baseDir},
-		&writeStdinTool{mgr: mgr},
+		&execCommandTool{mgr: mgr, baseDir: baseDir, safety: cfg.safety},
+		&writeStdinTool{mgr: mgr, safety: cfg.safety},
 		&killSessionTool{mgr: mgr},
 	}
 	return set, nil
@@ -168,6 +179,14 @@ func (s *toolSet) Name() string {
 type execCommandTool struct {
 	mgr     *manager
 	baseDir string
+	safety  *safety.Guard
+}
+
+func (t *execCommandTool) ToolPermissionPolicy() tool.PermissionPolicy {
+	if t == nil {
+		return nil
+	}
+	return t.safety
 }
 
 func (t *execCommandTool) Declaration() *tool.Declaration {
@@ -293,24 +312,68 @@ func (t *execCommandTool) Call(
 	}
 	yield := firstInt(in.YieldTimeMS, in.YieldMs)
 	timeout := firstInt(in.TimeoutSec, in.TimeoutSecOld)
-
-	res, err := t.mgr.exec(ctx, execParams{
-		Command:    in.Command,
-		Workdir:    workdir,
-		Env:        in.Env,
-		Pty:        firstBool(in.TTY, in.PTY),
-		Background: in.Background,
-		YieldMs:    yield,
-		TimeoutS:   timeout,
-	})
-	if err != nil {
-		return nil, err
+	guard := effectiveHostSafetyGuard(ctx, t.safety)
+	profile := effectiveHostRuntimeSafetyProfile(ctx, t.safety, toolExecCommand)
+	execEnv := in.Env
+	cleanEnv := false
+	if guard != nil {
+		execEnv = safetyExecutionEnv(t.mgr.baseEnv, in.Env)
+		cleanEnv = true
 	}
-	return mapExecResult(res), nil
+	params := execParams{
+		Command:        in.Command,
+		Workdir:        workdir,
+		Env:            execEnv,
+		SafetyEnv:      safetyScanEnv(t.mgr.baseEnv, in.Env),
+		CleanEnv:       cleanEnv,
+		Pty:            firstBool(in.TTY, in.PTY),
+		Background:     in.Background,
+		YieldMs:        yield,
+		TimeoutS:       timeout,
+		MaxOutputBytes: profile.MaxOutputBytes,
+	}
+	scanParams := params
+	scanParams.TimeoutS = safetyTimeoutForProfile(profile, params.TimeoutS)
+	if t.safety != nil {
+		if result, blocked, err := checkSafetyGuard(
+			ctx,
+			t.safety,
+			t,
+			t.Declaration(),
+			execSafetyArguments(scanParams, t.mgr.baseEnv),
+		); blocked {
+			return result, err
+		}
+	}
+	profile = effectiveHostRuntimeSafetyProfile(ctx, t.safety, toolExecCommand)
+	params.TimeoutS = cappedSafetyTimeoutForProfile(profile, params.TimeoutS)
+	params.MaxTimeout = time.Duration(profile.MaxTimeout)
+	// Re-read the limit after permission evaluation so an atomic policy
+	// reload that completed during the scan cannot leave execution using
+	// the older output budget.
+	params.MaxOutputBytes = profile.MaxOutputBytes
+
+	res, err := t.mgr.exec(ctx, params)
+	if err != nil {
+		return sanitizeSafetyResult(
+			ctx, t.safety, t.Declaration(), args, nil, err,
+		)
+	}
+	return sanitizeSafetyResult(
+		ctx, t.safety, t.Declaration(), args, mapExecResult(res), nil,
+	)
 }
 
 type writeStdinTool struct {
-	mgr *manager
+	mgr    *manager
+	safety *safety.Guard
+}
+
+func (t *writeStdinTool) ToolPermissionPolicy() tool.PermissionPolicy {
+	if t == nil {
+		return nil
+	}
+	return t.safety
 }
 
 func (t *writeStdinTool) Declaration() *tool.Declaration {
@@ -387,13 +450,27 @@ func (t *writeStdinTool) Call(
 	if sessionID == "" {
 		return nil, errors.New(errSessionIDRequired)
 	}
+	appendNewline := firstBool(in.AppendNewline, in.Submit)
+	if t.safety != nil {
+		if result, blocked, err := checkSafetyGuard(
+			ctx,
+			t.safety,
+			t,
+			t.Declaration(),
+			writeSafetyArguments(sessionID, in.Chars, appendNewline),
+		); blocked {
+			return result, err
+		}
+	}
 
 	if err := t.mgr.write(
 		sessionID,
 		in.Chars,
-		firstBool(in.AppendNewline, in.Submit),
+		appendNewline,
 	); err != nil {
-		return nil, err
+		return sanitizeSafetyResult(
+			ctx, t.safety, t.Declaration(), args, nil, err,
+		)
 	}
 
 	yield := defaultWriteYieldMS
@@ -406,16 +483,327 @@ func (t *writeStdinTool) Call(
 		defer timer.Stop()
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return sanitizeSafetyResult(
+				ctx, t.safety, t.Declaration(), args, nil, ctx.Err(),
+			)
 		case <-timer.C:
 		}
 	}
 
 	poll, err := t.mgr.poll(sessionID, nil)
 	if err != nil {
+		return sanitizeSafetyResult(
+			ctx, t.safety, t.Declaration(), args, nil, err,
+		)
+	}
+	return sanitizeSafetyResult(
+		ctx,
+		t.safety,
+		t.Declaration(),
+		args,
+		mapPollResult(sessionID, poll),
+		nil,
+	)
+}
+
+func execSafetyArguments(params execParams, baseEnv map[string]string) []byte {
+	timeoutS := defaultTimeoutS
+	if params.TimeoutS != nil && *params.TimeoutS > 0 {
+		timeoutS = *params.TimeoutS
+	}
+	env := mergeInheritedEnv(baseEnv, params.Env)
+	if params.SafetyEnv != nil {
+		env = params.SafetyEnv
+	}
+	if params.CleanEnv {
+		if params.SafetyEnv == nil {
+			env = params.Env
+		}
+	}
+	data, _ := json.Marshal(map[string]any{
+		"backend":          "hostexec",
+		"command":          params.Command,
+		"workdir":          params.Workdir,
+		"env":              env,
+		"timeout_sec":      timeoutS,
+		"pty":              params.Pty,
+		"background":       params.Background,
+		"max_output_bytes": params.MaxOutputBytes,
+	})
+	return data
+}
+
+func writeSafetyArguments(
+	sessionID string,
+	chars string,
+	appendNewline bool,
+) []byte {
+	if appendNewline {
+		chars += "\n"
+	}
+	data, _ := json.Marshal(map[string]any{
+		"backend":    "hostexec",
+		"session_id": sessionID,
+		"chars":      chars,
+	})
+	return data
+}
+
+func checkSafetyGuard(
+	ctx context.Context,
+	guard *safety.Guard,
+	t tool.Tool,
+	declaration *tool.Declaration,
+	args []byte,
+) (any, bool, error) {
+	if guard == nil {
+		return nil, false, nil
+	}
+	decision, err := guard.CheckToolPermission(ctx, &tool.PermissionRequest{
+		Tool: t, ToolName: declaration.Name, Declaration: declaration,
+		Arguments: args, Metadata: tool.MetadataOf(t),
+	})
+	if err != nil {
+		return nil, true, err
+	}
+	decision, err = tool.NormalizePermissionDecision(decision)
+	if err != nil {
+		return nil, true, err
+	}
+	if decision.Action == tool.PermissionActionAllow {
+		return nil, false, nil
+	}
+	return tool.PermissionResultFor(declaration.Name, decision), true, nil
+}
+
+func sanitizeSafetyResult(
+	ctx context.Context,
+	guard *safety.Guard,
+	declaration *tool.Declaration,
+	args []byte,
+	result any,
+	runErr error,
+) (any, error) {
+	if guard == nil {
+		return result, runErr
+	}
+	sanitized, err := guard.SanitizeToolResult(ctx, &tool.AfterToolArgs{
+		ToolName: declaration.Name, Declaration: declaration,
+		Arguments: args, Result: result, Error: runErr,
+	})
+	if err != nil {
 		return nil, err
 	}
-	return mapPollResult(sessionID, poll), nil
+	sanitizedErr, err := guard.SanitizeToolError(ctx, &tool.AfterToolArgs{
+		ToolName: declaration.Name, Declaration: declaration,
+		Arguments: args, Result: sanitized, Error: runErr,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return sanitized, sanitizedErr
+}
+
+func safetyMaxOutputBytes(guard *safety.Guard, toolName string) int64 {
+	return safetyToolProfile(guard, toolName).MaxOutputBytes
+}
+
+func safetyToolProfile(guard *safety.Guard, toolName string) safety.ToolProfile {
+	if guard == nil {
+		return safety.ToolProfile{}
+	}
+	return guard.ToolProfile(toolName)
+}
+
+func effectiveHostSafetyGuard(ctx context.Context, direct *safety.Guard) *safety.Guard {
+	if direct != nil {
+		return direct
+	}
+	guard, _ := tool.PermissionPolicyFromContext(ctx).(*safety.Guard)
+	return guard
+}
+
+func effectiveHostRuntimeSafetyProfile(
+	ctx context.Context,
+	direct *safety.Guard,
+	toolName string,
+) safety.ToolProfile {
+	var profile safety.ToolProfile
+	if direct != nil {
+		profile = direct.ToolProfile(toolName)
+	}
+	contextGuard, _ := tool.PermissionPolicyFromContext(ctx).(*safety.Guard)
+	if contextGuard != nil && contextGuard != direct {
+		contextProfile := contextGuard.ToolProfile(toolName)
+		profile.MaxTimeout = minPositiveSafetyDuration(
+			profile.MaxTimeout, contextProfile.MaxTimeout,
+		)
+		profile.MaxOutputBytes = minPositiveSafetyInt64(
+			profile.MaxOutputBytes, contextProfile.MaxOutputBytes,
+		)
+	}
+	return profile
+}
+
+func minPositiveSafetyDuration(a, b safety.Duration) safety.Duration {
+	if a <= 0 || b > 0 && b < a {
+		return b
+	}
+	return a
+}
+
+func minPositiveSafetyInt64(a, b int64) int64 {
+	if a <= 0 || b > 0 && b < a {
+		return b
+	}
+	return a
+}
+
+func cappedSafetyTimeout(
+	guard *safety.Guard,
+	toolName string,
+	requested *int,
+) *int {
+	profile := safetyToolProfile(guard, toolName)
+	return cappedSafetyTimeoutForProfile(profile, requested)
+}
+
+func cappedSafetyTimeoutForProfile(
+	profile safety.ToolProfile,
+	requested *int,
+) *int {
+	if profile.MaxTimeout <= 0 {
+		return requested
+	}
+	maxSeconds := int(time.Duration(profile.MaxTimeout) / time.Second)
+	if maxSeconds <= 0 {
+		return requested
+	}
+	if requested == nil || *requested <= 0 || *requested > maxSeconds {
+		return &maxSeconds
+	}
+	return requested
+}
+
+func safetyTimeoutForScan(
+	guard *safety.Guard,
+	toolName string,
+	requested *int,
+) *int {
+	if requested != nil && *requested > 0 {
+		return requested
+	}
+	profile := safetyToolProfile(guard, toolName)
+	return safetyTimeoutForProfile(profile, requested)
+}
+
+func safetyTimeoutForProfile(
+	profile safety.ToolProfile,
+	requested *int,
+) *int {
+	if requested != nil && *requested > 0 {
+		return requested
+	}
+	maxSeconds := int(time.Duration(profile.MaxTimeout) / time.Second)
+	if maxSeconds <= 0 {
+		return requested
+	}
+	return &maxSeconds
+}
+
+func mergeInheritedEnv(baseEnv, extra map[string]string) map[string]string {
+	out := make(map[string]string, len(os.Environ())+len(baseEnv)+len(extra))
+	for _, entry := range os.Environ() {
+		key, value, ok := strings.Cut(entry, "=")
+		if ok && key != "" {
+			out[key] = value
+		}
+	}
+	for key, value := range envscrub.Scrub(
+		mergeExplicitEnv(baseEnv, extra), true,
+	) {
+		out[key] = value
+	}
+	return out
+}
+
+func safetyExecutionEnv(baseEnv, extra map[string]string) map[string]string {
+	out := make(map[string]string, len(os.Environ())+len(baseEnv)+len(extra))
+	for _, entry := range os.Environ() {
+		key, value, ok := strings.Cut(entry, "=")
+		if !ok || key == "" || !safeInheritedHostEnvKey(key) {
+			continue
+		}
+		if _, changed := safety.RedactValue(map[string]string{key: value}); changed {
+			continue
+		}
+		out[key] = value
+	}
+	for key, value := range envscrub.Scrub(baseEnv, true) {
+		out[key] = value
+	}
+	for key, value := range envscrub.Scrub(extra, true) {
+		if protectedHostRuntimeEnvKey(key) {
+			continue
+		}
+		out[key] = value
+	}
+	return out
+}
+
+func protectedHostRuntimeEnvKey(key string) bool {
+	switch strings.ToUpper(key) {
+	case "PATH", "SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT":
+		return true
+	default:
+		return false
+	}
+}
+
+func safetyScanEnv(baseEnv, extra map[string]string) map[string]string {
+	out := make(map[string]string, len(os.Environ())+len(baseEnv)+len(extra))
+	for _, entry := range os.Environ() {
+		key, value, ok := strings.Cut(entry, "=")
+		if !ok || key == "" || !safeInheritedHostEnvKey(key) || envscrub.IsBlocked(key, true) {
+			continue
+		}
+		if _, changed := safety.RedactValue(map[string]string{key: value}); changed {
+			continue
+		}
+		out[key] = value
+	}
+	for key, value := range mergeExplicitEnv(baseEnv, extra) {
+		out[key] = value
+	}
+	return out
+}
+
+func safeInheritedHostEnvKey(key string) bool {
+	upper := strings.ToUpper(key)
+	switch upper {
+	case "PATH", "SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT",
+		"TEMP", "TMP", "TMPDIR", "LANG", "LANGUAGE", "TZ", "TERM",
+		"USER", "USERNAME":
+		return true
+	default:
+		return strings.HasPrefix(upper, "LC_")
+	}
+}
+
+func mergeExplicitEnv(baseEnv, extra map[string]string) map[string]string {
+	if len(baseEnv) == 0 && len(extra) == 0 {
+		return nil
+	}
+	out := cloneEnvMap(baseEnv)
+	if out == nil {
+		out = make(map[string]string, len(extra))
+	}
+	for key, value := range extra {
+		if strings.TrimSpace(key) != "" {
+			out[key] = value
+		}
+	}
+	return out
 }
 
 type killSessionTool struct {

@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // CodeExecutor executes code blocks via a friendly front-door API.
@@ -33,6 +34,41 @@ type CodeExecutor interface {
 type CodeExecutionInput struct {
 	CodeBlocks  []CodeBlock `json:"code_blocks"`
 	ExecutionID string      `json:"execution_id,omitempty"`
+}
+
+type cleanExecutionEnvContextKey struct{}
+type executionLimitsContextKey struct{}
+
+// ExecutionLimits carries opt-in runtime limits supplied by a safety-aware
+// tool wrapper. Executors should enforce these limits while work is running.
+type ExecutionLimits struct {
+	MaxTimeout     time.Duration
+	MaxOutputBytes int64
+}
+
+// WithCleanExecutionEnv marks code execution as safety-isolated. Executors
+// that run on the host should avoid inheriting the parent process environment.
+func WithCleanExecutionEnv(ctx context.Context) context.Context {
+	return context.WithValue(ctx, cleanExecutionEnvContextKey{}, true)
+}
+
+// CleanExecutionEnv reports whether the caller requested environment
+// isolation for this execution.
+func CleanExecutionEnv(ctx context.Context) bool {
+	clean, _ := ctx.Value(cleanExecutionEnvContextKey{}).(bool)
+	return clean
+}
+
+// WithExecutionLimits attaches safety runtime limits to an execution context.
+func WithExecutionLimits(ctx context.Context, limits ExecutionLimits) context.Context {
+	return context.WithValue(ctx, executionLimitsContextKey{}, limits)
+}
+
+// ExecutionLimitsFromContext returns attached limits and whether safety
+// runtime limiting was explicitly enabled.
+func ExecutionLimitsFromContext(ctx context.Context) (ExecutionLimits, bool) {
+	limits, ok := ctx.Value(executionLimitsContextKey{}).(ExecutionLimits)
+	return limits, ok
 }
 
 // CodeExecutionResult is the result of code execution including files.

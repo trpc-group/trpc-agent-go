@@ -19,6 +19,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -171,16 +172,36 @@ func (e *CodeExecutor) ExecuteCode(
 		defer os.RemoveAll(cmdDir)
 	}
 
+	limits, limitsEnabled := codeexecutor.ExecutionLimitsFromContext(ctx)
+	if limitsEnabled && limits.MaxTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, limits.MaxTimeout)
+		defer cancel()
+	}
+	remainingOutput := limits.MaxOutputBytes
+	limitOutput := limitsEnabled && limits.MaxOutputBytes > 0
 	for i, block := range input.CodeBlocks {
-		blockOutput, err := e.executeCodeBlock(ctx, cmdDir, scriptDir, block)
+		blockCtx := ctx
+		if limitOutput {
+			if remainingOutput <= 0 {
+				break
+			}
+			blockLimits := limits
+			blockLimits.MaxOutputBytes = remainingOutput
+			blockCtx = codeexecutor.WithExecutionLimits(ctx, blockLimits)
+		}
+		blockOutput, err := e.executeCodeBlock(blockCtx, cmdDir, scriptDir, block)
 		if err != nil {
-			output.WriteString(fmt.Sprintf(
+			appendExecutionOutput(&output, fmt.Sprintf(
 				"Error executing code block %d: %v\n", i, err,
-			))
+			), &remainingOutput, limitOutput)
+			if blockOutput != "" {
+				appendExecutionOutput(&output, blockOutput, &remainingOutput, limitOutput)
+			}
 			continue
 		}
 		if blockOutput != "" {
-			output.WriteString(blockOutput)
+			appendExecutionOutput(&output, blockOutput, &remainingOutput, limitOutput)
 		}
 	}
 
@@ -188,6 +209,24 @@ func (e *CodeExecutor) ExecuteCode(
 		Output:      output.String(),
 		OutputFiles: []codeexecutor.File{},
 	}, nil
+}
+
+func appendExecutionOutput(
+	output *strings.Builder,
+	value string,
+	remaining *int64,
+	limited bool,
+) {
+	if !limited {
+		output.WriteString(value)
+		return
+	}
+	if *remaining <= 0 {
+		return
+	}
+	writeLen := min(int64(len(value)), *remaining)
+	output.WriteString(value[:writeLen])
+	*remaining -= writeLen
 }
 
 func (e *CodeExecutor) executeCodeBlock(
@@ -284,19 +323,64 @@ func (e *CodeExecutor) executeCommand(
 ) (string, error) {
 	timeoutCtx, cancel := context.WithTimeout(ctx, e.Timeout)
 	defer cancel()
+	limits, limitsEnabled := codeexecutor.ExecutionLimitsFromContext(ctx)
+	commandCtx := timeoutCtx
+	var outputCancel context.CancelFunc
+	if limitsEnabled && limits.MaxOutputBytes > 0 {
+		commandCtx, outputCancel = context.WithCancel(timeoutCtx)
+		defer outputCancel()
+	}
 	// #nosec G204 — interpreter and path are controlled by us
 	cmd := exec.CommandContext(
-		timeoutCtx, cmdArgs[0], cmdArgs[1:]...,
+		commandCtx, cmdArgs[0], cmdArgs[1:]...,
 	)
 	cmd.Dir = workDir
-	output, err := cmd.CombinedOutput()
+	if codeexecutor.CleanExecutionEnv(ctx) {
+		cmd.Env = cleanCodeExecutionEnv()
+	}
+	if limitsEnabled {
+		configureProcessGroup(cmd)
+	}
+	var output []byte
+	var err error
+	if limitsEnabled && limits.MaxOutputBytes > 0 {
+		limit := &sharedOutputLimit{
+			maxBytes: limits.MaxOutputBytes, cancel: outputCancel,
+		}
+		writer := limitedOutputWriter{limit: limit}
+		cmd.Stdout = writer
+		cmd.Stderr = writer
+		cmd.WaitDelay = 2 * time.Second
+		err = cmd.Run()
+		stdout, _, _ := limit.result()
+		output = []byte(stdout)
+	} else {
+		output, err = cmd.CombinedOutput()
+	}
 	if err != nil {
-		return "", fmt.Errorf(
-			"command failed (cwd=%s, cmd=%s): %s: %w",
-			workDir, strings.Join(cmdArgs, " "), string(output), err,
+		return string(output), fmt.Errorf(
+			"command failed (cwd=%s, cmd=%s): %w",
+			workDir, strings.Join(cmdArgs, " "), err,
 		)
 	}
 	return string(output), nil
+}
+
+func cleanCodeExecutionEnv() []string {
+	if runtime.GOOS == "windows" {
+		keys := []string{"SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "TEMP", "TMP"}
+		out := make([]string, 0, len(keys))
+		for _, key := range keys {
+			if value := os.Getenv(key); value != "" {
+				out = append(out, key+"="+value)
+			}
+		}
+		return out
+	}
+	return []string{
+		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+		"LANG=C.UTF-8",
+	}
 }
 
 func removeHelperFile(path string) {
@@ -391,17 +475,17 @@ func (e *CodeExecutor) ExecuteInline(
 
 // Engine exposes the local runtime as an Engine for skills.
 //
-// The returned Engine advertises Capabilities{SupportsCleanEnv: true}
-// because the local runtime forwards spec.Env directly into
-// exec.Cmd.Env when spec.CleanEnv is true, giving the child
-// process the minimal env contract that tool/workspaceexec policy
-// mode relies on. Backends that have not yet been audited for
-// CleanEnv (container, e2b) keep the zero-valued Capabilities so
-// policy-gated tools fail closed there.
+// The returned Engine advertises clean-environment and hard combined-output
+// limit support. The local runtime enforces both contracts while the child
+// process is running. Backends that have not been audited retain the
+// zero-valued capabilities so policy-gated tools fail closed there.
 func (e *CodeExecutor) Engine() codeexecutor.Engine {
 	rt := e.ensureWS()
 	return codeexecutor.NewEngineWithCapabilities(
 		rt, rt, rt,
-		codeexecutor.Capabilities{SupportsCleanEnv: true},
+		codeexecutor.Capabilities{
+			SupportsCleanEnv:       true,
+			SupportsMaxOutputBytes: true,
+		},
 	)
 }

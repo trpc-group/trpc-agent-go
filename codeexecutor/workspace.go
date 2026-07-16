@@ -93,16 +93,21 @@ type RunProgramSpec struct {
 	Cwd      string // relative to workspace root
 	Stdin    string
 	Timeout  time.Duration
-	Limits   ResourceLimits
+	// MaxOutputBytes is a hard, combined stdout and stderr byte limit.
+	// A value less than or equal to zero disables the limit. Runtimes must
+	// advertise SupportsMaxOutputBytes before callers rely on this field.
+	MaxOutputBytes int64
+	Limits         ResourceLimits
 }
 
 // RunResult captures a single program run result.
 type RunResult struct {
-	Stdout   string
-	Stderr   string
-	ExitCode int
-	Duration time.Duration
-	TimedOut bool
+	Stdout             string
+	Stderr             string
+	ExitCode           int
+	Duration           time.Duration
+	TimedOut           bool
+	OutputLimitReached bool
 }
 
 // StageOptions controls directory staging behavior.
@@ -169,6 +174,11 @@ type Capabilities struct {
 	// NewEngineWithCapabilities (issue #1845); other backends keep
 	// the zero value and fail closed.
 	SupportsCleanEnv bool
+	// SupportsMaxOutputBytes reports whether positive
+	// RunProgramSpec.MaxOutputBytes values are enforced as a hard,
+	// combined stdout and stderr limit while the program is running.
+	// The zero value is deliberately fail-closed.
+	SupportsMaxOutputBytes bool
 }
 
 // Engine is a backend that provides workspace and execution services.

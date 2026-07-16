@@ -34,6 +34,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/safety"
 )
 
 const (
@@ -76,6 +77,7 @@ type ExecTool struct {
 	// "eval curl ..." or "sh -c '...'".
 	allowedCmds []string
 	deniedCmds  []string
+	safetyGuard *safety.Guard
 
 	mu       sync.Mutex
 	sessions map[string]*execSession
@@ -86,6 +88,24 @@ type ExecTool struct {
 // WriteStdinTool sends additional stdin to a running workspace_exec session.
 type WriteStdinTool struct {
 	exec *ExecTool
+}
+
+// ToolPermissionPolicy lets framework observability suppress raw arguments
+// before a directly configured guard reaches Call.
+func (t *ExecTool) ToolPermissionPolicy() tool.PermissionPolicy {
+	if t == nil {
+		return nil
+	}
+	return t.safetyGuard
+}
+
+// ToolPermissionPolicy lets framework observability suppress raw arguments
+// before a directly configured guard reaches Call.
+func (t *WriteStdinTool) ToolPermissionPolicy() tool.PermissionPolicy {
+	if t == nil || t.exec == nil {
+		return nil
+	}
+	return t.exec.safetyGuard
 }
 
 // KillSessionTool terminates a running workspace_exec session.
@@ -177,6 +197,15 @@ func NewExecTool(
 	tl.loadAllowedCommandsFromEnv()
 	tl.loadDeniedCommandsFromEnv()
 	return tl
+}
+
+// WithSafetyGuard enables fail-closed pre-execution scanning and final-result
+// redaction for direct workspace tool calls. Framework users may instead set
+// the same guard as the invocation ToolPermissionPolicy.
+func WithSafetyGuard(guard *safety.Guard) func(*ExecTool) {
+	return func(t *ExecTool) {
+		t.safetyGuard = guard
+	}
 }
 
 // NewWriteStdinTool creates a tool for continuing or polling a running session.
@@ -569,21 +598,64 @@ func (t *KillSessionTool) Declaration() *tool.Declaration {
 
 // Call executes workspace_exec once or starts a resumable session.
 func (t *ExecTool) Call(ctx context.Context, args []byte) (any, error) {
-	if t == nil || t.resolver == nil {
+	if t == nil {
 		return nil, errors.New("workspace_exec is not configured")
 	}
 	in, err := parseExecInput(args)
 	if err != nil {
 		return nil, err
 	}
-	req, err := t.prepareExec(ctx, in)
+	guard := effectiveSafetyGuard(ctx, t.safetyGuard)
+	profile := effectiveRuntimeSafetyProfile(ctx, t.safetyGuard, t.Declaration().Name)
+	safetyArgs := args
+	if guard != nil {
+		safetyArgs = workspaceExecSafetyArguments(in, profile)
+	}
+	if t.safetyGuard != nil {
+		if result, blocked, err := checkSafetyGuard(
+			ctx, t.safetyGuard, t, t.Declaration(), safetyArgs,
+		); blocked {
+			return result, err
+		}
+	}
+	if t.resolver == nil {
+		return nil, errors.New("workspace_exec is not configured")
+	}
+	// Re-read both profiles after the direct permission check so an atomic
+	// reload cannot make execution use an older, less restrictive limit.
+	profile = effectiveRuntimeSafetyProfile(ctx, t.safetyGuard, t.Declaration().Name)
+	req, err := t.prepareExecWithProfile(ctx, in, guard, profile)
 	if err != nil {
 		return nil, err
 	}
+	var result any
 	if t.sessional {
-		return t.callSessional(ctx, req)
+		result, err = t.callSessional(ctx, req)
+	} else {
+		result, err = t.callNonSessional(ctx, req)
 	}
-	return t.callNonSessional(ctx, req)
+	return sanitizeSafetyResult(ctx, t.safetyGuard, t.Declaration(), safetyArgs, result, err)
+}
+
+func workspaceExecSafetyArguments(in execInput, profile safety.ToolProfile) []byte {
+	timeout := requestedExecTimeout(in)
+	if timeout <= 0 {
+		timeout = defaultWorkspaceExecTimeout
+		if profile.MaxTimeout > 0 && timeout > time.Duration(profile.MaxTimeout) {
+			timeout = time.Duration(profile.MaxTimeout)
+		}
+	}
+	data, _ := json.Marshal(map[string]any{
+		"command":          in.Command,
+		"cwd":              in.Cwd,
+		"env":              in.Env,
+		"stdin":            in.Stdin,
+		"timeout_sec":      int64(timeout / time.Second),
+		"max_output_bytes": profile.MaxOutputBytes,
+		"pty":              firstBoolValue(in.TTY, in.PTY),
+		"background":       in.Background,
+	})
+	return data
 }
 
 func parseExecInput(args []byte) (execInput, error) {
@@ -600,6 +672,20 @@ func parseExecInput(args []byte) (execInput, error) {
 func (t *ExecTool) prepareExec(
 	ctx context.Context,
 	in execInput,
+	guard *safety.Guard,
+) (execRequest, error) {
+	profile := safety.ToolProfile{}
+	if guard != nil {
+		profile = guard.ToolProfile(t.Declaration().Name)
+	}
+	return t.prepareExecWithProfile(ctx, in, guard, profile)
+}
+
+func (t *ExecTool) prepareExecWithProfile(
+	ctx context.Context,
+	in execInput,
+	guard *safety.Guard,
+	profile safety.ToolProfile,
 ) (execRequest, error) {
 	if err := t.checkCommandPolicy(in.Command); err != nil {
 		return execRequest{}, err
@@ -613,7 +699,11 @@ func (t *ExecTool) prepareExec(
 		return execRequest{}, err
 	}
 	policyActive := t.commandPolicy().Active()
-	if err := checkRunnerSupportsPolicy(eng, policyActive); err != nil {
+	hardenedExecution := policyActive || guard != nil
+	if err := checkRunnerSupportsPolicy(eng, hardenedExecution); err != nil {
+		return execRequest{}, err
+	}
+	if err := checkRunnerSupportsOutputLimit(eng, profile.MaxOutputBytes); err != nil {
 		return execRequest{}, err
 	}
 	ws, err := t.resolver.CreateWorkspace(ctx, eng, "workspace")
@@ -623,10 +713,7 @@ func (t *ExecTool) prepareExec(
 	if err := t.reconcileWorkspace(ctx, eng, ws); err != nil {
 		return execRequest{}, err
 	}
-	timeout := firstIntValue(in.TimeoutSec, in.TimeoutSecOld)
-	if timeout <= 0 {
-		timeout = in.Timeout
-	}
+	timeout := effectiveExecTimeout(in, profile)
 	return execRequest{
 		background: in.Background,
 		tty:        firstBoolValue(in.TTY, in.PTY),
@@ -634,15 +721,84 @@ func (t *ExecTool) prepareExec(
 		eng:        eng,
 		ws:         ws,
 		spec: codeexecutor.RunProgramSpec{
-			Cmd:      "sh",
-			Args:     shellArgsForPolicy(policyActive, in.Command),
-			Env:      envForPolicy(policyActive, in.Env),
-			CleanEnv: policyActive,
-			Cwd:      cwd,
-			Stdin:    in.Stdin,
-			Timeout:  execTimeout(timeout),
+			Cmd:            "sh",
+			Args:           shellArgsForPolicy(hardenedExecution, in.Command),
+			Env:            envForPolicy(hardenedExecution, in.Env),
+			CleanEnv:       hardenedExecution,
+			Cwd:            cwd,
+			Stdin:          in.Stdin,
+			Timeout:        timeout,
+			MaxOutputBytes: profile.MaxOutputBytes,
 		},
 	}, nil
+}
+
+func effectiveSafetyGuard(ctx context.Context, direct *safety.Guard) *safety.Guard {
+	if direct != nil {
+		return direct
+	}
+	guard, _ := tool.PermissionPolicyFromContext(ctx).(*safety.Guard)
+	return guard
+}
+
+func effectiveRuntimeSafetyProfile(
+	ctx context.Context,
+	direct *safety.Guard,
+	toolName string,
+) safety.ToolProfile {
+	var profile safety.ToolProfile
+	if direct != nil {
+		profile = direct.ToolProfile(toolName)
+	}
+	contextGuard, _ := tool.PermissionPolicyFromContext(ctx).(*safety.Guard)
+	if contextGuard != nil && contextGuard != direct {
+		profile = restrictRuntimeSafetyProfile(
+			profile, contextGuard.ToolProfile(toolName),
+		)
+	}
+	return profile
+}
+
+func restrictRuntimeSafetyProfile(a, b safety.ToolProfile) safety.ToolProfile {
+	a.MaxTimeout = minPositiveDuration(a.MaxTimeout, b.MaxTimeout)
+	a.MaxOutputBytes = minPositiveInt64(a.MaxOutputBytes, b.MaxOutputBytes)
+	return a
+}
+
+func minPositiveDuration(a, b safety.Duration) safety.Duration {
+	if a <= 0 || b > 0 && b < a {
+		return b
+	}
+	return a
+}
+
+func minPositiveInt64(a, b int64) int64 {
+	if a <= 0 || b > 0 && b < a {
+		return b
+	}
+	return a
+}
+
+func requestedExecTimeout(in execInput) time.Duration {
+	timeout := firstIntValue(in.TimeoutSec, in.TimeoutSecOld)
+	if timeout <= 0 {
+		timeout = in.Timeout
+	}
+	if timeout <= 0 {
+		return 0
+	}
+	return time.Duration(timeout) * time.Second
+}
+
+func effectiveExecTimeout(in execInput, profile safety.ToolProfile) time.Duration {
+	timeout := requestedExecTimeout(in)
+	if timeout <= 0 {
+		timeout = defaultWorkspaceExecTimeout
+	}
+	if profile.MaxTimeout > 0 && timeout > time.Duration(profile.MaxTimeout) {
+		return time.Duration(profile.MaxTimeout)
+	}
+	return timeout
 }
 
 // checkCommandPolicy enforces the optional allow/deny lists. When no
@@ -701,6 +857,19 @@ func checkRunnerSupportsPolicy(
 			"Either run on codeexecutor/local or drop the policy lists " +
 			"(WithWorkspaceExecAllowedCommands / " +
 			"WithWorkspaceExecDeniedCommands).",
+	)
+}
+
+func checkRunnerSupportsOutputLimit(eng codeexecutor.Engine, maxBytes int64) error {
+	if maxBytes <= 0 || eng == nil {
+		return nil
+	}
+	if eng.Describe().SupportsMaxOutputBytes {
+		return nil
+	}
+	return errors.New(
+		"workspace_exec: safety max_output_bytes requires a runtime " +
+			"that advertises hard combined-output limit support",
 	)
 }
 
@@ -860,15 +1029,24 @@ func (t *WriteStdinTool) Call(ctx context.Context, args []byte) (any, error) {
 	if sessionID == "" {
 		return nil, errors.New("session_id is required")
 	}
+	if result, blocked, err := checkSafetyGuard(
+		ctx, t.exec.safetyGuard, t, t.Declaration(), args,
+	); blocked {
+		return result, err
+	}
 
 	sess, err := t.exec.getSession(sessionID)
 	if err != nil {
-		return nil, err
+		return sanitizeSafetyResult(
+			ctx, t.exec.safetyGuard, t.Declaration(), args, nil, err,
+		)
 	}
 	appendNewline := firstBoolValue(in.AppendNewline, in.Submit)
 	if in.Chars != "" || appendNewline {
 		if err := sess.proc.Write(in.Chars, appendNewline); err != nil {
-			return nil, err
+			return sanitizeSafetyResult(
+				ctx, t.exec.safetyGuard, t.Declaration(), args, nil, err,
+			)
 		}
 	}
 
@@ -884,7 +1062,64 @@ func (t *WriteStdinTool) Call(ctx context.Context, args []byte) (any, error) {
 			out.SessionID = sessionID
 		}
 	}
-	return out, nil
+	return sanitizeSafetyResult(
+		ctx, t.exec.safetyGuard, t.Declaration(), args, out, nil,
+	)
+}
+
+func checkSafetyGuard(
+	ctx context.Context,
+	guard *safety.Guard,
+	t tool.Tool,
+	declaration *tool.Declaration,
+	args []byte,
+) (any, bool, error) {
+	if guard == nil {
+		return nil, false, nil
+	}
+	decision, err := guard.CheckToolPermission(ctx, &tool.PermissionRequest{
+		Tool: t, ToolName: declaration.Name, Declaration: declaration,
+		Arguments: args, Metadata: tool.MetadataOf(t),
+	})
+	if err != nil {
+		return nil, true, err
+	}
+	decision, err = tool.NormalizePermissionDecision(decision)
+	if err != nil {
+		return nil, true, err
+	}
+	if decision.Action == tool.PermissionActionAllow {
+		return nil, false, nil
+	}
+	return tool.PermissionResultFor(declaration.Name, decision), true, nil
+}
+
+func sanitizeSafetyResult(
+	ctx context.Context,
+	guard *safety.Guard,
+	declaration *tool.Declaration,
+	args []byte,
+	result any,
+	runErr error,
+) (any, error) {
+	if guard == nil {
+		return result, runErr
+	}
+	sanitized, err := guard.SanitizeToolResult(ctx, &tool.AfterToolArgs{
+		ToolName: declaration.Name, Declaration: declaration,
+		Arguments: args, Result: result, Error: runErr,
+	})
+	if err != nil {
+		return nil, err
+	}
+	sanitizedErr, err := guard.SanitizeToolError(ctx, &tool.AfterToolArgs{
+		ToolName: declaration.Name, Declaration: declaration,
+		Arguments: args, Result: sanitized, Error: runErr,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return sanitized, sanitizedErr
 }
 
 // Call terminates a running workspace_exec session.

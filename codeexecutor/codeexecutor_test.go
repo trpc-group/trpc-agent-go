@@ -11,12 +11,26 @@
 package codeexecutor_test
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 )
+
+func TestExecutionLimitsContextRoundTrip(t *testing.T) {
+	if _, ok := codeexecutor.ExecutionLimitsFromContext(context.Background()); ok {
+		t.Fatal("plain context unexpectedly has execution limits")
+	}
+	want := codeexecutor.ExecutionLimits{MaxTimeout: time.Second, MaxOutputBytes: 128}
+	got, ok := codeexecutor.ExecutionLimitsFromContext(
+		codeexecutor.WithExecutionLimits(context.Background(), want),
+	)
+	assert.True(t, ok)
+	assert.Equal(t, want, got)
+}
 
 func TestExtractCodeBlock(t *testing.T) {
 	delimiter := codeexecutor.CodeBlockDelimiter{

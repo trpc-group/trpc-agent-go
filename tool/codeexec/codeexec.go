@@ -14,9 +14,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/safety"
 )
 
 // Option configures the code execution tool.
@@ -26,6 +28,7 @@ type config struct {
 	name        string
 	description string
 	languages   []string
+	safetyGuard *safety.Guard
 }
 
 // WithName sets the tool name.
@@ -44,6 +47,12 @@ func WithLanguages(langs ...string) Option {
 		// Defensive copy to avoid caller mutation.
 		c.languages = append([]string(nil), langs...)
 	}
+}
+
+// WithSafetyGuard enables fail-closed scanning of decoded code blocks and
+// final-result redaction for direct tool calls.
+func WithSafetyGuard(guard *safety.Guard) Option {
+	return func(c *config) { c.safetyGuard = guard }
 }
 
 func defaultConfig() config {
@@ -77,6 +86,13 @@ func NewTool(exec codeexecutor.CodeExecutor, opts ...Option) tool.CallableTool {
 type executeCodeTool struct {
 	executor codeexecutor.CodeExecutor
 	cfg      config
+}
+
+func (t *executeCodeTool) ToolPermissionPolicy() tool.PermissionPolicy {
+	if t == nil {
+		return nil
+	}
+	return t.cfg.safetyGuard
 }
 
 // Declaration returns the tool's declaration.
@@ -212,19 +228,163 @@ func (t *executeCodeTool) Call(ctx context.Context, args []byte) (any, error) {
 		CodeBlocks:  blocks,
 		ExecutionID: aux.ExecutionID,
 	}
+	guard := effectiveCodeSafetyGuard(ctx, t.cfg.safetyGuard)
 
 	// Best-effort validation. We return it as structured tool output (instead of Go error)
 	// so the model can correct itself.
 	if len(input.CodeBlocks) == 0 {
-		return codeexecutor.CodeExecutionResult{Output: "Error: missing code_blocks"}, nil
+		return t.finalizeSafetyResult(ctx, args, codeexecutor.CodeExecutionResult{
+			Output: "Error: missing code_blocks",
+		}, nil)
 	}
 	for i, b := range input.CodeBlocks {
 		if b.Language == "" || !t.isSupportedLanguage(b.Language) {
-			return codeexecutor.CodeExecutionResult{Output: fmt.Sprintf("Error: unsupported language: %d: %s", i, b.Language)}, nil
+			return t.finalizeSafetyResult(ctx, args, codeexecutor.CodeExecutionResult{
+				Output: fmt.Sprintf("Error: unsupported language: %d: %s", i, b.Language),
+			}, nil)
 		}
 	}
 
-	return t.executor.ExecuteCode(ctx, input)
+	if result, blocked, err := t.checkSafetyGuard(ctx, input); blocked {
+		return result, err
+	}
+	profile := effectiveCodeRuntimeSafetyProfile(ctx, t.cfg.safetyGuard, t.cfg.name)
+	var cancel context.CancelFunc
+	if guard != nil {
+		ctx = codeexecutor.WithCleanExecutionEnv(ctx)
+		ctx = codeexecutor.WithExecutionLimits(ctx, codeexecutor.ExecutionLimits{
+			MaxTimeout: time.Duration(profile.MaxTimeout), MaxOutputBytes: profile.MaxOutputBytes,
+		})
+		if profile.MaxTimeout > 0 {
+			ctx, cancel = context.WithTimeout(ctx, time.Duration(profile.MaxTimeout))
+			defer cancel()
+		}
+	}
+
+	result, runErr := t.executor.ExecuteCode(ctx, input)
+	result = capCodeExecutionResult(result, profile.MaxOutputBytes)
+	return t.finalizeSafetyResult(ctx, args, result, runErr)
+}
+
+func (t *executeCodeTool) finalizeSafetyResult(
+	ctx context.Context,
+	args []byte,
+	result codeexecutor.CodeExecutionResult,
+	runErr error,
+) (any, error) {
+	if t.cfg.safetyGuard == nil {
+		return result, runErr
+	}
+	sanitized, err := t.cfg.safetyGuard.SanitizeToolResult(ctx, &tool.AfterToolArgs{
+		ToolName: t.cfg.name, Declaration: t.Declaration(),
+		Arguments: args, Result: result, Error: runErr,
+	})
+	if err != nil {
+		return nil, err
+	}
+	sanitizedErr, err := t.cfg.safetyGuard.SanitizeToolError(ctx, &tool.AfterToolArgs{
+		ToolName: t.cfg.name, Declaration: t.Declaration(),
+		Arguments: args, Result: sanitized, Error: runErr,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return sanitized, sanitizedErr
+}
+
+func effectiveCodeSafetyGuard(ctx context.Context, direct *safety.Guard) *safety.Guard {
+	if direct != nil {
+		return direct
+	}
+	guard, _ := tool.PermissionPolicyFromContext(ctx).(*safety.Guard)
+	return guard
+}
+
+func effectiveCodeRuntimeSafetyProfile(
+	ctx context.Context,
+	direct *safety.Guard,
+	toolName string,
+) safety.ToolProfile {
+	var profile safety.ToolProfile
+	if direct != nil {
+		profile = direct.ToolProfile(toolName)
+	}
+	contextGuard, _ := tool.PermissionPolicyFromContext(ctx).(*safety.Guard)
+	if contextGuard != nil && contextGuard != direct {
+		other := contextGuard.ToolProfile(toolName)
+		profile.MaxTimeout = minPositiveCodeDuration(profile.MaxTimeout, other.MaxTimeout)
+		profile.MaxOutputBytes = minPositiveCodeInt64(profile.MaxOutputBytes, other.MaxOutputBytes)
+	}
+	return profile
+}
+
+func minPositiveCodeDuration(a, b safety.Duration) safety.Duration {
+	if a <= 0 || b > 0 && b < a {
+		return b
+	}
+	return a
+}
+
+func minPositiveCodeInt64(a, b int64) int64 {
+	if a <= 0 || b > 0 && b < a {
+		return b
+	}
+	return a
+}
+
+func capCodeExecutionResult(result codeexecutor.CodeExecutionResult, maxBytes int64) codeexecutor.CodeExecutionResult {
+	if maxBytes <= 0 {
+		return result
+	}
+	remaining := maxBytes
+	result.Output, remaining, _ = capCodeExecutionText(result.Output, remaining)
+	for i := range result.OutputFiles {
+		var truncated bool
+		result.OutputFiles[i].Content, remaining, truncated = capCodeExecutionText(
+			result.OutputFiles[i].Content, remaining,
+		)
+		result.OutputFiles[i].Truncated = result.OutputFiles[i].Truncated || truncated
+	}
+	return result
+}
+
+func capCodeExecutionText(value string, remaining int64) (string, int64, bool) {
+	if int64(len(value)) <= remaining {
+		return value, remaining - int64(len(value)), false
+	}
+	if remaining <= 0 {
+		return "", 0, value != ""
+	}
+	return value[:remaining], 0, true
+}
+
+func (t *executeCodeTool) checkSafetyGuard(
+	ctx context.Context,
+	input codeexecutor.CodeExecutionInput,
+) (any, bool, error) {
+	if t.cfg.safetyGuard == nil {
+		return nil, false, nil
+	}
+	normalizedArgs, err := json.Marshal(input)
+	if err != nil {
+		return nil, true, fmt.Errorf("codeexec: encode decoded input for safety scan: %w", err)
+	}
+	declaration := t.Declaration()
+	decision, err := t.cfg.safetyGuard.CheckToolPermission(ctx, &tool.PermissionRequest{
+		Tool: t, ToolName: t.cfg.name, Declaration: declaration,
+		Arguments: normalizedArgs, Metadata: tool.MetadataOf(t),
+	})
+	if err != nil {
+		return nil, true, err
+	}
+	decision, err = tool.NormalizePermissionDecision(decision)
+	if err != nil {
+		return nil, true, err
+	}
+	if decision.Action == tool.PermissionActionAllow {
+		return nil, false, nil
+	}
+	return tool.PermissionResultFor(t.cfg.name, decision), true, nil
 }
 
 func (t *executeCodeTool) isSupportedLanguage(language string) bool {
