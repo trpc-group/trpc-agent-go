@@ -96,7 +96,18 @@ func appendUntrackedDiffs(ctx context.Context, repo string, filePaths []string, 
 			continue
 		}
 		name := filepath.ToSlash(string(rawName))
-		content, err := os.ReadFile(filepath.Join(repo, filepath.FromSlash(name)))
+		path := filepath.Join(repo, filepath.FromSlash(name))
+		info, err := os.Stat(path)
+		if err != nil {
+			return fmt.Errorf("stat untracked file %q: %w", name, err)
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("untracked file %q is not a regular file", name)
+		}
+		if info.Size() > int64(maxInputDiffBytes-output.Len()) {
+			return fmt.Errorf("git diff exceeds %d-byte limit", maxInputDiffBytes)
+		}
+		content, err := os.ReadFile(path)
 		if err != nil {
 			return fmt.Errorf("read untracked file %q: %w", name, err)
 		}

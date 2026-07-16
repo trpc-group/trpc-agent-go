@@ -81,3 +81,27 @@ func TestLoadReviewInputIncludesUntrackedFiles(t *testing.T) {
 	require.Contains(t, string(data), "new file mode")
 	require.Contains(t, string(data), "+var apiKey")
 }
+
+func TestLoadReviewInputRejectsOversizedUntrackedFileBeforeRead(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	repo := t.TempDir()
+	runGit := func(args ...string) {
+		cmd := exec.Command("git", append([]string{"-c", "user.name=test", "-c", "user.email=test@example.com"}, args...)...)
+		cmd.Dir = repo
+		require.NoError(t, cmd.Run())
+	}
+	runGit("init")
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "README.md"), []byte("tracked\n"), 0o600))
+	runGit("add", "README.md")
+	runGit("commit", "-m", "initial")
+	path := filepath.Join(repo, "oversized.go")
+	file, err := os.Create(path)
+	require.NoError(t, err)
+	require.NoError(t, file.Truncate(maxInputDiffBytes+1))
+	require.NoError(t, file.Close())
+
+	_, _, err = LoadReviewInput(context.Background(), ReviewInput{RepoPath: repo})
+	require.ErrorContains(t, err, "exceeds")
+}
