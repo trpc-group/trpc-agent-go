@@ -77,6 +77,17 @@ func TestQualifyOperationWithGroundedTopic(t *testing.T) {
 			want: "外卖: 上周用了美团三次。",
 		},
 		{
+			name: "prefers a grounded named entity over a generic category",
+			source: "I use the Cartwheel app from Target. I redeemed a coupon. " +
+				"Many retailers, like Target, send offers by email.",
+			op: &Operation{
+				Type:   OperationAdd,
+				Memory: "Redeemed a $5 coupon on coffee creamer.",
+				Topics: []string{"coupon", "coffee creamer", "savings", "Target"},
+			},
+			want: "Target: Redeemed a $5 coupon on coffee creamer.",
+		},
+		{
 			name:   "ignores destructive operations",
 			source: "food delivery Domino's Pizza",
 			op: &Operation{

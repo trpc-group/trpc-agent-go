@@ -200,15 +200,38 @@ func qualifyOperationWithGroundedTopic(source string, operation *Operation) {
 		return
 	}
 
+	var selected string
+	selectedPriority := -1
 	for _, topic := range operation.Topics {
 		topic = strings.TrimSpace(topic)
 		if topic == "" || containsTopic(operation.Memory, topic) ||
 			!containsTopic(source, topic) {
 			continue
 		}
-		operation.Memory = topic + ": " + strings.TrimSpace(operation.Memory)
-		return
+		priority := groundedTopicPriority(source, topic)
+		if selected == "" || priority > selectedPriority {
+			selected = topic
+			selectedPriority = priority
+		}
 	}
+	if selected != "" {
+		operation.Memory = selected + ": " +
+			strings.TrimSpace(operation.Memory)
+	}
+}
+
+func groundedTopicPriority(source, topic string) int {
+	// Exact-case capitalization is a conservative named-entity signal. Equal
+	// priorities preserve the extractor's topic order.
+	if !strings.Contains(source, topic) {
+		return 0
+	}
+	for _, r := range topic {
+		if unicode.IsUpper(r) {
+			return 1
+		}
+	}
+	return 0
 }
 
 func conversationSourceText(messages []model.Message) string {
