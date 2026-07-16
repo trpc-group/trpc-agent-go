@@ -371,6 +371,33 @@ func TestParseSandboxFindings(t *testing.T) {
 	}
 }
 
+func TestSandboxReviewItemsSuppressesByCommandAndArgs(t *testing.T) {
+	runs := []SandboxRun{
+		{
+			Command:   "go",
+			Args:      []string{"test", "./..."},
+			Status:    "failed",
+			ErrorType: "non_zero_exit",
+			Stderr:    "pkg/a.go:12: test failed",
+		},
+		{
+			Command:   "go",
+			Args:      []string{"vet", "./..."},
+			Status:    "failed",
+			ErrorType: "non_zero_exit",
+			Stderr:    "vet failed without file location",
+		},
+	}
+	parsed := ParseSandboxFindings(runs)
+	items := sandboxReviewItems(runs, parsed)
+	if len(items) != 1 {
+		t.Fatalf("human review items = %d, want 1: parsed=%+v items=%+v", len(items), parsed, items)
+	}
+	if !strings.Contains(items[0].Evidence, "go vet ./...") {
+		t.Fatalf("expected unsuppressed go vet evidence, got %+v", items[0])
+	}
+}
+
 func hasRule(findings []Finding, ruleID string) bool {
 	for _, f := range findings {
 		if f.RuleID == ruleID {
@@ -779,6 +806,16 @@ func TestPrepareSandboxBuildContextEnablesStaticcheckInstall(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "ARG INSTALL_STATICCHECK=true") {
 		t.Fatalf("staticcheck install override missing from Dockerfile:\n%s", data)
+	}
+}
+
+func TestSandboxDockerfileDoesNotInstallStaticcheckByDefault(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(exampleDir(), "sandbox", "Dockerfile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "ARG INSTALL_STATICCHECK=false") {
+		t.Fatalf("staticcheck should be opt-in by default:\n%s", data)
 	}
 }
 

@@ -39,12 +39,16 @@ func ParseSandboxFindings(runs []SandboxRun) []Finding {
 				Evidence:       redactSecrets(match[0]),
 				Recommendation: sandboxRecommendation(run.Command),
 				Confidence:     0.82,
-				Source:         "sandbox:" + run.Command,
+				Source:         "sandbox:" + sandboxRunKey(run),
 				RuleID:         sandboxRuleID(run.Command, msg),
 			})
 		}
 	}
 	return DedupeFindings(findings)
+}
+
+func sandboxRunKey(run SandboxRun) string {
+	return strings.TrimSpace(run.Command + " " + strings.Join(run.Args, " "))
 }
 
 func sandboxSeverity(cmd, msg string) Severity {

@@ -413,7 +413,7 @@ func sandboxReviewItems(runs []SandboxRun, parsed []Finding) []Finding {
 		if run.Status == "success" || run.Status == "skipped" {
 			continue
 		}
-		if parsedByCommand[run.Command] {
+		if parsedByCommand[sandboxRunKey(run)] {
 			continue
 		}
 		out = append(out, Finding{
