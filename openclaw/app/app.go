@@ -513,12 +513,14 @@ const (
 
 	defaultExecResultOutputChars = 20_000
 
-	deepSeekAPIHost = "api.deepseek.com"
-	qwenAPIHost     = "dashscope.aliyuncs.com"
-	hunyuanAPIHost  = "api.hunyuan.cloud.tencent.com"
-	glmAPIHost      = "open.bigmodel.cn"
-	kimiAPIHost     = "api.moonshot.ai"
-	kimiCNAPIHost   = "api.moonshot.cn"
+	deepSeekAPIHost  = "api.deepseek.com"
+	qwenAPIHost      = "dashscope.aliyuncs.com"
+	hunyuanAPIHost   = "api.hunyuan.cloud.tencent.com"
+	glmAPIHost       = "open.bigmodel.cn"
+	miniMaxAPIHost   = "api.minimax.io"
+	miniMaxCNAPIHost = "api.minimaxi.com"
+	kimiAPIHost      = "api.moonshot.ai"
+	kimiCNAPIHost    = "api.moonshot.cn"
 
 	openAIAPIKeyEnvName  = "OPENAI_API_KEY"
 	openAIBaseURLEnvName = "OPENAI_BASE_URL"
@@ -4034,6 +4036,7 @@ func parseOpenAIVariant(
 		openai.VariantHunyuan,
 		openai.VariantQwen,
 		openai.VariantGLM,
+		openai.VariantMiniMax,
 		openai.VariantKimi:
 		return variant, nil
 	default:
@@ -4089,6 +4092,9 @@ func inferOpenAIVariant(baseURL string) openai.Variant {
 		return openai.VariantHunyuan
 	case strings.EqualFold(host, glmAPIHost):
 		return openai.VariantGLM
+	case strings.EqualFold(host, miniMaxAPIHost),
+		strings.EqualFold(host, miniMaxCNAPIHost):
+		return openai.VariantMiniMax
 	case strings.EqualFold(host, kimiAPIHost),
 		strings.EqualFold(host, kimiCNAPIHost):
 		return openai.VariantKimi
