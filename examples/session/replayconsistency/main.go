@@ -5,6 +5,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -22,24 +23,42 @@ func main() {
 		panic(e)
 	}
 	defer os.RemoveAll(tmp)
-	report := Report{Cases: len(Cases()), Backends: []string{"inmemory", "json-persistent"}}
+	report := Report{Cases: len(Cases()), Backends: []string{"inmemory-services", "sqlite-services"}}
 	for _, tc := range Cases() {
 		want := tc.Build()
-		mem := &memoryBackend{name: "inmemory"}
-		disk := NewJSONBackend(filepath.Join(tmp, tc.Name+".json"))
-		_ = mem.Save(want)
-		actual := clone(want)
-		if *inject {
-			tc.Mutate(&actual)
+		mem := NewInMemoryBackend()
+		disk, err := NewSQLiteBackend(filepath.Join(tmp, tc.Name))
+		if err != nil {
+			panic(err)
 		}
-		_ = disk.Save(actual)
-		left, _ := mem.Load()
-		right, _ := disk.Load()
+		if err := mem.Save(want); err != nil {
+			panic(err)
+		}
+		if err := disk.Save(want); err != nil {
+			panic(err)
+		}
+		left, err := mem.Load()
+		if err != nil {
+			panic(err)
+		}
+		right, err := disk.Load()
+		if err != nil {
+			panic(err)
+		}
+		if *inject {
+			// Corrupt the observed backend result, not the standardized input. This
+			// models data loss/corruption after real service operations and avoids
+			// having backend validation silently repair the injected fault.
+			tc.Mutate(&right)
+		}
 		diffs := Compare(tc.Name, disk.Name(), left, right)
 		if *inject && len(diffs) > 0 {
 			report.DetectedInjected++
 		}
 		report.Differences = append(report.Differences, diffs...)
+		if err := errors.Join(mem.Close(), disk.Close()); err != nil {
+			panic(err)
+		}
 	}
 	report.DurationMS = time.Since(started).Milliseconds()
 	data, _ := json.MarshalIndent(report, "", "  ")

@@ -4,7 +4,6 @@
 package main
 
 import (
-	"path/filepath"
 	"testing"
 )
 
@@ -25,18 +24,36 @@ func TestAllInjectedDifferencesDetected(t *testing.T) {
 		}
 	}
 }
-func TestJSONBackend(t *testing.T) {
-	b := NewJSONBackend(filepath.Join(t.TempDir(), "snapshot.json"))
-	want := Cases()[5].Build()
-	if e := b.Save(want); e != nil {
-		t.Fatal(e)
-	}
-	got, e := b.Load()
-	if e != nil {
-		t.Fatal(e)
-	}
-	if d := Compare("roundtrip", b.Name(), want, got); len(d) > 0 {
-		t.Fatal(d)
+func TestServiceBackendsReplayThroughRealAPIs(t *testing.T) {
+	for _, tc := range Cases() {
+		memoryBackend := NewInMemoryBackend()
+		sqliteBackend, err := NewSQLiteBackend(t.TempDir() + "/" + tc.Name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := memoryBackend.Save(tc.Build()); err != nil {
+			t.Fatal(err)
+		}
+		if err := sqliteBackend.Save(tc.Build()); err != nil {
+			t.Fatal(err)
+		}
+		left, err := memoryBackend.Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		right, err := sqliteBackend.Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if diffs := Compare(tc.Name, sqliteBackend.Name(), left, right); len(diffs) != 0 {
+			t.Fatalf("%s backend mismatch: %+v", tc.Name, diffs)
+		}
+		if err := memoryBackend.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := sqliteBackend.Close(); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 func TestNormalization(t *testing.T) {

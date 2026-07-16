@@ -9,10 +9,8 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"sort"
 	"strings"
-	"sync"
 )
 
 type Event struct {
@@ -68,45 +66,9 @@ type Backend interface {
 	Name() string
 	Save(Snapshot) error
 	Load() (Snapshot, error)
-}
-type memoryBackend struct {
-	name  string
-	value Snapshot
+	Close() error
 }
 
-func (b *memoryBackend) Name() string            { return b.name }
-func (b *memoryBackend) Save(v Snapshot) error   { b.value = clone(v); return nil }
-func (b *memoryBackend) Load() (Snapshot, error) { return clone(b.value), nil }
-
-type JSONBackend struct {
-	name, path string
-	mu         sync.Mutex
-}
-
-func NewJSONBackend(path string) *JSONBackend {
-	return &JSONBackend{name: "json-persistent", path: path}
-}
-func (b *JSONBackend) Name() string { return b.name }
-func (b *JSONBackend) Save(v Snapshot) error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	data, e := json.Marshal(v)
-	if e != nil {
-		return e
-	}
-	return os.WriteFile(b.path, data, 0o600)
-}
-func (b *JSONBackend) Load() (Snapshot, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	var v Snapshot
-	data, e := os.ReadFile(b.path)
-	if e != nil {
-		return v, e
-	}
-	e = json.Unmarshal(data, &v)
-	return v, e
-}
 func clone(v Snapshot) Snapshot {
 	data, _ := json.Marshal(v)
 	var out Snapshot
@@ -129,9 +91,18 @@ func Cases() []ReplayCase {
 			return base("s2", Event{Seq: 1, Role: "user", Content: "one"}, Event{Seq: 2, Role: "assistant", Content: "1"}, Event{Seq: 3, Role: "user", Content: "two"})
 		}, func(s *Snapshot) { s.Events[2].Seq = 2 }},
 		{"tool-call", func() Snapshot {
-			s := base("s3", Event{Seq: 1, Role: "assistant", Tool: "weather", Args: map[string]any{"city": "SZ"}, Extensions: map[string]any{"call_id": "c1"}}, Event{Seq: 2, Role: "tool", Tool: "weather", Response: map[string]any{"temp": 30}})
+			s := base("s3",
+				Event{Seq: 1, Author: "user", Role: "user", Content: "weather in Shenzhen"},
+				Event{Seq: 2, Author: "agent", Role: "assistant", Tool: "weather", Args: map[string]any{"city": "SZ"}, Extensions: map[string]any{"call_id": "c1"}},
+				Event{Seq: 3, Author: "tool", Role: "tool", Tool: "weather", Response: map[string]any{"temp": 30}},
+			)
 			return s
-		}, func(s *Snapshot) { s.Events[0].Args["city"] = "BJ" }},
+		}, func(s *Snapshot) {
+			if s.Events[1].Args == nil {
+				s.Events[1].Args = map[string]any{}
+			}
+			s.Events[1].Args["city"] = "BJ"
+		}},
 		{"state-updates", func() Snapshot { s := base("s4"); s.State = map[string]any{"count": 2, "keep": true}; return s }, func(s *Snapshot) { s.State["count"] = 1 }},
 		{"memory", func() Snapshot {
 			s := base("s5")
@@ -139,12 +110,12 @@ func Cases() []ReplayCase {
 			return s
 		}, func(s *Snapshot) { s.Memories[0].Content = "likes coffee" }},
 		{"summary-update", func() Snapshot {
-			s := base("s6")
+			s := base("s6", Event{Seq: 1, Author: "user", Role: "user", Content: "summarize this", FilterKey: "all"})
 			s.Summaries = []Summary{{ID: "sum1", SessionID: "s6", FilterKey: "all", Text: "latest summary", Version: 2}}
 			return s
 		}, func(s *Snapshot) { s.Summaries[0].Text = "old summary" }},
 		{"summary-truncation", func() Snapshot {
-			s := base("s7", Event{Seq: 10, Role: "assistant", Content: "retained"}, Event{Seq: 11, Role: "user", Content: "new"})
+			s := base("s7", Event{Seq: 10, Author: "agent", Role: "assistant", Content: "retained", FilterKey: "conversation"}, Event{Seq: 11, Author: "user", Role: "user", Content: "new", FilterKey: "conversation"})
 			s.Summaries = []Summary{{ID: "sum2", SessionID: "s7", FilterKey: "conversation", Text: "events 1-9", Version: 1}}
 			return s
 		}, func(s *Snapshot) { s.Summaries = nil }},
@@ -154,10 +125,14 @@ func Cases() []ReplayCase {
 			return s
 		}, func(s *Snapshot) { s.Tracks[0].Error = "timeout" }},
 		{"concurrent-order", func() Snapshot {
-			return base("s9", Event{Seq: 2, Branch: "tool-b", Content: "b"}, Event{Seq: 1, Branch: "tool-a", Content: "a"})
-		}, func(s *Snapshot) { s.Events[0].Seq = 1 }},
+			return base("s9",
+				Event{Seq: 0, Author: "user", Role: "user", Content: "start concurrent tools"},
+				Event{Seq: 2, Author: "agent-b", Role: "assistant", Branch: "tool-b", Content: "b"},
+				Event{Seq: 1, Author: "agent-a", Role: "assistant", Branch: "tool-a", Content: "a"},
+			)
+		}, func(s *Snapshot) { s.Events[1].Seq = 1 }},
 		{"retry-recovery", func() Snapshot {
-			s := base("s10", Event{ID: "stable", Seq: 1, Content: "once"})
+			s := base("s10", Event{ID: "stable", Seq: 1, Author: "user", Role: "user", Content: "once"})
 			s.State = map[string]any{"committed": true}
 			s.Memories = []Memory{{ID: "m10", Content: "once", Scope: "session"}}
 			return s
