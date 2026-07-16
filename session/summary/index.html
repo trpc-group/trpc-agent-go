@@ -3926,7 +3926,7 @@
 </span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithChecksAny</span><span class="p">(</span>
 </span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13"></a><span class="w">        </span><span class="nx">summary</span><span class="p">.</span><span class="nx">CheckEventThreshold</span><span class="p">(</span><span class="mi">20</span><span class="p">),</span>
 </span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14"></a><span class="w">        </span><span class="nx">summary</span><span class="p">.</span><span class="nx">CheckTokenThreshold</span><span class="p">(</span><span class="mi">4000</span><span class="p">),</span>
-</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15"></a><span class="w">        </span><span class="nx">summary</span><span class="p">.</span><span class="nx">CheckTimeThreshold</span><span class="p">(</span><span class="mi">5</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Minute</span><span class="p">),</span><span class="w"> </span><span class="c1">// Evaluated on summary check; compares the checked session&#39;s last event (normally the latest unsummarized event in delta flow)</span>
+</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15"></a><span class="w">        </span><span class="nx">summary</span><span class="p">.</span><span class="nx">CheckTimeThreshold</span><span class="p">(</span><span class="mi">5</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Minute</span><span class="p">),</span><span class="w"> </span><span class="c1">// Runner path: trigger when the idle gap before the next request exceeds 5 minutes</span>
 </span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16"></a><span class="w">    </span><span class="p">),</span>
 </span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithMaxSummaryWords</span><span class="p">(</span><span class="mi">200</span><span class="p">),</span>
 </span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18"></a><span class="p">)</span>
@@ -4481,7 +4481,7 @@ the caller.</p>
 </tr>
 <tr>
 <td><code>WithTimeThreshold(interval time.Duration)</code></td>
-<td>Evaluated during summary checks; wraps <code>CheckTimeThreshold</code> and triggers when the checked session's last event is older than the interval</td>
+<td>In the Runner path, triggers when the idle gap before the current top-level request exceeds the interval; standalone evaluation falls back to last-event age</td>
 </tr>
 </tbody>
 </table>
@@ -4901,7 +4901,7 @@ meaning:</p>
 </tr>
 <tr>
 <td><code>CheckTimeThreshold(interval time.Duration)</code></td>
-<td>Returns true when the checked session's last event is older than the interval</td>
+<td>In the Runner summary path, checks the idle gap before the current top-level request; direct calls without a Runner observation retain the last-event-age fallback</td>
 </tr>
 <tr>
 <td><code>CheckTokenThreshold(tokenCount int)</code></td>
@@ -5255,10 +5255,10 @@ and install it once during application initialization with
 <li>Event count exceeds threshold (<code>WithEventThreshold</code>)</li>
 <li>Token count exceeds threshold (<code>WithTokenThreshold</code>)</li>
 <li>Token count exceeds the configured ratio of the active model's context window (<code>WithContextThreshold</code>)</li>
-<li>On a summary check, the checked session's last event is older than the interval (<code>WithTimeThreshold</code>)</li>
+<li>The idle gap before the current top-level request exceeds the interval (<code>WithTimeThreshold</code> in the Runner path)</li>
 <li>Custom combined conditions met (<code>WithChecksAny</code> / <code>WithChecksAll</code>)</li>
 </ul>
-<p><code>WithTimeThreshold</code> is not a standalone background timer. The condition is only evaluated when a summary check runs, typically after a conversation turn completes or when you call summary APIs manually. It checks the last event of the session being evaluated; in the Runner's normal delta-summary flow, that session contains only pending events, so this effectively means the latest unsummarized event. For example, <code>5*time.Minute</code> means "on the next summary check, if the checked session's last event is already older than 5 minutes, summarize now."</p>
+<p><code>WithTimeThreshold</code> is not a standalone background timer. In the automatic Runner path, the framework records when a top-level request arrives and compares that immutable time with the previous relevant event in the same summary scope. For example, <code>5*time.Minute</code> means "when the next top-level request arrives after more than five minutes of scoped inactivity, its summary check may trigger." Model latency and async worker queue time do not count toward the gap. Direct checker or summary API calls without a Runner request observation retain the legacy last-event-age behavior.</p>
 <h3 id="same-run-sync-summary-for-long-react-loops">Same-Run Sync Summary for Long ReAct Loops</h3>
 <p>The default automatic path is asynchronous: after the Runner appends a
 qualifying complete response event, such as a <code>tool result</code> or final assistant
@@ -6164,7 +6164,7 @@ cascade:</p>
 </span><span id="__span-44-25"><a id="__codelineno-44-25" name="__codelineno-44-25"></a><span class="w">        </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithChecksAny</span><span class="p">(</span>
 </span><span id="__span-44-26"><a id="__codelineno-44-26" name="__codelineno-44-26"></a><span class="w">            </span><span class="nx">summary</span><span class="p">.</span><span class="nx">CheckEventThreshold</span><span class="p">(</span><span class="mi">20</span><span class="p">),</span>
 </span><span id="__span-44-27"><a id="__codelineno-44-27" name="__codelineno-44-27"></a><span class="w">            </span><span class="nx">summary</span><span class="p">.</span><span class="nx">CheckTokenThreshold</span><span class="p">(</span><span class="mi">4000</span><span class="p">),</span>
-</span><span id="__span-44-28"><a id="__codelineno-44-28" name="__codelineno-44-28"></a><span class="w">            </span><span class="nx">summary</span><span class="p">.</span><span class="nx">CheckTimeThreshold</span><span class="p">(</span><span class="mi">5</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Minute</span><span class="p">),</span><span class="w"> </span><span class="c1">// Evaluated on summary check; compares the checked session&#39;s last event (normally the latest unsummarized event in delta flow)</span>
+</span><span id="__span-44-28"><a id="__codelineno-44-28" name="__codelineno-44-28"></a><span class="w">            </span><span class="nx">summary</span><span class="p">.</span><span class="nx">CheckTimeThreshold</span><span class="p">(</span><span class="mi">5</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Minute</span><span class="p">),</span><span class="w"> </span><span class="c1">// Runner path: trigger when the idle gap before the next request exceeds 5 minutes</span>
 </span><span id="__span-44-29"><a id="__codelineno-44-29" name="__codelineno-44-29"></a><span class="w">        </span><span class="p">),</span>
 </span><span id="__span-44-30"><a id="__codelineno-44-30" name="__codelineno-44-30"></a><span class="w">    </span><span class="p">)</span>
 </span><span id="__span-44-31"><a id="__codelineno-44-31" name="__codelineno-44-31"></a>
@@ -6226,7 +6226,7 @@ cascade:</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="July 16, 2026 02:51:34 UTC">2026-07-16 02:51:34</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="July 16, 2026 02:52:02 UTC">2026-07-16 02:52:02</span>
   </span>
 
     
