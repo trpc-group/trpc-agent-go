@@ -56,10 +56,9 @@ func TestRegressionLoopScenariosUseEvaluationAndPromptIter(t *testing.T) {
 				t.Fatalf("standard Evaluation assets were not executed: train=%d validation=%d",
 					len(result.BaselineTrain.Cases), len(result.BaselineValidation.Cases))
 			}
-			if attributionCount(result.AttributionCounts) != 4 {
-				t.Fatalf("failure attribution statistics are incomplete: %v", result.AttributionCounts)
-			}
-			if !result.Usage.Complete || result.Usage.Source != "deterministic_example" || result.Usage.Calls == 0 {
+			assertAttributionPhases(t, result)
+			if !result.Usage.Complete || result.Usage.TelemetrySource != "promptiter_engine" ||
+				result.Usage.PricingSource != "deterministic_example_zero_cost" || result.Usage.Calls == 0 {
 				t.Fatalf("full-pipeline usage is incomplete: %+v", result.Usage)
 			}
 			if result.PromptIter == nil || result.PromptIter.NumRuns != result.Spec.Runtime.NumRuns {
@@ -71,6 +70,10 @@ func TestRegressionLoopScenariosUseEvaluationAndPromptIter(t *testing.T) {
 			candidate := result.Candidates[0]
 			if !candidate.PromptIterAccepted || candidate.Train == nil || candidate.TrainDelta == nil {
 				t.Fatalf("PromptIter round or reused candidate-train evidence missing: %+v", candidate)
+			}
+			if !candidate.RoundUsage.Complete || !candidate.CumulativeUsage.Complete ||
+				candidate.RoundUsage.Calls == 0 || candidate.CumulativeUsage.Calls <= candidate.RoundUsage.Calls {
+				t.Fatalf("candidate resource accounting is incomplete: %+v", candidate)
 			}
 			assertCompleteSnapshot(t, "baseline train", result.BaselineTrain, result.Spec.Runtime.NumRuns)
 			assertCompleteSnapshot(t, "baseline validation", result.BaselineValidation, result.Spec.Runtime.NumRuns)
@@ -210,8 +213,54 @@ func TestEvaluateContractRejectsUnexpectedAndExtraToolCalls(t *testing.T) {
 func normalizeRunResult(value regression.RunResult) regression.RunResult {
 	value.StartedAt = time.Time{}
 	value.EndedAt = time.Time{}
-	value.Usage.Latency = 0
+	value.Usage.PromptIterLatency = 0
+	for index := range value.Candidates {
+		value.Candidates[index].RoundUsage.PromptIterLatency = 0
+		value.Candidates[index].CumulativeUsage.PromptIterLatency = 0
+	}
 	return value
+}
+
+func assertAttributionPhases(t *testing.T, result *regression.RunResult) {
+	t.Helper()
+	actual := make(map[regression.AttributionPhase]int)
+	for _, attribution := range result.Attributions {
+		actual[attribution.Phase]++
+	}
+	expected := map[regression.AttributionPhase]int{
+		regression.AttributionBaselineTrain:      failedCaseCount(result.BaselineTrain),
+		regression.AttributionBaselineValidation: failedCaseCount(result.BaselineValidation),
+	}
+	for _, candidate := range result.Candidates {
+		expected[regression.AttributionCandidateTrain] += failedCaseCount(candidate.Train)
+		expected[regression.AttributionCandidateValidation] += failedCaseCount(candidate.Validation)
+	}
+	for phase, count := range expected {
+		if actual[phase] != count {
+			t.Fatalf("failure attribution phase %q count = %d, want %d: %+v",
+				phase, actual[phase], count, actual)
+		}
+	}
+	if attributionCount(result.AttributionCounts) != len(result.Attributions) {
+		t.Fatalf("attribution counts do not match results: counts=%v results=%d",
+			result.AttributionCounts, len(result.Attributions))
+	}
+}
+
+func failedCaseCount(snapshot *regression.EvaluationSnapshot) int {
+	if snapshot == nil {
+		return 0
+	}
+	count := 0
+	for _, result := range snapshot.Cases {
+		for _, metric := range result.Metrics {
+			if !metric.Passed {
+				count++
+				break
+			}
+		}
+	}
+	return count
 }
 
 func assertProgressiveSuccess(t *testing.T, result *regression.RunResult) {

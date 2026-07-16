@@ -719,6 +719,7 @@ func TestRunObserverReceivesRuntimeEvents(t *testing.T) {
 		fn: func(ctx context.Context, request *backwarder.Request) (*backwarder.Result, error) {
 			_ = ctx
 			return &backwarder.Result{
+				Usage: promptiter.Usage{Calls: 1, PromptTokens: 10, CompletionTokens: 2, TotalTokens: 12, Complete: true},
 				Gradients: []promptiter.SurfaceGradient{
 					{
 						EvalSetID:  request.EvalSetID,
@@ -736,6 +737,7 @@ func TestRunObserverReceivesRuntimeEvents(t *testing.T) {
 		fn: func(ctx context.Context, request *aggregator.Request) (*aggregator.Result, error) {
 			_ = ctx
 			return &aggregator.Result{
+				Usage: promptiter.Usage{Calls: 2, PromptTokens: 20, CompletionTokens: 4, TotalTokens: 24, Complete: true},
 				Gradient: &promptiter.AggregatedSurfaceGradient{
 					SurfaceID: request.SurfaceID,
 					NodeID:    request.NodeID,
@@ -748,7 +750,9 @@ func TestRunObserverReceivesRuntimeEvents(t *testing.T) {
 	optimizerInstance := &fakeOptimizer{
 		fn: func(ctx context.Context, request *optimizer.Request) (*optimizer.Result, error) {
 			_ = ctx
+			time.Sleep(time.Millisecond)
 			return &optimizer.Result{
+				Usage: promptiter.Usage{Calls: 3, PromptTokens: 30, CompletionTokens: 6, TotalTokens: 36, Complete: true},
 				Patch: &promptiter.SurfacePatch{
 					SurfaceID: request.Surface.SurfaceID,
 					Value: astructure.SurfaceValue{
@@ -792,6 +796,10 @@ func TestRunObserverReceivesRuntimeEvents(t *testing.T) {
 	}))
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
+	require.Len(t, result.Rounds, 1)
+	assert.Equal(t, 6, result.Rounds[0].Usage.Calls)
+	assert.Equal(t, int64(72), result.Rounds[0].Usage.TotalTokens)
+	assert.Positive(t, result.Rounds[0].Duration)
 	require.Len(t, observedEvents, 11)
 	assert.Equal(t, EventKindBaselineValidation, observedEvents[0].Kind)
 	assert.Zero(t, observedEvents[0].Round)

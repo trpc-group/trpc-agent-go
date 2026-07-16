@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	atrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
@@ -116,6 +117,8 @@ type EvalSetResult struct {
 type EvaluationResult struct {
 	// OverallScore stores the aggregate score across all evaluation sets.
 	OverallScore float64
+	// Duration is the Evaluation Service-measured execution time across sets.
+	Duration time.Duration
 	// EvalSets stores results grouped by evaluation set.
 	EvalSets []EvalSetResult
 	// Usage contains model-call telemetry across all evaluation sets.
@@ -143,6 +146,7 @@ func (e *engine) evaluate(
 	results := make([]EvalSetResult, 0, len(request.EvalSets))
 	usages := make([]promptiter.Usage, 0, len(request.EvalSets))
 	totalScore := 0.0
+	totalDuration := time.Duration(0)
 	for _, input := range request.EvalSets {
 		options, err := buildEvaluationCallOptions(request, input, runOptions)
 		if err != nil {
@@ -161,6 +165,7 @@ func (e *engine) evaluate(
 		results = append(results, *evalSetResult)
 		usages = append(usages, evalSetResult.Usage)
 		totalScore += evalSetResult.OverallScore
+		totalDuration += genericResult.ExecutionTime
 	}
 	usage := promptiter.MergeUsage(usages...)
 	// Expected and judge runners may execute model calls outside the retained
@@ -171,6 +176,7 @@ func (e *engine) evaluate(
 	}
 	return &EvaluationResult{
 		OverallScore: totalScore / float64(len(results)),
+		Duration:     totalDuration,
 		EvalSets:     results,
 		Usage:        usage,
 	}, nil

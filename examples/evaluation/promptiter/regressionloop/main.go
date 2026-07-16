@@ -29,7 +29,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/engine"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/regression"
-	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/regression/adapter"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/regression/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/regression/attribution"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/regression/delta"
@@ -269,24 +268,32 @@ func summarizeUsage(
 	promptIterResult *engine.RunResult,
 	agentInstance *supportAgent,
 	elapsed time.Duration,
-) (regression.UsageSummary, error) {
-	zeroCost := 0.0
-	usage, err := adapter.SummarizeUsage(promptIterResult, elapsed, &zeroCost)
-	if err != nil {
-		return regression.UsageSummary{}, fmt.Errorf("summarize usage: %w", err)
+) (regression.UsageSupplement, error) {
+	if !promptIterResult.Usage.Complete {
+		return regression.UsageSupplement{}, errors.New("PromptIter engine usage is incomplete")
 	}
-	if !usage.Complete {
-		return regression.UsageSummary{}, errors.New("PromptIter engine usage is incomplete")
-	}
-	if usage.Calls != agentInstance.Calls() {
-		return regression.UsageSummary{}, fmt.Errorf(
+	if promptIterResult.Usage.Calls != agentInstance.Calls() {
+		return regression.UsageSupplement{}, fmt.Errorf(
 			"PromptIter engine calls %d do not match support agent calls %d",
-			usage.Calls,
+			promptIterResult.Usage.Calls,
 			agentInstance.Calls(),
 		)
 	}
-	usage.Source = "deterministic_example"
-	return usage, nil
+	roundCosts := make(map[int]float64, len(promptIterResult.Rounds))
+	for _, round := range promptIterResult.Rounds {
+		roundCosts[round.Round] = 0
+	}
+	return regression.UsageSupplement{
+		PromptIterLatency: elapsed,
+		CostBreakdown: regression.CostBreakdown{
+			CostEstimate: regression.CostEstimate{
+				EstimatedCost: 0,
+				CostKnown:     true,
+				PricingSource: "deterministic_example_zero_cost",
+			},
+			RoundEstimatedCosts: roundCosts,
+		},
+	}, nil
 }
 
 func auditResult(
@@ -296,7 +303,7 @@ func auditResult(
 	runID string,
 	targetSurfaceID string,
 	promptIterResult *engine.RunResult,
-	usage regression.UsageSummary,
+	usage regression.UsageSupplement,
 ) (*regression.RunResult, error) {
 	analyzer, err := regression.New(regression.Dependencies{
 		Attributor:  attribution.NewRules(),

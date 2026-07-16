@@ -26,7 +26,6 @@ func buildTrainIndex(
 	ctx context.Context,
 	source *engine.RunResult,
 	critical map[string]struct{},
-	audit AuditPolicy,
 	policies map[string]MetricPolicy,
 	expectedRuns int,
 ) (map[string][]trainEvidence, error) {
@@ -39,7 +38,7 @@ func buildTrainIndex(
 		if err != nil {
 			return nil, fmt.Errorf("hash round %d input profile: %w", round.Round, err)
 		}
-		snapshot, err := adaptEvaluation(round.Train, round.InputProfile, critical, audit)
+		snapshot, err := adaptEvaluation(round.Train, round.InputProfile, critical)
 		if err != nil {
 			return nil, fmt.Errorf("adapt round %d train: %w", round.Round, err)
 		}
@@ -76,7 +75,6 @@ func roundCandidateTrain(
 	round engine.RoundResult,
 	fallback []trainEvidence,
 	critical map[string]struct{},
-	audit AuditPolicy,
 	policies map[string]MetricPolicy,
 	expectedRuns int,
 ) (*EvaluationSnapshot, error) {
@@ -87,7 +85,6 @@ func roundCandidateTrain(
 		round.CandidateTrain,
 		round.OutputProfile,
 		critical,
-		audit,
 	)
 	if err != nil {
 		return nil, err
@@ -154,17 +151,4 @@ func overrideJSON(profile *promptiter.Profile) (map[string]string, error) {
 		result[override.SurfaceID] = string(encoded)
 	}
 	return result, nil
-}
-
-func initialProfile(source *engine.RunResult) *promptiter.Profile {
-	if source == nil {
-		return nil
-	}
-	if source.InitialProfile != nil {
-		return promptiter.CloneProfile(source.InitialProfile)
-	}
-	if len(source.Rounds) > 0 && source.Rounds[0].InputProfile != nil {
-		return promptiter.CloneProfile(source.Rounds[0].InputProfile)
-	}
-	return promptiter.CloneProfile(source.AcceptedProfile)
 }

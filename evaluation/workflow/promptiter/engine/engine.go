@@ -16,6 +16,7 @@ import (
 	"math"
 	"slices"
 	"strings"
+	"time"
 
 	"golang.org/x/sync/errgroup"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -163,6 +164,12 @@ type RunConfiguration struct {
 type RoundResult struct {
 	// Round is the one-based index of this optimization cycle.
 	Round int
+	// Duration is the Engine-measured time spent executing this round, including
+	// optional terminal candidate-train evaluation.
+	Duration time.Duration
+	// Usage contains telemetry for this round's train, backward, aggregation,
+	// optimization, validation, and optional terminal candidate-train stages.
+	Usage promptiter.Usage
 	// InputProfile is the profile evaluated at the start of this round.
 	InputProfile *promptiter.Profile
 	// Train is the train-set result used for gradient generation.
@@ -302,6 +309,7 @@ func (e *engine) run(
 	roundsWithoutAcceptance := 0
 	for roundNumber := 1; roundNumber <= request.MaxRounds; roundNumber++ {
 		result.CurrentRound = roundNumber
+		roundStarted := time.Now()
 		roundResult, effectiveScore, err := e.executeRound(
 			ctx,
 			request,
@@ -357,6 +365,8 @@ func (e *engine) run(
 				return nil, err
 			}
 		}
+		roundResult.Usage = summarizeRoundUsage(roundResult)
+		roundResult.Duration = time.Since(roundStarted)
 		accepted := roundResult.Acceptance != nil && roundResult.Acceptance.Accepted
 		acceptanceReason := ""
 		scoreDelta := 0.0
@@ -394,30 +404,38 @@ func summarizeRunUsage(result *RunResult) promptiter.Usage {
 	if result == nil {
 		return promptiter.Usage{}
 	}
-	values := make([]promptiter.Usage, 0, 1+6*len(result.Rounds))
+	values := make([]promptiter.Usage, 0, 1+len(result.Rounds))
 	if result.BaselineValidation != nil {
 		values = append(values, result.BaselineValidation.Usage)
 	}
 	for index := range result.Rounds {
-		round := &result.Rounds[index]
-		if round.Train != nil {
-			values = append(values, round.Train.Usage)
-		}
-		if round.Backward != nil {
-			values = append(values, round.Backward.Usage)
-		}
-		if round.Aggregation != nil {
-			values = append(values, round.Aggregation.Usage)
-		}
-		if round.Patches != nil {
-			values = append(values, round.Patches.Usage)
-		}
-		if round.Validation != nil {
-			values = append(values, round.Validation.Usage)
-		}
-		if round.CandidateTrain != nil {
-			values = append(values, round.CandidateTrain.Usage)
-		}
+		values = append(values, result.Rounds[index].Usage)
+	}
+	return promptiter.MergeUsage(values...)
+}
+
+func summarizeRoundUsage(round *RoundResult) promptiter.Usage {
+	if round == nil {
+		return promptiter.Usage{}
+	}
+	values := make([]promptiter.Usage, 0, 6)
+	if round.Train != nil {
+		values = append(values, round.Train.Usage)
+	}
+	if round.Backward != nil {
+		values = append(values, round.Backward.Usage)
+	}
+	if round.Aggregation != nil {
+		values = append(values, round.Aggregation.Usage)
+	}
+	if round.Patches != nil {
+		values = append(values, round.Patches.Usage)
+	}
+	if round.Validation != nil {
+		values = append(values, round.Validation.Usage)
+	}
+	if round.CandidateTrain != nil {
+		values = append(values, round.CandidateTrain.Usage)
 	}
 	return promptiter.MergeUsage(values...)
 }

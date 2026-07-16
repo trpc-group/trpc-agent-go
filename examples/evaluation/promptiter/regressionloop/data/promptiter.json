@@ -16,8 +16,7 @@
     "minValidationGain": 0.2,
     "maxCaseRegression": 0,
     "maxGeneralizationGap": 0.3,
-    "rejectAnyNewFail": true,
-    "requireCompleteResults": true
+    "rejectAnyNewFail": true
   },
   "budget": {
     "maxCalls": 100,

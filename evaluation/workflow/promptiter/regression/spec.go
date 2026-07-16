@@ -62,7 +62,8 @@ func (s *RunSpec) Validate() error {
 		return errors.New("gate limits must be finite and non-negative")
 	}
 	if s.Budget.MaxCalls < 0 || s.Budget.MaxTokens < 0 ||
-		!finite(s.Budget.MaxEstimatedCost) || s.Budget.MaxEstimatedCost < 0 || s.Budget.MaxWallTime < 0 {
+		!finite(s.Budget.MaxEstimatedCost) || s.Budget.MaxEstimatedCost < 0 ||
+		s.Budget.MaxPromptIterLatency < 0 {
 		return errors.New("budget limits must be finite and non-negative")
 	}
 	if s.Audit.MaxContentBytes < 0 {

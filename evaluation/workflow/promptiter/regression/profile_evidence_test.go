@@ -42,31 +42,20 @@ func TestProfileOnlyChangesTargetValidatesProfileScope(t *testing.T) {
 	}
 }
 
-func TestOverrideJSONAndInitialProfileHandleInvalidAndFallbackSources(t *testing.T) {
+func TestOverrideJSONRejectsInvalidProfiles(t *testing.T) {
 	_, err := overrideJSON(&promptiter.Profile{Overrides: []promptiter.SurfaceOverride{{}}})
 	require.ErrorContains(t, err, "surface id is empty")
 	_, err = overrideJSON(&promptiter.Profile{Overrides: []promptiter.SurfaceOverride{{SurfaceID: "target"}, {SurfaceID: "target"}}})
 	require.ErrorContains(t, err, "duplicate profile override")
-
-	assert.Nil(t, initialProfile(nil))
-	initial := testProfile("target", "initial")
-	fromInitial := initialProfile(&engine.RunResult{InitialProfile: initial})
-	require.NotNil(t, fromInitial)
-	assert.NotSame(t, initial, fromInitial)
-
-	fromRound := initialProfile(&engine.RunResult{Rounds: []engine.RoundResult{{InputProfile: testProfile("target", "round")}}})
-	assert.Equal(t, "round", *fromRound.Overrides[0].Value.Text)
-	fromAccepted := initialProfile(&engine.RunResult{AcceptedProfile: testProfile("target", "accepted")})
-	assert.Equal(t, "accepted", *fromAccepted.Overrides[0].Value.Text)
 }
 
 func TestRoundCandidateTrainUsesFutureFallbackWhenTerminalEvidenceIsAbsent(t *testing.T) {
 	snapshot := &EvaluationSnapshot{EvalSetID: "train"}
-	actual, err := roundCandidateTrain(engine.RoundResult{Round: 1}, []trainEvidence{{round: 2, snapshot: snapshot}}, nil, AuditPolicy{}, nil, 1)
+	actual, err := roundCandidateTrain(engine.RoundResult{Round: 1}, []trainEvidence{{round: 2, snapshot: snapshot}}, nil, nil, 1)
 	require.NoError(t, err)
 	assert.Same(t, snapshot, actual)
 
-	actual, err = roundCandidateTrain(engine.RoundResult{Round: 2}, []trainEvidence{{round: 2, snapshot: snapshot}}, nil, AuditPolicy{}, nil, 1)
+	actual, err = roundCandidateTrain(engine.RoundResult{Round: 2}, []trainEvidence{{round: 2, snapshot: snapshot}}, nil, nil, 1)
 	require.NoError(t, err)
 	assert.Nil(t, actual)
 }

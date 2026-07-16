@@ -141,8 +141,11 @@ func TestPolicyDecideAppliesBudgetRulesAndWarnings(t *testing.T) {
 		{
 			name: "call token cost and time limits reject",
 			configure: func(input *regression.GateInput) {
-				input.Spec.Budget = regression.BudgetPolicy{MaxCalls: 1, MaxTokens: 2, MaxEstimatedCost: .1, MaxWallTime: time.Second}
-				input.TotalUsage = regression.UsageSummary{Calls: 2, TotalTokens: 3, EstimatedCost: .2, CostKnown: true, Latency: 2 * time.Second, Complete: true}
+				input.Spec.Budget = regression.BudgetPolicy{MaxCalls: 1, MaxTokens: 2, MaxEstimatedCost: .1, MaxPromptIterLatency: time.Second}
+				input.TotalUsage = regression.UsageSummary{
+					Calls: 2, TotalTokens: 3, PromptIterLatency: 2 * time.Second, Complete: true,
+					CostEstimate: regression.CostEstimate{EstimatedCost: .2, CostKnown: true},
+				}
 			},
 			decision: regression.DecisionRejected, rule: "call_budget",
 		},
@@ -165,6 +168,12 @@ func TestPolicyDecideAppliesBudgetRulesAndWarnings(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, regression.DecisionAccepted, actual.Decision)
 	assert.Equal(t, []string{"exploration threshold not met"}, actual.Warnings)
+
+	input.Spec.Gate.RequirePromptIterAcceptance = true
+	actual, err = NewPolicy().Decide(input)
+	require.NoError(t, err)
+	assert.Equal(t, regression.DecisionRejected, actual.Decision)
+	assert.False(t, rulePassed(actual, "promptiter_acceptance"))
 }
 
 func validInput() *regression.GateInput {
@@ -178,7 +187,9 @@ func validInput() *regression.GateInput {
 		}}},
 		TrainDelta:      &regression.DeltaReport{Complete: true, WeightedScoreDelta: .2},
 		ValidationDelta: &regression.DeltaReport{Complete: true, WeightedScoreDelta: .2},
-		TotalUsage:      regression.UsageSummary{Complete: true, CostKnown: true},
+		TotalUsage: regression.UsageSummary{
+			Complete: true, CostEstimate: regression.CostEstimate{CostKnown: true},
+		},
 	}
 }
 

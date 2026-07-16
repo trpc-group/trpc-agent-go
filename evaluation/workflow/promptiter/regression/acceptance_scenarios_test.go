@@ -23,16 +23,16 @@ import (
 type releaseScenario struct {
 	name      string
 	expected  regression.Decision
-	configure func(*regression.RunSpec, *engine.RunResult, *regression.UsageSummary)
+	configure func(*regression.RunSpec, *engine.RunResult, *regression.UsageSupplement)
 }
 
-func TestReleaseDecisionAccuracyUsesCompletePipelineScenarios(t *testing.T) {
+func TestReleaseDecisionCompletePipelineScenarios(t *testing.T) {
 	scenarios := []releaseScenario{
 		{name: "generalized candidate improves validation", expected: regression.DecisionAccepted},
 		{
 			name:     "PromptIter exploration rejection does not replace release evidence",
 			expected: regression.DecisionAccepted,
-			configure: func(_ *regression.RunSpec, source *engine.RunResult, _ *regression.UsageSummary) {
+			configure: func(_ *regression.RunSpec, source *engine.RunResult, _ *regression.UsageSupplement) {
 				source.Rounds[0].Acceptance.Accepted = false
 				source.Rounds[0].Acceptance.Reason = "exploration threshold not met"
 				source.AcceptedProfile = source.InitialProfile
@@ -41,14 +41,14 @@ func TestReleaseDecisionAccuracyUsesCompletePipelineScenarios(t *testing.T) {
 		{
 			name:     "candidate changes behavior but does not improve validation",
 			expected: regression.DecisionRejected,
-			configure: func(_ *regression.RunSpec, source *engine.RunResult, _ *regression.UsageSummary) {
+			configure: func(_ *regression.RunSpec, source *engine.RunResult, _ *regression.UsageSupplement) {
 				setEvaluationMetric(source.Rounds[0].Validation, "quality", 0, status.EvalStatusFailed, "no validation gain")
 			},
 		},
 		{
 			name:     "training improves much more than validation",
 			expected: regression.DecisionRejected,
-			configure: func(spec *regression.RunSpec, source *engine.RunResult, _ *regression.UsageSummary) {
+			configure: func(spec *regression.RunSpec, source *engine.RunResult, _ *regression.UsageSupplement) {
 				spec.Gate.MaxGeneralizationGap = .2
 				setEvaluationMetric(source.BaselineValidation, "quality", .8, status.EvalStatusPassed, "")
 				appendFollowUpRound(
@@ -62,7 +62,7 @@ func TestReleaseDecisionAccuracyUsesCompletePipelineScenarios(t *testing.T) {
 		{
 			name:     "candidate introduces a safety hard failure",
 			expected: regression.DecisionRejected,
-			configure: func(spec *regression.RunSpec, source *engine.RunResult, _ *regression.UsageSummary) {
+			configure: func(spec *regression.RunSpec, source *engine.RunResult, _ *regression.UsageSupplement) {
 				spec.MetricPolicies["safety"] = regression.MetricPolicy{Weight: 3, Floor: 1, HardFail: true}
 				appendEvaluationMetric(source.BaselineValidation, "safety", 1, status.EvalStatusPassed, "")
 				appendEvaluationMetric(source.Rounds[0].Validation, "safety", 0, status.EvalStatusFailed, "private data disclosed")
@@ -71,22 +71,22 @@ func TestReleaseDecisionAccuracyUsesCompletePipelineScenarios(t *testing.T) {
 		{
 			name:     "final candidate has no later training evidence",
 			expected: regression.DecisionInconclusive,
-			configure: func(spec *regression.RunSpec, _ *engine.RunResult, _ *regression.UsageSummary) {
+			configure: func(spec *regression.RunSpec, _ *engine.RunResult, _ *regression.UsageSupplement) {
 				spec.Gate.MaxGeneralizationGap = .2
 			},
 		},
 		{
 			name:     "budget is configured but only evaluation usage is known",
 			expected: regression.DecisionInconclusive,
-			configure: func(spec *regression.RunSpec, _ *engine.RunResult, usage *regression.UsageSummary) {
+			configure: func(spec *regression.RunSpec, source *engine.RunResult, _ *regression.UsageSupplement) {
 				spec.Budget.MaxCalls = 10
-				*usage = regression.UsageSummary{Calls: 4, Source: "evaluation_traces"}
+				source.Usage = promptiter.Usage{Calls: 4, Complete: false}
 			},
 		},
 		{
 			name:     "evaluation emits an unconfigured metric",
 			expected: regression.DecisionInconclusive,
-			configure: func(_ *regression.RunSpec, source *engine.RunResult, _ *regression.UsageSummary) {
+			configure: func(_ *regression.RunSpec, source *engine.RunResult, _ *regression.UsageSupplement) {
 				appendEvaluationMetric(source.BaselineValidation, "new_metric", 0, status.EvalStatusFailed, "")
 				appendEvaluationMetric(source.Rounds[0].Validation, "new_metric", 1, status.EvalStatusPassed, "")
 			},
@@ -94,7 +94,7 @@ func TestReleaseDecisionAccuracyUsesCompletePipelineScenarios(t *testing.T) {
 		{
 			name:     "configured metric is absent from every case",
 			expected: regression.DecisionInconclusive,
-			configure: func(spec *regression.RunSpec, _ *engine.RunResult, _ *regression.UsageSummary) {
+			configure: func(spec *regression.RunSpec, _ *engine.RunResult, _ *regression.UsageSupplement) {
 				spec.MetricPolicies["safety"] = regression.MetricPolicy{
 					Weight: 2, Floor: 1, HardFail: true,
 				}
@@ -103,7 +103,7 @@ func TestReleaseDecisionAccuracyUsesCompletePipelineScenarios(t *testing.T) {
 		{
 			name:     "configured repeated runs are missing from evaluation evidence",
 			expected: regression.DecisionInconclusive,
-			configure: func(spec *regression.RunSpec, source *engine.RunResult, _ *regression.UsageSummary) {
+			configure: func(spec *regression.RunSpec, source *engine.RunResult, _ *regression.UsageSupplement) {
 				spec.Runtime.NumRuns = 2
 				source.Configuration.EvaluationOptions.NumRuns = 2
 			},
@@ -111,7 +111,7 @@ func TestReleaseDecisionAccuracyUsesCompletePipelineScenarios(t *testing.T) {
 		{
 			name:     "one repeated run omits a configured metric",
 			expected: regression.DecisionInconclusive,
-			configure: func(spec *regression.RunSpec, source *engine.RunResult, _ *regression.UsageSummary) {
+			configure: func(spec *regression.RunSpec, source *engine.RunResult, _ *regression.UsageSupplement) {
 				spec.Runtime.NumRuns = 2
 				source.Configuration.EvaluationOptions.NumRuns = 2
 				appendSecondRun(source.BaselineValidation, true)
@@ -122,7 +122,7 @@ func TestReleaseDecisionAccuracyUsesCompletePipelineScenarios(t *testing.T) {
 		{
 			name:     "candidate modifies an unrelated surface",
 			expected: regression.DecisionRejected,
-			configure: func(_ *regression.RunSpec, source *engine.RunResult, _ *regression.UsageSummary) {
+			configure: func(_ *regression.RunSpec, source *engine.RunResult, _ *regression.UsageSupplement) {
 				text := "unrelated"
 				source.Rounds[0].OutputProfile.Overrides = append(
 					source.Rounds[0].OutputProfile.Overrides,
@@ -136,14 +136,14 @@ func TestReleaseDecisionAccuracyUsesCompletePipelineScenarios(t *testing.T) {
 		{
 			name:     "candidate validation omits a baseline case",
 			expected: regression.DecisionInconclusive,
-			configure: func(_ *regression.RunSpec, source *engine.RunResult, _ *regression.UsageSummary) {
+			configure: func(_ *regression.RunSpec, source *engine.RunResult, _ *regression.UsageSupplement) {
 				source.Rounds[0].Validation.EvalSets[0].Cases = nil
 			},
 		},
 		{
 			name:     "candidate validation omits a critical case",
 			expected: regression.DecisionRejected,
-			configure: func(spec *regression.RunSpec, source *engine.RunResult, _ *regression.UsageSummary) {
+			configure: func(spec *regression.RunSpec, source *engine.RunResult, _ *regression.UsageSupplement) {
 				spec.CriticalCaseIDs = []string{"validation-case"}
 				source.Rounds[0].Validation.EvalSets[0].Cases = nil
 			},
@@ -151,45 +151,38 @@ func TestReleaseDecisionAccuracyUsesCompletePipelineScenarios(t *testing.T) {
 		{
 			name:     "complete usage exceeds cost budget",
 			expected: regression.DecisionRejected,
-			configure: func(spec *regression.RunSpec, _ *engine.RunResult, usage *regression.UsageSummary) {
+			configure: func(spec *regression.RunSpec, _ *engine.RunResult, usage *regression.UsageSupplement) {
 				spec.Budget.MaxEstimatedCost = .5
-				*usage = regression.UsageSummary{
-					EstimatedCost: 1, CostKnown: true, Complete: true, Source: "full_pipeline",
+				*usage = regression.UsageSupplement{
+					CostBreakdown: regression.CostBreakdown{CostEstimate: regression.CostEstimate{
+						EstimatedCost: 1, CostKnown: true, PricingSource: "test",
+					}},
 				}
 			},
 		},
 		{
 			name:     "cost limit is configured but provider cost is unknown",
 			expected: regression.DecisionInconclusive,
-			configure: func(spec *regression.RunSpec, _ *engine.RunResult, usage *regression.UsageSummary) {
+			configure: func(spec *regression.RunSpec, _ *engine.RunResult, usage *regression.UsageSupplement) {
 				spec.Budget.MaxEstimatedCost = .5
-				*usage = regression.UsageSummary{
-					Complete: true, Source: "full_pipeline",
-				}
+				*usage = regression.UsageSupplement{}
 			},
 		},
 	}
 
-	correct := 0
 	for _, scenario := range scenarios {
 		t.Run(scenario.name, func(t *testing.T) {
 			spec := auditSpec()
 			source := promptIterResult(profile("baseline"), profile("candidate"), true)
-			usage := regression.UsageSummary{Complete: true, Source: "full_pipeline"}
+			usage := regression.UsageSupplement{}
 			if scenario.configure != nil {
 				scenario.configure(spec, source, &usage)
 			}
 			result := analyzeWith(t, spec, source, usage)
-			if result.Decision == scenario.expected {
-				correct++
-				return
+			if result.Decision != scenario.expected {
+				t.Errorf("decision = %q, want %q; candidates=%+v", result.Decision, scenario.expected, result.Candidates)
 			}
-			t.Errorf("decision = %q, want %q; candidates=%+v", result.Decision, scenario.expected, result.Candidates)
 		})
-	}
-	accuracy := float64(correct) / float64(len(scenarios))
-	if accuracy < .8 {
-		t.Fatalf("release scenario accuracy %.3f is below 0.80", accuracy)
 	}
 }
 
@@ -199,7 +192,7 @@ type attributionScenario struct {
 	prepare  func(*engine.CaseResult)
 }
 
-func TestFailureAttributionAccuracyUsesEvaluationEvidenceScenarios(t *testing.T) {
+func TestFailureAttributionCompletePipelineScenarios(t *testing.T) {
 	scenarios := []attributionScenario{
 		{name: "final response mismatch", expected: regression.FailureFinalResponseMismatch, prepare: failedMetricScenario("task_success", "answer differs from expected")},
 		{name: "tool selection mismatch", expected: regression.FailureToolSelection, prepare: failedMetricScenario("tool_selection", "expected get_order, got search_order")},
@@ -251,32 +244,32 @@ func TestFailureAttributionAccuracyUsesEvaluationEvidenceScenarios(t *testing.T)
 		{name: "unknown custom evaluator", expected: regression.FailureUnknown, prepare: failedMetricScenario("custom_quality", "custom contract failed")},
 	}
 
-	correct := 0
 	for _, scenario := range scenarios {
 		t.Run(scenario.name, func(t *testing.T) {
 			source := promptIterResult(profile("baseline"), profile("candidate"), true)
 			scenario.prepare(&source.Rounds[0].Train.EvalSets[0].Cases[0])
 			result := analyzeWith(
 				t, auditSpec(), source,
-				regression.UsageSummary{Complete: true, Source: "full_pipeline"},
+				regression.UsageSupplement{},
 			)
-			if len(result.Attributions) != 1 {
-				t.Fatalf("attributions = %+v", result.Attributions)
+			var attribution *regression.AttributionResult
+			for index := range result.Attributions {
+				current := &result.Attributions[index]
+				if current.Phase == regression.AttributionBaselineTrain {
+					attribution = current
+					break
+				}
 			}
-			attribution := result.Attributions[0]
-			if attribution.Category == scenario.expected {
-				correct++
-			} else {
+			if attribution == nil {
+				t.Fatalf("baseline train attribution missing: %+v", result.Attributions)
+			}
+			if attribution.Category != scenario.expected {
 				t.Errorf("category = %q, want %q", attribution.Category, scenario.expected)
 			}
 			if attribution.Reason == "" || len(attribution.Evidence) == 0 || attribution.Evidence[0].Reason == "" {
 				t.Fatalf("attribution is not explainable: %+v", attribution)
 			}
 		})
-	}
-	accuracy := float64(correct) / float64(len(scenarios))
-	if accuracy < .75 {
-		t.Fatalf("attribution scenario accuracy %.3f is below 0.75", accuracy)
 	}
 }
 

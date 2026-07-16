@@ -79,7 +79,14 @@ func (b *decisionBuilder) add(
 
 func (b *decisionBuilder) addQualityRules(input *regression.GateInput) {
 	policy := input.Spec.Gate
-	if !input.PromptIterAccepted {
+	if policy.RequirePromptIterAcceptance {
+		reason := input.PromptIterReason
+		if reason == "" {
+			reason = "PromptIter did not accept this round"
+		}
+		b.add("promptiter_acceptance", input.PromptIterAccepted,
+			input.PromptIterAccepted, true, reason, false)
+	} else if !input.PromptIterAccepted {
 		reason := input.PromptIterReason
 		if reason == "" {
 			reason = "PromptIter did not accept this round"
@@ -175,15 +182,16 @@ func (b *decisionBuilder) addBudgetRules(input *regression.GateInput) {
 			usage.TotalTokens, budget.MaxTokens, "token budget exceeded", false)
 	}
 	b.addCostRule(budget, usage)
-	if budget.MaxWallTime > 0 {
-		b.add("wall_time_budget", usage.Latency <= budget.MaxWallTime,
-			usage.Latency, budget.MaxWallTime, "wall time budget exceeded", false)
+	if budget.MaxPromptIterLatency > 0 {
+		b.add("promptiter_latency_budget", usage.PromptIterLatency <= budget.MaxPromptIterLatency,
+			usage.PromptIterLatency, budget.MaxPromptIterLatency,
+			"PromptIter latency budget exceeded", false)
 	}
 }
 
 func budgetConfigured(budget regression.BudgetPolicy) bool {
 	return budget.MaxCalls > 0 || budget.MaxTokens > 0 ||
-		budget.MaxEstimatedCost > 0 || budget.MaxWallTime > 0 ||
+		budget.MaxEstimatedCost > 0 || budget.MaxPromptIterLatency > 0 ||
 		budget.RequireKnownCost
 }
 

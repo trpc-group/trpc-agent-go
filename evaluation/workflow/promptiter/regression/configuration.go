@@ -81,25 +81,17 @@ func validatePromptIterConfiguration(
 			return errors.New("effective parallelism values must be non-negative")
 		}
 	}
-	if len(source.TargetSurfaceIDs) == 0 {
-		return errors.New("effective target surface ids are empty")
+	if len(source.TargetSurfaceIDs) != 1 {
+		return errors.New("regression audit requires exactly one effective target surface id")
 	}
-	foundTarget := false
-	seen := make(map[string]struct{}, len(source.TargetSurfaceIDs))
-	for _, surfaceID := range source.TargetSurfaceIDs {
-		surfaceID = strings.TrimSpace(surfaceID)
-		if surfaceID == "" {
-			return errors.New("effective target surface ids contain an empty value")
-		}
-		if _, exists := seen[surfaceID]; exists {
-			return fmt.Errorf("duplicate effective target surface id %q", surfaceID)
-		}
-		seen[surfaceID] = struct{}{}
-		foundTarget = foundTarget || surfaceID == spec.TargetSurfaceID
+	surfaceID := strings.TrimSpace(source.TargetSurfaceIDs[0])
+	if surfaceID == "" {
+		return errors.New("effective target surface id is empty")
 	}
-	if !foundTarget {
+	if surfaceID != spec.TargetSurfaceID {
 		return fmt.Errorf(
-			"audit target surface %q was not configured in PromptIter",
+			"effective target surface %q does not match audit target surface %q",
+			surfaceID,
 			spec.TargetSurfaceID,
 		)
 	}

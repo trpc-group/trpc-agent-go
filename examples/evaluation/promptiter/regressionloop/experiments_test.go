@@ -84,9 +84,8 @@ func TestNormalizedReportsAreReproducibleAcrossRuns(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		result.StartedAt = time.Time{}
-		result.EndedAt = time.Time{}
-		result.Usage.Latency = 0
+		normalized := normalizeRunResult(*result)
+		result = &normalized
 		jsonReport, err := report.JSON(result)
 		if err != nil {
 			t.Fatal(err)

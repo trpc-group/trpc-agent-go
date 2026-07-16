@@ -55,7 +55,7 @@ func TestRunSpecValidation(t *testing.T) {
 		{name: "negative token budget", mutate: func(spec *RunSpec) { spec.Budget.MaxTokens = -1 }},
 		{name: "negative cost budget", mutate: func(spec *RunSpec) { spec.Budget.MaxEstimatedCost = -1 }},
 		{name: "non-finite cost budget", mutate: func(spec *RunSpec) { spec.Budget.MaxEstimatedCost = math.NaN() }},
-		{name: "negative time budget", mutate: func(spec *RunSpec) { spec.Budget.MaxWallTime = -1 }},
+		{name: "negative PromptIter latency budget", mutate: func(spec *RunSpec) { spec.Budget.MaxPromptIterLatency = -1 }},
 		{name: "negative audit content limit", mutate: func(spec *RunSpec) { spec.Audit.MaxContentBytes = -1 }},
 		{name: "missing metric policies", mutate: func(spec *RunSpec) { spec.MetricPolicies = nil }},
 		{name: "empty metric name", mutate: func(spec *RunSpec) {

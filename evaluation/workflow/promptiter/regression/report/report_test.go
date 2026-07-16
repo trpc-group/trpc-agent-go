@@ -76,7 +76,17 @@ func TestMarkdownIncludesPromptDeltaCasesAndGateReasons(t *testing.T) {
 			ProfileChanged:       true,
 			PromptIterShouldStop: true,
 			PromptIterStopReason: "target score reached",
-			TrainDelta:           &regression.DeltaReport{BaselineScore: .2, CandidateScore: .8, WeightedScoreDelta: .6},
+			RoundUsage: regression.UsageSummary{
+				Calls: 2, TotalTokens: 30,
+				CostEstimate:      regression.CostEstimate{EstimatedCost: .1, CostKnown: true},
+				PromptIterLatency: 100 * time.Millisecond, Complete: true,
+			},
+			CumulativeUsage: regression.UsageSummary{
+				Calls: 5, TotalTokens: 70,
+				CostEstimate:      regression.CostEstimate{EstimatedCost: .25, CostKnown: true},
+				PromptIterLatency: 250 * time.Millisecond, Complete: true,
+			},
+			TrainDelta: &regression.DeltaReport{BaselineScore: .2, CandidateScore: .8, WeightedScoreDelta: .6},
 			ValidationDelta: &regression.DeltaReport{
 				BaselineScore: .3, CandidateScore: .2, WeightedScoreDelta: -.1,
 				NewFailures: 1,
@@ -117,6 +127,8 @@ func TestMarkdownIncludesPromptDeltaCasesAndGateReasons(t *testing.T) {
 		"## Optimization progress", "| 0 | 0.3 | 0 | n/a | baseline | n/a |",
 		"| 0.25 | 0.2 |",
 		"Target surfaces: `agent#instruction`",
+		"### Resources", "| round | 2 | 30 | 0.100000 | true | 100ms | true |",
+		"| cumulative | 5 | 70 | 0.250000 | true | 250ms | true |",
 	} {
 		if !strings.Contains(string(markdown), expected) {
 			t.Fatalf("markdown omitted %q:\n%s", expected, markdown)

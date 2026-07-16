@@ -236,6 +236,7 @@ func sanitizeAttribution(
 		return nil
 	}
 	result := *source
+	result.CandidateID = sanitizeContent(policy, source.CandidateID)
 	result.EvalSetID = sanitizeContent(policy, source.EvalSetID)
 	result.CaseID = sanitizeContent(policy, source.CaseID)
 	result.Reason = sanitizeContent(policy, source.Reason)
@@ -323,7 +324,8 @@ func SanitizeRunResult(source *RunResult) (*RunResult, error) {
 		result.Spec.Metadata = sanitizeMetadata(result.Spec.Metadata, policy)
 	}
 	result.ErrorMessage = sanitizeContent(policy, result.ErrorMessage)
-	result.Usage.Source = sanitizeContent(policy, result.Usage.Source)
+	result.Usage.TelemetrySource = sanitizeContent(policy, result.Usage.TelemetrySource)
+	result.Usage.PricingSource = sanitizeContent(policy, result.Usage.PricingSource)
 	result.BaselineProfile = sanitizeProfile(result.BaselineProfile, policy)
 	sanitizeSnapshot(result.BaselineTrain, policy)
 	sanitizeSnapshot(result.BaselineValidation, policy)
@@ -413,24 +415,17 @@ func sanitizeObservation(observation *Observation, policy AuditPolicy) {
 		return
 	}
 	observation.Route = sanitizeContent(policy, observation.Route)
+	observation.ExpectedRoute = sanitizeContent(policy, observation.ExpectedRoute)
 	observation.Error = sanitizeContent(policy, observation.Error)
 	if policy.IncludeRawContent {
 		observation.FinalResponse = sanitizeContent(policy, observation.FinalResponse)
+		observation.ExpectedFinalResponse = sanitizeContent(policy, observation.ExpectedFinalResponse)
 	} else {
 		observation.FinalResponse = ""
+		observation.ExpectedFinalResponse = ""
 	}
-	for toolIndex := range observation.Tools {
-		toolObservation := &observation.Tools[toolIndex]
-		toolObservation.Name = sanitizeContent(policy, toolObservation.Name)
-		toolObservation.Error = sanitizeContent(policy, toolObservation.Error)
-		if policy.IncludeRawContent {
-			toolObservation.Arguments = sanitizeStructuredContent(policy, toolObservation.Arguments)
-			toolObservation.Result = sanitizeStructuredContent(policy, toolObservation.Result)
-		} else {
-			toolObservation.Arguments = ""
-			toolObservation.Result = ""
-		}
-	}
+	sanitizeToolObservations(observation.Tools, policy)
+	sanitizeToolObservations(observation.ExpectedTools, policy)
 	for traceIndex := range observation.Trace {
 		step := &observation.Trace[traceIndex]
 		step.StepID = sanitizeContent(policy, step.StepID)
@@ -448,6 +443,21 @@ func sanitizeObservation(observation *Observation, policy AuditPolicy) {
 		} else {
 			step.Input = ""
 			step.Output = ""
+		}
+	}
+}
+
+func sanitizeToolObservations(observations []ToolObservation, policy AuditPolicy) {
+	for toolIndex := range observations {
+		toolObservation := &observations[toolIndex]
+		toolObservation.Name = sanitizeContent(policy, toolObservation.Name)
+		toolObservation.Error = sanitizeContent(policy, toolObservation.Error)
+		if policy.IncludeRawContent {
+			toolObservation.Arguments = sanitizeStructuredContent(policy, toolObservation.Arguments)
+			toolObservation.Result = sanitizeStructuredContent(policy, toolObservation.Result)
+		} else {
+			toolObservation.Arguments = ""
+			toolObservation.Result = ""
 		}
 	}
 }

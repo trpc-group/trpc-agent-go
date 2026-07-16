@@ -2,14 +2,15 @@
 
 - Status: `succeeded`
 - Decision: `accepted`
+- Release authority: `Regression release gate`
 - Selected candidate: `round-4-69d05e55c2ce`
-- Input fingerprint: `b9873c69d704c68766b6f91633211f21cc1d57539a050dce7a6d169e227efa8b`
+- Input fingerprint: `a91654fedc16f818f53fc7f4bf0da6f710ee1d368f484f55ec7573e169a0c361`
 - Random seed: `not applied` (configured value: `7`)
 - Audit runs: `2`
 - Deterministic runtime: `true`
-- Started: `2026-07-13 11:34:46.303 UTC`
-- Finished: `2026-07-13 11:34:46.306 UTC`
-- Duration: `2.222 ms`
+- Started: `2026-07-16 19:11:10.699 UTC`
+- Finished: `2026-07-16 19:11:10.702 UTC`
+- Duration: `3.000 ms`
 
 ## PromptIter execution
 
@@ -59,17 +60,33 @@ Never reveal another customer's order data.
 
 | Category | Count |
 |---|---:|
-| final_response_mismatch | 1 |
-| format_error | 1 |
-| route_error | 1 |
-| tool_selection_error | 1 |
+| final_response_mismatch | 2 |
+| format_error | 6 |
+| route_error | 4 |
+| tool_selection_error | 8 |
 
-| Set | Case | Category | Reason |
-|---|---|---|---|
-| support-train | train-json | format_error | structured output format mismatch: expected "{\"status\":\"eligible\"}"; actual "Refund status: **eligible**" |
-| support-train | train-order-tool | tool_selection_error | tool selection mismatch: expected "get_order"; actual "search_order" |
-| support-train | train-refund-window | final_response_mismatch | final response mismatch: expected "Unopened items can be returned within 30 days."; actual "Please check the current refund policy." |
-| support-train | train-route | route_error | route mismatch: expected "refund-specialist"; actual "A general support agent will review the request." |
+| Phase | Candidate | Set | Case | Category | Reason |
+|---|---|---|---|---|---|
+| baseline_train |  | support-train | train-json | format_error | structured output format mismatch: expected "{\"status\":\"eligible\"}"; actual "Refund status: **eligible**" |
+| baseline_train |  | support-train | train-order-tool | tool_selection_error | tool selection mismatch: expected "get_order"; actual "search_order" |
+| baseline_train |  | support-train | train-refund-window | final_response_mismatch | final response mismatch: expected "Unopened items can be returned within 30 days."; actual "Please check the current refund policy." |
+| baseline_train |  | support-train | train-route | route_error | route mismatch: expected "refund-specialist"; actual "A general support agent will review the request." |
+| baseline_validation |  | support-validation | validation-json | format_error | structured output format mismatch: expected "{\"status\":\"in_review\"}"; actual "Refund status: **in_review**" |
+| baseline_validation |  | support-validation | validation-order-tool | tool_selection_error | tool selection mismatch: expected "get_order"; actual "search_order" |
+| baseline_validation |  | support-validation | validation-refund-window | final_response_mismatch | final response mismatch: expected "Unopened items can be returned within 30 days."; actual "Please check the current refund policy." |
+| baseline_validation |  | support-validation | validation-route | route_error | route mismatch: expected "refund-specialist"; actual "A general support agent will review the request." |
+| candidate_train | round-1-88ba8744ac48 | support-train | train-json | format_error | structured output format mismatch: expected "{\"status\":\"eligible\"}"; actual "Refund status: **eligible**" |
+| candidate_train | round-1-88ba8744ac48 | support-train | train-order-tool | tool_selection_error | tool selection mismatch: expected "get_order"; actual "search_order" |
+| candidate_train | round-1-88ba8744ac48 | support-train | train-route | route_error | route mismatch: expected "refund-specialist"; actual "A general support agent will review the request." |
+| candidate_train | round-2-9e5fef24b25a | support-train | train-json | format_error | structured output format mismatch: expected "{\"status\":\"eligible\"}"; actual "Refund status: **eligible**" |
+| candidate_train | round-2-9e5fef24b25a | support-train | train-order-tool | tool_selection_error | tool selection mismatch: expected "get_order"; actual "search_order" |
+| candidate_train | round-3-eb5e2ec7c67d | support-train | train-order-tool | tool_selection_error | tool selection mismatch: expected "get_order"; actual "search_order" |
+| candidate_validation | round-1-88ba8744ac48 | support-validation | validation-json | format_error | structured output format mismatch: expected "{\"status\":\"in_review\"}"; actual "Refund status: **in_review**" |
+| candidate_validation | round-1-88ba8744ac48 | support-validation | validation-order-tool | tool_selection_error | tool selection mismatch: expected "get_order"; actual "search_order" |
+| candidate_validation | round-1-88ba8744ac48 | support-validation | validation-route | route_error | route mismatch: expected "refund-specialist"; actual "A general support agent will review the request." |
+| candidate_validation | round-2-9e5fef24b25a | support-validation | validation-json | format_error | structured output format mismatch: expected "{\"status\":\"in_review\"}"; actual "Refund status: **in_review**" |
+| candidate_validation | round-2-9e5fef24b25a | support-validation | validation-order-tool | tool_selection_error | tool selection mismatch: expected "get_order"; actual "search_order" |
+| candidate_validation | round-3-eb5e2ec7c67d | support-validation | validation-order-tool | tool_selection_error | tool selection mismatch: expected "get_order"; actual "search_order" |
 
 ## Candidate: round-1-88ba8744ac48
 
@@ -84,6 +101,13 @@ You are a customer-support agent.
 Never reveal another customer's order data.
 Refunds and unopened returns are allowed within 30 days.
 ```
+
+### Resources
+
+| Scope | Calls | Tokens | Estimated cost | Cost known | PromptIter latency | Complete |
+|---|---:|---:|---:|---:|---:|---:|
+| round | 18 | 886 | 0.000000 | true | 5.786ms | true |
+| cumulative | 28 | 1302 | 0.000000 | true | 10.1986ms | true |
 
 | Set | Baseline | Candidate | Weighted delta | New passes | New failures |
 |---|---:|---:|---:|---:|---:|
@@ -119,8 +143,8 @@ Decision: `rejected`
 | metric_floor/safety | true | 1 | 1 |  |
 | usage_complete | true | true | true |  |
 | known_cost | true | true | true |  |
-| call_budget | true | 90 | 100 |  |
-| token_budget | true | 6094 | 20000 |  |
+| call_budget | true | 28 | 100 |  |
+| token_budget | true | 1302 | 20000 |  |
 | cost_budget | true | 0 | 0.01 |  |
 
 ## Candidate: round-2-9e5fef24b25a
@@ -137,6 +161,13 @@ Never reveal another customer's order data.
 Refunds and unopened returns are allowed within 30 days.
 Route refund disputes to refund-specialist.
 ```
+
+### Resources
+
+| Scope | Calls | Tokens | Estimated cost | Cost known | PromptIter latency | Complete |
+|---|---:|---:|---:|---:|---:|---:|
+| round | 18 | 1116 | 0.000000 | true | 6.3245ms | true |
+| cumulative | 46 | 2418 | 0.000000 | true | 16.5231ms | true |
 
 | Set | Baseline | Candidate | Weighted delta | New passes | New failures |
 |---|---:|---:|---:|---:|---:|
@@ -172,8 +203,8 @@ Decision: `rejected`
 | metric_floor/safety | true | 1 | 1 |  |
 | usage_complete | true | true | true |  |
 | known_cost | true | true | true |  |
-| call_budget | true | 90 | 100 |  |
-| token_budget | true | 6094 | 20000 |  |
+| call_budget | true | 46 | 100 |  |
+| token_budget | true | 2418 | 20000 |  |
 | cost_budget | true | 0 | 0.01 |  |
 
 ## Candidate: round-3-eb5e2ec7c67d
@@ -191,6 +222,13 @@ Refunds and unopened returns are allowed within 30 days.
 Route refund disputes to refund-specialist.
 When the user asks for JSON, return only valid JSON.
 ```
+
+### Resources
+
+| Scope | Calls | Tokens | Estimated cost | Cost known | PromptIter latency | Complete |
+|---|---:|---:|---:|---:|---:|---:|
+| round | 18 | 1336 | 0.000000 | true | 5.0071ms | true |
+| cumulative | 64 | 3754 | 0.000000 | true | 21.5302ms | true |
 
 | Set | Baseline | Candidate | Weighted delta | New passes | New failures |
 |---|---:|---:|---:|---:|---:|
@@ -226,8 +264,8 @@ Decision: `rejected`
 | metric_floor/safety | true | 1 | 1 |  |
 | usage_complete | true | true | true |  |
 | known_cost | true | true | true |  |
-| call_budget | true | 90 | 100 |  |
-| token_budget | true | 6094 | 20000 |  |
+| call_budget | true | 64 | 100 |  |
+| token_budget | true | 3754 | 20000 |  |
 | cost_budget | true | 0 | 0.01 |  |
 
 ## Candidate: round-4-69d05e55c2ce
@@ -246,6 +284,13 @@ Route refund disputes to refund-specialist.
 When the user asks for JSON, return only valid JSON.
 For order lookups, call get_order with the order_id argument.
 ```
+
+### Resources
+
+| Scope | Calls | Tokens | Estimated cost | Cost known | PromptIter latency | Complete |
+|---|---:|---:|---:|---:|---:|---:|
+| round | 26 | 2340 | 0.000000 | true | 7.5098ms | true |
+| cumulative | 90 | 6094 | 0.000000 | true | 29.04ms | true |
 
 | Set | Baseline | Candidate | Weighted delta | New passes | New failures |
 |---|---:|---:|---:|---:|---:|
@@ -287,4 +332,4 @@ Decision: `accepted`
 
 ## Usage
 
-Calls: 90; tokens: 6094; estimated cost: 0.000000 (known: true); latency: 50.037ms; complete: true; source: `deterministic_example`.
+Calls: 90; tokens: 6094; estimated cost: 0.000000 (known: true); PromptIter latency: 51.4292ms; complete: true; telemetry source: `promptiter_engine`; pricing source: `deterministic_example_zero_cost`.

@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/engine"
@@ -26,7 +27,6 @@ func adaptEvaluation(
 	source *engine.EvaluationResult,
 	profile *promptiter.Profile,
 	critical map[string]struct{},
-	audit AuditPolicy,
 ) (*EvaluationSnapshot, error) {
 	if source == nil || profile == nil {
 		return nil, errors.New("evaluation result and profile are required")
@@ -66,7 +66,7 @@ func adaptEvaluation(
 			}
 			seenCases[key] = struct{}{}
 			caseResult, complete, err := adaptCase(
-				sourceCase, evalSet.EvalSetID, critical, runScores, audit,
+				sourceCase, evalSet.EvalSetID, critical, runScores,
 			)
 			if err != nil {
 				return nil, fmt.Errorf("adapt evaluation case %q: %w", sourceCase.EvalCaseID, err)
@@ -95,7 +95,6 @@ func adaptCase(
 	evalSetID string,
 	critical map[string]struct{},
 	runScores runMetricScores,
-	audit AuditPolicy,
 ) (CaseResult, bool, error) {
 	result := CaseResult{EvalSetID: evalSetID, CaseID: source.EvalCaseID, Passed: true}
 	if strings.TrimSpace(source.EvalCaseID) == "" {
@@ -120,7 +119,7 @@ func adaptCase(
 			Score:     metric.Score,
 			Threshold: metric.Threshold,
 			Passed:    metric.Status == status.EvalStatusPassed,
-			Reason:    sanitizeContent(audit, metric.Reason),
+			Reason:    metric.Reason,
 		}
 		if metric.Status != status.EvalStatusPassed && metric.Status != status.EvalStatusFailed {
 			complete = false
@@ -144,7 +143,7 @@ func adaptCase(
 				}
 				converted.Rubrics = append(converted.Rubrics, RubricResult{
 					ID: rubric.ID, Score: rubric.Score,
-					Reason: sanitizeContent(audit, rubric.Reason),
+					Reason: rubric.Reason,
 				})
 			}
 		}
@@ -164,6 +163,7 @@ func adaptCase(
 		complete = false
 	}
 	detailIDs := make(map[int]struct{}, len(source.RunDetails))
+	runIndexes := make(map[int]int, len(source.RunDetails))
 	for _, run := range source.RunDetails {
 		if run != nil {
 			if run.RunID <= 0 {
@@ -174,17 +174,18 @@ func adaptCase(
 			}
 			detailIDs[run.RunID] = struct{}{}
 		}
-		observation, input, ok := adaptObservation(run, audit)
+		observation, input, ok := adaptObservation(run)
 		if !ok {
 			complete = false
 			continue
 		}
-		if audit.IncludeRawContent && result.Input == "" {
-			result.Input = sanitizeContent(audit, input)
+		if result.Input == "" {
+			result.Input = input
 		}
 		if observationHasExecutionError(observation) {
 			result.Passed = false
 		}
+		runIndexes[observation.RunID] = len(result.Runs)
 		result.Runs = append(result.Runs, observation)
 	}
 	if len(result.Runs) == 0 {
@@ -203,6 +204,9 @@ func adaptCase(
 			return CaseResult{}, false, fmt.Errorf("duplicate run result id %d", run.RunID)
 		}
 		resultIDs[run.RunID] = struct{}{}
+		if index, exists := runIndexes[run.RunID]; exists {
+			applyExpectedEvidence(&result.Runs[index], run)
+		}
 		runMetrics := make(map[string]struct{}, len(run.OverallEvalMetricResults))
 		for _, metricResult := range run.OverallEvalMetricResults {
 			if metricResult == nil {
@@ -270,9 +274,41 @@ func adaptCase(
 	return result, complete, nil
 }
 
+func applyExpectedEvidence(observation *Observation, run *evalresult.EvalCaseResult) {
+	if observation == nil || run == nil {
+		return
+	}
+	for _, invocationResult := range run.EvalMetricResultPerInvocation {
+		if invocationResult == nil || invocationResult.ExpectedInvocation == nil {
+			continue
+		}
+		expected := invocationResult.ExpectedInvocation
+		if expected.FinalResponse != nil {
+			observation.ExpectedFinalResponse = expected.FinalResponse.Content
+		}
+		for _, toolCall := range expected.Tools {
+			if toolCall == nil {
+				continue
+			}
+			observation.ExpectedTools = append(observation.ExpectedTools, ToolObservation{
+				Name:      toolCall.Name,
+				Arguments: marshalAuditValue(toolCall.Arguments),
+				Result:    marshalAuditValue(toolCall.Result),
+			})
+		}
+		if expected.ExecutionTrace == nil {
+			continue
+		}
+		for _, step := range expected.ExecutionTrace.Steps {
+			if step.Branch != "" {
+				observation.ExpectedRoute = step.Branch
+			}
+		}
+	}
+}
+
 func adaptObservation(
 	run *evaluation.EvaluationCaseRunDetails,
-	audit AuditPolicy,
 ) (Observation, string, bool) {
 	if run == nil || run.Inference == nil {
 		return Observation{}, "", false
@@ -283,7 +319,7 @@ func adaptObservation(
 	}
 	observation := Observation{
 		RunID: run.RunID,
-		Error: sanitizeContent(audit, errorMessage),
+		Error: errorMessage,
 	}
 	input := ""
 	for _, invocation := range run.Inference.Inferences {
@@ -293,8 +329,8 @@ func adaptObservation(
 		if input == "" && invocation.UserContent != nil {
 			input = invocation.UserContent.Content
 		}
-		if audit.IncludeRawContent && invocation.FinalResponse != nil {
-			observation.FinalResponse = sanitizeContent(audit, invocation.FinalResponse.Content)
+		if invocation.FinalResponse != nil {
+			observation.FinalResponse = invocation.FinalResponse.Content
 		}
 		for _, toolCall := range invocation.Tools {
 			if toolCall == nil {
@@ -302,16 +338,10 @@ func adaptObservation(
 			}
 			toolObservation := ToolObservation{
 				Name:  toolCall.Name,
-				Error: sanitizeContent(audit, toolResultError(toolCall.Result)),
+				Error: toolResultError(toolCall.Result),
 			}
-			if audit.IncludeRawContent {
-				toolObservation.Arguments = sanitizeStructuredContent(
-					audit, marshalAuditValue(toolCall.Arguments),
-				)
-				toolObservation.Result = sanitizeStructuredContent(
-					audit, marshalAuditValue(toolCall.Result),
-				)
-			}
+			toolObservation.Arguments = marshalAuditValue(toolCall.Arguments)
+			toolObservation.Result = marshalAuditValue(toolCall.Result)
 			observation.Tools = append(observation.Tools, toolObservation)
 		}
 	}
@@ -329,15 +359,13 @@ func adaptObservation(
 				NodeID:            step.NodeID,
 				Branch:            step.Branch,
 				AppliedSurfaceIDs: append([]string(nil), step.AppliedSurfaceIDs...),
-				Error:             sanitizeContent(audit, step.Error),
+				Error:             step.Error,
 			}
-			if audit.IncludeRawContent {
-				if step.Input != nil {
-					converted.Input = sanitizeContent(audit, step.Input.Text)
-				}
-				if step.Output != nil {
-					converted.Output = sanitizeContent(audit, step.Output.Text)
-				}
+			if step.Input != nil {
+				converted.Input = step.Input.Text
+			}
+			if step.Output != nil {
+				converted.Output = step.Output.Text
 			}
 			observation.Trace = append(observation.Trace, converted)
 			if step.Branch != "" {

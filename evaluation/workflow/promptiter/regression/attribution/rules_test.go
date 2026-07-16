@@ -145,6 +145,77 @@ func TestRulesAttributeFallsBackWithoutFailures(t *testing.T) {
 	assert.Equal(t, "case", actual.Evidence[0].Source)
 }
 
+func TestRulesAttributeUsesExpectedAndActualExecutionEvidence(t *testing.T) {
+	tests := []struct {
+		name     string
+		run      regression.Observation
+		category regression.FailureCategory
+		source   string
+	}{
+		{
+			name: "tool selection mismatch",
+			run: regression.Observation{
+				Tools:         []regression.ToolObservation{{Name: "search_catalog"}},
+				ExpectedTools: []regression.ToolObservation{{Name: "lookup_order"}},
+			},
+			category: regression.FailureToolSelection,
+			source:   "tool_trajectory",
+		},
+		{
+			name: "tool arguments mismatch",
+			run: regression.Observation{
+				Tools: []regression.ToolObservation{{
+					Name: "lookup_order", Arguments: `{"query":"A-19"}`,
+				}},
+				ExpectedTools: []regression.ToolObservation{{
+					Name: "lookup_order", Arguments: `{"order_id":"A-19"}`,
+				}},
+			},
+			category: regression.FailureToolArgument,
+			source:   "tool_trajectory",
+		},
+		{
+			name: "route mismatch",
+			run: regression.Observation{
+				Route: "general-support", ExpectedRoute: "refund-specialist",
+			},
+			category: regression.FailureRoute,
+			source:   "trace",
+		},
+		{
+			name: "structured response mismatch",
+			run: regression.Observation{
+				FinalResponse: "status=ok", ExpectedFinalResponse: `{"status":"ok"}`,
+			},
+			category: regression.FailureFormat,
+			source:   "final_response",
+		},
+		{
+			name: "plain response mismatch",
+			run: regression.Observation{
+				FinalResponse: "14 days", ExpectedFinalResponse: "30 days",
+			},
+			category: regression.FailureFinalResponseMismatch,
+			source:   "final_response",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			actual, err := NewRules().Attribute(context.Background(), &regression.CaseResult{
+				EvalSetID: "validation", CaseID: "case-1", Passed: false,
+				Metrics: []regression.MetricResult{{
+					Name: "opaque_business_judge", Passed: false, Reason: "contract rejected",
+				}},
+				Runs: []regression.Observation{test.run},
+			})
+			require.NoError(t, err)
+			assert.Equal(t, test.category, actual.Category)
+			require.NotEmpty(t, actual.Evidence)
+			assert.Equal(t, test.source, actual.Evidence[0].Source)
+		})
+	}
+}
+
 func TestClassificationHelpersCoverStableCategories(t *testing.T) {
 	for _, test := range []struct {
 		name     string

@@ -73,19 +73,19 @@ type GatePolicy struct {
 	MaxCaseRegression    float64 `json:"maxCaseRegression"`
 	MaxGeneralizationGap float64 `json:"maxGeneralizationGap,omitempty"`
 	RejectAnyNewFail     bool    `json:"rejectAnyNewFail"`
-	// RequireCompleteResults is retained for configuration compatibility.
-	// Release decisions always require complete case and metric evidence.
-	RequireCompleteResults bool    `json:"requireCompleteResults"`
-	MaxScoreStdDev         float64 `json:"maxScoreStdDev,omitempty"`
+	// RequirePromptIterAcceptance makes PromptIter's round acceptance a
+	// mandatory release rule instead of advisory evidence.
+	RequirePromptIterAcceptance bool    `json:"requirePromptIterAcceptance,omitempty"`
+	MaxScoreStdDev              float64 `json:"maxScoreStdDev,omitempty"`
 }
 
 // BudgetPolicy limits aggregate model calls, tokens, cost, and wall time.
 type BudgetPolicy struct {
-	MaxCalls         int           `json:"maxCalls,omitempty"`
-	MaxTokens        int64         `json:"maxTokens,omitempty"`
-	MaxEstimatedCost float64       `json:"maxEstimatedCost,omitempty"`
-	MaxWallTime      time.Duration `json:"maxWallTime,omitempty"`
-	RequireKnownCost bool          `json:"requireKnownCost,omitempty"`
+	MaxCalls             int           `json:"maxCalls,omitempty"`
+	MaxTokens            int64         `json:"maxTokens,omitempty"`
+	MaxEstimatedCost     float64       `json:"maxEstimatedCost,omitempty"`
+	MaxPromptIterLatency time.Duration `json:"maxPromptIterLatency,omitempty"`
+	RequireKnownCost     bool          `json:"requireKnownCost,omitempty"`
 }
 
 // RuntimePolicy records caller-owned reproducibility declarations that are not
@@ -122,8 +122,8 @@ type PromptIterConfiguration struct {
 
 // AuditPolicy controls how much raw execution content is retained.
 type AuditPolicy struct {
-	// IncludeRawContent retains user inputs, responses, trace snapshots, and
-	// tool payloads. It should only be enabled for trusted or synthetic data.
+	// IncludeRawContent persists user inputs, responses, trace snapshots, and
+	// tool payloads after analysis. Enable it only for trusted or synthetic data.
 	IncludeRawContent bool `json:"includeRawContent,omitempty"`
 	// MaxContentBytes limits each retained raw text field. Zero uses a safe
 	// default.
@@ -153,12 +153,15 @@ type CaseResult struct {
 
 // Observation stores the final response, route, tools, trace, and error for one run.
 type Observation struct {
-	RunID         int               `json:"runId"`
-	FinalResponse string            `json:"finalResponse,omitempty"`
-	Route         string            `json:"route,omitempty"`
-	Trace         []TraceStep       `json:"trace,omitempty"`
-	Error         string            `json:"error,omitempty"`
-	Tools         []ToolObservation `json:"tools,omitempty"`
+	RunID                 int               `json:"runId"`
+	FinalResponse         string            `json:"finalResponse,omitempty"`
+	ExpectedFinalResponse string            `json:"expectedFinalResponse,omitempty"`
+	Route                 string            `json:"route,omitempty"`
+	ExpectedRoute         string            `json:"expectedRoute,omitempty"`
+	Trace                 []TraceStep       `json:"trace,omitempty"`
+	Error                 string            `json:"error,omitempty"`
+	Tools                 []ToolObservation `json:"tools,omitempty"`
+	ExpectedTools         []ToolObservation `json:"expectedTools,omitempty"`
 }
 
 // TraceStep stores the stable audit subset of one execution trace step.
@@ -197,20 +200,40 @@ type ToolObservation struct {
 	Error     string `json:"error,omitempty"`
 }
 
+// CostEstimate describes a priced resource amount and its provenance.
+type CostEstimate struct {
+	EstimatedCost float64 `json:"estimatedCost"`
+	CostKnown     bool    `json:"costKnown"`
+	PricingSource string  `json:"pricingSource,omitempty"`
+}
+
+// CostBreakdown allocates a total estimate across baseline and rounds.
+type CostBreakdown struct {
+	CostEstimate
+	BaselineEstimatedCost float64         `json:"baselineEstimatedCost,omitempty"`
+	RoundEstimatedCosts   map[int]float64 `json:"roundEstimatedCosts,omitempty"`
+}
+
+// UsageSupplement contains the resource facts that PromptIter cannot measure.
+// Callers cannot declare model calls, tokens, or telemetry completeness.
+type UsageSupplement struct {
+	PromptIterLatency time.Duration `json:"promptIterLatency"`
+	CostBreakdown
+}
+
 // UsageSummary stores aggregate resource consumption for audit and gates.
 type UsageSummary struct {
-	Calls         int           `json:"calls"`
-	InputTokens   int64         `json:"inputTokens,omitempty"`
-	OutputTokens  int64         `json:"outputTokens,omitempty"`
-	TotalTokens   int64         `json:"totalTokens"`
-	EstimatedCost float64       `json:"estimatedCost"`
-	CostKnown     bool          `json:"costKnown"`
-	Latency       time.Duration `json:"latency"`
+	Calls        int   `json:"calls"`
+	InputTokens  int64 `json:"inputTokens,omitempty"`
+	OutputTokens int64 `json:"outputTokens,omitempty"`
+	TotalTokens  int64 `json:"totalTokens"`
+	CostEstimate
+	PromptIterLatency time.Duration `json:"promptIterLatency"`
 	// Complete means the summary covers every model-bearing optimization stage,
 	// not only Evaluation execution traces.
 	Complete bool `json:"complete"`
-	// Source identifies the component that produced the usage summary.
-	Source string `json:"source,omitempty"`
+	// TelemetrySource identifies the authoritative usage producer.
+	TelemetrySource string `json:"telemetrySource"`
 }
 
 // FailureCategory is a stable, machine-readable failure class.
@@ -246,13 +269,29 @@ type Evidence struct {
 	Reason string `json:"reason"`
 }
 
+// AttributionPhase identifies the evaluation snapshot that produced a failure.
+type AttributionPhase string
+
+const (
+	// AttributionBaselineTrain identifies baseline training evidence.
+	AttributionBaselineTrain AttributionPhase = "baseline_train"
+	// AttributionBaselineValidation identifies baseline validation evidence.
+	AttributionBaselineValidation AttributionPhase = "baseline_validation"
+	// AttributionCandidateTrain identifies candidate training evidence.
+	AttributionCandidateTrain AttributionPhase = "candidate_train"
+	// AttributionCandidateValidation identifies candidate validation evidence.
+	AttributionCandidateValidation AttributionPhase = "candidate_validation"
+)
+
 // AttributionResult explains the primary failure of one training case.
 type AttributionResult struct {
-	EvalSetID string          `json:"evalSetId"`
-	CaseID    string          `json:"caseId"`
-	Category  FailureCategory `json:"category"`
-	Reason    string          `json:"reason"`
-	Evidence  []Evidence      `json:"evidence"`
+	Phase       AttributionPhase `json:"phase,omitempty"`
+	CandidateID string           `json:"candidateId,omitempty"`
+	EvalSetID   string           `json:"evalSetId"`
+	CaseID      string           `json:"caseId"`
+	Category    FailureCategory  `json:"category"`
+	Reason      string           `json:"reason"`
+	Evidence    []Evidence       `json:"evidence"`
 }
 
 // Candidate is one concrete profile produced by a PromptIter round.
@@ -361,6 +400,8 @@ type CandidateResult struct {
 	Validation           *EvaluationSnapshot `json:"validation"`
 	TrainDelta           *DeltaReport        `json:"trainDelta,omitempty"`
 	ValidationDelta      *DeltaReport        `json:"validationDelta"`
+	RoundUsage           UsageSummary        `json:"roundUsage"`
+	CumulativeUsage      UsageSummary        `json:"cumulativeUsage"`
 	Gate                 *GateDecision       `json:"gate"`
 }
 

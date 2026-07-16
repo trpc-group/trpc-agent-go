@@ -44,6 +44,7 @@ func Markdown(result *regression.RunResult) ([]byte, error) {
 	fmt.Fprintf(&builder, "# Prompt optimization report: %s\n\n", result.RunID)
 	fmt.Fprintf(&builder, "- Status: `%s`\n", result.Status)
 	fmt.Fprintf(&builder, "- Decision: `%s`\n", result.Decision)
+	builder.WriteString("- Release authority: `Regression release gate`\n")
 	fmt.Fprintf(&builder, "- Selected candidate: `%s`\n", result.SelectedCandidateID)
 	fmt.Fprintf(&builder, "- Input fingerprint: `%s`\n", result.Spec.InputFingerprint)
 	writeRandomSeed(&builder, result.Spec.Runtime)
@@ -82,9 +83,12 @@ func Markdown(result *regression.RunResult) ([]byte, error) {
 		builder.WriteString("No failed training cases.\n\n")
 	} else {
 		writeAttributionCounts(&builder, result.AttributionCounts)
-		builder.WriteString("| Set | Case | Category | Reason |\n|---|---|---|---|\n")
+		builder.WriteString("| Phase | Candidate | Set | Case | Category | Reason |\n")
+		builder.WriteString("|---|---|---|---|---|---|\n")
 		for _, attribution := range result.Attributions {
-			fmt.Fprintf(&builder, "| %s | %s | %s | %s |\n",
+			fmt.Fprintf(&builder, "| %s | %s | %s | %s | %s | %s |\n",
+				escapeCell(string(attribution.Phase)),
+				escapeCell(attribution.CandidateID),
 				escapeCell(attribution.EvalSetID),
 				escapeCell(attribution.CaseID),
 				escapeCell(string(attribution.Category)),
@@ -116,6 +120,12 @@ func Markdown(result *regression.RunResult) ([]byte, error) {
 			builder.WriteString("PromptIter action: `continue optimization`\n\n")
 		}
 		writeCodeBlock(&builder, profileText(candidate.Candidate.Profile, result.Spec.TargetSurfaceID))
+		builder.WriteString("### Resources\n\n")
+		builder.WriteString("| Scope | Calls | Tokens | Estimated cost | Cost known | PromptIter latency | Complete |\n")
+		builder.WriteString("|---|---:|---:|---:|---:|---:|---:|\n")
+		writeUsageRow(&builder, "round", candidate.RoundUsage)
+		writeUsageRow(&builder, "cumulative", candidate.CumulativeUsage)
+		builder.WriteString("\n")
 		if candidate.TrainDelta == nil {
 			builder.WriteString("Candidate training evidence is unavailable because this output profile ended the run before a later round could evaluate it as input.\n\n")
 		}
@@ -163,16 +173,24 @@ func Markdown(result *regression.RunResult) ([]byte, error) {
 	}
 
 	builder.WriteString("## Usage\n\n")
-	fmt.Fprintf(&builder, "Calls: %d; tokens: %d; estimated cost: %.6f (known: %t); latency: %s; complete: %t; source: `%s`.\n",
+	fmt.Fprintf(&builder, "Calls: %d; tokens: %d; estimated cost: %.6f (known: %t); PromptIter latency: %s; complete: %t; telemetry source: `%s`; pricing source: `%s`.\n",
 		result.Usage.Calls,
 		result.Usage.TotalTokens,
 		result.Usage.EstimatedCost,
 		result.Usage.CostKnown,
-		result.Usage.Latency,
+		result.Usage.PromptIterLatency,
 		result.Usage.Complete,
-		escapeCell(result.Usage.Source),
+		escapeCell(result.Usage.TelemetrySource),
+		escapeCell(result.Usage.PricingSource),
 	)
 	return []byte(builder.String()), nil
+}
+
+func writeUsageRow(builder *strings.Builder, scope string, usage regression.UsageSummary) {
+	fmt.Fprintf(builder, "| %s | %d | %d | %.6f | %t | %s | %t |\n",
+		scope, usage.Calls, usage.TotalTokens, usage.EstimatedCost,
+		usage.CostKnown, usage.PromptIterLatency, usage.Complete,
+	)
 }
 
 func writeProgressSummary(builder *strings.Builder, result *regression.RunResult) {

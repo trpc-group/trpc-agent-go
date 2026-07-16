@@ -10,6 +10,7 @@ package regression_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"math"
 	"strings"
@@ -101,7 +102,7 @@ func TestAnalyzerReturnsFailedResultForInvalidSpec(t *testing.T) {
 	result, err := analyzer.Analyze(
 		context.Background(), nil,
 		promptIterResult(profile("baseline"), profile("candidate"), true),
-		regression.UsageSummary{},
+		regression.UsageSupplement{},
 	)
 	if err == nil || result.Status != regression.RunStatusFailed || result.ErrorMessage == "" {
 		t.Fatalf("result=%+v err=%v", result, err)
@@ -122,7 +123,7 @@ func TestAnalyzerReturnsCanceledResultWhenAttributionIsCanceled(t *testing.T) {
 	result, err := analyzer.Analyze(
 		context.Background(), auditSpec(),
 		promptIterResult(profile("baseline"), profile("candidate"), true),
-		regression.UsageSummary{},
+		regression.UsageSupplement{},
 	)
 	if !errors.Is(err, context.Canceled) || result.Status != regression.RunStatusCanceled {
 		t.Fatalf("result=%+v err=%v", result, err)
@@ -137,24 +138,28 @@ func TestAnalyzerRejectsInconsistentUsageEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 	tests := []struct {
-		name  string
-		usage regression.UsageSummary
+		name        string
+		engineUsage promptiter.Usage
+		supplement  regression.UsageSupplement
 	}{
-		{name: "negative model calls", usage: regression.UsageSummary{Calls: -1}},
-		{name: "negative latency", usage: regression.UsageSummary{Latency: -time.Second}},
-		{name: "non-finite cost", usage: regression.UsageSummary{CostKnown: true, EstimatedCost: math.NaN()}},
-		{name: "unknown cost carries a value", usage: regression.UsageSummary{EstimatedCost: .5}},
-		{name: "token total contradicts components", usage: regression.UsageSummary{
-			InputTokens: 8, OutputTokens: 5, TotalTokens: 10,
+		{name: "negative model calls", engineUsage: promptiter.Usage{Calls: -1}},
+		{name: "negative latency", supplement: regression.UsageSupplement{PromptIterLatency: -time.Second}},
+		{name: "non-finite cost", supplement: regression.UsageSupplement{CostBreakdown: regression.CostBreakdown{CostEstimate: regression.CostEstimate{CostKnown: true, EstimatedCost: math.NaN(), PricingSource: "test"}}}},
+		{name: "unknown cost carries a value", supplement: regression.UsageSupplement{CostBreakdown: regression.CostBreakdown{CostEstimate: regression.CostEstimate{EstimatedCost: .5}}}},
+		{name: "unknown cost carries a pricing source", supplement: regression.UsageSupplement{CostBreakdown: regression.CostBreakdown{CostEstimate: regression.CostEstimate{PricingSource: "test"}}}},
+		{name: "known cost has no pricing source", supplement: regression.UsageSupplement{CostBreakdown: regression.CostBreakdown{CostEstimate: regression.CostEstimate{CostKnown: true}}}},
+		{name: "token total contradicts components", engineUsage: promptiter.Usage{
+			PromptTokens: 8, CompletionTokens: 5, TotalTokens: 10,
 		}},
-		{name: "complete usage has no provenance", usage: regression.UsageSummary{Complete: true}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			source := promptIterResult(profile("baseline"), profile("candidate"), true)
+			source.Usage = test.engineUsage
 			result, err := analyzer.Analyze(
 				context.Background(), auditSpec(),
-				promptIterResult(profile("baseline"), profile("candidate"), true),
-				test.usage,
+				source,
+				test.supplement,
 			)
 			if err == nil || result.Status != regression.RunStatusFailed {
 				t.Fatalf("result=%+v err=%v", result, err)
@@ -164,12 +169,10 @@ func TestAnalyzerRejectsInconsistentUsageEvidence(t *testing.T) {
 }
 
 func TestScenarioUsageEvidenceDerivesMissingTotalFromObservedTokens(t *testing.T) {
+	source := promptIterResult(profile("baseline"), profile("candidate"), true)
+	source.Usage = promptiter.Usage{PromptTokens: 8, CompletionTokens: 5, Complete: true}
 	result := analyzeWith(
-		t, auditSpec(),
-		promptIterResult(profile("baseline"), profile("candidate"), true),
-		regression.UsageSummary{
-			InputTokens: 8, OutputTokens: 5, Complete: true, Source: "full_pipeline",
-		},
+		t, auditSpec(), source, regression.UsageSupplement{},
 	)
 	if result.Usage.TotalTokens != 13 {
 		t.Fatalf("total tokens = %d, want 13", result.Usage.TotalTokens)
@@ -268,7 +271,7 @@ func TestAnalyzerRejectsMalformedPromptIterResults(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			result, err := analyzer.Analyze(
-				context.Background(), auditSpec(), test.build(), regression.UsageSummary{},
+				context.Background(), auditSpec(), test.build(), regression.UsageSupplement{},
 			)
 			if err == nil || result.Status != regression.RunStatusFailed || result.ErrorMessage == "" {
 				t.Fatalf("result=%+v err=%v", result, err)
@@ -316,7 +319,7 @@ func TestAnalyzerPropagatesAuditDependencyFailures(t *testing.T) {
 			result, err := analyzer.Analyze(
 				context.Background(), auditSpec(),
 				promptIterResult(profile("baseline"), profile("candidate"), true),
-				regression.UsageSummary{CostKnown: true},
+				regression.UsageSupplement{CostBreakdown: regression.CostBreakdown{CostEstimate: regression.CostEstimate{CostKnown: true, PricingSource: "test"}}},
 			)
 			if err == nil || result.Status != regression.RunStatusFailed {
 				t.Fatalf("result=%+v err=%v", result, err)
@@ -344,8 +347,13 @@ func TestAnalyzerAuditsPromptIterResultWithoutReevaluation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := analyzer.Analyze(context.Background(), auditSpec(), source, regression.UsageSummary{
-		Calls: 4, TotalTokens: 20, CostKnown: true, Latency: time.Second,
+	source.Usage = promptiter.Usage{Calls: 4, TotalTokens: 20, Complete: true}
+	result, err := analyzer.Analyze(context.Background(), auditSpec(), source, regression.UsageSupplement{
+		PromptIterLatency: time.Second,
+		CostBreakdown: regression.CostBreakdown{
+			CostEstimate:        regression.CostEstimate{CostKnown: true, PricingSource: "test"},
+			RoundEstimatedCosts: map[int]float64{1: 0, 2: 0},
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -360,7 +368,8 @@ func TestAnalyzerAuditsPromptIterResultWithoutReevaluation(t *testing.T) {
 	if candidateResult.ValidationDelta.WeightedScoreDelta != 1 || result.SelectedCandidateID == "" {
 		t.Fatalf("validation delta or selection missing: %+v", candidateResult.ValidationDelta)
 	}
-	if len(result.Attributions) != 1 || result.Attributions[0].Reason == "" {
+	baselineAttribution := attributionFor(result, regression.AttributionBaselineTrain, "train-case")
+	if baselineAttribution == nil || baselineAttribution.Reason == "" {
 		t.Fatalf("baseline failure attribution missing: %+v", result.Attributions)
 	}
 	if got := len(result.BaselineValidation.Cases[0].Runs[0].Trace); got != 1 {
@@ -393,6 +402,24 @@ func TestAnalyzerPreservesRepeatedProfileRounds(t *testing.T) {
 	}
 }
 
+func TestRegressionSelectionOverridesPromptIterRejectionForWriteBack(t *testing.T) {
+	baseline := profile("baseline")
+	candidate := profile("candidate")
+	source := promptIterResult(baseline, candidate, false)
+	result := analyze(t, source)
+	if result.Decision != regression.DecisionAccepted {
+		t.Fatalf("decision = %q, want accepted", result.Decision)
+	}
+	selected, err := result.SelectedProfile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if *selected.Overrides[0].Value.Text != "candidate" ||
+		*source.AcceptedProfile.Overrides[0].Value.Text != "baseline" {
+		t.Fatalf("selected=%+v PromptIter accepted=%+v", selected, source.AcceptedProfile)
+	}
+}
+
 func TestScenarioCriticalCaseIDMustResolveToOneValidationCase(t *testing.T) {
 	source := promptIterResult(profile("baseline"), profile("candidate"), true)
 	duplicate := evaluationResult(
@@ -411,7 +438,7 @@ func TestScenarioCriticalCaseIDMustResolveToOneValidationCase(t *testing.T) {
 		t.Fatal(err)
 	}
 	result, err := analyzer.Analyze(
-		context.Background(), spec, source, regression.UsageSummary{},
+		context.Background(), spec, source, regression.UsageSupplement{},
 	)
 	if err == nil || result.Status != regression.RunStatusFailed {
 		t.Fatalf("ambiguous critical case was accepted: result=%+v err=%v", result, err)
@@ -479,8 +506,9 @@ func TestScenarioToolBackendFailureUsesReachableEvaluationEvidence(t *testing.T)
 	if result.BaselineTrain.Cases[0].Passed {
 		t.Fatal("failed tool execution was reported as a passing case")
 	}
-	if len(result.Attributions) != 1 ||
-		result.Attributions[0].Category != regression.FailureToolResultHandling {
+	baselineAttribution := attributionFor(result, regression.AttributionBaselineTrain, "train-case")
+	if baselineAttribution == nil ||
+		baselineAttribution.Category != regression.FailureToolResultHandling {
 		t.Fatalf("unexpected attribution: %+v", result.Attributions)
 	}
 }
@@ -499,8 +527,9 @@ func TestScenarioTraceFailureOverridesPassingAggregateMetric(t *testing.T) {
 	if result.BaselineTrain.Cases[0].Passed {
 		t.Fatal("trace failure was hidden by the aggregate metric")
 	}
-	if len(result.Attributions) != 1 ||
-		result.Attributions[0].Category != regression.FailureInferenceError {
+	baselineAttribution := attributionFor(result, regression.AttributionBaselineTrain, "train-case")
+	if baselineAttribution == nil ||
+		baselineAttribution.Category != regression.FailureInferenceError {
 		t.Fatalf("unexpected attribution: %+v", result.Attributions)
 	}
 }
@@ -604,7 +633,7 @@ func TestScenarioAuditRedactsSecretsAndOwnsCandidateSnapshot(t *testing.T) {
 
 	spec := auditSpec()
 	spec.Audit = regression.AuditPolicy{IncludeRawContent: true, MaxContentBytes: 96}
-	result := analyzeWith(t, spec, source, regression.UsageSummary{})
+	result := analyzeWith(t, spec, source, regression.UsageSupplement{})
 	payload, err := report.JSON(result)
 	if err != nil {
 		t.Fatal(err)
@@ -673,7 +702,7 @@ func TestScenarioCustomPolicyModulesCannotLeakSecretsIntoAudit(t *testing.T) {
 	result, err := analyzer.Analyze(
 		context.Background(), spec,
 		promptIterResult(profile("baseline"), profile("candidate"), true),
-		regression.UsageSummary{},
+		regression.UsageSupplement{},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -697,16 +726,181 @@ func TestScenarioCustomPolicyModulesCannotLeakSecretsIntoAudit(t *testing.T) {
 	}
 }
 
-func TestScenarioRawExecutionContentIsExcludedByDefault(t *testing.T) {
-	result := analyze(t, promptIterResult(profile("baseline"), profile("candidate"), true))
-	observation := result.BaselineTrain.Cases[0].Runs[0]
-	if result.BaselineTrain.Cases[0].Input != "" || observation.FinalResponse != "" {
-		t.Fatalf("raw input or response was retained: %+v", observation)
+func TestAnalyzerUsesRawEvidenceBeforeReportSanitization(t *testing.T) {
+	source := promptIterResult(profile("baseline"), profile("candidate"), true)
+	invocation := source.Rounds[0].Train.EvalSets[0].Cases[0].RunDetails[0].Inference.Inferences[0]
+	invocation.FinalResponse.Content = "raw final response"
+	invocation.Tools = []*evalset.Tool{{
+		Name: "lookup", Arguments: map[string]any{"query": "raw tool arguments"},
+		Result: map[string]any{"value": "raw tool result"},
+	}}
+
+	analyzer, err := regression.New(regression.Dependencies{
+		Attributor: attributorFunc(func(_ context.Context, result *regression.CaseResult) (*regression.AttributionResult, error) {
+			if result.EvalSetID != "train" {
+				return &regression.AttributionResult{
+					EvalSetID: result.EvalSetID, CaseID: result.CaseID,
+					Category: regression.FailureUnknown, Reason: "validation evidence",
+					Evidence: []regression.Evidence{{Source: "metric", Path: "metrics", Reason: "validation evidence"}},
+				}, nil
+			}
+			observation := result.Runs[0]
+			if observation.FinalResponse != "raw final response" ||
+				!strings.Contains(observation.Tools[0].Arguments, "raw tool arguments") ||
+				!strings.Contains(observation.Tools[0].Result, "raw tool result") {
+				t.Fatalf("attributor received incomplete evidence: %+v", observation)
+			}
+			return &regression.AttributionResult{
+				EvalSetID: result.EvalSetID, CaseID: result.CaseID,
+				Category: regression.FailureToolArgument,
+				Reason:   "raw tool arguments identify the failure",
+				Evidence: []regression.Evidence{{Source: "tool", Path: "runs[0].tools[0].arguments", Reason: observation.Tools[0].Arguments}},
+			}, nil
+		}),
+		DeltaEngine: delta.New(1e-9),
+		Gate:        gate.NewPolicy(),
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if len(observation.Trace) != 1 || observation.Trace[0].StepID != "step" ||
+	result, err := analyzer.Analyze(
+		context.Background(), auditSpec(), source,
+		regression.UsageSupplement{
+			CostBreakdown: regression.CostBreakdown{
+				CostEstimate:        regression.CostEstimate{CostKnown: true, PricingSource: "test"},
+				RoundEstimatedCosts: map[int]float64{1: 0},
+			},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baselineAttribution := attributionFor(result, regression.AttributionBaselineTrain, "train-case")
+	if baselineAttribution == nil || baselineAttribution.Category != regression.FailureToolArgument {
+		t.Fatalf("unexpected attribution: %+v", result.Attributions)
+	}
+	payload, err := report.JSON(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var persisted regression.RunResult
+	if err := json.Unmarshal(payload, &persisted); err != nil {
+		t.Fatal(err)
+	}
+	observation := persisted.BaselineTrain.Cases[0].Runs[0]
+	if persisted.BaselineTrain.Cases[0].Input != "" || observation.FinalResponse != "" ||
+		observation.Tools[0].Arguments != "" || observation.Tools[0].Result != "" ||
 		observation.Trace[0].Input != "" || observation.Trace[0].Output != "" {
-		t.Fatalf("trace summary did not preserve identity while dropping payloads: %+v", observation.Trace)
+		t.Fatalf("persisted report retained raw evidence: %+v", observation)
 	}
+}
+
+func TestAnalyzerRetainsExpectedInvocationForAttribution(t *testing.T) {
+	source := promptIterResult(profile("baseline"), profile("candidate"), true)
+	trainCase := &source.Rounds[0].Train.EvalSets[0].Cases[0]
+	trainCase.Metrics[0].Reason = "contract rejected"
+	trainCase.RunResults[0].OverallEvalMetricResults[0].Details.Reason = "contract rejected"
+	expected := model.NewAssistantMessage("expected response")
+	actual := model.NewAssistantMessage("response")
+	trainCase.RunResults[0].EvalMetricResultPerInvocation = []*evalresult.EvalMetricResultPerInvocation{{
+		ExpectedInvocation: &evalset.Invocation{FinalResponse: &expected},
+		ActualInvocation:   &evalset.Invocation{FinalResponse: &actual},
+	}}
+
+	result := analyze(t, source)
+	baselineAttribution := attributionFor(result, regression.AttributionBaselineTrain, "train-case")
+	if baselineAttribution == nil || baselineAttribution.Category != regression.FailureFinalResponseMismatch {
+		t.Fatalf("attributions = %+v", result.Attributions)
+	}
+	run := result.BaselineTrain.Cases[0].Runs[0]
+	if run.ExpectedFinalResponse != "expected response" {
+		t.Fatalf("expected final response = %q", run.ExpectedFinalResponse)
+	}
+	payload, err := report.JSON(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var persisted regression.RunResult
+	if err := json.Unmarshal(payload, &persisted); err != nil {
+		t.Fatal(err)
+	}
+	if persisted.BaselineTrain.Cases[0].Runs[0].ExpectedFinalResponse != "" {
+		t.Fatal("report retained raw expected response while raw content was disabled")
+	}
+}
+
+func TestAnalyzerAttributesFailuresAcrossAuditSnapshots(t *testing.T) {
+	source := promptIterResult(profile("baseline"), profile("candidate"), false)
+	setEvaluationMetric(
+		source.Rounds[0].Validation, "quality", 0,
+		status.EvalStatusFailed, "candidate response mismatch",
+	)
+	result := analyze(t, source)
+
+	observed := make(map[string]int)
+	for _, attribution := range result.Attributions {
+		observed[string(attribution.Phase)+"/"+attribution.CandidateID]++
+	}
+	if observed["baseline_train/"] != 1 || observed["baseline_validation/"] != 1 {
+		t.Fatalf("baseline attribution scopes = %v", observed)
+	}
+	if observed["candidate_validation/"+result.Candidates[0].Candidate.ID] != 1 {
+		t.Fatalf("candidate attribution scopes = %v", observed)
+	}
+}
+
+func TestAnalyzerUsesPerRoundAndCumulativeUsageForCandidateGates(t *testing.T) {
+	source := promptIterResult(profile("baseline"), profile("candidate-1"), true)
+	appendFollowUpRound(
+		source, profile("candidate-2"),
+		evaluationResult("train", "train-case", 1, status.EvalStatusPassed, ""),
+		evaluationResult("validation", "validation-case", 1, status.EvalStatusPassed, ""),
+		true,
+	)
+	source.BaselineValidation.Usage = promptiter.Usage{Calls: 1, TotalTokens: 10, Complete: true}
+	source.Rounds[0].Usage = promptiter.Usage{Calls: 2, TotalTokens: 20, Complete: true}
+	source.Rounds[0].Duration = 20 * time.Millisecond
+	source.Rounds[1].Usage = promptiter.Usage{Calls: 2, TotalTokens: 20, Complete: true}
+	source.Rounds[1].Duration = 30 * time.Millisecond
+	source.Usage = promptiter.Usage{Calls: 5, TotalTokens: 50, Complete: true}
+	spec := auditSpec()
+	spec.Budget.MaxCalls = 3
+	result := analyzeWith(t, spec, source, regression.UsageSupplement{
+		CostBreakdown: regression.CostBreakdown{
+			CostEstimate: regression.CostEstimate{
+				EstimatedCost: 0.5, CostKnown: true, PricingSource: "test-pricing",
+			},
+			BaselineEstimatedCost: 0.1,
+			RoundEstimatedCosts:   map[int]float64{1: 0.2, 2: 0.2},
+		},
+	})
+
+	if result.Candidates[0].RoundUsage.Calls != 2 ||
+		result.Candidates[0].RoundUsage.PromptIterLatency != 20*time.Millisecond ||
+		result.Candidates[0].RoundUsage.EstimatedCost != 0.2 {
+		t.Fatalf("round 1 usage = %+v", result.Candidates[0].RoundUsage)
+	}
+	if result.Candidates[0].CumulativeUsage.Calls != 3 ||
+		result.Candidates[1].CumulativeUsage.Calls != 5 {
+		t.Fatalf("cumulative usage = %+v / %+v",
+			result.Candidates[0].CumulativeUsage, result.Candidates[1].CumulativeUsage)
+	}
+	if !gateRule(result.Candidates[0].Gate, "call_budget").Passed ||
+		gateRule(result.Candidates[1].Gate, "call_budget").Passed {
+		t.Fatalf("candidate gates did not use cumulative usage: %+v", result.Candidates)
+	}
+}
+
+func gateRule(decision *regression.GateDecision, name string) regression.GateRuleResult {
+	if decision == nil {
+		return regression.GateRuleResult{}
+	}
+	for _, rule := range decision.Rules {
+		if rule.Rule == name {
+			return rule
+		}
+	}
+	return regression.GateRuleResult{}
 }
 
 func TestScenarioCanceledAuditStopsBeforeConsumingEvaluationEvidence(t *testing.T) {
@@ -729,7 +923,7 @@ func TestScenarioCanceledAuditStopsBeforeConsumingEvaluationEvidence(t *testing.
 	result, err := analyzer.Analyze(
 		ctx, auditSpec(),
 		promptIterResult(profile("baseline"), profile("candidate"), true),
-		regression.UsageSummary{},
+		regression.UsageSupplement{},
 	)
 	if !errors.Is(err, context.Canceled) || result.Status != regression.RunStatusCanceled {
 		t.Fatalf("result=%+v err=%v", result, err)
@@ -738,16 +932,38 @@ func TestScenarioCanceledAuditStopsBeforeConsumingEvaluationEvidence(t *testing.
 
 func analyze(t *testing.T, source *engine.RunResult) *regression.RunResult {
 	t.Helper()
-	return analyzeWith(t, auditSpec(), source, regression.UsageSummary{CostKnown: true})
+	return analyzeWith(t, auditSpec(), source, regression.UsageSupplement{
+		CostBreakdown: regression.CostBreakdown{CostEstimate: regression.CostEstimate{
+			CostKnown: true, PricingSource: "test",
+		}},
+	})
+}
+
+func attributionFor(
+	result *regression.RunResult,
+	phase regression.AttributionPhase,
+	caseID string,
+) *regression.AttributionResult {
+	if result == nil {
+		return nil
+	}
+	for index := range result.Attributions {
+		attribution := &result.Attributions[index]
+		if attribution.Phase == phase && attribution.CaseID == caseID {
+			return attribution
+		}
+	}
+	return nil
 }
 
 func analyzeWith(
 	t *testing.T,
 	spec *regression.RunSpec,
 	source *engine.RunResult,
-	usage regression.UsageSummary,
+	usage regression.UsageSupplement,
 ) *regression.RunResult {
 	t.Helper()
+	usage = completeTestCostBreakdown(source, usage)
 	analyzer, err := regression.New(regression.Dependencies{
 		Attributor:  attribution.NewRules(),
 		DeltaEngine: delta.New(1e-9),
@@ -763,6 +979,21 @@ func analyzeWith(
 	return result
 }
 
+func completeTestCostBreakdown(
+	source *engine.RunResult,
+	usage regression.UsageSupplement,
+) regression.UsageSupplement {
+	if !usage.CostKnown || usage.RoundEstimatedCosts != nil || source == nil {
+		return usage
+	}
+	usage.BaselineEstimatedCost = usage.EstimatedCost
+	usage.RoundEstimatedCosts = make(map[int]float64, len(source.Rounds))
+	for _, round := range source.Rounds {
+		usage.RoundEstimatedCosts[round.Round] = 0
+	}
+	return usage
+}
+
 func auditSpec() *regression.RunSpec {
 	return &regression.RunSpec{
 		RunID: "run", TargetSurfaceID: "agent#instruction",
@@ -772,10 +1003,9 @@ func auditSpec() *regression.RunSpec {
 			"quality": {Weight: 1},
 		},
 		Gate: regression.GatePolicy{
-			MinValidationGain:      .1,
-			MaxCaseRegression:      1,
-			RejectAnyNewFail:       true,
-			RequireCompleteResults: true,
+			MinValidationGain: .1,
+			MaxCaseRegression: 1,
+			RejectAnyNewFail:  true,
 		},
 	}
 }
@@ -809,6 +1039,7 @@ func promptIterResult(
 			}
 			return baseline
 		}(),
+		Usage: promptiter.Usage{Complete: true},
 		Rounds: []engine.RoundResult{
 			{
 				Round: 1, InputProfile: baseline, Train: baselineTrain,

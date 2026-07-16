@@ -31,7 +31,7 @@ type Dependencies struct {
 
 // Analyzer converts one completed PromptIter run into a release audit report.
 type Analyzer interface {
-	Analyze(context.Context, *RunSpec, *engine.RunResult, UsageSummary) (*RunResult, error)
+	Analyze(context.Context, *RunSpec, *engine.RunResult, UsageSupplement) (*RunResult, error)
 }
 
 type analyzer struct {
@@ -58,7 +58,7 @@ func (a *analyzer) Analyze(
 	ctx context.Context,
 	spec *RunSpec,
 	source *engine.RunResult,
-	usage UsageSummary,
+	usageSupplement UsageSupplement,
 ) (result *RunResult, err error) {
 	started := a.deps.Now().UTC()
 	result = &RunResult{
@@ -66,7 +66,6 @@ func (a *analyzer) Analyze(
 		Status:        RunStatusRunning,
 		StartedAt:     started,
 		Decision:      DecisionRejected,
-		Usage:         usage,
 	}
 	defer func() {
 		result.EndedAt = a.deps.Now().UTC()
@@ -91,23 +90,26 @@ func (a *analyzer) Analyze(
 	if err = spec.Validate(); err != nil {
 		return result, fmt.Errorf("preflight: %w", err)
 	}
-	result.Usage, err = normalizeUsageSummary(result.Usage)
+	if source == nil {
+		return result, errors.New("PromptIter result is nil")
+	}
+	result.Usage, err = buildUsageSummary(source, usageSupplement)
 	if err != nil {
 		return result, fmt.Errorf("preflight usage: %w", err)
 	}
-	result.Usage.Source = sanitizeContent(spec.Audit, result.Usage.Source)
 	if err = validatePromptIterResult(source, spec); err != nil {
 		return result, fmt.Errorf("PromptIter result: %w", err)
+	}
+	candidateUsages, err := buildCandidateUsages(source, usageSupplement)
+	if err != nil {
+		return result, fmt.Errorf("candidate usage: %w", err)
 	}
 	result.RunID = spec.RunID
 	result.Spec = cloneRunSpec(spec)
 	result.PromptIter = promptIterConfiguration(source.Configuration)
-	baselineProfile := initialProfile(source)
-	if baselineProfile == nil {
-		return result, errors.New("PromptIter result has no initial profile")
-	}
-	result.BaselineProfile = sanitizeProfile(baselineProfile, spec.Audit)
-	if err = a.buildAudit(ctx, source, result, baselineProfile); err != nil {
+	baselineProfile := source.InitialProfile
+	result.BaselineProfile = promptiter.CloneProfile(baselineProfile)
+	if err = a.buildAudit(ctx, source, result, baselineProfile, candidateUsages); err != nil {
 		return result, err
 	}
 	return result, nil
@@ -213,6 +215,7 @@ func (a *analyzer) buildAudit(
 	source *engine.RunResult,
 	result *RunResult,
 	baselineProfile *promptiter.Profile,
+	candidateUsages map[int]candidateUsage,
 ) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -220,7 +223,7 @@ func (a *analyzer) buildAudit(
 	critical := stringSet(result.Spec.CriticalCaseIDs)
 	var err error
 	result.BaselineValidation, err = adaptEvaluation(
-		source.BaselineValidation, baselineProfile, critical, result.Spec.Audit,
+		source.BaselineValidation, baselineProfile, critical,
 	)
 	if err != nil {
 		return fmt.Errorf("adapt baseline validation: %w", err)
@@ -231,18 +234,25 @@ func (a *analyzer) buildAudit(
 	markConfiguredMetricCoverage(result.BaselineValidation, result.Spec.MetricPolicies)
 	markExpectedRunCoverage(result.BaselineValidation, result.Spec.Runtime.NumRuns)
 	result.BaselineTrain, err = adaptEvaluation(
-		source.Rounds[0].Train, baselineProfile, critical, result.Spec.Audit,
+		source.Rounds[0].Train, baselineProfile, critical,
 	)
 	if err != nil {
 		return fmt.Errorf("adapt baseline train: %w", err)
 	}
 	markConfiguredMetricCoverage(result.BaselineTrain, result.Spec.MetricPolicies)
 	markExpectedRunCoverage(result.BaselineTrain, result.Spec.Runtime.NumRuns)
-	if err := a.attributeFailures(ctx, result); err != nil {
+	if err := a.attributeSnapshot(
+		ctx, result, result.BaselineTrain, AttributionBaselineTrain, "",
+	); err != nil {
+		return err
+	}
+	if err := a.attributeSnapshot(
+		ctx, result, result.BaselineValidation, AttributionBaselineValidation, "",
+	); err != nil {
 		return err
 	}
 	trainByProfile, err := buildTrainIndex(
-		ctx, source, critical, result.Spec.Audit, result.Spec.MetricPolicies,
+		ctx, source, critical, result.Spec.MetricPolicies,
 		result.Spec.Runtime.NumRuns,
 	)
 	if err != nil {
@@ -254,12 +264,26 @@ func (a *analyzer) buildAudit(
 		}
 		candidateResult, err := a.auditRound(
 			result, baselineProfile, round, trainByProfile, critical,
+			candidateUsages[round.Round],
 		)
 		if err != nil {
 			return err
 		}
 		result.Candidates = append(result.Candidates, *candidateResult)
+		if err := a.attributeSnapshot(
+			ctx, result, candidateResult.Train,
+			AttributionCandidateTrain, candidateResult.Candidate.ID,
+		); err != nil {
+			return err
+		}
+		if err := a.attributeSnapshot(
+			ctx, result, candidateResult.Validation,
+			AttributionCandidateValidation, candidateResult.Candidate.ID,
+		); err != nil {
+			return err
+		}
 	}
+	finalizeAttributions(result)
 	selectCandidate(result)
 	return nil
 }
@@ -284,12 +308,21 @@ func validateCriticalCases(snapshot *EvaluationSnapshot, configured []string) er
 	return nil
 }
 
-func (a *analyzer) attributeFailures(ctx context.Context, result *RunResult) error {
-	for index := range result.BaselineTrain.Cases {
+func (a *analyzer) attributeSnapshot(
+	ctx context.Context,
+	result *RunResult,
+	snapshot *EvaluationSnapshot,
+	phase AttributionPhase,
+	candidateID string,
+) error {
+	if snapshot == nil {
+		return nil
+	}
+	for index := range snapshot.Cases {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		caseResult := &result.BaselineTrain.Cases[index]
+		caseResult := &snapshot.Cases[index]
 		if caseResult.Passed && !hasExecutionError(caseResult) {
 			continue
 		}
@@ -323,10 +356,21 @@ func (a *analyzer) attributeFailures(ctx context.Context, result *RunResult) err
 				return fmt.Errorf("attribute case %q returned empty evidence reason", caseResult.CaseID)
 			}
 		}
-		attribution = sanitizeAttribution(attribution, result.Spec.Audit)
+		attribution.Phase = phase
+		attribution.CandidateID = candidateID
 		result.Attributions = append(result.Attributions, *attribution)
 	}
+	return nil
+}
+
+func finalizeAttributions(result *RunResult) {
 	sort.Slice(result.Attributions, func(i, j int) bool {
+		if result.Attributions[i].Phase != result.Attributions[j].Phase {
+			return result.Attributions[i].Phase < result.Attributions[j].Phase
+		}
+		if result.Attributions[i].CandidateID != result.Attributions[j].CandidateID {
+			return result.Attributions[i].CandidateID < result.Attributions[j].CandidateID
+		}
 		if result.Attributions[i].EvalSetID != result.Attributions[j].EvalSetID {
 			return result.Attributions[i].EvalSetID < result.Attributions[j].EvalSetID
 		}
@@ -336,7 +380,6 @@ func (a *analyzer) attributeFailures(ctx context.Context, result *RunResult) err
 	for _, attribution := range result.Attributions {
 		result.AttributionCounts[attribution.Category]++
 	}
-	return nil
 }
 
 func (a *analyzer) auditRound(
@@ -345,13 +388,14 @@ func (a *analyzer) auditRound(
 	round engine.RoundResult,
 	trainByProfile map[string][]trainEvidence,
 	critical map[string]struct{},
+	usage candidateUsage,
 ) (*CandidateResult, error) {
 	hash, err := ProfileHash(round.OutputProfile)
 	if err != nil {
 		return nil, fmt.Errorf("hash round %d output profile: %w", round.Round, err)
 	}
 	validation, err := adaptEvaluation(
-		round.Validation, round.OutputProfile, critical, result.Spec.Audit,
+		round.Validation, round.OutputProfile, critical,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("adapt round %d validation: %w", round.Round, err)
@@ -370,11 +414,13 @@ func (a *analyzer) auditRound(
 		Candidate: Candidate{
 			ID:          fmt.Sprintf("round-%d-%s", round.Round, hash[:12]),
 			Round:       round.Round,
-			Profile:     sanitizeProfile(round.OutputProfile, result.Spec.Audit),
+			Profile:     promptiter.CloneProfile(round.OutputProfile),
 			ProfileHash: hash,
 		},
 		Validation:      validation,
 		ValidationDelta: validationDelta,
+		RoundUsage:      usage.round,
+		CumulativeUsage: usage.cumulative,
 	}
 	profileChanged, err := profileChanged(round.InputProfile, round.OutputProfile)
 	if err != nil {
@@ -382,16 +428,15 @@ func (a *analyzer) auditRound(
 	}
 	candidate.ProfileChanged = profileChanged
 	candidate.PromptIterAccepted = round.Acceptance.Accepted
-	candidate.PromptIterReason = sanitizeContent(result.Spec.Audit, round.Acceptance.Reason)
+	candidate.PromptIterReason = round.Acceptance.Reason
 	if round.Stop.ShouldStop {
 		candidate.PromptIterShouldStop = true
-		candidate.PromptIterStopReason = sanitizeContent(result.Spec.Audit, round.Stop.Reason)
+		candidate.PromptIterStopReason = round.Stop.Reason
 	}
 	train, err := roundCandidateTrain(
 		round,
 		trainByProfile[hash],
 		critical,
-		result.Spec.Audit,
 		result.Spec.MetricPolicies,
 		result.Spec.Runtime.NumRuns,
 	)
@@ -424,7 +469,7 @@ func (a *analyzer) auditRound(
 		CandidateValidation:     validation,
 		TrainDelta:              candidate.TrainDelta,
 		ValidationDelta:         validationDelta,
-		TotalUsage:              result.Usage,
+		TotalUsage:              candidate.CumulativeUsage,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("gate round %d: %w", round.Round, err)
@@ -435,7 +480,7 @@ func (a *analyzer) auditRound(
 	if err := validateGateDecision(gateDecision); err != nil {
 		return nil, fmt.Errorf("gate round %d returned invalid decision: %w", round.Round, err)
 	}
-	candidate.Gate = sanitizeGateDecision(gateDecision, result.Spec.Audit)
+	candidate.Gate = gateDecision
 	return candidate, nil
 }
 

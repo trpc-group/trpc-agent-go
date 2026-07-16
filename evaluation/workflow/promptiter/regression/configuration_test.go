@@ -51,6 +51,9 @@ func TestValidatePromptIterConfigurationRejectsIncompatibleSettings(t *testing.T
 		{name: "negative parallelism", mutate: func(source *engine.RunConfiguration, _ *RunSpec) { source.EvaluationOptions.EvalCaseParallelism = -1 }},
 		{name: "no target ids", mutate: func(source *engine.RunConfiguration, _ *RunSpec) { source.TargetSurfaceIDs = nil }},
 		{name: "empty target id", mutate: func(source *engine.RunConfiguration, _ *RunSpec) { source.TargetSurfaceIDs = []string{""} }},
+		{name: "multiple target ids", mutate: func(source *engine.RunConfiguration, _ *RunSpec) {
+			source.TargetSurfaceIDs = []string{"target", "secondary"}
+		}},
 		{name: "duplicate target id", mutate: func(source *engine.RunConfiguration, _ *RunSpec) {
 			source.TargetSurfaceIDs = []string{"target", "target"}
 		}},
