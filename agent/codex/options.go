@@ -120,7 +120,7 @@ func withCommandRunner(runner commandRunner) Option {
 func newOptions(opt ...Option) (*options, error) {
 	opts := &options{
 		name:          "codex-cli",
-		description:   "Invokes a locally installed Codex CLI and emits tool events from its JSONL output.",
+		description:   "Invokes a locally installed Codex CLI and emits assistant and tool events from its JSONL output.",
 		bin:           "codex",
 		commandRunner: execCommandRunner{},
 	}

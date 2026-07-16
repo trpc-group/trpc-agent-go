@@ -154,6 +154,7 @@ func (a *codexAgent) emitFinalResponse(
 		finalContent = strings.TrimSpace(result.FinalMessage)
 	}
 	rsp := &model.Response{
+		ID:     strings.TrimSpace(result.FinalMessageID),
 		Object: model.ObjectTypeChatCompletion,
 		Done:   true,
 		Usage:  result.Usage,

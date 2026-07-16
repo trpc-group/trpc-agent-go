@@ -77,7 +77,7 @@ ag, err := codex.New(
 
 ## 事件映射
 
-该 Agent 会实时发出工具事件与错误事件，并在 Codex turn 完成后发出最终响应事件；不发出中间 reasoning 事件。
+该 Agent 会随着 Codex JSONL 到达实时发出 assistant、工具与错误事件，并在 Codex turn 完成后发出最终完成响应。Codex 的 `agent_message` 是完整消息 item，不是 token delta，因此会映射为非终止 assistant response。最终完成响应使用最后一个 assistant message 的内容，并携带最终 usage 与 thread state；不发出中间 reasoning 事件。
 
 | Codex JSONL 输出 | 框架事件 |
 | --- | --- |
@@ -86,7 +86,7 @@ ag, err := codex.New(
 | `item.type == "mcp_tool_call"` | tool-call 与 tool-result response 事件 |
 | `web_search`、`file_change`、`image_view`、`image_generation` 等内置工具 item | tool-call 与 tool-result response 事件 |
 | `type == "turn.failed"` 或 `type == "error"` | error response 事件 |
-| `item.type == "agent_message"` | final response 内容 |
+| `item.type == "agent_message"` | 非终止 assistant response；最后一个 item 同时作为 final response 内容 |
 | `type == "turn.completed"` | final response usage |
 
 MCP 工具调用会尽量归一化为与 Claude Code 兼容的工具名：`mcp__<server>__<tool>`。

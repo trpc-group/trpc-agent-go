@@ -77,7 +77,7 @@ If multiple external skill repositories are configured for that Codex CLI enviro
 
 ## Event mapping
 
-The agent emits tool and error events as Codex JSONL records arrive, then emits the final response after the Codex turn completes. It does not emit intermediate reasoning events.
+The agent emits assistant, tool, and error events as Codex JSONL records arrive, then emits a final completion response after the Codex turn completes. Codex `agent_message` items are complete message items rather than token deltas, so they are emitted as non-terminal assistant responses. The final completion response uses the last assistant message content and carries final usage and thread state. It does not emit intermediate reasoning events.
 
 | Codex JSONL output | Framework event |
 | --- | --- |
@@ -86,7 +86,7 @@ The agent emits tool and error events as Codex JSONL records arrive, then emits 
 | `item.type == "mcp_tool_call"` | tool-call and tool-result response events |
 | Built-in tool items such as `web_search`, `file_change`, `image_view`, and `image_generation` | tool-call and tool-result response events |
 | `type == "turn.failed"` or `type == "error"` | error response event |
-| `item.type == "agent_message"` | final response event content |
+| `item.type == "agent_message"` | non-terminal assistant response event; the last item also becomes the final response content |
 | `type == "turn.completed"` | final response usage |
 
 MCP tool calls are normalized to Claude Code-compatible names when possible: `mcp__<server>__<tool>`.

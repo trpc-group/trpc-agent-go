@@ -100,11 +100,12 @@ type codexError struct {
 
 // transcriptResult is the framework event projection of one Codex JSONL transcript.
 type transcriptResult struct {
-	Events       []*event.Event
-	FinalMessage string
-	ThreadID     string
-	Usage        *model.Usage
-	Error        *model.ResponseError
+	Events         []*event.Event
+	FinalMessage   string
+	FinalMessageID string
+	ThreadID       string
+	Usage          *model.Usage
+	Error          *model.ResponseError
 }
 
 // transcriptStream incrementally maps Codex JSONL records to framework events.
@@ -244,7 +245,12 @@ func completedEventsFromItem(invocationID, author string, item *codexItem, toolN
 	}
 	if item.Type == codexItemAgentMessage {
 		result.FinalMessage = item.Text
-		return nil
+		result.FinalMessageID = strings.TrimSpace(item.ID)
+		evt := newAssistantMessageEvent(invocationID, author, result.FinalMessageID, item.Text)
+		if evt == nil {
+			return nil
+		}
+		return []*event.Event{evt}
 	}
 	if !isToolItem(item.Type) || strings.TrimSpace(item.ID) == "" {
 		return nil
@@ -280,6 +286,21 @@ func errorEventFromRecord(invocationID, author string, rec codexEvent) *event.Ev
 			},
 		},
 		Error: responseErr,
+	}
+	return event.NewResponseEvent(invocationID, author, rsp)
+}
+
+// newAssistantMessageEvent creates a non-terminal response for one complete Codex assistant item.
+func newAssistantMessageEvent(invocationID, author, responseID, text string) *event.Event {
+	content := strings.TrimSpace(text)
+	if content == "" {
+		return nil
+	}
+	rsp := &model.Response{
+		ID:      strings.TrimSpace(responseID),
+		Object:  model.ObjectTypeChatCompletion,
+		Done:    false,
+		Choices: []model.Choice{{Index: 0, Message: model.Message{Role: model.RoleAssistant, Content: content}}},
 	}
 	return event.NewResponseEvent(invocationID, author, rsp)
 }

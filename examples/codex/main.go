@@ -84,6 +84,7 @@ func runOnce(ctx context.Context, r runner.Runner, userID, sessionID, prompt str
 	if err != nil {
 		return err
 	}
+	var lastAssistantResponseID string
 	for evt := range ch {
 		if evt == nil {
 			continue
@@ -94,11 +95,33 @@ func runOnce(ctx context.Context, r runner.Runner, userID, sessionID, prompt str
 		}
 		printToolEvents(evt)
 		printThreadState(evt)
-		if evt.IsFinalResponse() && len(evt.Choices) > 0 {
-			fmt.Printf("Assistant: %s\n", strings.TrimSpace(evt.Choices[0].Message.Content))
-		}
+		printAssistantEvent(evt, &lastAssistantResponseID)
 	}
 	return nil
+}
+
+func printAssistantEvent(evt *event.Event, lastAssistantResponseID *string) {
+	if evt.Response == nil || len(evt.Choices) == 0 || evt.IsToolCallResponse() || evt.IsToolResultResponse() {
+		return
+	}
+	content := strings.TrimSpace(evt.Choices[0].Message.Content)
+	if content == "" {
+		return
+	}
+	if evt.IsFinalResponse() {
+		if evt.Response.ID != "" && lastAssistantResponseID != nil && evt.Response.ID == *lastAssistantResponseID {
+			return
+		}
+		fmt.Printf("Assistant: %s\n", content)
+		return
+	}
+	if evt.Object != model.ObjectTypeChatCompletion || evt.Done || evt.IsPartial {
+		return
+	}
+	if lastAssistantResponseID != nil {
+		*lastAssistantResponseID = evt.Response.ID
+	}
+	fmt.Printf("Assistant: %s\n", content)
 }
 
 func printToolEvents(evt *event.Event) {

@@ -132,20 +132,24 @@ func TestCodexAgent_Run_CreateParsesEventsAndStoresThread(t *testing.T) {
 	ch, err := ag.Run(ctx, inv)
 	require.NoError(t, err)
 	events := drainEvents(ch)
-	require.Len(t, events, 3)
+	require.Len(t, events, 4)
 	require.True(t, events[0].IsToolCallResponse())
 	require.True(t, events[1].IsToolResultResponse())
-	require.True(t, events[2].IsFinalResponse())
+	require.False(t, events[2].IsFinalResponse())
+	require.True(t, events[3].IsFinalResponse())
 	require.Equal(t, "command_execution", events[0].Choices[0].Message.ToolCalls[0].Function.Name)
 	require.Equal(t, `{"command":"/usr/bin/bash -lc 'printf hi'"}`, string(events[0].Choices[0].Message.ToolCalls[0].Function.Arguments))
 	require.Equal(t, "hi", events[1].Choices[0].Message.Content)
 	require.Equal(t, "done", events[2].Choices[0].Message.Content)
-	require.Equal(t, 10, events[2].Usage.PromptTokens)
-	require.Equal(t, 3, events[2].Usage.CompletionTokens)
-	require.Equal(t, 13, events[2].Usage.TotalTokens)
-	require.Equal(t, 2, events[2].Usage.PromptTokensDetails.CachedTokens)
-	require.Equal(t, 1, events[2].Usage.CompletionTokensDetails.ReasoningTokens)
-	require.Equal(t, []byte("thread-1"), events[2].StateDelta[StateKeyThreadID])
+	require.Equal(t, "item_1", events[2].Response.ID)
+	require.Equal(t, "done", events[3].Choices[0].Message.Content)
+	require.Equal(t, "item_1", events[3].Response.ID)
+	require.Equal(t, 10, events[3].Usage.PromptTokens)
+	require.Equal(t, 3, events[3].Usage.CompletionTokens)
+	require.Equal(t, 13, events[3].Usage.TotalTokens)
+	require.Equal(t, 2, events[3].Usage.PromptTokensDetails.CachedTokens)
+	require.Equal(t, 1, events[3].Usage.CompletionTokensDetails.ReasoningTokens)
+	require.Equal(t, []byte("thread-1"), events[3].StateDelta[StateKeyThreadID])
 	calls := runner.Calls()
 	require.Len(t, calls, 1)
 	require.Equal(t, "codex", calls[0].bin)
@@ -196,12 +200,72 @@ func TestCodexAgent_Run_StreamsToolEventBeforeCommandReturns(t *testing.T) {
 	}
 	close(release)
 	events := append([]*event.Event{first}, drainEvents(ch)...)
-	require.Len(t, events, 3)
+	require.Len(t, events, 4)
 	require.True(t, events[1].IsToolResultResponse())
 	require.Equal(t, "done", events[1].Choices[0].Message.Content)
-	require.True(t, events[2].IsFinalResponse())
+	require.False(t, events[2].IsFinalResponse())
 	require.Equal(t, "finished", events[2].Choices[0].Message.Content)
-	require.Equal(t, 3, events[2].Usage.TotalTokens)
+	require.True(t, events[3].IsFinalResponse())
+	require.Equal(t, "finished", events[3].Choices[0].Message.Content)
+	require.Equal(t, 3, events[3].Usage.TotalTokens)
+}
+
+func TestCodexAgent_Run_StreamsAssistantMessagesAroundToolEvents(t *testing.T) {
+	ctx := context.Background()
+	sess := session.NewSession("app", "user", "sess-stream-2")
+	inv := newTestInvocation("inv-stream-2", sess, "Say, run, say.")
+	release := make(chan struct{})
+	returned := make(chan struct{})
+	firstLine := []byte(`{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"good luck"}}` + "\n")
+	rest := []byte(`{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"sleep 1","status":"in_progress"}}` + "\n" +
+		`{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"sleep 1","aggregated_output":"done","exit_code":0,"status":"completed"}}` + "\n" +
+		`{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"practice makes perfect"}}` + "\n" +
+		`{"type":"turn.completed","usage":{"input_tokens":3,"output_tokens":4}}` + "\n")
+	runner := &scriptedRunner{
+		stream: func(cmd command, onStdoutLine commandOutputHandler) commandResult {
+			stdout := append([]byte(nil), firstLine...)
+			if err := onStdoutLine(firstLine); err != nil {
+				close(returned)
+				return commandResult{stdout: stdout, outputErr: err}
+			}
+			<-release
+			stdout = append(stdout, rest...)
+			outputErr := emitScriptedStdout(rest, onStdoutLine)
+			close(returned)
+			return commandResult{stdout: stdout, outputErr: outputErr}
+		},
+	}
+	ag, err := New(withCommandRunner(runner))
+	require.NoError(t, err)
+	ch, err := ag.Run(ctx, inv)
+	require.NoError(t, err)
+	var first *event.Event
+	select {
+	case first = <-ch:
+	case <-time.After(time.Second):
+		require.FailNow(t, "timed out waiting for streamed assistant event")
+	}
+	require.False(t, first.IsFinalResponse())
+	require.Equal(t, model.ObjectTypeChatCompletion, first.Object)
+	require.Equal(t, "item_0", first.Response.ID)
+	require.Equal(t, "good luck", first.Choices[0].Message.Content)
+	select {
+	case <-returned:
+		require.FailNow(t, "command returned before the test released it")
+	default:
+	}
+	close(release)
+	events := append([]*event.Event{first}, drainEvents(ch)...)
+	require.Len(t, events, 5)
+	require.True(t, events[1].IsToolCallResponse())
+	require.True(t, events[2].IsToolResultResponse())
+	require.False(t, events[3].IsFinalResponse())
+	require.Equal(t, "practice makes perfect", events[3].Choices[0].Message.Content)
+	require.Equal(t, "item_2", events[3].Response.ID)
+	require.True(t, events[4].IsFinalResponse())
+	require.Equal(t, "practice makes perfect", events[4].Choices[0].Message.Content)
+	require.Equal(t, "item_2", events[4].Response.ID)
+	require.Equal(t, 7, events[4].Usage.TotalTokens)
 }
 
 func TestCodexAgent_Run_ResumeFromSessionState(t *testing.T) {
@@ -220,9 +284,12 @@ func TestCodexAgent_Run_ResumeFromSessionState(t *testing.T) {
 	ch, err := ag.Run(ctx, inv)
 	require.NoError(t, err)
 	events := drainEvents(ch)
-	require.Len(t, events, 1)
+	require.Len(t, events, 2)
 	require.Equal(t, "hello", events[0].Choices[0].Message.Content)
-	require.Empty(t, events[0].StateDelta)
+	require.False(t, events[0].IsFinalResponse())
+	require.True(t, events[1].IsFinalResponse())
+	require.Equal(t, "hello", events[1].Choices[0].Message.Content)
+	require.Empty(t, events[1].StateDelta)
 	calls := runner.Calls()
 	require.Len(t, calls, 1)
 	require.Equal(t, []string{"exec", "resume", "--json", "thread-1"}, calls[0].args)
@@ -248,9 +315,12 @@ func TestCodexAgent_Run_ResumeErrorFallsBackToCreate(t *testing.T) {
 	ch, err := ag.Run(ctx, inv)
 	require.NoError(t, err)
 	events := drainEvents(ch)
-	require.Len(t, events, 1)
+	require.Len(t, events, 2)
 	require.Equal(t, "fresh", events[0].Choices[0].Message.Content)
-	require.Equal(t, []byte("thread-2"), events[0].StateDelta[StateKeyThreadID])
+	require.False(t, events[0].IsFinalResponse())
+	require.True(t, events[1].IsFinalResponse())
+	require.Equal(t, "fresh", events[1].Choices[0].Message.Content)
+	require.Equal(t, []byte("thread-2"), events[1].StateDelta[StateKeyThreadID])
 	calls := runner.Calls()
 	require.Len(t, calls, 2)
 	require.Equal(t, []string{"exec", "resume", "--json", "stale-thread"}, calls[0].args)
@@ -384,17 +454,18 @@ func TestCodexAgent_Run_RawOutputHookError(t *testing.T) {
 	ch, err := ag.Run(ctx, inv)
 	require.NoError(t, err)
 	events := drainEvents(ch)
-	require.Len(t, events, 3)
+	require.Len(t, events, 4)
 	require.True(t, events[0].IsToolCallResponse())
 	require.True(t, events[1].IsToolResultResponse())
-	require.True(t, events[2].IsFinalResponse())
-	require.Equal(t, model.ObjectTypeError, events[2].Object)
-	require.NotNil(t, events[2].Error)
-	require.Equal(t, model.ErrorTypeFlowError, events[2].Error.Type)
-	require.Contains(t, events[2].Error.Message, "raw output hook")
-	require.Contains(t, events[2].Error.Message, "hook failed")
-	require.Contains(t, events[2].Choices[0].Message.Content, "thread-hook-2")
-	require.Contains(t, events[2].Choices[0].Message.Content, "warn")
+	require.Equal(t, "hello", events[2].Choices[0].Message.Content)
+	require.True(t, events[3].IsFinalResponse())
+	require.Equal(t, model.ObjectTypeError, events[3].Object)
+	require.NotNil(t, events[3].Error)
+	require.Equal(t, model.ErrorTypeFlowError, events[3].Error.Type)
+	require.Contains(t, events[3].Error.Message, "raw output hook")
+	require.Contains(t, events[3].Error.Message, "hook failed")
+	require.Contains(t, events[3].Choices[0].Message.Content, "thread-hook-2")
+	require.Contains(t, events[3].Choices[0].Message.Content, "warn")
 }
 
 func TestCodexAgent_InfoAndRunnerArgs(t *testing.T) {
@@ -500,11 +571,14 @@ func TestParseTranscriptEvents_CompletedToolWithoutStarted(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "thread-parse", result.ThreadID)
 	require.Equal(t, "done", result.FinalMessage)
-	require.Len(t, result.Events, 2)
+	require.Equal(t, "item_1", result.FinalMessageID)
+	require.Len(t, result.Events, 3)
 	require.True(t, result.Events[0].IsToolCallResponse())
 	require.True(t, result.Events[1].IsToolResultResponse())
+	require.False(t, result.Events[2].IsFinalResponse())
 	require.Equal(t, "pwd", commandArg(t, result.Events[0]))
 	require.Equal(t, "/tmp\n", result.Events[1].Choices[0].Message.Content)
+	require.Equal(t, "done", result.Events[2].Choices[0].Message.Content)
 }
 
 func TestParseTranscriptEvents_MCPToolCallMapping(t *testing.T) {
