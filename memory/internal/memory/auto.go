@@ -928,6 +928,9 @@ func (w *AutoMemoryWorker) decideAddOp(
 		if c == nil || c.Memory == nil {
 			continue
 		}
+		if !reconcileMetadataCompatible(op, c.Memory) {
+			continue
+		}
 		j := tokenJaccard(op.Memory, c.Memory.Memory)
 		tier := reconcileDecisionTier(c.Score, j)
 		if best == nil ||
@@ -975,6 +978,24 @@ func (w *AutoMemoryWorker) decideAddOp(
 	default:
 		return op
 	}
+}
+
+// reconcileMetadataCompatible rejects candidates whose explicit identity
+// metadata proves that they describe different memories. Missing metadata
+// keeps the legacy text-and-score reconciliation behavior unchanged.
+func reconcileMetadataCompatible(
+	op *extractor.Operation,
+	stored *memory.Memory,
+) bool {
+	if op == nil || stored == nil {
+		return true
+	}
+	if op.MemoryKind != "" && stored.Kind != "" &&
+		op.MemoryKind != EffectiveKind(stored) {
+		return false
+	}
+	return op.EventTime == nil || stored.EventTime == nil ||
+		eventTimeCompatible(stored.EventTime, op.EventTime)
 }
 
 // tokenJaccard returns the token-level Jaccard similarity between two

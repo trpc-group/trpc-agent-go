@@ -2235,6 +2235,59 @@ func TestReconcileOps_KeepsOpWhenNotSimilar(t *testing.T) {
 	assert.Empty(t, out[0].MemoryID)
 }
 
+func TestReconcileOps_KeepsEpisodesWithDifferentEventTimes(t *testing.T) {
+	storedTime := time.Date(2023, 6, 17, 0, 0, 0, 0, time.UTC)
+	freshTime := time.Date(2023, 6, 3, 0, 0, 0, 0, time.UTC)
+	op := newMockOperator()
+	op.searchResults = []*memory.Entry{{
+		ID:      "mem-bbq",
+		AppName: "app", UserID: "u1",
+		Memory: &memory.Memory{
+			Memory:    "Attended a BBQ at a friend's house on June 17",
+			Kind:      memory.KindEpisode,
+			EventTime: &storedTime,
+		},
+		Score: 0.95,
+	}}
+	worker := NewAutoMemoryWorker(AutoMemoryConfig{}, op)
+	in := []*extractor.Operation{{
+		Type:       extractor.OperationAdd,
+		Memory:     "Attended a BBQ at a colleague's house on June 3",
+		MemoryKind: memory.KindEpisode,
+		EventTime:  &freshTime,
+	}}
+
+	out := worker.reconcileOps(context.Background(), reconcileUserKey(), in)
+	require.Len(t, out, 1)
+	assert.Equal(t, extractor.OperationAdd, out[0].Type)
+	assert.Empty(t, out[0].MemoryID)
+}
+
+func TestReconcileOps_ReconcilesEpisodesWithCompatibleEventTimes(t *testing.T) {
+	eventTime := time.Date(2023, 6, 3, 0, 0, 0, 0, time.UTC)
+	op := newMockOperator()
+	op.searchResults = []*memory.Entry{{
+		ID:      "mem-bbq",
+		AppName: "app", UserID: "u1",
+		Memory: &memory.Memory{
+			Memory:    "Attended a backyard BBQ on June 3",
+			Kind:      memory.KindEpisode,
+			EventTime: &eventTime,
+		},
+		Score: 0.95,
+	}}
+	worker := NewAutoMemoryWorker(AutoMemoryConfig{}, op)
+	in := []*extractor.Operation{{
+		Type:       extractor.OperationAdd,
+		Memory:     "Attended a backyard BBQ on June 3",
+		MemoryKind: memory.KindEpisode,
+		EventTime:  &eventTime,
+	}}
+
+	out := worker.reconcileOps(context.Background(), reconcileUserKey(), in)
+	require.Empty(t, out)
+}
+
 func TestHistoryPolicy_KeepsDistinctFactsWithHighTopicScore(t *testing.T) {
 	existing := "Attended a religious service at a cathedral on February 1."
 	incoming := "Interested in charities that provide food and shelter during Lent."
