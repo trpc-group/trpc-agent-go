@@ -299,7 +299,10 @@ func (c *CodeExecutor) Engine() codeexecutor.Engine {
 	}
 	return codeexecutor.NewEngineWithCapabilities(
 		rt, rt, rt,
-		codeexecutor.Capabilities{SupportsCleanEnv: true},
+		codeexecutor.Capabilities{
+			SupportsCleanEnv:      true,
+			SupportsDeclarativeIO: true,
+		},
 	)
 }
 

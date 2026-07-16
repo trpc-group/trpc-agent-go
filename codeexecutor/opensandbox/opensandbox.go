@@ -796,16 +796,16 @@ func (c *CodeExecutor) Close() error {
 }
 
 // ErrNotImplementedV1 is returned by the v1 stub implementations of
-// StageInputs and CollectOutputs. Callers can detect it with
-// errors.Is(err, ErrNotImplementedV1) and fall back to PutFiles /
-// Collect.
+// StageInputs and CollectOutputs on CodeExecutor (the direct methods).
+// Callers can detect it with errors.Is(err, ErrNotImplementedV1) and
+// fall back to PutFiles / Collect.
 //
-// Note (liuzengh follow-up on #2087): exporting this sentinel only
-// fixes error identity, not capability discovery. Cross-package callers
-// (e.g. tool/skill/run.go, artifact paths) that do not import this
-// package cannot use errors.Is against it; they propagate the error
-// directly. A backend-neutral capability flag / gating mechanism is
-// tracked as a follow-up in spec/add-opensandbox-executor.
+// When accessed via Engine().FS(), the gatingFS wrapper installed by
+// NewEngineWithCapabilities intercepts StageInputs/CollectOutputs and
+// returns codeexecutor.ErrDeclarativeIONotSupported instead, because
+// this engine does not advertise SupportsDeclarativeIO. Cross-package
+// callers that use the Engine interface should check
+// errors.Is(err, codeexecutor.ErrDeclarativeIONotSupported).
 var ErrNotImplementedV1 = errors.New("opensandbox: not implemented in v1")
 
 // errNotImplementedV1 is retained as a package-private alias for

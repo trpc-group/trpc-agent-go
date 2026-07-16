@@ -12,6 +12,7 @@ package codeexecutor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -169,7 +170,30 @@ type Capabilities struct {
 	// NewEngineWithCapabilities (issue #1845); other backends keep
 	// the zero value and fail closed.
 	SupportsCleanEnv bool
+	// SupportsDeclarativeIO reports whether this engine implements
+	// the declarative I/O surface of WorkspaceFS — StageInputs and
+	// CollectOutputs. Backends that only provide the v1 minimal
+	// surface (PutFiles, PutDirectory, Collect, RunProgram) must
+	// leave this false; NewEngineWithCapabilities wraps their FS in
+	// a gatingFS that returns ErrDeclarativeIONotSupported from
+	// StageInputs/CollectOutputs so callers can detect the missing
+	// capability via errors.Is and fall back to PutFiles/Collect.
+	//
+	// Defaults to false so any backend that has not been audited
+	// for declarative I/O is treated as "does not support" until
+	// it opts in.
+	SupportsDeclarativeIO bool
 }
+
+// ErrDeclarativeIONotSupported is returned by the gatingFS wrapper
+// when a caller invokes StageInputs or CollectOutputs on an engine
+// that does not advertise SupportsDeclarativeIO. Backend-neutral
+// callers should check errors.Is(err, ErrDeclarativeIONotSupported)
+// and fall back to PutFiles/Collect.
+var ErrDeclarativeIONotSupported = errors.New(
+	"codeexecutor: declarative I/O (StageInputs/CollectOutputs) " +
+		"not supported by this engine",
+)
 
 // Engine is a backend that provides workspace and execution services.
 type Engine interface {
@@ -198,6 +222,31 @@ func (e *stdEngine) FS() WorkspaceFS           { return e.f }
 func (e *stdEngine) Runner() ProgramRunner     { return e.r }
 func (e *stdEngine) Describe() Capabilities    { return e.c }
 
+// gatingFS wraps a WorkspaceFS and rejects StageInputs/CollectOutputs
+// with ErrDeclarativeIONotSupported. It is installed by
+// NewEngineWithCapabilities when SupportsDeclarativeIO is false so
+// that callers never reach a backend's private stub sentinel; they
+// receive a public, errors.Is-checkable error instead.
+type gatingFS struct {
+	inner WorkspaceFS
+}
+
+func (g *gatingFS) PutFiles(ctx context.Context, ws Workspace, files []PutFile) error {
+	return g.inner.PutFiles(ctx, ws, files)
+}
+func (g *gatingFS) StageDirectory(ctx context.Context, ws Workspace, src, to string, opt StageOptions) error {
+	return g.inner.StageDirectory(ctx, ws, src, to, opt)
+}
+func (g *gatingFS) Collect(ctx context.Context, ws Workspace, patterns []string) ([]File, error) {
+	return g.inner.Collect(ctx, ws, patterns)
+}
+func (g *gatingFS) StageInputs(ctx context.Context, ws Workspace, specs []InputSpec) error {
+	return ErrDeclarativeIONotSupported
+}
+func (g *gatingFS) CollectOutputs(ctx context.Context, ws Workspace, spec OutputSpec) (OutputManifest, error) {
+	return OutputManifest{}, ErrDeclarativeIONotSupported
+}
+
 // NewEngine constructs a simple Engine from its components, with
 // zero-valued Capabilities. Existing callers keep their historical
 // behaviour; new backends that want to advertise capabilities
@@ -219,12 +268,21 @@ func NewEngine(
 // not yet been audited continue to use NewEngine and inherit the
 // zero value, which fails closed in any tool that gates on a
 // capability.
+//
+// When SupportsDeclarativeIO is false the FS is wrapped in a
+// gatingFS that returns ErrDeclarativeIONotSupported from
+// StageInputs/CollectOutputs, so backend-neutral callers can detect
+// the missing capability via errors.Is without reaching a backend's
+// private stub.
 func NewEngineWithCapabilities(
 	m WorkspaceManager,
 	f WorkspaceFS,
 	r ProgramRunner,
 	c Capabilities,
 ) Engine {
+	if !c.SupportsDeclarativeIO {
+		f = &gatingFS{inner: f}
+	}
 	return &stdEngine{m: m, f: f, r: r, c: c}
 }
 

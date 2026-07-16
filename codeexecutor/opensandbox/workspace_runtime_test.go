@@ -1024,6 +1024,32 @@ func TestWorkspace_CollectOutputs_NotImplemented(t *testing.T) {
 	assert.ErrorIs(t, err, errNotImplementedV1)
 }
 
+// TestWorkspace_EngineFS_GatingDeclarativeIO verifies that
+// Engine().FS() returns ErrDeclarativeIONotSupported (from gatingFS)
+// rather than the package-private errNotImplementedV1, so
+// cross-package callers can detect the missing capability.
+func TestWorkspace_EngineFS_GatingDeclarativeIO(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	ws, err := exec.CreateWorkspace(context.Background(), "exec-1", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+
+	eng := exec.Engine()
+	assert.False(t, eng.Describe().SupportsDeclarativeIO,
+		"opensandbox must not advertise SupportsDeclarativeIO")
+
+	err = eng.FS().StageInputs(context.Background(), ws,
+		[]codeexecutor.InputSpec{{From: "host:///x"}})
+	assert.ErrorIs(t, err, codeexecutor.ErrDeclarativeIONotSupported)
+
+	_, err = eng.FS().CollectOutputs(context.Background(), ws,
+		codeexecutor.OutputSpec{Globs: []string{"*.txt"}})
+	assert.ErrorIs(t, err, codeexecutor.ErrDeclarativeIONotSupported)
+}
+
 func TestWorkspace_Close_KillsOwnedSandbox(t *testing.T) {
 	m := newMockServer(t)
 	defer m.close()

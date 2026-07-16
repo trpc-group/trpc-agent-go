@@ -1799,8 +1799,18 @@ func (t *RunTool) prepareOutputs(
 	if in.Outputs != nil && len(in.OutputFiles) == 0 {
 		m, err := eng.FS().CollectOutputs(ctx, ws, *in.Outputs)
 		if err != nil &&
-			!errors.Is(err, codeexecutor.ErrPartialOutputCommit) {
+			!errors.Is(err, codeexecutor.ErrPartialOutputCommit) &&
+			!errors.Is(err, codeexecutor.ErrDeclarativeIONotSupported) {
 			return nil, nil, nil, err
+		}
+		if errors.Is(err, codeexecutor.ErrDeclarativeIONotSupported) {
+			// Engine doesn't support declarative output collection;
+			// fall back to Collect with the spec's globs.
+			fs, ferr := t.collectFiles(ctx, eng, ws, in.Outputs.Globs)
+			if ferr != nil {
+				return nil, nil, nil, ferr
+			}
+			return fs, nil, nil, nil
 		}
 		manifest = &m
 		if in.Outputs.Inline {
