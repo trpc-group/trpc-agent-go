@@ -43,7 +43,22 @@ go run ./promptiter/regressionloop --mode=fake --scenario=all \
 ```
 
 `--scenario` selects one of `success | ineffective | overfit | attribution | all` (default
-`success`). Each scenario writes its report to `output/<scenario>/`.
+`success`). Each scenario writes its report to `output/<scenario>/`. This command
+records the real wall-clock `durationMs`, so its reports differ run-to-run.
+
+### Regenerate the committed sample reports
+
+The tracked reports under `output/` are byte-reproducible golden files. To
+regenerate them, add `--stable-cost` (which zeroes `durationMs`) — do **not** use
+the plain `Run` command above, or the real duration will dirty the golden files:
+
+```bash
+cd examples/evaluation
+go run ./promptiter/regressionloop --mode=fake --scenario=all --stable-cost \
+    --data-dir=./promptiter/regressionloop/data \
+    --output-dir=./promptiter/regressionloop/output
+git diff --stat -- promptiter/regressionloop/output   # expect: no changes
+```
 
 ## Scenarios
 

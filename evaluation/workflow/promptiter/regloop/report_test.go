@@ -106,17 +106,20 @@ func TestAnalyzeFailsClosedOnSlimmedResult(t *testing.T) {
 }
 
 func TestRoundReportDeltaUsesLastAcceptedBaseline(t *testing.T) {
-	// round1 improves c1 and is accepted; round2 regresses c1 and is rejected.
-	// round2's delta must compare against round1 (last accepted), not baseline.
+	// round1 improves c1 and is accepted; round2 and round3 are both rejected.
+	// The comparison baseline must stay at round1 (last accepted) across both
+	// rejected rounds — never advancing to a rejected round's validation.
 	baseline := evalR(0.0, caseR("c1", metricR("m", 0, status.EvalStatusFailed, "")))
-	v1 := evalR(1.0, caseR("c1", metricR("m", 1, status.EvalStatusPassed, "")))
-	v2 := evalR(0.0, caseR("c1", metricR("m", 0, status.EvalStatusFailed, "")))
+	v1 := evalR(1.0, caseR("c1", metricR("m", 1, status.EvalStatusPassed, ""))) // accepted
+	v2 := evalR(0.0, caseR("c1", metricR("m", 0, status.EvalStatusFailed, ""))) // rejected, c1 regressed
+	v3 := evalR(1.0, caseR("c1", metricR("m", 1, status.EvalStatusPassed, ""))) // rejected, c1 back to pass
 	result := &engine.RunResult{
 		Status:             engine.RunStatusSucceeded,
 		BaselineValidation: baseline,
 		Rounds: []engine.RoundResult{
 			lossRound(1, v1, true, 1.0),
 			lossRound(2, v2, false, -1.0),
+			lossRound(3, v3, false, 0.0),
 		},
 	}
 	report, err := Analyze(result, Options{Gate: ReleaseGate{MinTotalGain: 0.5}})
@@ -128,6 +131,12 @@ func TestRoundReportDeltaUsesLastAcceptedBaseline(t *testing.T) {
 	}
 	if report.Rounds[1].Delta.Summary.NewlyFailed != 1 {
 		t.Fatalf("round2 delta must compare vs last accepted round1, want NewlyFailed=1, got %+v", report.Rounds[1].Delta.Summary)
+	}
+	// round3 (c1 passes) vs last accepted round1 (c1 passes) = unchanged. If the
+	// baseline had wrongly advanced to the rejected round2 (c1 fails), this would
+	// show NewlyPassed=1 instead.
+	if report.Rounds[2].Delta.Summary.NewlyPassed != 0 {
+		t.Fatalf("round3 baseline must still be round1 (rejected round2 must not advance it), got %+v", report.Rounds[2].Delta.Summary)
 	}
 	if len(report.Rounds[1].Validation.EvalSets) == 0 {
 		t.Fatalf("round validation per-case must be present")
