@@ -541,7 +541,10 @@ func (c *CodeExecutor) Engine() codeexecutor.Engine {
 	rt := c.ensureRuntime()
 	return codeexecutor.NewEngineWithCapabilities(
 		rt, rt, rt,
-		codeexecutor.Capabilities{SupportsCleanEnv: true},
+		codeexecutor.Capabilities{
+			SupportsCleanEnv:      true,
+			SupportsDeclarativeIO: true,
+		},
 	)
 }
 

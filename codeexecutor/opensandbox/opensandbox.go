@@ -795,21 +795,24 @@ func (c *CodeExecutor) Close() error {
 	return nil
 }
 
-// ErrNotImplementedV1 is returned by v1 stub methods (StageInputs,
-// CollectOutputs). It is exported so callers can use errors.Is to
-// detect unsupported capabilities and fall back to alternative
-// strategies (e.g. using PutFiles/Collect directly instead of
-// StageInputs/CollectOutputs).
+// ErrNotImplementedV1 is returned by the v1 stub implementations of
+// StageInputs and CollectOutputs on the *CodeExecutor type (direct
+// calls only).
 //
-// Engine() exposes a WorkspaceFS whose StageInputs and CollectOutputs
-// methods return this error. Callers that rely on those methods must
-// check for it:
+// When accessed through Engine().FS(), the gatingFS wrapper intercepts
+// these methods and returns codeexecutor.ErrDeclarativeIONotSupported
+// instead, because Capabilities.SupportsDeclarativeIO is false for the
+// OpenSandbox backend. Cross-package callers that need to detect the
+// missing capability should check for codeexecutor.ErrDeclarativeIONotSupported:
 //
 //	if err := eng.FS().StageInputs(ctx, ws, specs); err != nil {
-//	    if errors.Is(err, opensandbox.ErrNotImplementedV1) {
+//	    if errors.Is(err, codeexecutor.ErrDeclarativeIONotSupported) {
 //	        // fall back to PutFiles
 //	    }
 //	}
+//
+// ErrNotImplementedV1 is retained for callers that interact with the
+// *CodeExecutor type directly (bypassing Engine()).
 var ErrNotImplementedV1 = errors.New("opensandbox: not implemented in v1")
 
 // errNotImplementedV1 is retained as a package-private alias for

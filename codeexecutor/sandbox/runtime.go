@@ -101,10 +101,11 @@ func (r *Runtime) Describe() codeexecutor.Capabilities {
 		isolation = "external"
 	}
 	return codeexecutor.Capabilities{
-		Isolation:      isolation,
-		NetworkAllowed: profile.network.Mode == NetworkEnabled,
-		ReadOnlyMount:  profile.enforcement() == enforcementManaged,
-		Streaming:      false,
+		Isolation:             isolation,
+		NetworkAllowed:        profile.network.Mode == NetworkEnabled,
+		ReadOnlyMount:         profile.enforcement() == enforcementManaged,
+		Streaming:             false,
+		SupportsDeclarativeIO: true,
 	}
 }
 

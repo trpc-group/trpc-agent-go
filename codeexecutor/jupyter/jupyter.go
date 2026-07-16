@@ -314,7 +314,11 @@ func (c *CodeExecutor) ExecuteInline(
 // Engine exposes the local runtime as an Engine for skills.
 func (c *CodeExecutor) Engine() codeexecutor.Engine {
 	rt := c.ensureWS()
-	return codeexecutor.NewEngine(rt, rt, rt)
+	return codeexecutor.NewEngineWithCapabilities(rt, rt, rt,
+		codeexecutor.Capabilities{
+			SupportsCleanEnv:      true,
+			SupportsDeclarativeIO: true,
+		})
 }
 
 // silencePip silences pip install commands

@@ -6,6 +6,7 @@ replace (
 	trpc.group/trpc-go/trpc-agent-go => ../../
 	trpc.group/trpc-go/trpc-agent-go/codeexecutor/container => ../../codeexecutor/container
 	trpc.group/trpc-go/trpc-agent-go/codeexecutor/jupyter => ../../codeexecutor/jupyter
+	trpc.group/trpc-go/trpc-agent-go/codeexecutor/opensandbox => ../../codeexecutor/opensandbox
 )
 
 require (

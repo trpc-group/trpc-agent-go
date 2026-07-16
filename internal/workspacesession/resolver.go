@@ -56,7 +56,8 @@ func (r *Resolver) EnsureEngine() codeexecutor.Engine {
 			"executor does not expose EngineProvider",
 	)
 	rt := localexec.NewRuntime("")
-	return codeexecutor.NewEngine(rt, rt, rt)
+	return codeexecutor.NewEngineWithCapabilities(rt, rt, rt,
+		codeexecutor.Capabilities{SupportsDeclarativeIO: true})
 }
 
 // CreateWorkspace acquires the invocation-scoped workspace for a tool run.

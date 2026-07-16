@@ -189,6 +189,23 @@ func (m *mockOpenSandboxServer) setSymlink(link, target string) {
 // the shell quoting scheme used by shellQuote.
 var readlinkPathRe = regexp.MustCompile(`(/[^\s'\\]+)`)
 
+// cdPathRe extracts the workspace path from the listFilesByGlob
+// script's opening `cd '<wsPath>'` clause. shellQuote nests the
+// inner single-quoted path inside the outer bash -c '...' quote,
+// producing `'\”<path>'\”`; the existing readlinkPathRe reliably
+// captures the first absolute path in the command, which is wsPath.
+var cdPathRe = readlinkPathRe
+
+// parseCDPath returns the workspace path embedded in the
+// listFilesByGlob bash script, or "" if not found.
+func parseCDPath(cmd string) string {
+	m := cdPathRe.FindStringSubmatch(cmd)
+	if m == nil {
+		return ""
+	}
+	return m[1]
+}
+
 // parseSingleReadlinkPath extracts the path argument from a
 // `bash -c 'readlink -f <path>'` command. Uses a regex because
 // shellQuote's nested quoting makes simple string splitting fragile.
@@ -472,6 +489,58 @@ func (m *mockOpenSandboxServer) handleCommand(w http.ResponseWriter, r *http.Req
 		}
 	}
 
+	// Handle the listFilesByGlob bash globstar script. The script is
+	// sent via runBash and carries distinctive markers (__OSB_BASE__=
+	// and shopt -s globstar). The mock cannot execute bash, so it
+	// synthesizes the output the script would produce: for each
+	// configured search result, resolve symlinks, skip directories
+	// (matching [ -f "$f" ]) and paths that escape the workspace base
+	// (matching the case "$__osb_rp" guard), and emit "path\tsize".
+	if strings.Contains(req.Command, "__OSB_BASE__=") &&
+		strings.Contains(req.Command, "shopt -s globstar") {
+		wsPath := parseCDPath(req.Command)
+		m.mu.Lock()
+		searchResults := append([]string(nil), m.searchResults...)
+		filesSnap := m.files
+		symlinks := m.symlinks
+		m.mu.Unlock()
+		var out strings.Builder
+		out.WriteString("__OSB_BASE__=" + wsPath + "\n")
+		emit := func(name string) {
+			full := path.Join(wsPath, name)
+			resolved := resolveMockSymlink(full, symlinks)
+			if !pathUnder(resolved, wsPath) {
+				return
+			}
+			size := int64(12) // default "mock-content"
+			if data, ok := filesSnap[full]; ok {
+				size = int64(len(data))
+			}
+			fmt.Fprintf(&out, "%s\t%d\n", resolved, size)
+		}
+		if len(searchResults) > 0 {
+			for _, spec := range searchResults {
+				name := spec
+				fileType := ""
+				if idx := strings.Index(spec, ":"); idx >= 0 {
+					name = spec[:idx]
+					fileType = spec[idx+1:]
+				}
+				if fileType == "dir" {
+					continue
+				}
+				emit(name)
+			}
+		} else {
+			emit("output.txt")
+		}
+		stdout = out.String()
+		if !forceInfraExit {
+			zero := 0
+			exitCode = &zero
+		}
+	}
+
 	// Handle readlink -f and readlink -m calls from
 	// resolveSandboxPath / resolveSandboxPaths /
 	// resolveSandboxAncestor. The mock simulates a sandbox filesystem
@@ -479,8 +548,12 @@ func (m *mockOpenSandboxServer) handleCommand(w http.ResponseWriter, r *http.Req
 	// readlink -m (canonicalize-missing) behaves the same as
 	// readlink -f in the mock: resolve the symlink if it exists,
 	// otherwise return the path as-is.
-	if strings.Contains(req.Command, "readlink -f") ||
-		strings.Contains(req.Command, "readlink -m") {
+	// The __OSB_BASE__ guard prevents this handler from firing on the
+	// listFilesByGlob script, which also contains readlink -f but is
+	// handled by the dedicated block above.
+	if (strings.Contains(req.Command, "readlink -f") ||
+		strings.Contains(req.Command, "readlink -m")) &&
+		!strings.Contains(req.Command, "__OSB_BASE__=") {
 		m.mu.Lock()
 		symlinks := m.symlinks
 		m.mu.Unlock()
