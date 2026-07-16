@@ -48,6 +48,15 @@ type deferredTool struct {
 	deferTool bool
 }
 
+type resultSanitizer struct{}
+
+func (resultSanitizer) SanitizeToolResult(
+	_ context.Context,
+	args *AfterToolArgs,
+) (any, error) {
+	return args.Result, nil
+}
+
 func (d *deferredTool) Declaration() *Declaration {
 	return &Declaration{Name: testToolName}
 }
@@ -118,6 +127,18 @@ func TestNormalizePermissionDecision(t *testing.T) {
 	}
 }
 
+func TestMostRestrictivePermissionDecision(t *testing.T) {
+	decision, err := MostRestrictivePermissionDecision(
+		AllowPermission(), AskPermission("ask"), DenyPermission("deny"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Action != PermissionActionDeny || decision.Reason != "deny" {
+		t.Fatalf("decision = %+v", decision)
+	}
+}
+
 func TestPermissionPolicyFunc_NilAllows(t *testing.T) {
 	var fn PermissionPolicyFunc
 	decision, err := fn.CheckToolPermission(context.Background(), &PermissionRequest{})
@@ -142,5 +163,20 @@ func TestPermissionResultFor(t *testing.T) {
 		ask.Tool != testToolName ||
 		ask.Reason != testReason {
 		t.Fatalf("unexpected ask result: %+v", ask)
+	}
+}
+
+func TestToolResultSanitizerContract(t *testing.T) {
+	var sanitizer ToolResultSanitizer = resultSanitizer{}
+	want := map[string]any{"safe": true}
+	got, err := sanitizer.SanitizeToolResult(
+		context.Background(),
+		&AfterToolArgs{Result: want},
+	)
+	if err != nil {
+		t.Fatalf("sanitize result: %v", err)
+	}
+	if gotMap, ok := got.(map[string]any); !ok || gotMap["safe"] != true {
+		t.Fatalf("unexpected sanitized result: %#v", got)
 	}
 }

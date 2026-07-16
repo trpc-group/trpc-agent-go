@@ -13,6 +13,28 @@ import (
 	"fmt"
 )
 
+type permissionPolicyContextKey struct{}
+
+// WithPermissionPolicyContext carries the already-evaluated framework policy
+// into a built-in tool call so the tool can apply runtime limits without
+// requiring a second policy configuration surface.
+func WithPermissionPolicyContext(ctx context.Context, policy PermissionPolicy) context.Context {
+	if policy == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, permissionPolicyContextKey{}, policy)
+}
+
+// PermissionPolicyFromContext returns the framework policy associated with a
+// tool call, when present.
+func PermissionPolicyFromContext(ctx context.Context) PermissionPolicy {
+	if ctx == nil {
+		return nil
+	}
+	policy, _ := ctx.Value(permissionPolicyContextKey{}).(PermissionPolicy)
+	return policy
+}
+
 const (
 	// PermissionActionAllow allows the tool call to execute.
 	PermissionActionAllow PermissionAction = "allow"
@@ -78,6 +100,37 @@ func NormalizePermissionDecision(decision PermissionDecision) (PermissionDecisio
 	}
 }
 
+// MostRestrictivePermissionDecision composes decisions using the fixed
+// precedence deny > ask > allow.
+func MostRestrictivePermissionDecision(
+	decisions ...PermissionDecision,
+) (PermissionDecision, error) {
+	strongest := AllowPermission()
+	for _, decision := range decisions {
+		normalized, err := NormalizePermissionDecision(decision)
+		if err != nil {
+			return PermissionDecision{}, err
+		}
+		if permissionActionRank(normalized.Action) > permissionActionRank(strongest.Action) {
+			strongest = normalized
+		}
+	}
+	return strongest, nil
+}
+
+func permissionActionRank(action PermissionAction) int {
+	switch action {
+	case PermissionActionDeny:
+		return 3
+	case PermissionActionAsk:
+		return 2
+	case PermissionActionAllow:
+		return 1
+	default:
+		return 0
+	}
+}
+
 // PermissionRequest describes one pending tool call for permission checks.
 type PermissionRequest struct {
 	// Tool is the tool about to be executed.
@@ -104,6 +157,32 @@ type PermissionChecker interface {
 // PermissionPolicy checks tool permissions for a run.
 type PermissionPolicy interface {
 	CheckToolPermission(ctx context.Context, req *PermissionRequest) (PermissionDecision, error)
+}
+
+// PermissionPolicyProvider exposes a tool-local policy to framework layers
+// that must suppress raw observability before the tool's Call method runs.
+type PermissionPolicyProvider interface {
+	ToolPermissionPolicy() PermissionPolicy
+}
+
+// ToolResultSanitizer is an optional capability implemented by a
+// PermissionPolicy that must inspect or redact the final tool result.
+//
+// Framework runners invoke the sanitizer after before/after callbacks have
+// produced the final result and before that result is added to events,
+// telemetry, or returned to the model. The returned value replaces Result,
+// including when it is nil. Returning an error fails closed: the unsanitized
+// result must not be exposed.
+type ToolResultSanitizer interface {
+	SanitizeToolResult(ctx context.Context, args *AfterToolArgs) (any, error)
+}
+
+// ToolErrorSanitizer is an optional companion to ToolResultSanitizer. It
+// replaces the final error text after callbacks and before logs, events, or
+// model-visible error messages are produced. The second error reports a
+// sanitizer failure; callers must fail closed in that case.
+type ToolErrorSanitizer interface {
+	SanitizeToolError(ctx context.Context, args *AfterToolArgs) (error, error)
 }
 
 // PermissionPolicyFunc adapts a function into PermissionPolicy.
