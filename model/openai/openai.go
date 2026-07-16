@@ -589,62 +589,15 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 		return
 	}
 
-	// Determine max input tokens using priority: user config > auto calculation > default.
-	maxInputTokens := m.maxInputTokens
-	outputReserveTokens := m.effectiveOutputReserveTokens(request)
-	contextWindow := m.contextWindow
-	if contextWindow <= 0 {
-		contextWindow = imodel.ResolveContextWindow(m.name)
-	}
-	autoBudget := maxInputTokens <= 0
-	if autoBudget {
-		// Auto-calculate based on model context window with custom or default parameters.
-		if m.protocolOverheadTokens > 0 || m.reserveOutputTokens > 0 {
-			// Use custom parameters if any are set.
-			maxInputTokens = imodel.CalculateMaxInputTokensWithParams(
-				contextWindow,
-				m.protocolOverheadTokens,
-				outputReserveTokens,
-				m.inputTokensFloor,
-				m.safetyMarginRatio,
-				m.maxInputTokensRatio,
-			)
-		} else {
-			// Use default parameters.
-			maxInputTokens = imodel.CalculateMaxInputTokensWithParams(
-				contextWindow,
-				imodel.DefaultProtocolOverheadTokens,
-				outputReserveTokens,
-				imodel.DefaultInputTokensFloor,
-				imodel.DefaultSafetyMarginRatio,
-				imodel.DefaultMaxInputTokensRatio,
-			)
-		}
-	}
-
-	maxInputTokens = min(maxInputTokens, m.hardInputBudget(contextWindow, outputReserveTokens))
-	if autoBudget {
+	maxInputTokens := m.InputTokenBudget(ctx, request)
+	if m.maxInputTokens <= 0 {
 		log.DebugfContext(
 			ctx,
 			"auto-calculated max input tokens: model=%s, "+
-				"contextWindow=%d, reserveOutputTokens=%d, maxInputTokens=%d",
+				"maxInputTokens=%d",
 			m.name,
-			contextWindow,
-			outputReserveTokens,
 			maxInputTokens,
 		)
-		toolsTokens := m.estimateToolsTokens(ctx, request.Tools)
-		if toolsTokens > 0 {
-			maxInputTokens = max(maxInputTokens-toolsTokens, 0)
-			log.DebugfContext(
-				ctx,
-				"adjusted max input tokens after tools budget: model=%s, "+
-					"toolsTokens=%d, maxInputTokens=%d",
-				m.name,
-				toolsTokens,
-				maxInputTokens,
-			)
-		}
 	}
 
 	// Apply token tailoring.
@@ -668,6 +621,54 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 	}
 
 	modeltailoring.ApplyResult(ctx, "openai.Model", request, tailored)
+}
+
+// InputTokenBudget returns the same input budget used by token tailoring.
+func (m *Model) InputTokenBudget(ctx context.Context, request *model.Request) int {
+	maxInputTokens := m.maxInputTokens
+	outputReserveTokens := m.effectiveOutputReserveTokens(request)
+	contextWindow := m.contextWindow
+	if contextWindow <= 0 {
+		contextWindow = imodel.ResolveContextWindow(m.name)
+	}
+	autoBudget := maxInputTokens <= 0
+	if autoBudget {
+		if m.protocolOverheadTokens > 0 || m.reserveOutputTokens > 0 {
+			maxInputTokens = imodel.CalculateMaxInputTokensWithParams(
+				contextWindow,
+				m.protocolOverheadTokens,
+				outputReserveTokens,
+				m.inputTokensFloor,
+				m.safetyMarginRatio,
+				m.maxInputTokensRatio,
+			)
+		} else {
+			maxInputTokens = imodel.CalculateMaxInputTokensWithParams(
+				contextWindow,
+				imodel.DefaultProtocolOverheadTokens,
+				outputReserveTokens,
+				imodel.DefaultInputTokensFloor,
+				imodel.DefaultSafetyMarginRatio,
+				imodel.DefaultMaxInputTokensRatio,
+			)
+		}
+	}
+
+	maxInputTokens = min(
+		maxInputTokens,
+		m.hardInputBudget(contextWindow, outputReserveTokens),
+	)
+	if autoBudget {
+		var tools map[string]tool.Tool
+		if request != nil {
+			tools = request.Tools
+		}
+		maxInputTokens = max(
+			maxInputTokens-m.estimateToolsTokens(ctx, tools),
+			0,
+		)
+	}
+	return maxInputTokens
 }
 
 func (m *Model) effectiveOutputReserveTokens(request *model.Request) int {

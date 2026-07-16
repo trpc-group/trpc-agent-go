@@ -184,6 +184,26 @@ with prompt caching can reuse more cached input. If no parent request is
 available, for example in manual or external summary calls, the summarizer
 falls back to the standalone request path.
 
+Before sending either form of request, the summarizer admits it against the
+summary model's effective input budget. The framework uses the smaller of the
+provider-specific input budget, when the model exposes one, and a conservative
+ceiling of 70% of the model context window. An oversized fork is reduced without
+mutating the parent request: unused tool schemas are removed first, older
+complete source rounds can be dropped while the latest round is protected, and
+large tool argument/result payloads are replaced as needed. If the fork still
+cannot fit, the summarizer rebuilds a bounded standalone request. This fallback
+truncates only `{conversation_text}` with head-and-tail preservation; the fixed
+system prompt and user-prompt template remain intact.
+
+Budget fitting and the fork-to-standalone decision happen before the
+`BeforeModel` callback. The callback therefore receives the actual request that
+will be sent. The framework counts the request again after the callback; if the
+callback makes it exceed the budget, the call fails explicitly instead of
+silently replacing the callback-modified request. If a provider still returns a
+context-length error, or a non-custom model call returns an empty summary, the
+summarizer makes one bounded standalone retry at half of the first attempt's
+input budget.
+
 One important branch-summary behavior: after `WithCacheSafeForking(true)` is
 enabled, a non-empty branch trigger may fork the current parent request for the
 branch summary, but it will not also run the cascaded full-session summary in
@@ -1079,8 +1099,8 @@ llmagent.WithAddSessionSummary(true)
 
 - Session summary is **merged into the existing system message** if one exists, or prepended as a new system message if none exists
 - This ensures compatibility with models that require a single system message at the beginning (e.g., Qwen3.5 series)
-- Includes **all incremental events** after the summary point (no truncation)
-- Guarantees complete context: compressed history + full new conversation
+- Includes **all incremental events** after the summary point. When a synchronous intra-run summary advances the boundary inside the current invocation, request rebuilding also preserves the current user message and the latest complete pre-boundary tool round as a bounded resume tail
+- Preserves semantic continuity through compressed history, post-boundary events, and the bounded current-invocation resume tail; older covered tool rounds are represented only by the summary
 - **`WithMaxHistoryRuns` parameter is ignored**
 
 #### Summary Injection Mode
@@ -1208,6 +1228,26 @@ When `WithEnableContextCompaction(true)` is enabled, the framework applies the f
 
 The passes have different roles: Pass 0 is an explicit tool-name policy; Pass 1 aggressively cleans old history (low threshold, full replacement); Pass 2 is a high-threshold guard that only kicks in for extreme cases and can also apply to the current request.
 
+Synchronous intra-run summary has one additional projection rule. If the new
+summary boundary covers events from the current invocation, the boundary is
+hard for ordinary covered history, but the rebuilt main-agent request keeps:
+
+1. The current invocation's user message.
+2. The latest complete tool round before the boundary, including all calls and
+   matching results in a parallel batch.
+3. All incremental events after the boundary.
+
+Only that latest complete pre-boundary round is restored; earlier covered tool
+rounds remain represented by the summary. This small resume tail prevents the
+main model from treating a completed tool step as missing and repeating a
+side-effecting call. When context compaction is enabled, each restored tool-call
+argument payload and each non-kept tool result is checked independently against
+`ContextCompactionToolResultMaxTokens`; only an item that exceeds the threshold
+is replaced with a protocol-preserving placeholder. When context compaction is
+disabled, the framework does not rewrite those payloads. If the boundary falls
+between a tool call and its result, the existing call/result pairing repair
+keeps the provider request valid without restoring unrelated covered history.
+
 Pass 2 is disabled by default (`0`). It only fires when both (1) `WithEnableContextCompaction(true)` is set and (2) `ContextCompactionOversizedToolResultMaxTokens > 0` (recommended opt-in value: `8192`, exposed as the constant `processor.DefaultContextCompactionOversizedToolResultMaxTokens`). This guarantees that `EnableContextCompaction=false` always means "the framework will not modify any tool result".
 
 Use `WithToolResultCompactionConfig(...)` when you need tool-name or recency policy:
@@ -1276,11 +1316,14 @@ large historical `tool result` payloads were replaced with placeholders.
 │ System Prompt                           │
 │ (merged with Session Summary)           │ ← System prompt + compressed history
 ├─────────────────────────────────────────┤
+│ User: current invocation message        │ ← Preserved across an intra-run cutoff
+├─────────────────────────────────────────┤
+│ Latest complete pre-cutoff tool round   │ ← At most one; oversized payloads may be placeholders
+├─────────────────────────────────────────┤
 │ Event 1 (after summary)                 │ ┐
-│ Event 2                                 │ │
-│ Event 3                                 │ │ New events after summary
-│ ...                                     │ │ (fully retained)
-│ Event N (current message)               │ ┘
+│ Event 2                                 │ │ Incremental events after summary
+│ ...                                     │ │ (subject to configured compaction/tailoring)
+│ Event N                                 │ ┘
 └─────────────────────────────────────────┘
 ```
 
