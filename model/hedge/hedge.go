@@ -102,6 +102,32 @@ func (m *hedgeModel) Info() model.Info {
 	}
 }
 
+// InputTokenBudget returns the smallest advertised candidate budget so every
+// hedge request receives an input it can accept.
+func (m *hedgeModel) InputTokenBudget(
+	ctx context.Context,
+	request *model.Request,
+) int {
+	type budgeter interface {
+		InputTokenBudget(context.Context, *model.Request) int
+	}
+	budget := 0
+	for _, candidate := range m.candidates {
+		b, ok := candidate.(budgeter)
+		if !ok {
+			return 0
+		}
+		candidateBudget := b.InputTokenBudget(ctx, request)
+		if candidateBudget <= 0 {
+			return 0
+		}
+		if budget == 0 || candidateBudget < budget {
+			budget = candidateBudget
+		}
+	}
+	return budget
+}
+
 // GenerateContent implements the model.Model interface.
 func (m *hedgeModel) GenerateContent(
 	ctx context.Context,
