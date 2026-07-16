@@ -4133,6 +4133,24 @@ request by:</p>
 with prompt caching can reuse more cached input. If no parent request is
 available, for example in manual or external summary calls, the summarizer
 falls back to the standalone request path.</p>
+<p>Before sending either form of request, the summarizer admits it against the
+summary model's effective input budget. The framework uses the smaller of the
+provider-specific input budget, when the model exposes one, and a conservative
+ceiling of 70% of the model context window. An oversized fork is reduced without
+mutating the parent request: unused tool schemas are removed first, older
+complete source rounds can be dropped while the latest round is protected, and
+large tool argument/result payloads are replaced as needed. If the fork still
+cannot fit, the summarizer rebuilds a bounded standalone request. This fallback
+truncates only <code>{conversation_text}</code> with head-and-tail preservation; the fixed
+system prompt and user-prompt template remain intact.</p>
+<p>Budget fitting and the fork-to-standalone decision happen before the
+<code>BeforeModel</code> callback. The callback therefore receives the actual request that
+will be sent. The framework counts the request again after the callback; if the
+callback makes it exceed the budget, the call fails explicitly instead of
+silently replacing the callback-modified request. If a provider still returns a
+context-length error, or a non-custom model call returns an empty summary, the
+summarizer makes one bounded standalone retry at half of the first attempt's
+input budget.</p>
 <p>One important branch-summary behavior: after <code>WithCacheSafeForking(true)</code> is
 enabled, a non-empty branch trigger may fork the current parent request for the
 branch summary, but it will not also run the cascaded full-session summary in
@@ -5458,8 +5476,8 @@ historical context.</p>
 <ul>
 <li>Session summary is <strong>merged into the existing system message</strong> if one exists, or prepended as a new system message if none exists</li>
 <li>This ensures compatibility with models that require a single system message at the beginning (e.g., Qwen3.5 series)</li>
-<li>Includes <strong>all incremental events</strong> after the summary point (no truncation)</li>
-<li>Guarantees complete context: compressed history + full new conversation</li>
+<li>Includes <strong>all incremental events</strong> after the summary point. When a synchronous intra-run summary advances the boundary inside the current invocation, request rebuilding also preserves the current user message and the latest complete pre-boundary tool round as a bounded resume tail</li>
+<li>Preserves semantic continuity through compressed history, post-boundary events, and the bounded current-invocation resume tail; older covered tool rounds are represented only by the summary</li>
 <li><strong><code>WithMaxHistoryRuns</code> parameter is ignored</strong></li>
 </ul>
 <h4 id="summary-injection-mode">Summary Injection Mode</h4>
@@ -5622,6 +5640,25 @@ summarizer.</p>
 <li>This is the safety net for single tool results large enough to overflow the context window on their own (e.g. <code>web_fetch</code> returning 800K+ chars of HTML)</li>
 </ul>
 <p>The passes have different roles: Pass 0 is an explicit tool-name policy; Pass 1 aggressively cleans old history (low threshold, full replacement); Pass 2 is a high-threshold guard that only kicks in for extreme cases and can also apply to the current request.</p>
+<p>Synchronous intra-run summary has one additional projection rule. If the new
+summary boundary covers events from the current invocation, the boundary is
+hard for ordinary covered history, but the rebuilt main-agent request keeps:</p>
+<ol>
+<li>The current invocation's user message.</li>
+<li>The latest complete tool round before the boundary, including all calls and
+   matching results in a parallel batch.</li>
+<li>All incremental events after the boundary.</li>
+</ol>
+<p>Only that latest complete pre-boundary round is restored; earlier covered tool
+rounds remain represented by the summary. This small resume tail prevents the
+main model from treating a completed tool step as missing and repeating a
+side-effecting call. When context compaction is enabled, each restored tool-call
+argument payload and each non-kept tool result is checked independently against
+<code>ContextCompactionToolResultMaxTokens</code>; only an item that exceeds the threshold
+is replaced with a protocol-preserving placeholder. When context compaction is
+disabled, the framework does not rewrite those payloads. If the boundary falls
+between a tool call and its result, the existing call/result pairing repair
+keeps the provider request valid without restoring unrelated covered history.</p>
 <p>Pass 2 is disabled by default (<code>0</code>). It only fires when both (1) <code>WithEnableContextCompaction(true)</code> is set and (2) <code>ContextCompactionOversizedToolResultMaxTokens &gt; 0</code> (recommended opt-in value: <code>8192</code>, exposed as the constant <code>processor.DefaultContextCompactionOversizedToolResultMaxTokens</code>). This guarantees that <code>EnableContextCompaction=false</code> always means "the framework will not modify any tool result".</p>
 <p>Use <code>WithToolResultCompactionConfig(...)</code> when you need tool-name or recency policy:</p>
 <ul>
@@ -5717,16 +5754,22 @@ large historical <code>tool result</code> payloads were replaced with placeholde
 <span class="normal"><a href="#__codelineno-33-7"> 7</a></span>
 <span class="normal"><a href="#__codelineno-33-8"> 8</a></span>
 <span class="normal"><a href="#__codelineno-33-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-33-10">10</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-33-1"><a id="__codelineno-33-1" name="__codelineno-33-1"></a>┌─────────────────────────────────────────┐
+<span class="normal"><a href="#__codelineno-33-10">10</a></span>
+<span class="normal"><a href="#__codelineno-33-11">11</a></span>
+<span class="normal"><a href="#__codelineno-33-12">12</a></span>
+<span class="normal"><a href="#__codelineno-33-13">13</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-33-1"><a id="__codelineno-33-1" name="__codelineno-33-1"></a>┌─────────────────────────────────────────┐
 </span><span id="__span-33-2"><a id="__codelineno-33-2" name="__codelineno-33-2"></a>│ System Prompt                           │
 </span><span id="__span-33-3"><a id="__codelineno-33-3" name="__codelineno-33-3"></a>│ (merged with Session Summary)           │ ← System prompt + compressed history
 </span><span id="__span-33-4"><a id="__codelineno-33-4" name="__codelineno-33-4"></a>├─────────────────────────────────────────┤
-</span><span id="__span-33-5"><a id="__codelineno-33-5" name="__codelineno-33-5"></a>│ Event 1 (after summary)                 │ ┐
-</span><span id="__span-33-6"><a id="__codelineno-33-6" name="__codelineno-33-6"></a>│ Event 2                                 │ │
-</span><span id="__span-33-7"><a id="__codelineno-33-7" name="__codelineno-33-7"></a>│ Event 3                                 │ │ New events after summary
-</span><span id="__span-33-8"><a id="__codelineno-33-8" name="__codelineno-33-8"></a>│ ...                                     │ │ (fully retained)
-</span><span id="__span-33-9"><a id="__codelineno-33-9" name="__codelineno-33-9"></a>│ Event N (current message)               │ ┘
-</span><span id="__span-33-10"><a id="__codelineno-33-10" name="__codelineno-33-10"></a>└─────────────────────────────────────────┘
+</span><span id="__span-33-5"><a id="__codelineno-33-5" name="__codelineno-33-5"></a>│ User: current invocation message        │ ← Preserved across an intra-run cutoff
+</span><span id="__span-33-6"><a id="__codelineno-33-6" name="__codelineno-33-6"></a>├─────────────────────────────────────────┤
+</span><span id="__span-33-7"><a id="__codelineno-33-7" name="__codelineno-33-7"></a>│ Latest complete pre-cutoff tool round   │ ← At most one; oversized payloads may be placeholders
+</span><span id="__span-33-8"><a id="__codelineno-33-8" name="__codelineno-33-8"></a>├─────────────────────────────────────────┤
+</span><span id="__span-33-9"><a id="__codelineno-33-9" name="__codelineno-33-9"></a>│ Event 1 (after summary)                 │ ┐
+</span><span id="__span-33-10"><a id="__codelineno-33-10" name="__codelineno-33-10"></a>│ Event 2                                 │ │ Incremental events after summary
+</span><span id="__span-33-11"><a id="__codelineno-33-11" name="__codelineno-33-11"></a>│ ...                                     │ │ (subject to configured compaction/tailoring)
+</span><span id="__span-33-12"><a id="__codelineno-33-12" name="__codelineno-33-12"></a>│ Event N                                 │ ┘
+</span><span id="__span-33-13"><a id="__codelineno-33-13" name="__codelineno-33-13"></a>└─────────────────────────────────────────┘
 </span></code></pre></div></td></tr></table></div>
 <p><strong>Model Compatibility</strong>:</p>
 <p>Some LLM providers have strict requirements for system message placement and count:</p>
@@ -6183,7 +6226,7 @@ cascade:</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="July 3, 2026 06:53:06 UTC">2026-07-03 06:53:06</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="July 16, 2026 02:51:34 UTC">2026-07-16 02:51:34</span>
   </span>
 
     
