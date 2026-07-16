@@ -71,37 +71,11 @@ func (s *Scanner) Scan(ctx context.Context, input ScanInput) ScanResult {
 		return result
 	}
 
-	result.Decision = aggregateDecisions(allFindings)
-	result.RiskLevel = aggregateRiskLevels(allFindings)
+	result.Decision = aggregateDecision(allFindings)
+	result.RiskLevel = aggregateRiskLevel(allFindings)
 	result.Intercepted = result.Decision != DecisionAllow
 
 	return result
-}
-
-// aggregateDecisions returns the highest-precedence decision across all findings.
-func aggregateDecisions(findings []Finding) Decision {
-	best := DecisionAllow
-	bestOrd := decisionOrder(best)
-	for _, f := range findings {
-		if ord := decisionOrder(f.Decision); ord < bestOrd {
-			best = f.Decision
-			bestOrd = ord
-		}
-	}
-	return best
-}
-
-// aggregateRiskLevels returns the highest-severity risk level across all findings.
-func aggregateRiskLevels(findings []Finding) RiskLevel {
-	best := RiskLevelInfo
-	bestOrd := riskLevelOrder(best)
-	for _, f := range findings {
-		if ord := riskLevelOrder(f.RiskLevel); ord > bestOrd {
-			best = f.RiskLevel
-			bestOrd = ord
-		}
-	}
-	return best
 }
 
 // defaultRules returns all built-in rules in evaluation order.
