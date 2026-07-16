@@ -896,8 +896,7 @@ func (t *RunTool) ensureEngine() codeexecutor.Engine {
 				"workspace resolver is not configured",
 		)
 		rt := localexec.NewRuntime("")
-		return codeexecutor.NewEngineWithCapabilities(rt, rt, rt,
-			codeexecutor.Capabilities{SupportsDeclarativeIO: true})
+		return codeexecutor.NewEngine(rt, rt, rt)
 	}
 	return t.wsr.EnsureEngine()
 }

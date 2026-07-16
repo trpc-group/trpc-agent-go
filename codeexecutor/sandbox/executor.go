@@ -45,13 +45,7 @@ func New(options ...Option) *CodeExecutor {
 
 // Engine exposes the sandbox runtime for workspace-capable tools.
 func (e *CodeExecutor) Engine() codeexecutor.Engine {
-	// Wrap with NewEngineWithCapabilities so the gatingFS layer is
-	// applied consistently with local/container/e2b/opensandbox.
-	// SupportsDeclarativeIO is true because Runtime implements real
-	// StageInputs/CollectOutputs (not stubs).
-	return codeexecutor.NewEngineWithCapabilities(
-		e.runtime, e.runtime, e.runtime, e.runtime.Describe(),
-	)
+	return e.runtime
 }
 
 // Runtime exposes the concrete sandbox runtime.
