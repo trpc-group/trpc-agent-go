@@ -4485,6 +4485,10 @@ func TestParseOpenAIVariant_Explicit(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, openai.VariantGLM, v)
 
+	v, err = parseOpenAIVariant(string(openai.VariantMiniMax), "")
+	require.NoError(t, err)
+	require.Equal(t, openai.VariantMiniMax, v)
+
 	v, err = parseOpenAIVariant(string(openai.VariantKimi), "")
 	require.NoError(t, err)
 	require.Equal(t, openai.VariantKimi, v)
@@ -4561,6 +4565,16 @@ func TestInferOpenAIVariant(t *testing.T) {
 		t,
 		openai.VariantGLM,
 		inferOpenAIVariant("https://open.bigmodel.cn/api/paas/v4"),
+	)
+	require.Equal(
+		t,
+		openai.VariantMiniMax,
+		inferOpenAIVariant("https://api.minimax.io/v1"),
+	)
+	require.Equal(
+		t,
+		openai.VariantMiniMax,
+		inferOpenAIVariant("https://api.minimaxi.com/v1"),
 	)
 	require.Equal(
 		t,

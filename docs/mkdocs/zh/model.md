@@ -1822,6 +1822,16 @@ Variant 机制是 Model 模块的重要优化，用于处理不同 OpenAI 兼容
 - 将思考开关序列化为 `{"thinking": {"type": "enabled"}}`
 - 文件上传默认使用 `file-extract` purpose
 
+**7. VariantMiniMax**
+
+- MiniMax OpenAI 兼容接口适配
+- 默认 BaseURL：`https://api.minimax.io/v1`
+- API Key 环境变量名：`MINIMAX_API_KEY`
+- 对官方 `api.minimax.io` 和 `api.minimaxi.com` host 自动推断
+- 开启思考时序列化为 `{"thinking": {"type": "adaptive"}}`，关闭时序列化为 `{"thinking": {"type": "disabled"}}`
+- 保持 MiniMax 原生 `<think>...</think>` 内容不变，以便工具调用间完整回传交错思考
+- 文件上传和删除使用 MiniMax 的 `/v1/files/upload` 与 `/v1/files/delete` 接口，默认 purpose 为 `video_understanding`
+
 ##### 7.2. 使用方式
 
 **使用示例**：
@@ -1846,6 +1856,11 @@ model := openai.New("deepseek-v4-flash",
 // 使用 Kimi 开放平台
 model = openai.New("kimi-k2.6",
     openai.WithVariant(openai.VariantKimi), // 自动读取 MOONSHOT_API_KEY
+)
+
+// 使用 MiniMax OpenAI 兼容接口
+model = openai.New("MiniMax-M3",
+    openai.WithVariant(openai.VariantMiniMax), // 自动读取 MINIMAX_API_KEY
 )
 ```
 
@@ -1881,6 +1896,9 @@ export DEEPSEEK_API_KEY="your-api-key"
 
 # Kimi 自动配置
 export MOONSHOT_API_KEY="your-api-key"
+
+# MiniMax 自动配置
+export MINIMAX_API_KEY="your-api-key"
 ```
 
 ```go
@@ -1911,6 +1929,7 @@ model := openai.New("deepseek-v4-flash",
 | `VariantGLM` | `"thinking": {"type": "enabled"}` |
 | `VariantQwen` | `"enable_thinking": true` |
 | `VariantKimi` | `"thinking": {"type": "enabled"}` |
+| `VariantMiniMax` | `"thinking": {"type": "adaptive"}` |
 
 例如，通过官方 DeepSeek API 确定性地开启思考：
 
@@ -1951,6 +1970,13 @@ llm := openai.New(
     }),
 )
 ```
+
+对 MiniMax-M3，`ThinkingEnabled=false` 会发送
+`thinking.type=disabled`；MiniMax M2.x 虽然接受该值，但仍会继续思考。
+适配器有意不设置 `reasoning_split`：MiniMax 原生 OpenAI 格式会把推理保留在
+assistant `content` 的 `<think>...</think>` 中，框架会在工具调用历史中原样保存。
+返回工具结果前，不应删除 assistant 历史中的这些标签。服务方的多轮要求参见
+[MiniMax OpenAI SDK 文档](https://platform.minimax.io/docs/api-reference/text-openai-api)。
 
 #### 8. 流式工具调用增量：ShowToolCallDelta
 
