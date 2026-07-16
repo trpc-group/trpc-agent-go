@@ -126,7 +126,7 @@ func TestQualifyOperationsWithGroundedExamples(t *testing.T) {
 		},
 		{
 			Type:   OperationAdd,
-			Memory: "Discovered Fresh Fusion, which offers pre-made meals.",
+			Memory: "Discovered a food delivery service called Fresh Fusion that offers pre-made meals.",
 			Topics: []string{"Fresh Fusion", "food delivery", "pre-made meals"},
 		},
 	}
@@ -142,7 +142,7 @@ func TestQualifyOperationsWithGroundedExamples(t *testing.T) {
 		operations[0].Memory,
 	)
 	assert.Equal(t,
-		"food delivery: Discovered Fresh Fusion, which offers pre-made meals.",
+		"Discovered a food delivery service called Fresh Fusion that offers pre-made meals.",
 		operations[1].Memory,
 	)
 	assert.Contains(t, operations[0].Topics, "Fresh Fusion")

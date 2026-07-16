@@ -91,7 +91,6 @@ func groundedExampleEntity(
 	for _, category := range contextOperation.Topics {
 		category = strings.TrimSpace(category)
 		if category == "" || !containsTopic(contextOperation.Memory, category) ||
-			containsTopic(detail.Memory, category) ||
 			!hasTopic(detail.Topics, category) {
 			continue
 		}
