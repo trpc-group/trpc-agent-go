@@ -13,7 +13,9 @@ package internal
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -30,6 +32,8 @@ type ContainerSandbox struct {
 	config   SandboxConfig
 	repoPath string
 }
+
+const maxWorkspaceDiskBytes int64 = 256 * 1024 * 1024
 
 // NewContainerSandbox starts the production container runtime.
 func NewContainerSandbox(config SandboxConfig, repoPath, dockerfilePath string) (*ContainerSandbox, error) {
@@ -70,7 +74,11 @@ func (s *ContainerSandbox) Execute(ctx context.Context, taskID, command string, 
 
 	timeoutCtx, cancel := context.WithTimeout(ctx, s.config.Timeout)
 	defer cancel()
-	ws, err := s.executor.CreateWorkspace(timeoutCtx, taskID+"-"+run.ID, codeexecutor.WorkspacePolicy{Isolated: true, MaxDiskBytes: 256 * 1024 * 1024})
+	if err := validateRepositorySize(s.repoPath, maxWorkspaceDiskBytes); err != nil {
+		run.Status, run.Error = SandboxStatusError, RedactSensitiveInfo(err.Error())
+		return run
+	}
+	ws, err := s.executor.CreateWorkspace(timeoutCtx, taskID+"-"+run.ID, codeexecutor.WorkspacePolicy{Isolated: true, MaxDiskBytes: maxWorkspaceDiskBytes})
 	if err != nil {
 		run.Status, run.Error = SandboxStatusError, RedactSensitiveInfo(err.Error())
 		return run
@@ -107,4 +115,29 @@ func (s *ContainerSandbox) Execute(ctx context.Context, taskID, command string, 
 		run.Status = SandboxStatusSuccess
 	}
 	return run
+}
+
+func validateRepositorySize(root string, limit int64) error {
+	var total int64
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if !entry.Type().IsRegular() {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if info.Size() > limit-total {
+			return fmt.Errorf("repository exceeds %d-byte sandbox copy limit", limit)
+		}
+		total += info.Size()
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("validate repository before sandbox copy: %w", err)
+	}
+	return nil
 }

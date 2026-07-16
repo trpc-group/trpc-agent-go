@@ -70,6 +70,18 @@ func TestRuleEngine_HardcodedSecret(t *testing.T) {
 	require.True(t, hasSecret, "expected HARDCODED_SECRET finding")
 }
 
+func TestRuleEngine_HardcodedSecretShortDeclaration(t *testing.T) {
+	rule := &HardcodedSecretRule{}
+	for _, content := range []string{
+		`apiKey := "abcdefghijklmnop"`,
+		`token := "abcdefghijklmnopqrst"`,
+		`password := "secret"`,
+	} {
+		findings := rule.Check(DiffFile{}, DiffHunk{}, DiffLine{Type: LineAdded, Content: content})
+		require.NotEmpty(t, findings, content)
+	}
+}
+
 func TestRuleEngine_GoroutineLeak(t *testing.T) {
 	diff := `diff --git a/worker.go b/worker.go
 --- a/worker.go

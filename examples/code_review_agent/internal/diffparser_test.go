@@ -169,6 +169,18 @@ func TestDiffSummary(t *testing.T) {
 	require.Contains(t, summary, "-1")
 }
 
+func TestDiffSummaryCountsDeletedLines(t *testing.T) {
+	files := []DiffFile{{
+		Path:      "deleted.go",
+		IsDeleted: true,
+		Hunks: []DiffHunk{{Lines: []DiffLine{
+			{Type: LineRemoved, Content: "package old"},
+			{Type: LineRemoved, Content: "func removed() {}"},
+		}}},
+	}}
+	require.Equal(t, "1 files, +0 -2", DiffSummary(files))
+}
+
 func TestChangedGoFiles(t *testing.T) {
 	files := []DiffFile{
 		{Path: "foo.go", Hunks: []DiffHunk{{Lines: []DiffLine{{Type: LineAdded}}}}},

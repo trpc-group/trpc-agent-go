@@ -58,3 +58,26 @@ func TestLoadReviewInputRejectsEscapingPath(t *testing.T) {
 	_, _, err := LoadReviewInput(context.Background(), ReviewInput{RepoPath: t.TempDir(), FilePaths: []string{"../secret"}})
 	require.Error(t, err)
 }
+
+func TestLoadReviewInputIncludesUntrackedFiles(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	repo := t.TempDir()
+	runGit := func(args ...string) {
+		cmd := exec.Command("git", append([]string{"-c", "user.name=test", "-c", "user.email=test@example.com"}, args...)...)
+		cmd.Dir = repo
+		require.NoError(t, cmd.Run())
+	}
+	runGit("init")
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "README.md"), []byte("tracked\n"), 0o600))
+	runGit("add", "README.md")
+	runGit("commit", "-m", "initial")
+	path := filepath.Join(repo, "new.go")
+	require.NoError(t, os.WriteFile(path, []byte("package demo\n\nvar apiKey = \"abcdefghijklmnop\"\n"), 0o600))
+
+	data, _, err := LoadReviewInput(context.Background(), ReviewInput{RepoPath: repo})
+	require.NoError(t, err)
+	require.Contains(t, string(data), "new file mode")
+	require.Contains(t, string(data), "+var apiKey")
+}

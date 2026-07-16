@@ -112,9 +112,9 @@ func (r *HardcodedSecretRule) Description() string {
 }
 
 var (
-	reHardcodedAPIKey = regexp.MustCompile(`(?i)(api[_-]?key|apikey)\s*(?::\s*string)?\s*=\s*"[\w\-]{16,}"`)
-	reHardcodedToken  = regexp.MustCompile(`(?i)(token|access_token|secret)\s*(?::\s*string)?\s*=\s*"[\w\-\.]{20,}"`)
-	reHardcodedPwd    = regexp.MustCompile(`(?i)(password|passwd|pwd)\s*(?::\s*string)?\s*=\s*"[^"]{4,}"`)
+	reHardcodedAPIKey = regexp.MustCompile(`(?i)(api[_-]?key|apikey)\s*(?::\s*string)?\s*(?::=|=)\s*"[\w\-]{16,}"`)
+	reHardcodedToken  = regexp.MustCompile(`(?i)(token|access_token|secret)\s*(?::\s*string)?\s*(?::=|=)\s*"[\w\-\.]{20,}"`)
+	reHardcodedPwd    = regexp.MustCompile(`(?i)(password|passwd|pwd)\s*(?::\s*string)?\s*(?::=|=)\s*"[^"]{4,}"`)
 )
 
 func (r *HardcodedSecretRule) Check(_ DiffFile, _ DiffHunk, line DiffLine) []Finding {

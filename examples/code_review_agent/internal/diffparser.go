@@ -307,10 +307,6 @@ func ParseDiffString(s string) ([]DiffFile, error) {
 func DiffSummary(files []DiffFile) string {
 	var added, removed, fileCount int
 	for _, f := range files {
-		if f.IsDeleted {
-			fileCount++
-			continue
-		}
 		fileCount++
 		for _, h := range f.Hunks {
 			for _, l := range h.Lines {
