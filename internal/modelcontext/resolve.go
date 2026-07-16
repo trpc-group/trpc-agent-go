@@ -10,7 +10,15 @@
 // framework-internal threshold decisions.
 package modelcontext
 
-import "trpc.group/trpc-go/trpc-agent-go/model"
+import (
+	"context"
+
+	"trpc.group/trpc-go/trpc-agent-go/model"
+)
+
+type inputTokenBudgeter interface {
+	InputTokenBudget(context.Context, *model.Request) int
+}
 
 // ResolveContextWindow resolves a model's context window from Info first,
 // then from the process-wide model-name registry.
@@ -23,4 +31,24 @@ func ResolveContextWindow(m model.Model) (int, bool) {
 		return info.ContextWindow, true
 	}
 	return model.LookupModelContextWindow(info.Name)
+}
+
+// ResolveInputTokenBudget returns the effective input budget used by a model
+// adapter for the supplied request. The optional capability keeps framework
+// admission decisions aligned with provider-side token tailoring without
+// extending the core Model interface.
+func ResolveInputTokenBudget(
+	ctx context.Context,
+	m model.Model,
+	request *model.Request,
+) (int, bool) {
+	if m == nil {
+		return 0, false
+	}
+	budgeter, ok := m.(inputTokenBudgeter)
+	if !ok {
+		return 0, false
+	}
+	budget := budgeter.InputTokenBudget(ctx, request)
+	return budget, budget > 0
 }
