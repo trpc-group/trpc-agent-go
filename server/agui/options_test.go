@@ -88,6 +88,19 @@ func TestWithFlushInterval(t *testing.T) {
 	assert.Equal(t, 2*time.Second, ro.FlushInterval)
 }
 
+func TestWithRunHook(t *testing.T) {
+	called := false
+	hook := func(context.Context, *aguirunner.Run) error {
+		called = true
+		return nil
+	}
+	opts := newOptions(WithRunHook(hook))
+	ro := aguirunner.NewOptions(opts.aguiRunnerOptions...)
+	assert.Len(t, ro.RunHooks, 1)
+	assert.NoError(t, ro.RunHooks[0](context.Background(), nil))
+	assert.True(t, called)
+}
+
 func TestWithPostRunFinalizationTimeout(t *testing.T) {
 	opts := newOptions(WithPostRunFinalizationTimeout(2 * time.Second))
 	ro := aguirunner.NewOptions(opts.aguiRunnerOptions...)

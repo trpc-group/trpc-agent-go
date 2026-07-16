@@ -335,6 +335,54 @@ stateResolver := func(_ context.Context, input *adapter.RunAgentInput) (map[stri
 server, _ := agui.New(runner, agui.WithAGUIRunnerOptions(aguirunner.WithStateResolver(stateResolver)))
 ```
 
+## Run Hook
+
+`RunHook` is for real-time conversation runs where server-side background logic proactively pushes AG-UI events to the frontend at its own pace. It is used for server-initiated UI status updates, rather than translating internal events that the Agent has already produced into AG-UI events; use a custom Translator or event translation callbacks for the latter.
+
+`RunHook` starts after `RUN_STARTED` is sent and runs in parallel with the Agent. The hook calls `run.Emit(ctx, event)` to write events into the SSE stream for the current request. If `SessionService` is configured, these events are also written to AG-UI history and can be restored through the [message snapshot route](history.md). Hook events are not written to normal session events, so they do not become model context in later runs.
+
+The following example shows a background report task that pushes generation progress every 100ms. For the complete example, see [examples/agui/server/runhook](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/runhook).
+
+```go
+import (
+	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui"
+	aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
+)
+
+const reportEventName = "background.report.status"
+
+func pushBackgroundReportStatus(ctx context.Context, run *aguirunner.Run) error {
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for step := 1; step <= 5; step++ {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+		err := run.Emit(ctx, aguievents.NewCustomEvent(
+			reportEventName,
+			aguievents.WithValue(map[string]any{
+				"progress": step * 20,
+			}),
+		))
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+coreRunner := runner.NewRunner(agent.Info().Name, agent)
+server, _ := agui.New(coreRunner, agui.WithRunHook(pushBackgroundReportStatus))
+```
+
+If the background task needs business fields from the current request, call `run.Input()` to get the `RunAgentInput`, for example to read business parameters from `forwardedProps`. Treat the request body as read-only in the hook, and do not keep rewriting it after the run has started.
+
+`run.Emit` is for UI events produced by server-side background logic. It should not send framework-owned events such as `RUN_STARTED`, `RUN_FINISHED`, `RUN_ERROR`, or `MESSAGES_SNAPSHOT`. If the Agent finishes before the hook, the framework waits for the hook to return before sending the final run terminal event, so proactively pushed UI events do not appear after the terminal event. The hook should honor `ctx.Done()` and return promptly when the run is canceled or times out. If the hook returns an error, the current AG-UI run returns `RUN_ERROR`.
+
 ## Custom Translator
 
 [Translator](index.md#translator) converts internal framework events into AG-UI events. The built-in Translator translates internal framework events into standard events defined by the AG-UI protocol, maintains streaming event state, and finalizes open streams when a run ends. A custom Translator can implement this conversion independently or wrap the built-in Translator to extend event output while preserving the default translation and finalization logic.

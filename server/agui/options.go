@@ -131,6 +131,13 @@ func WithAGUIRunnerOptions(aguiRunnerOpts ...aguirunner.Option) Option {
 	}
 }
 
+// WithRunHook appends a hook that runs after the AG-UI run has started.
+func WithRunHook(hook aguirunner.RunHook) Option {
+	return func(o *options) {
+		o.aguiRunnerOptions = append(o.aguiRunnerOptions, aguirunner.WithRunHook(hook))
+	}
+}
+
 // WithTimeout sets the maximum execution time for a run, 1h in default.
 func WithTimeout(d time.Duration) Option {
 	return func(o *options) {

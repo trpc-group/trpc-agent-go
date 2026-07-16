@@ -48,6 +48,7 @@ var (
 const (
 	toolResultInputEventAuthor = "agui.runner"
 	errResolveExternalTools    = "resolve external tools: %w"
+	defaultRunHookEventBuffer  = 256
 )
 
 // Runner executes AG-UI runs and emits AG-UI events.
@@ -84,6 +85,7 @@ func New(r trunner.Runner, opt ...Option) Runner {
 		userIDResolver:                         opts.UserIDResolver,
 		translateCallbacks:                     opts.TranslateCallbacks,
 		runAgentInputHook:                      opts.RunAgentInputHook,
+		runHooks:                               append([]RunHook(nil), opts.RunHooks...),
 		stateResolver:                          opts.StateResolver,
 		runOptionResolver:                      opts.RunOptionResolver,
 		sessionService:                         opts.SessionService,
@@ -122,6 +124,7 @@ type runner struct {
 	userIDResolver                            UserIDResolver
 	translateCallbacks                        *translator.Callbacks
 	runAgentInputHook                         RunAgentInputHook
+	runHooks                                  []RunHook
 	stateResolver                             StateResolver
 	runOptionResolver                         RunOptionResolver
 	sessionService                            session.Service
@@ -164,6 +167,13 @@ type runInput struct {
 	span            trace.Span
 	resume          *resumeInfo
 	terminalEmitted bool
+	runAgentInput   *adapter.RunAgentInput
+	done            chan struct{}
+}
+
+type runAgentResult struct {
+	events <-chan *event.Event
+	err    error
 }
 
 type runAgentMessages struct {
@@ -401,15 +411,17 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 			UserID:    userID,
 			SessionID: runAgentInput.ThreadID,
 		},
-		threadID:    threadID,
-		runID:       runID,
-		userID:      userID,
-		messages:    messages,
-		runOption:   runOption,
-		translator:  trans,
-		enableTrack: r.tracker != nil,
-		span:        span,
-		resume:      parseResumeInfo(runOption),
+		threadID:      threadID,
+		runID:         runID,
+		userID:        userID,
+		messages:      messages,
+		runOption:     runOption,
+		translator:    trans,
+		enableTrack:   r.tracker != nil,
+		span:          span,
+		resume:        parseResumeInfo(runOption),
+		runAgentInput: runAgentInput,
+		done:          make(chan struct{}),
 	}
 	events := make(chan aguievents.Event)
 	ctx, cancel := r.newExecutionContext(ctx, r.timeout)
@@ -431,17 +443,15 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 }
 
 func (r *runner) run(ctx context.Context, cancel context.CancelCauseFunc, key session.Key, input *runInput, events chan<- aguievents.Event) {
-	defer func() {
-		cancel(nil)
-		r.finishDistributedCancel(ctx, key)
-		r.unregister(key)
-		input.span.End()
-		close(events)
-	}()
+	if input.done == nil {
+		input.done = make(chan struct{})
+	}
 	threadID := input.threadID
 	runID := input.runID
-	if input.enableTrack {
-		defer func() {
+	defer func() {
+		close(input.done)
+		cancel(nil)
+		if input.enableTrack {
 			if err := r.flushTrack(ctx, input.key); err != nil {
 				log.WarnfContext(
 					ctx,
@@ -452,7 +462,13 @@ func (r *runner) run(ctx context.Context, cancel context.CancelCauseFunc, key se
 					err,
 				)
 			}
-		}()
+		}
+		r.finishDistributedCancel(ctx, key)
+		r.unregister(key)
+		input.span.End()
+		close(events)
+	}()
+	if input.enableTrack {
 		if input.messages.inputMessage.Role == model.RoleUser {
 			if err := r.recordUserMessage(ctx, input.key, input.messages.userMessage); err != nil {
 				log.WarnfContext(
@@ -479,37 +495,167 @@ func (r *runner) run(ctx context.Context, cancel context.CancelCauseFunc, key se
 			return
 		}
 	}
-	ch, err := r.runner.Run(ctx, input.userID, threadID, *input.messages.inputMessage, input.runOption...)
-	if err != nil {
-		log.ErrorfContext(
-			ctx,
-			"agui run: threadID: %s, runID: %s, run agent: %v",
-			threadID,
-			runID,
-			err,
-		)
-		r.emitEvent(ctx, events, aguievents.NewRunErrorEvent(fmt.Sprintf("run agent: %v", err),
-			aguievents.WithRunID(runID)), input)
-		return
-	}
+	hookEvents, hookDone, hookRemaining := r.startRunHooks(ctx, input)
+	agentRun := make(chan runAgentResult, 1)
+	go func() {
+		ch, err := r.runner.Run(ctx, input.userID, threadID, *input.messages.inputMessage, input.runOption...)
+		agentRun <- runAgentResult{events: ch, err: err}
+	}()
+	r.runEventLoop(ctx, events, input, agentRun, hookEvents, hookDone, hookRemaining)
+}
+
+func (r *runner) runEventLoop(
+	ctx context.Context,
+	events chan<- aguievents.Event,
+	input *runInput,
+	agentRun <-chan runAgentResult,
+	hookEvents <-chan hookEvent,
+	hookDone <-chan error,
+	hookRemaining int,
+) {
+	threadID := input.threadID
+	runID := input.runID
+	var agentEvents <-chan *event.Event
+	var pendingTerminal aguievents.Event
+	agentDone := false
 	for {
+		if agentDone && hookRemaining == 0 {
+			r.emitPendingTerminal(ctx, events, input, pendingTerminal)
+			return
+		}
 		select {
 		case <-ctx.Done():
 			log.ErrorfContext(ctx, "agui run: threadID: %s, runID: %s, err: %v", threadID, runID, ctx.Err())
 			r.emitPostRunTerminalEvent(ctx, events, input)
 			return
-		case agentEvent, ok := <-ch:
+		case result := <-agentRun:
+			agentRun = nil
+			if result.err != nil {
+				log.ErrorfContext(
+					ctx,
+					"agui run: threadID: %s, runID: %s, run agent: %v",
+					threadID,
+					runID,
+					result.err,
+				)
+				r.emitEvent(ctx, events, aguievents.NewRunErrorEvent(fmt.Sprintf("run agent: %v", result.err),
+					aguievents.WithRunID(runID)), input)
+				return
+			}
+			if result.events == nil {
+				agentDone = true
+				continue
+			}
+			agentEvents = result.events
+		case agentEvent, ok := <-agentEvents:
 			if !ok {
 				if ctx.Err() != nil {
 					r.emitPostRunTerminalEvent(ctx, events, input)
 				}
+				agentEvents = nil
+				agentDone = true
+				continue
+			}
+			terminal, ok := r.emitAgentEventWithDeferredTerminal(ctx, events, input, agentEvent)
+			if !ok {
 				return
 			}
-			if !r.handleAgentEvent(ctx, events, input, agentEvent) {
+			if terminal != nil {
+				pendingTerminal = terminal
+				agentEvents = nil
+				agentDone = true
+			}
+		case req := <-hookEvents:
+			if !r.handleHookEvent(ctx, events, input, req) {
+				return
+			}
+		case err := <-hookDone:
+			hookRemaining--
+			if hookRemaining == 0 {
+				hookDone = nil
+				hookEvents = nil
+			}
+			if err != nil {
+				log.ErrorfContext(ctx, "agui run hook: threadID: %s, runID: %s, err: %v", threadID, runID, err)
+				r.emitPostRunFinalization(ctx, events, input)
+				r.emitEvent(ctx, events, aguievents.NewRunErrorEvent(fmt.Sprintf("run hook: %v", err),
+					aguievents.WithRunID(runID)), input)
 				return
 			}
 		}
 	}
+}
+
+func (r *runner) emitPendingTerminal(ctx context.Context, events chan<- aguievents.Event, input *runInput, terminal aguievents.Event) {
+	if terminal != nil {
+		r.emitEvent(ctx, events, terminal, input)
+	}
+}
+
+func (r *runner) startRunHooks(ctx context.Context, input *runInput) (<-chan hookEvent, <-chan error, int) {
+	if len(r.runHooks) == 0 {
+		return nil, nil, 0
+	}
+	hookEvents := make(chan hookEvent, defaultRunHookEventBuffer)
+	hookDone := make(chan error, len(r.runHooks))
+	run := newRun(input.runAgentInput, hookEvents, input.done)
+	started := 0
+	for _, hook := range r.runHooks {
+		if hook == nil {
+			continue
+		}
+		started++
+		go func(h RunHook) {
+			hookDone <- runRunHook(ctx, h, run)
+		}(hook)
+	}
+	if started == 0 {
+		return nil, nil, 0
+	}
+	return hookEvents, hookDone, started
+}
+
+func runRunHook(ctx context.Context, hook RunHook, run *Run) (err error) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			err = fmt.Errorf("panic: %v", rec)
+		}
+	}()
+	return hook(ctx, run)
+}
+
+func (r *runner) emitAgentEventWithDeferredTerminal(
+	ctx context.Context,
+	events chan<- aguievents.Event,
+	input *runInput,
+	agentEvent *event.Event,
+) (aguievents.Event, bool) {
+	aguiEvents, err := r.translateAgentEvent(ctx, input, agentEvent)
+	if err != nil {
+		r.emitEvent(ctx, events, aguievents.NewRunErrorEvent(err.Error(), aguievents.WithRunID(input.runID)), input)
+		return nil, false
+	}
+	for _, aguiEvent := range aguiEvents {
+		if terminal, _ := terminalRunSignal(aguiEvent); terminal {
+			return aguiEvent, true
+		}
+		if !r.emitEvent(ctx, events, aguiEvent, input) {
+			return nil, false
+		}
+	}
+	return nil, true
+}
+
+func (r *runner) handleHookEvent(ctx context.Context, events chan<- aguievents.Event, input *runInput, req hookEvent) bool {
+	if req.reply == nil {
+		return r.writeEvent(ctx, events, req.event, input)
+	}
+	if !r.writeEvent(ctx, events, req.event, input) {
+		req.reply <- errRunClosed
+		return false
+	}
+	req.reply <- nil
+	return true
 }
 
 func (r *runner) flushTrack(ctx context.Context, key session.Key) error {
@@ -747,6 +893,15 @@ func newToolResultInputEvent(messageID string, msg *model.Message) *event.Event 
 }
 
 func (r *runner) handleAgentEvent(ctx context.Context, events chan<- aguievents.Event, input *runInput, event *event.Event) bool {
+	aguiEvents, err := r.translateAgentEvent(ctx, input, event)
+	if err != nil {
+		r.emitEvent(ctx, events, aguievents.NewRunErrorEvent(err.Error(), aguievents.WithRunID(input.runID)), input)
+		return false
+	}
+	return r.emitAgentEvents(ctx, events, input, aguiEvents)
+}
+
+func (r *runner) translateAgentEvent(ctx context.Context, input *runInput, event *event.Event) ([]aguievents.Event, error) {
 	threadID := input.threadID
 	runID := input.runID
 	customEvent, err := r.handleBeforeTranslate(ctx, event)
@@ -759,9 +914,7 @@ func (r *runner) handleAgentEvent(ctx context.Context, events chan<- aguievents.
 			runID,
 			err,
 		)
-		r.emitEvent(ctx, events, aguievents.NewRunErrorEvent(fmt.Sprintf("before translate callback: %v", err),
-			aguievents.WithRunID(runID)), input)
-		return false
+		return nil, fmt.Errorf("before translate callback: %w", err)
 	}
 	aguiEvents, err := input.translator.Translate(ctx, customEvent)
 	if err != nil {
@@ -773,10 +926,13 @@ func (r *runner) handleAgentEvent(ctx context.Context, events chan<- aguievents.
 			runID,
 			err,
 		)
-		r.emitEvent(ctx, events, aguievents.NewRunErrorEvent(fmt.Sprintf("translate event: %v", err),
-			aguievents.WithRunID(runID)), input)
-		return false
+		return nil, fmt.Errorf("translate event: %w", err)
 	}
+	return aguiEvents, nil
+}
+
+func (r *runner) emitAgentEvents(ctx context.Context, events chan<- aguievents.Event, input *runInput,
+	aguiEvents []aguievents.Event) bool {
 	for _, aguiEvent := range aguiEvents {
 		if !r.emitEvent(ctx, events, aguiEvent, input) {
 			return false
@@ -869,6 +1025,14 @@ func (r *runner) emitEvent(ctx context.Context, events chan<- aguievents.Event, 
 			log.ErrorfContext(ctx, "agui emit event: context done, threadID: %s, runID: %s, err: %v",
 				input.threadID, input.runID, ctx.Err())
 		}
+		return false
+	}
+	return r.writeEvent(ctx, events, event, input)
+}
+
+func (r *runner) writeEvent(ctx context.Context, events chan<- aguievents.Event, event aguievents.Event,
+	input *runInput) bool {
+	if input != nil && input.terminalEmitted {
 		return false
 	}
 	isTerminal, _ := terminalRunSignal(event)

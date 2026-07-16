@@ -45,6 +45,7 @@ type Options struct {
 	UserIDResolver                            UserIDResolver        // UserIDResolver derives the user identifier for an AG-UI run.
 	TranslateCallbacks                        *translator.Callbacks // TranslateCallbacks translates the run events to AG-UI events.
 	RunAgentInputHook                         RunAgentInputHook     // RunAgentInputHook allows modifying the run input before processing.
+	RunHooks                                  []RunHook             // RunHooks observe an AG-UI run and may emit run-scoped UI events.
 	AppName                                   string                // AppName is the name of the application.
 	AppNameResolver                           AppNameResolver       // AppNameResolver derives the app name for an AG-UI run.
 	SessionService                            session.Service       // SessionService is the session service.
@@ -143,6 +144,15 @@ type RunAgentInputHook func(ctx context.Context, input *adapter.RunAgentInput) (
 func WithRunAgentInputHook(hook RunAgentInputHook) Option {
 	return func(o *Options) {
 		o.RunAgentInputHook = hook
+	}
+}
+
+// WithRunHook appends a hook that runs after the AG-UI run has started.
+func WithRunHook(hook RunHook) Option {
+	return func(o *Options) {
+		if hook != nil {
+			o.RunHooks = append(o.RunHooks, hook)
+		}
 	}
 }
 
