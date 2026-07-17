@@ -57,7 +57,13 @@ func updatePolicyFromMetadata(ext extractor.MemoryExtractor) extractor.UpdatePol
 	if ext == nil {
 		return extractor.UpdatePolicyReconcile
 	}
-	raw, ok := ext.Metadata()[extractorMetadataUpdatePolicy]
+	metadataProvider, ok := ext.(interface {
+		Metadata() map[string]any
+	})
+	if !ok {
+		return extractor.UpdatePolicyReconcile
+	}
+	raw, ok := metadataProvider.Metadata()[extractorMetadataUpdatePolicy]
 	if !ok {
 		return extractor.UpdatePolicyReconcile
 	}
