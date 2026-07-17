@@ -2674,6 +2674,52 @@ func TestService_SearchMemories_ThresholdAndDeduplicate(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestService_SearchMemories_DeduplicateRefillsRequestedLimit(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+
+	svc := setupMockService(t, db, mock, WithSkipDBInit(true))
+	defer svc.Close()
+
+	now := time.Date(2024, 5, 7, 0, 0, 0, 0, time.UTC)
+	mock.ExpectQuery("SELECT memory_id, app_name, user_id, memory_content, topics.*LIMIT 4").
+		WillReturnRows(sqlmock.NewRows(
+			[]string{"memory_id", "app_name", "user_id", "memory_content", "topics",
+				"memory_kind", "event_time", "participants", "location",
+				"created_at", "updated_at", "similarity"},
+		).
+			AddRow("mem-1", "test-app", "u1", "Alice hiking in Kyoto", pq.Array([]string{"travel"}),
+				"episode", now, pq.Array([]string{"Alice"}), "Kyoto", now, now, 0.95).
+			AddRow("mem-2", "test-app", "u1", "Alice hiking in Kyoto", pq.Array([]string{"travel"}),
+				"episode", now, pq.Array([]string{"Alice"}), "Kyoto", now, now, 0.94).
+			AddRow("mem-3", "test-app", "u1", "Alice studying in Tokyo", pq.Array([]string{"study"}),
+				"episode", now, pq.Array([]string{"Alice"}), "Tokyo", now, now, 0.93))
+
+	results, err := svc.SearchMemories(
+		context.Background(),
+		memory.UserKey{AppName: "test-app", UserID: "u1"},
+		"Alice in Japan",
+		memory.WithSearchOptions(memory.SearchOptions{
+			Query:       "Alice in Japan",
+			MaxResults:  2,
+			Deduplicate: true,
+		}),
+	)
+	require.NoError(t, err)
+	require.Len(t, results, 2)
+	assert.Equal(t, "mem-1", results[0].ID)
+	assert.Equal(t, "mem-3", results[1].ID)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestDeduplicationCandidateLimit(t *testing.T) {
+	assert.Equal(t, 5, deduplicationCandidateLimit(5, false))
+	assert.Equal(t, 10, deduplicationCandidateLimit(5, true))
+	assert.Equal(t, 0, deduplicationCandidateLimit(0, true))
+	maxInt := int(^uint(0) >> 1)
+	assert.Equal(t, maxInt, deduplicationCandidateLimit(maxInt, true))
+}
+
 func TestService_SearchMemories_OrderByEventTimeKeepsHigherSimilarityFirst(t *testing.T) {
 	db, mock := setupMockDB(t)
 	defer db.Close()
