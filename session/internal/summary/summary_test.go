@@ -23,6 +23,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/summarytrigger"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	isummarycontext "trpc.group/trpc-go/trpc-agent-go/session/internal/summarycontext"
 	isummaryscope "trpc.group/trpc-go/trpc-agent-go/session/internal/summaryscope"
 	"trpc.group/trpc-go/trpc-agent-go/session/summary"
 )
@@ -586,7 +587,7 @@ func (s *previousSummaryCaptureSummarizer) Summarize(
 	ctx context.Context,
 	sess *session.Session,
 ) (string, error) {
-	s.previous, s.present = summary.PreviousSummaryFromContext(ctx)
+	s.previous, s.present = isummarycontext.PreviousSummary(ctx)
 	s.events = append([]event.Event(nil), sess.Events...)
 	return "updated summary", nil
 }

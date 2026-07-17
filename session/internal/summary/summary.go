@@ -20,6 +20,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/summarytrigger"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	isummarycontext "trpc.group/trpc-go/trpc-agent-go/session/internal/summarycontext"
 	isummaryscope "trpc.group/trpc-go/trpc-agent-go/session/internal/summaryscope"
 	"trpc.group/trpc-go/trpc-agent-go/session/summary"
 )
@@ -327,7 +328,7 @@ func buildSummaryInput(
 		report = &summary.Report{}
 		reportCtx = summary.ContextWithReport(ctx, report)
 	}
-	reportCtx = summary.ContextWithPreviousSummary(reportCtx, prev.text)
+	reportCtx = isummarycontext.WithPreviousSummary(reportCtx, prev.text)
 	if !shouldGenerateSummary(
 		reportCtx,
 		m,

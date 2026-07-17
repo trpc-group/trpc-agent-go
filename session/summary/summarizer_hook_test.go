@@ -18,6 +18,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	isummarycontext "trpc.group/trpc-go/trpc-agent-go/session/internal/summarycontext"
 )
 
 type echoPromptModel struct {
@@ -136,7 +137,7 @@ func TestSessionSummarizer_PreHook_ModifiesSeparatedPreviousSummary(t *testing.T
 		},
 		newEventWithContent("new conversation"),
 	}}
-	ctx := ContextWithPreviousSummary(context.Background(), "previous")
+	ctx := isummarycontext.WithPreviousSummary(context.Background(), "previous")
 
 	result, err := s.Summarize(ctx, sess)
 	require.NoError(t, err)

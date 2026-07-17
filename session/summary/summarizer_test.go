@@ -20,6 +20,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	isummarycontext "trpc.group/trpc-go/trpc-agent-go/session/internal/summarycontext"
 	isummaryscope "trpc.group/trpc-go/trpc-agent-go/session/internal/summaryscope"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -363,7 +364,7 @@ func TestSessionSummarizer_PreviousSummaryPlaceholder(t *testing.T) {
 			capture,
 			WithPrompt("Previous:\n{previous_summary}\n\nConversation:\n{conversation_text}\n\nSummary:"),
 		)
-		ctx := ContextWithPreviousSummary(context.Background(), previous)
+		ctx := isummarycontext.WithPreviousSummary(context.Background(), previous)
 
 		_, err := s.Summarize(ctx, newSession())
 		require.NoError(t, err)
@@ -380,7 +381,7 @@ func TestSessionSummarizer_PreviousSummaryPlaceholder(t *testing.T) {
 			capture,
 			WithPrompt("Conversation:\n{conversation_text}\n\nSummary:"),
 		)
-		ctx := ContextWithPreviousSummary(context.Background(), previous)
+		ctx := isummarycontext.WithPreviousSummary(context.Background(), previous)
 
 		_, err := s.Summarize(ctx, newSession())
 		require.NoError(t, err)
@@ -395,7 +396,7 @@ func TestSessionSummarizer_PreviousSummaryPlaceholder(t *testing.T) {
 			capture,
 			WithPrompt("Previous:\n{previous_summary}\n\nConversation:\n{conversation_text}\n\nSummary:"),
 		)
-		ctx := ContextWithPreviousSummary(context.Background(), previous)
+		ctx := isummarycontext.WithPreviousSummary(context.Background(), previous)
 
 		_, err := s.Summarize(ctx, &session.Session{ID: "previous-only"})
 		require.NoError(t, err)
@@ -509,7 +510,7 @@ func TestSessionSummarizer_CacheSafeForking(t *testing.T) {
 			model.NewUserMessage("new request"),
 		}}
 		ctx := ContextWithCacheSafeForkRequest(context.Background(), parent)
-		ctx = ContextWithPreviousSummary(ctx, "raw previous summary")
+		ctx = isummarycontext.WithPreviousSummary(ctx, "raw previous summary")
 
 		_, err := s.Summarize(ctx, newTestSession())
 		require.NoError(t, err)
@@ -527,7 +528,7 @@ func TestSessionSummarizer_CacheSafeForking(t *testing.T) {
 			WithCacheSafeForking(true),
 			WithPrompt("Previous:\n{previous_summary}\n\nConversation:\n{conversation_text}\n\nSummary:"),
 		)
-		ctx := ContextWithPreviousSummary(context.Background(), "raw previous summary")
+		ctx := isummarycontext.WithPreviousSummary(context.Background(), "raw previous summary")
 
 		_, err := s.Summarize(ctx, newTestSession())
 		require.NoError(t, err)
@@ -807,7 +808,7 @@ func TestSessionSummarizer_BoundsPreviousSummaryAndConversation(t *testing.T) {
 		},
 		newEventWithContent(conversation),
 	}}
-	ctx := ContextWithPreviousSummary(context.Background(), previous)
+	ctx := isummarycontext.WithPreviousSummary(context.Background(), previous)
 
 	text, err := s.Summarize(ctx, sess)
 	require.NoError(t, err)
@@ -2813,7 +2814,7 @@ func TestSessionSummarizer_WithSystemPrompt(t *testing.T) {
 			WithSystemPrompt("Do not use {previous_summary} here."),
 			WithPrompt("Previous: {previous_summary}\nConversation: {conversation_text}"),
 		)
-		ctx := ContextWithPreviousSummary(context.Background(), "previous")
+		ctx := isummarycontext.WithPreviousSummary(context.Background(), "previous")
 		sess := &session.Session{ID: "test", Events: []event.Event{
 			newEventWithContent("Need a summary"),
 		}}

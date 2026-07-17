@@ -26,6 +26,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/prompt"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	isummarycontext "trpc.group/trpc-go/trpc-agent-go/session/internal/summarycontext"
 	isummaryscope "trpc.group/trpc-go/trpc-agent-go/session/internal/summaryscope"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 )
@@ -452,7 +453,7 @@ func (s *sessionSummarizer) Summarize(ctx context.Context, sess *session.Session
 		return "", fmt.Errorf("no model configured for summarization for session %s", sess.ID)
 	}
 	ctx = s.ensureReportContext(ctx)
-	previousSummary, _ := PreviousSummaryFromContext(ctx)
+	previousSummary, _ := isummarycontext.PreviousSummary(ctx)
 	separatePreviousSummary := promptContainsVar(s.prompt, previousSummaryVar)
 	if len(sess.Events) == 0 && (!separatePreviousSummary || previousSummary == "") {
 		return "", fmt.Errorf("no events to summarize for session %s (events=0)", sess.ID)
