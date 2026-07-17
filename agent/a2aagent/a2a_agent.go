@@ -76,8 +76,14 @@ type A2AAgent struct {
 	a2aClient    *client.A2AClient
 	a2aClientURL string
 
-	anonymousCookieInitMu    sync.Mutex
-	anonymousCookieInitLocks map[anonymousCookieInitScope]*anonymousCookieInitLock
+	// anonymousCookieInitLocks serializes first anonymous-cookie acquisition
+	// only within this A2AAgent instance. It does not coordinate separate
+	// A2AAgent instances or processes that share the same SessionService; those
+	// callers may still race during first-cookie initialization until
+	// persistence-backed lease/CAS coordination is added.
+	anonymousCookieInitMu       sync.Mutex
+	anonymousCookieInitLocks    map[anonymousCookieInitScope]*anonymousCookieInitLock
+	anonymousCookieInitWaitHook func(anonymousCookieInitScope)
 }
 
 type invocationA2AClient struct {
@@ -309,6 +315,16 @@ func (r *A2AAgent) acquireAnonymousCookieInitialization(
 	case <-ctx.Done():
 		releaseRef()
 		return nil, ctx.Err()
+	default:
+		if r.anonymousCookieInitWaitHook != nil {
+			r.anonymousCookieInitWaitHook(scope)
+		}
+		select {
+		case entry.gate <- struct{}{}:
+		case <-ctx.Done():
+			releaseRef()
+			return nil, ctx.Err()
+		}
 	}
 
 	var once sync.Once

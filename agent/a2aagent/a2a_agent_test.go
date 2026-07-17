@@ -466,6 +466,11 @@ func TestA2AAgent_AnonymousCookiesSerializeConcurrentInitialAcquisition(t *testi
 
 	a, err := New(WithAgentCardURL(serverURL))
 	require.NoError(t, err)
+	secondWaitingForInit := make(chan struct{})
+	var secondWaitingOnce sync.Once
+	a.anonymousCookieInitWaitHook = func(anonymousCookieInitScope) {
+		secondWaitingOnce.Do(func() { close(secondWaitingForInit) })
+	}
 	createdAt := time.Now()
 	sess := &session.Session{
 		AppName:   "app",
@@ -505,8 +510,16 @@ func TestA2AAgent_AnonymousCookiesSerializeConcurrentInitialAcquisition(t *testi
 		secondDone <- runAnonymous("second")
 	}()
 	select {
+	case <-secondWaitingForInit:
 	case <-secondRequestObserved:
-	case <-time.After(50 * time.Millisecond):
+		t.Fatal("second anonymous request bypassed initialization lock")
+	case <-time.After(time.Second):
+		t.Fatal("second anonymous request did not reach initialization lock")
+	}
+	select {
+	case <-secondRequestObserved:
+		t.Fatal("second anonymous request bypassed initialization lock")
+	default:
 	}
 	close(releaseFirstRequest)
 	select {
@@ -631,6 +644,11 @@ func TestA2AAgent_AnonymousCookiesSerializeConcurrentPersistentSessionInitializa
 
 	a, err := New(WithAgentCardURL(serverURL))
 	require.NoError(t, err)
+	secondWaitingForInit := make(chan struct{})
+	var secondWaitingOnce sync.Once
+	a.anonymousCookieInitWaitHook = func(anonymousCookieInitScope) {
+		secondWaitingOnce.Do(func() { close(secondWaitingForInit) })
+	}
 	sessionService := sessionmemory.NewSessionService()
 	_, err = sessionService.CreateSession(context.Background(), session.Key{
 		AppName:   "app",
@@ -674,9 +692,16 @@ func TestA2AAgent_AnonymousCookiesSerializeConcurrentPersistentSessionInitializa
 	secondDone := make(chan error, 1)
 	go func() { secondDone <- run("second") }()
 	select {
+	case <-secondWaitingForInit:
 	case <-secondRequestObserved:
-		t.Error("second persistent anonymous request bypassed initialization lock")
-	case <-time.After(50 * time.Millisecond):
+		t.Fatal("second persistent anonymous request bypassed initialization lock")
+	case <-time.After(time.Second):
+		t.Fatal("second persistent anonymous request did not reach initialization lock")
+	}
+	select {
+	case <-secondRequestObserved:
+		t.Fatal("second persistent anonymous request bypassed initialization lock")
+	default:
 	}
 	close(releaseFirstRequest)
 
@@ -720,6 +745,11 @@ func TestA2AAgent_AnonymousCookiesSerializeConcurrentPersistentSessionInitializa
 
 func TestA2AAgent_AnonymousCookieInitializationHonorsContextCancellation(t *testing.T) {
 	a := &A2AAgent{}
+	secondWaitingForInit := make(chan struct{})
+	var secondWaitingOnce sync.Once
+	a.anonymousCookieInitWaitHook = func(anonymousCookieInitScope) {
+		secondWaitingOnce.Do(func() { close(secondWaitingForInit) })
+	}
 	persistentSession := &session.Session{
 		AppName: "app",
 		UserID:  "local-user",
@@ -735,11 +765,30 @@ func TestA2AAgent_AnonymousCookieInitializationHonorsContextCancellation(t *test
 	releaseFirst, err := a.acquireAnonymousCookieInitialization(context.Background(), cookie)
 	require.NoError(t, err)
 	require.NotNil(t, releaseFirst)
+	defer releaseFirst()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	_, err = a.acquireAnonymousCookieInitialization(ctx, cookie)
-	require.ErrorIs(t, err, context.DeadlineExceeded)
+	secondDone := make(chan error, 1)
+	go func() {
+		releaseSecond, acquireErr := a.acquireAnonymousCookieInitialization(ctx, cookie)
+		if releaseSecond != nil {
+			releaseSecond()
+		}
+		secondDone <- acquireErr
+	}()
+	select {
+	case <-secondWaitingForInit:
+	case <-time.After(time.Second):
+		t.Fatal("second anonymous cookie initialization did not wait")
+	}
+	cancel()
+	select {
+	case err := <-secondDone:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("second anonymous cookie initialization did not observe cancellation")
+	}
 
 	releaseFirst()
 	releaseThird, err := a.acquireAnonymousCookieInitialization(context.Background(), cookie)
