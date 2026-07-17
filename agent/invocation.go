@@ -65,7 +65,6 @@ const (
 	// session after the function-call processor clones the invocation
 	// session for state-delta isolation.
 	liveSessionStateKey = "__live_session__"
-
 	// streamHubStateKey is the invocation state key used by the graph to
 	// share ephemeral streams across node invocations within the same run.
 	streamHubStateKey = "__graph_stream_hub__"
@@ -103,6 +102,9 @@ const (
 	// TriggerTypeTransfer indicates the child invocation was created because
 	// the parent agent invoked the transfer_to_agent tool (handoff pattern).
 	TriggerTypeTransfer = event.TriggerTypeTransfer
+	// TriggerTypeDynamicWorkflow indicates the child invocation was created by
+	// a dynamic workflow script calling a registered child agent.
+	TriggerTypeDynamicWorkflow = event.TriggerTypeDynamicWorkflow
 )
 
 // ParentInvocationMetadata describes how a child invocation was triggered by
@@ -189,6 +191,10 @@ type Invocation struct {
 	entryPredecessorStepIDs []string
 	// traceNodeID stores the mounted static root node id for this invocation.
 	traceNodeID string
+	// executionTraceStepBinding is the internal ownership bridge for the
+	// structural trace step represented by this invocation. Derived invocations
+	// bind their own structural visit explicitly.
+	executionTraceStepBinding *tracecapture.StepBinding
 
 	// state stores invocation-scoped state data (lazy initialized).
 	// Can be used by callbacks, middleware, or any invocation-scoped logic.
@@ -1758,10 +1764,8 @@ func cloneStateReflectValue(
 	value reflect.Value,
 	visited map[reflectVisit]reflect.Value,
 ) (reflect.Value, bool) {
-	if value.IsValid() && value.CanInterface() {
-		if cloned, ok := cloneKnownStateValue(value.Interface()); ok {
-			return reflect.ValueOf(cloned), true
-		}
+	if cloned, ok := cloneKnownStateReflectValue(value); ok {
+		return cloned, true
 	}
 	switch value.Kind() {
 	case reflect.Interface:
@@ -1784,31 +1788,49 @@ func cloneStateReflectValue(
 	}
 }
 
-func cloneKnownStateValue(value any) (any, bool) {
-	switch v := value.(type) {
-	case *bytes.Buffer:
-		if v == nil {
-			return v, true
+var (
+	bytesBufferStateType    = reflect.TypeOf(bytes.Buffer{})
+	bytesBufferPtrStateType = reflect.TypeOf((*bytes.Buffer)(nil))
+	stringBuilderStateType  = reflect.TypeOf((*strings.Builder)(nil))
+	bigIntStateType         = reflect.TypeOf(big.Int{})
+	bigIntPtrStateType      = reflect.TypeOf((*big.Int)(nil))
+)
+
+func cloneKnownStateReflectValue(value reflect.Value) (reflect.Value, bool) {
+	if !value.IsValid() || !value.CanInterface() {
+		return reflect.Value{}, false
+	}
+	// Match by type before calling Interface. Interface on an arbitrary struct
+	// copies its fields, which is unsafe for opaque state carrying locks.
+	switch value.Type() {
+	case bytesBufferPtrStateType:
+		if value.IsNil() {
+			return value, true
 		}
-		return bytes.NewBuffer(cloneBytes(v.Bytes())), true
-	case bytes.Buffer:
-		return *bytes.NewBuffer(cloneBytes(v.Bytes())), true
-	case *strings.Builder:
-		if v == nil {
-			return v, true
+		v := value.Interface().(*bytes.Buffer)
+		return reflect.ValueOf(bytes.NewBuffer(cloneBytes(v.Bytes()))), true
+	case bytesBufferStateType:
+		v := value.Interface().(bytes.Buffer)
+		return reflect.ValueOf(*bytes.NewBuffer(cloneBytes(v.Bytes()))), true
+	case stringBuilderStateType:
+		if value.IsNil() {
+			return value, true
 		}
+		v := value.Interface().(*strings.Builder)
 		var cloned strings.Builder
 		_, _ = cloned.WriteString(v.String())
-		return &cloned, true
-	case *big.Int:
-		if v == nil {
-			return v, true
+		return reflect.ValueOf(&cloned), true
+	case bigIntPtrStateType:
+		if value.IsNil() {
+			return value, true
 		}
-		return new(big.Int).Set(v), true
-	case big.Int:
-		return *new(big.Int).Set(&v), true
+		v := value.Interface().(*big.Int)
+		return reflect.ValueOf(new(big.Int).Set(v)), true
+	case bigIntStateType:
+		v := value.Interface().(big.Int)
+		return reflect.ValueOf(*new(big.Int).Set(&v)), true
 	default:
-		return nil, false
+		return reflect.Value{}, false
 	}
 }
 

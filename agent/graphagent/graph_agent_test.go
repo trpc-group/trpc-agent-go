@@ -30,6 +30,7 @@ import (
 	"go.opentelemetry.io/otel/trace/noop"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
 	atrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
@@ -4077,10 +4078,10 @@ func TestGraphAgent_Run_ExecutionTraceCapturesComplexGraph(t *testing.T) {
 			"route_count": count + 1,
 			"visited":     []string{"route"},
 		}, nil
-	})
+	}, graph.WithNodeType(graph.NodeTypeRouter))
 	builder.AddNode("tools", func(context.Context, graph.State) (any, error) {
 		return graph.State{"visited": []string{"tools"}}, nil
-	})
+	}, graph.WithNodeType(graph.NodeType("custom")))
 	builder.AddNode("branch_a", func(context.Context, graph.State) (any, error) {
 		return graph.State{"visited": []string{"branch_a"}}, nil
 	})
@@ -4092,7 +4093,7 @@ func TestGraphAgent_Run_ExecutionTraceCapturesComplexGraph(t *testing.T) {
 	})
 	builder.AddNode("join", func(context.Context, graph.State) (any, error) {
 		return graph.State{"visited": []string{"join"}}, nil
-	})
+	}, graph.WithNodeType(graph.NodeTypeJoin))
 	builder.AddNode("done", func(context.Context, graph.State) (any, error) {
 		return graph.State{"visited": []string{"done"}}, nil
 	})
@@ -4140,6 +4141,17 @@ func TestGraphAgent_Run_ExecutionTraceCapturesComplexGraph(t *testing.T) {
 	require.NotNil(t, completion)
 	require.NotNil(t, completion.ExecutionTrace)
 	executionTrace := completion.ExecutionTrace
+	staticStructure, err := astructure.Export(context.Background(), ag)
+	require.NoError(t, err)
+	staticNodeKinds := make(map[string]astructure.NodeKind, len(staticStructure.Nodes))
+	for _, node := range staticStructure.Nodes {
+		staticNodeKinds[node.NodeID] = node.Kind
+	}
+	for _, step := range executionTrace.Steps {
+		staticNodeKind, ok := staticNodeKinds[step.NodeID]
+		require.True(t, ok, "trace node %q is missing from static structure", step.NodeID)
+		require.Equal(t, string(staticNodeKind), step.NodeType, step.NodeID)
+	}
 	require.Equal(t, atrace.Trace{
 		RootAgentName:    "assistant",
 		RootInvocationID: "root-invocation",
@@ -4155,6 +4167,7 @@ func TestGraphAgent_Run_ExecutionTraceCapturesComplexGraph(t *testing.T) {
 				AgentName:          "assistant",
 				Branch:             "assistant/branch_a",
 				NodeID:             "assistant/branch_a",
+				NodeType:           graph.NodeTypeFunction.String(),
 				StartedAt:          graphAgentTraceAssertionStartTime,
 				EndedAt:            graphAgentTraceAssertionEndTime,
 				PredecessorStepIDs: []string{"assistant/route#2"},
@@ -4169,6 +4182,7 @@ func TestGraphAgent_Run_ExecutionTraceCapturesComplexGraph(t *testing.T) {
 				AgentName:          "assistant",
 				Branch:             "assistant/branch_b",
 				NodeID:             "assistant/branch_b",
+				NodeType:           graph.NodeTypeFunction.String(),
 				StartedAt:          graphAgentTraceAssertionStartTime,
 				EndedAt:            graphAgentTraceAssertionEndTime,
 				PredecessorStepIDs: []string{"assistant/prepare#1"},
@@ -4183,6 +4197,7 @@ func TestGraphAgent_Run_ExecutionTraceCapturesComplexGraph(t *testing.T) {
 				AgentName:          "assistant",
 				Branch:             "assistant/done",
 				NodeID:             "assistant/done",
+				NodeType:           graph.NodeTypeFunction.String(),
 				StartedAt:          graphAgentTraceAssertionStartTime,
 				EndedAt:            graphAgentTraceAssertionEndTime,
 				PredecessorStepIDs: []string{"assistant/join#1"},
@@ -4197,6 +4212,7 @@ func TestGraphAgent_Run_ExecutionTraceCapturesComplexGraph(t *testing.T) {
 				AgentName:          "assistant",
 				Branch:             "assistant/join",
 				NodeID:             "assistant/join",
+				NodeType:           graph.NodeTypeFunction.String(),
 				StartedAt:          graphAgentTraceAssertionStartTime,
 				EndedAt:            graphAgentTraceAssertionEndTime,
 				PredecessorStepIDs: []string{"assistant/branch_a#1", "assistant/branch_b#1"},
@@ -4211,6 +4227,7 @@ func TestGraphAgent_Run_ExecutionTraceCapturesComplexGraph(t *testing.T) {
 				AgentName:          "assistant",
 				Branch:             "assistant/prepare",
 				NodeID:             "assistant/prepare",
+				NodeType:           graph.NodeTypeFunction.String(),
 				StartedAt:          graphAgentTraceAssertionStartTime,
 				EndedAt:            graphAgentTraceAssertionEndTime,
 				PredecessorStepIDs: []string{"assistant/start#1"},
@@ -4225,6 +4242,7 @@ func TestGraphAgent_Run_ExecutionTraceCapturesComplexGraph(t *testing.T) {
 				AgentName:          "assistant",
 				Branch:             "assistant/route",
 				NodeID:             "assistant/route",
+				NodeType:           graph.NodeTypeFunction.String(),
 				StartedAt:          graphAgentTraceAssertionStartTime,
 				EndedAt:            graphAgentTraceAssertionEndTime,
 				PredecessorStepIDs: []string{"assistant/start#1"},
@@ -4239,6 +4257,7 @@ func TestGraphAgent_Run_ExecutionTraceCapturesComplexGraph(t *testing.T) {
 				AgentName:          "assistant",
 				Branch:             "assistant/route",
 				NodeID:             "assistant/route",
+				NodeType:           graph.NodeTypeFunction.String(),
 				StartedAt:          graphAgentTraceAssertionStartTime,
 				EndedAt:            graphAgentTraceAssertionEndTime,
 				PredecessorStepIDs: []string{"assistant/tools#1"},
@@ -4253,6 +4272,7 @@ func TestGraphAgent_Run_ExecutionTraceCapturesComplexGraph(t *testing.T) {
 				AgentName:          "assistant",
 				Branch:             "assistant/start",
 				NodeID:             "assistant/start",
+				NodeType:           graph.NodeTypeFunction.String(),
 				StartedAt:          graphAgentTraceAssertionStartTime,
 				EndedAt:            graphAgentTraceAssertionEndTime,
 				PredecessorStepIDs: []string{},
@@ -4267,6 +4287,7 @@ func TestGraphAgent_Run_ExecutionTraceCapturesComplexGraph(t *testing.T) {
 				AgentName:          "assistant",
 				Branch:             "assistant/tools",
 				NodeID:             "assistant/tools",
+				NodeType:           graph.NodeTypeFunction.String(),
 				StartedAt:          graphAgentTraceAssertionStartTime,
 				EndedAt:            graphAgentTraceAssertionEndTime,
 				PredecessorStepIDs: []string{"assistant/route#1"},
@@ -4551,6 +4572,7 @@ func normalizeGraphAgentTraceForAssertion(executionTrace *atrace.Trace) atrace.T
 			AgentName:          step.AgentName,
 			Branch:             step.Branch,
 			NodeID:             step.NodeID,
+			NodeType:           step.NodeType,
 			StartedAt:          graphAgentTraceAssertionStartTime,
 			EndedAt:            graphAgentTraceAssertionEndTime,
 			PredecessorStepIDs: predecessors,

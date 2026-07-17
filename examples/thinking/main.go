@@ -34,7 +34,7 @@ var (
 	streaming       = flag.Bool("streaming", true, "Enable streaming mode for responses")
 	thinkingEnabled = flag.Bool("thinking", true, "Enable reasoning/thinking mode if provider supports it")
 	thinkingTokens  = flag.Int("thinking-tokens", 2048, "Max reasoning tokens if provider supports it")
-	variant         = flag.String("variant", "openai", "Name of Variant to use when use openai provider, openai / hunyuan / deepseek / qwen")
+	variant         = flag.String("variant", "openai", "Name of Variant to use with the OpenAI provider: openai / hunyuan / deepseek / qwen / glm")
 	debug           = flag.Bool("debug", true, "Print messages sent to model API for debugging")
 	reasoningMode   = flag.String("reasoning-mode", "discard_previous",
 		"How to handle reasoning_content in history: keep_all, discard_previous, discard_all")
@@ -93,12 +93,12 @@ func (c *thinkingChat) setup(_ context.Context) error {
 	var sessionService session.Service = sessioninmemory.NewSessionService()
 
 	genConfig := model.GenerationConfig{
-		MaxTokens:   intPtr(2000),
-		Temperature: floatPtr(0.7),
-		Stream:      c.streaming,
+		MaxTokens:       intPtr(2000),
+		Temperature:     floatPtr(0.7),
+		Stream:          c.streaming,
+		ThinkingEnabled: thinkingEnabled,
 	}
 	if thinkingEnabled != nil && *thinkingEnabled {
-		genConfig.ThinkingEnabled = thinkingEnabled
 		genConfig.ThinkingTokens = thinkingTokens
 	}
 
