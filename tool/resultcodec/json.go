@@ -24,11 +24,13 @@ func JSON() Codec {
 
 type jsonCodec struct{}
 
-// Encode serializes the result as JSON without HTML escaping.
-func (jsonCodec) Encode(_ context.Context, result any) (string, error) {
-	b, err := jsonx.MarshalNoHTMLEscape(result)
-	if err != nil {
-		return "", err
+// Encode serializes the result as JSON without HTML escaping. A panic from a
+// business MarshalJSON is recovered and returned as an error.
+func (jsonCodec) Encode(_ context.Context, result any) (s string, err error) {
+	defer recoverCodecPanic("JSON", &err)
+	b, mErr := jsonx.MarshalNoHTMLEscape(result)
+	if mErr != nil {
+		return "", mErr
 	}
 	return string(b), nil
 }

@@ -39,8 +39,10 @@ func Text() Codec {
 
 type textCodec struct{}
 
-// Encode returns the textual form of a text-typed result as valid UTF-8.
-func (textCodec) Encode(_ context.Context, result any) (string, error) {
+// Encode returns the textual form of a text-typed result as valid UTF-8. A panic
+// from a business MarshalText is recovered and returned as an error.
+func (textCodec) Encode(_ context.Context, result any) (s string, err error) {
+	defer recoverCodecPanic("Text", &err)
 	switch v := result.(type) {
 	case nil:
 		return "", nil
@@ -56,9 +58,9 @@ func (textCodec) Encode(_ context.Context, result any) (string, error) {
 		if isNilValue(v) {
 			return "", nil
 		}
-		b, err := v.MarshalText()
-		if err != nil {
-			return "", err
+		b, mErr := v.MarshalText()
+		if mErr != nil {
+			return "", mErr
 		}
 		return toValidUTF8(string(b)), nil
 	}

@@ -107,8 +107,11 @@ func TestResolvePermissionChecker_NotSkippedByUnwrap(t *testing.T) {
 	// past it to the inner tool that has no checker.
 	inner := &rcFakeCallable{name: "inner"}
 	wrapped := resultcodec.Wrap(&rcPermChecker{name: "pw", inner: inner}, resultcodec.JSON())
-	checker, ok := ResolvePermissionChecker(wrapped)
-	if !ok {
+	checker, err := ResolvePermissionChecker(wrapped)
+	if err != nil {
+		t.Fatalf("ResolvePermissionChecker error: %v", err)
+	}
+	if checker == nil {
 		t.Fatal("expected a permission checker in the wrapper chain")
 	}
 	decision, err := checker.CheckPermission(context.Background(), &tool.PermissionRequest{})
@@ -120,10 +123,51 @@ func TestResolvePermissionChecker_NotSkippedByUnwrap(t *testing.T) {
 	}
 }
 
-func TestResolvePermissionChecker_NoneReturnsFalse(t *testing.T) {
-	// A plain tool with no checker anywhere in the chain returns false.
-	if _, ok := ResolvePermissionChecker(&rcFakeCallable{name: "b"}); ok {
+func TestResolvePermissionChecker_NoneReturnsNil(t *testing.T) {
+	// A plain tool with no checker anywhere in the chain returns (nil, nil).
+	checker, err := ResolvePermissionChecker(&rcFakeCallable{name: "b"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if checker != nil {
 		t.Fatal("expected no permission checker for a plain tool")
+	}
+}
+
+// rcUnwrapOnly is a transparent wrapper exposing only Unwrap, used to build deep
+// and cyclic chains.
+type rcUnwrapOnly struct {
+	name  string
+	inner tool.Tool
+}
+
+func (w *rcUnwrapOnly) Declaration() *tool.Declaration { return &tool.Declaration{Name: w.name} }
+func (w *rcUnwrapOnly) Unwrap() tool.Tool              { return w.inner }
+
+func TestResolvePermissionChecker_ExhaustedChainFailsClosed(t *testing.T) {
+	// A checker hidden past the depth bound must not be reported as "no checker".
+	var t0 tool.Tool = &rcPermChecker{name: "deny", inner: &rcFakeCallable{name: "base"}}
+	for i := 0; i < 200; i++ {
+		t0 = &rcUnwrapOnly{name: "w", inner: t0}
+	}
+	checker, err := ResolvePermissionChecker(t0)
+	if err == nil {
+		t.Fatal("expected an exhaustion error for an overly deep chain")
+	}
+	if checker != nil {
+		t.Fatal("expected no checker returned on exhaustion")
+	}
+}
+
+func TestResolvePermissionChecker_CyclicFailsClosed(t *testing.T) {
+	// A cyclic chain must terminate and fail closed rather than report "none".
+	c := &rcSelfUnwrap{name: "cyclic"}
+	checker, err := ResolvePermissionChecker(c)
+	if err == nil {
+		t.Fatal("expected an exhaustion error for a cyclic chain")
+	}
+	if checker != nil {
+		t.Fatal("expected no checker returned on a cyclic chain")
 	}
 }
 

@@ -7,9 +7,10 @@
 //
 //
 
-// Package main demonstrates per-tool result codecs: how the same tool result can
-// be presented to the model as JSON, XML, plain text, or a custom template, and
-// how to bind a codec per tool via function.WithResultCodec or resultcodec.Wrap.
+// Package main demonstrates per-tool result codecs: how a structured tool result
+// can be presented to the model as JSON, XML, or a custom template, while an
+// already-textual result can use Text, and how to bind a codec per tool via
+// function.WithResultCodec or resultcodec.Wrap.
 //
 // This example needs no API key: it prints codec output directly and shows the
 // per-tool wiring. In a real agent, the framework applies the bound codec to the

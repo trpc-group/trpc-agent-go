@@ -47,15 +47,18 @@ func XML() Codec {
 
 type xmlCodec struct{}
 
-// Encode serializes the result as XML derived from its JSON logical tree.
-func (xmlCodec) Encode(_ context.Context, result any) (string, error) {
-	tree, err := jsonLogicalTree(result)
-	if err != nil {
-		return "", err
+// Encode serializes the result as XML derived from its JSON logical tree. A
+// panic from a business MarshalJSON (via the JSON logical tree) is recovered and
+// returned as an error.
+func (xmlCodec) Encode(_ context.Context, result any) (s string, err error) {
+	defer recoverCodecPanic("XML", &err)
+	tree, tErr := jsonLogicalTree(result)
+	if tErr != nil {
+		return "", tErr
 	}
 	var buf bytes.Buffer
-	if err := writeXMLElement(&buf, xmlRootElement, "", tree); err != nil {
-		return "", err
+	if wErr := writeXMLElement(&buf, xmlRootElement, "", tree); wErr != nil {
+		return "", wErr
 	}
 	return buf.String(), nil
 }

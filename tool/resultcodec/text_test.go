@@ -12,6 +12,7 @@ package resultcodec
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -103,6 +104,21 @@ func TestText_TypedNilTextMarshaler(t *testing.T) {
 	}
 	if got != "" {
 		t.Errorf("typed-nil TextMarshaler should encode to empty string, got %q", got)
+	}
+}
+
+// panicMarshalText panics when its MarshalText is invoked on a non-nil value.
+type panicMarshalText struct{}
+
+func (panicMarshalText) MarshalText() ([]byte, error) { panic("text boom") }
+
+func TestText_PanicRecoveredToError(t *testing.T) {
+	_, err := Text().Encode(context.Background(), panicMarshalText{})
+	if err == nil {
+		t.Fatal("expected a panicking MarshalText to be recovered into an error")
+	}
+	if !strings.Contains(err.Error(), "panic") {
+		t.Errorf("error should mention panic: %v", err)
 	}
 }
 

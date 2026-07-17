@@ -209,7 +209,9 @@ func (s *selfUnwrapTool) Call(context.Context, []byte) (any, error) { return nil
 func (s *selfUnwrapTool) Unwrap() tool.Tool                         { return s }
 
 func TestWrap_CyclicUnwrapTerminates(t *testing.T) {
-	// A cyclic Unwrap() chain must not hang; the depth bound terminates it.
+	// A cyclic Unwrap() chain must not hang, and permission must fail closed:
+	// because the chain can't be fully traversed, a hidden deny cannot be ruled
+	// out, so the decision is deny rather than allow.
 	s := &selfUnwrapTool{decl: &tool.Declaration{Name: "cyclic"}}
 	wrapped := Wrap(s, JSON())
 	checker, ok := wrapped.(tool.PermissionChecker)
@@ -221,8 +223,8 @@ func TestWrap_CyclicUnwrapTerminates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CheckPermission error: %v", err)
 	}
-	if decision.Action != tool.PermissionActionAllow {
-		t.Fatalf("no checker in cyclic chain should default to allow, got %q", decision.Action)
+	if decision.Action != tool.PermissionActionDeny {
+		t.Fatalf("cyclic chain must fail closed (deny), got %q", decision.Action)
 	}
 }
 

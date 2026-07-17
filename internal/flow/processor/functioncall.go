@@ -2717,8 +2717,18 @@ func (p *FunctionCallResponseProcessor) checkToolPermission(
 		Metadata:    tool.MetadataOf(semanticTool),
 	}
 	// Resolve the permission checker from the outermost wrapper inward so a
-	// transparent wrapper's decision is never skipped by unwrapping past it.
-	if checker, ok := itool.ResolvePermissionChecker(tl); ok {
+	// transparent wrapper's decision is never skipped by unwrapping past it. If
+	// the wrapper chain cannot be fully traversed (overly deep or cyclic), fail
+	// closed: deny rather than allow, since a deny may be hidden past the bound.
+	checker, permErr := itool.ResolvePermissionChecker(tl)
+	if permErr != nil {
+		return normalizeToolPermissionResult(
+			req,
+			tool.DenyPermission("tool permission could not be resolved: "+permErr.Error()),
+			nil,
+		)
+	}
+	if checker != nil {
 		decision, err := checker.CheckPermission(ctx, req)
 		result, err := normalizeToolPermissionResult(req, decision, err)
 		if result != nil || err != nil {

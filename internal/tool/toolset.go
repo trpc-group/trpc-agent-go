@@ -11,10 +11,17 @@ package tool
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
+
+// ErrToolWrapperTraversalExhausted indicates the wrapper chain could not be
+// fully traversed within the depth bound (an overly deep or cyclic chain).
+// Security decisions must fail closed when they see this error rather than
+// treating "not found" as "allow".
+var ErrToolWrapperTraversalExhausted = errors.New("tool wrapper traversal exhausted")
 
 // NamedToolSet wraps a ToolSet to automatically prefix tool names with the toolset name.
 // This prevents tool name conflicts when multiple toolsets provide tools with the same name.
@@ -156,12 +163,20 @@ func ResolveSemantic(t tool.Tool) tool.Tool {
 // wrapper chain. Permission must be resolved from the outside in: unwrapping past
 // a transparent wrapper (for example resultcodec.Wrap or any tool that exposes
 // Unwrap) to reach an inner tool would otherwise skip an intermediate wrapper's
-// own permission decision and bypass it. The traversal is depth-bounded for
-// cycle safety.
-func ResolvePermissionChecker(t tool.Tool) (tool.PermissionChecker, bool) {
-	for i := 0; i < maxToolUnwrapDepth && t != nil; i++ {
+// own permission decision and bypass it.
+//
+// It fails closed: a return of (nil, nil) means the chain was fully traversed
+// and no checker exists (safe to allow); a non-nil error
+// (ErrToolWrapperTraversalExhausted) means the chain could not be fully
+// traversed within the depth bound (overly deep or cyclic), so callers must not
+// treat it as "no checker" and must deny.
+func ResolvePermissionChecker(t tool.Tool) (tool.PermissionChecker, error) {
+	for i := 0; i < maxToolUnwrapDepth; i++ {
+		if t == nil {
+			return nil, nil
+		}
 		if checker, ok := t.(tool.PermissionChecker); ok {
-			return checker, true
+			return checker, nil
 		}
 		switch current := t.(type) {
 		case declarationWrapper:
@@ -171,10 +186,10 @@ func ResolvePermissionChecker(t tool.Tool) (tool.PermissionChecker, bool) {
 		case toolUnwrapper:
 			t = current.Unwrap()
 		default:
-			return nil, false
+			return nil, nil
 		}
 	}
-	return nil, false
+	return nil, ErrToolWrapperTraversalExhausted
 }
 
 type declarationTool struct {

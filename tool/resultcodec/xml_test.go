@@ -11,6 +11,7 @@ package resultcodec
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -139,6 +140,22 @@ func TestXML_Deterministic(t *testing.T) {
 func TestXML_ErrorOnNonSerializable(t *testing.T) {
 	if _, err := XML().Encode(context.Background(), make(chan int)); err == nil {
 		t.Fatal("expected error for non-serializable value")
+	}
+}
+
+// panicMarshalJSONForXML panics when JSON-marshaled; XML routes through the JSON
+// logical tree, so the panic must be recovered into an error.
+type panicMarshalJSONForXML struct{}
+
+func (panicMarshalJSONForXML) MarshalJSON() ([]byte, error) { panic("json boom") }
+
+func TestXML_PanicRecoveredToError(t *testing.T) {
+	_, err := XML().Encode(context.Background(), panicMarshalJSONForXML{})
+	if err == nil {
+		t.Fatal("expected a panicking MarshalJSON to be recovered into an error")
+	}
+	if !strings.Contains(err.Error(), "panic") {
+		t.Errorf("error should mention panic: %v", err)
 	}
 }
 

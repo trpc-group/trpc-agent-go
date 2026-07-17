@@ -92,3 +92,18 @@ func TestJSON_ErrorOnNonSerializable(t *testing.T) {
 		t.Fatal("expected error for non-serializable value")
 	}
 }
+
+// panicMarshalJSON panics when JSON-marshaled.
+type panicMarshalJSON struct{}
+
+func (panicMarshalJSON) MarshalJSON() ([]byte, error) { panic("json boom") }
+
+func TestJSON_PanicRecoveredToError(t *testing.T) {
+	_, err := JSON().Encode(context.Background(), panicMarshalJSON{})
+	if err == nil {
+		t.Fatal("expected a panicking MarshalJSON to be recovered into an error")
+	}
+	if !strings.Contains(err.Error(), "panic") {
+		t.Errorf("error should mention panic: %v", err)
+	}
+}

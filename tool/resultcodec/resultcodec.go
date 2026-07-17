@@ -32,9 +32,21 @@ package resultcodec
 
 import (
 	"context"
+	"fmt"
 
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
+
+// recoverCodecPanic converts a panic during encoding into an error tagged with
+// the codec name. Built-in codecs ultimately call business code (MarshalJSON via
+// encoding/json, MarshalText) that may panic; recovering keeps the documented
+// "built-in codecs return an error instead of panicking" contract for direct
+// Encode callers, not only the framework's flow path.
+func recoverCodecPanic(name string, errp *error) {
+	if r := recover(); r != nil {
+		*errp = fmt.Errorf("resultcodec: %s encode panic: %v", name, r)
+	}
+}
 
 // Codec encodes the final result of a single tool call into model-visible text.
 //
@@ -121,23 +133,42 @@ func (t *codecTool) Unwrap() tool.Tool {
 // cyclic Unwrap() implementation cannot cause an infinite loop.
 const maxWrapDepth = 128
 
+// walkStatus reports how a wrapper-chain traversal terminated.
+type walkStatus int
+
+const (
+	// walkEnded means the chain was fully traversed without fn matching.
+	walkEnded walkStatus = iota
+	// walkFound means fn matched a tool in the chain.
+	walkFound
+	// walkExhausted means the depth bound was hit before the chain ended
+	// (an overly deep or cyclic chain). Security decisions must fail closed.
+	walkExhausted
+)
+
 // walkBase visits the wrapped tool and each tool reachable through Unwrap(),
 // starting at t.base, calling fn until it returns true or the chain ends. The
-// traversal is depth-bounded for cycle safety. This resolves delegated
-// capabilities through the full wrapper chain so an intermediate unwrap-only
-// wrapper cannot hide a deeper capability (for example a PermissionChecker).
-func (t *codecTool) walkBase(fn func(tool.Tool) bool) {
+// traversal is depth-bounded for cycle safety and reports how it terminated so
+// callers (permission in particular) can fail closed on walkExhausted. This
+// resolves delegated capabilities through the full wrapper chain so an
+// intermediate unwrap-only wrapper cannot hide a deeper capability (for example
+// a PermissionChecker).
+func (t *codecTool) walkBase(fn func(tool.Tool) bool) walkStatus {
 	cur := t.base
-	for i := 0; i < maxWrapDepth && cur != nil; i++ {
+	for i := 0; i < maxWrapDepth; i++ {
+		if cur == nil {
+			return walkEnded
+		}
 		if fn(cur) {
-			return
+			return walkFound
 		}
 		u, ok := cur.(interface{ Unwrap() tool.Tool })
 		if !ok {
-			return
+			return walkEnded
 		}
 		cur = u.Unwrap()
 	}
+	return walkExhausted
 }
 
 // ToolMetadata resolves metadata through the full wrapper chain so it is
@@ -179,19 +210,30 @@ func (t *codecTool) ShouldDefer(ctx context.Context) bool {
 // CheckPermission resolves the permission decision through the full wrapper
 // chain so an intermediate unwrap-only wrapper cannot bypass a deeper
 // PermissionChecker. When no checker is found the decision defaults to allow.
+// If the chain cannot be fully traversed (overly deep or cyclic), it fails
+// closed by denying rather than allowing, since a deny may be hidden past the
+// depth bound.
 func (t *codecTool) CheckPermission(
 	ctx context.Context,
 	req *tool.PermissionRequest,
 ) (tool.PermissionDecision, error) {
 	decision := tool.AllowPermission()
 	var checkErr error
-	t.walkBase(func(cur tool.Tool) bool {
+	status := t.walkBase(func(cur tool.Tool) bool {
 		if c, ok := cur.(tool.PermissionChecker); ok {
 			decision, checkErr = c.CheckPermission(ctx, req)
 			return true
 		}
 		return false
 	})
+	if status == walkExhausted {
+		return tool.DenyPermission(
+			fmt.Sprintf(
+				"resultcodec: permission checker traversal exhausted after %d wrappers "+
+					"(overly deep or cyclic chain)", maxWrapDepth,
+			),
+		), nil
+	}
 	return decision, checkErr
 }
 
