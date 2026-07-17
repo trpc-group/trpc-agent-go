@@ -3934,6 +3934,13 @@ func TestPersistFunctionResponseAfterDeadline_FallbacksAndErrors(
 		time.Now().Add(-time.Second),
 	)
 	defer cancel()
+	t.Run("nil event", func(t *testing.T) {
+		require.NoError(t, persistFunctionResponseAfterDeadline(
+			ctx,
+			nil,
+			nil,
+		))
+	})
 	evt := event.NewResponseEvent(
 		"test-invocation",
 		"test-agent",

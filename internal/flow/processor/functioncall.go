@@ -457,6 +457,9 @@ func persistFunctionResponseAfterDeadline(
 	invocation *agent.Invocation,
 	functionResponseEvent *event.Event,
 ) error {
+	if functionResponseEvent == nil {
+		return nil
+	}
 	persistCtx, cancel := context.WithTimeout(
 		context.WithoutCancel(ctx),
 		funcRespDeadlinePersistenceTimeout,
