@@ -86,8 +86,9 @@ type invocationA2AClient struct {
 }
 
 type anonymousCookieInitScope struct {
-	session *session.Session
-	key     string
+	persistentSession session.Key
+	transientSession  *session.Session
+	cookieStateKey    string
 }
 
 type anonymousCookieInitLock struct {
@@ -270,13 +271,15 @@ func (r *A2AAgent) newAnonymousClient(
 }
 
 func (r *A2AAgent) acquireAnonymousCookieInitialization(
-	sess *session.Session,
-	key string,
+	cookie *anonymousCookieState,
 ) func() {
-	if r == nil || sess == nil || key == "" {
+	if r == nil {
 		return nil
 	}
-	scope := anonymousCookieInitScope{session: sess, key: key}
+	scope, ok := cookie.initializationScope()
+	if !ok {
+		return nil
+	}
 	r.anonymousCookieInitMu.Lock()
 	if r.anonymousCookieInitLocks == nil {
 		r.anonymousCookieInitLocks = make(map[anonymousCookieInitScope]*anonymousCookieInitLock)
@@ -357,11 +360,48 @@ func newAnonymousCookieState(
 	}
 }
 
+func (s *anonymousCookieState) persistentSessionKey() (session.Key, bool) {
+	if s == nil || !hasPersistentSessionKey(s.persistSession) {
+		return session.Key{}, false
+	}
+	return session.Key{
+		AppName:   s.persistSession.AppName,
+		UserID:    s.persistSession.UserID,
+		SessionID: s.persistSession.ID,
+	}, true
+}
+
+func (s *anonymousCookieState) initializationScope() (anonymousCookieInitScope, bool) {
+	if s == nil || s.key == "" {
+		return anonymousCookieInitScope{}, false
+	}
+	if persistentSessionKey, ok := s.persistentSessionKey(); ok {
+		return anonymousCookieInitScope{
+			persistentSession: persistentSessionKey,
+			cookieStateKey:    s.key,
+		}, true
+	}
+	if s.session == nil {
+		return anonymousCookieInitScope{}, false
+	}
+	return anonymousCookieInitScope{
+		transientSession: s.session,
+		cookieStateKey:   s.key,
+	}, true
+}
+
 func (s *anonymousCookieState) load() (string, bool) {
-	if s == nil || s.session == nil || s.key == "" {
+	if s == nil {
 		return "", false
 	}
-	raw, ok := s.session.GetState(s.key)
+	return loadAnonymousCookieFromSession(s.session, s.key)
+}
+
+func loadAnonymousCookieFromSession(sess *session.Session, key string) (string, bool) {
+	if sess == nil || key == "" {
+		return "", false
+	}
+	raw, ok := sess.GetState(key)
 	if !ok {
 		return "", false
 	}
@@ -370,6 +410,34 @@ func (s *anonymousCookieState) load() (string, bool) {
 		return "", false
 	}
 	return cookieValue, true
+}
+
+func (s *anonymousCookieState) reload(ctx context.Context) error {
+	if s == nil || s.sessionService == nil {
+		return nil
+	}
+	persistentSessionKey, ok := s.persistentSessionKey()
+	if !ok {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	persistedSession, err := s.sessionService.GetSession(ctx, persistentSessionKey)
+	if err != nil {
+		return fmt.Errorf("reload anonymous A2A cookie state: %w", err)
+	}
+	cookieValue, ok := loadAnonymousCookieFromSession(persistedSession, s.key)
+	if !ok {
+		return nil
+	}
+	if s.session != nil {
+		s.session.SetState(s.key, []byte(cookieValue))
+	}
+	if s.persistSession != nil {
+		s.persistSession.SetState(s.key, []byte(cookieValue))
+	}
+	return nil
 }
 
 func (s *anonymousCookieState) capture(ctx context.Context, cookieValue string) {
@@ -431,7 +499,7 @@ func canonicalAnonymousCookieStateScope(agentURL string) string {
 type anonymousCookieHTTPReqHandler struct {
 	cookie                *anonymousCookieState
 	scope                 anonymousCookieURLScope
-	acquireInitialization func(*session.Session, string) func()
+	acquireInitialization func(*anonymousCookieState) func()
 }
 
 func (h *anonymousCookieHTTPReqHandler) Handle(
@@ -445,7 +513,11 @@ func (h *anonymousCookieHTTPReqHandler) Handle(
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
-	if release := h.acquireInitializationIfNeeded(req.URL); release != nil {
+	release, err := h.acquireInitializationIfNeeded(ctx, req.URL)
+	if err != nil {
+		return nil, err
+	}
+	if release != nil {
 		defer release()
 	}
 	// Session state owns anonymous identity; a shared user-supplied Jar must
@@ -461,26 +533,35 @@ func (h *anonymousCookieHTTPReqHandler) Handle(
 }
 
 func (h *anonymousCookieHTTPReqHandler) acquireInitializationIfNeeded(
+	ctx context.Context,
 	u *url.URL,
-) func() {
+) (func(), error) {
 	if h == nil ||
 		h.cookie == nil ||
 		h.acquireInitialization == nil ||
 		!h.scope.matches(u) {
-		return nil
+		return nil, nil
 	}
 	if _, ok := h.cookie.load(); ok {
-		return nil
+		return nil, nil
 	}
-	release := h.acquireInitialization(h.cookie.session, h.cookie.key)
+	release := h.acquireInitialization(h.cookie)
 	if release == nil {
-		return nil
+		return nil, nil
 	}
 	if _, ok := h.cookie.load(); ok {
 		release()
-		return nil
+		return nil, nil
 	}
-	return release
+	if err := h.cookie.reload(ctx); err != nil {
+		release()
+		return nil, err
+	}
+	if _, ok := h.cookie.load(); ok {
+		release()
+		return nil, nil
+	}
+	return release, nil
 }
 
 type anonymousCookieJar struct {
