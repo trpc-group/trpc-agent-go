@@ -33,7 +33,7 @@ const (
 	mcpImageDetailAuto = "auto"
 
 	mcpImagesUserContent = "MCP tool returned image(s)."
-	mcpImageDataOmitted  = "[omitted: image data attached separately]"
+	mcpImageDataOmitted  = "[omitted: image data]"
 )
 
 type mcpContentItem struct {
@@ -61,15 +61,17 @@ func mcpImageResultMessages(
 	}
 
 	items := extractMCPContentItems(in.Result)
-	candidates := countMCPImageCandidates(items)
-	if candidates == 0 {
+	if countMCPImageItems(items) == 0 {
 		return nil, nil
 	}
+	candidates := countMCPImageCandidates(items)
 	defaultMsg = sanitizedMCPImageToolMessage(
 		defaultMsg,
 		in.Result,
-		items,
 	)
+	if candidates == 0 {
+		return []model.Message{defaultMsg}, nil
+	}
 	allowed := tool.ReserveToolResultAttachments(ctx, candidates)
 	if allowed <= 0 {
 		return []model.Message{defaultMsg}, nil
@@ -81,7 +83,7 @@ func mcpImageResultMessages(
 
 	userMsg := model.Message{
 		Role:    model.RoleUser,
-		Content: mcpImageUserContent(in.Result),
+		Content: mcpImagesUserContent,
 	}
 	for _, img := range images {
 		userMsg.AddImageData(img.Data, mcpImageDetailAuto, img.Format)
@@ -90,43 +92,14 @@ func mcpImageResultMessages(
 	return []model.Message{defaultMsg, userMsg}, nil
 }
 
-func mcpImageUserContent(result any) string {
-	path := mcpImageSavedPath(result)
-	if path == "" {
-		return mcpImagesUserContent
-	}
-	return mcpImagesUserContent + " Saved file: " + path +
-		". Use image_inspect with the saved file path when detailed " +
-		"visual reading or OCR is needed."
-}
-
-func mcpImageSavedPath(result any) string {
-	body, err := json.Marshal(result)
-	if err != nil {
-		return ""
-	}
-	var envelope struct {
-		ScreenshotPath string `json:"screenshotPath"`
-	}
-	if err := json.Unmarshal(body, &envelope); err != nil {
-		return ""
-	}
-	return strings.TrimSpace(envelope.ScreenshotPath)
-}
-
 func sanitizedMCPImageToolMessage(
 	msg model.Message,
 	result any,
-	items []mcpContentItem,
 ) model.Message {
-	sanitizedItems := sanitizeMCPContentItems(items)
-	if len(sanitizedItems) == 0 {
-		return msg
-	}
-
-	content, ok := sanitizedMCPResultJSON(result, sanitizedItems)
+	content, ok := sanitizedMCPResultJSON(result)
 	if !ok {
-		content = mustMarshalMCPContentItems(sanitizedItems)
+		msg.Content = mcpImageDataOmitted
+		return msg
 	}
 	if content != "" {
 		msg.Content = content
@@ -134,34 +107,15 @@ func sanitizedMCPImageToolMessage(
 	return msg
 }
 
-func sanitizeMCPContentItems(items []mcpContentItem) []mcpContentItem {
-	if len(items) == 0 {
-		return nil
-	}
-	out := make([]mcpContentItem, 0, len(items))
-	for _, item := range items {
-		if strings.ToLower(strings.TrimSpace(item.Type)) !=
-			mcpContentTypeImage {
-			out = append(out, item)
-			continue
-		}
-		if _, ok := mcpImageFormatFromMime(item.MimeType); !ok {
-			out = append(out, item)
-			continue
-		}
-		item.Data = mcpImageDataOmitted
-		out = append(out, item)
-	}
-	return out
-}
-
 func sanitizedMCPResultJSON(
 	result any,
-	items []mcpContentItem,
 ) (string, bool) {
-	body, err := json.Marshal(result)
+	body, err := marshalModelVisibleJSON(result)
 	if err != nil {
 		return "", false
+	}
+	if content, ok := sanitizeMCPContentJSON(body); ok {
+		return string(content), true
 	}
 
 	var envelope map[string]json.RawMessage
@@ -172,8 +126,8 @@ func sanitizedMCPResultJSON(
 		return "", false
 	}
 
-	itemBytes, err := marshalModelVisibleJSON(items)
-	if err != nil {
+	itemBytes, ok := sanitizeMCPContentJSON(envelope["content"])
+	if !ok {
 		return "", false
 	}
 	envelope["content"] = itemBytes
@@ -185,9 +139,36 @@ func sanitizedMCPResultJSON(
 	return string(sanitized), true
 }
 
-func mustMarshalMCPContentItems(items []mcpContentItem) string {
-	body, _ := marshalModelVisibleJSON(items)
-	return string(body)
+func sanitizeMCPContentJSON(body []byte) ([]byte, bool) {
+	var items []map[string]json.RawMessage
+	if err := json.Unmarshal(body, &items); err != nil {
+		return nil, false
+	}
+	found := false
+	for _, item := range items {
+		var contentType string
+		if err := json.Unmarshal(item["type"], &contentType); err != nil {
+			continue
+		}
+		if strings.ToLower(strings.TrimSpace(contentType)) !=
+			mcpContentTypeImage {
+			continue
+		}
+		omitted, err := json.Marshal(mcpImageDataOmitted)
+		if err != nil {
+			return nil, false
+		}
+		item["data"] = omitted
+		found = true
+	}
+	if !found {
+		return nil, false
+	}
+	sanitized, err := marshalModelVisibleJSON(items)
+	if err != nil {
+		return nil, false
+	}
+	return sanitized, true
 }
 
 func marshalModelVisibleJSON(v any) ([]byte, error) {
@@ -236,6 +217,17 @@ func countMCPImageCandidates(items []mcpContentItem) int {
 			continue
 		}
 		if _, ok := mcpImageFormatFromMime(item.MimeType); ok {
+			count++
+		}
+	}
+	return count
+}
+
+func countMCPImageItems(items []mcpContentItem) int {
+	var count int
+	for _, item := range items {
+		if strings.ToLower(strings.TrimSpace(item.Type)) ==
+			mcpContentTypeImage {
 			count++
 		}
 	}
