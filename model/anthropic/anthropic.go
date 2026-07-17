@@ -691,6 +691,14 @@ func (m *Model) runStreamingAttempt(
 	stream := m.client.Messages.NewStreaming(ctx, chatRequest, m.anthropicRequestOptions...)
 	defer stream.Close()
 	acc := newStreamingMessageAccumulator()
+	var pendingChunkCallbacks []anthropic.MessageStreamEventUnion
+	flushChunkCallbacks := func() {
+		for i := range pendingChunkCallbacks {
+			chunk := pendingChunkCallbacks[i]
+			m.runChatChunkCallback(ctx, &chatRequest, &chunk)
+		}
+		pendingChunkCallbacks = nil
+	}
 
 loop:
 	for stream.Next() {
@@ -699,7 +707,7 @@ loop:
 			streamErr = err
 			break
 		}
-		m.runChatChunkCallback(ctx, &chatRequest, &chunk)
+		pendingChunkCallbacks = append(pendingChunkCallbacks, chunk)
 		response, err := buildStreamingPartialResponse(acc.Message(), chunk, m.showToolCallDelta)
 		if err != nil {
 			streamErr = err
@@ -729,6 +737,9 @@ loop:
 	if streamErr == nil {
 		finalAcc := acc.Message()
 		callbackAcc = &finalAcc
+	}
+	if streamErr == nil || sawContent {
+		flushChunkCallbacks()
 	}
 	return finalResponse, callbackAcc, streamErr, sawContent
 }

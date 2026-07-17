@@ -2391,6 +2391,59 @@ func Test_HandleStreamingResponse_RetriesMidStreamTCPRST(t *testing.T) {
 		"handleStreamingResponse should have made exactly 2 HTTP attempts (1 mid-stream failure + 1 success)")
 }
 
+func Test_HandleStreamingResponse_ChunkCallbackNotDuplicatedOnRetry(t *testing.T) {
+	var attempts int32
+	var chunkCallbackCount int32
+	orig := model.DefaultNewHTTPClient
+	t.Cleanup(func() { model.DefaultNewHTTPClient = orig })
+	model.DefaultNewHTTPClient = func(_ ...HTTPClientOption) model.HTTPClient {
+		return &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+			n := atomic.AddInt32(&attempts, 1)
+			h := make(http.Header)
+			h.Set("Content-Type", "text/event-stream")
+			if n == 1 {
+				body := &errReadCloser{
+					pre: []byte(ssePrelude),
+					err: fmt.Errorf("read tcp: connection reset by peer"),
+				}
+				return &http.Response{StatusCode: 200, Header: h, Body: body}, nil
+			}
+			return &http.Response{
+				StatusCode: 200,
+				Header:     h,
+				Body:       io.NopCloser(strings.NewReader(sseFullSuccess)),
+			}, nil
+		})}
+	}
+
+	m := New(
+		"claude-test",
+		WithHTTPClientOptions(),
+		WithAnthropicClientOptions(anthropicopt.WithMaxRetries(0)),
+		WithStreamRetry(2, 1*time.Millisecond, 5*time.Millisecond),
+		WithChatChunkCallback(func(_ context.Context, _ *anthropic.MessageNewParams,
+			_ *anthropic.MessageStreamEventUnion) {
+			atomic.AddInt32(&chunkCallbackCount, 1)
+		}),
+	)
+
+	ctx := context.Background()
+	responseChan := make(chan *model.Response, 16)
+	m.handleStreamingResponse(ctx, anthropic.MessageNewParams{}, responseChan)
+	close(responseChan)
+
+	for r := range responseChan {
+		require.Nil(t, r.Error)
+	}
+	require.Equal(t, int32(2), atomic.LoadInt32(&attempts))
+	require.Greater(t, atomic.LoadInt32(&chunkCallbackCount), int32(0),
+		"successful attempt should deliver chunk callbacks")
+	// sseFullSuccess emits a small fixed number of stream events; the failed
+	// attempt's buffered chunks must not be flushed before retry.
+	require.LessOrEqual(t, atomic.LoadInt32(&chunkCallbackCount), int32(20),
+		"chunk callbacks should not duplicate across retried attempts")
+}
+
 // Test_HandleStreamingResponse_RetryCappedAfterMaxAttempts verifies that when
 // every streaming attempt is interrupted, handleStreamingResponse gives up
 // after maxRetries+1 attempts and surfaces the error to the caller rather
