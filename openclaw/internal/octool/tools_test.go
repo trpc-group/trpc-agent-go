@@ -1137,6 +1137,39 @@ func TestExecTool_YieldSessionSurvivesCallerContextCancel(t *testing.T) {
 	}, 2*time.Second, 20*time.Millisecond, "output: %s", all)
 }
 
+func TestExecTool_CancelAtSessionHandoffLeavesNoRunningSession(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash is not available")
+	}
+
+	marker := filepath.Join(t.TempDir(), "orphan-marker")
+	mgr := NewManager(WithJobTTL(10 * time.Second))
+	ctx, cancel := context.WithCancel(context.Background())
+	mgr.beforeSessionHandoff = cancel
+
+	res, err := mgr.Exec(ctx, execParams{
+		Command:    "sleep 0.3; echo orphan > " + strconv.Quote(marker),
+		Background: true,
+	})
+	require.ErrorIs(t, err, context.Canceled)
+	require.Empty(t, res.SessionID)
+
+	require.Eventually(t, func() bool {
+		mgr.mu.Lock()
+		defer mgr.mu.Unlock()
+		for _, sess := range mgr.sessions {
+			if sess.running() {
+				return false
+			}
+		}
+		return true
+	}, time.Second, 20*time.Millisecond)
+	require.Never(t, func() bool {
+		_, statErr := os.Stat(marker)
+		return statErr == nil
+	}, 500*time.Millisecond, 20*time.Millisecond)
+}
+
 func TestExecTool_DefaultTimeoutKillsProcessGroup(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("process group signaling is unix-specific")
