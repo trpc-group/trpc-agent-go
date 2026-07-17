@@ -444,6 +444,34 @@ func TestResolvePathRejectsAmbiguousDuplicatedCandidates(t *testing.T) {
 	require.Contains(t, err.Error(), "multiple corrected paths")
 }
 
+func TestResolvePathRejectsDuplicatedCandidatesAcrossAllowedDirs(t *testing.T) {
+	t.Parallel()
+
+	firstRoot := t.TempDir()
+	secondRoot := t.TempDir()
+	attachmentID := "attachment-12345"
+	first := filepath.Join(firstRoot, attachmentID, attachmentID+".png")
+	second := filepath.Join(secondRoot, attachmentID, attachmentID+".png")
+	require.NoError(t, os.MkdirAll(filepath.Dir(first), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Dir(second), 0o755))
+	writeTestPNG(t, first, image.Rect(0, 0, 1, 1))
+	writeTestPNG(t, second, image.Rect(0, 0, 1, 1))
+
+	tool, err := newInspector(Config{AllowedDirs: []string{
+		firstRoot,
+		secondRoot,
+	}})
+	require.NoError(t, err)
+	raw := filepath.Join(
+		attachmentID,
+		attachmentID,
+		attachmentID+".png",
+	)
+	_, err = tool.resolvePath(raw)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "multiple corrected paths")
+}
+
 func TestDuplicatedAllowedPathCandidatesRejectsNonDuplicatedPaths(t *testing.T) {
 	t.Parallel()
 
