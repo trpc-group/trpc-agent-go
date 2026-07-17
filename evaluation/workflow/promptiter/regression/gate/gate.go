@@ -114,8 +114,9 @@ func (b *decisionBuilder) addQualityRules(input *regression.GateInput) {
 	worstRegression := worstMetricRegression(input.ValidationDelta)
 	b.add("case_regression", worstRegression <= policy.MaxCaseRegression,
 		worstRegression, policy.MaxCaseRegression, "a validation metric regressed beyond the allowed limit", false)
-	b.add("validation_gain", input.ValidationDelta.WeightedScoreDelta >= policy.MinValidationGain,
-		input.ValidationDelta.WeightedScoreDelta, policy.MinValidationGain,
+	validationGain := input.ValidationDelta.CandidateScore - input.ValidationDelta.BaselineScore
+	b.add("validation_gain", validationGain >= policy.MinValidationGain,
+		validationGain, policy.MinValidationGain,
 		"validation gain is below the required minimum", false)
 	if policy.MaxGeneralizationGap > 0 {
 		trainAvailable := input.TrainDelta != nil
@@ -123,7 +124,8 @@ func (b *decisionBuilder) addQualityRules(input *regression.GateInput) {
 			"candidate training delta is unavailable for the generalization gate", true)
 	}
 	if input.TrainDelta != nil && policy.MaxGeneralizationGap > 0 {
-		generalizationGap := input.TrainDelta.WeightedScoreDelta - input.ValidationDelta.WeightedScoreDelta
+		trainGain := input.TrainDelta.CandidateScore - input.TrainDelta.BaselineScore
+		generalizationGap := trainGain - validationGain
 		b.add("generalization_gap", generalizationGap <= policy.MaxGeneralizationGap,
 			generalizationGap, policy.MaxGeneralizationGap,
 			"train and validation gains indicate overfitting", false)

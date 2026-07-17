@@ -199,11 +199,11 @@ func validatePromptIterResult(source *engine.RunResult, spec *RunSpec) error {
 }
 
 func sameProfile(left, right *promptiter.Profile) (bool, error) {
-	leftHash, err := ProfileHash(left)
+	leftHash, err := profileHash(left)
 	if err != nil {
 		return false, err
 	}
-	rightHash, err := ProfileHash(right)
+	rightHash, err := profileHash(right)
 	if err != nil {
 		return false, err
 	}
@@ -390,7 +390,7 @@ func (a *analyzer) auditRound(
 	critical map[string]struct{},
 	usage candidateUsage,
 ) (*CandidateResult, error) {
-	hash, err := ProfileHash(round.OutputProfile)
+	hash, err := profileHash(round.OutputProfile)
 	if err != nil {
 		return nil, fmt.Errorf("hash round %d output profile: %w", round.Round, err)
 	}
@@ -547,7 +547,7 @@ func selectCandidate(result *RunResult) {
 		if candidate.Gate.Decision != DecisionAccepted || candidate.ValidationDelta == nil {
 			continue
 		}
-		gain := candidate.ValidationDelta.WeightedScoreDelta
+		gain := candidate.ValidationDelta.CandidateScore - candidate.ValidationDelta.BaselineScore
 		if gain > bestGain || (gain == bestGain && candidatePrecedes(
 			candidate.Candidate, bestRound, bestID,
 		)) {

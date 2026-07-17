@@ -9,6 +9,8 @@
 package regression
 
 import (
+	"context"
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -58,6 +60,46 @@ func TestRoundCandidateTrainUsesFutureFallbackWhenTerminalEvidenceIsAbsent(t *te
 	actual, err = roundCandidateTrain(engine.RoundResult{Round: 2}, []trainEvidence{{round: 2, snapshot: snapshot}}, nil, nil, 1)
 	require.NoError(t, err)
 	assert.Nil(t, actual)
+}
+
+func TestBuildTrainIndexRejectsCanceledAndMalformedRounds(t *testing.T) {
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := buildTrainIndex(canceled, &engine.RunResult{Rounds: []engine.RoundResult{{}}}, nil, nil, 1)
+	require.ErrorIs(t, err, context.Canceled)
+
+	_, err = buildTrainIndex(context.Background(), &engine.RunResult{Rounds: []engine.RoundResult{{Round: 1}}}, nil, nil, 1)
+	require.ErrorContains(t, err, "hash round 1 input profile")
+
+	_, err = buildTrainIndex(context.Background(), &engine.RunResult{Rounds: []engine.RoundResult{{
+		Round: 1, InputProfile: testProfile("target", "before"),
+	}}}, nil, nil, 1)
+	require.ErrorContains(t, err, "adapt round 1 train")
+}
+
+func TestRoundCandidateTrainPrefersDirectTerminalEvidence(t *testing.T) {
+	profile := testProfile("target", "after")
+	direct := &engine.EvaluationResult{OverallScore: .8, EvalSets: []engine.EvalSetResult{{
+		EvalSetID: "train", Cases: []engine.CaseResult{{
+			EvalCaseID: "case", Metrics: []engine.MetricResult{{
+				MetricName: "quality", Score: .8, Threshold: .5,
+				Status: "passed",
+			}},
+		}},
+	}}}
+	actual, err := roundCandidateTrain(engine.RoundResult{
+		Round: 1, OutputProfile: profile, CandidateTrain: direct,
+	}, nil, nil, nil, 1)
+	require.NoError(t, err)
+	require.NotNil(t, actual)
+	assert.Equal(t, .8, actual.OverallScore)
+	assert.False(t, actual.Complete)
+
+	direct.OverallScore = math.NaN()
+	_, err = roundCandidateTrain(engine.RoundResult{
+		Round: 1, OutputProfile: profile, CandidateTrain: direct,
+	}, nil, nil, nil, 1)
+	require.ErrorContains(t, err, "overall score must be finite")
 }
 
 func testProfile(values ...string) *promptiter.Profile {

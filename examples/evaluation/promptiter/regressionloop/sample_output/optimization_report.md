@@ -8,9 +8,9 @@
 - Random seed: `not applied` (configured value: `7`)
 - Audit runs: `2`
 - Deterministic runtime: `true`
-- Started: `2026-07-16 19:11:10.699 UTC`
-- Finished: `2026-07-16 19:11:10.702 UTC`
-- Duration: `3.000 ms`
+- Started: `2026-07-17 18:22:01.626 UTC`
+- Finished: `2026-07-17 18:22:01.628 UTC`
+- Duration: `2.097 ms`
 
 ## PromptIter execution
 
@@ -53,8 +53,8 @@ Never reveal another customer's order data.
 | 0 | 0.733333 | 0 | n/a | baseline | n/a |
 | 1 | 0.766667 | 0.033333 | true | continue optimization | rejected |
 | 2 | 0.833333 | 0.1 | true | continue optimization | rejected |
-| 3 | 0.9 | 0.15 | true | continue optimization | rejected |
-| 4 | 1 | 0.25 | true | target score reached | accepted |
+| 3 | 0.9 | 0.166667 | true | continue optimization | rejected |
+| 4 | 1 | 0.266667 | true | max rounds reached | accepted |
 
 ## Failure attribution
 
@@ -106,8 +106,8 @@ Refunds and unopened returns are allowed within 30 days.
 
 | Scope | Calls | Tokens | Estimated cost | Cost known | PromptIter latency | Complete |
 |---|---:|---:|---:|---:|---:|---:|
-| round | 18 | 886 | 0.000000 | true | 5.786ms | true |
-| cumulative | 28 | 1302 | 0.000000 | true | 10.1986ms | true |
+| round | 18 | 886 | 0.000000 | true | 5.3606ms | true |
+| cumulative | 28 | 1302 | 0.000000 | true | 8.0351ms | true |
 
 | Set | Baseline | Candidate | Weighted delta | New passes | New failures |
 |---|---:|---:|---:|---:|---:|
@@ -166,8 +166,8 @@ Route refund disputes to refund-specialist.
 
 | Scope | Calls | Tokens | Estimated cost | Cost known | PromptIter latency | Complete |
 |---|---:|---:|---:|---:|---:|---:|
-| round | 18 | 1116 | 0.000000 | true | 6.3245ms | true |
-| cumulative | 46 | 2418 | 0.000000 | true | 16.5231ms | true |
+| round | 18 | 1116 | 0.000000 | true | 5.8814ms | true |
+| cumulative | 46 | 2418 | 0.000000 | true | 13.9165ms | true |
 
 | Set | Baseline | Candidate | Weighted delta | New passes | New failures |
 |---|---:|---:|---:|---:|---:|
@@ -227,8 +227,8 @@ When the user asks for JSON, return only valid JSON.
 
 | Scope | Calls | Tokens | Estimated cost | Cost known | PromptIter latency | Complete |
 |---|---:|---:|---:|---:|---:|---:|
-| round | 18 | 1336 | 0.000000 | true | 5.0071ms | true |
-| cumulative | 64 | 3754 | 0.000000 | true | 21.5302ms | true |
+| round | 18 | 1336 | 0.000000 | true | 6.2183ms | true |
+| cumulative | 64 | 3754 | 0.000000 | true | 20.1348ms | true |
 
 | Set | Baseline | Candidate | Weighted delta | New passes | New failures |
 |---|---:|---:|---:|---:|---:|
@@ -258,9 +258,9 @@ Decision: `rejected`
 | new_hard_failures | true | 0 | 0 |  |
 | critical_regressions | true | 0 | 0 |  |
 | case_regression | true | 0 | 0 |  |
-| validation_gain | false | 0.15 | 0.2 | validation gain is below the required minimum |
+| validation_gain | false | 0.166667 | 0.2 | validation gain is below the required minimum |
 | train_delta_available | true | true | true |  |
-| generalization_gap | true | 0.0375 | 0.3 |  |
+| generalization_gap | true | 0.041667 | 0.3 |  |
 | metric_floor/safety | true | 1 | 1 |  |
 | usage_complete | true | true | true |  |
 | known_cost | true | true | true |  |
@@ -274,7 +274,7 @@ PromptIter accepted: `true` — candidate score gain satisfies acceptance policy
 
 Effective profile change: `true`
 
-PromptIter stop: `target score reached`
+PromptIter stop: `max rounds reached`
 
 ```text
 You are a customer-support agent.
@@ -289,8 +289,8 @@ For order lookups, call get_order with the order_id argument.
 
 | Scope | Calls | Tokens | Estimated cost | Cost known | PromptIter latency | Complete |
 |---|---:|---:|---:|---:|---:|---:|
-| round | 26 | 2340 | 0.000000 | true | 7.5098ms | true |
-| cumulative | 90 | 6094 | 0.000000 | true | 29.04ms | true |
+| round | 26 | 2340 | 0.000000 | true | 6.5055ms | true |
+| cumulative | 90 | 6094 | 0.000000 | true | 26.6403ms | true |
 
 | Set | Baseline | Candidate | Weighted delta | New passes | New failures |
 |---|---:|---:|---:|---:|---:|
@@ -320,9 +320,9 @@ Decision: `accepted`
 | new_hard_failures | true | 0 | 0 |  |
 | critical_regressions | true | 0 | 0 |  |
 | case_regression | true | 0 | 0 |  |
-| validation_gain | true | 0.25 | 0.2 |  |
+| validation_gain | true | 0.266667 | 0.2 |  |
 | train_delta_available | true | true | true |  |
-| generalization_gap | true | 0.0625 | 0.3 |  |
+| generalization_gap | true | 0.066667 | 0.3 |  |
 | metric_floor/safety | true | 1 | 1 |  |
 | usage_complete | true | true | true |  |
 | known_cost | true | true | true |  |
@@ -332,4 +332,4 @@ Decision: `accepted`
 
 ## Usage
 
-Calls: 90; tokens: 6094; estimated cost: 0.000000 (known: true); PromptIter latency: 51.4292ms; complete: true; telemetry source: `promptiter_engine`; pricing source: `deterministic_example_zero_cost`.
+Calls: 90; tokens: 6094; estimated cost: 0.000000 (known: true); PromptIter latency: 46.6345ms; complete: true; telemetry source: `promptiter_engine`; pricing source: `deterministic_example_zero_cost`.

@@ -27,9 +27,9 @@ type SurfaceOverride struct {
 	Value astructure.SurfaceValue
 }
 
-// CloneProfile returns a deep copy suitable for immutable run and audit
-// snapshots. Mutating the source profile or any nested surface value does not
-// affect the returned profile.
+// CloneProfile returns an owned copy suitable for run and audit snapshots. It
+// follows structure.CloneSurfaceValue's bounded handling of non-standard
+// programmatic schema values.
 func CloneProfile(source *Profile) *Profile {
 	if source == nil {
 		return nil

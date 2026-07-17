@@ -211,7 +211,7 @@ func writeProgressSummary(builder *strings.Builder, result *regression.RunResult
 		gain := 0.0
 		if candidate.ValidationDelta != nil {
 			score = candidate.ValidationDelta.CandidateScore
-			gain = candidate.ValidationDelta.WeightedScoreDelta
+			gain = candidate.ValidationDelta.CandidateScore - candidate.ValidationDelta.BaselineScore
 		}
 		action := "continue optimization"
 		if candidate.PromptIterShouldStop {

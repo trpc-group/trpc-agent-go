@@ -82,6 +82,7 @@ func TestFrozenReleaseDecisionCorpus(t *testing.T) {
 func corpusGateInput(entry releaseCorpusEntry) *regression.GateInput {
 	validationDelta := &regression.DeltaReport{
 		Complete:            !entry.ValidationIncomplete,
+		CandidateScore:      entry.ValidationGain,
 		WeightedScoreDelta:  entry.ValidationGain,
 		NewHardFailures:     entry.NewHardFailures,
 		CriticalRegressions: entry.CriticalRegressions,
@@ -98,7 +99,9 @@ func corpusGateInput(entry releaseCorpusEntry) *regression.GateInput {
 	}
 	var trainDelta *regression.DeltaReport
 	if entry.TrainAvailable {
-		trainDelta = &regression.DeltaReport{Complete: true, WeightedScoreDelta: entry.TrainGain}
+		trainDelta = &regression.DeltaReport{
+			Complete: true, CandidateScore: entry.TrainGain, WeightedScoreDelta: entry.TrainGain,
+		}
 	}
 	return &regression.GateInput{
 		Spec: &regression.RunSpec{

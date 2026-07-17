@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -261,6 +262,56 @@ func TestCloneSurfaceValue_ClonesEmptyModelHeaders(t *testing.T) {
 	require.NotNil(t, cloned.Model.Headers)
 	cloned.Model.Headers["X-Test"] = "1"
 	assert.Empty(t, value.Model.Headers)
+}
+
+func TestCloneSurfaceValue_ClonesConcreteSchemaValueTypes(t *testing.T) {
+	type schemaDefault struct {
+		Labels map[string][]int
+		Array  [2]*int
+		hidden []string
+	}
+	first, second := 1, 2
+	value := SurfaceValue{Tools: []ToolRef{{
+		ID: "tool",
+		InputSchema: &tool.Schema{Default: schemaDefault{
+			Labels: map[string][]int{"values": {1, 2}},
+			Array:  [2]*int{&first, &second},
+			hidden: []string{"preserved"},
+		}},
+	}}}
+
+	cloned := CloneSurfaceValue(value)
+	require.Len(t, cloned.Tools, 1)
+	require.NotSame(t, value.Tools[0].InputSchema, cloned.Tools[0].InputSchema)
+	got, ok := cloned.Tools[0].InputSchema.Default.(schemaDefault)
+	require.True(t, ok)
+	got.Labels["values"][0] = 9
+	*got.Array[0] = 9
+
+	original := value.Tools[0].InputSchema.Default.(schemaDefault)
+	assert.Equal(t, []int{1, 2}, original.Labels["values"])
+	assert.Equal(t, 1, *original.Array[0])
+	assert.Equal(t, []string{"preserved"}, got.hidden)
+}
+
+func TestCloneJSONValueHandlesNilAndDefensiveCases(t *testing.T) {
+	type holder struct {
+		Value any
+		Ptr   *int
+		Map   map[string]int
+		Slice []int
+	}
+	value := reflect.ValueOf(holder{})
+
+	assert.False(t, cloneJSONValueAtDepth(reflect.Value{}, 0).IsValid())
+	assert.True(t, cloneJSONValueAtDepth(value.FieldByName("Value"), 0).IsNil())
+	assert.True(t, cloneJSONValueAtDepth(value.FieldByName("Ptr"), 0).IsNil())
+	assert.True(t, cloneJSONValueAtDepth(value.FieldByName("Map"), 0).IsNil())
+	assert.True(t, cloneJSONValueAtDepth(value.FieldByName("Slice"), 0).IsNil())
+
+	deepValue := reflect.ValueOf([]int{1})
+	assert.Equal(t, deepValue, cloneJSONValueAtDepth(deepValue, 65))
+	assert.Equal(t, 7, cloneJSONValue(reflect.ValueOf(7)).Interface())
 }
 
 func TestModelRef_JSONOmitsEmptyFields(t *testing.T) {

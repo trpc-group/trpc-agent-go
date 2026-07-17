@@ -34,8 +34,3 @@ func MergeUsage(values ...Usage) Usage {
 	}
 	return result
 }
-
-// HasEvidence reports whether telemetry contains calls or token counts.
-func (u Usage) HasEvidence() bool {
-	return u.Calls != 0 || u.PromptTokens != 0 || u.CompletionTokens != 0 || u.TotalTokens != 0
-}

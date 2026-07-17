@@ -93,7 +93,7 @@ func TestNilRunSpecIsInvalid(t *testing.T) {
 }
 
 func TestProfileHashIsStableAndSensitiveToProfileContent(t *testing.T) {
-	if _, err := ProfileHash(nil); err == nil {
+	if _, err := profileHash(nil); err == nil {
 		t.Fatal("nil profile was hashed")
 	}
 	text := "baseline"
@@ -104,11 +104,11 @@ func TestProfileHashIsStableAndSensitiveToProfileContent(t *testing.T) {
 			Value:     astructure.SurfaceValue{Text: &text},
 		}},
 	}
-	first, err := ProfileHash(profile)
+	first, err := profileHash(profile)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := ProfileHash(profile)
+	second, err := profileHash(profile)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +116,7 @@ func TestProfileHashIsStableAndSensitiveToProfileContent(t *testing.T) {
 		t.Fatalf("profile hash is not stable: %q %q", first, second)
 	}
 	*profile.Overrides[0].Value.Text = "candidate"
-	changed, err := ProfileHash(profile)
+	changed, err := profileHash(profile)
 	if err != nil {
 		t.Fatal(err)
 	}

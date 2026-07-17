@@ -33,6 +33,23 @@ func TestPromptIterConfigurationCopiesEffectiveSettings(t *testing.T) {
 	assert.Equal(t, "target", actual.TargetSurfaceIDs[0])
 }
 
+func TestCloneRunSpecOwnsMutableConfiguration(t *testing.T) {
+	assert.Nil(t, cloneRunSpec(nil))
+	source := &RunSpec{
+		CriticalCaseIDs: []string{"critical"},
+		MetricPolicies:  map[string]MetricPolicy{"quality": {Weight: 1}},
+		Metadata:        map[string]string{"model": "fake"},
+		Audit:           AuditPolicy{IncludeRawContent: true},
+	}
+	clone := cloneRunSpec(source)
+	source.CriticalCaseIDs[0] = "changed"
+	source.MetricPolicies["quality"] = MetricPolicy{Weight: 2}
+	source.Metadata["model"] = "changed"
+	assert.Equal(t, "critical", clone.CriticalCaseIDs[0])
+	assert.Equal(t, 1.0, clone.MetricPolicies["quality"].Weight)
+	assert.Equal(t, "fake", clone.Metadata["model"])
+}
+
 func TestValidatePromptIterConfigurationRejectsIncompatibleSettings(t *testing.T) {
 	tests := []struct {
 		name   string

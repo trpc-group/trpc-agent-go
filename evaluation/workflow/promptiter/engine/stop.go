@@ -34,16 +34,16 @@ func (e *engine) stop(
 ) *StopDecision {
 	decision := &StopDecision{}
 	switch {
-	case policy.TargetScore != nil && effectiveScore >= *policy.TargetScore:
+	case round >= maxRounds:
 		decision.ShouldStop = true
-		decision.Reason = "target score reached"
+		decision.Reason = "max rounds reached"
 	case policy.MaxRoundsWithoutAcceptance > 0 &&
 		roundsWithoutAcceptance >= policy.MaxRoundsWithoutAcceptance:
 		decision.ShouldStop = true
 		decision.Reason = "max rounds without acceptance reached"
-	case round >= maxRounds:
+	case policy.TargetScore != nil && effectiveScore >= *policy.TargetScore:
 		decision.ShouldStop = true
-		decision.Reason = "max rounds reached"
+		decision.Reason = "target score reached"
 	default:
 		decision.ShouldStop = false
 		decision.Reason = "continue optimization"

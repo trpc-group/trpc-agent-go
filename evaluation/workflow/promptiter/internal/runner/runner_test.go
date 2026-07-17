@@ -82,3 +82,39 @@ func TestCaptureOutputSummarizesCompleteAndMissingUsage(t *testing.T) {
 	assert.Equal(t, int64(5), output.Usage.TotalTokens)
 	assert.False(t, output.Usage.Complete)
 }
+
+func TestCaptureOutputMarksPrematureStreamIncomplete(t *testing.T) {
+	events := make(chan *event.Event, 1)
+	events <- event.NewResponseEvent("invocation-id", "runner", &model.Response{
+		ID: "call-1",
+		Choices: []model.Choice{{
+			Message: model.NewAssistantMessage("partial"),
+		}},
+	})
+	close(events)
+
+	output, err := CaptureOutput(events)
+
+	assert.NoError(t, err)
+	assert.Equal(t, 1, output.Usage.Calls)
+	assert.False(t, output.Usage.Complete)
+}
+
+func TestCaptureOutputGroupsAnonymousPartialAndDoneEvents(t *testing.T) {
+	events := make(chan *event.Event, 2)
+	events <- event.NewResponseEvent("invocation-id", "runner", &model.Response{
+		Choices: []model.Choice{{Message: model.NewAssistantMessage("partial")}},
+	})
+	events <- event.NewResponseEvent("invocation-id", "runner", &model.Response{
+		Done:  true,
+		Usage: &model.Usage{PromptTokens: 2, CompletionTokens: 1, TotalTokens: 3},
+	})
+	close(events)
+
+	output, err := CaptureOutput(events)
+
+	assert.NoError(t, err)
+	assert.Equal(t, 1, output.Usage.Calls)
+	assert.Equal(t, int64(3), output.Usage.TotalTokens)
+	assert.True(t, output.Usage.Complete)
+}

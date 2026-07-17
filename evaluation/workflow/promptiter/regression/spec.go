@@ -120,8 +120,7 @@ func validateMetricPolicy(name string, policy MetricPolicy) error {
 	return nil
 }
 
-// ProfileHash returns a stable SHA-256 identity for a concrete profile.
-func ProfileHash(profile *promptiter.Profile) (string, error) {
+func profileHash(profile *promptiter.Profile) (string, error) {
 	if profile == nil {
 		return "", errors.New("profile is nil")
 	}

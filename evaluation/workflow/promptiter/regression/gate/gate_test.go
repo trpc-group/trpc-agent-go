@@ -86,9 +86,19 @@ func TestPolicyDecideAppliesQualityAndMetricRules(t *testing.T) {
 			name: "overfitting rejects",
 			configure: func(input *regression.GateInput) {
 				input.Spec.Gate.MaxGeneralizationGap = .1
-				input.TrainDelta.WeightedScoreDelta = .5
+				input.TrainDelta.CandidateScore = .5
 			},
 			decision: regression.DecisionRejected, rule: "generalization_gap",
+		},
+		{
+			name: "validation gain uses overall score delta",
+			configure: func(input *regression.GateInput) {
+				input.Spec.Gate.MinValidationGain = .15
+				input.ValidationDelta.BaselineScore = .4
+				input.ValidationDelta.CandidateScore = .5
+				input.ValidationDelta.WeightedScoreDelta = .9
+			},
+			decision: regression.DecisionRejected, rule: "validation_gain",
 		},
 		{
 			name: "score variance rejects",
@@ -185,8 +195,12 @@ func validInput() *regression.GateInput {
 		CandidateValidation: &regression.EvaluationSnapshot{Complete: true, Cases: []regression.CaseResult{{
 			Metrics: []regression.MetricResult{{Name: "quality", Score: 1}},
 		}}},
-		TrainDelta:      &regression.DeltaReport{Complete: true, WeightedScoreDelta: .2},
-		ValidationDelta: &regression.DeltaReport{Complete: true, WeightedScoreDelta: .2},
+		TrainDelta: &regression.DeltaReport{
+			BaselineScore: 0, CandidateScore: .2, Complete: true, WeightedScoreDelta: .2,
+		},
+		ValidationDelta: &regression.DeltaReport{
+			BaselineScore: 0, CandidateScore: .2, Complete: true, WeightedScoreDelta: .2,
+		},
 		TotalUsage: regression.UsageSummary{
 			Complete: true, CostEstimate: regression.CostEstimate{CostKnown: true},
 		},

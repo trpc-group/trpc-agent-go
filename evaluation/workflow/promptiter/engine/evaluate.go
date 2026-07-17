@@ -32,9 +32,10 @@ type EvaluationOptions struct {
 	// NumRuns controls repeated evaluation executions per case. Zero defaults to one.
 	NumRuns int
 	// TraceUsageCoversAllCalls is true only when every model-bearing call made
-	// by inference and metric evaluation is represented by retained execution
-	// trace usage. It must remain false for LLM judges, expected runners, or
-	// custom evaluators whose telemetry is not included in those traces.
+	// by inference and metric evaluation is represented by exactly one
+	// usage-bearing execution-trace step. It must remain false when a step can
+	// aggregate multiple calls, or for LLM judges, expected runners, and custom
+	// evaluators whose telemetry is not included in those traces.
 	TraceUsageCoversAllCalls bool
 	// EvalCaseParallelism caps parallel case executions per evaluation set.
 	EvalCaseParallelism int
@@ -337,13 +338,14 @@ func summarizeTraceUsage(executionTrace *atrace.Trace) promptiter.Usage {
 		result.Calls++
 	}
 	if executionTrace.Usage != nil {
-		if result.Calls == 0 {
-			result.Calls = 1
-		}
 		result.PromptTokens = int64(executionTrace.Usage.PromptTokens)
 		result.CompletionTokens = int64(executionTrace.Usage.CompletionTokens)
 		result.TotalTokens = int64(executionTrace.Usage.TotalTokens)
-		result.Complete = true
+		// Aggregate trace usage contains authoritative token totals, but it does
+		// not contain a call count. At least one usage-bearing step is required
+		// before the caller's TraceUsageCoversAllCalls contract can make this
+		// telemetry complete.
+		result.Complete = result.Calls > 0
 		return result
 	}
 	for _, step := range executionTrace.Steps {

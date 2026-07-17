@@ -3528,7 +3528,7 @@ func TestLossStopAndEventHelpers(t *testing.T) {
 	}, 1, 0.8)
 	require.NotNil(t, decision)
 	assert.True(t, decision.ShouldStop)
-	assert.Equal(t, "target score reached", decision.Reason)
+	assert.Equal(t, "max rounds reached", decision.Reason)
 	decision = (&engine{}).stop(1, 4, StopPolicy{}, 0, 0.1)
 	require.NotNil(t, decision)
 	assert.False(t, decision.ShouldStop)

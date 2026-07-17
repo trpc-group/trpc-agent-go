@@ -34,7 +34,7 @@ func buildTrainIndex(
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		hash, err := ProfileHash(round.InputProfile)
+		hash, err := profileHash(round.InputProfile)
 		if err != nil {
 			return nil, fmt.Errorf("hash round %d input profile: %w", round.Round, err)
 		}

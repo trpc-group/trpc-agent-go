@@ -153,7 +153,7 @@ func TestSampleReportMatchesCurrentSuccessScenario(t *testing.T) {
 	value := string(markdown)
 	for _, expected := range []string{
 		"## Optimization progress",
-		"| 4 | 1 | 0.25 | true | target score reached | accepted |",
+		"| 4 | 1 | 0.266667 | true | max rounds reached | accepted |",
 		"| train | 0.666667 | 1.000000 | 0.312500 | 4 | 0 |",
 	} {
 		if !strings.Contains(value, expected) {
@@ -287,7 +287,7 @@ func assertProgressiveSuccess(t *testing.T, result *regression.RunResult) {
 		previousScore = candidate.Validation.OverallScore
 	}
 	final := result.Candidates[len(result.Candidates)-1]
-	if !final.PromptIterShouldStop || final.PromptIterStopReason != "target score reached" {
+	if !final.PromptIterShouldStop || final.PromptIterStopReason != "max rounds reached" {
 		t.Fatalf("final round did not stop on target score: %+v", final)
 	}
 	if result.SelectedCandidateID != final.Candidate.ID {

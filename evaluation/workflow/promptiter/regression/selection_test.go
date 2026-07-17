@@ -84,3 +84,30 @@ func TestSelectedProfileAllowsRepeatedProfileWithUniqueCandidateIDs(t *testing.T
 	require.NotNil(t, selected)
 	assert.Equal(t, "same-output", *selected.Overrides[0].Value.Text)
 }
+
+func TestSelectionUsesOverallScoreAndStableTieBreakers(t *testing.T) {
+	accepted := func(id string, round int, gain, weightedGain float64) CandidateResult {
+		return CandidateResult{
+			Candidate: Candidate{ID: id, Round: round},
+			ValidationDelta: &DeltaReport{
+				CandidateScore: gain, WeightedScoreDelta: weightedGain,
+			},
+			Gate: &GateDecision{Decision: DecisionAccepted},
+		}
+	}
+	result := &RunResult{Candidates: []CandidateResult{
+		{Candidate: Candidate{ID: "ignored", Round: 1}},
+		{Candidate: Candidate{ID: "uncertain", Round: 2}, Gate: &GateDecision{Decision: DecisionInconclusive}},
+		accepted("weighted-only", 1, .1, .9),
+		accepted("later", 3, .2, .2),
+		accepted("zeta", 2, .2, .2),
+		accepted("alpha", 2, .2, .2),
+		{Candidate: Candidate{ID: "missing-delta", Round: 1}, Gate: &GateDecision{Decision: DecisionAccepted}},
+	}}
+	selectCandidate(result)
+	assert.Equal(t, DecisionAccepted, result.Decision)
+	assert.Equal(t, "alpha", result.SelectedCandidateID)
+	assert.True(t, candidatePrecedes(Candidate{ID: "first", Round: 1}, 0, ""))
+	assert.True(t, candidatePrecedes(Candidate{ID: "first", Round: 1}, 2, "later"))
+	assert.False(t, candidatePrecedes(Candidate{ID: "later", Round: 3}, 2, "first"))
+}

@@ -77,16 +77,9 @@ func captureCallUsage(
 	if response.ID == "" && len(response.Choices) == 0 && response.Error == nil && response.Usage == nil {
 		return
 	}
-	if !response.Done && response.Usage == nil {
-		return
-	}
 	key := response.ID
 	if key == "" {
-		if !response.Done {
-			return
-		}
-		*anonymousCall++
-		key = fmt.Sprintf("anonymous-%d", *anonymousCall)
+		key = anonymousCallKey(calls, anonymousCall)
 	}
 	state := calls[key]
 	if state == nil {
@@ -98,6 +91,17 @@ func captureCallUsage(
 		usage := *response.Usage
 		state.usage = &usage
 	}
+}
+
+func anonymousCallKey(calls map[string]*callUsage, sequence *int) string {
+	if *sequence > 0 {
+		current := fmt.Sprintf("anonymous-%d", *sequence)
+		if state := calls[current]; state != nil && !state.done {
+			return current
+		}
+	}
+	*sequence++
+	return fmt.Sprintf("anonymous-%d", *sequence)
 }
 
 func summarizeCallUsage(calls map[string]*callUsage) promptiter.Usage {

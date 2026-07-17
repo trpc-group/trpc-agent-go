@@ -10,9 +10,13 @@ package report
 
 import (
 	"errors"
+	"math"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
@@ -261,4 +265,98 @@ func TestScenarioReportRendersNonTextOptimizationSurface(t *testing.T) {
 	if !strings.Contains(value, "deterministic-model") || !strings.Contains(value, "Model") {
 		t.Fatalf("model surface was not rendered in the report: %q", value)
 	}
+}
+
+func TestRenderHelpersCoverUnavailableAndOptionalEvidence(t *testing.T) {
+	_, err := JSON(nil)
+	require.Error(t, err)
+	_, err = Markdown(&regression.RunResult{})
+	require.ErrorContains(t, err, "run result spec is nil")
+
+	var builder strings.Builder
+	writePromptIterConfiguration(&builder, nil)
+	assert.Contains(t, builder.String(), "configuration is unavailable")
+
+	target := .9
+	builder.Reset()
+	writePromptIterConfiguration(&builder, &regression.PromptIterConfiguration{
+		NumRuns: 1, TargetScore: &target,
+		TargetSurfaceIDs: []string{"agent#instruction"},
+	})
+	assert.Contains(t, builder.String(), "Early-stop target score: `0.9`")
+	assert.Contains(t, builder.String(), "consecutive unaccepted rounds: `disabled`")
+
+	builder.Reset()
+	writeRandomSeed(&builder, regression.RuntimePolicy{Seed: 17})
+	assert.Contains(t, builder.String(), "not applied")
+
+	builder.Reset()
+	writeSnapshotRow(&builder, "train", nil)
+	writeDeltaRow(&builder, "validation", nil)
+	assert.Contains(t, builder.String(), "| train | n/a | false | 0 |")
+	assert.Contains(t, builder.String(), "| validation | n/a | n/a | n/a | 0 | 0 |")
+}
+
+func TestFormattingHelpersHandleMissingShortAndLongDurations(t *testing.T) {
+	zero := time.Time{}
+	assert.Equal(t, "not recorded", formatHumanTime(zero))
+	assert.Equal(t, "not recorded", formatDuration(zero, zero))
+	start := time.Unix(10, 0)
+	assert.Equal(t, "not recorded", formatDuration(start, start.Add(-time.Second)))
+	assert.Equal(t, "125.000 ms", formatDuration(start, start.Add(125*time.Millisecond)))
+	assert.Equal(t, "1m1s", formatDuration(start, start.Add(61*time.Second)))
+	assert.Equal(t, "1.25", formatReportValue(float32(1.25)))
+	assert.Equal(t, "250ms", formatReportValue(250*time.Millisecond))
+	assert.Equal(t, "value", formatReportValue("value"))
+}
+
+func TestProfileTextHandlesMissingEmptyAndUnserializableSurfaces(t *testing.T) {
+	assert.Empty(t, profileText(nil, "target"))
+	assert.Empty(t, profileText(&promptiter.Profile{}, "target"))
+	assert.Empty(t, profileText(&promptiter.Profile{Overrides: []promptiter.SurfaceOverride{{
+		SurfaceID: "target",
+	}}}, "target"))
+
+	profile := &promptiter.Profile{Overrides: []promptiter.SurfaceOverride{{
+		SurfaceID: "target",
+		Value: astructure.SurfaceValue{Tools: []astructure.ToolRef{{
+			ID: "tool", InputSchema: &tool.Schema{Default: math.Inf(1)},
+		}}},
+	}}}
+	assert.Contains(t, profileText(profile, "target"), "tool")
+}
+
+func TestMarkdownOrdersCandidatesAndReportsMissingGateEvidence(t *testing.T) {
+	other := "other"
+	target := "target"
+	result := &regression.RunResult{
+		RunID: "partial-audit",
+		Spec: &regression.RunSpec{
+			TargetSurfaceID: "target", Runtime: regression.RuntimePolicy{NumRuns: 1},
+		},
+		BaselineProfile: &promptiter.Profile{Overrides: []promptiter.SurfaceOverride{
+			{SurfaceID: "other", Value: astructure.SurfaceValue{Text: &other}},
+			{SurfaceID: "target", Value: astructure.SurfaceValue{Text: &target}},
+		}},
+		Candidates: []regression.CandidateResult{
+			{
+				Candidate:        regression.Candidate{ID: "zeta", Round: 2},
+				PromptIterReason: "candidate needs review",
+			},
+			{
+				Candidate: regression.Candidate{ID: "alpha", Round: 1},
+				Gate: &regression.GateDecision{
+					Decision: regression.DecisionRejected,
+					Rules:    []regression.GateRuleResult{{Rule: "gain", Reason: "too low"}},
+				},
+			},
+		},
+	}
+	markdown, err := Markdown(result)
+	require.NoError(t, err)
+	value := string(markdown)
+	assert.Less(t, strings.Index(value, "## Candidate: alpha"), strings.Index(value, "## Candidate: zeta"))
+	assert.Contains(t, value, "candidate needs review")
+	assert.Contains(t, value, "Decision evidence is missing")
+	assert.Contains(t, value, "target")
 }

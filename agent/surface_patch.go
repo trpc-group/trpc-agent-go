@@ -6,7 +6,6 @@
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 
-// Package agent defines Agent runtime contracts and per-run overrides.
 package agent
 
 import (

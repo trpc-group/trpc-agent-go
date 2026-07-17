@@ -207,9 +207,10 @@ func cloneSurfaceValue(value SurfaceValue) SurfaceValue {
 	return cloned
 }
 
-// CloneSurfaceValue returns a deep copy of a surface value, including nested
-// model headers, few-shot messages, tool schemas, and JSON-compatible schema
-// values.
+// CloneSurfaceValue returns an owned copy of a surface value, including model
+// headers, few-shot messages, tool schemas, and ordinary JSON-compatible
+// schema values. Non-standard programmatic schema values nested beyond the
+// defensive recursion limit may be retained by reference.
 func CloneSurfaceValue(value SurfaceValue) SurfaceValue {
 	return cloneSurfaceValue(value)
 }
@@ -294,7 +295,7 @@ func cloneSchemaValue(value any) any {
 
 // cloneJSONValue preserves concrete map and slice types while recursively
 // copying their contents. Schema defaults are expected to be JSON-compatible;
-// scalar and unsupported values are immutable and therefore returned as-is.
+// scalar values are immutable and therefore returned as-is.
 func cloneJSONValue(value reflect.Value) reflect.Value {
 	return cloneJSONValueAtDepth(value, 0)
 }

@@ -34,12 +34,12 @@ func adaptEvaluation(
 	if math.IsNaN(source.OverallScore) || math.IsInf(source.OverallScore, 0) {
 		return nil, errors.New("evaluation overall score must be finite")
 	}
-	profileHash, err := ProfileHash(profile)
+	digest, err := profileHash(profile)
 	if err != nil {
 		return nil, err
 	}
 	snapshot := &EvaluationSnapshot{
-		ProfileHash:  profileHash,
+		ProfileHash:  digest,
 		OverallScore: source.OverallScore,
 		Complete:     true,
 	}

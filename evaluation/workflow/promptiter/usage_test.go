@@ -27,9 +27,4 @@ func TestMergeUsageDerivesMissingTotalAndUsageEvidence(t *testing.T) {
 	assert.Equal(t, int64(8), actual.TotalTokens)
 	assert.True(t, actual.Complete)
 
-	assert.False(t, (Usage{}).HasEvidence())
-	assert.True(t, (Usage{Calls: 1}).HasEvidence())
-	assert.True(t, (Usage{PromptTokens: 1}).HasEvidence())
-	assert.True(t, (Usage{CompletionTokens: 1}).HasEvidence())
-	assert.True(t, (Usage{TotalTokens: 1}).HasEvidence())
 }

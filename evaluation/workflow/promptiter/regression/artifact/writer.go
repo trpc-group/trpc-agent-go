@@ -33,6 +33,9 @@ func WriteReports(
 	if err := validateRunDirectoryName(result.RunID); err != nil {
 		return nil, err
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	jsonReport, err := report.JSON(result)
 	if err != nil {
 		return nil, err
@@ -70,9 +73,7 @@ func (s *Store) writeBundle(
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	unlock := s.lockBundle(directory)
-	defer unlock()
-	finalDirectory, err := s.path(directory)
+	finalDirectory, err := s.runPath(directory)
 	if err != nil {
 		return nil, err
 	}
@@ -81,15 +82,14 @@ func (s *Store) writeBundle(
 	} else if !errors.Is(verifyErr, os.ErrNotExist) {
 		return nil, verifyErr
 	}
-	operations := s.effectiveBundleOperations()
-	temporaryDirectory, err := operations.mkdirTemp(s.root, ".report-bundle-*")
+	temporaryDirectory, err := os.MkdirTemp(s.root, ".report-bundle-*")
 	if err != nil {
 		return nil, fmt.Errorf("create temporary report bundle: %w", err)
 	}
 	committed := false
 	defer func() {
 		if !committed {
-			_ = operations.removeAll(temporaryDirectory)
+			_ = os.RemoveAll(temporaryDirectory)
 		}
 	}()
 	for _, value := range values {
@@ -99,17 +99,17 @@ func (s *Store) writeBundle(
 		if filepath.Base(value.name) != value.name || value.name == "." || value.name == ".." {
 			return nil, fmt.Errorf("invalid report file name %q", value.name)
 		}
-		if err := operations.writeSyncedFile(filepath.Join(temporaryDirectory, value.name), value.content); err != nil {
+		if err := writeSyncedFile(filepath.Join(temporaryDirectory, value.name), value.content); err != nil {
 			return nil, err
 		}
 	}
-	if err := operations.syncDirectory(temporaryDirectory); err != nil {
+	if err := syncDirectory(temporaryDirectory); err != nil {
 		return nil, fmt.Errorf("sync temporary report bundle: %w", err)
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if err := operations.rename(temporaryDirectory, finalDirectory); err != nil {
+	if err := os.Rename(temporaryDirectory, finalDirectory); err != nil {
 		if existing, verifyErr := verifyBundle(finalDirectory, directory, values); verifyErr == nil {
 			return existing, nil
 		} else if !errors.Is(verifyErr, os.ErrNotExist) {
@@ -121,7 +121,7 @@ func (s *Store) writeBundle(
 		return nil, fmt.Errorf("commit report bundle: %w", err)
 	}
 	committed = true
-	if err := operations.syncDirectory(s.root); err != nil {
+	if err := syncDirectory(s.root); err != nil {
 		// The rename already made this immutable bundle visible. Deleting it here
 		// can race with another writer that has verified the same bundle.
 		return nil, fmt.Errorf("sync artifact root after publishing report bundle: %w", err)
@@ -191,4 +191,19 @@ func verifyBundle(
 func digestBytes(content []byte) string {
 	digest := sha256.Sum256(content)
 	return hex.EncodeToString(digest[:])
+}
+
+func digestFile(path string) (string, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return "", err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return "", fmt.Errorf("report file %q is a symbolic link", path)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	return digestBytes(content), nil
 }
