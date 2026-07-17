@@ -4,23 +4,26 @@
 package main
 
 import (
+	"fmt"
 	"testing"
 )
 
 func TestNormalCasesHaveNoDiff(t *testing.T) {
 	for _, tc := range Cases() {
-		if d := Compare(tc.Name, "json", tc.Build(), clone(tc.Build())); len(d) != 0 {
+		if d := Compare(tc.Name, "json", tc.Expected(), clone(tc.Expected())); len(d) != 0 {
 			t.Fatalf("%s false positive: %+v", tc.Name, d)
 		}
 	}
 }
 func TestAllInjectedDifferencesDetected(t *testing.T) {
 	for _, tc := range Cases() {
-		a := tc.Build()
+		a := tc.Expected()
 		b := clone(a)
+		before := Compare(tc.Name, "json", a, b)
 		tc.Mutate(&b)
-		if d := Compare(tc.Name, "json", a, b); len(d) == 0 {
-			t.Fatalf("%s mismatch not detected", tc.Name)
+		after := Compare(tc.Name, "json", a, b)
+		if !HasNewNonAllowedDiff(before, after, tc.FaultPath) {
+			t.Fatalf("%s target mismatch %s not detected: %+v", tc.Name, tc.FaultPath, after)
 		}
 	}
 }
@@ -33,10 +36,10 @@ func TestServiceBackendsReplayThroughRealAPIs(t *testing.T) {
 		}
 		t.Cleanup(func() { _ = memoryBackend.Close() })
 		t.Cleanup(func() { _ = sqliteBackend.Close() })
-		if err := memoryBackend.Save(tc.Build()); err != nil {
+		if err := tc.Run(memoryBackend); err != nil {
 			t.Fatal(err)
 		}
-		if err := sqliteBackend.Save(tc.Build()); err != nil {
+		if err := tc.Run(sqliteBackend); err != nil {
 			t.Fatal(err)
 		}
 		left, err := memoryBackend.Load()
@@ -54,7 +57,7 @@ func TestServiceBackendsReplayThroughRealAPIs(t *testing.T) {
 			name     string
 			snapshot Snapshot
 		}{{memoryBackend.Name(), left}, {sqliteBackend.Name(), right}} {
-			for _, diff := range Compare(tc.Name, result.name, tc.Build(), result.snapshot) {
+			for _, diff := range Compare(tc.Name, result.name, tc.Expected(), result.snapshot) {
 				if !diff.Allowed {
 					t.Fatalf("%s lost modeled data in %s: %+v", tc.Name, result.name, diff)
 				}
@@ -75,12 +78,12 @@ func TestServiceBackendPropagatesJSONConversionErrors(t *testing.T) {
 	fixture := base("invalid-json", Event{
 		Seq: 1, Role: "assistant", Extensions: map[string]any{"bad": make(chan int)},
 	})
-	if err := backend.Save(fixture); err == nil {
+	if err := ReplaySnapshot(backend, fixture); err == nil {
 		t.Fatal("expected unsupported JSON value to fail replay")
 	}
 }
 func TestNormalization(t *testing.T) {
-	a := Cases()[4].Build()
+	a := Cases()[4].Expected()
 	b := clone(a)
 	a.Memories[0].Similarity = .91231
 	b.Memories[0].Similarity = .91239
@@ -92,7 +95,7 @@ func TestNormalization(t *testing.T) {
 }
 
 func TestUnsupportedCapabilityMarksMatchingDiffAllowed(t *testing.T) {
-	a := Cases()[7].Build()
+	a := Cases()[7].Expected()
 	b := clone(a)
 	b.Tracks[0].Error = "not persisted"
 	b.Unsupported = map[string]string{"/tracks": "backend does not persist track details"}
@@ -104,7 +107,7 @@ func TestUnsupportedCapabilityMarksMatchingDiffAllowed(t *testing.T) {
 }
 
 func TestUnsupportedCapabilityDoesNotAllowOtherDiffs(t *testing.T) {
-	a := Cases()[5].Build()
+	a := Cases()[5].Expected()
 	b := clone(a)
 	b.Summaries[0].Text = "lost"
 	b.Unsupported = map[string]string{"/tracks": "backend does not persist tracks"}
@@ -113,4 +116,79 @@ func TestUnsupportedCapabilityDoesNotAllowOtherDiffs(t *testing.T) {
 	if len(d) != 1 || d[0].Allowed {
 		t.Fatalf("unrelated data loss must remain disallowed: %+v", d)
 	}
+}
+
+func TestStableEventIDRoundTrips(t *testing.T) {
+	backend := NewInMemoryBackend()
+	t.Cleanup(func() { _ = backend.Close() })
+	fixture := base("stable-id", Event{ID: "caller-stable", Seq: 1, Role: "user", Content: "once"})
+	if err := ReplaySnapshot(backend, fixture); err != nil {
+		t.Fatal(err)
+	}
+	got, err := backend.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Events) != 1 || got.Events[0].ID != "caller-stable" {
+		t.Fatalf("stable event ID was not preserved: %+v", got.Events)
+	}
+	mutated := clone(got)
+	mutated.Events[0].ID = "rewritten"
+	if diffs := Compare("stable-id", backend.Name(), fixture, mutated); len(diffs) == 0 || diffs[0].Allowed {
+		t.Fatalf("stable ID rewrite was not detected: %+v", diffs)
+	}
+}
+
+func TestToolCallIDsRoundTripAcrossInterleavedResults(t *testing.T) {
+	fixture := base("interleaved-tools",
+		Event{Seq: 0, Role: "user", Content: "run both tools"},
+		Event{Seq: 1, Role: "assistant", Tool: "first", ToolCallID: "call-a", Args: map[string]any{"n": 1}},
+		Event{Seq: 2, Role: "assistant", Tool: "second", ToolCallID: "call-b", Args: map[string]any{"n": 2}},
+		Event{Seq: 3, Role: "tool", Tool: "second", ToolResultID: "call-b", Response: map[string]any{"ok": "b"}},
+		Event{Seq: 4, Role: "tool", Tool: "first", ToolResultID: "call-a", Response: map[string]any{"ok": "a"}},
+	)
+	backend := NewInMemoryBackend()
+	t.Cleanup(func() { _ = backend.Close() })
+	if err := ReplaySnapshot(backend, fixture); err != nil {
+		t.Fatal(err)
+	}
+	got, err := backend.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diffs := Compare("interleaved-tools", backend.Name(), fixture, got); len(diffs) != 0 {
+		t.Fatalf("tool IDs did not round-trip: %+v", diffs)
+	}
+}
+
+func TestServiceBackendLoadsMoreThanOneHundredMemories(t *testing.T) {
+	fixture := base("memory-101")
+	for i := 0; i < 101; i++ {
+		fixture.Memories = append(fixture.Memories, Memory{ID: fmt.Sprintf("m-%03d", i), Content: fmt.Sprintf("memory-%03d", i), Scope: "user"})
+	}
+	for _, backend := range []Backend{NewInMemoryBackend(), mustSQLiteBackend(t)} {
+		backend := backend
+		t.Run(backend.Name(), func(t *testing.T) {
+			t.Cleanup(func() { _ = backend.Close() })
+			if err := ReplaySnapshot(backend, fixture); err != nil {
+				t.Fatal(err)
+			}
+			got, err := backend.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got.Memories) != len(fixture.Memories) {
+				t.Fatalf("memory load truncated: got %d want %d", len(got.Memories), len(fixture.Memories))
+			}
+		})
+	}
+}
+
+func mustSQLiteBackend(t *testing.T) Backend {
+	t.Helper()
+	backend, err := NewSQLiteBackend(t.TempDir() + "/memory-101")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return backend
 }

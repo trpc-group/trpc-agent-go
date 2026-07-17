@@ -25,16 +25,16 @@ func main() {
 	defer os.RemoveAll(tmp)
 	report := Report{Cases: len(Cases()), Backends: []string{"inmemory-services", "sqlite-services"}}
 	for _, tc := range Cases() {
-		want := tc.Build()
+		want := tc.Expected()
 		mem := NewInMemoryBackend()
 		disk, err := NewSQLiteBackend(filepath.Join(tmp, tc.Name))
 		if err != nil {
 			panic(err)
 		}
-		if err := mem.Save(want); err != nil {
+		if err := tc.Run(mem); err != nil {
 			panic(err)
 		}
-		if err := disk.Save(want); err != nil {
+		if err := tc.Run(disk); err != nil {
 			panic(err)
 		}
 		left, err := mem.Load()
@@ -45,15 +45,17 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
+		before := caseDifferences(tc.Name, want, mem.Name(), left, disk.Name(), right)
+		diffs := before
 		if *inject {
 			// Corrupt the observed backend result, not the standardized input. This
 			// models data loss/corruption after real service operations and avoids
 			// having backend validation silently repair the injected fault.
 			tc.Mutate(&right)
-		}
-		diffs := Compare(tc.Name, disk.Name(), left, right)
-		if *inject && len(diffs) > 0 {
-			report.DetectedInjected++
+			diffs = caseDifferences(tc.Name, want, mem.Name(), left, disk.Name(), right)
+			if HasNewNonAllowedDiff(before, diffs, tc.FaultPath) {
+				report.DetectedInjected++
+			}
 		}
 		report.Differences = append(report.Differences, diffs...)
 		if err := errors.Join(mem.Close(), disk.Close()); err != nil {
@@ -66,4 +68,12 @@ func main() {
 		panic(e)
 	}
 	fmt.Printf("cases=%d differences=%d detected=%d duration=%dms\n", report.Cases, len(report.Differences), report.DetectedInjected, report.DurationMS)
+}
+
+func caseDifferences(caseName string, expected Snapshot, leftName string, left Snapshot, rightName string, right Snapshot) []Difference {
+	var diffs []Difference
+	diffs = append(diffs, Compare(caseName, leftName, expected, left)...)
+	diffs = append(diffs, Compare(caseName, rightName, expected, right)...)
+	diffs = append(diffs, Compare(caseName, leftName+"-vs-"+rightName, left, right)...)
+	return diffs
 }

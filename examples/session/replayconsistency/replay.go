@@ -8,26 +8,30 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 )
 
 type Event struct {
-	ID         string         `json:"id"`
-	Seq        int            `json:"seq"`
-	Author     string         `json:"author"`
-	Role       string         `json:"role"`
-	Content    string         `json:"content"`
-	Tool       string         `json:"tool,omitempty"`
-	Args       map[string]any `json:"args,omitempty"`
-	Response   any            `json:"response,omitempty"`
-	Branch     string         `json:"branch,omitempty"`
-	Tag        string         `json:"tag,omitempty"`
-	FilterKey  string         `json:"filter_key,omitempty"`
-	StateDelta map[string]any `json:"state_delta,omitempty"`
-	Extensions map[string]any `json:"extensions,omitempty"`
-	Timestamp  string         `json:"timestamp,omitempty"`
+	ID           string         `json:"id"`
+	Seq          int            `json:"seq"`
+	Author       string         `json:"author"`
+	Role         string         `json:"role"`
+	Content      string         `json:"content"`
+	Tool         string         `json:"tool,omitempty"`
+	ToolCallID   string         `json:"tool_call_id,omitempty"`
+	ToolResultID string         `json:"tool_result_id,omitempty"`
+	Args         map[string]any `json:"args,omitempty"`
+	Response     any            `json:"response,omitempty"`
+	Branch       string         `json:"branch,omitempty"`
+	Tag          string         `json:"tag,omitempty"`
+	FilterKey    string         `json:"filter_key,omitempty"`
+	StateDelta   map[string]any `json:"state_delta,omitempty"`
+	Extensions   map[string]any `json:"extensions,omitempty"`
+	Timestamp    string         `json:"timestamp,omitempty"`
 }
 type Memory struct {
 	ID         string         `json:"id"`
@@ -64,7 +68,13 @@ type Snapshot struct {
 
 type Backend interface {
 	Name() string
-	Save(Snapshot) error
+	Begin(Snapshot) error
+	AppendEvent(Event) error
+	AppendEventIdempotent(Event) error
+	UpdateState(string, any) error
+	AddMemory(Memory) error
+	CreateSummary(Summary) error
+	AppendTrack(TrackEvent) error
 	Load() (Snapshot, error)
 	Close() error
 }
@@ -77,67 +87,207 @@ func clone(v Snapshot) Snapshot {
 }
 
 type ReplayCase struct {
-	Name   string
-	Build  func() Snapshot
-	Mutate func(*Snapshot)
+	Name      string
+	Expected  func() Snapshot
+	Run       func(Backend) error
+	FaultPath string
+	Mutate    func(*Snapshot)
 }
 
 func Cases() []ReplayCase {
 	return []ReplayCase{
-		{"single-turn", func() Snapshot {
+		snapshotCase("single-turn", func() Snapshot {
 			return base("s1", Event{Seq: 1, Author: "user", Role: "user", Content: "hello"}, Event{Seq: 2, Author: "agent", Role: "assistant", Content: "hi"})
-		}, func(s *Snapshot) { s.Events[1].Content = "wrong" }},
-		{"multi-turn", func() Snapshot {
+		}, "/events/1/content", func(s *Snapshot) { s.Events[1].Content = "wrong" }),
+		snapshotCase("multi-turn", func() Snapshot {
 			return base("s2", Event{Seq: 1, Role: "user", Content: "one"}, Event{Seq: 2, Role: "assistant", Content: "1"}, Event{Seq: 3, Role: "user", Content: "two"})
-		}, func(s *Snapshot) { s.Events[2].Seq = 2 }},
-		{"tool-call", func() Snapshot {
+		}, "/events", func(s *Snapshot) { s.Events[2].Seq = 2 }),
+		snapshotCase("tool-call", func() Snapshot {
 			s := base("s3",
 				Event{Seq: 1, Author: "user", Role: "user", Content: "weather in Shenzhen"},
-				Event{Seq: 2, Author: "agent", Role: "assistant", Tool: "weather", Args: map[string]any{"city": "SZ"}, Extensions: map[string]any{"call_id": "c1"}},
-				Event{Seq: 3, Author: "tool", Role: "tool", Tool: "weather", Response: map[string]any{"temp": 30}},
+				Event{Seq: 2, Author: "agent", Role: "assistant", Tool: "weather", ToolCallID: "call-weather", Args: map[string]any{"city": "SZ"}, Extensions: map[string]any{"call_id": "c1"}},
+				Event{Seq: 3, Author: "tool", Role: "tool", Tool: "weather", ToolResultID: "call-weather", Response: map[string]any{"temp": 30}},
 			)
 			return s
-		}, func(s *Snapshot) {
+		}, "/events/1/args/city", func(s *Snapshot) {
 			if s.Events[1].Args == nil {
 				s.Events[1].Args = map[string]any{}
 			}
 			s.Events[1].Args["city"] = "BJ"
-		}},
-		{"state-updates", func() Snapshot { s := base("s4"); s.State = map[string]any{"count": 2, "keep": true}; return s }, func(s *Snapshot) { s.State["count"] = 1 }},
-		{"memory", func() Snapshot {
+		}),
+		snapshotCase("state-updates", func() Snapshot { s := base("s4"); s.State = map[string]any{"count": 2, "keep": true}; return s }, "/state/count", func(s *Snapshot) { s.State["count"] = 1 }),
+		snapshotCase("memory", func() Snapshot {
 			s := base("s5")
 			s.Memories = []Memory{{ID: "m1", Content: "likes tea", Metadata: map[string]any{"kind": "preference"}, Scope: "user", Similarity: .912345}}
 			return s
-		}, func(s *Snapshot) { s.Memories[0].Content = "likes coffee" }},
-		{"summary-update", func() Snapshot {
-			s := base("s6", Event{Seq: 1, Author: "user", Role: "user", Content: "summarize this", FilterKey: "all"})
-			s.Summaries = []Summary{{ID: "sum1", SessionID: "s6", FilterKey: "all", Text: "latest summary", Version: 2}}
-			return s
-		}, func(s *Snapshot) { s.Summaries[0].Text = "old summary" }},
-		{"summary-truncation", func() Snapshot {
-			s := base("s7", Event{Seq: 10, Author: "agent", Role: "assistant", Content: "retained", FilterKey: "conversation"}, Event{Seq: 11, Author: "user", Role: "user", Content: "new", FilterKey: "conversation"})
+		}, "/memories/0/content", func(s *Snapshot) { s.Memories[0].Content = "likes coffee" }),
+		summaryUpdateCase(),
+		snapshotCase("summary-truncation", func() Snapshot {
+			s := base("s7", Event{Seq: 10, Author: "user", Role: "user", Content: "retained", FilterKey: "conversation"}, Event{Seq: 11, Author: "agent", Role: "assistant", Content: "new", FilterKey: "conversation"})
 			s.Summaries = []Summary{{ID: "sum2", SessionID: "s7", FilterKey: "conversation", Text: "events 1-9", Version: 1}}
 			return s
-		}, func(s *Snapshot) { s.Summaries = nil }},
-		{"track-events", func() Snapshot {
+		}, "/summaries", func(s *Snapshot) { s.Summaries = nil }),
+		snapshotCase("track-events", func() Snapshot {
 			s := base("s8")
 			s.Tracks = []TrackEvent{{Name: "tool/weather", Type: "finish", InvocationID: "i1", DurationMS: 12.345}}
 			return s
-		}, func(s *Snapshot) { s.Tracks[0].Error = "timeout" }},
-		{"concurrent-order", func() Snapshot {
-			return base("s9",
-				Event{Seq: 0, Author: "user", Role: "user", Content: "start concurrent tools"},
-				Event{Seq: 2, Author: "agent-b", Role: "assistant", Branch: "tool-b", Content: "b"},
-				Event{Seq: 1, Author: "agent-a", Role: "assistant", Branch: "tool-a", Content: "a"},
-			)
-		}, func(s *Snapshot) { s.Events[1].Seq = 1 }},
-		{"retry-recovery", func() Snapshot {
-			s := base("s10", Event{ID: "stable", Seq: 1, Author: "user", Role: "user", Content: "once"})
-			s.State = map[string]any{"committed": true}
-			s.Memories = []Memory{{ID: "m10", Content: "once", Scope: "session"}}
-			return s
-		}, func(s *Snapshot) { s.Events = append(s.Events, s.Events[0]) }},
+		}, "/tracks/0/error", func(s *Snapshot) { s.Tracks[0].Error = "timeout" }),
+		concurrentCase(),
+		retryCase(),
 	}
+}
+
+func summaryUpdateCase() ReplayCase {
+	build := func() Snapshot {
+		s := base("s6", Event{Seq: 1, Author: "user", Role: "user", Content: "summarize this", FilterKey: "all"})
+		s.Summaries = []Summary{{ID: "sum1", SessionID: "s6", FilterKey: "all", Text: "latest summary", Version: 2}}
+		return s
+	}
+	return ReplayCase{
+		Name: "summary-update", Expected: build, FaultPath: "/summaries/0/text",
+		Run: func(backend Backend) error {
+			expected := build()
+			if err := backend.Begin(expected); err != nil {
+				return err
+			}
+			if err := backend.AppendEvent(expected.Events[0]); err != nil {
+				return err
+			}
+			old := expected.Summaries[0]
+			old.Text, old.Version = "old summary", 1
+			if err := backend.CreateSummary(old); err != nil {
+				return err
+			}
+			return backend.CreateSummary(expected.Summaries[0])
+		},
+		Mutate: func(s *Snapshot) { s.Summaries[0].Text = "old summary" },
+	}
+}
+
+func concurrentCase() ReplayCase {
+	build := func() Snapshot {
+		return base("s9",
+			Event{Seq: 0, Author: "user", Role: "user", Content: "start concurrent tools"},
+			Event{Seq: 1, Author: "agent-a", Role: "assistant", Branch: "tool-a", Content: "a"},
+			Event{Seq: 2, Author: "agent-b", Role: "assistant", Branch: "tool-b", Content: "b"},
+		)
+	}
+	return ReplayCase{
+		Name: "concurrent-order", Expected: build, FaultPath: "/events",
+		Run: func(backend Backend) error {
+			expected := build()
+			if err := backend.Begin(expected); err != nil {
+				return err
+			}
+			if err := backend.AppendEvent(expected.Events[0]); err != nil {
+				return err
+			}
+			start := make(chan struct{})
+			errs := make(chan error, 2)
+			var wg sync.WaitGroup
+			for _, event := range expected.Events[1:] {
+				event := event
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					<-start
+					errs <- backend.AppendEvent(event)
+				}()
+			}
+			close(start)
+			wg.Wait()
+			close(errs)
+			for err := range errs {
+				if err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+		Mutate: func(s *Snapshot) { s.Events[2].Seq = 1 },
+	}
+}
+
+var errInjectedAfterCommit = errors.New("injected failure after event commit")
+
+func retryCase() ReplayCase {
+	build := func() Snapshot {
+		s := base("s10", Event{ID: "stable", Seq: 1, Author: "user", Role: "user", Content: "once"})
+		s.State = map[string]any{"committed": true}
+		s.Memories = []Memory{{ID: "m10", Content: "once", Scope: "session"}}
+		return s
+	}
+	return ReplayCase{
+		Name: "retry-recovery", Expected: build, FaultPath: "/events",
+		Run: func(backend Backend) error {
+			expected := build()
+			if err := backend.Begin(expected); err != nil {
+				return err
+			}
+			if err := appendThenFail(backend, expected.Events[0]); !errors.Is(err, errInjectedAfterCommit) {
+				return fmt.Errorf("expected injected post-commit failure, got %w", err)
+			}
+			if err := backend.AppendEventIdempotent(expected.Events[0]); err != nil {
+				return fmt.Errorf("retry stable event: %w", err)
+			}
+			if err := backend.UpdateState("committed", true); err != nil {
+				return err
+			}
+			return backend.AddMemory(expected.Memories[0])
+		},
+		Mutate: func(s *Snapshot) { s.Events = append(s.Events, s.Events[0]) },
+	}
+}
+
+func appendThenFail(backend Backend, event Event) error {
+	if err := backend.AppendEvent(event); err != nil {
+		return err
+	}
+	return errInjectedAfterCommit
+}
+
+func snapshotCase(name string, build func() Snapshot, faultPath string, mutate func(*Snapshot)) ReplayCase {
+	return ReplayCase{
+		Name: name, Expected: build, FaultPath: faultPath, Mutate: mutate,
+		Run: func(backend Backend) error { return ReplaySnapshot(backend, build()) },
+	}
+}
+
+func ReplaySnapshot(backend Backend, input Snapshot) error {
+	if err := backend.Begin(input); err != nil {
+		return err
+	}
+	for _, event := range input.Events {
+		if err := backend.AppendEvent(event); err != nil {
+			return err
+		}
+	}
+	keys := make([]string, 0, len(input.State))
+	for key := range input.State {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if err := backend.UpdateState(key, input.State[key]); err != nil {
+			return err
+		}
+	}
+	for _, memory := range input.Memories {
+		if err := backend.AddMemory(memory); err != nil {
+			return err
+		}
+	}
+	for _, track := range input.Tracks {
+		if err := backend.AppendTrack(track); err != nil {
+			return err
+		}
+	}
+	for _, summary := range input.Summaries {
+		if err := backend.CreateSummary(summary); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 func base(id string, events ...Event) Snapshot {
 	return Snapshot{SessionID: id, Events: events, State: map[string]any{}, Unsupported: map[string]string{}}
@@ -145,7 +295,6 @@ func base(id string, events ...Event) Snapshot {
 
 func Normalize(s Snapshot) Snapshot {
 	for i := range s.Events {
-		s.Events[i].ID = ""
 		s.Events[i].Timestamp = ""
 	}
 	for i := range s.Memories {
@@ -267,6 +416,31 @@ func unsupportedDifference(path string, unsupported map[string]string) (bool, st
 		}
 	}
 	return false, "normalized values differ"
+}
+
+func HasNewNonAllowedDiff(before, after []Difference, pathPrefix string) bool {
+	known := make(map[string]bool, len(before))
+	for _, diff := range before {
+		if !diff.Allowed {
+			known[differenceKey(diff)] = true
+		}
+	}
+	pathPrefix = "/" + strings.Trim(pathPrefix, "/")
+	for _, diff := range after {
+		if diff.Allowed || (diff.Path != pathPrefix && !strings.HasPrefix(diff.Path, pathPrefix+"/")) {
+			continue
+		}
+		if !known[differenceKey(diff)] {
+			return true
+		}
+	}
+	return false
+}
+
+func differenceKey(diff Difference) string {
+	baseline, _ := json.Marshal(diff.Baseline)
+	compared, _ := json.Marshal(diff.Compared)
+	return diff.Backend + "\x00" + diff.Path + "\x00" + string(baseline) + "\x00" + string(compared)
 }
 func elementLocator(kind string, index int, a, b any) string {
 	m, _ := a.(map[string]any)

@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
 	"sync"
 	"time"
 
@@ -25,9 +24,12 @@ import (
 )
 
 const (
-	replayApp  = "replay-consistency"
-	replayUser = "fixture-user"
-	seqKey     = "replay.seq"
+	replayApp                = "replay-consistency"
+	replayUser               = "fixture-user"
+	seqKey                   = "replay.seq"
+	generatedEventIDKey      = "replay.generated_event_id"
+	generatedToolCallIDKey   = "replay.generated_tool_call_id"
+	generatedToolResultIDKey = "replay.generated_tool_result_id"
 )
 
 type deterministicSummarizer struct {
@@ -109,7 +111,7 @@ func NewSQLiteBackend(path string) (Backend, error) {
 
 func (b *serviceBackend) Name() string { return b.name }
 
-func (b *serviceBackend) Save(input Snapshot) error {
+func (b *serviceBackend) Begin(input Snapshot) error {
 	ctx := context.Background()
 	b.key = frameworksession.Key{AppName: replayApp, UserID: replayUser, SessionID: input.SessionID}
 	b.unsupported = cloneStringMap(input.Unsupported)
@@ -120,48 +122,7 @@ func (b *serviceBackend) Save(input Snapshot) error {
 	if b.unsupported == nil {
 		b.unsupported = map[string]string{}
 	}
-	sess, err := b.sessions.CreateSession(ctx, b.key, frameworksession.StateMap{})
-	if err != nil {
-		return fmt.Errorf("create session: %w", err)
-	}
-
-	for _, item := range input.Events {
-		event, err := toFrameworkEvent(item)
-		if err != nil {
-			return fmt.Errorf("encode event %d: %w", item.Seq, err)
-		}
-		if err := b.sessions.AppendEvent(ctx, sess, event); err != nil {
-			return fmt.Errorf("append event: %w", err)
-		}
-	}
-	keys := make([]string, 0, len(input.State))
-	for key := range input.State {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	for _, key := range keys {
-		// Exercise overwrite semantics before persisting the final value.
-		if err := b.sessions.UpdateSessionState(ctx, b.key, frameworksession.StateMap{key: []byte(`"stale"`)}); err != nil {
-			return fmt.Errorf("prime session state %q: %w", key, err)
-		}
-		value, err := json.Marshal(input.State[key])
-		if err != nil {
-			return fmt.Errorf("encode state %q: %w", key, err)
-		}
-		if input.State[key] == nil {
-			value = nil
-		}
-		if err := b.sessions.UpdateSessionState(ctx, b.key, frameworksession.StateMap{key: value}); err != nil {
-			return fmt.Errorf("update session state %q: %w", key, err)
-		}
-	}
-
-	userKey := frameworkmemory.UserKey{AppName: replayApp, UserID: replayUser}
 	for index, item := range input.Memories {
-		topics := stringSlice(item.Metadata["topics"])
-		if err := b.memories.AddMemory(ctx, userKey, item.Content, topics); err != nil {
-			return fmt.Errorf("add memory: %w", err)
-		}
 		prefix := fmt.Sprintf("/memories/%d", index)
 		b.unsupported[prefix+"/id"] = "memory services generate backend-specific IDs"
 		if item.Scope != "user" {
@@ -177,34 +138,6 @@ func (b *serviceBackend) Save(input Snapshot) error {
 			}
 		}
 	}
-	for _, item := range input.Tracks {
-		payload, err := json.Marshal(item)
-		if err != nil {
-			return fmt.Errorf("encode track: %w", err)
-		}
-		if err := b.tracks.AppendTrackEvent(ctx, sess, &frameworksession.TrackEvent{
-			Track: frameworksession.Track(item.Name), Payload: payload, Timestamp: time.Now().UTC(),
-		}); err != nil {
-			return fmt.Errorf("append track: %w", err)
-		}
-	}
-	for _, item := range input.Summaries {
-		fresh, err := b.sessions.GetSession(ctx, b.key)
-		if err != nil {
-			return fmt.Errorf("load session for summary: %w", err)
-		}
-		b.summarizer.set(item.Text)
-		if err := b.sessions.CreateSessionSummary(ctx, fresh, item.FilterKey, true); err != nil {
-			return fmt.Errorf("create summary %q: %w", item.FilterKey, err)
-		}
-		stored, err := b.sessions.GetSession(ctx, b.key)
-		if err != nil {
-			return fmt.Errorf("reload summary %q: %w", item.FilterKey, err)
-		}
-		if stored.Summaries[item.FilterKey] == nil {
-			return fmt.Errorf("summary %q was not persisted from %d events", item.FilterKey, len(fresh.Events))
-		}
-	}
 	for index, item := range input.Summaries {
 		prefix := fmt.Sprintf("/summaries/%d", index)
 		if item.ID != "summary:"+item.FilterKey {
@@ -212,8 +145,118 @@ func (b *serviceBackend) Save(input Snapshot) error {
 		}
 		b.unsupported[prefix+"/version"] = "summary boundary versions are assigned by the session service"
 	}
-	if len(input.Summaries) > 0 {
-		b.unsupported["/events"] = "forced session summarization compacts events at the summary boundary"
+	if _, err := b.sessions.CreateSession(ctx, b.key, frameworksession.StateMap{}); err != nil {
+		return fmt.Errorf("create session: %w", err)
+	}
+	return nil
+}
+
+func (b *serviceBackend) currentSession(ctx context.Context) (*frameworksession.Session, error) {
+	sess, err := b.sessions.GetSession(ctx, b.key)
+	if err != nil {
+		return nil, err
+	}
+	if sess == nil {
+		return nil, errors.New("session not found")
+	}
+	return sess, nil
+}
+
+func (b *serviceBackend) AppendEvent(item Event) error {
+	ctx := context.Background()
+	sess, err := b.currentSession(ctx)
+	if err != nil {
+		return fmt.Errorf("load session for event: %w", err)
+	}
+	event, err := toFrameworkEvent(item)
+	if err != nil {
+		return fmt.Errorf("encode event %d: %w", item.Seq, err)
+	}
+	if err := b.sessions.AppendEvent(ctx, sess, event); err != nil {
+		return fmt.Errorf("append event: %w", err)
+	}
+	return nil
+}
+
+func (b *serviceBackend) AppendEventIdempotent(item Event) error {
+	if item.ID == "" {
+		return errors.New("idempotent append requires a stable event ID")
+	}
+	ctx := context.Background()
+	sess, err := b.currentSession(ctx)
+	if err != nil {
+		return fmt.Errorf("load session for idempotent append: %w", err)
+	}
+	for i := range sess.Events {
+		if sess.Events[i].ID == item.ID {
+			return nil
+		}
+	}
+	return b.AppendEvent(item)
+}
+
+func (b *serviceBackend) UpdateState(key string, input any) error {
+	ctx := context.Background()
+	// Exercise overwrite semantics before persisting the final value.
+	if err := b.sessions.UpdateSessionState(ctx, b.key, frameworksession.StateMap{key: []byte(`"stale"`)}); err != nil {
+		return fmt.Errorf("prime session state %q: %w", key, err)
+	}
+	value, err := json.Marshal(input)
+	if err != nil {
+		return fmt.Errorf("encode state %q: %w", key, err)
+	}
+	if input == nil {
+		value = nil
+	}
+	if err := b.sessions.UpdateSessionState(ctx, b.key, frameworksession.StateMap{key: value}); err != nil {
+		return fmt.Errorf("update session state %q: %w", key, err)
+	}
+	return nil
+}
+
+func (b *serviceBackend) AddMemory(item Memory) error {
+	ctx := context.Background()
+	userKey := frameworkmemory.UserKey{AppName: replayApp, UserID: replayUser}
+	if err := b.memories.AddMemory(ctx, userKey, item.Content, stringSlice(item.Metadata["topics"])); err != nil {
+		return fmt.Errorf("add memory: %w", err)
+	}
+	return nil
+}
+
+func (b *serviceBackend) AppendTrack(item TrackEvent) error {
+	ctx := context.Background()
+	sess, err := b.currentSession(ctx)
+	if err != nil {
+		return fmt.Errorf("load session for track: %w", err)
+	}
+	payload, err := json.Marshal(item)
+	if err != nil {
+		return fmt.Errorf("encode track: %w", err)
+	}
+	if err := b.tracks.AppendTrackEvent(ctx, sess, &frameworksession.TrackEvent{
+		Track: frameworksession.Track(item.Name), Payload: payload, Timestamp: time.Now().UTC(),
+	}); err != nil {
+		return fmt.Errorf("append track: %w", err)
+	}
+	return nil
+}
+
+func (b *serviceBackend) CreateSummary(item Summary) error {
+	ctx := context.Background()
+	fresh, err := b.currentSession(ctx)
+	if err != nil {
+		return fmt.Errorf("load session for summary: %w", err)
+	}
+	b.summarizer.set(item.Text)
+	if err := b.sessions.CreateSessionSummary(ctx, fresh, item.FilterKey, true); err != nil {
+		return fmt.Errorf("create summary %q: %w", item.FilterKey, err)
+	}
+	stored, err := b.currentSession(ctx)
+	if err != nil {
+		return fmt.Errorf("reload summary %q: %w", item.FilterKey, err)
+	}
+	if stored.Summaries[item.FilterKey] == nil {
+		return fmt.Errorf("summary %q was not persisted from %d events", item.FilterKey, len(fresh.Events))
 	}
 	return nil
 }
@@ -247,7 +290,7 @@ func (b *serviceBackend) Load() (Snapshot, error) {
 		}
 		out.Events = append(out.Events, event)
 	}
-	entries, err := b.memories.ReadMemories(ctx, frameworkmemory.UserKey{AppName: replayApp, UserID: replayUser}, 100)
+	entries, err := b.memories.ReadMemories(ctx, frameworkmemory.UserKey{AppName: replayApp, UserID: replayUser}, 0)
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("read memories: %w", err)
 	}
@@ -291,23 +334,34 @@ func (b *serviceBackend) Close() error {
 
 func toFrameworkEvent(input Event) (*frameworkevent.Event, error) {
 	message := model.Message{Role: model.Role(input.Role), Content: input.Content, ToolName: input.Tool}
+	generatedToolCallID := false
 	if input.Tool != "" && input.Role != string(model.RoleTool) {
 		arguments, err := json.Marshal(input.Args)
 		if err != nil {
 			return nil, fmt.Errorf("encode tool arguments: %w", err)
 		}
+		toolCallID := input.ToolCallID
+		if toolCallID == "" {
+			toolCallID = fmt.Sprintf("generated-call-%d", input.Seq)
+			generatedToolCallID = true
+		}
 		message.ToolCalls = []model.ToolCall{{
-			Type: "function", ID: fmt.Sprintf("call-%d", input.Seq),
+			Type: "function", ID: toolCallID,
 			Function: model.FunctionDefinitionParam{Name: input.Tool, Arguments: arguments},
 		}}
 	}
+	generatedToolResultID := false
 	if input.Response != nil {
 		encoded, err := json.Marshal(input.Response)
 		if err != nil {
 			return nil, fmt.Errorf("encode tool response: %w", err)
 		}
 		message.Content = string(encoded)
-		message.ToolID = fmt.Sprintf("call-%d", input.Seq-1)
+		message.ToolID = input.ToolResultID
+		if message.ToolID == "" {
+			message.ToolID = fmt.Sprintf("generated-result-%d", input.Seq)
+			generatedToolResultID = true
+		}
 	}
 	response := &model.Response{
 		Choices: []model.Choice{{Message: message}}, Done: true,
@@ -329,7 +383,7 @@ func toFrameworkEvent(input Event) (*frameworkevent.Event, error) {
 		return nil, fmt.Errorf("encode state delta: %w", err)
 	}
 	e.StateDelta = stateDelta
-	e.Extensions = make(map[string]json.RawMessage, len(input.Extensions)+1)
+	e.Extensions = make(map[string]json.RawMessage, len(input.Extensions)+4)
 	for key, value := range input.Extensions {
 		raw, err := json.Marshal(value)
 		if err != nil {
@@ -342,11 +396,23 @@ func toFrameworkEvent(input Event) (*frameworkevent.Event, error) {
 		return nil, fmt.Errorf("encode sequence: %w", err)
 	}
 	e.Extensions[seqKey] = sequence
+	if input.ID == "" {
+		e.Extensions[generatedEventIDKey] = json.RawMessage("true")
+	}
+	if generatedToolCallID {
+		e.Extensions[generatedToolCallIDKey] = json.RawMessage("true")
+	}
+	if generatedToolResultID {
+		e.Extensions[generatedToolResultIDKey] = json.RawMessage("true")
+	}
 	return e, nil
 }
 
 func fromFrameworkEvent(input *frameworkevent.Event, fallbackSeq int) (Event, error) {
 	out := Event{ID: input.ID, Seq: fallbackSeq, Author: input.Author, Branch: input.Branch, Tag: input.Tag, FilterKey: input.FilterKey, Timestamp: input.Timestamp.UTC().Format(time.RFC3339Nano)}
+	if _, generated := input.Extensions[generatedEventIDKey]; generated {
+		out.ID = ""
+	}
 	if raw, ok := input.Extensions[seqKey]; ok {
 		if err := json.Unmarshal(raw, &out.Seq); err != nil {
 			return Event{}, fmt.Errorf("decode sequence: %w", err)
@@ -357,11 +423,19 @@ func fromFrameworkEvent(input *frameworkevent.Event, fallbackSeq int) (Event, er
 		out.Role, out.Content, out.Tool = string(message.Role), message.Content, message.ToolName
 		if len(message.ToolCalls) > 0 {
 			out.Tool = message.ToolCalls[0].Function.Name
+			out.ToolCallID = message.ToolCalls[0].ID
+			if _, generated := input.Extensions[generatedToolCallIDKey]; generated {
+				out.ToolCallID = ""
+			}
 			if err := json.Unmarshal(message.ToolCalls[0].Function.Arguments, &out.Args); err != nil {
 				return Event{}, fmt.Errorf("decode tool arguments: %w", err)
 			}
 		}
 		if message.Role == model.RoleTool && message.Content != "" {
+			out.ToolResultID = message.ToolID
+			if _, generated := input.Extensions[generatedToolResultIDKey]; generated {
+				out.ToolResultID = ""
+			}
 			if err := json.Unmarshal([]byte(message.Content), &out.Response); err != nil {
 				return Event{}, fmt.Errorf("decode tool response: %w", err)
 			}
@@ -375,7 +449,7 @@ func fromFrameworkEvent(input *frameworkevent.Event, fallbackSeq int) (Event, er
 	out.StateDelta = stateDelta
 	out.Extensions = make(map[string]any, len(input.Extensions))
 	for key, raw := range input.Extensions {
-		if key == seqKey {
+		if key == seqKey || key == generatedEventIDKey || key == generatedToolCallIDKey || key == generatedToolResultIDKey {
 			continue
 		}
 		var value any
