@@ -448,8 +448,14 @@ func (r *runner) run(ctx context.Context, cancel context.CancelCauseFunc, key se
 	}
 	threadID := input.threadID
 	runID := input.runID
+	var closeDoneOnce sync.Once
+	closeDone := func() {
+		closeDoneOnce.Do(func() {
+			close(input.done)
+		})
+	}
 	defer func() {
-		close(input.done)
+		closeDone()
 		cancel(nil)
 		if input.enableTrack {
 			if err := r.flushTrack(ctx, input.key); err != nil {
@@ -500,11 +506,15 @@ func (r *runner) run(ctx context.Context, cancel context.CancelCauseFunc, key se
 	ctx = newRunContext(ctx, run)
 	hookDone, hookRemaining := r.startRunHooks(ctx, run)
 	agentRun := make(chan runAgentResult, 1)
+	agentRunDone := make(chan struct{})
 	go func() {
+		defer close(agentRunDone)
 		ch, err := r.runner.Run(ctx, input.userID, threadID, *input.messages.inputMessage, input.runOption...)
 		agentRun <- runAgentResult{events: ch, err: err}
 	}()
 	r.runEventLoop(ctx, events, input, agentRun, hookEvents, hookDone, hookRemaining)
+	closeDone()
+	<-agentRunDone
 }
 
 func (r *runner) runEventLoop(
@@ -541,9 +551,12 @@ func (r *runner) runEventLoop(
 					runID,
 					result.err,
 				)
-				r.emitEvent(ctx, events, aguievents.NewRunErrorEvent(fmt.Sprintf("run agent: %v", result.err),
-					aguievents.WithRunID(runID)), input)
-				return
+				pendingTerminal = r.afterTranslateEvent(ctx, aguievents.NewRunErrorEvent(
+					fmt.Sprintf("run agent: %v", result.err),
+					aguievents.WithRunID(runID),
+				), input)
+				agentDone = true
+				continue
 			}
 			if result.events == nil {
 				agentDone = true
@@ -590,7 +603,7 @@ func (r *runner) runEventLoop(
 
 func (r *runner) emitPendingTerminal(ctx context.Context, events chan<- aguievents.Event, input *runInput, terminal aguievents.Event) {
 	if terminal != nil {
-		r.emitEvent(ctx, events, terminal, input)
+		r.writeEvent(ctx, events, terminal, input)
 	}
 }
 
@@ -636,10 +649,11 @@ func (r *runner) emitAgentEventWithDeferredTerminal(
 		return nil, false
 	}
 	for _, aguiEvent := range aguiEvents {
+		aguiEvent = r.afterTranslateEvent(ctx, aguiEvent, input)
 		if terminal, _ := terminalRunSignal(aguiEvent); terminal {
 			return aguiEvent, true
 		}
-		if !r.emitEvent(ctx, events, aguiEvent, input) {
+		if !r.writeEvent(ctx, events, aguiEvent, input) {
 			return nil, false
 		}
 	}
@@ -1003,7 +1017,12 @@ func (r *runner) emitEvent(ctx context.Context, events chan<- aguievents.Event, 
 	if input != nil && input.terminalEmitted {
 		return false
 	}
-	event, err := r.handleAfterTranslate(ctx, event)
+	event = r.afterTranslateEvent(ctx, event, input)
+	return r.writeEvent(ctx, events, event, input)
+}
+
+func (r *runner) afterTranslateEvent(ctx context.Context, event aguievents.Event, input *runInput) aguievents.Event {
+	translatedEvent, err := r.handleAfterTranslate(ctx, event)
 	if err != nil {
 		log.ErrorfContext(
 			ctx,
@@ -1014,20 +1033,10 @@ func (r *runner) emitEvent(ctx context.Context, events chan<- aguievents.Event, 
 			input.runID,
 			err,
 		)
-		runErr := aguievents.NewRunErrorEvent(fmt.Sprintf("after translate callback: %v", err),
+		return aguievents.NewRunErrorEvent(fmt.Sprintf("after translate callback: %v", err),
 			aguievents.WithRunID(input.runID))
-		select {
-		case events <- runErr:
-			if input != nil {
-				input.terminalEmitted = true
-			}
-		case <-ctx.Done():
-			log.ErrorfContext(ctx, "agui emit event: context done, threadID: %s, runID: %s, err: %v",
-				input.threadID, input.runID, ctx.Err())
-		}
-		return false
 	}
-	return r.writeEvent(ctx, events, event, input)
+	return translatedEvent
 }
 
 func (r *runner) writeEvent(ctx context.Context, events chan<- aguievents.Event, event aguievents.Event,

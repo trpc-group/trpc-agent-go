@@ -78,12 +78,13 @@ func (r *Run) Emit(ctx context.Context, event aguievents.Event) error {
 	if err := validateRunHookEvent(event); err != nil {
 		return err
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	req := hookEvent{event: event, reply: make(chan error, 1)}
 	select {
 	case <-r.done:
 		return errRunClosed
-	case <-ctx.Done():
-		return ctx.Err()
 	case r.emit <- req:
 	}
 	select {
@@ -94,8 +95,6 @@ func (r *Run) Emit(ctx context.Context, event aguievents.Event) error {
 	select {
 	case err := <-req.reply:
 		return err
-	case <-ctx.Done():
-		return ctx.Err()
 	case <-r.done:
 		select {
 		case err := <-req.reply:
