@@ -120,6 +120,8 @@ func ResolveDeclaration(t tool.Tool) tool.Tool {
 		return nil
 	case declarationWrapper:
 		return ResolveDeclaration(current.originalTool())
+	case toolUnwrapper:
+		return ResolveDeclaration(current.Unwrap())
 	default:
 		return t
 	}
@@ -134,6 +136,8 @@ func ResolveSemantic(t tool.Tool) tool.Tool {
 		return ResolveSemantic(current.originalTool())
 	case *NamedTool:
 		return ResolveSemantic(current.Original())
+	case toolUnwrapper:
+		return ResolveSemantic(current.Unwrap())
 	default:
 		return t
 	}

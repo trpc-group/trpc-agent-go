@@ -9941,7 +9941,7 @@ func TestBuildDefaultToolMessage_NoHTMLEscape(t *testing.T) {
 		"output":    "    <-done\n    for i := 0; i < 10; i++ {\n        fmt.Println(i)\n    }",
 		"status":    "exited",
 	}
-	msg, err := buildDefaultToolMessage("call-123", result)
+	msg, err := buildDefaultToolMessage(context.Background(), "call-123", result, nil)
 	require.NoError(t, err)
 	assert.Equal(t, "call-123", msg.ToolID)
 	assert.Contains(t, msg.Content, "<-done",
@@ -9976,7 +9976,7 @@ func TestBuildDefaultToolMessage_BackwardCompat(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			msg, err := buildDefaultToolMessage("id-1", tt.result)
+			msg, err := buildDefaultToolMessage(context.Background(), "id-1", tt.result, nil)
 			require.NoError(t, err)
 			// Compare with what json.Marshal would produce (they should
 			// be identical for inputs without < > &).

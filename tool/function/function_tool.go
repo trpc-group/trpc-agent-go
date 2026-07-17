@@ -22,6 +22,7 @@ import (
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/resultcodec"
 )
 
 // FunctionTool implements the CallableTool interface for executing functions with arguments.
@@ -38,6 +39,9 @@ type FunctionTool[I, O any] struct {
 	// skipSummarization indicates whether the outer flow should skip
 	// the post-tool summarization step after this tool returns.
 	skipSummarization bool
+	// resultCodec optionally encodes the tool result into model-visible text.
+	// When nil, the framework keeps its default JSON behavior.
+	resultCodec resultcodec.Codec
 }
 
 // Option is a function that configures a FunctionTool.
@@ -52,6 +56,7 @@ type functionToolOptions struct {
 	skipSummarization bool
 	inputSchema       *tool.Schema
 	outputSchema      *tool.Schema
+	resultCodec       resultcodec.Codec
 }
 
 // WithName sets the name of the function tool.
@@ -109,6 +114,17 @@ func WithOutputSchema(schema *tool.Schema) Option {
 	}
 }
 
+// WithResultCodec binds a result codec to the function tool. The codec encodes
+// the tool's final result into the model-visible tool result message content
+// (for example resultcodec.XML()). When no codec is configured the framework
+// keeps its default JSON behavior. Repeated configuration follows the existing
+// last-writer-wins option semantics.
+func WithResultCodec(codec resultcodec.Codec) Option {
+	return func(opts *functionToolOptions) {
+		opts.resultCodec = codec
+	}
+}
+
 // NewFunctionTool creates and returns a new instance of FunctionTool with the specified
 // function implementation and optional configuration.
 // Parameters:
@@ -162,6 +178,7 @@ func NewFunctionTool[I, O any](fn func(context.Context, I) (O, error), opts ...O
 		inputSchema:       iSchema,
 		outputSchema:      oSchema,
 		skipSummarization: options.skipSummarization,
+		resultCodec:       options.resultCodec,
 	}
 }
 
@@ -193,6 +210,12 @@ func (ft *FunctionTool[I, O]) LongRunning() bool {
 // outer-agent summarization after tool.response.
 func (ft *FunctionTool[I, O]) SkipSummarization() bool {
 	return ft.skipSummarization
+}
+
+// ResultCodec returns the codec bound to this tool, or nil when none is
+// configured. The framework uses it to encode the model-visible tool result.
+func (ft *FunctionTool[I, O]) ResultCodec() resultcodec.Codec {
+	return ft.resultCodec
 }
 
 // Declaration returns the tool's declaration information.
@@ -230,6 +253,9 @@ type StreamableFunctionTool[I, O any] struct {
 	unmarshaler  unmarshaler
 	// skipSummarization has the same meaning as in FunctionTool.
 	skipSummarization bool
+	// resultCodec optionally encodes the final tool result into model-visible
+	// text. Intermediate stream events are unaffected.
+	resultCodec resultcodec.Codec
 }
 
 // NewStreamableFunctionTool creates a new StreamableFunctionTool instance.
@@ -280,6 +306,7 @@ func NewStreamableFunctionTool[I, O any](fn func(context.Context, I) (*tool.Stre
 		inputSchema:       iSchema,
 		outputSchema:      oSchema,
 		skipSummarization: options.skipSummarization,
+		resultCodec:       options.resultCodec,
 	}
 }
 
@@ -337,6 +364,12 @@ func (t *StreamableFunctionTool[I, O]) LongRunning() bool {
 // outer-agent summarization after tool.response.
 func (t *StreamableFunctionTool[I, O]) SkipSummarization() bool {
 	return t.skipSummarization
+}
+
+// ResultCodec returns the codec bound to this tool, or nil when none is
+// configured. Only the final streamable result is encoded with it.
+func (t *StreamableFunctionTool[I, O]) ResultCodec() resultcodec.Codec {
+	return t.resultCodec
 }
 
 type unmarshaler interface {

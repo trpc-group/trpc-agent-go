@@ -39,6 +39,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
+	"trpc.group/trpc-go/trpc-agent-go/tool/resultcodec"
 	"trpc.group/trpc-go/trpc-agent-go/tool/transfer"
 )
 
@@ -51,6 +52,9 @@ const (
 	ErrorStreamableToolExecution = "Error: streamable tool execution failed"
 	// ErrorMarshalResult is the error message for failed to marshal result.
 	ErrorMarshalResult = "Error: failed to marshal result"
+	// ErrorEncodeResult is the error message for a result codec failing to
+	// encode the tool result into model-visible text.
+	ErrorEncodeResult = "Error: failed to encode tool result"
 )
 
 const (
@@ -1852,17 +1856,17 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 			return ctx, nil, modifiedArgs, true, skipSummarization, nil
 		}
 	}
+	codec := itool.ResolveResultCodec(tl)
 	if suppressDefaultToolMessage {
-		defaultMsg, err := buildDefaultToolMessage(toolCall.ID, result)
+		defaultMsg, err := buildDefaultToolMessage(ctx, toolCall.ID, result, codec)
 		if err != nil {
 			log.WarnfContext(
 				ctx,
-				"Failed to marshal tool result for %s: %v",
+				"Failed to encode tool result for %s: %v",
 				toolCall.Function.Name,
 				err,
 			)
-			return ctx, nil, modifiedArgs, true, skipSummarization,
-				fmt.Errorf("%s: %w", ErrorMarshalResult, err)
+			return ctx, nil, modifiedArgs, true, skipSummarization, err
 		}
 		defaultMsg.ToolName = toolCall.Function.Name
 		ctx = markSyntheticStateOnlyToolChoice(ctx)
@@ -1882,19 +1886,18 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 			skipSummarization, nil
 	}
 
-	defaultMsg, err := buildDefaultToolMessage(toolCall.ID, result)
+	defaultMsg, err := buildDefaultToolMessage(ctx, toolCall.ID, result, codec)
 	if err != nil {
-		// Marshal failures (for example, NaN in floats) do not
+		// Marshal/encode failures (for example, NaN in floats) do not
 		// affect the overall flow. Downgrade to warning to avoid
 		// noisy alerts while still surfacing the issue.
 		log.WarnfContext(
 			ctx,
-			"Failed to marshal tool result for %s: %v",
+			"Failed to encode tool result for %s: %v",
 			toolCall.Function.Name,
 			err,
 		)
-		return ctx, nil, modifiedArgs, true, skipSummarization,
-			fmt.Errorf("%s: %w", ErrorMarshalResult, err)
+		return ctx, nil, modifiedArgs, true, skipSummarization, err
 	}
 	defaultMsg.ToolName = toolCall.Function.Name
 
@@ -2808,22 +2811,56 @@ func extractResultError(result any) bool {
 }
 
 func buildDefaultToolMessage(
+	ctx context.Context,
 	toolCallID string,
 	result any,
+	codec resultcodec.Codec,
 ) (model.Message, error) {
-	// Preserve legacy tool message serialization for default fallback content.
-	// Use marshalJSONNoHTMLEscape so that <, >, & in tool output (e.g. Go source
-	// code containing "<-done") are preserved verbatim instead of being escaped
-	// to \u003c, \u003e, \u0026 which confuses LLMs reading the content.
-	resultBytes, err := marshalJSONNoHTMLEscape(result)
-	if err != nil {
-		return model.Message{}, err
+	var content string
+	if codec == nil {
+		// Preserve legacy tool message serialization for default fallback
+		// content. Use marshalJSONNoHTMLEscape so that <, >, & in tool output
+		// (e.g. Go source code containing "<-done") are preserved verbatim
+		// instead of being escaped to \u003c, \u003e, \u0026 which confuses
+		// LLMs reading the content.
+		resultBytes, err := marshalJSONNoHTMLEscape(result)
+		if err != nil {
+			return model.Message{}, fmt.Errorf("%s: %w", ErrorMarshalResult, err)
+		}
+		content = string(resultBytes)
+	} else {
+		encoded, err := encodeWithRecover(ctx, codec, result)
+		if err != nil {
+			return model.Message{}, fmt.Errorf("%s: %w", ErrorEncodeResult, err)
+		}
+		content = encoded
 	}
 	return model.Message{
 		Role:    model.RoleTool,
-		Content: string(resultBytes),
+		Content: content,
 		ToolID:  toolCallID,
 	}, nil
+}
+
+// encodeWithRecover runs the codec under panic protection so a misbehaving
+// custom encoder becomes an observable error instead of crashing the flow.
+// Built-in codecs do not panic; this is defense-in-depth.
+func encodeWithRecover(
+	ctx context.Context,
+	codec resultcodec.Codec,
+	result any,
+) (content string, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.ErrorfContext(
+				ctx,
+				log.PanicPrefix+" Tool result codec panic: %v",
+				r,
+			)
+			err = fmt.Errorf("tool result codec panic: %v", r)
+		}
+	}()
+	return codec.Encode(ctx, result)
 }
 
 // marshalJSONNoHTMLEscape serializes v to JSON without escaping <, >, & characters.

@@ -1,0 +1,124 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+
+package resultcodec
+
+import (
+	"context"
+	"testing"
+
+	"trpc.group/trpc-go/trpc-agent-go/tool"
+)
+
+type mockCallable struct {
+	decl        *tool.Declaration
+	longRunning bool
+}
+
+func (m *mockCallable) Declaration() *tool.Declaration { return m.decl }
+func (m *mockCallable) Call(_ context.Context, _ []byte) (any, error) {
+	return "called", nil
+}
+func (m *mockCallable) LongRunning() bool { return m.longRunning }
+
+type mockStreamable struct {
+	decl        *tool.Declaration
+	streamInner bool
+}
+
+func (m *mockStreamable) Declaration() *tool.Declaration { return m.decl }
+func (m *mockStreamable) Call(_ context.Context, _ []byte) (any, error) {
+	return "called", nil
+}
+func (m *mockStreamable) StreamableCall(
+	_ context.Context,
+	_ []byte,
+) (*tool.StreamReader, error) {
+	return nil, nil
+}
+func (m *mockStreamable) StreamInner() bool { return m.streamInner }
+
+func TestWrap_NilTool(t *testing.T) {
+	if got := Wrap(nil, JSON()); got != nil {
+		t.Fatalf("Wrap(nil) should return nil, got %v", got)
+	}
+}
+
+func TestWrap_CallableOnly(t *testing.T) {
+	base := &mockCallable{decl: &tool.Declaration{Name: "c"}}
+	wrapped := Wrap(base, XML())
+
+	if _, ok := wrapped.(tool.CallableTool); !ok {
+		t.Fatal("wrapped tool should be callable")
+	}
+	if _, ok := wrapped.(tool.StreamableTool); ok {
+		t.Fatal("callable-only tool must not become streamable")
+	}
+	if wrapped.Declaration().Name != "c" {
+		t.Fatalf("declaration should delegate, got %q", wrapped.Declaration().Name)
+	}
+}
+
+func TestWrap_ExposesCodecAndUnwrap(t *testing.T) {
+	base := &mockCallable{decl: &tool.Declaration{Name: "c"}}
+	codec := XML()
+	wrapped := Wrap(base, codec)
+
+	provider, ok := wrapped.(interface{ ResultCodec() Codec })
+	if !ok {
+		t.Fatal("wrapped tool should expose ResultCodec()")
+	}
+	if provider.ResultCodec() != codec {
+		t.Fatal("ResultCodec() should return the bound codec")
+	}
+	unwrapper, ok := wrapped.(interface{ Unwrap() tool.Tool })
+	if !ok {
+		t.Fatal("wrapped tool should expose Unwrap()")
+	}
+	if unwrapper.Unwrap() != base {
+		t.Fatal("Unwrap() should return the base tool")
+	}
+}
+
+func TestWrap_StreamablePreserved(t *testing.T) {
+	base := &mockStreamable{decl: &tool.Declaration{Name: "s"}, streamInner: true}
+	wrapped := Wrap(base, JSON())
+	if _, ok := wrapped.(tool.StreamableTool); !ok {
+		t.Fatal("streamable capability should be preserved")
+	}
+}
+
+func TestWrap_StreamInnerOptOutDropsStreamable(t *testing.T) {
+	// A tool that implements StreamableTool but opts out via StreamInner()==false
+	// must not advertise streamable after wrapping, matching framework detection.
+	base := &mockStreamable{decl: &tool.Declaration{Name: "s"}, streamInner: false}
+	wrapped := Wrap(base, JSON())
+	if _, ok := wrapped.(tool.StreamableTool); ok {
+		t.Fatal("StreamInner opt-out should drop the streamable wrapper")
+	}
+	if _, ok := wrapped.(tool.CallableTool); !ok {
+		t.Fatal("callable capability should remain")
+	}
+}
+
+func TestWrap_CallDelegates(t *testing.T) {
+	base := &mockCallable{decl: &tool.Declaration{Name: "c"}}
+	wrapped := Wrap(base, JSON())
+	callable, ok := wrapped.(tool.CallableTool)
+	if !ok {
+		t.Fatal("expected callable")
+	}
+	got, err := callable.Call(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "called" {
+		t.Fatalf("Call should delegate, got %v", got)
+	}
+}
