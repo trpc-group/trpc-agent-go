@@ -4120,6 +4120,9 @@ func modelCallBudgetFinalRequestFromOptions(
 	if strings.TrimSpace(opts.ModelMode) != modeOpenAI {
 		return cfg
 	}
+	if opts.DeadlineFinalizationWindow <= 0 {
+		return cfg
+	}
 	variant, err := parseOpenAIVariant(opts.OpenAIVariant, opts.OpenAIBaseURL)
 	if err != nil {
 		return cfg

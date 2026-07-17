@@ -19,6 +19,7 @@ import (
 	"unicode/utf8"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/internal/flow/llmflow"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/gateway"
 )
@@ -357,7 +358,29 @@ func modelCallBudgetTimeoutResponse(
 	if _, ok := parentCtx.Deadline(); !ok {
 		return false
 	}
-	return isModelTimeoutResponse(resp)
+	return modelCallBudgetDeadlineSoon(parentCtx, budget.deadlineWindow) &&
+		isModelTimeoutResponse(resp)
+}
+
+func modelCallBudgetPrepareFinalRetry(
+	ctx context.Context,
+	budget *modelCallBudget,
+	req *model.Request,
+	discarded *model.Response,
+) (context.Context, *model.Request, *model.Response, error) {
+	var err error
+	if discarded != nil {
+		ctx, err = llmflow.RunModelRetryAfterCallbacks(ctx, req, discarded)
+		if err != nil {
+			return ctx, nil, nil, err
+		}
+	}
+	finalReq := budget.applyFinalRequest(req, true)
+	ctx, customResp, err := llmflow.RunModelRetryBeforeCallbacks(ctx, finalReq)
+	if err != nil {
+		return ctx, nil, nil, err
+	}
+	return ctx, finalReq, customResp, nil
 }
 
 func newModelCallBudgetModel(m model.Model) model.Model {
@@ -443,8 +466,18 @@ func (m *modelCallBudgetModel) GenerateContent(
 			); reserveErr != nil {
 				return nil, reserveErr
 			}
-			req = budget.applyFinalRequest(req, true)
-			return m.model.GenerateContent(withoutModelCallBudget(ctx), req)
+			retryCtx, finalReq, customResp, retryErr :=
+				modelCallBudgetPrepareFinalRetry(ctx, budget, req, nil)
+			if retryErr != nil {
+				return nil, retryErr
+			}
+			if customResp != nil {
+				return modelCallBudgetResponseChannel(customResp), nil
+			}
+			return m.model.GenerateContent(
+				withoutModelCallBudget(retryCtx),
+				finalReq,
+			)
 		}
 		return nil, err
 	}
@@ -453,7 +486,7 @@ func (m *modelCallBudgetModel) GenerateContent(
 		defer close(out)
 		defer cancel()
 		timedOut := false
-		var buffered []*model.Response
+		var discarded *model.Response
 		for resp := range ch {
 			if modelCallBudgetTimeoutResponse(
 				resp,
@@ -462,9 +495,12 @@ func (m *modelCallBudgetModel) GenerateContent(
 				budget,
 			) {
 				timedOut = true
+				discarded = resp
 				continue
 			}
-			buffered = append(buffered, resp)
+			if !modelCallBudgetSendResponse(ctx, out, resp) {
+				return
+			}
 		}
 		if modelCallBudgetPrefinalTimedOut(prefinalCtx, ctx) {
 			timedOut = true
@@ -473,11 +509,6 @@ func (m *modelCallBudgetModel) GenerateContent(
 			return
 		}
 		if !timedOut {
-			for _, resp := range buffered {
-				if !modelCallBudgetSendResponse(ctx, out, resp) {
-					return
-				}
-			}
 			return
 		}
 		if reserveErr := modelCallBudgetReserveFinalCall(
@@ -491,10 +522,23 @@ func (m *modelCallBudgetModel) GenerateContent(
 			)
 			return
 		}
-		req = budget.applyFinalRequest(req, true)
+		retryCtx, finalReq, customResp, retryErr :=
+			modelCallBudgetPrepareFinalRetry(ctx, budget, req, discarded)
+		if retryErr != nil {
+			modelCallBudgetSendResponse(
+				ctx,
+				out,
+				modelCallBudgetErrorResponse(retryErr),
+			)
+			return
+		}
+		if customResp != nil {
+			modelCallBudgetSendResponse(ctx, out, customResp)
+			return
+		}
 		finalCh, finalErr := m.model.GenerateContent(
-			withoutModelCallBudget(ctx),
-			req,
+			withoutModelCallBudget(retryCtx),
+			finalReq,
 		)
 		if finalErr != nil {
 			modelCallBudgetSendResponse(
@@ -577,15 +621,26 @@ func (m *modelCallBudgetIterModel) GenerateContentIter(
 			); reserveErr != nil {
 				return nil, reserveErr
 			}
-			req = budget.applyFinalRequest(req, true)
-			return m.iter.GenerateContentIter(withoutModelCallBudget(ctx), req)
+			retryCtx, finalReq, customResp, retryErr :=
+				modelCallBudgetPrepareFinalRetry(ctx, budget, req, nil)
+			if retryErr != nil {
+				return nil, retryErr
+			}
+			if customResp != nil {
+				return modelCallBudgetResponseSeq(customResp), nil
+			}
+			return m.iter.GenerateContentIter(
+				withoutModelCallBudget(retryCtx),
+				finalReq,
+			)
 		}
 		return nil, err
 	}
 	return func(yield func(*model.Response) bool) {
 		defer cancel()
 		timedOut := false
-		var buffered []*model.Response
+		stopped := false
+		var discarded *model.Response
 		seq(func(resp *model.Response) bool {
 			if modelCallBudgetTimeoutResponse(
 				resp,
@@ -594,11 +649,18 @@ func (m *modelCallBudgetIterModel) GenerateContentIter(
 				budget,
 			) {
 				timedOut = true
+				discarded = resp
 				return true
 			}
-			buffered = append(buffered, resp)
+			if !yield(resp) {
+				stopped = true
+				return false
+			}
 			return true
 		})
+		if stopped {
+			return
+		}
 		if modelCallBudgetPrefinalTimedOut(prefinalCtx, ctx) {
 			timedOut = true
 		}
@@ -606,11 +668,6 @@ func (m *modelCallBudgetIterModel) GenerateContentIter(
 			return
 		}
 		if !timedOut {
-			for _, resp := range buffered {
-				if !yield(resp) {
-					return
-				}
-			}
 			return
 		}
 		if reserveErr := modelCallBudgetReserveFinalCall(
@@ -620,10 +677,19 @@ func (m *modelCallBudgetIterModel) GenerateContentIter(
 			yield(modelCallBudgetErrorResponse(reserveErr))
 			return
 		}
-		req = budget.applyFinalRequest(req, true)
+		retryCtx, finalReq, customResp, retryErr :=
+			modelCallBudgetPrepareFinalRetry(ctx, budget, req, discarded)
+		if retryErr != nil {
+			yield(modelCallBudgetErrorResponse(retryErr))
+			return
+		}
+		if customResp != nil {
+			yield(customResp)
+			return
+		}
 		finalSeq, finalErr := m.iter.GenerateContentIter(
-			withoutModelCallBudget(ctx),
-			req,
+			withoutModelCallBudget(retryCtx),
+			finalReq,
 		)
 		if finalErr != nil {
 			yield(modelCallBudgetErrorResponse(finalErr))
@@ -631,6 +697,21 @@ func (m *modelCallBudgetIterModel) GenerateContentIter(
 		}
 		finalSeq(yield)
 	}, nil
+}
+
+func modelCallBudgetResponseChannel(
+	resp *model.Response,
+) <-chan *model.Response {
+	ch := make(chan *model.Response, 1)
+	ch <- resp
+	close(ch)
+	return ch
+}
+
+func modelCallBudgetResponseSeq(resp *model.Response) model.Seq[*model.Response] {
+	return func(yield func(*model.Response) bool) {
+		yield(resp)
+	}
 }
 
 func modelCallBudgetSendResponse(
@@ -747,9 +828,7 @@ func finalModelCallRequest(
 	}
 	clone.Messages = finalModelCallMessages(req.Messages, config)
 	clone.Messages = finalModelCallTrimMessages(clone.Messages, config)
-	clone.Messages = append(clone.Messages, model.NewUserMessage(
-		finalModelCallNotice,
-	))
+	clone.Messages = append(clone.Messages, finalModelCallNoticeMessage(config))
 	return &clone
 }
 
@@ -817,7 +896,7 @@ func finalModelCallTrimMessages(
 	counter := finalModelCallTokenCounter(config)
 	budget := finalModelCallTrimBudget(ctx, counter, maxInputTokens)
 	if budget <= 0 {
-		return messages
+		return nil
 	}
 	fallback := finalModelCallTailEvidenceMessages(
 		ctx,
@@ -925,18 +1004,59 @@ func finalModelCallTrimBudget(
 	if maxInputTokens <= 0 {
 		return maxInputTokens
 	}
-	noticeTokens, err := counter.CountTokens(
+	notice := finalModelCallNoticeMessageWithCounter(
 		ctx,
-		model.NewUserMessage(finalModelCallNotice),
+		counter,
+		maxInputTokens,
 	)
+	noticeTokens, err := counter.CountTokens(ctx, notice)
 	if err != nil || noticeTokens <= 0 {
 		return maxInputTokens
 	}
 	budget := maxInputTokens - noticeTokens
 	if budget <= 0 {
-		return maxInputTokens
+		return 0
 	}
 	return budget
+}
+
+func finalModelCallNoticeMessage(
+	config modelCallBudgetFinalRequestConfig,
+) model.Message {
+	return finalModelCallNoticeMessageWithCounter(
+		context.Background(),
+		finalModelCallTokenCounter(config),
+		config.MaxInputTokens,
+	)
+}
+
+func finalModelCallNoticeMessageWithCounter(
+	ctx context.Context,
+	counter model.TokenCounter,
+	maxTokens int,
+) model.Message {
+	full := model.NewUserMessage(finalModelCallNotice)
+	if maxTokens <= 0 {
+		return full
+	}
+	if tokens, err := counter.CountTokens(ctx, full); err == nil &&
+		tokens <= maxTokens {
+		return full
+	}
+	runes := []rune(finalModelCallNotice)
+	low, high, best := 0, len(runes), 0
+	for low <= high {
+		mid := low + (high-low)/2
+		candidate := model.NewUserMessage(string(runes[:mid]))
+		tokens, err := counter.CountTokens(ctx, candidate)
+		if err != nil || tokens > maxTokens {
+			high = mid - 1
+			continue
+		}
+		best = mid
+		low = mid + 1
+	}
+	return model.NewUserMessage(string(runes[:best]))
 }
 
 func finalModelCallFits(

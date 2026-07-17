@@ -586,19 +586,18 @@ func TestFinalModelCallRequest_TrimsContextWhenConfigured(t *testing.T) {
 	)
 
 	require.Nil(t, got.Tools)
-	require.Less(t, len(got.Messages), len(req.Messages)+1)
-	require.Equal(t, model.RoleSystem, got.Messages[0].Role)
-	require.Equal(t, model.RoleUser, got.Messages[len(got.Messages)-1].Role)
-	require.Contains(
-		t,
-		got.Messages[len(got.Messages)-1].Content,
-		"final allowed model call",
+	require.Len(t, got.Messages, 1)
+	require.Equal(t, model.RoleUser, got.Messages[0].Role)
+	require.Contains(t, got.Messages[0].Content, "OpenClaw Budget Notice")
+	counter := finalModelCallTokenCounter(modelCallBudgetFinalRequestConfig{})
+	tokens, err := counter.CountTokensRange(
+		context.Background(),
+		got.Messages,
+		0,
+		len(got.Messages),
 	)
-	content := budgetTestMessageText(got.Messages)
-	require.Contains(t, content, "latest question")
-	require.Contains(t, content, "latest evidence")
-	require.NotContains(t, content, "old question")
-	require.NotContains(t, content, "old answer")
+	require.NoError(t, err)
+	require.LessOrEqual(t, tokens, 20)
 }
 
 func TestFinalModelCallRequest_UsesConfiguredTokenEstimate(t *testing.T) {
@@ -619,12 +618,12 @@ func TestFinalModelCallRequest_UsesConfiguredTokenEstimate(t *testing.T) {
 
 	relaxed := finalModelCallRequest(
 		req,
-		modelCallBudgetFinalRequestConfig{MaxInputTokens: 80},
+		modelCallBudgetFinalRequestConfig{MaxInputTokens: 600},
 	)
 	strict := finalModelCallRequest(
 		req,
 		modelCallBudgetFinalRequestConfig{
-			MaxInputTokens:      80,
+			MaxInputTokens:      600,
 			ApproxRunesPerToken: 1,
 		},
 	)
@@ -964,8 +963,10 @@ func TestModelCallBudgetModel_FinalizesWhenPrefinalWindowExpires(
 		got = append(got, resp)
 	}
 
-	require.Len(t, got, 1)
-	require.Equal(t, "final answer", got[0].Choices[0].Message.Content)
+	require.Len(t, got, 2)
+	require.True(t, got[0].IsPartial)
+	require.Equal(t, "partial draft", got[0].Choices[0].Message.Content)
+	require.Equal(t, "final answer", got[1].Choices[0].Message.Content)
 	requests := underlying.requestsSnapshot()
 	require.Len(t, requests, 2)
 	require.NotNil(t, requests[0].Tools)
@@ -1015,8 +1016,10 @@ func TestModelCallBudgetIterModel_FinalizesWhenPrefinalWindowExpires(
 		return true
 	})
 
-	require.Len(t, got, 1)
-	require.Equal(t, "final answer", got[0].Choices[0].Message.Content)
+	require.Len(t, got, 2)
+	require.True(t, got[0].IsPartial)
+	require.Equal(t, "partial draft", got[0].Choices[0].Message.Content)
+	require.Equal(t, "final answer", got[1].Choices[0].Message.Content)
 	requests := underlying.iterRequestsSnapshot()
 	require.Len(t, requests, 2)
 	require.NotNil(t, requests[0].Tools)
@@ -1093,11 +1096,12 @@ func TestModelCallBudgetModel_DeadlineFallbackRespectsCallLimits(
 				got = append(got, resp)
 			}
 
-			require.Len(t, got, 1)
-			require.NotNil(t, got[0].Error)
+			require.Len(t, got, 2)
+			require.True(t, got[0].IsPartial)
+			require.NotNil(t, got[1].Error)
 			require.Contains(
 				t,
-				got[0].Error.Message,
+				got[1].Error.Message,
 				"max LLM calls",
 			)
 			require.Len(t, underlying.requestsSnapshot(), 1)
@@ -1105,7 +1109,42 @@ func TestModelCallBudgetModel_DeadlineFallbackRespectsCallLimits(
 	}
 }
 
-func TestModelCallBudgetModel_FinalizesAfterInnerModelTimeout(
+func TestModelCallBudgetIterModel_StopsWithoutDeadlineRetry(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	underlying := &prefinalTimeoutBudgetModel{}
+	wrapped := newModelCallBudgetModel(underlying)
+	iter, ok := wrapped.(model.IterModel)
+	require.True(t, ok)
+	ctx, cancel := context.WithDeadline(
+		context.Background(),
+		time.Now().Add(500*time.Millisecond),
+	)
+	defer cancel()
+	ctx = withModelCallBudgetValue(
+		ctx,
+		newModelCallBudget(0, false, 300*time.Millisecond),
+	)
+
+	seq, err := iter.GenerateContentIter(ctx, &model.Request{
+		Messages: []model.Message{model.NewUserMessage("question")},
+		Tools:    map[string]tool.Tool{"search": nil},
+	})
+	require.NoError(t, err)
+	var got []*model.Response
+	seq(func(resp *model.Response) bool {
+		got = append(got, resp)
+		return false
+	})
+
+	require.Len(t, got, 1)
+	require.True(t, got[0].IsPartial)
+	require.Len(t, underlying.iterRequestsSnapshot(), 1)
+}
+
+func TestModelCallBudgetModel_DoesNotFinalizeInnerTimeoutBeforeWindow(
 	t *testing.T,
 ) {
 	t.Parallel()
@@ -1134,15 +1173,15 @@ func TestModelCallBudgetModel_FinalizesAfterInnerModelTimeout(
 	}
 
 	require.Len(t, got, 1)
-	require.Equal(t, "final answer", got[0].Choices[0].Message.Content)
+	require.NotNil(t, got[0].Error)
+	require.Contains(t, got[0].Error.Message, "model request timeout")
 	requests := underlying.requestsSnapshot()
-	require.Len(t, requests, 2)
+	require.Len(t, requests, 1)
 	require.NotNil(t, requests[0].Tools)
-	require.Nil(t, requests[1].Tools)
-	require.Nil(t, req.Tools)
+	require.NotNil(t, req.Tools)
 }
 
-func TestModelCallBudgetIterModel_FinalizesAfterInnerModelTimeout(
+func TestModelCallBudgetIterModel_DoesNotFinalizeInnerTimeoutBeforeWindow(
 	t *testing.T,
 ) {
 	t.Parallel()
@@ -1174,12 +1213,12 @@ func TestModelCallBudgetIterModel_FinalizesAfterInnerModelTimeout(
 	})
 
 	require.Len(t, got, 1)
-	require.Equal(t, "final answer", got[0].Choices[0].Message.Content)
+	require.NotNil(t, got[0].Error)
+	require.Contains(t, got[0].Error.Message, "model request timeout")
 	requests := underlying.iterRequestsSnapshot()
-	require.Len(t, requests, 2)
+	require.Len(t, requests, 1)
 	require.NotNil(t, requests[0].Tools)
-	require.Nil(t, requests[1].Tools)
-	require.Nil(t, req.Tools)
+	require.NotNil(t, req.Tools)
 }
 
 func TestModelCallBudgetModel_DoesNotFinalizeOutsideDeadlineWindow(
