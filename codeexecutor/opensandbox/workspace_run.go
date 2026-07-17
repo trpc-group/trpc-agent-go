@@ -105,10 +105,18 @@ func (r *workspaceRuntime) RunProgram(
 	skillsDir := path.Join(ws.Path, codeexecutor.DirSkills)
 	workDir := path.Join(ws.Path, codeexecutor.DirWork)
 	outDir := path.Join(ws.Path, codeexecutor.DirOut)
+	runsDir := path.Join(ws.Path, codeexecutor.DirRuns)
 	runDir := path.Join(
-		ws.Path, codeexecutor.DirRuns,
+		runsDir,
 		fmt.Sprintf("run_%d_%d", time.Now().UnixNano(), atomic.AddUint64(&r.runSeq, 1)),
 	)
+	// Reject layout directories that are symlinks outside the workspace
+	// before mkdir/upload. In PerSession mode a previous turn can leave
+	// skills/work/runs/out as symlinks; mkdir -p and UploadFiles would
+	// otherwise follow them.
+	if err := r.ensureLayoutDirs(ctx, ws, skillsDir, workDir, outDir, runsDir); err != nil {
+		return codeexecutor.RunResult{}, err
+	}
 	baseEnv := map[string]string{
 		codeexecutor.WorkspaceEnvDirKey: ws.Path,
 		codeexecutor.EnvSkillsDir:       skillsDir,
@@ -137,6 +145,14 @@ func (r *workspaceRuntime) RunProgram(
 	var stdinRedir string
 	if spec.Stdin != "" {
 		stdinPath := path.Join(runDir, "stdin")
+		// runDir is under runsDir which ensureLayoutDirs just verified;
+		// still create it and remove a leaf symlink before upload.
+		if err := r.ensureLayoutDirs(ctx, ws, runDir); err != nil {
+			return codeexecutor.RunResult{}, err
+		}
+		if err := r.removeSymlinksBatch(ctx, []string{stdinPath}, ws.Path); err != nil {
+			return codeexecutor.RunResult{}, err
+		}
 		if err := sb.UploadFiles(ctx, []osb.UploadFileEntry{{
 			File: strings.NewReader(spec.Stdin),
 			Options: osb.UploadFileOptions{
@@ -155,7 +171,8 @@ func (r *workspaceRuntime) RunProgram(
 	}
 
 	// mkdir -p the runDir and outDir so the spawned program can write
-	// scratch/output files without having to create them.
+	// scratch/output files. Layout dirs were already stripped/verified
+	// above; mkdir here is for the per-run subdirectory.
 	command := fmt.Sprintf(
 		"mkdir -p %s %s && cd %s && %s%s%s%s",
 		shellQuote(runDir), shellQuote(outDir),
@@ -483,6 +500,43 @@ func (r *workspaceRuntime) runBash(
 		)
 	}
 	return stdoutBuf.string(), nil
+}
+
+// ensureLayoutDirs strips symlink hijacks on the given absolute paths
+// under ws, recreates them as real directories, and verifies each
+// resolved path stays under ws.Path. Used by RunProgram so PerSession
+// workspaces cannot redirect mkdir/upload via skills/work/runs/out
+// symlinks planted by earlier turns.
+func (r *workspaceRuntime) ensureLayoutDirs(
+	ctx context.Context, ws codeexecutor.Workspace, dirs ...string,
+) error {
+	if len(dirs) == 0 {
+		return nil
+	}
+	var sb strings.Builder
+	sb.WriteString("set -e; ")
+	for _, d := range dirs {
+		if !pathUnder(d, ws.Path) && d != ws.Path {
+			return fmt.Errorf("opensandbox: layout path %q escapes workspace", d)
+		}
+		sb.WriteString("if [ -L ")
+		sb.WriteString(shellQuote(d))
+		sb.WriteString(" ]; then rm -f -- ")
+		sb.WriteString(shellQuote(d))
+		sb.WriteString(" || exit; fi; mkdir -p ")
+		sb.WriteString(shellQuote(d))
+		sb.WriteString("; r=$(readlink -f -- ")
+		sb.WriteString(shellQuote(d))
+		sb.WriteString(" 2>/dev/null || true); case \"$r\" in ")
+		sb.WriteString(shellQuote(ws.Path))
+		sb.WriteString("|")
+		sb.WriteString(shellQuote(ws.Path))
+		sb.WriteString("/*) ;; *) echo \"opensandbox: path escapes workspace: \" \"$r\" >&2; exit 1 ;; esac; ")
+	}
+	if _, err := r.runBash(ctx, sb.String(), defaultCreateTimeout); err != nil {
+		return fmt.Errorf("opensandbox: ensure layout dirs: %w", err)
+	}
+	return nil
 }
 
 // isTimeoutErr reports whether err represents a command execution

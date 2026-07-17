@@ -87,7 +87,7 @@ const (
 //     Cleanup, validateWorkspace, sandbox accessor, cleanupContext
 //   - workspace_files.go:   PutFiles, PutDirectory, walkAndUpload,
 //     StageDirectory, symlink/path helpers (pathUnder,
-//     resolveSandboxPath, resolveSandboxAncestor, removeSymlinkIfExists)
+//     resolveSandboxPath, resolveSandboxAncestor, removeSymlinksBatch)
 //   - workspace_collect.go: Collect, resolveSandboxPaths, readFile,
 //     listFilesByGlob, StageInputs, CollectOutputs
 //   - workspace_run.go:     RunProgram, resolveRunCwd, ExecuteInline,
@@ -193,36 +193,56 @@ func (r *workspaceRuntime) CreateWorkspace(
 		wsPath = path.Join(r.cfg.runBase, fmt.Sprintf("ws_%s_%d", safe, suf))
 	}
 
-	var sb2 strings.Builder
-	sb2.WriteString("set -e; mkdir -p ")
-	for _, d := range []string{
+	dirs := []string{
 		wsPath,
 		path.Join(wsPath, codeexecutor.DirSkills),
 		path.Join(wsPath, codeexecutor.DirWork),
 		path.Join(wsPath, codeexecutor.DirRuns),
 		path.Join(wsPath, codeexecutor.DirOut),
-	} {
+	}
+	var sb2 strings.Builder
+	// set -e: any unexpected failure aborts. Symlink checks use if/fi
+	// so a non-symlink path never leaves a failing status.
+	sb2.WriteString("set -e; ")
+	// PerSession reuse: a previous turn may have replaced skills/work/
+	// runs/out (or the workspace root) with a symlink outside the
+	// workspace. mkdir -p follows such symlinks and would create
+	// content outside runBase. Strip them first.
+	for _, d := range dirs {
+		sb2.WriteString("if [ -L ")
+		sb2.WriteString(shellQuote(d))
+		sb2.WriteString(" ]; then rm -f -- ")
+		sb2.WriteString(shellQuote(d))
+		sb2.WriteString(" || exit; fi; ")
+	}
+	sb2.WriteString("mkdir -p ")
+	for _, d := range dirs {
 		sb2.WriteString(shellQuote(d))
 		sb2.WriteByte(' ')
 	}
-	// Guard against symlink hijack on meta.json: if a previous run (or
-	// a malicious actor with write access to the workspace) replaced
-	// meta.json with a symlink pointing to an external file (e.g.
-	// /etc/cron.d/payload), the `[ -f meta.json ]` test would follow
-	// the symlink and see the target's content as existing, so `echo
-	// '{}' > meta.json` would never fire — but a subsequent write to
-	// meta.json would go through the symlink and clobber the external
-	// target. Remove any pre-existing symlink before the existence
-	// check so `echo '{}' >` always creates a fresh regular file.
+	// Guard against symlink hijack on meta.json.
 	metaPath := path.Join(wsPath, codeexecutor.MetaFileName)
-	sb2.WriteString("; [ -L ")
+	sb2.WriteString("; if [ -L ")
 	sb2.WriteString(shellQuote(metaPath))
-	sb2.WriteString(" ] && rm -f ")
+	sb2.WriteString(" ]; then rm -f -- ")
 	sb2.WriteString(shellQuote(metaPath))
-	sb2.WriteString("; [ -f ")
+	sb2.WriteString(" || exit; fi; if [ ! -f ")
 	sb2.WriteString(shellQuote(metaPath))
-	sb2.WriteString(" ] || echo '{}' > ")
+	sb2.WriteString(" ]; then echo '{}' > ")
 	sb2.WriteString(shellQuote(metaPath))
+	sb2.WriteString("; fi")
+	// Post-condition: every standard directory must resolve under
+	// wsPath. Catches races where a symlink was re-planted between
+	// the strip step and mkdir -p.
+	for _, d := range dirs {
+		sb2.WriteString("; r=$(readlink -f -- ")
+		sb2.WriteString(shellQuote(d))
+		sb2.WriteString(" 2>/dev/null || true); case \"$r\" in ")
+		sb2.WriteString(shellQuote(wsPath))
+		sb2.WriteString("|")
+		sb2.WriteString(shellQuote(wsPath))
+		sb2.WriteString("/*) ;; *) echo \"opensandbox: path escapes workspace: \" \"$r\" >&2; exit 1 ;; esac")
+	}
 
 	if _, err := r.runBash(ctx, sb2.String(), defaultCreateTimeout); err != nil {
 		return codeexecutor.Workspace{}, err

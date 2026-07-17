@@ -761,7 +761,13 @@ func (c *CodeExecutor) Engine() codeexecutor.Engine {
 	rt := c.ensureRuntime()
 	return codeexecutor.NewEngineWithCapabilities(
 		rt, rt, rt,
-		codeexecutor.Capabilities{SupportsCleanEnv: true},
+		codeexecutor.Capabilities{
+			SupportsCleanEnv: true,
+			// Explicitly unsupported: StageInputs/CollectOutputs are
+			// v1 stubs. gatingFS returns ErrDeclarativeIONotSupported
+			// so skill callers can detect the missing capability.
+			SupportsDeclarativeIO: codeexecutor.SupportsDeclarativeIOFalse,
+		},
 	)
 }
 
@@ -803,7 +809,7 @@ func (c *CodeExecutor) Close() error {
 // When accessed via Engine().FS(), the gatingFS wrapper installed by
 // NewEngineWithCapabilities intercepts StageInputs/CollectOutputs and
 // returns codeexecutor.ErrDeclarativeIONotSupported instead, because
-// this engine does not advertise SupportsDeclarativeIO. Cross-package
+// this engine advertises SupportsDeclarativeIO=false. Cross-package
 // callers that use the Engine interface should check
 // errors.Is(err, codeexecutor.ErrDeclarativeIONotSupported).
 var ErrNotImplementedV1 = errors.New("opensandbox: not implemented in v1")

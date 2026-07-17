@@ -543,7 +543,7 @@ func (c *CodeExecutor) Engine() codeexecutor.Engine {
 		rt, rt, rt,
 		codeexecutor.Capabilities{
 			SupportsCleanEnv:      true,
-			SupportsDeclarativeIO: true,
+			SupportsDeclarativeIO: codeexecutor.SupportsDeclarativeIOTrue,
 		},
 	)
 }

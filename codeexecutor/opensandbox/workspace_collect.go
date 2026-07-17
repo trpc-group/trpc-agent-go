@@ -297,14 +297,19 @@ func (r *workspaceRuntime) listFilesByGlob(
 	// 3. For each pattern, prepend **/ if it has no path separator
 	// 4. For each match, resolve symlinks and verify the real path
 	//    stays under the workspace base
-	// 5. Print "path\tsize" for each valid match
-	// 6. Stop after maxCollectFiles+1 results (server-side cap)
+	// 5. Dedup by resolved path BEFORE counting (overlapping patterns
+	//    such as **/* and **/*.txt must not double-spend the budget)
+	// 6. Print "path\tsize" for each unique valid match
+	// 7. Stop after maxCollectFiles+1 unique results (server-side cap)
 	var cmd strings.Builder
 	cmd.WriteString("cd ")
 	cmd.WriteString(shellQuote(wsPath))
 	cmd.WriteString(" && __osb_base=$(readlink -f . 2>/dev/null || pwd); ")
 	cmd.WriteString("printf '__OSB_BASE__=%s\\n' \"$__osb_base\"; ")
 	cmd.WriteString("shopt -s globstar nullglob dotglob; ")
+	// Associative set of already-emitted resolved paths so overlapping
+	// patterns only consume one unit of the unique-file budget.
+	cmd.WriteString("declare -A __osb_seen=(); ")
 	cmd.WriteString("__osb_count=0; __osb_cap=")
 	cmd.WriteString(strconv.Itoa(maxCollectFiles + 1))
 	cmd.WriteString("; for p in")
@@ -324,11 +329,14 @@ func (r *workspaceRuntime) listFilesByGlob(
 	// every non-empty string and make the *) branch dead code.
 	cmd.WriteString(" case \"$p\" in */*) ;; *) p=\"**/$p\";; esac; ")
 	cmd.WriteString("for f in $p; do")
-	cmd.WriteString(" if [ \"$__osb_count\" -gt \"$__osb_cap\" ]; then break; fi; ")
+	cmd.WriteString(" if [ \"$__osb_count\" -ge \"$__osb_cap\" ]; then break 2; fi; ")
 	cmd.WriteString("if [ -f \"$f\" ]; then ")
 	cmd.WriteString("__osb_rp=$(readlink -f \"$f\" 2>/dev/null || echo \"$(pwd)/$f\"); ")
 	cmd.WriteString("case \"$__osb_rp\" in ")
 	cmd.WriteString("\"$__osb_base\"/*|\"$__osb_base\") ")
+	// Skip paths already counted under an earlier overlapping pattern.
+	cmd.WriteString("if [ -n \"${__osb_seen[$__osb_rp]+x}\" ]; then continue; fi; ")
+	cmd.WriteString("__osb_seen[$__osb_rp]=1; ")
 	// stat -c %s is GNU stat (available in the code-interpreter image);
 	// fall back to 0 if stat fails.
 	cmd.WriteString("__osb_size=$(stat -c %s \"$__osb_rp\" 2>/dev/null || echo 0); ")

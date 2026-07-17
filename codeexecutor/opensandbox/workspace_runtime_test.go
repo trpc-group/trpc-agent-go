@@ -19,6 +19,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"regexp"
@@ -458,7 +459,7 @@ func (m *mockOpenSandboxServer) handleCommand(w http.ResponseWriter, r *http.Req
 		}
 	}
 
-	// Handle test -L calls from removeSymlinkIfExists. test -L returns
+	// Handle test -L calls from removeSymlinksBatch. test -L returns
 	// true only for symlinks (does not follow the link).
 	if strings.Contains(req.Command, "test -L") {
 		m.mu.Lock()
@@ -475,7 +476,7 @@ func (m *mockOpenSandboxServer) handleCommand(w http.ResponseWriter, r *http.Req
 		}
 	}
 
-	// Handle rm -f calls from removeSymlinkIfExists and CreateWorkspace
+	// Handle rm -f calls from removeSymlinksBatch and CreateWorkspace
 	// symlink guard. Remove the path from symlinks and existingPaths.
 	if strings.Contains(req.Command, "rm -f") && !strings.Contains(req.Command, "rm -rf") {
 		m.mu.Lock()
@@ -1038,7 +1039,9 @@ func TestWorkspace_EngineFS_GatingDeclarativeIO(t *testing.T) {
 	require.NoError(t, err)
 
 	eng := exec.Engine()
-	assert.False(t, eng.Describe().SupportsDeclarativeIO,
+	require.NotNil(t, eng.Describe().SupportsDeclarativeIO,
+		"opensandbox must explicitly declare SupportsDeclarativeIO=false")
+	assert.False(t, *eng.Describe().SupportsDeclarativeIO,
 		"opensandbox must not advertise SupportsDeclarativeIO")
 
 	err = eng.FS().StageInputs(context.Background(), ws,
@@ -1691,7 +1694,7 @@ func TestWorkspace_WalkAndUpload_StreamsFiles(t *testing.T) {
 	// /files endpoint.
 	sb, err := exec.rt.sandbox()
 	require.NoError(t, err)
-	err = exec.rt.walkAndUpload(context.Background(), sb, dir, ws.Path)
+	err = exec.rt.walkAndUpload(context.Background(), sb, dir, ws.Path, ws.Path)
 	require.NoError(t, err)
 }
 
@@ -1732,8 +1735,11 @@ func TestWorkspace_WalkAndUpload_SkipsNonRegularFiles(t *testing.T) {
 	dir := t.TempDir()
 	// Create a regular file.
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "real.txt"), []byte("ok"), 0o644))
-	// Create a symlink pointing outside hostRoot.
-	require.NoError(t, os.Symlink(filepath.Join(os.TempDir(), "external"), filepath.Join(dir, "link")))
+	// Create a symlink pointing outside hostRoot. On Windows this needs
+	// admin/developer mode — skip rather than fail the suite.
+	if err := os.Symlink(filepath.Join(os.TempDir(), "external"), filepath.Join(dir, "link")); err != nil {
+		t.Skipf("symlink creation failed (Windows needs admin/developer mode): %v", err)
+	}
 
 	m := newMockServer(t)
 	defer m.close()
@@ -1767,7 +1773,7 @@ func TestWorkspace_WalkAndUpload_ClosesPendingHandlesOnError(t *testing.T) {
 	// Call walkAndUpload with a non-existent hostRoot to trigger a
 	// WalkDir error. No files will be opened, but the error path
 	// (closing pending handles) is exercised.
-	err = exec.rt.walkAndUpload(context.Background(), sb, filepath.Join(t.TempDir(), "nonexistent"), ws.Path)
+	err = exec.rt.walkAndUpload(context.Background(), sb, filepath.Join(t.TempDir(), "nonexistent"), ws.Path, ws.Path)
 	require.Error(t, err)
 }
 
@@ -2917,7 +2923,7 @@ func TestCreateWorkspace_MetaJsonSymlinkGuard(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify the CreateWorkspace bash command includes the meta.json
-	// symlink guard: `[ -L ... ] && rm -f ...`
+	// symlink guard: if [ -L ... ]; then rm -f -- ...; fi
 	m.mu.Lock()
 	commands := append([]string(nil), m.commands...)
 	m.mu.Unlock()
@@ -2966,4 +2972,287 @@ func TestResolveSandboxAncestor_TailSymlinkResolved(t *testing.T) {
 	}})
 	require.Error(t, err, "PutFiles should reject path that resolves outside workspace via tail symlink")
 	assert.Contains(t, err.Error(), "escapes workspace")
+}
+
+// --- Review follow-ups (liuzengh 2026-07-17) ---
+
+// TestBatchRemoveSymlinksScript_NoSymlinkExitsZero is a pure-shell
+// regression for the batchUploader flush guard. The old form
+// `[ -L "$p" ] && rm -f "$p"` left exit status 1 when the last path
+// was a normal file or missing; runBash would then abort before
+// UploadFiles. The mock historically forced exit 0 for any `rm -f`
+// command, so only a real shell catches this.
+func TestBatchRemoveSymlinksScript_NoSymlinkExitsZero(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	dir := t.TempDir()
+	f1 := filepath.ToSlash(filepath.Join(dir, "a.txt"))
+	f2 := filepath.ToSlash(filepath.Join(dir, "b.txt"))
+	require.NoError(t, os.WriteFile(filepath.FromSlash(f1), []byte("a"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.FromSlash(f2), []byte("b"), 0o644))
+	script := fmt.Sprintf(
+		"for p in %s %s; do if [ -L \"$p\" ]; then rm -f -- \"$p\" || exit; fi; done; echo ok",
+		shellQuote(f1), shellQuote(f2),
+	)
+	cmd := exec.Command("bash", "-c", script)
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "no-symlink batch must exit 0; output=%s", out)
+	assert.Contains(t, string(out), "ok")
+}
+
+// TestBatchRemoveSymlinksScript_OldFormFails documents the bug the
+// reviewer found: the previous `&&` form fails when no path is a
+// symlink.
+func TestBatchRemoveSymlinksScript_OldFormFails(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	dir := t.TempDir()
+	f1 := filepath.ToSlash(filepath.Join(dir, "a.txt"))
+	require.NoError(t, os.WriteFile(filepath.FromSlash(f1), []byte("a"), 0o644))
+	script := fmt.Sprintf(
+		"for p in %s; do [ -L \"$p\" ] && rm -f \"$p\"; done",
+		shellQuote(f1),
+	)
+	cmd := exec.Command("bash", "-c", script)
+	err := cmd.Run()
+	require.Error(t, err, "old && form must exit non-zero on non-symlink")
+}
+
+// TestWorkspace_PutDirectory_RejectsIntermediateSymlink verifies that
+// an intermediate destination directory that is a symlink outside the
+// workspace is rejected during directory upload (not only the leaf).
+func TestWorkspace_PutDirectory_RejectsIntermediateSymlink(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	ws, err := exec.CreateWorkspace(
+		context.Background(), "exec-inter-sym", codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+
+	hijack := path.Join(ws.Path, "dest", "hijack")
+	m.setSymlink(hijack, "/tmp/outside")
+
+	hostDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(hostDir, "hijack"), 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(hostDir, "hijack", "file.txt"), []byte("pwn"), 0o644,
+	))
+
+	err = exec.PutDirectory(context.Background(), ws, hostDir, "dest")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "escapes workspace")
+}
+
+// TestWorkspace_PutDirectory_NoSymlinkBatchSucceeds is the end-to-end
+// counterpart of TestBatchRemoveSymlinksScript_NoSymlinkExitsZero.
+func TestWorkspace_PutDirectory_NoSymlinkBatchSucceeds(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	ws, err := exec.CreateWorkspace(
+		context.Background(), "exec-nosym", codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+
+	hostDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(hostDir, "a.txt"), []byte("a"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(hostDir, "b.txt"), []byte("b"), 0o644))
+
+	err = exec.PutDirectory(context.Background(), ws, hostDir, "out")
+	require.NoError(t, err)
+
+	m.mu.Lock()
+	commands := append([]string(nil), m.commands...)
+	m.mu.Unlock()
+	found := false
+	for _, cmd := range commands {
+		if strings.Contains(cmd, "if [ -L \"$p\" ]") && strings.Contains(cmd, "rm -f --") {
+			found = true
+			assert.NotContains(t, cmd, "[ -L \"$p\" ] && rm -f \"$p\"")
+			break
+		}
+	}
+	assert.True(t, found, "batch remove-symlink script should have been issued")
+}
+
+// TestListFilesByGlob_ScriptDedupsBeforeCounting verifies the generated
+// bash script tracks unique resolved paths before incrementing the
+// server-side budget.
+func TestListFilesByGlob_ScriptDedupsBeforeCounting(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	ws, err := exec.CreateWorkspace(
+		context.Background(), "exec-dedup", codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+
+	names := make([]string, maxCollectFiles+20)
+	for i := range names {
+		names[i] = fmt.Sprintf("f%03d.txt", i)
+	}
+	m.setSearchResults(names)
+	for _, name := range names {
+		m.setDownloadData(path.Join(ws.Path, name), []byte("x"))
+	}
+
+	_, err = exec.rt.listFilesByGlob(context.Background(), ws.Path, []string{"**/*", "**/*.txt"})
+	require.NoError(t, err)
+
+	cmd := m.lastCommand()
+	assert.Contains(t, cmd, "declare -A __osb_seen")
+	assert.Contains(t, cmd, "${__osb_seen[$__osb_rp]+x}")
+}
+
+// TestNewEngineWithCapabilities_UnknownDoesNotGate: zero/unknown
+// SupportsDeclarativeIO must leave the FS unwrapped.
+func TestNewEngineWithCapabilities_UnknownDoesNotGate(t *testing.T) {
+	stub := &stubWorkspaceFS{}
+	eng := codeexecutor.NewEngineWithCapabilities(
+		stub, stub, stub,
+		codeexecutor.Capabilities{SupportsCleanEnv: true},
+	)
+	require.Nil(t, eng.Describe().SupportsDeclarativeIO)
+	err := eng.FS().StageInputs(context.Background(), codeexecutor.Workspace{Path: "/tmp/x"}, nil)
+	require.NoError(t, err, "unknown capability must not install gatingFS")
+
+	eng2 := codeexecutor.NewEngineWithCapabilities(
+		stub, stub, stub,
+		codeexecutor.Capabilities{SupportsDeclarativeIO: codeexecutor.SupportsDeclarativeIOFalse},
+	)
+	err = eng2.FS().StageInputs(context.Background(), codeexecutor.Workspace{Path: "/tmp/x"}, nil)
+	require.ErrorIs(t, err, codeexecutor.ErrDeclarativeIONotSupported)
+}
+
+// stubWorkspaceFS is a minimal WorkspaceFS for capability-gating tests.
+type stubWorkspaceFS struct{}
+
+func (*stubWorkspaceFS) CreateWorkspace(context.Context, string, codeexecutor.WorkspacePolicy) (codeexecutor.Workspace, error) {
+	return codeexecutor.Workspace{Path: "/tmp/x"}, nil
+}
+func (*stubWorkspaceFS) Cleanup(context.Context, codeexecutor.Workspace) error { return nil }
+func (*stubWorkspaceFS) PutFiles(context.Context, codeexecutor.Workspace, []codeexecutor.PutFile) error {
+	return nil
+}
+func (*stubWorkspaceFS) StageDirectory(context.Context, codeexecutor.Workspace, string, string, codeexecutor.StageOptions) error {
+	return nil
+}
+func (*stubWorkspaceFS) Collect(context.Context, codeexecutor.Workspace, []string) ([]codeexecutor.File, error) {
+	return nil, nil
+}
+func (*stubWorkspaceFS) StageInputs(context.Context, codeexecutor.Workspace, []codeexecutor.InputSpec) error {
+	return nil
+}
+func (*stubWorkspaceFS) CollectOutputs(context.Context, codeexecutor.Workspace, codeexecutor.OutputSpec) (codeexecutor.OutputManifest, error) {
+	return codeexecutor.OutputManifest{}, nil
+}
+func (*stubWorkspaceFS) RunProgram(context.Context, codeexecutor.Workspace, codeexecutor.RunProgramSpec) (codeexecutor.RunResult, error) {
+	return codeexecutor.RunResult{}, nil
+}
+
+// TestWorkspace_CreateWorkspace_StripsLayoutSymlinks verifies that a
+// pre-existing symlink at a layout directory (e.g. out -> /tmp/outside)
+// is removed before mkdir -p so CreateWorkspace does not follow it.
+func TestWorkspace_CreateWorkspace_StripsLayoutSymlinks(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	// We cannot know the exact PerTurn path in advance, but the generated
+	// CreateWorkspace script must strip -L on skills/work/runs/out and
+	// verify resolved paths stay under the workspace.
+	_, err := exec.CreateWorkspace(context.Background(), "exec-layout", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+
+	m.mu.Lock()
+	commands := append([]string(nil), m.commands...)
+	m.mu.Unlock()
+	found := false
+	for _, cmd := range commands {
+		if strings.Contains(cmd, "mkdir -p") && strings.Contains(cmd, codeexecutor.DirOut) {
+			assert.Contains(t, cmd, "if [ -L ", "must strip layout symlinks")
+			assert.Contains(t, cmd, "readlink -f", "must verify resolved paths")
+			assert.Contains(t, cmd, "path escapes workspace", "must fail closed on escape")
+			found = true
+			break
+		}
+	}
+	assert.True(t, found)
+}
+
+// TestWorkspace_PutFiles_BatchRemoveBeforeUpload verifies PutFiles issues
+// the same if/fi leaf-symlink batch removal as PutDirectory flush.
+func TestWorkspace_PutFiles_BatchRemoveBeforeUpload(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	ws, err := exec.CreateWorkspace(context.Background(), "exec-put-batch", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+
+	err = exec.PutFiles(context.Background(), ws, []codeexecutor.PutFile{
+		{Path: "a.txt", Content: []byte("a")},
+		{Path: "b.txt", Content: []byte("b")},
+	})
+	require.NoError(t, err)
+
+	m.mu.Lock()
+	commands := append([]string(nil), m.commands...)
+	m.mu.Unlock()
+	found := false
+	for _, cmd := range commands {
+		if strings.Contains(cmd, "if [ -L \"$p\" ]") && strings.Contains(cmd, "rm -f --") &&
+			(strings.Contains(cmd, "a.txt") || strings.Contains(cmd, "b.txt")) {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "PutFiles must batch-remove leaf symlinks before upload")
+}
+
+// TestWorkspace_RunProgram_EnsuresLayoutDirs verifies RunProgram issues
+// ensureLayoutDirs before mkdir/stdin so layout symlinks cannot redirect.
+func TestWorkspace_RunProgram_EnsuresLayoutDirs(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	zero := 0
+	m.setExitCode(zero)
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	ws, err := exec.CreateWorkspace(context.Background(), "exec-run-layout", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+
+	_, err = exec.RunProgram(context.Background(), ws, codeexecutor.RunProgramSpec{
+		Cmd:     "echo",
+		Args:    []string{"hi"},
+		Timeout: 5 * time.Second,
+	})
+	require.NoError(t, err)
+
+	m.mu.Lock()
+	commands := append([]string(nil), m.commands...)
+	m.mu.Unlock()
+	found := false
+	for _, cmd := range commands {
+		if strings.Contains(cmd, codeexecutor.DirOut) &&
+			strings.Contains(cmd, "if [ -L ") &&
+			strings.Contains(cmd, "readlink -f") &&
+			strings.Contains(cmd, "mkdir -p") {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "RunProgram must ensureLayoutDirs before execution")
 }

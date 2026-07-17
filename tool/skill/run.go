@@ -658,8 +658,12 @@ func (t *RunTool) prepareWorkspaceForRun(
 	ctxIO := withArtifactContext(ctx)
 	if len(in.Inputs) > 0 {
 		if err := eng.FS().StageInputs(ctxIO, ws, in.Inputs); err != nil {
+			// StageInputs cannot fall back to PutFiles without losing
+			// scheme/pin/link semantics. Propagate (including
+			// ErrDeclarativeIONotSupported for engines that advertise
+			// SupportsDeclarativeIO=false) so skill_run fails closed.
 			return nil, codeexecutor.Workspace{}, "", nil, nil,
-				nil, err
+				nil, fmt.Errorf("stage inputs: %w", err)
 		}
 	}
 	return eng, ws, stageRes.WorkspaceSkillDir, ctxIO, staged, stageWarn,
@@ -1785,6 +1789,29 @@ func withArtifactContext(ctx context.Context) context.Context {
 	return ctxIO
 }
 
+// outputSpecAllowsGlobsOnlyFallback reports whether an OutputSpec can be
+// safely honoured by Collect(globs) alone when CollectOutputs is not
+// supported. Only the zero-valued extras (no Save, no NameTemplate, no
+// limits, no Inline) are allowed; any richer field would be silently
+// dropped by a globs-only fallback.
+func outputSpecAllowsGlobsOnlyFallback(spec codeexecutor.OutputSpec) bool {
+	if spec.Save {
+		return false
+	}
+	if strings.TrimSpace(spec.NameTemplate) != "" {
+		return false
+	}
+	if spec.MaxFiles != 0 || spec.MaxFileBytes != 0 || spec.MaxTotalBytes != 0 {
+		return false
+	}
+	// Inline relies on CollectOutputs producing a manifest; without it
+	// skill would return empty OutputFiles while claiming Inline success.
+	if spec.Inline {
+		return false
+	}
+	return true
+}
+
 // prepareOutputs collects files either through OutputSpec or legacy
 // output_files patterns. It returns collected files and optional
 // manifest.
@@ -1804,8 +1831,16 @@ func (t *RunTool) prepareOutputs(
 			return nil, nil, nil, err
 		}
 		if errors.Is(err, codeexecutor.ErrDeclarativeIONotSupported) {
-			// Engine doesn't support declarative output collection;
-			// fall back to Collect with the spec's globs.
+			// Engine doesn't support declarative output collection.
+			// Globs-only OutputSpec can fall back to Collect without
+			// changing the public contract. Any richer field (Save,
+			// NameTemplate, MaxFiles/MaxFileBytes/MaxTotalBytes,
+			// Inline via manifest) cannot be silently emulated —
+			// returning the unsupported error is preferable to a
+			// successful run that drops requested artifacts.
+			if !outputSpecAllowsGlobsOnlyFallback(*in.Outputs) {
+				return nil, nil, nil, err
+			}
 			fs, ferr := t.collectFiles(ctx, eng, ws, in.Outputs.Globs)
 			if ferr != nil {
 				return nil, nil, nil, ferr

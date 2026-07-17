@@ -65,18 +65,8 @@ func (r *workspaceRuntime) PutFiles(
 			return err
 		}
 		finalPath = path.Join(resolvedParent, path.Base(finalPath))
-		// Guard against the final component being a pre-existing
-		// symlink: resolveSandboxAncestor only resolves symlinks in
-		// components that exist *at call time*, but if the final
-		// component (e.g. "file.txt") already exists as a symlink to
-		// an external path, UploadFiles would follow it and write
-		// outside the workspace. Remove any pre-existing symlink at
-		// the final path so the upload creates a fresh regular file.
-		// This is safe because the caller's intent is to write a new
-		// file at this path — overwriting a symlink with a regular
-		// file is the expected behaviour.
-		if err := r.removeSymlinkIfExists(ctx, finalPath, ws.Path); err != nil {
-			return err
+		if !pathUnder(finalPath, ws.Path) {
+			return fmt.Errorf("opensandbox: path %q escapes workspace", f.Path)
 		}
 		// Ensure the parent directory exists. The SDK's UploadFiles
 		// creates intermediate directories, but we create them
@@ -102,7 +92,36 @@ func (r *workspaceRuntime) PutFiles(
 			},
 		})
 	}
-	return sb.UploadFiles(ctx, entries)
+	// Immediately before UploadFiles: re-resolve parents (TOCTOU between
+	// CreateDirectory and upload) and remove any leaf symlinks. Process
+	// in uploadBatchSize chunks so a large PutFiles call cannot build an
+	// ARG_MAX-sized shell command or one giant multipart body.
+	for start := 0; start < len(entries); start += uploadBatchSize {
+		end := start + uploadBatchSize
+		if end > len(entries) {
+			end = len(entries)
+		}
+		batch := entries[start:end]
+		for i := range batch {
+			p := batch[i].Options.Metadata.Path
+			resolvedParent, err := r.resolveSandboxAncestor(ctx, path.Dir(p), ws.Path)
+			if err != nil {
+				return err
+			}
+			finalPath := path.Join(resolvedParent, path.Base(p))
+			if !pathUnder(finalPath, ws.Path) {
+				return fmt.Errorf("opensandbox: path %q escapes workspace", finalPath)
+			}
+			batch[i].Options.Metadata.Path = finalPath
+		}
+		if err := r.removeSymlinksBatch(ctx, uploadPaths(batch), ws.Path); err != nil {
+			return err
+		}
+		if err := sb.UploadFiles(ctx, batch); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // PutDirectory packs a host directory into tar.gz then uploads and
@@ -158,7 +177,7 @@ func (r *workspaceRuntime) PutDirectory(
 		return fmt.Errorf("create directory %s: %w", dest, err)
 	}
 
-	return r.walkAndUpload(ctx, sb, abs, dest)
+	return r.walkAndUpload(ctx, sb, abs, dest, ws.Path)
 }
 
 // uploadBatchSize is the maximum number of files uploaded in a single
@@ -186,12 +205,18 @@ const uploadBatchSize = 64
 // tree in the agent process. File handles are closed after each batch
 // is uploaded, keeping the open-fd count bounded by uploadBatchSize
 // rather than the total file count in the tree.
+//
+// wsBase is the workspace root used for symlink-escape checks. Every
+// destination parent is resolved with resolveSandboxAncestor before
+// CreateDirectory/UploadFiles so an intermediate directory that is a
+// pre-existing symlink outside the workspace cannot redirect writes
+// (e.g. dest/hijack -> /tmp/outside, upload dest/hijack/file.txt).
 func (r *workspaceRuntime) walkAndUpload(
 	ctx context.Context,
 	sb *osb.Sandbox,
-	hostRoot, destRoot string,
+	hostRoot, destRoot, wsBase string,
 ) error {
-	uploader := &batchUploader{r: r, sb: sb}
+	uploader := &batchUploader{r: r, sb: sb, destRoot: destRoot, wsBase: wsBase}
 	walkErr := filepath.WalkDir(hostRoot, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -207,12 +232,14 @@ func (r *workspaceRuntime) walkAndUpload(
 }
 
 // batchUploader accumulates files opened during a WalkDir and uploads
-// them in batches of uploadBatchSize. Each flush removes pre-existing
-// symlinks at every target path in a single bash call before upload,
+// them in batches of uploadBatchSize. Each flush re-validates target
+// parents, removes pre-existing leaf symlinks in a single bash call,
 // then closes all file handles in the batch.
 type batchUploader struct {
 	r         *workspaceRuntime
 	sb        *osb.Sandbox
+	destRoot  string
+	wsBase    string
 	entries   []osb.UploadFileEntry
 	openFiles []*os.File
 }
@@ -235,8 +262,15 @@ func (u *batchUploader) visit(
 	remotePath := path.Join(destRoot, filepath.ToSlash(rel))
 
 	if d.IsDir() {
-		if err := u.sb.CreateDirectory(ctx, remotePath, osb.OctalMode(0o755)); err != nil {
-			return fmt.Errorf("create directory %s: %w", remotePath, err)
+		// Resolve intermediate destination components so a pre-existing
+		// directory symlink under destRoot cannot redirect CreateDirectory
+		// (or later nested uploads) outside the workspace.
+		resolved, err := u.r.resolveSandboxAncestor(ctx, remotePath, u.wsBase)
+		if err != nil {
+			return err
+		}
+		if err := u.sb.CreateDirectory(ctx, resolved, osb.OctalMode(0o755)); err != nil {
+			return fmt.Errorf("create directory %s: %w", resolved, err)
 		}
 		return nil
 	}
@@ -248,8 +282,19 @@ func (u *batchUploader) visit(
 	if !shouldUploadFile(info) {
 		return nil
 	}
-	parent := path.Dir(remotePath)
-	if parent != "." && parent != "/" && parent != destRoot {
+	// Resolve the parent of the leaf so intermediate directory symlinks
+	// (e.g. dest/hijack -> /tmp/outside with leaf file.txt) are rejected
+	// before CreateDirectory/UploadFiles. Mirrors PutFiles.
+	resolvedParent, err := u.r.resolveSandboxAncestor(ctx, path.Dir(remotePath), u.wsBase)
+	if err != nil {
+		return err
+	}
+	remotePath = path.Join(resolvedParent, path.Base(remotePath))
+	if !pathUnder(remotePath, u.wsBase) {
+		return fmt.Errorf("opensandbox: path %q escapes workspace", remotePath)
+	}
+	parent := resolvedParent
+	if parent != "." && parent != "/" && parent != destRoot && parent != u.wsBase {
 		if err := u.sb.CreateDirectory(ctx, parent, osb.OctalMode(0o755)); err != nil {
 			return fmt.Errorf("create directory %s: %w", parent, err)
 		}
@@ -284,27 +329,36 @@ func (u *batchUploader) visit(
 // Called when the batch reaches uploadBatchSize and once more after
 // the walk finishes.
 //
-// Before each upload, pre-existing symlinks at every target path are
-// removed in a single bash call. In PerSession mode, previously
-// executed code may have left symlinks at nested destinations pointing
-// outside the workspace; without this guard, UploadFiles would follow
-// them and write outside the workspace. This mirrors the per-file
-// removeSymlinkIfExists guard in PutFiles, but batches the check into
-// one bash call per upload batch to avoid 2N round-trips for N files.
+// Immediately before upload:
+//  1. Re-resolve every target parent (TOCTOU between visit and flush).
+//  2. Remove pre-existing leaf symlinks in one bash call. The shell
+//     loop must exit 0 when no path is a symlink — the usual upload
+//     case — so use `if [ -L ]; then rm; fi` rather than
+//     `[ -L ] && rm`, which leaves exit status 1 when the last path is
+//     a normal file or missing.
 func (u *batchUploader) flush(ctx context.Context) error {
 	if len(u.entries) == 0 {
 		return nil
 	}
-	var rm strings.Builder
-	rm.WriteString("for p in")
-	for _, e := range u.entries {
-		rm.WriteByte(' ')
-		rm.WriteString(shellQuote(e.Options.Metadata.Path))
+	// Re-validate parents right before upload so a symlink planted after
+	// visit cannot redirect the write. Update Metadata.Path in place.
+	for i := range u.entries {
+		p := u.entries[i].Options.Metadata.Path
+		resolvedParent, err := u.r.resolveSandboxAncestor(ctx, path.Dir(p), u.wsBase)
+		if err != nil {
+			u.closePending()
+			return err
+		}
+		finalPath := path.Join(resolvedParent, path.Base(p))
+		if !pathUnder(finalPath, u.wsBase) {
+			u.closePending()
+			return fmt.Errorf("opensandbox: path %q escapes workspace", finalPath)
+		}
+		u.entries[i].Options.Metadata.Path = finalPath
 	}
-	rm.WriteString("; do [ -L \"$p\" ] && rm -f \"$p\"; done")
-	if _, err := u.r.runBash(ctx, rm.String(), defaultCreateTimeout); err != nil {
+	if err := u.r.removeSymlinksBatch(ctx, uploadPaths(u.entries), u.wsBase); err != nil {
 		u.closePending()
-		return fmt.Errorf("opensandbox: batch remove symlinks before upload: %w", err)
+		return err
 	}
 	err := u.sb.UploadFiles(ctx, u.entries)
 	u.closePending()
@@ -319,6 +373,43 @@ func (u *batchUploader) closePending() {
 	}
 	u.entries = u.entries[:0]
 	u.openFiles = u.openFiles[:0]
+}
+
+// uploadPaths returns Metadata.Path for every upload entry.
+func uploadPaths(entries []osb.UploadFileEntry) []string {
+	out := make([]string, len(entries))
+	for i, e := range entries {
+		out[i] = e.Options.Metadata.Path
+	}
+	return out
+}
+
+// removeSymlinksBatch removes pre-existing symlinks at the given paths
+// in a single bash call. The loop always exits 0 when no path is a
+// symlink (if/fi, not `&&`), so normal uploads are not aborted.
+// Each path must already be pathUnder(wsBase).
+func (r *workspaceRuntime) removeSymlinksBatch(
+	ctx context.Context, paths []string, wsBase string,
+) error {
+	if len(paths) == 0 {
+		return nil
+	}
+	var rm strings.Builder
+	rm.WriteString("for p in")
+	for _, p := range paths {
+		if !pathUnder(p, wsBase) {
+			return fmt.Errorf(
+				"opensandbox: path %q escapes workspace %q", p, wsBase,
+			)
+		}
+		rm.WriteByte(' ')
+		rm.WriteString(shellQuote(p))
+	}
+	rm.WriteString(`; do if [ -L "$p" ]; then rm -f -- "$p" || exit; fi; done`)
+	if _, err := r.runBash(ctx, rm.String(), defaultCreateTimeout); err != nil {
+		return fmt.Errorf("opensandbox: batch remove symlinks before upload: %w", err)
+	}
+	return nil
 }
 
 // StageDirectory stages a directory with options (ReadOnly).
@@ -411,45 +502,6 @@ func (r *workspaceRuntime) resolveSandboxPath(
 		)
 	}
 	return resolved, nil
-}
-
-// removeSymlinkIfExists checks if targetPath is a symlink (using
-// `test -L`, which does not follow the symlink) and, if so, removes it
-// with `rm -f`. This prevents a pre-existing symlink at the final
-// component of an upload path from redirecting the write to an external
-// location. If targetPath does not exist or is a regular file, this is
-// a no-op.
-//
-// The path is validated against wsBase before the rm to ensure the
-// removal cannot be tricked into deleting files outside the workspace.
-func (r *workspaceRuntime) removeSymlinkIfExists(
-	ctx context.Context, targetPath, wsBase string,
-) error {
-	if !pathUnder(targetPath, wsBase) {
-		// Already caught by earlier validation, but double-check.
-		return fmt.Errorf(
-			"opensandbox: path %q escapes workspace %q", targetPath, wsBase,
-		)
-	}
-	// test -L returns true for symlinks (does not follow). A regular
-	// file or non-existent path returns false. Only remove if it's a
-	// symlink.
-	out, err := r.runBash(ctx,
-		"test -L "+shellQuote(targetPath)+" && echo yes || echo no",
-		defaultCreateTimeout)
-	if err != nil {
-		return fmt.Errorf(
-			"opensandbox: check symlink %q: %w", targetPath, err,
-		)
-	}
-	if strings.TrimSpace(out) == "yes" {
-		if _, err := r.runBash(ctx, "rm -f "+shellQuote(targetPath), defaultRmTimeout); err != nil {
-			return fmt.Errorf(
-				"opensandbox: remove symlink %q: %w", targetPath, err,
-			)
-		}
-	}
-	return nil
 }
 
 // resolveSandboxAncestor resolves the real path of a target that may
