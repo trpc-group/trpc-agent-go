@@ -63,7 +63,11 @@ func copyTestData(t *testing.T) string {
 
 func runExamplePipeline(t *testing.T, config *Config, inputs *resolvedInputs, dataDir, outputDir string, writeBack bool) *Result {
 	t.Helper()
-	result, err := runPipeline(context.Background(), Options{
+	// Bound the run so a deadlock or cancellation regression fails fast
+	// instead of stalling until the go test global timeout.
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	result, err := runPipeline(ctx, Options{
 		Config:    config,
 		Inputs:    inputs,
 		DataDir:   dataDir,
