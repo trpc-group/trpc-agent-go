@@ -147,6 +147,7 @@ const (
 	flagHostExecDefaultTimeout             = "host-exec-default-timeout"
 	flagHostExecMaxTimeout                 = "host-exec-max-timeout"
 	flagHostExecMaxYield                   = "host-exec-max-yield"
+	flagHostExecMaxIdleWait                = "host-exec-max-idle-wait"
 
 	flagAdminEnabled  = "admin-enabled"
 	flagAdminAddr     = "admin-addr"
@@ -313,6 +314,7 @@ type runOptions struct {
 	HostExecDefaultTimeout             time.Duration
 	HostExecMaxTimeout                 time.Duration
 	HostExecMaxYield                   time.Duration
+	HostExecMaxIdleWait                time.Duration
 
 	enableOpenClawToolsExplicit  bool
 	deferToolSurfaceModeExplicit bool
@@ -1036,6 +1038,13 @@ func parseRunOptions(args []string) (runOptions, error) {
 		"Maximum wait before exec_command or write_stdin returns "+
 			"interim output (0 disables the cap)",
 	)
+	fs.DurationVar(
+		&opts.HostExecMaxIdleWait,
+		flagHostExecMaxIdleWait,
+		0,
+		"Maximum sleep-style idle wait allowed inside host exec "+
+			"commands (0 allows long idle waits)",
+	)
 
 	if err := fs.Parse(args); err != nil {
 		return runOptions{}, &exitError{Code: 2, Err: err}
@@ -1376,6 +1385,8 @@ type toolsConfig struct {
 	HostExecMaxTimeoutCamel       *string             `yaml:"hostExecMaxTimeout,omitempty"`
 	HostExecMaxYield              *string             `yaml:"host_exec_max_yield,omitempty"`
 	HostExecMaxYieldCamel         *string             `yaml:"hostExecMaxYield,omitempty"`
+	HostExecMaxIdleWait           *string             `yaml:"host_exec_max_idle_wait,omitempty"`
+	HostExecMaxIdleWaitCamel      *string             `yaml:"hostExecMaxIdleWait,omitempty"`
 
 	Providers []filePluginSpec `yaml:"providers,omitempty"`
 	ToolSets  []filePluginSpec `yaml:"toolsets,omitempty"`
@@ -2239,6 +2250,21 @@ func (cfg *fileConfig) apply(
 			}
 			opts.HostExecMaxYield = dur
 		}
+		hostExecMaxIdleWait := firstStringPtr(
+			cfg.Tools.HostExecMaxIdleWait,
+			cfg.Tools.HostExecMaxIdleWaitCamel,
+		)
+		if hostExecMaxIdleWait != nil &&
+			!flagWasSet(set, flagHostExecMaxIdleWait) {
+			dur, err := parseDuration(*hostExecMaxIdleWait)
+			if err != nil {
+				return fmt.Errorf(
+					"tools.host_exec_max_idle_wait: %w",
+					err,
+				)
+			}
+			opts.HostExecMaxIdleWait = dur
+		}
 		if len(cfg.Tools.Providers) > 0 {
 			opts.ToolProviders = convertPluginSpecs(cfg.Tools.Providers)
 		}
@@ -2997,6 +3023,12 @@ func finalizeRunOptions(opts *runOptions) error {
 		return fmt.Errorf(
 			"invalid host exec max yield: %s",
 			opts.HostExecMaxYield,
+		)
+	}
+	if opts.HostExecMaxIdleWait < 0 {
+		return fmt.Errorf(
+			"invalid host exec max idle wait: %s",
+			opts.HostExecMaxIdleWait,
 		)
 	}
 	opts.DeferToolSurfaceDirect = strings.Join(

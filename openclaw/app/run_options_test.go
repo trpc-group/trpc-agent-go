@@ -1314,6 +1314,7 @@ tools:
   host_exec_default_timeout: "60s"
   host_exec_max_timeout: "45s"
   host_exec_max_yield: "2s"
+  host_exec_max_idle_wait: "20s"
 `)
 	opts, err := parseRunOptions([]string{"-config", cfgPath})
 	require.NoError(t, err)
@@ -1326,6 +1327,7 @@ tools:
 	require.Equal(t, time.Minute, opts.HostExecDefaultTimeout)
 	require.Equal(t, 45*time.Second, opts.HostExecMaxTimeout)
 	require.Equal(t, 2*time.Second, opts.HostExecMaxYield)
+	require.Equal(t, 20*time.Second, opts.HostExecMaxIdleWait)
 }
 
 func TestParseRunOptions_DynamicAgentTimeoutFlagOverridesConfig(t *testing.T) {
@@ -1409,6 +1411,23 @@ tools:
 	require.Equal(t, 45*time.Second, opts.HostExecMaxYield)
 }
 
+func TestParseRunOptions_HostExecMaxIdleWaitFlagOverridesConfig(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+tools:
+  host_exec_max_idle_wait: "3m"
+`)
+	opts, err := parseRunOptions([]string{
+		"-config", cfgPath,
+		"-host-exec-max-idle-wait", "45s",
+	})
+	require.NoError(t, err)
+	require.Equal(t, 45*time.Second, opts.HostExecMaxIdleWait)
+}
+
 func TestParseRunOptions_HostExecMaxConfigInvalidDurationFails(
 	t *testing.T,
 ) {
@@ -1420,6 +1439,7 @@ func TestParseRunOptions_HostExecMaxConfigInvalidDurationFails(
 	}{
 		{name: "timeout", key: "host_exec_max_timeout"},
 		{name: "yield", key: "host_exec_max_yield"},
+		{name: "idle wait", key: "host_exec_max_idle_wait"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -1509,6 +1529,17 @@ func TestParseRunOptions_HostExecMaxYieldNegativeFails(t *testing.T) {
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "host exec max yield")
+}
+
+func TestParseRunOptions_HostExecMaxIdleWaitNegativeFails(t *testing.T) {
+	t.Parallel()
+
+	_, err := parseRunOptions([]string{
+		"-host-exec-max-idle-wait",
+		"-1s",
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "host exec max idle wait")
 }
 
 func TestParseRunOptions_DeferToolSurfaceDefaultsToOff(t *testing.T) {

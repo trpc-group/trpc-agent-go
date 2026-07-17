@@ -134,6 +134,34 @@ func (t *ddgTool) searchSERPWithFallbackForBackend(
 				"DuckDuckGo",
 		}, nil
 	}
+	if isSERPRouteBlocker(err, fallbackErr) &&
+		isAPIFallbackTransportIncompatible(apiFallbackErr) {
+		return searchResponse{
+			Query:   req.Query,
+			Results: []resultItem{},
+			Summary: "DuckDuckGo html and lite search pages are both " +
+				"unavailable for this query due to transport errors " +
+				"or anti-bot challenge pages, and the Instant Answer " +
+				"API fallback also failed due to HTTPS transport " +
+				"incompatibility; use direct URLs with web_fetch/" +
+				"browser or another configured search provider " +
+				"instead of immediately retrying DuckDuckGo",
+		}, nil
+	}
+	if isSERPRouteBlocker(err, fallbackErr) &&
+		isRetryableAPIStatus(apiFallbackErr) {
+		return searchResponse{
+			Query:   req.Query,
+			Results: []resultItem{},
+			Summary: "DuckDuckGo html and lite search pages are both " +
+				"unavailable for this query due to transport errors " +
+				"or anti-bot challenge pages, and the Instant Answer " +
+				"API fallback returned a retryable unavailable status; " +
+				"use direct URLs with web_fetch/browser or another " +
+				"configured search provider instead of immediately " +
+				"retrying DuckDuckGo",
+		}, nil
+	}
 	result.Summary = fmt.Sprintf(
 		"%s; fallback %s failed: %v; api fallback failed: %v",
 		result.Summary,
@@ -286,6 +314,10 @@ func isSERPUnavailableError(err error) bool {
 	return strings.Contains(msg, "search returned status 429") ||
 		strings.Contains(msg, "search returned status 502") ||
 		strings.Contains(msg, "search returned status 503")
+}
+
+func isAPIFallbackTransportIncompatible(err error) bool {
+	return shouldRetrySERPWithHTTP(err)
 }
 
 func fallbackSERPBackend(backend string) string {
