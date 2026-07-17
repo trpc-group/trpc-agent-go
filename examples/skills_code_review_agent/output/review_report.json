@@ -1,9 +1,9 @@
 {
   "task": {
-    "id": "review-88128b232348d460f3ee2048",
+    "id": "review-74c1122b1999211579d559a8",
     "status": "completed",
-    "started_at": "2026-07-17T11:51:41.069675+08:00",
-    "ended_at": "2026-07-17T11:51:41.076452+08:00",
+    "started_at": "2026-07-17T12:36:42.908923+08:00",
+    "ended_at": "2026-07-17T12:36:42.913995+08:00",
     "input_mode": "fixture:security_issue"
   },
   "input": {
@@ -54,8 +54,8 @@
   ],
   "sandbox_runs": [
     {
-      "id": "run-76bd63908f4214c2619dfbc1",
-      "task_id": "review-88128b232348d460f3ee2048",
+      "id": "run-d20acf4b12713f50692390b0",
+      "task_id": "review-74c1122b1999211579d559a8",
       "command": "bash",
       "args": [
         "skills/code-review/scripts/diff_summary.sh",
@@ -67,14 +67,14 @@
       "exit_code": 0,
       "stderr": "sandbox command skipped by dry-run/fake executor after permission decision",
       "error_type": "dry_run",
-      "started_at": "2026-07-17T11:51:41.076451+08:00",
+      "started_at": "2026-07-17T12:36:42.913995+08:00",
       "duration_ms": 0,
       "timed_out": false,
       "output_truncated": false
     },
     {
-      "id": "run-36a5401697cde6472d014aa4",
-      "task_id": "review-88128b232348d460f3ee2048",
+      "id": "run-84b2b388b83553f3105a501a",
+      "task_id": "review-74c1122b1999211579d559a8",
       "command": "go",
       "args": [
         "test",
@@ -89,7 +89,7 @@
       "exit_code": 0,
       "stderr": "repo path not provided; repository Go checks skipped in dry-run/fake executor",
       "error_type": "no_repo_path",
-      "started_at": "2026-07-17T11:51:41.076451+08:00",
+      "started_at": "2026-07-17T12:36:42.913995+08:00",
       "duration_ms": 0,
       "timed_out": false,
       "output_truncated": false
@@ -97,13 +97,13 @@
   ],
   "permission_decisions": [
     {
-      "id": "perm-3f86fbb306f3813d10924e3f",
-      "task_id": "review-88128b232348d460f3ee2048",
+      "id": "perm-a87f0f8b6e1e83e1a231b9d3",
+      "task_id": "review-74c1122b1999211579d559a8",
       "tool": "workspace_exec",
       "command": "bash skills/code-review/scripts/diff_summary.sh work/change.diff out/diff_summary.json",
       "action": "allow",
       "disposition": "allow",
-      "created_at": "2026-07-17T11:51:41.07645+08:00"
+      "created_at": "2026-07-17T12:36:42.913994+08:00"
     }
   ],
   "permission_summary": {
@@ -114,40 +114,40 @@
   },
   "artifacts": [
     {
-      "id": "artifact-3230e28c2e9f66c489e0eba8",
-      "task_id": "review-88128b232348d460f3ee2048",
+      "id": "artifact-5c8688c13e6dc1bcbefb99e6",
+      "task_id": "review-74c1122b1999211579d559a8",
       "name": "review_report.json",
       "path": "output/review_report.json",
       "mime_type": "application/json",
-      "size_bytes": 4145,
-      "created_at": "2026-07-17T11:51:41.084538+08:00"
+      "size_bytes": 4146,
+      "created_at": "2026-07-17T12:36:42.921282+08:00"
     },
     {
-      "id": "artifact-59853f2ac371f97d2cb3f755",
-      "task_id": "review-88128b232348d460f3ee2048",
+      "id": "artifact-f753f8767da2c8611a281218",
+      "task_id": "review-74c1122b1999211579d559a8",
       "name": "review_report.md",
       "path": "output/review_report.md",
       "mime_type": "text/markdown",
       "size_bytes": 2357,
-      "created_at": "2026-07-17T11:51:41.08454+08:00"
+      "created_at": "2026-07-17T12:36:42.921284+08:00"
     },
     {
-      "id": "artifact-d54ef6cd848cca25fc1ceba5",
-      "task_id": "review-88128b232348d460f3ee2048",
+      "id": "artifact-8c67880d8eaa2502b3dd3d05",
+      "task_id": "review-74c1122b1999211579d559a8",
       "name": "review_diagnostics.json",
       "path": "output/review_diagnostics.json",
       "mime_type": "application/json",
       "size_bytes": 2146,
-      "created_at": "2026-07-17T11:51:41.084542+08:00"
+      "created_at": "2026-07-17T12:36:42.921285+08:00"
     },
     {
-      "id": "artifact-43032cede502d2c6f70f0f29",
-      "task_id": "review-88128b232348d460f3ee2048",
+      "id": "artifact-6782e1b62b267d39111dd692",
+      "task_id": "review-74c1122b1999211579d559a8",
       "name": "review_report.zh.md",
       "path": "output/review_report.zh.md",
       "mime_type": "text/markdown",
       "size_bytes": 1199,
-      "created_at": "2026-07-17T11:51:41.084544+08:00"
+      "created_at": "2026-07-17T12:36:42.921286+08:00"
     }
   ],
   "artifact_policy": {
@@ -164,7 +164,7 @@
     "rejected_count": 0
   },
   "metrics": {
-    "total_duration_ms": 6,
+    "total_duration_ms": 5,
     "sandbox_duration_ms": 0,
     "tool_call_count": 0,
     "permission_deny_count": 0,

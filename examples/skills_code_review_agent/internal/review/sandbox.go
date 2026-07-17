@@ -416,14 +416,18 @@ func (r *WorkspaceSandboxRunner) runProgram(ctx context.Context, ws codeexecutor
 func (r *WorkspaceSandboxRunner) materializeCollectedArtifact(taskID string, f codeexecutor.File) (ArtifactRecord, error) {
 	name := filepath.Base(f.Name)
 	content := []byte(redactSecrets(f.Content))
+	if int64(len(content)) > defaultArtifactPolicy().MaxBytesPerFile {
+		return ArtifactRecord{}, fmt.Errorf("artifact %s exceeds max size %d", name, defaultArtifactPolicy().MaxBytesPerFile)
+	}
 	outputDir := r.outputDir
 	if outputDir == "" {
 		outputDir = "output"
 	}
-	if err := os.MkdirAll(outputDir, 0o755); err != nil {
+	artifactDir := filepath.Join(outputDir, taskID)
+	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
 		return ArtifactRecord{}, err
 	}
-	path := filepath.Join(outputDir, name)
+	path := filepath.Join(artifactDir, name)
 	if err := os.WriteFile(path, content, 0o600); err != nil {
 		return ArtifactRecord{}, err
 	}
@@ -533,31 +537,94 @@ func repoHasUnvendoredExternalModules(repoPath string) bool {
 }
 
 func goModHasRequire(data string) bool {
-	inBlock := false
-	for _, raw := range strings.Split(data, "\n") {
-		line := strings.TrimSpace(raw)
-		if line == "" || strings.HasPrefix(line, "//") {
-			continue
-		}
-		if strings.HasPrefix(line, "require (") {
-			inBlock = true
-			continue
-		}
-		if inBlock {
-			if line == ")" {
-				inBlock = false
-				continue
-			}
-			if strings.TrimSpace(strings.Split(line, "//")[0]) != "" {
-				return true
-			}
-			continue
-		}
-		if strings.HasPrefix(line, "require ") {
+	requires, localReplaces := parseGoModRequiresAndLocalReplaces(data)
+	for module := range requires {
+		if !localReplaces[module] {
 			return true
 		}
 	}
 	return false
+}
+
+func parseGoModRequiresAndLocalReplaces(data string) (map[string]bool, map[string]bool) {
+	requires := map[string]bool{}
+	localReplaces := map[string]bool{}
+	block := ""
+	for _, raw := range strings.Split(data, "\n") {
+		line := stripGoModComment(raw)
+		if line == "" {
+			continue
+		}
+		if line == ")" && block != "" {
+			block = ""
+			continue
+		}
+		if line == "require (" {
+			block = "require"
+			continue
+		}
+		if line == "replace (" {
+			block = "replace"
+			continue
+		}
+		switch {
+		case block == "require":
+			if module := requireModule(line); module != "" {
+				requires[module] = true
+			}
+		case block == "replace":
+			if module, ok := localReplaceModule(line); ok {
+				localReplaces[module] = true
+			}
+		case strings.HasPrefix(line, "require "):
+			if module := requireModule(strings.TrimSpace(strings.TrimPrefix(line, "require "))); module != "" {
+				requires[module] = true
+			}
+		case strings.HasPrefix(line, "replace "):
+			if module, ok := localReplaceModule(strings.TrimSpace(strings.TrimPrefix(line, "replace "))); ok {
+				localReplaces[module] = true
+			}
+		}
+	}
+	return requires, localReplaces
+}
+
+func stripGoModComment(line string) string {
+	if i := strings.Index(line, "//"); i >= 0 {
+		line = line[:i]
+	}
+	return strings.TrimSpace(line)
+}
+
+func requireModule(line string) string {
+	fields := strings.Fields(line)
+	if len(fields) < 2 {
+		return ""
+	}
+	return fields[0]
+}
+
+func localReplaceModule(line string) (string, bool) {
+	left, right, ok := strings.Cut(line, "=>")
+	if !ok {
+		return "", false
+	}
+	leftFields := strings.Fields(strings.TrimSpace(left))
+	rightFields := strings.Fields(strings.TrimSpace(right))
+	if len(leftFields) == 0 || len(rightFields) == 0 {
+		return "", false
+	}
+	if !isLocalReplaceTarget(rightFields[0]) {
+		return "", false
+	}
+	return leftFields[0], true
+}
+
+func isLocalReplaceTarget(target string) bool {
+	return target == "." ||
+		strings.HasPrefix(target, "./") ||
+		strings.HasPrefix(target, "../") ||
+		filepath.IsAbs(target)
 }
 
 func prepareSandboxRepoSnapshotForPath(ctx context.Context, repoPath string) (string, string, func() error, error) {

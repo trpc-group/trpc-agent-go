@@ -575,8 +575,10 @@ func TestRunReviewStoresQueryableTask(t *testing.T) {
 		t.Fatalf("loaded permission summary = %+v, want %+v", loaded.PermissionSummary, report.PermissionSummary)
 	}
 	if loaded.ArtifactPolicy.MaxArtifacts != report.ArtifactPolicy.MaxArtifacts ||
+		loaded.ArtifactPolicy.MaxBytesPerFile != report.ArtifactPolicy.MaxBytesPerFile ||
 		loaded.ArtifactPolicy.RetainedCount != report.ArtifactPolicy.RetainedCount ||
-		loaded.ArtifactPolicy.RejectedCount != report.ArtifactPolicy.RejectedCount {
+		loaded.ArtifactPolicy.RejectedCount != report.ArtifactPolicy.RejectedCount ||
+		strings.Join(loaded.ArtifactPolicy.AllowedFileNames, "\x00") != strings.Join(report.ArtifactPolicy.AllowedFileNames, "\x00") {
 		t.Fatalf("loaded artifact policy = %+v, want %+v", loaded.ArtifactPolicy, report.ArtifactPolicy)
 	}
 	if len(loaded.Packages) == 0 || loaded.Packages[0].PackagePath != "service" || loaded.Packages[0].PackageName != "service" {
@@ -725,6 +727,38 @@ func TestRunReviewFakeModelAddsLowConfidenceWarning(t *testing.T) {
 	}
 	if report.Warnings[0].Source != "llm" || report.Warnings[0].RuleID != "llm/fake-model/supplemental" {
 		t.Fatalf("unexpected fake model warning: %+v", report.Warnings[0])
+	}
+}
+
+func TestRunReviewFakeModelAnchorsToProvidedDiff(t *testing.T) {
+	dir := t.TempDir()
+	diffPath := filepath.Join(dir, "change.diff")
+	diff := `diff --git a/pkg/other.go b/pkg/other.go
+--- a/pkg/other.go
++++ b/pkg/other.go
+@@ -1,2 +1,3 @@
+ package pkg
++
++func Added() {}
+`
+	if err := os.WriteFile(diffPath, []byte(diff), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	report, _, _, err := RunReview(testContext(t), ReviewConfig{
+		DiffFile:  diffPath,
+		DryRun:    true,
+		FakeModel: true,
+		OutputDir: filepath.Join(dir, "out"),
+		DBPath:    filepath.Join(dir, "review.sqlite"),
+	})
+	if err != nil {
+		t.Fatalf("RunReview() error = %v", err)
+	}
+	if len(report.Warnings) != 1 {
+		t.Fatalf("warnings = %d, want 1: %+v", len(report.Warnings), report.Warnings)
+	}
+	if report.Warnings[0].File != "pkg/other.go" || report.Warnings[0].Line != 2 {
+		t.Fatalf("fake model warning was not anchored to provided diff: %+v", report.Warnings[0])
 	}
 }
 

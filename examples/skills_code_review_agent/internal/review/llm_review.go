@@ -61,7 +61,7 @@ func RunLLMReview(ctx context.Context, cfg LLMReviewConfig) ([]Finding, error) {
 	var mdl model.Model
 	switch provider {
 	case "fake":
-		mdl = newFakeReviewModel()
+		mdl = newFakeReviewModel(firstAddedAnchor(cfg.ParsedDiff))
 	default:
 		modelName, opts, err := openAICompatibleModelOptions(provider, cfg.Model, cfg.BaseURL)
 		if err != nil {
@@ -334,11 +334,17 @@ func bucketSupplementalFindings(items []Finding) (findings, warnings, needsHuman
 }
 
 type fakeReviewModel struct {
-	step atomic.Int32
+	step   atomic.Int32
+	anchor fakeReviewAnchor
 }
 
-func newFakeReviewModel() *fakeReviewModel {
-	return &fakeReviewModel{}
+type fakeReviewAnchor struct {
+	file string
+	line int
+}
+
+func newFakeReviewModel(anchor fakeReviewAnchor) *fakeReviewModel {
+	return &fakeReviewModel{anchor: anchor}
 }
 
 func (m *fakeReviewModel) Info() model.Info {
@@ -348,8 +354,12 @@ func (m *fakeReviewModel) Info() model.Info {
 func (m *fakeReviewModel) GenerateContent(ctx context.Context, _ *model.Request) (<-chan *model.Response, error) {
 	step := m.step.Add(1)
 	content := "[]"
-	if step == 1 {
-		content = `[{"severity":"medium","category":"testing","file":"service/handler.go","line":4,"title":"Fake model supplemental review item","evidence":"fake-model run through llmagent and code-review skill","recommendation":"Use a real model in production or keep this as deterministic CI coverage.","confidence":0.54,"source":"llm","rule_id":"llm/fake-model/supplemental"}]`
+	if step == 1 && m.anchor.file != "" && m.anchor.line > 0 {
+		content = fmt.Sprintf(
+			`[{"severity":"medium","category":"testing","file":%q,"line":%d,"title":"Fake model supplemental review item","evidence":"fake-model run through llmagent and code-review skill","recommendation":"Use a real model in production or keep this as deterministic CI coverage.","confidence":0.54,"source":"llm","rule_id":"llm/fake-model/supplemental"}]`,
+			m.anchor.file,
+			m.anchor.line,
+		)
 	}
 	rsp := &model.Response{
 		ID:      "fake-review",
@@ -373,6 +383,17 @@ func (m *fakeReviewModel) GenerateContent(ctx context.Context, _ *model.Request)
 		}
 	}()
 	return ch, nil
+}
+
+func firstAddedAnchor(pd ParsedDiff) fakeReviewAnchor {
+	for _, h := range pd.Hunks {
+		for _, line := range h.Lines {
+			if line.Kind == '+' && line.NewLine > 0 && h.File != "" {
+				return fakeReviewAnchor{file: h.File, line: line.NewLine}
+			}
+		}
+	}
+	return fakeReviewAnchor{}
 }
 
 func filepathJoin(elem ...string) string {

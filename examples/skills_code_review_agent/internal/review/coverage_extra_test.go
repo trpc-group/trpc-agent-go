@@ -442,6 +442,9 @@ func TestWorkspaceSandboxRunnerWithMockEngine(t *testing.T) {
 	if len(result.Artifacts) != 1 || result.Artifacts[0].Name != "diff_summary.json" {
 		t.Fatalf("unexpected artifacts: %+v", result.Artifacts)
 	}
+	if !strings.Contains(filepath.ToSlash(result.Artifacts[0].Path), "/task-mock/") {
+		t.Fatalf("artifact path is not scoped by task id: %s", result.Artifacts[0].Path)
+	}
 	data, err := os.ReadFile(result.Artifacts[0].Path)
 	if err != nil {
 		t.Fatalf("expected durable artifact path %q: %v", result.Artifacts[0].Path, err)
@@ -451,6 +454,20 @@ func TestWorkspaceSandboxRunnerWithMockEngine(t *testing.T) {
 	}
 	if len(result.Findings) != 1 || result.Findings[0].RuleID != "sandbox/go/diagnostic" {
 		t.Fatalf("unexpected sandbox findings: %+v", result.Findings)
+	}
+	other, err := runner.materializeCollectedArtifact("task-other", codeexecutor.File{
+		Name:    "out/diff_summary.json",
+		Content: `{"files_changed":2}`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if other.Path == result.Artifacts[0].Path {
+		t.Fatalf("artifact paths should be task-scoped, both were %s", other.Path)
+	}
+	tooLarge := strings.Repeat("x", int(defaultArtifactPolicy().MaxBytesPerFile)+1)
+	if _, err := runner.materializeCollectedArtifact("task-large", codeexecutor.File{Name: "out/diff_summary.json", Content: tooLarge}); err == nil {
+		t.Fatal("expected oversized collected artifact to be rejected before writing")
 	}
 	var staticcheckSkipped bool
 	for _, run := range result.Runs {
@@ -530,6 +547,39 @@ func TestWorkspaceSandboxRunnerMarksExternalModulesUnavailableOffline(t *testing
 	}
 	if unavailable != 3 {
 		t.Fatalf("expected three dependency unavailable runs, got %+v", result.Runs)
+	}
+}
+
+func TestWorkspaceSandboxRunnerAllowsLocalReplaceModulesOffline(t *testing.T) {
+	repo := t.TempDir()
+	writeTestFile(t, filepath.Join(repo, "go.mod"), `module example.com/deps
+
+go 1.23
+
+require example.com/localmod v0.0.0
+
+replace example.com/localmod => ./localmod
+`)
+	writeTestFile(t, filepath.Join(repo, "localmod", "go.mod"), "module example.com/localmod\n\ngo 1.23\n")
+	if repoHasUnvendoredExternalModules(repo) {
+		t.Fatal("local replace module should not require external module resolution")
+	}
+	engine := &mockWorkspaceEngine{}
+	runner := &WorkspaceSandboxRunner{
+		executorName:     "container",
+		engine:           engine,
+		timeout:          time.Second,
+		outputLimitBytes: 1024,
+		outputDir:        t.TempDir(),
+	}
+	result := runner.RunChecks(testContext(t), "task-local-replace", repo, ParsedDiff{Raw: "diff"})
+	if len(engine.runSpecs) != 4 {
+		t.Fatalf("expected repo checks to run with local replace, specs=%+v result=%+v", engine.runSpecs, result.Runs)
+	}
+	for _, run := range result.Runs {
+		if run.ErrorType == "dependency_unavailable" {
+			t.Fatalf("local replace was marked unavailable: %+v", result.Runs)
+		}
 	}
 }
 
@@ -911,7 +961,11 @@ func TestStoreDirectBucketsAndMissingRows(t *testing.T) {
 	if loaded.PermissionSummary.AllowCount != 1 {
 		t.Fatalf("loaded permission summary = %+v", loaded.PermissionSummary)
 	}
-	if loaded.ArtifactPolicy.RejectedCount != 2 || loaded.ArtifactPolicy.RetainedCount != 1 {
+	if loaded.ArtifactPolicy.MaxArtifacts != report.ArtifactPolicy.MaxArtifacts ||
+		loaded.ArtifactPolicy.MaxBytesPerFile != report.ArtifactPolicy.MaxBytesPerFile ||
+		strings.Join(loaded.ArtifactPolicy.AllowedFileNames, "\x00") != strings.Join(report.ArtifactPolicy.AllowedFileNames, "\x00") ||
+		loaded.ArtifactPolicy.RejectedCount != report.ArtifactPolicy.RejectedCount ||
+		loaded.ArtifactPolicy.RetainedCount != report.ArtifactPolicy.RetainedCount {
 		t.Fatalf("loaded artifact policy = %+v", loaded.ArtifactPolicy)
 	}
 	if err := store.SaveReport(testContext(t), report, pd, "review_report.json", "review_report.md"); err == nil {
