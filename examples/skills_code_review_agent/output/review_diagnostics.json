@@ -1,0 +1,90 @@
+{
+  "task_id": "review-fb6dfcfccbfe87a2803fca33",
+  "status": "completed",
+  "input": {
+    "files_changed": 1,
+    "go_files": 1,
+    "added_lines": 2,
+    "deleted_lines": 0
+  },
+  "packages": [
+    {
+      "package_path": "service",
+      "package_name": "service",
+      "files": [
+        "service/config.go"
+      ]
+    }
+  ],
+  "severity_counts": {
+    "critical": 1,
+    "low": 1
+  },
+  "error_type_counts": {
+    "dry_run": 1,
+    "no_repo_path": 1
+  },
+  "permission_summary": {
+    "allow_count": 1,
+    "deny_count": 0,
+    "ask_count": 0,
+    "needs_human_review_count": 0
+  },
+  "sandbox_summary": [
+    {
+      "id": "run-86375f789408650525a18455",
+      "task_id": "review-fb6dfcfccbfe87a2803fca33",
+      "command": "bash",
+      "args": [
+        "skills/code-review/scripts/diff_summary.sh",
+        "work/change.diff",
+        "out/diff_summary.json"
+      ],
+      "executor": "fake",
+      "status": "skipped",
+      "exit_code": 0,
+      "stderr": "sandbox command skipped by dry-run/fake executor after permission decision",
+      "error_type": "dry_run",
+      "started_at": "2026-07-17T10:26:56.841311+08:00",
+      "duration_ms": 0,
+      "timed_out": false,
+      "output_truncated": false
+    },
+    {
+      "id": "run-73b068ecc95a4bef98cd2401",
+      "task_id": "review-fb6dfcfccbfe87a2803fca33",
+      "command": "go",
+      "args": [
+        "test",
+        "./...",
+        "vet",
+        "./...",
+        "staticcheck",
+        "./..."
+      ],
+      "executor": "fake",
+      "status": "skipped",
+      "exit_code": 0,
+      "stderr": "repo path not provided; repository Go checks skipped in dry-run/fake executor",
+      "error_type": "no_repo_path",
+      "started_at": "2026-07-17T10:26:56.841312+08:00",
+      "duration_ms": 0,
+      "timed_out": false,
+      "output_truncated": false
+    }
+  ],
+  "artifact_policy": {
+    "max_artifacts": 5,
+    "max_bytes_per_file": 1048576,
+    "allowed_file_names": [
+      "review_report.json",
+      "review_report.md",
+      "review_diagnostics.json",
+      "review_report.zh.md",
+      "diff_summary.json"
+    ],
+    "retained_count": 4,
+    "rejected_count": 0
+  },
+  "conclusion": "Critical security findings were detected. Do not merge until the listed secret or credential issues are remediated and rotated."
+}

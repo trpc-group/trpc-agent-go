@@ -1,6 +1,6 @@
 # Code Review Report
 
-- Task: `review-d40f63208646f9202f58c5d7`
+- Task: `review-fc71da1b3a457dd18aedc55e`
 - Status: `completed`
 - Files changed: `2`
 - Go files changed: `2`
@@ -46,7 +46,7 @@ No low-confidence warnings.
 - Permission deny decisions: `0`
 - Permission ask decisions: `0`
 - Permission needs human review decisions: `0`
-- Artifact policy: retained `3`, rejected `0`, max `3` files, max `1048576` bytes per file
+- Artifact policy: retained `5`, rejected `0`, max `5` files, max `1048576` bytes per file
 - `bash skills/code-review/scripts/diff_summary.sh work/change.diff out/diff_summary.json`: action=`allow`, disposition=`allow`
 - `go test ./...`: action=`allow`, disposition=`allow`
 - `go vet ./...`: action=`allow`, disposition=`allow`
@@ -54,15 +54,15 @@ No low-confidence warnings.
 
 ## Sandbox
 
-- `bash skills/code-review/scripts/diff_summary.sh work/change.diff out/diff_summary.json`: success, exit=0, timeout=false, duration=42ms
-- `go test ./...`: success, exit=0, timeout=false, duration=2130ms
-- `go vet ./...`: success, exit=0, timeout=false, duration=368ms
-- `staticcheck ./...`: success, exit=0, timeout=false, duration=833ms
+- `bash skills/code-review/scripts/diff_summary.sh work/change.diff out/diff_summary.json`: success, exit=0, timeout=false, duration=48ms
+- `go test ./...`: success, exit=0, timeout=false, duration=6223ms
+- `go vet ./...`: success, exit=0, timeout=false, duration=494ms
+- `staticcheck ./...`: success, exit=0, timeout=false, duration=1274ms
 
 ## Metrics
 
-- Total duration: `65780ms`
-- Sandbox duration: `3373ms`
+- Total duration: `71407ms`
+- Sandbox duration: `8039ms`
 - Tool calls: `4`
 - Error types: `map[]`
 

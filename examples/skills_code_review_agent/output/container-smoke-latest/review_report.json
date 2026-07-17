@@ -1,9 +1,9 @@
 {
   "task": {
-    "id": "review-d40f63208646f9202f58c5d7",
+    "id": "review-fc71da1b3a457dd18aedc55e",
     "status": "completed",
-    "started_at": "2026-07-15T19:49:42.330523+08:00",
-    "ended_at": "2026-07-15T19:50:48.110079+08:00",
+    "started_at": "2026-07-17T10:26:56.838262+08:00",
+    "ended_at": "2026-07-17T10:28:08.244745+08:00",
     "input_mode": "container-smoke"
   },
   "input": {
@@ -27,8 +27,8 @@
   "needs_human_review": [],
   "sandbox_runs": [
     {
-      "id": "run-6e71d03d12c34cac5cb3a303",
-      "task_id": "review-d40f63208646f9202f58c5d7",
+      "id": "run-9d9f018695cea4db73a3feb5",
+      "task_id": "review-fc71da1b3a457dd18aedc55e",
       "command": "bash",
       "args": [
         "skills/code-review/scripts/diff_summary.sh",
@@ -38,14 +38,14 @@
       "executor": "container",
       "status": "success",
       "exit_code": 0,
-      "started_at": "2026-07-15T19:50:44.673999+08:00",
-      "duration_ms": 42,
+      "started_at": "2026-07-17T10:28:00.122541+08:00",
+      "duration_ms": 48,
       "timed_out": false,
       "output_truncated": false
     },
     {
-      "id": "run-1c26b05ac966799c8aa9cd46",
-      "task_id": "review-d40f63208646f9202f58c5d7",
+      "id": "run-b1a5a193e2f6105db4dcf72a",
+      "task_id": "review-fc71da1b3a457dd18aedc55e",
       "command": "go",
       "args": [
         "test",
@@ -55,14 +55,14 @@
       "status": "success",
       "exit_code": 0,
       "stdout": "ok  \texample.com/container-smoke/calc\t0.001s\n",
-      "started_at": "2026-07-15T19:50:44.716168+08:00",
-      "duration_ms": 2130,
+      "started_at": "2026-07-17T10:28:00.17123+08:00",
+      "duration_ms": 6223,
       "timed_out": false,
       "output_truncated": false
     },
     {
-      "id": "run-6c2370e68a00969a64e5d5ec",
-      "task_id": "review-d40f63208646f9202f58c5d7",
+      "id": "run-e460714ae09bd3cfcf23086a",
+      "task_id": "review-fc71da1b3a457dd18aedc55e",
       "command": "go",
       "args": [
         "vet",
@@ -71,14 +71,14 @@
       "executor": "container",
       "status": "success",
       "exit_code": 0,
-      "started_at": "2026-07-15T19:50:46.846165+08:00",
-      "duration_ms": 368,
+      "started_at": "2026-07-17T10:28:06.394922+08:00",
+      "duration_ms": 494,
       "timed_out": false,
       "output_truncated": false
     },
     {
-      "id": "run-fef54d43ad9611c872a2595b",
-      "task_id": "review-d40f63208646f9202f58c5d7",
+      "id": "run-9ea5c38e82495078c7d3ae15",
+      "task_id": "review-fc71da1b3a457dd18aedc55e",
       "command": "staticcheck",
       "args": [
         "./..."
@@ -86,48 +86,48 @@
       "executor": "container",
       "status": "success",
       "exit_code": 0,
-      "started_at": "2026-07-15T19:50:47.214443+08:00",
-      "duration_ms": 833,
+      "started_at": "2026-07-17T10:28:06.889542+08:00",
+      "duration_ms": 1274,
       "timed_out": false,
       "output_truncated": false
     }
   ],
   "permission_decisions": [
     {
-      "id": "perm-2baf9c337fe0c7afb249587c",
-      "task_id": "review-d40f63208646f9202f58c5d7",
+      "id": "perm-4fd25c901b23cd52867d4197",
+      "task_id": "review-fc71da1b3a457dd18aedc55e",
       "tool": "workspace_exec",
       "command": "bash skills/code-review/scripts/diff_summary.sh work/change.diff out/diff_summary.json",
       "action": "allow",
       "disposition": "allow",
-      "created_at": "2026-07-15T19:50:44.673998+08:00"
+      "created_at": "2026-07-17T10:28:00.12254+08:00"
     },
     {
-      "id": "perm-f55655fdce90e3d1f6978301",
-      "task_id": "review-d40f63208646f9202f58c5d7",
+      "id": "perm-d56d2297d871239da29e56bf",
+      "task_id": "review-fc71da1b3a457dd18aedc55e",
       "tool": "workspace_exec",
       "command": "go test ./...",
       "action": "allow",
       "disposition": "allow",
-      "created_at": "2026-07-15T19:50:44.716166+08:00"
+      "created_at": "2026-07-17T10:28:00.171229+08:00"
     },
     {
-      "id": "perm-b38320e5a47e1be468909591",
-      "task_id": "review-d40f63208646f9202f58c5d7",
+      "id": "perm-d33ff5d0750b550b470287fc",
+      "task_id": "review-fc71da1b3a457dd18aedc55e",
       "tool": "workspace_exec",
       "command": "go vet ./...",
       "action": "allow",
       "disposition": "allow",
-      "created_at": "2026-07-15T19:50:46.846154+08:00"
+      "created_at": "2026-07-17T10:28:06.394883+08:00"
     },
     {
-      "id": "perm-3df72ec1f995091ff9fea399",
-      "task_id": "review-d40f63208646f9202f58c5d7",
+      "id": "perm-92cdc662c7ca93a6d0b74743",
+      "task_id": "review-fc71da1b3a457dd18aedc55e",
       "tool": "workspace_exec",
       "command": "staticcheck ./...",
       "action": "allow",
       "disposition": "allow",
-      "created_at": "2026-07-15T19:50:47.214442+08:00"
+      "created_at": "2026-07-17T10:28:06.889542+08:00"
     }
   ],
   "permission_summary": {
@@ -138,47 +138,67 @@
   },
   "artifacts": [
     {
-      "id": "artifact-c77295898f3f657f170494cc",
-      "task_id": "review-d40f63208646f9202f58c5d7",
+      "id": "artifact-48709eccd07de4ed19421f2f",
+      "task_id": "review-fc71da1b3a457dd18aedc55e",
       "name": "diff_summary.json",
       "path": "out/diff_summary.json",
       "mime_type": "text/plain; charset=utf-8",
       "size_bytes": 67,
-      "created_at": "2026-07-15T19:50:48.079576+08:00"
+      "created_at": "2026-07-17T10:28:08.205558+08:00"
     },
     {
-      "id": "artifact-51b0bdbb8d17b38f70d0ba7e",
-      "task_id": "review-d40f63208646f9202f58c5d7",
+      "id": "artifact-64a511ba71f8adedff37f545",
+      "task_id": "review-fc71da1b3a457dd18aedc55e",
       "name": "review_report.json",
       "path": "output/container-smoke-latest/review_report.json",
       "mime_type": "application/json",
-      "size_bytes": 4405,
-      "created_at": "2026-07-15T19:50:48.11579+08:00"
+      "size_bytes": 4404,
+      "created_at": "2026-07-17T10:28:08.261405+08:00"
     },
     {
-      "id": "artifact-3d10f01114d4b44a8aa5a71e",
-      "task_id": "review-d40f63208646f9202f58c5d7",
+      "id": "artifact-35386073dd05a85a8d9f6b7d",
+      "task_id": "review-fc71da1b3a457dd18aedc55e",
       "name": "review_report.md",
       "path": "output/container-smoke-latest/review_report.md",
       "mime_type": "text/markdown",
-      "size_bytes": 1763,
-      "created_at": "2026-07-15T19:50:48.115795+08:00"
+      "size_bytes": 1764,
+      "created_at": "2026-07-17T10:28:08.261411+08:00"
+    },
+    {
+      "id": "artifact-c168a1dce225cfe16bf7e46c",
+      "task_id": "review-fc71da1b3a457dd18aedc55e",
+      "name": "review_diagnostics.json",
+      "path": "output/container-smoke-latest/review_diagnostics.json",
+      "mime_type": "application/json",
+      "size_bytes": 2656,
+      "created_at": "2026-07-17T10:28:08.261416+08:00"
+    },
+    {
+      "id": "artifact-6d4f94211ae80ee336879159",
+      "task_id": "review-fc71da1b3a457dd18aedc55e",
+      "name": "review_report.zh.md",
+      "path": "output/container-smoke-latest/review_report.zh.md",
+      "mime_type": "text/markdown",
+      "size_bytes": 617,
+      "created_at": "2026-07-17T10:28:08.261421+08:00"
     }
   ],
   "artifact_policy": {
-    "max_artifacts": 3,
+    "max_artifacts": 5,
     "max_bytes_per_file": 1048576,
     "allowed_file_names": [
       "review_report.json",
       "review_report.md",
+      "review_diagnostics.json",
+      "review_report.zh.md",
       "diff_summary.json"
     ],
-    "retained_count": 3,
+    "retained_count": 5,
     "rejected_count": 0
   },
   "metrics": {
-    "total_duration_ms": 65780,
-    "sandbox_duration_ms": 3373,
+    "total_duration_ms": 71407,
+    "sandbox_duration_ms": 8039,
     "tool_call_count": 4,
     "permission_deny_count": 0,
     "permission_ask_count": 0,

@@ -65,6 +65,39 @@ func TestRunWithoutConfigDefaultsToRuleOnly(t *testing.T) {
 	}
 }
 
+func TestRunYAMLConfigWithoutRuleOnlyPreservesDefault(t *testing.T) {
+	outDir := t.TempDir()
+	cfgPath := filepath.Join(t.TempDir(), "cr-agent.yaml")
+	config := "input:\n  fixture: security_issue\n" +
+		"output:\n  dir: " + filepath.ToSlash(outDir) + "\n  sqlite: " + filepath.ToSlash(filepath.Join(outDir, "reviews.sqlite")) + "\n" +
+		"sandbox:\n  executor: fake\n  timeout: 30s\n" +
+		"model:\n  provider: fake\n"
+	if err := os.WriteFile(cfgPath, []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := run([]string{"--config", cfgPath}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "findings=1 warnings=0 needs_human_review=1") {
+		t.Fatalf("unexpected output:\n%s", out.String())
+	}
+}
+
+func TestLoadYAMLConfigAllowsExplicitRuleOnlyFalse(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "cr-agent.yaml")
+	if err := os.WriteFile(cfgPath, []byte("model:\n  rule_only: false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := loadYAMLConfig(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.RuleOnly {
+		t.Fatal("expected explicit model.rule_only=false to be preserved")
+	}
+}
+
 func TestLoadYAMLConfigRejectsBadTimeout(t *testing.T) {
 	cfgPath := filepath.Join(t.TempDir(), "bad.yaml")
 	if err := os.WriteFile(cfgPath, []byte("sandbox:\n  timeout: nope\n"), 0o600); err != nil {

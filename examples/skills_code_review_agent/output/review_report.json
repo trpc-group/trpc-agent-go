@@ -1,9 +1,9 @@
 {
   "task": {
-    "id": "review-2bd2b47bf194f502a1184f97",
+    "id": "review-fb6dfcfccbfe87a2803fca33",
     "status": "completed",
-    "started_at": "2026-07-15T19:49:32.456565+08:00",
-    "ended_at": "2026-07-15T19:49:32.458848+08:00",
+    "started_at": "2026-07-17T10:26:56.838069+08:00",
+    "ended_at": "2026-07-17T10:26:56.841313+08:00",
     "input_mode": "fixture:security_issue"
   },
   "input": {
@@ -54,8 +54,8 @@
   ],
   "sandbox_runs": [
     {
-      "id": "run-2f3c09055634f73dfc6ea265",
-      "task_id": "review-2bd2b47bf194f502a1184f97",
+      "id": "run-86375f789408650525a18455",
+      "task_id": "review-fb6dfcfccbfe87a2803fca33",
       "command": "bash",
       "args": [
         "skills/code-review/scripts/diff_summary.sh",
@@ -67,14 +67,14 @@
       "exit_code": 0,
       "stderr": "sandbox command skipped by dry-run/fake executor after permission decision",
       "error_type": "dry_run",
-      "started_at": "2026-07-15T19:49:32.458847+08:00",
+      "started_at": "2026-07-17T10:26:56.841311+08:00",
       "duration_ms": 0,
       "timed_out": false,
       "output_truncated": false
     },
     {
-      "id": "run-7bb4e30e058c502ffcdf1122",
-      "task_id": "review-2bd2b47bf194f502a1184f97",
+      "id": "run-73b068ecc95a4bef98cd2401",
+      "task_id": "review-fb6dfcfccbfe87a2803fca33",
       "command": "go",
       "args": [
         "test",
@@ -89,7 +89,7 @@
       "exit_code": 0,
       "stderr": "repo path not provided; repository Go checks skipped in dry-run/fake executor",
       "error_type": "no_repo_path",
-      "started_at": "2026-07-15T19:49:32.458847+08:00",
+      "started_at": "2026-07-17T10:26:56.841312+08:00",
       "duration_ms": 0,
       "timed_out": false,
       "output_truncated": false
@@ -97,13 +97,13 @@
   ],
   "permission_decisions": [
     {
-      "id": "perm-e46d02e51322e2979f55c011",
-      "task_id": "review-2bd2b47bf194f502a1184f97",
+      "id": "perm-7c62321b5ed0d534dbaf3ffd",
+      "task_id": "review-fb6dfcfccbfe87a2803fca33",
       "tool": "workspace_exec",
       "command": "bash skills/code-review/scripts/diff_summary.sh work/change.diff out/diff_summary.json",
       "action": "allow",
       "disposition": "allow",
-      "created_at": "2026-07-15T19:49:32.458846+08:00"
+      "created_at": "2026-07-17T10:26:56.841311+08:00"
     }
   ],
   "permission_summary": {
@@ -114,37 +114,57 @@
   },
   "artifacts": [
     {
-      "id": "artifact-c72faa95bc39b9f80ce2098f",
-      "task_id": "review-2bd2b47bf194f502a1184f97",
+      "id": "artifact-7ad75d9b5f500cfde27ef95e",
+      "task_id": "review-fb6dfcfccbfe87a2803fca33",
       "name": "review_report.json",
       "path": "output/review_report.json",
       "mime_type": "application/json",
       "size_bytes": 4146,
-      "created_at": "2026-07-15T19:49:32.462629+08:00"
+      "created_at": "2026-07-17T10:26:56.851251+08:00"
     },
     {
-      "id": "artifact-b99df20c4483aa3178e8ba4d",
-      "task_id": "review-2bd2b47bf194f502a1184f97",
+      "id": "artifact-a6c351022bb10b136d953f02",
+      "task_id": "review-fb6dfcfccbfe87a2803fca33",
       "name": "review_report.md",
       "path": "output/review_report.md",
       "mime_type": "text/markdown",
       "size_bytes": 2357,
-      "created_at": "2026-07-15T19:49:32.462633+08:00"
+      "created_at": "2026-07-17T10:26:56.851254+08:00"
+    },
+    {
+      "id": "artifact-861ed7dd59b2022f19e329c4",
+      "task_id": "review-fb6dfcfccbfe87a2803fca33",
+      "name": "review_diagnostics.json",
+      "path": "output/review_diagnostics.json",
+      "mime_type": "application/json",
+      "size_bytes": 2146,
+      "created_at": "2026-07-17T10:26:56.851256+08:00"
+    },
+    {
+      "id": "artifact-9dc903fb644aae03858cec5a",
+      "task_id": "review-fb6dfcfccbfe87a2803fca33",
+      "name": "review_report.zh.md",
+      "path": "output/review_report.zh.md",
+      "mime_type": "text/markdown",
+      "size_bytes": 1199,
+      "created_at": "2026-07-17T10:26:56.851257+08:00"
     }
   ],
   "artifact_policy": {
-    "max_artifacts": 3,
+    "max_artifacts": 5,
     "max_bytes_per_file": 1048576,
     "allowed_file_names": [
       "review_report.json",
       "review_report.md",
+      "review_diagnostics.json",
+      "review_report.zh.md",
       "diff_summary.json"
     ],
-    "retained_count": 2,
+    "retained_count": 4,
     "rejected_count": 0
   },
   "metrics": {
-    "total_duration_ms": 2,
+    "total_duration_ms": 3,
     "sandbox_duration_ms": 0,
     "tool_call_count": 0,
     "permission_deny_count": 0,

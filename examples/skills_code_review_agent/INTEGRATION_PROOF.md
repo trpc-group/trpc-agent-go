@@ -50,7 +50,7 @@ Container smoke persistence check:
 | `sandbox_runs` | 4 |
 | `permission_decisions` | 4 |
 | `findings` | 0 |
-| `artifacts` | 3 |
+| `artifacts` | 5 |
 | `audit_metrics` | 1 |
 | `reports` | 1 |
 

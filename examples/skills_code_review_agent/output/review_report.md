@@ -1,6 +1,6 @@
 # Code Review Report
 
-- Task: `review-2bd2b47bf194f502a1184f97`
+- Task: `review-fb6dfcfccbfe87a2803fca33`
 - Status: `completed`
 - Files changed: `1`
 - Go files changed: `1`
@@ -64,7 +64,7 @@ No low-confidence warnings.
 - Permission deny decisions: `0`
 - Permission ask decisions: `0`
 - Permission needs human review decisions: `0`
-- Artifact policy: retained `2`, rejected `0`, max `3` files, max `1048576` bytes per file
+- Artifact policy: retained `4`, rejected `0`, max `5` files, max `1048576` bytes per file
 - `bash skills/code-review/scripts/diff_summary.sh work/change.diff out/diff_summary.json`: action=`allow`, disposition=`allow`
 
 ## Sandbox
@@ -74,7 +74,7 @@ No low-confidence warnings.
 
 ## Metrics
 
-- Total duration: `2ms`
+- Total duration: `3ms`
 - Sandbox duration: `0ms`
 - Tool calls: `0`
 - Error types: `map[dry_run:1 no_repo_path:1]`

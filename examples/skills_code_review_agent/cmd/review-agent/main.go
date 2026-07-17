@@ -48,7 +48,7 @@ type fileConfig struct {
 		Name     string `yaml:"name"`
 		BaseURL  string `yaml:"base_url"`
 		Fake     bool   `yaml:"fake"`
-		RuleOnly bool   `yaml:"rule_only"`
+		RuleOnly *bool  `yaml:"rule_only"`
 	} `yaml:"model"`
 }
 
@@ -133,7 +133,10 @@ func loadYAMLConfig(path string) (review.ReviewConfig, error) {
 		Model:              fc.Model.Name,
 		ModelBaseURL:       fc.Model.BaseURL,
 		FakeModel:          fc.Model.Fake,
-		RuleOnly:           fc.Model.RuleOnly,
+		RuleOnly:           true,
+	}
+	if fc.Model.RuleOnly != nil {
+		cfg.RuleOnly = *fc.Model.RuleOnly
 	}
 	if fc.Sandbox.Timeout != "" {
 		timeout, err := time.ParseDuration(fc.Sandbox.Timeout)
