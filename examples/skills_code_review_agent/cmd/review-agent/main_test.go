@@ -11,6 +11,8 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -62,6 +64,28 @@ func TestRunWithoutConfigDefaultsToRuleOnly(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "findings=1 warnings=0 needs_human_review=1") {
 		t.Fatalf("unexpected output:\n%s", out.String())
+	}
+}
+
+func TestRunPropagatesCanceledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	outDir := t.TempDir()
+	var out bytes.Buffer
+	err := runWithContext(ctx, []string{
+		"--fixture", "security_issue",
+		"--executor", "fake",
+		"--output-dir", outDir,
+		"--sqlite", filepath.Join(outDir, "reviews.sqlite"),
+	}, &out)
+	if err == nil {
+		t.Fatal("expected canceled context error")
+	}
+	if !errors.Is(err, context.Canceled) && !strings.Contains(err.Error(), context.Canceled.Error()) {
+		t.Fatalf("expected context canceled error, got %v", err)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("expected no success output on canceled context, got %q", out.String())
 	}
 }
 

@@ -11,6 +11,8 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -49,5 +51,28 @@ func TestRunCLIRejectsBadFlag(t *testing.T) {
 	}
 	if out.Len() != 0 {
 		t.Fatalf("expected no output on flag error, got %q", out.String())
+	}
+}
+
+func TestRunCLIPropagatesCanceledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	outDir := t.TempDir()
+	var out bytes.Buffer
+	err := runWithContext(ctx, []string{
+		"--fixture", "security_issue",
+		"--dry-run",
+		"--executor", "fake",
+		"--output-dir", outDir,
+		"--db", filepath.Join(outDir, "reviews.sqlite"),
+	}, &out)
+	if err == nil {
+		t.Fatal("expected canceled context error")
+	}
+	if !errors.Is(err, context.Canceled) && !strings.Contains(err.Error(), context.Canceled.Error()) {
+		t.Fatalf("expected context canceled error, got %v", err)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("expected no success output on canceled context, got %q", out.String())
 	}
 }
