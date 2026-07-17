@@ -604,7 +604,7 @@ func (m *mockOpenSandboxServer) handleCommand(w http.ResponseWriter, r *http.Req
 		// the exit_code field; it only defaults to 0 when no error
 		// occurred. The error event's evalue is parsed as the exit
 		// code by the SDK's error handler.
-		if m.executionError != nil {
+		if m.executionError != nil && (isRunProgram || forceInfraExit) {
 			ee := m.executionError
 			tb, _ := json.Marshal(ee.Traceback)
 			fmt.Fprintf(w, `{"type":"error","ename":%q,"evalue":%q,"traceback":%s}`,
@@ -2574,6 +2574,9 @@ func TestRunProgram_ExecutionError_MappedToStderr(t *testing.T) {
 		Args:    []string{"bad.py"},
 		Timeout: 5 * time.Second,
 	})
+	// SDK may return nil Go error with Execution.Error set; we surface a
+	// failed RunResult (ExitCode -1 + stderr) so err-only and ExitCode
+	// checkers both see failure without breaking ExecuteCode aggregation.
 	require.NoError(t, err)
 	assert.Equal(t, -1, res.ExitCode,
 		"non-numeric evalue should fall back to ExitCode -1")
@@ -3386,4 +3389,34 @@ func TestValidateWorkspacePolicy_ZeroOK(t *testing.T) {
 	require.NoError(t, validateWorkspacePolicy(codeexecutor.WorkspacePolicy{}))
 	require.NoError(t, validateWorkspacePolicy(codeexecutor.WorkspacePolicy{Isolated: true}))
 	require.NoError(t, validateRunProgramLimits(codeexecutor.ResourceLimits{}))
+}
+
+// TestCollect_ExactBudgetComplete_NoPartialMarker: when matches exactly
+// fill the byte budget and no eligible file is skipped, do not mark partial.
+func TestCollect_ExactBudgetComplete_NoPartialMarker(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	ws, err := exec.CreateWorkspace(context.Background(), "exec-exact", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+
+	// Exactly 16 * 4MiB = 64MiB budget; no 17th file.
+	var searchPaths []string
+	for i := 0; i < 16; i++ {
+		fname := fmt.Sprintf("exact_%02d.txt", i)
+		fpath := filepath.ToSlash(filepath.Join(ws.Path, fname))
+		m.setDownloadData(fpath, make([]byte, maxReadSizeBytes))
+		searchPaths = append(searchPaths, fname)
+	}
+	m.setSearchResults(searchPaths)
+
+	files, err := exec.Collect(context.Background(), ws, []string{"*.txt"})
+	require.NoError(t, err)
+	for _, f := range files {
+		assert.NotEqual(t, collectLimitsHitMarkerName, f.Name,
+			"exact fill of budget with no remaining matches is complete")
+	}
+	assert.Len(t, files, 16)
 }

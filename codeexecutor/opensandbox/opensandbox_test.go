@@ -1192,7 +1192,7 @@ func TestExecuteCode_PerSession_DerivesExecIDFromSession(t *testing.T) {
 	m.mu.Unlock()
 
 	wantKey := executionIDFromContext(ctx)
-	require.Equal(t, "app-a/user-1/sess-1", wantKey)
+	require.Equal(t, encodeSessionWorkspaceKey("app-a", "user-1", "sess-1"), wantKey)
 	h := stableWorkspaceHash(wantKey)
 	wsMarker := "ws_" + h
 
@@ -1269,4 +1269,20 @@ func TestEngine_DoesNotAdvertiseSupportsCleanEnv(t *testing.T) {
 	exec := newTestExecutor(t, m)
 	defer exec.Close()
 	assert.False(t, exec.Engine().Describe().SupportsCleanEnv)
+}
+
+func TestEncodeSessionWorkspaceKey_Injective(t *testing.T) {
+	// Empty-field collision that the old "/"-join scheme produced.
+	a := encodeSessionWorkspaceKey("a", "", "b")
+	b := encodeSessionWorkspaceKey("", "a", "b")
+	require.NotEqual(t, a, b)
+	// Embedded separator must not collide either.
+	c := encodeSessionWorkspaceKey("a/b", "c", "d")
+	d := encodeSessionWorkspaceKey("a", "b/c", "d")
+	require.NotEqual(t, c, d)
+	// Same identity always matches.
+	require.Equal(t,
+		encodeSessionWorkspaceKey("app", "user", "sess"),
+		encodeSessionWorkspaceKey("app", "user", "sess"),
+	)
 }

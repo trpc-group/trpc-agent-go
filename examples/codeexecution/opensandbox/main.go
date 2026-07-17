@@ -9,8 +9,9 @@
 //
 
 // Package main demonstrates how to use the OpenSandbox code execution
-// capabilities with LLMAgent. This example uses DeepSeek as the LLM
-// and OpenSandbox (running in Docker Desktop WSL2) as the code executor.
+// capabilities with LLMAgent. Configure the LLM via OPENAI_API_KEY and
+// optional OPENAI_BASE_URL (same as other codeexecution examples).
+// OpenSandbox connection uses OPENSANDBOX_* env vars.
 package main
 
 import (
@@ -29,19 +30,17 @@ import (
 )
 
 func main() {
-	modelName := flag.String("model", "deepseek-chat", "Name of the model to use")
+	modelName := flag.String("model", "deepseek-v4-flash", "Name of the model to use")
 	flag.Parse()
 
 	fmt.Printf("Creating LLMAgent with OpenSandbox code executor:\n")
 	fmt.Printf("- Model Name: %s\n", *modelName)
-	fmt.Printf("- Code Executor: OpenSandbox (Docker Desktop WSL2)\n")
+	fmt.Printf("- Code Executor: OpenSandbox\n")
 	fmt.Println()
 
-	// DeepSeek requires its own base URL to trigger the DeepSeek variant.
-	// OPENAI_API_KEY is read from env; set it to the DeepSeek API key.
-	modelInstance := openai.New(*modelName,
-		openai.WithBaseURL("https://api.deepseek.com"),
-	)
+	// Same as other codeexecution examples: model config from env.
+	// OPENAI_API_KEY is required; OPENAI_BASE_URL is optional (gateway/DeepSeek/etc).
+	modelInstance := openai.New(*modelName)
 
 	genConfig := model.GenerationConfig{
 		MaxTokens:   intPtr(1000),

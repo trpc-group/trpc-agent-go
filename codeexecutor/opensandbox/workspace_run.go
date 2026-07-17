@@ -246,16 +246,22 @@ func (r *workspaceRuntime) executeRunCommand(
 		Stderr:   stderrBuf.string(),
 	}
 	if exec != nil {
-		// exec.Error carries structured error information from SSE
-		// error events.
+		// SDK may return nil Go error while Execution.Error is set after
+		// an SSE error event (exit code often nil). Never treat that as
+		// exit 0: put details in stderr and set a non-zero ExitCode.
+		// Do NOT convert this into runErr — ExecuteCode aggregates via
+		// ExitCode/stderr and must continue subsequent blocks.
 		if exec.Error != nil {
 			res.Stderr = formatExecutionError(exec.Error, res.Stderr)
-		}
-		if exec.ExitCode != nil {
+			if exec.ExitCode != nil {
+				res.ExitCode = *exec.ExitCode
+			} else {
+				res.ExitCode = -1
+			}
+		} else if exec.ExitCode != nil {
 			res.ExitCode = *exec.ExitCode
-		} else {
-			// ExitCode is nil when the command was killed by a signal
-			// or did not complete. Use -1 to make the failure visible.
+		} else if runErr == nil {
+			// Incomplete stream (e.g. mock noComplete): not success.
 			res.ExitCode = -1
 		}
 	}
@@ -496,12 +502,30 @@ func (r *workspaceRuntime) runBash(
 		}
 		return "", err
 	}
-	if exec.ExitCode != nil && *exec.ExitCode != 0 {
+	// Surface structured SSE errors even when the Go error is nil (SDK
+	// quirk). Prefer the historical "bash exit N" form when a non-zero
+	// exit code is present so existing tests and logs stay stable.
+	if exec != nil && exec.Error != nil {
+		if exec.ExitCode != nil && *exec.ExitCode != 0 {
+			return stdoutBuf.string(), fmt.Errorf(
+				"opensandbox: bash exit %d: %s",
+				*exec.ExitCode, formatExecutionError(exec.Error, stderrBuf.string()),
+			)
+		}
+		return stdoutBuf.string(), fmt.Errorf(
+			"opensandbox: bash exit %d: %s",
+			-1, formatExecutionError(exec.Error, stderrBuf.string()),
+		)
+	}
+	if exec != nil && exec.ExitCode != nil && *exec.ExitCode != 0 {
 		return stdoutBuf.string(), fmt.Errorf(
 			"opensandbox: bash exit %d: %s",
 			*exec.ExitCode, stderrBuf.string(),
 		)
 	}
+	// Nil ExitCode without Error: treat as success for infrastructure
+	// helpers. Mock streams used by layout/mkdir often omit exit_code
+	// on non-RunProgram commands; failing closed here breaks CreateWorkspace.
 	return stdoutBuf.string(), nil
 }
 

@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"path"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	osb "github.com/alibaba/OpenSandbox/sdks/sandbox/go"
@@ -193,8 +194,10 @@ func (r *workspaceRuntime) CreateWorkspace(
 		h := stableWorkspaceHash(execID)
 		wsPath = path.Join(r.cfg.runBase, fmt.Sprintf("ws_%s", h))
 	} else {
-		suf := time.Now().UnixNano()
-		wsPath = path.Join(r.cfg.runBase, fmt.Sprintf("ws_%s_%d", safe, suf))
+		// Nano + monotonic seq: pure UnixNano can collide under concurrent
+		// CreateWorkspace in the same process; seq makes the suffix unique.
+		suf := fmt.Sprintf("%d_%d", time.Now().UnixNano(), atomic.AddUint64(&r.runSeq, 1))
+		wsPath = path.Join(r.cfg.runBase, fmt.Sprintf("ws_%s_%s", safe, suf))
 	}
 
 	dirs := []string{

@@ -773,25 +773,32 @@ func (c *CodeExecutor) Engine() codeexecutor.Engine {
 	)
 }
 
-// executionIDFromContext builds a stable workspace key from the agent
-// invocation session, matching codeexecutor/sandbox. Empty when the
-// context has no session.
+// executionIDFromContext builds a stable, injective workspace key from
+// the agent invocation session. Empty when the context has no session.
+//
+// All three fields are always included with length prefixes so empty
+// fields and embedded separators cannot collide. Example collisions
+// avoided: (App="a", User="", ID="b") vs (App="", User="a", ID="b")
+// both used to become "a/b" when empty parts were omitted.
 func executionIDFromContext(ctx context.Context) string {
 	inv, ok := agent.InvocationFromContext(ctx)
 	if !ok || inv == nil || inv.Session == nil {
 		return ""
 	}
-	var parts []string
-	if inv.Session.AppName != "" {
-		parts = append(parts, inv.Session.AppName)
-	}
-	if inv.Session.UserID != "" {
-		parts = append(parts, inv.Session.UserID)
-	}
-	if inv.Session.ID != "" {
-		parts = append(parts, inv.Session.ID)
-	}
-	return strings.Join(parts, "/")
+	return encodeSessionWorkspaceKey(
+		inv.Session.AppName,
+		inv.Session.UserID,
+		inv.Session.ID,
+	)
+}
+
+// encodeSessionWorkspaceKey returns an injective encoding of the three
+// session identity fields for PerSession workspace hashing.
+func encodeSessionWorkspaceKey(app, user, id string) string {
+	// length-prefixed segments: always three fields, including empties.
+	// Parsing is: for each field, read decimal length, ':', then N bytes.
+	return fmt.Sprintf("%d:%s/%d:%s/%d:%s",
+		len(app), app, len(user), user, len(id), id)
 }
 
 // killTimeout bounds the Kill call in Close so that a sandbox whose
