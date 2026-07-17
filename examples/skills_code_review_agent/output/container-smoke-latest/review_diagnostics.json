@@ -1,5 +1,5 @@
 {
-  "task_id": "review-fc71da1b3a457dd18aedc55e",
+  "task_id": "review-37cde6cd81b5d4ead87b20da",
   "status": "completed",
   "input": {
     "files_changed": 2,
@@ -27,8 +27,8 @@
   },
   "sandbox_summary": [
     {
-      "id": "run-9d9f018695cea4db73a3feb5",
-      "task_id": "review-fc71da1b3a457dd18aedc55e",
+      "id": "run-1c61b7865e6c2abb2666a9a1",
+      "task_id": "review-37cde6cd81b5d4ead87b20da",
       "command": "bash",
       "args": [
         "skills/code-review/scripts/diff_summary.sh",
@@ -38,14 +38,14 @@
       "executor": "container",
       "status": "success",
       "exit_code": 0,
-      "started_at": "2026-07-17T10:28:00.122541+08:00",
-      "duration_ms": 48,
+      "started_at": "2026-07-17T11:52:52.355929+08:00",
+      "duration_ms": 22,
       "timed_out": false,
       "output_truncated": false
     },
     {
-      "id": "run-b1a5a193e2f6105db4dcf72a",
-      "task_id": "review-fc71da1b3a457dd18aedc55e",
+      "id": "run-c7c7f44c96e3d46c02b2bc30",
+      "task_id": "review-37cde6cd81b5d4ead87b20da",
       "command": "go",
       "args": [
         "test",
@@ -55,14 +55,14 @@
       "status": "success",
       "exit_code": 0,
       "stdout": "ok  \texample.com/container-smoke/calc\t0.001s\n",
-      "started_at": "2026-07-17T10:28:00.17123+08:00",
-      "duration_ms": 6223,
+      "started_at": "2026-07-17T11:52:52.378141+08:00",
+      "duration_ms": 5470,
       "timed_out": false,
       "output_truncated": false
     },
     {
-      "id": "run-e460714ae09bd3cfcf23086a",
-      "task_id": "review-fc71da1b3a457dd18aedc55e",
+      "id": "run-f56a9039fb4980bce098b8e1",
+      "task_id": "review-37cde6cd81b5d4ead87b20da",
       "command": "go",
       "args": [
         "vet",
@@ -71,14 +71,14 @@
       "executor": "container",
       "status": "success",
       "exit_code": 0,
-      "started_at": "2026-07-17T10:28:06.394922+08:00",
-      "duration_ms": 494,
+      "started_at": "2026-07-17T11:52:57.84857+08:00",
+      "duration_ms": 593,
       "timed_out": false,
       "output_truncated": false
     },
     {
-      "id": "run-9ea5c38e82495078c7d3ae15",
-      "task_id": "review-fc71da1b3a457dd18aedc55e",
+      "id": "run-1494c5fa7ffc93d3087753a6",
+      "task_id": "review-37cde6cd81b5d4ead87b20da",
       "command": "staticcheck",
       "args": [
         "./..."
@@ -86,8 +86,8 @@
       "executor": "container",
       "status": "success",
       "exit_code": 0,
-      "started_at": "2026-07-17T10:28:06.889542+08:00",
-      "duration_ms": 1274,
+      "started_at": "2026-07-17T11:52:58.442094+08:00",
+      "duration_ms": 1291,
       "timed_out": false,
       "output_truncated": false
     }

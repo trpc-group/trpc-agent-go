@@ -76,6 +76,7 @@ func RunReview(ctx context.Context, cfg ReviewConfig) (ReviewReport, string, str
 		llmFindings, err := RunLLMReview(ctx, LLMReviewConfig{
 			TaskID:       task.ID,
 			DiffRaw:      pd.Raw,
+			ParsedDiff:   pd,
 			InputSummary: pd.Summary,
 			RuleFindings: append(append([]Finding{}, findings...), append(warnings, needsHuman...)...),
 			FakeModel:    cfg.FakeModel,
@@ -111,7 +112,7 @@ func RunReview(ctx context.Context, cfg ReviewConfig) (ReviewReport, string, str
 			runnerCfg.Executor = "fake-fail"
 		}
 	}
-	runner, err := NewSandboxRunner(runnerCfg)
+	runner, err := NewSandboxRunnerWithContext(ctx, runnerCfg)
 	var sandboxResult SandboxResult
 	if err != nil {
 		sandboxResult = SandboxResult{Runs: []SandboxRun{
@@ -123,6 +124,9 @@ func RunReview(ctx context.Context, cfg ReviewConfig) (ReviewReport, string, str
 	}
 	findings = append(findings, sandboxResult.Findings...)
 	needsHuman = append(needsHuman, sandboxReviewItems(sandboxResult.Runs, sandboxResult.Findings)...)
+	if inputMode == "file-list" {
+		needsHuman = append(needsHuman, fileListIncompleteFinding())
+	}
 	task.EndedAt = time.Now()
 	span.SetAttributes(
 		attribute.String("review.task_id", task.ID),
@@ -389,6 +393,21 @@ func writeSyntheticFileDiff(b *strings.Builder, file string) {
 	fmt.Fprintf(b, "+++ b/%s\n", file)
 }
 
+func fileListIncompleteFinding() Finding {
+	return Finding{
+		Severity:       SeverityMedium,
+		Category:       "input_coverage",
+		File:           "",
+		Line:           0,
+		Title:          "File-list review is metadata-only",
+		Evidence:       "The file-list input contains file names but no diff hunks or source content, so code rules, LLM review, and repository checks cannot inspect changed code.",
+		Recommendation: "Provide --diff-file or --repo-path when code-level review is required, or treat this result as incomplete metadata coverage.",
+		Confidence:     0.90,
+		Source:         "input",
+		RuleID:         "input/file-list-incomplete",
+	}
+}
+
 func writeNewFileDiff(b *strings.Builder, file string, lines []string, noNewline bool) {
 	fmt.Fprintf(b, "diff --git a/%s b/%s\n", file, file)
 	fmt.Fprintf(b, "new file mode 100644\n")
@@ -536,11 +555,7 @@ func reportFileArtifacts(taskID, jsonPath, mdPath string) []ArtifactRecord {
 }
 
 func reportArtifacts(taskID string, candidates []ArtifactRecord) ([]ArtifactRecord, ArtifactPolicy) {
-	policy := ArtifactPolicy{
-		MaxArtifacts:     5,
-		MaxBytesPerFile:  1 << 20,
-		AllowedFileNames: []string{"review_report.json", "review_report.md", "review_diagnostics.json", "review_report.zh.md", "diff_summary.json"},
-	}
+	policy := defaultArtifactPolicy()
 	allowed := map[string]bool{}
 	for _, name := range policy.AllowedFileNames {
 		allowed[name] = true
@@ -556,6 +571,14 @@ func reportArtifacts(taskID string, candidates []ArtifactRecord) ([]ArtifactReco
 	}
 	policy.RetainedCount = len(kept)
 	return kept, policy
+}
+
+func defaultArtifactPolicy() ArtifactPolicy {
+	return ArtifactPolicy{
+		MaxArtifacts:     5,
+		MaxBytesPerFile:  1 << 20,
+		AllowedFileNames: []string{"review_report.json", "review_report.md", "review_diagnostics.json", "review_report.zh.md", "diff_summary.json"},
+	}
 }
 
 func redactFindingSlice(in []Finding) []Finding {

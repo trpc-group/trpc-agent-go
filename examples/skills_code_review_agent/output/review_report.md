@@ -1,6 +1,6 @@
 # Code Review Report
 
-- Task: `review-fb6dfcfccbfe87a2803fca33`
+- Task: `review-88128b232348d460f3ee2048`
 - Status: `completed`
 - Files changed: `1`
 - Go files changed: `1`
@@ -74,7 +74,7 @@ No low-confidence warnings.
 
 ## Metrics
 
-- Total duration: `3ms`
+- Total duration: `6ms`
 - Sandbox duration: `0ms`
 - Tool calls: `0`
 - Error types: `map[dry_run:1 no_repo_path:1]`

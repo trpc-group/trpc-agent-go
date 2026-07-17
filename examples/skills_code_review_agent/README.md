@@ -133,16 +133,19 @@ go run . --repo-path /path/to/repo --executor container \
   --container-install-staticcheck
 ```
 
-Use E2B:
+Use E2B for diff-only sandbox checks:
 
 ```bash
-go run . --repo-path /path/to/repo --executor e2b
+go run . --diff-file /path/to/change.diff --executor e2b
 ```
 
 The E2B path is wired through `codeexecutor/e2b`, but the local
 validation for this example only exercised dry-run and container smoke.
-Run the command above with a valid `E2B_API_KEY` in CI or a cloud
-environment before claiming E2B production verification.
+Because this executor uses a remote sandbox and this example does not
+enforce an outbound network boundary there, repository snapshots are not
+uploaded and `go test`, `go vet`, and `staticcheck` are marked
+unavailable by default. Run diff-only checks with a valid `E2B_API_KEY`
+before claiming E2B production verification.
 
 Use local execution only as development fallback:
 
@@ -254,6 +257,9 @@ depend on network access. For `--repo-path`, the runner stages a
 sanitized temporary snapshot instead of the raw host directory: git
 metadata, ignored files, symlinks, local env files, private keys, and
 secret-like paths are excluded before the tree enters the sandbox. The
+E2B executor is treated as remote execution without a denied-egress
+boundary, so repository execution is disabled there by default and only
+the staged diff-summary helper runs.
 supplemental `llmagent` path is configured with knowledge-only Skill
 tools and no CodeExecutor; all executable checks stay behind the sandbox
 runner and PermissionPolicy.

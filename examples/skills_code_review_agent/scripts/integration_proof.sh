@@ -2,11 +2,35 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-OUT_DIR="${1:-"${ROOT_DIR}/output/integration-proof"}"
+DEFAULT_OUT_DIR="${ROOT_DIR}/output/integration-proof"
+OUT_DIR="${1:-"${DEFAULT_OUT_DIR}"}"
+OUTPUT_ROOT="${ROOT_DIR}/output"
+OWNERSHIP_MARKER=".integration-proof-owned"
 PROOF="${OUT_DIR}/proof.md"
+
+case "${OUT_DIR}" in
+  "${OUTPUT_ROOT}"/*) ;;
+  *)
+    echo "integration proof output must be under ${OUTPUT_ROOT}" >&2
+    exit 2
+    ;;
+esac
+
+if [[ "${OUT_DIR}" != "${DEFAULT_OUT_DIR}" && -d "${OUT_DIR}" && ! -f "${OUT_DIR}/${OWNERSHIP_MARKER}" ]]; then
+	if find "${OUT_DIR}" -mindepth 1 -maxdepth 1 | grep -q .; then
+		echo "refusing to clean unowned output directory: ${OUT_DIR}" >&2
+		echo "remove it manually or add ${OWNERSHIP_MARKER} after verifying it only contains generated proof files" >&2
+		exit 2
+	fi
+fi
+if [[ -e "${OUT_DIR}" && ! -d "${OUT_DIR}" ]]; then
+	echo "refusing to replace non-directory output path: ${OUT_DIR}" >&2
+	exit 2
+fi
 
 rm -rf "${OUT_DIR}"
 mkdir -p "${OUT_DIR}"
+touch "${OUT_DIR}/${OWNERSHIP_MARKER}"
 
 run_and_log() {
   local name="$1"

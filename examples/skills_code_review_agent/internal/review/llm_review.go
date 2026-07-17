@@ -36,6 +36,7 @@ const (
 type LLMReviewConfig struct {
 	TaskID       string
 	DiffRaw      string
+	ParsedDiff   ParsedDiff
 	InputSummary DiffSummary
 	RuleFindings []Finding
 	FakeModel    bool
@@ -94,7 +95,11 @@ func RunLLMReview(ctx context.Context, cfg LLMReviewConfig) ([]Finding, error) {
 	if err != nil {
 		return nil, fmt.Errorf("run llm review agent: %w", err)
 	}
-	return parseLLMFindings(collectAssistantText(events))
+	findings, err := parseLLMFindings(collectAssistantText(events))
+	if err != nil {
+		return nil, err
+	}
+	return validateLLMFindings(findings, cfg.ParsedDiff), nil
 }
 
 func normalizeModelProvider(provider string, fake bool) string {
@@ -218,13 +223,79 @@ func parseLLMFindings(content string) ([]Finding, error) {
 		return nil, fmt.Errorf("decode llm findings: %w", err)
 	}
 	for i := range findings {
-		if findings[i].Source == "" {
-			findings[i].Source = "llm"
-		}
+		findings[i].Source = "llm"
 		findings[i].Evidence = redactSecrets(findings[i].Evidence)
 		findings[i].Recommendation = redactSecrets(findings[i].Recommendation)
 	}
 	return findings, nil
+}
+
+func validateLLMFindings(items []Finding, pd ParsedDiff) []Finding {
+	added := addedLineAnchors(pd)
+	var out []Finding
+	for _, f := range items {
+		f.Source = "llm"
+		if f.RuleID == "" {
+			f.RuleID = "llm/supplemental"
+		}
+		if validLLMFinding(f, added) {
+			out = append(out, f)
+			continue
+		}
+		out = append(out, Finding{
+			Severity:       SeverityLow,
+			Category:       "llm_review",
+			File:           f.File,
+			Line:           f.Line,
+			Title:          "LLM finding could not be anchored to the diff",
+			Evidence:       redactSecrets(firstNonEmpty(f.Title, f.Evidence, "malformed or unanchored model finding")),
+			Recommendation: "Review this model output manually before treating it as actionable.",
+			Confidence:     0.50,
+			Source:         "llm",
+			RuleID:         "llm/malformed-finding",
+		})
+	}
+	return out
+}
+
+func addedLineAnchors(pd ParsedDiff) map[string]map[int]bool {
+	anchors := map[string]map[int]bool{}
+	for _, h := range pd.Hunks {
+		for _, line := range h.Lines {
+			if line.Kind != '+' || line.NewLine <= 0 {
+				continue
+			}
+			if anchors[h.File] == nil {
+				anchors[h.File] = map[int]bool{}
+			}
+			anchors[h.File][line.NewLine] = true
+		}
+	}
+	return anchors
+}
+
+func validLLMFinding(f Finding, added map[string]map[int]bool) bool {
+	if !validSeverity(f.Severity) || f.Confidence < 0 || f.Confidence > 1 {
+		return false
+	}
+	if strings.TrimSpace(f.Category) == "" ||
+		strings.TrimSpace(f.File) == "" ||
+		f.Line <= 0 ||
+		strings.TrimSpace(f.Title) == "" ||
+		strings.TrimSpace(f.Evidence) == "" ||
+		strings.TrimSpace(f.Recommendation) == "" {
+		return false
+	}
+	return added[f.File][f.Line]
+}
+
+func validSeverity(s Severity) bool {
+	switch s {
+	case SeverityCritical, SeverityHigh, SeverityMedium, SeverityLow:
+		return true
+	default:
+		return false
+	}
 }
 
 func stripCodeFence(content string) string {
@@ -278,7 +349,7 @@ func (m *fakeReviewModel) GenerateContent(ctx context.Context, _ *model.Request)
 	step := m.step.Add(1)
 	content := "[]"
 	if step == 1 {
-		content = `[{"severity":"medium","category":"testing","file":"review.go","line":1,"title":"Fake model supplemental review item","evidence":"fake-model run through llmagent and code-review skill","recommendation":"Use a real model in production or keep this as deterministic CI coverage.","confidence":0.54,"source":"llm","rule_id":"llm/fake-model/supplemental"}]`
+		content = `[{"severity":"medium","category":"testing","file":"service/handler.go","line":4,"title":"Fake model supplemental review item","evidence":"fake-model run through llmagent and code-review skill","recommendation":"Use a real model in production or keep this as deterministic CI coverage.","confidence":0.54,"source":"llm","rule_id":"llm/fake-model/supplemental"}]`
 	}
 	rsp := &model.Response{
 		ID:      "fake-review",

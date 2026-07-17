@@ -16,18 +16,26 @@ import (
 	"io"
 	"log"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/examples/skills_code_review_agent/internal/review"
 )
 
 func main() {
-	if err := run(os.Args[1:], os.Stdout); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := runWithContext(ctx, os.Args[1:], os.Stdout); err != nil {
 		log.Fatalf("code review failed: %v", err)
 	}
 }
 
 func run(args []string, out io.Writer) error {
+	return runWithContext(context.Background(), args, out)
+}
+
+func runWithContext(ctx context.Context, args []string, out io.Writer) error {
 	var cfg review.ReviewConfig
 	fs := flag.NewFlagSet("skills_code_review_agent", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -58,7 +66,7 @@ func run(args []string, out io.Writer) error {
 	}
 	cfg.LLMReview = !cfg.RuleOnly
 
-	report, jsonPath, mdPath, err := review.RunReview(context.Background(), cfg)
+	report, jsonPath, mdPath, err := review.RunReview(ctx, cfg)
 	if err != nil {
 		return err
 	}

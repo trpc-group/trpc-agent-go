@@ -430,6 +430,7 @@ func TestWorkspaceSandboxRunnerWithMockEngine(t *testing.T) {
 		engine:           engine,
 		timeout:          time.Second,
 		outputLimitBytes: 1024,
+		outputDir:        t.TempDir(),
 	}
 	result := runner.RunChecks(testContext(t), "task-mock", repo, pd)
 	if !result.SkillLoaded {
@@ -440,6 +441,13 @@ func TestWorkspaceSandboxRunnerWithMockEngine(t *testing.T) {
 	}
 	if len(result.Artifacts) != 1 || result.Artifacts[0].Name != "diff_summary.json" {
 		t.Fatalf("unexpected artifacts: %+v", result.Artifacts)
+	}
+	data, err := os.ReadFile(result.Artifacts[0].Path)
+	if err != nil {
+		t.Fatalf("expected durable artifact path %q: %v", result.Artifacts[0].Path, err)
+	}
+	if !strings.Contains(string(data), "files_changed") {
+		t.Fatalf("unexpected artifact content: %s", data)
 	}
 	if len(result.Findings) != 1 || result.Findings[0].RuleID != "sandbox/go/diagnostic" {
 		t.Fatalf("unexpected sandbox findings: %+v", result.Findings)
@@ -462,6 +470,7 @@ func TestWorkspaceSandboxRunnerSkipsStaticcheckExit127WithoutError(t *testing.T)
 		engine:           engine,
 		timeout:          time.Second,
 		outputLimitBytes: 1024,
+		outputDir:        t.TempDir(),
 	}
 	run := runner.runProgram(testContext(t), codeexecutor.Workspace{ID: "ws"}, "task", "staticcheck", []string{"./..."}, ".")
 	if run.Status != "skipped" || run.ErrorType != "tool_unavailable" {
@@ -469,6 +478,58 @@ func TestWorkspaceSandboxRunnerSkipsStaticcheckExit127WithoutError(t *testing.T)
 	}
 	if strings.Contains(run.Stderr, "No such file") {
 		t.Fatalf("expected friendly unavailable message, got %q", run.Stderr)
+	}
+}
+
+func TestWorkspaceSandboxRunnerDisablesRepoChecksForE2B(t *testing.T) {
+	repo := t.TempDir()
+	writeTestFile(t, filepath.Join(repo, "go.mod"), "module example.com/e2b\n\ngo 1.23\n")
+	engine := &mockWorkspaceEngine{}
+	runner := &WorkspaceSandboxRunner{
+		executorName:     "e2b",
+		engine:           engine,
+		timeout:          time.Second,
+		outputLimitBytes: 1024,
+		outputDir:        t.TempDir(),
+	}
+	result := runner.RunChecks(testContext(t), "task-e2b", repo, ParsedDiff{Raw: "diff"})
+	if len(engine.runSpecs) != 1 || engine.runSpecs[0].Cmd != "bash" {
+		t.Fatalf("expected only diff summary to run in E2B, specs=%+v", engine.runSpecs)
+	}
+	var unavailable int
+	for _, run := range result.Runs {
+		if run.ErrorType == "e2b_egress_not_enforced" && run.Status == "skipped" {
+			unavailable++
+		}
+	}
+	if unavailable != 3 {
+		t.Fatalf("expected three unavailable repo checks, runs=%+v", result.Runs)
+	}
+}
+
+func TestWorkspaceSandboxRunnerMarksExternalModulesUnavailableOffline(t *testing.T) {
+	repo := t.TempDir()
+	writeTestFile(t, filepath.Join(repo, "go.mod"), "module example.com/deps\n\ngo 1.23\n\nrequire github.com/stretchr/testify v1.9.0\n")
+	engine := &mockWorkspaceEngine{}
+	runner := &WorkspaceSandboxRunner{
+		executorName:     "container",
+		engine:           engine,
+		timeout:          time.Second,
+		outputLimitBytes: 1024,
+		outputDir:        t.TempDir(),
+	}
+	result := runner.RunChecks(testContext(t), "task-deps", repo, ParsedDiff{Raw: "diff"})
+	if len(engine.runSpecs) != 1 || engine.runSpecs[0].Cmd != "bash" {
+		t.Fatalf("expected dependency-unavailable path to skip repo commands, specs=%+v", engine.runSpecs)
+	}
+	var unavailable int
+	for _, run := range result.Runs {
+		if run.ErrorType == "dependency_unavailable" && run.Status == "skipped" {
+			unavailable++
+		}
+	}
+	if unavailable != 3 {
+		t.Fatalf("expected three dependency unavailable runs, got %+v", result.Runs)
 	}
 }
 
@@ -822,6 +883,13 @@ func TestStoreDirectBucketsAndMissingRows(t *testing.T) {
 			MimeType:  "application/json",
 			CreatedAt: time.Now(),
 		}},
+		ArtifactPolicy: ArtifactPolicy{
+			MaxArtifacts:     5,
+			MaxBytesPerFile:  1024,
+			AllowedFileNames: []string{"review_report.json"},
+			RetainedCount:    1,
+			RejectedCount:    2,
+		},
 		Metrics:    AuditMetrics{FindingCount: 1, SeverityCounts: map[string]int{"high": 1}, ErrorTypeCounts: map[string]int{}},
 		Conclusion: "done",
 	}
@@ -839,6 +907,12 @@ func TestStoreDirectBucketsAndMissingRows(t *testing.T) {
 	}
 	if loaded.Permissions[0].Disposition != "allow" {
 		t.Fatalf("loaded permission disposition = %q", loaded.Permissions[0].Disposition)
+	}
+	if loaded.PermissionSummary.AllowCount != 1 {
+		t.Fatalf("loaded permission summary = %+v", loaded.PermissionSummary)
+	}
+	if loaded.ArtifactPolicy.RejectedCount != 2 || loaded.ArtifactPolicy.RetainedCount != 1 {
+		t.Fatalf("loaded artifact policy = %+v", loaded.ArtifactPolicy)
 	}
 	if err := store.SaveReport(testContext(t), report, pd, "review_report.json", "review_report.md"); err == nil {
 		t.Fatal("expected duplicate task save error")

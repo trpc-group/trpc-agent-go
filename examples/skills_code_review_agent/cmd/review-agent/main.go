@@ -16,7 +16,9 @@ import (
 	"io"
 	"log"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -53,12 +55,18 @@ type fileConfig struct {
 }
 
 func main() {
-	if err := run(os.Args[1:], os.Stdout); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := runWithContext(ctx, os.Args[1:], os.Stdout); err != nil {
 		log.Fatalf("review-agent failed: %v", err)
 	}
 }
 
 func run(args []string, out io.Writer) error {
+	return runWithContext(context.Background(), args, out)
+}
+
+func runWithContext(ctx context.Context, args []string, out io.Writer) error {
 	cfg := review.ReviewConfig{RuleOnly: true}
 	var configPath string
 	fs := flag.NewFlagSet("review-agent", flag.ContinueOnError)
@@ -94,7 +102,7 @@ func run(args []string, out io.Writer) error {
 	}
 	applyDefaults(&cfg)
 	cfg.LLMReview = !cfg.RuleOnly
-	report, jsonPath, mdPath, err := review.RunReview(context.Background(), cfg)
+	report, jsonPath, mdPath, err := review.RunReview(ctx, cfg)
 	if err != nil {
 		return err
 	}

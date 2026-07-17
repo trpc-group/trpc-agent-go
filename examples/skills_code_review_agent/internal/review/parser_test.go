@@ -431,24 +431,31 @@ func TestDedupeFindingsKeepsHighestConfidence(t *testing.T) {
 	}
 }
 
-func TestDedupeFindingsCollapsesSameLocationCategory(t *testing.T) {
+func TestDedupeFindingsKeepsDistinctRulesAtSameLocation(t *testing.T) {
 	in := []Finding{
 		{Severity: SeverityMedium, Category: "security", File: "a.go", Line: 10, RuleID: "rule/a", Confidence: 0.7},
 		{Severity: SeverityHigh, Category: "security", File: "a.go", Line: 10, RuleID: "rule/b", Confidence: 0.8},
 		{Severity: SeverityHigh, Category: "resource_lifecycle", File: "a.go", Line: 10, RuleID: "rule/c", Confidence: 0.9},
 	}
 	got := DedupeFindings(in)
-	if len(got) != 2 {
-		t.Fatalf("deduped len = %d, want 2", len(got))
+	if len(got) != 3 {
+		t.Fatalf("deduped len = %d, want 3", len(got))
 	}
-	var security Finding
-	for _, f := range got {
-		if f.Category == "security" {
-			security = f
+	for _, ruleID := range []string{"rule/a", "rule/b", "rule/c"} {
+		if !hasRule(got, ruleID) {
+			t.Fatalf("missing %s from deduped findings: %+v", ruleID, got)
 		}
 	}
-	if security.RuleID != "rule/b" {
-		t.Fatalf("expected highest confidence security finding, got %+v", got)
+}
+
+func TestDedupeFindingsKeepsDistinctUnanchoredSandboxFailures(t *testing.T) {
+	in := []Finding{
+		{Severity: SeverityMedium, Category: "sandbox", RuleID: "sandbox/check-failed", Source: "sandbox", Evidence: "go test ./... failed", Confidence: 0.66},
+		{Severity: SeverityMedium, Category: "sandbox", RuleID: "sandbox/check-failed", Source: "sandbox", Evidence: "go vet ./... failed", Confidence: 0.66},
+	}
+	got := DedupeFindings(in)
+	if len(got) != 2 {
+		t.Fatalf("deduped sandbox failures = %d, want 2: %+v", len(got), got)
 	}
 }
 
@@ -564,6 +571,14 @@ func TestRunReviewStoresQueryableTask(t *testing.T) {
 	if len(loaded.Artifacts) != len(report.Artifacts) {
 		t.Fatalf("loaded artifacts = %d, want %d", len(loaded.Artifacts), len(report.Artifacts))
 	}
+	if loaded.PermissionSummary != report.PermissionSummary {
+		t.Fatalf("loaded permission summary = %+v, want %+v", loaded.PermissionSummary, report.PermissionSummary)
+	}
+	if loaded.ArtifactPolicy.MaxArtifacts != report.ArtifactPolicy.MaxArtifacts ||
+		loaded.ArtifactPolicy.RetainedCount != report.ArtifactPolicy.RetainedCount ||
+		loaded.ArtifactPolicy.RejectedCount != report.ArtifactPolicy.RejectedCount {
+		t.Fatalf("loaded artifact policy = %+v, want %+v", loaded.ArtifactPolicy, report.ArtifactPolicy)
+	}
 	if len(loaded.Packages) == 0 || loaded.Packages[0].PackagePath != "service" || loaded.Packages[0].PackageName != "service" {
 		t.Fatalf("unexpected loaded package info: %+v", loaded.Packages)
 	}
@@ -589,6 +604,104 @@ func TestRunReviewStoresQueryableTask(t *testing.T) {
 	}
 	if strings.Contains(string(data), "sk-1234567890") {
 		t.Fatal("report leaked raw token")
+	}
+}
+
+func TestRunReviewFileListMarksAnalysisIncomplete(t *testing.T) {
+	dir := t.TempDir()
+	list := filepath.Join(dir, "files.txt")
+	if err := os.WriteFile(list, []byte("service/config.go\nservice/config_test.go\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	report, _, _, err := RunReview(testContext(t), ReviewConfig{
+		FileList:  list,
+		OutputDir: filepath.Join(dir, "out"),
+		DBPath:    filepath.Join(dir, "review.sqlite"),
+		DryRun:    true,
+		Executor:  "fake",
+	})
+	if err != nil {
+		t.Fatalf("RunReview() error = %v", err)
+	}
+	if !hasRule(report.NeedsHumanReview, "input/file-list-incomplete") {
+		t.Fatalf("expected incomplete file-list review item, got %+v", report.NeedsHumanReview)
+	}
+	if strings.Contains(report.Conclusion, "No high-confidence") {
+		t.Fatalf("file-list review should not be clean: %q", report.Conclusion)
+	}
+}
+
+func TestValidateLLMFindingsAnchorsToAddedLines(t *testing.T) {
+	pd, err := ParseUnifiedDiff(`diff --git a/a.go b/a.go
+--- a/a.go
++++ b/a.go
+@@ -1,2 +1,3 @@
+ package a
++func Added() {}
+ func Existing() {}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err := parseLLMFindings(`[
+{"severity":"critical","category":"security","file":"a.go","line":2,"title":"valid","evidence":"added line","recommendation":"fix","confidence":0.90,"source":"tool","rule_id":"llm/valid"},
+{"severity":"high","category":"security","file":"missing.go","line":2,"title":"bad file","evidence":"x","recommendation":"fix","confidence":0.90,"rule_id":"llm/bad-file"},
+{"severity":"high","category":"security","file":"a.go","line":3,"title":"unchanged","evidence":"x","recommendation":"fix","confidence":0.90,"rule_id":"llm/unchanged"},
+{"severity":"urgent","category":"security","file":"a.go","line":2,"title":"bad severity","evidence":"x","recommendation":"fix","confidence":0.90,"rule_id":"llm/bad-severity"},
+{"severity":"high","category":"security","file":"a.go","line":2,"title":"bad confidence","evidence":"x","recommendation":"fix","confidence":1.50,"rule_id":"llm/bad-confidence"}
+]`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := validateLLMFindings(items, pd)
+	var valid, malformed int
+	for _, f := range got {
+		if f.Source != "llm" {
+			t.Fatalf("source was not forced to llm: %+v", f)
+		}
+		switch f.RuleID {
+		case "llm/valid":
+			valid++
+			if f.Severity != SeverityCritical || f.File != "a.go" || f.Line != 2 {
+				t.Fatalf("valid finding changed unexpectedly: %+v", f)
+			}
+		case "llm/malformed-finding":
+			malformed++
+		}
+	}
+	if valid != 1 || malformed != 4 {
+		t.Fatalf("valid=%d malformed=%d got=%+v", valid, malformed, got)
+	}
+}
+
+func TestCheckRedactionRejectsPrivateKeyPattern(t *testing.T) {
+	report := filepath.Join(t.TempDir(), "report.md")
+	if err := os.WriteFile(report, []byte("-----BEGIN PRIVATE KEY-----\nsecret\n-----END PRIVATE KEY-----\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(exampleDir(), "skills", "code-review", "scripts", "check_redaction.sh")
+	cmd := exec.Command("bash", script, report)
+	if err := cmd.Run(); err == nil {
+		t.Fatal("expected private-key redaction check to fail")
+	}
+}
+
+func TestIntegrationProofRejectsExternalOutputWithoutDeletingSentinel(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "external-proof")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sentinel := filepath.Join(dir, "sentinel.txt")
+	if err := os.WriteFile(sentinel, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(exampleDir(), "scripts", "integration_proof.sh")
+	cmd := exec.Command("bash", script, dir)
+	if err := cmd.Run(); err == nil {
+		t.Fatal("expected external output directory to be rejected")
+	}
+	if _, err := os.Stat(sentinel); err != nil {
+		t.Fatalf("sentinel was removed: %v", err)
 	}
 }
 

@@ -38,9 +38,14 @@ type WorkspaceSandboxRunner struct {
 	closeFn          func() error
 	timeout          time.Duration
 	outputLimitBytes int
+	outputDir        string
 }
 
 func NewSandboxRunner(cfg ReviewConfig) (SandboxRunner, error) {
+	return NewSandboxRunnerWithContext(context.Background(), cfg)
+}
+
+func NewSandboxRunnerWithContext(ctx context.Context, cfg ReviewConfig) (SandboxRunner, error) {
 	timeout := cfg.Timeout
 	if timeout <= 0 {
 		timeout = 30 * time.Second
@@ -48,6 +53,10 @@ func NewSandboxRunner(cfg ReviewConfig) (SandboxRunner, error) {
 	limit := cfg.OutputLimitBytes
 	if limit <= 0 {
 		limit = 64 * 1024
+	}
+	outputDir := cfg.OutputDir
+	if outputDir == "" {
+		outputDir = "output"
 	}
 	executor := strings.ToLower(strings.TrimSpace(cfg.Executor))
 	if executor == "" {
@@ -108,9 +117,10 @@ func NewSandboxRunner(cfg ReviewConfig) (SandboxRunner, error) {
 			closeFn:          closeFn,
 			timeout:          timeout,
 			outputLimitBytes: limit,
+			outputDir:        outputDir,
 		}, nil
 	case "e2b":
-		initCtx, cancel := context.WithTimeout(context.Background(), timeout)
+		initCtx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
 		ex, err := e2bexec.NewWithContext(initCtx)
 		if err != nil {
@@ -122,6 +132,7 @@ func NewSandboxRunner(cfg ReviewConfig) (SandboxRunner, error) {
 			closeFn:          ex.Close,
 			timeout:          timeout,
 			outputLimitBytes: limit,
+			outputDir:        outputDir,
 		}, nil
 	case "local":
 		if !cfg.AllowLocalFallback {
@@ -133,6 +144,7 @@ func NewSandboxRunner(cfg ReviewConfig) (SandboxRunner, error) {
 			engine:           ex.Engine(),
 			timeout:          timeout,
 			outputLimitBytes: limit,
+			outputDir:        outputDir,
 		}, nil
 	case "fake", "none":
 		return NoopSandboxRunner{executorName: executor}, nil
@@ -241,7 +253,22 @@ func (r *WorkspaceSandboxRunner) RunChecks(ctx context.Context, taskID string, r
 		return SandboxResult{Runs: []SandboxRun{failedSetupRun(taskID, r.executorName, "stage_diff", err)}}
 	}
 	hasRepo := strings.TrimSpace(repoPath) != ""
+	repoChecksUnavailable := ""
+	if hasRepo && r.executorName == "e2b" {
+		hasRepo = false
+		repoChecksUnavailable = "e2b_egress_not_enforced"
+	}
 	repoCwd := filepath.Join(codeexecutor.DirWork, "repo")
+	if hasRepo {
+		absRepo, err := filepath.Abs(repoPath)
+		if err != nil {
+			return SandboxResult{Runs: []SandboxRun{failedSetupRun(taskID, r.executorName, "abs_repo", err)}}
+		}
+		if r.executorName == "container" && repoHasUnvendoredExternalModules(absRepo) {
+			hasRepo = false
+			repoChecksUnavailable = "dependency_unavailable"
+		}
+	}
 	if hasRepo {
 		absRepo, err := filepath.Abs(repoPath)
 		if err != nil {
@@ -286,6 +313,8 @@ func (r *WorkspaceSandboxRunner) RunChecks(ctx context.Context, taskID string, r
 				cwd  string
 			}{cmd: "staticcheck", args: []string{"./..."}, cwd: repoCwd},
 		)
+	} else if repoChecksUnavailable != "" {
+		runs = append(runs, unavailableRepoCheckRuns(taskID, r.executorName, repoChecksUnavailable)...)
 	} else {
 		runs = append(runs, SandboxRun{
 			ID:        newID("run"),
@@ -314,15 +343,9 @@ func (r *WorkspaceSandboxRunner) RunChecks(ctx context.Context, taskID string, r
 	}
 	if files, err := r.engine.FS().Collect(ctx, ws, []string{filepath.Join(codeexecutor.DirOut, "diff_summary.json")}); err == nil {
 		for _, f := range files {
-			artifacts = append(artifacts, ArtifactRecord{
-				ID:        newID("artifact"),
-				TaskID:    taskID,
-				Name:      filepath.Base(f.Name),
-				Path:      f.Name,
-				MimeType:  firstNonEmpty(f.MIMEType, "application/json"),
-				SizeBytes: artifactSize(f),
-				CreatedAt: time.Now(),
-			})
+			if artifact, err := r.materializeCollectedArtifact(taskID, f); err == nil {
+				artifacts = append(artifacts, artifact)
+			}
 		}
 	}
 	return SandboxResult{
@@ -390,6 +413,66 @@ func (r *WorkspaceSandboxRunner) runProgram(ctx context.Context, ws codeexecutor
 	}
 }
 
+func (r *WorkspaceSandboxRunner) materializeCollectedArtifact(taskID string, f codeexecutor.File) (ArtifactRecord, error) {
+	name := filepath.Base(f.Name)
+	content := []byte(redactSecrets(f.Content))
+	outputDir := r.outputDir
+	if outputDir == "" {
+		outputDir = "output"
+	}
+	if err := os.MkdirAll(outputDir, 0o755); err != nil {
+		return ArtifactRecord{}, err
+	}
+	path := filepath.Join(outputDir, name)
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		return ArtifactRecord{}, err
+	}
+	return ArtifactRecord{
+		ID:        newID("artifact"),
+		TaskID:    taskID,
+		Name:      name,
+		Path:      path,
+		MimeType:  firstNonEmpty(f.MIMEType, "application/json"),
+		SizeBytes: int64(len(content)),
+		CreatedAt: time.Now(),
+	}, nil
+}
+
+func unavailableRepoCheckRuns(taskID, executor, reason string) []SandboxRun {
+	var stderr string
+	switch reason {
+	case "e2b_egress_not_enforced":
+		stderr = "repository checks are disabled for E2B because outbound network egress is not denied; only diff summary is executed"
+	case "dependency_unavailable":
+		stderr = "repository declares external modules without a vendor directory; offline container checks cannot resolve dependencies"
+	default:
+		stderr = "repository checks are unavailable"
+	}
+	specs := []struct {
+		cmd  string
+		args []string
+	}{
+		{"go", []string{"test", "./..."}},
+		{"go", []string{"vet", "./..."}},
+		{"staticcheck", []string{"./..."}},
+	}
+	out := make([]SandboxRun, 0, len(specs))
+	for _, spec := range specs {
+		out = append(out, SandboxRun{
+			ID:        newID("run"),
+			TaskID:    taskID,
+			Command:   spec.cmd,
+			Args:      spec.args,
+			Executor:  executor,
+			Status:    "skipped",
+			ErrorType: reason,
+			StartedAt: time.Now(),
+			Stderr:    stderr,
+		})
+	}
+	return out
+}
+
 func staticcheckLooksUnavailable(exitCode int, stderr string) bool {
 	if exitCode != 127 {
 		return false
@@ -436,6 +519,45 @@ func goReviewEnv() map[string]string {
 		"GOTOOLCHAIN": "local",
 		"CGO_ENABLED": "0",
 	}
+}
+
+func repoHasUnvendoredExternalModules(repoPath string) bool {
+	if _, err := os.Stat(filepath.Join(repoPath, "vendor")); err == nil {
+		return false
+	}
+	data, err := os.ReadFile(filepath.Join(repoPath, "go.mod"))
+	if err != nil {
+		return false
+	}
+	return goModHasRequire(string(data))
+}
+
+func goModHasRequire(data string) bool {
+	inBlock := false
+	for _, raw := range strings.Split(data, "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" || strings.HasPrefix(line, "//") {
+			continue
+		}
+		if strings.HasPrefix(line, "require (") {
+			inBlock = true
+			continue
+		}
+		if inBlock {
+			if line == ")" {
+				inBlock = false
+				continue
+			}
+			if strings.TrimSpace(strings.Split(line, "//")[0]) != "" {
+				return true
+			}
+			continue
+		}
+		if strings.HasPrefix(line, "require ") {
+			return true
+		}
+	}
+	return false
 }
 
 func prepareSandboxRepoSnapshotForPath(ctx context.Context, repoPath string) (string, string, func() error, error) {

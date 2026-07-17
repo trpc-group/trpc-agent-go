@@ -8,7 +8,7 @@ if grep -Eiq '(api[_-]?key|token|password|authorization: bearer)[[:space:]]*[:=]
   exit 1
 fi
 
-if grep -Eq '-----BEGIN [A-Z ]*PRIVATE KEY-----' "$report"; then
+if grep -Eq -e '-----BEGIN [A-Z ]*PRIVATE KEY-----' "$report"; then
   echo "redaction check failed: private key block found" >&2
   exit 1
 fi

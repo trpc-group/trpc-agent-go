@@ -33,7 +33,7 @@
       "confidence": 0.95,
       "source": "rule",
       "rule_id": "go/security/secret-literal",
-      "fingerprint": "586f94d64a314a4fdbfc630d470a932fcf0713c2f62c9e712303712843fab4e8"
+      "fingerprint": "5a7e959ef807b6859b529646694f3bbefc7faacf7e6ecd64ade0cb1f0d6a3ca4"
     }
   ],
   "warnings": [],
@@ -49,7 +49,7 @@
       "confidence": 0.64,
       "source": "rule",
       "rule_id": "go/test/missing-test-change",
-      "fingerprint": "9f81497b112a414e3ca8931be1d0cf723b4df8bd25b43fad6f6f02866bdbb7d3"
+      "fingerprint": "4a0e6b0c5b14d128f863b61bbcb8b0205b5dfba5e3b27a0cec96bcc29ee35f0a"
     }
   ],
   "sandbox_runs": [

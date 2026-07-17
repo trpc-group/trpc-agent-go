@@ -21,7 +21,7 @@ func DedupeFindings(in []Finding) []Finding {
 	best := map[string]Finding{}
 	for _, f := range in {
 		f.Fingerprint = findingFingerprint(f)
-		key := fmt.Sprintf("%s:%d:%s", f.File, f.Line, f.Category)
+		key := findingDedupeKey(f)
 		prev, ok := best[key]
 		if !ok || betterFinding(f, prev) {
 			best[key] = f
@@ -44,9 +44,21 @@ func DedupeFindings(in []Finding) []Finding {
 }
 
 func findingFingerprint(f Finding) string {
-	key := strings.ToLower(strings.TrimSpace(fmt.Sprintf("%s:%d:%s", f.File, f.Line, f.Category)))
+	key := strings.ToLower(strings.TrimSpace(findingDedupeKey(f)))
 	sum := sha256.Sum256([]byte(key))
 	return hex.EncodeToString(sum[:])
+}
+
+func findingDedupeKey(f Finding) string {
+	ruleID := strings.TrimSpace(f.RuleID)
+	if ruleID == "" {
+		ruleID = "unknown-rule"
+	}
+	parts := []string{f.File, fmt.Sprintf("%d", f.Line), f.Category, ruleID}
+	if f.File == "" && f.Line == 0 {
+		parts = append(parts, f.Source, f.Title, f.Evidence)
+	}
+	return strings.Join(parts, "\x00")
 }
 
 func betterFinding(a, b Finding) bool {

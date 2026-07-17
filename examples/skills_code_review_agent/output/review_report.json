@@ -1,9 +1,9 @@
 {
   "task": {
-    "id": "review-fb6dfcfccbfe87a2803fca33",
+    "id": "review-88128b232348d460f3ee2048",
     "status": "completed",
-    "started_at": "2026-07-17T10:26:56.838069+08:00",
-    "ended_at": "2026-07-17T10:26:56.841313+08:00",
+    "started_at": "2026-07-17T11:51:41.069675+08:00",
+    "ended_at": "2026-07-17T11:51:41.076452+08:00",
     "input_mode": "fixture:security_issue"
   },
   "input": {
@@ -33,7 +33,7 @@
       "confidence": 0.95,
       "source": "rule",
       "rule_id": "go/security/secret-literal",
-      "fingerprint": "586f94d64a314a4fdbfc630d470a932fcf0713c2f62c9e712303712843fab4e8"
+      "fingerprint": "5a7e959ef807b6859b529646694f3bbefc7faacf7e6ecd64ade0cb1f0d6a3ca4"
     }
   ],
   "warnings": [],
@@ -49,13 +49,13 @@
       "confidence": 0.64,
       "source": "rule",
       "rule_id": "go/test/missing-test-change",
-      "fingerprint": "9f81497b112a414e3ca8931be1d0cf723b4df8bd25b43fad6f6f02866bdbb7d3"
+      "fingerprint": "4a0e6b0c5b14d128f863b61bbcb8b0205b5dfba5e3b27a0cec96bcc29ee35f0a"
     }
   ],
   "sandbox_runs": [
     {
-      "id": "run-86375f789408650525a18455",
-      "task_id": "review-fb6dfcfccbfe87a2803fca33",
+      "id": "run-76bd63908f4214c2619dfbc1",
+      "task_id": "review-88128b232348d460f3ee2048",
       "command": "bash",
       "args": [
         "skills/code-review/scripts/diff_summary.sh",
@@ -67,14 +67,14 @@
       "exit_code": 0,
       "stderr": "sandbox command skipped by dry-run/fake executor after permission decision",
       "error_type": "dry_run",
-      "started_at": "2026-07-17T10:26:56.841311+08:00",
+      "started_at": "2026-07-17T11:51:41.076451+08:00",
       "duration_ms": 0,
       "timed_out": false,
       "output_truncated": false
     },
     {
-      "id": "run-73b068ecc95a4bef98cd2401",
-      "task_id": "review-fb6dfcfccbfe87a2803fca33",
+      "id": "run-36a5401697cde6472d014aa4",
+      "task_id": "review-88128b232348d460f3ee2048",
       "command": "go",
       "args": [
         "test",
@@ -89,7 +89,7 @@
       "exit_code": 0,
       "stderr": "repo path not provided; repository Go checks skipped in dry-run/fake executor",
       "error_type": "no_repo_path",
-      "started_at": "2026-07-17T10:26:56.841312+08:00",
+      "started_at": "2026-07-17T11:51:41.076451+08:00",
       "duration_ms": 0,
       "timed_out": false,
       "output_truncated": false
@@ -97,13 +97,13 @@
   ],
   "permission_decisions": [
     {
-      "id": "perm-7c62321b5ed0d534dbaf3ffd",
-      "task_id": "review-fb6dfcfccbfe87a2803fca33",
+      "id": "perm-3f86fbb306f3813d10924e3f",
+      "task_id": "review-88128b232348d460f3ee2048",
       "tool": "workspace_exec",
       "command": "bash skills/code-review/scripts/diff_summary.sh work/change.diff out/diff_summary.json",
       "action": "allow",
       "disposition": "allow",
-      "created_at": "2026-07-17T10:26:56.841311+08:00"
+      "created_at": "2026-07-17T11:51:41.07645+08:00"
     }
   ],
   "permission_summary": {
@@ -114,40 +114,40 @@
   },
   "artifacts": [
     {
-      "id": "artifact-7ad75d9b5f500cfde27ef95e",
-      "task_id": "review-fb6dfcfccbfe87a2803fca33",
+      "id": "artifact-3230e28c2e9f66c489e0eba8",
+      "task_id": "review-88128b232348d460f3ee2048",
       "name": "review_report.json",
       "path": "output/review_report.json",
       "mime_type": "application/json",
-      "size_bytes": 4146,
-      "created_at": "2026-07-17T10:26:56.851251+08:00"
+      "size_bytes": 4145,
+      "created_at": "2026-07-17T11:51:41.084538+08:00"
     },
     {
-      "id": "artifact-a6c351022bb10b136d953f02",
-      "task_id": "review-fb6dfcfccbfe87a2803fca33",
+      "id": "artifact-59853f2ac371f97d2cb3f755",
+      "task_id": "review-88128b232348d460f3ee2048",
       "name": "review_report.md",
       "path": "output/review_report.md",
       "mime_type": "text/markdown",
       "size_bytes": 2357,
-      "created_at": "2026-07-17T10:26:56.851254+08:00"
+      "created_at": "2026-07-17T11:51:41.08454+08:00"
     },
     {
-      "id": "artifact-861ed7dd59b2022f19e329c4",
-      "task_id": "review-fb6dfcfccbfe87a2803fca33",
+      "id": "artifact-d54ef6cd848cca25fc1ceba5",
+      "task_id": "review-88128b232348d460f3ee2048",
       "name": "review_diagnostics.json",
       "path": "output/review_diagnostics.json",
       "mime_type": "application/json",
       "size_bytes": 2146,
-      "created_at": "2026-07-17T10:26:56.851256+08:00"
+      "created_at": "2026-07-17T11:51:41.084542+08:00"
     },
     {
-      "id": "artifact-9dc903fb644aae03858cec5a",
-      "task_id": "review-fb6dfcfccbfe87a2803fca33",
+      "id": "artifact-43032cede502d2c6f70f0f29",
+      "task_id": "review-88128b232348d460f3ee2048",
       "name": "review_report.zh.md",
       "path": "output/review_report.zh.md",
       "mime_type": "text/markdown",
       "size_bytes": 1199,
-      "created_at": "2026-07-17T10:26:56.851257+08:00"
+      "created_at": "2026-07-17T11:51:41.084544+08:00"
     }
   ],
   "artifact_policy": {
@@ -164,7 +164,7 @@
     "rejected_count": 0
   },
   "metrics": {
-    "total_duration_ms": 3,
+    "total_duration_ms": 6,
     "sandbox_duration_ms": 0,
     "tool_call_count": 0,
     "permission_deny_count": 0,

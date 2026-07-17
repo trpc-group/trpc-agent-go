@@ -31,7 +31,7 @@ type ReviewStore interface {
 	LoadTaskReport(ctx context.Context, taskID string) (ReviewReport, error)
 }
 
-const schemaVersion = 4
+const schemaVersion = 5
 
 func OpenStore(ctx context.Context, path string) (ReviewStore, error) {
 	db, err := sql.Open("sqlite3", path)
@@ -132,13 +132,14 @@ func (s *Store) Init(ctx context.Context) error {
 			FOREIGN KEY(task_id) REFERENCES review_tasks(id) ON DELETE CASCADE
 		)`,
 		`CREATE TABLE IF NOT EXISTS reports (
-			task_id TEXT PRIMARY KEY,
-			json_path TEXT NOT NULL,
-			md_path TEXT NOT NULL,
-			conclusion TEXT NOT NULL,
-			created_at TEXT NOT NULL,
-			FOREIGN KEY(task_id) REFERENCES review_tasks(id) ON DELETE CASCADE
-		)`,
+				task_id TEXT PRIMARY KEY,
+				json_path TEXT NOT NULL,
+				md_path TEXT NOT NULL,
+				conclusion TEXT NOT NULL,
+				artifact_policy_json TEXT NOT NULL DEFAULT '{}',
+				created_at TEXT NOT NULL,
+				FOREIGN KEY(task_id) REFERENCES review_tasks(id) ON DELETE CASCADE
+			)`,
 		`CREATE TABLE IF NOT EXISTS audit_metrics (
 			task_id TEXT PRIMARY KEY,
 			metrics_json TEXT NOT NULL,
@@ -174,6 +175,9 @@ func (s *Store) migrate(ctx context.Context) error {
 		return err
 	}
 	if err := ensureColumn(ctx, s.db, "permission_decisions", "disposition", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := ensureColumn(ctx, s.db, "reports", "artifact_policy_json", "TEXT NOT NULL DEFAULT '{}'"); err != nil {
 		return err
 	}
 	stmts := []string{
@@ -305,10 +309,11 @@ func (s *Store) SaveReport(ctx context.Context, report ReviewReport, pd ParsedDi
 	); err != nil {
 		return err
 	}
+	artifactPolicyJSON, _ := json.Marshal(report.ArtifactPolicy)
 	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO reports(task_id, json_path, md_path, conclusion, created_at)
-		 VALUES (?, ?, ?, ?, ?)`,
-		report.Task.ID, jsonPath, mdPath, report.Conclusion,
+		`INSERT INTO reports(task_id, json_path, md_path, conclusion, artifact_policy_json, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		report.Task.ID, jsonPath, mdPath, report.Conclusion, string(artifactPolicyJSON),
 		time.Now().Format(time.RFC3339Nano),
 	); err != nil {
 		return err
@@ -357,16 +362,25 @@ func (s *Store) LoadTaskReport(ctx context.Context, taskID string) (ReviewReport
 	if err := s.loadPermissionDecisions(ctx, taskID, &report); err != nil {
 		return ReviewReport{}, err
 	}
+	report.PermissionSummary = buildPermissionSummary(report.Permissions)
 	if err := s.loadArtifacts(ctx, taskID, &report); err != nil {
 		return ReviewReport{}, err
 	}
 	if err := s.loadMetrics(ctx, taskID, &report); err != nil {
 		return ReviewReport{}, err
 	}
+	var artifactPolicyJSON string
 	if err := s.db.QueryRowContext(ctx,
-		`SELECT conclusion FROM reports WHERE task_id = ?`, taskID,
-	).Scan(&report.Conclusion); err != nil && err != sql.ErrNoRows {
+		`SELECT conclusion, artifact_policy_json FROM reports WHERE task_id = ?`, taskID,
+	).Scan(&report.Conclusion, &artifactPolicyJSON); err != nil && err != sql.ErrNoRows {
 		return ReviewReport{}, err
+	}
+	if artifactPolicyJSON != "" {
+		_ = json.Unmarshal([]byte(artifactPolicyJSON), &report.ArtifactPolicy)
+	}
+	if report.ArtifactPolicy.MaxArtifacts == 0 && len(report.Artifacts) > 0 {
+		report.ArtifactPolicy = defaultArtifactPolicy()
+		report.ArtifactPolicy.RetainedCount = len(report.Artifacts)
 	}
 	return report, nil
 }
