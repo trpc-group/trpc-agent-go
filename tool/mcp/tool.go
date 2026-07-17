@@ -30,6 +30,9 @@ type mcpToolResult struct {
 // MarshalJSON implements json.Marshaler.
 // It marshals only the Content slice for backward compatibility.
 func (r *mcpToolResult) MarshalJSON() ([]byte, error) {
+	if r == nil || len(r.Content) == 0 {
+		return []byte("[]"), nil
+	}
 	return json.Marshal(r.Content)
 }
 

@@ -653,7 +653,17 @@ func TestFileMemoryStoreForBackend_FileOnly(t *testing.T) {
 func TestBuildOpenClawTools_HidesMemoryFileEnvWithoutFileBackend(t *testing.T) {
 	t.Parallel()
 
-	bundle := buildOpenClawTools(true, t.TempDir(), nil, nil, nil, 0, 0, 0)
+	bundle := buildOpenClawTools(
+		true,
+		t.TempDir(),
+		nil,
+		nil,
+		nil,
+		0,
+		0,
+		0,
+		0,
+	)
 	decl := findToolDeclaration(bundle.tools, "exec_command")
 	require.NotNil(t, decl)
 	require.Contains(
@@ -674,6 +684,7 @@ func TestBuildOpenClawTools_HostExecDefaultTimeout(t *testing.T) {
 		nil,
 		nil,
 		50*time.Millisecond,
+		0,
 		0,
 		0,
 	)
@@ -714,6 +725,7 @@ func TestBuildOpenClawTools_HostExecMaxTimeoutAndYield(t *testing.T) {
 		0,
 		50*time.Millisecond,
 		20*time.Millisecond,
+		0,
 	)
 	execTool := findTool(bundle.tools, "exec_command")
 	callable, ok := execTool.(tool.CallableTool)
@@ -780,6 +792,33 @@ func TestBuildOpenClawTools_HostExecMaxTimeoutAndYield(t *testing.T) {
 	require.Less(t, time.Since(started), 500*time.Millisecond)
 }
 
+func TestBuildOpenClawTools_HostExecMaxIdleWait(t *testing.T) {
+	t.Parallel()
+
+	bundle := buildOpenClawTools(
+		true,
+		t.TempDir(),
+		nil,
+		nil,
+		nil,
+		0,
+		0,
+		0,
+		20*time.Second,
+	)
+	execTool := findTool(bundle.tools, "exec_command")
+	callable, ok := execTool.(tool.CallableTool)
+	require.True(t, ok)
+
+	started := time.Now()
+	_, err := callable.Call(
+		context.Background(),
+		[]byte(`{"command":"sleep 30 && printf done"}`),
+	)
+	require.ErrorContains(t, err, "long idle waits")
+	require.Less(t, time.Since(started), time.Second)
+}
+
 func TestBuildOpenClawTools_ExposesMemoryFileEnvForFileBackend(t *testing.T) {
 	t.Parallel()
 
@@ -788,7 +827,17 @@ func TestBuildOpenClawTools_ExposesMemoryFileEnvForFileBackend(t *testing.T) {
 	store, err := memoryfile.NewStore(root)
 	require.NoError(t, err)
 
-	bundle := buildOpenClawTools(true, t.TempDir(), nil, store, nil, 0, 0, 0)
+	bundle := buildOpenClawTools(
+		true,
+		t.TempDir(),
+		nil,
+		store,
+		nil,
+		0,
+		0,
+		0,
+		0,
+	)
 	decl := findToolDeclaration(bundle.tools, "exec_command")
 	require.NotNil(t, decl)
 	require.Contains(t, decl.Description, "OPENCLAW_MEMORY_FILE")
@@ -805,7 +854,17 @@ func TestBuildOpenClawTools_UsesSandboxExecCommand(t *testing.T) {
 	t.Parallel()
 
 	engine := codeexecutor.NewEngine(nil, nil, nil)
-	bundle := buildOpenClawTools(true, t.TempDir(), nil, nil, engine, 0, 0, 0)
+	bundle := buildOpenClawTools(
+		true,
+		t.TempDir(),
+		nil,
+		nil,
+		engine,
+		0,
+		0,
+		0,
+		0,
+	)
 	decl := findToolDeclaration(bundle.tools, "exec_command")
 	require.NotNil(t, decl)
 	require.Contains(t, decl.Description, "inside the configured sandbox")
@@ -833,7 +892,17 @@ func TestBuildOpenClawTools_UsesSandboxExecCommandWithMemoryFileStore(
 	require.NoError(t, err)
 
 	engine := codeexecutor.NewEngine(nil, nil, nil)
-	bundle := buildOpenClawTools(true, t.TempDir(), nil, store, engine, 0, 0, 0)
+	bundle := buildOpenClawTools(
+		true,
+		t.TempDir(),
+		nil,
+		store,
+		engine,
+		0,
+		0,
+		0,
+		0,
+	)
 	decl := findToolDeclaration(bundle.tools, "exec_command")
 	require.NotNil(t, decl)
 	require.Contains(t, decl.Description, "inside the configured sandbox")
@@ -852,7 +921,17 @@ func TestBuildOpenClawTools_IncludesConversationHistoryTool(
 ) {
 	t.Parallel()
 
-	bundle := buildOpenClawTools(true, t.TempDir(), nil, nil, nil, 0, 0, 0)
+	bundle := buildOpenClawTools(
+		true,
+		t.TempDir(),
+		nil,
+		nil,
+		nil,
+		0,
+		0,
+		0,
+		0,
+	)
 	decl := findToolDeclaration(bundle.tools, "conversation_history")
 	require.NotNil(t, decl)
 	require.Contains(
@@ -865,7 +944,17 @@ func TestBuildOpenClawTools_IncludesConversationHistoryTool(
 func TestBuildOpenClawTools_IncludesSubagentTools(t *testing.T) {
 	t.Parallel()
 
-	bundle := buildOpenClawTools(true, t.TempDir(), nil, nil, nil, 0, 0, 0)
+	bundle := buildOpenClawTools(
+		true,
+		t.TempDir(),
+		nil,
+		nil,
+		nil,
+		0,
+		0,
+		0,
+		0,
+	)
 	require.NotNil(
 		t,
 		findToolDeclaration(bundle.tools, "subagents_spawn"),
@@ -2796,6 +2885,12 @@ func TestNewAgent_BrowserToolingGuidance_Applied(t *testing.T) {
 	require.Contains(
 		t,
 		sys,
+		"Google Scholar, Brave Search",
+	)
+	require.Contains(t, sys, "unusual traffic warning")
+	require.Contains(
+		t,
+		sys,
 		"Browser snapshots are for current page structure",
 	)
 }
@@ -2853,6 +2948,8 @@ func TestNewAgent_BrowserToolingGuidance_FromToolProvider(
 		sys,
 		"missing search/fetch blocker",
 	)
+	require.Contains(t, sys, "search-engine result pages")
+	require.Contains(t, sys, "CAPTCHA")
 }
 
 func TestNewAgent_OpenClawToolingGuidance_OverrideApplied(
@@ -4536,6 +4633,14 @@ func TestParseOpenAIVariant_Explicit(t *testing.T) {
 	v, err = parseOpenAIVariant(string(openai.VariantGLM), "")
 	require.NoError(t, err)
 	require.Equal(t, openai.VariantGLM, v)
+
+	v, err = parseOpenAIVariant(string(openai.VariantMiniMax), "")
+	require.NoError(t, err)
+	require.Equal(t, openai.VariantMiniMax, v)
+
+	v, err = parseOpenAIVariant(string(openai.VariantKimi), "")
+	require.NoError(t, err)
+	require.Equal(t, openai.VariantKimi, v)
 }
 
 func TestParseOpenAIVariant_Auto(t *testing.T) {
@@ -4560,6 +4665,8 @@ func TestModelCompatibilityRunOptions_GLMEnablesJSONRepair(t *testing.T) {
 	agentOpts := agent.NewRunOptions(runOpts...)
 	require.NotNil(t, agentOpts.ToolCallArgumentsJSONRepairEnabled)
 	require.True(t, *agentOpts.ToolCallArgumentsJSONRepairEnabled)
+	require.NotNil(t, agentOpts.ToolCallTextRepairEnabled)
+	require.True(t, *agentOpts.ToolCallTextRepairEnabled)
 }
 
 func TestModelCompatibilityRunOptions_GLMCanBeInferred(t *testing.T) {
@@ -4574,6 +4681,8 @@ func TestModelCompatibilityRunOptions_GLMCanBeInferred(t *testing.T) {
 	agentOpts := agent.NewRunOptions(runOpts...)
 	require.NotNil(t, agentOpts.ToolCallArgumentsJSONRepairEnabled)
 	require.True(t, *agentOpts.ToolCallArgumentsJSONRepairEnabled)
+	require.NotNil(t, agentOpts.ToolCallTextRepairEnabled)
+	require.True(t, *agentOpts.ToolCallTextRepairEnabled)
 }
 
 func TestModelCompatibilityRunOptions_NonGLMUnaffected(t *testing.T) {
@@ -4701,6 +4810,26 @@ func TestInferOpenAIVariant(t *testing.T) {
 		t,
 		openai.VariantGLM,
 		inferOpenAIVariant("https://open.bigmodel.cn/api/paas/v4"),
+	)
+	require.Equal(
+		t,
+		openai.VariantMiniMax,
+		inferOpenAIVariant("https://api.minimax.io/v1"),
+	)
+	require.Equal(
+		t,
+		openai.VariantMiniMax,
+		inferOpenAIVariant("https://api.minimaxi.com/v1"),
+	)
+	require.Equal(
+		t,
+		openai.VariantKimi,
+		inferOpenAIVariant("https://api.moonshot.ai/v1"),
+	)
+	require.Equal(
+		t,
+		openai.VariantKimi,
+		inferOpenAIVariant("https://api.moonshot.cn/v1"),
 	)
 	require.Equal(
 		t,

@@ -313,10 +313,13 @@ const (
 		"browser only when a page requires JavaScript rendering, " +
 		"interaction, download handling, screenshots, or visual " +
 		"verification; do not drive Google, Bing, or DuckDuckGo " +
-		"result pages through browser when a search tool is " +
-		"available. If a public site repeatedly blocks access " +
+		"result pages, Google Scholar, Brave Search, or other " +
+		"search-engine result pages through browser when a search " +
+		"tool is available. If a public site repeatedly blocks access " +
 		"with sign-in, bot-check, CAPTCHA, or anti-automation " +
-		"errors and the user has not provided credentials, stop " +
+		"errors, Cloudflare or `Just a moment` challenges, or " +
+		"unusual traffic warnings and the user has not provided " +
+		"credentials, stop " +
 		"retrying that blocked path; use search, fetch, metadata, " +
 		"or the evidence already available to complete the task or " +
 		"state the exact blocker. When searches return no useful " +
@@ -491,7 +494,14 @@ const (
 		"Do not use browser as a substitute for web search or " +
 		"fetching known static URLs; if a worker needs those " +
 		"capabilities but they are unavailable, return the exact " +
-		"missing search/fetch blocker. " +
+		"missing search/fetch blocker. Do not use browser to drive " +
+		"DuckDuckGo, Google, Google Scholar, Brave Search, Bing, " +
+		"or other search-engine result pages when search or fetch " +
+		"tools are available. If browser content shows a CAPTCHA, " +
+		"Cloudflare or `Just a moment` challenge, unusual traffic " +
+		"warning, bot check, or anti-automation page, treat that " +
+		"route as blocked and switch tools or sources instead of " +
+		"waiting, screenshotting, or retrying it. " +
 		"Browser snapshots are for current page structure and " +
 		"interactive state, not bulk extraction of long static " +
 		"documents; when static page text is needed, prefer " +
@@ -513,10 +523,14 @@ const (
 
 	defaultExecResultOutputChars = 20_000
 
-	deepSeekAPIHost = "api.deepseek.com"
-	qwenAPIHost     = "dashscope.aliyuncs.com"
-	hunyuanAPIHost  = "api.hunyuan.cloud.tencent.com"
-	glmAPIHost      = "open.bigmodel.cn"
+	deepSeekAPIHost  = "api.deepseek.com"
+	qwenAPIHost      = "dashscope.aliyuncs.com"
+	hunyuanAPIHost   = "api.hunyuan.cloud.tencent.com"
+	glmAPIHost       = "open.bigmodel.cn"
+	miniMaxAPIHost   = "api.minimax.io"
+	miniMaxCNAPIHost = "api.minimaxi.com"
+	kimiAPIHost      = "api.moonshot.ai"
+	kimiCNAPIHost    = "api.moonshot.cn"
 
 	openAIAPIKeyEnvName  = "OPENAI_API_KEY"
 	openAIBaseURLEnvName = "OPENAI_BASE_URL"
@@ -1177,6 +1191,7 @@ func NewRuntimeWithOptions(
 		opts.HostExecDefaultTimeout,
 		opts.HostExecMaxTimeout,
 		opts.HostExecMaxYield,
+		opts.HostExecMaxIdleWait,
 	)
 	extraTools := memoryServiceTools(memSvc)
 	extraTools = append(extraTools, openClawTools.tools...)
@@ -1824,6 +1839,7 @@ func run(
 		opts.HostExecDefaultTimeout,
 		opts.HostExecMaxTimeout,
 		opts.HostExecMaxYield,
+		opts.HostExecMaxIdleWait,
 	)
 	extraTools := memoryServiceTools(memSvc)
 	extraTools = append(extraTools, openClawTools.tools...)
@@ -2962,6 +2978,7 @@ func newAgent(
 		callbacks,
 		os.Getenv(envBlockedToolArgumentSubstrings),
 	)
+	registerBlockedRouteToolCallback(callbacks)
 	callbacks.RegisterToolResultMessages(openClawToolResultMessages)
 
 	exec := cfg.codeExecutor
@@ -3545,6 +3562,7 @@ func buildOpenClawTools(
 	hostExecDefaultTimeout time.Duration,
 	hostExecMaxTimeout time.Duration,
 	hostExecMaxYield time.Duration,
+	hostExecMaxIdleWait time.Duration,
 ) openClawToolsBundle {
 	if !enabled {
 		return openClawToolsBundle{}
@@ -3564,7 +3582,11 @@ func buildOpenClawTools(
 
 	var mgr *octool.Manager
 	var execTool tool.Tool
-	commandPolicy := octool.NewChatCommandSafetyPolicy()
+	commandPolicy := octool.NewChatCommandSafetyPolicyWithOptions(
+		octool.ChatCommandSafetyPolicyOptions{
+			MaxIdleWait: hostExecMaxIdleWait,
+		},
+	)
 	outputRedactor := octool.NewChatCommandOutputRedactor()
 	if sandboxExecEngine != nil {
 		execTool = octool.NewSandboxExecCommandToolWithPolicy(
@@ -4068,7 +4090,9 @@ func parseOpenAIVariant(
 		openai.VariantDeepSeek,
 		openai.VariantHunyuan,
 		openai.VariantQwen,
-		openai.VariantGLM:
+		openai.VariantGLM,
+		openai.VariantMiniMax,
+		openai.VariantKimi:
 		return variant, nil
 	default:
 		return "", fmt.Errorf("unsupported openai variant: %s", raw)
@@ -4106,6 +4130,7 @@ func modelCompatibilityRunOptions(
 	}
 	return []agent.RunOption{
 		agent.WithToolCallArgumentsJSONRepairEnabled(true),
+		agent.WithToolCallTextRepairEnabled(true),
 	}
 }
 
@@ -4158,6 +4183,12 @@ func inferOpenAIVariant(baseURL string) openai.Variant {
 		return openai.VariantHunyuan
 	case strings.EqualFold(host, glmAPIHost):
 		return openai.VariantGLM
+	case strings.EqualFold(host, miniMaxAPIHost),
+		strings.EqualFold(host, miniMaxCNAPIHost):
+		return openai.VariantMiniMax
+	case strings.EqualFold(host, kimiAPIHost),
+		strings.EqualFold(host, kimiCNAPIHost):
+		return openai.VariantKimi
 	default:
 		return openai.VariantOpenAI
 	}

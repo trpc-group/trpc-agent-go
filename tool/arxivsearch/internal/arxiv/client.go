@@ -139,8 +139,12 @@ func (c *Client) Search(search Search) ([]Result, error) {
 // buildQueryURL builds the query URL for the search
 func (c *Client) buildQueryURL(search Search, start, maxResults int) (string, error) {
 	params := url.Values{}
-	if search.Query != "" {
-		params.Add("search_query", search.Query)
+	query, err := buildSearchQuery(search)
+	if err != nil {
+		return "", err
+	}
+	if query != "" {
+		params.Add("search_query", query)
 	}
 	if len(search.IDList) > 0 {
 		params.Add("id_list", strings.Join(search.IDList, ","))
@@ -159,6 +163,100 @@ func (c *Client) buildQueryURL(search Search, start, maxResults int) (string, er
 	}
 
 	return c.BaseURL + "?" + params.Encode(), nil
+}
+
+func buildSearchQuery(search Search) (string, error) {
+	query := strings.TrimSpace(search.Query)
+	dateClause, err := submittedDateClause(
+		search.SubmittedDateFrom,
+		search.SubmittedDateTo,
+	)
+	if err != nil {
+		return "", err
+	}
+	if dateClause == "" {
+		return query, nil
+	}
+	if containsSubmittedDateClause(query) {
+		return "", fmt.Errorf(
+			"query already contains submittedDate; use either the " +
+				"query clause or submitted_date_from/to",
+		)
+	}
+	if query == "" {
+		return dateClause, nil
+	}
+	return "(" + query + ") AND " + dateClause, nil
+}
+
+func containsSubmittedDateClause(query string) bool {
+	return strings.Contains(
+		strings.ToLower(query),
+		"submitteddate:",
+	)
+}
+
+func submittedDateClause(from string, to string) (string, error) {
+	from = strings.TrimSpace(from)
+	to = strings.TrimSpace(to)
+	if from == "" && to == "" {
+		return "", nil
+	}
+	if from == "" {
+		from = "199001010000"
+	}
+	if to == "" {
+		to = "999912312359"
+	}
+	fromDate, err := normalizeArxivDateBound(from, false)
+	if err != nil {
+		return "", fmt.Errorf("invalid submitted_date_from: %w", err)
+	}
+	toDate, err := normalizeArxivDateBound(to, true)
+	if err != nil {
+		return "", fmt.Errorf("invalid submitted_date_to: %w", err)
+	}
+	if fromDate > toDate {
+		return "", fmt.Errorf(
+			"submitted_date_from must be before or equal to " +
+				"submitted_date_to",
+		)
+	}
+	return fmt.Sprintf(
+		"submittedDate:[%s TO %s]",
+		fromDate,
+		toDate,
+	), nil
+}
+
+func normalizeArxivDateBound(raw string, upper bool) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", fmt.Errorf("empty date")
+	}
+	formats := []struct {
+		layout   string
+		dateOnly bool
+	}{
+		{layout: "2006-01-02", dateOnly: true},
+		{layout: "20060102", dateOnly: true},
+		{layout: "200601021504"},
+		{layout: "2006-01-02 15:04"},
+	}
+	for _, format := range formats {
+		parsed, err := time.Parse(format.layout, raw)
+		if err != nil {
+			continue
+		}
+		if format.dateOnly && upper {
+			parsed = parsed.Add(23*time.Hour + 59*time.Minute)
+		}
+		return parsed.Format("200601021504"), nil
+	}
+	return "", fmt.Errorf(
+		"expected YYYY-MM-DD, YYYYMMDD, YYYYMMDDHHMM, or " +
+			"YYYY-MM-DD HH:MM",
+	)
 }
 
 // fetchPage fetches a page of results

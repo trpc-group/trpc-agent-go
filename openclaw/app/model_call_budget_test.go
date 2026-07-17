@@ -1406,6 +1406,71 @@ func TestModelCallBudgetModel_DoesNotFinalizeOutsideDeadlineWindow(
 	require.NotNil(t, req.Tools)
 }
 
+func TestModelCallBudgetIterModel_FinalizesOnLastAllowedCall(t *testing.T) {
+	t.Parallel()
+
+	underlying := &capturingBudgetModel{}
+	wrapped := newModelCallBudgetModel(underlying)
+	iter, ok := wrapped.(model.IterModel)
+	require.True(t, ok)
+	ctx := withModelCallBudgetValue(
+		context.Background(),
+		newModelCallBudget(1, true, 0),
+	)
+	req := &model.Request{
+		Messages: []model.Message{model.NewUserMessage("question")},
+		Tools:    map[string]tool.Tool{"search": nil},
+		ExtraFields: map[string]any{
+			"parallel_tool_calls": true,
+			"response_format":     "json",
+			"tool_choice":         "required",
+			"tools":               []string{"search"},
+		},
+	}
+
+	_, err := iter.GenerateContentIter(ctx, req)
+	require.NoError(t, err)
+
+	got := underlying.lastIterRequest()
+	require.NotNil(t, got)
+	require.Nil(t, got.Tools)
+	require.Len(t, got.Messages, 2)
+	require.Contains(
+		t,
+		got.Messages[1].Content,
+		"final allowed model call",
+	)
+	require.Contains(
+		t,
+		got.Messages[1].Content,
+		"Do not emit tool calls",
+	)
+	require.Contains(
+		t,
+		got.Messages[1].Content,
+		"<tool_call>",
+	)
+	require.Nil(t, req.Tools)
+	require.Len(t, req.Messages, 2)
+	require.Equal(t, map[string]any{
+		"response_format": "json",
+	}, req.ExtraFields)
+	require.Equal(t, map[string]any{
+		"response_format": "json",
+	}, got.ExtraFields)
+}
+
+func TestApplyFinalModelCallRequestNil(t *testing.T) {
+	t.Parallel()
+
+	got := applyFinalModelCallRequest(nil, false)
+
+	require.NotNil(t, got)
+	require.Nil(t, got.Tools)
+	require.Len(t, got.Messages, 1)
+	require.Contains(t, got.Messages[0].Content, "final allowed model call")
+}
+
 func TestModelCallBudgetModel_UserPromptPrefixConsumesBudget(t *testing.T) {
 	t.Parallel()
 
