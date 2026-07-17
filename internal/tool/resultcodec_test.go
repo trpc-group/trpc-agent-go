@@ -159,6 +159,20 @@ func TestResolvePermissionChecker_ExhaustedChainFailsClosed(t *testing.T) {
 	}
 }
 
+func TestNamedTool_CheckPermissionResolvesDeepDeny(t *testing.T) {
+	// NamedTool -> transparent wrapper -> deny checker. NamedTool must resolve
+	// the deeper deny, not only its direct original.
+	deny := &rcPermChecker{name: "deny", inner: &rcFakeCallable{name: "base"}}
+	named := NewUnprefixedNamedTool(&rcUnwrapOnly{name: "t", inner: deny})
+	decision, err := named.CheckPermission(context.Background(), &tool.PermissionRequest{})
+	if err != nil {
+		t.Fatalf("CheckPermission error: %v", err)
+	}
+	if decision.Action != tool.PermissionActionDeny {
+		t.Fatalf("NamedTool must honor a deny behind a transparent wrapper, got %q", decision.Action)
+	}
+}
+
 func TestResolvePermissionChecker_CyclicFailsClosed(t *testing.T) {
 	// A cyclic chain must terminate and fail closed rather than report "none".
 	c := &rcSelfUnwrap{name: "cyclic"}

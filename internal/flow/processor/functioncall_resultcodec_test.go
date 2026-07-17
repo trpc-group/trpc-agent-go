@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -446,6 +447,32 @@ func TestExecuteToolCall_DeepWrapperChainDenyNotBypassed(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, choices, 1)
 	assert.False(t, base.called, "base tool must not run when a deny is hidden past the bound")
+	var pr tool.PermissionResult
+	require.NoError(t, json.Unmarshal([]byte(choices[0].Message.Content), &pr))
+	assert.Equal(t, tool.PermissionResultStatusDenied, pr.Status)
+}
+
+func TestExecuteToolCall_NamedToolDoesNotHideDeepDeny(t *testing.T) {
+	// codecTool -> NamedTool -> transparent wrapper -> deny -> base.
+	// NamedTool must not report allow by only checking its direct original; the
+	// deeper deny must be honored and the base tool must not execute.
+	base := &recordingCallableTool{declaration: &tool.Declaration{Name: "danger"}}
+	deny := &permissionWrapper{base: base}
+	transparent := &transparentWrapper{inner: deny}
+	named := itool.NewUnprefixedNamedTool(transparent)
+	wrapped := resultcodec.Wrap(named, resultcodec.Text())
+	tools := map[string]tool.Tool{"danger": wrapped}
+	p := NewFunctionCallResponseProcessor(false, nil)
+	inv := &agent.Invocation{AgentName: "a", Model: &mockModel{}}
+	pc := model.ToolCall{
+		ID:       "c1",
+		Function: model.FunctionDefinitionParam{Name: "danger", Arguments: []byte(`{}`)},
+	}
+	ch := make(chan *event.Event, 8)
+	_, choices, _, _, _, err := p.executeToolCall(context.Background(), inv, pc, tools, 0, ch)
+	require.NoError(t, err)
+	require.Len(t, choices, 1)
+	assert.False(t, base.called, "base tool must not run when a deny is hidden behind a NamedTool")
 	var pr tool.PermissionResult
 	require.NoError(t, json.Unmarshal([]byte(choices[0].Message.Content), &pr))
 	assert.Equal(t, tool.PermissionResultStatusDenied, pr.Status)

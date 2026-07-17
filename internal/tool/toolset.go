@@ -170,24 +170,34 @@ func ResolveSemantic(t tool.Tool) tool.Tool {
 // (ErrToolWrapperTraversalExhausted) means the chain could not be fully
 // traversed within the depth bound (overly deep or cyclic), so callers must not
 // treat it as "no checker" and must deny.
+//
+// Purely-delegating framework wrappers (declarationWrapper, NamedTool) carry no
+// permission policy of their own and are unwrapped before anything is treated as
+// a checker; otherwise their shallow delegating CheckPermission would
+// short-circuit resolution and could hide a deeper deny.
 func ResolvePermissionChecker(t tool.Tool) (tool.PermissionChecker, error) {
 	for i := 0; i < maxToolUnwrapDepth; i++ {
 		if t == nil {
 			return nil, nil
 		}
-		if checker, ok := t.(tool.PermissionChecker); ok {
-			return checker, nil
-		}
 		switch current := t.(type) {
 		case declarationWrapper:
 			t = current.originalTool()
+			continue
 		case *NamedTool:
 			t = current.Original()
-		case toolUnwrapper:
-			t = current.Unwrap()
-		default:
-			return nil, nil
+			continue
 		}
+		// A tool with its own PermissionChecker is authoritative at this layer.
+		if checker, ok := t.(tool.PermissionChecker); ok {
+			return checker, nil
+		}
+		// A transparent wrapper without its own checker: keep unwrapping.
+		if u, ok := t.(toolUnwrapper); ok {
+			t = u.Unwrap()
+			continue
+		}
+		return nil, nil
 	}
 	return nil, ErrToolWrapperTraversalExhausted
 }
@@ -339,8 +349,16 @@ func (t *NamedTool) CheckPermission(
 	ctx context.Context,
 	req *tool.PermissionRequest,
 ) (tool.PermissionDecision, error) {
-	checker, ok := t.original.(tool.PermissionChecker)
-	if !ok {
+	// Resolve through the full wrapper chain, not just the direct original, so a
+	// deny behind a transparent wrapper is not missed. Fail closed if the chain
+	// cannot be fully traversed.
+	checker, err := ResolvePermissionChecker(t.original)
+	if err != nil {
+		return tool.DenyPermission(
+			"tool permission could not be resolved: " + err.Error(),
+		), nil
+	}
+	if checker == nil {
 		return tool.AllowPermission(), nil
 	}
 	return checker.CheckPermission(ctx, req)
