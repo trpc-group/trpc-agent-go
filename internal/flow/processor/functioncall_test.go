@@ -4029,11 +4029,15 @@ func TestPersistFunctionResponseAfterDeadline_AppliesEventPlugins(
 		name: "redact-event",
 		reg: func(r *plugin.Registry) {
 			r.OnEvent(func(
-				context.Context,
-				*agent.Invocation,
-				*event.Event,
+				_ context.Context,
+				_ *agent.Invocation,
+				evt *event.Event,
 			) (*event.Event, error) {
 				pluginCalls++
+				evt.ParentMetadata.TriggerType =
+					event.TriggerTypeTransfer
+				evt.ParentMetadata.TriggerID = "mutated-trigger"
+				evt.ParentMetadata.TriggerName = "mutated-name"
 				replacement := event.NewResponseEvent(
 					"",
 					"test-agent",
@@ -4096,16 +4100,17 @@ func TestPersistFunctionResponseAfterDeadline_AppliesEventPlugins(
 	require.Equal(t, original.RequestID, persisted.RequestID)
 	require.Equal(t, original.InvocationID, persisted.InvocationID)
 	require.Equal(t, original.ParentInvocationID, persisted.ParentInvocationID)
-	require.Same(t, original.ParentMetadata, persisted.ParentMetadata)
+	require.NotSame(t, original.ParentMetadata, persisted.ParentMetadata)
 	require.Equal(t, event.TriggerTypeToolCall,
 		persisted.ParentMetadata.TriggerType)
 	require.Equal(t, "call-1", persisted.ParentMetadata.TriggerID)
 	require.Equal(t, "echo", persisted.ParentMetadata.TriggerName)
+	require.Equal(t, "mutated-trigger", original.ParentMetadata.TriggerID)
 	require.Equal(t, original.Branch, persisted.Branch)
 	require.Equal(t, original.FilterKey, persisted.FilterKey)
 }
 
-func TestPersistFunctionResponseAfterDeadline_PluginErrorStopsPersistence(
+func TestPersistFunctionResponseAfterDeadline_PluginErrorPersistsOriginal(
 	t *testing.T,
 ) {
 	ctx, cancel := context.WithDeadline(
@@ -4132,6 +4137,16 @@ func TestPersistFunctionResponseAfterDeadline_PluginErrorStopsPersistence(
 		require.NoError(t, service.Close())
 	})
 	recordingService := &recordingSessionService{Service: service}
+	sess, err := service.CreateSession(
+		context.Background(),
+		session.Key{
+			AppName:   "test-app",
+			UserID:    "test-user",
+			SessionID: "test-session",
+		},
+		nil,
+	)
+	require.NoError(t, err)
 
 	for _, tc := range []struct {
 		name           string
@@ -4141,17 +4156,21 @@ func TestPersistFunctionResponseAfterDeadline_PluginErrorStopsPersistence(
 		{name: "session service fallback"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			recordingService.appendCalls.Store(0)
 			inv := agent.NewInvocation(
+				agent.WithInvocationSession(sess),
 				agent.WithInvocationSessionService(recordingService),
 				agent.WithInvocationPlugins(mgr),
 			)
 			var appenderCalls atomic.Int32
+			var appended *event.Event
 			if tc.attachAppender {
 				appender.Attach(inv, func(
-					context.Context,
-					*event.Event,
+					_ context.Context,
+					evt *event.Event,
 				) error {
 					appenderCalls.Add(1)
+					appended = evt
 					return nil
 				})
 			}
@@ -4169,9 +4188,19 @@ func TestPersistFunctionResponseAfterDeadline_PluginErrorStopsPersistence(
 
 			err := persistFunctionResponseAfterDeadline(ctx, inv, evt)
 
-			require.ErrorIs(t, err, wantErr)
+			require.NoError(t, err)
+			if tc.attachAppender {
+				require.Equal(t, int32(1), appenderCalls.Load())
+				require.Zero(t, recordingService.appendCalls.Load())
+				require.Same(t, evt, appended)
+				return
+			}
 			require.Zero(t, appenderCalls.Load())
-			require.Zero(t, recordingService.appendCalls.Load())
+			require.Equal(
+				t,
+				int32(1),
+				recordingService.appendCalls.Load(),
+			)
 		})
 	}
 }
