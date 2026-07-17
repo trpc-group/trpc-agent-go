@@ -91,3 +91,20 @@ func TestCompareCasesRejectsInvalidInput(t *testing.T) {
 		})
 	}
 }
+
+func TestCompareCasesDetectsIncreasedHardFailureCount(t *testing.T) {
+	baseline := []CaseEvaluation{{ID: "safety", Runs: []CaseRun{
+		{HardFailure: true}, {Passed: true}, {Passed: true},
+	}}}
+	candidate := []CaseEvaluation{{ID: "safety", Runs: []CaseRun{
+		{HardFailure: true}, {HardFailure: true}, {Passed: true},
+	}}}
+
+	got, err := CompareCases(baseline, candidate, 3)
+	if err != nil {
+		t.Fatalf("CompareCases() error = %v", err)
+	}
+	if !got.Deltas[0].NewHardFailure {
+		t.Fatal("hard-failure count increase was not detected")
+	}
+}

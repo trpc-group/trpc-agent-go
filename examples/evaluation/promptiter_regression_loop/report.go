@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"html"
 	"os"
 	"path/filepath"
 	"sort"
@@ -86,9 +87,9 @@ func renderMarkdown(report *optimizationReport) string {
 	}
 	fmt.Fprintf(&out, "# Prompt Optimization Report\n\n")
 	fmt.Fprintf(&out, "- Decision: **%s**\n", decision)
-	fmt.Fprintf(&out, "- Mode: `%s`\n", report.Mode)
+	fmt.Fprintf(&out, "- Mode: %s\n", markdownInlineCode(report.Mode))
 	fmt.Fprintf(&out, "- Seed: `%d`\n", report.Seed)
-	fmt.Fprintf(&out, "- Model: `%s/%s`\n", report.Model.Provider, report.Model.Name)
+	fmt.Fprintf(&out, "- Model: %s\n", markdownInlineCode(report.Model.Provider+"/"+report.Model.Name))
 	fmt.Fprintf(&out, "- Fingerprint: `%s`\n", report.DeterministicFingerprint)
 	fmt.Fprintf(&out, "- Duration: `%d ms`\n\n", report.DurationMillis)
 
@@ -120,15 +121,16 @@ func renderMarkdown(report *optimizationReport) string {
 			status = "FAIL"
 		}
 		fmt.Fprintf(&out, "| %s | %s | %.4f | %s %.4f |\n",
-			check.Name, status, check.Observed, check.Operator, check.Threshold)
+			markdownTableCell(check.Name), status, check.Observed,
+			markdownTableCell(check.Operator), check.Threshold)
 	}
 
 	fmt.Fprintf(&out, "\n## Per-case delta\n\n")
 	fmt.Fprintf(&out, "| Case | Critical | Baseline | Candidate | Delta | Pass^%d |\n", report.Comparison.PassK)
 	fmt.Fprintf(&out, "|---|---|---:|---:|---:|---|\n")
 	for _, delta := range report.Comparison.Deltas {
-		fmt.Fprintf(&out, "| %s | %t | %.4f | %.4f | %+.4f | %t → %t |\n",
-			delta.ID, delta.Critical, delta.BaselineMeanScore, delta.CandidateMeanScore,
+		fmt.Fprintf(&out, "| %s | %t | %.4f | %.4f | %+.4f | %t -> %t |\n",
+			markdownTableCell(delta.ID), delta.Critical, delta.BaselineMeanScore, delta.CandidateMeanScore,
 			delta.ScoreDelta, delta.BaselinePassPowerK, delta.CandidatePassPowerK)
 	}
 
@@ -140,13 +142,60 @@ func renderMarkdown(report *optimizationReport) string {
 
 	fmt.Fprintf(&out, "\n## Audit and anti-overfitting notes\n\n")
 	fmt.Fprintf(&out, "PromptIter receives only the training set. The final decision uses the independent validation set, ")
-	fmt.Fprintf(&out, "three repeated runs, hard-failure vetoes, critical-case protection, Pass^k stability, a paired bootstrap interval, and resource budgets.\n\n")
-	fmt.Fprintf(&out, "Selected prompt:\n\n```text\n%s\n```\n", strings.TrimSpace(report.SelectedPrompt))
+	fmt.Fprintf(&out, "%d repeated runs, hard-failure vetoes, critical-case protection, Pass^k stability, a paired bootstrap interval, and resource budgets.\n\n",
+		report.Comparison.PassK)
+	prompt := strings.TrimSpace(report.SelectedPrompt)
+	fence := markdownCodeFence(prompt)
+	fmt.Fprintf(&out, "Selected prompt:\n\n%stext\n%s\n%s\n", fence, prompt, fence)
 	return out.String()
 }
 
+func markdownTableCell(value string) string {
+	value = html.EscapeString(value)
+	return strings.NewReplacer(
+		"\\", "\\\\",
+		"|", "\\|",
+		"`", "\\`",
+		"\r\n", "<br>",
+		"\r", "<br>",
+		"\n", "<br>",
+	).Replace(value)
+}
+
+func markdownInlineCode(value string) string {
+	value = strings.Join(strings.Fields(value), " ")
+	fence := strings.Repeat("`", longestBacktickRun(value)+1)
+	if strings.HasPrefix(value, "`") || strings.HasSuffix(value, "`") {
+		value = " " + value + " "
+	}
+	return fence + value + fence
+}
+
+func markdownCodeFence(value string) string {
+	length := longestBacktickRun(value) + 1
+	if length < 3 {
+		length = 3
+	}
+	return strings.Repeat("`", length)
+}
+
+func longestBacktickRun(value string) int {
+	longest, current := 0, 0
+	for _, char := range value {
+		if char == '`' {
+			current++
+			if current > longest {
+				longest = current
+			}
+			continue
+		}
+		current = 0
+	}
+	return longest
+}
+
 func renderAttributionGroup(out *bytes.Buffer, name string, summary map[FailureCategory]int) {
-	fmt.Fprintf(out, "### %s\n\n", name)
+	fmt.Fprintf(out, "### %s\n\n", markdownTableCell(name))
 	if len(summary) == 0 {
 		fmt.Fprintln(out, "- No failed cases.")
 		fmt.Fprintln(out)
@@ -158,7 +207,7 @@ func renderAttributionGroup(out *bytes.Buffer, name string, summary map[FailureC
 	}
 	sort.Strings(categories)
 	for _, category := range categories {
-		fmt.Fprintf(out, "- `%s`: %d\n", category, summary[FailureCategory(category)])
+		fmt.Fprintf(out, "- %s: %d\n", markdownInlineCode(category), summary[FailureCategory(category)])
 	}
 	fmt.Fprintln(out)
 }

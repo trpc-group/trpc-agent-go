@@ -11,7 +11,7 @@
     "passK": 3,
     "bootstrapSeed": 20260717,
     "bootstrapRounds": 5000,
-    "maxCalls": 48,
+    "maxCalls": 162,
     "maxTokens": 100000,
     "maxCostCNY": 20.0
   },

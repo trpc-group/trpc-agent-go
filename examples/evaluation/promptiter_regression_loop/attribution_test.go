@@ -69,6 +69,19 @@ func TestAttributeFailureTraceEvidence(t *testing.T) {
 	}
 }
 
+func TestAttributeFailureIgnoresSuccessfulTraceText(t *testing.T) {
+	got := AttributeFailure(AttributionInput{
+		Error: "model refusal",
+		Trace: []TraceStep{
+			{Kind: "network", Name: "retrieval", Status: "completed", Detail: "network request succeeded"},
+			{Kind: "agent", Name: "answer", Status: "failed", Detail: "model refusal"},
+		},
+	})
+	if got.Category != FailureCategoryModel {
+		t.Fatalf("AttributeFailure() category = %q, want %q", got.Category, FailureCategoryModel)
+	}
+}
+
 func TestAttributionAccuracyFromCaseEvidence(t *testing.T) {
 	tests := []struct {
 		name     string

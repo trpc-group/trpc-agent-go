@@ -60,6 +60,9 @@ func evaluatePrompt(
 			result, err := generateCase(ctx, generator, prompt, evalCase)
 			caseResult.Runs = append(caseResult.Runs, result)
 			if err != nil {
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					return nil, ctxErr
+				}
 				continue
 			}
 		}
@@ -93,7 +96,6 @@ func generateCase(
 			Trace:              []TraceStep{{Kind: "environment", Name: "model", Status: "failed", Detail: err.Error()}},
 		}
 		return CaseRun{
-			HardFailure:   spec.HardFailure,
 			Error:         err.Error(),
 			Trace:         input.Trace,
 			LatencyMillis: latencyMillis,

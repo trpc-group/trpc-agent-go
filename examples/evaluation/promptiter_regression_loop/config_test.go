@@ -9,6 +9,7 @@
 package main
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -47,6 +48,43 @@ func TestValidateDatasetIsolationRejectsLeakage(t *testing.T) {
 		)
 		assert.ErrorContains(t, err, "duplicates train case")
 	})
+	t.Run("same input with different expected response", func(t *testing.T) {
+		validation := shared
+		validation.EvalID = "validation-case"
+		validation.Conversation = append([]invocationSpec(nil), shared.Conversation...)
+		validation.Conversation[0].FinalResponse.Content = "different output"
+		err := validateDatasetIsolation(
+			evalSetFile{EvalCases: []caseSpec{shared}},
+			evalSetFile{EvalCases: []caseSpec{validation}},
+		)
+		assert.ErrorContains(t, err, "duplicates train case")
+	})
+}
+
+func TestSetDefaultsPreservesExplicitZeroRetries(t *testing.T) {
+	var explicit pipelineConfig
+	require.NoError(t, json.Unmarshal([]byte(`{"live":{"maxRetries":0}}`), &explicit))
+	setDefaults(&explicit)
+	assert.Zero(t, explicit.Live.MaxRetries)
+
+	var omitted pipelineConfig
+	require.NoError(t, json.Unmarshal([]byte(`{"live":{}}`), &omitted))
+	setDefaults(&omitted)
+	assert.Equal(t, 2, omitted.Live.MaxRetries)
+}
+
+func TestValidateLiveCallBudgetIncludesSymmetricRetries(t *testing.T) {
+	cfg := pipelineConfig{
+		Gate: gateFileConfig{PassK: 3, MaxCalls: 161},
+		Live: liveConfig{MaxRetries: 2},
+	}
+	train := evalSetFile{EvalCases: make([]caseSpec, 6)}
+	validation := evalSetFile{EvalCases: make([]caseSpec, 7)}
+
+	err := validateLiveCallBudget(cfg, train, validation)
+	assert.ErrorContains(t, err, "cannot cover 162 required live calls")
+	cfg.Gate.MaxCalls = 162
+	assert.NoError(t, validateLiveCallBudget(cfg, train, validation))
 }
 
 func TestValidateConfigRejectsUnsafeLiveBudgetValues(t *testing.T) {

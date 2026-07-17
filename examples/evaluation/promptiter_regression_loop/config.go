@@ -73,6 +73,22 @@ type liveConfig struct {
 	MaxRetries          int     `json:"maxRetries"`
 	InputCNYPerMillion  float64 `json:"inputCNYPerMillion"`
 	OutputCNYPerMillion float64 `json:"outputCNYPerMillion"`
+	maxRetriesSet       bool
+}
+
+func (cfg *liveConfig) UnmarshalJSON(data []byte) error {
+	type liveConfigAlias liveConfig
+	var decoded liveConfigAlias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	*cfg = liveConfig(decoded)
+	_, cfg.maxRetriesSet = fields["maxRetries"]
+	return nil
 }
 
 type evalSetFile struct {
@@ -188,7 +204,7 @@ func setDefaults(cfg *pipelineConfig) {
 	if cfg.Live.TimeoutSeconds == 0 {
 		cfg.Live.TimeoutSeconds = 45
 	}
-	if cfg.Live.MaxRetries == 0 {
+	if !cfg.Live.maxRetriesSet {
 		cfg.Live.MaxRetries = 2
 	}
 	if cfg.Live.InputCNYPerMillion == 0 {
@@ -263,7 +279,22 @@ func validateLoadedInputs(
 	if err := validateMetrics(metrics, cfg.Gate.PassK); err != nil {
 		return err
 	}
+	if err := validateLiveCallBudget(cfg, train, validation); err != nil {
+		return err
+	}
 	return validateDatasetIsolation(train, validation)
+}
+
+func validateLiveCallBudget(cfg pipelineConfig, train, validation evalSetFile) error {
+	mandatoryGenerations := 2*len(train.EvalCases) + 2*cfg.Gate.PassK*len(validation.EvalCases)
+	requiredCalls := mandatoryGenerations * (cfg.Live.MaxRetries + 1)
+	if cfg.Gate.MaxCalls > 0 && cfg.Gate.MaxCalls < requiredCalls {
+		return fmt.Errorf(
+			"gate.maxCalls %d cannot cover %d required live calls (%d mandatory generations with %d retries)",
+			cfg.Gate.MaxCalls, requiredCalls, mandatoryGenerations, cfg.Live.MaxRetries,
+		)
+	}
+	return nil
 }
 
 func validateMetrics(metrics metricsConfig, passK int) error {
@@ -313,7 +344,7 @@ func normalizedCaseContent(evalCase caseSpec) string {
 	}
 	invocation := evalCase.Conversation[0]
 	return strings.ToLower(strings.Join(strings.Fields(
-		invocation.UserContent.Content+"\x00"+invocation.FinalResponse.Content,
+		invocation.UserContent.Content,
 	), " "))
 }
 

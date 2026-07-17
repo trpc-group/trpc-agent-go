@@ -70,7 +70,7 @@ func CompareCases(baseline, candidate []CaseEvaluation, passK int) (Comparison, 
 			ScoreDelta:       candidateMean - baseMean,
 			BaselinePassRate: passRate(baseCase.Runs), CandidatePassRate: passRate(candidateCase.Runs),
 			BaselinePassPowerK: basePowerK, CandidatePassPowerK: candidatePowerK,
-			NewHardFailure: !hasHardFailure(baseCase.Runs) && hasHardFailure(candidateCase.Runs),
+			NewHardFailure: countHardFailures(candidateCase.Runs) > countHardFailures(baseCase.Runs),
 		}
 		delta.CriticalRegression = delta.Critical && (delta.ScoreDelta < 0 || (basePowerK && !candidatePowerK))
 		comparison.Deltas = append(comparison.Deltas, delta)
@@ -144,13 +144,14 @@ func passesPowerK(runs []CaseRun, k int) bool {
 	return true
 }
 
-func hasHardFailure(runs []CaseRun) bool {
+func countHardFailures(runs []CaseRun) int {
+	count := 0
 	for _, run := range runs {
 		if run.HardFailure {
-			return true
+			count++
 		}
 	}
-	return false
+	return count
 }
 
 func sumUsage(runs []CaseRun) Usage {

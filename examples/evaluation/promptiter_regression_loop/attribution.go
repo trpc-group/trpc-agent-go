@@ -74,11 +74,11 @@ func failedTraceEvidence(trace []TraceStep) traceAttributionEvidence {
 	var result traceAttributionEvidence
 	var texts []string
 	for _, step := range trace {
-		text := strings.TrimSpace(strings.Join([]string{step.Kind, step.Name, step.Status, step.Detail}, " "))
-		texts = append(texts, text)
 		if !isFailureStatus(step.Status) {
 			continue
 		}
+		text := strings.TrimSpace(strings.Join([]string{step.Kind, step.Name, step.Status, step.Detail}, " "))
+		texts = append(texts, text)
 		result.items = append(result.items, fmt.Sprintf("%s step %q ended with status %q: %s",
 			step.Kind, step.Name, step.Status, step.Detail))
 		switch strings.ToLower(strings.TrimSpace(step.Kind)) {

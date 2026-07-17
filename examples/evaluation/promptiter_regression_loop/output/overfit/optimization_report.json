@@ -3,7 +3,7 @@
   "mode": "fake",
   "seed": 20260717,
   "durationMillis": 1,
-  "deterministicFingerprint": "9d5fa762dc607f685c6aacacb53221f41739029ea221a684bf0875941a7b16be",
+  "deterministicFingerprint": "beffffedf2fa17f7dbe184f3f5692ae3d545959326a264003e681fdc9207701c",
   "model": {
     "provider": "deterministic",
     "name": "fake-trace-runner"
@@ -1026,7 +1026,7 @@
         "name": "calls_budget",
         "passed": true,
         "observed": 0,
-        "threshold": 48,
+        "threshold": 162,
         "operator": "\u003c=",
         "detail": "usage must remain within budget"
       },

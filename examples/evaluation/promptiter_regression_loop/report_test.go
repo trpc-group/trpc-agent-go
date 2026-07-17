@@ -44,3 +44,22 @@ func TestRenderMarkdownIncludesDecisionEvidence(t *testing.T) {
 	assert.Contains(t, markdown, "minimum_score_gain")
 	assert.Contains(t, markdown, "`prompt`: 2")
 }
+
+func TestRenderMarkdownEscapesUntrustedContent(t *testing.T) {
+	report := &optimizationReport{
+		Mode: "fake`mode", Seed: 7,
+		Model: modelAudit{Provider: "provider", Name: "model`name"},
+		Gate:  GateResult{Checks: []GateCheck{{Name: "check|name\nspoof", Operator: ">="}}},
+		Comparison: Comparison{PassK: 5, Deltas: []CaseDelta{{
+			ID: "case|name\n## injected",
+		}}},
+		SelectedPrompt: "prompt\n```text\n## injected\n```",
+	}
+
+	markdown := renderMarkdown(report)
+	assert.Contains(t, markdown, `case\|name<br>## injected`)
+	assert.Contains(t, markdown, `check\|name<br>spoof`)
+	assert.Contains(t, markdown, "5 repeated runs")
+	assert.NotContains(t, markdown, "three repeated runs")
+	assert.Contains(t, markdown, "````text\nprompt\n```text\n## injected\n```\n````")
+}
