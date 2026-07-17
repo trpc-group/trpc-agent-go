@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"runtime/debug"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -943,6 +944,11 @@ func (p *streamingResponseProcessor) process(
 	p.repairToolCallArguments(response)
 	p.repairToolCallTextAndStats(response)
 	if p.shouldBufferToolCallTextPartial(response) {
+		if err := agent.CheckContextCancelled(p.ctx); err != nil {
+			*p.err = err
+			responseErr = err
+			return false
+		}
 		if responseStarted && response != nil {
 			responseSpan.SetAttributes(
 				latencyResponseAttrs(response)...,
@@ -1078,7 +1084,33 @@ func (p *streamingResponseProcessor) shouldBufferToolCallTextPartial(
 	return response != nil && response.IsPartial &&
 		p.currentInvocation != nil &&
 		isToolCallTextRepairEnabled(p.currentInvocation) &&
-		p.llmRequest != nil && len(p.llmRequest.Tools) > 0
+		p.llmRequest != nil && len(p.llmRequest.Tools) > 0 &&
+		responseMayContainTextToolCall(response)
+}
+
+func responseMayContainTextToolCall(response *model.Response) bool {
+	if response == nil {
+		return false
+	}
+	for i := range response.Choices {
+		msg := &response.Choices[i].Message
+		if msg.Role != model.RoleAssistant {
+			continue
+		}
+		text, ok := repairableMessageText(msg)
+		if !ok {
+			continue
+		}
+		if strings.Contains(text, textToolCallOpenTag) {
+			return true
+		}
+		for prefixLen := 1; prefixLen < len(textToolCallOpenTag); prefixLen++ {
+			if strings.HasSuffix(text, textToolCallOpenTag[:prefixLen]) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (p *streamingResponseProcessor) emitLLMResponse(

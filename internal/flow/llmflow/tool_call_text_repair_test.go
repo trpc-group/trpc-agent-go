@@ -208,6 +208,95 @@ func TestToolCallTextRepair_BuffersPartialResponses(t *testing.T) {
 	)
 }
 
+func TestToolCallTextRepair_StreamsOrdinaryPartialResponses(t *testing.T) {
+	t.Parallel()
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationID("inv-text-repair-ordinary-stream"),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithToolCallTextRepairEnabled(true),
+		)),
+	)
+	req := &model.Request{Tools: map[string]tool.Tool{
+		"exec_command": textRepairTool{name: "exec_command"},
+	}}
+	partial := &model.Response{
+		IsPartial: true,
+		Choices:   []model.Choice{{Message: model.NewAssistantMessage("hello")}},
+	}
+	terminal := &model.Response{
+		Done:    true,
+		Choices: []model.Choice{{Message: model.NewAssistantMessage("hello world")}},
+	}
+	eventChan := make(chan *event.Event, 2)
+	tracer := gooteltrace.NewNoopTracerProvider().Tracer("test")
+	ctx, span := tracer.Start(agent.NewInvocationContext(context.Background(), inv), "stream")
+	defer span.End()
+
+	lastEvent, err := New(nil, nil, Options{}).processStreamingResponses(
+		ctx,
+		inv,
+		nil,
+		req,
+		func(yield func(*model.Response) bool) {
+			if yield(partial) {
+				yield(terminal)
+			}
+		},
+		eventChan,
+		span,
+		true,
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, lastEvent)
+	require.Len(t, eventChan, 2)
+}
+
+func TestToolCallTextRepair_BufferedPartialHonorsCancellation(t *testing.T) {
+	t.Parallel()
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationID("inv-text-repair-canceled-stream"),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithToolCallTextRepairEnabled(true),
+		)),
+	)
+	req := &model.Request{Tools: map[string]tool.Tool{
+		"exec_command": textRepairTool{name: "exec_command"},
+	}}
+	ctx, cancel := context.WithCancel(agent.NewInvocationContext(
+		context.Background(),
+		inv,
+	))
+	cancel()
+	tracer := gooteltrace.NewNoopTracerProvider().Tracer("test")
+	ctx, span := tracer.Start(ctx, "stream")
+	defer span.End()
+	yields := 0
+
+	_, err := New(nil, nil, Options{}).processStreamingResponses(
+		ctx,
+		inv,
+		nil,
+		req,
+		func(yield func(*model.Response) bool) {
+			for yield(&model.Response{
+				IsPartial: true,
+				Choices:   []model.Choice{{Message: model.NewAssistantMessage("<tool_call>")}},
+			}) {
+				yields++
+			}
+		},
+		make(chan *event.Event, 1),
+		span,
+		true,
+	)
+
+	require.ErrorIs(t, err, context.Canceled)
+	require.Zero(t, yields)
+}
+
 func TestRepairResponseToolCallTextInPlace_MultipleCalls(t *testing.T) {
 	t.Parallel()
 
@@ -331,6 +420,29 @@ func TestRepairResponseToolCallTextInPlace_GuardsPreserveText(t *testing.T) {
 						Content: toolText,
 					},
 				}},
+			},
+		},
+		{
+			name: "user message",
+			resp: &model.Response{
+				Done: true,
+				Choices: []model.Choice{{Message: model.Message{
+					Role:    model.RoleUser,
+					Content: toolText,
+				}}},
+			},
+		},
+		{
+			name: "mixed non-text content",
+			resp: &model.Response{
+				Done: true,
+				Choices: []model.Choice{{Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: toolText,
+					ContentParts: []model.ContentPart{{
+						Type: model.ContentTypeImage,
+					}},
+				}}},
 			},
 		},
 	}
