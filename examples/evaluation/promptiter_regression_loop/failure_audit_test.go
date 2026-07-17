@@ -11,6 +11,7 @@ package main
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -25,11 +26,11 @@ func (failingGenerator) Generate(context.Context, string, string) (generationRes
 
 type cancelingGenerator struct {
 	cancel context.CancelFunc
-	calls  int
+	calls  atomic.Int32
 }
 
 func (g *cancelingGenerator) Generate(context.Context, string, string) (generationResult, error) {
-	g.calls++
+	g.calls.Add(1)
 	g.cancel()
 	return generationResult{}, context.Canceled
 }
@@ -67,5 +68,5 @@ func TestEvaluationStopsWhenParentContextIsCanceled(t *testing.T) {
 
 	_, err := evaluatePrompt(ctx, set, "prompt", 2, generator)
 	require.ErrorIs(t, err, context.Canceled)
-	assert.Equal(t, 1, generator.calls)
+	assert.Contains(t, []int32{1, 2}, generator.calls.Load())
 }
