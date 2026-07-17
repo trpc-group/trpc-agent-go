@@ -12,9 +12,26 @@ package resultcodec
 import (
 	"context"
 	"testing"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
+
+// runWithinTimeout runs fn and fails the test if it does not return within d, so
+// a regression in cycle protection fails fast instead of hanging go test.
+func runWithinTimeout(t *testing.T, d time.Duration, fn func()) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		fn()
+	}()
+	select {
+	case <-done:
+	case <-time.After(d):
+		t.Fatal("call did not terminate; cycle protection may have regressed")
+	}
+}
 
 type mockCallable struct {
 	decl        *tool.Declaration
@@ -218,8 +235,15 @@ func TestWrap_CyclicUnwrapTerminates(t *testing.T) {
 	if !ok {
 		t.Fatal("wrapped tool should expose PermissionChecker")
 	}
-	// Reaching this call returning (instead of hanging) proves termination.
-	decision, err := checker.CheckPermission(context.Background(), &tool.PermissionRequest{})
+	// Reaching this call returning (instead of hanging) proves termination; the
+	// timeout fails fast if cycle protection regresses.
+	var (
+		decision tool.PermissionDecision
+		err      error
+	)
+	runWithinTimeout(t, 5*time.Second, func() {
+		decision, err = checker.CheckPermission(context.Background(), &tool.PermissionRequest{})
+	})
 	if err != nil {
 		t.Fatalf("CheckPermission error: %v", err)
 	}

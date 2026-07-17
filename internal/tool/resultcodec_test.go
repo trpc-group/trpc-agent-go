@@ -12,10 +12,28 @@ package tool
 import (
 	"context"
 	"testing"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/resultcodec"
 )
+
+// runWithinTimeout runs fn and fails the test if it does not return within d, so
+// a regression in cycle protection fails fast instead of hanging go test until
+// its global timeout.
+func runWithinTimeout(t *testing.T, d time.Duration, fn func()) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		fn()
+	}()
+	select {
+	case <-done:
+	case <-time.After(d):
+		t.Fatal("traversal did not terminate; cycle protection may have regressed")
+	}
+}
 
 type rcFakeCallable struct {
 	name        string
@@ -176,7 +194,13 @@ func TestNamedTool_CheckPermissionResolvesDeepDeny(t *testing.T) {
 func TestResolvePermissionChecker_CyclicFailsClosed(t *testing.T) {
 	// A cyclic chain must terminate and fail closed rather than report "none".
 	c := &rcSelfUnwrap{name: "cyclic"}
-	checker, err := ResolvePermissionChecker(c)
+	var (
+		checker tool.PermissionChecker
+		err     error
+	)
+	runWithinTimeout(t, 5*time.Second, func() {
+		checker, err = ResolvePermissionChecker(c)
+	})
 	if err == nil {
 		t.Fatal("expected an exhaustion error for a cyclic chain")
 	}
@@ -197,13 +221,20 @@ func TestResolvers_CyclicUnwrapTerminate(t *testing.T) {
 	// A cyclic Unwrap() chain must not cause unbounded recursion; the
 	// depth-bounded traversals return instead of hanging or overflowing.
 	s := &rcSelfUnwrap{name: "cyclic"}
-	if got := ResolveSemantic(s); got == nil {
+	var semantic, declaration tool.Tool
+	var codec resultcodec.Codec
+	runWithinTimeout(t, 5*time.Second, func() {
+		semantic = ResolveSemantic(s)
+		declaration = ResolveDeclaration(s)
+		codec = ResolveResultCodec(s)
+	})
+	if semantic == nil {
 		t.Fatal("ResolveSemantic should return a tool, not nil")
 	}
-	if got := ResolveDeclaration(s); got == nil {
+	if declaration == nil {
 		t.Fatal("ResolveDeclaration should return a tool, not nil")
 	}
-	if got := ResolveResultCodec(s); got != nil {
+	if codec != nil {
 		t.Fatal("ResolveResultCodec should return nil when no codec is present")
 	}
 }

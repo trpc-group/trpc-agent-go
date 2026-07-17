@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -490,13 +491,37 @@ func TestExecuteToolCall_CyclicWrapperFailsClosed(t *testing.T) {
 		Function: model.FunctionDefinitionParam{Name: "danger", Arguments: []byte(`{}`)},
 	}
 	ch := make(chan *event.Event, 8)
-	_, choices, _, _, _, err := p.executeToolCall(context.Background(), inv, pc, tools, 0, ch)
+	var (
+		choices []model.Choice
+		err     error
+	)
+	// Bound the call so a regression in cycle protection fails fast instead of
+	// hanging go test until its global timeout.
+	runWithinTimeout(t, 5*time.Second, func() {
+		_, choices, _, _, _, err = p.executeToolCall(context.Background(), inv, pc, tools, 0, ch)
+	})
 	require.NoError(t, err)
 	require.Len(t, choices, 1)
 	assert.False(t, base.called, "base tool must not run for a cyclic wrapper chain")
 	var pr tool.PermissionResult
 	require.NoError(t, json.Unmarshal([]byte(choices[0].Message.Content), &pr))
 	assert.Equal(t, tool.PermissionResultStatusDenied, pr.Status)
+}
+
+// runWithinTimeout runs fn and fails the test if it does not return within d, so
+// a regression in cycle protection fails fast instead of hanging go test.
+func runWithinTimeout(t *testing.T, d time.Duration, fn func()) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		fn()
+	}()
+	select {
+	case <-done:
+	case <-time.After(d):
+		t.Fatal("tool call did not terminate; cycle protection may have regressed")
+	}
 }
 
 func TestExecuteToolCall_StateDeltaMarshalPanicHandled(t *testing.T) {
