@@ -14,7 +14,7 @@
         <link rel="prev" href="../tool/">
       
       
-        <link rel="next" href="summary/">
+        <link rel="next" href="noop/">
       
       
       <link rel="icon" href="../assets/images/favicon.png">
@@ -1526,6 +1526,29 @@
   
 </nav>
       
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="noop/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Noop Session
+    
+  </span>
+  
+
+      </a>
     </li>
   
 
@@ -3539,17 +3562,18 @@
 <li><strong>Event Limit</strong>: Controls the maximum number of events stored per session to prevent memory overflow</li>
 <li><strong>Event Pagination</strong>: PostgreSQL/MySQL support paged history reads for <code>GetSession</code></li>
 <li><strong>TTL Management</strong>: Supports automatic expiration and cleanup of session data</li>
-<li><strong>Multiple Storage Backends</strong>: Supports Memory, SQLite, Redis, PostgreSQL, PGVector, MySQL, and ClickHouse</li>
+<li><strong>Flexible Persistence</strong>: Supports no persistence through Noop, plus Memory, SQLite, Redis, PostgreSQL, PGVector, MySQL, ClickHouse, and MongoDB</li>
 <li><strong>Concurrency Safe</strong>: Built-in read-write locks ensure safe concurrent access</li>
 <li><strong>Automatic Management</strong>: Automatically handles session creation, loading, and updates when integrated with Runner</li>
-<li><strong>Soft Delete Support</strong>: SQLite/PostgreSQL/PGVector/MySQL/ClickHouse support soft delete for data recovery</li>
+<li><strong>Soft Delete Support</strong>: SQLite/PostgreSQL/PGVector/MySQL/ClickHouse/MongoDB support soft delete for data recovery</li>
 <li><strong>Multimodal Externalization</strong>: Optionally externalizes inline image/audio/file payloads in session events to Artifact storage</li>
 </ul>
 <h2 id="quick-start">Quick Start</h2>
 <h3 id="integration-with-runner">Integration with Runner</h3>
 <p>Session management in tRPC-Agent-Go is integrated into the Runner via <code>runner.WithSessionService</code>. The Runner automatically handles session creation, loading, updating, and persistence.</p>
-<p><strong>Supported Storage Backends:</strong> Memory, SQLite, Redis, PostgreSQL, PGVector, MySQL, ClickHouse</p>
+<p><strong>Supported Persistence Modes:</strong> <a href="noop/">Noop</a> (no persistence), Memory, SQLite, Redis, PostgreSQL, PGVector, MySQL, ClickHouse, MongoDB</p>
 <p><strong>Default Behavior:</strong> If <code>runner.WithSessionService</code> is not configured, the Runner defaults to in-memory storage, and data will be lost after process restart.</p>
+<p>If the upstream application owns the complete conversation history and Runner should not retain sessions across requests, explicitly use <a href="noop/">Noop</a>.</p>
 <h3 id="basic-example">Basic Example</h3>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1">  1</a></span>
 <span class="normal"><a href="#__codelineno-0-2">  2</a></span>
@@ -4162,10 +4186,15 @@
 <td>Application-level cleanup + Native TTL</td>
 <td>Yes</td>
 </tr>
+<tr>
+<td>MongoDB</td>
+<td>TTL indexes + periodic event/track cleanup</td>
+<td>Yes</td>
+</tr>
 </tbody>
 </table>
 <h2 id="storage-backend-comparison">Storage Backend Comparison</h2>
-<p>tRPC-Agent-Go provides seven session storage backends for different scenarios:</p>
+<p>tRPC-Agent-Go provides a no-persistence mode and eight session storage backends for different scenarios:</p>
 <table>
 <thead>
 <tr>
@@ -4177,6 +4206,13 @@
 </tr>
 </thead>
 <tbody>
+<tr>
+<td><a href="noop/">Noop</a></td>
+<td>Application-managed history, no cross-request persistence</td>
+<td>❌</td>
+<td>❌</td>
+<td>❌</td>
+</tr>
 <tr>
 <td><a href="inmemory/">Memory</a></td>
 <td>Dev/Test, small scale</td>
@@ -4222,6 +4258,13 @@
 <tr>
 <td><a href="clickhouse/">ClickHouse</a></td>
 <td>Production, massive data</td>
+<td>✅</td>
+<td>✅</td>
+<td>✅</td>
+</tr>
+<tr>
+<td><a href="mongodb/">MongoDB</a></td>
+<td>Production, document storage</td>
 <td>✅</td>
 <td>✅</td>
 <td>✅</td>
@@ -4298,7 +4341,7 @@
 </span><span id="__span-8-16"><a id="__codelineno-8-16" name="__codelineno-8-16"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <p><strong>Chain of Responsibility</strong>: Hooks form a chain via <code>next()</code>. You can return early to short-circuit subsequent logic, and errors propagate upward.</p>
-<p><strong>Cross-Backend Consistency</strong>: All storage backends (Memory, SQLite, Redis, PostgreSQL, PGVector, MySQL, ClickHouse) have unified Hook support. Simply inject Hook slices when constructing the service — the usage is identical across all backends.</p>
+<p><strong>Cross-Backend Consistency</strong>: All storage backends (Memory, SQLite, Redis, PostgreSQL, PGVector, MySQL, ClickHouse, MongoDB) have unified Hook support. Simply inject Hook slices when constructing the service — the usage is identical across all backends.</p>
 <h2 id="advanced-usage">Advanced Usage</h2>
 <h3 id="using-session-service-api-directly">Using Session Service API Directly</h3>
 <p>In most cases, you should use session management through the Runner, which handles all details automatically. However, in some special scenarios (such as session management dashboards, data migration, analytics, etc.), you may need to operate the Session Service directly.</p>
@@ -4658,6 +4701,10 @@
 <td>✅</td>
 </tr>
 <tr>
+<td>MongoDB</td>
+<td>✅</td>
+</tr>
+<tr>
 <td>ClickHouse</td>
 <td>❌</td>
 </tr>
@@ -4733,6 +4780,7 @@ also preload cross-session recall into the system prompt via
 <h2 id="related-documentation">Related Documentation</h2>
 <ul>
 <li><a href="summary/">Session Summary</a> - Automatic compression of long conversation history</li>
+<li><a href="noop/">Noop</a> - Application-managed history without cross-request persistence</li>
 <li><a href="inmemory/">Memory Storage</a> - Development and testing environment</li>
 <li><a href="sqlite/">SQLite Storage</a> - Local persistence, single-node</li>
 <li><a href="redis/">Redis Storage</a> - Production distributed storage</li>
@@ -4740,10 +4788,12 @@ also preload cross-session recall into the system prompt via
 <li><a href="pgvector/">PGVector Session</a> - PostgreSQL session storage with semantic recall</li>
 <li><a href="mysql/">MySQL Storage</a> - Relational database storage</li>
 <li><a href="clickhouse/">ClickHouse Storage</a> - Massive data storage</li>
+<li><a href="mongodb/">MongoDB Storage</a> - Distributed document database storage</li>
 </ul>
 <h2 id="references">References</h2>
 <ul>
 <li><a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/runner">Session Examples</a></li>
+<li><a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/runwithmessages">Noop + RunWithMessages Example</a></li>
 <li><a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/summary">Summary Examples</a></li>
 <li><a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/session/hook">Hook Examples</a></li>
 </ul>
@@ -4769,7 +4819,7 @@ also preload cross-session recall into the system prompt via
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="July 16, 2026 02:52:02 UTC">2026-07-16 02:52:02</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="July 17, 2026 08:55:02 UTC">2026-07-17 08:55:02</span>
   </span>
 
     
@@ -4877,13 +4927,13 @@ also preload cross-session recall into the system prompt via
         
         
           
-          <a href="summary/" class="md-footer__link md-footer__link--next" aria-label="Next: Session Summary">
+          <a href="noop/" class="md-footer__link md-footer__link--next" aria-label="Next: Noop Session">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                Session Summary
+                Noop Session
               </div>
             </div>
             <div class="md-footer__button md-icon">

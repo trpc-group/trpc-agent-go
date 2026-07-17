@@ -1887,6 +1887,29 @@
   
   
     <li class="md-nav__item">
+      <a href="../session/noop/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Noop Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../session/summary/" class="md-nav__link">
         
   
@@ -5125,7 +5148,8 @@ assistant 文本 delta，合成一条非 partial 的 assistant 事件，经过 e
 </span><span id="__span-24-7"><a id="__codelineno-24-7" name="__codelineno-24-7"></a>
 </span><span id="__span-24-8"><a id="__codelineno-24-8" name="__codelineno-24-8"></a><span class="nx">ch</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">RunWithMessages</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">r</span><span class="p">,</span><span class="w"> </span><span class="nx">userID</span><span class="p">,</span><span class="w"> </span><span class="nx">sessionID</span><span class="p">,</span><span class="w"> </span><span class="nx">msgs</span><span class="p">,</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">WithRequestID</span><span class="p">(</span><span class="s">&quot;request-ID&quot;</span><span class="p">))</span>
 </span></code></pre></div></td></tr></table></div>
-<p>示例：<code>examples/runwithmessages</code>（使用 <code>RunWithMessages</code>；Runner 会 auto-seed 并复用 Session）</p>
+<p>示例：<code>examples/runwithmessages</code>（使用 <code>session/noop</code>，并在每次请求中通过
+<code>RunWithMessages</code> 传入业务侧维护的完整历史）</p>
 <p>方式 B：通过 RunOption 显式传入（与 Python ADK 一致的理念）</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-25-1">1</a></span>
 <span class="normal"><a href="#__codelineno-25-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-25-1"><a id="__codelineno-25-1" name="__codelineno-25-1"></a><span class="nx">msgs</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="p">[]</span><span class="nx">model</span><span class="p">.</span><span class="nx">Message</span><span class="p">{</span><span class="w"> </span><span class="cm">/* 同上 */</span><span class="w"> </span><span class="p">}</span>
@@ -5135,6 +5159,7 @@ assistant 文本 delta，合成一条非 partial 的 assistant 事件，经过 e
 Session。内容处理器不会读取这个选项，它只会从 Session 事件中派生消息（或在 Session
 没有事件时回退到单条 <code>invocation.Message</code>）。<code>RunWithMessages</code> 仍会把最新的用户消息写入
 <code>invocation.Message</code>。</p>
+<p>如果上游业务负责持久化完整历史，并且不希望 Runner 跨请求保存 Session，可以给 Runner 注入 <code>session/noop</code>，并在每次请求中通过 <code>RunWithMessages</code> 传入更新后的完整历史。Noop 仍保留单次 <code>Run</code> 所需的临时 Session，但不会自动恢复上一轮数据。详见 <a href="../session/noop/">无持久化（Noop）</a>。</p>
 <h4 id="_12">用户消息改写</h4>
 <p><code>agent.WithUserMessageRewriter(...)</code> 用于在当前轮运行开始前改写用户消息。改写结果会直接作为本轮实际生效的输入写入 Session，并在后续轮次继续参与会话构建。该能力适用于补充业务上下文、整理用户表达，或将一条输入拆成多条更适合模型处理的消息。</p>
 <p><code>UserMessageRewriter</code> 的签名如下：</p>
@@ -6819,7 +6844,7 @@ runner 的消费循环也会正常结束，避免写端阻塞。</p>
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年7月2日 12:17:12 UTC">2026-07-02 12:17:12</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年7月17日 08:55:02 UTC">2026-07-17 08:55:02</span>
   </span>
 
     
