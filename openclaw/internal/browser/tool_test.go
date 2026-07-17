@@ -3075,7 +3075,7 @@ func TestToolCall_ScreenshotDirProvidesDefaultFilename(t *testing.T) {
 	tool := newTestTool(drv)
 	tool.screenshotDir = dir
 
-	_, err := tool.Call(
+	raw, err := tool.Call(
 		context.Background(),
 		mustJSON(t, map[string]any{
 			"action": actionScreenshot,
@@ -3090,6 +3090,9 @@ func TestToolCall_ScreenshotDirProvidesDefaultFilename(t *testing.T) {
 	require.Equal(t, dir, filepath.Dir(filename))
 	require.Contains(t, filepath.Base(filename), "screenshot-")
 	require.Equal(t, ".jpg", filepath.Ext(filename))
+
+	got := raw.(Result)
+	require.Equal(t, filename, got.ScreenshotPath)
 }
 
 func TestResolveScreenshotFilenameCompatibilityBranches(t *testing.T) {
@@ -3133,6 +3136,7 @@ func TestToolCall_ScreenshotCompactsBrowserCrashContent(t *testing.T) {
 		},
 	}
 	tool := newTestTool(drv)
+	tool.screenshotDir = t.TempDir()
 
 	raw, err := tool.Call(
 		context.Background(),
@@ -3143,6 +3147,7 @@ func TestToolCall_ScreenshotCompactsBrowserCrashContent(t *testing.T) {
 	require.NoError(t, err)
 
 	got := raw.(Result)
+	require.Empty(t, got.ScreenshotPath)
 	text := extractText(got.Content)
 	require.Contains(t, text, browserCrashSummary)
 	require.NotContains(t, text, "--disable-field-trial-config")

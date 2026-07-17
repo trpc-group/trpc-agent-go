@@ -74,6 +74,7 @@ type Result struct {
 	Supported        []string              `json:"supportedActions,omitempty"`
 	NavigationPolicy *NavigationPolicyInfo `json:"navigationPolicy,omitempty"`
 	TargetID         string                `json:"targetId,omitempty"`
+	ScreenshotPath   string                `json:"screenshotPath,omitempty"`
 	Profiles         []ProfileInfo         `json:"profiles,omitempty"`
 	Tabs             []TabInfo             `json:"tabs,omitempty"`
 	Untrusted        bool                  `json:"untrusted,omitempty"`
