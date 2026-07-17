@@ -290,8 +290,9 @@ func TestModelCallBudgetModel_FinalizesOnLastAllowedCall(t *testing.T) {
 	require.Contains(
 		t,
 		got.Messages[1].Content,
-		"Do not describe plans or next steps",
+		"Do not ask to continue or promise future execution",
 	)
+	require.NotContains(t, got.Messages[1].Content, "Do not describe plans")
 	require.Contains(
 		t,
 		got.Messages[1].Content,
