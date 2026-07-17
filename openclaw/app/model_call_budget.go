@@ -213,7 +213,7 @@ func (m *modelCallBudgetModel) GenerateContent(
 		return nil, err
 	}
 	if finalize {
-		req = finalModelCallRequest(req)
+		req = applyFinalModelCallRequest(req)
 	}
 	return m.model.GenerateContent(ctx, req)
 }
@@ -251,7 +251,7 @@ func (m *modelCallBudgetIterModel) GenerateContentIter(
 		return nil, err
 	}
 	if finalize {
-		req = finalModelCallRequest(req)
+		req = applyFinalModelCallRequest(req)
 	}
 	return m.iter.GenerateContentIter(ctx, req)
 }
@@ -321,6 +321,15 @@ func finalModelCallRequest(req *model.Request) *model.Request {
 			"format, follow it exactly.",
 	))
 	return &clone
+}
+
+func applyFinalModelCallRequest(req *model.Request) *model.Request {
+	finalReq := finalModelCallRequest(req)
+	if req == nil {
+		return finalReq
+	}
+	*req = *finalReq
+	return req
 }
 
 func finalModelCallExtraFields(extra map[string]any) map[string]any {
