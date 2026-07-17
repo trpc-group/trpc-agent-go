@@ -5563,6 +5563,7 @@ func TestConvertChatCompletionChoiceLogprobs(t *testing.T) {
 				Bytes:   []int64{65},
 				TopLogprobs: []openaigo.ChatCompletionTokenLogprobTopLogprob{
 					{Token: "B", Logprob: -0.2, Bytes: []int64{66}},
+					{Token: "C", Logprob: -0.3, Bytes: []int64{67, 68}},
 				},
 			},
 		},
@@ -5572,10 +5573,25 @@ func TestConvertChatCompletionChoiceLogprobs(t *testing.T) {
 	assert.Equal(t, "A", got.Content[0].Token)
 	assert.Equal(t, -0.1, got.Content[0].Logprob)
 	assert.Equal(t, []int{65}, got.Content[0].Bytes)
-	require.Len(t, got.Content[0].TopLogprobs, 1)
+	require.Len(t, got.Content[0].TopLogprobs, 2)
 	assert.Equal(t, "B", got.Content[0].TopLogprobs[0].Token)
 	assert.Equal(t, []int{66}, got.Content[0].TopLogprobs[0].Bytes)
-	assert.Nil(t, int64SliceToIntSlice(nil))
+	assert.Equal(t, []int{67, 68}, got.Content[0].TopLogprobs[1].Bytes)
+
+	// Each view has capped capacity, so appending cannot overwrite the
+	// neighboring bytes stored in the shared per-token arena.
+	got.Content[0].Bytes = append(got.Content[0].Bytes, 99)
+	assert.Equal(t, []int{66}, got.Content[0].TopLogprobs[0].Bytes)
+	assert.Equal(t, []int{67, 68}, got.Content[0].TopLogprobs[1].Bytes)
+	got.Content[0].TopLogprobs[0].Bytes = append(
+		got.Content[0].TopLogprobs[0].Bytes,
+		100,
+	)
+	assert.Equal(t, []int{67, 68}, got.Content[0].TopLogprobs[1].Bytes)
+
+	assert.Nil(t, convertChatCompletionChoiceLogprobs(
+		openaigo.ChatCompletionChoiceLogprobs{},
+	))
 }
 
 // TestConvertUserMessageContent_WithImage tests image content conversion.
