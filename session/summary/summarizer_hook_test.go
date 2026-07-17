@@ -148,6 +148,36 @@ func TestSessionSummarizer_PreHook_ModifiesSeparatedPreviousSummary(t *testing.T
 	require.NotContains(t, result, "new conversation")
 }
 
+func TestSessionSummarizer_PreHook_ClearsSeparatedConversation(t *testing.T) {
+	mdl := &echoPromptModel{}
+	s := NewSummarizer(
+		mdl,
+		WithPrompt("Previous:\n{previous_summary}\n\nConversation:\n{conversation_text}\n\nSummary:"),
+		WithPreSummaryHook(func(in *PreSummaryHookContext) error {
+			require.Equal(t, "previous", in.PreviousSummary)
+			in.Events = nil
+			in.Text = ""
+			return nil
+		}),
+	)
+	sess := &session.Session{ID: "sess", Events: []event.Event{
+		{
+			Author: authorSystem,
+			Response: &model.Response{Choices: []model.Choice{{
+				Message: model.Message{Content: "previous"},
+			}}},
+		},
+		newEventWithContent("sensitive conversation"),
+	}}
+	ctx := isummarycontext.WithPreviousSummary(context.Background(), "previous")
+
+	result, err := s.Summarize(ctx, sess)
+	require.NoError(t, err)
+	require.Contains(t, result, "Previous:\nprevious")
+	require.Contains(t, result, "Conversation:\n\n\nSummary:")
+	require.NotContains(t, result, "sensitive conversation")
+}
+
 func TestSessionSummarizer_PostHook_ModifiesOutput(t *testing.T) {
 	model := &echoPromptModel{}
 	s := NewSummarizer(model, WithPostSummaryHook(func(in *PostSummaryHookContext) error {

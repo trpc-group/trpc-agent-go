@@ -505,6 +505,8 @@ func (s *sessionSummarizer) Summarize(ctx context.Context, sess *session.Session
 				input.conversationText = hookCtx.Text
 			} else if len(hookCtx.Events) > 0 {
 				input.conversationText = s.extractConversationText(hookCtx.Events)
+			} else {
+				input.conversationText = ""
 			}
 		}
 	}
