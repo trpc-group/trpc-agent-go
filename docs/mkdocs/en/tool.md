@@ -495,6 +495,104 @@ bare context, downstream tool code will no longer see that ID.
 So if you replace the context inside callbacks, make sure you preserve the
 existing context values you still need.
 
+## Result Codec
+
+By default, TAG serializes a tool's result to JSON to build the model-visible
+tool result message. A Result Codec lets you choose that format per tool - JSON,
+XML, plain text, or a custom template - without writing callbacks or building
+`model.Message` yourself.
+
+A codec only turns the final tool result into model-visible text. The framework
+still builds the protocol-correct tool result message (role, tool name, and
+tool-call-ID pairing) and keeps event, session, and resume semantics unchanged.
+
+### Built-in codecs
+
+The `tool/resultcodec` package provides four codecs:
+
+| Codec | Model-visible output |
+|-------|----------------------|
+| `resultcodec.JSON()` | JSON, compatible with the default tool result (no HTML escaping) |
+| `resultcodec.XML()` | XML derived from the JSON logical tree, with the same fields and values |
+| `resultcodec.Text()` | Text-typed results verbatim (string, bytes, `TextMarshaler`); other types return an error |
+| `resultcodec.Custom[T](fn)` | Whatever the typed encoder `fn` returns |
+
+Built-in codecs are deterministic, always emit valid UTF-8 (invalid bytes are
+replaced with U+FFFD), and are safe for concurrent use.
+
+### Configure a codec per tool
+
+Use `function.WithResultCodec` when constructing a function tool:
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/tool/function"
+    "trpc.group/trpc-go/trpc-agent-go/tool/resultcodec"
+)
+
+bashTool := function.NewFunctionTool(
+    runBash,
+    function.WithName("bash"),
+    function.WithDescription("run a bash command"),
+    function.WithResultCodec(resultcodec.XML()),
+)
+```
+
+Without `WithResultCodec`, the tool keeps the default JSON behavior:
+
+```go
+bashTool := function.NewFunctionTool(
+    runBash,
+    function.WithName("bash"),
+    function.WithDescription("run a bash command"),
+)
+```
+
+For a business-specific template, use a typed `Custom` encoder. It receives the
+concrete result type, so you never assert `any`:
+
+```go
+codec := resultcodec.Custom(func(ctx context.Context, r BashResult) (string, error) {
+    return formatBashObservation(r), nil
+})
+
+bashTool := function.NewFunctionTool(
+    runBash,
+    function.WithName("bash"),
+    function.WithResultCodec(codec),
+)
+```
+
+### Bind a codec to an existing tool
+
+For a tool whose construction you cannot modify (for example a tool produced by
+a `ToolSet`), wrap it with `resultcodec.Wrap`:
+
+```go
+wrapped := resultcodec.Wrap(existingTool, resultcodec.XML())
+```
+
+`Wrap` preserves the tool's declaration and its callable/streamable behavior,
+and stays transparent to framework capability checks (long-running, permission,
+metadata, deferred loading, and summarization).
+
+### Behavior and compatibility
+
+- Tools without a codec keep byte-identical JSON output.
+- A codec only affects the tool it is bound to; other tools are unaffected.
+- Encoding failures are reported as clear errors; the framework does not fall
+  back to JSON or re-run the tool.
+- For a streamable tool, only the final result is encoded; intermediate stream
+  events are unchanged.
+- Permission results (denied / approval-required) are framework control protocol
+  and are never passed through the codec.
+- Result Codec covers "one normal tool result -> one tool message". For multiple
+  messages, extra roles, multimodal content, or full protocol takeover, keep
+  using `ToolResultMessages`. When both are configured, the codec produces the
+  default tool message and the callback's existing override semantics apply.
+
+A runnable example lives under `examples/resultcodec`.
+
 ## Built-in Tools
 
 ### Tool Call Retry

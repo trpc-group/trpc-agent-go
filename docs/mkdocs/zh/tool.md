@@ -477,6 +477,97 @@ toolCallID, ok := agent.GetRuntimeStateValueFromContext[string](
 因此，如果你会在回调里替换 context，记得把已有的 context value
 一并透传。
 
+## Result Codec 结果编码
+
+默认情况下，TAG 会把工具结果序列化为 JSON，用来构造模型可见的 tool result 消息。
+Result Codec 让你**按工具**选择这个格式——JSON、XML、纯文本或自定义模板——而无需
+编写回调或自己构造 `model.Message`。
+
+Codec 的唯一职责是把最终工具结果转成模型可见字符串。TAG 仍负责构造协议正确的 tool
+result 消息（role、tool name、tool call ID 配对），并保持 event、session、resume 语义
+不变。
+
+### 内置 codec
+
+`tool/resultcodec` 包提供四种 codec：
+
+| Codec | 模型可见输出 |
+|-------|--------------|
+| `resultcodec.JSON()` | JSON，与默认 tool result 兼容（不做 HTML 转义） |
+| `resultcodec.XML()` | 由 JSON 逻辑树推导出的 XML，字段与值保持一致 |
+| `resultcodec.Text()` | 直接输出文本类型结果（string、字节、`TextMarshaler`）；其他类型返回错误 |
+| `resultcodec.Custom[T](fn)` | 类型化 encoder `fn` 的返回值 |
+
+内置 codec 输出确定、始终为有效 UTF-8（非法字节替换为 U+FFFD），且支持并发调用。
+
+### 按工具配置 codec
+
+构造 function tool 时使用 `function.WithResultCodec`：
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/tool/function"
+    "trpc.group/trpc-go/trpc-agent-go/tool/resultcodec"
+)
+
+bashTool := function.NewFunctionTool(
+    runBash,
+    function.WithName("bash"),
+    function.WithDescription("run a bash command"),
+    function.WithResultCodec(resultcodec.XML()),
+)
+```
+
+不配置 `WithResultCodec` 时，工具继续使用默认 JSON 行为：
+
+```go
+bashTool := function.NewFunctionTool(
+    runBash,
+    function.WithName("bash"),
+    function.WithDescription("run a bash command"),
+)
+```
+
+需要业务专属模板时，使用类型化 `Custom` encoder，它接收具体结果类型，业务无需自行
+断言 `any`：
+
+```go
+codec := resultcodec.Custom(func(ctx context.Context, r BashResult) (string, error) {
+    return formatBashObservation(r), nil
+})
+
+bashTool := function.NewFunctionTool(
+    runBash,
+    function.WithName("bash"),
+    function.WithResultCodec(codec),
+)
+```
+
+### 为已有工具绑定 codec
+
+对于无法修改构造过程的工具（例如由 `ToolSet` 生成的工具），使用 `resultcodec.Wrap`
+包装：
+
+```go
+wrapped := resultcodec.Wrap(existingTool, resultcodec.XML())
+```
+
+`Wrap` 保留工具的 declaration 与 callable/streamable 行为，并对框架能力检查
+（long-running、permission、metadata、deferred loading、summarization）保持透明。
+
+### 行为与兼容性
+
+- 未配置 codec 的工具，其模型可见 JSON 输出逐字节不变。
+- codec 只影响所绑定的工具，不影响其他工具。
+- 编码失败会报明确错误；框架不会回退 JSON，也不会重新执行工具。
+- 对 streamable 工具，只编码最终结果；中间流式事件保持不变。
+- 权限结果（denied / approval-required）属于框架控制协议，不会经过 codec。
+- Result Codec 处理“一个正常工具结果 → 一个 tool 消息”。返回多条消息、追加其他
+  role、多模态内容或完全接管协议等场景，继续使用 `ToolResultMessages`；两者同时配置
+  时，codec 生成默认 tool 消息，callback 保持现有 override 语义。
+
+可运行示例见 `examples/resultcodec`。
+
 ## 内置工具类型
 
 ### Tool 调用重试
