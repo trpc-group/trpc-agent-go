@@ -69,26 +69,31 @@ func SetTokenCounter(counter model.TokenCounter) {
 	defaultTokenCounterMu.Unlock()
 }
 
-// filterDeltaEvents returns events after the last summarized boundary stored
-// in session state. Exact boundaries use the last event ID when available;
+// filterDeltaEvents returns visible events after the last summarized boundary
+// stored in session state. Masked (Pensieve-pruned) events are excluded via
+// GetVisibleEvents. Exact boundaries use the last event ID when available;
 // timestamp-only boundaries keep same-timestamp events to avoid dropping
 // uncovered history.
 func filterDeltaEvents(sess *session.Session) []event.Event {
-	if sess == nil || len(sess.Events) == 0 {
+	if sess == nil {
+		return nil
+	}
+	events := sess.GetVisibleEvents()
+	if len(events) == 0 {
 		return nil
 	}
 
 	if rawID, ok := sess.GetState(lastIncludedEventIDKey); ok && len(rawID) > 0 {
-		for i, e := range sess.Events {
+		for i, e := range events {
 			if e.ID == string(rawID) {
-				return sess.Events[i+1:]
+				return events[i+1:]
 			}
 		}
 	}
 
 	raw, ok := sess.GetState(lastIncludedTsKey)
 	if !ok || len(raw) == 0 {
-		return sess.Events
+		return events
 	}
 
 	lastTs, err := time.Parse(time.RFC3339Nano, string(raw))
@@ -99,11 +104,11 @@ func filterDeltaEvents(sess *session.Session) []event.Event {
 			sess.ID,
 			err,
 		)
-		return sess.Events
+		return events
 	}
 
-	out := make([]event.Event, 0, len(sess.Events))
-	for _, e := range sess.Events {
+	out := make([]event.Event, 0, len(events))
+	for _, e := range events {
 		if !e.Timestamp.Before(lastTs) {
 			out = append(out, e)
 		}
@@ -231,10 +236,14 @@ func evaluateTimeThreshold(interval time.Duration) checkEvaluator {
 			Threshold: int(interval / time.Millisecond),
 			Unit:      unitMilliseconds,
 		}
-		if sess == nil || len(sess.Events) == 0 {
+		if sess == nil {
 			return check
 		}
-		relevant := filterSummaryInputEventsForSession(sess.Events, sess)
+		visible := sess.GetVisibleEvents()
+		if len(visible) == 0 {
+			return check
+		}
+		relevant := filterSummaryInputEventsForSession(visible, sess)
 		if len(relevant) == 0 {
 			return check
 		}

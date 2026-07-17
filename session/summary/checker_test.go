@@ -121,6 +121,21 @@ func TestCheckEventThreshold(t *testing.T) {
 		assert.Equal(t, deltaEventID, delta[0].ID)
 	})
 
+	t.Run("masked events are excluded from delta", func(t *testing.T) {
+		sess := session.NewSession("app", "user", "mask-delta")
+		sess.Events = []event.Event{
+			{ID: "visible-1", Timestamp: time.Now().Add(-time.Minute)},
+			{ID: "masked-1", Timestamp: time.Now()},
+			{ID: "visible-2", Timestamp: time.Now().Add(time.Second)},
+		}
+		sess.MaskEvents("masked-1")
+
+		delta := filterDeltaEvents(sess)
+		require.Len(t, delta, 2)
+		assert.Equal(t, "visible-1", delta[0].ID)
+		assert.Equal(t, "visible-2", delta[1].ID)
+	})
+
 	t.Run("lastIncludedTs in future yields no delta events", func(t *testing.T) {
 		now := time.Now()
 		future := now.Add(5 * time.Minute)

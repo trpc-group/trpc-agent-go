@@ -300,11 +300,15 @@ func (s *sessionSummarizer) evaluateTrigger(
 	ctx context.Context,
 	sess *session.Session,
 ) Trigger {
-	if sess == nil || len(sess.Events) == 0 {
+	if sess == nil {
+		return Trigger{}
+	}
+	visible := sess.GetVisibleEvents()
+	if len(visible) == 0 {
 		return Trigger{}
 	}
 	summaryInputEvents := filterSummaryInputEventsForSession(
-		s.filterEventsForSummary(sess.Events),
+		s.filterEventsForSummary(visible),
 		sess,
 	)
 	if !s.hasSummarizableContent(summaryInputEvents) {
@@ -393,15 +397,16 @@ func (s *sessionSummarizer) Summarize(ctx context.Context, sess *session.Session
 	if s.model == nil {
 		return "", fmt.Errorf("no model configured for summarization for session %s", sess.ID)
 	}
-	if len(sess.Events) == 0 {
+	visible := sess.GetVisibleEvents()
+	if len(visible) == 0 {
 		return "", fmt.Errorf("no events to summarize for session %s (events=0)", sess.ID)
 	}
 	ctx = s.ensureReportContext(ctx)
 
-	// Extract conversation text from events. Use filtered events for summarization
+	// Extract conversation text from visible events. Use filtered events for summarization
 	// to skip recent events while ensuring proper context.
 	eventsToSummarize := filterSummaryInputEventsForSession(
-		s.filterEventsForSummary(sess.Events),
+		s.filterEventsForSummary(visible),
 		sess,
 	)
 
