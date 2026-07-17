@@ -1144,6 +1144,92 @@ func TestModelCallBudgetIterModel_StopsWithoutDeadlineRetry(
 	require.Len(t, underlying.iterRequestsSnapshot(), 1)
 }
 
+func TestModelCallBudgetModel_StreamsBeforeDeadlineWindow(t *testing.T) {
+	t.Parallel()
+
+	gate := make(chan struct{})
+	underlying := &controlledStreamingBudgetModel{gate: gate}
+	wrapped := newModelCallBudgetModel(underlying)
+	ctx, cancel := context.WithDeadline(
+		context.Background(),
+		time.Now().Add(2*time.Second),
+	)
+	defer cancel()
+	ctx = withModelCallBudgetValue(
+		ctx,
+		newModelCallBudget(0, false, 100*time.Millisecond),
+	)
+
+	ch, err := wrapped.GenerateContent(ctx, &model.Request{})
+	require.NoError(t, err)
+	select {
+	case resp := <-ch:
+		require.True(t, resp.IsPartial)
+	case <-time.After(500 * time.Millisecond):
+		close(gate)
+		t.Fatal("partial response was buffered until the stream completed")
+	}
+	close(gate)
+	var remaining []*model.Response
+	for resp := range ch {
+		remaining = append(remaining, resp)
+	}
+	require.Len(t, remaining, 1)
+	require.True(t, remaining[0].Done)
+	require.Equal(t, 1, underlying.requestCount())
+}
+
+func TestModelCallBudgetIterModel_StreamsBeforeDeadlineWindow(t *testing.T) {
+	t.Parallel()
+
+	gate := make(chan struct{})
+	underlying := &controlledStreamingBudgetModel{gate: gate}
+	wrapped := newModelCallBudgetModel(underlying)
+	iter, ok := wrapped.(model.IterModel)
+	require.True(t, ok)
+	ctx, cancel := context.WithDeadline(
+		context.Background(),
+		time.Now().Add(2*time.Second),
+	)
+	defer cancel()
+	ctx = withModelCallBudgetValue(
+		ctx,
+		newModelCallBudget(0, false, 100*time.Millisecond),
+	)
+
+	seq, err := iter.GenerateContentIter(ctx, &model.Request{})
+	require.NoError(t, err)
+	responses := make(chan *model.Response, 2)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		seq(func(resp *model.Response) bool {
+			responses <- resp
+			return true
+		})
+	}()
+	select {
+	case resp := <-responses:
+		require.True(t, resp.IsPartial)
+	case <-time.After(500 * time.Millisecond):
+		close(gate)
+		t.Fatal("partial response was buffered until the iterator completed")
+	}
+	close(gate)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("iterator did not complete")
+	}
+	select {
+	case resp := <-responses:
+		require.True(t, resp.Done)
+	default:
+		t.Fatal("final response was not yielded")
+	}
+	require.Equal(t, 1, underlying.iterRequestCount())
+}
+
 func TestModelCallBudgetModel_DoesNotFinalizeInnerTimeoutBeforeWindow(
 	t *testing.T,
 ) {
@@ -1422,6 +1508,70 @@ type prefinalTimeoutBudgetModel struct {
 	mu           sync.Mutex
 	requests     []*model.Request
 	iterRequests []*model.Request
+}
+
+type controlledStreamingBudgetModel struct {
+	mu           sync.Mutex
+	gate         <-chan struct{}
+	requests     int
+	iterRequests int
+}
+
+func (m *controlledStreamingBudgetModel) GenerateContent(
+	ctx context.Context,
+	_ *model.Request,
+) (<-chan *model.Response, error) {
+	m.mu.Lock()
+	m.requests++
+	m.mu.Unlock()
+	ch := make(chan *model.Response, 1)
+	go func() {
+		defer close(ch)
+		ch <- &model.Response{IsPartial: true}
+		select {
+		case <-m.gate:
+			ch <- &model.Response{Done: true}
+		case <-ctx.Done():
+			ch <- modelCallBudgetErrorResponse(ctx.Err())
+		}
+	}()
+	return ch, nil
+}
+
+func (m *controlledStreamingBudgetModel) Info() model.Info {
+	return model.Info{Name: "controlled-streaming"}
+}
+
+func (m *controlledStreamingBudgetModel) GenerateContentIter(
+	ctx context.Context,
+	_ *model.Request,
+) (model.Seq[*model.Response], error) {
+	m.mu.Lock()
+	m.iterRequests++
+	m.mu.Unlock()
+	return func(yield func(*model.Response) bool) {
+		if !yield(&model.Response{IsPartial: true}) {
+			return
+		}
+		select {
+		case <-m.gate:
+			yield(&model.Response{Done: true})
+		case <-ctx.Done():
+			yield(modelCallBudgetErrorResponse(ctx.Err()))
+		}
+	}, nil
+}
+
+func (m *controlledStreamingBudgetModel) requestCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.requests
+}
+
+func (m *controlledStreamingBudgetModel) iterRequestCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.iterRequests
 }
 
 func (m *prefinalTimeoutBudgetModel) GenerateContent(
