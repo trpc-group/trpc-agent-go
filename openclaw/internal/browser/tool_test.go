@@ -1788,6 +1788,55 @@ func TestToolCall_NavigateBlocksSearchResultPage(t *testing.T) {
 	require.Empty(t, drv.calls)
 }
 
+func TestToolCall_NavigateBlocksRedirectedSearchResultPage(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{callResult: map[string]any{
+		mcpToolNavigate: map[string]any{
+			"content": textPayload("navigated"),
+			"url":     "https://www.google.com/search?q=redirected",
+		},
+	}}
+	raw, err := newTestTool(drv).Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action": actionNavigate,
+			"url":    "https://example.com/redirect",
+		}),
+	)
+	require.NoError(t, err)
+
+	got := raw.(Result)
+	require.Equal(t, stateBlocked, got.State)
+	require.Contains(t, got.Text, "Google search")
+}
+
+func TestToolCall_ActBlocksResultingSearchPage(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{callResult: map[string]any{
+		mcpToolClick: map[string]any{
+			"content": textPayload("clicked"),
+			"url":     "https://www.bing.com/search?q=clicked",
+		},
+	}}
+	raw, err := newTestTool(drv).Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action": actionAct,
+			"request": map[string]any{
+				"kind": actClick,
+				"ref":  "e1",
+			},
+		}),
+	)
+	require.NoError(t, err)
+
+	got := raw.(Result)
+	require.Equal(t, stateBlocked, got.State)
+	require.Contains(t, got.Text, "Bing search")
+}
+
 func TestToolCall_NavigateAllowsSearchResultPageWhenConfigured(
 	t *testing.T,
 ) {
@@ -1827,6 +1876,43 @@ func TestToolCall_NavigateAllowsSearchResultPageWhenConfigured(
 	require.NotEqual(t, stateBlocked, got.State)
 	require.Len(t, drv.calls, 1)
 	require.Equal(t, mcpToolNavigate, drv.calls[0].Tool)
+}
+
+func TestTextResultBlockedDetectionIsConfigurableAndActionAware(t *testing.T) {
+	t.Parallel()
+
+	challenge := textPayload(
+		"Anti-bot security check: access blocked; verify to continue.",
+	)
+	tool := newTestTool(&fakeDriver{})
+
+	pageResult := tool.textResult(
+		actionSnapshot,
+		defaultProfileName,
+		driverTypePlaywrightMCP,
+		nil,
+		challenge,
+	)
+	require.Equal(t, stateBlocked, pageResult.State)
+
+	consoleResult := tool.textResult(
+		actionConsole,
+		defaultProfileName,
+		driverTypePlaywrightMCP,
+		nil,
+		challenge,
+	)
+	require.NotEqual(t, stateBlocked, consoleResult.State)
+
+	tool.detectBlocked = false
+	disabledResult := tool.textResult(
+		actionSnapshot,
+		defaultProfileName,
+		driverTypePlaywrightMCP,
+		nil,
+		challenge,
+	)
+	require.NotEqual(t, stateBlocked, disabledResult.State)
 }
 
 func TestToolCall_NavigateCompactsBrowserCrashOutput(t *testing.T) {

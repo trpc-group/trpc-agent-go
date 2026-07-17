@@ -53,6 +53,10 @@ var tabLinePattern = regexp.MustCompile(
 	`^\s*([>*]?)\s*(?:tab\s+)?(\d+)[\]:.)-]?\s*(.*)$`,
 )
 
+var pageURLPattern = regexp.MustCompile(
+	`(?i)(?:page\s+url|url)\s*:\s*(https?://[^\s]+)`,
+)
+
 type textContentItem struct {
 	Type string `json:"type,omitempty"`
 	Text string `json:"text,omitempty"`
@@ -271,16 +275,54 @@ func blockedBrowserPageReason(text string) (string, bool) {
 	) {
 		return "human-verification challenge", true
 	}
-	if containsAny(
-		lower,
+	if looksLikeShortBotChallenge(lower) {
+		return "bot-check challenge", true
+	}
+	return "", false
+}
+
+func looksLikeShortBotChallenge(text string) bool {
+	if len(text) > 1200 || !containsAny(
+		text,
 		"bot check",
 		"anti-bot",
 		"anti automation",
 		"anti-automation",
 	) {
-		return "bot-check challenge", true
+		return false
 	}
-	return "", false
+	return containsAny(
+		text,
+		"access denied",
+		"blocked",
+		"challenge",
+		"enable javascript",
+		"security check",
+		"verify",
+	)
+}
+
+func browserResultURL(raw any) string {
+	if raw == nil {
+		return ""
+	}
+	body, err := json.Marshal(raw)
+	if err != nil {
+		return ""
+	}
+	var envelope struct {
+		URL string `json:"url"`
+	}
+	if err := json.Unmarshal(body, &envelope); err == nil {
+		if rawURL := strings.TrimSpace(envelope.URL); rawURL != "" {
+			return rawURL
+		}
+	}
+	match := pageURLPattern.FindStringSubmatch(extractText(raw))
+	if len(match) < 2 {
+		return ""
+	}
+	return strings.TrimRight(strings.TrimSpace(match[1]), `.,;)]}`)
 }
 
 func looksLikeCloudflareChallenge(text string) bool {

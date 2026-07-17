@@ -149,6 +149,7 @@ func TestBlockedBrowserPageReason_IgnoresPlainPageText(t *testing.T) {
 
 	cases := []string{
 		"This article says a captcha can be hard to read.",
+		"This security article compares anti-bot systems and bot check terminology.",
 		"The phrase just a moment appeared in the transcript.",
 		"Just a moment in the article title, then regular text.",
 		"Verify your account settings before changing the profile.",
@@ -163,6 +164,18 @@ func TestBlockedBrowserPageReason_IgnoresPlainPageText(t *testing.T) {
 			require.Empty(t, got)
 		})
 	}
+}
+
+func TestBrowserResultURL(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, "https://example.com/final", browserResultURL(map[string]any{
+		"url": "https://example.com/final",
+	}))
+	require.Equal(t, "https://example.com/mcp", browserResultURL(textPayload(
+		"Page URL: https://example.com/mcp",
+	)))
+	require.Empty(t, browserResultURL(nil))
 }
 
 func TestParseTabs_ParsesActiveTab(t *testing.T) {

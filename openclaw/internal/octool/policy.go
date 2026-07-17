@@ -58,6 +58,7 @@ const (
 
 var (
 	httpURLPattern             = regexp.MustCompile("https?://[^\\s\"'`<>\\\\]+")
+	curlSearchDataPattern      = regexp.MustCompile(`(?i)(?:--data-urlencode|--data|-d)\s+["']?(?:q|p)=`)
 	webProxyTargetParamPattern = regexp.MustCompile(`[?&](url|uri|target|quest)=`)
 	pythonProxiesPattern       = regexp.MustCompile(`\bproxies\s*=`)
 	jsProxyOptionPattern       = regexp.MustCompile(`\bproxy\s*:`)
@@ -147,7 +148,7 @@ func NewChatCommandSafetyPolicyWithOptions(
 				fmt.Sprintf(reasonSearchResultHTTP, source),
 			)
 		}
-		if blocksNetworkProxy(req.Command) {
+		if blocksNetworkProxy(req.Command) || blocksNetworkProxyEnv(req.Env) {
 			return fmt.Errorf(
 				errCommandPolicyRejected,
 				reasonNetworkProxy,
@@ -197,8 +198,30 @@ func blocksSearchResultHTTP(command string) (string, bool) {
 		if ok {
 			return source, true
 		}
+		if curlSearchDataPattern.MatchString(command) {
+			candidate := trimShellURL(raw)
+			separator := "?"
+			if strings.Contains(candidate, "?") {
+				separator = "&"
+			}
+			if source, ok := searchresult.Match(candidate + separator + "q=x"); ok {
+				return source, true
+			}
+		}
 	}
 	return "", false
+}
+
+func blocksNetworkProxyEnv(env map[string]string) bool {
+	for key, value := range env {
+		switch strings.ToUpper(strings.TrimSpace(key)) {
+		case "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY":
+			if strings.TrimSpace(value) != "" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func blocksNetworkProxy(command string) bool {

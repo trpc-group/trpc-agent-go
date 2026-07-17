@@ -301,6 +301,7 @@ type input struct {
 type Tool struct {
 	defaultProfile  string
 	evaluateEnabled bool
+	detectBlocked   bool
 	screenshotDir   string
 	navigation      navigationPolicy
 	hostServer      *serverTargetConfig
@@ -358,6 +359,7 @@ func NewTool(cfg Config) (*Tool, error) {
 		drivers,
 	)
 	tool.screenshotDir = resolved.ScreenshotDir
+	tool.detectBlocked = resolved.DetectBlocked
 	return tool, nil
 }
 
@@ -374,6 +376,7 @@ func newToolWithDrivers(
 	return &Tool{
 		defaultProfile:  defaultProfile,
 		evaluateEnabled: evaluateEnabled,
+		detectBlocked:   true,
 		navigation:      navigation,
 		hostServer:      hostServer,
 		sandboxServer:   sandboxServer,
@@ -1370,6 +1373,20 @@ func (t *Tool) handleOpen(
 	if err != nil {
 		return Result{}, err
 	}
+	for _, tab := range result.Tabs {
+		if !tab.Active {
+			continue
+		}
+		if blocked, ok := t.searchResultBlockedResult(
+			actionOpen,
+			profile,
+			driverType,
+			tab.URL,
+			nil,
+		); ok {
+			return blocked, nil
+		}
+	}
 	result.Action = actionOpen
 	return result, nil
 }
@@ -1629,6 +1646,15 @@ func (t *Tool) handleNavigate(
 	})
 	if err != nil {
 		return Result{}, err
+	}
+	if result, ok := t.searchResultBlockedFromRaw(
+		actionNavigate,
+		profile,
+		driverType,
+		raw,
+		in.MaxChars,
+	); ok {
+		return result, nil
 	}
 	raw = compactBrowserErrorResult(raw)
 	return t.textResult(
@@ -2334,6 +2360,15 @@ func (t *Tool) handleAct(
 	if err != nil {
 		return Result{}, err
 	}
+	if result, ok := t.searchResultBlockedFromRaw(
+		actionAct,
+		profile,
+		driverType,
+		raw,
+		in.MaxChars,
+	); ok {
+		return result, nil
+	}
 
 	if req.Kind == actClose {
 		result, err := t.handleTabs(
@@ -2946,22 +2981,53 @@ func (t *Tool) textResult(
 	result.Untrusted = true
 	result.Warning = untrustedBrowserWarning
 	text := extractText(raw)
-	if reason, ok := blockedBrowserPageReason(text); ok {
-		result.State = stateBlocked
-		result.Warning = blockedBrowserPageWarning
-		result.Text = blockedBrowserPageText(
-			reason,
-			text,
-			intValue(maxChars),
-		)
-		result.Content = []textContentItem{{
-			Type: "text",
-			Text: result.Text,
-		}}
-		return result
+	if t.detectBlocked && browserActionHasPageContent(action) {
+		if reason, ok := blockedBrowserPageReason(text); ok {
+			result.State = stateBlocked
+			result.Warning = blockedBrowserPageWarning
+			result.Text = blockedBrowserPageText(
+				reason,
+				text,
+				intValue(maxChars),
+			)
+			result.Content = []textContentItem{{
+				Type: "text",
+				Text: result.Text,
+			}}
+			return result
+		}
 	}
 	result.Text = wrapUntrustedText(text, intValue(maxChars))
 	return result
+}
+
+func browserActionHasPageContent(action string) bool {
+	switch strings.ToLower(strings.TrimSpace(action)) {
+	case actionSnapshot, actionNavigate, actionAct, actionWait:
+		return true
+	default:
+		return false
+	}
+}
+
+func (t *Tool) searchResultBlockedFromRaw(
+	action string,
+	profile string,
+	driverType string,
+	raw any,
+	maxChars *int,
+) (Result, bool) {
+	rawURL := browserResultURL(raw)
+	if rawURL == "" {
+		return Result{}, false
+	}
+	return t.searchResultBlockedResult(
+		action,
+		profile,
+		driverType,
+		rawURL,
+		maxChars,
+	)
 }
 
 func (t *Tool) blockedActNavigateResult(

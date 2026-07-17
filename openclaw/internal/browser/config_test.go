@@ -174,6 +174,24 @@ func TestResolveConfig_NavigationPolicyApplied(t *testing.T) {
 	)
 }
 
+func TestResolveConfig_BlockedPageDetectionDefaultsOnAndCanDisable(t *testing.T) {
+	t.Parallel()
+
+	base := Config{Profiles: []ProfileConfig{{
+		Transport: transportStdio,
+		Command:   "npx",
+	}}}
+	got, err := resolveConfig(base)
+	require.NoError(t, err)
+	require.True(t, got.DetectBlocked)
+
+	disabled := false
+	base.DetectBlocked = &disabled
+	got, err = resolveConfig(base)
+	require.NoError(t, err)
+	require.False(t, got.DetectBlocked)
+}
+
 func TestResolveConfig_ServerTargetsAllowEmptyProfileTransport(t *testing.T) {
 	t.Parallel()
 

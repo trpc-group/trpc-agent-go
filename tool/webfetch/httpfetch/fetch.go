@@ -624,16 +624,31 @@ func blockedFetchPageReason(text string) (string, bool) {
 	) {
 		return "human-verification challenge", true
 	}
-	if containsAny(
-		lower,
+	if looksLikeShortBotChallenge(lower) {
+		return "bot-check challenge", true
+	}
+	return "", false
+}
+
+func looksLikeShortBotChallenge(text string) bool {
+	if len(text) > 1200 || !containsAny(
+		text,
 		"bot check",
 		"anti-bot",
 		"anti automation",
 		"anti-automation",
 	) {
-		return "bot-check challenge", true
+		return false
 	}
-	return "", false
+	return containsAny(
+		text,
+		"access denied",
+		"blocked",
+		"challenge",
+		"enable javascript",
+		"security check",
+		"verify",
+	)
 }
 
 func looksLikeCloudflareChallenge(text string) bool {

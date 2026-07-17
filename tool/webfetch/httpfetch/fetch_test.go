@@ -41,6 +41,23 @@ func (f roundTripFunc) RoundTrip(
 	return f(req)
 }
 
+func TestBlockedFetchPageReasonIgnoresSecurityArticleTerms(t *testing.T) {
+	t.Parallel()
+
+	reason, blocked := blockedFetchPageReason(
+		"This security article compares anti-bot systems, CAPTCHA " +
+			"providers, and bot check terminology without blocking access.",
+	)
+	require.False(t, blocked)
+	require.Empty(t, reason)
+
+	reason, blocked = blockedFetchPageReason(
+		"Anti-bot security check: access blocked; verify to continue.",
+	)
+	require.True(t, blocked)
+	require.Contains(t, reason, "bot-check")
+}
+
 func TestWebFetch(t *testing.T) {
 	// Mock server
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

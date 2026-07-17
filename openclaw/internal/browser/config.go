@@ -73,6 +73,7 @@ type Config struct {
 	AllowPrivateNet  *bool           `yaml:"allow_private_networks,omitempty"`
 	AllowFileURLs    *bool           `yaml:"allow_file_urls,omitempty"`
 	AllowSearchPages *bool           `yaml:"allow_search_result_pages,omitempty"`
+	DetectBlocked    *bool           `yaml:"detect_blocked_pages,omitempty"`
 	AllowedFileRoots []string        `yaml:"allowed_file_roots,omitempty"`
 	Nodes            []NodeConfig    `yaml:"nodes,omitempty"`
 	Profiles         []ProfileConfig `yaml:"profiles,omitempty"`
@@ -82,6 +83,7 @@ type resolvedConfig struct {
 	DefaultProfile  string
 	EvaluateEnabled bool
 	ScreenshotDir   string
+	DetectBlocked   bool
 	Navigation      navigationPolicy
 	HostServer      *serverTargetConfig
 	SandboxServer   *serverTargetConfig
@@ -114,6 +116,10 @@ func resolveConfig(cfg Config) (resolvedConfig, error) {
 	out := resolvedConfig{
 		DefaultProfile: strings.TrimSpace(cfg.DefaultProfile),
 		ScreenshotDir:  strings.TrimSpace(cfg.ScreenshotDir),
+		DetectBlocked:  true,
+	}
+	if cfg.DetectBlocked != nil {
+		out.DetectBlocked = *cfg.DetectBlocked
 	}
 	if cfg.EvaluateEnabled != nil {
 		out.EvaluateEnabled = *cfg.EvaluateEnabled

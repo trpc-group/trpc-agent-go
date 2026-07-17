@@ -268,6 +268,7 @@ func TestChatCommandSafetyPolicy_BlocksSearchResultHTTPClients(
 	policy := NewChatCommandSafetyPolicy()
 	for _, command := range []string{
 		`curl -sL "https://www.google.com/search?q=openclaw"`,
+		`curl -G --data-urlencode q=openclaw https://www.google.com/search`,
 		`wget -qO- https://www.bing.com/search?q=openclaw`,
 		`http https://search.yahoo.com/search?p=openclaw`,
 		`bash -lc 'curl -s "https://duckduckgo.com/?q=openclaw"'`,
@@ -285,6 +286,25 @@ func TestChatCommandSafetyPolicy_BlocksSearchResultHTTPClients(
 			require.ErrorContains(t, err, "result pages")
 		})
 	}
+}
+
+func TestChatCommandSafetyPolicy_BlocksExplicitProxyEnv(t *testing.T) {
+	t.Parallel()
+
+	policy := NewChatCommandSafetyPolicy()
+	for _, key := range []string{"HTTP_PROXY", "https_proxy", "ALL_PROXY"} {
+		err := policy(context.Background(), CommandRequest{
+			Command: "curl https://example.com",
+			Env: map[string]string{
+				key: "http://proxy.example:8080",
+			},
+		})
+		require.ErrorContains(t, err, reasonNetworkProxy)
+	}
+	require.NoError(t, policy(context.Background(), CommandRequest{
+		Command: "curl https://example.com",
+		Env:     map[string]string{"HTTPS_PROXY": ""},
+	}))
 }
 
 func TestChatCommandSafetyPolicy_AllowsNonSearchHTTPCommands(
