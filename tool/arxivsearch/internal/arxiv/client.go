@@ -234,34 +234,29 @@ func normalizeArxivDateBound(raw string, upper bool) (string, error) {
 	if raw == "" {
 		return "", fmt.Errorf("empty date")
 	}
-	digits := dateDigits(raw)
-	switch len(digits) {
-	case 8:
-		if upper {
-			digits += "2359"
-		} else {
-			digits += "0000"
+	formats := []struct {
+		layout   string
+		dateOnly bool
+	}{
+		{layout: "2006-01-02", dateOnly: true},
+		{layout: "20060102", dateOnly: true},
+		{layout: "200601021504"},
+		{layout: "2006-01-02 15:04"},
+	}
+	for _, format := range formats {
+		parsed, err := time.Parse(format.layout, raw)
+		if err != nil {
+			continue
 		}
-	case 12:
-	default:
-		return "", fmt.Errorf(
-			"expected YYYY-MM-DD, YYYYMMDD, or YYYYMMDDHHMM",
-		)
-	}
-	if _, err := time.Parse("200601021504", digits); err != nil {
-		return "", err
-	}
-	return digits, nil
-}
-
-func dateDigits(raw string) string {
-	var b strings.Builder
-	for _, r := range raw {
-		if r >= '0' && r <= '9' {
-			b.WriteRune(r)
+		if format.dateOnly && upper {
+			parsed = parsed.Add(23*time.Hour + 59*time.Minute)
 		}
+		return parsed.Format("200601021504"), nil
 	}
-	return b.String()
+	return "", fmt.Errorf(
+		"expected YYYY-MM-DD, YYYYMMDD, YYYYMMDDHHMM, or " +
+			"YYYY-MM-DD HH:MM",
+	)
 }
 
 // fetchPage fetches a page of results

@@ -283,6 +283,7 @@ func TestNormalizeArxivDateBound(t *testing.T) {
 		{name: "minute", raw: "202206011234", want: "202206011234"},
 		{name: "date time text", raw: "2022-06-01 12:34", want: "202206011234"},
 		{name: "bad date", raw: "2022-02-31", wantErr: true},
+		{name: "unexpected date character", raw: "2022-0x6-01", wantErr: true},
 		{name: "bad shape", raw: "2022", wantErr: true},
 	}
 	for _, tt := range tests {
