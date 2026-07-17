@@ -4,11 +4,18 @@ go 1.24.1
 
 replace (
 	trpc.group/trpc-go/trpc-agent-go => ../../
+	trpc.group/trpc-go/trpc-agent-go/memory/mysql => ../../memory/mysql
+	trpc.group/trpc-go/trpc-agent-go/memory/postgres => ../../memory/postgres
+	trpc.group/trpc-go/trpc-agent-go/memory/redis => ../../memory/redis
+	trpc.group/trpc-go/trpc-agent-go/memory/sqlite => ../../memory/sqlite
 	trpc.group/trpc-go/trpc-agent-go/session/clickhouse => ../clickhouse
 	trpc.group/trpc-go/trpc-agent-go/session/mysql => ../mysql
 	trpc.group/trpc-go/trpc-agent-go/session/postgres => ../postgres
 	trpc.group/trpc-go/trpc-agent-go/session/redis => ../redis
 	trpc.group/trpc-go/trpc-agent-go/session/sqlite => ../sqlite
+	trpc.group/trpc-go/trpc-agent-go/storage/mysql => ../../storage/mysql
+	trpc.group/trpc-go/trpc-agent-go/storage/postgres => ../../storage/postgres
+	trpc.group/trpc-go/trpc-agent-go/storage/redis => ../../storage/redis
 )
 
 require (
@@ -19,6 +26,10 @@ require (
 	github.com/stretchr/testify v1.11.1
 	golang.org/x/sync v0.11.0
 	trpc.group/trpc-go/trpc-agent-go v1.6.1-0.20260311094958-7b74ee59e339
+	trpc.group/trpc-go/trpc-agent-go/memory/mysql v0.0.0
+	trpc.group/trpc-go/trpc-agent-go/memory/postgres v0.0.0
+	trpc.group/trpc-go/trpc-agent-go/memory/redis v0.0.0
+	trpc.group/trpc-go/trpc-agent-go/memory/sqlite v0.0.0
 	trpc.group/trpc-go/trpc-agent-go/session/clickhouse v1.10.0
 	trpc.group/trpc-go/trpc-agent-go/session/mysql v1.10.0
 	trpc.group/trpc-go/trpc-agent-go/session/postgres v1.10.0
@@ -82,5 +93,5 @@ require (
 	google.golang.org/protobuf v1.34.2 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	trpc.group/trpc-go/trpc-a2a-go v0.2.5 // indirect
-	trpc.group/trpc-go/trpc-agent-go/storage/redis v0.0.3 // indirect
+	trpc.group/trpc-go/trpc-agent-go/storage/redis v0.2.0 // indirect
 )

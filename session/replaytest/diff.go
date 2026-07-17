@@ -85,9 +85,11 @@ func HasUnexpectedDiff(result CaseResult) bool {
 	if result.Status == StatusInconclusive {
 		return true
 	}
-	for _, diff := range result.Diffs {
-		if !diff.Allowed {
-			return true
+	for _, group := range [][]Diff{result.Diffs, result.GoldenDiffs} {
+		for _, diff := range group {
+			if !diff.Allowed {
+				return true
+			}
 		}
 	}
 	return false
@@ -152,6 +154,7 @@ func walkDiff(path string, left, right any, add func(string, any, any)) {
 }
 
 func toGeneric(value any) (any, error) {
+	missingPaths := collectMissingValuePaths(value)
 	raw, err := json.Marshal(value)
 	if err != nil {
 		return nil, fmt.Errorf("marshal snapshot: %w", err)
@@ -162,27 +165,96 @@ func toGeneric(value any) (any, error) {
 	if err := dec.Decode(&result); err != nil {
 		return nil, fmt.Errorf("decode snapshot: %w", err)
 	}
-	return restoreMissingValues(convertNumbers(result)), nil
+	return restoreMissingValues(convertNumbers(result), "$", missingPaths), nil
 }
 
-// restoreMissingValues walks a generic structure and replaces
-// {"__missing": true} maps (produced by MissingValue.MarshalJSON)
-// back into MissingValue instances so walkDiff can detect them.
-func restoreMissingValues(v any) any {
+func collectMissingValuePaths(value any) map[string]struct{} {
+	paths := make(map[string]struct{})
+	collectMissingValuePathsReflect(reflect.ValueOf(value), "$", paths)
+	return paths
+}
+
+func collectMissingValuePathsReflect(value reflect.Value, path string, paths map[string]struct{}) {
+	if !value.IsValid() {
+		return
+	}
+	for value.Kind() == reflect.Interface || value.Kind() == reflect.Pointer {
+		if value.IsNil() {
+			return
+		}
+		value = value.Elem()
+	}
+	if !value.IsValid() {
+		return
+	}
+	if value.Type() == reflect.TypeOf(MissingValue{}) {
+		paths[path] = struct{}{}
+		return
+	}
+	switch value.Kind() {
+	case reflect.Struct:
+		for i := 0; i < value.NumField(); i++ {
+			field := value.Type().Field(i)
+			if field.PkgPath != "" {
+				continue
+			}
+			name := jsonFieldName(field)
+			if name == "" {
+				continue
+			}
+			collectMissingValuePathsReflect(value.Field(i), appendMapPath(path, name), paths)
+		}
+	case reflect.Map:
+		if value.Type().Key().Kind() != reflect.String {
+			return
+		}
+		keys := value.MapKeys()
+		ordered := make([]string, 0, len(keys))
+		for _, key := range keys {
+			ordered = append(ordered, key.String())
+		}
+		sort.Strings(ordered)
+		for _, key := range ordered {
+			collectMissingValuePathsReflect(value.MapIndex(reflect.ValueOf(key)), appendMapPath(path, key), paths)
+		}
+	case reflect.Slice, reflect.Array:
+		for i := 0; i < value.Len(); i++ {
+			collectMissingValuePathsReflect(value.Index(i), fmt.Sprintf("%s[%d]", path, i), paths)
+		}
+	}
+}
+
+func jsonFieldName(field reflect.StructField) string {
+	tag := field.Tag.Get("json")
+	if tag == "-" {
+		return ""
+	}
+	if tag != "" {
+		name := strings.Split(tag, ",")[0]
+		if name != "" {
+			return name
+		}
+	}
+	return field.Name
+}
+
+// restoreMissingValues walks a generic structure and restores only paths that
+// were MissingValue instances before the JSON round-trip.
+func restoreMissingValues(v any, path string, missingPaths map[string]struct{}) any {
+	if _, ok := missingPaths[path]; ok {
+		return MissingValue{}
+	}
 	switch val := v.(type) {
 	case map[string]any:
-		if len(val) == 1 && val["__missing"] == true {
-			return MissingValue{}
-		}
 		m := make(map[string]any, len(val))
 		for k, v2 := range val {
-			m[k] = restoreMissingValues(v2)
+			m[k] = restoreMissingValues(v2, appendMapPath(path, k), missingPaths)
 		}
 		return m
 	case []any:
 		out := make([]any, len(val))
 		for i, v2 := range val {
-			out[i] = restoreMissingValues(v2)
+			out[i] = restoreMissingValues(v2, fmt.Sprintf("%s[%d]", path, i), missingPaths)
 		}
 		return out
 	default:

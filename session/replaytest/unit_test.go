@@ -31,6 +31,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
+	mredis "trpc.group/trpc-go/trpc-agent-go/memory/redis"
+	msqlite "trpc.group/trpc-go/trpc-agent-go/memory/sqlite"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	chstorage "trpc.group/trpc-go/trpc-agent-go/storage/clickhouse"
 	mystorage "trpc.group/trpc-go/trpc-agent-go/storage/mysql"
@@ -314,6 +316,27 @@ func TestNormalizer_VolatileKeyRemoval(t *testing.T) {
 	assert.False(t, hasDuration, "volatile key 'duration' should be removed")
 }
 
+func TestNormalizer_VolatileKeyRemoval_PreservesNestedBusinessFields(t *testing.T) {
+	key := sessKey("norm-volatile-nested")
+	backends := makeBackends(t, key)
+	backend := backends[0]
+	backend.Sess.CreateSession(context.Background(), key, nil)
+	sess, _ := backend.Sess.GetSession(context.Background(), key)
+	backend.Track.AppendTrackEvent(context.Background(), sess, newTrackEventWithVolatile("test", map[string]any{
+		"type":     "end",
+		"duration": 1234.5,
+		"result":   map[string]any{"duration": 42},
+	}))
+
+	normalizer := NewNormalizer(DefaultNormalizerConfig())
+	snap, err := Capture(context.Background(), backend, CaptureOptions{NormalizerConfig: DefaultNormalizerConfig()}, normalizer)
+	require.NoError(t, err)
+	payload := snap.Tracks["test"][0].Payload.(map[string]any)
+	_, hasDuration := payload["duration"]
+	assert.False(t, hasDuration, "top-level volatile key should be removed")
+	assert.Equal(t, int64(42), payload["result"].(map[string]any)["duration"])
+}
+
 func TestNormalizer_MemoryOrdered(t *testing.T) {
 	key := sessKey("norm-mem-ord")
 	uk := userKey()
@@ -403,6 +426,22 @@ func TestDiff_MissingValueVsMissingValue(t *testing.T) {
 	diffs, err := Compare("test", "a", "b", left, right, nil)
 	require.NoError(t, err)
 	assert.Empty(t, diffs, "MissingValue vs MissingValue should not diff")
+}
+
+func TestDiff_MissingValueSentinelPayloadDoesNotMaskMissingKey(t *testing.T) {
+	left := Snapshot{State: map[string]any{
+		"k1":    map[string]any{"__missing": true},
+		"other": "same",
+	}}
+	right := Snapshot{State: map[string]any{"other": "same"}}
+	diffs, err := Compare("test", "a", "b", left, right, nil)
+	require.NoError(t, err)
+	require.Len(t, diffs, 1)
+	assert.Equal(t, "$.state.k1", diffs[0].Path)
+	assert.Equal(t, SeverityCritical, diffs[0].Severity)
+	assert.Equal(t, map[string]any{"__missing": true}, diffs[0].ValueA)
+	_, isMissing := diffs[0].ValueB.(MissingValue)
+	assert.True(t, isMissing)
 }
 
 func TestDiff_AllowedDiffBidirectional(t *testing.T) {
@@ -1141,6 +1180,19 @@ func TestReport_SeverityCount(t *testing.T) {
 	assert.Equal(t, 1, report.Summary.MinorDiffs)
 }
 
+func TestReport_SeverityCount_IncludesGoldenDiffs(t *testing.T) {
+	results := []CaseResult{
+		{
+			Name:        "test",
+			Status:      StatusFail,
+			GoldenDiffs: []Diff{{Severity: SeverityCritical}},
+		},
+	}
+	report := GenerateReport(results, []string{"a", "b"})
+	assert.Equal(t, 1, report.Summary.TotalDiffs)
+	assert.Equal(t, 1, report.Summary.CriticalDiffs)
+}
+
 // --- mockSessionService for validation tests ---
 
 type mockSessionService struct{}
@@ -1219,6 +1271,34 @@ func (s *staticScopedStateSessionService) ListAppStates(ctx context.Context, app
 
 func (s *staticScopedStateSessionService) ListUserStates(ctx context.Context, userKey session.UserKey) (session.StateMap, error) {
 	return s.userState, nil
+}
+
+type failingScopedStateSessionService struct {
+	mockSessionService
+	appErr  error
+	userErr error
+}
+
+func (s *failingScopedStateSessionService) GetSession(
+	ctx context.Context,
+	key session.Key,
+	opts ...session.Option,
+) (*session.Session, error) {
+	return &session.Session{ID: "mock", AppName: key.AppName, UserID: key.UserID}, nil
+}
+
+func (s *failingScopedStateSessionService) ListAppStates(ctx context.Context, appName string) (session.StateMap, error) {
+	if s.appErr != nil {
+		return nil, s.appErr
+	}
+	return nil, nil
+}
+
+func (s *failingScopedStateSessionService) ListUserStates(ctx context.Context, userKey session.UserKey) (session.StateMap, error) {
+	if s.userErr != nil {
+		return nil, s.userErr
+	}
+	return nil, nil
 }
 
 // --- New feature tests ---
@@ -2338,6 +2418,21 @@ func TestHarness_BackendsForCase(t *testing.T) {
 	}
 }
 
+func TestHarness_BackendsForCase_IsolatesAppAndUserNamespaces(t *testing.T) {
+	key := sessKey("for-case-scope")
+	backends := makeBackends(t, key)
+	h := Harness{Backends: backends}
+
+	caseBackends := h.backendsForCase(Case{Name: "scope_case"})
+	require.Len(t, caseBackends, 2)
+	for _, b := range caseBackends {
+		k := b.SessKey()
+		assert.Contains(t, k.AppName, "scope_case")
+		assert.Contains(t, k.UserID, "scope_case")
+		assert.Contains(t, k.SessionID, "scope_case")
+	}
+}
+
 func TestHarness_Run_AllowedDiffs(t *testing.T) {
 	key := sessKey("allowed-diff")
 	backends := makeBackends(t, key)
@@ -2482,6 +2577,23 @@ func TestBackend_VerifyCleanup_NoLeak(t *testing.T) {
 	_ = backend.Cleanup(context.Background(), key, uk)
 	err := backend.VerifyCleanup(context.Background(), key, uk)
 	assert.NoError(t, err)
+}
+
+func TestBackend_Cleanup_RemovesScopedStates(t *testing.T) {
+	key := sessKey("verify-scoped-clean")
+	backends := makeBackends(t, key)
+	backend := backends[0]
+	ctx := context.Background()
+
+	require.NoError(t, backend.Sess.UpdateAppState(ctx, key.AppName, session.StateMap{"theme": []byte("dark")}))
+	require.NoError(t, backend.Sess.UpdateUserState(ctx, session.UserKey{
+		AppName: key.AppName,
+		UserID:  key.UserID,
+	}, session.StateMap{"locale": []byte("en")}))
+
+	uk := memory.UserKey{AppName: key.AppName, UserID: key.UserID}
+	require.NoError(t, backend.Cleanup(ctx, key, uk))
+	require.NoError(t, backend.VerifyCleanup(ctx, key, uk))
 }
 
 func TestBackend_VerifyCleanup_LeakDetected(t *testing.T) {
@@ -2673,11 +2785,32 @@ func TestNormalize_NormalizeKnownIdentifiers(t *testing.T) {
 			"toolCallId": "tc-orig-002",
 		},
 	}
-	normalizeKnownIdentifiers(value, m)
+	normalizeKnownIdentifiers(value, m, nil)
 	assert.Equal(t, "invocation-000", value["invocation"])
 	assert.Equal(t, "tool-call-000", value["tool_id"])
 	nested := value["nested"].(map[string]any)
 	assert.Equal(t, "tool-call-001", nested["toolCallId"])
+}
+
+func TestNormalize_NormalizeKnownIdentifiers_DoesNotRealiasStableIDs(t *testing.T) {
+	m := NewIDAliasMap()
+	value := map[string]any{
+		"tool_calls": []any{
+			map[string]any{"id": "tool-call-000"},
+		},
+		"parentMetadata": map[string]any{"triggerId": "tool-call-000"},
+		"extensions": map[string]any{
+			"args": map[string]any{"tool-call-000": "value"},
+		},
+		"longRunningToolIDs": map[string]any{"tool-call-000": true},
+	}
+
+	normalizeKnownIdentifiers(value, m, map[string]struct{}{
+		"parentMetadata":     {},
+		"longRunningToolIDs": {},
+	})
+	assert.Equal(t, "tool-call-000", value["parentMetadata"].(map[string]any)["triggerId"])
+	assert.Contains(t, value["longRunningToolIDs"].(map[string]any), "tool-call-000")
 }
 
 func TestNormalize_NormalizeJSON_Number(t *testing.T) {
@@ -2715,6 +2848,20 @@ func TestNormalize_DecodeJSON_MultipleValues(t *testing.T) {
 	err := decodeJSON([]byte(`{"a":1}{"b":2}`), &target)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "multiple JSON")
+}
+
+func TestNormalize_DecodeJSON_TrailingGarbage(t *testing.T) {
+	var target any
+	err := decodeJSON([]byte(`{"a":1}corrupt`), &target)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "trailing data")
+}
+
+func TestNormalize_DecodeJSON_TruncatedSecondValue(t *testing.T) {
+	var target any
+	err := decodeJSON([]byte(`{"a":1}{"b":`), &target)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "trailing data")
 }
 
 func TestNormalize_DecodeJSON_ValidInput(t *testing.T) {
@@ -2946,6 +3093,34 @@ func TestCapture_LoadScopedStates(t *testing.T) {
 	assert.NotNil(t, snap.AppState)
 }
 
+func TestCapture_LoadScopedStates_AppError(t *testing.T) {
+	key := sessKey("scoped-app-error")
+	backend := Backend{
+		Name:    "failing",
+		Sess:    &failingScopedStateSessionService{appErr: errors.New("app denied")},
+		Caps:    AllCapabilities(),
+		SessKey: func() session.Key { return key },
+	}
+
+	_, err := Capture(context.Background(), backend, CaptureOptions{NormalizerConfig: DefaultNormalizerConfig()}, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ListAppStates on failing")
+}
+
+func TestCapture_LoadScopedStates_UserError(t *testing.T) {
+	key := sessKey("scoped-user-error")
+	backend := Backend{
+		Name:    "failing",
+		Sess:    &failingScopedStateSessionService{userErr: errors.New("user denied")},
+		Caps:    AllCapabilities(),
+		SessKey: func() session.Key { return key },
+	}
+
+	_, err := Capture(context.Background(), backend, CaptureOptions{NormalizerConfig: DefaultNormalizerConfig()}, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ListUserStates on failing")
+}
+
 // --- Validate case edge cases ---
 
 func TestValidateCase_EmptyRequiredCap(t *testing.T) {
@@ -3042,6 +3217,18 @@ func TestFactory_SetPromptAndSetModel(t *testing.T) {
 	// These are no-op methods but need coverage.
 	fs.SetPrompt("test")
 	fs.SetModel(nil)
+}
+
+func TestFactory_SQLiteUsesSQLiteMemoryService(t *testing.T) {
+	backend := sqliteFactory{}.Create(context.Background(), t)
+	_, ok := backend.Mem.(*msqlite.Service)
+	require.True(t, ok, "sqlite backend should use sqlite memory service")
+}
+
+func TestFactory_MiniredisUsesRedisMemoryService(t *testing.T) {
+	backend := miniredisFactory{}.Create(context.Background(), t)
+	_, ok := backend.Mem.(*mredis.Service)
+	require.True(t, ok, "miniredis backend should use redis memory service")
 }
 
 func TestFactory_ResolvePair_AllVariants(t *testing.T) {
@@ -4427,6 +4614,7 @@ func TestHarness_Run_GoldenRegression(t *testing.T) {
 	require.NoError(t, err)
 	// The result should have GoldenDiffs since the golden trace doesn't match.
 	assert.NotNil(t, result.GoldenDiffs, "should have golden diffs")
+	assert.Equal(t, StatusFail, result.Status, "unexpected golden regression should fail the case")
 }
 
 func TestHarness_Run_GoldenRegression_UsesMergedAllowedDiffs(t *testing.T) {
@@ -6176,10 +6364,10 @@ func TestHarness_saveCheckpointResult_MarshalError(t *testing.T) {
 		PanicRecovered: make(chan int),
 	}
 	err := saveCheckpointResult(dir, "marshal-error-case", result)
-	// Should fall back to simple done-marker and not return an error.
-	assert.NoError(t, err)
-	// Verify the done marker was created.
-	assert.True(t, checkpointExists(dir, "marshal-error-case"))
+	require.Error(t, err)
+	assert.False(t, checkpointExists(dir, "marshal-error-case"))
+	_, ok := loadCheckpointResult(dir, "marshal-error-case")
+	assert.False(t, ok)
 }
 
 // TestHarness_saveCheckpointAndProgress covers the saveCheckpointAndProgress
@@ -6396,11 +6584,12 @@ func TestFactory_ClickhouseFactory_Create_WithSkipDBInit(t *testing.T) {
 	require.NotNil(t, backend)
 	assert.Equal(t, "clickhouse", backend.Name)
 	assert.NotNil(t, backend.Sess)
-	assert.NotNil(t, backend.Mem)
+	assert.Nil(t, backend.Mem)
 	assert.NotNil(t, backend.SessKey)
 	assert.NotNil(t, backend.Probe)
 	assert.NotNil(t, backend.WarmUp)
 	assert.True(t, backend.Caps.Has(CapEvents))
+	assert.False(t, backend.Caps.Has(CapMemory))
 	assert.False(t, backend.Caps.Has(CapTrack))
 }
 

@@ -436,13 +436,7 @@ func (h Harness) Run(ctx context.Context, replayCase Case) (CaseResult, error) {
 	if result.PanicRecovered != nil {
 		result.Status = StatusFail
 	} else {
-		hasUnexpected := false
-		for _, diff := range diffs {
-			if !diff.Allowed {
-				hasUnexpected = true
-				break
-			}
-		}
+		hasUnexpected := hasUnexpectedDiffs(diffs) || hasUnexpectedDiffs(result.GoldenDiffs)
 		if hasUnexpected {
 			result.Status = StatusFail
 		} else if len(result.SkippedBackends) > 0 {
@@ -457,6 +451,15 @@ func (h Harness) Run(ctx context.Context, replayCase Case) (CaseResult, error) {
 		replayCase.Name, result.Status, result.Duration, len(diffs), len(result.SkippedBackends) > 0)
 
 	return result, nil
+}
+
+func hasUnexpectedDiffs(diffs []Diff) bool {
+	for _, diff := range diffs {
+		if !diff.Allowed {
+			return true
+		}
+	}
+	return false
 }
 
 // captureOnBackend executes the case and captures a snapshot on a single backend.
@@ -597,15 +600,33 @@ func (h Harness) backendsForCase(c Case) []Backend {
 		backends[i] = b
 		if b.SessKey != nil {
 			origKey := b.SessKey()
+			suffix := caseNamespaceSuffix(c.Name)
 			caseKey := session.Key{
-				AppName:   origKey.AppName,
-				UserID:    origKey.UserID,
-				SessionID: origKey.SessionID + "-" + c.Name,
+				AppName:   origKey.AppName + "-" + suffix,
+				UserID:    origKey.UserID + "-" + suffix,
+				SessionID: origKey.SessionID + "-" + suffix,
 			}
 			backends[i].SessKey = func() session.Key { return caseKey }
 		}
 	}
 	return backends
+}
+
+func caseNamespaceSuffix(caseName string) string {
+	var builder strings.Builder
+	for _, r := range caseName {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_':
+			builder.WriteRune(r)
+		default:
+			builder.WriteByte('-')
+		}
+	}
+	sanitized := strings.Trim(builder.String(), "-")
+	if sanitized == "" {
+		return "case"
+	}
+	return sanitized
 }
 
 // RunSuite runs multiple cases with checkpoint/resume support, circuit breaker,
@@ -928,7 +949,10 @@ func Capture(
 
 	// Load scoped states if not already provided in opts.
 	if opts.AppState == nil || opts.UserState == nil {
-		appState, userState := loadScopedStates(ctx, backend)
+		appState, userState, err := loadScopedStates(ctx, backend)
+		if err != nil {
+			return Snapshot{}, err
+		}
 		if opts.AppState == nil {
 			opts.AppState = appState
 		}
@@ -976,23 +1000,25 @@ func loadBackend(ctx context.Context, backend Backend) (*session.Session, []*mem
 }
 
 // loadScopedStates reads AppState and UserState from a session service.
-func loadScopedStates(ctx context.Context, backend Backend) (appState, userState session.StateMap) {
+func loadScopedStates(ctx context.Context, backend Backend) (appState, userState session.StateMap, err error) {
 	var key session.Key
 	if backend.SessKey != nil {
 		key = backend.SessKey()
 	}
 	if key.AppName != "" {
-		if states, err := backend.Sess.ListAppStates(ctx, key.AppName); err == nil {
-			appState = states
+		appState, err = backend.Sess.ListAppStates(ctx, key.AppName)
+		if err != nil {
+			return nil, nil, fmt.Errorf("ListAppStates on %s: %w", backend.Name, err)
 		}
 	}
 	if key.AppName != "" && key.UserID != "" {
 		userKey := session.UserKey{AppName: key.AppName, UserID: key.UserID}
-		if states, err := backend.Sess.ListUserStates(ctx, userKey); err == nil {
-			userState = states
+		userState, err = backend.Sess.ListUserStates(ctx, userKey)
+		if err != nil {
+			return nil, nil, fmt.Errorf("ListUserStates on %s: %w", backend.Name, err)
 		}
 	}
-	return appState, userState
+	return appState, userState, nil
 }
 
 // --- Retry ---
@@ -1160,8 +1186,7 @@ func saveCheckpoint(dir, caseName string) error {
 func saveCheckpointResult(dir, caseName string, result CaseResult) error {
 	b, err := json.Marshal(result)
 	if err != nil {
-		// Fall back to simple done-marker on marshal failure.
-		return saveCheckpoint(dir, caseName)
+		return fmt.Errorf("marshal checkpoint result for %s: %w", caseName, err)
 	}
 	path := filepath.Join(dir, caseName+".result.json")
 	return saveBytesAtomic(path, b)
@@ -1330,7 +1355,8 @@ func GenerateReport(results []CaseResult, backends []string) *Report {
 			// Mixed = pass + skipped backends — count as passed for pass-rate.
 			report.Summary.PassedCases++
 		}
-		for _, d := range r.Diffs {
+		allDiffs := append(append([]Diff(nil), r.Diffs...), r.GoldenDiffs...)
+		for _, d := range allDiffs {
 			report.Summary.TotalDiffs++
 			if d.Allowed {
 				report.Summary.AllowedDiffs++

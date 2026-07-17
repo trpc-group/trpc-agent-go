@@ -21,6 +21,10 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/redis/go-redis/v9"
 	"trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
+	mmysql "trpc.group/trpc-go/trpc-agent-go/memory/mysql"
+	mpostgres "trpc.group/trpc-go/trpc-agent-go/memory/postgres"
+	mredis "trpc.group/trpc-go/trpc-agent-go/memory/redis"
+	msqlite "trpc.group/trpc-go/trpc-agent-go/memory/sqlite"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	sclickhouse "trpc.group/trpc-go/trpc-agent-go/session/clickhouse"
@@ -132,12 +136,15 @@ func (sqliteFactory) Create(_ context.Context, t *testing.T) *Backend {
 			t.Logf("warning: closing sqlite service: %v", closeErr)
 		}
 	})
-	memSvc := inmemory.NewMemoryService()
-	t.Cleanup(func() {
-		if closeErr := memSvc.Close(); closeErr != nil {
-			t.Logf("warning: closing inmemory memory service: %v", closeErr)
-		}
-	})
+	memDB, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite memory db: %v", err)
+	}
+	memDB.SetMaxOpenConns(1)
+	memSvc, err := msqlite.NewService(memDB)
+	if err != nil {
+		t.Fatalf("create sqlite memory service: %v", err)
+	}
 	return &Backend{
 		Name:    "sqlite",
 		Sess:    svc,
@@ -174,12 +181,12 @@ func (miniredisFactory) Create(_ context.Context, t *testing.T) *Backend {
 			t.Logf("warning: closing miniredis session service: %v", closeErr)
 		}
 	})
-	memSvc := inmemory.NewMemoryService()
-	t.Cleanup(func() {
-		if closeErr := memSvc.Close(); closeErr != nil {
-			t.Logf("warning: closing inmemory memory service: %v", closeErr)
-		}
-	})
+	memSvc, err := mredis.NewService(
+		mredis.WithRedisClientURL("redis://" + mr.Addr()),
+	)
+	if err != nil {
+		t.Fatalf("create miniredis memory service: %v", err)
+	}
 	return &Backend{
 		Name:    "miniredis",
 		Sess:    svc,
@@ -218,12 +225,12 @@ func (redisFactory) Create(_ context.Context, t *testing.T) *Backend {
 			t.Logf("warning: closing redis session service: %v", closeErr)
 		}
 	})
-	memSvc := inmemory.NewMemoryService()
-	t.Cleanup(func() {
-		if closeErr := memSvc.Close(); closeErr != nil {
-			t.Logf("warning: closing inmemory memory service: %v", closeErr)
-		}
-	})
+	memSvc, err := mredis.NewService(
+		mredis.WithRedisClientURL(url),
+	)
+	if err != nil {
+		t.Fatalf("create redis memory service: %v", err)
+	}
 	return &Backend{
 		Name:    "redis",
 		Sess:    svc,
@@ -280,12 +287,16 @@ func (postgresFactory) Create(_ context.Context, t *testing.T) *Backend {
 			t.Logf("warning: closing postgres session service: %v", closeErr)
 		}
 	})
-	memSvc := inmemory.NewMemoryService()
-	t.Cleanup(func() {
-		if closeErr := memSvc.Close(); closeErr != nil {
-			t.Logf("warning: closing inmemory memory service: %v", closeErr)
-		}
-	})
+	memOpts := []mpostgres.ServiceOpt{
+		mpostgres.WithPostgresClientDSN(dsn),
+	}
+	if os.Getenv("TRPC_AGENT_REPLAY_SKIP_DB_INIT") != "" {
+		memOpts = append(memOpts, mpostgres.WithSkipDBInit(true))
+	}
+	memSvc, err := mpostgres.NewService(memOpts...)
+	if err != nil {
+		t.Fatalf("create postgres memory service: %v", err)
+	}
 	return &Backend{
 		Name:    "postgres",
 		Sess:    svc,
@@ -343,12 +354,16 @@ func (mysqlFactory) Create(_ context.Context, t *testing.T) *Backend {
 			t.Logf("warning: closing mysql session service: %v", closeErr)
 		}
 	})
-	memSvc := inmemory.NewMemoryService()
-	t.Cleanup(func() {
-		if closeErr := memSvc.Close(); closeErr != nil {
-			t.Logf("warning: closing inmemory memory service: %v", closeErr)
-		}
-	})
+	memOpts := []mmysql.ServiceOpt{
+		mmysql.WithMySQLClientDSN(dsn),
+	}
+	if os.Getenv("TRPC_AGENT_REPLAY_SKIP_DB_INIT") != "" {
+		memOpts = append(memOpts, mmysql.WithSkipDBInit(true))
+	}
+	memSvc, err := mmysql.NewService(memOpts...)
+	if err != nil {
+		t.Fatalf("create mysql memory service: %v", err)
+	}
 	return &Backend{
 		Name:    "mysql",
 		Sess:    svc,
@@ -379,7 +394,7 @@ func (clickhouseFactory) Capabilities() Capabilities {
 	return Capabilities{
 		CapEvents:              {Supported: true},
 		CapState:               {Supported: true},
-		CapMemory:              {Supported: true},
+		CapMemory:              {Supported: false, Reason: "ClickHouse replay backend does not have a matching memory.Service implementation"},
 		CapSummary:             {Supported: true},
 		CapTrack:               {Supported: false, Reason: "ClickHouse does not implement TrackService"},
 		CapEventStateDeltaNull: {Supported: true},
@@ -407,17 +422,11 @@ func (clickhouseFactory) Create(_ context.Context, t *testing.T) *Backend {
 			t.Logf("warning: closing clickhouse session service: %v", closeErr)
 		}
 	})
-	memSvc := inmemory.NewMemoryService()
-	t.Cleanup(func() {
-		if closeErr := memSvc.Close(); closeErr != nil {
-			t.Logf("warning: closing inmemory memory service: %v", closeErr)
-		}
-	})
 	return &Backend{
 		Name:    "clickhouse",
 		Sess:    svc,
 		Track:   nil,
-		Mem:     memSvc,
+		Mem:     nil,
 		Caps:    clickhouseFactory{}.Capabilities(),
 		SessKey: defaultSessKey,
 		Probe: func(ctx context.Context) error {

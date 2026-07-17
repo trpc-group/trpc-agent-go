@@ -60,5 +60,8 @@ func LoadGoldenTrace(dir, caseName string) (*GoldenTrace, bool, error) {
 	if err := json.Unmarshal(b, &gt); err != nil {
 		return nil, false, fmt.Errorf("parse golden trace %s: %w", caseName, err)
 	}
+	for i := range gt.Snapshots {
+		restoreMissingInSnapshot(&gt.Snapshots[i])
+	}
 	return &gt, true, nil
 }

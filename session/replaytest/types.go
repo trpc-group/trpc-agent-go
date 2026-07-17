@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -54,6 +55,9 @@ func NewIDAliasMap() *IDAliasMap {
 func (m *IDAliasMap) Alias(original, category string) string {
 	if original == "" {
 		return ""
+	}
+	if strings.HasPrefix(original, category+"-") {
+		return original
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -433,6 +437,31 @@ func (b *Backend) Cleanup(ctx context.Context, key session.Key, userKey memory.U
 		if err := b.Sess.DeleteSession(ctx, key); err != nil {
 			errs = append(errs, fmt.Errorf("DeleteSession: %w", err))
 		}
+		if key.AppName != "" {
+			appState, err := b.Sess.ListAppStates(ctx, key.AppName)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("ListAppStates: %w", err))
+			} else {
+				for stateKey := range appState {
+					if err := b.Sess.DeleteAppState(ctx, key.AppName, stateKey); err != nil {
+						errs = append(errs, fmt.Errorf("DeleteAppState(%s): %w", stateKey, err))
+					}
+				}
+			}
+		}
+		if key.AppName != "" && key.UserID != "" {
+			scopedUserKey := session.UserKey{AppName: key.AppName, UserID: key.UserID}
+			userState, err := b.Sess.ListUserStates(ctx, scopedUserKey)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("ListUserStates: %w", err))
+			} else {
+				for stateKey := range userState {
+					if err := b.Sess.DeleteUserState(ctx, scopedUserKey, stateKey); err != nil {
+						errs = append(errs, fmt.Errorf("DeleteUserState(%s): %w", stateKey, err))
+					}
+				}
+			}
+		}
 	}
 	if b.Mem != nil {
 		if err := b.Mem.ClearMemories(ctx, userKey); err != nil {
@@ -449,6 +478,21 @@ func (b *Backend) VerifyCleanup(ctx context.Context, key session.Key, userKey me
 		sess, err := b.Sess.GetSession(ctx, key)
 		if err == nil && sess != nil {
 			return fmt.Errorf("leak detected: session %v still exists after cleanup", key)
+		}
+		if key.AppName != "" {
+			appState, err := b.Sess.ListAppStates(ctx, key.AppName)
+			if err == nil && len(appState) > 0 {
+				return fmt.Errorf("leak detected: %d app states still exist after cleanup", len(appState))
+			}
+		}
+		if key.AppName != "" && key.UserID != "" {
+			userState, err := b.Sess.ListUserStates(ctx, session.UserKey{
+				AppName: key.AppName,
+				UserID:  key.UserID,
+			})
+			if err == nil && len(userState) > 0 {
+				return fmt.Errorf("leak detected: %d user states still exist after cleanup", len(userState))
+			}
 		}
 	}
 	if b.Mem != nil {

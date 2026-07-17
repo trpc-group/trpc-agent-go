@@ -209,9 +209,3 @@ trpc.group/trpc-go/trpc-a2a-go v0.2.5 h1:X3pAlWD128LaS9TtXsUDZoJWPVuPZDkZKUecKRx
 trpc.group/trpc-go/trpc-a2a-go v0.2.5/go.mod h1:Gtytau9Uoc3oPo/dpHvKit+tQn9Qlk5XFG1RiZTGqfk=
 trpc.group/trpc-go/trpc-agent-go/storage/clickhouse v1.1.2-0.20260108033914-7a20241f1ad5 h1:661lwYHW4KSYF0uR9Jgm6WZekdkxa5m8/+Jm9ddf1mg=
 trpc.group/trpc-go/trpc-agent-go/storage/clickhouse v1.1.2-0.20260108033914-7a20241f1ad5/go.mod h1:Ku/A2gaZbPbaXQMAwf1uevrGKEMSf84mgth8pedFTfs=
-trpc.group/trpc-go/trpc-agent-go/storage/mysql v0.5.0 h1:0mEfSfopzlCAWUwOWlp03fVzUWz7Vf79OMAXrhLN4VY=
-trpc.group/trpc-go/trpc-agent-go/storage/mysql v0.5.0/go.mod h1:5AZIZqvwR8U15gEEw64TQGSDWZgcno0M/ADkj6xKbBw=
-trpc.group/trpc-go/trpc-agent-go/storage/postgres v0.8.0 h1:8phxJucSgwhdhS0UP6uyaVtWyNL3z1RW7OfLHYUtzco=
-trpc.group/trpc-go/trpc-agent-go/storage/postgres v0.8.0/go.mod h1:q1/qPdLQ8hgyGhvq2t0lmfhRcekm0chBc5+ZI32pBv0=
-trpc.group/trpc-go/trpc-agent-go/storage/redis v0.0.3 h1:Vd2bewRzVD19TxGC0mCB4/oqo8Eti1tRAEaV3XGfS+M=
-trpc.group/trpc-go/trpc-agent-go/storage/redis v0.0.3/go.mod h1:dmIEHlm3TG74PKiGeOKiuRI73+F3cOMO+KtYNgnc70I=

@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"sort"
 	"strconv"
@@ -182,7 +183,12 @@ func (n *Normalizer) normalizeEvents(
 		}
 
 		// Recursively alias known identifiers in nested structures.
-		normalizeKnownIdentifiers(value, aliases)
+		normalizeKnownIdentifiers(value, aliases, map[string]struct{}{
+			"invocationId":       {},
+			"parentInvocationId": {},
+			"parentMetadata":     {},
+			"longRunningToolIDs": {},
+		})
 
 		result = append(result, normalizeJSONMap(value, volatileSet))
 	}
@@ -363,7 +369,7 @@ func (n *Normalizer) normalizeTracks(
 				payload = string(trackEvent.Payload)
 			}
 			payload = normalizeJSON(payload, volatileSet)
-			normalizeKnownIdentifiers(payload, aliases)
+			normalizeKnownIdentifiers(payload, aliases, nil)
 			events = append(events, TrackSnapshot{
 				Track:   string(trackEvent.Track),
 				Payload: payload,
@@ -440,7 +446,7 @@ func normalizeEventToolData(value map[string]any, aliases *IDAliasMap) {
 	}
 }
 
-func normalizeKnownIdentifiers(value any, aliases *IDAliasMap) {
+func normalizeKnownIdentifiers(value any, aliases *IDAliasMap, skip map[string]struct{}) {
 	switch typed := value.(type) {
 	case map[string]any:
 		for _, key := range []string{"invocation", "invocation_id", "invocationId", "parentInvocationId"} {
@@ -459,14 +465,17 @@ func normalizeKnownIdentifiers(value any, aliases *IDAliasMap) {
 		}
 		sort.Strings(keys)
 		for _, key := range keys {
-			normalizeKnownIdentifiers(typed[key], aliases)
+			if _, shouldSkip := skip[key]; shouldSkip {
+				continue
+			}
+			normalizeKnownIdentifiers(typed[key], aliases, nil)
 			if key == "longRunningToolIDs" {
 				typed[key] = aliasMapKeys(typed[key], aliases, "tool-call")
 			}
 		}
 	case []any:
 		for _, item := range typed {
-			normalizeKnownIdentifiers(item, aliases)
+			normalizeKnownIdentifiers(item, aliases, nil)
 		}
 	}
 }
@@ -495,7 +504,7 @@ func normalizeJSONMap(value map[string]any, omit map[string]struct{}) map[string
 		if _, skip := omit[key]; skip {
 			continue
 		}
-		result[key] = normalizeJSON(item, omit)
+		result[key] = normalizeJSON(item, nil)
 	}
 	return result
 }
@@ -536,6 +545,8 @@ func decodeJSON(raw []byte, target any) error {
 	var trailing any
 	if err := dec.Decode(&trailing); err == nil {
 		return fmt.Errorf("multiple JSON values")
+	} else if err != io.EOF {
+		return fmt.Errorf("trailing data after JSON value: %w", err)
 	}
 	return nil
 }
