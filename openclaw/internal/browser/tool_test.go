@@ -2898,6 +2898,7 @@ func TestToolCall_ScreenshotCompactsBrowserCrashContent(t *testing.T) {
 		},
 	}
 	tool := newTestTool(drv)
+	tool.screenshotDir = t.TempDir()
 
 	raw, err := tool.Call(
 		context.Background(),
@@ -2908,6 +2909,7 @@ func TestToolCall_ScreenshotCompactsBrowserCrashContent(t *testing.T) {
 	require.NoError(t, err)
 
 	got := raw.(Result)
+	require.Empty(t, got.ScreenshotPath)
 	text := extractText(got.Content)
 	require.Contains(t, text, browserCrashSummary)
 	require.NotContains(t, text, "--disable-field-trial-config")
