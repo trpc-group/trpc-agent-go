@@ -45,10 +45,11 @@ func main() {
 	ctx := context.Background()
 	result := bashResult{ExitCode: 0, Output: "<ok> & \"done\""}
 
-	fmt.Println("== Built-in codecs (same result, different model-visible formats) ==")
+	// JSON, XML, and Custom encode the same structured result into different
+	// model-visible formats.
+	fmt.Println("== Structured result, different model-visible formats ==")
 	printEncode(ctx, "JSON  ", resultcodec.JSON(), result)
 	printEncode(ctx, "XML   ", resultcodec.XML(), result)
-	printEncode(ctx, "Text  ", resultcodec.Text(), "plain observation text")
 
 	// Custom typed encoder: the business template receives the concrete result
 	// type, so there is no need to assert `any`.
@@ -56,6 +57,10 @@ func main() {
 		return fmt.Sprintf("exit=%d\n%s", r.ExitCode, r.Output), nil
 	})
 	printEncode(ctx, "Custom", custom, result)
+
+	// Text handles already-textual results; it takes a string, not a struct.
+	fmt.Println("\n== Text result ==")
+	printEncode(ctx, "Text  ", resultcodec.Text(), "plain observation text")
 
 	fmt.Println("\n== Per-tool configuration ==")
 

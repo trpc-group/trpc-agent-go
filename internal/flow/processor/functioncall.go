@@ -1369,6 +1369,42 @@ func (p *FunctionCallResponseProcessor) decorateToolCallResponseEvent(
 	return ev
 }
 
+type stateDeltaProvider interface {
+	StateDelta(string, []byte, []byte) map[string][]byte
+}
+
+type invocationStateDeltaProvider interface {
+	StateDeltaForInvocation(
+		*agent.Invocation,
+		string,
+		[]byte,
+		[]byte,
+	) map[string][]byte
+}
+
+// toolProvidesStateDelta reports whether the tool (through the wrapper chain)
+// contributes a state delta from its result content.
+func toolProvidesStateDelta(tl tool.Tool) bool {
+	semantic := itool.ResolveSemantic(tl)
+	if _, ok := semantic.(invocationStateDeltaProvider); ok {
+		return true
+	}
+	_, ok := semantic.(stateDeltaProvider)
+	return ok
+}
+
+// marshalStateDeltaContent serializes result to the JSON bytes used as the
+// state-delta input, under panic protection. Custom result codecs may wrap
+// results that are not JSON-friendly, so a failure here must not abort the call.
+func marshalStateDeltaContent(result any) (b []byte, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("state delta content marshal panic: %v", r)
+		}
+	}()
+	return marshalJSONNoHTMLEscape(result)
+}
+
 // attachStateDelta copies tool-provided state delta to the event. stateContent
 // is the JSON-encoded tool result used as the state-delta input; when nil the
 // choice message content is used (the default JSON behavior). This keeps state
@@ -1389,18 +1425,6 @@ func (p *FunctionCallResponseProcessor) attachStateDelta(
 		b = []byte(choice.Message.Content)
 	}
 	toolCallID := choice.Message.ToolID
-
-	type stateDeltaProvider interface {
-		StateDelta(string, []byte, []byte) map[string][]byte
-	}
-	type invocationStateDeltaProvider interface {
-		StateDeltaForInvocation(
-			*agent.Invocation,
-			string,
-			[]byte,
-			[]byte,
-		) map[string][]byte
-	}
 
 	var delta map[string][]byte
 	providerTool := itool.ResolveSemantic(tl)
@@ -1891,13 +1915,19 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 		// approval-required messages keep their default encoding.
 		codec = nil
 	}
-	if codec != nil {
+	if codec != nil && toolProvidesStateDelta(tl) {
 		// A result codec only changes the model-visible message. Stateful tools
 		// compute their state delta from the tool result content, which must stay
-		// JSON so JSON-parsing tools are not broken by the codec. Preserve the
-		// default JSON bytes for the state-delta path.
-		if stateContent, jerr := marshalJSONNoHTMLEscape(result); jerr == nil {
+		// JSON so JSON-parsing tools are not broken by the codec. Only stateful
+		// tools need this, so avoid the extra marshal (and its panic surface) for
+		// every codec'd call; a Custom codec may wrap results that are not
+		// JSON-friendly.
+		if stateContent, jerr := marshalStateDeltaContent(result); jerr == nil {
 			ctx = withStateDeltaContent(ctx, stateContent)
+		} else {
+			// Do not let the state-delta path fall back to codec text; skip the
+			// state delta for this call rather than write codec output as state.
+			ctx = withSkippedToolStateDelta(ctx)
 		}
 	}
 	if suppressDefaultToolMessage {
@@ -2686,7 +2716,9 @@ func (p *FunctionCallResponseProcessor) checkToolPermission(
 		Arguments:   toolCall.Function.Arguments,
 		Metadata:    tool.MetadataOf(semanticTool),
 	}
-	if checker, ok := semanticTool.(tool.PermissionChecker); ok {
+	// Resolve the permission checker from the outermost wrapper inward so a
+	// transparent wrapper's decision is never skipped by unwrapping past it.
+	if checker, ok := itool.ResolvePermissionChecker(tl); ok {
 		decision, err := checker.CheckPermission(ctx, req)
 		result, err := normalizeToolPermissionResult(req, decision, err)
 		if result != nil || err != nil {

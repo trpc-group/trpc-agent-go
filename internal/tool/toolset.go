@@ -152,6 +152,31 @@ func ResolveSemantic(t tool.Tool) tool.Tool {
 	return t
 }
 
+// ResolvePermissionChecker returns the outermost tool.PermissionChecker in the
+// wrapper chain. Permission must be resolved from the outside in: unwrapping past
+// a transparent wrapper (for example resultcodec.Wrap or any tool that exposes
+// Unwrap) to reach an inner tool would otherwise skip an intermediate wrapper's
+// own permission decision and bypass it. The traversal is depth-bounded for
+// cycle safety.
+func ResolvePermissionChecker(t tool.Tool) (tool.PermissionChecker, bool) {
+	for i := 0; i < maxToolUnwrapDepth && t != nil; i++ {
+		if checker, ok := t.(tool.PermissionChecker); ok {
+			return checker, true
+		}
+		switch current := t.(type) {
+		case declarationWrapper:
+			t = current.originalTool()
+		case *NamedTool:
+			t = current.Original()
+		case toolUnwrapper:
+			t = current.Unwrap()
+		default:
+			return nil, false
+		}
+	}
+	return nil, false
+}
+
 type declarationTool struct {
 	decl tool.Declaration
 	base tool.Tool

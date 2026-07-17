@@ -18,8 +18,9 @@ go run ./resultcodec
 
 ## What it shows
 
-- The built-in codecs `resultcodec.JSON()`, `XML()`, `Text()`, and `Custom[T]()`
-  encoding the same result into different model-visible text.
+- The built-in codecs `resultcodec.JSON()`, `XML()`, and `Custom[T]()` encoding
+  the same structured result into different model-visible text, and
+  `resultcodec.Text()` encoding an already-textual result.
 - Binding a codec per tool:
   - `function.WithResultCodec(codec)` on a function tool.
   - `resultcodec.Wrap(tool, codec)` for a tool whose construction you cannot
@@ -29,12 +30,14 @@ go run ./resultcodec
 ## Expected output
 
 ```text
-== Built-in codecs (same result, different model-visible formats) ==
+== Structured result, different model-visible formats ==
 JSON   -> {"exit_code":0,"output":"<ok> & \"done\""}
 XML    -> <result><exit_code>0</exit_code><output>&lt;ok&gt; &amp; &#34;done&#34;</output></result>
-Text   -> plain observation text
 Custom -> exit=0
 <ok> & "done"
+
+== Text result ==
+Text   -> plain observation text
 
 == Per-tool configuration ==
 function tool "bash_xml" -> XML codec

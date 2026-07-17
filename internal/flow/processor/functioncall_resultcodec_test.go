@@ -440,6 +440,125 @@ func TestExecuteToolCall_StateDeltaUsesJSONNotCodec(t *testing.T) {
 	assert.NotContains(t, string(base.gotContent), "<result>")
 }
 
+// recordingCallableTool records whether Call executed.
+type recordingCallableTool struct {
+	declaration *tool.Declaration
+	called      bool
+}
+
+func (r *recordingCallableTool) Declaration() *tool.Declaration { return r.declaration }
+func (r *recordingCallableTool) Call(_ context.Context, _ []byte) (any, error) {
+	r.called = true
+	return "base-result", nil
+}
+
+// permissionWrapper is a transparent wrapper that denies permission and exposes
+// Unwrap()/Call(). It mirrors a third-party wrapper that resultcodec.Wrap wraps.
+type permissionWrapper struct {
+	base tool.Tool
+}
+
+func (w *permissionWrapper) Declaration() *tool.Declaration { return w.base.Declaration() }
+func (w *permissionWrapper) Unwrap() tool.Tool              { return w.base }
+func (w *permissionWrapper) Call(ctx context.Context, args []byte) (any, error) {
+	return w.base.(tool.CallableTool).Call(ctx, args)
+}
+func (w *permissionWrapper) CheckPermission(
+	context.Context,
+	*tool.PermissionRequest,
+) (tool.PermissionDecision, error) {
+	return tool.DenyPermission("blocked"), nil
+}
+
+func TestExecuteToolCall_PermissionWrapperNotBypassedByCodecWrap(t *testing.T) {
+	// codecTool -> permissionWrapper (deny) -> base. Unwrapping past the
+	// permission wrapper must not bypass its deny.
+	base := &recordingCallableTool{declaration: &tool.Declaration{Name: "danger"}}
+	wrapped := resultcodec.Wrap(&permissionWrapper{base: base}, resultcodec.Text())
+	tools := map[string]tool.Tool{"danger": wrapped}
+	p := NewFunctionCallResponseProcessor(false, nil)
+	inv := &agent.Invocation{AgentName: "a", Model: &mockModel{}}
+	pc := model.ToolCall{
+		ID:       "c1",
+		Function: model.FunctionDefinitionParam{Name: "danger", Arguments: []byte(`{}`)},
+	}
+	ch := make(chan *event.Event, 8)
+	_, choices, _, _, _, err := p.executeToolCall(context.Background(), inv, pc, tools, 0, ch)
+	require.NoError(t, err)
+	require.Len(t, choices, 1)
+
+	// The base tool must not execute when the wrapper denies.
+	assert.False(t, base.called, "base tool must not run when a wrapper denies permission")
+	var pr tool.PermissionResult
+	require.NoError(t, json.Unmarshal([]byte(choices[0].Message.Content), &pr))
+	assert.Equal(t, tool.PermissionResultStatusDenied, pr.Status)
+}
+
+// panicMarshalResult panics if JSON-marshaled, standing in for a result a Custom
+// codec is meant to handle without JSON.
+type panicMarshalResult struct{}
+
+func (panicMarshalResult) MarshalJSON() ([]byte, error) { panic("marshal boom") }
+
+func TestExecuteToolCall_CodecSkipsStateMarshalForNonStatefulTool(t *testing.T) {
+	// For a tool without a state delta, configuring a codec must not trigger an
+	// extra JSON marshal of the result (which here would panic).
+	p := NewFunctionCallResponseProcessor(false, nil)
+	codec := resultcodec.Custom(func(_ context.Context, _ panicMarshalResult) (string, error) {
+		return "ok-custom", nil
+	})
+	ft := function.NewFunctionTool(
+		func(_ context.Context, _ struct{}) (panicMarshalResult, error) {
+			return panicMarshalResult{}, nil
+		},
+		function.WithName("p"),
+		function.WithResultCodec(codec),
+	)
+	choices := runCodecToolCall(t, p, "p", ft)
+	require.Len(t, choices, 1)
+	assert.Equal(t, "ok-custom", choices[0].Message.Content)
+}
+
+// jsonFailResult fails (does not panic) JSON marshaling because of the channel.
+type jsonFailResult struct {
+	Ch chan int `json:"ch"`
+}
+
+func TestExecuteToolCall_StateDeltaSkippedWhenJSONMarshalFails(t *testing.T) {
+	// When the state-delta JSON marshal fails, the stateful tool must not receive
+	// codec text; the state delta is skipped instead.
+	base := &recordingStateDeltaTool{
+		declaration: &tool.Declaration{Name: "stateful"},
+		result:      jsonFailResult{Ch: make(chan int)},
+	}
+	codec := resultcodec.Custom(func(_ context.Context, _ jsonFailResult) (string, error) {
+		return "custom-out", nil
+	})
+	wrapped := resultcodec.Wrap(base, codec)
+	tools := map[string]tool.Tool{"stateful": wrapped}
+	p := NewFunctionCallResponseProcessor(false, nil)
+	inv := &agent.Invocation{
+		AgentName: "a",
+		Model:     &mockModel{},
+		Session:   &session.Session{},
+	}
+	pc := model.ToolCall{
+		ID:       "c1",
+		Function: model.FunctionDefinitionParam{Name: "stateful", Arguments: []byte(`{}`)},
+	}
+	ev, err := p.executeSingleToolCallSequential(
+		context.Background(), inv, &model.Response{}, tools, make(chan *event.Event, 8), 0, pc,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, ev)
+	require.NotEmpty(t, ev.Choices)
+
+	assert.Equal(t, "custom-out", ev.Choices[0].Message.Content)
+	assert.Nil(t, base.gotContent,
+		"StateDelta must be skipped on marshal failure, never fed codec text")
+	assert.Empty(t, ev.StateDelta)
+}
+
 func TestExecuteToolCall_WrapBindsCodec(t *testing.T) {
 	ctx := context.Background()
 	p := NewFunctionCallResponseProcessor(false, nil)

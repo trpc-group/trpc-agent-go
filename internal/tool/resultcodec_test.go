@@ -85,6 +85,48 @@ func TestResolveDeclaration_SeesThroughResultCodecWrap(t *testing.T) {
 	}
 }
 
+// rcPermChecker denies permission and exposes Unwrap, standing in for a
+// transparent third-party permission wrapper.
+type rcPermChecker struct {
+	name  string
+	inner tool.Tool
+}
+
+func (p *rcPermChecker) Declaration() *tool.Declaration { return &tool.Declaration{Name: p.name} }
+func (p *rcPermChecker) Unwrap() tool.Tool              { return p.inner }
+func (p *rcPermChecker) CheckPermission(
+	context.Context,
+	*tool.PermissionRequest,
+) (tool.PermissionDecision, error) {
+	return tool.DenyPermission("no"), nil
+}
+
+func TestResolvePermissionChecker_NotSkippedByUnwrap(t *testing.T) {
+	// resultcodec.Wrap wraps a permission-denying wrapper over a plain tool.
+	// Resolving the permission checker must find the wrapper's deny, not unwrap
+	// past it to the inner tool that has no checker.
+	inner := &rcFakeCallable{name: "inner"}
+	wrapped := resultcodec.Wrap(&rcPermChecker{name: "pw", inner: inner}, resultcodec.JSON())
+	checker, ok := ResolvePermissionChecker(wrapped)
+	if !ok {
+		t.Fatal("expected a permission checker in the wrapper chain")
+	}
+	decision, err := checker.CheckPermission(context.Background(), &tool.PermissionRequest{})
+	if err != nil {
+		t.Fatalf("CheckPermission error: %v", err)
+	}
+	if decision.Action != tool.PermissionActionDeny {
+		t.Fatalf("expected deny, got %q", decision.Action)
+	}
+}
+
+func TestResolvePermissionChecker_NoneReturnsFalse(t *testing.T) {
+	// A plain tool with no checker anywhere in the chain returns false.
+	if _, ok := ResolvePermissionChecker(&rcFakeCallable{name: "b"}); ok {
+		t.Fatal("expected no permission checker for a plain tool")
+	}
+}
+
 // rcSelfUnwrap returns itself from Unwrap, forming a cycle.
 type rcSelfUnwrap struct {
 	name string
