@@ -65,44 +65,10 @@ func (r *workspaceRuntime) RunProgram(
 		return codeexecutor.RunResult{}, err
 	}
 
-	timeout := spec.Timeout
-	if timeout <= 0 {
-		timeout = defaultRunTimeout
+	timeout, err := r.resolveRunTimeout(spec.Timeout)
+	if err != nil {
+		return codeexecutor.RunResult{}, err
 	}
-	// Reject sub-millisecond timeouts explicitly. The OpenSandbox API
-	// accepts timeout in integer milliseconds; a value like 500µs would
-	// be truncated to 0 by the integer division below, then silently
-	// fall back to defaultRunTimeout (30s) — a 60000× inflation that
-	// violates the ProgramRunner contract. Values in (0, 1ms) are
-	// almost certainly caller bugs.
-	if timeout > 0 && timeout < time.Millisecond {
-		return codeexecutor.RunResult{}, fmt.Errorf(
-			"opensandbox: spec.Timeout %s is below the 1ms API granularity; "+
-				"the OpenSandbox RunCommand timeout is an integer number of "+
-				"milliseconds and sub-millisecond values would be truncated to 0",
-			timeout,
-		)
-	}
-
-	// The SDK applies ConnectionConfig.RequestTimeout to ALL HTTP
-	// requests including streaming /command. If spec.Timeout exceeds
-	// the request timeout budget the command would be killed by the
-	// HTTP client before finishing. Rather than silently clamping
-	// (which would violate the ProgramRunner contract that other
-	// runtimes honor spec.Timeout verbatim), return an error so the
-	// caller can raise WithRequestTimeout or lower spec.Timeout.
-	if r.ce.requestTimeout > 0 {
-		maxRun := r.ce.requestTimeout - requestTimeoutBuffer
-		if maxRun > 0 && timeout > maxRun {
-			return codeexecutor.RunResult{}, fmt.Errorf(
-				"opensandbox: spec.Timeout %s exceeds the request timeout budget %s "+
-					"(HTTP client timeout %s - %s buffer); raise WithRequestTimeout "+
-					"(or WithExecutionTimeout, which sets the floor) to allow longer runs",
-				timeout, maxRun, r.ce.requestTimeout, requestTimeoutBuffer,
-			)
-		}
-	}
-
 	cwd, err := r.resolveRunCwd(ctx, ws, spec.Cwd)
 	if err != nil {
 		return codeexecutor.RunResult{}, err
@@ -135,47 +101,99 @@ func (r *workspaceRuntime) RunProgram(
 		return codeexecutor.RunResult{}, err
 	}
 
+	stdinRedir, err := r.prepareStdinRedirect(ctx, sb, ws, runDir, spec.Stdin)
+	if err != nil {
+		return codeexecutor.RunResult{}, err
+	}
+	command := buildRunCommand(cwd, runDir, outDir, envAssign, spec, stdinRedir)
+
+	req := osb.RunCommandRequest{
+		Command: command,
+		Cwd:     "", // cwd is already handled by `cd` in the command
+		Timeout: int64(timeout / time.Millisecond),
+	}
+	return r.executeRunCommand(ctx, sb, req)
+}
+
+// resolveRunTimeout normalizes and validates spec.Timeout against the
+// HTTP request budget.
+func (r *workspaceRuntime) resolveRunTimeout(timeout time.Duration) (time.Duration, error) {
+	if timeout <= 0 {
+		timeout = defaultRunTimeout
+	}
+	// Reject sub-millisecond timeouts explicitly. The OpenSandbox API
+	// accepts timeout in integer milliseconds; a value like 500µs would
+	// be truncated to 0, then silently fall back to defaultRunTimeout.
+	if timeout > 0 && timeout < time.Millisecond {
+		return 0, fmt.Errorf(
+			"opensandbox: spec.Timeout %s is below the 1ms API granularity; "+
+				"the OpenSandbox RunCommand timeout is an integer number of "+
+				"milliseconds and sub-millisecond values would be truncated to 0",
+			timeout,
+		)
+	}
+	// The SDK applies ConnectionConfig.RequestTimeout to ALL HTTP
+	// requests including streaming /command.
+	if r.ce.requestTimeout > 0 {
+		maxRun := r.ce.requestTimeout - requestTimeoutBuffer
+		if maxRun > 0 && timeout > maxRun {
+			return 0, fmt.Errorf(
+				"opensandbox: spec.Timeout %s exceeds the request timeout budget %s "+
+					"(HTTP client timeout %s - %s buffer); raise WithRequestTimeout "+
+					"(or WithExecutionTimeout, which sets the floor) to allow longer runs",
+				timeout, maxRun, r.ce.requestTimeout, requestTimeoutBuffer,
+			)
+		}
+	}
+	return timeout, nil
+}
+
+// prepareStdinRedirect uploads stdin to runDir/stdin when non-empty and
+// returns a shell redirect fragment (or "").
+func (r *workspaceRuntime) prepareStdinRedirect(
+	ctx context.Context,
+	sb *osb.Sandbox,
+	ws codeexecutor.Workspace,
+	runDir, stdin string,
+) (string, error) {
+	if stdin == "" {
+		return "", nil
+	}
+	stdinPath := path.Join(runDir, "stdin")
+	// runDir may not exist yet; create it and strip a leaf symlink.
+	if err := r.ensureLayoutDirs(ctx, ws, runDir); err != nil {
+		return "", err
+	}
+	if err := r.removeSymlinksBatch(ctx, []string{stdinPath}, ws.Path); err != nil {
+		return "", err
+	}
+	if err := sb.UploadFiles(ctx, []osb.UploadFileEntry{{
+		File: strings.NewReader(stdin),
+		Options: osb.UploadFileOptions{
+			FileName: "stdin",
+			Metadata: osb.FileMetadata{
+				Path: stdinPath,
+				Mode: osb.OctalMode(0o600),
+			},
+		},
+	}}); err != nil {
+		return "", fmt.Errorf("opensandbox: upload stdin: %w", err)
+	}
+	return " < " + shellQuote(stdinPath), nil
+}
+
+// buildRunCommand assembles the remote shell command for RunProgram.
+func buildRunCommand(
+	cwd, runDir, outDir, envAssign string,
+	spec codeexecutor.RunProgramSpec,
+	stdinRedir string,
+) string {
 	quotedCmd := shellQuote(spec.Cmd)
 	var quotedArgs strings.Builder
 	for _, a := range spec.Args {
 		quotedArgs.WriteByte(' ')
 		quotedArgs.WriteString(shellQuote(a))
 	}
-
-	// Upload stdin as a temp file in the run directory and redirect
-	// from it. This avoids embedding base64-encoded stdin in the
-	// command string, which would inflate the payload by ~33% and
-	// could exceed the OS ARG_MAX limit (typically 128 KiB – 2 MiB)
-	// for large stdin inputs. The temp file is cleaned up with the
-	// runDir by workspace Cleanup.
-	var stdinRedir string
-	if spec.Stdin != "" {
-		stdinPath := path.Join(runDir, "stdin")
-		// runDir is under runsDir which ensureLayoutDirs just verified;
-		// still create it and remove a leaf symlink before upload.
-		if err := r.ensureLayoutDirs(ctx, ws, runDir); err != nil {
-			return codeexecutor.RunResult{}, err
-		}
-		if err := r.removeSymlinksBatch(ctx, []string{stdinPath}, ws.Path); err != nil {
-			return codeexecutor.RunResult{}, err
-		}
-		if err := sb.UploadFiles(ctx, []osb.UploadFileEntry{{
-			File: strings.NewReader(spec.Stdin),
-			Options: osb.UploadFileOptions{
-				FileName: "stdin",
-				Metadata: osb.FileMetadata{
-					Path: stdinPath,
-					Mode: osb.OctalMode(0o600),
-				},
-			},
-		}}); err != nil {
-			return codeexecutor.RunResult{}, fmt.Errorf(
-				"opensandbox: upload stdin: %w", err,
-			)
-		}
-		stdinRedir = " < " + shellQuote(stdinPath)
-	}
-
 	// mkdir -p the runDir and outDir so the spawned program can write
 	// scratch/output files. Layout dirs were already stripped/verified
 	// above; mkdir here is for the per-run subdirectory.
@@ -186,40 +204,26 @@ func (r *workspaceRuntime) RunProgram(
 		envAssign, quotedCmd, quotedArgs.String(),
 		stdinRedir,
 	)
-	// When CleanEnv is requested, the outer wrapper bash must also
-	// start with a minimal environment. Without this, BASH_ENV (if set
-	// in the sandbox env) would cause bash to source an arbitrary file
-	// before the inner `env -i` command runs, and LD_PRELOAD would be
-	// loaded by the dynamic linker before bash starts. Using
-	// `env -i PATH=... bash --norc --noprofile` ensures the wrapper
-	// shell inherits nothing from the sandbox environment and skips
-	// startup files. SupportsCleanEnv: true is a security gate for
-	// command-policy mode, so this boundary must be real.
-	//
-	// Note: previously the CleanEnv wrapper required bash for process
-	// substitution (<(...)) used by the base64 stdin redirect. Now
-	// that stdin is a file redirect (< path), /bin/sh would suffice,
-	// but we keep bash --norc --noprofile for BASH_ENV/LD_PRELOAD
-	// defense.
+	// Best-effort CleanEnv prefix. OpenSandbox execd still merges
+	// os.Environ() into the outer shell, so SupportsCleanEnv is false;
+	// this prefix only helps the inner command string.
 	if spec.CleanEnv {
-		command = "env -i PATH=" + shellQuote(minimalCleanPATH) +
+		return "env -i PATH=" + shellQuote(minimalCleanPATH) +
 			" bash --norc --noprofile -c " + shellQuote(command)
-	} else {
-		command = "bash -c " + shellQuote(command)
 	}
+	return "bash -c " + shellQuote(command)
+}
 
-	req := osb.RunCommandRequest{
-		Command: command,
-		Cwd:     "", // cwd is already handled by `cd` in the command
-		Timeout: int64(timeout / time.Millisecond),
-	}
-
+// executeRunCommand runs a prepared RunCommandRequest with capped
+// stdout/stderr handlers and maps timeout/exit semantics.
+func (r *workspaceRuntime) executeRunCommand(
+	ctx context.Context,
+	sb *osb.Sandbox,
+	req osb.RunCommandRequest,
+) (codeexecutor.RunResult, error) {
 	start := time.Now()
 	// Use ExecutionHandlers with SkipAccumulation to prevent the SDK
-	// from accumulating unbounded stdout/stderr in the Execution
-	// struct. Instead, we copy into our own capped buffers and stop
-	// accepting data once the cap is reached. This bounds host memory
-	// even when a remote command prints continuously.
+	// from accumulating unbounded stdout/stderr in the Execution struct.
 	var (
 		stdoutBuf cappedBuffer
 		stderrBuf cappedBuffer
@@ -236,19 +240,14 @@ func (r *workspaceRuntime) RunProgram(
 		SkipAccumulation: true,
 	}
 	exec, runErr := sb.RunCommandWithOpts(ctx, req, handlers)
-	dur := time.Since(start)
-
 	res := codeexecutor.RunResult{
-		Duration: dur,
+		Duration: time.Since(start),
+		Stdout:   stdoutBuf.string(),
+		Stderr:   stderrBuf.string(),
 	}
-	res.Stdout = stdoutBuf.string()
-	res.Stderr = stderrBuf.string()
 	if exec != nil {
-		// exec.Error carries structured error information (exception
-		// name, value, traceback) from SSE error events. Without this,
-		// a non-numeric evalue would leave ExitCode nil and Stderr
-		// empty, causing ExecuteCode to report only "[exit -1]" and
-		// discard the actual error details.
+		// exec.Error carries structured error information from SSE
+		// error events.
 		if exec.Error != nil {
 			res.Stderr = formatExecutionError(exec.Error, res.Stderr)
 		}
@@ -256,15 +255,13 @@ func (r *workspaceRuntime) RunProgram(
 			res.ExitCode = *exec.ExitCode
 		} else {
 			// ExitCode is nil when the command was killed by a signal
-			// or did not complete. Use -1 to make the failure visible
-			// to callers.
+			// or did not complete. Use -1 to make the failure visible.
 			res.ExitCode = -1
 		}
 	}
 	if runErr != nil {
 		if isTimeoutErr(runErr) {
 			res.TimedOut = true
-			// Don't return the error; surface timeout via RunResult.
 			return res, nil
 		}
 		return res, runErr

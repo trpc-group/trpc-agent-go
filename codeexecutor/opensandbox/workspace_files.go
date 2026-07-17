@@ -47,79 +47,118 @@ func (r *workspaceRuntime) PutFiles(
 
 	entries := make([]osb.UploadFileEntry, 0, len(files))
 	for _, f := range files {
-		clean := path.Clean(filepath.ToSlash(f.Path))
-		if clean == "." || clean == "/" || clean == "" {
-			return fmt.Errorf("invalid file path: %s", f.Path)
-		}
-		finalPath := path.Join(ws.Path, clean)
-		if !pathUnder(finalPath, ws.Path) {
-			return fmt.Errorf("opensandbox: path %q escapes workspace", f.Path)
-		}
-		// Resolve symlinks in the parent directory to prevent a
-		// symlink inside the workspace from redirecting writes
-		// outside. Use resolveSandboxAncestor (not resolveSandboxPath)
-		// because the parent may not yet exist — e.g. uploading
-		// a/b/c/file.txt where a, b, and c are all new directories.
-		resolvedParent, err := r.resolveSandboxAncestor(ctx, path.Dir(finalPath), ws.Path)
+		entry, err := r.buildPutFileEntry(ctx, sb, ws, f)
 		if err != nil {
 			return err
 		}
-		finalPath = path.Join(resolvedParent, path.Base(finalPath))
-		if !pathUnder(finalPath, ws.Path) {
-			return fmt.Errorf("opensandbox: path %q escapes workspace", f.Path)
-		}
-		// Ensure the parent directory exists. The SDK's UploadFiles
-		// creates intermediate directories, but we create them
-		// explicitly to be safe across server versions.
-		parent := resolvedParent
-		if parent != "." && parent != "/" && parent != ws.Path {
-			if err := sb.CreateDirectory(ctx, parent, osb.OctalMode(0o755)); err != nil {
-				return fmt.Errorf("create directory %s: %w", parent, err)
-			}
-		}
-		mode := f.Mode
-		if mode == 0 {
-			mode = 0o644
-		}
-		entries = append(entries, osb.UploadFileEntry{
-			File: bytes.NewReader(f.Content),
-			Options: osb.UploadFileOptions{
-				FileName: path.Base(clean),
-				Metadata: osb.FileMetadata{
-					Path: finalPath,
-					Mode: osb.OctalMode(os.FileMode(mode)),
-				},
-			},
-		})
+		entries = append(entries, entry)
 	}
-	// Immediately before UploadFiles: re-resolve parents (TOCTOU between
-	// CreateDirectory and upload) and remove any leaf symlinks. Process
-	// in uploadBatchSize chunks so a large PutFiles call cannot build an
-	// ARG_MAX-sized shell command or one giant multipart body.
+	return r.uploadEntriesBatched(ctx, sb, ws.Path, entries)
+}
+
+// buildPutFileEntry validates one PutFile, resolves parent symlinks,
+// ensures the parent directory exists, and returns an UploadFileEntry.
+func (r *workspaceRuntime) buildPutFileEntry(
+	ctx context.Context,
+	sb *osb.Sandbox,
+	ws codeexecutor.Workspace,
+	f codeexecutor.PutFile,
+) (osb.UploadFileEntry, error) {
+	clean := path.Clean(filepath.ToSlash(f.Path))
+	if clean == "." || clean == "/" || clean == "" {
+		return osb.UploadFileEntry{}, fmt.Errorf("invalid file path: %s", f.Path)
+	}
+	finalPath := path.Join(ws.Path, clean)
+	if !pathUnder(finalPath, ws.Path) {
+		return osb.UploadFileEntry{}, fmt.Errorf("opensandbox: path %q escapes workspace", f.Path)
+	}
+	// Resolve symlinks in the parent directory to prevent a symlink
+	// inside the workspace from redirecting writes outside. Use
+	// resolveSandboxAncestor because the parent may not yet exist.
+	resolvedParent, err := r.resolveSandboxAncestor(ctx, path.Dir(finalPath), ws.Path)
+	if err != nil {
+		return osb.UploadFileEntry{}, err
+	}
+	finalPath = path.Join(resolvedParent, path.Base(finalPath))
+	if !pathUnder(finalPath, ws.Path) {
+		return osb.UploadFileEntry{}, fmt.Errorf("opensandbox: path %q escapes workspace", f.Path)
+	}
+	if err := r.ensureRemoteDir(ctx, sb, resolvedParent, ws.Path); err != nil {
+		return osb.UploadFileEntry{}, err
+	}
+	mode := f.Mode
+	if mode == 0 {
+		mode = 0o644
+	}
+	return osb.UploadFileEntry{
+		File: bytes.NewReader(f.Content),
+		Options: osb.UploadFileOptions{
+			FileName: path.Base(clean),
+			Metadata: osb.FileMetadata{
+				Path: finalPath,
+				Mode: osb.OctalMode(os.FileMode(mode)),
+			},
+		},
+	}, nil
+}
+
+// ensureRemoteDir creates parent if it is a non-root path under wsBase.
+func (r *workspaceRuntime) ensureRemoteDir(
+	ctx context.Context, sb *osb.Sandbox, parent, wsBase string,
+) error {
+	if parent == "." || parent == "/" || parent == wsBase {
+		return nil
+	}
+	if err := sb.CreateDirectory(ctx, parent, osb.OctalMode(0o755)); err != nil {
+		return fmt.Errorf("create directory %s: %w", parent, err)
+	}
+	return nil
+}
+
+// uploadEntriesBatched re-resolves parents (TOCTOU), strips leaf
+// symlinks, and uploads in uploadBatchSize chunks to bound ARG_MAX
+// and multipart body size.
+func (r *workspaceRuntime) uploadEntriesBatched(
+	ctx context.Context,
+	sb *osb.Sandbox,
+	wsBase string,
+	entries []osb.UploadFileEntry,
+) error {
 	for start := 0; start < len(entries); start += uploadBatchSize {
 		end := start + uploadBatchSize
 		if end > len(entries) {
 			end = len(entries)
 		}
 		batch := entries[start:end]
-		for i := range batch {
-			p := batch[i].Options.Metadata.Path
-			resolvedParent, err := r.resolveSandboxAncestor(ctx, path.Dir(p), ws.Path)
-			if err != nil {
-				return err
-			}
-			finalPath := path.Join(resolvedParent, path.Base(p))
-			if !pathUnder(finalPath, ws.Path) {
-				return fmt.Errorf("opensandbox: path %q escapes workspace", finalPath)
-			}
-			batch[i].Options.Metadata.Path = finalPath
+		if err := r.revalidateUploadBatch(ctx, wsBase, batch); err != nil {
+			return err
 		}
-		if err := r.removeSymlinksBatch(ctx, uploadPaths(batch), ws.Path); err != nil {
+		if err := r.removeSymlinksBatch(ctx, uploadPaths(batch), wsBase); err != nil {
 			return err
 		}
 		if err := sb.UploadFiles(ctx, batch); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// revalidateUploadBatch re-resolves each entry parent immediately
+// before upload and updates Metadata.Path in place.
+func (r *workspaceRuntime) revalidateUploadBatch(
+	ctx context.Context, wsBase string, batch []osb.UploadFileEntry,
+) error {
+	for i := range batch {
+		p := batch[i].Options.Metadata.Path
+		resolvedParent, err := r.resolveSandboxAncestor(ctx, path.Dir(p), wsBase)
+		if err != nil {
+			return err
+		}
+		finalPath := path.Join(resolvedParent, path.Base(p))
+		if !pathUnder(finalPath, wsBase) {
+			return fmt.Errorf("opensandbox: path %q escapes workspace", finalPath)
+		}
+		batch[i].Options.Metadata.Path = finalPath
 	}
 	return nil
 }
