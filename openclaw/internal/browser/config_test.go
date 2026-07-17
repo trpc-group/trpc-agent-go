@@ -147,6 +147,7 @@ func TestResolveConfig_NavigationPolicyApplied(t *testing.T) {
 		AllowLoopback:    &allow,
 		AllowPrivateNet:  &allow,
 		AllowFileURLs:    &allow,
+		AllowSearchPages: &allow,
 		AllowedFileRoots: []string{"/tmp/openclaw-uploads"},
 		Profiles: []ProfileConfig{{
 			Transport: transportStdio,
@@ -165,11 +166,30 @@ func TestResolveConfig_NavigationPolicyApplied(t *testing.T) {
 	require.True(t, got.Navigation.AllowLoopback)
 	require.True(t, got.Navigation.AllowPrivateNet)
 	require.True(t, got.Navigation.AllowFileURLs)
+	require.True(t, got.Navigation.AllowSearchPages)
 	require.Equal(
 		t,
 		normalizeFileRoots([]string{"/tmp/openclaw-uploads"}),
 		got.Navigation.AllowedFileRoots,
 	)
+}
+
+func TestResolveConfig_BlockedPageDetectionDefaultsOnAndCanDisable(t *testing.T) {
+	t.Parallel()
+
+	base := Config{Profiles: []ProfileConfig{{
+		Transport: transportStdio,
+		Command:   "npx",
+	}}}
+	got, err := resolveConfig(base)
+	require.NoError(t, err)
+	require.True(t, got.DetectBlocked)
+
+	disabled := false
+	base.DetectBlocked = &disabled
+	got, err = resolveConfig(base)
+	require.NoError(t, err)
+	require.False(t, got.DetectBlocked)
 }
 
 func TestResolveConfig_ServerTargetsAllowEmptyProfileTransport(t *testing.T) {
@@ -203,7 +223,11 @@ func TestResolveConfig_ServerTargetsAllowEmptyProfileTransport(t *testing.T) {
 	)
 	require.Equal(t, "sandbox-token", got.SandboxServer.AuthToken)
 	require.Contains(t, got.NodeTargets, "edge")
-	require.Equal(t, "http://node.example:9444", got.NodeTargets["edge"].ServerURL)
+	require.Equal(
+		t,
+		"http://node.example:9444",
+		got.NodeTargets["edge"].ServerURL,
+	)
 	require.Empty(t, got.Profiles[0].Connection.Transport)
 }
 

@@ -360,7 +360,10 @@ func TestToolCall_BrowserBackendCrashGuardStartStopResetBlockedState(
 		)
 		require.NoError(t, err)
 	}
-	_, err = tool.Call(ctx, mustJSON(t, map[string]any{"action": actionProfiles}))
+	_, err = tool.Call(
+		ctx,
+		mustJSON(t, map[string]any{"action": actionProfiles}),
+	)
 	require.NoError(t, err)
 	raw, err = tool.Call(
 		ctx,
@@ -726,7 +729,11 @@ func TestToolCall_ProfilesAreSorted(t *testing.T) {
 	require.Equal(t, driverTypePlaywrightMCP, got.Profiles[0].Driver)
 	require.Equal(t, driverTypePlaywrightMCP, got.Profiles[1].Driver)
 	require.NotNil(t, got.NavigationPolicy)
-	require.Equal(t, []string{"example.com"}, got.NavigationPolicy.AllowedDomains)
+	require.Equal(
+		t,
+		[]string{"example.com"},
+		got.NavigationPolicy.AllowedDomains,
+	)
 	require.Equal(
 		t,
 		[]string{"blocked.example"},
@@ -816,6 +823,31 @@ func TestToolCall_OpenCreatesThenNavigates(t *testing.T) {
 		"https://example.com",
 		drv.calls[1].Args["url"],
 	)
+}
+
+func TestToolCall_OpenBlocksSearchResultPageBeforeCreatingTab(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	drv := &fakeDriver{}
+	tool := newTestTool(drv)
+
+	raw, err := tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action": actionOpen,
+			"url":    "https://www.google.com/search?q=openclaw",
+		}),
+	)
+	require.NoError(t, err)
+
+	got := raw.(Result)
+	require.Equal(t, actionOpen, got.Action)
+	require.Equal(t, stateBlocked, got.State)
+	require.Contains(t, got.Text, "search-engine result page")
+	require.Contains(t, got.Text, "allow_search_result_pages")
+	require.Empty(t, drv.calls)
 }
 
 func TestToolCall_FillUsesFillForm(t *testing.T) {
@@ -1248,6 +1280,10 @@ func TestNewTool_DeclarationExposesSchema(t *testing.T) {
 	require.Equal(t, ToolName, decl.Name)
 	require.Contains(t, decl.Description, "current browser tab")
 	require.Contains(t, decl.Description, "not for direct inspection")
+	require.Contains(t, decl.Description, "general web search engine")
+	require.Contains(t, decl.Description, "Google Scholar")
+	require.Contains(t, decl.Description, "CAPTCHA")
+	require.Contains(t, decl.Description, "unusual traffic warning")
 	require.Contains(t, decl.Description, "file://, data:, or ad hoc localhost")
 	require.Contains(t, decl.Description, "MEDIA or MEDIA_DIR")
 	require.Contains(t, decl.Description, "evaluate action is disabled")
@@ -1729,6 +1765,156 @@ func TestToolCall_NavigateAcceptsTargetURL(t *testing.T) {
 	require.Equal(t, "https://example.com", drv.calls[0].Args["url"])
 }
 
+func TestToolCall_NavigateBlocksSearchResultPage(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{}
+	tool := newTestTool(drv)
+
+	raw, err := tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action":   actionNavigate,
+			"targetId": "tab-2",
+			"url":      "https://search.brave.com/search?q=openclaw",
+		}),
+	)
+	require.NoError(t, err)
+
+	got := raw.(Result)
+	require.Equal(t, actionNavigate, got.Action)
+	require.Equal(t, stateBlocked, got.State)
+	require.Contains(t, got.Text, "Brave Search")
+	require.Empty(t, drv.calls)
+}
+
+func TestToolCall_NavigateBlocksRedirectedSearchResultPage(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{callResult: map[string]any{
+		mcpToolNavigate: map[string]any{
+			"content": textPayload("navigated"),
+			"url":     "https://www.google.com/search?q=redirected",
+		},
+	}}
+	raw, err := newTestTool(drv).Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action": actionNavigate,
+			"url":    "https://example.com/redirect",
+		}),
+	)
+	require.NoError(t, err)
+
+	got := raw.(Result)
+	require.Equal(t, stateBlocked, got.State)
+	require.Contains(t, got.Text, "Google search")
+}
+
+func TestToolCall_ActBlocksResultingSearchPage(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{callResult: map[string]any{
+		mcpToolClick: map[string]any{
+			"content": textPayload("clicked"),
+			"url":     "https://www.bing.com/search?q=clicked",
+		},
+	}}
+	raw, err := newTestTool(drv).Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action": actionAct,
+			"request": map[string]any{
+				"kind": actClick,
+				"ref":  "e1",
+			},
+		}),
+	)
+	require.NoError(t, err)
+
+	got := raw.(Result)
+	require.Equal(t, stateBlocked, got.State)
+	require.Contains(t, got.Text, "Bing search")
+}
+
+func TestToolCall_NavigateAllowsSearchResultPageWhenConfigured(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	drv := &fakeDriver{
+		callResult: map[string]any{
+			mcpToolNavigate: textPayload("navigated"),
+		},
+	}
+	tool := newToolWithDrivers(
+		defaultProfileName,
+		false,
+		navigationPolicy{AllowSearchPages: true},
+		nil,
+		nil,
+		nil,
+		map[string]ProfileConfig{
+			defaultProfileName: {Name: defaultProfileName},
+		},
+		map[string]driver{
+			defaultProfileName: drv,
+		},
+	)
+
+	raw, err := tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action": actionNavigate,
+			"url":    "https://search.brave.com/search?q=openclaw",
+		}),
+	)
+	require.NoError(t, err)
+
+	got := raw.(Result)
+	require.Equal(t, actionNavigate, got.Action)
+	require.NotEqual(t, stateBlocked, got.State)
+	require.Len(t, drv.calls, 1)
+	require.Equal(t, mcpToolNavigate, drv.calls[0].Tool)
+}
+
+func TestTextResultBlockedDetectionIsConfigurableAndActionAware(t *testing.T) {
+	t.Parallel()
+
+	challenge := textPayload(
+		"Anti-bot security check: access blocked; verify to continue.",
+	)
+	tool := newTestTool(&fakeDriver{})
+
+	pageResult := tool.textResult(
+		actionSnapshot,
+		defaultProfileName,
+		driverTypePlaywrightMCP,
+		nil,
+		challenge,
+	)
+	require.Equal(t, stateBlocked, pageResult.State)
+
+	consoleResult := tool.textResult(
+		actionConsole,
+		defaultProfileName,
+		driverTypePlaywrightMCP,
+		nil,
+		challenge,
+	)
+	require.NotEqual(t, stateBlocked, consoleResult.State)
+
+	tool.detectBlocked = false
+	disabledResult := tool.textResult(
+		actionSnapshot,
+		defaultProfileName,
+		driverTypePlaywrightMCP,
+		nil,
+		challenge,
+	)
+	require.NotEqual(t, stateBlocked, disabledResult.State)
+}
+
 func TestToolCall_NavigateCompactsBrowserCrashOutput(t *testing.T) {
 	t.Parallel()
 
@@ -1753,6 +1939,35 @@ func TestToolCall_NavigateCompactsBrowserCrashOutput(t *testing.T) {
 	require.NotContains(t, got.Text, "--disable-field-trial-config")
 	require.NotContains(t, got.Text, browserLaunchMarker)
 	require.Less(t, len(got.Text), 800)
+}
+
+func TestToolCall_NavigateMarksBlockedChallengePage(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{
+		callResult: map[string]any{
+			mcpToolNavigate: blockedChallengePayload(),
+		},
+	}
+	tool := newTestTool(drv)
+
+	raw, err := tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action": actionNavigate,
+			"url":    "https://example.com",
+		}),
+	)
+	require.NoError(t, err)
+
+	got := raw.(Result)
+	require.Equal(t, actionNavigate, got.Action)
+	require.Equal(t, stateBlocked, got.State)
+	require.Equal(t, blockedBrowserPageWarning, got.Warning)
+	require.Contains(t, got.Text, "web_fetch")
+	require.Contains(t, got.Text, "Just a moment")
+	require.Len(t, drv.calls, 1)
+	require.Equal(t, mcpToolNavigate, drv.calls[0].Tool)
 }
 
 func TestToolCall_ActWithURLDefaultsToNavigate(t *testing.T) {
@@ -2068,6 +2283,29 @@ func TestToolCall_ActNavigateRoutesToBrowserNavigate(t *testing.T) {
 			require.Equal(t, tc.wantURL, drv.calls[0].Args["url"])
 		})
 	}
+}
+
+func TestToolCall_ActNavigateBlocksSearchResultPage(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{}
+	tool := newTestTool(drv)
+
+	raw, err := tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action": actionAct,
+			"kind":   actionNavigate,
+			"url":    "https://www.bing.com/search?q=openclaw",
+		}),
+	)
+	require.NoError(t, err)
+
+	got := raw.(Result)
+	require.Equal(t, actionAct, got.Action)
+	require.Equal(t, stateBlocked, got.State)
+	require.Contains(t, got.Text, "Bing search")
+	require.Empty(t, drv.calls)
 }
 
 func TestToolCall_ActRoutesLegacyFields(t *testing.T) {
@@ -3871,6 +4109,35 @@ func TestToolCall_WaitActionAlias(t *testing.T) {
 	require.Equal(t, "Ready", drv.calls[0].Args["text"])
 }
 
+func TestToolCall_WaitMarksBlockedChallengePage(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{
+		callResult: map[string]any{
+			mcpToolWait: blockedChallengePayload(),
+		},
+	}
+	tool := newTestTool(drv)
+
+	raw, err := tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action": actionWait,
+			"timeMs": 1000,
+		}),
+	)
+	require.NoError(t, err)
+
+	got := raw.(Result)
+	require.Equal(t, actionAct, got.Action)
+	require.Equal(t, stateBlocked, got.State)
+	require.Equal(t, blockedBrowserPageWarning, got.Warning)
+	require.Contains(t, got.Text, "retrying")
+	require.Contains(t, got.Text, "Just a moment")
+	require.Len(t, drv.calls, 1)
+	require.Equal(t, mcpToolWait, drv.calls[0].Tool)
+}
+
 func TestToolCall_ActWithWaitFieldsDefaultsToWait(t *testing.T) {
 	t.Parallel()
 
@@ -4678,6 +4945,14 @@ func textPayload(text string) []map[string]any {
 
 func browserCrashPayload() []map[string]any {
 	return textPayload(browserCrashPayloadText())
+}
+
+func blockedChallengePayload() []map[string]any {
+	return textPayload(
+		"Page Title: Just a moment...\n" +
+			"Checking if the site connection is secure\n" +
+			"Cloudflare Ray ID: test",
+	)
 }
 
 func browserCrashPayloadText() string {
