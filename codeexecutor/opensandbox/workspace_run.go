@@ -160,7 +160,8 @@ func (r *workspaceRuntime) prepareStdinRedirect(
 		return "", nil
 	}
 	stdinPath := path.Join(runDir, "stdin")
-	// runDir may not exist yet; create it and strip a leaf symlink.
+	// runDir may not exist yet; create it. removeSymlinksBatch is
+	// currently a lexical no-op (see its doc comment).
 	if err := r.ensureLayoutDirs(ctx, ws, runDir); err != nil {
 		return "", err
 	}
