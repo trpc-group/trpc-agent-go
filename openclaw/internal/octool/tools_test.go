@@ -452,6 +452,33 @@ func TestManagerStartBackgroundRejectsCanceledParentContext(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 }
 
+func TestManagerStartBackgroundStopsCancellationOnStartFailure(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("pty and process startup behavior is unix-specific")
+	}
+
+	for _, usePTY := range []bool{false, true} {
+		t.Run(fmt.Sprintf("pty=%t", usePTY), func(t *testing.T) {
+			mgr := NewManager()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			sess, err := mgr.startBackground(
+				ctx,
+				execParams{
+					Command: "printf unexpected",
+					Workdir: filepath.Join(t.TempDir(), "missing"),
+					Pty:     usePTY,
+				},
+				time.Second,
+				nil,
+			)
+			require.Nil(t, sess)
+			require.Error(t, err)
+		})
+	}
+}
+
 func TestExecTool_RuntimeProfileWorkspacePolicy(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash is not available")
@@ -1170,6 +1197,30 @@ func TestExecTool_CancelAtSessionHandoffLeavesNoRunningSession(t *testing.T) {
 	}, 500*time.Millisecond, 20*time.Millisecond)
 }
 
+func TestExecTool_CancelAtYieldHandoffLeavesNoRunningSession(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash is not available")
+	}
+
+	mgr := NewManager(WithJobTTL(10 * time.Second))
+	ctx, cancel := context.WithCancel(context.Background())
+	mgr.beforeSessionHandoff = cancel
+	yieldMs := 10
+
+	res, err := mgr.Exec(ctx, execParams{
+		Command: "sleep 5",
+		YieldMs: &yieldMs,
+	})
+	require.ErrorIs(t, err, context.Canceled)
+	require.Empty(t, res.SessionID)
+
+	require.Eventually(t, func() bool {
+		mgr.mu.Lock()
+		defer mgr.mu.Unlock()
+		return len(mgr.sessions) == 0
+	}, time.Second, 20*time.Millisecond)
+}
+
 func TestCommitRunningSession_RechecksCanceledParentAfterDetach(
 	t *testing.T,
 ) {
@@ -1197,6 +1248,34 @@ func TestCommitRunningSession_RechecksCanceledParentAfterDetach(
 	_, exists := mgr.sessions[sess.id]
 	mgr.mu.Unlock()
 	require.False(t, exists)
+}
+
+func TestCommitRunningSession_RejectsCompletedCancellationWithoutParent(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	mgr := NewManager()
+	sess := newSession("completed-cancel", "sleep", defaultMaxLines)
+	sess.parentCancelStop = func() bool { return false }
+	sess.cancel = func() {
+		sess.markDone(-1)
+	}
+	mgr.sessions[sess.id] = sess
+
+	err := mgr.commitRunningSession(nil, sess)
+	require.ErrorIs(t, err, context.Canceled)
+	mgr.mu.Lock()
+	_, exists := mgr.sessions[sess.id]
+	mgr.mu.Unlock()
+	require.False(t, exists)
+}
+
+func TestSessionDetachParentCancellationWithoutParent(t *testing.T) {
+	t.Parallel()
+
+	sess := newSession("no-parent", "printf ok", defaultMaxLines)
+	require.True(t, sess.detachParentCancellation())
 }
 
 func TestExecTool_DefaultTimeoutKillsProcessGroup(t *testing.T) {
