@@ -113,34 +113,43 @@ func ApplyDeclarations(base []tool.Tool, declarations []tool.Declaration) []tool
 	return out
 }
 
-// ResolveDeclaration unwraps framework declaration overlays.
+// ResolveDeclaration unwraps framework declaration overlays. The traversal is
+// depth-bounded so a cyclic wrapper chain cannot cause unbounded recursion.
 func ResolveDeclaration(t tool.Tool) tool.Tool {
-	switch current := t.(type) {
-	case nil:
-		return nil
-	case declarationWrapper:
-		return ResolveDeclaration(current.originalTool())
-	case toolUnwrapper:
-		return ResolveDeclaration(current.Unwrap())
-	default:
-		return t
+	for i := 0; i < maxToolUnwrapDepth; i++ {
+		switch current := t.(type) {
+		case nil:
+			return nil
+		case declarationWrapper:
+			t = current.originalTool()
+		case toolUnwrapper:
+			t = current.Unwrap()
+		default:
+			return t
+		}
 	}
+	return t
 }
 
-// ResolveSemantic unwraps framework wrappers for semantic capability checks.
+// ResolveSemantic unwraps framework wrappers for semantic capability checks. The
+// traversal is depth-bounded so a cyclic wrapper chain cannot cause unbounded
+// recursion.
 func ResolveSemantic(t tool.Tool) tool.Tool {
-	switch current := t.(type) {
-	case nil:
-		return nil
-	case declarationWrapper:
-		return ResolveSemantic(current.originalTool())
-	case *NamedTool:
-		return ResolveSemantic(current.Original())
-	case toolUnwrapper:
-		return ResolveSemantic(current.Unwrap())
-	default:
-		return t
+	for i := 0; i < maxToolUnwrapDepth; i++ {
+		switch current := t.(type) {
+		case nil:
+			return nil
+		case declarationWrapper:
+			t = current.originalTool()
+		case *NamedTool:
+			t = current.Original()
+		case toolUnwrapper:
+			t = current.Unwrap()
+		default:
+			return t
+		}
 	}
+	return t
 }
 
 type declarationTool struct {

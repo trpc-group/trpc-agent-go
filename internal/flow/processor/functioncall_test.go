@@ -974,7 +974,7 @@ func TestFunctionCallResponseProcessor_AttachStateDelta(t *testing.T) {
 			deltaKey1: []byte(deltaVal1),
 		},
 	}
-	p.attachStateDelta(inv, tl, args, choice, ev)
+	p.attachStateDelta(inv, tl, args, nil, choice, ev)
 	require.Equal(t, []byte(deltaVal1), ev.StateDelta[deltaKey1])
 
 	ev2 := &event.Event{}
@@ -984,7 +984,7 @@ func TestFunctionCallResponseProcessor_AttachStateDelta(t *testing.T) {
 			deltaKey2: []byte(deltaVal2),
 		},
 	}
-	p.attachStateDelta(inv, tl2, args, choice, ev2)
+	p.attachStateDelta(inv, tl2, args, nil, choice, ev2)
 	require.Equal(t, []byte(deltaVal2), ev2.StateDelta[deltaKey2])
 }
 

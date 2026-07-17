@@ -28,10 +28,17 @@ type resultCodecProvider interface {
 	ResultCodec() resultcodec.Codec
 }
 
+// maxToolUnwrapDepth bounds wrapper-chain traversal so a self-referential or
+// mutually cyclic wrapper (for example an extension-provided Unwrap()) cannot
+// cause an infinite loop or stack exhaustion.
+const maxToolUnwrapDepth = 128
+
 // ResolveResultCodec walks the tool wrapper chain from outermost to innermost
 // and returns the first non-nil result codec, or nil when none is configured.
+// The traversal is depth-bounded for cycle safety.
 func ResolveResultCodec(t tool.Tool) resultcodec.Codec {
-	for cur := t; cur != nil; {
+	cur := t
+	for i := 0; i < maxToolUnwrapDepth && cur != nil; i++ {
 		if p, ok := cur.(resultCodecProvider); ok {
 			if c := p.ResultCodec(); c != nil {
 				return c
@@ -45,7 +52,7 @@ func ResolveResultCodec(t tool.Tool) resultcodec.Codec {
 		case toolUnwrapper:
 			cur = w.Unwrap()
 		default:
-			cur = nil
+			return nil
 		}
 	}
 	return nil

@@ -51,6 +51,11 @@ func (textCodec) Encode(_ context.Context, result any) (string, error) {
 	case []byte:
 		return toValidUTF8(string(v)), nil
 	case encoding.TextMarshaler:
+		// A typed-nil pointer still matches this case; calling MarshalText on it
+		// may panic, so treat nilable nil values as the empty string.
+		if isNilValue(v) {
+			return "", nil
+		}
 		b, err := v.MarshalText()
 		if err != nil {
 			return "", err
@@ -78,4 +83,17 @@ func (textCodec) Encode(_ context.Context, result any) (string, error) {
 // copy with each invalid byte sequence replaced by U+FFFD.
 func toValidUTF8(s string) string {
 	return strings.ToValidUTF8(s, replacementChar)
+}
+
+// isNilValue reports whether v holds a nil value for a nilable kind, so callers
+// can avoid invoking methods on a typed-nil receiver.
+func isNilValue(v any) bool {
+	rv := reflect.ValueOf(v)
+	switch rv.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface,
+		reflect.Map, reflect.Pointer, reflect.Slice:
+		return rv.IsNil()
+	default:
+		return false
+	}
 }

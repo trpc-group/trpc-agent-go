@@ -86,7 +86,7 @@ func writeXMLElement(buf *bytes.Buffer, name, keyAttr string, value any) error {
 	buf.WriteString(name)
 	if keyAttr != "" {
 		buf.WriteString(` key="`)
-		if err := xml.EscapeText(buf, []byte(keyAttr)); err != nil {
+		if err := escapeXMLText(buf, keyAttr); err != nil {
 			return err
 		}
 		buf.WriteByte('"')
@@ -129,9 +129,9 @@ func writeXMLValue(buf *bytes.Buffer, value any) error {
 			}
 		}
 	case json.Number:
-		return xml.EscapeText(buf, []byte(v.String()))
+		return escapeXMLText(buf, v.String())
 	case string:
-		return xml.EscapeText(buf, []byte(v))
+		return escapeXMLText(buf, v)
 	case bool:
 		if v {
 			buf.WriteString("true")
@@ -142,6 +142,38 @@ func writeXMLValue(buf *bytes.Buffer, value any) error {
 		return fmt.Errorf("resultcodec: XML cannot encode value of type %T", value)
 	}
 	return nil
+}
+
+// escapeXMLText validates s for XML 1.0-legal characters and writes the escaped
+// text. Unlike xml.EscapeText alone, it rejects XML-illegal runes (for example
+// control characters that a JSON value can carry) with an error instead of
+// silently replacing them with U+FFFD, which would lose data.
+func escapeXMLText(buf *bytes.Buffer, s string) error {
+	if err := validateXMLText(s); err != nil {
+		return err
+	}
+	return xml.EscapeText(buf, []byte(s))
+}
+
+// validateXMLText returns an error if s contains a rune that is illegal in XML.
+func validateXMLText(s string) error {
+	for _, r := range s {
+		if !isValidXMLChar(r) {
+			return fmt.Errorf(
+				"resultcodec: XML cannot encode illegal character %#U",
+				r,
+			)
+		}
+	}
+	return nil
+}
+
+// isValidXMLChar reports whether r is allowed by the XML 1.0 Char production.
+func isValidXMLChar(r rune) bool {
+	return r == 0x09 || r == 0x0A || r == 0x0D ||
+		(r >= 0x20 && r <= 0xD7FF) ||
+		(r >= 0xE000 && r <= 0xFFFD) ||
+		(r >= 0x10000 && r <= 0x10FFFF)
 }
 
 // xmlElementName returns the element name for a JSON object key. A key that is a

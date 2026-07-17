@@ -88,6 +88,24 @@ func TestText_InvalidUTF8ReplacedWithU_FFFD(t *testing.T) {
 	}
 }
 
+type panicOnNilMarshaler struct{ s string }
+
+// MarshalText dereferences the receiver, so it panics on a typed-nil pointer.
+func (m *panicOnNilMarshaler) MarshalText() ([]byte, error) {
+	return []byte(m.s), nil
+}
+
+func TestText_TypedNilTextMarshaler(t *testing.T) {
+	var p *panicOnNilMarshaler // typed-nil pointer implementing TextMarshaler
+	got, err := Text().Encode(context.Background(), p)
+	if err != nil {
+		t.Fatalf("Encode error: %v", err)
+	}
+	if got != "" {
+		t.Errorf("typed-nil TextMarshaler should encode to empty string, got %q", got)
+	}
+}
+
 func TestText_ErrorOnStructuredResult(t *testing.T) {
 	type payload struct {
 		A int

@@ -21,6 +21,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 	"trpc.group/trpc-go/trpc-agent-go/tool/resultcodec"
@@ -381,6 +382,62 @@ func TestExecuteToolCall_PermissionResult_BypassesCodec(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(content), &pr))
 	assert.Equal(t, tool.PermissionResultStatusDenied, pr.Status)
 	assert.Equal(t, "danger", pr.Tool)
+}
+
+// recordingStateDeltaTool records the content bytes it receives for state
+// deltas, so a test can assert the codec does not leak into the state-delta path.
+type recordingStateDeltaTool struct {
+	declaration *tool.Declaration
+	result      any
+	gotContent  []byte
+}
+
+func (r *recordingStateDeltaTool) Declaration() *tool.Declaration { return r.declaration }
+func (r *recordingStateDeltaTool) Call(_ context.Context, _ []byte) (any, error) {
+	return r.result, nil
+}
+func (r *recordingStateDeltaTool) StateDelta(_ string, _ []byte, content []byte) map[string][]byte {
+	r.gotContent = append([]byte(nil), content...)
+	return map[string][]byte{"k": []byte("v")}
+}
+
+func TestExecuteToolCall_StateDeltaUsesJSONNotCodec(t *testing.T) {
+	ctx := context.Background()
+	res := codecTestResult{ExitCode: 0, Output: "<ok>"}
+	base := &recordingStateDeltaTool{
+		declaration: &tool.Declaration{Name: "stateful"},
+		result:      res,
+	}
+	// Bind an XML codec; the state-delta path must still receive JSON.
+	wrapped := resultcodec.Wrap(base, resultcodec.XML())
+	tools := map[string]tool.Tool{"stateful": wrapped}
+	p := NewFunctionCallResponseProcessor(false, nil)
+	inv := &agent.Invocation{
+		AgentName: "a",
+		Model:     &mockModel{},
+		Session:   &session.Session{},
+	}
+	pc := model.ToolCall{
+		ID:       "c1",
+		Function: model.FunctionDefinitionParam{Name: "stateful", Arguments: []byte(`{}`)},
+	}
+	ev, err := p.executeSingleToolCallSequential(
+		ctx, inv, &model.Response{}, tools, make(chan *event.Event, 8), 0, pc,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, ev)
+	require.NotEmptyf(t, ev.Choices, "expected a tool result choice")
+
+	// The model-visible message is XML.
+	wantXML, err := resultcodec.XML().Encode(ctx, res)
+	require.NoError(t, err)
+	assert.Equal(t, wantXML, ev.Choices[0].Message.Content)
+
+	// But the stateful tool received JSON, not the codec output.
+	wantJSON, err := resultcodec.JSON().Encode(ctx, res)
+	require.NoError(t, err)
+	assert.Equal(t, wantJSON, string(base.gotContent))
+	assert.NotContains(t, string(base.gotContent), "<result>")
 }
 
 func TestExecuteToolCall_WrapBindsCodec(t *testing.T) {

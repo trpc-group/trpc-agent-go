@@ -108,6 +108,11 @@ type toolEventStateDelta struct {
 	sessionBaseline session.StateMap
 	args            []byte
 	choice          model.Choice
+	// content holds the JSON-encoded tool result used to compute stateful-tool
+	// state deltas. It keeps state deltas on JSON even when a result codec
+	// changes the model-visible message. When nil, the choice message content is
+	// used (the default JSON behavior).
+	content []byte
 }
 
 type resolvedToolContextKey struct{}
@@ -115,6 +120,19 @@ type stateDeltaSessionBaselineContextKey struct{}
 type executingToolArgsContextKey struct{}
 type skipToolStateDeltaContextKey struct{}
 type skipToolSkipSummarizationContextKey struct{}
+type stateDeltaContentContextKey struct{}
+
+// withStateDeltaContent stores the JSON-encoded tool result used to compute
+// stateful-tool state deltas, so a per-tool result codec only changes the
+// model-visible message and not the bytes stateful tools parse.
+func withStateDeltaContent(ctx context.Context, content []byte) context.Context {
+	return context.WithValue(ctx, stateDeltaContentContextKey{}, content)
+}
+
+func stateDeltaContentFromContext(ctx context.Context) []byte {
+	content, _ := ctx.Value(stateDeltaContentContextKey{}).([]byte)
+	return content
+}
 
 // toolResult holds the result of a single tool execution.
 type toolResult struct {
@@ -1351,18 +1369,25 @@ func (p *FunctionCallResponseProcessor) decorateToolCallResponseEvent(
 	return ev
 }
 
-// attachStateDelta copies tool-provided state delta to the event.
+// attachStateDelta copies tool-provided state delta to the event. stateContent
+// is the JSON-encoded tool result used as the state-delta input; when nil the
+// choice message content is used (the default JSON behavior). This keeps state
+// deltas on JSON even when a result codec changes the model-visible message.
 func (p *FunctionCallResponseProcessor) attachStateDelta(
 	inv *agent.Invocation,
 	tl tool.Tool,
 	args []byte,
+	stateContent []byte,
 	choice *model.Choice,
 	ev *event.Event,
 ) {
 	if tl == nil || choice == nil || ev == nil {
 		return
 	}
-	b := []byte(choice.Message.Content)
+	b := stateContent
+	if b == nil {
+		b = []byte(choice.Message.Content)
+	}
 	toolCallID := choice.Message.ToolID
 
 	type stateDeltaProvider interface {
@@ -1431,6 +1456,7 @@ func (p *FunctionCallResponseProcessor) buildToolEventStateDelta(
 		sessionBaseline: stateDeltaSessionBaseline(ctx),
 		args:            args,
 		choice:          choices[0],
+		content:         stateDeltaContentFromContext(ctx),
 	}
 }
 
@@ -1639,6 +1665,7 @@ func (p *FunctionCallResponseProcessor) attachStateDeltaToToolResults(
 				stateDeltaInv,
 				result.stateDelta.tool,
 				result.stateDelta.args,
+				result.stateDelta.content,
 				&result.stateDelta.choice,
 				result.event,
 			)
@@ -1863,6 +1890,15 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 		// output. Never run the tool's result codec on them so denied and
 		// approval-required messages keep their default encoding.
 		codec = nil
+	}
+	if codec != nil {
+		// A result codec only changes the model-visible message. Stateful tools
+		// compute their state delta from the tool result content, which must stay
+		// JSON so JSON-parsing tools are not broken by the codec. Preserve the
+		// default JSON bytes for the state-delta path.
+		if stateContent, jerr := marshalJSONNoHTMLEscape(result); jerr == nil {
+			ctx = withStateDeltaContent(ctx, stateContent)
+		}
 	}
 	if suppressDefaultToolMessage {
 		defaultMsg, err := buildDefaultToolMessage(ctx, toolCall.ID, result, codec)

@@ -84,3 +84,26 @@ func TestResolveDeclaration_SeesThroughResultCodecWrap(t *testing.T) {
 		t.Fatal("LongRunning should be true through the wrapper")
 	}
 }
+
+// rcSelfUnwrap returns itself from Unwrap, forming a cycle.
+type rcSelfUnwrap struct {
+	name string
+}
+
+func (s *rcSelfUnwrap) Declaration() *tool.Declaration { return &tool.Declaration{Name: s.name} }
+func (s *rcSelfUnwrap) Unwrap() tool.Tool              { return s }
+
+func TestResolvers_CyclicUnwrapTerminate(t *testing.T) {
+	// A cyclic Unwrap() chain must not cause unbounded recursion; the
+	// depth-bounded traversals return instead of hanging or overflowing.
+	s := &rcSelfUnwrap{name: "cyclic"}
+	if got := ResolveSemantic(s); got == nil {
+		t.Fatal("ResolveSemantic should return a tool, not nil")
+	}
+	if got := ResolveDeclaration(s); got == nil {
+		t.Fatal("ResolveDeclaration should return a tool, not nil")
+	}
+	if got := ResolveResultCodec(s); got != nil {
+		t.Fatal("ResolveResultCodec should return nil when no codec is present")
+	}
+}

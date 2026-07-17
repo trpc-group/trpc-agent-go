@@ -154,6 +154,78 @@ func TestWrap_PreservesSkipSummarization(t *testing.T) {
 	}
 }
 
+// unwrapOnlyTool exposes only Unwrap(), hiding the inner tool's capabilities
+// unless the wrapper resolves them through the full chain.
+type unwrapOnlyTool struct {
+	inner tool.Tool
+}
+
+func (u *unwrapOnlyTool) Declaration() *tool.Declaration { return u.inner.Declaration() }
+func (u *unwrapOnlyTool) Call(ctx context.Context, args []byte) (any, error) {
+	return u.inner.(tool.CallableTool).Call(ctx, args)
+}
+func (u *unwrapOnlyTool) Unwrap() tool.Tool { return u.inner }
+
+// denyingTool implements PermissionChecker with a deny decision.
+type denyingTool struct {
+	decl *tool.Declaration
+}
+
+func (d *denyingTool) Declaration() *tool.Declaration            { return d.decl }
+func (d *denyingTool) Call(context.Context, []byte) (any, error) { return "called", nil }
+func (d *denyingTool) CheckPermission(
+	context.Context,
+	*tool.PermissionRequest,
+) (tool.PermissionDecision, error) {
+	return tool.DenyPermission("nope"), nil
+}
+
+func TestWrap_ResolvesPermissionThroughChain(t *testing.T) {
+	// codecTool -> unwrapOnlyTool (no permission) -> denyingTool (deny).
+	base := &denyingTool{decl: &tool.Declaration{Name: "danger"}}
+	mid := &unwrapOnlyTool{inner: base}
+	wrapped := Wrap(mid, JSON())
+
+	checker, ok := wrapped.(tool.PermissionChecker)
+	if !ok {
+		t.Fatal("wrapped tool should expose PermissionChecker")
+	}
+	decision, err := checker.CheckPermission(context.Background(), &tool.PermissionRequest{})
+	if err != nil {
+		t.Fatalf("CheckPermission error: %v", err)
+	}
+	if decision.Action != tool.PermissionActionDeny {
+		t.Fatalf("permission must resolve through the chain to deny, got %q", decision.Action)
+	}
+}
+
+// selfUnwrapTool returns itself from Unwrap, forming a cycle.
+type selfUnwrapTool struct {
+	decl *tool.Declaration
+}
+
+func (s *selfUnwrapTool) Declaration() *tool.Declaration            { return s.decl }
+func (s *selfUnwrapTool) Call(context.Context, []byte) (any, error) { return nil, nil }
+func (s *selfUnwrapTool) Unwrap() tool.Tool                         { return s }
+
+func TestWrap_CyclicUnwrapTerminates(t *testing.T) {
+	// A cyclic Unwrap() chain must not hang; the depth bound terminates it.
+	s := &selfUnwrapTool{decl: &tool.Declaration{Name: "cyclic"}}
+	wrapped := Wrap(s, JSON())
+	checker, ok := wrapped.(tool.PermissionChecker)
+	if !ok {
+		t.Fatal("wrapped tool should expose PermissionChecker")
+	}
+	// Reaching this call returning (instead of hanging) proves termination.
+	decision, err := checker.CheckPermission(context.Background(), &tool.PermissionRequest{})
+	if err != nil {
+		t.Fatalf("CheckPermission error: %v", err)
+	}
+	if decision.Action != tool.PermissionActionAllow {
+		t.Fatalf("no checker in cyclic chain should default to allow, got %q", decision.Action)
+	}
+}
+
 func TestWrap_CallDelegates(t *testing.T) {
 	base := &mockCallable{decl: &tool.Declaration{Name: "c"}}
 	wrapped := Wrap(base, JSON())

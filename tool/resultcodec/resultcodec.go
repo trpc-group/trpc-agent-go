@@ -117,44 +117,96 @@ func (t *codecTool) Unwrap() tool.Tool {
 	return t.base
 }
 
-// ToolMetadata delegates to the wrapped tool so metadata is preserved for
-// callers that inspect it directly (tool.MetadataOf does not unwrap).
+// maxWrapDepth bounds wrapper-chain traversal so a self-referential or mutually
+// cyclic Unwrap() implementation cannot cause an infinite loop.
+const maxWrapDepth = 128
+
+// walkBase visits the wrapped tool and each tool reachable through Unwrap(),
+// starting at t.base, calling fn until it returns true or the chain ends. The
+// traversal is depth-bounded for cycle safety. This resolves delegated
+// capabilities through the full wrapper chain so an intermediate unwrap-only
+// wrapper cannot hide a deeper capability (for example a PermissionChecker).
+func (t *codecTool) walkBase(fn func(tool.Tool) bool) {
+	cur := t.base
+	for i := 0; i < maxWrapDepth && cur != nil; i++ {
+		if fn(cur) {
+			return
+		}
+		u, ok := cur.(interface{ Unwrap() tool.Tool })
+		if !ok {
+			return
+		}
+		cur = u.Unwrap()
+	}
+}
+
+// ToolMetadata resolves metadata through the full wrapper chain so it is
+// preserved for callers that inspect it directly (tool.MetadataOf does not
+// unwrap).
 func (t *codecTool) ToolMetadata() tool.ToolMetadata {
-	return tool.MetadataOf(t.base)
+	var meta tool.ToolMetadata
+	t.walkBase(func(cur tool.Tool) bool {
+		_, isProvider := cur.(tool.MetadataProvider)
+		_, isAware := cur.(tool.ConcurrencyAware)
+		if isProvider || isAware {
+			meta = tool.MetadataOf(cur)
+			return true
+		}
+		return false
+	})
+	return meta
 }
 
-// IsConcurrencySafe delegates to the wrapped tool's metadata.
+// IsConcurrencySafe reports the wrapped chain's concurrency safety.
 func (t *codecTool) IsConcurrencySafe() bool {
-	return tool.MetadataOf(t.base).ConcurrencySafe
+	return t.ToolMetadata().ConcurrencySafe
 }
 
-// ShouldDefer delegates to the wrapped tool so deferred loading is preserved
-// (tool.ShouldDefer does not unwrap).
+// ShouldDefer resolves deferred-loading preference through the full wrapper
+// chain (tool.ShouldDefer does not unwrap).
 func (t *codecTool) ShouldDefer(ctx context.Context) bool {
-	return tool.ShouldDefer(ctx, t.base)
+	deferred := false
+	t.walkBase(func(cur tool.Tool) bool {
+		if d, ok := cur.(tool.DeferredTool); ok {
+			deferred = d.ShouldDefer(ctx)
+			return true
+		}
+		return false
+	})
+	return deferred
 }
 
-// CheckPermission delegates to the wrapped tool when it implements
-// tool.PermissionChecker, preserving permission behavior through the wrapper.
+// CheckPermission resolves the permission decision through the full wrapper
+// chain so an intermediate unwrap-only wrapper cannot bypass a deeper
+// PermissionChecker. When no checker is found the decision defaults to allow.
 func (t *codecTool) CheckPermission(
 	ctx context.Context,
 	req *tool.PermissionRequest,
 ) (tool.PermissionDecision, error) {
-	checker, ok := t.base.(tool.PermissionChecker)
-	if !ok {
-		return tool.AllowPermission(), nil
-	}
-	return checker.CheckPermission(ctx, req)
+	decision := tool.AllowPermission()
+	var checkErr error
+	t.walkBase(func(cur tool.Tool) bool {
+		if c, ok := cur.(tool.PermissionChecker); ok {
+			decision, checkErr = c.CheckPermission(ctx, req)
+			return true
+		}
+		return false
+	})
+	return decision, checkErr
 }
 
-// SkipSummarization delegates to the wrapped tool when it publishes the
-// preference; otherwise it reports false.
+// SkipSummarization resolves the preference through the full wrapper chain;
+// otherwise it reports false.
 func (t *codecTool) SkipSummarization() bool {
-	type skipper interface{ SkipSummarization() bool }
-	if s, ok := t.base.(skipper); ok {
-		return s.SkipSummarization()
-	}
-	return false
+	skip := false
+	t.walkBase(func(cur tool.Tool) bool {
+		if s, ok := cur.(interface{ SkipSummarization() bool }); ok {
+			skip = s.SkipSummarization()
+			return true
+		}
+		return false
+	})
+	return skip
 }
 
 type callableCodecTool struct {

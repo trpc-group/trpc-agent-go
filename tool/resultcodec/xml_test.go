@@ -141,3 +141,34 @@ func TestXML_ErrorOnNonSerializable(t *testing.T) {
 		t.Fatal("expected error for non-serializable value")
 	}
 }
+
+func TestXML_ErrorOnIllegalControlChar(t *testing.T) {
+	// 0x01 is a valid JSON string char but illegal in XML 1.0. It must produce
+	// an error instead of being silently replaced with U+FFFD.
+	cases := []struct {
+		name   string
+		result any
+	}{
+		{"value", map[string]any{"k": "bad\x01char"}},
+		{"key attribute", map[string]any{"has space\x01": "v"}},
+		{"scalar", "oops\x08"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := XML().Encode(context.Background(), tc.result); err == nil {
+				t.Fatalf("expected error for XML-illegal character in %v", tc.result)
+			}
+		})
+	}
+}
+
+func TestXML_AllowsLegalWhitespaceAndReplacementChar(t *testing.T) {
+	// Tab (0x09), newline (0x0A), and U+FFFD are legal XML characters.
+	got, err := XML().Encode(context.Background(), map[string]any{"k": "a\tb\nc\uFFFD"})
+	if err != nil {
+		t.Fatalf("Encode error: %v", err)
+	}
+	if got == "" {
+		t.Fatal("expected non-empty output for legal characters")
+	}
+}
