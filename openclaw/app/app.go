@@ -4093,6 +4093,7 @@ func modelCompatibilityRunOptions(
 	}
 	return []agent.RunOption{
 		agent.WithToolCallArgumentsJSONRepairEnabled(true),
+		agent.WithToolCallTextRepairEnabled(true),
 	}
 }
 

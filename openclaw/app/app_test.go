@@ -4613,6 +4613,8 @@ func TestModelCompatibilityRunOptions_GLMEnablesJSONRepair(t *testing.T) {
 	agentOpts := agent.NewRunOptions(runOpts...)
 	require.NotNil(t, agentOpts.ToolCallArgumentsJSONRepairEnabled)
 	require.True(t, *agentOpts.ToolCallArgumentsJSONRepairEnabled)
+	require.NotNil(t, agentOpts.ToolCallTextRepairEnabled)
+	require.True(t, *agentOpts.ToolCallTextRepairEnabled)
 }
 
 func TestModelCompatibilityRunOptions_GLMCanBeInferred(t *testing.T) {
@@ -4627,6 +4629,8 @@ func TestModelCompatibilityRunOptions_GLMCanBeInferred(t *testing.T) {
 	agentOpts := agent.NewRunOptions(runOpts...)
 	require.NotNil(t, agentOpts.ToolCallArgumentsJSONRepairEnabled)
 	require.True(t, *agentOpts.ToolCallArgumentsJSONRepairEnabled)
+	require.NotNil(t, agentOpts.ToolCallTextRepairEnabled)
+	require.True(t, *agentOpts.ToolCallTextRepairEnabled)
 }
 
 func TestModelCompatibilityRunOptions_NonGLMUnaffected(t *testing.T) {
