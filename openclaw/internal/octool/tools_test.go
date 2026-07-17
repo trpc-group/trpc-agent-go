@@ -1170,6 +1170,35 @@ func TestExecTool_CancelAtSessionHandoffLeavesNoRunningSession(t *testing.T) {
 	}, 500*time.Millisecond, 20*time.Millisecond)
 }
 
+func TestCommitRunningSession_RechecksCanceledParentAfterDetach(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	mgr := NewManager()
+	sess := newSession("handoff-race", "sleep", defaultMaxLines)
+	stopCalled := false
+	sess.parentCancelStop = func() bool {
+		stopCalled = true
+		return true
+	}
+	sess.cancel = func() {
+		sess.markDone(-1)
+	}
+	mgr.sessions[sess.id] = sess
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := mgr.commitRunningSession(ctx, sess)
+	require.ErrorIs(t, err, context.Canceled)
+	require.True(t, stopCalled)
+	mgr.mu.Lock()
+	_, exists := mgr.sessions[sess.id]
+	mgr.mu.Unlock()
+	require.False(t, exists)
+}
+
 func TestExecTool_DefaultTimeoutKillsProcessGroup(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("process group signaling is unix-specific")

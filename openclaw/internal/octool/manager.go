@@ -318,7 +318,8 @@ func (m *Manager) commitRunningSession(
 	if m.beforeSessionHandoff != nil {
 		m.beforeSessionHandoff()
 	}
-	if sess.detachParentCancellation() {
+	if sess.detachParentCancellation() &&
+		(parent == nil || parent.Err() == nil) {
 		return nil
 	}
 	_ = m.kill(sess.id)
