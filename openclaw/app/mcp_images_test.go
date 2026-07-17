@@ -305,6 +305,22 @@ func TestSanitizedMCPResultJSONFallbacks(t *testing.T) {
 	content, ok = sanitizedMCPResultJSON([]mcpContentItem{})
 	require.False(t, ok)
 	require.Empty(t, content)
+
+	content, ok = sanitizedMCPResultJSON(map[string]any{
+		"other": "value",
+	})
+	require.False(t, ok)
+	require.Empty(t, content)
+
+	content, ok = sanitizedMCPResultJSON(map[string]any{
+		"content": "not-an-item-list",
+	})
+	require.False(t, ok)
+	require.Empty(t, content)
+
+	body, ok := sanitizeMCPContentJSON([]byte(`[{"type":{}}]`))
+	require.False(t, ok)
+	require.Nil(t, body)
 }
 
 func TestMarshalModelVisibleJSONError(t *testing.T) {
