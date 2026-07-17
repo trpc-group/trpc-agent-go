@@ -810,7 +810,7 @@ Inspired by amazing frameworks like **ADK**, **Agno**, **CrewAI**, **AutoGen**, 
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=trpc-group/trpc-agent-go&type=Date)](https://star-history.com/#trpc-group/trpc-agent-go&Date)
+[![Star History Chart](https://api.star-history.com/chart?repos=trpc-group/trpc-agent-go&type=date&legend=top-left&sealed_token=cOvxWW_HIOl_iqhx7EX4sM_lhJS9pKkMhBbgGeVmfRtpJI3blqrmWSBobm1va_F_A-FPah1pI_zv5E8uVf9sIDzA2WKntW21ZPiJQ9k_Tw_hECs-FuyetP6G6K3Ub0JKSBUB7uQNQNU7hpbcX5Rhoev4ujQ4SXDseYXGP_Bu_P-ptJeVcFVRscMmKhZC)](https://www.star-history.com/?repos=trpc-group%2Ftrpc-agent-go&type=date&legend=top-left)
 
 ---
 
