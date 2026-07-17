@@ -1601,6 +1601,7 @@ func (t *Tool) handleScreenshot(
 	if err != nil {
 		return Result{}, err
 	}
+	_, captureFailed := compactBrowserErrorText(extractText(raw))
 	raw = compactBrowserErrorResult(raw)
 
 	result := newBaseResult(
@@ -1610,6 +1611,9 @@ func (t *Tool) handleScreenshot(
 		t.evaluateEnabled,
 	)
 	result.TargetID = strings.TrimSpace(in.TargetID)
+	if !captureFailed {
+		result.ScreenshotPath = filename
+	}
 	result.Content = raw
 	return result, nil
 }
