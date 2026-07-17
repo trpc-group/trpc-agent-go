@@ -186,7 +186,7 @@ func buildSearchQuery(search Search) (string, error) {
 	if query == "" {
 		return dateClause, nil
 	}
-	return query + " AND " + dateClause, nil
+	return "(" + query + ") AND " + dateClause, nil
 }
 
 func containsSubmittedDateClause(query string) bool {

@@ -140,7 +140,23 @@ func TestClient_buildQueryURL(t *testing.T) {
 				start:      0,
 				maxResults: 10,
 			},
-			want: "http://arxiv.org?max_results=10&search_query=cat%3Acs.AI+AND+submittedDate%3A%5B202206010000+TO+202206302359%5D&start=0",
+			want: "http://arxiv.org?max_results=10&search_query=%28cat%3Acs.AI%29+AND+submittedDate%3A%5B202206010000+TO+202206302359%5D&start=0",
+		},
+		{
+			name: "submitted date range groups compound query",
+			fields: fields{
+				baseURL: "http://arxiv.org",
+			},
+			args: args{
+				search: Search{
+					Query:             "cat:cs.AI OR cat:cs.LG",
+					SubmittedDateFrom: "2022-06-01",
+					SubmittedDateTo:   "2022-06-30",
+				},
+				start:      0,
+				maxResults: 10,
+			},
+			want: "http://arxiv.org?max_results=10&search_query=%28cat%3Acs.AI+OR+cat%3Acs.LG%29+AND+submittedDate%3A%5B202206010000+TO+202206302359%5D&start=0",
 		},
 		{
 			name: "submitted date range only",
@@ -170,7 +186,7 @@ func TestClient_buildQueryURL(t *testing.T) {
 				start:      0,
 				maxResults: 5,
 			},
-			want: "http://arxiv.org?max_results=5&search_query=cat%3Acs.AI+AND+submittedDate%3A%5B202206010000+TO+999912312359%5D&start=0",
+			want: "http://arxiv.org?max_results=5&search_query=%28cat%3Acs.AI%29+AND+submittedDate%3A%5B202206010000+TO+999912312359%5D&start=0",
 		},
 		{
 			name: "submitted date to only",
