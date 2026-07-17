@@ -1,0 +1,21 @@
+diff --git a/pkg/clean.go b/pkg/clean.go
+--- a/pkg/clean.go
++++ b/pkg/clean.go
+@@ -0,0 +1,6 @@
++package pkg
++
++func Add(a, b int) int {
++	return a + b
++}
++
+diff --git a/pkg/clean_test.go b/pkg/clean_test.go
+--- a/pkg/clean_test.go
++++ b/pkg/clean_test.go
+@@ -0,0 +1,7 @@
++package pkg
++
++func TestAdd(t *testing.T) {
++	if Add(1, 2) != 3 {
++		t.Fatal("bad add")
++	}
++}

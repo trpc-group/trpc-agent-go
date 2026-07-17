@@ -1,0 +1,10 @@
+diff --git a/pkg/redact.go b/pkg/redact.go
+--- a/pkg/redact.go
++++ b/pkg/redact.go
+@@ -0,0 +1,6 @@
++package pkg
++
++const password = "supersecretpassword123"
++const token = "Bearer abcdefghijklmnop"
++
++func Credentials() {}

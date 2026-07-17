@@ -1,0 +1,9 @@
+diff --git a/pkg/security.go b/pkg/security.go
+--- a/pkg/security.go
++++ b/pkg/security.go
+@@ -0,0 +1,5 @@
++package pkg
++
++const apiKey = "AKID1234567890SECRET"
++
++func Key() string { return apiKey }

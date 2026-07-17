@@ -1,0 +1,68 @@
+{
+  "fixtures": [
+    {
+      "name": "clean",
+      "expected_rules": [],
+      "expected_high_rules": []
+    },
+    {
+      "name": "security",
+      "expected_rules": ["go.security.secret"],
+      "expected_high_rules": ["go.security.secret"],
+      "allowed_extra_rules": ["go.testing.missing"]
+    },
+    {
+      "name": "goroutine_context",
+      "expected_rules": ["go.concurrency.context"],
+      "expected_high_rules": [],
+      "allowed_extra_rules": ["go.testing.missing"]
+    },
+    {
+      "name": "resource_close",
+      "expected_rules": ["go.resource.close"],
+      "expected_high_rules": [],
+      "allowed_extra_rules": ["go.testing.missing"]
+    },
+    {
+      "name": "db_lifecycle",
+      "expected_rules": ["go.database.lifecycle", "go.resource.close"],
+      "expected_high_rules": [],
+      "allowed_extra_rules": ["go.testing.missing"]
+    },
+    {
+      "name": "missing_tests",
+      "expected_rules": ["go.testing.missing"],
+      "expected_high_rules": []
+    },
+    {
+      "name": "duplicate",
+      "expected_rules": ["go.security.secret"],
+      "expected_high_rules": ["go.security.secret"],
+      "allowed_extra_rules": ["go.testing.missing"]
+    },
+    {
+      "name": "sandbox_failure",
+      "expected_rules": [],
+      "expected_high_rules": [],
+      "allowed_extra_rules": ["go.testing.missing"]
+    },
+    {
+      "name": "sandbox_setup_failure",
+      "expected_rules": [],
+      "expected_high_rules": [],
+      "allowed_extra_rules": ["go.testing.missing"]
+    },
+    {
+      "name": "redaction",
+      "expected_rules": ["go.security.secret"],
+      "expected_high_rules": ["go.security.secret"],
+      "allowed_extra_rules": ["go.testing.missing"]
+    }
+  ],
+  "secret_values": [
+    "AKID1234567890SECRET",
+    "abcd1234secret",
+    "supersecretpassword123",
+    "abcdefghijklmnop"
+  ]
+}
