@@ -21,31 +21,46 @@ import (
 type Decision string
 
 const (
+	// DecisionAllow allows the tool execution to proceed.
 	DecisionAllow Decision = "allow"
-	DecisionDeny  Decision = "deny"
-	DecisionAsk   Decision = "ask"
+	// DecisionDeny blocks the tool execution.
+	DecisionDeny Decision = "deny"
+	// DecisionAsk requires human review before execution.
+	DecisionAsk Decision = "ask"
 )
 
 // RiskLevel indicates the severity of a finding.
 type RiskLevel string
 
 const (
+	// RiskCritical indicates a critical safety risk.
 	RiskCritical RiskLevel = "critical"
-	RiskHigh     RiskLevel = "high"
-	RiskMedium   RiskLevel = "medium"
-	RiskLow      RiskLevel = "low"
-	RiskNone     RiskLevel = "none"
+	// RiskHigh indicates a high safety risk.
+	RiskHigh RiskLevel = "high"
+	// RiskMedium indicates a medium safety risk.
+	RiskMedium RiskLevel = "medium"
+	// RiskLow indicates a low safety risk.
+	RiskLow RiskLevel = "low"
+	// RiskNone indicates that no safety risk was found.
+	RiskNone RiskLevel = "none"
 )
 
-// category labels for findings.
+// Category labels for findings.
 const (
+	// CatDangerousCmd identifies dangerous command findings.
 	CatDangerousCmd = "dangerous_cmd"
-	CatNetwork      = "network"
-	CatShellBypass  = "shell_bypass"
-	CatHostRisk     = "host_risk"
-	CatInstall      = "dependency_install"
-	CatResource     = "resource_abuse"
-	CatSensitive    = "sensitive_leak"
+	// CatNetwork identifies network access findings.
+	CatNetwork = "network"
+	// CatShellBypass identifies shell bypass findings.
+	CatShellBypass = "shell_bypass"
+	// CatHostRisk identifies host environment risk findings.
+	CatHostRisk = "host_risk"
+	// CatInstall identifies dependency installation findings.
+	CatInstall = "dependency_install"
+	// CatResource identifies resource abuse findings.
+	CatResource = "resource_abuse"
+	// CatSensitive identifies sensitive data leakage findings.
+	CatSensitive = "sensitive_leak"
 )
 
 // ScanReport is the structured output produced after scanning a
