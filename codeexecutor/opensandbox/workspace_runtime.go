@@ -181,7 +181,10 @@ func (r *workspaceRuntime) CreateWorkspace(
 
 	if r.cfg.workspacePersistence == WorkspacePersistencePerSession && execID == "" {
 		return codeexecutor.Workspace{}, errors.New(
-			"opensandbox: execID must not be empty when using WorkspacePersistencePerSession",
+			"opensandbox: execID must not be empty when using " +
+				"WorkspacePersistencePerSession; provide a stable " +
+				"session-derived ID, or switch to PerTurn mode " +
+				"(the default) which does not require a stable ID",
 		)
 	}
 

@@ -136,8 +136,13 @@ func (r *workspaceRuntime) ensureRemoteDir(
 // End-to-end server-side rejection therefore cannot be guaranteed
 // today. Closing this window requires server-side no-follow semantics
 // (O_NOFOLLOW on the leaf, openat2/RESOLVE_BENEATH for the parent
-// path); when the server adds such support, the client-side checks
+// path) — when the server adds such support, the client-side checks
 // here become a true guarantee rather than defense-in-depth.
+//
+// When upgrading the SDK dependency (examples/codeexecution/go.mod and
+// the root go.mod), re-audit filesystem_upload.go to see whether
+// O_NOFOLLOW / openat2 has been added; if so, the NOTE above no longer
+// applies and these checks can be tightened.
 //
 // Until then, PerSession persistence must only be used with trusted
 // in-sandbox code; PerTurn (the default) gives each turn a fresh
@@ -491,6 +496,12 @@ func (r *workspaceRuntime) StageDirectory(
 		// (after symlink resolution), not a symlink that might point
 		// outside the workspace. PutDirectory already validated this,
 		// but we resolve again in case the filesystem changed.
+		//
+		// chmod -R follows directory symlinks in the tree, which could
+		// change permissions on files outside the workspace if dest
+		// contained symlinks. This is safe here because PutDirectory ->
+		// walkAndUpload skips non-regular entries (shouldUploadFile),
+		// so dest only contains regular files and real directories.
 		dest := ws.Path
 		if to != "" {
 			dest = path.Join(ws.Path, filepath.ToSlash(to))

@@ -526,8 +526,10 @@ func (c *CodeExecutor) ExecuteCode(
 			return codeexecutor.CodeExecutionResult{}, errors.New(
 				"opensandbox: ExecutionID must not be empty when using " +
 					"WorkspacePersistencePerSession; provide a stable " +
-					"session-derived ID or invoke with a session in context " +
-					"so the workspace can be reused across turns",
+					"session-derived ID, invoke with a session in context " +
+					"so the workspace can be reused across turns, or " +
+					"switch to PerTurn mode (the default) which does not " +
+					"require a stable ID",
 			)
 		}
 		execID = fmt.Sprintf("exec_%d", time.Now().UnixNano())
@@ -754,6 +756,11 @@ func (c *CodeExecutor) ExecuteInline(
 // environment merged from the sandbox process (os.Environ). Client-
 // side prefixes therefore cannot form a trustworthy CleanEnv security
 // boundary for tool/workspaceexec policy mode.
+//
+// TODO: re-audit SupportsCleanEnv when execd adds clean-env support
+// (e.g. a RunCommandRequest flag that prevents os.Environ merge into
+// the outer shell). Flip to true here and add a test verifying the
+// outer shell does not inherit host env.
 func (c *CodeExecutor) Engine() codeexecutor.Engine {
 	rt := c.ensureRuntime()
 	return codeexecutor.NewEngineWithCapabilities(

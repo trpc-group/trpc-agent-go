@@ -314,6 +314,12 @@ type fileSearchResult struct {
 // Patterns without a path separator get a **/ prefix so they match
 // recursively across the full directory tree, preserving the previous
 // SearchFiles behaviour of glob.PathMatch(pattern, info.Name()).
+//
+// The script assumes GNU coreutils readlink (supports -f) and GNU stat
+// (supports -c %s). The default code-interpreter image is Debian/Ubuntu
+// based and ships GNU coreutils; callers using a custom image with a
+// stripped-down toolchain (e.g. busybox sh, where readlink -f behaves
+// differently) may see broken globbing.
 func (r *workspaceRuntime) listFilesByGlob(
 	ctx context.Context, wsPath string, patterns []string,
 ) ([]fileSearchResult, error) {
