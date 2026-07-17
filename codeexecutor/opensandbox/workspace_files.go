@@ -56,9 +56,8 @@ func (r *workspaceRuntime) PutFiles(
 	return r.uploadEntriesBatched(ctx, sb, ws.Path, entries)
 }
 
-// buildPutFileEntry validates one PutFile, ensures the parent path
-// stays under the workspace, ensures the parent directory exists, and
-// returns an UploadFileEntry.
+// buildPutFileEntry validates one PutFile, resolves parent symlinks,
+// ensures the parent directory exists, and returns an UploadFileEntry.
 func (r *workspaceRuntime) buildPutFileEntry(
 	ctx context.Context,
 	sb *osb.Sandbox,
@@ -73,9 +72,9 @@ func (r *workspaceRuntime) buildPutFileEntry(
 	if !pathUnder(finalPath, ws.Path) {
 		return osb.UploadFileEntry{}, fmt.Errorf("opensandbox: path %q escapes workspace", f.Path)
 	}
-	// Validate the parent path stays under the workspace.
-	// (resolveSandboxAncestor is currently a lexical no-op; see its
-	// doc comment for why full symlink resolution is disabled.)
+	// Resolve symlinks in the parent directory to prevent a symlink
+	// inside the workspace from redirecting writes outside. Use
+	// resolveSandboxAncestor because the parent may not yet exist.
 	resolvedParent, err := r.resolveSandboxAncestor(ctx, path.Dir(finalPath), ws.Path)
 	if err != nil {
 		return osb.UploadFileEntry{}, err
@@ -116,27 +115,33 @@ func (r *workspaceRuntime) ensureRemoteDir(
 	return nil
 }
 
-// uploadEntriesBatched uploads entries in uploadBatchSize chunks to
-// bound ARG_MAX and multipart body size.
+// uploadEntriesBatched re-resolves parents (TOCTOU), strips leaf
+// symlinks, and uploads in uploadBatchSize chunks to bound ARG_MAX
+// and multipart body size.
 //
-// NOTE: revalidateUploadBatch and removeSymlinksBatch are currently
-// no-ops that only perform lexical pathUnder validation. The previous
-// implementation re-resolved parents and stripped leaf symlinks before
-// upload, but those are client-side checks which cannot prevent TOCTOU
-// symlink replanting on the server. The OpenSandbox execd upload
-// endpoint (as of v1.0.x) opens destinations with
-// os.OpenFile(O_WRONLY|O_CREATE|O_TRUNC) — no O_NOFOLLOW, no openat2
-// — and MkdirAllWithOwnership / ExpandPath follow symlinks in parent
-// components. A process surviving in a persistent workspace can
-// replant a symlink between this call and the UploadFiles request
-// below, redirecting the write outside the workspace. Closing this
-// window requires server-side no-follow semantics (O_NOFOLLOW on the
-// leaf, openat2/RESOLVE_BENEATH for the parent path). When the server
-// adds such support, re-enable both functions to provide
-// defense-in-depth. Until then, PerSession persistence must only be
-// used with trusted in-sandbox code; PerTurn (the default) gives each
-// turn a fresh workspace where no adversary-controlled symlink can
-// pre-exist.
+// NOTE: this is defense-in-depth, not a complete symlink-escape fix.
+// The OpenSandbox execd upload endpoint (as of v1.0.x) opens the
+// destination with os.OpenFile(O_WRONLY|O_CREATE|O_TRUNC) — no
+// O_NOFOLLOW, no openat2 — and MkdirAllWithOwnership / ExpandPath
+// follow symlinks in parent components. A process surviving in a
+// persistent workspace can therefore replant a leaf or parent symlink
+// between our removeSymlinksBatch call and the UploadFiles request
+// below, redirecting the write outside the workspace.
+//
+// Server-side no-follow support has been investigated and confirmed
+// absent as of OpenSandbox v1.0.x (see
+// components/execd/pkg/web/controller/filesystem_upload.go: the upload
+// handler uses os.OpenFile without O_NOFOLLOW, and pathutil.ExpandPath
+// / MkdirAllWithOwnership follow symlinks in parent components).
+// End-to-end server-side rejection therefore cannot be guaranteed
+// today. Closing this window requires server-side no-follow semantics
+// (O_NOFOLLOW on the leaf, openat2/RESOLVE_BENEATH for the parent
+// path); when the server adds such support, the client-side checks
+// here become a true guarantee rather than defense-in-depth.
+//
+// Until then, PerSession persistence must only be used with trusted
+// in-sandbox code; PerTurn (the default) gives each turn a fresh
+// workspace where no adversary-controlled symlink can pre-exist.
 func (r *workspaceRuntime) uploadEntriesBatched(
 	ctx context.Context,
 	sb *osb.Sandbox,
@@ -164,22 +169,20 @@ func (r *workspaceRuntime) uploadEntriesBatched(
 
 // revalidateUploadBatch re-resolves each entry parent immediately
 // before upload and updates Metadata.Path in place.
-//
-// NOTE: Currently a no-op that only performs lexical pathUnder
-// validation. The previous implementation re-resolved parents via
-// resolveSandboxAncestor to close the TOCTOU window between visit and
-// flush, but since resolveSandboxAncestor is now a no-op (see its doc
-// comment), this revalidation is also a no-op. When server-side
-// no-follow semantics are added, re-enable both resolveSandboxAncestor
-// and this function.
 func (r *workspaceRuntime) revalidateUploadBatch(
 	ctx context.Context, wsBase string, batch []osb.UploadFileEntry,
 ) error {
 	for i := range batch {
 		p := batch[i].Options.Metadata.Path
-		if !pathUnder(p, wsBase) {
-			return fmt.Errorf("opensandbox: path %q escapes workspace", p)
+		resolvedParent, err := r.resolveSandboxAncestor(ctx, path.Dir(p), wsBase)
+		if err != nil {
+			return err
 		}
+		finalPath := path.Join(resolvedParent, path.Base(p))
+		if !pathUnder(finalPath, wsBase) {
+			return fmt.Errorf("opensandbox: path %q escapes workspace", finalPath)
+		}
+		batch[i].Options.Metadata.Path = finalPath
 	}
 	return nil
 }
@@ -220,9 +223,9 @@ func (r *workspaceRuntime) PutDirectory(
 	if !pathUnder(dest, ws.Path) {
 		return fmt.Errorf("opensandbox: destination %q escapes workspace", to)
 	}
-	// Validate dest stays under the workspace. (resolveSandboxAncestor
-	// is currently a lexical no-op; see its doc comment for why full
-	// symlink resolution is disabled.)
+	// Resolve symlinks in dest to prevent a symlink inside the
+	// workspace from redirecting directory uploads outside. Use
+	// resolveSandboxAncestor because dest may not yet exist.
 	resolvedDest, err := r.resolveSandboxAncestor(ctx, dest, ws.Path)
 	if err != nil {
 		return err
@@ -266,11 +269,11 @@ const uploadBatchSize = 64
 // is uploaded, keeping the open-fd count bounded by uploadBatchSize
 // rather than the total file count in the tree.
 //
-// wsBase is the workspace root used for lexical pathUnder checks.
-// Every destination parent is passed through resolveSandboxAncestor
-// before CreateDirectory/UploadFiles, which currently only validates
-// that the path stays under wsBase (see resolveSandboxAncestor for why
-// full symlink resolution is disabled).
+// wsBase is the workspace root used for symlink-escape checks. Every
+// destination parent is resolved with resolveSandboxAncestor before
+// CreateDirectory/UploadFiles so an intermediate directory that is a
+// pre-existing symlink outside the workspace cannot redirect writes
+// (e.g. dest/hijack -> /tmp/outside, upload dest/hijack/file.txt).
 func (r *workspaceRuntime) walkAndUpload(
 	ctx context.Context,
 	sb *osb.Sandbox,
@@ -293,9 +296,8 @@ func (r *workspaceRuntime) walkAndUpload(
 
 // batchUploader accumulates files opened during a WalkDir and uploads
 // them in batches of uploadBatchSize. Each flush re-validates target
-// parents and strips leaf symlinks via resolveSandboxAncestor /
-// removeSymlinksBatch (currently lexical-only no-ops; see those
-// functions' doc comments), then closes all file handles in the batch.
+// parents, removes pre-existing leaf symlinks in a single bash call,
+// then closes all file handles in the batch.
 type batchUploader struct {
 	r         *workspaceRuntime
 	sb        *osb.Sandbox
@@ -323,9 +325,9 @@ func (u *batchUploader) visit(
 	remotePath := path.Join(destRoot, filepath.ToSlash(rel))
 
 	if d.IsDir() {
-		// Validate the destination path stays under the workspace.
-		// (resolveSandboxAncestor is currently a lexical no-op; see its
-		// doc comment for why full symlink resolution is disabled.)
+		// Resolve intermediate destination components so a pre-existing
+		// directory symlink under destRoot cannot redirect CreateDirectory
+		// (or later nested uploads) outside the workspace.
 		resolved, err := u.r.resolveSandboxAncestor(ctx, remotePath, u.wsBase)
 		if err != nil {
 			return err
@@ -343,8 +345,9 @@ func (u *batchUploader) visit(
 	if !shouldUploadFile(info) {
 		return nil
 	}
-	// Validate the parent path stays under the workspace. Mirrors
-	// PutFiles. (resolveSandboxAncestor is currently a lexical no-op.)
+	// Resolve the parent of the leaf so intermediate directory symlinks
+	// (e.g. dest/hijack -> /tmp/outside with leaf file.txt) are rejected
+	// before CreateDirectory/UploadFiles. Mirrors PutFiles.
 	resolvedParent, err := u.r.resolveSandboxAncestor(ctx, path.Dir(remotePath), u.wsBase)
 	if err != nil {
 		return err
@@ -389,14 +392,19 @@ func (u *batchUploader) visit(
 // Called when the batch reaches uploadBatchSize and once more after
 // the walk finishes.
 //
-// Immediately before upload, re-validates target parents and strips
-// leaf symlinks via resolveSandboxAncestor / removeSymlinksBatch
-// (currently lexical-only no-ops; see those functions' doc comments).
+// Immediately before upload:
+//  1. Re-resolve every target parent (TOCTOU between visit and flush).
+//  2. Remove pre-existing leaf symlinks in one bash call. The shell
+//     loop must exit 0 when no path is a symlink — the usual upload
+//     case — so use `if [ -L ]; then rm; fi` rather than
+//     `[ -L ] && rm`, which leaves exit status 1 when the last path is
+//     a normal file or missing.
 func (u *batchUploader) flush(ctx context.Context) error {
 	if len(u.entries) == 0 {
 		return nil
 	}
-	// Validate parents right before upload (lexical-only for now).
+	// Re-validate parents right before upload so a symlink planted after
+	// visit cannot redirect the write. Update Metadata.Path in place.
 	for i := range u.entries {
 		p := u.entries[i].Options.Metadata.Path
 		resolvedParent, err := u.r.resolveSandboxAncestor(ctx, path.Dir(p), u.wsBase)
@@ -440,24 +448,29 @@ func uploadPaths(entries []osb.UploadFileEntry) []string {
 }
 
 // removeSymlinksBatch removes pre-existing symlinks at the given paths
-// in a single bash call.
-//
-// NOTE: Currently a no-op that only performs lexical pathUnder
-// validation. The previous implementation issued `rm -f` for each
-// symlink, but that is a client-side check which cannot prevent TOCTOU
-// symlink replanting on the server (see resolveSandboxAncestor for the
-// full rationale). When the OpenSandbox execd upload endpoint adds
-// O_NOFOLLOW / openat2 support, restore the batch `rm -f` to provide
-// defense-in-depth.
+// in a single bash call. The loop always exits 0 when no path is a
+// symlink (if/fi, not `&&`), so normal uploads are not aborted.
+// Each path must already be pathUnder(wsBase).
 func (r *workspaceRuntime) removeSymlinksBatch(
 	ctx context.Context, paths []string, wsBase string,
 ) error {
+	if len(paths) == 0 {
+		return nil
+	}
+	var rm strings.Builder
+	rm.WriteString("for p in")
 	for _, p := range paths {
 		if !pathUnder(p, wsBase) {
 			return fmt.Errorf(
 				"opensandbox: path %q escapes workspace %q", p, wsBase,
 			)
 		}
+		rm.WriteByte(' ')
+		rm.WriteString(shellQuote(p))
+	}
+	rm.WriteString(`; do if [ -L "$p" ]; then rm -f -- "$p" || exit; fi; done`)
+	if _, err := r.runBash(ctx, rm.String(), defaultCreateTimeout); err != nil {
+		return fmt.Errorf("opensandbox: batch remove symlinks before upload: %w", err)
 	}
 	return nil
 }
@@ -474,9 +487,10 @@ func (r *workspaceRuntime) StageDirectory(
 		return err
 	}
 	if opt.ReadOnly {
-		// Validate dest stays under the workspace before chmod.
-		// (resolveSandboxAncestor is currently a lexical no-op; see
-		// its doc comment for why full symlink resolution is disabled.)
+		// Re-resolve dest to ensure chmod operates on the real path
+		// (after symlink resolution), not a symlink that might point
+		// outside the workspace. PutDirectory already validated this,
+		// but we resolve again in case the filesystem changed.
 		dest := ws.Path
 		if to != "" {
 			dest = path.Join(ws.Path, filepath.ToSlash(to))
@@ -556,37 +570,49 @@ func (r *workspaceRuntime) resolveSandboxPath(
 // resolveSandboxAncestor resolves the real path of a target that may
 // not yet exist (e.g. a/b/c/file.txt where a, b, and c are all new).
 //
-// NOTE: Currently a no-op that returns the cleaned input target. The
-// previous implementation used `readlink -m` to canonicalize existing
-// symlink components, but that is a client-side check which cannot
-// prevent TOCTOU symlink replanting on the server. The OpenSandbox
-// execd upload endpoint (as of v1.0.x) opens destinations with
-// os.OpenFile(O_WRONLY|O_CREATE|O_TRUNC) — no O_NOFOLLOW, no openat2
-// — and MkdirAllWithOwnership / ExpandPath follow symlinks in parent
-// components. A process surviving in a persistent workspace can
-// replant a symlink between this call and the subsequent UploadFiles
-// request, redirecting the write outside the workspace.
+// It uses `readlink -m` (--canonicalize-missing) which resolves
+// symlinks in all *existing* path components (including intermediate
+// and final components that already exist) while leaving non-existent
+// components as-is. This is superior to the old ancestor-walk approach
+// which only resolved the nearest existing ancestor and appended the
+// non-existent tail verbatim — if a tail component was itself an
+// existing symlink (e.g. target=/ws/a/b/c where /ws/a/b is a symlink
+// to /etc and c doesn't exist), the old code would return /ws/a/b/c
+// without resolving the /ws/a/b symlink, allowing writes to land in
+// /etc/c.
 //
-// Closing this window requires server-side no-follow semantics
-// (O_NOFOLLOW on the leaf, openat2/RESOLVE_BENEATH for the parent
-// path). When the server adds such support, restore the `readlink -m`
-// resolution to provide defense-in-depth.
+// `readlink -m` also fixes the depth-limit issue: the old code walked
+// up one component at a time, issuing a `test -e` round-trip per
+// level. A deeply nested target (e.g. /a/b/c/.../z/file) required
+// O(depth) remote calls with no upper bound. readlink -m resolves
+// the entire path in a single call.
 //
-// Until then, this function only performs a cheap lexical pathUnder
-// check. Callers must still perform the same pathUnder validation on
-// the returned path before issuing UploadFiles. PerSession persistence
-// must only be used with trusted in-sandbox code; PerTurn (the
-// default) gives each turn a fresh workspace where no adversary-
-// controlled symlink can pre-exist.
+// After resolution, the result is verified to be under wsBase to
+// prevent symlink escape.
 func (r *workspaceRuntime) resolveSandboxAncestor(
 	ctx context.Context, target, wsBase string,
 ) (string, error) {
 	target = path.Clean(target)
-	if !pathUnder(target, wsBase) {
+	// Use readlink -m: canonicalizes existing symlink components,
+	// leaves non-existent components as-is. Unlike readlink -f, it
+	// does not fail when intermediate components don't exist.
+	out, err := r.runBash(ctx, "readlink -m "+shellQuote(target), defaultCreateTimeout)
+	if err != nil {
 		return "", fmt.Errorf(
-			"opensandbox: path %q escapes workspace %q (symlink?)",
-			target, wsBase,
+			"opensandbox: resolve ancestor %q: %w", target, err,
 		)
 	}
-	return target, nil
+	resolved := strings.TrimSpace(out)
+	if resolved == "" {
+		return "", fmt.Errorf(
+			"opensandbox: readlink -m returned empty for %q", target,
+		)
+	}
+	if !pathUnder(resolved, wsBase) {
+		return "", fmt.Errorf(
+			"opensandbox: resolved path %q escapes workspace %q (symlink?)",
+			resolved, wsBase,
+		)
+	}
+	return resolved, nil
 }

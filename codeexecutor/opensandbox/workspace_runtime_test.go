@@ -2139,11 +2139,10 @@ func TestWorkspace_Cleanup_cleanupContext_Succeeds(t *testing.T) {
 // --- Symlink escape prevention ---
 
 // TestWorkspace_PutFiles_RejectsSymlinkEscape verifies that PutFiles
-// does NOT reject a file whose parent directory is a symlink pointing
-// outside the workspace, because resolveSandboxAncestor is currently a
-// lexical no-op (see its doc comment). The lexical pathUnder check
-// passes because the path is under ws.Path; only server-side
-// O_NOFOLLOW can prevent the write from following the symlink.
+// rejects a file whose parent directory is a symlink pointing outside
+// the workspace. Without readlink -f resolution, the lexical
+// pathUnder check would pass but the write would land outside the
+// workspace.
 func TestWorkspace_PutFiles_RejectsSymlinkEscape(t *testing.T) {
 	m := newMockServer(t)
 	defer m.close()
@@ -2160,13 +2159,11 @@ func TestWorkspace_PutFiles_RejectsSymlinkEscape(t *testing.T) {
 	linkPath := ws.Path + "/link"
 	m.setSymlink(linkPath, outside)
 
-	// PutFiles succeeds because resolveSandboxAncestor is a no-op and
-	// the lexical pathUnder check passes. Server-side O_NOFOLLOW is
-	// required to actually block this.
 	err = exec.PutFiles(context.Background(), ws, []codeexecutor.PutFile{
 		{Path: "link/file.txt", Content: []byte("data")},
 	})
-	assert.NoError(t, err, "lexical no-op does not reject symlink escape; server-side O_NOFOLLOW needed")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "escapes workspace")
 }
 
 // TestWorkspace_RunProgram_RejectsSymlinkCwd verifies that RunProgram
@@ -2274,10 +2271,8 @@ func TestWorkspace_PutFiles_MultiLevelNewDirs(t *testing.T) {
 }
 
 // TestWorkspace_PutDirectory_RejectsSymlinkEscape verifies that
-// PutDirectory does NOT reject a destination that is a symlink pointing
-// outside the workspace, because resolveSandboxAncestor is currently a
-// lexical no-op (see its doc comment). Only server-side O_NOFOLLOW can
-// prevent the write from following the symlink.
+// PutDirectory rejects a destination that is a symlink pointing
+// outside the workspace.
 func TestWorkspace_PutDirectory_RejectsSymlinkEscape(t *testing.T) {
 	m := newMockServer(t)
 	defer m.close()
@@ -2299,17 +2294,14 @@ func TestWorkspace_PutDirectory_RejectsSymlinkEscape(t *testing.T) {
 	linkPath := ws.Path + "/link"
 	m.setSymlink(linkPath, "/tmp/outside")
 
-	// PutDirectory succeeds because resolveSandboxAncestor is a no-op
-	// and the lexical pathUnder check passes.
 	err = exec.PutDirectory(context.Background(), ws, hostDir, "link")
-	assert.NoError(t, err, "lexical no-op does not reject symlink escape; server-side O_NOFOLLOW needed")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "escapes workspace")
 }
 
 // TestWorkspace_StageDirectory_ReadOnly_NoChmodOutsideWorkspace
-// verifies that StageDirectory with ReadOnly=true does NOT reject a
-// symlink target outside the workspace, because resolveSandboxAncestor
-// is currently a lexical no-op (see its doc comment). Only server-side
-// O_NOFOLLOW can prevent the chmod from following the symlink.
+// verifies that StageDirectory with ReadOnly=true does not chmod a
+// symlink target outside the workspace.
 func TestWorkspace_StageDirectory_ReadOnly_NoChmodOutsideWorkspace(t *testing.T) {
 	m := newMockServer(t)
 	defer m.close()
@@ -2330,11 +2322,10 @@ func TestWorkspace_StageDirectory_ReadOnly_NoChmodOutsideWorkspace(t *testing.T)
 	linkPath := ws.Path + "/link"
 	m.setSymlink(linkPath, "/tmp/outside")
 
-	// StageDirectory succeeds because resolveSandboxAncestor is a no-op
-	// and the lexical pathUnder check passes.
 	err = exec.StageDirectory(context.Background(), ws, hostDir, "link",
 		codeexecutor.StageOptions{ReadOnly: true})
-	assert.NoError(t, err, "lexical no-op does not reject symlink escape; server-side O_NOFOLLOW needed")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "escapes workspace")
 }
 
 // TestResolveSandboxAncestor_NoExistingAncestor exercises the fallback
@@ -2829,11 +2820,10 @@ func TestCollect_RemainingZero_BreaksBeforeReadFile(t *testing.T) {
 
 // --- L1: PutFiles final-component symlink removal ---
 
-// TestPutFiles_RemovesPreExistingSymlink verifies that PutFiles does
-// NOT remove a pre-existing symlink at the final file path, because
-// removeSymlinksBatch is currently a no-op (see its doc comment). Only
-// server-side O_NOFOLLOW can prevent the write from following the
-// symlink.
+// TestPutFiles_RemovesPreExistingSymlink verifies that PutFiles
+// removes a pre-existing symlink at the final file path before
+// uploading, preventing writes from following the symlink outside
+// the workspace.
 func TestPutFiles_RemovesPreExistingSymlink(t *testing.T) {
 	m := newMockServer(t)
 	defer m.close()
@@ -2849,19 +2839,18 @@ func TestPutFiles_RemovesPreExistingSymlink(t *testing.T) {
 	targetPath := path.Join(ws.Path, "output.txt")
 	m.setSymlink(targetPath, "/etc/passwd")
 
-	// PutFiles succeeds — removeSymlinksBatch is a no-op so the symlink
-	// is NOT removed. Server-side O_NOFOLLOW is required to block this.
+	// PutFiles should succeed — the symlink is removed before upload.
 	err = exec.PutFiles(context.Background(), ws, []codeexecutor.PutFile{{
 		Path:    "output.txt",
 		Content: []byte("safe content"),
 	}})
 	require.NoError(t, err)
 
-	// The symlink should still be present (no-op does not remove it).
+	// The symlink should have been removed (mock tracks this).
 	m.mu.Lock()
 	_, isSymlink := m.symlinks[targetPath]
 	m.mu.Unlock()
-	assert.True(t, isSymlink, "no-op removeSymlinksBatch must not remove the symlink; server-side O_NOFOLLOW needed")
+	assert.False(t, isSymlink, "pre-existing symlink should have been removed")
 }
 
 // --- L2: Collect SearchFiles count limit ---
@@ -3034,14 +3023,13 @@ func TestCreateWorkspace_MetaJsonSymlinkGuard(t *testing.T) {
 	assert.True(t, found, "CreateWorkspace command should include "+codeexecutor.MetaFileName+" symlink guard")
 }
 
-// --- N3+N4: resolveSandboxAncestor via readlink -m (currently no-op) ---
+// --- N3+N4: resolveSandboxAncestor via readlink -m ---
 
 // TestResolveSandboxAncestor_TailSymlinkResolved verifies that
-// resolveSandboxAncestor is currently a lexical no-op and does NOT
-// resolve symlinks in existing tail components. A symlink at an
-// intermediate path component (e.g. ws/subdir -> /tmp/outside) is NOT
-// detected, so PutFiles succeeds. Server-side O_NOFOLLOW is required
-// to actually block this (see resolveSandboxAncestor doc comment).
+// resolveSandboxAncestor uses readlink -m to resolve symlinks in
+// existing tail components, not just the nearest existing ancestor.
+// This prevents a symlink at an intermediate path component from
+// causing writes to land outside the workspace.
 func TestResolveSandboxAncestor_TailSymlinkResolved(t *testing.T) {
 	m := newMockServer(t)
 	defer m.close()
@@ -3053,17 +3041,18 @@ func TestResolveSandboxAncestor_TailSymlinkResolved(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create a symlink at ws/subdir pointing to /tmp/outside.
-	// resolveSandboxAncestor is a no-op, so it returns the path as-is
-	// and the lexical pathUnder check passes.
+	// resolveSandboxAncestor for ws/subdir/newfile.txt should resolve
+	// the symlink at ws/subdir and return /tmp/outside/newfile.txt,
+	// which escapes the workspace and should be rejected.
 	m.setSymlink(path.Join(ws.Path, "subdir"), "/tmp/outside")
 
-	// PutFiles succeeds because resolveSandboxAncestor does not resolve
-	// the tail symlink.
+	// PutFiles should fail because the resolved path escapes the workspace.
 	err = exec.PutFiles(context.Background(), ws, []codeexecutor.PutFile{{
 		Path:    "subdir/newfile.txt",
 		Content: []byte("test"),
 	}})
-	assert.NoError(t, err, "no-op resolveSandboxAncestor does not reject tail symlink; server-side O_NOFOLLOW needed")
+	require.Error(t, err, "PutFiles should reject path that resolves outside workspace via tail symlink")
+	assert.Contains(t, err.Error(), "escapes workspace")
 }
 
 // --- Review follow-ups (liuzengh 2026-07-17) ---
@@ -3114,10 +3103,7 @@ func TestBatchRemoveSymlinksScript_OldFormFails(t *testing.T) {
 
 // TestWorkspace_PutDirectory_RejectsIntermediateSymlink verifies that
 // an intermediate destination directory that is a symlink outside the
-// workspace is NOT rejected during directory upload, because
-// resolveSandboxAncestor is currently a lexical no-op (see its doc
-// comment). Only server-side O_NOFOLLOW can prevent the write from
-// following the symlink.
+// workspace is rejected during directory upload (not only the leaf).
 func TestWorkspace_PutDirectory_RejectsIntermediateSymlink(t *testing.T) {
 	m := newMockServer(t)
 	defer m.close()
@@ -3138,17 +3124,13 @@ func TestWorkspace_PutDirectory_RejectsIntermediateSymlink(t *testing.T) {
 		filepath.Join(hostDir, "hijack", "file.txt"), []byte("pwn"), 0o644,
 	))
 
-	// PutDirectory succeeds because resolveSandboxAncestor is a no-op
-	// and the lexical pathUnder check passes.
 	err = exec.PutDirectory(context.Background(), ws, hostDir, "dest")
-	assert.NoError(t, err, "lexical no-op does not reject intermediate symlink; server-side O_NOFOLLOW needed")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "escapes workspace")
 }
 
-// TestWorkspace_PutDirectory_NoSymlinkBatchSucceeds verifies that
-// PutDirectory does NOT issue the batch remove-symlink script, because
-// removeSymlinksBatch is currently a no-op (see its doc comment). The
-// pure-shell grammar tests (TestBatchRemoveSymlinksScript_*) still
-// guard the script syntax for when server-side O_NOFOLLOW lands.
+// TestWorkspace_PutDirectory_NoSymlinkBatchSucceeds is the end-to-end
+// counterpart of TestBatchRemoveSymlinksScript_NoSymlinkExitsZero.
 func TestWorkspace_PutDirectory_NoSymlinkBatchSucceeds(t *testing.T) {
 	m := newMockServer(t)
 	defer m.close()
@@ -3167,15 +3149,18 @@ func TestWorkspace_PutDirectory_NoSymlinkBatchSucceeds(t *testing.T) {
 	err = exec.PutDirectory(context.Background(), ws, hostDir, "out")
 	require.NoError(t, err)
 
-	// removeSymlinksBatch is a no-op: the batch `if [ -L ]` script must
-	// NOT be issued.
 	m.mu.Lock()
 	commands := append([]string(nil), m.commands...)
 	m.mu.Unlock()
+	found := false
 	for _, cmd := range commands {
-		assert.NotContains(t, cmd, `if [ -L "$p" ]`,
-			"no-op removeSymlinksBatch must not issue the batch rm script")
+		if strings.Contains(cmd, "if [ -L \"$p\" ]") && strings.Contains(cmd, "rm -f --") {
+			found = true
+			assert.NotContains(t, cmd, "[ -L \"$p\" ] && rm -f \"$p\"")
+			break
+		}
 	}
+	assert.True(t, found, "batch remove-symlink script should have been issued")
 }
 
 // TestListFilesByGlob_ScriptDedupsBeforeCounting verifies the generated
@@ -3286,9 +3271,8 @@ func TestWorkspace_CreateWorkspace_StripsLayoutSymlinks(t *testing.T) {
 	assert.True(t, found)
 }
 
-// TestWorkspace_PutFiles_BatchRemoveBeforeUpload verifies that PutFiles
-// does NOT issue the batch remove-symlink script, because
-// removeSymlinksBatch is currently a no-op (see its doc comment).
+// TestWorkspace_PutFiles_BatchRemoveBeforeUpload verifies PutFiles issues
+// the same if/fi leaf-symlink batch removal as PutDirectory flush.
 func TestWorkspace_PutFiles_BatchRemoveBeforeUpload(t *testing.T) {
 	m := newMockServer(t)
 	defer m.close()
@@ -3304,15 +3288,18 @@ func TestWorkspace_PutFiles_BatchRemoveBeforeUpload(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// removeSymlinksBatch is a no-op: the batch `if [ -L ]` script must
-	// NOT be issued.
 	m.mu.Lock()
 	commands := append([]string(nil), m.commands...)
 	m.mu.Unlock()
+	found := false
 	for _, cmd := range commands {
-		assert.NotContains(t, cmd, `if [ -L "$p" ]`,
-			"no-op removeSymlinksBatch must not issue the batch rm script")
+		if strings.Contains(cmd, "if [ -L \"$p\" ]") && strings.Contains(cmd, "rm -f --") &&
+			(strings.Contains(cmd, "a.txt") || strings.Contains(cmd, "b.txt")) {
+			found = true
+			break
+		}
 	}
+	assert.True(t, found, "PutFiles must batch-remove leaf symlinks before upload")
 }
 
 // TestWorkspace_RunProgram_EnsuresLayoutDirs verifies RunProgram issues
