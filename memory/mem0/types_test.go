@@ -89,3 +89,62 @@ func TestSearchV2Response_UnmarshalInvalid(t *testing.T) {
 	var resp searchV2Response
 	assert.Error(t, resp.UnmarshalJSON([]byte(`not-json`)))
 }
+
+func TestOSSCreateMemoryRequest_OptionalFields(t *testing.T) {
+	t.Run("defaults preserve the existing payload", func(t *testing.T) {
+		body, err := json.Marshal(ossCreateMemoryRequest{
+			Messages: []apiMessage{{Role: "user", Content: "hello"}},
+			UserID:   "user",
+			Infer:    true,
+		})
+		require.NoError(t, err)
+		var fields map[string]any
+		require.NoError(t, json.Unmarshal(body, &fields))
+		assert.Equal(t, true, fields["infer"])
+		assert.NotContains(t, fields, "expiration_date")
+		assert.NotContains(t, fields, "memory_type")
+		assert.NotContains(t, fields, "prompt")
+	})
+
+	t.Run("explicit values are serialized", func(t *testing.T) {
+		body, err := json.Marshal(ossCreateMemoryRequest{
+			Messages:       []apiMessage{{Role: "user", Content: "hello"}},
+			ExpirationDate: "2026-08-01",
+			Infer:          false,
+			MemoryType:     string(MemoryTypeProcedural),
+			Prompt:         "extract procedures",
+		})
+		require.NoError(t, err)
+		var fields map[string]any
+		require.NoError(t, json.Unmarshal(body, &fields))
+		assert.Equal(t, "2026-08-01", fields["expiration_date"])
+		assert.Equal(t, false, fields["infer"])
+		assert.Equal(t, string(MemoryTypeProcedural), fields["memory_type"])
+		assert.Equal(t, "extract procedures", fields["prompt"])
+	})
+}
+
+func TestSearchV2Request_OptionalFields(t *testing.T) {
+	body, err := json.Marshal(searchV2Request{Query: "hello", TopK: 20})
+	require.NoError(t, err)
+	var defaults map[string]any
+	require.NoError(t, json.Unmarshal(body, &defaults))
+	assert.NotContains(t, defaults, "threshold")
+	assert.NotContains(t, defaults, "explain")
+	assert.NotContains(t, defaults, "show_expired")
+
+	threshold := 0.42
+	body, err = json.Marshal(searchV2Request{
+		Query:       "hello",
+		TopK:        20,
+		Threshold:   &threshold,
+		Explain:     true,
+		ShowExpired: true,
+	})
+	require.NoError(t, err)
+	var explicit map[string]any
+	require.NoError(t, json.Unmarshal(body, &explicit))
+	assert.InDelta(t, 0.42, explicit["threshold"], 1e-9)
+	assert.Equal(t, true, explicit["explain"])
+	assert.Equal(t, true, explicit["show_expired"])
+}

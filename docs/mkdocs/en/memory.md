@@ -1728,6 +1728,64 @@ In short, `MemoryService` means "the framework manages memories directly", while
 | `WithMemoryQueueSize(n)` | Queue size per ingest worker. | `10` |
 | `WithMemoryJobTimeout(d)` | Timeout for queued jobs and synchronous fallback ingest. | `30s` |
 
+### Self-Hosted OSS Request Fields
+
+The standard Runner path keeps its existing behavior: it supplies the session
+ID as `run_id`, the active agent name as `agent_id`, and leaves all other Mem0
+settings at their server defaults. Custom callers can explicitly configure the
+remaining OSS create fields for one ingestion request:
+
+```go
+err := mem0Svc.IngestSession(
+    ctx,
+    sess,
+    session.WithIngestAgentID("deployment-agent"),
+    memorymem0.WithIngestPrompt("Extract reusable deployment procedures."),
+    memorymem0.WithIngestExpirationDate(
+        time.Date(2026, time.December, 31, 0, 0, 0, 0, time.UTC),
+    ),
+    memorymem0.WithIngestInference(false),
+    memorymem0.WithIngestMemoryType(memorymem0.MemoryTypeProcedural),
+)
+```
+
+- `WithIngestPrompt` forwards Mem0's per-request extraction prompt.
+- `WithIngestExpirationDate` forwards a `YYYY-MM-DD` expiration date. The date
+  in the supplied value's location is used.
+- `WithIngestInference` controls Mem0's `infer` field. Its default remains
+  `true`; `false` stores non-system messages without LLM extraction.
+- `WithIngestMemoryType` currently accepts
+  `MemoryTypeProcedural`. Procedural memory requires an `agent_id`.
+- Prompt, expiration date, and memory type are OSS-only and are rejected in
+  hosted-platform mode rather than silently ignored. `infer` is supported in
+  both modes.
+
+OSS search can also pass provider-supported scopes and diagnostics through the
+standard search API:
+
+```go
+entries, err := mem0Svc.SearchMemories(
+    ctx,
+    memory.UserKey{AppName: "my-app", UserID: "user-1"},
+    "deployment procedure",
+    memory.WithSearchOptions(memory.SearchOptions{
+        Query:               "deployment procedure",
+        AgentID:             "deployment-agent",
+        RunID:               "run-1",
+        MaxResults:          20,
+        SimilarityThreshold: 0.5,
+        IncludeExpired:      true,
+        Explain:             true,
+    }),
+)
+```
+
+For list requests, use `ReadOSSMemories` with `OSSReadOptions` to forward
+`agent_id`, `run_id`, and `show_expired`. OSS entries preserve Mem0's promoted
+record fields in `Entry.ProviderAttributes` and optional ranking diagnostics in
+`Entry.ScoreDetails`. These fields are available to direct Go callers but are
+not included in the standard `memory_search` or `memory_load` tool result.
+
 For the official self-hosted OSS server, configure the server-side LLM and
 embedder independently when they use different endpoints or API keys. The OSS
 server exposes `POST /configure`; set `llm.provider=openai` with the LLM model,

@@ -14,6 +14,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -130,12 +131,12 @@ func TestIngestSession_NilContext(t *testing.T) {
 }
 
 func TestIngestSession_ForwardsMessagesToBackend(t *testing.T) {
-	var gotBody []byte
+	gotBody := make(chan []byte, 1)
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
-		buf := make([]byte, 4096)
-		n, _ := r.Body.Read(buf)
-		gotBody = buf[:n]
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		gotBody <- body
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`[{"id":"x","status":"SUCCEEDED"}]`))
 	})
@@ -165,11 +166,13 @@ func TestIngestSession_ForwardsMessagesToBackend(t *testing.T) {
 		session.WithIngestRunID("run-1"),
 	))
 
-	// Wait for the async worker to hit the backend.
-	assert.Eventually(t, func() bool { return len(gotBody) > 0 },
-		2*time.Second, 10*time.Millisecond, "backend was not hit")
-
-	body := string(gotBody)
+	var body string
+	select {
+	case requestBody := <-gotBody:
+		body = string(requestBody)
+	case <-time.After(2 * time.Second):
+		t.Fatal("backend was not hit")
+	}
 	for _, want := range []string{"hello", "agent-1", "run-1", `"k":"v"`} {
 		assert.Contains(t, body, want)
 	}
@@ -218,6 +221,101 @@ func TestIngestSession_SyncFallbackWhenQueueFull(t *testing.T) {
 	require.NoError(t, svc.IngestSession(context.Background(), sess))
 	assert.Equal(t, int32(1), atomic.LoadInt32(&ingestCalls),
 		"sync fallback must hit the backend exactly once")
+}
+
+func TestIngestSession_ValidatesOptionalFieldsBeforeWatermark(t *testing.T) {
+	tests := []struct {
+		name    string
+		service []ServiceOpt
+		opts    []session.IngestOption
+		wantErr string
+	}{
+		{
+			name:    "invalid expiration date",
+			service: []ServiceOpt{WithSelfHostedOSS(), WithHost("http://localhost:8888")},
+			opts: []session.IngestOption{func(opts *session.IngestOptions) {
+				opts.ExpirationDate = "07/17/2026"
+			}},
+			wantErr: "invalid expiration date",
+		},
+		{
+			name:    "unsupported memory type",
+			service: []ServiceOpt{WithSelfHostedOSS(), WithHost("http://localhost:8888")},
+			opts:    []session.IngestOption{WithIngestMemoryType(MemoryType("core"))},
+			wantErr: "unsupported memory type",
+		},
+		{
+			name:    "procedural memory without agent",
+			service: []ServiceOpt{WithSelfHostedOSS(), WithHost("http://localhost:8888")},
+			opts:    []session.IngestOption{WithIngestMemoryType(MemoryTypeProcedural)},
+			wantErr: "requires an agent ID",
+		},
+		{
+			name:    "OSS-only prompt in cloud mode",
+			service: []ServiceOpt{WithAPIKey("key")},
+			opts:    []session.IngestOption{WithIngestPrompt("extract deadlines")},
+			wantErr: "require self-hosted OSS mode",
+		},
+		{
+			name:    "OSS-only expiration in cloud mode",
+			service: []ServiceOpt{WithAPIKey("key")},
+			opts: []session.IngestOption{WithIngestExpirationDate(
+				time.Date(2026, time.August, 1, 0, 0, 0, 0, time.UTC),
+			)},
+			wantErr: "require self-hosted OSS mode",
+		},
+		{
+			name:    "OSS-only memory type in cloud mode",
+			service: []ServiceOpt{WithAPIKey("key")},
+			opts: []session.IngestOption{
+				session.WithIngestAgentID("agent-1"),
+				WithIngestMemoryType(MemoryTypeProcedural),
+			},
+			wantErr: "require self-hosted OSS mode",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc, err := NewService(tt.service...)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = svc.Close() })
+			sess := newIngestTestSession()
+			err = svc.IngestSession(context.Background(), sess, tt.opts...)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+			assert.True(t, readLastExtractAt(sess).IsZero())
+		})
+	}
+}
+
+func TestResolveIngestOptionsSnapshotsCallerData(t *testing.T) {
+	metadata := map[string]any{"nested": map[string]any{"value": "before"}}
+	infer := false
+	opts := resolveIngestOptions([]session.IngestOption{func(opts *session.IngestOptions) {
+		opts.Metadata = metadata
+		opts.Infer = &infer
+	}})
+	metadata["nested"].(map[string]any)["value"] = "after"
+	infer = true
+
+	assert.Equal(t, "before", opts.Metadata["nested"].(map[string]any)["value"])
+	require.NotNil(t, opts.Infer)
+	assert.False(t, *opts.Infer)
+}
+
+func newIngestTestSession() *session.Session {
+	return &session.Session{
+		AppName: "app",
+		UserID:  "user",
+		ID:      "session",
+		Events: []event.Event{{
+			Timestamp: time.Date(2026, time.July, 17, 12, 0, 0, 0, time.UTC),
+			Response: &model.Response{Choices: []model.Choice{{
+				Message: model.Message{Role: model.RoleUser, Content: "hello"},
+			}}},
+		}},
+	}
 }
 
 // --- ReadMemories ---
@@ -450,6 +548,60 @@ func TestReadMemories_SelfHostedOSSSortsLimitsAndSkipsInvalidRecords(t *testing.
 	assert.Contains(t, gotQuery, "top_k=1000")
 }
 
+func TestReadOSSMemories_ForwardsProviderScopes(t *testing.T) {
+	var gotQuery string
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.RawQuery
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"results":[{
+			"id":"memory-1",
+			"memory":"remember this",
+			"metadata":{"trpc_app_name":"app"},
+			"agent_id":"agent-1",
+			"run_id":"run-1",
+			"expiration_date":"2026-08-01"
+		}]}`))
+	})
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+	svc, err := NewService(WithSelfHostedOSS(), WithHost(srv.URL))
+	require.NoError(t, err)
+	defer svc.Close()
+
+	entries, err := svc.ReadOSSMemories(
+		context.Background(),
+		memory.UserKey{AppName: "app", UserID: "user"},
+		10,
+		OSSReadOptions{AgentID: "agent-1", RunID: "run-1", IncludeExpired: true},
+	)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	query, err := url.ParseQuery(gotQuery)
+	require.NoError(t, err)
+	assert.Equal(t, "user", query.Get(queryKeyUserID))
+	assert.Equal(t, "agent-1", query.Get(queryKeyAgentID))
+	assert.Equal(t, "run-1", query.Get(queryKeyRunID))
+	assert.Equal(t, "true", query.Get(queryKeyShowExpired))
+	assert.Equal(t, "agent-1", entries[0].ProviderAttributes[queryKeyAgentID])
+	assert.Equal(t, "run-1", entries[0].ProviderAttributes[queryKeyRunID])
+	assert.Equal(t, "2026-08-01", entries[0].ProviderAttributes["expiration_date"])
+}
+
+func TestReadOSSMemories_RejectsCloudMode(t *testing.T) {
+	svc, err := NewService(WithAPIKey("key"))
+	require.NoError(t, err)
+	defer svc.Close()
+
+	_, err = svc.ReadOSSMemories(
+		context.Background(),
+		memory.UserKey{AppName: "app", UserID: "user"},
+		10,
+		OSSReadOptions{},
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "require self-hosted OSS mode")
+}
+
 // --- SearchMemories ---
 
 func TestSearchMemories_InvalidUserKey(t *testing.T) {
@@ -605,4 +757,102 @@ func TestSearchMemories_SelfHostedOSSCanIncludeUnscopedMemories(t *testing.T) {
 	assert.Equal(t, "app", got[0].ID)
 	assert.Equal(t, "legacy", got[1].ID)
 	assert.Equal(t, map[string]any{queryKeyUserID: "user"}, gotReq.Filters)
+}
+
+func TestSearchMemories_SelfHostedOSSForwardsOptionalFields(t *testing.T) {
+	var gotReq searchV2Request
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		require.NoError(t, json.Unmarshal(body, &gotReq))
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"results":[{
+			"id":"memory-1",
+			"memory":"match",
+			"metadata":{"trpc_app_name":"app","custom":"value"},
+			"score":0.9,
+			"score_details":{"semantic":0.8,"lexical":0.1},
+			"agent_id":"agent-1",
+			"run_id":"run-1",
+			"hash":"hash-1",
+			"expiration_date":"2026-08-01",
+			"actor_id":"actor-1",
+			"role":"user",
+			"attributed_to":"alice"
+		}]}`))
+	})
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+	svc, err := NewService(WithSelfHostedOSS(), WithHost(srv.URL))
+	require.NoError(t, err)
+	defer svc.Close()
+
+	searchOpts := memory.SearchOptions{
+		Query:               "query",
+		AgentID:             "agent-1",
+		RunID:               "run-1",
+		SimilarityThreshold: 0.42,
+		IncludeExpired:      true,
+		Explain:             true,
+	}
+	entries, err := svc.SearchMemories(
+		context.Background(),
+		memory.UserKey{AppName: "app", UserID: "user"},
+		"query",
+		memory.WithSearchOptions(searchOpts),
+	)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, "agent-1", gotReq.Filters[queryKeyAgentID])
+	assert.Equal(t, "run-1", gotReq.Filters[queryKeyRunID])
+	require.NotNil(t, gotReq.Threshold)
+	assert.InDelta(t, 0.42, *gotReq.Threshold, 1e-9)
+	assert.True(t, gotReq.Explain)
+	assert.True(t, gotReq.ShowExpired)
+	assert.Equal(t, map[string]any{"semantic": 0.8, "lexical": 0.1}, entries[0].ScoreDetails)
+	assert.Equal(t, "agent-1", entries[0].ProviderAttributes[queryKeyAgentID])
+	assert.Equal(t, "run-1", entries[0].ProviderAttributes[queryKeyRunID])
+	assert.Equal(t, "hash-1", entries[0].ProviderAttributes["hash"])
+	assert.Equal(t, "2026-08-01", entries[0].ProviderAttributes["expiration_date"])
+	assert.Equal(t, "actor-1", entries[0].ProviderAttributes["actor_id"])
+	assert.Equal(t, "user", entries[0].ProviderAttributes["role"])
+	assert.Equal(t, "alice", entries[0].ProviderAttributes["attributed_to"])
+	assert.Equal(t, map[string]any{
+		metadataKeyTRPCAppName: "app",
+		"custom":               "value",
+	}, entries[0].ProviderAttributes["metadata"])
+}
+
+func TestSearchMemories_CloudDoesNotForwardOSSFields(t *testing.T) {
+	var gotReq map[string]any
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		require.NoError(t, json.Unmarshal(body, &gotReq))
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"memories":[]}`))
+	})
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+	svc, err := NewService(WithAPIKey("key"), WithHost(srv.URL))
+	require.NoError(t, err)
+	defer svc.Close()
+
+	_, err = svc.SearchMemories(
+		context.Background(),
+		memory.UserKey{AppName: "app", UserID: "user"},
+		"query",
+		memory.WithSearchOptions(memory.SearchOptions{
+			Query:               "query",
+			AgentID:             "agent-1",
+			RunID:               "run-1",
+			SimilarityThreshold: 0.42,
+			IncludeExpired:      true,
+			Explain:             true,
+		}),
+	)
+	require.NoError(t, err)
+	assert.NotContains(t, gotReq, "threshold")
+	assert.NotContains(t, gotReq, "explain")
+	assert.NotContains(t, gotReq, "show_expired")
 }

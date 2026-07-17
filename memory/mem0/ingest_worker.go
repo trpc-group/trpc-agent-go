@@ -185,8 +185,12 @@ func (w *ingestWorker) ingest(
 	if len(apiMsgs) == 0 {
 		return nil
 	}
+	infer := true
+	if reqOpts.Infer != nil {
+		infer = *reqOpts.Infer
+	}
 	if w.apiMode == apiModeSelfHostedOSS {
-		return w.ingestOSS(ctx, userKey, apiMsgs, reqOpts)
+		return w.ingestOSS(ctx, userKey, apiMsgs, reqOpts, infer)
 	}
 	req := createMemoryRequest{
 		Messages:  apiMsgs,
@@ -195,7 +199,7 @@ func (w *ingestWorker) ingest(
 		AgentID:   reqOpts.AgentID,
 		RunID:     reqOpts.RunID,
 		Metadata:  cloneMetadata(reqOpts.Metadata),
-		Infer:     true,
+		Infer:     infer,
 		Async:     w.asyncMode,
 		Version:   w.version,
 		OrgID:     w.orgID,
@@ -213,14 +217,18 @@ func (w *ingestWorker) ingestOSS(
 	userKey memory.UserKey,
 	messages []apiMessage,
 	reqOpts session.IngestOptions,
+	infer bool,
 ) error {
 	req := ossCreateMemoryRequest{
-		Messages: messages,
-		UserID:   userKey.UserID,
-		AgentID:  reqOpts.AgentID,
-		RunID:    reqOpts.RunID,
-		Metadata: withTRPCAppMetadata(reqOpts.Metadata, userKey.AppName),
-		Infer:    true,
+		Messages:       messages,
+		UserID:         userKey.UserID,
+		AgentID:        reqOpts.AgentID,
+		RunID:          reqOpts.RunID,
+		Metadata:       withTRPCAppMetadata(reqOpts.Metadata, userKey.AppName),
+		ExpirationDate: reqOpts.ExpirationDate,
+		Infer:          infer,
+		MemoryType:     reqOpts.MemoryType,
+		Prompt:         reqOpts.Prompt,
 	}
 	return w.c.doJSON(ctx, httpMethodPost, pathOSSMemories, nil, req, nil)
 }

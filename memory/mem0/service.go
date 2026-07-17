@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
@@ -73,10 +74,10 @@ func (s *Service) Tools() []tool.Tool {
 
 // IngestSession enqueues session transcript ingestion into mem0.
 //
-// Per-request settings are configured via session.IngestOption helpers
-// (e.g. session.WithIngestMetadata, session.WithIngestAgentID,
-// session.WithIngestRunID). The resolved snapshot is forwarded to mem0's
-// POST /v1/memories/ payload as metadata, agent_id and run_id respectively.
+// Per-request settings are configured via session.IngestOption helpers. Common
+// scopes use session.WithIngestMetadata, session.WithIngestAgentID, and
+// session.WithIngestRunID. Mem0-specific request fields use the WithIngest*
+// helpers in this package.
 //
 // An invalid session scope (empty AppName / UserID) is surfaced as an error
 // rather than silently dropped, so caller misconfiguration is distinguishable
@@ -101,14 +102,11 @@ func (s *Service) IngestSession(
 	if len(messages) == 0 {
 		return nil
 	}
-	writeLastExtractAt(sess, latestTs)
-	var reqOpts session.IngestOptions
-	for _, opt := range opts {
-		if opt == nil {
-			continue
-		}
-		opt(&reqOpts)
+	reqOpts := resolveIngestOptions(opts)
+	if err := s.validateIngestOptions(reqOpts); err != nil {
+		return err
 	}
+	writeLastExtractAt(sess, latestTs)
 	job := &ingestJob{
 		Ctx:      context.WithoutCancel(ctx),
 		UserKey:  userKey,
@@ -133,13 +131,50 @@ func (s *Service) IngestSession(
 	return s.ingestWorker.ingest(syncCtx, userKey, sess, messages, reqOpts)
 }
 
+func resolveIngestOptions(options []session.IngestOption) session.IngestOptions {
+	var opts session.IngestOptions
+	for _, option := range options {
+		if option == nil {
+			continue
+		}
+		option(&opts)
+	}
+	opts.Metadata = cloneMetadata(opts.Metadata)
+	if opts.Infer != nil {
+		infer := *opts.Infer
+		opts.Infer = &infer
+	}
+	return opts
+}
+
+func (s *Service) validateIngestOptions(opts session.IngestOptions) error {
+	if opts.ExpirationDate != "" {
+		if _, err := time.Parse(time.DateOnly, opts.ExpirationDate); err != nil {
+			return fmt.Errorf("mem0: invalid expiration date %q: %w", opts.ExpirationDate, err)
+		}
+	}
+	if opts.MemoryType != "" && opts.MemoryType != string(MemoryTypeProcedural) {
+		return fmt.Errorf("mem0: unsupported memory type %q", opts.MemoryType)
+	}
+	if opts.MemoryType == string(MemoryTypeProcedural) && strings.TrimSpace(opts.AgentID) == "" {
+		return errors.New("mem0: procedural memory requires an agent ID")
+	}
+	if s.opts.apiMode == apiModeSelfHostedOSS {
+		return nil
+	}
+	if opts.Prompt != "" || opts.ExpirationDate != "" || opts.MemoryType != "" {
+		return errors.New("mem0: prompt, expiration date, and memory type require self-hosted OSS mode")
+	}
+	return nil
+}
+
 // ReadMemories reads memories for a user.
 func (s *Service) ReadMemories(ctx context.Context, userKey memory.UserKey, limit int) ([]*memory.Entry, error) {
 	if err := userKey.CheckUserKey(); err != nil {
 		return nil, err
 	}
 	if s.opts.apiMode == apiModeSelfHostedOSS {
-		return s.readOSSMemories(ctx, userKey, limit)
+		return s.readOSSMemories(ctx, userKey, limit, OSSReadOptions{})
 	}
 	pageSize := defaultListPageSize
 	if limit > 0 && limit < pageSize {
@@ -187,7 +222,29 @@ func (s *Service) ReadMemories(ctx context.Context, userKey memory.UserKey, limi
 	return entries, nil
 }
 
-func (s *Service) readOSSMemories(ctx context.Context, userKey memory.UserKey, limit int) ([]*memory.Entry, error) {
+// ReadOSSMemories reads self-hosted OSS records with optional provider scopes.
+// It returns an error when the service is not configured in OSS mode.
+func (s *Service) ReadOSSMemories(
+	ctx context.Context,
+	userKey memory.UserKey,
+	limit int,
+	opts OSSReadOptions,
+) ([]*memory.Entry, error) {
+	if s.opts.apiMode != apiModeSelfHostedOSS {
+		return nil, errors.New("mem0: OSS read options require self-hosted OSS mode")
+	}
+	if err := userKey.CheckUserKey(); err != nil {
+		return nil, err
+	}
+	return s.readOSSMemories(ctx, userKey, limit, opts)
+}
+
+func (s *Service) readOSSMemories(
+	ctx context.Context,
+	userKey memory.UserKey,
+	limit int,
+	opts OSSReadOptions,
+) ([]*memory.Entry, error) {
 	if limit <= 0 {
 		return nil, errors.New("mem0: self-hosted OSS ReadMemories requires a positive limit")
 	}
@@ -196,6 +253,15 @@ func (s *Service) readOSSMemories(ctx context.Context, userKey memory.UserKey, l
 	}
 	q := url.Values{}
 	q.Set(queryKeyUserID, userKey.UserID)
+	if opts.AgentID != "" {
+		q.Set(queryKeyAgentID, opts.AgentID)
+	}
+	if opts.RunID != "" {
+		q.Set(queryKeyRunID, opts.RunID)
+	}
+	if opts.IncludeExpired {
+		q.Set(queryKeyShowExpired, "true")
+	}
 	// The current OSS GET /memories API can only scope by user_id, run_id, or
 	// agent_id, not by metadata.trpc_app_name. Fetch the server-side cap and
 	// enforce app isolation locally as a best-effort view over those candidates.
@@ -211,7 +277,7 @@ func (s *Service) readOSSMemories(ctx context.Context, userKey memory.UserKey, l
 		if !recordMatchesTRPCApp(rec, userKey.AppName, s.opts.includeUnscopedSelfHostedOSSMemories) {
 			continue
 		}
-		if entry := toEntry(userKey.AppName, userKey.UserID, rec); entry != nil {
+		if entry := toOSSEntry(userKey.AppName, userKey.UserID, rec); entry != nil {
 			entries = append(entries, entry)
 		}
 	}
@@ -245,12 +311,24 @@ func (s *Service) SearchMemories(ctx context.Context, userKey memory.UserKey, qu
 	filters := cloudSearchFilters(userKey, s.opts)
 	if s.opts.apiMode == apiModeSelfHostedOSS {
 		path = pathOSSSearch
-		filters = ossSearchFilters(userKey, s.opts.includeUnscopedSelfHostedOSSMemories)
+		filters = ossSearchFilters(
+			userKey,
+			s.opts.includeUnscopedSelfHostedOSSMemories,
+			searchOpts,
+		)
 	}
 	req := searchV2Request{
 		Query:   searchOpts.Query,
 		Filters: filters,
 		TopK:    searchCandidateLimit(searchOpts, maxResults),
+	}
+	if s.opts.apiMode == apiModeSelfHostedOSS {
+		if searchOpts.SimilarityThreshold > 0 && searchOpts.SimilarityThreshold <= 1 {
+			threshold := searchOpts.SimilarityThreshold
+			req.Threshold = &threshold
+		}
+		req.Explain = searchOpts.Explain
+		req.ShowExpired = searchOpts.IncludeExpired
 	}
 	var resp searchV2Response
 	if err := s.c.doJSON(ctx, httpMethodPost, path, nil, req, &resp); err != nil {
@@ -258,22 +336,15 @@ func (s *Service) SearchMemories(ctx context.Context, userKey memory.UserKey, qu
 	}
 	results := make([]*memory.Entry, 0, len(resp.Memories))
 	for _, m := range resp.Memories {
-		rec := memoryRecord{
-			ID:        m.ID,
-			Memory:    m.Memory,
-			Metadata:  m.Metadata,
-			UserID:    m.UserID,
-			AppID:     m.AppID,
-			CreatedAt: m.CreatedAt,
-		}
-		if m.UpdatedAt != nil {
-			rec.UpdatedAt = *m.UpdatedAt
-		}
+		rec := m.toMemoryRecord()
 		if s.opts.apiMode == apiModeSelfHostedOSS &&
 			!recordMatchesTRPCApp(&rec, userKey.AppName, s.opts.includeUnscopedSelfHostedOSSMemories) {
 			continue
 		}
 		entry := toEntry(userKey.AppName, userKey.UserID, &rec)
+		if s.opts.apiMode == apiModeSelfHostedOSS {
+			entry = toOSSEntry(userKey.AppName, userKey.UserID, &rec)
+		}
 		if entry == nil {
 			continue
 		}

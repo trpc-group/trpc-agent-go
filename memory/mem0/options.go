@@ -12,7 +12,10 @@ package mem0
 
 import (
 	"net/http"
+	"strings"
 	"time"
+
+	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
 const (
@@ -22,6 +25,24 @@ const (
 	defaultAsyncMemoryNum    = 1
 	defaultMemoryQueueSize   = 10
 	defaultMemoryJobTimeout  = 30 * time.Second
+)
+
+// OSSReadOptions controls a self-hosted OSS memory list request.
+type OSSReadOptions struct {
+	// AgentID narrows the list to memories associated with one agent.
+	AgentID string
+	// RunID narrows the list to memories associated with one run.
+	RunID string
+	// IncludeExpired asks Mem0 to include expired memories.
+	IncludeExpired bool
+}
+
+// MemoryType identifies a Mem0 memory creation mode.
+type MemoryType string
+
+const (
+	// MemoryTypeProcedural stores agent procedures rather than user facts.
+	MemoryTypeProcedural MemoryType = "procedural_memory"
 )
 
 type apiMode int
@@ -70,6 +91,49 @@ var defaultOptions = serviceOpts{
 
 // ServiceOpt configures a mem0 service.
 type ServiceOpt func(*serviceOpts)
+
+// WithIngestPrompt adds custom extraction instructions to one Mem0 OSS ingest
+// request. Empty prompts are ignored.
+func WithIngestPrompt(prompt string) session.IngestOption {
+	return func(opts *session.IngestOptions) {
+		if strings.TrimSpace(prompt) == "" {
+			return
+		}
+		opts.Prompt = prompt
+	}
+}
+
+// WithIngestExpirationDate sets the calendar date after which memories created
+// by one Mem0 OSS ingest request are hidden by default. The date component in
+// expirationDate's location is used.
+func WithIngestExpirationDate(expirationDate time.Time) session.IngestOption {
+	return func(opts *session.IngestOptions) {
+		if expirationDate.IsZero() {
+			return
+		}
+		opts.ExpirationDate = expirationDate.Format(time.DateOnly)
+	}
+}
+
+// WithIngestInference controls whether Mem0 extracts memories from the
+// transcript. When disabled, Mem0 stores non-system messages verbatim.
+func WithIngestInference(infer bool) session.IngestOption {
+	return func(opts *session.IngestOptions) {
+		value := infer
+		opts.Infer = &value
+	}
+}
+
+// WithIngestMemoryType selects the Mem0 memory creation mode for one request.
+// The self-hosted OSS API currently supports MemoryTypeProcedural.
+func WithIngestMemoryType(memoryType MemoryType) session.IngestOption {
+	return func(opts *session.IngestOptions) {
+		if memoryType == "" {
+			return
+		}
+		opts.MemoryType = string(memoryType)
+	}
+}
 
 // WithHost sets the mem0 API host or base URL.
 func WithHost(host string) ServiceOpt {

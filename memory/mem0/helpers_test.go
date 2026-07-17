@@ -152,6 +152,39 @@ func TestToEntry(t *testing.T) {
 		assert.Equal(t, []string{"alice"}, e.Memory.Participants)
 		assert.Equal(t, "tokyo", e.Memory.Location)
 		assert.NotNil(t, e.Memory.LastUpdated)
+		assert.Nil(t, e.ProviderAttributes)
+		assert.Nil(t, e.ScoreDetails)
+	})
+	t.Run("OSS entry preserves provider fields without aliasing", func(t *testing.T) {
+		rec := &memoryRecord{
+			ID:             "id-1",
+			Memory:         "content",
+			Metadata:       map[string]any{"custom": map[string]any{"value": "before"}},
+			AgentID:        "agent-1",
+			RunID:          "run-1",
+			Hash:           "hash-1",
+			ExpirationDate: "2026-08-01",
+			ActorID:        "actor-1",
+			Role:           "user",
+			AttributedTo:   "alice",
+			ScoreDetails:   map[string]any{"semantic": 0.8},
+		}
+		e := toOSSEntry("app", "user", rec)
+		require.NotNil(t, e)
+		assert.Equal(t, "agent-1", e.ProviderAttributes[queryKeyAgentID])
+		assert.Equal(t, "run-1", e.ProviderAttributes[queryKeyRunID])
+		assert.Equal(t, "hash-1", e.ProviderAttributes["hash"])
+		assert.Equal(t, "2026-08-01", e.ProviderAttributes["expiration_date"])
+		assert.Equal(t, "actor-1", e.ProviderAttributes["actor_id"])
+		assert.Equal(t, "user", e.ProviderAttributes["role"])
+		assert.Equal(t, "alice", e.ProviderAttributes["attributed_to"])
+		assert.Equal(t, map[string]any{"semantic": 0.8}, e.ScoreDetails)
+
+		rec.Metadata["custom"].(map[string]any)["value"] = "after"
+		rec.ScoreDetails["semantic"] = 0.1
+		providerMetadata := e.ProviderAttributes["metadata"].(map[string]any)
+		assert.Equal(t, "before", providerMetadata["custom"].(map[string]any)["value"])
+		assert.Equal(t, 0.8, e.ScoreDetails["semantic"])
 	})
 }
 

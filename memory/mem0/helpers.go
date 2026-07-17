@@ -35,11 +35,14 @@ const (
 	pathOSSMemories = "/memories"
 	pathOSSSearch   = "/search"
 
-	queryKeyUserID   = "user_id"
-	queryKeyAppID    = "app_id"
-	queryKeyPage     = "page"
-	queryKeyPageSize = "page_size"
-	queryKeyTopK     = "top_k"
+	queryKeyUserID      = "user_id"
+	queryKeyAppID       = "app_id"
+	queryKeyPage        = "page"
+	queryKeyPageSize    = "page_size"
+	queryKeyTopK        = "top_k"
+	queryKeyAgentID     = "agent_id"
+	queryKeyRunID       = "run_id"
+	queryKeyShowExpired = "show_expired"
 
 	memoryUserRole = "user"
 
@@ -92,9 +95,19 @@ func cloudSearchFilters(userKey memory.UserKey, opts serviceOpts) map[string]any
 	return filters
 }
 
-func ossSearchFilters(userKey memory.UserKey, includeUnscoped bool) map[string]any {
+func ossSearchFilters(
+	userKey memory.UserKey,
+	includeUnscoped bool,
+	opts memory.SearchOptions,
+) map[string]any {
 	filters := map[string]any{
 		queryKeyUserID: userKey.UserID,
+	}
+	if opts.AgentID != "" {
+		filters[queryKeyAgentID] = opts.AgentID
+	}
+	if opts.RunID != "" {
+		filters[queryKeyRunID] = opts.RunID
 	}
 	if !includeUnscoped {
 		filters[metadataKeyTRPCAppName] = userKey.AppName
@@ -158,6 +171,19 @@ func parseMem0Time(s string) (time.Time, bool) {
 }
 
 func toEntry(appName, userID string, rec *memoryRecord) *memory.Entry {
+	return toEntryWithProviderFields(appName, userID, rec, false)
+}
+
+func toOSSEntry(appName, userID string, rec *memoryRecord) *memory.Entry {
+	return toEntryWithProviderFields(appName, userID, rec, true)
+}
+
+func toEntryWithProviderFields(
+	appName string,
+	userID string,
+	rec *memoryRecord,
+	includeProviderFields bool,
+) *memory.Entry {
 	if rec == nil || strings.TrimSpace(rec.ID) == "" || strings.TrimSpace(rec.Memory) == "" {
 		return nil
 	}
@@ -174,7 +200,7 @@ func toEntry(appName, userID string, rec *memoryRecord) *memory.Entry {
 		),
 		Location: readLocationFromMetadata(rec.Metadata),
 	}
-	return &memory.Entry{
+	entry := &memory.Entry{
 		ID:        rec.ID,
 		AppName:   appName,
 		UserID:    userID,
@@ -182,6 +208,32 @@ func toEntry(appName, userID string, rec *memoryRecord) *memory.Entry {
 		CreatedAt: times.CreatedAt,
 		UpdatedAt: times.UpdatedAt,
 	}
+	if !includeProviderFields {
+		return entry
+	}
+	if len(rec.Metadata) > 0 {
+		entry.ProviderAttributes = map[string]any{"metadata": cloneMetadata(rec.Metadata)}
+	}
+	entry.ProviderAttributes = addRecordAttribute(entry.ProviderAttributes, queryKeyAgentID, rec.AgentID)
+	entry.ProviderAttributes = addRecordAttribute(entry.ProviderAttributes, queryKeyRunID, rec.RunID)
+	entry.ProviderAttributes = addRecordAttribute(entry.ProviderAttributes, "hash", rec.Hash)
+	entry.ProviderAttributes = addRecordAttribute(entry.ProviderAttributes, "expiration_date", rec.ExpirationDate)
+	entry.ProviderAttributes = addRecordAttribute(entry.ProviderAttributes, "actor_id", rec.ActorID)
+	entry.ProviderAttributes = addRecordAttribute(entry.ProviderAttributes, "role", rec.Role)
+	entry.ProviderAttributes = addRecordAttribute(entry.ProviderAttributes, "attributed_to", rec.AttributedTo)
+	entry.ScoreDetails = cloneMetadata(rec.ScoreDetails)
+	return entry
+}
+
+func addRecordAttribute(attributes map[string]any, key, value string) map[string]any {
+	if value == "" {
+		return attributes
+	}
+	if attributes == nil {
+		attributes = make(map[string]any)
+	}
+	attributes[key] = value
+	return attributes
 }
 
 func readTopicsFromMetadata(meta map[string]any) []string {

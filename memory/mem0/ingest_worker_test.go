@@ -183,6 +183,27 @@ func TestIngestWorker_Ingest_CreatesAndTerminalStatus(t *testing.T) {
 	assert.Equal(t, int32(1), atomic.LoadInt32(&createCalls))
 }
 
+func TestIngestWorker_IngestHostedForwardsInference(t *testing.T) {
+	var gotBody map[string]any
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		require.NoError(t, json.Unmarshal(body, &gotBody))
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`[{"id":"x","status":"SUCCEEDED"}]`))
+	})
+	w, _ := newWorkerWithServer(t, handler, serviceOpts{memoryJobTimeout: time.Second})
+	infer := false
+	err := w.ingest(context.Background(),
+		memory.UserKey{AppName: "app", UserID: "u"},
+		nil,
+		[]model.Message{{Role: model.RoleUser, Content: "store this message"}},
+		session.IngestOptions{Infer: &infer},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, false, gotBody["infer"])
+}
+
 func TestIngestWorker_IngestSelfHostedOSSUsesSyncCreate(t *testing.T) {
 	var gotPath string
 	var gotBody map[string]any
@@ -212,11 +233,48 @@ func TestIngestWorker_IngestSelfHostedOSSUsesSyncCreate(t *testing.T) {
 	assert.NotContains(t, gotBody, "app_id")
 	assert.NotContains(t, gotBody, "async_mode")
 	assert.NotContains(t, gotBody, "version")
+	assert.NotContains(t, gotBody, "expiration_date")
+	assert.NotContains(t, gotBody, "memory_type")
+	assert.NotContains(t, gotBody, "prompt")
 
 	meta, ok := gotBody["metadata"].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, "v", meta["k"])
 	assert.Equal(t, "app", meta[metadataKeyTRPCAppName])
+}
+
+func TestIngestWorker_IngestSelfHostedOSSForwardsOptionalFields(t *testing.T) {
+	var gotBody map[string]any
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		require.NoError(t, json.Unmarshal(body, &gotBody))
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"results":[{"id":"x","memory":"procedure"}]}`))
+	})
+	w, _ := newWorkerWithServer(t, handler, serviceOpts{
+		apiMode:          apiModeSelfHostedOSS,
+		memoryJobTimeout: time.Second,
+	})
+	infer := false
+	err := w.ingest(context.Background(),
+		memory.UserKey{AppName: "app", UserID: "u"},
+		nil,
+		[]model.Message{{Role: model.RoleUser, Content: "deploy the service"}},
+		session.IngestOptions{
+			AgentID:        "agent-1",
+			ExpirationDate: "2026-08-01",
+			Infer:          &infer,
+			MemoryType:     string(MemoryTypeProcedural),
+			Prompt:         "extract a deployment procedure",
+		},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "agent-1", gotBody["agent_id"])
+	assert.Equal(t, "2026-08-01", gotBody["expiration_date"])
+	assert.Equal(t, false, gotBody["infer"])
+	assert.Equal(t, string(MemoryTypeProcedural), gotBody["memory_type"])
+	assert.Equal(t, "extract a deployment procedure", gotBody["prompt"])
 }
 
 func TestIngestWorker_AwaitIngestEvent_PollsUntilSuccess(t *testing.T) {

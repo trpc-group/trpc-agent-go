@@ -1761,6 +1761,61 @@ defer r.Close()
 | `WithMemoryQueueSize(n)` | 每个 worker 的队列长度。 | `10` |
 | `WithMemoryJobTimeout(d)` | 队列任务与同步 fallback ingest 的超时时间。 | `30s` |
 
+### 本地 OSS 请求字段
+
+标准 Runner 路径保持原有行为：它会把 session ID 作为 `run_id`、当前 Agent
+名称作为 `agent_id`，其余 Mem0 参数继续使用服务端默认值。需要定制行为的调用方
+可以针对单次 ingest 显式配置其余 OSS create 字段：
+
+```go
+err := mem0Svc.IngestSession(
+    ctx,
+    sess,
+    session.WithIngestAgentID("deployment-agent"),
+    memorymem0.WithIngestPrompt("提取可复用的部署流程。"),
+    memorymem0.WithIngestExpirationDate(
+        time.Date(2026, time.December, 31, 0, 0, 0, 0, time.UTC),
+    ),
+    memorymem0.WithIngestInference(false),
+    memorymem0.WithIngestMemoryType(memorymem0.MemoryTypeProcedural),
+)
+```
+
+- `WithIngestPrompt` 透传 Mem0 的单次提取 prompt。
+- `WithIngestExpirationDate` 透传 `YYYY-MM-DD` 格式的过期日期；使用传入
+  `time.Time` 所在时区的日期部分。
+- `WithIngestInference` 控制 Mem0 的 `infer` 字段。默认值仍为 `true`；设为
+  `false` 时，Mem0 不通过 LLM 提取，而是直接保存非 system 消息。
+- `WithIngestMemoryType` 当前接受 `MemoryTypeProcedural`；procedural memory
+  必须同时提供 `agent_id`。
+- prompt、过期日期与 memory type 仅供本地 OSS 使用；托管模式会明确报错，
+  不会静默忽略。`infer` 在两种模式下都支持。
+
+OSS 检索也可以通过标准 search API 传入服务端支持的 scope 与诊断参数：
+
+```go
+entries, err := mem0Svc.SearchMemories(
+    ctx,
+    memory.UserKey{AppName: "my-app", UserID: "user-1"},
+    "deployment procedure",
+    memory.WithSearchOptions(memory.SearchOptions{
+        Query:               "deployment procedure",
+        AgentID:             "deployment-agent",
+        RunID:               "run-1",
+        MaxResults:          20,
+        SimilarityThreshold: 0.5,
+        IncludeExpired:      true,
+        Explain:             true,
+    }),
+)
+```
+
+list 请求可以使用 `ReadOSSMemories` 和 `OSSReadOptions` 透传 `agent_id`、
+`run_id` 与 `show_expired`。OSS 返回记录中的 Mem0 promoted fields 会保存在
+`Entry.ProviderAttributes`，可选的排序诊断会保存在 `Entry.ScoreDetails`。这些字段可供
+直接调用 Go API 的代码读取，但不会进入标准 `memory_search` 或 `memory_load`
+工具结果。
+
 如果使用官方本地 Mem0 OSS server，并且 LLM 与 embedding 使用不同 endpoint 或
 API key，需要在 server 侧分别配置。OSS server 提供 `POST /configure`：
 `llm.provider=openai` 配置 LLM 的模型、base URL 和 API key，

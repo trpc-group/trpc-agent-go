@@ -14,6 +14,9 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
 func apply(opts ...ServiceOpt) serviceOpts {
@@ -49,6 +52,49 @@ func TestWithSelfHostedOSS(t *testing.T) {
 func TestWithSelfHostedOSSIncludeUnscopedMemories(t *testing.T) {
 	assert.False(t, apply().includeUnscopedSelfHostedOSSMemories)
 	assert.True(t, apply(WithSelfHostedOSSIncludeUnscopedMemories()).includeUnscopedSelfHostedOSSMemories)
+}
+
+func TestIngestOptions(t *testing.T) {
+	t.Run("prompt", func(t *testing.T) {
+		opts := resolveTestIngestOptions(
+			WithIngestPrompt("extract deadlines"),
+			WithIngestPrompt("   "),
+		)
+		assert.Equal(t, "extract deadlines", opts.Prompt)
+	})
+
+	t.Run("expiration date", func(t *testing.T) {
+		location := time.FixedZone("UTC+8", 8*60*60)
+		opts := resolveTestIngestOptions(WithIngestExpirationDate(
+			time.Date(2026, time.July, 17, 23, 0, 0, 0, location),
+		))
+		assert.Equal(t, "2026-07-17", opts.ExpirationDate)
+
+		zero := resolveTestIngestOptions(WithIngestExpirationDate(time.Time{}))
+		assert.Empty(t, zero.ExpirationDate)
+	})
+
+	t.Run("inference", func(t *testing.T) {
+		opts := resolveTestIngestOptions(WithIngestInference(false))
+		require.NotNil(t, opts.Infer)
+		assert.False(t, *opts.Infer)
+	})
+
+	t.Run("memory type", func(t *testing.T) {
+		opts := resolveTestIngestOptions(
+			WithIngestMemoryType(MemoryTypeProcedural),
+			WithIngestMemoryType(""),
+		)
+		assert.Equal(t, string(MemoryTypeProcedural), opts.MemoryType)
+	})
+}
+
+func resolveTestIngestOptions(options ...session.IngestOption) session.IngestOptions {
+	var opts session.IngestOptions
+	for _, option := range options {
+		option(&opts)
+	}
+	return opts
 }
 
 func TestWithOrgProject(t *testing.T) {
