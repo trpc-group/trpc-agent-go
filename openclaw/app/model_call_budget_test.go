@@ -210,7 +210,7 @@ func TestModelCallBudget_FinalRequestEvidenceGuards(t *testing.T) {
 		Messages: []model.Message{
 			model.NewToolMessage("call_1", "search", "evidence"),
 		},
-	})
+	}, false)
 	require.NotNil(t, direct)
 	require.Contains(t, budgetTestMessageText(direct.Messages), "final allowed")
 
@@ -228,7 +228,7 @@ func TestModelCallBudget_FinalRequestEvidenceGuards(t *testing.T) {
 	})
 	finalReq := budget.applyFinalRequest(&model.Request{
 		Messages: []model.Message{model.NewUserMessage("question")},
-	})
+	}, false)
 	content := budgetTestMessageText(finalReq.Messages)
 	require.Contains(t, content, "original evidence")
 	require.NotContains(t, content, "shorter evidence")
@@ -420,8 +420,8 @@ func TestModelCallBudgetModel_FinalizesOnLastAllowedCall(t *testing.T) {
 	require.Equal(t, map[string]any{
 		"response_format": "json",
 	}, got.ExtraFields)
-	require.False(t, got.Stream)
-	require.False(t, req.Stream)
+	require.True(t, got.Stream)
+	require.True(t, req.Stream)
 }
 
 func TestModelCallBudgetModel_FinalizesWithStoredEvidenceMessages(
@@ -837,7 +837,7 @@ func TestFinalModelCallHelpers_EdgeCases(t *testing.T) {
 			model.NewUserMessage("tail"),
 		}),
 	)
-	require.NotNil(t, applyFinalModelCallRequest(nil))
+	require.NotNil(t, applyFinalModelCallRequest(nil, false))
 }
 
 func budgetTestMessageText(messages []model.Message) string {
@@ -1028,6 +1028,81 @@ func TestModelCallBudgetIterModel_FinalizesWhenPrefinalWindowExpires(
 		"final allowed model call",
 	)
 	require.Nil(t, req.Tools)
+}
+
+func TestModelCallBudgetModel_DeadlineFallbackRespectsCallLimits(
+	t *testing.T,
+) {
+	const (
+		deadline = 300 * time.Millisecond
+		window   = 200 * time.Millisecond
+	)
+
+	tests := []struct {
+		name        string
+		budgetLimit int
+		invLimit    int
+		primeInv    bool
+	}{
+		{
+			name:        "model call budget",
+			budgetLimit: 1,
+		},
+		{
+			name:        "invocation budget",
+			budgetLimit: 2,
+			invLimit:    1,
+			primeInv:    true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			underlying := &prefinalTimeoutBudgetModel{}
+			wrapped := newModelCallBudgetModel(underlying)
+			ctx, cancel := context.WithDeadline(
+				context.Background(),
+				time.Now().Add(deadline),
+			)
+			defer cancel()
+			if tt.invLimit > 0 {
+				inv := agent.NewInvocation()
+				inv.MaxLLMCalls = tt.invLimit
+				if tt.primeInv {
+					require.NoError(t, inv.IncLLMCallCount())
+				}
+				ctx = agent.NewInvocationContext(ctx, inv)
+			}
+			ctx = withModelCallBudgetValue(
+				ctx,
+				newModelCallBudget(
+					tt.budgetLimit,
+					false,
+					window,
+				),
+			)
+
+			ch, err := wrapped.GenerateContent(ctx, &model.Request{
+				Messages: []model.Message{
+					model.NewUserMessage("question"),
+				},
+				Tools: map[string]tool.Tool{"search": nil},
+			})
+			require.NoError(t, err)
+			var got []*model.Response
+			for resp := range ch {
+				got = append(got, resp)
+			}
+
+			require.Len(t, got, 1)
+			require.NotNil(t, got[0].Error)
+			require.Contains(
+				t,
+				got[0].Error.Message,
+				"max LLM calls",
+			)
+			require.Len(t, underlying.requestsSnapshot(), 1)
+		})
+	}
 }
 
 func TestModelCallBudgetModel_FinalizesAfterInnerModelTimeout(
@@ -1324,6 +1399,12 @@ func (m *prefinalTimeoutBudgetModel) GenerateContent(
 			ch <- modelCallBudgetTestFinalResponse()
 			return
 		}
+		ch <- &model.Response{
+			IsPartial: true,
+			Choices: []model.Choice{{
+				Message: model.NewAssistantMessage("partial draft"),
+			}},
+		}
 		<-ctx.Done()
 		ch <- &model.Response{
 			Error: model.ResponseErrorFromError(
@@ -1350,6 +1431,14 @@ func (m *prefinalTimeoutBudgetModel) GenerateContentIter(
 	return func(yield func(*model.Response) bool) {
 		if req == nil || req.Tools == nil {
 			yield(modelCallBudgetTestFinalResponse())
+			return
+		}
+		if !yield(&model.Response{
+			IsPartial: true,
+			Choices: []model.Choice{{
+				Message: model.NewAssistantMessage("partial draft"),
+			}},
+		}) {
 			return
 		}
 		<-ctx.Done()

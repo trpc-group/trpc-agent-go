@@ -200,6 +200,21 @@ func (b *modelCallBudget) use(ctx context.Context) (bool, error) {
 	return modelCallBudgetDeadlineSoon(ctx, b.deadlineWindow), nil
 }
 
+func (b *modelCallBudget) reserveFinalCall() error {
+	if b == nil || b.limit <= 0 {
+		return nil
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.count >= b.limit {
+		return agent.NewStopError(
+			fmt.Sprintf("max LLM calls (%d) exceeded", b.limit),
+		)
+	}
+	b.count++
+	return nil
+}
+
 func (b *modelCallBudget) finalConfig() modelCallBudgetFinalRequestConfig {
 	if b == nil {
 		return modelCallBudgetFinalRequestConfig{}
@@ -219,19 +234,48 @@ func (b *modelCallBudget) rememberRequest(req *model.Request) {
 	b.lastEvidenceMessages = append([]model.Message(nil), req.Messages...)
 }
 
-func (b *modelCallBudget) applyFinalRequest(req *model.Request) *model.Request {
+func (b *modelCallBudget) applyFinalRequest(
+	req *model.Request,
+	nonStreaming bool,
+) *model.Request {
 	if b == nil || req == nil || modelCallBudgetHasToolEvidence(req) {
-		return applyFinalModelCallRequest(req, b.finalConfig())
+		return applyFinalModelCallRequest(
+			req,
+			nonStreaming,
+			b.finalConfig(),
+		)
 	}
 	b.mu.Lock()
 	messages := append([]model.Message(nil), b.lastEvidenceMessages...)
 	b.mu.Unlock()
 	if len(messages) == 0 {
-		return applyFinalModelCallRequest(req, b.finalConfig())
+		return applyFinalModelCallRequest(
+			req,
+			nonStreaming,
+			b.finalConfig(),
+		)
 	}
 	clone := *req
 	clone.Messages = messages
-	return applyFinalModelCallRequest(&clone, b.finalConfig())
+	return applyFinalModelCallRequest(
+		&clone,
+		nonStreaming,
+		b.finalConfig(),
+	)
+}
+
+func modelCallBudgetReserveFinalCall(
+	ctx context.Context,
+	budget *modelCallBudget,
+) error {
+	if err := budget.reserveFinalCall(); err != nil {
+		return err
+	}
+	inv, ok := agent.InvocationFromContext(ctx)
+	if !ok || inv == nil {
+		return nil
+	}
+	return inv.IncLLMCallCount()
 }
 
 func modelCallBudgetDeadlineSoon(
@@ -369,7 +413,11 @@ func (m *modelCallBudgetModel) GenerateContent(
 		return nil, err
 	}
 	if finalize {
-		req = budget.applyFinalRequest(req)
+		nonStreaming := modelCallBudgetDeadlineSoon(
+			ctx,
+			budget.deadlineWindow,
+		)
+		req = budget.applyFinalRequest(req, nonStreaming)
 		return m.model.GenerateContent(ctx, req)
 	}
 	if budget == nil {
@@ -389,7 +437,13 @@ func (m *modelCallBudgetModel) GenerateContent(
 			cancel()
 		}
 		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
-			req = budget.applyFinalRequest(req)
+			if reserveErr := modelCallBudgetReserveFinalCall(
+				ctx,
+				budget,
+			); reserveErr != nil {
+				return nil, reserveErr
+			}
+			req = budget.applyFinalRequest(req, true)
 			return m.model.GenerateContent(withoutModelCallBudget(ctx), req)
 		}
 		return nil, err
@@ -399,6 +453,7 @@ func (m *modelCallBudgetModel) GenerateContent(
 		defer close(out)
 		defer cancel()
 		timedOut := false
+		var buffered []*model.Response
 		for resp := range ch {
 			if modelCallBudgetTimeoutResponse(
 				resp,
@@ -409,32 +464,44 @@ func (m *modelCallBudgetModel) GenerateContent(
 				timedOut = true
 				continue
 			}
-			select {
-			case out <- resp:
-			case <-ctx.Done():
-				return
-			}
+			buffered = append(buffered, resp)
 		}
 		if modelCallBudgetPrefinalTimedOut(prefinalCtx, ctx) {
 			timedOut = true
 		}
-		if !timedOut || ctx.Err() != nil {
+		if ctx.Err() != nil {
 			return
 		}
-		req = budget.applyFinalRequest(req)
+		if !timedOut {
+			for _, resp := range buffered {
+				if !modelCallBudgetSendResponse(ctx, out, resp) {
+					return
+				}
+			}
+			return
+		}
+		if reserveErr := modelCallBudgetReserveFinalCall(
+			ctx,
+			budget,
+		); reserveErr != nil {
+			modelCallBudgetSendResponse(
+				ctx,
+				out,
+				modelCallBudgetErrorResponse(reserveErr),
+			)
+			return
+		}
+		req = budget.applyFinalRequest(req, true)
 		finalCh, finalErr := m.model.GenerateContent(
 			withoutModelCallBudget(ctx),
 			req,
 		)
 		if finalErr != nil {
-			modelCallBudgetSendResponse(ctx, out, &model.Response{
-				Error: model.ResponseErrorFromError(
-					finalErr,
-					model.ErrorTypeFlowError,
-				),
-				Done:      true,
-				Timestamp: time.Now(),
-			})
+			modelCallBudgetSendResponse(
+				ctx,
+				out,
+				modelCallBudgetErrorResponse(finalErr),
+			)
 			return
 		}
 		for resp := range finalCh {
@@ -480,7 +547,11 @@ func (m *modelCallBudgetIterModel) GenerateContentIter(
 		return nil, err
 	}
 	if finalize {
-		req = budget.applyFinalRequest(req)
+		nonStreaming := modelCallBudgetDeadlineSoon(
+			ctx,
+			budget.deadlineWindow,
+		)
+		req = budget.applyFinalRequest(req, nonStreaming)
 		return m.iter.GenerateContentIter(ctx, req)
 	}
 	if budget == nil {
@@ -500,7 +571,13 @@ func (m *modelCallBudgetIterModel) GenerateContentIter(
 			cancel()
 		}
 		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
-			req = budget.applyFinalRequest(req)
+			if reserveErr := modelCallBudgetReserveFinalCall(
+				ctx,
+				budget,
+			); reserveErr != nil {
+				return nil, reserveErr
+			}
+			req = budget.applyFinalRequest(req, true)
 			return m.iter.GenerateContentIter(withoutModelCallBudget(ctx), req)
 		}
 		return nil, err
@@ -508,6 +585,7 @@ func (m *modelCallBudgetIterModel) GenerateContentIter(
 	return func(yield func(*model.Response) bool) {
 		defer cancel()
 		timedOut := false
+		var buffered []*model.Response
 		seq(func(resp *model.Response) bool {
 			if modelCallBudgetTimeoutResponse(
 				resp,
@@ -518,28 +596,37 @@ func (m *modelCallBudgetIterModel) GenerateContentIter(
 				timedOut = true
 				return true
 			}
-			return yield(resp)
+			buffered = append(buffered, resp)
+			return true
 		})
 		if modelCallBudgetPrefinalTimedOut(prefinalCtx, ctx) {
 			timedOut = true
 		}
-		if !timedOut || ctx.Err() != nil {
+		if ctx.Err() != nil {
 			return
 		}
-		req = budget.applyFinalRequest(req)
+		if !timedOut {
+			for _, resp := range buffered {
+				if !yield(resp) {
+					return
+				}
+			}
+			return
+		}
+		if reserveErr := modelCallBudgetReserveFinalCall(
+			ctx,
+			budget,
+		); reserveErr != nil {
+			yield(modelCallBudgetErrorResponse(reserveErr))
+			return
+		}
+		req = budget.applyFinalRequest(req, true)
 		finalSeq, finalErr := m.iter.GenerateContentIter(
 			withoutModelCallBudget(ctx),
 			req,
 		)
 		if finalErr != nil {
-			yield(&model.Response{
-				Error: model.ResponseErrorFromError(
-					finalErr,
-					model.ErrorTypeFlowError,
-				),
-				Done:      true,
-				Timestamp: time.Now(),
-			})
+			yield(modelCallBudgetErrorResponse(finalErr))
 			return
 		}
 		finalSeq(yield)
@@ -556,6 +643,17 @@ func modelCallBudgetSendResponse(
 		return true
 	case <-ctx.Done():
 		return false
+	}
+}
+
+func modelCallBudgetErrorResponse(err error) *model.Response {
+	return &model.Response{
+		Error: model.ResponseErrorFromError(
+			err,
+			model.ErrorTypeFlowError,
+		),
+		Done:      true,
+		Timestamp: time.Now(),
 	}
 }
 
@@ -643,7 +741,6 @@ func finalModelCallRequest(
 	}
 	clone := *req
 	clone.Tools = nil
-	clone.Stream = false
 	clone.ExtraFields = finalModelCallExtraFields(req.ExtraFields)
 	if config.DisableThinking {
 		clone.ThinkingEnabled = model.BoolPtr(false)
@@ -1269,12 +1366,16 @@ func finalModelCallNormalizeTail(
 
 func applyFinalModelCallRequest(
 	req *model.Request,
+	nonStreaming bool,
 	finalRequest ...modelCallBudgetFinalRequestConfig,
 ) *model.Request {
 	finalReq := finalModelCallRequest(
 		req,
 		modelCallBudgetFinalRequestArg(finalRequest),
 	)
+	if nonStreaming {
+		finalReq.Stream = false
+	}
 	if req == nil {
 		return finalReq
 	}
