@@ -169,7 +169,9 @@ func (r *workspaceRuntime) resolveSandboxPaths(
 			"opensandbox: resolve paths: %w", err,
 		)
 	}
-	lines := strings.Split(strings.TrimSpace(out), "\n")
+	// Trim only trailing newlines, not all whitespace: paths may
+	// contain trailing spaces (see resolveSandboxAncestor for details).
+	lines := strings.Split(strings.TrimRight(out, "\r\n"), "\n")
 	if len(lines) != len(results) {
 		// Fallback: if the batch script returned unexpected output,
 		// resolve each path individually.
@@ -187,7 +189,8 @@ func (r *workspaceRuntime) resolveSandboxPaths(
 	}
 	filtered := make([]fileSearchResult, 0, len(results))
 	for i, line := range lines {
-		resolved := strings.TrimSpace(line)
+		// Trim only trailing \r (from \r\n line endings), not spaces.
+		resolved := strings.TrimRight(line, "\r")
 		if resolved == "" || !pathUnder(resolved, wsBase) {
 			continue
 		}
