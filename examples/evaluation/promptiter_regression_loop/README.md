@@ -48,12 +48,22 @@ Finishes in well under a second and produces:
   by non-engineers.
 - `output/candidate_prompt.txt` + `output/candidate_profile.json` — only when
   the gate accepts: the instruction text plus the full accepted profile with
-  every surface override, e.g. the improved tool description (add
-  `-write-back` to overwrite `baseline_prompt.txt` directly).
-- `output/audit/` — run meta (seed, mode, config snapshot), every engine
-  event per round, per-round cost/latency, attributions, candidates, and the
-  gate decision. Events are flushed as they happen, so an interrupted run
-  keeps a complete partial trail.
+  every surface override, e.g. the improved tool description. Both files are
+  removed at the start of every run, so a later rejecting run never leaves a
+  stale accepted candidate next to its rejection report.
+- With `-write-back`, acceptance also updates the on-disk baseline:
+  `baseline_prompt.txt` receives the instruction text, and
+  `baseline_profile.json` (next to it) receives the **merged effective
+  profile** — the accepted overrides layered onto any previously written-back
+  profile, so consecutive write-backs never drop inherited overrides such as
+  the improved tool description. The next run reloads this profile as its
+  baseline: the instruction still comes from `baseline_prompt.txt`, and tool
+  descriptions are restored into the agent.
+- `output/audit/<runID>/` — run meta (seed, mode, config snapshot), every
+  engine event per round, per-round cost/latency, attributions, candidates,
+  and the gate decision, isolated per execution so reruns never mix audit
+  artifacts. Events are flushed as they happen, so an interrupted run keeps a
+  complete partial trail.
 
 Exit code is `0` for both accept and reject — a rejection is a normal
 business outcome; only pipeline execution errors exit non-zero.
@@ -212,7 +222,10 @@ override 注入引擎；引擎每轮事件由 Observer 流式落盘。
 拒绝并给出"判定为过拟合"的可解释理由；离线接受仅给 accept_pending_canary，
 建议经线上回灌二次门禁。
 
-**产物审计**：`audit/` 留存 run_meta（seed、模式、配置快照）、每轮全部引擎
-事件、per-round 成本耗时、归因、候选与 gate 决策；报告汇总 baseline/candidate
-分数、双集逐 case delta 与规则明细。fake 模式下评测分数、归因与 gate 决策
-完全确定：同输入必得同结论；runId、时间戳、耗时等审计字段随每次运行变化。
+**产物审计**：`audit/<runID>/` 按执行隔离地留存 run_meta（seed、模式、配置
+快照）、每轮全部引擎事件、per-round 成本耗时、归因、候选与 gate 决策，重跑
+不会混入历史轮次；报告汇总 baseline/candidate 分数、双集逐 case delta 与规则
+明细，报告中的外部数据（case ID、理由、模型证据、候选 prompt）经 Markdown
+转义与动态围栏渲染，防止模型输出注入报告结构。fake 模式下评测分数、归因与
+gate 决策完全确定：同输入必得同结论；runId、时间戳、耗时等审计字段随每次
+运行变化。

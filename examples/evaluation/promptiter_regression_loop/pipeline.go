@@ -495,10 +495,12 @@ func buildCandidates(
 // candidate_prompt.txt. The engine normalizes away no-op overrides, so an
 // accepted profile whose patches only touched non-instruction surfaces
 // legitimately carries no instruction text: that keeps the baseline prompt in
-// force. Write-back persists the complete gate-approved profile as the next
-// baseline: the instruction text over the prompt source and the full profile
-// to baseline_profile.json beside it, which resolveInputs reloads on the next
-// run so non-instruction overrides are not silently lost.
+// force. Write-back persists the complete effective baseline: the instruction
+// text over the prompt source, and the accepted overrides merged onto the
+// previously restored baseline profile into baseline_profile.json beside it.
+// Merging keeps consecutive write-backs lossless — once a restored override is
+// baked into the agent, a later accepted profile no longer carries it, so
+// writing the accepted profile alone would silently drop it.
 func writeCandidatePrompt(opts Options, inputs *resolvedInputs, result *Result, decision *GateDecision) error {
 	var profile *promptiter.Profile
 	for _, candidate := range result.Candidates {
@@ -542,11 +544,61 @@ func writeCandidatePrompt(opts Options, inputs *resolvedInputs, result *Result, 
 				return fmt.Errorf("write back baseline prompt: %w", err)
 			}
 		}
-		if err := os.WriteFile(inputs.baselineProfilePath, append(profileContent, '\n'), 0o644); err != nil {
+		merged := mergedBaselineProfile(inputs, profile, instructionSurfaceID, promptText)
+		mergedContent, err := json.MarshalIndent(merged, "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshal merged baseline profile: %w", err)
+		}
+		if err := os.WriteFile(inputs.baselineProfilePath, append(mergedContent, '\n'), 0o644); err != nil {
 			return fmt.Errorf("write back baseline profile: %w", err)
 		}
 	}
 	return nil
+}
+
+// mergedBaselineProfile overlays the accepted overrides onto the previously
+// restored baseline profile, producing the complete effective baseline for
+// the next run. Without the merge an instruction-only acceptance would
+// overwrite baseline_profile.json without the inherited tool overrides (they
+// are baked into the agent, so the engine no longer emits them as patches).
+// The instruction override is refreshed from the effective instruction text
+// so the stored profile always stays consistent with the prompt source.
+func mergedBaselineProfile(
+	inputs *resolvedInputs,
+	accepted *promptiter.Profile,
+	instructionSurfaceID string,
+	promptText string,
+) *promptiter.Profile {
+	merged := &promptiter.Profile{StructureID: accepted.StructureID}
+	if inputs.baselineProfile != nil {
+		merged.Overrides = append(merged.Overrides, inputs.baselineProfile.Overrides...)
+	}
+	for _, override := range accepted.Overrides {
+		merged.Overrides = upsertOverride(merged.Overrides, override)
+	}
+	instructionText := promptText
+	if instructionText == "" {
+		instructionText = inputs.baselinePrompt
+	}
+	merged.Overrides = upsertOverride(merged.Overrides, promptiter.SurfaceOverride{
+		SurfaceID: instructionSurfaceID,
+		Value:     astructureTextValue(instructionText),
+	})
+	return merged
+}
+
+// upsertOverride replaces the override with the same surface ID or appends it.
+func upsertOverride(
+	overrides []promptiter.SurfaceOverride,
+	override promptiter.SurfaceOverride,
+) []promptiter.SurfaceOverride {
+	for i := range overrides {
+		if overrides[i].SurfaceID == override.SurfaceID {
+			overrides[i] = override
+			return overrides
+		}
+	}
+	return append(overrides, override)
 }
 
 // aggregateScore mirrors the engine's aggregation: the mean over every
@@ -633,6 +685,10 @@ type resolvedInputs struct {
 	// baselineProfilePath is where write-back persists the full accepted
 	// profile so the next run starts from the candidate that passed the gate.
 	baselineProfilePath string
+	// baselineProfile is the previously written-back profile, reloaded so a
+	// later write-back can merge onto it instead of dropping inherited
+	// overrides. Nil when no previous run wrote back a profile.
+	baselineProfile *promptiter.Profile
 	// baselineToolDescriptions carries accepted tool-description overrides
 	// loaded from the baseline profile, keyed by tool name. Nil when no
 	// previous run wrote back a profile.
@@ -703,7 +759,7 @@ func resolveInputs(dataDir string, config *Config) (*resolvedInputs, error) {
 	}
 	inputs.baselinePrompt = strings.TrimSpace(string(prompt))
 	inputs.baselineProfilePath = filepath.Join(filepath.Dir(inputs.promptSourcePath), baselineProfileFileName)
-	inputs.baselineToolDescriptions, err = loadBaselineProfile(inputs.baselineProfilePath, config)
+	inputs.baselineProfile, inputs.baselineToolDescriptions, err = loadBaselineProfile(inputs.baselineProfilePath, config)
 	if err != nil {
 		return nil, err
 	}
@@ -722,23 +778,24 @@ func resolveInputs(dataDir string, config *Config) (*resolvedInputs, error) {
 // instead of the in-code constants. The instruction override inside the
 // profile is skipped: the prompt source file stays the instruction source of
 // truth (write-back updates both from the same accepted profile). It returns
-// the tool-description overrides keyed by tool name; a missing file means no
-// previous write-back and yields nil.
-func loadBaselineProfile(path string, config *Config) (map[string]string, error) {
+// the full profile (kept for merged write-backs) plus the tool-description
+// overrides keyed by tool name; a missing file means no previous write-back
+// and yields nils.
+func loadBaselineProfile(path string, config *Config) (*promptiter.Profile, map[string]string, error) {
 	content, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
+		return nil, nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("read baseline profile %q: %w", path, err)
+		return nil, nil, fmt.Errorf("read baseline profile %q: %w", path, err)
 	}
 	profile := &promptiter.Profile{}
 	if err := json.Unmarshal(content, profile); err != nil {
-		return nil, fmt.Errorf("decode baseline profile %q: %w", path, err)
+		return nil, nil, fmt.Errorf("decode baseline profile %q: %w", path, err)
 	}
 	instructionSurfaceID, err := instructionTargetSurfaceID(config)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	descriptions := make(map[string]string)
 	for _, override := range profile.Overrides {
@@ -750,14 +807,14 @@ func loadBaselineProfile(path string, config *Config) (map[string]string, error)
 				descriptions[toolRef.ID] = toolRef.Description
 			}
 		default:
-			return nil, fmt.Errorf(
+			return nil, nil, fmt.Errorf(
 				"baseline profile %q override %q is neither the instruction surface nor a tool surface; "+
 					"this example's agent builder cannot restore it",
 				path, override.SurfaceID,
 			)
 		}
 	}
-	return descriptions, nil
+	return profile, descriptions, nil
 }
 
 // newRunID builds a time-based unique run identifier for the audit trail.

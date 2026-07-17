@@ -242,6 +242,38 @@ func TestReportMarkdownRejectPath(t *testing.T) {
 	assert.Contains(t, markdown, "候选 prompt 全文")
 }
 
+// TestReportMarkdownEscapesAdversarialContent locks the report against
+// Markdown injection from external data: a model-generated prompt containing
+// backtick fences stays inside a longer dynamic fence, and eval-data values
+// (case IDs, evidence) containing pipes, newlines, links, or raw HTML are
+// escaped so the table/list structure and the rendered page stay intact.
+func TestReportMarkdownEscapesAdversarialContent(t *testing.T) {
+	opts, result := reportFixture(t, true)
+	hostilePrompt := "第一行\n```\n# 注入标题\n<script>alert(1)</script>\n````\n结束"
+	result.Candidates[0].Profile.Overrides[0].Value.Text = &hostilePrompt
+	result.Candidates[0].Deltas[1].EvalCaseID = "case|注入<img src=x>"
+	result.BaselineAttributions[0].EvalCaseID = "train|注入[link](http://evil)"
+	result.BaselineAttributions[0].Chain[1].Evidence = "多行\n`证据`|<b>加粗</b>"
+
+	report := BuildReport(opts, result)
+	markdown, err := RenderMarkdown(report)
+	require.NoError(t, err)
+
+	// The prompt fence is longer than any backtick run inside the prompt (the
+	// prompt's longest run is 4, so the fence must be 5), keeping the injected
+	// fence closers and Markdown inside the code block.
+	assert.Contains(t, markdown, "`````\n"+hostilePrompt+"\n`````")
+	// Table cells: the pipe and the raw HTML tag are escaped.
+	assert.Contains(t, markdown, `case\|注入\<img src=x\>`)
+	assert.NotContains(t, markdown, "<img src=x>")
+	// List items: pipes and link syntax are escaped.
+	assert.Contains(t, markdown, `train\|注入\[link\](http://evil)`)
+	assert.NotContains(t, markdown, "[link](http://evil)")
+	// Evidence: newlines flatten, backticks / pipes / HTML are escaped.
+	assert.Contains(t, markdown, "多行 \\`证据\\`\\|\\<b\\>加粗\\</b\\>")
+	assert.NotContains(t, markdown, "<b>")
+}
+
 // TestReportWithoutCandidates covers a run that produced no candidates.
 func TestReportWithoutCandidates(t *testing.T) {
 	opts, result := reportFixture(t, false)

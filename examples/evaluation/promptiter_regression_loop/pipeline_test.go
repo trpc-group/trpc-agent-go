@@ -33,27 +33,47 @@ const (
 	testDataDir = "./data"
 )
 
+// loadInputsAt loads the pipeline config and resolved inputs from dataDir,
+// including any baseline profile a previous write-back left there.
+func loadInputsAt(t *testing.T, dataDir string) (*Config, *resolvedInputs) {
+	t.Helper()
+	config, err := LoadConfig(filepath.Join(dataDir, dataAppName, "promptiter.json"))
+	require.NoError(t, err)
+	inputs, err := resolveInputs(dataDir, config)
+	require.NoError(t, err)
+	return config, inputs
+}
+
 func loadExampleInputs(t *testing.T) (*Config, *resolvedInputs) {
 	t.Helper()
-	config, err := LoadConfig(filepath.Join(testDataDir, dataAppName, "promptiter.json"))
-	require.NoError(t, err)
-	inputs, err := resolveInputs(testDataDir, config)
-	require.NoError(t, err)
+	config, inputs := loadInputsAt(t, testDataDir)
 	require.NotContains(t, inputs.baselinePrompt, OptimizedMarker,
 		"baseline prompt must not already contain the optimization marker")
 	return config, inputs
 }
 
-func runExamplePipeline(t *testing.T, config *Config, inputs *resolvedInputs, outputDir string) *Result {
+// copyTestData clones the committed data dir into a temp dir so write-back
+// tests can mutate the baseline files without touching the repository.
+func copyTestData(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	require.NoError(t, os.CopyFS(dir, os.DirFS(testDataDir)))
+	return dir
+}
+
+func runExamplePipeline(t *testing.T, config *Config, inputs *resolvedInputs, dataDir, outputDir string, writeBack bool) *Result {
 	t.Helper()
 	result, err := runPipeline(context.Background(), Options{
 		Config:    config,
 		Inputs:    inputs,
-		DataDir:   testDataDir,
+		DataDir:   dataDir,
 		OutputDir: outputDir,
 		Mode:      ModeFake,
+		WriteBack: writeBack,
 		Components: Components{
-			CandidateAgent: NewAgent(NewModel(""), inputs.baselinePrompt, nil),
+			// Mirror main.go: restored tool-description overrides are baked
+			// into the candidate agent.
+			CandidateAgent: NewAgent(NewModel(""), inputs.baselinePrompt, inputs.baselineToolDescriptions),
 			Backwarder:     NewBackwarder(),
 			Aggregator:     NewAggregator(),
 			Optimizer:      NewOptimizer(),
@@ -72,7 +92,7 @@ func TestPipelineRunFakeMode(t *testing.T) {
 	config, inputs := loadExampleInputs(t)
 	outputDir := t.TempDir()
 	started := time.Now()
-	result := runExamplePipeline(t, config, inputs, outputDir)
+	result := runExamplePipeline(t, config, inputs, testDataDir, outputDir, false)
 	// Acceptance criterion 5 requires the full fake pipeline under 3 minutes;
 	// assert a much tighter bound.
 	assert.Less(t, time.Since(started), time.Minute)
@@ -282,7 +302,7 @@ func TestPipelineRunRelaxedGateAccepts(t *testing.T) {
 	config.Gate.MaxRegressedCases = 1
 	config.Gate.MaxNewHardFails = 1
 	outputDir := t.TempDir()
-	result := runExamplePipeline(t, config, inputs, outputDir)
+	result := runExamplePipeline(t, config, inputs, testDataDir, outputDir, false)
 
 	assert.Equal(t, StatusAccepted, result.Status)
 	require.NotNil(t, result.Gate)
@@ -311,4 +331,71 @@ func TestPipelineRunRelaxedGateAccepts(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(markdown), "**接受**（accept_pending_canary）")
 	assert.Contains(t, string(markdown), "canary")
+}
+
+// TestConsecutiveWriteBacksKeepToolOverride locks write-back fidelity across
+// runs. The first acceptance persists the merged effective profile
+// (instruction + improved tool description) to baseline_profile.json; the
+// rerun restores it, baking the tool description into the agent, so its own
+// accepted candidate no longer carries the tool patch. The second write-back
+// must merge onto the restored baseline instead of overwriting it, or the
+// inherited tool override would be silently dropped for every later run.
+func TestConsecutiveWriteBacksKeepToolOverride(t *testing.T) {
+	dataDir := copyTestData(t)
+	outputDir := t.TempDir()
+	improved := ImprovedToolDescriptions[ToolQueryOrder]
+	relax := func(config *Config) {
+		config.Gate.ProtectedCases = nil
+		config.Gate.MaxRegressedCases = 1
+		config.Gate.MaxNewHardFails = 1
+	}
+
+	// First write-back: the optimized candidate (instruction + tool patch)
+	// is accepted and becomes the on-disk baseline.
+	config, inputs := loadInputsAt(t, dataDir)
+	relax(config)
+	first := runExamplePipeline(t, config, inputs, dataDir, outputDir, true)
+	require.Equal(t, StatusAccepted, first.Status)
+	profileContent, err := os.ReadFile(inputs.baselineProfilePath)
+	require.NoError(t, err)
+	require.Contains(t, string(profileContent), improved,
+		"first write-back must persist the accepted tool override")
+
+	// Rerun over the written-back baseline: the tool description and marker
+	// instruction are restored, so the baseline already behaves as the
+	// previously accepted candidate.
+	config, inputs = loadInputsAt(t, dataDir)
+	require.Equal(t, improved, inputs.baselineToolDescriptions[ToolQueryOrder])
+	require.Contains(t, inputs.baselinePrompt, OptimizedMarker)
+	relax(config)
+	// Narrow the second run to the instruction surface — the documented shape
+	// of a later instruction-only optimization — so its accepted profile
+	// cannot carry the tool patch at all.
+	config.TargetSurfaces = []TargetSurface{{Node: "candidate", Type: "instruction"}}
+	inputs, err = resolveInputs(dataDir, config)
+	require.NoError(t, err)
+	// Zero-gain thresholds let the idempotent zero-delta candidate through.
+	zeroGain := 0.0
+	config.Engine.MinScoreGain = &zeroGain
+	config.Gate.MinValidationScoreGain = 0
+	second := runExamplePipeline(t, config, inputs, dataDir, outputDir, true)
+	require.Equal(t, StatusAccepted, second.Status)
+	assert.InDelta(t, 5.0/6.0, second.BaselineValidationScore, 1e-9,
+		"rerun baseline must behave as the previously accepted candidate")
+	// The scenario is only meaningful if the second accepted profile itself
+	// lacks the tool patch: the override is baked into the agent, so only
+	// the merge can carry it forward.
+	candidateContent, err := os.ReadFile(filepath.Join(outputDir, "candidate_profile.json"))
+	require.NoError(t, err)
+	require.NotContains(t, string(candidateContent), improved,
+		"second accepted profile must not itself carry the tool patch")
+
+	// The second write-back keeps the inherited tool override.
+	profileContent, err = os.ReadFile(inputs.baselineProfilePath)
+	require.NoError(t, err)
+	assert.Contains(t, string(profileContent), improved,
+		"consecutive write-backs must not drop the inherited tool override")
+	_, reloaded := loadInputsAt(t, dataDir)
+	assert.Equal(t, improved, reloaded.baselineToolDescriptions[ToolQueryOrder])
+	assert.Contains(t, reloaded.baselinePrompt, OptimizedMarker)
 }

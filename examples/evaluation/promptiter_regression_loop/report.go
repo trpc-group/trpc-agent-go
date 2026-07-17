@@ -325,9 +325,9 @@ const markdownTemplate = `# Prompt 优化报告
 ## 结论
 
 {{ if .Gate.Accepted -}}
-**接受**（{{ .Gate.Recommendation }}）：{{ .Gate.Summary }}
+**接受**（{{ .Gate.Recommendation }}）：{{ md .Gate.Summary }}
 {{- else -}}
-**拒绝**：{{ .Gate.Summary }}
+**拒绝**：{{ md .Gate.Summary }}
 {{- end }}
 
 - 运行 ID：` + "`{{ .RunID }}`" + `（mode={{ .Mode }}，seed={{ .Seed }}，耗时 {{ .Duration }}）
@@ -348,7 +348,7 @@ const markdownTemplate = `# Prompt 优化报告
 | case | 变化 | baseline | 候选 | Δ分数 | 候选侧根因 |
 |---|---|---|---|---|---|
 {{- range .Delta.Validation }}
-| {{ escapeTable .EvalCaseID }} | {{ escapeTable .Kind }} | {{ passFail .BaselinePass }} {{ printf "%.2f" .BaselineScore }} | {{ passFail .CandidatePass }} {{ printf "%.2f" .CandidateScore }} | {{ printf "%+.2f" .ScoreDelta }} | {{ escapeTable (rootCauses .CandidateAttribution) }} |
+| {{ md .EvalCaseID }} | {{ md .Kind }} | {{ passFail .BaselinePass }} {{ printf "%.2f" .BaselineScore }} | {{ passFail .CandidatePass }} {{ printf "%.2f" .CandidateScore }} | {{ printf "%+.2f" .ScoreDelta }} | {{ md (rootCauses .CandidateAttribution) }} |
 {{- end }}
 {{ if .Delta.Train }}
 ## 逐 case delta（train）
@@ -356,7 +356,7 @@ const markdownTemplate = `# Prompt 优化报告
 | case | 变化 | baseline | 候选 | Δ分数 |
 |---|---|---|---|---|
 {{- range .Delta.Train }}
-| {{ escapeTable .EvalCaseID }} | {{ escapeTable .Kind }} | {{ passFail .BaselinePass }} {{ printf "%.2f" .BaselineScore }} | {{ passFail .CandidatePass }} {{ printf "%.2f" .CandidateScore }} | {{ printf "%+.2f" .ScoreDelta }} |
+| {{ md .EvalCaseID }} | {{ md .Kind }} | {{ passFail .BaselinePass }} {{ printf "%.2f" .BaselineScore }} | {{ passFail .CandidatePass }} {{ printf "%.2f" .CandidateScore }} | {{ printf "%+.2f" .ScoreDelta }} |
 {{- end }}
 {{ end }}
 ## 失败归因
@@ -371,15 +371,15 @@ baseline 失败 {{ len .Attribution.Baseline }} 例，候选失败 {{ len .Attri
 
 因果链明细：
 {{ range .Attribution.Baseline }}
-- [baseline] {{ .EvalSetID }}/{{ .EvalCaseID }}：{{ chainSummary . }}
+- [baseline] {{ md .EvalSetID }}/{{ md .EvalCaseID }}：{{ md (chainSummary .) }}
   {{- range .Chain }}
-  - {{ .Category }}{{ if .DerivedFrom }}（由 {{ .DerivedFrom }} 级联）{{ end }}：{{ oneline .Evidence }}
+  - {{ md .Category }}{{ if .DerivedFrom }}（由 {{ md .DerivedFrom }} 级联）{{ end }}：{{ md .Evidence }}
   {{- end }}
 {{- end }}
 {{- range .Attribution.Candidate }}
-- [候选] {{ .EvalSetID }}/{{ .EvalCaseID }}：{{ chainSummary . }}
+- [候选] {{ md .EvalSetID }}/{{ md .EvalCaseID }}：{{ md (chainSummary .) }}
   {{- range .Chain }}
-  - {{ .Category }}{{ if .DerivedFrom }}（由 {{ .DerivedFrom }} 级联）{{ end }}：{{ oneline .Evidence }}
+  - {{ md .Category }}{{ if .DerivedFrom }}（由 {{ md .DerivedFrom }} 级联）{{ end }}：{{ md .Evidence }}
   {{- end }}
 {{- end }}
 
@@ -396,7 +396,7 @@ baseline 失败 {{ len .Attribution.Baseline }} 例，候选失败 {{ len .Attri
 | 规则 | 实测 | 阈值 | 结果 | 说明 |
 |---|---|---|---|---|
 {{- range .Gate.Rules }}
-| {{ escapeTable .Name }} | {{ escapeTable .Observed }} | {{ escapeTable .Threshold }} | {{ if .Passed }}通过{{ else }}**未通过**{{ end }} | {{ escapeTable .Reason }} |
+| {{ md .Name }} | {{ md .Observed }} | {{ md .Threshold }} | {{ if .Passed }}通过{{ else }}**未通过**{{ end }} | {{ md .Reason }} |
 {{- end }}
 
 ## 轮次时间线
@@ -404,7 +404,7 @@ baseline 失败 {{ len .Attribution.Baseline }} 例，候选失败 {{ len .Attri
 | 轮次 | train | validation | 引擎内层判定 | 模型调用 | 耗时 |
 |---|---|---|---|---|---|
 {{- range .Rounds }}
-| {{ .Round }} | {{ printf "%.4f" .TrainScore }} | {{ printf "%.4f" .ValidationScore }} | {{ if .EngineAccepted }}接受{{ else }}拒绝{{ end }}{{ if .StopReason }}（停止：{{ .StopReason }}）{{ end }} | {{ .ModelCalls }} | {{ .WallClock }} |
+| {{ .Round }} | {{ printf "%.4f" .TrainScore }} | {{ printf "%.4f" .ValidationScore }} | {{ if .EngineAccepted }}接受{{ else }}拒绝{{ end }}{{ if .StopReason }}（停止：{{ md .StopReason }}）{{ end }} | {{ .ModelCalls }} | {{ .WallClock }} |
 {{- end }}
 
 ## 成本摘要
@@ -429,6 +429,27 @@ baseline 失败 {{ len .Attribution.Baseline }} 例，候选失败 {{ len .Attri
 {{- end }}
 `
 
+// markdownEscaper escapes the characters through which external data could
+// distort the report: pipes (table structure), backticks (code fences),
+// brackets (links and images), and angle brackets (raw HTML). Backslash goes
+// first so pre-existing backslashes cannot un-escape a later replacement.
+var markdownEscaper = strings.NewReplacer(
+	"\\", "\\\\",
+	"`", "\\`",
+	"|", "\\|",
+	"<", "\\<",
+	">", "\\>",
+	"[", "\\[",
+	"]", "\\]",
+)
+
+// markdownEscape renders one dynamic value for a Markdown table cell or list
+// item: whitespace (including newlines) collapses to single spaces, then
+// Markdown control characters are escaped.
+func markdownEscape(value any) string {
+	return markdownEscaper.Replace(strings.Join(strings.Fields(fmt.Sprint(value)), " "))
+}
+
 // RenderMarkdown renders the human-readable report.
 func RenderMarkdown(report *Report) (string, error) {
 	tmpl, err := template.New("optimization_report").Funcs(template.FuncMap{
@@ -449,9 +470,6 @@ func RenderMarkdown(report *Report) (string, error) {
 		},
 		"chainSummary": func(attribution CaseAttribution) string {
 			return attribution.ChainSummary()
-		},
-		"oneline": func(text string) string {
-			return strings.Join(strings.Fields(text), " ")
 		},
 		"rootCauses": func(attribution *CaseAttribution) string {
 			if attribution == nil {
@@ -495,14 +513,11 @@ func RenderMarkdown(report *Report) (string, error) {
 			fence := strings.Repeat("`", fenceLen)
 			return fence + language + "\n" + code + "\n" + fence
 		},
-		// escapeTable escapes pipe characters in values rendered inside Markdown
-		// table cells so that external eval data (case IDs, reasons, evidence)
-		// cannot distort the table structure.
-		"escapeTable": func(value any) string {
-			text := fmt.Sprint(value)
-			text = strings.ReplaceAll(text, "|", "\\|")
-			return strings.ReplaceAll(text, "\n", " ")
-		},
+		// md flattens whitespace and escapes every Markdown control character
+		// that lets external data (eval case IDs, reasons, model evidence)
+		// break table or list structure, open or close code fences, form
+		// links, or inject raw HTML into the rendered report.
+		"md": markdownEscape,
 	}).Parse(markdownTemplate)
 	if err != nil {
 		return "", fmt.Errorf("parse report template: %w", err)
