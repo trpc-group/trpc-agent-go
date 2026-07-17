@@ -1,0 +1,27 @@
+{
+  "seed": 20260717,
+  "promptFile": "prompts/baseline_prompt.md",
+  "trainEvalSet": "train.evalset.json",
+  "validationEvalSet": "validation.evalset.json",
+  "metricsFile": "metrics.json",
+  "promptIterFile": "promptiter.json",
+  "outputDir": "../output",
+  "gate": {
+    "minScoreGain": 0.02,
+    "passK": 3,
+    "bootstrapSeed": 20260717,
+    "bootstrapRounds": 5000,
+    "maxCalls": 48,
+    "maxTokens": 100000,
+    "maxCostCNY": 20.0
+  },
+  "live": {
+    "model": "deepseek-v4-flash",
+    "baseURL": "https://api.deepseek.com",
+    "apiKeyEnv": "DEEPSEEK_API_KEY",
+    "timeoutSeconds": 45,
+    "maxRetries": 2,
+    "inputCNYPerMillion": 1.0,
+    "outputCNYPerMillion": 2.0
+  }
+}
