@@ -1221,6 +1221,56 @@ func TestExecTool_CancelAtYieldHandoffLeavesNoRunningSession(t *testing.T) {
 	}, time.Second, 20*time.Millisecond)
 }
 
+func TestExecTool_CancelWhilePreparingYieldResultKillsSession(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash is not available")
+	}
+
+	redactorEntered := make(chan struct{})
+	releaseRedactor := make(chan struct{})
+	mgr := NewManager(
+		WithJobTTL(10*time.Second),
+		WithCleanShellStartup(true),
+		WithOutputRedactor(func(_ CommandRequest, output string) string {
+			close(redactorEntered)
+			<-releaseRedactor
+			return output
+		}),
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	yieldMs := 500
+
+	type execOutcome struct {
+		result execResult
+		err    error
+	}
+	done := make(chan execOutcome, 1)
+	go func() {
+		result, err := mgr.Exec(ctx, execParams{
+			Command: "printf 'ready\\n'; sleep 5",
+			YieldMs: &yieldMs,
+		})
+		done <- execOutcome{result: result, err: err}
+	}()
+
+	select {
+	case <-redactorEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("output redactor was not called")
+	}
+	cancel()
+	close(releaseRedactor)
+
+	outcome := <-done
+	require.ErrorIs(t, outcome.err, context.Canceled)
+	require.Empty(t, outcome.result.SessionID)
+	require.Eventually(t, func() bool {
+		mgr.mu.Lock()
+		defer mgr.mu.Unlock()
+		return len(mgr.sessions) == 0
+	}, time.Second, 20*time.Millisecond)
+}
+
 func TestCommitRunningSession_RechecksCanceledParentAfterDetach(
 	t *testing.T,
 ) {

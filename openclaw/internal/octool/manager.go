@@ -251,14 +251,15 @@ func (m *Manager) Exec(
 	}
 
 	if params.Background {
-		if err := m.commitRunningSession(ctx, sess); err != nil {
-			return execResult{}, err
-		}
-		return execResult{
+		result := execResult{
 			Status:    "running",
 			SessionID: sess.id,
 			Output:    m.limitTailResultOutput(sess.tail(defaultLogTail)),
-		}, nil
+		}
+		if err := m.commitRunningSession(ctx, sess); err != nil {
+			return execResult{}, err
+		}
+		return result, nil
 	}
 
 	if yieldMs == 0 {
@@ -300,14 +301,15 @@ func (m *Manager) Exec(
 			ExitCode: code,
 		}, nil
 	case <-timer.C:
-		if err := m.commitRunningSession(ctx, sess); err != nil {
-			return execResult{}, err
-		}
-		return execResult{
+		result := execResult{
 			Status:    "running",
 			SessionID: sess.id,
 			Output:    m.limitTailResultOutput(sess.tail(defaultLogTail)),
-		}, nil
+		}
+		if err := m.commitRunningSession(ctx, sess); err != nil {
+			return execResult{}, err
+		}
+		return result, nil
 	}
 }
 
