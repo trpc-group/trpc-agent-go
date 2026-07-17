@@ -337,6 +337,9 @@ PY`,
 			`fetch('https://example.com', {agent:new HttpsProxyAgent('http://127.0.0.1:8080')})"`,
 		`node -e "require('axios').get('https://example.com', ` +
 			`{proxy:{host:'127.0.0.1',port:8080}})"`,
+		`cd /tmp && python3 -c "import requests; ` +
+			`requests.get('https://example.com', proxies={` +
+			`'http':'http://127.0.0.1:8080'})"`,
 		`python3 - <<'PY'
 import urllib.parse
 import urllib.request
@@ -401,6 +404,8 @@ func TestChatCommandSafetyPolicy_BlocksLongIdleWaits(t *testing.T) {
 		`env FOO=bar sleep 1m`,
 		`timeout 90 sleep 45`,
 		`echo ok; sleep infinity`,
+		`sleep 15 15`,
+		`sleep 1d`,
 	} {
 		command := command
 		t.Run(command, func(t *testing.T) {
@@ -427,6 +432,7 @@ func TestChatCommandSafetyPolicy_AllowsShortOrQuotedIdleWaits(
 	for _, command := range []string{
 		`sleep 5 && curl https://example.com`,
 		`sleep 20`,
+		`sleep 10 10`,
 		`echo sleep 60`,
 		`printf 'sleep 60\n'`,
 		`python3 -c "print('sleep 60')"`,

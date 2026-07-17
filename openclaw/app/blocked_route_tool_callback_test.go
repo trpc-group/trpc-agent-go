@@ -902,7 +902,8 @@ func TestBlockedRouteToolCallback_RecordsAntiBotEvidence(t *testing.T) {
 				{
 					RetrievedURL: "https://challenge.example/a",
 					StatusCode:   403,
-					Content:      "Just a moment - Cloudflare",
+					Error: "web_fetch page appears blocked: " +
+						"Just a moment - Cloudflare",
 				},
 			},
 		},
@@ -917,6 +918,43 @@ func TestBlockedRouteToolCallback_RecordsAntiBotEvidence(t *testing.T) {
 	require.NotNil(t, result)
 	response := decodeBlockedRouteCustomResult(t, result.CustomResult)
 	require.Contains(t, response.Results[0].Error, "anti-bot")
+}
+
+func TestBlockedRouteToolCallback_IgnoresSuccessfulPageDiscussion(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	callbacks := tool.NewCallbacks()
+	registerBlockedRouteToolCallback(callbacks)
+	ctx, inv := newBlockedRouteTestContextWithInvocation()
+
+	_, err := callbacks.RunAfterTool(ctx, &tool.AfterToolArgs{
+		ToolName: webFetchToolName,
+		Result: blockedRouteFetchResponse{
+			Results: []blockedRouteResultItem{{
+				RetrievedURL: "https://docs.example/anti-bot",
+				StatusCode:   http.StatusOK,
+				Content: "This article discusses Cloudflare, CAPTCHA, " +
+					"and rate limits.",
+			}},
+		},
+	})
+	require.NoError(t, err)
+
+	result, err := callbacks.RunBeforeTool(ctx, &tool.BeforeToolArgs{
+		ToolName: webFetchToolName,
+		Arguments: []byte(
+			`{"urls":["https://docs.example/next"]}`,
+		),
+	})
+	require.NoError(t, err)
+	require.Nil(t, result)
+	_, ok := agent.GetStateValue[*blockedRouteMemory](
+		inv,
+		blockedRouteStateKey,
+	)
+	require.False(t, ok)
 }
 
 func TestBlockedRouteToolCallback_IgnoresOrdinaryHTTPFailures(t *testing.T) {

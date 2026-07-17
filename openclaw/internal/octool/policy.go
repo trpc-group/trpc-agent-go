@@ -280,15 +280,26 @@ func looksLikeExecutablePosition(words []string, index int) bool {
 }
 
 func sleepDuration(words []string) (time.Duration, bool) {
+	var total time.Duration
+	found := false
 	for _, word := range words {
 		value := strings.Trim(strings.TrimSpace(word), shellQuoteChars)
 		value = strings.TrimRight(value, ".,;:)]}")
 		if value == "" || strings.HasPrefix(value, "-") {
 			continue
 		}
-		return parseIdleWaitDuration(value)
+		wait, ok := parseIdleWaitDuration(value)
+		if !ok {
+			continue
+		}
+		found = true
+		const maxDuration = time.Duration(1<<63 - 1)
+		if wait > maxDuration-total {
+			return maxDuration, true
+		}
+		total += wait
 	}
-	return 0, false
+	return total, found
 }
 
 func parseIdleWaitDuration(value string) (time.Duration, bool) {
@@ -307,6 +318,21 @@ func parseIdleWaitDuration(value string) (time.Duration, bool) {
 			return maxDuration, true
 		}
 		return time.Duration(seconds * float64(time.Second)), true
+	}
+	if strings.HasSuffix(lower, "d") {
+		days, err := strconv.ParseFloat(
+			strings.TrimSuffix(lower, "d"),
+			64,
+		)
+		if err != nil || days < 0 {
+			return 0, false
+		}
+		const day = 24 * time.Hour
+		const maxDuration = time.Duration(1<<63 - 1)
+		if days > float64(maxDuration)/float64(day) {
+			return maxDuration, true
+		}
+		return time.Duration(days * float64(day)), true
 	}
 	duration, err := time.ParseDuration(lower)
 	if err != nil || duration < 0 {
@@ -342,6 +368,9 @@ func blocksNetworkProxyDepth(command string, depth int) bool {
 		return true
 	}
 	for _, segment := range shellPolicySegments(command) {
+		if blocksProgrammaticNetworkProxy(segment) {
+			return true
+		}
 		words := shellPolicyWords(segment)
 		if blocksNetworkProxyWords(words) {
 			return true

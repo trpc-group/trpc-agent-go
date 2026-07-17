@@ -338,6 +338,15 @@ func (t *webFetchTool) fetchOne(ctx context.Context, urlStr string) resultItem {
 		return item
 	}
 	defer resp.Body.Close()
+	if t.blockSearchPages && resp.Request != nil &&
+		resp.Request.URL != nil {
+		if name, ok := blockedSearchResultPage(
+			resp.Request.URL.String(),
+		); ok {
+			item.Error = blockedSearchResultPageError(name)
+			return item
+		}
+	}
 
 	contentType := resp.Header.Get("Content-Type")
 	// Parse media type (ignore parameters like charset)

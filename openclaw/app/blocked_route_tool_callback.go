@@ -560,7 +560,7 @@ func blockedRouteHostKey(raw string) (string, bool) {
 }
 
 func blockedRouteReason(item blockedRouteResultItem) (string, bool) {
-	evidence := strings.ToLower(item.Error + "\n" + item.Content)
+	evidence := strings.ToLower(item.Error)
 	if item.StatusCode == 429 ||
 		strings.Contains(evidence, "too many requests") ||
 		strings.Contains(evidence, "rate limit") ||

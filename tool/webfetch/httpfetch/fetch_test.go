@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -30,6 +31,14 @@ type errReader struct{}
 
 func (errReader) Read(_ []byte) (int, error) {
 	return 0, errors.New("read failed")
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(
+	req *http.Request,
+) (*http.Response, error) {
+	return f(req)
 }
 
 func TestWebFetch(t *testing.T) {
@@ -210,6 +219,63 @@ func TestWebFetch_BlocksSearchResultPagesWhenEnabled(t *testing.T) {
 		"web_fetch search-result page is blocked",
 	)
 	require.Contains(t, resp.Results[0].Error, "Google search")
+}
+
+func TestWebFetch_BlocksRedirectedSearchResultPages(t *testing.T) {
+	redirects := 0
+	client := &http.Client{
+		Transport: roundTripFunc(func(
+			req *http.Request,
+		) (*http.Response, error) {
+			if req.URL.Host == "example.com" {
+				return &http.Response{
+					StatusCode: http.StatusFound,
+					Header: http.Header{
+						"Location": []string{
+							"https://www.google.com/search?q=openclaw",
+						},
+					},
+					Body:    http.NoBody,
+					Request: req,
+				}, nil
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header: http.Header{
+					"Content-Type": []string{"text/html"},
+				},
+				Body: io.NopCloser(strings.NewReader(
+					"<html><body>results</body></html>",
+				)),
+				Request: req,
+			}, nil
+		}),
+		CheckRedirect: func(
+			_ *http.Request,
+			_ []*http.Request,
+		) error {
+			redirects++
+			return nil
+		},
+	}
+	tool := NewTool(
+		WithHTTPClient(client),
+		WithSearchResultPageBlocking(true),
+	)
+
+	res, err := tool.Call(
+		context.Background(),
+		[]byte(`{"urls":["https://example.com/start"]}`),
+	)
+	require.NoError(t, err)
+	response := res.(fetchResponse)
+	require.Equal(t, 1, redirects)
+	require.Len(t, response.Results, 1)
+	require.Contains(
+		t,
+		response.Results[0].Error,
+		"web_fetch search-result page is blocked",
+	)
 }
 
 func TestWebFetch_DetectsBlockedPagesWhenEnabled(t *testing.T) {
