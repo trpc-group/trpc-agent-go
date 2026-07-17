@@ -1084,10 +1084,26 @@ func finalModelCallCompactMessages(
 ) []model.Message {
 	compact := make([]model.Message, 0, len(messages))
 	for _, msg := range messages {
-		msg.Content = finalModelCallTrimContent(msg.Content, contentLimit)
+		msg.Content = finalModelCallCompactEvidenceContent(
+			msg.Content,
+			contentLimit,
+		)
 		compact = append(compact, msg)
 	}
 	return compact
+}
+
+func finalModelCallCompactEvidenceContent(content string, limit int) string {
+	const toolResultPrefix = "[Tool result: "
+	if strings.HasPrefix(content, toolResultPrefix) {
+		if index := strings.Index(content, "]\n"); index >= 0 {
+			payload := strings.TrimSpace(content[index+2:])
+			if payload != "" {
+				return finalModelCallTrimContent(payload, limit)
+			}
+		}
+	}
+	return finalModelCallTrimContent(content, limit)
 }
 
 func finalModelCallTranscriptMessages(
