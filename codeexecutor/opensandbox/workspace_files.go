@@ -118,6 +118,20 @@ func (r *workspaceRuntime) ensureRemoteDir(
 // uploadEntriesBatched re-resolves parents (TOCTOU), strips leaf
 // symlinks, and uploads in uploadBatchSize chunks to bound ARG_MAX
 // and multipart body size.
+//
+// NOTE: this is defense-in-depth, not a complete symlink-escape fix.
+// The OpenSandbox execd upload endpoint (as of v1.0.x) opens the
+// destination with os.OpenFile(O_WRONLY|O_CREATE|O_TRUNC) — no
+// O_NOFOLLOW, no openat2 — and MkdirAllWithOwnership / ExpandPath
+// follow symlinks in parent components. A process surviving in a
+// persistent workspace can therefore replant a leaf or parent symlink
+// between our removeSymlinksBatch call and the UploadFiles request
+// below, redirecting the write outside the workspace. Closing this
+// window requires server-side no-follow semantics (O_NOFOLLOW on the
+// leaf, openat2/RESOLVE_BENEATH for the parent path). Until then,
+// PerSession persistence must only be used with trusted in-sandbox
+// code; PerTurn (the default) gives each turn a fresh workspace where
+// no adversary-controlled symlink can pre-exist.
 func (r *workspaceRuntime) uploadEntriesBatched(
 	ctx context.Context,
 	sb *osb.Sandbox,

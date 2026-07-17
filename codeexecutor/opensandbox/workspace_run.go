@@ -245,25 +245,26 @@ func (r *workspaceRuntime) executeRunCommand(
 		Stdout:   stdoutBuf.string(),
 		Stderr:   stderrBuf.string(),
 	}
-	if exec != nil {
-		// SDK may return nil Go error while Execution.Error is set after
-		// an SSE error event (exit code often nil). Never treat that as
-		// exit 0: put details in stderr and set a non-zero ExitCode.
-		// Do NOT convert this into runErr — ExecuteCode aggregates via
-		// ExitCode/stderr and must continue subsequent blocks.
-		if exec.Error != nil {
-			res.Stderr = formatExecutionError(exec.Error, res.Stderr)
-			if exec.ExitCode != nil {
-				res.ExitCode = *exec.ExitCode
-			} else {
-				res.ExitCode = -1
-			}
-		} else if exec.ExitCode != nil {
+	// SDK contract: on a complete stream, execution_complete sets
+	// ExitCode=0 when no error occurred. Therefore ExitCode == nil with
+	// a nil Go error means the stream was incomplete (network drop,
+	// premature close). Fail closed — never surface ExitCode 0 unless
+	// the server actually said 0.
+	//
+	// Do NOT convert SSE errors into runErr: ExecuteCode aggregates via
+	// ExitCode/stderr and must continue subsequent code blocks.
+	if exec != nil && exec.Error != nil {
+		res.Stderr = formatExecutionError(exec.Error, res.Stderr)
+		if exec.ExitCode != nil {
 			res.ExitCode = *exec.ExitCode
-		} else if runErr == nil {
-			// Incomplete stream (e.g. mock noComplete): not success.
+		} else {
 			res.ExitCode = -1
 		}
+	} else if exec != nil && exec.ExitCode != nil {
+		res.ExitCode = *exec.ExitCode
+	} else if runErr == nil {
+		// Incomplete stream (e.g. no execution_complete event).
+		res.ExitCode = -1
 	}
 	if runErr != nil {
 		if isTimeoutErr(runErr) {
@@ -502,10 +503,19 @@ func (r *workspaceRuntime) runBash(
 		}
 		return "", err
 	}
+	// SDK contract: execution_complete sets ExitCode=0 on success. So
+	// exec == nil or ExitCode == nil with err == nil means the stream
+	// was incomplete — fail closed so infra commands (mkdir, chmod, rm)
+	// do not silently look successful.
+	if exec == nil {
+		return stdoutBuf.string(), fmt.Errorf(
+			"opensandbox: bash command returned no execution result",
+		)
+	}
 	// Surface structured SSE errors even when the Go error is nil (SDK
 	// quirk). Prefer the historical "bash exit N" form when a non-zero
 	// exit code is present so existing tests and logs stay stable.
-	if exec != nil && exec.Error != nil {
+	if exec.Error != nil {
 		if exec.ExitCode != nil && *exec.ExitCode != 0 {
 			return stdoutBuf.string(), fmt.Errorf(
 				"opensandbox: bash exit %d: %s",
@@ -517,15 +527,17 @@ func (r *workspaceRuntime) runBash(
 			-1, formatExecutionError(exec.Error, stderrBuf.string()),
 		)
 	}
-	if exec != nil && exec.ExitCode != nil && *exec.ExitCode != 0 {
+	if exec.ExitCode == nil {
+		return stdoutBuf.string(), fmt.Errorf(
+			"opensandbox: bash command completed without exit code (incomplete stream)",
+		)
+	}
+	if *exec.ExitCode != 0 {
 		return stdoutBuf.string(), fmt.Errorf(
 			"opensandbox: bash exit %d: %s",
 			*exec.ExitCode, stderrBuf.string(),
 		)
 	}
-	// Nil ExitCode without Error: treat as success for infrastructure
-	// helpers. Mock streams used by layout/mkdir often omit exit_code
-	// on non-RunProgram commands; failing closed here breaks CreateWorkspace.
 	return stdoutBuf.string(), nil
 }
 

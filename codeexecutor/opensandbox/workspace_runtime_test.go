@@ -598,7 +598,17 @@ func (m *mockOpenSandboxServer) handleCommand(w http.ResponseWriter, r *http.Req
 			flusher.Flush()
 		}
 	}
-	if !noComplete {
+	// noComplete simulates a stream that ended without an
+	// execution_complete event. Real execd always emits
+	// execution_complete, so only apply this to RunProgram commands;
+	// infra commands (mkdir, rm, chmod) must keep emitting it so
+	// runBash fail-closed logic does not break CreateWorkspace.
+	// forceInfraExit makes the mock treat infra commands like
+	// RunProgram so noComplete / executionError / runError apply to
+	// them too — used to test runBash error and incomplete-stream
+	// paths.
+	emitComplete := !noComplete || (!isRunProgram && !forceInfraExit)
+	if emitComplete {
 		// Non-zero exit code must be delivered via an "error" event
 		// because the SDK's execution_complete handler does not parse
 		// the exit_code field; it only defaults to 0 when no error
@@ -3419,4 +3429,28 @@ func TestCollect_ExactBudgetComplete_NoPartialMarker(t *testing.T) {
 			"exact fill of budget with no remaining matches is complete")
 	}
 	assert.Len(t, files, 16)
+}
+
+// TestRunBash_FailClosed_IncompleteStream verifies runBash fails when
+// the stream ended without execution_complete (ExitCode == nil). Real
+// execd always emits execution_complete on success, so a nil ExitCode
+// with nil Go error means the stream was incomplete and the infra
+// command (mkdir, rm, chmod) must not look successful.
+func TestRunBash_FailClosed_IncompleteStream(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	// Force noComplete for infra commands too so runBash sees
+	// ExitCode == nil. forceInfraExit makes the mock treat infra
+	// commands like RunProgram for the noComplete gate.
+	m.noComplete = true
+	m.forceInfraExit = true
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	// CreateWorkspace calls ensureLayoutDirs -> runBash; with
+	// noComplete + forceInfraExit, runBash sees ExitCode == nil and
+	// must fail, so CreateWorkspace itself must fail.
+	_, err := exec.CreateWorkspace(context.Background(), "exec-incomplete", codeexecutor.WorkspacePolicy{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "incomplete stream")
 }
