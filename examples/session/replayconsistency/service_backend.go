@@ -24,12 +24,13 @@ import (
 )
 
 const (
-	replayApp                = "replay-consistency"
-	replayUser               = "fixture-user"
-	seqKey                   = "replay.seq"
-	generatedEventIDKey      = "replay.generated_event_id"
-	generatedToolCallIDKey   = "replay.generated_tool_call_id"
-	generatedToolResultIDKey = "replay.generated_tool_result_id"
+	replayApp                 = "replay-consistency"
+	replayUser                = "fixture-user"
+	seqKey                    = "replay.seq"
+	generatedEventIDKey       = "replay.generated_event_id"
+	generatedToolCallIDKey    = "replay.generated_tool_call_id"
+	generatedToolResultIDKey  = "replay.generated_tool_result_id"
+	structuredToolResponseKey = "replay.structured_tool_response"
 )
 
 type deterministicSummarizer struct {
@@ -82,6 +83,10 @@ func NewSQLiteBackend(path string) (Backend, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The replay deliberately issues concurrent appends. A single SQLite
+	// connection preserves that API-level concurrency without allowing two
+	// writers to race into SQLITE_BUSY inside this deterministic harness.
+	sessionDB.SetMaxOpenConns(1)
 	summarizer := &deterministicSummarizer{}
 	sessions, err := sessionsqlite.NewService(
 		sessionDB,
@@ -97,6 +102,7 @@ func NewSQLiteBackend(path string) (Backend, error) {
 		_ = sessions.Close()
 		return nil, err
 	}
+	memoryDB.SetMaxOpenConns(1)
 	memories, err := memorysqlite.NewService(memoryDB)
 	if err != nil {
 		_ = memoryDB.Close()
@@ -113,6 +119,17 @@ func (b *serviceBackend) Name() string { return b.name }
 
 func (b *serviceBackend) Begin(input Snapshot) error {
 	ctx := context.Background()
+	canonical := Normalize(clone(input))
+	for i := 1; i < len(canonical.Memories); i++ {
+		if memoryStableKey(canonical.Memories[i-1]) == memoryStableKey(canonical.Memories[i]) {
+			return fmt.Errorf("memories %d and %d have the same stable capability locator", i-1, i)
+		}
+	}
+	for i := 1; i < len(canonical.Summaries); i++ {
+		if canonical.Summaries[i-1].FilterKey == canonical.Summaries[i].FilterKey {
+			return fmt.Errorf("summaries %d and %d have the same filter key %q", i-1, i, canonical.Summaries[i].FilterKey)
+		}
+	}
 	b.key = frameworksession.Key{AppName: replayApp, UserID: replayUser, SessionID: input.SessionID}
 	b.unsupported = cloneStringMap(input.Unsupported)
 	b.modeledState = make(map[string]bool, len(input.State))
@@ -122,7 +139,9 @@ func (b *serviceBackend) Begin(input Snapshot) error {
 	if b.unsupported == nil {
 		b.unsupported = map[string]string{}
 	}
-	for index, item := range input.Memories {
+	// Capability paths are assigned only after applying the comparator's
+	// canonical ordering, so an exception cannot drift to a different element.
+	for index, item := range canonical.Memories {
 		prefix := fmt.Sprintf("/memories/%d", index)
 		b.unsupported[prefix+"/id"] = "memory services generate backend-specific IDs"
 		if item.Scope != "user" {
@@ -138,7 +157,7 @@ func (b *serviceBackend) Begin(input Snapshot) error {
 			}
 		}
 	}
-	for index, item := range input.Summaries {
+	for index, item := range canonical.Summaries {
 		prefix := fmt.Sprintf("/summaries/%d", index)
 		if item.ID != "summary:"+item.FilterKey {
 			b.unsupported[prefix+"/id"] = "summary IDs are derived from the filter key"
@@ -351,12 +370,15 @@ func toFrameworkEvent(input Event) (*frameworkevent.Event, error) {
 		}}
 	}
 	generatedToolResultID := false
+	structuredToolResponse := input.Response != nil
 	if input.Response != nil {
 		encoded, err := json.Marshal(input.Response)
 		if err != nil {
 			return nil, fmt.Errorf("encode tool response: %w", err)
 		}
 		message.Content = string(encoded)
+	}
+	if message.Role == model.RoleTool {
 		message.ToolID = input.ToolResultID
 		if message.ToolID == "" {
 			message.ToolID = fmt.Sprintf("generated-result-%d", input.Seq)
@@ -383,7 +405,7 @@ func toFrameworkEvent(input Event) (*frameworkevent.Event, error) {
 		return nil, fmt.Errorf("encode state delta: %w", err)
 	}
 	e.StateDelta = stateDelta
-	e.Extensions = make(map[string]json.RawMessage, len(input.Extensions)+4)
+	e.Extensions = make(map[string]json.RawMessage, len(input.Extensions)+5)
 	for key, value := range input.Extensions {
 		raw, err := json.Marshal(value)
 		if err != nil {
@@ -404,6 +426,9 @@ func toFrameworkEvent(input Event) (*frameworkevent.Event, error) {
 	}
 	if generatedToolResultID {
 		e.Extensions[generatedToolResultIDKey] = json.RawMessage("true")
+	}
+	if structuredToolResponse {
+		e.Extensions[structuredToolResponseKey] = json.RawMessage("true")
 	}
 	return e, nil
 }
@@ -431,15 +456,17 @@ func fromFrameworkEvent(input *frameworkevent.Event, fallbackSeq int) (Event, er
 				return Event{}, fmt.Errorf("decode tool arguments: %w", err)
 			}
 		}
-		if message.Role == model.RoleTool && message.Content != "" {
+		if message.Role == model.RoleTool {
 			out.ToolResultID = message.ToolID
 			if _, generated := input.Extensions[generatedToolResultIDKey]; generated {
 				out.ToolResultID = ""
 			}
-			if err := json.Unmarshal([]byte(message.Content), &out.Response); err != nil {
-				return Event{}, fmt.Errorf("decode tool response: %w", err)
+			if _, structured := input.Extensions[structuredToolResponseKey]; structured {
+				if err := json.Unmarshal([]byte(message.Content), &out.Response); err != nil {
+					return Event{}, fmt.Errorf("decode tool response: %w", err)
+				}
+				out.Content = ""
 			}
-			out.Content = ""
 		}
 	}
 	stateDelta, err := decodeState(input.StateDelta)
@@ -449,7 +476,7 @@ func fromFrameworkEvent(input *frameworkevent.Event, fallbackSeq int) (Event, er
 	out.StateDelta = stateDelta
 	out.Extensions = make(map[string]any, len(input.Extensions))
 	for key, raw := range input.Extensions {
-		if key == seqKey || key == generatedEventIDKey || key == generatedToolCallIDKey || key == generatedToolResultIDKey {
+		if key == seqKey || key == generatedEventIDKey || key == generatedToolCallIDKey || key == generatedToolResultIDKey || key == structuredToolResponseKey {
 			continue
 		}
 		var value any

@@ -311,7 +311,13 @@ func Normalize(s Snapshot) Snapshot {
 		s.Tracks[i].DurationMS = float64(int(s.Tracks[i].DurationMS + .5))
 	}
 	sort.SliceStable(s.Events, func(i, j int) bool { return s.Events[i].Seq < s.Events[j].Seq })
-	sort.Slice(s.Memories, func(i, j int) bool { return s.Memories[i].ID < s.Memories[j].ID })
+	sort.Slice(s.Memories, func(i, j int) bool {
+		left, right := memoryStableKey(s.Memories[i]), memoryStableKey(s.Memories[j])
+		if left == right {
+			return s.Memories[i].ID < s.Memories[j].ID
+		}
+		return left < right
+	})
 	sort.Slice(s.Summaries, func(i, j int) bool {
 		if s.Summaries[i].FilterKey == s.Summaries[j].FilterKey {
 			return s.Summaries[i].ID < s.Summaries[j].ID
@@ -320,6 +326,14 @@ func Normalize(s Snapshot) Snapshot {
 	})
 	sort.SliceStable(s.Tracks, func(i, j int) bool { return s.Tracks[i].Name < s.Tracks[j].Name })
 	return s
+}
+
+// memoryStableKey uses only fields that both service backends persist. IDs,
+// scope, similarity, and arbitrary metadata are capability-dependent and must
+// never determine which memory receives an allowed-difference rule.
+func memoryStableKey(memory Memory) string {
+	topics, _ := json.Marshal(memory.Metadata["topics"])
+	return memory.Content + "\x00" + string(topics)
 }
 
 type Difference struct {

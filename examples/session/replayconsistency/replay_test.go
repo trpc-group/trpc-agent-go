@@ -118,6 +118,36 @@ func TestUnsupportedCapabilityDoesNotAllowOtherDiffs(t *testing.T) {
 	}
 }
 
+func TestBackendCapabilityPathsUseCanonicalOrder(t *testing.T) {
+	backend := NewInMemoryBackend()
+	t.Cleanup(func() { _ = backend.Close() })
+	service := backend.(*serviceBackend)
+	fixture := base("canonical-capabilities")
+	fixture.Memories = []Memory{
+		{ID: "z", Content: "z-memory", Scope: "session", Metadata: map[string]any{"private": true}},
+		{ID: "a", Content: "a-memory", Scope: "user"},
+	}
+	fixture.Summaries = []Summary{
+		{ID: "custom-z", FilterKey: "z", Text: "z"},
+		{ID: "summary:a", FilterKey: "a", Text: "a"},
+	}
+	if err := service.Begin(fixture); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := service.unsupported["/memories/1/scope"]; !ok {
+		t.Fatalf("scope exception did not follow canonical memory order: %+v", service.unsupported)
+	}
+	if _, ok := service.unsupported["/memories/0/scope"]; ok {
+		t.Fatalf("scope exception moved to a different memory: %+v", service.unsupported)
+	}
+	if _, ok := service.unsupported["/memories/1/metadata"]; !ok {
+		t.Fatalf("metadata exception did not follow canonical memory order: %+v", service.unsupported)
+	}
+	if _, ok := service.unsupported["/summaries/1/id"]; !ok {
+		t.Fatalf("summary ID exception did not follow canonical summary order: %+v", service.unsupported)
+	}
+}
+
 func TestStableEventIDRoundTrips(t *testing.T) {
 	backend := NewInMemoryBackend()
 	t.Cleanup(func() { _ = backend.Close() })
@@ -158,6 +188,33 @@ func TestToolCallIDsRoundTripAcrossInterleavedResults(t *testing.T) {
 	}
 	if diffs := Compare("interleaved-tools", backend.Name(), fixture, got); len(diffs) != 0 {
 		t.Fatalf("tool IDs did not round-trip: %+v", diffs)
+	}
+}
+
+func TestPlainTextToolResultPreservesContentAndCorrelationID(t *testing.T) {
+	fixture := base("plain-tool-result",
+		Event{Seq: 1, Role: "user", Content: "run plain tool"},
+		Event{Seq: 2, Role: "assistant", Tool: "plain", ToolCallID: "call-text", Args: map[string]any{"value": 1}},
+		Event{Seq: 3, Role: "tool", Tool: "plain", ToolResultID: "call-text", Content: "ok"},
+	)
+	for _, backend := range []Backend{NewInMemoryBackend(), mustSQLiteBackend(t)} {
+		backend := backend
+		t.Run(backend.Name(), func(t *testing.T) {
+			t.Cleanup(func() { _ = backend.Close() })
+			if err := ReplaySnapshot(backend, fixture); err != nil {
+				t.Fatal(err)
+			}
+			got, err := backend.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got.Events) != 3 || got.Events[2].Content != "ok" || got.Events[2].ToolResultID != "call-text" || got.Events[2].Response != nil {
+				t.Fatalf("plain tool result did not round-trip: %+v", got.Events)
+			}
+			if diffs := Compare("plain-tool-result", backend.Name(), fixture, got); len(diffs) != 0 {
+				t.Fatalf("plain tool result changed: %+v", diffs)
+			}
+		})
 	}
 }
 
