@@ -8,6 +8,7 @@ replace (
 )
 
 require (
+	github.com/docker/docker v28.4.0+incompatible
 	github.com/google/uuid v1.6.0
 	github.com/stretchr/testify v1.11.1
 	modernc.org/sqlite v1.37.1
@@ -25,7 +26,6 @@ require (
 	github.com/containerd/log v0.1.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/distribution/reference v0.6.0 // indirect
-	github.com/docker/docker v28.4.0+incompatible // indirect
 	github.com/docker/go-connections v0.5.0 // indirect
 	github.com/docker/go-units v0.5.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
