@@ -42,7 +42,7 @@ func (ga *GraphAgent) Export(
 		nodePaths[node.ID] = nodePath
 		snapshot.Nodes = append(snapshot.Nodes, structure.Node{
 			NodeID: nodePath,
-			Kind:   nodeKindFromGraphNodeType(node.Type),
+			Kind:   istructure.NormalizeNodeKind(node.Type.String()),
 			Name:   node.Name,
 		})
 	}
@@ -112,19 +112,6 @@ func appendAgentNodeChildSnapshot(
 	}
 	snapshot.Edges = append(snapshot.Edges, rebased.Edges...)
 	snapshot.Surfaces = append(snapshot.Surfaces, rebased.Surfaces...)
-}
-
-func nodeKindFromGraphNodeType(nodeType graph.NodeType) structure.NodeKind {
-	switch nodeType {
-	case graph.NodeTypeLLM:
-		return structure.NodeKindLLM
-	case graph.NodeTypeTool:
-		return structure.NodeKindTool
-	case graph.NodeTypeAgent:
-		return structure.NodeKindAgent
-	default:
-		return structure.NodeKindFunction
-	}
 }
 
 func exportGraphNodeSurfaces(
