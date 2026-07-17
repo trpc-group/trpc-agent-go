@@ -29,6 +29,18 @@ func TestNewSandboxRunnerFallbacks(t *testing.T) {
 	r, err = NewSandboxRunner(ReviewOptions{Runtime: "fake", OutputLimit: -1, SandboxTimeout: -1})
 	require.NoError(t, err)
 	require.NoError(t, r.Close())
+	r, err = newContainerRunner(ReviewOptions{Runtime: "container", DryRun: true}, time.Second, 64)
+	require.NoError(t, err)
+	engine, ok := r.(*engineRunner)
+	require.True(t, ok)
+	require.Nil(t, engine.exec)
+	require.True(t, engine.dryRun)
+	r, err = newE2BRunner(ReviewOptions{Runtime: "e2b", DryRun: true}, time.Second, 64)
+	require.NoError(t, err)
+	engine, ok = r.(*engineRunner)
+	require.True(t, ok)
+	require.Nil(t, engine.exec)
+	require.True(t, engine.dryRun)
 	_, err = NewSandboxRunner(ReviewOptions{Runtime: "unknown"})
 	require.Error(t, err)
 }
@@ -70,6 +82,14 @@ func TestEngineRunnerDryRunAndExecution(t *testing.T) {
 	require.Equal(t, []string{"../skills/code-review/scripts/run_go_checks.sh"}, runner.specs[1].Args)
 	require.Equal(t, "repo", runner.specs[1].Cwd)
 
+	r.outputLimit = 40
+	runner.result.Stdout = `token="AKID1234567890SECRET"`
+	runs, err = r.Run(context.Background(), "task", []string{"go test ./..."}, NewCommandGate())
+	require.NoError(t, err)
+	require.Len(t, runs, 1)
+	require.NotContains(t, runs[0].Output, "AKID1234567890SECRET")
+	require.Contains(t, runs[0].Output, "[REDACTED]")
+
 	runs, err = r.Run(context.Background(), "task", []string{"curl http://example.com"}, NewCommandGate())
 	require.NoError(t, err)
 	require.Len(t, runs, 1)
@@ -103,6 +123,13 @@ func TestEngineRunnerErrors(t *testing.T) {
 	limited, truncated := limitOutput("abcdefghijklmnopqrstuvwxyz0123456789", 32)
 	require.True(t, truncated)
 	require.Contains(t, limited, "[output truncated]")
+	require.Len(t, limited, 32)
+
+	r = &engineRunner{runtime: "stub", dryRun: true}
+	runs, err = r.Run(context.Background(), "task", []string{"go test ./..."}, NewCommandGate())
+	require.NoError(t, err)
+	require.Len(t, runs, 1)
+	require.Equal(t, "dry_run", runs[0].Status)
 }
 
 func mustLimitOutput(t *testing.T, out string, max int64) string {

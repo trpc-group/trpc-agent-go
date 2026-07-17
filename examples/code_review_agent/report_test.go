@@ -23,9 +23,23 @@ func TestRenderMarkdownAndMetrics(t *testing.T) {
 	now := time.Now().Add(-time.Second)
 	report := minimalReport("task-md")
 	report.SandboxRuns[0].ErrorType = "execution_error"
+	report.Warnings = []Finding{{
+		Severity:       severityLow,
+		Category:       "style",
+		File:           "warn.go",
+		Line:           3,
+		Title:          "warning title",
+		Evidence:       "warning evidence",
+		Recommendation: "warning recommendation",
+		Confidence:     0.4,
+		Source:         "test",
+		RuleID:         "test.warning",
+	}}
 	md := renderMarkdown(report)
 	require.Contains(t, md, "Code Review Report")
 	require.Contains(t, md, "Governance")
+	require.Contains(t, md, "## Warnings")
+	require.Contains(t, md, "warning title")
 	var b strings.Builder
 	renderFindingList(&b, nil)
 	require.Contains(t, b.String(), "No items")

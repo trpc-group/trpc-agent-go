@@ -42,3 +42,21 @@ func TestParseUnifiedDiffHunkMismatch(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "hunk count mismatch")
 }
+
+func TestParseUnifiedDiffPlainUnifiedDiff(t *testing.T) {
+	raw := "--- a/plain.go\n+++ b/plain.go\n@@ -0,0 +1,1 @@\n+package plain\n"
+	sum, err := ParseUnifiedDiff(raw)
+	require.NoError(t, err)
+	require.Len(t, sum.Files, 1)
+	require.Equal(t, "plain.go", sum.Files[0].NewPath)
+	require.Equal(t, "package plain", sum.AddedLines[0].Content)
+}
+
+func TestParseUnifiedDiffHunkContentWithHeaderPrefixes(t *testing.T) {
+	raw := "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -1,2 +1,3 @@\n package main\n+++literal\n---old\n+added\n"
+	sum, err := ParseUnifiedDiff(raw)
+	require.NoError(t, err)
+	require.Len(t, sum.AddedLines, 2)
+	require.Equal(t, "++literal", sum.AddedLines[0].Content)
+	require.Equal(t, "added", sum.AddedLines[1].Content)
+}

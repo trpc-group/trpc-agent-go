@@ -77,11 +77,17 @@ func NewSandboxRunner(opts ReviewOptions) (SandboxRunner, error) {
 }
 
 func (r *engineRunner) Run(ctx context.Context, taskID string, commands []string, gate *CommandGate) ([]SandboxRun, error) {
+	if r == nil {
+		return nil, errors.New("sandbox runner is not configured")
+	}
+	if r.exec == nil && !r.dryRun {
+		return nil, errors.New("sandbox runner is not configured")
+	}
 	ctx, span := otel.Tracer("trpc-agent-go/examples/code_review_agent").Start(ctx, "code_review_agent.sandbox")
 	defer span.End()
 	span.SetAttributes(attribute.String("runtime", r.runtime), attribute.Int("commands", len(commands)))
-	if r == nil || r.exec == nil {
-		return nil, errors.New("sandbox runner is not configured")
+	if r.dryRun {
+		return r.runDryRun(ctx, taskID, commands, gate), nil
 	}
 	provider, ok := r.exec.(codeexecutor.EngineProvider)
 	if !ok {
@@ -95,7 +101,13 @@ func (r *engineRunner) Run(ctx context.Context, taskID string, commands []string
 	if err != nil {
 		return nil, err
 	}
-	defer eng.Manager().Cleanup(ctx, ws)
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := eng.Manager().Cleanup(cleanupCtx, ws); err != nil {
+			span.RecordError(err)
+		}
+	}()
 	if r.repoPath != "" {
 		if err := eng.FS().StageDirectory(ctx, ws, r.repoPath, "repo", codeexecutor.StageOptions{ReadOnly: true, AllowMount: true}); err != nil {
 			return nil, fmt.Errorf("stage repo: %w", err)
@@ -156,8 +168,7 @@ func (r *engineRunner) runOne(ctx context.Context, eng codeexecutor.Engine, ws c
 	run.Duration = rr.Duration
 	run.ExitCode = rr.ExitCode
 	run.TimedOut = rr.TimedOut
-	run.Output, run.Truncated = limitOutput(rr.Stdout+rr.Stderr, r.outputLimit)
-	run.Output = RedactSecrets(run.Output)
+	run.Output, run.Truncated = limitOutput(RedactSecrets(rr.Stdout+rr.Stderr), r.outputLimit)
 	if err != nil {
 		run.Status = "failed"
 		if rr.TimedOut {
@@ -169,6 +180,33 @@ func (r *engineRunner) runOne(ctx context.Context, eng codeexecutor.Engine, ws c
 	}
 	run.Status = "completed"
 	return run, nil
+}
+
+func (r *engineRunner) runDryRun(ctx context.Context, taskID string, commands []string, gate *CommandGate) []SandboxRun {
+	runs := make([]SandboxRun, 0, len(commands))
+	for _, command := range commands {
+		start := time.Now().UTC()
+		run := SandboxRun{TaskID: taskID, Runtime: r.runtime, Command: command, Status: "skipped", StartedAt: start}
+		decision, err := gate.Check(ctx, taskID, command)
+		run.CompletedAt = time.Now().UTC()
+		run.Duration = run.CompletedAt.Sub(start)
+		if err != nil {
+			run.Status = "failed"
+			run.ErrorType = "permission_error"
+			runs = append(runs, run)
+			continue
+		}
+		if decision.Action != tool.PermissionActionAllow {
+			run.Status = string(decision.Action)
+			run.ErrorType = "permission_" + string(decision.Action)
+			runs = append(runs, run)
+			continue
+		}
+		run.Status = "dry_run"
+		run.Output = "dry-run: command permitted but not executed"
+		runs = append(runs, run)
+	}
+	return runs
 }
 
 type sandboxCommandSpec struct {
@@ -262,8 +300,13 @@ func limitOutput(out string, max int64) (string, bool) {
 	if max <= 0 || int64(len(out)) <= max {
 		return out, false
 	}
+	const marker = "\n[output truncated]"
 	if max < 32 {
 		return out[:max], true
 	}
-	return out[:max] + "\n[output truncated]", true
+	keep := max - int64(len(marker))
+	if keep < 0 {
+		keep = 0
+	}
+	return out[:keep] + marker, true
 }

@@ -18,6 +18,16 @@ import (
 )
 
 func newContainerRunner(opts ReviewOptions, timeout time.Duration, outputLimit int64) (SandboxRunner, error) {
+	if opts.DryRun {
+		return &engineRunner{
+			runtime:     "container",
+			timeout:     timeout,
+			outputLimit: outputLimit,
+			repoPath:    opts.RepoPath,
+			skillsRoot:  opts.SkillsRoot,
+			dryRun:      true,
+		}, nil
+	}
 	dockerPath := filepath.Join("code_review_agent", "sandbox")
 	exec, err := containerexec.New(containerexec.WithDockerFilePath(dockerPath))
 	if err != nil {
@@ -35,6 +45,16 @@ func newContainerRunner(opts ReviewOptions, timeout time.Duration, outputLimit i
 }
 
 func newE2BRunner(opts ReviewOptions, timeout time.Duration, outputLimit int64) (SandboxRunner, error) {
+	if opts.DryRun {
+		return &engineRunner{
+			runtime:     "e2b",
+			timeout:     timeout,
+			outputLimit: outputLimit,
+			repoPath:    opts.RepoPath,
+			skillsRoot:  opts.SkillsRoot,
+			dryRun:      true,
+		}, nil
+	}
 	exec, err := e2bexec.New(
 		e2bexec.WithExecutionTimeout(timeout),
 		e2bexec.WithSandboxTimeout(timeout*2),

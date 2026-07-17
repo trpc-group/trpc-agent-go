@@ -61,6 +61,30 @@ func TestGitDiffInput(t *testing.T) {
 	require.Contains(t, raw, "func A")
 }
 
+func TestGitDiffDisablesTextconv(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	repo := t.TempDir()
+	runGit(t, repo, "init")
+	runGit(t, repo, "config", "user.email", "test@example.com")
+	runGit(t, repo, "config", "user.name", "Test")
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "note.txt"), []byte("one\n"), 0o644))
+	runGit(t, repo, "add", "note.txt")
+	runGit(t, repo, "commit", "-m", "init")
+	marker := filepath.Join(repo, "textconv-ran.txt")
+	script := filepath.Join(repo, "textconv.sh")
+	require.NoError(t, os.WriteFile(script, []byte("#!/bin/sh\n"+"echo ran > \"$1\"\n"+"cat \"$2\"\n"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, ".gitattributes"), []byte("*.txt diff=custom\n"), 0o644))
+	runGit(t, repo, "config", "diff.custom.textconv", script+" "+marker)
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "note.txt"), []byte("two\n"), 0o644))
+
+	_, err := gitDiff(context.Background(), repo)
+	require.NoError(t, err)
+	_, statErr := os.Stat(marker)
+	require.Error(t, statErr)
+}
+
 func runGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	cmd := exec.Command("git", args...)

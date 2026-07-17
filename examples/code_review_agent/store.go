@@ -266,7 +266,7 @@ func (s *Store) SaveReport(ctx context.Context, report ReviewReport, jsonPath st
 	); err != nil {
 		return err
 	}
-	reportJSON, err := json.Marshal(report)
+	reportJSON, err := json.Marshal(redactReviewReport(report))
 	if err != nil {
 		return err
 	}

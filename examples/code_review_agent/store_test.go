@@ -101,15 +101,20 @@ func TestStoreConcurrentWrites(t *testing.T) {
 	require.NoError(t, err)
 	defer store.Close()
 	var wg sync.WaitGroup
+	errCh := make(chan error, 3)
 	for _, id := range []string{"task-a", "task-b", "task-c"} {
 		id := id
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			require.NoError(t, store.SaveReport(ctx, minimalReport(id), id+".json", id+".md"))
+			errCh <- store.SaveReport(ctx, minimalReport(id), id+".json", id+".md")
 		}()
 	}
 	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		require.NoError(t, err)
+	}
 }
 
 func TestStoreLoadsZeroMetricsMapsAndHelpers(t *testing.T) {

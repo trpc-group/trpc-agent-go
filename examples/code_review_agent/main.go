@@ -14,7 +14,9 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 	"time"
 )
 
@@ -54,7 +56,8 @@ func runCLI(args []string) error {
 	if err != nil {
 		return fmt.Errorf("invalid --sandbox-timeout: %w", err)
 	}
-	ctx := context.Background()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	if evalLabels != "" {
 		report, jsonPath, mdPath, err := RunEvaluation(ctx, opts, evalLabels)
 		if err != nil {

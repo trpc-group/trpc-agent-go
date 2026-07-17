@@ -11,6 +11,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -36,24 +38,27 @@ type EvalFixtureLabel struct {
 
 // EvalReport records measurable fixture review quality and redaction metrics.
 type EvalReport struct {
-	StartedAt             time.Time           `json:"started_at"`
-	CompletedAt           time.Time           `json:"completed_at"`
-	DurationMS            int64               `json:"duration_ms"`
-	FixtureCount          int                 `json:"fixture_count"`
-	ExpectedRules         int                 `json:"expected_rules"`
-	MatchedRules          int                 `json:"matched_rules"`
-	ExpectedHighRules     int                 `json:"expected_high_rules"`
-	MatchedHighRules      int                 `json:"matched_high_rules"`
-	ReportedRules         int                 `json:"reported_rules"`
-	FalsePositiveRules    int                 `json:"false_positive_rules"`
-	SecretValueChecks     int                 `json:"secret_value_checks"`
-	SecretValueLeaks      int                 `json:"secret_value_leaks"`
-	Recall                float64             `json:"recall"`
-	HighRiskRecall        float64             `json:"high_risk_recall"`
-	FalsePositiveRate     float64             `json:"false_positive_rate"`
-	RedactionRate         float64             `json:"redaction_rate"`
-	PassedHiddenThreshold bool                `json:"passed_hidden_threshold"`
-	Results               []EvalFixtureResult `json:"results"`
+	StartedAt              time.Time           `json:"started_at"`
+	CompletedAt            time.Time           `json:"completed_at"`
+	DurationMS             int64               `json:"duration_ms"`
+	FixtureCount           int                 `json:"fixture_count"`
+	ExpectedRules          int                 `json:"expected_rules"`
+	MatchedRules           int                 `json:"matched_rules"`
+	ExpectedHighRules      int                 `json:"expected_high_rules"`
+	MatchedHighRules       int                 `json:"matched_high_rules"`
+	ReportedRules          int                 `json:"reported_rules"`
+	FalsePositiveRules     int                 `json:"false_positive_rules"`
+	SecretValueChecks      int                 `json:"secret_value_checks"`
+	SecretValueLeaks       int                 `json:"secret_value_leaks"`
+	Recall                 float64             `json:"recall"`
+	RecallMeasured         bool                `json:"recall_measured"`
+	HighRiskRecall         float64             `json:"high_risk_recall"`
+	HighRiskRecallMeasured bool                `json:"high_risk_recall_measured"`
+	FalsePositiveRate      float64             `json:"false_positive_rate"`
+	RedactionRate          float64             `json:"redaction_rate"`
+	RedactionRateMeasured  bool                `json:"redaction_rate_measured"`
+	PassedHiddenThreshold  bool                `json:"passed_hidden_threshold"`
+	Results                []EvalFixtureResult `json:"results"`
 }
 
 // EvalFixtureResult records measured rule matches for one fixture.
@@ -104,11 +109,15 @@ func RunEvaluation(ctx context.Context, opts ReviewOptions, labelsPath string) (
 	report.FixtureCount = len(manifest.Fixtures)
 	report.CompletedAt = time.Now().UTC()
 	report.DurationMS = report.CompletedAt.Sub(start).Milliseconds()
-	report.Recall = ratio(report.MatchedRules, report.ExpectedRules)
-	report.HighRiskRecall = ratio(report.MatchedHighRules, report.ExpectedHighRules)
+	report.Recall, report.RecallMeasured = measuredRatio(report.MatchedRules, report.ExpectedRules)
+	report.HighRiskRecall, report.HighRiskRecallMeasured = measuredRatio(report.MatchedHighRules, report.ExpectedHighRules)
 	report.FalsePositiveRate = ratio(report.FalsePositiveRules, report.ReportedRules)
-	report.RedactionRate = ratio(report.SecretValueChecks-report.SecretValueLeaks, report.SecretValueChecks)
-	report.PassedHiddenThreshold = report.HighRiskRecall >= 0.80 && report.FalsePositiveRate <= 0.15 && report.RedactionRate >= 0.95
+	report.RedactionRate, report.RedactionRateMeasured = measuredRatio(report.SecretValueChecks-report.SecretValueLeaks, report.SecretValueChecks)
+	report.PassedHiddenThreshold = report.HighRiskRecallMeasured &&
+		report.RedactionRateMeasured &&
+		report.HighRiskRecall >= 0.80 &&
+		report.FalsePositiveRate <= 0.15 &&
+		report.RedactionRate >= 0.95
 	jsonPath, mdPath, err := writeEvalReport(report, opts.OutDir)
 	if err != nil {
 		return EvalReport{}, "", "", err
@@ -146,7 +155,6 @@ func evaluateFixture(label EvalFixtureLabel, report ReviewReport, artifactPaths 
 	reported := collectRuleIDs(report)
 	expected := stringSet(label.ExpectedRules)
 	allowed := stringSet(label.AllowedExtraRules)
-	allowed["go.testing.missing"] = struct{}{}
 	result := EvalFixtureResult{
 		Name:           label.Name,
 		TaskID:         report.Task.ID,
@@ -166,7 +174,7 @@ func evaluateFixture(label EvalFixtureLabel, report ReviewReport, artifactPaths 
 		result.FalsePositives = append(result.FalsePositives, rule)
 	}
 	sort.Strings(result.FalsePositives)
-	leaks, checks, err := scanArtifactsForSecrets(artifactPaths, secrets)
+	leaks, checks, failedChecks, err := scanArtifactsForSecrets(artifactPaths, secrets)
 	if err != nil {
 		return EvalFixtureResult{}, evalCounts{}, err
 	}
@@ -179,7 +187,7 @@ func evaluateFixture(label EvalFixtureLabel, report ReviewReport, artifactPaths 
 		reportedRules:      len(reported),
 		falsePositiveRules: len(result.FalsePositives),
 		secretValueChecks:  checks,
-		secretValueLeaks:   len(leaks),
+		secretValueLeaks:   failedChecks,
 	}
 	return result, counts, nil
 }
@@ -196,29 +204,31 @@ func collectRuleIDs(report ReviewReport) map[string]struct{} {
 	return out
 }
 
-func scanArtifactsForSecrets(paths []string, secrets []string) ([]string, int, error) {
+func scanArtifactsForSecrets(paths []string, secrets []string) ([]string, int, int, error) {
 	if len(secrets) == 0 {
-		return []string{}, 0, nil
+		return []string{}, 0, 0, nil
 	}
 	leaks := map[string]struct{}{}
 	checks := 0
+	failedChecks := 0
 	for _, p := range paths {
 		raw, err := os.ReadFile(p)
 		if err != nil {
-			return nil, 0, err
+			return nil, 0, 0, err
 		}
 		content := string(raw)
-		for _, secret := range secrets {
+		for i, secret := range secrets {
 			if secret == "" {
 				continue
 			}
 			checks++
 			if strings.Contains(content, secret) {
-				leaks[secret] = struct{}{}
+				failedChecks++
+				leaks[secretLeakID(i, secret)] = struct{}{}
 			}
 		}
 	}
-	return sortedKeys(leaks), checks, nil
+	return sortedKeys(leaks), checks, failedChecks, nil
 }
 
 func writeEvalReport(report EvalReport, outDir string) (string, string, error) {
@@ -244,10 +254,10 @@ func renderEvalMarkdown(report EvalReport) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Code Review Evaluation\n\n")
 	fmt.Fprintf(&b, "- Fixtures: %d\n", report.FixtureCount)
-	fmt.Fprintf(&b, "- Recall: %.4f (%d/%d)\n", report.Recall, report.MatchedRules, report.ExpectedRules)
-	fmt.Fprintf(&b, "- High-risk recall: %.4f (%d/%d)\n", report.HighRiskRecall, report.MatchedHighRules, report.ExpectedHighRules)
+	fmt.Fprintf(&b, "- Recall: %s (%d/%d)\n", formatMeasuredMetric(report.Recall, report.RecallMeasured), report.MatchedRules, report.ExpectedRules)
+	fmt.Fprintf(&b, "- High-risk recall: %s (%d/%d)\n", formatMeasuredMetric(report.HighRiskRecall, report.HighRiskRecallMeasured), report.MatchedHighRules, report.ExpectedHighRules)
 	fmt.Fprintf(&b, "- False positive rate: %.4f (%d/%d)\n", report.FalsePositiveRate, report.FalsePositiveRules, report.ReportedRules)
-	fmt.Fprintf(&b, "- Redaction rate: %.4f (%d/%d checks clean)\n", report.RedactionRate, report.SecretValueChecks-report.SecretValueLeaks, report.SecretValueChecks)
+	fmt.Fprintf(&b, "- Redaction rate: %s (%d/%d checks clean)\n", formatMeasuredMetric(report.RedactionRate, report.RedactionRateMeasured), report.SecretValueChecks-report.SecretValueLeaks, report.SecretValueChecks)
 	fmt.Fprintf(&b, "- Duration ms: %d\n", report.DurationMS)
 	fmt.Fprintf(&b, "- Threshold pass: %t\n\n", report.PassedHiddenThreshold)
 	fmt.Fprintf(&b, "## Fixtures\n\n")
@@ -268,6 +278,25 @@ func ratio(n int, d int) float64 {
 		return 1
 	}
 	return float64(n) / float64(d)
+}
+
+func measuredRatio(n int, d int) (float64, bool) {
+	if d == 0 {
+		return 0, false
+	}
+	return float64(n) / float64(d), true
+}
+
+func formatMeasuredMetric(v float64, measured bool) string {
+	if !measured {
+		return "n/a"
+	}
+	return fmt.Sprintf("%.4f", v)
+}
+
+func secretLeakID(index int, secret string) string {
+	sum := sha256.Sum256([]byte(secret))
+	return fmt.Sprintf("secret-%02d-%s", index+1, hex.EncodeToString(sum[:4]))
 }
 
 func intersection(expected []string, actual map[string]struct{}) []string {

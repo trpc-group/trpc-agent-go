@@ -72,6 +72,9 @@ type diffParseState struct {
 }
 
 func processDiffLine(summary *DiffSummary, state diffParseState, line string, lineNo int) (diffParseState, error) {
+	if shouldConsumeHunkContent(state.hunk, line) {
+		return consumeDiffContent(summary, state, line, lineNo)
+	}
 	switch {
 	case strings.HasPrefix(line, "diff --git "):
 		return startChangedFile(summary, state, line, lineNo)
@@ -83,6 +86,21 @@ func processDiffLine(summary *DiffSummary, state diffParseState, line string, li
 		return rememberMinusHeader(state, line)
 	default:
 		return consumeDiffContent(summary, state, line, lineNo)
+	}
+}
+
+func shouldConsumeHunkContent(h *hunkState, line string) bool {
+	if h == nil || h.oldSeen >= h.oldWant && h.newSeen >= h.newWant {
+		return false
+	}
+	if len(line) == 0 {
+		return true
+	}
+	switch line[0] {
+	case '+', '-', ' ', '\\':
+		return true
+	default:
+		return false
 	}
 }
 
@@ -102,7 +120,11 @@ func startChangedFile(summary *DiffSummary, state diffParseState, line string, l
 
 func updateNewPath(summary *DiffSummary, state diffParseState, line string, lineNo int) (diffParseState, error) {
 	if state.current == nil {
-		return state, fmt.Errorf("line %d: +++ without diff header", lineNo)
+		next, err := syntheticPlainFile(summary, state.lastMinusLine, lineNo)
+		if err != nil {
+			return state, fmt.Errorf("line %d: +++ without diff header", lineNo)
+		}
+		state.current = next
 	}
 	p, deleted, err := parseHeaderPath(strings.TrimPrefix(line, "+++ "))
 	if err != nil {

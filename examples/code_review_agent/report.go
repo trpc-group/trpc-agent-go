@@ -88,6 +88,8 @@ func renderMarkdown(report ReviewReport) string {
 	}
 	fmt.Fprintf(&b, "\n## Findings\n\n")
 	renderFindingList(&b, report.Findings)
+	fmt.Fprintf(&b, "\n## Warnings\n\n")
+	renderFindingList(&b, report.Warnings)
 	fmt.Fprintf(&b, "\n## Human Review\n\n")
 	renderFindingList(&b, report.NeedsHumanReview)
 	fmt.Fprintf(&b, "\n## Governance\n\n")

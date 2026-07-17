@@ -96,7 +96,7 @@ func gitDiff(ctx context.Context, repo string) (string, error) {
 	if _, err := gitTrackedFiles(ctx, repo); err != nil {
 		return "", err
 	}
-	cmd := exec.CommandContext(ctx, "git", "diff", "--no-ext-diff")
+	cmd := exec.CommandContext(ctx, "git", "diff", "--no-ext-diff", "--no-textconv")
 	cmd.Dir = repo
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr

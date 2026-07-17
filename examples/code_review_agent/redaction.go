@@ -49,3 +49,21 @@ func redactRun(r SandboxRun) SandboxRun {
 	r.Output = RedactSecrets(r.Output)
 	return r
 }
+
+func redactReviewReport(report ReviewReport) ReviewReport {
+	report.Input = redactDiffSummary(report.Input)
+	for i := range report.Findings {
+		report.Findings[i] = redactFinding(report.Findings[i])
+	}
+	for i := range report.Warnings {
+		report.Warnings[i] = redactFinding(report.Warnings[i])
+	}
+	for i := range report.NeedsHumanReview {
+		report.NeedsHumanReview[i] = redactFinding(report.NeedsHumanReview[i])
+	}
+	for i := range report.SandboxRuns {
+		report.SandboxRuns[i] = redactRun(report.SandboxRuns[i])
+	}
+	report.Conclusion = RedactSecrets(report.Conclusion)
+	return report
+}
