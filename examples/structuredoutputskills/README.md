@@ -19,6 +19,21 @@ The key idea is:
 - Only the **final** answer must be a single JSON object that matches the
   schema.
 
+## Provider compatibility
+
+This pattern requires the model service to support tools together with native
+structured output. Some OpenAI-compatible endpoints accept both request fields
+but let the JSON constraint suppress tool calls. A schema-valid final response
+does not by itself prove that a tool ran; check the tool-call and tool-result
+events shown by this example.
+
+If your endpoint does not reliably support the combination, use separate model
+calls: collect evidence with tools and without native structured output, then
+disable tools and request the structured final response. See
+[vLLM #39929](https://github.com/vllm-project/vllm/issues/39929) and
+[SGLang #21593](https://github.com/sgl-project/sglang/pull/21593) for related
+backend behavior.
+
 ## Run
 
 From this directory:
