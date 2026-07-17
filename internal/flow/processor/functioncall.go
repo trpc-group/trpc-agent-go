@@ -463,12 +463,17 @@ func persistFunctionResponseAfterDeadline(
 	)
 	defer cancel()
 	routeEvent := sessionroute.SnapshotEventIdentity(functionResponseEvent)
-	functionResponseEvent = applyEventPluginsAfterDeadline(
+	parentMetadata := functionResponseEvent.ParentMetadata
+	functionResponseEvent, err := applyEventPluginsAfterDeadline(
 		persistCtx,
 		invocation,
 		functionResponseEvent,
 	)
+	if err != nil {
+		return err
+	}
 	restoreEventRoutingFields(functionResponseEvent, routeEvent)
+	functionResponseEvent.ParentMetadata = parentMetadata
 
 	attached, err := appender.Invoke(
 		persistCtx,
@@ -505,19 +510,18 @@ func applyEventPluginsAfterDeadline(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	evt *event.Event,
-) *event.Event {
+) (*event.Event, error) {
 	if evt == nil || invocation == nil || invocation.Plugins == nil {
-		return evt
+		return evt, nil
 	}
 	updated, err := invocation.Plugins.OnEvent(ctx, invocation, evt)
 	if err != nil {
-		log.ErrorfContext(ctx, "plugin OnEvent failed: %v", err)
-		return evt
+		return nil, err
 	}
 	if updated == nil {
-		return evt
+		return evt, nil
 	}
-	return updated
+	return updated, nil
 }
 
 func restoreEventRoutingFields(dst *event.Event, src *event.Event) {
