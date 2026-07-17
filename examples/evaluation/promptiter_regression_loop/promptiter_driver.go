@@ -54,13 +54,13 @@ type promptIterAudit struct {
 }
 
 type promptIterRound struct {
-	Round           int     `json:"round"`
-	CandidatePrompt string  `json:"candidatePrompt"`
-	TrainScore      float64 `json:"trainScore"`
-	ValidationScore float64 `json:"validationScore"`
-	Accepted        bool    `json:"accepted"`
-	ScoreDelta      float64 `json:"scoreDelta"`
-	Reason          string  `json:"reason"`
+	Round             int     `json:"round"`
+	CandidatePrompt   string  `json:"candidatePrompt"`
+	TrainScore        float64 `json:"trainScore"`
+	OptimizationScore float64 `json:"optimizationScore"`
+	Accepted          bool    `json:"accepted"`
+	ScoreDelta        float64 `json:"scoreDelta"`
+	Reason            string  `json:"reason"`
 }
 
 func runDeterministicPromptIter(
@@ -92,13 +92,9 @@ func runDeterministicPromptIter(
 	}
 	optimizerStage := newDeterministicOptimizer(baseline)
 	evaluator := &deterministicAgentEvaluator{
-		surfaceID:       surfaceID,
-		trainEvalSetID:  cfg.Train.EvalSetID,
-		validationSetID: cfg.Validation.EvalSetID,
-		evalSets: map[string]evalSetFile{
-			cfg.Train.EvalSetID:      cfg.Train,
-			cfg.Validation.EvalSetID: cfg.Validation,
-		},
+		surfaceID:     surfaceID,
+		evalSetID:     cfg.Train.EvalSetID,
+		evalSet:       cfg.Train,
 		currentPrompt: optimizerStage.currentPrompt,
 	}
 	engine, err := promptiterengine.New(
@@ -115,7 +111,7 @@ func runDeterministicPromptIter(
 	defer evaluator.Close()
 	result, err := engine.Run(ctx, &promptiterengine.RunRequest{
 		Train:            []promptiterengine.EvalSetInput{{EvalSetID: cfg.Train.EvalSetID}},
-		Validation:       []promptiterengine.EvalSetInput{{EvalSetID: cfg.Validation.EvalSetID}},
+		Validation:       []promptiterengine.EvalSetInput{{EvalSetID: cfg.Train.EvalSetID}},
 		AcceptancePolicy: promptiterengine.AcceptancePolicy{MinScoreGain: cfg.PromptIter.MinScoreGain},
 		StopPolicy:       promptiterengine.StopPolicy{MaxRoundsWithoutAcceptance: 1},
 		MaxRounds:        cfg.PromptIter.MaxRounds,
@@ -135,7 +131,7 @@ func runDeterministicPromptIter(
 			roundAudit.TrainScore = round.Train.OverallScore
 		}
 		if round.Validation != nil {
-			roundAudit.ValidationScore = round.Validation.OverallScore
+			roundAudit.OptimizationScore = round.Validation.OverallScore
 		}
 		if round.Acceptance != nil {
 			roundAudit.Accepted = round.Acceptance.Accepted
@@ -168,11 +164,10 @@ func profileInstruction(profile *promptiter.Profile, surfaceID string) string {
 }
 
 type deterministicAgentEvaluator struct {
-	surfaceID       string
-	trainEvalSetID  string
-	validationSetID string
-	evalSets        map[string]evalSetFile
-	currentPrompt   func() string
+	surfaceID     string
+	evalSetID     string
+	evalSet       evalSetFile
+	currentPrompt func() string
 }
 
 func (e *deterministicAgentEvaluator) Evaluate(
@@ -180,10 +175,10 @@ func (e *deterministicAgentEvaluator) Evaluate(
 	evalSetID string,
 	_ ...evaluation.Option,
 ) (*evaluation.EvaluationResult, error) {
-	set, ok := e.evalSets[evalSetID]
-	if !ok || (evalSetID != e.trainEvalSetID && evalSetID != e.validationSetID) {
+	if evalSetID != e.evalSetID {
 		return nil, fmt.Errorf("unexpected eval set %q", evalSetID)
 	}
+	set := e.evalSet
 	prompt := e.currentPrompt()
 	overallStatus := evalstatus.EvalStatusPassed
 	evalCases := make([]*evaluation.EvaluationCaseResult, 0, len(set.EvalCases))

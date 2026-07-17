@@ -2,8 +2,8 @@
   "schemaVersion": "1.0",
   "mode": "fake",
   "seed": 20260717,
-  "durationMillis": 1,
-  "deterministicFingerprint": "2f4654742df273355df66a2ec2a2700655234daf62331fc634f81c54c687011c",
+  "durationMillis": 2,
+  "deterministicFingerprint": "44024b4bdc83d82f4f246a619638059fda617662b6c013e0e453396bd451d981",
   "model": {
     "provider": "deterministic",
     "name": "fake-trace-runner"
@@ -17,9 +17,9 @@
         "round": 1,
         "candidatePrompt": "Answer the user's request helpfully and concisely. Use tools when useful.\n1. ROUTE_EXPLICITLY: select the route that matches the user's intent.\n2. VALIDATE_TOOL_ARGUMENTS: verify required arguments and types before every tool call.\n3. OUTPUT_JSON_WHEN_REQUESTED: emit valid JSON with no surrounding prose when JSON is requested.\n4. GROUND_IN_PROVIDED_CONTEXT: never invent facts that are absent from the supplied context.\n5. PRESERVE_SAFETY_CONSTRAINTS: refuse unsafe requests and never reveal credentials or secrets.\n6. REPORT_ENVIRONMENT_FAILURES: distinguish timeouts and unavailable dependencies from model errors.",
         "trainScore": 0,
-        "validationScore": 1,
+        "optimizationScore": 1,
         "accepted": true,
-        "scoreDelta": 0.8571428571428572,
+        "scoreDelta": 1,
         "reason": "candidate score gain satisfies acceptance policy"
       }
     ]

@@ -3,7 +3,7 @@
   "mode": "fake",
   "seed": 20260717,
   "durationMillis": 1,
-  "deterministicFingerprint": "260f56efd48a978db7f96621504698c54a0e819fa61c1e8c1cae101092fe8fdb",
+  "deterministicFingerprint": "9d5fa762dc607f685c6aacacb53221f41739029ea221a684bf0875941a7b16be",
   "model": {
     "provider": "deterministic",
     "name": "fake-trace-runner"
@@ -17,10 +17,10 @@
         "round": 1,
         "candidatePrompt": "Answer the user's request helpfully and concisely. Use tools when useful.\n1. ROUTE_EXPLICITLY: select the route that matches the user's intent.\n2. VALIDATE_TOOL_ARGUMENTS: verify required arguments and types before every tool call.\n3. OUTPUT_JSON_WHEN_REQUESTED: emit valid JSON with no surrounding prose when JSON is requested.\n4. GROUND_IN_PROVIDED_CONTEXT: never invent facts that are absent from the supplied context.\n5. PRESERVE_SAFETY_CONSTRAINTS: refuse unsafe requests and never reveal credentials or secrets.\n6. REPORT_ENVIRONMENT_FAILURES: distinguish timeouts and unavailable dependencies from model errors.",
         "trainScore": 0,
-        "validationScore": 0.3333333333333333,
-        "accepted": false,
-        "scoreDelta": -0.3333333333333333,
-        "reason": "candidate score gain does not satisfy acceptance policy"
+        "optimizationScore": 1,
+        "accepted": true,
+        "scoreDelta": 1,
+        "reason": "candidate score gain satisfies acceptance policy"
       }
     ]
   },

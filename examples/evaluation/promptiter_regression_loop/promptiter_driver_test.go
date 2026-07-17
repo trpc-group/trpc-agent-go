@@ -41,3 +41,14 @@ func TestPromptIterCandidateIsDerivedFromTrainingFailures(t *testing.T) {
 	require.NotEmpty(t, audit.Rounds)
 	assert.Equal(t, candidate, audit.Rounds[0].CandidatePrompt)
 }
+
+func TestPromptIterDoesNotUseOuterValidationSet(t *testing.T) {
+	cfg, err := loadConfig("data/config.json")
+	require.NoError(t, err)
+	cfg.Validation.EvalSetID = "outer-validation-must-not-reach-promptiter"
+	cfg.Validation.EvalCases = nil
+
+	candidate, _, err := runDeterministicPromptIter(context.Background(), cfg)
+	require.NoError(t, err)
+	assert.NotEmpty(t, candidate)
+}

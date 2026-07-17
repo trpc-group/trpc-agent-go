@@ -4,7 +4,7 @@
 - Mode: `fake`
 - Seed: `20260717`
 - Model: `deterministic/fake-trace-runner`
-- Fingerprint: `260f56efd48a978db7f96621504698c54a0e819fa61c1e8c1cae101092fe8fdb`
+- Fingerprint: `9d5fa762dc607f685c6aacacb53221f41739029ea221a684bf0875941a7b16be`
 - Duration: `1 ms`
 
 ## Validation summary
