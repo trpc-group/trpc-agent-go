@@ -301,6 +301,7 @@ type input struct {
 type Tool struct {
 	defaultProfile  string
 	evaluateEnabled bool
+	detectBlocked   bool
 	screenshotDir   string
 	navigation      navigationPolicy
 	hostServer      *serverTargetConfig
@@ -358,6 +359,7 @@ func NewTool(cfg Config) (*Tool, error) {
 		drivers,
 	)
 	tool.screenshotDir = resolved.ScreenshotDir
+	tool.detectBlocked = resolved.DetectBlocked
 	return tool, nil
 }
 
@@ -374,6 +376,7 @@ func newToolWithDrivers(
 	return &Tool{
 		defaultProfile:  defaultProfile,
 		evaluateEnabled: evaluateEnabled,
+		detectBlocked:   true,
 		navigation:      navigation,
 		hostServer:      hostServer,
 		sandboxServer:   sandboxServer,
@@ -453,6 +456,18 @@ func browserDescription(evaluateEnabled bool) string {
 		"native browser contract. Use it for live web pages, " +
 		"public URLs, and configured browser profiles, not for " +
 		"direct inspection of local or generated files. Do not " +
+		"use browser as a general web search engine: prefer search " +
+		"tools, APIs, direct source URLs, archives, or web_fetch " +
+		"for search-engine lookups and known static pages. Avoid " +
+		"driving DuckDuckGo, Google, Google Scholar, Brave Search, " +
+		"Bing, or other search-result pages through browser when " +
+		"search or fetch tools are available. If a page shows a " +
+		"CAPTCHA, Cloudflare or `Just a moment` challenge, unusual " +
+		"traffic warning, bot check, or anti-automation page, treat " +
+		"that route as blocked and switch tools or sources instead " +
+		"of waiting, screenshotting, or retrying it. Do not " +
+		"navigate to search-engine result pages unless " +
+		"allow_search_result_pages is explicitly enabled. Do not " +
 		"navigate to file://, data:, or ad hoc localhost/127.0.0.1 " +
 		"URLs unless the runtime configuration explicitly exposes " +
 		"that file root or server; normal browser policy may block those paths. " +
@@ -1152,6 +1167,7 @@ func navigationPolicyInfo(policy navigationPolicy) *NavigationPolicyInfo {
 		!policy.AllowLoopback &&
 		!policy.AllowPrivateNet &&
 		!policy.AllowFileURLs &&
+		!policy.AllowSearchPages &&
 		len(policy.AllowedFileRoots) == 0 {
 		return nil
 	}
@@ -1162,6 +1178,7 @@ func navigationPolicyInfo(policy navigationPolicy) *NavigationPolicyInfo {
 		AllowPrivateNetworks: policy.AllowPrivateNet,
 		AllowFileURLs:        policy.AllowFileURLs,
 		AllowRootFileURLs:    len(policy.AllowedFileRoots) > 0,
+		AllowSearchPages:     policy.AllowSearchPages,
 		AllowedFileRoots:     append([]string(nil), policy.AllowedFileRoots...),
 	}
 }
@@ -1323,6 +1340,15 @@ func (t *Tool) handleOpen(
 	if err := t.navigation.Validate(rawURL); err != nil {
 		return Result{}, err
 	}
+	if result, ok := t.searchResultBlockedResult(
+		actionOpen,
+		profile,
+		driverType,
+		rawURL,
+		nil,
+	); ok {
+		return result, nil
+	}
 	args := map[string]any{
 		"action": tabActionNew,
 	}
@@ -1346,6 +1372,20 @@ func (t *Tool) handleOpen(
 	)
 	if err != nil {
 		return Result{}, err
+	}
+	for _, tab := range result.Tabs {
+		if !tab.Active {
+			continue
+		}
+		if blocked, ok := t.searchResultBlockedResult(
+			actionOpen,
+			profile,
+			driverType,
+			tab.URL,
+			nil,
+		); ok {
+			return blocked, nil
+		}
 	}
 	result.Action = actionOpen
 	return result, nil
@@ -1581,15 +1621,23 @@ func (t *Tool) handleNavigate(
 	drv driver,
 	in input,
 ) (Result, error) {
-	if err := selectTarget(ctx, drv, in.TargetID); err != nil {
-		return Result{}, err
-	}
-
 	rawURL := browserURL(in.URL, in.TargetURL)
 	if rawURL == "" {
 		return Result{}, errors.New("browser navigate requires url")
 	}
 	if err := t.navigation.Validate(rawURL); err != nil {
+		return Result{}, err
+	}
+	if result, ok := t.searchResultBlockedResult(
+		actionNavigate,
+		profile,
+		driverType,
+		rawURL,
+		in.MaxChars,
+	); ok {
+		return result, nil
+	}
+	if err := selectTarget(ctx, drv, in.TargetID); err != nil {
 		return Result{}, err
 	}
 
@@ -1598,6 +1646,15 @@ func (t *Tool) handleNavigate(
 	})
 	if err != nil {
 		return Result{}, err
+	}
+	if result, ok := t.searchResultBlockedFromRaw(
+		actionNavigate,
+		profile,
+		driverType,
+		raw,
+		in.MaxChars,
+	); ok {
+		return result, nil
 	}
 	raw = compactBrowserErrorResult(raw)
 	return t.textResult(
@@ -2284,6 +2341,17 @@ func (t *Tool) handleAct(
 	in input,
 ) (Result, error) {
 	req := normalizeActRequest(in)
+	if result, ok, err := t.blockedActNavigateResult(
+		actionAct,
+		profile,
+		driverType,
+		req,
+		in.MaxChars,
+	); err != nil {
+		return Result{}, err
+	} else if ok {
+		return result, nil
+	}
 	if err := selectTarget(ctx, drv, req.TargetID); err != nil {
 		return Result{}, err
 	}
@@ -2291,6 +2359,15 @@ func (t *Tool) handleAct(
 	raw, err := t.executeAct(ctx, drv, req, driverType)
 	if err != nil {
 		return Result{}, err
+	}
+	if result, ok := t.searchResultBlockedFromRaw(
+		actionAct,
+		profile,
+		driverType,
+		raw,
+		in.MaxChars,
+	); ok {
+		return result, nil
 	}
 
 	if req.Kind == actClose {
@@ -2903,11 +2980,119 @@ func (t *Tool) textResult(
 	)
 	result.Untrusted = true
 	result.Warning = untrustedBrowserWarning
-	result.Text = wrapUntrustedText(
-		extractText(raw),
-		intValue(maxChars),
-	)
+	text := extractText(raw)
+	if t.detectBlocked && browserActionHasPageContent(action) {
+		if reason, ok := blockedBrowserPageReason(text); ok {
+			result.State = stateBlocked
+			result.Warning = blockedBrowserPageWarning
+			result.Text = blockedBrowserPageText(
+				reason,
+				text,
+				intValue(maxChars),
+			)
+			result.Content = []textContentItem{{
+				Type: "text",
+				Text: result.Text,
+			}}
+			return result
+		}
+	}
+	result.Text = wrapUntrustedText(text, intValue(maxChars))
 	return result
+}
+
+func browserActionHasPageContent(action string) bool {
+	switch strings.ToLower(strings.TrimSpace(action)) {
+	case actionSnapshot, actionNavigate, actionAct, actionWait:
+		return true
+	default:
+		return false
+	}
+}
+
+func (t *Tool) searchResultBlockedFromRaw(
+	action string,
+	profile string,
+	driverType string,
+	raw any,
+	maxChars *int,
+) (Result, bool) {
+	rawURL := browserResultURL(raw)
+	if rawURL == "" {
+		return Result{}, false
+	}
+	return t.searchResultBlockedResult(
+		action,
+		profile,
+		driverType,
+		rawURL,
+		maxChars,
+	)
+}
+
+func (t *Tool) blockedActNavigateResult(
+	action string,
+	profile string,
+	driverType string,
+	req actRequest,
+	maxChars *int,
+) (Result, bool, error) {
+	if normalizeActKind(req.Kind) != actionNavigate {
+		return Result{}, false, nil
+	}
+	rawURL := browserURL(req.URL, req.TargetURL)
+	if rawURL == "" {
+		return Result{}, false, errors.New(
+			"browser act navigate requires url",
+		)
+	}
+	if err := t.navigation.Validate(rawURL); err != nil {
+		return Result{}, false, err
+	}
+	result, ok := t.searchResultBlockedResult(
+		action,
+		profile,
+		driverType,
+		rawURL,
+		maxChars,
+	)
+	return result, ok, nil
+}
+
+func (t *Tool) searchResultBlockedResult(
+	action string,
+	profile string,
+	driverType string,
+	rawURL string,
+	maxChars *int,
+) (Result, bool) {
+	source, ok := t.navigation.BlockedSearchResultPage(rawURL)
+	if !ok {
+		return Result{}, false
+	}
+	text := "Browser navigation blocked: " + rawURL +
+		" is a search-engine result page (" + source + "). Use " +
+		"search tools, web_fetch, direct source URLs, APIs, " +
+		"archives, or existing evidence instead. If browser " +
+		"inspection of this search page is required, enable " +
+		"allow_search_result_pages in browser config."
+	if max := intValue(maxChars); max > 0 {
+		text = truncateString(text, max)
+	}
+	result := newBaseResult(
+		action,
+		profile,
+		driverType,
+		t.evaluateEnabled,
+	)
+	result.State = stateBlocked
+	result.Text = text
+	result.Warning = "Search-result browser navigation is blocked."
+	result.Content = []textContentItem{{
+		Type: "text",
+		Text: text,
+	}}
+	return result, true
 }
 
 func (t *Tool) tabsResult(

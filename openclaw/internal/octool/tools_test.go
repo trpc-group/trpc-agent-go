@@ -187,6 +187,28 @@ func TestSandboxExecTool_AppliesCommandPolicy(t *testing.T) {
 	require.Empty(t, engine.manager.workspaces)
 }
 
+func TestSandboxExecTool_BlocksExplicitProxyEnv(t *testing.T) {
+	t.Parallel()
+
+	engine := &fakeSandboxExecEngine{}
+	tl := NewSandboxExecCommandToolWithPolicy(
+		engine,
+		nil,
+		nil,
+		NewChatCommandSafetyPolicy(),
+		nil,
+	).(tool.CallableTool)
+
+	_, err := tl.Call(context.Background(), mustJSON(t, map[string]any{
+		"command": "curl https://example.com",
+		"env": map[string]string{
+			"HTTPS_PROXY": "http://proxy.example:8080",
+		},
+	}))
+	require.ErrorContains(t, err, reasonNetworkProxy)
+	require.Empty(t, engine.runner.specs)
+}
+
 func TestSandboxExecTool_RedactsSensitiveEnvValueOutput(t *testing.T) {
 	t.Parallel()
 
@@ -713,6 +735,21 @@ func TestExecTool_BlocksShellProfileAccess(t *testing.T) {
 		err,
 		"shell or credential files is not allowed",
 	)
+}
+
+func TestExecTool_BlocksExplicitProxyEnv(t *testing.T) {
+	t.Parallel()
+
+	mgr := NewManager(WithCommandPolicy(NewChatCommandSafetyPolicy()))
+	tl := newExecCommandTool(mgr)
+
+	_, err := tl.Call(context.Background(), mustJSON(t, map[string]any{
+		"command": "curl https://example.com",
+		"env": map[string]string{
+			"HTTPS_PROXY": "http://proxy.example:8080",
+		},
+	}))
+	require.ErrorContains(t, err, reasonNetworkProxy)
 }
 
 func TestChatCommandSafetyPolicyAllowsStateScratchWorkdir(t *testing.T) {
