@@ -2288,6 +2288,106 @@ func TestReconcileOps_ReconcilesEpisodesWithCompatibleEventTimes(t *testing.T) {
 	require.Empty(t, out)
 }
 
+func TestReconcileOps_KeepsEpisodesWithDifferentParticipants(t *testing.T) {
+	eventTime := time.Date(2023, 1, 15, 0, 0, 0, 0, time.UTC)
+	op := newMockOperator()
+	op.searchResults = []*memory.Entry{{
+		ID:      "mem-lecture",
+		AppName: "app", UserID: "u1",
+		Memory: &memory.Memory{
+			Memory:       "Attended a museum lecture with Dr. Rivera",
+			Kind:         memory.KindEpisode,
+			EventTime:    &eventTime,
+			Participants: []string{"Dr. Rivera"},
+			Location:     "Museum of Contemporary Art",
+		},
+		Score: 0.95,
+	}}
+	worker := NewAutoMemoryWorker(AutoMemoryConfig{}, op)
+	in := []*extractor.Operation{{
+		Type:         extractor.OperationAdd,
+		Memory:       "Met artists at the museum reception",
+		MemoryKind:   memory.KindEpisode,
+		EventTime:    &eventTime,
+		Participants: []string{"artists"},
+		Location:     "Museum of Contemporary Art",
+	}}
+
+	out := worker.reconcileOps(context.Background(), reconcileUserKey(), in)
+	require.Len(t, out, 1)
+	assert.Equal(t, extractor.OperationAdd, out[0].Type)
+	assert.Empty(t, out[0].MemoryID)
+}
+
+func TestReconcileOps_KeepsEpisodesWithDifferentLocations(t *testing.T) {
+	eventTime := time.Date(2023, 1, 15, 0, 0, 0, 0, time.UTC)
+	op := newMockOperator()
+	op.searchResults = []*memory.Entry{{
+		ID:      "mem-science",
+		AppName: "app", UserID: "u1",
+		Memory: &memory.Memory{
+			Memory:    "Visited a museum exhibition",
+			Kind:      memory.KindEpisode,
+			EventTime: &eventTime,
+			Location:  "Science Museum",
+		},
+		Score: 0.95,
+	}}
+	worker := NewAutoMemoryWorker(AutoMemoryConfig{}, op)
+	in := []*extractor.Operation{{
+		Type:       extractor.OperationAdd,
+		Memory:     "Visited a museum exhibition",
+		MemoryKind: memory.KindEpisode,
+		EventTime:  &eventTime,
+		Location:   "Museum of Contemporary Art",
+	}}
+
+	out := worker.reconcileOps(context.Background(), reconcileUserKey(), in)
+	require.Len(t, out, 1)
+	assert.Equal(t, extractor.OperationAdd, out[0].Type)
+	assert.Empty(t, out[0].MemoryID)
+}
+
+func TestReconcileOps_ReconcilesEpisodeParticipantEnrichment(t *testing.T) {
+	eventTime := time.Date(2023, 1, 15, 0, 0, 0, 0, time.UTC)
+	op := newMockOperator()
+	op.searchResults = []*memory.Entry{{
+		ID:      "mem-lecture",
+		AppName: "app", UserID: "u1",
+		Memory: &memory.Memory{
+			Memory:       "Attended a museum lecture",
+			Topics:       []string{"lecture"},
+			Kind:         memory.KindEpisode,
+			EventTime:    &eventTime,
+			Participants: []string{"Dr. Rivera"},
+			Location:     "Museum of Contemporary Art",
+		},
+		Score: 0.95,
+	}}
+	worker := NewAutoMemoryWorker(AutoMemoryConfig{}, op)
+	in := []*extractor.Operation{{
+		Type:         extractor.OperationAdd,
+		Memory:       "Attended a museum lecture with Dr. Rivera and Alex",
+		Topics:       []string{"lecture", "Alex"},
+		MemoryKind:   memory.KindEpisode,
+		EventTime:    &eventTime,
+		Participants: []string{"Dr. Rivera", "Alex"},
+		Location:     "museum of contemporary art",
+	}}
+
+	out := worker.reconcileOps(context.Background(), reconcileUserKey(), in)
+	require.Len(t, out, 1)
+	assert.Equal(t, extractor.OperationUpdate, out[0].Type)
+	assert.Equal(t, "mem-lecture", out[0].MemoryID)
+}
+
+func TestReconcileMetadataCompatible_IgnoresBlankLocation(t *testing.T) {
+	assert.True(t, reconcileMetadataCompatible(
+		&extractor.Operation{Location: " \t"},
+		&memory.Memory{Location: "Science Museum"},
+	))
+}
+
 func TestHistoryPolicy_KeepsDistinctFactsWithHighTopicScore(t *testing.T) {
 	existing := "Attended a religious service at a cathedral on February 1."
 	incoming := "Interested in charities that provide food and shelter during Lent."

@@ -994,8 +994,22 @@ func reconcileMetadataCompatible(
 		op.MemoryKind != EffectiveKind(stored) {
 		return false
 	}
-	return op.EventTime == nil || stored.EventTime == nil ||
-		eventTimeCompatible(stored.EventTime, op.EventTime)
+	if op.EventTime != nil && stored.EventTime != nil &&
+		!eventTimeCompatible(stored.EventTime, op.EventTime) {
+		return false
+	}
+	freshLocation := strings.TrimSpace(op.Location)
+	storedLocation := strings.TrimSpace(stored.Location)
+	if freshLocation != "" && storedLocation != "" &&
+		!strings.EqualFold(freshLocation, storedLocation) {
+		return false
+	}
+	if len(op.Participants) > 0 && len(stored.Participants) > 0 &&
+		!isStringSubset(op.Participants, stored.Participants) &&
+		!isStringSubset(stored.Participants, op.Participants) {
+		return false
+	}
+	return true
 }
 
 // tokenJaccard returns the token-level Jaccard similarity between two
