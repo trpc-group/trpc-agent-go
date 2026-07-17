@@ -9,12 +9,14 @@
 package localpython
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -179,6 +181,52 @@ func TestStartScriptRejectsMissingName(t *testing.T) {
 	require.ErrorContains(t, err, "script name is required")
 }
 
+func TestStartScriptRejectsOversizedCodeBeforeStarting(t *testing.T) {
+	_, err := StartScript(
+		context.Background(),
+		Config{MaxCodeBytes: 3},
+		"four",
+		"guest.py",
+		[]byte("print('unreachable')"),
+		nil,
+		nil,
+		io.Discard,
+	)
+	require.ErrorContains(t, err, "code exceeds 3 bytes")
+}
+
+func TestStartScriptReportsScriptWriteFailure(t *testing.T) {
+	_, err := StartScript(
+		context.Background(),
+		Config{},
+		"code",
+		".",
+		[]byte("print('unreachable')"),
+		nil,
+		nil,
+		io.Discard,
+	)
+	require.ErrorContains(t, err, "write script")
+}
+
+func TestStartScriptReportsInvalidWorkDir(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 unavailable")
+	}
+	workDir := filepath.Join(t.TempDir(), "missing")
+	_, err := StartScript(
+		context.Background(),
+		Config{WorkDir: workDir},
+		"code",
+		"guest.py",
+		[]byte("print('unreachable')"),
+		nil,
+		nil,
+		io.Discard,
+	)
+	require.ErrorContains(t, err, "start Python")
+}
+
 func TestStartScriptCleansScriptDirOnStartFailure(t *testing.T) {
 	workDir := t.TempDir()
 	_, err := StartScript(
@@ -225,6 +273,47 @@ func TestStartScriptSupportsRelativePythonPathWithTemporaryWorkDir(t *testing.T)
 	require.NoError(t, err)
 	require.NoError(t, proc.Wait())
 	require.Equal(t, "ok", strings.TrimSpace(string(out)))
+}
+
+func TestProcessStdinAndKill(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 unavailable")
+	}
+	proc, err := StartScript(
+		context.Background(),
+		Config{},
+		"code",
+		"guest.py",
+		[]byte("import sys, time\nprint(sys.stdin.readline().strip(), flush=True)\ntime.sleep(30)\n"),
+		nil,
+		nil,
+		io.Discard,
+	)
+	require.NoError(t, err)
+	_, err = io.WriteString(proc.Stdin(), "ready\n")
+	require.NoError(t, err)
+	out, err := bufio.NewReader(proc.Stdout()).ReadString('\n')
+	require.NoError(t, err)
+	require.Equal(t, "ready", strings.TrimSpace(out))
+	require.NoError(t, proc.Kill())
+	require.Error(t, proc.Wait())
+}
+
+func TestNilProcessLifecycleMethods(t *testing.T) {
+	var proc *Process
+	require.NoError(t, proc.Kill())
+	require.NoError(t, proc.Wait())
+	require.NoError(t, (&Process{}).Kill())
+	require.NoError(t, (&Process{}).Wait())
+}
+
+func TestResolveWorkDirReportsTemporaryDirectoryFailure(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("TMPDIR does not select the Windows temporary directory")
+	}
+	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "missing"))
+	_, _, err := resolveWorkDir("")
+	require.ErrorContains(t, err, "create workdir")
 }
 
 func requireSamePath(t *testing.T, want, got string) {

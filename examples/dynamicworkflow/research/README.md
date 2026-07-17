@@ -128,7 +128,7 @@ for iteration in range(1, 4):
             "type": "object",
             "properties": {
                 "approved": {"type": "boolean"},
-                "issues": {"type": "array", "items": {"type": "string"},
+                "issues": {"type": "array", "items": {"type": "string"}},
             },
             "required": ["approved", "issues"],
             "additionalProperties": False,

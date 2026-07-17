@@ -49,13 +49,6 @@ type LocalRunner struct {
 	// MaxCodeBytes bounds the workflow source size before launching Python.
 	// The default is 64 KiB. Use a negative value to disable this limit.
 	MaxCodeBytes int
-	// Env sets extra guest process environment variables. LocalRunner filters
-	// shell, loader, and Python preload/search-path variables and always enforces
-	// its Python hardening environment. When nil, it does not inherit the host
-	// environment.
-	// Do not pass secrets or the full host environment unless each variable is
-	// intentionally available to workflow code.
-	Env []string
 	// WorkDir sets the guest process working directory. When empty, LocalRunner
 	// creates an empty temporary directory and removes it after the guest exits.
 	// WorkDir is not automatically added to Python's module search path.
@@ -117,7 +110,6 @@ func (r LocalRunner) startWorkflowGuest(
 			Python:       r.Python,
 			Timeout:      r.Timeout,
 			MaxCodeBytes: r.MaxCodeBytes,
-			Env:          r.Env,
 			WorkDir:      r.WorkDir,
 		},
 		code,

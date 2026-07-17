@@ -361,12 +361,6 @@ default, rejects generated source larger than 64 KiB unless configured
 otherwise, and enforces the documented restricted Python subset. These are
 intentional behavior changes rather than a security sandbox boundary.
 
-If you pass `LocalRunner.Env`, LocalRunner still filters shell, dynamic-loader,
-and Python preload/search-path variables and enforces its Python hardening
-environment. Do not pass the host `os.Environ()` unless each variable is
-intentionally allowed for the workflow guest; this filtering is not secret
-isolation.
-
 In production, provide your own `dynamicworkflow.Runtime`, such as a container,
 microVM, or remote sandbox, and enforce filesystem, network, process,
 dependency, and resource limits there.

@@ -323,10 +323,6 @@ Go 框架掌控。
 目录，会拒绝超过 64 KiB 的生成源码（除非显式调整限制），并执行文档声明的受限
 Python 子集。这些是有意的行为变化，但不会构成安全 sandbox 边界。
 
-如果传入 `LocalRunner.Env`，LocalRunner 仍会过滤 shell、动态加载器以及 Python 预加载和
-搜索路径相关变量，并强制设置 Python hardening 环境。除非每个变量都确认需要暴露给
-workflow guest，否则不要直接传宿主进程的 `os.Environ()`；这层过滤不是环境变量机密隔离。
-
 生产环境应提供自己的 `dynamicworkflow.Runtime`，例如容器、microVM 或远端 sandbox，
 并在里面落实文件系统、网络、进程、依赖和资源限制。
 

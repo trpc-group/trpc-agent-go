@@ -369,30 +369,6 @@ func TestLocalRunnerOptionalTimeoutStopsBusyCode(t *testing.T) {
 	require.Less(t, time.Since(start), 5*time.Second)
 }
 
-func TestLocalRunnerUsesHardenedEnvironment(t *testing.T) {
-	if _, err := exec.LookPath("python3"); err != nil {
-		t.Skip("python3 unavailable")
-	}
-	result, err := Execute(
-		context.Background(),
-		LocalRunner{Env: []string{
-			"KEEP=1",
-			"PYTHONPATH=/tmp/unsafe",
-			"pythonpath=/tmp/unsafe-lower",
-			"PYTHONNOUSERSITE=0",
-		}},
-		fakeToolCallHandler{},
-		`import os
-return {
-    "keep": os.getenv("KEEP"),
-    "pythonpath": os.getenv("PYTHONPATH"),
-    "nousersite": os.getenv("PYTHONNOUSERSITE"),
-}`,
-	)
-	require.NoError(t, err)
-	require.JSONEq(t, `{"keep":"1","pythonpath":null,"nousersite":"1"}`, string(result.Value))
-}
-
 func TestLocalRunnerUsesConfiguredWorkDir(t *testing.T) {
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 unavailable")
