@@ -451,6 +451,7 @@ func redactedEventForLogging(e *Event) Event {
 }
 
 func tryEmitReadyEvent(ctx context.Context, ch chan<- *Event, e *Event) (handled bool, err error) {
+	eventStr := snapshotEvent(e)
 	defer func() {
 		if r := recover(); r != nil {
 			redactedEvent := redactedEventForLogging(e)
@@ -461,7 +462,7 @@ func tryEmitReadyEvent(ctx context.Context, ch chan<- *Event, e *Event) (handled
 	}()
 	select {
 	case ch <- e:
-		log.TracefContext(ctx, "tryEmitReadyEvent: event sent, event: %s", snapshotEvent(e))
+		log.TracefContext(ctx, "tryEmitReadyEvent: event sent, event: %s", eventStr)
 		return true, nil
 	case <-ctx.Done():
 		err = ctx.Err()
