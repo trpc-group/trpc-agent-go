@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os/exec"
 	"strings"
 	"sync"
@@ -26,10 +27,11 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
-	"trpc.group/trpc-go/trpc-agent-go/internal/state/eventstream"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/flush"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/livesession"
 	"trpc.group/trpc-go/trpc-agent-go/internal/surfacepatch"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
@@ -204,7 +206,7 @@ func TestDecodeAgentOptionsRejectsUnknownField(t *testing.T) {
 	require.ErrorContains(t, err, `unsupported agent option "unsupported_option"`)
 }
 
-func TestWorkflowParallelAgentsUseDistinctChildrenAndForwardEvents(t *testing.T) {
+func TestWorkflowParallelAgentsUseDistinctChildrenAndStreamEvents(t *testing.T) {
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 is not installed")
 	}
@@ -252,17 +254,11 @@ func TestWorkflowParallelAgentsUseDistinctChildrenAndForwardEvents(t *testing.T)
 		agent.WithInvocationSession(&session.Session{ID: "session-1", AppName: "app", UserID: "user"}),
 	)
 	var eventsMu sync.Mutex
-	var persisted, forwarded []*event.Event
+	var persisted []*event.Event
 	appender.Attach(parent, func(_ context.Context, evt *event.Event) error {
 		eventsMu.Lock()
 		defer eventsMu.Unlock()
 		persisted = append(persisted, evt)
-		return nil
-	})
-	eventstream.Attach(parent, func(_ context.Context, evt *event.Event) error {
-		eventsMu.Lock()
-		defer eventsMu.Unlock()
-		forwarded = append(forwarded, evt)
 		return nil
 	})
 
@@ -274,9 +270,14 @@ results = await parallel([
 return results
 `})
 	require.NoError(t, err)
-	value, err := workflow.Call(agent.NewInvocationContext(ctx, parent), workflowInput)
+	result, forwarded := executeWorkflowStream(
+		t,
+		workflow,
+		agent.NewInvocationContext(ctx, parent),
+		workflowInput,
+		nil,
+	)
 	require.NoError(t, err)
-	result := value.(Result)
 	var agentResults []agentResult
 	require.NoError(t, json.Unmarshal(result.Value, &agentResults))
 	require.Len(t, agentResults, 2)
@@ -287,7 +288,7 @@ return results
 	eventsMu.Lock()
 	defer eventsMu.Unlock()
 	require.Len(t, persisted, 2, "each child input is persisted")
-	require.Len(t, forwarded, 2, "each child output reaches the shared event stream")
+	require.Len(t, forwarded, 2, "each child output reaches the tool stream")
 	require.NotEqual(t, forwarded[0].InvocationID, forwarded[1].InvocationID)
 }
 
@@ -344,16 +345,13 @@ func TestWorkflowParallelStreamsInterleavedEventsAndKeepsResultOrder(t *testing.
 		agent.WithInvocationSession(&session.Session{ID: "session-1", AppName: "app", UserID: "user"}),
 	)
 	appender.Attach(parent, func(context.Context, *event.Event) error { return nil })
-	var eventsMu sync.Mutex
 	var streamed []string
 	var invocationIDs []string
-	eventstream.Attach(parent, func(_ context.Context, evt *event.Event) error {
+	onEvent := func(evt *event.Event) {
 		content, ok := assistantEventContent(evt)
 		if !ok || content == "" {
-			return nil
+			return
 		}
-		eventsMu.Lock()
-		defer eventsMu.Unlock()
 		streamed = append(streamed, content)
 		invocationIDs = append(invocationIDs, evt.InvocationID)
 		if content == "first partial" {
@@ -362,8 +360,7 @@ func TestWorkflowParallelStreamsInterleavedEventsAndKeepsResultOrder(t *testing.
 		if content == "second final" {
 			secondFinalOnce.Do(func() { close(secondFinalForwarded) })
 		}
-		return nil
-	})
+	}
 
 	input, err := json.Marshal(map[string]string{"code": `
 results = await parallel([
@@ -373,17 +370,19 @@ results = await parallel([
 return results
 `})
 	require.NoError(t, err)
-	value, err := workflow.Call(agent.NewInvocationContext(ctx, parent), input)
-	require.NoError(t, err)
-	result := value.(Result)
+	result, _ := executeWorkflowStream(
+		t,
+		workflow,
+		agent.NewInvocationContext(ctx, parent),
+		input,
+		onEvent,
+	)
 	var agentResults []agentResult
 	require.NoError(t, json.Unmarshal(result.Value, &agentResults))
 	require.Len(t, agentResults, 2)
 	require.Equal(t, "first final", agentResults[0].Text)
 	require.Equal(t, "second final", agentResults[1].Text)
 
-	eventsMu.Lock()
-	defer eventsMu.Unlock()
 	require.Equal(t, []string{
 		"first partial",
 		"second partial",
@@ -612,7 +611,7 @@ func TestWorkflowChildAgentToolsHonorParentPermissionPolicy(t *testing.T) {
 	require.GreaterOrEqual(t, modelImpl.callCount(), 2)
 }
 
-func TestWorkflowForwardsChildEventsWhenRunnerForwarderIsAttached(t *testing.T) {
+func TestWorkflowStreamsChildEventsWithoutDuplicatingSessionAppend(t *testing.T) {
 	reviewer := &testAgent{name: "reviewer", response: "done"}
 	workflow, err := NewTool(scriptedRuntime{run: func(ctx context.Context, handler CallHandler) (Result, error) {
 		_, err := handler.HandleWorkflowCall(ctx, Call{
@@ -626,22 +625,668 @@ func TestWorkflowForwardsChildEventsWhenRunnerForwarderIsAttached(t *testing.T) 
 		agent.WithInvocationAgent(&testAgent{name: "root"}),
 		agent.WithInvocationSession(&session.Session{ID: "session-1", AppName: "app", UserID: "user"}),
 	)
-	var persisted, forwarded []*event.Event
+	var persisted []*event.Event
 	appender.Attach(parent, func(_ context.Context, evt *event.Event) error {
 		persisted = append(persisted, evt)
 		return nil
 	})
-	eventstream.Attach(parent, func(_ context.Context, evt *event.Event) error {
-		forwarded = append(forwarded, evt)
-		return nil
-	})
 
-	_, err = workflow.Call(agent.NewInvocationContext(context.Background(), parent), []byte(`{"code":"return None"}`))
-	require.NoError(t, err)
+	_, streamed := executeWorkflowStream(
+		t,
+		workflow,
+		agent.NewInvocationContext(context.Background(), parent),
+		[]byte(`{"code":"return None"}`),
+		nil,
+	)
 	require.Len(t, persisted, 1, "the child input remains a session-only event")
-	require.Len(t, forwarded, 1, "child output is forwarded through the runner path")
-	require.Equal(t, "reviewer", forwarded[0].Author)
-	require.NotEqual(t, parent.InvocationID, forwarded[0].InvocationID)
+	require.Len(t, streamed, 1, "child output is emitted through the tool stream")
+	require.Equal(t, "reviewer", streamed[0].Author)
+	require.NotEqual(t, parent.InvocationID, streamed[0].InvocationID)
+}
+
+func TestWorkflowStreamableCallEmitsStructuredError(t *testing.T) {
+	workflow, err := NewTool(scriptedRuntime{run: func(context.Context, CallHandler) (Result, error) {
+		return Result{}, errors.New("workflow failed")
+	}}, []agent.Agent{&testAgent{name: "reviewer"}})
+	require.NoError(t, err)
+	streamable, ok := workflow.(tool.StreamableTool)
+	require.True(t, ok)
+	structured, ok := workflow.(interface {
+		TRPCAgentGoStructuredStreamErrorsOptIn() bool
+	})
+	require.True(t, ok)
+	require.True(t, structured.TRPCAgentGoStructuredStreamErrorsOptIn())
+
+	parent := agent.NewInvocation(
+		agent.WithInvocationAgent(&testAgent{name: "root"}),
+		agent.WithInvocationSession(&session.Session{ID: "session-1", AppName: "app", UserID: "user"}),
+	)
+	reader, err := streamable.StreamableCall(
+		agent.NewInvocationContext(context.Background(), parent),
+		[]byte(`{"code":"return None"}`),
+	)
+	require.NoError(t, err)
+	defer reader.Close()
+
+	chunk, err := reader.Recv()
+	require.NoError(t, err)
+	errEvent, ok := chunk.Content.(*event.Event)
+	require.True(t, ok)
+	require.Equal(t, parent.InvocationID, errEvent.InvocationID)
+	require.NotNil(t, errEvent.Response)
+	require.ErrorContains(t, errorsFromResponse(errEvent.Response.Error), "workflow failed")
+	_, err = reader.Recv()
+	require.ErrorIs(t, err, io.EOF)
+}
+
+func TestWorkflowStreamableCallValidatesBeforeStarting(t *testing.T) {
+	workflow, err := NewTool(scriptedRuntime{}, []agent.Agent{&testAgent{name: "reviewer"}})
+	require.NoError(t, err)
+	streamable := workflow.(tool.StreamableTool)
+	_, err = streamable.StreamableCall(context.Background(), []byte(`{"code":"return None"}`))
+	require.ErrorContains(t, err, "must be called from an active Agent run")
+
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{ID: "session-1", AppName: "app", UserID: "user"}),
+	)
+	_, err = streamable.StreamableCall(
+		agent.NewInvocationContext(context.Background(), parent),
+		[]byte(`{"code":" "}`),
+	)
+	require.ErrorContains(t, err, "code is required")
+}
+
+func TestWorkflowStreamableCallStopsWhenContextIsCanceled(t *testing.T) {
+	started := make(chan struct{})
+	stopped := make(chan struct{})
+	workflow, err := NewTool(scriptedRuntime{run: func(
+		ctx context.Context,
+		_ CallHandler,
+	) (Result, error) {
+		close(started)
+		<-ctx.Done()
+		close(stopped)
+		return Result{}, ctx.Err()
+	}}, []agent.Agent{&testAgent{name: "reviewer"}})
+	require.NoError(t, err)
+	parent := agent.NewInvocation(
+		agent.WithInvocationAgent(&testAgent{name: "root"}),
+		agent.WithInvocationSession(&session.Session{ID: "session-1", AppName: "app", UserID: "user"}),
+	)
+	appender.Attach(parent, func(context.Context, *event.Event) error { return nil })
+	ctx, cancel := context.WithCancel(
+		agent.NewInvocationContext(context.Background(), parent),
+	)
+	reader, err := workflow.(tool.StreamableTool).StreamableCall(
+		ctx,
+		[]byte(`{"code":"return None"}`),
+	)
+	require.NoError(t, err)
+	defer reader.Close()
+	<-started
+	cancel()
+
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("workflow Runtime did not observe cancellation")
+	}
+	chunk, err := reader.Recv()
+	require.NoError(t, err)
+	errEvent, ok := chunk.Content.(*event.Event)
+	require.True(t, ok)
+	require.True(t, errEvent.IsError())
+	require.Contains(t, errEvent.Error.Message, context.Canceled.Error())
+	_, err = reader.Recv()
+	require.ErrorIs(t, err, io.EOF)
+}
+
+func TestWorkflowStreamableCallReaderCloseCancelsChildAgent(t *testing.T) {
+	childStarted := make(chan struct{})
+	childStopped := make(chan struct{})
+	child := &testAgent{name: "reviewer"}
+	child.runFn = func(ctx context.Context, inv *agent.Invocation) (<-chan *event.Event, error) {
+		out := make(chan *event.Event)
+		go func() {
+			defer close(out)
+			defer close(childStopped)
+			close(childStarted)
+			for i := 0; ; i++ {
+				evt := testAgentPartialEvent(
+					inv.InvocationID,
+					"reviewer",
+					fmt.Sprintf("chunk-%d", i),
+				)
+				select {
+				case out <- evt:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}()
+		return out, nil
+	}
+	workflow, err := NewTool(scriptedRuntime{run: func(
+		ctx context.Context,
+		handler CallHandler,
+	) (Result, error) {
+		_, callErr := handler.HandleWorkflowCall(ctx, Call{
+			ID:   "agent-1",
+			Kind: CallKindAgent,
+			Name: "reviewer",
+			Args: json.RawMessage(`{"input":"review it"}`),
+		})
+		return Result{}, callErr
+	}}, []agent.Agent{child})
+	require.NoError(t, err)
+	parent := agent.NewInvocation(
+		agent.WithInvocationAgent(&testAgent{name: "root"}),
+		agent.WithInvocationSession(&session.Session{ID: "session-1", AppName: "app", UserID: "user"}),
+	)
+	appender.Attach(parent, func(context.Context, *event.Event) error { return nil })
+	reader, err := workflow.(tool.StreamableTool).StreamableCall(
+		agent.NewInvocationContext(context.Background(), parent),
+		[]byte(`{"code":"return None"}`),
+	)
+	require.NoError(t, err)
+	<-childStarted
+	reader.Close()
+
+	select {
+	case <-childStopped:
+	case <-time.After(time.Second):
+		t.Fatal("closing the workflow stream did not cancel the child Agent")
+	}
+}
+
+func TestWorkflowStreamableCallSynchronizesWithRunner(t *testing.T) {
+	child := &testAgent{name: "reviewer", response: "approved"}
+	workflow, err := NewTool(scriptedRuntime{run: func(
+		ctx context.Context,
+		handler CallHandler,
+	) (Result, error) {
+		_, callErr := handler.HandleWorkflowCall(ctx, Call{
+			ID:   "agent-1",
+			Kind: CallKindAgent,
+			Name: "reviewer",
+			Args: json.RawMessage(`{"input":"review it"}`),
+		})
+		return Result{Value: json.RawMessage(`{"ok":true}`)}, callErr
+	}}, []agent.Agent{child})
+	require.NoError(t, err)
+	parent := agent.NewInvocation(
+		agent.WithInvocationAgent(&testAgent{name: "root"}),
+		agent.WithInvocationSession(&session.Session{ID: "session-1", AppName: "app", UserID: "user"}),
+	)
+	appender.Attach(parent, func(context.Context, *event.Event) error { return nil })
+	ctx := agent.NewInvocationContext(context.Background(), parent)
+	flushRequests := make(chan *flush.FlushRequest, 1)
+	flush.Attach(ctx, parent, flushRequests)
+	defer flush.Clear(parent)
+	reader, err := workflow.(tool.StreamableTool).StreamableCall(
+		ctx,
+		[]byte(`{"code":"return None"}`),
+	)
+	require.NoError(t, err)
+	defer reader.Close()
+
+	startChunk, err := reader.Recv()
+	require.NoError(t, err)
+	startEvent, ok := startChunk.Content.(*event.Event)
+	require.True(t, ok)
+	require.True(t, isWorkflowSyncEvent(parent, startEvent))
+
+	childResult := make(chan tool.StreamChunk, 1)
+	childErr := make(chan error, 1)
+	go func() {
+		chunk, recvErr := reader.Recv()
+		if recvErr != nil {
+			childErr <- recvErr
+			return
+		}
+		childResult <- chunk
+	}()
+	select {
+	case <-childResult:
+		t.Fatal("child event arrived before Runner acknowledged stream start")
+	case recvErr := <-childErr:
+		t.Fatalf("receive child event before stream start: %v", recvErr)
+	case <-time.After(20 * time.Millisecond):
+	}
+	require.NoError(t, parent.NotifyCompletion(
+		ctx,
+		agent.GetAppendEventNoticeKey(startEvent.ID),
+	))
+	var childChunk tool.StreamChunk
+	select {
+	case childChunk = <-childResult:
+	case recvErr := <-childErr:
+		t.Fatalf("receive child event: %v", recvErr)
+	case <-time.After(time.Second):
+		t.Fatal("child event did not arrive after stream start acknowledgement")
+	}
+	childEvent, ok := childChunk.Content.(*event.Event)
+	require.True(t, ok)
+	require.Equal(t, "reviewer", childEvent.Author)
+
+	endChunk, err := reader.Recv()
+	require.NoError(t, err)
+	endEvent, ok := endChunk.Content.(*event.Event)
+	require.True(t, ok)
+	require.True(t, isWorkflowSyncEvent(parent, endEvent))
+	require.NotEqual(t, startEvent.ID, endEvent.ID)
+
+	finalResult := make(chan tool.StreamChunk, 1)
+	finalErr := make(chan error, 1)
+	go func() {
+		chunk, recvErr := reader.Recv()
+		if recvErr != nil {
+			finalErr <- recvErr
+			return
+		}
+		finalResult <- chunk
+	}()
+	select {
+	case <-finalResult:
+		t.Fatal("final result arrived before Runner acknowledged stream end")
+	case recvErr := <-finalErr:
+		t.Fatalf("receive final result before stream end: %v", recvErr)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	require.NoError(t, parent.NotifyCompletion(
+		ctx,
+		agent.GetAppendEventNoticeKey(endEvent.ID),
+	))
+	select {
+	case chunk := <-finalResult:
+		final, ok := chunk.Content.(tool.FinalResultChunk)
+		require.True(t, ok)
+		result, ok := final.Result.(Result)
+		require.True(t, ok)
+		require.JSONEq(t, `{"ok":true}`, string(result.Value))
+	case recvErr := <-finalErr:
+		t.Fatalf("receive final result: %v", recvErr)
+	case <-time.After(time.Second):
+		t.Fatal("final result did not arrive after stream end acknowledgement")
+	}
+	select {
+	case <-flushRequests:
+		t.Fatal("streamable workflow unexpectedly requested a separate flush")
+	default:
+	}
+}
+
+func TestWorkflowSharedInstanceWaitsForPerCallSynchronization(t *testing.T) {
+	childStarted := make(chan string, 2)
+	child := &testAgent{name: "reviewer"}
+	child.runFn = func(_ context.Context, inv *agent.Invocation) (<-chan *event.Event, error) {
+		childStarted <- inv.Message.Content
+		out := make(chan *event.Event, 1)
+		out <- testAgentFinalEvent(inv.InvocationID, "reviewer", inv.Message.Content+" answer")
+		close(out)
+		return out, nil
+	}
+	workflow, err := NewTool(scriptedRuntime{run: func(
+		ctx context.Context,
+		handler CallHandler,
+	) (Result, error) {
+		for i, input := range []string{"first", "second"} {
+			_, callErr := handler.HandleWorkflowCall(ctx, Call{
+				ID:   fmt.Sprintf("agent-%d", i+1),
+				Kind: CallKindAgent,
+				Name: "reviewer",
+				Args: json.RawMessage(fmt.Sprintf(
+					`{"input":%q,"options":{"instance_id":"shared"}}`,
+					input,
+				)),
+			})
+			if callErr != nil {
+				return Result{}, callErr
+			}
+		}
+		return Result{Value: json.RawMessage(`{"ok":true}`)}, nil
+	}}, []agent.Agent{child})
+	require.NoError(t, err)
+	parent := agent.NewInvocation(
+		agent.WithInvocationAgent(&testAgent{name: "root"}),
+		agent.WithInvocationSession(&session.Session{ID: "session-1", AppName: "app", UserID: "user"}),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), parent)
+	flushRequests := make(chan *flush.FlushRequest, 1)
+	flush.Attach(ctx, parent, flushRequests)
+	defer flush.Clear(parent)
+	reader, err := workflow.(tool.StreamableTool).StreamableCall(
+		ctx,
+		[]byte(`{"code":"return None"}`),
+	)
+	require.NoError(t, err)
+	defer reader.Close()
+
+	start := receiveWorkflowEvent(t, reader)
+	require.True(t, isWorkflowSyncEvent(parent, start))
+	require.NoError(t, parent.NotifyCompletion(
+		ctx,
+		agent.GetAppendEventNoticeKey(start.ID),
+	))
+	require.Equal(t, "first", <-childStarted)
+	firstEvent := receiveWorkflowEvent(t, reader)
+	require.Equal(t, "first answer", eventPrimaryAssistantContent(firstEvent))
+	firstCallSync := receiveWorkflowEvent(t, reader)
+	require.True(t, isWorkflowSyncEvent(parent, firstCallSync))
+
+	select {
+	case input := <-childStarted:
+		t.Fatalf("second shared-instance call started before synchronization: %q", input)
+	case <-time.After(20 * time.Millisecond):
+	}
+	require.NoError(t, parent.NotifyCompletion(
+		ctx,
+		agent.GetAppendEventNoticeKey(firstCallSync.ID),
+	))
+	select {
+	case input := <-childStarted:
+		require.Equal(t, "second", input)
+	case <-time.After(time.Second):
+		t.Fatal("second shared-instance call did not start after synchronization")
+	}
+}
+
+func receiveWorkflowEvent(t *testing.T, reader *tool.StreamReader) *event.Event {
+	t.Helper()
+	chunk, err := reader.Recv()
+	require.NoError(t, err)
+	evt, ok := chunk.Content.(*event.Event)
+	require.True(t, ok)
+	return evt
+}
+
+func isWorkflowSyncEvent(parent *agent.Invocation, evt *event.Event) bool {
+	return parent != nil &&
+		evt != nil &&
+		evt.RequiresCompletion &&
+		evt.InvocationID == parent.InvocationID &&
+		evt.Author == parent.AgentName &&
+		evt.ParentMetadata != nil &&
+		evt.ParentMetadata.TriggerType == agent.TriggerTypeDynamicWorkflow
+}
+
+func TestWorkflowStreamableCallReleasesCompletionWithoutRunner(t *testing.T) {
+	released := make(chan struct{})
+	child := &testAgent{name: "reviewer"}
+	child.runFn = func(ctx context.Context, inv *agent.Invocation) (<-chan *event.Event, error) {
+		out := make(chan *event.Event, 2)
+		go func() {
+			defer close(out)
+			completionEvent := event.New(inv.InvocationID, "reviewer")
+			completionEvent.RequiresCompletion = true
+			completionID := agent.GetAppendEventNoticeKey(completionEvent.ID)
+			if inv.AddNoticeChannel(ctx, completionID) == nil {
+				return
+			}
+			out <- completionEvent
+			if err := inv.AddNoticeChannelAndWait(ctx, completionID, time.Second); err != nil {
+				return
+			}
+			close(released)
+			out <- testAgentFinalEvent(inv.InvocationID, "reviewer", "completed")
+		}()
+		return out, nil
+	}
+	workflow, err := NewTool(scriptedRuntime{run: func(
+		ctx context.Context,
+		handler CallHandler,
+	) (Result, error) {
+		_, callErr := handler.HandleWorkflowCall(ctx, Call{
+			ID:   "agent-1",
+			Kind: CallKindAgent,
+			Name: "reviewer",
+			Args: json.RawMessage(`{"input":"review it"}`),
+		})
+		return Result{Value: json.RawMessage(`{"ok":true}`)}, callErr
+	}}, []agent.Agent{child})
+	require.NoError(t, err)
+	parent := agent.NewInvocation(
+		agent.WithInvocationAgent(&testAgent{name: "root"}),
+		agent.WithInvocationSession(&session.Session{
+			ID: "session-1", AppName: "app", UserID: "user",
+		}),
+	)
+	ctx, cancel := context.WithTimeout(
+		agent.NewInvocationContext(context.Background(), parent),
+		2*time.Second,
+	)
+	defer cancel()
+	reader, err := workflow.(tool.StreamableTool).StreamableCall(
+		ctx,
+		[]byte(`{"code":"return None"}`),
+	)
+	require.NoError(t, err)
+	defer reader.Close()
+
+	var finalSeen bool
+	for {
+		chunk, recvErr := reader.Recv()
+		if errors.Is(recvErr, io.EOF) {
+			break
+		}
+		require.NoError(t, recvErr)
+		if _, ok := chunk.Content.(tool.FinalResultChunk); ok {
+			finalSeen = true
+		}
+	}
+	require.True(t, finalSeen)
+	select {
+	case <-released:
+	default:
+		t.Fatal("direct stream did not release child completion")
+	}
+}
+
+func TestWorkflowStreamedCompletionIsReleasedByRunner(t *testing.T) {
+	barrierReached := make(chan struct{})
+	child := &testAgent{name: "reviewer"}
+	child.runFn = func(ctx context.Context, inv *agent.Invocation) (<-chan *event.Event, error) {
+		out := make(chan *event.Event, 3)
+		go func() {
+			defer close(out)
+			stateEvent := event.New(
+				inv.InvocationID,
+				"reviewer",
+				event.WithStateDelta(map[string][]byte{
+					"workflow_child_state": []byte(`"updated"`),
+				}),
+			)
+			stateEvent.Response = nil
+			out <- stateEvent
+			barrierEvent := event.New(inv.InvocationID, "reviewer")
+			barrierEvent.RequiresCompletion = true
+			completionID := agent.GetAppendEventNoticeKey(barrierEvent.ID)
+			if inv.AddNoticeChannel(ctx, completionID) == nil {
+				return
+			}
+			out <- barrierEvent
+			if err := inv.AddNoticeChannelAndWait(ctx, completionID, time.Second); err != nil {
+				return
+			}
+			close(barrierReached)
+			out <- testAgentFinalEvent(inv.InvocationID, "reviewer", "child completed")
+		}()
+		return out, nil
+	}
+	workflow, err := NewTool(scriptedRuntime{run: func(ctx context.Context, handler CallHandler) (Result, error) {
+		_, err := handler.HandleWorkflowCall(ctx, Call{
+			ID:   "agent-1",
+			Kind: CallKindAgent,
+			Name: "reviewer",
+			Args: json.RawMessage(`{"input":"review it"}`),
+		})
+		return Result{Value: json.RawMessage(`{"ok":true}`)}, err
+	}}, []agent.Agent{child})
+	require.NoError(t, err)
+	root := llmagent.New(
+		"root",
+		llmagent.WithModel(&toolCallingThenFinalModel{
+			toolName:  "run_workflow",
+			arguments: []byte(`{"code":"return None"}`),
+		}),
+		llmagent.WithTools([]tool.Tool{workflow}),
+	)
+	service := sessioninmemory.NewSessionService()
+	r := runner.NewRunner("dynamic-workflow-stream-test", root, runner.WithSessionService(service))
+	defer r.Close()
+
+	events, err := r.Run(
+		context.Background(),
+		"user",
+		"session",
+		model.NewUserMessage("start"),
+		agent.WithLatencyDiagnostics(true),
+	)
+	require.NoError(t, err)
+	workflowSyncEventIDs := make(map[string]struct{}, 2)
+	var (
+		sawState      bool
+		sawBarrier    bool
+		sawChildFinal bool
+		runnerFinal   *event.Event
+	)
+	for evt := range events {
+		if evt == nil {
+			continue
+		}
+		if evt.Response == nil && evt.Author == "reviewer" {
+			sawState = true
+		}
+		if evt.RequiresCompletion && evt.Author == "reviewer" {
+			sawBarrier = true
+		}
+		if evt.Author == "root" &&
+			evt.RequiresCompletion &&
+			evt.ParentMetadata != nil &&
+			evt.ParentMetadata.TriggerType == agent.TriggerTypeDynamicWorkflow {
+			workflowSyncEventIDs[evt.ID] = struct{}{}
+		}
+		if content, ok := assistantEventContent(evt); ok && content == "child completed" {
+			sawChildFinal = true
+		}
+		if evt.IsRunnerCompletion() {
+			runnerFinal = evt
+		}
+	}
+	require.True(t, sawState)
+	require.True(t, sawBarrier)
+	require.True(t, sawChildFinal)
+	require.Len(t, workflowSyncEventIDs, 2)
+	select {
+	case <-barrierReached:
+	default:
+		t.Fatal("Runner did not release the child completion barrier")
+	}
+	require.NotNil(t, runnerFinal)
+	require.NotEqual(t, "child completed", eventPrimaryAssistantContent(runnerFinal))
+
+	sess, err := service.GetSession(context.Background(), session.Key{
+		AppName: "dynamic-workflow-stream-test", UserID: "user", SessionID: "session",
+	})
+	require.NoError(t, err)
+	state, ok := sess.GetState("workflow_child_state")
+	require.True(t, ok)
+	require.JSONEq(t, `"updated"`, string(state))
+	childFinalCount := 0
+	for _, stored := range sess.GetEvents() {
+		_, workflowSyncEvent := workflowSyncEventIDs[stored.ID]
+		require.False(t, workflowSyncEvent,
+			"workflow synchronization events must not be persisted")
+		if content, ok := assistantEventContent(&stored); ok && content == "child completed" {
+			childFinalCount++
+		}
+	}
+	require.Equal(t, 1, childFinalCount)
+}
+
+func TestWorkflowSharedInstanceWaitsForStreamedHistory(t *testing.T) {
+	var calls int
+	historySeen := make(chan bool, 1)
+	child := &testAgent{name: "reviewer"}
+	child.runFn = func(_ context.Context, inv *agent.Invocation) (<-chan *event.Event, error) {
+		calls++
+		if calls == 2 {
+			seen := false
+			if inv.Session != nil {
+				stored := inv.Session.GetEvents()
+				for i := range stored {
+					if content, ok := assistantEventContent(&stored[i]); ok && content == "first answer" {
+						seen = true
+						break
+					}
+				}
+			}
+			historySeen <- seen
+		}
+		content := "first answer"
+		if calls == 2 {
+			content = "second answer"
+		}
+		out := make(chan *event.Event, 1)
+		out <- testAgentFinalEvent(inv.InvocationID, "reviewer", content)
+		close(out)
+		return out, nil
+	}
+	workflow, err := NewTool(scriptedRuntime{run: func(
+		ctx context.Context,
+		handler CallHandler,
+	) (Result, error) {
+		for i, input := range []string{"first", "second"} {
+			_, callErr := handler.HandleWorkflowCall(ctx, Call{
+				ID:   fmt.Sprintf("agent-%d", i+1),
+				Kind: CallKindAgent,
+				Name: "reviewer",
+				Args: json.RawMessage(fmt.Sprintf(
+					`{"input":%q,"options":{"instance_id":"shared"}}`,
+					input,
+				)),
+			})
+			if callErr != nil {
+				return Result{}, callErr
+			}
+		}
+		return Result{Value: json.RawMessage(`{"ok":true}`)}, nil
+	}}, []agent.Agent{child})
+	require.NoError(t, err)
+	root := llmagent.New(
+		"root",
+		llmagent.WithModel(&toolCallingThenFinalModel{
+			toolName:  "run_workflow",
+			arguments: []byte(`{"code":"return None"}`),
+		}),
+		llmagent.WithTools([]tool.Tool{workflow}),
+	)
+	service := sessioninmemory.NewSessionService()
+	r := runner.NewRunner("dynamic-workflow-history-test", root, runner.WithSessionService(service))
+	defer r.Close()
+
+	events, err := r.Run(
+		context.Background(),
+		"user",
+		"session",
+		model.NewUserMessage("start"),
+	)
+	require.NoError(t, err)
+	for range events {
+	}
+
+	select {
+	case seen := <-historySeen:
+		require.True(t, seen, "second call did not observe first call's assistant history")
+	case <-time.After(time.Second):
+		t.Fatal("second shared-instance call was not observed")
+	}
+}
+
+func eventPrimaryAssistantContent(evt *event.Event) string {
+	content, _ := assistantEventContent(evt)
+	return content
 }
 
 func TestWorkflowRunsDynamicAgentSpecWithSurfacePatch(t *testing.T) {
@@ -1155,11 +1800,11 @@ func TestWorkflowCallValidationAndRuntimeError(t *testing.T) {
 	require.ErrorContains(t, err, "decode input")
 
 	_, err = workflow.Call(context.Background(), []byte(`{"code":"return None"}`))
-	require.ErrorContains(t, err, "requires a running agent invocation")
+	require.ErrorContains(t, err, "must be called from an active Agent run")
 
 	parent := agent.NewInvocation(agent.WithInvocationAgent(&testAgent{name: "root"}))
 	_, err = workflow.Call(agent.NewInvocationContext(context.Background(), parent), []byte(`{"code":"return None"}`))
-	require.ErrorContains(t, err, "requires a parent session")
+	require.ErrorContains(t, err, "requires an active Session")
 
 	parent = agent.NewInvocation(
 		agent.WithInvocationAgent(&testAgent{name: "root"}),
@@ -1167,6 +1812,52 @@ func TestWorkflowCallValidationAndRuntimeError(t *testing.T) {
 	)
 	_, err = workflow.Call(agent.NewInvocationContext(context.Background(), parent), []byte(`{"code":"return None"}`))
 	require.ErrorContains(t, err, "runtime failed")
+}
+
+func TestWorkflowCallSynchronizesParentRun(t *testing.T) {
+	workflow, err := NewTool(
+		scriptedRuntime{},
+		[]agent.Agent{&testAgent{name: "reviewer"}},
+	)
+	require.NoError(t, err)
+	parent := agent.NewInvocation(
+		agent.WithInvocationAgent(&testAgent{name: "root"}),
+		agent.WithInvocationSession(&session.Session{
+			ID: "session-1", AppName: "app", UserID: "user",
+		}),
+	)
+	ctx, cancel := context.WithTimeout(
+		agent.NewInvocationContext(context.Background(), parent),
+		time.Second,
+	)
+	defer cancel()
+	flushRequests := make(chan *flush.FlushRequest, 1)
+	flush.Attach(ctx, parent, flushRequests)
+	defer flush.Clear(parent)
+
+	callErr := make(chan error, 1)
+	go func() {
+		_, callError := workflow.Call(ctx, []byte(`{"code":"return None"}`))
+		callErr <- callError
+	}()
+	var request *flush.FlushRequest
+	select {
+	case request = <-flushRequests:
+	case <-ctx.Done():
+		t.Fatal("direct workflow call did not request parent synchronization")
+	}
+	select {
+	case err := <-callErr:
+		t.Fatalf("direct workflow call completed before synchronization: %v", err)
+	default:
+	}
+	close(request.ACK)
+	select {
+	case err := <-callErr:
+		require.NoError(t, err)
+	case <-ctx.Done():
+		t.Fatal("direct workflow call did not continue after synchronization")
+	}
 }
 
 func TestWorkflowGatewayToolValidation(t *testing.T) {
@@ -1186,7 +1877,7 @@ func TestWorkflowGatewayToolValidation(t *testing.T) {
 	require.ErrorContains(t, err, `unsupported call kind "unknown"`)
 
 	_, err = (*workflowGateway)(nil).HandleWorkflowCall(context.Background(), Call{})
-	require.ErrorContains(t, err, "nil gateway")
+	require.ErrorContains(t, err, "workflow bridge is unavailable")
 
 	_, err = gateway.callTool(context.Background(), Call{Kind: CallKindTool, Name: "missing", Args: json.RawMessage(`{}`)})
 	require.ErrorContains(t, err, `tool "missing" is not allowlisted`)
@@ -1277,7 +1968,7 @@ func TestWorkflowGatewayHelperBranches(t *testing.T) {
 	require.Equal(t, "live", parentWithLiveSession(parent).Session.ID)
 	require.Nil(t, parentWithLiveSession(nil))
 
-	require.ErrorContains(t, gateway.appendChildUserMessage(context.Background(), nil), "child invocation is nil")
+	require.ErrorContains(t, gateway.appendChildUserMessage(context.Background(), nil), "initialize child Agent")
 	require.NoError(t, appendSessionEvent(context.Background(), nil, nil))
 	require.NoError(t, (*workflowGateway)(nil).appendSessionEvent(context.Background(), nil, nil))
 	require.NoError(t, gateway.appendSessionEvent(context.Background(), nil, nil))
@@ -1324,14 +2015,14 @@ func TestWorkflowCollectChildResultErrorBranches(t *testing.T) {
 	})
 	ch <- evt
 	close(ch)
-	eventstream.Attach(inv, func(context.Context, *event.Event) error {
+	gateway := &workflowGateway{emitEvent: func(*event.Event) error {
 		return errors.New("forward failed")
-	})
-	_, err = (&workflowGateway{}).collectChildResult(context.Background(), inv, ch)
-	require.ErrorContains(t, err, "forward failed")
+	}}
+	_, err = gateway.collectChildResult(context.Background(), inv, ch)
+	require.ErrorContains(t, err, "publish child event")
 }
 
-func TestWorkflowCollectChildResultNotifiesForwardedEventCompletion(t *testing.T) {
+func TestWorkflowCollectChildResultNotifiesCompletionInDirectMode(t *testing.T) {
 	inv := agent.NewInvocation(
 		agent.WithInvocationSession(&session.Session{ID: "session-1", AppName: "app", UserID: "user"}),
 	)
@@ -1345,19 +2036,42 @@ func TestWorkflowCollectChildResultNotifiesForwardedEventCompletion(t *testing.T
 	ch := make(chan *event.Event, 1)
 	ch <- evt
 	close(ch)
-	forwarded := false
-	eventstream.Attach(inv, func(context.Context, *event.Event) error {
-		forwarded = true
-		return nil
-	})
-
 	_, err := (&workflowGateway{}).collectChildResult(context.Background(), inv, ch)
 	require.NoError(t, err)
-	require.True(t, forwarded)
 	require.NoError(t, inv.AddNoticeChannelAndWait(
 		context.Background(),
 		agent.GetAppendEventNoticeKey(evt.ID),
 		100*time.Millisecond,
+	))
+}
+
+func TestWorkflowCollectChildResultDefersCompletionInStreamMode(t *testing.T) {
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{ID: "session-1", AppName: "app", UserID: "user"}),
+	)
+	evt := event.NewResponseEvent(inv.InvocationID, "reviewer", &model.Response{
+		Done: true,
+		Choices: []model.Choice{{Index: 0, Message: model.Message{
+			Role: model.RoleAssistant, Content: "done",
+		}}},
+	})
+	evt.RequiresCompletion = true
+	ch := make(chan *event.Event, 1)
+	ch <- evt
+	close(ch)
+	streamed := false
+	gateway := &workflowGateway{emitEvent: func(got *event.Event) error {
+		streamed = got == evt
+		return nil
+	}}
+
+	_, err := gateway.collectChildResult(context.Background(), inv, ch)
+	require.NoError(t, err)
+	require.True(t, streamed)
+	require.Error(t, inv.AddNoticeChannelAndWait(
+		context.Background(),
+		agent.GetAppendEventNoticeKey(evt.ID),
+		10*time.Millisecond,
 	))
 }
 
@@ -1740,7 +2454,8 @@ func (m *structuredOutputCaptureModel) latestStructuredOutput() *model.Structure
 }
 
 type toolCallingThenFinalModel struct {
-	toolName string
+	toolName  string
+	arguments []byte
 
 	mu    sync.Mutex
 	calls int
@@ -1757,6 +2472,10 @@ func (m *toolCallingThenFinalModel) GenerateContent(
 
 	responses := make(chan *model.Response, 1)
 	if callNumber == 1 {
+		arguments := m.arguments
+		if len(arguments) == 0 {
+			arguments = []byte(`{"id":"42"}`)
+		}
 		finishReason := "tool_calls"
 		responses <- &model.Response{
 			ID:   "tool-calling-model",
@@ -1771,7 +2490,7 @@ func (m *toolCallingThenFinalModel) GenerateContent(
 						ID:   "call-1",
 						Function: model.FunctionDefinitionParam{
 							Name:      m.toolName,
-							Arguments: []byte(`{"id":"42"}`),
+							Arguments: arguments,
 						},
 					}},
 				},
@@ -1923,6 +2642,64 @@ func normalizeWorkflowResult(t *testing.T, raw []byte) string {
 	normalized, err := json.Marshal(value)
 	require.NoError(t, err)
 	return string(normalized)
+}
+
+func executeWorkflowStream(
+	t *testing.T,
+	workflow tool.CallableTool,
+	ctx context.Context,
+	raw []byte,
+	onEvent func(*event.Event),
+) (Result, []*event.Event) {
+	t.Helper()
+	streamable, ok := workflow.(tool.StreamableTool)
+	require.True(t, ok)
+	reader, err := streamable.StreamableCall(ctx, raw)
+	require.NoError(t, err)
+	defer reader.Close()
+
+	var (
+		result    Result
+		events    []*event.Event
+		finalSeen bool
+	)
+	for {
+		chunk, recvErr := reader.Recv()
+		if errors.Is(recvErr, io.EOF) {
+			break
+		}
+		require.NoError(t, recvErr)
+		switch content := chunk.Content.(type) {
+		case *event.Event:
+			if content.RequiresCompletion {
+				inv, invocationOK := agent.InvocationFromContext(ctx)
+				require.True(t, invocationOK)
+				require.NoError(t, inv.NotifyCompletion(
+					ctx,
+					agent.GetAppendEventNoticeKey(content.ID),
+				))
+			}
+			events = append(events, content)
+			if onEvent != nil {
+				onEvent(content)
+			}
+		case tool.FinalResultChunk:
+			var resultOK bool
+			result, resultOK = content.Result.(Result)
+			require.True(t, resultOK)
+			finalSeen = true
+		case *tool.FinalResultChunk:
+			require.NotNil(t, content)
+			var resultOK bool
+			result, resultOK = content.Result.(Result)
+			require.True(t, resultOK)
+			finalSeen = true
+		default:
+			t.Fatalf("unexpected workflow stream chunk %T", chunk.Content)
+		}
+	}
+	require.True(t, finalSeen, "workflow stream must end with a final result chunk")
+	return result, events
 }
 
 func normalizeSingleAgentResult(t *testing.T, raw []byte) string {

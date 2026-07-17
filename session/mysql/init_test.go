@@ -12,6 +12,7 @@ package mysql
 import (
 	"context"
 	"errors"
+	"fmt"
 	"regexp"
 	"testing"
 
@@ -20,7 +21,15 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/sqldb"
+	agentlog "trpc.group/trpc-go/trpc-agent-go/log"
 )
+
+func datetimePrecisionForType(dataType string) any {
+	if dataType == "timestamp" {
+		return int64(6)
+	}
+	return nil
+}
 
 // mockVerifySchemaQueries adds mock expectations for verifySchema queries
 func mockVerifySchemaQueries(mock sqlmock.Sqlmock, tablePrefix string) {
@@ -43,13 +52,13 @@ func mockVerifySchemaQueries(mock sqlmock.Sqlmock, tablePrefix string) {
 			WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
 
 		// 2. verifyColumns query
-		colRows := sqlmock.NewRows([]string{"COLUMN_NAME", "DATA_TYPE", "IS_NULLABLE"})
+		colRows := sqlmock.NewRows([]string{"COLUMN_NAME", "DATA_TYPE", "IS_NULLABLE", "DATETIME_PRECISION"})
 		for _, col := range schema.columns {
 			isNullable := "NO"
 			if col.nullable {
 				isNullable = "YES"
 			}
-			colRows.AddRow(col.name, col.dataType, isNullable)
+			colRows.AddRow(col.name, col.dataType, isNullable, datetimePrecisionForType(col.dataType))
 		}
 		mock.ExpectQuery(regexp.QuoteMeta("SELECT COLUMN_NAME")).
 			WithArgs(fullTableName).
@@ -364,13 +373,13 @@ func TestVerifySchema_Success(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
 
 	// 2. verifyColumns
-	rows := sqlmock.NewRows([]string{"COLUMN_NAME", "DATA_TYPE", "IS_NULLABLE"})
+	rows := sqlmock.NewRows([]string{"COLUMN_NAME", "DATA_TYPE", "IS_NULLABLE", "DATETIME_PRECISION"})
 	for _, col := range expectedSchema[testTable].columns {
 		isNullable := "NO"
 		if col.nullable {
 			isNullable = "YES"
 		}
-		rows.AddRow(col.name, col.dataType, isNullable)
+		rows.AddRow(col.name, col.dataType, isNullable, datetimePrecisionForType(col.dataType))
 	}
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT COLUMN_NAME")).
 		WithArgs(fullTableName).
@@ -422,13 +431,13 @@ func TestVerifySchema_MissingUniqueIndexFatal(t *testing.T) {
 		WithArgs(fullTableName).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
 	// Columns match.
-	colRows := sqlmock.NewRows([]string{"COLUMN_NAME", "DATA_TYPE", "IS_NULLABLE"})
+	colRows := sqlmock.NewRows([]string{"COLUMN_NAME", "DATA_TYPE", "IS_NULLABLE", "DATETIME_PRECISION"})
 	for _, col := range expectedSchema[testTable].columns {
 		isNullable := "NO"
 		if col.nullable {
 			isNullable = "YES"
 		}
-		colRows.AddRow(col.name, col.dataType, isNullable)
+		colRows.AddRow(col.name, col.dataType, isNullable, datetimePrecisionForType(col.dataType))
 	}
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT COLUMN_NAME")).
 		WithArgs(fullTableName).
@@ -615,11 +624,13 @@ func TestVerifyIndexes_Scenarios(t *testing.T) {
 
 func TestVerifyColumns_Scenarios(t *testing.T) {
 	tests := []struct {
-		name            string
-		expectedColumns []tableColumn
-		actualColumns   map[string]tableColumn
-		wantError       bool
-		wantErrContains string
+		name                 string
+		expectedColumns      []tableColumn
+		actualColumns        map[string]tableColumn
+		datetimePrecisions   map[string]any
+		wantError            bool
+		wantErrContains      string
+		wantErrorLogContains string
 	}{
 		{
 			name: "all columns correct",
@@ -634,6 +645,62 @@ func TestVerifyColumns_Scenarios(t *testing.T) {
 				"state":    {"state", "json", true},
 			},
 			wantError: false,
+		},
+		{
+			name: "timestamp precision six",
+			expectedColumns: []tableColumn{
+				{"created_at", "timestamp", false},
+			},
+			actualColumns: map[string]tableColumn{
+				"created_at": {"created_at", "timestamp", false},
+			},
+			datetimePrecisions: map[string]any{
+				"created_at": int64(6),
+			},
+			wantError: false,
+		},
+		{
+			name: "timestamp precision mismatch logs error",
+			expectedColumns: []tableColumn{
+				{"created_at", "timestamp", false},
+			},
+			actualColumns: map[string]tableColumn{
+				"created_at": {"created_at", "timestamp", false},
+			},
+			datetimePrecisions: map[string]any{
+				"created_at": int64(0),
+			},
+			wantError: false,
+			wantErrorLogContains: "canonical schema migration template (review SHOW CREATE TABLE first; " +
+				"preserve any custom defaults, ON UPDATE clauses, comments, and other column attributes; " +
+				"changing timestamp precision may rebuild the table and block writes): " +
+				"ALTER TABLE `test_table` MODIFY COLUMN `created_at` " +
+				"TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6);",
+		},
+		{
+			name: "multiple timestamp precision mismatches use one alter statement",
+			expectedColumns: []tableColumn{
+				{"created_at", "timestamp", false},
+				{"updated_at", "timestamp", false},
+				{"expires_at", "timestamp", true},
+			},
+			actualColumns: map[string]tableColumn{
+				"created_at": {"created_at", "timestamp", false},
+				"updated_at": {"updated_at", "timestamp", false},
+				"expires_at": {"expires_at", "timestamp", true},
+			},
+			datetimePrecisions: map[string]any{
+				"created_at": int64(0),
+				"updated_at": int64(0),
+				"expires_at": int64(0),
+			},
+			wantError: false,
+			wantErrorLogContains: "ALTER TABLE `test_table` " +
+				"MODIFY COLUMN `created_at` TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6), " +
+				"MODIFY COLUMN `updated_at` TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) " +
+				"ON UPDATE CURRENT_TIMESTAMP(6), " +
+				"MODIFY COLUMN `expires_at` " +
+				"TIMESTAMP(6) NULL DEFAULT NULL;",
 		},
 		{
 			name: "missing column",
@@ -681,17 +748,29 @@ func TestVerifyColumns_Scenarios(t *testing.T) {
 
 			s := createTestService(t, db)
 			ctx := context.Background()
+			originalErrorfContext := agentlog.ErrorfContext
+			var errorLogs []string
+			agentlog.ErrorfContext = func(_ context.Context, format string, args ...any) {
+				errorLogs = append(errorLogs, fmt.Sprintf(format, args...))
+			}
+			defer func() {
+				agentlog.ErrorfContext = originalErrorfContext
+			}()
 
 			tableName := "test_table"
 
 			// Build mock rows from actualColumns
-			rows := sqlmock.NewRows([]string{"COLUMN_NAME", "DATA_TYPE", "IS_NULLABLE"})
+			rows := sqlmock.NewRows([]string{"COLUMN_NAME", "DATA_TYPE", "IS_NULLABLE", "DATETIME_PRECISION"})
 			for _, col := range tt.actualColumns {
 				isNullable := "NO"
 				if col.nullable {
 					isNullable = "YES"
 				}
-				rows.AddRow(col.name, col.dataType, isNullable)
+				precision := datetimePrecisionForType(col.dataType)
+				if configured, ok := tt.datetimePrecisions[col.name]; ok {
+					precision = configured
+				}
+				rows.AddRow(col.name, col.dataType, isNullable, precision)
 			}
 
 			mock.ExpectQuery(regexp.QuoteMeta("SELECT COLUMN_NAME")).
@@ -706,6 +785,12 @@ func TestVerifyColumns_Scenarios(t *testing.T) {
 				}
 			} else {
 				assert.NoError(t, err)
+			}
+			if tt.wantErrorLogContains == "" {
+				assert.Empty(t, errorLogs)
+			} else {
+				require.Len(t, errorLogs, 1)
+				assert.Contains(t, errorLogs[0], tt.wantErrorLogContains)
 			}
 			assert.NoError(t, mock.ExpectationsWereMet())
 		})
