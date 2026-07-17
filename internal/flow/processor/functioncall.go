@@ -1858,6 +1858,12 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 		}
 	}
 	codec := itool.ResolveResultCodec(tl)
+	if isPermissionResult(result) {
+		// Permission results are framework control protocol, not normal tool
+		// output. Never run the tool's result codec on them so denied and
+		// approval-required messages keep their default encoding.
+		codec = nil
+	}
 	if suppressDefaultToolMessage {
 		defaultMsg, err := buildDefaultToolMessage(ctx, toolCall.ID, result, codec)
 		if err != nil {

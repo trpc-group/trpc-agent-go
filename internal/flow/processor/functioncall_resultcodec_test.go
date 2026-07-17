@@ -334,6 +334,55 @@ func TestExecuteToolCall_ToolResultMessagesOverridesCodecDefault(t *testing.T) {
 	assert.Equal(t, want, defaultContent)
 }
 
+// denyingCodecTool denies permission and would return a codecTestResult if it
+// ran, so we can assert the codec is not applied to the permission result.
+type denyingCodecTool struct {
+	declaration *tool.Declaration
+}
+
+func (d *denyingCodecTool) Declaration() *tool.Declaration { return d.declaration }
+func (d *denyingCodecTool) Call(_ context.Context, _ []byte) (any, error) {
+	return codecTestResult{ExitCode: 0, Output: "ran"}, nil
+}
+func (d *denyingCodecTool) CheckPermission(
+	_ context.Context,
+	_ *tool.PermissionRequest,
+) (tool.PermissionDecision, error) {
+	return tool.DenyPermission("not allowed"), nil
+}
+
+func TestExecuteToolCall_PermissionResult_BypassesCodec(t *testing.T) {
+	p := NewFunctionCallResponseProcessor(false, nil)
+	base := &denyingCodecTool{declaration: &tool.Declaration{Name: "danger"}}
+	// Typed codec that would error if handed a tool.PermissionResult.
+	codec := resultcodec.Custom(
+		func(_ context.Context, r codecTestResult) (string, error) {
+			return "CODEC:" + r.Output, nil
+		},
+	)
+	wrapped := resultcodec.Wrap(base, codec)
+	tools := map[string]tool.Tool{"danger": wrapped}
+	inv := &agent.Invocation{AgentName: "a", Model: &mockModel{}}
+	pc := model.ToolCall{
+		ID:       "c1",
+		Function: model.FunctionDefinitionParam{Name: "danger", Arguments: []byte(`{}`)},
+	}
+	ch := make(chan *event.Event, 8)
+	_, choices, _, _, _, err := p.executeToolCall(context.Background(), inv, pc, tools, 0, ch)
+
+	// Permission denial is not an error and must not be masked by an encode error.
+	require.NoError(t, err)
+	require.Len(t, choices, 1)
+	content := choices[0].Message.Content
+	require.NotContains(t, content, "CODEC:", "codec must not run on permission results")
+
+	// The message is the default-encoded permission result.
+	var pr tool.PermissionResult
+	require.NoError(t, json.Unmarshal([]byte(content), &pr))
+	assert.Equal(t, tool.PermissionResultStatusDenied, pr.Status)
+	assert.Equal(t, "danger", pr.Tool)
+}
+
 func TestExecuteToolCall_WrapBindsCodec(t *testing.T) {
 	ctx := context.Background()
 	p := NewFunctionCallResponseProcessor(false, nil)

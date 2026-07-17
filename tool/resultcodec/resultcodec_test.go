@@ -107,6 +107,53 @@ func TestWrap_StreamInnerOptOutDropsStreamable(t *testing.T) {
 	}
 }
 
+type mockMetaTool struct {
+	decl      *tool.Declaration
+	meta      tool.ToolMetadata
+	deferLoad bool
+	skip      bool
+}
+
+func (m *mockMetaTool) Declaration() *tool.Declaration            { return m.decl }
+func (m *mockMetaTool) Call(context.Context, []byte) (any, error) { return "called", nil }
+func (m *mockMetaTool) ToolMetadata() tool.ToolMetadata           { return m.meta }
+func (m *mockMetaTool) ShouldDefer(context.Context) bool          { return m.deferLoad }
+func (m *mockMetaTool) SkipSummarization() bool                   { return m.skip }
+
+func TestWrap_PreservesMetadata(t *testing.T) {
+	base := &mockMetaTool{
+		decl: &tool.Declaration{Name: "m"},
+		meta: tool.ToolMetadata{ReadOnly: true, ConcurrencySafe: true, MaxResultSize: 123},
+	}
+	wrapped := Wrap(base, JSON())
+
+	got := tool.MetadataOf(wrapped)
+	if got != base.meta {
+		t.Fatalf("MetadataOf(wrapped) = %+v, want %+v", got, base.meta)
+	}
+	aware, ok := wrapped.(tool.ConcurrencyAware)
+	if !ok || !aware.IsConcurrencySafe() {
+		t.Fatal("wrapped tool should report concurrency safety of the base")
+	}
+}
+
+func TestWrap_PreservesShouldDefer(t *testing.T) {
+	base := &mockMetaTool{decl: &tool.Declaration{Name: "m"}, deferLoad: true}
+	wrapped := Wrap(base, JSON())
+	if !tool.ShouldDefer(context.Background(), wrapped) {
+		t.Fatal("ShouldDefer(wrapped) should delegate to the base tool")
+	}
+}
+
+func TestWrap_PreservesSkipSummarization(t *testing.T) {
+	base := &mockMetaTool{decl: &tool.Declaration{Name: "m"}, skip: true}
+	wrapped := Wrap(base, JSON())
+	s, ok := wrapped.(interface{ SkipSummarization() bool })
+	if !ok || !s.SkipSummarization() {
+		t.Fatal("wrapped tool should delegate SkipSummarization to the base")
+	}
+}
+
 func TestWrap_CallDelegates(t *testing.T) {
 	base := &mockCallable{decl: &tool.Declaration{Name: "c"}}
 	wrapped := Wrap(base, JSON())

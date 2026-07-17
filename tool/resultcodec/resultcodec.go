@@ -117,6 +117,46 @@ func (t *codecTool) Unwrap() tool.Tool {
 	return t.base
 }
 
+// ToolMetadata delegates to the wrapped tool so metadata is preserved for
+// callers that inspect it directly (tool.MetadataOf does not unwrap).
+func (t *codecTool) ToolMetadata() tool.ToolMetadata {
+	return tool.MetadataOf(t.base)
+}
+
+// IsConcurrencySafe delegates to the wrapped tool's metadata.
+func (t *codecTool) IsConcurrencySafe() bool {
+	return tool.MetadataOf(t.base).ConcurrencySafe
+}
+
+// ShouldDefer delegates to the wrapped tool so deferred loading is preserved
+// (tool.ShouldDefer does not unwrap).
+func (t *codecTool) ShouldDefer(ctx context.Context) bool {
+	return tool.ShouldDefer(ctx, t.base)
+}
+
+// CheckPermission delegates to the wrapped tool when it implements
+// tool.PermissionChecker, preserving permission behavior through the wrapper.
+func (t *codecTool) CheckPermission(
+	ctx context.Context,
+	req *tool.PermissionRequest,
+) (tool.PermissionDecision, error) {
+	checker, ok := t.base.(tool.PermissionChecker)
+	if !ok {
+		return tool.AllowPermission(), nil
+	}
+	return checker.CheckPermission(ctx, req)
+}
+
+// SkipSummarization delegates to the wrapped tool when it publishes the
+// preference; otherwise it reports false.
+func (t *codecTool) SkipSummarization() bool {
+	type skipper interface{ SkipSummarization() bool }
+	if s, ok := t.base.(skipper); ok {
+		return s.SkipSummarization()
+	}
+	return false
+}
+
 type callableCodecTool struct {
 	*codecTool
 	callable tool.CallableTool
