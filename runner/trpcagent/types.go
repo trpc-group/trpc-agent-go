@@ -22,8 +22,9 @@ type session struct {
 }
 
 type runOptions struct {
-	RequestID             string `json:"requestID,omitempty"`
-	ExecutionTraceEnabled bool   `json:"executionTraceEnabled,omitempty"`
+	RequestID             string         `json:"requestID,omitempty"`
+	ExecutionTraceEnabled bool           `json:"executionTraceEnabled,omitempty"`
+	RuntimeState          map[string]any `json:"runtimeState,omitempty"`
 }
 
 type runRequest struct {

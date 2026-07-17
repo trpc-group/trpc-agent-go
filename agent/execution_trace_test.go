@@ -161,6 +161,13 @@ func TestExecutionTrace_LazilyInitializesForDirectInvocationLiteral(t *testing.T
 	require.Len(t, executionTrace.Steps, 1)
 	assert.Equal(t, "assistant", executionTrace.RootAgentName)
 	assert.Equal(t, "assistant", executionTrace.Steps[0].NodeID)
+	assert.Empty(t, executionTrace.Steps[0].NodeType)
+	assert.Empty(t, StartExecutionTraceStep(
+		inv,
+		"",
+		nil,
+		nil,
+	))
 }
 
 func TestNextExecutionTracePredecessors_UsesNestedChildInvocationTerminals(t *testing.T) {
