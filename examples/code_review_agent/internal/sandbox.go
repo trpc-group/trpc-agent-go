@@ -76,6 +76,32 @@ func DefaultSandboxConfig() SandboxConfig {
 	}
 }
 
+func withSandboxDefaults(config SandboxConfig) SandboxConfig {
+	defaults := DefaultSandboxConfig()
+	if config.Timeout <= 0 {
+		config.Timeout = defaults.Timeout
+	}
+	if config.MaxOutputBytes <= 0 {
+		config.MaxOutputBytes = defaults.MaxOutputBytes
+	}
+	if config.MaxWorkspaceBytes <= 0 {
+		config.MaxWorkspaceBytes = defaults.MaxWorkspaceBytes
+	}
+	if config.MemoryMB <= 0 {
+		config.MemoryMB = defaults.MemoryMB
+	}
+	if config.CPUPercent <= 0 {
+		config.CPUPercent = defaults.CPUPercent
+	}
+	if config.MaxPIDs <= 0 {
+		config.MaxPIDs = defaults.MaxPIDs
+	}
+	if config.AllowedEnvVars == nil {
+		config.AllowedEnvVars = append([]string(nil), defaults.AllowedEnvVars...)
+	}
+	return config
+}
+
 // Sandbox executes commands in a controlled environment with
 // timeout, output limits, and env var whitelisting.
 type Sandbox struct {
@@ -90,10 +116,7 @@ type SandboxExecutor interface {
 
 // NewSandbox creates a Sandbox with the given config.
 func NewSandbox(config SandboxConfig) *Sandbox {
-	if config.MaxOutputBytes <= 0 {
-		config.MaxOutputBytes = DefaultSandboxConfig().MaxOutputBytes
-	}
-	return &Sandbox{config: config}
+	return &Sandbox{config: withSandboxDefaults(config)}
 }
 
 // NewDefaultSandbox creates a Sandbox with default settings.

@@ -44,6 +44,18 @@ func TestSandbox_ExecuteSuccess(t *testing.T) {
 	require.False(t, run.TimedOut)
 }
 
+func TestSandbox_ZeroConfigUsesSafeDefaults(t *testing.T) {
+	sandbox := NewSandbox(SandboxConfig{})
+	defaults := DefaultSandboxConfig()
+	require.Equal(t, defaults.Timeout, sandbox.config.Timeout)
+	require.Equal(t, defaults.MaxOutputBytes, sandbox.config.MaxOutputBytes)
+	require.Equal(t, defaults.MaxWorkspaceBytes, sandbox.config.MaxWorkspaceBytes)
+	require.Equal(t, defaults.MemoryMB, sandbox.config.MemoryMB)
+	require.Equal(t, defaults.CPUPercent, sandbox.config.CPUPercent)
+	require.Equal(t, defaults.MaxPIDs, sandbox.config.MaxPIDs)
+	require.Equal(t, defaults.AllowedEnvVars, sandbox.config.AllowedEnvVars)
+}
+
 func TestSandbox_ExecuteBlocked(t *testing.T) {
 	sandbox := NewDefaultSandbox()
 

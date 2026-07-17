@@ -44,22 +44,7 @@ const maxSnapshotPathListBytes = 4 * 1024 * 1024
 
 // NewContainerSandbox starts the production container runtime.
 func NewContainerSandbox(config SandboxConfig, repoPath, dockerfilePath string) (*ContainerSandbox, error) {
-	defaults := DefaultSandboxConfig()
-	if config.MaxOutputBytes <= 0 {
-		config.MaxOutputBytes = defaults.MaxOutputBytes
-	}
-	if config.MaxWorkspaceBytes <= 0 {
-		config.MaxWorkspaceBytes = defaults.MaxWorkspaceBytes
-	}
-	if config.MemoryMB <= 0 {
-		config.MemoryMB = defaults.MemoryMB
-	}
-	if config.CPUPercent <= 0 {
-		config.CPUPercent = defaults.CPUPercent
-	}
-	if config.MaxPIDs <= 0 {
-		config.MaxPIDs = defaults.MaxPIDs
-	}
+	config = withSandboxDefaults(config)
 	hostConfig := hardenedHostConfig(config)
 	options := []containerexecutor.Option{
 		containerexecutor.WithDockerFilePath(dockerfilePath),
@@ -141,18 +126,18 @@ func (s *ContainerSandbox) Execute(ctx context.Context, taskID, command string, 
 	defer cancel()
 	snapshotPath, removeSnapshot, err := stageReviewSnapshot(timeoutCtx, s.repoPath, s.config.MaxWorkspaceBytes)
 	if err != nil {
-		run.Status, run.Error = SandboxStatusError, RedactSensitiveInfo(err.Error())
+		classifyContainerSetupError(run, timeoutCtx, s.config.Timeout, err)
 		return run
 	}
 	defer removeSnapshot()
 	ws, err := s.executor.CreateWorkspace(timeoutCtx, taskID+"-"+run.ID, codeexecutor.WorkspacePolicy{Isolated: true, MaxDiskBytes: s.config.MaxWorkspaceBytes})
 	if err != nil {
-		run.Status, run.Error = SandboxStatusError, RedactSensitiveInfo(err.Error())
+		classifyContainerSetupError(run, timeoutCtx, s.config.Timeout, err)
 		return run
 	}
 	defer s.executor.Cleanup(context.WithoutCancel(ctx), ws)
 	if err := s.executor.PutDirectory(timeoutCtx, ws, snapshotPath, "repo"); err != nil {
-		run.Status, run.Error = SandboxStatusError, RedactSensitiveInfo(err.Error())
+		classifyContainerSetupError(run, timeoutCtx, s.config.Timeout, err)
 		return run
 	}
 	result, err := s.executor.RunProgram(timeoutCtx, ws, codeexecutor.RunProgramSpec{
@@ -186,6 +171,15 @@ func (s *ContainerSandbox) Execute(ctx context.Context, taskID, command string, 
 		run.Status = SandboxStatusSuccess
 	}
 	return run
+}
+
+func classifyContainerSetupError(run *SandboxRun, timeoutCtx context.Context, timeout time.Duration, err error) {
+	if errors.Is(timeoutCtx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
+		run.Status, run.TimedOut = SandboxStatusTimeout, true
+		run.Error = fmt.Sprintf("command timed out after %s during container setup", timeout)
+		return
+	}
+	run.Status, run.Error = SandboxStatusError, RedactSensitiveInfo(err.Error())
 }
 
 func moduleCachePath(trusted bool) string {

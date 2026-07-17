@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -95,4 +96,15 @@ func TestHardenedHostConfigEnforcesResources(t *testing.T) {
 func TestModuleCacheRequiresExplicitTrustedMode(t *testing.T) {
 	require.Equal(t, "/tmp/gomodcache", moduleCachePath(false))
 	require.Equal(t, "/go/pkg/mod", moduleCachePath(true))
+}
+
+func TestContainerSetupDeadlineIsReportedAsTimeout(t *testing.T) {
+	repo := initGitRepository(t)
+	sandbox := &ContainerSandbox{config: withSandboxDefaults(SandboxConfig{}), repoPath: repo}
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	run := sandbox.Execute(ctx, "expired-setup", "go test ./...", DecisionAllow, "")
+	require.Equal(t, SandboxStatusTimeout, run.Status)
+	require.True(t, run.TimedOut)
+	require.Contains(t, run.Error, "during container setup")
 }
