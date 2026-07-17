@@ -495,7 +495,10 @@ func (r *runner) run(ctx context.Context, cancel context.CancelCauseFunc, key se
 			return
 		}
 	}
-	hookEvents, hookDone, hookRemaining := r.startRunHooks(ctx, input)
+	hookEvents := make(chan hookEvent, defaultRunHookEventBuffer)
+	run := newRun(input.runAgentInput, hookEvents, input.done)
+	ctx = newRunContext(ctx, run)
+	hookDone, hookRemaining := r.startRunHooks(ctx, run)
 	agentRun := make(chan runAgentResult, 1)
 	go func() {
 		ch, err := r.runner.Run(ctx, input.userID, threadID, *input.messages.inputMessage, input.runOption...)
@@ -573,7 +576,6 @@ func (r *runner) runEventLoop(
 			hookRemaining--
 			if hookRemaining == 0 {
 				hookDone = nil
-				hookEvents = nil
 			}
 			if err != nil {
 				log.ErrorfContext(ctx, "agui run hook: threadID: %s, runID: %s, err: %v", threadID, runID, err)
@@ -592,13 +594,11 @@ func (r *runner) emitPendingTerminal(ctx context.Context, events chan<- aguieven
 	}
 }
 
-func (r *runner) startRunHooks(ctx context.Context, input *runInput) (<-chan hookEvent, <-chan error, int) {
+func (r *runner) startRunHooks(ctx context.Context, run *Run) (<-chan error, int) {
 	if len(r.runHooks) == 0 {
-		return nil, nil, 0
+		return nil, 0
 	}
-	hookEvents := make(chan hookEvent, defaultRunHookEventBuffer)
 	hookDone := make(chan error, len(r.runHooks))
-	run := newRun(input.runAgentInput, hookEvents, input.done)
 	started := 0
 	for _, hook := range r.runHooks {
 		if hook == nil {
@@ -610,9 +610,9 @@ func (r *runner) startRunHooks(ctx context.Context, input *runInput) (<-chan hoo
 		}(hook)
 	}
 	if started == 0 {
-		return nil, nil, 0
+		return nil, 0
 	}
-	return hookEvents, hookDone, started
+	return hookDone, started
 }
 
 func runRunHook(ctx context.Context, hook RunHook, run *Run) (err error) {

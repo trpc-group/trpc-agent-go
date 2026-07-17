@@ -16,6 +16,7 @@ This directory shows AG-UI servers that can talk to the AG-UI client examples.
 - [`externaltool/agentnode_handoff_agenttool/`](externaltool/agentnode_handoff_agenttool/) – Demonstrates an outer `AgentNode` producing a `handoff_task` external tool call that a normal graph node executes through a dynamically selected `AgentTool` child `GraphAgent`.
 - [`streamtool/`](streamtool/) – Demonstrates a minimal `StreamableTool` that uses `agui.WithStreamingToolResultActivityEnabled(true)` to stream tool progress as `ACTIVITY_SNAPSHOT` / `ACTIVITY_DELTA` while preserving a final `TOOL_CALL_RESULT`.
 - [`runhook/`](runhook/) – Demonstrates `agui.WithRunHook` for server-side background UI events that stream to SSE and persist to AG-UI history without entering normal session events.
+- [`graph_progress/`](graph_progress/) – Demonstrates `GraphAgent` nodes using `aguirunner.RunFromContext` to proactively emit AG-UI progress percentages.
 - [`heartbeat/`](heartbeat/) – Demonstrates SSE heartbeat keepalive frames with `agui.WithHeartbeatInterval`.
 - [`graph/`](graph/) – Demonstrates graph node start activity events via `ACTIVITY_DELTA`.
 - [`react/`](react/) – The server showcases how React planner tags are streamed as custom AG-UI events.

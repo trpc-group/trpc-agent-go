@@ -32,6 +32,8 @@ type Run struct {
 	done  <-chan struct{}
 }
 
+type runContextKey struct{}
+
 type hookEvent struct {
 	event aguievents.Event
 	reply chan error
@@ -39,6 +41,25 @@ type hookEvent struct {
 
 func newRun(input *adapter.RunAgentInput, emit chan<- hookEvent, done <-chan struct{}) *Run {
 	return &Run{input: input, emit: emit, done: done}
+}
+
+func newRunContext(ctx context.Context, run *Run) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if run == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, runContextKey{}, run)
+}
+
+// RunFromContext returns the AG-UI run handle attached to ctx.
+func RunFromContext(ctx context.Context) (*Run, bool) {
+	if ctx == nil {
+		return nil, false
+	}
+	run, ok := ctx.Value(runContextKey{}).(*Run)
+	return run, ok
 }
 
 // Input returns the request payload for this run.

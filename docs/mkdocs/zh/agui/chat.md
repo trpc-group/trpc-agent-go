@@ -339,9 +339,9 @@ server, _ := agui.New(runner, agui.WithAGUIRunnerOptions(aguirunner.WithStateRes
 
 `RunHook` 适合在实时对话运行过程中，由服务端后台逻辑按自己的节奏主动向前端推送 AG-UI 事件。它处理的是服务端主动补充 UI 状态的场景，而不是把 Agent 已经产生的内部事件翻译成 AG-UI 事件；后者应使用后续的自定义 Translator 或事件翻译回调。
 
-`RunHook` 会在 `RUN_STARTED` 发送后启动，并与 Agent 运行并行执行。Hook 通过 `run.Emit(ctx, event)` 把事件写入本次请求的 SSE 流；如果配置了 `SessionService`，这些事件也会写入 AG-UI 历史，可通过 [消息快照路由](history.md) 恢复。Hook 事件不会写入普通会话事件，因此不会成为后续模型上下文。
+AG-UI 会在 `RUN_STARTED` 发送后创建本次运行的 `Run`，把它绑定到执行 `ctx`，再启动 `RunHook` 并调用底层 Runner。Hook 中可以直接使用参数里的 `run`；Agent、Tool 或其他沿 `ctx` 执行的业务代码，可以通过 `aguirunner.RunFromContext(ctx)` 取出同一个 `Run`。通过 `run.Emit(ctx, event)` 发送的事件会写入本次请求的 SSE 流；如果配置了 `SessionService`，这些事件也会写入 AG-UI 历史，可通过 [消息快照路由](history.md) 恢复。它们不会写入普通会话事件，因此不会成为后续模型上下文。
 
-下面示例演示一个后台报告任务每 100ms 推送一次生成进度。完整示例可参考 [examples/agui/server/runhook](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/runhook)。
+下面示例演示一个后台报告任务每 100ms 推送一次生成进度。完整示例可参考 [examples/agui/server/runhook](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/runhook)；如果需要在 GraphAgent 节点中主动上报进度，可参考 [examples/agui/server/graph_progress](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/graph_progress)。
 
 ```go
 import (
@@ -379,9 +379,26 @@ coreRunner := runner.NewRunner(agent.Info().Name, agent)
 server, _ := agui.New(coreRunner, agui.WithRunHook(pushBackgroundReportStatus))
 ```
 
+在 Agent 或 Tool 内部主动推送时，不需要自己把 `Run` 放入 state。只要代码拿到的是本次运行传入的 `ctx`，就可以从 `ctx` 中读取。
+
+```go
+func emitReportStatus(ctx context.Context, progress int) error {
+	run, ok := aguirunner.RunFromContext(ctx)
+	if !ok {
+		return nil
+	}
+	return run.Emit(ctx, aguievents.NewCustomEvent(
+		reportEventName,
+		aguievents.WithValue(map[string]any{
+			"progress": progress,
+		}),
+	))
+}
+```
+
 如果后台任务需要读取本次请求里的业务字段，可以通过 `run.Input()` 获取 `RunAgentInput`，例如读取 `forwardedProps` 中的业务参数。Hook 中应把请求体当作只读数据使用，不要在运行开始后继续改写它。
 
-`run.Emit` 用于发送服务端后台产生的 UI 事件，不应发送 `RUN_STARTED`、`RUN_FINISHED`、`RUN_ERROR` 或 `MESSAGES_SNAPSHOT` 这类框架事件。如果 Agent 先于 Hook 完成，框架会等 Hook 返回后再发送最终运行终态，避免主动推送的 UI 事件落在终态之后。Hook 应响应 `ctx.Done()`；运行被取消或超时时，应尽快返回。如果 Hook 返回错误，本次 AG-UI 运行会返回 `RUN_ERROR`。
+`run.Emit` 用于发送服务端主动产生的 UI 事件，不应发送 `RUN_STARTED`、`RUN_FINISHED`、`RUN_ERROR` 或 `MESSAGES_SNAPSHOT` 这类框架事件。如果 Agent 先于 Hook 完成，框架会等 Hook 返回后再发送最终运行终态，避免 Hook 推送的 UI 事件落在终态之后。Hook 应响应 `ctx.Done()`；运行被取消或超时时，应尽快返回。如果 Hook 返回错误，本次 AG-UI 运行会返回 `RUN_ERROR`。
 
 ## 自定义 Translator
 
