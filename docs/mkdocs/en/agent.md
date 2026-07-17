@@ -912,6 +912,9 @@ tool ran. When correctness depends on tool execution, verify the tool-call and
 tool-result events. If an endpoint does not reliably support the combination,
 split the operation into a tool-enabled call without native structured output,
 followed by a tool-disabled call that produces the structured final response.
+The second call must receive the first call's evidence by continuing the same
+session or message history, or by explicitly including its tool-call and
+tool-result messages.
 
 Related backend discussions include
 [vLLM #39929](https://github.com/vllm-project/vllm/issues/39929), which tracks

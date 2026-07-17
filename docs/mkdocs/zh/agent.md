@@ -860,7 +860,8 @@ llmagent := llmagent.New("llmagent", llmagent.WithAgentCallbacks(callbacks))
 因此，HTTP 请求成功且 JSON 校验通过，并不能证明所需工具已执行。当结果正确性依赖
 工具执行时，应同时检查工具调用与工具结果事件。如果端点不能可靠支持该组合，
 可将操作拆成两次调用：先在不启用原生结构化输出的情况下调用工具，再禁用工具并
-生成结构化的最终答复。
+生成结构化的最终答复。第二次调用必须通过延续相同的 session 或消息历史来获取
+第一次调用的证据，或者显式包含第一次调用的工具调用与工具结果消息。
 
 相关后端讨论包括
 [vLLM #39929](https://github.com/vllm-project/vllm/issues/39929)，该 issue
