@@ -72,10 +72,16 @@ function escapeRegExp(value) {
 
 function targetTextCandidates(value) {
   const text = targetText(value);
-  const roleless = text.replace(
-    /\b(?:button|link|dropdown|combobox|select|textbox|input|field|search|checkbox|radio)\b/ig,
-    " "
-  ).replace(/\s+/g, " ").trim();
+  const roleWords = {
+    button: /\bbutton\b/ig,
+    link: /\blink\b/ig,
+    combobox: /\b(?:dropdown|combobox|select)\b/ig,
+    textbox: /\b(?:textbox|input|field)\b/ig,
+    checkbox: /\bcheckbox\b/ig,
+    radio: /\bradio\b/ig
+  }[roleHint(value)];
+  const roleless = (roleWords ? text.replace(roleWords, " ") : text)
+    .replace(/\s+/g, " ").trim();
   const candidates = [text, roleless];
   for (const candidate of [text, roleless]) {
     candidates.push(...candidate.split(/\s+or\s+/i));
@@ -114,9 +120,6 @@ function roleHint(value) {
   if (/\blink\b/.test(raw)) {
     return "link";
   }
-  if (/\b(?:textbox|input|field|search)\b/.test(raw)) {
-    return "textbox";
-  }
   if (/\b(?:combobox|dropdown|select)\b/.test(raw)) {
     return "combobox";
   }
@@ -125,6 +128,9 @@ function roleHint(value) {
   }
   if (/\bradio\b/.test(raw)) {
     return "radio";
+  }
+  if (/\b(?:textbox|input|field|search)\b/.test(raw)) {
+    return "textbox";
   }
   return "";
 }

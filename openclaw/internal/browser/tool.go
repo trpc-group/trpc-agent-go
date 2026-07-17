@@ -2557,22 +2557,25 @@ func (t *Tool) executeAct(
 		return drv.Call(ctx, mcpToolHover, args)
 	case strings.ToLower(actScrollIntoView):
 		if driverType == driverTypePlaywrightMCP {
-			if t.evaluateEnabled {
-				args := map[string]any{
-					"function": scrollIntoViewFunction,
-				}
-				addOptionalElementArgs(
-					args,
-					req.Ref,
-					req.Target,
-					driverType,
+			if !t.evaluateEnabled {
+				return nil, errors.New(
+					"scrollIntoView requires browser evaluate support",
 				)
-				return drv.Call(ctx, mcpToolEvaluate, args)
 			}
-			return t.executeScroll(ctx, drv, req, driverType)
+			args := map[string]any{
+				"function": scrollIntoViewFunction,
+			}
+			addOptionalElementArgs(
+				args,
+				req.Ref,
+				req.Target,
+				driverType,
+			)
+			return drv.Call(ctx, mcpToolEvaluate, args)
 		}
-		args := map[string]any{
-			"ref": strings.TrimSpace(req.Ref),
+		args, err := elementActionArgs(req, driverType)
+		if err != nil {
+			return nil, err
 		}
 		addServerTimeoutArg(args, driverType, req.TimeoutMs)
 		return drv.Call(ctx, mcpToolScroll, args)
@@ -2896,13 +2899,12 @@ func fillFields(req actRequest) []map[string]any {
 	if len(req.Fields) > 0 {
 		return req.Fields
 	}
-	text := strings.TrimSpace(req.Text)
 	target := firstNonEmpty(req.Ref, req.Target)
-	if text == "" || target == "" {
+	if target == "" {
 		return nil
 	}
 	field := map[string]any{
-		"text": text,
+		"text": req.Text,
 	}
 	if strings.TrimSpace(req.Ref) != "" {
 		field["ref"] = strings.TrimSpace(req.Ref)
@@ -2947,7 +2949,12 @@ func normalizeMCPFillFields(fields []map[string]any) []map[string]any {
 			normalized["type"] = "textbox"
 		}
 		if _, ok := normalized["value"]; !ok {
-			normalized["value"] = stringField(field, "text")
+			text := field["text"]
+			if text == nil {
+				normalized["value"] = ""
+			} else {
+				normalized["value"] = fmt.Sprint(text)
+			}
 		} else {
 			normalized["value"] = fmt.Sprint(normalized["value"])
 		}

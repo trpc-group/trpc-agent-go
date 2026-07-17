@@ -280,6 +280,37 @@ test("HostProfile act clicks a visible text button target", async () => {
   );
 });
 
+test("HostProfile preserves role-like words in accessible names", async () => {
+  const calls = [];
+  const locator = {
+    first() {
+      return locator;
+    },
+    async click() {}
+  };
+  const page = {
+    getByRole(role, options) {
+      calls.push({ role, options });
+      return locator;
+    }
+  };
+
+  const profile = profileForPage(page);
+  await profile.act("tab-1", {
+    kind: "click",
+    target: "Search button"
+  });
+  await profile.act("tab-1", {
+    kind: "click",
+    target: "Search combobox"
+  });
+
+  assert.equal(calls[0].role, "button");
+  assert.match("Search", calls[0].options.name);
+  assert.equal(calls[1].role, "combobox");
+  assert.match("Search", calls[1].options.name);
+});
+
 test("HostProfile act clicks a bare visible text target", async () => {
   const calls = [];
   const locator = {
