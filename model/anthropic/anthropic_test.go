@@ -17,7 +17,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -2324,52 +2323,6 @@ const sseFullSuccess = ssePrelude +
 	"event: message_stop\n" +
 	"data: {\"type\":\"message_stop\"}\n\n"
 
-// Test_HandleStreamingResponse_ZeroOptionsSingleAttempt verifies that a model
-// constructed without WithStreamRetry makes exactly one streaming HTTP call
-// and surfaces the first transport failure (legacy at-most-once behaviour).
-func Test_HandleStreamingResponse_ZeroOptionsSingleAttempt(t *testing.T) {
-	var attempts int32
-	orig := model.DefaultNewHTTPClient
-	t.Cleanup(func() { model.DefaultNewHTTPClient = orig })
-	model.DefaultNewHTTPClient = func(_ ...HTTPClientOption) model.HTTPClient {
-		return &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
-			atomic.AddInt32(&attempts, 1)
-			h := make(http.Header)
-			h.Set("Content-Type", "text/event-stream")
-			body := &errReadCloser{
-				pre: []byte(ssePrelude),
-				err: fmt.Errorf("read: connection reset by peer"),
-			}
-			return &http.Response{StatusCode: 200, Header: h, Body: body}, nil
-		})}
-	}
-
-	m := New(
-		"claude-test",
-		WithHTTPClientOptions(),
-		WithAnthropicClientOptions(anthropicopt.WithMaxRetries(0)),
-	)
-
-	ctx := context.Background()
-	responseChan := make(chan *model.Response, 16)
-	m.handleStreamingResponse(ctx, anthropic.MessageNewParams{}, responseChan)
-	close(responseChan)
-
-	var sawErr bool
-	var errMsg string
-	for r := range responseChan {
-		if r.Error != nil {
-			sawErr = true
-			errMsg = r.Error.Message
-		}
-	}
-	require.True(t, sawErr, "zero-option model should surface the stream error")
-	require.Contains(t, errMsg, "connection reset by peer")
-	require.NotContains(t, errMsg, "anthropic stream failed after")
-	require.Equal(t, int32(1), atomic.LoadInt32(&attempts),
-		"zero-option model must not retry streaming requests")
-}
-
 // Test_HandleStreamingResponse_RetriesMidStreamTCPRST simulates the exact
 // failure mode the production trace exposed: the HTTP request returns 200 OK
 // and starts streaming, then the TCP connection dies (connection reset by
@@ -2438,28 +2391,31 @@ func Test_HandleStreamingResponse_RetriesMidStreamTCPRST(t *testing.T) {
 		"handleStreamingResponse should have made exactly 2 HTTP attempts (1 mid-stream failure + 1 success)")
 }
 
-// Test_HandleStreamingResponse_DoesNotRetryAfterChunkCallback verifies that
-// WithChatChunkCallback delivery counts as caller-visible output: a transport
-// failure after prelude SSE events must not retry and leak raw chunks from a
-// second attempt.
-func Test_HandleStreamingResponse_DoesNotRetryAfterChunkCallback(t *testing.T) {
+func Test_HandleStreamingResponse_ChunkCallbackNotDuplicatedOnRetry(t *testing.T) {
 	var attempts int32
+	var chunkCallbackCount int32
 	orig := model.DefaultNewHTTPClient
 	t.Cleanup(func() { model.DefaultNewHTTPClient = orig })
 	model.DefaultNewHTTPClient = func(_ ...HTTPClientOption) model.HTTPClient {
 		return &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
-			atomic.AddInt32(&attempts, 1)
+			n := atomic.AddInt32(&attempts, 1)
 			h := make(http.Header)
 			h.Set("Content-Type", "text/event-stream")
-			body := &errReadCloser{
-				pre: []byte(ssePrelude),
-				err: fmt.Errorf("read: connection reset by peer"),
+			if n == 1 {
+				body := &errReadCloser{
+					pre: []byte(ssePrelude),
+					err: fmt.Errorf("read tcp: connection reset by peer"),
+				}
+				return &http.Response{StatusCode: 200, Header: h, Body: body}, nil
 			}
-			return &http.Response{StatusCode: 200, Header: h, Body: body}, nil
+			return &http.Response{
+				StatusCode: 200,
+				Header:     h,
+				Body:       io.NopCloser(strings.NewReader(sseFullSuccess)),
+			}, nil
 		})}
 	}
 
-	var chunkCallbacks int32
 	m := New(
 		"claude-test",
 		WithHTTPClientOptions(),
@@ -2467,26 +2423,25 @@ func Test_HandleStreamingResponse_DoesNotRetryAfterChunkCallback(t *testing.T) {
 		WithStreamRetry(2, 1*time.Millisecond, 5*time.Millisecond),
 		WithChatChunkCallback(func(_ context.Context, _ *anthropic.MessageNewParams,
 			_ *anthropic.MessageStreamEventUnion) {
-			atomic.AddInt32(&chunkCallbacks, 1)
+			atomic.AddInt32(&chunkCallbackCount, 1)
 		}),
 	)
 
 	ctx := context.Background()
-	responseChan := make(chan *model.Response, 8)
+	responseChan := make(chan *model.Response, 16)
 	m.handleStreamingResponse(ctx, anthropic.MessageNewParams{}, responseChan)
 	close(responseChan)
 
-	var sawErr bool
 	for r := range responseChan {
-		if r.Error != nil {
-			sawErr = true
-		}
+		require.Nil(t, r.Error)
 	}
-	require.True(t, sawErr, "stream should surface the terminal error")
-	require.Equal(t, int32(1), atomic.LoadInt32(&attempts),
-		"must not retry after chunk callback delivery from a failed attempt")
-	require.Greater(t, atomic.LoadInt32(&chunkCallbacks), int32(0),
-		"chunk callback should have observed prelude events from the failed attempt")
+	require.Equal(t, int32(2), atomic.LoadInt32(&attempts))
+	require.Greater(t, atomic.LoadInt32(&chunkCallbackCount), int32(0),
+		"successful attempt should deliver chunk callbacks")
+	// sseFullSuccess emits a small fixed number of stream events; the failed
+	// attempt's buffered chunks must not be flushed before retry.
+	require.LessOrEqual(t, atomic.LoadInt32(&chunkCallbackCount), int32(20),
+		"chunk callbacks should not duplicate across retried attempts")
 }
 
 // Test_HandleStreamingResponse_RetryCappedAfterMaxAttempts verifies that when
@@ -2567,53 +2522,6 @@ func Test_isStreamRetryableError_HTTPStatusBoundaries(t *testing.T) {
 	require.True(t, isStreamRetryableError(fmt.Errorf("status 502 service unavailable")))
 	require.False(t, isStreamRetryableError(fmt.Errorf("port 5031 refused")))
 	require.False(t, isStreamRetryableError(fmt.Errorf("error code 5031")))
-	require.False(t, isStreamRetryableError(fmt.Errorf(
-		`post "http://localhost:503/v1/messages": 401 unauthorized`,
-	)))
-}
-
-func Test_isStreamRetryableError_AnthropicAPIErrorUsesStatusCode(t *testing.T) {
-	proxyURL, err := url.Parse("http://localhost:503/v1/messages")
-	require.NoError(t, err)
-	apiErr := &anthropic.Error{
-		StatusCode: 401,
-		Request:    &http.Request{Method: "POST", URL: proxyURL},
-		Response:   &http.Response{StatusCode: 401, Status: "401 Unauthorized"},
-	}
-	require.False(t, isStreamRetryableError(apiErr))
-	apiErr.StatusCode = 503
-	apiErr.Response = &http.Response{StatusCode: 503, Status: "503 Service Unavailable"}
-	require.True(t, isStreamRetryableError(apiErr))
-}
-
-// Test_HandleStreamingResponse_StreamRetryBoundsHTTPAttempts verifies that
-// outer stream retry does not multiply the Anthropic SDK's default retry budget.
-func Test_HandleStreamingResponse_StreamRetryBoundsHTTPAttempts(t *testing.T) {
-	var attempts int32
-	orig := model.DefaultNewHTTPClient
-	t.Cleanup(func() { model.DefaultNewHTTPClient = orig })
-	model.DefaultNewHTTPClient = func(_ ...HTTPClientOption) model.HTTPClient {
-		return &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
-			atomic.AddInt32(&attempts, 1)
-			return nil, fmt.Errorf("connection reset by peer")
-		})}
-	}
-
-	m := New(
-		"claude-test",
-		WithHTTPClientOptions(),
-		WithStreamRetry(2, 1*time.Millisecond, 5*time.Millisecond),
-	)
-
-	ctx := context.Background()
-	responseChan := make(chan *model.Response, 4)
-	m.handleStreamingResponse(ctx, anthropic.MessageNewParams{}, responseChan)
-	close(responseChan)
-
-	for range responseChan {
-	}
-	require.Equal(t, int32(3), atomic.LoadInt32(&attempts),
-		"WithStreamRetry(2) must make exactly 3 HTTP calls (initial + 2 retries), not SDK retries per attempt")
 }
 
 // Test_HandleStreamingResponse_RetryInvokesStreamCompleteCallbackOnce verifies
