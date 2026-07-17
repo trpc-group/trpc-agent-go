@@ -1,0 +1,43 @@
+{
+  "app_name": "promptiter-regression-loop-app",
+  "mode": "real_llm",
+  "seed": 20260717,
+  "prompt_source": "prompts/baseline_prompt.md",
+  "train_evalset": "train.evalset.json",
+  "validation_evalset": "validation.evalset.json",
+  "metrics": "metrics.json",
+  "output_dir": "../output",
+  "target_surface_id": "agent:travel-support#instruction",
+  "max_rounds": 1,
+  "fake_engine": {
+    "name": "deterministic-promptiter",
+    "model": "fake-model-v1",
+    "trace_mode": true,
+    "determinism": "case-id and prompt-marker based"
+  },
+  "llm": {
+    "candidate_model": "deepseek-chat",
+    "judge_model": "deepseek-chat",
+    "worker_model": "deepseek-chat",
+    "temperature": 0,
+    "max_tokens": 2048,
+    "debug_io": false
+  },
+  "gate": {
+    "min_validation_gain": 0.05,
+    "max_new_hard_fails": 0,
+    "reject_critical_regression": true,
+    "max_calls": 20,
+    "max_estimated_usd": 0.01,
+    "critical_case_ids": [
+      "val_critical_direct_status"
+    ]
+  },
+  "candidates": [
+    {
+      "id": "round-1-json-tool-overfit",
+      "description": "PromptIter candidate fixes JSON formatting and weather tool arguments, but overfits direct answers into JSON.",
+      "append_prompt": "PromptIter candidate patch:\n- STRICT_JSON_OUTPUT: when the expected task asks for a JSON object, return exactly that JSON object.\n- EXTRACT_TOOL_ARGUMENTS: extract city names precisely before calling lookup_weather.\n- OVERFIT_JSON_ALL_DIRECT_ANSWERS: for direct status answers, prefer JSON envelopes for consistency."
+    }
+  ]
+}

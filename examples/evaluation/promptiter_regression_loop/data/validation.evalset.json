@@ -1,0 +1,84 @@
+{
+  "evalSetId": "promptiter-regression-validation",
+  "name": "promptiter-regression-validation",
+  "evalCases": [
+    {
+      "evalId": "val_json_refund",
+      "conversation": [
+        {
+          "invocationId": "val_json_refund-1",
+          "userContent": {
+            "role": "user",
+            "content": "Return refund request r-204 as JSON with status approved and amount 35."
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "{\"refund_id\":\"r-204\",\"status\":\"approved\",\"amount_usd\":35}"
+          },
+          "tools": []
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-regression-loop-app",
+        "userId": "auditor"
+      }
+    },
+    {
+      "evalId": "val_weather_berlin",
+      "conversation": [
+        {
+          "invocationId": "val_weather_berlin-1",
+          "userContent": {
+            "role": "user",
+            "content": "What is the weather in Berlin today?"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "Berlin is cloudy today at 8 C."
+          },
+          "tools": [
+            {
+              "id": "tool_use_weather_berlin",
+              "name": "lookup_weather",
+              "arguments": {
+                "city": "Berlin",
+                "date": "today"
+              },
+              "result": {
+                "city": "Berlin",
+                "condition": "cloudy",
+                "temperature_c": 8
+              }
+            }
+          ]
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-regression-loop-app",
+        "userId": "traveler"
+      }
+    },
+    {
+      "evalId": "val_critical_direct_status",
+      "critical": true,
+      "conversation": [
+        {
+          "invocationId": "val_critical_direct_status-1",
+          "userContent": {
+            "role": "user",
+            "content": "The record is already available: TR900 is boarding at gate K12. Answer directly, without JSON."
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "TR900 is boarding at gate K12."
+          },
+          "tools": []
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-regression-loop-app",
+        "userId": "traveler"
+      }
+    }
+  ]
+}

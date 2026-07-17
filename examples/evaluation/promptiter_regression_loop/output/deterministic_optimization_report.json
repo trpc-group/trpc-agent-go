@@ -1,0 +1,1142 @@
+{
+  "run_id": "promptiter-regression-loop-app-20260717",
+  "app_name": "promptiter-regression-loop-app",
+  "mode": "deterministic",
+  "data_source": "fake model with deterministic evalset responses",
+  "seed": 20260717,
+  "target_surface_id": "agent:travel-support#instruction",
+  "prompt_source": "prompts/baseline_prompt.md",
+  "fake_engine": {
+    "name": "deterministic-promptiter",
+    "model": "fake-model-v1",
+    "trace_mode": true,
+    "determinism": "case-id and prompt-marker based"
+  },
+  "baseline_prompt": "You are a travel support assistant.\n\nAnswer concisely. Use tools when weather data is requested. For direct records, answer without calling tools.\n",
+  "baseline_train": {
+    "name": "baseline_train",
+    "eval_set_id": "promptiter-regression-train",
+    "overall_score": 0.3333333333333333,
+    "passed": 0,
+    "failed": 3,
+    "cases": [
+      {
+        "eval_set_id": "promptiter-regression-train",
+        "case_id": "train_json_invoice",
+        "critical": false,
+        "score": 0.5,
+        "status": "failed",
+        "metrics": [
+          {
+            "metric_name": "tool_trajectory_avg_score",
+            "score": 1,
+            "threshold": 1,
+            "status": "passed"
+          },
+          {
+            "metric_name": "llm_rubric_critic",
+            "score": 0,
+            "threshold": 0.8,
+            "status": "failed",
+            "reason": "format error: expected structured response \"{\\\"invoice_id\\\":\\\"inv-100\\\",\\\"status\\\":\\\"approved\\\",\\\"amount_usd\\\":120}\", actual \"The invoice is approved for 120 USD.\""
+          }
+        ],
+        "failure_reasons": [
+          {
+            "category": "format_error",
+            "metric_name": "llm_rubric_critic",
+            "evidence": "format error: expected structured response \"{\\\"invoice_id\\\":\\\"inv-100\\\",\\\"status\\\":\\\"approved\\\",\\\"amount_usd\\\":120}\", actual \"The invoice is approved for 120 USD.\""
+          }
+        ],
+        "expected": {
+          "invocationId": "train_json_invoice-1",
+          "userContent": {
+            "role": "user",
+            "content": "Return the approval for invoice inv-100 as JSON with status approved and amount 120."
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "{\"invoice_id\":\"inv-100\",\"status\":\"approved\",\"amount_usd\":120}"
+          }
+        },
+        "actual": {
+          "invocationId": "train_json_invoice-actual",
+          "userContent": {
+            "role": "user",
+            "content": "Return the approval for invoice inv-100 as JSON with status approved and amount 120."
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "The invoice is approved for 120 USD."
+          }
+        },
+        "trace": {
+          "mode": "deterministic_trace",
+          "route": "direct_response",
+          "signals": [
+            "direct_response",
+            "format_error"
+          ]
+        },
+        "latency_ms": 0
+      },
+      {
+        "eval_set_id": "promptiter-regression-train",
+        "case_id": "train_weather_paris",
+        "critical": false,
+        "score": 0,
+        "status": "failed",
+        "metrics": [
+          {
+            "metric_name": "tool_trajectory_avg_score",
+            "score": 0,
+            "threshold": 1,
+            "status": "failed",
+            "reason": "tool argument error: tool arguments do not match expectation"
+          },
+          {
+            "metric_name": "llm_rubric_critic",
+            "score": 0,
+            "threshold": 0.8,
+            "status": "failed",
+            "reason": "final response mismatch: expected \"Paris is rainy today at 12 C.\", actual \"I could not identify the exact Paris weather record.\""
+          }
+        ],
+        "failure_reasons": [
+          {
+            "category": "tool_argument_error",
+            "metric_name": "tool_trajectory_avg_score",
+            "evidence": "tool argument error: tool arguments do not match expectation"
+          },
+          {
+            "category": "unknown",
+            "metric_name": "llm_rubric_critic",
+            "evidence": "final response mismatch: expected \"Paris is rainy today at 12 C.\", actual \"I could not identify the exact Paris weather record.\""
+          }
+        ],
+        "expected": {
+          "invocationId": "train_weather_paris-1",
+          "userContent": {
+            "role": "user",
+            "content": "What is the weather in Paris today?"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "Paris is rainy today at 12 C."
+          },
+          "tools": [
+            {
+              "id": "tool_use_weather_paris",
+              "name": "lookup_weather",
+              "arguments": {
+                "city": "Paris",
+                "date": "today"
+              },
+              "result": {
+                "city": "Paris",
+                "condition": "rainy",
+                "temperature_c": 12
+              }
+            }
+          ]
+        },
+        "actual": {
+          "invocationId": "train_weather_paris-actual",
+          "userContent": {
+            "role": "user",
+            "content": "What is the weather in Paris today?"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "I could not identify the exact Paris weather record."
+          },
+          "tools": [
+            {
+              "id": "tool_use_weather_wrong",
+              "name": "lookup_weather",
+              "arguments": {
+                "city": "France",
+                "date": "today"
+              },
+              "result": {
+                "city": "France",
+                "condition": "unknown",
+                "temperature_c": 0
+              }
+            }
+          ]
+        },
+        "trace": {
+          "mode": "deterministic_trace",
+          "route": "tool_augmented_response",
+          "tool_trajectory": [
+            {
+              "id": "tool_use_weather_wrong",
+              "name": "lookup_weather",
+              "arguments": {
+                "city": "France",
+                "date": "today"
+              },
+              "result": {
+                "city": "France",
+                "condition": "unknown",
+                "temperature_c": 0
+              }
+            }
+          ],
+          "signals": [
+            "tool_augmented_response",
+            "tool_trajectory_recorded",
+            "tool_argument_error",
+            "unknown"
+          ]
+        },
+        "latency_ms": 0
+      },
+      {
+        "eval_set_id": "promptiter-regression-train",
+        "case_id": "train_refund_policy",
+        "critical": false,
+        "score": 0.5,
+        "status": "failed",
+        "metrics": [
+          {
+            "metric_name": "tool_trajectory_avg_score",
+            "score": 1,
+            "threshold": 1,
+            "status": "passed"
+          },
+          {
+            "metric_name": "llm_rubric_critic",
+            "score": 0,
+            "threshold": 0.8,
+            "status": "failed",
+            "reason": "knowledge recall gap: refund policy window is missing or wrong"
+          }
+        ],
+        "failure_reasons": [
+          {
+            "category": "knowledge_recall_gap",
+            "metric_name": "llm_rubric_critic",
+            "evidence": "knowledge recall gap: refund policy window is missing or wrong"
+          }
+        ],
+        "expected": {
+          "invocationId": "train_refund_policy-1",
+          "userContent": {
+            "role": "user",
+            "content": "What refund window applies to premium members?"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "Premium members can request refunds within 30 days."
+          }
+        },
+        "actual": {
+          "invocationId": "train_refund_policy-actual",
+          "userContent": {
+            "role": "user",
+            "content": "What refund window applies to premium members?"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "Standard refunds are available within 14 days."
+          }
+        },
+        "trace": {
+          "mode": "deterministic_trace",
+          "route": "direct_response",
+          "signals": [
+            "direct_response",
+            "knowledge_recall_gap"
+          ]
+        },
+        "latency_ms": 0
+      }
+    ],
+    "latency_ms": 0,
+    "cost": {
+      "prompt_tokens": 66,
+      "completion_tokens": 24,
+      "total_calls": 3,
+      "estimated_usd": 0.000017999999999999997
+    }
+  },
+  "baseline_validation": {
+    "name": "baseline_validation",
+    "eval_set_id": "promptiter-regression-validation",
+    "overall_score": 0.8333333333333334,
+    "passed": 2,
+    "failed": 1,
+    "cases": [
+      {
+        "eval_set_id": "promptiter-regression-validation",
+        "case_id": "val_json_refund",
+        "critical": false,
+        "score": 0.5,
+        "status": "failed",
+        "metrics": [
+          {
+            "metric_name": "tool_trajectory_avg_score",
+            "score": 1,
+            "threshold": 1,
+            "status": "passed"
+          },
+          {
+            "metric_name": "llm_rubric_critic",
+            "score": 0,
+            "threshold": 0.8,
+            "status": "failed",
+            "reason": "format error: expected structured response \"{\\\"refund_id\\\":\\\"r-204\\\",\\\"status\\\":\\\"approved\\\",\\\"amount_usd\\\":35}\", actual \"Refund request r-204 is approved for 35 USD.\""
+          }
+        ],
+        "failure_reasons": [
+          {
+            "category": "format_error",
+            "metric_name": "llm_rubric_critic",
+            "evidence": "format error: expected structured response \"{\\\"refund_id\\\":\\\"r-204\\\",\\\"status\\\":\\\"approved\\\",\\\"amount_usd\\\":35}\", actual \"Refund request r-204 is approved for 35 USD.\""
+          }
+        ],
+        "expected": {
+          "invocationId": "val_json_refund-1",
+          "userContent": {
+            "role": "user",
+            "content": "Return refund request r-204 as JSON with status approved and amount 35."
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "{\"refund_id\":\"r-204\",\"status\":\"approved\",\"amount_usd\":35}"
+          }
+        },
+        "actual": {
+          "invocationId": "val_json_refund-actual",
+          "userContent": {
+            "role": "user",
+            "content": "Return refund request r-204 as JSON with status approved and amount 35."
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "Refund request r-204 is approved for 35 USD."
+          }
+        },
+        "trace": {
+          "mode": "deterministic_trace",
+          "route": "direct_response",
+          "signals": [
+            "direct_response",
+            "format_error"
+          ]
+        },
+        "latency_ms": 0
+      },
+      {
+        "eval_set_id": "promptiter-regression-validation",
+        "case_id": "val_weather_berlin",
+        "critical": false,
+        "score": 1,
+        "status": "passed",
+        "metrics": [
+          {
+            "metric_name": "tool_trajectory_avg_score",
+            "score": 1,
+            "threshold": 1,
+            "status": "passed"
+          },
+          {
+            "metric_name": "llm_rubric_critic",
+            "score": 1,
+            "threshold": 0.8,
+            "status": "passed"
+          }
+        ],
+        "expected": {
+          "invocationId": "val_weather_berlin-1",
+          "userContent": {
+            "role": "user",
+            "content": "What is the weather in Berlin today?"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "Berlin is cloudy today at 8 C."
+          },
+          "tools": [
+            {
+              "id": "tool_use_weather_berlin",
+              "name": "lookup_weather",
+              "arguments": {
+                "city": "Berlin",
+                "date": "today"
+              },
+              "result": {
+                "city": "Berlin",
+                "condition": "cloudy",
+                "temperature_c": 8
+              }
+            }
+          ]
+        },
+        "actual": {
+          "invocationId": "val_weather_berlin-actual",
+          "userContent": {
+            "role": "user",
+            "content": "What is the weather in Berlin today?"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "Berlin is cloudy today at 8 C."
+          },
+          "tools": [
+            {
+              "id": "tool_use_weather_berlin",
+              "name": "lookup_weather",
+              "arguments": {
+                "city": "Berlin",
+                "date": "today"
+              },
+              "result": {
+                "city": "Berlin",
+                "condition": "cloudy",
+                "temperature_c": 8
+              }
+            }
+          ]
+        },
+        "trace": {
+          "mode": "deterministic_trace",
+          "route": "tool_augmented_response",
+          "tool_trajectory": [
+            {
+              "id": "tool_use_weather_berlin",
+              "name": "lookup_weather",
+              "arguments": {
+                "city": "Berlin",
+                "date": "today"
+              },
+              "result": {
+                "city": "Berlin",
+                "condition": "cloudy",
+                "temperature_c": 8
+              }
+            }
+          ],
+          "signals": [
+            "tool_augmented_response",
+            "tool_trajectory_recorded",
+            "all_metrics_passed"
+          ]
+        },
+        "latency_ms": 0
+      },
+      {
+        "eval_set_id": "promptiter-regression-validation",
+        "case_id": "val_critical_direct_status",
+        "critical": true,
+        "score": 1,
+        "status": "passed",
+        "metrics": [
+          {
+            "metric_name": "tool_trajectory_avg_score",
+            "score": 1,
+            "threshold": 1,
+            "status": "passed"
+          },
+          {
+            "metric_name": "llm_rubric_critic",
+            "score": 1,
+            "threshold": 0.8,
+            "status": "passed"
+          }
+        ],
+        "expected": {
+          "invocationId": "val_critical_direct_status-1",
+          "userContent": {
+            "role": "user",
+            "content": "The record is already available: TR900 is boarding at gate K12. Answer directly, without JSON."
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "TR900 is boarding at gate K12."
+          }
+        },
+        "actual": {
+          "invocationId": "val_critical_direct_status-actual",
+          "userContent": {
+            "role": "user",
+            "content": "The record is already available: TR900 is boarding at gate K12. Answer directly, without JSON."
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "TR900 is boarding at gate K12."
+          }
+        },
+        "trace": {
+          "mode": "deterministic_trace",
+          "route": "direct_response",
+          "signals": [
+            "direct_response",
+            "all_metrics_passed"
+          ]
+        },
+        "latency_ms": 0
+      }
+    ],
+    "latency_ms": 0,
+    "cost": {
+      "prompt_tokens": 66,
+      "completion_tokens": 22,
+      "total_calls": 3,
+      "estimated_usd": 0.0000176
+    }
+  },
+  "candidate": {
+    "id": "round-1-json-tool-overfit",
+    "description": "PromptIter candidate fixes JSON formatting and weather tool arguments, but overfits direct answers into JSON.",
+    "prompt": "You are a travel support assistant.\n\nAnswer concisely. Use tools when weather data is requested. For direct records, answer without calling tools.\n\nPromptIter candidate patch:\n- STRICT_JSON_OUTPUT: when the expected task asks for a JSON object, return exactly that JSON object.\n- EXTRACT_TOOL_ARGUMENTS: extract city names precisely before calling lookup_weather.\n- OVERFIT_JSON_ALL_DIRECT_ANSWERS: for direct status answers, prefer JSON envelopes for consistency.\n",
+    "train_evaluation": {
+      "name": "candidate_train",
+      "eval_set_id": "promptiter-regression-train",
+      "overall_score": 0.8333333333333334,
+      "passed": 2,
+      "failed": 1,
+      "cases": [
+        {
+          "eval_set_id": "promptiter-regression-train",
+          "case_id": "train_json_invoice",
+          "critical": false,
+          "score": 1,
+          "status": "passed",
+          "metrics": [
+            {
+              "metric_name": "tool_trajectory_avg_score",
+              "score": 1,
+              "threshold": 1,
+              "status": "passed"
+            },
+            {
+              "metric_name": "llm_rubric_critic",
+              "score": 1,
+              "threshold": 0.8,
+              "status": "passed"
+            }
+          ],
+          "expected": {
+            "invocationId": "train_json_invoice-1",
+            "userContent": {
+              "role": "user",
+              "content": "Return the approval for invoice inv-100 as JSON with status approved and amount 120."
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "{\"invoice_id\":\"inv-100\",\"status\":\"approved\",\"amount_usd\":120}"
+            }
+          },
+          "actual": {
+            "invocationId": "train_json_invoice-actual",
+            "userContent": {
+              "role": "user",
+              "content": "Return the approval for invoice inv-100 as JSON with status approved and amount 120."
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "{\"invoice_id\":\"inv-100\",\"status\":\"approved\",\"amount_usd\":120}"
+            }
+          },
+          "trace": {
+            "mode": "deterministic_trace",
+            "route": "direct_response",
+            "signals": [
+              "direct_response",
+              "all_metrics_passed"
+            ]
+          },
+          "latency_ms": 0
+        },
+        {
+          "eval_set_id": "promptiter-regression-train",
+          "case_id": "train_weather_paris",
+          "critical": false,
+          "score": 1,
+          "status": "passed",
+          "metrics": [
+            {
+              "metric_name": "tool_trajectory_avg_score",
+              "score": 1,
+              "threshold": 1,
+              "status": "passed"
+            },
+            {
+              "metric_name": "llm_rubric_critic",
+              "score": 1,
+              "threshold": 0.8,
+              "status": "passed"
+            }
+          ],
+          "expected": {
+            "invocationId": "train_weather_paris-1",
+            "userContent": {
+              "role": "user",
+              "content": "What is the weather in Paris today?"
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "Paris is rainy today at 12 C."
+            },
+            "tools": [
+              {
+                "id": "tool_use_weather_paris",
+                "name": "lookup_weather",
+                "arguments": {
+                  "city": "Paris",
+                  "date": "today"
+                },
+                "result": {
+                  "city": "Paris",
+                  "condition": "rainy",
+                  "temperature_c": 12
+                }
+              }
+            ]
+          },
+          "actual": {
+            "invocationId": "train_weather_paris-actual",
+            "userContent": {
+              "role": "user",
+              "content": "What is the weather in Paris today?"
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "Paris is rainy today at 12 C."
+            },
+            "tools": [
+              {
+                "id": "tool_use_weather_paris",
+                "name": "lookup_weather",
+                "arguments": {
+                  "city": "Paris",
+                  "date": "today"
+                },
+                "result": {
+                  "city": "Paris",
+                  "condition": "rainy",
+                  "temperature_c": 12
+                }
+              }
+            ]
+          },
+          "trace": {
+            "mode": "deterministic_trace",
+            "route": "tool_augmented_response",
+            "tool_trajectory": [
+              {
+                "id": "tool_use_weather_paris",
+                "name": "lookup_weather",
+                "arguments": {
+                  "city": "Paris",
+                  "date": "today"
+                },
+                "result": {
+                  "city": "Paris",
+                  "condition": "rainy",
+                  "temperature_c": 12
+                }
+              }
+            ],
+            "signals": [
+              "tool_augmented_response",
+              "tool_trajectory_recorded",
+              "all_metrics_passed"
+            ]
+          },
+          "latency_ms": 0
+        },
+        {
+          "eval_set_id": "promptiter-regression-train",
+          "case_id": "train_refund_policy",
+          "critical": false,
+          "score": 0.5,
+          "status": "failed",
+          "metrics": [
+            {
+              "metric_name": "tool_trajectory_avg_score",
+              "score": 1,
+              "threshold": 1,
+              "status": "passed"
+            },
+            {
+              "metric_name": "llm_rubric_critic",
+              "score": 0,
+              "threshold": 0.8,
+              "status": "failed",
+              "reason": "knowledge recall gap: refund policy window is missing or wrong"
+            }
+          ],
+          "failure_reasons": [
+            {
+              "category": "knowledge_recall_gap",
+              "metric_name": "llm_rubric_critic",
+              "evidence": "knowledge recall gap: refund policy window is missing or wrong"
+            }
+          ],
+          "expected": {
+            "invocationId": "train_refund_policy-1",
+            "userContent": {
+              "role": "user",
+              "content": "What refund window applies to premium members?"
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "Premium members can request refunds within 30 days."
+            }
+          },
+          "actual": {
+            "invocationId": "train_refund_policy-actual",
+            "userContent": {
+              "role": "user",
+              "content": "What refund window applies to premium members?"
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "Standard refunds are available within 14 days."
+            }
+          },
+          "trace": {
+            "mode": "deterministic_trace",
+            "route": "direct_response",
+            "signals": [
+              "direct_response",
+              "knowledge_recall_gap"
+            ]
+          },
+          "latency_ms": 0
+        }
+      ],
+      "latency_ms": 0,
+      "cost": {
+        "prompt_tokens": 183,
+        "completion_tokens": 16,
+        "total_calls": 3,
+        "estimated_usd": 0.0000398
+      }
+    },
+    "validation_evaluation": {
+      "name": "candidate_validation",
+      "eval_set_id": "promptiter-regression-validation",
+      "overall_score": 0.8333333333333334,
+      "passed": 2,
+      "failed": 1,
+      "cases": [
+        {
+          "eval_set_id": "promptiter-regression-validation",
+          "case_id": "val_json_refund",
+          "critical": false,
+          "score": 1,
+          "status": "passed",
+          "metrics": [
+            {
+              "metric_name": "tool_trajectory_avg_score",
+              "score": 1,
+              "threshold": 1,
+              "status": "passed"
+            },
+            {
+              "metric_name": "llm_rubric_critic",
+              "score": 1,
+              "threshold": 0.8,
+              "status": "passed"
+            }
+          ],
+          "expected": {
+            "invocationId": "val_json_refund-1",
+            "userContent": {
+              "role": "user",
+              "content": "Return refund request r-204 as JSON with status approved and amount 35."
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "{\"refund_id\":\"r-204\",\"status\":\"approved\",\"amount_usd\":35}"
+            }
+          },
+          "actual": {
+            "invocationId": "val_json_refund-actual",
+            "userContent": {
+              "role": "user",
+              "content": "Return refund request r-204 as JSON with status approved and amount 35."
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "{\"refund_id\":\"r-204\",\"status\":\"approved\",\"amount_usd\":35}"
+            }
+          },
+          "trace": {
+            "mode": "deterministic_trace",
+            "route": "direct_response",
+            "signals": [
+              "direct_response",
+              "all_metrics_passed"
+            ]
+          },
+          "latency_ms": 0
+        },
+        {
+          "eval_set_id": "promptiter-regression-validation",
+          "case_id": "val_weather_berlin",
+          "critical": false,
+          "score": 1,
+          "status": "passed",
+          "metrics": [
+            {
+              "metric_name": "tool_trajectory_avg_score",
+              "score": 1,
+              "threshold": 1,
+              "status": "passed"
+            },
+            {
+              "metric_name": "llm_rubric_critic",
+              "score": 1,
+              "threshold": 0.8,
+              "status": "passed"
+            }
+          ],
+          "expected": {
+            "invocationId": "val_weather_berlin-1",
+            "userContent": {
+              "role": "user",
+              "content": "What is the weather in Berlin today?"
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "Berlin is cloudy today at 8 C."
+            },
+            "tools": [
+              {
+                "id": "tool_use_weather_berlin",
+                "name": "lookup_weather",
+                "arguments": {
+                  "city": "Berlin",
+                  "date": "today"
+                },
+                "result": {
+                  "city": "Berlin",
+                  "condition": "cloudy",
+                  "temperature_c": 8
+                }
+              }
+            ]
+          },
+          "actual": {
+            "invocationId": "val_weather_berlin-actual",
+            "userContent": {
+              "role": "user",
+              "content": "What is the weather in Berlin today?"
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "Berlin is cloudy today at 8 C."
+            },
+            "tools": [
+              {
+                "id": "tool_use_weather_berlin",
+                "name": "lookup_weather",
+                "arguments": {
+                  "city": "Berlin",
+                  "date": "today"
+                },
+                "result": {
+                  "city": "Berlin",
+                  "condition": "cloudy",
+                  "temperature_c": 8
+                }
+              }
+            ]
+          },
+          "trace": {
+            "mode": "deterministic_trace",
+            "route": "tool_augmented_response",
+            "tool_trajectory": [
+              {
+                "id": "tool_use_weather_berlin",
+                "name": "lookup_weather",
+                "arguments": {
+                  "city": "Berlin",
+                  "date": "today"
+                },
+                "result": {
+                  "city": "Berlin",
+                  "condition": "cloudy",
+                  "temperature_c": 8
+                }
+              }
+            ],
+            "signals": [
+              "tool_augmented_response",
+              "tool_trajectory_recorded",
+              "all_metrics_passed"
+            ]
+          },
+          "latency_ms": 0
+        },
+        {
+          "eval_set_id": "promptiter-regression-validation",
+          "case_id": "val_critical_direct_status",
+          "critical": true,
+          "score": 0.5,
+          "status": "failed",
+          "metrics": [
+            {
+              "metric_name": "tool_trajectory_avg_score",
+              "score": 1,
+              "threshold": 1,
+              "status": "passed"
+            },
+            {
+              "metric_name": "llm_rubric_critic",
+              "score": 0,
+              "threshold": 0.8,
+              "status": "failed",
+              "reason": "final response mismatch: expected \"TR900 is boarding at gate K12.\", actual \"{\\\"flight\\\":\\\"TR900\\\",\\\"status\\\":\\\"boarding\\\",\\\"gate\\\":\\\"K12\\\"}\""
+            }
+          ],
+          "failure_reasons": [
+            {
+              "category": "unknown",
+              "metric_name": "llm_rubric_critic",
+              "evidence": "final response mismatch: expected \"TR900 is boarding at gate K12.\", actual \"{\\\"flight\\\":\\\"TR900\\\",\\\"status\\\":\\\"boarding\\\",\\\"gate\\\":\\\"K12\\\"}\""
+            }
+          ],
+          "expected": {
+            "invocationId": "val_critical_direct_status-1",
+            "userContent": {
+              "role": "user",
+              "content": "The record is already available: TR900 is boarding at gate K12. Answer directly, without JSON."
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "TR900 is boarding at gate K12."
+            }
+          },
+          "actual": {
+            "invocationId": "val_critical_direct_status-actual",
+            "userContent": {
+              "role": "user",
+              "content": "The record is already available: TR900 is boarding at gate K12. Answer directly, without JSON."
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "{\"flight\":\"TR900\",\"status\":\"boarding\",\"gate\":\"K12\"}"
+            }
+          },
+          "trace": {
+            "mode": "deterministic_trace",
+            "route": "direct_response",
+            "signals": [
+              "direct_response",
+              "unknown"
+            ]
+          },
+          "latency_ms": 0
+        }
+      ],
+      "latency_ms": 0,
+      "cost": {
+        "prompt_tokens": 183,
+        "completion_tokens": 10,
+        "total_calls": 3,
+        "estimated_usd": 0.0000386
+      }
+    }
+  },
+  "delta": {
+    "baseline_score": 0.8333333333333334,
+    "candidate_score": 0.8333333333333334,
+    "score_delta": 0,
+    "newly_passed": 1,
+    "newly_failed": 1,
+    "improved": 1,
+    "regressed": 1,
+    "critical_regressed": 1,
+    "cases": [
+      {
+        "case_id": "val_json_refund",
+        "critical": false,
+        "baseline_score": 0.5,
+        "candidate_score": 1,
+        "score_delta": 0.5,
+        "baseline_status": "failed",
+        "candidate_status": "passed",
+        "transition": "fixed"
+      },
+      {
+        "case_id": "val_weather_berlin",
+        "critical": false,
+        "baseline_score": 1,
+        "candidate_score": 1,
+        "score_delta": 0,
+        "baseline_status": "passed",
+        "candidate_status": "passed",
+        "transition": "stayed_pass"
+      },
+      {
+        "case_id": "val_critical_direct_status",
+        "critical": true,
+        "baseline_score": 1,
+        "candidate_score": 0.5,
+        "score_delta": -0.5,
+        "baseline_status": "passed",
+        "candidate_status": "failed",
+        "transition": "regressed",
+        "failure_reasons": [
+          {
+            "category": "unknown",
+            "metric_name": "llm_rubric_critic",
+            "evidence": "final response mismatch: expected \"TR900 is boarding at gate K12.\", actual \"{\\\"flight\\\":\\\"TR900\\\",\\\"status\\\":\\\"boarding\\\",\\\"gate\\\":\\\"K12\\\"}\""
+          }
+        ]
+      }
+    ]
+  },
+  "gate": {
+    "accepted": false,
+    "reasons": [
+      "validation score gain 0.0000 is below threshold 0.0500",
+      "new hard fails 1 exceed limit 0",
+      "1 critical validation case(s) regressed"
+    ]
+  },
+  "failure_attribution": {
+    "train": {
+      "knowledge_recall_gap": 1
+    },
+    "validation": {
+      "unknown": 1
+    }
+  },
+  "cost": {
+    "prompt_tokens": 498,
+    "completion_tokens": 72,
+    "total_calls": 12,
+    "estimated_usd": 0.000114
+  },
+  "latency": {
+    "started_at": "2026-07-17T16:05:35.0244649+08:00",
+    "finished_at": "2026-07-17T16:05:35.0244649+08:00",
+    "duration_ms": 0
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "candidate_id": "round-1-json-tool-overfit",
+      "losses": [
+        {
+          "EvalSetID": "promptiter-regression-train",
+          "EvalCaseID": "train_refund_policy",
+          "TerminalLosses": [
+            {
+              "EvalSetID": "promptiter-regression-train",
+              "EvalCaseID": "train_refund_policy",
+              "MetricName": "llm_rubric_critic",
+              "Severity": "P3",
+              "StepID": "final",
+              "Loss": "knowledge_recall_gap: knowledge recall gap: refund policy window is missing or wrong"
+            }
+          ]
+        }
+      ],
+      "patches": {
+        "Patches": [
+          {
+            "SurfaceID": "agent:travel-support#instruction",
+            "Value": {
+              "Text": "You are a travel support assistant.\n\nAnswer concisely. Use tools when weather data is requested. For direct records, answer without calling tools.\n\nPromptIter candidate patch:\n- STRICT_JSON_OUTPUT: when the expected task asks for a JSON object, return exactly that JSON object.\n- EXTRACT_TOOL_ARGUMENTS: extract city names precisely before calling lookup_weather.\n- OVERFIT_JSON_ALL_DIRECT_ANSWERS: for direct status answers, prefer JSON envelopes for consistency.\n",
+              "PromptSyntax": null,
+              "FewShot": null,
+              "Model": null,
+              "Tools": null,
+              "Skills": null
+            },
+            "Reason": "PromptIter candidate fixes JSON formatting and weather tool arguments, but overfits direct answers into JSON."
+          }
+        ]
+      },
+      "output_profile": {
+        "StructureID": "promptiter-regression-loop-app-deterministic-structure",
+        "Overrides": [
+          {
+            "SurfaceID": "agent:travel-support#instruction",
+            "Value": {
+              "Text": "You are a travel support assistant.\n\nAnswer concisely. Use tools when weather data is requested. For direct records, answer without calling tools.\n\nPromptIter candidate patch:\n- STRICT_JSON_OUTPUT: when the expected task asks for a JSON object, return exactly that JSON object.\n- EXTRACT_TOOL_ARGUMENTS: extract city names precisely before calling lookup_weather.\n- OVERFIT_JSON_ALL_DIRECT_ANSWERS: for direct status answers, prefer JSON envelopes for consistency.\n",
+              "PromptSyntax": null,
+              "FewShot": null,
+              "Model": null,
+              "Tools": null,
+              "Skills": null
+            }
+          }
+        ]
+      },
+      "delta": {
+        "baseline_score": 0.8333333333333334,
+        "candidate_score": 0.8333333333333334,
+        "score_delta": 0,
+        "newly_passed": 1,
+        "newly_failed": 1,
+        "improved": 1,
+        "regressed": 1,
+        "critical_regressed": 1,
+        "cases": [
+          {
+            "case_id": "val_json_refund",
+            "critical": false,
+            "baseline_score": 0.5,
+            "candidate_score": 1,
+            "score_delta": 0.5,
+            "baseline_status": "failed",
+            "candidate_status": "passed",
+            "transition": "fixed"
+          },
+          {
+            "case_id": "val_weather_berlin",
+            "critical": false,
+            "baseline_score": 1,
+            "candidate_score": 1,
+            "score_delta": 0,
+            "baseline_status": "passed",
+            "candidate_status": "passed",
+            "transition": "stayed_pass"
+          },
+          {
+            "case_id": "val_critical_direct_status",
+            "critical": true,
+            "baseline_score": 1,
+            "candidate_score": 0.5,
+            "score_delta": -0.5,
+            "baseline_status": "passed",
+            "candidate_status": "failed",
+            "transition": "regressed",
+            "failure_reasons": [
+              {
+                "category": "unknown",
+                "metric_name": "llm_rubric_critic",
+                "evidence": "final response mismatch: expected \"TR900 is boarding at gate K12.\", actual \"{\\\"flight\\\":\\\"TR900\\\",\\\"status\\\":\\\"boarding\\\",\\\"gate\\\":\\\"K12\\\"}\""
+              }
+            ]
+          }
+        ]
+      },
+      "gate": {
+        "accepted": false,
+        "reasons": [
+          "validation score gain 0.0000 is below threshold 0.0500",
+          "new hard fails 1 exceed limit 0",
+          "1 critical validation case(s) regressed"
+        ]
+      },
+      "cost": {
+        "prompt_tokens": 366,
+        "completion_tokens": 26,
+        "total_calls": 6,
+        "estimated_usd": 0.00007840000000000001
+      },
+      "latency_ms": 0
+    }
+  ]
+}
