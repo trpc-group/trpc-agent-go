@@ -168,7 +168,11 @@ func (r *workspaceRuntime) CreateWorkspace(
 	execID string,
 	pol codeexecutor.WorkspacePolicy,
 ) (codeexecutor.Workspace, error) {
-	_ = pol
+	// Fail closed on policy fields this backend does not enforce. Silent
+	// ignore would let callers believe Persist/MaxDiskBytes are honored.
+	if err := validateWorkspacePolicy(pol); err != nil {
+		return codeexecutor.Workspace{}, err
+	}
 
 	if _, err := r.sandbox(); err != nil {
 		return codeexecutor.Workspace{}, err
@@ -248,6 +252,48 @@ func (r *workspaceRuntime) CreateWorkspace(
 		return codeexecutor.Workspace{}, err
 	}
 	return codeexecutor.Workspace{ID: execID, Path: wsPath}, nil
+}
+
+// validateWorkspacePolicy rejects WorkspacePolicy fields this backend
+// does not implement. Zero-value policy is accepted (callers that do
+// not care about these knobs keep working). Non-zero fields fail closed
+// so a missing enforcement is never silent.
+//
+// Isolated is ignored when true: OpenSandbox is always remote-isolated,
+// so requesting isolation is a no-op that matches the runtime, not a
+// false promise.
+//
+// Persist / MaxDiskBytes are not enforced: lifecycle persistence is
+// controlled by WithWorkspacePersistence, and disk caps are not wired
+// to the OpenSandbox API in v1.
+func validateWorkspacePolicy(pol codeexecutor.WorkspacePolicy) error {
+	if pol.Persist {
+		return errors.New(
+			"opensandbox: WorkspacePolicy.Persist is not supported; " +
+				"use WithWorkspacePersistence(WorkspacePersistencePerSession) " +
+				"and call Cleanup when the session ends",
+		)
+	}
+	if pol.MaxDiskBytes != 0 {
+		return fmt.Errorf(
+			"opensandbox: WorkspacePolicy.MaxDiskBytes (%d) is not supported in v1",
+			pol.MaxDiskBytes,
+		)
+	}
+	return nil
+}
+
+// validateRunProgramLimits rejects per-invocation ResourceLimits.
+// Sandbox-level caps belong on WithResourceLimits at New/NewWithContext.
+func validateRunProgramLimits(lim codeexecutor.ResourceLimits) error {
+	if lim.CPUPercent != 0 || lim.MemoryMB != 0 || lim.MaxPIDs != 0 {
+		return fmt.Errorf(
+			"opensandbox: RunProgramSpec.Limits is not supported in v1 "+
+				"(cpu=%d%% memory=%dMB pids=%d); set WithResourceLimits when creating the sandbox",
+			lim.CPUPercent, lim.MemoryMB, lim.MaxPIDs,
+		)
+	}
+	return nil
 }
 
 // validateWorkspace enforces that ws.Path is a directory created under

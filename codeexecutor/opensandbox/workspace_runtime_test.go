@@ -3324,3 +3324,66 @@ func TestWorkspace_RunProgram_EnsuresLayoutDirs(t *testing.T) {
 	}
 	assert.True(t, found, "RunProgram must ensureLayoutDirs before execution")
 }
+
+// --- Fail-closed unsupported policy / limits (v1 honesty) ---
+
+func TestCreateWorkspace_RejectsUnsupportedPolicy(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	_, err := exec.CreateWorkspace(context.Background(), "exec-pol", codeexecutor.WorkspacePolicy{
+		Persist: true,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Persist")
+
+	_, err = exec.CreateWorkspace(context.Background(), "exec-pol2", codeexecutor.WorkspacePolicy{
+		MaxDiskBytes: 1024,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "MaxDiskBytes")
+
+	// Zero policy and Isolated-only still OK (remote is always isolated).
+	ws, err := exec.CreateWorkspace(context.Background(), "exec-pol3", codeexecutor.WorkspacePolicy{
+		Isolated: true,
+	})
+	require.NoError(t, err)
+	assert.NotEmpty(t, ws.Path)
+}
+
+func TestRunProgram_RejectsUnsupportedLimits(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	zero := 0
+	m.setExitCode(zero)
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	ws, err := exec.CreateWorkspace(context.Background(), "exec-lim", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+
+	_, err = exec.RunProgram(context.Background(), ws, codeexecutor.RunProgramSpec{
+		Cmd:    "echo",
+		Args:   []string{"ok"},
+		Limits: codeexecutor.ResourceLimits{MemoryMB: 256},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Limits")
+	assert.Contains(t, err.Error(), "WithResourceLimits")
+
+	// Zero limits still run.
+	res, err := exec.RunProgram(context.Background(), ws, codeexecutor.RunProgramSpec{
+		Cmd:  "echo",
+		Args: []string{"ok"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 0, res.ExitCode)
+}
+
+func TestValidateWorkspacePolicy_ZeroOK(t *testing.T) {
+	require.NoError(t, validateWorkspacePolicy(codeexecutor.WorkspacePolicy{}))
+	require.NoError(t, validateWorkspacePolicy(codeexecutor.WorkspacePolicy{Isolated: true}))
+	require.NoError(t, validateRunProgramLimits(codeexecutor.ResourceLimits{}))
+}

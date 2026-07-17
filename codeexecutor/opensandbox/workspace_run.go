@@ -54,6 +54,12 @@ func (r *workspaceRuntime) RunProgram(
 	if err := r.validateWorkspace(ws); err != nil {
 		return codeexecutor.RunResult{}, err
 	}
+	// Fail closed on per-run ResourceLimits: OpenSandbox only accepts
+	// resource caps at sandbox create time (WithResourceLimits). Silently
+	// ignoring non-zero Limits would look like a cgroup policy was applied.
+	if err := validateRunProgramLimits(spec.Limits); err != nil {
+		return codeexecutor.RunResult{}, err
+	}
 	sb, err := r.sandbox()
 	if err != nil {
 		return codeexecutor.RunResult{}, err
