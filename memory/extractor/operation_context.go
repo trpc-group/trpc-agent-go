@@ -15,173 +15,19 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
-const maxGroundedExampleContextBytes = 240
-
 func qualifyOperationsWithGroundedTopics(
 	source string,
 	operations []*Operation,
 ) {
-	preserveGroundedExampleRelations(source, operations)
 	for _, operation := range operations {
 		qualifyOperationWithGroundedTopic(source, operation)
 	}
-}
-
-func preserveGroundedExampleRelations(source string, operations []*Operation) {
-	for _, contextOperation := range operations {
-		if !qualifiableOperation(contextOperation) ||
-			len(contextOperation.Memory) > maxGroundedExampleContextBytes {
-			continue
-		}
-		var entities []string
-		for _, detail := range operations {
-			if detail == contextOperation || !qualifiableOperation(detail) {
-				continue
-			}
-			entity := groundedExampleEntity(
-				source, contextOperation, detail,
-			)
-			if entity == "" || hasTopic(entities, entity) {
-				continue
-			}
-			entities = append(entities, entity)
-		}
-		if len(entities) == 0 {
-			continue
-		}
-		contextOperation.Memory = appendGroundedExamples(
-			contextOperation.Memory, entities,
-		)
-		contextOperation.Topics = append(contextOperation.Topics, entities...)
-	}
-}
-
-func appendGroundedExamples(context string, entities []string) string {
-	context = strings.TrimRight(
-		strings.TrimSpace(context), ".!?;。！？；",
-	)
-	if usesCJKPunctuation(context) {
-		return context + "（包括" + strings.Join(entities, "、") + "）。"
-	}
-	return context + " (including " + strings.Join(entities, ", ") + ")."
-}
-
-func usesCJKPunctuation(value string) bool {
-	for _, r := range value {
-		if unicode.In(
-			r, unicode.Han, unicode.Hiragana, unicode.Katakana, unicode.Hangul,
-		) {
-			return true
-		}
-	}
-	return false
 }
 
 func qualifiableOperation(operation *Operation) bool {
 	return operation != nil &&
 		(operation.Type == OperationAdd || operation.Type == OperationUpdate) &&
 		strings.TrimSpace(operation.Memory) != ""
-}
-
-func groundedExampleEntity(
-	source string,
-	contextOperation *Operation,
-	detail *Operation,
-) string {
-	for _, category := range contextOperation.Topics {
-		category = strings.TrimSpace(category)
-		if category == "" || !containsTopic(contextOperation.Memory, category) ||
-			!hasTopic(detail.Topics, category) {
-			continue
-		}
-		for _, entity := range detail.Topics {
-			entity = strings.TrimSpace(entity)
-			if entity == "" || entity == category ||
-				!containsTopic(detail.Memory, entity) ||
-				containsTopic(contextOperation.Memory, entity) ||
-				hasTopic(contextOperation.Topics, entity) {
-				continue
-			}
-			if sourceLinksExample(source, category, entity) {
-				return entity
-			}
-		}
-	}
-	return ""
-}
-
-func hasTopic(topics []string, target string) bool {
-	for _, topic := range topics {
-		if strings.EqualFold(strings.TrimSpace(topic), target) {
-			return true
-		}
-	}
-	return false
-}
-
-func sourceLinksExample(source, category, entity string) bool {
-	source = strings.ToLower(source)
-	category = strings.ToLower(strings.TrimSpace(category))
-	entity = strings.ToLower(strings.TrimSpace(entity))
-	if source == "" || category == "" || entity == "" {
-		return false
-	}
-	for _, categoryIndex := range topicIndexes(source, category) {
-		for _, entityIndex := range topicIndexes(source, entity) {
-			if sourceSpanLinksExample(
-				source, category, categoryIndex, entity, entityIndex,
-			) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func topicIndexes(source, topic string) []int {
-	var indexes []int
-	for offset := 0; offset < len(source); {
-		index := strings.Index(source[offset:], topic)
-		if index < 0 {
-			break
-		}
-		index += offset
-		indexes = append(indexes, index)
-		offset = index + len(topic)
-	}
-	return indexes
-}
-
-func sourceSpanLinksExample(
-	source, category string,
-	categoryIndex int,
-	entity string,
-	entityIndex int,
-) bool {
-	if categoryIndex == entityIndex {
-		return false
-	}
-	left, right := categoryIndex+len(category), entityIndex
-	if entityIndex < categoryIndex {
-		left, right = entityIndex+len(entity), categoryIndex
-	}
-	if left > right || right-left > maxGroundedExampleContextBytes {
-		return false
-	}
-	between := source[left:right]
-	if strings.ContainsAny(between, ".!?;\n。！？；") {
-		return false
-	}
-	for _, cue := range []string{
-		" like ", " such as ", " including ", " includes ",
-		" include ", " for example ", " one of ",
-		"比如", "例如", "包括", "像",
-	} {
-		if strings.Contains(" "+between+" ", cue) {
-			return true
-		}
-	}
-	return false
 }
 
 func qualifyOperationWithGroundedTopic(source string, operation *Operation) {
@@ -209,6 +55,9 @@ func qualifyOperationWithGroundedTopic(source string, operation *Operation) {
 			continue
 		}
 		priority := groundedTopicPriority(source, topic)
+		if priority <= 0 {
+			continue
+		}
 		if selected == "" || priority > selectedPriority {
 			selected = topic
 			selectedPriority = priority

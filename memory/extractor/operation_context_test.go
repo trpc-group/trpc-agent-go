@@ -9,7 +9,6 @@
 package extractor
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -26,7 +25,7 @@ func TestQualifyOperationWithGroundedTopic(t *testing.T) {
 		want   string
 	}{
 		{
-			name: "adds grounded category missing from memory",
+			name: "keeps generic category in structured topics",
 			source: "I've been relying on food delivery services lately - " +
 				"I had Domino's Pizza three times last week!",
 			op: &Operation{
@@ -34,7 +33,7 @@ func TestQualifyOperationWithGroundedTopic(t *testing.T) {
 				Memory: "Had Domino's Pizza three times last week.",
 				Topics: []string{"Domino's Pizza", "food delivery", "pizza"},
 			},
-			want: "food delivery: Had Domino's Pizza three times last week.",
+			want: "Had Domino's Pizza three times last week.",
 		},
 		{
 			name:   "keeps ungrounded category out",
@@ -67,14 +66,14 @@ func TestQualifyOperationWithGroundedTopic(t *testing.T) {
 			want: "food delivery: Had Domino's Pizza.",
 		},
 		{
-			name:   "preserves source language",
+			name:   "does not guess CJK named entities",
 			source: "最近经常点外卖，上周用了美团三次。",
 			op: &Operation{
 				Type:   OperationAdd,
 				Memory: "上周用了美团三次。",
 				Topics: []string{"美团", "外卖"},
 			},
-			want: "外卖: 上周用了美团三次。",
+			want: "上周用了美团三次。",
 		},
 		{
 			name: "prefers a grounded named entity over a generic category",
@@ -126,43 +125,31 @@ func TestConversationSourceText(t *testing.T) {
 	assert.Equal(t, "user text\nassistant part\n", conversationSourceText(messages))
 }
 
-func TestQualifyOperationsWithGroundedExamples(t *testing.T) {
+func TestQualifyOperationsDoNotCopyContextAcrossMemories(t *testing.T) {
 	t.Parallel()
 
 	operations := []*Operation{
 		{
 			Type:   OperationAdd,
-			Memory: "Has been relying on food delivery services lately due to being busy.",
-			Topics: []string{"food delivery", "busy schedule"},
+			Memory: "Melanie plays the clarinet and uses music to relax.",
+			Topics: []string{"Melanie", "clarinet", "music"},
 		},
 		{
 			Type:   OperationAdd,
-			Memory: "Discovered a food delivery service called Fresh Fusion that offers pre-made meals.",
-			Topics: []string{"Fresh Fusion", "food delivery", "pre-made meals"},
+			Memory: "Melanie listens to Bach.",
+			Topics: []string{"Melanie", "music", "Bach"},
 		},
 	}
-	source := "I've been relying on food delivery services, like this new one " +
-		"I found called Fresh Fusion - they have great pre-made meals."
-	assert.True(t, sourceLinksExample(source, "food delivery", "Fresh Fusion"))
+	source := "Melanie plays the clarinet. She also likes classical music, including Bach."
 
 	qualifyOperationsWithGroundedTopics(source, operations)
 
-	assert.Equal(t,
-		"Has been relying on food delivery services lately due to being busy "+
-			"(including Fresh Fusion).",
-		operations[0].Memory,
-	)
-	assert.Equal(t,
-		"Discovered a food delivery service called Fresh Fusion that offers pre-made meals.",
-		operations[1].Memory,
-	)
-	assert.Contains(t, operations[0].Topics, "Fresh Fusion")
-	qualifyOperationsWithGroundedTopics(source, operations)
-	assert.Equal(t, 1, strings.Count(operations[0].Memory, "including Fresh Fusion"))
-	assert.Equal(t, 1, strings.Count(strings.Join(operations[0].Topics, ","), "Fresh Fusion"))
+	assert.Equal(t, "Melanie plays the clarinet and uses music to relax.", operations[0].Memory)
+	assert.Equal(t, []string{"Melanie", "clarinet", "music"}, operations[0].Topics)
+	assert.Equal(t, "Melanie listens to Bach.", operations[1].Memory)
 }
 
-func TestQualifyOperationsRequiresExplicitExampleLink(t *testing.T) {
+func TestQualifyOperationsKeepGenericContextInTopics(t *testing.T) {
 	t.Parallel()
 
 	operations := []*Operation{
@@ -183,12 +170,12 @@ func TestQualifyOperationsRequiresExplicitExampleLink(t *testing.T) {
 	qualifyOperationsWithGroundedTopics(source, operations)
 
 	assert.Equal(t,
-		"food delivery: Had Domino's Pizza three times last week.",
+		"Had Domino's Pizza three times last week.",
 		operations[1].Memory,
 	)
 }
 
-func TestQualifyOperationsRejectsExampleCueAcrossSentences(t *testing.T) {
+func TestQualifyOperationsDoNotInferContextAcrossSentences(t *testing.T) {
 	t.Parallel()
 
 	operations := []*Operation{
@@ -208,58 +195,8 @@ func TestQualifyOperationsRejectsExampleCueAcrossSentences(t *testing.T) {
 	qualifyOperationsWithGroundedTopics(source, operations)
 
 	assert.Equal(t,
-		"food delivery: Discovered Fresh Fusion.",
+		"Discovered Fresh Fusion.",
 		operations[1].Memory,
-	)
-}
-
-func TestQualifyOperationsWithGroundedExamplesPreservesLanguage(t *testing.T) {
-	t.Parallel()
-
-	operations := []*Operation{
-		{
-			Type:   OperationAdd,
-			Memory: "最近因为忙一直依赖外卖服务。",
-			Topics: []string{"外卖"},
-		},
-		{
-			Type:   OperationAdd,
-			Memory: "发现了美团。",
-			Topics: []string{"美团", "外卖"},
-		},
-	}
-	source := "最近因为忙一直依赖外卖服务，比如新发现的美团。"
-	assert.True(t, sourceLinksExample(source, "外卖", "美团"))
-
-	qualifyOperationsWithGroundedTopics(source, operations)
-
-	assert.Equal(t,
-		"最近因为忙一直依赖外卖服务（包括美团）。",
-		operations[0].Memory,
-	)
-	assert.Equal(t,
-		"外卖: 发现了美团。",
-		operations[1].Memory,
-	)
-}
-
-func TestSourceLinksExampleInReverseOrder(t *testing.T) {
-	t.Parallel()
-
-	assert.True(t, sourceLinksExample(
-		"Fresh Fusion is one of the food delivery services I rely on.",
-		"food delivery", "Fresh Fusion",
-	))
-}
-
-func TestAppendGroundedExamplesKeepsLatinPunctuation(t *testing.T) {
-	t.Parallel()
-
-	assert.Equal(t,
-		"Prefiere cafeterías (including Café Roma).",
-		appendGroundedExamples(
-			"Prefiere cafeterías.", []string{"Café Roma"},
-		),
 	)
 }
 
