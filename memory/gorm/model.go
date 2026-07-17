@@ -23,10 +23,10 @@ const defaultTableName = "memories"
 // Column types are chosen for MySQL/PostgreSQL portability (memory_id is SHA-256 hex).
 type memoryRow struct {
 	MemoryID   string         `gorm:"column:memory_id;primaryKey;type:char(64);size:64"`
-	AppName    string         `gorm:"column:app_name;type:varchar(255);not null;index:idx_memories_app_user"`
-	UserID     string         `gorm:"column:user_id;type:varchar(255);not null;index:idx_memories_app_user"`
+	AppName    string         `gorm:"column:app_name;type:varchar(255);not null"`
+	UserID     string         `gorm:"column:user_id;type:varchar(255);not null"`
 	MemoryData datatypes.JSON `gorm:"column:memory_data;not null"`
 	CreatedAt  time.Time      `gorm:"column:created_at;not null"`
-	UpdatedAt  time.Time      `gorm:"column:updated_at;not null;index:idx_memories_updated_at"`
-	DeletedAt  gorm.DeletedAt `gorm:"column:deleted_at;index:idx_memories_deleted_at"`
+	UpdatedAt  time.Time      `gorm:"column:updated_at;not null"`
+	DeletedAt  gorm.DeletedAt `gorm:"column:deleted_at"`
 }

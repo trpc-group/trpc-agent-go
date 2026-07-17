@@ -125,24 +125,6 @@ func (s *Service) AddMemory(ctx context.Context, userKey memory.UserKey, memoryS
 	imemory.ApplyMetadata(mem, ep)
 	memoryID := imemory.GenerateMemoryID(mem, userKey.AppName, userKey.UserID)
 
-	if s.opts.memoryLimit > 0 {
-		var existing int64
-		err := s.memoryTable(ctx).
-			Where(
-				"memory_id = ? AND app_name = ? AND user_id = ?",
-				memoryID, userKey.AppName, userKey.UserID,
-			).
-			Count(&existing).Error
-		if err != nil {
-			return wrapDBErr("check existing memory", err)
-		}
-		if existing == 0 {
-			if err := s.enforceMemoryLimit(ctx, userKey); err != nil {
-				return err
-			}
-		}
-	}
-
 	entry := &memory.Entry{
 		ID:        memoryID,
 		AppName:   userKey.AppName,
@@ -178,36 +160,54 @@ func (s *Service) AddMemory(ctx context.Context, userKey memory.UserKey, memoryS
 		Columns:   []clause.Column{{Name: "memory_id"}},
 		DoUpdates: clause.Assignments(conflictUpdates),
 	}
-	createQuery := s.memoryTable(ctx).Clauses(conflict)
-	if s.opts.softDelete {
-		err = createQuery.Create(&row).Error
-	} else {
-		err = createQuery.Select(
+
+	store := func(tx *gorm.DB) error {
+		createQuery := s.memoryTableWithDB(ctx, tx).Clauses(conflict)
+		if s.opts.softDelete {
+			return createQuery.Create(&row).Error
+		}
+		return createQuery.Select(
 			"memory_id", "app_name", "user_id", "memory_data", "created_at", "updated_at",
 		).Create(&row).Error
 	}
-	if err != nil {
-		return wrapDBErr("store memory entry", err)
-	}
-	return nil
-}
 
-func (s *Service) enforceMemoryLimit(ctx context.Context, userKey memory.UserKey) error {
 	if s.opts.memoryLimit <= 0 {
+		if err := store(s.db); err != nil {
+			return wrapDBErr("store memory entry", err)
+		}
 		return nil
 	}
 
-	var count int64
-	err := s.memoryTable(ctx).
-		Where("app_name = ? AND user_id = ?", userKey.AppName, userKey.UserID).
-		Count(&count).Error
+	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var existing int64
+		if err := s.memoryTableWithDB(ctx, tx).
+			Where(
+				"memory_id = ? AND app_name = ? AND user_id = ?",
+				memoryID, userKey.AppName, userKey.UserID,
+			).
+			Count(&existing).Error; err != nil {
+			return wrapDBErr("check existing memory", err)
+		}
+		if existing == 0 {
+			var count int64
+			if err := s.memoryTableWithDB(ctx, tx).
+				Where("app_name = ? AND user_id = ?", userKey.AppName, userKey.UserID).
+				Count(&count).Error; err != nil {
+				return wrapDBErr("check memory count", err)
+			}
+			if int(count) >= s.opts.memoryLimit {
+				return fmt.Errorf(
+					"memory limit exceeded for user %s, limit: %d, current: %d",
+					userKey.UserID, s.opts.memoryLimit, count)
+			}
+		}
+		if err := store(tx); err != nil {
+			return wrapDBErr("store memory entry", err)
+		}
+		return nil
+	})
 	if err != nil {
-		return wrapDBErr("check memory count", err)
-	}
-	if int(count) >= s.opts.memoryLimit {
-		return fmt.Errorf(
-			"memory limit exceeded for user %s, limit: %d, current: %d",
-			userKey.UserID, s.opts.memoryLimit, count)
+		return err
 	}
 	return nil
 }
@@ -259,7 +259,7 @@ func (s *Service) UpdateMemory(ctx context.Context, memoryKey memory.Key, memory
 			memoryKey.MemoryID, memoryKey.AppName, memoryKey.UserID).
 		Updates(map[string]any{
 			"memory_id":   newID,
-			"memory_data": updated,
+			"memory_data": datatypes.JSON(updated),
 			"updated_at":  now,
 		})
 	if result.Error != nil {
