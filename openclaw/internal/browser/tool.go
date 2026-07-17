@@ -226,6 +226,22 @@ type actRequest struct {
 	TextGone    string           `json:"textGone,omitempty"`
 	TimeoutMs   *int             `json:"timeoutMs,omitempty"`
 	Fn          string           `json:"fn,omitempty"`
+	textSet     bool
+}
+
+func (r *actRequest) UnmarshalJSON(data []byte) error {
+	type actRequestAlias actRequest
+	var decoded actRequestAlias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*r = actRequest(decoded)
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	_, r.textSet = fields["text"]
+	return nil
 }
 
 type input struct {
@@ -507,6 +523,11 @@ func (t *Tool) Call(ctx context.Context, args []byte) (any, error) {
 	}
 	if actionKey == actionScroll {
 		in.Kind = actScroll
+		if in.Request != nil {
+			req := *in.Request
+			req.Kind = actScroll
+			in.Request = &req
+		}
 		actionKey = strings.ToLower(actionAct)
 	}
 	in = normalizeBrowserActionInput(in, actionKey)
@@ -2352,7 +2373,7 @@ func normalizeActRequest(in input) actRequest {
 		if req.Modifiers == nil {
 			req.Modifiers = in.Modifiers
 		}
-		if req.Text == "" {
+		if !req.textSet && req.Text == "" {
 			req.Text = in.Text
 		}
 		if req.Submit == nil {
@@ -2896,7 +2917,7 @@ func (t *Tool) executeFill(
 }
 
 func fillFields(req actRequest) []map[string]any {
-	if len(req.Fields) > 0 {
+	if req.Fields != nil {
 		return req.Fields
 	}
 	target := firstNonEmpty(req.Ref, req.Target)

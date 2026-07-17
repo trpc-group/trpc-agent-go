@@ -114,25 +114,39 @@ function textMatcher(value) {
 
 function roleHint(value) {
   const raw = stringValue(value).toLowerCase();
-  if (/\bbutton\b/.test(raw)) {
-    return "button";
-  }
-  if (/\blink\b/.test(raw)) {
-    return "link";
-  }
-  if (/\b(?:combobox|dropdown|select)\b/.test(raw)) {
+  const prefix = raw.match(
+    /^(?:the\s+)?(button|link|combobox|dropdown|select|checkbox|radio|textbox|input|field)(?:\s+(?:that|with|named|label(?:ed)?|says|containing)\b|$)/
+  );
+  const suffix = raw.match(
+    /\b(button|combobox|dropdown|select|checkbox|radio|textbox|input|field)$/
+  );
+  const role = prefix?.[1] || suffix?.[1] || "";
+  if (role === "dropdown" || role === "select") {
     return "combobox";
   }
-  if (/\bcheckbox\b/.test(raw)) {
-    return "checkbox";
-  }
-  if (/\bradio\b/.test(raw)) {
-    return "radio";
-  }
-  if (/\b(?:textbox|input|field|search)\b/.test(raw)) {
+  if (role === "input" || role === "field") {
     return "textbox";
   }
-  return "";
+  return role;
+}
+
+const cssElementPattern = new RegExp(
+  "^(?:\\*|a|article|aside|button|details|dialog|div|fieldset|footer|" +
+  "form|header|input|label|li|main|nav|ol|option|p|section|select|" +
+  "span|summary|table|tbody|td|textarea|th|thead|tr|ul)(?:[#.:\\[].*)?$",
+  "i"
+);
+
+function looksLikeSelectorSequence(raw) {
+  const tokens = raw.split(/\s+/).filter(Boolean);
+  if (tokens.length < 2) {
+    return false;
+  }
+  return tokens.every((token) =>
+    /^[>+~]$/.test(token) ||
+    /^[.#\[]/.test(token) ||
+    cssElementPattern.test(token)
+  );
 }
 
 function looksLikeSelector(value) {
@@ -143,10 +157,11 @@ function looksLikeSelector(value) {
   if (/^(?:css=|xpath=|text=|role=|\/\/)/i.test(raw)) {
     return true;
   }
-  if (/^[.#[]/.test(raw)) {
+  if (/^[.#\[]/.test(raw)) {
     return true;
   }
-  return /^[a-zA-Z][\w-]*(?:[#.:[>]| +[.#[:])/.test(raw);
+  return /^[a-zA-Z][\w-]*(?:[#.:[>]| +[.#[:])/.test(raw) ||
+    looksLikeSelectorSequence(raw);
 }
 
 function selectorTarget(value) {

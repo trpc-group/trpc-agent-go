@@ -345,6 +345,57 @@ test("HostProfile act clicks a bare visible text target", async () => {
   assert.equal(result.content[0].text, "Clicked Submit.");
 });
 
+test("HostProfile keeps Search and Copy link as visible text", async () => {
+  const calls = [];
+  const locator = {
+    first() {
+      return locator;
+    },
+    async click() {}
+  };
+  const page = {
+    getByRole() {
+      throw new Error("role locator should not run");
+    },
+    getByText(text) {
+      calls.push(text);
+      return locator;
+    }
+  };
+
+  const profile = profileForPage(page);
+  await profile.act("tab-1", { kind: "click", target: "Search" });
+  await profile.act("tab-1", { kind: "click", target: "Copy link" });
+
+  assert.deepEqual(calls, ["Search", "Copy link"]);
+});
+
+test("HostProfile accepts descendant and child CSS selectors", async () => {
+  const calls = [];
+  const locator = {
+    first() {
+      return locator;
+    },
+    async click() {}
+  };
+  const page = {
+    locator(selector) {
+      calls.push(selector);
+      return locator;
+    },
+    getByText() {
+      throw new Error("text locator should not run");
+    }
+  };
+
+  const profile = profileForPage(page);
+  for (const target of ["form button", "ul li.item", "div > button"]) {
+    await profile.act("tab-1", { kind: "click", target });
+  }
+
+  assert.deepEqual(calls, ["form button", "ul li.item", "div > button"]);
+});
+
 test("HostProfile act fill preserves falsey field values", async () => {
   const calls = [];
   const locator = {

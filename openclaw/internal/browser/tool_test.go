@@ -2532,6 +2532,76 @@ func TestToolCall_ActBackfillsTopLevelKindIntoNestedRequest(t *testing.T) {
 	require.Equal(t, "Home", drv.calls[0].Args["key"])
 }
 
+func TestToolCall_ScrollOverridesConflictingNestedKind(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{
+		callResult: map[string]any{
+			mcpToolMouseWheel: textPayload("scrolled"),
+		},
+	}
+
+	_, err := newTestTool(drv).Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action": actionScroll,
+			"request": map[string]any{
+				"kind":   actClick,
+				"target": "do-not-click",
+			},
+			"direction": "down",
+			"amount":    250,
+		}),
+	)
+	require.NoError(t, err)
+	require.Len(t, drv.calls, 1)
+	require.Equal(t, mcpToolMouseWheel, drv.calls[0].Tool)
+}
+
+func TestToolCall_ActPreservesExplicitEmptyNestedText(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{}
+	_, err := newTestTool(drv).Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action": actionAct,
+			"kind":   actType,
+			"ref":    "fallback-ref",
+			"text":   "fallback",
+			"request": map[string]any{
+				"kind": actType,
+				"ref":  "nested-ref",
+				"text": "",
+			},
+		}),
+	)
+	require.NoError(t, err)
+	require.Len(t, drv.calls, 1)
+	require.Equal(t, "", drv.calls[0].Args["text"])
+}
+
+func TestToolCall_ActFillRejectsExplicitEmptyFields(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{}
+	_, err := newTestTool(drv).Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action": actionAct,
+			"request": map[string]any{
+				"kind":   actFill,
+				"target": "name",
+				"text":   "should-not-fill",
+				"fields": []map[string]any{},
+			},
+		}),
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "fill requires fields")
+	require.Empty(t, drv.calls)
+}
+
 func TestNormalizeActRequestPreservesExplicitNestedValues(t *testing.T) {
 	t.Parallel()
 
