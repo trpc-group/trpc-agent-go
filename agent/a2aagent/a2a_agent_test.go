@@ -718,6 +718,36 @@ func TestA2AAgent_AnonymousCookiesSerializeConcurrentPersistentSessionInitializa
 	require.Equal(t, anonymousTestCookieValue(1), string(persistedCookie))
 }
 
+func TestA2AAgent_AnonymousCookieInitializationHonorsContextCancellation(t *testing.T) {
+	a := &A2AAgent{}
+	persistentSession := &session.Session{
+		AppName: "app",
+		UserID:  "local-user",
+		ID:      "session-a",
+	}
+	cookie := newAnonymousCookieState(
+		persistentSession.Clone(),
+		persistentSession,
+		nil,
+		"cookie-state",
+	)
+
+	releaseFirst, err := a.acquireAnonymousCookieInitialization(context.Background(), cookie)
+	require.NoError(t, err)
+	require.NotNil(t, releaseFirst)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	_, err = a.acquireAnonymousCookieInitialization(ctx, cookie)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+
+	releaseFirst()
+	releaseThird, err := a.acquireAnonymousCookieInitialization(context.Background(), cookie)
+	require.NoError(t, err)
+	require.NotNil(t, releaseThird)
+	releaseThird()
+}
+
 func assertAnonymousCookieNotInEvents(
 	t *testing.T,
 	cookieStateKey string,

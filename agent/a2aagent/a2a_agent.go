@@ -92,7 +92,7 @@ type anonymousCookieInitScope struct {
 }
 
 type anonymousCookieInitLock struct {
-	mu   sync.Mutex
+	gate chan struct{}
 	refs int
 }
 
@@ -271,14 +271,18 @@ func (r *A2AAgent) newAnonymousClient(
 }
 
 func (r *A2AAgent) acquireAnonymousCookieInitialization(
+	ctx context.Context,
 	cookie *anonymousCookieState,
-) func() {
+) (func(), error) {
 	if r == nil {
-		return nil
+		return nil, nil
 	}
 	scope, ok := cookie.initializationScope()
 	if !ok {
-		return nil
+		return nil, nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	r.anonymousCookieInitMu.Lock()
 	if r.anonymousCookieInitLocks == nil {
@@ -286,25 +290,34 @@ func (r *A2AAgent) acquireAnonymousCookieInitialization(
 	}
 	entry := r.anonymousCookieInitLocks[scope]
 	if entry == nil {
-		entry = &anonymousCookieInitLock{}
+		entry = &anonymousCookieInitLock{gate: make(chan struct{}, 1)}
 		r.anonymousCookieInitLocks[scope] = entry
 	}
 	entry.refs++
 	r.anonymousCookieInitMu.Unlock()
 
-	entry.mu.Lock()
+	releaseRef := func() {
+		r.anonymousCookieInitMu.Lock()
+		entry.refs--
+		if entry.refs == 0 && r.anonymousCookieInitLocks[scope] == entry {
+			delete(r.anonymousCookieInitLocks, scope)
+		}
+		r.anonymousCookieInitMu.Unlock()
+	}
+	select {
+	case entry.gate <- struct{}{}:
+	case <-ctx.Done():
+		releaseRef()
+		return nil, ctx.Err()
+	}
+
 	var once sync.Once
 	return func() {
 		once.Do(func() {
-			entry.mu.Unlock()
-			r.anonymousCookieInitMu.Lock()
-			entry.refs--
-			if entry.refs == 0 && r.anonymousCookieInitLocks[scope] == entry {
-				delete(r.anonymousCookieInitLocks, scope)
-			}
-			r.anonymousCookieInitMu.Unlock()
+			<-entry.gate
+			releaseRef()
 		})
-	}
+	}, nil
 }
 
 func hasCustomA2AHTTPReqHandlerOption(opts []client.Option) bool {
@@ -499,7 +512,7 @@ func canonicalAnonymousCookieStateScope(agentURL string) string {
 type anonymousCookieHTTPReqHandler struct {
 	cookie                *anonymousCookieState
 	scope                 anonymousCookieURLScope
-	acquireInitialization func(*anonymousCookieState) func()
+	acquireInitialization func(context.Context, *anonymousCookieState) (func(), error)
 }
 
 func (h *anonymousCookieHTTPReqHandler) Handle(
@@ -545,7 +558,10 @@ func (h *anonymousCookieHTTPReqHandler) acquireInitializationIfNeeded(
 	if _, ok := h.cookie.load(); ok {
 		return nil, nil
 	}
-	release := h.acquireInitialization(h.cookie)
+	release, err := h.acquireInitialization(ctx, h.cookie)
+	if err != nil {
+		return nil, err
+	}
 	if release == nil {
 		return nil, nil
 	}
