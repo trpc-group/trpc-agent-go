@@ -69,11 +69,22 @@ func (r *workspaceRuntime) Collect(
 	out := make([]codeexecutor.File, 0, prealloc)
 	seen := map[string]bool{}
 	var totalBytes int64
+	// limitsHit is set when aggregate file-count or total-byte budgets
+	// stop collection while more matching files remain (or the listing
+	// itself hit the server-side cap). Per-file Truncated only covers
+	// single-file byte caps and is not enough for callers to detect a
+	// partial Collect result.
+	limitsHit := len(paths) > maxCollectFiles
 	for _, fr := range resolvedPaths {
 		// Stop when the aggregate file-count or total-byte budget is
 		// reached. Without this, model-generated code can create
 		// thousands of matching files and exhaust host memory.
-		if len(out) >= maxCollectFiles || totalBytes >= maxCollectTotalBytes {
+		if len(out) >= maxCollectFiles {
+			limitsHit = true
+			break
+		}
+		if totalBytes >= maxCollectTotalBytes {
+			limitsHit = true
 			break
 		}
 		rel := strings.TrimPrefix(fr.path, ws.Path+"/")
@@ -91,9 +102,7 @@ func (r *workspaceRuntime) Collect(
 		// so a single large file cannot consume the entire budget.
 		remaining := maxCollectTotalBytes - totalBytes
 		if remaining <= 0 {
-			// Budget exhausted — stop to avoid passing limit=0 to
-			// readFile, whose <= 0 fallback would read up to
-			// maxReadSizeBytes (4 MiB) beyond the budget.
+			limitsHit = true
 			break
 		}
 		if remaining > maxReadSizeBytes {
@@ -104,6 +113,10 @@ func (r *workspaceRuntime) Collect(
 			return nil, err
 		}
 		totalBytes += int64(len(data))
+		if totalBytes >= maxCollectTotalBytes {
+			// Budget exhausted after this file; later matches skipped.
+			limitsHit = true
+		}
 		mime := http.DetectContentType(data)
 		out = append(out, codeexecutor.File{
 			Name:      rel,
@@ -113,7 +126,33 @@ func (r *workspaceRuntime) Collect(
 			Truncated: truncated,
 		})
 	}
+	// listFilesByGlob returns at most maxCollectFiles+1 entries; more
+	// than maxCollectFiles means the server-side listing was capped.
+	if len(resolvedPaths) > maxCollectFiles {
+		limitsHit = true
+	}
+	if limitsHit {
+		out = append(out, codeexecutor.File{
+			Name:     collectLimitsHitMarkerName,
+			Content:  collectLimitsHitMarkerContent(maxCollectFiles, maxCollectTotalBytes),
+			MIMEType: "text/plain",
+		})
+	}
 	return out, nil
+}
+
+// collectLimitsHitMarkerName is a synthetic entry appended when Collect
+// stops early due to aggregate file-count or total-byte budgets. Callers
+// that only inspect per-file Truncated would otherwise treat a partial
+// result as complete.
+const collectLimitsHitMarkerName = ".opensandbox_collect_limits_hit"
+
+func collectLimitsHitMarkerContent(maxFiles int, maxBytes int64) string {
+	return fmt.Sprintf(
+		"collect stopped early: aggregate limits reached "+
+			"(max files=%d, max total bytes=%d); result is partial",
+		maxFiles, maxBytes,
+	)
 }
 
 // resolveSandboxPaths resolves the real paths of multiple targets

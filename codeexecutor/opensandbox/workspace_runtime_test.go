@@ -11,6 +11,7 @@
 package opensandbox
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -1673,14 +1674,21 @@ func TestWorkspace_ReadFile_ServerIgnoresRange(t *testing.T) {
 	assert.Equal(t, maxReadSizeBytes, len(files[0].Content), "content should be capped at maxReadSizeBytes")
 }
 
-// TestWorkspace_WalkAndUpload_StreamsFiles is a regression test for
-// P2-2: files should be opened as io.Reader (streamed via *os.File),
-// not materialized into memory via os.ReadFile. It also verifies that
-// walkAndUpload uploads files in batches and closes each batch's file
-// handles, so the open-fd count stays bounded regardless of tree size.
+// TestWorkspace_WalkAndUpload_StreamsFiles is a regression for Rememorio's
+// follow-up on StageDirectory memory use: each regular file must be held
+// as an *os.File (streamed), not loaded with os.ReadFile into a []byte /
+// bytes.Reader. A naive success-only walk would still pass under the old
+// materializing implementation; this test fails if File is not *os.File
+// or if the open file is closed before flush completes.
 func TestWorkspace_WalkAndUpload_StreamsFiles(t *testing.T) {
 	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hello"), 0o644))
+	// Multi-MiB payload so accidental full materialization is more
+	// obvious in memory profiles, and so we can prove the open *os.File
+	// still yields the full contents when read at upload time.
+	const payloadSize = 2 << 20 // 2 MiB
+	payload := bytes.Repeat([]byte("S"), payloadSize)
+	hostFile := filepath.Join(dir, "big.bin")
+	require.NoError(t, os.WriteFile(hostFile, payload, 0o644))
 
 	m := newMockServer(t)
 	defer m.close()
@@ -1689,13 +1697,43 @@ func TestWorkspace_WalkAndUpload_StreamsFiles(t *testing.T) {
 
 	ws, err := exec.CreateWorkspace(context.Background(), "exec-stream", codeexecutor.WorkspacePolicy{})
 	require.NoError(t, err)
-
-	// walkAndUpload should succeed and upload the file via the mock's
-	// /files endpoint.
 	sb, err := exec.rt.sandbox()
 	require.NoError(t, err)
-	err = exec.rt.walkAndUpload(context.Background(), sb, dir, ws.Path, ws.Path)
+
+	// Drive one visit without flushing so we can inspect the pending
+	// entry types before UploadFiles consumes them.
+	u := &batchUploader{r: exec.rt, sb: sb, destRoot: ws.Path, wsBase: ws.Path}
+	info, err := os.Stat(hostFile)
 	require.NoError(t, err)
+	// DirEntry for the file via WalkDir semantics: use a synthetic entry.
+	de, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	require.Len(t, de, 1)
+	require.NoError(t, u.visit(context.Background(), dir, ws.Path, hostFile, de[0]))
+	_ = info
+
+	require.Len(t, u.openFiles, 1, "streaming path must keep one open *os.File")
+	require.Len(t, u.entries, 1)
+	// Old os.ReadFile design used bytes.NewReader([]byte); streaming uses *os.File.
+	require.IsType(t, (*os.File)(nil), u.openFiles[0],
+		"openFiles must be *os.File (streaming), not a materialised buffer handle")
+	require.IsType(t, (*os.File)(nil), u.entries[0].File,
+		"UploadFileEntry.File must be *os.File so UploadFiles streams from disk")
+	// The open file must still be readable for the full payload — proves
+	// content was not pre-sliced into a detached buffer and then dropped.
+	got, err := io.ReadAll(u.entries[0].File)
+	require.NoError(t, err)
+	require.Equal(t, payload, got, "streamed *os.File must yield full on-disk content")
+	// Rewind so flush/UploadFiles can re-read if the mock drains the body.
+	_, err = u.openFiles[0].Seek(0, io.SeekStart)
+	require.NoError(t, err)
+
+	require.NoError(t, u.flush(context.Background()))
+	require.Empty(t, u.openFiles, "flush must close pending file handles")
+	require.Empty(t, u.entries)
+
+	// End-to-end walk still succeeds against the mock upload endpoint.
+	require.NoError(t, exec.rt.walkAndUpload(context.Background(), sb, dir, ws.Path, ws.Path))
 }
 
 // TestWorkspace_WalkAndUpload_BatchedBySize verifies that walkAndUpload
@@ -2470,8 +2508,20 @@ func TestCollect_AggregateLimits_FileCount(t *testing.T) {
 
 	files, err := exec.Collect(context.Background(), ws, []string{"*"})
 	require.NoError(t, err)
-	assert.LessOrEqual(t, len(files), maxCollectFiles,
-		"Collect should stop at maxCollectFiles")
+	// Real files are capped; a synthetic limits-hit marker may be appended.
+	real := 0
+	hasMarker := false
+	for _, f := range files {
+		if f.Name == collectLimitsHitMarkerName {
+			hasMarker = true
+			continue
+		}
+		real++
+	}
+	assert.LessOrEqual(t, real, maxCollectFiles,
+		"Collect should stop at maxCollectFiles real files")
+	assert.True(t, hasMarker,
+		"Collect must append aggregate limits-hit marker when capped")
 }
 
 // --- R5: RunProgram bounded output ---
@@ -2735,17 +2785,24 @@ func TestCollect_RemainingZero_BreaksBeforeReadFile(t *testing.T) {
 
 	files, err := exec.Collect(context.Background(), ws, []string{"*.txt"})
 	require.NoError(t, err)
-	// At most 16 files (16 * 4 MiB = 64 MiB = budget). The 17th file
-	// would exceed the budget and must not be included.
-	assert.LessOrEqual(t, len(files), 16,
-		"Collect must not exceed maxCollectTotalBytes budget")
-	// Total content must not exceed the budget.
+	// At most 16 real files (16 * 4 MiB = 64 MiB = budget). A synthetic
+	// limits-hit marker may be appended and must not count toward content.
+	realFiles := 0
 	var totalBytes int64
+	hasMarker := false
 	for _, f := range files {
+		if f.Name == collectLimitsHitMarkerName {
+			hasMarker = true
+			continue
+		}
+		realFiles++
 		totalBytes += int64(len(f.Content))
 	}
+	assert.LessOrEqual(t, realFiles, 16,
+		"Collect must not exceed maxCollectTotalBytes budget")
 	assert.LessOrEqual(t, totalBytes, int64(maxCollectTotalBytes),
 		"total bytes must not exceed maxCollectTotalBytes")
+	assert.True(t, hasMarker, "byte-budget cap must set aggregate marker")
 }
 
 // --- L1: PutFiles final-component symlink removal ---
@@ -2805,11 +2862,22 @@ func TestListFilesByGlob_CountLimit(t *testing.T) {
 	}
 	m.setSearchResults(searchPaths)
 
-	// Collect should return at most maxCollectFiles files.
+	// Collect should return at most maxCollectFiles real files, plus an
+	// optional aggregate limits-hit marker.
 	files, err := exec.Collect(context.Background(), ws, []string{"*.txt"})
 	require.NoError(t, err)
-	assert.LessOrEqual(t, len(files), maxCollectFiles,
+	realFiles := 0
+	hasMarker := false
+	for _, f := range files {
+		if f.Name == collectLimitsHitMarkerName {
+			hasMarker = true
+			continue
+		}
+		realFiles++
+	}
+	assert.LessOrEqual(t, realFiles, maxCollectFiles,
 		"Collect must cap file count at maxCollectFiles")
+	assert.True(t, hasMarker, "file-count cap must set aggregate marker")
 }
 
 // --- L3: ErrNotImplementedV1 exported ---

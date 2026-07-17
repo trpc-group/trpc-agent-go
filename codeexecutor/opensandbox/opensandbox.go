@@ -26,6 +26,7 @@ import (
 
 	osb "github.com/alibaba/OpenSandbox/sdks/sandbox/go"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 )
@@ -511,19 +512,22 @@ func (c *CodeExecutor) ExecuteCode(
 		)
 	}
 
-	execID := input.ExecutionID
+	execID := strings.TrimSpace(input.ExecutionID)
+	if execID == "" {
+		// Match codeexecutor/sandbox: tool/codeexec leaves execution_id
+		// optional, so PerSession must derive a stable key from the
+		// invocation session (app/user/session) when present.
+		execID = executionIDFromContext(ctx)
+	}
 	if execID == "" {
 		if c.workspacePersistence == WorkspacePersistencePerSession {
-			// In PerSession mode, a random fallback would produce a
-			// different workspace hash on every call, defeating
-			// persistence and leaking workspaces (PerSession skips
-			// auto-cleanup). Require the caller to provide a stable
-			// session-derived ID.
+			// Still no stable ID: refuse rather than mint a random one
+			// that would break persistence and leak workspaces.
 			return codeexecutor.CodeExecutionResult{}, errors.New(
 				"opensandbox: ExecutionID must not be empty when using " +
 					"WorkspacePersistencePerSession; provide a stable " +
-					"session-derived ID so the workspace can be reused " +
-					"across turns",
+					"session-derived ID or invoke with a session in context " +
+					"so the workspace can be reused across turns",
 			)
 		}
 		execID = fmt.Sprintf("exec_%d", time.Now().UnixNano())
@@ -744,31 +748,50 @@ func (c *CodeExecutor) ExecuteInline(
 // Engine exposes the sandbox-backed runtime as an Engine for skill
 // tools.
 //
-// The engine advertises SupportsCleanEnv: RunProgram honors
-// RunProgramSpec.CleanEnv by launching the spawned program through
-// `env -i` with only the workspace base variables, the (already
-// scrubbed) spec.Env and a minimal PATH, so the program does not
-// inherit the sandbox process environment.
-//
-// Scope note: when CleanEnv is requested, RunProgram wraps the outer
-// `bash -c` in `env -i PATH=... bash --norc --noprofile -c '...'` so
-// the framing shell itself starts with a minimal environment. This
-// prevents BASH_ENV (if set in the sandbox env) from sourcing an
-// arbitrary file and LD_PRELOAD from being loaded before the inner
-// `env -i` command runs. When CleanEnv is false, the outer bash
-// inherits the sandbox environment as before.
+// The engine does NOT advertise SupportsCleanEnv. RunProgram still
+// best-effort prefixes env -i for the remote command string, but
+// OpenSandbox execd always starts that string via shell -c with an
+// environment merged from the sandbox process (os.Environ). Client-
+// side prefixes therefore cannot form a trustworthy CleanEnv security
+// boundary for tool/workspaceexec policy mode.
 func (c *CodeExecutor) Engine() codeexecutor.Engine {
 	rt := c.ensureRuntime()
 	return codeexecutor.NewEngineWithCapabilities(
 		rt, rt, rt,
 		codeexecutor.Capabilities{
-			SupportsCleanEnv: true,
+			// SupportsCleanEnv is false: OpenSandbox execd launches
+			// commands as shell -c with env merged from the sandbox
+			// process os.Environ() (execd command.go). Client-side
+			// env -i cannot prevent BASH_ENV/LD_PRELOAD on that outer
+			// shell, so advertising true would mislead workspaceexec.
+			SupportsCleanEnv: false,
 			// Explicitly unsupported: StageInputs/CollectOutputs are
 			// v1 stubs. gatingFS returns ErrDeclarativeIONotSupported
 			// so skill callers can detect the missing capability.
 			SupportsDeclarativeIO: codeexecutor.SupportsDeclarativeIOFalse,
 		},
 	)
+}
+
+// executionIDFromContext builds a stable workspace key from the agent
+// invocation session, matching codeexecutor/sandbox. Empty when the
+// context has no session.
+func executionIDFromContext(ctx context.Context) string {
+	inv, ok := agent.InvocationFromContext(ctx)
+	if !ok || inv == nil || inv.Session == nil {
+		return ""
+	}
+	var parts []string
+	if inv.Session.AppName != "" {
+		parts = append(parts, inv.Session.AppName)
+	}
+	if inv.Session.UserID != "" {
+		parts = append(parts, inv.Session.UserID)
+	}
+	if inv.Session.ID != "" {
+		parts = append(parts, inv.Session.ID)
+	}
+	return strings.Join(parts, "/")
 }
 
 // killTimeout bounds the Kill call in Close so that a sandbox whose

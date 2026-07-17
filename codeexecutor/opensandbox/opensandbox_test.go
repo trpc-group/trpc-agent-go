@@ -24,7 +24,9 @@ import (
 
 	osb "github.com/alibaba/OpenSandbox/sdks/sandbox/go"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
 func TestOptions(t *testing.T) {
@@ -594,11 +596,11 @@ func TestEngine(t *testing.T) {
 	defer exec.Close()
 
 	// Engine exposes the sandbox-backed runtime; verify it is non-nil
-	// and advertises SupportsCleanEnv.
+	// and does not advertise SupportsCleanEnv (execd env merge).
 	eng := exec.Engine()
 	require.NotNil(t, eng)
 	caps := eng.Describe()
-	assert.True(t, caps.SupportsCleanEnv, "OpenSandbox engine should support CleanEnv")
+	assert.False(t, caps.SupportsCleanEnv, "OpenSandbox must not advertise CleanEnv: execd merges os.Environ")
 	assert.NotNil(t, eng.Manager())
 	assert.NotNil(t, eng.FS())
 	assert.NotNil(t, eng.Runner())
@@ -967,7 +969,7 @@ func TestNew_WithSandboxRunBase_RejectsInvalid(t *testing.T) {
 		"validateRunBase must reject before CreateSandbox is called")
 }
 
-// TestExecuteCode_PerSession_EmptyExecID_ReturnsError verifies that
+// TestExecuteCode_PerSession_EmptyExecID_ReturnsError verifies that without ExecutionID and without session in context
 // in PerSession mode, an empty ExecutionID is rejected with a clear
 // error rather than generating a random fallback (which would defeat
 // workspace persistence and leak workspaces). The error must fire
@@ -1137,4 +1139,134 @@ func TestNew_WithEndpointHostRewrite_DoesNotAliasCallerMap(t *testing.T) {
 	assert.Equal(t, map[string]string{"host.docker.internal": "localhost"},
 		exec.endpointHostRewrite,
 		"WithEndpointHostRewrite must copy the caller's map")
+}
+
+// --- Rememorio 2026-07-17 follow-ups ---
+
+// TestExecuteCode_PerSession_DerivesExecIDFromSession verifies that when
+// ExecutionID is empty but ctx carries an invocation session, PerSession
+// mode reuses a stable workspace key (app/user/session) across turns.
+func TestExecuteCode_PerSession_DerivesExecIDFromSession(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	u, err := url.Parse(m.server.URL)
+	require.NoError(t, err)
+	exec, err := New(
+		WithDomain(u.Host),
+		WithProtocol("http"),
+		WithAPIKey("test-key"),
+		WithWorkspacePersistence(WorkspacePersistencePerSession),
+	)
+	require.NoError(t, err)
+	defer exec.Close()
+
+	ctx := agent.NewInvocationContext(context.Background(), &agent.Invocation{
+		Session: &session.Session{
+			AppName: "app-a",
+			UserID:  "user-1",
+			ID:      "sess-1",
+		},
+	})
+	blocks := []codeexecutor.CodeBlock{{Language: "bash", Code: "echo ok"}}
+
+	_, err = exec.ExecuteCode(ctx, codeexecutor.CodeExecutionInput{
+		ExecutionID: "",
+		CodeBlocks:  blocks,
+	})
+	require.NoError(t, err)
+
+	// Same session again must target the same workspace path (stable hash).
+	// Capture mkdir paths from commands.
+	m.mu.Lock()
+	cmds1 := append([]string(nil), m.commands...)
+	m.mu.Unlock()
+
+	_, err = exec.ExecuteCode(ctx, codeexecutor.CodeExecutionInput{
+		ExecutionID: "",
+		CodeBlocks:  blocks,
+	})
+	require.NoError(t, err)
+
+	m.mu.Lock()
+	cmds2 := append([]string(nil), m.commands...)
+	m.mu.Unlock()
+
+	wantKey := executionIDFromContext(ctx)
+	require.Equal(t, "app-a/user-1/sess-1", wantKey)
+	h := stableWorkspaceHash(wantKey)
+	wsMarker := "ws_" + h
+
+	found1, found2 := false, false
+	for _, c := range cmds1 {
+		if strings.Contains(c, wsMarker) {
+			found1 = true
+			break
+		}
+	}
+	for _, c := range cmds2 {
+		if strings.Contains(c, wsMarker) {
+			found2 = true
+			break
+		}
+	}
+	assert.True(t, found1, "first turn should use session-derived workspace")
+	assert.True(t, found2, "second turn should reuse same session workspace")
+}
+
+// TestExecuteCode_PerSession_CrossSessionIsolation verifies different
+// sessions get different workspace paths.
+func TestExecuteCode_PerSession_CrossSessionIsolation(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	u, err := url.Parse(m.server.URL)
+	require.NoError(t, err)
+	exec, err := New(
+		WithDomain(u.Host),
+		WithProtocol("http"),
+		WithAPIKey("test-key"),
+		WithWorkspacePersistence(WorkspacePersistencePerSession),
+	)
+	require.NoError(t, err)
+	defer exec.Close()
+
+	blocks := []codeexecutor.CodeBlock{{Language: "bash", Code: "echo ok"}}
+	ctxA := agent.NewInvocationContext(context.Background(), &agent.Invocation{
+		Session: &session.Session{AppName: "app", UserID: "u", ID: "a"},
+	})
+	ctxB := agent.NewInvocationContext(context.Background(), &agent.Invocation{
+		Session: &session.Session{AppName: "app", UserID: "u", ID: "b"},
+	})
+
+	_, err = exec.ExecuteCode(ctxA, codeexecutor.CodeExecutionInput{CodeBlocks: blocks})
+	require.NoError(t, err)
+	_, err = exec.ExecuteCode(ctxB, codeexecutor.CodeExecutionInput{CodeBlocks: blocks})
+	require.NoError(t, err)
+
+	ha := "ws_" + stableWorkspaceHash(executionIDFromContext(ctxA))
+	hb := "ws_" + stableWorkspaceHash(executionIDFromContext(ctxB))
+	require.NotEqual(t, ha, hb)
+
+	m.mu.Lock()
+	cmds := append([]string(nil), m.commands...)
+	m.mu.Unlock()
+	sawA, sawB := false, false
+	for _, c := range cmds {
+		if strings.Contains(c, ha) {
+			sawA = true
+		}
+		if strings.Contains(c, hb) {
+			sawB = true
+		}
+	}
+	assert.True(t, sawA && sawB, "each session must have its own workspace path")
+}
+
+// TestEngine_DoesNotAdvertiseSupportsCleanEnv locks the execd reality:
+// outer shell inherits os.Environ, so CleanEnv is not a security boundary.
+func TestEngine_DoesNotAdvertiseSupportsCleanEnv(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+	assert.False(t, exec.Engine().Describe().SupportsCleanEnv)
 }
