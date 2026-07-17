@@ -31,6 +31,7 @@ func main() {
 	files := flag.String("files", "", "comma-separated repository-relative paths (with --repo-path)")
 	executor := flag.String("executor", "container", "sandbox executor: container|local (local is development-only)")
 	dockerfile := flag.String("dockerfile", "", "container Dockerfile directory (auto-detected by default)")
+	trustedModuleCache := flag.Bool("trusted-module-cache", false, "mount the host Go module cache read-only (trusted repositories only)")
 	dryRun := flag.Bool("dry-run", true, "run rules only, skip sandbox execution (default true)")
 	dbPath := flag.String("db-path", "review.db", "path to the SQLite database file")
 	outputDir := flag.String("output-dir", ".", "directory for report output files")
@@ -74,6 +75,7 @@ func main() {
 	// Configure sandbox.
 	sandboxCfg := internal.DefaultSandboxConfig()
 	sandboxCfg.Timeout = time.Duration(*timeoutSec) * time.Second
+	sandboxCfg.TrustedModuleCache = *trustedModuleCache
 	if *repoPath != "" {
 		sandboxCfg.WorkDir = *repoPath
 	}
@@ -126,6 +128,7 @@ func main() {
 	fmt.Printf("Database:    %s\n", *dbPath)
 	fmt.Printf("Output dir:  %s\n", *outputDir)
 	fmt.Printf("Timeout:     %ds\n", *timeoutSec)
+	fmt.Printf("Host cache:  %t\n", *trustedModuleCache)
 	fmt.Println()
 
 	result, err := agent.Review(ctx, input)

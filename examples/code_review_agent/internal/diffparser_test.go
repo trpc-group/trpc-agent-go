@@ -181,6 +181,51 @@ func TestDiffSummaryCountsDeletedLines(t *testing.T) {
 	require.Equal(t, "1 files, +0 -2", DiffSummary(files))
 }
 
+func TestParseDiffGitQuotedPaths(t *testing.T) {
+	tests := []struct {
+		name string
+		diff string
+		want string
+	}{
+		{
+			name: "utf8",
+			diff: "diff --git \"a/\\346\\265\\213\\350\\257\\225.go\" \"b/\\346\\265\\213\\350\\257\\225.go\"\n--- \"a/\\346\\265\\213\\350\\257\\225.go\"\n+++ \"b/\\346\\265\\213\\350\\257\\225.go\"\n@@ -0,0 +1 @@\n+package test\n",
+			want: "测试.go",
+		},
+		{
+			name: "control byte",
+			diff: "diff --git \"a/control\\001.go\" \"b/control\\001.go\"\n--- /dev/null\n+++ \"b/control\\001.go\"\n@@ -0,0 +1 @@\n+package test\n",
+			want: "control\x01.go",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			files, err := ParseDiffString(tt.diff)
+			require.NoError(t, err)
+			require.Len(t, files, 1)
+			require.Equal(t, tt.want, files[0].Path)
+			require.Len(t, files[0].AddedLines(), 1)
+		})
+	}
+}
+
+func TestParseDiffNoNewlineMarkerDoesNotAdvanceLine(t *testing.T) {
+	diff := "diff --git a/f.go b/f.go\n--- a/f.go\n+++ b/f.go\n@@ -1,2 +1,2 @@\n-old\n\\ No newline at end of file\n+new\n context\n"
+	files, err := ParseDiffString(diff)
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	require.Len(t, files[0].Hunks, 1)
+	lines := files[0].Hunks[0].Lines
+	require.Len(t, lines, 3)
+	require.Equal(t, 1, lines[1].Number)
+	require.Equal(t, 2, lines[2].Number)
+}
+
+func TestParseDiffRejectsMalformedGitHeader(t *testing.T) {
+	_, err := ParseDiffString("diff --git malformed\n")
+	require.Error(t, err)
+}
+
 func TestChangedGoFiles(t *testing.T) {
 	files := []DiffFile{
 		{Path: "foo.go", Hunks: []DiffHunk{{Lines: []DiffLine{{Type: LineAdded}}}}},

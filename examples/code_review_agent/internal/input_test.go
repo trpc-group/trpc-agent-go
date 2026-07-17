@@ -105,3 +105,27 @@ func TestLoadReviewInputRejectsOversizedUntrackedFileBeforeRead(t *testing.T) {
 	_, _, err = LoadReviewInput(context.Background(), ReviewInput{RepoPath: repo})
 	require.ErrorContains(t, err, "exceeds")
 }
+
+func TestLoadReviewInputRejectsUntrackedSymlink(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	repo := t.TempDir()
+	runGit := func(args ...string) {
+		cmd := exec.Command("git", append([]string{"-c", "user.name=test", "-c", "user.email=test@example.com"}, args...)...)
+		cmd.Dir = repo
+		require.NoError(t, cmd.Run())
+	}
+	runGit("init")
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "README.md"), []byte("tracked\n"), 0o600))
+	runGit("add", "README.md")
+	runGit("commit", "-m", "initial")
+	external := filepath.Join(t.TempDir(), "sentinel.go")
+	require.NoError(t, os.WriteFile(external, []byte("package stolen\n"), 0o600))
+	if err := os.Symlink(external, filepath.Join(repo, "secret.go")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	_, _, err := LoadReviewInput(context.Background(), ReviewInput{RepoPath: repo})
+	require.ErrorContains(t, err, "not a regular file")
+}

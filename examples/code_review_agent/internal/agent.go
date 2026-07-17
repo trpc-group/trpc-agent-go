@@ -12,6 +12,7 @@ package internal
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -94,9 +95,13 @@ func (a *ReviewAgent) Review(ctx context.Context, input ReviewInput) (result *Re
 	taskPersisted := false
 	defer func() {
 		if err != nil && taskPersisted {
-			_ = a.storage.UpdateTaskStatus(
-				ctx, taskID, "failed", time.Now(), monitor.Finalize().TotalDurationMs,
-			)
+			updateCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			defer cancel()
+			if updateErr := a.storage.UpdateTaskStatus(
+				updateCtx, taskID, "failed", time.Now(), monitor.Finalize().TotalDurationMs,
+			); updateErr != nil {
+				err = errors.Join(err, fmt.Errorf("persist failed task status: %w", updateErr))
+			}
 		}
 	}()
 

@@ -475,6 +475,7 @@ func (r *workspaceRuntime) RunProgram(
 		t,
 		spec.Stdin,
 		execEnv,
+		spec.MaxOutputBytes,
 	)
 	res := codeexecutor.RunResult{
 		Stdout:   out,
@@ -1156,7 +1157,7 @@ func (r *workspaceRuntime) execCmd(
 	argv []string,
 	timeout time.Duration,
 ) (string, string, int, bool, error) {
-	return r.execCmdWithStdin(ctx, argv, timeout, "", nil)
+	return r.execCmdWithStdin(ctx, argv, timeout, "", nil, maxReadSizeBytes)
 }
 
 // execCmdWithStdin runs argv in the container. execEnv, when
@@ -1171,6 +1172,7 @@ func (r *workspaceRuntime) execCmdWithStdin(
 	timeout time.Duration,
 	stdin string,
 	execEnv []string,
+	maxOutputBytes int,
 ) (string, string, int, bool, error) {
 	tctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -1207,7 +1209,8 @@ func (r *workspaceRuntime) execCmdWithStdin(
 		}()
 	}
 
-	var stdout, stderr bytes.Buffer
+	stdout := newBoundedOutput(maxOutputBytes)
+	stderr := newBoundedOutput(maxOutputBytes)
 	_, err = stdcopy.StdCopy(&stdout, &stderr, hj.Reader)
 	if stdin != "" {
 		if writeErr := <-writeDone; err == nil && writeErr != nil {
@@ -1224,6 +1227,46 @@ func (r *workspaceRuntime) execCmdWithStdin(
 	}
 	timed := errors.Is(tctx.Err(), context.DeadlineExceeded)
 	return stdout.String(), stderr.String(), insp.ExitCode, timed, nil
+}
+
+type boundedOutput struct {
+	data      []byte
+	limit     int
+	truncated bool
+}
+
+func newBoundedOutput(limit int) boundedOutput {
+	if limit <= 0 {
+		limit = maxReadSizeBytes
+	}
+	return boundedOutput{
+		data:  make([]byte, 0, min(limit, 4096)),
+		limit: limit,
+	}
+}
+
+func (b *boundedOutput) Write(p []byte) (int, error) {
+	original := len(p)
+	remaining := b.limit - len(b.data)
+	if remaining <= 0 {
+		b.truncated = b.truncated || original > 0
+		return original, nil
+	}
+	if len(p) > remaining {
+		b.data = append(b.data, p[:remaining]...)
+		b.truncated = true
+		return original, nil
+	}
+	b.data = append(b.data, p...)
+	return original, nil
+}
+
+func (b *boundedOutput) String() string {
+	result := string(b.data)
+	if b.truncated {
+		result += fmt.Sprintf("\n... [output truncated at %d bytes]", b.limit)
+	}
+	return result
 }
 
 func sanitize(s string) string {

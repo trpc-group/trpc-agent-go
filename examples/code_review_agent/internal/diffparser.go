@@ -113,8 +113,6 @@ func (f DiffFile) AddedLines() []DiffLine {
 }
 
 var (
-	// Matches: diff --git a/foo/bar.go b/foo/bar.go
-	reDiffGit = regexp.MustCompile(`^diff --git a/(.*) b/(.*)$`)
 	// Matches: --- a/foo/bar.go  (or --- /dev/null)
 	reOldFile = regexp.MustCompile(`^--- (a/(.+)|/dev/null)$`)
 	// Matches: +++ b/foo/bar.go  (or +++ /dev/null)
@@ -163,10 +161,11 @@ func ParseDiff(r io.Reader) ([]DiffFile, error) {
 		switch {
 		case strings.HasPrefix(line, "diff --git "):
 			flushFile()
-			m := reDiffGit.FindStringSubmatch(line)
-			if m != nil {
-				current = &DiffFile{Path: m[2], OldPath: m[1]}
+			oldPath, newPath, err := parseDiffGitHeader(line)
+			if err != nil {
+				return nil, err
 			}
+			current = &DiffFile{Path: newPath, OldPath: oldPath}
 			currentHunk = nil
 
 		case strings.HasPrefix(line, "--- "):
@@ -248,6 +247,11 @@ func ParseDiff(r io.Reader) ([]DiffFile, error) {
 				current.IsDeleted = true
 			}
 
+		case line == `\ No newline at end of file`:
+			// This marker describes the preceding diff line and consumes no
+			// source or destination line number.
+			continue
+
 		case strings.HasPrefix(line, "+"):
 			if currentHunk != nil {
 				currentHunk.Lines = append(currentHunk.Lines, DiffLine{
@@ -294,6 +298,50 @@ func ParseDiff(r io.Reader) ([]DiffFile, error) {
 	}
 
 	return files, nil
+}
+
+func parseDiffGitHeader(line string) (string, string, error) {
+	rest := strings.TrimPrefix(line, "diff --git ")
+	oldToken, rest, err := parseGitPathToken(rest)
+	if err != nil {
+		return "", "", fmt.Errorf("parse diff --git header %q: %w", line, err)
+	}
+	newToken, trailing, err := parseGitPathToken(strings.TrimLeft(rest, " \t"))
+	if err != nil {
+		return "", "", fmt.Errorf("parse diff --git header %q: %w", line, err)
+	}
+	if strings.TrimSpace(trailing) != "" || !strings.HasPrefix(oldToken, "a/") || !strings.HasPrefix(newToken, "b/") {
+		return "", "", fmt.Errorf("parse diff --git header %q: invalid path pair", line)
+	}
+	return strings.TrimPrefix(oldToken, "a/"), strings.TrimPrefix(newToken, "b/"), nil
+}
+
+func parseGitPathToken(input string) (string, string, error) {
+	if input == "" {
+		return "", "", fmt.Errorf("missing path")
+	}
+	if input[0] != '"' {
+		if index := strings.IndexAny(input, " \t"); index >= 0 {
+			return input[:index], input[index:], nil
+		}
+		return input, "", nil
+	}
+	escaped := false
+	for index := 1; index < len(input); index++ {
+		switch {
+		case escaped:
+			escaped = false
+		case input[index] == '\\':
+			escaped = true
+		case input[index] == '"':
+			decoded, err := strconv.Unquote(input[:index+1])
+			if err != nil {
+				return "", "", err
+			}
+			return decoded, input[index+1:], nil
+		}
+	}
+	return "", "", fmt.Errorf("unterminated quoted path")
 }
 
 // ParseDiffString is a convenience wrapper for ParseDiff that accepts

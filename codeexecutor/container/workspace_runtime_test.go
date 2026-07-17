@@ -58,6 +58,15 @@ func isMetadataArchiveName(name string) bool {
 			strings.HasSuffix(name, metadataTmpSuf)
 }
 
+func TestBoundedOutputLimitsRetainedBytes(t *testing.T) {
+	output := newBoundedOutput(4)
+	n, err := output.Write([]byte("abcdefgh"))
+	require.NoError(t, err)
+	require.Equal(t, 8, n)
+	require.Equal(t, 4, len(output.data))
+	require.Equal(t, "abcd\n... [output truncated at 4 bytes]", output.String())
+}
+
 // helper: fake docker client bound to httptest server.
 func fakeDocker(t *testing.T, h http.HandlerFunc) (*client.Client, func()) {
 	t.Helper()

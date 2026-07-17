@@ -13,6 +13,7 @@ package internal
 import (
 	"context"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -95,6 +96,16 @@ func TestSandbox_OutputTruncation(t *testing.T) {
 
 	require.Equal(t, SandboxStatusSuccess, run.Status)
 	require.Contains(t, run.Stdout, "truncated")
+}
+
+func TestBoundedCaptureCapsMemoryWhileWriting(t *testing.T) {
+	capture := newBoundedCapture(32)
+	payload := strings.Repeat("x", 1024*1024)
+	written, err := capture.Write([]byte(payload))
+	require.NoError(t, err)
+	require.Equal(t, len(payload), written)
+	require.Len(t, capture.data, 32)
+	require.Contains(t, capture.String(), "truncated")
 }
 
 func TestSandbox_FailureDoesNotPanic(t *testing.T) {

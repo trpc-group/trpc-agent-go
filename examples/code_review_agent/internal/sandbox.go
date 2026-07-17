@@ -12,6 +12,7 @@ package internal
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -50,19 +51,28 @@ type SandboxRun struct {
 
 // SandboxConfig holds sandbox execution parameters.
 type SandboxConfig struct {
-	Timeout        time.Duration
-	MaxOutputBytes int
-	WorkDir        string
-	AllowedEnvVars []string // whitelist of env vars to pass through
+	Timeout            time.Duration
+	MaxOutputBytes     int
+	MaxWorkspaceBytes  int64
+	MemoryMB           int
+	CPUPercent         int
+	MaxPIDs            int
+	TrustedModuleCache bool
+	WorkDir            string
+	AllowedEnvVars     []string // whitelist of env vars to pass through
 }
 
 // DefaultSandboxConfig returns safe default sandbox settings.
 func DefaultSandboxConfig() SandboxConfig {
 	return SandboxConfig{
-		Timeout:        30 * time.Second,
-		MaxOutputBytes: 1 * 1024 * 1024, // 1MB
-		WorkDir:        "",
-		AllowedEnvVars: []string{"PATH", "HOME", "GOROOT", "GOPATH", "LANG"},
+		Timeout:           30 * time.Second,
+		MaxOutputBytes:    1 * 1024 * 1024, // 1MB
+		MaxWorkspaceBytes: 256 * 1024 * 1024,
+		MemoryMB:          1024,
+		CPUPercent:        200,
+		MaxPIDs:           256,
+		WorkDir:           "",
+		AllowedEnvVars:    []string{"PATH", "HOME", "GOROOT", "GOPATH", "LANG"},
 	}
 }
 
@@ -80,6 +90,9 @@ type SandboxExecutor interface {
 
 // NewSandbox creates a Sandbox with the given config.
 func NewSandbox(config SandboxConfig) *Sandbox {
+	if config.MaxOutputBytes <= 0 {
+		config.MaxOutputBytes = DefaultSandboxConfig().MaxOutputBytes
+	}
 	return &Sandbox{config: config}
 }
 
@@ -129,7 +142,7 @@ func (s *Sandbox) Execute(
 	}
 
 	// #nosec G204 — command is validated by permission policy
-	cmd := exec.CommandContext(timeoutCtx, parts[0], parts[1:]...)
+	cmd := exec.Command(parts[0], parts[1:]...)
 
 	// Set working directory.
 	if s.config.WorkDir != "" {
@@ -139,15 +152,15 @@ func (s *Sandbox) Execute(
 	// Build whitelisted environment.
 	cmd.Env = s.buildEnv()
 
-	var stdoutBuf, stderrBuf strings.Builder
+	stdoutBuf := newBoundedCapture(s.config.MaxOutputBytes)
+	stderrBuf := newBoundedCapture(s.config.MaxOutputBytes)
 	cmd.Stdout = &stdoutBuf
 	cmd.Stderr = &stderrBuf
 
-	err := cmd.Run()
+	err := runCommandWithContext(timeoutCtx, cmd)
 
-	// Apply output size limits.
-	run.Stdout = RedactSensitiveInfo(truncateOutput(stdoutBuf.String(), s.config.MaxOutputBytes))
-	run.Stderr = RedactSensitiveInfo(truncateOutput(stderrBuf.String(), s.config.MaxOutputBytes))
+	run.Stdout = RedactSensitiveInfo(stdoutBuf.String())
+	run.Stderr = RedactSensitiveInfo(stderrBuf.String())
 	run.ExitCode = -1
 	if cmd.ProcessState != nil {
 		run.ExitCode = cmd.ProcessState.ExitCode()
@@ -188,4 +201,58 @@ func truncateOutput(s string, maxBytes int) string {
 	}
 	return s[:maxBytes] + "\n... [output truncated at " +
 		fmt.Sprintf("%d bytes]", maxBytes)
+}
+
+type boundedCapture struct {
+	data      []byte
+	limit     int
+	truncated bool
+}
+
+func newBoundedCapture(limit int) boundedCapture {
+	if limit <= 0 {
+		limit = DefaultSandboxConfig().MaxOutputBytes
+	}
+	return boundedCapture{data: make([]byte, 0, min(limit, 4096)), limit: limit}
+}
+
+func (b *boundedCapture) Write(p []byte) (int, error) {
+	original := len(p)
+	remaining := b.limit - len(b.data)
+	if remaining <= 0 {
+		b.truncated = b.truncated || original > 0
+		return original, nil
+	}
+	if len(p) > remaining {
+		b.data = append(b.data, p[:remaining]...)
+		b.truncated = true
+		return original, nil
+	}
+	b.data = append(b.data, p...)
+	return original, nil
+}
+
+func (b *boundedCapture) String() string {
+	text := string(b.data)
+	if b.truncated {
+		text += fmt.Sprintf("\n... [output truncated at %d bytes]", b.limit)
+	}
+	return text
+}
+
+func runCommandWithContext(ctx context.Context, cmd *exec.Cmd) error {
+	prepareProcessTree(cmd)
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		killErr := terminateProcessTree(cmd)
+		waitErr := <-done
+		return errors.Join(ctx.Err(), killErr, waitErr)
+	}
 }

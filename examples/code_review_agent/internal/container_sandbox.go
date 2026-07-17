@@ -11,14 +11,19 @@
 package internal
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
-	"io/fs"
+	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
+	dockercontainer "github.com/docker/docker/api/types/container"
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	containerexecutor "trpc.group/trpc-go/trpc-agent-go/codeexecutor/container"
@@ -31,20 +36,47 @@ type ContainerSandbox struct {
 	executor *containerexecutor.CodeExecutor
 	config   SandboxConfig
 	repoPath string
+	mu       sync.Mutex
+	closed   bool
 }
 
-const maxWorkspaceDiskBytes int64 = 256 * 1024 * 1024
+const maxSnapshotPathListBytes = 4 * 1024 * 1024
 
 // NewContainerSandbox starts the production container runtime.
 func NewContainerSandbox(config SandboxConfig, repoPath, dockerfilePath string) (*ContainerSandbox, error) {
-	options := []containerexecutor.Option{containerexecutor.WithDockerFilePath(dockerfilePath)}
-	// The container has no network access. Reuse the host's already-downloaded
-	// module cache as a read-only mount so checks remain deterministic without
-	// allowing dependency downloads during review.
-	if output, err := exec.Command("go", "env", "GOMODCACHE").Output(); err == nil {
-		if moduleCache := strings.TrimSpace(string(output)); moduleCache != "" {
-			options = append(options, containerexecutor.WithBindMount(moduleCache, "/go/pkg/mod", "ro"))
+	defaults := DefaultSandboxConfig()
+	if config.MaxOutputBytes <= 0 {
+		config.MaxOutputBytes = defaults.MaxOutputBytes
+	}
+	if config.MaxWorkspaceBytes <= 0 {
+		config.MaxWorkspaceBytes = defaults.MaxWorkspaceBytes
+	}
+	if config.MemoryMB <= 0 {
+		config.MemoryMB = defaults.MemoryMB
+	}
+	if config.CPUPercent <= 0 {
+		config.CPUPercent = defaults.CPUPercent
+	}
+	if config.MaxPIDs <= 0 {
+		config.MaxPIDs = defaults.MaxPIDs
+	}
+	hostConfig := hardenedHostConfig(config)
+	options := []containerexecutor.Option{
+		containerexecutor.WithDockerFilePath(dockerfilePath),
+		containerexecutor.WithHostConfig(hostConfig),
+	}
+	// A broad host module cache can contain unrelated private source. It is
+	// available only as an explicit trusted-mode opt-in.
+	if config.TrustedModuleCache {
+		output, err := exec.Command("go", "env", "GOMODCACHE").Output()
+		if err != nil {
+			return nil, fmt.Errorf("resolve trusted module cache: %w", err)
 		}
+		moduleCache := strings.TrimSpace(string(output))
+		if moduleCache == "" {
+			return nil, errors.New("trusted module cache path is empty")
+		}
+		options = append(options, containerexecutor.WithBindMount(moduleCache, "/go/pkg/mod", "ro"))
 	}
 	executor, err := containerexecutor.New(options...)
 	if err != nil {
@@ -53,8 +85,34 @@ func NewContainerSandbox(config SandboxConfig, repoPath, dockerfilePath string) 
 	return &ContainerSandbox{executor: executor, config: config, repoPath: repoPath}, nil
 }
 
+func hardenedHostConfig(config SandboxConfig) dockercontainer.HostConfig {
+	pids := int64(config.MaxPIDs)
+	return dockercontainer.HostConfig{
+		AutoRemove:     true,
+		Privileged:     false,
+		NetworkMode:    "none",
+		ReadonlyRootfs: true,
+		Tmpfs: map[string]string{
+			"/tmp": fmt.Sprintf("rw,nosuid,nodev,size=%d", config.MaxWorkspaceBytes),
+		},
+		Resources: dockercontainer.Resources{
+			NanoCPUs:  int64(config.CPUPercent) * 10_000_000,
+			Memory:    int64(config.MemoryMB) * 1024 * 1024,
+			PidsLimit: &pids,
+		},
+	}
+}
+
 // Close releases the underlying container.
-func (s *ContainerSandbox) Close() error { return s.executor.Close() }
+func (s *ContainerSandbox) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil
+	}
+	s.closed = true
+	return s.executor.Close()
+}
 
 // Execute runs one previously-authorized command.
 func (s *ContainerSandbox) Execute(ctx context.Context, taskID, command string, decision Decision, reason string) *SandboxRun {
@@ -62,6 +120,13 @@ func (s *ContainerSandbox) Execute(ctx context.Context, taskID, command string, 
 	if IsBlocked(decision) {
 		run.Status = SandboxStatusBlocked
 		run.Error = "command blocked by permission policy: " + reason
+		return run
+	}
+	s.mu.Lock()
+	closed := s.closed
+	s.mu.Unlock()
+	if closed {
+		run.Status, run.Error = SandboxStatusError, "container was recycled after a previous timeout"
 		return run
 	}
 	start := time.Now()
@@ -74,17 +139,19 @@ func (s *ContainerSandbox) Execute(ctx context.Context, taskID, command string, 
 
 	timeoutCtx, cancel := context.WithTimeout(ctx, s.config.Timeout)
 	defer cancel()
-	if err := validateRepositorySize(s.repoPath, maxWorkspaceDiskBytes); err != nil {
+	snapshotPath, removeSnapshot, err := stageReviewSnapshot(timeoutCtx, s.repoPath, s.config.MaxWorkspaceBytes)
+	if err != nil {
 		run.Status, run.Error = SandboxStatusError, RedactSensitiveInfo(err.Error())
 		return run
 	}
-	ws, err := s.executor.CreateWorkspace(timeoutCtx, taskID+"-"+run.ID, codeexecutor.WorkspacePolicy{Isolated: true, MaxDiskBytes: maxWorkspaceDiskBytes})
+	defer removeSnapshot()
+	ws, err := s.executor.CreateWorkspace(timeoutCtx, taskID+"-"+run.ID, codeexecutor.WorkspacePolicy{Isolated: true, MaxDiskBytes: s.config.MaxWorkspaceBytes})
 	if err != nil {
 		run.Status, run.Error = SandboxStatusError, RedactSensitiveInfo(err.Error())
 		return run
 	}
 	defer s.executor.Cleanup(context.WithoutCancel(ctx), ws)
-	if err := s.executor.PutDirectory(timeoutCtx, ws, s.repoPath, "repo"); err != nil {
+	if err := s.executor.PutDirectory(timeoutCtx, ws, snapshotPath, "repo"); err != nil {
 		run.Status, run.Error = SandboxStatusError, RedactSensitiveInfo(err.Error())
 		return run
 	}
@@ -93,20 +160,24 @@ func (s *ContainerSandbox) Execute(ctx context.Context, taskID, command string, 
 		Env: map[string]string{
 			"PATH":        "/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin",
 			"GOPATH":      "/go",
-			"GOMODCACHE":  "/go/pkg/mod",
+			"GOMODCACHE":  moduleCachePath(s.config.TrustedModuleCache),
 			"GOCACHE":     "/tmp/go-build",
 			"HOME":        "/tmp",
 			"GOTOOLCHAIN": "local",
 			"GOPROXY":     "off",
 		},
-		Limits: codeexecutor.ResourceLimits{CPUPercent: 200, MemoryMB: 1024, MaxPIDs: 256},
+		Limits:         codeexecutor.ResourceLimits{CPUPercent: s.config.CPUPercent, MemoryMB: s.config.MemoryMB, MaxPIDs: s.config.MaxPIDs},
+		MaxOutputBytes: s.config.MaxOutputBytes,
 	})
-	run.Stdout = RedactSensitiveInfo(truncateOutput(result.Stdout, s.config.MaxOutputBytes))
-	run.Stderr = RedactSensitiveInfo(truncateOutput(result.Stderr, s.config.MaxOutputBytes))
+	run.Stdout = RedactSensitiveInfo(result.Stdout)
+	run.Stderr = RedactSensitiveInfo(result.Stderr)
 	run.ExitCode, run.TimedOut = result.ExitCode, result.TimedOut
 	if result.TimedOut || timeoutCtx.Err() == context.DeadlineExceeded {
 		run.Status, run.TimedOut = SandboxStatusTimeout, true
 		run.Error = fmt.Sprintf("command timed out after %s", s.config.Timeout)
+		// Docker exec cannot reliably kill descendants. Closing the executor
+		// recycles the whole container before another command can start.
+		_ = s.Close()
 	} else if err != nil {
 		run.Status, run.Error = SandboxStatusError, RedactSensitiveInfo(err.Error())
 	} else if result.ExitCode != 0 {
@@ -117,27 +188,114 @@ func (s *ContainerSandbox) Execute(ctx context.Context, taskID, command string, 
 	return run
 }
 
-func validateRepositorySize(root string, limit int64) error {
+func moduleCachePath(trusted bool) string {
+	if trusted {
+		return "/go/pkg/mod"
+	}
+	return "/tmp/gomodcache"
+}
+
+func stageReviewSnapshot(ctx context.Context, root string, limit int64) (string, func(), error) {
+	root, err := filepath.Abs(root)
+	if err != nil {
+		return "", func() {}, fmt.Errorf("resolve repository: %w", err)
+	}
+	root, err = filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", func() {}, fmt.Errorf("resolve repository links: %w", err)
+	}
+	cmd := exec.CommandContext(ctx, "git", "ls-files", "--cached", "--others", "--exclude-standard", "-z", "--")
+	cmd.Dir = root
+	cmd.Env = append(filteredGitEnv(), "GIT_OPTIONAL_LOCKS=0")
+	var stdout, stderr limitedBuffer
+	stdout.limit, stderr.limit = maxSnapshotPathListBytes, 64*1024
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		return "", func() {}, fmt.Errorf("list review snapshot files: %w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	if stdout.exceeded {
+		return "", func() {}, fmt.Errorf("review snapshot path list exceeds %d bytes", maxSnapshotPathListBytes)
+	}
+	snapshot, err := os.MkdirTemp("", "code-review-snapshot-")
+	if err != nil {
+		return "", func() {}, fmt.Errorf("create review snapshot: %w", err)
+	}
+	cleanup := func() { _ = os.RemoveAll(snapshot) }
 	var total int64
-	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
+	for _, rawName := range bytes.Split(stdout.Bytes(), []byte{0}) {
+		if len(rawName) == 0 {
+			continue
 		}
-		if !entry.Type().IsRegular() {
-			return nil
+		name := filepath.Clean(filepath.FromSlash(string(rawName)))
+		if filepath.IsAbs(name) || name == ".." || strings.HasPrefix(name, ".."+string(filepath.Separator)) || name == ".git" || strings.HasPrefix(name, ".git"+string(filepath.Separator)) {
+			cleanup()
+			return "", func() {}, fmt.Errorf("unsafe review snapshot path %q", name)
 		}
-		info, err := entry.Info()
+		source := filepath.Join(root, name)
+		info, err := os.Lstat(source)
+		if errors.Is(err, os.ErrNotExist) {
+			continue // tracked deletion
+		}
 		if err != nil {
-			return err
+			cleanup()
+			return "", func() {}, fmt.Errorf("lstat review file %q: %w", name, err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			cleanup()
+			return "", func() {}, fmt.Errorf("review file %q is not a regular file", name)
+		}
+		resolved, err := filepath.EvalSymlinks(source)
+		if err != nil {
+			cleanup()
+			return "", func() {}, fmt.Errorf("resolve review file %q: %w", name, err)
+		}
+		inside, err := pathInside(root, resolved)
+		if err != nil || !inside {
+			cleanup()
+			return "", func() {}, fmt.Errorf("review file %q resolves outside repository", name)
 		}
 		if info.Size() > limit-total {
-			return fmt.Errorf("repository exceeds %d-byte sandbox copy limit", limit)
+			cleanup()
+			return "", func() {}, fmt.Errorf("review snapshot exceeds %d-byte limit", limit)
 		}
-		total += info.Size()
-		return nil
-	})
-	if err != nil {
-		return fmt.Errorf("validate repository before sandbox copy: %w", err)
+		destination := filepath.Join(snapshot, name)
+		if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
+			cleanup()
+			return "", func() {}, fmt.Errorf("create snapshot directory for %q: %w", name, err)
+		}
+		sourceFile, err := os.Open(source)
+		if err != nil {
+			cleanup()
+			return "", func() {}, fmt.Errorf("open review file %q: %w", name, err)
+		}
+		openedInfo, statErr := sourceFile.Stat()
+		if statErr != nil || !os.SameFile(info, openedInfo) {
+			_ = sourceFile.Close()
+			cleanup()
+			return "", func() {}, fmt.Errorf("review file %q changed while opening", name)
+		}
+		mode := os.FileMode(0o600)
+		if info.Mode()&0o111 != 0 {
+			mode = 0o700
+		}
+		destinationFile, err := os.OpenFile(destination, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
+		if err != nil {
+			_ = sourceFile.Close()
+			cleanup()
+			return "", func() {}, fmt.Errorf("create snapshot file %q: %w", name, err)
+		}
+		written, copyErr := io.Copy(destinationFile, io.LimitReader(sourceFile, limit-total+1))
+		closeSourceErr := sourceFile.Close()
+		closeDestinationErr := destinationFile.Close()
+		if written > limit-total {
+			cleanup()
+			return "", func() {}, fmt.Errorf("review snapshot exceeds %d-byte limit while copying %q", limit, name)
+		}
+		if copyErr != nil || closeSourceErr != nil || closeDestinationErr != nil {
+			cleanup()
+			return "", func() {}, fmt.Errorf("copy review file %q within limit: %w", name, errors.Join(copyErr, closeSourceErr, closeDestinationErr))
+		}
+		total += written
 	}
-	return nil
+	return snapshot, cleanup, nil
 }

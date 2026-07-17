@@ -40,6 +40,7 @@ CGO_ENABLED=1 go test ./...
 | `--files` | "" | 逗号分隔的仓库相对路径过滤器 |
 | `--executor` | container | 沙箱执行器：container\|local（local 仅供开发） |
 | `--dockerfile` | 自动探测 | 自定义容器 Dockerfile 所在目录 |
+| `--trusted-module-cache` | false | 只对可信仓库只读挂载宿主机 Go 模块缓存；默认使用容器内空缓存 |
 | `--dry-run` | true | 仅运行规则，跳过沙箱执行 |
 | `--db-path` | review.db | SQLite 数据库路径 |
 | `--output-dir` | . | 报告输出目录 |
@@ -103,7 +104,10 @@ CGO_ENABLED=1 go test ./...
 
 - 高风险命令（rm、curl、wget）被 PermissionPolicy 拒绝
 - 需审查命令（docker、git push）进入 needs_human_review
-- 默认使用无网络、非特权的 `codeexecutor/container` 隔离 workspace；本地执行仅为显式 fallback
-- 沙箱超时 30 秒、输出限制 1MB，并限制 CPU、内存、PID 和 workspace 大小
+- 默认使用无网络、非特权、只读根文件系统的 `codeexecutor/container` 隔离 workspace；本地执行仅为显式 fallback
+- 只复制 Git 已跟踪和未忽略的工作区文件；拒绝符号链接、特殊文件、越界路径和超出大小上限的快照
+- 默认不暴露宿主机 Go 模块缓存；可信仓库可显式使用 `--trusted-module-cache`
+- 沙箱超时 30 秒；超时会回收整个容器，并限制 CPU、内存、PID 和 workspace 大小
+- stdout/stderr 在读取时分别限制为 1MB，超限内容只丢弃而不继续占用内存
 - 环境变量白名单（仅 PATH、HOME、GOROOT、GOPATH）
 - 敏感信息自动脱敏（API Key、token、password 等）

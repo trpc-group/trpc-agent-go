@@ -74,7 +74,7 @@ func GenerateMarkdownReport(data *ReportData) string {
 			sb.WriteString(fmt.Sprintf("- **Recommendation:** %s\n\n", f.Recommendation))
 		}
 	} else {
-		sb.WriteString("## Findings\n\nNo findings. The code looks clean.\n\n")
+		sb.WriteString("## Findings\n\nNo findings are confirmed. Review warnings and sandbox evidence before approval.\n\n")
 	}
 
 	// Warnings (low confidence)
@@ -140,7 +140,7 @@ func GenerateMarkdownReport(data *ReportData) string {
 
 // BuildRecommendations generates actionable recommendations from
 // the findings.
-func BuildRecommendations(findings []Finding) []string {
+func BuildRecommendations(findings []Finding, warnings []Warning, sandboxRuns []SandboxRun) []string {
 	var recs []string
 	critical := 0
 	high := 0
@@ -163,7 +163,21 @@ func BuildRecommendations(findings []Finding) []string {
 				"leaks or data loss in production.", high))
 	}
 	if len(findings) == 0 {
-		recs = append(recs, "No issues found. Code is ready for review.")
+		sandboxPassed := len(sandboxRuns) > 0
+		for _, run := range sandboxRuns {
+			if run.Status != SandboxStatusSuccess {
+				sandboxPassed = false
+				break
+			}
+		}
+		switch {
+		case len(warnings) > 0:
+			recs = append(recs, fmt.Sprintf("No confirmed issues; review %d warning(s) before approval.", len(warnings)))
+		case !sandboxPassed:
+			recs = append(recs, "No confirmed issues; sandbox verification is missing or unsuccessful, so readiness is not established.")
+		default:
+			recs = append(recs, "No confirmed issues and all sandbox checks passed. Code is ready for human review.")
+		}
 	}
 	return recs
 }
@@ -187,6 +201,6 @@ func NewReportData(
 		PermissionSummary: permissionRecords,
 		SandboxRuns:       sandboxRuns,
 		Monitoring:        monitoring,
-		Recommendations:   BuildRecommendations(findings),
+		Recommendations:   BuildRecommendations(findings, warnings, sandboxRuns),
 	}
 }

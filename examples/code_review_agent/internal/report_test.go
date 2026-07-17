@@ -89,13 +89,32 @@ func TestBuildRecommendations(t *testing.T) {
 		{Severity: SeverityCritical},
 		{Severity: SeverityHigh},
 	}
-	recs := BuildRecommendations(findings)
+	recs := BuildRecommendations(findings, nil, nil)
 	require.Len(t, recs, 2)
 	require.Contains(t, recs[0], "critical")
 }
 
 func TestBuildRecommendations_Empty(t *testing.T) {
-	recs := BuildRecommendations(nil)
+	recs := BuildRecommendations(nil, nil, nil)
 	require.Len(t, recs, 1)
-	require.Contains(t, recs[0], "ready for review")
+	require.Contains(t, recs[0], "readiness is not established")
+}
+
+func TestBuildRecommendations_WarningOnlyIsNeutral(t *testing.T) {
+	recs := BuildRecommendations(nil, []Warning{{Title: "needs review"}}, []SandboxRun{{Status: SandboxStatusSuccess}})
+	require.Len(t, recs, 1)
+	require.Contains(t, recs[0], "review 1 warning")
+	require.NotContains(t, recs[0], "ready")
+}
+
+func TestBuildRecommendations_FailedSandboxIsNeutral(t *testing.T) {
+	recs := BuildRecommendations(nil, nil, []SandboxRun{{Status: SandboxStatusFailed}})
+	require.Len(t, recs, 1)
+	require.Contains(t, recs[0], "unsuccessful")
+}
+
+func TestBuildRecommendations_ReadyAfterSuccessfulSandbox(t *testing.T) {
+	recs := BuildRecommendations(nil, nil, []SandboxRun{{Status: SandboxStatusSuccess}})
+	require.Len(t, recs, 1)
+	require.Contains(t, recs[0], "ready for human review")
 }

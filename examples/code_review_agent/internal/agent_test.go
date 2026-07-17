@@ -12,6 +12,7 @@ package internal
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 
@@ -177,4 +178,39 @@ func TestAgent_Review_DedupWorks(t *testing.T) {
 			"duplicate finding found: %s", key)
 		seen[key] = true
 	}
+}
+
+type cancelAfterSaveStorage struct {
+	Storage
+	cancel context.CancelFunc
+	done   bool
+}
+
+func (s *cancelAfterSaveStorage) SaveTask(ctx context.Context, task *ReviewTask) error {
+	if err := s.Storage.SaveTask(ctx, task); err != nil {
+		return err
+	}
+	if !s.done {
+		s.done = true
+		s.cancel()
+	}
+	return nil
+}
+
+func TestAgentCancellationPersistsTerminalStatus(t *testing.T) {
+	storage := newTestStorage(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	wrapped := &cancelAfterSaveStorage{Storage: storage, cancel: cancel}
+	agent := NewReviewAgent(wrapped)
+
+	_, err := agent.Review(ctx, ReviewInput{
+		TaskID:   "cancel-after-save",
+		DiffFile: filepath.Join("..", "fixtures", "01_clean.diff"),
+		DryRun:   true,
+	})
+	require.Error(t, err)
+	require.True(t, errors.Is(err, context.Canceled), "unexpected error: %v", err)
+	task, getErr := storage.GetTask(context.Background(), "cancel-after-save")
+	require.NoError(t, getErr)
+	require.Equal(t, "failed", task.Status)
 }

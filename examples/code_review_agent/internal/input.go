@@ -14,6 +14,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -97,19 +98,49 @@ func appendUntrackedDiffs(ctx context.Context, repo string, filePaths []string, 
 		}
 		name := filepath.ToSlash(string(rawName))
 		path := filepath.Join(repo, filepath.FromSlash(name))
-		info, err := os.Stat(path)
+		info, err := os.Lstat(path)
 		if err != nil {
-			return fmt.Errorf("stat untracked file %q: %w", name, err)
+			return fmt.Errorf("lstat untracked file %q: %w", name, err)
 		}
-		if !info.Mode().IsRegular() {
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
 			return fmt.Errorf("untracked file %q is not a regular file", name)
+		}
+		resolved, err := filepath.EvalSymlinks(path)
+		if err != nil {
+			return fmt.Errorf("resolve untracked file %q: %w", name, err)
+		}
+		inside, err := pathInside(repo, resolved)
+		if err != nil {
+			return fmt.Errorf("validate untracked file %q: %w", name, err)
+		}
+		if !inside {
+			return fmt.Errorf("untracked file %q resolves outside repository", name)
 		}
 		if info.Size() > int64(maxInputDiffBytes-output.Len()) {
 			return fmt.Errorf("git diff exceeds %d-byte limit", maxInputDiffBytes)
 		}
-		content, err := os.ReadFile(path)
+		file, err := os.Open(path)
 		if err != nil {
-			return fmt.Errorf("read untracked file %q: %w", name, err)
+			return fmt.Errorf("open untracked file %q: %w", name, err)
+		}
+		openedInfo, statErr := file.Stat()
+		if statErr != nil || !os.SameFile(info, openedInfo) {
+			_ = file.Close()
+			if statErr != nil {
+				return fmt.Errorf("restat untracked file %q: %w", name, statErr)
+			}
+			return fmt.Errorf("untracked file %q changed while opening", name)
+		}
+		content, readErr := io.ReadAll(io.LimitReader(file, int64(maxInputDiffBytes-output.Len())+1))
+		closeErr := file.Close()
+		if readErr != nil {
+			return fmt.Errorf("read untracked file %q: %w", name, readErr)
+		}
+		if closeErr != nil {
+			return fmt.Errorf("close untracked file %q: %w", name, closeErr)
+		}
+		if len(content) > maxInputDiffBytes-output.Len() {
+			return fmt.Errorf("git diff exceeds %d-byte limit", maxInputDiffBytes)
 		}
 		if bytes.IndexByte(content, 0) >= 0 {
 			return fmt.Errorf("untracked binary file %q cannot be reviewed safely", name)
@@ -125,6 +156,26 @@ func appendUntrackedDiffs(ctx context.Context, repo string, filePaths []string, 
 		}
 	}
 	return nil
+}
+
+func pathInside(root, candidate string) (bool, error) {
+	root, err := filepath.Abs(root)
+	if err != nil {
+		return false, err
+	}
+	root, err = filepath.EvalSymlinks(root)
+	if err != nil {
+		return false, err
+	}
+	candidate, err = filepath.Abs(candidate)
+	if err != nil {
+		return false, err
+	}
+	rel, err := filepath.Rel(root, candidate)
+	if err != nil {
+		return false, err
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel), nil
 }
 
 type limitedBuffer struct {
