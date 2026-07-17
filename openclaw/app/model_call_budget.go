@@ -19,7 +19,6 @@ import (
 	"unicode/utf8"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
-	"trpc.group/trpc-go/trpc-agent-go/internal/flow/llmflow"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/gateway"
 )
@@ -362,6 +361,31 @@ func modelCallBudgetTimeoutResponse(
 		isModelTimeoutResponse(resp)
 }
 
+type modelCallBudgetRetryCallbacksKey struct{}
+
+type modelCallBudgetRetryCallbacks struct {
+	before func(context.Context, *model.Request) (
+		context.Context,
+		*model.Response,
+		error,
+	)
+	after func(context.Context, *model.Request, *model.Response) (
+		context.Context,
+		error,
+	)
+}
+
+func modelCallBudgetRetryCallbacksFromContext(
+	ctx context.Context,
+) modelCallBudgetRetryCallbacks {
+	if ctx == nil {
+		return modelCallBudgetRetryCallbacks{}
+	}
+	value := ctx.Value(modelCallBudgetRetryCallbacksKey{})
+	callbacks, _ := value.(modelCallBudgetRetryCallbacks)
+	return callbacks
+}
+
 func modelCallBudgetPrepareFinalRetry(
 	ctx context.Context,
 	budget *modelCallBudget,
@@ -369,14 +393,20 @@ func modelCallBudgetPrepareFinalRetry(
 	discarded *model.Response,
 ) (context.Context, *model.Request, *model.Response, error) {
 	var err error
+	callbacks := modelCallBudgetRetryCallbacksFromContext(ctx)
 	if discarded != nil {
-		ctx, err = llmflow.RunModelRetryAfterCallbacks(ctx, req, discarded)
+		if callbacks.after != nil {
+			ctx, err = callbacks.after(ctx, req, discarded)
+		}
 		if err != nil {
 			return ctx, nil, nil, err
 		}
 	}
 	finalReq := budget.applyFinalRequest(req, true)
-	ctx, customResp, err := llmflow.RunModelRetryBeforeCallbacks(ctx, finalReq)
+	var customResp *model.Response
+	if callbacks.before != nil {
+		ctx, customResp, err = callbacks.before(ctx, finalReq)
+	}
 	if err != nil {
 		return ctx, nil, nil, err
 	}
@@ -424,6 +454,31 @@ func newModelCallBudgetBypassModel(m model.Model) model.Model {
 
 type modelCallBudgetModel struct {
 	model model.Model
+}
+
+// WithModelRetryCallbacks binds callback-aware retry hooks to one model call.
+// llmflow discovers this optional method structurally, so the openclaw module
+// remains compatible with older root-module releases.
+func (m *modelCallBudgetModel) WithModelRetryCallbacks(
+	ctx context.Context,
+	before func(context.Context, *model.Request) (
+		context.Context,
+		*model.Response,
+		error,
+	),
+	after func(context.Context, *model.Request, *model.Response) (
+		context.Context,
+		error,
+	),
+) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(
+		ctx,
+		modelCallBudgetRetryCallbacksKey{},
+		modelCallBudgetRetryCallbacks{before: before, after: after},
+	)
 }
 
 func (m *modelCallBudgetModel) GenerateContent(

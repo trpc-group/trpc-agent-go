@@ -16,36 +16,44 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
-type modelRetryCallbacksKey struct{}
-
-type modelRetryCallbacks struct {
-	before func(context.Context, *model.Request) (
+type modelRetryCallbackBinder interface {
+	WithModelRetryCallbacks(
 		context.Context,
-		*model.Response,
-		error,
-	)
-	after func(context.Context, *model.Request, *model.Response) (
-		context.Context,
-		error,
-	)
+		func(context.Context, *model.Request) (
+			context.Context,
+			*model.Response,
+			error,
+		),
+		func(context.Context, *model.Request, *model.Response) (
+			context.Context,
+			error,
+		),
+	) context.Context
 }
 
 func contextWithModelRetryCallbacks(
 	ctx context.Context,
 	flow *Flow,
 	invocation *agent.Invocation,
+	callModel model.Model,
 ) context.Context {
-	if ctx == nil || flow == nil {
+	binder, ok := callModel.(modelRetryCallbackBinder)
+	if ctx == nil || flow == nil || !ok {
 		return ctx
 	}
-	callbacks := modelRetryCallbacks{
-		before: func(
+	return binder.WithModelRetryCallbacks(
+		ctx,
+		func(
 			callbackCtx context.Context,
 			req *model.Request,
 		) (context.Context, *model.Response, error) {
-			return flow.runBeforeModelCallbacks(callbackCtx, invocation, req)
+			return flow.runBeforeModelCallbacks(
+				callbackCtx,
+				invocation,
+				req,
+			)
 		},
-		after: func(
+		func(
 			callbackCtx context.Context,
 			req *model.Request,
 			resp *model.Response,
@@ -58,39 +66,5 @@ func contextWithModelRetryCallbacks(
 			)
 			return updatedCtx, err
 		},
-	}
-	return context.WithValue(ctx, modelRetryCallbacksKey{}, callbacks)
-}
-
-// RunModelRetryBeforeCallbacks runs the normal before-model callback chain for
-// a physical retry initiated by a model wrapper.
-func RunModelRetryBeforeCallbacks(
-	ctx context.Context,
-	req *model.Request,
-) (context.Context, *model.Response, error) {
-	if ctx == nil {
-		return nil, nil, nil
-	}
-	callbacks, _ := ctx.Value(modelRetryCallbacksKey{}).(modelRetryCallbacks)
-	if callbacks.before == nil {
-		return ctx, nil, nil
-	}
-	return callbacks.before(ctx, req)
-}
-
-// RunModelRetryAfterCallbacks pairs a discarded physical response with the
-// normal after-model callback chain before a wrapper starts a retry.
-func RunModelRetryAfterCallbacks(
-	ctx context.Context,
-	req *model.Request,
-	resp *model.Response,
-) (context.Context, error) {
-	if ctx == nil {
-		return nil, nil
-	}
-	callbacks, _ := ctx.Value(modelRetryCallbacksKey{}).(modelRetryCallbacks)
-	if callbacks.after == nil {
-		return ctx, nil
-	}
-	return callbacks.after(ctx, req, resp)
+	)
 }

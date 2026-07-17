@@ -19,6 +19,48 @@ import (
 )
 
 type modelRetryTestContextKey struct{}
+type modelRetryTestCallbacksKey struct{}
+
+type modelRetryTestCallbacks struct {
+	before func(context.Context, *model.Request) (
+		context.Context,
+		*model.Response,
+		error,
+	)
+	after func(context.Context, *model.Request, *model.Response) (
+		context.Context,
+		error,
+	)
+}
+
+type modelRetryTestBinder struct{}
+
+func (modelRetryTestBinder) GenerateContent(
+	context.Context,
+	*model.Request,
+) (<-chan *model.Response, error) {
+	return nil, nil
+}
+
+func (modelRetryTestBinder) Info() model.Info {
+	return model.Info{Name: "retry-test-binder"}
+}
+
+func (modelRetryTestBinder) WithModelRetryCallbacks(
+	ctx context.Context,
+	before func(context.Context, *model.Request) (
+		context.Context,
+		*model.Response,
+		error,
+	),
+	after func(context.Context, *model.Request, *model.Response) (
+		context.Context,
+		error,
+	),
+) context.Context {
+	return context.WithValue(ctx, modelRetryTestCallbacksKey{},
+		modelRetryTestCallbacks{before: before, after: after})
+}
 
 func TestModelRetryCallbacks_RunNormalCallbackChain(t *testing.T) {
 	const contextValue = "retry-callback-context"
@@ -52,32 +94,30 @@ func TestModelRetryCallbacks_RunNormalCallbackChain(t *testing.T) {
 		context.Background(),
 		flow,
 		agent.NewInvocation(),
+		modelRetryTestBinder{},
 	)
+	bound, ok := ctx.Value(modelRetryTestCallbacksKey{}).(modelRetryTestCallbacks)
+	require.True(t, ok)
 	req := &model.Request{Messages: []model.Message{
 		model.NewUserMessage("retry"),
 	}}
 
-	ctx, customResponse, err := RunModelRetryBeforeCallbacks(ctx, req)
+	ctx, customResponse, err := bound.before(ctx, req)
 	require.NoError(t, err)
 	require.Nil(t, customResponse)
-	ctx, err = RunModelRetryAfterCallbacks(
-		ctx,
-		req,
-		&model.Response{ID: "response"},
-	)
+	ctx, err = bound.after(ctx, req, &model.Response{ID: "response"})
 	require.NoError(t, err)
 	require.NotNil(t, ctx)
 	require.Equal(t, 1, beforeCalls)
 	require.Equal(t, 1, afterCalls)
 }
 
-func TestModelRetryCallbacks_NilContext(t *testing.T) {
-	ctx, resp, err := RunModelRetryBeforeCallbacks(nil, &model.Request{})
-	require.NoError(t, err)
-	require.Nil(t, ctx)
-	require.Nil(t, resp)
-
-	ctx, err = RunModelRetryAfterCallbacks(nil, nil, nil)
-	require.NoError(t, err)
-	require.Nil(t, ctx)
+func TestModelRetryCallbacks_UnsupportedModel(t *testing.T) {
+	ctx := context.Background()
+	require.Equal(t, ctx, contextWithModelRetryCallbacks(
+		ctx,
+		New(nil, nil, Options{}),
+		agent.NewInvocation(),
+		&mockModel{},
+	))
 }

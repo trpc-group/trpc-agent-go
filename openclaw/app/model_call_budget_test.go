@@ -1144,6 +1144,74 @@ func TestModelCallBudgetIterModel_StopsWithoutDeadlineRetry(
 	require.Len(t, underlying.iterRequestsSnapshot(), 1)
 }
 
+type modelCallBudgetRetryCallbackBinder interface {
+	WithModelRetryCallbacks(
+		context.Context,
+		func(context.Context, *model.Request) (
+			context.Context,
+			*model.Response,
+			error,
+		),
+		func(context.Context, *model.Request, *model.Response) (
+			context.Context,
+			error,
+		),
+	) context.Context
+}
+
+func TestModelCallBudgetModel_DeadlineRetryRunsCallbacks(t *testing.T) {
+	t.Parallel()
+
+	underlying := &prefinalTimeoutBudgetModel{}
+	wrapped := newModelCallBudgetModel(underlying)
+	binder, ok := wrapped.(modelCallBudgetRetryCallbackBinder)
+	require.True(t, ok)
+	ctx, cancel := context.WithDeadline(
+		context.Background(),
+		time.Now().Add(500*time.Millisecond),
+	)
+	defer cancel()
+	ctx = withModelCallBudgetValue(
+		ctx,
+		newModelCallBudget(0, false, 300*time.Millisecond),
+	)
+	var beforeCalls int
+	var afterCalls int
+	ctx = binder.WithModelRetryCallbacks(
+		ctx,
+		func(
+			callbackCtx context.Context,
+			req *model.Request,
+		) (context.Context, *model.Response, error) {
+			beforeCalls++
+			require.Nil(t, req.Tools)
+			return callbackCtx, nil, nil
+		},
+		func(
+			callbackCtx context.Context,
+			req *model.Request,
+			resp *model.Response,
+		) (context.Context, error) {
+			afterCalls++
+			require.NotNil(t, req.Tools)
+			require.NotNil(t, resp.Error)
+			return callbackCtx, nil
+		},
+	)
+
+	ch, err := wrapped.GenerateContent(ctx, &model.Request{
+		Messages: []model.Message{model.NewUserMessage("question")},
+		Tools:    map[string]tool.Tool{"search": nil},
+	})
+	require.NoError(t, err)
+	for range ch {
+	}
+
+	require.Equal(t, 1, beforeCalls)
+	require.Equal(t, 1, afterCalls)
+	require.Len(t, underlying.requestsSnapshot(), 2)
+}
+
 func TestModelCallBudgetModel_StreamsBeforeDeadlineWindow(t *testing.T) {
 	t.Parallel()
 
