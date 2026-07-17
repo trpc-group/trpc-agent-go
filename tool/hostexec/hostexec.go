@@ -409,14 +409,10 @@ func (t *writeStdinTool) Call(
 		defer timer.Stop()
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
 		case <-timer.C:
 		}
 	}
 
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
 	poll, err := t.mgr.poll(sessionID, nil)
 	if err != nil {
 		return nil, err
