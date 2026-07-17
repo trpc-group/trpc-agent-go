@@ -213,7 +213,13 @@ func (ft *FunctionTool[I, O]) SkipSummarization() bool {
 }
 
 // ResultCodec returns the codec bound to this tool, or nil when none is
-// configured. The framework uses it to encode the model-visible tool result.
+// configured.
+//
+// This method exists so the framework can discover the codec set via
+// WithResultCodec. It is an internal discovery detail, not a supported
+// configuration entry point: bind a codec with function.WithResultCodec, or
+// resultcodec.Wrap for tools you cannot construct, rather than implementing or
+// calling this method directly.
 func (ft *FunctionTool[I, O]) ResultCodec() resultcodec.Codec {
 	return ft.resultCodec
 }
@@ -368,6 +374,12 @@ func (t *StreamableFunctionTool[I, O]) SkipSummarization() bool {
 
 // ResultCodec returns the codec bound to this tool, or nil when none is
 // configured. Only the final streamable result is encoded with it.
+//
+// This method exists so the framework can discover the codec set via
+// WithResultCodec. It is an internal discovery detail, not a supported
+// configuration entry point: bind a codec with function.WithResultCodec, or
+// resultcodec.Wrap for tools you cannot construct, rather than implementing or
+// calling this method directly.
 func (t *StreamableFunctionTool[I, O]) ResultCodec() resultcodec.Codec {
 	return t.resultCodec
 }

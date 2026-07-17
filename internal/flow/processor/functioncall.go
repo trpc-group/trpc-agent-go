@@ -27,6 +27,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonrepair"
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonutils"
+	"trpc.group/trpc-go/trpc-agent-go/internal/jsonx"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
@@ -2864,22 +2865,11 @@ func encodeWithRecover(
 }
 
 // marshalJSONNoHTMLEscape serializes v to JSON without escaping <, >, & characters.
-// Standard json.Marshal escapes these for HTML safety, but tool results are never
-// embedded in HTML and the escaped sequences (\u003c, \u003e, \u0026) confuse LLMs
-// that read the output as source code (e.g. Go channel operations "<-done").
+// It delegates to jsonx.MarshalNoHTMLEscape, the single source of truth for the
+// framework's default tool result encoding, so this path stays byte-for-byte
+// identical to resultcodec.JSON().
 func marshalJSONNoHTMLEscape(v any) ([]byte, error) {
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
-	if err := enc.Encode(v); err != nil {
-		return nil, err
-	}
-	// json.Encoder.Encode appends a trailing newline; trim it for Marshal parity.
-	b := buf.Bytes()
-	if len(b) > 0 && b[len(b)-1] == '\n' {
-		b = b[:len(b)-1]
-	}
-	return b, nil
+	return jsonx.MarshalNoHTMLEscape(v)
 }
 
 type structuredStreamErrorOptIn interface {

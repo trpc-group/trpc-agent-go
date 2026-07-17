@@ -18,6 +18,16 @@
 //
 // When no codec is configured the framework keeps its default JSON behavior,
 // byte-for-byte compatible with previous versions.
+//
+// There are exactly two supported ways to bind a codec to a tool:
+//
+//   - function.WithResultCodec(codec) when constructing a function tool; and
+//   - resultcodec.Wrap(tool, codec) for tools whose construction cannot be
+//     modified (for example tools produced by a ToolSet).
+//
+// The framework discovers the codec through an internal ResultCodec() method on
+// these wrappers. That method is a discovery detail, not a third configuration
+// path; do not rely on implementing it on your own tool types.
 package resultcodec
 
 import (
@@ -95,7 +105,8 @@ func (t *codecTool) Declaration() *tool.Declaration {
 	return t.base.Declaration()
 }
 
-// ResultCodec returns the bound codec so the framework can discover it.
+// ResultCodec returns the bound codec so the framework can discover it. It is an
+// internal discovery hook, not a supported configuration entry point.
 func (t *codecTool) ResultCodec() Codec {
 	return t.codec
 }

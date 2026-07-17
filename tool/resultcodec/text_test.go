@@ -61,6 +61,33 @@ func TestText_TextMarshaler(t *testing.T) {
 	}
 }
 
+func TestText_InvalidUTF8ReplacedWithU_FFFD(t *testing.T) {
+	ctx := context.Background()
+	// 0xff is an invalid UTF-8 byte and must be replaced with U+FFFD.
+	invalid := "ok\xffend"
+	want := "ok\uFFFDend"
+	cases := []struct {
+		name   string
+		result any
+	}{
+		{"bytes", []byte(invalid)},
+		{"raw message", json.RawMessage(invalid)},
+		{"string", invalid},
+		{"named string", textStatus(invalid)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := Text().Encode(ctx, tc.result)
+			if err != nil {
+				t.Fatalf("Encode error: %v", err)
+			}
+			if got != want {
+				t.Errorf("got %q, want %q", got, want)
+			}
+		})
+	}
+}
+
 func TestText_ErrorOnStructuredResult(t *testing.T) {
 	type payload struct {
 		A int

@@ -17,6 +17,8 @@ import (
 	"fmt"
 	"sort"
 	"unicode"
+
+	"trpc.group/trpc-go/trpc-agent-go/internal/jsonx"
 )
 
 const (
@@ -63,7 +65,7 @@ func (xmlCodec) Encode(_ context.Context, result any) (string, error) {
 // string, bool, or nil. Routing through JSON guarantees XML and JSON share the
 // same logical fields and values.
 func jsonLogicalTree(result any) (any, error) {
-	b, err := marshalJSONNoHTMLEscape(result)
+	b, err := jsonx.MarshalNoHTMLEscape(result)
 	if err != nil {
 		return nil, err
 	}
