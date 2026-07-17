@@ -1,17 +1,18 @@
-# RunWithMessages: Seed Once, Then Latest Only
+# RunWithMessages + Noop: Complete History on Every Request
 
-This example shows how to drive an Agent with a caller‑supplied conversation
-history. We construct a multi‑turn history (system + user/assistant) and pass it
-only on the first user turn of a session (and after reset). For all subsequent
-turns, we only send the latest user message; Runner appends it to the session
-and the agent reads full context from session events.
+This example shows how to drive an Agent when the application owns the complete
+conversation history. Runner uses `session/noop`, so the application passes the
+updated history to `RunWithMessages` on every request instead of relying on a
+server-side Session from an earlier request.
 
 ## Highlights
 
-- **Auto session priming** – Runner converts your history into session events on
-  first use (when the session is empty).
-- **Seamless continuation** – Subsequent turns continue to append to the
-  session automatically.
+- **Caller-owned history** – The application retains user, assistant, tool-call,
+  and tool-result messages.
+- **No Session persistence** – `session/noop` creates only a transient Session
+  for each run.
+- **Complete context every time** – Every request uses `RunWithMessages` with the
+  full updated history.
 - **Streaming CLI** – Talk to the agent in a terminal, reset on demand.
 
 ## Prerequisites
@@ -47,29 +48,31 @@ Try asking things like:
 
 ## How it works
 
-- Prepare a multi‑turn `[]model.Message` (system + user/assistant few turns).
-- On the first user input, call `RunWithMessages(...)` with `history + latest user`.
-- Afterwards, call `r.Run(...)` with only the latest user message; Runner will
-  append to the session and the content processor will read the entire context
-  from session events.
+- Inject `session/noop` through `runner.WithSessionService`.
+- Maintain a complete `[]model.Message` transcript in the application.
+- Append each user message before the run.
+- Call `RunWithMessages(...)` with the complete updated history on every request.
+- Consume the event stream and append complete assistant tool calls, tool
+  results, and assistant replies for the next request.
 
 ## Relation to `agent.WithMessages`
 
-- Passing `agent.WithMessages` (or `runner.RunWithMessages`) persists the
-  supplied history to the session on first use. The content processor does not
-  read this option; it only converts session events (and falls back to a single
-  `invocation.Message` when the session has no events).
+- Passing `agent.WithMessages` (or `runner.RunWithMessages`) seeds the transient
+  Session used by the current run. With `session/noop`, that Session is discarded
+  after the run, so the next request must pass the complete history again.
 
 Notes:
 
 - When `[]model.Message` is provided, the content processor prioritizes these messages and skips deriving content from session events or the single `message` to avoid duplication.
 - `RunWithMessages` sets `invocation.Message` to the latest user message for compatibility with graph/flow agents that use initial user input.
-- Runner still persists events to its session service by default, but this session is not used to build the LLM request when messages are explicitly supplied.
+- The example copies complete, non-partial response messages from the event
+  stream into its caller-owned transcript.
 
 ## Compare with examples/runner
 
 - `examples/runner` demonstrates multi-turn chat using Runner with server-side session state.
-- `examples/runwithmessages` shows a stateless approach where you control the full prompt per run — a good fit for building middleware services where the upstream system already maintains the session.
+- `examples/runwithmessages` uses Noop and caller-owned history — a good fit for
+  middleware where the upstream system already maintains the conversation.
 
 ## Customize
 
@@ -81,5 +84,5 @@ Notes:
 
 For more details, see docs:
 
-- English: `docs/mkdocs/en/runner.md` → “Pass Conversation History (no session dependency)”
-- 中文: `docs/mkdocs/zh/runner.md` → “传入对话历史（无需使用 Session）”
+- English: `docs/mkdocs/en/session/noop.md` → “No Persistence (Noop)”
+- 中文: `docs/mkdocs/zh/session/noop.md` → “无持久化（Noop）”

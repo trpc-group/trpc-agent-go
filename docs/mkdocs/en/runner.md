@@ -721,8 +721,8 @@ msgs := []model.Message{
 ch, err := runner.RunWithMessages(ctx, r, userID, sessionID, msgs, agent.WithRequestID("request-ID"))
 ```
 
-Example: `examples/runwithmessages` (uses `RunWithMessages`; runner auto-seeds and
-continues reusing the session)
+Example: `examples/runwithmessages` (uses `session/noop` and passes the
+caller-owned complete history to `RunWithMessages` on every request)
 
 Option B: Pass via RunOption explicitly (same philosophy as ADK Python)
 
@@ -737,6 +737,8 @@ option; it only derives messages from session events (or falls back to the
 single `invocation.Message` if the session has no events). `RunWithMessages`
 still sets `invocation.Message` to the latest user turn so graph/flow agents
 that inspect it continue to work.
+
+If the upstream application persists the complete history and Runner should not retain Sessions across requests, inject `session/noop` and pass the updated complete history through `RunWithMessages` on every request. Noop keeps the transient Session required by a single `Run`, but it does not restore data from a previous run. See [No Persistence (Noop)](./session/noop.md).
 
 ### User Message Rewriting
 
