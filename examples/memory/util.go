@@ -204,18 +204,19 @@ const (
 	defaultGormMemorySQLiteFile = "memories_gorm.db"
 )
 
-// newGormMemoryService creates a GORM memory service with a shared *gorm.DB.
+// newGormMemoryService creates a GORM memory service. The service owns the DB
+// connection opened from GORM_DSN (via WithDialector) and closes it on Close().
 // Environment variables:
 //   - GORM_DSN: SQLite path or postgres:// DSN (default: memories_gorm.db)
 //   - GORM_SKIP_DB_INIT: set to true when the host application owns DDL
 func newGormMemoryService(cfg MemoryServiceConfig) (memory.Service, error) {
-	db, err := openGormMemoryDB()
+	dialector, err := gormMemoryDialector()
 	if err != nil {
-		return nil, fmt.Errorf("open gorm memory database: %w", err)
+		return nil, fmt.Errorf("resolve gorm memory dialector: %w", err)
 	}
 
 	opts := []memorygorm.ServiceOpt{
-		memorygorm.WithDB(db),
+		memorygorm.WithDialector(dialector),
 		memorygorm.WithSoftDelete(cfg.SoftDelete),
 	}
 
@@ -241,15 +242,15 @@ func newGormMemoryService(cfg MemoryServiceConfig) (memory.Service, error) {
 	return memorygorm.NewService(opts...)
 }
 
-func openGormMemoryDB() (*gorm.DB, error) {
+func gormMemoryDialector() (gorm.Dialector, error) {
 	dsn := strings.TrimSpace(os.Getenv(gormMemoryDSNEnvKey))
 	if dsn == "" {
-		return gorm.Open(sqlite.Open(defaultGormMemorySQLiteFile), &gorm.Config{})
+		return sqlite.Open(defaultGormMemorySQLiteFile), nil
 	}
 	if strings.HasPrefix(dsn, "postgres://") || strings.HasPrefix(dsn, "postgresql://") {
-		return gorm.Open(postgres.Open(dsn), &gorm.Config{})
+		return postgres.Open(dsn), nil
 	}
-	return gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	return sqlite.Open(dsn), nil
 }
 
 const (
@@ -646,6 +647,13 @@ func PrintMemoryInfo(memoryType MemoryType, softDelete bool) {
 		fmt.Printf("MySQL Vector: %s:%s/%s\n", host, port, database)
 		fmt.Printf("Embedder model: %s\n", getEmbeddingModel(embedderModel))
 		fmt.Printf("Soft delete: %t\n", softDelete)
+	case MemoryGORM:
+		dsn := GetEnvOrDefault(gormMemoryDSNEnvKey, defaultGormMemorySQLiteFile)
+		skipInit := strings.EqualFold(GetEnvOrDefault(gormMemorySkipDBInitEnvKey, "false"), "true") ||
+			GetEnvOrDefault(gormMemorySkipDBInitEnvKey, "") == "1"
+		fmt.Printf("GORM memory: %s\n", dsn)
+		fmt.Printf("Soft delete: %t\n", softDelete)
+		fmt.Printf("Skip DB init: %t\n", skipInit)
 	default:
 		fmt.Printf("In-memory\n")
 	}

@@ -97,7 +97,7 @@ var (
 		"inmemory",
 		"Name of the memory service to use, "+
 			"inmemory / sqlite / sqlitevec / redis / "+
-			"mysql / mysqlvec / postgres / pgvector",
+			"mysql / mysqlvec / postgres / pgvector / gorm",
 	)
 	streaming = flag.Bool(
 		"streaming",
