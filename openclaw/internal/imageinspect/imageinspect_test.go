@@ -387,6 +387,31 @@ func TestResolvePathCorrectsDuplicatedAllowedDirBase(t *testing.T) {
 	require.Equal(t, actual, got)
 }
 
+func TestResolvePathCorrectsDuplicatedPathThroughAllowedDirSymlink(t *testing.T) {
+	t.Parallel()
+
+	realRoot := t.TempDir()
+	aliasParent := t.TempDir()
+	aliasRoot := filepath.Join(aliasParent, "allowed-link")
+	require.NoError(t, os.Symlink(realRoot, aliasRoot))
+	attachmentID := "attachment-12345"
+	actual := filepath.Join(realRoot, attachmentID, attachmentID+".png")
+	require.NoError(t, os.MkdirAll(filepath.Dir(actual), 0o755))
+	writeTestPNG(t, actual, image.Rect(0, 0, 1, 1))
+
+	tool, err := newInspector(Config{AllowedDirs: []string{aliasRoot}})
+	require.NoError(t, err)
+	raw := filepath.Join(
+		aliasRoot,
+		attachmentID,
+		attachmentID,
+		attachmentID+".png",
+	)
+	got, err := tool.resolvePath(raw)
+	require.NoError(t, err)
+	require.Equal(t, actual, got)
+}
+
 func TestResolvePathCorrectsDuplicatedRelativeAttachment(t *testing.T) {
 	t.Parallel()
 
@@ -480,6 +505,20 @@ func TestDuplicatedAllowedPathCandidatesRejectsNonDuplicatedPaths(t *testing.T) 
 	require.Empty(t, duplicatedAllowedPathCandidates(filepath.Dir(root), root))
 	require.Empty(t, duplicatedAllowedPathCandidates(
 		filepath.Join(root, "single"),
+		root,
+	))
+}
+
+func TestDuplicatedAllowedPathCandidatesBoundsLongInput(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	parts := make([]string, maxDuplicatePathParts+1)
+	for idx := range parts {
+		parts[idx] = "duplicate"
+	}
+	require.Empty(t, duplicatedAllowedPathCandidates(
+		filepath.Join(append([]string{root}, parts...)...),
 		root,
 	))
 }
