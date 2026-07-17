@@ -327,6 +327,7 @@ func buildSummaryInput(
 		report = &summary.Report{}
 		reportCtx = summary.ContextWithReport(ctx, report)
 	}
+	reportCtx = summary.ContextWithPreviousSummary(reportCtx, prev.text)
 	if !shouldGenerateSummary(
 		reportCtx,
 		m,

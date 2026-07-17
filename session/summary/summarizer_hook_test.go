@@ -112,6 +112,41 @@ func TestSessionSummarizer_PreHook_ModifiesEventsAndRebuildsText(t *testing.T) {
 	assert.NotContains(t, summary, "origin")
 }
 
+func TestSessionSummarizer_PreHook_ModifiesSeparatedPreviousSummary(t *testing.T) {
+	mdl := &echoPromptModel{}
+	var capturedEvents []event.Event
+	s := NewSummarizer(
+		mdl,
+		WithPrompt("Previous:\n{previous_summary}\n\nConversation:\n{conversation_text}\n\nSummary:"),
+		WithPreSummaryHook(func(in *PreSummaryHookContext) error {
+			capturedEvents = append([]event.Event(nil), in.Events...)
+			require.Equal(t, "previous", in.PreviousSummary)
+			require.Equal(t, "user: new conversation", in.Text)
+			in.PreviousSummary = "redacted previous"
+			in.Text = "redacted conversation"
+			return nil
+		}),
+	)
+	sess := &session.Session{ID: "sess", Events: []event.Event{
+		{
+			Author: authorSystem,
+			Response: &model.Response{Choices: []model.Choice{{
+				Message: model.Message{Content: "previous"},
+			}}},
+		},
+		newEventWithContent("new conversation"),
+	}}
+	ctx := ContextWithPreviousSummary(context.Background(), "previous")
+
+	result, err := s.Summarize(ctx, sess)
+	require.NoError(t, err)
+	require.Len(t, capturedEvents, 1)
+	require.Equal(t, authorUser, capturedEvents[0].Author)
+	require.Contains(t, result, "Previous:\nredacted previous")
+	require.Contains(t, result, "Conversation:\nredacted conversation")
+	require.NotContains(t, result, "new conversation")
+}
+
 func TestSessionSummarizer_PostHook_ModifiesOutput(t *testing.T) {
 	model := &echoPromptModel{}
 	s := NewSummarizer(model, WithPostSummaryHook(func(in *PostSummaryHookContext) error {

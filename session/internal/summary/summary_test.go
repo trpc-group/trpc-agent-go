@@ -572,6 +572,75 @@ func makeEvent(content string, ts time.Time, filterKey string) event.Event {
 	}
 }
 
+type previousSummaryCaptureSummarizer struct {
+	previous string
+	present  bool
+	events   []event.Event
+}
+
+func (s *previousSummaryCaptureSummarizer) ShouldSummarize(*session.Session) bool {
+	return true
+}
+
+func (s *previousSummaryCaptureSummarizer) Summarize(
+	ctx context.Context,
+	sess *session.Session,
+) (string, error) {
+	s.previous, s.present = summary.PreviousSummaryFromContext(ctx)
+	s.events = append([]event.Event(nil), sess.Events...)
+	return "updated summary", nil
+}
+
+func (s *previousSummaryCaptureSummarizer) SetPrompt(string)         {}
+func (s *previousSummaryCaptureSummarizer) SetModel(model.Model)     {}
+func (s *previousSummaryCaptureSummarizer) Metadata() map[string]any { return nil }
+
+func TestSummarizeSession_AttachesPreviousSummaryContext(t *testing.T) {
+	oldTimestamp := time.Now().Add(-time.Minute)
+	newTimestamp := time.Now()
+	base := &session.Session{
+		ID:      "previous-summary-context",
+		AppName: "app",
+		UserID:  "user",
+		Events: []event.Event{
+			makeEvent("old", oldTimestamp, "branch"),
+			makeEvent("new", newTimestamp, "branch"),
+		},
+		Summaries: map[string]*session.Summary{
+			"branch": {
+				Summary:   "previous summary",
+				UpdatedAt: oldTimestamp,
+				Boundary: session.NewSummaryBoundaryWithEventID(
+					"branch",
+					oldTimestamp,
+					"old",
+				),
+			},
+		},
+	}
+	capture := &previousSummaryCaptureSummarizer{}
+
+	updated, err := SummarizeSession(
+		context.Background(),
+		capture,
+		base,
+		"branch",
+		false,
+	)
+	require.NoError(t, err)
+	require.True(t, updated)
+	require.True(t, capture.present)
+	require.Equal(t, "previous summary", capture.previous)
+	require.Len(t, capture.events, 2)
+	require.Equal(t, authorSystem, capture.events[0].Author)
+	require.Equal(
+		t,
+		"previous summary",
+		capture.events[0].Response.Choices[0].Message.Content,
+	)
+	require.Equal(t, "new", capture.events[1].ID)
+}
+
 func TestSummarizeSession_FilteredKey_RespectsDeltaAndShould(t *testing.T) {
 	now := time.Now()
 	base := &session.Session{ID: "s1", AppName: "a", UserID: "u"}
