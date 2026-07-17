@@ -240,9 +240,8 @@ func parseTextToolCallArgValue(raw string) any {
 	if trimmed == "" {
 		return ""
 	}
-	var value any
-	if err := json.Unmarshal([]byte(trimmed), &value); err == nil {
-		return value
+	if json.Valid([]byte(trimmed)) {
+		return json.RawMessage(trimmed)
 	}
 	return trimmed
 }

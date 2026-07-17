@@ -929,6 +929,14 @@ func (p *streamingResponseProcessor) process(
 	responseusage.AttachTiming(response, p.timingInfo, &p.partialUsageState)
 	p.repairToolCallArguments(response)
 	p.repairToolCallTextAndStats(response)
+	if p.shouldBufferToolCallTextPartial(response) {
+		if responseStarted && response != nil {
+			responseSpan.SetAttributes(
+				latencyResponseAttrs(response)...,
+			)
+		}
+		return true
+	}
 	llmResponseEvent := p.emitLLMResponse(
 		eventInvocation,
 		response,
@@ -1049,6 +1057,15 @@ func (p *streamingResponseProcessor) repairToolCallText(
 		return false
 	}
 	return repairResponseToolCallTextInPlace(p.ctx, p.llmRequest, response)
+}
+
+func (p *streamingResponseProcessor) shouldBufferToolCallTextPartial(
+	response *model.Response,
+) bool {
+	return response != nil && response.IsPartial &&
+		p.currentInvocation != nil &&
+		isToolCallTextRepairEnabled(p.currentInvocation) &&
+		p.llmRequest != nil && len(p.llmRequest.Tools) > 0
 }
 
 func (p *streamingResponseProcessor) emitLLMResponse(

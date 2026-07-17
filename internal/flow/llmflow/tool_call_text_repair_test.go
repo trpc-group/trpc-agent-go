@@ -11,10 +11,13 @@ package llmflow
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	gooteltrace "go.opentelemetry.io/otel/trace"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -87,6 +90,122 @@ func TestRepairResponseToolCallTextInPlace(t *testing.T) {
 	require.Equal(t, 0, *call.Index)
 	require.NotNil(t, resp.Choices[0].FinishReason)
 	require.Equal(t, "tool_calls", *resp.Choices[0].FinishReason)
+}
+
+func TestRepairResponseToolCallTextInPlace_PreservesIntegerPrecision(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	const maxInt64 = "9223372036854775807"
+	req := &model.Request{
+		Tools: map[string]tool.Tool{
+			"lookup": textRepairTool{name: "lookup"},
+		},
+	}
+	resp := &model.Response{
+		Done: true,
+		Choices: []model.Choice{{
+			Message: model.Message{
+				Role: model.RoleAssistant,
+				Content: "<tool_call>lookup" +
+					"<arg_key>id</arg_key>" +
+					"<arg_value>" + maxInt64 + "</arg_value>" +
+					"<arg_key>nested</arg_key>" +
+					"<arg_value>{\"ids\":[" + maxInt64 +
+					",1]}</arg_value></tool_call>",
+			},
+		}},
+	}
+
+	repaired := repairResponseToolCallTextInPlace(
+		context.Background(),
+		req,
+		resp,
+	)
+
+	require.True(t, repaired)
+	require.Len(t, resp.Choices[0].Message.ToolCalls, 1)
+	var args map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(
+		resp.Choices[0].Message.ToolCalls[0].Function.Arguments,
+		&args,
+	))
+	require.Equal(t, maxInt64, string(args["id"]))
+	require.Equal(
+		t,
+		`{"ids":[9223372036854775807,1]}`,
+		string(args["nested"]),
+	)
+}
+
+func TestToolCallTextRepair_BuffersPartialResponses(t *testing.T) {
+	t.Parallel()
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationID("inv-text-repair-stream"),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithToolCallTextRepairEnabled(true),
+		)),
+	)
+	req := &model.Request{
+		Tools: map[string]tool.Tool{
+			"exec_command": textRepairTool{name: "exec_command"},
+		},
+	}
+	partial := &model.Response{
+		IsPartial: true,
+		Choices: []model.Choice{{
+			Message: model.NewAssistantMessage(
+				"<tool_call>exec_command<arg_key>",
+			),
+		}},
+	}
+	terminal := &model.Response{
+		Done: true,
+		Choices: []model.Choice{{
+			Message: model.NewAssistantMessage(
+				"<tool_call>exec_command" +
+					"<arg_key>command</arg_key>" +
+					"<arg_value>echo ok</arg_value>" +
+					"</tool_call>",
+			),
+		}},
+	}
+	seq := func(yield func(*model.Response) bool) {
+		if yield(partial) {
+			yield(terminal)
+		}
+	}
+	eventChan := make(chan *event.Event, 2)
+	tracer := gooteltrace.NewNoopTracerProvider().Tracer("test")
+	ctx, span := tracer.Start(
+		agent.NewInvocationContext(context.Background(), inv),
+		"stream",
+	)
+	defer span.End()
+
+	lastEvent, err := New(nil, nil, Options{}).
+		processStreamingResponses(
+			ctx,
+			inv,
+			nil,
+			req,
+			seq,
+			eventChan,
+			span,
+			true,
+		)
+
+	require.NoError(t, err)
+	require.NotNil(t, lastEvent)
+	require.Len(t, eventChan, 1)
+	require.True(t, lastEvent.Response.IsToolCallResponse())
+	require.NotContains(
+		t,
+		lastEvent.Response.Choices[0].Message.Content,
+		textToolCallOpenTag,
+	)
 }
 
 func TestRepairResponseToolCallTextInPlace_MultipleCalls(t *testing.T) {
