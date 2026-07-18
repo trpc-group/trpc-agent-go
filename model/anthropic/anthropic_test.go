@@ -3293,20 +3293,6 @@ func TestWithEnableTokenTailoring_AutoSetMaxTokens(t *testing.T) {
 	require.Equal(t, int64(4096), captured.MaxTokens)
 }
 
-func TestBuildChatRequest_ClampsMaxTokensToModelCap(t *testing.T) {
-	m := New("claude-3-5-sonnet-20241022")
-	over := 64000
-	req := &model.Request{
-		Messages: []model.Message{model.NewUserMessage("hi")},
-		GenerationConfig: model.GenerationConfig{
-			MaxTokens: &over,
-		},
-	}
-	chatReq, err := m.buildChatRequest(req)
-	require.NoError(t, err)
-	require.Equal(t, int64(8192), chatReq.MaxTokens)
-}
-
 // TestWithEnableTokenTailoring_UserSpecifiedMaxTokens tests user-specified MaxTokens is preserved.
 func TestWithEnableTokenTailoring_UserSpecifiedMaxTokens(t *testing.T) {
 	var captured *anthropic.MessageNewParams

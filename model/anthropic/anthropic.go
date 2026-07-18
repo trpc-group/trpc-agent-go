@@ -77,8 +77,11 @@ type Model struct {
 	cacheTools        bool
 	cacheMessages     bool
 	showToolCallDelta bool
+	// explicitMaxTokens overrides the auto-calculated MaxTokens value sent to the API.
+	explicitMaxTokens *int
 
 	// Stream retry configuration. See WithStreamRetry for semantics.
+	streamRetryEnabled     bool
 	streamMaxRetries       int
 	streamRetryBaseBackoff time.Duration
 	streamRetryMaxBackoff  time.Duration
@@ -132,6 +135,8 @@ func New(name string, opts ...Option) *Model {
 		cacheTools:                 o.cacheTools,
 		cacheMessages:              o.cacheMessages,
 		showToolCallDelta:          o.showToolCallDelta,
+		explicitMaxTokens:          o.explicitMaxTokens,
+		streamRetryEnabled:         o.streamRetryEnabled,
 		streamMaxRetries:           o.streamMaxRetries,
 		streamRetryBaseBackoff:     o.streamRetryBaseBackoff,
 		streamRetryMaxBackoff:      o.streamRetryMaxBackoff,
@@ -322,9 +327,14 @@ func (m *Model) buildChatRequest(request *model.Request) (*anthropic.MessageNewP
 	if len(systemPrompts) > 0 {
 		chatRequest.System = systemPrompts
 	}
-	if mt := model.ClampMaxTokensForModel(m.name, request.MaxTokens); mt != nil {
-		chatRequest.MaxTokens = int64(*mt)
+	if request.GenerationConfig.MaxTokens == nil && m.explicitMaxTokens != nil {
+		request.GenerationConfig.MaxTokens = m.explicitMaxTokens
 	}
+	if request.GenerationConfig.MaxTokens != nil {
+		chatRequest.MaxTokens = int64(*request.GenerationConfig.MaxTokens)
+	}
+	// Anthropic requires max_tokens >= model.MinValidCompletionTokens. Apply the
+	// same default when unset or invalid; token tailoring only trims input.
 	if chatRequest.MaxTokens < int64(model.MinValidCompletionTokens) {
 		chatRequest.MaxTokens = 4096
 	}
@@ -665,8 +675,12 @@ func (m *Model) handleStreamingResponse(
 }
 
 // effectiveStreamMaxRetries resolves the retry budget for handleStreamingResponse.
-// Zero uses the package default; negative disables retries.
+// Stream retries are disabled unless WithStreamRetry was used. When enabled,
+// zero uses defaultStreamMaxRetries and negative disables retries.
 func (m *Model) effectiveStreamMaxRetries() int {
+	if !m.streamRetryEnabled {
+		return 0
+	}
 	if m.streamMaxRetries < 0 {
 		return 0
 	}
