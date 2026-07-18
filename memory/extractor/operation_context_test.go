@@ -25,7 +25,7 @@ func TestQualifyOperationWithGroundedTopic(t *testing.T) {
 		want   string
 	}{
 		{
-			name: "keeps generic category in structured topics",
+			name: "preserves sentence-local generic relation",
 			source: "I've been relying on food delivery services lately - " +
 				"I had Domino's Pizza three times last week!",
 			op: &Operation{
@@ -33,7 +33,7 @@ func TestQualifyOperationWithGroundedTopic(t *testing.T) {
 				Memory: "Had Domino's Pizza three times last week.",
 				Topics: []string{"Domino's Pizza", "food delivery", "pizza"},
 			},
-			want: "Had Domino's Pizza three times last week.",
+			want: "food delivery: Had Domino's Pizza three times last week.",
 		},
 		{
 			name:   "keeps ungrounded category out",
@@ -125,7 +125,7 @@ func TestConversationSourceText(t *testing.T) {
 	assert.Equal(t, "user text\nassistant part\n", conversationSourceText(messages))
 }
 
-func TestQualifyOperationsDoNotCopyContextAcrossMemories(t *testing.T) {
+func TestQualifyOperationsUseOnlyOperationSpecificTopics(t *testing.T) {
 	t.Parallel()
 
 	operations := []*Operation{
@@ -146,10 +146,10 @@ func TestQualifyOperationsDoNotCopyContextAcrossMemories(t *testing.T) {
 
 	assert.Equal(t, "Melanie plays the clarinet and uses music to relax.", operations[0].Memory)
 	assert.Equal(t, []string{"Melanie", "clarinet", "music"}, operations[0].Topics)
-	assert.Equal(t, "Melanie listens to Bach.", operations[1].Memory)
+	assert.Equal(t, "music: Melanie listens to Bach.", operations[1].Memory)
 }
 
-func TestQualifyOperationsKeepGenericContextInTopics(t *testing.T) {
+func TestQualifyOperationsKeepCrossSentenceGenericContextInTopics(t *testing.T) {
 	t.Parallel()
 
 	operations := []*Operation{

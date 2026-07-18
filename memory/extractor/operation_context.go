@@ -35,14 +35,13 @@ func qualifyOperationWithGroundedTopic(source string, operation *Operation) {
 		return
 	}
 
-	anchored := false
+	anchoredTopics := make([]string, 0, len(operation.Topics))
 	for _, topic := range operation.Topics {
 		if containsTopic(operation.Memory, topic) {
-			anchored = true
-			break
+			anchoredTopics = append(anchoredTopics, topic)
 		}
 	}
-	if !anchored {
+	if len(anchoredTopics) == 0 {
 		return
 	}
 
@@ -54,7 +53,7 @@ func qualifyOperationWithGroundedTopic(source string, operation *Operation) {
 			!containsTopic(source, topic) {
 			continue
 		}
-		priority := groundedTopicPriority(source, topic)
+		priority := groundedTopicPriority(source, topic, anchoredTopics)
 		if priority <= 0 {
 			continue
 		}
@@ -69,18 +68,52 @@ func qualifyOperationWithGroundedTopic(source string, operation *Operation) {
 	}
 }
 
-func groundedTopicPriority(source, topic string) int {
-	// Exact-case capitalization is a conservative named-entity signal. Equal
-	// priorities preserve the extractor's topic order.
-	if !strings.Contains(source, topic) {
+func groundedTopicPriority(
+	source, topic string,
+	anchoredTopics []string,
+) int {
+	// Exact-case capitalization is a conservative named-entity signal and
+	// outranks sentence-local generic context. Equal priorities preserve the
+	// extractor's topic order.
+	if !containsTopic(source, topic) {
 		return 0
 	}
 	for _, r := range topic {
-		if unicode.IsUpper(r) {
-			return 1
+		if strings.Contains(source, topic) && unicode.IsUpper(r) {
+			return 2
 		}
 	}
+	if !containsNonASCII(topic) && topicSharesSourceSegment(
+		source, topic, anchoredTopics,
+	) {
+		return 1
+	}
 	return 0
+}
+
+func topicSharesSourceSegment(
+	source, topic string,
+	anchoredTopics []string,
+) bool {
+	segments := strings.FieldsFunc(source, func(r rune) bool {
+		switch r {
+		case '\n', '.', '?', '!', ';', '\u3002', '\uff1f', '\uff01':
+			return true
+		default:
+			return false
+		}
+	})
+	for _, segment := range segments {
+		if !containsTopic(segment, topic) {
+			continue
+		}
+		for _, anchoredTopic := range anchoredTopics {
+			if containsTopic(segment, anchoredTopic) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func conversationSourceText(messages []model.Message) string {
