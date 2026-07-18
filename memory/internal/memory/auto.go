@@ -208,14 +208,13 @@ type MemoryOperator interface {
 
 // AutoMemoryWorker manages async memory extraction workers.
 type AutoMemoryWorker struct {
-	config           AutoMemoryConfig
-	operator         MemoryOperator
-	updatePolicy     extractor.UpdatePolicy
-	assistantResults bool
-	jobChans         []chan *MemoryJob
-	wg               sync.WaitGroup
-	mu               sync.RWMutex
-	started          bool
+	config       AutoMemoryConfig
+	operator     MemoryOperator
+	updatePolicy extractor.UpdatePolicy
+	jobChans     []chan *MemoryJob
+	wg           sync.WaitGroup
+	mu           sync.RWMutex
+	started      bool
 }
 
 // NewAutoMemoryWorker creates a new auto memory worker.
@@ -226,12 +225,10 @@ func NewAutoMemoryWorker(
 	operator MemoryOperator,
 ) *AutoMemoryWorker {
 	config.EnabledTools = maps.Clone(config.EnabledTools)
-	updatePolicy, assistantResults := extractionPoliciesFromMetadata(config.Extractor)
 	return &AutoMemoryWorker{
-		config:           config,
-		operator:         operator,
-		updatePolicy:     updatePolicy,
-		assistantResults: assistantResults,
+		config:       config,
+		operator:     operator,
+		updatePolicy: updatePolicyFromMetadata(config.Extractor),
 	}
 }
 
@@ -522,8 +519,7 @@ func (w *AutoMemoryWorker) searchRelevantMemories(
 ) ([]*memory.Entry, error) {
 	query := buildSearchQuery(messages)
 	if w.updatePolicy == extractor.UpdatePolicyHistoryPreserving ||
-		w.updatePolicy == extractor.UpdatePolicyAddOnly ||
-		w.assistantResults {
+		w.updatePolicy == extractor.UpdatePolicyAddOnly {
 		query = buildPolicySearchQuery(messages)
 	}
 	if query == "" {

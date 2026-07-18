@@ -24,8 +24,7 @@ import (
 )
 
 const (
-	extractorMetadataUpdatePolicy     = "update_policy"
-	extractorMetadataAssistantResults = "assistant_result_extraction"
+	extractorMetadataUpdatePolicy = "update_policy"
 
 	historyOldCoverage = 0.95
 	historyNewCoverage = 0.70
@@ -54,15 +53,14 @@ type historyCandidate struct {
 	newCoverage float64
 }
 
-func extractionPoliciesFromMetadata(
-	ext extractor.MemoryExtractor,
-) (extractor.UpdatePolicy, bool) {
+func updatePolicyFromMetadata(ext extractor.MemoryExtractor) extractor.UpdatePolicy {
 	if ext == nil {
-		return extractor.UpdatePolicyReconcile, false
+		return extractor.UpdatePolicyReconcile
 	}
-	metadata := ext.Metadata()
-	assistantResults, _ := metadata[extractorMetadataAssistantResults].(bool)
-	raw := metadata[extractorMetadataUpdatePolicy]
+	raw, ok := ext.Metadata()[extractorMetadataUpdatePolicy]
+	if !ok {
+		return extractor.UpdatePolicyReconcile
+	}
 	var policy extractor.UpdatePolicy
 	switch value := raw.(type) {
 	case extractor.UpdatePolicy:
@@ -73,9 +71,9 @@ func extractionPoliciesFromMetadata(
 	switch policy {
 	case extractor.UpdatePolicyHistoryPreserving,
 		extractor.UpdatePolicyAddOnly:
-		return policy, assistantResults
+		return policy
 	default:
-		return extractor.UpdatePolicyReconcile, assistantResults
+		return extractor.UpdatePolicyReconcile
 	}
 }
 
@@ -490,9 +488,8 @@ func stringSet(values []string) map[string]struct{} {
 	return result
 }
 
-// buildPolicySearchQuery gives opt-in policies and assistant-result extraction
-// enough context to reconcile assistant-produced results while keeping the
-// legacy user-only query intact.
+// buildPolicySearchQuery gives opt-in policies enough context to reconcile
+// assistant-produced results while keeping the legacy user-only query intact.
 func buildPolicySearchQuery(messages []model.Message) string {
 	parts := make([]string, 0, len(messages))
 	for _, msg := range messages {
