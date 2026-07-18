@@ -233,6 +233,7 @@ func TestExtractor_AssistantResultExtractionOption(t *testing.T) {
 	assert.Contains(t, prompt, "MANDATORY DIRECT-RESULT CHECK")
 	assert.Contains(t, prompt, "requested extraction, classification, or transformation")
 	assert.Contains(t, prompt, "Do not store general definitions")
+	assert.Contains(t, prompt, `must begin with "Assistant result:"`)
 	assert.Contains(t, prompt, assistantResultAddToolName)
 }
 
@@ -287,7 +288,10 @@ func TestExtractor_AssistantResultExtractionCombinedPass(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, ops, 2)
 	assert.Equal(t, "Wants to learn backend development.", ops[0].Memory)
-	assert.Equal(t, "Recommended backend languages: Go, Java, and Python.", ops[1].Memory)
+	assert.Equal(t,
+		"Assistant result: Recommended backend languages: Go, Java, and Python.",
+		ops[1].Memory,
+	)
 	require.Len(t, m.requests, 1)
 	assert.Contains(t, m.requests[0].Messages[0].Content,
 		"<assistant_result_extraction>")
@@ -331,7 +335,7 @@ func TestExtractor_AssistantResultStageOwnsNearDuplicate(t *testing.T) {
 	assert.Empty(t, primary)
 	require.Len(t, assistantResults, 1)
 	assert.Equal(t,
-		"Assistant recommended resources for front-end and back-end development: Codecademy for HTML, CSS, and JavaScript; Node.js, Python, SQL, and Java for back-end development.",
+		"Assistant result: Assistant recommended resources for front-end and back-end development: Codecademy for HTML, CSS, and JavaScript; Node.js, Python, SQL, and Java for back-end development.",
 		assistantResults[0].Memory,
 	)
 }
@@ -430,9 +434,30 @@ func TestExtractor_AssistantResultExtractionStages(t *testing.T) {
 	require.Len(t, assistantResults, 1)
 	assert.Equal(t, "Wants to learn backend development.", primary[0].Memory)
 	assert.Equal(t,
-		"Recommended backend languages: Go and Python.",
+		"Assistant result: Recommended backend languages: Go and Python.",
 		assistantResults[0].Memory,
 	)
+}
+
+func TestQualifyAssistantResultOperations(t *testing.T) {
+	operations := []*Operation{
+		{Type: OperationAdd, Memory: "Recommended Go and Python."},
+		{Type: OperationAdd, Memory: " assistant RESULT: Recommended SQL. "},
+		{Type: OperationUpdate, Memory: "Updated recommendation."},
+		nil,
+	}
+
+	qualifyAssistantResultOperations(operations)
+
+	assert.Equal(t,
+		"Assistant result: Recommended Go and Python.",
+		operations[0].Memory,
+	)
+	assert.Equal(t,
+		"assistant RESULT: Recommended SQL.",
+		operations[1].Memory,
+	)
+	assert.Equal(t, "Updated recommendation.", operations[2].Memory)
 }
 
 func TestExtractor_AssistantResultExtractionRejectsUngroundedAmounts(t *testing.T) {

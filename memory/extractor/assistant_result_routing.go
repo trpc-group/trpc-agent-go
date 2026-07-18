@@ -13,6 +13,28 @@ import (
 	"unicode"
 )
 
+const assistantResultMemoryPrefix = "Assistant result: "
+
+func qualifyAssistantResultOperations(operations []*Operation) {
+	for _, operation := range operations {
+		if operation == nil || operation.Type != OperationAdd {
+			continue
+		}
+		memoryText := strings.TrimSpace(operation.Memory)
+		if memoryText == "" {
+			continue
+		}
+		if strings.HasPrefix(
+			strings.ToLower(memoryText),
+			strings.ToLower(strings.TrimSpace(assistantResultMemoryPrefix)),
+		) {
+			operation.Memory = memoryText
+			continue
+		}
+		operation.Memory = assistantResultMemoryPrefix + memoryText
+	}
+}
+
 func routeAssistantResultOperations(
 	primary, results []*Operation,
 ) ([]*Operation, []*Operation) {

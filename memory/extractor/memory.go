@@ -183,6 +183,7 @@ func (e *memoryExtractor) ExtractOperationStages(
 	primary, assistantResults = routeAssistantResultOperations(
 		primary, assistantResults,
 	)
+	qualifyAssistantResultOperations(assistantResults)
 	return primary, assistantResults, nil
 }
 
@@ -649,6 +650,10 @@ Eligible results are named answers, recommendations or shortlists, ordered
 plans, decisions, calculations, and requested extractions, classifications, or
 transformations. Do not store general definitions, explanatory background,
 tutorial prose, brainstorming without a selected result, or acknowledgments.
+
+Every assistant-result memory must begin with "Assistant result:" so its source
+remains explicit after persistence. The prefix distinguishes assistant-provided
+recommendations, estimates, and answers from facts confirmed by the user.
 
 - Store a concrete result the user explicitly requested and may refer to later,
   such as a named answer, concise recommendation, final list or ordering, plan,
