@@ -248,6 +248,18 @@ func TestExtractor_DefaultPromptGroundsCurrentTurnReferences(t *testing.T) {
 		"nearest explicit question, label, or restatement")
 }
 
+func TestExtractor_DefaultPromptPreservesRelationScope(t *testing.T) {
+	extractor := NewExtractor(
+		&mockModel{name: "test-model"},
+	).(*memoryExtractor)
+	prompt := extractor.buildSystemPrompt(time.Now(), nil)
+	assert.Contains(t, prompt, "SELF-CONTAINED RELATIONS")
+	assert.Contains(t, prompt,
+		"Keep a relationship, its value, and every qualifier")
+	assert.Contains(t, prompt,
+		"As Product Owner, leads three UX researchers")
+}
+
 func TestExtractor_AssistantResultExtractionCombinedPass(t *testing.T) {
 	primaryArgs, err := json.Marshal(map[string]any{
 		"memory": "Wants to learn backend development.",

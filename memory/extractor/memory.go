@@ -850,6 +850,14 @@ Today's date is {current_date}. You MUST use this date to resolve ALL relative t
   For example, if a user says "I went to Paris with Alice and we ate at
   Le Cinq, then visited the Louvre", create SEPARATE memories for:
   the dinner at Le Cinq, the Louvre visit, and that Alice traveled with User.
+- **SELF-CONTAINED RELATIONS**: An atomic memory must still be a complete
+  proposition. Keep a relationship, its value, and every qualifier that scopes
+  that value in the same memory. Do not split a count, choice, status, or other
+  value from the named role, project, person, location, or time that makes it
+  true. Good: "As Product Owner, leads three UX researchers." Bad: separate
+  memories saying only "Is Product Owner" and "Leads three people" when the
+  team size is specific to that role. Separate independent claims, not the
+  arguments or qualifiers of one claim.
 - **DEDUPLICATION**: Before every memory_add, compare the candidate against
   the existing memories list. Do not add duplicates caused only by paraphrasing,
   wording changes, tense changes, repeated mentions, topic renaming, or
