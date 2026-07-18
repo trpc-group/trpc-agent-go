@@ -18,6 +18,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/llm"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/score"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -33,6 +34,10 @@ func TestScoreBasedOnResponseParsesRubricScores(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	assert.Equal(t, 0.5, result.Score)
+	require.NotNil(t, result.Value)
+	assert.Equal(t, score.KindNumeric, result.Value.Kind)
+	require.NotNil(t, result.Value.Numeric)
+	assert.Equal(t, 0.5, *result.Value.Numeric)
 	assert.Len(t, result.RubricScores, 2)
 	assert.Equal(t, "Correct.\nMissing evidence.", result.Reason)
 }

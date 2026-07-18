@@ -11,16 +11,14 @@ package template
 
 import (
 	"context"
-	"fmt"
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm"
-	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/internal/templateresolver"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/messagesconstructor"
 	tmessagesconstructor "trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/messagesconstructor/template"
+	operatorregistry "trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/registry"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
-	metricllm "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/llm"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -30,13 +28,31 @@ const EvaluatorName = "llm_judge_template"
 type templateEvaluator struct {
 	llmBaseEvaluator    llm.LLMEvaluator
 	messagesConstructor messagesconstructor.MessagesConstructor
+	operatorRegistry    operatorregistry.Registry
+}
+
+// Option configures the template evaluator.
+type Option func(*templateEvaluator)
+
+// WithOperatorRegistry sets the LLM operator registry.
+func WithOperatorRegistry(registry operatorregistry.Registry) Option {
+	return func(e *templateEvaluator) {
+		e.operatorRegistry = registry
+	}
 }
 
 // New returns the template evaluator.
-func New() evaluator.Evaluator {
-	e := &templateEvaluator{
-		messagesConstructor: tmessagesconstructor.New(),
+func New(opt ...Option) evaluator.Evaluator {
+	e := &templateEvaluator{}
+	for _, o := range opt {
+		o(e)
 	}
+	if e.operatorRegistry == nil {
+		e.operatorRegistry = operatorregistry.New()
+	}
+	e.messagesConstructor = tmessagesconstructor.New(
+		tmessagesconstructor.WithOperatorRegistry(e.operatorRegistry),
+	)
 	e.llmBaseEvaluator = llm.New(e)
 	return e
 }
@@ -76,76 +92,29 @@ func (e *templateEvaluator) StructuredOutput(ctx context.Context, actuals, expec
 // ScoreBasedOnResponse scores the judge response with the configured scorer.
 func (e *templateEvaluator) ScoreBasedOnResponse(ctx context.Context, response *model.Response,
 	evalMetric *metric.EvalMetric) (*evaluator.ScoreResult, error) {
-	scorerName, err := responseScorerName(evalMetric)
+	operators, err := e.operatorRegistry.Resolve(evalMetric)
 	if err != nil {
 		return nil, err
 	}
-	scorer, err := templateresolver.ResolveResponseScorer(scorerName)
-	if err != nil {
-		return nil, err
-	}
-	return scorer.ScoreBasedOnResponse(ctx, response, evalMetric)
+	return operators.ResponseScorer.ScoreBasedOnResponse(ctx, response, evalMetric)
 }
 
 // AggregateSamples aggregates samples with the configured strategy.
 func (e *templateEvaluator) AggregateSamples(ctx context.Context, samples []*evaluator.PerInvocationResult,
 	evalMetric *metric.EvalMetric) (*evaluator.PerInvocationResult, error) {
-	templateOptions, err := judgeTemplateOptions(evalMetric)
+	operators, err := e.operatorRegistry.Resolve(evalMetric)
 	if err != nil {
 		return nil, err
 	}
-	aggregator, err := templateresolver.ResolveSamplesAggregator(sampleAggregatorName(templateOptions))
-	if err != nil {
-		return nil, err
-	}
-	return aggregator.AggregateSamples(ctx, samples, evalMetric)
+	return operators.SamplesAggregator.AggregateSamples(ctx, samples, evalMetric)
 }
 
 // AggregateInvocations aggregates invocation results with the configured strategy.
 func (e *templateEvaluator) AggregateInvocations(ctx context.Context, results []*evaluator.PerInvocationResult,
 	evalMetric *metric.EvalMetric) (*evaluator.EvaluateResult, error) {
-	templateOptions, err := judgeTemplateOptions(evalMetric)
+	operators, err := e.operatorRegistry.Resolve(evalMetric)
 	if err != nil {
 		return nil, err
 	}
-	aggregator, err := templateresolver.ResolveInvocationsAggregator(invocationAggregatorName(templateOptions))
-	if err != nil {
-		return nil, err
-	}
-	return aggregator.AggregateInvocations(ctx, results, evalMetric)
-}
-
-func responseScorerName(evalMetric *metric.EvalMetric) (string, error) {
-	templateOptions, err := judgeTemplateOptions(evalMetric)
-	if err != nil {
-		return "", err
-	}
-	if templateOptions.ResponseScorerName == "" {
-		return "", fmt.Errorf("template responseScorerName is empty")
-	}
-	return templateOptions.ResponseScorerName, nil
-}
-
-func sampleAggregatorName(templateOptions *metricllm.JudgeTemplateOptions) string {
-	if templateOptions == nil || templateOptions.SampleAggregatorName == "" {
-		return templateresolver.SampleAggregatorMajorityVoteName
-	}
-	return templateOptions.SampleAggregatorName
-}
-
-func invocationAggregatorName(templateOptions *metricllm.JudgeTemplateOptions) string {
-	if templateOptions == nil || templateOptions.InvocationAggregatorName == "" {
-		return templateresolver.InvocationAggregatorAverageName
-	}
-	return templateOptions.InvocationAggregatorName
-}
-
-func judgeTemplateOptions(evalMetric *metric.EvalMetric) (*metricllm.JudgeTemplateOptions, error) {
-	if evalMetric == nil || evalMetric.Criterion == nil || evalMetric.Criterion.LLMJudge == nil {
-		return nil, fmt.Errorf("missing llm judge criterion")
-	}
-	if evalMetric.Criterion.LLMJudge.Template == nil {
-		return nil, fmt.Errorf("template is nil")
-	}
-	return evalMetric.Criterion.LLMJudge.Template, nil
+	return operators.InvocationsAggregator.AggregateInvocations(ctx, results, evalMetric)
 }

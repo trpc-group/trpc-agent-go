@@ -36,6 +36,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/text"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/tooltrajectory"
 	criterionxml "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/xml"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/score"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/toolmock"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -79,6 +80,19 @@ func TestCloneEvalMetric_NilInput(t *testing.T) {
 	assert.Nil(t, got)
 }
 
+func TestCloneEvalMetric_AssignsExtensionAsIs(t *testing.T) {
+	extension := map[string]any{"weight": 0.7}
+	src := &metric.EvalMetric{
+		MetricName: "metric-1",
+		Extension:  extension,
+	}
+	dst, err := CloneEvalMetric(src)
+	require.NoError(t, err)
+	require.NotNil(t, dst)
+	dst.Extension.(map[string]any)["weight"] = 0.3
+	assert.Equal(t, 0.3, src.Extension.(map[string]any)["weight"])
+}
+
 func TestCloneEvalMetric_DeepCopiesJudgeTemplate(t *testing.T) {
 	src := &metric.EvalMetric{
 		MetricName:    "metric-1",
@@ -86,8 +100,14 @@ func TestCloneEvalMetric_DeepCopiesJudgeTemplate(t *testing.T) {
 		Criterion: &criterion.Criterion{
 			LLMJudge: &criterionllm.LLMCriterion{
 				Template: &criterionllm.JudgeTemplateOptions{
-					Prompt:             "Question: {{question}}",
-					ResponseScorerName: "single_score",
+					Prompt:               "Question: {{question}}",
+					ResponseScorerName:   "single_score",
+					StructuredOutputName: "single_score_schema",
+					ResponseScorerOptions: &criterionllm.ResponseScorerOptions{
+						Categories: []*criterionllm.CategoryScore{
+							{Label: "correct", Score: 1},
+						},
+					},
 					VariableBindings: []*criterionllm.TemplateVariableBinding{
 						{
 							TemplateVariable: "question",
@@ -97,6 +117,7 @@ func TestCloneEvalMetric_DeepCopiesJudgeTemplate(t *testing.T) {
 								Selector: &criterionllm.TemplateVariableSelector{
 									NodeID: "ignored",
 								},
+								Path: "$.question",
 							},
 						},
 					},
@@ -113,12 +134,18 @@ func TestCloneEvalMetric_DeepCopiesJudgeTemplate(t *testing.T) {
 	require.NotNil(t, dst.Criterion.LLMJudge.Template)
 	dst.Criterion.LLMJudge.Template.Prompt = "changed"
 	assert.Equal(t, "Question: {{question}}", src.Criterion.LLMJudge.Template.Prompt)
+	dst.Criterion.LLMJudge.Template.StructuredOutputName = "changed"
+	assert.Equal(t, "single_score_schema", src.Criterion.LLMJudge.Template.StructuredOutputName)
 	dst.Criterion.LLMJudge.Template.VariableBindings[0].TemplateVariable = "changed"
 	assert.Equal(t, "question", src.Criterion.LLMJudge.Template.VariableBindings[0].TemplateVariable)
 	dst.Criterion.LLMJudge.Template.VariableBindings[0].Source.Scope = criterionllm.TemplateVariableScopeExpected
 	assert.Equal(t, criterionllm.TemplateVariableScopeActual, src.Criterion.LLMJudge.Template.VariableBindings[0].Source.Scope)
 	dst.Criterion.LLMJudge.Template.VariableBindings[0].Source.Selector.NodeID = "changed"
 	assert.Equal(t, "ignored", src.Criterion.LLMJudge.Template.VariableBindings[0].Source.Selector.NodeID)
+	dst.Criterion.LLMJudge.Template.VariableBindings[0].Source.Path = "$.changed"
+	assert.Equal(t, "$.question", src.Criterion.LLMJudge.Template.VariableBindings[0].Source.Path)
+	dst.Criterion.LLMJudge.Template.ResponseScorerOptions.Categories[0].Label = "changed"
+	assert.Equal(t, "correct", src.Criterion.LLMJudge.Template.ResponseScorerOptions.Categories[0].Label)
 }
 
 func TestCloneTemplateVariableHelpersHandleNil(t *testing.T) {
@@ -663,6 +690,10 @@ func TestCloneEvalSetResult_DeepCopy(t *testing.T) {
 						Details: &evalresult.EvalMetricResultDetails{
 							Reason: "ok",
 							Score:  0.9,
+							Value: &score.Value{
+								Kind:    score.KindNumeric,
+								Numeric: float64Ptr(0.9),
+							},
 							RubricScores: []*evalresult.RubricScore{
 								{
 									ID:     "r1",
@@ -729,6 +760,11 @@ func TestCloneEvalSetResult_DeepCopy(t *testing.T) {
 
 	dst.EvalCaseResults[0].OverallEvalMetricResults[0].Details.RubricScores[0].Reason = "changed"
 	assert.Equal(t, "good", src.EvalCaseResults[0].OverallEvalMetricResults[0].Details.RubricScores[0].Reason)
+
+	require.NotNil(t, dst.EvalCaseResults[0].OverallEvalMetricResults[0].Details.Value)
+	require.NotNil(t, dst.EvalCaseResults[0].OverallEvalMetricResults[0].Details.Value.Numeric)
+	*dst.EvalCaseResults[0].OverallEvalMetricResults[0].Details.Value.Numeric = 0.1
+	assert.Equal(t, 0.9, *src.EvalCaseResults[0].OverallEvalMetricResults[0].Details.Value.Numeric)
 
 	dst.EvalCaseResults[0].EvalMetricResultPerInvocation[0].ActualInvocation.Tools[0].Arguments.(map[string]any)["k"] = "changed"
 	assert.Equal(t, "v", src.EvalCaseResults[0].EvalMetricResultPerInvocation[0].ActualInvocation.Tools[0].Arguments.(map[string]any)["k"])

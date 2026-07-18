@@ -65,6 +65,7 @@ func New(appName string, runner runner.Runner, opt ...Option) (AgentEvaluator, e
 		metricManager:                     opts.metricManager,
 		registry:                          opts.registry,
 		metricRegistry:                    opts.metricRegistry,
+		evalCaseResultAggregator:          opts.evalCaseResultAggregator,
 		evalService:                       opts.evalService,
 		callbacks:                         opts.callbacks,
 		expectedRunner:                    opts.expectedRunner,
@@ -107,6 +108,9 @@ func New(appName string, runner runner.Runner, opt ...Option) (AgentEvaluator, e
 		if opts.userSimulator != nil {
 			serviceOpts = append(serviceOpts, service.WithUserSimulator(opts.userSimulator))
 		}
+		if opts.evalCaseResultAggregator != nil {
+			serviceOpts = append(serviceOpts, service.WithEvalCaseResultAggregator(opts.evalCaseResultAggregator))
+		}
 		evalService, err := local.New(a.runner, serviceOpts...)
 		if err != nil {
 			return nil, fmt.Errorf("create eval service: %w", err)
@@ -127,6 +131,7 @@ type agentEvaluator struct {
 	metricManager                     metric.Manager
 	registry                          registry.Registry
 	metricRegistry                    metricregistry.Registry
+	evalCaseResultAggregator          service.EvalCaseResultAggregator
 	evalService                       service.Service
 	callbacks                         *service.Callbacks
 	expectedRunner                    runner.Runner
@@ -220,6 +225,7 @@ func (a *agentEvaluator) mergeCallOptions(opt ...Option) (*options, error) {
 		metricManager:                     a.metricManager,
 		registry:                          a.registry,
 		metricRegistry:                    a.metricRegistry,
+		evalCaseResultAggregator:          a.evalCaseResultAggregator,
 		evalService:                       a.evalService,
 		callbacks:                         a.callbacks,
 		expectedRunner:                    a.expectedRunner,
@@ -506,6 +512,9 @@ func (a *agentEvaluator) runEvaluationOnce(
 	}
 	if opts.evalCaseParallelEvaluationEnabled != nil {
 		evaluateOpts = append(evaluateOpts, service.WithEvalCaseParallelEvaluationEnabled(*opts.evalCaseParallelEvaluationEnabled))
+	}
+	if opts.evalCaseResultAggregator != nil {
+		evaluateOpts = append(evaluateOpts, service.WithEvalCaseResultAggregator(opts.evalCaseResultAggregator))
 	}
 	runResult, err := opts.evalService.Evaluate(ctx, evaluateRequest, evaluateOpts...)
 	if err != nil {

@@ -16,6 +16,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/score"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 )
 
@@ -60,14 +61,17 @@ type PerInvocationDetails struct {
 	Reason string `json:"reason,omitempty"`
 	// Score is the score for the invocation evaluation result.
 	Score float64 `json:"score,omitempty"`
+	// Value is the evaluator's typed score value.
+	Value *score.Value `json:"value,omitempty"`
 	// RubricScores contains the scores for the rubric items.
 	RubricScores []*evalresult.RubricScore `json:"rubricScores,omitempty"`
 }
 
 // ScoreResult represents the score and rationale for a single metric evaluation.
-// It mirrors the schema used by ADK Web, with field names in camel to align with the JSON format.
 type ScoreResult struct {
 	Reason       string                    `json:"reason,omitempty"`
 	Score        float64                   `json:"score,omitempty"`
+	Status       *status.EvalStatus        `json:"status,omitempty"`
+	Value        *score.Value              `json:"value,omitempty"`
 	RubricScores []*evalresult.RubricScore `json:"rubricScores,omitempty"`
 }

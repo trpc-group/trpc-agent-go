@@ -27,11 +27,16 @@ type MessagesConstructor interface {
 		evalMetric *metric.EvalMetric) ([]model.Message, error)
 }
 
-// StructuredOutputMessagesConstructor extends MessagesConstructor with a structured output contract.
-type StructuredOutputMessagesConstructor interface {
-	MessagesConstructor
+// StructuredOutputProvider provides a structured output schema for the judge model.
+type StructuredOutputProvider interface {
 	// StructuredOutput returns the structured output schema for the judge model.
 	// LLMBaseEvaluator calls it with the same per-invocation prefix slices used for ConstructMessages.
 	StructuredOutput(ctx context.Context, actuals, expecteds []*evalset.Invocation,
 		evalMetric *metric.EvalMetric) (*model.StructuredOutput, error)
+}
+
+// StructuredOutputMessagesConstructor extends MessagesConstructor with a structured output contract.
+type StructuredOutputMessagesConstructor interface {
+	MessagesConstructor
+	StructuredOutputProvider
 }

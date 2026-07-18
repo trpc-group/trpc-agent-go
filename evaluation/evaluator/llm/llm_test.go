@@ -27,12 +27,15 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/llm"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/score"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/provider"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
+
+func float64Ptr(v float64) *float64 { return &v }
 
 type fakeLLMEvaluator struct {
 	constructMessagesCalled   int
@@ -64,8 +67,15 @@ func (f *fakeLLMEvaluator) ConstructMessages(_ context.Context, actuals, expecte
 func (f *fakeLLMEvaluator) ScoreBasedOnResponse(_ context.Context, _ *model.Response,
 	_ *metric.EvalMetric) (*evaluator.ScoreResult, error) {
 	f.scoreBasedOnResponseCalls++
-	score := 0.9
-	return &evaluator.ScoreResult{Score: score, RubricScores: nil}, nil
+	scoreValue := 0.9
+	return &evaluator.ScoreResult{
+		Score: scoreValue,
+		Value: &score.Value{
+			Kind:    score.KindNumeric,
+			Numeric: float64Ptr(scoreValue),
+		},
+		RubricScores: nil,
+	}, nil
 }
 
 func (f *fakeLLMEvaluator) AggregateSamples(_ context.Context, samples []*evaluator.PerInvocationResult,
@@ -292,6 +302,11 @@ func TestLLMBaseEvaluator_EvaluateSuccess(t *testing.T) {
 	require.Len(t, stub.receivedSamples, 1)
 	assert.Equal(t, actual, stub.receivedSamples[0].ActualInvocation)
 	assert.Equal(t, expected, stub.receivedSamples[0].ExpectedInvocation)
+	require.NotNil(t, stub.receivedSamples[0].Details)
+	require.NotNil(t, stub.receivedSamples[0].Details.Value)
+	assert.Equal(t, score.KindNumeric, stub.receivedSamples[0].Details.Value.Kind)
+	require.NotNil(t, stub.receivedSamples[0].Details.Value.Numeric)
+	assert.Equal(t, 0.9, *stub.receivedSamples[0].Details.Value.Numeric)
 	require.Len(t, stub.receivedInvocations, 1)
 	assert.Equal(t, stub.receivedSamples[0].Score, stub.receivedInvocations[0].Score)
 }
@@ -321,6 +336,7 @@ type scriptedLLMEvaluator struct {
 	constructErr        error
 	scoreErr            error
 	scoreValue          float64
+	scoreStatus         *status.EvalStatus
 	aggregateSamplesErr error
 }
 
@@ -347,7 +363,7 @@ func (s *scriptedLLMEvaluator) ScoreBasedOnResponse(context.Context, *model.Resp
 		return nil, s.scoreErr
 	}
 	score := s.scoreValue
-	return &evaluator.ScoreResult{Score: score, RubricScores: nil}, nil
+	return &evaluator.ScoreResult{Score: score, Status: s.scoreStatus, RubricScores: nil}, nil
 }
 
 func (s *scriptedLLMEvaluator) AggregateSamples(_ context.Context, samples []*evaluator.PerInvocationResult,
@@ -444,6 +460,31 @@ func TestLLMBaseEvaluator_ScoreBelowThreshold(t *testing.T) {
 		context.Background(),
 		[]*evalset.Invocation{actual},
 		[]*evalset.Invocation{expected},
+		evalMetric,
+	)
+	require.NoError(t, err)
+	require.Len(t, res.PerInvocationResults, 1)
+	assert.Equal(t, status.EvalStatusFailed, res.PerInvocationResults[0].Status)
+}
+
+func TestLLMBaseEvaluator_UsesScoreStatusOverride(t *testing.T) {
+	provider.Register("llm-status-override-provider", func(_ *provider.Options) (model.Model, error) {
+		return &fakeModel{responses: []*model.Response{{
+			Choices: []model.Choice{{Message: model.Message{Content: "ok"}}},
+			Done:    true,
+		}}}, nil
+	})
+	failedStatus := status.EvalStatusFailed
+	base := &LLMBaseEvaluator{LLMEvaluator: &scriptedLLMEvaluator{
+		scoreValue:  0,
+		scoreStatus: &failedStatus,
+	}}
+	evalMetric := buildEvalMetric("llm-status-override-provider", 1)
+	evalMetric.Threshold = 0
+	res, err := base.Evaluate(
+		context.Background(),
+		[]*evalset.Invocation{{InvocationID: "a"}},
+		[]*evalset.Invocation{{InvocationID: "b"}},
 		evalMetric,
 	)
 	require.NoError(t, err)

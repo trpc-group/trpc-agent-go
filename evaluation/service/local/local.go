@@ -29,7 +29,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/registry"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/internal/callback"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/internal/clone"
-	istatus "trpc.group/trpc-go/trpc-agent-go/evaluation/internal/status"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
 	criterionllm "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/llm"
@@ -53,6 +52,7 @@ type local struct {
 	evalResultManager                 evalresult.Manager
 	registry                          registry.Registry
 	metricRegistry                    metricregistry.Registry
+	evalCaseResultAggregator          service.EvalCaseResultAggregator
 	sessionIDSupplier                 func(ctx context.Context) string
 	userSimulator                     usersimulation.Simulator
 	callbacks                         *service.Callbacks
@@ -88,6 +88,9 @@ func New(runner runner.Runner, opt ...service.Option) (service.Service, error) {
 	if opts.MetricRegistry == nil {
 		return nil, errors.New("metric registry is nil")
 	}
+	if opts.EvalCaseResultAggregator == nil {
+		return nil, errors.New("eval case result aggregator is nil")
+	}
 	if opts.SessionIDSupplier == nil {
 		return nil, errors.New("session id supplier is nil")
 	}
@@ -99,6 +102,7 @@ func New(runner runner.Runner, opt ...service.Option) (service.Service, error) {
 		evalResultManager:                 opts.EvalResultManager,
 		registry:                          opts.Registry,
 		metricRegistry:                    opts.MetricRegistry,
+		evalCaseResultAggregator:          opts.EvalCaseResultAggregator,
 		sessionIDSupplier:                 opts.SessionIDSupplier,
 		userSimulator:                     opts.UserSimulator,
 		callbacks:                         opts.Callbacks,
@@ -393,6 +397,9 @@ func (s *local) evaluatePerCase(ctx context.Context, inferenceResult *service.In
 	if opts.Registry == nil {
 		return nil, errors.New("registry is nil")
 	}
+	if opts.EvalCaseResultAggregator == nil {
+		return nil, errors.New("eval case result aggregator is nil")
+	}
 	evalCase, err := opts.EvalSetManager.GetCase(ctx,
 		inferenceResult.AppName,
 		inferenceResult.EvalSetID,
@@ -417,6 +424,7 @@ func (s *local) evaluatePerCase(ctx context.Context, inferenceResult *service.In
 	}
 	// overallMetricResults collects the metric results for the entire eval case.
 	overallMetricResults := make([]*evalresult.EvalMetricResult, 0, len(evaluateConfig.EvalMetrics))
+	effectiveMetrics := make([]*metric.EvalMetric, 0, len(evaluateConfig.EvalMetrics))
 	perInvocation := make([]*evalresult.EvalMetricResultPerInvocation, len(inputs.actuals))
 	for i, actual := range inputs.actuals {
 		perInvocation[i] = &evalresult.EvalMetricResultPerInvocation{
@@ -447,6 +455,7 @@ func (s *local) evaluatePerCase(ctx context.Context, inferenceResult *service.In
 		if err != nil {
 			return nil, fmt.Errorf("run evaluation for metric %s: %w", evalMetric.MetricName, err)
 		}
+		effectiveMetrics = append(effectiveMetrics, evalMetric)
 		if len(result.PerInvocationResults) != len(perInvocation) {
 			return nil, fmt.Errorf("metric %s returned %d per-invocation results, expected %d", evalMetric.MetricName,
 				len(result.PerInvocationResults), len(perInvocation))
@@ -473,6 +482,7 @@ func (s *local) evaluatePerCase(ctx context.Context, inferenceResult *service.In
 				evalMetricResult.Details = &evalresult.EvalMetricResultDetails{
 					Reason:       invocationResult.Details.Reason,
 					Score:        invocationResult.Details.Score,
+					Value:        invocationResult.Details.Value,
 					RubricScores: invocationResult.Details.RubricScores,
 				}
 				reasons = append(reasons, invocationResult.Details.Reason)
@@ -498,15 +508,30 @@ func (s *local) evaluatePerCase(ctx context.Context, inferenceResult *service.In
 			},
 		})
 	}
-	// Summarize the overall metric results and return the final eval status.
-	finalStatus, err := istatus.SummarizeMetricsStatus(overallMetricResults)
+	aggregation, err := opts.EvalCaseResultAggregator.Aggregate(ctx, &service.EvalCaseResultAggregationInput{
+		AppName:         inferenceResult.AppName,
+		EvalSetID:       inferenceResult.EvalSetID,
+		EvalCase:        evalCase,
+		InferenceResult: inferenceResult,
+		EvalMetrics:     effectiveMetrics,
+		MetricResults:   overallMetricResults,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("summarize overall metric results: %w", err)
+		return nil, fmt.Errorf("aggregate eval case result: %w", err)
+	}
+	if aggregation == nil {
+		return nil, errors.New("eval case result aggregation result is nil")
+	}
+	switch aggregation.Status {
+	case evalstatus.EvalStatusPassed, evalstatus.EvalStatusFailed, evalstatus.EvalStatusNotEvaluated:
+	default:
+		return nil, fmt.Errorf("unexpected eval case result aggregation status %v", aggregation.Status)
 	}
 	return &evalresult.EvalCaseResult{
 		EvalSetID:                     inferenceResult.EvalSetID,
 		EvalID:                        inferenceResult.EvalCaseID,
-		FinalEvalStatus:               finalStatus,
+		Score:                         aggregation.Score,
+		FinalEvalStatus:               aggregation.Status,
 		OverallEvalMetricResults:      overallMetricResults,
 		EvalMetricResultPerInvocation: perInvocation,
 		SessionID:                     inferenceResult.SessionID,

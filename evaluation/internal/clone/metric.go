@@ -29,6 +29,7 @@ func CloneEvalMetric(src *metric.EvalMetric) (*metric.EvalMetric, error) {
 		return nil, errNilInput("eval metric")
 	}
 	copied := *src
+	// Extension is intentionally assigned as-is because callers own its clone semantics.
 	clonedCriterion, err := cloneCriterion(src.Criterion)
 	if err != nil {
 		return nil, err
@@ -197,8 +198,33 @@ func cloneJudgeTemplateOptions(src *criterionllm.JudgeTemplateOptions) *criterio
 		return nil
 	}
 	copied := *src
+	copied.ResponseScorerOptions = cloneResponseScorerOptions(src.ResponseScorerOptions)
 	copied.VariableBindings = cloneTemplateVariableBindings(src.VariableBindings)
 	return &copied
+}
+
+func cloneResponseScorerOptions(src *criterionllm.ResponseScorerOptions) *criterionllm.ResponseScorerOptions {
+	if src == nil {
+		return nil
+	}
+	copied := *src
+	copied.Categories = cloneCategoryScores(src.Categories)
+	return &copied
+}
+
+func cloneCategoryScores(src []*criterionllm.CategoryScore) []*criterionllm.CategoryScore {
+	if src == nil {
+		return nil
+	}
+	copied := make([]*criterionllm.CategoryScore, len(src))
+	for i := range src {
+		if src[i] == nil {
+			continue
+		}
+		category := *src[i]
+		copied[i] = &category
+	}
+	return copied
 }
 
 func cloneTemplateVariableBindings(src []*criterionllm.TemplateVariableBinding) []*criterionllm.TemplateVariableBinding {

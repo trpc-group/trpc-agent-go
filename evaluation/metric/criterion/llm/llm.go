@@ -71,9 +71,25 @@ type JudgeModelOptions struct {
 type JudgeTemplateOptions struct {
 	Prompt                   string                     `json:"prompt,omitempty"`
 	ResponseScorerName       string                     `json:"responseScorerName,omitempty"`
+	StructuredOutputName     string                     `json:"structuredOutputName,omitempty"`
+	ResponseScorerOptions    *ResponseScorerOptions     `json:"responseScorerOptions,omitempty"`
 	VariableBindings         []*TemplateVariableBinding `json:"variableBindings,omitempty"`
 	SampleAggregatorName     string                     `json:"sampleAggregatorName,omitempty"`
 	InvocationAggregatorName string                     `json:"invocationAggregatorName,omitempty"`
+}
+
+// ResponseScorerOptions configures template response scoring.
+type ResponseScorerOptions struct {
+	// Categories maps categorical labels to numeric scores.
+	Categories []*CategoryScore `json:"categories,omitempty"`
+}
+
+// CategoryScore maps one categorical label to a numeric score.
+type CategoryScore struct {
+	// Label identifies the category.
+	Label string `json:"label,omitempty"`
+	// Score is the numeric score mapped from the category.
+	Score float64 `json:"score"`
 }
 
 // TemplateVariableBinding binds one template variable to one evaluation source.
@@ -87,6 +103,7 @@ type TemplateVariableSource struct {
 	Scope    TemplateVariableScope     `json:"scope,omitempty"`
 	Field    TemplateVariableField     `json:"field,omitempty"`
 	Selector *TemplateVariableSelector `json:"selector,omitempty"`
+	Path     string                    `json:"path,omitempty"`
 }
 
 // TemplateVariableSelector selects one execution trace step.
@@ -102,6 +119,8 @@ const (
 	TemplateVariableScopeActual TemplateVariableScope = "actual"
 	// TemplateVariableScopeExpected binds against the current expected invocation.
 	TemplateVariableScopeExpected TemplateVariableScope = "expected"
+	// TemplateVariableScopeMetric binds against the current metric configuration.
+	TemplateVariableScopeMetric TemplateVariableScope = "metric"
 )
 
 // TemplateVariableField identifies which field is extracted from the source object.
@@ -116,6 +135,8 @@ const (
 	TemplateVariableFieldTraceStepInput TemplateVariableField = "traceStepInput"
 	// TemplateVariableFieldTraceStepOutput extracts the selected trace step output text.
 	TemplateVariableFieldTraceStepOutput TemplateVariableField = "traceStepOutput"
+	// TemplateVariableFieldRubrics extracts the metric rubrics.
+	TemplateVariableFieldRubrics TemplateVariableField = "rubrics"
 )
 
 // MarshalJSON omits APIKey from JSON output while still allowing JSON input to populate it.

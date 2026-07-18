@@ -17,8 +17,8 @@ import (
 
 	agenttrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
-	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/internal/templateresolver"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/messagesconstructor"
+	operatorregistry "trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/registry"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
 	criterionllm "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/llm"
@@ -139,6 +139,73 @@ func TestConstructMessagesRendersTraceStepInput(t *testing.T) {
 	assert.Contains(t, messages[0].Content, "Tool input: match query")
 }
 
+func TestConstructMessagesRendersMetricRubrics(t *testing.T) {
+	constructor := New()
+	evalMetric := buildTemplateEvalMetric(
+		"Rubrics: {{rubrics}}",
+		&criterionllm.TemplateVariableBinding{
+			TemplateVariable: "rubrics",
+			Source: &criterionllm.TemplateVariableSource{
+				Scope: criterionllm.TemplateVariableScopeMetric,
+				Field: criterionllm.TemplateVariableFieldRubrics,
+			},
+		},
+	)
+	evalMetric.Criterion.LLMJudge.Rubrics = []*criterionllm.Rubric{
+		{ID: "r1", Content: &criterionllm.RubricContent{Text: "Must be correct."}},
+	}
+	messages, err := constructor.ConstructMessages(context.Background(), nil, nil, evalMetric)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Contains(t, messages[0].Content, `"id":"r1"`)
+	assert.Contains(t, messages[0].Content, `"text":"Must be correct."`)
+}
+
+func TestConstructMessagesAppliesJSONPath(t *testing.T) {
+	constructor := New()
+	actual := &evalset.Invocation{
+		ExecutionTrace: &agenttrace.Trace{
+			Steps: []agenttrace.Step{
+				{NodeID: "fetch", Output: &agenttrace.Snapshot{Text: `{"payload":{"answer":"Paris","evidence":{"city":"Paris"}}}`}},
+			},
+		},
+	}
+	messages, err := constructor.ConstructMessages(
+		context.Background(),
+		[]*evalset.Invocation{actual},
+		nil,
+		buildTemplateEvalMetric(
+			"Answer: {{answer}}\nEvidence: {{evidence}}",
+			&criterionllm.TemplateVariableBinding{
+				TemplateVariable: "answer",
+				Source: &criterionllm.TemplateVariableSource{
+					Scope: criterionllm.TemplateVariableScopeActual,
+					Field: criterionllm.TemplateVariableFieldTraceStepOutput,
+					Selector: &criterionllm.TemplateVariableSelector{
+						NodeID: "fetch",
+					},
+					Path: "$.payload.answer",
+				},
+			},
+			&criterionllm.TemplateVariableBinding{
+				TemplateVariable: "evidence",
+				Source: &criterionllm.TemplateVariableSource{
+					Scope: criterionllm.TemplateVariableScopeActual,
+					Field: criterionllm.TemplateVariableFieldTraceStepOutput,
+					Selector: &criterionllm.TemplateVariableSelector{
+						NodeID: "fetch",
+					},
+					Path: "payload.evidence",
+				},
+			},
+		),
+	)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Contains(t, messages[0].Content, "Answer: Paris")
+	assert.Contains(t, messages[0].Content, `Evidence: {"city":"Paris"}`)
+}
+
 func TestConstructMessagesRejectsDuplicateBindings(t *testing.T) {
 	constructor := New()
 
@@ -190,7 +257,7 @@ func TestConstructMessagesRequiresExpectedFinalResponse(t *testing.T) {
 	assert.Contains(t, err.Error(), "expected finalResponse is empty")
 }
 
-func TestStructuredOutputResolvesResponseScorerSchema(t *testing.T) {
+func TestStructuredOutputDefaultsToResponseScorerName(t *testing.T) {
 	constructor, ok := New().(messagesconstructor.StructuredOutputMessagesConstructor)
 	require.True(t, ok)
 	output, err := constructor.StructuredOutput(context.Background(), nil, nil,
@@ -200,8 +267,32 @@ func TestStructuredOutputResolvesResponseScorerSchema(t *testing.T) {
 	require.NotNil(t, output.JSONSchema)
 	assert.Equal(t, "single_score_result", output.JSONSchema.Name)
 	evalMetric := buildTemplateEvalMetric("Answer: {{answer}}", nil)
-	evalMetric.Criterion.LLMJudge.Template.ResponseScorerName = templateresolver.ResponseScorerRubricScoresName
+	evalMetric.Criterion.LLMJudge.Template.ResponseScorerName = operatorregistry.ResponseScorerRubricScoresName
 	output, err = constructor.StructuredOutput(context.Background(), nil, nil, evalMetric)
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	require.NotNil(t, output.JSONSchema)
+	assert.Equal(t, "rubric_scores_result", output.JSONSchema.Name)
+	evalMetric.Criterion.LLMJudge.Template.ResponseScorerName = operatorregistry.ResponseScorerCategoricalName
+	evalMetric.Criterion.LLMJudge.Template.ResponseScorerOptions = &criterionllm.ResponseScorerOptions{
+		Categories: []*criterionllm.CategoryScore{
+			{Label: "correct", Score: 1},
+			{Label: "incorrect", Score: 0},
+		},
+	}
+	output, err = constructor.StructuredOutput(context.Background(), nil, nil, evalMetric)
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	require.NotNil(t, output.JSONSchema)
+	assert.Equal(t, "categorical_result", output.JSONSchema.Name)
+}
+
+func TestStructuredOutputUsesStructuredOutputName(t *testing.T) {
+	constructor := New().(messagesconstructor.StructuredOutputMessagesConstructor)
+	evalMetric := buildTemplateEvalMetric("Answer: {{answer}}", nil)
+	evalMetric.Criterion.LLMJudge.Template.ResponseScorerName = operatorregistry.ResponseScorerSingleScoreName
+	evalMetric.Criterion.LLMJudge.Template.StructuredOutputName = operatorregistry.StructuredOutputRubricScoresName
+	output, err := constructor.StructuredOutput(context.Background(), nil, nil, evalMetric)
 	require.NoError(t, err)
 	require.NotNil(t, output)
 	require.NotNil(t, output.JSONSchema)
@@ -222,13 +313,13 @@ func TestStructuredOutputRejectsInvalidTemplateOptions(t *testing.T) {
 	assert.Contains(t, err.Error(), "template is nil")
 }
 
-func TestStructuredOutputRejectsUnsupportedScorer(t *testing.T) {
+func TestStructuredOutputRejectsUnsupportedStructuredOutput(t *testing.T) {
 	constructor := New().(messagesconstructor.StructuredOutputMessagesConstructor)
 	evalMetric := buildTemplateEvalMetric("Answer: {{answer}}", nil)
-	evalMetric.Criterion.LLMJudge.Template.ResponseScorerName = "missing"
+	evalMetric.Criterion.LLMJudge.Template.StructuredOutputName = "missing"
 	_, err := constructor.StructuredOutput(context.Background(), nil, nil, evalMetric)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), `unsupported response scorer "missing"`)
+	assert.Contains(t, err.Error(), `unsupported structured output "missing"`)
 }
 
 func TestConstructMessagesRejectsUnknownPlaceholder(t *testing.T) {
@@ -307,11 +398,11 @@ func TestConstructMessagesRejectsInvalidTemplateOptions(t *testing.T) {
 }
 
 func TestResolveTemplateValuesRejectsInvalidBindings(t *testing.T) {
-	values, err := resolveTemplateValues(nil, nil, []*criterionllm.TemplateVariableBinding{nil})
+	values, err := resolveTemplateValues(nil, nil, nil, []*criterionllm.TemplateVariableBinding{nil})
 	require.Error(t, err)
 	assert.Nil(t, values)
 	assert.Contains(t, err.Error(), "template binding is nil")
-	values, err = resolveTemplateValues(nil, nil, []*criterionllm.TemplateVariableBinding{{
+	values, err = resolveTemplateValues(nil, nil, nil, []*criterionllm.TemplateVariableBinding{{
 		Source: &criterionllm.TemplateVariableSource{
 			Scope: criterionllm.TemplateVariableScopeActual,
 			Field: criterionllm.TemplateVariableFieldFinalResponse,
@@ -323,17 +414,27 @@ func TestResolveTemplateValuesRejectsInvalidBindings(t *testing.T) {
 }
 
 func TestResolveBindingValueRejectsNilAndUnsupportedSource(t *testing.T) {
-	value, err := resolveBindingValue(nil, nil, nil)
+	value, err := resolveBindingValue(nil, nil, nil, nil)
 	require.Error(t, err)
 	assert.Empty(t, value)
 	assert.Contains(t, err.Error(), "source is nil")
-	value, err = resolveBindingValue(nil, nil, &criterionllm.TemplateVariableSource{
-		Scope: "metric",
+	value, err = resolveBindingValue(nil, nil, buildTemplateEvalMetric("{{x}}"), &criterionllm.TemplateVariableSource{
+		Scope: criterionllm.TemplateVariableScopeMetric,
 		Field: criterionllm.TemplateVariableFieldFinalResponse,
 	})
 	require.Error(t, err)
 	assert.Empty(t, value)
 	assert.Contains(t, err.Error(), "unsupported source metric.finalResponse")
+}
+
+func TestResolveBindingValueRejectsEmptyRubrics(t *testing.T) {
+	value, err := resolveBindingValue(nil, nil, buildTemplateEvalMetric("{{rubrics}}"), &criterionllm.TemplateVariableSource{
+		Scope: criterionllm.TemplateVariableScopeMetric,
+		Field: criterionllm.TemplateVariableFieldRubrics,
+	})
+	require.Error(t, err)
+	assert.Empty(t, value)
+	assert.Contains(t, err.Error(), "metric rubrics are empty")
 }
 
 func TestResolveActualValueRejectsInvalidActualInput(t *testing.T) {
@@ -408,10 +509,24 @@ func TestResolveTraceStepErrors(t *testing.T) {
 				Scope: criterionllm.TemplateVariableScopeActual,
 				Field: criterionllm.TemplateVariableFieldTraceStepOutput,
 				Selector: &criterionllm.TemplateVariableSelector{
-					NodeID: " ",
+					NodeID: "",
 				},
 			},
 			wantErr: "trace selector nodeID is required",
+		},
+		{
+			name: "space node id is not trimmed",
+			actuals: []*evalset.Invocation{{
+				ExecutionTrace: &agenttrace.Trace{Steps: []agenttrace.Step{{NodeID: "fetch"}}},
+			}},
+			source: &criterionllm.TemplateVariableSource{
+				Scope: criterionllm.TemplateVariableScopeActual,
+				Field: criterionllm.TemplateVariableFieldTraceStepOutput,
+				Selector: &criterionllm.TemplateVariableSelector{
+					NodeID: " ",
+				},
+			},
+			wantErr: `trace step not found for actual.traceStepOutput nodeID " " at invocation index 0`,
 		},
 		{
 			name: "no matching step",
@@ -459,7 +574,7 @@ func buildTemplateEvalMetric(promptText string,
 			LLMJudge: &criterionllm.LLMCriterion{
 				Template: &criterionllm.JudgeTemplateOptions{
 					Prompt:             promptText,
-					ResponseScorerName: templateresolver.ResponseScorerSingleScoreName,
+					ResponseScorerName: operatorregistry.ResponseScorerSingleScoreName,
 					VariableBindings:   bindings,
 				},
 			},

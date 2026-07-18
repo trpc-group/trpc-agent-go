@@ -20,6 +20,7 @@ type options struct {
 	matchStrategy   JSONMatchStrategy
 	numberTolerance *float64
 	valid           bool
+	schema          string
 	compareName     string
 	compare         CompareFunc
 }
@@ -75,6 +76,13 @@ func WithNumberTolerance(tolerance float64) Option {
 func WithValid(valid bool) Option {
 	return func(o *options) {
 		o.valid = valid
+	}
+}
+
+// WithSchema sets the JSON schema.
+func WithSchema(schema string) Option {
+	return func(o *options) {
+		o.schema = schema
 	}
 }
 

@@ -21,6 +21,7 @@ import (
 	finalresponse "trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/finalresponse"
 	llmfinalresponse "trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/finalresponse"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/hallucination"
+	operatorregistry "trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/registry"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/rubriccritic"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/rubricknowledgerecall"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/rubricreferencecritic"
@@ -40,14 +41,32 @@ type Registry interface {
 	List() []string
 }
 
+// Option configures the evaluator registry.
+type Option func(*options)
+
+type options struct {
+	llmOperatorRegistry operatorregistry.Registry
+}
+
+// WithLLMOperatorRegistry sets the operator registry used by the default template LLM evaluator.
+func WithLLMOperatorRegistry(r operatorregistry.Registry) Option {
+	return func(o *options) {
+		o.llmOperatorRegistry = r
+	}
+}
+
 // registry is the default implementation of Registry.
 type registry struct {
 	mu         sync.RWMutex
 	evaluators map[string]evaluator.Evaluator
 }
 
-// New creates a evaluator registry
-func New() Registry {
+// New creates a evaluator registry.
+func New(opt ...Option) Registry {
+	opts := &options{}
+	for _, o := range opt {
+		o(opts)
+	}
 	r := &registry{
 		evaluators: make(map[string]evaluator.Evaluator),
 	}
@@ -67,7 +86,11 @@ func New() Registry {
 	r.Register(rubricKnowledgeRecall.Name(), rubricKnowledgeRecall)
 	hallucinationEvaluator := hallucination.New()
 	r.Register(hallucinationEvaluator.Name(), hallucinationEvaluator)
-	templateEvaluator := llmtemplate.New()
+	templateOptions := []llmtemplate.Option(nil)
+	if opts.llmOperatorRegistry != nil {
+		templateOptions = append(templateOptions, llmtemplate.WithOperatorRegistry(opts.llmOperatorRegistry))
+	}
+	templateEvaluator := llmtemplate.New(templateOptions...)
 	r.Register(templateEvaluator.Name(), templateEvaluator)
 	verifierPairwiseEvaluator := verifierpairwise.New()
 	r.Register(verifierPairwiseEvaluator.Name(), verifierPairwiseEvaluator)

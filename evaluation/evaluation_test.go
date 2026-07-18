@@ -552,6 +552,38 @@ func TestAgentEvaluatorEvaluateDoesNotOverrideServiceCallOptionsByDefault(t *tes
 	assert.True(t, probeSvc.lastEvaluateOptions.EvalCaseParallelEvaluationEnabled)
 }
 
+func TestAgentEvaluatorEvaluatePassesEvalCaseResultAggregatorToEvaluate(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+	evalSetMgr := evalsetinmemory.New()
+	_, err := evalSetMgr.Create(ctx, appName, evalSetID)
+	assert.NoError(t, err)
+	probeSvc := &optionProbeService{}
+	aggregator := stubEvalCaseResultAggregator{}
+	ae, err := New(
+		appName,
+		stubRunner{},
+		WithEvalSetManager(evalSetMgr),
+		WithEvalResultManager(evalresultinmemory.New()),
+		WithMetricManager(metricinmemory.New()),
+		WithRegistry(registry.New()),
+		WithEvaluationService(probeSvc),
+		WithEvalCaseResultAggregator(aggregator),
+	)
+	assert.NoError(t, err)
+	if err != nil {
+		return
+	}
+	defer func() {
+		assert.NoError(t, ae.Close())
+	}()
+	_, err = ae.Evaluate(ctx, evalSetID)
+	assert.NoError(t, err)
+	require.NotNil(t, probeSvc.lastEvaluateOptions)
+	assert.Equal(t, aggregator, probeSvc.lastEvaluateOptions.EvalCaseResultAggregator)
+}
+
 func TestAgentEvaluatorEvaluatePassesEvalCaseIDsToInference(t *testing.T) {
 	ctx := context.Background()
 	appName := "app"

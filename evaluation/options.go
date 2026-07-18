@@ -17,6 +17,7 @@ import (
 	evalresultinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	evalsetinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/inmemory"
+	operatorregistry "trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/registry"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/registry"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	metricinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/inmemory"
@@ -36,6 +37,7 @@ type options struct {
 	metricManager                     metric.Manager
 	registry                          registry.Registry
 	metricRegistry                    metricregistry.Registry
+	evalCaseResultAggregator          service.EvalCaseResultAggregator
 	evalService                       service.Service
 	expectedRunner                    runner.Runner
 	userSimulator                     usersimulation.Simulator
@@ -103,10 +105,24 @@ func WithRegistry(r registry.Registry) Option {
 	}
 }
 
+// WithLLMOperatorRegistry sets the operator registry used by the default template LLM evaluator.
+func WithLLMOperatorRegistry(r operatorregistry.Registry) Option {
+	return func(o *options) {
+		o.registry = registry.New(registry.WithLLMOperatorRegistry(r))
+	}
+}
+
 // WithMetricRegistry sets the metric runtime registry.
 func WithMetricRegistry(r metricregistry.Registry) Option {
 	return func(o *options) {
 		o.metricRegistry = r
+	}
+}
+
+// WithEvalCaseResultAggregator sets the eval case result aggregator for service evaluation.
+func WithEvalCaseResultAggregator(aggregator service.EvalCaseResultAggregator) Option {
+	return func(o *options) {
+		o.evalCaseResultAggregator = aggregator
 	}
 }
 
