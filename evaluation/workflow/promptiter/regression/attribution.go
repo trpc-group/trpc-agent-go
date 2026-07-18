@@ -40,9 +40,10 @@ type Failure struct {
 
 // FailureHint is the bounded feedback supplied to PromptIter.
 type FailureHint struct {
-	CaseID   string          `json:"case_id"`
-	Category FailureCategory `json:"category"`
-	Reason   string          `json:"reason"`
+	CaseID     string          `json:"case_id"`
+	MetricName string          `json:"metric_name"`
+	Category   FailureCategory `json:"category"`
+	Reason     string          `json:"reason"`
 }
 
 // Attribution contains failures and stable category totals.
@@ -76,10 +77,12 @@ func Hints(attribution *Attribution) ([]FailureHint, error) {
 	}
 	hints := make([]FailureHint, 0, len(attribution.Failures))
 	for _, failure := range attribution.Failures {
-		hints = append(hints, FailureHint{
-			CaseID: failure.CaseID, Category: failure.Category,
-			Reason: truncate(failure.Reason, 512),
-		})
+		for _, metricName := range failure.MetricNames {
+			hints = append(hints, FailureHint{
+				CaseID: failure.CaseID, MetricName: metricName, Category: failure.Category,
+				Reason: truncate(failure.Reason, 512),
+			})
+		}
 	}
 	return hints, nil
 }
