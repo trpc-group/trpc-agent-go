@@ -36,6 +36,8 @@ type MetricDelta struct {
 	ScoreDelta         float64   `json:"score_delta"`
 	BaselineEvaluated  bool      `json:"baseline_evaluated"`
 	CandidateEvaluated bool      `json:"candidate_evaluated"`
+	BaselinePassed     bool      `json:"baseline_passed"`
+	CandidatePassed    bool      `json:"candidate_passed"`
 }
 
 // CaseDelta compares one evaluation case.
@@ -128,6 +130,7 @@ func compareCase(baseline, candidate CaseSummary) (CaseDelta, error) {
 		result.Metrics = append(result.Metrics, MetricDelta{
 			Name: name, Kind: kind, BaselineScore: before.Score, CandidateScore: after.Score,
 			ScoreDelta: scoreDelta, BaselineEvaluated: before.Evaluated, CandidateEvaluated: after.Evaluated,
+			BaselinePassed: before.Passed, CandidatePassed: after.Passed,
 		})
 	}
 	return result, nil

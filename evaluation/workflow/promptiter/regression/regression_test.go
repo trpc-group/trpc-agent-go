@@ -322,6 +322,9 @@ func TestCompareSortsAndComparesMetrics(t *testing.T) {
 	if delta.Kind != DeltaNewlyPassed || delta.Cases[0].Metrics[0].Name != "a" || delta.Cases[0].Metrics[1].Kind != DeltaUnchanged {
 		t.Fatalf("delta = %+v", delta)
 	}
+	if !delta.Cases[0].Metrics[0].CandidatePassed || delta.Cases[0].Metrics[0].BaselinePassed {
+		t.Fatalf("metric pass states = %+v", delta.Cases[0].Metrics[0])
+	}
 }
 
 func TestCompareRejectsDifferentShapes(t *testing.T) {
