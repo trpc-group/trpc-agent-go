@@ -44,6 +44,9 @@ type MemoryExtractor interface {
 	// scenarios or requirements. If nil is provided, it will be ignored and
 	// the current model will remain unchanged.
 	SetModel(m model.Model)
+
+	// Metadata returns metadata about the extractor configuration.
+	Metadata() map[string]any
 }
 
 // UpdatePolicy controls how automatic extraction reconciles new information
