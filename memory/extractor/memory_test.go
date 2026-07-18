@@ -153,7 +153,7 @@ func TestNewExtractor(t *testing.T) {
 		require.NotNil(t, e)
 
 		// Check metadata.
-		meta := e.Metadata()
+		meta := e.(*memoryExtractor).Metadata()
 		assert.Equal(t, "test-model", meta[metadataKeyModelName])
 		assert.True(t, meta[metadataKeyModelAvailable].(bool))
 	})
@@ -200,7 +200,7 @@ func TestExtractor_UpdatePolicyOptions(t *testing.T) {
 			} else {
 				e = NewExtractor(m, WithUpdatePolicy(tt.in))
 			}
-			meta := e.Metadata()
+			meta := e.(*memoryExtractor).Metadata()
 			assert.Equal(t, string(tt.want), meta[metadataKeyUpdatePolicy])
 		})
 	}
@@ -983,20 +983,21 @@ func TestExtractor_SetModel(t *testing.T) {
 	m1 := &mockModel{name: "model-1"}
 	m2 := &mockModel{name: "model-2"}
 	e := NewExtractor(m1)
+	extractor := e.(*memoryExtractor)
 
 	// Set new model.
 	e.SetModel(m2)
-	meta := e.Metadata()
+	meta := extractor.Metadata()
 	assert.Equal(t, "model-2", meta[metadataKeyModelName])
 
 	// Nil model should be ignored.
 	e.SetModel(nil)
-	meta = e.Metadata()
+	meta = extractor.Metadata()
 	assert.Equal(t, "model-2", meta[metadataKeyModelName])
 }
 
 func TestExtractor_Metadata_NoModel(t *testing.T) {
-	e := NewExtractor(nil)
+	e := NewExtractor(nil).(*memoryExtractor)
 	meta := e.Metadata()
 
 	assert.Equal(t, "", meta[metadataKeyModelName])
