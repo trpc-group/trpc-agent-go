@@ -476,39 +476,15 @@ func (s *sessionSummarizer) Summarize(ctx context.Context, sess *session.Session
 	}
 
 	input.conversationText = s.extractConversationText(conversationEvents)
-	if s.preHook != nil {
-		hookCtx := &PreSummaryHookContext{
-			Ctx:             ctx,
-			Session:         sess,
-			Events:          conversationEvents,
-			Text:            input.conversationText,
-			PreviousSummary: input.previousSummary,
-		}
-		hookErr := s.preHook(hookCtx)
-		if hookErr != nil && s.hookAbortOnError {
-			return "", fmt.Errorf("pre-summary hook failed: %w", hookErr)
-		}
-		if hookErr == nil {
-			// Propagate context modifications from pre-hook to subsequent operations.
-			if hookCtx.Ctx != nil {
-				if report, ok := reportFromContext(ctx); ok {
-					if _, exists := reportFromContext(hookCtx.Ctx); !exists {
-						hookCtx.Ctx = ContextWithReport(hookCtx.Ctx, report)
-					}
-				}
-				ctx = hookCtx.Ctx
-			}
-			if separatePreviousSummary {
-				input.previousSummary = hookCtx.PreviousSummary
-			}
-			if hookCtx.Text != "" {
-				input.conversationText = hookCtx.Text
-			} else if len(hookCtx.Events) > 0 {
-				input.conversationText = s.extractConversationText(hookCtx.Events)
-			} else {
-				input.conversationText = ""
-			}
-		}
+	ctx, input, err := s.runPreSummaryHook(
+		ctx,
+		sess,
+		conversationEvents,
+		input,
+		separatePreviousSummary,
+	)
+	if err != nil {
+		return "", err
 	}
 	if input.conversationText == "" && input.previousSummary == "" {
 		return "", fmt.Errorf("no conversation text extracted for session %s (events=%d)", sess.ID, len(eventsToSummarize))
@@ -537,6 +513,46 @@ func (s *sessionSummarizer) Summarize(ctx context.Context, sess *session.Session
 	}
 
 	return summaryText, nil
+}
+
+// runPreSummaryHook applies pre-summary input and context changes while
+// preserving the original input when a non-fatal hook error occurs.
+func (s *sessionSummarizer) runPreSummaryHook(
+	ctx context.Context,
+	sess *session.Session,
+	events []event.Event,
+	input summaryPromptInput,
+	separatePreviousSummary bool,
+) (context.Context, summaryPromptInput, error) {
+	if s.preHook == nil {
+		return ctx, input, nil
+	}
+	hookCtx := &PreSummaryHookContext{
+		Ctx:             ctx,
+		Session:         sess,
+		Events:          events,
+		Text:            input.conversationText,
+		PreviousSummary: input.previousSummary,
+	}
+	if err := s.preHook(hookCtx); err != nil {
+		if s.hookAbortOnError {
+			return ctx, input, fmt.Errorf("pre-summary hook failed: %w", err)
+		}
+		return ctx, input, nil
+	}
+
+	ctx = inheritReportContext(hookCtx.Ctx, ctx)
+	if separatePreviousSummary {
+		input.previousSummary = hookCtx.PreviousSummary
+	}
+	if hookCtx.Text != "" {
+		input.conversationText = hookCtx.Text
+	} else if len(hookCtx.Events) > 0 {
+		input.conversationText = s.extractConversationText(hookCtx.Events)
+	} else {
+		input.conversationText = ""
+	}
+	return ctx, input, nil
 }
 
 // removePreviousSummaryEvent removes the synthetic event inserted by the
