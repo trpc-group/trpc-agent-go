@@ -1,0 +1,326 @@
+[
+  {
+    "name": "safe go test",
+    "report": {
+      "decision": "allow",
+      "risk_level": "none",
+      "rule_id": "SAFETY_NO_FINDINGS",
+      "evidence": "0 findings; parsed_segments=1; backend=workspaceexec",
+      "recommendation": "execute with configured backend isolation and limits",
+      "tool_name": "workspace_exec",
+      "command": "go test ./...",
+      "backend": "workspaceexec",
+      "blocked": false,
+      "redacted": false,
+      "duration_ms": 0,
+      "policy_version": "1",
+      "findings": []
+    }
+  },
+  {
+    "name": "dangerous deletion",
+    "report": {
+      "decision": "deny",
+      "risk_level": "critical",
+      "rule_id": "CMD_DANGEROUS_DELETE",
+      "evidence": "recursive destructive deletion detected: source=command; segment_index=0",
+      "recommendation": "limit deletion to a reviewed workspace path",
+      "tool_name": "workspace_exec",
+      "command": "rm -rf /",
+      "backend": "workspaceexec",
+      "blocked": true,
+      "redacted": false,
+      "duration_ms": 0,
+      "policy_version": "1",
+      "findings": [
+        {
+          "rule_id": "CMD_DANGEROUS_DELETE",
+          "risk_level": "critical",
+          "decision": "deny",
+          "evidence": "recursive destructive deletion detected: source=command; segment_index=0",
+          "recommendation": "limit deletion to a reviewed workspace path"
+        },
+        {
+          "rule_id": "CMD_DENIED",
+          "risk_level": "high",
+          "decision": "deny",
+          "evidence": "command policy match: source=command; segment_index=0; executable=rm",
+          "recommendation": "use an explicitly allowed non-dangerous command"
+        }
+      ]
+    }
+  },
+  {
+    "name": "SSH credential read",
+    "report": {
+      "decision": "deny",
+      "risk_level": "high",
+      "rule_id": "PATH_SSH_CREDENTIAL",
+      "evidence": "SSH credential path detected: source=command",
+      "recommendation": "remove credential access or use a scoped secret provider",
+      "tool_name": "workspace_exec",
+      "command": "cat ~/.ssh/id_rsa",
+      "backend": "workspaceexec",
+      "blocked": true,
+      "redacted": false,
+      "duration_ms": 0,
+      "policy_version": "1",
+      "findings": [
+        {
+          "rule_id": "PATH_SSH_CREDENTIAL",
+          "risk_level": "high",
+          "decision": "deny",
+          "evidence": "SSH credential path detected: source=command",
+          "recommendation": "remove credential access or use a scoped secret provider"
+        },
+        {
+          "rule_id": "PATH_FORBIDDEN",
+          "risk_level": "high",
+          "decision": "deny",
+          "evidence": "denied path matched: source=command",
+          "recommendation": "keep access inside an explicitly permitted workspace path"
+        }
+      ]
+    }
+  },
+  {
+    "name": "non-allowlisted network",
+    "report": {
+      "decision": "deny",
+      "risk_level": "high",
+      "rule_id": "NETWORK_DOMAIN_DENIED",
+      "evidence": "non-allowlisted network domain: source=command; host=evil.example",
+      "recommendation": "add the exact domain after review or deny the request",
+      "tool_name": "workspace_exec",
+      "command": "custom-fetch https://evil.example/file",
+      "backend": "workspaceexec",
+      "blocked": true,
+      "redacted": false,
+      "duration_ms": 0,
+      "policy_version": "1",
+      "findings": [
+        {
+          "rule_id": "NETWORK_DOMAIN_DENIED",
+          "risk_level": "high",
+          "decision": "deny",
+          "evidence": "non-allowlisted network domain: source=command; host=evil.example",
+          "recommendation": "add the exact domain after review or deny the request"
+        },
+        {
+          "rule_id": "NETWORK_CUSTOM_CLIENT",
+          "risk_level": "medium",
+          "decision": "ask",
+          "evidence": "custom network client detected: source=command",
+          "recommendation": "review the client's redirect and proxy behavior"
+        }
+      ]
+    }
+  },
+  {
+    "name": "allowlisted network",
+    "report": {
+      "decision": "allow",
+      "risk_level": "none",
+      "rule_id": "SAFETY_NO_FINDINGS",
+      "evidence": "0 findings; parsed_segments=1; backend=workspaceexec",
+      "recommendation": "execute with configured backend isolation and limits",
+      "tool_name": "workspace_exec",
+      "command": "curl https://api.github.com/repos/x/y",
+      "backend": "workspaceexec",
+      "blocked": false,
+      "redacted": false,
+      "duration_ms": 0,
+      "policy_version": "1",
+      "findings": []
+    }
+  },
+  {
+    "name": "shell wrapper",
+    "report": {
+      "decision": "deny",
+      "risk_level": "high",
+      "rule_id": "CMD_SHELL_WRAPPER",
+      "evidence": "command policy match: source=command; segment_index=0; executable=bash",
+      "recommendation": "replace the wrapper with a directly auditable command",
+      "tool_name": "workspace_exec",
+      "command": "bash -c 'echo safe'",
+      "backend": "workspaceexec",
+      "blocked": true,
+      "redacted": false,
+      "duration_ms": 0,
+      "policy_version": "1",
+      "findings": [
+        {
+          "rule_id": "CMD_SHELL_WRAPPER",
+          "risk_level": "high",
+          "decision": "deny",
+          "evidence": "command policy match: source=command; segment_index=0; executable=bash",
+          "recommendation": "replace the wrapper with a directly auditable command"
+        }
+      ]
+    }
+  },
+  {
+    "name": "pipeline review",
+    "report": {
+      "decision": "ask",
+      "risk_level": "medium",
+      "rule_id": "SHELL_COMPOUND_COMMAND",
+      "evidence": "compound shell input: source=command; parsed_segments=2",
+      "recommendation": "review every pipeline segment before execution",
+      "tool_name": "workspace_exec",
+      "command": "go env | cat",
+      "backend": "workspaceexec",
+      "blocked": true,
+      "redacted": false,
+      "duration_ms": 0,
+      "policy_version": "1",
+      "findings": [
+        {
+          "rule_id": "SHELL_COMPOUND_COMMAND",
+          "risk_level": "medium",
+          "decision": "ask",
+          "evidence": "compound shell input: source=command; parsed_segments=2",
+          "recommendation": "review every pipeline segment before execution"
+        }
+      ]
+    }
+  },
+  {
+    "name": "dependency install",
+    "report": {
+      "decision": "ask",
+      "risk_level": "medium",
+      "rule_id": "DEPENDENCY_GO_INSTALL",
+      "evidence": "dependency installation detected: source=command",
+      "recommendation": "pin and review dependencies before installation",
+      "tool_name": "workspace_exec",
+      "command": "go install example.com/tool@latest",
+      "backend": "workspaceexec",
+      "blocked": true,
+      "redacted": false,
+      "duration_ms": 0,
+      "policy_version": "1",
+      "findings": [
+        {
+          "rule_id": "DEPENDENCY_GO_INSTALL",
+          "risk_level": "medium",
+          "decision": "ask",
+          "evidence": "dependency installation detected: source=command",
+          "recommendation": "pin and review dependencies before installation"
+        }
+      ]
+    }
+  },
+  {
+    "name": "long sleep",
+    "report": {
+      "decision": "deny",
+      "risk_level": "high",
+      "rule_id": "RESOURCE_LONG_SLEEP",
+      "evidence": "sleep exceeds policy limit: source=command",
+      "recommendation": "reduce or remove the sleep duration",
+      "tool_name": "workspace_exec",
+      "command": "sleep 120",
+      "backend": "workspaceexec",
+      "blocked": true,
+      "redacted": false,
+      "duration_ms": 0,
+      "policy_version": "1",
+      "findings": [
+        {
+          "rule_id": "RESOURCE_LONG_SLEEP",
+          "risk_level": "high",
+          "decision": "deny",
+          "evidence": "sleep exceeds policy limit: source=command",
+          "recommendation": "reduce or remove the sleep duration"
+        }
+      ]
+    }
+  },
+  {
+    "name": "oversized output",
+    "report": {
+      "decision": "deny",
+      "risk_level": "high",
+      "rule_id": "RESOURCE_UNBOUNDED_OUTPUT",
+      "evidence": "unbounded output pattern detected: source=command",
+      "recommendation": "replace with bounded output",
+      "tool_name": "workspace_exec",
+      "command": "yes",
+      "backend": "workspaceexec",
+      "blocked": true,
+      "redacted": false,
+      "duration_ms": 0,
+      "policy_version": "1",
+      "findings": [
+        {
+          "rule_id": "RESOURCE_UNBOUNDED_OUTPUT",
+          "risk_level": "high",
+          "decision": "deny",
+          "evidence": "unbounded output pattern detected: source=command",
+          "recommendation": "replace with bounded output"
+        }
+      ]
+    }
+  },
+  {
+    "name": "host PTY",
+    "report": {
+      "decision": "ask",
+      "risk_level": "medium",
+      "rule_id": "HOST_PTY_SESSION",
+      "evidence": "PTY execution requested",
+      "recommendation": "use non-interactive execution when possible",
+      "tool_name": "exec_command",
+      "command": "go test ./...",
+      "backend": "hostexec",
+      "blocked": true,
+      "redacted": false,
+      "duration_ms": 0,
+      "policy_version": "1",
+      "findings": [
+        {
+          "rule_id": "HOST_PTY_SESSION",
+          "risk_level": "medium",
+          "decision": "ask",
+          "evidence": "PTY execution requested",
+          "recommendation": "use non-interactive execution when possible"
+        }
+      ]
+    }
+  },
+  {
+    "name": "dynamic network target",
+    "report": {
+      "decision": "needs_human_review",
+      "risk_level": "high",
+      "rule_id": "NETWORK_DYNAMIC_TARGET",
+      "evidence": "dynamic network target detected: source=command",
+      "recommendation": "replace the target with a literal allowlisted hostname",
+      "tool_name": "workspace_exec",
+      "command": "curl \"https://${TARGET}/file\"",
+      "backend": "workspaceexec",
+      "blocked": true,
+      "redacted": false,
+      "duration_ms": 0,
+      "policy_version": "1",
+      "findings": [
+        {
+          "rule_id": "NETWORK_DYNAMIC_TARGET",
+          "risk_level": "high",
+          "decision": "needs_human_review",
+          "evidence": "dynamic network target detected: source=command",
+          "recommendation": "replace the target with a literal allowlisted hostname"
+        },
+        {
+          "rule_id": "SHELL_PARSE_FAILED",
+          "risk_level": "high",
+          "decision": "needs_human_review",
+          "evidence": "shell input could not be parsed safely: source=command",
+          "recommendation": "rewrite as literal arguments without shell expansion"
+        }
+      ]
+    }
+  }
+]

@@ -63,9 +63,10 @@ type Pipeline struct {
 // commandParser is the package-private seam between the public,
 // dependency-free API of shellsafe and the underlying bash parser
 // implementation. It takes a normalised, non-empty command string
-// and returns either a flat slice of "plain" pipeline segments
-// (each segment is its argv) or a structured rejection error
-// describing the first disallowed construct.
+// and an explicit segment limit, then returns either a flat slice of
+// "plain" pipeline segments (each segment is its argv) or a
+// structured rejection error describing the first disallowed
+// construct.
 //
 // The default implementation lives in parser_simple.go and is a
 // hand-rolled lexer. Replacing the parser - whether by adopting a
@@ -73,7 +74,7 @@ type Pipeline struct {
 // requires implementing a function with this signature and updating
 // the line below; nothing else in the package depends on the parser
 // internals.
-type commandParser func(src string) ([][]string, error)
+type commandParser func(src string, segmentLimit int) ([][]string, error)
 
 // parseCommand is wired at package init by the implementation file.
 // Tests may temporarily replace it through withParser.
@@ -84,11 +85,31 @@ var parseCommand commandParser = parseCommandSimple
 // error mentions the first construct that caused the rejection so
 // callers can surface it verbatim to the model.
 func Parse(command string) (*Pipeline, error) {
+	return parse(command, maxSegments)
+}
+
+// ParseWithMaxSegments validates command like Parse, using the given
+// pipeline segment limit. The limit must be between 1 and 512.
+func ParseWithMaxSegments(
+	command string,
+	segmentLimit int,
+) (*Pipeline, error) {
+	if segmentLimit < 1 || segmentLimit > maxConfigurableSegments {
+		return nil, fmt.Errorf(
+			"max segments must be between 1 and %d: got %d",
+			maxConfigurableSegments,
+			segmentLimit,
+		)
+	}
+	return parse(command, segmentLimit)
+}
+
+func parse(command string, segmentLimit int) (*Pipeline, error) {
 	src := strings.TrimSpace(command)
 	if src == "" {
 		return nil, errors.New("command is empty")
 	}
-	cmds, err := parseCommand(src)
+	cmds, err := parseCommand(src, segmentLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -102,9 +123,13 @@ func Parse(command string) (*Pipeline, error) {
 // returned cleanup function and returns the previous parser. It is
 // intended for tests that exercise the Pipeline / Policy layer
 // without exercising the underlying parser implementation.
-func withParser(p commandParser) (restore func()) {
+func withParser(
+	p func(src string) ([][]string, error),
+) (restore func()) {
 	prev := parseCommand
-	parseCommand = p
+	parseCommand = func(src string, _ int) ([][]string, error) {
+		return p(src)
+	}
 	return func() { parseCommand = prev }
 }
 
