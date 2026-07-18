@@ -214,7 +214,11 @@ _ = result.OverallStatus
     - [Prerequisites](#prerequisites)
     - [Run the Example](#run-the-example)
     - [Basic Usage](#basic-usage)
+    - [Dynamic Agent per Request](#dynamic-agent-per-request)
     - [Stop / Cancel a Run](#stop--cancel-a-run)
+      - [Option A: Ctrl+C (terminal programs)](#option-a-ctrlc-terminal-programs)
+      - [Option B: Cancel from your code](#option-b-cancel-from-your-code)
+      - [Option C: Cancel by `requestID` (for servers / background runs)](#option-c-cancel-by-requestid-for-servers--background-runs)
   - [Examples](#examples)
     - [1. Tool Usage](#1-tool-usage)
     - [2. LLM-Only Agent](#2-llm-only-agent)
@@ -827,5 +831,5 @@ Licensed under the **Apache 2.0 License** - see [LICENSE](LICENSE) file for deta
 If tRPC-Agent-Go is useful for your Go agent projects, stars are welcome.
 
 _Empowering developers to build the next generation of intelligent applications_
-
+1
 </div>
