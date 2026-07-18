@@ -197,7 +197,11 @@ func RedactSecrets(input string) string {
 		with string
 	}{
 		{
-			re:   regexp.MustCompile(`(?i)\b(api[_-]?key|apikey|llm[_-]?key|openai[_-]?(api[_-]?)?key|client[_-]?secret|secret|token|bearer[_-]?token|password|passwd|pwd|github[_-]?token|private[_-]?key)\b\s*[:=]\s*("[^"]+"|'[^']+'|[^\s,;]+)`),
+			re:   regexp.MustCompile(`(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----`),
+			with: `[REDACTED_PRIVATE_KEY]`,
+		},
+		{
+			re:   regexp.MustCompile(`(?i)\b(api[_-]?key|apikey|llm[_-]?key|openai[_-]?(api[_-]?)?key|client[_-]?secret|secret|token|bearer[_-]?token|password|passwd|pwd|github[_-]?token|private[_-]?key)\b\s*[:=]\s*("[^"]+"|'[^']+'|[^\s,;\[]+)`),
 			with: `$1=[REDACTED]`,
 		},
 		{
@@ -219,10 +223,6 @@ func RedactSecrets(input string) string {
 		{
 			re:   regexp.MustCompile(`[A-Za-z0-9_-]{3,}\.[A-Za-z0-9_-]{3,}\.[A-Za-z0-9_-]{3,}`),
 			with: `[REDACTED]`,
-		},
-		{
-			re:   regexp.MustCompile(`-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----`),
-			with: `[REDACTED_PRIVATE_KEY]`,
 		},
 		{
 			re:   regexp.MustCompile(`([a-z][a-z0-9+.-]*://[^/\s:@]+):([^@\s/]+)@`),

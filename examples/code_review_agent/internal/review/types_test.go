@@ -66,3 +66,33 @@ func TestRedactSecretsMasksCommonTokenShapes(t *testing.T) {
 		t.Fatalf("expected redaction marker, got %s", got)
 	}
 }
+
+func TestRedactSecretsMasksMultilinePEMBlocksBeforeGenericKeyPatterns(t *testing.T) {
+	input := strings.Join([]string{
+		"provider request failed:",
+		"private_key=-----BEGIN PRIVATE KEY-----",
+		"MIIEvQIBADANBgkqhkiG9w0BAQEFAASC",
+		"ZXhhbXBsZS1tdWx0aWxpbmUtc2VjcmV0",
+		"-----END PRIVATE KEY-----",
+		"retry=false",
+	}, "\n")
+
+	got := RedactSecrets(input)
+
+	for _, raw := range []string{
+		"-----BEGIN PRIVATE KEY-----",
+		"MIIEvQIBADANBgkqhkiG9w0BAQEFAASC",
+		"ZXhhbXBsZS1tdWx0aWxpbmUtc2VjcmV0",
+		"-----END PRIVATE KEY-----",
+	} {
+		if strings.Contains(got, raw) {
+			t.Fatalf("redacted output still contains %q: %s", raw, got)
+		}
+	}
+	if !strings.Contains(got, "private_key=[REDACTED_PRIVATE_KEY]") {
+		t.Fatalf("expected multiline PEM block to be fully redacted, got %s", got)
+	}
+	if !strings.Contains(got, "retry=false") {
+		t.Fatalf("expected surrounding context to remain, got %s", got)
+	}
+}
