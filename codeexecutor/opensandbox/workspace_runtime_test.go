@@ -104,6 +104,22 @@ type mockOpenSandboxServer struct {
 	// Workspaces and directories created via CreateDirectory /
 	// UploadFiles are added here automatically.
 	existingPaths map[string]bool
+	// uploadShouldFail, when true, makes POST /files return 500 so
+	// UploadFiles returns an error. Used to test flush / PutFiles /
+	// prepareStdinRedirect / ExecuteInline error paths.
+	uploadShouldFail bool
+	// createDirShouldFail, when true, makes POST /directories return
+	// 500 so CreateDirectory returns an error. Used to test ensureRemoteDir
+	// / visit / PutDirectory error paths.
+	createDirShouldFail bool
+	// readlinkBatchMalformed, when true, makes the batch readlink script
+	// (used by resolveSandboxPaths) return a line count != input count,
+	// forcing the per-path fallback branch. Used to test the fallback.
+	readlinkBatchMalformed bool
+	// commandShouldFail, when true, makes /command return a 500 with a
+	// generic error (not "timeout") so runBash returns a non-timeout
+	// error. Used to test removeSymlinksBatch / chmod error paths.
+	commandShouldFail bool
 }
 
 func newMockServer(t *testing.T) *mockOpenSandboxServer {
@@ -401,6 +417,7 @@ func (m *mockOpenSandboxServer) handleCommand(w http.ResponseWriter, r *http.Req
 	noComplete := m.noComplete
 	runErr := m.runError
 	forceInfraExit := m.forceInfraExit
+	commandShouldFail := m.commandShouldFail
 	m.mu.Unlock()
 
 	// runBash calls (CreateWorkspace mkdir, Cleanup rm, StageDirectory
@@ -410,6 +427,17 @@ func (m *mockOpenSandboxServer) handleCommand(w http.ResponseWriter, r *http.Req
 	// contain `&& cd ` (from `mkdir -p ... && cd ... && ...`).
 	// forceInfraExit bypasses this guard to test runBash error paths.
 	isRunProgram := strings.Contains(req.Command, "&& cd ")
+
+	// commandShouldFail makes any /command return 500 with a generic
+	// (non-"timeout") error so runBash / executeRunCommand surface a
+	// non-timeout error. Used to test removeSymlinksBatch, chmod, and
+	// readlink error paths.
+	if commandShouldFail {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintf(w, `{"code":"internal_error","message":"injected failure"}`)
+		return
+	}
 
 	// runError makes /command return a 500 with "timeout" in the code
 	// field so the SDK produces an APIError whose Error() contains
@@ -558,12 +586,21 @@ func (m *mockOpenSandboxServer) handleCommand(w http.ResponseWriter, r *http.Req
 		!strings.Contains(req.Command, "__OSB_BASE__=") {
 		m.mu.Lock()
 		symlinks := m.symlinks
+		malformed := m.readlinkBatchMalformed
 		m.mu.Unlock()
 		var result string
 		if strings.Contains(req.Command, "for p in") {
 			paths := parseBatchReadlinkPaths(req.Command)
-			for _, p := range paths {
-				result += resolveMockSymlink(p, symlinks) + "\n"
+			if malformed {
+				// Return one fewer line than expected so
+				// resolveSandboxPaths falls back to per-path resolve.
+				for i := 0; i < len(paths)-1; i++ {
+					result += resolveMockSymlink(paths[i], symlinks) + "\n"
+				}
+			} else {
+				for _, p := range paths {
+					result += resolveMockSymlink(p, symlinks) + "\n"
+				}
 			}
 		} else {
 			p := parseSingleReadlinkPath(req.Command)
@@ -643,15 +680,27 @@ func (m *mockOpenSandboxServer) handleCreateDirectory(w http.ResponseWriter, r *
 	var dirs map[string]map[string]int
 	_ = json.Unmarshal(body, &dirs)
 	m.mu.Lock()
+	shouldFail := m.createDirShouldFail
 	for p := range dirs {
 		m.dirsCreated = append(m.dirsCreated, p)
 		m.existingPaths[p] = true
 	}
 	m.mu.Unlock()
+	if shouldFail {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
 	w.WriteHeader(http.StatusOK)
 }
 
 func (m *mockOpenSandboxServer) handleUploadFiles(w http.ResponseWriter, r *http.Request) {
+	m.mu.Lock()
+	shouldFail := m.uploadShouldFail
+	m.mu.Unlock()
+	if shouldFail {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
 	// Multipart upload: parse the form and record file paths. We don't
 	// fully simulate the filesystem; we just track that files were
 	// received.
