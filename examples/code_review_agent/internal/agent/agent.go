@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/approval"
@@ -73,6 +74,7 @@ const (
 	defaultMaxArtifactTotalBytes = 4 * 1024 * 1024
 	defaultMaxArtifactCount      = 4
 	defaultTimeout               = 30 * time.Second
+	taskCleanupTimeout           = 5 * time.Second
 	containerRepoMountPath       = execution.ContainerRepoMountPath
 	defaultContainerImage        = execution.DefaultContainerImage
 	goSandboxCacheDir            = execution.GoSandboxCacheDir
@@ -142,9 +144,9 @@ type Request struct {
 }
 
 // defaultPermissionPolicy 返回代码审查命令的固定 allowlist。
-func defaultPermissionPolicy(outputLimit int) tool.PermissionPolicy {
-	commands := approval.AllowedReviewCommands(true)
-	for _, command := range approval.AllowedReviewCommands(true) {
+func defaultPermissionPolicy(enableStaticcheck bool, outputLimit int) tool.PermissionPolicy {
+	commands := approval.AllowedReviewCommands(enableStaticcheck)
+	for _, command := range approval.AllowedReviewCommands(enableStaticcheck) {
 		containerCommand := execution.SandboxExecCommand(RuntimeContainer, command)
 		commands = append(commands,
 			containerCommand,
@@ -175,6 +177,8 @@ type Agent struct {
 	artifactService artifact.Service
 	// modelProvider 提供语义审查增量。
 	modelProvider llm.Provider
+	closeOnce     sync.Once
+	closeErr      error
 }
 
 // New 创建基于 trpc-agent-go 的 CR Agent。
@@ -196,6 +200,9 @@ func New(cfg Config) (*Agent, error) {
 	if cfg.SkillsRoot == "" {
 		return nil, errors.New("skills root is required")
 	}
+	if cfg.Runtime == RuntimeContainer && cfg.EnableStaticcheck {
+		return nil, errors.New("staticcheck is unavailable in container runtime")
+	}
 
 	// 建立 Skill 仓库，供 skill_load 和 skill_run 共用。
 	repo, err := skillrepo.NewFSRepository(cfg.SkillsRoot)
@@ -213,6 +220,16 @@ func New(cfg Config) (*Agent, error) {
 	}
 
 	var store storage.Store
+	cleanupOnError := true
+	defer func() {
+		if !cleanupOnError {
+			return
+		}
+		if store != nil {
+			_ = store.Close()
+		}
+		_ = execution.CleanupExecutor(exec)
+	}()
 	if cfg.SQLitePath != "" {
 		if err := ensureSQLiteParentDir(cfg.SQLitePath); err != nil {
 			return nil, err
@@ -235,17 +252,19 @@ func New(cfg Config) (*Agent, error) {
 		}),
 	)
 
-	return &Agent{
+	agent := &Agent{
 		cfg:             cfg,
 		loadTool:        toolskill.NewLoadTool(repo),
 		runTool:         runTool,
 		checkTool:       toolcodeexec.NewTool(exec, toolcodeexec.WithName("execute_code"), toolcodeexec.WithLanguages("bash")),
 		exec:            exec,
-		policy:          defaultPermissionPolicy(cfg.OutputLimitBytes),
+		policy:          defaultPermissionPolicy(cfg.EnableStaticcheck, cfg.OutputLimitBytes),
 		store:           store,
 		artifactService: cfg.ArtifactService,
 		modelProvider:   cfg.ModelProvider,
-	}, nil
+	}
+	cleanupOnError = false
+	return agent, nil
 }
 
 // Run 通过官方 Runner/Event 路线执行一次审查，并返回最终结果。
@@ -260,6 +279,9 @@ func (a *Agent) Run(ctx context.Context, req Request) (review.Result, error) {
 			continue
 		}
 		if ev.Response != nil && ev.Response.Error != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return review.Result{}, ctxErr
+			}
 			return review.Result{}, errors.New(ev.Response.Error.Message)
 		}
 		if ev.Object == reviewEventTaskFinished {
@@ -269,6 +291,9 @@ func (a *Agent) Run(ctx context.Context, req Request) (review.Result, error) {
 		}
 	}
 	if result.TaskID == "" {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return review.Result{}, ctxErr
+		}
 		return review.Result{}, errors.New("review runner did not produce a result")
 	}
 	return result, nil
@@ -309,7 +334,9 @@ func (a *Agent) runDirect(ctx context.Context, req Request) (result review.Resul
 	taskStarted := false
 	defer func() {
 		if err != nil && taskStarted && a.store != nil {
-			_ = a.saveTaskStatus(ctx, taskID, inputRef, digestBytes(diff), req.RepoPath, mode, "failed", start, time.Now())
+			cleanupCtx, cancel := a.taskCleanupContext(ctx)
+			defer cancel()
+			_ = a.saveTaskStatus(cleanupCtx, taskID, inputRef, digestBytes(diff), req.RepoPath, mode, terminalTaskStatus(ctx, err), start, time.Now())
 		}
 	}()
 
@@ -322,9 +349,15 @@ func (a *Agent) runDirect(ctx context.Context, req Request) (result review.Resul
 	}
 
 	result, decisions, runs, toolCallCount, runErr := a.runReviewChecks(ctx, taskID, plan, req.RepoPath, diff)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return review.Result{}, ctxErr
+	}
 	a.emitReviewEvent(ctx, taskID, reviewEventSkillRun, defaultSkillCommand)
 	for _, run := range runs {
 		a.emitReviewEvent(ctx, taskID, reviewEventSandboxRun, run.Command)
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return review.Result{}, ctxErr
 	}
 	if runErr != nil {
 		// 执行失败降级为人工复核项。
@@ -339,9 +372,15 @@ func (a *Agent) runDirect(ctx context.Context, req Request) (result review.Resul
 		Runs:          runs,
 		Plan:          plan,
 	})
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return review.Result{}, ctxErr
+	}
 	if provider, audit := a.configuredModelProvider(plan.ModelRequested); provider != nil {
 		var modelSummary llm.RunSummary
 		result, modelSummary = a.runModelReview(ctx, taskID, provider, audit, result, diff, inputMeta)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return review.Result{}, ctxErr
+		}
 		a.emitReviewEvent(ctx, taskID, reviewEventModelReview, fmt.Sprintf("calls=%d findings=%d exceptions=%d", modelSummary.CallCount, modelSummary.FindingCount, modelSummary.ExceptionCount))
 		result = finalizeReviewResult(result, reviewResultContext{
 			TaskID:        taskID,
@@ -353,6 +392,9 @@ func (a *Agent) runDirect(ctx context.Context, req Request) (result review.Resul
 			Model:         modelSummary,
 			Plan:          plan,
 		})
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return review.Result{}, ctxErr
 	}
 
 	// 报告文件和 SQLite 使用同一份内容。
@@ -456,10 +498,16 @@ func (a *Agent) runUnsupportedRuntime(taskID string, runtime string) (review.Res
 
 // Close 释放 Agent 持有的存储连接。
 func (a *Agent) Close() error {
-	if a == nil || a.store == nil {
+	if a == nil {
 		return nil
 	}
-	return a.store.Close()
+	a.closeOnce.Do(func() {
+		if a.store != nil {
+			a.closeErr = errors.Join(a.closeErr, a.store.Close())
+		}
+		a.closeErr = errors.Join(a.closeErr, execution.CleanupExecutor(a.exec))
+	})
+	return a.closeErr
 }
 
 // saveTaskStatus 保存任务状态。
@@ -560,6 +608,29 @@ func normalizeConfig(cfg Config) Config {
 		cfg.ArtifactService = artifactinmemory.NewService()
 	}
 	return cfg
+}
+
+func (a *Agent) taskCleanupContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	timeout := taskCleanupTimeout
+	if a != nil && a.cfg.Timeout > 0 && a.cfg.Timeout < timeout {
+		timeout = a.cfg.Timeout
+	}
+	return context.WithTimeout(context.WithoutCancel(ctx), timeout)
+}
+
+func terminalTaskStatus(ctx context.Context, err error) string {
+	switch {
+	case ctx != nil && errors.Is(ctx.Err(), context.Canceled):
+		return "canceled"
+	case ctx != nil && errors.Is(ctx.Err(), context.DeadlineExceeded):
+		return "timed_out"
+	case errors.Is(err, context.Canceled):
+		return "canceled"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "timed_out"
+	default:
+		return "failed"
+	}
 }
 
 // recordReviewStartTelemetry 记录审查入口边界。

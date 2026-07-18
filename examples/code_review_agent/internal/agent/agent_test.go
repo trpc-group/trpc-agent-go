@@ -190,6 +190,71 @@ func TestLocalFallbackExecutorsUseIsolatedWorkDirs(t *testing.T) {
 	}
 }
 
+func TestAgentCloseCleansLocalFallbackExecutorExactlyOnce(t *testing.T) {
+
+	root := repoRoot(t)
+	t.Setenv("TMPDIR", t.TempDir())
+
+	ag, err := New(Config{
+		SkillsRoot: filepath.Join(root, "skills"),
+		Runtime:    RuntimeLocalFallback,
+		OutputDir:  t.TempDir(),
+		Timeout:    testReviewTimeout,
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+
+	localExec, ok := ag.exec.(*localexec.CodeExecutor)
+	if !ok {
+		t.Fatalf("expected local executor, got %T", ag.exec)
+	}
+	workDir := localExec.WorkDir
+	if workDir == "" {
+		t.Fatal("expected local fallback workdir")
+	}
+	if err := ag.Close(); err != nil {
+		t.Fatalf("first Close returned error: %v", err)
+	}
+	if _, err := os.Stat(workDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected workdir %q to be removed, stat err=%v", workDir, err)
+	}
+	if err := ag.Close(); err != nil {
+		t.Fatalf("second Close returned error: %v", err)
+	}
+}
+
+func TestAgentNewCleansLocalFallbackExecutorOnFailure(t *testing.T) {
+
+	root := repoRoot(t)
+	tmpRoot := t.TempDir()
+	t.Setenv("TMPDIR", tmpRoot)
+
+	blocker := filepath.Join(t.TempDir(), "blocker")
+	if err := os.WriteFile(blocker, []byte("file"), 0o644); err != nil {
+		t.Fatalf("write blocker file: %v", err)
+	}
+
+	_, err := New(Config{
+		SkillsRoot: filepath.Join(root, "skills"),
+		Runtime:    RuntimeLocalFallback,
+		SQLitePath: filepath.Join(blocker, "review.db"),
+		OutputDir:  t.TempDir(),
+		Timeout:    testReviewTimeout,
+	})
+	if err == nil {
+		t.Fatal("expected New to fail when sqlite parent is a file")
+	}
+
+	leftovers, globErr := filepath.Glob(filepath.Join(tmpRoot, "cr-agent-localexec-*"))
+	if globErr != nil {
+		t.Fatalf("glob leftover workdirs: %v", globErr)
+	}
+	if len(leftovers) != 0 {
+		t.Fatalf("expected local fallback workdirs to be cleaned on New failure, got %+v", leftovers)
+	}
+}
+
 // TestAgentRunDoesNotPersistRawSecretsInSQLite 固定明文密钥不落库。
 func TestAgentRunDoesNotPersistRawSecretsInSQLite(t *testing.T) {
 
@@ -1628,6 +1693,93 @@ func TestAgentRunWithEventsUsesOfficialRunnerRoute(t *testing.T) {
 	}
 }
 
+func TestAgentRunCancellationStopsLaterStagesAndPersistsTerminalStatus(t *testing.T) {
+
+	root := repoRoot(t)
+	dbPath := filepath.Join(t.TempDir(), "review.db")
+	outDir := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var taskID string
+	ag, err := New(Config{
+		SkillsRoot: filepath.Join(root, "skills"),
+		Runtime:    RuntimeLocalFallback,
+		SQLitePath: dbPath,
+		OutputDir:  outDir,
+		Timeout:    testReviewTimeout,
+		EventSink: func(ctx context.Context, ev *agentevent.Event) {
+			_ = ctx
+			if ev == nil {
+				return
+			}
+			if ev.Object == reviewEventSkillRun {
+				taskID = ev.InvocationID
+				cancel()
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	defer ag.Close()
+
+	_, err = ag.Run(ctx, Request{
+		DiffFile: filepath.Join(root, "testdata", "fixtures", "safe.diff"),
+		Mode:     ModeFakeModel,
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run error = %v, want context canceled", err)
+	}
+	if taskID == "" {
+		t.Fatal("expected cancellation path to emit a task id")
+	}
+	if _, err := os.Stat(filepath.Join(outDir, "review_report.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected report write to be skipped after cancellation, stat err=%v", err)
+	}
+
+	store, err := sqlite.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer store.Close()
+
+	task, err := store.TaskByID(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("TaskByID returned error: %v", err)
+	}
+	if task.Status != "canceled" {
+		t.Fatalf("task status = %q, want canceled", task.Status)
+	}
+	if task.FinishedAt.IsZero() {
+		t.Fatalf("expected canceled task to record finished_at: %+v", task)
+	}
+	if _, err := store.ReportByTaskID(context.Background(), taskID); err != sql.ErrNoRows {
+		t.Fatalf("expected canceled run to skip final report persistence, got %v", err)
+	}
+}
+
+func TestForwardRunnerEventStopsWhenContextIsCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	ch := make(chan *agentevent.Event)
+
+	done := make(chan bool, 1)
+	go func() {
+		done <- forwardRunnerEvent(ctx, ch, reviewEvent("task-1", reviewEventSkillRun, "first"))
+	}()
+
+	cancel()
+
+	select {
+	case ok := <-done:
+		if ok {
+			t.Fatal("expected forwardRunnerEvent to stop when context is canceled")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("forwardRunnerEvent blocked after context cancellation")
+	}
+}
+
 // TestAgentRunE2BRuntimeRecordsUnsupportedAudit 固定 E2B 入口是显式 unsupported，而不是静默 fallback。
 func TestAgentRunE2BRuntimeRecordsUnsupportedAudit(t *testing.T) {
 
@@ -2715,6 +2867,21 @@ func TestAgentRunSandboxModeOptionallyExecutesStaticcheck(t *testing.T) {
 		t.Fatalf("load sandbox runs: %v", err)
 	}
 	assertAnyRunForCommand(t, runs, "staticcheck ./...")
+}
+
+func TestNewRejectsStaticcheckForContainerRuntime(t *testing.T) {
+
+	root := repoRoot(t)
+	_, err := New(Config{
+		SkillsRoot:        filepath.Join(root, "skills"),
+		Runtime:           RuntimeContainer,
+		OutputDir:         t.TempDir(),
+		Timeout:           testReviewTimeout,
+		EnableStaticcheck: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "staticcheck is unavailable in container runtime") {
+		t.Fatalf("expected container staticcheck configuration error, got %v", err)
+	}
 }
 
 // TestAgentRunContainerRuntimeExecutesGoChecks 验证真实容器链路。

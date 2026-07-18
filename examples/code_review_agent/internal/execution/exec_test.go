@@ -13,11 +13,14 @@ package execution
 import (
 	"context"
 	"errors"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
+	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
 )
 
 func TestContainerHostConfigEnforcesProductionIsolation(t *testing.T) {
@@ -166,5 +169,36 @@ func TestFakeExecutionRuntimeIsTestOnlyAndSeparateFromLocalFallback(t *testing.T
 	}
 	if !strings.Contains(result.Output, RuntimeFakeExecution) {
 		t.Fatalf("fake executor output should identify test-only runtime, got %q", result.Output)
+	}
+}
+
+func TestCleanupExecutorRemovesLocalFallbackWorkDirExactlyOnce(t *testing.T) {
+	base := t.TempDir()
+	t.Setenv("TMPDIR", base)
+
+	exec, err := NewExecutor(Config{Runtime: RuntimeLocalFallback})
+	if err != nil {
+		t.Fatalf("NewExecutor returned error: %v", err)
+	}
+	localExec, ok := exec.(*localexec.CodeExecutor)
+	if !ok {
+		t.Fatalf("expected local executor, got %T", exec)
+	}
+	workDir := localExec.WorkDir
+	if workDir == "" {
+		t.Fatal("expected local fallback workdir")
+	}
+	if err := os.WriteFile(filepath.Join(workDir, "probe.txt"), []byte("ok"), 0o644); err != nil {
+		t.Fatalf("write probe file: %v", err)
+	}
+
+	if err := CleanupExecutor(exec); err != nil {
+		t.Fatalf("CleanupExecutor returned error: %v", err)
+	}
+	if _, err := os.Stat(workDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected workdir %q to be removed, stat err=%v", workDir, err)
+	}
+	if err := CleanupExecutor(exec); err != nil {
+		t.Fatalf("second CleanupExecutor returned error: %v", err)
 	}
 }

@@ -14,6 +14,7 @@ package execution
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -97,6 +98,29 @@ func NewExecutor(cfg Config) (codeexecutor.CodeExecutor, error) {
 	default:
 		return nil, fmt.Errorf("unsupported runtime %q", cfg.Runtime)
 	}
+}
+
+// CleanupExecutor releases runtime-specific executor resources.
+func CleanupExecutor(exec codeexecutor.CodeExecutor) error {
+	if exec == nil {
+		return nil
+	}
+	var cleanupErr error
+	if closer, ok := exec.(interface{ Close() error }); ok {
+		cleanupErr = errors.Join(cleanupErr, closer.Close())
+	}
+	localExec, ok := exec.(*localexec.CodeExecutor)
+	if !ok {
+		return cleanupErr
+	}
+	workDir := strings.TrimSpace(localExec.WorkDir)
+	if workDir == "" {
+		return cleanupErr
+	}
+	if err := os.RemoveAll(workDir); err != nil && !errors.Is(err, os.ErrNotExist) {
+		cleanupErr = errors.Join(cleanupErr, fmt.Errorf("remove local fallback workdir %q: %w", workDir, err))
+	}
+	return cleanupErr
 }
 
 // ContainerHostConfig returns the enforced production isolation profile.

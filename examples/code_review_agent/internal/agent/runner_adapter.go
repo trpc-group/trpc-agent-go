@@ -24,6 +24,7 @@ import (
 )
 
 const officialReviewAgentName = "cr-agent"
+const runnerEventBufferSize = 16
 
 // RunWithEvents 通过官方 Runner 执行一次 review，并返回 event.Event 流。
 // 内部仍复用本项目 runDirect，避免为了接 Runner 破坏报告、SQLite 和 fixture contract。
@@ -45,12 +46,14 @@ func (a *Agent) RunWithEvents(ctx context.Context, req Request) (<-chan *agentev
 		_ = r.Close()
 		return nil, err
 	}
-	out := make(chan *agentevent.Event)
+	out := make(chan *agentevent.Event, runnerEventBufferSize)
 	go func() {
 		defer close(out)
 		defer r.Close()
 		for ev := range events {
-			out <- ev
+			if !forwardRunnerEvent(ctx, out, ev) {
+				return
+			}
 		}
 	}()
 	return out, nil
@@ -65,7 +68,7 @@ func (a reviewRunnerAgent) Run(ctx context.Context, invocation *officialagent.In
 	if a.base == nil {
 		return nil, fmt.Errorf("agent is required")
 	}
-	events := make(chan *agentevent.Event, 16)
+	events := make(chan *agentevent.Event, runnerEventBufferSize)
 	local := *a.base
 	originalSink := local.cfg.EventSink
 	local.cfg.EventSink = func(ctx context.Context, ev *agentevent.Event) {
@@ -77,14 +80,14 @@ func (a reviewRunnerAgent) Run(ctx context.Context, invocation *officialagent.In
 			originalSink(ctx, ev.Clone())
 		}
 		officialagent.InjectIntoEvent(invocation, ev)
-		events <- ev
+		_ = forwardRunnerEvent(ctx, events, ev)
 	}
 	go func() {
 		defer close(events)
 		if _, err := local.runDirect(ctx, a.req); err != nil {
 			ev := agentevent.NewErrorEvent("", officialReviewAgentName, "run_error", review.RedactSecrets(err.Error()))
 			officialagent.InjectIntoEvent(invocation, ev)
-			events <- ev
+			_ = forwardRunnerEvent(ctx, events, ev)
 		}
 	}()
 	_ = invocation
@@ -109,4 +112,16 @@ func (a reviewRunnerAgent) SubAgents() []officialagent.Agent {
 func (a reviewRunnerAgent) FindSubAgent(name string) officialagent.Agent {
 	_ = name
 	return nil
+}
+
+func forwardRunnerEvent(ctx context.Context, ch chan<- *agentevent.Event, ev *agentevent.Event) bool {
+	if ev == nil {
+		return true
+	}
+	select {
+	case ch <- ev:
+		return true
+	case <-ctx.Done():
+		return false
+	}
 }
