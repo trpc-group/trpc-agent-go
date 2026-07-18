@@ -627,7 +627,7 @@ func networkOperandFindings(
 			return findings
 		}
 		return []Finding{newFinding(
-			"NETWORK_TARGET_UNPARSEABLE",
+			"NETWORK_TARGET_UNPARSABLE",
 			RiskLevelHigh,
 			DecisionNeedsHumanReview,
 			"network command has no classifiable target: source="+safeLabel(source),
@@ -660,7 +660,7 @@ func evaluateLiteralNetworkTarget(
 	host, err := literalNetworkHost(rawTarget)
 	if err != nil {
 		return []Finding{newFinding(
-			"NETWORK_TARGET_UNPARSEABLE",
+			"NETWORK_TARGET_UNPARSABLE",
 			RiskLevelHigh,
 			DecisionNeedsHumanReview,
 			"network target could not be classified: source="+safeLabel(source),

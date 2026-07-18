@@ -160,7 +160,7 @@ func (networkRule) Evaluate(
 		findings = append(findings, literalFindings...)
 		if len(urls) == 0 && !classified {
 			findings = append(findings, newFinding(
-				"NETWORK_TARGET_UNPARSEABLE",
+				"NETWORK_TARGET_UNPARSABLE",
 				RiskLevelHigh,
 				DecisionNeedsHumanReview,
 				"network target could not be classified: source="+safeLabel(candidate.label),
@@ -271,7 +271,7 @@ func evaluateURL(rawURL, source string, policy Policy) []Finding {
 	parsed, err := url.Parse(rawURL)
 	if err != nil || parsed.Hostname() == "" {
 		return []Finding{newFinding(
-			"NETWORK_URL_UNPARSEABLE",
+			"NETWORK_URL_UNPARSABLE",
 			RiskLevelHigh,
 			DecisionNeedsHumanReview,
 			"network URL could not be classified: source="+safeLabel(source),

