@@ -55,18 +55,18 @@ type RunRequest struct {
 
 // Round records one candidate and its acceptance evidence.
 type Round struct {
-	Number           int
-	InputPrompt      string
-	CandidatePrompt  string
-	Hints            []FailureHint
-	Train            *EvalSummary
-	Validation       *EvalSummary
-	TrainDelta       *DatasetDelta
-	ValidationDelta  *DatasetDelta
-	Attribution      *Attribution
-	Gate             *GateDecision
-	ServingCost      Cost
-	OptimizationCost Cost
+	Number           int           `json:"number"`
+	InputPrompt      string        `json:"input_prompt"`
+	CandidatePrompt  string        `json:"candidate_prompt"`
+	Hints            []FailureHint `json:"hints"`
+	Train            *EvalSummary  `json:"train"`
+	Validation       *EvalSummary  `json:"validation"`
+	TrainDelta       *DatasetDelta `json:"train_delta"`
+	ValidationDelta  *DatasetDelta `json:"validation_delta"`
+	Attribution      *Attribution  `json:"validation_attribution"`
+	Gate             *GateDecision `json:"gate"`
+	ServingCost      Cost          `json:"serving_cost"`
+	OptimizationCost Cost          `json:"optimization_cost"`
 }
 
 // OptimizationRun is the complete in-memory result consumed by audit reports.
