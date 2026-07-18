@@ -1252,7 +1252,7 @@ func Test_buildChatRequest_AllBranchesAndErrors(t *testing.T) {
 		},
 		Tools: map[string]tool.Tool{},
 	}
-	chatReq, err := m.buildChatRequest(req, false)
+	chatReq, err := m.buildChatRequest(req)
 	assert.NoError(t, err)
 	assert.Equal(t, anthropic.Model("claude-test"), chatReq.Model)
 	assert.True(t, chatReq.Temperature.Valid())
@@ -1260,7 +1260,7 @@ func Test_buildChatRequest_AllBranchesAndErrors(t *testing.T) {
 	assert.Equal(t, int64(maxTokens), chatReq.MaxTokens)
 	// Error when no messages are present in conversation.
 	req2 := &model.Request{Messages: []model.Message{model.NewSystemMessage("s")}}
-	chatReq, err = m.buildChatRequest(req2, false)
+	chatReq, err = m.buildChatRequest(req2)
 	assert.Error(t, err)
 	assert.Nil(t, chatReq)
 
@@ -1271,7 +1271,7 @@ func Test_buildChatRequest_AllBranchesAndErrors(t *testing.T) {
 			Stop: []string{"<END>"},
 		},
 	}
-	chatReq, err = m.buildChatRequest(reqStop, false)
+	chatReq, err = m.buildChatRequest(reqStop)
 	assert.NoError(t, err)
 	assert.True(t, len(chatReq.StopSequences) == 1)
 }
@@ -1292,7 +1292,7 @@ func Test_buildChatRequest_ThinkingIgnoredWhenTokensNil(t *testing.T) {
 			ThinkingEnabled: &thinking,
 		},
 	}
-	chatReq, err := m.buildChatRequest(req, false)
+	chatReq, err := m.buildChatRequest(req)
 	assert.NoError(t, err)
 	assert.Nil(t, chatReq.Thinking.OfAdaptive)
 	assert.Nil(t, chatReq.Thinking.OfEnabled)
@@ -1322,7 +1322,7 @@ func Test_buildChatRequest_AdaptiveThinkingModels(t *testing.T) {
 					ReasoningEffort: &effort,
 				},
 			}
-			chatReq, err := m.buildChatRequest(req, false)
+			chatReq, err := m.buildChatRequest(req)
 			require.NoError(t, err)
 			require.NotNil(t, chatReq.Thinking.OfAdaptive)
 			assert.Nil(t, chatReq.Thinking.OfEnabled)
@@ -1353,7 +1353,7 @@ func Test_buildChatRequest_DisabledThinking(t *testing.T) {
 					ThinkingEnabled: &thinking,
 				},
 			}
-			chatReq, err := m.buildChatRequest(req, false)
+			chatReq, err := m.buildChatRequest(req)
 			require.NoError(t, err)
 			require.NotNil(t, chatReq.Thinking.OfDisabled)
 			assert.Nil(t, chatReq.Thinking.OfAdaptive)
@@ -1375,7 +1375,7 @@ func Test_buildChatRequest_LegacyDisabledThinkingLeavesThinkingUnset(t *testing.
 			ThinkingEnabled: &thinking,
 		},
 	}
-	chatReq, err := m.buildChatRequest(req, false)
+	chatReq, err := m.buildChatRequest(req)
 	require.NoError(t, err)
 	assert.Nil(t, chatReq.Thinking.OfAdaptive)
 	assert.Nil(t, chatReq.Thinking.OfEnabled)
@@ -1393,7 +1393,7 @@ func Test_buildChatRequest_MythosDisabledThinkingReturnsError(t *testing.T) {
 			ThinkingEnabled: &thinking,
 		},
 	}
-	chatReq, err := m.buildChatRequest(req, false)
+	chatReq, err := m.buildChatRequest(req)
 	require.Error(t, err)
 	assert.Nil(t, chatReq)
 	assert.Contains(t, err.Error(), "thinking cannot be disabled")
@@ -1406,7 +1406,7 @@ func Test_buildChatRequest_NilThinkingEnabledLeavesThinkingUnset(t *testing.T) {
 			req := &model.Request{
 				Messages: []model.Message{model.NewUserMessage("u")},
 			}
-			chatReq, err := m.buildChatRequest(req, false)
+			chatReq, err := m.buildChatRequest(req)
 			require.NoError(t, err)
 			assert.Nil(t, chatReq.Thinking.OfAdaptive)
 			assert.Nil(t, chatReq.Thinking.OfEnabled)
@@ -1428,7 +1428,7 @@ func Test_buildChatRequest_LegacyThinkingUsesBudgetTokens(t *testing.T) {
 			ThinkingTokens:  &thinkingTokens,
 		},
 	}
-	chatReq, err := m.buildChatRequest(req, false)
+	chatReq, err := m.buildChatRequest(req)
 	require.NoError(t, err)
 	require.NotNil(t, chatReq.Thinking.OfEnabled)
 	assert.Nil(t, chatReq.Thinking.OfAdaptive)
@@ -2145,18 +2145,13 @@ func Test_repairToolUseInputIfNeeded(t *testing.T) {
 
 func Test_StreamingMessageAccumulator_IncompleteToolUseInputFinalizes(t *testing.T) {
 	acc := newStreamingMessageAccumulator()
-	// Partial JSON in tool-use Input is now handled gracefully:
-	// ensureValidToolInput resets invalid Input to {} before refreshContentBlockRawJSON.
 	acc.message.Content = []anthropic.ContentBlockUnion{{Type: "tool_use", Input: json.RawMessage("{")}}
 	acc.inputDeltaStartedAt = []bool{false}
 	require.NoError(t, acc.Accumulate(mustMessageStreamEventUnion(t,
 		`{"type":"content_block_stop","index":0}`)))
 	require.NoError(t, acc.Finalize())
 	assert.JSONEq(t, `{}`, string(acc.message.Content[0].Input))
-	// The invalid Input should have been reset to {}.
-	assert.Equal(t, json.RawMessage("{}"), acc.message.Content[0].Input)
-	// Proxy sends "input": null (literal JSON null) with no input_json_delta.
-	// ensureValidToolInput must treat this as empty and reset to {}.
+
 	acc3 := newStreamingMessageAccumulator()
 	acc3.message.Content = []anthropic.ContentBlockUnion{{Type: "tool_use", Input: json.RawMessage("null")}}
 	acc3.inputDeltaStartedAt = []bool{false}
@@ -2164,16 +2159,13 @@ func Test_StreamingMessageAccumulator_IncompleteToolUseInputFinalizes(t *testing
 		`{"type":"content_block_stop","index":0}`)))
 	assert.Equal(t, json.RawMessage("{}"), acc3.message.Content[0].Input)
 
-	// Non-tool_use blocks with malformed Input must NOT be auto-repaired.
 	acc2 := newStreamingMessageAccumulator()
 	acc2.message.Content = []anthropic.ContentBlockUnion{{Type: "text", Input: json.RawMessage("{")}}
 	acc2.inputDeltaStartedAt = []bool{false}
 	require.Error(t, acc2.Accumulate(mustMessageStreamEventUnion(t,
 		`{"type":"content_block_stop","index":0}`)))
-	// Input remains unchanged — auto-repair is tool_use-specific.
 	assert.Equal(t, json.RawMessage("{"), acc2.message.Content[0].Input)
 
-	// refreshContentBlockRawJSON repairs invalid tool_use Input when called directly.
 	block := &anthropic.ContentBlockUnion{Type: "tool_use", Input: json.RawMessage("{")}
 	require.NoError(t, refreshContentBlockRawJSON(block))
 	assert.JSONEq(t, `{}`, string(block.Input))
@@ -2399,6 +2391,59 @@ func Test_HandleStreamingResponse_RetriesMidStreamTCPRST(t *testing.T) {
 		"handleStreamingResponse should have made exactly 2 HTTP attempts (1 mid-stream failure + 1 success)")
 }
 
+func Test_HandleStreamingResponse_ChunkCallbackNotDuplicatedOnRetry(t *testing.T) {
+	var attempts int32
+	var chunkCallbackCount int32
+	orig := model.DefaultNewHTTPClient
+	t.Cleanup(func() { model.DefaultNewHTTPClient = orig })
+	model.DefaultNewHTTPClient = func(_ ...HTTPClientOption) model.HTTPClient {
+		return &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+			n := atomic.AddInt32(&attempts, 1)
+			h := make(http.Header)
+			h.Set("Content-Type", "text/event-stream")
+			if n == 1 {
+				body := &errReadCloser{
+					pre: []byte(ssePrelude),
+					err: fmt.Errorf("read tcp: connection reset by peer"),
+				}
+				return &http.Response{StatusCode: 200, Header: h, Body: body}, nil
+			}
+			return &http.Response{
+				StatusCode: 200,
+				Header:     h,
+				Body:       io.NopCloser(strings.NewReader(sseFullSuccess)),
+			}, nil
+		})}
+	}
+
+	m := New(
+		"claude-test",
+		WithHTTPClientOptions(),
+		WithAnthropicClientOptions(anthropicopt.WithMaxRetries(0)),
+		WithStreamRetry(2, 1*time.Millisecond, 5*time.Millisecond),
+		WithChatChunkCallback(func(_ context.Context, _ *anthropic.MessageNewParams,
+			_ *anthropic.MessageStreamEventUnion) {
+			atomic.AddInt32(&chunkCallbackCount, 1)
+		}),
+	)
+
+	ctx := context.Background()
+	responseChan := make(chan *model.Response, 16)
+	m.handleStreamingResponse(ctx, anthropic.MessageNewParams{}, responseChan)
+	close(responseChan)
+
+	for r := range responseChan {
+		require.Nil(t, r.Error)
+	}
+	require.Equal(t, int32(2), atomic.LoadInt32(&attempts))
+	require.Greater(t, atomic.LoadInt32(&chunkCallbackCount), int32(0),
+		"successful attempt should deliver chunk callbacks")
+	// sseFullSuccess emits a small fixed number of stream events; the failed
+	// attempt's buffered chunks must not be flushed before retry.
+	require.LessOrEqual(t, atomic.LoadInt32(&chunkCallbackCount), int32(20),
+		"chunk callbacks should not duplicate across retried attempts")
+}
+
 // Test_HandleStreamingResponse_RetryCappedAfterMaxAttempts verifies that when
 // every streaming attempt is interrupted, handleStreamingResponse gives up
 // after maxRetries+1 attempts and surfaces the error to the caller rather
@@ -2470,6 +2515,215 @@ func Test_HandleStreamingResponse_DoesNotRetryFatalErrors(t *testing.T) {
 
 	require.Equal(t, int32(1), atomic.LoadInt32(&attempts),
 		"a 401 authentication failure must not be retried")
+}
+
+func Test_isStreamRetryableError_HTTPStatusBoundaries(t *testing.T) {
+	require.True(t, isStreamRetryableError(fmt.Errorf("received http status 503")))
+	require.True(t, isStreamRetryableError(fmt.Errorf("status 502 service unavailable")))
+	require.False(t, isStreamRetryableError(fmt.Errorf("port 5031 refused")))
+	require.False(t, isStreamRetryableError(fmt.Errorf("error code 5031")))
+}
+
+// Test_HandleStreamingResponse_RetryInvokesStreamCompleteCallbackOnce verifies
+// intermediate retryable failures do not emit stream-complete callbacks.
+func Test_HandleStreamingResponse_RetryInvokesStreamCompleteCallbackOnce(t *testing.T) {
+	var attempts int32
+	orig := model.DefaultNewHTTPClient
+	t.Cleanup(func() { model.DefaultNewHTTPClient = orig })
+	model.DefaultNewHTTPClient = func(_ ...HTTPClientOption) model.HTTPClient {
+		return &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+			n := atomic.AddInt32(&attempts, 1)
+			h := make(http.Header)
+			h.Set("Content-Type", "text/event-stream")
+			if n == 1 {
+				body := &errReadCloser{
+					pre: []byte(ssePrelude),
+					err: fmt.Errorf("read: connection reset by peer"),
+				}
+				return &http.Response{StatusCode: 200, Header: h, Body: body}, nil
+			}
+			return &http.Response{
+				StatusCode: 200,
+				Header:     h,
+				Body:       io.NopCloser(strings.NewReader(sseFullSuccess)),
+			}, nil
+		})}
+	}
+
+	var callbackCount int32
+	m := New(
+		"claude-test",
+		WithHTTPClientOptions(),
+		WithAnthropicClientOptions(anthropicopt.WithMaxRetries(0)),
+		WithStreamRetry(2, 1*time.Millisecond, 5*time.Millisecond),
+		WithChatStreamCompleteCallback(func(_ context.Context, _ *anthropic.MessageNewParams,
+			_ *anthropic.Message, err error) {
+			atomic.AddInt32(&callbackCount, 1)
+			require.NoError(t, err)
+		}),
+	)
+
+	ctx := context.Background()
+	responseChan := make(chan *model.Response, 16)
+	m.handleStreamingResponse(ctx, anthropic.MessageNewParams{}, responseChan)
+	close(responseChan)
+
+	for range responseChan {
+	}
+	require.Equal(t, int32(1), atomic.LoadInt32(&callbackCount))
+	require.Equal(t, int32(2), atomic.LoadInt32(&attempts))
+}
+
+func Test_effectiveStreamMaxRetries_PositiveOverride(t *testing.T) {
+	m := New("claude-test", WithStreamRetry(7, 0, 0))
+	assert.Equal(t, 7, m.effectiveStreamMaxRetries())
+}
+
+func Test_streamRetryBackoff_DefaultAndCustom(t *testing.T) {
+	defaultModel := New("claude-test")
+	assert.Equal(t, defaultStreamRetryBaseBackoff, defaultModel.streamRetryBackoff(1))
+	assert.Equal(t, defaultStreamRetryBaseBackoff*2, defaultModel.streamRetryBackoff(2))
+	assert.Equal(t, defaultStreamRetryMaxBackoff, defaultModel.streamRetryBackoff(20))
+
+	customModel := New("claude-test", WithStreamRetry(5, 10*time.Millisecond, 15*time.Millisecond))
+	assert.Equal(t, 10*time.Millisecond, customModel.streamRetryBackoff(1))
+	assert.Equal(t, 15*time.Millisecond, customModel.streamRetryBackoff(3))
+}
+
+func Test_isStreamRetryableError_NilAndTransportPatterns(t *testing.T) {
+	require.False(t, isStreamRetryableError(nil))
+	require.True(t, isStreamRetryableError(fmt.Errorf("read: connection reset by peer")))
+	require.True(t, isStreamRetryableError(fmt.Errorf("http2: server sent GOAWAY")))
+}
+
+func Test_containsIsolatedToken_EmptyToken(t *testing.T) {
+	require.False(t, containsIsolatedToken("status 503", ""))
+}
+
+func Test_HandleStreamingResponse_DoesNotRetryAfterPartialDelivery(t *testing.T) {
+	partialThenRST := ssePrelude +
+		"event: content_block_start\n" +
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}` + "\n\n" +
+		"event: content_block_delta\n" +
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello"}}` + "\n\n"
+
+	var attempts int32
+	orig := model.DefaultNewHTTPClient
+	t.Cleanup(func() { model.DefaultNewHTTPClient = orig })
+	model.DefaultNewHTTPClient = func(_ ...HTTPClientOption) model.HTTPClient {
+		return &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+			atomic.AddInt32(&attempts, 1)
+			h := make(http.Header)
+			h.Set("Content-Type", "text/event-stream")
+			body := &errReadCloser{
+				pre: []byte(partialThenRST),
+				err: fmt.Errorf("read tcp: read: connection reset by peer"),
+			}
+			return &http.Response{StatusCode: 200, Header: h, Body: body}, nil
+		})}
+	}
+
+	m := New(
+		"claude-test",
+		WithHTTPClientOptions(),
+		WithAnthropicClientOptions(anthropicopt.WithMaxRetries(0)),
+		WithStreamRetry(3, 1*time.Millisecond, 5*time.Millisecond),
+	)
+
+	responseChan := make(chan *model.Response, 8)
+	m.handleStreamingResponse(context.Background(), anthropic.MessageNewParams{}, responseChan)
+	close(responseChan)
+
+	var sawErr bool
+	for r := range responseChan {
+		if r.Error != nil {
+			sawErr = true
+		}
+	}
+	require.True(t, sawErr)
+	require.Equal(t, int32(1), atomic.LoadInt32(&attempts),
+		"must not retry after the caller already received a partial chunk")
+}
+
+func Test_HandleStreamingResponse_CancelDuringRetryBackoff(t *testing.T) {
+	var attempts int32
+	orig := model.DefaultNewHTTPClient
+	t.Cleanup(func() { model.DefaultNewHTTPClient = orig })
+	model.DefaultNewHTTPClient = func(_ ...HTTPClientOption) model.HTTPClient {
+		return &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+			atomic.AddInt32(&attempts, 1)
+			return nil, fmt.Errorf("write tcp: write: broken pipe")
+		})}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		time.Sleep(5 * time.Millisecond)
+		cancel()
+	}()
+
+	callbackCalled := make(chan struct{})
+	var callbackErr error
+	m := New(
+		"claude-test",
+		WithHTTPClientOptions(),
+		WithAnthropicClientOptions(anthropicopt.WithMaxRetries(0)),
+		WithStreamRetry(5, 50*time.Millisecond, 100*time.Millisecond),
+		WithChatStreamCompleteCallback(func(_ context.Context,
+			_ *anthropic.MessageNewParams, _ *anthropic.Message, err error) {
+			callbackErr = err
+			close(callbackCalled)
+		}),
+	)
+
+	responseChan := make(chan *model.Response, 4)
+	m.handleStreamingResponse(ctx, anthropic.MessageNewParams{}, responseChan)
+	close(responseChan)
+
+	for range responseChan {
+	}
+	select {
+	case <-callbackCalled:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for stream complete callback")
+	}
+	require.ErrorIs(t, callbackErr, context.Canceled)
+	require.Equal(t, int32(1), atomic.LoadInt32(&attempts))
+}
+
+func Test_HandleStreamingResponse_ContextCancelWhileSendingFinalResponse(t *testing.T) {
+	orig := model.DefaultNewHTTPClient
+	t.Cleanup(func() { model.DefaultNewHTTPClient = orig })
+	model.DefaultNewHTTPClient = func(_ ...HTTPClientOption) model.HTTPClient {
+		return &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+			h := make(http.Header)
+			h.Set("Content-Type", "text/event-stream")
+			return &http.Response{
+				StatusCode: 200,
+				Header:     h,
+				Body:       io.NopCloser(strings.NewReader(sseFullSuccess)),
+			}, nil
+		})}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	responseChan := make(chan *model.Response, 1)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		m := New("claude-test", WithHTTPClientOptions())
+		m.handleStreamingResponse(ctx, anthropic.MessageNewParams{}, responseChan)
+	}()
+
+	<-responseChan // consume the partial chunk so the handler blocks on the final response
+	cancel()
+	<-done
+	close(responseChan)
+
+	for range responseChan {
+	}
 }
 
 func Test_HTTPClientOptions_AndAnthropicClientOptions(t *testing.T) {
@@ -2958,7 +3212,8 @@ func TestWithEnableTokenTailoring_ErrorInCountTokens(t *testing.T) {
 	require.NotNil(t, captured, "expected request callback to capture request")
 	// Tailoring succeeds but token counting fails, messages should be tailored.
 	require.Len(t, captured.Messages, 1, "expected tailored messages even when token counting fails, got %d", len(captured.Messages))
-	require.Equal(t, int64(4096), captured.MaxTokens, "expected default MaxTokens when user did not set GenerationConfig.MaxTokens")
+	// MaxTokens defaults to 4096 when unset (Anthropic requires max_tokens >= 1).
+	require.Equal(t, int64(4096), captured.MaxTokens)
 }
 
 // zeroTokenCounter always returns 0 for testing edge cases.
@@ -3005,7 +3260,7 @@ func TestWithEnableTokenTailoring_RemainingTokensNegative(t *testing.T) {
 	}
 
 	require.NotNil(t, captured, "expected request callback to capture request")
-	require.Equal(t, int64(4096), captured.MaxTokens, "expected default MaxTokens when user did not set GenerationConfig.MaxTokens")
+	require.Equal(t, int64(4096), captured.MaxTokens)
 }
 
 // TestWithEnableTokenTailoring_AutoSetMaxTokens tests automatic MaxTokens setting.
@@ -3034,7 +3289,8 @@ func TestWithEnableTokenTailoring_AutoSetMaxTokens(t *testing.T) {
 	}
 
 	require.NotNil(t, captured, "expected request callback to capture request")
-	require.Equal(t, int64(4096), captured.MaxTokens, "expected default MaxTokens when user did not set GenerationConfig.MaxTokens")
+	// Anthropic requires max_tokens >= 1; apply framework default when unset.
+	require.Equal(t, int64(4096), captured.MaxTokens)
 }
 
 // TestWithEnableTokenTailoring_UserSpecifiedMaxTokens tests user-specified MaxTokens is preserved.
@@ -3117,32 +3373,6 @@ func TestWithEnableTokenTailoring_EmptyMessages(t *testing.T) {
 	ch, err := m.GenerateContent(context.Background(), req)
 	require.Error(t, err, "GenerateContent should fail with empty messages")
 	require.Nil(t, ch, "expected nil channel with empty messages")
-}
-
-// emptyTailoringStrategy returns empty slice always.
-type emptyTailoringStrategy struct{}
-
-func (emptyTailoringStrategy) TailorMessages(
-	ctx context.Context,
-	messages []model.Message,
-	maxTokens int,
-) ([]model.Message, error) {
-	return []model.Message{}, nil
-}
-
-// TestWithTokenTailoring_PreservesOriginalOnEmptyResult verifies empty tailoring
-// results do not wipe a non-empty request (modeltailoring.ApplyResult guard).
-func TestWithTokenTailoring_PreservesOriginalOnEmptyResult(t *testing.T) {
-	original := []model.Message{model.NewUserMessage("A")}
-	m := New("claude-3-5-sonnet",
-		WithEnableTokenTailoring(true),
-		WithMaxInputTokens(100),
-		WithTokenCounter(testStubCounter{}),
-		WithTailoringStrategy(emptyTailoringStrategy{}),
-	)
-	req := &model.Request{Messages: append([]model.Message(nil), original...)}
-	m.applyTokenTailoring(context.Background(), req)
-	require.Equal(t, original, req.Messages)
 }
 
 // ============================================================================

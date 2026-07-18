@@ -59,7 +59,7 @@ var (
 		"memory",
 		"inmemory",
 		"Memory service type: inmemory, sqlite, sqlitevec, redis, "+
-			"postgres, pgvector, mysql, mysqlvec",
+			"postgres, pgvector, mysql, mysqlvec, gorm",
 	)
 )
 

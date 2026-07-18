@@ -698,6 +698,19 @@ func TestSessionEventsSnapshot(t *testing.T) {
 	require.Equal(t, "req1", sess.Events[0].RequestID)
 }
 
+func TestSessionEventsSnapshot_ExcludesMaskedEvents(t *testing.T) {
+	sess := session.NewSession("app", "user", "snapshot-mask")
+	sess.Events = []event.Event{
+		{ID: "e1", RequestID: "req1"},
+		{ID: "e2", RequestID: "req2"},
+	}
+	sess.MaskEvents("e2")
+
+	events := sessionEventsSnapshot(sess)
+	require.Len(t, events, 1)
+	require.Equal(t, "e1", events[0].ID)
+}
+
 func TestContextCompactionToolResultOptions(t *testing.T) {
 	skipFunc := func([]event.Event) int { return 2 }
 	p := NewContentRequestProcessor(

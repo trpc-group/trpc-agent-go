@@ -76,11 +76,12 @@ type Model struct {
 	cacheSystemPrompt bool
 	cacheTools        bool
 	cacheMessages     bool
+	showToolCallDelta bool
 	// explicitMaxTokens overrides the auto-calculated MaxTokens value sent to the API.
 	explicitMaxTokens *int
-	showToolCallDelta bool
 
 	// Stream retry configuration. See WithStreamRetry for semantics.
+	streamRetryEnabled     bool
 	streamMaxRetries       int
 	streamRetryBaseBackoff time.Duration
 	streamRetryMaxBackoff  time.Duration
@@ -133,8 +134,9 @@ func New(name string, opts ...Option) *Model {
 		cacheSystemPrompt:          o.cacheSystemPrompt,
 		cacheTools:                 o.cacheTools,
 		cacheMessages:              o.cacheMessages,
-		explicitMaxTokens:          o.explicitMaxTokens,
 		showToolCallDelta:          o.showToolCallDelta,
+		explicitMaxTokens:          o.explicitMaxTokens,
+		streamRetryEnabled:         o.streamRetryEnabled,
 		streamMaxRetries:           o.streamMaxRetries,
 		streamRetryBaseBackoff:     o.streamRetryBaseBackoff,
 		streamRetryMaxBackoff:      o.streamRetryMaxBackoff,
@@ -206,12 +208,10 @@ func (m *Model) GenerateContent(
 		return nil, errors.New("request cannot be nil")
 	}
 
-	hadMessages := len(request.Messages) > 0
 	// Apply token tailoring if configured.
 	m.applyTokenTailoring(ctx, request)
-	allowTailoredEmpty := hadMessages && len(request.Messages) == 0
 
-	chatRequest, err := m.buildChatRequest(request, allowTailoredEmpty)
+	chatRequest, err := m.buildChatRequest(request)
 	if err != nil {
 		return nil, fmt.Errorf("build chat request: %w", err)
 	}
@@ -292,73 +292,18 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 		return
 	}
 
-	if !modeltailoring.ApplyResult(ctx, "anthropic.Model", request, tailored) {
-		return
-	}
-
-	// Optional model-level default for MaxTokens (explicit option only).
-	// Do not infer max completion tokens here; tests and API defaults expect
-	// GenerationConfig.MaxTokens to stay nil unless set on the request.
-	if request.GenerationConfig.MaxTokens == nil && m.explicitMaxTokens != nil {
-		request.GenerationConfig.MaxTokens = m.explicitMaxTokens
-	}
-}
-
-// buildTailoredEmptyChatRequest builds params when tailoring removed all messages.
-func (m *Model) buildTailoredEmptyChatRequest(
-	request *model.Request,
-	systemPrompts []anthropic.TextBlockParam,
-) (*anthropic.MessageNewParams, error) {
-	tools := convertTools(request.Tools)
-	messages := []anthropic.MessageParam(nil)
-	if m.cacheSystemPrompt || m.cacheTools || m.cacheMessages {
-		systemPrompts, tools, messages = m.applyCacheControl(systemPrompts, tools, messages)
-	}
-	chatRequest := &anthropic.MessageNewParams{
-		Model:    anthropic.Model(m.name),
-		Messages: messages,
-		Tools:    tools,
-	}
-	if len(systemPrompts) > 0 {
-		chatRequest.System = systemPrompts
-	}
-	if request.GenerationConfig.MaxTokens != nil {
-		chatRequest.MaxTokens = int64(*request.GenerationConfig.MaxTokens)
-	}
-	if chatRequest.MaxTokens == 0 && !m.enableTokenTailoring {
-		chatRequest.MaxTokens = 4096
-	}
-	if request.Temperature != nil {
-		chatRequest.Temperature = anthropic.Float(*request.Temperature)
-	}
-	if request.TopP != nil {
-		chatRequest.TopP = anthropic.Float(*request.TopP)
-	}
-	if len(request.Stop) > 0 {
-		chatRequest.StopSequences = append(chatRequest.StopSequences, request.Stop...)
-	}
-	if request.ThinkingEnabled != nil && *request.ThinkingEnabled && request.ThinkingTokens != nil {
-		chatRequest.Thinking = anthropic.ThinkingConfigParamOfEnabled(int64(*request.ThinkingTokens))
-	}
-	return chatRequest, nil
+	modeltailoring.ApplyResult(ctx, "anthropic.Model", request, tailored)
 }
 
 // buildChatRequest builds the chat request for the Anthropic API.
-// allowTailoredEmpty is true when tailoring removed every message from a non-empty request.
-func (m *Model) buildChatRequest(
-	request *model.Request,
-	allowTailoredEmpty bool,
-) (*anthropic.MessageNewParams, error) {
+func (m *Model) buildChatRequest(request *model.Request) (*anthropic.MessageNewParams, error) {
 	// Convert messages to Anthropic format.
 	messages, systemPrompts, err := convertMessages(request.Messages)
 	if err != nil {
 		return nil, err
 	}
 	if len(messages) == 0 {
-		if !m.enableTokenTailoring || !allowTailoredEmpty {
-			return nil, fmt.Errorf("request must include at least one message")
-		}
-		return m.buildTailoredEmptyChatRequest(request, systemPrompts)
+		return nil, fmt.Errorf("request must include at least one message")
 	}
 
 	// Convert tools
@@ -381,6 +326,9 @@ func (m *Model) buildChatRequest(
 	}
 	if len(systemPrompts) > 0 {
 		chatRequest.System = systemPrompts
+	}
+	if request.GenerationConfig.MaxTokens == nil && m.explicitMaxTokens != nil {
+		request.GenerationConfig.MaxTokens = m.explicitMaxTokens
 	}
 	if request.GenerationConfig.MaxTokens != nil {
 		chatRequest.MaxTokens = int64(*request.GenerationConfig.MaxTokens)
@@ -668,15 +616,13 @@ func (m *Model) handleStreamingResponse(
 	chatRequest anthropic.MessageNewParams,
 	responseChan chan<- *model.Response,
 ) {
-	maxRetries := m.streamMaxRetries
-	if maxRetries < 0 {
-		maxRetries = 0
-	}
+	maxRetries := m.effectiveStreamMaxRetries()
 
 	attempt := 0
 	for {
-		finalResponse, streamErr, sawContent := m.runStreamingAttempt(ctx, chatRequest, responseChan)
+		finalResponse, callbackAcc, streamErr, sawContent := m.runStreamingAttempt(ctx, chatRequest, responseChan)
 		if streamErr == nil {
+			m.runChatStreamCompleteCallback(ctx, &chatRequest, callbackAcc, nil)
 			if finalResponse != nil {
 				select {
 				case responseChan <- finalResponse:
@@ -688,24 +634,28 @@ func (m *Model) handleStreamingResponse(
 		// Don't retry context cancellation — the run is being torn down.
 		if errors.Is(streamErr, context.Canceled) ||
 			errors.Is(streamErr, context.DeadlineExceeded) {
+			m.runChatStreamCompleteCallback(ctx, &chatRequest, nil, streamErr)
 			m.sendErrorResponse(ctx, responseChan, model.ErrorTypeStreamError, streamErr)
 			return
 		}
 		// Don't retry after the first chunk reaches the caller; retrying
 		// would corrupt the downstream stream by re-emitting from scratch.
 		if sawContent {
+			m.runChatStreamCompleteCallback(ctx, &chatRequest, nil, streamErr)
 			m.sendErrorResponse(ctx, responseChan, model.ErrorTypeStreamError, streamErr)
 			return
 		}
 		// Only retry transport-level errors that look transient. Authentic
 		// 4xx-style failures (bad request, invalid api key) should fail fast.
 		if !isStreamRetryableError(streamErr) {
+			m.runChatStreamCompleteCallback(ctx, &chatRequest, nil, streamErr)
 			m.sendErrorResponse(ctx, responseChan, model.ErrorTypeStreamError, streamErr)
 			return
 		}
 		if attempt >= maxRetries {
-			m.sendErrorResponse(ctx, responseChan, model.ErrorTypeStreamError,
-				fmt.Errorf("anthropic stream failed after %d attempts: %w", attempt+1, streamErr))
+			terminalErr := fmt.Errorf("anthropic stream failed after %d attempts: %w", attempt+1, streamErr)
+			m.runChatStreamCompleteCallback(ctx, &chatRequest, nil, terminalErr)
+			m.sendErrorResponse(ctx, responseChan, model.ErrorTypeStreamError, terminalErr)
 			return
 		}
 		attempt++
@@ -717,10 +667,27 @@ func (m *Model) handleStreamingResponse(
 		select {
 		case <-time.After(backoff):
 		case <-ctx.Done():
+			m.runChatStreamCompleteCallback(ctx, &chatRequest, nil, ctx.Err())
 			m.sendErrorResponse(ctx, responseChan, model.ErrorTypeStreamError, ctx.Err())
 			return
 		}
 	}
+}
+
+// effectiveStreamMaxRetries resolves the retry budget for handleStreamingResponse.
+// Stream retries are disabled unless WithStreamRetry was used. When enabled,
+// zero uses defaultStreamMaxRetries and negative disables retries.
+func (m *Model) effectiveStreamMaxRetries() int {
+	if !m.streamRetryEnabled {
+		return 0
+	}
+	if m.streamMaxRetries < 0 {
+		return 0
+	}
+	if m.streamMaxRetries == 0 {
+		return defaultStreamMaxRetries
+	}
+	return m.streamMaxRetries
 }
 
 // runStreamingAttempt performs a single streaming attempt and returns:
@@ -734,10 +701,18 @@ func (m *Model) runStreamingAttempt(
 	ctx context.Context,
 	chatRequest anthropic.MessageNewParams,
 	responseChan chan<- *model.Response,
-) (finalResponse *model.Response, streamErr error, sawContent bool) {
+) (finalResponse *model.Response, callbackAcc *anthropic.Message, streamErr error, sawContent bool) {
 	stream := m.client.Messages.NewStreaming(ctx, chatRequest, m.anthropicRequestOptions...)
 	defer stream.Close()
 	acc := newStreamingMessageAccumulator()
+	var pendingChunkCallbacks []anthropic.MessageStreamEventUnion
+	flushChunkCallbacks := func() {
+		for i := range pendingChunkCallbacks {
+			chunk := pendingChunkCallbacks[i]
+			m.runChatChunkCallback(ctx, &chatRequest, &chunk)
+		}
+		pendingChunkCallbacks = nil
+	}
 
 loop:
 	for stream.Next() {
@@ -746,7 +721,7 @@ loop:
 			streamErr = err
 			break
 		}
-		m.runChatChunkCallback(ctx, &chatRequest, &chunk)
+		pendingChunkCallbacks = append(pendingChunkCallbacks, chunk)
 		response, err := buildStreamingPartialResponse(acc.Message(), chunk, m.showToolCallDelta)
 		if err != nil {
 			streamErr = err
@@ -773,13 +748,14 @@ loop:
 			finalResponse = buildStreamingFinalResponse(acc.Message())
 		}
 	}
-	var callbackAcc *anthropic.Message
 	if streamErr == nil {
 		finalAcc := acc.Message()
 		callbackAcc = &finalAcc
 	}
-	m.runChatStreamCompleteCallback(ctx, &chatRequest, callbackAcc, streamErr)
-	return finalResponse, streamErr, sawContent
+	if streamErr == nil || sawContent {
+		flushChunkCallbacks()
+	}
+	return finalResponse, callbackAcc, streamErr, sawContent
 }
 
 // streamRetryBackoff returns the sleep duration before retry attempt n
@@ -824,10 +800,15 @@ var streamRetryableErrorPatterns = []string{
 	"server misbehaving",
 	"no such host",
 	"overloaded",
-	"529", // anthropic-specific "overloaded" status code
-	"503",
+}
+
+// streamRetryableHTTPStatusCodes are HTTP status codes worth retrying when they
+// appear as isolated tokens in error text (not substrings of longer numbers).
+var streamRetryableHTTPStatusCodes = []string{
 	"502",
+	"503",
 	"504",
+	"529", // anthropic-specific "overloaded" status code
 }
 
 // isStreamRetryableError returns true when the given streaming-attempt error
@@ -839,6 +820,31 @@ func isStreamRetryableError(err error) bool {
 	msg := strings.ToLower(err.Error())
 	for _, p := range streamRetryableErrorPatterns {
 		if strings.Contains(msg, p) {
+			return true
+		}
+	}
+	for _, code := range streamRetryableHTTPStatusCodes {
+		if containsIsolatedToken(msg, code) {
+			return true
+		}
+	}
+	return false
+}
+
+// containsIsolatedToken reports whether token appears in msg without being
+// embedded in a longer digit sequence (e.g. match "503" but not "5031").
+func containsIsolatedToken(msg, token string) bool {
+	if token == "" {
+		return false
+	}
+	for i := 0; i+len(token) <= len(msg); i++ {
+		if msg[i:i+len(token)] != token {
+			continue
+		}
+		beforeDigit := i > 0 && msg[i-1] >= '0' && msg[i-1] <= '9'
+		after := i + len(token)
+		afterDigit := after < len(msg) && msg[after] >= '0' && msg[after] <= '9'
+		if !beforeDigit && !afterDigit {
 			return true
 		}
 	}

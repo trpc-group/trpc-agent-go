@@ -15,6 +15,11 @@ const (
 	StateAppPrefix  = "app:"
 	StateUserPrefix = "user:"
 	StateTempPrefix = "temp:"
+
+	// MaskedEventsStateKey stores JSON-encoded masked event IDs for Pensieve
+	// context pruning. The in-memory mask set is hydrated from this key when a
+	// session is reloaded from a session service.
+	MaskedEventsStateKey = "pensieve:masked_event_ids"
 )
 
 // State maintains the current value and the pending-commit delta.

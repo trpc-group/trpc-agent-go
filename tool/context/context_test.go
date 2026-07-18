@@ -1,7 +1,16 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
 package context
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -9,6 +18,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+	"trpc.group/trpc-go/trpc-agent-go/session/noop"
 )
 
 // ctxWithSession creates a context containing an Invocation with a real Session.
@@ -16,6 +27,29 @@ func ctxWithSession(sess *session.Session) context.Context {
 	inv := agent.NewInvocation()
 	inv.Session = sess
 	return agent.NewInvocationContext(context.Background(), inv)
+}
+
+func ctxWithSessionService(sess *session.Session, svc session.Service) context.Context {
+	inv := agent.NewInvocation()
+	inv.Session = sess
+	inv.SessionService = svc
+	return agent.NewInvocationContext(context.Background(), inv)
+}
+
+type failingNotePersistService struct {
+	*noop.Service
+}
+
+func newFailingNotePersistService() session.Service {
+	return &failingNotePersistService{Service: noop.NewService()}
+}
+
+func (s *failingNotePersistService) UpdateSessionState(
+	context.Context,
+	session.Key,
+	session.StateMap,
+) error {
+	return errors.New("persist failed")
 }
 
 func newTestEvent(id string) event.Event {
@@ -65,6 +99,61 @@ func TestDeleteContextTool(t *testing.T) {
 		out := result.(DeleteContextOutput)
 		if out.Masked != 0 {
 			t.Fatal("expected 0 masked without session")
+		}
+	})
+
+	t.Run("persists masks to session state", func(t *testing.T) {
+		ctx := context.Background()
+		svc := inmemory.NewSessionService()
+		key := session.Key{AppName: "app", UserID: "user", SessionID: "dc-persist"}
+		sess, err := svc.CreateSession(ctx, key, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sess.Events = []event.Event{
+			newTestEvent("e1"),
+			newTestEvent("e2"),
+		}
+		invCtx := ctxWithSessionService(sess, svc)
+
+		tool := NewDeleteContextTool()
+		_, err = tool.Call(invCtx, []byte(`{"event_ids":["e1"]}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		raw, ok := sess.GetState(session.MaskedEventsStateKey)
+		if !ok {
+			t.Fatal("expected masked events persisted in session state")
+		}
+		reloaded := session.NewSession(key.AppName, key.UserID, key.SessionID)
+		reloaded.Events = sess.Events
+		reloaded.SetState(session.MaskedEventsStateKey, raw)
+		visible := reloaded.GetVisibleEvents()
+		if len(visible) != 1 || visible[0].ID != "e2" {
+			t.Fatalf("expected hydrated mask after reload, got %v", visible)
+		}
+	})
+
+	t.Run("returns error and skips state key when session service persist fails", func(t *testing.T) {
+		sess := session.NewSession("app", "user", "dc-fail")
+		sess.Events = []event.Event{
+			newTestEvent("e1"),
+			newTestEvent("e2"),
+		}
+		invCtx := ctxWithSessionService(sess, newFailingNotePersistService())
+
+		tool := NewDeleteContextTool()
+		_, err := tool.Call(invCtx, []byte(`{"event_ids":["e1"]}`))
+		if err == nil {
+			t.Fatal("expected persist error")
+		}
+		if _, ok := sess.GetState(session.MaskedEventsStateKey); ok {
+			t.Fatal("masked events state should not be written when persist fails")
+		}
+		visible := sess.GetVisibleEvents()
+		if len(visible) != 2 {
+			t.Fatalf("expected mask rollback after persist failure, got %v", visible)
 		}
 	})
 }
@@ -148,6 +237,57 @@ func TestNoteTool(t *testing.T) {
 			t.Fatalf("expected v2, got %s", val)
 		}
 	})
+
+	t.Run("no session returns graceful message", func(t *testing.T) {
+		tool := NewNoteTool()
+		out, err := tool.Call(context.Background(), []byte(`{"key":"k","content":"v"}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if out.(NoteOutput).Message != "no session available" {
+			t.Fatalf("unexpected message: %v", out)
+		}
+	})
+
+	t.Run("persists through session service", func(t *testing.T) {
+		ctx := context.Background()
+		svc := inmemory.NewSessionService()
+		key := session.Key{AppName: "app", UserID: "user", SessionID: "note-persist"}
+		sess, err := svc.CreateSession(ctx, key, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		invCtx := ctxWithSessionService(sess, svc)
+
+		tool := NewNoteTool()
+		_, err = tool.Call(invCtx, []byte(`{"key":"plan","content":"saved"}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		reloaded, err := svc.GetSession(ctx, key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		val, ok := reloaded.GetState("note:plan")
+		if !ok || string(val) != "saved" {
+			t.Fatalf("expected persisted note, got %q ok=%v", val, ok)
+		}
+	})
+
+	t.Run("returns error when session service persist fails", func(t *testing.T) {
+		sess := session.NewSession("app", "user", "s-note-fail")
+		invCtx := ctxWithSessionService(sess, newFailingNotePersistService())
+
+		tool := NewNoteTool()
+		_, err := tool.Call(invCtx, []byte(`{"key":"k","content":"v"}`))
+		if err == nil {
+			t.Fatal("expected persist error")
+		}
+		if _, ok := sess.GetState("note:k"); ok {
+			t.Fatal("note should not be stored when persist fails")
+		}
+	})
 }
 
 // --- read_notes tests ---
@@ -190,9 +330,33 @@ func TestReadNotesTool(t *testing.T) {
 			t.Fatalf("expected 0, got %d", out.Count)
 		}
 	})
+
+	t.Run("no session returns empty notes", func(t *testing.T) {
+		tool := NewReadNotesTool()
+		result, err := tool.Call(context.Background(), []byte(`{}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := result.(ReadNotesOutput)
+		if out.Count != 0 || len(out.Notes) != 0 {
+			t.Fatalf("expected empty output, got %+v", out)
+		}
+	})
 }
 
 // --- notes_index tests ---
+
+func TestNotesIndexPreview(t *testing.T) {
+	if got := notesIndexPreview(""); got != "" {
+		t.Fatalf("expected empty for empty input, got %q", got)
+	}
+	if got := notesIndexPreview("   \n\t  "); got != "" {
+		t.Fatalf("expected empty for whitespace-only input, got %q", got)
+	}
+	if got := notesIndexPreview("short"); got != "short" {
+		t.Fatalf("expected unchanged short preview, got %q", got)
+	}
+}
 
 func TestNotesIndexTool(t *testing.T) {
 	t.Run("returns keys, sizes, and previews in deterministic order", func(t *testing.T) {
@@ -257,6 +421,22 @@ func TestNotesIndexTool(t *testing.T) {
 		}
 	})
 
+	t.Run("truncates multi-byte runes without splitting", func(t *testing.T) {
+		content := strings.Repeat("你", 100)
+		sess := session.NewSession("app", "user", "ni-cjk")
+		sess.SetState("note:cjk", []byte(content))
+		ctx := ctxWithSession(sess)
+
+		out := mustCallNotesIndex(t, ctx)
+		if out.Count != 1 {
+			t.Fatalf("expected 1 entry, got %d", out.Count)
+		}
+		want := strings.Repeat("你", notesIndexPreviewMaxChars) + "…"
+		if out.Notes[0].Preview != want {
+			t.Fatalf("preview split runes: got len=%d want len=%d", len([]rune(out.Notes[0].Preview)), len([]rune(want)))
+		}
+	})
+
 	t.Run("empty when no notes are stored", func(t *testing.T) {
 		sess := session.NewSession("app", "user", "ni3")
 		ctx := ctxWithSession(sess)
@@ -288,11 +468,113 @@ func mustCallNotesIndex(t *testing.T, ctx context.Context) NotesIndexOutput {
 	return result.(NotesIndexOutput)
 }
 
+// --- list_context tests ---
+
+func TestListContextTool(t *testing.T) {
+	t.Run("returns visible event IDs", func(t *testing.T) {
+		sess := session.NewSession("app", "user", "lc1")
+		sess.Events = []event.Event{
+			newTestEvent("e1"),
+			newTestEvent("e2"),
+		}
+		sess.MaskEvents("e1")
+		ctx := ctxWithSession(sess)
+
+		tool := NewListContextTool()
+		result, err := tool.Call(ctx, []byte(`{}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := result.(ListContextOutput)
+		if out.Count != 1 || len(out.Events) != 1 {
+			t.Fatalf("expected 1 visible event, got %+v", out)
+		}
+		if out.Events[0].ID != "e2" {
+			t.Fatalf("expected e2, got %+v", out.Events[0])
+		}
+	})
+
+	t.Run("no session returns empty list", func(t *testing.T) {
+		tool := NewListContextTool()
+		result, err := tool.Call(context.Background(), []byte(`{}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := result.(ListContextOutput)
+		if out.Count != 0 || len(out.Events) != 0 {
+			t.Fatalf("expected empty list, got %+v", out)
+		}
+	})
+
+	t.Run("delta tool call and tool id populate preview", func(t *testing.T) {
+		sess := session.NewSession("app", "user", "lc-delta")
+		sess.Events = []event.Event{
+			{
+				ID:     "call-delta",
+				Author: "assistant",
+				Response: &model.Response{
+					Choices: []model.Choice{{
+						Delta: model.Message{
+							Role: model.RoleAssistant,
+							ToolCalls: []model.ToolCall{{
+								ID: "tc-1",
+								Function: model.FunctionDefinitionParam{
+									Name: "lookup_weather",
+								},
+							}},
+						},
+					}},
+				},
+			},
+			{
+				ID:     "result-delta",
+				Author: "tool",
+				Response: &model.Response{
+					Choices: []model.Choice{{
+						Delta: model.Message{
+							Role:   model.RoleTool,
+							ToolID: "tc-1",
+						},
+					}},
+				},
+			},
+		}
+		ctx := ctxWithSession(sess)
+
+		tool := NewListContextTool()
+		result, err := tool.Call(ctx, []byte(`{}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := result.(ListContextOutput)
+		if out.Count != 2 {
+			t.Fatalf("expected 2 events, got %+v", out)
+		}
+		previews := map[string]string{}
+		for _, e := range out.Events {
+			previews[e.ID] = e.Preview
+		}
+		if previews["call-delta"] != "lookup_weather" {
+			t.Fatalf("expected delta tool-call preview, got %q", previews["call-delta"])
+		}
+		if previews["result-delta"] != "tc-1" {
+			t.Fatalf("expected delta tool-id preview, got %q", previews["result-delta"])
+		}
+	})
+}
+
 // --- Tools() convenience ---
 
 func TestToolsReturnsAllContextTools(t *testing.T) {
 	tools := Tools()
-	expected := []string{"delete_context", "check_budget", "note", "read_notes", "notes_index"}
+	expected := []string{
+		"list_context",
+		"delete_context",
+		"check_budget",
+		"note",
+		"read_notes",
+		"notes_index",
+	}
 	if len(tools) != len(expected) {
 		t.Fatalf("expected %d tools, got %d", len(expected), len(tools))
 	}
