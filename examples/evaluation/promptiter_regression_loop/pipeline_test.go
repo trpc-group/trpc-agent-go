@@ -417,6 +417,8 @@ func TestReportSchema(t *testing.T) {
 	require.Contains(t, patches[0].(map[string]any), "value")
 	markdown, err := os.ReadFile(result.ReportMarkdownPath)
 	require.NoError(t, err)
+	require.Contains(t, string(markdown), "- Baseline prompt: `./config/baseline_prompt.txt`")
+	require.Contains(t, string(markdown), "- Baseline prompt SHA-256: `75357d685f238b6afd7738be9786fdafde641eb6ca9a3be7471939715a68a4de`")
 	require.Contains(t, string(markdown), "- Final gate: rejectOnNewHardFail=`true`, rejectOnCriticalRegression=`true`, maxDurationMs=`180000`, maxModelCalls=`100`")
 }
 
@@ -468,6 +470,67 @@ func TestTraceSmokeAdapterFallsBackToInvocationExecutionTrace(t *testing.T) {
 	require.NoError(t, err)
 	require.Same(t, executionTrace, engineResult.EvalSets[0].Cases[0].Trace)
 	require.Equal(t, 1.0, engineResult.OverallScore)
+}
+
+func TestTraceSmokeAdapterUsesFailedInvocationTrace(t *testing.T) {
+	turn1Trace := traceForTest("turn-1")
+	turn2Trace := traceForTest("turn-2")
+	turn1Trace.Steps[0].AppliedSurfaceIDs = []string{"surface-turn-1"}
+	turn2Trace.Steps[0].AppliedSurfaceIDs = []string{"surface-turn-2"}
+	passedMetric := evalMetricForTest("final_response_avg_score", 1, status.EvalStatusPassed, "")
+	failedMetric := evalMetricForTest("final_response_avg_score", 0, status.EvalStatusFailed, "final response mismatch")
+	runResult := &evalresult.EvalCaseResult{
+		EvalSetID:                traceSmokeEvalSetID,
+		EvalID:                   "trace_case",
+		SessionID:                "run-result-session",
+		OverallEvalMetricResults: []*evalresult.EvalMetricResult{failedMetric},
+		EvalMetricResultPerInvocation: []*evalresult.EvalMetricResultPerInvocation{
+			{
+				ActualInvocation: &evalset.Invocation{
+					InvocationID:   "trace_case_turn_1",
+					ExecutionTrace: turn1Trace,
+				},
+				EvalMetricResults: []*evalresult.EvalMetricResult{passedMetric},
+			},
+			{
+				ActualInvocation: &evalset.Invocation{
+					InvocationID:   "trace_case_turn_2",
+					ExecutionTrace: turn2Trace,
+				},
+				EvalMetricResults: []*evalresult.EvalMetricResult{failedMetric},
+			},
+		},
+	}
+	agentResult := &evaluation.EvaluationResult{
+		EvalSetID: traceSmokeEvalSetID,
+		EvalCases: []*evaluation.EvaluationCaseResult{
+			{
+				EvalCaseID:      "trace_case",
+				EvalCaseResults: []*evalresult.EvalCaseResult{runResult},
+				RunDetails: []*evaluation.EvaluationCaseRunDetails{
+					{
+						RunID: 1,
+						Inference: &evaluation.EvaluationInferenceDetails{
+							SessionID:       "trace-session",
+							ExecutionTraces: []*atrace.Trace{turn1Trace},
+						},
+					},
+				},
+			},
+		},
+	}
+	engineResult, err := adaptAgentEvaluationResultToEngine(agentResult)
+	require.NoError(t, err)
+	convertedCase := engineResult.EvalSets[0].Cases[0]
+	require.Same(t, turn2Trace, convertedCase.Trace)
+
+	attribution, err := buildFailureAttribution(engineResult)
+	require.NoError(t, err)
+	require.Len(t, attribution.PerFailedCase, 1)
+	failedCase := attribution.PerFailedCase[0]
+	require.NotNil(t, failedCase.TerminalStep)
+	require.Equal(t, "turn-2", failedCase.TerminalStep.StepID)
+	require.Equal(t, []string{"surface-turn-2"}, failedCase.AppliedSurfaceIDs)
 }
 
 func TestTraceSmokeMarkdownOmitsOptimizationDecision(t *testing.T) {
@@ -856,6 +919,32 @@ func TestFinalGateDecisions(t *testing.T) {
 	require.Equal(t, gateDecisionReject, gate.Decision)
 	require.Contains(t, gate.CriticalRegressions, "critical")
 
+	statusRegressionCfg := cfg
+	statusRegressionCfg.MinValidationGain = 0
+	statusRegressionCfg.CriticalCaseIDs = []string{"critical_equal_score"}
+	statusRegressionBaseline := summaryFromCases("validation",
+		reportCaseWithMetrics("critical_equal_score",
+			MetricSummary{MetricName: "metric_1", Score: 0.5, Status: "passed"},
+			MetricSummary{MetricName: "metric_2", Score: 0.5, Status: "passed"},
+		),
+	)
+	statusRegressionCandidate := summaryFromCases("validation",
+		reportCaseWithMetrics("critical_equal_score",
+			MetricSummary{MetricName: "metric_1", Score: 1, Status: "passed"},
+			MetricSummary{MetricName: "metric_2", Score: 0, Status: "failed"},
+		),
+	)
+	statusRegressionDelta, err := buildValidationDelta(statusRegressionBaseline, statusRegressionCandidate)
+	require.NoError(t, err)
+	require.Len(t, statusRegressionDelta.PerCase, 1)
+	require.Equal(t, deltaNewFail, statusRegressionDelta.PerCase[0].Category)
+	require.False(t, statusRegressionDelta.PerCase[0].NewHardFail)
+	gate, err = buildGateReport(statusRegressionBaseline, statusRegressionCandidate, statusRegressionDelta, statusRegressionCfg, 10, 5, fakeMode)
+	require.NoError(t, err)
+	require.Equal(t, gateDecisionReject, gate.Decision)
+	require.Contains(t, gate.CriticalRegressions, "critical_equal_score")
+	require.True(t, statusRegressionDelta.PerCase[0].CriticalRegression)
+
 	nonEnforcingCfg := cfg
 	nonEnforcingCfg.RejectOnNewHardFail = false
 	nonEnforcingCfg.RejectOnCriticalRegression = false
@@ -1084,6 +1173,13 @@ func reportCase(id string, score float64, passed bool) CaseSummary {
 		Metrics: []MetricSummary{
 			{MetricName: "metric", Score: score, Status: statusValue},
 		},
+	}
+}
+
+func reportCaseWithMetrics(id string, metrics ...MetricSummary) CaseSummary {
+	return CaseSummary{
+		EvalCaseID: id,
+		Metrics:    metrics,
 	}
 }
 

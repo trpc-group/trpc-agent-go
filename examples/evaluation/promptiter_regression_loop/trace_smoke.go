@@ -258,12 +258,69 @@ func traceForCase(
 	evalCase *evaluation.EvaluationCaseResult,
 	runResult *evalresult.EvalCaseResult,
 ) *trace.Trace {
+	if runResult != nil {
+		if trace := failedInvocationTrace(runResult); trace != nil {
+			return trace
+		}
+		if trace := anyInvocationTrace(runResult); trace != nil {
+			return trace
+		}
+	}
+	if trace := inferenceInvocationTrace(evalCase); trace != nil {
+		return trace
+	}
+	return caseLevelTrace(evalCase)
+}
+
+func failedInvocationTrace(runResult *evalresult.EvalCaseResult) *trace.Trace {
+	for _, perInvocation := range runResult.EvalMetricResultPerInvocation {
+		if !perInvocationHasFailedMetric(perInvocation) {
+			continue
+		}
+		if trace := traceFromPerInvocation(perInvocation); trace != nil {
+			return trace
+		}
+	}
+	return nil
+}
+
+func anyInvocationTrace(runResult *evalresult.EvalCaseResult) *trace.Trace {
+	for _, perInvocation := range runResult.EvalMetricResultPerInvocation {
+		if trace := traceFromPerInvocation(perInvocation); trace != nil {
+			return trace
+		}
+	}
+	return nil
+}
+
+func traceFromPerInvocation(perInvocation *evalresult.EvalMetricResultPerInvocation) *trace.Trace {
+	if perInvocation == nil ||
+		perInvocation.ActualInvocation == nil ||
+		perInvocation.ActualInvocation.ExecutionTrace == nil {
+		return nil
+	}
+	return perInvocation.ActualInvocation.ExecutionTrace
+}
+
+func perInvocationHasFailedMetric(perInvocation *evalresult.EvalMetricResultPerInvocation) bool {
+	if perInvocation == nil {
+		return false
+	}
+	for _, metricResult := range perInvocation.EvalMetricResults {
+		if metricResult != nil && metricResult.EvalStatus == status.EvalStatusFailed {
+			return true
+		}
+	}
+	return false
+}
+
+func inferenceInvocationTrace(evalCase *evaluation.EvaluationCaseResult) *trace.Trace {
+	if evalCase == nil {
+		return nil
+	}
 	for _, detail := range evalCase.RunDetails {
 		if detail == nil || detail.Inference == nil {
 			continue
-		}
-		if len(detail.Inference.ExecutionTraces) > 0 && detail.Inference.ExecutionTraces[0] != nil {
-			return detail.Inference.ExecutionTraces[0]
 		}
 		for _, invocation := range detail.Inference.Inferences {
 			if invocation != nil && invocation.ExecutionTrace != nil {
@@ -271,14 +328,19 @@ func traceForCase(
 			}
 		}
 	}
-	if runResult == nil {
+	return nil
+}
+
+func caseLevelTrace(evalCase *evaluation.EvaluationCaseResult) *trace.Trace {
+	if evalCase == nil {
 		return nil
 	}
-	for _, perInvocation := range runResult.EvalMetricResultPerInvocation {
-		if perInvocation != nil &&
-			perInvocation.ActualInvocation != nil &&
-			perInvocation.ActualInvocation.ExecutionTrace != nil {
-			return perInvocation.ActualInvocation.ExecutionTrace
+	for _, detail := range evalCase.RunDetails {
+		if detail == nil || detail.Inference == nil {
+			continue
+		}
+		if len(detail.Inference.ExecutionTraces) > 0 && detail.Inference.ExecutionTraces[0] != nil {
+			return detail.Inference.ExecutionTraces[0]
 		}
 	}
 	return nil

@@ -530,6 +530,12 @@ func finalizedMarkdown(buf *bytes.Buffer) []byte {
 func renderAuditSummaryMarkdown(buf *bytes.Buffer, report *OptimizationReport) {
 	fmt.Fprintf(buf, "## Audit Configuration\n\n")
 	fmt.Fprintf(buf, "- Deterministic seed: `%d`\n", report.Seed)
+	if report.PromptPath != "" {
+		fmt.Fprintf(buf, "- Baseline prompt: `%s`\n", report.PromptPath)
+	}
+	if report.PromptSHA256 != "" {
+		fmt.Fprintf(buf, "- Baseline prompt SHA-256: `%s`\n", report.PromptSHA256)
+	}
 	if report.ConfigPath != "" {
 		fmt.Fprintf(buf, "- PromptIter config: `%s`\n", report.ConfigPath)
 		fmt.Fprintf(buf, "- PromptIter config SHA-256: `%s`\n", report.ConfigSHA256)

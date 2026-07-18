@@ -5,6 +5,8 @@ Mode: `fake`
 ## Audit Configuration
 
 - Deterministic seed: `0`
+- Baseline prompt: `./config/baseline_prompt.txt`
+- Baseline prompt SHA-256: `75357d685f238b6afd7738be9786fdafde641eb6ca9a3be7471939715a68a4de`
 - PromptIter config: `./config/promptiter.json`
 - PromptIter config SHA-256: `72c920d7cf8470c845a3dcca50b7bc4dea8ace772366ba59f71adedcb7bb714d`
 - Model: `phase4v2-fake-model` (deterministic=`true`, temperature=`0.0`, max tokens=`1024`, stream=`false`)

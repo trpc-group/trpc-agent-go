@@ -286,7 +286,9 @@ func buildGateReport(
 		}
 		if _, ok := criticalSet[caseDelta.EvalCaseID]; ok {
 			foundCritical[caseDelta.EvalCaseID] = struct{}{}
-			if caseDelta.CandidateScore+epsilon() < caseDelta.BaselineScore {
+			scoreRegressed := caseDelta.CandidateScore+epsilon() < caseDelta.BaselineScore
+			statusRegressed := caseDelta.Category == deltaNewFail
+			if scoreRegressed || statusRegressed {
 				caseDelta.CriticalRegression = true
 				report.CriticalRegressions = append(report.CriticalRegressions, caseDelta.EvalCaseID)
 			}
