@@ -24,15 +24,34 @@ func qualifyAssistantResultOperations(operations []*Operation) {
 		if memoryText == "" {
 			continue
 		}
-		if strings.HasPrefix(
-			strings.ToLower(memoryText),
-			strings.ToLower(strings.TrimSpace(assistantResultMemoryPrefix)),
-		) {
-			operation.Memory = memoryText
-			continue
-		}
-		operation.Memory = assistantResultMemoryPrefix + memoryText
+		operation.Memory = assistantResultMemoryPrefix +
+			stripAssistantResultPrefixes(memoryText)
 	}
+}
+
+func stripAssistantResultPrefixes(memoryText string) string {
+	marker := strings.ToLower(strings.TrimSpace(assistantResultMemoryPrefix))
+	parts := make([]string, 0, 2)
+	for {
+		index := strings.Index(strings.ToLower(memoryText), marker)
+		if index < 0 {
+			parts = append(parts, strings.TrimSpace(memoryText))
+			break
+		}
+		parts = append(parts, strings.TrimSpace(memoryText[:index]))
+		memoryText = memoryText[index+len(marker):]
+	}
+	return strings.Join(removeEmptyStrings(parts), " ")
+}
+
+func removeEmptyStrings(values []string) []string {
+	result := values[:0]
+	for _, value := range values {
+		if value != "" {
+			result = append(result, value)
+		}
+	}
+	return result
 }
 
 func routeAssistantResultOperations(

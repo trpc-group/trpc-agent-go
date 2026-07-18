@@ -443,6 +443,8 @@ func TestQualifyAssistantResultOperations(t *testing.T) {
 	operations := []*Operation{
 		{Type: OperationAdd, Memory: "Recommended Go and Python."},
 		{Type: OperationAdd, Memory: " assistant RESULT: Recommended SQL. "},
+		{Type: OperationAdd, Memory: "Tokyo: Assistant result: Recommended N'EX."},
+		{Type: OperationAdd, Memory: "Assistant result: Assistant result: Use Go."},
 		{Type: OperationUpdate, Memory: "Updated recommendation."},
 		nil,
 	}
@@ -454,10 +456,18 @@ func TestQualifyAssistantResultOperations(t *testing.T) {
 		operations[0].Memory,
 	)
 	assert.Equal(t,
-		"assistant RESULT: Recommended SQL.",
+		"Assistant result: Recommended SQL.",
 		operations[1].Memory,
 	)
-	assert.Equal(t, "Updated recommendation.", operations[2].Memory)
+	assert.Equal(t,
+		"Assistant result: Tokyo: Recommended N'EX.",
+		operations[2].Memory,
+	)
+	assert.Equal(t,
+		"Assistant result: Use Go.",
+		operations[3].Memory,
+	)
+	assert.Equal(t, "Updated recommendation.", operations[4].Memory)
 }
 
 func TestExtractor_AssistantResultExtractionRejectsUngroundedAmounts(t *testing.T) {
