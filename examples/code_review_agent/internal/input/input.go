@@ -83,12 +83,10 @@ func diffFromRepo(repoPath string, baseRef string, headRef string) ([]byte, erro
 		return nil, errors.New("repo path is required")
 	}
 	if isGitWorktree(repoPath) {
-		cmd := exec.Command("git", gitDiffArgs(repoPath, baseRef, headRef)...)
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			return nil, fmt.Errorf("git diff: %w: %s", err, string(out))
+		if hasExplicitRefs(baseRef, headRef) {
+			return runGitDiff(gitDiffArgs(repoPath, baseRef, headRef))
 		}
-		return out, nil
+		return diffFromGitWorktree(repoPath)
 	}
 	return diffFromDirectory(repoPath)
 }
@@ -99,6 +97,93 @@ func gitDiffArgs(repoPath string, baseRef string, headRef string) []string {
 		args = append(args, strings.TrimSpace(baseRef)+"..."+strings.TrimSpace(headRef))
 	}
 	return args
+}
+
+func hasExplicitRefs(baseRef string, headRef string) bool {
+	return strings.TrimSpace(baseRef) != "" && strings.TrimSpace(headRef) != ""
+}
+
+func diffFromGitWorktree(repoPath string) ([]byte, error) {
+	tracked, err := diffTrackedGitChanges(repoPath)
+	if err != nil {
+		return nil, err
+	}
+	untracked, err := diffUntrackedGitFiles(repoPath)
+	if err != nil {
+		return nil, err
+	}
+	var b strings.Builder
+	b.Write(tracked)
+	if len(tracked) > 0 && len(untracked) > 0 && !strings.HasSuffix(b.String(), "\n") {
+		b.WriteByte('\n')
+	}
+	b.Write(untracked)
+	return []byte(b.String()), nil
+}
+
+func diffTrackedGitChanges(repoPath string) ([]byte, error) {
+	if gitHeadExists(repoPath) {
+		return runGitDiff([]string{"-C", repoPath, "diff", "--no-ext-diff", "--no-textconv", "--unified=3", "HEAD"})
+	}
+	staged, err := runGitDiff([]string{"-C", repoPath, "diff", "--cached", "--no-ext-diff", "--no-textconv", "--unified=3"})
+	if err != nil {
+		return nil, err
+	}
+	unstaged, err := runGitDiff([]string{"-C", repoPath, "diff", "--no-ext-diff", "--no-textconv", "--unified=3"})
+	if err != nil {
+		return nil, err
+	}
+	var b strings.Builder
+	b.Write(staged)
+	if len(staged) > 0 && len(unstaged) > 0 && !strings.HasSuffix(b.String(), "\n") {
+		b.WriteByte('\n')
+	}
+	b.Write(unstaged)
+	return []byte(b.String()), nil
+}
+
+func diffUntrackedGitFiles(repoPath string) ([]byte, error) {
+	repoRoot, err := gitRepoRoot(repoPath)
+	if err != nil {
+		return nil, err
+	}
+	out, err := exec.Command("git", "-C", repoPath, "ls-files", "--others", "--exclude-standard", "-z").CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("git ls-files: %w: %s", err, string(out))
+	}
+	var b strings.Builder
+	for _, name := range strings.Split(string(out), "\x00") {
+		if name == "" {
+			continue
+		}
+		content, err := os.ReadFile(filepath.Join(repoRoot, filepath.FromSlash(name)))
+		if err != nil {
+			return nil, fmt.Errorf("read untracked file %q: %w", name, err)
+		}
+		diffForNewFile(&b, name, content)
+	}
+	return []byte(b.String()), nil
+}
+
+func gitHeadExists(repoPath string) bool {
+	return exec.Command("git", "-C", repoPath, "rev-parse", "--verify", "HEAD").Run() == nil
+}
+
+func gitRepoRoot(repoPath string) (string, error) {
+	out, err := exec.Command("git", "-C", repoPath, "rev-parse", "--show-toplevel").CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("git rev-parse --show-toplevel: %w: %s", err, string(out))
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+func runGitDiff(args []string) ([]byte, error) {
+	cmd := exec.Command("git", args...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("git diff: %w: %s", err, string(out))
+	}
+	return out, nil
 }
 
 func isGitWorktree(repoPath string) bool {
@@ -171,7 +256,21 @@ func resolveListedFile(name string, baseDir string, restrictToBase bool) (string
 			display = rel
 		}
 	}
-	return path, display, nil
+	if !restrictToBase {
+		return path, display, nil
+	}
+	resolvedBase, err := filepath.EvalSymlinks(baseDir)
+	if err != nil {
+		return "", "", fmt.Errorf("resolve base directory %q: %w", baseDir, err)
+	}
+	resolvedPath, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", "", fmt.Errorf("resolve listed file %q: %w", name, err)
+	}
+	if rel, err := filepath.Rel(resolvedBase, resolvedPath); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", "", fmt.Errorf("listed file %q escapes base directory", name)
+	}
+	return resolvedPath, display, nil
 }
 
 func diffForNewFile(b *strings.Builder, name string, content []byte) {
