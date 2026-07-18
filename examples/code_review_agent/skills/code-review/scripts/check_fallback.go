@@ -80,13 +80,9 @@ func main() {
 			if hunkText == "" {
 				hunkText = strings.Join(currentHunk, "\n")
 			}
-			localHunkText := hunkBefore + "\n" + text
 
 			addFinding := func(severity, category, title, recommendation, ruleID string) {
-				key := currentFile + "|" + ruleID
-				if ruleID == "secret-leak" {
-					key = fmt.Sprintf("%s|%d|%s|%s", currentFile, newLine, category, ruleID)
-				}
+				key := dedupeKey(currentFile, newLine, category, ruleID)
 				if emittedFindings[key] {
 					return
 				}
@@ -98,10 +94,7 @@ func main() {
 				})
 			}
 			addWarning := func(severity, category, title, recommendation, ruleID string) {
-				key := currentFile + "|" + ruleID
-				if ruleID == "secret-leak" {
-					key = fmt.Sprintf("%s|%d|%s|%s", currentFile, newLine, category, ruleID)
-				}
+				key := dedupeKey(currentFile, newLine, category, ruleID)
 				if emittedWarnings[key] {
 					return
 				}
@@ -150,16 +143,10 @@ func main() {
 					"Wrap the error with operation context using fmt.Errorf(\"operation: %w\", err).", "bare-return-err")
 			}
 			if reportsStringConcatLoop(text, hunkBefore, hunkText) {
-				key := currentFile + "|string-concat-loop"
-				if !emittedWarnings[key] {
-					emittedWarnings[key] = true
-					warnings = append(warnings, finding{
-						Severity: "low", Category: "performance", File: currentFile, Line: newLine,
-						Title: "String concatenation in a loop may allocate repeatedly", Evidence: redact(text),
-						Recommendation: "Use strings.Builder or bytes.Buffer for repeated string assembly.",
-						Confidence:     "low", Source: "skill_run", RuleID: "string-concat-loop", Status: "needs_human_review",
-					})
-				}
+				addWarning("low", "performance", "String concatenation in a loop may allocate repeatedly",
+					"Use strings.Builder or bytes.Buffer for repeated string assembly.", "string-concat-loop")
+				warnings[len(warnings)-1].Confidence = "low"
+				warnings[len(warnings)-1].Status = "needs_human_review"
 			}
 			if strings.HasSuffix(currentFile, ".go") &&
 				!strings.HasSuffix(currentFile, "_test.go") && strings.HasPrefix(text, "func ") &&
@@ -168,22 +155,22 @@ func main() {
 					"Add a unit test that exercises the new path.", "missing-test-hint")
 			}
 			if (strings.Contains(text, "go func") || strings.HasPrefix(text, "go ")) &&
-				!containsAny(localHunkText, "WaitGroup", "ctx.Done", "errgroup", "done", "sync.") {
+				!containsAny(hunkText, "WaitGroup", ".Done()", "ctx.Done", "errgroup", "done", "sync.") {
 				addFinding("high", "concurrency", "New goroutine has no visible lifecycle guard",
 					"Bind the goroutine to a context, wait group, or explicit completion signal.", "goroutine-leak")
 			}
 			if containsAny(text, "context.WithCancel", "context.WithTimeout", "context.WithDeadline") &&
-				!containsAny(localHunkText, "defer cancel()", "ctx.Done", "cancel()") {
+				!contextHasCancelCleanup(text, hunkText) {
 				addFinding("high", "lifecycle", "Derived context is not canceled",
 					"Store the cancel function and defer cancel() in the same scope.", "context-leak")
 			}
 			if containsAny(text, "os.Open", "os.OpenFile", "os.Create") &&
-				!containsAny(localHunkText, "defer", "Close()") {
+				!resourceHasCleanup(text, hunkText) {
 				addFinding("high", "resource", "Opened resource has no close path",
 					"Defer Close() immediately after the resource is opened.", "resource-leak")
 			}
 			if containsAny(text, "sql.Open", ".BeginTx", ".Begin(") &&
-				!containsAny(localHunkText, "Rollback()", "Close()") {
+				!databaseHasCleanup(text, hunkText) {
 				addFinding("high", "database", "Database handle or transaction has no cleanup path",
 					"Defer Close() for handles and Rollback() for transactions in the same scope.", "db-lifecycle")
 			}
@@ -266,6 +253,10 @@ func extractAssignedString(text string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+func dedupeKey(file string, line int, category string, ruleID string) string {
+	return fmt.Sprintf("%s|%d|%s|%s", file, line, category, ruleID)
 }
 
 func containsAny(text string, items ...string) bool {
@@ -373,6 +364,41 @@ func isQuotedLiteral(text string) bool {
 
 func reportsContextBackgroundMisuse(text string, hunkText string) bool {
 	return strings.Contains(text, "context.Background()") && strings.Contains(hunkText, "context.Context")
+}
+
+var (
+	assignmentVariablePattern = regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_]*)\s*(?:,\s*[A-Za-z_][A-Za-z0-9_]*)?\s*:=`)
+	contextCancelPattern      = regexp.MustCompile(`(?:[A-Za-z_][A-Za-z0-9_]*|_)\s*,\s*([A-Za-z_][A-Za-z0-9_]*)\s*:=\s*context\.With(?:Cancel|Timeout|Deadline)`)
+)
+
+func assignedVariable(text string) string {
+	match := assignmentVariablePattern.FindStringSubmatch(text)
+	if len(match) < 2 {
+		return ""
+	}
+	return match[1]
+}
+
+func contextHasCancelCleanup(text string, hunkText string) bool {
+	match := contextCancelPattern.FindStringSubmatch(text)
+	return len(match) == 2 && strings.Contains(hunkText, match[1]+"()")
+}
+
+func resourceHasCleanup(text string, hunkText string) bool {
+	name := assignedVariable(text)
+	return name != "" && strings.Contains(hunkText, name+".Close()")
+}
+
+func databaseHasCleanup(text string, hunkText string) bool {
+	name := assignedVariable(text)
+	if name == "" {
+		return false
+	}
+	cleanup := "Close"
+	if !strings.Contains(text, "sql.Open") {
+		cleanup = "Rollback"
+	}
+	return strings.Contains(hunkText, name+"."+cleanup+"()")
 }
 
 func reportsMutexUnlockMissing(text string, hunkText string) bool {
