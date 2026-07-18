@@ -11,6 +11,7 @@
 package llm
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -90,6 +91,34 @@ func TestModelReviewSystemPromptDefinesStrictContract(t *testing.T) {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("system prompt missing %q:\n%s", want, prompt)
 		}
+	}
+}
+
+func TestRunReviewNeverSendsMultilinePEMToProvider(t *testing.T) {
+	const payload = "MIIEvQIBADANBgkqhkiG9w0BAQEFAASC-multiline-test-payload"
+	diff := []byte("diff --git a/config.go b/config.go\n" +
+		"+++ b/config.go\n" +
+		"@@ -0,0 +1,4 @@\n" +
+		"+private_key=-----BEGIN PRIVATE KEY-----\n" +
+		"+" + payload + "\n" +
+		"+-----END PRIVATE KEY-----\n")
+	called := false
+	provider := ProviderFunc(func(_ context.Context, input Input) (Output, error) {
+		called = true
+		for _, secret := range []string{"-----BEGIN PRIVATE KEY-----", payload, "-----END PRIVATE KEY-----"} {
+			if strings.Contains(input.DiffSummary, secret) {
+				t.Fatalf("provider input leaked %q: %s", secret, input.DiffSummary)
+			}
+		}
+		if !strings.Contains(input.DiffSummary, "[REDACTED_PRIVATE_KEY]") {
+			t.Fatalf("provider input missing PEM redaction marker: %s", input.DiffSummary)
+		}
+		return Output{}, nil
+	})
+
+	_, _ = RunReview(context.Background(), "task-1", provider, Audit{}, review.Result{}, diff, review.InputMetadata{})
+	if !called {
+		t.Fatal("expected model provider to receive a review request")
 	}
 }
 
