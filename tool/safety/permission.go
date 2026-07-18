@@ -108,7 +108,7 @@ func (guard *Guard) scanRequest(
 ) (Report, error) {
 	input, err := adaptSafely(ctx, req, binding)
 	if err != nil {
-		return guard.scanUnparseableRequest(ctx, req, binding)
+		return guard.scanUnparsableRequest(ctx, req, binding)
 	}
 	report, err := guard.scan(ctx, input)
 	if err != nil {
@@ -130,7 +130,7 @@ func adaptSafely(
 	return binding.Adapter.Adapt(ctx, req, binding)
 }
 
-func (guard *Guard) scanUnparseableRequest(
+func (guard *Guard) scanUnparsableRequest(
 	ctx context.Context,
 	req AdaptRequest,
 	binding Binding,
@@ -141,12 +141,12 @@ func (guard *Guard) scanUnparseableRequest(
 		Kind:       binding.Kind,
 		Backend:    binding.Backend,
 		Operation:  operationForKind(binding.Kind),
-		Script:     "<unparseable-arguments>",
+		Script:     "<unparsable-arguments>",
 		Language:   "arguments",
 		Metadata:   req.Metadata,
 	}
 	findings := []Finding{newFinding(
-		"TOOL_INPUT_UNPARSEABLE",
+		"TOOL_INPUT_UNPARSABLE",
 		RiskLevelHigh,
 		DecisionNeedsHumanReview,
 		"tool arguments could not be normalized",
