@@ -48,6 +48,11 @@ bounded 512-segment entry point; parse failures are fail-closed. A
 `ToolExecutionFilter` has no per-call arguments and remains a static exposure
 or routing mechanism. `PermissionPolicy` and `WrapExecution` are the pre-run
 gates. Using both causes two independent prechecks and is not required.
+`WrapExecution` accepts callable tools only and deliberately does not expose a
+wrapped tool's streaming capability. Stream-only tools fail wrapper creation,
+and dual tools use the callable path. This fail-closed boundary avoids claiming
+that `max_timeout` can interrupt a blocked `StreamReader.Recv`; streaming
+backends must enforce their own cancellation and output limits.
 
 `workspaceexec` constrains workspace paths and owns its process/session policy.
 `hostexec` touches the host shell, may inherit host environment, and permits PTY,

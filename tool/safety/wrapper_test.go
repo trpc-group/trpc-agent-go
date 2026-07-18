@@ -34,6 +34,7 @@ type fakeCallableTool struct {
 	permissionChecks int
 	streamInner      bool
 	innerTextMode    tool.InnerTextMode
+	longRunning      bool
 }
 
 func newFakeCallable(result any) *fakeCallableTool {
@@ -69,6 +70,32 @@ func (fake *fakeCallableTool) StreamInner() bool { return fake.streamInner }
 
 func (fake *fakeCallableTool) InnerTextMode() tool.InnerTextMode {
 	return fake.innerTextMode
+}
+
+func (fake *fakeCallableTool) LongRunning() bool { return fake.longRunning }
+
+type fakeStreamOnlyTool struct {
+	declaration tool.Declaration
+}
+
+func (fake *fakeStreamOnlyTool) Declaration() *tool.Declaration {
+	return &fake.declaration
+}
+
+func (fake *fakeStreamOnlyTool) StreamableCall(
+	_ context.Context,
+	_ []byte,
+) (*tool.StreamReader, error) {
+	return tool.NewStream(0).Reader, nil
+}
+
+type fakeDualTool struct{ *fakeCallableTool }
+
+func (fake *fakeDualTool) StreamableCall(
+	_ context.Context,
+	_ []byte,
+) (*tool.StreamReader, error) {
+	return tool.NewStream(0).Reader, nil
 }
 
 type fakeInvocationStateTool struct {
@@ -291,21 +318,76 @@ func TestWrapExecutionWithholdsOversizedLegacyStateDelta(t *testing.T) {
 	require.Equal(t, "STATE_DELTA_LIMIT_EXCEEDED", auditor.events[1].RuleID)
 }
 
-func TestWrapExecutionUsesSemanticStreamCapability(t *testing.T) {
+func TestWrapExecutionForwardsSemanticLongRunning(t *testing.T) {
 	guard, _ := newWrapperGuard(t, nil)
-	inner := &fakeStreamTool{
-		declaration: tool.Declaration{Name: "workspace_exec"},
-		chunks:      []tool.StreamChunk{{Content: "ok"}},
+	base := newFakeCallable(nil)
+	base.longRunning = true
+	tests := []struct {
+		name  string
+		inner tool.Tool
+	}{
+		{name: "callable", inner: base},
+		{name: "invocation state", inner: &fakeInvocationStateTool{
+			fakeCallableTool: base,
+		}},
+		{name: "legacy state", inner: &fakeLegacyStateTool{
+			fakeCallableTool: base,
+		}},
 	}
-	named := itool.NewUnprefixedNamedTool(inner)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assertWrappedLongRunning(t, guard, test.inner)
+		})
+	}
+}
+
+func assertWrappedLongRunning(t *testing.T, guard *Guard, inner tool.Tool) {
+	t.Helper()
 	wrapper, err := WrapExecution(
 		guard,
-		named,
+		inner,
+		BindWorkspaceExec("workspace_exec"),
+	)
+	require.NoError(t, err)
+	overlaid := itool.ApplyDeclarations(
+		[]tool.Tool{wrapper},
+		[]tool.Declaration{{Name: "workspace_exec", Description: "overlaid"}},
+	)
+	require.Len(t, overlaid, 1)
+	runner, ok := itool.ResolveDeclaration(overlaid[0]).(interface {
+		LongRunning() bool
+	})
+	require.True(t, ok)
+	require.True(t, runner.LongRunning())
+}
+
+func TestWrapExecutionRejectsStreamOnlyTool(t *testing.T) {
+	guard, _ := newWrapperGuard(t, nil)
+	inner := &fakeStreamOnlyTool{
+		declaration: tool.Declaration{Name: "workspace_exec"},
+	}
+
+	wrapper, err := WrapExecution(
+		guard,
+		inner,
+		BindWorkspaceExec("workspace_exec"),
+	)
+	require.Nil(t, wrapper)
+	require.ErrorContains(t, err, "must support non-streaming calls")
+}
+
+func TestWrapExecutionNarrowsDualToolToCallable(t *testing.T) {
+	guard, _ := newWrapperGuard(t, nil)
+	inner := &fakeDualTool{fakeCallableTool: newFakeCallable("ok")}
+
+	wrapper, err := WrapExecution(
+		guard,
+		inner,
 		BindWorkspaceExec("workspace_exec"),
 	)
 	require.NoError(t, err)
 	_, callable := wrapper.(tool.CallableTool)
 	_, streamable := wrapper.(tool.StreamableTool)
-	require.False(t, callable)
-	require.True(t, streamable)
+	require.True(t, callable)
+	require.False(t, streamable)
 }

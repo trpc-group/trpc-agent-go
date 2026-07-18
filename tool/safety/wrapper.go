@@ -50,12 +50,11 @@ func (err *ExecutionError) Error() string {
 }
 
 type executionWrapper struct {
-	guard      *Guard
-	inner      tool.Tool
-	semantic   tool.Tool
-	binding    Binding
-	callable   tool.CallableTool
-	streamable tool.StreamableTool
+	guard    *Guard
+	inner    tool.Tool
+	semantic tool.Tool
+	binding  Binding
+	callable tool.CallableTool
 }
 
 // WrapExecution wraps one explicitly bound execution tool.
@@ -102,23 +101,17 @@ func validateExecutionWrapper(
 
 func (wrapper *executionWrapper) wrapCallCapabilities() (tool.Tool, error) {
 	_, hasCallable := wrapper.semantic.(tool.CallableTool)
-	_, hasStreamable := wrapper.semantic.(tool.StreamableTool)
-	if hasCallable {
-		wrapper.callable, hasCallable = wrapper.inner.(tool.CallableTool)
+	if !hasCallable {
+		return nil, errors.New(
+			"tool safety: wrapped tool must support non-streaming calls",
+		)
 	}
-	if hasStreamable {
-		wrapper.streamable, hasStreamable = wrapper.inner.(tool.StreamableTool)
+	callable, ok := wrapper.inner.(tool.CallableTool)
+	if !ok {
+		return nil, errors.New("tool safety: wrapped call capability is unavailable")
 	}
-	switch {
-	case hasCallable && hasStreamable:
-		return &dualExecutionWrapper{executionWrapper: wrapper}, nil
-	case hasCallable:
-		return &callableExecutionWrapper{executionWrapper: wrapper}, nil
-	case hasStreamable:
-		return &streamableExecutionWrapper{executionWrapper: wrapper}, nil
-	default:
-		return nil, errors.New("tool safety: wrapped tool is not executable")
-	}
+	wrapper.callable = callable
+	return &callableExecutionWrapper{executionWrapper: wrapper}, nil
 }
 
 func (wrapper *executionWrapper) Declaration() *tool.Declaration {
@@ -155,6 +148,12 @@ func (wrapper *executionWrapper) InnerTextMode() tool.InnerTextMode {
 	return tool.NormalizeInnerTextMode(preference.InnerTextMode())
 }
 
+// LongRunning delegates the semantic tool's long-running preference.
+func (wrapper *executionWrapper) LongRunning() bool {
+	runner, ok := wrapper.semantic.(interface{ LongRunning() bool })
+	return ok && runner.LongRunning()
+}
+
 type callableExecutionWrapper struct{ *executionWrapper }
 
 func (wrapper *callableExecutionWrapper) Call(
@@ -164,71 +163,12 @@ func (wrapper *callableExecutionWrapper) Call(
 	return wrapper.call(ctx, arguments)
 }
 
-type streamableExecutionWrapper struct{ *executionWrapper }
-
-func (wrapper *streamableExecutionWrapper) StreamableCall(
-	ctx context.Context,
-	arguments []byte,
-) (*tool.StreamReader, error) {
-	return wrapper.stream(ctx, arguments)
-}
-
-type dualExecutionWrapper struct{ *executionWrapper }
-
-func (wrapper *dualExecutionWrapper) Call(
-	ctx context.Context,
-	arguments []byte,
-) (any, error) {
-	return wrapper.call(ctx, arguments)
-}
-
-func (wrapper *dualExecutionWrapper) StreamableCall(
-	ctx context.Context,
-	arguments []byte,
-) (*tool.StreamReader, error) {
-	return wrapper.stream(ctx, arguments)
-}
-
 type invocationCallableWrapper struct {
 	*callableExecutionWrapper
 	provider invocationStateDeltaProvider
 }
 
 func (wrapper *invocationCallableWrapper) StateDeltaForInvocation(
-	invocation *agent.Invocation,
-	toolCallID string,
-	arguments []byte,
-	result []byte,
-) map[string][]byte {
-	delta := wrapper.provider.StateDeltaForInvocation(
-		invocation, toolCallID, arguments, result,
-	)
-	return wrapper.inspectStateDelta(delta)
-}
-
-type invocationStreamableWrapper struct {
-	*streamableExecutionWrapper
-	provider invocationStateDeltaProvider
-}
-
-func (wrapper *invocationStreamableWrapper) StateDeltaForInvocation(
-	invocation *agent.Invocation,
-	toolCallID string,
-	arguments []byte,
-	result []byte,
-) map[string][]byte {
-	delta := wrapper.provider.StateDeltaForInvocation(
-		invocation, toolCallID, arguments, result,
-	)
-	return wrapper.inspectStateDelta(delta)
-}
-
-type invocationDualWrapper struct {
-	*dualExecutionWrapper
-	provider invocationStateDeltaProvider
-}
-
-func (wrapper *invocationDualWrapper) StateDeltaForInvocation(
 	invocation *agent.Invocation,
 	toolCallID string,
 	arguments []byte,
@@ -254,34 +194,6 @@ func (wrapper *stateCallableWrapper) StateDelta(
 	return wrapper.inspectStateDelta(delta)
 }
 
-type stateStreamableWrapper struct {
-	*streamableExecutionWrapper
-	provider stateDeltaProvider
-}
-
-func (wrapper *stateStreamableWrapper) StateDelta(
-	toolCallID string,
-	arguments []byte,
-	result []byte,
-) map[string][]byte {
-	delta := wrapper.provider.StateDelta(toolCallID, arguments, result)
-	return wrapper.inspectStateDelta(delta)
-}
-
-type stateDualWrapper struct {
-	*dualExecutionWrapper
-	provider stateDeltaProvider
-}
-
-func (wrapper *stateDualWrapper) StateDelta(
-	toolCallID string,
-	arguments []byte,
-	result []byte,
-) map[string][]byte {
-	delta := wrapper.provider.StateDelta(toolCallID, arguments, result)
-	return wrapper.inspectStateDelta(delta)
-}
-
 func wrapStateCapability(wrapped tool.Tool, semantic tool.Tool) tool.Tool {
 	if provider, ok := semantic.(invocationStateDeltaProvider); ok {
 		return wrapInvocationState(wrapped, provider)
@@ -296,29 +208,19 @@ func wrapInvocationState(
 	wrapped tool.Tool,
 	provider invocationStateDeltaProvider,
 ) tool.Tool {
-	switch concrete := wrapped.(type) {
-	case *callableExecutionWrapper:
-		return &invocationCallableWrapper{concrete, provider}
-	case *streamableExecutionWrapper:
-		return &invocationStreamableWrapper{concrete, provider}
-	case *dualExecutionWrapper:
-		return &invocationDualWrapper{concrete, provider}
-	default:
+	concrete, ok := wrapped.(*callableExecutionWrapper)
+	if !ok {
 		return wrapped
 	}
+	return &invocationCallableWrapper{concrete, provider}
 }
 
 func wrapLegacyState(wrapped tool.Tool, provider stateDeltaProvider) tool.Tool {
-	switch concrete := wrapped.(type) {
-	case *callableExecutionWrapper:
-		return &stateCallableWrapper{concrete, provider}
-	case *streamableExecutionWrapper:
-		return &stateStreamableWrapper{concrete, provider}
-	case *dualExecutionWrapper:
-		return &stateDualWrapper{concrete, provider}
-	default:
+	concrete, ok := wrapped.(*callableExecutionWrapper)
+	if !ok {
 		return wrapped
 	}
+	return &stateCallableWrapper{concrete, provider}
 }
 
 func newExecutionError(report Report, phase string) *ExecutionError {
