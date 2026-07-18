@@ -117,6 +117,7 @@ func (a *Agent) runSkillChecks(ctx context.Context, taskID string, diff []byte) 
 	}
 
 	start := time.Now()
+	a.emitReviewEvent(ctx, taskID, reviewEventSkillRun, defaultSkillCommand)
 	// 通过 skill_run 进入 runtime。
 	raw, err := a.runTool.Call(ctx, runArgs)
 	runRecord.DurationMS = time.Since(start).Milliseconds()

@@ -92,7 +92,7 @@ func TestReadFileListRejectsSymlinkEscapingRepo(t *testing.T) {
 	}
 	linkPath := filepath.Join(repo, "linked.go")
 	if err := os.Symlink(filepath.Join(root, "secret.go"), linkPath); err != nil {
-		t.Fatalf("create symlink: %v", err)
+		t.Skipf("symlinks are unavailable in this test environment: %v", err)
 	}
 	listPath := filepath.Join(repo, "files.txt")
 	if err := os.WriteFile(listPath, []byte("linked.go\n"), 0o644); err != nil {
@@ -193,6 +193,31 @@ func TestReadRepoPathIncludesStagedUnstagedAndUntrackedChanges(t *testing.T) {
 		if !strings.Contains(diffText, want) {
 			t.Fatalf("generated diff missing %q: %s", want, diffText)
 		}
+	}
+}
+
+func TestReadRepoPathRejectsUntrackedSymlink(t *testing.T) {
+	repo := t.TempDir()
+	git(t, repo, "init")
+	git(t, repo, "config", "user.email", "reviewer@example.com")
+	git(t, repo, "config", "user.name", "Review Agent Test")
+	if err := os.WriteFile(filepath.Join(repo, "tracked.go"), []byte("package sample\n"), 0o644); err != nil {
+		t.Fatalf("write tracked source: %v", err)
+	}
+	git(t, repo, "add", "tracked.go")
+	git(t, repo, "commit", "-m", "initial")
+
+	outside := filepath.Join(t.TempDir(), "secret.go")
+	if err := os.WriteFile(outside, []byte("package secret\n"), 0o644); err != nil {
+		t.Fatalf("write outside source: %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(repo, "untracked.go")); err != nil {
+		t.Skipf("symlinks are unavailable in this test environment: %v", err)
+	}
+
+	_, _, err := Read(Config{}, Request{RepoPath: repo})
+	if err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("Read error = %v, want untracked symlink rejection", err)
 	}
 }
 

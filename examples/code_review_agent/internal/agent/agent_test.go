@@ -1366,12 +1366,18 @@ func TestAgentRunDryRunRecordsSkippedSandbox(t *testing.T) {
 
 	root := repoRoot(t)
 	dbPath := filepath.Join(t.TempDir(), "review.db")
+	var events []string
 	ag, err := New(Config{
 		SkillsRoot: filepath.Join(root, "skills"),
 		Runtime:    RuntimeLocalFallback,
 		SQLitePath: dbPath,
 		OutputDir:  t.TempDir(),
 		Timeout:    testReviewTimeout,
+		EventSink: func(_ context.Context, event *agentevent.Event) {
+			if event != nil {
+				events = append(events, event.Object)
+			}
+		},
 	})
 	if err != nil {
 		t.Fatalf("New returned error: %v", err)
@@ -1387,6 +1393,9 @@ func TestAgentRunDryRunRecordsSkippedSandbox(t *testing.T) {
 	}
 	if result.Metrics.ToolCallCount != 1 {
 		t.Fatalf("dry-run should only load skill, got tool calls %d", result.Metrics.ToolCallCount)
+	}
+	if containsString(events, reviewEventSkillRun) {
+		t.Fatalf("dry-run must not emit skill execution event: %+v", events)
 	}
 
 	store, err := sqlite.Open(dbPath)
@@ -1786,6 +1795,7 @@ func TestAgentRunE2BRuntimeRecordsUnsupportedAudit(t *testing.T) {
 	root := repoRoot(t)
 	dbPath := filepath.Join(t.TempDir(), "review.db")
 	outDir := t.TempDir()
+	var events []string
 	ag, err := New(Config{
 		SkillsRoot:   filepath.Join(root, "skills"),
 		FixturesRoot: filepath.Join(root, "testdata", "fixtures"),
@@ -1793,6 +1803,11 @@ func TestAgentRunE2BRuntimeRecordsUnsupportedAudit(t *testing.T) {
 		SQLitePath:   dbPath,
 		OutputDir:    outDir,
 		Timeout:      testReviewTimeout,
+		EventSink: func(_ context.Context, event *agentevent.Event) {
+			if event != nil {
+				events = append(events, event.Object)
+			}
+		},
 	})
 	if err != nil {
 		t.Fatalf("New returned error: %v", err)
@@ -1814,6 +1829,9 @@ func TestAgentRunE2BRuntimeRecordsUnsupportedAudit(t *testing.T) {
 	}
 	if len(result.HumanReviewItems) == 0 || !hasRuleID(result.HumanReviewItems, "e2b-runtime-unsupported") {
 		t.Fatalf("expected e2b human review item, got %+v", result.HumanReviewItems)
+	}
+	if containsString(events, reviewEventSkillRun) {
+		t.Fatalf("unsupported E2B runtime must not emit skill execution event: %+v", events)
 	}
 
 	store, err := sqlite.Open(dbPath)

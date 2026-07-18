@@ -156,7 +156,15 @@ func diffUntrackedGitFiles(repoPath string) ([]byte, error) {
 		if name == "" {
 			continue
 		}
-		content, err := os.ReadFile(filepath.Join(repoRoot, filepath.FromSlash(name)))
+		path := filepath.Join(repoRoot, filepath.FromSlash(name))
+		info, err := os.Lstat(path)
+		if err != nil {
+			return nil, fmt.Errorf("stat untracked file %q: %w", name, err)
+		}
+		if !info.Mode().IsRegular() {
+			return nil, fmt.Errorf("untracked file %q is not a regular file", name)
+		}
+		content, err := os.ReadFile(path)
 		if err != nil {
 			return nil, fmt.Errorf("read untracked file %q: %w", name, err)
 		}

@@ -328,7 +328,9 @@ func fallbackScriptEnv(t *testing.T) []string {
 
 func runSkillCheck(t *testing.T, skillRoot string, diff string, env []string) skillCheckPayload {
 	t.Helper()
-	mustLookPath(t, "python3")
+	if env == nil {
+		mustLookPath(t, "python3")
+	}
 
 	cmd := exec.Command(mustLookPath(t, "bash"), filepath.Join(skillRoot, "scripts", "check.sh"))
 	cmd.Stdin = strings.NewReader(diff)

@@ -352,7 +352,6 @@ func (a *Agent) runDirect(ctx context.Context, req Request) (result review.Resul
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return review.Result{}, ctxErr
 	}
-	a.emitReviewEvent(ctx, taskID, reviewEventSkillRun, defaultSkillCommand)
 	for _, run := range runs {
 		a.emitReviewEvent(ctx, taskID, reviewEventSandboxRun, run.Command)
 	}
