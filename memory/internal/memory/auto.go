@@ -226,11 +226,12 @@ func NewAutoMemoryWorker(
 	operator MemoryOperator,
 ) *AutoMemoryWorker {
 	config.EnabledTools = maps.Clone(config.EnabledTools)
+	updatePolicy, assistantResults := extractionPoliciesFromMetadata(config.Extractor)
 	return &AutoMemoryWorker{
 		config:           config,
 		operator:         operator,
-		updatePolicy:     updatePolicyFromMetadata(config.Extractor),
-		assistantResults: assistantResultExtractionFromMetadata(config.Extractor),
+		updatePolicy:     updatePolicy,
+		assistantResults: assistantResults,
 	}
 }
 

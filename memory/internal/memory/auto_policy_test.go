@@ -23,6 +23,16 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
+type policyMetadataExtractor struct {
+	*mockExtractor
+	calls int
+}
+
+func (e *policyMetadataExtractor) Metadata() map[string]any {
+	e.calls++
+	return e.mockExtractor.Metadata()
+}
+
 func TestUpdatePolicyFromMetadata(t *testing.T) {
 	tests := []struct {
 		name string
@@ -43,12 +53,14 @@ func TestUpdatePolicyFromMetadata(t *testing.T) {
 				metadata[extractorMetadataUpdatePolicy] = tt.raw
 			}
 			ext := &mockExtractor{metadata: metadata}
-			assert.Equal(t, tt.want, updatePolicyFromMetadata(ext))
+			policy, _ := extractionPoliciesFromMetadata(ext)
+			assert.Equal(t, tt.want, policy)
 			worker := NewAutoMemoryWorker(AutoMemoryConfig{Extractor: ext}, nil)
 			assert.Equal(t, tt.want, worker.updatePolicy)
 		})
 	}
-	assert.Equal(t, extractor.UpdatePolicyReconcile, updatePolicyFromMetadata(nil))
+	policy, _ := extractionPoliciesFromMetadata(nil)
+	assert.Equal(t, extractor.UpdatePolicyReconcile, policy)
 }
 
 func TestAssistantResultExtractionFromMetadata(t *testing.T) {
@@ -72,12 +84,25 @@ func TestAssistantResultExtractionFromMetadata(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			ext := &mockExtractor{metadata: test.metadata}
-			assert.Equal(t, test.want, assistantResultExtractionFromMetadata(ext))
+			_, assistantResults := extractionPoliciesFromMetadata(ext)
+			assert.Equal(t, test.want, assistantResults)
 			worker := NewAutoMemoryWorker(AutoMemoryConfig{Extractor: ext}, newMockOperator())
 			assert.Equal(t, test.want, worker.assistantResults)
 		})
 	}
-	assert.False(t, assistantResultExtractionFromMetadata(nil))
+	_, assistantResults := extractionPoliciesFromMetadata(nil)
+	assert.False(t, assistantResults)
+
+	counted := &policyMetadataExtractor{mockExtractor: &mockExtractor{
+		metadata: map[string]any{
+			extractorMetadataUpdatePolicy:     extractor.UpdatePolicyHistoryPreserving,
+			extractorMetadataAssistantResults: true,
+		},
+	}}
+	worker := NewAutoMemoryWorker(AutoMemoryConfig{Extractor: counted}, newMockOperator())
+	assert.Equal(t, 1, counted.calls)
+	assert.Equal(t, extractor.UpdatePolicyHistoryPreserving, worker.updatePolicy)
+	assert.True(t, worker.assistantResults)
 }
 
 func TestAssistantResultPolicyPreservesDistinctResult(t *testing.T) {

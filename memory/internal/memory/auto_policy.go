@@ -54,14 +54,15 @@ type historyCandidate struct {
 	newCoverage float64
 }
 
-func updatePolicyFromMetadata(ext extractor.MemoryExtractor) extractor.UpdatePolicy {
+func extractionPoliciesFromMetadata(
+	ext extractor.MemoryExtractor,
+) (extractor.UpdatePolicy, bool) {
 	if ext == nil {
-		return extractor.UpdatePolicyReconcile
+		return extractor.UpdatePolicyReconcile, false
 	}
-	raw, ok := ext.Metadata()[extractorMetadataUpdatePolicy]
-	if !ok {
-		return extractor.UpdatePolicyReconcile
-	}
+	metadata := ext.Metadata()
+	assistantResults, _ := metadata[extractorMetadataAssistantResults].(bool)
+	raw := metadata[extractorMetadataUpdatePolicy]
 	var policy extractor.UpdatePolicy
 	switch value := raw.(type) {
 	case extractor.UpdatePolicy:
@@ -72,18 +73,10 @@ func updatePolicyFromMetadata(ext extractor.MemoryExtractor) extractor.UpdatePol
 	switch policy {
 	case extractor.UpdatePolicyHistoryPreserving,
 		extractor.UpdatePolicyAddOnly:
-		return policy
+		return policy, assistantResults
 	default:
-		return extractor.UpdatePolicyReconcile
+		return extractor.UpdatePolicyReconcile, assistantResults
 	}
-}
-
-func assistantResultExtractionFromMetadata(ext extractor.MemoryExtractor) bool {
-	if ext == nil {
-		return false
-	}
-	enabled, _ := ext.Metadata()[extractorMetadataAssistantResults].(bool)
-	return enabled
 }
 
 func (w *AutoMemoryWorker) applyUpdatePolicy(
