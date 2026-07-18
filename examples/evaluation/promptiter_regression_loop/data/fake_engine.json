@@ -1,0 +1,8 @@
+{
+  "engineId": "deterministic-ping-v1",
+  "promptTokens": 4,
+  "completionTokens": 1,
+  "latencyMillis": 2,
+  "optimizerTokens": 5,
+  "optimizerLatencyMillis": 2
+}

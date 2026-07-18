@@ -1,0 +1,1168 @@
+{
+  "schema_version": "v1",
+  "status": "accepted",
+  "audit": {
+    "run_id": "promptiter-regression-2003-20260718T141000.129395098Z",
+    "started_at": "2026-07-18T14:10:00.129395098Z",
+    "finished_at": "2026-07-18T14:10:00.133637289Z",
+    "duration_ms": 4,
+    "seed": 2003,
+    "inputs": [
+      {
+        "name": "baseline_prompt",
+        "path": "baseline_prompt.txt",
+        "sha256": "179a9d34f467b7d96785ba6271fa9aa96d9ef084cdcff33a2a5b61d36d3303c4"
+      },
+      {
+        "name": "fake_engine",
+        "path": "fake_engine.json",
+        "sha256": "0f885a4898143e764a398dcc995f4a8f0647987190f495b1e330016b7e8e71c0"
+      },
+      {
+        "name": "metrics",
+        "path": "metrics.json",
+        "sha256": "029056c87319d2c7b8fbe87393bca4f9c39dd11c01d64944e4ef4530936d9dd1"
+      },
+      {
+        "name": "promptiter",
+        "path": "promptiter.json",
+        "sha256": "604961453a14cf5e3a17c268eaca277840c627f21ba5f5f955bccfe0da1bc255"
+      },
+      {
+        "name": "train_evalset",
+        "path": "train.evalset.json",
+        "sha256": "b9f7ee5c55c88a49ea7531aee15041cbd6ff75f1a6fda2ab2cff3b50917bfcb8"
+      },
+      {
+        "name": "validation_evalset",
+        "path": "validation.evalset.json",
+        "sha256": "bd093d6103b66ec95baa56484453cfed50c25b6ec22dfb3d75397d6fcc6ae06e"
+      }
+    ],
+    "runtime": {
+      "mode": "fake",
+      "model": "deterministic-ping-v1",
+      "config_sha256": "1deca002f96c1ba70eaac288a9822f1a21d82542664c45f4e24d4614db5b09fd",
+      "config": {
+        "max_rounds": "3",
+        "optimizer": "deterministic-promptiter"
+      }
+    }
+  },
+  "initial_prompt": {
+    "text": "Reply with pong only for basic and short ping requests. fixture:baseline",
+    "sha256": "b085697c911b238a4947292ca2f4dd4a35e87824c5d175be8f87eea3b5f67ae0"
+  },
+  "accepted_prompt": {
+    "text": "Reply with pong for every valid ping request. fixture:balanced",
+    "sha256": "dce53b10df6d6b6daa50a41e4ae9ec979fee83875b5cac87a71e0db60d1aa278"
+  },
+  "baseline_train": {
+    "eval_set_id": "regression-train",
+    "score": 0.6666666666666666,
+    "passed": false,
+    "cases": [
+      {
+        "id": "train-case-1",
+        "score": 1,
+        "passed": true,
+        "metrics": [
+          {
+            "name": "quality",
+            "score": 1,
+            "threshold": 1,
+            "passed": true,
+            "evaluated": true
+          },
+          {
+            "name": "tool_trajectory_avg_score",
+            "score": 1,
+            "threshold": 1,
+            "passed": true,
+            "evaluated": true
+          }
+        ]
+      },
+      {
+        "id": "train-case-2",
+        "score": 0.5,
+        "passed": false,
+        "metrics": [
+          {
+            "name": "quality",
+            "score": 0,
+            "threshold": 1,
+            "passed": false,
+            "evaluated": true,
+            "reason": "final response mismatch: text mismatch: source not-pong and target pong do not match"
+          },
+          {
+            "name": "tool_trajectory_avg_score",
+            "score": 1,
+            "threshold": 1,
+            "passed": true,
+            "evaluated": true
+          }
+        ],
+        "actual_invocations": [
+          {
+            "final_response": "not-pong",
+            "tools": [
+              {
+                "name": "echo_ping",
+                "arguments": {
+                  "value": "ping"
+                },
+                "result": {
+                  "value": "pong"
+                }
+              }
+            ],
+            "route": [
+              {
+                "agent": "candidate",
+                "node_id": "answer"
+              }
+            ]
+          }
+        ],
+        "expected_invocations": [
+          {
+            "final_response": "pong",
+            "tools": [
+              {
+                "name": "echo_ping",
+                "arguments": {
+                  "value": "ping"
+                },
+                "result": {
+                  "value": "pong"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "train-case-3",
+        "score": 0.5,
+        "passed": false,
+        "metrics": [
+          {
+            "name": "quality",
+            "score": 0,
+            "threshold": 1,
+            "passed": false,
+            "evaluated": true,
+            "reason": "final response mismatch: text mismatch: source not-pong and target pong do not match"
+          },
+          {
+            "name": "tool_trajectory_avg_score",
+            "score": 1,
+            "threshold": 1,
+            "passed": true,
+            "evaluated": true
+          }
+        ],
+        "actual_invocations": [
+          {
+            "final_response": "not-pong",
+            "tools": [
+              {
+                "name": "echo_ping",
+                "arguments": {
+                  "value": "ping"
+                },
+                "result": {
+                  "value": "pong"
+                }
+              }
+            ],
+            "route": [
+              {
+                "agent": "candidate",
+                "node_id": "answer"
+              }
+            ]
+          }
+        ],
+        "expected_invocations": [
+          {
+            "final_response": "pong",
+            "tools": [
+              {
+                "name": "echo_ping",
+                "arguments": {
+                  "value": "ping"
+                },
+                "result": {
+                  "value": "pong"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "baseline_validation": {
+    "eval_set_id": "regression-validation",
+    "score": 0.6666666666666666,
+    "passed": false,
+    "cases": [
+      {
+        "id": "validation-case-1",
+        "score": 1,
+        "passed": true,
+        "metrics": [
+          {
+            "name": "quality",
+            "score": 1,
+            "threshold": 1,
+            "passed": true,
+            "evaluated": true
+          },
+          {
+            "name": "tool_trajectory_avg_score",
+            "score": 1,
+            "threshold": 1,
+            "passed": true,
+            "evaluated": true
+          }
+        ]
+      },
+      {
+        "id": "validation-case-2",
+        "score": 0.5,
+        "passed": false,
+        "metrics": [
+          {
+            "name": "quality",
+            "score": 0,
+            "threshold": 1,
+            "passed": false,
+            "evaluated": true,
+            "reason": "final response mismatch: text mismatch: source not-pong and target pong do not match"
+          },
+          {
+            "name": "tool_trajectory_avg_score",
+            "score": 1,
+            "threshold": 1,
+            "passed": true,
+            "evaluated": true
+          }
+        ],
+        "actual_invocations": [
+          {
+            "final_response": "not-pong",
+            "tools": [
+              {
+                "name": "echo_ping",
+                "arguments": {
+                  "value": "ping"
+                },
+                "result": {
+                  "value": "pong"
+                }
+              }
+            ],
+            "route": [
+              {
+                "agent": "candidate",
+                "node_id": "answer"
+              }
+            ]
+          }
+        ],
+        "expected_invocations": [
+          {
+            "final_response": "pong",
+            "tools": [
+              {
+                "name": "echo_ping",
+                "arguments": {
+                  "value": "ping"
+                },
+                "result": {
+                  "value": "pong"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "validation-case-3",
+        "score": 0.5,
+        "passed": false,
+        "metrics": [
+          {
+            "name": "quality",
+            "score": 0,
+            "threshold": 1,
+            "passed": false,
+            "evaluated": true,
+            "reason": "final response mismatch: text mismatch: source not-pong and target pong do not match"
+          },
+          {
+            "name": "tool_trajectory_avg_score",
+            "score": 1,
+            "threshold": 1,
+            "passed": true,
+            "evaluated": true
+          }
+        ],
+        "actual_invocations": [
+          {
+            "final_response": "not-pong",
+            "tools": [
+              {
+                "name": "echo_ping",
+                "arguments": {
+                  "value": "ping"
+                },
+                "result": {
+                  "value": "pong"
+                }
+              }
+            ],
+            "route": [
+              {
+                "agent": "candidate",
+                "node_id": "answer"
+              }
+            ]
+          }
+        ],
+        "expected_invocations": [
+          {
+            "final_response": "pong",
+            "tools": [
+              {
+                "name": "echo_ping",
+                "arguments": {
+                  "value": "ping"
+                },
+                "result": {
+                  "value": "pong"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "baseline_train_attribution": {
+    "failures": [
+      {
+        "case_id": "train-case-2",
+        "category": "final_response_mismatch",
+        "metric_names": [
+          "quality"
+        ],
+        "reason": "quality: final response mismatch: text mismatch: source not-pong and target pong do not match"
+      },
+      {
+        "case_id": "train-case-3",
+        "category": "final_response_mismatch",
+        "metric_names": [
+          "quality"
+        ],
+        "reason": "quality: final response mismatch: text mismatch: source not-pong and target pong do not match"
+      }
+    ],
+    "counts": {
+      "final_response_mismatch": 2
+    }
+  },
+  "baseline_validation_attribution": {
+    "failures": [
+      {
+        "case_id": "validation-case-2",
+        "category": "final_response_mismatch",
+        "metric_names": [
+          "quality"
+        ],
+        "reason": "quality: final response mismatch: text mismatch: source not-pong and target pong do not match"
+      },
+      {
+        "case_id": "validation-case-3",
+        "category": "final_response_mismatch",
+        "metric_names": [
+          "quality"
+        ],
+        "reason": "quality: final response mismatch: text mismatch: source not-pong and target pong do not match"
+      }
+    ],
+    "counts": {
+      "final_response_mismatch": 2
+    }
+  },
+  "rounds": [
+    {
+      "number": 1,
+      "input_prompt": "Reply with pong only for basic and short ping requests. fixture:baseline",
+      "candidate_prompt": "Rephrase without changing behavior. fixture:ineffective",
+      "hints": [
+        {
+          "case_id": "train-case-2",
+          "metric_name": "quality",
+          "category": "final_response_mismatch",
+          "reason": "quality: final response mismatch: text mismatch: source not-pong and target pong do not match"
+        },
+        {
+          "case_id": "train-case-3",
+          "metric_name": "quality",
+          "category": "final_response_mismatch",
+          "reason": "quality: final response mismatch: text mismatch: source not-pong and target pong do not match"
+        }
+      ],
+      "train": {
+        "eval_set_id": "regression-train",
+        "score": 0.6666666666666666,
+        "passed": false,
+        "cases": [
+          {
+            "id": "train-case-1",
+            "score": 1,
+            "passed": true,
+            "metrics": [
+              {
+                "name": "quality",
+                "score": 1,
+                "threshold": 1,
+                "passed": true,
+                "evaluated": true
+              },
+              {
+                "name": "tool_trajectory_avg_score",
+                "score": 1,
+                "threshold": 1,
+                "passed": true,
+                "evaluated": true
+              }
+            ]
+          },
+          {
+            "id": "train-case-2",
+            "score": 0.5,
+            "passed": false,
+            "metrics": [
+              {
+                "name": "quality",
+                "score": 0,
+                "threshold": 1,
+                "passed": false,
+                "evaluated": true,
+                "reason": "final response mismatch: text mismatch: source not-pong and target pong do not match"
+              },
+              {
+                "name": "tool_trajectory_avg_score",
+                "score": 1,
+                "threshold": 1,
+                "passed": true,
+                "evaluated": true
+              }
+            ]
+          },
+          {
+            "id": "train-case-3",
+            "score": 0.5,
+            "passed": false,
+            "metrics": [
+              {
+                "name": "quality",
+                "score": 0,
+                "threshold": 1,
+                "passed": false,
+                "evaluated": true,
+                "reason": "final response mismatch: text mismatch: source not-pong and target pong do not match"
+              },
+              {
+                "name": "tool_trajectory_avg_score",
+                "score": 1,
+                "threshold": 1,
+                "passed": true,
+                "evaluated": true
+              }
+            ]
+          }
+        ]
+      },
+      "validation": {
+        "eval_set_id": "regression-validation",
+        "score": 0.6666666666666666,
+        "passed": false,
+        "cases": [
+          {
+            "id": "validation-case-1",
+            "score": 1,
+            "passed": true,
+            "metrics": [
+              {
+                "name": "quality",
+                "score": 1,
+                "threshold": 1,
+                "passed": true,
+                "evaluated": true
+              },
+              {
+                "name": "tool_trajectory_avg_score",
+                "score": 1,
+                "threshold": 1,
+                "passed": true,
+                "evaluated": true
+              }
+            ]
+          },
+          {
+            "id": "validation-case-2",
+            "score": 0.5,
+            "passed": false,
+            "metrics": [
+              {
+                "name": "quality",
+                "score": 0,
+                "threshold": 1,
+                "passed": false,
+                "evaluated": true,
+                "reason": "final response mismatch: text mismatch: source not-pong and target pong do not match"
+              },
+              {
+                "name": "tool_trajectory_avg_score",
+                "score": 1,
+                "threshold": 1,
+                "passed": true,
+                "evaluated": true
+              }
+            ]
+          },
+          {
+            "id": "validation-case-3",
+            "score": 0.5,
+            "passed": false,
+            "metrics": [
+              {
+                "name": "quality",
+                "score": 0,
+                "threshold": 1,
+                "passed": false,
+                "evaluated": true,
+                "reason": "final response mismatch: text mismatch: source not-pong and target pong do not match"
+              },
+              {
+                "name": "tool_trajectory_avg_score",
+                "score": 1,
+                "threshold": 1,
+                "passed": true,
+                "evaluated": true
+              }
+            ]
+          }
+        ]
+      },
+      "train_delta": {
+        "eval_set_id": "regression-train",
+        "kind": "unchanged",
+        "score_delta": 0
+      },
+      "validation_delta": {
+        "eval_set_id": "regression-validation",
+        "kind": "unchanged",
+        "score_delta": 0
+      },
+      "validation_attribution": {
+        "failures": [
+          {
+            "case_id": "validation-case-2",
+            "category": "final_response_mismatch",
+            "metric_names": [
+              "quality"
+            ],
+            "reason": "quality: final response mismatch: text mismatch: source not-pong and target pong do not match"
+          },
+          {
+            "case_id": "validation-case-3",
+            "category": "final_response_mismatch",
+            "metric_names": [
+              "quality"
+            ],
+            "reason": "quality: final response mismatch: text mismatch: source not-pong and target pong do not match"
+          }
+        ],
+        "counts": {
+          "final_response_mismatch": 2
+        }
+      },
+      "gate": {
+        "accepted": false,
+        "reasons": [
+          "validation score gain 0.000000 is below required 0.300000"
+        ]
+      },
+      "serving_cost": {
+        "model_calls": 12,
+        "tokens": 60,
+        "latency_ms": 24
+      },
+      "optimization_cost": {
+        "model_calls": 22,
+        "tokens": 110,
+        "latency_ms": 44
+      }
+    },
+    {
+      "number": 2,
+      "input_prompt": "Reply with pong only for basic and short ping requests. fixture:baseline",
+      "candidate_prompt": "Optimize only the training cases. fixture:train-only",
+      "hints": [
+        {
+          "case_id": "train-case-2",
+          "metric_name": "quality",
+          "category": "final_response_mismatch",
+          "reason": "quality: final response mismatch: text mismatch: source not-pong and target pong do not match"
+        },
+        {
+          "case_id": "train-case-3",
+          "metric_name": "quality",
+          "category": "final_response_mismatch",
+          "reason": "quality: final response mismatch: text mismatch: source not-pong and target pong do not match"
+        }
+      ],
+      "train": {
+        "eval_set_id": "regression-train",
+        "score": 1,
+        "passed": true,
+        "cases": [
+          {
+            "id": "train-case-1",
+            "score": 1,
+            "passed": true,
+            "metrics": [
+              {
+                "name": "quality",
+                "score": 1,
+                "threshold": 1,
+                "passed": true,
+                "evaluated": true
+              },
+              {
+                "name": "tool_trajectory_avg_score",
+                "score": 1,
+                "threshold": 1,
+                "passed": true,
+                "evaluated": true
+              }
+            ]
+          },
+          {
+            "id": "train-case-2",
+            "score": 1,
+            "passed": true,
+            "metrics": [
+              {
+                "name": "quality",
+                "score": 1,
+                "threshold": 1,
+                "passed": true,
+                "evaluated": true
+              },
+              {
+                "name": "tool_trajectory_avg_score",
+                "score": 1,
+                "threshold": 1,
+                "passed": true,
+                "evaluated": true
+              }
+            ]
+          },
+          {
+            "id": "train-case-3",
+            "score": 1,
+            "passed": true,
+            "metrics": [
+              {
+                "name": "quality",
+                "score": 1,
+                "threshold": 1,
+                "passed": true,
+                "evaluated": true
+              },
+              {
+                "name": "tool_trajectory_avg_score",
+                "score": 1,
+                "threshold": 1,
+                "passed": true,
+                "evaluated": true
+              }
+            ]
+          }
+        ]
+      },
+      "validation": {
+        "eval_set_id": "regression-validation",
+        "score": 0.5,
+        "passed": false,
+        "cases": [
+          {
+            "id": "validation-case-1",
+            "score": 0.5,
+            "passed": false,
+            "metrics": [
+              {
+                "name": "quality",
+                "score": 0,
+                "threshold": 1,
+                "passed": false,
+                "evaluated": true,
+                "reason": "final response mismatch: text mismatch: source not-pong and target pong do not match"
+              },
+              {
+                "name": "tool_trajectory_avg_score",
+                "score": 1,
+                "threshold": 1,
+                "passed": true,
+                "evaluated": true
+              }
+            ]
+          },
+          {
+            "id": "validation-case-2",
+            "score": 0.5,
+            "passed": false,
+            "metrics": [
+              {
+                "name": "quality",
+                "score": 0,
+                "threshold": 1,
+                "passed": false,
+                "evaluated": true,
+                "reason": "final response mismatch: text mismatch: source not-pong and target pong do not match"
+              },
+              {
+                "name": "tool_trajectory_avg_score",
+                "score": 1,
+                "threshold": 1,
+                "passed": true,
+                "evaluated": true
+              }
+            ]
+          },
+          {
+            "id": "validation-case-3",
+            "score": 0.5,
+            "passed": false,
+            "metrics": [
+              {
+                "name": "quality",
+                "score": 0,
+                "threshold": 1,
+                "passed": false,
+                "evaluated": true,
+                "reason": "final response mismatch: text mismatch: source not-pong and target pong do not match"
+              },
+              {
+                "name": "tool_trajectory_avg_score",
+                "score": 1,
+                "threshold": 1,
+                "passed": true,
+                "evaluated": true
+              }
+            ]
+          }
+        ]
+      },
+      "train_delta": {
+        "eval_set_id": "regression-train",
+        "kind": "newly_passed",
+        "score_delta": 0.33333333333333337,
+        "changed_cases": [
+          {
+            "id": "train-case-2",
+            "kind": "newly_passed",
+            "baseline_score": 0.5,
+            "candidate_score": 1,
+            "score_delta": 0.5,
+            "changed_metrics": [
+              {
+                "name": "quality",
+                "kind": "newly_passed",
+                "baseline_score": 0,
+                "candidate_score": 1,
+                "score_delta": 1,
+                "baseline_evaluated": true,
+                "candidate_evaluated": true
+              }
+            ]
+          },
+          {
+            "id": "train-case-3",
+            "kind": "newly_passed",
+            "baseline_score": 0.5,
+            "candidate_score": 1,
+            "score_delta": 0.5,
+            "changed_metrics": [
+              {
+                "name": "quality",
+                "kind": "newly_passed",
+                "baseline_score": 0,
+                "candidate_score": 1,
+                "score_delta": 1,
+                "baseline_evaluated": true,
+                "candidate_evaluated": true
+              }
+            ]
+          }
+        ]
+      },
+      "validation_delta": {
+        "eval_set_id": "regression-validation",
+        "kind": "regressed",
+        "score_delta": -0.16666666666666663,
+        "changed_cases": [
+          {
+            "id": "validation-case-1",
+            "kind": "newly_failed",
+            "baseline_score": 1,
+            "candidate_score": 0.5,
+            "score_delta": -0.5,
+            "changed_metrics": [
+              {
+                "name": "quality",
+                "kind": "newly_failed",
+                "baseline_score": 1,
+                "candidate_score": 0,
+                "score_delta": -1,
+                "baseline_evaluated": true,
+                "candidate_evaluated": true
+              }
+            ]
+          }
+        ]
+      },
+      "validation_attribution": {
+        "failures": [
+          {
+            "case_id": "validation-case-1",
+            "category": "final_response_mismatch",
+            "metric_names": [
+              "quality"
+            ],
+            "reason": "quality: final response mismatch: text mismatch: source not-pong and target pong do not match"
+          },
+          {
+            "case_id": "validation-case-2",
+            "category": "final_response_mismatch",
+            "metric_names": [
+              "quality"
+            ],
+            "reason": "quality: final response mismatch: text mismatch: source not-pong and target pong do not match"
+          },
+          {
+            "case_id": "validation-case-3",
+            "category": "final_response_mismatch",
+            "metric_names": [
+              "quality"
+            ],
+            "reason": "quality: final response mismatch: text mismatch: source not-pong and target pong do not match"
+          }
+        ],
+        "counts": {
+          "final_response_mismatch": 3
+        }
+      },
+      "gate": {
+        "accepted": false,
+        "reasons": [
+          "validation score gain -0.166667 is below required 0.300000",
+          "hard metric \"quality\" newly failed in case \"validation-case-1\"",
+          "metric \"quality\" in case \"validation-case-1\" dropped 1.000000"
+        ]
+      },
+      "serving_cost": {
+        "model_calls": 12,
+        "tokens": 60,
+        "latency_ms": 24
+      },
+      "optimization_cost": {
+        "model_calls": 22,
+        "tokens": 110,
+        "latency_ms": 44
+      }
+    },
+    {
+      "number": 3,
+      "input_prompt": "Reply with pong only for basic and short ping requests. fixture:baseline",
+      "candidate_prompt": "Reply with pong for every valid ping request. fixture:balanced",
+      "hints": [
+        {
+          "case_id": "train-case-2",
+          "metric_name": "quality",
+          "category": "final_response_mismatch",
+          "reason": "quality: final response mismatch: text mismatch: source not-pong and target pong do not match"
+        },
+        {
+          "case_id": "train-case-3",
+          "metric_name": "quality",
+          "category": "final_response_mismatch",
+          "reason": "quality: final response mismatch: text mismatch: source not-pong and target pong do not match"
+        }
+      ],
+      "train": {
+        "eval_set_id": "regression-train",
+        "score": 1,
+        "passed": true,
+        "cases": [
+          {
+            "id": "train-case-1",
+            "score": 1,
+            "passed": true,
+            "metrics": [
+              {
+                "name": "quality",
+                "score": 1,
+                "threshold": 1,
+                "passed": true,
+                "evaluated": true
+              },
+              {
+                "name": "tool_trajectory_avg_score",
+                "score": 1,
+                "threshold": 1,
+                "passed": true,
+                "evaluated": true
+              }
+            ]
+          },
+          {
+            "id": "train-case-2",
+            "score": 1,
+            "passed": true,
+            "metrics": [
+              {
+                "name": "quality",
+                "score": 1,
+                "threshold": 1,
+                "passed": true,
+                "evaluated": true
+              },
+              {
+                "name": "tool_trajectory_avg_score",
+                "score": 1,
+                "threshold": 1,
+                "passed": true,
+                "evaluated": true
+              }
+            ]
+          },
+          {
+            "id": "train-case-3",
+            "score": 1,
+            "passed": true,
+            "metrics": [
+              {
+                "name": "quality",
+                "score": 1,
+                "threshold": 1,
+                "passed": true,
+                "evaluated": true
+              },
+              {
+                "name": "tool_trajectory_avg_score",
+                "score": 1,
+                "threshold": 1,
+                "passed": true,
+                "evaluated": true
+              }
+            ]
+          }
+        ]
+      },
+      "validation": {
+        "eval_set_id": "regression-validation",
+        "score": 1,
+        "passed": true,
+        "cases": [
+          {
+            "id": "validation-case-1",
+            "score": 1,
+            "passed": true,
+            "metrics": [
+              {
+                "name": "quality",
+                "score": 1,
+                "threshold": 1,
+                "passed": true,
+                "evaluated": true
+              },
+              {
+                "name": "tool_trajectory_avg_score",
+                "score": 1,
+                "threshold": 1,
+                "passed": true,
+                "evaluated": true
+              }
+            ]
+          },
+          {
+            "id": "validation-case-2",
+            "score": 1,
+            "passed": true,
+            "metrics": [
+              {
+                "name": "quality",
+                "score": 1,
+                "threshold": 1,
+                "passed": true,
+                "evaluated": true
+              },
+              {
+                "name": "tool_trajectory_avg_score",
+                "score": 1,
+                "threshold": 1,
+                "passed": true,
+                "evaluated": true
+              }
+            ]
+          },
+          {
+            "id": "validation-case-3",
+            "score": 1,
+            "passed": true,
+            "metrics": [
+              {
+                "name": "quality",
+                "score": 1,
+                "threshold": 1,
+                "passed": true,
+                "evaluated": true
+              },
+              {
+                "name": "tool_trajectory_avg_score",
+                "score": 1,
+                "threshold": 1,
+                "passed": true,
+                "evaluated": true
+              }
+            ]
+          }
+        ]
+      },
+      "train_delta": {
+        "eval_set_id": "regression-train",
+        "kind": "newly_passed",
+        "score_delta": 0.33333333333333337,
+        "changed_cases": [
+          {
+            "id": "train-case-2",
+            "kind": "newly_passed",
+            "baseline_score": 0.5,
+            "candidate_score": 1,
+            "score_delta": 0.5,
+            "changed_metrics": [
+              {
+                "name": "quality",
+                "kind": "newly_passed",
+                "baseline_score": 0,
+                "candidate_score": 1,
+                "score_delta": 1,
+                "baseline_evaluated": true,
+                "candidate_evaluated": true
+              }
+            ]
+          },
+          {
+            "id": "train-case-3",
+            "kind": "newly_passed",
+            "baseline_score": 0.5,
+            "candidate_score": 1,
+            "score_delta": 0.5,
+            "changed_metrics": [
+              {
+                "name": "quality",
+                "kind": "newly_passed",
+                "baseline_score": 0,
+                "candidate_score": 1,
+                "score_delta": 1,
+                "baseline_evaluated": true,
+                "candidate_evaluated": true
+              }
+            ]
+          }
+        ]
+      },
+      "validation_delta": {
+        "eval_set_id": "regression-validation",
+        "kind": "newly_passed",
+        "score_delta": 0.33333333333333337,
+        "changed_cases": [
+          {
+            "id": "validation-case-2",
+            "kind": "newly_passed",
+            "baseline_score": 0.5,
+            "candidate_score": 1,
+            "score_delta": 0.5,
+            "changed_metrics": [
+              {
+                "name": "quality",
+                "kind": "newly_passed",
+                "baseline_score": 0,
+                "candidate_score": 1,
+                "score_delta": 1,
+                "baseline_evaluated": true,
+                "candidate_evaluated": true
+              }
+            ]
+          },
+          {
+            "id": "validation-case-3",
+            "kind": "newly_passed",
+            "baseline_score": 0.5,
+            "candidate_score": 1,
+            "score_delta": 0.5,
+            "changed_metrics": [
+              {
+                "name": "quality",
+                "kind": "newly_passed",
+                "baseline_score": 0,
+                "candidate_score": 1,
+                "score_delta": 1,
+                "baseline_evaluated": true,
+                "candidate_evaluated": true
+              }
+            ]
+          }
+        ]
+      },
+      "validation_attribution": {
+        "failures": null,
+        "counts": {}
+      },
+      "gate": {
+        "accepted": true,
+        "reasons": null
+      },
+      "serving_cost": {
+        "model_calls": 12,
+        "tokens": 60,
+        "latency_ms": 24
+      },
+      "optimization_cost": {
+        "model_calls": 22,
+        "tokens": 110,
+        "latency_ms": 44
+      }
+    }
+  ],
+  "decision": {
+    "accepted": true,
+    "write_back_recommended": true,
+    "reason": "candidate accepted by regression gate"
+  },
+  "cost": {
+    "model_calls": 114,
+    "tokens": 570,
+    "latency_ms": 228
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "candidates": ["Rephrase without changing behavior. fixture:ineffective", "Optimize only the training cases. fixture:train-only", "Reply with pong for every valid ping request. fixture:balanced"],
+  "maxRounds": 3,
+  "gate": {
+    "minValidationGain": 0.3,
+    "rejectNewHardFail": true,
+    "hardMetrics": ["quality"],
+    "criticalCases": ["validation-case-3"],
+    "maxMetricDrop": 0.5,
+    "maxModelCalls": 40,
+    "maxTokens": 200
+  }
+}

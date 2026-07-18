@@ -1,0 +1,1 @@
+Reply with pong only for basic and short ping requests. fixture:baseline
