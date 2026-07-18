@@ -93,6 +93,8 @@ const (
 	flagMaxHistoryRuns                                = "max-history-runs"
 	flagMaxLLMCalls                                   = "max-llm-calls"
 	flagFinalizeBeforeMaxLLMCalls                     = "finalize-before-max-llm-calls"
+	flagDeadlineFinalizationWindow                    = "deadline-finalization-window"
+	flagDeadlineFinalizationMaxInputTokens            = "deadline-finalization-max-input-tokens"
 	flagMaxToolIterations                             = "max-tool-iterations"
 	flagOpenAIMaxRetries                              = "openai-max-retries"
 	flagOpenAITimeout                                 = "openai-timeout"
@@ -194,6 +196,8 @@ type runOptions struct {
 	MaxHistoryRuns                                int
 	MaxLLMCalls                                   int
 	FinalizeBeforeMaxLLMCalls                     bool
+	DeadlineFinalizationWindow                    time.Duration
+	DeadlineFinalizationMaxInputTokens            int
 	MaxToolIterations                             int
 	PreloadMemory                                 int
 	ToolCallArgumentsJSONRepair                   bool
@@ -487,6 +491,20 @@ func parseRunOptions(args []string) (runOptions, error) {
 		flagFinalizeBeforeMaxLLMCalls,
 		false,
 		"On the last allowed LLM call, disable tools and ask the model to finalize",
+	)
+	fs.DurationVar(
+		&opts.DeadlineFinalizationWindow,
+		flagDeadlineFinalizationWindow,
+		0,
+		"Disable tools and ask the model to finalize when request deadline "+
+			"is within this window (0 disables)",
+	)
+	fs.IntVar(
+		&opts.DeadlineFinalizationMaxInputTokens,
+		flagDeadlineFinalizationMaxInputTokens,
+		0,
+		"Approximate input-token budget for deadline finalization requests "+
+			"(0 keeps the full context)",
 	)
 	fs.IntVar(
 		&opts.MaxToolIterations,
@@ -1242,13 +1260,15 @@ type agentRunConfig struct {
 	MaxHistoryRuns                                *int  `yaml:"max_history_runs,omitempty"`
 	// MaxLLMCalls limits agent-facing model calls per invocation. Auxiliary
 	// session summary and auto-memory extraction calls are excluded.
-	MaxLLMCalls                 *int  `yaml:"max_llm_calls,omitempty"`
-	FinalizeBeforeMaxLLMCalls   *bool `yaml:"finalize_before_max_llm_calls,omitempty"`
-	MaxToolIterations           *int  `yaml:"max_tool_iterations,omitempty"`
-	PreloadMemory               *int  `yaml:"preload_memory,omitempty"`
-	ToolCallArgumentsJSONRepair *bool `yaml:"tool_call_arguments_json_repair,omitempty"`
-	DisablePostToolPrompt       *bool `yaml:"disable_post_tool_prompt,omitempty"`
-	DisablePostToolPromptCamel  *bool `yaml:"disablePostToolPrompt,omitempty"`
+	MaxLLMCalls                        *int    `yaml:"max_llm_calls,omitempty"`
+	FinalizeBeforeMaxLLMCalls          *bool   `yaml:"finalize_before_max_llm_calls,omitempty"`
+	DeadlineFinalizationWindow         *string `yaml:"deadline_finalization_window,omitempty"`
+	DeadlineFinalizationMaxInputTokens *int    `yaml:"deadline_finalization_max_input_tokens,omitempty"`
+	MaxToolIterations                  *int    `yaml:"max_tool_iterations,omitempty"`
+	PreloadMemory                      *int    `yaml:"preload_memory,omitempty"`
+	ToolCallArgumentsJSONRepair        *bool   `yaml:"tool_call_arguments_json_repair,omitempty"`
+	DisablePostToolPrompt              *bool   `yaml:"disable_post_tool_prompt,omitempty"`
+	DisablePostToolPromptCamel         *bool   `yaml:"disablePostToolPrompt,omitempty"`
 
 	Instruction      *string  `yaml:"instruction,omitempty"`
 	InstructionFiles []string `yaml:"instruction_files,omitempty"`
@@ -1772,6 +1792,35 @@ func (cfg *fileConfig) apply(
 		if cfg.Agent.FinalizeBeforeMaxLLMCalls != nil &&
 			!flagWasSet(set, flagFinalizeBeforeMaxLLMCalls) {
 			opts.FinalizeBeforeMaxLLMCalls = *cfg.Agent.FinalizeBeforeMaxLLMCalls
+		}
+		if cfg.Agent.DeadlineFinalizationWindow != nil &&
+			!flagWasSet(set, flagDeadlineFinalizationWindow) {
+			dur, err := parseDuration(
+				*cfg.Agent.DeadlineFinalizationWindow,
+			)
+			if err != nil {
+				return fmt.Errorf(
+					"agent.deadline_finalization_window: %w",
+					err,
+				)
+			}
+			if dur < 0 {
+				return fmt.Errorf(
+					"agent.deadline_finalization_window must be >= 0",
+				)
+			}
+			opts.DeadlineFinalizationWindow = dur
+		}
+		if cfg.Agent.DeadlineFinalizationMaxInputTokens != nil &&
+			!flagWasSet(set, flagDeadlineFinalizationMaxInputTokens) {
+			v := *cfg.Agent.DeadlineFinalizationMaxInputTokens
+			if v < 0 {
+				return fmt.Errorf(
+					"agent.deadline_finalization_max_input_tokens " +
+						"must be >= 0",
+				)
+			}
+			opts.DeadlineFinalizationMaxInputTokens = v
 		}
 		if cfg.Agent.MaxToolIterations != nil &&
 			!flagWasSet(set, flagMaxToolIterations) {
@@ -2952,6 +3001,18 @@ func finalizeRunOptions(opts *runOptions) error {
 		return fmt.Errorf(
 			"invalid max LLM calls: %d",
 			opts.MaxLLMCalls,
+		)
+	}
+	if opts.DeadlineFinalizationWindow < 0 {
+		return fmt.Errorf(
+			"invalid deadline finalization window: %s",
+			opts.DeadlineFinalizationWindow,
+		)
+	}
+	if opts.DeadlineFinalizationMaxInputTokens < 0 {
+		return fmt.Errorf(
+			"invalid deadline finalization max input tokens: %d",
+			opts.DeadlineFinalizationMaxInputTokens,
 		)
 	}
 	opts.EvolutionSkillScopeMode = skill.NormalizeSkillScopeMode(
