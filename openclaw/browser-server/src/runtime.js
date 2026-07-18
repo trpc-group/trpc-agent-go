@@ -10,6 +10,13 @@ function textResult(text, extra = {}) {
   };
 }
 
+function withPageURL(result, page) {
+  return {
+    ...result,
+    url: page?.url?.() || ""
+  };
+}
+
 export class BrowserRuntime {
   constructor(config) {
     this.config = config;
@@ -122,7 +129,10 @@ export class BrowserRuntime {
       return this.chromeRelay.execute(tab.targetId, "navigate", { url });
     }
     const result = await this.hostProfile.openTab(url);
-    return textResult(`Opened tab ${result.targetId}.`, result);
+    return withPageURL(
+      textResult(`Opened tab ${result.targetId}.`, result),
+      this.hostProfile.currentPage()
+    );
   }
 
   async focus(profile, targetId) {
@@ -167,7 +177,11 @@ export class BrowserRuntime {
         payload
       );
     }
-    return this.hostProfile.navigate(payload.targetId, payload.url);
+    const result = await this.hostProfile.navigate(
+      payload.targetId,
+      payload.url
+    );
+    return withPageURL(result, this.hostProfile.currentPage());
   }
 
   async console(profile, payload) {
@@ -370,9 +384,10 @@ export class BrowserRuntime {
         payload.request || payload
       );
     }
-    return this.hostProfile.act(
+    const result = await this.hostProfile.act(
       payload.targetId || payload.request?.targetId,
       payload.request || payload
     );
+    return withPageURL(result, this.hostProfile.currentPage());
   }
 }

@@ -32,14 +32,23 @@ The tool provides access to scholarly articles from arXiv repository:
 **Input:**
 ```json
 {
-  "query": "string",
-  "id_list": ["string"],
-  "max_results": 5,
-  "sort_by": "relevance",
-  "sort_order": "descending",
-  "read_arxiv_papers": false
+  "search": {
+    "query": "string",
+    "id_list": ["string"],
+    "max_results": 5,
+    "sort_by": "relevance",
+    "sort_order": "descending",
+    "submitted_date_from": "2025-01-01",
+    "submitted_date_to": "2025-12-31"
+  },
+  "read_arxiv_papers": true,
+  "max_content_runes": 20000
 }
 ```
+
+When PDF reading is enabled, `max_content_runes` limits the returned text for
+each article. Non-positive values use the default of 20,000 runes, and values
+above 200,000 are capped at 200,000.
 
 **Output:**
 ```json
@@ -59,12 +68,21 @@ The tool provides access to scholarly articles from arXiv repository:
       "content": [
         {
           "page": 1,
-          "text": "string"
+          "text": "partial page text",
+          "truncated": true
         }
-      ]
+      ],
+      "content_runes": 58321,
+      "returned_content_runes": 20000,
+      "content_truncated": true
     }
 ]
 ```
+
+`content_truncated` means the article's `content` is partial rather than the
+complete extracted PDF text. `content_runes` is the full extracted size and
+`returned_content_runes` is the size returned within the configured budget. A
+page-level `truncated` flag identifies the page where the budget was exhausted.
 
 **What Works (Scholarly Article Search):**
 - **Keyword Search**: Search by research topics, concepts, techniques
@@ -72,7 +90,7 @@ The tool provides access to scholarly articles from arXiv repository:
 - **Category Search**: Browse by arXiv categories (cs.AI, cs.CV, math.NA, etc.)
 - **ID Search**: Look up specific arXiv IDs (e.g., "2401.12345")
 - **Date Filtering**: Search by publication date ranges
-- **PDF Content**: Optionally read and extract text from PDF articles
+- **PDF Content**: Optionally return budgeted PDF text with explicit truncation metadata
 - **Multi-field Search**: Combine title, abstract, author searches
 
 **What Doesn't Work (Limitations):**

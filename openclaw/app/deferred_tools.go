@@ -57,6 +57,7 @@ func baseLLMAgentOptions(
 ) []llmagent.Option {
 	opts := []llmagent.Option{
 		llmagent.WithModel(mdl),
+		llmagent.WithAgentCallbacks(blockedRouteAgentCallbacks()),
 		llmagent.WithInstruction(instruction),
 		llmagent.WithGlobalInstruction(systemPrompt),
 		llmagent.WithGenerationConfig(genConfig),
