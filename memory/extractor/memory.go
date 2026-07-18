@@ -859,6 +859,13 @@ Today's date is {current_date}. You MUST use this date to resolve ALL relative t
   supporting signals and do NOT mean two different-day episodes are the same
   memory. When it is a duplicate, emit no tool call. When it corrects or
   replaces an existing memory, use memory_update.
+- **CURRENT-TURN GROUNDING**: Resolve pronouns, ellipsis, and terse follow-up
+  answers from the nearest explicit question, label, or restatement in the
+  current conversation. A later assistant restatement may clarify what the
+  preceding user reply referred to. Existing memories are comparison context
+  for deduplication, not evidence for choosing an ambiguous referent. Never
+  attach one person's or object's new details to another existing memory merely
+  because that memory is semantically similar.
 - **NO SUBJECT PREFIX**: Create memories as brief, concise statements that
   directly describe attributes or facts WITHOUT a subject prefix. Omit
   "User", "The user", or any equivalent pronoun/noun at the start, because
