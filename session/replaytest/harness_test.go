@@ -7,8 +7,12 @@ package replaytest
 
 import (
 	"context"
+	"fmt"
+	"sync/atomic"
 	"testing"
 )
+
+var inMemoryBackendSeq atomic.Int64
 
 func openInMemoryBackend(t *testing.T) NamedBackend {
 	t.Helper()
@@ -22,8 +26,9 @@ func openInMemoryBackend(t *testing.T) NamedBackend {
 			_ = mem.Close()
 		}
 	})
+	n := inMemoryBackendSeq.Add(1)
 	return NamedBackend{
-		Name:           "inmemory",
+		Name:           fmt.Sprintf("inmemory-%d", n),
 		Profile:        profile,
 		SessionService: sess,
 		MemoryService:  mem,
@@ -121,5 +126,36 @@ func TestRun_RejectsEmptyAllowedRule(t *testing.T) {
 	}})
 	if err == nil {
 		t.Fatal("expected validation error for empty AllowedDiff rule")
+	}
+}
+
+func TestRun_RejectsDuplicateBackendNames(t *testing.T) {
+	h := NewHarness(DefaultHarnessOpts())
+	b1 := openInMemoryBackend(t)
+	b2 := openInMemoryBackend(t)
+	b1.Name = "same"
+	b2.Name = "same"
+	h.AddBackend(b1)
+	h.AddBackend(b2)
+	_, err := h.Run(context.Background(), []ReplayCase{CaseSingleTurnText()})
+	if err == nil {
+		t.Fatal("expected duplicate backend name error")
+	}
+}
+
+func TestRecoveryDuplicateEvent_LogicalKeyShared(t *testing.T) {
+	h := NewHarness(DefaultHarnessOpts())
+	h.AddBackend(openInMemoryBackend(t))
+	h.AddBackend(openInMemoryBackend(t))
+	report, err := h.Run(context.Background(), []ReplayCase{CaseRecoveryDuplicateEvent()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.FailedCases != 0 {
+		for _, r := range report.Results {
+			if r.Status == StatusFailed {
+				t.Fatalf("recovery case failed: %+v", r.Diffs)
+			}
+		}
 	}
 }

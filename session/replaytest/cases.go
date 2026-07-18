@@ -184,35 +184,53 @@ func CaseTrackEvents() ReplayCase {
 	}
 }
 
-// CaseConcurrentInterleaved covers branch-local order under interleaving.
+// CaseConcurrentInterleaved covers branch-local order under true concurrent appends.
+// Branches start together via ParallelGroupStep; each branch keeps local order.
 func CaseConcurrentInterleaved() ReplayCase {
 	key := SessionKeyFor("concurrent_interleaved")
 	return ReplayCase{
 		Name:             "concurrent_interleaved",
 		EventCompareMode: EventCompareBranchLocal,
-		Description:      "interleaved branches keep local order",
+		Description:      "interleaved branches keep local order under concurrent append",
 		Steps: []Step{
-			AppendEventStep{StepKey: "c10.a.1", SessionKey: key, Event: BranchEvent("c10.a.1", "branchA", "a1")},
-			AppendEventStep{StepKey: "c10.b.1", SessionKey: key, Event: BranchEvent("c10.b.1", "branchB", "b1")},
-			AppendEventStep{StepKey: "c10.a.2", SessionKey: key, Event: BranchEvent("c10.a.2", "branchA", "a2")},
-			AppendEventStep{StepKey: "c10.b.2", SessionKey: key, Event: BranchEvent("c10.b.2", "branchB", "b2")},
+			// Ensure session exists before concurrent writers attach.
+			AppendEventStep{StepKey: "c10.seed", SessionKey: key, Event: UserEvent("c10.seed", "seed")},
+			ParallelGroupStep{
+				StepKey: "c10.parallel",
+				Branches: [][]Step{
+					{
+						AppendEventStep{StepKey: "c10.a.1", SessionKey: key, Event: BranchEvent("c10.a.1", "branchA", "a1")},
+						AppendEventStep{StepKey: "c10.a.2", SessionKey: key, Event: BranchEvent("c10.a.2", "branchA", "a2")},
+					},
+					{
+						AppendEventStep{StepKey: "c10.b.1", SessionKey: key, Event: BranchEvent("c10.b.1", "branchB", "b1")},
+						AppendEventStep{StepKey: "c10.b.2", SessionKey: key, Event: BranchEvent("c10.b.2", "branchB", "b2")},
+					},
+				},
+			},
 			GetSessionStep{StepKey: "c10.get", SessionKey: key},
 		},
 		AllowedDiffs: []AllowedDiff{
+			// Global interleaving is nondeterministic under concurrency; branch-local
+			// mode already relaxes global order while preserving per-branch sequence.
 			{PathPattern: "events[*].id", Rule: RuleIgnore, Reason: "global order may interleave differently across backends"},
 		},
 	}
 }
 
-// CaseRecoveryDuplicateEvent covers duplicate logical event writes.
+// CaseRecoveryDuplicateEvent covers duplicate logical event writes after a reload boundary.
+// Both appends share the same LogicalKey so normalizer/comparator treat them as the same
+// logical identity; backends that do not dedupe will retain two physical events.
 func CaseRecoveryDuplicateEvent() ReplayCase {
 	key := SessionKeyFor("recovery_duplicate_event")
+	logical := "c11.user.1"
 	return ReplayCase{
 		Name:        "recovery_duplicate_event",
 		Description: "duplicate logical event append after recovery",
 		Steps: []Step{
-			AppendEventStep{StepKey: "c11.user.1", SessionKey: key, Event: UserEvent("c11.user.1", "once")},
-			AppendEventStep{StepKey: "c11.user.1.dup", SessionKey: key, Event: UserEvent("c11.user.1", "once")},
+			AppendEventStep{StepKey: "c11.user.1", SessionKey: key, LogicalKey: logical, Event: UserEvent(logical, "once")},
+			ReloadSessionStep{StepKey: "c11.reload", SessionKey: key},
+			AppendEventStep{StepKey: "c11.user.1.dup", SessionKey: key, LogicalKey: logical, Event: UserEvent(logical, "once")},
 			GetSessionStep{StepKey: "c11.get", SessionKey: key},
 		},
 	}

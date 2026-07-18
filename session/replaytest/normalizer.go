@@ -224,14 +224,10 @@ func cloneMemory(in *memory.Entry) *memory.Entry {
 }
 
 func normalizeState(state session.StateMap) {
-	if state == nil {
-		return
-	}
-	for k := range state {
-		if strings.HasPrefix(k, "_") {
-			delete(state, k)
-		}
-	}
+	// Intentionally keep all keys, including underscore-prefixed control keys
+	// (e.g. _node_metadata, __trpc_agent_await_user_reply_route__). Callers that
+	// need to ignore backend-specific nondeterministic keys should use AllowedDiff.
+	_ = state
 }
 
 func eventLogicalKey(e *event.Event, index int) string {
@@ -289,19 +285,24 @@ func normalizeMemory(entry *memory.Entry) {
 	}
 	sort.Strings(entry.Memory.Topics)
 	sort.Strings(entry.Memory.Participants)
+	// Audit timestamps are assigned by backends via time.Now() and are not
+	// semantically comparable across independent services. Canonicalize them.
+	// Caller-supplied EventTime remains a semantic field (UTC only).
 	if !entry.CreatedAt.IsZero() {
-		entry.CreatedAt = entry.CreatedAt.UTC()
+		entry.CreatedAt = FixedTimestamp
 	}
 	if !entry.UpdatedAt.IsZero() {
-		entry.UpdatedAt = entry.UpdatedAt.UTC()
+		entry.UpdatedAt = FixedTimestamp
 	}
-	if entry.Memory.LastUpdated != nil && !entry.Memory.LastUpdated.IsZero() {
-		t := entry.Memory.LastUpdated.UTC()
-		entry.Memory.LastUpdated = &t
-	}
-	if entry.Memory.EventTime != nil && !entry.Memory.EventTime.IsZero() {
-		t := entry.Memory.EventTime.UTC()
-		entry.Memory.EventTime = &t
+	if entry.Memory != nil {
+		if entry.Memory.LastUpdated != nil && !entry.Memory.LastUpdated.IsZero() {
+			t := FixedTimestamp
+			entry.Memory.LastUpdated = &t
+		}
+		if entry.Memory.EventTime != nil && !entry.Memory.EventTime.IsZero() {
+			t := entry.Memory.EventTime.UTC()
+			entry.Memory.EventTime = &t
+		}
 	}
 	// Stable semantic ID so backends with random IDs still compare.
 	// Content alone is not enough when two memories share text but differ topics.

@@ -48,8 +48,8 @@ func TestNormalizer_EventIDAndPrivateState(t *testing.T) {
 	if !got.Equal(localTS.UTC()) {
 		t.Fatalf("timestamp=%v want %v", got, localTS.UTC())
 	}
-	if _, ok := out.Session.State["_secret"]; ok {
-		t.Fatal("private key not stripped")
+	if _, ok := out.Session.State["_secret"]; !ok {
+		t.Fatal("underscore state key should be preserved; use AllowedDiff to ignore")
 	}
 	if string(out.Session.State["color"]) != "red" {
 		t.Fatal("public state lost")
@@ -132,5 +132,66 @@ func TestNormalizer_MemoryStableID(t *testing.T) {
 	}
 	if out.Memories[0].Memory.Topics[0] != "a" && out.Memories[0].Memory.Topics[0] != "other" {
 		// topics sorted; first memory in sort may be "likes tea"/topics a,b or other
+	}
+}
+
+func TestNormalizer_KeepsUnderscoreStateKeys(t *testing.T) {
+	n := NewNormalizer()
+	in := &Snapshot{
+		Backend: "a",
+		Session: &session.Session{
+			State: session.StateMap{
+				"_node_metadata":                        []byte("meta"),
+				"__trpc_agent_await_user_reply_route__": []byte("route"),
+				"color":                                 []byte("red"),
+			},
+		},
+	}
+	out, err := n.Normalize(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := out.Session.State["_node_metadata"]; !ok {
+		t.Fatal("expected _node_metadata preserved")
+	}
+	if _, ok := out.Session.State["__trpc_agent_await_user_reply_route__"]; !ok {
+		t.Fatal("expected await route key preserved")
+	}
+	if string(out.Session.State["color"]) != "red" {
+		t.Fatal("color missing")
+	}
+}
+
+func TestNormalizer_CanonicalizesMemoryAuditTimestamps(t *testing.T) {
+	n := NewNormalizer()
+	ts1 := time.Unix(100, 0).UTC()
+	ts2 := time.Unix(200, 0).UTC()
+	eventT := time.Unix(50, 0).In(time.FixedZone("CST", 8*3600))
+	in := &Snapshot{
+		Backend: "a",
+		Memories: []*memory.Entry{{
+			ID:        "m1",
+			CreatedAt: ts1,
+			UpdatedAt: ts2,
+			Memory: &memory.Memory{
+				Memory: "x", LastUpdated: &ts2, EventTime: &eventT,
+			},
+		}},
+	}
+	out, err := n.Normalize(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !out.Memories[0].CreatedAt.Equal(FixedTimestamp) || !out.Memories[0].UpdatedAt.Equal(FixedTimestamp) {
+		t.Fatalf("audit timestamps not canonicalized: %+v", out.Memories[0])
+	}
+	if out.Memories[0].Memory.LastUpdated == nil || !out.Memories[0].Memory.LastUpdated.Equal(FixedTimestamp) {
+		t.Fatal("LastUpdated not canonicalized")
+	}
+	if out.Memories[0].Memory.EventTime == nil || out.Memories[0].Memory.EventTime.Location() != time.UTC {
+		t.Fatalf("EventTime not UTC: %+v", out.Memories[0].Memory.EventTime)
+	}
+	if !out.Memories[0].Memory.EventTime.Equal(eventT.UTC()) {
+		t.Fatalf("EventTime absolute changed: got %v want %v", out.Memories[0].Memory.EventTime, eventT.UTC())
 	}
 }

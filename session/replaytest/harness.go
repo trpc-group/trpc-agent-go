@@ -8,6 +8,7 @@ package replaytest
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -51,6 +52,9 @@ func (h *Harness) AddBackend(b NamedBackend) {
 
 // Run executes cases and returns an aggregated report.
 func (h *Harness) Run(ctx context.Context, cases []ReplayCase) (*Report, error) {
+	if err := validateBackends(h.backends); err != nil {
+		return nil, err
+	}
 	for _, tc := range cases {
 		if err := validateAllowedDiffs(tc); err != nil {
 			return nil, err
@@ -165,7 +169,26 @@ func (h *Harness) runCase(ctx context.Context, tc ReplayCase) (CaseResult, error
 	return cr, nil
 }
 
+func validateBackends(backends []NamedBackend) error {
+	seen := map[string]struct{}{}
+	for i, b := range backends {
+		name := b.Name
+		if name == "" {
+			name = b.Profile.Name
+		}
+		if name == "" {
+			return fmt.Errorf("backend[%d]: empty name", i)
+		}
+		if _, ok := seen[name]; ok {
+			return fmt.Errorf("duplicate backend name %q", name)
+		}
+		seen[name] = struct{}{}
+	}
+	return nil
+}
+
 func validateAllowedDiffs(tc ReplayCase) error {
+
 	for i, rule := range tc.AllowedDiffs {
 		switch rule.Rule {
 		case RuleIgnore, RuleWithinDelta, RuleNotEmpty, RuleSameType:
@@ -214,6 +237,7 @@ type caseExecutor struct {
 	backend  NamedBackend
 	sessions map[session.Key]*session.Session
 	snapshot *Snapshot
+	mu       sync.Mutex // protects sessions map under ParallelGroupStep
 }
 
 func (e *caseExecutor) execute(ctx context.Context, step Step) error {
@@ -238,24 +262,41 @@ func (e *caseExecutor) execute(ctx context.Context, step Step) error {
 		return e.listAppStates(ctx, s)
 	case ListUserStatesStep:
 		return e.listUserStates(ctx, s)
+	case ReloadSessionStep:
+		return e.reloadSession(ctx, s)
+	case ParallelGroupStep:
+		return e.parallelGroup(ctx, s)
 	default:
 		return fmt.Errorf("unknown step type %T", step)
 	}
 }
 
 func (e *caseExecutor) ensureSession(ctx context.Context, key session.Key) (*session.Session, error) {
+	e.mu.Lock()
 	if sess, ok := e.sessions[key]; ok && sess != nil {
+		e.mu.Unlock()
 		return sess, nil
 	}
+	e.mu.Unlock()
+	// Prefer backend as source of truth outside the lock (may block).
 	if existing, err := e.backend.SessionService.GetSession(ctx, key); err == nil && existing != nil {
+		e.mu.Lock()
 		e.sessions[key] = existing
+		e.mu.Unlock()
 		return existing, nil
 	}
 	sess, err := e.backend.SessionService.CreateSession(ctx, key, session.StateMap{})
 	if err != nil {
 		return nil, err
 	}
+	e.mu.Lock()
+	// Another worker may have created/cached concurrently; prefer existing cache.
+	if cached, ok := e.sessions[key]; ok && cached != nil {
+		e.mu.Unlock()
+		return cached, nil
+	}
 	e.sessions[key] = sess
+	e.mu.Unlock()
 	return sess, nil
 }
 
@@ -280,7 +321,11 @@ func (e *caseExecutor) appendEvent(ctx context.Context, step AppendEventStep) er
 	e.snapshot.SessionID = key.SessionID
 	evt := *step.Event
 	event.WithTag(step.StepKey)(&evt)
-	if err := event.SetExtension(&evt, EventLogicalKeyExtension, step.StepKey); err != nil {
+	logical := step.LogicalKey
+	if logical == "" {
+		logical = step.StepKey
+	}
+	if err := event.SetExtension(&evt, EventLogicalKeyExtension, logical); err != nil {
 		return err
 	}
 	if evt.Timestamp.IsZero() {
@@ -411,9 +456,64 @@ func (e *caseExecutor) captureSession(ctx context.Context, key session.Key) erro
 	if err != nil {
 		return err
 	}
+	e.mu.Lock()
 	e.sessions[key] = sess
+	e.mu.Unlock()
 	e.snapshot.Session = sess
 	e.snapshot.SessionID = key.SessionID
+	return nil
+}
+
+func (e *caseExecutor) reloadSession(ctx context.Context, step ReloadSessionStep) error {
+	key := step.SessionKey
+	e.mu.Lock()
+	delete(e.sessions, key)
+	e.mu.Unlock()
+	sess, err := e.backend.SessionService.GetSession(ctx, key)
+	if err != nil {
+		return err
+	}
+	if sess == nil {
+		return fmt.Errorf("reload_session: session not found: %s", key.SessionID)
+	}
+	e.mu.Lock()
+	e.sessions[key] = sess
+	e.mu.Unlock()
+	e.snapshot.Session = sess
+	e.snapshot.SessionID = key.SessionID
+	return nil
+}
+
+func (e *caseExecutor) parallelGroup(ctx context.Context, step ParallelGroupStep) error {
+	if len(step.Branches) == 0 {
+		return nil
+	}
+	var start sync.WaitGroup
+	start.Add(1)
+	errCh := make(chan error, len(step.Branches))
+	var workers sync.WaitGroup
+	for _, branch := range step.Branches {
+		br := branch
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			start.Wait() // barrier: all workers start together
+			for _, st := range br {
+				if err := e.execute(ctx, st); err != nil {
+					errCh <- err
+					return
+				}
+			}
+		}()
+	}
+	start.Done()
+	workers.Wait()
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

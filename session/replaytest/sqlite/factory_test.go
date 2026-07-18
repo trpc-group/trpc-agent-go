@@ -44,6 +44,7 @@ func TestOpen_InMemoryVsSQLite_Lightweight(t *testing.T) {
 		replaytest.CaseMultiTurnConversation(),
 		replaytest.CaseToolCallConversation(),
 		replaytest.CaseStateCRUD(),
+		replaytest.CaseMemoryWriteAndRead(),
 		replaytest.CaseSummaryGeneration(),
 		replaytest.CaseSummaryFilterKey(),
 		replaytest.CaseTrackEvents(),

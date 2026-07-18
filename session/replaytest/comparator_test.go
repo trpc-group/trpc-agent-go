@@ -11,6 +11,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -263,7 +264,6 @@ func TestComparator_EventInvocationAndMemoryFields(t *testing.T) {
 		"memories[0].kind",
 		"memories[0].location",
 		"memories[0].event_time",
-		"memories[0].last_updated",
 	}
 	got := map[string]bool{}
 	for _, d := range diffs {
@@ -287,4 +287,34 @@ func contains(s, sub string) bool {
 		}
 		return false
 	})()))
+}
+
+func TestComparator_ResponseResidual(t *testing.T) {
+	c := NewComparator()
+	tc := ReplayCase{Name: "resp"}
+	ea := *UserEvent("e1", "hi")
+	eb := *UserEvent("e1", "hi")
+	if ea.Response == nil || eb.Response == nil {
+		t.Fatal("fixture missing response")
+	}
+	ea.Response.Object = "chat.completion"
+	ea.Response.Done = true
+	eb.Response.Object = "chat.completion.chunk"
+	eb.Response.Done = false
+	eb.Response.Error = &model.ResponseError{Message: "boom"}
+	a := &Snapshot{Backend: "a", Session: &session.Session{Events: []event.Event{ea}}}
+	b := &Snapshot{Backend: "b", Session: &session.Session{Events: []event.Event{eb}}}
+	n := NewNormalizer()
+	a, _ = n.Normalize(a)
+	b, _ = n.Normalize(b)
+	diffs := c.Compare(tc, a, b, InMemoryProfile(), InMemoryProfile())
+	var has bool
+	for _, d := range diffs {
+		if !d.Allowed && d.Path == "events[0].response" {
+			has = true
+		}
+	}
+	if !has {
+		t.Fatalf("expected response residual diff, got %+v", diffs)
+	}
 }

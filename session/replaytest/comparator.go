@@ -594,6 +594,9 @@ func compareEventSemantics(index int, ea, eb event.Event, sessionID string) []Di
 			}
 		}
 	}
+	if !responseResidualEqual(ea, eb) {
+		add(fmt.Sprintf("events[%d].response", index), responseResidual(ea), responseResidual(eb), "response residual fields mismatch")
+	}
 	if !bytes.Equal(encodeStateDelta(ea.StateDelta), encodeStateDelta(eb.StateDelta)) {
 		add(fmt.Sprintf("events[%d].state_delta", index), ea.StateDelta, eb.StateDelta, "state delta mismatch")
 	}
@@ -736,6 +739,40 @@ func compareBranchLocalSemantic(tc ReplayCase, backendA, backendB, sessionID str
 		}
 	}
 	return diffs
+}
+
+func responseResidual(e event.Event) any {
+	if e.Response == nil {
+		return nil
+	}
+	// Clone residual response fields that are not covered by choices/timestamp paths.
+	type residual struct {
+		ID                string
+		Object            string
+		Created           int64
+		Model             string
+		Usage             *model.Usage
+		SystemFingerprint *string
+		Error             *model.ResponseError
+		Done              bool
+		IsPartial         bool
+	}
+	r := residual{
+		ID:                e.Response.ID,
+		Object:            e.Response.Object,
+		Created:           e.Response.Created,
+		Model:             e.Response.Model,
+		Usage:             e.Response.Usage,
+		SystemFingerprint: e.Response.SystemFingerprint,
+		Error:             e.Response.Error,
+		Done:              e.Response.Done,
+		IsPartial:         e.Response.IsPartial,
+	}
+	return r
+}
+
+func responseResidualEqual(a, b event.Event) bool {
+	return reflect.DeepEqual(responseResidual(a), responseResidual(b))
 }
 
 func responseChoices(e event.Event) []model.Choice {

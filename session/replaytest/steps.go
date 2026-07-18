@@ -18,6 +18,11 @@ type AppendEventStep struct {
 	StepKey    string
 	SessionKey session.Key
 	Event      *event.Event
+	// LogicalKey is the deterministic logical event identity used by the
+	// normalizer/comparator. When empty, StepKey is used for backward compatibility.
+	// Keep this independent from StepKey when the same logical event is retried
+	// under a different step name (e.g. recovery_duplicate_event).
+	LogicalKey string
 }
 
 // Type implements Step.
@@ -148,3 +153,30 @@ func (s ListUserStatesStep) Type() string { return "list_user_states" }
 
 // Key implements Step.
 func (s ListUserStatesStep) Key() string { return s.StepKey }
+
+// ReloadSessionStep drops the executor's cached session pointer and reloads from
+// the backend, simulating a recovery / process-restart boundary.
+type ReloadSessionStep struct {
+	StepKey    string
+	SessionKey session.Key
+}
+
+// Type implements Step.
+func (s ReloadSessionStep) Type() string { return "reload_session" }
+
+// Key implements Step.
+func (s ReloadSessionStep) Key() string { return s.StepKey }
+
+// ParallelGroupStep runs nested steps concurrently.
+// Each inner item is a branch: steps within a branch run sequentially in one
+// worker; branches start together after a barrier and join before continuing.
+type ParallelGroupStep struct {
+	StepKey  string
+	Branches [][]Step
+}
+
+// Type implements Step.
+func (s ParallelGroupStep) Type() string { return "parallel_group" }
+
+// Key implements Step.
+func (s ParallelGroupStep) Key() string { return s.StepKey }
