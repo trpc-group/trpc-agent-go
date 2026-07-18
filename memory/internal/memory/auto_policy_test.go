@@ -51,6 +51,35 @@ func TestUpdatePolicyFromMetadata(t *testing.T) {
 	assert.Equal(t, extractor.UpdatePolicyReconcile, updatePolicyFromMetadata(nil))
 }
 
+func TestAssistantResultExtractionFromMetadata(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name     string
+		metadata map[string]any
+		want     bool
+	}{
+		{name: "missing"},
+		{name: "enabled", metadata: map[string]any{
+			extractorMetadataAssistantResults: true,
+		}, want: true},
+		{name: "disabled", metadata: map[string]any{
+			extractorMetadataAssistantResults: false,
+		}},
+		{name: "wrong type", metadata: map[string]any{
+			extractorMetadataAssistantResults: "true",
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ext := &mockExtractor{metadata: test.metadata}
+			assert.Equal(t, test.want, assistantResultExtractionFromMetadata(ext))
+			worker := NewAutoMemoryWorker(AutoMemoryConfig{Extractor: ext}, newMockOperator())
+			assert.Equal(t, test.want, worker.assistantResults)
+		})
+	}
+	assert.False(t, assistantResultExtractionFromMetadata(nil))
+}
+
 func TestAssistantResultPolicyPreservesDistinctResult(t *testing.T) {
 	stored := []*memory.Entry{{
 		ID: "tips",

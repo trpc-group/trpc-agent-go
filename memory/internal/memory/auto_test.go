@@ -109,6 +109,7 @@ type mockOperator struct {
 	updateErr   error
 	deleteErr   error
 	clearErr    error
+	searchQuery string
 	// searchResults, when non-nil, is returned directly by SearchMemories
 	// as a scored candidate list. Tests use this to exercise reconcile
 	// decision branches without needing a real search implementation.
@@ -150,6 +151,9 @@ func (m *mockOperator) SearchMemories(
 	query string,
 	opts ...memory.SearchOption,
 ) ([]*memory.Entry, error) {
+	m.mu.Lock()
+	m.searchQuery = query
+	m.mu.Unlock()
 	if m.searchErr != nil {
 		return nil, m.searchErr
 	}
@@ -2081,6 +2085,27 @@ func TestSearchRelevantMemories(t *testing.T) {
 		)
 		assert.NoError(t, err)
 		assert.Len(t, entries, 1)
+	})
+
+	t.Run("assistant result extraction searches assistant text", func(t *testing.T) {
+		ext := &mockExtractor{metadata: map[string]any{
+			extractorMetadataAssistantResults: true,
+		}}
+		op := newMockOperator()
+		worker := NewAutoMemoryWorker(AutoMemoryConfig{Extractor: ext}, op)
+		messages := []model.Message{
+			model.NewUserMessage("What should I choose?"),
+			model.NewAssistantMessage("Choose the steel frame for strength."),
+		}
+
+		_, err := worker.searchRelevantMemories(
+			context.Background(),
+			memory.UserKey{AppName: "app", UserID: "user"},
+			messages,
+		)
+		assert.NoError(t, err)
+		assert.Contains(t, op.searchQuery, "What should I choose?")
+		assert.Contains(t, op.searchQuery, "Choose the steel frame for strength.")
 	})
 }
 

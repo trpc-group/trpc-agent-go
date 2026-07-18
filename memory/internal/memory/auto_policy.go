@@ -24,7 +24,8 @@ import (
 )
 
 const (
-	extractorMetadataUpdatePolicy = "update_policy"
+	extractorMetadataUpdatePolicy     = "update_policy"
+	extractorMetadataAssistantResults = "assistant_result_extraction"
 
 	historyOldCoverage = 0.95
 	historyNewCoverage = 0.70
@@ -75,6 +76,14 @@ func updatePolicyFromMetadata(ext extractor.MemoryExtractor) extractor.UpdatePol
 	default:
 		return extractor.UpdatePolicyReconcile
 	}
+}
+
+func assistantResultExtractionFromMetadata(ext extractor.MemoryExtractor) bool {
+	if ext == nil {
+		return false
+	}
+	enabled, _ := ext.Metadata()[extractorMetadataAssistantResults].(bool)
+	return enabled
 }
 
 func (w *AutoMemoryWorker) applyUpdatePolicy(
@@ -488,8 +497,9 @@ func stringSet(values []string) map[string]struct{} {
 	return result
 }
 
-// buildPolicySearchQuery gives opt-in policies enough context to reconcile
-// assistant-produced results while keeping the legacy user-only query intact.
+// buildPolicySearchQuery gives opt-in policies and assistant-result extraction
+// enough context to reconcile assistant-produced results while keeping the
+// legacy user-only query intact.
 func buildPolicySearchQuery(messages []model.Message) string {
 	parts := make([]string, 0, len(messages))
 	for _, msg := range messages {
