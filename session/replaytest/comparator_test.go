@@ -318,3 +318,68 @@ func TestComparator_ResponseResidual(t *testing.T) {
 		t.Fatalf("expected response residual diff, got %+v", diffs)
 	}
 }
+
+func TestComparator_BranchLocalCrossBranchDuplicateID(t *testing.T) {
+	cmp := NewComparator()
+	tc := ReplayCase{Name: "cross_branch_dup", EventCompareMode: EventCompareBranchLocal}
+	// Same ID appears once on each branch. Global interleaving differs; branch-local
+	// occurrence counters must not cross-pair events across branches.
+	a := &Snapshot{Session: &session.Session{Events: []event.Event{
+		{ID: "same", Author: "user", Branch: "b1", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "b1"}}}}},
+		{ID: "same", Author: "user", Branch: "b2", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "b2"}}}}},
+	}}}
+	b := &Snapshot{Session: &session.Session{Events: []event.Event{
+		{ID: "same", Author: "user", Branch: "b2", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "b2"}}}}},
+		{ID: "same", Author: "user", Branch: "b1", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "b1"}}}}},
+	}}}
+	diffs := cmp.Compare(tc, a, b, BackendProfile{Name: "A"}, BackendProfile{Name: "B"})
+	if len(diffs) != 0 {
+		t.Fatalf("branch-local cross-branch same ID with reordered interleaving should pass: %+v", diffs)
+	}
+
+	// Content mismatch on b1 must still be detected and not swallowed by global pairing.
+	bBad := &Snapshot{Session: &session.Session{Events: []event.Event{
+		{ID: "same", Author: "user", Branch: "b2", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "b2"}}}}},
+		{ID: "same", Author: "user", Branch: "b1", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "B1-BAD"}}}}},
+	}}}
+	diffs = cmp.Compare(tc, a, bBad, BackendProfile{Name: "A"}, BackendProfile{Name: "B"})
+	if len(diffs) == 0 {
+		t.Fatal("expected content mismatch for branch b1 event")
+	}
+}
+
+func TestComparator_SessionPresence(t *testing.T) {
+	cmp := NewComparator()
+	tc := ReplayCase{Name: "session_presence"}
+	a := &Snapshot{Session: &session.Session{Events: nil}}
+	b := &Snapshot{Session: nil}
+	diffs := cmp.Compare(tc, a, b, BackendProfile{Name: "A"}, BackendProfile{Name: "B"})
+	found := false
+	for _, d := range diffs {
+		if d.Path == "session" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected session presence mismatch, got %+v", diffs)
+	}
+}
+
+func TestComparator_MemoryPresence(t *testing.T) {
+	cmp := NewComparator()
+	tc := ReplayCase{Name: "memory_presence"}
+	a := &Snapshot{Memories: []*memory.Entry{nil}}
+	b := &Snapshot{Memories: []*memory.Entry{{ID: "m1", Memory: &memory.Memory{Memory: "x"}}}}
+	diffs := cmp.Compare(tc, a, b, BackendProfile{Name: "A"}, BackendProfile{Name: "B"})
+	found := false
+	for _, d := range diffs {
+		if d.Path == "memories[0]" || d.Path == "memories[0].memory" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected memory presence mismatch, got %+v", diffs)
+	}
+}

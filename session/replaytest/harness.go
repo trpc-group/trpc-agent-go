@@ -83,89 +83,23 @@ func (h *Harness) backendNames() []string {
 
 func (h *Harness) runCase(ctx context.Context, tc ReplayCase) (CaseResult, error) {
 	cr := CaseResult{CaseName: tc.Name, Status: StatusPassed}
-	snaps := map[string]*Snapshot{}
-	profiles := map[string]BackendProfile{}
-
-	for _, b := range h.backends {
-		missing := MissingCaps(tc.RequiredCaps, b.Profile)
-		if tc.RequiredCaps.NeedsMemory && b.MemoryService == nil {
-			missing = append(missing, "memory")
-		}
-		if len(missing) > 0 {
-			cr.Status = StatusSkipped
-			cr.Skipped = fmt.Sprintf("unsupported: %v on %s", missing, b.Name)
-			continue
-		}
-		raw, err := executeCase(ctx, tc, b)
-		if err != nil {
-			return cr, err
-		}
-		norm, err := h.normalizer.Normalize(raw)
-		if err != nil {
-			return cr, err
-		}
-		snaps[b.Name] = norm
-		profiles[b.Name] = b.Profile
+	snaps, profiles, err := h.collectCaseSnapshots(ctx, tc, &cr)
+	if err != nil {
+		return cr, err
 	}
-
 	if len(snaps) == 0 {
 		if cr.Status == "" {
 			cr.Status = StatusSkipped
 		}
 		return cr, nil
 	}
-
-	// Single-backend self-check: pass when only one backend executed,
-	// but keep StatusSkipped if any other backend was capability-skipped.
 	if len(snaps) == 1 {
-		if cr.Status != StatusSkipped {
-			cr.Status = StatusPassed
-		}
+		applySingleBackendStatus(&cr)
 		return cr, nil
 	}
-
-	var pairs [][2]string
-	switch h.opts.ComparisonMode {
-	case ComparisonAllPairs:
-		names := make([]string, 0, len(snaps))
-		for n := range snaps {
-			names = append(names, n)
-		}
-		for i := 0; i < len(names); i++ {
-			for j := i + 1; j < len(names); j++ {
-				pairs = append(pairs, [2]string{names[i], names[j]})
-			}
-		}
-	default:
-		ref := h.opts.ReferenceBackend
-		if _, ok := snaps[ref]; !ok {
-			// pick first as reference
-			for n := range snaps {
-				ref = n
-				break
-			}
-		}
-		for n := range snaps {
-			if n == ref {
-				continue
-			}
-			pairs = append(pairs, [2]string{ref, n})
-		}
-	}
-
-	var diffs []Diff
-	for _, p := range pairs {
-		d := h.comparator.Compare(tc, snaps[p[0]], snaps[p[1]], profiles[p[0]], profiles[p[1]])
-		diffs = append(diffs, d...)
-	}
-	cr.Diffs = diffs
-	if hasErrorDiff(diffs) {
-		cr.Status = StatusFailed
-	} else if cr.Status == StatusSkipped {
-		// keep skipped if any backend skipped and no errors
-	} else {
-		cr.Status = StatusPassed
-	}
+	pairs := buildComparisonPairs(h.opts.ComparisonMode, h.opts.ReferenceBackend, snaps)
+	diffs := h.compareSnapshotPairs(tc, snaps, profiles, pairs)
+	finalizeCaseStatus(&cr, diffs)
 	return cr, nil
 }
 

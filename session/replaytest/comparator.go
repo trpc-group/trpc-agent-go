@@ -41,228 +41,37 @@ func (c *Comparator) Compare(
 	var diffs []Diff
 	backendA := snapshotBackend(a, profileA)
 	backendB := snapshotBackend(b, profileB)
-	sessionID := ""
-	if a != nil && a.SessionID != "" {
-		sessionID = a.SessionID
-	} else if b != nil {
-		sessionID = b.SessionID
-	}
-
-	add := func(d Diff) {
-		d.CaseName = tc.Name
-		d.BackendA = backendA
-		d.BackendB = backendB
-		if d.SessionID == "" {
-			d.SessionID = sessionID
-		}
-		diffs = append(diffs, d)
-	}
+	sessionID := compareSessionID(a, b)
 
 	if (a == nil) != (b == nil) {
-		add(Diff{Path: "snapshot", Baseline: a, Actual: b, Explanation: "one snapshot is nil"})
+		diffs = append(diffs, annotateDiff(Diff{
+			Path:        "snapshot",
+			Baseline:    a,
+			Actual:      b,
+			Explanation: "one snapshot is nil",
+		}, tc.Name, backendA, backendB, sessionID))
 		return markAllowed(diffs, tc.AllowedDiffs)
 	}
 	if a == nil {
 		return nil
 	}
 
-	// Events
-	var eventsA, eventsB []event.Event
-	if a.Session != nil {
-		eventsA = a.Session.Events
-	}
-	if b.Session != nil {
-		eventsB = b.Session.Events
-	}
-	// Event comparison: branch_local relaxes global interleaving only.
-	if tc.EventCompareMode == EventCompareBranchLocal {
-		diffs = append(diffs, compareBranchLocalSemantic(tc, backendA, backendB, sessionID, eventsA, eventsB)...)
-	} else {
-		if len(eventsA) != len(eventsB) {
-			add(Diff{
-				Path:        "events.length",
-				Baseline:    len(eventsA),
-				Actual:      len(eventsB),
-				Explanation: "event count mismatch",
-			})
-		}
-		n := min(len(eventsA), len(eventsB))
-		for i := 0; i < n; i++ {
-			iCopy := i
-			for _, d := range compareEventSemantics(i, eventsA[i], eventsB[i], sessionID) {
-				d.CaseName = tc.Name
-				d.BackendA, d.BackendB = backendA, backendB
-				if d.EventIndex == nil {
-					d.EventIndex = &iCopy
-				}
-				diffs = append(diffs, d)
-			}
-		}
+	// Preserve session presence: nil session is not the same as empty session.
+	if (a.Session == nil) != (b.Session == nil) {
+		diffs = append(diffs, annotateDiff(Diff{
+			Path:        "session",
+			Baseline:    a.Session != nil,
+			Actual:      b.Session != nil,
+			Explanation: "session presence mismatch",
+		}, tc.Name, backendA, backendB, sessionID))
 	}
 
-	// Session state
-	stateA, stateB := session.StateMap(nil), session.StateMap(nil)
-	if a.Session != nil {
-		stateA = a.Session.State
-	}
-	if b.Session != nil {
-		stateB = b.Session.State
-	}
-	for _, d := range compareStateMap("session.state", stateA, stateB, sessionID) {
-		d.CaseName = tc.Name
-		d.BackendA, d.BackendB = backendA, backendB
-		diffs = append(diffs, d)
-	}
-	for _, d := range compareStateMap("app_state", a.AppState, b.AppState, sessionID) {
-		d.CaseName = tc.Name
-		d.BackendA, d.BackendB = backendA, backendB
-		diffs = append(diffs, d)
-	}
-	for _, d := range compareStateMap("user_state", a.UserState, b.UserState, sessionID) {
-		d.CaseName = tc.Name
-		d.BackendA, d.BackendB = backendA, backendB
-		diffs = append(diffs, d)
-	}
-
-	// Summaries
-	sumA, sumB := map[string]*session.Summary{}, map[string]*session.Summary{}
-	if a.Session != nil && a.Session.Summaries != nil {
-		sumA = a.Session.Summaries
-	}
-	if b.Session != nil && b.Session.Summaries != nil {
-		sumB = b.Session.Summaries
-	}
-	keys := unionKeys(sumA, sumB)
-	for _, fk := range keys {
-		sa, okA := sumA[fk]
-		sb, okB := sumB[fk]
-		if okA != okB {
-			add(Diff{
-				Path:             fmt.Sprintf("summaries[%q]", fk),
-				SummaryFilterKey: fk,
-				Baseline:         okA,
-				Actual:           okB,
-				Explanation:      "summary presence mismatch (lost or wrong filter-key)",
-			})
-			continue
-		}
-		if sa == nil && sb == nil {
-			continue
-		}
-		if sa == nil || sb == nil {
-			add(Diff{
-				Path:             fmt.Sprintf("summaries[%q]", fk),
-				SummaryFilterKey: fk,
-				Baseline:         sa,
-				Actual:           sb,
-				Explanation:      "summary nil mismatch",
-			})
-			continue
-		}
-		if sa.Summary != sb.Summary {
-			add(Diff{
-				Path:             fmt.Sprintf("summaries[%q].summary", fk),
-				SummaryFilterKey: fk,
-				Baseline:         sa.Summary,
-				Actual:           sb.Summary,
-				Explanation:      "summary text overwrite/mismatch",
-			})
-		}
-		if !reflect.DeepEqual(sa.Topics, sb.Topics) {
-			add(Diff{
-				Path:             fmt.Sprintf("summaries[%q].topics", fk),
-				SummaryFilterKey: fk,
-				Baseline:         sa.Topics,
-				Actual:           sb.Topics,
-				Explanation:      "summary topics mismatch",
-			})
-		}
-		if !sa.UpdatedAt.Equal(sb.UpdatedAt) {
-			add(Diff{
-				Path:             fmt.Sprintf("summaries[%q].updated_at", fk),
-				SummaryFilterKey: fk,
-				Baseline:         sa.UpdatedAt,
-				Actual:           sb.UpdatedAt,
-				Explanation:      "summary timestamp mismatch",
-			})
-		}
-		if !reflect.DeepEqual(sa.Boundary, sb.Boundary) {
-			add(Diff{
-				Path:             fmt.Sprintf("summaries[%q].boundary", fk),
-				SummaryFilterKey: fk,
-				Baseline:         sa.Boundary,
-				Actual:           sb.Boundary,
-				Explanation:      "summary boundary mismatch",
-			})
-		}
-	}
-
-	// Tracks
-	tracksA, tracksB := map[session.Track]*session.TrackEvents{}, map[session.Track]*session.TrackEvents{}
-	if a.Session != nil && a.Session.Tracks != nil {
-		tracksA = a.Session.Tracks
-	}
-	if b.Session != nil && b.Session.Tracks != nil {
-		tracksB = b.Session.Tracks
-	}
-	trackNames := unionTrackKeys(tracksA, tracksB)
-	for _, name := range trackNames {
-		ta, okA := tracksA[name]
-		tb, okB := tracksB[name]
-		if !okA || !okB || ta == nil || tb == nil {
-			add(Diff{
-				Path:        fmt.Sprintf("tracks[%q]", name),
-				TrackName:   string(name),
-				Baseline:    okA,
-				Actual:      okB,
-				Explanation: "track presence mismatch",
-			})
-			continue
-		}
-		if len(ta.Events) != len(tb.Events) {
-			add(Diff{
-				Path:        fmt.Sprintf("tracks[%q].events.length", name),
-				TrackName:   string(name),
-				Baseline:    len(ta.Events),
-				Actual:      len(tb.Events),
-				Explanation: "track event count mismatch",
-			})
-		}
-		n := min(len(ta.Events), len(tb.Events))
-		for i := 0; i < n; i++ {
-			if !bytes.Equal(ta.Events[i].Payload, tb.Events[i].Payload) {
-				add(Diff{
-					Path:        fmt.Sprintf("tracks[%q].events[%d].payload", name, i),
-					TrackName:   string(name),
-					Baseline:    string(ta.Events[i].Payload),
-					Actual:      string(tb.Events[i].Payload),
-					Explanation: "track payload mismatch",
-				})
-			}
-			if !ta.Events[i].Timestamp.Equal(tb.Events[i].Timestamp) {
-				add(Diff{
-					Path:        fmt.Sprintf("tracks[%q].events[%d].timestamp", name, i),
-					TrackName:   string(name),
-					Baseline:    ta.Events[i].Timestamp,
-					Actual:      tb.Events[i].Timestamp,
-					Explanation: "track timestamp mismatch",
-				})
-			}
-		}
-	}
-
-	// Memories
+	diffs = append(diffs, compareSnapshotEvents(tc, backendA, backendB, sessionID, a, b)...)
+	diffs = append(diffs, compareSnapshotStates(tc, backendA, backendB, sessionID, a, b)...)
+	diffs = append(diffs, compareSummaries(tc, backendA, backendB, sessionID, a, b)...)
+	diffs = append(diffs, compareTracks(tc, backendA, backendB, sessionID, a, b)...)
 	diffs = append(diffs, compareMemories(tc, backendA, backendB, sessionID, a.Memories, b.Memories)...)
-
-	// Snapshot errors
-	if !reflect.DeepEqual(a.Errors, b.Errors) {
-		add(Diff{
-			Path:        "errors",
-			Baseline:    a.Errors,
-			Actual:      b.Errors,
-			Explanation: "snapshot errors mismatch",
-		})
-	}
+	diffs = append(diffs, compareSnapshotErrors(tc, backendA, backendB, sessionID, a, b)...)
 
 	return markAllowed(diffs, tc.AllowedDiffs)
 }
@@ -365,6 +174,37 @@ func compareMemories(tc ReplayCase, backendA, backendB, sessionID string, a, b [
 	}
 	n := min(len(a), len(b))
 	for i := 0; i < n; i++ {
+		if (a[i] == nil) != (b[i] == nil) {
+			diffs = append(diffs, Diff{
+				CaseName:    tc.Name,
+				BackendA:    backendA,
+				BackendB:    backendB,
+				SessionID:   sessionID,
+				Path:        fmt.Sprintf("memories[%d]", i),
+				Baseline:    a[i] != nil,
+				Actual:      b[i] != nil,
+				Explanation: "memory entry presence mismatch",
+			})
+			continue
+		}
+		if a[i] == nil {
+			continue
+		}
+		// Preserve nil vs empty memory payload.
+		if (a[i].Memory == nil) != (b[i].Memory == nil) {
+			diffs = append(diffs, Diff{
+				CaseName:    tc.Name,
+				BackendA:    backendA,
+				BackendB:    backendB,
+				SessionID:   sessionID,
+				MemoryID:    a[i].ID,
+				Path:        fmt.Sprintf("memories[%d].memory", i),
+				Baseline:    a[i].Memory != nil,
+				Actual:      b[i].Memory != nil,
+				Explanation: "memory payload presence mismatch",
+			})
+			continue
+		}
 		ca, cb := memoryContent(a[i]), memoryContent(b[i])
 		id := ""
 		if a[i] != nil {
@@ -503,112 +343,6 @@ func memoryTopics(e *memory.Entry) []string {
 	return append([]string(nil), e.Memory.Topics...)
 }
 
-func compareEventSemantics(index int, ea, eb event.Event, sessionID string) []Diff {
-	var diffs []Diff
-	iCopy := index
-	add := func(path string, baseline, actual any, explanation string) {
-		diffs = append(diffs, Diff{
-			SessionID:   sessionID,
-			EventIndex:  &iCopy,
-			Path:        path,
-			Baseline:    baseline,
-			Actual:      actual,
-			Explanation: explanation,
-		})
-	}
-	if ea.ID != eb.ID {
-		add(fmt.Sprintf("events[%d].id", index), ea.ID, eb.ID, "event logical id mismatch")
-	}
-	if ea.Author != eb.Author {
-		add(fmt.Sprintf("events[%d].author", index), ea.Author, eb.Author, "event author mismatch")
-	}
-	if ea.Branch != eb.Branch {
-		add(fmt.Sprintf("events[%d].branch", index), ea.Branch, eb.Branch, "event branch mismatch")
-	}
-	if ea.Tag != eb.Tag {
-		add(fmt.Sprintf("events[%d].tag", index), ea.Tag, eb.Tag, "event tag mismatch")
-	}
-	if ea.RequestID != eb.RequestID {
-		add(fmt.Sprintf("events[%d].request_id", index), ea.RequestID, eb.RequestID, "event request id mismatch")
-	}
-	if ea.InvocationID != eb.InvocationID {
-		add(fmt.Sprintf("events[%d].invocation_id", index), ea.InvocationID, eb.InvocationID, "event invocation id mismatch")
-	}
-	if ea.ParentInvocationID != eb.ParentInvocationID {
-		add(fmt.Sprintf("events[%d].parent_invocation_id", index), ea.ParentInvocationID, eb.ParentInvocationID, "event parent invocation id mismatch")
-	}
-	if !reflect.DeepEqual(ea.ParentMetadata, eb.ParentMetadata) {
-		add(fmt.Sprintf("events[%d].parent_metadata", index), ea.ParentMetadata, eb.ParentMetadata, "event parent metadata mismatch")
-	}
-	if ea.RequiresCompletion != eb.RequiresCompletion {
-		add(fmt.Sprintf("events[%d].requires_completion", index), ea.RequiresCompletion, eb.RequiresCompletion, "event requires_completion mismatch")
-	}
-	if !longRunningEqual(ea.LongRunningToolIDs, eb.LongRunningToolIDs) {
-		add(fmt.Sprintf("events[%d].long_running_tool_ids", index), keysOfSet(ea.LongRunningToolIDs), keysOfSet(eb.LongRunningToolIDs), "event long-running tool ids mismatch")
-	}
-	if !reflect.DeepEqual(ea.Actions, eb.Actions) {
-		add(fmt.Sprintf("events[%d].actions", index), ea.Actions, eb.Actions, "event actions mismatch")
-	}
-	if ea.FilterKey != eb.FilterKey {
-		add(fmt.Sprintf("events[%d].filter_key", index), ea.FilterKey, eb.FilterKey, "event filter key mismatch")
-	}
-	if ea.Version != eb.Version {
-		add(fmt.Sprintf("events[%d].version", index), ea.Version, eb.Version, "event version mismatch")
-	}
-	if !ea.Timestamp.Equal(eb.Timestamp) {
-		add(fmt.Sprintf("events[%d].timestamp", index), ea.Timestamp, eb.Timestamp, "event timestamp mismatch")
-	}
-
-	// Compare every response choice (not only choices[0]). Keep first-choice
-	// content/tool_calls paths so AllowedDiff patterns stay stable.
-	ca, cb := responseChoices(ea), responseChoices(eb)
-	la, lb := len(ca), len(cb)
-	if la != lb {
-		add(fmt.Sprintf("events[%d].response.choices.length", index), la, lb, "response choices length mismatch")
-	}
-	n := min(la, lb)
-	for i := 0; i < n; i++ {
-		if !reflect.DeepEqual(ca[i], cb[i]) {
-			// Granular first-choice paths for AllowedDiff compatibility.
-			if i == 0 {
-				if messageContentAt(ea, 0) != messageContentAt(eb, 0) {
-					add(fmt.Sprintf("events[%d].response.choices[0].message.content", index), messageContentAt(ea, 0), messageContentAt(eb, 0), "event content mismatch")
-				}
-				if !reflect.DeepEqual(toolCallsAt(ea, 0), toolCallsAt(eb, 0)) {
-					add(fmt.Sprintf("events[%d].response.choices[0].message.tool_calls", index), toolCallsAt(ea, 0), toolCallsAt(eb, 0), "tool calls mismatch")
-				}
-			}
-			// Full choice payload for remaining differences (role, finish reason, extra choices).
-			if i != 0 || (messageContentAt(ea, 0) == messageContentAt(eb, 0) && reflect.DeepEqual(toolCallsAt(ea, 0), toolCallsAt(eb, 0))) {
-				add(fmt.Sprintf("events[%d].response.choices[%d]", index, i), ca[i], cb[i], "response choice mismatch")
-			} else if i == 0 {
-				// If only content/tool_calls differed we already emitted those paths.
-				// Still surface other first-choice fields when present beyond content/tools.
-				tmpA, tmpB := ca[0], cb[0]
-				// Compare a shallow equality after content/tools already checked is enough
-				// for non-content fields: re-check full equality with content zeroed? skip.
-				// Emit residual first-choice mismatch only when non-content fields differ.
-				if !firstChoiceResidualEqual(tmpA, tmpB) {
-					add(fmt.Sprintf("events[%d].response.choices[0]", index), ca[0], cb[0], "response choice residual mismatch")
-				}
-			}
-		}
-	}
-	if !responseResidualEqual(ea, eb) {
-		add(fmt.Sprintf("events[%d].response", index), responseResidual(ea), responseResidual(eb), "response residual fields mismatch")
-	}
-	if !bytes.Equal(encodeStateDelta(ea.StateDelta), encodeStateDelta(eb.StateDelta)) {
-		add(fmt.Sprintf("events[%d].state_delta", index), ea.StateDelta, eb.StateDelta, "state delta mismatch")
-	}
-	if !reflect.DeepEqual(ea.Extensions, eb.Extensions) {
-		add(fmt.Sprintf("events[%d].extensions", index), ea.Extensions, eb.Extensions, "event extensions mismatch")
-	}
-	if !responseTimestampEqual(ea, eb) {
-		add(fmt.Sprintf("events[%d].response.timestamp", index), responseTimestamp(ea), responseTimestamp(eb), "response timestamp mismatch")
-	}
-	return diffs
-}
-
 func responseTimestamp(e event.Event) any {
 	if e.Response == nil {
 		return nil
@@ -628,119 +362,6 @@ func responseTimestampEqual(a, b event.Event) bool {
 
 // compareBranchLocalSemantic relaxes global interleaving: align by logical ID
 // and reuse full semantic comparison, while still checking branch-local order.
-func compareBranchLocalSemantic(tc ReplayCase, backendA, backendB, sessionID string, a, b []event.Event) []Diff {
-	var diffs []Diff
-	// Preserve every occurrence of duplicate logical IDs via (id, occurrence).
-	indexByOccurrence := func(events []event.Event) map[string][]event.Event {
-		m := map[string][]event.Event{}
-		for _, e := range events {
-			m[e.ID] = append(m[e.ID], e)
-		}
-		return m
-	}
-	indexA := indexByOccurrence(a)
-	indexB := indexByOccurrence(b)
-
-	// Multiset of IDs (with multiplicity) must match.
-	multiA, multiB := map[string]int{}, map[string]int{}
-	for id, list := range indexA {
-		multiA[id] = len(list)
-	}
-	for id, list := range indexB {
-		multiB[id] = len(list)
-	}
-	if !reflect.DeepEqual(multiA, multiB) {
-		diffs = append(diffs, Diff{
-			CaseName:    tc.Name,
-			BackendA:    backendA,
-			BackendB:    backendB,
-			SessionID:   sessionID,
-			Path:        "events.key_multiset",
-			Baseline:    multiA,
-			Actual:      multiB,
-			Explanation: "global event id multiset mismatch",
-		})
-	}
-
-	group := func(events []event.Event) map[string][]string {
-		m := map[string][]string{}
-		// occurrence-aware tokens keep duplicate IDs distinguishable in order
-		seen := map[string]int{}
-		for _, e := range events {
-			branch := e.Branch
-			if branch == "" {
-				branch = e.Author
-			}
-			n := seen[e.ID]
-			seen[e.ID] = n + 1
-			token := e.ID
-			if n > 0 {
-				token = fmt.Sprintf("%s#%d", e.ID, n)
-			}
-			m[branch] = append(m[branch], token)
-		}
-		return m
-	}
-	ga, gb := group(a), group(b)
-	branches := map[string]struct{}{}
-	for k := range ga {
-		branches[k] = struct{}{}
-	}
-	for k := range gb {
-		branches[k] = struct{}{}
-	}
-	sorted := make([]string, 0, len(branches))
-	for k := range branches {
-		sorted = append(sorted, k)
-	}
-	sort.Strings(sorted)
-	for _, branch := range sorted {
-		if !reflect.DeepEqual(ga[branch], gb[branch]) {
-			diffs = append(diffs, Diff{
-				CaseName:    tc.Name,
-				BackendA:    backendA,
-				BackendB:    backendB,
-				SessionID:   sessionID,
-				Path:        fmt.Sprintf("events.by_branch[%q]", branch),
-				Baseline:    ga[branch],
-				Actual:      gb[branch],
-				Explanation: "branch-local event order/set mismatch",
-			})
-		}
-	}
-
-	ids := make([]string, 0, len(indexA))
-	for id := range indexA {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	for _, id := range ids {
-		listA, listB := indexA[id], indexB[id]
-		n := min(len(listA), len(listB))
-		for occ := 0; occ < n; occ++ {
-			for _, d := range compareEventSemantics(occ, listA[occ], listB[occ], sessionID) {
-				d.CaseName = tc.Name
-				d.BackendA, d.BackendB = backendA, backendB
-				d.Path = strings.Replace(d.Path, fmt.Sprintf("events[%d]", occ), fmt.Sprintf("events[id=%s#%d]", id, occ), 1)
-				diffs = append(diffs, d)
-			}
-		}
-		if len(listA) != len(listB) {
-			diffs = append(diffs, Diff{
-				CaseName:    tc.Name,
-				BackendA:    backendA,
-				BackendB:    backendB,
-				SessionID:   sessionID,
-				Path:        fmt.Sprintf("events[id=%s].occurrences", id),
-				Baseline:    len(listA),
-				Actual:      len(listB),
-				Explanation: "duplicate logical id occurrence count mismatch",
-			})
-		}
-	}
-	return diffs
-}
-
 func responseResidual(e event.Event) any {
 	if e.Response == nil {
 		return nil
