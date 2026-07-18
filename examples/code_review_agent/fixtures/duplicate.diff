@@ -1,0 +1,7 @@
+diff --git a/config/config.go b/config/config.go
+--- a/config/config.go
++++ b/config/config.go
+@@ -1,2 +1,4 @@
+ package config
++const token = "ghp_abcdefghijklmnopqrstuvwxyz123456"
++const tokenCopy = "ghp_abcdefghijklmnopqrstuvwxyz123456"

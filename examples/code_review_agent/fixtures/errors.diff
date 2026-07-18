@@ -1,0 +1,7 @@
+diff --git a/service/save.go b/service/save.go
+--- a/service/save.go
++++ b/service/save.go
+@@ -1,2 +1,4 @@
+ package service
++_ = store.Save(ctx, value)
++return nil
