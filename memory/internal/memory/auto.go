@@ -518,10 +518,6 @@ func (w *AutoMemoryWorker) searchRelevantMemories(
 	messages []model.Message,
 ) ([]*memory.Entry, error) {
 	query := buildSearchQuery(messages)
-	if w.updatePolicy == extractor.UpdatePolicyHistoryPreserving ||
-		w.updatePolicy == extractor.UpdatePolicyAddOnly {
-		query = buildPolicySearchQuery(messages)
-	}
 	if query == "" {
 		return nil, nil
 	}

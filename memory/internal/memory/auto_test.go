@@ -114,6 +114,7 @@ type mockOperator struct {
 	// decision branches without needing a real search implementation.
 	// A nil value keeps the default behavior (reuse ReadMemories).
 	searchResults []*memory.Entry
+	searchQueries []string
 }
 
 func newMockOperator() *mockOperator {
@@ -150,6 +151,9 @@ func (m *mockOperator) SearchMemories(
 	query string,
 	opts ...memory.SearchOption,
 ) ([]*memory.Entry, error) {
+	m.mu.Lock()
+	m.searchQueries = append(m.searchQueries, query)
+	m.mu.Unlock()
 	if m.searchErr != nil {
 		return nil, m.searchErr
 	}
@@ -1998,6 +2002,27 @@ func TestBuildSearchQuery(t *testing.T) {
 }
 
 func TestSearchRelevantMemories(t *testing.T) {
+	for _, policy := range []string{"history-preserving", "add-only"} {
+		t.Run(policy+" uses user-only query", func(t *testing.T) {
+			ext := &mockExtractor{metadata: map[string]any{
+				extractorMetadataUpdatePolicy: policy,
+			}}
+			op := newMockOperator()
+			worker := NewAutoMemoryWorker(AutoMemoryConfig{Extractor: ext}, op)
+
+			_, err := worker.searchRelevantMemories(
+				context.Background(),
+				memory.UserKey{AppName: "app", UserID: "user"},
+				[]model.Message{
+					model.NewUserMessage("user fact"),
+					model.NewAssistantMessage("long assistant result"),
+				},
+			)
+			require.NoError(t, err)
+			require.Equal(t, []string{"user fact"}, op.searchQueries)
+		})
+	}
+
 	t.Run("empty query returns nil", func(t *testing.T) {
 		ext := &mockExtractor{}
 		op := newMockOperator()

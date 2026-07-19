@@ -10,17 +10,14 @@ package memory
 
 import (
 	"context"
-	"strings"
 	"testing"
 	"time"
-	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
-	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 func TestUpdatePolicyFromMetadata(t *testing.T) {
@@ -292,23 +289,4 @@ func TestAddOnlyPolicy_EnforcesAllowedOperationsAndDeduplicates(t *testing.T) {
 	assert.Equal(t, "Works at Globex", out[0].Memory)
 	assert.Equal(t, []string{"work"}, out[0].Topics)
 	assert.Equal(t, "Enjoys hiking", out[1].Memory)
-}
-
-func TestPolicySearchQuery_IncludesAssistantAndBoundsUTF8(t *testing.T) {
-	query := buildPolicySearchQuery([]model.Message{
-		model.NewUserMessage("user fact"),
-		model.NewAssistantMessage("assistant result"),
-		model.NewToolMessage("call", "tool", "ignored"),
-	})
-	assert.Contains(t, query, "user fact")
-	assert.Contains(t, query, "assistant result")
-	assert.NotContains(t, query, "ignored")
-
-	query = buildPolicySearchQuery([]model.Message{
-		model.NewUserMessage(strings.Repeat("history ", maxPolicySearchQueryBytes)),
-		model.NewAssistantMessage(strings.Repeat("中文", maxPolicySearchQueryBytes)),
-	})
-	assert.LessOrEqual(t, len(query), maxPolicySearchQueryBytes)
-	assert.True(t, utf8.ValidString(query))
-	assert.Contains(t, query, searchQueryOmissionMarker)
 }

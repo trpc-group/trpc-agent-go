@@ -15,12 +15,10 @@ import (
 	"strings"
 	"time"
 	"unicode"
-	"unicode/utf8"
 
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
-	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 const (
@@ -28,9 +26,6 @@ const (
 
 	historyOldCoverage = 0.95
 	historyNewCoverage = 0.70
-
-	maxPolicySearchQueryBytes = 7 * 1024
-	searchQueryOmissionMarker = "\n...\n"
 )
 
 var (
@@ -486,52 +481,6 @@ func stringSet(values []string) map[string]struct{} {
 		}
 	}
 	return result
-}
-
-// buildPolicySearchQuery gives opt-in policies enough context to reconcile
-// assistant-produced results while keeping the legacy user-only query intact.
-func buildPolicySearchQuery(messages []model.Message) string {
-	parts := make([]string, 0, len(messages))
-	for _, msg := range messages {
-		if msg.Role != model.RoleUser && msg.Role != model.RoleAssistant {
-			continue
-		}
-		if msg.ToolID != "" || len(msg.ToolCalls) > 0 {
-			continue
-		}
-		if text := messageSearchText(msg); text != "" {
-			parts = append(parts, text)
-		}
-	}
-	return limitPolicySearchQuery(strings.Join(parts, " "))
-}
-
-func limitPolicySearchQuery(query string) string {
-	if len(query) <= maxPolicySearchQueryBytes {
-		return query
-	}
-	contentBudget := maxPolicySearchQueryBytes - len(searchQueryOmissionMarker)
-	prefixBudget := contentBudget / 2
-	suffixBudget := contentBudget - prefixBudget
-	prefixEnd := utf8PrefixBoundary(query, prefixBudget)
-	suffixStart := utf8SuffixBoundary(query, len(query)-suffixBudget)
-	return strings.TrimSpace(
-		query[:prefixEnd] + searchQueryOmissionMarker + query[suffixStart:],
-	)
-}
-
-func utf8PrefixBoundary(text string, limit int) int {
-	for limit > 0 && !utf8.RuneStart(text[limit]) {
-		limit--
-	}
-	return limit
-}
-
-func utf8SuffixBoundary(text string, start int) int {
-	for start < len(text) && !utf8.RuneStart(text[start]) {
-		start++
-	}
-	return start
 }
 
 func logPolicyDecision(
