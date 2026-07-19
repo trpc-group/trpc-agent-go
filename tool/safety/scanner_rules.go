@@ -11,9 +11,12 @@ package safety
 
 import (
 	"context"
+	"errors"
+	"math"
 	"net"
 	"net/url"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -190,7 +193,7 @@ func networkEnvironmentFindings(env map[string]string, policy Policy) []Finding 
 	findings := make([]Finding, 0)
 	for key, value := range env {
 		upper := strings.ToUpper(key)
-		if !strings.Contains(upper, "PROXY") && !strings.Contains(upper, "URL") {
+		if !networkEnvironmentKey(upper) {
 			continue
 		}
 		urls := urlPattern.FindAllString(value, -1)
@@ -203,6 +206,14 @@ func networkEnvironmentFindings(env map[string]string, policy Policy) []Finding 
 		}
 	}
 	return findings
+}
+
+func networkEnvironmentKey(key string) bool {
+	if key == "NO_PROXY" {
+		return false
+	}
+	return key == "URL" || strings.HasSuffix(key, "_URL") ||
+		key == "PROXY" || strings.HasSuffix(key, "_PROXY")
 }
 
 func networkExecutionEvidence(text string) bool {
@@ -527,7 +538,6 @@ type resourceRule struct{}
 func (resourceRule) ID() string { return "resource" }
 
 var (
-	sleepPattern        = regexp.MustCompile(`(?i)\bsleep\s+([0-9]+(?:\.[0-9]+)?)([smhd]?)\b`)
 	yesPattern          = regexp.MustCompile(`(^|[\s;|&])yes(?:\s|$)`)
 	infinitePattern     = regexp.MustCompile(`(?i)\bwhile\s+(?:true|1)\b|for\s*\(\s*;\s*;\s*\)|for\s*\{\s*\}|loop\s*\{`)
 	highParallelPattern = regexp.MustCompile(`(?i)(?:\s|^)(?:-p|-j)\s*([0-9]{1,6})\b`)
@@ -583,16 +593,14 @@ func resourceTextFindings(text labeledText, policy Policy) []Finding {
 			"replace with bounded output",
 		))
 	}
-	if match := sleepPattern.FindStringSubmatch(lower); len(match) == 3 {
-		if sleepDuration(match[1], match[2]) > policy.maxSleep {
-			findings = append(findings, newFinding(
-				"RESOURCE_LONG_SLEEP",
-				RiskLevelHigh,
-				DecisionDeny,
-				"sleep exceeds policy limit: source="+source,
-				"reduce or remove the sleep duration",
-			))
-		}
+	if containsUnsafeSleep(text.text, policy.maxSleep) {
+		findings = append(findings, newFinding(
+			"RESOURCE_LONG_SLEEP",
+			RiskLevelHigh,
+			DecisionDeny,
+			"sleep exceeds policy limit: source="+source,
+			"reduce or remove the sleep duration",
+		))
 	}
 	if infinitePattern.MatchString(lower) {
 		findings = append(findings, newFinding(
@@ -643,10 +651,51 @@ func timeoutApplicable(input ScanInput) bool {
 	}
 }
 
-func sleepDuration(value, suffix string) time.Duration {
+func containsUnsafeSleep(text string, maxSleep time.Duration) bool {
+	pipeline, err := shellsafe.ParseWithMaxSegments(text, guardMaxSegments)
+	if err != nil {
+		return false
+	}
+	for _, argv := range pipeline.Commands {
+		if len(argv) == 0 || !sleepCommand(argv[0]) {
+			continue
+		}
+		if len(argv) == 1 {
+			return true
+		}
+		var total time.Duration
+		for _, value := range argv[1:] {
+			duration, durationErr := sleepDuration(value)
+			if durationErr != nil || duration > maxSleep-total {
+				return true
+			}
+			total += duration
+		}
+	}
+	return false
+}
+
+func sleepCommand(command string) bool {
+	base := commandBase(command)
+	if runtime.GOOS == "windows" {
+		return normalizePolicyCommand(base) == "sleep"
+	}
+	return base == "sleep"
+}
+
+func sleepDuration(value string) (time.Duration, error) {
+	if value == "" {
+		return 0, errors.New("sleep duration is empty")
+	}
+	suffix := ""
+	last := value[len(value)-1]
+	if strings.ContainsRune("smhd", rune(last)) {
+		suffix = string(last)
+		value = value[:len(value)-1]
+	}
 	seconds, err := strconv.ParseFloat(value, 64)
-	if err != nil || seconds < 0 {
-		return 0
+	if err != nil || seconds < 0 || math.IsInf(seconds, 0) || math.IsNaN(seconds) {
+		return 0, errors.New("sleep duration is invalid")
 	}
 	multiplier := time.Second
 	switch suffix {
@@ -657,7 +706,11 @@ func sleepDuration(value, suffix string) time.Duration {
 	case "d":
 		multiplier = 24 * time.Hour
 	}
-	return time.Duration(seconds * float64(multiplier))
+	nanoseconds := seconds * float64(multiplier)
+	if nanoseconds >= float64(math.MaxInt64) {
+		return 0, errors.New("sleep duration overflows")
+	}
+	return time.Duration(nanoseconds), nil
 }
 
 type secretRule struct{}

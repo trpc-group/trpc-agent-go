@@ -53,3 +53,25 @@ func TestRedactTextLeavesSafeValueUnchanged(t *testing.T) {
 	require.False(t, changed)
 	require.Equal(t, "go test ./...", got)
 }
+
+func TestRedactTextRemovesCompleteQuotedSecret(t *testing.T) {
+	for _, test := range []struct {
+		input string
+		want  string
+	}{
+		{input: `password="correct horse battery staple"`, want: `password=[REDACTED]`},
+		{input: `secret='alpha beta gamma'`, want: `secret=[REDACTED]`},
+		{input: `password="abc\"def"`, want: `password=[REDACTED]`},
+		{input: `secret='abc\'def'`, want: `secret=[REDACTED]`},
+		{input: `password="correct horse`, want: `password=[REDACTED]`},
+		{input: `secret='alpha beta`, want: `secret=[REDACTED]`},
+		{input: `password="secret\`, want: `password=[REDACTED]`},
+		{input: `secret='secret\`, want: `secret=[REDACTED]`},
+		{input: "password=\"secret\\\ncontinued\"", want: `password=[REDACTED]`},
+		{input: "secret='secret\\\ncontinued'", want: `secret=[REDACTED]`},
+	} {
+		got, changed := redactText(test.input)
+		require.True(t, changed)
+		require.Equal(t, test.want, got)
+	}
+}

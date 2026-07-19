@@ -635,7 +635,7 @@ func commandListKey(command string, allow bool) string {
 	if allow && strings.ContainsAny(command, "/\\") {
 		return "path:" + command
 	}
-	if allow && runtime.GOOS == "linux" {
+	if allow && runtime.GOOS != "windows" {
 		return "bare:" + command
 	}
 	return "normalized:" + normalizePolicyCommand(command)

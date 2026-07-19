@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
@@ -23,6 +24,15 @@ type stateDeltaProvider interface {
 	StateDelta(string, []byte, []byte) map[string][]byte
 }
 
+type stateDeltaErrorProvider interface {
+	StateDeltaWithError(
+		context.Context,
+		string,
+		[]byte,
+		[]byte,
+	) (map[string][]byte, error)
+}
+
 type invocationStateDeltaProvider interface {
 	StateDeltaForInvocation(
 		*agent.Invocation,
@@ -30,6 +40,16 @@ type invocationStateDeltaProvider interface {
 		[]byte,
 		[]byte,
 	) map[string][]byte
+}
+
+type invocationStateDeltaErrorProvider interface {
+	StateDeltaForInvocationWithError(
+		context.Context,
+		*agent.Invocation,
+		string,
+		[]byte,
+		[]byte,
+	) (map[string][]byte, error)
 }
 
 // ExecutionError reports a blocked precheck or withheld tool output.
@@ -87,16 +107,34 @@ func validateExecutionWrapper(
 	if err := validateExecutionGuard(guard); err != nil {
 		return err
 	}
-	if inner == nil || inner.Declaration() == nil {
+	if isNilTool(inner) {
+		return errors.New("tool safety: wrapped tool requires a declaration")
+	}
+	declaration := inner.Declaration()
+	if declaration == nil {
 		return errors.New("tool safety: wrapped tool requires a declaration")
 	}
 	if err := validateBinding(binding); err != nil {
 		return err
 	}
-	if inner.Declaration().Name != binding.ToolName {
+	if declaration.Name != binding.ToolName {
 		return errors.New("tool safety: binding name must match wrapped tool")
 	}
 	return nil
+}
+
+func isNilTool(tl tool.Tool) bool {
+	if tl == nil {
+		return true
+	}
+	value := reflect.ValueOf(tl)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map,
+		reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
 }
 
 func (wrapper *executionWrapper) wrapCallCapabilities() (tool.Tool, error) {
@@ -165,7 +203,7 @@ func (wrapper *callableExecutionWrapper) Call(
 
 type invocationCallableWrapper struct {
 	*callableExecutionWrapper
-	provider invocationStateDeltaProvider
+	provider any
 }
 
 func (wrapper *invocationCallableWrapper) StateDeltaForInvocation(
@@ -174,15 +212,44 @@ func (wrapper *invocationCallableWrapper) StateDeltaForInvocation(
 	arguments []byte,
 	result []byte,
 ) map[string][]byte {
-	delta := wrapper.provider.StateDeltaForInvocation(
-		invocation, toolCallID, arguments, result,
+	delta, err := wrapper.StateDeltaForInvocationWithError(
+		context.Background(), invocation, toolCallID, arguments, result,
 	)
-	return wrapper.inspectStateDelta(delta)
+	if err != nil {
+		return nil
+	}
+	return delta
+}
+
+func (wrapper *invocationCallableWrapper) StateDeltaForInvocationWithError(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	toolCallID string,
+	arguments []byte,
+	result []byte,
+) (map[string][]byte, error) {
+	var delta map[string][]byte
+	if provider, ok := wrapper.provider.(invocationStateDeltaErrorProvider); ok {
+		var err error
+		delta, err = provider.StateDeltaForInvocationWithError(
+			ctx, invocation, toolCallID, arguments, result,
+		)
+		if err != nil {
+			return nil, err
+		}
+	} else if provider, ok := wrapper.provider.(invocationStateDeltaProvider); ok {
+		delta = provider.StateDeltaForInvocation(
+			invocation, toolCallID, arguments, result,
+		)
+	} else {
+		return nil, nil
+	}
+	return wrapper.inspectStateDelta(ctx, delta)
 }
 
 type stateCallableWrapper struct {
 	*callableExecutionWrapper
-	provider stateDeltaProvider
+	provider any
 }
 
 func (wrapper *stateCallableWrapper) StateDelta(
@@ -190,23 +257,57 @@ func (wrapper *stateCallableWrapper) StateDelta(
 	arguments []byte,
 	result []byte,
 ) map[string][]byte {
-	delta := wrapper.provider.StateDelta(toolCallID, arguments, result)
-	return wrapper.inspectStateDelta(delta)
+	delta, err := wrapper.StateDeltaWithError(
+		context.Background(), toolCallID, arguments, result,
+	)
+	if err != nil {
+		return nil
+	}
+	return delta
+}
+
+func (wrapper *stateCallableWrapper) StateDeltaWithError(
+	ctx context.Context,
+	toolCallID string,
+	arguments []byte,
+	result []byte,
+) (map[string][]byte, error) {
+	var delta map[string][]byte
+	if provider, ok := wrapper.provider.(stateDeltaErrorProvider); ok {
+		var err error
+		delta, err = provider.StateDeltaWithError(
+			ctx, toolCallID, arguments, result,
+		)
+		if err != nil {
+			return nil, err
+		}
+	} else if provider, ok := wrapper.provider.(stateDeltaProvider); ok {
+		delta = provider.StateDelta(toolCallID, arguments, result)
+	} else {
+		return nil, nil
+	}
+	return wrapper.inspectStateDelta(ctx, delta)
 }
 
 func wrapStateCapability(wrapped tool.Tool, semantic tool.Tool) tool.Tool {
-	if provider, ok := semantic.(invocationStateDeltaProvider); ok {
-		return wrapInvocationState(wrapped, provider)
+	if _, ok := semantic.(invocationStateDeltaErrorProvider); ok {
+		return wrapInvocationState(wrapped, semantic)
 	}
-	if provider, ok := semantic.(stateDeltaProvider); ok {
-		return wrapLegacyState(wrapped, provider)
+	if _, ok := semantic.(stateDeltaErrorProvider); ok {
+		return wrapLegacyState(wrapped, semantic)
+	}
+	if _, ok := semantic.(invocationStateDeltaProvider); ok {
+		return wrapInvocationState(wrapped, semantic)
+	}
+	if _, ok := semantic.(stateDeltaProvider); ok {
+		return wrapLegacyState(wrapped, semantic)
 	}
 	return wrapped
 }
 
 func wrapInvocationState(
 	wrapped tool.Tool,
-	provider invocationStateDeltaProvider,
+	provider any,
 ) tool.Tool {
 	concrete, ok := wrapped.(*callableExecutionWrapper)
 	if !ok {
@@ -215,7 +316,7 @@ func wrapInvocationState(
 	return &invocationCallableWrapper{concrete, provider}
 }
 
-func wrapLegacyState(wrapped tool.Tool, provider stateDeltaProvider) tool.Tool {
+func wrapLegacyState(wrapped tool.Tool, provider any) tool.Tool {
 	concrete, ok := wrapped.(*callableExecutionWrapper)
 	if !ok {
 		return wrapped

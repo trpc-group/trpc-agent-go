@@ -58,7 +58,7 @@ func (wrapper *executionWrapper) call(
 	if err := wrapper.inspectOutput(ctx, report, snapshot); err != nil {
 		return nil, err
 	}
-	return result, nil
+	return json.RawMessage(append([]byte(nil), snapshot.serialized...)), nil
 }
 
 func (wrapper *executionWrapper) precheck(
@@ -166,6 +166,7 @@ func (wrapper *executionWrapper) rejectOutput(
 		ToolName:       precheck.ToolName,
 		Command:        precheck.Command,
 		Backend:        precheck.Backend,
+		Provider:       precheck.Provider,
 		Blocked:        false,
 		DurationMS:     time.Duration(0).Milliseconds(),
 		PolicyVersion:  wrapper.guard.policy.versionString(),

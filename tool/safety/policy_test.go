@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -128,6 +129,22 @@ func TestLoadPolicy_OmittedListsUseDefaults(t *testing.T) {
 	require.Empty(t, policy.allowedDomains)
 }
 
+func TestLoadPolicyNormalizesValidBoundaryValues(t *testing.T) {
+	path := writePolicyFile(t, "policy.json", `{
+  "version": 1,
+  "commands": {"allowed": ["/usr/bin/go"], "denied": []},
+  "network": {"allowed_domains": ["EXAMPLE.COM", "*.trusted.example"]},
+  "environment": {"allowed": ["CI_TOKEN"]},
+  "limits": {"max_timeout": "1m", "max_output_bytes": 1, "max_concurrency": 1}
+}`)
+	policy, err := LoadPolicy(path)
+	require.NoError(t, err)
+	require.Equal(t, []string{"example.com", "*.trusted.example"}, policy.allowedDomains)
+	require.Equal(t, time.Minute, policy.maxTimeout)
+	require.Equal(t, int64(1), policy.maxOutputBytes)
+	require.Equal(t, 1, policy.maxConcurrency)
+}
+
 func TestLoadPolicy_StrictDecode(t *testing.T) {
 	tests := append(strictYAMLPolicyCases(), strictJSONPolicyCases()...)
 	requirePolicyLoadErrors(t, tests)
@@ -149,6 +166,15 @@ func strictYAMLPolicyCases() []invalidPolicyCase {
 		invalidPolicy("yaml fractional integer limit", "policy.yaml", "version: 1\nlimits:\n  max_output_bytes: 1.5\n"),
 		invalidPolicy("yaml octal-looking integer limit", "policy.yaml", "version: 1\nlimits:\n  max_output_bytes: 010\n"),
 		invalidPolicy("yaml negative octal-looking integer limit", "policy.yaml", "version: 1\nlimits:\n  max_output_bytes: -010\n"),
+		invalidPolicy("yaml object field as list", "policy.yaml", "version: 1\ncommands: []\n"),
+		invalidPolicy("yaml string list as scalar", "policy.yaml", "version: 1\ncommands:\n  allowed: go\n"),
+		invalidPolicy("yaml nested string list", "policy.yaml", "version: 1\ncommands:\n  allowed: [[go]]\n"),
+		invalidPolicy("yaml object in string list", "policy.yaml", "version: 1\ncommands:\n  allowed: [{name: go}]\n"),
+		invalidPolicy("yaml boolean integer limit", "policy.yaml", "version: 1\nlimits:\n  max_output_bytes: true\n"),
+		invalidPolicy("yaml action as list", "policy.yaml", "version: 1\nactions:\n  pipeline: [deny]\n"),
+		invalidPolicy("yaml empty document", "policy.yaml", "---\n"),
+		invalidPolicy("yaml alias", "policy.yaml", "version: &version 1\ncommands:\n  allowed: [*version]\n"),
+		invalidPolicy("yaml malformed trailing document", "policy.yaml", "version: 1\n---\n["),
 	}
 }
 
@@ -161,6 +187,15 @@ func strictJSONPolicyCases() []invalidPolicyCase {
 		invalidJSONPolicy("json null", `{"version":1,"commands":null}`),
 		invalidJSONPolicy("json case variant root field", `{"version":1,"Version":2}`),
 		invalidJSONPolicy("json case variant nested field", `{"version":1,"commands":{"allowed":["go"],"Allowed":["date"]}}`),
+		invalidJSONPolicy("json root array", `[1]`),
+		invalidJSONPolicy("json root scalar", `1`),
+		invalidJSONPolicy("json object in string list", `{"version":1,"commands":{"allowed":[{"name":"go"}]}}`),
+		invalidJSONPolicy("json nested string list", `{"version":1,"commands":{"allowed":[["go"]]}}`),
+		invalidJSONPolicy("json null list item", `{"version":1,"commands":{"allowed":[null]}}`),
+		invalidJSONPolicy("json incomplete array", `{"version":1,"commands":{"allowed":["go"}`),
+		invalidJSONPolicy("json malformed trailing token", `{"version":1} trailing`),
+		invalidJSONPolicy("json object where scalar required", `{"version":{"nested":1}}`),
+		invalidJSONPolicy("json array where scalar required", `{"version":[1]}`),
 	}
 }
 
@@ -169,12 +204,20 @@ func validationPolicyCases() []invalidPolicyCase {
 		invalidJSONPolicy("missing version", `{}`),
 		invalidJSONPolicy("unsupported version", `{"version":2}`),
 		invalidJSONPolicy("duplicate list item", `{"version":1,"commands":{"allowed":["go","go"]}}`),
+		invalidJSONPolicy("empty allowed command", `{"version":1,"commands":{"allowed":[" "]}}`),
+		invalidJSONPolicy("empty denied command", `{"version":1,"commands":{"denied":[""]}}`),
 		invalidJSONPolicy("allow deny conflict", `{"version":1,"commands":{"allowed":["go"],"denied":["GO"]}}`),
 		invalidJSONPolicy("empty list item", `{"version":1,"paths":{"denied":[" "]}}`),
+		invalidJSONPolicy("duplicate denied path", `{"version":1,"paths":{"denied":["/root","/root"]}}`),
 		invalidJSONPolicy("basename allow deny conflict", `{"version":1,"commands":{"allowed":["/usr/bin/curl"],"denied":["curl"]}}`),
 		invalidJSONPolicy("invalid env key", `{"version":1,"environment":{"allowed":["BAD-KEY"]}}`),
+		invalidJSONPolicy("empty env key", `{"version":1,"environment":{"allowed":[""]}}`),
+		invalidJSONPolicy("duplicate env key", `{"version":1,"environment":{"allowed":["CI","CI"]}}`),
 		invalidJSONPolicy("invalid duration", `{"version":1,"limits":{"max_timeout":"soon"}}`),
+		invalidJSONPolicy("zero duration", `{"version":1,"limits":{"max_timeout":"0s"}}`),
 		invalidJSONPolicy("zero output limit", `{"version":1,"limits":{"max_output_bytes":0}}`),
+		invalidJSONPolicy("negative output limit", `{"version":1,"limits":{"max_output_bytes":-1}}`),
+		invalidJSONPolicy("zero concurrency", `{"version":1,"limits":{"max_concurrency":0}}`),
 		invalidJSONPolicy("negative concurrency", `{"version":1,"limits":{"max_concurrency":-1}}`),
 		invalidJSONPolicy("allow action", `{"version":1,"actions":{"pipeline":"allow"}}`),
 		invalidJSONPolicy("unknown action", `{"version":1,"actions":{"pipeline":"review"}}`),
@@ -194,6 +237,13 @@ func validationDomainCases() []invalidPolicyCase {
 		invalidDomainPolicy("legacy padded decimal and hexadecimal components", "09.0.0.0x1"),
 		invalidDomainPolicy("wildcard legacy IP literal domain", "*.127.1"),
 		invalidDomainPolicy("wildcard mixed hexadecimal IP literal domain", "*.127.0.0.0x1"),
+		invalidDomainPolicy("bare wildcard", "*"),
+		invalidDomainPolicy("multiple wildcards", "*.evil.*"),
+		invalidDomainPolicy("leading hyphen", "-bad.example"),
+		invalidDomainPolicy("trailing hyphen", "bad-.example"),
+		invalidDomainPolicy("empty label", "bad..example"),
+		invalidDomainPolicy("oversized label", strings.Repeat("x", 64)+".example"),
+		invalidJSONPolicy("duplicate domain", `{"version":1,"network":{"allowed_domains":["example.com","EXAMPLE.COM"]}}`),
 	}
 }
 
