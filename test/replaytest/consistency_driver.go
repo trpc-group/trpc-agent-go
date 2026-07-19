@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"sync"
 	"testing"
 	"time"
@@ -23,7 +24,12 @@ import (
 )
 
 // stepBaseTime is the reference time for event timestamps.
-var stepBaseTime = time.Now().UTC().Truncate(time.Second)
+// It is set at the beginning of each RunReplayCase call so that event
+// timestamps naturally post-date session creation (which uses wall-clock
+// time.Now() during the first step).  This prevents SQLite's
+// getSummariesList from discarding summaries whose updated_at predates
+// the session created_at.
+var stepBaseTime time.Time
 
 // ReplayResult holds the output of running a ReplayCase against one backend.
 type ReplayResult struct {
@@ -39,6 +45,12 @@ func RunReplayCase(
 	backend *ReplayBackend,
 	rc *ReplayCase,
 ) *ReplayResult {
+	// Capture the reference time now so event timestamps post-date
+	// session creation (which uses wall-clock time.Now() inside the
+	// first step).  This prevents SQLite's getSummariesList from
+	// discarding summaries.
+	stepBaseTime = time.Now().UTC().Truncate(time.Second)
+
 	key := session.Key{
 		AppName:   rc.AppName,
 		UserID:    rc.UserID,
@@ -132,10 +144,25 @@ func RunReplayCase(
 	if err != nil {
 		t.Fatalf("read memories: %v", err)
 	}
+	snap := CaptureSnapshot(backend.Name, sess, memories)
+
+	// When events order is intentionally non-deterministic (e.g.
+	// concurrent writes), sort the normalised events so that
+	// comparison is based on content identity rather than insertion
+	// order.  This replaces broad allowed_diff wildcards with
+	// precise per-field detection.
+	if rc.Verify != nil && rc.Verify.EventsOrderIndependent {
+		sort.Slice(snap.Events, func(i, j int) bool {
+			a, _ := json.Marshal(snap.Events[i])
+			b, _ := json.Marshal(snap.Events[j])
+			return string(a) < string(b)
+		})
+	}
+
 	return &ReplayResult{
 		Backend:  backend.Name,
 		Key:      key,
-		Snapshot: CaptureSnapshot(backend.Name, sess, memories),
+		Snapshot: snap,
 	}
 }
 
@@ -177,13 +204,15 @@ func buildEvent(ev *actionEvent, stepIndex int) *event.Event {
 		obj = model.ObjectTypeToolResponse
 	}
 
+	ts := stepBaseTime.Add(time.Duration(stepIndex) * time.Second)
 	e := &event.Event{
 		Response: &model.Response{
 			Object:    obj,
 			Done:      true,
-			Timestamp: stepBaseTime.Add(time.Duration(stepIndex) * time.Second),
+			Timestamp: ts,
 			Choices:   []model.Choice{{Index: 0, Message: msg}},
 		},
+		Timestamp: ts,
 		Author:    ev.Author,
 		Branch:    ev.Branch,
 		FilterKey: ev.FilterKey,
@@ -307,26 +336,69 @@ func runConcurrentSteps(
 	key session.Key, memKey memory.UserKey, aliases map[string]string,
 	steps []ReplayStep,
 ) {
+	// Pre-build all events outside the critical section so goroutines
+	// can interleave during construction.  All concurrent events share
+	// the same base timestamp — they represent logically simultaneous
+	// operations.
+	type prebuilt struct {
+		step ReplayStep
+		evt  *event.Event // non-nil only for StepAppendEvent
+	}
+	pre := make([]prebuilt, len(steps))
+	for i, step := range steps {
+		pre[i].step = step
+		if step.Type == StepAppendEvent {
+			pre[i].evt = buildEvent(step.Event, 0)
+		}
+	}
+
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	errCh := make(chan error, len(steps))
 
-	for i := range steps {
+	for i := range pre {
 		wg.Add(1)
-		go func(step ReplayStep, idx int) {
+		go func(p prebuilt) {
 			defer wg.Done()
-			mu.Lock()
-			_ = aliases // shared alias map
-			mu.Unlock()
 
-			if step.Type == StepAppendEvent {
-				sess := mustGetSession(t, ctx, backend, key)
-				evt := buildEvent(step.Event, idx)
-				if err := backend.SessionService.AppendEvent(ctx, sess, evt); err != nil {
+			switch p.step.Type {
+			case StepAppendEvent:
+				// Serialise GetSession + AppendEvent to avoid
+				// lost updates under CopyOnWrite semantics.
+				mu.Lock()
+				sess, err := backend.SessionService.GetSession(ctx, key)
+				if err != nil {
+					mu.Unlock()
+					errCh <- fmt.Errorf("concurrent get session: %w", err)
+					return
+				}
+				if sess == nil {
+					mu.Unlock()
+					errCh <- fmt.Errorf("concurrent: session not found")
+					return
+				}
+				err = backend.SessionService.AppendEvent(ctx, sess, p.evt)
+				mu.Unlock()
+				if err != nil {
 					errCh <- fmt.Errorf("concurrent append event: %w", err)
 				}
+
+			case StepAddMemory, StepUpdateMemory, StepDeleteMemory:
+				mu.Lock()
+				err := applyMemoryOpSafe(
+					ctx, backend.MemoryService, memKey, aliases, p.step.Memory,
+				)
+				mu.Unlock()
+				if err != nil {
+					errCh <- err
+				}
+
+			default:
+				errCh <- fmt.Errorf(
+					"unsupported concurrent step type: %s", p.step.Type,
+				)
 			}
-		}(steps[i], i)
+		}(pre[i])
 	}
 	wg.Wait()
 	close(errCh)
@@ -335,4 +407,78 @@ func runConcurrentSteps(
 			t.Errorf("concurrent step error: %v", err)
 		}
 	}
+}
+
+// applyMemoryOpSafe is like applyMemoryOp but returns an error instead of
+// calling t.Fatalf, making it safe to use from goroutines.
+func applyMemoryOpSafe(
+	ctx context.Context, svc memory.Service,
+	userKey memory.UserKey, aliases map[string]string, a *actionMemory,
+) error {
+	switch a.Op {
+	case "add":
+		var opts []memory.AddOption
+		if a.Meta != nil {
+			opts = append(opts, memory.WithMetadata(buildMemoryMeta(a.Meta)))
+		}
+		if err := svc.AddMemory(
+			ctx, userKey, a.Content, copyStrings(a.Topics), opts...,
+		); err != nil {
+			return fmt.Errorf("add memory %q: %w", a.Content, err)
+		}
+		if a.ResultAlias != "" {
+			entries, _ := svc.ReadMemories(ctx, userKey, 0)
+			for _, e := range entries {
+				if e != nil && e.Memory != nil &&
+					e.Memory.Memory == a.Content {
+					aliases[a.ResultAlias] = e.ID
+					break
+				}
+			}
+		}
+	case "update":
+		memID, ok := aliases[a.Ref]
+		if !ok {
+			return fmt.Errorf("memory alias %q not found", a.Ref)
+		}
+		var opts []memory.UpdateOption
+		if a.Meta != nil {
+			opts = append(
+				opts,
+				memory.WithUpdateMetadata(buildMemoryMeta(a.Meta)),
+			)
+		}
+		result := &memory.UpdateResult{}
+		opts = append(opts, memory.WithUpdateResult(result))
+		if err := svc.UpdateMemory(
+			ctx,
+			memory.Key{
+				AppName: userKey.AppName, UserID: userKey.UserID,
+				MemoryID: memID,
+			},
+			a.Content, copyStrings(a.Topics), opts...,
+		); err != nil {
+			return fmt.Errorf("update memory %q: %w", a.Content, err)
+		}
+		if a.ResultAlias != "" {
+			aliases[a.ResultAlias] = result.MemoryID
+		}
+	case "delete":
+		memID, ok := aliases[a.Ref]
+		if !ok {
+			return fmt.Errorf("memory alias %q not found", a.Ref)
+		}
+		if err := svc.DeleteMemory(
+			ctx,
+			memory.Key{
+				AppName: userKey.AppName, UserID: userKey.UserID,
+				MemoryID: memID,
+			},
+		); err != nil {
+			return fmt.Errorf("delete memory %q: %w", a.Content, err)
+		}
+	default:
+		return fmt.Errorf("unknown memory op %q", a.Op)
+	}
+	return nil
 }

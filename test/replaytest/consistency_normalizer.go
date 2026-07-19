@@ -227,7 +227,6 @@ func normalizeSummaries(sess *session.Session) map[string]summarySnapshot {
 			entry.Boundary = &replayBoundary{
 				Version:     boundary.Version,
 				FilterKey:   boundary.FilterKey,
-				CutoffAt:    timeToString(boundary.CutoffAt),
 				LastEventID: boundary.LastEventID,
 			}
 		}

@@ -128,11 +128,12 @@ type actionTrack struct {
 
 // VerifySpec declares expected properties of the final snapshot.
 type VerifySpec struct {
-	EventsCount          *int `json:"events_count,omitempty"`
-	MemoriesCount        *int `json:"memories_count,omitempty"`
-	NoDuplicateEvents    bool `json:"no_duplicate_events,omitempty"`
-	NoDuplicateMemories  bool `json:"no_duplicate_memories,omitempty"`
-	EventsOrderPreserved bool `json:"events_order_preserved,omitempty"`
+	EventsCount            *int `json:"events_count,omitempty"`
+	MemoriesCount          *int `json:"memories_count,omitempty"`
+	NoDuplicateEvents      bool `json:"no_duplicate_events,omitempty"`
+	NoDuplicateMemories    bool `json:"no_duplicate_memories,omitempty"`
+	EventsOrderPreserved   bool `json:"events_order_preserved,omitempty"`
+	EventsOrderIndependent bool `json:"events_order_independent,omitempty"`
 }
 
 // AllowedDiffRule describes a cross-backend difference that is expected.
