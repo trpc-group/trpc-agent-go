@@ -25,14 +25,15 @@ import (
 )
 
 // allRuleIDs is the complete set of rule IDs implemented by the rules engine
-// plus the AST rule engine. It is used by the clean-fixture assertion to
-// verify that no rules fire on a benign diff.
+// plus the AST rule engine and the fake LLM heuristics. It is used by the
+// clean-fixture assertion to verify that no rules fire on a benign diff.
 var allRuleIDs = []string{
 	"SI-001", "SC-001", "SC-002", "SC-003",
 	"GL-001", "GL-002", "GL-003",
 	"RL-001", "EH-001", "TM-001",
 	"DB-001", "DB-002",
 	"AST-001", "AST-002", "AST-003", "AST-004",
+	"LLM-001", "LLM-002", "LLM-003",
 }
 
 // fixtureCase describes a single integration test case.
@@ -43,6 +44,7 @@ type fixtureCase struct {
 	noFindings       bool   // if true, assert no rule IDs appear in the report
 	expectConclusion string // expected conclusion string in the JSON report
 	plaintextSecret  string // secret value that must NOT appear in the report
+	model            string // --model flag value; "" leaves the default (rule-based only)
 }
 
 // TestIntegration_Fixtures runs the full review pipeline against each .diff
@@ -60,28 +62,35 @@ type fixtureCase struct {
 // present, "pass" otherwise.
 func TestIntegration_Fixtures(t *testing.T) {
 	fixtures := []fixtureCase{
-		{"clean", "clean.diff", "", true, "pass", ""},
-		{"security", "security.diff", "SI-001", false, "fail", "sk-abc123def456ghi789jkl012mno345"},
-		{"goroutine_leak", "goroutine_leak.diff", "GL-001", false, "pass", ""},
-		{"resource_leak", "resource_leak.diff", "RL-001", false, "pass", ""},
-		{"missing_tests", "missing_tests.diff", "TM-001", false, "pass", ""},
-		{"sensitive_info", "sensitive_info.diff", "SC-001", false, "fail", "super-secret-value-12345"},
-		{"db_lifecycle", "db_lifecycle.diff", "DB-001", false, "pass", ""},
-		{"duplicate_finding", "duplicate_finding.diff", "SI-001", false, "fail", "sk-duplicate001test002value003"},
-		{"sandbox_failure", "sandbox_failure.diff", "", false, "pass", ""},
+		{name: "clean", fixtureFile: "clean.diff", noFindings: true, expectConclusion: "pass"},
+		{name: "security", fixtureFile: "security.diff", expectFinding: "SI-001", expectConclusion: "fail", plaintextSecret: "sk-abc123def456ghi789jkl012mno345"},
+		{name: "goroutine_leak", fixtureFile: "goroutine_leak.diff", expectFinding: "GL-001", expectConclusion: "pass"},
+		{name: "resource_leak", fixtureFile: "resource_leak.diff", expectFinding: "RL-001", expectConclusion: "pass"},
+		{name: "missing_tests", fixtureFile: "missing_tests.diff", expectFinding: "TM-001", expectConclusion: "pass"},
+		{name: "sensitive_info", fixtureFile: "sensitive_info.diff", expectFinding: "SC-001", expectConclusion: "fail", plaintextSecret: "super-secret-value-12345"},
+		{name: "db_lifecycle", fixtureFile: "db_lifecycle.diff", expectFinding: "DB-001", expectConclusion: "pass"},
+		{name: "duplicate_finding", fixtureFile: "duplicate_finding.diff", expectFinding: "SI-001", expectConclusion: "fail", plaintextSecret: "sk-duplicate001test002value003"},
+		{name: "sandbox_failure", fixtureFile: "sandbox_failure.diff", expectConclusion: "pass"},
 		// Phase-1 new rules (borrowed from competitor PRs #2190/#2243):
-		{"missing_tx_rollback", "missing_tx_rollback.diff", "DB-002", false, "pass", ""},
-		{"panic_in_goroutine", "panic_in_goroutine.diff", "GL-003", false, "pass", ""},
-		{"cmd_injection", "cmd_injection.diff", "SC-002", false, "fail", ""},
-		{"sensitive_info_in_log", "sensitive_info_in_log.diff", "SC-003", false, "pass", ""},
+		{name: "missing_tx_rollback", fixtureFile: "missing_tx_rollback.diff", expectFinding: "DB-002", expectConclusion: "pass"},
+		{name: "panic_in_goroutine", fixtureFile: "panic_in_goroutine.diff", expectFinding: "GL-003", expectConclusion: "pass"},
+		{name: "cmd_injection", fixtureFile: "cmd_injection.diff", expectFinding: "SC-002", expectConclusion: "fail"},
+		{name: "sensitive_info_in_log", fixtureFile: "sensitive_info_in_log.diff", expectFinding: "SC-003", expectConclusion: "pass"},
 		// Phase-3 AST rules (borrowed from competitor PR #2243):
-		{"ast_http_body_leak", "ast_http_body_leak.diff", "AST-001", false, "pass", ""},
-		{"ast_sql_rows_leak", "ast_sql_rows_leak.diff", "AST-002", false, "pass", ""},
-		{"ast_context_misuse", "ast_context_misuse.diff", "AST-003", false, "pass", ""},
-		{"ast_goroutine_shared_mutation", "ast_goroutine_shared_mutation.diff", "AST-004", false, "pass", ""},
+		{name: "ast_http_body_leak", fixtureFile: "ast_http_body_leak.diff", expectFinding: "AST-001", expectConclusion: "pass"},
+		{name: "ast_sql_rows_leak", fixtureFile: "ast_sql_rows_leak.diff", expectFinding: "AST-002", expectConclusion: "pass"},
+		{name: "ast_context_misuse", fixtureFile: "ast_context_misuse.diff", expectFinding: "AST-003", expectConclusion: "pass"},
+		{name: "ast_goroutine_shared_mutation", fixtureFile: "ast_goroutine_shared_mutation.diff", expectFinding: "AST-004", expectConclusion: "pass"},
 		// AST benign: a complete Go file that uses http.Get but properly
 		// defers Body.Close — none of the AST rules should fire.
-		{"ast_http_body_closed", "ast_http_body_closed.diff", "", true, "pass", ""},
+		{name: "ast_http_body_closed", fixtureFile: "ast_http_body_closed.diff", noFindings: true, expectConclusion: "pass"},
+		// Phase-3.2 fake LLM (borrowed from competitor PR #2243):
+		// --model=fake exercises the LLM integration path without API
+		// keys. The fixture contains a hardcoded password (LLM-001), a
+		// TODO comment (LLM-002), and a debug print (LLM-003). SI-001
+		// also fires on the password; the test only asserts LLM-001
+		// appears, proving the fake model's output reached the report.
+		{name: "llm_patterns", fixtureFile: "llm_patterns.diff", expectFinding: "LLM-001", expectConclusion: "fail", plaintextSecret: "super-secret-value-12345", model: "fake"},
 	}
 
 	for _, tt := range fixtures {
@@ -113,6 +122,7 @@ func TestIntegration_Fixtures(t *testing.T) {
 					executor:    "local",
 					unsafeLocal: true,
 					dryRun:      true,
+					model:       tt.model,
 				},
 				startTime: time.Now(),
 			}

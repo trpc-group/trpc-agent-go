@@ -37,6 +37,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/astrules"
+	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/fakellm"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/inputsource"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/permission"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/redact"
@@ -46,6 +47,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/sandbox"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/store"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/telemetry"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 )
 
@@ -88,7 +90,7 @@ func parseFlags(args []string) (*cliFlags, error) {
 	fs.StringVar(&f.executor, "executor", "container", "sandbox executor backend: container|e2b|local")
 	fs.BoolVar(&f.unsafeLocal, "unsafe-local", false, "allow the unsafe local executor (fail-closed by default)")
 	fs.BoolVar(&f.dryRun, "dry-run", false, "parse inputs and plan the review without executing sandboxed tools")
-	fs.StringVar(&f.model, "model", "deepseek-v4-flash", "LLM model identifier reserved for future LLM-based review; not yet wired into the pipeline")
+	fs.StringVar(&f.model, "model", "deepseek-v4-flash", "LLM model identifier: 'fake' uses a deterministic API-key-free fake model suitable for CI; the default runs rule-based review only")
 	// PR metadata (borrowed from competitor PR #2090): embedded in the
 	// report header so CI-generated reports carry reviewer context.
 	fs.StringVar(&f.prTitle, "pr-title", "", "PR title to embed in the report header (optional, CI metadata)")
@@ -159,11 +161,12 @@ func runPipeline(ctx context.Context, opts *pipelineOpts) (retErr error) {
 	}
 
 	taskID := store.NewTaskID(opts.repoPath)
-	log.Printf("task %s starting (dry-run=%v, executor=%s)", taskID, opts.dryRun, opts.executor)
-	// The --model flag is parsed for forward compatibility but the current
-	// pipeline only runs deterministic rules. Warn the user so a non-default
-	// model value is not silently ignored.
-	if opts.model != "" && opts.model != "deepseek-v4-flash" {
+	log.Printf("task %s starting (dry-run=%v, executor=%s, model=%s)", taskID, opts.dryRun, opts.executor, opts.model)
+	// The --model flag selects the LLM augmentation strategy:
+	//   "" | "deepseek-v4-flash"  — rule-based only (default; no LLM call)
+	//   "fake"                    — deterministic fake LLM (no API keys; CI)
+	//   any other value           — reserved for real LLM integration (Phase 3+)
+	if opts.model != "" && opts.model != "deepseek-v4-flash" && opts.model != "fake" {
 		log.Printf("warning: --model %q is not yet wired into the pipeline; review is rule-based only", opts.model)
 	}
 
@@ -206,7 +209,7 @@ func runPipeline(ctx context.Context, opts *pipelineOpts) (retErr error) {
 		log.Printf("redacted %d sensitive occurrence(s) in diff text", n)
 	}
 
-	rev = runRules(taskID, input, metrics)
+	rev = runRules(taskID, input, metrics, opts.model)
 	log.Printf("rules: %d confirmed finding(s), %d warning(s), %d need human review",
 		len(rev.Findings), len(rev.Warnings), len(rev.NeedsHumanReview))
 
@@ -275,16 +278,71 @@ func loadInput(ctx context.Context, opts *pipelineOpts) (*inputsource.Input, err
 // into a review.Report. AST rules run on newly added files only (OldPath ==
 // "/dev/null") because that is the only case where the added lines form a
 // complete, parseable Go source file.
-func runRules(taskID string, input *inputsource.Input, metrics *telemetry.Metrics) *review.Report {
+//
+// When modelFlag is "fake", the deterministic fake LLM (fakellm.FakeModel)
+// is invoked with the diff text and its findings are merged with the rule
+// findings before report aggregation. This exercises the LLM integration
+// path end-to-end without requiring API keys. Borrowed from competitor
+// PR #2243's --fake-model flag.
+func runRules(taskID string, input *inputsource.Input, metrics *telemetry.Metrics, modelFlag string) *review.Report {
 	engine := rules.NewEngine()
 	ruleFindings := engine.Run(input.Files)
 	astEngine := astrules.NewEngine()
 	astFindings := astEngine.Run(input.Files)
 	ruleFindings = append(ruleFindings, astFindings...)
+
+	if modelFlag == "fake" {
+		llmFindings := runFakeLLM(input)
+		ruleFindings = append(ruleFindings, llmFindings...)
+	}
+
 	for _, f := range ruleFindings {
 		metrics.IncFinding(f.Severity)
 	}
 	return review.Build(taskID, ruleFindings)
+}
+
+// runFakeLLM drives the deterministic fake LLM against the diff text and
+// converts its JSON response into rules.Finding values tagged with
+// Source="llm:<RuleID>". The fake model is API-key-free and produces
+// deterministic output, so this function is safe to call from CI. Errors
+// from the fake model are logged and swallowed: the fake never fails in
+// practice, and a failure here should not break the rule-based review.
+func runFakeLLM(input *inputsource.Input) []rules.Finding {
+	m := fakellm.New()
+	req := model.NewRequest([]model.Message{
+		model.NewUserMessage(input.DiffText),
+	})
+	ch, err := m.GenerateContent(context.Background(), req)
+	if err != nil {
+		log.Printf("fake llm: generate failed: %v (skipping LLM findings)", err)
+		return nil
+	}
+	var content string
+	for r := range ch {
+		if r == nil || len(r.Choices) == 0 {
+			continue
+		}
+		content += r.Choices[0].Message.Content
+	}
+	parsed := fakellm.ParseFindings(content)
+	out := make([]rules.Finding, 0, len(parsed))
+	for _, f := range parsed {
+		out = append(out, rules.Finding{
+			RuleID:         f.RuleID,
+			Severity:       f.Severity,
+			Category:       f.Category,
+			File:           f.File,
+			Line:           f.Line,
+			Title:          f.Title,
+			Evidence:       f.Evidence,
+			Recommendation: f.Recommendation,
+			Confidence:     f.Confidence,
+			Source:         "llm:" + f.RuleID,
+		})
+	}
+	log.Printf("fake llm: %d finding(s) emitted", len(out))
+	return out
 }
 
 // resolveSkillsDir resolves the skills/ directory path. It checks the
