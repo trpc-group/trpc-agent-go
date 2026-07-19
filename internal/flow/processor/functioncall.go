@@ -457,18 +457,27 @@ func persistFunctionResponseAfterDeadline(
 	invocation *agent.Invocation,
 	functionResponseEvent *event.Event,
 ) error {
+	if functionResponseEvent == nil {
+		return nil
+	}
 	persistCtx, cancel := context.WithTimeout(
 		context.WithoutCancel(ctx),
 		funcRespDeadlinePersistenceTimeout,
 	)
 	defer cancel()
 	routeEvent := sessionroute.SnapshotEventIdentity(functionResponseEvent)
+	var parentMetadata *event.ParentInvocationMetadata
+	if functionResponseEvent.ParentMetadata != nil {
+		metadata := *functionResponseEvent.ParentMetadata
+		parentMetadata = &metadata
+	}
 	functionResponseEvent = applyEventPluginsAfterDeadline(
 		persistCtx,
 		invocation,
 		functionResponseEvent,
 	)
 	restoreEventRoutingFields(functionResponseEvent, routeEvent)
+	functionResponseEvent.ParentMetadata = parentMetadata
 
 	attached, err := appender.Invoke(
 		persistCtx,
