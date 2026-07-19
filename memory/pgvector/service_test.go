@@ -2471,24 +2471,61 @@ func TestExecuteVectorSearch_OrderByEventTimeUsesSimilarityFirst(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestMergeHybridResults(t *testing.T) {
-	entry := func(id string) *memory.Entry {
-		return &memory.Entry{
-			ID:     id,
-			Memory: &memory.Memory{Memory: id},
+func TestExpandedHybridSearchLimit(t *testing.T) {
+	assert.Equal(t, 120, expandedHybridSearchLimit(30))
+	assert.Equal(t, 0, expandedHybridSearchLimit(0))
+	assert.Equal(t, -1, expandedHybridSearchLimit(-1))
+
+	maxInt := int(^uint(0) >> 1)
+	assert.Equal(t, maxInt, expandedHybridSearchLimit(maxInt))
+}
+
+func TestRankedResultsByMemoryKindPromotesMinorityKind(t *testing.T) {
+	episodePositions := map[int]bool{
+		12: true, 17: true, 19: true, 20: true, 23: true,
+		26: true, 27: true, 32: true, 46: true, 47: true,
+	}
+	vectorResults := make([]*memory.Entry, 0, 72)
+	for index := 0; index < 72; index++ {
+		kind := memory.KindFact
+		if episodePositions[index] {
+			kind = memory.KindEpisode
 		}
+		id := fmt.Sprintf("memory-%02d", index)
+		if index == 47 {
+			id = "target-episode"
+		}
+		vectorResults = append(vectorResults, &memory.Entry{
+			ID: id,
+			Memory: &memory.Memory{
+				Memory: id,
+				Kind:   kind,
+			},
+		})
 	}
 
-	results := mergeHybridResults(
-		[]*memory.Entry{entry("mem-1"), entry("mem-2")},
-		[]*memory.Entry{entry("mem-2"), entry("mem-3")},
-		0,
-		2,
+	kindRankings := rankedResultsByMemoryKind(vectorResults)
+	require.Len(t, kindRankings, 2)
+	merged := imemory.MergeRankedResults(
+		append([][]*memory.Entry{vectorResults}, kindRankings...),
+		defaultRRFK,
+		len(vectorResults),
 	)
 
-	require.Len(t, results, 2)
-	assert.Equal(t, "mem-2", results[0].ID)
-	assert.Greater(t, results[0].Score, results[1].Score)
+	require.Len(t, merged, len(vectorResults))
+	targetIndex := entryIndex(merged, "target-episode")
+	require.NotEqual(t, -1, targetIndex)
+	assert.Less(t, targetIndex, 47)
+	assert.Nil(t, rankedResultsByMemoryKind(vectorResults[:4]))
+}
+
+func entryIndex(entries []*memory.Entry, id string) int {
+	for index, entry := range entries {
+		if entry != nil && entry.ID == id {
+			return index
+		}
+	}
+	return -1
 }
 
 func TestMergeSearchResults(t *testing.T) {

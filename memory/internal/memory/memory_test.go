@@ -1778,6 +1778,27 @@ func TestMergeHybridResults_UsesDefaultKAndSkipsInvalidEntries(t *testing.T) {
 	assert.Greater(t, results[0].Score, results[1].Score)
 }
 
+func TestMergeRankedResults_CombinesMultipleRankingsDeterministically(t *testing.T) {
+	base := time.Date(2024, 5, 7, 0, 0, 0, 0, time.UTC)
+	entry := func(id string) *memory.Entry {
+		return newSearchTestEntry(id, id, nil, base, base)
+	}
+	rankings := [][]*memory.Entry{
+		{entry("shared"), entry("vector-only")},
+		{entry("keyword-only"), entry("shared")},
+		{entry("shared"), entry("kind-only")},
+	}
+
+	first := MergeRankedResults(rankings, 0, 3)
+	second := MergeRankedResults(rankings, 0, 3)
+
+	require.Len(t, first, 3)
+	assert.Equal(t, "shared", first[0].ID)
+	assert.Equal(t, []string{first[0].ID, first[1].ID, first[2].ID},
+		[]string{second[0].ID, second[1].ID, second[2].ID})
+	assert.Greater(t, first[0].Score, first[1].Score)
+}
+
 func TestIsPunctToken(t *testing.T) {
 	tests := []struct {
 		name     string

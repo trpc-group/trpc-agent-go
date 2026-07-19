@@ -1507,6 +1507,19 @@ func MergeHybridResults(
 	k int,
 	maxResults int,
 ) []*memory.Entry {
+	return MergeRankedResults(
+		[][]*memory.Entry{primary, secondary}, k, maxResults,
+	)
+}
+
+// MergeRankedResults combines any number of ranked result lists using
+// equal-weight Reciprocal Rank Fusion. Scores are assigned using
+// 1 / (k + rank) and summed across result lists.
+func MergeRankedResults(
+	rankings [][]*memory.Entry,
+	k int,
+	maxResults int,
+) []*memory.Entry {
 	if k <= 0 {
 		k = DefaultHybridRRFK
 	}
@@ -1516,7 +1529,7 @@ func MergeHybridResults(
 		score float64
 	}
 
-	scores := make(map[string]*rrfEntry, len(primary)+len(secondary))
+	scores := make(map[string]*rrfEntry)
 	accumulate := func(results []*memory.Entry) {
 		for rank, entry := range results {
 			if entry == nil || entry.ID == "" {
@@ -1534,8 +1547,9 @@ func MergeHybridResults(
 			}
 		}
 	}
-	accumulate(primary)
-	accumulate(secondary)
+	for _, ranking := range rankings {
+		accumulate(ranking)
+	}
 
 	merged := make([]*memory.Entry, 0, len(scores))
 	for _, scored := range scores {

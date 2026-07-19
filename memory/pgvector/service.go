@@ -535,7 +535,10 @@ func (s *Service) ReadMemories(
 
 // minKindFallbackResults is the threshold below which a kind-filtered
 // search triggers a fallback unfiltered search when KindFallback is enabled.
-const minKindFallbackResults = 3
+const (
+	minKindFallbackResults = 3
+	hybridOverfetchFactor  = 4
+)
 
 // SearchMemories searches memories for a user using vector similarity.
 // Options may include WithSearchOptions for advanced filtering
@@ -572,8 +575,12 @@ func (s *Service) SearchMemories(
 	if opts.MaxResults > 0 {
 		maxResults = opts.MaxResults
 	}
+	candidateLimit := maxResults
+	if opts.HybridSearch {
+		candidateLimit = expandedHybridSearchLimit(maxResults)
+	}
 
-	results, err := s.executeVectorSearch(ctx, userKey, opts, vector, maxResults)
+	results, err := s.executeVectorSearch(ctx, userKey, opts, vector, candidateLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -585,24 +592,34 @@ func (s *Service) SearchMemories(
 		fallbackOpts.Kind = ""
 		fallbackOpts.KindFallback = false
 		fallbackResults, fallbackErr := s.executeVectorSearch(
-			ctx, userKey, fallbackOpts, vector, maxResults,
+			ctx, userKey, fallbackOpts, vector, candidateLimit,
 		)
 		if fallbackErr == nil && len(fallbackResults) > 0 {
-			results = mergeSearchResults(results, fallbackResults, opts.Kind, maxResults)
+			results = mergeSearchResults(
+				results, fallbackResults, opts.Kind, candidateLimit,
+			)
 		}
 	}
 
-	// Hybrid search: run keyword search and merge with vector results
-	// using Reciprocal Rank Fusion (RRF) to improve recall for exact
-	// entity names, book titles, etc.
+	// Hybrid search fuses global vector, keyword, and per-kind vector rankings.
+	// The per-kind rankings normalize rank for minority memory kinds without a
+	// fixed quota.
 	if opts.HybridSearch {
-		keywordResults, kwErr := s.executeKeywordSearch(ctx, userKey, opts, maxResults)
+		keywordResults, kwErr := s.executeKeywordSearch(
+			ctx, userKey, opts, candidateLimit,
+		)
+		rankings := make([][]*memory.Entry, 0, 4)
+		rankings = append(rankings, results)
 		if kwErr == nil && len(keywordResults) > 0 {
-			rrfK := opts.HybridRRFK
-			if rrfK <= 0 {
-				rrfK = defaultRRFK
-			}
-			results = mergeHybridResults(results, keywordResults, rrfK, maxResults)
+			rankings = append(rankings, keywordResults)
+		}
+		rankings = append(rankings, rankedResultsByMemoryKind(results)...)
+		rrfK := opts.HybridRRFK
+		if rrfK <= 0 {
+			rrfK = defaultRRFK
+		}
+		if len(rankings) > 1 {
+			results = imemory.MergeRankedResults(rankings, rrfK, candidateLimit)
 		}
 	}
 
@@ -643,6 +660,47 @@ func (s *Service) SearchMemories(
 	}
 
 	return results, nil
+}
+
+func expandedHybridSearchLimit(limit int) int {
+	if limit <= 0 {
+		return limit
+	}
+	maxInt := int(^uint(0) >> 1)
+	if limit > maxInt/hybridOverfetchFactor {
+		return maxInt
+	}
+	return limit * hybridOverfetchFactor
+}
+
+func rankedResultsByMemoryKind(
+	results []*memory.Entry,
+) [][]*memory.Entry {
+	byKind := make(map[string][]*memory.Entry)
+	for _, entry := range results {
+		if entry == nil || entry.Memory == nil {
+			continue
+		}
+		kind := imemory.EffectiveKind(entry.Memory)
+		if kind == "" {
+			continue
+		}
+		key := string(kind)
+		byKind[key] = append(byKind[key], entry)
+	}
+	if len(byKind) < 2 {
+		return nil
+	}
+	kinds := make([]string, 0, len(byKind))
+	for kind := range byKind {
+		kinds = append(kinds, kind)
+	}
+	slices.Sort(kinds)
+	rankings := make([][]*memory.Entry, 0, len(kinds))
+	for _, kind := range kinds {
+		rankings = append(rankings, byKind[kind])
+	}
+	return rankings
 }
 
 // executeVectorSearch runs a single vector similarity search against pgvector.
@@ -787,23 +845,6 @@ func (s *Service) executeKeywordSearch(
 		return []*memory.Entry{}, nil
 	}
 	return results, nil
-}
-
-// mergeHybridResults combines vector and keyword search results using
-// Reciprocal Rank Fusion (RRF). Each result gets score = 1/(k+rank)
-// from each search method. Combined scores determine final ranking.
-func mergeHybridResults(
-	vectorResults []*memory.Entry,
-	keywordResults []*memory.Entry,
-	k int,
-	maxResults int,
-) []*memory.Entry {
-	return imemory.MergeHybridResults(
-		vectorResults,
-		keywordResults,
-		k,
-		maxResults,
-	)
 }
 
 // mergeSearchResults merges kind-filtered results with fallback results.
