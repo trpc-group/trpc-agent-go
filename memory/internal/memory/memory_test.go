@@ -846,6 +846,61 @@ func TestSearchResultDeduplicationHelpers(t *testing.T) {
 		assert.Len(t, deduped, 2,
 			"tokenless entries carry no lexical evidence of duplication and must both survive")
 	})
+
+	t.Run("deduplicate preserves conflicting states newest first", func(t *testing.T) {
+		older := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+		newer := older.Add(time.Hour)
+		four := &memory.Entry{
+			ID:        "four",
+			Score:     0.95,
+			CreatedAt: older,
+			UpdatedAt: older,
+			Memory: &memory.Memory{
+				Memory: "Has written four short stories since starting to write regularly",
+			},
+		}
+		seven := &memory.Entry{
+			ID:        "seven",
+			Score:     0.90,
+			CreatedAt: newer,
+			UpdatedAt: newer,
+			Memory: &memory.Memory{
+				Memory: "Has written seven short stories since starting to write regularly",
+			},
+		}
+
+		ordinary := DeduplicateResults([]*memory.Entry{four, seven})
+		require.Len(t, ordinary, 1)
+		assert.Equal(t, "four", ordinary[0].ID)
+
+		deduped := DeduplicateResultsPreservingConflicts(
+			[]*memory.Entry{four, seven},
+		)
+		require.Len(t, deduped, 2)
+		assert.Equal(t, "seven", deduped[0].ID)
+		assert.Equal(t, "four", deduped[1].ID)
+	})
+
+	t.Run("deduplicate normalizes equivalent number forms", func(t *testing.T) {
+		results := []*memory.Entry{
+			{ID: "word", Score: 0.9, Memory: &memory.Memory{
+				Memory: "Has written four short stories this month since starting to write regularly",
+			}},
+			{ID: "digit", Score: 0.8, Memory: &memory.Memory{
+				Memory: "Has written 4 short stories this month since starting to write regularly",
+			}},
+		}
+
+		deduped := DeduplicateResultsPreservingConflicts(results)
+		require.Len(t, deduped, 1)
+		assert.Equal(t, "word", deduped[0].ID)
+	})
+
+	t.Run("deduplicate normalizes compound number forms", func(t *testing.T) {
+		assert.Equal(t, "21", normalizeCriticalValue("twenty-one"))
+		assert.Equal(t, "21", normalizeCriticalValue("twenty one"))
+		assert.Equal(t, "21", normalizeCriticalValue("21"))
+	})
 }
 
 func TestMatchMemoryEntry_FallbackNoTokens(t *testing.T) {

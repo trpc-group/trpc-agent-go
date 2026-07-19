@@ -2547,7 +2547,7 @@ func TestMergeSearchResults(t *testing.T) {
 }
 
 func TestDeduplicateResults(t *testing.T) {
-	results := deduplicateResults([]*memory.Entry{
+	results := imemory.DeduplicateResultsPreservingConflicts([]*memory.Entry{
 		{ID: "mem-1", Score: 0.95, Memory: &memory.Memory{Memory: "Alice hiking in Kyoto"}},
 		{ID: "mem-2", Score: 0.90, Memory: &memory.Memory{Memory: "Alice hiking in Kyoto"}},
 		{ID: "mem-3", Score: 0.80, Memory: &memory.Memory{Memory: "Alice studying in Tokyo"}},
@@ -2556,14 +2556,6 @@ func TestDeduplicateResults(t *testing.T) {
 	require.Len(t, results, 2)
 	assert.Equal(t, "mem-1", results[0].ID)
 	assert.Equal(t, "mem-3", results[1].ID)
-}
-
-func TestJaccardSimilarity(t *testing.T) {
-	assert.Equal(t, 1.0, jaccardSimilarity(map[string]struct{}{}, map[string]struct{}{}))
-	assert.InDelta(t, 0.333333, jaccardSimilarity(
-		map[string]struct{}{"alice": {}, "kyoto": {}},
-		map[string]struct{}{"alice": {}, "tokyo": {}},
-	), 0.0001)
 }
 
 func TestService_SearchMemories_ThresholdAndDeduplicate(t *testing.T) {

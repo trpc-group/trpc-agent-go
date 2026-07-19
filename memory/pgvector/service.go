@@ -653,7 +653,7 @@ func (s *Service) SearchMemories(
 
 	// Content-based deduplication of near-identical memories.
 	if opts.Deduplicate && len(results) > 1 {
-		results = deduplicateResults(results)
+		results = imemory.DeduplicateResultsPreservingConflicts(results)
 	}
 	if maxResults > 0 && len(results) > maxResults {
 		results = results[:maxResults]
@@ -883,73 +883,6 @@ func mergeSearchResults(
 		merged = merged[:maxResults]
 	}
 	return merged
-}
-
-// deduplicateResults removes near-duplicate memories based on word-level
-// Jaccard similarity. When two results have >80% word overlap, the
-// lower-scored one is dropped.
-func deduplicateResults(results []*memory.Entry) []*memory.Entry {
-	const jaccardThreshold = 0.80
-
-	type wordSet map[string]struct{}
-	sets := make([]wordSet, len(results))
-	for i, r := range results {
-		ws := make(wordSet)
-		for _, w := range strings.Fields(strings.ToLower(r.Memory.Memory)) {
-			ws[w] = struct{}{}
-		}
-		sets[i] = ws
-	}
-
-	keep := make([]bool, len(results))
-	for i := range keep {
-		keep[i] = true
-	}
-
-	for i := 0; i < len(results); i++ {
-		if !keep[i] {
-			continue
-		}
-		for j := i + 1; j < len(results); j++ {
-			if !keep[j] {
-				continue
-			}
-			if jaccardSimilarity(sets[i], sets[j]) >= jaccardThreshold {
-				// Drop the lower-scored duplicate.
-				if results[i].Score >= results[j].Score {
-					keep[j] = false
-				} else {
-					keep[i] = false
-					break
-				}
-			}
-		}
-	}
-
-	deduped := make([]*memory.Entry, 0, len(results))
-	for i, r := range results {
-		if keep[i] {
-			deduped = append(deduped, r)
-		}
-	}
-	return deduped
-}
-
-func jaccardSimilarity(a, b map[string]struct{}) float64 {
-	if len(a) == 0 && len(b) == 0 {
-		return 1.0
-	}
-	intersection := 0
-	for w := range a {
-		if _, ok := b[w]; ok {
-			intersection++
-		}
-	}
-	union := len(a) + len(b) - intersection
-	if union == 0 {
-		return 0
-	}
-	return float64(intersection) / float64(union)
 }
 
 // Tools returns the list of available memory tools.
