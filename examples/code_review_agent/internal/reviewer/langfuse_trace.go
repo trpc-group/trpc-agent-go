@@ -13,11 +13,11 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log"
 	"net"
 	"net/url"
 	"os"
 	"strings"
+	"time"
 
 	agentpkg "trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/langfuse"
@@ -34,30 +34,41 @@ var (
 	langfuseInsecure  = flag.Bool("langfuse-insecure", false, "Use insecure Langfuse transport")
 )
 
+// The SDK's batch processor permits a single export to take up to 30 seconds.
+// Shutdown needs a longer but still finite window so a final batch can finish
+// or retry instead of silently dropping the Agent's last model and tool spans.
+const langfuseCleanupTimeout = time.Minute
+
 func setupLangfuseRun(
 	ctx context.Context,
 	userID string,
 	sessionID string,
 	sandbox string,
 	input string,
-) (runContext context.Context, runOptions []agentpkg.RunOption, cleanup func(), err error) {
+) (
+	runContext context.Context,
+	runOptions []agentpkg.RunOption,
+	cleanup func(context.Context) error,
+	err error,
+) {
 	clean, enabled, err := startLangfuseTraceIfConfigured(ctx)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 
-	cleanup = func() {}
+	cleanup = func(context.Context) error { return nil }
 	if clean != nil {
-		cleanup = func() {
-			if err := clean(context.Background()); err != nil {
-				log.Printf("Failed to clean up Langfuse tracing: %v", err)
-			}
-		}
+		cleanup = clean
 	}
 
 	runContext, runOptions, err = langfuseRunOptions(ctx, enabled, userID, sessionID, sandbox, input)
 	if err != nil {
-		cleanup()
+		cleanupCtx, cancel := context.WithTimeout(
+			context.WithoutCancel(ctx),
+			langfuseCleanupTimeout,
+		)
+		defer cancel()
+		_ = cleanup(cleanupCtx)
 		return nil, nil, nil, err
 	}
 

@@ -66,6 +66,20 @@ func TestBuildReviewMessageExplainsScopeAndNavigationFields(t *testing.T) {
 		GoPackages: []GoPackage{{
 			Directory:   "internal",
 			PackageName: "calculator",
+			ModulePath:  "example.com/review",
+			ModuleRoot:  "",
+			Complete:    true,
+		}, {
+			Directory:   "internal/worker",
+			PackageName: "worker",
+			ModulePath:  "example.com/review",
+			ModuleRoot:  "",
+			Complete:    true,
+		}, {
+			Directory:   "testdata/nested",
+			PackageName: "nested",
+			ModulePath:  "example.com/nested",
+			ModuleRoot:  "testdata/nested",
 			Complete:    true,
 		}},
 	}
@@ -81,6 +95,7 @@ func TestBuildReviewMessageExplainsScopeAndNavigationFields(t *testing.T) {
 		"Review scope (requested paths):\n- internal/calculator.go\n- internal/calculator_test.go",
 		"complete_file_available=true",
 		"package_context_complete=true",
+		"module_dir=work/inputs/repo",
 		"Hunk previews:",
 		"candidate_lines identify added or modified new-file lines; they are not confirmed findings.",
 		"candidate_lines=[11]",
@@ -92,6 +107,15 @@ func TestBuildReviewMessageExplainsScopeAndNavigationFields(t *testing.T) {
 	for _, old := range []string{"full_context=", " complete=", "Selected hunks:"} {
 		if strings.Contains(message, old) {
 			t.Fatalf("message still contains ambiguous label %q:\n%s", old, message)
+		}
+	}
+	for _, coupledInstruction := range []string{
+		"Required Skill baseline commands:",
+		"run-go-checks.sh",
+		"exactly once",
+	} {
+		if strings.Contains(message, coupledInstruction) {
+			t.Fatalf("message contains Skill workflow instruction %q:\n%s", coupledInstruction, message)
 		}
 	}
 }

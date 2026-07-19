@@ -1,13 +1,6 @@
-diff --git a/math_test.go b/math_test.go
---- a/math_test.go
-+++ b/math_test.go
-@@ -10,7 +10,7 @@ package sandboxfailure
- import "testing"
- 
- func TestAdd(t *testing.T) {
--	if got := Add(1, 2); got != 3 {
--		t.Fatalf("Add(1, 2) = %d, want 3", got)
-+	if got := Add(1, 2); got != 4 {
-+		t.Fatalf("Add(1, 2) = %d, want 4", got)
- 	}
- }
+diff --git a/math.go b/math.go
+--- a/math.go
++++ b/math.go
+@@ -10 +10,2 @@
++// Add returns the sum of a and b.
+ func Add(a, b int) int { return a + b }

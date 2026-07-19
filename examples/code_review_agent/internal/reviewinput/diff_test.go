@@ -8,6 +8,7 @@
 package reviewinput
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 
@@ -88,6 +89,22 @@ func TestParseReviewDiffAppliesExactPathScope(t *testing.T) {
 	}
 	if strings.Contains(string(masked), "a/a.go") || strings.Contains(string(scoped), "a/a.go") {
 		t.Fatalf("path-scoped diff still contains a.go: %s", scoped)
+	}
+}
+
+func TestParseReviewDiffDirectoryScopeIncludesDescendants(t *testing.T) {
+	raw := []byte("diff --git a/internal/a.go b/internal/a.go\n" +
+		"--- a/internal/a.go\n+++ b/internal/a.go\n@@ -1 +1 @@\n-package a\n+package aa\n" +
+		"diff --git a/root.go b/root.go\n--- a/root.go\n+++ b/root.go\n@@ -1 +1 @@\n-package root\n+package changed\n")
+	parsed, masked, _, err := parseReviewDiff(raw, []string{"internal"}, true, redact.New())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parsed.ChangedFiles) != 1 || parsed.ChangedFiles[0].Path != "internal/a.go" {
+		t.Fatalf("directory-scoped changed files = %#v", parsed.ChangedFiles)
+	}
+	if bytes.Contains(masked, []byte("root.go")) {
+		t.Fatalf("directory-scoped diff contains an out-of-scope file:\n%s", masked)
 	}
 }
 

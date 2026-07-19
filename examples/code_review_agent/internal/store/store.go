@@ -2,7 +2,7 @@
 // Tencent is pleased to support the open source community by making
 // trpc-agent-go available.
 //
-// Copyright (C) 2025 Tencent.  All rights reserved.
+// Copyright (C) 2026 Tencent.  All rights reserved.
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
@@ -12,119 +12,28 @@ package store
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
 )
 
-// ReviewTaskRecord is the lifecycle root and the lookup bridge to the complete
-// framework Session key.
-type ReviewTaskRecord struct {
-	TaskID                string
-	AppName               string
-	UserID                string
-	Status                string
-	InputKind             string
-	InputSummaryJSON      string
-	InputArtifactName     string
-	InputArtifactVersion  *int
-	MonitoringSummaryJSON string
-	Conclusion            string
-	JSONReportName        string
-	JSONReportVersion     *int
-	MarkdownReportName    string
-	MarkdownReportVersion *int
-	StartedAt             time.Time
-	FinishedAt            time.Time
-	ErrorType             string
-	ErrorMessage          string
-}
-
-// TaskInputRecord is the input projection produced after parsing, masking, and
-// saving the complete masked diff artifact. Keeping this update separate from
-// SaveTask prevents input preparation from accidentally overwriting lifecycle
-// fields that were established when the task started.
-type TaskInputRecord struct {
-	InputKind            string
-	InputSummaryJSON     string
-	InputArtifactName    string
-	InputArtifactVersion int
-}
-
-// PermissionDecisionRecord records a system governance decision made before
-// an operation executes.
-type PermissionDecisionRecord struct {
-	ToolCallID     string
-	DecisionKind   string
-	Operation      string
-	ToolName       string
-	CommandPreview string
-	Decision       string
-	Reason         string
-	DecidedAt      time.Time
-}
-
-// SandboxRunRecord records facts observed by the governed execution wrapper.
-type SandboxRunRecord struct {
-	ToolCallID         string
-	Backend            string
-	Workdir            string
-	CommandPreview     string
-	EnvAllowlistJSON   string
-	Timeout            time.Duration
-	OutputLimitBytes   int64
-	ArtifactLimitBytes int64
-	Status             string
-	ExitCode           *int
-	TimedOut           bool
-	StdoutSummary      string
-	StderrSummary      string
-	StdoutTruncated    bool
-	StderrTruncated    bool
-	RedactionCount     int
-	StartedAt          time.Time
-	FinishedAt         time.Time
-	Duration           time.Duration
-	ErrorType          string
-	ErrorMessage       string
-}
-
-// ReviewResultRecord is a finding, warning, or human-review item submitted by
-// the Agent through submit_review_results.
-type ReviewResultRecord struct {
-	ResultKind     string
-	Severity       string
-	Category       string
-	File           string
-	Line           int
-	Title          string
-	Evidence       string
-	Recommendation string
-	Confidence     float64
-	Source         string
-	RuleID         string
-	CreatedAt      time.Time
-}
-
-// SQLiteStore persists task-scoped review projections.
-type SQLiteStore struct {
+// SQLite persists task-scoped review projections.
+type SQLite struct {
 	db *sql.DB
 }
 
 // NewSQLite creates a review store using an initialized caller-owned database.
-func NewSQLite(db *sql.DB) (store *SQLiteStore, err error) {
+func NewSQLite(db *sql.DB) (store *SQLite, err error) {
 	if db == nil {
 		return nil, errors.New("sqlite database is required")
 	}
-	return &SQLiteStore{db: db}, nil
+	return &SQLite{db: db}, nil
 }
 
 // SaveTask creates or replaces the lifecycle projection for a review task.
-func (s *SQLiteStore) SaveTask(ctx context.Context, task ReviewTaskRecord) error {
+func (s *SQLite) SaveTask(ctx context.Context, task ReviewTaskRecord) error {
 	if err := s.ready(); err != nil {
 		return err
 	}
@@ -155,14 +64,24 @@ ON CONFLICT(task_id) DO UPDATE SET
 	started_at = excluded.started_at, finished_at = excluded.finished_at,
 	error_type = excluded.error_type, error_message = excluded.error_message,
 	updated_at = CURRENT_TIMESTAMP`,
-		task.TaskID, task.AppName, task.UserID, emptyDefault(task.Status, "running"),
-		emptyDefault(task.InputKind, "manual"), jsonDefault(task.InputSummaryJSON, "{}"),
-		nullableString(task.InputArtifactName), nullableInt(task.InputArtifactVersion),
-		jsonDefault(task.MonitoringSummaryJSON, "{}"), nullableString(task.Conclusion),
-		nullableString(task.JSONReportName), nullableInt(task.JSONReportVersion),
-		nullableString(task.MarkdownReportName), nullableInt(task.MarkdownReportVersion),
-		formatTime(task.StartedAt), nullableTime(task.FinishedAt),
-		nullableString(task.ErrorType), nullableString(task.ErrorMessage),
+		task.TaskID,
+		task.AppName,
+		task.UserID,
+		emptyDefault(task.Status, "running"),
+		emptyDefault(task.InputKind, "manual"),
+		jsonDefault(task.InputSummaryJSON, "{}"),
+		nullableString(task.InputArtifactName),
+		nullableInt(task.InputArtifactVersion),
+		jsonDefault(task.MonitoringSummaryJSON, "{}"),
+		nullableString(task.Conclusion),
+		nullableString(task.JSONReportName),
+		nullableInt(task.JSONReportVersion),
+		nullableString(task.MarkdownReportName),
+		nullableInt(task.MarkdownReportVersion),
+		formatTime(task.StartedAt),
+		nullableTime(task.FinishedAt),
+		nullableString(task.ErrorType),
+		nullableString(task.ErrorMessage),
 	)
 	if err != nil {
 		return fmt.Errorf("save review task %s: %w", task.TaskID, err)
@@ -171,7 +90,7 @@ ON CONFLICT(task_id) DO UPDATE SET
 }
 
 // UpdateTaskConclusion records the Agent's final structured conclusion.
-func (s *SQLiteStore) UpdateTaskConclusion(ctx context.Context, taskID, conclusion string) error {
+func (s *SQLite) UpdateTaskConclusion(ctx context.Context, taskID, conclusion string) error {
 	if err := s.ready(); err != nil {
 		return err
 	}
@@ -184,8 +103,45 @@ WHERE task_id = ?`, nullableString(conclusion), taskID)
 	return requireUpdatedTask(result, taskID)
 }
 
+// UpdateTaskMonitoring records the bounded JSON monitoring summary.
+func (s *SQLite) UpdateTaskMonitoring(ctx context.Context, taskID, summaryJSON string) error {
+	if err := s.ready(); err != nil {
+		return err
+	}
+	if !json.Valid([]byte(summaryJSON)) {
+		return errors.New("monitoring summary must be valid JSON")
+	}
+	result, err := s.db.ExecContext(ctx, `
+UPDATE review_tasks SET monitoring_summary_json = ?, updated_at = CURRENT_TIMESTAMP
+WHERE task_id = ?`, summaryJSON, taskID)
+	if err != nil {
+		return fmt.Errorf("update review task monitoring %s: %w", taskID, err)
+	}
+	return requireUpdatedTask(result, taskID)
+}
+
+// UpdateTaskReports stores artifact references without copying report content
+// into the Review Store.
+func (s *SQLite) UpdateTaskReports(ctx context.Context, taskID string, refs ReportReferences) error {
+	if err := s.ready(); err != nil {
+		return err
+	}
+	if refs.JSONName == "" || refs.MarkdownName == "" {
+		return errors.New("JSON and Markdown report names are required")
+	}
+	result, err := s.db.ExecContext(ctx, `
+UPDATE review_tasks SET json_report_name = ?, json_report_version = ?,
+	markdown_report_name = ?, markdown_report_version = ?, updated_at = CURRENT_TIMESTAMP
+WHERE task_id = ?`, refs.JSONName, refs.JSONVersion, refs.MarkdownName,
+		refs.MarkdownVersion, taskID)
+	if err != nil {
+		return fmt.Errorf("update review task reports %s: %w", taskID, err)
+	}
+	return requireUpdatedTask(result, taskID)
+}
+
 // UpdateTaskInput records the durable projection of prepared review input.
-func (s *SQLiteStore) UpdateTaskInput(ctx context.Context, taskID string, input TaskInputRecord) error {
+func (s *SQLite) UpdateTaskInput(ctx context.Context, taskID string, input TaskInputRecord) error {
 	if err := s.ready(); err != nil {
 		return err
 	}
@@ -205,10 +161,7 @@ UPDATE review_tasks SET input_kind = ?, input_summary_json = ?,
 }
 
 // FinishTask records the terminal task status and any orchestration error.
-func (s *SQLiteStore) FinishTask(ctx context.Context, taskID string, runErr error) error {
-	if err := s.ready(); err != nil {
-		return err
-	}
+func (s *SQLite) FinishTask(ctx context.Context, taskID string, runErr error) error {
 	status := "completed"
 	errorType := ""
 	errorMessage := ""
@@ -217,19 +170,61 @@ func (s *SQLiteStore) FinishTask(ctx context.Context, taskID string, runErr erro
 		errorType = fmt.Sprintf("%T", runErr)
 		errorMessage = runErr.Error()
 	}
+	return s.FinalizeTask(ctx, taskID, TaskFinalization{
+		Status: status, MonitoringSummaryJSON: "{}",
+		ErrorType: errorType, ErrorMessage: errorMessage,
+	})
+}
+
+// FinalizeTask atomically publishes the complete terminal task projection.
+func (s *SQLite) FinalizeTask(
+	ctx context.Context,
+	taskID string,
+	finalization TaskFinalization,
+) error {
+	if err := s.ready(); err != nil {
+		return err
+	}
+	if taskID == "" {
+		return errors.New("review task id is required")
+	}
+	switch finalization.Status {
+	case "completed", "failed", "canceled":
+	default:
+		return fmt.Errorf("invalid terminal review task status %q", finalization.Status)
+	}
+	if !json.Valid([]byte(finalization.MonitoringSummaryJSON)) {
+		return errors.New("monitoring summary must be valid JSON")
+	}
+	if finalization.FinishedAt.IsZero() {
+		finalization.FinishedAt = time.Now()
+	}
+	var jsonName, markdownName any
+	var jsonVersion, markdownVersion any
+	if finalization.Reports != nil {
+		if finalization.Reports.JSONName == "" || finalization.Reports.MarkdownName == "" {
+			return errors.New("JSON and Markdown report names are required")
+		}
+		jsonName, jsonVersion = finalization.Reports.JSONName, finalization.Reports.JSONVersion
+		markdownName, markdownVersion = finalization.Reports.MarkdownName, finalization.Reports.MarkdownVersion
+	}
 	result, err := s.db.ExecContext(ctx, `
-UPDATE review_tasks SET task_status = ?, finished_at = ?, error_type = ?,
+UPDATE review_tasks SET task_status = ?, monitoring_summary_json = ?,
+	json_report_name = ?, json_report_version = ?, markdown_report_name = ?,
+	markdown_report_version = ?, finished_at = ?, error_type = ?,
 	error_message = ?, updated_at = CURRENT_TIMESTAMP WHERE task_id = ?`,
-		status, formatTime(time.Now()), nullableString(errorType),
-		nullableString(errorMessage), taskID)
+		finalization.Status, finalization.MonitoringSummaryJSON,
+		jsonName, jsonVersion, markdownName, markdownVersion,
+		formatTime(finalization.FinishedAt), nullableString(finalization.ErrorType),
+		nullableString(finalization.ErrorMessage), taskID)
 	if err != nil {
-		return fmt.Errorf("finish review task %s: %w", taskID, err)
+		return fmt.Errorf("finalize review task %s: %w", taskID, err)
 	}
 	return requireUpdatedTask(result, taskID)
 }
 
 // SavePermissionDecision records a governance decision made before execution.
-func (s *SQLiteStore) SavePermissionDecision(ctx context.Context, taskID string, decision PermissionDecisionRecord) error {
+func (s *SQLite) SavePermissionDecision(ctx context.Context, taskID string, decision PermissionDecisionRecord) error {
 	if err := s.ready(); err != nil {
 		return err
 	}
@@ -255,7 +250,7 @@ INSERT INTO permission_decisions (
 }
 
 // SaveSandboxRun records one governed workspace execution attempt.
-func (s *SQLiteStore) SaveSandboxRun(ctx context.Context, taskID string, run SandboxRunRecord) error {
+func (s *SQLite) SaveSandboxRun(ctx context.Context, taskID string, run SandboxRunRecord) error {
 	if err := s.ready(); err != nil {
 		return err
 	}
@@ -287,35 +282,128 @@ INSERT INTO sandbox_runs (
 	return nil
 }
 
-// SaveReviewResult persists one deduplicated Agent review result.
-func (s *SQLiteStore) SaveReviewResult(ctx context.Context, taskID string, result ReviewResultRecord) error {
+// SubmitReviewResults atomically replaces the task's complete structured result
+// projection. The caller supplies the canonical final arrays for one complete
+// submit_review_results invocation; framework Session events retain the tool
+// call history separately.
+func (s *SQLite) SubmitReviewResults(
+	ctx context.Context,
+	taskID string,
+	results []ReviewResultRecord,
+	conclusion string,
+) (ReviewResultCounts, error) {
 	if err := s.ready(); err != nil {
-		return err
+		return ReviewResultCounts{}, err
 	}
 	if taskID == "" {
-		return errors.New("review task id is required")
+		return ReviewResultCounts{}, errors.New("review task id is required")
 	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return ReviewResultCounts{}, fmt.Errorf(
+			"begin review submission for task %s: %w",
+			taskID,
+			err,
+		)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// Acquire the SQLite write transaction and reject an unknown task before
+	// replacing any projection rows.
+	confirmed, err := tx.ExecContext(ctx, `
+UPDATE review_tasks SET updated_at = updated_at WHERE task_id = ?`, taskID)
+	if err != nil {
+		return ReviewResultCounts{}, fmt.Errorf(
+			"confirm review task %s: %w",
+			taskID,
+			err,
+		)
+	}
+	if err := requireUpdatedTask(confirmed, taskID); err != nil {
+		return ReviewResultCounts{}, err
+	}
+	if _, err := tx.ExecContext(
+		ctx,
+		`DELETE FROM review_results WHERE task_id = ?`,
+		taskID,
+	); err != nil {
+		return ReviewResultCounts{}, fmt.Errorf(
+			"replace review results for task %s: %w",
+			taskID,
+			err,
+		)
+	}
+
+	var counts ReviewResultCounts
+	for _, result := range results {
+		if err := insertReviewResult(ctx, tx, taskID, result); err != nil {
+			return ReviewResultCounts{}, err
+		}
+		switch result.ResultKind {
+		case "finding":
+			counts.FindingCount++
+		case "warning":
+			counts.WarningCount++
+		case "needs_human_review":
+			counts.HumanReviewCount++
+		default:
+			return ReviewResultCounts{}, fmt.Errorf(
+				"save review result for task %s: unsupported result kind %q",
+				taskID,
+				result.ResultKind,
+			)
+		}
+	}
+
+	updated, err := tx.ExecContext(ctx, `
+UPDATE review_tasks SET conclusion = ?, updated_at = CURRENT_TIMESTAMP
+WHERE task_id = ?`, conclusion, taskID)
+	if err != nil {
+		return ReviewResultCounts{}, fmt.Errorf(
+			"update review task conclusion %s: %w",
+			taskID,
+			err,
+		)
+	}
+	if err := requireUpdatedTask(updated, taskID); err != nil {
+		return ReviewResultCounts{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return ReviewResultCounts{}, fmt.Errorf(
+			"commit review submission for task %s: %w",
+			taskID,
+			err,
+		)
+	}
+	return counts, nil
+}
+
+func insertReviewResult(
+	ctx context.Context,
+	tx *sql.Tx,
+	taskID string,
+	result ReviewResultRecord,
+) error {
 	if result.CreatedAt.IsZero() {
 		result.CreatedAt = time.Now()
 	}
-	dedupeKey := resultDedupeKey(result)
-	_, err := s.db.ExecContext(ctx, `
+	_, err := tx.ExecContext(ctx, `
 INSERT INTO review_results (
 	task_id, result_kind, severity, category, file_path, line, title, evidence,
-	recommendation, confidence, source, rule_id, dedupe_key, created_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, taskID,
-		emptyDefault(result.ResultKind, "finding"), emptyDefault(result.Severity, "medium"),
-		emptyDefault(result.Category, "general"), result.File, result.Line, result.Title,
+	recommendation, confidence, source, rule_id, created_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		taskID,
+		result.ResultKind, result.Severity, result.Category, result.File,
+		result.Line, result.Title,
 		result.Evidence, nullableString(result.Recommendation), result.Confidence,
-		emptyDefault(result.Source, "agent"), emptyDefault(result.RuleID, "agent"),
-		dedupeKey, formatTime(result.CreatedAt))
+		result.Source, result.RuleID, formatTime(result.CreatedAt))
 	if err != nil {
 		return fmt.Errorf("save review result for task %s: %w", taskID, err)
 	}
 	return nil
 }
 
-func (s *SQLiteStore) ready() error {
+func (s *SQLite) ready() error {
 	if s == nil || s.db == nil {
 		return errors.New("sqlite store is not initialized")
 	}
@@ -367,10 +455,8 @@ func boolInt(value bool) int {
 func formatTime(value time.Time) string        { return value.UTC().Format(time.RFC3339Nano) }
 func durationMillis(value time.Duration) int64 { return value.Milliseconds() }
 
-func resultDedupeKey(result ReviewResultRecord) string {
-	payload := fmt.Sprintf("%s\x00%s\x00%d\x00%s\x00%s", result.Category, result.File, result.Line, result.Title, result.RuleID)
-	sum := sha256.Sum256([]byte(payload))
-	return hex.EncodeToString(sum[:])
+func parseStoredTime(value string) (time.Time, error) {
+	return time.Parse(time.RFC3339Nano, value)
 }
 
 func requireUpdatedTask(result sql.Result, taskID string) error {

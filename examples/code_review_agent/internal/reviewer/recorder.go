@@ -64,24 +64,42 @@ func (r *reviewRecorder) RecordInput(ctx context.Context, taskID string, input s
 	return r.store.UpdateTaskInput(ctx, taskID, input)
 }
 
-// FinishTask keeps the caller-visible error unchanged while persisting only a
-// masked error message. Input parsers, Git, tools, and model providers may all
-// include user-controlled text in an error, so failure paths need the same
-// storage boundary as successful findings.
-func (r *reviewRecorder) FinishTask(ctx context.Context, taskID string, runErr error) error {
+func (r *reviewRecorder) RecordSandboxRun(ctx context.Context, taskID string, run store.SandboxRunRecord) error {
 	if r == nil || r.store == nil {
 		return errors.New("review recorder requires a store")
 	}
-	if runErr == nil {
-		return r.store.FinishTask(ctx, taskID, nil)
-	}
-	return r.store.FinishTask(ctx, taskID, errors.New(r.mask(runErr.Error())))
+	run.CommandPreview = r.mask(run.CommandPreview)
+	run.StdoutSummary = r.mask(run.StdoutSummary)
+	run.StderrSummary = r.mask(run.StderrSummary)
+	run.ErrorMessage = r.mask(run.ErrorMessage)
+	return r.store.SaveSandboxRun(ctx, taskID, run)
 }
 
-func (r *reviewRecorder) SubmitReviewResults(ctx context.Context, taskID string, results []store.ReviewResultRecord, conclusion string) error {
+// FinalizeTask masks only the user-controlled error text. ErrorType is produced
+// by the orchestration boundary before masking so cancellation, timeout, and
+// provider failures retain a useful stable category.
+func (r *reviewRecorder) FinalizeTask(
+	ctx context.Context,
+	taskID string,
+	finalization store.TaskFinalization,
+) error {
 	if r == nil || r.store == nil {
 		return errors.New("review recorder requires a store")
 	}
+	finalization.ErrorMessage = r.mask(finalization.ErrorMessage)
+	return r.store.FinalizeTask(ctx, taskID, finalization)
+}
+
+func (r *reviewRecorder) SubmitReviewResults(
+	ctx context.Context,
+	taskID string,
+	results []store.ReviewResultRecord,
+	conclusion string,
+) (store.ReviewResultCounts, error) {
+	if r == nil || r.store == nil {
+		return store.ReviewResultCounts{}, errors.New("review recorder requires a store")
+	}
+	maskedResults := make([]store.ReviewResultRecord, 0, len(results))
 	for _, result := range results {
 		result.Severity = r.mask(result.Severity)
 		result.Category = r.mask(result.Category)
@@ -94,14 +112,16 @@ func (r *reviewRecorder) SubmitReviewResults(ctx context.Context, taskID string,
 		if result.CreatedAt.IsZero() {
 			result.CreatedAt = r.clock()
 		}
-		if err := r.store.SaveReviewResult(ctx, taskID, result); err != nil {
-			return err
-		}
+		maskedResults = append(maskedResults, result)
 	}
-	if conclusion == "" {
-		return nil
+	return r.store.SubmitReviewResults(ctx, taskID, maskedResults, r.mask(conclusion))
+}
+
+func (r *reviewRecorder) Snapshot(ctx context.Context, taskID string) (store.ReviewSnapshot, error) {
+	if r == nil || r.store == nil {
+		return store.ReviewSnapshot{}, errors.New("review recorder requires a store")
 	}
-	return r.store.UpdateTaskConclusion(ctx, taskID, r.mask(conclusion))
+	return r.store.LoadTaskSnapshot(ctx, taskID)
 }
 
 func (r *reviewRecorder) mask(value string) string {

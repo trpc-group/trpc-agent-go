@@ -17,6 +17,10 @@ import (
 )
 
 func createGitSnapshot(ctx context.Context, client gitClient, root, tempRoot string) (snapshot string, cleanup func() error, err error) {
+	// listSnapshotFiles reads index modes and omits 160000 gitlinks. A checked
+	// out submodule is a directory owned by another repository; recursively
+	// copying it would both cross the review-root boundary and make ordinary
+	// superproject reviews fail the regular-file check.
 	files, err := client.listSnapshotFiles(ctx, root)
 	if err != nil {
 		return "", nil, err

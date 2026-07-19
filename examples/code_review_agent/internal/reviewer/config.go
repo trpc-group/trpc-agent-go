@@ -9,11 +9,14 @@
 
 package reviewer
 
+import "io"
+
 // Config contains model selection and sandbox settings for one reviewer instance.
 type Config struct {
-	Mode    string
-	Model   ModelConfig
-	Sandbox SandboxConfig
+	Mode     string
+	Model    ModelConfig
+	Sandbox  SandboxConfig
+	Approval ApprovalConfig
 }
 
 // ModelConfig identifies the DeepSeek-compatible model endpoint used when the
@@ -27,4 +30,12 @@ type ModelConfig struct {
 // SandboxConfig selects the workspace execution backend.
 type SandboxConfig struct {
 	Backend string
+}
+
+// ApprovalConfig supplies the interactive terminal used to approve governed
+// code execution. Fake-model runs use deterministic approval and do not read
+// Input.
+type ApprovalConfig struct {
+	Input  io.Reader
+	Output io.Writer
 }

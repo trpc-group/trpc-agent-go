@@ -9,6 +9,7 @@ package reviewinput
 
 import (
 	"fmt"
+	"path"
 	"strings"
 	"unicode/utf8"
 )
@@ -59,8 +60,13 @@ func buildReviewMessage(kind, mode string, paths []string, parsed parsedInput, l
 		fmt.Fprintf(&b, "\nGo packages:\n")
 		packageLimit := min(len(parsed.GoPackages), limits.MaxFiles)
 		for _, pkg := range parsed.GoPackages[:packageLimit] {
-			fmt.Fprintf(&b, "- dir=%s package=%s module=%s test_arg=%s package_context_complete=%t\n",
-				pkg.Directory, pkg.PackageName, pkg.ModulePath, pkg.SuggestedTestArg, pkg.Complete)
+			moduleDir := "unavailable"
+			if mode == ReviewModeRepoBacked && pkg.ModulePath != "" {
+				moduleDir = path.Join("work/inputs/repo", pkg.ModuleRoot)
+			}
+			fmt.Fprintf(&b, "- dir=%s package=%s module=%s module_dir=%s test_arg=%s package_context_complete=%t\n",
+				pkg.Directory, pkg.PackageName, pkg.ModulePath, moduleDir,
+				pkg.SuggestedTestArg, pkg.Complete)
 		}
 		if omitted := len(parsed.GoPackages) - packageLimit; omitted > 0 {
 			fmt.Fprintf(&b, "- ... %d additional packages omitted from this message\n", omitted)

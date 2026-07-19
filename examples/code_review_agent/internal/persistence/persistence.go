@@ -14,8 +14,10 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 
 	artifactsqlite "trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/store"
@@ -33,7 +35,7 @@ var sqliteDDL string
 // Resources contains the persistence capabilities consumed by the example.
 // Close releases all resources created by Open.
 type Resources struct {
-	ReviewStore     *store.SQLiteStore
+	ReviewStore     *store.SQLite
 	SessionService  session.Service
 	ArtifactService frameworkartifact.Service
 
@@ -115,12 +117,21 @@ func (r *Resources) Close() error {
 }
 
 func openDB(ctx context.Context, path string) (db *sql.DB, err error) {
-	db, err = sql.Open("sqlite", path)
+	// busy_timeout is a per-connection PRAGMA. Put it in the modernc DSN so
+	// every connection opened by database/sql receives the policy; executing
+	// PRAGMA once would configure only whichever pooled connection happened to
+	// serve that call.
+	separator := "?"
+	if strings.Contains(path, "?") {
+		separator = "&"
+	}
+	dsn := path + separator + "_pragma=" + url.QueryEscape("busy_timeout(5000)")
+	db, err = sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
 	}
 	db.SetMaxOpenConns(0)
-	if _, err := db.ExecContext(ctx, "PRAGMA busy_timeout = 5000"); err != nil {
+	if err := db.PingContext(ctx); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("configure sqlite database: %w", err)
 	}

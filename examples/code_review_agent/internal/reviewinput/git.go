@@ -146,14 +146,32 @@ func (g gitClient) listUntracked(ctx context.Context, root string, paths []strin
 }
 
 func (g gitClient) listSnapshotFiles(ctx context.Context, root string) (files []string, err error) {
-	result, err := g.run(ctx, root, nil, "ls-files", "--cached", "--others", "--exclude-standard", "-z", "--")
+	tracked, err := g.run(ctx, root, nil, "ls-files", "--stage", "-z", "--cached", "--")
 	if err != nil {
 		return nil, err
 	}
-	if result.exitCode != 0 {
-		return nil, fmt.Errorf("list repository snapshot files: %s", conciseCommandError(result))
+	if tracked.exitCode != 0 {
+		return nil, fmt.Errorf("list tracked repository snapshot files: %s", conciseCommandError(tracked))
 	}
-	return splitNUL(result.stdout), nil
+	for _, record := range splitNUL(tracked.stdout) {
+		tab := strings.IndexByte(record, '\t')
+		if tab < 0 {
+			return nil, fmt.Errorf("parse tracked snapshot entry %q", record)
+		}
+		metadata := strings.Fields(record[:tab])
+		if len(metadata) != 3 {
+			return nil, fmt.Errorf("parse tracked snapshot metadata %q", record[:tab])
+		}
+		if metadata[0] == "160000" {
+			continue
+		}
+		files = append(files, filepath.ToSlash(record[tab+1:]))
+	}
+	untracked, err := g.listUntracked(ctx, root, nil, false)
+	if err != nil {
+		return nil, err
+	}
+	return append(files, untracked...), nil
 }
 
 // ensureDiffApplied makes a supplied patch and repo snapshot describe the same

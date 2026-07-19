@@ -1,14 +1,14 @@
 {
   "name": "acceptance-sandbox-failure",
-  "description": "A deterministic unit-test assertion failure exercises sandbox failure handling without a compile error or timeout.",
+  "description": "A pre-existing deterministic unit-test assertion failure exercises sandbox failure handling without being attributed to the comment-only change.",
   "expected_categories": [],
   "expected_result_kind": "none",
   "sandbox_expectation": "failure",
-  "changed_files": ["math_test.go"],
+  "changed_files": ["math.go"],
   "minimum_secret_signals": 0,
   "forbidden_plaintext": [],
   "required_snapshot_fragments": {
-    "math_test.go": ["got != 4"]
+    "math.go": ["Add returns the sum of a and b."]
   },
   "forbidden_snapshot_fragments": {}
 }

@@ -93,16 +93,22 @@ CREATE TABLE IF NOT EXISTS review_results (
     severity TEXT NOT NULL,
     category TEXT NOT NULL,
     file_path TEXT NOT NULL,
-    line INTEGER NOT NULL DEFAULT 0,
+    line INTEGER NOT NULL DEFAULT 0 CHECK (line >= 0),
     title TEXT NOT NULL,
     evidence TEXT NOT NULL,
     recommendation TEXT,
     confidence REAL NOT NULL DEFAULT 0,
     source TEXT NOT NULL,
     rule_id TEXT NOT NULL,
-    dedupe_key TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
+
+-- Accurate source locations and opaque rule IDs form the deterministic
+-- rule-location identity. This does not claim semantic root-cause equivalence.
+-- line=0 has no exact location and is deliberately excluded.
+CREATE UNIQUE INDEX IF NOT EXISTS review_results_task_location_rule_unique
+    ON review_results (task_id, file_path, line, rule_id)
+    WHERE line > 0;
 
 -- Versioned artifact content for the SQLite artifact.Service adapter.
 -- The complete framework SessionInfo key scopes each artifact.

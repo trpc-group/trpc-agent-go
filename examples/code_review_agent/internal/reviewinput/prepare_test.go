@@ -125,6 +125,67 @@ func TestPrepareRepoIncludesTrackedAndUntrackedChanges(t *testing.T) {
 	}
 }
 
+func TestPrepareRepoDirectoryPathScope(t *testing.T) {
+	repo := newGitRepo(t)
+	writeTestFile(t, filepath.Join(repo, "go.mod"), "module example.com/review\n\ngo 1.25\n")
+	writeTestFile(t, filepath.Join(repo, "internal", "a.go"), "package internal\n\nconst A = 1\n")
+	writeTestFile(t, filepath.Join(repo, "root.go"), "package review\n\nconst Root = 1\n")
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "-c", "user.name=Review Test", "-c", "user.email=review@example.com", "commit", "-m", "base")
+	writeTestFile(t, filepath.Join(repo, "internal", "a.go"), "package internal\n\nconst A = 2\n")
+	writeTestFile(t, filepath.Join(repo, "root.go"), "package review\n\nconst Root = 2\n")
+
+	preparer, err := NewPreparer(&memoryArtifactStore{}, redact.New(), Config{TempRoot: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := preparer.Prepare(context.Background(), TaskScope{
+		TaskID: "task-directory-scope", AppName: "app", UserID: "user",
+	}, Spec{RepoPath: repo, Paths: []string{"internal"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer prepared.Close()
+	if len(prepared.parsed.ChangedFiles) != 1 ||
+		prepared.parsed.ChangedFiles[0].Path != "internal/a.go" {
+		t.Fatalf("directory-scoped changed files = %#v", prepared.parsed.ChangedFiles)
+	}
+}
+
+func TestPrepareRepoSkipsCheckedOutSubmoduleGitlink(t *testing.T) {
+	submodule := newGitRepo(t)
+	writeTestFile(t, filepath.Join(submodule, "nested.txt"), "submodule content\n")
+	runGit(t, submodule, "add", "nested.txt")
+	runGit(t, submodule, "-c", "user.name=Review Test", "-c", "user.email=review@example.com", "commit", "-m", "base")
+
+	repo := newGitRepo(t)
+	writeTestFile(t, filepath.Join(repo, "go.mod"), "module example.com/review\n\ngo 1.25\n")
+	writeTestFile(t, filepath.Join(repo, "value.go"), "package review\n\nconst Value = 1\n")
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "-c", "protocol.file.allow=always", "submodule", "add", submodule, "third_party/nested")
+	runGit(t, repo, "-c", "user.name=Review Test", "-c", "user.email=review@example.com", "commit", "-am", "base")
+	writeTestFile(t, filepath.Join(repo, "value.go"), "package review\n\nconst Value = 2\n")
+
+	preparer, err := NewPreparer(&memoryArtifactStore{}, redact.New(), Config{TempRoot: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := preparer.Prepare(context.Background(), TaskScope{
+		TaskID: "task-submodule", AppName: "app", UserID: "user",
+	}, Spec{RepoPath: repo})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer prepared.Close()
+	snapshot := strings.TrimPrefix(prepared.Bootstrap.Files[1].Input.From, "host://")
+	if _, err := os.Lstat(filepath.Join(snapshot, "third_party", "nested")); !os.IsNotExist(err) {
+		t.Fatalf("submodule gitlink copied into snapshot: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(snapshot, "value.go")); err != nil {
+		t.Fatalf("superproject file missing from snapshot: %v", err)
+	}
+}
+
 func TestPrepareDiffAndRepoAppliesPatchToSnapshot(t *testing.T) {
 	repo := newGitRepo(t)
 	writeTestFile(t, filepath.Join(repo, "go.mod"), "module example.com/review\n\ngo 1.25\n")
@@ -159,30 +220,6 @@ func TestResolveSpecRejectsEscapingPath(t *testing.T) {
 	_, err := resolveSpec(Spec{DiffFile: "change.diff", Paths: []string{"../secret"}}, "")
 	if err == nil {
 		t.Fatal("escaping path unexpectedly accepted")
-	}
-}
-
-func TestPrepareNamedRepoFixtureUsesNormalRepoBackedFlow(t *testing.T) {
-	store := &memoryArtifactStore{}
-	preparer, err := NewPreparer(store, redact.New(), Config{
-		FixtureRoot: filepath.Join("..", "..", "testdata", "fixtures"),
-		TempRoot:    t.TempDir(),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	prepared, err := preparer.Prepare(context.Background(), TaskScope{
-		TaskID: "task-fixture", AppName: "app", UserID: "user",
-	}, Spec{Fixture: "input-repo"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer prepared.Close()
-	if prepared.InputKind != InputKindFixture || prepared.ReviewMode != ReviewModeRepoBacked {
-		t.Fatalf("fixture prepared as %s/%s", prepared.InputKind, prepared.ReviewMode)
-	}
-	if len(prepared.parsed.GoPackages) != 1 || prepared.parsed.GoPackages[0].ImportPath != "example.com/code-review-fixture" {
-		t.Fatalf("fixture packages = %#v", prepared.parsed.GoPackages)
 	}
 }
 

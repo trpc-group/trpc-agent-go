@@ -69,6 +69,56 @@ func TestSanitizerMasksPrivateKeyInUnifiedDiff(t *testing.T) {
 	}
 }
 
+func TestSanitizerDetectsSupportedCredentialFormats(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		plaintext string
+		ruleID    string
+	}{
+		{
+			name:      "private key",
+			input:     "-----BEGIN PRIVATE KEY-----\nabc123\n-----END PRIVATE KEY-----",
+			plaintext: "abc123",
+			ruleID:    "SECRET-PRIVATE-KEY",
+		},
+		{name: "bearer token", input: "Bearer abcdefghijklmnop", plaintext: "abcdefghijklmnop", ruleID: "SECRET-BEARER"},
+		{name: "GitHub personal access token", input: "ghp_abcdefghijklmnopqrstuvwxyz123456", plaintext: "ghp_abcdefghijklmnopqrstuvwxyz123456", ruleID: "SECRET-GITHUB"},
+		{name: "GitHub OAuth token", input: "gho_abcdefghijklmnopqrstuvwxyz123456", plaintext: "gho_abcdefghijklmnopqrstuvwxyz123456", ruleID: "SECRET-GITHUB"},
+		{name: "OpenAI API key", input: "sk-abcdefghijklmnopqrstuvwx", plaintext: "sk-abcdefghijklmnopqrstuvwx", ruleID: "SECRET-OPENAI"},
+		{name: "GitLab token", input: "glpat-abcdefghijklmnopqrstuvwxyz1234", plaintext: "glpat-abcdefghijklmnopqrstuvwxyz1234", ruleID: "SECRET-GITLAB"},
+		{name: "Slack token", input: "xox" + "b-1234567890-abcdefghijklmnop", plaintext: "xox" + "b-1234567890-abcdefghijklmnop", ruleID: "SECRET-SLACK"},
+		{name: "Google API key", input: "AIzaabcdefghijklmnopqrstuvwxyz123456", plaintext: "AIzaabcdefghijklmnopqrstuvwxyz123456", ruleID: "SECRET-GOOGLE-API-KEY"},
+		{name: "Stripe key", input: "sk_li" + "ve_abcdefghijklmnopqrstuvwx", plaintext: "sk_li" + "ve_abcdefghijklmnopqrstuvwx", ruleID: "SECRET-STRIPE"},
+		{name: "SendGrid key", input: "SG.abcdefghijklmnopqrstu.abcdefghijklmnopqrstu", plaintext: "SG.abcdefghijklmnopqrstu.abcdefghijklmnopqrstu", ruleID: "SECRET-SENDGRID"},
+		{name: "npm token", input: "npm_abcdefghijklmnopqrstuvwxyz123456", plaintext: "npm_abcdefghijklmnopqrstuvwxyz123456", ruleID: "SECRET-NPM"},
+		{name: "Twilio key", input: "S" + "K0123456789abcdef0123456789abcdef", plaintext: "S" + "K0123456789abcdef0123456789abcdef", ruleID: "SECRET-TWILIO"},
+		{name: "AWS access key", input: "AKI" + "AABCDEFGHIJKLMNOP", plaintext: "AKI" + "AABCDEFGHIJKLMNOP", ruleID: "SECRET-AWS-ACCESS-KEY"},
+		{name: "JWT", input: "eyJabcdef.abcdefgh.ijklmnop", plaintext: "eyJabcdef.abcdefgh.ijklmnop", ruleID: "SECRET-JWT"},
+		{name: "HTTP URL password", input: "https://user:http-password@example.com", plaintext: "http-password", ruleID: "SECRET-URL-USERINFO"},
+		{name: "PostgreSQL URL password", input: "postgres://user:database-password@db.example/app", plaintext: "database-password", ruleID: "SECRET-URL-USERINFO"},
+		{name: "MongoDB URL password", input: "mongodb+srv://user:mongo-password@db.example/app", plaintext: "mongo-password", ruleID: "SECRET-URL-USERINFO"},
+		{name: "password assignment", input: "password=assignment-secret", plaintext: "assignment-secret", ruleID: "SECRET-ASSIGNMENT"},
+		{name: "AWS secret assignment", input: "AWS_SECRET_ACCESS_KEY=aws-secret-material", plaintext: "aws-secret-material", ruleID: "SECRET-ASSIGNMENT"},
+		{name: "client secret assignment", input: "client_secret=client-secret-material", plaintext: "client-secret-material", ruleID: "SECRET-ASSIGNMENT"},
+	}
+	sanitizer := New()
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := sanitizer.DetectAndMask([]byte(test.input))
+			if strings.Contains(string(result.Masked), test.plaintext) {
+				t.Fatalf("masked content contains plaintext %q: %q", test.plaintext, result.Masked)
+			}
+			for _, signal := range result.Signals {
+				if signal.RuleID == test.ruleID {
+					return
+				}
+			}
+			t.Fatalf("signals = %#v, want rule %q", result.Signals, test.ruleID)
+		})
+	}
+}
+
 func TestSanitizerMaskValuePreservesJSONShape(t *testing.T) {
 	s := New()
 	masked, count, err := s.MaskValue(map[string]any{

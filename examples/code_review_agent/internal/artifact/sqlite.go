@@ -19,12 +19,14 @@ import (
 	"sort"
 
 	trpcartifact "trpc.group/trpc-go/trpc-agent-go/artifact"
+	"trpc.group/trpc-go/trpc-agent-go/internal/workspacefacade"
 )
 
 var _ trpcartifact.Service = (*sqliteArtifactService)(nil)
 
 type sqliteArtifactService struct {
-	db *sql.DB
+	db       *sql.DB
+	maxBytes int64
 }
 
 // New creates an Artifact Service using an initialized caller-owned database.
@@ -32,7 +34,9 @@ func New(db *sql.DB) (service trpcartifact.Service, err error) {
 	if db == nil {
 		return nil, errors.New("sqlite artifact service requires a database")
 	}
-	return &sqliteArtifactService{db: db}, nil
+	return &sqliteArtifactService{
+		db: db, maxBytes: workspacefacade.DefaultArtifactMaxBytes,
+	}, nil
 }
 
 func (s *sqliteArtifactService) SaveArtifact(
@@ -46,6 +50,9 @@ func (s *sqliteArtifactService) SaveArtifact(
 	}
 	if item == nil {
 		return 0, errors.New("artifact is required")
+	}
+	if int64(len(item.Data)) > s.maxBytes {
+		return 0, fmt.Errorf("artifact %q exceeds the %d-byte limit", filename, s.maxBytes)
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {

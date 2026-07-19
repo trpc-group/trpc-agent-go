@@ -123,18 +123,21 @@ func diffFilePaths(fd *sourcediff.FileDiff) (oldPath, newPath, filePath string, 
 	return oldPath, newPath, filePath, nil
 }
 
-// pathScopeIncludes accepts either side of a rename and records every matched
-// requested path. This lets the caller reject partially matched scopes rather
-// than silently reviewing fewer files than requested.
+// pathScopeIncludes gives --paths the same file-or-directory meaning as Git
+// pathspecs. It accepts either side of a rename and records the requested scope,
+// not merely the concrete changed file, so partially unmatched scopes remain
+// detectable.
 func pathScopeIncludes(filter, matched map[string]struct{}, oldPath, filePath string) bool {
 	if len(filter) == 0 {
 		return true
 	}
 	included := false
 	for _, candidate := range []string{filePath, oldPath} {
-		if _, ok := filter[candidate]; ok {
-			matched[candidate] = struct{}{}
-			included = true
+		for requested := range filter {
+			if candidate == requested || strings.HasPrefix(candidate, requested+"/") {
+				matched[requested] = struct{}{}
+				included = true
+			}
 		}
 	}
 	return included

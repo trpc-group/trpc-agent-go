@@ -112,6 +112,55 @@ func New() *Sanitizer {
 			confidence: 0.98,
 		},
 		{
+			id:         "SECRET-GITLAB",
+			kind:       "gitlab_token",
+			pattern:    regexp.MustCompile(`\b(glpat-[A-Za-z0-9_-]{20,})\b`),
+			secretPart: 1,
+			confidence: 0.99,
+		},
+		{
+			id:         "SECRET-SLACK",
+			kind:       "slack_token",
+			pattern:    regexp.MustCompile(`\b(xox[baprs]-[A-Za-z0-9-]{10,})\b`),
+			secretPart: 1,
+			confidence: 0.99,
+		},
+		{
+			id:         "SECRET-GOOGLE-API-KEY",
+			kind:       "api_key",
+			pattern:    regexp.MustCompile(`\b(AIza[0-9A-Za-z_-]{20,})\b`),
+			secretPart: 1,
+			confidence: 0.99,
+		},
+		{
+			id:         "SECRET-STRIPE",
+			kind:       "api_key",
+			pattern:    regexp.MustCompile(`\b((?:sk|rk)_(?:live|test)_[A-Za-z0-9]{16,})\b`),
+			secretPart: 1,
+			confidence: 0.99,
+		},
+		{
+			id:         "SECRET-SENDGRID",
+			kind:       "api_key",
+			pattern:    regexp.MustCompile(`\b(SG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,})\b`),
+			secretPart: 1,
+			confidence: 0.99,
+		},
+		{
+			id:         "SECRET-NPM",
+			kind:       "access_token",
+			pattern:    regexp.MustCompile(`\b(npm_[A-Za-z0-9]{20,})\b`),
+			secretPart: 1,
+			confidence: 0.99,
+		},
+		{
+			id:         "SECRET-TWILIO",
+			kind:       "api_key",
+			pattern:    regexp.MustCompile(`\b(SK[0-9a-fA-F]{32})\b`),
+			secretPart: 1,
+			confidence: 0.99,
+		},
+		{
 			// Matches the fixed AWS access-key form: AKIA or ASIA followed by
 			// exactly 16 uppercase letters or digits.
 			id:         "SECRET-AWS-ACCESS-KEY",
@@ -134,7 +183,7 @@ func New() *Sanitizer {
 			// "https://user:password@host", while retaining the URL and user.
 			id:         "SECRET-URL-USERINFO",
 			kind:       "password",
-			pattern:    regexp.MustCompile(`https?://[^:/\s]+:([^@/\s]{4,})@`),
+			pattern:    regexp.MustCompile(`(?i)(?:https?|postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|amqp)://[^:/\s]+:([^@/\s]{4,})@`),
 			secretPart: 1,
 			confidence: 0.96,
 		},
@@ -145,7 +194,7 @@ func New() *Sanitizer {
 			// whitespace are ignored to limit obvious false positives.
 			id:         "SECRET-ASSIGNMENT",
 			kind:       "credential",
-			pattern:    regexp.MustCompile(`(?i)\b(?:api[_-]?key|access[_-]?token|auth[_-]?token|refresh[_-]?token|token|password|passwd|secret|client[_-]?secret)\b\s*[:=]\s*["']?([^\s"',;}{]{6,})`),
+			pattern:    regexp.MustCompile(`(?i)\b(?:api[_-]?key|access[_-]?token|auth[_-]?token|refresh[_-]?token|token|password|passwd|secret|client[_-]?secret|aws[_-]?secret[_-]?access[_-]?key|private[_-]?key|signing[_-]?key|webhook[_-]?secret)\b\s*[:=]\s*["']?([^\s"',;}{]{6,})`),
 			secretPart: 1,
 			confidence: 0.92,
 		},
