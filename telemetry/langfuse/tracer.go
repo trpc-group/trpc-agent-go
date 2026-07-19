@@ -77,15 +77,14 @@ func start(ctx context.Context, cfg *config, opts ...otlptracehttp.Option) (clea
 
 	}
 
-	exp, err := newExporter(ctx, opts...)
+	// AttributeRewriter is applied inside the Langfuse exporter after
+	// transformCallLLM/transformExecuteTool so consume-and-strip of library
+	// keys (e.g. llm_request) happens before branding renames.
+	exp, err := newExporter(ctx, cfg.attributeRewriter, opts...)
 	if err != nil {
 		return nil, err
 	}
-	var spanExp sdktrace.SpanExporter = exp
-	if cfg.attributeRewriter != nil {
-		spanExp = &attributeRewritingExporter{next: exp, rewrite: cfg.attributeRewriter}
-	}
-	processor := newSpanProcessor(spanExp, resolveBaggageFilter(cfg))
+	processor := newSpanProcessor(exp, resolveBaggageFilter(cfg))
 	if provider == nil {
 		serviceNamespace := semconvtrace.ResourceServiceNamespace
 		if cfg.serviceNamespace != "" {

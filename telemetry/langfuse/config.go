@@ -26,9 +26,10 @@ type Option func(*config)
 // allowlist or compose with WithExtraBaggageAttributeKeys.
 type BaggageAttributeFilter func(baggage.Member) bool
 
-// AttributeRewriter transforms span attributes immediately before export.
+// AttributeRewriter transforms span attributes after Langfuse observation
+// transforms (e.g. transformCallLLM) and immediately before OTLP upload.
 // Returning a new slice leaves the in-memory span unchanged for local processors.
-// A nil rewriter preserves attributes as stamped by the library (default).
+// A nil rewriter preserves attributes as stamped/transformed by the library (default).
 type AttributeRewriter func(attrs []attribute.KeyValue) []attribute.KeyValue
 
 // WithSecretKey sets the Langfuse secret key.
@@ -141,8 +142,11 @@ func WithExtraBaggageAttributeKeys(keys ...string) Option {
 	}
 }
 
-// WithAttributeRewriter registers a transform applied to span attributes
-// immediately before they are exported to Langfuse. Defaults to nil (no rewrite).
+// WithAttributeRewriter registers a transform applied to span attributes after
+// Langfuse observation transforms and before OTLP upload. Defaults to nil (no rewrite).
+// Apply branding renames here; do not rename library keys that transformCallLLM
+// consumes (e.g. trpc.go.agent.llm_request) before that transform runs — the
+// exporter already runs this rewriter after those transforms.
 func WithAttributeRewriter(rewriter AttributeRewriter) Option {
 	return func(cfg *config) {
 		cfg.attributeRewriter = rewriter
