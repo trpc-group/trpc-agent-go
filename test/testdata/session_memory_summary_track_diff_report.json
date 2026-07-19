@@ -1,0 +1,866 @@
+{
+  "version": 1,
+  "generated_at": "2026-07-19T00:00:00Z",
+  "baseline": "inmemory",
+  "backends": [
+    "inmemory",
+    "sqlite-fault"
+  ],
+  "total_cases": 4,
+  "passed_cases": 0,
+  "failed_cases": 4,
+  "skipped_cases": 0,
+  "mixed_cases": 0,
+  "inconclusive_cases": 0,
+  "allowed_diffs": 0,
+  "blocking_diffs": 14,
+  "cases": [
+    {
+      "name": "tool_call_response_extensions",
+      "status": "failed",
+      "backends": [
+        "inmemory",
+        "sqlite-fault:tool_args_reference_corruption"
+      ],
+      "capabilities": {
+        "inmemory": {
+          "app_state": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "event_paging": {
+            "supported": false,
+            "allowed_diff": true,
+            "reason": "the lightweight replay matrix does not exercise backend-specific paging tokens"
+          },
+          "event_state_delta_null": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "events": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "memory": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "memory_search": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "state": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "state_clear": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "state_delete": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "summary": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "tracks": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "ttl": {
+            "supported": false,
+            "allowed_diff": true,
+            "reason": "TTL is disabled to keep deterministic replay snapshots"
+          },
+          "user_state": {
+            "supported": true,
+            "allowed_diff": false
+          }
+        },
+        "sqlite-fault:tool_args_reference_corruption": {
+          "app_state": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "event_paging": {
+            "supported": false,
+            "allowed_diff": true,
+            "reason": "the lightweight replay matrix does not exercise backend-specific paging tokens"
+          },
+          "event_state_delta_null": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "events": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "memory": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "memory_search": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "state": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "state_clear": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "state_delete": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "summary": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "tracks": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "ttl": {
+            "supported": false,
+            "allowed_diff": true,
+            "reason": "TTL is disabled to keep deterministic replay snapshots"
+          },
+          "user_state": {
+            "supported": true,
+            "allowed_diff": false
+          }
+        }
+      },
+      "unsupported": [
+        {
+          "backend": "inmemory",
+          "capability": "event_paging",
+          "allowed_diff": true,
+          "reason": "the example matrix does not exercise backend-specific paging tokens"
+        },
+        {
+          "backend": "sqlite-fault:tool_args_reference_corruption",
+          "capability": "ttl",
+          "allowed_diff": true,
+          "reason": "TTL is disabled for deterministic replay"
+        }
+      ],
+      "diffs": [
+        {
+          "case": "tool_call_response_extensions",
+          "session_id": "session-tool_call_response_extensions",
+          "backend_a": "inmemory",
+          "backend_b": "sqlite-fault:tool_args_reference_corruption",
+          "section": "events",
+          "path": "$.events[2].extensions[\"trpc_agent.tool_call_args\"][\"tool-call:weather-call\"].units",
+          "baseline": "celsius",
+          "compared": "fahrenheit",
+          "baseline_present": true,
+          "compared_present": true,
+          "allowed_diff": false,
+          "explanation": "unexpected backend mismatch",
+          "checkpoint": "final",
+          "event_index": 2
+        }
+      ],
+      "duration": 50000000
+    },
+    {
+      "name": "memory_write_read",
+      "status": "failed",
+      "backends": [
+        "inmemory",
+        "sqlite-fault:memory_loss"
+      ],
+      "capabilities": {
+        "inmemory": {
+          "app_state": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "event_paging": {
+            "supported": false,
+            "allowed_diff": true,
+            "reason": "the lightweight replay matrix does not exercise backend-specific paging tokens"
+          },
+          "event_state_delta_null": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "events": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "memory": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "memory_search": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "state": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "state_clear": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "state_delete": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "summary": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "tracks": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "ttl": {
+            "supported": false,
+            "allowed_diff": true,
+            "reason": "TTL is disabled to keep deterministic replay snapshots"
+          },
+          "user_state": {
+            "supported": true,
+            "allowed_diff": false
+          }
+        },
+        "sqlite-fault:memory_loss": {
+          "app_state": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "event_paging": {
+            "supported": false,
+            "allowed_diff": true,
+            "reason": "the lightweight replay matrix does not exercise backend-specific paging tokens"
+          },
+          "event_state_delta_null": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "events": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "memory": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "memory_search": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "state": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "state_clear": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "state_delete": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "summary": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "tracks": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "ttl": {
+            "supported": false,
+            "allowed_diff": true,
+            "reason": "TTL is disabled to keep deterministic replay snapshots"
+          },
+          "user_state": {
+            "supported": true,
+            "allowed_diff": false
+          }
+        }
+      },
+      "unsupported": [
+        {
+          "backend": "inmemory",
+          "capability": "event_paging",
+          "allowed_diff": true,
+          "reason": "the example matrix does not exercise backend-specific paging tokens"
+        },
+        {
+          "backend": "sqlite-fault:memory_loss",
+          "capability": "ttl",
+          "allowed_diff": true,
+          "reason": "TTL is disabled for deterministic replay"
+        }
+      ],
+      "diffs": [
+        {
+          "case": "memory_write_read",
+          "session_id": "session-memory_write_read",
+          "backend_a": "inmemory",
+          "backend_b": "sqlite-fault:memory_loss",
+          "section": "memories",
+          "path": "$.memories[0].content",
+          "baseline": "User prefers Go for backend services.",
+          "compared": "User shipped a replay harness with Alice.",
+          "baseline_present": true,
+          "compared_present": true,
+          "allowed_diff": false,
+          "explanation": "unexpected backend mismatch",
+          "checkpoint": "final",
+          "memory_id": "memory:preference"
+        },
+        {
+          "case": "memory_write_read",
+          "session_id": "session-memory_write_read",
+          "backend_a": "inmemory",
+          "backend_b": "sqlite-fault:memory_loss",
+          "section": "memories",
+          "path": "$.memories[0].event_time",
+          "baseline": {
+            "__missing": true
+          },
+          "compared": "2026-07-01T08:30:00Z",
+          "baseline_present": false,
+          "compared_present": true,
+          "allowed_diff": false,
+          "explanation": "unexpected backend mismatch",
+          "checkpoint": "final",
+          "memory_id": "memory:preference"
+        },
+        {
+          "case": "memory_write_read",
+          "session_id": "session-memory_write_read",
+          "backend_a": "inmemory",
+          "backend_b": "sqlite-fault:memory_loss",
+          "section": "memories",
+          "path": "$.memories[0].id",
+          "baseline": "memory:preference",
+          "compared": "memory:episode",
+          "baseline_present": true,
+          "compared_present": true,
+          "allowed_diff": false,
+          "explanation": "unexpected backend mismatch",
+          "checkpoint": "final",
+          "memory_id": "memory:preference"
+        },
+        {
+          "case": "memory_write_read",
+          "session_id": "session-memory_write_read",
+          "backend_a": "inmemory",
+          "backend_b": "sqlite-fault:memory_loss",
+          "section": "memories",
+          "path": "$.memories[0].kind",
+          "baseline": "fact",
+          "compared": "episode",
+          "baseline_present": true,
+          "compared_present": true,
+          "allowed_diff": false,
+          "explanation": "unexpected backend mismatch",
+          "checkpoint": "final",
+          "memory_id": "memory:preference"
+        },
+        {
+          "case": "memory_write_read",
+          "session_id": "session-memory_write_read",
+          "backend_a": "inmemory",
+          "backend_b": "sqlite-fault:memory_loss",
+          "section": "memories",
+          "path": "$.memories[0].location",
+          "baseline": {
+            "__missing": true
+          },
+          "compared": "Shenzhen",
+          "baseline_present": false,
+          "compared_present": true,
+          "allowed_diff": false,
+          "explanation": "unexpected backend mismatch",
+          "checkpoint": "final",
+          "memory_id": "memory:preference"
+        },
+        {
+          "case": "memory_write_read",
+          "session_id": "session-memory_write_read",
+          "backend_a": "inmemory",
+          "backend_b": "sqlite-fault:memory_loss",
+          "section": "memories",
+          "path": "$.memories[0].participants",
+          "baseline": {
+            "__missing": true
+          },
+          "compared": [
+            "Alice",
+            "User"
+          ],
+          "baseline_present": false,
+          "compared_present": true,
+          "allowed_diff": false,
+          "explanation": "unexpected backend mismatch",
+          "checkpoint": "final",
+          "memory_id": "memory:preference"
+        },
+        {
+          "case": "memory_write_read",
+          "session_id": "session-memory_write_read",
+          "backend_a": "inmemory",
+          "backend_b": "sqlite-fault:memory_loss",
+          "section": "memories",
+          "path": "$.memories[0].topics[0]",
+          "baseline": "go",
+          "compared": "project",
+          "baseline_present": true,
+          "compared_present": true,
+          "allowed_diff": false,
+          "explanation": "unexpected backend mismatch",
+          "checkpoint": "final",
+          "memory_id": "memory:preference"
+        },
+        {
+          "case": "memory_write_read",
+          "session_id": "session-memory_write_read",
+          "backend_a": "inmemory",
+          "backend_b": "sqlite-fault:memory_loss",
+          "section": "memories",
+          "path": "$.memories[0].topics[1]",
+          "baseline": "preference",
+          "compared": "replay",
+          "baseline_present": true,
+          "compared_present": true,
+          "allowed_diff": false,
+          "explanation": "unexpected backend mismatch",
+          "checkpoint": "final",
+          "memory_id": "memory:preference"
+        },
+        {
+          "case": "memory_write_read",
+          "session_id": "session-memory_write_read",
+          "backend_a": "inmemory",
+          "backend_b": "sqlite-fault:memory_loss",
+          "section": "memories",
+          "path": "$.memories[1]",
+          "baseline": {
+            "app_name": "replay-memory_write_read",
+            "content": "User shipped a replay harness with Alice.",
+            "event_time": "2026-07-01T08:30:00Z",
+            "id": "memory:episode",
+            "kind": "episode",
+            "location": "Shenzhen",
+            "participants": [
+              "Alice",
+              "User"
+            ],
+            "rank": -1,
+            "score": 0,
+            "topics": [
+              "project",
+              "replay"
+            ],
+            "user_id": "user-memory_write_read"
+          },
+          "compared": {
+            "__missing": true
+          },
+          "baseline_present": true,
+          "compared_present": false,
+          "allowed_diff": false,
+          "explanation": "unexpected backend mismatch",
+          "checkpoint": "final",
+          "memory_id": "memory:episode"
+        }
+      ],
+      "duration": 50000000
+    },
+    {
+      "name": "summary_filter_and_overwrite",
+      "status": "failed",
+      "backends": [
+        "inmemory",
+        "sqlite-fault:summary_wrong_session"
+      ],
+      "capabilities": {
+        "inmemory": {
+          "app_state": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "event_paging": {
+            "supported": false,
+            "allowed_diff": true,
+            "reason": "the lightweight replay matrix does not exercise backend-specific paging tokens"
+          },
+          "event_state_delta_null": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "events": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "memory": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "memory_search": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "state": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "state_clear": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "state_delete": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "summary": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "tracks": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "ttl": {
+            "supported": false,
+            "allowed_diff": true,
+            "reason": "TTL is disabled to keep deterministic replay snapshots"
+          },
+          "user_state": {
+            "supported": true,
+            "allowed_diff": false
+          }
+        },
+        "sqlite-fault:summary_wrong_session": {
+          "app_state": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "event_paging": {
+            "supported": false,
+            "allowed_diff": true,
+            "reason": "the lightweight replay matrix does not exercise backend-specific paging tokens"
+          },
+          "event_state_delta_null": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "events": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "memory": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "memory_search": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "state": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "state_clear": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "state_delete": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "summary": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "tracks": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "ttl": {
+            "supported": false,
+            "allowed_diff": true,
+            "reason": "TTL is disabled to keep deterministic replay snapshots"
+          },
+          "user_state": {
+            "supported": true,
+            "allowed_diff": false
+          }
+        }
+      },
+      "unsupported": [
+        {
+          "backend": "inmemory",
+          "capability": "event_paging",
+          "allowed_diff": true,
+          "reason": "the example matrix does not exercise backend-specific paging tokens"
+        },
+        {
+          "backend": "sqlite-fault:summary_wrong_session",
+          "capability": "ttl",
+          "allowed_diff": true,
+          "reason": "TTL is disabled for deterministic replay"
+        }
+      ],
+      "diffs": [
+        {
+          "case": "summary_filter_and_overwrite",
+          "session_id": "session-summary_filter_and_overwrite",
+          "backend_a": "inmemory",
+          "backend_b": "sqlite-fault:summary_wrong_session",
+          "section": "summaries",
+          "path": "$.summaries[\"root/tools/weather\"].session_id",
+          "baseline": "session-summary_filter_and_overwrite",
+          "compared": "session:wrong-owner",
+          "baseline_present": true,
+          "compared_present": true,
+          "allowed_diff": false,
+          "explanation": "unexpected backend mismatch",
+          "checkpoint": "after_summary_overwrite",
+          "summary_id": "session-summary_filter_and_overwrite:root/tools/weather:1",
+          "summary_filter_key": "root/tools/weather"
+        },
+        {
+          "case": "summary_filter_and_overwrite",
+          "session_id": "session-summary_filter_and_overwrite",
+          "backend_a": "inmemory",
+          "backend_b": "sqlite-fault:summary_wrong_session",
+          "section": "summaries",
+          "path": "$.summaries[\"root/tools/weather\"].session_id",
+          "baseline": "session-summary_filter_and_overwrite",
+          "compared": "session:wrong-owner",
+          "baseline_present": true,
+          "compared_present": true,
+          "allowed_diff": false,
+          "explanation": "unexpected backend mismatch",
+          "checkpoint": "final",
+          "summary_id": "session-summary_filter_and_overwrite:root/tools/weather:1",
+          "summary_filter_key": "root/tools/weather"
+        }
+      ],
+      "duration": 50000000
+    },
+    {
+      "name": "track_status_error_invocation",
+      "status": "failed",
+      "backends": [
+        "inmemory",
+        "sqlite-fault:track_name_corruption"
+      ],
+      "capabilities": {
+        "inmemory": {
+          "app_state": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "event_paging": {
+            "supported": false,
+            "allowed_diff": true,
+            "reason": "the lightweight replay matrix does not exercise backend-specific paging tokens"
+          },
+          "event_state_delta_null": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "events": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "memory": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "memory_search": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "state": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "state_clear": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "state_delete": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "summary": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "tracks": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "ttl": {
+            "supported": false,
+            "allowed_diff": true,
+            "reason": "TTL is disabled to keep deterministic replay snapshots"
+          },
+          "user_state": {
+            "supported": true,
+            "allowed_diff": false
+          }
+        },
+        "sqlite-fault:track_name_corruption": {
+          "app_state": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "event_paging": {
+            "supported": false,
+            "allowed_diff": true,
+            "reason": "the lightweight replay matrix does not exercise backend-specific paging tokens"
+          },
+          "event_state_delta_null": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "events": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "memory": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "memory_search": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "state": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "state_clear": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "state_delete": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "summary": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "tracks": {
+            "supported": true,
+            "allowed_diff": false
+          },
+          "ttl": {
+            "supported": false,
+            "allowed_diff": true,
+            "reason": "TTL is disabled to keep deterministic replay snapshots"
+          },
+          "user_state": {
+            "supported": true,
+            "allowed_diff": false
+          }
+        }
+      },
+      "unsupported": [
+        {
+          "backend": "inmemory",
+          "capability": "event_paging",
+          "allowed_diff": true,
+          "reason": "the example matrix does not exercise backend-specific paging tokens"
+        },
+        {
+          "backend": "sqlite-fault:track_name_corruption",
+          "capability": "ttl",
+          "allowed_diff": true,
+          "reason": "TTL is disabled for deterministic replay"
+        }
+      ],
+      "diffs": [
+        {
+          "case": "track_status_error_invocation",
+          "session_id": "session-track_status_error_invocation",
+          "backend_a": "inmemory",
+          "backend_b": "sqlite-fault:track_name_corruption",
+          "section": "tracks",
+          "path": "$.tracks[\"tool.weather\"]",
+          "baseline": [
+            {
+              "payload": {
+                "event_type": "started",
+                "invocation_id": "invocation:root"
+              },
+              "track": "tool.weather"
+            },
+            {
+              "payload": {
+                "error": "timeout",
+                "event_type": "failed",
+                "invocation_id": "invocation:root"
+              },
+              "track": "tool.weather"
+            }
+          ],
+          "compared": {
+            "__missing": true
+          },
+          "baseline_present": true,
+          "compared_present": false,
+          "allowed_diff": false,
+          "explanation": "unexpected backend mismatch",
+          "checkpoint": "final",
+          "track_name": "tool.weather"
+        },
+        {
+          "case": "track_status_error_invocation",
+          "session_id": "session-track_status_error_invocation",
+          "backend_a": "inmemory",
+          "backend_b": "sqlite-fault:track_name_corruption",
+          "section": "tracks",
+          "path": "$.tracks[\"tool.wrong\"]",
+          "baseline": {
+            "__missing": true
+          },
+          "compared": [
+            {
+              "payload": {
+                "event_type": "started",
+                "invocation_id": "invocation:root"
+              },
+              "track": "tool.wrong"
+            },
+            {
+              "payload": {
+                "error": "timeout",
+                "event_type": "failed",
+                "invocation_id": "invocation:root"
+              },
+              "track": "tool.wrong"
+            }
+          ],
+          "baseline_present": false,
+          "compared_present": true,
+          "allowed_diff": false,
+          "explanation": "unexpected backend mismatch",
+          "checkpoint": "final",
+          "track_name": "tool.wrong"
+        }
+      ],
+      "duration": 50000000
+    }
+  ]
+}
