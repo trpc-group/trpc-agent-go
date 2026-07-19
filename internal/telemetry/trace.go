@@ -14,6 +14,7 @@ package telemetry
 import (
 	"encoding/json"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -30,6 +31,33 @@ import (
 	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
+
+// genAISystem holds the gen_ai.system value stamped on agent/tool/chat spans.
+// Defaults to semconvtrace.SystemTRPCGoAgent; integrators may override via
+// SetGenAISystem (e.g. langfuse.WithGenAISystem).
+var genAISystem atomic.Value
+
+func init() {
+	genAISystem.Store(semconvtrace.SystemTRPCGoAgent)
+}
+
+// GenAISystem returns the gen_ai.system value used when stamping span attributes.
+func GenAISystem() string {
+	if v, ok := genAISystem.Load().(string); ok && v != "" {
+		return v
+	}
+	return semconvtrace.SystemTRPCGoAgent
+}
+
+// SetGenAISystem overrides the gen_ai.system value stamped by Trace* helpers.
+// An empty system restores the library default (trpc.go.agent).
+func SetGenAISystem(system string) {
+	if system == "" {
+		genAISystem.Store(semconvtrace.SystemTRPCGoAgent)
+		return
+	}
+	genAISystem.Store(system)
+}
 
 // grpcDial is a package-level variable to allow test injection of a custom dialer.
 // In production, this points to grpc.Dial.
@@ -197,7 +225,7 @@ const (
 // TraceToolCall traces the invocation of a tool call.
 func TraceToolCall(span trace.Span, sess *session.Session, declaration *tool.Declaration, args []byte, rspEvent *event.Event, err error) {
 	span.SetAttributes(
-		attribute.String(semconvtrace.KeyGenAISystem, semconvtrace.SystemTRPCGoAgent),
+		attribute.String(semconvtrace.KeyGenAISystem, GenAISystem()),
 		attribute.String(semconvtrace.KeyGenAIOperationName, OperationExecuteTool),
 		attribute.String(semconvtrace.KeyGenAIToolName, declaration.Name),
 		attribute.String(semconvtrace.KeyGenAIToolDescription, declaration.Description),
@@ -247,7 +275,7 @@ const ToolNameMergedTools = "(merged tools)"
 // for preventing trace-query requests typically sent by web UIs.
 func TraceMergedToolCalls(span trace.Span, rspEvent *event.Event) {
 	span.SetAttributes(
-		attribute.String(semconvtrace.KeyGenAISystem, semconvtrace.SystemTRPCGoAgent),
+		attribute.String(semconvtrace.KeyGenAISystem, GenAISystem()),
 		attribute.String(semconvtrace.KeyGenAIOperationName, OperationExecuteTool),
 		attribute.String(semconvtrace.KeyGenAIToolName, ToolNameMergedTools),
 		attribute.String(semconvtrace.KeyGenAIToolDescription, "(merged tools)"),
@@ -291,7 +319,7 @@ func TraceBeforeInvokeAgent(span trace.Span, invoke *agent.Invocation, agentDesc
 		return
 	}
 	attrs := []attribute.KeyValue{
-		attribute.String(semconvtrace.KeyGenAISystem, semconvtrace.SystemTRPCGoAgent),
+		attribute.String(semconvtrace.KeyGenAISystem, GenAISystem()),
 		attribute.String(semconvtrace.KeyGenAIOperationName, OperationInvokeAgent),
 		attribute.String(semconvtrace.KeyGenAIAgentDescription, agentDescription),
 		attribute.String(semconvtrace.KeyGenAISystemInstructions, instructions),
@@ -461,7 +489,7 @@ func TraceChat(span trace.Span, attributes *TraceChatAttributes) {
 		return
 	}
 	attrs := []attribute.KeyValue{
-		attribute.String(semconvtrace.KeyGenAISystem, semconvtrace.SystemTRPCGoAgent),
+		attribute.String(semconvtrace.KeyGenAISystem, GenAISystem()),
 		attribute.String(semconvtrace.KeyGenAIOperationName, OperationChat),
 	}
 	if attributes == nil {

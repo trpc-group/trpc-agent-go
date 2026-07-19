@@ -14,6 +14,7 @@ import (
 	"encoding/base64"
 	"fmt"
 
+	"go.opentelemetry.io/otel/baggage"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/sdk/resource"
 	semconv "go.opentelemetry.io/otel/semconv/v1.21.0"
@@ -57,10 +58,14 @@ func Start(ctx context.Context, opts ...Option) (clean func(context.Context) err
 		otelOpts = append(otelOpts, otlptracehttp.WithInsecure())
 	}
 
-	return start(ctx, otelOpts...)
+	return start(ctx, config, otelOpts...)
 }
 
-func start(ctx context.Context, opts ...otlptracehttp.Option) (clean func(context.Context) error, err error) {
+func start(ctx context.Context, cfg *config, opts ...otlptracehttp.Option) (clean func(context.Context) error, err error) {
+	if cfg == nil {
+		cfg = &config{}
+	}
+
 	p := atrace.TracerProvider
 	_, ok := p.(noop.TracerProvider)
 	var provider *sdktrace.TracerProvider
@@ -76,13 +81,29 @@ func start(ctx context.Context, opts ...otlptracehttp.Option) (clean func(contex
 	if err != nil {
 		return nil, err
 	}
-	processor := newSpanProcessor(exp)
+	var spanExp sdktrace.SpanExporter = exp
+	if cfg.attributeRewriter != nil {
+		spanExp = &attributeRewritingExporter{next: exp, rewrite: cfg.attributeRewriter}
+	}
+	processor := newSpanProcessor(spanExp, resolveBaggageFilter(cfg))
 	if provider == nil {
+		serviceNamespace := semconvtrace.ResourceServiceNamespace
+		if cfg.serviceNamespace != "" {
+			serviceNamespace = cfg.serviceNamespace
+		}
+		serviceName := semconvtrace.ResourceServiceName
+		if cfg.serviceName != "" {
+			serviceName = cfg.serviceName
+		}
+		serviceVersion := semconvtrace.ResourceServiceVersion
+		if cfg.serviceVersion != "" {
+			serviceVersion = cfg.serviceVersion
+		}
 		res, err := resource.New(ctx,
 			resource.WithAttributes(
-				semconv.ServiceNamespace(semconvtrace.ResourceServiceNamespace),
-				semconv.ServiceName(semconvtrace.ResourceServiceName),
-				semconv.ServiceVersion(semconvtrace.ResourceServiceVersion),
+				semconv.ServiceNamespace(serviceNamespace),
+				semconv.ServiceName(serviceName),
+				semconv.ServiceVersion(serviceVersion),
 			),
 		)
 		if err != nil {
@@ -98,7 +119,14 @@ func start(ctx context.Context, opts ...otlptracehttp.Option) (clean func(contex
 		provider.RegisterSpanProcessor(processor)
 	}
 
-	atrace.Tracer = provider.Tracer(itelemetry.InstrumentName)
+	instrumentName := itelemetry.InstrumentName
+	if cfg.instrumentName != "" {
+		instrumentName = cfg.instrumentName
+	}
+	if cfg.genAISystem != "" {
+		itelemetry.SetGenAISystem(cfg.genAISystem)
+	}
+	atrace.Tracer = provider.Tracer(instrumentName)
 	return provider.Shutdown, nil
 }
 
@@ -106,4 +134,27 @@ func start(ctx context.Context, opts ...otlptracehttp.Option) (clean func(contex
 func encodeAuth(pk, sk string) string {
 	auth := pk + ":" + sk
 	return base64.StdEncoding.EncodeToString([]byte(auth))
+}
+
+func resolveBaggageFilter(cfg *config) BaggageAttributeFilter {
+	if cfg != nil && cfg.baggageFilter != nil {
+		return cfg.baggageFilter
+	}
+	if cfg == nil || len(cfg.extraBaggageKeys) == 0 {
+		return defaultLangfuseTraceAttributeFilter
+	}
+	extras := make(map[string]struct{}, len(cfg.extraBaggageKeys))
+	for _, k := range cfg.extraBaggageKeys {
+		if k == "" {
+			continue
+		}
+		extras[k] = struct{}{}
+	}
+	return func(member baggage.Member) bool {
+		if defaultLangfuseTraceAttributeFilter(member) {
+			return true
+		}
+		_, ok := extras[member.Key()]
+		return ok
+	}
 }
