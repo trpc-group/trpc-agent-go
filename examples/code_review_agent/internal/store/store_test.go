@@ -466,3 +466,79 @@ func startsWith(s, prefix string) bool {
 	}
 	return s[:len(prefix)] == prefix
 }
+
+// TestInitRecordsSchemaVersion verifies that Init inserts the current
+// schema version into schema_migrations. Borrowed from competitor PR
+// #2243.
+func TestInitRecordsSchemaVersion(t *testing.T) {
+	st := newTestStore(t)
+	v, err := st.SchemaVersion(context.Background())
+	if err != nil {
+		t.Fatalf("SchemaVersion: %v", err)
+	}
+	if v != CurrentSchemaVersion {
+		t.Errorf("SchemaVersion = %q, want %q", v, CurrentSchemaVersion)
+	}
+}
+
+// TestMigrateIdempotent verifies that calling Migrate on an already-
+// up-to-date database applies zero migrations and returns no error.
+func TestMigrateIdempotent(t *testing.T) {
+	st := newTestStore(t)
+	n, err := st.Migrate(context.Background())
+	if err != nil {
+		t.Fatalf("Migrate (first call): %v", err)
+	}
+	if n != 0 {
+		t.Errorf("first Migrate applied %d, want 0 (Init already recorded v1)", n)
+	}
+	// Call Migrate again — should still be a no-op.
+	n, err = st.Migrate(context.Background())
+	if err != nil {
+		t.Fatalf("Migrate (second call): %v", err)
+	}
+	if n != 0 {
+		t.Errorf("second Migrate applied %d, want 0", n)
+	}
+}
+
+// TestSchemaVersionEmptyOnFreshDB verifies that a database with no
+// schema_migrations rows returns "" (not an error). This covers the
+// edge case where schema_migrations exists but is empty, which should
+// not happen with the current Init but is the contract of
+// SchemaVersion.
+func TestSchemaVersionEmptyOnFreshDB(t *testing.T) {
+	st := New(":memory:").(*sqliteStore)
+	// Open + apply schema but skip the version insert by calling the
+	// raw schema apply directly (simulates a pre-migration database).
+	if err := st.Init(context.Background()); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	// Delete the version row to simulate a pre-migration database.
+	if _, err := st.db.ExecContext(context.Background(),
+		`DELETE FROM schema_migrations;`); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	v, err := st.SchemaVersion(context.Background())
+	if err != nil {
+		t.Fatalf("SchemaVersion: %v", err)
+	}
+	if v != "" {
+		t.Errorf("SchemaVersion = %q, want empty string", v)
+	}
+	// Migrate should re-apply the v1 row.
+	n, err := st.Migrate(context.Background())
+	if err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("Migrate applied %d, want 1 (v1 was missing)", n)
+	}
+	v, err = st.SchemaVersion(context.Background())
+	if err != nil {
+		t.Fatalf("SchemaVersion after Migrate: %v", err)
+	}
+	if v != CurrentSchemaVersion {
+		t.Errorf("SchemaVersion after Migrate = %q, want %q", v, CurrentSchemaVersion)
+	}
+}

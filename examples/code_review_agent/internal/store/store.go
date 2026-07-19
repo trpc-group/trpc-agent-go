@@ -48,7 +48,9 @@ var ErrTaskNotFound = errors.New("store: task not found")
 // Store is the persistence contract for the code review agent.
 type Store interface {
 	// Init opens the database, enables foreign keys and applies schema.sql.
-	// It must be called once before any other method.
+	// It must be called once before any other method. Init also records the
+	// current schema version in schema_migrations (borrowed from competitor
+	// PR #2243) so Migrate can detect already-applied migrations.
 	Init(ctx context.Context) error
 	// Close releases the underlying database handle.
 	Close() error
@@ -60,6 +62,14 @@ type Store interface {
 	LoadTaskReport(ctx context.Context, taskID string) (*TaskReport, error)
 	// ListTasks returns the most recent task summaries, newest first.
 	ListTasks(ctx context.Context, limit int) ([]TaskSummary, error)
+	// Migrate applies pending schema migrations up to CurrentSchemaVersion.
+	// It is idempotent: calling it on an up-to-date database is a no-op.
+	// Returns the number of migrations applied. Borrowed from competitor
+	// PR #2243.
+	Migrate(ctx context.Context) (int, error)
+	// SchemaVersion returns the highest migration version recorded in
+	// schema_migrations, or "" if no migration has been applied yet.
+	SchemaVersion(ctx context.Context) (string, error)
 }
 
 // sqliteStore is the concrete Store backed by modernc.org/sqlite.
@@ -80,6 +90,11 @@ func New(path string) Store {
 // handle is already open, preventing connection leaks. Every CREATE TABLE and
 // CREATE INDEX statement uses IF NOT EXISTS, so re-applying the schema is
 // idempotent.
+//
+// After applying the schema, Init records the current schema version in
+// schema_migrations (borrowed from competitor PR #2243) so Migrate can
+// detect already-applied migrations. The version insert uses INSERT OR
+// IGNORE so re-initialising an existing database is a no-op.
 func (s *sqliteStore) Init(ctx context.Context) error {
 	if s.db != nil {
 		return nil
@@ -101,6 +116,17 @@ func (s *sqliteStore) Init(ctx context.Context) error {
 		_ = s.db.Close()
 		s.db = nil
 		return fmt.Errorf("store: apply schema: %w", err)
+	}
+	// Record the initial schema version. INSERT OR IGNORE makes this
+	// idempotent: a database that already has the v1 row (e.g. re-opened
+	// from disk) is left untouched.
+	now := time.Now().UTC().Format(time.RFC3339)
+	if _, err := s.db.ExecContext(ctx, `
+INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?);`,
+		CurrentSchemaVersion, now); err != nil {
+		_ = s.db.Close()
+		s.db = nil
+		return fmt.Errorf("store: record schema version: %w", err)
 	}
 	return nil
 }

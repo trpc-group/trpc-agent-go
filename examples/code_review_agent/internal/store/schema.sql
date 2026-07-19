@@ -3,6 +3,16 @@
 -- CASCADE so that deleting a task removes all of its associated rows. Foreign
 -- keys are enabled at runtime via "PRAGMA foreign_keys=ON" (modernc.org/sqlite
 -- defaults them OFF).
+--
+-- The schema_migrations table (borrowed from competitor PR #2243) records
+-- which schema versions have been applied. Init inserts the current
+-- CurrentSchemaVersion row after the schema is applied; Migrate uses the
+-- table to skip already-applied migrations and apply pending ones.
+
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    version    TEXT    PRIMARY KEY,
+    applied_at TEXT    NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS review_task (
     task_id             TEXT    PRIMARY KEY,
