@@ -31,7 +31,8 @@ import (
 var _ trace.SpanExporter = (*exporter)(nil)
 
 type exporter struct {
-	client otlptrace.Client
+	client  otlptrace.Client
+	rewrite AttributeRewriter
 
 	mu      sync.RWMutex
 	started bool
@@ -40,8 +41,11 @@ type exporter struct {
 	stopOnce  sync.Once
 }
 
-func newExporter(ctx context.Context, opts ...otlptracehttp.Option) (*exporter, error) {
-	e := &exporter{client: otlptracehttp.NewClient(opts...)}
+func newExporter(ctx context.Context, rewrite AttributeRewriter, opts ...otlptracehttp.Option) (*exporter, error) {
+	e := &exporter{
+		client:  otlptracehttp.NewClient(opts...),
+		rewrite: rewrite,
+	}
 	if err := e.Start(ctx); err != nil {
 		return nil, err
 	}
@@ -51,7 +55,13 @@ func newExporter(ctx context.Context, opts ...otlptracehttp.Option) (*exporter, 
 func (e *exporter) ExportSpans(ctx context.Context, ss []trace.ReadOnlySpan) error {
 	protoSpans := tracetransform.Spans(ss)
 
+	// Langfuse transform must run before AttributeRewriter so library keys such as
+	// trpc.go.agent.llm_request are consumed into observation.input and stripped.
+	// Rewriting first renames those keys and leaks multi-MB blobs into metadata.
 	protoSpans = transform(protoSpans)
+	if e != nil && e.rewrite != nil {
+		protoSpans = rewriteTransformedSpans(protoSpans, e.rewrite)
+	}
 
 	err := e.client.UploadTraces(ctx, protoSpans)
 	if err != nil {
