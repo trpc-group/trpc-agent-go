@@ -386,6 +386,12 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsAndSendEventWithReque
 		eventChan,
 	)
 	if err != nil {
+		if functionResponseEvent != nil {
+			emitErr := emitFunctionResponseEvent(
+				ctx, invocation, eventChan, functionResponseEvent,
+			)
+			err = errors.Join(err, emitErr)
+		}
 		log.ErrorfContext(
 			ctx,
 			"Function call handling failed for agent %s: %v",
@@ -398,13 +404,26 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsAndSendEventWithReque
 			model.ErrorTypeFlowError,
 			err.Error(),
 		))
-		return nil, err
+		return functionResponseEvent, err
 	}
 
 	if functionResponseEvent == nil {
 		return nil, nil
 	}
+	if err := emitFunctionResponseEvent(
+		ctx, invocation, eventChan, functionResponseEvent,
+	); err != nil {
+		return nil, err
+	}
+	return functionResponseEvent, nil
+}
 
+func emitFunctionResponseEvent(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	eventChan chan<- *event.Event,
+	functionResponseEvent *event.Event,
+) error {
 	functionResponseEvent.RequiresCompletion = true
 	emitErr := agent.EmitEvent(
 		ctx,
@@ -424,23 +443,23 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsAndSendEventWithReque
 				persistErr,
 			)
 		}
-		return nil, emitErr
+		return emitErr
 	}
 	if emitErr != nil {
-		return nil, emitErr
+		return emitErr
 	}
 
 	if !appender.IsAttached(invocation) {
-		return functionResponseEvent, nil
+		return nil
 	}
 
 	completionID :=
 		agent.GetAppendEventNoticeKey(functionResponseEvent.ID)
 	timeout := funcRespWaitTimeout(ctx)
-	err = invocation.AddNoticeChannelAndWait(ctx, completionID, timeout)
+	err := invocation.AddNoticeChannelAndWait(ctx, completionID, timeout)
 	if errors.Is(err, context.Canceled) ||
 		errors.Is(err, context.DeadlineExceeded) {
-		return nil, err
+		return err
 	}
 	if err != nil {
 		log.WarnfContext(
@@ -449,7 +468,7 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsAndSendEventWithReque
 			err,
 		)
 	}
-	return functionResponseEvent, nil
+	return nil
 }
 
 func persistFunctionResponseAfterDeadline(
@@ -612,7 +631,7 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsWithRequest(
 		invocation,
 		toolResults,
 	)
-	if err != nil {
+	if err != nil && len(toolCallResponsesEvents) == 0 {
 		return nil, err
 	}
 
@@ -629,6 +648,9 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsWithRequest(
 		ctx, invocation, llmResponse, tools, toolCalls, toolResults,
 		toolCallResponsesEvents,
 	)
+	if err != nil {
+		return mergedEvent, err
+	}
 	if err := p.applyAfterToolMessagesHooks(
 		ctx,
 		invocation,
@@ -1127,8 +1149,9 @@ func (p *FunctionCallResponseProcessor) executeToolCallsInParallel(
 		invocation,
 		toolResults,
 	)
-	if stateDeltaErr != nil {
-		return nil, errors.Join(err, stateDeltaErr)
+	err = errors.Join(err, stateDeltaErr)
+	if stateDeltaErr != nil && len(toolCallResponsesEvents) == 0 {
+		return nil, err
 	}
 	if len(toolCallResponsesEvents) == 0 && invocation != nil {
 		for _, tc := range toolCalls {
@@ -1760,6 +1783,7 @@ func (p *FunctionCallResponseProcessor) attachStateDeltaToToolResults(
 	results []toolResult,
 ) ([]*event.Event, error) {
 	var priorStateDelta []*event.Event
+	var stateDeltaErr error
 	events := make([]*event.Event, 0, len(results))
 	for i := 0; i < len(results); i++ {
 		result := results[i]
@@ -1786,7 +1810,8 @@ func (p *FunctionCallResponseProcessor) attachStateDeltaToToolResults(
 				&result.stateDelta.choice,
 				result.event,
 			); err != nil {
-				return nil, err
+				stateDeltaErr = errors.Join(stateDeltaErr, err)
+				continue
 			}
 		}
 		p.runPostToolResultHooks(ctx, invocation, result.event)
@@ -1798,7 +1823,7 @@ func (p *FunctionCallResponseProcessor) attachStateDeltaToToolResults(
 		}
 		events = append(events, result.event)
 	}
-	return events, nil
+	return events, stateDeltaErr
 }
 
 func (p *FunctionCallResponseProcessor) runPostToolResultHooks(
