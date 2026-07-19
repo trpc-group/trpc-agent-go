@@ -152,7 +152,7 @@ func (guard *Guard) scan(
 		}
 	}()
 
-	findings := make([]Finding, 0)
+	findings := inputValidationFindings(input)
 	if ctx.Err() != nil {
 		findings = append(findings, scanFailureFinding(ctx.Err()))
 	} else {
@@ -176,6 +176,29 @@ func (guard *Guard) scan(
 		},
 	)
 	return report, nil
+}
+
+func inputValidationFindings(input ScanInput) []Finding {
+	findings := make([]Finding, 0, 2)
+	if !validBackendProvider(input.Backend, input.Provider) {
+		findings = append(findings, newFinding(
+			"SAFETY_PROVIDER_INVALID",
+			RiskLevelHigh,
+			DecisionDeny,
+			"execution provider does not match its backend",
+			"set a valid provider only for a remote sandbox backend",
+		))
+	}
+	if strings.TrimSpace(input.Command) != "" && len(input.Args) > 0 {
+		findings = append(findings, newFinding(
+			"SAFETY_INPUT_AMBIGUOUS",
+			RiskLevelHigh,
+			DecisionDeny,
+			"command and args cannot both be set",
+			"provide exactly one executable input form",
+		))
+	}
+	return findings
 }
 
 func cloneScanInput(input ScanInput) ScanInput {
@@ -288,6 +311,7 @@ func buildReport(policy Policy, input ScanInput, outcome scanOutcome) Report {
 		ToolName:      bounded(input.ToolName, maxEvidenceBytes),
 		Command:       command,
 		Backend:       input.Backend,
+		Provider:      reportProvider(input),
 		Redacted:      redacted,
 		DurationMS:    outcome.duration.Milliseconds(),
 		PolicyVersion: policy.versionString(),
@@ -314,6 +338,13 @@ func buildReport(policy Policy, input ScanInput, outcome scanOutcome) Report {
 	report.Recommendation = primary.Recommendation
 	report.Blocked = primary.Decision != DecisionAllow
 	return report
+}
+
+func reportProvider(input ScanInput) Provider {
+	if validBackendProvider(input.Backend, input.Provider) {
+		return input.Provider
+	}
+	return ""
 }
 
 func findingLess(left, right Finding) bool {
@@ -814,7 +845,7 @@ func commandAllowed(allowed []string, command string) bool {
 		if hasPath || strings.ContainsAny(candidate, "/\\") {
 			continue
 		}
-		if runtime.GOOS == "linux" {
+		if runtime.GOOS != "windows" {
 			if candidate == command {
 				return true
 			}

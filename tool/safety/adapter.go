@@ -51,6 +51,7 @@ type Binding struct {
 	ToolName string
 	Kind     ExecutionKind
 	Backend  Backend
+	Provider Provider
 	Adapter  InputAdapter
 }
 
@@ -110,6 +111,17 @@ func BindCodeExec(toolName string, backend Backend) Binding {
 	}
 }
 
+// BindRemoteCodeExec binds a codeexec tool to a remote sandbox provider.
+func BindRemoteCodeExec(toolName string, provider Provider) Binding {
+	return Binding{
+		ToolName: toolName,
+		Kind:     ExecutionKindCodeExec,
+		Backend:  BackendRemoteSandbox,
+		Provider: provider,
+		Adapter:  codeExecAdapter{},
+	}
+}
+
 // BindCustom binds a caller-provided adapter for an MCP, Skill, or custom
 // execution tool.
 func BindCustom(
@@ -152,6 +164,9 @@ func validateBinding(binding Binding) error {
 			return err
 		}
 	}
+	if !validBackendProvider(binding.Backend, binding.Provider) {
+		return errors.New("tool safety: binding provider is invalid")
+	}
 	switch binding.Kind {
 	case ExecutionKindWorkspaceExec, ExecutionKindWorkspaceSession:
 		if binding.Backend != BackendWorkspaceExec {
@@ -163,7 +178,8 @@ func validateBinding(binding Binding) error {
 		}
 	case ExecutionKindCodeExec:
 		switch binding.Backend {
-		case BackendCodeExec, BackendLocal, BackendContainer, BackendE2B:
+		case BackendCodeExec, BackendLocal, BackendContainer:
+		case BackendRemoteSandbox:
 		default:
 			return errors.New("tool safety: invalid code binding backend")
 		}
@@ -177,6 +193,33 @@ func validateBinding(binding Binding) error {
 		return errors.New("tool safety: unknown binding kind")
 	}
 	return nil
+}
+
+func validBackendProvider(backend Backend, provider Provider) bool {
+	if backend == BackendRemoteSandbox {
+		return validProvider(provider)
+	}
+	return provider == ""
+}
+
+func validProvider(provider Provider) bool {
+	value := string(provider)
+	if value == "" || len(value) > 64 {
+		return false
+	}
+	separator := false
+	for index, char := range value {
+		if char >= 'a' && char <= 'z' || char >= '0' && char <= '9' {
+			separator = false
+			continue
+		}
+		if separator || index == 0 || index == len(value)-1 ||
+			(char != '.' && char != '_' && char != '-') {
+			return false
+		}
+		separator = true
+	}
+	return true
 }
 
 func isNilAdapter(adapter InputAdapter) bool {
@@ -275,6 +318,7 @@ func (workspaceExecAdapter) Adapt(
 		Env:          cloneStringMap(input.Env),
 		Metadata:     req.Metadata,
 		Backend:      binding.Backend,
+		Provider:     binding.Provider,
 		Timeout:      timeout,
 		Yield:        yield,
 		PTY:          pty,
@@ -355,6 +399,7 @@ func (adapter hostExecAdapter) Adapt(
 		Env:         cloneStringMap(input.Env),
 		Metadata:    req.Metadata,
 		Backend:     binding.Backend,
+		Provider:    binding.Provider,
 		Timeout:     timeout,
 		Yield:       yield,
 		PTY:         pty,
@@ -406,6 +451,7 @@ func adaptSession(
 		Submit:       submit,
 		Metadata:     req.Metadata,
 		Backend:      binding.Backend,
+		Provider:     binding.Provider,
 		Yield:        yield,
 		Interactive:  true,
 	}, nil
@@ -441,6 +487,7 @@ func (codeExecAdapter) Adapt(
 		CodeBlocks:  cloneCodeBlocks(blocks),
 		Metadata:    req.Metadata,
 		Backend:     binding.Backend,
+		Provider:    binding.Provider,
 	}, nil
 }
 

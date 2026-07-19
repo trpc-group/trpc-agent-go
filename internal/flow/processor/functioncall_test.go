@@ -855,6 +855,62 @@ type mockStateDeltaTool struct {
 	delta       map[string][]byte
 }
 
+type errorStateDeltaTool struct {
+	err    error
+	callFn func(context.Context, []byte) (any, error)
+}
+
+type errorInvocationStateDeltaTool struct {
+	*errorStateDeltaTool
+	invocationErr error
+}
+
+type legacyInvocationErrorStateDeltaTool struct {
+	*errorStateDeltaTool
+}
+
+func (t *legacyInvocationErrorStateDeltaTool) StateDeltaForInvocation(
+	_ *agent.Invocation,
+	_ string,
+	_ []byte,
+	_ []byte,
+) map[string][]byte {
+	return map[string][]byte{"legacy": []byte("must-not-win")}
+}
+
+func (t *errorInvocationStateDeltaTool) StateDeltaForInvocationWithError(
+	_ context.Context,
+	_ *agent.Invocation,
+	_ string,
+	_ []byte,
+	_ []byte,
+) (map[string][]byte, error) {
+	return nil, t.invocationErr
+}
+
+func (t *errorStateDeltaTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{Name: "error_state_delta"}
+}
+
+func (t *errorStateDeltaTool) Call(
+	ctx context.Context,
+	args []byte,
+) (any, error) {
+	if t.callFn != nil {
+		return t.callFn(ctx, args)
+	}
+	return map[string]any{"ok": true}, nil
+}
+
+func (t *errorStateDeltaTool) StateDeltaWithError(
+	_ context.Context,
+	_ string,
+	_ []byte,
+	_ []byte,
+) (map[string][]byte, error) {
+	return nil, t.err
+}
+
 func (m *mockStateDeltaTool) Declaration() *tool.Declaration {
 	if m.declaration != nil {
 		return m.declaration
@@ -1006,7 +1062,9 @@ func TestFunctionCallResponseProcessor_AttachStateDelta(t *testing.T) {
 			deltaKey1: []byte(deltaVal1),
 		},
 	}
-	p.attachStateDelta(inv, tl, args, choice, ev)
+	require.NoError(t, p.attachStateDelta(
+		context.Background(), inv, tl, args, choice, ev,
+	))
 	require.Equal(t, []byte(deltaVal1), ev.StateDelta[deltaKey1])
 
 	ev2 := &event.Event{}
@@ -1016,8 +1074,156 @@ func TestFunctionCallResponseProcessor_AttachStateDelta(t *testing.T) {
 			deltaKey2: []byte(deltaVal2),
 		},
 	}
-	p.attachStateDelta(inv, tl2, args, choice, ev2)
+	require.NoError(t, p.attachStateDelta(
+		context.Background(), inv, tl2, args, choice, ev2,
+	))
 	require.Equal(t, []byte(deltaVal2), ev2.StateDelta[deltaKey2])
+}
+
+func TestAttachStateDeltaToToolResultsPropagatesProviderError(t *testing.T) {
+	wantErr := errors.New("state delta audit failed")
+	p := NewFunctionCallResponseProcessor(false, nil)
+	firstEvent := &event.Event{}
+	failedEvent := &event.Event{}
+	results := []toolResult{
+		{
+			event: firstEvent,
+			stateDelta: &toolEventStateDelta{
+				tool: &mockStateDeltaTool{delta: map[string][]byte{
+					"first": []byte("value"),
+				}},
+				choice: model.Choice{Message: model.Message{
+					Role:   model.RoleTool,
+					ToolID: "call-1",
+				}},
+			},
+		},
+		{
+			event: failedEvent,
+			stateDelta: &toolEventStateDelta{
+				tool: &errorStateDeltaTool{err: wantErr},
+				choice: model.Choice{Message: model.Message{
+					Role:   model.RoleTool,
+					ToolID: "call-2",
+				}},
+			},
+		},
+	}
+
+	events, err := p.attachStateDeltaToToolResults(
+		context.Background(), nil, results,
+	)
+	require.ErrorIs(t, err, wantErr)
+	require.Nil(t, events)
+	require.Equal(t, []byte("value"), firstEvent.StateDelta["first"])
+	require.Empty(t, failedEvent.StateDelta)
+}
+
+func TestAttachStateDeltaPrefersInvocationAwareErrorProvider(t *testing.T) {
+	invocationErr := errors.New("invocation state delta failed")
+	legacyErr := errors.New("legacy state delta must not win")
+	processor := NewFunctionCallResponseProcessor(false, nil)
+	event := &event.Event{}
+	choice := &model.Choice{Message: model.Message{
+		Role:   model.RoleTool,
+		ToolID: "call-1",
+	}}
+	provider := &errorInvocationStateDeltaTool{
+		errorStateDeltaTool: &errorStateDeltaTool{err: legacyErr},
+		invocationErr:       invocationErr,
+	}
+
+	err := processor.attachStateDelta(
+		context.Background(), &agent.Invocation{}, provider, nil, choice, event,
+	)
+	require.ErrorIs(t, err, invocationErr)
+	require.NotErrorIs(t, err, legacyErr)
+	require.Empty(t, event.StateDelta)
+}
+
+func TestAttachStateDeltaPrefersErrorAwareStateOverLegacyInvocationState(t *testing.T) {
+	wantErr := errors.New("state delta failed")
+	processor := NewFunctionCallResponseProcessor(false, nil)
+	event := &event.Event{}
+	choice := &model.Choice{Message: model.Message{Role: model.RoleTool}}
+	provider := &legacyInvocationErrorStateDeltaTool{
+		errorStateDeltaTool: &errorStateDeltaTool{err: wantErr},
+	}
+
+	err := processor.attachStateDelta(
+		context.Background(), &agent.Invocation{}, provider, nil, choice, event,
+	)
+	require.ErrorIs(t, err, wantErr)
+	require.Empty(t, event.StateDelta)
+}
+
+func TestExecuteSingleToolCallSequentialPropagatesStateDeltaError(t *testing.T) {
+	wantErr := errors.New("state delta audit failed")
+	p := NewFunctionCallResponseProcessor(false, nil)
+	inv := &agent.Invocation{AgentName: "tester"}
+	call := model.ToolCall{ID: "call-1", Function: model.FunctionDefinitionParam{
+		Name: "error_state_delta", Arguments: []byte(`{}`),
+	}}
+
+	event, err := p.executeSingleToolCallSequential(
+		context.Background(),
+		inv,
+		newToolCallResponseWithCalls([]model.ToolCall{call}),
+		map[string]tool.Tool{
+			"error_state_delta": &errorStateDeltaTool{err: wantErr},
+		},
+		nil,
+		0,
+		call,
+	)
+	require.Nil(t, event)
+	require.ErrorIs(t, err, wantErr)
+}
+
+func TestExecuteToolCallsInParallelPreservesExecutionAndStateDeltaErrors(
+	t *testing.T,
+) {
+	criticalErr := agent.NewStopError("critical tool failure")
+	stateDeltaErr := errors.New("state delta audit failed")
+	stateToolDone := make(chan struct{})
+	p := NewFunctionCallResponseProcessor(false, nil)
+	inv := &agent.Invocation{AgentName: "tester"}
+	calls := []model.ToolCall{
+		{ID: "call-state", Function: model.FunctionDefinitionParam{
+			Name: "state", Arguments: []byte(`{}`),
+		}},
+		{ID: "call-critical", Function: model.FunctionDefinitionParam{
+			Name: "critical", Arguments: []byte(`{}`),
+		}},
+	}
+	tools := map[string]tool.Tool{
+		"state": &errorStateDeltaTool{
+			err: stateDeltaErr,
+			callFn: func(context.Context, []byte) (any, error) {
+				close(stateToolDone)
+				return map[string]any{"ok": true}, nil
+			},
+		},
+		"critical": &mockInvocationStateDeltaTool{
+			declaration: &tool.Declaration{Name: "critical"},
+			callFn: func(context.Context, []byte) (any, error) {
+				<-stateToolDone
+				return nil, criticalErr
+			},
+		},
+	}
+
+	event, err := p.executeToolCallsInParallel(
+		context.Background(),
+		inv,
+		newToolCallResponseWithCalls(calls),
+		calls,
+		tools,
+		nil,
+	)
+	require.Nil(t, event)
+	require.ErrorIs(t, err, criticalErr)
+	require.ErrorIs(t, err, stateDeltaErr)
 }
 
 func TestExecuteSingleToolCallSequential_PreservesCustomInvocationState(
@@ -1822,7 +2028,10 @@ func TestAttachStateDeltaToToolResults_ReplaysPendingStateDeltas(
 		},
 	}
 
-	events := p.attachStateDeltaToToolResults(context.Background(), inv, results)
+	events, err := p.attachStateDeltaToToolResults(
+		context.Background(), inv, results,
+	)
+	require.NoError(t, err)
 	require.Len(t, events, 2)
 	require.Equal(t, []byte("v1"), events[1].StateDelta[writeKey])
 }
@@ -1850,9 +2059,10 @@ func TestPostToolResultHookRunsAfterToolResult(t *testing.T) {
 			ev.StateDelta[hookKey] = []byte("ran")
 		}),
 	)
-	events := p.attachStateDeltaToToolResults(ctx, inv, []toolResult{
+	events, err := p.attachStateDeltaToToolResults(ctx, inv, []toolResult{
 		{event: &event.Event{}},
 	})
+	require.NoError(t, err)
 	require.Len(t, events, 1)
 	require.Equal(t, 1, called)
 	require.Equal(t, []byte("ran"), events[0].StateDelta[hookKey])

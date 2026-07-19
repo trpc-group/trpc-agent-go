@@ -49,7 +49,7 @@ func TestValidateBindings_ValidMatrix(t *testing.T) {
 		{name: "code generic", binding: BindCodeExec("execute_code", BackendCodeExec)},
 		{name: "code local", binding: BindCodeExec("execute_local", BackendLocal)},
 		{name: "code container", binding: BindCodeExec("execute_container", BackendContainer)},
-		{name: "code e2b", binding: BindCodeExec("execute_e2b", BackendE2B)},
+		{name: "code e2b", binding: BindRemoteCodeExec("execute_e2b", ProviderE2B)},
 		{name: "custom mcp", binding: BindCustom("mcp.exec", BackendMCP, custom)},
 		{name: "custom skill", binding: BindCustom("skill.exec", BackendSkill, custom)},
 		{name: "custom", binding: BindCustom("custom.exec", BackendCustom, custom)},
@@ -115,6 +115,19 @@ func TestValidateBindings_Invalid(t *testing.T) {
 			name: "code backend mismatch",
 			binding: Binding{ToolName: "tool", Kind: ExecutionKindCodeExec,
 				Backend: BackendMCP, Adapter: validAdapter},
+		},
+		{
+			name:    "remote provider missing",
+			binding: BindRemoteCodeExec("tool", ""),
+		},
+		{
+			name:    "remote provider invalid",
+			binding: BindRemoteCodeExec("tool", "E2B..Cloud"),
+		},
+		{
+			name: "provider on local backend",
+			binding: Binding{ToolName: "tool", Kind: ExecutionKindCodeExec,
+				Backend: BackendLocal, Provider: ProviderE2B, Adapter: validAdapter},
 		},
 		{
 			name: "custom backend mismatch",
@@ -413,6 +426,16 @@ func TestCodeExecAdapter_WireFormsAndOrder(t *testing.T) {
 	}
 }
 
+func TestRemoteCodeExecAdapterPreservesProvider(t *testing.T) {
+	binding := BindRemoteCodeExec("execute_e2b", ProviderE2B)
+	require.NoError(t, validateBinding(binding))
+
+	input := requireAdapt(t, binding,
+		`{"code_blocks":{"language":"python","code":"print(1)"}}`)
+	require.Equal(t, BackendRemoteSandbox, input.Backend)
+	require.Equal(t, ProviderE2B, input.Provider)
+}
+
 func TestCodeExecAdapter_RejectsInvalidFormsWithoutEcho(t *testing.T) {
 	binding := BindCodeExec("execute_code", BackendLocal)
 	tests := []string{
@@ -467,6 +490,59 @@ func TestAdapters_ContextAndBindingChecks(t *testing.T) {
 	binding.Backend = BackendHostExec
 	_, err = binding.Adapter.Adapt(context.Background(), request, binding)
 	require.ErrorContains(t, err, "kind do not match")
+}
+
+func TestBuiltinAdaptersRejectMalformedRequests(t *testing.T) {
+	for _, test := range []struct {
+		binding Binding
+		valid   string
+	}{
+		{BindWorkspaceExec("workspace_exec"), `{"command":"date"}`},
+		{BindWorkspaceSession("workspace_session"), `{"session_id":"id"}`},
+		{BindHostExec("exec_command", ""), `{"command":"date"}`},
+		{BindHostSession("write_stdin"), `{"session_id":"id"}`},
+		{BindCodeExec("execute_code", BackendLocal), `{"code_blocks":[{"language":"python","code":"print(1)"}]}`},
+	} {
+		request := AdaptRequest{
+			ToolName:  test.binding.ToolName,
+			Arguments: []byte(test.valid),
+		}
+		_, err := test.binding.Adapter.Adapt(nil, request, test.binding)
+		require.ErrorContains(t, err, "nil adapter context")
+
+		request.ToolName = "other"
+		_, err = test.binding.Adapter.Adapt(
+			context.Background(), request, test.binding,
+		)
+		require.ErrorContains(t, err, "tool name do not match")
+
+		request.ToolName = test.binding.ToolName
+		for _, arguments := range []string{`{}`, `{"unterminated"`} {
+			request.Arguments = []byte(arguments)
+			_, err = test.binding.Adapter.Adapt(
+				context.Background(), request, test.binding,
+			)
+			require.Error(t, err)
+		}
+	}
+}
+
+func TestAdaptersNormalizeYieldAliasesAndHomeWorkdir(t *testing.T) {
+	workspace := BindWorkspaceExec("workspace_exec")
+	for _, arguments := range []string{
+		`{"command":"date","background":true,"yield-time_ms":25}`,
+		`{"command":"date","background":true,"yieldMs":25}`,
+	} {
+		input := requireAdapt(t, workspace, arguments)
+		require.Equal(t, 25*time.Millisecond, input.Yield)
+		require.True(t, input.Interactive)
+	}
+
+	host := BindHostExec("exec_command", "")
+	input := requireAdapt(t, host, `{"command":"date","workdir":"~/repo"}`)
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+	require.Equal(t, filepath.Join(home, "repo"), input.WorkingDir)
 }
 
 func TestBindCustom_PreservesExplicitAdapter(t *testing.T) {

@@ -18,5 +18,16 @@ func SpanAttributes(report Report) []attribute.KeyValue {
 		attribute.String("tool.safety.risk_level", string(report.RiskLevel)),
 		attribute.String("tool.safety.rule_id", report.RuleID),
 		attribute.String("tool.safety.backend", string(report.Backend)),
+		attribute.String("tool.safety.provider", telemetryProvider(report.Provider)),
 	}
+}
+
+func telemetryProvider(provider Provider) string {
+	if provider == "" {
+		return "none"
+	}
+	if validProvider(provider) {
+		return string(provider)
+	}
+	return "other"
 }

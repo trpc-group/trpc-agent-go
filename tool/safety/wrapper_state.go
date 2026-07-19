@@ -11,20 +11,21 @@ package safety
 
 import (
 	"context"
+	"errors"
 	"time"
 )
 
 func (wrapper *executionWrapper) inspectStateDelta(
+	ctx context.Context,
 	delta map[string][]byte,
-) map[string][]byte {
+) (map[string][]byte, error) {
 	if len(delta) == 0 {
-		return delta
+		return delta, nil
 	}
 	if violation, ok := wrapper.stateDeltaViolation(delta); ok {
-		wrapper.recordStateDeltaViolation(violation)
-		return nil
+		return nil, wrapper.recordStateDeltaViolation(ctx, violation)
 	}
-	return cloneStateDelta(delta)
+	return cloneStateDelta(delta), nil
 }
 
 func (wrapper *executionWrapper) stateDeltaViolation(
@@ -60,8 +61,9 @@ func (wrapper *executionWrapper) stateDeltaViolation(
 }
 
 func (wrapper *executionWrapper) recordStateDeltaViolation(
+	ctx context.Context,
 	violation outputViolation,
-) {
+) error {
 	finding := newFinding(
 		violation.ruleID,
 		violation.riskLevel,
@@ -77,15 +79,23 @@ func (wrapper *executionWrapper) recordStateDeltaViolation(
 		Recommendation: finding.Recommendation,
 		ToolName:       wrapper.binding.ToolName,
 		Backend:        wrapper.binding.Backend,
+		Provider:       wrapper.binding.Provider,
 		Blocked:        false,
 		Redacted:       violation.ruleID == "SECRET_IN_STATE_DELTA",
 		DurationMS:     time.Duration(0).Milliseconds(),
 		PolicyVersion:  wrapper.guard.policy.versionString(),
 		Findings:       []Finding{finding},
 	}
-	_, _ = wrapper.guard.finalizeReport(
-		context.Background(), report, auditPhasePostcheck,
+	report, auditErr := wrapper.guard.finalizeReport(
+		normalizeContext(ctx), report, auditPhasePostcheck,
 	)
+	if auditErr != nil {
+		return errors.Join(
+			newExecutionError(report, auditPhasePostcheck),
+			auditErr,
+		)
+	}
+	return nil
 }
 
 func cloneStateDelta(delta map[string][]byte) map[string][]byte {

@@ -108,6 +108,10 @@ func (guard *Guard) scanRequest(
 ) (Report, error) {
 	input, err := adaptSafely(ctx, req, binding)
 	if err != nil {
+		if errors.Is(err, context.Canceled) ||
+			errors.Is(err, context.DeadlineExceeded) {
+			return Report{}, err
+		}
 		return guard.scanUnparsableRequest(ctx, req, binding)
 	}
 	report, err := guard.scan(ctx, input)
@@ -140,6 +144,7 @@ func (guard *Guard) scanUnparsableRequest(
 		ToolCallID: req.ToolCallID,
 		Kind:       binding.Kind,
 		Backend:    binding.Backend,
+		Provider:   binding.Provider,
 		Operation:  operationForKind(binding.Kind),
 		Script:     "<unparsable-arguments>",
 		Language:   "arguments",

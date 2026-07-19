@@ -31,6 +31,7 @@ type AuditEvent struct {
 	Phase      string    `json:"phase"`
 	ToolName   string    `json:"tool_name"`
 	Backend    Backend   `json:"backend"`
+	Provider   Provider  `json:"provider,omitempty"`
 	Decision   Decision  `json:"decision"`
 	RiskLevel  RiskLevel `json:"risk_level"`
 	RuleID     string    `json:"rule_id"`
@@ -86,6 +87,10 @@ func NewJSONLAuditor(path string) (*JSONLAuditor, error) {
 	if err != nil {
 		return nil, fmt.Errorf("tool safety: open audit file: %w", err)
 	}
+	if err := file.Chmod(0o600); err != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("tool safety: secure audit file: %w", err)
+	}
 	return &JSONLAuditor{
 		file:    file,
 		encoder: json.NewEncoder(file),
@@ -131,6 +136,7 @@ func auditEventFromReport(report Report, phase string) AuditEvent {
 		Phase:      phase,
 		ToolName:   report.ToolName,
 		Backend:    report.Backend,
+		Provider:   report.Provider,
 		Decision:   report.Decision,
 		RiskLevel:  report.RiskLevel,
 		RuleID:     report.RuleID,

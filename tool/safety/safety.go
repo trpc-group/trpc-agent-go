@@ -62,14 +62,22 @@ const (
 	BackendLocal Backend = "local"
 	// BackendContainer is the container CodeExecutor backend.
 	BackendContainer Backend = "container"
-	// BackendE2B is the E2B CodeExecutor backend.
-	BackendE2B Backend = "e2b"
+	// BackendRemoteSandbox is a remotely hosted sandbox backend.
+	BackendRemoteSandbox Backend = "remote_sandbox"
 	// BackendMCP is an explicitly adapted MCP execution tool.
 	BackendMCP Backend = "mcp"
 	// BackendSkill is an explicitly adapted Skill execution tool.
 	BackendSkill Backend = "skill"
 	// BackendCustom is an explicitly adapted custom execution tool.
 	BackendCustom Backend = "custom"
+)
+
+// Provider identifies the implementation behind a provider-neutral backend.
+type Provider string
+
+const (
+	// ProviderE2B identifies the E2B remote sandbox provider.
+	ProviderE2B Provider = "e2b"
 )
 
 // ExecutionKind identifies the argument schema used by an execution tool.
@@ -130,6 +138,7 @@ type ScanInput struct {
 	Env           map[string]string
 	Metadata      tool.ToolMetadata
 	Backend       Backend
+	Provider      Provider
 	Timeout       time.Duration
 	Yield         time.Duration
 	MaxOutputSize int64
@@ -157,6 +166,7 @@ type Report struct {
 	ToolName       string    `json:"tool_name"`
 	Command        string    `json:"command"`
 	Backend        Backend   `json:"backend"`
+	Provider       Provider  `json:"provider,omitempty"`
 	Blocked        bool      `json:"blocked"`
 	Redacted       bool      `json:"redacted"`
 	DurationMS     int64     `json:"duration_ms"`

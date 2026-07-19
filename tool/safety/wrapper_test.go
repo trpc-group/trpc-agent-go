@@ -11,6 +11,7 @@ package safety
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -35,6 +36,29 @@ type fakeCallableTool struct {
 	streamInner      bool
 	innerTextMode    tool.InnerTextMode
 	longRunning      bool
+}
+
+type maskedResult struct {
+	secret string
+}
+
+func (maskedResult) MarshalJSON() ([]byte, error) {
+	return []byte(`{"status":"safe"}`), nil
+}
+
+type failSecondAudit struct {
+	calls int
+}
+
+func (auditor *failSecondAudit) Record(
+	_ context.Context,
+	_ AuditEvent,
+) error {
+	auditor.calls++
+	if auditor.calls == 2 {
+		return errors.New("audit unavailable")
+	}
+	return nil
 }
 
 func newFakeCallable(result any) *fakeCallableTool {
@@ -91,6 +115,28 @@ func (fake *fakeStreamOnlyTool) StreamableCall(
 
 type fakeDualTool struct{ *fakeCallableTool }
 
+type nilDeclarationCallable struct{}
+
+func (*nilDeclarationCallable) Declaration() *tool.Declaration { return nil }
+
+func (*nilDeclarationCallable) Call(context.Context, []byte) (any, error) {
+	return "ok", nil
+}
+
+type minimalCallableTool struct {
+	declaration tool.Declaration
+	result      any
+	err         error
+}
+
+func (minimal *minimalCallableTool) Declaration() *tool.Declaration {
+	return &minimal.declaration
+}
+
+func (minimal *minimalCallableTool) Call(context.Context, []byte) (any, error) {
+	return minimal.result, minimal.err
+}
+
 func (fake *fakeDualTool) StreamableCall(
 	_ context.Context,
 	_ []byte,
@@ -118,6 +164,80 @@ func (fake *fakeInvocationStateTool) StateDeltaForInvocation(
 type fakeLegacyStateTool struct {
 	*fakeCallableTool
 	delta map[string][]byte
+}
+
+type fakeErrorInvocationStateTool struct {
+	*fakeInvocationStateTool
+	err error
+}
+
+func (fake *fakeErrorInvocationStateTool) StateDeltaForInvocationWithError(
+	_ context.Context,
+	_ *agent.Invocation,
+	_ string,
+	_ []byte,
+	_ []byte,
+) (map[string][]byte, error) {
+	return fake.delta, fake.err
+}
+
+type fakeErrorLegacyStateTool struct {
+	*fakeLegacyStateTool
+	err error
+}
+
+type fakeInvocationLegacyStateErrorTool struct {
+	*fakeInvocationStateTool
+	err error
+}
+
+func (fake *fakeInvocationLegacyStateErrorTool) StateDeltaWithError(
+	_ context.Context,
+	_ string,
+	_ []byte,
+	_ []byte,
+) (map[string][]byte, error) {
+	return nil, fake.err
+}
+
+type fakeErrorOnlyInvocationStateTool struct {
+	*fakeCallableTool
+	delta map[string][]byte
+	err   error
+}
+
+func (fake *fakeErrorOnlyInvocationStateTool) StateDeltaForInvocationWithError(
+	_ context.Context,
+	_ *agent.Invocation,
+	_ string,
+	_ []byte,
+	_ []byte,
+) (map[string][]byte, error) {
+	return fake.delta, fake.err
+}
+
+type fakeErrorOnlyLegacyStateTool struct {
+	*fakeCallableTool
+	delta map[string][]byte
+	err   error
+}
+
+func (fake *fakeErrorOnlyLegacyStateTool) StateDeltaWithError(
+	_ context.Context,
+	_ string,
+	_ []byte,
+	_ []byte,
+) (map[string][]byte, error) {
+	return fake.delta, fake.err
+}
+
+func (fake *fakeErrorLegacyStateTool) StateDeltaWithError(
+	_ context.Context,
+	_ string,
+	_ []byte,
+	_ []byte,
+) (map[string][]byte, error) {
+	return fake.delta, fake.err
 }
 
 func (fake *fakeLegacyStateTool) StateDelta(
@@ -179,10 +299,25 @@ func TestWrapExecutionAllowsSafeResultOnce(t *testing.T) {
 
 	result, err := wrapper.Call(context.Background(), []byte(safeWorkspaceArguments))
 	require.NoError(t, err)
-	require.Equal(t, map[string]any{"ok": true}, result)
+	raw, ok := result.(json.RawMessage)
+	require.True(t, ok)
+	require.Equal(t, json.RawMessage(`{"ok":true}`), raw)
 	require.Equal(t, 1, inner.calls)
 	require.Len(t, auditor.events, 1)
 	require.False(t, auditor.events[0].Blocked)
+}
+
+func TestWrapExecutionReturnsInspectedRepresentation(t *testing.T) {
+	guard, _ := newWrapperGuard(t, nil)
+	inner := newFakeCallable(maskedResult{secret: "api_key=top-secret-value"})
+	wrapper := wrapCallable(t, guard, inner)
+
+	result, err := wrapper.Call(context.Background(), []byte(safeWorkspaceArguments))
+	require.NoError(t, err)
+	raw, ok := result.(json.RawMessage)
+	require.True(t, ok)
+	require.Equal(t, json.RawMessage(`{"status":"safe"}`), raw)
+	require.NotContains(t, string(raw), "top-secret-value")
 }
 
 func TestWrapExecutionWithholdsSensitiveOutput(t *testing.T) {
@@ -233,6 +368,24 @@ func TestWrapExecutionForwardsSemanticCapabilities(t *testing.T) {
 	require.False(t, wrapper.(interface{ StreamInner() bool }).StreamInner())
 	require.Equal(t, tool.InnerTextModeExclude,
 		wrapper.(interface{ InnerTextMode() tool.InnerTextMode }).InnerTextMode())
+}
+
+func TestWrapExecutionSuppliesDefaultsForOptionalCapabilities(t *testing.T) {
+	guard, _ := newWrapperGuard(t, nil)
+	wrapper := wrapCallable(t, guard, &minimalCallableTool{
+		declaration: tool.Declaration{Name: "workspace_exec"},
+		result:      "ok",
+	})
+
+	decision, err := wrapper.(tool.PermissionChecker).CheckPermission(
+		context.Background(), &tool.PermissionRequest{},
+	)
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionAllow, decision.Action)
+	require.True(t, wrapper.(interface{ StreamInner() bool }).StreamInner())
+	require.Equal(t, tool.InnerTextModeInclude,
+		wrapper.(interface{ InnerTextMode() tool.InnerTextMode }).InnerTextMode())
+	require.False(t, wrapper.(interface{ LongRunning() bool }).LongRunning())
 }
 
 func TestWrapExecutionPreservesMetadataThroughDeclarationOverlay(t *testing.T) {
@@ -318,6 +471,169 @@ func TestWrapExecutionWithholdsOversizedLegacyStateDelta(t *testing.T) {
 	require.Equal(t, "STATE_DELTA_LIMIT_EXCEEDED", auditor.events[1].RuleID)
 }
 
+func TestWrapExecutionPropagatesStateDeltaAuditFailure(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		inner tool.Tool
+		check func(t *testing.T, wrapped tool.CallableTool)
+	}{
+		{
+			name: "invocation provider",
+			inner: &fakeInvocationStateTool{
+				fakeCallableTool: newFakeCallable("ok"),
+				delta: map[string][]byte{
+					"api_key": []byte("top-secret-value"),
+				},
+			},
+			check: func(t *testing.T, wrapped tool.CallableTool) {
+				provider := wrapped.(invocationStateDeltaErrorProvider)
+				delta, err := provider.StateDeltaForInvocationWithError(
+					context.Background(), nil, "call-1", nil, nil,
+				)
+				require.Nil(t, delta)
+				require.ErrorContains(t, err, "AUDIT_WRITE_FAILED")
+			},
+		},
+		{
+			name: "legacy provider",
+			inner: &fakeLegacyStateTool{
+				fakeCallableTool: newFakeCallable("ok"),
+				delta: map[string][]byte{
+					"api_key": []byte("top-secret-value"),
+				},
+			},
+			check: func(t *testing.T, wrapped tool.CallableTool) {
+				provider := wrapped.(stateDeltaErrorProvider)
+				delta, err := provider.StateDeltaWithError(
+					context.Background(), "call-1", nil, nil,
+				)
+				require.Nil(t, delta)
+				require.ErrorContains(t, err, "AUDIT_WRITE_FAILED")
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			auditor := &failSecondAudit{}
+			guard, err := NewGuard(DefaultPolicy(), WithAuditor(auditor))
+			require.NoError(t, err)
+			wrapped := wrapCallable(t, guard, test.inner)
+			_, err = wrapped.Call(
+				context.Background(), []byte(safeWorkspaceArguments),
+			)
+			require.NoError(t, err)
+
+			test.check(t, wrapped)
+			require.Equal(t, 2, auditor.calls)
+		})
+	}
+}
+
+func TestWrapExecutionPreservesInnerStateDeltaErrors(t *testing.T) {
+	wantErr := errors.New("inner state delta failed")
+	guard, _ := newWrapperGuard(t, nil)
+
+	invocationInner := &fakeErrorInvocationStateTool{
+		fakeInvocationStateTool: &fakeInvocationStateTool{
+			fakeCallableTool: newFakeCallable("ok"),
+		},
+		err: wantErr,
+	}
+	invocationWrapped := wrapCallable(t, guard, invocationInner)
+	_, err := invocationWrapped.(invocationStateDeltaErrorProvider).
+		StateDeltaForInvocationWithError(
+			context.Background(), nil, "call-1", nil, nil,
+		)
+	require.ErrorIs(t, err, wantErr)
+
+	legacyInner := &fakeErrorLegacyStateTool{
+		fakeLegacyStateTool: &fakeLegacyStateTool{
+			fakeCallableTool: newFakeCallable("ok"),
+		},
+		err: wantErr,
+	}
+	legacyWrapped := wrapCallable(t, guard, legacyInner)
+	_, err = legacyWrapped.(stateDeltaErrorProvider).StateDeltaWithError(
+		context.Background(), "call-1", nil, nil,
+	)
+	require.ErrorIs(t, err, wantErr)
+}
+
+func TestWrapExecutionPrefersErrorAwareStateOverLegacyInvocationState(t *testing.T) {
+	wantErr := errors.New("state delta failed")
+	guard, _ := newWrapperGuard(t, nil)
+	inner := &fakeInvocationLegacyStateErrorTool{
+		fakeInvocationStateTool: &fakeInvocationStateTool{
+			fakeCallableTool: newFakeCallable("ok"),
+		},
+		err: wantErr,
+	}
+	wrapper := wrapCallable(t, guard, inner)
+	provider, ok := wrapper.(stateDeltaErrorProvider)
+	require.True(t, ok)
+	_, err := provider.StateDeltaWithError(
+		context.Background(), "call-1", nil, nil,
+	)
+	require.ErrorIs(t, err, wantErr)
+}
+
+func TestWrapExecutionPreservesErrorOnlyStateCapabilities(t *testing.T) {
+	guard, _ := newWrapperGuard(t, nil)
+	wantDelta := map[string][]byte{"artifact": []byte("preserved")}
+
+	invocationWrapped := wrapCallable(t, guard, &fakeErrorOnlyInvocationStateTool{
+		fakeCallableTool: newFakeCallable("ok"),
+		delta:            wantDelta,
+	})
+	invocationDelta, err := invocationWrapped.(invocationStateDeltaErrorProvider).
+		StateDeltaForInvocationWithError(
+			context.Background(), nil, "call-1", nil, nil,
+		)
+	require.NoError(t, err)
+	require.Equal(t, wantDelta, invocationDelta)
+	require.Equal(
+		t,
+		wantDelta,
+		invocationWrapped.(invocationStateDeltaProvider).StateDeltaForInvocation(
+			nil, "call-1", nil, nil,
+		),
+	)
+
+	legacyWrapped := wrapCallable(t, guard, &fakeErrorOnlyLegacyStateTool{
+		fakeCallableTool: newFakeCallable("ok"),
+		delta:            wantDelta,
+	})
+	legacyDelta, err := legacyWrapped.(stateDeltaErrorProvider).StateDeltaWithError(
+		context.Background(), "call-1", nil, nil,
+	)
+	require.NoError(t, err)
+	require.Equal(t, wantDelta, legacyDelta)
+	require.Equal(
+		t,
+		wantDelta,
+		legacyWrapped.(stateDeltaProvider).StateDelta("call-1", nil, nil),
+	)
+
+	failingWrapped := wrapCallable(t, guard, &fakeErrorOnlyLegacyStateTool{
+		fakeCallableTool: newFakeCallable("ok"),
+		err:              errors.New("state delta failed"),
+	})
+	require.Nil(
+		t,
+		failingWrapped.(stateDeltaProvider).StateDelta("call-1", nil, nil),
+	)
+
+	failingInvocation := wrapCallable(t, guard, &fakeErrorOnlyInvocationStateTool{
+		fakeCallableTool: newFakeCallable("ok"),
+		err:              errors.New("invocation state delta failed"),
+	})
+	require.Nil(
+		t,
+		failingInvocation.(invocationStateDeltaProvider).StateDeltaForInvocation(
+			nil, "call-1", nil, nil,
+		),
+	)
+}
+
 func TestWrapExecutionForwardsSemanticLongRunning(t *testing.T) {
 	guard, _ := newWrapperGuard(t, nil)
 	base := newFakeCallable(nil)
@@ -390,4 +706,98 @@ func TestWrapExecutionNarrowsDualToolToCallable(t *testing.T) {
 	_, streamable := wrapper.(tool.StreamableTool)
 	require.True(t, callable)
 	require.False(t, streamable)
+}
+
+func TestWrapExecutionRejectsTypedNil(t *testing.T) {
+	guard, _ := newWrapperGuard(t, nil)
+	var inner *fakeCallableTool
+
+	require.NotPanics(t, func() {
+		wrapped, err := WrapExecution(
+			guard,
+			inner,
+			BindWorkspaceExec("workspace_exec"),
+		)
+		require.Nil(t, wrapped)
+		require.ErrorContains(t, err, "requires a declaration")
+	})
+}
+
+func TestWrapExecutionRejectsInvalidConstruction(t *testing.T) {
+	guard, _ := newWrapperGuard(t, nil)
+	tests := []struct {
+		name    string
+		guard   *Guard
+		inner   tool.Tool
+		binding Binding
+		want    string
+	}{
+		{
+			name: "nil guard", inner: newFakeCallable("ok"),
+			binding: BindWorkspaceExec("workspace_exec"), want: "guard",
+		},
+		{
+			name: "nil tool", guard: guard,
+			binding: BindWorkspaceExec("workspace_exec"), want: "declaration",
+		},
+		{
+			name: "nil declaration", guard: guard,
+			inner:   &nilDeclarationCallable{},
+			binding: BindWorkspaceExec("workspace_exec"), want: "declaration",
+		},
+		{
+			name: "binding mismatch", guard: guard,
+			inner: newFakeCallable("ok"), binding: BindWorkspaceExec("other"),
+			want: "binding name must match",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			wrapped, err := WrapExecution(test.guard, test.inner, test.binding)
+			require.Nil(t, wrapped)
+			require.ErrorContains(t, err, test.want)
+		})
+	}
+}
+
+func TestWrapExecutionAuditFailureBlocksCall(t *testing.T) {
+	auditor := &memoryAuditor{err: errors.New("audit unavailable")}
+	guard, err := NewGuard(DefaultPolicy(), WithAuditor(auditor))
+	require.NoError(t, err)
+	inner := newFakeCallable("ok")
+	wrapper := wrapCallable(t, guard, inner)
+
+	result, err := wrapper.Call(context.Background(), []byte(safeWorkspaceArguments))
+	require.Nil(t, result)
+	require.ErrorContains(t, err, "record audit event")
+	require.Zero(t, inner.calls)
+}
+
+func TestWrapExecutionHandlesToolErrorsAndUninspectableOutput(t *testing.T) {
+	guard, _ := newWrapperGuard(t, nil)
+
+	plainErr := errors.New("tool failed")
+	plain := newFakeCallable(nil)
+	plain.err = plainErr
+	wrapper := wrapCallable(t, guard, plain)
+	result, err := wrapper.Call(context.Background(), []byte(safeWorkspaceArguments))
+	require.Nil(t, result)
+	require.ErrorIs(t, err, plainErr)
+
+	secret := newFakeCallable(nil)
+	secret.err = errors.New("api_key=top-secret-value")
+	wrapper = wrapCallable(t, guard, secret)
+	result, err = wrapper.Call(context.Background(), []byte(safeWorkspaceArguments))
+	require.Nil(t, result)
+	require.NotContains(t, err.Error(), "top-secret-value")
+	var executionErr *ExecutionError
+	require.ErrorAs(t, err, &executionErr)
+	require.Equal(t, "SECRET_IN_TOOL_OUTPUT", executionErr.RuleID)
+
+	uninspectable := newFakeCallable(make(chan struct{}))
+	wrapper = wrapCallable(t, guard, uninspectable)
+	result, err = wrapper.Call(context.Background(), []byte(safeWorkspaceArguments))
+	require.Nil(t, result)
+	require.ErrorAs(t, err, &executionErr)
+	require.Equal(t, "TOOL_OUTPUT_UNINSPECTABLE", executionErr.RuleID)
 }
