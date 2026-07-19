@@ -1,0 +1,83 @@
+{
+  "name": "concurrent",
+  "description": "并发写入：模拟多个工具调用或子 Agent 事件交错追加，检查最终回放顺序和归一化结果",
+  "app_name": "replay-matrix",
+  "user_id": "user-concurrent",
+  "session_id": "session-concurrent",
+  "steps": [
+    {"type": "create_session"},
+    {
+      "type": "append_event",
+      "event": {
+        "author": "user",
+        "role": "user",
+        "content": "请同时搜索知识库、分析代码、获取数据和查询天气",
+        "branch": "root",
+        "filter_key": "root"
+      }
+    },
+    {
+      "type": "concurrent_events",
+      "concurrent": [
+        {
+          "type": "append_event",
+          "event": {
+            "author": "tool_search",
+            "role": "tool",
+            "content": "search result: found 42 documents",
+            "tool_id": "search_1",
+            "tool_name": "search_knowledge_base",
+            "branch": "research",
+            "filter_key": "research",
+            "tag": "concurrent-worker-1"
+          }
+        },
+        {
+          "type": "append_event",
+          "event": {
+            "author": "tool_code",
+            "role": "tool",
+            "content": "code analysis: 3 potential bugs detected",
+            "tool_id": "analyze_1",
+            "tool_name": "analyze_code",
+            "branch": "code-review",
+            "filter_key": "code-review",
+            "tag": "concurrent-worker-2"
+          }
+        },
+        {
+          "type": "append_event",
+          "event": {
+            "author": "tool_data",
+            "role": "tool",
+            "content": "fetched 15000 rows from analytics database",
+            "tool_id": "fetch_1",
+            "tool_name": "fetch_data",
+            "branch": "analytics",
+            "filter_key": "analytics",
+            "tag": "concurrent-worker-3"
+          }
+        },
+        {
+          "type": "append_event",
+          "event": {
+            "author": "tool_weather",
+            "role": "tool",
+            "content": "current weather: 22°C, humidity 65%",
+            "tool_id": "weather_1",
+            "tool_name": "get_weather",
+            "branch": "info",
+            "filter_key": "info",
+            "tag": "concurrent-worker-4"
+          }
+        }
+      ]
+    },
+    {"type": "get_session"}
+  ],
+  "verify": {
+    "events_count": 5,
+    "no_duplicate_events": true,
+    "events_order_independent": true
+  }
+}

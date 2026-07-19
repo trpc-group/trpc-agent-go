@@ -1,0 +1,45 @@
+{
+  "name": "state_updates",
+  "description": "State 更新：覆盖写入、删除、清空 app/user/session 三层 state，验证最终状态一致性",
+  "app_name": "replay-matrix",
+  "user_id": "user-state-updates",
+  "session_id": "session-state-updates",
+  "steps": [
+    {
+      "type": "create_session",
+      "state": {"init_key": "init_value"}
+    },
+    {
+      "type": "update_app_state",
+      "state": {"app_config": {"theme": "dark", "lang": "zh"}}
+    },
+    {
+      "type": "update_user_state",
+      "state": {"preferences": {"notify": true}}
+    },
+    {
+      "type": "update_session_state",
+      "state": {"step": 1, "context": "in-progress"}
+    },
+    {
+      "type": "update_app_state",
+      "state": {"app_config": {"theme": "light", "lang": "en"}, "version": 2}
+    },
+    {
+      "type": "update_user_state",
+      "state": {"preferences": {"notify": false}, "last_active": "2026-07-18"}
+    },
+    {
+      "type": "update_session_state",
+      "state": {"step": 2, "context": "completed"}
+    },
+    {
+      "type": "update_session_state",
+      "state": {}
+    },
+    {"type": "get_session"}
+  ],
+  "verify": {
+    "events_count": 0
+  }
+}

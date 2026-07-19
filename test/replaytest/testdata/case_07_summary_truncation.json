@@ -1,0 +1,71 @@
+{
+  "name": "summary_truncation",
+  "description": "Summary 与事件截断：长对话压缩后验证 boundary（LastEventID、CutoffAt、Version）和 post-truncation 新事件",
+  "app_name": "replay-matrix",
+  "user_id": "user-summary-truncation",
+  "session_id": "session-summary-truncation",
+  "steps": [
+    {"type": "create_session"},
+    {
+      "type": "append_event",
+      "event": {
+        "author": "user", "role": "user",
+        "content": "message 1 from user",
+        "branch": "main", "filter_key": "main"
+      }
+    },
+    {
+      "type": "append_event",
+      "event": {
+        "author": "agent", "role": "assistant",
+        "content": "response 1 from agent",
+        "branch": "main", "filter_key": "main"
+      }
+    },
+    {
+      "type": "append_event",
+      "event": {
+        "author": "user", "role": "user",
+        "content": "message 2 from user, a longer conversation turn",
+        "branch": "main", "filter_key": "main"
+      }
+    },
+    {
+      "type": "append_event",
+      "event": {
+        "author": "agent", "role": "assistant",
+        "content": "response 2 from agent with more detail",
+        "branch": "main", "filter_key": "main"
+      }
+    },
+    {
+      "type": "create_summary",
+      "summary": {
+        "filter_key": "main",
+        "text": "对话摘要：用户发送了两条消息，助手分别进行了回复。第一轮为简单对话，第二轮涉及更详细的内容。",
+        "force": false
+      }
+    },
+    {
+      "type": "append_event",
+      "event": {
+        "author": "user", "role": "user",
+        "content": "message 3 — new message after summary truncation",
+        "branch": "main", "filter_key": "main"
+      }
+    },
+    {
+      "type": "append_event",
+      "event": {
+        "author": "agent", "role": "assistant",
+        "content": "response 3 — responding to post-truncation message",
+        "branch": "main", "filter_key": "main"
+      }
+    },
+    {"type": "get_session"}
+  ],
+  "verify": {
+    "events_count": 6,
+    "events_order_preserved": true
+  }
+}

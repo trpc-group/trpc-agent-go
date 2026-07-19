@@ -1,0 +1,65 @@
+{
+  "name": "tool_calls",
+  "description": "工具调用对话：包含 user event、assistant tool call event、tool response event，验证 tool call args、tool_id、extensions",
+  "app_name": "replay-matrix",
+  "user_id": "user-tool-calls",
+  "session_id": "session-tool-calls",
+  "steps": [
+    {"type": "create_session"},
+    {
+      "type": "append_event",
+      "event": {
+        "author": "user",
+        "role": "user",
+        "content": "what is the weather in Beijing?",
+        "branch": "root",
+        "filter_key": "root"
+      }
+    },
+    {
+      "type": "append_event",
+      "event": {
+        "author": "agent",
+        "role": "assistant",
+        "content": "",
+        "branch": "root",
+        "filter_key": "root",
+        "tool_calls": [
+          {
+            "id": "call_abc123",
+            "name": "get_weather",
+            "arguments": {"city": "Beijing", "units": "celsius"}
+          }
+        ],
+        "extensions": {"thinking": "need to check weather"}
+      }
+    },
+    {
+      "type": "append_event",
+      "event": {
+        "author": "tool",
+        "role": "tool",
+        "content": "{\"temperature\": 22, \"condition\": \"sunny\"}",
+        "tool_id": "call_abc123",
+        "tool_name": "get_weather",
+        "branch": "root",
+        "filter_key": "root"
+      }
+    },
+    {
+      "type": "append_event",
+      "event": {
+        "author": "agent",
+        "role": "assistant",
+        "content": "Beijing is sunny and 22°C.",
+        "branch": "root",
+        "filter_key": "root"
+      }
+    },
+    {"type": "get_session"}
+  ],
+  "verify": {
+    "events_count": 4,
+    "events_order_preserved": true
+  }
+}

@@ -1,0 +1,57 @@
+{
+  "name": "multi_turn",
+  "description": "多轮对话：连续追加 3 轮 user/assistant event，验证事件读取顺序",
+  "app_name": "replay-matrix",
+  "user_id": "user-multi-turn",
+  "session_id": "session-multi-turn",
+  "steps": [
+    {"type": "create_session"},
+    {
+      "type": "append_event",
+      "event": {
+        "author": "user", "role": "user", "content": "turn one",
+        "branch": "root", "filter_key": "root"
+      }
+    },
+    {
+      "type": "append_event",
+      "event": {
+        "author": "agent", "role": "assistant", "content": "answer one",
+        "branch": "root", "filter_key": "root"
+      }
+    },
+    {
+      "type": "append_event",
+      "event": {
+        "author": "user", "role": "user", "content": "turn two",
+        "branch": "root", "filter_key": "root"
+      }
+    },
+    {
+      "type": "append_event",
+      "event": {
+        "author": "agent", "role": "assistant", "content": "answer two",
+        "branch": "root", "filter_key": "root"
+      }
+    },
+    {
+      "type": "append_event",
+      "event": {
+        "author": "user", "role": "user", "content": "turn three",
+        "branch": "root", "filter_key": "root"
+      }
+    },
+    {
+      "type": "append_event",
+      "event": {
+        "author": "agent", "role": "assistant", "content": "answer three",
+        "branch": "root", "filter_key": "root"
+      }
+    },
+    {"type": "get_session"}
+  ],
+  "verify": {
+    "events_count": 6,
+    "events_order_preserved": true
+  }
+}
