@@ -8,7 +8,7 @@ require (
 	github.com/mattn/go-sqlite3 v1.14.32
 	github.com/r3labs/sse/v2 v2.10.0
 	github.com/stretchr/testify v1.11.1
-	trpc.group/trpc-go/trpc-agent-go v0.2.0
+	trpc.group/trpc-go/trpc-agent-go v1.6.1-0.20260311094958-7b74ee59e339
 	trpc.group/trpc-go/trpc-agent-go/memory/sqlite v1.10.0
 	trpc.group/trpc-go/trpc-agent-go/server/agui v0.0.0-20260108131845-87b14951638b
 	trpc.group/trpc-go/trpc-agent-go/session/mongodb v0.0.0
@@ -44,6 +44,7 @@ require (
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/creack/pty v1.1.24 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
+	github.com/go-ego/gse v1.0.0 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/google/uuid v1.6.0 // indirect
@@ -51,6 +52,7 @@ require (
 	github.com/panjf2000/ants/v2 v2.10.0 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/sirupsen/logrus v1.9.3 // indirect
+	github.com/vcaesar/cedar v0.20.2 // indirect
 	go.opentelemetry.io/otel v1.41.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.29.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.29.0 // indirect
