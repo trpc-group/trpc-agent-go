@@ -191,9 +191,10 @@ func computeConclusion(
 	return ConclusionPass
 }
 
-// ToJSON writes the report as indented JSON to <outDir>/review_report.json.
-// It creates outDir if it does not exist and returns the absolute path of
-// the written file.
+// ToJSON writes the report as indented JSON to <outDir>/<reportFileName>.
+// The filename includes the task id (see reportFileName) so concurrent or
+// repeated runs do not clobber each other's reports. It creates outDir if
+// it does not exist and returns the absolute path of the written file.
 func (r *ReportData) ToJSON(outDir string) (string, error) {
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return "", fmt.Errorf("report: create out dir: %w", err)
@@ -202,7 +203,7 @@ func (r *ReportData) ToJSON(outDir string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("report: marshal json: %w", err)
 	}
-	path := filepath.Join(outDir, "review_report.json")
+	path := filepath.Join(outDir, r.reportFileName("json"))
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		return "", fmt.Errorf("report: write json: %w", err)
 	}
@@ -213,14 +214,15 @@ func (r *ReportData) ToJSON(outDir string) (string, error) {
 	return abs, nil
 }
 
-// ToMarkdown writes the report as Markdown to <outDir>/review_report.md.
-// It creates outDir if it does not exist and returns the absolute path of
-// the written file.
+// ToMarkdown writes the report as Markdown to <outDir>/<reportFileName>.
+// The filename includes the task id (see reportFileName) so concurrent or
+// repeated runs do not clobber each other's reports. It creates outDir if
+// it does not exist and returns the absolute path of the written file.
 func (r *ReportData) ToMarkdown(outDir string) (string, error) {
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return "", fmt.Errorf("report: create out dir: %w", err)
 	}
-	path := filepath.Join(outDir, "review_report.md")
+	path := filepath.Join(outDir, r.reportFileName("md"))
 	if err := os.WriteFile(path, []byte(r.markdown()), 0o644); err != nil {
 		return "", fmt.Errorf("report: write markdown: %w", err)
 	}
@@ -229,6 +231,46 @@ func (r *ReportData) ToMarkdown(outDir string) (string, error) {
 		return "", fmt.Errorf("report: resolve markdown abs path: %w", err)
 	}
 	return abs, nil
+}
+
+// reportFileName returns the filename for the report with the given
+// extension. When TaskID is set, the file is named
+// "review_report_<sanitizedTaskID>.<ext>" so concurrent or repeated runs do
+// not clobber each other's reports. When TaskID is empty, the legacy fixed
+// name "review_report.<ext>" is used. The task id is sanitized to a
+// filesystem-safe charset ([A-Za-z0-9._-]) so unusual ids cannot produce
+// paths that escape outDir via traversal or separators.
+func (r *ReportData) reportFileName(ext string) string {
+	base := "review_report"
+	if id := sanitizeTaskIDForFile(r.TaskID); id != "" {
+		return base + "_" + id + "." + ext
+	}
+	return base + "." + ext
+}
+
+// sanitizeTaskIDForFile returns a filesystem-safe representation of taskID
+// suitable for use in artifact filenames. Characters outside [A-Za-z0-9._-]
+// (notably path separators and traversal sequences) are replaced with '_'.
+// An empty taskID yields an empty string so callers can fall back to the
+// legacy fixed filename.
+func sanitizeTaskIDForFile(taskID string) string {
+	if taskID == "" {
+		return ""
+	}
+	var b strings.Builder
+	b.Grow(len(taskID))
+	for _, r := range taskID {
+		switch {
+		case r >= 'a' && r <= 'z',
+			r >= 'A' && r <= 'Z',
+			r >= '0' && r <= '9',
+			r == '-', r == '_', r == '.':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('_')
+		}
+	}
+	return b.String()
 }
 
 // WriteAll writes both the JSON and Markdown reports and returns
@@ -243,6 +285,21 @@ func (r *ReportData) WriteAll(outDir string) (string, string, error) {
 		return "", "", err
 	}
 	return jsonPath, mdPath, nil
+}
+
+// PredictedPaths returns the absolute file paths that ToJSON and ToMarkdown
+// will write to, without actually writing. This lets callers populate the
+// Artifacts field (which references the report files themselves) before
+// serialization so the written JSON/Markdown includes the artifact list.
+// The returned paths match what WriteAll will return as long as outDir is
+// not renamed between the two calls.
+func (r *ReportData) PredictedPaths(outDir string) (jsonPath, mdPath string) {
+	abs, err := filepath.Abs(outDir)
+	if err != nil {
+		abs = outDir
+	}
+	return filepath.Join(abs, r.reportFileName("json")),
+		filepath.Join(abs, r.reportFileName("md"))
 }
 
 // markdown renders the full Markdown report. Section rendering is delegated

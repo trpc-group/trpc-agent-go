@@ -43,6 +43,15 @@ type Rule interface {
 	Scan(file diffparse.DiffFile) []Finding
 }
 
+// CrossFileScanner is an optional interface implemented by rules that need
+// to see all files in the diff at once (e.g. TM-001 needs to know whether a
+// source file has a corresponding _test.go in the same changeset). When a
+// Rule implements CrossFileScanner, the Engine calls ScanAll instead of
+// Scan per file.
+type CrossFileScanner interface {
+	ScanAll(files []diffparse.DiffFile) []Finding
+}
+
 // Engine runs the registered rules against parsed diff files.
 type Engine struct {
 	rules []Rule
@@ -53,11 +62,18 @@ func NewEngine() *Engine {
 	return &Engine{rules: defaultRules()}
 }
 
-// Run executes every rule against every file and aggregates the findings.
+// Run executes every rule against the provided files. Rules that implement
+// CrossFileScanner receive the full file list at once; per-file rules are
+// run once per file. Findings are returned in rule-then-file order; the
+// review layer sorts them by severity before rendering.
 func (e *Engine) Run(files []diffparse.DiffFile) []Finding {
 	var out []Finding
-	for _, f := range files {
-		for _, r := range e.rules {
+	for _, r := range e.rules {
+		if cf, ok := r.(CrossFileScanner); ok {
+			out = append(out, cf.ScanAll(files)...)
+			continue
+		}
+		for _, f := range files {
 			out = append(out, r.Scan(f)...)
 		}
 	}
@@ -303,22 +319,53 @@ func (r *missingTestsRule) Severity() string    { return "low" }
 func (r *missingTestsRule) Category() string    { return "quality" }
 func (r *missingTestsRule) Confidence() float64 { return 0.70 }
 
+// Scan is retained for the Rule interface but is a no-op: TM-001 needs
+// cross-file context to avoid false positives when the diff adds both a
+// source file and its _test.go. The Engine dispatches to ScanAll via the
+// CrossFileScanner interface.
 func (r *missingTestsRule) Scan(file diffparse.DiffFile) []Finding {
-	if !strings.HasSuffix(file.NewPath, ".go") || strings.HasSuffix(file.NewPath, "_test.go") {
-		return nil
+	return nil
+}
+
+// ScanAll implements CrossFileScanner. It flags each new non-test .go file
+// whose corresponding _test.go is NOT also present in the diff. This
+// avoids the false positive where TM-001 fired on foo.go even when
+// foo_test.go was added in the same changeset.
+func (r *missingTestsRule) ScanAll(files []diffparse.DiffFile) []Finding {
+	// Collect the set of source paths that have a corresponding _test.go
+	// in the same diff. The key is the source path (e.g. "foo.go") derived
+	// from each test file (e.g. "foo_test.go").
+	hasTest := make(map[string]bool, len(files))
+	for _, f := range files {
+		if !strings.HasSuffix(f.NewPath, "_test.go") {
+			continue
+		}
+		src := strings.TrimSuffix(f.NewPath, "_test.go") + ".go"
+		hasTest[src] = true
 	}
-	return []Finding{{
-		RuleID:         r.ID(),
-		Severity:       r.Severity(),
-		Category:       r.Category(),
-		File:           file.NewPath,
-		Line:           1,
-		Title:          "No test file added for this source file",
-		Evidence:       "no test file added for this file",
-		Recommendation: "Add a *_test.go file with table-driven tests covering the new behavior",
-		Confidence:     r.Confidence(),
-		Source:         "rule:" + r.ID(),
-	}}
+
+	var out []Finding
+	for _, f := range files {
+		if !strings.HasSuffix(f.NewPath, ".go") || strings.HasSuffix(f.NewPath, "_test.go") {
+			continue
+		}
+		if hasTest[f.NewPath] {
+			continue
+		}
+		out = append(out, Finding{
+			RuleID:         r.ID(),
+			Severity:       r.Severity(),
+			Category:       r.Category(),
+			File:           f.NewPath,
+			Line:           1,
+			Title:          "No test file added for this source file",
+			Evidence:       "no test file added for this file",
+			Recommendation: "Add a *_test.go file with table-driven tests covering the new behavior",
+			Confidence:     r.Confidence(),
+			Source:         "rule:" + r.ID(),
+		})
+	}
+	return out
 }
 
 // --- DB-001: DB lifecycle ---

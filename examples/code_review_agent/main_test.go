@@ -50,22 +50,22 @@ type fixtureCase struct {
 // to avoid recompilation overhead per fixture. Each fixture is copied into a
 // fresh temp directory so the fixture-dir loader sees exactly one diff file.
 //
-// Sandbox behaviour note: with --executor local --unsafe-local the sandbox
-// runs `go vet` and `staticcheck` inside an empty workspace (no go.mod, no
-// staged files). These commands fail, producing StatusFailed sandbox runs.
-// Per computeConclusion, a failed sandbox run yields conclusion
-// "needs_human_review" unless a critical-severity finding forces "fail".
+// Sandbox behaviour note: these fixtures use --fixture-dir mode (no
+// --repo-path), so runSandboxChecks skips the static checks entirely and
+// records a single StatusSkipped run. The conclusion is therefore driven
+// purely by rule findings: "fail" when a critical-severity finding is
+// present, "pass" otherwise.
 func TestIntegration_Fixtures(t *testing.T) {
 	fixtures := []fixtureCase{
-		{"clean", "clean.diff", "", true, "needs_human_review", ""},
+		{"clean", "clean.diff", "", true, "pass", ""},
 		{"security", "security.diff", "SI-001", false, "fail", "sk-abc123def456ghi789jkl012mno345"},
-		{"goroutine_leak", "goroutine_leak.diff", "GL-001", false, "needs_human_review", ""},
-		{"resource_leak", "resource_leak.diff", "RL-001", false, "needs_human_review", ""},
-		{"missing_tests", "missing_tests.diff", "TM-001", false, "needs_human_review", ""},
+		{"goroutine_leak", "goroutine_leak.diff", "GL-001", false, "pass", ""},
+		{"resource_leak", "resource_leak.diff", "RL-001", false, "pass", ""},
+		{"missing_tests", "missing_tests.diff", "TM-001", false, "pass", ""},
 		{"sensitive_info", "sensitive_info.diff", "SC-001", false, "fail", "super-secret-value-12345"},
-		{"db_lifecycle", "db_lifecycle.diff", "DB-001", false, "needs_human_review", ""},
+		{"db_lifecycle", "db_lifecycle.diff", "DB-001", false, "pass", ""},
 		{"duplicate_finding", "duplicate_finding.diff", "SI-001", false, "fail", "sk-duplicate001test002value003"},
-		{"sandbox_failure", "sandbox_failure.diff", "", false, "needs_human_review", ""},
+		{"sandbox_failure", "sandbox_failure.diff", "", false, "pass", ""},
 	}
 
 	for _, tt := range fixtures {
@@ -119,29 +119,38 @@ func TestIntegration_Fixtures(t *testing.T) {
 }
 
 // verifyReportArtifacts checks that the JSON report, Markdown report, and
-// SQLite database files were created by the pipeline.
+// SQLite database files were created by the pipeline. The report filenames
+// include the per-run task id, so we glob for the per-task pattern rather
+// than expecting a fixed name.
 func verifyReportArtifacts(t *testing.T, outDir, dbPath string) {
 	t.Helper()
-	jsonPath := filepath.Join(outDir, "review_report.json")
-	mdPath := filepath.Join(outDir, "review_report.md")
-	if _, err := os.Stat(jsonPath); err != nil {
-		t.Errorf("json report missing: %v", err)
+	jsonMatches, err := filepath.Glob(filepath.Join(outDir, "review_report_*.json"))
+	if err != nil || len(jsonMatches) == 0 {
+		t.Errorf("json report missing in %q (glob err: %v)", outDir, err)
 	}
-	if _, err := os.Stat(mdPath); err != nil {
-		t.Errorf("md report missing: %v", err)
+	mdMatches, err := filepath.Glob(filepath.Join(outDir, "review_report_*.md"))
+	if err != nil || len(mdMatches) == 0 {
+		t.Errorf("md report missing in %q (glob err: %v)", outDir, err)
 	}
 	if _, err := os.Stat(dbPath); err != nil {
 		t.Errorf("db missing: %v", err)
 	}
 }
 
-// readReportJSON reads and returns the JSON report as a string.
+// readReportJSON reads and returns the JSON report as a string. The report
+// filename includes the per-run task id, so we glob for the per-task pattern.
 func readReportJSON(t *testing.T, outDir string) string {
 	t.Helper()
-	jsonPath := filepath.Join(outDir, "review_report.json")
-	jsonBytes, err := os.ReadFile(jsonPath)
+	matches, err := filepath.Glob(filepath.Join(outDir, "review_report_*.json"))
 	if err != nil {
-		t.Fatalf("read json report: %v", err)
+		t.Fatalf("glob json report: %v", err)
+	}
+	if len(matches) == 0 {
+		t.Fatalf("no json report found in %q", outDir)
+	}
+	jsonBytes, err := os.ReadFile(matches[0])
+	if err != nil {
+		t.Fatalf("read json report %q: %v", matches[0], err)
 	}
 	return string(jsonBytes)
 }

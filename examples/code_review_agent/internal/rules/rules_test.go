@@ -164,6 +164,26 @@ func TestRules(t *testing.T) {
 			},
 		},
 		{
+			name: "TM-001 source file with corresponding test does not trigger",
+			diff: "diff --git a/bar.go b/bar.go\n" +
+				"new file mode 100644\n" +
+				"--- /dev/null\n" +
+				"+++ b/bar.go\n" +
+				"@@ -0,0 +1,1 @@\n" +
+				"+package bar\n" +
+				"diff --git a/bar_test.go b/bar_test.go\n" +
+				"new file mode 100644\n" +
+				"--- /dev/null\n" +
+				"+++ b/bar_test.go\n" +
+				"@@ -0,0 +1,1 @@\n" +
+				"+package bar\n",
+			check: func(t *testing.T, fs []Finding) {
+				if hasRule(fs, "TM-001") {
+					t.Fatalf("expected no TM-001 finding when _test.go is present, got: %v", fs)
+				}
+			},
+		},
+		{
 			name: "DB-001 sql.Open without close triggers",
 			diff: "diff --git a/db.go b/db.go\n" +
 				"new file mode 100644\n" +

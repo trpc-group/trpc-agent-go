@@ -12,7 +12,8 @@
 // Package sandbox provides a fail-closed execution layer over the
 // trpc-agent-go codeexecutor Engine API. It provisions an isolated
 // workspace, stages the repository read-only, and runs review tools with
-// a cleaned environment, bounded output, and resource limits.
+// a cleaned environment, client-side bounded output, and advisory
+// resource limits.
 //
 // The Executor never silently degrades to an unsafe backend: container/e2b
 // construction failures are returned to the caller, and the local backend is
@@ -20,16 +21,29 @@
 // execute on any backend that does not honor CleanEnv (see
 // Capabilities.SupportsCleanEnv) so review tools never inherit the host
 // process environment.
+//
+// Resource limits (CPUPercent, MemoryMB, MaxPIDs) are passed through
+// RunProgramSpec.Limits but are advisory: as of the current codeexecutor
+// backends (container, e2b, local), none enforce these values. The real
+// resource controls are the sandbox image (fixed toolchain), the permission
+// policy (blocks resource-exhausting commands), and the per-command Timeout.
+//
+// Output bounding is client-side only: backends return Stdout/Stderr as
+// fully-buffered strings, so MaxStdoutBytes/MaxStderrBytes cap what is
+// retained in RunResult (and persisted to the report/DB) but do not
+// prevent the backend from allocating the full output in memory. Redaction
+// is applied before truncation so secrets split across the byte boundary
+// are still caught.
 package sandbox
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
@@ -57,6 +71,10 @@ const (
 	StatusSuccess = "success"
 	StatusFailed  = "failed"
 	StatusTimeout = "timeout"
+	// StatusSkipped indicates the sandbox check was intentionally not run
+	// (e.g. diff-only mode has no staged repo to vet). Skipped runs do not
+	// force the report conclusion to needs_human_review.
+	StatusSkipped = "skipped"
 )
 
 // Default tuning used when Config fields are zero.
@@ -66,7 +84,10 @@ const (
 	DefaultMaxStdoutBytes int64 = 1 << 20 // 1 MiB
 	DefaultMaxStderrBytes int64 = 1 << 20 // 1 MiB
 
-	// Resource limit defaults applied to every RunProgram call.
+	// Resource limit defaults applied to every RunProgram call. These are
+	// advisory: current codeexecutor backends do not enforce them (see the
+	// package doc comment). They are still passed through RunProgramSpec
+	// so backends that add support in the future will pick them up.
 	defaultCPUPercent = 100 // one full CPU, expressed in percent units
 	defaultMemoryMB   = 1024
 	defaultMaxPIDs    = 256
@@ -98,8 +119,11 @@ type Config struct {
 	WorkDir string
 	// Timeout is the per-command timeout. Defaults to 120s.
 	Timeout time.Duration
-	// MaxStdoutBytes / MaxStderrBytes bound captured output. Output
-	// past the limit is dropped and RunResult.Truncated is set.
+	// MaxStdoutBytes / MaxStderrBytes bound captured output. The limit is
+	// applied client-side after the backend returns: it caps what is
+	// retained in RunResult (and persisted downstream) but does not
+	// prevent the backend from allocating the full output in memory.
+	// Output past the limit is dropped and RunResult.Truncated is set.
 	MaxStdoutBytes int64
 	MaxStderrBytes int64
 }
@@ -234,8 +258,24 @@ func (e *Executor) StageDirectory(ctx context.Context, ws codeexecutor.Workspace
 }
 
 // Run executes a command via the framework Engine with a cleaned
-// environment, bounded output, and resource limits. It never panics on
-// command failure; failures are reflected in RunResult.Status.
+// environment, client-side bounded output, and advisory resource limits.
+// It never panics on command failure; failures are reflected in
+// RunResult.Status.
+//
+// Resource limits are advisory: RunProgramSpec.Limits is populated but
+// current codeexecutor backends (container, e2b, local) do not enforce
+// CPUPercent/MemoryMB/MaxPIDs. The real resource controls are the sandbox
+// image (fixed toolchain), the permission policy (blocks resource-
+// exhausting commands like `find /` or `yes`), and the per-command
+// Timeout.
+//
+// Output bounding is client-side: the backend returns Stdout/Stderr as
+// fully-buffered strings, so MaxStdoutBytes/MaxStderrBytes cap only what
+// is retained in RunResult (and persisted downstream). To avoid an extra
+// full-string copy of the backend output, redaction and truncation
+// operate directly on the []byte returned by redact.TextBytes via
+// bytes.Reader. Redaction runs before truncation so a secret split across
+// the byte boundary is still caught.
 func (e *Executor) Run(
 	ctx context.Context,
 	ws codeexecutor.Workspace,
@@ -285,11 +325,13 @@ func (e *Executor) Run(
 	// secrets split across the byte boundary are caught. This is
 	// defense-in-depth: the permission layer should block exfiltration
 	// commands, but a tool may print secrets that exist in the staged repo.
+	// Operate on []byte via bytes.Reader to avoid an extra full-string copy
+	// (res.Stdout is already a string; redact.TextBytes returns []byte).
 	stdoutBytes, _ := redact.TextBytes([]byte(res.Stdout))
 	stderrBytes, _ := redact.TextBytes([]byte(res.Stderr))
 
-	stdout, outTrunc := limitedRead(strings.NewReader(string(stdoutBytes)), e.cfg.MaxStdoutBytes)
-	stderr, errTrunc := limitedRead(strings.NewReader(string(stderrBytes)), e.cfg.MaxStderrBytes)
+	stdout, outTrunc := limitedRead(bytes.NewReader(stdoutBytes), e.cfg.MaxStdoutBytes)
+	stderr, errTrunc := limitedRead(bytes.NewReader(stderrBytes), e.cfg.MaxStderrBytes)
 
 	status := StatusSuccess
 	if res.TimedOut {

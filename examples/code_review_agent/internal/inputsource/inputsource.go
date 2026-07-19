@@ -33,6 +33,12 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/diffparse"
 )
 
+// MaxDiffBytes is the maximum total size of diff input accepted by Load.
+// Inputs exceeding this are rejected before parsing to prevent unbounded
+// memory allocation. 10 MiB is generous for typical PRs while still
+// bounding memory usage.
+const MaxDiffBytes int64 = 10 * 1024 * 1024
+
 // Source identifies the input mode requested by the caller of Load.
 type Source string
 
@@ -86,9 +92,12 @@ func Load(ctx context.Context, source Source, paths ...string) (*Input, error) {
 
 // loadFixtureDir walks the directory with WalkDir, reads each .diff file
 // (skipping symlinks and other non-regular files via shouldUploadFile),
-// concatenates them with "\n" separators and parses the result.
+// concatenates them with "\n" separators and parses the result. The total
+// size of all fixtures is capped at MaxDiffBytes to prevent unbounded
+// memory allocation.
 func loadFixtureDir(ctx context.Context, dir string) (*Input, error) {
 	var parts []string
+	var totalSize int64
 	walkErr := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -103,10 +112,23 @@ func loadFixtureDir(ctx context.Context, dir string) (*Input, error) {
 		if !strings.HasSuffix(path, ".diff") {
 			return nil
 		}
-		data, rerr := os.ReadFile(path)
+		f, oerr := os.Open(path)
+		if oerr != nil {
+			return oerr
+		}
+		defer f.Close()
+		remaining := MaxDiffBytes - totalSize
+		if remaining <= 0 {
+			return fmt.Errorf("inputsource: fixture dir exceeds max total size %d bytes", MaxDiffBytes)
+		}
+		data, rerr := io.ReadAll(io.LimitReader(f, remaining+1))
 		if rerr != nil {
 			return rerr
 		}
+		if int64(len(data)) > remaining {
+			return fmt.Errorf("inputsource: fixture dir exceeds max total size %d bytes", MaxDiffBytes)
+		}
+		totalSize += int64(len(data))
 		parts = append(parts, string(data))
 		return nil
 	})
@@ -121,11 +143,20 @@ func loadFixtureDir(ctx context.Context, dir string) (*Input, error) {
 	return &Input{Source: SourceFixtureDir, DiffText: diffText, Files: parsed.Files}, nil
 }
 
-// loadDiffFile reads a single .diff file and parses it.
+// loadDiffFile reads a single .diff file and parses it. The file size is
+// capped at MaxDiffBytes to prevent unbounded memory allocation.
 func loadDiffFile(path string) (*Input, error) {
-	data, err := os.ReadFile(path)
+	f, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("inputsource: read diff file %q: %w", path, err)
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, MaxDiffBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("inputsource: read diff file %q: %w", path, err)
+	}
+	if int64(len(data)) > MaxDiffBytes {
+		return nil, fmt.Errorf("inputsource: diff file %q exceeds max size %d bytes", path, MaxDiffBytes)
 	}
 	diffText := string(data)
 	parsed, err := diffparse.Parse(strings.NewReader(diffText))
@@ -145,19 +176,32 @@ func loadFileList(listPath, repoRoot string) (*Input, error) {
 	if err != nil {
 		return nil, fmt.Errorf("inputsource: resolve repo root %q: %w", repoRoot, err)
 	}
-	data, err := os.ReadFile(listPath)
+	f, err := os.Open(listPath)
 	if err != nil {
 		return nil, fmt.Errorf("inputsource: read file list %q: %w", listPath, err)
 	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, MaxDiffBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("inputsource: read file list %q: %w", listPath, err)
+	}
+	if int64(len(data)) > MaxDiffBytes {
+		return nil, fmt.Errorf("inputsource: file list %q exceeds max size %d bytes", listPath, MaxDiffBytes)
+	}
 	var diffs []string
+	var totalSize int64
 	for _, line := range strings.Split(string(data), "\n") {
 		name := strings.TrimSpace(line)
 		if name == "" {
 			continue
 		}
-		synth, serr := syntheticDiffForFile(name, absRoot)
+		synth, serr := syntheticDiffForFile(name, absRoot, MaxDiffBytes-totalSize)
 		if serr != nil {
 			return nil, serr
+		}
+		totalSize += int64(len(synth))
+		if totalSize > MaxDiffBytes {
+			return nil, fmt.Errorf("inputsource: file-list synthetic diff exceeds max total size %d bytes", MaxDiffBytes)
 		}
 		diffs = append(diffs, synth)
 	}
@@ -173,7 +217,8 @@ func loadFileList(listPath, repoRoot string) (*Input, error) {
 // file" diff treating its full contents as added lines. The path is
 // resolved under repoRoot and validated: absolute paths, traversal
 // (../), symlinks and non-regular files are rejected before reading.
-func syntheticDiffForFile(name, repoRoot string) (string, error) {
+// maxBytes caps the read size to prevent unbounded memory allocation.
+func syntheticDiffForFile(name, repoRoot string, maxBytes int64) (string, error) {
 	// Reject absolute paths — file-list entries must be repo-relative.
 	if filepath.IsAbs(name) {
 		return "", fmt.Errorf("inputsource: reject absolute path %q in file-list", name)
@@ -198,9 +243,20 @@ func syntheticDiffForFile(name, repoRoot string) (string, error) {
 	if !info.Mode().IsRegular() {
 		return "", fmt.Errorf("inputsource: reject non-regular file %q in file-list", name)
 	}
-	content, err := os.ReadFile(abs)
+	if maxBytes <= 0 {
+		return "", fmt.Errorf("inputsource: file-list size budget exhausted")
+	}
+	f, err := os.Open(abs)
 	if err != nil {
 		return "", fmt.Errorf("inputsource: read listed file %q: %w", name, err)
+	}
+	defer f.Close()
+	content, err := io.ReadAll(io.LimitReader(f, maxBytes+1))
+	if err != nil {
+		return "", fmt.Errorf("inputsource: read listed file %q: %w", name, err)
+	}
+	if int64(len(content)) > maxBytes {
+		return "", fmt.Errorf("inputsource: file %q exceeds remaining size budget %d bytes", name, maxBytes)
 	}
 	text := string(content)
 	var lines []string
@@ -305,29 +361,52 @@ func gitCommittedDiff(ctx context.Context, repo, baseBranch string) (string, err
 	return diff, nil
 }
 
-// gitWorkingTreeDiff returns the unstaged working-tree diff.
+// gitWorkingTreeDiff returns the working-tree diff against HEAD, capturing
+// both staged and unstaged changes so staged-but-uncommitted security or
+// correctness changes are reviewed rather than silently skipped. For repos
+// with an unborn HEAD (no commits), it falls back to `git diff` (unstaged
+// only) since there are no staged changes to miss in a fresh repo.
 func gitWorkingTreeDiff(ctx context.Context, repo string) (string, error) {
-	diff, err := gitOutput(ctx, repo, "diff")
+	diff, err := gitOutput(ctx, repo, "diff", "HEAD")
 	if err != nil {
-		return "", fmt.Errorf("inputsource: git diff working tree: %w", err)
+		// unborn HEAD (no commits): fall back to unstaged-only diff.
+		diff, err = gitOutput(ctx, repo, "diff")
+		if err != nil {
+			return "", fmt.Errorf("inputsource: git diff working tree: %w", err)
+		}
 	}
 	return diff, nil
 }
 
-// gitOutput runs "git -C repo args..." capturing stdout. stderr is
-// discarded so unborn-HEAD fallbacks do not pollute test output.
+// gitOutput runs "git -C repo args..." capturing stdout via a pipe so the
+// output is stream-limited to MaxDiffBytes and never fully buffered before
+// the size check. stderr is discarded so unborn-HEAD fallbacks do not
+// pollute test output.
 func gitOutput(ctx context.Context, repo string, args ...string) (string, error) {
 	full := make([]string, 0, len(args)+2)
 	full = append(full, "-C", repo)
 	full = append(full, args...)
 	cmd := exec.CommandContext(ctx, "git", full...)
-	var out strings.Builder
-	cmd.Stdout = &out
-	cmd.Stderr = io.Discard
-	if err := cmd.Run(); err != nil {
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
 		return "", err
 	}
-	return out.String(), nil
+	cmd.Stderr = io.Discard
+	if err := cmd.Start(); err != nil {
+		return "", err
+	}
+	data, readErr := io.ReadAll(io.LimitReader(stdout, MaxDiffBytes+1))
+	waitErr := cmd.Wait()
+	if readErr != nil {
+		return "", readErr
+	}
+	if waitErr != nil {
+		return "", waitErr
+	}
+	if int64(len(data)) > MaxDiffBytes {
+		return "", fmt.Errorf("inputsource: git output exceeds max size %d bytes", MaxDiffBytes)
+	}
+	return string(data), nil
 }
 
 // shouldUploadFile reports whether the entry is a regular file safe to

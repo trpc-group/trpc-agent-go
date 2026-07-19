@@ -146,7 +146,8 @@ func TestBuildConclusionNeedsReview(t *testing.T) {
 }
 
 // TestWriteAllFiles verifies WriteAll creates both the JSON and Markdown
-// files in the output directory.
+// files in the output directory. The filenames must include the task id so
+// concurrent or repeated runs do not clobber each other's reports.
 func TestWriteAllFiles(t *testing.T) {
 	rev := &review.Report{
 		TaskID: "task-write",
@@ -170,11 +171,85 @@ func TestWriteAllFiles(t *testing.T) {
 			t.Errorf("expected file %q to exist: %v", p, err)
 		}
 	}
-	if filepath.Base(jsonPath) != "review_report.json" {
-		t.Errorf("json base name = %q, want review_report.json", filepath.Base(jsonPath))
+	if got := filepath.Base(jsonPath); got != "review_report_task-write.json" {
+		t.Errorf("json base name = %q, want review_report_task-write.json", got)
 	}
-	if filepath.Base(mdPath) != "review_report.md" {
-		t.Errorf("md base name = %q, want review_report.md", filepath.Base(mdPath))
+	if got := filepath.Base(mdPath); got != "review_report_task-write.md" {
+		t.Errorf("md base name = %q, want review_report_task-write.md", got)
+	}
+}
+
+// TestReportFileNameDoesNotClobber verifies that writing reports for two
+// different task ids in the same directory produces distinct files and that
+// the second write does not overwrite the first. This is a regression test
+// for the bug where all tasks wrote the same fixed filename.
+func TestReportFileNameDoesNotClobber(t *testing.T) {
+	dir := t.TempDir()
+
+	mk := func(taskID string) *ReportData {
+		rev := &review.Report{
+			TaskID: taskID,
+			Findings: []review.Finding{
+				{
+					TaskID: taskID, Severity: "medium", File: "x.go", Line: 1,
+					Title: "t", Evidence: "e", Recommendation: "r",
+					Confidence: 0.7, RuleID: "RL-001",
+				},
+			},
+		}
+		return Build(taskID, rev, nil, nil, nil, telemetry.Summary{})
+	}
+
+	rd1 := mk("cr-20260101-120000-aaaaaaaa-1111")
+	rd2 := mk("cr-20260101-120000-bbbbbbbb-2222")
+
+	jp1, mp1, err := rd1.WriteAll(dir)
+	if err != nil {
+		t.Fatalf("first WriteAll: %v", err)
+	}
+	jp2, mp2, err := rd2.WriteAll(dir)
+	if err != nil {
+		t.Fatalf("second WriteAll: %v", err)
+	}
+	if jp1 == jp2 {
+		t.Fatalf("two task ids produced the same json path %q", jp1)
+	}
+	if mp1 == mp2 {
+		t.Fatalf("two task ids produced the same md path %q", mp1)
+	}
+	// Both JSON files must coexist on disk.
+	for _, p := range []string{jp1, jp2, mp1, mp2} {
+		if _, err := os.Stat(p); err != nil {
+			t.Errorf("expected file %q to still exist after second write: %v", p, err)
+		}
+	}
+}
+
+// TestReportFileNameSanitizesTraversal verifies that a hostile task id
+// containing path separators or traversal sequences cannot escape outDir.
+// The sanitized id must contain only [A-Za-z0-9._-] characters.
+func TestReportFileNameSanitizesTraversal(t *testing.T) {
+	dir := t.TempDir()
+	rev := &review.Report{TaskID: "../../etc/passwd", Findings: []review.Finding{}}
+	rd := Build("../../etc/passwd", rev, nil, nil, nil, telemetry.Summary{})
+
+	jp, _, err := rd.WriteAll(dir)
+	if err != nil {
+		t.Fatalf("WriteAll: %v", err)
+	}
+	// The written file must live inside dir, not somewhere above it.
+	absDir, _ := filepath.Abs(dir)
+	rel, err := filepath.Rel(absDir, jp)
+	if err != nil {
+		t.Fatalf("Rel: %v", err)
+	}
+	if strings.HasPrefix(rel, "..") {
+		t.Fatalf("json path %q escaped outDir %q (rel=%q)", jp, absDir, rel)
+	}
+	// Sanitized filename should not contain '/' or '\\'.
+	base := filepath.Base(jp)
+	if strings.ContainsAny(base, `/\`) {
+		t.Errorf("sanitized base name %q contains a path separator", base)
 	}
 }
 

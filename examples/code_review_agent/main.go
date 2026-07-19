@@ -77,7 +77,7 @@ func parseFlags(args []string) (*cliFlags, error) {
 	fs.StringVar(&f.executor, "executor", "container", "sandbox executor backend: container|e2b|local")
 	fs.BoolVar(&f.unsafeLocal, "unsafe-local", false, "allow the unsafe local executor (fail-closed by default)")
 	fs.BoolVar(&f.dryRun, "dry-run", false, "parse inputs and plan the review without executing sandboxed tools")
-	fs.StringVar(&f.model, "model", "deepseek-v4-flash", "LLM model identifier used by the review skill")
+	fs.StringVar(&f.model, "model", "deepseek-v4-flash", "LLM model identifier reserved for future LLM-based review; not yet wired into the pipeline")
 	if err := fs.Parse(args); err != nil {
 		return nil, err
 	}
@@ -141,6 +141,12 @@ func runPipeline(ctx context.Context, opts *pipelineOpts) (retErr error) {
 
 	taskID := store.NewTaskID(opts.repoPath)
 	log.Printf("task %s starting (dry-run=%v, executor=%s)", taskID, opts.dryRun, opts.executor)
+	// The --model flag is parsed for forward compatibility but the current
+	// pipeline only runs deterministic rules. Warn the user so a non-default
+	// model value is not silently ignored.
+	if opts.model != "" && opts.model != "deepseek-v4-flash" {
+		log.Printf("warning: --model %q is not yet wired into the pipeline; review is rule-based only", opts.model)
+	}
 
 	metrics := telemetry.New()
 
@@ -291,7 +297,23 @@ func resolveSkillsDir() string {
 // The workspace lifecycle (create + close) is owned by this function so the
 // workspace never outlives the sandbox checks. Sandbox construction failures
 // are fail-closed in normal mode and best-effort skipped in dry-run mode.
+//
+// When opts.repoPath is empty (diff-only / fixture / file-list mode) the
+// static checks are skipped entirely: go vet, staticcheck and go test all
+// require a staged Go repository, and running them against an empty
+// workspace only produces noise (failed runs that force the conclusion to
+// needs_human_review without surfacing any real issue). A single skipped
+// record is returned so the report is transparent about why sandbox checks
+// did not run.
 func runSandboxChecks(ctx context.Context, opts *pipelineOpts, taskID string, policy *permission.Policy, metrics *telemetry.Metrics, skillDir string) ([]sandboxRunRecord, []store.PermissionDecision, error) {
+	if opts.repoPath == "" {
+		log.Printf("sandbox checks skipped: no repo staged (diff-only/fixture/file-list mode)")
+		return []sandboxRunRecord{{
+			command: "go-vet+staticcheck+go-test",
+			result:  sandbox.RunResult{Status: sandbox.StatusSkipped, ExitCode: 0, Stdout: nil, Stderr: nil},
+		}}, nil, nil
+	}
+
 	sbCfg := sandbox.Config{
 		Backend:        backendFromFlag(opts.executor),
 		UnsafeLocal:    opts.unsafeLocal,
@@ -455,7 +477,9 @@ func backendFromFlag(s string) sandbox.Backend {
 // buildAndPersistReport aggregates the pipeline state into a ReportData, writes
 // the JSON and Markdown reports, and persists a TaskReport to the store. When
 // conclusionOverride is non-empty it forces the conclusion (used for partial
-// reports after a step failure). It returns the ReportData and report paths.
+// reports after a step failure) and marks the task status as "failed" so the
+// database distinguishes partial reports from completed ones. It returns the
+// ReportData and report paths.
 func buildAndPersistReport(
 	ctx context.Context,
 	st store.Store,
@@ -482,15 +506,29 @@ func buildAndPersistReport(
 		rd.Conclusion = report.Conclusion(conclusionOverride)
 	}
 
+	// Predict the report file paths before writing so the Artifacts field
+	// (which references the report files themselves) can be populated in
+	// the ReportData that gets serialized to JSON/Markdown. Without this,
+	// the written reports would always show an empty Artifacts list.
+	now := time.Now().UTC().Format(time.RFC3339)
+	predictedJSON, predictedMD := rd.PredictedPaths(opts.outDir)
+	artifacts := buildArtifacts(taskID, predictedJSON, predictedMD, now)
+	rd.Artifacts = artifacts
+
 	jsonPath, mdPath, err := rd.WriteAll(opts.outDir)
 	if err != nil {
 		return nil, "", "", fmt.Errorf("write reports: %w", err)
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
-	artifacts := buildArtifacts(taskID, jsonPath, mdPath, now)
-	rd.Artifacts = artifacts
 
-	taskReport := buildTaskReport(taskID, opts, input, rd, runRecords, permDecisions, artifacts, summary, jsonPath, mdPath, now)
+	// Derive the task status: a non-empty conclusionOverride means this is a
+	// partial report written after a step failure, so the task is "failed"
+	// rather than "completed". This keeps the database honest about which
+	// runs actually finished the full pipeline.
+	taskStatus := "completed"
+	if conclusionOverride != "" {
+		taskStatus = "failed"
+	}
+	taskReport := buildTaskReport(taskID, opts, input, rd, runRecords, permDecisions, artifacts, summary, jsonPath, mdPath, now, taskStatus)
 	if err := st.SaveTaskReport(ctx, taskReport); err != nil {
 		return rd, jsonPath, mdPath, fmt.Errorf("save task report: %w", err)
 	}
@@ -498,7 +536,9 @@ func buildAndPersistReport(
 }
 
 // buildTaskReport assembles the store.TaskReport aggregate from the pipeline
-// outputs. now is the shared creation timestamp for all child rows.
+// outputs. now is the shared creation timestamp for all child rows. status
+// is "completed" for a full run or "failed" for a partial report written
+// after a step failure.
 func buildTaskReport(
 	taskID string,
 	opts *pipelineOpts,
@@ -508,7 +548,7 @@ func buildTaskReport(
 	permDecisions []store.PermissionDecision,
 	artifacts []store.Artifact,
 	summary telemetry.Summary,
-	jsonPath, mdPath, now string,
+	jsonPath, mdPath, now, status string,
 ) store.TaskReport {
 	diffSource := ""
 	if input != nil {
@@ -520,7 +560,7 @@ func buildTaskReport(
 			CreatedAt:         now,
 			RepoPath:          opts.repoPath,
 			DiffSource:        diffSource,
-			Status:            "completed",
+			Status:            status,
 			Conclusion:        string(rd.Conclusion),
 			TotalDurationMs:   int64(summary.TotalDuration.Milliseconds()),
 			SandboxDurationMs: int64(summary.SandboxDuration.Milliseconds()),
@@ -609,10 +649,12 @@ func toStoreSandboxRun(r sandboxRunRecord, taskID, now string) store.SandboxRun 
 }
 
 // buildArtifacts constructs the two report-file artifact rows (JSON + Markdown).
+// The artifact Name is derived from the actual file path's base so it matches
+// the per-task filename produced by report.ReportData.reportFileName.
 func buildArtifacts(taskID, jsonPath, mdPath, now string) []store.Artifact {
 	return []store.Artifact{
-		{TaskID: taskID, Name: "review_report.json", Path: jsonPath, SizeBytes: fileSize(jsonPath), CreatedAt: now},
-		{TaskID: taskID, Name: "review_report.md", Path: mdPath, SizeBytes: fileSize(mdPath), CreatedAt: now},
+		{TaskID: taskID, Name: filepath.Base(jsonPath), Path: jsonPath, SizeBytes: fileSize(jsonPath), CreatedAt: now},
+		{TaskID: taskID, Name: filepath.Base(mdPath), Path: mdPath, SizeBytes: fileSize(mdPath), CreatedAt: now},
 	}
 }
 
