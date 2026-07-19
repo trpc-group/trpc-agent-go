@@ -49,6 +49,159 @@ function waitDurationMs(request) {
   return defaultWaitDurationMs;
 }
 
+function stringValue(value) {
+  return `${value || ""}`.trim();
+}
+
+function refSelector(ref) {
+  return `[data-openclaw-ref="${ref}"]`;
+}
+
+function targetText(value) {
+  const raw = stringValue(value);
+  const match = raw.match(
+    /\b(?:says|called|named|label(?:ed)?|with text)\s+(.+)$/i
+  );
+  const text = match ? match[1] : raw;
+  return text.replace(/^["'`]+|["'`.,:;]+$/g, "").trim();
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function targetTextCandidates(value) {
+  const text = targetText(value);
+  const roleWords = {
+    button: /\bbutton\b/ig,
+    link: /\blink\b/ig,
+    combobox: /\b(?:dropdown|combobox|select)\b/ig,
+    textbox: /\b(?:textbox|input|field)\b/ig,
+    checkbox: /\bcheckbox\b/ig,
+    radio: /\bradio\b/ig
+  }[roleHint(value)];
+  const roleless = (roleWords ? text.replace(roleWords, " ") : text)
+    .replace(/\s+/g, " ").trim();
+  const candidates = [text, roleless];
+  for (const candidate of [text, roleless]) {
+    candidates.push(...candidate.split(/\s+or\s+/i));
+  }
+  return [...new Set(candidates
+    .map((part) => part.trim())
+    .filter(Boolean))];
+}
+
+function textMatcher(value) {
+  const candidates = targetTextCandidates(value);
+  if (candidates.length === 0) {
+    return "";
+  }
+  if (candidates.length === 1) {
+    return candidates[0];
+  }
+  if (candidates.every((part) => part.length <= 64)) {
+    return new RegExp(candidates.map(escapeRegExp).join("|"), "i");
+  }
+  const text = candidates[0];
+  const parts = text.split(/\s+or\s+/i)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (parts.length > 1 && parts.every((part) => part.length <= 64)) {
+    return new RegExp(parts.map(escapeRegExp).join("|"), "i");
+  }
+  return text;
+}
+
+function roleHint(value) {
+  const raw = stringValue(value).toLowerCase();
+  const prefix = raw.match(
+    /^(?:the\s+)?(button|link|combobox|dropdown|select|checkbox|radio|textbox|input|field)(?:\s+(?:that|with|named|label(?:ed)?|says|containing)\b|$)/
+  );
+  const suffix = raw.match(
+    /\b(button|combobox|dropdown|select|checkbox|radio|textbox|input|field)$/
+  );
+  const role = prefix?.[1] || suffix?.[1] || "";
+  if (role === "dropdown" || role === "select") {
+    return "combobox";
+  }
+  if (role === "input" || role === "field") {
+    return "textbox";
+  }
+  return role;
+}
+
+const cssElementPattern = new RegExp(
+  "^(?:\\*|a|article|aside|button|details|dialog|div|fieldset|footer|" +
+  "form|header|input|label|li|main|nav|ol|option|p|section|select|" +
+  "span|summary|table|tbody|td|textarea|th|thead|tr|ul)(?:[#.:\\[].*)?$",
+  "i"
+);
+
+function looksLikeSelectorSequence(raw) {
+  const tokens = raw.split(/\s+/).filter(Boolean);
+  if (tokens.length < 2) {
+    return false;
+  }
+  return tokens.every((token) =>
+    /^[>+~]$/.test(token) ||
+    /^[.#\[]/.test(token) ||
+    cssElementPattern.test(token)
+  );
+}
+
+function looksLikeSelector(value) {
+  const raw = stringValue(value);
+  if (!raw) {
+    return false;
+  }
+  if (/^(?:css=|xpath=|text=|role=|\/\/)/i.test(raw)) {
+    return true;
+  }
+  if (/^[.#\[]/.test(raw)) {
+    return true;
+  }
+  return /^[a-zA-Z][\w-]*(?:[#.:[>]| +[.#[:])/.test(raw) ||
+    looksLikeSelectorSequence(raw);
+}
+
+function selectorTarget(value) {
+  const raw = stringValue(value);
+  if (raw.toLowerCase().startsWith("css=")) {
+    return raw.slice(4).trim();
+  }
+  return raw;
+}
+
+function targetLocator(page, request) {
+  const ref = stringValue(request.ref);
+  if (ref) {
+    return page.locator(refSelector(ref));
+  }
+  const target = stringValue(request.element) || stringValue(request.target);
+  if (!target) {
+    throw new Error("act requires ref or element target");
+  }
+  if (looksLikeSelector(target)) {
+    return page.locator(selectorTarget(target)).first();
+  }
+  const role = roleHint(target);
+  const matcher = textMatcher(target);
+  if (role && typeof page.getByRole === "function") {
+    return page.getByRole(role, { name: matcher, exact: false }).first();
+  }
+  if (typeof page.getByText === "function") {
+    return page.getByText(matcher, { exact: false }).first();
+  }
+  return page.locator(`text=${targetText(target)}`).first();
+}
+
+function targetLabel(request) {
+  return stringValue(request.ref) ||
+    stringValue(request.element) ||
+    stringValue(request.target) ||
+    "element";
+}
+
 function evaluateSource(request) {
   return `${request.fn || request.function || ""}`.trim();
 }
@@ -809,40 +962,49 @@ export class HostProfile {
   async act(targetId, request) {
     const page = this.requirePageOrCurrent(targetId);
     const ref = `${request.ref || ""}`.trim();
+    const label = targetLabel(request);
     switch (normalizeActKind(request.kind)) {
       case "click":
         await this.click(page, request, ref);
-        return textContent(`Clicked ${ref}.`);
+        return textContent(`Clicked ${label}.`);
       case "type":
         await this.type(page, request, ref);
-        return textContent(`Typed into ${ref}.`);
+        return textContent(`Typed into ${label}.`);
       case "hover":
-        await page.locator(`[data-openclaw-ref="${ref}"]`).hover({
+        await targetLocator(page, request).hover({
           timeout: waitTimeoutMs(request)
         });
-        return textContent(`Hovered ${ref}.`);
+        return textContent(`Hovered ${label}.`);
       case "scrollIntoView":
         await this.scrollIntoView(page, request, ref);
-        return textContent(`Scrolled ${ref} into view.`);
+        return textContent(`Scrolled ${label} into view.`);
       case "drag":
         await this.drag(page, request);
         return textContent(
-          `Dragged ${request.startRef} -> ${request.endRef}.`
+          `Dragged ${targetLabel({
+            ref: request.startRef,
+            element: request.startElement,
+            target: request.startTarget
+          })} -> ${targetLabel({
+            ref: request.endRef,
+            element: request.endElement,
+            target: request.endTarget
+          })}.`
         );
       case "select":
-        await page.locator(`[data-openclaw-ref="${ref}"]`).selectOption(
+        await targetLocator(page, request).selectOption(
           request.values || [],
           {
             timeout: waitTimeoutMs(request)
           }
         );
-        return textContent(`Selected ${ref}.`);
+        return textContent(`Selected ${label}.`);
       case "fill":
         {
           const timeoutMs = waitTimeoutMs(request);
           for (const field of request.fields || []) {
-            await page.locator(`[data-openclaw-ref="${field.ref}"]`).fill(
-              `${field.text || ""}`,
+            await targetLocator(page, field).fill(
+              `${field.text ?? field.value ?? ""}`,
               {
                 timeout: timeoutMs
               }
@@ -944,7 +1106,7 @@ export class HostProfile {
   }
 
   async click(page, request, ref) {
-    const locator = page.locator(`[data-openclaw-ref="${ref}"]`);
+    const locator = targetLocator(page, { ...request, ref });
     const options = {
       button: request.button || "left",
       modifiers: normalizeModifiers(request.modifiers),
@@ -958,15 +1120,13 @@ export class HostProfile {
   }
 
   async scrollIntoView(page, request, ref) {
-    await page.locator(
-      `[data-openclaw-ref="${ref}"]`
-    ).scrollIntoViewIfNeeded({
+    await targetLocator(page, { ...request, ref }).scrollIntoViewIfNeeded({
       timeout: waitTimeoutMs(request)
     });
   }
 
   async type(page, request, ref) {
-    const locator = page.locator(`[data-openclaw-ref="${ref}"]`);
+    const locator = targetLocator(page, { ...request, ref });
     const text = `${request.text || ""}`;
     const timeoutMs = waitTimeoutMs(request);
     if (request.slowly) {
@@ -984,13 +1144,18 @@ export class HostProfile {
   }
 
   async drag(page, request) {
-    const startRef = `${request.startRef || ""}`.trim();
-    const endRef = `${request.endRef || ""}`.trim();
-    if (!startRef || !endRef) {
-      throw new Error("drag requires startRef and endRef");
-    }
-    await page.locator(`[data-openclaw-ref="${startRef}"]`).dragTo(
-      page.locator(`[data-openclaw-ref="${endRef}"]`),
+    const start = targetLocator(page, {
+      ref: request.startRef,
+      element: request.startElement,
+      target: request.startTarget
+    });
+    const end = targetLocator(page, {
+      ref: request.endRef,
+      element: request.endElement,
+      target: request.endTarget
+    });
+    await start.dragTo(
+      end,
       {
         timeout: waitTimeoutMs(request)
       }
