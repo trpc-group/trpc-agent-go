@@ -51,6 +51,35 @@ parse_error_decision: deny
 	}
 }
 
+func TestLoadPolicyMergesHostExecFlagsWithoutDecision(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "hostexec.yaml")
+	// Only allow_background/allow_pty are set (no host_exec.decision).
+	// These must survive the merge instead of being dropped, and the
+	// default decision must be preserved.
+	content := `version: 1
+host_exec:
+  allow_background: true
+  allow_pty: true
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p, err := LoadPolicy(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if !p.HostExec.AllowBackground {
+		t.Error("host_exec.allow_background should survive merge")
+	}
+	if !p.HostExec.AllowPTY {
+		t.Error("host_exec.allow_pty should survive merge")
+	}
+	if p.HostExec.Decision != DecisionAsk {
+		t.Errorf("host_exec.decision default should be preserved, got %q", p.HostExec.Decision)
+	}
+}
+
 func TestLoadPolicyJSON(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "policy.json")

@@ -27,7 +27,7 @@ is what this package does.
 
 ## Architecture
 
-```
+```text
 tool call ──► Guard (tool.PermissionPolicy)
                  │  convert args → safety.Request
                  ▼
@@ -86,14 +86,15 @@ fmt.Println(report.Decision, report.RiskLevel, report.RuleIDs())
 | `dangerous_command` | Destructive command | `rm -rf / --no-preserve-root`, `dd of=/dev/sda`, fork bomb | deny |
 | `sensitive_path` | Credential/key read | `cat ~/.ssh/id_rsa`, `cat .env` | deny |
 | `network_egress` | Non-allowlisted egress | `curl http://evil.example.com` | deny |
-| `shell_bypass` | Wrapper / substitution | `sh -c ...`, `eval ...`, `$(...)`, pipes+redirs on unparseable input | deny |
+| `shell_bypass` | Wrapper / substitution | `sh -c ...`, `eval ...`, `$(...)`, pipes+redirs on unparsable input | deny |
 | `host_exec_risk` | Host session / host bridge | hostexec PTY or background; `os.system(...)` in code | ask |
 | `dependency_change` | Env mutation | `pip install`, `go install`, `apt install` | ask |
 | `resource_abuse` | Runaway resource use | `sleep 3600`, `cat /dev/urandom`, `while true` | ask |
 | `secret_leak` | Inline credential | `ghp_...`, `AKIA...`, `-----BEGIN PRIVATE KEY-----` | deny + redact |
-| `env_policy` | Env var rule | `LD_PRELOAD=...` | deny |
+| `env_policy` | Env var rule | `LD_PRELOAD=...` (denied name) or a name outside `env.allowed_names` | deny (denied name) / ask (not allowlisted) |
 | `command_policy` | Allow/deny list hit | executable not in `allowed_commands` | deny |
-| `parse_error` | Unparseable command | anything shellsafe refuses to parse | deny (configurable, never allow) |
+| `destructive_metadata` | Tool flagged destructive | tool metadata sets `Destructive` | ask |
+| `parse_error` | Unparsable command | anything shellsafe refuses to parse | deny (configurable, never allow) |
 
 ### Decisions
 
@@ -123,7 +124,7 @@ the aggregate risk is the **highest** finding.
 
 - **`tool.PermissionPolicy`** is the framework's pre-execution
   interception point. `safety.Guard` implements it. The zero/`nil`
-  guard fails closed (deny), and unparseable arguments fail closed.
+  guard fails closed (deny), and unparsable arguments fail closed.
 
 - **`tool/workspaceexec`** runs commands inside the shared executor
   workspace. Its safety boundary is workspace isolation plus its own
@@ -187,7 +188,7 @@ file.
 go test ./tool/safety/...
 ```
 
-The suite covers the twelve acceptance sample categories, the detection
+The suite covers the fourteen acceptance sample categories, the detection
 and false-positive-rate thresholds, the 500-segment performance bound
 (< 1 s), secret redaction, policy loading (YAML + JSON), fail-closed
 parse handling, and the permission-bridge decision mapping. The runnable

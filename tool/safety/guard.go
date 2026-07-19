@@ -84,6 +84,16 @@ func WithReportObserver(obs ReportObserver) GuardOption {
 	return func(g *Guard) { g.observer = obs }
 }
 
+// WithAllowUnmapped controls how the guard treats tools it cannot
+// convert into a scan request. The default (false) still defensively
+// scans unmapped tools that advertise open-world or destructive
+// metadata. Setting it to true allows every unmapped tool outright,
+// trusting the framework's own allow-by-default contract for
+// non-execution surfaces.
+func WithAllowUnmapped(allow bool) GuardOption {
+	return func(g *Guard) { g.allowUnmapped = allow }
+}
+
 // NewGuard builds a Guard enforcing policy.
 func NewGuard(policy Policy, opts ...GuardOption) *Guard {
 	g := &Guard{policy: policy}
@@ -298,16 +308,19 @@ func classify(name string) (string, toolKind) {
 }
 
 // decisionToPermission maps a scan report onto a framework decision.
-// deny -> deny, ask/needs_human_review -> ask, allow -> allow.
+// allow -> allow, ask/needs_human_review -> ask, everything else
+// (deny plus any unrecognised or empty Decision) -> deny. The default
+// fails closed: a hand-built Policy whose rule Decision is empty
+// aggregates to report.Decision == "" and must never map to allow.
 func decisionToPermission(report Report) tool.PermissionDecision {
 	reason := reasonFor(report)
 	switch report.Decision {
-	case DecisionDeny:
-		return tool.DenyPermission(reason)
+	case DecisionAllow:
+		return tool.AllowPermission()
 	case DecisionAsk, DecisionNeedsHumanReview:
 		return tool.AskPermission(reason)
 	default:
-		return tool.AllowPermission()
+		return tool.DenyPermission(reason)
 	}
 }
 

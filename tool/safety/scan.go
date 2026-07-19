@@ -67,13 +67,17 @@ type Request struct {
 	Background bool
 	// TTY reports a request for an interactive PTY session.
 	TTY bool
-	// Metadata mirrors tool.ToolMetadata flags the caller wants the
-	// scanner to weigh (Destructive, OpenWorld).
+	// Destructive mirrors tool.ToolMetadata.Destructive and is the
+	// only metadata flag Scan's scanMetadata decision path weighs.
 	Destructive bool
-	OpenWorld   bool
+	// OpenWorld mirrors tool.ToolMetadata.OpenWorld. It is consulted
+	// only by the guard when deciding whether to defensively scan an
+	// unmapped tool (see guard.toScanRequest); Scan itself does not
+	// weigh it.
+	OpenWorld bool
 	// Malformed reports that the caller could not parse the tool
 	// arguments into a request. The scanner then emits a parse-error
-	// finding and applies policy.ParseErrorDecision, so unparseable
+	// finding and applies policy.ParseErrorDecision, so unparsable
 	// input fails closed instead of scanning an empty command.
 	Malformed bool
 }
@@ -165,7 +169,7 @@ func (s *scanner) finish(report *Report, start time.Time) Report {
 }
 
 // scanCommand parses the command line with shellsafe and runs the
-// per-segment rules. Unparseable commands fail closed.
+// per-segment rules. Unparsable commands fail closed.
 func (s *scanner) scanCommand(command, backend string) {
 	// Secret and sensitive-path checks run on the raw text so they
 	// fire even when the command cannot be parsed structurally.
@@ -195,13 +199,16 @@ func (s *scanner) scanCommand(command, backend string) {
 	s.scanPipelineLimits(pipe)
 }
 
-// scanArgv runs the segment rules on an already-split argv.
+// scanArgv runs the segment rules on an already-split argv. It mirrors
+// scanCommand's text checks (including resource abuse) so the hostexec/
+// codeexec Args path is not weaker than the Command path.
 func (s *scanner) scanArgv(argv []string) {
 	joined := strings.Join(argv, " ")
 	s.scanSecrets(joined)
 	s.scanSensitivePaths(joined)
 	s.scanDestructive(joined)
 	s.scanDependency(joined)
+	s.scanResourceText(joined)
 	pipe := &shellsafe.Pipeline{Commands: [][]string{argv}}
 	s.applyCommandPolicy(pipe)
 	s.scanNetwork(pipe)
@@ -397,9 +404,12 @@ func (s *scanner) scanDestructive(text string) {
 
 // scanDependency flags package-manager install commands.
 func (s *scanner) scanDependency(text string) {
+	// lc is padded with a leading and trailing space so the single
+	// boundary-aware check below matches whole words/phrases without
+	// firing on substrings (e.g. "install" inside "reinstall").
 	lc := " " + strings.ToLower(text) + " "
 	for _, p := range dependencyInstallPatterns {
-		if strings.Contains(lc, " "+p+" ") || strings.Contains(lc, p+" ") {
+		if strings.Contains(lc, " "+p+" ") {
 			s.add(Finding{
 				RuleID:         RuleDependencyChange,
 				RiskLevel:      RiskMedium,
@@ -455,7 +465,7 @@ func (s *scanner) scanResourceText(text string) {
 func (s *scanner) scanMetadata(req Request) {
 	if req.Destructive {
 		s.add(Finding{
-			RuleID:         RuleDestructiveintent,
+			RuleID:         RuleDestructiveIntent,
 			RiskLevel:      RiskMedium,
 			Decision:       DecisionAsk,
 			Evidence:       "tool metadata marks the call as destructive",

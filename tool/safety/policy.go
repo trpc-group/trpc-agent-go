@@ -314,8 +314,16 @@ func mergePolicy(base, loaded Policy) Policy {
 	if loaded.Env.DeniedNames != nil {
 		out.Env.DeniedNames = loaded.Env.DeniedNames
 	}
+	// Merge each HostExec field independently so a policy that only sets
+	// allow_background/allow_pty (without a decision) is not silently dropped.
+	if loaded.HostExec.AllowBackground {
+		out.HostExec.AllowBackground = true
+	}
+	if loaded.HostExec.AllowPTY {
+		out.HostExec.AllowPTY = true
+	}
 	if loaded.HostExec.Decision != "" {
-		out.HostExec = loaded.HostExec
+		out.HostExec.Decision = loaded.HostExec.Decision
 	}
 	if loaded.DependencyInstallDecision != "" {
 		out.DependencyInstallDecision = loaded.DependencyInstallDecision

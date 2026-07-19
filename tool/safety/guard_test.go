@@ -149,6 +149,55 @@ func TestGuardNilFailsClosed(t *testing.T) {
 	}
 }
 
+func TestDecisionToPermissionFailsClosed(t *testing.T) {
+	cases := map[Decision]tool.PermissionAction{
+		DecisionAllow:            tool.PermissionActionAllow,
+		DecisionAsk:              tool.PermissionActionAsk,
+		DecisionNeedsHumanReview: tool.PermissionActionAsk,
+		DecisionDeny:             tool.PermissionActionDeny,
+		Decision(""):             tool.PermissionActionDeny, // unrecognised/empty -> deny
+		Decision("bogus"):        tool.PermissionActionDeny,
+	}
+	for dec, want := range cases {
+		got := decisionToPermission(Report{Decision: dec})
+		if got.Action != want {
+			t.Errorf("decisionToPermission(%q) = %q, want %q", dec, got.Action, want)
+		}
+	}
+}
+
+func TestGuardEmptyNetworkDecisionFailsClosed(t *testing.T) {
+	// A hand-built policy that skipped Validate() and left a rule's
+	// decision empty must not slip through as allow.
+	pol := testPolicy()
+	pol.Network.Decision = ""
+	g := NewGuard(pol)
+	dec, _ := g.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:  "workspace_exec",
+		Arguments: mustArgs(t, map[string]any{"command": "curl http://evil.example.com"}),
+	})
+	if dec.Action != tool.PermissionActionDeny {
+		t.Errorf("empty network decision = %q, want deny", dec.Action)
+	}
+}
+
+func TestGuardWithAllowUnmapped(t *testing.T) {
+	// An unmapped open-world tool touching a secret is denied by default...
+	req := &tool.PermissionRequest{
+		ToolName:  "custom_fetch",
+		Arguments: []byte(`cat ~/.ssh/id_rsa`),
+		Metadata:  tool.ToolMetadata{OpenWorld: true},
+	}
+	if dec, _ := NewGuard(testPolicy()).CheckToolPermission(context.Background(), req); dec.Action != tool.PermissionActionDeny {
+		t.Fatalf("default unmapped scan = %q, want deny", dec.Action)
+	}
+	// ...but WithAllowUnmapped(true) trusts unmapped tools outright.
+	g := NewGuard(testPolicy(), WithAllowUnmapped(true))
+	if dec, _ := g.CheckToolPermission(context.Background(), req); dec.Action != tool.PermissionActionAllow {
+		t.Errorf("WithAllowUnmapped unmapped tool = %q, want allow", dec.Action)
+	}
+}
+
 func TestGuardImplementsPermissionPolicy(t *testing.T) {
 	var _ tool.PermissionPolicy = NewGuard(DefaultPolicy())
 }

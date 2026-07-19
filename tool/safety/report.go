@@ -33,7 +33,7 @@ const (
 	RuleEnvPolicy         = "env_policy"
 	RuleCommandPolicy     = "command_policy"
 	RuleParseError        = "parse_error"
-	RuleDestructiveintent = "destructive_metadata"
+	RuleDestructiveIntent = "destructive_metadata"
 )
 
 // Span attribute keys reserved for OpenTelemetry integration, as

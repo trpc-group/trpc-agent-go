@@ -16,7 +16,7 @@ go run . -policy tool_safety_policy.yaml \
 
 Output:
 
-```
+```text
 safe_go_test                 -> allow              risk=none     rules=[]
 dangerous_delete_root        -> deny               risk=critical rules=[dangerous_command]
 read_ssh_private_key         -> deny               risk=high     rules=[sensitive_path]
