@@ -1082,9 +1082,21 @@ func TestFunctionCallResponseProcessor_AttachStateDelta(t *testing.T) {
 
 func TestAttachStateDeltaToToolResultsPropagatesProviderError(t *testing.T) {
 	wantErr := errors.New("state delta audit failed")
-	p := NewFunctionCallResponseProcessor(false, nil)
 	firstEvent := &event.Event{}
 	failedEvent := &event.Event{}
+	lastEvent := &event.Event{}
+	var hookedEvents []*event.Event
+	p := NewFunctionCallResponseProcessor(
+		false,
+		nil,
+		WithPostToolResultHook(func(
+			_ context.Context,
+			_ *agent.Invocation,
+			event *event.Event,
+		) {
+			hookedEvents = append(hookedEvents, event)
+		}),
+	)
 	results := []toolResult{
 		{
 			event: firstEvent,
@@ -1108,15 +1120,29 @@ func TestAttachStateDeltaToToolResultsPropagatesProviderError(t *testing.T) {
 				}},
 			},
 		},
+		{
+			event: lastEvent,
+			stateDelta: &toolEventStateDelta{
+				tool: &mockStateDeltaTool{delta: map[string][]byte{
+					"last": []byte("value"),
+				}},
+				choice: model.Choice{Message: model.Message{
+					Role:   model.RoleTool,
+					ToolID: "call-3",
+				}},
+			},
+		},
 	}
 
 	events, err := p.attachStateDeltaToToolResults(
 		context.Background(), nil, results,
 	)
 	require.ErrorIs(t, err, wantErr)
-	require.Nil(t, events)
+	require.Equal(t, []*event.Event{firstEvent, lastEvent}, events)
+	require.Equal(t, []*event.Event{firstEvent, lastEvent}, hookedEvents)
 	require.Equal(t, []byte("value"), firstEvent.StateDelta["first"])
 	require.Empty(t, failedEvent.StateDelta)
+	require.Equal(t, []byte("value"), lastEvent.StateDelta["last"])
 }
 
 func TestAttachStateDeltaPrefersInvocationAwareErrorProvider(t *testing.T) {
@@ -1180,13 +1206,14 @@ func TestExecuteSingleToolCallSequentialPropagatesStateDeltaError(t *testing.T) 
 	require.ErrorIs(t, err, wantErr)
 }
 
-func TestExecuteToolCallsInParallelPreservesExecutionAndStateDeltaErrors(
+func TestHandleFunctionCallsPreservesHealthyParallelResultAndErrors(
 	t *testing.T,
 ) {
 	criticalErr := agent.NewStopError("critical tool failure")
 	stateDeltaErr := errors.New("state delta audit failed")
 	stateToolDone := make(chan struct{})
-	p := NewFunctionCallResponseProcessor(false, nil)
+	healthyToolDone := make(chan struct{})
+	p := NewFunctionCallResponseProcessor(true, nil)
 	inv := &agent.Invocation{AgentName: "tester"}
 	calls := []model.ToolCall{
 		{ID: "call-state", Function: model.FunctionDefinitionParam{
@@ -1194,6 +1221,9 @@ func TestExecuteToolCallsInParallelPreservesExecutionAndStateDeltaErrors(
 		}},
 		{ID: "call-critical", Function: model.FunctionDefinitionParam{
 			Name: "critical", Arguments: []byte(`{}`),
+		}},
+		{ID: "call-healthy", Function: model.FunctionDefinitionParam{
+			Name: "healthy", Arguments: []byte(`{}`),
 		}},
 	}
 	tools := map[string]tool.Tool{
@@ -1208,22 +1238,35 @@ func TestExecuteToolCallsInParallelPreservesExecutionAndStateDeltaErrors(
 			declaration: &tool.Declaration{Name: "critical"},
 			callFn: func(context.Context, []byte) (any, error) {
 				<-stateToolDone
+				<-healthyToolDone
 				return nil, criticalErr
+			},
+		},
+		"healthy": &mockInvocationStateDeltaTool{
+			declaration: &tool.Declaration{Name: "healthy"},
+			callFn: func(context.Context, []byte) (any, error) {
+				close(healthyToolDone)
+				return map[string]any{"ok": true}, nil
 			},
 		},
 	}
 
-	event, err := p.executeToolCallsInParallel(
+	eventChan := make(chan *event.Event, 2)
+	event, err := p.handleFunctionCallsAndSendEvent(
 		context.Background(),
 		inv,
 		newToolCallResponseWithCalls(calls),
-		calls,
 		tools,
-		nil,
+		eventChan,
 	)
-	require.Nil(t, event)
+	require.NotNil(t, event)
+	require.Len(t, event.Choices, 2)
+	require.Equal(t, "call-critical", event.Choices[0].Message.ToolID)
+	require.Equal(t, "call-healthy", event.Choices[1].Message.ToolID)
 	require.ErrorIs(t, err, criticalErr)
 	require.ErrorIs(t, err, stateDeltaErr)
+	require.Same(t, event, <-eventChan)
+	require.Equal(t, model.ObjectTypeError, (<-eventChan).Object)
 }
 
 func TestExecuteSingleToolCallSequential_PreservesCustomInvocationState(
