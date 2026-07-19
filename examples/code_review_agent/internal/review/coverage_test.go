@@ -154,7 +154,10 @@ func TestLocalSandboxRunsAuditedChecks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runs, decisions, artifacts := runner.run(context.Background(), "local-smoke", repo, input)
+	runs, decisions, artifacts, err := runner.run(context.Background(), "local-smoke", repo, input)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(runs) != 4 || len(decisions) != 4 || len(artifacts) != 1 {
 		t.Fatalf("incomplete sandbox evidence: runs=%+v decisions=%+v artifacts=%+v", runs, decisions, artifacts)
 	}
@@ -179,6 +182,8 @@ func TestExecuteClassifiesResults(t *testing.T) {
 		{name: "timeout result", command: "go", result: codeexecutor.RunResult{TimedOut: true}, status: "failed", errorType: "timeout"},
 		{name: "deadline error", command: "go", err: context.DeadlineExceeded, status: "failed", errorType: "timeout"},
 		{name: "staticcheck unavailable", command: "staticcheck", result: codeexecutor.RunResult{ExitCode: -1, Stderr: "not found"}, status: "skipped", errorType: "tool_unavailable"},
+		{name: "dependency unavailable", command: "go", result: codeexecutor.RunResult{ExitCode: 1, Stderr: "missing go.sum entry for module"}, status: "skipped", errorType: "dependency_unavailable"},
+		{name: "staticcheck timeout is not unavailable", command: "staticcheck", result: codeexecutor.RunResult{TimedOut: true, Stderr: "not found"}, status: "failed", errorType: "timeout"},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
@@ -215,7 +220,10 @@ func TestSandboxSetupFailuresRemainAuditable(t *testing.T) {
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
 			runner := &sandbox{engine: test.eng, executor: "stub", timeout: time.Second, outputLimit: 128, outputDir: t.TempDir(), skillDir: filepath.Join(base, "skills", "code-review")}
-			runs, decisions, artifacts := runner.run(context.Background(), "setup-failure", test.repo, input)
+			runs, decisions, artifacts, err := runner.run(context.Background(), "setup-failure", test.repo, input)
+			if err != nil {
+				t.Fatal(err)
+			}
 			if len(runs) != 1 || runs[0].Command != test.op || runs[0].ErrorType != "setup_error" {
 				t.Fatalf("unexpected setup failure: %+v", runs)
 			}
@@ -223,6 +231,33 @@ func TestSandboxSetupFailuresRemainAuditable(t *testing.T) {
 				t.Fatalf("audit evidence missing: decisions=%+v artifacts=%+v", decisions, artifacts)
 			}
 		})
+	}
+}
+
+func TestDiffStatsWriteFailureIsPropagated(t *testing.T) {
+	outputFile := filepath.Join(t.TempDir(), "output-file")
+	writeFile(t, outputFile, "not a directory")
+	runner := &sandbox{executor: ExecutorFake, outputDir: outputFile}
+	if _, _, _, err := runner.run(context.Background(), "task", "", ParsedInput{}); err == nil {
+		t.Fatal("diff statistics write failure was ignored")
+	}
+}
+
+func TestWorkspaceCleanupFailureIsAudited(t *testing.T) {
+	base, err := exampleDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := &sandbox{
+		engine:   stubEngine{manager: stubManager{cleanupErr: errors.New("cleanup failed")}, fs: &stubFS{}, runner: stubRunner{}, cleanEnv: true},
+		executor: ExecutorContainer, timeout: time.Second, outputLimit: 128, outputDir: t.TempDir(), skillDir: filepath.Join(base, "skills", "code-review"),
+	}
+	runs, _, _, err := runner.run(context.Background(), "cleanup-failure", "", ParsedInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 2 || runs[1].Command != "cleanup_workspace" || runs[1].ErrorType != "setup_error" {
+		t.Fatalf("cleanup failure was not audited: %+v", runs)
 	}
 }
 
@@ -323,6 +358,18 @@ func TestReportAndStoreErrorPaths(t *testing.T) {
 	}
 }
 
+func TestStageReportAndSkillLoadingRejectInvalidRoots(t *testing.T) {
+	parentFile := filepath.Join(t.TempDir(), "parent")
+	writeFile(t, parentFile, "not a directory")
+	report := Report{Task: Task{ID: "task"}, Metrics: Metrics{SeverityDistribution: map[string]int{}}}
+	if _, _, _, err := stageReport(report, parentFile); err == nil {
+		t.Fatal("report was staged below a regular file")
+	}
+	if err := loadReviewSkill(t.TempDir()); err == nil {
+		t.Fatal("missing review skill was accepted")
+	}
+}
+
 func TestSnapshotRejectsOversizeGoFile(t *testing.T) {
 	repo := t.TempDir()
 	file := filepath.Join(repo, "large.go")
@@ -361,12 +408,15 @@ type stubRunner struct {
 	err    error
 }
 
-type stubManager struct{ createErr error }
+type stubManager struct {
+	createErr  error
+	cleanupErr error
+}
 
 func (s stubManager) CreateWorkspace(context.Context, string, codeexecutor.WorkspacePolicy) (codeexecutor.Workspace, error) {
 	return codeexecutor.Workspace{Path: "stub"}, s.createErr
 }
-func (stubManager) Cleanup(context.Context, codeexecutor.Workspace) error { return nil }
+func (s stubManager) Cleanup(context.Context, codeexecutor.Workspace) error { return s.cleanupErr }
 
 type stubFS struct {
 	stageCalls    int

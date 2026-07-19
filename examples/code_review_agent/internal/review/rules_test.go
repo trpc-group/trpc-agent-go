@@ -48,8 +48,14 @@ func TestFixtureRules(t *testing.T) {
 }
 
 func TestCleanFixtureHasNoObservation(t *testing.T) {
-	base, _ := exampleDir()
-	raw, _ := os.ReadFile(filepath.Join(base, "fixtures", "clean.diff"))
+	base, err := exampleDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(base, "fixtures", "clean.diff"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	input, err := ParseUnifiedDiff(string(raw))
 	if err != nil {
 		t.Fatal(err)
@@ -61,8 +67,14 @@ func TestCleanFixtureHasNoObservation(t *testing.T) {
 }
 
 func TestContextFixtureDoesNotTreatDiscardedContextAsError(t *testing.T) {
-	base, _ := exampleDir()
-	raw, _ := os.ReadFile(filepath.Join(base, "fixtures", "context.diff"))
+	base, err := exampleDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(base, "fixtures", "context.diff"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	input, err := ParseUnifiedDiff(string(raw))
 	if err != nil {
 		t.Fatal(err)
@@ -108,6 +120,54 @@ func TestMissingTestRoutesToHumanReview(t *testing.T) {
 	}
 	if len(decisions) != 1 || decisions[0].Action != FilterRouteHuman {
 		t.Fatalf("human-review routing is not auditable: %+v", decisions)
+	}
+}
+
+func TestMissingTestsMustBeInSameDirectoryAndNotDeleted(t *testing.T) {
+	input := ParsedInput{
+		Files:    []string{"pkg/service.go", "other/service_test.go", "pkg/old_test.go"},
+		Statuses: map[string]FileStatus{"pkg/old_test.go": fileDeleted},
+	}
+	if got := missingTestFile(input); got != "pkg/service.go" {
+		t.Fatalf("unexpected missing-test file %q", got)
+	}
+	input.Files = append(input.Files, "pkg/service_test.go")
+	if got := missingTestFile(input); got != "" {
+		t.Fatalf("same-package test was ignored: %q", got)
+	}
+}
+
+func TestDynamicShellOnlyFlagsDynamicShellCode(t *testing.T) {
+	cases := []struct {
+		line string
+		want bool
+	}{
+		{`exec.Command("bash", "-c", userInput)`, true},
+		{`exec.CommandContext(ctx, "sh", "-c", fmt.Sprintf("echo %s", value))`, true},
+		{`exec.Command("bash", "-c", "echo safe")`, false},
+		{`exec.Command("go", "test", "./"+pkg)`, false},
+		{`fmt.Sprintf("bash -c %s", value)`, false},
+		{`exec.Command("python", "-c", script)`, false},
+		{`exec.Command("bash", script)`, false},
+		{`exec.Command("bash", "-c")`, false},
+		{`exec.Command("bash", "-c", "unterminated)`, true},
+	}
+	for _, test := range cases {
+		if got := isDynamicShellCommand(test.line); got != test.want {
+			t.Errorf("isDynamicShellCommand(%q) = %t, want %t", test.line, got, test.want)
+		}
+	}
+}
+
+func TestDynamicShellDetectsMultilineInvocation(t *testing.T) {
+	raw := "diff --git a/run.go b/run.go\n--- a/run.go\n+++ b/run.go\n@@ -1 +1,6 @@\n package run\n+cmd := exec.CommandContext(\n+    ctx,\n+    \"bash\",\n+    \"-c\",\n+    userInput,\n+)\n"
+	input, err := ParseUnifiedDiff(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	findings, _, _ := analyze(input)
+	if !hasRule(findings, "go/security/dynamic-shell") {
+		t.Fatalf("multiline dynamic shell was missed: %+v", findings)
 	}
 }
 

@@ -12,6 +12,7 @@ package review
 import (
 	"regexp"
 	"strings"
+	"unicode/utf8"
 )
 
 var redactionPatterns = []*regexp.Regexp{
@@ -37,7 +38,11 @@ func truncate(value string, limit int) (string, bool) {
 	if limit <= 0 || len(value) <= limit {
 		return value, false
 	}
-	return value[:limit] + "\n...[truncated]", true
+	cut := limit
+	for cut > 0 && !utf8.RuneStart(value[cut]) {
+		cut--
+	}
+	return value[:cut] + "\n...[truncated]", true
 }
 
 func looksSecret(value string) bool {

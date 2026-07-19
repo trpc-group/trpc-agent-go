@@ -36,6 +36,9 @@ type Executor string
 // FilterAction describes how a finding candidate was routed.
 type FilterAction string
 
+// FileStatus describes how a path changed in the reviewed diff.
+type FileStatus string
+
 const (
 	// TaskRunning indicates that a review is in progress.
 	TaskRunning TaskStatus = "running"
@@ -65,6 +68,23 @@ const (
 	// RunSkipped indicates that a sandbox command was intentionally not run.
 	RunSkipped RunStatus = "skipped"
 
+	// ErrorDryRun records a check skipped by deterministic dry-run mode.
+	ErrorDryRun ErrorType = "dry_run"
+	// ErrorExecutor records an executor-level failure.
+	ErrorExecutor ErrorType = "executor_error"
+	// ErrorPermissionDecision records a command blocked by governance.
+	ErrorPermissionDecision ErrorType = "permission_decision"
+	// ErrorNonZeroExit records a completed command with an unsuccessful exit code.
+	ErrorNonZeroExit ErrorType = "non_zero_exit"
+	// ErrorTimeout records an execution deadline.
+	ErrorTimeout ErrorType = "timeout"
+	// ErrorToolUnavailable records an optional executable missing from the sandbox.
+	ErrorToolUnavailable ErrorType = "tool_unavailable"
+	// ErrorDependencyUnavailable records dependencies absent from the offline sandbox cache.
+	ErrorDependencyUnavailable ErrorType = "dependency_unavailable"
+	// ErrorSetup records a sandbox lifecycle or staging failure.
+	ErrorSetup ErrorType = "setup_error"
+
 	// ExecutorContainer selects the local container sandbox backend.
 	ExecutorContainer Executor = "container"
 	// ExecutorE2B selects the E2B sandbox backend.
@@ -84,6 +104,10 @@ const (
 	FilterDropDuplicate FilterAction = "drop_duplicate"
 	// FilterRouteHuman sends a candidate to human review.
 	FilterRouteHuman FilterAction = "route_human"
+
+	fileAdded    FileStatus = "added"
+	fileModified FileStatus = "modified"
+	fileDeleted  FileStatus = "deleted"
 )
 
 // Config configures a review pipeline run.
@@ -131,11 +155,12 @@ type ChangedLine struct {
 
 // ParsedInput contains the bounded diff data consumed by review rules.
 type ParsedInput struct {
-	Raw     string            `json:"-"`
-	Files   []string          `json:"files"`
-	Lines   []ChangedLine     `json:"lines"`
-	Context map[string]string `json:"-"`
-	Summary DiffSummary       `json:"summary"`
+	Raw      string                `json:"-"`
+	Files    []string              `json:"files"`
+	Statuses map[string]FileStatus `json:"-"`
+	Lines    []ChangedLine         `json:"lines"`
+	Context  map[string]string     `json:"-"`
+	Summary  DiffSummary           `json:"summary"`
 }
 
 // Finding is a structured code review observation.

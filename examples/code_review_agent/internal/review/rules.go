@@ -29,7 +29,6 @@ type rule struct {
 }
 
 var (
-	dynamicShell = regexp.MustCompile(`exec\.Command(?:Context)?\([^\n]*(?:"(?:sh|bash)"\s*,\s*"-c"|[+]|fmt\.Sprintf)`)
 	sqlConcat    = regexp.MustCompile(`(?i)(query|exec|where|select|insert|update|delete)[^\n]*(?:\+|fmt\.Sprintf)`)
 	ignoredError = regexp.MustCompile(`(?:^|\s)_\s*:?=\s*[A-Za-z_][A-Za-z0-9_.]*\s*\(`)
 	nilOnError   = regexp.MustCompile(`if\s+err\s*!=\s*nil[^\n]*\{?\s*return\s+(?:nil|0|"")\s*(?:,\s*nil)?`)
@@ -61,7 +60,9 @@ func analyzeWithDecisions(input ParsedInput) (findings, warnings, needsHuman []F
 			id: "go/security/dynamic-shell", category: "security", severity: SeverityHigh,
 			title: "Dynamic shell command may permit command injection", confidence: .92,
 			recommendation: "Avoid shell interpretation; invoke a fixed executable with validated arguments.",
-			match:          func(line ChangedLine, _ map[string]string) bool { return dynamicShell.MatchString(line.Text) },
+			match: func(line ChangedLine, all map[string]string) bool {
+				return isDynamicShellCommand(line.Text) || strings.Contains(line.Text, "exec.Command") && isDynamicShellCommand(strings.ReplaceAll(all[line.File], "\n", " "))
+			},
 		},
 		{
 			id: "go/database/sql-concatenation", category: "database", severity: SeverityHigh,
@@ -132,9 +133,9 @@ func analyzeWithDecisions(input ParsedInput) (findings, warnings, needsHuman []F
 			}
 		}
 	}
-	if missingTests(input.Files) {
+	if file := missingTestFile(input); file != "" {
 		needsHuman = append(needsHuman, fingerprint(Finding{
-			Severity: SeverityLow, Category: "test_coverage", File: firstProductionGo(input.Files), Line: 1,
+			Severity: SeverityLow, Category: "test_coverage", File: file, Line: 1,
 			Title:          "Production Go changes have no accompanying test change",
 			Evidence:       "No changed file ends with _test.go.",
 			Recommendation: "Add focused tests for changed behavior, error paths, and lifecycle cleanup.",
@@ -148,6 +149,42 @@ func analyzeWithDecisions(input ParsedInput) (findings, warnings, needsHuman []F
 	warnings = dedupe(warnings)
 	needsHuman = dedupe(needsHuman)
 	return findings, warnings, needsHuman, decisions
+}
+
+func isDynamicShellCommand(line string) bool {
+	if !strings.Contains(line, "exec.Command") {
+		return false
+	}
+	shell := strings.Index(line, `"sh"`)
+	if bash := strings.Index(line, `"bash"`); shell < 0 || bash >= 0 && bash < shell {
+		shell = bash
+	}
+	if shell < 0 {
+		return false
+	}
+	cFlag := strings.Index(line[shell:], `"-c"`)
+	if cFlag < 0 {
+		return false
+	}
+	argument := strings.TrimSpace(line[shell+cFlag+len(`"-c"`):])
+	if !strings.HasPrefix(argument, ",") {
+		return false
+	}
+	argument = strings.TrimSpace(strings.TrimPrefix(argument, ","))
+	if argument == "" {
+		return false
+	}
+	if argument[0] != '"' && argument[0] != '`' {
+		return true
+	}
+	quote := argument[0]
+	for index := 1; index < len(argument); index++ {
+		if argument[index] == quote && (quote == '`' || argument[index-1] != '\\') {
+			remainder := strings.TrimSpace(argument[index+1:])
+			return strings.HasPrefix(remainder, "+") || strings.HasPrefix(remainder, ",") && strings.Contains(remainder, "+")
+		}
+	}
+	return true
 }
 
 func filterDecisions(values []Finding, bucket string, retainedAction FilterAction) []FilterDecision {
@@ -221,21 +258,33 @@ func findingLocationKey(value Finding) string {
 }
 
 func missingTests(files []string) bool {
-	production := false
-	for _, file := range files {
-		if strings.HasSuffix(file, "_test.go") {
-			return false
-		}
-		if strings.HasSuffix(file, ".go") {
-			production = true
-		}
-	}
-	return production
+	return missingTestFile(ParsedInput{Files: files}) != ""
 }
 
 func firstProductionGo(files []string) string {
 	for _, file := range files {
 		if strings.HasSuffix(file, ".go") && !strings.HasSuffix(file, "_test.go") {
+			return file
+		}
+	}
+	return ""
+}
+
+func missingTestFile(input ParsedInput) string {
+	testDirs := map[string]bool{}
+	for _, file := range input.Files {
+		if input.Statuses[file] == fileDeleted {
+			continue
+		}
+		if strings.HasSuffix(file, "_test.go") {
+			testDirs[packageFor(file)] = true
+		}
+	}
+	for _, file := range input.Files {
+		if input.Statuses[file] == fileDeleted || !strings.HasSuffix(file, ".go") || strings.HasSuffix(file, "_test.go") {
+			continue
+		}
+		if !testDirs[packageFor(file)] {
 			return file
 		}
 	}

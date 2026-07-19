@@ -11,18 +11,21 @@ $summary = Join-Path $OutputRoot "summary.tsv"
 
 Push-Location $root
 try {
-    foreach ($fixture in $fixtures) {
-        $dir = Join-Path $OutputRoot $fixture
-        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+	foreach ($fixture in $fixtures) {
+		$dir = Join-Path $OutputRoot $fixture
+		$taskID = "fixture-$fixture"
+		if (Test-Path -LiteralPath $dir) { Remove-Item -LiteralPath $dir -Recurse -Force }
+		New-Item -ItemType Directory -Path $dir -Force | Out-Null
         $db = Join-Path $dir "reviews.sqlite"
         if ($fixture -eq "sandbox_failure") {
-            go run . --fixture $fixture --executor fake-fail --output-dir $dir --db $db
-        } else {
-            go run . --fixture $fixture --dry-run --output-dir $dir --db $db
+			go run . --fixture $fixture --task-id $taskID --executor fake-fail --output-dir $dir --db $db
+		} else {
+			go run . --fixture $fixture --task-id $taskID --dry-run --output-dir $dir --db $db
         }
         if ($LASTEXITCODE -ne 0) { throw "fixture $fixture failed" }
-        $reportFile = Get-ChildItem -Path $dir -Filter review_report.json -Recurse | Select-Object -First 1
-        $report = Get-Content -LiteralPath $reportFile.FullName -Raw | ConvertFrom-Json
+		$reportFile = Join-Path $dir "$taskID\report\review_report.json"
+		if (-not (Test-Path -LiteralPath $reportFile)) { throw "missing report: $reportFile" }
+		$report = Get-Content -LiteralPath $reportFile -Raw | ConvertFrom-Json
         "$fixture`t$($report.findings.Count)`t$($report.warnings.Count)`t$($report.needs_human_review.Count)`t$($report.task.status)" |
             Add-Content -LiteralPath $summary -Encoding utf8
     }

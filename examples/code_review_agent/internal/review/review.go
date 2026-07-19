@@ -52,7 +52,10 @@ func Run(ctx context.Context, cfg Config) (Report, ReportPaths, error) {
 		return Report{}, ReportPaths{}, fmt.Errorf("initialize sandbox: %w", err)
 	}
 	defer sandboxRunner.Close()
-	runs, decisions, sandboxArtifacts := sandboxRunner.run(ctx, task.ID, cfg.RepoPath, input)
+	runs, decisions, sandboxArtifacts, err := sandboxRunner.run(ctx, task.ID, cfg.RepoPath, input)
+	if err != nil {
+		return Report{}, ReportPaths{}, fmt.Errorf("run sandbox checks: %w", err)
+	}
 	sandboxItems := sandboxReviewItems(runs)
 	needsHuman = append(needsHuman, sandboxItems...)
 	retainedAudit := filterAudit[:0]
@@ -71,10 +74,11 @@ func Run(ctx context.Context, cfg Config) (Report, ReportPaths, error) {
 	}
 	report.Metrics = collectMetrics(started, report)
 	report.Conclusion = conclusion(report)
-	report, paths, err := publish(report, cfg.OutputDir)
+	report, paths, staged, err := stageReport(report, cfg.OutputDir)
 	if err != nil {
 		return Report{}, ReportPaths{}, err
 	}
+	defer staged.cleanup()
 	store, err := openStore(cfg.DatabasePath)
 	if err != nil {
 		return Report{}, ReportPaths{}, fmt.Errorf("open review database: %w", err)
@@ -84,8 +88,17 @@ func Run(ctx context.Context, cfg Config) (Report, ReportPaths, error) {
 		return Report{}, ReportPaths{}, fmt.Errorf("store review: %w", err)
 	}
 	stored, err := store.Load(ctx, task.ID)
-	if err != nil || stored.Task.ID != task.ID {
-		return Report{}, ReportPaths{}, errors.New("stored review verification failed")
+	if err != nil {
+		return Report{}, ReportPaths{}, fmt.Errorf("load stored review: %w", err)
+	}
+	if stored.Task.ID != task.ID {
+		return Report{}, ReportPaths{}, errors.New("stored review task ID mismatch")
+	}
+	if err := staged.commit(); err != nil {
+		if rollbackErr := store.Delete(context.WithoutCancel(ctx), task.ID); rollbackErr != nil {
+			return Report{}, ReportPaths{}, fmt.Errorf("publish stored report: %w; rollback stored review: %v", err, rollbackErr)
+		}
+		return Report{}, ReportPaths{}, fmt.Errorf("publish stored report: %w", err)
 	}
 	return report, paths, nil
 }
@@ -162,7 +175,7 @@ func loadReviewSkill(baseDir string) error {
 func sandboxReviewItems(runs []SandboxRun) []Finding {
 	var result []Finding
 	for _, run := range runs {
-		if run.Status == RunSuccess || run.Status == RunSkipped && run.ErrorType == "tool_unavailable" || run.ErrorType == "dry_run" {
+		if run.Status == RunSuccess || run.Status == RunSkipped && run.ErrorType == ErrorToolUnavailable || run.ErrorType == ErrorDryRun {
 			continue
 		}
 		result = append(result, fingerprint(Finding{
@@ -179,7 +192,7 @@ func collectMetrics(started time.Time, report Report) Metrics {
 	metrics := Metrics{TotalDurationMS: time.Since(started).Milliseconds(), ToolCallCount: len(report.SandboxRuns), FindingCount: len(report.Findings), WarningCount: len(report.Warnings), NeedsHumanCount: len(report.NeedsHumanReview), SeverityDistribution: map[string]int{}, ErrorDistribution: map[string]int{}}
 	for _, run := range report.SandboxRuns {
 		metrics.SandboxDurationMS += run.DurationMS
-		if run.ErrorType != "" {
+		if run.ErrorType != "" && run.ErrorType != ErrorDryRun {
 			metrics.ErrorDistribution[string(run.ErrorType)]++
 		}
 	}
@@ -201,8 +214,13 @@ func collectMetrics(started time.Time, report Report) Metrics {
 
 func conclusion(report Report) string {
 	for _, finding := range report.Findings {
-		if finding.Severity == SeverityCritical {
+		if finding.Severity == SeverityCritical && finding.RuleID == "go/security/hardcoded-secret" {
 			return "Critical findings block merge until remediation and credential rotation are complete."
+		}
+	}
+	for _, finding := range report.Findings {
+		if finding.Severity == SeverityCritical {
+			return "Critical findings block merge until the reported issues are remediated."
 		}
 	}
 	if len(report.Findings) > 0 {

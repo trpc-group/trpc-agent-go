@@ -63,6 +63,13 @@ func TestTruncateRedactsBeforeBounding(t *testing.T) {
 	}
 }
 
+func TestTruncatePreservesUTF8(t *testing.T) {
+	got, cut := truncate("你好世界", 5)
+	if !cut || !strings.Contains(got, "你") || strings.ContainsRune(got, '\uFFFD') {
+		t.Fatalf("invalid UTF-8 truncation: %q", got)
+	}
+}
+
 func TestSandboxFailureBecomesHumanReview(t *testing.T) {
 	items := sandboxReviewItems([]SandboxRun{{Command: "go", Args: []string{"test", "./..."}, Status: "failed", ErrorType: "timeout", Stderr: "deadline"}})
 	if len(items) != 1 || items[0].Category != "sandbox" {

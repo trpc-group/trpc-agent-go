@@ -8,13 +8,18 @@ fixtures=(clean secret goroutine context resource database errors missing_test d
 mkdir -p "$output"
 printf 'fixture\tfindings\twarnings\tneeds_human_review\tstatus\n' >"$output/summary.tsv"
 for fixture in "${fixtures[@]}"; do
-  args=(--fixture "$fixture" --output-dir "$output/$fixture" --db "$output/$fixture/reviews.sqlite")
+	dir="$output/$fixture"
+	task_id="fixture-$fixture"
+	rm -rf -- "$dir"
+	mkdir -p "$dir"
+	args=(--fixture "$fixture" --task-id "$task_id" --output-dir "$dir" --db "$dir/reviews.sqlite")
   if [[ "$fixture" == sandbox_failure ]]; then
     args+=(--executor fake-fail)
   else
     args+=(--dry-run)
   fi
   (cd "$root" && go run . "${args[@]}")
-  report="$(find "$output/$fixture" -name review_report.json -type f | head -n 1)"
+	report="$dir/$task_id/report/review_report.json"
+	[[ -f "$report" ]] || { printf 'missing report: %s\n' "$report" >&2; exit 1; }
   jq -r --arg fixture "$fixture" '[$fixture, (.findings|length), (.warnings|length), (.needs_human_review|length), .task.status] | @tsv' "$report" >>"$output/summary.tsv"
 done

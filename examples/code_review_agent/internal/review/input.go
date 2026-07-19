@@ -16,6 +16,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -30,13 +31,17 @@ const maxInputBytes = 8 << 20
 var hunkHeader = regexp.MustCompile(`^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@`)
 
 func loadInput(ctx context.Context, cfg Config, baseDir string) (ParsedInput, string, error) {
+	cfg.DiffFile = strings.TrimSpace(cfg.DiffFile)
+	cfg.RepoPath = strings.TrimSpace(cfg.RepoPath)
+	cfg.FileList = strings.TrimSpace(cfg.FileList)
+	cfg.Fixture = strings.TrimSpace(cfg.Fixture)
 	modes := 0
 	primaryRepo := cfg.RepoPath
 	if cfg.FileList != "" {
 		primaryRepo = ""
 	}
 	for _, value := range []string{cfg.DiffFile, primaryRepo, cfg.FileList, cfg.Fixture} {
-		if strings.TrimSpace(value) != "" {
+		if value != "" {
 			modes++
 		}
 	}
@@ -71,15 +76,43 @@ func loadInput(ctx context.Context, cfg Config, baseDir string) (ParsedInput, st
 }
 
 func readBounded(path string) (string, error) {
-	info, err := os.Stat(path)
+	file, err := os.Open(path)
 	if err != nil {
 		return "", err
 	}
-	if info.Size() > maxInputBytes {
-		return "", fmt.Errorf("input exceeds %d bytes", maxInputBytes)
+	defer file.Close()
+	return readBoundedReader(file, "input")
+}
+
+func readBoundedReader(reader io.Reader, label string) (string, error) {
+	data, err := io.ReadAll(io.LimitReader(reader, maxInputBytes+1))
+	if err != nil {
+		return "", err
 	}
-	data, err := os.ReadFile(path)
-	return string(data), err
+	if len(data) > maxInputBytes {
+		return "", fmt.Errorf("%s exceeds %d bytes", label, maxInputBytes)
+	}
+	return string(data), nil
+}
+
+func commandOutputBounded(cmd *exec.Cmd, label string) (string, error) {
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return "", err
+	}
+	if err := cmd.Start(); err != nil {
+		return "", err
+	}
+	output, readErr := readBoundedReader(stdout, label)
+	if readErr != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return "", readErr
+	}
+	if err := cmd.Wait(); err != nil {
+		return "", err
+	}
+	return output, nil
 }
 
 func gitWorkingDiff(ctx context.Context, repo string) (string, error) {
@@ -89,20 +122,17 @@ func gitWorkingDiff(ctx context.Context, repo string) (string, error) {
 	}
 	cmd := exec.CommandContext(ctx, "git", "-c", "core.quotepath=false", "diff", "--no-ext-diff", "--unified=3", "HEAD", "--")
 	cmd.Dir = abs
-	out, err := cmd.Output()
+	out, err := commandOutputBounded(cmd, "git diff")
 	if err != nil {
 		return "", fmt.Errorf("read git diff: %w", err)
 	}
-	if len(out) > maxInputBytes {
-		return "", fmt.Errorf("git diff exceeds %d bytes", maxInputBytes)
-	}
 	untracked := exec.CommandContext(ctx, "git", "-c", "core.quotepath=false", "ls-files", "--others", "--exclude-standard")
 	untracked.Dir = abs
-	listed, err := untracked.Output()
+	listed, err := commandOutputBounded(untracked, "untracked file list")
 	if err != nil {
 		return "", fmt.Errorf("list untracked files: %w", err)
 	}
-	paths := nonEmptyLines(string(listed))
+	paths := nonEmptyLines(listed)
 	extra, err := synthesizeFiles(abs, paths)
 	if err != nil {
 		return "", err
@@ -110,7 +140,7 @@ func gitWorkingDiff(ctx context.Context, repo string) (string, error) {
 	if len(out)+len(extra) > maxInputBytes {
 		return "", fmt.Errorf("git input exceeds %d bytes", maxInputBytes)
 	}
-	return string(out) + extra, nil
+	return out + extra, nil
 }
 
 func diffFromFileList(repo, listPath string) (string, error) {
@@ -121,12 +151,12 @@ func diffFromFileList(repo, listPath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	data, err := os.ReadFile(listPath)
+	data, err := readBounded(listPath)
 	if err != nil {
 		return "", err
 	}
 	var paths []string
-	scanner := bufio.NewScanner(strings.NewReader(string(data)))
+	scanner := bufio.NewScanner(strings.NewReader(data))
 	for scanner.Scan() {
 		paths = append(paths, scanner.Text())
 	}
@@ -143,7 +173,7 @@ func synthesizeFiles(root string, paths []string) (string, error) {
 		if rel == "." || rel == "" {
 			continue
 		}
-		if rel == "." || filepath.IsAbs(rel) || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		if filepath.IsAbs(rel) || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 			return "", fmt.Errorf("unsafe file-list entry %q", rel)
 		}
 		full := filepath.Join(root, rel)
@@ -159,8 +189,9 @@ func synthesizeFiles(root string, paths []string) (string, error) {
 			return "", err
 		}
 		slash := filepath.ToSlash(rel)
-		fmt.Fprintf(&b, "diff --git a/%s b/%s\n--- /dev/null\n+++ b/%s\n@@ -0,0 +1,%d @@\n", slash, slash, slash, strings.Count(contents, "\n")+1)
-		for _, line := range strings.Split(strings.TrimSuffix(contents, "\n"), "\n") {
+		lines := fileLines(contents)
+		fmt.Fprintf(&b, "diff --git a/%s b/%s\n--- /dev/null\n+++ b/%s\n@@ -0,0 +1,%d @@\n", slash, slash, slash, len(lines))
+		for _, line := range lines {
 			b.WriteString("+")
 			b.WriteString(line)
 			b.WriteString("\n")
@@ -170,6 +201,13 @@ func synthesizeFiles(root string, paths []string) (string, error) {
 		}
 	}
 	return b.String(), nil
+}
+
+func fileLines(contents string) []string {
+	if contents == "" {
+		return nil
+	}
+	return strings.Split(strings.TrimSuffix(contents, "\n"), "\n")
 }
 
 func nonEmptyLines(value string) []string {
@@ -192,30 +230,46 @@ func ParseUnifiedDiff(raw string) (ParsedInput, error) {
 	if len(raw) > maxInputBytes {
 		return ParsedInput{}, fmt.Errorf("input exceeds %d bytes", maxInputBytes)
 	}
-	parsed := ParsedInput{Raw: raw, Context: map[string]string{}}
+	parsed := ParsedInput{Raw: raw, Context: map[string]string{}, Statuses: map[string]FileStatus{}}
 	files := map[string]bool{}
 	currentFile := ""
+	oldFile := ""
 	headerFile := ""
 	newLine := 0
 	inHunk := false
 	for _, line := range strings.Split(raw, "\n") {
 		switch {
 		case strings.HasPrefix(line, "diff --git "):
-			fields := strings.Fields(line)
-			if len(fields) >= 4 {
-				headerFile = cleanDiffPath(fields[3])
-				if headerFile != "" {
-					files[headerFile] = true
-				}
+			oldFile, currentFile = "", ""
+			headerFile = diffHeaderTarget(line)
+			inHunk = false
+		case strings.HasPrefix(line, "rename to "):
+			currentFile = cleanDiffPath(strings.TrimPrefix(line, "rename to "))
+			if currentFile != "" {
+				files[currentFile] = true
+				parsed.Statuses[currentFile] = fileModified
 			}
+		case strings.HasPrefix(line, "Binary files ") || strings.HasPrefix(line, "GIT binary patch"):
+			if headerFile != "" {
+				files[headerFile] = true
+				parsed.Statuses[headerFile] = fileModified
+			}
+		case strings.HasPrefix(line, "--- "):
+			oldFile = cleanDiffPath(strings.TrimPrefix(line, "--- "))
 			inHunk = false
 		case strings.HasPrefix(line, "+++ "):
-			currentFile = cleanDiffPath(strings.TrimPrefix(line, "+++ "))
-			if currentFile == "" {
-				currentFile = headerFile
+			newFile := cleanDiffPath(strings.TrimPrefix(line, "+++ "))
+			currentFile = newFile
+			status := fileModified
+			if oldFile == "" {
+				status = fileAdded
+			}
+			if newFile == "" {
+				currentFile, status = oldFile, fileDeleted
 			}
 			if currentFile != "" {
 				files[currentFile] = true
+				parsed.Statuses[currentFile] = status
 			}
 			inHunk = false
 		case hunkHeader.MatchString(line):
@@ -250,12 +304,53 @@ func ParseUnifiedDiff(raw string) (ParsedInput, error) {
 	return parsed, nil
 }
 
+func diffHeaderTarget(line string) string {
+	value := strings.TrimSpace(strings.TrimPrefix(line, "diff --git "))
+	for token := 0; token < 2; token++ {
+		var current string
+		if strings.HasPrefix(value, `"`) {
+			end := 1
+			for end < len(value) {
+				if value[end] == '"' && value[end-1] != '\\' {
+					end++
+					break
+				}
+				end++
+			}
+			if end > len(value) {
+				return ""
+			}
+			current = value[:end]
+			value = strings.TrimSpace(value[end:])
+		} else {
+			end := strings.IndexByte(value, ' ')
+			if end < 0 {
+				current, value = value, ""
+			} else {
+				current, value = value[:end], strings.TrimSpace(value[end+1:])
+			}
+		}
+		if token == 1 {
+			return cleanDiffPath(current)
+		}
+	}
+	return ""
+}
+
 func cleanDiffPath(value string) string {
 	value = strings.TrimSpace(value)
+	if tab := strings.IndexByte(value, '\t'); tab >= 0 {
+		value = value[:tab]
+	}
+	if strings.HasPrefix(value, `"`) {
+		if unquoted, err := strconv.Unquote(value); err == nil {
+			value = unquoted
+		}
+	}
 	if value == "/dev/null" {
 		return ""
 	}
-	value = strings.TrimPrefix(value, "b/")
+	value = strings.TrimPrefix(strings.TrimPrefix(value, "a/"), "b/")
 	value = filepath.ToSlash(filepath.Clean(value))
 	if value == "." || value == ".." || strings.HasPrefix(value, "../") || strings.HasPrefix(value, "/") {
 		return ""

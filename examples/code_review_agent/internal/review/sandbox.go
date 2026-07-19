@@ -22,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	dockercontainer "github.com/docker/docker/api/types/container"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	containerexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/container"
 	e2bexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/e2b"
@@ -29,9 +30,11 @@ import (
 )
 
 const (
-	maxSnapshotBytes = 32 << 20
-	maxSnapshotFiles = 2000
-	maxArtifactBytes = 1 << 20
+	maxSnapshotBytes  = 32 << 20
+	maxSnapshotFiles  = 2000
+	maxArtifactBytes  = 1 << 20
+	containerImageTag = "trpc-agent-go-code-review:go1.24"
+	cleanupTimeout    = 5 * time.Second
 )
 
 type sandbox struct {
@@ -48,7 +51,12 @@ type sandbox struct {
 type engineFactory func(context.Context, Config, string) (codeexecutor.Engine, func() error, error)
 
 var containerFactory engineFactory = func(_ context.Context, _ Config, baseDir string) (codeexecutor.Engine, func() error, error) {
-	executor, err := containerexec.New(containerexec.WithDockerFilePath(filepath.Join(baseDir, "sandbox")))
+	executor, err := containerexec.New(
+		containerexec.WithDockerFilePath(filepath.Join(baseDir, "sandbox")),
+		containerexec.WithContainerConfig(dockercontainer.Config{
+			Image: containerImageTag, WorkingDir: "/", Cmd: []string{"tail", "-f", "/dev/null"}, Tty: true, OpenStdin: true,
+		}),
+	)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -118,7 +126,7 @@ func (s *sandbox) Close() error {
 	return s.close()
 }
 
-func (s *sandbox) run(ctx context.Context, taskID, repoPath string, input ParsedInput) ([]SandboxRun, []PermissionDecision, []Artifact) {
+func (s *sandbox) run(ctx context.Context, taskID, repoPath string, input ParsedInput) (runs []SandboxRun, decisions []PermissionDecision, artifacts []Artifact, err error) {
 	type check struct {
 		command string
 		args    []string
@@ -132,57 +140,67 @@ func (s *sandbox) run(ctx context.Context, taskID, repoPath string, input Parsed
 			check{"staticcheck", []string{"./..."}, "work/repo"},
 		)
 	}
-	decisions := make([]PermissionDecision, 0, len(checks))
+	decisions = make([]PermissionDecision, 0, len(checks))
 	for _, item := range checks {
 		decisions = append(decisions, decide(ctx, item.command, item.args))
 	}
-	artifacts := []Artifact{s.writeDiffStats(taskID, input.Summary)}
+	stats, err := s.writeDiffStats(taskID, input.Summary)
+	if err != nil {
+		return nil, decisions, nil, fmt.Errorf("write diff statistics: %w", err)
+	}
+	artifacts = []Artifact{stats}
 	if s.initErr != nil {
-		return []SandboxRun{setupFailure(s.executor, "initialize_executor", s.initErr)}, decisions, artifacts
+		return []SandboxRun{setupFailure(s.executor, "initialize_executor", s.initErr, s.outputLimit)}, decisions, artifacts, nil
 	}
 	if s.engine == nil {
 		runs := make([]SandboxRun, 0, len(checks))
 		for index, item := range checks {
 			status := RunSkipped
-			errorType := ErrorType("dry_run")
+			errorType := ErrorDryRun
 			if s.executor == ExecutorFakeFailure && index == 0 {
-				status, errorType = RunFailed, "executor_error"
+				status, errorType = RunFailed, ErrorExecutor
 			}
 			if decisions[index].Action != PermissionAllow {
-				status, errorType = RunStatus(decisions[index].Action), "permission_decision"
+				status, errorType = RunStatus(decisions[index].Action), ErrorPermissionDecision
 			}
 			runs = append(runs, SandboxRun{Command: item.command, Args: item.args, Executor: s.executor, Status: status, ErrorType: errorType})
 		}
-		return runs, decisions, artifacts
+		return runs, decisions, artifacts, nil
 	}
 	ws, err := s.engine.Manager().CreateWorkspace(ctx, taskID, codeexecutor.WorkspacePolicy{Isolated: true})
 	if err != nil {
-		return []SandboxRun{setupFailure(s.executor, "create_workspace", err)}, decisions, artifacts
+		return []SandboxRun{setupFailure(s.executor, "create_workspace", err, s.outputLimit)}, decisions, artifacts, nil
 	}
-	defer s.engine.Manager().Cleanup(context.WithoutCancel(ctx), ws)
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
+		defer cancel()
+		if cleanupErr := s.engine.Manager().Cleanup(cleanupCtx, ws); cleanupErr != nil {
+			runs = append(runs, setupFailure(s.executor, "cleanup_workspace", cleanupErr, s.outputLimit))
+		}
+	}()
 	if err := s.engine.FS().StageDirectory(ctx, ws, s.skillDir, "skills/code-review", codeexecutor.StageOptions{ReadOnly: true}); err != nil {
-		return []SandboxRun{setupFailure(s.executor, "stage_skill", err)}, decisions, artifacts
+		return []SandboxRun{setupFailure(s.executor, "stage_skill", err, s.outputLimit)}, decisions, artifacts, nil
 	}
 	if err := s.engine.FS().PutFiles(ctx, ws, []codeexecutor.PutFile{{Path: "work/change.diff", Content: []byte(redact(input.Raw)), Mode: 0o600}}); err != nil {
-		return []SandboxRun{setupFailure(s.executor, "stage_diff", err)}, decisions, artifacts
+		return []SandboxRun{setupFailure(s.executor, "stage_diff", err, s.outputLimit)}, decisions, artifacts, nil
 	}
 	cleanup := func() {}
 	if strings.TrimSpace(repoPath) != "" {
 		snapshot, release, err := safeSnapshot(repoPath)
 		if err != nil {
-			return []SandboxRun{setupFailure(s.executor, "snapshot_repo", err)}, decisions, artifacts
+			return []SandboxRun{setupFailure(s.executor, "snapshot_repo", err, s.outputLimit)}, decisions, artifacts, nil
 		}
 		cleanup = release
 		if err := s.engine.FS().StageDirectory(ctx, ws, snapshot, "work/repo", codeexecutor.StageOptions{}); err != nil {
 			cleanup()
-			return []SandboxRun{setupFailure(s.executor, "stage_repo", err)}, decisions, artifacts
+			return []SandboxRun{setupFailure(s.executor, "stage_repo", err, s.outputLimit)}, decisions, artifacts, nil
 		}
 	}
 	defer cleanup()
-	runs := make([]SandboxRun, 0, len(checks))
+	runs = make([]SandboxRun, 0, len(checks))
 	for index, item := range checks {
 		if decisions[index].Action != PermissionAllow {
-			runs = append(runs, SandboxRun{Command: item.command, Args: item.args, Executor: s.executor, Status: RunStatus(decisions[index].Action), Stderr: decisions[index].Reason, ErrorType: "permission_decision"})
+			runs = append(runs, SandboxRun{Command: item.command, Args: item.args, Executor: s.executor, Status: RunStatus(decisions[index].Action), Stderr: decisions[index].Reason, ErrorType: ErrorPermissionDecision})
 			continue
 		}
 		if runtime.GOOS == "windows" && s.executor == ExecutorLocalDev && item.command == "bash" {
@@ -191,7 +209,7 @@ func (s *sandbox) run(ctx context.Context, taskID, repoPath string, input Parsed
 		}
 		runs = append(runs, s.execute(ctx, ws, item.command, item.args, item.cwd))
 	}
-	return runs, decisions, artifacts
+	return runs, decisions, artifacts, nil
 }
 
 func (s *sandbox) execute(ctx context.Context, ws codeexecutor.Workspace, command string, args []string, cwd string) SandboxRun {
@@ -201,21 +219,40 @@ func (s *sandbox) execute(ctx context.Context, ws codeexecutor.Workspace, comman
 	})
 	stdout, stdoutCut := truncate(result.Stdout, s.outputLimit)
 	stderr, stderrCut := truncate(result.Stderr, s.outputLimit)
-	stdout, stderr = redact(stdout), redact(stderr)
 	run := SandboxRun{Command: command, Args: args, Executor: s.executor, Status: RunSuccess, ExitCode: result.ExitCode, Stdout: stdout, Stderr: stderr, Duration: time.Since(started), DurationMS: time.Since(started).Milliseconds(), TimedOut: result.TimedOut, OutputTruncated: stdoutCut || stderrCut}
 	if err != nil {
-		run.Status, run.ErrorType, run.Stderr = RunFailed, classifyExecutionError(err), redact(strings.TrimSpace(stderr+"\n"+err.Error()))
+		combined, cut := truncate(strings.TrimSpace(result.Stderr+"\n"+err.Error()), s.outputLimit)
+		run.Status, run.ErrorType, run.Stderr = RunFailed, classifyExecutionError(err), combined
+		run.OutputTruncated = run.OutputTruncated || cut
 	}
 	if result.ExitCode != 0 && run.Status == "success" {
-		run.Status, run.ErrorType = RunFailed, "non_zero_exit"
+		run.Status, run.ErrorType = RunFailed, ErrorNonZeroExit
 	}
 	if result.TimedOut {
-		run.Status, run.ErrorType = RunFailed, "timeout"
+		run.Status, run.ErrorType = RunFailed, ErrorTimeout
 	}
-	if command == "staticcheck" && (strings.Contains(strings.ToLower(run.Stderr), "not found") || run.ExitCode == -1) {
-		run.Status, run.ErrorType = RunSkipped, "tool_unavailable"
+	if run.ErrorType != ErrorTimeout && command == "staticcheck" && commandNotFound(run.Stderr) {
+		run.Status, run.ErrorType = RunSkipped, ErrorToolUnavailable
+	}
+	if run.ErrorType != ErrorTimeout && (command == "go" || command == "staticcheck") && dependencyUnavailable(run.Stderr) {
+		run.Status, run.ErrorType = RunSkipped, ErrorDependencyUnavailable
 	}
 	return run
+}
+
+func commandNotFound(value string) bool {
+	lower := strings.ToLower(value)
+	return strings.Contains(lower, "command not found") || strings.Contains(lower, "executable file not found") || strings.Contains(lower, "staticcheck: not found") || strings.TrimSpace(lower) == "not found"
+}
+
+func dependencyUnavailable(value string) bool {
+	lower := strings.ToLower(value)
+	for _, marker := range []string{"missing go.sum entry", "no required module provides package", "cannot find module providing package", "module lookup disabled by goproxy=off"} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func reviewEnvironment(executor Executor) map[string]string {
@@ -279,7 +316,7 @@ func safeSnapshot(repo string) (string, func(), error) {
 		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
 			return err
 		}
-		return copyBoundedFile(current, target, info.Size())
+		return copyBoundedFile(current, target, info)
 	})
 	if err != nil {
 		cleanup()
@@ -288,8 +325,8 @@ func safeSnapshot(repo string) (string, func(), error) {
 	return dest, cleanup, nil
 }
 
-func copyBoundedFile(source, target string, size int64) error {
-	if size > maxSnapshotBytes {
+func copyBoundedFile(source, target string, original fs.FileInfo) error {
+	if original.Size() > maxSnapshotBytes {
 		return errors.New("snapshot file too large")
 	}
 	in, err := os.Open(source)
@@ -297,32 +334,55 @@ func copyBoundedFile(source, target string, size int64) error {
 		return err
 	}
 	defer in.Close()
+	opened, err := in.Stat()
+	if err != nil {
+		return err
+	}
+	if !opened.Mode().IsRegular() || !os.SameFile(original, opened) || opened.Size() != original.Size() {
+		return errors.New("snapshot source changed while opening")
+	}
 	out, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
 	defer out.Close()
-	_, err = io.CopyN(out, in, size)
-	return err
-}
-
-func (s *sandbox) writeDiffStats(taskID string, summary DiffSummary) Artifact {
-	dir := filepath.Join(s.outputDir, taskID)
-	_ = os.MkdirAll(dir, 0o700)
-	file := filepath.Join(dir, "diff_stats.json")
-	data, _ := json.MarshalIndent(map[string]int{"files_changed": summary.FilesChanged, "added_lines": summary.AddedLines, "deleted_lines": summary.DeletedLines}, "", "  ")
-	if len(data) <= maxArtifactBytes {
-		_ = os.WriteFile(file, append(data, '\n'), 0o600)
+	written, err := io.Copy(out, io.LimitReader(in, original.Size()+1))
+	if err != nil {
+		return err
 	}
-	return Artifact{Name: "diff_stats.json", Path: file, MIMEType: "application/json", SizeBytes: int64(len(data) + 1)}
+	if written != original.Size() {
+		return errors.New("snapshot source changed while copying")
+	}
+	return out.Sync()
 }
 
-func setupFailure(executor Executor, operation string, err error) SandboxRun {
-	return SandboxRun{Command: operation, Executor: executor, Status: "failed", ErrorType: "setup_error", Stderr: redact(err.Error())}
+func (s *sandbox) writeDiffStats(taskID string, summary DiffSummary) (Artifact, error) {
+	dir := filepath.Join(s.outputDir, taskID)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return Artifact{}, err
+	}
+	file := filepath.Join(dir, "diff_stats.json")
+	data, err := json.MarshalIndent(map[string]int{"files_changed": summary.FilesChanged, "added_lines": summary.AddedLines, "deleted_lines": summary.DeletedLines}, "", "  ")
+	if err != nil {
+		return Artifact{}, err
+	}
+	data = append(data, '\n')
+	if len(data) > maxArtifactBytes {
+		return Artifact{}, errors.New("diff statistics exceed artifact limit")
+	}
+	if err := atomicWrite(file, data); err != nil {
+		return Artifact{}, err
+	}
+	return Artifact{Name: "diff_stats.json", Path: file, MIMEType: "application/json", SizeBytes: int64(len(data))}, nil
+}
+
+func setupFailure(executor Executor, operation string, err error, outputLimit int) SandboxRun {
+	stderr, cut := truncate(err.Error(), outputLimit)
+	return SandboxRun{Command: operation, Executor: executor, Status: RunFailed, ErrorType: ErrorSetup, Stderr: stderr, OutputTruncated: cut}
 }
 func classifyExecutionError(err error) ErrorType {
 	if errors.Is(err, context.DeadlineExceeded) || strings.Contains(strings.ToLower(err.Error()), "timeout") {
-		return "timeout"
+		return ErrorTimeout
 	}
-	return "executor_error"
+	return ErrorExecutor
 }

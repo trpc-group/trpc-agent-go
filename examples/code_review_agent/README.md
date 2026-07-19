@@ -15,8 +15,8 @@ go run . --fixture secret --dry-run --output-dir output --db output/reviews.sqli
 The command prints its task ID and the exact paths to:
 
 ```text
-output/<task-id>/review_report.json
-output/<task-id>/review_report.md
+output/<task-id>/report/review_report.json
+output/<task-id>/report/review_report.md
 output/<task-id>/diff_stats.json
 ```
 
@@ -80,6 +80,6 @@ go test -count=1 -cover ./internal/review
 
 Core tests cover diff line mapping, file-list traversal, rule fixtures, clean-diff false positives, deduplication, credential redaction, Permission decisions, sandbox failure recovery, safe repository snapshots, SQLite round trips, and report sections.
 
-The current core-package coverage is `85.6% of statements`.
+The current core-package coverage is `85.5% of statements`.
 
 See [DESIGN.md](DESIGN.md) for the 300–500 Chinese-character design summary and `sample_output/` for checked-in report examples.

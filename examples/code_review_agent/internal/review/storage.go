@@ -42,6 +42,8 @@ type Store interface {
 	LoadFindings(context.Context, string, string) ([]Finding, error)
 	// LoadArtifacts retrieves published artifacts by task ID.
 	LoadArtifacts(context.Context, string) ([]Artifact, error)
+	// Delete removes a report and all normalized audit records atomically.
+	Delete(context.Context, string) error
 	// Close releases the store resources.
 	Close() error
 }
@@ -49,16 +51,37 @@ type Store interface {
 type sqliteStore struct{ db *sql.DB }
 
 func openStore(path string) (Store, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite3", path+"?_busy_timeout=5000&_foreign_keys=on")
+	if err := os.Chmod(dir, 0o700); err != nil {
+		return nil, err
+	}
+	_, statErr := os.Stat(path)
+	created := os.IsNotExist(statErr)
+	cleanup := func() {
+		if !created {
+			return
+		}
+		for _, suffix := range []string{"", "-journal", "-wal", "-shm"} {
+			_ = os.Remove(path + suffix)
+		}
+	}
+	db, err := sql.Open("sqlite3", path+"?_busy_timeout=5000&_foreign_keys=on&_journal_mode=DELETE")
 	if err != nil {
+		cleanup()
 		return nil, err
 	}
 	store := &sqliteStore{db: db}
 	if err := store.migrate(); err != nil {
 		db.Close()
+		cleanup()
+		return nil, err
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		db.Close()
+		cleanup()
 		return nil, err
 	}
 	return store, nil
@@ -92,7 +115,10 @@ func (s *sqliteStore) Save(ctx context.Context, report Report) error {
 		return err
 	}
 	for index, run := range report.SandboxRuns {
-		payload, _ := json.Marshal(run)
+		payload, err := json.Marshal(run)
+		if err != nil {
+			return fmt.Errorf("encode sandbox run %d: %w", index, err)
+		}
 		if _, err = tx.ExecContext(ctx, `INSERT INTO sandbox_runs(task_id,ordinal,command,executor,status,exit_code,error_type,payload_json) VALUES(?,?,?,?,?,?,?,?)`, report.Task.ID, index, run.Command, run.Executor, run.Status, run.ExitCode, run.ErrorType, string(payload)); err != nil {
 			return err
 		}
@@ -109,7 +135,10 @@ func (s *sqliteStore) Save(ctx context.Context, report Report) error {
 	}
 	for bucket, findings := range map[string][]Finding{"finding": report.Findings, "warning": report.Warnings, "needs_human_review": report.NeedsHumanReview} {
 		for _, finding := range findings {
-			payload, _ := json.Marshal(finding)
+			payload, err := json.Marshal(finding)
+			if err != nil {
+				return fmt.Errorf("encode %s finding: %w", bucket, err)
+			}
 			if _, err = tx.ExecContext(ctx, `INSERT INTO findings(task_id,bucket,fingerprint,severity,category,file,line,payload_json) VALUES(?,?,?,?,?,?,?,?)`, report.Task.ID, bucket, finding.Fingerprint, finding.Severity, finding.Category, finding.File, finding.Line, string(payload)); err != nil {
 				return err
 			}
@@ -120,8 +149,14 @@ func (s *sqliteStore) Save(ctx context.Context, report Report) error {
 			return err
 		}
 	}
-	metrics, _ := json.Marshal(report.Metrics)
-	payload, _ := json.Marshal(report)
+	metrics, err := json.Marshal(report.Metrics)
+	if err != nil {
+		return fmt.Errorf("encode review metrics: %w", err)
+	}
+	payload, err := json.Marshal(report)
+	if err != nil {
+		return fmt.Errorf("encode review report: %w", err)
+	}
 	if _, err = tx.ExecContext(ctx, `INSERT INTO review_metrics(task_id,payload_json) VALUES(?,?)`, report.Task.ID, string(metrics)); err != nil {
 		return err
 	}
@@ -258,6 +293,24 @@ func (s *sqliteStore) LoadArtifacts(ctx context.Context, taskID string) ([]Artif
 		values = append(values, value)
 	}
 	return values, rows.Err()
+}
+
+func (s *sqliteStore) Delete(ctx context.Context, taskID string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, table := range []string{"review_reports", "review_metrics", "artifacts", "findings", "filter_decisions", "permission_decisions", "sandbox_runs", "review_inputs", "review_tasks"} {
+		column := "task_id"
+		if table == "review_tasks" {
+			column = "id"
+		}
+		if _, err := tx.ExecContext(ctx, "DELETE FROM "+table+" WHERE "+column+"=?", taskID); err != nil {
+			return fmt.Errorf("delete %s records: %w", table, err)
+		}
+	}
+	return tx.Commit()
 }
 
 func (s *sqliteStore) Close() error { return s.db.Close() }

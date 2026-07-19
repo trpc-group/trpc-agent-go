@@ -88,6 +88,12 @@ func TestDryRunCompletesReportsAndPersistence(t *testing.T) {
 			t.Fatalf("plaintext secret leaked into %s", path)
 		}
 	}
+	if err := store.Delete(context.Background(), report.Task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Load(context.Background(), report.Task.ID); err == nil {
+		t.Fatal("deleted report remained queryable")
+	}
 }
 
 func TestSandboxFailureDoesNotAbortReview(t *testing.T) {
@@ -135,10 +141,68 @@ func TestMarkdownContainsRequiredAuditSections(t *testing.T) {
 	}
 }
 
+func TestMarkdownEscapesUntrustedFields(t *testing.T) {
+	report := Report{
+		Task:       Task{ID: "review-test", Status: TaskCompleted},
+		Findings:   []Finding{{Severity: SeverityHigh, Category: "x|y", File: "<script>|a.go", Title: "`title`", Evidence: "line1\nline2", Recommendation: "<b>fix</b>"}},
+		Metrics:    Metrics{SeverityDistribution: map[string]int{}},
+		Conclusion: "<script>alert(1)</script>",
+	}
+	text := string(renderMarkdown(report))
+	for _, unsafe := range []string{"<script>", "<b>", "x|y", "`title`"} {
+		if strings.Contains(text, unsafe) {
+			t.Fatalf("unsafe Markdown remained in report: %q", unsafe)
+		}
+	}
+	if !strings.Contains(text, `x\|y`) || !strings.Contains(text, "&lt;script&gt;") {
+		t.Fatalf("escaped fields missing: %s", text)
+	}
+}
+
+func TestPublishCommitsReportPairOnlyOnce(t *testing.T) {
+	dir := t.TempDir()
+	report := Report{Task: Task{ID: "pair", Status: TaskCompleted}, Metrics: Metrics{SeverityDistribution: map[string]int{}}}
+	_, paths, err := publish(report, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{paths.JSON, paths.Markdown} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("published pair is incomplete: %v", err)
+		}
+	}
+	if _, _, err := publish(report, dir); err == nil {
+		t.Fatal("existing report pair was overwritten")
+	}
+}
+
+func TestRunRollsBackStoreWhenReportCommitFails(t *testing.T) {
+	dir := t.TempDir()
+	taskID := "commit-collision"
+	if err := os.MkdirAll(filepath.Join(dir, taskID, "report"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	dbPath := filepath.Join(dir, "reviews.sqlite")
+	if _, _, err := Run(context.Background(), Config{TaskID: taskID, Fixture: "clean", DryRun: true, OutputDir: dir, DatabasePath: dbPath}); err == nil {
+		t.Fatal("report commit collision was ignored")
+	}
+	store, err := openStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if _, err := store.Load(context.Background(), taskID); err == nil {
+		t.Fatal("failed publication left a completed report in storage")
+	}
+}
+
 func TestExecutorInitializationFailureIsReported(t *testing.T) {
 	dir := t.TempDir()
 	runner := &sandbox{executor: "container", initErr: context.DeadlineExceeded, outputDir: dir}
-	runs, decisions, artifacts := runner.run(context.Background(), "task-init-failure", "", ParsedInput{})
+	runs, decisions, artifacts, err := runner.run(context.Background(), "task-init-failure", "", ParsedInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(runs) != 1 || runs[0].Status != "failed" || runs[0].ErrorType != "setup_error" {
 		t.Fatalf("unexpected runs: %+v", runs)
 	}
