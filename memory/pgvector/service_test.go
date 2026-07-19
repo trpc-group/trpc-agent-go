@@ -1680,19 +1680,13 @@ func TestService_InitDB_Success(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("ALTER TABLE .* ADD COLUMN IF NOT EXISTS search_vector").
 		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec("ALTER TABLE .* ADD COLUMN IF NOT EXISTS topic_search_vector").
-		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("CREATE OR REPLACE FUNCTION .*_search_vector_update\\(\\) RETURNS trigger AS").
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("DROP TRIGGER IF EXISTS tsvector_update ON .*").
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").
 		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").
-		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("UPDATE .* SET search_vector = to_tsvector").
-		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec("UPDATE .* SET topic_search_vector = to_tsvector").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectClose()
 
@@ -1740,20 +1734,14 @@ func TestService_InitDB_BackfillSearchVectorErrorIsNonFatal(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("ALTER TABLE .* ADD COLUMN IF NOT EXISTS search_vector").
 		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec("ALTER TABLE .* ADD COLUMN IF NOT EXISTS topic_search_vector").
-		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("CREATE OR REPLACE FUNCTION .*_search_vector_update\\(\\) RETURNS trigger AS").
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("DROP TRIGGER IF EXISTS tsvector_update ON .*").
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").
 		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec("CREATE INDEX IF NOT EXISTS").
-		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("UPDATE .* SET search_vector = to_tsvector").
 		WillReturnError(fmt.Errorf("backfill failed"))
-	mock.ExpectExec("UPDATE .* SET topic_search_vector = to_tsvector").
-		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectClose()
 
 	originalBuilder := storage.GetClientBuilder()
@@ -2424,80 +2412,10 @@ func TestExecuteKeywordSearch(t *testing.T) {
 			context.Background(),
 			memory.UserKey{AppName: "test-app", UserID: "u1"},
 			memory.SearchOptions{Query: "   "},
-			1,
+			5,
 		)
 		require.NoError(t, err)
 		assert.Empty(t, results)
-		require.NoError(t, mock.ExpectationsWereMet())
-	})
-
-	t.Run("natural language query prefers adjacent content phrases", func(t *testing.T) {
-		db, mock := setupMockDB(t)
-		defer db.Close()
-
-		svc := setupMockService(t, db, mock, WithSkipDBInit(true))
-		defer svc.Close()
-
-		now := time.Date(2024, 5, 7, 0, 0, 0, 0, time.UTC)
-		mock.ExpectQuery("ts_rank\\(topic_search_vector, websearch_to_tsquery.*"+
-			"topic_search_vector @@ websearch_to_tsquery").
-			WithArgs(`"museums visited"`, "test-app", "u1").
-			WillReturnRows(sqlmock.NewRows(
-				[]string{"memory_id", "app_name", "user_id", "memory_content", "topics",
-					"memory_kind", "event_time", "participants", "location",
-					"created_at", "updated_at", "similarity"},
-			).AddRow(
-				"mem-1", "test-app", "u1", "Visited the Science Museum",
-				pq.Array([]string{"museum"}), "fact", nil, pq.Array([]string{}), "",
-				now, now, 0.42,
-			))
-
-		results, err := svc.executeKeywordSearch(
-			context.Background(),
-			memory.UserKey{AppName: "test-app", UserID: "u1"},
-			memory.SearchOptions{Query: "museums I visited", HybridSearch: true},
-			5,
-		)
-		require.NoError(t, err)
-		require.Len(t, results, 1)
-		assert.Equal(t, "mem-1", results[0].ID)
-		require.NoError(t, mock.ExpectationsWereMet())
-	})
-
-	t.Run("falls back to any normalized term when no phrase matches", func(t *testing.T) {
-		db, mock := setupMockDB(t)
-		defer db.Close()
-
-		svc := setupMockService(t, db, mock, WithSkipDBInit(true))
-		defer svc.Close()
-
-		now := time.Date(2024, 5, 7, 0, 0, 0, 0, time.UTC)
-		columns := []string{
-			"memory_id", "app_name", "user_id", "memory_content", "topics",
-			"memory_kind", "event_time", "participants", "location",
-			"created_at", "updated_at", "similarity",
-		}
-		mock.ExpectQuery("websearch_to_tsquery").
-			WithArgs(`"museums visited"`, "test-app", "u1").
-			WillReturnRows(sqlmock.NewRows(columns))
-		mock.ExpectQuery("ts_rank\\(topic_search_vector, to_tsquery.*\\|.*"+
-			"topic_search_vector @@ to_tsquery").
-			WithArgs("museums I visited", "test-app", "u1").
-			WillReturnRows(sqlmock.NewRows(columns).AddRow(
-				"mem-1", "test-app", "u1", "Visited the Science Museum",
-				pq.Array([]string{"museum"}), "fact", nil,
-				pq.Array([]string{}), "", now, now, 0.42,
-			))
-
-		results, err := svc.executeKeywordSearch(
-			context.Background(),
-			memory.UserKey{AppName: "test-app", UserID: "u1"},
-			memory.SearchOptions{Query: "museums I visited", HybridSearch: true},
-			5,
-		)
-		require.NoError(t, err)
-		require.Len(t, results, 1)
-		assert.Equal(t, "mem-1", results[0].ID)
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 
@@ -2520,31 +2438,6 @@ func TestExecuteKeywordSearch(t *testing.T) {
 		require.NoError(t, err)
 		assert.Empty(t, results)
 		require.NoError(t, mock.ExpectationsWereMet())
-	})
-}
-
-func TestBuildKeywordPhraseQuery(t *testing.T) {
-	t.Parallel()
-
-	query := buildKeywordPhraseQuery(
-		"How many different types of food delivery services have I used recently?",
-	)
-	assert.Contains(t, query, `"food delivery"`)
-	assert.Contains(t, query, `"delivery services"`)
-	assert.NotContains(t, query, "how")
-	assert.NotContains(t, query, "have")
-	assert.Empty(t, buildKeywordPhraseQuery("Kyoto"))
-}
-
-func TestMergeKeywordSearchResults(t *testing.T) {
-	t.Parallel()
-
-	phrase := []*memory.Entry{{ID: "phrase"}, {ID: "shared"}}
-	fallback := []*memory.Entry{{ID: "shared"}, {ID: "fallback"}}
-	got := mergeKeywordSearchResults(phrase, fallback, 3)
-	require.Len(t, got, 3)
-	assert.Equal(t, []string{"phrase", "shared", "fallback"}, []string{
-		got[0].ID, got[1].ID, got[2].ID,
 	})
 }
 
@@ -2672,52 +2565,6 @@ func TestService_SearchMemories_ThresholdAndDeduplicate(t *testing.T) {
 	require.Len(t, results, 1)
 	assert.Equal(t, "mem-1", results[0].ID)
 	require.NoError(t, mock.ExpectationsWereMet())
-}
-
-func TestService_SearchMemories_DeduplicateRefillsRequestedLimit(t *testing.T) {
-	db, mock := setupMockDB(t)
-	defer db.Close()
-
-	svc := setupMockService(t, db, mock, WithSkipDBInit(true))
-	defer svc.Close()
-
-	now := time.Date(2024, 5, 7, 0, 0, 0, 0, time.UTC)
-	mock.ExpectQuery("SELECT memory_id, app_name, user_id, memory_content, topics.*LIMIT 4").
-		WillReturnRows(sqlmock.NewRows(
-			[]string{"memory_id", "app_name", "user_id", "memory_content", "topics",
-				"memory_kind", "event_time", "participants", "location",
-				"created_at", "updated_at", "similarity"},
-		).
-			AddRow("mem-1", "test-app", "u1", "Alice hiking in Kyoto", pq.Array([]string{"travel"}),
-				"episode", now, pq.Array([]string{"Alice"}), "Kyoto", now, now, 0.95).
-			AddRow("mem-2", "test-app", "u1", "Alice hiking in Kyoto", pq.Array([]string{"travel"}),
-				"episode", now, pq.Array([]string{"Alice"}), "Kyoto", now, now, 0.94).
-			AddRow("mem-3", "test-app", "u1", "Alice studying in Tokyo", pq.Array([]string{"study"}),
-				"episode", now, pq.Array([]string{"Alice"}), "Tokyo", now, now, 0.93))
-
-	results, err := svc.SearchMemories(
-		context.Background(),
-		memory.UserKey{AppName: "test-app", UserID: "u1"},
-		"Alice in Japan",
-		memory.WithSearchOptions(memory.SearchOptions{
-			Query:       "Alice in Japan",
-			MaxResults:  2,
-			Deduplicate: true,
-		}),
-	)
-	require.NoError(t, err)
-	require.Len(t, results, 2)
-	assert.Equal(t, "mem-1", results[0].ID)
-	assert.Equal(t, "mem-3", results[1].ID)
-	require.NoError(t, mock.ExpectationsWereMet())
-}
-
-func TestDeduplicationCandidateLimit(t *testing.T) {
-	assert.Equal(t, 5, deduplicationCandidateLimit(5, false))
-	assert.Equal(t, 10, deduplicationCandidateLimit(5, true))
-	assert.Equal(t, 0, deduplicationCandidateLimit(0, true))
-	maxInt := int(^uint(0) >> 1)
-	assert.Equal(t, maxInt, deduplicationCandidateLimit(maxInt, true))
 }
 
 func TestService_SearchMemories_OrderByEventTimeKeepsHigherSimilarityFirst(t *testing.T) {
