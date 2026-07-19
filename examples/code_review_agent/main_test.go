@@ -25,8 +25,9 @@ import (
 )
 
 // allRuleIDs is the complete set of rule IDs implemented by the rules engine
-// plus the AST rule engine and the fake LLM heuristics. It is used by the
-// clean-fixture assertion to verify that no rules fire on a benign diff.
+// plus the AST rule engine, the fake LLM heuristics, and the sandbox
+// diagnostic parser. It is used by the clean-fixture assertion to verify
+// that no rules fire on a benign diff.
 var allRuleIDs = []string{
 	"SI-001", "SC-001", "SC-002", "SC-003",
 	"GL-001", "GL-002", "GL-003",
@@ -34,6 +35,7 @@ var allRuleIDs = []string{
 	"DB-001", "DB-002",
 	"AST-001", "AST-002", "AST-003", "AST-004",
 	"LLM-001", "LLM-002", "LLM-003",
+	"DIAG-001", "DIAG-002",
 }
 
 // fixtureCase describes a single integration test case.

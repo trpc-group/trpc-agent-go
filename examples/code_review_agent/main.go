@@ -37,6 +37,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/astrules"
+	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/diagparse"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/fakellm"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/inputsource"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/permission"
@@ -209,7 +210,8 @@ func runPipeline(ctx context.Context, opts *pipelineOpts) (retErr error) {
 		log.Printf("redacted %d sensitive occurrence(s) in diff text", n)
 	}
 
-	rev = runRules(taskID, input, metrics, opts.model)
+	ruleFindings, revReport := runRules(taskID, input, metrics, opts.model)
+	rev = revReport
 	log.Printf("rules: %d confirmed finding(s), %d warning(s), %d need human review",
 		len(rev.Findings), len(rev.Warnings), len(rev.NeedsHumanReview))
 
@@ -241,6 +243,23 @@ func runPipeline(ctx context.Context, opts *pipelineOpts) (retErr error) {
 	}
 	runRecords = runs
 	permDecisions = perms
+
+	// Phase 3.3: parse go vet / staticcheck output from sandbox runs into
+	// structured findings. The diag findings are merged with the rule
+	// findings and the report is re-aggregated so the diagnostics appear
+	// as first-class findings (DIAG-001 / DIAG-002) in the report.
+	// Borrowed from competitor PR #2243.
+	if diagFindings := parseDiagFindings(runRecords); len(diagFindings) > 0 {
+		for _, f := range diagFindings {
+			metrics.IncFinding(f.Severity)
+		}
+		merged := make([]rules.Finding, 0, len(ruleFindings)+len(diagFindings))
+		merged = append(merged, ruleFindings...)
+		merged = append(merged, diagFindings...)
+		rev = review.Build(taskID, merged)
+		log.Printf("diag: %d diagnostic finding(s) merged (total: %d confirmed, %d warning, %d need human review)",
+			len(diagFindings), len(rev.Findings), len(rev.Warnings), len(rev.NeedsHumanReview))
+	}
 
 	rd, jsonPath, mdPath, err := buildAndPersistReport(
 		ctx, st, opts, taskID, input, rev,
@@ -284,7 +303,12 @@ func loadInput(ctx context.Context, opts *pipelineOpts) (*inputsource.Input, err
 // findings before report aggregation. This exercises the LLM integration
 // path end-to-end without requiring API keys. Borrowed from competitor
 // PR #2243's --fake-model flag.
-func runRules(taskID string, input *inputsource.Input, metrics *telemetry.Metrics, modelFlag string) *review.Report {
+//
+// The function returns both the raw rules.Finding slice and the aggregated
+// review.Report. The raw findings are returned so the caller can merge in
+// diagnostic findings from sandbox output (Phase 3.3) and re-aggregate the
+// report via review.Build without losing the rule findings.
+func runRules(taskID string, input *inputsource.Input, metrics *telemetry.Metrics, modelFlag string) ([]rules.Finding, *review.Report) {
 	engine := rules.NewEngine()
 	ruleFindings := engine.Run(input.Files)
 	astEngine := astrules.NewEngine()
@@ -299,7 +323,7 @@ func runRules(taskID string, input *inputsource.Input, metrics *telemetry.Metric
 	for _, f := range ruleFindings {
 		metrics.IncFinding(f.Severity)
 	}
-	return review.Build(taskID, ruleFindings)
+	return ruleFindings, review.Build(taskID, ruleFindings)
 }
 
 // runFakeLLM drives the deterministic fake LLM against the diff text and
@@ -343,6 +367,35 @@ func runFakeLLM(input *inputsource.Input) []rules.Finding {
 	}
 	log.Printf("fake llm: %d finding(s) emitted", len(out))
 	return out
+}
+
+// parseDiagFindings converts the stdout/stderr of sandboxed go vet and
+// staticcheck runs into structured rules.Finding values via the
+// diagparse package. Skipped and empty runs produce no findings. The
+// returned findings are tagged with Source="diag:DIAG-xxx" and merged
+// with rule findings in the pipeline so tool diagnostics surface as
+// first-class findings in the report. Borrowed from competitor PR #2243.
+func parseDiagFindings(records []sandboxRunRecord) []rules.Finding {
+	if len(records) == 0 {
+		return nil
+	}
+	inputs := make([]diagparse.RunInput, 0, len(records))
+	for _, r := range records {
+		// Skipped runs (no repo staged) and empty-output runs contribute
+		// nothing — skip them to avoid handing the parser empty bytes.
+		if r.result.Status == sandbox.StatusSkipped {
+			continue
+		}
+		inputs = append(inputs, diagparse.RunInput{
+			Command: r.command,
+			Stdout:  r.result.Stdout,
+			Stderr:  r.result.Stderr,
+		})
+	}
+	if len(inputs) == 0 {
+		return nil
+	}
+	return diagparse.FromRuns(inputs)
 }
 
 // resolveSkillsDir resolves the skills/ directory path. It checks the
