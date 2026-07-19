@@ -36,6 +36,7 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
+	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/astrules"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/inputsource"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/permission"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/redact"
@@ -60,6 +61,16 @@ type cliFlags struct {
 	unsafeLocal bool
 	dryRun      bool
 	model       string
+	// PR metadata embedded in the report header so CI-generated reports
+	// carry the context reviewers need without opening the diff. Borrowed
+	// from competitor PR #2090.
+	prTitle  string
+	prAuthor string
+	prBranch string
+	// containerBaseImage overrides the sandbox base image. Useful when the
+	// default golang image is unreachable (e.g. China CI behind a mirror).
+	// Borrowed from competitor PR #2243.
+	containerBaseImage string
 }
 
 // parseFlags builds a FlagSet from the provided args and returns the resolved
@@ -78,6 +89,14 @@ func parseFlags(args []string) (*cliFlags, error) {
 	fs.BoolVar(&f.unsafeLocal, "unsafe-local", false, "allow the unsafe local executor (fail-closed by default)")
 	fs.BoolVar(&f.dryRun, "dry-run", false, "parse inputs and plan the review without executing sandboxed tools")
 	fs.StringVar(&f.model, "model", "deepseek-v4-flash", "LLM model identifier reserved for future LLM-based review; not yet wired into the pipeline")
+	// PR metadata (borrowed from competitor PR #2090): embedded in the
+	// report header so CI-generated reports carry reviewer context.
+	fs.StringVar(&f.prTitle, "pr-title", "", "PR title to embed in the report header (optional, CI metadata)")
+	fs.StringVar(&f.prAuthor, "pr-author", "", "PR author to embed in the report header (optional, CI metadata)")
+	fs.StringVar(&f.prBranch, "pr-branch", "", "PR branch name to embed in the report header (optional, CI metadata)")
+	// Container base image override (borrowed from competitor PR #2243):
+	// lets reviewers behind a Docker mirror use a regional image.
+	fs.StringVar(&f.containerBaseImage, "container-base-image", "", "override the sandbox container base image (e.g. docker.m.daocloud.io/library/golang:1.23-bookworm)")
 	if err := fs.Parse(args); err != nil {
 		return nil, err
 	}
@@ -251,11 +270,17 @@ func loadInput(ctx context.Context, opts *pipelineOpts) (*inputsource.Input, err
 	}
 }
 
-// runRules executes the rule engine against the parsed files, records per-
-// finding telemetry, and aggregates the findings into a review.Report.
+// runRules executes the regex rule engine and the AST rule engine against the
+// parsed files, records per-finding telemetry, and aggregates the findings
+// into a review.Report. AST rules run on newly added files only (OldPath ==
+// "/dev/null") because that is the only case where the added lines form a
+// complete, parseable Go source file.
 func runRules(taskID string, input *inputsource.Input, metrics *telemetry.Metrics) *review.Report {
 	engine := rules.NewEngine()
 	ruleFindings := engine.Run(input.Files)
+	astEngine := astrules.NewEngine()
+	astFindings := astEngine.Run(input.Files)
+	ruleFindings = append(ruleFindings, astFindings...)
 	for _, f := range ruleFindings {
 		metrics.IncFinding(f.Severity)
 	}
@@ -315,12 +340,13 @@ func runSandboxChecks(ctx context.Context, opts *pipelineOpts, taskID string, po
 	}
 
 	sbCfg := sandbox.Config{
-		Backend:        backendFromFlag(opts.executor),
-		UnsafeLocal:    opts.unsafeLocal,
-		RepoPath:       opts.repoPath,
-		Timeout:        120 * time.Second,
-		MaxStdoutBytes: 1 << 20,
-		MaxStderrBytes: 1 << 20,
+		Backend:            backendFromFlag(opts.executor),
+		UnsafeLocal:        opts.unsafeLocal,
+		RepoPath:           opts.repoPath,
+		Timeout:            120 * time.Second,
+		MaxStdoutBytes:     1 << 20,
+		MaxStderrBytes:     1 << 20,
+		ContainerBaseImage: opts.containerBaseImage,
 	}
 	sb, err := sandbox.New(sbCfg)
 	if err != nil {
@@ -501,7 +527,11 @@ func buildAndPersistReport(
 	if revReport == nil {
 		revReport = &review.Report{TaskID: taskID}
 	}
-	rd := report.Build(taskID, revReport, toRunResults(runRecords), permDecisions, nil, summary)
+	rd := report.Build(taskID, revReport, toRunResults(runRecords), permDecisions, nil, summary, report.PRMetadata{
+		Title:  opts.prTitle,
+		Author: opts.prAuthor,
+		Branch: opts.prBranch,
+	})
 	if conclusionOverride != "" {
 		rd.Conclusion = report.Conclusion(conclusionOverride)
 	}

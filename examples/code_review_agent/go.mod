@@ -8,6 +8,7 @@ replace (
 )
 
 require (
+	github.com/docker/docker v28.4.0+incompatible
 	modernc.org/sqlite v1.53.0
 	trpc.group/trpc-go/trpc-agent-go v0.5.0
 	trpc.group/trpc-go/trpc-agent-go/codeexecutor/container v0.5.0
@@ -23,7 +24,6 @@ require (
 	github.com/containerd/log v0.1.0 // indirect
 	github.com/creack/pty v1.1.24 // indirect
 	github.com/distribution/reference v0.6.0 // indirect
-	github.com/docker/docker v28.4.0+incompatible // indirect
 	github.com/docker/go-connections v0.5.0 // indirect
 	github.com/docker/go-units v0.5.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect

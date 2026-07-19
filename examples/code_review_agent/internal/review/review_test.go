@@ -12,8 +12,12 @@
 package review
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
+	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/diffparse"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/rules"
 )
 
@@ -314,4 +318,65 @@ func TestBuild_SeverityOrder(t *testing.T) {
 			t.Fatalf("findings[%d].RuleID = %q, want %q", i, rep.Findings[i].RuleID, w)
 		}
 	}
+}
+
+// TestHoldoutFixtureQualityThresholds is a quality regression gate. It loads
+// every .diff fixture under testdata/holdout and asserts:
+//
+//   - risk-*.diff must produce at least one finding (regression in a rule
+//     that used to fire).
+//   - benign-*.diff must produce zero critical or high findings (false
+//     positive introduced by a rule change).
+//
+// Borrowed from competitor PR #2243's TestHoldoutFixtureQualityThresholds.
+// This is a stricter gate than the integration tests: it pins the
+// precision/recall contract of the rule set so a rule change that
+// silently breaks a pattern is caught before merge.
+func TestHoldoutFixtureQualityThresholds(t *testing.T) {
+	holdoutDir := "testdata/holdout"
+	entries, err := os.ReadDir(holdoutDir)
+	if err != nil {
+		t.Fatalf("read holdout dir: %v", err)
+	}
+	eng := rules.NewEngine()
+	var riskCount, benignCount int
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".diff") {
+			continue
+		}
+		name := e.Name()
+		path := filepath.Join(holdoutDir, name)
+		diff, derr := os.ReadFile(path)
+		if derr != nil {
+			t.Fatalf("read %s: %v", name, derr)
+		}
+		parsed, perr := diffparse.Parse(strings.NewReader(string(diff)))
+		if perr != nil {
+			t.Fatalf("parse %s: %v", name, perr)
+		}
+		findings := eng.Run(parsed.Files)
+		rep := Build("holdout", findings)
+
+		if strings.HasPrefix(name, "risk-") {
+			riskCount++
+			if len(rep.Findings) == 0 {
+				t.Errorf("risk fixture %s produced 0 findings (expected >=1); rule regression?", name)
+			}
+		} else if strings.HasPrefix(name, "benign-") {
+			benignCount++
+			for _, f := range rep.Findings {
+				if f.Severity == "critical" || f.Severity == "high" {
+					t.Errorf("benign fixture %s produced %s finding from rule %s at %s:%d (false positive)",
+						name, f.Severity, f.RuleID, f.File, f.Line)
+				}
+			}
+		}
+	}
+	if riskCount == 0 {
+		t.Errorf("no risk-* holdout fixtures found in %s", holdoutDir)
+	}
+	if benignCount == 0 {
+		t.Errorf("no benign-* holdout fixtures found in %s", holdoutDir)
+	}
+	t.Logf("holdout: %d risk + %d benign fixtures checked", riskCount, benignCount)
 }

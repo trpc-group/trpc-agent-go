@@ -94,6 +94,13 @@ func defaultRules() []Rule {
 		newMissingTestsRule(),
 		newDBLifecycleRule(),
 		newSensitiveInfoRule(),
+		// Phase-1 additions (borrowed from competitor PRs #2190/#2243):
+		// broaden coverage to transaction rollback, panic-in-goroutine,
+		// command injection, and sensitive-info-in-log patterns.
+		newMissingTxRollbackRule(),
+		newPanicInGoroutineRule(),
+		newCmdInjectionRule(),
+		newSensitiveInfoInLogRule(),
 	}
 }
 
@@ -442,6 +449,189 @@ func (r *sensitiveInfoRule) Scan(file diffparse.DiffFile) []Finding {
 		out = append(out, makeFinding(r, file, l,
 			"Sensitive information in added line",
 			"Remove the secret and rotate it; load from a secret manager"))
+	}
+	return out
+}
+
+// --- DB-002: Missing transaction rollback ---
+//
+// Borrowed from competitor PR #2190. sql.Tx.Begin must be paired with a
+// defer Rollback() (or Commit) so a mid-transaction error does not leave
+// the transaction open. This rule flags Begin() calls whose surrounding
+// added content lacks any Rollback/Commit defer.
+
+type missingTxRollbackRule struct {
+	beginRe   *regexp.Regexp
+	releaseRe *regexp.Regexp
+}
+
+func newMissingTxRollbackRule() *missingTxRollbackRule {
+	return &missingTxRollbackRule{
+		// Match .Begin( without requiring a word char before the dot —
+		// the receiver may be a type-assertion result like db.(...).Begin().
+		beginRe:   regexp.MustCompile(`\.Begin\(`),
+		releaseRe: regexp.MustCompile(`defer\s+.*\.(Rollback|Commit)\(\)`),
+	}
+}
+
+func (r *missingTxRollbackRule) ID() string          { return "DB-002" }
+func (r *missingTxRollbackRule) Severity() string    { return "high" }
+func (r *missingTxRollbackRule) Category() string    { return "reliability" }
+func (r *missingTxRollbackRule) Confidence() float64 { return 0.80 }
+
+func (r *missingTxRollbackRule) Scan(file diffparse.DiffFile) []Finding {
+	// If the same added content defers Rollback/Commit, the transaction
+	// is properly released — skip the file.
+	if r.releaseRe.MatchString(addedContent(file)) {
+		return nil
+	}
+	var out []Finding
+	for _, l := range file.AddedLinesNumbered() {
+		if !r.beginRe.MatchString(l.Content) {
+			continue
+		}
+		out = append(out, makeFinding(r, file, l,
+			"Transaction started without rollback",
+			"Add 'defer tx.Rollback()' immediately after Begin to release the transaction on error"))
+	}
+	return out
+}
+
+// --- GL-003: Panic in goroutine ---
+//
+// Borrowed from competitor PR #2190. A panic inside a goroutine crashes
+// the whole process because there is no recovering caller. This rule
+// flags `go func(...) { ... }` literals whose body contains panic() and
+// lacks a deferred recover().
+
+type panicInGoroutineRule struct {
+	goFuncRe  *regexp.Regexp
+	panicRe   *regexp.Regexp
+	recoverRe *regexp.Regexp
+}
+
+func newPanicInGoroutineRule() *panicInGoroutineRule {
+	return &panicInGoroutineRule{
+		goFuncRe:  regexp.MustCompile(`^\s*go\s+func\s*\(`),
+		panicRe:   regexp.MustCompile(`\bpanic\(`),
+		recoverRe: regexp.MustCompile(`defer\s+.*recover\(\)`),
+	}
+}
+
+func (r *panicInGoroutineRule) ID() string          { return "GL-003" }
+func (r *panicInGoroutineRule) Severity() string    { return "high" }
+func (r *panicInGoroutineRule) Category() string    { return "correctness" }
+func (r *panicInGoroutineRule) Confidence() float64 { return 0.75 }
+
+func (r *panicInGoroutineRule) Scan(file diffparse.DiffFile) []Finding {
+	content := addedContent(file)
+	if r.recoverRe.MatchString(content) {
+		// A deferred recover is present somewhere in the added content;
+		// assume the goroutine is protected.
+		return nil
+	}
+	var out []Finding
+	for _, l := range file.AddedLinesNumbered() {
+		if !r.goFuncRe.MatchString(l.Content) {
+			continue
+		}
+		// Flag the go-func line only if a panic appears anywhere in the
+		// added content — we cannot reliably scope to the goroutine body
+		// with regex, so the line anchors the finding on the go statement.
+		if !r.panicRe.MatchString(content) {
+			continue
+		}
+		out = append(out, makeFinding(r, file, l,
+			"Panic inside goroutine without recover",
+			"Add 'defer func() { if r := recover(); r != nil { ... } }()' at the top of the goroutine"))
+	}
+	return out
+}
+
+// --- SC-002: Command injection ---
+//
+// Borrowed from competitor PR #2190. Executing a shell with user-
+// controlled input is a command-injection vector. This rule flags
+// exec.Command("sh", "-c", ...) / exec.Command("bash", "-c", ...) /
+// exec.Command("cmd", "/C", ...) calls where the third argument is not
+// a string literal (heuristic: contains a variable interpolation or
+// string concatenation).
+
+type cmdInjectionRule struct {
+	shellRe   *regexp.Regexp
+	literalRe *regexp.Regexp
+}
+
+func newCmdInjectionRule() *cmdInjectionRule {
+	return &cmdInjectionRule{
+		shellRe: regexp.MustCompile(`exec\.Command\(\s*"(?:sh|bash|cmd)"\s*,\s*"(?:-c|/C)"\s*,`),
+		// A literal command has no variable interpolation or `+` concat
+		// after the third argument. We approximate "safe" by checking the
+		// remainder of the line for `+`, `fmt.Sprintf`, or a backtick.
+		literalRe: regexp.MustCompile(`exec\.Command\(\s*"(?:sh|bash|cmd)"\s*,\s*"(?:-c|/C)"\s*,\s*"`),
+	}
+}
+
+func (r *cmdInjectionRule) ID() string          { return "SC-002" }
+func (r *cmdInjectionRule) Severity() string    { return "critical" }
+func (r *cmdInjectionRule) Category() string    { return "security" }
+func (r *cmdInjectionRule) Confidence() float64 { return 0.85 }
+
+func (r *cmdInjectionRule) Scan(file diffparse.DiffFile) []Finding {
+	var out []Finding
+	for _, l := range file.AddedLinesNumbered() {
+		if !r.shellRe.MatchString(l.Content) {
+			continue
+		}
+		// If the third argument is a string literal (starts with `"` right
+		// after the comma), assume it is safe. Anything else (variable,
+		// Sprintf, concatenation) is flagged.
+		if r.literalRe.MatchString(l.Content) {
+			continue
+		}
+		out = append(out, makeFinding(r, file, l,
+			"Potential command injection via shell exec",
+			"Avoid 'sh -c <user input>'; pass arguments directly to exec.Command without a shell"))
+	}
+	return out
+}
+
+// --- SC-003: Sensitive info in log ---
+//
+// Borrowed from competitor PR #2190. Logging secrets (passwords,
+// tokens, credit cards) exposes them in log aggregation systems. This
+// rule flags log.Print*/fmt.Print*/logf calls whose arguments contain
+// common secret-bearing identifiers (password, token, secret, apiKey).
+
+type sensitiveInfoInLogRule struct {
+	logRe    *regexp.Regexp
+	secretRe *regexp.Regexp
+}
+
+func newSensitiveInfoInLogRule() *sensitiveInfoInLogRule {
+	return &sensitiveInfoInLogRule{
+		logRe:    regexp.MustCompile(`\b(log\.(Print|Printf|Println|Fatal|Fatalf|Fatalln|Panic|Panicf|Panicln)|fmt\.(Print|Printf|Println|Fprint|Fprintf|Fprintln))\(`),
+		secretRe: regexp.MustCompile(`(?i)\b(password|passwd|secret|token|apiKey|api_key|accessKey|access_key|privateKey|private_key|bearer|credential)\b`),
+	}
+}
+
+func (r *sensitiveInfoInLogRule) ID() string          { return "SC-003" }
+func (r *sensitiveInfoInLogRule) Severity() string    { return "high" }
+func (r *sensitiveInfoInLogRule) Category() string    { return "security" }
+func (r *sensitiveInfoInLogRule) Confidence() float64 { return 0.75 }
+
+func (r *sensitiveInfoInLogRule) Scan(file diffparse.DiffFile) []Finding {
+	var out []Finding
+	for _, l := range file.AddedLinesNumbered() {
+		if !r.logRe.MatchString(l.Content) {
+			continue
+		}
+		if !r.secretRe.MatchString(l.Content) {
+			continue
+		}
+		out = append(out, makeFinding(r, file, l,
+			"Sensitive information in log statement",
+			"Redact or omit the secret field before logging; log a placeholder like '***'"))
 	}
 	return out
 }

@@ -1,0 +1,12 @@
+diff --git a/log_secret.go b/log_secret.go
+new file mode 100644
+--- /dev/null
++++ b/log_secret.go
+@@ -0,0 +1,7 @@
++package example
++
++import "log"
++
++func logCred(user, token string) {
++	log.Printf("user=%s token=%s", user, token)
++}

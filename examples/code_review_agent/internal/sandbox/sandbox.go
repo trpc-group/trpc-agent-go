@@ -46,6 +46,7 @@ import (
 	"path/filepath"
 	"time"
 
+	tcontainer "github.com/docker/docker/api/types/container"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	containerexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/container"
 	e2bexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/e2b"
@@ -126,6 +127,12 @@ type Config struct {
 	// Output past the limit is dropped and RunResult.Truncated is set.
 	MaxStdoutBytes int64
 	MaxStderrBytes int64
+	// ContainerBaseImage overrides the Docker image used by the container
+	// backend. When empty, the container backend's default is used. This
+	// is useful when the default image is unreachable (e.g. behind a
+	// regional mirror like docker.m.daocloud.io). Ignored for e2b/local.
+	// Borrowed from competitor PR #2243.
+	ContainerBaseImage string
 }
 
 // RunSpec describes a single sandboxed command invocation.
@@ -190,7 +197,20 @@ func New(cfg Config) (*Executor, error) {
 func buildEngine(cfg Config) (codeexecutor.Engine, error) {
 	switch cfg.Backend {
 	case BackendContainer:
-		ce, err := containerexec.New()
+		var copts []containerexec.Option
+		if cfg.ContainerBaseImage != "" {
+			// Override the container image while preserving the working
+			// dir / cmd / tty defaults the container backend relies on.
+			// Borrowed from competitor PR #2243 to support regional
+			// Docker mirrors (e.g. docker.m.daocloud.io).
+			copts = append(copts, containerexec.WithContainerConfig(tcontainer.Config{
+				Image:      cfg.ContainerBaseImage,
+				WorkingDir: "/",
+				Cmd:        []string{"tail", "-f", "/dev/null"},
+				Tty:        true,
+			}))
+		}
+		ce, err := containerexec.New(copts...)
 		if err != nil {
 			return nil, fmt.Errorf("sandbox: container backend unavailable: %w", err)
 		}

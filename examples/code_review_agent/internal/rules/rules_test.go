@@ -39,7 +39,8 @@ func hasRule(fs []Finding, id string) bool {
 	return false
 }
 
-// TestRules runs table-driven tests covering each built-in rule plus the
+// TestRules runs table-driven tests covering the original built-in rules
+// (SI-001, SC-001, GL-001/002, RL-001, EH-001, TM-001, DB-001) plus the
 // AddedLines-only invariant for SC-001 and a clean-diff baseline.
 func TestRules(t *testing.T) {
 	tests := []struct {
@@ -236,6 +237,129 @@ func TestRules(t *testing.T) {
 			check: func(t *testing.T, fs []Finding) {
 				if len(fs) != 0 {
 					t.Fatalf("expected 0 findings, got: %v", fs)
+				}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fs := runDiff(t, tt.diff)
+			tt.check(t, fs)
+		})
+	}
+}
+
+// TestRulesPhase1 covers the Phase-1 rule additions (DB-002, GL-003,
+// SC-002, SC-003) borrowed from competitor PRs #2190/#2243. Splitting
+// these into a separate test function keeps TestRules under the
+// cyclomatic-complexity budget enforced by gocyclo.
+func TestRulesPhase1(t *testing.T) {
+	tests := []struct {
+		name  string
+		diff  string
+		check func(t *testing.T, fs []Finding)
+	}{
+		{
+			name: "DB-002 Begin without Rollback/Commit triggers",
+			diff: "diff --git a/tx.go b/tx.go\n" +
+				"new file mode 100644\n" +
+				"--- /dev/null\n" +
+				"+++ b/tx.go\n" +
+				"@@ -0,0 +1,1 @@\n" +
+				"+tx, _ := db.Begin()\n",
+			check: func(t *testing.T, fs []Finding) {
+				if !hasRule(fs, "DB-002") {
+					t.Fatalf("expected DB-002 finding, got: %v", fs)
+				}
+			},
+		},
+		{
+			name: "DB-002 Begin with defer Rollback does not trigger",
+			diff: "diff --git a/tx.go b/tx.go\n" +
+				"new file mode 100644\n" +
+				"--- /dev/null\n" +
+				"+++ b/tx.go\n" +
+				"@@ -0,0 +1,2 @@\n" +
+				"+tx, _ := db.Begin()\n" +
+				"+defer tx.Rollback()\n",
+			check: func(t *testing.T, fs []Finding) {
+				if hasRule(fs, "DB-002") {
+					t.Fatalf("expected no DB-002 finding when defer Rollback present, got: %v", fs)
+				}
+			},
+		},
+		{
+			name: "GL-003 go func with panic triggers",
+			diff: "diff --git a/g.go b/g.go\n" +
+				"new file mode 100644\n" +
+				"--- /dev/null\n" +
+				"+++ b/g.go\n" +
+				"@@ -0,0 +1,3 @@\n" +
+				"+go func() {\n" +
+				"+	panic(\"boom\")\n" +
+				"+}()\n",
+			check: func(t *testing.T, fs []Finding) {
+				if !hasRule(fs, "GL-003") {
+					t.Fatalf("expected GL-003 finding, got: %v", fs)
+				}
+			},
+		},
+		{
+			name: "GL-003 go func with defer recover does not trigger",
+			diff: "diff --git a/g.go b/g.go\n" +
+				"new file mode 100644\n" +
+				"--- /dev/null\n" +
+				"+++ b/g.go\n" +
+				"@@ -0,0 +1,4 @@\n" +
+				"+go func() {\n" +
+				"+	defer func() { _ = recover() }()\n" +
+				"+	panic(\"boom\")\n" +
+				"+}()\n",
+			check: func(t *testing.T, fs []Finding) {
+				if hasRule(fs, "GL-003") {
+					t.Fatalf("expected no GL-003 finding when defer recover present, got: %v", fs)
+				}
+			},
+		},
+		{
+			name: "SC-002 exec.Command sh -c with variable triggers",
+			diff: "diff --git a/e.go b/e.go\n" +
+				"new file mode 100644\n" +
+				"--- /dev/null\n" +
+				"+++ b/e.go\n" +
+				"@@ -0,0 +1,1 @@\n" +
+				"+exec.Command(\"sh\", \"-c\", userInput)\n",
+			check: func(t *testing.T, fs []Finding) {
+				if !hasRule(fs, "SC-002") {
+					t.Fatalf("expected SC-002 finding, got: %v", fs)
+				}
+			},
+		},
+		{
+			name: "SC-002 exec.Command sh -c with literal does not trigger",
+			diff: "diff --git a/e.go b/e.go\n" +
+				"new file mode 100644\n" +
+				"--- /dev/null\n" +
+				"+++ b/e.go\n" +
+				"@@ -0,0 +1,1 @@\n" +
+				"+exec.Command(\"sh\", \"-c\", \"echo hello\")\n",
+			check: func(t *testing.T, fs []Finding) {
+				if hasRule(fs, "SC-002") {
+					t.Fatalf("expected no SC-002 finding for literal command, got: %v", fs)
+				}
+			},
+		},
+		{
+			name: "SC-003 log.Printf with token triggers",
+			diff: "diff --git a/l.go b/l.go\n" +
+				"new file mode 100644\n" +
+				"--- /dev/null\n" +
+				"+++ b/l.go\n" +
+				"@@ -0,0 +1,1 @@\n" +
+				"+log.Printf(\"token=%s\", token)\n",
+			check: func(t *testing.T, fs []Finding) {
+				if !hasRule(fs, "SC-003") {
+					t.Fatalf("expected SC-003 finding, got: %v", fs)
 				}
 			},
 		},

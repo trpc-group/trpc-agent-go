@@ -44,11 +44,22 @@ const (
 	ConclusionFail        Conclusion = "fail"
 )
 
+// PRMetadata is optional context about the pull request under review.
+// When populated, it is rendered in the report header so CI-generated
+// reports carry the context reviewers need without opening the diff.
+// Borrowed from competitor PR #2090.
+type PRMetadata struct {
+	Title  string
+	Author string
+	Branch string
+}
+
 // ReportData is the aggregated, renderable output of a single review task.
 type ReportData struct {
 	TaskID              string
 	Conclusion          Conclusion
 	GeneratedAt         string
+	PRMetadata          PRMetadata
 	Review              *review.Report
 	SandboxRuns         []sandbox.RunResult
 	PermissionDecisions []store.PermissionDecision
@@ -93,6 +104,7 @@ func Build(
 	perms []store.PermissionDecision,
 	arts []store.Artifact,
 	metrics telemetry.Summary,
+	prMeta PRMetadata,
 ) *ReportData {
 	redacted := redactReport(rev)
 	stats := computeSeverityStats(redacted.Findings)
@@ -103,6 +115,7 @@ func Build(
 		TaskID:              taskID,
 		Conclusion:          conclusion,
 		GeneratedAt:         time.Now().UTC().Format(time.RFC3339),
+		PRMetadata:          prMeta,
 		Review:              redacted,
 		SandboxRuns:         runs,
 		PermissionDecisions: perms,
@@ -328,13 +341,24 @@ func findingsOf(rev *review.Report) []review.Finding {
 	return rev.Findings
 }
 
-// writeHeader writes the report title and top-level metadata.
+// writeHeader writes the report title and top-level metadata. When PRMetadata
+// is populated, the PR title/author/branch are included so CI-generated
+// reports carry reviewer context.
 func writeHeader(b *strings.Builder, r *ReportData) {
 	fmt.Fprintln(b, "# Code Review Report")
 	fmt.Fprintln(b)
 	fmt.Fprintf(b, "- **Task ID:** %s\n", r.TaskID)
 	fmt.Fprintf(b, "- **Generated At:** %s\n", r.GeneratedAt)
 	fmt.Fprintf(b, "- **Conclusion:** %s\n", string(r.Conclusion))
+	if r.PRMetadata.Title != "" {
+		fmt.Fprintf(b, "- **PR Title:** %s\n", r.PRMetadata.Title)
+	}
+	if r.PRMetadata.Author != "" {
+		fmt.Fprintf(b, "- **PR Author:** %s\n", r.PRMetadata.Author)
+	}
+	if r.PRMetadata.Branch != "" {
+		fmt.Fprintf(b, "- **PR Branch:** %s\n", r.PRMetadata.Branch)
+	}
 	fmt.Fprintln(b)
 }
 

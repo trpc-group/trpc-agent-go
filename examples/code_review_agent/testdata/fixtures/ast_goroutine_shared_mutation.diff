@@ -1,0 +1,15 @@
+diff --git a/race.go b/race.go
+new file mode 100644
+--- /dev/null
++++ b/race.go
+@@ -0,0 +1,12 @@
++package example
++
++func counter() {
++	var count int
++	go func() {
++		// BUG: writes to captured outer variable 'count'.
++		count++
++	}()
++	_ = count
++}

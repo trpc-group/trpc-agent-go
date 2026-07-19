@@ -1,0 +1,34 @@
+diff --git a/http_client_safe.go b/http_client_safe.go
+new file mode 100644
+--- /dev/null
++++ b/http_client_safe.go
+@@ -0,0 +1,17 @@
++package example
++
++import (
++	"net/http"
++	"io"
++)
++
++func fetchURLSafe(url string) (string, error) {
++	resp, err := http.Get(url)
++	if err != nil {
++		return "", err
++	}
++	defer resp.Body.Close()
++	body, rerr := io.ReadAll(resp.Body)
++	if rerr != nil {
++		return "", rerr
++	}
++	return string(body), nil
++}
+diff --git a/http_client_safe_test.go b/http_client_safe_test.go
+new file mode 100644
+--- /dev/null
++++ b/http_client_safe_test.go
+@@ -0,0 +1,5 @@
++package example
++
++import "testing"
++
++func TestFetchURLSafe(t *testing.T) { _ = fetchURLSafe }

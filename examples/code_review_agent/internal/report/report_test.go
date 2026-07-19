@@ -88,7 +88,7 @@ func TestBuildConclusionFail(t *testing.T) {
 		{Name: "report.md", Path: "/tmp/report.md", SizeBytes: 100},
 	}
 
-	rd := Build("task-fail", rev, runs, perms, arts, sampleMetrics())
+	rd := Build("task-fail", rev, runs, perms, arts, sampleMetrics(), PRMetadata{})
 
 	if rd.Conclusion != ConclusionFail {
 		t.Fatalf("conclusion = %q, want %q", rd.Conclusion, ConclusionFail)
@@ -126,7 +126,7 @@ func TestBuildConclusionPass(t *testing.T) {
 			},
 		},
 	}
-	rd := Build("task-pass", rev, nil, nil, nil, telemetry.Summary{})
+	rd := Build("task-pass", rev, nil, nil, nil, telemetry.Summary{}, PRMetadata{})
 	if rd.Conclusion != ConclusionPass {
 		t.Fatalf("conclusion = %q, want %q", rd.Conclusion, ConclusionPass)
 	}
@@ -139,7 +139,7 @@ func TestBuildConclusionNeedsReview(t *testing.T) {
 	runs := []sandbox.RunResult{
 		{Status: sandbox.StatusTimeout, TimedOut: true, Duration: 2 * time.Second},
 	}
-	rd := Build("task-needs", rev, runs, nil, nil, telemetry.Summary{})
+	rd := Build("task-needs", rev, runs, nil, nil, telemetry.Summary{}, PRMetadata{})
 	if rd.Conclusion != ConclusionNeedsReview {
 		t.Fatalf("conclusion = %q, want %q", rd.Conclusion, ConclusionNeedsReview)
 	}
@@ -159,7 +159,7 @@ func TestWriteAllFiles(t *testing.T) {
 			},
 		},
 	}
-	rd := Build("task-write", rev, nil, nil, nil, sampleMetrics())
+	rd := Build("task-write", rev, nil, nil, nil, sampleMetrics(), PRMetadata{})
 
 	dir := t.TempDir()
 	jsonPath, mdPath, err := rd.WriteAll(dir)
@@ -197,7 +197,7 @@ func TestReportFileNameDoesNotClobber(t *testing.T) {
 				},
 			},
 		}
-		return Build(taskID, rev, nil, nil, nil, telemetry.Summary{})
+		return Build(taskID, rev, nil, nil, nil, telemetry.Summary{}, PRMetadata{})
 	}
 
 	rd1 := mk("cr-20260101-120000-aaaaaaaa-1111")
@@ -231,7 +231,7 @@ func TestReportFileNameDoesNotClobber(t *testing.T) {
 func TestReportFileNameSanitizesTraversal(t *testing.T) {
 	dir := t.TempDir()
 	rev := &review.Report{TaskID: "../../etc/passwd", Findings: []review.Finding{}}
-	rd := Build("../../etc/passwd", rev, nil, nil, nil, telemetry.Summary{})
+	rd := Build("../../etc/passwd", rev, nil, nil, nil, telemetry.Summary{}, PRMetadata{})
 
 	jp, _, err := rd.WriteAll(dir)
 	if err != nil {
@@ -253,6 +253,34 @@ func TestReportFileNameSanitizesTraversal(t *testing.T) {
 	}
 }
 
+// TestPRMetadataInHeader verifies that when PRMetadata is populated, the
+// PR title/author/branch are rendered in the Markdown report header so
+// CI-generated reports carry reviewer context. Borrowed from competitor
+// PR #2090.
+func TestPRMetadataInHeader(t *testing.T) {
+	rev := &review.Report{TaskID: "task-pr", Findings: []review.Finding{}}
+	rd := Build("task-pr", rev, nil, nil, nil, telemetry.Summary{}, PRMetadata{
+		Title:  "Fix auth flow",
+		Author: "alice",
+		Branch: "feature/auth",
+	})
+
+	dir := t.TempDir()
+	mdPath, err := rd.ToMarkdown(dir)
+	if err != nil {
+		t.Fatalf("ToMarkdown: %v", err)
+	}
+	body, err := os.ReadFile(mdPath)
+	if err != nil {
+		t.Fatalf("read md: %v", err)
+	}
+	for _, want := range []string{"Fix auth flow", "alice", "feature/auth"} {
+		if !strings.Contains(string(body), want) {
+			t.Errorf("markdown header missing %q", want)
+		}
+	}
+}
+
 // TestJSONRoundTrip verifies the JSON output can be unmarshaled back into a
 // ReportData with matching TaskID and TotalFindings.
 func TestJSONRoundTrip(t *testing.T) {
@@ -271,7 +299,7 @@ func TestJSONRoundTrip(t *testing.T) {
 			},
 		},
 	}
-	rd := Build("task-json", rev, nil, nil, nil, telemetry.Summary{})
+	rd := Build("task-json", rev, nil, nil, nil, telemetry.Summary{}, PRMetadata{})
 
 	dir := t.TempDir()
 	jsonPath, err := rd.ToJSON(dir)
@@ -307,7 +335,7 @@ func TestMarkdownContent(t *testing.T) {
 			},
 		},
 	}
-	rd := Build("task-md", rev, nil, nil, nil, sampleMetrics())
+	rd := Build("task-md", rev, nil, nil, nil, sampleMetrics(), PRMetadata{})
 
 	dir := t.TempDir()
 	mdPath, err := rd.ToMarkdown(dir)
@@ -355,7 +383,7 @@ func TestNoPlaintextSecrets(t *testing.T) {
 			},
 		},
 	}
-	rd := Build("task-secret", rev, nil, nil, nil, telemetry.Summary{})
+	rd := Build("task-secret", rev, nil, nil, nil, telemetry.Summary{}, PRMetadata{})
 
 	dir := t.TempDir()
 	jsonPath, mdPath, err := rd.WriteAll(dir)
@@ -400,7 +428,7 @@ func TestSeveritySortStability(t *testing.T) {
 			},
 		},
 	}
-	rd := Build("task-stable", rev, nil, nil, nil, telemetry.Summary{})
+	rd := Build("task-stable", rev, nil, nil, nil, telemetry.Summary{}, PRMetadata{})
 
 	dir := t.TempDir()
 	mdPath, err := rd.ToMarkdown(dir)

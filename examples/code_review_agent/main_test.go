@@ -24,12 +24,15 @@ import (
 	"time"
 )
 
-// allRuleIDs is the complete set of rule IDs implemented by the rules engine.
-// It is used by the clean-fixture assertion to verify that no rules fire on a
-// benign diff.
+// allRuleIDs is the complete set of rule IDs implemented by the rules engine
+// plus the AST rule engine. It is used by the clean-fixture assertion to
+// verify that no rules fire on a benign diff.
 var allRuleIDs = []string{
-	"SI-001", "SC-001", "GL-001", "GL-002",
-	"RL-001", "EH-001", "TM-001", "DB-001",
+	"SI-001", "SC-001", "SC-002", "SC-003",
+	"GL-001", "GL-002", "GL-003",
+	"RL-001", "EH-001", "TM-001",
+	"DB-001", "DB-002",
+	"AST-001", "AST-002", "AST-003", "AST-004",
 }
 
 // fixtureCase describes a single integration test case.
@@ -66,6 +69,19 @@ func TestIntegration_Fixtures(t *testing.T) {
 		{"db_lifecycle", "db_lifecycle.diff", "DB-001", false, "pass", ""},
 		{"duplicate_finding", "duplicate_finding.diff", "SI-001", false, "fail", "sk-duplicate001test002value003"},
 		{"sandbox_failure", "sandbox_failure.diff", "", false, "pass", ""},
+		// Phase-1 new rules (borrowed from competitor PRs #2190/#2243):
+		{"missing_tx_rollback", "missing_tx_rollback.diff", "DB-002", false, "pass", ""},
+		{"panic_in_goroutine", "panic_in_goroutine.diff", "GL-003", false, "pass", ""},
+		{"cmd_injection", "cmd_injection.diff", "SC-002", false, "fail", ""},
+		{"sensitive_info_in_log", "sensitive_info_in_log.diff", "SC-003", false, "pass", ""},
+		// Phase-3 AST rules (borrowed from competitor PR #2243):
+		{"ast_http_body_leak", "ast_http_body_leak.diff", "AST-001", false, "pass", ""},
+		{"ast_sql_rows_leak", "ast_sql_rows_leak.diff", "AST-002", false, "pass", ""},
+		{"ast_context_misuse", "ast_context_misuse.diff", "AST-003", false, "pass", ""},
+		{"ast_goroutine_shared_mutation", "ast_goroutine_shared_mutation.diff", "AST-004", false, "pass", ""},
+		// AST benign: a complete Go file that uses http.Get but properly
+		// defers Body.Close — none of the AST rules should fire.
+		{"ast_http_body_closed", "ast_http_body_closed.diff", "", true, "pass", ""},
 	}
 
 	for _, tt := range fixtures {
