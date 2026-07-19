@@ -49,13 +49,13 @@ var validStepTypes = map[string]bool{
 
 // ReplayCase is a complete replay test case loaded from a JSON file.
 type ReplayCase struct {
-	Name         string           `json:"name"`
-	Description  string           `json:"description"`
-	AppName      string           `json:"app_name"`
-	UserID       string           `json:"user_id"`
-	SessionID    string           `json:"session_id"`
-	Steps        []ReplayStep     `json:"steps"`
-	Verify       *VerifySpec      `json:"verify,omitempty"`
+	Name         string            `json:"name"`
+	Description  string            `json:"description"`
+	AppName      string            `json:"app_name"`
+	UserID       string            `json:"user_id"`
+	SessionID    string            `json:"session_id"`
+	Steps        []ReplayStep      `json:"steps"`
+	Verify       *VerifySpec       `json:"verify,omitempty"`
 	AllowedDiffs []AllowedDiffRule `json:"allowed_diffs,omitempty"`
 }
 

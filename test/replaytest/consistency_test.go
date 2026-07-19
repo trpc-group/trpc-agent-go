@@ -176,7 +176,9 @@ func TestReplayConsistency_InjectedInconsistencies(t *testing.T) {
 	findCase := func(name string) *ReplayCase {
 		t.Helper()
 		for _, rc := range cases {
-			if rc.Name == name { return rc }
+			if rc.Name == name {
+				return rc
+			}
 		}
 		t.Fatalf("case %q not found", name)
 		return nil
@@ -208,14 +210,18 @@ func TestReplayConsistency_InjectedInconsistencies(t *testing.T) {
 			name: "missing_event", section: "events",
 			ref: refSingle,
 			inject: func(s *ReplaySnapshot) {
-				if len(s.Events) > 0 { s.Events = s.Events[:len(s.Events)-1] }
+				if len(s.Events) > 0 {
+					s.Events = s.Events[:len(s.Events)-1]
+				}
 			},
 		},
 		{
 			name: "wrong_event_order", section: "events",
 			ref: refSingle,
 			inject: func(s *ReplaySnapshot) {
-				if len(s.Events) >= 2 { s.Events[0], s.Events[1] = s.Events[1], s.Events[0] }
+				if len(s.Events) >= 2 {
+					s.Events[0], s.Events[1] = s.Events[1], s.Events[0]
+				}
 			},
 		},
 		{
@@ -229,7 +235,9 @@ func TestReplayConsistency_InjectedInconsistencies(t *testing.T) {
 			name: "missing_memory", section: "memory",
 			ref: refMem,
 			inject: func(s *ReplaySnapshot) {
-				if len(s.Memories) > 0 { s.Memories = s.Memories[:len(s.Memories)-1] }
+				if len(s.Memories) > 0 {
+					s.Memories = s.Memories[:len(s.Memories)-1]
+				}
 			},
 		},
 		{
@@ -303,7 +311,8 @@ func TestReplayConsistency_InjectedInconsistencies(t *testing.T) {
 			found := false
 			for _, d := range diffs {
 				if d.Section == tc.section {
-					found = true; break
+					found = true
+					break
 				}
 			}
 			require.True(

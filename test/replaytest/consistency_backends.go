@@ -52,9 +52,11 @@ func (s *DeterministicSummarizer) Summarize(_ context.Context, _ *session.Sessio
 	return s.text, nil
 }
 
-func (s *DeterministicSummarizer) SetPrompt(string)         {}
-func (s *DeterministicSummarizer) SetModel(model.Model)     {}
-func (s *DeterministicSummarizer) Metadata() map[string]any { return map[string]any{"deterministic": true} }
+func (s *DeterministicSummarizer) SetPrompt(string)     {}
+func (s *DeterministicSummarizer) SetModel(model.Model) {}
+func (s *DeterministicSummarizer) Metadata() map[string]any {
+	return map[string]any{"deterministic": true}
+}
 
 // SetText sets the text that the next Summarize call will return.
 func (s *DeterministicSummarizer) SetText(text string) { s.text = text }

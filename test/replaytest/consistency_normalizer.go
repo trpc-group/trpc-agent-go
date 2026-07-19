@@ -23,13 +23,13 @@ import (
 
 // ReplaySnapshot is a normalized, backend-agnostic view of session state.
 type ReplaySnapshot struct {
-	BackendName string                    `json:"backend_name"`
-	Session     sessionSnapshot           `json:"session"`
-	Events      []map[string]any          `json:"events"`
-	State       map[string]any            `json:"state"`
-	Memories    []memorySnapshot          `json:"memories"`
+	BackendName string                     `json:"backend_name"`
+	Session     sessionSnapshot            `json:"session"`
+	Events      []map[string]any           `json:"events"`
+	State       map[string]any             `json:"state"`
+	Memories    []memorySnapshot           `json:"memories"`
 	Summaries   map[string]summarySnapshot `json:"summaries"`
-	Tracks      []trackSnap           `json:"tracks"`
+	Tracks      []trackSnap                `json:"tracks"`
 }
 
 type sessionSnapshot struct {
@@ -52,9 +52,9 @@ type memorySnapshot struct {
 }
 
 type summarySnapshot struct {
-	Summary          string           `json:"summary"`
-	Topics           []string         `json:"topics,omitempty"`
-	UpdatedAtNonZero bool             `json:"updated_at_non_zero"`
+	Summary          string          `json:"summary"`
+	Topics           []string        `json:"topics,omitempty"`
+	UpdatedAtNonZero bool            `json:"updated_at_non_zero"`
 	Boundary         *replayBoundary `json:"boundary,omitempty"`
 }
 
@@ -66,7 +66,7 @@ type replayBoundary struct {
 }
 
 type trackSnap struct {
-	Name   string               `json:"name"`
+	Name   string           `json:"name"`
 	Events []trackEventSnap `json:"events"`
 }
 
