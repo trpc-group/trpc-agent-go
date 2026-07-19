@@ -79,7 +79,7 @@ func start(ctx context.Context, cfg *config, opts ...otlptracehttp.Option) (clea
 
 	// AttributeRewriter is applied inside the Langfuse exporter after
 	// transformCallLLM/transformExecuteTool so consume-and-strip of library
-	// keys (e.g. llm_request) happens before branding renames.
+	// keys (e.g. llm_request) runs before any caller renames or drops.
 	exp, err := newExporter(ctx, cfg.attributeRewriter, opts...)
 	if err != nil {
 		return nil, err

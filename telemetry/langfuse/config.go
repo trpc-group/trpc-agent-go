@@ -144,9 +144,10 @@ func WithExtraBaggageAttributeKeys(keys ...string) Option {
 
 // WithAttributeRewriter registers a transform applied to span attributes after
 // Langfuse observation transforms and before OTLP upload. Defaults to nil (no rewrite).
-// Apply branding renames here; do not rename library keys that transformCallLLM
-// consumes (e.g. trpc.go.agent.llm_request) before that transform runs — the
-// exporter already runs this rewriter after those transforms.
+// Callers may rename or drop attributes here. Keys that transformCallLLM /
+// transformExecuteTool consume (e.g. trpc.go.agent.llm_request) must still be
+// present under their library names when those transforms run — the exporter
+// applies this rewriter after those transforms so renames cannot bypass them.
 func WithAttributeRewriter(rewriter AttributeRewriter) Option {
 	return func(cfg *config) {
 		cfg.attributeRewriter = rewriter

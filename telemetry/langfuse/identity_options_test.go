@@ -28,9 +28,9 @@ import (
 )
 
 func TestResolveBaggageFilter_ExtraKeys(t *testing.T) {
-	filter := resolveBaggageFilter(&config{extraBaggageKeys: []string{"guild.agent_name"}})
+	filter := resolveBaggageFilter(&config{extraBaggageKeys: []string{"app.agent_name"}})
 
-	m, err := baggage.NewMemberRaw("guild.agent_name", "persona-a")
+	m, err := baggage.NewMemberRaw("app.agent_name", "agent-a")
 	require.NoError(t, err)
 	assert.True(t, filter(m))
 
@@ -38,14 +38,14 @@ func TestResolveBaggageFilter_ExtraKeys(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, filter(ignored))
 
-	traceNameMember, err := baggage.NewMemberRaw(traceName, "persona-a")
+	traceNameMember, err := baggage.NewMemberRaw(traceName, "agent-a")
 	require.NoError(t, err)
 	assert.True(t, filter(traceNameMember))
 }
 
 func TestResolveBaggageFilter_CustomFilterOverridesExtras(t *testing.T) {
 	filter := resolveBaggageFilter(&config{
-		extraBaggageKeys: []string{"guild.agent_name"},
+		extraBaggageKeys: []string{"app.agent_name"},
 		baggageFilter: func(m baggage.Member) bool {
 			return m.Key() == "custom.only"
 		},
@@ -54,7 +54,7 @@ func TestResolveBaggageFilter_CustomFilterOverridesExtras(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, filter(custom))
 
-	extra, err := baggage.NewMemberRaw("guild.agent_name", "persona-a")
+	extra, err := baggage.NewMemberRaw("app.agent_name", "agent-a")
 	require.NoError(t, err)
 	assert.False(t, filter(extra))
 }
@@ -91,14 +91,14 @@ func TestAttributeRewritingExporter_RewritesBeforeNext(t *testing.T) {
 
 func TestNewSpanProcessor_ExtraBaggageKeysCopied(t *testing.T) {
 	ctx := context.Background()
-	m, err := baggage.NewMemberRaw("guild.agent_name", "persona-a")
+	m, err := baggage.NewMemberRaw("app.agent_name", "agent-a")
 	require.NoError(t, err)
 	b, err := baggage.New(m)
 	require.NoError(t, err)
 	ctx = baggage.ContextWithBaggage(ctx, b)
 
 	exp := &recordingExporter{}
-	filter := resolveBaggageFilter(&config{extraBaggageKeys: []string{"guild.agent_name"}})
+	filter := resolveBaggageFilter(&config{extraBaggageKeys: []string{"app.agent_name"}})
 	sp := newSpanProcessor(exp, filter)
 
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sp))
@@ -110,7 +110,7 @@ func TestNewSpanProcessor_ExtraBaggageKeysCopied(t *testing.T) {
 
 	spans := exp.snapshot()
 	require.Len(t, spans, 1)
-	assert.Contains(t, spans[0].Attributes(), attribute.String("guild.agent_name", "persona-a"))
+	assert.Contains(t, spans[0].Attributes(), attribute.String("app.agent_name", "agent-a"))
 }
 
 func TestStart_AppliesIdentityOptions(t *testing.T) {
