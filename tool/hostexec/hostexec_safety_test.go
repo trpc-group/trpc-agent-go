@@ -79,7 +79,8 @@ func TestExecCommandTool_SafetyScannerSanitizesOutput(t *testing.T) {
 		t.Fatal("exec_command tool not found")
 	}
 	got, err := execTool.Call(context.Background(), []byte(`{
-		"command": "echo 012345678901234567890123456789"
+		"command": "echo 012345678901234567890123456789",
+		"timeout_sec": 1
 	}`))
 	if err != nil {
 		t.Fatal(err)
@@ -87,6 +88,39 @@ func TestExecCommandTool_SafetyScannerSanitizesOutput(t *testing.T) {
 	output, _ := got.(map[string]any)["output"].(string)
 	if len(output) > 24 || !strings.Contains(output, "[truncated]") {
 		t.Fatalf("output = %q, want capped output", output)
+	}
+}
+
+func TestExecCommandTool_SafetyScannerScansEffectiveDefaultTimeout(t *testing.T) {
+	policy := safety.DefaultPolicy()
+	policy.BackendRules.HostExec.DefaultAction = safety.DecisionAllow
+	policy.ForbiddenPaths = []string{"/blocked/**"}
+	scanner, err := safety.NewScanner(policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = scanner.Close() })
+	set, err := NewToolSet(
+		WithBaseDir(t.TempDir()),
+		WithSafetyScanner(scanner),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer set.Close()
+	var execTool tool.CallableTool
+	for _, tl := range set.Tools(context.Background()) {
+		if decl := tl.Declaration(); decl != nil && decl.Name == toolExecCommand {
+			execTool = tl.(tool.CallableTool)
+		}
+	}
+	if execTool == nil {
+		t.Fatal("exec_command tool not found")
+	}
+	_, err = execTool.Call(context.Background(), []byte(`{"command":"echo ok"}`))
+	if err == nil || !errors.Is(err, safety.ErrBlocked) ||
+		!strings.Contains(err.Error(), safety.RuleResourceTimeout) {
+		t.Fatalf("error = %v, want effective default timeout review", err)
 	}
 }
 

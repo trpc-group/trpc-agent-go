@@ -74,3 +74,24 @@ func TestExecTool_SafetyScannerUsesNormalizedCWD(t *testing.T) {
 		t.Fatalf("cwd = %q, want normalized workspace root", req.spec.Cwd)
 	}
 }
+
+func TestExecTool_SafetyScannerTreatsPositiveYieldAsBackground(t *testing.T) {
+	policy := safety.DefaultPolicy()
+	policy.BackendRules.WorkspaceExec.BackgroundAction = safety.DecisionDeny
+	scanner, err := safety.NewScanner(policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = scanner.Close() })
+
+	yield := 1
+	tl := NewExecTool(local.New(), WithSafetyScanner(scanner))
+	_, err = tl.prepareExec(context.Background(), execInput{
+		Command:     "echo ok",
+		YieldTimeMS: &yield,
+	})
+	if err == nil || !errors.Is(err, safety.ErrBlocked) ||
+		!strings.Contains(err.Error(), safety.RuleHostBackground) {
+		t.Fatalf("error = %v, want yielded-session background block", err)
+	}
+}

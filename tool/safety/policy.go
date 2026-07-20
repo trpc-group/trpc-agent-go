@@ -81,7 +81,7 @@ type CodeExecRules struct {
 type AuditConfig struct {
 	Enabled    bool   `json:"enabled" yaml:"enabled"`
 	Path       string `json:"path" yaml:"path"`
-	FailClosed bool   `json:"fail_closed" yaml:"fail_closed"`
+	FailClosed *bool  `json:"fail_closed,omitempty" yaml:"fail_closed,omitempty"`
 }
 
 // RedactionConfig configures sensitive-value redaction.
@@ -160,7 +160,7 @@ func DefaultPolicy() Policy {
 		},
 		Audit: AuditConfig{
 			Enabled:    false,
-			FailClosed: true,
+			FailClosed: boolPointer(true),
 		},
 		Redaction: RedactionConfig{
 			Enabled:     boolPointer(true),
@@ -196,9 +196,7 @@ func (p Policy) normalized() (Policy, error) {
 	if len(p.EnvAllowlist) == 0 {
 		p.EnvAllowlist = append([]string(nil), def.EnvAllowlist...)
 	}
-	if p.ResourceLimits == (ResourceLimits{}) {
-		p.ResourceLimits = def.ResourceLimits
-	}
+	p.ResourceLimits = normalizeResourceLimits(p.ResourceLimits, def.ResourceLimits)
 	p.BackendRules.WorkspaceExec = normalizeWorkspaceExecRules(
 		p.BackendRules.WorkspaceExec,
 		def.BackendRules.WorkspaceExec,
@@ -219,6 +217,9 @@ func (p Policy) normalized() (Policy, error) {
 	if p.Redaction.Enabled == nil {
 		p.Redaction.Enabled = boolPointer(true)
 	}
+	if p.Audit.FailClosed == nil {
+		p.Audit.FailClosed = boolPointer(boolPtrValue(def.Audit.FailClosed))
+	}
 	if p.Rules == nil {
 		p.Rules = map[string]RulePolicyOverride{}
 	}
@@ -232,6 +233,28 @@ func (p Policy) normalized() (Policy, error) {
 	p.DeniedNetworkDomains = cleanStrings(p.DeniedNetworkDomains)
 	p.EnvAllowlist = cleanStrings(p.EnvAllowlist)
 	return p, nil
+}
+
+func normalizeResourceLimits(got, def ResourceLimits) ResourceLimits {
+	if got.MaxTimeoutMS == 0 {
+		got.MaxTimeoutMS = def.MaxTimeoutMS
+	}
+	if got.MaxOutputBytes == 0 {
+		got.MaxOutputBytes = def.MaxOutputBytes
+	}
+	if got.MaxCommandBytes == 0 {
+		got.MaxCommandBytes = def.MaxCommandBytes
+	}
+	if got.MaxSegments == 0 {
+		got.MaxSegments = def.MaxSegments
+	}
+	if got.MaxSleepSeconds == 0 {
+		got.MaxSleepSeconds = def.MaxSleepSeconds
+	}
+	if got.MaxParallelismHint == 0 {
+		got.MaxParallelismHint = def.MaxParallelismHint
+	}
+	return got
 }
 
 func boolPointer(v bool) *bool {

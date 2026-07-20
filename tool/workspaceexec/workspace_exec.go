@@ -674,15 +674,17 @@ func (t *ExecTool) checkSafety(ctx context.Context, in execInput, cwd string) er
 	if timeout <= 0 {
 		timeout = in.Timeout
 	}
+	yield := firstIntPtr(in.YieldTimeMS, in.YieldMs)
+	mayLeaveSession := t.sessional && yield != nil && *yield > 0
 	report, err := t.safetyScanner.Scan(ctx, safety.ExecutionRequest{
 		ToolName:   "workspace_exec",
 		Backend:    safety.BackendWorkspaceExec,
 		Command:    in.Command,
 		Cwd:        cwd,
 		Env:        in.Env,
-		TimeoutMS:  int64(timeout) * 1000,
+		TimeoutMS:  execTimeout(timeout).Milliseconds(),
 		TTY:        firstBoolValue(in.TTY, in.PTY),
-		Background: in.Background,
+		Background: in.Background || mayLeaveSession,
 	})
 	if err != nil {
 		return err

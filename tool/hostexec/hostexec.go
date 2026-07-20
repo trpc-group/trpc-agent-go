@@ -334,10 +334,11 @@ func (t *execCommandTool) checkSafety(
 		return nil
 	}
 	timeout := firstInt(in.TimeoutSec, in.TimeoutSecOld)
-	var timeoutMS int64
+	timeoutSeconds := 0
 	if timeout != nil {
-		timeoutMS = int64(*timeout) * 1000
+		timeoutSeconds = *timeout
 	}
+	timeoutMS := timeoutDuration(timeoutSeconds).Milliseconds()
 	report, err := t.safety.Scan(ctx, safety.ExecutionRequest{
 		ToolName:   toolExecCommand,
 		Backend:    safety.BackendHostExec,

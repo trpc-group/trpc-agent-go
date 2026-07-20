@@ -10,6 +10,7 @@ package safety
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -17,9 +18,10 @@ import (
 
 // PermissionPolicy adapts Scanner to tool.PermissionPolicy.
 type PermissionPolicy struct {
-	scanner    *Scanner
-	audit      AuditWriter
-	failClosed bool
+	scanner      *Scanner
+	audit        AuditWriter
+	failClosed   bool
+	toolBackends map[string]Backend
 }
 
 // PermissionOption configures a PermissionPolicy.
@@ -33,6 +35,20 @@ func WithAuditWriter(w AuditWriter) PermissionOption {
 // WithAuditFailClosed configures audit write failures.
 func WithAuditFailClosed(v bool) PermissionOption {
 	return func(p *PermissionPolicy) { p.failClosed = v }
+}
+
+// WithToolBackend registers a model-visible tool name with its execution backend.
+func WithToolBackend(name string, backend Backend) PermissionOption {
+	return func(p *PermissionPolicy) {
+		name = strings.ToLower(strings.TrimSpace(name))
+		if name == "" {
+			return
+		}
+		if p.toolBackends == nil {
+			p.toolBackends = make(map[string]Backend)
+		}
+		p.toolBackends[name] = backend
+	}
 }
 
 // NewPermissionPolicy creates a tool permission policy.
@@ -54,7 +70,7 @@ func (p *PermissionPolicy) CheckToolPermission(
 	ctx context.Context,
 	req *tool.PermissionRequest,
 ) (tool.PermissionDecision, error) {
-	execReq := RequestFromPermission(req)
+	execReq := requestFromPermission(req, p.toolBackends)
 	report, err := p.scanner.Scan(ctx, execReq)
 	if err != nil {
 		return tool.PermissionDecision{}, err

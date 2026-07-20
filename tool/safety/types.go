@@ -70,6 +70,7 @@ type ExecutionRequest struct {
 	Args           []string          `json:"args,omitempty" yaml:"args,omitempty"`
 	Script         string            `json:"script,omitempty" yaml:"script,omitempty"`
 	Language       string            `json:"language,omitempty" yaml:"language,omitempty"`
+	CodeBlocks     []CodeBlock       `json:"code_blocks,omitempty" yaml:"code_blocks,omitempty"`
 	Cwd            string            `json:"cwd,omitempty" yaml:"cwd,omitempty"`
 	Env            map[string]string `json:"env,omitempty" yaml:"env,omitempty"`
 	Timeout        time.Duration     `json:"-" yaml:"-"`
@@ -78,6 +79,12 @@ type ExecutionRequest struct {
 	TTY            bool              `json:"tty,omitempty" yaml:"tty,omitempty"`
 	Background     bool              `json:"background,omitempty" yaml:"background,omitempty"`
 	Metadata       map[string]string `json:"metadata,omitempty" yaml:"metadata,omitempty"`
+}
+
+// CodeBlock preserves the language boundary of code execution input.
+type CodeBlock struct {
+	Language string `json:"language" yaml:"language"`
+	Code     string `json:"code" yaml:"code"`
 }
 
 // Finding describes one matched safety rule.

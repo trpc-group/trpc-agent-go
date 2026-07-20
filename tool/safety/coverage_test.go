@@ -99,6 +99,10 @@ func TestRequestFromPermissionCodeExecDoubleEncodedBlocks(t *testing.T) {
 	if req.Language != "bash" || req.Script != "rm -rf ./tmp" {
 		t.Fatalf("decoded language/script = %q/%q", req.Language, req.Script)
 	}
+	if len(req.CodeBlocks) != 1 || req.CodeBlocks[0].Language != "bash" ||
+		req.CodeBlocks[0].Code != "rm -rf ./tmp" {
+		t.Fatalf("decoded code blocks = %#v", req.CodeBlocks)
+	}
 	scanner, err := NewScanner(Policy{})
 	if err != nil {
 		t.Fatal(err)
@@ -204,6 +208,22 @@ func TestRequestFromPermissionVariants(t *testing.T) {
 	if !boolPtrValue(&trueValue) || boolPtrValue(nil) {
 		t.Fatalf("boolPtrValue returned unexpected values")
 	}
+	aliases := RequestFromPermission(&tool.PermissionRequest{
+		ToolName:  "workspace_exec",
+		Arguments: []byte(`{"command":"echo ok","timeout_sec":600,"timeoutSec":1}`),
+	})
+	if aliases.TimeoutMS != 600_000 {
+		t.Fatalf("conflicting alias timeout = %d, want canonical 600000", aliases.TimeoutMS)
+	}
+	fallback := RequestFromPermission(&tool.PermissionRequest{
+		ToolName: "workspace_exec",
+		Arguments: []byte(
+			`{"command":"echo ok","timeout":7,"timeout_sec":0,"timeoutSec":1}`,
+		),
+	})
+	if fallback.TimeoutMS != 7_000 {
+		t.Fatalf("zero canonical timeout = %d, want timeout fallback 7000", fallback.TimeoutMS)
+	}
 }
 
 func TestPolicyValidationAndParsing(t *testing.T) {
@@ -251,6 +271,7 @@ func TestPolicyValidationAndParsing(t *testing.T) {
 		t.Fatalf("NewScanner accepted invalid codeexec bash action")
 	}
 	policy, err := Policy{
+		ResourceLimits: ResourceLimits{MaxOutputBytes: 1234},
 		BackendRules: BackendRules{
 			HostExec: HostExecRules{DefaultAction: DecisionDeny},
 			CodeExec: CodeExecRules{BashAction: DecisionDeny},
@@ -260,6 +281,9 @@ func TestPolicyValidationAndParsing(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(policy.EnvAllowlist) == 0 ||
+		policy.ResourceLimits.MaxOutputBytes != 1234 ||
+		policy.ResourceLimits.MaxTimeoutMS == 0 ||
+		policy.ResourceLimits.MaxSleepSeconds == 0 ||
 		!policy.BackendRules.WorkspaceExec.RequireWorkspaceRelativeCwd ||
 		policy.BackendRules.HostExec.DefaultAction != DecisionDeny ||
 		policy.BackendRules.HostExec.BackgroundAction != DecisionAsk ||
@@ -424,6 +448,37 @@ func TestScannerReviewRegressionCases(t *testing.T) {
 		wantDecision Decision
 		wantRule     string
 	}{
+		{
+			name: "option value references forbidden path",
+			req: ExecutionRequest{
+				ToolName: "workspace_exec",
+				Backend:  BackendWorkspaceExec,
+				Command:  "curl --output=.env https://proxy.example.test",
+			},
+			wantDecision: DecisionDeny,
+			wantRule:     RuleForbiddenPath,
+		},
+		{
+			name: "python shell token is literal",
+			req: ExecutionRequest{
+				ToolName: "execute_code",
+				Backend:  BackendCodeExec,
+				Language: "python",
+				Script:   `print('${HOME}')`,
+			},
+			wantDecision: DecisionAllow,
+		},
+		{
+			name: "shell command outside heuristic is scanned",
+			req: ExecutionRequest{
+				ToolName: "execute_code",
+				Backend:  BackendCodeExec,
+				Language: "bash",
+				Script:   "chmod 600 .env",
+			},
+			wantDecision: DecisionDeny,
+			wantRule:     RuleForbiddenPath,
+		},
 		{
 			name: "quoted shell expansion is literal",
 			req: ExecutionRequest{
@@ -921,6 +976,37 @@ func TestStrictPolicyParsingAndRedactionToggle(t *testing.T) {
 		t.Fatalf("zero policy did not inherit command defaults: %#v", zero.policy)
 	}
 
+	for _, tc := range []struct {
+		name string
+		data string
+		want bool
+	}{
+		{name: "audit omitted", data: "audit:\n  enabled: true\n  path: audit.jsonl\n", want: true},
+		{name: "audit true", data: "audit:\n  fail_closed: true\n", want: true},
+		{name: "audit false", data: "audit:\n  fail_closed: false\n", want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			policy, err := ParsePolicy([]byte(tc.data), "yaml")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if policy.Audit.FailClosed == nil || *policy.Audit.FailClosed != tc.want {
+				t.Fatalf("fail_closed = %v, want %v", policy.Audit.FailClosed, tc.want)
+			}
+		})
+	}
+	partialResources, err := ParsePolicy([]byte(
+		"resource_limits:\n  max_output_bytes: 1234\n",
+	), "yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if partialResources.ResourceLimits.MaxOutputBytes != 1234 ||
+		partialResources.ResourceLimits.MaxTimeoutMS == 0 ||
+		partialResources.ResourceLimits.MaxSleepSeconds == 0 {
+		t.Fatalf("partial resource defaults not preserved: %#v", partialResources.ResourceLimits)
+	}
+
 	for _, enabled := range []bool{false, true} {
 		t.Run("redaction "+fmt.Sprint(enabled), func(t *testing.T) {
 			policy := DefaultPolicy()
@@ -943,7 +1029,7 @@ func TestStrictPolicyParsingAndRedactionToggle(t *testing.T) {
 func TestPolicyConfiguredAudit(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audit.jsonl")
 	policy := DefaultPolicy()
-	policy.Audit = AuditConfig{Enabled: true, Path: path, FailClosed: true}
+	policy.Audit = AuditConfig{Enabled: true, Path: path, FailClosed: boolPointer(true)}
 	scanner, err := NewScanner(policy)
 	if err != nil {
 		t.Fatal(err)
@@ -969,7 +1055,7 @@ func TestPolicyConfiguredAudit(t *testing.T) {
 	}
 
 	disabled := DefaultPolicy()
-	disabled.Audit = AuditConfig{Enabled: false, Path: filepath.Join(t.TempDir(), "missing", "audit.jsonl"), FailClosed: true}
+	disabled.Audit = AuditConfig{Enabled: false, Path: filepath.Join(t.TempDir(), "missing", "audit.jsonl"), FailClosed: boolPointer(true)}
 	if scanner, err := NewScanner(disabled); err != nil {
 		t.Fatalf("disabled audit failed: %v", err)
 	} else if err := scanner.Close(); err != nil {
@@ -977,13 +1063,22 @@ func TestPolicyConfiguredAudit(t *testing.T) {
 	}
 
 	badPath := filepath.Join(t.TempDir(), "missing", "audit.jsonl")
+	omitted, err := ParsePolicy([]byte(fmt.Sprintf(
+		`{"audit":{"enabled":true,"path":%q}}`, badPath,
+	)), "json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewScanner(omitted); err == nil {
+		t.Fatal("omitted fail_closed accepted an unwritable audit path")
+	}
 	closed := DefaultPolicy()
-	closed.Audit = AuditConfig{Enabled: true, Path: badPath, FailClosed: true}
+	closed.Audit = AuditConfig{Enabled: true, Path: badPath, FailClosed: boolPointer(true)}
 	if _, err := NewScanner(closed); err == nil {
 		t.Fatal("fail-closed audit accepted an unwritable path")
 	}
 	open := DefaultPolicy()
-	open.Audit = AuditConfig{Enabled: true, Path: badPath, FailClosed: false}
+	open.Audit = AuditConfig{Enabled: true, Path: badPath, FailClosed: boolPointer(false)}
 	if scanner, err := NewScanner(open); err != nil {
 		t.Fatalf("fail-open audit initialization failed: %v", err)
 	} else if _, err := scanner.Scan(context.Background(), ExecutionRequest{Command: "go test ./tool/safety"}); err != nil {

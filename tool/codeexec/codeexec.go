@@ -14,7 +14,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
-	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -265,17 +264,17 @@ func (t *executeCodeTool) checkSafety(
 	if t.cfg.safety == nil {
 		return nil
 	}
-	var scriptParts []string
-	var langParts []string
+	blocks := make([]safety.CodeBlock, 0, len(input.CodeBlocks))
 	for _, block := range input.CodeBlocks {
-		langParts = append(langParts, block.Language)
-		scriptParts = append(scriptParts, block.Code)
+		blocks = append(blocks, safety.CodeBlock{
+			Language: block.Language,
+			Code:     block.Code,
+		})
 	}
 	report, err := t.cfg.safety.Scan(ctx, safety.ExecutionRequest{
-		ToolName: t.cfg.name,
-		Backend:  safety.BackendCodeExec,
-		Script:   strings.Join(scriptParts, "\n"),
-		Language: strings.Join(langParts, ","),
+		ToolName:   t.cfg.name,
+		Backend:    safety.BackendCodeExec,
+		CodeBlocks: blocks,
 	})
 	if err != nil {
 		return err

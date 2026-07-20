@@ -16,13 +16,24 @@ import (
 
 // RequestFromPermission normalizes a tool permission request for scanning.
 func RequestFromPermission(req *tool.PermissionRequest) ExecutionRequest {
+	return requestFromPermission(req, nil)
+}
+
+func requestFromPermission(
+	req *tool.PermissionRequest,
+	toolBackends map[string]Backend,
+) ExecutionRequest {
 	if req == nil {
 		return ExecutionRequest{ToolName: "unknown", Backend: BackendUnknown}
+	}
+	backend := backendFromToolName(req.ToolName)
+	if registered, ok := toolBackends[strings.ToLower(strings.TrimSpace(req.ToolName))]; ok {
+		backend = registered
 	}
 	out := ExecutionRequest{
 		ToolName:   req.ToolName,
 		ToolCallID: req.ToolCallID,
-		Backend:    backendFromToolName(req.ToolName),
+		Backend:    backend,
 	}
 	switch out.Backend {
 	case BackendWorkspaceExec:
@@ -81,12 +92,14 @@ func fillExecLike(out *ExecutionRequest, raw []byte, workspace bool) {
 	out.Env = in.Env
 	out.Background = in.Background
 	out.TTY = boolPtrValue(in.TTY) || boolPtrValue(in.PTY)
-	timeout := in.Timeout
+	timeout := 0
 	if in.TimeoutSec != nil {
 		timeout = *in.TimeoutSec
-	}
-	if in.TimeoutSecOld != nil {
+	} else if in.TimeoutSecOld != nil {
 		timeout = *in.TimeoutSecOld
+	}
+	if workspace && timeout <= 0 {
+		timeout = in.Timeout
 	}
 	if timeout > 0 {
 		out.TimeoutMS = int64(timeout) * 1000
@@ -132,6 +145,10 @@ func fillCodeExec(out *ExecutionRequest, raw []byte) {
 	var scripts []string
 	var langs []string
 	for _, b := range blocks {
+		out.CodeBlocks = append(out.CodeBlocks, CodeBlock{
+			Language: b.Language,
+			Code:     b.Code,
+		})
 		if b.Language != "" {
 			langs = append(langs, b.Language)
 		}

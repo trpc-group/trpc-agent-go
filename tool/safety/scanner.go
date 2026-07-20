@@ -46,19 +46,19 @@ func NewScanner(policy Policy) (*Scanner, error) {
 	scanner := &Scanner{
 		policy:          p,
 		redactor:        redactor,
-		auditFailClosed: p.Audit.FailClosed,
+		auditFailClosed: boolPtrValue(p.Audit.FailClosed),
 		now:             time.Now,
 	}
 	if p.Audit.Enabled {
 		if strings.TrimSpace(p.Audit.Path) == "" {
-			if p.Audit.FailClosed {
+			if boolPtrValue(p.Audit.FailClosed) {
 				return nil, fmt.Errorf("audit.enabled requires audit.path")
 			}
 			return scanner, nil
 		}
 		writer, closeFn, err := NewJSONLFileWriter(p.Audit.Path)
 		if err != nil {
-			if p.Audit.FailClosed {
+			if boolPtrValue(p.Audit.FailClosed) {
 				return nil, fmt.Errorf("open safety audit: %w", err)
 			}
 			return scanner, nil
@@ -96,7 +96,7 @@ func (s *Scanner) Scan(ctx context.Context, req ExecutionRequest) (Report, error
 	if req.Timeout == 0 && req.TimeoutMS > 0 {
 		req.Timeout = time.Duration(req.TimeoutMS) * time.Millisecond
 	}
-	commandSummary := firstNonBlank(req.Command, req.Script)
+	commandSummary := firstNonBlank(req.Command, req.Script, codeBlockSummary(req.CodeBlocks))
 	findings := s.scanRequest(req)
 	dur := float64(s.now().Sub(start).Microseconds()) / 1000.0
 	report := newReport(req, commandSummary, findings, dur, s.redactor)
@@ -143,7 +143,12 @@ func (s *Scanner) scanRequest(req ExecutionRequest) []Finding {
 			findings = append(findings, s.scanCommandInCwd(req.Command, req.Cwd)...)
 		}
 	}
-	if strings.TrimSpace(req.Script) != "" {
+	if len(req.CodeBlocks) > 0 {
+		for i, block := range req.CodeBlocks {
+			blockFindings := s.scanScript(block.Code, block.Language)
+			findings = append(findings, prefixBlockLocations(blockFindings, i)...)
+		}
+	} else if strings.TrimSpace(req.Script) != "" {
 		findings = append(findings, s.scanScript(req.Script, req.Language)...)
 	}
 	findings = append(findings, s.scanEnv(req.Env)...)
@@ -265,7 +270,8 @@ func (s *Scanner) scanScript(script, language string) []Finding {
 			"Review shell code before execution or use a more constrained language.",
 		))
 	}
-	allowCommandScan := shouldScanScriptCommands(lang)
+	shellLike := isShellLikeLanguage(lang)
+	unknownLanguage := lang == ""
 	lines := strings.Split(script, "\n")
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
@@ -277,14 +283,30 @@ func (s *Scanner) scanScript(script, language string) []Finding {
 		if strings.HasPrefix(trimmed, "#") {
 			continue
 		}
-		findings = append(findings, s.scanShellTokensAt(trimmed, loc)...)
-		if allowCommandScan && looksLikeCommand(trimmed) {
+		if shellLike || unknownLanguage {
+			findings = append(findings, s.scanShellTokensAt(trimmed, loc)...)
+		}
+		if shellLike || unknownLanguage && looksLikeCommand(trimmed) {
 			for _, f := range s.scanCommand(trimmed) {
 				if f.Location == "" || f.Location == "command" {
 					f.Location = loc
 				}
 				findings = append(findings, f)
 			}
+		}
+	}
+	return findings
+}
+
+func prefixBlockLocations(findings []Finding, index int) []Finding {
+	prefix := fmt.Sprintf("script.block[%d]", index)
+	for i := range findings {
+		if strings.HasPrefix(findings[i].Location, "script") {
+			findings[i].Location = prefix + strings.TrimPrefix(findings[i].Location, "script")
+		} else if findings[i].Location != "" {
+			findings[i].Location = prefix + "." + findings[i].Location
+		} else {
+			findings[i].Location = prefix
 		}
 	}
 	return findings
@@ -441,6 +463,16 @@ func firstNonBlank(values ...string) string {
 	return ""
 }
 
+func codeBlockSummary(blocks []CodeBlock) string {
+	parts := make([]string, 0, len(blocks))
+	for _, block := range blocks {
+		if strings.TrimSpace(block.Code) != "" {
+			parts = append(parts, block.Code)
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
 func looksLikeCommand(line string) bool {
 	if strings.ContainsAny(line, "|;&<>`$") {
 		return true
@@ -465,14 +497,6 @@ func isShellLikeLanguage(lang string) bool {
 		}
 	}
 	return false
-}
-
-func shouldScanScriptCommands(lang string) bool {
-	lang = strings.TrimSpace(lang)
-	if lang == "" {
-		return true
-	}
-	return isShellLikeLanguage(lang)
 }
 
 func ruleForDeniedCommand(cmd string) string {

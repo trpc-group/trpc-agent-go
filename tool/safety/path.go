@@ -65,6 +65,13 @@ func resolvePathAgainstCwd(path, cwd string) string {
 
 func normalizePathToken(s string) string {
 	s = strings.Trim(strings.TrimSpace(s), `"'`)
+	if strings.HasPrefix(s, "-") {
+		_, value, ok := strings.Cut(s, "=")
+		if !ok {
+			return ""
+		}
+		s = strings.Trim(strings.TrimSpace(value), `"'`)
+	}
 	if s == "" || strings.HasPrefix(s, "-") || strings.Contains(s, "://") {
 		return ""
 	}

@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/safety"
 )
 
@@ -116,5 +117,52 @@ func TestExecuteCodeTool_SafetyScannerBlocksBeforeExecutor(t *testing.T) {
 	}
 	if exec.called {
 		t.Fatal("executor was called despite blocked safety decision")
+	}
+}
+
+func TestExecuteCodeTool_SafetyScannerPreservesCodeBlockLanguages(t *testing.T) {
+	policy := safety.DefaultPolicy()
+	policy.BackendRules.CodeExec.BashAction = safety.DecisionAllow
+	scanner, err := safety.NewScanner(policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exec := &safetyTestExecutor{}
+	tl := NewTool(exec, WithSafetyScanner(scanner))
+	_, err = tl.Call(context.Background(), []byte(`{
+		"code_blocks":[
+			{"language":"python","code":"for i in range(2):\n    print('${HOME}')"},
+			{"language":"bash","code":"echo ok"}
+		]
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !exec.called {
+		t.Fatal("executor was not called for safe mixed-language blocks")
+	}
+}
+
+func TestPermissionPolicyRecognizesRenamedCodeExec(t *testing.T) {
+	scanner, err := safety.NewScanner(safety.DefaultPolicy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tl := NewTool(&safetyTestExecutor{}, WithName("run_code"))
+	policy := safety.NewPermissionPolicy(
+		scanner,
+		safety.WithToolBackend(tl.Declaration().Name, safety.BackendCodeExec),
+	)
+	decision, err := policy.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName: "run_code",
+		Arguments: []byte(`{
+			"code_blocks":[{"language":"bash","code":"rm -rf ./tmp"}]
+		}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Action != tool.PermissionActionDeny {
+		t.Fatalf("decision = %s, want deny for renamed codeexec", decision.Action)
 	}
 }
