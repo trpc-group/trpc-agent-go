@@ -11,6 +11,7 @@ package extractor
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -41,8 +42,12 @@ Correct ONLY those candidates using the conversation as evidence.
   can be made.
 </grounded_state_recovery>`
 
+var stateReplacementPattern = regexp.MustCompile(
+	`(?i)\breplac(?:e|ed|ing)\s+(?:the\s+)?(?:old|previous|prior)\b|` +
+		`\breplaced\s+by\b|\bnow\s+replaced\b|\breplacement\s+for\b`,
+)
+
 var stateLossRelationFragments = []string{
-	"replac",
 	"move on from",
 	"moved on from",
 	"moving on from",
@@ -72,6 +77,7 @@ var stateLossRelationFragments = []string{
 
 var explicitStateLossFragments = append(
 	[]string{
+		"replac",
 		"used to have",
 		"used to own",
 		"formerly had",
@@ -233,7 +239,15 @@ func operationHasStateRelation(operation *Operation) bool {
 			operation.Type != OperationUpdate) {
 		return false
 	}
-	return containsAnyFragment(operation.Memory, stateLossRelationFragments)
+	if explicitAssistantSubject(operation.Memory) {
+		return false
+	}
+	return containsStateLossRelation(operation.Memory)
+}
+
+func containsStateLossRelation(text string) bool {
+	return stateReplacementPattern.MatchString(text) ||
+		containsAnyFragment(text, stateLossRelationFragments)
 }
 
 func containsAnyFragment(text string, fragments []string) bool {

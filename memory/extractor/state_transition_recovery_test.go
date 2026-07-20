@@ -29,8 +29,7 @@ func TestContainsStateLossRelation(t *testing.T) {
 		"Previously had a five-gallon tank.",
 		"No longer owns the old phone.",
 	} {
-		assert.True(t,
-			containsAnyFragment(text, stateLossRelationFragments), text)
+		assert.True(t, containsStateLossRelation(text), text)
 	}
 	for _, text := range []string{
 		"Has an old laptop.",
@@ -39,10 +38,36 @@ func TestContainsStateLossRelation(t *testing.T) {
 		"Monitors ammonia in addition to nitrite.",
 		"Uses the desktop alongside the laptop.",
 		"Uses tea instead of coffee today.",
+		"Start by replacing 1-2 tablespoons of granulated sugar.",
 	} {
-		assert.False(t,
-			containsAnyFragment(text, stateLossRelationFragments), text)
+		assert.False(t, containsStateLossRelation(text), text)
 	}
+}
+
+func TestExtractorStateRecoveryIgnoresAssistantResultMemory(t *testing.T) {
+	resultArgs := mustOperationArgs(t, map[string]any{
+		"memory_id": "result-1",
+		"memory": "Assistant result: Start by replacing 1-2 tablespoons " +
+			"of granulated sugar.",
+	})
+	m := stateRecoverySequenceModel([]model.ToolCall{
+		makeToolCall(memory.UpdateToolName, resultArgs),
+	})
+	e := NewExtractor(m,
+		WithUpdatePolicy(UpdatePolicyHistoryPreserving),
+	)
+
+	operations, err := e.Extract(context.Background(), []model.Message{
+		model.NewUserMessage("How should I use muscovado in frosting?"),
+		model.NewAssistantMessage(
+			"Start by replacing 1-2 tablespoons of granulated sugar.",
+		),
+	}, nil)
+
+	require.NoError(t, err)
+	require.Len(t, operations, 1)
+	assert.Equal(t, OperationUpdate, operations[0].Type)
+	assert.Len(t, m.requests, 1)
 }
 
 func TestExtractorRecoversUngroundedStateTransition(t *testing.T) {

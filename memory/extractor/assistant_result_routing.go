@@ -94,7 +94,8 @@ func assistantResultOperationIndex(
 func explicitAssistantSubject(text string) bool {
 	text = strings.ToLower(strings.TrimSpace(text))
 	for _, prefix := range []string{
-		"assistant ", "assistant's ", "assistant-", "the assistant ",
+		"assistant ", "assistant's ", "assistant-", "assistant result:",
+		"the assistant ",
 		"ai assistant ", "助手", "助理",
 	} {
 		if strings.HasPrefix(text, prefix) {
