@@ -13,6 +13,7 @@ package input
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -21,11 +22,15 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/review"
 )
 
-const defaultMaxInputBytes int64 = 1 << 20
+const (
+	defaultMaxInputBytes int64 = 1 << 20
+	gitCommandTimeout          = 30 * time.Second
+)
 
 // Config 保存输入加载配置。
 type Config struct {
@@ -89,7 +94,11 @@ func diffFromRepo(repoPath string, baseRef string, headRef string, maxBytes int6
 	if repoPath == "" {
 		return nil, errors.New("repo path is required")
 	}
-	if isGitWorktree(repoPath) {
+	worktree, err := isGitWorktree(repoPath)
+	if err != nil {
+		return nil, err
+	}
+	if worktree {
 		if hasExplicitRefs(baseRef, headRef) {
 			return runGitDiff(gitDiffArgs(repoPath, baseRef, headRef), maxBytes)
 		}
@@ -141,7 +150,11 @@ func diffFromGitWorktree(repoPath string, maxBytes int64) ([]byte, error) {
 }
 
 func diffTrackedGitChanges(repoPath string, maxBytes int64) ([]byte, error) {
-	if gitHeadExists(repoPath) {
+	hasHead, err := gitHeadExists(repoPath)
+	if err != nil {
+		return nil, err
+	}
+	if hasHead {
 		return runGitDiff([]string{"-C", repoPath, "diff", "--no-ext-diff", "--no-textconv", "--unified=3", "HEAD"}, maxBytes)
 	}
 	b := newLimitedBuffer(maxBytes, "git tracked diff")
@@ -209,8 +222,15 @@ func diffUntrackedGitFiles(repoPath string, maxBytes int64) ([]byte, error) {
 	return b.Bytes(), nil
 }
 
-func gitHeadExists(repoPath string) bool {
-	return exec.Command("git", "-C", repoPath, "rev-parse", "--verify", "HEAD").Run() == nil
+func gitHeadExists(repoPath string) (bool, error) {
+	_, err := runGitCommand([]string{"-C", repoPath, "rev-parse", "--verify", "HEAD"}, 1024, "git HEAD check")
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return false, err
+	}
+	return false, nil
 }
 
 func gitRepoContext(repoPath string, maxBytes int64) (string, string, error) {
@@ -233,9 +253,15 @@ func runGitDiff(args []string, maxBytes int64) ([]byte, error) {
 	return out, nil
 }
 
-func isGitWorktree(repoPath string) bool {
-	out, err := exec.Command("git", "-C", repoPath, "rev-parse", "--is-inside-work-tree").Output()
-	return err == nil && strings.TrimSpace(string(out)) == "true"
+func isGitWorktree(repoPath string) (bool, error) {
+	out, err := runGitCommand([]string{"-C", repoPath, "rev-parse", "--is-inside-work-tree"}, 1024, "git worktree check")
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return false, err
+		}
+		return false, nil
+	}
+	return strings.TrimSpace(string(out)) == "true", nil
 }
 
 func diffFromDirectory(repoPath string, maxBytes int64) ([]byte, error) {
@@ -463,12 +489,17 @@ func readFileWithLimit(path string, maxBytes int64, label string) ([]byte, error
 }
 
 func runGitCommand(args []string, maxBytes int64, label string) ([]byte, error) {
-	cmd := exec.Command("git", args...)
+	ctx, cancel := context.WithTimeout(context.Background(), gitCommandTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", args...)
 	stdout := newLimitedBuffer(maxBytes, label)
 	stderr := newLimitedBuffer(maxBytes, label)
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	err := cmd.Run()
+	if ctx.Err() != nil {
+		return nil, fmt.Errorf("git command timed out: %w", ctx.Err())
+	}
 	if outErr := stdout.Err(); outErr != nil {
 		return nil, outErr
 	}
