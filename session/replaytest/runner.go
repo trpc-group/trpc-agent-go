@@ -24,9 +24,11 @@ import (
 
 var errInjectedPreWrite = errors.New("replaytest: injected pre-write failure")
 
-// Runner executes cases and compares every backend with the reference.
+// Runner executes cases using either a named reference or oracle-free
+// pairwise consensus.
 type Runner struct {
 	Reference string
+	Mode      ComparisonMode
 	Now       func() time.Time
 }
 
@@ -42,12 +44,23 @@ func (r Runner) Run(
 	if err := validateBackends(backends); err != nil {
 		return Report{}, err
 	}
-	reference := r.Reference
-	if reference == "" {
-		reference = backends[0].Name
+	mode := r.Mode
+	if mode == "" {
+		mode = ComparisonReference
 	}
-	if !hasBackend(backends, reference) {
-		return Report{}, fmt.Errorf("replaytest: reference backend %q not found", reference)
+	if mode != ComparisonReference && mode != ComparisonConsensus {
+		return Report{}, fmt.Errorf("replaytest: unknown comparison mode %q", mode)
+	}
+	reference := r.Reference
+	if mode == ComparisonReference {
+		if reference == "" {
+			reference = backends[0].Name
+		}
+		if !hasBackend(backends, reference) {
+			return Report{}, fmt.Errorf("replaytest: reference backend %q not found", reference)
+		}
+	} else if reference != "" {
+		return Report{}, errors.New("replaytest: consensus mode does not use a reference backend")
 	}
 	caseNames := make(map[string]struct{}, len(cases))
 	for _, replayCase := range cases {
@@ -68,10 +81,11 @@ func (r Runner) Run(
 		now = r.Now
 	}
 	report := Report{
-		GeneratedAt: now().UTC(),
-		Reference:   reference,
-		TotalCases:  len(cases),
-		Cases:       make([]CaseResult, 0, len(cases)),
+		GeneratedAt:    now().UTC(),
+		ComparisonMode: mode,
+		Reference:      reference,
+		TotalCases:     len(cases),
+		Cases:          make([]CaseResult, 0, len(cases)),
 	}
 	for _, backend := range backends {
 		report.Backends = append(report.Backends, backend.Name)
@@ -90,9 +104,13 @@ func (r Runner) Run(
 			}
 			snapshot, err := Replay(ctx, replayCase, backend)
 			if err != nil {
+				diffBackendA := reference
+				if mode == ComparisonConsensus {
+					diffBackendA = backend.Name
+				}
 				result.Diffs = append(result.Diffs, Diff{
 					Case:        replayCase.Name,
-					BackendA:    reference,
+					BackendA:    diffBackendA,
 					BackendB:    backend.Name,
 					SessionID:   replayCase.Name,
 					Path:        "/execution",
@@ -105,39 +123,64 @@ func (r Runner) Run(
 			snapshots[backend.Name] = snapshot
 		}
 
-		baseline, baselineOK := snapshots[reference]
-		if !baselineOK {
-			result.Diffs = append(result.Diffs, Diff{
-				Case:        replayCase.Name,
-				BackendA:    reference,
-				BackendB:    reference,
-				SessionID:   replayCase.Name,
-				Path:        "/execution",
-				Baseline:    "reference snapshot",
-				Actual:      "unavailable",
-				Explanation: "reference backend did not produce a snapshot",
-			})
+		if mode == ComparisonConsensus {
+			diffs, consensus, err := compareByConsensus(
+				replayCase.Name,
+				snapshots,
+				replayCase.AllowedDiffs,
+			)
+			if err != nil {
+				return Report{}, err
+			}
+			result.Diffs = append(result.Diffs, diffs...)
+			result.Consensus = &consensus
 		} else {
-			for _, backend := range backends {
-				if backend.Name == reference {
-					continue
+			baseline, baselineOK := snapshots[reference]
+			if !baselineOK {
+				_, referenceUnsupported := unsupported[reference]
+				if !referenceUnsupported && !hasSelfExecutionDiff(result.Diffs, reference) {
+					result.Diffs = append(result.Diffs, Diff{
+						Case:        replayCase.Name,
+						BackendA:    reference,
+						BackendB:    reference,
+						SessionID:   replayCase.Name,
+						Path:        "/execution",
+						Baseline:    "reference snapshot",
+						Actual:      "unavailable",
+						Explanation: "reference backend did not produce a snapshot",
+					})
 				}
-				actual, ok := snapshots[backend.Name]
-				if !ok {
-					continue
+			} else {
+				for _, backend := range backends {
+					if backend.Name == reference {
+						continue
+					}
+					actual, ok := snapshots[backend.Name]
+					if !ok {
+						continue
+					}
+					diffs, err := Compare(replayCase.Name, baseline, actual, replayCase.AllowedDiffs)
+					if err != nil {
+						return Report{}, err
+					}
+					result.Diffs = append(result.Diffs, diffs...)
 				}
-				diffs, err := Compare(replayCase.Name, baseline, actual, replayCase.AllowedDiffs)
-				if err != nil {
-					return Report{}, err
-				}
-				result.Diffs = append(result.Diffs, diffs...)
 			}
 		}
-		for backendName, missing := range unsupported {
+		for _, backend := range backends {
+			backendName := backend.Name
+			missing, ok := unsupported[backendName]
+			if !ok {
+				continue
+			}
 			for _, capability := range missing {
+				diffBackendA := reference
+				if mode == ComparisonConsensus {
+					diffBackendA = backendName
+				}
 				result.Diffs = append(result.Diffs, Diff{
 					Case:        replayCase.Name,
-					BackendA:    reference,
+					BackendA:    diffBackendA,
 					BackendB:    backendName,
 					SessionID:   replayCase.Name,
 					Path:        "/capabilities/" + string(capability),
@@ -591,6 +634,15 @@ func countDiffs(diffs []Diff) (blocking, allowed int) {
 		}
 	}
 	return blocking, allowed
+}
+
+func hasSelfExecutionDiff(diffs []Diff, backend string) bool {
+	for _, diff := range diffs {
+		if diff.BackendA == backend && diff.BackendB == backend && diff.Path == "/execution" {
+			return true
+		}
+	}
+	return false
 }
 
 func cloneJSONMap(input CanonicalMap) CanonicalMap {

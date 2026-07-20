@@ -131,8 +131,7 @@ func (c *comparator) addDiff(path string, left, right any) {
 	}
 	c.addLocator(&diff)
 	for _, rule := range c.allowed {
-		if !backendMatches(rule.BackendA, c.baseline.Backend) ||
-			!backendMatches(rule.BackendB, c.actual.Backend) {
+		if !backendPairMatches(rule, c.baseline.Backend, c.actual.Backend) {
 			continue
 		}
 		matched, err := pathpkg.Match(rule.Path, path)
@@ -257,6 +256,12 @@ func backendMatches(pattern, backend string) bool {
 	return pattern == "*" || pattern == backend
 }
 
+func backendPairMatches(rule AllowedDiff, backendA, backendB string) bool {
+	direct := backendMatches(rule.BackendA, backendA) && backendMatches(rule.BackendB, backendB)
+	reverse := backendMatches(rule.BackendA, backendB) && backendMatches(rule.BackendB, backendA)
+	return direct || reverse
+}
+
 func escapePointer(value string) string {
 	value = strings.ReplaceAll(value, "~", "~0")
 	return strings.ReplaceAll(value, "/", "~1")
@@ -295,8 +300,11 @@ func (r Report) Validate() error {
 	if r.GeneratedAt.IsZero() {
 		return errors.New("replaytest: report generated_at is required")
 	}
-	if r.Reference == "" || len(r.Backends) < 2 {
-		return errors.New("replaytest: report requires a reference and two backends")
+	if len(r.Backends) < 2 {
+		return errors.New("replaytest: report requires at least two backends")
+	}
+	if r.ComparisonMode != ComparisonReference && r.ComparisonMode != ComparisonConsensus {
+		return fmt.Errorf("replaytest: report has unknown comparison mode %q", r.ComparisonMode)
 	}
 	backendNames := make(map[string]struct{}, len(r.Backends))
 	for _, backend := range r.Backends {
@@ -308,8 +316,12 @@ func (r Report) Validate() error {
 		}
 		backendNames[backend] = struct{}{}
 	}
-	if _, ok := backendNames[r.Reference]; !ok {
-		return fmt.Errorf("replaytest: reference backend %q is not in backends", r.Reference)
+	if r.ComparisonMode == ComparisonReference {
+		if _, ok := backendNames[r.Reference]; !ok {
+			return fmt.Errorf("replaytest: reference backend %q is not in backends", r.Reference)
+		}
+	} else if r.Reference != "" {
+		return errors.New("replaytest: consensus report must not name a reference backend")
 	}
 	if r.TotalCases != len(r.Cases) {
 		return fmt.Errorf("replaytest: total_cases=%d but cases=%d", r.TotalCases, len(r.Cases))
@@ -338,11 +350,42 @@ func (r Report) Validate() error {
 			return fmt.Errorf("replaytest: case %q has unknown status %q", result.Name, result.Status)
 		}
 		caseBlocking, caseAllowed := countDiffs(result.Diffs)
-		if result.Status == StatusFailed && caseBlocking == 0 {
-			return fmt.Errorf("replaytest: failed case %q has no blocking diff", result.Name)
+		hasCapabilityEvidence := false
+		for _, diff := range result.Diffs {
+			if diff.Path == "/execution" && diff.Allowed {
+				return fmt.Errorf("replaytest: case %q allows an execution failure", result.Name)
+			}
+			if strings.HasPrefix(diff.Path, "/capabilities/") {
+				if !diff.Allowed {
+					return fmt.Errorf("replaytest: case %q has blocking capability evidence", result.Name)
+				}
+				hasCapabilityEvidence = true
+			}
 		}
-		if result.Status != StatusFailed && caseBlocking > 0 {
-			return fmt.Errorf("replaytest: case %q has blocking diffs but status %q", result.Name, result.Status)
+		if r.ComparisonMode == ComparisonReference && result.Consensus != nil {
+			return fmt.Errorf("replaytest: reference case %q contains consensus data", result.Name)
+		}
+		if r.ComparisonMode == ComparisonConsensus {
+			if result.Consensus == nil {
+				return fmt.Errorf("replaytest: consensus case %q has no consensus data", result.Name)
+			}
+			if err := validateConsensusResult(result.Name, *result.Consensus, result.Diffs, backendNames); err != nil {
+				return err
+			}
+		}
+		expectedStatus := StatusPassed
+		if caseBlocking > 0 {
+			expectedStatus = StatusFailed
+		} else if hasCapabilityEvidence {
+			expectedStatus = StatusUnsupported
+		}
+		if result.Status != expectedStatus {
+			return fmt.Errorf(
+				"replaytest: case %q has status %q, want %q from its evidence",
+				result.Name,
+				result.Status,
+				expectedStatus,
+			)
 		}
 		blockingDiffs += caseBlocking
 		allowedDiffs += caseAllowed

@@ -1,29 +1,30 @@
 # Design
 
 Replay consistency is modeled as a semantic contract, not byte-for-byte
-database equality. A case contains typed operations that use the repository's
-existing `session.Service` and `memory.Service` interfaces. Every backend is
-opened in isolation for one case, replayed, read back, and closed before the
-next case. The captured view separates session identity, globally or causally
-ordered events, scoped state, memories, filter-key summaries, and named tracks.
+database equality. Cases use typed operations over `session.Service` and
+`memory.Service`. Each backend is isolated, replayed, read back, and closed.
+Snapshots separate globally or causally ordered events, scoped state,
+memories, filter-key summaries, and named tracks.
 
 Normalization removes only values that do not carry portable semantics.
-Physical event and memory IDs become stable logical IDs; timestamps become
-presence markers; JSON objects and maps are canonicalized; memory results are
-sorted by normalized content; generated timestamps become presence markers,
-while user-supplied memory event times remain UTC instants; duration, latency,
-and timestamp fields inside track payloads become presence markers. Event role/content/tool data,
-extensions, state delta, summary text and boundary version/filter key, retained
-post-summary events, track status/error data, and summary ownership remain comparable.
-Concurrent cases relax global interleaving but still compare each branch's
-causal order and the full event set.
+Physical IDs become logical IDs, generated timestamps become presence markers,
+maps are canonicalized, and memories are sorted by normalized content.
+User-supplied memory times remain UTC instants. Track durations and timestamps
+are volatile, while status and errors remain semantic. Event content, tool
+data, extensions, state delta, summary text, boundary, filter key, retained
+tail, and ownership remain comparable. Concurrent cases ignore global
+interleaving but preserve branch-local order and the complete event set.
 
-The comparator walks normalized JSON and emits JSON Pointer paths with the
-nearest session ID, event index, memory ID, summary filter key, or track name.
-An `AllowedDiff` must name both backends, a valid path glob, an `ignore`,
-`same_type`, or `within_delta` rule, and a reason; malformed or undocumented rules fail before replay. Backend adapters
-declare capabilities explicitly, so unsupported operations appear in the
-report instead of disappearing through test skips. The root package supplies
-InMemory; SQLite lives in a small nested module to keep CGO out of the root
-dependency surface. Other persistent adapters can register without changing
-cases, normalization, or comparison code.
+The comparator emits JSON Pointer paths with session, event, memory, summary,
+or track locators. `AllowedDiff` requires an unordered backend pair, path glob,
+known rule, and reason; malformed rules fail before replay.
+
+Reference mode uses one named oracle. Consensus mode compares every successful
+pair deterministically and names an outlier only when all remaining backends
+agree. Split votes, two-backend disagreements, and non-transitive results stay
+ambiguous. Allowed differences count as agreement; execution failures and
+unsupported capabilities remain separate evidence.
+
+Adapters declare capabilities, so unsupported operations never disappear.
+The root package supplies InMemory; SQLite uses a nested module. Other adapters
+register without changing cases, normalization, or comparison code.

@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"reflect"
 	"strings"
@@ -20,6 +21,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
 func TestPublicCases(t *testing.T) {
@@ -125,6 +127,395 @@ func TestRunnerInMemoryMatrix(t *testing.T) {
 	}
 }
 
+func TestRunnerConsensusIdentifiesSingleOutlier(t *testing.T) {
+	goodA := InMemoryBackend()
+	goodA.Name = "good-a"
+	goodB := InMemoryBackend()
+	goodB.Name = "good-b"
+	outlier := eventAuthorDriftBackend("outlier")
+	backends := []Backend{outlier, goodB, goodA}
+
+	report, err := (Runner{Mode: ComparisonConsensus}).Run(
+		context.Background(),
+		[]Case{PublicCases()[0]},
+		backends,
+	)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if report.ComparisonMode != ComparisonConsensus || report.Reference != "" {
+		t.Fatalf("Run() report mode/reference = %q/%q", report.ComparisonMode, report.Reference)
+	}
+	if report.FailedCases != 1 || len(report.Cases) != 1 {
+		t.Fatalf("Run() report counters = %+v", report)
+	}
+	consensus := report.Cases[0].Consensus
+	if consensus == nil {
+		t.Fatal("Run() did not emit consensus analysis")
+	}
+	if consensus.Verdict != ConsensusOutlier || !reflect.DeepEqual(consensus.Outliers, []string{"outlier"}) {
+		t.Fatalf("consensus verdict/outliers = %q/%v", consensus.Verdict, consensus.Outliers)
+	}
+	if !reflect.DeepEqual(consensus.ComparableBackends, []string{"good-a", "good-b", "outlier"}) {
+		t.Fatalf("consensus backends = %v", consensus.ComparableBackends)
+	}
+	if len(consensus.Pairs) != 3 {
+		t.Fatalf("consensus pairs = %d, want 3", len(consensus.Pairs))
+	}
+	for _, pair := range consensus.Pairs {
+		if pair.BackendA == "good-a" && pair.BackendB == "good-b" {
+			if pair.BlockingDiffs != 0 {
+				t.Fatalf("agreeing pair has %d blocking diffs", pair.BlockingDiffs)
+			}
+			continue
+		}
+		if pair.BlockingDiffs == 0 {
+			t.Fatalf("outlier pair %+v has no blocking diff", pair)
+		}
+	}
+
+	referenceReport, err := (Runner{Reference: "outlier"}).Run(
+		context.Background(),
+		[]Case{PublicCases()[0]},
+		backends,
+	)
+	if err != nil {
+		t.Fatalf("reference Run() error = %v", err)
+	}
+	if referenceReport.FailedCases != 1 || referenceReport.Cases[0].Consensus != nil {
+		t.Fatalf("reference report = %+v", referenceReport)
+	}
+	comparedBackends := make(map[string]struct{})
+	for _, diff := range referenceReport.Cases[0].Diffs {
+		if !diff.Allowed {
+			comparedBackends[diff.BackendB] = struct{}{}
+		}
+	}
+	if len(comparedBackends) != 2 {
+		t.Fatalf("faulty reference implicated %d backends, want 2", len(comparedBackends))
+	}
+
+	report.Cases[0].Consensus.Pairs[0].BlockingDiffs++
+	if err := report.Validate(); err == nil {
+		t.Fatal("Validate() accepted tampered consensus counters")
+	}
+}
+
+func TestRunnerConsensusDoesNotGuessWithTwoBackends(t *testing.T) {
+	good := InMemoryBackend()
+	good.Name = "good"
+	outlier := eventAuthorDriftBackend("different")
+	report, err := (Runner{Mode: ComparisonConsensus}).Run(
+		context.Background(),
+		[]Case{PublicCases()[0]},
+		[]Backend{good, outlier},
+	)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	consensus := report.Cases[0].Consensus
+	if consensus == nil || consensus.Verdict != ConsensusAmbiguous || len(consensus.Outliers) != 0 {
+		t.Fatalf("two-backend consensus = %+v", consensus)
+	}
+	consensus.Outliers = []string{}
+	if err := report.Validate(); err != nil {
+		t.Fatalf("Validate() rejected an empty outliers array: %v", err)
+	}
+}
+
+func TestRunnerConsensusRejectsReference(t *testing.T) {
+	left := InMemoryBackend()
+	left.Name = "left"
+	right := InMemoryBackend()
+	right.Name = "right"
+	_, err := (Runner{Mode: ComparisonConsensus, Reference: left.Name}).Run(
+		context.Background(),
+		[]Case{PublicCases()[0]},
+		[]Backend{left, right},
+	)
+	if err == nil {
+		t.Fatal("Run() unexpectedly accepted a consensus reference")
+	}
+}
+
+func TestRunnerConsensusRecordsExcludedBackendEvidence(t *testing.T) {
+	caseUnderTest := PublicCases()[0]
+	goodA := InMemoryBackend()
+	goodA.Name = "good-a"
+	goodB := InMemoryBackend()
+	goodB.Name = "good-b"
+
+	t.Run("execution failure", func(t *testing.T) {
+		failed := openFailureBackend("failed")
+		report, err := (Runner{Mode: ComparisonConsensus}).Run(
+			context.Background(),
+			[]Case{caseUnderTest},
+			[]Backend{goodA, failed, goodB},
+		)
+		if err != nil {
+			t.Fatalf("Run() error = %v", err)
+		}
+		if report.Cases[0].Status != StatusFailed || report.Cases[0].Consensus.Verdict != ConsensusUnanimous {
+			t.Fatalf("execution failure report = %+v", report)
+		}
+		if countEvidence(report.Cases[0].Diffs, "failed", "/execution") != 1 {
+			t.Fatalf("execution evidence = %+v", report.Cases[0].Diffs)
+		}
+	})
+
+	t.Run("unsupported capability", func(t *testing.T) {
+		unsupported := missingCapabilityBackend("unsupported", CapabilitySession)
+		report, err := (Runner{Mode: ComparisonConsensus}).Run(
+			context.Background(),
+			[]Case{caseUnderTest},
+			[]Backend{unsupported, goodB, goodA},
+		)
+		if err != nil {
+			t.Fatalf("Run() error = %v", err)
+		}
+		if report.Cases[0].Status != StatusUnsupported || report.Cases[0].Consensus.Verdict != ConsensusUnanimous {
+			t.Fatalf("unsupported report = %+v", report)
+		}
+		if countEvidence(report.Cases[0].Diffs, "unsupported", "/capabilities/session") != 1 {
+			t.Fatalf("capability evidence = %+v", report.Cases[0].Diffs)
+		}
+		report.PassedCases = 1
+		report.UnsupportedCases = 0
+		report.Cases[0].Status = StatusPassed
+		if err := report.Validate(); err == nil {
+			t.Fatal("Validate() accepted passed status with capability evidence")
+		}
+	})
+
+	t.Run("insufficient comparable backends", func(t *testing.T) {
+		unsupported := missingCapabilityBackend("unsupported", CapabilitySession)
+		report, err := (Runner{Mode: ComparisonConsensus}).Run(
+			context.Background(),
+			[]Case{caseUnderTest},
+			[]Backend{goodA, unsupported},
+		)
+		if err != nil {
+			t.Fatalf("Run() error = %v", err)
+		}
+		if report.Cases[0].Status != StatusUnsupported ||
+			report.Cases[0].Consensus.Verdict != ConsensusInsufficient {
+			t.Fatalf("insufficient report = %+v", report)
+		}
+	})
+}
+
+func TestRunnerReferenceDoesNotDuplicateMissingBaselineEvidence(t *testing.T) {
+	caseUnderTest := PublicCases()[0]
+	good := InMemoryBackend()
+	good.Name = "good"
+
+	t.Run("execution failure", func(t *testing.T) {
+		failed := openFailureBackend("failed")
+		report, err := (Runner{Reference: failed.Name}).Run(
+			context.Background(),
+			[]Case{caseUnderTest},
+			[]Backend{failed, good},
+		)
+		if err != nil {
+			t.Fatalf("Run() error = %v", err)
+		}
+		if report.Cases[0].Status != StatusFailed ||
+			countEvidence(report.Cases[0].Diffs, failed.Name, "/execution") != 1 {
+			t.Fatalf("reference execution evidence = %+v", report.Cases[0])
+		}
+	})
+
+	t.Run("unsupported capability", func(t *testing.T) {
+		unsupported := missingCapabilityBackend("unsupported", CapabilitySession)
+		report, err := (Runner{Reference: unsupported.Name}).Run(
+			context.Background(),
+			[]Case{caseUnderTest},
+			[]Backend{unsupported, good},
+		)
+		if err != nil {
+			t.Fatalf("Run() error = %v", err)
+		}
+		if report.Cases[0].Status != StatusUnsupported || report.BlockingDiffs != 0 {
+			t.Fatalf("reference unsupported report = %+v", report)
+		}
+	})
+}
+
+func TestClassifyConsensus(t *testing.T) {
+	tests := []struct {
+		name     string
+		backends []string
+		pairs    []PairComparison
+		verdict  ConsensusVerdict
+		outliers []string
+	}{
+		{
+			name:     "insufficient",
+			backends: []string{"a"},
+			verdict:  ConsensusInsufficient,
+		},
+		{
+			name:     "unanimous",
+			backends: []string{"a", "b", "c"},
+			pairs: []PairComparison{
+				{BackendA: "a", BackendB: "b"},
+				{BackendA: "a", BackendB: "c"},
+				{BackendA: "b", BackendB: "c"},
+			},
+			verdict: ConsensusUnanimous,
+		},
+		{
+			name:     "strict outlier",
+			backends: []string{"a", "b", "c"},
+			pairs: []PairComparison{
+				{BackendA: "a", BackendB: "b"},
+				{BackendA: "a", BackendB: "c", BlockingDiffs: 1},
+				{BackendA: "b", BackendB: "c", BlockingDiffs: 1},
+			},
+			verdict:  ConsensusOutlier,
+			outliers: []string{"c"},
+		},
+		{
+			name:     "two backend disagreement",
+			backends: []string{"a", "b"},
+			pairs: []PairComparison{
+				{BackendA: "a", BackendB: "b", BlockingDiffs: 1},
+			},
+			verdict: ConsensusAmbiguous,
+		},
+		{
+			name:     "split vote",
+			backends: []string{"a", "b", "c", "d"},
+			pairs: []PairComparison{
+				{BackendA: "a", BackendB: "b"},
+				{BackendA: "a", BackendB: "c", BlockingDiffs: 1},
+				{BackendA: "a", BackendB: "d", BlockingDiffs: 1},
+				{BackendA: "b", BackendB: "c", BlockingDiffs: 1},
+				{BackendA: "b", BackendB: "d", BlockingDiffs: 1},
+				{BackendA: "c", BackendB: "d"},
+			},
+			verdict: ConsensusAmbiguous,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			verdict, outliers := classifyConsensus(test.backends, test.pairs)
+			if verdict != test.verdict || !reflect.DeepEqual(outliers, test.outliers) {
+				t.Fatalf("classifyConsensus() = %q/%v, want %q/%v", verdict, outliers, test.verdict, test.outliers)
+			}
+		})
+	}
+}
+
+func TestConsensusValidationRequiresBackendExclusionEvidence(t *testing.T) {
+	backends := make([]Backend, 3)
+	for index, name := range []string{"a", "b", "c"} {
+		backends[index] = InMemoryBackend()
+		backends[index].Name = name
+	}
+	report, err := (Runner{Mode: ComparisonConsensus}).Run(
+		context.Background(),
+		[]Case{PublicCases()[0]},
+		backends,
+	)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	consensus := report.Cases[0].Consensus
+	consensus.ComparableBackends = []string{"a", "b"}
+	consensus.Pairs = []PairComparison{{BackendA: "a", BackendB: "b"}}
+	if err := report.Validate(); err == nil {
+		t.Fatal("Validate() accepted a silently excluded backend")
+	}
+}
+
+func TestConsensusValidationRejectsReversePairDiff(t *testing.T) {
+	left := InMemoryBackend()
+	left.Name = "a"
+	right := InMemoryBackend()
+	right.Name = "b"
+	report, err := (Runner{Mode: ComparisonConsensus}).Run(
+		context.Background(),
+		[]Case{PublicCases()[0]},
+		[]Backend{left, right},
+	)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	report.PassedCases = 0
+	report.FailedCases = 1
+	report.BlockingDiffs = 1
+	report.Cases[0].Status = StatusFailed
+	report.Cases[0].Diffs = append(report.Cases[0].Diffs, Diff{
+		Case:        report.Cases[0].Name,
+		BackendA:    "b",
+		BackendB:    "a",
+		SessionID:   report.Cases[0].Name,
+		Path:        "/session/id",
+		Baseline:    "b",
+		Actual:      "a",
+		Explanation: "tampered reverse pair",
+	})
+	if err := report.Validate(); err == nil {
+		t.Fatal("Validate() accepted a reverse-direction consensus diff")
+	}
+}
+
+func TestConsensusValidationRejectsReservedPairEvidence(t *testing.T) {
+	tests := []struct {
+		name    string
+		path    string
+		allowed bool
+	}{
+		{name: "execution", path: "/execution"},
+		{name: "capability", path: "/capabilities/session", allowed: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			left := InMemoryBackend()
+			left.Name = "a"
+			right := InMemoryBackend()
+			right.Name = "b"
+			report, err := (Runner{Mode: ComparisonConsensus}).Run(
+				context.Background(),
+				[]Case{PublicCases()[0]},
+				[]Backend{left, right},
+			)
+			if err != nil {
+				t.Fatalf("Run() error = %v", err)
+			}
+			diff := Diff{
+				Case:        report.Cases[0].Name,
+				BackendA:    "a",
+				BackendB:    "b",
+				SessionID:   report.Cases[0].Name,
+				Path:        test.path,
+				Baseline:    "success",
+				Actual:      "tampered",
+				Allowed:     test.allowed,
+				Explanation: "tampered reserved path",
+			}
+			report.Cases[0].Diffs = append(report.Cases[0].Diffs, diff)
+			if test.allowed {
+				report.AllowedDiffs = 1
+				report.UnsupportedCases = 1
+				report.PassedCases = 0
+				report.Cases[0].Status = StatusUnsupported
+				report.Cases[0].Consensus.Pairs[0].AllowedDiffs = 1
+			} else {
+				report.BlockingDiffs = 1
+				report.FailedCases = 1
+				report.PassedCases = 0
+				report.Cases[0].Status = StatusFailed
+				report.Cases[0].Consensus.Pairs[0].BlockingDiffs = 1
+			}
+			if err := report.Validate(); err == nil {
+				t.Fatalf("Validate() accepted pairwise %s evidence", test.name)
+			}
+		})
+	}
+}
+
 func TestReplayClosesIncompleteServices(t *testing.T) {
 	reference := InMemoryBackend()
 	cleaned := false
@@ -200,6 +591,58 @@ func TestCompareAllowedDiff(t *testing.T) {
 	}
 	if len(diffs) != 1 || !diffs[0].Allowed || diffs[0].Explanation != rules[0].Reason {
 		t.Fatalf("Compare() diffs = %+v, want one documented allowed diff", diffs)
+	}
+}
+
+func TestCompareAllowedDiffBackendPairIsUnordered(t *testing.T) {
+	baseline := minimalSnapshot("baseline", `{"score":1}`)
+	actual := minimalSnapshot("actual", `{"score":2}`)
+	rules := []AllowedDiff{{
+		BackendA: "actual",
+		BackendB: "baseline",
+		Path:     "/state/session/score",
+		Rule:     AllowedIgnore,
+		Reason:   "backend pairs are unordered in consensus comparisons",
+	}}
+	diffs, err := Compare("allowed-reverse", baseline, actual, rules)
+	if err != nil {
+		t.Fatalf("Compare() error = %v", err)
+	}
+	if len(diffs) != 1 || !diffs[0].Allowed {
+		t.Fatalf("Compare() diffs = %+v, want one allowed diff", diffs)
+	}
+}
+
+func TestCompareAllowedDiffBackendWildcardPairIsUnordered(t *testing.T) {
+	tests := []struct {
+		name     string
+		baseline string
+		actual   string
+		allowed  bool
+	}{
+		{name: "sqlite first", baseline: "sqlite", actual: "zeta", allowed: true},
+		{name: "sqlite second", baseline: "alpha", actual: "sqlite", allowed: true},
+		{name: "sqlite absent", baseline: "mysql", actual: "postgres", allowed: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			baseline := minimalSnapshot(test.baseline, `{"score":1}`)
+			actual := minimalSnapshot(test.actual, `{"score":2}`)
+			rules := []AllowedDiff{{
+				BackendA: "*",
+				BackendB: "sqlite",
+				Path:     "/state/session/score",
+				Rule:     AllowedIgnore,
+				Reason:   "SQLite exposes a documented backend-private value",
+			}}
+			diffs, err := Compare(test.name, baseline, actual, rules)
+			if err != nil {
+				t.Fatalf("Compare() error = %v", err)
+			}
+			if len(diffs) != 1 || diffs[0].Allowed != test.allowed {
+				t.Fatalf("Compare() diffs = %+v, want allowed=%t", diffs, test.allowed)
+			}
+		})
 	}
 }
 
@@ -374,12 +817,13 @@ func TestMemoryEventTimeRemainsSemantic(t *testing.T) {
 
 func TestReportJSONRoundTrip(t *testing.T) {
 	report := Report{
-		GeneratedAt:   caseEpoch,
-		Reference:     "inmemory",
-		Backends:      []string{"inmemory", "sqlite"},
-		TotalCases:    1,
-		FailedCases:   1,
-		BlockingDiffs: 1,
+		GeneratedAt:    caseEpoch,
+		ComparisonMode: ComparisonReference,
+		Reference:      "inmemory",
+		Backends:       []string{"inmemory", "sqlite"},
+		TotalCases:     1,
+		FailedCases:    1,
+		BlockingDiffs:  1,
 		Cases: []CaseResult{{
 			Name:   "summary_filter_key",
 			Status: StatusFailed,
@@ -437,11 +881,12 @@ func TestWriteReportAndSample(t *testing.T) {
 
 func TestReportValidationRejectsIncorrectCounters(t *testing.T) {
 	report := Report{
-		GeneratedAt: caseEpoch,
-		Reference:   "baseline",
-		Backends:    []string{"baseline", "actual"},
-		TotalCases:  1,
-		PassedCases: 1,
+		GeneratedAt:    caseEpoch,
+		ComparisonMode: ComparisonReference,
+		Reference:      "baseline",
+		Backends:       []string{"baseline", "actual"},
+		TotalCases:     1,
+		PassedCases:    1,
 		Cases: []CaseResult{{
 			Name:   "clean",
 			Status: StatusPassed,
@@ -465,6 +910,63 @@ func causalEvent(t *testing.T, logicalID, filterKey, content string) event.Event
 		t.Fatalf("SetExtension() error = %v", err)
 	}
 	return *evt
+}
+
+type eventAuthorDriftService struct {
+	session.Service
+}
+
+func (s *eventAuthorDriftService) AppendEvent(
+	ctx context.Context,
+	sess *session.Session,
+	evt *event.Event,
+	options ...session.Option,
+) error {
+	drifted := evt.Clone()
+	drifted.Author += "-drifted"
+	return s.Service.AppendEvent(ctx, sess, drifted, options...)
+}
+
+func eventAuthorDriftBackend(name string) Backend {
+	backend := InMemoryBackend()
+	backend.Name = name
+	open := backend.Open
+	backend.Open = func(ctx context.Context, caseName string) (*Services, error) {
+		services, err := open(ctx, caseName)
+		if err != nil {
+			return nil, err
+		}
+		services.Session = &eventAuthorDriftService{Service: services.Session}
+		return services, nil
+	}
+	return backend
+}
+
+func openFailureBackend(name string) Backend {
+	return Backend{
+		Name:         name,
+		Capabilities: FullCapabilities(),
+		Open: func(context.Context, string) (*Services, error) {
+			return nil, errors.New("injected open failure")
+		},
+	}
+}
+
+func missingCapabilityBackend(name string, capability Capability) Backend {
+	backend := InMemoryBackend()
+	backend.Name = name
+	backend.Capabilities[capability] = false
+	return backend
+}
+
+func countEvidence(diffs []Diff, backend, path string) int {
+	count := 0
+	for _, diff := range diffs {
+		if diff.BackendA == backend && diff.BackendB == backend && diff.Path == path {
+			count++
+		}
+	}
+	return count
 }
 
 func minimalSnapshot(backend, score string) Snapshot {

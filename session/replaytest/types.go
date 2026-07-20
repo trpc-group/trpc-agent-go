@@ -200,7 +200,8 @@ const (
 )
 
 // AllowedDiff documents one explicit, path-scoped backend difference.
-// Path is a slash-separated glob, for example /tracks/*/*/payload/duration_ms.
+// BackendA and BackendB form an unordered pair. Path is a slash-separated
+// glob, for example /tracks/*/*/payload/duration_ms.
 type AllowedDiff struct {
 	BackendA string      `json:"backend_a"`
 	BackendB string      `json:"backend_b"`
@@ -209,6 +210,17 @@ type AllowedDiff struct {
 	Delta    float64     `json:"delta,omitempty"`
 	Reason   string      `json:"reason"`
 }
+
+// ComparisonMode selects the oracle used to interpret backend differences.
+type ComparisonMode string
+
+const (
+	// ComparisonReference compares every backend with one named reference.
+	ComparisonReference ComparisonMode = "reference"
+	// ComparisonConsensus compares every backend pair and only identifies an
+	// outlier when all remaining backends agree with each other.
+	ComparisonConsensus ComparisonMode = "consensus"
+)
 
 // Diff records one semantic mismatch and its nearest domain locator.
 type Diff struct {
@@ -227,12 +239,40 @@ type Diff struct {
 	Explanation      string `json:"explanation,omitempty"`
 }
 
+// ConsensusVerdict describes what an oracle-free comparison can conclude.
+type ConsensusVerdict string
+
+const (
+	ConsensusUnanimous    ConsensusVerdict = "unanimous"
+	ConsensusOutlier      ConsensusVerdict = "outlier"
+	ConsensusAmbiguous    ConsensusVerdict = "ambiguous"
+	ConsensusInsufficient ConsensusVerdict = "insufficient"
+)
+
+// PairComparison summarizes one deterministic backend-pair comparison.
+type PairComparison struct {
+	BackendA      string `json:"backend_a"`
+	BackendB      string `json:"backend_b"`
+	BlockingDiffs int    `json:"blocking_diffs"`
+	AllowedDiffs  int    `json:"allowed_diffs"`
+}
+
+// ConsensusResult records pairwise agreement without assuming one backend is
+// correct. Outliers is populated only for a conclusive single-outlier result.
+type ConsensusResult struct {
+	Verdict            ConsensusVerdict `json:"verdict"`
+	ComparableBackends []string         `json:"comparable_backends"`
+	Pairs              []PairComparison `json:"pairs"`
+	Outliers           []string         `json:"outliers,omitempty"`
+}
+
 // CaseResult is one case in a report.
 type CaseResult struct {
-	Name     string `json:"case"`
-	Status   string `json:"status"`
-	Duration int64  `json:"duration_ms"`
-	Diffs    []Diff `json:"diffs,omitempty"`
+	Name      string           `json:"case"`
+	Status    string           `json:"status"`
+	Duration  int64            `json:"duration_ms"`
+	Diffs     []Diff           `json:"diffs,omitempty"`
+	Consensus *ConsensusResult `json:"consensus,omitempty"`
 }
 
 const (
@@ -243,16 +283,17 @@ const (
 
 // Report is the machine-readable replay result.
 type Report struct {
-	GeneratedAt      time.Time    `json:"generated_at"`
-	Reference        string       `json:"reference"`
-	Backends         []string     `json:"backends"`
-	TotalCases       int          `json:"total_cases"`
-	PassedCases      int          `json:"passed_cases"`
-	FailedCases      int          `json:"failed_cases"`
-	UnsupportedCases int          `json:"unsupported_cases"`
-	BlockingDiffs    int          `json:"blocking_diffs"`
-	AllowedDiffs     int          `json:"allowed_diffs"`
-	Cases            []CaseResult `json:"cases"`
+	GeneratedAt      time.Time      `json:"generated_at"`
+	ComparisonMode   ComparisonMode `json:"comparison_mode"`
+	Reference        string         `json:"reference,omitempty"`
+	Backends         []string       `json:"backends"`
+	TotalCases       int            `json:"total_cases"`
+	PassedCases      int            `json:"passed_cases"`
+	FailedCases      int            `json:"failed_cases"`
+	UnsupportedCases int            `json:"unsupported_cases"`
+	BlockingDiffs    int            `json:"blocking_diffs"`
+	AllowedDiffs     int            `json:"allowed_diffs"`
+	Cases            []CaseResult   `json:"cases"`
 }
 
 // FaultKind identifies a deterministic snapshot mutation used to prove that
