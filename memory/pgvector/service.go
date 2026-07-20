@@ -613,6 +613,9 @@ func (s *Service) SearchMemories(
 		if kwErr == nil && len(keywordResults) > 0 {
 			rankings = append(rankings, keywordResults)
 		}
+		if focusedResults := rankResultsByFocusedPassage(query, results); len(focusedResults) > 0 {
+			rankings = append(rankings, focusedResults)
+		}
 		rankings = append(rankings, rankedResultsByMemoryKind(results)...)
 		rrfK := opts.HybridRRFK
 		if rrfK <= 0 {
