@@ -398,9 +398,16 @@ func gitWorkingTreeDiff(ctx context.Context, repo string) (string, error) {
 // capped at MaxDiffBytes minus the bytes already consumed by the tracked
 // diff so the combined working-tree diff never exceeds MaxDiffBytes.
 //
-// Each entry is resolved under repo and validated via syntheticDiffForFile,
-// which rejects absolute paths, traversal, symlinks and non-regular files
-// — the same safety net applied to --file-list mode.
+// Non-regular files (directories, submodules, symlinks, devices) and files
+// that disappear between the ls-files call and the read are silently skipped
+// — they are not reviewable as text diffs and failing the whole review on
+// their account would be too aggressive. Absolute paths are still rejected
+// defensively (see comment in the loop).
+//
+// When the remaining size budget is exhausted, the loop breaks early and
+// returns whatever was collected so far. This mirrors how loadFixtureDir
+// behaves when the total cap is reached: the caller gets a partial result
+// rather than a hard failure.
 func gitUntrackedDiff(ctx context.Context, repo string, alreadyUsed int64) (string, error) {
 	if alreadyUsed >= MaxDiffBytes {
 		return "", nil
@@ -431,7 +438,29 @@ func gitUntrackedDiff(ctx context.Context, repo string, alreadyUsed int64) (stri
 		if filepath.IsAbs(name) {
 			return "", fmt.Errorf("reject absolute untracked path %q", name)
 		}
-		synth, serr := syntheticDiffForFile(name, absRepo, MaxDiffBytes-alreadyUsed-totalSize)
+		// Stop once the size budget is exhausted so we don't fail the
+		// whole load just because there are too many untracked files.
+		remaining := MaxDiffBytes - alreadyUsed - totalSize
+		if remaining <= 0 {
+			break
+		}
+		// Pre-check the file type so non-regular entries (directories,
+		// submodules, symlinks) are skipped rather than failing the
+		// load. syntheticDiffForFile repeats the Lstat internally;
+		// the duplicate call is acceptable (stat is fast) and keeps
+		// that function's contract intact for file-list mode.
+		full := filepath.Join(absRepo, name)
+		info, lerr := os.Lstat(full)
+		if lerr != nil {
+			// File was deleted or renamed between ls-files and Lstat
+			// (TOCTOU). Skip it rather than failing the review.
+			continue
+		}
+		if !info.Mode().IsRegular() {
+			// Directory, submodule, symlink, device, socket, etc.
+			continue
+		}
+		synth, serr := syntheticDiffForFile(name, absRepo, remaining)
 		if serr != nil {
 			return "", serr
 		}

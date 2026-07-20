@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -207,6 +208,74 @@ func TestLoad_RepoPath_UnbornHEAD(t *testing.T) {
 	}
 	if len(in.Files) != 0 {
 		t.Fatalf("expected 0 files for empty repo, got %d", len(in.Files))
+	}
+}
+
+// TestLoad_RepoPath_UntrackedFiles verifies that untracked files (newly
+// added but not yet `git add`-ed) are included in the review diff so
+// hardcoded secrets or other issues in them are not silently skipped.
+// A directory and a non-regular file placed alongside the untracked source
+// file must be skipped rather than failing the load.
+func TestLoad_RepoPath_UntrackedFiles(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skipf("git not found on PATH: %v", err)
+	}
+	repo := t.TempDir()
+	if err := exec.Command("git", "init", repo).Run(); err != nil {
+		t.Fatalf("git init: %v", err)
+	}
+	// Configure git so `git diff` and `git ls-files` work in a fresh repo
+	// without a default identity (required by some git versions for any
+	// write operation, but `git ls-files` doesn't need it; set anyway).
+	if err := os.Chdir(repo); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	// Create an untracked Go file with a hardcoded credential.
+	creds := filepath.Join(repo, "creds.go")
+	credsBody := []byte("package main\nconst password = \"sk-untracked-test-12345\"\n")
+	if err := os.WriteFile(creds, credsBody, 0o644); err != nil {
+		t.Fatalf("write creds.go: %v", err)
+	}
+	// Create an untracked directory — must be skipped, not fail the load.
+	if err := os.MkdirAll(filepath.Join(repo, "subdir"), 0o755); err != nil {
+		t.Fatalf("mkdir subdir: %v", err)
+	}
+	// Create a tracked file so the repo has at least one staged path
+	// (proves the untracked diff is additive on top of the tracked diff).
+	tracked := filepath.Join(repo, "main.go")
+	if err := os.WriteFile(tracked, []byte("package main\nfunc main() {}\n"), 0o644); err != nil {
+		t.Fatalf("write main.go: %v", err)
+	}
+	if err := exec.Command("git", "-C", repo, "add", "main.go").Run(); err != nil {
+		t.Fatalf("git add main.go: %v", err)
+	}
+	if err := exec.Command("git", "-C", repo, "commit", "-m", "init", "--author=test <test@example.com>").Run(); err != nil {
+		t.Fatalf("git commit: %v", err)
+	}
+
+	in, err := Load(context.Background(), SourceRepoPath, repo)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	// The diff must contain the untracked creds.go content so rules can
+	// scan it for the hardcoded credential.
+	if !strings.Contains(in.DiffText, "creds.go") {
+		t.Errorf("untracked creds.go missing from diff; diffText:\n%s", in.DiffText)
+	}
+	if !strings.Contains(in.DiffText, "sk-untracked-test-12345") {
+		t.Errorf("untracked credential missing from diff; diffText:\n%s", in.DiffText)
+	}
+	// The untracked directory must not fail the load (it's skipped).
+	// The parsed files should include creds.go.
+	var foundCreds bool
+	for _, f := range in.Files {
+		if f.NewPath == "creds.go" {
+			foundCreds = true
+			break
+		}
+	}
+	if !foundCreds {
+		t.Errorf("creds.go not in parsed files: %+v", in.Files)
 	}
 }
 
