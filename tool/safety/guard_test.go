@@ -392,3 +392,121 @@ func TestGuard_DefaultExtractor_ExecStdinExtracted(t *testing.T) {
 		t.Errorf("exec with stdin containing dangerous code should be denied, got %s", dec.Action)
 	}
 }
+
+func TestParseExtractorArgs(t *testing.T) {
+	tests := []struct {
+		name string
+		args []byte
+		ok   bool
+	}{
+		{name: "empty", args: nil, ok: false},
+		{name: "whitespace only", args: []byte("  \t\n"), ok: false},
+		{name: "non json", args: []byte("raw shell text"), ok: false},
+		{name: "json array", args: []byte(`[]`), ok: false},
+		{name: "json object", args: []byte(`{"command":"ls"}`), ok: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, ok := parseExtractorArgs(tt.args)
+			if ok != tt.ok {
+				t.Fatalf("parseExtractorArgs() ok = %v, want %v", ok, tt.ok)
+			}
+		})
+	}
+}
+
+func TestStringField(t *testing.T) {
+	raw := map[string]json.RawMessage{
+		"command": json.RawMessage(`"ls -la"`),
+		"number":  json.RawMessage(`123`),
+		"broken":  json.RawMessage(`{"unterminated"`),
+	}
+
+	if got, ok := stringField(raw, "command"); !ok || got != "ls -la" {
+		t.Fatalf("stringField(command) = (%q, %v), want (%q, true)", got, ok, "ls -la")
+	}
+	if _, ok := stringField(raw, "missing"); ok {
+		t.Fatal("stringField(missing) should return ok=false")
+	}
+	if _, ok := stringField(raw, "number"); ok {
+		t.Fatal("stringField(number) should reject non-string JSON")
+	}
+	if _, ok := stringField(raw, "broken"); ok {
+		t.Fatal("stringField(broken) should reject malformed JSON")
+	}
+}
+
+func TestMergeStdinPayload(t *testing.T) {
+	t.Run("empty command uses stdin", func(t *testing.T) {
+		in := ScanInput{ExecutorType: "local"}
+		raw := map[string]json.RawMessage{"stdin": json.RawMessage(`"print('hi')"`)}
+
+		mergeStdinPayload(&in, raw, "exec_command")
+		if in.Command != "print('hi')" {
+			t.Fatalf("command = %q, want stdin payload", in.Command)
+		}
+		if len(in.CodeBlocks) != 0 {
+			t.Fatalf("unexpected code blocks: %+v", in.CodeBlocks)
+		}
+	})
+
+	t.Run("non interpreter appends heredoc", func(t *testing.T) {
+		in := ScanInput{Command: "sh -c echo", ExecutorType: "local"}
+		raw := map[string]json.RawMessage{"stdin": json.RawMessage(`"payload"`)}
+
+		mergeStdinPayload(&in, raw, "exec_command")
+		if in.Command != "sh -c echo <<< payload" {
+			t.Fatalf("command = %q, want heredoc merge", in.Command)
+		}
+		if len(in.CodeBlocks) != 0 {
+			t.Fatalf("unexpected code blocks: %+v", in.CodeBlocks)
+		}
+	})
+
+	t.Run("missing stdin leaves input unchanged", func(t *testing.T) {
+		in := ScanInput{Command: "ls", ExecutorType: "local"}
+		mergeStdinPayload(&in, map[string]json.RawMessage{}, "exec_command")
+		if in.Command != "ls" {
+			t.Fatalf("command = %q, want unchanged", in.Command)
+		}
+	})
+}
+
+func TestIsInterpreterCommand(t *testing.T) {
+	if !isInterpreterCommand("node") {
+		t.Fatal("node should be recognized as interpreter command")
+	}
+	if isInterpreterCommand("sh -c") {
+		t.Fatal("shell wrapper string should not be treated as interpreter command")
+	}
+}
+
+func TestParseCodeBlocks_InvalidPayloads(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  json.RawMessage
+	}{
+		{name: "empty", raw: nil},
+		{name: "scalar", raw: json.RawMessage(`123`)},
+		{name: "double encoded invalid", raw: json.RawMessage(`"not json"`)},
+		{name: "object without code", raw: json.RawMessage(`{"language":"python"}`)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if blocks := parseCodeBlocks(tt.raw); len(blocks) != 0 {
+				t.Fatalf("parseCodeBlocks() = %+v, want nil/empty", blocks)
+			}
+		})
+	}
+}
+
+func TestCodeBlockFromAny(t *testing.T) {
+	if cb, ok := codeBlockFromAny("print('hi')"); !ok || cb.Code != "print('hi')" {
+		t.Fatalf("string element = (%+v, %v), want code block", cb, ok)
+	}
+	if _, ok := codeBlockFromAny(123); ok {
+		t.Fatal("numeric element should not produce code block")
+	}
+}
