@@ -4336,7 +4336,7 @@
 <p>这个模式有几个边界要说清楚。</p>
 <p><strong>第一，它优化的是“生成 summary 的那次请求”</strong>，不改变 summary 的存储方式，也不改变 boundary 和 events 的语义。</p>
 <p><strong>第二，它依赖父请求前缀稳定。</strong> system prompt、tools、模型、上下文顺序如果频繁变化，prompt cache 仍然会被打散。</p>
-<p><strong>第三，追加的 compaction prompt 和普通 <code>WithPrompt(...)</code> 不一样。</strong> cache-safe fork 模式下，父请求本身已经包含对话前缀，所以自定义 <code>WithCacheSafeForkPrompt(...)</code> 时不应该再塞 <code>{conversation_text}</code>，只需要告诉模型“把上面的对话压成后续可继续工作的 summary”。</p>
+<p><strong>第三，追加的 compaction prompt 和普通 <code>WithPrompt(...)</code> 不一样。</strong> cache-safe fork 模式下，父请求本身已经包含对话前缀和已注入的摘要，所以自定义 <code>WithCacheSafeForkPrompt(...)</code> 时不应该再塞 <code>{conversation_text}</code> 或 <code>{previous_summary}</code>，只需要告诉模型“把上面的对话压成后续可继续工作的 summary”。</p>
 <p><strong>第四，summary 已经生成以后</strong>，下一轮普通对话请求如果也希望更利于 prompt cache，仍然要回到前面说的注入策略：频繁变化的内容尽量放在 message 侧，避免总是改 system 前缀。也因此，超长会话里 user injection mode 和 cache-safe forking 是可以互相配合的。</p>
 <p>PR 里的 A/B 结果也能说明这个方向的价值：standalone summary 首次摘要请求无法复用已热的父请求前缀，cached prompt tokens 为 0；cache-safe fork summary 则能在摘要请求里复用大部分父请求前缀，cache rate 约为 <code>94.67%</code>。这条优化主要改善长会话 summary 链路的成本和延迟，不直接改变答案质量。</p>
 <p>这里还能回到前面同步/异步的问题：越是 coding agent，越容易有稳定且昂贵的前缀，也越值得把 compaction 做成少触发、晚触发、可复用缓存的动作；越是 general agent，工具集合、页面上下文、知识库输入可能每轮变化更明显，summary 请求是否值得强行复用父请求前缀，就要看具体业务形态。cache-safe forking 给的是能力，不是默认答案。</p>
@@ -5372,7 +5372,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年6月15日 03:20:11 UTC">2026-06-15 03:20:11</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年7月20日 02:18:03 UTC">2026-07-20 02:18:03</span>
   </span>
 
     
