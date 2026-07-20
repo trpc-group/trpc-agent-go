@@ -699,6 +699,54 @@ your callback as needed.
 
 End-to-end example: [examples/workspace_io](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/workspace_io).
 
+## Limiting inline `workspace_exec` output in sessions
+
+For compatibility, `workspace_exec` returns all terminal text observed for a
+call by default. To prevent very large stdout/stderr payloads from being
+persisted as tool results in the session, configure an inline byte limit at the
+agent level:
+
+```go
+import workspaceexec "trpc.group/trpc-go/trpc-agent-go/tool/workspaceexec"
+
+agent := llmagent.New(
+    "my-agent",
+    llmagent.WithCodeExecutor(executor),
+    llmagent.WithWorkspaceExecOutputLimits(workspaceexec.OutputLimits{
+        MaxOutputBytes: 64 * 1024,
+    }),
+)
+```
+
+You can also configure a directly constructed tool:
+
+```go
+tool := workspaceexec.NewExecTool(
+    executor,
+    workspaceexec.WithOutputLimits(workspaceexec.OutputLimits{
+        MaxOutputBytes: 64 * 1024,
+    }),
+)
+```
+
+The limit applies to one-shot `workspace_exec` calls and to every return from
+interactive `workspace_exec` / `workspace_write_stdin` calls. Oversized output
+is windowed with its head and tail preserved, and the result reports
+`truncated: true` plus the original `total_bytes`. Windowing happens before the
+tool-result event is created, so the session persists the bounded result. This
+is different from Context Compaction, which only rewrites the request
+projection before a model call.
+
+If the configured limit is too small to fit the truncation marker, the result
+falls back to a UTF-8-safe prefix. For interactive results, `offset` and
+`next_offset` always describe the range consumed by the underlying poll. When
+`truncated` is true, `output` is only a bounded view of that range and omitted
+content is not returned by a later poll.
+
+`MaxOutputBytes <= 0` disables the limit and is the default. This option bounds
+the tool result and session payload; whether stdout/stderr capture is bounded
+during command execution still depends on the executor backend.
+
 ## Restricting `workspace_exec` commands
 
 `workspace_exec` runs whatever shell command the model sends. In sandboxes

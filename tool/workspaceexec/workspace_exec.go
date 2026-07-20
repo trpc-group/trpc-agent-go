@@ -21,6 +21,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
@@ -39,6 +40,7 @@ import (
 const (
 	defaultWorkspaceExecTimeout = 5 * time.Minute
 	defaultWorkspaceWriteYield  = 200
+	outputTruncatedMarker       = "\n...[output truncated]...\n"
 )
 
 // Environment variables that mirror the option names; useful for
@@ -76,6 +78,7 @@ type ExecTool struct {
 	// "eval curl ..." or "sh -c '...'".
 	allowedCmds []string
 	deniedCmds  []string
+	outputLimit int
 
 	mu       sync.Mutex
 	sessions map[string]*execSession
@@ -139,6 +142,18 @@ type execOutput struct {
 	SessionID  string `json:"session_id,omitempty"`
 	Offset     int    `json:"offset"`
 	NextOffset int    `json:"next_offset"`
+	Truncated  bool   `json:"truncated,omitempty"`
+	TotalBytes int    `json:"total_bytes,omitempty"`
+}
+
+// OutputLimits controls how much terminal text workspace_exec and
+// workspace_write_stdin return inline. The limit is applied before the tool
+// result event is created, so oversized terminal output is not persisted in
+// full in the session. A non-positive MaxOutputBytes disables this limit.
+type OutputLimits struct {
+	// MaxOutputBytes is the maximum inline output size per tool call.
+	// Non-positive values disable output windowing.
+	MaxOutputBytes int
 }
 
 type execRequest struct {
@@ -196,6 +211,18 @@ func WithWorkspaceRegistry(
 ) func(*ExecTool) {
 	return func(t *ExecTool) {
 		t.reg = reg
+	}
+}
+
+// WithOutputLimits sets the inline terminal-output limit for workspace_exec
+// and workspace_write_stdin. Oversized output is normally windowed with its
+// head and tail preserved. If the limit cannot fit the truncation marker, the
+// output falls back to a UTF-8-safe prefix. The returned result includes
+// truncated=true and the original total_bytes value. The limit is disabled by
+// default.
+func WithOutputLimits(limits OutputLimits) func(*ExecTool) {
+	return func(t *ExecTool) {
+		t.outputLimit = limits.MaxOutputBytes
 	}
 }
 
@@ -764,7 +791,7 @@ func (t *ExecTool) callNonSessional(
 	if err != nil {
 		return execOutput{}, err
 	}
-	return out, nil
+	return t.limitOutput(out), nil
 }
 
 func (t *ExecTool) callSessional(
@@ -776,7 +803,7 @@ func (t *ExecTool) callSessional(
 		if err != nil {
 			return execOutput{}, err
 		}
-		return out, nil
+		return t.limitOutput(out), nil
 	}
 	return t.startInteractive(ctx, req)
 }
@@ -824,6 +851,7 @@ func (t *ExecTool) startInteractive(
 	t.putSession(proc.ID(), &execSession{proc: proc})
 	poll := initialPoll(proc, req.background, req.yield)
 	out := pollOutput(proc.ID(), poll)
+	out = t.limitOutput(out)
 	if poll.Status == codeexecutor.ProgramStatusExited {
 		if err := t.finalizeAndRemoveSession(proc.ID()); err != nil {
 			out.SessionID = proc.ID()
@@ -879,6 +907,7 @@ func (t *WriteStdinTool) Call(ctx context.Context, args []byte) (any, error) {
 		programsession.PollLineLimit(0),
 	)
 	out := pollOutput(sessionID, poll)
+	out = t.exec.limitOutput(out)
 	if poll.Status == codeexecutor.ProgramStatusExited {
 		if err := t.exec.finalizeAndRemoveSession(sessionID); err != nil {
 			out.SessionID = sessionID
@@ -1094,11 +1123,13 @@ func execOutputSchema(desc string) *tool.Schema {
 		Required:    []string{"status", "offset", "next_offset"},
 		Properties: map[string]*tool.Schema{
 			"status":      {Type: "string", Description: "running or exited"},
-			"output":      {Type: "string", Description: "Aggregated terminal text observed for this call. It may combine stdout and stderr and does not guarantee preservation of their original interleaving."},
+			"output":      {Type: "string", Description: "Aggregated terminal text observed for this call. It may combine stdout and stderr and does not guarantee preservation of their original interleaving. When truncated is true, this is only a bounded view of the output consumed through next_offset; omitted content cannot be retrieved by a later poll."},
 			"exit_code":   {Type: "integer", Description: "Exit code when the session has exited."},
 			"session_id":  {Type: "string", Description: "Interactive session id when still running."},
-			"offset":      {Type: "integer", Description: "Start offset of returned output."},
-			"next_offset": {Type: "integer", Description: "Next output offset."},
+			"offset":      {Type: "integer", Description: "Start cursor of the underlying output consumed for this call."},
+			"next_offset": {Type: "integer", Description: "Next cursor after the underlying output consumed for this call, including content omitted when truncated is true."},
+			"truncated":   {Type: "boolean", Description: "True when output was shortened to the configured inline limit before the tool result was persisted."},
+			"total_bytes": {Type: "integer", Description: "Original output size in bytes when truncated is true."},
 		},
 	}
 }
@@ -1115,6 +1146,60 @@ func pollOutput(sessionID string, poll codeexecutor.ProgramPoll) execOutput {
 		out.SessionID = sessionID
 	}
 	return out
+}
+
+func (t *ExecTool) limitOutput(out execOutput) execOutput {
+	if t == nil || t.outputLimit <= 0 || len(out.Output) <= t.outputLimit {
+		return out
+	}
+	out.TotalBytes = len(out.Output)
+	out.Output = windowOutput(out.Output, t.outputLimit)
+	out.Truncated = true
+	return out
+}
+
+func windowOutput(output string, maxBytes int) string {
+	if maxBytes <= 0 || len(output) <= maxBytes {
+		return output
+	}
+	if maxBytes <= len(outputTruncatedMarker) {
+		return utf8Prefix(output, maxBytes)
+	}
+
+	contentBudget := maxBytes - len(outputTruncatedMarker)
+	headBudget := (contentBudget + 1) / 2
+	tailBudget := contentBudget - headBudget
+	head := utf8Prefix(output, headBudget)
+	tail := utf8Suffix(output, tailBudget)
+	return head + outputTruncatedMarker + tail
+}
+
+func utf8Prefix(s string, maxBytes int) string {
+	if maxBytes <= 0 {
+		return ""
+	}
+	if len(s) <= maxBytes {
+		return s
+	}
+	end := maxBytes
+	for end > 0 && !utf8.RuneStart(s[end]) {
+		end--
+	}
+	return s[:end]
+}
+
+func utf8Suffix(s string, maxBytes int) string {
+	if maxBytes <= 0 {
+		return ""
+	}
+	if len(s) <= maxBytes {
+		return s
+	}
+	start := len(s) - maxBytes
+	for start < len(s) && !utf8.RuneStart(s[start]) {
+		start++
+	}
+	return s[start:]
 }
 
 func execTimeout(raw int) time.Duration {

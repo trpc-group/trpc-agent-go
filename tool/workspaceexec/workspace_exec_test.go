@@ -15,8 +15,10 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/require"
 
@@ -78,6 +80,81 @@ func TestExecTool_Declaration_DescribesGeneralShellUsage(t *testing.T) {
 	require.NotContains(t, decl.Description, "curl")
 	require.NotContains(t, decl.Description, "network")
 	require.NotContains(t, decl.Description, "git")
+	require.Contains(t, decl.OutputSchema.Properties, "truncated")
+	require.Contains(t, decl.OutputSchema.Properties, "total_bytes")
+}
+
+func TestExecTool_OutputLimitsApplyBeforeReturn(t *testing.T) {
+	const maxBytes = 40
+	exec := localexec.New()
+	tl := NewExecTool(exec, WithOutputLimits(OutputLimits{
+		MaxOutputBytes: maxBytes,
+	}))
+
+	original := "HEAD!" + strings.Repeat("x", 80) + "!TAIL"
+	args, err := json.Marshal(execInput{
+		Command: "printf '" + original + "'",
+		Timeout: timeoutSecSmall,
+	})
+	require.NoError(t, err)
+
+	res, err := tl.Call(context.Background(), args)
+	require.NoError(t, err)
+	out := res.(execOutput)
+	require.True(t, out.Truncated)
+	require.Equal(t, len(original), out.TotalBytes)
+	require.LessOrEqual(t, len(out.Output), maxBytes)
+	require.Contains(t, out.Output, outputTruncatedMarker)
+	require.True(t, strings.HasPrefix(out.Output, "HEAD!"))
+	require.True(t, strings.HasSuffix(out.Output, "!TAIL"))
+}
+
+func TestExecTool_OutputLimitsDisabledByDefault(t *testing.T) {
+	original := strings.Repeat("x", 128)
+	out := (&ExecTool{}).limitOutput(execOutput{Output: original})
+	require.Equal(t, original, out.Output)
+	require.False(t, out.Truncated)
+	require.Zero(t, out.TotalBytes)
+}
+
+func TestExecTool_OutputLimitsPreserveUTF8(t *testing.T) {
+	limit := len(outputTruncatedMarker) + 6
+	original := "你" + strings.Repeat("x", 80) + "好"
+	out := (&ExecTool{outputLimit: limit}).limitOutput(execOutput{
+		Output: original,
+	})
+	require.True(t, out.Truncated)
+	require.Equal(t, len(original), out.TotalBytes)
+	require.LessOrEqual(t, len(out.Output), limit)
+	require.True(t, strings.HasPrefix(out.Output, "你"))
+	require.True(t, strings.HasSuffix(out.Output, "好"))
+	require.True(t, utf8.ValidString(out.Output))
+}
+
+func TestExecTool_OutputLimitsTinyBudgetUsesUTF8Prefix(t *testing.T) {
+	tests := []struct {
+		name     string
+		limit    int
+		expected string
+	}{
+		{name: "partial multibyte rune", limit: 2, expected: ""},
+		{name: "complete rune and ASCII", limit: 4, expected: "你a"},
+		{name: "marker does not fit", limit: len(outputTruncatedMarker), expected: "你abcdefghijklmnopqrstuvw"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			original := "你abcdefghijklmnopqrstuvwxyz"
+			out := (&ExecTool{outputLimit: tc.limit}).limitOutput(execOutput{
+				Output: original,
+			})
+			require.True(t, out.Truncated)
+			require.Equal(t, len(original), out.TotalBytes)
+			require.Equal(t, tc.expected, out.Output)
+			require.LessOrEqual(t, len(out.Output), tc.limit)
+			require.True(t, utf8.ValidString(out.Output))
+			require.NotContains(t, out.Output, outputTruncatedMarker)
+		})
+	}
 }
 
 func TestExecTool_AutoStagesInvocationMessageFiles(t *testing.T) {
@@ -318,12 +395,16 @@ func TestExecTool_SkillsCWDDoesNotRequireRepo(t *testing.T) {
 }
 
 func TestExecTool_BackgroundAndWriteStdin(t *testing.T) {
+	const maxBytes = 40
+	initialOutput := "HEAD!" + strings.Repeat("x", 80) + "!TAIL"
 	exec := localexec.New()
-	execTool := NewExecTool(exec)
+	execTool := NewExecTool(exec, WithOutputLimits(OutputLimits{
+		MaxOutputBytes: maxBytes,
+	}))
 	writeTool := NewWriteStdinTool(execTool)
 
 	startArgs := execInput{
-		Command:     "printf 'ready\\n'; read v; echo out:$v; echo err:$v >&2",
+		Command:     "printf '" + initialOutput + "\\n'; read v; echo out:$v; echo err:$v >&2",
 		Cwd:         "work",
 		Background:  true,
 		YieldTimeMS: intPtr(100),
@@ -337,7 +418,12 @@ func TestExecTool_BackgroundAndWriteStdin(t *testing.T) {
 	started := startRes.(execOutput)
 	require.Equal(t, codeexecutor.ProgramStatusRunning, started.Status)
 	require.NotEmpty(t, started.SessionID)
-	require.Contains(t, started.Output, "ready")
+	require.True(t, started.Truncated)
+	require.Equal(t, len(initialOutput), started.TotalBytes)
+	require.LessOrEqual(t, len(started.Output), maxBytes)
+	require.Contains(t, started.Output, outputTruncatedMarker)
+	require.True(t, strings.HasPrefix(started.Output, "HEAD!"))
+	require.True(t, strings.HasSuffix(started.Output, "!TAIL"))
 
 	writeArgs := writeInput{
 		SessionID:     started.SessionID,
@@ -373,6 +459,64 @@ func TestExecTool_BackgroundAndWriteStdin(t *testing.T) {
 	require.NotNil(t, out.ExitCode)
 	require.Equal(t, 0, *out.ExitCode)
 	require.Contains(t, out.Output, "out:hello")
+}
+
+func TestWriteStdinTool_OutputLimitsApplyToPolls(t *testing.T) {
+	const (
+		sessionID = "limited-poll"
+		maxBytes  = 40
+	)
+	original := "HEAD!" + strings.Repeat("x", 80) + "!TAIL"
+	exitCode := 0
+	execTool := &ExecTool{
+		outputLimit: maxBytes,
+		sessions: map[string]*execSession{
+			sessionID: {
+				proc: failingProgramSession{poll: codeexecutor.ProgramPoll{
+					Status:     codeexecutor.ProgramStatusExited,
+					Output:     original,
+					ExitCode:   &exitCode,
+					Offset:     12,
+					NextOffset: 34,
+				}},
+			},
+		},
+		ttl:   time.Minute,
+		clock: time.Now,
+	}
+	writeTool := NewWriteStdinTool(execTool)
+	args, err := json.Marshal(writeInput{SessionID: sessionID})
+	require.NoError(t, err)
+
+	res, err := writeTool.Call(context.Background(), args)
+	require.NoError(t, err)
+	out := res.(execOutput)
+	require.True(t, out.Truncated)
+	require.Equal(t, len(original), out.TotalBytes)
+	require.LessOrEqual(t, len(out.Output), maxBytes)
+	require.Contains(t, out.Output, outputTruncatedMarker)
+	require.Equal(t, codeexecutor.ProgramStatusExited, out.Status)
+	require.Equal(t, 12, out.Offset)
+	require.Equal(t, 34, out.NextOffset)
+}
+
+func TestExecTool_OutputLimitsPreservePollMetadata(t *testing.T) {
+	exitCode := 7
+	original := execOutput{
+		Status:     codeexecutor.ProgramStatusRunning,
+		Output:     strings.Repeat("x", 80),
+		ExitCode:   &exitCode,
+		SessionID:  "session-1",
+		Offset:     12,
+		NextOffset: 34,
+	}
+	out := (&ExecTool{outputLimit: 40}).limitOutput(original)
+	require.True(t, out.Truncated)
+	require.Equal(t, original.Status, out.Status)
+	require.Same(t, original.ExitCode, out.ExitCode)
+	require.Equal(t, original.SessionID, out.SessionID)
+	require.Equal(t, original.Offset, out.Offset)
+	require.Equal(t, original.NextOffset, out.NextOffset)
 }
 
 func TestExecTool_ParseExecInput_Validation(t *testing.T) {

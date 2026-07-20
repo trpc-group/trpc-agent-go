@@ -658,6 +658,50 @@ args.Invocation.Session.AppendStateValue("last_report", ref.Ref)
 
 完整可运行示例：[examples/workspace_io](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/workspace_io)。
 
+## 限制 `workspace_exec` 的 Session 内联输出
+
+`workspace_exec` 默认保持兼容行为，完整返回本次调用观察到的终端文本。若要
+避免超大 stdout/stderr 作为 tool result 写入 Session，可在 Agent 级别配置
+内联字节上限：
+
+```go
+import workspaceexec "trpc.group/trpc-go/trpc-agent-go/tool/workspaceexec"
+
+agent := llmagent.New(
+    "my-agent",
+    llmagent.WithCodeExecutor(executor),
+    llmagent.WithWorkspaceExecOutputLimits(workspaceexec.OutputLimits{
+        MaxOutputBytes: 64 * 1024,
+    }),
+)
+```
+
+也可以直接配置工具：
+
+```go
+tool := workspaceexec.NewExecTool(
+    executor,
+    workspaceexec.WithOutputLimits(workspaceexec.OutputLimits{
+        MaxOutputBytes: 64 * 1024,
+    }),
+)
+```
+
+该限制同时作用于一次性 `workspace_exec` 以及交互式
+`workspace_exec` / `workspace_write_stdin` 的每次返回。超限时保留内容首尾，
+并返回 `truncated: true` 与截断前的 `total_bytes`。截断发生在 tool-result
+event 创建之前，因此 Session 持久化的也是窗口化结果；这与只在入模前改写
+请求投影的 Context Compaction 不同。
+
+若配置的上限小到无法容纳截断标记，结果会退化为 UTF-8 安全的前缀截断。
+交互式返回中的 `offset` / `next_offset` 始终表示底层 poll 已消费的范围；当
+`truncated: true` 时，`output` 只是该范围的有界视图，被省略的内容不会在后续
+poll 中重新返回。
+
+`MaxOutputBytes <= 0` 表示关闭限制，也是默认行为。该选项限制的是工具返回和
+Session 体积；底层 executor 在命令运行期间是否限制 stdout/stderr 捕获仍由
+具体 backend 决定。
+
 ## 限制 `workspace_exec` 可执行的命令
 
 `workspace_exec` 会执行模型发过来的任意 shell 命令。当沙箱允许出网时，
