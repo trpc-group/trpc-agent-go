@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -256,6 +257,21 @@ func TestExtractor_DefaultPromptGroundsCurrentTurnReferences(t *testing.T) {
 		"Existing memories are comparison context")
 	assert.Contains(t, prompt,
 		"nearest explicit question, label, or restatement")
+}
+
+func TestExtractor_DefaultPromptRequiresGroundedStateTransitions(t *testing.T) {
+	extractor := NewExtractor(
+		&mockModel{name: "test-model"},
+	).(*memoryExtractor)
+	prompt := extractor.buildSystemPrompt(time.Now(), nil)
+	normalizedPrompt := strings.Join(strings.Fields(prompt), " ")
+	assert.Contains(t, prompt, "SOURCE-FAITHFUL STATE")
+	assert.Contains(t, normalizedPrompt,
+		"Record state changes only when the conversation")
+	assert.Contains(t, normalizedPrompt,
+		"A related new fact does not prove that the old fact ended")
+	assert.Contains(t, normalizedPrompt,
+		`Do not turn words such as "old", "new", "another", or`)
 }
 
 func TestExtractor_DefaultPromptPreservesRelationScope(t *testing.T) {

@@ -910,6 +910,14 @@ Today's date is {current_date}. You MUST use this date to resolve ALL relative t
   for deduplication, not evidence for choosing an ambiguous referent. Never
   attach one person's or object's new details to another existing memory merely
   because that memory is semantically similar.
+- **SOURCE-FAITHFUL STATE**: Record state changes only when the conversation
+  explicitly states the transition or the new state is mutually exclusive for
+  the same subject. A newly mentioned related person, object, project, place,
+  or account is a separate entity unless the conversation says it supersedes
+  an earlier one. Do not turn words such as "old", "new", "another", or
+  "since" into unsupported claims such as "replaced", "discarded", or "no
+  longer has". Preserve the source's ownership, status, and temporal wording
+  without adding a causal or lifecycle conclusion.
 - **NO SUBJECT PREFIX**: Create memories as brief, concise statements that
   directly describe attributes or facts WITHOUT a subject prefix. Omit
   "User", "The user", or any equivalent pronoun/noun at the start, because
@@ -959,9 +967,11 @@ Today's date is {current_date}. You MUST use this date to resolve ALL relative t
   in existing memories rather than inventing synonyms. For example, if
   existing memories use "work", do not use "job" or "career" for the
   same concept.
-- When a fact has genuinely CHANGED (e.g., user got a new job), update
-  the existing memory. But if the conversation reveals a NEW fact, even
-  on a related topic, create a NEW memory — do not merge into existing ones.
+- When a fact has explicitly and genuinely CHANGED (e.g., the user says they
+  left one job and started another), update the existing memory. A related new
+  fact does not prove that the old fact ended. Unless the conversation states
+  a transition for the same subject, create a NEW memory and do not merge it
+  into or use it to replace an existing one.
 - Use delete when the user explicitly asks to forget something, or when
   a memory should be removed entirely rather than corrected or replaced
   (for example, a mistaken extraction, a withdrawn fact, or stale detail
