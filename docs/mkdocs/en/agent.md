@@ -122,7 +122,7 @@ llm := llmagent.New(
   ),
 )
 
-inv := agent.NewInvoction()
+inv := agent.NewInvocation()
 inv.SetState("case", "case-1")
 
 // Initialize session state (Runner + SessionService)
