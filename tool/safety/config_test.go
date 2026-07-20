@@ -178,3 +178,30 @@ func TestLoadPolicyFile_UnknownFieldRejected(t *testing.T) {
 		t.Errorf("error should mention the unknown field, got %q", err.Error())
 	}
 }
+
+func TestLoadPolicyFile_MergesWithDefaults(t *testing.T) {
+	// A partial policy file should extend the default deny lists, not
+	// replace them, so built-in protections are not silently weakened.
+	tmpDir := t.TempDir()
+	path := tmpDir + "/partial.yaml"
+	os.WriteFile(path, []byte("denied_paths:\n  - /custom/path\n"), 0644)
+	p, err := LoadPolicyFile(path)
+	if err != nil {
+		t.Fatalf("LoadPolicyFile: %v", err)
+	}
+	if !sliceContains(p.DeniedPaths, "~/.ssh") {
+		t.Errorf("default path ~/.ssh should be preserved, got %v", p.DeniedPaths)
+	}
+	if !sliceContains(p.DeniedPaths, "/custom/path") {
+		t.Errorf("custom path should be merged, got %v", p.DeniedPaths)
+	}
+}
+
+func sliceContains(haystack []string, needle string) bool {
+	for _, s := range haystack {
+		if s == needle {
+			return true
+		}
+	}
+	return false
+}

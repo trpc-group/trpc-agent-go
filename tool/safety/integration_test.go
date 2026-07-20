@@ -62,7 +62,7 @@ func TestIntegration_FullPipeline_LoadPolicyToBlock(t *testing.T) {
 	}
 
 	// 4. Build a ScanReport (simulating what a tool wrapper would do).
-	res := guard.scanner.Scan(guard.extract(jsonCommandArgs("rm -rf /")))
+	res := guard.scanner.Scan(guard.extract(jsonCommandArgs("rm -rf /"), ""))
 	report := NewReport(res, ScanInput{Command: "rm -rf /"}, "exec_command", time.Millisecond)
 	if !report.Blocked {
 		t.Error("report should be blocked")
@@ -107,7 +107,7 @@ func TestIntegration_FullPipeline_SafeCommand(t *testing.T) {
 		t.Fatalf("expected allow, got %s", dec.Action)
 	}
 
-	res := guard.scanner.Scan(guard.extract(jsonCommandArgs("ls -la")))
+	res := guard.scanner.Scan(guard.extract(jsonCommandArgs("ls -la"), ""))
 	report := NewReport(res, ScanInput{Command: "ls -la"}, "exec_command", time.Millisecond)
 	if report.Blocked {
 		t.Error("safe command should not be blocked")
@@ -140,7 +140,7 @@ func TestIntegration_FullPipeline_AskReview(t *testing.T) {
 		t.Fatalf("expected ask, got %s", dec.Action)
 	}
 
-	res := guard.scanner.Scan(guard.extract(jsonCommandArgs("git push origin main")))
+	res := guard.scanner.Scan(guard.extract(jsonCommandArgs("git push origin main"), ""))
 	report := NewReport(res, ScanInput{Command: "git push origin main"}, "exec_command", time.Millisecond)
 	if report.Decision != DecisionAsk {
 		t.Errorf("expected ask, got %s", report.Decision)
@@ -214,7 +214,7 @@ func TestIntegration_RedactorWithGuardPipeline(t *testing.T) {
 	}
 
 	// Build report, then redact it.
-	res := guard.scanner.Scan(guard.extract(args))
+	res := guard.scanner.Scan(guard.extract(args, ""))
 	report := NewReport(res, ScanInput{Command: cmd}, "exec_command", time.Millisecond)
 	redactedReport := redactor.RedactReport(report)
 	if redactedReport.Command == report.Command {

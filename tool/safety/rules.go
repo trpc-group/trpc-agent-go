@@ -416,8 +416,10 @@ func (r *NetworkAccessRule) WithDeniedDomains(domains []string) *NetworkAccessRu
 
 // mergeUnique returns the union of base and extra, preserving order and
 // dropping exact-match duplicates. Comparison is case-insensitive so that
-// "Curl" and "curl" do not both appear in the merged deny list. Nil/empty
-// inputs are tolerated on both sides.
+// "Curl" and "curl" do not both appear in the merged deny list.
+// Returned values are lowercased so they match the case-normalised
+// scan input produced by combineInput.
+// Nil/empty inputs are tolerated on both sides.
 func mergeUnique(base, extra []string) []string {
 	if len(base) == 0 && len(extra) == 0 {
 		return nil
@@ -433,7 +435,7 @@ func mergeUnique(base, extra []string) []string {
 			return
 		}
 		seen[key] = struct{}{}
-		out = append(out, s)
+		out = append(out, key)
 	}
 	for _, s := range base {
 		push(s)

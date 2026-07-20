@@ -2,7 +2,7 @@
 
 A pre-execution safety scanner for tool calls. It returns an
 `allow / deny / ask` decision for every request before the tool runs,
-emits a structured report and an audit log entry, and can be wired
+emits a structured report plus an audit-shaped event payload, and can be wired
 into a Runner via `tool.PermissionPolicy` or attached to any
 `tool.ToolSet` via `safety.WrapToolSet`.
 
@@ -122,8 +122,8 @@ Every scan produces a JSON report:
 
 ## Audit log
 
-Each scan also produces a JSONL event that can be streamed to your
-log pipeline:
+Each scan can be represented as a JSONL event and streamed to your
+own log pipeline or persisted by the caller:
 
 ```jsonl
 {"tool_name":"exec_command","command":"ls -la","decision":"allow","risk_level":"none","blocked":false}

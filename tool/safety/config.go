@@ -68,19 +68,65 @@ func LoadPolicyFile(path string) (*PolicyFile, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read policy file %s: %w", path, err)
 	}
-	p := DefaultPolicy() // Start from defaults, not zero.
+	base := DefaultPolicy() // Start from defaults, not zero.
 	if len(bytes.TrimSpace(data)) == 0 {
-		p := DefaultPolicy()
-		return &p, nil
+		return &base, nil
 	}
 	// Use KnownFields(true) so misspelled policy keys (e.g. "not_a_valid_key")
 	// fail loudly instead of silently disabling a guard rule.
+	var patch PolicyFile
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
-	if err := dec.Decode(&p); err != nil {
+	if err := dec.Decode(&patch); err != nil {
 		return nil, fmt.Errorf("parse policy file %s: %w", path, err)
 	}
-	return &p, nil
+
+	// Merge deny lists: custom entries are appended to defaults so that
+	// adding one custom entry does not silently drop built-in protections.
+	base.DeniedCommands = mergeUniqueStrings(base.DeniedCommands, patch.DeniedCommands)
+	if len(patch.DangerousCommandDeny) > 0 {
+		// DangerousCommandDeny takes precedence over DeniedCommands in the
+		// rules; fold in the defaults so they are preserved.
+		base.DangerousCommandDeny = mergeUniqueStrings(
+			mergeUniqueStrings(base.DeniedCommands, base.DangerousCommandDeny),
+			patch.DangerousCommandDeny,
+		)
+	}
+	base.NetworkClientDeny = mergeUniqueStrings(base.NetworkClientDeny, patch.NetworkClientDeny)
+	base.DeniedPaths = mergeUniqueStrings(base.DeniedPaths, patch.DeniedPaths)
+
+	// Override fields: user-provided allow/deny domains replace the
+	// (empty) defaults.
+	if len(patch.AllowedDomains) > 0 {
+		base.AllowedDomains = patch.AllowedDomains
+	}
+	if len(patch.DeniedDomains) > 0 {
+		base.DeniedDomains = patch.DeniedDomains
+	}
+
+	return &base, nil
+}
+
+// mergeUniqueStrings returns a new slice containing all unique strings from a
+// followed by any strings from b not already present in a.
+func mergeUniqueStrings(a, b []string) []string {
+	seen := make(map[string]struct{}, len(a)+len(b))
+	out := make([]string, 0, len(a)+len(b))
+	for _, s := range a {
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		out = append(out, s)
+		seen[s] = struct{}{}
+	}
+	for _, s := range b {
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		out = append(out, s)
+		seen[s] = struct{}{}
+	}
+	return out
 }
 
 // ============================================================

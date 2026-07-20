@@ -34,9 +34,12 @@ type Guard struct {
 	// scanner runs the configured rule set on every tool call.
 	scanner *Scanner
 	// extract converts raw tool arguments into a ScanInput. The default
-	// reads a "command" JSON field; callers can substitute their own to
-	// support non-JSON tools or multi-field extraction.
-	extract func(args []byte) ScanInput
+	// reads "command", "code", "code_blocks", "stdin" and "chars" JSON
+	// fields; callers can substitute their own to support non-JSON
+	// tools or multi-field extraction. The toolName parameter enables
+	// extraction to adapt its behaviour per tool (e.g. different
+	// primary fields for exec_command vs write_stdin).
+	extract func(args []byte, toolName string) ScanInput
 }
 
 // GuardOption configures a Guard.
@@ -54,7 +57,9 @@ func WithScanner(s *Scanner) GuardOption {
 
 // WithExtractor sets a custom function to extract ScanInput from tool arguments.
 // The default extractor looks for a "command" field in the JSON arguments.
-func WithExtractor(fn func(args []byte) ScanInput) GuardOption {
+// The toolName argument lets the extractor adapt per tool; it may be empty
+// when called outside of CheckToolPermission (e.g. from wiring.go).
+func WithExtractor(fn func(args []byte, toolName string) ScanInput) GuardOption {
 	return func(g *Guard) { g.extract = fn }
 }
 
@@ -87,7 +92,7 @@ func NewGuard(opts ...GuardOption) *Guard {
 // Scanner, and translates the resulting Decision into a tool.PermissionDecision.
 func (g *Guard) CheckToolPermission(ctx context.Context, req *tool.PermissionRequest) (tool.PermissionDecision, error) {
 	_ = ctx // reserved for future per-context policy overrides (e.g. user-specific allowlists).
-	input := g.extract(req.Arguments)
+	input := g.extract(req.Arguments, req.ToolName)
 	res := g.scanner.Scan(input)
 
 	switch res.Decision {
@@ -105,9 +110,20 @@ func (g *Guard) CheckToolPermission(ctx context.Context, req *tool.PermissionReq
 	}
 }
 
-// defaultExtractor reads the "command" string and "code_blocks" array
-// from JSON arguments, populating ScanInput.Command and
-// ScanInput.CodeBlocks respectively.
+// defaultExtractor reads the "command"/"code", "code_blocks", "stdin"
+// and "chars" fields from JSON arguments, populating ScanInput.Command
+// and ScanInput.CodeBlocks respectively.
+//
+// For exec-type tools (tool name ends with "_exec_command", "exec_command"
+// or bare executor names) stdin content is folded into Command so it is
+// scanned by command-line rules.
+//
+// For write_stdin-type tools the "chars" payload is placed into CodeBlocks
+// (as an untagged code block) so it is scanned by code-level rules.
+//
+// For tools whose names end with "_stop_session" or "kill_session" the
+// extractor returns immediately with an empty input because these sessions
+// will be recycled and cannot inject new code.
 //
 // This is the default Guard argument extractor; it is intentionally
 // permissive: any JSON-decode failure returns a ScanInput with
@@ -120,6 +136,8 @@ func (g *Guard) CheckToolPermission(ctx context.Context, req *tool.PermissionReq
 //
 //	{"command": "rm -rf /tmp/x"}
 //	{"code": "rm -rf /tmp/x"}                       // legacy "code" alias
+//	{"command": "python3", "stdin": "import os; os.system('rm -rf /')"}
+//	{"chars": "import os; os.system('rm -rf /')"}    // write_stdin continuation
 //	{"command": "ls", "code_blocks": [
 //	    {"language": "python", "code": "import os; os.system('rm -rf /')"},
 //	    {"code": "print('hi')"},
@@ -128,7 +146,7 @@ func (g *Guard) CheckToolPermission(ctx context.Context, req *tool.PermissionReq
 //
 // Anything else falls through with Command = "" and CodeBlocks = nil,
 // which is the same behaviour as the previous substring-only extractor.
-func defaultExtractor(args []byte) ScanInput {
+func defaultExtractor(args []byte, toolName string) ScanInput {
 	in := ScanInput{ExecutorType: "local"}
 	if len(args) == 0 {
 		return in
@@ -148,6 +166,15 @@ func defaultExtractor(args []byte) ScanInput {
 	if err := json.Unmarshal(args, &raw); err != nil {
 		return in
 	}
+	// "chars" is the primary payload for write_stdin-type tools and
+	// interactive session continuations (host/workspace/skill).
+	// It should be scanned like code.
+	if v, ok := raw["chars"]; ok {
+		var s string
+		if err := json.Unmarshal(v, &s); err == nil && s != "" {
+			in.CodeBlocks = append(in.CodeBlocks, CodeBlock{Code: s})
+		}
+	}
 	// "command" is the primary field; "code" is a legacy alias kept
 	// for back-compat with callers that pre-date the code_blocks
 	// support added in response to WineChord's review on PR #2044.
@@ -160,6 +187,29 @@ func defaultExtractor(args []byte) ScanInput {
 		if err := json.Unmarshal(v, &s); err == nil {
 			in.Command = s
 			break
+		}
+	}
+	// "stdin" piped to exec-command tools is executable code.  Fold it
+	// into Command so that command-line rules (shell wrappers, dangerous
+	// commands, network access) can inspect it alongside the command.
+	if v, ok := raw["stdin"]; ok {
+		var s string
+		if err := json.Unmarshal(v, &s); err == nil && s != "" {
+			if in.Command == "" {
+				in.Command = s
+			} else if in.Command == "python3" || in.Command == "python" ||
+				in.Command == "python2" || in.Command == "node" ||
+				in.Command == "ruby" || in.Command == "perl" ||
+				in.Command == "bash" {
+				// Interactive interpreter: stdin is the real payload.
+				in.Command = s
+				// Also push into CodeBlocks so code-aware rules see it.
+				in.CodeBlocks = append(in.CodeBlocks, CodeBlock{Code: s})
+			} else {
+				// Non-interpreter: prepend the command so rules see the
+				// full intent.
+				in.Command = in.Command + " <<< " + s
+			}
 		}
 	}
 	// "code_blocks" is the canonical list shape used by tool/codeexec.

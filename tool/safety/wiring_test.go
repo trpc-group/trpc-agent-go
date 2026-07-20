@@ -494,6 +494,22 @@ func (s *permissionCheckerStub) CheckPermission(_ context.Context, _ *tool.Permi
 	return tool.DenyPermission("inner permission checker denied"), nil
 }
 
+// stateDeltaStub publishes response state deltas.
+type stateDeltaStub struct {
+	stubTool
+	lastToolCallID string
+	lastArgs       []byte
+	lastResult     []byte
+	delta          map[string][]byte
+}
+
+func (s *stateDeltaStub) StateDelta(toolCallID string, args []byte, resultJSON []byte) map[string][]byte {
+	s.lastToolCallID = toolCallID
+	s.lastArgs = append([]byte(nil), args...)
+	s.lastResult = append([]byte(nil), resultJSON...)
+	return s.delta
+}
+
 // metadataStub publishes ToolMetadata.
 type metadataStub struct {
 	stubTool
@@ -584,7 +600,12 @@ func TestGuardedTool_PreservesPermissionChecker(t *testing.T) {
 	if !ok {
 		t.Fatal("wrapped tool should implement PermissionChecker")
 	}
-	dec, err := checker.CheckPermission(context.Background(), &tool.PermissionRequest{})
+	dec, err := checker.CheckPermission(context.Background(), &tool.PermissionRequest{
+		Tool:        inner,
+		ToolName:    "permissioned",
+		Declaration: inner.Declaration(),
+		Arguments:   jsonCommandArgs("ls"),
+	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -593,6 +614,76 @@ func TestGuardedTool_PreservesPermissionChecker(t *testing.T) {
 	}
 	if !inner.checked {
 		t.Error("inner CheckPermission was not called")
+	}
+}
+
+func TestGuardedTool_CheckPermissionRunsGuardFirst(t *testing.T) {
+	inner := &permissionCheckerStub{stubTool: stubTool{name: "exec_command"}}
+	guard := NewGuard(WithRules(NewDangerousCommandRule()))
+
+	wrapped := WrapTool(inner, guard).(*GuardedTool)
+	checker, ok := tool.Tool(wrapped).(tool.PermissionChecker)
+	if !ok {
+		t.Fatal("wrapped tool should implement PermissionChecker")
+	}
+	dec, err := checker.CheckPermission(context.Background(), &tool.PermissionRequest{
+		Tool:        inner,
+		ToolName:    "exec_command",
+		Declaration: inner.Declaration(),
+		Arguments:   jsonCommandArgs("rm -rf /"),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if dec.Action != tool.PermissionActionDeny {
+		t.Errorf("expected guard denial, got %s", dec.Action)
+	}
+	if dec.Reason == "inner permission checker denied" {
+		t.Error("expected denial to come from guard before inner checker")
+	}
+	if inner.checked {
+		t.Error("inner CheckPermission should not be called when guard denies")
+	}
+}
+
+func TestGuardedTool_PreservesStateDelta(t *testing.T) {
+	inner := &stateDeltaStub{
+		stubTool: stubTool{name: "exec_command"},
+		delta:    map[string][]byte{"cwd": []byte(`"/tmp"`)},
+	}
+	wrapped := WrapTool(inner, NewGuard()).(*GuardedTool)
+
+	provider, ok := any(wrapped).(interface {
+		StateDelta(toolCallID string, args []byte, resultJSON []byte) map[string][]byte
+	})
+	if !ok {
+		t.Fatal("wrapped tool should expose StateDelta")
+	}
+	got := provider.StateDelta("call-1", []byte(`{"command":"pwd"}`), []byte(`{"cwd":"/tmp"}`))
+	if string(got["cwd"]) != `"/tmp"` {
+		t.Fatalf("unexpected state delta: %v", got)
+	}
+	if inner.lastToolCallID != "call-1" {
+		t.Errorf("toolCallID = %q, want %q", inner.lastToolCallID, "call-1")
+	}
+}
+
+func TestGuardedCombinedTool_PreservesStateDelta(t *testing.T) {
+	inner := &combinedStateDeltaStub{
+		combinedStub: combinedStub{name: "combined"},
+		delta:        map[string][]byte{"cwd": []byte(`"/workspace"`)},
+	}
+	wrapped := WrapTool(inner, NewGuard()).(*GuardedCombinedTool)
+
+	provider, ok := any(wrapped).(interface {
+		StateDelta(toolCallID string, args []byte, resultJSON []byte) map[string][]byte
+	})
+	if !ok {
+		t.Fatal("wrapped combined tool should expose StateDelta")
+	}
+	got := provider.StateDelta("call-2", []byte(`{"command":"pwd"}`), []byte(`{"cwd":"/workspace"}`))
+	if string(got["cwd"]) != `"/workspace"` {
+		t.Fatalf("unexpected state delta: %v", got)
 	}
 }
 
@@ -727,6 +818,16 @@ func (s *optionalCombinedStub) StreamableCall(_ context.Context, _ []byte) (*too
 }
 func (s *optionalCombinedStub) LongRunning() bool       { return s.longRunning }
 func (s *optionalCombinedStub) SkipSummarization() bool { return s.skipSummarization }
+
+// combinedStateDeltaStub adds StateDelta to a combined tool.
+type combinedStateDeltaStub struct {
+	combinedStub
+	delta map[string][]byte
+}
+
+func (s *combinedStateDeltaStub) StateDelta(toolCallID string, args []byte, resultJSON []byte) map[string][]byte {
+	return s.delta
+}
 
 func TestGuardedTool_UnknownDecisionDenies(t *testing.T) {
 	inner := &stubTool{name: "exec_command", desc: "stub"}

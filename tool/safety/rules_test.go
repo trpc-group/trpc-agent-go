@@ -864,7 +864,7 @@ func TestGuard_DefaultExtractor_ReadsCodeBlocks(t *testing.T) {
 
 	// Build args with both command and code_blocks.
 	args := []byte(`{"command": "ls", "code_blocks": [{"language": "python", "code": "import os; os.system('rm -rf /')"}]}`)
-	in := g.extract(args)
+	in := g.extract(args, "")
 	if in.Command != "ls" {
 		t.Fatalf("expected Command=ls, got %q", in.Command)
 	}

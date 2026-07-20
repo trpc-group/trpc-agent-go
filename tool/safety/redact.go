@@ -13,11 +13,18 @@ import (
 	"strings"
 )
 
+// minShortSecretLen is the minimum secret length below which the redactor
+// fully redacts the value instead of revealing boundary characters.
+// Short secrets (e.g. 8-12 chars) would leak too much information if
+// we showed the first and last few characters.
+const minShortSecretLen = 12
+
 // Redactor masks credentials and other sensitive material that may appear in
 // commands, code blocks, or audit log entries.
 //
 // The default redactor replaces secret-like substrings with "***REDACTED***"
 // while preserving the surrounding context (key name, prefix, suffix length).
+// Secrets shorter than minShortSecretLen are fully redacted.
 type Redactor struct {
 	// patterns maps a regex (case-insensitive) to the replacement value.
 	patterns []*redactPattern
@@ -121,8 +128,12 @@ func (r *Redactor) RedactAuditEvent(event AuditEvent) AuditEvent {
 
 // wrapBoundary keeps at most n chars of prefix/suffix from the original match
 // to provide audit context without leaking the full secret.
+// Secrets shorter than minShortSecretLen are fully redacted.
 func (r *Redactor) wrapBoundary(match, replacement string) string {
 	n := r.KeepBoundaryLen
+	if len(match) < minShortSecretLen {
+		return replacement
+	}
 	if n <= 0 || len(match) <= n*2+len(replacement)+1 {
 		return replacement
 	}
@@ -175,7 +186,9 @@ func redactLiteral(s, literal, replacement string, keep int) string {
 		if hasOpenQuote {
 			out.WriteByte(openQuoteChar)
 		}
-		if keep > 0 && secretEnd-secretStart > keep*2 {
+		if secretEnd-secretStart < minShortSecretLen {
+			out.WriteString(replacement)
+		} else if keep > 0 && secretEnd-secretStart > keep*2 {
 			out.WriteString(s[secretStart : secretStart+keep])
 			out.WriteString(replacement)
 			out.WriteString(s[secretEnd-keep : secretEnd])

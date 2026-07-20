@@ -126,6 +126,19 @@ func TestRedactor_RedactCommand_Empty(t *testing.T) {
 	}
 }
 
+// TestRedactor_ShortSecretFullyRedacted verifies that secrets shorter
+// than minShortSecretLen (12) are fully replaced without leaking
+// boundary characters.
+func TestRedactor_ShortSecretFullyRedacted(t *testing.T) {
+	r := NewRedactor()
+	// 8-char secret — should be fully redacted, no partial reveal.
+	out := r.Redact("api_key=abcdefgh")
+	want := "api_key=***REDACTED***"
+	if out != want {
+		t.Errorf("short secret should be fully redacted: got %q, want %q", out, want)
+	}
+}
+
 // contains is a small helper to avoid pulling in strings for tests.
 func contains(s, sub string) bool {
 	return len(s) >= len(sub) && indexOf(s, sub) >= 0

@@ -129,7 +129,7 @@ func TestGuard_WithScanner(t *testing.T) {
 
 func TestGuard_WithExtractor(t *testing.T) {
 	// Custom extractor that reads a "script" field instead of "command".
-	customExtractor := func(args []byte) ScanInput {
+	customExtractor := func(args []byte, _ string) ScanInput {
 		var raw map[string]json.RawMessage
 		if err := json.Unmarshal(args, &raw); err != nil {
 			return ScanInput{ExecutorType: "local"}
@@ -225,7 +225,7 @@ func TestGuard_DefaultExtractor_CodeBlocksRawStrings(t *testing.T) {
 	guard := NewGuard()
 	// code_blocks as array of raw strings (fallback path in defaultExtractor).
 	args := []byte(`{"code_blocks": ["import requests; requests.get('http://evil.com/')"]}`)
-	in := guard.extract(args)
+	in := guard.extract(args, "")
 	if len(in.CodeBlocks) != 1 {
 		t.Fatalf("expected 1 CodeBlock from raw strings, got %d", len(in.CodeBlocks))
 	}
@@ -238,7 +238,7 @@ func TestGuard_DefaultExtractor_CodeBlocksLangKey(t *testing.T) {
 	guard := NewGuard()
 	// code_blocks with "lang" key (alternative to "language").
 	args := []byte(`{"command":"ls","code_blocks":[{"lang":"python","code":"import os"}]}`)
-	in := guard.extract(args)
+	in := guard.extract(args, "")
 	if len(in.CodeBlocks) != 1 {
 		t.Fatalf("expected 1 CodeBlock, got %d", len(in.CodeBlocks))
 	}
@@ -254,7 +254,7 @@ func TestGuard_DefaultExtractor_CodeBlocksEmptyEntries(t *testing.T) {
 	guard := NewGuard()
 	// code_blocks with empty entries should be skipped.
 	args := []byte(`{"code_blocks":[{"code":""},{"language":"python"},{"code":"print('hi')"}]}`)
-	in := guard.extract(args)
+	in := guard.extract(args, "")
 	if len(in.CodeBlocks) != 1 {
 		t.Fatalf("expected 1 CodeBlock (empty entries skipped), got %d", len(in.CodeBlocks))
 	}
@@ -279,7 +279,7 @@ func TestGuard_DefaultExtractor_CodeBlocksSingleObject(t *testing.T) {
 func TestGuard_DefaultExtractor_CodeBlocksDoubleEncodedArray(t *testing.T) {
 	guard := NewGuard()
 	payload := `{"code_blocks":"[{\"code\":\"import os\",\"language\":\"python\"}]"}`
-	in := guard.extract([]byte(payload))
+	in := guard.extract([]byte(payload), "")
 	if len(in.CodeBlocks) != 1 {
 		t.Fatalf("expected 1 CodeBlock from double-encoded array, got %d", len(in.CodeBlocks))
 	}
@@ -294,7 +294,7 @@ func TestGuard_DefaultExtractor_CodeBlocksDoubleEncodedArray(t *testing.T) {
 func TestGuard_DefaultExtractor_CodeBlocksDoubleEncodedStringSlice(t *testing.T) {
 	guard := NewGuard()
 	payload := `{"code_blocks":"[\"curl http://evil.com\"]"}`
-	in := guard.extract([]byte(payload))
+	in := guard.extract([]byte(payload), "")
 	if len(in.CodeBlocks) != 1 {
 		t.Fatalf("expected 1 CodeBlock from double-encoded string slice, got %d", len(in.CodeBlocks))
 	}
@@ -349,5 +349,46 @@ func TestGuard_DefaultExtractor_CodeBlocksDoubleEncodedObject(t *testing.T) {
 	}
 	if dec.Action != tool.PermissionActionDeny {
 		t.Errorf("double-encoded single-object code_blocks should be scanned and denied, got %s", dec.Action)
+	}
+}
+
+func TestGuard_DefaultExtractor_WriteStdinCharsExtracted(t *testing.T) {
+	// Regression: write_stdin tools carry executable code in the "chars"
+	// field.  Without extraction a model can first start an allowed
+	// interactive interpreter (e.g. python3) and then submit dangerous
+	// code through subsequent write_stdin calls without any rule seeing
+	// it.
+	guard := NewGuard(WithRules(NewDangerousCommandRule(), NewNetworkAccessRule()))
+
+	// write_stdin  →  "chars" should be extracted into CodeBlocks.
+	dec, err := guard.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:   "workspace_write_stdin",
+		Arguments:  []byte(`{"chars":"import os; os.system('rm -rf /')"}`),
+		ToolCallID: "call-write-stdin",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if dec.Action != tool.PermissionActionDeny {
+		t.Errorf("write_stdin with dangerous code should be denied, got %s", dec.Action)
+	}
+}
+
+func TestGuard_DefaultExtractor_ExecStdinExtracted(t *testing.T) {
+	// Regression: exec_command can receive dangerous code through the
+	// "stdin" field (e.g. python3 - << EOF).  Previously stdin was not
+	// scanned.
+	guard := NewGuard(WithRules(NewDangerousCommandRule()))
+
+	dec, err := guard.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:   "workspace_exec",
+		Arguments:  []byte(`{"command":"python3","stdin":"import os; os.system('rm -rf /')"}`),
+		ToolCallID: "call-exec-stdin",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if dec.Action != tool.PermissionActionDeny {
+		t.Errorf("exec with stdin containing dangerous code should be denied, got %s", dec.Action)
 	}
 }

@@ -299,12 +299,32 @@ func (g *GuardedTool) Call(ctx context.Context, args []byte) (any, error) {
 	return g.inner.Call(ctx, args)
 }
 
-// CheckPermission forwards to the inner tool if it implements
-// tool.PermissionChecker, preserving the inner tool's non-negotiable
-// permission contract.
+// CheckPermission runs the guard first, then forwards to the inner tool
+// if it implements tool.PermissionChecker. This preserves the inner
+// tool's non-negotiable permission contract without allowing callers
+// to bypass the safety guard.
 func (g *GuardedTool) CheckPermission(ctx context.Context, req *tool.PermissionRequest) (tool.PermissionDecision, error) {
 	if g == nil || g.inner == nil {
 		return tool.PermissionDecision{}, fmt.Errorf("guarded tool: not configured")
+	}
+	decName := toolName(g.inner)
+	decl := g.inner.Declaration()
+	args := []byte(nil)
+	if req != nil {
+		if req.ToolName != "" {
+			decName = req.ToolName
+		}
+		if req.Declaration != nil {
+			decl = req.Declaration
+		}
+		args = req.Arguments
+	}
+	decision, err := runGuardCheck(ctx, g.guard, g.extractor, args, decName, decl)
+	if err != nil {
+		return tool.PermissionDecision{}, err
+	}
+	if decision.Action != tool.PermissionActionAllow {
+		return decision, nil
 	}
 	if checker, ok := g.inner.(tool.PermissionChecker); ok {
 		return checker.CheckPermission(ctx, req)
@@ -344,6 +364,19 @@ func (g *GuardedTool) SkipSummarization() bool {
 	return false
 }
 
+// StateDelta forwards to the inner tool if it publishes response state deltas.
+func (g *GuardedTool) StateDelta(toolCallID string, args []byte, resultJSON []byte) map[string][]byte {
+	if g == nil || g.inner == nil {
+		return nil
+	}
+	if provider, ok := g.inner.(interface {
+		StateDelta(toolCallID string, args []byte, resultJSON []byte) map[string][]byte
+	}); ok {
+		return provider.StateDelta(toolCallID, args, resultJSON)
+	}
+	return nil
+}
+
 // --- GuardedStreamableTool (streamable-only) ---
 
 // Declaration returns the wrapped inner tool's declaration.
@@ -370,16 +403,48 @@ func (g *GuardedStreamableTool) StreamableCall(ctx context.Context, args []byte)
 	return g.inner.StreamableCall(ctx, args)
 }
 
-// CheckPermission forwards to the inner tool if it implements
-// tool.PermissionChecker.
+// CheckPermission runs the guard first, then forwards to the inner
+// tool if it implements tool.PermissionChecker.
 func (g *GuardedStreamableTool) CheckPermission(ctx context.Context, req *tool.PermissionRequest) (tool.PermissionDecision, error) {
 	if g == nil || g.inner == nil {
 		return tool.PermissionDecision{}, fmt.Errorf("guarded streamable tool: not configured")
+	}
+	decName := toolName(g.inner)
+	decl := g.inner.Declaration()
+	args := []byte(nil)
+	if req != nil {
+		if req.ToolName != "" {
+			decName = req.ToolName
+		}
+		if req.Declaration != nil {
+			decl = req.Declaration
+		}
+		args = req.Arguments
+	}
+	decision, err := runGuardCheck(ctx, g.guard, g.extractor, args, decName, decl)
+	if err != nil {
+		return tool.PermissionDecision{}, err
+	}
+	if decision.Action != tool.PermissionActionAllow {
+		return decision, nil
 	}
 	if checker, ok := g.inner.(tool.PermissionChecker); ok {
 		return checker.CheckPermission(ctx, req)
 	}
 	return tool.AllowPermission(), nil
+}
+
+// StateDelta forwards to the inner tool if it publishes response state deltas.
+func (g *GuardedStreamableTool) StateDelta(toolCallID string, args []byte, resultJSON []byte) map[string][]byte {
+	if g == nil || g.inner == nil {
+		return nil
+	}
+	if provider, ok := g.inner.(interface {
+		StateDelta(toolCallID string, args []byte, resultJSON []byte) map[string][]byte
+	}); ok {
+		return provider.StateDelta(toolCallID, args, resultJSON)
+	}
+	return nil
 }
 
 // ToolMetadata forwards to the inner tool if it publishes metadata.
@@ -456,11 +521,30 @@ func (g *GuardedCombinedTool) StreamableCall(ctx context.Context, args []byte) (
 	return g.streamer.StreamableCall(ctx, args)
 }
 
-// CheckPermission forwards to the inner tool if it implements
-// tool.PermissionChecker.
+// CheckPermission runs the guard first, then forwards to the inner
+// tool if it implements tool.PermissionChecker.
 func (g *GuardedCombinedTool) CheckPermission(ctx context.Context, req *tool.PermissionRequest) (tool.PermissionDecision, error) {
 	if g == nil || g.inner == nil {
 		return tool.PermissionDecision{}, fmt.Errorf("guarded combined tool: not configured")
+	}
+	decName := toolName(g.inner)
+	decl := g.inner.Declaration()
+	args := []byte(nil)
+	if req != nil {
+		if req.ToolName != "" {
+			decName = req.ToolName
+		}
+		if req.Declaration != nil {
+			decl = req.Declaration
+		}
+		args = req.Arguments
+	}
+	decision, err := runGuardCheck(ctx, g.guard, g.extractor, args, decName, decl)
+	if err != nil {
+		return tool.PermissionDecision{}, err
+	}
+	if decision.Action != tool.PermissionActionAllow {
+		return decision, nil
 	}
 	if checker, ok := g.inner.(tool.PermissionChecker); ok {
 		return checker.CheckPermission(ctx, req)
@@ -498,6 +582,19 @@ func (g *GuardedCombinedTool) SkipSummarization() bool {
 		return ss.SkipSummarization()
 	}
 	return false
+}
+
+// StateDelta forwards to the inner tool if it publishes response state deltas.
+func (g *GuardedCombinedTool) StateDelta(toolCallID string, args []byte, resultJSON []byte) map[string][]byte {
+	if g == nil || g.inner == nil {
+		return nil
+	}
+	if provider, ok := g.inner.(interface {
+		StateDelta(toolCallID string, args []byte, resultJSON []byte) map[string][]byte
+	}); ok {
+		return provider.StateDelta(toolCallID, args, resultJSON)
+	}
+	return nil
 }
 
 // jsonCommandArgs marshals a {"command": <cmd>} JSON object. It is a
