@@ -22,12 +22,14 @@
 #
 # Multi-stage build: the builder stage compiles staticcheck from source
 # so the final image contains a single static binary. The runtime stage
-# is golang:1.23-bookworm (Debian-based) because the agent's sandbox
-# relies on /bin/sh and the Go toolchain being available.
+# is golang:1.25-bookworm (Debian-based) because the agent's sandbox
+# relies on /bin/sh and the Go toolchain being available. Pinned to 1.25
+# to stay ahead of go.mod (currently 1.21) and to satisfy any future
+# dependency that requires Go 1.25+.
 
 # syntax=docker/dockerfile:1.6
 
-FROM golang:1.23-bookworm AS builder
+FROM golang:1.25-bookworm AS builder
 
 # Build staticcheck in a cache-friendly location. GOFLAGS=-mod=mod
 # ensures the build succeeds even if go.sum is slightly out of date.
@@ -42,7 +44,7 @@ RUN go install "honnef.co/go/tools/cmd/staticcheck@v${STATICCHECK_VERSION}"
 
 # Runtime stage: keep the Go toolchain (go vet / go test need it) and
 # copy the staticcheck binary from the builder stage.
-FROM golang:1.23-bookworm AS runtime
+FROM golang:1.25-bookworm AS runtime
 
 # Copy staticcheck from the builder stage. The binary lives under
 # /go/bin in the builder; install it into /usr/local/bin so it is on

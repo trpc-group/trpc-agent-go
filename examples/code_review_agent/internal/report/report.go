@@ -183,6 +183,16 @@ func countPermissionBlocked(perms []store.PermissionDecision) int {
 
 // computeConclusion derives the overall conclusion from the review output,
 // sandbox runs, needs-human-review count, and permission-blocked count.
+//
+// Severity → conclusion mapping:
+//   - critical finding          -> fail (auto-block merge)
+//   - high finding              -> needs_human_review (CI must not auto-pass)
+//   - sandbox failed/timeout    -> needs_human_review
+//   - permission-blocked command -> needs_human_review
+//
+// High-severity findings do not auto-fail because they may be false positives
+// (e.g. a high-confidence heuristic on a benign pattern), but they must never
+// silently pass — the report forces a human to acknowledge them before merge.
 func computeConclusion(
 	rev *review.Report,
 	runs []sandbox.RunResult,
@@ -191,6 +201,11 @@ func computeConclusion(
 	for _, f := range rev.Findings {
 		if f.Severity == "critical" {
 			return ConclusionFail
+		}
+	}
+	for _, f := range rev.Findings {
+		if f.Severity == "high" {
+			return ConclusionNeedsReview
 		}
 	}
 	for _, r := range runs {

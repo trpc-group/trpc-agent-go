@@ -62,8 +62,13 @@ type cliFlags struct {
 	dbPath      string
 	executor    string
 	unsafeLocal bool
-	dryRun      bool
-	model       string
+	// unsafeAllowE2BNetwork opts in to the e2b backend despite it having
+	// network access (the SDK exposes no option to disable it). Fail-closed
+	// by default so reviewers do not accidentally run untrusted `go test`
+	// against a network-enabled sandbox.
+	unsafeAllowE2BNetwork bool
+	dryRun                bool
+	model                 string
 	// PR metadata embedded in the report header so CI-generated reports
 	// carry the context reviewers need without opening the diff. Borrowed
 	// from competitor PR #2090.
@@ -90,6 +95,7 @@ func parseFlags(args []string) (*cliFlags, error) {
 	fs.StringVar(&f.dbPath, "db-path", "./review.db", "path to the SQLite database used for persistence")
 	fs.StringVar(&f.executor, "executor", "container", "sandbox executor backend: container|e2b|local")
 	fs.BoolVar(&f.unsafeLocal, "unsafe-local", false, "allow the unsafe local executor (fail-closed by default)")
+	fs.BoolVar(&f.unsafeAllowE2BNetwork, "unsafe-allow-e2b-network", false, "allow the e2b backend despite it having network access (fail-closed by default)")
 	fs.BoolVar(&f.dryRun, "dry-run", false, "parse inputs and plan the review without executing sandboxed tools")
 	fs.StringVar(&f.model, "model", "deepseek-v4-flash", "LLM model identifier: 'fake' uses a deterministic API-key-free fake model suitable for CI; the default runs rule-based review only")
 	// PR metadata (borrowed from competitor PR #2090): embedded in the
@@ -273,22 +279,58 @@ func runPipeline(ctx context.Context, opts *pipelineOpts) (retErr error) {
 
 // loadInput selects the input source from the resolved flags and loads it.
 // Exactly one of --fixture-dir, --diff-file, --file-list or --repo-path must
-// be set; otherwise an error is returned.
+// be set; passing multiple is rejected so a stale CLI invocation never
+// silently picks one source and ignores the others.
+//
+// --repo-path is overloaded: it is a standalone source AND the path anchor
+// for --file-list. When --file-list is set, --repo-path is consumed as its
+// anchor and does not count as a separate source, so the combination
+// `--file-list=x --repo-path=/r` is valid (exactly one source: file-list).
+// Every other combination of two or more sources is rejected.
 func loadInput(ctx context.Context, opts *pipelineOpts) (*inputsource.Input, error) {
+	fileListSet := opts.fileList != ""
+	repoPathSet := opts.repoPath != ""
+
+	var sources []string
+	if opts.fixtureDir != "" {
+		sources = append(sources, "--fixture-dir")
+	}
+	if opts.diffFile != "" {
+		sources = append(sources, "--diff-file")
+	}
+	if fileListSet {
+		sources = append(sources, "--file-list")
+	}
+	// When --file-list is set, --repo-path is its anchor, not a separate
+	// source; only count it as a source when there is no --file-list.
+	if repoPathSet && !fileListSet {
+		sources = append(sources, "--repo-path")
+	}
+
+	switch len(sources) {
+	case 0:
+		return nil, errors.New("no input source specified (use --fixture-dir, --diff-file, --file-list or --repo-path)")
+	case 1:
+		// exactly one source — ok
+	default:
+		return nil, fmt.Errorf("conflicting input sources: %s (specify exactly one; --repo-path may anchor --file-list)",
+			strings.Join(sources, ", "))
+	}
+
+	// --file-list requires --repo-path as its anchor (not counted above).
+	if fileListSet && !repoPathSet {
+		return nil, errors.New("--file-list requires --repo-path to anchor file paths")
+	}
+
 	switch {
 	case opts.fixtureDir != "":
 		return inputsource.Load(ctx, inputsource.SourceFixtureDir, opts.fixtureDir)
 	case opts.diffFile != "":
 		return inputsource.Load(ctx, inputsource.SourceDiffFile, opts.diffFile)
 	case opts.fileList != "":
-		if opts.repoPath == "" {
-			return nil, errors.New("--file-list requires --repo-path to anchor file paths")
-		}
 		return inputsource.Load(ctx, inputsource.SourceFileList, opts.fileList, opts.repoPath)
-	case opts.repoPath != "":
-		return inputsource.Load(ctx, inputsource.SourceRepoPath, opts.repoPath)
 	default:
-		return nil, errors.New("no input source specified (use --fixture-dir, --diff-file, --file-list or --repo-path)")
+		return inputsource.Load(ctx, inputsource.SourceRepoPath, opts.repoPath)
 	}
 }
 
@@ -451,13 +493,14 @@ func runSandboxChecks(ctx context.Context, opts *pipelineOpts, taskID string, po
 	}
 
 	sbCfg := sandbox.Config{
-		Backend:            backendFromFlag(opts.executor),
-		UnsafeLocal:        opts.unsafeLocal,
-		RepoPath:           opts.repoPath,
-		Timeout:            120 * time.Second,
-		MaxStdoutBytes:     1 << 20,
-		MaxStderrBytes:     1 << 20,
-		ContainerBaseImage: opts.containerBaseImage,
+		Backend:               backendFromFlag(opts.executor),
+		UnsafeLocal:           opts.unsafeLocal,
+		UnsafeAllowE2BNetwork: opts.unsafeAllowE2BNetwork,
+		RepoPath:              opts.repoPath,
+		Timeout:               120 * time.Second,
+		MaxStdoutBytes:        1 << 20,
+		MaxStderrBytes:        1 << 20,
+		ContainerBaseImage:    opts.containerBaseImage,
 	}
 	sb, err := sandbox.New(sbCfg)
 	if err != nil {

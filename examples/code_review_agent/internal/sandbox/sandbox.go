@@ -93,6 +93,15 @@ const (
 	defaultMemoryMB   = 1024
 	defaultMaxPIDs    = 256
 
+	// defaultContainerImage is the image used when Config.ContainerBaseImage
+	// is empty. It must ship a Go toolchain so `go vet` and `go test` work
+	// out of the box. staticcheck is NOT pre-installed here — reviewers
+	// who need staticcheck should build the project's Dockerfile (which
+	// bakes staticcheck in) and pass --container-base-image. The container
+	// backend defaults to python:3.9-slim, which has no Go toolchain, so
+	// overriding is required for the sandbox to be useful.
+	defaultContainerImage = "golang:1.25-bookworm"
+
 	// repoStageDir is the workspace-relative location the repository is
 	// staged into. Keeping it in a subdirectory avoids colliding with the
 	// skill scripts and output directories.
@@ -112,6 +121,13 @@ type Config struct {
 	// UnsafeLocal must be true to use BackendLocal. It is ignored for
 	// the container and e2b backends.
 	UnsafeLocal bool
+	// UnsafeAllowE2BNetwork must be true to use BackendE2B. E2B sandboxes
+	// have network access by default and the SDK exposes no option to
+	// disable it, so `go test` running untrusted code could exfiltrate
+	// staged repo contents or finding evidence. Fail-closed: New returns
+	// an error when Backend == BackendE2B and this field is false. The
+	// container backend is unaffected (it defaults to NetworkMode=none).
+	UnsafeAllowE2BNetwork bool
 	// RepoPath is a host path that is staged read-only into each
 	// workspace. May be empty to skip staging.
 	RepoPath string
@@ -128,9 +144,10 @@ type Config struct {
 	MaxStdoutBytes int64
 	MaxStderrBytes int64
 	// ContainerBaseImage overrides the Docker image used by the container
-	// backend. When empty, the container backend's default is used. This
-	// is useful when the default image is unreachable (e.g. behind a
-	// regional mirror like docker.m.daocloud.io). Ignored for e2b/local.
+	// backend. When empty, defaultContainerImage (golang:1.25-bookworm)
+	// is used so `go vet`/`go test` work without a custom build. Pass the
+	// project's code-review-sandbox:latest image (built from the
+	// Dockerfile) to also get staticcheck. Ignored for e2b/local.
 	// Borrowed from competitor PR #2243.
 	ContainerBaseImage string
 }
@@ -160,8 +177,9 @@ type RunResult struct {
 
 // Executor wraps a codeexecutor.Engine with safe defaults.
 type Executor struct {
-	eng codeexecutor.Engine
-	cfg Config
+	eng    codeexecutor.Engine
+	closer io.Closer // may be nil (local backend has no Close)
+	cfg    Config
 }
 
 // New constructs an Executor for the configured backend.
@@ -170,7 +188,9 @@ type Executor struct {
 // Docker is not running for the container backend) the error is returned to
 // the caller. New never falls back from container/e2b to local. The local
 // backend is only used when cfg.Backend == BackendLocal and cfg.UnsafeLocal
-// is true.
+// is true. The e2b backend is only used when cfg.UnsafeAllowE2BNetwork is
+// true (e2b sandboxes have network access and the SDK exposes no way to
+// disable it).
 func New(cfg Config) (*Executor, error) {
 	if cfg.Timeout <= 0 {
 		cfg.Timeout = DefaultTimeout
@@ -182,56 +202,69 @@ func New(cfg Config) (*Executor, error) {
 		cfg.MaxStderrBytes = DefaultMaxStderrBytes
 	}
 
-	eng, err := buildEngine(cfg)
+	eng, closer, err := buildEngine(cfg)
 	if err != nil {
 		return nil, err
 	}
 	if eng == nil {
 		return nil, fmt.Errorf("sandbox: %s backend produced a nil engine", cfg.Backend)
 	}
-	return &Executor{eng: eng, cfg: cfg}, nil
+	return &Executor{eng: eng, closer: closer, cfg: cfg}, nil
 }
 
-// buildEngine constructs the Engine for the configured backend. It returns
-// an error (never a silent local fallback) when the requested backend fails.
-func buildEngine(cfg Config) (codeexecutor.Engine, error) {
+// buildEngine constructs the Engine for the configured backend and returns
+// the backend's Closer so the caller can release Docker/E2B resources when
+// the Executor is shut down. The closer is nil for the local backend (it
+// has no Close method). It returns an error (never a silent local fallback)
+// when the requested backend fails.
+func buildEngine(cfg Config) (codeexecutor.Engine, io.Closer, error) {
 	switch cfg.Backend {
 	case BackendContainer:
-		var copts []containerexec.Option
-		if cfg.ContainerBaseImage != "" {
-			// Override the container image while preserving the working
-			// dir / cmd / tty defaults the container backend relies on.
-			// Borrowed from competitor PR #2243 to support regional
-			// Docker mirrors (e.g. docker.m.daocloud.io).
-			copts = append(copts, containerexec.WithContainerConfig(tcontainer.Config{
-				Image:      cfg.ContainerBaseImage,
+		image := cfg.ContainerBaseImage
+		if image == "" {
+			// Default to a Go-enabled image so `go vet`/`go test` work
+			// without requiring the user to build the project's Dockerfile.
+			// The container backend's own default (python:3.9-slim) has no
+			// Go toolchain, which would make every sandbox run fail.
+			image = defaultContainerImage
+		}
+		copts := []containerexec.Option{
+			containerexec.WithContainerConfig(tcontainer.Config{
+				Image:      image,
 				WorkingDir: "/",
 				Cmd:        []string{"tail", "-f", "/dev/null"},
 				Tty:        true,
-			}))
+			}),
 		}
 		ce, err := containerexec.New(copts...)
 		if err != nil {
-			return nil, fmt.Errorf("sandbox: container backend unavailable: %w", err)
+			return nil, nil, fmt.Errorf("sandbox: container backend unavailable: %w", err)
 		}
-		return ce.Engine(), nil
+		return ce.Engine(), ce, nil
 	case BackendE2B:
+		if !cfg.UnsafeAllowE2BNetwork {
+			return nil, nil, errors.New(
+				"sandbox: e2b backend requires UnsafeAllowE2BNetwork=true " +
+					"(e2b sandboxes have network access and the SDK exposes no option to disable it; " +
+					"use the container backend for network-isolated review)")
+		}
 		ce, err := e2bexec.New()
 		if err != nil {
-			return nil, fmt.Errorf("sandbox: e2b backend unavailable: %w", err)
+			return nil, nil, fmt.Errorf("sandbox: e2b backend unavailable: %w", err)
 		}
-		return ce.Engine(), nil
+		return ce.Engine(), ce, nil
 	case BackendLocal:
 		if !cfg.UnsafeLocal {
-			return nil, errors.New("sandbox: local backend requires UnsafeLocal=true")
+			return nil, nil, errors.New("sandbox: local backend requires UnsafeLocal=true")
 		}
 		var lopts []localexec.CodeExecutorOption
 		if cfg.WorkDir != "" {
 			lopts = append(lopts, localexec.WithWorkDir(cfg.WorkDir))
 		}
-		return localexec.New(lopts...).Engine(), nil
+		// localexec.CodeExecutor has no Close method; return nil closer.
+		return localexec.New(lopts...).Engine(), nil, nil
 	default:
-		return nil, fmt.Errorf("sandbox: unknown backend %q", cfg.Backend)
+		return nil, nil, fmt.Errorf("sandbox: unknown backend %q", cfg.Backend)
 	}
 }
 
@@ -371,16 +404,31 @@ func (e *Executor) Run(
 	}, nil
 }
 
-// Close releases the workspace resources.
+// Close releases the workspace resources and shuts down the backend
+// (Docker client / E2B client). It must be called exactly once when the
+// Executor is no longer needed; calling it twice may return an error from
+// the backend but is otherwise safe. Workspace cleanup errors take
+// precedence over backend-close errors so callers see the more actionable
+// failure first. The context is used only for workspace cleanup; backend
+// close is synchronous and does not honour cancellation (the underlying
+// HTTP clients close immediately).
 func (e *Executor) Close(ctx context.Context, ws codeexecutor.Workspace) error {
+	var firstErr error
 	mgr := e.eng.Manager()
-	if mgr == nil {
-		return nil
+	if mgr != nil {
+		if err := mgr.Cleanup(ctx, ws); err != nil {
+			firstErr = fmt.Errorf("sandbox: cleanup workspace: %w", err)
+		}
 	}
-	if err := mgr.Cleanup(ctx, ws); err != nil {
-		return fmt.Errorf("sandbox: cleanup workspace: %w", err)
+	// Close the backend so Docker/E2B clients release their connections.
+	// Without this the *CodeExecutor is garbage-collected eventually but
+	// may hold open HTTP keep-alive sockets or sandbox slots until then.
+	if e.closer != nil {
+		if err := e.closer.Close(); err != nil && firstErr == nil {
+			firstErr = fmt.Errorf("sandbox: close backend: %w", err)
+		}
 	}
-	return nil
+	return firstErr
 }
 
 // buildSandboxEnv constructs the minimal, allowlisted environment for a

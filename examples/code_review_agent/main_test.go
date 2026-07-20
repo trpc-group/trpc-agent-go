@@ -61,28 +61,29 @@ type fixtureCase struct {
 // --repo-path), so runSandboxChecks skips the static checks entirely and
 // records a single StatusSkipped run. The conclusion is therefore driven
 // purely by rule findings: "fail" when a critical-severity finding is
-// present, "pass" otherwise.
+// present, "needs_human_review" when a high-severity finding is present,
+// and "pass" otherwise (medium/low findings do not block merge).
 func TestIntegration_Fixtures(t *testing.T) {
 	fixtures := []fixtureCase{
 		{name: "clean", fixtureFile: "clean.diff", noFindings: true, expectConclusion: "pass"},
 		{name: "security", fixtureFile: "security.diff", expectFinding: "SI-001", expectConclusion: "fail", plaintextSecret: "sk-abc123def456ghi789jkl012mno345"},
-		{name: "goroutine_leak", fixtureFile: "goroutine_leak.diff", expectFinding: "GL-001", expectConclusion: "pass"},
-		{name: "resource_leak", fixtureFile: "resource_leak.diff", expectFinding: "RL-001", expectConclusion: "pass"},
+		{name: "goroutine_leak", fixtureFile: "goroutine_leak.diff", expectFinding: "GL-001", expectConclusion: "needs_human_review"},
+		{name: "resource_leak", fixtureFile: "resource_leak.diff", expectFinding: "RL-001", expectConclusion: "needs_human_review"},
 		{name: "missing_tests", fixtureFile: "missing_tests.diff", expectFinding: "TM-001", expectConclusion: "pass"},
 		{name: "sensitive_info", fixtureFile: "sensitive_info.diff", expectFinding: "SC-001", expectConclusion: "fail", plaintextSecret: "super-secret-value-12345"},
-		{name: "db_lifecycle", fixtureFile: "db_lifecycle.diff", expectFinding: "DB-001", expectConclusion: "pass"},
+		{name: "db_lifecycle", fixtureFile: "db_lifecycle.diff", expectFinding: "DB-001", expectConclusion: "needs_human_review"},
 		{name: "duplicate_finding", fixtureFile: "duplicate_finding.diff", expectFinding: "SI-001", expectConclusion: "fail", plaintextSecret: "sk-duplicate001test002value003"},
 		{name: "sandbox_failure", fixtureFile: "sandbox_failure.diff", expectConclusion: "pass"},
 		// Phase-1 new rules (borrowed from competitor PRs #2190/#2243):
-		{name: "missing_tx_rollback", fixtureFile: "missing_tx_rollback.diff", expectFinding: "DB-002", expectConclusion: "pass"},
-		{name: "panic_in_goroutine", fixtureFile: "panic_in_goroutine.diff", expectFinding: "GL-003", expectConclusion: "pass"},
+		{name: "missing_tx_rollback", fixtureFile: "missing_tx_rollback.diff", expectFinding: "DB-002", expectConclusion: "needs_human_review"},
+		{name: "panic_in_goroutine", fixtureFile: "panic_in_goroutine.diff", expectFinding: "GL-003", expectConclusion: "needs_human_review"},
 		{name: "cmd_injection", fixtureFile: "cmd_injection.diff", expectFinding: "SC-002", expectConclusion: "fail"},
-		{name: "sensitive_info_in_log", fixtureFile: "sensitive_info_in_log.diff", expectFinding: "SC-003", expectConclusion: "pass"},
+		{name: "sensitive_info_in_log", fixtureFile: "sensitive_info_in_log.diff", expectFinding: "SC-003", expectConclusion: "needs_human_review"},
 		// Phase-3 AST rules (borrowed from competitor PR #2243):
-		{name: "ast_http_body_leak", fixtureFile: "ast_http_body_leak.diff", expectFinding: "AST-001", expectConclusion: "pass"},
-		{name: "ast_sql_rows_leak", fixtureFile: "ast_sql_rows_leak.diff", expectFinding: "AST-002", expectConclusion: "pass"},
+		{name: "ast_http_body_leak", fixtureFile: "ast_http_body_leak.diff", expectFinding: "AST-001", expectConclusion: "needs_human_review"},
+		{name: "ast_sql_rows_leak", fixtureFile: "ast_sql_rows_leak.diff", expectFinding: "AST-002", expectConclusion: "needs_human_review"},
 		{name: "ast_context_misuse", fixtureFile: "ast_context_misuse.diff", expectFinding: "AST-003", expectConclusion: "pass"},
-		{name: "ast_goroutine_shared_mutation", fixtureFile: "ast_goroutine_shared_mutation.diff", expectFinding: "AST-004", expectConclusion: "pass"},
+		{name: "ast_goroutine_shared_mutation", fixtureFile: "ast_goroutine_shared_mutation.diff", expectFinding: "AST-004", expectConclusion: "needs_human_review"},
 		// AST benign: a complete Go file that uses http.Get but properly
 		// defers Body.Close — none of the AST rules should fire.
 		{name: "ast_http_body_closed", fixtureFile: "ast_http_body_closed.diff", noFindings: true, expectConclusion: "pass"},

@@ -43,32 +43,86 @@ type Finding struct {
 //     -> LLM-002 unresolved TODO (low)
 //   - "fmt.Println" / "fmt.Printf" in non-test file
 //     -> LLM-003 debug print left in production code (medium)
+//
+// Line numbers are sourced from the hunk header (@@ -old +newStart,newLen @@)
+// so findings point at the actual line in the new file rather than the
+// line's position inside the diff text. This keeps fingerprints stable
+// across rebases and matches what a real LLM would report.
 func scan(diffText string) []Finding {
 	if diffText == "" {
 		return nil
 	}
 	var out []Finding
 	currentFile := ""
-	lineNo := 0
+	// newLineNo tracks the next unprocessed line number in the new file.
+	// It is seeded from the hunk header and advanced by context and '+'
+	// lines; '-' lines do not advance it (they only exist in the old file).
+	newLineNo := 0
 	for _, raw := range strings.Split(diffText, "\n") {
-		lineNo++
 		switch {
 		case strings.HasPrefix(raw, "+++ b/"):
 			currentFile = strings.TrimPrefix(raw, "+++ b/")
+			newLineNo = 0
 		case strings.HasPrefix(raw, "--- a/"):
 			// old path; ignore
+		case strings.HasPrefix(raw, "@@"):
+			// Parse the new-file start line from "@@ -old,oldLen +newStart,newLen @@".
+			// A parsed value of 0 means the header was unparseable; the
+			// scanner still walks the hunk but line numbers will be off by
+			// an unknown offset (acceptable for the fake model's purposes).
+			if start := parseHunkNewStart(raw); start > 0 {
+				newLineNo = start
+			}
 		case strings.HasPrefix(raw, "+"):
 			content := strings.TrimPrefix(raw, "+")
-			out = append(out, scanLine(currentFile, lineNo, content)...)
+			// The added line occupies line `newLineNo` in the new file.
+			// Guard against a missing/malformed hunk header by falling
+			// back to 1 so findings never report line 0.
+			line := newLineNo
+			if line <= 0 {
+				line = 1
+			}
+			out = append(out, scanLine(currentFile, line, content)...)
+			newLineNo++
+		case strings.HasPrefix(raw, " "):
+			// Context line — present in both old and new file, so it
+			// advances the new-file line counter.
+			newLineNo++
+		case strings.HasPrefix(raw, "-"):
+			// Deleted line — exists only in the old file; newLineNo is
+			// unchanged.
 		}
 	}
 	return out
 }
 
+// parseHunkNewStart extracts the new-file start line number from a unified
+// diff hunk header like "@@ -10,7 +12,9 @@ optional context". Returns 0 if
+// the header cannot be parsed (caller falls back to a sensible default).
+// Manual parsing avoids pulling in regexp for a single well-known format.
+func parseHunkNewStart(line string) int {
+	// Locate " +" — the space before the +range marker. We search from
+	// index 1 to skip a leading "@@" that would not match anyway.
+	idx := strings.Index(line[1:], " +")
+	if idx < 0 {
+		return 0
+	}
+	rest := line[1+idx+2:]
+	n := 0
+	for i := 0; i < len(rest); i++ {
+		c := rest[i]
+		if c < '0' || c > '9' {
+			break
+		}
+		n = n*10 + int(c-'0')
+	}
+	return n
+}
+
 // scanLine checks a single added line for the fake-model patterns. The
-// line number passed in is the line's position in the diff text, not in
-// the source file; this is good enough for the fake model's purposes
-// (callers care about the file + rule, not the exact line).
+// line number passed in is the line's position in the new source file
+// (derived from the hunk header), so findings point at the right place
+// when a reviewer opens the file.
 func scanLine(file string, line int, content string) []Finding {
 	var out []Finding
 	low := strings.ToLower(content)

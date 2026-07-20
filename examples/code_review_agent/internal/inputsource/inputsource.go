@@ -366,6 +366,13 @@ func gitCommittedDiff(ctx context.Context, repo, baseBranch string) (string, err
 // correctness changes are reviewed rather than silently skipped. For repos
 // with an unborn HEAD (no commits), it falls back to `git diff` (unstaged
 // only) since there are no staged changes to miss in a fresh repo.
+//
+// Untracked files (listed by `git ls-files --others --exclude-standard`) are
+// synthesised into "new file" diffs and appended so newly-added files —
+// which may contain hardcoded secrets or other reviewable issues — are not
+// silently skipped. This matters for security: a developer who drops a
+// config file with an API key into the repo without `git add` would
+// otherwise bypass the rule engine entirely.
 func gitWorkingTreeDiff(ctx context.Context, repo string) (string, error) {
 	diff, err := gitOutput(ctx, repo, "diff", "HEAD")
 	if err != nil {
@@ -375,7 +382,63 @@ func gitWorkingTreeDiff(ctx context.Context, repo string) (string, error) {
 			return "", fmt.Errorf("inputsource: git diff working tree: %w", err)
 		}
 	}
+	untracked, err := gitUntrackedDiff(ctx, repo, int64(len(diff)))
+	if err != nil {
+		return "", fmt.Errorf("inputsource: git untracked diff: %w", err)
+	}
+	if diff != "" && untracked != "" {
+		diff += "\n"
+	}
+	diff += untracked
 	return diff, nil
+}
+
+// gitUntrackedDiff synthesises "new file" diffs for every untracked file
+// reported by `git ls-files --others --exclude-standard`. The output is
+// capped at MaxDiffBytes minus the bytes already consumed by the tracked
+// diff so the combined working-tree diff never exceeds MaxDiffBytes.
+//
+// Each entry is resolved under repo and validated via syntheticDiffForFile,
+// which rejects absolute paths, traversal, symlinks and non-regular files
+// — the same safety net applied to --file-list mode.
+func gitUntrackedDiff(ctx context.Context, repo string, alreadyUsed int64) (string, error) {
+	if alreadyUsed >= MaxDiffBytes {
+		return "", nil
+	}
+	out, err := gitOutput(ctx, repo, "ls-files", "--others", "--exclude-standard", "-z")
+	if err != nil {
+		return "", fmt.Errorf("ls-files: %w", err)
+	}
+	if out == "" {
+		return "", nil
+	}
+	// Resolve repo to an absolute root once so syntheticDiffForFile's
+	// pathUnder check is consistent across entries.
+	absRepo, err := filepath.Abs(repo)
+	if err != nil {
+		return "", fmt.Errorf("resolve repo root: %w", err)
+	}
+	var diffs []string
+	var totalSize int64
+	for _, name := range strings.Split(strings.TrimRight(out, "\x00"), "\x00") {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		// Reject absolute untracked paths defensively; git normally
+		// emits repo-relative names, but a hostile or unusual setup
+		// (e.g. core.worktree pointing elsewhere) could change that.
+		if filepath.IsAbs(name) {
+			return "", fmt.Errorf("reject absolute untracked path %q", name)
+		}
+		synth, serr := syntheticDiffForFile(name, absRepo, MaxDiffBytes-alreadyUsed-totalSize)
+		if serr != nil {
+			return "", serr
+		}
+		totalSize += int64(len(synth))
+		diffs = append(diffs, synth)
+	}
+	return strings.Join(diffs, "\n"), nil
 }
 
 // gitOutput runs "git -C repo args..." capturing stdout via a pipe so the
