@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
@@ -278,6 +279,9 @@ func TestCleanupExecutorRemovesLocalFallbackWorkDirExactlyOnce(t *testing.T) {
 type closeSpyExecutor struct {
 	execCalls  int
 	closeCalls int
+	closeErr   error
+	closeStart chan struct{}
+	closeAllow chan struct{}
 }
 
 func (e *closeSpyExecutor) ExecuteCode(
@@ -294,7 +298,13 @@ func (*closeSpyExecutor) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
 
 func (e *closeSpyExecutor) Close() error {
 	e.closeCalls++
-	return nil
+	if e.closeStart != nil {
+		close(e.closeStart)
+	}
+	if e.closeAllow != nil {
+		<-e.closeAllow
+	}
+	return e.closeErr
 }
 
 func TestLazyExecutorDefersFactoryUntilUseAndUnusedClose(t *testing.T) {
@@ -351,5 +361,69 @@ func TestLazyExecutorInitializesAndClosesUnderlyingExecutorOnce(t *testing.T) {
 	}
 	if spy.closeCalls != 1 {
 		t.Fatalf("underlying close calls = %d, want 1", spy.closeCalls)
+	}
+}
+
+func TestLazyExecutorCloseWaitsForRacingInitializationCleanup(t *testing.T) {
+	t.Parallel()
+
+	cleanupErr := errors.New("cleanup failed")
+	factoryStarted := make(chan struct{})
+	releaseFactory := make(chan struct{})
+	spy := &closeSpyExecutor{
+		closeErr:   cleanupErr,
+		closeStart: make(chan struct{}),
+		closeAllow: make(chan struct{}),
+	}
+	exec := NewLazyExecutor(Config{Runtime: RuntimeContainer}, func(Config) (codeexecutor.CodeExecutor, error) {
+		close(factoryStarted)
+		<-releaseFactory
+		return spy, nil
+	})
+
+	executeDone := make(chan error, 1)
+	go func() {
+		_, err := exec.ExecuteCode(context.Background(), codeexecutor.CodeExecutionInput{})
+		executeDone <- err
+	}()
+	<-factoryStarted
+
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- exec.Close() }()
+	waitForLazyExecutorClosed(t, exec)
+	close(releaseFactory)
+	<-spy.closeStart
+
+	select {
+	case err := <-closeDone:
+		t.Fatalf("Close returned before cleanup completed: %v", err)
+	default:
+	}
+
+	close(spy.closeAllow)
+	if err := <-closeDone; !errors.Is(err, cleanupErr) {
+		t.Fatalf("Close error = %v, want cleanup error", err)
+	}
+	if err := <-executeDone; err == nil || !strings.Contains(err.Error(), "executor is closed") {
+		t.Fatalf("ExecuteCode error = %v, want closed executor", err)
+	}
+}
+
+func waitForLazyExecutorClosed(t *testing.T, exec *LazyExecutor) {
+	t.Helper()
+	deadline := time.After(time.Second)
+	for {
+		exec.mu.Lock()
+		closed := exec.closed
+		exec.mu.Unlock()
+		if closed {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatal("Close did not mark LazyExecutor closed")
+		default:
+			time.Sleep(time.Millisecond)
+		}
 	}
 }

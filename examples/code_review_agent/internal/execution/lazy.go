@@ -112,13 +112,14 @@ func (e *LazyExecutor) Close() error {
 	e.exec = nil
 	e.mu.Unlock()
 
-	var err error
+	var cleanupErr error
 	if exec != nil {
-		err = CleanupExecutor(exec)
+		cleanupErr = CleanupExecutor(exec)
 	}
 
 	e.mu.Lock()
-	e.closeErr = err
+	e.closeErr = errors.Join(e.closeErr, cleanupErr)
+	err := e.closeErr
 	e.mu.Unlock()
 	return err
 }
@@ -164,12 +165,16 @@ func (e *LazyExecutor) ensure() (codeexecutor.CodeExecutor, error) {
 	e.mu.Lock()
 	if e.closed {
 		e.initializing = false
+		e.mu.Unlock()
+		var cleanupErr error
+		if exec != nil {
+			cleanupErr = CleanupExecutor(exec)
+		}
+		e.mu.Lock()
 		e.initErr = errors.New("executor is closed")
+		e.closeErr = errors.Join(e.closeErr, cleanupErr)
 		close(e.initDone)
 		e.mu.Unlock()
-		if exec != nil {
-			_ = CleanupExecutor(exec)
-		}
 		return nil, e.initErr
 	}
 	e.exec = exec
