@@ -830,6 +830,6 @@ Licensed under the **Apache 2.0 License** - see [LICENSE](LICENSE) file for deta
 
 If tRPC-Agent-Go is useful for your Go agent projects, stars are welcome.
 
-_Empowering developers to build the next generation of intelligent applications_
+_Empowering developers to build the next generation of intelligent applications_1
 
 </div>
