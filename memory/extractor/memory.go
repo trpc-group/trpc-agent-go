@@ -174,6 +174,24 @@ func (e *memoryExtractor) ExtractOperationStages(
 	if err != nil || !includeAssistantResults {
 		return primary, assistantResults, err
 	}
+	if len(assistantResults) == 0 &&
+		hasStructuredAssistantResultCandidate(messages) {
+		recoveryCtx, recovered, recoveryErr :=
+			e.recoverStructuredAssistantResults(
+				ctx, messages, existing,
+			)
+		if recoveryErr != nil {
+			if recoveryCtx.Err() != nil {
+				return primary, nil, recoveryErr
+			}
+			log.WarnfContext(ctx,
+				"extractor: structured assistant result recovery failed: %v",
+				recoveryErr,
+			)
+		} else {
+			assistantResults = recovered
+		}
+	}
 	assistantResults = filterGroundedAssistantResultOperations(
 		ctx, messages, assistantResults,
 	)
