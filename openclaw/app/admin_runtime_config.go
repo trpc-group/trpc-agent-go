@@ -760,6 +760,27 @@ func adminRuntimeConfigSectionSpecs() []adminRuntimeConfigSectionSpec {
 					},
 				),
 				adminRuntimeTextField(
+					"tools.host_exec_max_idle_wait",
+					"Host Exec Max Idle Wait",
+					"Maximum sleep-style idle wait allowed inside "+
+						"host exec_command calls, for example 20s. "+
+						"Empty or 0 allows long idle waits.",
+					"",
+					[]adminRuntimeConfigKeyRef{
+						adminRuntimeKey("tools"),
+						adminRuntimeKey(
+							"host_exec_max_idle_wait",
+							"hostExecMaxIdleWait",
+						),
+					},
+					func(opts runOptions) string {
+						if opts.HostExecMaxIdleWait <= 0 {
+							return ""
+						}
+						return opts.HostExecMaxIdleWait.String()
+					},
+				),
+				adminRuntimeTextField(
 					"tools.defer_direct_tools",
 					"Deferred Direct Tools",
 					"Comma-separated additional tool names to keep "+

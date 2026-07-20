@@ -10,6 +10,7 @@ package summary
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -17,6 +18,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	isummarycontext "trpc.group/trpc-go/trpc-agent-go/session/internal/summarycontext"
 )
 
 type echoPromptModel struct {
@@ -109,6 +111,71 @@ func TestSessionSummarizer_PreHook_ModifiesEventsAndRebuildsText(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, summary, "new-content")
 	assert.NotContains(t, summary, "origin")
+}
+
+func TestSessionSummarizer_PreHook_ModifiesSeparatedPreviousSummary(t *testing.T) {
+	mdl := &echoPromptModel{}
+	var capturedEvents []event.Event
+	s := NewSummarizer(
+		mdl,
+		WithPrompt("Previous:\n{previous_summary}\n\nConversation:\n{conversation_text}\n\nSummary:"),
+		WithPreSummaryHook(func(in *PreSummaryHookContext) error {
+			capturedEvents = append([]event.Event(nil), in.Events...)
+			require.Equal(t, "previous", in.PreviousSummary)
+			require.Equal(t, "user: new conversation", in.Text)
+			in.PreviousSummary = "redacted previous"
+			in.Text = "redacted conversation"
+			return nil
+		}),
+	)
+	sess := &session.Session{ID: "sess", Events: []event.Event{
+		{
+			Author: authorSystem,
+			Response: &model.Response{Choices: []model.Choice{{
+				Message: model.Message{Content: "previous"},
+			}}},
+		},
+		newEventWithContent("new conversation"),
+	}}
+	ctx := isummarycontext.WithPreviousSummary(context.Background(), "previous")
+
+	result, err := s.Summarize(ctx, sess)
+	require.NoError(t, err)
+	require.Len(t, capturedEvents, 1)
+	require.Equal(t, authorUser, capturedEvents[0].Author)
+	require.Contains(t, result, "Previous:\nredacted previous")
+	require.Contains(t, result, "Conversation:\nredacted conversation")
+	require.NotContains(t, result, "new conversation")
+}
+
+func TestSessionSummarizer_PreHook_ClearsSeparatedConversation(t *testing.T) {
+	mdl := &echoPromptModel{}
+	s := NewSummarizer(
+		mdl,
+		WithPrompt("Previous:\n{previous_summary}\n\nConversation:\n{conversation_text}\n\nSummary:"),
+		WithPreSummaryHook(func(in *PreSummaryHookContext) error {
+			require.Equal(t, "previous", in.PreviousSummary)
+			in.Events = nil
+			in.Text = ""
+			return nil
+		}),
+	)
+	sess := &session.Session{ID: "sess", Events: []event.Event{
+		{
+			Author: authorSystem,
+			Response: &model.Response{Choices: []model.Choice{{
+				Message: model.Message{Content: "previous"},
+			}}},
+		},
+		newEventWithContent("sensitive conversation"),
+	}}
+	ctx := isummarycontext.WithPreviousSummary(context.Background(), "previous")
+
+	result, err := s.Summarize(ctx, sess)
+	require.NoError(t, err)
+	require.Contains(t, result, "Previous:\nprevious")
+	require.Contains(t, result, "Conversation:\n\n\nSummary:")
+	require.NotContains(t, result, "sensitive conversation")
 }
 
 func TestSessionSummarizer_PostHook_ModifiesOutput(t *testing.T) {
@@ -216,10 +283,15 @@ func TestSessionSummarizer_PostHook_ErrorBehavior(t *testing.T) {
 	})
 }
 
-type panicGenerateModel struct{}
+type panicGenerateModel struct {
+	contextWindow int
+}
 
 func (m *panicGenerateModel) Info() model.Info {
-	return model.Info{Name: "panic-generate"}
+	return model.Info{
+		Name:          "panic-generate",
+		ContextWindow: m.contextWindow,
+	}
 }
 
 func (m *panicGenerateModel) GenerateContent(
@@ -277,12 +349,42 @@ func TestSessionSummarizer_ModelCallbacks_Before_ModifiesRequest(t *testing.T) {
 	assert.NotContains(t, summary, "origin")
 }
 
+func TestSessionSummarizer_ModelCallbacks_Before_RejectsOversizedRequest(
+	t *testing.T,
+) {
+	callbacks := model.NewCallbacks().RegisterBeforeModel(
+		func(
+			_ context.Context,
+			args *model.BeforeModelArgs,
+		) (*model.BeforeModelResult, error) {
+			args.Request.Messages = append(
+				args.Request.Messages,
+				model.NewSystemMessage(strings.Repeat("callback-content ", 1000)),
+			)
+			return nil, nil
+		},
+	)
+	s := NewSummarizer(
+		&panicGenerateModel{contextWindow: 1000},
+		WithModelCallbacks(callbacks),
+	)
+	sess := &session.Session{
+		ID:     "sess",
+		Events: []event.Event{newEventWithContent("origin")},
+	}
+
+	_, err := s.Summarize(context.Background(), sess)
+	require.ErrorContains(t, err, "no longer fits after before-model callbacks")
+}
+
 func TestSessionSummarizer_ModelCallbacks_Before_CustomResponseSkipsModel(t *testing.T) {
+	var callbackInput string
 	callbacks := model.NewCallbacks().RegisterBeforeModel(
 		func(
 			ctx context.Context,
 			args *model.BeforeModelArgs,
 		) (*model.BeforeModelResult, error) {
+			callbackInput = args.Request.Messages[0].Content
 			return &model.BeforeModelResult{
 				CustomResponse: &model.Response{
 					Done: true,
@@ -293,15 +395,74 @@ func TestSessionSummarizer_ModelCallbacks_Before_CustomResponseSkipsModel(t *tes
 			}, nil
 		},
 	)
-	s := NewSummarizer(&panicGenerateModel{}, WithModelCallbacks(callbacks))
+	s := NewSummarizer(
+		&panicGenerateModel{contextWindow: 1000},
+		WithModelCallbacks(callbacks),
+	)
 
 	sess := &session.Session{
-		ID:     "sess",
-		Events: []event.Event{newEventWithContent("origin")},
+		ID: "sess",
+		Events: []event.Event{newEventWithContent(
+			strings.Repeat("oversized-origin ", 1000),
+		)},
 	}
 	summary, err := s.Summarize(context.Background(), sess)
 	require.NoError(t, err)
 	assert.Equal(t, "FROM_CALLBACK", summary)
+	assert.Contains(t, callbackInput, summaryConversationOmitted)
+	assert.Less(t, strings.Count(callbackInput, "oversized-origin"), 900)
+}
+
+func TestSessionSummarizer_ModelCallbacks_Before_AppliesToFallbackRequest(
+	t *testing.T,
+) {
+	const sentinel = "callback-applied"
+	maxTokens := 77
+	callbacks := model.NewCallbacks().RegisterBeforeModel(
+		func(
+			_ context.Context,
+			args *model.BeforeModelArgs,
+		) (*model.BeforeModelResult, error) {
+			args.Request.GenerationConfig.MaxTokens = &maxTokens
+			if args.Request.Headers == nil {
+				args.Request.Headers = make(map[string]string)
+			}
+			args.Request.Headers["X-Summary-Callback"] = sentinel
+			return nil, nil
+		},
+	)
+	capture := &cacheSafeCaptureModel{
+		response:      "summary",
+		contextWindow: 1000,
+	}
+	s := NewSummarizer(
+		capture,
+		WithCacheSafeForking(true),
+		WithModelCallbacks(callbacks),
+	)
+	oversized := strings.Repeat("oversized-origin ", 1000)
+	parent := &model.Request{Messages: []model.Message{
+		model.NewSystemMessage("stable system"),
+		model.NewUserMessage(oversized),
+	}}
+	ctx := ContextWithCacheSafeForkRequest(context.Background(), parent)
+	sess := &session.Session{
+		ID:     "fallback-callback",
+		Events: []event.Event{newEventWithContent(oversized)},
+	}
+
+	summary, err := s.Summarize(ctx, sess)
+	require.NoError(t, err)
+	require.Equal(t, "summary", summary)
+	require.NotNil(t, capture.request)
+	require.Len(t, capture.request.Messages, 1)
+	require.Contains(t, capture.request.Messages[0].Content,
+		summaryConversationOmitted)
+	require.NotNil(t, capture.request.GenerationConfig.MaxTokens)
+	require.Equal(t, maxTokens,
+		*capture.request.GenerationConfig.MaxTokens)
+	require.Equal(t, sentinel,
+		capture.request.Headers["X-Summary-Callback"])
 }
 
 func TestSessionSummarizer_ModelCallbacks_After_OverridesResponse(t *testing.T) {

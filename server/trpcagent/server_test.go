@@ -600,6 +600,7 @@ func TestServerOptionsApplyBasePathTimeoutAndCORS(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.Equal(t, "/api/apps", srv.BasePath())
+	assert.Equal(t, "/api/apps/sports-agent", srv.AppPath())
 	req := httptest.NewRequest(http.MethodGet, "/api/apps/sports-agent/structure", nil)
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, req)

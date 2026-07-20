@@ -57,6 +57,7 @@ func baseLLMAgentOptions(
 ) []llmagent.Option {
 	opts := []llmagent.Option{
 		llmagent.WithModel(mdl),
+		llmagent.WithAgentCallbacks(blockedRouteAgentCallbacks()),
 		llmagent.WithInstruction(instruction),
 		llmagent.WithGlobalInstruction(systemPrompt),
 		llmagent.WithGenerationConfig(genConfig),
@@ -86,7 +87,7 @@ func baseLLMAgentOptions(
 			runtimeprofile.SkillVisibilityFilterForRepository(repo),
 		),
 	}
-	if cfg.MaxLLMCalls > 0 {
+	if cfg.MaxLLMCalls > 0 || cfg.DeadlineFinalizationWindow > 0 {
 		opts = append(opts, llmagent.WithModelCallbacks(
 			modelCallBudgetCallbacks(),
 		))

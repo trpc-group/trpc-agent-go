@@ -93,6 +93,8 @@ const (
 	flagMaxHistoryRuns                                = "max-history-runs"
 	flagMaxLLMCalls                                   = "max-llm-calls"
 	flagFinalizeBeforeMaxLLMCalls                     = "finalize-before-max-llm-calls"
+	flagDeadlineFinalizationWindow                    = "deadline-finalization-window"
+	flagDeadlineFinalizationMaxInputTokens            = "deadline-finalization-max-input-tokens"
 	flagMaxToolIterations                             = "max-tool-iterations"
 	flagOpenAIMaxRetries                              = "openai-max-retries"
 	flagOpenAITimeout                                 = "openai-timeout"
@@ -147,6 +149,7 @@ const (
 	flagHostExecDefaultTimeout             = "host-exec-default-timeout"
 	flagHostExecMaxTimeout                 = "host-exec-max-timeout"
 	flagHostExecMaxYield                   = "host-exec-max-yield"
+	flagHostExecMaxIdleWait                = "host-exec-max-idle-wait"
 
 	flagAdminEnabled  = "admin-enabled"
 	flagAdminAddr     = "admin-addr"
@@ -193,6 +196,8 @@ type runOptions struct {
 	MaxHistoryRuns                                int
 	MaxLLMCalls                                   int
 	FinalizeBeforeMaxLLMCalls                     bool
+	DeadlineFinalizationWindow                    time.Duration
+	DeadlineFinalizationMaxInputTokens            int
 	MaxToolIterations                             int
 	PreloadMemory                                 int
 	ToolCallArgumentsJSONRepair                   bool
@@ -313,6 +318,7 @@ type runOptions struct {
 	HostExecDefaultTimeout             time.Duration
 	HostExecMaxTimeout                 time.Duration
 	HostExecMaxYield                   time.Duration
+	HostExecMaxIdleWait                time.Duration
 
 	enableOpenClawToolsExplicit  bool
 	deferToolSurfaceModeExplicit bool
@@ -486,6 +492,20 @@ func parseRunOptions(args []string) (runOptions, error) {
 		false,
 		"On the last allowed LLM call, disable tools and ask the model to finalize",
 	)
+	fs.DurationVar(
+		&opts.DeadlineFinalizationWindow,
+		flagDeadlineFinalizationWindow,
+		0,
+		"Disable tools and ask the model to finalize when request deadline "+
+			"is within this window (0 disables)",
+	)
+	fs.IntVar(
+		&opts.DeadlineFinalizationMaxInputTokens,
+		flagDeadlineFinalizationMaxInputTokens,
+		0,
+		"Approximate input-token budget for deadline finalization requests "+
+			"(0 keeps the full context)",
+	)
 	fs.IntVar(
 		&opts.MaxToolIterations,
 		flagMaxToolIterations,
@@ -641,7 +661,7 @@ func parseRunOptions(args []string) (runOptions, error) {
 		"openai-variant",
 		defaultOpenAIVariant,
 		"OpenAI variant: auto, openai, deepseek, qwen, hunyuan, "+
-			"glm (auto uses configured base URL host)",
+			"glm, kimi, minimax (auto uses configured base URL host)",
 	)
 	fs.StringVar(
 		&opts.OpenAIBaseURL,
@@ -1036,6 +1056,13 @@ func parseRunOptions(args []string) (runOptions, error) {
 		"Maximum wait before exec_command or write_stdin returns "+
 			"interim output (0 disables the cap)",
 	)
+	fs.DurationVar(
+		&opts.HostExecMaxIdleWait,
+		flagHostExecMaxIdleWait,
+		0,
+		"Maximum sleep-style idle wait allowed inside host exec "+
+			"commands (0 allows long idle waits)",
+	)
 
 	if err := fs.Parse(args); err != nil {
 		return runOptions{}, &exitError{Code: 2, Err: err}
@@ -1233,13 +1260,15 @@ type agentRunConfig struct {
 	MaxHistoryRuns                                *int  `yaml:"max_history_runs,omitempty"`
 	// MaxLLMCalls limits agent-facing model calls per invocation. Auxiliary
 	// session summary and auto-memory extraction calls are excluded.
-	MaxLLMCalls                 *int  `yaml:"max_llm_calls,omitempty"`
-	FinalizeBeforeMaxLLMCalls   *bool `yaml:"finalize_before_max_llm_calls,omitempty"`
-	MaxToolIterations           *int  `yaml:"max_tool_iterations,omitempty"`
-	PreloadMemory               *int  `yaml:"preload_memory,omitempty"`
-	ToolCallArgumentsJSONRepair *bool `yaml:"tool_call_arguments_json_repair,omitempty"`
-	DisablePostToolPrompt       *bool `yaml:"disable_post_tool_prompt,omitempty"`
-	DisablePostToolPromptCamel  *bool `yaml:"disablePostToolPrompt,omitempty"`
+	MaxLLMCalls                        *int    `yaml:"max_llm_calls,omitempty"`
+	FinalizeBeforeMaxLLMCalls          *bool   `yaml:"finalize_before_max_llm_calls,omitempty"`
+	DeadlineFinalizationWindow         *string `yaml:"deadline_finalization_window,omitempty"`
+	DeadlineFinalizationMaxInputTokens *int    `yaml:"deadline_finalization_max_input_tokens,omitempty"`
+	MaxToolIterations                  *int    `yaml:"max_tool_iterations,omitempty"`
+	PreloadMemory                      *int    `yaml:"preload_memory,omitempty"`
+	ToolCallArgumentsJSONRepair        *bool   `yaml:"tool_call_arguments_json_repair,omitempty"`
+	DisablePostToolPrompt              *bool   `yaml:"disable_post_tool_prompt,omitempty"`
+	DisablePostToolPromptCamel         *bool   `yaml:"disablePostToolPrompt,omitempty"`
 
 	Instruction      *string  `yaml:"instruction,omitempty"`
 	InstructionFiles []string `yaml:"instruction_files,omitempty"`
@@ -1376,6 +1405,8 @@ type toolsConfig struct {
 	HostExecMaxTimeoutCamel       *string             `yaml:"hostExecMaxTimeout,omitempty"`
 	HostExecMaxYield              *string             `yaml:"host_exec_max_yield,omitempty"`
 	HostExecMaxYieldCamel         *string             `yaml:"hostExecMaxYield,omitempty"`
+	HostExecMaxIdleWait           *string             `yaml:"host_exec_max_idle_wait,omitempty"`
+	HostExecMaxIdleWaitCamel      *string             `yaml:"hostExecMaxIdleWait,omitempty"`
 
 	Providers []filePluginSpec `yaml:"providers,omitempty"`
 	ToolSets  []filePluginSpec `yaml:"toolsets,omitempty"`
@@ -1761,6 +1792,35 @@ func (cfg *fileConfig) apply(
 		if cfg.Agent.FinalizeBeforeMaxLLMCalls != nil &&
 			!flagWasSet(set, flagFinalizeBeforeMaxLLMCalls) {
 			opts.FinalizeBeforeMaxLLMCalls = *cfg.Agent.FinalizeBeforeMaxLLMCalls
+		}
+		if cfg.Agent.DeadlineFinalizationWindow != nil &&
+			!flagWasSet(set, flagDeadlineFinalizationWindow) {
+			dur, err := parseDuration(
+				*cfg.Agent.DeadlineFinalizationWindow,
+			)
+			if err != nil {
+				return fmt.Errorf(
+					"agent.deadline_finalization_window: %w",
+					err,
+				)
+			}
+			if dur < 0 {
+				return fmt.Errorf(
+					"agent.deadline_finalization_window must be >= 0",
+				)
+			}
+			opts.DeadlineFinalizationWindow = dur
+		}
+		if cfg.Agent.DeadlineFinalizationMaxInputTokens != nil &&
+			!flagWasSet(set, flagDeadlineFinalizationMaxInputTokens) {
+			v := *cfg.Agent.DeadlineFinalizationMaxInputTokens
+			if v < 0 {
+				return fmt.Errorf(
+					"agent.deadline_finalization_max_input_tokens " +
+						"must be >= 0",
+				)
+			}
+			opts.DeadlineFinalizationMaxInputTokens = v
 		}
 		if cfg.Agent.MaxToolIterations != nil &&
 			!flagWasSet(set, flagMaxToolIterations) {
@@ -2238,6 +2298,21 @@ func (cfg *fileConfig) apply(
 				)
 			}
 			opts.HostExecMaxYield = dur
+		}
+		hostExecMaxIdleWait := firstStringPtr(
+			cfg.Tools.HostExecMaxIdleWait,
+			cfg.Tools.HostExecMaxIdleWaitCamel,
+		)
+		if hostExecMaxIdleWait != nil &&
+			!flagWasSet(set, flagHostExecMaxIdleWait) {
+			dur, err := parseDuration(*hostExecMaxIdleWait)
+			if err != nil {
+				return fmt.Errorf(
+					"tools.host_exec_max_idle_wait: %w",
+					err,
+				)
+			}
+			opts.HostExecMaxIdleWait = dur
 		}
 		if len(cfg.Tools.Providers) > 0 {
 			opts.ToolProviders = convertPluginSpecs(cfg.Tools.Providers)
@@ -2928,6 +3003,18 @@ func finalizeRunOptions(opts *runOptions) error {
 			opts.MaxLLMCalls,
 		)
 	}
+	if opts.DeadlineFinalizationWindow < 0 {
+		return fmt.Errorf(
+			"invalid deadline finalization window: %s",
+			opts.DeadlineFinalizationWindow,
+		)
+	}
+	if opts.DeadlineFinalizationMaxInputTokens < 0 {
+		return fmt.Errorf(
+			"invalid deadline finalization max input tokens: %d",
+			opts.DeadlineFinalizationMaxInputTokens,
+		)
+	}
 	opts.EvolutionSkillScopeMode = skill.NormalizeSkillScopeMode(
 		opts.EvolutionSkillScopeMode,
 	)
@@ -2997,6 +3084,12 @@ func finalizeRunOptions(opts *runOptions) error {
 		return fmt.Errorf(
 			"invalid host exec max yield: %s",
 			opts.HostExecMaxYield,
+		)
+	}
+	if opts.HostExecMaxIdleWait < 0 {
+		return fmt.Errorf(
+			"invalid host exec max idle wait: %s",
+			opts.HostExecMaxIdleWait,
 		)
 	}
 	opts.DeferToolSurfaceDirect = strings.Join(
