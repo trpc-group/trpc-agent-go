@@ -41,7 +41,7 @@ Correct ONLY those candidates using the conversation as evidence.
   can be made.
 </grounded_state_recovery>`
 
-var stateRelationFragments = []string{
+var stateLossRelationFragments = []string{
 	"replac",
 	"move on from",
 	"moved on from",
@@ -64,16 +64,24 @@ var stateRelationFragments = []string{
 	"upgrade from",
 	"upgraded from",
 	"upgrading from",
-	"instead of",
-	"in addition to",
-	"alongside",
-	"while keeping",
 	"moved from",
 	"changed from",
 	"changed to",
-	"left the",
 	"stopped ",
 }
+
+var explicitStateLossFragments = append(
+	[]string{
+		"used to have",
+		"used to own",
+		"formerly had",
+		"formerly owned",
+		"parted with",
+		"donated",
+		"threw away",
+	},
+	stateLossRelationFragments...,
+)
 
 func (e *memoryExtractor) recoverUngroundedStateOperations(
 	ctx context.Context,
@@ -85,7 +93,7 @@ func (e *memoryExtractor) recoverUngroundedStateOperations(
 		return ctx, operations, nil
 	}
 	userSource := userExtractionSourceText(messages)
-	if containsStateRelation(userSource) {
+	if containsAnyFragment(userSource, explicitStateLossFragments) {
 		return ctx, operations, nil
 	}
 	safe := make([]*Operation, 0, len(operations))
@@ -126,8 +134,33 @@ func (e *memoryExtractor) recoverUngroundedStateOperations(
 	if len(grounded) == 0 {
 		return ctx, operations, nil
 	}
+	grounded = preserveStateRecoveryMetadata(suspect, grounded)
 	return ctx, append(safe,
 		uniqueExtractionOperations(safe, grounded)...), nil
+}
+
+func preserveStateRecoveryMetadata(
+	suspect, recovered []*Operation,
+) []*Operation {
+	if len(suspect) != len(recovered) {
+		return recovered
+	}
+	result := make([]*Operation, 0, len(recovered))
+	for i, correction := range recovered {
+		if suspect[i] == nil || correction == nil {
+			return recovered
+		}
+		preserved := *suspect[i]
+		preserved.Type = OperationAdd
+		preserved.MemoryID = ""
+		preserved.Memory = correction.Memory
+		preserved.Topics = append([]string(nil), suspect[i].Topics...)
+		preserved.Participants = append(
+			[]string(nil), suspect[i].Participants...,
+		)
+		result = append(result, &preserved)
+	}
+	return result
 }
 
 func (e *memoryExtractor) buildGroundedStateRecoveryMessages(
@@ -200,12 +233,12 @@ func operationHasStateRelation(operation *Operation) bool {
 			operation.Type != OperationUpdate) {
 		return false
 	}
-	return containsStateRelation(operation.Memory)
+	return containsAnyFragment(operation.Memory, stateLossRelationFragments)
 }
 
-func containsStateRelation(text string) bool {
+func containsAnyFragment(text string, fragments []string) bool {
 	text = strings.ToLower(text)
-	for _, fragment := range stateRelationFragments {
+	for _, fragment := range fragments {
 		if strings.Contains(text, fragment) {
 			return true
 		}

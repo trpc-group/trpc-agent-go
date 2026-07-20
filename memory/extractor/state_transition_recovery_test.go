@@ -21,23 +21,27 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
-func TestContainsStateRelation(t *testing.T) {
+func TestContainsStateLossRelation(t *testing.T) {
 	t.Parallel()
 	for _, text := range []string{
 		"Replaced the old laptop.",
 		"Moving on from the old tank.",
 		"Previously had a five-gallon tank.",
 		"No longer owns the old phone.",
-		"Uses the desktop in addition to the laptop.",
 	} {
-		assert.True(t, containsStateRelation(text), text)
+		assert.True(t,
+			containsAnyFragment(text, stateLossRelationFragments), text)
 	}
 	for _, text := range []string{
 		"Has an old laptop.",
 		"Set up a new desktop.",
 		"Has a five-gallon and a twenty-gallon tank.",
+		"Monitors ammonia in addition to nitrite.",
+		"Uses the desktop alongside the laptop.",
+		"Uses tea instead of coffee today.",
 	} {
-		assert.False(t, containsStateRelation(text), text)
+		assert.False(t,
+			containsAnyFragment(text, stateLossRelationFragments), text)
 	}
 }
 
@@ -46,7 +50,12 @@ func TestExtractorRecoversUngroundedStateTransition(t *testing.T) {
 		"memory": "Has experience cycling an aquarium.",
 	})
 	suspectArgs := mustOperationArgs(t, map[string]any{
-		"memory": "Set up a new 20-gallon tank, moving on from the old 5-gallon tank.",
+		"memory":       "Set up a new 20-gallon tank, moving on from the old 5-gallon tank.",
+		"memory_kind":  "episode",
+		"event_time":   "2023-05-20",
+		"topics":       []string{"aquarium", "setup"},
+		"participants": []string{"Finley"},
+		"location":     "home",
 	})
 	recoveredArgs := mustOperationArgs(t, map[string]any{
 		"memory": "Set up a new 20-gallon tank.",
@@ -77,6 +86,12 @@ func TestExtractorRecoversUngroundedStateTransition(t *testing.T) {
 		operations[0].Memory)
 	assert.Equal(t, "Set up a new 20-gallon tank.",
 		operations[1].Memory)
+	assert.Equal(t, memory.KindEpisode, operations[1].MemoryKind)
+	require.NotNil(t, operations[1].EventTime)
+	assert.Equal(t, "2023-05-20", operations[1].EventTime.Format("2006-01-02"))
+	assert.Equal(t, []string{"aquarium", "setup"}, operations[1].Topics)
+	assert.Equal(t, []string{"Finley"}, operations[1].Participants)
+	assert.Equal(t, "home", operations[1].Location)
 	require.Len(t, m.requests, 2)
 	assert.Len(t, m.requests[1].Tools, 1)
 	assert.Contains(t, m.requests[1].Tools, groundedStateAddToolName)
@@ -85,6 +100,50 @@ func TestExtractorRecoversUngroundedStateTransition(t *testing.T) {
 	assert.Contains(t,
 		m.requests[1].Messages[len(m.requests[1].Messages)-1].Content,
 		"moving on from")
+}
+
+func TestExtractorStateRecoveryIgnoresCoexistenceLanguage(t *testing.T) {
+	coexistenceArgs := mustOperationArgs(t, map[string]any{
+		"memory": "Monitors ammonia in addition to nitrite.",
+	})
+	m := stateRecoverySequenceModel([]model.ToolCall{
+		makeToolCall(memory.AddToolName, coexistenceArgs),
+	})
+	e := NewExtractor(m,
+		WithUpdatePolicy(UpdatePolicyHistoryPreserving),
+	)
+
+	operations, err := e.Extract(context.Background(), []model.Message{
+		model.NewUserMessage("Should I also monitor ammonia?"),
+	}, nil)
+
+	require.NoError(t, err)
+	require.Len(t, operations, 1)
+	assert.Equal(t, "Monitors ammonia in addition to nitrite.",
+		operations[0].Memory)
+	assert.Len(t, m.requests, 1)
+}
+
+func TestExtractorStateRecoveryPreservesParaphrasedExplicitLoss(t *testing.T) {
+	explicitArgs := mustOperationArgs(t, map[string]any{
+		"memory": "Previously had a five-gallon tank.",
+	})
+	m := stateRecoverySequenceModel([]model.ToolCall{
+		makeToolCall(memory.AddToolName, explicitArgs),
+	})
+	e := NewExtractor(m,
+		WithUpdatePolicy(UpdatePolicyHistoryPreserving),
+	)
+
+	operations, err := e.Extract(context.Background(), []model.Message{
+		model.NewUserMessage("I used to have a five-gallon tank."),
+	}, nil)
+
+	require.NoError(t, err)
+	require.Len(t, operations, 1)
+	assert.Equal(t, "Previously had a five-gallon tank.",
+		operations[0].Memory)
+	assert.Len(t, m.requests, 1)
 }
 
 func TestExtractorStateRecoveryKeepsDefaultPolicyCompatible(t *testing.T) {
