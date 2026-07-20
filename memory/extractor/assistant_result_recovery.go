@@ -41,6 +41,10 @@ eligible result and emit no tool call otherwise.
 - Preserve exact names, ordering, negation, quantities, and item-to-detail
   relationships. Keep a cohesive result together when splitting loses those
   relationships.
+- Do not store a response that merely acknowledges, copies, paraphrases,
+  reformats, or summarizes facts supplied by the user. Keep a genuinely new
+  assistant selection, recommendation, calculation, classification, or
+  transformation even when it reuses user-supplied entities and values.
 - Do not store the request itself, generic definitions, tutorial steps,
   unselected alternatives, brainstorming, acknowledgments, or filler.
 - Do not duplicate a result already present in existing memories.

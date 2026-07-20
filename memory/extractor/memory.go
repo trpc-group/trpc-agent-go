@@ -697,6 +697,12 @@ recommendations, estimates, and answers from facts confirmed by the user.
 - Store a concrete result the user explicitly requested and may refer to later,
   such as a named answer, concise recommendation, final list or ordering, plan,
   calculation, or requested extraction, classification, or transformation.
+- SOURCE NOVELTY CHECK: Do not store a response that merely acknowledges,
+  copies, paraphrases, reformats, or summarizes facts supplied by the user in
+  the same conversation. Those facts belong in normal user memories. Keep a
+  genuinely new assistant selection, recommendation, calculation,
+  classification, or transformation even when its input entities and values
+  came from the user.
 - MANDATORY DIRECT-RESULT CHECK: Before finishing, inspect the assistant's
   direct answer separately. If it contains concrete named items or a conclusion
   requested by the user, emit a memory for that result even when the response

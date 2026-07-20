@@ -93,6 +93,8 @@ func TestExtractor_RecoversStructuredAssistantResult(t *testing.T) {
 	assert.Contains(t, m.requests[1].Tools, assistantResultAddToolName)
 	assert.Contains(t, m.requests[1].Messages[0].Content,
 		"<assistant_result_recovery>")
+	assert.Contains(t, m.requests[1].Messages[0].Content,
+		"merely acknowledges")
 	assert.Equal(t, model.RoleUser,
 		m.requests[1].Messages[len(m.requests[1].Messages)-1].Role)
 }
