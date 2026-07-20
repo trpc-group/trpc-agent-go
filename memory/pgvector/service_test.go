@@ -2632,6 +2632,51 @@ func TestService_SearchMemories_OrderByEventTimeKeepsHigherSimilarityFirst(t *te
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestService_SearchMemories_BackfillsTemporalEventTail(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+
+	svc := setupMockService(t, db, mock, WithSkipDBInit(true))
+	defer svc.Close()
+
+	baseTime := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	columns := []string{
+		"memory_id", "app_name", "user_id", "memory_content", "topics",
+		"memory_kind", "event_time", "participants", "location",
+		"created_at", "updated_at", "similarity",
+	}
+	mock.ExpectQuery("SELECT memory_id, app_name, user_id, memory_content, topics").
+		WillReturnRows(sqlmock.NewRows(columns).
+			AddRow("latest", "test-app", "u1", "Saw a sculpture exhibition", pq.Array([]string{"museum"}),
+				"episode", baseTime.Add(48*time.Hour), pq.Array([]string{}), "Art Museum",
+				baseTime.Add(48*time.Hour), baseTime.Add(48*time.Hour), 0.95).
+			AddRow("middle", "test-app", "u1", "Attended an art lecture", pq.Array([]string{"museum"}),
+				"episode", baseTime.Add(24*time.Hour), pq.Array([]string{}), "City Museum",
+				baseTime.Add(24*time.Hour), baseTime.Add(24*time.Hour), 0.90).
+			AddRow("earliest", "test-app", "u1", "Visited a dinosaur collection", pq.Array([]string{"museum"}),
+				"episode", baseTime, pq.Array([]string{}), "History Museum",
+				baseTime, baseTime, 0.85))
+	mock.ExpectQuery("SELECT memory_id, app_name, user_id, memory_content, topics").
+		WillReturnRows(sqlmock.NewRows(columns))
+
+	results, err := svc.SearchMemories(
+		context.Background(),
+		memory.UserKey{AppName: "test-app", UserID: "u1"},
+		"List the museums from earliest to latest.",
+		memory.WithSearchOptions(memory.SearchOptions{
+			Query:        "List the museums from earliest to latest.",
+			HybridSearch: true,
+			MaxResults:   2,
+		}),
+	)
+	require.NoError(t, err)
+	require.Len(t, results, 2)
+	assert.Equal(t, []string{"latest", "earliest"}, []string{
+		results[0].ID, results[1].ID,
+	})
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestService_SearchMemories_KindFallbackKeepsRequestedKindFirst(t *testing.T) {
 	db, mock := setupMockDB(t)
 	defer db.Close()
