@@ -572,9 +572,9 @@ a `ToolSet`), wrap it with `resultcodec.Wrap`:
 wrapped := resultcodec.Wrap(existingTool, resultcodec.XML())
 ```
 
-`Wrap` preserves the tool's declaration and its callable/streamable behavior,
-and stays transparent to framework capability checks (long-running, permission,
-metadata, deferred loading, and summarization).
+`Wrap` adds result encoding without changing the framework's existing resolution
+of the wrapped tool's declaration or capabilities. It does not define precedence
+between independently nested capability wrappers.
 
 ### Behavior and compatibility
 

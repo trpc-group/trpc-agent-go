@@ -205,81 +205,6 @@ func ResolvePermissionChecker(t tool.Tool) (tool.PermissionChecker, error) {
 	return nil, ErrToolWrapperTraversalExhausted
 }
 
-// WalkToolCapabilities visits the tools in t's wrapper chain from outermost to
-// innermost, honoring a capability declared by an intermediate transparent
-// wrapper before the wrapped tool (outermost-wins). Framework structural
-// wrappers (declaration overlays and NamedTool) are unwrapped without being
-// treated as capability sources, since they only delegate. visit is called until
-// it returns true or the chain ends; the return reports whether traversal hit the
-// depth bound (a cyclic or over-deep chain) without terminating, so callers can
-// fail closed. A clean end (a nil tool, including a transparent wrapper that
-// unwraps to nil, or a base tool with no further wrapper) reports exhausted=false.
-// This mirrors resultcodec.codecTool's walkBase so capability resolution is
-// consistent whether a tool is wrapped by NamedTool or the codec.
-func WalkToolCapabilities(t tool.Tool, visit func(tool.Tool) bool) (exhausted bool) {
-	for i := 0; i < maxToolUnwrapDepth; i++ {
-		if t == nil {
-			return false
-		}
-		switch cur := t.(type) {
-		case declarationWrapper:
-			t = cur.originalTool()
-			continue
-		case *NamedTool:
-			t = cur.Original()
-			continue
-		}
-		if visit(t) {
-			return false
-		}
-		tw, ok := t.(transparentTool)
-		if !ok {
-			return false
-		}
-		t = tw.TransparentUnwrap()
-	}
-	return true
-}
-
-// ResolveMetadata resolves a tool's effective metadata across framework and
-// transparent wrappers, outermost-first: the first MetadataProvider terminates
-// the walk, while the nearest ConcurrencyAware value is overlaid. This honors an
-// outer wrapper's own capability declaration (for example a wrapper that marks
-// the composite as not concurrency-safe, or as destructive) instead of skipping
-// straight to the innermost tool. If the chain cannot be fully traversed (overly
-// deep or cyclic) and no provider was found, it fails closed with conservative
-// Destructive/OpenWorld flags rather than reporting a benign zero value.
-func ResolveMetadata(t tool.Tool) tool.ToolMetadata {
-	var (
-		meta            tool.ToolMetadata
-		concurrency     bool
-		haveConcurrency bool
-		foundProvider   bool
-	)
-	exhausted := WalkToolCapabilities(t, func(cur tool.Tool) bool {
-		if !haveConcurrency {
-			if aware, ok := cur.(tool.ConcurrencyAware); ok {
-				concurrency = aware.IsConcurrencySafe()
-				haveConcurrency = true
-			}
-		}
-		if provider, ok := cur.(tool.MetadataProvider); ok {
-			meta = provider.ToolMetadata()
-			foundProvider = true
-			return true
-		}
-		return false
-	})
-	if exhausted && !foundProvider {
-		meta.Destructive = true
-		meta.OpenWorld = true
-	}
-	if haveConcurrency {
-		meta.ConcurrencySafe = concurrency
-	}
-	return meta
-}
-
 type declarationTool struct {
 	decl tool.Declaration
 	base tool.Tool
@@ -405,32 +330,19 @@ func (t *NamedTool) Original() tool.Tool {
 	return t.original
 }
 
-// ToolMetadata resolves metadata across the wrapper chain outermost-first, so an
-// intermediate transparent wrapper's own declaration (for example a tightened
-// ConcurrencySafe or a Destructive marker) is honored rather than skipped in
-// favor of the innermost tool. See ResolveMetadata.
+// ToolMetadata delegates to the original tool.
 func (t *NamedTool) ToolMetadata() tool.ToolMetadata {
-	return ResolveMetadata(t.original)
+	return tool.MetadataOf(t.original)
 }
 
-// IsConcurrencySafe resolves concurrency safety outermost-first across the
-// wrapper chain.
+// IsConcurrencySafe delegates to the original tool.
 func (t *NamedTool) IsConcurrencySafe() bool {
-	return ResolveMetadata(t.original).ConcurrencySafe
+	return tool.MetadataOf(t.original).ConcurrencySafe
 }
 
-// ShouldDefer resolves the deferred-loading preference outermost-first across the
-// wrapper chain, so the first DeferredTool declaration wins.
+// ShouldDefer delegates to the original tool.
 func (t *NamedTool) ShouldDefer(ctx context.Context) bool {
-	deferred := false
-	WalkToolCapabilities(t.original, func(cur tool.Tool) bool {
-		if d, ok := cur.(tool.DeferredTool); ok {
-			deferred = d.ShouldDefer(ctx)
-			return true
-		}
-		return false
-	})
-	return deferred
+	return tool.ShouldDefer(ctx, t.original)
 }
 
 // CheckPermission delegates to the original tool when it implements
@@ -476,20 +388,12 @@ func (t *NamedTool) StreamableCall(ctx context.Context, jsonArgs []byte) (*tool.
 	return nil, fmt.Errorf("tool is not streamable")
 }
 
-// SkipSummarization resolves the preference outermost-first across the wrapper
-// chain: the first tool publishing a SkipSummarization() bool preference wins;
-// otherwise it returns false. Resolving per-capability (rather than fully
-// unwrapping first) keeps an intermediate transparent wrapper's own preference
-// from being skipped.
+// SkipSummarization delegates to the original tool when it implements
+// a SkipSummarization() bool preference; otherwise returns false.
 func (t *NamedTool) SkipSummarization() bool {
 	type skipper interface{ SkipSummarization() bool }
-	skip := false
-	WalkToolCapabilities(t.original, func(cur tool.Tool) bool {
-		if s, ok := cur.(skipper); ok {
-			skip = s.SkipSummarization()
-			return true
-		}
-		return false
-	})
-	return skip
+	if s, ok := t.original.(skipper); ok {
+		return s.SkipSummarization()
+	}
+	return false
 }

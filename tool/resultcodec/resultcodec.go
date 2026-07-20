@@ -65,9 +65,10 @@ type Codec interface {
 // returned tool preserves the callable and/or streamable capabilities of t and
 // exposes the codec to the framework.
 //
-// Wrapping is transparent: framework capability checks (long-running,
-// permission, streaming preference, summarization) continue to observe the
-// underlying tool. Wrap returns nil when t is nil.
+// Adding this wrapper does not change how the framework resolves t's existing
+// declaration or capabilities. Capability precedence between independently
+// nested wrappers remains resolver-specific; Wrap does not define a global
+// outermost-first rule. Wrap returns nil when t is nil.
 func Wrap(t tool.Tool, codec Codec) tool.Tool {
 	if t == nil {
 		return nil

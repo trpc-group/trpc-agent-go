@@ -14,12 +14,12 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool/resultcodec"
 )
 
-// transparentTool is implemented by wrappers that are transparent: they keep the
-// wrapped tool's model-facing declaration and delegate capabilities. Only such
-// wrappers are traversed by framework capability/permission resolution. A plain
-// errors.Unwrap() is intentionally NOT followed, so a wrapper that renames the
-// tool (different model-facing declaration) or owns its own hooks is not
-// silently stripped and keeps its declaration for execution filters.
+// transparentTool is implemented by wrappers that are safe to traverse when a
+// capability is not handled at the current layer. Traversal does not establish a
+// global wrapper-precedence rule; each capability resolver defines its own
+// behavior. A plain errors.Unwrap() is intentionally NOT followed, so a wrapper
+// that renames the tool is not silently stripped and keeps its declaration for
+// execution filters.
 type transparentTool interface {
 	TransparentUnwrap() tool.Tool
 }

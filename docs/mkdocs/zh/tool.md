@@ -552,8 +552,8 @@ bashTool := function.NewFunctionTool(
 wrapped := resultcodec.Wrap(existingTool, resultcodec.XML())
 ```
 
-`Wrap` 保留工具的 declaration 与 callable/streamable 行为，并对框架能力检查
-（long-running、permission、metadata、deferred loading、summarization）保持透明。
+`Wrap` 只增加结果编码，不改变框架对被包装工具已有 declaration 和 capability 的解析
+结果；它不定义多个独立 capability wrapper 之间的优先级。
 
 ### 行为与兼容性
 

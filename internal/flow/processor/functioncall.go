@@ -1407,39 +1407,15 @@ type invocationStateDeltaProvider interface {
 	) map[string][]byte
 }
 
-// firstCapabilityTool returns the outermost tool in tl's wrapper chain for which
-// match returns true, honoring an intermediate transparent wrapper's own
-// capability instead of skipping straight to the innermost tool. Returns nil if
-// none matches.
-func firstCapabilityTool(tl tool.Tool, match func(tool.Tool) bool) tool.Tool {
-	var found tool.Tool
-	itool.WalkToolCapabilities(tl, func(cur tool.Tool) bool {
-		if match(cur) {
-			found = cur
-			return true
-		}
-		return false
-	})
-	return found
-}
-
-// resolveStateDeltaProvider returns the outermost tool in the wrapper chain that
-// contributes a state delta, so a stateful transparent wrapper's own delta is not
-// skipped by unwrapping straight to the innermost tool.
-func resolveStateDeltaProvider(tl tool.Tool) tool.Tool {
-	return firstCapabilityTool(tl, func(cur tool.Tool) bool {
-		if _, ok := cur.(invocationStateDeltaProvider); ok {
-			return true
-		}
-		_, ok := cur.(stateDeltaProvider)
-		return ok
-	})
-}
-
 // toolProvidesStateDelta reports whether the tool (through the wrapper chain)
 // contributes a state delta from its result content.
 func toolProvidesStateDelta(tl tool.Tool) bool {
-	return resolveStateDeltaProvider(tl) != nil
+	semantic := itool.ResolveSemantic(tl)
+	if _, ok := semantic.(invocationStateDeltaProvider); ok {
+		return true
+	}
+	_, ok := semantic.(stateDeltaProvider)
+	return ok
 }
 
 // marshalStateDeltaContent serializes result to the JSON bytes used as the
@@ -1478,7 +1454,7 @@ func (p *FunctionCallResponseProcessor) attachStateDelta(
 	toolCallID := choice.Message.ToolID
 
 	var delta map[string][]byte
-	providerTool := resolveStateDeltaProvider(tl)
+	providerTool := itool.ResolveSemantic(tl)
 	if isdp, ok := providerTool.(invocationStateDeltaProvider); ok {
 		delta = isdp.StateDeltaForInvocation(inv, toolCallID, args, b)
 	} else if sdp, ok := providerTool.(stateDeltaProvider); ok {
@@ -2766,17 +2742,14 @@ func (p *FunctionCallResponseProcessor) checkToolPermission(
 	tl tool.Tool,
 	decl *tool.Declaration,
 ) (*tool.PermissionResult, error) {
-	// Resolve metadata outermost-first (capability-aware) rather than fully
-	// unwrapping to the innermost tool, so the permission policy sees the
-	// effective metadata the business tool exposes (including an intermediate
-	// transparent wrapper's own ConcurrencySafe/Destructive declaration).
+	semanticTool := itool.ResolveSemantic(tl)
 	req := &tool.PermissionRequest{
 		Tool:        tl,
 		ToolName:    toolCall.Function.Name,
 		ToolCallID:  toolCall.ID,
 		Declaration: decl,
 		Arguments:   toolCall.Function.Arguments,
-		Metadata:    itool.ResolveMetadata(tl),
+		Metadata:    tool.MetadataOf(semanticTool),
 	}
 	// Resolve the permission checker from the outermost wrapper inward so a
 	// transparent wrapper's decision is never skipped by unwrapping past it. If
@@ -2862,16 +2835,12 @@ func streamableTool(t tool.Tool) (tool.StreamableTool, bool) {
 	if !ok {
 		return nil, false
 	}
-	if _, ok := itool.ResolveSemantic(t).(tool.StreamableTool); !ok {
+	probe := itool.ResolveSemantic(t)
+	if _, ok := probe.(tool.StreamableTool); !ok {
 		return nil, false
 	}
-	// Check the stream preference outermost-first, so an intermediate transparent
-	// wrapper's preference is honored; it falls through to the inner tool's
-	// preference otherwise.
-	if pref := firstCapabilityTool(t, func(cur tool.Tool) bool {
-		_, ok := cur.(streamInnerPreference)
-		return ok
-	}); pref != nil && !pref.(streamInnerPreference).StreamInner() {
+	// Check if the tool has a stream preference and if it is enabled.
+	if pref, ok := probe.(streamInnerPreference); ok && !pref.StreamInner() {
 		return nil, false
 	}
 	return streamable, true
@@ -3041,25 +3010,19 @@ func shouldRequestStructuredStreamErrors(tl tool.StreamableTool) bool {
 	if tl == nil {
 		return false
 	}
-	t := firstCapabilityTool(tl, func(cur tool.Tool) bool {
-		_, ok := cur.(structuredStreamErrorOptIn)
-		return ok
-	})
-	return t != nil && t.(structuredStreamErrorOptIn).TRPCAgentGoStructuredStreamErrorsOptIn()
+	pref, ok := itool.ResolveSemantic(tl).(structuredStreamErrorOptIn)
+	return ok && pref.TRPCAgentGoStructuredStreamErrorsOptIn()
 }
 
 func innerTextModeForTool(tl tool.StreamableTool) tool.InnerTextMode {
 	if tl == nil {
 		return tool.InnerTextModeInclude
 	}
-	t := firstCapabilityTool(tl, func(cur tool.Tool) bool {
-		_, ok := cur.(innerTextModePreference)
-		return ok
-	})
-	if t == nil {
+	pref, ok := itool.ResolveSemantic(tl).(innerTextModePreference)
+	if !ok {
 		return tool.InnerTextModeInclude
 	}
-	return t.(innerTextModePreference).InnerTextMode()
+	return pref.InnerTextMode()
 }
 
 // executeStreamableTool executes a streamable tool.
@@ -3540,16 +3503,10 @@ func markSkipSummarization(ev *event.Event) {
 }
 
 func toolPrefersSkipSummarization(tl tool.Tool) bool {
-	// Outermost-first: an intermediate transparent wrapper's own preference is
-	// honored rather than skipped by unwrapping to the innermost tool.
-	t := firstCapabilityTool(tl, func(cur tool.Tool) bool {
-		_, ok := cur.(summarizationSkipper)
-		return ok
-	})
-	if t == nil {
-		return false
+	if skipper, ok := itool.ResolveSemantic(tl).(summarizationSkipper); ok {
+		return skipper.SkipSummarization()
 	}
-	return t.(summarizationSkipper).SkipSummarization()
+	return false
 }
 
 // findCompatibleTool attempts to map a requested (missing) tool name to a compatible tool.
