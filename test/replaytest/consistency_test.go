@@ -424,16 +424,6 @@ func diffSections(diffs []DiffEntry) string {
 	return strings.Join(names, ", ")
 }
 
-// init removes any stale report file so CI runs start clean.
-func init() {
-	// Respect explicit env overrides — only clean the default path.
-	if os.Getenv(EnvReportPath) != "" {
-		return
-	}
-	// Clean up a stale report from the default location, ignoring errors.
-	_ = os.Remove(defaultReportName)
-}
-
 // TestMain discovers the testdata directory when running from the repo root.
 func TestMain(m *testing.M) {
 	// Change to the directory containing this file so that testdata/

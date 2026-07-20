@@ -41,6 +41,8 @@ pnpm-lock.yaml
 .env
 .gomodcache
 next-env.d.ts
+# Replay consistency test — generated diff report.
+test/replaytest/replay_diff_report.json
 .codebuddy
 examples/**/*.evalset_result.json
 !examples/evaluation/**/*.evalset_result.json
