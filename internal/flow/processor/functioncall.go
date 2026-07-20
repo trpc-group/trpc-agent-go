@@ -942,17 +942,25 @@ func toolCapabilityPollutesAutoMemory(tl tool.Tool) bool {
 	// Traverse both NamedTool (Original) and transparent wrappers such as
 	// resultcodec.Wrap (TransparentUnwrap) so wrapping a knowledge tool does not
 	// hide its PollutesAutoMemory capability. Depth-bounded for cycle safety.
+	//
+	// Fail closed: if the chain cannot be fully traversed (a self-cycle or deeper
+	// than the bound), a pollution source may be hidden past the limit, so treat
+	// the tool as polluting rather than risk persisting external content into
+	// automatic memory. A fully traversed chain with no source is not polluting.
 	for i := 0; i < maxToolWrapperTraversalDepth && tl != nil; i++ {
 		if source, ok := tl.(autoMemoryPollutionSource); ok && source.PollutesAutoMemory() {
 			return true
 		}
 		next := unwrapAutoMemoryTool(tl)
-		if next == nil || next == tl {
+		if next == nil {
 			return false
+		}
+		if next == tl {
+			return true
 		}
 		tl = next
 	}
-	return false
+	return true
 }
 
 // maxToolWrapperTraversalDepth bounds wrapper-chain traversal for capability

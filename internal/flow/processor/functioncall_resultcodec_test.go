@@ -730,6 +730,42 @@ func TestToolCapabilityPollutesAutoMemory_ThroughWrap(t *testing.T) {
 	}
 }
 
+func TestToolCapabilityPollutesAutoMemory_ShortChainNotPolluting(t *testing.T) {
+	// A fully traversable chain with no pollution source must not be marked
+	// polluting; fail-closed must only trigger on cycles/exhaustion.
+	base := &recordingCallableTool{declaration: &tool.Declaration{Name: "plain"}}
+	chain := &transparentWrapper{inner: &transparentWrapper{inner: base}}
+	if toolCapabilityPollutesAutoMemory(chain) {
+		t.Fatal("a finite non-polluting chain must not be treated as polluting")
+	}
+}
+
+func TestToolCapabilityPollutesAutoMemory_CyclicFailsClosed(t *testing.T) {
+	// A self-cyclic transparent chain cannot be fully traversed, so a hidden
+	// pollution source cannot be ruled out: fail closed (treat as polluting).
+	base := &recordingCallableTool{declaration: &tool.Declaration{Name: "x"}}
+	cyclic := &cyclicCallableWrapper{base: base}
+	var got bool
+	runWithinTimeout(t, 5*time.Second, func() {
+		got = toolCapabilityPollutesAutoMemory(cyclic)
+	})
+	if !got {
+		t.Fatal("cyclic chain must fail closed (treated as polluting)")
+	}
+}
+
+func TestToolCapabilityPollutesAutoMemory_DeepChainFailsClosed(t *testing.T) {
+	// A chain deeper than the traversal bound cannot be fully inspected, so a
+	// pollution source hidden past the bound cannot be ruled out: fail closed.
+	var tl tool.Tool = &recordingCallableTool{declaration: &tool.Declaration{Name: "x"}}
+	for i := 0; i < maxToolWrapperTraversalDepth+2; i++ {
+		tl = &transparentWrapper{inner: tl}
+	}
+	if !toolCapabilityPollutesAutoMemory(tl) {
+		t.Fatal("a chain deeper than the bound must fail closed (treated as polluting)")
+	}
+}
+
 func TestExecuteToolCall_WrapBindsCodec(t *testing.T) {
 	ctx := context.Background()
 	p := NewFunctionCallResponseProcessor(false, nil)

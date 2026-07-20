@@ -330,19 +330,24 @@ func (t *NamedTool) Original() tool.Tool {
 	return t.original
 }
 
-// ToolMetadata delegates to the original tool.
+// ToolMetadata resolves metadata through the full wrapper chain (including
+// transparent wrappers) rather than only the direct original, so a deeper
+// MetadataProvider is not hidden by an intermediate transparent wrapper. This
+// matches how the flow resolves capabilities (via ResolveSemantic) and keeps
+// metadata correct for hosts that inspect a NamedTool directly.
 func (t *NamedTool) ToolMetadata() tool.ToolMetadata {
-	return tool.MetadataOf(t.original)
+	return tool.MetadataOf(ResolveSemantic(t.original))
 }
 
-// IsConcurrencySafe delegates to the original tool.
+// IsConcurrencySafe resolves concurrency safety through the full wrapper chain.
 func (t *NamedTool) IsConcurrencySafe() bool {
-	return tool.MetadataOf(t.original).ConcurrencySafe
+	return tool.MetadataOf(ResolveSemantic(t.original)).ConcurrencySafe
 }
 
-// ShouldDefer delegates to the original tool.
+// ShouldDefer resolves the deferred-loading preference through the full wrapper
+// chain, so a transparent wrapper cannot hide a deeper DeferredTool.
 func (t *NamedTool) ShouldDefer(ctx context.Context) bool {
-	return tool.ShouldDefer(ctx, t.original)
+	return tool.ShouldDefer(ctx, ResolveSemantic(t.original))
 }
 
 // CheckPermission delegates to the original tool when it implements
@@ -388,11 +393,13 @@ func (t *NamedTool) StreamableCall(ctx context.Context, jsonArgs []byte) (*tool.
 	return nil, fmt.Errorf("tool is not streamable")
 }
 
-// SkipSummarization delegates to the original tool when it implements
-// a SkipSummarization() bool preference; otherwise returns false.
+// SkipSummarization resolves the preference through the full wrapper chain when
+// the resolved tool publishes a SkipSummarization() bool preference; otherwise
+// it returns false. Resolving deeper than the direct original keeps a transparent
+// wrapper from hiding a deeper preference.
 func (t *NamedTool) SkipSummarization() bool {
 	type skipper interface{ SkipSummarization() bool }
-	if s, ok := t.original.(skipper); ok {
+	if s, ok := ResolveSemantic(t.original).(skipper); ok {
 		return s.SkipSummarization()
 	}
 	return false

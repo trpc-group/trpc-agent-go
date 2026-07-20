@@ -180,14 +180,17 @@ func (t *codecTool) walkBase(fn func(tool.Tool) bool) walkStatus {
 // unwrap). Only a full MetadataProvider terminates the traversal; the nearest
 // ConcurrencyAware value is tracked separately and overlaid, so an outer wrapper
 // that only publishes concurrency safety cannot discard a deeper provider's
-// Destructive/OpenWorld/MaxResultSize metadata.
+// Destructive/OpenWorld/MaxResultSize metadata. If the chain cannot be fully
+// traversed (overly deep or cyclic) and no provider was found, it fails closed
+// with conservative Destructive/OpenWorld flags.
 func (t *codecTool) ToolMetadata() tool.ToolMetadata {
 	var (
 		meta            tool.ToolMetadata
 		concurrency     bool
 		haveConcurrency bool
+		foundProvider   bool
 	)
-	t.walkBase(func(cur tool.Tool) bool {
+	status := t.walkBase(func(cur tool.Tool) bool {
 		if !haveConcurrency {
 			if aware, ok := cur.(tool.ConcurrencyAware); ok {
 				concurrency = aware.IsConcurrencySafe()
@@ -196,10 +199,19 @@ func (t *codecTool) ToolMetadata() tool.ToolMetadata {
 		}
 		if provider, ok := cur.(tool.MetadataProvider); ok {
 			meta = provider.ToolMetadata()
+			foundProvider = true
 			return true
 		}
 		return false
 	})
+	if status == walkExhausted && !foundProvider {
+		// The chain could not be fully traversed (overly deep or cyclic), so a
+		// deeper provider's safety metadata may be hidden past the bound. Fail
+		// closed with conservative flags rather than reporting a destructive or
+		// open-world tool as benign.
+		meta.Destructive = true
+		meta.OpenWorld = true
+	}
 	if haveConcurrency {
 		meta.ConcurrencySafe = concurrency
 	}

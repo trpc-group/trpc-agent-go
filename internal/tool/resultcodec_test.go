@@ -238,3 +238,55 @@ func TestResolvers_CyclicUnwrapTerminate(t *testing.T) {
 		t.Fatal("ResolveResultCodec should return nil when no codec is present")
 	}
 }
+
+// rcCapProvider is an innermost tool that publishes metadata, deferred loading,
+// and skip-summarization preferences.
+type rcCapProvider struct {
+	name string
+}
+
+func (p *rcCapProvider) Declaration() *tool.Declaration            { return &tool.Declaration{Name: p.name} }
+func (p *rcCapProvider) Call(context.Context, []byte) (any, error) { return "ok", nil }
+func (p *rcCapProvider) ToolMetadata() tool.ToolMetadata {
+	return tool.ToolMetadata{Destructive: true, OpenWorld: true, MaxResultSize: 7}
+}
+func (p *rcCapProvider) ShouldDefer(context.Context) bool { return true }
+func (p *rcCapProvider) SkipSummarization() bool          { return true }
+
+// TestNamedTool_ResolvesCapabilitiesThroughTransparentWrapper covers the reported
+// chain resultcodec.Wrap -> NamedTool -> transparent wrapper -> provider, and
+// asserts NamedTool no longer hides a deeper MetadataProvider / DeferredTool /
+// SkipSummarization behind an intermediate transparent wrapper (the sibling of
+// the permission-chain fix). The transparent wrapper deliberately does not
+// implement any of those capabilities itself.
+func TestNamedTool_ResolvesCapabilitiesThroughTransparentWrapper(t *testing.T) {
+	ctx := context.Background()
+	provider := &rcCapProvider{name: "inner"}
+	wrapper := &rcUnwrapOnly{name: "inner", inner: provider}
+	named := NewUnprefixedNamedTool(wrapper)
+
+	// Directly on the NamedTool (the reported shallow methods).
+	md := tool.MetadataOf(named)
+	if !md.Destructive || !md.OpenWorld || md.MaxResultSize != 7 {
+		t.Fatalf("NamedTool must resolve metadata through the wrapper, got %+v", md)
+	}
+	if !tool.ShouldDefer(ctx, named) {
+		t.Fatal("NamedTool must resolve ShouldDefer through the wrapper")
+	}
+	if s, ok := tool.Tool(named).(interface{ SkipSummarization() bool }); !ok || !s.SkipSummarization() {
+		t.Fatal("NamedTool must resolve SkipSummarization through the wrapper")
+	}
+
+	// Full reported chain, inspected directly (no manual ResolveSemantic).
+	wrapped := resultcodec.Wrap(named, resultcodec.JSON())
+	wmd := tool.MetadataOf(wrapped)
+	if !wmd.Destructive || !wmd.OpenWorld || wmd.MaxResultSize != 7 {
+		t.Fatalf("wrapped chain must resolve metadata, got %+v", wmd)
+	}
+	if !tool.ShouldDefer(ctx, wrapped) {
+		t.Fatal("wrapped chain must resolve ShouldDefer")
+	}
+	if s, ok := wrapped.(interface{ SkipSummarization() bool }); !ok || !s.SkipSummarization() {
+		t.Fatal("wrapped chain must resolve SkipSummarization")
+	}
+}

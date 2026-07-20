@@ -196,6 +196,18 @@ func TestWrap_MetadataNotDiscardedByConcurrencyWrapper(t *testing.T) {
 	}
 }
 
+func TestWrap_MetadataFailsClosedOnCyclicChain(t *testing.T) {
+	// A cyclic transparent chain cannot be fully traversed, so a deeper
+	// provider's safety metadata cannot be ruled out. ToolMetadata must fail
+	// closed with conservative flags rather than report a zero (benign) value.
+	s := &selfUnwrapTool{decl: &tool.Declaration{Name: "cyclic"}}
+	wrapped := Wrap(s, JSON())
+	md := tool.MetadataOf(wrapped)
+	if !md.Destructive || !md.OpenWorld {
+		t.Fatalf("cyclic metadata must fail closed with conservative flags, got %+v", md)
+	}
+}
+
 func TestWrap_PreservesShouldDefer(t *testing.T) {
 	base := &mockMetaTool{decl: &tool.Declaration{Name: "m"}, deferLoad: true}
 	wrapped := Wrap(base, JSON())
