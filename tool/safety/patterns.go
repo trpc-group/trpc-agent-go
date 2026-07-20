@@ -18,11 +18,12 @@ import (
 // destructivePatterns are literal fragments that indicate an
 // irreversible or system-damaging operation. Matched case-insensitively
 // as substrings, so they stay conservative and language-agnostic.
-// Recursive-delete patterns are handled separately by
-// destructiveRmRe so a scoped "rm -rf /tmp/x" is not confused with a
-// root wipe.
+// Recursive "rm" deletes are handled separately by analyzeRm, which
+// parses flags and targets instead of matching one literal flag shape,
+// so a scoped "rm -rf /tmp/x" is not confused with a root wipe while
+// split-flag forms such as "rm -r -f /" are still caught.
 var destructivePatterns = []string{
-	"rm -rf ~", "rm -rf --no-preserve-root", "rm --no-preserve-root",
+	"rm -rf --no-preserve-root", "rm --no-preserve-root",
 	":(){ :|:& };:", // fork bomb
 	"mkfs", "dd if=/dev/zero", "dd of=/dev/",
 	"> /dev/sda", "of=/dev/sda", "of=/dev/vda", "of=/dev/nvme",
@@ -34,16 +35,142 @@ var destructivePatterns = []string{
 	"format c:", "del /f /s /q c:\\",
 }
 
-// destructiveRmRe matches recursive force deletes that target the
-// filesystem root, a wildcard root, a home directory or a top-level
-// system directory. A scoped delete such as "rm -rf /tmp/build" or
-// "rm -rf ./node_modules" is intentionally NOT matched here so the
-// critical decision stays reserved for genuinely catastrophic cases.
-var destructiveRmRe = regexp.MustCompile(
-	`(?i)\brm\s+(?:-[a-z]*\s+)*-[a-z]*r[a-z]*f?[a-z]*\s+` +
-		`(?:/\s|/\*|/$|~|--no-preserve-root|` +
-		`/(?:etc|usr|bin|sbin|var|boot|lib|lib64|root|home|sys|proc|dev|opt)\b)`,
-)
+// catastrophicRoots are absolute targets whose recursive deletion is
+// treated as critical: the filesystem root and the top-level system
+// directories. Home ("~") and a bare wildcard ("*", "/*") are handled
+// separately in isCatastrophicTarget.
+var catastrophicRoots = map[string]struct{}{
+	"/etc": {}, "/usr": {}, "/bin": {}, "/sbin": {}, "/var": {},
+	"/boot": {}, "/lib": {}, "/lib64": {}, "/root": {}, "/home": {},
+	"/sys": {}, "/proc": {}, "/dev": {}, "/opt": {}, "/srv": {},
+}
+
+// analyzeRm inspects one command's argv (argv[0] must be an "rm"
+// invocation) and reports whether it is a catastrophic recursive
+// delete. It understands combined flags ("-rf"), split flags
+// ("-r -f"), long options ("--recursive --force"), the "--" end-of-
+// options marker and normalised targets ("/etc//"), closing the gap
+// where only a single "-[a-z]*r...f" flag shape was matched before.
+func analyzeRm(argv []string) (string, bool) {
+	if len(argv) == 0 {
+		return "", false
+	}
+	if lastPathSegment(strings.ToLower(argv[0])) != "rm" {
+		return "", false
+	}
+	recursive := false
+	noPreserveRoot := false
+	endOfFlags := false
+	var targets []string
+	for _, tok := range argv[1:] {
+		switch {
+		case !endOfFlags && tok == "--":
+			endOfFlags = true
+		case !endOfFlags && strings.HasPrefix(tok, "--"):
+			switch tok {
+			case "--recursive", "--dir":
+				recursive = true
+			case "--no-preserve-root":
+				noPreserveRoot = true
+			}
+		case !endOfFlags && strings.HasPrefix(tok, "-") && len(tok) > 1:
+			for _, r := range tok[1:] {
+				if r == 'r' || r == 'R' {
+					recursive = true
+				}
+			}
+		default:
+			targets = append(targets, tok)
+		}
+	}
+	if !recursive {
+		return "", false
+	}
+	for _, t := range targets {
+		if isCatastrophicTarget(t) {
+			return "recursive delete of a system path: rm " + strings.Join(argv[1:], " "), true
+		}
+	}
+	if noPreserveRoot {
+		return "recursive delete with --no-preserve-root: rm " + strings.Join(argv[1:], " "), true
+	}
+	return "", false
+}
+
+// isCatastrophicTarget reports whether a recursive-delete target is a
+// whole-filesystem, wildcard-root, home or top-level system path.
+// Redundant separators and a trailing slash are normalised first, so
+// "/etc//" and "/etc/" match "/etc".
+func isCatastrophicTarget(t string) bool {
+	t = strings.Trim(strings.TrimSpace(t), `"'`)
+	if t == "" {
+		return false
+	}
+	switch t {
+	case "/", "/*", "*", "~", "~/", "$HOME", "${HOME}", "$HOME/", "${HOME}/":
+		return true
+	}
+	clean := collapseSlashes(t)
+	// A wildcard directly under a catastrophic root ("/etc/*", "/*").
+	if strings.HasSuffix(clean, "/*") {
+		base := strings.TrimRight(strings.TrimSuffix(clean, "/*"), "/")
+		if base == "" {
+			return true
+		}
+		if _, ok := catastrophicRoots[base]; ok {
+			return true
+		}
+	}
+	trimmed := strings.TrimRight(clean, "/")
+	if _, ok := catastrophicRoots[trimmed]; ok {
+		return true
+	}
+	return false
+}
+
+// rmSegments finds "rm ..." runs in free text and returns each as a
+// whitespace-split argv starting at the "rm" token. It is a best-effort
+// tokeniser for text that never reaches shellsafe (non-shell code
+// blocks, raw arguments); shell command lines and shell code blocks are
+// parsed structurally instead. Quotes and shell operators are treated
+// as separators so "os.system('rm -r -f /')" yields ["rm","-r","-f","/"].
+func rmSegments(text string) [][]string {
+	fields := strings.FieldsFunc(text, func(r rune) bool {
+		switch r {
+		case ' ', '\t', '\n', '\r', '\'', '"', '(', ')', ',', ';', '|', '&', '`':
+			return true
+		}
+		return false
+	})
+	var segs [][]string
+	for i := 0; i < len(fields); i++ {
+		if lastPathSegment(strings.ToLower(fields[i])) != "rm" {
+			continue
+		}
+		seg := []string{"rm"}
+		for j := i + 1; j < len(fields); j++ {
+			// Stop at the next obvious command boundary token.
+			if lastPathSegment(strings.ToLower(fields[j])) == "rm" {
+				break
+			}
+			seg = append(seg, fields[j])
+		}
+		segs = append(segs, seg)
+	}
+	return segs
+}
+
+// collapseSlashes replaces runs of "/" with a single "/", so redundant
+// separators cannot be used to dodge a substring or exact path match
+// ("/etc//shadow" -> "/etc/shadow"). Windows separators are folded to
+// "/" first so the same denied-path list covers both.
+func collapseSlashes(s string) string {
+	s = strings.ReplaceAll(s, `\`, "/")
+	for strings.Contains(s, "//") {
+		s = strings.ReplaceAll(s, "//", "/")
+	}
+	return s
+}
 
 // dependencyInstallPatterns flag package-manager and toolchain
 // mutations that pull remote code into the environment.
@@ -187,17 +314,111 @@ func longestSleep(text string) (int, bool) {
 	return best, found
 }
 
-// firstHost extracts a hostname from egress-command arguments. It
-// understands bare hosts, host:port and URLs.
-func firstHost(args []string) string {
+// allHosts extracts every destination host from egress-command
+// arguments, so a multi-target invocation (curl URL1 URL2, wget of
+// several URLs, rsync src dst) is fully checked rather than only its
+// first operand. Flags and their attached values ("-o file", "--url=")
+// are handled so an option operand is not mistaken for a destination.
+func allHosts(args []string) []string {
+	var hosts []string
+	seen := map[string]struct{}{}
+	skipNext := false
 	for _, a := range args {
 		a = strings.TrimSpace(a)
-		if a == "" || strings.HasPrefix(a, "-") {
+		if a == "" {
 			continue
 		}
-		return hostFromToken(a)
+		if skipNext {
+			skipNext = false
+			// A flag value may itself be a URL (e.g. --url=... is
+			// handled below; "-u https://..." lands here).
+			if h := hostFromToken(a); h != "" && looksLikeURL(a) {
+				addHost(&hosts, seen, h)
+			}
+			continue
+		}
+		if strings.HasPrefix(a, "-") {
+			// --flag=value: inspect the value for a URL.
+			if i := strings.IndexByte(a, '='); i >= 0 {
+				if v := a[i+1:]; looksLikeURL(v) {
+					if h := hostFromToken(v); h != "" {
+						addHost(&hosts, seen, h)
+					}
+				}
+				continue
+			}
+			// A bare option consumes the following token as its value.
+			if optionTakesValue(a) {
+				skipNext = true
+			}
+			continue
+		}
+		if h := hostFromToken(a); h != "" {
+			addHost(&hosts, seen, h)
+		}
 	}
-	return ""
+	return hosts
+}
+
+func addHost(hosts *[]string, seen map[string]struct{}, h string) {
+	if _, ok := seen[h]; ok {
+		return
+	}
+	seen[h] = struct{}{}
+	*hosts = append(*hosts, h)
+}
+
+// optionTakesValue reports whether a short egress-client flag consumes
+// the next argument. The conservative default is false so that a plain
+// destination is never skipped; only well-known value-taking flags are
+// listed, and being wrong here only risks an extra (safe) check.
+func optionTakesValue(flag string) bool {
+	switch strings.ToLower(flag) {
+	case "-o", "-out", "--output", "-t", "--upload-file", "-u", "--user",
+		"-h", "--header", "-d", "--data", "-p", "-i", "-l", "-e":
+		return true
+	}
+	return false
+}
+
+// looksLikeURL reports whether a token names a network destination: an
+// explicit scheme, a host:port, or a dotted host with a path. It is
+// deliberately loose so egress checks err towards inspecting a value.
+func looksLikeURL(tok string) bool {
+	tok = strings.Trim(strings.TrimSpace(tok), `"'`)
+	if tok == "" {
+		return false
+	}
+	if strings.Contains(tok, "://") {
+		return true
+	}
+	if strings.HasPrefix(tok, "//") {
+		return true
+	}
+	// user@host (scp/ssh style) or host:path (rsync).
+	if strings.Contains(tok, "@") || strings.Contains(tok, ":") {
+		return true
+	}
+	// dotted hostname, optionally with a path.
+	head := tok
+	if i := strings.IndexAny(head, "/?#"); i >= 0 {
+		head = head[:i]
+	}
+	return strings.Contains(head, ".")
+}
+
+// shellLanguages are code-block language tags whose content is executed
+// by a shell and therefore gets the full per-command rule treatment.
+var shellLanguages = map[string]struct{}{
+	"sh": {}, "bash": {}, "shell": {}, "zsh": {}, "ksh": {},
+	"dash": {}, "ash": {}, "console": {}, "shellscript": {},
+}
+
+// isShellLanguage reports whether a code-block language tag denotes a
+// shell script.
+func isShellLanguage(lang string) bool {
+	_, ok := shellLanguages[strings.ToLower(strings.TrimSpace(lang))]
+	return ok
 }
 
 func hostFromToken(tok string) string {

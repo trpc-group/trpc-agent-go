@@ -57,7 +57,15 @@ type Request struct {
 	// Args are pre-split argv values (used by hostexec/codeexec paths
 	// that already have structured arguments). Optional.
 	Args []string
-	// Workdir is the requested working directory.
+	// RawArgs are opaque string values harvested from a non-shell tool
+	// call (for example the field values of an MCP tool's JSON
+	// arguments). They are scanned for secrets, sensitive paths,
+	// destructive fragments, dependency installs and network hosts, but
+	// are never treated as a single shell command line. Optional.
+	RawArgs []string
+	// Workdir is the requested working directory. Relative path
+	// operands are resolved against it before the sensitive-path rule
+	// runs, so a denied file reached via a workdir cannot slip through.
 	Workdir string
 	// Env is the environment overlay requested for the call.
 	Env map[string]string
@@ -119,9 +127,16 @@ func Scan(req Request, policy Policy) Report {
 		return sc.finish(&report, start)
 	}
 
+	sc.workdir = req.Workdir
 	sc.scanMetadata(req)
 	sc.scanEnv(req)
 	sc.scanExecParams(req)
+	// A denied path can be reached via {workdir:"/etc", command:"cat
+	// shadow"} without the command text containing the fragment, so the
+	// workdir itself is checked against the sensitive-path rule.
+	if strings.TrimSpace(req.Workdir) != "" {
+		sc.scanSensitivePaths(req.Workdir)
+	}
 
 	// Command line analysis.
 	if strings.TrimSpace(req.Command) != "" {
@@ -130,6 +145,12 @@ func Scan(req Request, policy Policy) Report {
 	// argv analysis (already-split commands).
 	if len(req.Args) > 0 {
 		sc.scanArgv(req.Args)
+	}
+	// RawArgs: opaque field values from a non-shell (e.g. MCP) tool.
+	// Each value is scanned individually and any URL-shaped value has
+	// its host checked, but they are never joined into a shell command.
+	if len(req.RawArgs) > 0 {
+		sc.scanRawArgs(req.RawArgs)
 	}
 	// Code blocks: analyse each block's text and its leading command.
 	for _, b := range req.CodeBlocks {
@@ -145,10 +166,25 @@ type scanner struct {
 	policy    Policy
 	findings  []Finding
 	sawSecret bool
+	// workdir is the request working directory used to resolve relative
+	// path operands before the sensitive-path rule runs.
+	workdir string
+	// seen deduplicates findings by rule + evidence so the same issue
+	// reported by two overlapping passes (e.g. the raw-text and parsed-
+	// argv recursive-delete checks) appears once.
+	seen map[string]struct{}
 }
 
 func (s *scanner) add(f Finding) {
 	f.Evidence = s.redactString(f.Evidence)
+	key := f.RuleID + "\x00" + f.Evidence
+	if s.seen == nil {
+		s.seen = make(map[string]struct{})
+	}
+	if _, dup := s.seen[key]; dup {
+		return
+	}
+	s.seen[key] = struct{}{}
 	s.findings = append(s.findings, f)
 }
 
@@ -197,6 +233,12 @@ func (s *scanner) scanCommand(command, backend string) {
 	s.applyCommandPolicy(pipe)
 	s.scanNetwork(pipe)
 	s.scanPipelineLimits(pipe)
+	// Per-segment structural checks: recursive-delete flag parsing and
+	// relative-path resolution need the split argv, which the raw-text
+	// substring rules above cannot see.
+	for _, argv := range pipe.Commands {
+		s.scanArgvStructure(argv)
+	}
 }
 
 // scanArgv runs the segment rules on an already-split argv. It mirrors
@@ -212,6 +254,23 @@ func (s *scanner) scanArgv(argv []string) {
 	pipe := &shellsafe.Pipeline{Commands: [][]string{argv}}
 	s.applyCommandPolicy(pipe)
 	s.scanNetwork(pipe)
+	s.scanArgvStructure(argv)
+}
+
+// scanArgvStructure runs the checks that need a split argv rather than
+// raw text: recursive-delete flag parsing (rm -r -f /, rm -rf --) and
+// sensitive paths resolved relative to the request workdir.
+func (s *scanner) scanArgvStructure(argv []string) {
+	if ev, ok := analyzeRm(argv); ok {
+		s.add(Finding{
+			RuleID:         RuleDangerousCommand,
+			RiskLevel:      RiskCritical,
+			Decision:       DecisionDeny,
+			Evidence:       ev,
+			Recommendation: "this operation is irreversible; scope the path or run only inside a disposable sandbox",
+		})
+	}
+	s.scanResolvedPaths(argv)
 }
 
 // applyCommandPolicy enforces the allow/deny lists via shellsafe. Its
@@ -295,7 +354,12 @@ func (s *scanner) flagShellBypass(command string) {
 }
 
 // scanNetwork inspects each segment for network-egress executables
-// and checks their target host against the allowlist.
+// and checks EVERY target host against the allowlist. A command such
+// as "curl https://ok.example/a https://evil.example/b" is reported
+// because the second destination is not allowlisted, even though the
+// first is. A segment whose destinations cannot be extracted at all
+// (an egress client with no host-shaped operand) still reports once so
+// it is never silently allowed.
 func (s *scanner) scanNetwork(pipe *shellsafe.Pipeline) {
 	egress := s.egressCommands()
 	for _, argv := range pipe.Commands {
@@ -306,21 +370,31 @@ func (s *scanner) scanNetwork(pipe *shellsafe.Pipeline) {
 		if _, ok := egress[base]; !ok {
 			continue
 		}
-		host := firstHost(argv[1:])
-		if host != "" && s.hostAllowed(host) {
+		hosts := allHosts(argv[1:])
+		if len(hosts) == 0 {
+			// Egress client with no identifiable destination: fail to
+			// the configured egress decision rather than allow.
+			s.add(Finding{
+				RuleID:         RuleNetworkEgress,
+				RiskLevel:      RiskHigh,
+				Decision:       s.policy.Network.Decision,
+				Evidence:       "network egress via " + base + " with no verifiable destination",
+				Recommendation: "pass an explicit destination host so it can be checked against network.allowed_hosts",
+			})
 			continue
 		}
-		ev := "network egress via " + base
-		if host != "" {
-			ev += " to " + host
+		for _, host := range hosts {
+			if s.hostAllowed(host) {
+				continue
+			}
+			s.add(Finding{
+				RuleID:         RuleNetworkEgress,
+				RiskLevel:      RiskHigh,
+				Decision:       s.policy.Network.Decision,
+				Evidence:       "network egress via " + base + " to " + host,
+				Recommendation: "add the destination host to network.allowed_hosts if it is trusted",
+			})
 		}
-		s.add(Finding{
-			RuleID:         RuleNetworkEgress,
-			RiskLevel:      RiskHigh,
-			Decision:       s.policy.Network.Decision,
-			Evidence:       ev,
-			Recommendation: "add the destination host to network.allowed_hosts if it is trusted",
-		})
 	}
 }
 
@@ -353,14 +427,16 @@ func (s *scanner) scanSecrets(text string) {
 	}
 }
 
-// scanSensitivePaths flags references to denied filesystem paths.
+// scanSensitivePaths flags references to denied filesystem paths. The
+// text is normalised first (redundant "/" collapsed, "\" folded to
+// "/") so "cat /etc//shadow" cannot dodge the "/etc/shadow" fragment.
 func (s *scanner) scanSensitivePaths(text string) {
-	lc := strings.ToLower(text)
+	lc := collapseSlashes(strings.ToLower(text))
 	for _, p := range s.policy.DeniedPaths {
 		if p == "" {
 			continue
 		}
-		if strings.Contains(lc, strings.ToLower(p)) {
+		if strings.Contains(lc, collapseSlashes(strings.ToLower(p))) {
 			s.add(Finding{
 				RuleID:         RuleSensitivePath,
 				RiskLevel:      RiskHigh,
@@ -372,17 +448,94 @@ func (s *scanner) scanSensitivePaths(text string) {
 	}
 }
 
-// scanDestructive matches destructive command patterns.
+// scanResolvedPaths resolves relative path operands of one argv against
+// the request workdir and re-checks the denied-path list, so a denied
+// file reached as {workdir:"/etc", command:"cat shadow"} is caught even
+// though neither the command nor the workdir alone contains the
+// fragment.
+func (s *scanner) scanResolvedPaths(argv []string) {
+	if s.workdir == "" || len(argv) < 2 {
+		return
+	}
+	base := collapseSlashes(strings.TrimRight(strings.ToLower(s.workdir), "/"))
+	for _, tok := range argv[1:] {
+		tok = strings.Trim(strings.TrimSpace(tok), `"'`)
+		if tok == "" || strings.HasPrefix(tok, "-") {
+			continue
+		}
+		// Only relative operands need joining; absolute ones were
+		// already covered by the raw-text pass.
+		if strings.HasPrefix(tok, "/") || strings.HasPrefix(tok, "~") {
+			continue
+		}
+		resolved := collapseSlashes(base + "/" + strings.ToLower(tok))
+		for _, p := range s.policy.DeniedPaths {
+			if p == "" {
+				continue
+			}
+			if strings.Contains(resolved, collapseSlashes(strings.ToLower(p))) {
+				s.add(Finding{
+					RuleID:         RuleSensitivePath,
+					RiskLevel:      RiskHigh,
+					Decision:       DecisionDeny,
+					Evidence:       "sensitive path access via workdir: " + s.workdir + "/" + tok,
+					Recommendation: "do not read credential or key material; use scoped, injected secrets",
+				})
+			}
+		}
+	}
+}
+
+// scanRawArgs scans opaque field values from a non-shell tool call
+// (for example the JSON argument values of an MCP tool). Each value is
+// run through the text rules and, when it is URL-shaped, its host is
+// checked against the egress allowlist — without ever concatenating the
+// values into a shell command line (which would misparse structured
+// JSON and could mask a non-allowlisted URL).
+func (s *scanner) scanRawArgs(values []string) {
+	for _, v := range values {
+		v = strings.TrimSpace(v)
+		if v == "" {
+			continue
+		}
+		s.scanSecrets(v)
+		s.scanSensitivePaths(v)
+		s.scanDestructive(v)
+		s.scanDependency(v)
+		if looksLikeURL(v) {
+			host := hostFromToken(v)
+			if host != "" && !s.hostAllowed(host) {
+				s.add(Finding{
+					RuleID:         RuleNetworkEgress,
+					RiskLevel:      RiskHigh,
+					Decision:       s.policy.Network.Decision,
+					Evidence:       "network destination in tool arguments: " + host,
+					Recommendation: "add the destination host to network.allowed_hosts if it is trusted",
+				})
+			}
+		}
+	}
+}
+
+// scanDestructive matches destructive command patterns in raw text.
+// Recursive "rm" deletes are handled structurally by analyzeRm on the
+// parsed argv (see scanArgvStructure); this text pass additionally
+// tokenises any "rm" run it can find so a catastrophic delete inside a
+// non-shell code block (e.g. os.system("rm -r -f /")) is still caught
+// even though it never reaches shellsafe.
 func (s *scanner) scanDestructive(text string) {
 	lc := strings.ToLower(text)
-	if loc := destructiveRmRe.FindString(text); loc != "" {
-		s.add(Finding{
-			RuleID:         RuleDangerousCommand,
-			RiskLevel:      RiskCritical,
-			Decision:       DecisionDeny,
-			Evidence:       "recursive delete of a system path: " + strings.TrimSpace(loc),
-			Recommendation: "this operation is irreversible; scope the path or run only inside a disposable sandbox",
-		})
+	for _, seg := range rmSegments(text) {
+		if ev, ok := analyzeRm(seg); ok {
+			s.add(Finding{
+				RuleID:         RuleDangerousCommand,
+				RiskLevel:      RiskCritical,
+				Decision:       DecisionDeny,
+				Evidence:       ev,
+				Recommendation: "this operation is irreversible; scope the path or run only inside a disposable sandbox",
+			})
+			break
+		}
 	}
 	patterns := append([]string{}, destructivePatterns...)
 	patterns = append(patterns, s.policy.DestructivePatterns...)
@@ -438,12 +591,17 @@ func (s *scanner) scanResourceText(text string) {
 	}
 	for _, src := range infiniteSources {
 		if strings.Contains(lc, src) {
+			rec := "cap the amount read (head -c) and set an output limit"
+			if s.policy.Limits.MaxOutputBytes > 0 {
+				rec += "; policy advises at most " +
+					strconv.FormatInt(s.policy.Limits.MaxOutputBytes, 10) + " bytes"
+			}
 			s.add(Finding{
 				RuleID:         RuleResourceAbuse,
 				RiskLevel:      RiskMedium,
 				Decision:       DecisionAsk,
 				Evidence:       "reads unbounded source: " + src,
-				Recommendation: "cap the amount read (head -c) and set an output limit",
+				Recommendation: rec,
 			})
 			break
 		}
@@ -549,10 +707,23 @@ func (s *scanner) scanExecParams(req Request) {
 
 // scanCodeBlock analyses one code block for secrets, sensitive paths
 // and destructive host bridges (os.system, subprocess, exec.Command).
+// For shell-language blocks it additionally routes each executable
+// statement through the same structural command rules used for a shell
+// command line (command policy, network egress, recursive delete,
+// dependency install), so a Bash block that runs "curl
+// https://evil.example" or "pip install x" is no longer weaker than
+// the equivalent workspace_exec command.
 func (s *scanner) scanCodeBlock(b CodeBlock) {
 	s.scanSecrets(b.Code)
 	s.scanSensitivePaths(b.Code)
 	s.scanDestructive(b.Code)
+	s.scanDependency(b.Code)
+	s.scanResourceText(b.Code)
+
+	if isShellLanguage(b.Language) {
+		s.scanShellScript(b.Code)
+	}
+
 	lc := strings.ToLower(b.Code)
 	for _, bridge := range hostBridgePatterns {
 		if strings.Contains(lc, bridge) {
@@ -564,6 +735,37 @@ func (s *scanner) scanCodeBlock(b CodeBlock) {
 				Recommendation: "run untrusted code in codeexecutor/container or E2B, never on the host",
 			})
 			return
+		}
+	}
+}
+
+// scanShellScript applies the per-command structural rules to each
+// line of a shell-language code block. A line that cannot be parsed
+// conservatively fails closed via the parse-error decision, matching
+// the command-line path.
+func (s *scanner) scanShellScript(code string) {
+	for _, line := range strings.Split(code, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		pipe, err := shellsafe.Parse(line)
+		if err != nil {
+			s.add(Finding{
+				RuleID:         RuleParseError,
+				RiskLevel:      RiskHigh,
+				Decision:       s.policy.ParseErrorDecision,
+				Evidence:       "shell code block line could not be parsed conservatively: " + err.Error(),
+				Recommendation: "avoid shell substitution/redirection in executed code, or run it in an isolated sandbox",
+			})
+			s.flagShellBypass(line)
+			continue
+		}
+		s.applyCommandPolicy(pipe)
+		s.scanNetwork(pipe)
+		s.scanPipelineLimits(pipe)
+		for _, argv := range pipe.Commands {
+			s.scanArgvStructure(argv)
 		}
 	}
 }

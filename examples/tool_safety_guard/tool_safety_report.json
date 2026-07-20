@@ -32,7 +32,7 @@
         "rule_id": "dangerous_command",
         "risk_level": "critical",
         "decision": "deny",
-        "evidence": "recursive delete of a system path: rm -rf /",
+        "evidence": "recursive delete of a system path: rm -rf / --no-preserve-root",
         "recommendation": "this operation is irreversible; scope the path or run only inside a disposable sandbox"
       }
     ]
@@ -193,7 +193,7 @@
         "risk_level": "medium",
         "decision": "ask",
         "evidence": "reads unbounded source: /dev/urandom",
-        "recommendation": "cap the amount read (head -c) and set an output limit"
+        "recommendation": "cap the amount read (head -c) and set an output limit; policy advises at most 10485760 bytes"
       }
     ]
   },
