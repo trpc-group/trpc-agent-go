@@ -575,6 +575,49 @@ func TestMemoryHelpersAndJSONValidation(t *testing.T) {
 	require.NotEmpty(t, shortHash("value"))
 }
 
+func TestBuildReplayEventExpandsParentAndToolReferences(t *testing.T) {
+	runtime := NewRuntime(
+		rootReplayBackends(t, "parent-tool-references")[0],
+		NormalizeOptions{},
+	)
+	require.NoError(t, runtime.Ledger.Register(
+		IdentityToolCall,
+		rawIdentity(runtime.Backend.Name, IdentityToolCall, "parent-tool"),
+		"parent-tool",
+	))
+	evt, err := buildReplayEvent(runtime, "child-event", EventSpec{
+		Author:              "assistant",
+		Role:                model.RoleAssistant,
+		Content:             "child",
+		InvocationLogicalID: "child-invocation",
+		ParentInvocationID:  "parent-invocation",
+		ParentTriggerID:     "parent-tool",
+		ParentTriggerType:   "tool",
+		ParentTriggerName:   "delegate",
+		ToolCalls: []ToolCallSpec{{
+			LogicalID: "child-tool",
+			Name:      "child",
+			Arguments: json.RawMessage(`{"value":1}`),
+		}},
+		ToolCallArgs: map[string]json.RawMessage{
+			"child-tool": json.RawMessage(`{"value":1}`),
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(
+		t,
+		rawIdentity(runtime.Backend.Name, IdentityInvocation, "parent-invocation"),
+		evt.ParentInvocationID,
+	)
+	require.NotNil(t, evt.ParentMetadata)
+	require.Equal(
+		t,
+		rawIdentity(runtime.Backend.Name, IdentityToolCall, "parent-tool"),
+		evt.ParentMetadata.TriggerID,
+	)
+	require.Contains(t, evt.Extensions, event.ToolCallArgsExtensionKey)
+}
+
 func rootReplayFactories() []BackendFactory {
 	capabilities := rootReplayCapabilities()
 	return []BackendFactory{

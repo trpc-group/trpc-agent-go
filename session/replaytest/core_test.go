@@ -330,6 +330,39 @@ func TestCompareSnapshotsAddsSummaryAndTrackContext(t *testing.T) {
 	}
 }
 
+func TestCompareSnapshotsAddsMemoryQueryContext(t *testing.T) {
+	left := Snapshot{
+		SessionID: "session",
+		MemoryQueries: map[string][]MemorySnapshot{
+			"Go backend": {{
+				ID: "memory:go", Content: "Go", Score: 0.9,
+			}},
+		},
+		Summaries: map[string]SummarySnapshot{},
+		Tracks:    map[string][]TrackEventSnapshot{},
+	}
+	right := left
+	right.MemoryQueries = map[string][]MemorySnapshot{
+		"Go backend": {{
+			ID: "memory:go", Content: "Go", Score: 0.5,
+		}},
+	}
+	diffs, err := CompareSnapshots(
+		"memory-query",
+		"inmemory",
+		"sqlite",
+		left,
+		right,
+		nil,
+		"final",
+	)
+	require.NoError(t, err)
+	require.Len(t, diffs, 1)
+	require.Equal(t, "memory_queries", diffs[0].Section)
+	require.Equal(t, "memory:go", diffs[0].MemoryID)
+	require.Contains(t, diffs[0].Path, "Go backend")
+}
+
 func TestCompareSnapshotsUsesUnsupportedOnlyAsCapabilityMetadata(t *testing.T) {
 	left := Snapshot{
 		SessionID: "session",
