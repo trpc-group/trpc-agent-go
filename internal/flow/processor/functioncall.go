@@ -2742,14 +2742,17 @@ func (p *FunctionCallResponseProcessor) checkToolPermission(
 	tl tool.Tool,
 	decl *tool.Declaration,
 ) (*tool.PermissionResult, error) {
-	semanticTool := itool.ResolveSemantic(tl)
+	// Resolve metadata outermost-first (capability-aware) rather than fully
+	// unwrapping to the innermost tool, so the permission policy sees the
+	// effective metadata the business tool exposes (including an intermediate
+	// transparent wrapper's own ConcurrencySafe/Destructive declaration).
 	req := &tool.PermissionRequest{
 		Tool:        tl,
 		ToolName:    toolCall.Function.Name,
 		ToolCallID:  toolCall.ID,
 		Declaration: decl,
 		Arguments:   toolCall.Function.Arguments,
-		Metadata:    tool.MetadataOf(semanticTool),
+		Metadata:    itool.ResolveMetadata(tl),
 	}
 	// Resolve the permission checker from the outermost wrapper inward so a
 	// transparent wrapper's decision is never skipped by unwrapping past it. If

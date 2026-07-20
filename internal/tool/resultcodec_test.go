@@ -290,3 +290,87 @@ func TestNamedTool_ResolvesCapabilitiesThroughTransparentWrapper(t *testing.T) {
 		t.Fatal("wrapped chain must resolve SkipSummarization")
 	}
 }
+
+// rcSafeProvider is concurrency-safe and non-destructive.
+type rcSafeProvider struct {
+	name string
+}
+
+func (p *rcSafeProvider) Declaration() *tool.Declaration            { return &tool.Declaration{Name: p.name} }
+func (p *rcSafeProvider) Call(context.Context, []byte) (any, error) { return "ok", nil }
+func (p *rcSafeProvider) ToolMetadata() tool.ToolMetadata {
+	return tool.ToolMetadata{ConcurrencySafe: true}
+}
+
+// rcConcurrencyOverrideWrapper is a transparent wrapper that overrides only the
+// concurrency-safety capability (marks the composite unsafe), delegating the rest.
+type rcConcurrencyOverrideWrapper struct {
+	inner tool.Tool
+}
+
+func (w *rcConcurrencyOverrideWrapper) Declaration() *tool.Declaration {
+	return w.inner.Declaration()
+}
+func (w *rcConcurrencyOverrideWrapper) Call(ctx context.Context, args []byte) (any, error) {
+	return w.inner.(tool.CallableTool).Call(ctx, args)
+}
+func (w *rcConcurrencyOverrideWrapper) TransparentUnwrap() tool.Tool { return w.inner }
+func (w *rcConcurrencyOverrideWrapper) IsConcurrencySafe() bool      { return false }
+
+// rcDestructiveOverrideWrapper is a transparent wrapper that declares the
+// composite destructive via its own MetadataProvider, delegating unwrap.
+type rcDestructiveOverrideWrapper struct {
+	inner tool.Tool
+}
+
+func (w *rcDestructiveOverrideWrapper) Declaration() *tool.Declaration { return w.inner.Declaration() }
+func (w *rcDestructiveOverrideWrapper) Call(ctx context.Context, args []byte) (any, error) {
+	return w.inner.(tool.CallableTool).Call(ctx, args)
+}
+func (w *rcDestructiveOverrideWrapper) TransparentUnwrap() tool.Tool { return w.inner }
+func (w *rcDestructiveOverrideWrapper) ToolMetadata() tool.ToolMetadata {
+	return tool.ToolMetadata{Destructive: true}
+}
+
+func TestResolveMetadata_OuterWrapperOverridesConcurrency(t *testing.T) {
+	// An intermediate transparent wrapper that marks the composite as not
+	// concurrency-safe must win over the inner tool's ConcurrencySafe=true, rather
+	// than being skipped by fully unwrapping to the innermost tool.
+	inner := &rcSafeProvider{name: "inner"}
+	wrapper := &rcConcurrencyOverrideWrapper{inner: inner}
+
+	if !ResolveMetadata(inner).ConcurrencySafe {
+		t.Fatal("precondition: inner tool must be concurrency-safe")
+	}
+	if ResolveMetadata(wrapper).ConcurrencySafe {
+		t.Fatal("outer ConcurrencySafe=false must win over inner true")
+	}
+
+	named := NewUnprefixedNamedTool(wrapper)
+	if named.IsConcurrencySafe() {
+		t.Fatal("NamedTool must honor the outer ConcurrencySafe=false")
+	}
+	if tool.MetadataOf(named).ConcurrencySafe {
+		t.Fatal("MetadataOf(NamedTool) must honor the outer override")
+	}
+	if tool.MetadataOf(resultcodec.Wrap(named, resultcodec.JSON())).ConcurrencySafe {
+		t.Fatal("codecTool chain must honor the outer ConcurrencySafe=false")
+	}
+}
+
+func TestResolveMetadata_OuterWrapperOverridesDestructive(t *testing.T) {
+	// An intermediate transparent wrapper that declares the composite destructive
+	// must win over a non-destructive inner tool.
+	inner := &rcSafeProvider{name: "inner"} // not destructive
+	wrapper := &rcDestructiveOverrideWrapper{inner: inner}
+
+	if ResolveMetadata(inner).Destructive {
+		t.Fatal("precondition: inner tool must not be destructive")
+	}
+	if !ResolveMetadata(wrapper).Destructive {
+		t.Fatal("outer Destructive=true must win over inner false")
+	}
+	if !tool.MetadataOf(NewUnprefixedNamedTool(wrapper)).Destructive {
+		t.Fatal("NamedTool must honor the outer Destructive=true")
+	}
+}

@@ -730,6 +730,63 @@ func TestToolCapabilityPollutesAutoMemory_ThroughWrap(t *testing.T) {
 	}
 }
 
+// recordingPermissionInner is the deepest tool: a permission checker that
+// records the metadata it receives and reports itself as non-destructive.
+type recordingPermissionInner struct {
+	decl     *tool.Declaration
+	captured tool.ToolMetadata
+	got      bool
+}
+
+func (r *recordingPermissionInner) Declaration() *tool.Declaration            { return r.decl }
+func (r *recordingPermissionInner) Call(context.Context, []byte) (any, error) { return "ok", nil }
+func (r *recordingPermissionInner) ToolMetadata() tool.ToolMetadata {
+	return tool.ToolMetadata{ReadOnly: true}
+}
+func (r *recordingPermissionInner) CheckPermission(
+	_ context.Context,
+	req *tool.PermissionRequest,
+) (tool.PermissionDecision, error) {
+	r.captured = req.Metadata
+	r.got = true
+	return tool.AllowPermission(), nil
+}
+
+// destructiveTransparentWrapper is a transparent wrapper that declares the
+// composite destructive while delegating unwrap to the inner tool.
+type destructiveTransparentWrapper struct {
+	inner tool.Tool
+}
+
+func (w *destructiveTransparentWrapper) Declaration() *tool.Declaration { return w.inner.Declaration() }
+func (w *destructiveTransparentWrapper) Call(ctx context.Context, args []byte) (any, error) {
+	return w.inner.(tool.CallableTool).Call(ctx, args)
+}
+func (w *destructiveTransparentWrapper) TransparentUnwrap() tool.Tool { return w.inner }
+func (w *destructiveTransparentWrapper) ToolMetadata() tool.ToolMetadata {
+	return tool.ToolMetadata{Destructive: true}
+}
+
+func TestCheckToolPermission_MetadataResolvedOutermostWins(t *testing.T) {
+	// The permission policy must see the effective (outermost) metadata: an outer
+	// transparent wrapper declaring Destructive=true, not the inner tool's
+	// non-destructive value that full unwrapping would surface. The checker is
+	// found deeper, but the metadata is resolved outermost-first.
+	inner := &recordingPermissionInner{decl: &tool.Declaration{Name: "danger"}}
+	tl := &destructiveTransparentWrapper{inner: inner}
+	p := NewFunctionCallResponseProcessor(false, nil)
+	inv := &agent.Invocation{AgentName: "a", Model: &mockModel{}}
+	tc := model.ToolCall{
+		ID:       "c1",
+		Function: model.FunctionDefinitionParam{Name: "danger", Arguments: []byte(`{}`)},
+	}
+	_, err := p.checkToolPermission(context.Background(), inv, tc, tl, tl.Declaration())
+	require.NoError(t, err)
+	require.True(t, inner.got, "permission checker must be invoked")
+	require.True(t, inner.captured.Destructive,
+		"permission policy must see the outer wrapper's Destructive=true, not the inner value")
+}
+
 func TestToolCapabilityPollutesAutoMemory_ShortChainNotPolluting(t *testing.T) {
 	// A fully traversable chain with no pollution source must not be marked
 	// polluting; fail-closed must only trigger on cycles/exhaustion.
