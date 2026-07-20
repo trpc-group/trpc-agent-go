@@ -1791,10 +1791,10 @@ err := mem0Svc.IngestSession(
 - prompt、过期日期与 memory type 仅供本地 OSS 使用；托管模式会明确报错，
   不会静默忽略。`infer` 在两种模式下都支持。
 
-OSS 检索也可以通过标准 search API 传入服务端支持的 scope 与诊断参数：
+OSS 检索也可以通过 OSS 专属 search API 传入服务端支持的 scope 与诊断参数：
 
 ```go
-entries, err := mem0Svc.SearchMemories(
+records, err := mem0Svc.SearchOSSMemories(
     ctx,
     memory.UserKey{AppName: "my-app", UserID: "user-1"},
     "deployment procedure",
@@ -1811,10 +1811,10 @@ entries, err := mem0Svc.SearchMemories(
 ```
 
 list 请求可以使用 `ReadOSSMemories` 和 `OSSReadOptions` 透传 `agent_id`、
-`run_id` 与 `show_expired`。OSS 返回记录中的 Mem0 promoted fields 会保存在
-`Entry.ProviderAttributes`，可选的排序诊断会保存在 `Entry.ScoreDetails`。这些字段可供
-直接调用 Go API 的代码读取，但不会进入标准 `memory_search` 或 `memory_load`
-工具结果。
+`run_id` 与 `show_expired`。两个 OSS 专属方法都返回 `OSSMemory`：
+`OSSMemory.Entry` 保存标准记忆条目，其他字段保存 Mem0 scope、metadata、过期信息和
+可选排序诊断。标准 `ReadMemories`、`SearchMemories`、`memory_search` 与
+`memory_load` 仍然只暴露 `memory.Entry`。
 
 如果使用官方本地 Mem0 OSS server，并且 LLM 与 embedding 使用不同 endpoint 或
 API key，需要在 server 侧分别配置。OSS server 提供 `POST /configure`：

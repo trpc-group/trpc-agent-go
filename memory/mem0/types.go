@@ -12,7 +12,25 @@ package mem0
 import (
 	"encoding/json"
 	"time"
+
+	"trpc.group/trpc-go/trpc-agent-go/memory"
 )
+
+// OSSMemory contains a standard memory entry and optional fields returned by
+// self-hosted Mem0 OSS. Metadata and ScoreDetails are detached snapshots that
+// callers may modify without mutating the HTTP response retained by Service.
+type OSSMemory struct {
+	Entry          *memory.Entry  `json:"entry"`
+	AgentID        string         `json:"agent_id,omitempty"`
+	RunID          string         `json:"run_id,omitempty"`
+	Hash           string         `json:"hash,omitempty"`
+	ExpirationDate string         `json:"expiration_date,omitempty"`
+	ActorID        string         `json:"actor_id,omitempty"`
+	Role           string         `json:"role,omitempty"`
+	AttributedTo   string         `json:"attributed_to,omitempty"`
+	Metadata       map[string]any `json:"metadata,omitempty"`
+	ScoreDetails   map[string]any `json:"score_details,omitempty"`
+}
 
 type apiMessage struct {
 	Role    string `json:"role"`

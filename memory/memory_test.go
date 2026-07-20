@@ -10,7 +10,6 @@
 package memory
 
 import (
-	"encoding/json"
 	"testing"
 	"time"
 
@@ -51,10 +50,11 @@ func TestEntry_JSONTags(t *testing.T) {
 	assert.NotEmpty(t, entry.UserID, "UserID field should not be empty.")
 	assert.False(t, entry.CreatedAt.IsZero(), "CreatedAt should not be zero.")
 	assert.False(t, entry.UpdatedAt.IsZero(), "UpdatedAt should not be zero.")
-	body, err := json.Marshal(entry)
-	require.NoError(t, err)
-	assert.NotContains(t, string(body), "score_details")
-	assert.NotContains(t, string(body), "provider_attributes")
+}
+
+func TestEntry_RemainsComparable(t *testing.T) {
+	entries := map[Entry]struct{}{{ID: "memory-1"}: {}}
+	assert.Contains(t, entries, Entry{ID: "memory-1"})
 }
 
 func TestKey_CheckMemoryKey(t *testing.T) {

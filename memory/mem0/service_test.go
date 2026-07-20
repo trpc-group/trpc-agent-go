@@ -582,9 +582,11 @@ func TestReadOSSMemories_ForwardsProviderScopes(t *testing.T) {
 	assert.Equal(t, "agent-1", query.Get(queryKeyAgentID))
 	assert.Equal(t, "run-1", query.Get(queryKeyRunID))
 	assert.Equal(t, "true", query.Get(queryKeyShowExpired))
-	assert.Equal(t, "agent-1", entries[0].ProviderAttributes[queryKeyAgentID])
-	assert.Equal(t, "run-1", entries[0].ProviderAttributes[queryKeyRunID])
-	assert.Equal(t, "2026-08-01", entries[0].ProviderAttributes["expiration_date"])
+	require.NotNil(t, entries[0].Entry)
+	assert.Equal(t, "memory-1", entries[0].Entry.ID)
+	assert.Equal(t, "agent-1", entries[0].AgentID)
+	assert.Equal(t, "run-1", entries[0].RunID)
+	assert.Equal(t, "2026-08-01", entries[0].ExpirationDate)
 }
 
 func TestReadOSSMemories_RejectsCloudMode(t *testing.T) {
@@ -795,7 +797,7 @@ func TestSearchMemories_SelfHostedOSSForwardsOptionalFields(t *testing.T) {
 		IncludeExpired:      true,
 		Explain:             true,
 	}
-	entries, err := svc.SearchMemories(
+	entries, err := svc.SearchOSSMemories(
 		context.Background(),
 		memory.UserKey{AppName: "app", UserID: "user"},
 		"query",
@@ -809,18 +811,35 @@ func TestSearchMemories_SelfHostedOSSForwardsOptionalFields(t *testing.T) {
 	assert.InDelta(t, 0.42, *gotReq.Threshold, 1e-9)
 	assert.True(t, gotReq.Explain)
 	assert.True(t, gotReq.ShowExpired)
+	require.NotNil(t, entries[0].Entry)
+	assert.Equal(t, "memory-1", entries[0].Entry.ID)
+	assert.InDelta(t, 0.9, entries[0].Entry.Score, 1e-9)
 	assert.Equal(t, map[string]any{"semantic": 0.8, "lexical": 0.1}, entries[0].ScoreDetails)
-	assert.Equal(t, "agent-1", entries[0].ProviderAttributes[queryKeyAgentID])
-	assert.Equal(t, "run-1", entries[0].ProviderAttributes[queryKeyRunID])
-	assert.Equal(t, "hash-1", entries[0].ProviderAttributes["hash"])
-	assert.Equal(t, "2026-08-01", entries[0].ProviderAttributes["expiration_date"])
-	assert.Equal(t, "actor-1", entries[0].ProviderAttributes["actor_id"])
-	assert.Equal(t, "user", entries[0].ProviderAttributes["role"])
-	assert.Equal(t, "alice", entries[0].ProviderAttributes["attributed_to"])
+	assert.Equal(t, "agent-1", entries[0].AgentID)
+	assert.Equal(t, "run-1", entries[0].RunID)
+	assert.Equal(t, "hash-1", entries[0].Hash)
+	assert.Equal(t, "2026-08-01", entries[0].ExpirationDate)
+	assert.Equal(t, "actor-1", entries[0].ActorID)
+	assert.Equal(t, "user", entries[0].Role)
+	assert.Equal(t, "alice", entries[0].AttributedTo)
 	assert.Equal(t, map[string]any{
 		metadataKeyTRPCAppName: "app",
 		"custom":               "value",
-	}, entries[0].ProviderAttributes["metadata"])
+	}, entries[0].Metadata)
+}
+
+func TestSearchOSSMemories_RejectsCloudMode(t *testing.T) {
+	svc, err := NewService(WithAPIKey("key"))
+	require.NoError(t, err)
+	defer svc.Close()
+
+	_, err = svc.SearchOSSMemories(
+		context.Background(),
+		memory.UserKey{AppName: "app", UserID: "user"},
+		"query",
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "require self-hosted OSS mode")
 }
 
 func TestSearchMemories_CloudDoesNotForwardOSSFields(t *testing.T) {

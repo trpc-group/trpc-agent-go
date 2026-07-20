@@ -98,6 +98,11 @@ func TestOSSCreateMemoryRequest_OptionalFields(t *testing.T) {
 			Infer:    true,
 		})
 		require.NoError(t, err)
+		assert.JSONEq(t, `{
+			"messages":[{"role":"user","content":"hello"}],
+			"user_id":"user",
+			"infer":true
+		}`, string(body))
 		var fields map[string]any
 		require.NoError(t, json.Unmarshal(body, &fields))
 		assert.Equal(t, true, fields["infer"])
@@ -109,12 +114,27 @@ func TestOSSCreateMemoryRequest_OptionalFields(t *testing.T) {
 	t.Run("explicit values are serialized", func(t *testing.T) {
 		body, err := json.Marshal(ossCreateMemoryRequest{
 			Messages:       []apiMessage{{Role: "user", Content: "hello"}},
+			UserID:         "user",
+			AgentID:        "agent-1",
+			RunID:          "run-1",
+			Metadata:       map[string]any{"reference_date": "2026-07-17"},
 			ExpirationDate: "2026-08-01",
 			Infer:          false,
 			MemoryType:     string(MemoryTypeProcedural),
 			Prompt:         "extract procedures",
 		})
 		require.NoError(t, err)
+		assert.JSONEq(t, `{
+			"messages":[{"role":"user","content":"hello"}],
+			"user_id":"user",
+			"agent_id":"agent-1",
+			"run_id":"run-1",
+			"metadata":{"reference_date":"2026-07-17"},
+			"expiration_date":"2026-08-01",
+			"infer":false,
+			"memory_type":"procedural_memory",
+			"prompt":"extract procedures"
+		}`, string(body))
 		var fields map[string]any
 		require.NoError(t, json.Unmarshal(body, &fields))
 		assert.Equal(t, "2026-08-01", fields["expiration_date"])

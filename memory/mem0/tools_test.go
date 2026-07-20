@@ -247,12 +247,8 @@ func TestBuildToolSearchOptions(t *testing.T) {
 func TestEntryToResult(t *testing.T) {
 	evt := time.Date(2024, 5, 7, 12, 34, 56, 0, time.UTC)
 	e := &memory.Entry{
-		ID:                 "id1",
-		CreatedAt:          time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
-		ProviderAttributes: map[string]any{"metadata": map[string]any{"private": "not exposed"}},
-		ScoreDetails: map[string]any{
-			"semantic": 0.42,
-		},
+		ID:        "id1",
+		CreatedAt: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
 		Memory: &memory.Memory{
 			Memory:       "hello",
 			Topics:       []string{"t1"},

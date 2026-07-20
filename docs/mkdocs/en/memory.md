@@ -1761,10 +1761,10 @@ err := mem0Svc.IngestSession(
   both modes.
 
 OSS search can also pass provider-supported scopes and diagnostics through the
-standard search API:
+OSS-specific search API:
 
 ```go
-entries, err := mem0Svc.SearchMemories(
+records, err := mem0Svc.SearchOSSMemories(
     ctx,
     memory.UserKey{AppName: "my-app", UserID: "user-1"},
     "deployment procedure",
@@ -1781,10 +1781,11 @@ entries, err := mem0Svc.SearchMemories(
 ```
 
 For list requests, use `ReadOSSMemories` with `OSSReadOptions` to forward
-`agent_id`, `run_id`, and `show_expired`. OSS entries preserve Mem0's promoted
-record fields in `Entry.ProviderAttributes` and optional ranking diagnostics in
-`Entry.ScoreDetails`. These fields are available to direct Go callers but are
-not included in the standard `memory_search` or `memory_load` tool result.
+`agent_id`, `run_id`, and `show_expired`. Both OSS-specific methods return
+`OSSMemory` values. `OSSMemory.Entry` contains the standard memory entry, while
+the other fields preserve Mem0 scopes, metadata, expiration information, and
+optional ranking diagnostics. Standard `ReadMemories`, `SearchMemories`,
+`memory_search`, and `memory_load` continue to expose only `memory.Entry`.
 
 For the official self-hosted OSS server, configure the server-side LLM and
 embedder independently when they use different endpoints or API keys. The OSS

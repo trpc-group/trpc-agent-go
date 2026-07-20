@@ -174,7 +174,11 @@ func (s *Service) ReadMemories(ctx context.Context, userKey memory.UserKey, limi
 		return nil, err
 	}
 	if s.opts.apiMode == apiModeSelfHostedOSS {
-		return s.readOSSMemories(ctx, userKey, limit, OSSReadOptions{})
+		entries, err := s.readOSSMemories(ctx, userKey, limit, OSSReadOptions{}, false)
+		if err != nil {
+			return nil, err
+		}
+		return entriesFromOSSMemories(entries), nil
 	}
 	pageSize := defaultListPageSize
 	if limit > 0 && limit < pageSize {
@@ -229,14 +233,14 @@ func (s *Service) ReadOSSMemories(
 	userKey memory.UserKey,
 	limit int,
 	opts OSSReadOptions,
-) ([]*memory.Entry, error) {
+) ([]*OSSMemory, error) {
 	if s.opts.apiMode != apiModeSelfHostedOSS {
 		return nil, errors.New("mem0: OSS read options require self-hosted OSS mode")
 	}
 	if err := userKey.CheckUserKey(); err != nil {
 		return nil, err
 	}
-	return s.readOSSMemories(ctx, userKey, limit, opts)
+	return s.readOSSMemories(ctx, userKey, limit, opts, true)
 }
 
 func (s *Service) readOSSMemories(
@@ -244,7 +248,8 @@ func (s *Service) readOSSMemories(
 	userKey memory.UserKey,
 	limit int,
 	opts OSSReadOptions,
-) ([]*memory.Entry, error) {
+	includeProviderFields bool,
+) ([]*OSSMemory, error) {
 	if limit <= 0 {
 		return nil, errors.New("mem0: self-hosted OSS ReadMemories requires a positive limit")
 	}
@@ -271,21 +276,28 @@ func (s *Service) readOSSMemories(
 	if err := s.c.doJSON(ctx, httpMethodGet, pathOSSMemories, q, nil, &batch); err != nil {
 		return nil, err
 	}
-	entries := make([]*memory.Entry, 0, len(batch.Results))
+	entries := make([]*OSSMemory, 0, len(batch.Results))
 	for i := range batch.Results {
 		rec := &batch.Results[i]
 		if !recordMatchesTRPCApp(rec, userKey.AppName, s.opts.includeUnscopedSelfHostedOSSMemories) {
 			continue
 		}
-		if entry := toOSSEntry(userKey.AppName, userKey.UserID, rec); entry != nil {
-			entries = append(entries, entry)
+		var item *OSSMemory
+		if includeProviderFields {
+			item = toOSSMemory(userKey.AppName, userKey.UserID, rec)
+		} else if entry := toEntry(userKey.AppName, userKey.UserID, rec); entry != nil {
+			item = &OSSMemory{Entry: entry}
 		}
+		if item == nil {
+			continue
+		}
+		entries = append(entries, item)
 	}
 	sort.Slice(entries, func(i, j int) bool {
-		if entries[i].UpdatedAt.Equal(entries[j].UpdatedAt) {
-			return entries[i].CreatedAt.After(entries[j].CreatedAt)
+		if entries[i].Entry.UpdatedAt.Equal(entries[j].Entry.UpdatedAt) {
+			return entries[i].Entry.CreatedAt.After(entries[j].Entry.CreatedAt)
 		}
-		return entries[i].UpdatedAt.After(entries[j].UpdatedAt)
+		return entries[i].Entry.UpdatedAt.After(entries[j].Entry.UpdatedAt)
 	})
 	if limit > 0 && len(entries) > limit {
 		entries = entries[:limit]
@@ -295,13 +307,42 @@ func (s *Service) readOSSMemories(
 
 // SearchMemories searches memories for a user.
 func (s *Service) SearchMemories(ctx context.Context, userKey memory.UserKey, query string, opts ...memory.SearchOption) ([]*memory.Entry, error) {
+	results, err := s.searchMemories(ctx, userKey, query, false, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return entriesFromOSSMemories(results), nil
+}
+
+// SearchOSSMemories searches self-hosted OSS records and preserves optional
+// provider fields and ranking diagnostics. It returns an error when the service
+// is not configured in OSS mode.
+func (s *Service) SearchOSSMemories(
+	ctx context.Context,
+	userKey memory.UserKey,
+	query string,
+	opts ...memory.SearchOption,
+) ([]*OSSMemory, error) {
+	if s.opts.apiMode != apiModeSelfHostedOSS {
+		return nil, errors.New("mem0: OSS search options require self-hosted OSS mode")
+	}
+	return s.searchMemories(ctx, userKey, query, true, opts...)
+}
+
+func (s *Service) searchMemories(
+	ctx context.Context,
+	userKey memory.UserKey,
+	query string,
+	includeProviderFields bool,
+	opts ...memory.SearchOption,
+) ([]*OSSMemory, error) {
 	if err := userKey.CheckUserKey(); err != nil {
 		return nil, err
 	}
 	searchOpts := memory.ResolveSearchOptions(query, opts)
 	searchOpts.Query = strings.TrimSpace(searchOpts.Query)
 	if searchOpts.Query == "" {
-		return []*memory.Entry{}, nil
+		return []*OSSMemory{}, nil
 	}
 	maxResults := defaultSearchTopK
 	if searchOpts.MaxResults > 0 {
@@ -334,27 +375,29 @@ func (s *Service) SearchMemories(ctx context.Context, userKey memory.UserKey, qu
 	if err := s.c.doJSON(ctx, httpMethodPost, path, nil, req, &resp); err != nil {
 		return nil, err
 	}
-	results := make([]*memory.Entry, 0, len(resp.Memories))
+	results := make([]*OSSMemory, 0, len(resp.Memories))
 	for _, m := range resp.Memories {
 		rec := m.toMemoryRecord()
 		if s.opts.apiMode == apiModeSelfHostedOSS &&
 			!recordMatchesTRPCApp(&rec, userKey.AppName, s.opts.includeUnscopedSelfHostedOSSMemories) {
 			continue
 		}
-		entry := toEntry(userKey.AppName, userKey.UserID, &rec)
-		if s.opts.apiMode == apiModeSelfHostedOSS {
-			entry = toOSSEntry(userKey.AppName, userKey.UserID, &rec)
+		var item *OSSMemory
+		if includeProviderFields {
+			item = toOSSMemory(userKey.AppName, userKey.UserID, &rec)
+		} else if entry := toEntry(userKey.AppName, userKey.UserID, &rec); entry != nil {
+			item = &OSSMemory{Entry: entry}
 		}
-		if entry == nil {
+		if item == nil {
 			continue
 		}
-		entry.Score = m.Score
-		if !matchesSearchFilters(entry, searchOpts) {
+		item.Entry.Score = m.Score
+		if !matchesSearchFilters(item.Entry, searchOpts) {
 			continue
 		}
-		results = append(results, entry)
+		results = append(results, item)
 	}
-	sortSearchResults(results, searchOpts)
+	sortOSSMemories(results, searchOpts)
 	if maxResults > 0 && len(results) > maxResults {
 		results = results[:maxResults]
 	}

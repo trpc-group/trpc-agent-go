@@ -171,19 +171,6 @@ func parseMem0Time(s string) (time.Time, bool) {
 }
 
 func toEntry(appName, userID string, rec *memoryRecord) *memory.Entry {
-	return toEntryWithProviderFields(appName, userID, rec, false)
-}
-
-func toOSSEntry(appName, userID string, rec *memoryRecord) *memory.Entry {
-	return toEntryWithProviderFields(appName, userID, rec, true)
-}
-
-func toEntryWithProviderFields(
-	appName string,
-	userID string,
-	rec *memoryRecord,
-	includeProviderFields bool,
-) *memory.Entry {
 	if rec == nil || strings.TrimSpace(rec.ID) == "" || strings.TrimSpace(rec.Memory) == "" {
 		return nil
 	}
@@ -200,7 +187,7 @@ func toEntryWithProviderFields(
 		),
 		Location: readLocationFromMetadata(rec.Metadata),
 	}
-	entry := &memory.Entry{
+	return &memory.Entry{
 		ID:        rec.ID,
 		AppName:   appName,
 		UserID:    userID,
@@ -208,32 +195,42 @@ func toEntryWithProviderFields(
 		CreatedAt: times.CreatedAt,
 		UpdatedAt: times.UpdatedAt,
 	}
-	if !includeProviderFields {
-		return entry
-	}
-	if len(rec.Metadata) > 0 {
-		entry.ProviderAttributes = map[string]any{"metadata": cloneMetadata(rec.Metadata)}
-	}
-	entry.ProviderAttributes = addRecordAttribute(entry.ProviderAttributes, queryKeyAgentID, rec.AgentID)
-	entry.ProviderAttributes = addRecordAttribute(entry.ProviderAttributes, queryKeyRunID, rec.RunID)
-	entry.ProviderAttributes = addRecordAttribute(entry.ProviderAttributes, "hash", rec.Hash)
-	entry.ProviderAttributes = addRecordAttribute(entry.ProviderAttributes, "expiration_date", rec.ExpirationDate)
-	entry.ProviderAttributes = addRecordAttribute(entry.ProviderAttributes, "actor_id", rec.ActorID)
-	entry.ProviderAttributes = addRecordAttribute(entry.ProviderAttributes, "role", rec.Role)
-	entry.ProviderAttributes = addRecordAttribute(entry.ProviderAttributes, "attributed_to", rec.AttributedTo)
-	entry.ScoreDetails = cloneMetadata(rec.ScoreDetails)
-	return entry
 }
 
-func addRecordAttribute(attributes map[string]any, key, value string) map[string]any {
-	if value == "" {
-		return attributes
+func toOSSMemory(appName, userID string, rec *memoryRecord) *OSSMemory {
+	entry := toEntry(appName, userID, rec)
+	if entry == nil {
+		return nil
 	}
-	if attributes == nil {
-		attributes = make(map[string]any)
+	return &OSSMemory{
+		Entry:          entry,
+		AgentID:        rec.AgentID,
+		RunID:          rec.RunID,
+		Hash:           rec.Hash,
+		ExpirationDate: rec.ExpirationDate,
+		ActorID:        rec.ActorID,
+		Role:           rec.Role,
+		AttributedTo:   rec.AttributedTo,
+		Metadata:       cloneMetadata(rec.Metadata),
+		ScoreDetails:   cloneMetadata(rec.ScoreDetails),
 	}
-	attributes[key] = value
-	return attributes
+}
+
+func entriesFromOSSMemories(memories []*OSSMemory) []*memory.Entry {
+	entries := make([]*memory.Entry, 0, len(memories))
+	for _, item := range memories {
+		if item == nil || item.Entry == nil {
+			continue
+		}
+		entries = append(entries, item.Entry)
+	}
+	return entries
+}
+
+func sortOSSMemories(memories []*OSSMemory, opts memory.SearchOptions) {
+	sort.Slice(memories, func(i, j int) bool {
+		return lessSearchEntry(memories[i].Entry, memories[j].Entry, opts)
+	})
 }
 
 func readTopicsFromMetadata(meta map[string]any) []string {
@@ -367,32 +364,36 @@ func matchesSearchFilters(entry *memory.Entry, opts memory.SearchOptions) bool {
 
 func sortSearchResults(results []*memory.Entry, opts memory.SearchOptions) {
 	sort.Slice(results, func(i, j int) bool {
-		if opts.Kind != "" && opts.KindFallback {
-			ik := results[i] != nil && results[i].Memory != nil && results[i].Memory.Kind == opts.Kind
-			jk := results[j] != nil && results[j].Memory != nil && results[j].Memory.Kind == opts.Kind
-			if ik != jk {
-				return ik
-			}
-		}
-		if results[i].Score != results[j].Score {
-			return results[i].Score > results[j].Score
-		}
-		if opts.OrderByEventTime {
-			it, jt := results[i].Memory.EventTime, results[j].Memory.EventTime
-			switch {
-			case it != nil && jt != nil && !it.Equal(*jt):
-				return it.Before(*jt)
-			case it != nil && jt == nil:
-				return true
-			case it == nil && jt != nil:
-				return false
-			}
-		}
-		if results[i].UpdatedAt.Equal(results[j].UpdatedAt) {
-			return results[i].CreatedAt.After(results[j].CreatedAt)
-		}
-		return results[i].UpdatedAt.After(results[j].UpdatedAt)
+		return lessSearchEntry(results[i], results[j], opts)
 	})
+}
+
+func lessSearchEntry(left, right *memory.Entry, opts memory.SearchOptions) bool {
+	if opts.Kind != "" && opts.KindFallback {
+		leftMatches := left != nil && left.Memory != nil && left.Memory.Kind == opts.Kind
+		rightMatches := right != nil && right.Memory != nil && right.Memory.Kind == opts.Kind
+		if leftMatches != rightMatches {
+			return leftMatches
+		}
+	}
+	if left.Score != right.Score {
+		return left.Score > right.Score
+	}
+	if opts.OrderByEventTime {
+		leftTime, rightTime := left.Memory.EventTime, right.Memory.EventTime
+		switch {
+		case leftTime != nil && rightTime != nil && !leftTime.Equal(*rightTime):
+			return leftTime.Before(*rightTime)
+		case leftTime != nil && rightTime == nil:
+			return true
+		case leftTime == nil && rightTime != nil:
+			return false
+		}
+	}
+	if left.UpdatedAt.Equal(right.UpdatedAt) {
+		return left.CreatedAt.After(right.CreatedAt)
+	}
+	return left.UpdatedAt.After(right.UpdatedAt)
 }
 
 func searchCandidateLimit(opts memory.SearchOptions, maxResults int) int {
