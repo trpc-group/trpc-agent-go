@@ -14,8 +14,6 @@ import (
 	"net/http"
 	"strings"
 	"time"
-
-	"trpc.group/trpc-go/trpc-agent-go/memory"
 )
 
 const (
@@ -25,38 +23,7 @@ const (
 	defaultAsyncMemoryNum    = 1
 	defaultMemoryQueueSize   = 10
 	defaultMemoryJobTimeout  = 30 * time.Second
-)
-
-// OSSReadOptions controls a self-hosted OSS memory list request.
-type OSSReadOptions struct {
-	// AgentID narrows the list to memories associated with one agent.
-	AgentID string
-	// RunID narrows the list to memories associated with one run.
-	RunID string
-	// IncludeExpired asks Mem0 to include expired memories.
-	IncludeExpired bool
-}
-
-// OSSSearchOptions controls a self-hosted OSS memory search request.
-type OSSSearchOptions struct {
-	// SearchOptions contains provider-independent filtering and ranking options.
-	SearchOptions memory.SearchOptions
-	// AgentID narrows the search to memories associated with one agent.
-	AgentID string
-	// RunID narrows the search to memories associated with one run.
-	RunID string
-	// IncludeExpired asks Mem0 to include expired memories.
-	IncludeExpired bool
-	// Explain asks Mem0 to return provider ranking diagnostics.
-	Explain bool
-}
-
-// MemoryType identifies a Mem0 memory creation mode.
-type MemoryType string
-
-const (
-	// MemoryTypeProcedural stores agent procedures rather than user facts.
-	MemoryTypeProcedural MemoryType = "procedural_memory"
+	memoryTypeProcedural     = "procedural_memory"
 )
 
 type ingestOptions struct {
@@ -65,12 +32,9 @@ type ingestOptions struct {
 	runID          string
 	prompt         string
 	expirationDate string
-	infer          *bool
-	memoryType     MemoryType
+	infer          bool
+	memoryType     string
 }
-
-// IngestOption configures one Mem0 ingestion request made through Service.Ingest.
-type IngestOption func(*ingestOptions)
 
 type apiMode int
 
@@ -95,6 +59,7 @@ type serviceOpts struct {
 
 	loadToolEnabled                      bool
 	includeUnscopedSelfHostedOSSMemories bool
+	ingestDefaults                       ingestOptions
 
 	asyncMemoryNum   int
 	memoryQueueSize  int
@@ -114,87 +79,51 @@ var defaultOptions = serviceOpts{
 	asyncMemoryNum:   defaultAsyncMemoryNum,
 	memoryQueueSize:  defaultMemoryQueueSize,
 	memoryJobTimeout: defaultMemoryJobTimeout,
+	ingestDefaults: ingestOptions{
+		infer: true,
+	},
 }
 
 // ServiceOpt configures a mem0 service.
 type ServiceOpt func(*serviceOpts)
 
-// WithIngestMetadata attaches metadata to memories created by one request.
-// Repeated calls merge metadata, with later values replacing earlier ones.
-func WithIngestMetadata(metadata map[string]any) IngestOption {
-	return func(opts *ingestOptions) {
-		if len(metadata) == 0 {
-			return
-		}
-		if opts.metadata == nil {
-			opts.metadata = make(map[string]any, len(metadata))
-		}
-		for key, value := range metadata {
-			opts.metadata[key] = value
-		}
-	}
-}
-
-// WithIngestAgentID associates memories created by one request with an agent.
-func WithIngestAgentID(agentID string) IngestOption {
-	return func(opts *ingestOptions) {
-		if strings.TrimSpace(agentID) == "" {
-			return
-		}
-		opts.agentID = agentID
-	}
-}
-
-// WithIngestRunID associates memories created by one request with a run.
-func WithIngestRunID(runID string) IngestOption {
-	return func(opts *ingestOptions) {
-		if strings.TrimSpace(runID) == "" {
-			return
-		}
-		opts.runID = runID
-	}
-}
-
-// WithIngestPrompt adds custom extraction instructions to one Mem0 OSS ingest
-// request. Empty prompts are ignored.
-func WithIngestPrompt(prompt string) IngestOption {
-	return func(opts *ingestOptions) {
+// WithSelfHostedIngestPrompt sets the extraction prompt used by every
+// self-hosted Mem0 ingestion request from this service.
+func WithSelfHostedIngestPrompt(prompt string) ServiceOpt {
+	return func(opts *serviceOpts) {
 		if strings.TrimSpace(prompt) == "" {
 			return
 		}
-		opts.prompt = prompt
+		opts.ingestDefaults.prompt = prompt
 	}
 }
 
-// WithIngestExpirationDate sets the calendar date after which memories created
-// by one Mem0 OSS ingest request are hidden by default. The date component in
-// expirationDate's location is used.
-func WithIngestExpirationDate(expirationDate time.Time) IngestOption {
-	return func(opts *ingestOptions) {
+// WithSelfHostedIngestExpirationDate sets the calendar date after which
+// memories ingested by this self-hosted Mem0 service are hidden by default.
+// The date component in expirationDate's location is used.
+func WithSelfHostedIngestExpirationDate(expirationDate time.Time) ServiceOpt {
+	return func(opts *serviceOpts) {
 		if expirationDate.IsZero() {
 			return
 		}
-		opts.expirationDate = expirationDate.Format(time.DateOnly)
+		opts.ingestDefaults.expirationDate = expirationDate.Format(time.DateOnly)
 	}
 }
 
 // WithIngestInference controls whether Mem0 extracts memories from the
-// transcript. When disabled, Mem0 stores non-system messages verbatim.
-func WithIngestInference(infer bool) IngestOption {
-	return func(opts *ingestOptions) {
-		value := infer
-		opts.infer = &value
+// transcript for every ingestion request from this service. When disabled,
+// Mem0 stores non-system messages verbatim.
+func WithIngestInference(infer bool) ServiceOpt {
+	return func(opts *serviceOpts) {
+		opts.ingestDefaults.infer = infer
 	}
 }
 
-// WithIngestMemoryType selects the Mem0 memory creation mode for one request.
-// The self-hosted OSS API currently supports MemoryTypeProcedural.
-func WithIngestMemoryType(memoryType MemoryType) IngestOption {
-	return func(opts *ingestOptions) {
-		if memoryType == "" {
-			return
-		}
-		opts.memoryType = memoryType
+// WithSelfHostedProceduralMemory configures this service to create procedural
+// memories. Mem0 requires an agent ID for procedural memory ingestion.
+func WithSelfHostedProceduralMemory() ServiceOpt {
+	return func(opts *serviceOpts) {
+		opts.ingestDefaults.memoryType = memoryTypeProcedural
 	}
 }
 

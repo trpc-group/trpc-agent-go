@@ -1752,6 +1752,10 @@ defer r.Close()
 | `WithHost(url)` | 覆盖 mem0 API Host / Base URL。 | `https://api.mem0.ai` |
 | `WithSelfHostedOSS()` | 使用本地 Mem0 OSS REST API（`/memories`、`/search`、`X-API-Key`）。开启后如果没有设置 `WithHost`，host 默认 `http://localhost:8888`；OSS 模式会拒绝托管平台默认 host。 | 关闭 |
 | `WithSelfHostedOSSIncludeUnscopedMemories()` | 包含没有 `metadata.trpc_app_name` 的历史 OSS 记录；已标记为其他 app 的记录仍会隐藏。 | 关闭 |
+| `WithSelfHostedIngestPrompt(prompt)` | 为该 service 的所有本地 Mem0 写入设置提取 prompt。 | 服务端默认值 |
+| `WithSelfHostedIngestExpirationDate(date)` | 设置该本地 service 新建记忆的过期日期。 | 无 |
+| `WithIngestInference(bool)` | 控制 Mem0 是否从 transcript 中提取记忆；同时适用于托管和本地写入。 | `true` |
+| `WithSelfHostedProceduralMemory()` | 创建本地 procedural memory；必须提供 `agent_id`。 | 关闭 |
 | `WithOrgProject(orgID, projectID)` | 追加托管平台的 `org_id` / `project_id`；本地 OSS 不支持。 | 空 |
 | `WithAsyncMode(bool)` | 控制托管平台 ingest 请求里的 `async_mode`；本地 OSS 在 REST 层同步写入。 | `true` |
 | `WithVersion(v)` | 设置托管平台 mem0 ingest 请求里的版本字段。 | `v2` |
@@ -1763,66 +1767,44 @@ defer r.Close()
 
 ### 本地 OSS 请求字段
 
-标准 Runner 路径保持原有行为：它会把 session ID 作为 `run_id`、当前 Agent
-名称作为 `agent_id`，其余 Mem0 参数继续使用服务端默认值。需要定制行为的调用方
-可以针对单次 ingest 显式配置其余 OSS create 字段：
+标准 Runner 路径会把 session ID 作为 `run_id`、当前 Agent 名称作为
+`agent_id`。Mem0 专属行为在创建 service 时统一配置，因此
+`IngestSession` 仍是唯一的写入 API：
 
 ```go
-err := mem0Svc.Ingest(
-    ctx,
-    sess,
-    memorymem0.WithIngestAgentID("deployment-agent"),
-    memorymem0.WithIngestRunID("run-1"),
-    memorymem0.WithIngestPrompt("提取可复用的部署流程。"),
-    memorymem0.WithIngestExpirationDate(
+mem0Svc, err := memorymem0.NewService(
+    memorymem0.WithSelfHostedOSS(),
+    memorymem0.WithHost("http://localhost:8888"),
+    memorymem0.WithSelfHostedIngestPrompt("提取可复用的部署流程。"),
+    memorymem0.WithSelfHostedIngestExpirationDate(
         time.Date(2026, time.December, 31, 0, 0, 0, 0, time.UTC),
     ),
     memorymem0.WithIngestInference(false),
-    memorymem0.WithIngestMemoryType(memorymem0.MemoryTypeProcedural),
+    memorymem0.WithSelfHostedProceduralMemory(),
 )
 ```
 
-- `Ingest` 是承载 Mem0 专属请求字段的具体 API。标准 `IngestSession` 与
-  `session.IngestOptions` 保持 provider-neutral，继续供 Runner 和其他 session
-  ingestor 使用。
-- `WithIngestMetadata`、`WithIngestAgentID` 与 `WithIngestRunID` 用于在该具体
-  调用路径中设置 Mem0 的通用请求 scope。
-- `WithIngestPrompt` 透传 Mem0 的单次提取 prompt。
-- `WithIngestExpirationDate` 透传 `YYYY-MM-DD` 格式的过期日期；使用传入
-  `time.Time` 所在时区的日期部分。
+- `session.WithIngestMetadata`、`session.WithIngestAgentID` 与
+  `session.WithIngestRunID` 仍用于设置单次 `IngestSession` 的通用字段；
+  Runner 会自动提供 agent ID 和 run ID。
+- `WithSelfHostedIngestPrompt` 在每次本地 create 请求中透传该 service 的提取
+  prompt。
+- `WithSelfHostedIngestExpirationDate` 透传 `YYYY-MM-DD` 格式的过期日期；
+  使用传入 `time.Time` 所在时区的日期部分。
 - `WithIngestInference` 控制 Mem0 的 `infer` 字段。默认值仍为 `true`；设为
   `false` 时，Mem0 不通过 LLM 提取，而是直接保存非 system 消息。
-- `WithIngestMemoryType` 当前接受 `MemoryTypeProcedural`；procedural memory
-  必须同时提供 `agent_id`。
+- `WithSelfHostedProceduralMemory` 选择 Mem0 的 `procedural_memory` 模式。
+  未配置时，Mem0 的公开 create API 会自行提取普通记忆；procedural memory 必须
+  同时提供 `agent_id`。
 - prompt、过期日期与 memory type 仅供本地 OSS 使用；托管模式会明确报错，
   不会静默忽略。`infer` 在两种模式下都支持。
 
-OSS 检索也可以通过 OSS 专属 search API 传入服务端支持的 scope 与诊断参数：
-
-```go
-records, err := mem0Svc.SearchOSSMemories(
-    ctx,
-    memory.UserKey{AppName: "my-app", UserID: "user-1"},
-    "deployment procedure",
-    memorymem0.OSSSearchOptions{
-        SearchOptions: memory.SearchOptions{
-            Query:               "deployment procedure",
-            MaxResults:          20,
-            SimilarityThreshold: 0.5,
-        },
-        AgentID:        "deployment-agent",
-        RunID:          "run-1",
-        IncludeExpired: true,
-        Explain:        true,
-    },
-)
-```
-
-list 请求可以使用 `ReadOSSMemories` 和 `OSSReadOptions` 透传 `agent_id`、
-`run_id` 与 `show_expired`。两个 OSS 专属方法都返回 `OSSMemory`：
-`OSSMemory.Entry` 保存标准记忆条目，其他字段保存 Mem0 scope、metadata、过期信息和
-可选排序诊断。标准 `ReadMemories`、`SearchMemories`、`memory_search` 与
-`memory_load` 仍然只暴露 `memory.Entry`。
+本地模式与托管模式共用 `ReadMemories` 和 `SearchMemories`。
+`SearchMemories` 会把 `MaxResults` 作为 `top_k` 发送；在本地模式下，还会把
+`SimilarityThreshold` 作为 `threshold` 发送。返回值统一映射为
+`memory.Entry`，包括 ID、正文、score、时间戳，以及 metadata 中保存的 tRPC
+结构化记忆字段。对于 `memory.Entry` 无法表达的 provider 专属诊断信息，适配层
+不会额外引入第二套公共结果模型。
 
 如果使用官方本地 Mem0 OSS server，并且 LLM 与 embedding 使用不同 endpoint 或
 API key，需要在 server 侧分别配置。OSS server 提供 `POST /configure`：
@@ -1836,7 +1818,7 @@ API key，需要在 server 侧分别配置。OSS server 提供 `POST /configure`
 - 所有读取仍然基于当前 `<appName, userID>` 做隔离。
 - 本地 OSS 没有 top-level `app_id`，适配层使用 `metadata.trpc_app_name` 做 app 隔离。已有 OSS 记录如果缺少这个 metadata，默认会被隐藏，直到重新 ingest 或回填 metadata。迁移期确实需要读取这些历史记录时，可显式开启 `WithSelfHostedOSSIncludeUnscopedMemories()`。
 - 当前 OSS `GET /memories` API 最多返回 1000 条 user 级结果，不支持分页，也不能在服务端表达 `metadata.trpc_app_name` 过滤。因此 `ReadMemories` 要求传入大于 0 且不超过 1000 的 limit，并且只会在 OSS 返回的前 1000 条 user 级记录内尽力做本地 app 隔离。
-- Runner 会自动把 session 上下文带入 `IngestSession`。只需要通用 scope 的调用方仍可使用 `session.WithIngestMetadata`、`session.WithIngestAgentID` 与 `session.WithIngestRunID`；需要 Mem0 专属字段时，应使用 `Ingest` 和本包对应的 helper。
+- Runner 会自动把 session 上下文带入 `IngestSession`。自定义调用方可通过 `session.WithIngestMetadata`、`session.WithIngestAgentID` 与 `session.WithIngestRunID` 设置单次调用的通用字段；Mem0 专属字段通过 service option 配置。
 - 当同一个 mem0 service 通过 `runner.WithSessionIngestor(mem0Svc)` 配置后，`WithPreloadMemory(N)` 可以使用 mem0 的只读能力；生产环境建议使用正数预算。
 - 当 mem0 返回结构化 metadata 时，检索结果仍可携带 `Topics`、`Kind`、`EventTime`、`Participants`、`Location` 等字段。
 - 使用完成后请调用 `Close()`，确保后台 worker 干净退出。

@@ -35,14 +35,11 @@ const (
 	pathOSSMemories = "/memories"
 	pathOSSSearch   = "/search"
 
-	queryKeyUserID      = "user_id"
-	queryKeyAppID       = "app_id"
-	queryKeyPage        = "page"
-	queryKeyPageSize    = "page_size"
-	queryKeyTopK        = "top_k"
-	queryKeyAgentID     = "agent_id"
-	queryKeyRunID       = "run_id"
-	queryKeyShowExpired = "show_expired"
+	queryKeyUserID   = "user_id"
+	queryKeyAppID    = "app_id"
+	queryKeyPage     = "page"
+	queryKeyPageSize = "page_size"
+	queryKeyTopK     = "top_k"
 
 	memoryUserRole = "user"
 
@@ -98,16 +95,9 @@ func cloudSearchFilters(userKey memory.UserKey, opts serviceOpts) map[string]any
 func ossSearchFilters(
 	userKey memory.UserKey,
 	includeUnscoped bool,
-	opts OSSSearchOptions,
 ) map[string]any {
 	filters := map[string]any{
 		queryKeyUserID: userKey.UserID,
-	}
-	if opts.AgentID != "" {
-		filters[queryKeyAgentID] = opts.AgentID
-	}
-	if opts.RunID != "" {
-		filters[queryKeyRunID] = opts.RunID
 	}
 	if !includeUnscoped {
 		filters[metadataKeyTRPCAppName] = userKey.AppName
@@ -195,42 +185,6 @@ func toEntry(appName, userID string, rec *memoryRecord) *memory.Entry {
 		CreatedAt: times.CreatedAt,
 		UpdatedAt: times.UpdatedAt,
 	}
-}
-
-func toOSSMemory(appName, userID string, rec *memoryRecord) *OSSMemory {
-	entry := toEntry(appName, userID, rec)
-	if entry == nil {
-		return nil
-	}
-	return &OSSMemory{
-		Entry:          entry,
-		AgentID:        rec.AgentID,
-		RunID:          rec.RunID,
-		Hash:           rec.Hash,
-		ExpirationDate: rec.ExpirationDate,
-		ActorID:        rec.ActorID,
-		Role:           rec.Role,
-		AttributedTo:   rec.AttributedTo,
-		Metadata:       cloneMetadata(rec.Metadata),
-		ScoreDetails:   cloneMetadata(rec.ScoreDetails),
-	}
-}
-
-func entriesFromOSSMemories(memories []*OSSMemory) []*memory.Entry {
-	entries := make([]*memory.Entry, 0, len(memories))
-	for _, item := range memories {
-		if item == nil || item.Entry == nil {
-			continue
-		}
-		entries = append(entries, item.Entry)
-	}
-	return entries
-}
-
-func sortOSSMemories(memories []*OSSMemory, opts memory.SearchOptions) {
-	sort.Slice(memories, func(i, j int) bool {
-		return lessSearchEntry(memories[i].Entry, memories[j].Entry, opts)
-	})
 }
 
 func readTopicsFromMetadata(meta map[string]any) []string {
@@ -364,36 +318,33 @@ func matchesSearchFilters(entry *memory.Entry, opts memory.SearchOptions) bool {
 
 func sortSearchResults(results []*memory.Entry, opts memory.SearchOptions) {
 	sort.Slice(results, func(i, j int) bool {
-		return lessSearchEntry(results[i], results[j], opts)
+		if opts.Kind != "" && opts.KindFallback {
+			leftMatches := results[i] != nil && results[i].Memory != nil && results[i].Memory.Kind == opts.Kind
+			rightMatches := results[j] != nil && results[j].Memory != nil && results[j].Memory.Kind == opts.Kind
+			if leftMatches != rightMatches {
+				return leftMatches
+			}
+		}
+		if results[i].Score != results[j].Score {
+			return results[i].Score > results[j].Score
+		}
+		if opts.OrderByEventTime {
+			leftTime := results[i].Memory.EventTime
+			rightTime := results[j].Memory.EventTime
+			switch {
+			case leftTime != nil && rightTime != nil && !leftTime.Equal(*rightTime):
+				return leftTime.Before(*rightTime)
+			case leftTime != nil && rightTime == nil:
+				return true
+			case leftTime == nil && rightTime != nil:
+				return false
+			}
+		}
+		if results[i].UpdatedAt.Equal(results[j].UpdatedAt) {
+			return results[i].CreatedAt.After(results[j].CreatedAt)
+		}
+		return results[i].UpdatedAt.After(results[j].UpdatedAt)
 	})
-}
-
-func lessSearchEntry(left, right *memory.Entry, opts memory.SearchOptions) bool {
-	if opts.Kind != "" && opts.KindFallback {
-		leftMatches := left != nil && left.Memory != nil && left.Memory.Kind == opts.Kind
-		rightMatches := right != nil && right.Memory != nil && right.Memory.Kind == opts.Kind
-		if leftMatches != rightMatches {
-			return leftMatches
-		}
-	}
-	if left.Score != right.Score {
-		return left.Score > right.Score
-	}
-	if opts.OrderByEventTime {
-		leftTime, rightTime := left.Memory.EventTime, right.Memory.EventTime
-		switch {
-		case leftTime != nil && rightTime != nil && !leftTime.Equal(*rightTime):
-			return leftTime.Before(*rightTime)
-		case leftTime != nil && rightTime == nil:
-			return true
-		case leftTime == nil && rightTime != nil:
-			return false
-		}
-	}
-	if left.UpdatedAt.Equal(right.UpdatedAt) {
-		return left.CreatedAt.After(right.CreatedAt)
-	}
-	return left.UpdatedAt.After(right.UpdatedAt)
 }
 
 func searchCandidateLimit(opts memory.SearchOptions, maxResults int) int {

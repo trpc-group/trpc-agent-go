@@ -52,11 +52,6 @@ func TestEntry_JSONTags(t *testing.T) {
 	assert.False(t, entry.UpdatedAt.IsZero(), "UpdatedAt should not be zero.")
 }
 
-func TestEntry_RemainsComparable(t *testing.T) {
-	entries := map[Entry]struct{}{{ID: "memory-1"}: {}}
-	assert.Contains(t, entries, Entry{ID: "memory-1"})
-}
-
 func TestKey_CheckMemoryKey(t *testing.T) {
 	tests := []struct {
 		name      string

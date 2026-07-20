@@ -193,12 +193,11 @@ func TestIngestWorker_IngestHostedForwardsInference(t *testing.T) {
 		_, _ = w.Write([]byte(`[{"id":"x","status":"SUCCEEDED"}]`))
 	})
 	w, _ := newWorkerWithServer(t, handler, serviceOpts{memoryJobTimeout: time.Second})
-	infer := false
 	err := w.ingest(context.Background(),
 		memory.UserKey{AppName: "app", UserID: "u"},
 		nil,
 		[]model.Message{{Role: model.RoleUser, Content: "store this message"}},
-		ingestOptions{infer: &infer},
+		ingestOptions{infer: false},
 	)
 	require.NoError(t, err)
 	assert.Equal(t, false, gotBody["infer"])
@@ -224,7 +223,7 @@ func TestIngestWorker_IngestSelfHostedOSSUsesSyncCreate(t *testing.T) {
 		memory.UserKey{AppName: "app", UserID: "u"},
 		nil,
 		[]model.Message{{Role: model.RoleUser, Content: "hi"}},
-		ingestOptions{metadata: map[string]any{"k": "v"}},
+		ingestOptions{metadata: map[string]any{"k": "v"}, infer: true},
 	)
 	require.NoError(t, err)
 	assert.Equal(t, "/memories", gotPath)
@@ -256,7 +255,6 @@ func TestIngestWorker_IngestSelfHostedOSSForwardsOptionalFields(t *testing.T) {
 		apiMode:          apiModeSelfHostedOSS,
 		memoryJobTimeout: time.Second,
 	})
-	infer := false
 	err := w.ingest(context.Background(),
 		memory.UserKey{AppName: "app", UserID: "u"},
 		nil,
@@ -264,8 +262,8 @@ func TestIngestWorker_IngestSelfHostedOSSForwardsOptionalFields(t *testing.T) {
 		ingestOptions{
 			agentID:        "agent-1",
 			expirationDate: "2026-08-01",
-			infer:          &infer,
-			memoryType:     MemoryTypeProcedural,
+			infer:          false,
+			memoryType:     memoryTypeProcedural,
 			prompt:         "extract a deployment procedure",
 		},
 	)
@@ -273,7 +271,7 @@ func TestIngestWorker_IngestSelfHostedOSSForwardsOptionalFields(t *testing.T) {
 	assert.Equal(t, "agent-1", gotBody["agent_id"])
 	assert.Equal(t, "2026-08-01", gotBody["expiration_date"])
 	assert.Equal(t, false, gotBody["infer"])
-	assert.Equal(t, string(MemoryTypeProcedural), gotBody["memory_type"])
+	assert.Equal(t, memoryTypeProcedural, gotBody["memory_type"])
 	assert.Equal(t, "extract a deployment procedure", gotBody["prompt"])
 }
 

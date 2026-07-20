@@ -120,7 +120,7 @@ func TestOSSCreateMemoryRequest_OptionalFields(t *testing.T) {
 			Metadata:       map[string]any{"reference_date": "2026-07-17"},
 			ExpirationDate: "2026-08-01",
 			Infer:          false,
-			MemoryType:     string(MemoryTypeProcedural),
+			MemoryType:     memoryTypeProcedural,
 			Prompt:         "extract procedures",
 		})
 		require.NoError(t, err)
@@ -139,7 +139,7 @@ func TestOSSCreateMemoryRequest_OptionalFields(t *testing.T) {
 		require.NoError(t, json.Unmarshal(body, &fields))
 		assert.Equal(t, "2026-08-01", fields["expiration_date"])
 		assert.Equal(t, false, fields["infer"])
-		assert.Equal(t, string(MemoryTypeProcedural), fields["memory_type"])
+		assert.Equal(t, memoryTypeProcedural, fields["memory_type"])
 		assert.Equal(t, "extract procedures", fields["prompt"])
 	})
 }
@@ -155,16 +155,12 @@ func TestSearchV2Request_OptionalFields(t *testing.T) {
 
 	threshold := 0.42
 	body, err = json.Marshal(searchV2Request{
-		Query:       "hello",
-		TopK:        20,
-		Threshold:   &threshold,
-		Explain:     true,
-		ShowExpired: true,
+		Query:     "hello",
+		TopK:      20,
+		Threshold: &threshold,
 	})
 	require.NoError(t, err)
 	var explicit map[string]any
 	require.NoError(t, json.Unmarshal(body, &explicit))
 	assert.InDelta(t, 0.42, explicit["threshold"], 1e-9)
-	assert.Equal(t, true, explicit["explain"])
-	assert.Equal(t, true, explicit["show_expired"])
 }

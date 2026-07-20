@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func apply(opts ...ServiceOpt) serviceOpts {
@@ -52,59 +51,35 @@ func TestWithSelfHostedOSSIncludeUnscopedMemories(t *testing.T) {
 	assert.True(t, apply(WithSelfHostedOSSIncludeUnscopedMemories()).includeUnscopedSelfHostedOSSMemories)
 }
 
-func TestIngestOptions(t *testing.T) {
-	t.Run("common request fields", func(t *testing.T) {
-		opts := resolveTestIngestOptions(
-			WithIngestMetadata(map[string]any{"first": 1, "shared": "old"}),
-			WithIngestMetadata(map[string]any{"second": 2, "shared": "new"}),
-			WithIngestAgentID("agent-1"),
-			WithIngestRunID("run-1"),
-		)
-		assert.Equal(t, map[string]any{"first": 1, "second": 2, "shared": "new"}, opts.metadata)
-		assert.Equal(t, "agent-1", opts.agentID)
-		assert.Equal(t, "run-1", opts.runID)
-	})
-
+func TestSelfHostedIngestOptions(t *testing.T) {
 	t.Run("prompt", func(t *testing.T) {
-		opts := resolveTestIngestOptions(
-			WithIngestPrompt("extract deadlines"),
-			WithIngestPrompt("   "),
+		opts := apply(
+			WithSelfHostedIngestPrompt("extract deadlines"),
+			WithSelfHostedIngestPrompt("   "),
 		)
-		assert.Equal(t, "extract deadlines", opts.prompt)
+		assert.Equal(t, "extract deadlines", opts.ingestDefaults.prompt)
 	})
 
 	t.Run("expiration date", func(t *testing.T) {
 		location := time.FixedZone("UTC+8", 8*60*60)
-		opts := resolveTestIngestOptions(WithIngestExpirationDate(
+		opts := apply(WithSelfHostedIngestExpirationDate(
 			time.Date(2026, time.July, 17, 23, 0, 0, 0, location),
 		))
-		assert.Equal(t, "2026-07-17", opts.expirationDate)
+		assert.Equal(t, "2026-07-17", opts.ingestDefaults.expirationDate)
 
-		zero := resolveTestIngestOptions(WithIngestExpirationDate(time.Time{}))
-		assert.Empty(t, zero.expirationDate)
+		zero := apply(WithSelfHostedIngestExpirationDate(time.Time{}))
+		assert.Empty(t, zero.ingestDefaults.expirationDate)
 	})
 
 	t.Run("inference", func(t *testing.T) {
-		opts := resolveTestIngestOptions(WithIngestInference(false))
-		require.NotNil(t, opts.infer)
-		assert.False(t, *opts.infer)
+		assert.True(t, apply().ingestDefaults.infer)
+		assert.False(t, apply(WithIngestInference(false)).ingestDefaults.infer)
 	})
 
-	t.Run("memory type", func(t *testing.T) {
-		opts := resolveTestIngestOptions(
-			WithIngestMemoryType(MemoryTypeProcedural),
-			WithIngestMemoryType(""),
-		)
-		assert.Equal(t, MemoryTypeProcedural, opts.memoryType)
+	t.Run("procedural memory", func(t *testing.T) {
+		opts := apply(WithSelfHostedProceduralMemory())
+		assert.Equal(t, memoryTypeProcedural, opts.ingestDefaults.memoryType)
 	})
-}
-
-func resolveTestIngestOptions(options ...IngestOption) ingestOptions {
-	var opts ingestOptions
-	for _, option := range options {
-		option(&opts)
-	}
-	return opts
 }
 
 func TestWithOrgProject(t *testing.T) {

@@ -1719,6 +1719,10 @@ In short, `MemoryService` means "the framework manages memories directly", while
 | `WithHost(url)` | Override the mem0 API host/base URL. | `https://api.mem0.ai` |
 | `WithSelfHostedOSS()` | Use the self-hosted Mem0 OSS REST API (`/memories`, `/search`, `X-API-Key`). When enabled without `WithHost`, the host defaults to `http://localhost:8888`; the hosted-platform default host is rejected in OSS mode. | disabled |
 | `WithSelfHostedOSSIncludeUnscopedMemories()` | Include legacy OSS records that do not carry `metadata.trpc_app_name`; records tagged for a different app remain hidden. | disabled |
+| `WithSelfHostedIngestPrompt(prompt)` | Set the extraction prompt for every self-hosted ingestion request from this service. | server default |
+| `WithSelfHostedIngestExpirationDate(date)` | Set the expiration date for memories created by this self-hosted service. | none |
+| `WithIngestInference(bool)` | Control whether Mem0 extracts memories from transcripts. This applies to hosted and self-hosted ingestion. | `true` |
+| `WithSelfHostedProceduralMemory()` | Create self-hosted procedural memories. An `agent_id` is required. | disabled |
 | `WithOrgProject(orgID, projectID)` | Add hosted-platform `org_id` / `project_id`; unsupported with self-hosted OSS. | empty |
 | `WithAsyncMode(bool)` | Controls hosted-platform `async_mode`; self-hosted OSS writes are synchronous at the REST layer. | `true` |
 | `WithVersion(v)` | Sets the hosted-platform ingestion API version field. | `v2` |
@@ -1730,70 +1734,49 @@ In short, `MemoryService` means "the framework manages memories directly", while
 
 ### Self-Hosted OSS Request Fields
 
-The standard Runner path keeps its existing behavior: it supplies the session
-ID as `run_id`, the active agent name as `agent_id`, and leaves all other Mem0
-settings at their server defaults. Custom callers can explicitly configure the
-remaining OSS create fields for one ingestion request:
+The standard Runner path supplies the session ID as `run_id` and the active
+agent name as `agent_id`. Mem0-specific behavior is configured once when the
+service is created, so `IngestSession` remains the only ingestion API:
 
 ```go
-err := mem0Svc.Ingest(
-    ctx,
-    sess,
-    memorymem0.WithIngestAgentID("deployment-agent"),
-    memorymem0.WithIngestRunID("run-1"),
-    memorymem0.WithIngestPrompt("Extract reusable deployment procedures."),
-    memorymem0.WithIngestExpirationDate(
+mem0Svc, err := memorymem0.NewService(
+    memorymem0.WithSelfHostedOSS(),
+    memorymem0.WithHost("http://localhost:8888"),
+    memorymem0.WithSelfHostedIngestPrompt(
+        "Extract reusable deployment procedures.",
+    ),
+    memorymem0.WithSelfHostedIngestExpirationDate(
         time.Date(2026, time.December, 31, 0, 0, 0, 0, time.UTC),
     ),
     memorymem0.WithIngestInference(false),
-    memorymem0.WithIngestMemoryType(memorymem0.MemoryTypeProcedural),
+    memorymem0.WithSelfHostedProceduralMemory(),
 )
 ```
 
-- `Ingest` is the concrete Mem0 API for provider-specific request fields. The
-  standard `IngestSession` method and `session.IngestOptions` remain
-  provider-neutral for Runner and other session ingestors.
-- `WithIngestMetadata`, `WithIngestAgentID`, and `WithIngestRunID` set the
-  common Mem0 request scopes on this concrete path.
-- `WithIngestPrompt` forwards Mem0's per-request extraction prompt.
-- `WithIngestExpirationDate` forwards a `YYYY-MM-DD` expiration date. The date
-  in the supplied value's location is used.
+- `session.WithIngestMetadata`, `session.WithIngestAgentID`, and
+  `session.WithIngestRunID` continue to set common fields for an individual
+  `IngestSession` call. Runner supplies the agent and run IDs automatically.
+- `WithSelfHostedIngestPrompt` forwards the service's extraction prompt on
+  every self-hosted create request.
+- `WithSelfHostedIngestExpirationDate` forwards a `YYYY-MM-DD` expiration
+  date. The date in the supplied value's location is used.
 - `WithIngestInference` controls Mem0's `infer` field. Its default remains
   `true`; `false` stores non-system messages without LLM extraction.
-- `WithIngestMemoryType` currently accepts
-  `MemoryTypeProcedural`. Procedural memory requires an `agent_id`.
+- `WithSelfHostedProceduralMemory` selects Mem0's
+  `procedural_memory` mode. Mem0's public create API otherwise infers ordinary
+  memories; procedural memory requires an `agent_id`.
 - Prompt, expiration date, and memory type are OSS-only and are rejected in
   hosted-platform mode rather than silently ignored. `infer` is supported in
   both modes.
 
-OSS search can also pass provider-supported scopes and diagnostics through the
-OSS-specific search API:
-
-```go
-records, err := mem0Svc.SearchOSSMemories(
-    ctx,
-    memory.UserKey{AppName: "my-app", UserID: "user-1"},
-    "deployment procedure",
-    memorymem0.OSSSearchOptions{
-        SearchOptions: memory.SearchOptions{
-            Query:               "deployment procedure",
-            MaxResults:          20,
-            SimilarityThreshold: 0.5,
-        },
-        AgentID:        "deployment-agent",
-        RunID:          "run-1",
-        IncludeExpired: true,
-        Explain:        true,
-    },
-)
-```
-
-For list requests, use `ReadOSSMemories` with `OSSReadOptions` to forward
-`agent_id`, `run_id`, and `show_expired`. Both OSS-specific methods return
-`OSSMemory` values. `OSSMemory.Entry` contains the standard memory entry, while
-the other fields preserve Mem0 scopes, metadata, expiration information, and
-optional ranking diagnostics. Standard `ReadMemories`, `SearchMemories`,
-`memory_search`, and `memory_load` continue to expose only `memory.Entry`.
+Self-hosted reads and searches use the same `ReadMemories` and
+`SearchMemories` methods as the hosted adapter. `SearchMemories` forwards
+`MaxResults` as `top_k` and, in self-hosted mode, forwards
+`SimilarityThreshold` as `threshold`. Results are mapped to
+`memory.Entry`, including ID, text, score, timestamps, and the structured
+tRPC memory fields stored in metadata. Provider-only diagnostics that have no
+representation in `memory.Entry` are intentionally not exposed as a second
+public result model.
 
 For the official self-hosted OSS server, configure the server-side LLM and
 embedder independently when they use different endpoints or API keys. The OSS
@@ -1808,7 +1791,7 @@ access the OSS server's internal vector store directly.
 - All reads remain scoped to the current `<appName, userID>`.
 - Self-hosted OSS app isolation uses `metadata.trpc_app_name` because the OSS API has no top-level `app_id`. Existing OSS records without this metadata are hidden by default until reingested or backfilled. Use `WithSelfHostedOSSIncludeUnscopedMemories()` only for migrations that need those legacy records visible.
 - The current OSS `GET /memories` API is capped at 1000 user-level results, is not pageable, and cannot express `metadata.trpc_app_name` as a server-side filter. `ReadMemories` therefore requires a positive limit no larger than 1000 and applies app isolation as a best-effort local filter over the first 1000 OSS records returned for the user.
-- Runner automatically passes session context into `IngestSession`. Custom callers that only need common scopes can also use `session.WithIngestMetadata`, `session.WithIngestAgentID`, and `session.WithIngestRunID`; callers needing Mem0-only fields should use `Ingest` and this package's corresponding helpers.
+- Runner automatically passes session context into `IngestSession`. Custom callers can use `session.WithIngestMetadata`, `session.WithIngestAgentID`, and `session.WithIngestRunID` for per-call common fields; Mem0-specific fields are service options.
 - `WithPreloadMemory(N)` works with mem0 when the same service is configured via `runner.WithSessionIngestor(mem0Svc)`. Use a positive budget in production.
 - When mem0 metadata is available, search results can still carry structured fields such as `Topics`, `Kind`, `EventTime`, `Participants`, and `Location`.
 - Call `Close()` on the service so background workers shut down cleanly.

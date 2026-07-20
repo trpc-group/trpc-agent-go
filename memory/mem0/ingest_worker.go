@@ -185,12 +185,8 @@ func (w *ingestWorker) ingest(
 	if len(apiMsgs) == 0 {
 		return nil
 	}
-	infer := true
-	if reqOpts.infer != nil {
-		infer = *reqOpts.infer
-	}
 	if w.apiMode == apiModeSelfHostedOSS {
-		return w.ingestOSS(ctx, userKey, apiMsgs, reqOpts, infer)
+		return w.ingestOSS(ctx, userKey, apiMsgs, reqOpts)
 	}
 	req := createMemoryRequest{
 		Messages:  apiMsgs,
@@ -199,7 +195,7 @@ func (w *ingestWorker) ingest(
 		AgentID:   reqOpts.agentID,
 		RunID:     reqOpts.runID,
 		Metadata:  cloneMetadata(reqOpts.metadata),
-		Infer:     infer,
+		Infer:     reqOpts.infer,
 		Async:     w.asyncMode,
 		Version:   w.version,
 		OrgID:     w.orgID,
@@ -217,7 +213,6 @@ func (w *ingestWorker) ingestOSS(
 	userKey memory.UserKey,
 	messages []apiMessage,
 	reqOpts ingestOptions,
-	infer bool,
 ) error {
 	req := ossCreateMemoryRequest{
 		Messages:       messages,
@@ -226,7 +221,7 @@ func (w *ingestWorker) ingestOSS(
 		RunID:          reqOpts.runID,
 		Metadata:       withTRPCAppMetadata(reqOpts.metadata, userKey.AppName),
 		ExpirationDate: reqOpts.expirationDate,
-		Infer:          infer,
+		Infer:          reqOpts.infer,
 		MemoryType:     string(reqOpts.memoryType),
 		Prompt:         reqOpts.prompt,
 	}

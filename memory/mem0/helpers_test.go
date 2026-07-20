@@ -153,63 +153,6 @@ func TestToEntry(t *testing.T) {
 		assert.Equal(t, "tokyo", e.Memory.Location)
 		assert.NotNil(t, e.Memory.LastUpdated)
 	})
-	t.Run("OSS memory preserves provider fields without aliasing", func(t *testing.T) {
-		rec := &memoryRecord{
-			ID:             "id-1",
-			Memory:         "content",
-			Metadata:       map[string]any{"custom": map[string]any{"value": "before"}},
-			AgentID:        "agent-1",
-			RunID:          "run-1",
-			Hash:           "hash-1",
-			ExpirationDate: "2026-08-01",
-			ActorID:        "actor-1",
-			Role:           "user",
-			AttributedTo:   "alice",
-			ScoreDetails:   map[string]any{"semantic": 0.8},
-		}
-		got := toOSSMemory("app", "user", rec)
-		require.NotNil(t, got)
-		require.NotNil(t, got.Entry)
-		assert.Equal(t, "id-1", got.Entry.ID)
-		assert.Equal(t, "agent-1", got.AgentID)
-		assert.Equal(t, "run-1", got.RunID)
-		assert.Equal(t, "hash-1", got.Hash)
-		assert.Equal(t, "2026-08-01", got.ExpirationDate)
-		assert.Equal(t, "actor-1", got.ActorID)
-		assert.Equal(t, "user", got.Role)
-		assert.Equal(t, "alice", got.AttributedTo)
-		assert.Equal(t, map[string]any{"semantic": 0.8}, got.ScoreDetails)
-
-		rec.Metadata["custom"].(map[string]any)["value"] = "after"
-		rec.ScoreDetails["semantic"] = 0.1
-		assert.Equal(t, "before", got.Metadata["custom"].(map[string]any)["value"])
-		assert.Equal(t, 0.8, got.ScoreDetails["semantic"])
-	})
-}
-
-func TestEntriesFromOSSMemories(t *testing.T) {
-	first := &memory.Entry{ID: "first"}
-	second := &memory.Entry{ID: "second"}
-	got := entriesFromOSSMemories([]*OSSMemory{
-		{Entry: first},
-		nil,
-		{},
-		{Entry: second},
-	})
-	assert.Equal(t, []*memory.Entry{first, second}, got)
-}
-
-func TestSortOSSMemories_PreservesProviderFields(t *testing.T) {
-	memories := []*OSSMemory{
-		{Entry: &memory.Entry{ID: "low", Score: 0.2}, AgentID: "low-agent"},
-		{Entry: &memory.Entry{ID: "high", Score: 0.9}, AgentID: "high-agent"},
-	}
-	sortOSSMemories(memories, memory.SearchOptions{})
-	require.Len(t, memories, 2)
-	assert.Equal(t, "high", memories[0].Entry.ID)
-	assert.Equal(t, "high-agent", memories[0].AgentID)
-	assert.Equal(t, "low", memories[1].Entry.ID)
-	assert.Equal(t, "low-agent", memories[1].AgentID)
 }
 
 // --- readTopicsFromMetadata ---
