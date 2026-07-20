@@ -10,11 +10,11 @@ package replaytest
 
 import (
 	"encoding/json"
-	"time"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // Step type constants (used in JSON scenario files).
