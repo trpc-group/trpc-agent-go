@@ -12,8 +12,10 @@
 package input
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,10 +25,14 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/review"
 )
 
+const defaultMaxInputBytes int64 = 1 << 20
+
 // Config 保存输入加载配置。
 type Config struct {
 	// FixturesRoot 是受控 fixture 目录。
 	FixturesRoot string
+	// MaxInputBytes limits loaded or generated diff input.
+	MaxInputBytes int64
 }
 
 // Request 描述一次审查输入来源。
@@ -47,25 +53,26 @@ type Request struct {
 
 // Read 读取或生成 unified diff 输入。
 func Read(cfg Config, req Request) ([]byte, string, error) {
+	maxBytes := normalizeMaxInputBytes(cfg.MaxInputBytes)
 	if req.DiffFile != "" {
-		b, err := os.ReadFile(req.DiffFile)
+		b, err := readFileWithLimit(req.DiffFile, maxBytes, "diff file")
 		return b, req.DiffFile, err
 	}
 	if req.FileList != "" {
-		b, err := diffFromFileList(req.FileList, req.RepoPath)
+		b, err := diffFromFileList(req.FileList, req.RepoPath, maxBytes)
 		return b, req.FileList, err
 	}
 	if req.Fixture != "" {
-		return readFixtureInput(cfg.FixturesRoot, req.Fixture)
+		return readFixtureInput(cfg.FixturesRoot, req.Fixture, maxBytes)
 	}
 	if req.RepoPath != "" {
-		b, err := diffFromRepo(req.RepoPath, req.BaseRef, req.HeadRef)
+		b, err := diffFromRepo(req.RepoPath, req.BaseRef, req.HeadRef, maxBytes)
 		return b, req.RepoPath, err
 	}
 	return nil, "", errors.New("diff file, file list, repo path, or fixture is required")
 }
 
-func readFixtureInput(root string, name string) ([]byte, string, error) {
+func readFixtureInput(root string, name string, maxBytes int64) ([]byte, string, error) {
 	if strings.TrimSpace(root) == "" {
 		return nil, "", errors.New("fixtures root is required")
 	}
@@ -74,21 +81,21 @@ func readFixtureInput(root string, name string) ([]byte, string, error) {
 		return nil, "", fmt.Errorf("invalid fixture name %q", name)
 	}
 	path := filepath.Join(root, cleanName)
-	b, err := os.ReadFile(path)
+	b, err := readFileWithLimit(path, maxBytes, "fixture")
 	return b, path, err
 }
 
-func diffFromRepo(repoPath string, baseRef string, headRef string) ([]byte, error) {
+func diffFromRepo(repoPath string, baseRef string, headRef string, maxBytes int64) ([]byte, error) {
 	if repoPath == "" {
 		return nil, errors.New("repo path is required")
 	}
 	if isGitWorktree(repoPath) {
 		if hasExplicitRefs(baseRef, headRef) {
-			return runGitDiff(gitDiffArgs(repoPath, baseRef, headRef))
+			return runGitDiff(gitDiffArgs(repoPath, baseRef, headRef), maxBytes)
 		}
-		return diffFromGitWorktree(repoPath)
+		return diffFromGitWorktree(repoPath, maxBytes)
 	}
-	return diffFromDirectory(repoPath)
+	return diffFromDirectory(repoPath, maxBytes)
 }
 
 func gitDiffArgs(repoPath string, baseRef string, headRef string) []string {
@@ -103,60 +110,86 @@ func hasExplicitRefs(baseRef string, headRef string) bool {
 	return strings.TrimSpace(baseRef) != "" && strings.TrimSpace(headRef) != ""
 }
 
-func diffFromGitWorktree(repoPath string) ([]byte, error) {
-	tracked, err := diffTrackedGitChanges(repoPath)
+func diffFromGitWorktree(repoPath string, maxBytes int64) ([]byte, error) {
+	b := newLimitedBuffer(maxBytes, "git worktree diff")
+
+	tracked, err := diffTrackedGitChanges(repoPath, b.Remaining())
 	if err != nil {
 		return nil, err
 	}
-	untracked, err := diffUntrackedGitFiles(repoPath)
+	if _, err := b.Write(tracked); err != nil {
+		return nil, err
+	}
+
+	untrackedLimit := b.Remaining()
+	if len(tracked) > 0 && !bytes.HasSuffix(tracked, []byte{'\n'}) && untrackedLimit > 0 {
+		untrackedLimit--
+	}
+	untracked, err := diffUntrackedGitFiles(repoPath, untrackedLimit)
 	if err != nil {
 		return nil, err
 	}
-	var b strings.Builder
-	b.Write(tracked)
-	if len(tracked) > 0 && len(untracked) > 0 && !strings.HasSuffix(b.String(), "\n") {
-		b.WriteByte('\n')
+	if len(tracked) > 0 && len(untracked) > 0 && !bytes.HasSuffix(tracked, []byte{'\n'}) {
+		if err := b.WriteByte('\n'); err != nil {
+			return nil, err
+		}
 	}
-	b.Write(untracked)
-	return []byte(b.String()), nil
+	if _, err := b.Write(untracked); err != nil {
+		return nil, err
+	}
+	return b.Bytes(), nil
 }
 
-func diffTrackedGitChanges(repoPath string) ([]byte, error) {
+func diffTrackedGitChanges(repoPath string, maxBytes int64) ([]byte, error) {
 	if gitHeadExists(repoPath) {
-		return runGitDiff([]string{"-C", repoPath, "diff", "--no-ext-diff", "--no-textconv", "--unified=3", "HEAD"})
+		return runGitDiff([]string{"-C", repoPath, "diff", "--no-ext-diff", "--no-textconv", "--unified=3", "HEAD"}, maxBytes)
 	}
-	staged, err := runGitDiff([]string{"-C", repoPath, "diff", "--cached", "--no-ext-diff", "--no-textconv", "--unified=3"})
+	b := newLimitedBuffer(maxBytes, "git tracked diff")
+	staged, err := runGitDiff([]string{"-C", repoPath, "diff", "--cached", "--no-ext-diff", "--no-textconv", "--unified=3"}, b.Remaining())
 	if err != nil {
 		return nil, err
 	}
-	unstaged, err := runGitDiff([]string{"-C", repoPath, "diff", "--no-ext-diff", "--no-textconv", "--unified=3"})
+	if _, err := b.Write(staged); err != nil {
+		return nil, err
+	}
+	unstagedLimit := b.Remaining()
+	if len(staged) > 0 && !bytes.HasSuffix(staged, []byte{'\n'}) && unstagedLimit > 0 {
+		unstagedLimit--
+	}
+	unstaged, err := runGitDiff([]string{"-C", repoPath, "diff", "--no-ext-diff", "--no-textconv", "--unified=3"}, unstagedLimit)
 	if err != nil {
 		return nil, err
 	}
-	var b strings.Builder
-	b.Write(staged)
-	if len(staged) > 0 && len(unstaged) > 0 && !strings.HasSuffix(b.String(), "\n") {
-		b.WriteByte('\n')
+	if len(staged) > 0 && len(unstaged) > 0 && !bytes.HasSuffix(staged, []byte{'\n'}) {
+		if err := b.WriteByte('\n'); err != nil {
+			return nil, err
+		}
 	}
-	b.Write(unstaged)
-	return []byte(b.String()), nil
+	if _, err := b.Write(unstaged); err != nil {
+		return nil, err
+	}
+	return b.Bytes(), nil
 }
 
-func diffUntrackedGitFiles(repoPath string) ([]byte, error) {
-	repoRoot, err := gitRepoRoot(repoPath)
+func diffUntrackedGitFiles(repoPath string, maxBytes int64) ([]byte, error) {
+	_, repoPrefix, err := gitRepoContext(repoPath, maxBytes)
 	if err != nil {
 		return nil, err
 	}
-	out, err := exec.Command("git", "-C", repoPath, "ls-files", "--others", "--exclude-standard", "-z").CombinedOutput()
+	out, err := runGitCommand(
+		[]string{"-C", repoPath, "ls-files", "--others", "--exclude-standard", "-z"},
+		maxBytes,
+		"git ls-files output",
+	)
 	if err != nil {
-		return nil, fmt.Errorf("git ls-files: %w: %s", err, string(out))
+		return nil, fmt.Errorf("git ls-files: %w", err)
 	}
-	var b strings.Builder
+	b := newLimitedBuffer(maxBytes, "untracked diff")
 	for _, name := range strings.Split(string(out), "\x00") {
 		if name == "" {
 			continue
 		}
-		path := filepath.Join(repoRoot, filepath.FromSlash(name))
+		path := filepath.Join(repoPath, filepath.FromSlash(name))
 		info, err := os.Lstat(path)
 		if err != nil {
 			return nil, fmt.Errorf("stat untracked file %q: %w", name, err)
@@ -164,32 +197,38 @@ func diffUntrackedGitFiles(repoPath string) ([]byte, error) {
 		if !info.Mode().IsRegular() {
 			return nil, fmt.Errorf("untracked file %q is not a regular file", name)
 		}
-		content, err := os.ReadFile(path)
+		content, err := readFileWithLimit(path, b.Remaining(), fmt.Sprintf("untracked file %q", name))
 		if err != nil {
 			return nil, fmt.Errorf("read untracked file %q: %w", name, err)
 		}
-		diffForNewFile(&b, name, content)
+		display := filepath.ToSlash(filepath.Join(repoPrefix, filepath.FromSlash(name)))
+		if err := diffForNewFile(b, display, content); err != nil {
+			return nil, err
+		}
 	}
-	return []byte(b.String()), nil
+	return b.Bytes(), nil
 }
 
 func gitHeadExists(repoPath string) bool {
 	return exec.Command("git", "-C", repoPath, "rev-parse", "--verify", "HEAD").Run() == nil
 }
 
-func gitRepoRoot(repoPath string) (string, error) {
-	out, err := exec.Command("git", "-C", repoPath, "rev-parse", "--show-toplevel").CombinedOutput()
+func gitRepoContext(repoPath string, maxBytes int64) (string, string, error) {
+	root, err := runGitCommand([]string{"-C", repoPath, "rev-parse", "--show-toplevel"}, maxBytes, "git repo root")
 	if err != nil {
-		return "", fmt.Errorf("git rev-parse --show-toplevel: %w: %s", err, string(out))
+		return "", "", fmt.Errorf("git rev-parse --show-toplevel: %w", err)
 	}
-	return strings.TrimSpace(string(out)), nil
+	prefix, err := runGitCommand([]string{"-C", repoPath, "rev-parse", "--show-prefix"}, maxBytes, "git repo prefix")
+	if err != nil {
+		return "", "", fmt.Errorf("git rev-parse --show-prefix: %w", err)
+	}
+	return strings.TrimSpace(string(root)), strings.TrimSpace(string(prefix)), nil
 }
 
-func runGitDiff(args []string) ([]byte, error) {
-	cmd := exec.Command("git", args...)
-	out, err := cmd.CombinedOutput()
+func runGitDiff(args []string, maxBytes int64) ([]byte, error) {
+	out, err := runGitCommand(args, maxBytes, "git diff output")
 	if err != nil {
-		return nil, fmt.Errorf("git diff: %w: %s", err, string(out))
+		return nil, fmt.Errorf("git diff: %w", err)
 	}
 	return out, nil
 }
@@ -199,8 +238,8 @@ func isGitWorktree(repoPath string) bool {
 	return err == nil && strings.TrimSpace(string(out)) == "true"
 }
 
-func diffFromDirectory(repoPath string) ([]byte, error) {
-	var b strings.Builder
+func diffFromDirectory(repoPath string, maxBytes int64) ([]byte, error) {
+	b := newLimitedBuffer(maxBytes, "directory diff")
 	entries, err := os.ReadDir(repoPath)
 	if err != nil {
 		return nil, err
@@ -210,17 +249,19 @@ func diffFromDirectory(repoPath string) ([]byte, error) {
 			continue
 		}
 		path := filepath.Join(repoPath, entry.Name())
-		content, err := os.ReadFile(path)
+		content, err := readFileWithLimit(path, b.Remaining(), fmt.Sprintf("directory file %q", entry.Name()))
 		if err != nil {
 			continue
 		}
-		diffForNewFile(&b, entry.Name(), content)
+		if err := diffForNewFile(b, entry.Name(), content); err != nil {
+			return nil, err
+		}
 	}
-	return []byte(b.String()), nil
+	return b.Bytes(), nil
 }
 
-func diffFromFileList(listPath string, repoPath string) ([]byte, error) {
-	content, err := os.ReadFile(listPath)
+func diffFromFileList(listPath string, repoPath string, maxBytes int64) ([]byte, error) {
+	content, err := readFileWithLimit(listPath, maxBytes, "file list")
 	if err != nil {
 		return nil, err
 	}
@@ -230,7 +271,7 @@ func diffFromFileList(listPath string, repoPath string) ([]byte, error) {
 		baseDir = repoPath
 		restrictToBase = true
 	}
-	var b strings.Builder
+	b := newLimitedBuffer(maxBytes, "file list diff")
 	for _, raw := range strings.Split(string(content), "\n") {
 		name := strings.TrimSpace(raw)
 		if name == "" || strings.HasPrefix(name, "#") {
@@ -240,13 +281,15 @@ func diffFromFileList(listPath string, repoPath string) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		fileContent, err := os.ReadFile(path)
+		fileContent, err := readFileWithLimit(path, b.Remaining(), fmt.Sprintf("listed file %q", name))
 		if err != nil {
 			return nil, fmt.Errorf("read listed file %q: %w", name, err)
 		}
-		diffForNewFile(&b, display, fileContent)
+		if err := diffForNewFile(b, display, fileContent); err != nil {
+			return nil, err
+		}
 	}
-	return []byte(b.String()), nil
+	return b.Bytes(), nil
 }
 
 func resolveListedFile(name string, baseDir string, restrictToBase bool) (string, string, error) {
@@ -281,15 +324,24 @@ func resolveListedFile(name string, baseDir string, restrictToBase bool) (string
 	return resolvedPath, display, nil
 }
 
-func diffForNewFile(b *strings.Builder, name string, content []byte) {
+func diffForNewFile(b *limitedBuffer, name string, content []byte) error {
 	display := filepath.ToSlash(strings.TrimPrefix(filepath.Clean(name), string(filepath.Separator)))
 	lines := contentLines(content)
-	fmt.Fprintf(b, "diff --git a/%s b/%s\n", display, display)
-	fmt.Fprintf(b, "--- /dev/null\n+++ b/%s\n", display)
-	fmt.Fprintf(b, "@@ -0,0 +1,%d @@\n", len(lines))
-	for _, line := range lines {
-		fmt.Fprintf(b, "+%s\n", line)
+	if _, err := fmt.Fprintf(b, "diff --git a/%s b/%s\n", display, display); err != nil {
+		return err
 	}
+	if _, err := fmt.Fprintf(b, "--- /dev/null\n+++ b/%s\n", display); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(b, "@@ -0,0 +1,%d @@\n", len(lines)); err != nil {
+		return err
+	}
+	for _, line := range lines {
+		if _, err := fmt.Fprintf(b, "+%s\n", line); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func contentLines(content []byte) []string {
@@ -378,4 +430,118 @@ func sortedKeys(values map[string]struct{}) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+var errInputTooLarge = errors.New("input size limit exceeded")
+
+func normalizeMaxInputBytes(n int64) int64 {
+	if n <= 0 {
+		return defaultMaxInputBytes
+	}
+	return n
+}
+
+func readFileWithLimit(path string, maxBytes int64, label string) ([]byte, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	if info, err := file.Stat(); err == nil && info.Mode().IsRegular() && info.Size() > maxBytes {
+		return nil, sizeLimitError(label, maxBytes)
+	}
+
+	buf := newLimitedBuffer(maxBytes, label)
+	if _, err := io.Copy(buf, io.LimitReader(file, maxBytes+1)); err != nil && !errors.Is(err, errInputTooLarge) {
+		return nil, err
+	}
+	if err := buf.Err(); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func runGitCommand(args []string, maxBytes int64, label string) ([]byte, error) {
+	cmd := exec.Command("git", args...)
+	stdout := newLimitedBuffer(maxBytes, label)
+	stderr := newLimitedBuffer(maxBytes, label)
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	err := cmd.Run()
+	if outErr := stdout.Err(); outErr != nil {
+		return nil, outErr
+	}
+	if errErr := stderr.Err(); errErr != nil {
+		return nil, errErr
+	}
+	if err != nil {
+		message := strings.TrimSpace(stderr.String())
+		if message == "" {
+			message = strings.TrimSpace(stdout.String())
+		}
+		if message == "" {
+			return nil, err
+		}
+		return nil, fmt.Errorf("%w: %s", err, message)
+	}
+	return stdout.Bytes(), nil
+}
+
+type limitedBuffer struct {
+	buf     bytes.Buffer
+	max     int64
+	label   string
+	written int64
+	err     error
+}
+
+func newLimitedBuffer(maxBytes int64, label string) *limitedBuffer {
+	return &limitedBuffer{max: maxBytes, label: label}
+}
+
+func (b *limitedBuffer) Write(p []byte) (int, error) {
+	if b.err != nil {
+		return 0, b.err
+	}
+	if b.written+int64(len(p)) > b.max {
+		remaining := b.max - b.written
+		if remaining > 0 {
+			n, _ := b.buf.Write(p[:remaining])
+			b.written += int64(n)
+		}
+		b.err = sizeLimitError(b.label, b.max)
+		return 0, b.err
+	}
+	n, err := b.buf.Write(p)
+	b.written += int64(n)
+	return n, err
+}
+
+func (b *limitedBuffer) WriteByte(c byte) error {
+	_, err := b.Write([]byte{c})
+	return err
+}
+
+func (b *limitedBuffer) Bytes() []byte {
+	return b.buf.Bytes()
+}
+
+func (b *limitedBuffer) String() string {
+	return b.buf.String()
+}
+
+func (b *limitedBuffer) Remaining() int64 {
+	if b.max-b.written <= 0 {
+		return 0
+	}
+	return b.max - b.written
+}
+
+func (b *limitedBuffer) Err() error {
+	return b.err
+}
+
+func sizeLimitError(label string, maxBytes int64) error {
+	return fmt.Errorf("%w: %s exceeds %d bytes", errInputTooLarge, label, maxBytes)
 }

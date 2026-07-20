@@ -11,6 +11,7 @@
 package input
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -127,6 +128,21 @@ func TestReadFileListPreservesBlankLinesAndLineNumbers(t *testing.T) {
 	}
 }
 
+func TestReadDiffFileRejectsOversizedInput(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	diffPath := filepath.Join(root, "change.diff")
+	if err := os.WriteFile(diffPath, []byte("123456789"), 0o644); err != nil {
+		t.Fatalf("write diff: %v", err)
+	}
+
+	_, _, err := Read(Config{MaxInputBytes: 8}, Request{DiffFile: diffPath})
+	if !errors.Is(err, errInputTooLarge) {
+		t.Fatalf("Read error = %v, want input size limit rejection", err)
+	}
+}
+
 func TestReadRepoPathInGitWorktreeSubdirectoryUsesGitDiff(t *testing.T) {
 	repo := t.TempDir()
 	git(t, repo, "init")
@@ -149,6 +165,39 @@ func TestReadRepoPathInGitWorktreeSubdirectoryUsesGitDiff(t *testing.T) {
 	}
 	if len(diff) != 0 {
 		t.Fatalf("committed files in a Git worktree subdirectory must not be synthesized as new: %s", diff)
+	}
+}
+
+func TestReadRepoPathInGitWorktreeSubdirectoryUsesRepoRelativeUntrackedPaths(t *testing.T) {
+	repo := t.TempDir()
+	git(t, repo, "init")
+	git(t, repo, "config", "user.email", "reviewer@example.com")
+	git(t, repo, "config", "user.name", "Review Agent Test")
+
+	subdir := filepath.Join(repo, "service")
+	if err := os.MkdirAll(subdir, 0o755); err != nil {
+		t.Fatalf("make subdirectory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "tracked.go"), []byte("package root\n"), 0o644); err != nil {
+		t.Fatalf("write tracked source: %v", err)
+	}
+	git(t, repo, "add", ".")
+	git(t, repo, "commit", "-m", "initial")
+
+	if err := os.WriteFile(filepath.Join(subdir, "new.go"), []byte("package service\n"), 0o644); err != nil {
+		t.Fatalf("write untracked source: %v", err)
+	}
+
+	diff, _, err := Read(Config{}, Request{RepoPath: subdir})
+	if err != nil {
+		t.Fatalf("Read returned error: %v", err)
+	}
+	diffText := string(diff)
+	if !strings.Contains(diffText, "diff --git a/service/new.go b/service/new.go") {
+		t.Fatalf("generated diff missing repo-relative untracked path: %s", diffText)
+	}
+	if strings.Contains(diffText, "diff --git a/new.go b/new.go") {
+		t.Fatalf("generated diff must not drop the subdirectory prefix: %s", diffText)
 	}
 }
 
@@ -193,6 +242,31 @@ func TestReadRepoPathIncludesStagedUnstagedAndUntrackedChanges(t *testing.T) {
 		if !strings.Contains(diffText, want) {
 			t.Fatalf("generated diff missing %q: %s", want, diffText)
 		}
+	}
+}
+
+func TestReadRepoPathRejectsOversizedUntrackedTotal(t *testing.T) {
+	repo := t.TempDir()
+	git(t, repo, "init")
+	git(t, repo, "config", "user.email", "reviewer@example.com")
+	git(t, repo, "config", "user.name", "Review Agent Test")
+
+	if err := os.WriteFile(filepath.Join(repo, "tracked.go"), []byte("package sample\n"), 0o644); err != nil {
+		t.Fatalf("write tracked source: %v", err)
+	}
+	git(t, repo, "add", "tracked.go")
+	git(t, repo, "commit", "-m", "initial")
+
+	if err := os.WriteFile(filepath.Join(repo, "one.go"), []byte("package sample\n\nfunc one() {}\n"), 0o644); err != nil {
+		t.Fatalf("write first untracked source: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "two.go"), []byte("package sample\n\nfunc two() {}\n"), 0o644); err != nil {
+		t.Fatalf("write second untracked source: %v", err)
+	}
+
+	_, _, err := Read(Config{MaxInputBytes: 120}, Request{RepoPath: repo})
+	if !errors.Is(err, errInputTooLarge) {
+		t.Fatalf("Read error = %v, want input size limit rejection", err)
 	}
 }
 
