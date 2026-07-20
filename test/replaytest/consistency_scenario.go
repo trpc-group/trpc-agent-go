@@ -199,8 +199,22 @@ func (rc *ReplayCase) Validate() error {
 		return fmt.Errorf("steps must not be empty")
 	}
 	for i, step := range rc.Steps {
-		if !validStepTypes[step.Type] {
-			return fmt.Errorf("step %d: unknown type %q", i, step.Type)
+		if err := validateSteps(step, i); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateSteps recursively validates step types, including steps nested
+// inside Concurrent blocks.
+func validateSteps(step ReplayStep, index int) error {
+	if !validStepTypes[step.Type] {
+		return fmt.Errorf("step %d: unknown type %q", index, step.Type)
+	}
+	for i, nested := range step.Concurrent {
+		if err := validateSteps(nested, i); err != nil {
+			return err
 		}
 	}
 	return nil
