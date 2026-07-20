@@ -144,7 +144,7 @@ func (s *Service) ingestSession(
 }
 
 func resolveSessionIngestOptions(
-	defaults ingestOptions,
+	defaults ingestConfig,
 	options []session.IngestOption,
 ) ingestOptions {
 	var sessionOpts session.IngestOptions
@@ -154,11 +154,15 @@ func resolveSessionIngestOptions(
 		}
 		option(&sessionOpts)
 	}
-	resolved := defaults
-	resolved.metadata = cloneMetadata(sessionOpts.Metadata)
-	resolved.agentID = sessionOpts.AgentID
-	resolved.runID = sessionOpts.RunID
-	return resolved
+	return ingestOptions{
+		metadata:       cloneMetadata(sessionOpts.Metadata),
+		agentID:        sessionOpts.AgentID,
+		runID:          sessionOpts.RunID,
+		prompt:         defaults.prompt,
+		expirationDate: defaults.expirationDate,
+		infer:          defaults.infer,
+		memoryType:     defaults.memoryType,
+	}
 }
 
 func (s *Service) validateIngestOptions(opts ingestOptions) error {

@@ -138,3 +138,9 @@ func TestDefaultOptionsCloneIsValueCopy(t *testing.T) {
 	assert.Equal(t, "mutated", a.apiKey)
 	assert.Empty(t, b.apiKey, "clone should produce an independent copy")
 }
+
+func TestServiceOptionsRemainComparable(t *testing.T) {
+	if got := defaultOptions.clone(); got != defaultOptions {
+		t.Fatal("cloned service options differ from defaults")
+	}
+}

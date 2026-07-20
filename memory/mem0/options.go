@@ -36,6 +36,13 @@ type ingestOptions struct {
 	memoryType     string
 }
 
+type ingestConfig struct {
+	prompt         string
+	expirationDate string
+	infer          bool
+	memoryType     string
+}
+
 type apiMode int
 
 const (
@@ -59,7 +66,7 @@ type serviceOpts struct {
 
 	loadToolEnabled                      bool
 	includeUnscopedSelfHostedOSSMemories bool
-	ingestDefaults                       ingestOptions
+	ingestDefaults                       ingestConfig
 
 	asyncMemoryNum   int
 	memoryQueueSize  int
@@ -79,7 +86,7 @@ var defaultOptions = serviceOpts{
 	asyncMemoryNum:   defaultAsyncMemoryNum,
 	memoryQueueSize:  defaultMemoryQueueSize,
 	memoryJobTimeout: defaultMemoryJobTimeout,
-	ingestDefaults: ingestOptions{
+	ingestDefaults: ingestConfig{
 		infer: true,
 	},
 }

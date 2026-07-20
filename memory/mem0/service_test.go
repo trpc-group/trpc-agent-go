@@ -322,7 +322,7 @@ func TestIngestSession_ProceduralMemoryRequiresAgentBeforeWatermark(t *testing.T
 
 func TestResolveSessionIngestOptionsSnapshotsCallerData(t *testing.T) {
 	metadata := map[string]any{"nested": map[string]any{"value": "before"}}
-	defaults := ingestOptions{prompt: "extract deadlines", infer: false}
+	defaults := ingestConfig{prompt: "extract deadlines", infer: false}
 	opts := resolveSessionIngestOptions(defaults, []session.IngestOption{
 		session.WithIngestMetadata(metadata),
 		session.WithIngestAgentID("agent-1"),
