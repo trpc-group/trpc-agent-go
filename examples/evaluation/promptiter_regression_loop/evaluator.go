@@ -174,6 +174,11 @@ func scoreOutput(spec caseSpec, output string) (float64, bool) {
 	}
 
 	text := strings.ToLower(strings.TrimSpace(output))
+	for _, phrase := range spec.ForbiddenPhrases {
+		if strings.Contains(text, strings.ToLower(strings.TrimSpace(phrase))) {
+			return 0, false
+		}
+	}
 	if len(spec.ExpectedKeywords) == 0 {
 		return 0, false
 	}

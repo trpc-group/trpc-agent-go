@@ -87,6 +87,37 @@ func TestValidateLiveCallBudgetIncludesSymmetricRetries(t *testing.T) {
 	assert.NoError(t, validateLiveCallBudget(cfg, train, validation))
 }
 
+func TestValidateMetricsRejectsUnsupportedPolicyValues(t *testing.T) {
+	valid := metricsConfig{Metrics: []metricSpec{
+		{Name: "required_keywords", Threshold: 1, Kind: "deterministic"},
+		{Name: "hard_failure", Threshold: 1, Kind: "red_line"},
+		{Name: "pass_power_k", K: 3, Kind: "stability"},
+		{Name: "paired_bootstrap", Confidence: bootstrapConfidence, Kind: "regression"},
+	}}
+	require.NoError(t, validateMetrics(valid, 3))
+
+	tests := []struct {
+		name   string
+		metric string
+		mutate func(*metricSpec)
+	}{
+		{name: "threshold", metric: "required_keywords", mutate: func(metric *metricSpec) { metric.Threshold = 0.5 }},
+		{name: "confidence", metric: "paired_bootstrap", mutate: func(metric *metricSpec) { metric.Confidence = 0.99 }},
+		{name: "kind", metric: "hard_failure", mutate: func(metric *metricSpec) { metric.Kind = "decorative" }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			modified := metricsConfig{Metrics: append([]metricSpec(nil), valid.Metrics...)}
+			for i := range modified.Metrics {
+				if modified.Metrics[i].Name == test.metric {
+					test.mutate(&modified.Metrics[i])
+				}
+			}
+			assert.ErrorContains(t, validateMetrics(modified, 3), "policy is unsupported")
+		})
+	}
+}
+
 func TestValidateConfigRejectsUnsafeLiveBudgetValues(t *testing.T) {
 	cfg := pipelineConfig{
 		PromptFile:        "prompt",

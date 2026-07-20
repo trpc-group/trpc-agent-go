@@ -30,7 +30,7 @@ go run ./promptiter_regression_loop -config ./promptiter_regression_loop/data/co
 Remove-Item Env:DEEPSEEK_API_KEY
 ```
 
-The key is never written to the configuration or reports. Live execution defaults to `deepseek-v4-flash`, applies bounded retries and timeouts, and stops at the configured call, token, or CNY budget. Fake mode uses zero model calls.
+The key is never written to the configuration or reports. Live execution defaults to `deepseek-v4-flash`, applies bounded retries and timeouts, and stops at the configured call, token, or CNY budget. The underlying OpenAI-compatible SDK retry layer is disabled so every HTTP attempt is owned, counted, and budgeted by this example. Fake mode uses zero model calls.
 
 Model errors do not discard the audit trail: the affected case is recorded as a failed run and the final candidate is rejected. Authentication failures are not retried. This makes a failed live check inspectable without weakening the gate.
 
@@ -43,7 +43,9 @@ Outputs are atomically written to:
 
 PromptIter only receives the training eval set. The deterministic PromptIter collaborators produce auditable gradients, aggregation, and a patch against the exported instruction surface; the normal PromptIter engine performs its internal selection using that same training data, alongside training loss extraction, patch application, and its built-in score check. The candidate is then moved into a separate regression harness because the engine's built-in acceptance policy intentionally covers only score gain. The independent validation set is never passed to PromptIter and is reserved exclusively for the outer gate.
 
-The outer harness runs every validation case `gate.passK` times (three by default) and compares the baseline and candidate case by case. It classifies failures as model, prompt, agent/tool, environment, format, knowledge, or unknown using explicit signals before conservative text inference. Deterministic scorers validate required facts and JSON syntax without an LLM judge. Acceptance requires the configured mean-score gain, no new hard failure, no critical-case regression, non-regressing Pass^k stability, a non-negative paired-bootstrap 90% confidence-interval lower bound, and compliance with call, token, and CNY budgets. A single red-line failure vetoes the candidate even if its average score improves.
+The outer harness runs every validation case `gate.passK` times (three by default) and compares the baseline and candidate case by case. It classifies failures as model, prompt, agent/tool, environment, format, knowledge, or unknown using explicit signals before conservative text inference. Deterministic scorers validate required facts, explicit forbidden or negated phrases, and JSON syntax without an LLM judge. Acceptance requires the configured mean-score gain, no new hard failure, no critical-case regression, non-regressing Pass^k stability, a non-negative paired-bootstrap 90% confidence-interval lower bound, and compliance with call, token, and CNY budgets. A single red-line failure vetoes the candidate even if its average score improves.
+
+`data/metrics.json` declares the fixed policies supported by this example. Loading fails if a metric name, kind, threshold, Pass^k value, or bootstrap confidence differs from those supported settings, so a decorative configuration value can never disagree with the executed gate.
 
 Training scores never participate in the final gate, which prevents a PromptIter patch from being accepted merely because it memorizes optimization examples. The committed fixtures cover routing, tool arguments, structured output, missing knowledge, dependency timeouts, and secret disclosure. A fixed seed makes bootstrap decisions and the report fingerprint reproducible; elapsed time is recorded separately and excluded from the fingerprint.
 
@@ -65,4 +67,4 @@ go test ./promptiter_regression_loop
 go vet ./promptiter_regression_loop
 ```
 
-The tests cover attribution precedence, paired deltas, Pass^k, bootstrap reproducibility, hard-failure and critical-case vetoes, overfitting rejection, resource budgets, retry accounting, atomic report replacement, and end-to-end deterministic replay.
+The tests cover attribution precedence, negated-fact counterexamples, paired deltas, Pass^k, bootstrap reproducibility, hard-failure and critical-case vetoes, overfitting rejection, HTTP retry accounting, resource budgets, atomic report replacement, and end-to-end deterministic replay.

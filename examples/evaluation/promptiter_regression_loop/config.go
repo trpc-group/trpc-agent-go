@@ -105,6 +105,7 @@ type caseSpec struct {
 	RequiredDirective  string           `json:"requiredDirective"`
 	ForbiddenDirective string           `json:"forbiddenDirective,omitempty"`
 	ExpectedKeywords   []string         `json:"expectedKeywords"`
+	ForbiddenPhrases   []string         `json:"forbiddenPhrases,omitempty"`
 	Conversation       []invocationSpec `json:"conversation"`
 }
 
@@ -298,22 +299,32 @@ func validateLiveCallBudget(cfg pipelineConfig, train, validation evalSetFile) e
 }
 
 func validateMetrics(metrics metricsConfig, passK int) error {
-	required := map[string]bool{
-		"required_keywords": false,
-		"hard_failure":      false,
-		"pass_power_k":      false,
-		"paired_bootstrap":  false,
+	required := map[string]metricSpec{
+		"required_keywords": {Name: "required_keywords", Threshold: 1, Kind: "deterministic"},
+		"hard_failure":      {Name: "hard_failure", Threshold: 1, Kind: "red_line"},
+		"pass_power_k":      {Name: "pass_power_k", K: passK, Kind: "stability"},
+		"paired_bootstrap":  {Name: "paired_bootstrap", Confidence: bootstrapConfidence, Kind: "regression"},
 	}
+	seen := make(map[string]struct{}, len(required))
 	for _, metric := range metrics.Metrics {
-		if _, ok := required[metric.Name]; ok {
-			required[metric.Name] = true
+		expected, ok := required[metric.Name]
+		if !ok {
+			return fmt.Errorf("unsupported metric %q", metric.Name)
 		}
-		if metric.Name == "pass_power_k" && metric.K != passK {
-			return fmt.Errorf("metric pass_power_k uses k=%d, want %d", metric.K, passK)
+		if _, duplicate := seen[metric.Name]; duplicate {
+			return fmt.Errorf("duplicate metric %q", metric.Name)
+		}
+		seen[metric.Name] = struct{}{}
+		if metric != expected {
+			return fmt.Errorf(
+				"metric %q policy is unsupported: got kind=%q threshold=%g k=%d confidence=%g; want kind=%q threshold=%g k=%d confidence=%g",
+				metric.Name, metric.Kind, metric.Threshold, metric.K, metric.Confidence,
+				expected.Kind, expected.Threshold, expected.K, expected.Confidence,
+			)
 		}
 	}
-	for name, present := range required {
-		if !present {
+	for name := range required {
+		if _, present := seen[name]; !present {
 			return fmt.Errorf("required metric %q is missing", name)
 		}
 	}
@@ -375,6 +386,11 @@ func loadEvalSet(path string) (evalSetFile, error) {
 	for _, c := range set.EvalCases {
 		if strings.TrimSpace(c.EvalID) == "" || len(c.Conversation) != 1 {
 			return evalSetFile{}, fmt.Errorf("eval case must have an ID and exactly one invocation")
+		}
+		for _, phrase := range c.ForbiddenPhrases {
+			if strings.TrimSpace(phrase) == "" {
+				return evalSetFile{}, fmt.Errorf("eval case %q has an empty forbidden phrase", c.EvalID)
+			}
 		}
 		if _, ok := seen[c.EvalID]; ok {
 			return evalSetFile{}, fmt.Errorf("duplicate eval case ID %q", c.EvalID)

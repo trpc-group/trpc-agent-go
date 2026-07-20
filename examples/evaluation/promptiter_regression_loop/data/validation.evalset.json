@@ -7,6 +7,7 @@
       "category": "route",
       "requiredDirective": "ROUTE_EXPLICITLY",
       "expectedKeywords": ["support", "billing"],
+      "forbiddenPhrases": ["billing support was not selected"],
       "conversation": [{
         "invocationId": "validation_route_support-1",
         "userContent": {"role": "user", "content": "Route my duplicate charge question to billing support."},
@@ -18,6 +19,7 @@
       "category": "tool_argument",
       "requiredDirective": "VALIDATE_TOOL_ARGUMENTS",
       "expectedKeywords": ["count", "integer"],
+      "forbiddenPhrases": ["count is not an integer"],
       "conversation": [{
         "invocationId": "validation_tool_types-1",
         "userContent": {"role": "user", "content": "Validate that the tool argument count is an integer."},

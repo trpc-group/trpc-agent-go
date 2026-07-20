@@ -7,6 +7,7 @@
       "category": "route",
       "requiredDirective": "ROUTE_EXPLICITLY",
       "expectedKeywords": ["weather", "shanghai"],
+      "forbiddenPhrases": ["weather route was not selected"],
       "conversation": [{
         "invocationId": "train_route_weather-1",
         "userContent": {"role": "user", "content": "Route this request and answer: what is the weather in Shanghai?"},
@@ -18,6 +19,7 @@
       "category": "tool_argument",
       "requiredDirective": "VALIDATE_TOOL_ARGUMENTS",
       "expectedKeywords": ["city", "date"],
+      "forbiddenPhrases": ["city and date are not required"],
       "conversation": [{
         "invocationId": "train_tool_arguments-1",
         "userContent": {"role": "user", "content": "Before calling the booking tool, name its required arguments: city and date."},

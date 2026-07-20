@@ -11,6 +11,9 @@ package main
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -104,4 +107,42 @@ func TestLiveGeneratorReservesBudgetBeforeCalling(t *testing.T) {
 	_, err := generator.Generate(context.Background(), "prompt", "input")
 	assert.ErrorContains(t, err, "cannot reserve")
 	assert.Zero(t, client.calls)
+}
+
+func TestLiveGeneratorOwnsEveryHTTPRetry(t *testing.T) {
+	tests := []struct {
+		name       string
+		maxRetries int
+		wantCalls  int32
+	}{
+		{name: "zero retries", maxRetries: 0, wantCalls: 1},
+		{name: "two retries", maxRetries: 2, wantCalls: 3},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var calls atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				calls.Add(1)
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = w.Write([]byte(`{"error":{"message":"temporary failure","type":"server_error"}}`))
+			}))
+			defer server.Close()
+
+			generator, err := newLiveGenerator(liveConfig{
+				Model:               "test-model",
+				BaseURL:             server.URL,
+				APIKeyEnv:           "TEST_API_KEY",
+				TimeoutSeconds:      2,
+				MaxRetries:          test.maxRetries,
+				InputCNYPerMillion:  1,
+				OutputCNYPerMillion: 2,
+			}, gateFileConfig{MaxCalls: 3, MaxTokens: 10_000, MaxCostCNY: 1}, "test-key")
+			require.NoError(t, err)
+
+			_, err = generator.Generate(context.Background(), "prompt", "input")
+			require.Error(t, err)
+			assert.Equal(t, test.wantCalls, calls.Load())
+		})
+	}
 }

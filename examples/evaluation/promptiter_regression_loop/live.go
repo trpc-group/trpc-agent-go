@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	openaiopt "github.com/openai/openai-go/option"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 )
@@ -56,6 +57,7 @@ func newLiveGenerator(cfg liveConfig, gate gateFileConfig, apiKey string) (*live
 	options := []openai.Option{
 		openai.WithAPIKey(apiKey),
 		openai.WithVariant(openai.VariantDeepSeek),
+		openai.WithOpenAIOptions(openaiopt.WithMaxRetries(0)),
 	}
 	if strings.TrimSpace(cfg.BaseURL) != "" {
 		options = append(options, openai.WithBaseURL(strings.TrimSpace(cfg.BaseURL)))
