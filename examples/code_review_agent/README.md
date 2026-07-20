@@ -3,7 +3,10 @@
 面向 Go 项目的可运行代码评审示例。它把 unified diff、文件列表或 Git
 工作区变更统一为 diff，通过 `code-review` Skill 运行确定性规则；可选在
 container 沙箱中执行 `go test`、`go vet`，并把 findings、权限决策、沙箱运行、
-监控和最终报告写入 SQLite。
+监控和最终报告写入 SQLite。容器保持 `NetworkMode=none`，因此 Go module / workspace
+仓库必须提前 vendor 依赖（`vendor/modules.txt`）；否则沙箱会返回明确的
+`unsupported` 能力审计，而不是尝试联网下载。`staticcheck` 仅支持
+`local-fallback` runtime，container 启动时会直接拒绝该组合。
 
 ## Run
 
@@ -19,6 +22,10 @@ go run ./cmd/review-agent --diff-file testdata/fixtures/secret.diff \
 go run ./cmd/review-agent --repo-path /path/to/go-repo \
   --sandbox --runtime container --output-dir /tmp/cr-report
 ```
+
+如果目标仓库依赖 Go modules，请先在仓库根目录准备 `vendor/modules.txt`
+（例如由 `go mod vendor` 或 `go work vendor` 生成），否则 container runtime
+只会记录 `unsupported` 的 Go 检查能力状态。
 
 `review` 是正式模式；`--sandbox` 和 `--model-enabled` 可独立组合。默认 fake
 model 不联网，真实 Provider 必须显式配置。`dry-run` 只验证 Skill 加载与审计链路。

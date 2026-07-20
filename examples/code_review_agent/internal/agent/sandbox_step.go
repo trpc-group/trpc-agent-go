@@ -41,6 +41,13 @@ func sandboxUnavailableAudit(taskID string) (review.Result, storage.DecisionReco
 
 // runGoSandboxChecks 在配置的 runtime 中执行 Go 工程检查。
 func (a *Agent) runGoSandboxChecks(ctx context.Context, taskID string, repoPath string) ([]storage.DecisionRecord, []storage.SandboxRunRecord) {
+	if a.cfg.Runtime == RuntimeContainer {
+		reason, err := execution.ContainerGoChecksUnsupportedReason(repoPath)
+		if err == nil && reason != "" {
+			decision, run := sandboxCapabilityUnsupportedAudit(taskID, a.cfg.Runtime, reason, a.cfg.Timeout, a.cfg.OutputLimitBytes)
+			return []storage.DecisionRecord{decision}, []storage.SandboxRunRecord{run}
+		}
+	}
 	commands := approval.AllowedReviewCommands(a.cfg.EnableStaticcheck)
 	decisions := make([]storage.DecisionRecord, 0, len(commands))
 	runs := make([]storage.SandboxRunRecord, 0, len(commands))
@@ -157,4 +164,28 @@ func (a *Agent) runGoSandboxCommand(ctx context.Context, taskID string, repoPath
 	}
 	run.Status = "ok"
 	return decisions, run
+}
+
+func sandboxCapabilityUnsupportedAudit(taskID string, runtime string, reason string, timeout time.Duration, outputLimit int) (storage.DecisionRecord, storage.SandboxRunRecord) {
+	now := time.Now()
+	decision := storage.DecisionRecord{
+		TaskID:  taskID,
+		Command: "go checks",
+		Action:  "unsupported",
+		Reason:  reason,
+		At:      now,
+	}
+	run := storage.SandboxRunRecord{
+		TaskID:           taskID,
+		Command:          "go checks",
+		Runtime:          runtime,
+		Status:           "unsupported",
+		TimeoutMS:        timeout.Milliseconds(),
+		OutputLimitBytes: outputLimit,
+		EnvWhitelist:     sandboxEnvWhitelist,
+		Output:           reason,
+		At:               now,
+		FinishedAt:       now,
+	}
+	return decision, run
 }

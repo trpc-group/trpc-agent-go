@@ -145,6 +145,78 @@ func TestContainerSandboxEnvUsesContainerLocalPaths(t *testing.T) {
 	}
 }
 
+func TestContainerGoChecksUnsupportedReason(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		repoSetup func(t *testing.T, repo string)
+		want      string
+	}{
+		{
+			name: "non module repo stays supported",
+			repoSetup: func(t *testing.T, repo string) {
+				t.Helper()
+				if err := os.WriteFile(filepath.Join(repo, "main.go"), []byte("package main\n"), 0o644); err != nil {
+					t.Fatalf("write main.go: %v", err)
+				}
+			},
+		},
+		{
+			name: "go.mod without vendor is unsupported",
+			repoSetup: func(t *testing.T, repo string) {
+				t.Helper()
+				if err := os.WriteFile(filepath.Join(repo, "go.mod"), []byte("module example.com/plain\n\ngo 1.25.0\n"), 0o644); err != nil {
+					t.Fatalf("write go.mod: %v", err)
+				}
+			},
+			want: "vendor/modules.txt",
+		},
+		{
+			name: "go.work without vendor is unsupported",
+			repoSetup: func(t *testing.T, repo string) {
+				t.Helper()
+				if err := os.WriteFile(filepath.Join(repo, "go.work"), []byte("go 1.25.0\n"), 0o644); err != nil {
+					t.Fatalf("write go.work: %v", err)
+				}
+			},
+			want: "vendor/modules.txt",
+		},
+		{
+			name: "vendored module repo stays supported",
+			repoSetup: func(t *testing.T, repo string) {
+				t.Helper()
+				if err := os.WriteFile(filepath.Join(repo, "go.mod"), []byte("module example.com/vendored\n\ngo 1.25.0\n"), 0o644); err != nil {
+					t.Fatalf("write go.mod: %v", err)
+				}
+				if err := os.MkdirAll(filepath.Join(repo, "vendor"), 0o755); err != nil {
+					t.Fatalf("mkdir vendor: %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(repo, "vendor", "modules.txt"), []byte("# example.com/vendored\n"), 0o644); err != nil {
+					t.Fatalf("write vendor/modules.txt: %v", err)
+				}
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := t.TempDir()
+			tc.repoSetup(t, repo)
+			reason, err := ContainerGoChecksUnsupportedReason(repo)
+			if err != nil {
+				t.Fatalf("ContainerGoChecksUnsupportedReason returned error: %v", err)
+			}
+			if tc.want == "" && reason != "" {
+				t.Fatalf("reason = %q, want supported repo", reason)
+			}
+			if tc.want != "" && !strings.Contains(reason, tc.want) {
+				t.Fatalf("reason = %q, want containing %q", reason, tc.want)
+			}
+		})
+	}
+}
+
 func TestFakeExecutionRuntimeIsTestOnlyAndSeparateFromLocalFallback(t *testing.T) {
 	t.Parallel()
 
@@ -200,5 +272,84 @@ func TestCleanupExecutorRemovesLocalFallbackWorkDirExactlyOnce(t *testing.T) {
 	}
 	if err := CleanupExecutor(exec); err != nil {
 		t.Fatalf("second CleanupExecutor returned error: %v", err)
+	}
+}
+
+type closeSpyExecutor struct {
+	execCalls  int
+	closeCalls int
+}
+
+func (e *closeSpyExecutor) ExecuteCode(
+	context.Context,
+	codeexecutor.CodeExecutionInput,
+) (codeexecutor.CodeExecutionResult, error) {
+	e.execCalls++
+	return codeexecutor.CodeExecutionResult{Output: "ok"}, nil
+}
+
+func (*closeSpyExecutor) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
+	return codeexecutor.CodeBlockDelimiter{Start: "~~~", End: "~~~"}
+}
+
+func (e *closeSpyExecutor) Close() error {
+	e.closeCalls++
+	return nil
+}
+
+func TestLazyExecutorDefersFactoryUntilUseAndUnusedClose(t *testing.T) {
+	t.Parallel()
+
+	factoryCalls := 0
+	exec := NewLazyExecutor(Config{Runtime: RuntimeContainer}, func(Config) (codeexecutor.CodeExecutor, error) {
+		factoryCalls++
+		return &closeSpyExecutor{}, nil
+	})
+
+	if got := exec.CodeBlockDelimiter(); got != defaultCodeBlockDelimiter {
+		t.Fatalf("default delimiter = %+v, want %+v", got, defaultCodeBlockDelimiter)
+	}
+	if factoryCalls != 0 {
+		t.Fatalf("factory calls after construction = %d, want 0", factoryCalls)
+	}
+	if err := exec.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+	if factoryCalls != 0 {
+		t.Fatalf("factory calls after unused Close = %d, want 0", factoryCalls)
+	}
+}
+
+func TestLazyExecutorInitializesAndClosesUnderlyingExecutorOnce(t *testing.T) {
+	t.Parallel()
+
+	spy := &closeSpyExecutor{}
+	factoryCalls := 0
+	exec := NewLazyExecutor(Config{Runtime: RuntimeContainer}, func(Config) (codeexecutor.CodeExecutor, error) {
+		factoryCalls++
+		return spy, nil
+	})
+
+	result, err := exec.ExecuteCode(context.Background(), codeexecutor.CodeExecutionInput{})
+	if err != nil {
+		t.Fatalf("ExecuteCode returned error: %v", err)
+	}
+	if result.Output != "ok" {
+		t.Fatalf("ExecuteCode output = %q, want ok", result.Output)
+	}
+	if factoryCalls != 1 || spy.execCalls != 1 {
+		t.Fatalf("factory/execution calls = %d/%d, want 1/1", factoryCalls, spy.execCalls)
+	}
+	if got := exec.CodeBlockDelimiter(); got.Start != "~~~" || got.End != "~~~" {
+		t.Fatalf("initialized delimiter = %+v, want spy delimiter", got)
+	}
+	if err := exec.Close(); err != nil {
+		t.Fatalf("first Close returned error: %v", err)
+	}
+	if err := exec.Close(); err != nil {
+		t.Fatalf("second Close returned error: %v", err)
+	}
+	if spy.closeCalls != 1 {
+		t.Fatalf("underlying close calls = %d, want 1", spy.closeCalls)
 	}
 }

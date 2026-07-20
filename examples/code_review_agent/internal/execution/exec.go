@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -43,6 +44,9 @@ const (
 	GoSandboxBinary        = "/usr/local/go/bin/go"
 	GoSandboxPath          = "/go/bin:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin"
 	SandboxEnvWhitelist    = "PATH,HOME,TMPDIR,GOCACHE"
+	goModFileName          = "go.mod"
+	goWorkFileName         = "go.work"
+	vendorModulesManifest  = "vendor/modules.txt"
 )
 
 // Config 保存 runtime 相关执行器配置。
@@ -204,6 +208,22 @@ func SandboxEnv(runtime string) map[string]string {
 	}
 }
 
+// ContainerGoChecksUnsupportedReason returns the capability boundary for network-isolated container Go checks.
+func ContainerGoChecksUnsupportedReason(repoPath string) (string, error) {
+	moduleRepo, err := hasAnyRepoMarker(repoPath, goModFileName, goWorkFileName)
+	if err != nil || !moduleRepo {
+		return "", err
+	}
+	vendored, err := hasRepoMarker(repoPath, vendorModulesManifest)
+	if err != nil {
+		return "", err
+	}
+	if vendored {
+		return "", nil
+	}
+	return "container runtime keeps network access disabled; Go module repositories must vendor dependencies (vendor/modules.txt) before running go test/go vet", nil
+}
+
 // AllowedSandboxEnvKey 判断环境变量名是否允许进入沙箱命令规格。
 func AllowedSandboxEnvKey(key string) bool {
 	switch strings.TrimSpace(key) {
@@ -273,4 +293,28 @@ func SandboxCode(runtime string, hostRepoPath string, command string) string {
 // ShellQuote 返回 POSIX 单引号转义后的值。
 func ShellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
+}
+
+func hasAnyRepoMarker(repoPath string, names ...string) (bool, error) {
+	for _, name := range names {
+		ok, err := hasRepoMarker(repoPath, name)
+		if err != nil {
+			return false, err
+		}
+		if ok {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func hasRepoMarker(repoPath string, name string) (bool, error) {
+	_, err := os.Stat(filepath.Join(strings.TrimSpace(repoPath), filepath.FromSlash(name)))
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	return false, err
 }
