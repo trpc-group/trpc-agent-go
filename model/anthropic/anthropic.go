@@ -28,6 +28,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/anthropics/anthropic-sdk-go/packages/param"
 	"github.com/anthropics/anthropic-sdk-go/shared/constant"
+	"trpc.group/trpc-go/trpc-agent-go/internal/jsonrepair"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolorder"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -76,6 +77,11 @@ type Model struct {
 	cacheTools        bool
 	cacheMessages     bool
 	showToolCallDelta bool
+
+	// Stream retry configuration. See WithStreamRetry for semantics.
+	streamMaxRetries       int
+	streamRetryBaseBackoff time.Duration
+	streamRetryMaxBackoff  time.Duration
 }
 
 // New creates a new Anthropic model adapter.
@@ -126,6 +132,9 @@ func New(name string, opts ...Option) *Model {
 		cacheTools:                 o.cacheTools,
 		cacheMessages:              o.cacheMessages,
 		showToolCallDelta:          o.showToolCallDelta,
+		streamMaxRetries:           o.streamMaxRetries,
+		streamRetryBaseBackoff:     o.streamRetryBaseBackoff,
+		streamRetryMaxBackoff:      o.streamRetryMaxBackoff,
 	}
 }
 
@@ -580,33 +589,126 @@ func (m *Model) handleNonStreamingResponse(
 	}
 }
 
-// handleStreamingResponse sends a streaming request to the Anthropic API and emits partial deltas
-// followed by a final response.
+// handleStreamingResponse sends a streaming request to the Anthropic API and
+// emits partial deltas followed by a final response.
+//
+// Transport-level interruptions that occur BEFORE the first chunk is emitted
+// to responseChan are retried up to m.streamMaxRetries times using
+// exponential backoff. This is load-bearing for long-running workflows
+// because go-retryablehttp at the transport layer cannot retry mid-stream
+// connection resets (the HTTP response has already returned 200 OK by the
+// time the stream dies).
+//
+// Once any partial content has been delivered downstream we intentionally do
+// NOT retry; the caller is responsible for restarting the request from a
+// known state to avoid duplicate or interleaved chunks.
 func (m *Model) handleStreamingResponse(
 	ctx context.Context,
 	chatRequest anthropic.MessageNewParams,
 	responseChan chan<- *model.Response,
 ) {
-	// Issue streaming request.
+	maxRetries := m.effectiveStreamMaxRetries()
+
+	attempt := 0
+	for {
+		finalResponse, callbackAcc, streamErr, sawContent := m.runStreamingAttempt(ctx, chatRequest, responseChan)
+		if streamErr == nil {
+			m.runChatStreamCompleteCallback(ctx, &chatRequest, callbackAcc, nil)
+			if finalResponse != nil {
+				select {
+				case responseChan <- finalResponse:
+				case <-ctx.Done():
+				}
+			}
+			return
+		}
+		// Don't retry context cancellation — the run is being torn down.
+		if errors.Is(streamErr, context.Canceled) ||
+			errors.Is(streamErr, context.DeadlineExceeded) {
+			m.runChatStreamCompleteCallback(ctx, &chatRequest, nil, streamErr)
+			m.sendErrorResponse(ctx, responseChan, model.ErrorTypeStreamError, streamErr)
+			return
+		}
+		// Don't retry after the first chunk reaches the caller; retrying
+		// would corrupt the downstream stream by re-emitting from scratch.
+		if sawContent {
+			m.runChatStreamCompleteCallback(ctx, &chatRequest, nil, streamErr)
+			m.sendErrorResponse(ctx, responseChan, model.ErrorTypeStreamError, streamErr)
+			return
+		}
+		// Only retry transport-level errors that look transient. Authentic
+		// 4xx-style failures (bad request, invalid api key) should fail fast.
+		if !isStreamRetryableError(streamErr) {
+			m.runChatStreamCompleteCallback(ctx, &chatRequest, nil, streamErr)
+			m.sendErrorResponse(ctx, responseChan, model.ErrorTypeStreamError, streamErr)
+			return
+		}
+		if attempt >= maxRetries {
+			terminalErr := fmt.Errorf("anthropic stream failed after %d attempts: %w", attempt+1, streamErr)
+			m.runChatStreamCompleteCallback(ctx, &chatRequest, nil, terminalErr)
+			m.sendErrorResponse(ctx, responseChan, model.ErrorTypeStreamError, terminalErr)
+			return
+		}
+		attempt++
+		backoff := m.streamRetryBackoff(attempt)
+		log.WarnfContext(ctx,
+			"anthropic streaming request interrupted before first chunk (attempt %d/%d): %v; retrying after %s",
+			attempt, maxRetries+1, streamErr, backoff,
+		)
+		select {
+		case <-time.After(backoff):
+		case <-ctx.Done():
+			m.runChatStreamCompleteCallback(ctx, &chatRequest, nil, ctx.Err())
+			m.sendErrorResponse(ctx, responseChan, model.ErrorTypeStreamError, ctx.Err())
+			return
+		}
+	}
+}
+
+// effectiveStreamMaxRetries resolves the retry budget for handleStreamingResponse.
+// Zero uses the package default; negative disables retries.
+func (m *Model) effectiveStreamMaxRetries() int {
+	if m.streamMaxRetries < 0 {
+		return 0
+	}
+	if m.streamMaxRetries == 0 {
+		return defaultStreamMaxRetries
+	}
+	return m.streamMaxRetries
+}
+
+// runStreamingAttempt performs a single streaming attempt and returns:
+//   - finalResponse: the terminal response when streaming completed cleanly
+//     (caller is responsible for delivering it to responseChan).
+//   - streamErr: a non-nil error if the stream failed at any point.
+//   - sawContent: true if at least one partial response was delivered to
+//     responseChan during this attempt. When true the caller MUST NOT retry
+//     because the caller-visible stream has already been partially consumed.
+func (m *Model) runStreamingAttempt(
+	ctx context.Context,
+	chatRequest anthropic.MessageNewParams,
+	responseChan chan<- *model.Response,
+) (finalResponse *model.Response, callbackAcc *anthropic.Message, streamErr error, sawContent bool) {
 	stream := m.client.Messages.NewStreaming(ctx, chatRequest, m.anthropicRequestOptions...)
 	defer stream.Close()
-	// Accumulator to build final response.
 	acc := newStreamingMessageAccumulator()
-	var (
-		finalResponse *model.Response
-		streamErr     error
-	)
+	var pendingChunkCallbacks []anthropic.MessageStreamEventUnion
+	flushChunkCallbacks := func() {
+		for i := range pendingChunkCallbacks {
+			chunk := pendingChunkCallbacks[i]
+			m.runChatChunkCallback(ctx, &chatRequest, &chunk)
+		}
+		pendingChunkCallbacks = nil
+	}
 
 loop:
 	for stream.Next() {
 		chunk := stream.Current()
-		// Accumulate into accumulator.
 		if err := acc.Accumulate(chunk); err != nil {
 			streamErr = err
 			break
 		}
-		m.runChatChunkCallback(ctx, &chatRequest, &chunk)
-		// Build partial response.
+		pendingChunkCallbacks = append(pendingChunkCallbacks, chunk)
 		response, err := buildStreamingPartialResponse(acc.Message(), chunk, m.showToolCallDelta)
 		if err != nil {
 			streamErr = err
@@ -615,9 +717,9 @@ loop:
 		if response == nil {
 			continue
 		}
-		// Emit partial response.
 		select {
 		case responseChan <- response:
+			sawContent = true
 		case <-ctx.Done():
 			streamErr = ctx.Err()
 			break loop
@@ -633,21 +735,107 @@ loop:
 			finalResponse = buildStreamingFinalResponse(acc.Message())
 		}
 	}
-	var callbackAcc *anthropic.Message
 	if streamErr == nil {
 		finalAcc := acc.Message()
 		callbackAcc = &finalAcc
 	}
-	m.runChatStreamCompleteCallback(ctx, &chatRequest, callbackAcc, streamErr)
-	// Propagate stream error.
-	if streamErr != nil {
-		m.sendErrorResponse(ctx, responseChan, model.ErrorTypeStreamError, streamErr)
-		return
+	if streamErr == nil || sawContent {
+		flushChunkCallbacks()
 	}
-	select {
-	case responseChan <- finalResponse:
-	case <-ctx.Done():
+	return finalResponse, callbackAcc, streamErr, sawContent
+}
+
+// streamRetryBackoff returns the sleep duration before retry attempt n
+// (1-indexed). It doubles for each attempt, capped at streamRetryMaxBackoff.
+func (m *Model) streamRetryBackoff(attempt int) time.Duration {
+	base := m.streamRetryBaseBackoff
+	if base <= 0 {
+		base = defaultStreamRetryBaseBackoff
 	}
+	maxWait := m.streamRetryMaxBackoff
+	if maxWait <= 0 {
+		maxWait = defaultStreamRetryMaxBackoff
+	}
+	d := base
+	for i := 1; i < attempt; i++ {
+		d *= 2
+		if d >= maxWait {
+			return maxWait
+		}
+	}
+	if d > maxWait {
+		return maxWait
+	}
+	return d
+}
+
+// streamRetryableErrorPatterns are substrings found in transport-level errors
+// that indicate a transient interruption worth retrying. We intentionally
+// match on substrings (rather than typed errors) because the Anthropic SDK
+// wraps low-level network errors in fmt.Errorf strings; using errors.As on
+// those would miss the cases that matter.
+var streamRetryableErrorPatterns = []string{
+	"connection reset",
+	"connection refused",
+	"broken pipe",
+	"i/o timeout",
+	"tls handshake timeout",
+	"unexpected eof",
+	"http2: server",
+	"http2: stream",
+	"network is unreachable",
+	"server misbehaving",
+	"no such host",
+	"overloaded",
+}
+
+// streamRetryableHTTPStatusCodes are HTTP status codes worth retrying when they
+// appear as isolated tokens in error text (not substrings of longer numbers).
+var streamRetryableHTTPStatusCodes = []string{
+	"502",
+	"503",
+	"504",
+	"529", // anthropic-specific "overloaded" status code
+}
+
+// isStreamRetryableError returns true when the given streaming-attempt error
+// looks like a transient transport/server condition that should be retried.
+func isStreamRetryableError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	for _, p := range streamRetryableErrorPatterns {
+		if strings.Contains(msg, p) {
+			return true
+		}
+	}
+	for _, code := range streamRetryableHTTPStatusCodes {
+		if containsIsolatedToken(msg, code) {
+			return true
+		}
+	}
+	return false
+}
+
+// containsIsolatedToken reports whether token appears in msg without being
+// embedded in a longer digit sequence (e.g. match "503" but not "5031").
+func containsIsolatedToken(msg, token string) bool {
+	if token == "" {
+		return false
+	}
+	for i := 0; i+len(token) <= len(msg); i++ {
+		if msg[i:i+len(token)] != token {
+			continue
+		}
+		beforeDigit := i > 0 && msg[i-1] >= '0' && msg[i-1] <= '9'
+		after := i + len(token)
+		afterDigit := after < len(msg) && msg[after] >= '0' && msg[after] <= '9'
+		if !beforeDigit && !afterDigit {
+			return true
+		}
+	}
+	return false
 }
 
 type streamingMessageAccumulator struct {
@@ -718,7 +906,9 @@ func (a *streamingMessageAccumulator) Accumulate(event anthropic.MessageStreamEv
 		// Guard against invalid/partial JSON in tool-use Input fields.
 		// Certain Anthropic-compatible APIs send content_block_stop before
 		// all input_json_delta events, leaving accumulated Input as
-		// incomplete JSON.
+		// incomplete JSON. Try jsonrepair first, then normalize any remaining
+		// invalid tool_use Input to {}.
+		repairToolUseInputIfNeeded(block)
 		ensureValidToolInput(block)
 		if err := refreshContentBlockRawJSON(block); err != nil {
 			return fmt.Errorf("error converting content block to JSON: %w", err)
@@ -783,10 +973,37 @@ func finalizeStreamingMessage(message *anthropic.Message) error {
 	return message.UnmarshalJSON(raw)
 }
 
+// repairToolUseInputIfNeeded normalizes streamed tool_use argument JSON before the
+// SDK re-marshals the content block. Truncated streams can leave Input as invalid
+// json.RawMessage (for example "{"), which makes json.Marshal fail with
+// "unexpected end of JSON input" and aborts the whole LLM stream.
+func repairToolUseInputIfNeeded(block *anthropic.ContentBlockUnion) {
+	if block == nil || block.Type != "tool_use" {
+		return
+	}
+	input := bytes.TrimSpace(block.Input)
+	if len(input) == 0 {
+		block.Input = json.RawMessage("{}")
+		return
+	}
+	if json.Valid(input) {
+		return
+	}
+	repaired, err := jsonrepair.Repair(input)
+	if err != nil {
+		return
+	}
+	repaired = bytes.TrimSpace(repaired)
+	if json.Valid(repaired) {
+		block.Input = json.RawMessage(repaired)
+	}
+}
+
 func refreshContentBlockRawJSON(block *anthropic.ContentBlockUnion) error {
 	if block == nil {
 		return nil
 	}
+	repairToolUseInputIfNeeded(block)
 	raw, err := json.Marshal(block)
 	if err != nil {
 		return err
