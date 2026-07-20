@@ -21,6 +21,9 @@ import (
 var ErrInjectedFailure = errors.New("injected replay failure")
 
 // Fixture adapts one Session and Memory backend pair to replay operations.
+// Its methods must be safe for concurrent use because parallel replay operations
+// may call them from multiple goroutines. Implementations that also implement
+// FaultInjector must provide the same guarantee for ApplyWithFault.
 type Fixture interface {
 	Name() string
 	Capabilities() CapabilitySet

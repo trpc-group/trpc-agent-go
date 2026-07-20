@@ -381,6 +381,8 @@ func assertUnexpectedExplainedDifferences(
 }
 
 func cloneWriteOperation(operation replaytest.Operation) replaytest.Operation {
+	// Keep this explicit deep-clone list in sync when Operation or its nested
+	// snapshot types gain map or slice fields, preserving alias isolation.
 	operation.After = append([]string(nil), operation.After...)
 	operation.StateDeletes = append([]string(nil), operation.StateDeletes...)
 	operation.StateUpdates = cloneAnyMap(operation.StateUpdates)

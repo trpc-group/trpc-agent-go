@@ -227,6 +227,64 @@ func TestNormalizeJSONLikeHandlesRawRepresentations(t *testing.T) {
 	}
 }
 
+func TestNormalizeJSONLikeHandlesFallbackRepresentations(t *testing.T) {
+	options := DefaultNormalizeOptions()
+	if got := normalizeJSONLike(nil, options); got != nil {
+		t.Fatalf("normalizeJSONLike(nil) = %#v", got)
+	}
+	for _, value := range []any{
+		json.RawMessage(`{"invalid"`),
+		[]byte(`{"invalid"`),
+	} {
+		if _, ok := normalizeJSONLike(value, options).(string); !ok {
+			t.Fatalf("invalid JSON representation was not preserved as text: %#v", value)
+		}
+	}
+	if _, ok := normalizeJSONLike(make(chan int), options).(string); !ok {
+		t.Fatal("unencodable value was not converted to diagnostic text")
+	}
+
+	scalars := []struct {
+		value any
+		want  any
+	}{
+		{value: uint64(42), want: uint64(42)},
+		{value: float32(1.5), want: float64(1.5)},
+	}
+	for _, scalar := range scalars {
+		if got := normalizeJSONLike(scalar.value, options); !reflect.DeepEqual(got, scalar.want) {
+			t.Fatalf("normalizeJSONLike(%T) = %#v, want %#v", scalar.value, got, scalar.want)
+		}
+	}
+}
+
+func TestNormalizeJSONNumbersPreservesInvalidNumbers(t *testing.T) {
+	tests := []json.Number{"1e+", "not-a-number"}
+	for _, value := range tests {
+		if got := normalizeJSONNumbers(value); got != value.String() {
+			t.Fatalf("normalizeJSONNumbers(%q) = %#v", value, got)
+		}
+	}
+}
+
+func TestCloneJSONLikeCopiesReferenceValues(t *testing.T) {
+	raw := json.RawMessage(`{"value":1}`)
+	bytesValue := []byte("bytes")
+	input := []any{raw, bytesValue, []any{map[string]any{"key": "value"}}}
+	cloned := cloneJSONLike(input).([]any)
+
+	cloned[0].(json.RawMessage)[0]++
+	cloned[1].([]byte)[0]++
+	cloned[2].([]any)[0].(map[string]any)["key"] = "changed"
+	if reflect.DeepEqual(input, cloned) {
+		t.Fatal("cloneJSONLike() retained aliases to reference values")
+	}
+	if string(raw) != `{"value":1}` || string(bytesValue) != "bytes" ||
+		input[2].([]any)[0].(map[string]any)["key"] != "value" {
+		t.Fatalf("cloneJSONLike() mutated input: %#v", input)
+	}
+}
+
 func TestNormalizeSnapshotFlagsInvalidSessionMetadataOrder(t *testing.T) {
 	created := time.Unix(20, 0)
 	snapshot := Snapshot{Sessions: []SessionSnapshot{{

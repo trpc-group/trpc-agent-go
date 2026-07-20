@@ -108,6 +108,26 @@ func TestCompareSnapshotsReportsMissingCollectionItems(t *testing.T) {
 	}
 }
 
+func TestCompareSnapshotsReportsAdditionalCollectionItems(t *testing.T) {
+	differences, err := CompareSnapshots(CompareInput{
+		Case:     "additional-memory",
+		Backend:  "sqlite",
+		Baseline: Snapshot{},
+		Actual: Snapshot{Memories: []MemorySnapshot{{
+			ID: "memory-1", AppName: "app", UserID: "user", Content: "content",
+		}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CompareSnapshots() error = %v", err)
+	}
+	differenceAt(t, differences, "$.memories.length")
+	additional := differenceAt(t, differences, "$.memories[0]")
+	if additional.Locator.MemoryID != "memory-1" || additional.Baseline != missingValue {
+		t.Fatalf("additional memory difference = %#v", additional)
+	}
+}
+
 func TestCompareSnapshotsRejectsInvalidAllowedDiffRules(t *testing.T) {
 	_, err := CompareSnapshots(CompareInput{
 		Case: "case", Backend: "sqlite",
@@ -156,6 +176,26 @@ func TestCompareSnapshotsReturnsEncodingErrors(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "encode baseline snapshot") {
 		t.Fatalf("CompareSnapshots() error = %v", err)
 	}
+}
+
+func TestCompareSnapshotsPreservesLargeIntegerPrecision(t *testing.T) {
+	baseline := Snapshot{Sessions: []SessionSnapshot{{State: map[string]StateValueSnapshot{
+		"large": JSONStateValue(int64(9007199254740992)),
+	}}}}
+	actual := Snapshot{Sessions: []SessionSnapshot{{State: map[string]StateValueSnapshot{
+		"large": JSONStateValue(int64(9007199254740993)),
+	}}}}
+
+	differences, err := CompareSnapshots(CompareInput{
+		Case: "large-integer", Backend: "sqlite", Baseline: baseline, Actual: actual,
+	})
+	if err != nil {
+		t.Fatalf("CompareSnapshots() error = %v", err)
+	}
+	if len(differences) == 0 {
+		t.Fatal("distinct integers above 2^53 compared equal")
+	}
+	differenceAt(t, differences, "$.sessions[0].state.large.value")
 }
 
 func TestCompareSnapshotsUsesAbsoluteScoreTolerance(t *testing.T) {
@@ -231,6 +271,37 @@ func TestCompareSnapshotsDoesNotApplyScoreToleranceToState(t *testing.T) {
 	difference := differenceAt(t, differences, "$.sessions[0].state.memories.value.score")
 	if difference.Locator.StateKey != "memories" {
 		t.Fatalf("state locator = %#v", difference.Locator)
+	}
+}
+
+func TestRuleMatchesRequiresExactScope(t *testing.T) {
+	rule := AllowedDiffRule{Case: "case", Backend: "sqlite", Path: "$.sessions"}
+	if ruleMatches(rule, "other", "sqlite", "$.sessions") ||
+		ruleMatches(rule, "case", "other", "$.sessions") ||
+		ruleMatches(rule, "case", "sqlite", "$.sessions[0]") {
+		t.Fatal("exact rule matched outside its case, backend, or path")
+	}
+	if !ruleMatches(rule, "case", "sqlite", "$.sessions") {
+		t.Fatal("exact rule did not match its configured path")
+	}
+	rule.PathPrefix = true
+	if !ruleMatches(rule, "case", "sqlite", "$.sessions[0]") ||
+		!ruleMatches(rule, "case", "sqlite", "$.sessions.length") ||
+		ruleMatches(rule, "case", "sqlite", "$.session") {
+		t.Fatal("path-prefix rule matched an incorrect set of paths")
+	}
+}
+
+func TestComparisonNumericAndMemoryHelpers(t *testing.T) {
+	if got, ok := numericFloat64(float64(1.5)); !ok || got != 1.5 {
+		t.Fatalf("numericFloat64(float64) = %v, %v", got, ok)
+	}
+	if _, ok := numericFloat64("1.5"); ok {
+		t.Fatal("numericFloat64(string) unexpectedly succeeded")
+	}
+	appName, userID := memoryScope(map[string]any{"app_name": "app", "user_id": "user"})
+	if appName != "app" || userID != "user" {
+		t.Fatalf("memoryScope() = %q, %q", appName, userID)
 	}
 }
 

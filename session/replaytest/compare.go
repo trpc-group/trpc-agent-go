@@ -10,6 +10,7 @@
 package replaytest
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -88,7 +89,9 @@ func snapshotValue(snapshot Snapshot) (any, error) {
 		return nil, err
 	}
 	var value any
-	if err := json.Unmarshal(encoded, &value); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(encoded))
+	decoder.UseNumber()
+	if err := decoder.Decode(&value); err != nil {
 		return nil, err
 	}
 	return value, nil
@@ -320,8 +323,8 @@ func scoreValuesEqual(path string, baseline, actual any, tolerance float64) bool
 	if itemPath == path || !isMemoryItemPath(itemPath) {
 		return false
 	}
-	baselineScore, baselineOK := baseline.(float64)
-	actualScore, actualOK := actual.(float64)
+	baselineScore, baselineOK := numericFloat64(baseline)
+	actualScore, actualOK := numericFloat64(actual)
 	return baselineOK && actualOK && math.Abs(baselineScore-actualScore) <= tolerance
 }
 
@@ -330,9 +333,21 @@ func durationValuesEqual(path string, baseline, actual any, tolerance time.Durat
 		!strings.Contains(path, "].events[") {
 		return false
 	}
-	baselineDuration, baselineOK := baseline.(float64)
-	actualDuration, actualOK := actual.(float64)
+	baselineDuration, baselineOK := numericFloat64(baseline)
+	actualDuration, actualOK := numericFloat64(actual)
 	return baselineOK && actualOK && math.Abs(baselineDuration-actualDuration) <= float64(tolerance)
+}
+
+func numericFloat64(value any) (float64, bool) {
+	switch typed := value.(type) {
+	case json.Number:
+		parsed, err := typed.Float64()
+		return parsed, err == nil
+	case float64:
+		return typed, true
+	default:
+		return 0, false
+	}
 }
 
 func isMemoryItemPath(path string) bool {

@@ -9,7 +9,10 @@
 
 package replaytest
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestOperationValidateRejectsInvalidPayloads(t *testing.T) {
 	tests := []struct {
@@ -78,6 +81,104 @@ func TestOperationValidateRejectsInvalidPayloads(t *testing.T) {
 	}
 }
 
+func TestOperationValidateRejectsInvalidConfigurations(t *testing.T) {
+	validChild := appendEvent("event", "user", "content", 1)
+	tests := []struct {
+		name      string
+		operation Operation
+		want      string
+	}{
+		{
+			name:      "unsupported kind",
+			operation: Operation{Kind: "unknown"},
+			want:      "unsupported operation kind",
+		},
+		{
+			name: "expected failure without injection",
+			operation: Operation{
+				Kind: OperationCreateSession, SessionID: "session", ExpectFailure: true,
+			},
+			want: "expected failure requires injected failure",
+		},
+		{
+			name: "invalid failure point",
+			operation: Operation{
+				Kind: OperationCreateSession, SessionID: "session",
+				InjectedFailure: "failure", ExpectFailure: true, FailurePoint: "invalid",
+			},
+			want: "valid failure point",
+		},
+		{
+			name: "failure point without injection",
+			operation: Operation{
+				Kind: OperationCreateSession, SessionID: "session", FailurePoint: FailureBeforeWrite,
+			},
+			want: "failure point requires injected failure",
+		},
+		{
+			name: "children on non-parallel operation",
+			operation: Operation{
+				Kind: OperationCreateSession, SessionID: "session", Parallel: []Operation{validChild},
+			},
+			want: "cannot contain parallel operations",
+		},
+		{
+			name: "failure on parallel parent",
+			operation: Operation{
+				Kind: OperationParallel, Parallel: []Operation{validChild},
+				InjectedFailure: "failure", ExpectFailure: true, FailurePoint: FailureBeforeWrite,
+			},
+			want: "parallel failure must be injected on a child",
+		},
+		{
+			name:      "create session without id",
+			operation: Operation{Kind: OperationCreateSession},
+			want:      "create session requires session id",
+		},
+		{
+			name:      "update state without changes",
+			operation: Operation{Kind: OperationUpdateState, SessionID: "session"},
+			want:      "update state requires session id and state changes",
+		},
+		{
+			name:      "write memory without memory",
+			operation: Operation{Kind: OperationWriteMemory},
+			want:      "write memory requires memory",
+		},
+		{
+			name: "search score above one",
+			operation: Operation{
+				Kind: OperationSearchMemory, SearchQuery: "query", SearchLimit: 1,
+				SearchAppName: "app", SearchUserID: "user", SearchMinScore: 1.1,
+			},
+			want: "score threshold",
+		},
+		{
+			name:      "update summary without summary",
+			operation: Operation{Kind: OperationUpdateSummary, SessionID: "session"},
+			want:      "update summary requires session id and summary",
+		},
+		{
+			name:      "append track without event",
+			operation: Operation{Kind: OperationAppendTrack, SessionID: "session", TrackName: "tool"},
+			want:      "append track requires session id, track name, and event",
+		},
+		{
+			name:      "parallel without children",
+			operation: Operation{Kind: OperationParallel},
+			want:      "parallel operation requires child operations",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := test.operation.Validate()
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Operation.Validate() error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
 func TestParallelDependenciesRejectInvalidGraphs(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -102,6 +203,22 @@ func TestParallelDependenciesRejectInvalidGraphs(t *testing.T) {
 				namedOperation(appendEvent("1", "user", "one", 1), "one", "two"),
 				namedOperation(appendEvent("2", "user", "two", 2), "two", "one"),
 			},
+		},
+		{
+			name:       "invalid child operation",
+			operations: []Operation{{Kind: OperationCreateSession}},
+		},
+		{
+			name: "unnamed dependency",
+			operations: []Operation{{
+				Kind: OperationCreateSession, SessionID: "session", After: []string{"other"},
+			}},
+		},
+		{
+			name: "self dependency",
+			operations: []Operation{{
+				Kind: OperationCreateSession, SessionID: "session", Name: "self", After: []string{"self"},
+			}},
 		},
 	}
 	for _, test := range tests {

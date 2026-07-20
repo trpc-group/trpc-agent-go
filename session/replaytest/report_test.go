@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"strings"
 	"testing"
 )
 
@@ -54,6 +55,38 @@ func TestWriteReportValidatesWriterAndWrapsErrors(t *testing.T) {
 	}
 	if err := WriteReport(shortWriter{}, Report{}); !errors.Is(err, io.ErrShortWrite) {
 		t.Fatalf("WriteReport() short write error = %v", err)
+	}
+}
+
+func TestReportEncodingPropagatesUnsupportedValues(t *testing.T) {
+	report := Report{Differences: []Difference{{Baseline: make(chan int)}}}
+	if _, err := MarshalReport(report); err == nil || !strings.Contains(err.Error(), "marshal replay report") {
+		t.Fatalf("MarshalReport() error = %v", err)
+	}
+	if err := WriteReport(&bytes.Buffer{}, report); err == nil ||
+		!strings.Contains(err.Error(), "marshal replay report") {
+		t.Fatalf("WriteReport() error = %v", err)
+	}
+}
+
+func TestReportSortHelpersUseAllTieBreakers(t *testing.T) {
+	probes := cloneAndSortProbeResults([]CapabilityProbeResult{
+		{Probe: "probe", Backend: "z", Capability: CapabilityTTL},
+		{Probe: "probe", Backend: "a", Capability: CapabilityTTL},
+		{Probe: "probe", Backend: "a", Capability: CapabilityEventPaging},
+	})
+	if probes[0].Backend != "a" || probes[0].Capability != CapabilityEventPaging ||
+		probes[2].Backend != "z" {
+		t.Fatalf("probe results are not fully sorted: %#v", probes)
+	}
+
+	differences := []Difference{
+		{Case: "case", Backend: "z", Path: "$.a"},
+		{Case: "case", Backend: "a", Path: "$.z"},
+	}
+	sortDifferences(differences)
+	if differences[0].Backend != "a" {
+		t.Fatalf("differences are not sorted by backend: %#v", differences)
 	}
 }
 

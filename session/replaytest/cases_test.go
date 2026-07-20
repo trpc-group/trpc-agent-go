@@ -217,6 +217,147 @@ func TestConcurrentSnapshotInvariant(t *testing.T) {
 	}
 }
 
+func TestReplayInvariantValidationErrors(t *testing.T) {
+	tests := []struct {
+		name     string
+		check    func(Snapshot) error
+		snapshot Snapshot
+		want     string
+	}{
+		{
+			name: "summary replay session count", check: validateSummaryReplayWindow,
+			want: "session count",
+		},
+		{
+			name: "summary replay events", check: validateSummaryReplayWindow,
+			snapshot: Snapshot{Sessions: []SessionSnapshot{{ID: standardSessionID}}},
+			want:     "retained events",
+		},
+		{
+			name: "event count", check: validateEvents(eventExpectation{content: "expected"}),
+			snapshot: Snapshot{Sessions: []SessionSnapshot{{ID: standardSessionID}}},
+			want:     "event count",
+		},
+		{
+			name: "tool event count", check: validateToolCall,
+			snapshot: Snapshot{Sessions: []SessionSnapshot{{ID: standardSessionID}}},
+			want:     "event count",
+		},
+		{
+			name: "state value", check: validateStateUpdate,
+			snapshot: Snapshot{Sessions: []SessionSnapshot{{ID: standardSessionID}}},
+			want:     "state",
+		},
+		{
+			name: "summary update session count", check: validateSummaryUpdate,
+			want: "session count",
+		},
+		{
+			name: "tracks missing", check: validateTracks,
+			snapshot: Snapshot{Sessions: []SessionSnapshot{{ID: standardSessionID}}},
+			want:     "tracks",
+		},
+		{
+			name: "concurrent unknown session", check: validateConcurrentSnapshot,
+			snapshot: Snapshot{Sessions: []SessionSnapshot{{ID: "unknown"}, {ID: "session-2"}}},
+			want:     "unexpected session",
+		},
+		{
+			name: "recovery event contents", check: validateRecoverySnapshot,
+			snapshot: Snapshot{
+				Sessions: []SessionSnapshot{{
+					Events: []EventSnapshot{{Content: "wrong"}, {Content: "retried"}},
+					State:  map[string]StateValueSnapshot{"status": JSONStateValue("recovered")},
+				}},
+				Memories: []MemorySnapshot{{}},
+			},
+			want: "event contents",
+		},
+		{
+			name: "wrong only session id",
+			check: func(snapshot Snapshot) error {
+				_, err := onlySession(snapshot, standardSessionID)
+				return err
+			},
+			snapshot: Snapshot{Sessions: []SessionSnapshot{{ID: "wrong"}}},
+			want:     "session id",
+		},
+		{
+			name: "missing named session",
+			check: func(snapshot Snapshot) error {
+				_, err := findSessionSnapshot(snapshot, standardSessionID)
+				return err
+			},
+			want: "not found",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := test.check(test.snapshot)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("invariant error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestValidateSummaryRejectsInvalidPersistedFields(t *testing.T) {
+	valid := SummarySnapshot{
+		SessionID: standardSessionID,
+		FilterKey: "branch/main",
+		Text:      "summary",
+		Version:   1,
+		UpdatedAt: standardTime,
+		Boundary: map[string]any{
+			"filter_key": "branch/main", "last_event_id": "event-1", "cutoff_at": standardTime,
+		},
+	}
+	tests := []struct {
+		name   string
+		mutate func(*SummarySnapshot)
+		want   string
+	}{
+		{name: "main fields", mutate: func(summary *SummarySnapshot) {
+			summary.Version = 0
+		}, want: "summary ="},
+		{name: "boundary filter", mutate: func(summary *SummarySnapshot) {
+			summary.Boundary["filter_key"] = "wrong"
+		}, want: "filter_key"},
+		{name: "boundary event", mutate: func(summary *SummarySnapshot) {
+			delete(summary.Boundary, "last_event_id")
+		}, want: "last_event_id"},
+		{name: "boundary cutoff", mutate: func(summary *SummarySnapshot) {
+			delete(summary.Boundary, "cutoff_at")
+		}, want: "cutoff_at"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			summary := valid
+			summary.Boundary = make(map[string]any, len(valid.Boundary))
+			for key, value := range valid.Boundary {
+				summary.Boundary[key] = value
+			}
+			test.mutate(&summary)
+			err := validateSummary(summary, standardSessionID, "summary")
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("validateSummary() error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestSameStringSetRejectsInvalidValues(t *testing.T) {
+	if sameStringSet([]any{"one"}, "one", "two") {
+		t.Fatal("sameStringSet() accepted mismatched lengths")
+	}
+	if sameStringSet([]any{1}, "one") {
+		t.Fatal("sameStringSet() accepted a non-string value")
+	}
+	if sameStringSet([]any{"two"}, "one") {
+		t.Fatal("sameStringSet() accepted an unexpected string")
+	}
+}
+
 func replayCaseByName(t *testing.T, cases []ReplayCase, name string) ReplayCase {
 	t.Helper()
 	for _, replayCase := range cases {

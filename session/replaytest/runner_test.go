@@ -267,6 +267,20 @@ func TestRunnerRejectsInvalidOrUnusedUnsupportedAllowances(t *testing.T) {
 			want: "duplicated",
 		},
 		{
+			name: "unknown backend",
+			allowances: []UnsupportedAllowance{{
+				Backend: "missing", Case: "summary", Capability: CapabilitySummary, Reason: "test",
+			}},
+			want: "unknown backend",
+		},
+		{
+			name: "unknown case",
+			allowances: []UnsupportedAllowance{{
+				Backend: "inmemory", Case: "missing", Capability: CapabilitySummary, Reason: "test",
+			}},
+			want: "unknown case",
+		},
+		{
 			name: "unused",
 			allowances: []UnsupportedAllowance{{
 				Backend: "inmemory", Case: "summary", Capability: CapabilitySummary,
@@ -362,6 +376,74 @@ func TestRunnerValidatesConfiguration(t *testing.T) {
 	}
 }
 
+func TestRunnerPropagatesFixtureLifecycleErrors(t *testing.T) {
+	wantErr := errors.New("fixture failure")
+	tests := []struct {
+		name     string
+		backend  Backend
+		replay   ReplayCase
+		wantText string
+	}{
+		{
+			name: "create error",
+			backend: Backend{Name: "broken", New: func(context.Context, string) (Fixture, error) {
+				return nil, wantErr
+			}},
+			replay: ReplayCase{Name: "case"}, wantText: "create fixture",
+		},
+		{
+			name: "nil fixture",
+			backend: Backend{Name: "nil", New: func(context.Context, string) (Fixture, error) {
+				return nil, nil
+			}},
+			replay: ReplayCase{Name: "case"}, wantText: "returned nil",
+		},
+		{
+			name: "fixture name mismatch",
+			backend: fakeBackend("expected", &fakeFixture{
+				name: "actual", capabilities: allCapabilities(), closeErr: wantErr,
+			}),
+			replay: ReplayCase{Name: "case"}, wantText: "does not match backend",
+		},
+		{
+			name: "unsupported fixture close",
+			backend: fakeBackend("limited", &fakeFixture{
+				name: "limited", capabilities: CapabilitySet{}, closeErr: wantErr,
+			}),
+			replay:   ReplayCase{Name: "case", Capabilities: []Capability{CapabilitySession}},
+			wantText: "close unsupported fixture",
+		},
+		{
+			name: "snapshot read",
+			backend: fakeBackend("broken", &fakeFixture{
+				name: "broken", capabilities: allCapabilities(), snapshotErr: wantErr,
+			}),
+			replay: ReplayCase{Name: "case"}, wantText: "read snapshot",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runner := Runner{Backends: []Backend{test.backend}}
+			_, err := runner.Run(context.Background(), []ReplayCase{test.replay})
+			if err == nil || !strings.Contains(err.Error(), test.wantText) {
+				t.Fatalf("Runner.Run() error = %v, want %q", err, test.wantText)
+			}
+		})
+	}
+}
+
+func TestExecuteCaseRejectsTopLevelDependencies(t *testing.T) {
+	fixture := &fakeFixture{name: "inmemory", capabilities: allCapabilities()}
+	operation := appendEvent("event-1", "user", "content", 1)
+	operation.After = []string{"dependency"}
+	_, err := executeCase(context.Background(), fixture, ReplayCase{
+		Name: "case", Operations: []Operation{operation},
+	})
+	if err == nil || !strings.Contains(err.Error(), "top-level dependencies") {
+		t.Fatalf("executeCase() error = %v", err)
+	}
+}
+
 type fakeFixture struct {
 	mu           sync.Mutex
 	name         string
@@ -370,6 +452,7 @@ type fakeFixture struct {
 	operations   []Operation
 	applyErr     error
 	faultErr     error
+	snapshotErr  error
 	closeErr     error
 	closed       bool
 	closeCount   int
@@ -403,7 +486,7 @@ func (fixture *fakeFixture) ApplyWithFault(ctx context.Context, operation Operat
 }
 
 func (fixture *fakeFixture) Snapshot(context.Context) (Snapshot, error) {
-	return fixture.snapshot, nil
+	return fixture.snapshot, fixture.snapshotErr
 }
 
 func (fixture *fakeFixture) Close() error {
