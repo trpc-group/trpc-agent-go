@@ -165,8 +165,8 @@ func ResolveSemantic(t tool.Tool) tool.Tool {
 // ResolvePermissionChecker returns the outermost tool.PermissionChecker in the
 // wrapper chain. Permission must be resolved from the outside in: unwrapping past
 // a transparent wrapper (for example resultcodec.Wrap or any tool that exposes
-// Unwrap) to reach an inner tool would otherwise skip an intermediate wrapper's
-// own permission decision and bypass it.
+// TransparentUnwrap) to reach an inner tool would otherwise skip an intermediate
+// wrapper's own permission decision and bypass it.
 //
 // It fails closed: a return of (nil, nil) means the chain was fully traversed
 // and no checker exists (safe to allow); a non-nil error

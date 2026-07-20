@@ -1411,8 +1411,10 @@ func toolProvidesStateDelta(tl tool.Tool) bool {
 }
 
 // marshalStateDeltaContent serializes result to the JSON bytes used as the
-// state-delta input, under panic protection. Custom result codecs may wrap
-// results that are not JSON-friendly, so a failure here must not abort the call.
+// state-delta input, under panic protection. It is only called for stateful
+// tools; a Custom codec may wrap non-JSON-friendly results, so a failure here is
+// returned to the caller, which fails the call rather than silently dropping the
+// state delta.
 func marshalStateDeltaContent(result any) (b []byte, err error) {
 	defer func() {
 		if r := recover(); r != nil {

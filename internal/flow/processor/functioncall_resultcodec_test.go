@@ -405,7 +405,8 @@ func (r *recordingStateDeltaTool) StateDelta(_ string, _ []byte, content []byte)
 	return map[string][]byte{"k": []byte("v")}
 }
 
-// transparentWrapper exposes only Unwrap()/Call(), used to build deep chains.
+// transparentWrapper exposes TransparentUnwrap()/Call() only, used to build deep
+// transparent chains.
 type transparentWrapper struct {
 	inner tool.Tool
 }
@@ -416,8 +417,8 @@ func (w *transparentWrapper) Call(ctx context.Context, args []byte) (any, error)
 	return w.inner.(tool.CallableTool).Call(ctx, args)
 }
 
-// cyclicCallableWrapper's Unwrap returns itself, forming a cycle; Call delegates
-// to the base so an incorrect fail-open would execute it.
+// cyclicCallableWrapper's TransparentUnwrap returns itself, forming a cycle; Call
+// delegates to the base so an incorrect fail-open would execute it.
 type cyclicCallableWrapper struct {
 	base tool.Tool
 }
@@ -480,7 +481,7 @@ func TestExecuteToolCall_NamedToolDoesNotHideDeepDeny(t *testing.T) {
 }
 
 func TestExecuteToolCall_CyclicWrapperFailsClosed(t *testing.T) {
-	// A cyclic Unwrap chain must not hang and must fail closed (no execution).
+	// A cyclic transparent chain must not hang and must fail closed (no execution).
 	base := &recordingCallableTool{declaration: &tool.Declaration{Name: "danger"}}
 	wrapped := resultcodec.Wrap(&cyclicCallableWrapper{base: base}, resultcodec.Text())
 	tools := map[string]tool.Tool{"danger": wrapped}
@@ -605,7 +606,8 @@ func (r *recordingCallableTool) Call(_ context.Context, _ []byte) (any, error) {
 }
 
 // permissionWrapper is a transparent wrapper that denies permission and exposes
-// Unwrap()/Call(). It mirrors a third-party wrapper that resultcodec.Wrap wraps.
+// TransparentUnwrap()/Call(). It mirrors a third-party wrapper resultcodec.Wrap
+// wraps.
 type permissionWrapper struct {
 	base tool.Tool
 }

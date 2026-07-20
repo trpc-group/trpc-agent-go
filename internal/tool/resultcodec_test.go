@@ -103,8 +103,8 @@ func TestResolveDeclaration_SeesThroughResultCodecWrap(t *testing.T) {
 	}
 }
 
-// rcPermChecker denies permission and exposes Unwrap, standing in for a
-// transparent third-party permission wrapper.
+// rcPermChecker denies permission and exposes TransparentUnwrap, standing in for
+// a transparent third-party permission wrapper.
 type rcPermChecker struct {
 	name  string
 	inner tool.Tool
@@ -152,8 +152,8 @@ func TestResolvePermissionChecker_NoneReturnsNil(t *testing.T) {
 	}
 }
 
-// rcUnwrapOnly is a transparent wrapper exposing only Unwrap, used to build deep
-// and cyclic chains.
+// rcUnwrapOnly is a transparent wrapper exposing only TransparentUnwrap, used to
+// build deep and cyclic chains.
 type rcUnwrapOnly struct {
 	name  string
 	inner tool.Tool
@@ -209,7 +209,7 @@ func TestResolvePermissionChecker_CyclicFailsClosed(t *testing.T) {
 	}
 }
 
-// rcSelfUnwrap returns itself from Unwrap, forming a cycle.
+// rcSelfUnwrap returns itself from TransparentUnwrap, forming a cycle.
 type rcSelfUnwrap struct {
 	name string
 }
@@ -218,7 +218,7 @@ func (s *rcSelfUnwrap) Declaration() *tool.Declaration { return &tool.Declaratio
 func (s *rcSelfUnwrap) TransparentUnwrap() tool.Tool   { return s }
 
 func TestResolvers_CyclicUnwrapTerminate(t *testing.T) {
-	// A cyclic Unwrap() chain must not cause unbounded recursion; the
+	// A cyclic transparent chain must not cause unbounded recursion; the
 	// depth-bounded traversals return instead of hanging or overflowing.
 	s := &rcSelfUnwrap{name: "cyclic"}
 	var semantic, declaration tool.Tool

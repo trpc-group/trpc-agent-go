@@ -32,8 +32,8 @@ type resultCodecProvider interface {
 }
 
 // maxToolUnwrapDepth bounds wrapper-chain traversal so a self-referential or
-// mutually cyclic wrapper (for example an extension-provided Unwrap()) cannot
-// cause an infinite loop or stack exhaustion.
+// mutually cyclic wrapper (for example an extension-provided TransparentUnwrap())
+// cannot cause an infinite loop or stack exhaustion.
 const maxToolUnwrapDepth = 128
 
 // ResolveResultCodec walks the tool wrapper chain from outermost to innermost

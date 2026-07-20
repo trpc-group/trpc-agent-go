@@ -44,6 +44,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	agenttool "trpc.group/trpc-go/trpc-agent-go/tool/agent"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
+	"trpc.group/trpc-go/trpc-agent-go/tool/resultcodec"
 	skilltool "trpc.group/trpc-go/trpc-agent-go/tool/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool/transfer"
 )
@@ -295,6 +296,24 @@ func TestExecuteSingleToolCallSequential_MarksAutoMemoryPolluted(t *testing.T) {
 				return knowledgetool.NewKnowledgeSearchTool(
 					autoMemoryPollutionTestKnowledge{},
 					knowledgetool.WithToolName("docs_search"),
+				)
+			},
+			wantMark: true,
+		},
+		{
+			// A custom-named knowledge tool further wrapped by a result codec:
+			// the custom name misses the name-based fallback, so pollution must
+			// be discovered via capability traversal through resultcodec.Wrap.
+			name:     "wrapped custom-named knowledge search",
+			toolName: "custom_search",
+			toolFactory: func(t *testing.T) tool.Tool {
+				t.Helper()
+				return resultcodec.Wrap(
+					knowledgetool.NewKnowledgeSearchTool(
+						autoMemoryPollutionTestKnowledge{},
+						knowledgetool.WithToolName("custom_search"),
+					),
+					resultcodec.XML(),
 				)
 			},
 			wantMark: true,

@@ -213,8 +213,9 @@ func TestWrap_PreservesSkipSummarization(t *testing.T) {
 	}
 }
 
-// unwrapOnlyTool exposes only Unwrap(), hiding the inner tool's capabilities
-// unless the wrapper resolves them through the full chain.
+// unwrapOnlyTool is a transparent wrapper (TransparentUnwrap only) that hides
+// the inner tool's capabilities unless the wrapper resolves them through the
+// full transparent chain.
 type unwrapOnlyTool struct {
 	inner tool.Tool
 }
@@ -258,7 +259,7 @@ func TestWrap_ResolvesPermissionThroughChain(t *testing.T) {
 	}
 }
 
-// selfUnwrapTool returns itself from Unwrap, forming a cycle.
+// selfUnwrapTool returns itself from TransparentUnwrap, forming a cycle.
 type selfUnwrapTool struct {
 	decl *tool.Declaration
 }
@@ -268,7 +269,7 @@ func (s *selfUnwrapTool) Call(context.Context, []byte) (any, error) { return nil
 func (s *selfUnwrapTool) TransparentUnwrap() tool.Tool              { return s }
 
 func TestWrap_CyclicUnwrapTerminates(t *testing.T) {
-	// A cyclic Unwrap() chain must not hang, and permission must fail closed:
+	// A cyclic transparent chain must not hang, and permission must fail closed:
 	// because the chain can't be fully traversed, a hidden deny cannot be ruled
 	// out, so the decision is deny rather than allow.
 	s := &selfUnwrapTool{decl: &tool.Declaration{Name: "cyclic"}}

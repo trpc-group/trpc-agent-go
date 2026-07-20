@@ -133,7 +133,7 @@ func (t *codecTool) TransparentUnwrap() tool.Tool {
 }
 
 // maxWrapDepth bounds wrapper-chain traversal so a self-referential or mutually
-// cyclic Unwrap() implementation cannot cause an infinite loop.
+// cyclic TransparentUnwrap() implementation cannot cause an infinite loop.
 const maxWrapDepth = 128
 
 // walkStatus reports how a wrapper-chain traversal terminated.
@@ -225,8 +225,8 @@ func (t *codecTool) ShouldDefer(ctx context.Context) bool {
 	return deferred
 }
 
-// CheckPermission resolves the permission decision through the full wrapper
-// chain so an intermediate unwrap-only wrapper cannot bypass a deeper
+// CheckPermission resolves the permission decision through the full transparent
+// wrapper chain so an intermediate transparent wrapper cannot bypass a deeper
 // PermissionChecker. When no checker is found the decision defaults to allow.
 // If the chain cannot be fully traversed (overly deep or cyclic), it fails
 // closed by denying rather than allowing, since a deny may be hidden past the

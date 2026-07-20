@@ -20,6 +20,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/resultcodec"
 )
 
 func TestWithMessagesOption_SetsRunOptions(t *testing.T) {
@@ -448,6 +449,56 @@ func TestRunOptionsShouldExecuteToolUnwrapsDeclarationWrapper(t *testing.T) {
 		return tl == base
 	}))
 	require.True(t, ro.ShouldExecuteTool(ctx, patchedTools[0]))
+}
+
+// renamingUnwrapTool changes the model-facing name but only implements a generic
+// Unwrap() (not the explicit TransparentUnwrap contract). Framework resolution
+// must not strip it, so its outer name and its own semantic hooks are preserved.
+type renamingUnwrapTool struct {
+	decl  *tool.Declaration
+	inner tool.Tool
+}
+
+func (r *renamingUnwrapTool) Declaration() *tool.Declaration            { return r.decl }
+func (r *renamingUnwrapTool) Call(context.Context, []byte) (any, error) { return "ok", nil }
+func (r *renamingUnwrapTool) Unwrap() tool.Tool                         { return r.inner }
+func (r *renamingUnwrapTool) LongRunning() bool                         { return true }
+
+// TestRunOptionsShouldExecuteToolBlocksRenamedGenericUnwrapWrapper pins the
+// wrapper-compatibility boundary: a renaming wrapper that only exposes a generic
+// Unwrap() must keep its declaration for the ToolExecutionFilter (excluding the
+// model-facing name blocks execution) even when further wrapped by
+// resultcodec.Wrap, and ResolveSemantic must preserve its own hook.
+func TestRunOptionsShouldExecuteToolBlocksRenamedGenericUnwrapWrapper(t *testing.T) {
+	ctx := context.Background()
+	base := &stubTool{decl: &tool.Declaration{Name: "inner"}}
+	renamed := &renamingUnwrapTool{
+		decl:  &tool.Declaration{Name: "outer"},
+		inner: base,
+	}
+	wrapped := resultcodec.Wrap(renamed, resultcodec.JSON())
+
+	// The filter sees the model-facing (outer) name, so excluding it blocks.
+	roExcludeOuter := NewRunOptions(
+		WithToolExecutionFilter(tool.NewExcludeToolNamesFilter("outer")),
+	)
+	require.False(t, roExcludeOuter.ShouldExecuteTool(ctx, wrapped),
+		"excluding the model-facing wrapper name must block execution")
+
+	// Excluding the inner name must not match, proving the wrapper is not stripped.
+	roExcludeInner := NewRunOptions(
+		WithToolExecutionFilter(tool.NewExcludeToolNamesFilter("inner")),
+	)
+	require.True(t, roExcludeInner.ShouldExecuteTool(ctx, wrapped),
+		"a generic Unwrap wrapper must not expose the inner name to the filter")
+
+	// ResolveDeclaration keeps the renaming wrapper's outer name.
+	require.Equal(t, "outer", itool.ResolveDeclaration(wrapped).Declaration().Name)
+
+	// ResolveSemantic preserves the outer wrapper's own hook.
+	lr, ok := itool.ResolveSemantic(wrapped).(interface{ LongRunning() bool })
+	require.True(t, ok, "ResolveSemantic must preserve the outer wrapper's hook")
+	require.True(t, lr.LongRunning())
 }
 
 // TestWithToolCallArgumentsJSONRepairEnabled_SetsRunOptions verifies the option toggles the RunOptions flag.
