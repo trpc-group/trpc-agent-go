@@ -11,11 +11,21 @@
 package llm
 
 import (
+	"context"
+	"net/http"
+	"strings"
 	"testing"
+	"time"
 
 	agentmodel "trpc.group/trpc-go/trpc-agent-go/model"
 	officialopenai "trpc.group/trpc-go/trpc-agent-go/model/openai"
 )
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return fn(req)
+}
 
 func TestOpenAIModelProviderBuildsOfficialDeepSeekModel(t *testing.T) {
 	t.Setenv("CR_AGENT_TEST_DEEPSEEK_KEY", "test-deepseek-key")
@@ -99,5 +109,85 @@ func TestDeepSeekModelProviderDoesNotInheritOpenAIBaseURL(t *testing.T) {
 	})
 	if got != "" {
 		t.Fatalf("expected DeepSeek default base URL to come from official variant, got %q", got)
+	}
+}
+
+func TestOpenAIModelTimeoutDefaultsToHTTPProviderTimeout(t *testing.T) {
+	if got := OpenAIModelTimeout(OpenAIConfig{}); got != defaultHTTPTimeout {
+		t.Fatalf("expected default timeout %s, got %s", defaultHTTPTimeout, got)
+	}
+}
+
+func TestOpenAIModelProviderTimeoutBoundsStalledRequests(t *testing.T) {
+	const timeout = 50 * time.Millisecond
+
+	originalNewHTTPClient := agentmodel.DefaultNewHTTPClient
+	t.Cleanup(func() {
+		agentmodel.DefaultNewHTTPClient = originalNewHTTPClient
+	})
+
+	var capturedTimeout time.Duration
+	attempts := 0
+	agentmodel.DefaultNewHTTPClient = func(opts ...agentmodel.HTTPClientOption) agentmodel.HTTPClient {
+		httpOpts := &agentmodel.HTTPClientOptions{}
+		for _, opt := range opts {
+			opt(httpOpts)
+		}
+		capturedTimeout = httpOpts.Timeout
+		return &http.Client{
+			Timeout: httpOpts.Timeout,
+			Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+				attempts++
+				<-req.Context().Done()
+				return nil, req.Context().Err()
+			}),
+		}
+	}
+
+	model, err := NewOpenAIModel(OpenAIConfig{
+		Provider: ProviderOpenAICompatible,
+		Model:    "gpt-4o-mini",
+		APIKey:   "sk-localyaml-1234567890abcdef",
+		BaseURL:  "https://gateway.example.com/v1",
+		Timeout:  timeout,
+	})
+	if err != nil {
+		t.Fatalf("NewOpenAIModel returned error: %v", err)
+	}
+	if capturedTimeout != timeout {
+		t.Fatalf("expected official client timeout %s, got %s", timeout, capturedTimeout)
+	}
+
+	start := time.Now()
+	responseChan, err := model.GenerateContent(context.Background(), &agentmodel.Request{
+		Messages: []agentmodel.Message{
+			agentmodel.NewUserMessage("hello"),
+		},
+	})
+	if err != nil {
+		t.Fatalf("GenerateContent returned error: %v", err)
+	}
+
+	var responses []*agentmodel.Response
+	for response := range responseChan {
+		responses = append(responses, response)
+	}
+	elapsed := time.Since(start)
+
+	if len(responses) != 1 {
+		t.Fatalf("expected a single terminal response, got %d", len(responses))
+	}
+	if responses[0].Error == nil {
+		t.Fatalf("expected timeout error response, got %+v", responses[0])
+	}
+	if !strings.Contains(strings.ToLower(responses[0].Error.Message), "timeout") &&
+		!strings.Contains(strings.ToLower(responses[0].Error.Message), "deadline exceeded") {
+		t.Fatalf("expected timeout-related error, got %q", responses[0].Error.Message)
+	}
+	if attempts != 1 {
+		t.Fatalf("expected a single timed request attempt, got %d", attempts)
+	}
+	if elapsed >= 4*timeout {
+		t.Fatalf("expected request to be bounded near %s, took %s", timeout, elapsed)
 	}
 }

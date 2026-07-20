@@ -15,7 +15,9 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
+	openaiopt "github.com/openai/openai-go/option"
 	agentmodel "trpc.group/trpc-go/trpc-agent-go/model"
 	officialopenai "trpc.group/trpc-go/trpc-agent-go/model/openai"
 )
@@ -37,6 +39,7 @@ type OpenAIConfig struct {
 	APIKey    string
 	APIKeyEnv string
 	BaseURL   string
+	Timeout   time.Duration
 	Variant   string
 }
 
@@ -89,6 +92,15 @@ func NewOpenAIModel(cfg OpenAIConfig) (agentmodel.Model, error) {
 	if baseURL := OpenAIModelBaseURL(cfg); baseURL != "" {
 		opts = append(opts, officialopenai.WithBaseURL(baseURL))
 	}
+	opts = append(
+		opts,
+		officialopenai.WithHTTPClientOptions(
+			officialopenai.WithHTTPClientTimeout(OpenAIModelTimeout(cfg)),
+		),
+	)
+	// Keep timeout behavior aligned with the generic HTTP provider by
+	// avoiding SDK-managed retries that can stretch wall-clock duration.
+	opts = append(opts, officialopenai.WithOpenAIOptions(openaiopt.WithMaxRetries(0)))
 	variant, err := OpenAIModelVariant(cfg)
 	if err != nil {
 		return nil, err
@@ -109,6 +121,14 @@ func OpenAIModelBaseURL(cfg OpenAIConfig) string {
 		return ""
 	}
 	return strings.TrimSpace(os.Getenv("OPENAI_BASE_URL"))
+}
+
+// OpenAIModelTimeout returns the configured timeout or the shared default.
+func OpenAIModelTimeout(cfg OpenAIConfig) time.Duration {
+	if cfg.Timeout > 0 {
+		return cfg.Timeout
+	}
+	return defaultHTTPTimeout
 }
 
 // ModelAPIKeyEnv returns the provider's API key env name.
