@@ -17,11 +17,13 @@ type OperationKind string
 // InjectedFailurePoint identifies whether a deterministic failure occurs around a write.
 type InjectedFailurePoint string
 
+// FailureBeforeWrite and FailureAfterWrite identify supported injection boundaries.
 const (
 	FailureBeforeWrite InjectedFailurePoint = "before_write"
 	FailureAfterWrite  InjectedFailurePoint = "after_write"
 )
 
+// OperationCreateSession and the following constants identify replay actions.
 const (
 	OperationCreateSession   OperationKind = "create_session"
 	OperationAppendEvent     OperationKind = "append_event"

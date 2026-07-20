@@ -16,6 +16,7 @@ import "time"
 // Capability identifies an optional backend feature used by a replay case.
 type Capability string
 
+// CapabilitySession and the following constants identify supported backend features.
 const (
 	CapabilitySession       Capability = "session"
 	CapabilityMemory        Capability = "memory"
@@ -94,6 +95,7 @@ type EventSnapshot struct {
 // StateValueKind preserves how a Session state value was stored.
 type StateValueKind string
 
+// StateValueNull and the following constants identify persisted state representations.
 const (
 	StateValueNull   StateValueKind = "null"
 	StateValueJSON   StateValueKind = "json"
@@ -284,6 +286,7 @@ type CapabilityProbeResult struct {
 // ResultStatus describes the outcome of one case or backend comparison.
 type ResultStatus string
 
+// ResultPass and the following constants identify replay comparison outcomes.
 const (
 	ResultPass         ResultStatus = "pass"
 	ResultFail         ResultStatus = "fail"

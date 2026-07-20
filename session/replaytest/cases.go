@@ -195,14 +195,15 @@ func memoryCase() ReplayCase {
 	}
 }
 
+type memoryExpectation struct {
+	scope MemoryScope
+	kind  string
+}
+
 func validateMemoryScopes(snapshot Snapshot) error {
 	wantCounts := map[MemoryScope]int{
 		{AppName: "replaytest", UserID: "user-1"}: 3,
 		{AppName: "replaytest", UserID: "user-2"}: 1,
-	}
-	type memoryExpectation struct {
-		scope MemoryScope
-		kind  string
 	}
 	wantMemories := map[string]memoryExpectation{
 		"prefers concise answers": {
@@ -218,31 +219,28 @@ func validateMemoryScopes(snapshot Snapshot) error {
 			scope: MemoryScope{AppName: "replaytest", UserID: "user-2"}, kind: "private",
 		},
 	}
+	if err := validateMemories(snapshot.Memories, wantCounts, wantMemories); err != nil {
+		return err
+	}
+	return validateMemorySearches(snapshot.MemorySearches)
+}
+
+func validateMemories(
+	memories []MemorySnapshot,
+	wantCounts map[MemoryScope]int,
+	wantMemories map[string]memoryExpectation,
+) error {
 	gotCounts := make(map[MemoryScope]int)
 	gotContents := make(map[string]int)
-	for _, item := range snapshot.Memories {
+	for _, item := range memories {
 		gotCounts[item.Scope]++
 		gotContents[item.Content]++
 		expected, ok := wantMemories[item.Content]
 		if !ok {
 			return fmt.Errorf("unexpected memory content %q", item.Content)
 		}
-		if item.Scope != expected.scope ||
-			!reflect.DeepEqual(item.Topics, []string{expected.kind}) ||
-			item.Metadata["kind"] != expected.kind {
-			return fmt.Errorf("memory %q = %#v, want scope %#v and kind %q",
-				item.Content, item, expected.scope, expected.kind)
-		}
-		if item.Content == "prefers concise answers" {
-			eventTime, ok := item.Metadata["event_time"].(string)
-			parsedTime, err := time.Parse(time.RFC3339Nano, eventTime)
-			participants, participantsOK := item.Metadata["participants"].([]any)
-			if !ok || err != nil || !parsedTime.Equal(standardTime.Add(-time.Hour)) ||
-				item.Metadata["location"] != "Shenzhen" ||
-				!participantsOK || !sameStringSet(participants, "user", "assistant") {
-				return fmt.Errorf("preference metadata = %#v, want event_time, location, and participants",
-					item.Metadata)
-			}
+		if err := validateMemory(item, expected); err != nil {
+			return err
 		}
 	}
 	for content := range wantMemories {
@@ -255,10 +253,40 @@ func validateMemoryScopes(snapshot Snapshot) error {
 			return fmt.Errorf("memory scope %#v count = %d, want %d", scope, gotCounts[scope], want)
 		}
 	}
-	if len(snapshot.MemorySearches) != 4 {
-		return fmt.Errorf("memory searches = %d, want 4", len(snapshot.MemorySearches))
+	return nil
+}
+
+func validateMemory(item MemorySnapshot, expected memoryExpectation) error {
+	if item.Scope != expected.scope ||
+		!reflect.DeepEqual(item.Topics, []string{expected.kind}) ||
+		item.Metadata["kind"] != expected.kind {
+		return fmt.Errorf("memory %q = %#v, want scope %#v and kind %q",
+			item.Content, item, expected.scope, expected.kind)
 	}
-	for _, search := range snapshot.MemorySearches {
+	if item.Content == "prefers concise answers" {
+		return validatePreferenceMetadata(item.Metadata)
+	}
+	return nil
+}
+
+func validatePreferenceMetadata(metadata map[string]any) error {
+	eventTime, ok := metadata["event_time"].(string)
+	parsedTime, err := time.Parse(time.RFC3339Nano, eventTime)
+	participants, participantsOK := metadata["participants"].([]any)
+	if !ok || err != nil || !parsedTime.Equal(standardTime.Add(-time.Hour)) ||
+		metadata["location"] != "Shenzhen" ||
+		!participantsOK || !sameStringSet(participants, "user", "assistant") {
+		return fmt.Errorf("preference metadata = %#v, want event_time, location, and participants",
+			metadata)
+	}
+	return nil
+}
+
+func validateMemorySearches(searches []MemorySearchSnapshot) error {
+	if len(searches) != 4 {
+		return fmt.Errorf("memory searches = %d, want 4", len(searches))
+	}
+	for _, search := range searches {
 		wantScope := MemoryScope{AppName: search.AppName, UserID: search.UserID}
 		positive := search.UserID == "user-1" && search.Query == "concise" ||
 			search.UserID == "user-2" && search.Query == "isolated"
