@@ -12,6 +12,9 @@ package replaytest
 import (
 	"strings"
 	"testing"
+	"time"
+
+	"trpc.group/trpc-go/trpc-agent-go/event"
 )
 
 func TestStandardReplayCasesCoverRequiredScenarios(t *testing.T) {
@@ -123,6 +126,10 @@ func assertToolCaseCoverage(t *testing.T, toolCall ReplayCase) {
 			if len(operation.Event.ToolResponse.Extra) == 0 {
 				t.Fatal("tool response extra is not covered")
 			}
+			args, ok := operation.Event.Extensions[event.ToolCallArgsExtensionKey].(map[string]string)
+			if !ok || args["call-1"] != `{"city":"Shenzhen"}` {
+				t.Fatalf("tool call args extension = %#v", operation.Event.Extensions)
+			}
 			return
 		}
 	}
@@ -135,14 +142,24 @@ func assertConcurrentCaseCoverage(t *testing.T, concurrent ReplayCase) {
 		t.Fatalf("concurrent case operations = %#v", concurrent.Operations)
 	}
 	children := concurrent.Operations[4].Parallel
-	if len(children) != 3 || children[0].Name != "primary-first" || len(children[0].After) != 0 ||
+	if len(children) != 4 || children[0].Name != "primary-later" || len(children[0].After) != 0 ||
 		children[1].Name != "secondary" || len(children[1].After) != 0 ||
-		children[2].Name != "primary-second" || len(children[2].After) != 1 ||
-		children[2].After[0] != "primary-first" {
+		children[2].Name != "primary-earlier" || len(children[2].After) != 1 ||
+		children[2].After[0] != "primary-later" ||
+		children[3].Name != "primary-follow-up" || len(children[3].After) != 1 ||
+		children[3].After[0] != "primary-earlier" {
 		t.Fatalf("concurrent dependencies = %#v", children)
 	}
 	if children[0].SessionID == children[1].SessionID {
 		t.Fatal("independent concurrent writes must use distinct sessions")
+	}
+	if children[0].SessionID != children[2].SessionID ||
+		children[0].SessionID != children[3].SessionID {
+		t.Fatal("controlled out-of-order writes must target the same session")
+	}
+	if children[0].Event.ID != "event-2" || children[2].Event.ID != "event-1" ||
+		!children[0].Event.Timestamp.After(children[2].Event.Timestamp) {
+		t.Fatalf("same-session logical order is not out of append order: %#v", children)
 	}
 }
 
@@ -202,10 +219,14 @@ func TestRecoverySnapshotInvariant(t *testing.T) {
 func TestConcurrentSnapshotInvariant(t *testing.T) {
 	valid := Snapshot{Sessions: []SessionSnapshot{
 		{ID: standardSessionID, Events: []EventSnapshot{
-			{Content: "primary request"}, {Content: "first"}, {Content: "second"},
+			{ID: "event-0", Author: "user", Content: "primary request", Timestamp: time.Unix(0, 1).UTC()},
+			{ID: "event-2", Author: "tool", Content: "later tool", Timestamp: time.Unix(0, 3).UTC()},
+			{ID: "event-1", Author: "sub-agent", Content: "earlier sub-agent", Timestamp: time.Unix(0, 2).UTC()},
+			{ID: "event-3", Author: "assistant", Content: "follow-up", Timestamp: time.Unix(0, 4).UTC()},
 		}},
 		{ID: "session-2", Events: []EventSnapshot{
-			{Content: "secondary request"}, {Content: "parallel"},
+			{ID: "event-0", Author: "user", Content: "secondary request", Timestamp: time.Unix(0, 1).UTC()},
+			{ID: "event-3", Author: "sub-agent", Content: "parallel", Timestamp: time.Unix(0, 2).UTC()},
 		}},
 	}}
 	if err := validateConcurrentSnapshot(valid); err != nil {

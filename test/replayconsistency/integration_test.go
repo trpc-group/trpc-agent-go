@@ -46,7 +46,7 @@ func TestOptionalIntegrationReplayMatrix(t *testing.T) {
 					newInMemoryBackend(),
 					backend,
 				},
-				NormalizeOptions:      replaytest.DefaultNormalizeOptions(),
+				NormalizeOptions:      standardNormalizeOptions(),
 				CompareOptions:        replaytest.DefaultCompareOptions(),
 				UnsupportedAllowances: replayUnsupportedAllowances(factory.Name),
 			}

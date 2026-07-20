@@ -13,6 +13,8 @@ import (
 	"fmt"
 	"reflect"
 	"time"
+
+	"trpc.group/trpc-go/trpc-agent-go/event"
 )
 
 const standardSessionID = "session-1"
@@ -91,6 +93,11 @@ func toolCallCase() ReplayCase {
 		Name:       "weather",
 		Content:    "sunny",
 		Extra:      map[string]any{"provider_status": "ok"},
+	}
+	response.Event.Extensions = map[string]any{
+		event.ToolCallArgsExtensionKey: map[string]string{
+			"call-1": `{"city":"Shenzhen"}`,
+		},
 	}
 	return ReplayCase{
 		Name:         "tool-call",
@@ -408,10 +415,10 @@ func trackCase() ReplayCase {
 func concurrentCase() ReplayCase {
 	return ReplayCase{
 		Name:         "concurrent-out-of-order",
-		Description:  "overlapping sessions and controlled out-of-order writes preserve replay ordering semantics",
+		Description:  "overlapping sessions and controlled same-session out-of-order writes preserve append ordering",
 		Capabilities: []Capability{CapabilitySession},
 		Invariants: []SnapshotInvariant{{
-			Name:  "concurrent writes retain both sessions and semantic event order",
+			Name:  "concurrent writes retain both sessions and same-session append order",
 			Check: validateConcurrentSnapshot,
 		}},
 		Operations: append(createSessionOperations(),
@@ -422,16 +429,20 @@ func concurrentCase() ReplayCase {
 				Kind: OperationParallel,
 				Parallel: []Operation{
 					namedOperation(
-						appendEvent("event-1", "tool", "first", 1),
-						"primary-first",
+						appendEvent("event-2", "tool", "later tool", 2),
+						"primary-later",
 					),
 					namedOperation(
 						appendEventForSession("session-2", "event-3", "sub-agent", "parallel", 3),
 						"secondary",
 					),
 					namedOperation(
-						appendEvent("event-2", "assistant", "second", 2),
-						"primary-second", "primary-first",
+						appendEvent("event-1", "sub-agent", "earlier sub-agent", 1),
+						"primary-earlier", "primary-later",
+					),
+					namedOperation(
+						appendEvent("event-3", "assistant", "follow-up", 3),
+						"primary-follow-up", "primary-earlier",
 					),
 				},
 			},
@@ -440,29 +451,49 @@ func concurrentCase() ReplayCase {
 }
 
 func validateConcurrentSnapshot(snapshot Snapshot) error {
-	want := map[string][]string{
-		standardSessionID: {"primary request", "first", "second"},
-		"session-2":       {"secondary request", "parallel"},
+	type expectedEvent struct {
+		id       string
+		author   string
+		content  string
+		timeRank int
+	}
+	want := map[string][]expectedEvent{
+		standardSessionID: {
+			{id: "event-0", author: "user", content: "primary request", timeRank: 1},
+			{id: "event-2", author: "tool", content: "later tool", timeRank: 3},
+			{id: "event-1", author: "sub-agent", content: "earlier sub-agent", timeRank: 2},
+			{id: "event-3", author: "assistant", content: "follow-up", timeRank: 4},
+		},
+		"session-2": {
+			{id: "event-0", author: "user", content: "secondary request", timeRank: 1},
+			{id: "event-3", author: "sub-agent", content: "parallel", timeRank: 2},
+		},
 	}
 	if len(snapshot.Sessions) != len(want) {
 		return fmt.Errorf("session count = %d, want %d", len(snapshot.Sessions), len(want))
 	}
 	for _, sess := range snapshot.Sessions {
-		wantContents, ok := want[sess.ID]
+		wantEvents, ok := want[sess.ID]
 		if !ok {
 			return fmt.Errorf("unexpected session %q", sess.ID)
 		}
-		if len(sess.Events) != len(wantContents) {
-			return fmt.Errorf("session %q event count = %d, want %d", sess.ID, len(sess.Events), len(wantContents))
+		if len(sess.Events) != len(wantEvents) {
+			return fmt.Errorf("session %q event count = %d, want %d", sess.ID, len(sess.Events), len(wantEvents))
 		}
-		for index, content := range wantContents {
-			if sess.Events[index].Content != content {
+		for index, wantEvent := range wantEvents {
+			got := sess.Events[index]
+			if got.ID != wantEvent.id || got.Author != wantEvent.author ||
+				got.Content != wantEvent.content ||
+				!got.Timestamp.Equal(time.Unix(0, int64(wantEvent.timeRank)).UTC()) {
 				return fmt.Errorf(
-					"session %q event %d content = %q, want %q",
+					"session %q event %d = %#v, want id=%q author=%q content=%q time rank=%d",
 					sess.ID,
 					index,
-					sess.Events[index].Content,
-					content,
+					got,
+					wantEvent.id,
+					wantEvent.author,
+					wantEvent.content,
+					wantEvent.timeRank,
 				)
 			}
 		}
@@ -591,7 +622,29 @@ func validateToolCall(snapshot Snapshot) error {
 		!reflect.DeepEqual(response.Extra, map[string]any{"provider_status": "ok"}) {
 		return fmt.Errorf("tool response = %#v, want linked sunny weather response", response)
 	}
+	if err := validateToolCallArgsExtension(sess.Events[2].Extensions); err != nil {
+		return err
+	}
 	return nil
+}
+
+func validateToolCallArgsExtension(extensions map[string]any) error {
+	raw, ok := extensions[event.ToolCallArgsExtensionKey]
+	if !ok {
+		return fmt.Errorf("tool call args extension %q is missing", event.ToolCallArgsExtensionKey)
+	}
+	const expected = `{"city":"Shenzhen"}`
+	switch args := raw.(type) {
+	case map[string]string:
+		if args["call-1"] == expected {
+			return nil
+		}
+	case map[string]any:
+		if args["call-1"] == expected {
+			return nil
+		}
+	}
+	return fmt.Errorf("tool call args extension = %#v, want call-1 arguments %s", raw, expected)
 }
 
 func validateStateUpdate(snapshot Snapshot) error {

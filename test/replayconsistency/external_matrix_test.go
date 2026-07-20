@@ -48,7 +48,7 @@ func TestRequiredExternalReplayMatrix(t *testing.T) {
 	defer cancel()
 	runner := replaytest.Runner{
 		Backends:              append([]replaytest.Backend{newInMemoryBackend()}, backends...),
-		NormalizeOptions:      replaytest.DefaultNormalizeOptions(),
+		NormalizeOptions:      standardNormalizeOptions(),
 		CompareOptions:        replaytest.DefaultCompareOptions(),
 		UnsupportedAllowances: replayUnsupportedAllowances(backendNames(backends)...),
 	}

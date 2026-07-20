@@ -16,17 +16,20 @@
 标准场景覆盖单轮及多轮对话、工具调用、State、Memory、Summary、事件截断、Track、并发写入和异常恢复，并额外保证：
 
 - Memory 覆盖两个逻辑 scope、正向检索和跨 scope 负向检索。
+- Tool 场景同时校验 call、response、response extra 及 `trpc_agent.tool_call_args` args extension。
 - Summary 覆盖双 Session 归属、覆盖更新、filter-key，以及后端生成的 version、boundary 和 updated-at。`set_replay_window` 根据已持久化的 Summary boundary 构造回放窗口，不删除底层 Event。
-- 并发场景通过 barrier 同时释放两个跨 Session 写入；同一 Session 内的依赖操作仍按确定顺序执行。
+- 并发场景通过 barrier 释放跨 Session 写入，并在同一 Session 中受控追加时间/ID 乱序的 tool、sub-agent 和 assistant 事件；不变量同时校验追加顺序和规范化时间等级。
 - 每条标准场景都包含 Snapshot invariant，避免多个后端共同丢失或错误地保存数据时仍比较通过。
-- 恢复场景同时覆盖 before-write 和 after-write 重试。
+- 恢复场景覆盖 before-write 和 after-write 重试；真实后端 fixture 另有 Event、State、Summary 的定向 uncertain-commit 测试。
 
 ## 快速使用
 
 ```go
+normalizeOptions := replaytest.DefaultNormalizeOptions()
+normalizeOptions.PreserveEventIDs = true // StandardReplayCases 使用显式 Event ID。
 runner := replaytest.Runner{
 	Backends:        []replaytest.Backend{baseline, candidate},
-	NormalizeOptions: replaytest.DefaultNormalizeOptions(),
+	NormalizeOptions: normalizeOptions,
 	CompareOptions:   replaytest.DefaultCompareOptions(),
 }
 report, err := runner.Run(ctx, replaytest.StandardReplayCases())
@@ -36,7 +39,7 @@ report, err := runner.Run(ctx, replaytest.StandardReplayCases())
 
 ## 比较规则
 
-- 只归一化自动生成或后端私有字段；Event、State、Memory、Summary 和 Track 的业务语义保持严格比较。
+- 只归一化自动生成或后端私有字段；标准矩阵保留 fixture 显式指定的 Event ID，防止后端篡改被逻辑 ID 映射掩盖。
 - Track duration 保留原值，比较器默认使用 `1ms` 绝对误差容限，不做分桶。
 - 未声明的差异默认失败，并生成非空 `Explanation`。
 - `allowed_diff` 必须精确绑定 backend、case 和 path/capability；通配路径、重复规则和未消费规则均视为配置错误。

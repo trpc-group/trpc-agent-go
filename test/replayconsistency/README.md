@@ -26,7 +26,7 @@ go test ./replayconsistency -run TestLightweightReplayMatrix -count=1
 | `summary-update` | 内容、filter-key、版本、归属和覆盖 |
 | `summary-truncation` | Summary、保留事件和后续事件共同回放 |
 | `track-events` | 调用关联、时序、错误和耗时 |
-| `concurrent-out-of-order` | 并发及交错追加后的确定性结果 |
+| `concurrent-out-of-order` | 跨 Session 并发及同 Session 时间/ID 乱序追加后的确定性结果 |
 | `failure-retry` | 写入失败、重复写入和幂等重试 |
 
 ## 可选集成后端
@@ -70,13 +70,13 @@ go test ./replayconsistency -run TestOptionalIntegrationTTLProbes -count=1
 
 ## 设计说明（150–300 字）
 
-框架用十类后端无关操作驱动隔离 fixture，并读取统一快照。归一化只处理自动 ID、时间戳、JSON/map 顺序及私有 metadata，事件顺序和业务字段仍严格比较。Memory 保留检索排名，仅容忍微小相似度误差；Summary 检查 filter-key、文本、版本、归属与覆盖关系；Track 检查名称、类型、调用、错误及时序，仅容忍微小耗时误差。并发场景使用 barrier，快照不变量防止共同漏数。`allowed_diff` 必须绑定后端、场景、能力或字段路径并说明原因，未声明差异和未消费规则均失败。轻量模式使用 InMemory 与 SQLite，外部后端通过环境变量启用。
+框架用十类后端无关操作驱动隔离 fixture，并读取统一快照。归一化处理自动 ID、时间戳、JSON/map 顺序及私有 metadata；标准轨迹中的显式 Event ID、事件顺序和业务字段严格保留。Memory 保留检索排名，仅容忍微小相似度误差；Summary 分别检查文本语义、filter-key、版本、归属和覆盖；Track 检查名称、类型、调用、错误及时序，仅容忍微小耗时误差。同 Session 乱序轨迹用明确依赖和时间等级避免抖动。`allowed_diff` 必须绑定后端、场景、能力或字段路径并说明原因，未声明或未消费规则均失败。轻量模式使用 InMemory 与 SQLite，外部后端由环境变量启用。
 
 ## 故障检测
 
 `write_fault_test.go` 在真实 fixture 的 `Apply` / `ApplyWithFault` 写边界注入故障，不修改读取后的 Snapshot。10 条标准场景分别验证目标 fault 能被检出并定位到预期 path；Summary 额外覆盖 missing、overwrite、wrong-session 和 wrong-filter-key。
 
-异常恢复场景还会注入 after-write Memory 故障，验证“提交成功但响应失败”后的幂等重试。Operation 在注入前执行深拷贝，避免 baseline、candidate 或并发子操作之间共享污染。
+异常恢复标准场景注入 after-write Memory 故障；定向测试另覆盖 Event 重复、State 脏 key，以及 Summary 重复/错误覆盖、归属、filter-key、版本、更新时间和 boundary。State 与 Summary 测试同时运行 InMemory、SQLite。Operation 在注入前执行深拷贝，避免 baseline、candidate 或并发子操作之间共享污染。
 
 ## 差异报告
 

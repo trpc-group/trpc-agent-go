@@ -17,6 +17,7 @@ import (
 	"sync"
 	"testing"
 
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/session/replaytest"
@@ -131,10 +132,12 @@ func TestStandardReplayCasesDetectWriteBoundaryFaults(t *testing.T) {
 		),
 		"tool-call": onceWriteFault(
 			func(operation replaytest.Operation) bool {
-				return operation.Event != nil && len(operation.Event.ToolCalls) > 0
+				return operation.Event != nil && operation.Event.ToolResponse != nil
 			},
 			func(operation *replaytest.Operation) {
-				operation.Event.ToolCalls[0].Arguments = map[string]any{"city": "Beijing"}
+				operation.Event.Extensions[event.ToolCallArgsExtensionKey] = map[string]string{
+					"call-1": `{"city":"Beijing"}`,
+				}
 			},
 		),
 		"state-update": onceWriteFault(
@@ -185,7 +188,7 @@ func TestStandardReplayCasesDetectWriteBoundaryFaults(t *testing.T) {
 	expectedPaths := map[string]string{
 		"single-turn":             ".events[",
 		"multi-turn":              ".events[",
-		"tool-call":               ".tool_calls[",
+		"tool-call":               ".extensions.trpc_agent.tool_call_args.call-1",
 		"state-update":            ".state.write_fault",
 		"memory-read-write":       "$.memories[",
 		"summary-update":          ".summaries[",
@@ -288,7 +291,7 @@ func runWriteFaultCase(
 			newInMemoryBackend(),
 			newWriteFaultBackend(fault),
 		},
-		NormalizeOptions: replaytest.DefaultNormalizeOptions(),
+		NormalizeOptions: standardNormalizeOptions(),
 		CompareOptions:   replaytest.DefaultCompareOptions(),
 	}
 	report, err := runner.Run(context.Background(), []replaytest.ReplayCase{replayCase})

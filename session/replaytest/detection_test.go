@@ -165,6 +165,9 @@ func TestSummaryCriticalDifferencesAreDetected(t *testing.T) {
 func TestEventAssociatedFieldsAreDetected(t *testing.T) {
 	mutators := []func(*Snapshot){
 		func(snapshot *Snapshot) {
+			snapshot.Sessions[0].Events[0].ID = "wrong-event"
+		},
+		func(snapshot *Snapshot) {
 			snapshot.Sessions[0].Events[0].InvocationID = "wrong-invocation"
 		},
 		func(snapshot *Snapshot) {
@@ -214,12 +217,14 @@ func TestRecoveryCaseLeavesCleanFinalState(t *testing.T) {
 }
 
 func modelRunner(baselineMutator, actualMutator func(*Snapshot)) Runner {
+	normalizeOptions := DefaultNormalizeOptions()
+	normalizeOptions.PreserveEventIDs = true
 	return Runner{
 		Backends: []Backend{
 			modelBackend("baseline", baselineMutator),
 			modelBackend("actual", actualMutator),
 		},
-		NormalizeOptions: DefaultNormalizeOptions(),
+		NormalizeOptions: normalizeOptions,
 		CompareOptions:   DefaultCompareOptions(),
 	}
 }
