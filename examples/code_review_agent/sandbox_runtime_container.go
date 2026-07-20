@@ -18,6 +18,10 @@ import (
 )
 
 func newContainerRunner(opts ReviewOptions, timeout time.Duration, outputLimit int64) (SandboxRunner, error) {
+	goModCache := ""
+	if opts.RepoPath != "" {
+		goModCache = hostGoModCache()
+	}
 	if opts.DryRun {
 		return &engineRunner{
 			runtime:     "container",
@@ -26,6 +30,7 @@ func newContainerRunner(opts ReviewOptions, timeout time.Duration, outputLimit i
 			repoPath:    opts.RepoPath,
 			skillsRoot:  opts.SkillsRoot,
 			dryRun:      true,
+			goModCache:  goModCache,
 		}, nil
 	}
 	dockerPath := filepath.Join("code_review_agent", "sandbox")
@@ -41,10 +46,16 @@ func newContainerRunner(opts ReviewOptions, timeout time.Duration, outputLimit i
 		repoPath:    opts.RepoPath,
 		skillsRoot:  opts.SkillsRoot,
 		dryRun:      opts.DryRun,
+		goModCache:  goModCache,
 	}, nil
 }
 
 func newE2BRunner(opts ReviewOptions, timeout time.Duration, outputLimit int64) (SandboxRunner, error) {
+	goModCache := ""
+	if opts.RepoPath != "" {
+		goModCache = hostGoModCache()
+	}
+	lifetime := totalSandboxLifetime(timeout, reviewCommands(opts))
 	if opts.DryRun {
 		return &engineRunner{
 			runtime:     "e2b",
@@ -53,11 +64,12 @@ func newE2BRunner(opts ReviewOptions, timeout time.Duration, outputLimit int64) 
 			repoPath:    opts.RepoPath,
 			skillsRoot:  opts.SkillsRoot,
 			dryRun:      true,
+			goModCache:  goModCache,
 		}, nil
 	}
 	exec, err := e2bexec.New(
 		e2bexec.WithExecutionTimeout(timeout),
-		e2bexec.WithSandboxTimeout(timeout*2),
+		e2bexec.WithSandboxTimeout(lifetime),
 	)
 	if err != nil {
 		return nil, err
@@ -70,5 +82,21 @@ func newE2BRunner(opts ReviewOptions, timeout time.Duration, outputLimit int64) 
 		repoPath:    opts.RepoPath,
 		skillsRoot:  opts.SkillsRoot,
 		dryRun:      opts.DryRun,
+		goModCache:  goModCache,
 	}, nil
+}
+
+func totalSandboxLifetime(timeout time.Duration, commands []string) time.Duration {
+	if timeout <= 0 {
+		return 0
+	}
+	commandCount := len(commands)
+	if commandCount == 0 {
+		commandCount = 1
+	}
+	const perCommandOverhead = 10 * time.Second
+	const setupAndCleanupBuffer = 30 * time.Second
+	return time.Duration(commandCount)*timeout +
+		time.Duration(commandCount+1)*perCommandOverhead +
+		setupAndCleanupBuffer
 }

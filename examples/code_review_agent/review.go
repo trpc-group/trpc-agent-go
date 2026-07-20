@@ -33,6 +33,9 @@ func RunReview(ctx context.Context, opts ReviewOptions) (ReviewReport, string, s
 	ctx, span := otel.Tracer("trpc-agent-go/examples/code_review_agent").Start(ctx, "code_review_agent.review")
 	defer span.End()
 	start := time.Now().UTC()
+	if err := validateReviewInputs(opts); err != nil {
+		return ReviewReport{}, "", "", err
+	}
 	if opts.OutDir == "" {
 		opts.OutDir = "code_review_agent_out"
 	}

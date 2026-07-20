@@ -60,3 +60,21 @@ func TestParseUnifiedDiffHunkContentWithHeaderPrefixes(t *testing.T) {
 	require.Equal(t, "++literal", sum.AddedLines[0].Content)
 	require.Equal(t, "added", sum.AddedLines[1].Content)
 }
+
+func TestParseUnifiedDiffUnquotedGitPathWithSpaces(t *testing.T) {
+	raw := "diff --git a/pkg/a b.go b/pkg/a b.go\n--- a/pkg/a b.go\t2026-07-20 12:00:00 +0800\n+++ b/pkg/a b.go\t2026-07-20 12:01:00 +0800\n@@ -0,0 +1,1 @@\n+package pkg\n"
+	sum, err := ParseUnifiedDiff(raw)
+	require.NoError(t, err)
+	require.Len(t, sum.Files, 1)
+	require.Equal(t, "pkg/a b.go", sum.Files[0].OldPath)
+	require.Equal(t, "pkg/a b.go", sum.Files[0].NewPath)
+	require.Equal(t, "package pkg", sum.AddedLines[0].Content)
+}
+
+func TestParseUnifiedDiffHeaderTimestamp(t *testing.T) {
+	raw := "--- a/plain.go\t2026-07-20 12:00:00 +0800\n+++ b/plain.go\t2026-07-20 12:01:00 +0800\n@@ -0,0 +1,1 @@\n+package plain\n"
+	sum, err := ParseUnifiedDiff(raw)
+	require.NoError(t, err)
+	require.Len(t, sum.Files, 1)
+	require.Equal(t, "plain.go", sum.Files[0].NewPath)
+}

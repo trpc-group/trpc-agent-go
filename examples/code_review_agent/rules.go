@@ -159,9 +159,11 @@ func hunkContext(lines []AddedLine) map[string][]AddedLine {
 }
 
 func testCoverageRule(summary DiffSummary) []Finding {
-	changedGo := false
-	testChanged := false
-	firstFile := ""
+	type packageChange struct {
+		firstImplFile string
+		hasTest       bool
+	}
+	changes := make(map[string]*packageChange)
 	for _, file := range summary.Files {
 		p := file.NewPath
 		if p == "" {
@@ -170,30 +172,51 @@ func testCoverageRule(summary DiffSummary) []Finding {
 		if filepath.Ext(p) != ".go" {
 			continue
 		}
+		dir := filepath.ToSlash(filepath.Dir(p))
+		if dir == "." {
+			dir = ""
+		}
+		change := changes[dir]
+		if change == nil {
+			change = &packageChange{}
+			changes[dir] = change
+		}
 		if strings.HasSuffix(p, "_test.go") {
-			testChanged = true
+			change.hasTest = true
 			continue
 		}
-		if firstFile == "" {
-			firstFile = p
+		if change.firstImplFile == "" {
+			change.firstImplFile = p
 		}
-		changedGo = true
 	}
-	if !changedGo || testChanged {
+	if len(changes) == 0 {
 		return nil
 	}
-	return []Finding{{
-		Severity:       severityLow,
-		Category:       "testing",
-		File:           firstFile,
-		Line:           1,
-		Title:          "Go code changed without test changes",
-		Evidence:       "Diff changes Go implementation files but no *_test.go file is present.",
-		Recommendation: "Add or update focused tests for the changed behavior, or record why existing coverage is sufficient.",
-		Confidence:     0.66,
-		Source:         "deterministic-rule",
-		RuleID:         "go.testing.missing",
-	}}
+	dirs := make([]string, 0, len(changes))
+	for dir := range changes {
+		dirs = append(dirs, dir)
+	}
+	sort.Strings(dirs)
+	findings := make([]Finding, 0, len(dirs))
+	for _, dir := range dirs {
+		change := changes[dir]
+		if change == nil || change.firstImplFile == "" || change.hasTest {
+			continue
+		}
+		findings = append(findings, Finding{
+			Severity:       severityLow,
+			Category:       "testing",
+			File:           change.firstImplFile,
+			Line:           1,
+			Title:          "Go code changed without package-local test changes",
+			Evidence:       "Diff changes Go implementation files in this package but no *_test.go file changed alongside them.",
+			Recommendation: "Add or update focused tests for the changed package, or record why existing coverage is sufficient.",
+			Confidence:     0.66,
+			Source:         "deterministic-rule",
+			RuleID:         "go.testing.missing",
+		})
+	}
+	return findings
 }
 
 // DeduplicateFindings removes duplicate reports by file, line, category, and rule.

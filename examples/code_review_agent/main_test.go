@@ -50,6 +50,10 @@ func TestRunCLI(t *testing.T) {
 
 	err = runCLI([]string{"--sandbox-timeout", "not-a-duration", "--runtime", "fake"})
 	require.Error(t, err)
+	err = runCLI([]string{"--runtime", "fake"})
+	require.Error(t, err)
+	err = runCLI([]string{"--runtime", "fake", "--fixture", "clean", "--diff-file", "x.diff"})
+	require.Error(t, err)
 	err = runCLI([]string{"--unknown"})
 	require.Error(t, err)
 	err = runAllFixtures(context.Background(), ReviewOptions{FixtureDir: filepath.Join(t.TempDir(), "missing")})

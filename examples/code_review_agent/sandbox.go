@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -39,6 +40,7 @@ type engineRunner struct {
 	repoPath    string
 	skillsRoot  string
 	dryRun      bool
+	goModCache  string
 }
 
 type fakeRunner struct {
@@ -118,6 +120,11 @@ func (r *engineRunner) Run(ctx context.Context, taskID string, commands []string
 			return nil, fmt.Errorf("stage skills: %w", err)
 		}
 	}
+	if r.goModCache != "" {
+		if err := eng.FS().StageDirectory(ctx, ws, r.goModCache, "gomodcache", codeexecutor.StageOptions{ReadOnly: true, AllowMount: true}); err != nil {
+			return nil, fmt.Errorf("stage gomodcache: %w", err)
+		}
+	}
 	runs := make([]SandboxRun, 0, len(commands))
 	for _, command := range commands {
 		run, err := r.runOne(ctx, eng, ws, taskID, command, gate)
@@ -158,11 +165,8 @@ func (r *engineRunner) runOne(ctx context.Context, eng codeexecutor.Engine, ws c
 		Args:     spec.args,
 		Cwd:      spec.cwd,
 		CleanEnv: true,
-		Env: map[string]string{
-			"HOME": "/tmp",
-			"PATH": "/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin",
-		},
-		Timeout: r.timeout,
+		Env:      sandboxEnv(spec.cwd, r.goModCache),
+		Timeout:  r.timeout,
 	})
 	run.CompletedAt = time.Now().UTC()
 	run.Duration = rr.Duration
@@ -309,4 +313,30 @@ func limitOutput(out string, max int64) (string, bool) {
 		keep = 0
 	}
 	return out[:keep] + marker, true
+}
+
+func hostGoModCache() string {
+	cmd := exec.Command("go", "env", "GOMODCACHE")
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func sandboxEnv(cwd string, stagedGoModCache string) map[string]string {
+	env := map[string]string{
+		"HOME": "/tmp",
+		"PATH": "/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin",
+	}
+	if stagedGoModCache == "" {
+		return env
+	}
+	prefix := ""
+	if cwd != "." && cwd != "" {
+		prefix = "../"
+	}
+	env["GOMODCACHE"] = prefix + "gomodcache"
+	env["GOCACHE"] = prefix + "gocache"
+	return env
 }

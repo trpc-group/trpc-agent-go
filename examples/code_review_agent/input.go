@@ -38,6 +38,28 @@ func loadInput(ctx context.Context, opts ReviewOptions) (string, string, error) 
 	}
 }
 
+func validateReviewInputs(opts ReviewOptions) error {
+	count := 0
+	for _, present := range []bool{
+		opts.Fixture != "",
+		opts.DiffFile != "",
+		opts.RepoPath != "",
+		opts.FileList != "",
+	} {
+		if present {
+			count++
+		}
+	}
+	switch {
+	case count == 0:
+		return fmt.Errorf("exactly one input source is required: --fixture, --diff-file, --repo-path, or --file-list")
+	case count > 1:
+		return fmt.Errorf("input sources are mutually exclusive: choose exactly one of --fixture, --diff-file, --repo-path, or --file-list")
+	default:
+		return nil
+	}
+}
+
 func loadFixture(dir string, name string) (string, error) {
 	if dir == "" {
 		dir = filepath.Join("code_review_agent", "testdata", "fixtures")
@@ -96,15 +118,29 @@ func gitDiff(ctx context.Context, repo string) (string, error) {
 	if _, err := gitTrackedFiles(ctx, repo); err != nil {
 		return "", err
 	}
-	cmd := exec.CommandContext(ctx, "git", "diff", "--no-ext-diff", "--no-textconv")
-	cmd.Dir = repo
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	out, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("git diff: %w: %s", err, stderr.String())
+	if hasHead(ctx, repo) {
+		out, err := runGitOutput(ctx, repo, "diff", "--no-ext-diff", "--no-textconv", "HEAD")
+		if err != nil {
+			return "", err
+		}
+		return string(out), nil
 	}
-	return string(out), nil
+	cached, err := runGitOutput(ctx, repo, "diff", "--cached", "--no-ext-diff", "--no-textconv", "--root")
+	if err != nil {
+		return "", err
+	}
+	worktree, err := runGitOutput(ctx, repo, "diff", "--no-ext-diff", "--no-textconv")
+	if err != nil {
+		return "", err
+	}
+	switch {
+	case len(cached) == 0:
+		return string(worktree), nil
+	case len(worktree) == 0:
+		return string(cached), nil
+	default:
+		return string(cached) + "\n" + string(worktree), nil
+	}
 }
 
 func gitTrackedFiles(ctx context.Context, repo string) ([]string, error) {
@@ -128,6 +164,24 @@ func gitTrackedFiles(ctx context.Context, repo string) ([]string, error) {
 		files = append(files, p)
 	}
 	return files, nil
+}
+
+func hasHead(ctx context.Context, repo string) bool {
+	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--verify", "HEAD")
+	cmd.Dir = repo
+	return cmd.Run() == nil
+}
+
+func runGitOutput(ctx context.Context, repo string, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = repo
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, stderr.String())
+	}
+	return out, nil
 }
 
 func diffFromFileList(list string) (string, error) {

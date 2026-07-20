@@ -56,6 +56,11 @@ func runCLI(args []string) error {
 	if err != nil {
 		return fmt.Errorf("invalid --sandbox-timeout: %w", err)
 	}
+	if evalLabels == "" {
+		if err := validateReviewInputs(opts); err != nil {
+			return err
+		}
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if evalLabels != "" {

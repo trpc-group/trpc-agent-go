@@ -21,13 +21,15 @@ import (
 
 func TestLoadInputVariants(t *testing.T) {
 	ctx := context.Background()
-	kind, raw, err := loadInput(ctx, ReviewOptions{})
-	require.NoError(t, err)
-	require.Equal(t, "empty", kind)
-	require.Empty(t, raw)
+	var kind string
+	var raw string
+	err := validateReviewInputs(ReviewOptions{})
+	require.Error(t, err)
 
 	diff := filepath.Join(t.TempDir(), "change.diff")
 	require.NoError(t, os.WriteFile(diff, []byte("diff --git a/a.go b/a.go\n"), 0o644))
+	err = validateReviewInputs(ReviewOptions{DiffFile: diff, FileList: "pkg/a.go"})
+	require.Error(t, err)
 	kind, raw, err = loadInput(ctx, ReviewOptions{DiffFile: diff})
 	require.NoError(t, err)
 	require.Equal(t, "diff_file", kind)
@@ -59,6 +61,26 @@ func TestGitDiffInput(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "repo", kind)
 	require.Contains(t, raw, "func A")
+}
+
+func TestGitDiffIncludesStagedChanges(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	repo := t.TempDir()
+	runGit(t, repo, "init")
+	runGit(t, repo, "config", "user.email", "test@example.com")
+	runGit(t, repo, "config", "user.name", "Test")
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "a.go"), []byte("package main\n"), 0o644))
+	runGit(t, repo, "add", "a.go")
+	runGit(t, repo, "commit", "-m", "init")
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "a.go"), []byte("package main\n\nfunc Staged() {}\n"), 0o644))
+	runGit(t, repo, "add", "a.go")
+
+	kind, raw, err := loadInput(context.Background(), ReviewOptions{RepoPath: repo})
+	require.NoError(t, err)
+	require.Equal(t, "repo", kind)
+	require.Contains(t, raw, "func Staged")
 }
 
 func TestGitDiffDisablesTextconv(t *testing.T) {

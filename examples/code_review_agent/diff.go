@@ -176,6 +176,16 @@ func rememberMinusHeader(state diffParseState, line string) (diffParseState, err
 	}
 	if state.current == nil {
 		state.lastMinusLine = line
+		return state, nil
+	}
+	p, deleted, err := parseHeaderPath(strings.TrimPrefix(line, "--- "))
+	if err != nil {
+		return state, err
+	}
+	if deleted {
+		state.current.OldPath = ""
+	} else {
+		state.current.OldPath = p
 	}
 	return state, nil
 }
@@ -276,16 +286,9 @@ func validateHunk(h *hunkState) error {
 
 func parseDiffGitLine(line string) (string, string, error) {
 	rest := strings.TrimPrefix(line, "diff --git ")
-	left, rest, err := readGitPathToken(rest)
+	left, right, err := splitGitHeaderPaths(rest)
 	if err != nil {
 		return "", "", err
-	}
-	right, rest, err := readGitPathToken(strings.TrimLeft(rest, " "))
-	if err != nil {
-		return "", "", err
-	}
-	if strings.TrimSpace(rest) != "" {
-		return "", "", fmt.Errorf("unexpected diff header suffix %q", rest)
 	}
 	oldPath, err := normalizeDiffPath(left)
 	if err != nil {
@@ -298,16 +301,64 @@ func parseDiffGitLine(line string) (string, string, error) {
 	return oldPath, newPath, nil
 }
 
-func readGitPathToken(s string) (string, string, error) {
+func splitGitHeaderPaths(s string) (string, string, error) {
+	if s == "" {
+		return "", "", errors.New("missing path token")
+	}
+	if s[0] == '"' {
+		left, rest, err := readQuotedPathToken(s)
+		if err != nil {
+			return "", "", err
+		}
+		right, rest, err := readQuotedPathToken(strings.TrimLeft(rest, " "))
+		if err != nil {
+			return "", "", err
+		}
+		if strings.TrimSpace(rest) != "" {
+			return "", "", fmt.Errorf("unexpected diff header suffix %q", rest)
+		}
+		return left, right, nil
+	}
+	return splitUnquotedGitHeaderPaths(s)
+}
+
+func splitUnquotedGitHeaderPaths(s string) (string, string, error) {
+	if !strings.HasPrefix(s, "a/") {
+		return "", "", fmt.Errorf("invalid diff header %q", s)
+	}
+	var fallbackLeft string
+	var fallbackRight string
+	for i := strings.Index(s, " b/"); i >= 0; {
+		split := i + 1
+		left := s[:i]
+		right := s[split:]
+		if strings.HasPrefix(right, "b/") {
+			if strings.TrimPrefix(left, "a/") == strings.TrimPrefix(right, "b/") {
+				return left, right, nil
+			}
+			if fallbackLeft == "" {
+				fallbackLeft = left
+				fallbackRight = right
+			}
+		}
+		next := strings.Index(s[split+2:], " b/")
+		if next < 0 {
+			break
+		}
+		i = split + 2 + next
+	}
+	if fallbackLeft != "" {
+		return fallbackLeft, fallbackRight, nil
+	}
+	return "", "", fmt.Errorf("invalid diff header %q", s)
+}
+
+func readQuotedPathToken(s string) (string, string, error) {
 	if s == "" {
 		return "", "", errors.New("missing path token")
 	}
 	if s[0] != '"' {
-		i := strings.IndexByte(s, ' ')
-		if i < 0 {
-			return s, "", nil
-		}
-		return s[:i], s[i:], nil
+		return "", "", errors.New("expected quoted path")
 	}
 	escaped := false
 	for i := 1; i < len(s); i++ {
@@ -328,12 +379,33 @@ func readGitPathToken(s string) (string, string, error) {
 }
 
 func parseHeaderPath(raw string) (string, bool, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "/dev/null" {
+	raw = strings.TrimRight(raw, " \r")
+	pathToken, err := splitHeaderPathToken(raw)
+	if err != nil {
+		return "", false, err
+	}
+	if pathToken == "/dev/null" {
 		return "", true, nil
 	}
-	p, err := normalizeDiffPath(raw)
+	p, err := normalizeDiffPath(pathToken)
 	return p, false, err
+}
+
+func splitHeaderPathToken(raw string) (string, error) {
+	if raw == "" {
+		return "", errors.New("empty path")
+	}
+	if raw[0] == '"' {
+		p, _, err := readQuotedPathToken(raw)
+		return p, err
+	}
+	if i := strings.IndexByte(raw, '\t'); i >= 0 {
+		raw = raw[:i]
+	}
+	if raw == "" {
+		return "", errors.New("empty path")
+	}
+	return raw, nil
 }
 
 func normalizeDiffPath(raw string) (string, error) {

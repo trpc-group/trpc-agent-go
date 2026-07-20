@@ -11,7 +11,10 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -136,6 +139,49 @@ func TestStoreLoadsZeroMetricsMapsAndHelpers(t *testing.T) {
 	require.Empty(t, formatTime(time.Time{}))
 	require.True(t, parseTime("").IsZero())
 	require.True(t, parseTime("not-time").IsZero())
+}
+
+func TestStorePersistsRedactedSecretsAndPrivatePermissions(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "review.db")
+	store, err := OpenStore(ctx, dbPath)
+	require.NoError(t, err)
+	defer store.Close()
+
+	report := minimalReport("task-secret")
+	report.Input = DiffSummary{
+		Hash:       "hash",
+		Files:      []ChangedFile{{OldPath: "pkg/a.go", NewPath: "pkg/a.go"}},
+		AddedLines: []AddedLine{{File: "pkg/a.go", Line: 1, Content: `token := "supersecretpassword123"`}},
+		Packages:   []PackageInfo{{Dir: "pkg", Name: "pkg", GoFiles: 1}},
+	}
+	report.SandboxRuns[0].Output = "AKIA1234567890ABCDEF"
+	report.Conclusion = "-----BEGIN PRIVATE KEY-----\nZXhhbXBsZS1zZWNyZXQ=\n-----END PRIVATE KEY-----"
+	require.NoError(t, store.SaveReport(ctx, report, "report.json", "report.md"))
+
+	var summaryJSON string
+	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT summary_json FROM review_inputs WHERE task_id = ?`, report.Task.ID).Scan(&summaryJSON))
+	require.NotContains(t, summaryJSON, "supersecretpassword123")
+
+	var sandboxOutput string
+	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT output FROM sandbox_runs WHERE task_id = ?`, report.Task.ID).Scan(&sandboxOutput))
+	require.NotContains(t, sandboxOutput, "AKIA1234567890ABCDEF")
+
+	var reportJSON string
+	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT report_json FROM reports WHERE task_id = ?`, report.Task.ID).Scan(&reportJSON))
+	require.NotContains(t, reportJSON, "ZXhhbXBsZS1zZWNyZXQ=")
+
+	loaded, err := store.LoadReport(ctx, report.Task.ID)
+	require.NoError(t, err)
+	raw, err := json.Marshal(loaded)
+	require.NoError(t, err)
+	require.NotContains(t, string(raw), "supersecretpassword123")
+
+	info, err := os.Stat(dbPath)
+	require.NoError(t, err)
+	if runtime.GOOS != "windows" {
+		require.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+	}
 }
 
 func minimalReport(id string) ReviewReport {

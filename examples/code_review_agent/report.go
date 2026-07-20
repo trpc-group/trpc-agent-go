@@ -26,9 +26,10 @@ func writeReports(report ReviewReport, outDir string) (string, string, []Artifac
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return "", "", nil, err
 	}
+	report = redactReviewReport(report)
 	jsonPath := filepath.Join(outDir, "review_report.json")
 	mdPath := filepath.Join(outDir, "review_report.md")
-	md := []byte(RedactSecrets(renderMarkdown(report)))
+	md := []byte(renderMarkdown(report))
 	now := time.Now().UTC()
 	artifacts := []ArtifactRecord{
 		{TaskID: report.Task.ID, Name: "review_report.json", Path: jsonPath, MIMEType: "application/json", CreatedAt: now},
@@ -54,7 +55,6 @@ func marshalReportWithArtifacts(report ReviewReport, artifacts []ArtifactRecord)
 		if err != nil {
 			return nil, nil, err
 		}
-		next = []byte(RedactSecrets(string(next)))
 		size := int64(len(next))
 		if artifacts[0].SizeBytes == size {
 			return next, artifacts, nil

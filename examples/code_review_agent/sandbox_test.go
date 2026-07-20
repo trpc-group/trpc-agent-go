@@ -52,7 +52,8 @@ func TestEngineRunnerDryRunAndExecution(t *testing.T) {
 		ExitCode: 0,
 		Duration: time.Millisecond,
 	}}
-	exec := &stubCodeExecutor{eng: stubEngine{runner: runner}}
+	fs := &stubFS{}
+	exec := &stubCodeExecutor{eng: stubEngine{runner: runner, fs: fs}}
 	r := &engineRunner{runtime: "stub", exec: exec, timeout: time.Second, outputLimit: 100, dryRun: true}
 	gate := NewCommandGate()
 	runs, err := r.Run(context.Background(), "task", []string{"go test ./..."}, gate)
@@ -73,6 +74,7 @@ func TestEngineRunnerDryRunAndExecution(t *testing.T) {
 
 	r.repoPath = "."
 	r.skillsRoot = "skills"
+	r.goModCache = "host-mod-cache"
 	runs, err = r.Run(context.Background(), "task", []string{skillScriptCommand}, NewCommandGate())
 	require.NoError(t, err)
 	require.Len(t, runs, 1)
@@ -81,6 +83,11 @@ func TestEngineRunnerDryRunAndExecution(t *testing.T) {
 	require.Equal(t, "bash", runner.specs[1].Cmd)
 	require.Equal(t, []string{"../skills/code-review/scripts/run_go_checks.sh"}, runner.specs[1].Args)
 	require.Equal(t, "repo", runner.specs[1].Cwd)
+	require.Equal(t, "../gomodcache", runner.specs[1].Env["GOMODCACHE"])
+	require.Equal(t, "../gocache", runner.specs[1].Env["GOCACHE"])
+	require.Contains(t, fs.stageCalls, stageCall{src: ".", to: "repo"})
+	require.Contains(t, fs.stageCalls, stageCall{src: "skills", to: "skills"})
+	require.Contains(t, fs.stageCalls, stageCall{src: "host-mod-cache", to: "gomodcache"})
 
 	r.outputLimit = 40
 	runner.result.Stdout = `token="AKID1234567890SECRET"`
@@ -132,6 +139,13 @@ func TestEngineRunnerErrors(t *testing.T) {
 	require.Equal(t, "dry_run", runs[0].Status)
 }
 
+func TestTotalSandboxLifetimeCoversFullCommandSequence(t *testing.T) {
+	timeout := 30 * time.Second
+	lifetime := totalSandboxLifetime(timeout, []string{"go test ./...", "go vet ./...", skillScriptCommand})
+	require.Greater(t, lifetime, timeout*2)
+	require.Equal(t, 160*time.Second, lifetime)
+}
+
 func mustLimitOutput(t *testing.T, out string, max int64) string {
 	t.Helper()
 	limited, truncated := limitOutput(out, max)
@@ -165,11 +179,17 @@ func (s *closeableStubCodeExecutor) Close() error {
 
 type stubEngine struct {
 	runner codeexecutor.ProgramRunner
+	fs     codeexecutor.WorkspaceFS
 }
 
 func (s stubEngine) Manager() codeexecutor.WorkspaceManager { return stubManager{} }
-func (s stubEngine) FS() codeexecutor.WorkspaceFS           { return stubFS{} }
-func (s stubEngine) Runner() codeexecutor.ProgramRunner     { return s.runner }
+func (s stubEngine) FS() codeexecutor.WorkspaceFS {
+	if s.fs != nil {
+		return s.fs
+	}
+	return &stubFS{}
+}
+func (s stubEngine) Runner() codeexecutor.ProgramRunner { return s.runner }
 func (s stubEngine) Describe() codeexecutor.Capabilities {
 	return codeexecutor.Capabilities{SupportsCleanEnv: true}
 }
@@ -182,21 +202,29 @@ func (stubManager) CreateWorkspace(context.Context, string, codeexecutor.Workspa
 
 func (stubManager) Cleanup(context.Context, codeexecutor.Workspace) error { return nil }
 
-type stubFS struct{}
+type stageCall struct {
+	src string
+	to  string
+}
 
-func (stubFS) PutFiles(context.Context, codeexecutor.Workspace, []codeexecutor.PutFile) error {
+type stubFS struct {
+	stageCalls []stageCall
+}
+
+func (*stubFS) PutFiles(context.Context, codeexecutor.Workspace, []codeexecutor.PutFile) error {
 	return nil
 }
-func (stubFS) StageDirectory(context.Context, codeexecutor.Workspace, string, string, codeexecutor.StageOptions) error {
+func (s *stubFS) StageDirectory(_ context.Context, _ codeexecutor.Workspace, src string, to string, _ codeexecutor.StageOptions) error {
+	s.stageCalls = append(s.stageCalls, stageCall{src: src, to: to})
 	return nil
 }
-func (stubFS) Collect(context.Context, codeexecutor.Workspace, []string) ([]codeexecutor.File, error) {
+func (*stubFS) Collect(context.Context, codeexecutor.Workspace, []string) ([]codeexecutor.File, error) {
 	return []codeexecutor.File{}, nil
 }
-func (stubFS) StageInputs(context.Context, codeexecutor.Workspace, []codeexecutor.InputSpec) error {
+func (*stubFS) StageInputs(context.Context, codeexecutor.Workspace, []codeexecutor.InputSpec) error {
 	return nil
 }
-func (stubFS) CollectOutputs(context.Context, codeexecutor.Workspace, codeexecutor.OutputSpec) (codeexecutor.OutputManifest, error) {
+func (*stubFS) CollectOutputs(context.Context, codeexecutor.Workspace, codeexecutor.OutputSpec) (codeexecutor.OutputManifest, error) {
 	return codeexecutor.OutputManifest{}, nil
 }
 

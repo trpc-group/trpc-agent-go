@@ -14,6 +14,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -21,7 +23,8 @@ import (
 
 // Store persists review tasks and audit records.
 type Store struct {
-	db *sql.DB
+	db   *sql.DB
+	path string
 }
 
 // ReviewStore is the persistence boundary for alternate SQL backends.
@@ -55,14 +58,21 @@ func OpenStore(ctx context.Context, path string) (*Store, error) {
 	if path == "" {
 		return nil, fmt.Errorf("empty db path")
 	}
+	if err := ensurePrivateSQLitePath(path); err != nil {
+		return nil, err
+	}
 	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(5000)")
 	if err != nil {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
-	s := &Store{db: db}
+	s := &Store{db: db, path: path}
 	if err := s.init(ctx); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := hardenSQLitePermissions(path); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -208,7 +218,7 @@ func (s *Store) SaveReport(ctx context.Context, report ReviewReport, jsonPath st
 	); err != nil {
 		return err
 	}
-	inputJSON, err := json.Marshal(report.Input)
+	inputJSON, err := json.Marshal(redactDiffSummary(report.Input))
 	if err != nil {
 		return err
 	}
@@ -273,11 +283,14 @@ func (s *Store) SaveReport(ctx context.Context, report ReviewReport, jsonPath st
 	if _, err := tx.ExecContext(ctx,
 		`INSERT OR REPLACE INTO reports(task_id, json_path, md_path, report_json, conclusion, created_at)
 		VALUES (?, ?, ?, ?, ?, ?)`,
-		report.Task.ID, jsonPath, mdPath, string(reportJSON), report.Conclusion, formatTime(time.Now().UTC()),
+		report.Task.ID, jsonPath, mdPath, string(reportJSON), RedactSecrets(report.Conclusion), formatTime(time.Now().UTC()),
 	); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	return hardenSQLitePermissions(s.path)
 }
 
 func insertFindings(ctx context.Context, tx *sql.Tx, taskID string, bucket string, findings []Finding) error {
@@ -555,4 +568,27 @@ func parseTime(raw string) time.Time {
 		return time.Time{}
 	}
 	return t
+}
+
+func ensurePrivateSQLitePath(path string) error {
+	dir := filepath.Dir(path)
+	if dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+	}
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return err
+	}
+	return f.Close()
+}
+
+func hardenSQLitePermissions(path string) error {
+	for _, candidate := range []string{path, path + "-wal", path + "-shm", path + "-journal"} {
+		if err := os.Chmod(candidate, 0o600); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return nil
 }

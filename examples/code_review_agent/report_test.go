@@ -68,3 +68,25 @@ func TestWriteReportsArtifactMetadataMatchesFiles(t *testing.T) {
 	require.Equal(t, artifacts[0].SizeBytes, disk.Artifacts[0].SizeBytes)
 	require.Equal(t, artifacts[1].SizeBytes, disk.Artifacts[1].SizeBytes)
 }
+
+func TestWriteReportsRedactsSecrets(t *testing.T) {
+	report := minimalReport("task-redacted-report")
+	report.Input = DiffSummary{
+		Hash:       "hash",
+		Files:      []ChangedFile{{OldPath: "pkg/a.go", NewPath: "pkg/a.go"}},
+		AddedLines: []AddedLine{{File: "pkg/a.go", Line: 1, Content: `token := "supersecretpassword123"`}},
+		Packages:   []PackageInfo{{Dir: "pkg", Name: "pkg", GoFiles: 1}},
+	}
+	report.Conclusion = "AKIA1234567890ABCDEF"
+	jsonPath, mdPath, _, err := writeReports(report, t.TempDir())
+	require.NoError(t, err)
+
+	raw, err := os.ReadFile(jsonPath)
+	require.NoError(t, err)
+	require.NotContains(t, string(raw), "supersecretpassword123")
+	require.NotContains(t, string(raw), "AKIA1234567890ABCDEF")
+
+	md, err := os.ReadFile(mdPath)
+	require.NoError(t, err)
+	require.NotContains(t, string(md), "supersecretpassword123")
+}
