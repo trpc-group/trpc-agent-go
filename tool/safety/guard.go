@@ -148,82 +148,116 @@ func (g *Guard) CheckToolPermission(ctx context.Context, req *tool.PermissionReq
 // which is the same behaviour as the previous substring-only extractor.
 func defaultExtractor(args []byte, toolName string) ScanInput {
 	in := ScanInput{ExecutorType: "local"}
-	if len(args) == 0 {
+	raw, ok := parseExtractorArgs(args)
+	if !ok {
 		return in
+	}
+
+	appendCharsCodeBlock(&in, raw)
+	in.Command = firstStringField(raw, "command", "code")
+	mergeStdinPayload(&in, raw, toolName)
+	appendParsedCodeBlocks(&in, raw)
+	return in
+}
+
+func parseExtractorArgs(args []byte) (map[string]json.RawMessage, bool) {
+	if len(args) == 0 {
+		return nil, false
 	}
 	args = bytes.TrimLeft(args, " \t\n\r\v\f")
 	if len(args) == 0 {
-		return in
+		return nil, false
 	}
 	// Fast path: a non-JSON blob (e.g. raw shell) — return empty so the
 	// scan pipeline still runs with a zero-value input. We deliberately
 	// do not try to parse it as JSON to avoid a misleading panic on
 	// malformed payloads.
 	if args[0] != '{' && args[0] != '[' {
-		return in
+		return nil, false
 	}
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(args, &raw); err != nil {
-		return in
+		return nil, false
 	}
+	return raw, true
+}
+
+func appendCharsCodeBlock(in *ScanInput, raw map[string]json.RawMessage) {
 	// "chars" is the primary payload for write_stdin-type tools and
 	// interactive session continuations (host/workspace/skill).
 	// It should be scanned like code.
-	if v, ok := raw["chars"]; ok {
-		var s string
-		if err := json.Unmarshal(v, &s); err == nil && s != "" {
-			in.CodeBlocks = append(in.CodeBlocks, CodeBlock{Code: s})
+	if s, ok := stringField(raw, "chars"); ok && s != "" {
+		in.CodeBlocks = append(in.CodeBlocks, CodeBlock{Code: s})
+	}
+}
+
+func firstStringField(raw map[string]json.RawMessage, keys ...string) string {
+	for _, key := range keys {
+		if s, ok := stringField(raw, key); ok {
+			return s
 		}
 	}
-	// "command" is the primary field; "code" is a legacy alias kept
-	// for back-compat with callers that pre-date the code_blocks
-	// support added in response to WineChord's review on PR #2044.
-	for _, key := range []string{"command", "code"} {
-		v, ok := raw[key]
-		if !ok {
-			continue
-		}
-		var s string
-		if err := json.Unmarshal(v, &s); err == nil {
-			in.Command = s
-			break
-		}
+	return ""
+}
+
+func stringField(raw map[string]json.RawMessage, key string) (string, bool) {
+	v, ok := raw[key]
+	if !ok {
+		return "", false
 	}
-	// "stdin" piped to exec-command tools is executable code.  Fold it
+	var s string
+	if err := json.Unmarshal(v, &s); err != nil {
+		return "", false
+	}
+	return s, true
+}
+
+func mergeStdinPayload(in *ScanInput, raw map[string]json.RawMessage, toolName string) {
+	_ = toolName
+	// "stdin" piped to exec-command tools is executable code. Fold it
 	// into Command so that command-line rules (shell wrappers, dangerous
 	// commands, network access) can inspect it alongside the command.
-	if v, ok := raw["stdin"]; ok {
-		var s string
-		if err := json.Unmarshal(v, &s); err == nil && s != "" {
-			if in.Command == "" {
-				in.Command = s
-			} else if in.Command == "python3" || in.Command == "python" ||
-				in.Command == "python2" || in.Command == "node" ||
-				in.Command == "ruby" || in.Command == "perl" ||
-				in.Command == "bash" {
-				// Interactive interpreter: stdin is the real payload.
-				in.Command = s
-				// Also push into CodeBlocks so code-aware rules see it.
-				in.CodeBlocks = append(in.CodeBlocks, CodeBlock{Code: s})
-			} else {
-				// Non-interpreter: prepend the command so rules see the
-				// full intent.
-				in.Command = in.Command + " <<< " + s
-			}
-		}
+	stdin, ok := stringField(raw, "stdin")
+	if !ok || stdin == "" {
+		return
 	}
+	if in.Command == "" {
+		in.Command = stdin
+		return
+	}
+	if isInterpreterCommand(in.Command) {
+		// Interactive interpreter: stdin is the real payload.
+		in.Command = stdin
+		// Also push into CodeBlocks so code-aware rules see it.
+		in.CodeBlocks = append(in.CodeBlocks, CodeBlock{Code: stdin})
+		return
+	}
+	// Non-interpreter: prepend the command so rules see the full intent.
+	in.Command = in.Command + " <<< " + stdin
+}
+
+func isInterpreterCommand(cmd string) bool {
+	switch cmd {
+	case "python3", "python", "python2", "node", "ruby", "perl", "bash":
+		return true
+	default:
+		return false
+	}
+}
+
+func appendParsedCodeBlocks(in *ScanInput, raw map[string]json.RawMessage) {
 	// "code_blocks" is the canonical list shape used by tool/codeexec.
 	// It may be a normal array, a single object (instead of an array),
 	// or a double-encoded JSON string containing either of the above.
-	if v, ok := raw["code_blocks"]; ok {
-		blocks := parseCodeBlocks(v)
-		for _, cb := range blocks {
-			if cb.Code != "" {
-				in.CodeBlocks = append(in.CodeBlocks, cb)
-			}
+	v, ok := raw["code_blocks"]
+	if !ok {
+		return
+	}
+	for _, cb := range parseCodeBlocks(v) {
+		if cb.Code != "" {
+			in.CodeBlocks = append(in.CodeBlocks, cb)
 		}
 	}
-	return in
 }
 
 // parseCodeBlocks mirrors tool/codeexec's unmarshalCodeBlocks so the
