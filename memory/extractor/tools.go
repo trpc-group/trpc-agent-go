@@ -61,7 +61,8 @@ var assistantResultAddTool = func() tool.Tool {
 	declaration := *memorytool.NewAddTool().Declaration()
 	declaration.Name = assistantResultAddToolName
 	declaration.Description = "Store a concrete result provided by the " +
-		"assistant in direct response to the user's request."
+		"assistant in direct response to the user's request, including a " +
+		"named analytical or opinion-based conclusion."
 	return &declarationOnlyTool{decl: &declaration}
 }()
 

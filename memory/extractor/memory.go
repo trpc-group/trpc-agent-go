@@ -648,8 +648,11 @@ events, goals, corrections, and forget requests supplied by the user.
 
 Eligible results are named answers, recommendations or shortlists, ordered
 plans, decisions, calculations, and requested extractions, classifications, or
-transformations. Do not store general definitions, explanatory background,
-tutorial prose, brainstorming without a selected result, or acknowledgments.
+transformations. This includes a selected answer to a judgment or comparison
+question even when the assistant frames it as an opinion, an analysis, or a
+conclusion based on available information. Do not store general definitions,
+explanatory background, tutorial prose, brainstorming without a selected
+result, or acknowledgments.
 
 Every assistant-result memory must begin with "Assistant result:" so its source
 remains explicit after persistence. The prefix distinguishes assistant-provided
@@ -663,6 +666,11 @@ recommendations, estimates, and answers from facts confirmed by the user.
   requested by the user, emit a memory for that result even when the response
   is educational, generally applicable, or based on non-personal material.
   Do not emit only the user's goal while dropping the answer to that goal.
+- Determine eligibility by whether the response resolves the user's request
+  with a concise answer they could ask about later, not by whether the answer is
+  personal, objectively verifiable, or free of analysis. A rationale or a
+  disclaimer that the assistant has no personal opinion does not make an
+  otherwise concrete named answer into generic background.
 - Keep a cohesive result in one memory when splitting it would lose set
   membership, ordering, or item-to-detail relationships. For a long response,
   store one concise memory containing the requested answer rather than every
@@ -671,6 +679,11 @@ recommendations, estimates, and answers from facts confirmed by the user.
   "steel for strength, aluminum for weight, and wood for cost", store one
   memory containing all three material-to-property recommendations. Merely
   storing that the user is comparing materials is incomplete.
+- Example: if a user asks which proposal best balances reliability and cost and
+  the assistant answers "Based on my analysis, Plan B is the best balance"
+  followed by supporting reasons, store "Assistant result: Plan B best balances
+  reliability and cost." The analytical framing and supporting explanation do
+  not disqualify the selected conclusion.
 - Preserve exact names, quantities, negation, modality, and relationships.
 - Every number, amount, range, percentage, date, duration, and measurement in
   a result must appear in the assistant's direct response. Never invent a
