@@ -3,9 +3,9 @@
 language: "en-US"
 tone_instructions: >-
   Concise professional reviews. Bilingual output: EN first, ZH collapsed.
-  Framework repo: prioritize semantic/behavioral compat, stable
-  defaults/contracts, extensibility, generality, usability, and CI-hard
-  design/behavior issues; avoid style debates.
+  This is a framework repository. Prioritize public API design, semantic and
+  behavioral compatibility, stable defaults and contracts, extensibility,
+  generality, usability, and correctness. Avoid subjective local style debates.
 early_access: false
 
 reviews:
@@ -22,6 +22,7 @@ reviews:
   sequence_diagrams: false
   estimate_code_review_effort: true
   in_progress_fortune: false
+
   path_filters:
     - "!**/*.png"
     - "!**/*.jpg"
@@ -44,101 +45,243 @@ reviews:
     - "!**/*.wasm"
 
   high_level_summary_instructions: |-
-    Please output a bilingual high-level summary.
+    Output a bilingual high-level summary.
     Show the English summary first.
-    Wrap the Chinese translation in a Markdown-compatible HTML details block collapsed by default.
-    Both versions must cover: change overview, compatibility and behavioral risks, and recommended validation steps.
-    Be specific and actionable. Avoid generic praise and irrelevant style commentary.
-    The Chinese section must use this exact wrapper:
+    Wrap the Chinese translation in a Markdown-compatible HTML details block
+    collapsed by default.
+
+    Both versions must cover:
+    - the change overview;
+    - public API and compatibility implications;
+    - behavioral and operational risks; and
+    - recommended validation.
+
+    When the pull request adds or changes exported Go APIs, include a public API
+    surface summary that lists the affected symbols and calls out questions
+    about export necessity, package ownership, API overlap, naming semantics,
+    extensibility, documentation, and compatibility.
+
+    Be specific and actionable. Avoid generic praise and subjective style
+    commentary.
+
+    Use this exact wrapper for the Chinese section:
     <details>
     <summary>中文</summary>
-    
+
     Chinese summary here.
-    
+
     </details>
 
   path_instructions:
     - path: "**/*.go"
       instructions: |
-        Write all review output bilingually: English first, then Chinese in collapsed <details><summary>中文</summary>...</details>.
-        This is framework code. Review priorities:
-        1. Semantic and behavioral compatibility
-        2. Extensibility
-        3. Generality
+        Write review output bilingually: English first, followed by Chinese in
+        a collapsed <details><summary>中文</summary>...</details> block.
+
+        This is framework code. Review priorities are:
+        1. Public API and framework design
+        2. Semantic and behavioral compatibility
+        3. Extensibility and generality
         4. Ease of use
         5. Concurrency safety, resource boundaries, and error handling
         6. Code style
 
-        Focus on:
-        - Whether default behavior remains stable and new capability is introduced through optional config, options, interfaces, callbacks, or plugins rather than by changing existing paths.
-        - Whether exported types, exported functions, exported methods, interfaces, options, error semantics, nil or zero-value semantics, JSON or serialization fields, event ordering, or streaming semantics introduce breaking changes.
-        - Adding struct fields is usually compatible. Do not raise blocking comments for that alone, but do check serialization compatibility, zero-value semantics, and default behavior.
-        - When agent, runner, graph, tool, or similar execution paths change, whether event flow, stateDelta, tool invocation order, cancellation propagation, retry semantics, or long-running tool markers change in externally observable ways.
-        - Whether abstractions remain capability-oriented rather than vendor-oriented, and avoid leaking provider-specific, model-specific, or business-specific assumptions into public layers.
-        - Whether the change introduces global mutable state, implicit singletons, unbounded queues, infinite retries, goroutine leaks, incorrect channel-closing order, or background tasks that cannot stop promptly.
-        - Whether persistence- or protocol-related structures such as session, memory, artifact, knowledge, and vectorstore remain backward compatible and have migration and rollback paths.
-        - Whether errors preserve root causes and remain distinguishable to callers. Control-flow errors should not be retried as ordinary failures.
-        - Whether security boundaries stay clear: treat external input, URLs, paths, command arguments, and model-driven tool invocations as untrusted.
-        - Whether new APIs or configuration keep the minimum required setup, sensible defaults, and consistent naming and parameter ordering.
+        Public API review:
+
+        Whenever the diff adds or changes exported types, functions, methods,
+        interfaces, fields, constants, variables, options, callbacks, or
+        sentinel errors, perform a separate review of the complete public API
+        surface.
+
+        Inventory the affected exported symbols before reviewing individual
+        implementation details. Review the surface as one coherent design,
+        including relationships and overlap between the new and existing APIs.
+
+        For each added or changed export, verify:
+        - whether external consumers need the symbol or it can remain
+          unexported;
+        - whether an existing API, option, interface, callback, or extension
+          point already supports the use case;
+        - whether the concept belongs to the declaring package and abstraction
+          layer;
+        - whether it duplicates or partially overlaps an existing public entry
+          point;
+        - whether its name represents a stable user-facing concept rather than
+          an incidental implementation, provider, vendor, or deployment detail;
+        - whether the design can evolve without parallel APIs, duplicate types,
+          or incompatible renames;
+        - whether defaults, zero values, nil inputs, errors, ownership,
+          mutation, concurrency, cancellation, cleanup, and lifecycle behavior
+          are defined where relevant;
+        - whether source, behavioral, serialization, persistence, protocol, and
+          extension compatibility are preserved;
+        - whether meaningful Godoc explains the contract, defaults,
+          constraints, and errors; and
+        - whether tests protect the public contract and externally observable
+          behavior.
+
+        Do not assume an additive export is appropriate merely because it is
+        source compatible. An unnecessary or overlapping export is still a
+        long-term framework commitment.
+
+        Provider and abstraction boundaries:
+
+        - Keep provider-, vendor-, model-, protocol-, business-, and
+          deployment-specific concepts in their owning packages.
+        - Do not move provider-specific fields or options into shared framework
+          types unless multiple implementations share the same semantics.
+        - Prefer capability-oriented shared abstractions over
+          provider-oriented abstractions.
+        - Check whether changes to shared interfaces affect all existing
+          implementations, including implementations outside the pull request.
+        - Check whether a concrete provider package can expose a necessary
+          specialized capability without expanding a shared package.
+
+        Public API naming versus local naming:
+
+        - Treat exported naming as a framework design concern when it affects
+          semantic accuracy, discoverability, package fit, abstraction
+          boundaries, provider leakage, or future evolution.
+        - Do not dismiss a public naming concern as style merely because the
+          code compiles or the name is internally consistent.
+        - Treat unexported helpers, local variables, and test names as
+          implementation details.
+        - Do not raise an unexported naming or refactoring suggestion based only
+          on personal preference.
+        - Raise a local naming issue only when the name is misleading,
+          conflicts with an established convention, or is likely to cause
+          incorrect behavior.
+
+        Compatibility and behavior:
+
+        - Verify that existing default behavior remains stable and that new
+          behavior is explicit and opt-in when practical.
+        - Check exported APIs, interfaces, options, errors, nil behavior,
+          zero-value behavior, JSON fields, event ordering, streaming,
+          cancellation, retry semantics, and lifecycle behavior.
+        - Adding a struct field is usually source compatible, but still review
+          serialization, zero-value, default, equality, comparability, and
+          external implementation implications.
+        - When agent, runner, graph, tool, or related execution paths change,
+          review event flow, stateDelta, tool invocation order, cancellation,
+          retries, long-running tool markers, and termination behavior.
+        - For persistence and protocol changes, review migration, rollback, and
+          mixed-version behavior.
+        - Verify that errors preserve root causes and remain distinguishable to
+          callers. Do not retry control-flow errors as ordinary failures.
+
+        Concurrency, resources, and security:
+
+        - Check for global mutable state, implicit singletons, unbounded queues,
+          infinite retries, goroutine leaks, incorrect channel-closing order,
+          and background work that cannot stop promptly.
+        - Verify cancellation propagation, cleanup, backpressure, ownership,
+          and resource limits.
+        - Treat external input, URLs, paths, command arguments, serialized data,
+          and model-driven tool invocations as untrusted.
+
+        Comments and documentation:
+
+        - Require newly added source comments and Godoc to be written in
+          English, except for intentionally localized test data.
+        - Check that comments explain contracts, constraints, invariants, or
+          non-obvious reasoning rather than merely restating the code.
+        - Check that every added exported symbol has meaningful Godoc.
 
         Avoid:
-        - Suggestions about naming, formatting, comment style, or "more elegant refactors" based only on personal preference.
-        - Suggestions that break public contracts or default behavior merely for implementation convenience.
+        - suggestions about unexported naming, formatting, comment style, or
+          more elegant refactors based only on personal preference;
+        - treating a shallow private helper or local implementation choice as a
+          public API design problem;
+        - recommending a new abstraction without a demonstrated responsibility
+          or external use case; and
+        - suggestions that break existing contracts or defaults merely for
+          implementation convenience.
 
-        If you believe a change is an intentional behavioral change, explicitly state:
-        - what the old behavior was;
-        - what the new behavior is;
-        - which users or extension points are affected;
-        - which tests, examples, or documentation should be updated accordingly.
+        For an intentional behavioral change, explicitly state:
+        - the old behavior;
+        - the new behavior;
+        - the affected users and extension points; and
+        - the tests, examples, documentation, migration notes, and release
+          notes that should be updated.
 
     - path: "**/*_test.go"
       instructions: |
-        Write all review output bilingually: English first, then Chinese in collapsed <details><summary>中文</summary>...</details>.
-        Prioritize whether tests validate external behavior rather than implementation details.
+        Write review output bilingually: English first, followed by Chinese in
+        a collapsed <details><summary>中文</summary>...</details> block.
 
-        Focus on:
-        - Whether the main path, boundary conditions, error paths, and regression scenarios are covered.
-        - Whether concurrency-related changes cover cancellation, shutdown, error propagation, goroutine cleanup, channel ordering, and backpressure.
-        - Whether streaming output, event flow, stateDelta, and tool invocation chains verify order, consistency, and termination semantics.
-        - Whether tests are stable and avoid time.Sleep, randomness, real external services, or machine-specific environment differences.
-        - Whether mocks, fakes, httptest, temporary directories, or other controllable substitutes are preferred.
-        - Whether assertions are strong enough to ensure the intended behavior is actually verified.
+        Prioritize whether tests protect externally observable behavior rather
+        than implementation details.
 
-        Do not suggest weakening assertions, deleting tests, or widening mocks merely to hide real problems.
+        Check:
+        - main paths, boundary conditions, error paths, and regressions;
+        - cancellation, shutdown, error propagation, goroutine cleanup, channel
+          ordering, and backpressure for concurrent behavior;
+        - ordering, consistency, and termination for streaming, events,
+          stateDelta, and tool invocation chains;
+        - deterministic behavior without unnecessary sleeps, randomness, real
+          external services, or machine-specific assumptions;
+        - appropriate use of mocks, fakes, httptest, and temporary directories;
+          and
+        - assertions strong enough to fail when the intended contract breaks.
+
+        Flag tests that only execute code, assert language properties, or
+        duplicate implementation details without protecting a project
+        contract.
+
+        Do not suggest weakening assertions, deleting meaningful tests, or
+        widening mocks to hide a real failure.
 
     - path: "test/**"
       instructions: |
-        Write all review output bilingually: English first, then Chinese in collapsed <details><summary>中文</summary>...</details>.
-        Treat code under test/ as test infrastructure rather than ordinary business code.
+        Write review output bilingually: English first, followed by Chinese in
+        a collapsed <details><summary>中文</summary>...</details> block.
 
-        Focus on:
-        - Whether test helper code is small, clear, single-purpose, and reusable.
-        - Whether it avoids relying on real external services and unstable environments.
-        - Whether it avoids hiding real behavior by pushing too much logic into fixtures.
-        - Whether logs, test data, and example configuration leak sensitive information.
+        Treat code under test/ as test infrastructure rather than ordinary
+        framework code.
+
+        Check whether test helpers:
+        - are focused, clear, and reusable;
+        - avoid unstable external dependencies and machine-specific behavior;
+        - preserve the real behavior being tested rather than hiding it behind
+          fixtures; and
+        - prevent credentials or sensitive information from leaking through
+          logs, fixtures, artifacts, or configuration.
 
     - path: "examples/**"
       instructions: |
-        Write all review output bilingually: English first, then Chinese in collapsed <details><summary>中文</summary>...</details>.
-        Examples represent the recommended usage and the user's first impression. Review them for reproducibility, clarity, and safe execution.
+        Write review output bilingually: English first, followed by Chinese in
+        a collapsed <details><summary>中文</summary>...</details> block.
 
-        Focus on:
-        - Whether they use public APIs and reflect the current recommended usage.
-        - Whether runtime steps, dependencies, environment variables, and side effects are clear.
-        - Whether sensitive information is passed through environment variables and whether example output avoids leaking tokens, secrets, or private data.
-        - Whether each example is small enough and focused on one capability instead of becoming a hidden "mini production system."
-        - Whether examples are updated when public APIs, defaults, or recommended usage change.
+        Examples represent recommended usage and a user's first impression.
+
+        Check whether examples:
+        - use current public APIs and recommended patterns;
+        - document runtime steps, dependencies, environment variables, and side
+          effects;
+        - keep credentials in environment variables and avoid exposing secrets;
+        - remain focused on one capability rather than becoming hidden
+          production systems; and
+        - are updated alongside public APIs, defaults, and recommended usage.
 
     - path: "**/*.md"
       instructions: |
-        Write all review output bilingually: English first, then Chinese in collapsed <details><summary>中文</summary>...</details>.
-        The goal of documentation is to accurately communicate the current public contract, not to optimize for writing style.
+        Write review output bilingually: English first, followed by Chinese in
+        a collapsed <details><summary>中文</summary>...</details> block.
 
-        Focus on:
-        - Whether commands, import paths, configuration keys, defaults, and return behavior match the current code.
-        - Whether README.md and README.zh_CN.md describe external usage consistently, or clearly explain any intentional differences.
-        - Whether documentation is updated when public APIs, default behavior, migration paths, or compatibility strategy change.
-        - Whether example code, configuration snippets, and directory paths are actually usable in the current repository layout.
+        Documentation must accurately describe the current public contract.
+
+        Check:
+        - commands, import paths, configuration keys, defaults, errors, and
+          return behavior against the implementation;
+        - consistency between English and translated documentation;
+        - documentation of public APIs, default behavior, migration paths, and
+          compatibility decisions; and
+        - whether examples, snippets, configuration, and repository paths are
+          usable.
+
+        Do not optimize for prose style at the expense of technical accuracy.
+
   tools:
     github-checks:
       enabled: true
@@ -152,6 +295,7 @@ reviews:
       enabled: true
     gitleaks:
       enabled: true
+
   auto_review:
     enabled: true
     drafts: false
