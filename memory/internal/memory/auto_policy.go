@@ -109,6 +109,7 @@ func (w *AutoMemoryWorker) applyHistoryPreservingPolicy(
 	ops []*extractor.Operation,
 	existing []*memory.Entry,
 ) []*extractor.Operation {
+	ops = coalesceHistoryBatchOperations(ops)
 	byID := make(map[string]*memory.Entry, len(existing))
 	for _, entry := range existing {
 		if validMemoryEntry(entry) {
@@ -130,6 +131,142 @@ func (w *AutoMemoryWorker) applyHistoryPreservingPolicy(
 		}
 	}
 	return out
+}
+
+// coalesceHistoryBatchOperations makes operations extracted from the same
+// conversation visible to one another. Store-backed reconciliation cannot see
+// pending adds, so without this pass a short episode and a strict enrichment
+// of that episode are both persisted even though they describe one event.
+func coalesceHistoryBatchOperations(
+	ops []*extractor.Operation,
+) []*extractor.Operation {
+	out := make([]*extractor.Operation, 0, len(ops))
+	for _, op := range ops {
+		if op == nil || op.Type != extractor.OperationAdd {
+			out = append(out, op)
+			continue
+		}
+		match, incomingEnriches := selectHistoryBatchCandidate(op, out)
+		if match < 0 {
+			out = append(out, op)
+			continue
+		}
+		richer, other := out[match], op
+		if incomingEnriches {
+			richer, other = op, out[match]
+		}
+		out[match] = mergeHistoryBatchOperations(richer, other)
+	}
+	return out
+}
+
+func selectHistoryBatchCandidate(
+	incoming *extractor.Operation,
+	pending []*extractor.Operation,
+) (int, bool) {
+	for index, candidate := range pending {
+		if candidate == nil || candidate.Type != extractor.OperationAdd {
+			continue
+		}
+		if classifyHistoryBatchCandidate(incoming, candidate) != nil {
+			return index, true
+		}
+		if classifyHistoryBatchCandidate(candidate, incoming) != nil {
+			return index, false
+		}
+	}
+	return -1, false
+}
+
+// classifyHistoryBatchCandidate returns a match when incoming is an exact
+// duplicate or a strict enrichment of stored. Unlike store reconciliation, a
+// fact/episode classifier disagreement is allowed here because both operations
+// came from one extraction call; the merged operation retains episodic
+// metadata. Other kinds remain isolated.
+func classifyHistoryBatchCandidate(
+	incoming, stored *extractor.Operation,
+) *historyCandidate {
+	if incoming == nil || stored == nil ||
+		!historyBatchKindCompatible(incoming, stored) ||
+		!historyBatchMetadataCompatible(incoming, stored) {
+		return nil
+	}
+	entry := entryForOperation(stored)
+	if normalizeMemoryText(incoming.Memory) ==
+		normalizeMemoryText(stored.Memory) {
+		return &historyCandidate{
+			entry:       entry,
+			duplicate:   true,
+			oldCoverage: 1,
+			newCoverage: 1,
+		}
+	}
+	oldCoverage, newCoverage := directionalTokenCoverage(
+		stored.Memory, incoming.Memory,
+	)
+	if oldCoverage < historyOldCoverage || newCoverage < historyNewCoverage ||
+		!materialTokensPreserved(stored.Memory, incoming.Memory) ||
+		!criticalValuesPreserved(stored.Memory, incoming.Memory) ||
+		negationSignature(stored.Memory) != negationSignature(incoming.Memory) {
+		return nil
+	}
+	if changeMarkerPattern.MatchString(incoming.Memory) &&
+		!changeMarkerPattern.MatchString(stored.Memory) {
+		return nil
+	}
+	return &historyCandidate{
+		entry:       entry,
+		oldCoverage: oldCoverage,
+		newCoverage: newCoverage,
+	}
+}
+
+func historyBatchKindCompatible(left, right *extractor.Operation) bool {
+	leftKind, rightKind := operationKind(left), operationKind(right)
+	if leftKind == rightKind {
+		return true
+	}
+	return (leftKind == memory.KindFact || leftKind == memory.KindEpisode) &&
+		(rightKind == memory.KindFact || rightKind == memory.KindEpisode)
+}
+
+func historyBatchMetadataCompatible(left, right *extractor.Operation) bool {
+	if !eventTimeCompatible(right.EventTime, left.EventTime) {
+		return false
+	}
+	if len(left.Participants) > 0 && len(right.Participants) > 0 &&
+		!isStringSubset(left.Participants, right.Participants) &&
+		!isStringSubset(right.Participants, left.Participants) {
+		return false
+	}
+	leftLocation := strings.TrimSpace(left.Location)
+	rightLocation := strings.TrimSpace(right.Location)
+	return leftLocation == "" || rightLocation == "" ||
+		strings.EqualFold(leftLocation, rightLocation)
+}
+
+func mergeHistoryBatchOperations(
+	richer, other *extractor.Operation,
+) *extractor.Operation {
+	merged := *richer
+	merged.Type = extractor.OperationAdd
+	merged.MemoryID = ""
+	merged.Topics = mergeTopics(other.Topics, richer.Topics)
+	merged.Participants = mergeTopics(other.Participants, richer.Participants)
+	if operationKind(other) == memory.KindEpisode ||
+		operationKind(richer) == memory.KindEpisode {
+		merged.MemoryKind = memory.KindEpisode
+	}
+	if merged.EventTime == nil ||
+		(merged.EventTime != nil && other.EventTime != nil &&
+			isMidnight(merged.EventTime.UTC()) &&
+			!isMidnight(other.EventTime.UTC())) {
+		merged.EventTime = other.EventTime
+	}
+	if strings.TrimSpace(merged.Location) == "" {
+		merged.Location = other.Location
+	}
+	return &merged
 }
 
 func (w *AutoMemoryWorker) appendHistoryAdd(

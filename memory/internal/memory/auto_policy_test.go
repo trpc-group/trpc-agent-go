@@ -180,6 +180,150 @@ func TestHistoryPreservingPolicy_ExactDuplicateIsNoOp(t *testing.T) {
 	assert.Empty(t, out)
 }
 
+func TestHistoryPreservingPolicy_CoalescesStrictEnrichmentWithinBatch(
+	t *testing.T,
+) {
+	eventTime := time.Date(2025, 12, 1, 16, 0, 0, 0, time.UTC)
+	worker := NewAutoMemoryWorker(AutoMemoryConfig{}, newMockOperator())
+	worker.updatePolicy = extractor.UpdatePolicyHistoryPreserving
+
+	out := worker.applyUpdatePolicy(
+		context.Background(), reconcileUserKey(),
+		[]*extractor.Operation{
+			{
+				Type:       extractor.OperationAdd,
+				Memory:     "Alice visited Bob in Paris on December 1st, 2025.",
+				Topics:     []string{"Alice", "visit"},
+				MemoryKind: memory.KindEpisode,
+				EventTime:  &eventTime,
+				Participants: []string{
+					"Alice",
+				},
+			},
+			{
+				Type: extractor.OperationAdd,
+				Memory: "Alice visited Bob in Paris on December 1st, 2025, " +
+					"and discussed the new exhibition.",
+				Topics:     []string{"Bob", "exhibition"},
+				MemoryKind: memory.KindFact,
+				Participants: []string{
+					"Alice", "Bob",
+				},
+			},
+		}, nil,
+	)
+
+	require.Len(t, out, 1)
+	assert.Equal(t, extractor.OperationAdd, out[0].Type)
+	assert.Equal(t, memory.KindEpisode, out[0].MemoryKind)
+	assert.Equal(t, &eventTime, out[0].EventTime)
+	assert.Equal(t,
+		"Alice visited Bob in Paris on December 1st, 2025, "+
+			"and discussed the new exhibition.",
+		out[0].Memory,
+	)
+	assert.ElementsMatch(t, []string{"Alice", "visit", "Bob", "exhibition"},
+		out[0].Topics)
+	assert.ElementsMatch(t, []string{"Alice", "Bob"}, out[0].Participants)
+}
+
+func TestHistoryPreservingPolicy_CoalescesShorterEpisodeWithinBatch(
+	t *testing.T,
+) {
+	eventTime := time.Date(2025, 12, 1, 0, 0, 0, 0, time.UTC)
+	worker := NewAutoMemoryWorker(AutoMemoryConfig{}, newMockOperator())
+	worker.updatePolicy = extractor.UpdatePolicyHistoryPreserving
+
+	out := worker.applyUpdatePolicy(
+		context.Background(), reconcileUserKey(),
+		[]*extractor.Operation{
+			{
+				Type: extractor.OperationAdd,
+				Memory: "Alice visited Bob in Paris on December 1st, 2025, " +
+					"and discussed the new exhibition.",
+				MemoryKind: memory.KindFact,
+			},
+			{
+				Type:       extractor.OperationAdd,
+				Memory:     "Alice visited Bob in Paris on December 1st, 2025.",
+				MemoryKind: memory.KindEpisode,
+				EventTime:  &eventTime,
+			},
+		}, nil,
+	)
+
+	require.Len(t, out, 1)
+	assert.Equal(t, memory.KindEpisode, out[0].MemoryKind)
+	assert.Equal(t, &eventTime, out[0].EventTime)
+	assert.Contains(t, out[0].Memory, "new exhibition")
+}
+
+func TestHistoryPreservingPolicy_DoesNotCoalesceBatchStateChanges(
+	t *testing.T,
+) {
+	worker := NewAutoMemoryWorker(AutoMemoryConfig{}, newMockOperator())
+	worker.updatePolicy = extractor.UpdatePolicyHistoryPreserving
+
+	out := worker.applyUpdatePolicy(
+		context.Background(), reconcileUserKey(),
+		[]*extractor.Operation{
+			{
+				Type:       extractor.OperationAdd,
+				Memory:     "Alice works at Acme as a software engineer.",
+				MemoryKind: memory.KindFact,
+			},
+			{
+				Type: extractor.OperationAdd,
+				Memory: "Alice now works at Globex as a software " +
+					"engineer.",
+				MemoryKind: memory.KindFact,
+			},
+			{
+				Type: extractor.OperationAdd,
+				Memory: "Alice did not visit the Metropolitan Museum " +
+					"of Art.",
+				MemoryKind: memory.KindFact,
+			},
+			{
+				Type:       extractor.OperationAdd,
+				Memory:     "Alice visited the Metropolitan Museum of Art.",
+				MemoryKind: memory.KindEpisode,
+			},
+		}, nil,
+	)
+
+	require.Len(t, out, 4)
+}
+
+func TestHistoryPreservingPolicy_DoesNotCoalesceDistinctBatchEvents(
+	t *testing.T,
+) {
+	first := time.Date(2025, 12, 1, 0, 0, 0, 0, time.UTC)
+	second := time.Date(2025, 12, 2, 0, 0, 0, 0, time.UTC)
+	worker := NewAutoMemoryWorker(AutoMemoryConfig{}, newMockOperator())
+	worker.updatePolicy = extractor.UpdatePolicyHistoryPreserving
+
+	out := worker.applyUpdatePolicy(
+		context.Background(), reconcileUserKey(),
+		[]*extractor.Operation{
+			{
+				Type:       extractor.OperationAdd,
+				Memory:     "Alice visited the Science Museum with Bob.",
+				MemoryKind: memory.KindEpisode,
+				EventTime:  &first,
+			},
+			{
+				Type:       extractor.OperationAdd,
+				Memory:     "Alice visited the Art Museum with Bob.",
+				MemoryKind: memory.KindEpisode,
+				EventTime:  &second,
+			},
+		}, nil,
+	)
+
+	require.Len(t, out, 2)
+}
+
 func TestHistoryPreservingPolicy_UpdateOperations(t *testing.T) {
 	existing := []*memory.Entry{{
 		ID: "trip",
