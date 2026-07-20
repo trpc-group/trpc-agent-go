@@ -156,7 +156,6 @@ func TestWorkspaceRegistry_Acquire_CanceledMissDoesNotCreate(t *testing.T) {
 	require.Equal(t, 0, wm.callCount())
 }
 
-
 func TestWorkspaceRegistry_Release(t *testing.T) {
 	r := NewWorkspaceRegistry()
 	wm := &fakeWM{ws: Workspace{Path: "/tmp/w"}}

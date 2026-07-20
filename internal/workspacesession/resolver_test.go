@@ -240,7 +240,6 @@ func TestResolver_CreateWorkspace_InjectsArtifactContext(t *testing.T) {
 	require.True(t, probe.sawOK)
 }
 
-
 func TestKeyFromInvocation_Injective(t *testing.T) {
 	// Slash-embedding collision that the old join scheme produced.
 	a := KeyFromInvocation(&agent.Invocation{Session: &session.Session{

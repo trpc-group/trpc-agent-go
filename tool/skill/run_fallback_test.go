@@ -98,7 +98,6 @@ func TestPrepareOutputs_DeclarativeIO_SaveRejected(t *testing.T) {
 	require.True(t, errors.Is(err, codeexecutor.ErrDeclarativeIONotSupported))
 }
 
-
 // countingRunner records RunProgram calls for preflight falsifiers.
 type countingRunner struct {
 	calls int
@@ -184,7 +183,6 @@ func TestBuildRunProgramSpec_PolicyFailsClosedWithoutCleanEnv(t *testing.T) {
 	require.Contains(t, err.Error(), "CleanEnv")
 	require.Equal(t, 0, runner.calls)
 }
-
 
 func TestInvariant_Preflight_InputsBeforePrepare(t *testing.T) {
 	eng := preflightEngine{

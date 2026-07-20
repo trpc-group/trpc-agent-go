@@ -5076,7 +5076,10 @@ func (e *fakeEngine) Manager() codeexecutor.WorkspaceManager { return nil }
 func (e *fakeEngine) FS() codeexecutor.WorkspaceFS           { return nil }
 func (e *fakeEngine) Runner() codeexecutor.ProgramRunner     { return e.r }
 func (e *fakeEngine) Describe() codeexecutor.Capabilities {
-	return codeexecutor.Capabilities{}
+	// fakeEngine backs tests that exercise policy mode (allowed/denied
+	// commands), which requires SupportsCleanEnv. Tests that do not
+	// touch policy mode are unaffected by this capability flag.
+	return codeexecutor.Capabilities{SupportsCleanEnv: true}
 }
 
 type engineExec struct {

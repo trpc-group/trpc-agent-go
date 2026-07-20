@@ -196,13 +196,20 @@ func BoolPtr(b bool) *bool {
 	return &v
 }
 
-// SupportsDeclarativeIOTrue() / SupportsDeclarativeIOFalse() return audited
-// true/false values for Capabilities.SupportsDeclarativeIO.
+// SupportsDeclarativeIOTrue returns an audited true value for
+// Capabilities.SupportsDeclarativeIO.
 //
-// INV-CAP: these are functions that allocate a fresh *bool on each call
+// INV-CAP: this is a function that allocates a fresh *bool on each call
 // so mutating the returned pointer (or Describe()'s copy) cannot change
 // other engines or later constructions.
-func SupportsDeclarativeIOTrue() *bool  { return BoolPtr(true) }
+func SupportsDeclarativeIOTrue() *bool { return BoolPtr(true) }
+
+// SupportsDeclarativeIOFalse returns an audited false value for
+// Capabilities.SupportsDeclarativeIO.
+//
+// INV-CAP: this is a function that allocates a fresh *bool on each call
+// so mutating the returned pointer (or Describe()'s copy) cannot change
+// other engines or later constructions.
 func SupportsDeclarativeIOFalse() *bool { return BoolPtr(false) }
 
 // ErrDeclarativeIONotSupported is returned by the gatingFS wrapper

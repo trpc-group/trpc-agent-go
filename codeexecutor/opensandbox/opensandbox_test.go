@@ -1288,7 +1288,6 @@ func TestEncodeSessionWorkspaceKey_Injective(t *testing.T) {
 	)
 }
 
-
 // --- INV-ISO / INV-LIFE falsifiers (multi-review-gate pack A) ---
 
 // TestInvariant_Isolation_ExplicitIDCrossSession verifies that two
@@ -1436,7 +1435,6 @@ func TestInvariant_Lifecycle_PublicCleanupExplicitLabel(t *testing.T) {
 	require.NoError(t, exec.CleanupExecution(ctx, label))
 }
 
-
 // TestInvariant_Output_MultiEventNewlines locks SDK Execution.Text() join
 // semantics when SkipAccumulation handlers feed cappedBuffer.
 func TestInvariant_Output_MultiEventNewlines(t *testing.T) {
@@ -1456,7 +1454,6 @@ func TestInvariant_Output_MultiEventNewlines(t *testing.T) {
 	b3.write("b")
 	require.Equal(t, "a\n\nb", b3.string())
 }
-
 
 // TestInvariant_Lifecycle_CleanupSessionSweepsLabels verifies CleanupSession
 // destroys both empty-label and explicit-label PerSession workspaces.
@@ -1550,7 +1547,6 @@ func TestInvariant_Isolation_CreateWorkspaceNamespacesExplicitID(t *testing.T) {
 	require.NotEqual(t, bare, wsB.Path)
 }
 
-
 // TestInvariant_Isolation_EngineManagerNamespaces verifies Engine().Manager()
 // CreateWorkspace applies the same session namespacing as CodeExecutor.
 func TestInvariant_Isolation_EngineManagerNamespaces(t *testing.T) {
@@ -1595,7 +1591,6 @@ func TestInvariant_Isolation_EngineManagerNamespaces(t *testing.T) {
 	}
 	assert.True(t, saw, "Engine-created workspace must be tracked for CleanupSession")
 }
-
 
 // TestInvariant_Lifecycle_CleanupSessionRetainsOnFailure verifies tracking is
 // not forgotten when cleanup fails, so a later CleanupSession can retry.
