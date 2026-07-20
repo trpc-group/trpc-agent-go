@@ -93,6 +93,10 @@ type RouteStep struct {
 
 // Summarize converts a normal Evaluation Service result into deterministic facts.
 func Summarize(result *evaluation.EvaluationResult) (*EvalSummary, error) {
+	return summarize(result, nil)
+}
+
+func summarize(result *evaluation.EvaluationResult, configuredMetricNames []string) (*EvalSummary, error) {
 	if result == nil {
 		return nil, errors.New("evaluation result is nil")
 	}
@@ -122,7 +126,7 @@ func Summarize(result *evaluation.EvaluationResult) (*EvalSummary, error) {
 		if i > 0 && cases[i-1].EvalCaseID == evalCase.EvalCaseID {
 			return nil, fmt.Errorf("duplicate evaluation case %q", evalCase.EvalCaseID)
 		}
-		caseSummary, score, count, err := summarizeCase(evalCase)
+		caseSummary, score, count, err := summarizeCase(evalCase, configuredMetricNames)
 		if err != nil {
 			return nil, fmt.Errorf("summarize case %q: %w", evalCase.EvalCaseID, err)
 		}
@@ -142,7 +146,9 @@ func Summarize(result *evaluation.EvaluationResult) (*EvalSummary, error) {
 	return summary, nil
 }
 
-func summarizeCase(evalCase *evaluation.EvaluationCaseResult) (CaseSummary, float64, int, error) {
+func summarizeCase(
+	evalCase *evaluation.EvaluationCaseResult, configuredMetricNames []string,
+) (CaseSummary, float64, int, error) {
 	summary := CaseSummary{ID: evalCase.EvalCaseID}
 	for _, run := range evalCase.EvalCaseResults {
 		if run != nil && strings.TrimSpace(run.ErrorMessage) != "" {
@@ -169,6 +175,13 @@ func summarizeCase(evalCase *evaluation.EvaluationCaseResult) (CaseSummary, floa
 	}
 
 	metrics := append([]*evalresult.EvalMetricResult(nil), evalCase.MetricResults...)
+	if len(metrics) == 0 && summary.Error != "" {
+		var err error
+		metrics, err = failedMetricResults(configuredMetricNames, summary.Error)
+		if err != nil {
+			return CaseSummary{}, 0, 0, err
+		}
+	}
 	sort.Slice(metrics, func(i, j int) bool {
 		if metrics[i] == nil {
 			return true
@@ -207,6 +220,30 @@ func summarizeCase(evalCase *evaluation.EvaluationCaseResult) (CaseSummary, floa
 	summary.Passed = allPassed
 	summary.ActualInvocations, summary.ExpectedInvocations = invocationEvidence(evalCase)
 	return summary, total, count, nil
+}
+
+func failedMetricResults(metricNames []string, reason string) ([]*evalresult.EvalMetricResult, error) {
+	if len(metricNames) == 0 {
+		return nil, errors.New("execution failure has no configured metric identities")
+	}
+	seen := make(map[string]struct{}, len(metricNames))
+	results := make([]*evalresult.EvalMetricResult, 0, len(metricNames))
+	for index, name := range metricNames {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			return nil, fmt.Errorf("configured metric at index %d has no name", index)
+		}
+		if _, ok := seen[name]; ok {
+			return nil, fmt.Errorf("duplicate configured metric %q", name)
+		}
+		seen[name] = struct{}{}
+		results = append(results, &evalresult.EvalMetricResult{
+			MetricName: name,
+			EvalStatus: status.EvalStatusFailed,
+			Details:    &evalresult.EvalMetricResultDetails{Reason: reason},
+		})
+	}
+	return results, nil
 }
 
 func summarizeMetric(metric *evalresult.EvalMetricResult, runs []*evalresult.EvalCaseResult) MetricSummary {

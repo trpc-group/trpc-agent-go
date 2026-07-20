@@ -21,6 +21,9 @@ import (
 type EvaluationOutput struct {
 	Result *evaluation.EvaluationResult
 	Cost   Cost
+	// MetricNames identifies configured metrics when inference fails before
+	// the Evaluation Service can emit per-metric results.
+	MetricNames []string
 }
 
 // EvaluateFunc evaluates one prompt against one configured eval set.
@@ -63,6 +66,7 @@ type Round struct {
 	Validation       *EvalSummary  `json:"validation"`
 	TrainDelta       *DatasetDelta `json:"train_delta"`
 	ValidationDelta  *DatasetDelta `json:"validation_delta"`
+	TrainAttribution *Attribution  `json:"train_attribution"`
 	Attribution      *Attribution  `json:"validation_attribution"`
 	Gate             *GateDecision `json:"gate"`
 	ServingCost      Cost          `json:"serving_cost"`
@@ -108,6 +112,10 @@ func Run(ctx context.Context, request RunRequest, evaluate EvaluateFunc, generat
 		BaselineTrain: baselineTrain, BaselineValidation: baselineValidation,
 		AcceptedTrain: baselineTrain, AcceptedValidation: baselineValidation,
 		Rounds: make([]Round, 0, request.MaxRounds), TotalCost: totalCost, Seed: request.Seed,
+	}
+	if hasExecutionFailure(baselineTrain) || hasExecutionFailure(baselineValidation) {
+		run.StopReason = "baseline evaluation has execution failures"
+		return run, nil
 	}
 
 	for roundNumber := 1; roundNumber <= request.MaxRounds; roundNumber++ {
@@ -175,14 +183,26 @@ func Run(ctx context.Context, request RunRequest, evaluate EvaluateFunc, generat
 		if err != nil {
 			return nil, fmt.Errorf("gate round %d: %w", roundNumber, err)
 		}
+		trainAttribution, err := Attribute(candidateTrain)
+		if err != nil {
+			return nil, fmt.Errorf("attribute train candidate round %d: %w", roundNumber, err)
+		}
 		validationAttribution, err := Attribute(candidateValidation)
 		if err != nil {
 			return nil, fmt.Errorf("attribute validation round %d: %w", roundNumber, err)
 		}
+		if hasExecutionFailure(candidateTrain) {
+			decision.Reasons = append(decision.Reasons, "candidate train evaluation has execution failures")
+		}
+		if hasExecutionFailure(candidateValidation) {
+			decision.Reasons = append(decision.Reasons, "candidate validation evaluation has execution failures")
+		}
+		decision.Accepted = len(decision.Reasons) == 0
 		run.Rounds = append(run.Rounds, Round{
 			Number: roundNumber, InputPrompt: run.AcceptedPrompt, CandidatePrompt: candidate.Prompt,
 			Hints: hints, Train: candidateTrain, Validation: candidateValidation,
-			TrainDelta: trainDelta, ValidationDelta: validationDelta, Attribution: validationAttribution,
+			TrainDelta: trainDelta, ValidationDelta: validationDelta,
+			TrainAttribution: trainAttribution, Attribution: validationAttribution,
 			Gate: decision, ServingCost: servingCost, OptimizationCost: candidate.Cost,
 		})
 		run.TotalCost, err = addCosts(run.TotalCost, servingCost, candidate.Cost)
@@ -204,6 +224,18 @@ func Run(ctx context.Context, request RunRequest, evaluate EvaluateFunc, generat
 	return run, nil
 }
 
+func hasExecutionFailure(summary *EvalSummary) bool {
+	if summary == nil {
+		return false
+	}
+	for _, evalCase := range summary.Cases {
+		if strings.TrimSpace(evalCase.Error) != "" {
+			return true
+		}
+	}
+	return false
+}
+
 func evaluateSummary(
 	ctx context.Context, evaluate EvaluateFunc, prompt, evalSetID string, seed int64,
 ) (*EvalSummary, Cost, error) {
@@ -220,7 +252,7 @@ func evaluateSummary(
 	if err := validateCost(output.Cost); err != nil {
 		return nil, Cost{}, err
 	}
-	summary, err := Summarize(output.Result)
+	summary, err := summarize(output.Result, output.MetricNames)
 	if err != nil {
 		return nil, Cost{}, err
 	}

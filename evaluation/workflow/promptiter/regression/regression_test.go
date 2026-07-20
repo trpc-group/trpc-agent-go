@@ -171,6 +171,33 @@ func TestSummarizeKeepsFailedRunTraceAndStructuredContent(t *testing.T) {
 	}
 }
 
+func TestSummarizePreservesExecutionFailureWithoutMetrics(t *testing.T) {
+	failedCase := &evaluation.EvaluationCaseResult{
+		EvalCaseID:    "failed",
+		OverallStatus: status.EvalStatusFailed,
+		EvalCaseResults: []*evalresult.EvalCaseResult{{
+			RunID: 1, ErrorMessage: "inference unavailable",
+		}},
+	}
+	summary, err := summarize(&evaluation.EvaluationResult{
+		EvalSetID: "set", EvalCases: []*evaluation.EvaluationCaseResult{failedCase},
+	}, []string{"quality"})
+	if err != nil {
+		t.Fatalf("Summarize() error = %v", err)
+	}
+	if summary.Score != 0 || summary.Passed || len(summary.Cases[0].Metrics) != 1 ||
+		summary.Cases[0].Error != "inference unavailable" {
+		t.Fatalf("summary = %+v", summary)
+	}
+	attribution, err := Attribute(summary)
+	if err != nil {
+		t.Fatalf("Attribute() error = %v", err)
+	}
+	if len(attribution.Failures) != 1 || attribution.Failures[0].Category != FailureExecutionError {
+		t.Fatalf("attribution = %+v", attribution)
+	}
+}
+
 func TestSafeJSONHashesLongToolResult(t *testing.T) {
 	result := safeJSON(map[string]any{"result": strings.Repeat("x", 20<<10), "bearerToken": "leak"})
 	if strings.Contains(string(result), "leak") || !strings.Contains(string(result), `"truncated":true`) ||

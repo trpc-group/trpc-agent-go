@@ -134,6 +134,7 @@ type ReportRound struct {
 	Validation       *ReportEvaluation   `json:"validation"`
 	TrainDelta       *ReportDatasetDelta `json:"train_delta"`
 	ValidationDelta  *ReportDatasetDelta `json:"validation_delta"`
+	TrainAttribution *Attribution        `json:"train_attribution"`
 	Attribution      *Attribution        `json:"validation_attribution"`
 	Gate             *GateDecision       `json:"gate"`
 	ServingCost      Cost                `json:"serving_cost"`
@@ -237,7 +238,8 @@ func reportRounds(rounds []Round) []ReportRound {
 			Number: round.Number, InputPrompt: round.InputPrompt, CandidatePrompt: round.CandidatePrompt,
 			Hints: round.Hints, Train: reportEvaluation(round.Train, false),
 			Validation: reportEvaluation(round.Validation, false), TrainDelta: reportDelta(round.TrainDelta),
-			ValidationDelta: reportDelta(round.ValidationDelta), Attribution: round.Attribution, Gate: round.Gate,
+			ValidationDelta:  reportDelta(round.ValidationDelta),
+			TrainAttribution: round.TrainAttribution, Attribution: round.Attribution, Gate: round.Gate,
 			ServingCost: round.ServingCost, OptimizationCost: round.OptimizationCost,
 		})
 	}

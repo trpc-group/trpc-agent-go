@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation"
@@ -96,18 +97,11 @@ func TestRunRejectsWrongEvaluationSetBeforeGate(t *testing.T) {
 }
 
 func TestRunStopsWithoutOptimizableTrainingFailures(t *testing.T) {
-	executionFailure := pipelineResult("train", 1, true)
-	executionFailure.EvalCases[0].RunDetails = []*evaluation.EvaluationCaseRunDetails{{
-		Inference: &evaluation.EvaluationInferenceDetails{
-			Status: status.EvalStatusFailed, ErrorMessage: "runner stopped",
-		},
-	}}
 	tests := []struct {
 		name  string
 		train *evaluation.EvaluationResult
 	}{
 		{name: "all training metrics pass", train: pipelineResult("train", 1, true)},
-		{name: "execution failure without failed metric", train: executionFailure},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -132,6 +126,78 @@ func TestRunStopsWithoutOptimizableTrainingFailures(t *testing.T) {
 			}
 			if run.StopReason != "no optimizable training failures" || run.AcceptedPrompt != "base" {
 				t.Fatalf("run = %+v", run)
+			}
+		})
+	}
+}
+
+func TestRunAuditsBaselineExecutionFailureWithoutGenerating(t *testing.T) {
+	for _, failureSet := range []string{"train", "validation"} {
+		t.Run(failureSet, func(t *testing.T) {
+			generated := 0
+			evaluate := func(_ context.Context, _, evalSetID string, _ int64) (*EvaluationOutput, error) {
+				result := pipelineResult(evalSetID, 1, true)
+				if evalSetID == failureSet {
+					result = executionFailureResult(evalSetID)
+				}
+				return &EvaluationOutput{Result: result, MetricNames: []string{"quality"}}, nil
+			}
+			run, err := Run(context.Background(), RunRequest{
+				InitialPrompt: "base", TrainEvalSetID: "train", ValidationEvalSetID: "validation", MaxRounds: 1,
+			}, evaluate, func(context.Context, CandidateRequest) (*Candidate, error) {
+				generated++
+				return &Candidate{Prompt: "unexpected"}, nil
+			})
+			if err != nil {
+				t.Fatalf("Run() error = %v", err)
+			}
+			report, err := BuildReport(run, testAuditMetadata("baseline-failure"))
+			if err != nil {
+				t.Fatalf("BuildReport() error = %v", err)
+			}
+			trainFailures := report.BaselineTrainAttribution.Counts[FailureExecutionError]
+			validationFailures := report.BaselineValidationAttribution.Counts[FailureExecutionError]
+			if generated != 0 || len(run.Rounds) != 0 ||
+				run.StopReason != "baseline evaluation has execution failures" ||
+				trainFailures+validationFailures != 1 {
+				t.Fatalf("run = %+v, report = %+v, generated = %d", run, report, generated)
+			}
+		})
+	}
+}
+
+func TestRunRejectsAndAuditsCandidateExecutionFailure(t *testing.T) {
+	for _, failureSet := range []string{"train", "validation"} {
+		t.Run(failureSet, func(t *testing.T) {
+			evaluate := func(_ context.Context, prompt, evalSetID string, _ int64) (*EvaluationOutput, error) {
+				result := pipelineResult(evalSetID, 0, false)
+				if prompt == "candidate" {
+					result = pipelineResult(evalSetID, 1, true)
+					if evalSetID == failureSet {
+						result = executionFailureResult(evalSetID)
+					}
+				}
+				return &EvaluationOutput{Result: result, MetricNames: []string{"quality"}}, nil
+			}
+			run, err := Run(context.Background(), RunRequest{
+				InitialPrompt: "base", TrainEvalSetID: "train", ValidationEvalSetID: "validation", MaxRounds: 1,
+			}, evaluate, func(context.Context, CandidateRequest) (*Candidate, error) {
+				return &Candidate{Prompt: "candidate"}, nil
+			})
+			if err != nil {
+				t.Fatalf("Run() error = %v", err)
+			}
+			report, err := BuildReport(run, testAuditMetadata("candidate-failure"))
+			if err != nil {
+				t.Fatalf("BuildReport() error = %v", err)
+			}
+			trainFailures := report.Rounds[0].TrainAttribution.Counts[FailureExecutionError]
+			validationFailures := report.Rounds[0].Attribution.Counts[FailureExecutionError]
+			if len(run.Rounds) != 1 || run.Rounds[0].Gate.Accepted || run.AcceptedPrompt != "base" ||
+				run.WriteBackRecommended || trainFailures+validationFailures != 1 ||
+				!strings.Contains(strings.Join(run.Rounds[0].Gate.Reasons, " "),
+					"candidate "+failureSet+" evaluation has execution failures") {
+				t.Fatalf("run = %+v, report = %+v", run, report)
 			}
 		})
 	}
@@ -212,9 +278,12 @@ func TestRunPropagatesEvaluationErrorsByStage(t *testing.T) {
 }
 
 func TestGeneratePromptIterUsesTargetAndHints(t *testing.T) {
+	otherPrompt := "keep me"
 	engine := &promptIterStub{
 		structure: &astructure.Snapshot{
-			StructureID: "structure", Surfaces: []astructure.Surface{{SurfaceID: "system"}},
+			StructureID: "structure", Surfaces: []astructure.Surface{
+				{SurfaceID: "system"}, {SurfaceID: "reviewer"},
+			},
 		},
 		candidate: "improved prompt",
 	}
@@ -222,6 +291,13 @@ func TestGeneratePromptIterUsesTargetAndHints(t *testing.T) {
 		Train:      []promptiterengine.EvalSetInput{{EvalSetID: "train"}},
 		Validation: []promptiterengine.EvalSetInput{{EvalSetID: "validation"}},
 		MaxRounds:  9,
+		InitialProfile: &promptiter.Profile{
+			StructureID: "structure",
+			Overrides: []promptiter.SurfaceOverride{
+				{SurfaceID: "system", Value: astructure.SurfaceValue{Text: stringPointer("old target")}},
+				{SurfaceID: "reviewer", Value: astructure.SurfaceValue{Text: &otherPrompt}},
+			},
+		},
 	}
 	prompt, err := GeneratePromptIter(context.Background(), engine, base, "system", CandidateRequest{
 		Prompt: "baseline", Hints: []FailureHint{{CaseID: "case", MetricName: "quality", Reason: "wrong answer"}},
@@ -239,7 +315,21 @@ func TestGeneratePromptIterUsesTargetAndHints(t *testing.T) {
 		*engine.request.InitialProfile.Overrides[0].Value.Text != "baseline" {
 		t.Fatalf("initial profile = %+v", engine.request.InitialProfile)
 	}
+	if len(engine.request.InitialProfile.Overrides) != 2 ||
+		engine.request.InitialProfile.Overrides[1].Value.Text == nil ||
+		*engine.request.InitialProfile.Overrides[1].Value.Text != "keep me" {
+		t.Fatalf("non-target override was not preserved: %+v", engine.request.InitialProfile)
+	}
+	if got := *base.InitialProfile.Overrides[0].Value.Text; got != "old target" {
+		t.Fatalf("base target override was modified: %q", got)
+	}
+	*engine.request.InitialProfile.Overrides[1].Value.Text = "engine mutation"
+	if got := *base.InitialProfile.Overrides[1].Value.Text; got != "keep me" {
+		t.Fatalf("base non-target override shares mutable state: %q", got)
+	}
 }
+
+func stringPointer(value string) *string { return &value }
 
 func TestGeneratePromptIterRejectsMissingCandidate(t *testing.T) {
 	engine := &promptIterStub{structure: &astructure.Snapshot{
@@ -425,5 +515,26 @@ func pipelineResult(evalSetID string, score float64, passed bool) *evaluation.Ev
 				Details: &evalresult.EvalMetricResultDetails{Reason: "wrong answer"},
 			}},
 		}},
+	}
+}
+
+func executionFailureResult(evalSetID string) *evaluation.EvaluationResult {
+	return &evaluation.EvaluationResult{
+		EvalSetID: evalSetID,
+		EvalCases: []*evaluation.EvaluationCaseResult{{
+			EvalCaseID:    "case",
+			OverallStatus: status.EvalStatusFailed,
+			EvalCaseResults: []*evalresult.EvalCaseResult{{
+				RunID: 1, ErrorMessage: "inference unavailable",
+			}},
+		}},
+	}
+}
+
+func testAuditMetadata(runID string) AuditMetadata {
+	started := time.Unix(100, 0).UTC()
+	return AuditMetadata{
+		RunID: runID, StartedAt: started, FinishedAt: started.Add(time.Second),
+		Runtime: RuntimeAudit{Mode: "test"},
 	}
 }

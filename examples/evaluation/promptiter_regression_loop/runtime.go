@@ -99,7 +99,13 @@ func evaluatePrompt(ctx context.Context, config loopConfig, prompt, evalSetID st
 	if err != nil {
 		return nil, err
 	}
-	return &regression.EvaluationOutput{Result: result, Cost: counter.snapshot()}, nil
+	metricNames := make([]string, 0, len(config.metrics))
+	for _, configuredMetric := range config.metrics {
+		metricNames = append(metricNames, configuredMetric.MetricName)
+	}
+	return &regression.EvaluationOutput{
+		Result: result, Cost: counter.snapshot(), MetricNames: metricNames,
+	}, nil
 }
 
 func newPromptIterRuntime(
