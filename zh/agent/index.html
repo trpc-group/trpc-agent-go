@@ -884,6 +884,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#provider" class="md-nav__link">
+    <span class="md-ellipsis">
+      Provider 兼容性
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#withstructuredoutputjsonschema" class="md-nav__link">
     <span class="md-ellipsis">
       WithStructuredOutputJSONSchema
@@ -3645,6 +3654,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#provider" class="md-nav__link">
+    <span class="md-ellipsis">
+      Provider 兼容性
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#withstructuredoutputjsonschema" class="md-nav__link">
     <span class="md-ellipsis">
       WithStructuredOutputJSONSchema
@@ -5049,6 +5067,22 @@
 </tr>
 </tbody>
 </table>
+<h3 id="provider">Provider 兼容性</h3>
+<p>框架允许同时配置工具与 <code>WithStructuredOutputJSONSchema</code> 或
+<code>WithStructuredOutputJSON</code>，但模型服务也必须支持组合使用工具调用与原生结构化输出。
+部分 OpenAI 兼容端点会接受 <code>tools</code> 和 <code>response_format: json_schema</code>，
+却把 JSON 约束应用于整个生成过程。在这种情况下，约束解码可能会抑制模型专用的
+工具调用语法，最终返回符合 schema 的 JSON，却没有实际发起任何工具调用。</p>
+<p>因此，HTTP 请求成功且 JSON 校验通过，并不能证明所需工具已执行。当结果正确性依赖
+工具执行时，应同时检查工具调用与工具结果事件。如果端点不能可靠支持该组合，
+可将操作拆成两次调用：先在不启用原生结构化输出的情况下调用工具，再禁用工具并
+生成结构化的最终答复。第二次调用必须通过延续相同的 session 或消息历史来获取
+第一次调用的证据，或者显式包含第一次调用的工具调用与工具结果消息。</p>
+<p>相关后端讨论包括
+<a href="https://github.com/vllm-project/vllm/issues/39929">vLLM #39929</a>，该 issue
+跟踪 <code>response_format</code> 抑制自动工具调用的问题；以及
+<a href="https://github.com/sgl-project/sglang/pull/21593">SGLang #21593</a>，该 PR
+修复了约束解码与模型专用工具调用格式之间的冲突。</p>
 <h3 id="withstructuredoutputjsonschema">WithStructuredOutputJSONSchema</h3>
 <p>提供用户自定义的 JSON schema 用于结构化输出，同时<strong>允许使用工具</strong>。这是需要结构化输出和工具能力的 Agent 的最灵活选项。</p>
 <p><strong>注意：</strong>
@@ -5944,7 +5978,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年7月15日 03:20:49 UTC">2026-07-15 03:20:49</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年7月20日 02:34:15 UTC">2026-07-20 02:34:15</span>
   </span>
 
     
