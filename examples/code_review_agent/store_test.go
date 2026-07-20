@@ -170,12 +170,14 @@ func TestStorePersistsRedactedSecretsAndPrivatePermissions(t *testing.T) {
 	var reportJSON string
 	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT report_json FROM reports WHERE task_id = ?`, report.Task.ID).Scan(&reportJSON))
 	require.NotContains(t, reportJSON, "ZXhhbXBsZS1zZWNyZXQ=")
+	require.NotContains(t, reportJSON, "AKIA1234567890ABCDEF")
 
 	loaded, err := store.LoadReport(ctx, report.Task.ID)
 	require.NoError(t, err)
 	raw, err := json.Marshal(loaded)
 	require.NoError(t, err)
 	require.NotContains(t, string(raw), "supersecretpassword123")
+	require.NotContains(t, string(raw), "AKIA1234567890ABCDEF")
 
 	info, err := os.Stat(dbPath)
 	require.NoError(t, err)

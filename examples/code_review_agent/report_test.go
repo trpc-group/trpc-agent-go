@@ -78,6 +78,7 @@ func TestWriteReportsRedactsSecrets(t *testing.T) {
 		Packages:   []PackageInfo{{Dir: "pkg", Name: "pkg", GoFiles: 1}},
 	}
 	report.Conclusion = "AKIA1234567890ABCDEF"
+	report.SandboxRuns[0].Output = "token := bearer supersecretpassword123"
 	jsonPath, mdPath, _, err := writeReports(report, t.TempDir())
 	require.NoError(t, err)
 
@@ -85,8 +86,10 @@ func TestWriteReportsRedactsSecrets(t *testing.T) {
 	require.NoError(t, err)
 	require.NotContains(t, string(raw), "supersecretpassword123")
 	require.NotContains(t, string(raw), "AKIA1234567890ABCDEF")
+	require.NotContains(t, string(raw), "bearer supersecretpassword123")
 
 	md, err := os.ReadFile(mdPath)
 	require.NoError(t, err)
 	require.NotContains(t, string(md), "supersecretpassword123")
+	require.NotContains(t, string(md), "bearer supersecretpassword123")
 }

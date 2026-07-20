@@ -67,20 +67,40 @@ func TestGitDiffIncludesStagedChanges(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
 	}
-	repo := t.TempDir()
-	runGit(t, repo, "init")
-	runGit(t, repo, "config", "user.email", "test@example.com")
-	runGit(t, repo, "config", "user.name", "Test")
-	require.NoError(t, os.WriteFile(filepath.Join(repo, "a.go"), []byte("package main\n"), 0o644))
-	runGit(t, repo, "add", "a.go")
-	runGit(t, repo, "commit", "-m", "init")
-	require.NoError(t, os.WriteFile(filepath.Join(repo, "a.go"), []byte("package main\n\nfunc Staged() {}\n"), 0o644))
-	runGit(t, repo, "add", "a.go")
+	t.Run("with HEAD includes staged changes", func(t *testing.T) {
+		repo := t.TempDir()
+		runGit(t, repo, "init")
+		runGit(t, repo, "config", "user.email", "test@example.com")
+		runGit(t, repo, "config", "user.name", "Test")
+		require.NoError(t, os.WriteFile(filepath.Join(repo, "a.go"), []byte("package main\n"), 0o644))
+		runGit(t, repo, "add", "a.go")
+		runGit(t, repo, "commit", "-m", "init")
+		require.NoError(t, os.WriteFile(filepath.Join(repo, "a.go"), []byte("package main\n\nfunc Staged() {}\n"), 0o644))
+		runGit(t, repo, "add", "a.go")
 
-	kind, raw, err := loadInput(context.Background(), ReviewOptions{RepoPath: repo})
-	require.NoError(t, err)
-	require.Equal(t, "repo", kind)
-	require.Contains(t, raw, "func Staged")
+		kind, raw, err := loadInput(context.Background(), ReviewOptions{RepoPath: repo})
+		require.NoError(t, err)
+		require.Equal(t, "repo", kind)
+		require.Contains(t, raw, "func Staged")
+	})
+
+	t.Run("without HEAD combines staged and unstaged changes", func(t *testing.T) {
+		repo := t.TempDir()
+		runGit(t, repo, "init")
+		runGit(t, repo, "config", "user.email", "test@example.com")
+		runGit(t, repo, "config", "user.name", "Test")
+		require.NoError(t, os.WriteFile(filepath.Join(repo, "staged.go"), []byte("package main\n\nfunc StagedNoHead() {}\n"), 0o644))
+		runGit(t, repo, "add", "staged.go")
+		require.NoError(t, os.WriteFile(filepath.Join(repo, "mixed.go"), []byte("package main\n"), 0o644))
+		runGit(t, repo, "add", "mixed.go")
+		require.NoError(t, os.WriteFile(filepath.Join(repo, "mixed.go"), []byte("package main\n\nfunc UnstagedNoHead() {}\n"), 0o644))
+
+		kind, raw, err := loadInput(context.Background(), ReviewOptions{RepoPath: repo})
+		require.NoError(t, err)
+		require.Equal(t, "repo", kind)
+		require.Contains(t, raw, "func StagedNoHead")
+		require.Contains(t, raw, "func UnstagedNoHead")
+	})
 }
 
 func TestGitDiffDisablesTextconv(t *testing.T) {

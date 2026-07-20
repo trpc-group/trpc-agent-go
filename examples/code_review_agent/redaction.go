@@ -13,7 +13,7 @@ import "regexp"
 
 type secretRedactor struct {
 	re      *regexp.Regexp
-	replace func(string) string
+	replace string
 }
 
 var secretPatterns = []*regexp.Regexp{
@@ -28,44 +28,32 @@ var secretPatterns = []*regexp.Regexp{
 
 var secretRedactors = []secretRedactor{
 	{
-		re: secretPatterns[0],
-		replace: func(s string) string {
-			m := secretPatterns[0].FindStringSubmatch(s)
-			if len(m) != 4 {
-				return "[REDACTED]"
-			}
-			return m[1] + m[2] + "[REDACTED]"
-		},
+		re:      secretPatterns[0],
+		replace: `${1}${2}[REDACTED]`,
 	},
 	{
-		re: secretPatterns[1],
-		replace: func(s string) string {
-			m := secretPatterns[1].FindStringSubmatch(s)
-			if len(m) != 3 {
-				return "[REDACTED]"
-			}
-			return m[1] + "[REDACTED]"
-		},
+		re:      secretPatterns[1],
+		replace: `${1}[REDACTED]`,
 	},
 	{
 		re:      secretPatterns[2],
-		replace: func(string) string { return "[REDACTED]" },
+		replace: "[REDACTED]",
 	},
 	{
 		re:      secretPatterns[3],
-		replace: func(string) string { return "[REDACTED PRIVATE KEY]" },
+		replace: "[REDACTED PRIVATE KEY]",
 	},
 	{
 		re:      secretPatterns[4],
-		replace: func(string) string { return "[REDACTED]" },
+		replace: "[REDACTED]",
 	},
 	{
 		re:      secretPatterns[5],
-		replace: func(string) string { return "[REDACTED]" },
+		replace: "[REDACTED]",
 	},
 	{
 		re:      secretPatterns[6],
-		replace: func(string) string { return "[REDACTED]" },
+		replace: "[REDACTED]",
 	},
 }
 
@@ -74,7 +62,7 @@ var secretRedactors = []secretRedactor{
 func RedactSecrets(s string) string {
 	out := s
 	for _, redactor := range secretRedactors {
-		out = redactor.re.ReplaceAllStringFunc(out, redactor.replace)
+		out = redactor.re.ReplaceAllString(out, redactor.replace)
 	}
 	return out
 }
