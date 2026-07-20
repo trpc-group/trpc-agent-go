@@ -8,6 +8,6 @@
     "criticalCases": ["validation-case-3"],
     "maxMetricDrop": 0.5,
     "maxModelCalls": 120,
-    "maxTokens": 600
+    "maxTokens": 700
   }
 }

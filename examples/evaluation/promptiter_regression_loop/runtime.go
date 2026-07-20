@@ -202,7 +202,7 @@ func (r *deterministicRunner) Run(_ context.Context, _, _ string, message model.
 	if runOptions.Instruction != "" {
 		prompt = runOptions.Instruction
 	}
-	r.counter.record(2)
+	r.counter.recordServing(2)
 	content := "not-pong"
 	if shouldReplyPong(prompt, message.Content) {
 		content = "pong"
@@ -236,14 +236,29 @@ func (*deterministicRunner) Close() error { return nil }
 type costCounter struct {
 	mu     sync.Mutex
 	engine fakeEngineConfig
-	calls  int
+	cost   regression.Cost
 }
 
-func (c *costCounter) record(calls int) { c.mu.Lock(); c.calls += calls; c.mu.Unlock() }
+func (c *costCounter) recordServing(calls int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.cost.ModelCalls += calls
+	c.cost.Tokens += int64(calls) * int64(c.engine.PromptTokens+c.engine.CompletionTokens)
+	c.cost.LatencyMS += int64(calls) * c.engine.LatencyMS
+}
+
+func (c *costCounter) recordOptimizer(calls int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.cost.ModelCalls += calls
+	c.cost.Tokens += int64(calls) * c.engine.OptimizerTokens
+	c.cost.LatencyMS += int64(calls) * c.engine.OptimizerLatencyMS
+}
+
 func (c *costCounter) snapshot() regression.Cost {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return regression.Cost{ModelCalls: c.calls, Tokens: int64(c.calls * (c.engine.PromptTokens + c.engine.CompletionTokens)), LatencyMS: int64(c.calls) * c.engine.LatencyMS}
+	return c.cost
 }
 
 type jsonRunner struct {
@@ -252,7 +267,7 @@ type jsonRunner struct {
 }
 
 func (r *jsonRunner) Run(context.Context, string, string, model.Message, ...agent.RunOption) (<-chan *event.Event, error) {
-	r.counter.record(1)
+	r.counter.recordOptimizer(1)
 	channel := make(chan *event.Event, 1)
 	channel <- &event.Event{Response: &model.Response{Done: true, Choices: []model.Choice{{Message: model.NewAssistantMessage(r.output)}}}}
 	close(channel)

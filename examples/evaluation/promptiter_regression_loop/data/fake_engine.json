@@ -3,6 +3,6 @@
   "promptTokens": 4,
   "completionTokens": 1,
   "latencyMillis": 2,
-  "optimizerTokens": 5,
-  "optimizerLatencyMillis": 2
+  "optimizerTokens": 13,
+  "optimizerLatencyMillis": 7
 }

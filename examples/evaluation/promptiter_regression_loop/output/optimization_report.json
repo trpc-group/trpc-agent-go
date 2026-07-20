@@ -2,10 +2,10 @@
   "schema_version": "v1",
   "status": "accepted",
   "audit": {
-    "run_id": "promptiter-regression-2003-20260720T141210.362223302Z",
-    "started_at": "2026-07-20T14:12:10.362223302Z",
-    "finished_at": "2026-07-20T14:12:10.366531466Z",
-    "duration_ms": 4,
+    "run_id": "promptiter-regression-2003-20260720T154642.545456616Z",
+    "started_at": "2026-07-20T15:46:42.545456616Z",
+    "finished_at": "2026-07-20T15:46:42.549239517Z",
+    "duration_ms": 3,
     "seed": 2003,
     "inputs": [
       {
@@ -16,7 +16,7 @@
       {
         "name": "fake_engine",
         "path": "fake_engine.json",
-        "sha256": "0f885a4898143e764a398dcc995f4a8f0647987190f495b1e330016b7e8e71c0"
+        "sha256": "eb13913cdc96fe2d1f0c3cc6bc696ad615d7cd4a003a1870c40888753e4aea6e"
       },
       {
         "name": "metrics",
@@ -26,7 +26,7 @@
       {
         "name": "promptiter",
         "path": "promptiter.json",
-        "sha256": "3c25e8457e88f54953d32cde5ffcf8d6e22d471668e992fbe26a5cd6fe8b4f61"
+        "sha256": "7efb98c83e598aeef343b14030e980bd657f9656c126862de074d27d8c0fdd2d"
       },
       {
         "name": "train_evalset",
@@ -42,7 +42,7 @@
     "runtime": {
       "mode": "fake",
       "model": "deterministic-ping-v1",
-      "config_sha256": "09a2a08427679ddcd35788bcdd7bae3a9275c2cff0590a6f86ccdc97fef6a5ef",
+      "config_sha256": "04eada0069151439910135d63cdc706e57a147afd364a12322375bb36d461ca2",
       "config": {
         "max_rounds": "3",
         "optimizer": "deterministic-promptiter"
@@ -655,8 +655,8 @@
       },
       "optimization_cost": {
         "model_calls": 22,
-        "tokens": 110,
-        "latency_ms": 44
+        "tokens": 142,
+        "latency_ms": 64
       }
     },
     {
@@ -947,8 +947,8 @@
       },
       "optimization_cost": {
         "model_calls": 22,
-        "tokens": 110,
-        "latency_ms": 44
+        "tokens": 142,
+        "latency_ms": 64
       }
     },
     {
@@ -1214,8 +1214,8 @@
       },
       "optimization_cost": {
         "model_calls": 22,
-        "tokens": 110,
-        "latency_ms": 44
+        "tokens": 142,
+        "latency_ms": 64
       }
     }
   ],
@@ -1226,7 +1226,7 @@
   },
   "cost": {
     "model_calls": 114,
-    "tokens": 570,
-    "latency_ms": 228
+    "tokens": 666,
+    "latency_ms": 288
   }
 }

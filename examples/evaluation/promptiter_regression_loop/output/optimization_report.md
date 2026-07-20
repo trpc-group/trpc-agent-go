@@ -40,8 +40,8 @@ Rephrase without changing behavior. fixture:ineffective
 - Train score: 0.666667 (+0.000000)
 - Validation score: 0.666667 (+0.000000)
 - Evaluation cost: 12 calls, 60 tokens, 24 ms
-- Optimization cost: 22 calls, 110 tokens, 44 ms
-- Round total: 34 calls, 170 tokens, 68 ms
+- Optimization cost: 22 calls, 142 tokens, 64 ms
+- Round total: 34 calls, 202 tokens, 88 ms
 
 | Case | Change | Baseline | Candidate | Delta |
 | --- | --- | ---: | ---: | ---: |
@@ -65,8 +65,8 @@ Optimize only the training cases. fixture:train-only
 - Train score: 1.000000 (+0.333333)
 - Validation score: 0.500000 (-0.166667)
 - Evaluation cost: 12 calls, 60 tokens, 24 ms
-- Optimization cost: 22 calls, 110 tokens, 44 ms
-- Round total: 34 calls, 170 tokens, 68 ms
+- Optimization cost: 22 calls, 142 tokens, 64 ms
+- Round total: 34 calls, 202 tokens, 88 ms
 
 | Case | Change | Baseline | Candidate | Delta |
 | --- | --- | ---: | ---: | ---: |
@@ -95,8 +95,8 @@ Reply with pong for every valid ping request. fixture:balanced
 - Train score: 1.000000 (+0.333333)
 - Validation score: 1.000000 (+0.333333)
 - Evaluation cost: 12 calls, 60 tokens, 24 ms
-- Optimization cost: 22 calls, 110 tokens, 44 ms
-- Round total: 34 calls, 170 tokens, 68 ms
+- Optimization cost: 22 calls, 142 tokens, 64 ms
+- Round total: 34 calls, 202 tokens, 88 ms
 
 | Case | Change | Baseline | Candidate | Delta |
 | --- | --- | ---: | ---: | ---: |
@@ -113,5 +113,5 @@ Changed metrics:
 ## Cost
 
 - Model calls: 114
-- Tokens: 570
-- Latency: 228 ms
+- Tokens: 666
+- Latency: 288 ms

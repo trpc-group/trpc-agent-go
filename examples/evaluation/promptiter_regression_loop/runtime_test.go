@@ -48,6 +48,12 @@ func TestFakeRegressionLoopEndToEnd(t *testing.T) {
 	if report.Rounds[2].ValidationDelta.ScoreDelta <= 0 || report.Cost.ModelCalls == 0 || report.Cost.Tokens == 0 {
 		t.Fatalf("accepted round or cost = %+v, %+v", report.Rounds[2], report.Cost)
 	}
+	if got := report.Rounds[0].ServingCost; got.ModelCalls != 12 || got.Tokens != 60 || got.LatencyMS != 24 {
+		t.Fatalf("serving cost = %+v", got)
+	}
+	if got := report.Rounds[0].OptimizationCost; got.ModelCalls != 22 || got.Tokens != 142 || got.LatencyMS != 64 {
+		t.Fatalf("optimization cost = %+v", got)
+	}
 	for _, name := range []string{"optimization_report.json", "optimization_report.md"} {
 		path := filepath.Join(outputDir, name)
 		data, err := os.ReadFile(path)
