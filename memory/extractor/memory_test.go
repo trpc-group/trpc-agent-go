@@ -232,10 +232,6 @@ func TestExtractor_AssistantResultExtractionOption(t *testing.T) {
 	prompt := e.buildSystemPrompt(refDate, nil)
 	assert.Contains(t, prompt, "<assistant_result_extraction>")
 	assert.Contains(t, prompt, "MANDATORY DIRECT-RESULT CHECK")
-	assert.Contains(t, prompt, "SOURCE NOVELTY CHECK")
-	assert.Contains(t, prompt, "Skip only if every substantive claim")
-	assert.Contains(t, prompt, "assistant recommends Ruby")
-	assert.Contains(t, prompt, "Python, or PHP for back-end development")
 	assert.Contains(t, prompt, "requested extraction, classification, or transformation")
 	assert.Contains(t, prompt,
 		"even when the assistant frames it as an opinion, an analysis")

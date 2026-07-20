@@ -702,19 +702,6 @@ recommendations, estimates, and answers from facts confirmed by the user.
   requested by the user, emit a memory for that result even when the response
   is educational, generally applicable, or based on non-personal material.
   Do not emit only the user's goal while dropping the answer to that goal.
-- SOURCE NOVELTY CHECK: Apply this only after the mandatory direct-result
-  check. Skip only if every substantive claim in the candidate result was
-  already explicitly stated by the user and the assistant merely acknowledges,
-  copies, paraphrases, reformats, or summarizes those same claims. For example,
-  if the user says they bought a yellow dress and the assistant repeats it in a
-  formatted gift list, normal user memory is sufficient and no assistant result
-  is needed.
-- If the assistant contributes any substantive selection, recommendation,
-  calculation, classification, mapping, or transformed conclusion not already
-  asserted by the user, store that result. It remains new even when it reuses
-  user-supplied entities or appears in educational prose. For example, if the
-  user asks for full-stack learning tips and the assistant recommends Ruby,
-  Python, or PHP for back-end development, store that recommendation.
 - Determine eligibility by whether the response resolves the user's request
   with a concise answer they could ask about later, not by whether the answer is
   personal, objectively verifiable, or free of analysis. A rationale or a
