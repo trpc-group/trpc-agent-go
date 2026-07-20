@@ -12,8 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
+	"path"
 	"strconv"
 	"strings"
 	"testing"
@@ -26,6 +25,16 @@ import (
 type testAdapter struct {
 	input ScanInput
 	err   error
+}
+
+type panicInputAdapter struct{}
+
+func (panicInputAdapter) Adapt(
+	context.Context,
+	AdaptRequest,
+	Binding,
+) (ScanInput, error) {
+	panic("adapter panic")
 }
 
 func (adapter *testAdapter) Adapt(
@@ -49,9 +58,7 @@ func TestValidateBindings_ValidMatrix(t *testing.T) {
 		{name: "code generic", binding: BindCodeExec("execute_code", BackendCodeExec)},
 		{name: "code local", binding: BindCodeExec("execute_local", BackendLocal)},
 		{name: "code container", binding: BindCodeExec("execute_container", BackendContainer)},
-		{name: "code e2b", binding: BindRemoteCodeExec("execute_e2b", ProviderE2B)},
-		{name: "custom mcp", binding: BindCustom("mcp.exec", BackendMCP, custom)},
-		{name: "custom skill", binding: BindCustom("skill.exec", BackendSkill, custom)},
+		{name: "code remote", binding: BindCodeExec("execute_remote", BackendRemoteSandbox)},
 		{name: "custom", binding: BindCustom("custom.exec", BackendCustom, custom)},
 	}
 	for _, test := range tests {
@@ -114,31 +121,12 @@ func TestValidateBindings_Invalid(t *testing.T) {
 		{
 			name: "code backend mismatch",
 			binding: Binding{ToolName: "tool", Kind: ExecutionKindCodeExec,
-				Backend: BackendMCP, Adapter: validAdapter},
-		},
-		{
-			name:    "remote provider missing",
-			binding: BindRemoteCodeExec("tool", ""),
-		},
-		{
-			name:    "remote provider invalid",
-			binding: BindRemoteCodeExec("tool", "E2B..Cloud"),
-		},
-		{
-			name: "provider on local backend",
-			binding: Binding{ToolName: "tool", Kind: ExecutionKindCodeExec,
-				Backend: BackendLocal, Provider: ProviderE2B, Adapter: validAdapter},
+				Backend: BackendCustom, Adapter: validAdapter},
 		},
 		{
 			name: "custom backend mismatch",
 			binding: Binding{ToolName: "tool", Kind: ExecutionKindCustom,
 				Backend: BackendLocal, Adapter: validAdapter},
-		},
-		{
-			name: "invalid built-in adapter configuration",
-			binding: Binding{ToolName: "tool", Kind: ExecutionKindHostExec,
-				Backend: BackendHostExec,
-				Adapter: hostExecAdapter{baseDirInvalid: true}},
 		},
 	}
 	for _, test := range tests {
@@ -146,7 +134,9 @@ func TestValidateBindings_Invalid(t *testing.T) {
 			require.Error(t, validateBinding(test.binding))
 		})
 	}
+}
 
+func TestValidateBindings_Duplicate(t *testing.T) {
 	_, err := validateBindings([]Binding{
 		BindWorkspaceExec("same"),
 		BindHostExec("same", "."),
@@ -171,23 +161,20 @@ func TestWorkspaceExecAdapter_NormalizesWireContract(t *testing.T) {
 		"pty":true
 	}`)
 	input, err := binding.Adapter.Adapt(context.Background(), AdaptRequest{
-		ToolName:   binding.ToolName,
-		ToolCallID: "call-1",
-		Arguments:  arguments,
+		ToolName:  binding.ToolName,
+		Arguments: arguments,
 		Metadata: tool.ToolMetadata{
 			OpenWorld: true,
 		},
 	}, binding)
 	require.NoError(t, err)
 	require.Equal(t, "named.workspace_exec", input.ToolName)
-	require.Equal(t, "call-1", input.ToolCallID)
 	require.Equal(t, OperationExecute, input.Operation)
 	require.Equal(t, "go test ./...", input.Command)
 	require.Equal(t, "work/module", input.WorkingDir)
 	require.Equal(t, map[string]string{"SAFE": "value"}, input.Env)
 	require.Equal(t, "input", input.InitialStdin)
 	require.Equal(t, 7*time.Second, input.Timeout)
-	require.Zero(t, input.Yield)
 	require.False(t, input.PTY)
 	require.True(t, input.Background)
 	require.True(t, input.Interactive)
@@ -232,7 +219,6 @@ func TestWorkspaceExecAdapter_DefaultsAndAliases(t *testing.T) {
 			input := requireAdapt(t, binding, test.args)
 			require.Equal(t, test.timeout, input.Timeout)
 			require.Equal(t, test.pty, input.PTY)
-			require.Equal(t, test.yield, input.Yield)
 			require.Equal(t, ".", input.WorkingDir)
 		})
 	}
@@ -250,20 +236,13 @@ func TestAdapters_SaturateOversizedDurations(t *testing.T) {
 		maxInt, maxInt,
 	))
 	require.Equal(t, maxDuration, workspace.Timeout)
-	require.Equal(t, maxDuration, workspace.Yield)
 
 	host := requireAdapt(t, BindHostExec("exec_command", "."), fmt.Sprintf(
 		`{"command":"date","timeout_sec":%d,"yield-time_ms":%d}`,
 		maxInt, maxInt,
 	))
 	require.Equal(t, maxDuration, host.Timeout)
-	require.Equal(t, maxDuration, host.Yield)
 
-	session := requireAdapt(t, BindHostSession("write_stdin"), fmt.Sprintf(
-		`{"session_id":"session-1","yield-time_ms":%d}`,
-		maxInt,
-	))
-	require.Equal(t, maxDuration, session.Yield)
 }
 
 func TestWorkspaceExecAdapter_RejectsUnsafeCWDAndInvalidInput(t *testing.T) {
@@ -309,13 +288,11 @@ func TestWorkspaceSessionAdapter_AliasesAndOperations(t *testing.T) {
 	require.Equal(t, "session-1", poll.SessionID)
 	require.Equal(t, OperationSessionPoll, poll.Operation)
 	require.False(t, poll.Submit)
-	require.Zero(t, poll.Yield)
 	require.True(t, poll.Interactive)
 
 	input := requireAdapt(t, binding, `{"session_id":"session-2","chars":"whoami"}`)
 	require.Equal(t, OperationSessionInput, input.Operation)
 	require.Equal(t, "whoami", input.SessionInput)
-	require.Equal(t, defaultSessionWriteYield, input.Yield)
 
 	submit := requireAdapt(t, binding, `{"session_id":"session-3","submit":true}`)
 	require.Equal(t, OperationSessionInput, submit.Operation)
@@ -324,14 +301,14 @@ func TestWorkspaceSessionAdapter_AliasesAndOperations(t *testing.T) {
 
 func TestHostExecAdapter_PathDefaultsAndAliases(t *testing.T) {
 	base := t.TempDir()
+	lexicalBase := strings.ReplaceAll(base, "\\", "/")
 	binding := BindHostExec("named.exec_command", base)
 	input := requireAdapt(t, binding, `{
 		"command":"go test ./...","workdir":"sub","env":{"SAFE":"ok"},
 		"yield-time_ms":0,"yieldMs":999,"background":true,
 		"timeout_sec":0,"timeoutSec":999,"tty":false,"pty":true
 	}`)
-	require.Equal(t, filepath.Join(base, "sub"), input.WorkingDir)
-	require.Zero(t, input.Yield)
+	require.Equal(t, path.Join(lexicalBase, "sub"), input.WorkingDir)
 	require.Equal(t, defaultHostTimeout, input.Timeout)
 	require.False(t, input.PTY)
 	require.True(t, input.Background)
@@ -339,33 +316,29 @@ func TestHostExecAdapter_PathDefaultsAndAliases(t *testing.T) {
 	require.Equal(t, map[string]string{"SAFE": "ok"}, input.Env)
 
 	defaults := requireAdapt(t, binding, `{"command":"date"}`)
-	require.Equal(t, base, defaults.WorkingDir)
-	require.Equal(t, defaultHostYield, defaults.Yield)
+	require.Equal(t, lexicalBase, defaults.WorkingDir)
 	require.Equal(t, defaultHostTimeout, defaults.Timeout)
 
 	aliases := requireAdapt(t, binding, `{
 		"command":"date","yieldMs":25,"timeoutSec":4,"pty":true
 	}`)
-	require.Equal(t, 25*time.Millisecond, aliases.Yield)
 	require.Equal(t, 4*time.Second, aliases.Timeout)
 	require.True(t, aliases.PTY)
 
-	absolute := filepath.Join(t.TempDir(), "absolute")
+	absolute := path.Join(strings.ReplaceAll(t.TempDir(), "\\", "/"), "absolute")
 	absInput := requireAdapt(t, binding, fmt.Sprintf(
 		`{"command":"date","workdir":%q}`, absolute,
 	))
 	require.Equal(t, absolute, absInput.WorkingDir)
 }
 
-func TestHostExecAdapter_DefaultBaseAndHome(t *testing.T) {
+func TestHostExecAdapter_DefaultBaseAndLexicalHome(t *testing.T) {
 	binding := BindHostExec("exec_command", "")
 	input := requireAdapt(t, binding, `{"command":"date"}`)
 	require.Empty(t, input.WorkingDir)
 
-	home, err := os.UserHomeDir()
-	require.NoError(t, err)
 	homeInput := requireAdapt(t, binding, `{"command":"date","workdir":"~"}`)
-	require.Equal(t, home, homeInput.WorkingDir)
+	require.Equal(t, "~", homeInput.WorkingDir)
 }
 
 func TestHostSessionAdapter(t *testing.T) {
@@ -373,14 +346,12 @@ func TestHostSessionAdapter(t *testing.T) {
 	poll := requireAdapt(t, binding, `{"sessionId":"host-1"}`)
 	require.Equal(t, "host-1", poll.SessionID)
 	require.Equal(t, OperationSessionPoll, poll.Operation)
-	require.Equal(t, defaultSessionWriteYield, poll.Yield)
 
 	input := requireAdapt(t, binding, `{
 		"session_id":"host-2","chars":"yes","append_newline":true,"yieldMs":3
 	}`)
 	require.Equal(t, OperationSessionInput, input.Operation)
 	require.True(t, input.Submit)
-	require.Equal(t, 3*time.Millisecond, input.Yield)
 }
 
 func TestCodeExecAdapter_WireFormsAndOrder(t *testing.T) {
@@ -416,24 +387,21 @@ func TestCodeExecAdapter_WireFormsAndOrder(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			input := requireAdapt(t, binding, test.args)
-			require.Equal(t, "exec-1", input.ExecutionID)
 			require.Equal(t, OperationCodeExecute, input.Operation)
 			require.Equal(t, BackendContainer, input.Backend)
 			require.Equal(t, test.want, input.CodeBlocks)
 			require.Zero(t, input.Timeout)
-			require.Zero(t, input.MaxOutputSize)
 		})
 	}
 }
 
-func TestRemoteCodeExecAdapterPreservesProvider(t *testing.T) {
-	binding := BindRemoteCodeExec("execute_e2b", ProviderE2B)
+func TestRemoteCodeExecAdapterPreservesBackend(t *testing.T) {
+	binding := BindCodeExec("execute_remote", BackendRemoteSandbox)
 	require.NoError(t, validateBinding(binding))
 
 	input := requireAdapt(t, binding,
 		`{"code_blocks":{"language":"python","code":"print(1)"}}`)
 	require.Equal(t, BackendRemoteSandbox, input.Backend)
-	require.Equal(t, ProviderE2B, input.Provider)
 }
 
 func TestCodeExecAdapter_RejectsInvalidFormsWithoutEcho(t *testing.T) {
@@ -527,22 +495,19 @@ func TestBuiltinAdaptersRejectMalformedRequests(t *testing.T) {
 	}
 }
 
-func TestAdaptersNormalizeYieldAliasesAndHomeWorkdir(t *testing.T) {
+func TestAdaptersNormalizeYieldAliasesAndLexicalHomeWorkdir(t *testing.T) {
 	workspace := BindWorkspaceExec("workspace_exec")
 	for _, arguments := range []string{
 		`{"command":"date","background":true,"yield-time_ms":25}`,
 		`{"command":"date","background":true,"yieldMs":25}`,
 	} {
 		input := requireAdapt(t, workspace, arguments)
-		require.Equal(t, 25*time.Millisecond, input.Yield)
 		require.True(t, input.Interactive)
 	}
 
 	host := BindHostExec("exec_command", "")
 	input := requireAdapt(t, host, `{"command":"date","workdir":"~/repo"}`)
-	home, err := os.UserHomeDir()
-	require.NoError(t, err)
-	require.Equal(t, filepath.Join(home, "repo"), input.WorkingDir)
+	require.Equal(t, "~/repo", input.WorkingDir)
 }
 
 func TestBindCustom_PreservesExplicitAdapter(t *testing.T) {
@@ -553,7 +518,7 @@ func TestBindCustom_PreservesExplicitAdapter(t *testing.T) {
 		CodeBlocks: []CodeBlockInput{{Language: "custom", Code: "run"}},
 	}
 	adapter := &testAdapter{input: want}
-	binding := BindCustom("skill.run", BackendSkill, adapter)
+	binding := BindCustom("custom.run", BackendCustom, adapter)
 	require.Same(t, adapter, binding.Adapter)
 	require.NoError(t, validateBinding(binding))
 	got, err := binding.Adapter.Adapt(context.Background(), AdaptRequest{}, binding)

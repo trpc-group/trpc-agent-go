@@ -72,7 +72,7 @@ func policyTransitions(extension string) []policyTransition {
 func yamlPolicyTransitions() []policyTransition {
 	return []policyTransition{
 		{
-			name: "allowed domain", command: "curl https://new.example/file",
+			name: "allowed domain", command: "curl -q --noproxy '*' https://new.example/file",
 			baseline:   "version: 1\ncommands:\n  allowed: [curl]\nnetwork:\n  allowed_domains: []\n",
 			modified:   "version: 1\ncommands:\n  allowed: [curl]\nnetwork:\n  allowed_domains: [new.example]\n",
 			wantBefore: DecisionDeny, wantAfter: DecisionAllow,
@@ -95,7 +95,7 @@ func yamlPolicyTransitions() []policyTransition {
 func jsonPolicyTransitions() []policyTransition {
 	return []policyTransition{
 		{
-			name: "allowed domain", command: "curl https://new.example/file",
+			name: "allowed domain", command: "curl -q --noproxy '*' https://new.example/file",
 			baseline:   `{"version":1,"commands":{"allowed":["curl"]},"network":{"allowed_domains":[]}}`,
 			modified:   `{"version":1,"commands":{"allowed":["curl"]},"network":{"allowed_domains":["new.example"]}}`,
 			wantBefore: DecisionDeny, wantAfter: DecisionAllow,

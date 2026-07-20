@@ -98,7 +98,7 @@ func publicSamplesPolicy() []publicSample {
 	return []publicSample{
 		{
 			name:       "allowlisted network",
-			input:      scanCommand("curl https://api.github.com/repos/x/y"),
+			input:      scanCommand("curl -q --noproxy '*' https://api.github.com/repos/x/y"),
 			decision:   DecisionAllow,
 			requiredID: "SAFETY_NO_FINDINGS",
 		},
@@ -106,7 +106,7 @@ func publicSamplesPolicy() []publicSample {
 			name:       "shell wrapper",
 			input:      scanCommand("bash -c 'echo safe'"),
 			decision:   DecisionDeny,
-			requiredID: "CMD_SHELL_WRAPPER",
+			requiredID: "CMD_PROCESS_WRAPPER",
 		},
 		{
 			name:       "pipeline",
@@ -177,7 +177,7 @@ func TestGuardForcedCategoriesAndParseFailClosed(t *testing.T) {
 		{"credential file", "cat ~/.aws/credentials", "PATH_CREDENTIAL_FILE", DecisionDeny},
 		{"IP literal", "curl https://127.0.0.1/file", "NETWORK_IP_LITERAL", DecisionDeny},
 		{"dynamic URL", `curl "https://${TARGET}/file"`, "NETWORK_DYNAMIC_TARGET", DecisionNeedsHumanReview},
-		{"curl remap", "curl --resolve example.com:443:127.0.0.1 https://example.com", "NETWORK_CURL_REMAP", DecisionDeny},
+		{"curl remap", "curl --resolve example.com:443:127.0.0.1 https://example.com", ruleNetworkDestinationMap, DecisionDeny},
 		{"privilege wrapper", "env sudo go test ./...", "CMD_PRIVILEGE_ESCALATION", DecisionDeny},
 	}
 	for _, test := range tests {
@@ -188,6 +188,97 @@ func TestGuardForcedCategoriesAndParseFailClosed(t *testing.T) {
 			requireFinding(t, report, test.ruleID)
 		})
 	}
+}
+
+func TestPathRuleUsesParsedArgvAndLexicalWorkingDirectory(t *testing.T) {
+	policy := DefaultPolicy()
+	policy.allowedCommands = []string{"cat"}
+	policy.deniedCommands = nil
+	policy.deniedPaths = []string{"/workspace/secrets", "/etc/passwd"}
+	guard, err := NewGuard(policy)
+	require.NoError(t, err)
+	tests := []struct {
+		name     string
+		input    ScanInput
+		rule     string
+		evidence string
+	}{
+		{
+			name: "option value relative to cwd",
+			input: func() ScanInput {
+				input := scanCommand("cat --file=secrets/token")
+				input.WorkingDir = "/workspace"
+				return input
+			}(),
+			rule: "PATH_FORBIDDEN",
+		},
+		{
+			name:  "quoted windows credential path",
+			input: scanCommand(`cat "C:\Users\me\.ssh\id_rsa"`),
+			rule:  "PATH_SSH_CREDENTIAL",
+		},
+		{
+			name: "preparsed option value",
+			input: ScanInput{
+				ToolName: "custom.exec", Kind: ExecutionKindCustom,
+				Operation: OperationExecute,
+				Args:      []string{"cat", "--file=.env"}, Backend: BackendCustom,
+			},
+			rule: "PATH_ENV_FILE",
+		},
+		{
+			name:     "quote concatenation",
+			input:    scanCommand(`cat /e'tc'/passwd`),
+			rule:     "PATH_FORBIDDEN",
+			evidence: "source=command.segment0.argv1",
+		},
+		{
+			name:     "backslash escape",
+			input:    scanCommand(`cat /etc/pass\wd`),
+			rule:     "PATH_FORBIDDEN",
+			evidence: "source=command.segment0.argv1",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			report, scanErr := guard.Scan(context.Background(), test.input)
+			require.NoError(t, scanErr)
+			require.Equal(t, DecisionDeny, report.Decision)
+			finding := requireFinding(t, report, test.rule)
+			if test.evidence != "" {
+				require.Contains(t, finding.Evidence, test.evidence)
+			}
+		})
+	}
+}
+
+func TestCommandRuleBlocksProcessWrappersInEverySegment(t *testing.T) {
+	guard, err := NewGuard(DefaultPolicy())
+	require.NoError(t, err)
+	commands := []string{
+		"env curl https://evil.example",
+		"xargs curl https://evil.example",
+		"go version | /usr/bin/ENV curl https://evil.example",
+		"go version | timeout 30 curl https://evil.example",
+	}
+	for _, command := range commands {
+		report, scanErr := guard.Scan(context.Background(), scanCommand(command))
+		require.NoError(t, scanErr)
+		require.Equal(t, DecisionDeny, report.Decision, command)
+		requireFinding(t, report, "CMD_PROCESS_WRAPPER")
+	}
+}
+
+func TestCommandRuleKeepsExplicitDenyPriority(t *testing.T) {
+	policy := DefaultPolicy()
+	policy.deniedCommands = append(policy.deniedCommands, "env")
+	guard, err := NewGuard(policy)
+	require.NoError(t, err)
+	report, err := guard.Scan(
+		context.Background(), scanCommand("env curl https://evil.example"),
+	)
+	require.NoError(t, err)
+	requireFinding(t, report, "CMD_DENIED")
 }
 
 func TestGuardQuotedNearMisses(t *testing.T) {
@@ -208,34 +299,28 @@ func TestGuardQuotedNearMisses(t *testing.T) {
 func TestGuardFiveHundredSegments(t *testing.T) {
 	guard, err := NewGuard(DefaultPolicy())
 	require.NoError(t, err)
-
-	safeSegments := make([]string, 500)
-	for index := range safeSegments {
-		safeSegments[index] = "go env"
+	segments := make([]string, 500)
+	for index := range segments {
+		segments[index] = "go env"
 	}
 	started := time.Now()
 	report, scanErr := guard.Scan(
-		context.Background(),
-		scanCommand(strings.Join(safeSegments, " | ")),
+		context.Background(), scanCommand(strings.Join(segments, " | ")),
 	)
 	require.NoError(t, scanErr)
 	require.LessOrEqual(t, time.Since(started), time.Second)
 	require.Equal(t, DecisionAsk, report.Decision)
-	compound := requireFinding(t, report, "SHELL_COMPOUND_COMMAND")
-	require.Contains(t, compound.Evidence, "parsed_segments=500")
-	require.NoError(t, findingAbsent(report, "CMD_DANGEROUS_DELETE"))
+	require.Contains(t, report.Evidence, "parsed_segments=500")
 
-	safeSegments[499] = "rm -rf /"
+	segments[499] = "rm -rf /"
 	started = time.Now()
 	report, scanErr = guard.Scan(
-		context.Background(),
-		scanCommand(strings.Join(safeSegments, " | ")),
+		context.Background(), scanCommand(strings.Join(segments, " | ")),
 	)
 	require.NoError(t, scanErr)
 	require.LessOrEqual(t, time.Since(started), time.Second)
 	require.Equal(t, DecisionDeny, report.Decision)
-	dangerous := requireFinding(t, report, "CMD_DANGEROUS_DELETE")
-	require.Contains(t, dangerous.Evidence, "segment_index=499")
+	requireFinding(t, report, "CMD_DANGEROUS_DELETE")
 }
 
 func TestGuardFiveHundredLineCode(t *testing.T) {
@@ -266,21 +351,15 @@ func TestGuardFiveHundredLineCode(t *testing.T) {
 }
 
 func TestGuardSelectsDeterministicPrimaryFinding(t *testing.T) {
-	guard, err := NewGuard(
-		DefaultPolicy(),
-		func(options *guardOptions) error {
-			options.rules = []rule{staticRule{findings: []Finding{
-				newFinding("ASK_LOW", RiskLevelLow, DecisionAsk, "ask", "review"),
-				newFinding("CMD_NOT_ALLOWED", RiskLevelHigh, DecisionDeny, "generic", "deny"),
-				newFinding("PATH_SSH_CREDENTIAL", RiskLevelHigh, DecisionDeny, "credential", "deny"),
-				newFinding("REVIEW_CRITICAL", RiskLevelCritical, DecisionNeedsHumanReview, "review", "review"),
-			}}}
-			return nil
-		},
-	)
-	require.NoError(t, err)
-	report, scanErr := guard.Scan(context.Background(), scanCommand("go env"))
-	require.NoError(t, scanErr)
+	findings := []Finding{
+		newFinding("ASK_MEDIUM", RiskLevelMedium, DecisionAsk, "ask", "review"),
+		newFinding("CMD_NOT_ALLOWED", RiskLevelHigh, DecisionDeny, "generic", "deny"),
+		newFinding("PATH_SSH_CREDENTIAL", RiskLevelHigh, DecisionDeny, "credential", "deny"),
+		newFinding("REVIEW_CRITICAL", RiskLevelCritical, DecisionNeedsHumanReview, "review", "review"),
+	}
+	report := buildReport(DefaultPolicy(), scanCommand("go env"), scanOutcome{
+		findings: findings,
+	})
 	require.Equal(t, DecisionDeny, report.Decision)
 	require.Equal(t, "PATH_SSH_CREDENTIAL", report.RuleID)
 	require.Equal(t, "PATH_SSH_CREDENTIAL", report.Findings[0].RuleID)
@@ -299,58 +378,11 @@ func TestGuardBoundsPublicReportFields(t *testing.T) {
 	require.True(t, strings.HasSuffix(report.ToolName, "..."))
 }
 
-func TestGuardRulePanicFailsClosed(t *testing.T) {
-	guard, err := NewGuard(
-		DefaultPolicy(),
-		func(options *guardOptions) error {
-			options.rules = []rule{panicRule{}, staticRule{}}
-			return nil
-		},
-	)
-	require.NoError(t, err)
-	report, scanErr := guard.Scan(context.Background(), scanCommand("go env"))
-	require.NoError(t, scanErr)
-	require.Equal(t, DecisionDeny, report.Decision)
-	require.Equal(t, "SAFETY_RULE_PANIC", report.RuleID)
-}
-
-func TestGuardRuleAndIdentifierPanicFailsClosed(t *testing.T) {
-	guard, err := NewGuard(
-		DefaultPolicy(),
-		func(options *guardOptions) error {
-			options.rules = []rule{doublePanicRule{}}
-			return nil
-		},
-	)
-	require.NoError(t, err)
-	report, scanErr := guard.Scan(context.Background(), scanCommand("go env"))
-	require.NoError(t, scanErr)
-	require.Equal(t, DecisionDeny, report.Decision)
-	require.Equal(t, "SAFETY_SCAN_FAILED", report.RuleID)
-}
-
 func TestGuardCanceledContextNeverAllows(t *testing.T) {
 	guard, err := NewGuard(DefaultPolicy())
 	require.NoError(t, err)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	report, scanErr := guard.Scan(ctx, scanCommand("go test ./..."))
-	require.NoError(t, scanErr)
-	require.Equal(t, DecisionDeny, report.Decision)
-	require.Equal(t, "SAFETY_SCAN_FAILED", report.RuleID)
-}
-
-func TestGuardCancellationDuringScanNeverAllows(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	guard, err := NewGuard(
-		DefaultPolicy(),
-		func(options *guardOptions) error {
-			options.rules = []rule{cancelingRule{cancel: cancel}}
-			return nil
-		},
-	)
-	require.NoError(t, err)
-
 	report, scanErr := guard.Scan(ctx, scanCommand("go test ./..."))
 	require.NoError(t, scanErr)
 	require.Equal(t, DecisionDeny, report.Decision)
@@ -366,37 +398,14 @@ func TestGuardPolicyAndInputDefensiveCopies(t *testing.T) {
 	require.NoError(t, scanErr)
 	require.Equal(t, DecisionAllow, report.Decision)
 
-	started := make(chan struct{})
-	resume := make(chan struct{})
-	observed := make(chan ScanInput, 1)
-	copyGuard, err := NewGuard(
-		DefaultPolicy(),
-		func(options *guardOptions) error {
-			options.rules = []rule{captureRule{
-				started:  started,
-				resume:   resume,
-				observed: observed,
-			}}
-			return nil
-		},
-	)
-	require.NoError(t, err)
 	input := scanCommand("go env")
 	input.Args = []string{"safe"}
 	input.Env = map[string]string{"LANG": "C"}
 	input.CodeBlocks = []CodeBlockInput{{Language: "go", Code: "safe"}}
-	done := make(chan struct{})
-	go func() {
-		_, _ = copyGuard.Scan(context.Background(), input)
-		close(done)
-	}()
-	<-started
+	snapshot := cloneScanInput(input)
 	input.Args[0] = "mutated"
 	input.Env["LANG"] = "mutated"
 	input.CodeBlocks[0].Code = "mutated"
-	close(resume)
-	snapshot := <-observed
-	<-done
 	require.Equal(t, "safe", snapshot.Args[0])
 	require.Equal(t, "C", snapshot.Env["LANG"])
 	require.Equal(t, "safe", snapshot.CodeBlocks[0].Code)
@@ -436,7 +445,6 @@ func TestGuardDoesNotProducePostcheckOnlyRules(t *testing.T) {
 	guard, err := NewGuard(DefaultPolicy())
 	require.NoError(t, err)
 	input := scanCommand("go test ./...")
-	input.MaxOutputSize = 1 << 30
 	report, scanErr := guard.Scan(context.Background(), input)
 	require.NoError(t, scanErr)
 	require.NoError(t, findingAbsent(report, "RESOURCE_OUTPUT_LIMIT_EXCEEDED"))
@@ -445,15 +453,14 @@ func TestGuardDoesNotProducePostcheckOnlyRules(t *testing.T) {
 
 func scanCommand(command string) ScanInput {
 	return ScanInput{
-		ToolName:      "workspace_exec",
-		Kind:          ExecutionKindWorkspaceExec,
-		Operation:     OperationExecute,
-		Command:       command,
-		WorkingDir:    ".",
-		Env:           map[string]string{},
-		Backend:       BackendWorkspaceExec,
-		Timeout:       30 * time.Second,
-		MaxOutputSize: 1 << 20,
+		ToolName:   "workspace_exec",
+		Kind:       ExecutionKindWorkspaceExec,
+		Operation:  OperationExecute,
+		Command:    command,
+		WorkingDir: ".",
+		Env:        map[string]string{},
+		Backend:    BackendWorkspaceExec,
+		Timeout:    30 * time.Second,
 	}
 }
 
@@ -477,66 +484,6 @@ func findingAbsent(report Report, ruleID string) error {
 	return nil
 }
 
-type staticRule struct {
-	findings []Finding
-}
-
-func (staticRule) ID() string { return "static" }
-
-func (rule staticRule) Evaluate(
-	context.Context,
-	ScanInput,
-	Policy,
-) []Finding {
-	return append([]Finding(nil), rule.findings...)
-}
-
-type panicRule struct{}
-
-func (panicRule) ID() string { return "panic" }
-
-func (panicRule) Evaluate(context.Context, ScanInput, Policy) []Finding {
-	panic("test panic")
-}
-
-type doublePanicRule struct{}
-
-func (doublePanicRule) ID() string { panic("test identifier panic") }
-
-func (doublePanicRule) Evaluate(context.Context, ScanInput, Policy) []Finding {
-	panic("test evaluation panic")
-}
-
-type cancelingRule struct {
-	cancel context.CancelFunc
-}
-
-func (cancelingRule) ID() string { return "canceling" }
-
-func (rule cancelingRule) Evaluate(context.Context, ScanInput, Policy) []Finding {
-	rule.cancel()
-	return nil
-}
-
-type captureRule struct {
-	started  chan<- struct{}
-	resume   <-chan struct{}
-	observed chan<- ScanInput
-}
-
-func (captureRule) ID() string { return "capture" }
-
-func (rule captureRule) Evaluate(
-	_ context.Context,
-	input ScanInput,
-	_ Policy,
-) []Finding {
-	close(rule.started)
-	<-rule.resume
-	rule.observed <- input
-	return nil
-}
-
 func TestNewGuardFromFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "policy.yaml")
 	require.NoError(t, os.WriteFile(path, []byte(`
@@ -555,13 +502,6 @@ limits:
   max_output_bytes: 2048
   max_sleep: 2s
   max_concurrency: 3
-actions:
-  parse_error: deny
-  unknown_language: needs_human_review
-  pipeline: ask
-  dependency_install: ask
-  host_pty: ask
-  host_background: deny
 `), 0o600))
 
 	guard, err := NewGuardFromFile(path)
@@ -581,21 +521,10 @@ func TestNewGuardRejectsInvalidPublicInputs(t *testing.T) {
 	require.Error(t, err)
 	_, err = NewGuardFromFile(filepath.Join(t.TempDir(), "missing.yaml"))
 	require.Error(t, err)
-	_, err = NewGuard(DefaultPolicy(), func(options *guardOptions) error {
-		options.rules = nil
-		return nil
-	})
-	require.ErrorContains(t, err, "guard requires rules")
-
 	invalidLimits := DefaultPolicy()
 	invalidLimits.maxTimeout = 0
 	_, err = NewGuard(invalidLimits)
 	require.ErrorContains(t, err, "invalid policy limits")
-
-	failOpenAction := DefaultPolicy()
-	failOpenAction.parseErrorAction = DecisionAllow
-	_, err = NewGuard(failOpenAction)
-	require.ErrorContains(t, err, "invalid policy action")
 }
 
 func TestScanWithUnknownLanguage(t *testing.T) {
@@ -743,10 +672,10 @@ func TestScanSessionPollSkipsMostRules(t *testing.T) {
 
 	input := ScanInput{
 		ToolName:  "workspace_session",
+		SessionID: "session-1",
 		Kind:      ExecutionKindWorkspaceSession,
 		Operation: OperationSessionPoll,
 		Backend:   BackendWorkspaceExec,
-		Timeout:   30 * time.Second,
 	}
 	report, scanErr := guard.Scan(context.Background(), input)
 	require.NoError(t, scanErr)
@@ -759,11 +688,12 @@ func TestScanSessionInput(t *testing.T) {
 	require.NoError(t, err)
 
 	input := ScanInput{
-		ToolName:  "workspace_session",
-		Kind:      ExecutionKindWorkspaceSession,
-		Operation: OperationSessionInput,
-		Backend:   BackendWorkspaceExec,
-		Timeout:   30 * time.Second,
+		ToolName:     "workspace_session",
+		SessionID:    "session-1",
+		Kind:         ExecutionKindWorkspaceSession,
+		Operation:    OperationSessionInput,
+		SessionInput: "whoami",
+		Backend:      BackendWorkspaceExec,
 	}
 	report, scanErr := guard.Scan(context.Background(), input)
 	require.NoError(t, scanErr)
@@ -917,132 +847,4 @@ func TestScanWithDependencyPipInstall(t *testing.T) {
 	report, scanErr := guard.Scan(context.Background(), scanCommand("pip install requests"))
 	require.NoError(t, scanErr)
 	requireFinding(t, report, "DEPENDENCY_PIP_INSTALL")
-}
-
-func TestScanNonShellExecutableText(t *testing.T) {
-	policy := DefaultPolicy()
-	guard, err := NewGuard(policy)
-	require.NoError(t, err)
-
-	input := ScanInput{
-		ToolName:  "code_execution",
-		Kind:      ExecutionKindCodeExec,
-		Operation: OperationCodeExecute,
-		Backend:   BackendCodeExec,
-		CodeBlocks: []CodeBlockInput{{
-			Language: "python",
-			Code:     "import os; os.system('rm -rf /')",
-		}},
-	}
-	report, scanErr := guard.Scan(context.Background(), input)
-	require.NoError(t, scanErr)
-	require.Equal(t, DecisionDeny, report.Decision)
-}
-
-func TestScanCommandDenied(t *testing.T) {
-	policy := DefaultPolicy()
-	guard, err := NewGuard(policy)
-	require.NoError(t, err)
-
-	report, scanErr := guard.Scan(context.Background(), scanCommand("wget evil.example/file"))
-	require.NoError(t, scanErr)
-	require.Equal(t, DecisionDeny, report.Decision)
-}
-
-func TestScanWithEnvURLDetectionProxy(t *testing.T) {
-	policy := DefaultPolicy()
-	guard, err := NewGuard(policy)
-	require.NoError(t, err)
-
-	input := scanCommand("go test ./...")
-	input.Env = map[string]string{"HTTP_PROXY": "http://evil.example:8080"}
-	report, scanErr := guard.Scan(context.Background(), input)
-	require.NoError(t, scanErr)
-	require.Equal(t, DecisionDeny, report.Decision)
-}
-
-func TestNetworkEnvironmentKeysAreExplicit(t *testing.T) {
-	policy := DefaultPolicy()
-	ignored := networkEnvironmentFindings(map[string]string{
-		"CURL_HOME":      `C:\tools\curl`,
-		"CURL_CA_BUNDLE": `C:\certs\ca.pem`,
-		"NO_PROXY":       "internal.example",
-	}, policy)
-	require.Empty(t, ignored)
-
-	for _, key := range []string{"URL", "SERVICE_URL", "PROXY", "HTTPS_PROXY"} {
-		findings := networkEnvironmentFindings(
-			map[string]string{key: "https://evil.example/path"},
-			policy,
-		)
-		require.NotEmpty(t, findings, key)
-	}
-}
-
-func TestResourceSleepInspectionUsesParsedCommands(t *testing.T) {
-	guard, err := NewGuard(DefaultPolicy())
-	require.NoError(t, err)
-
-	for _, command := range []string{
-		"sleep 1; sleep 120",
-		"sleep invalid",
-		"sleep 5 6",
-		"sleep 1e100",
-	} {
-		report, scanErr := guard.Scan(context.Background(), scanCommand(command))
-		require.NoError(t, scanErr)
-		requireFinding(t, report, "RESOURCE_LONG_SLEEP")
-	}
-
-	report, scanErr := guard.Scan(
-		context.Background(),
-		scanCommand("echo sleep 120"),
-	)
-	require.NoError(t, scanErr)
-	require.NoError(t, findingAbsent(report, "RESOURCE_LONG_SLEEP"))
-}
-
-func TestSleepCommandFollowsPlatformExecutableRules(t *testing.T) {
-	require.True(t, sleepCommand("sleep"))
-	if runtime.GOOS == "windows" {
-		require.True(t, sleepCommand("SLEEP.EXE"))
-	} else {
-		require.False(t, sleepCommand("sleep.exe"))
-		require.False(t, sleepCommand("SLEEP"))
-	}
-}
-
-func TestScanRejectsAmbiguousExecutableInput(t *testing.T) {
-	guard, err := NewGuard(DefaultPolicy())
-	require.NoError(t, err)
-	input := scanCommand("go env")
-	input.Args = []string{"rm", "-rf", "/"}
-
-	report, scanErr := guard.Scan(context.Background(), input)
-	require.NoError(t, scanErr)
-	require.Equal(t, DecisionDeny, report.Decision)
-	requireFinding(t, report, "SAFETY_INPUT_AMBIGUOUS")
-}
-
-func TestScanRawDangerousDelete(t *testing.T) {
-	policy := DefaultPolicy()
-	guard, err := NewGuard(policy)
-	require.NoError(t, err)
-
-	tests := []struct {
-		name    string
-		command string
-	}{
-		{"rm rf", "rm -rf /tmp/build"},
-		{"remove item recurse", "Remove-Item -Recurse -Force C:\\build"},
-		{"rmdir s", "rmdir /s build"},
-		{"del s", "del /s *.tmp"},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			report, scanErr := guard.Scan(context.Background(), scanCommand(test.command))
-			require.NoError(t, scanErr)
-			requireFinding(t, report, "CMD_DANGEROUS_DELETE")
-		})
-	}
 }

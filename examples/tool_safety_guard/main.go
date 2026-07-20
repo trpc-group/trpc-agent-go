@@ -21,6 +21,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool/safety"
 )
 
+const reportFileMode = os.FileMode(0o600)
+
 type sample struct {
 	Name           string               `json:"name"`
 	Expected       safety.Decision      `json:"expected_decision"`
@@ -127,17 +129,16 @@ func (current sample) scanInput() (safety.ScanInput, error) {
 		return safety.ScanInput{}, fmt.Errorf("parse timeout: %w", err)
 	}
 	return safety.ScanInput{
-		ToolName:      current.ToolName,
-		Kind:          current.Kind,
-		Operation:     current.Operation,
-		Command:       current.Command,
-		WorkingDir:    current.WorkingDir,
-		Env:           current.Env,
-		Backend:       current.Backend,
-		Timeout:       timeout,
-		MaxOutputSize: current.MaxOutputBytes,
-		PTY:           current.PTY,
-		Interactive:   current.Interactive,
+		ToolName:    current.ToolName,
+		Kind:        current.Kind,
+		Operation:   current.Operation,
+		Command:     current.Command,
+		WorkingDir:  current.WorkingDir,
+		Env:         current.Env,
+		Backend:     current.Backend,
+		Timeout:     timeout,
+		PTY:         current.PTY,
+		Interactive: current.Interactive,
 	}, nil
 }
 
@@ -171,7 +172,7 @@ func writeReports(path string, reports []namedReport) error {
 		return fmt.Errorf("encode reports: %w", err)
 	}
 	data = append(data, '\n')
-	if err := os.WriteFile(path, data, 0o600); err != nil {
+	if err := os.WriteFile(path, data, reportFileMode); err != nil {
 		return fmt.Errorf("write reports: %w", err)
 	}
 	return nil

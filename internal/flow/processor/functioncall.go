@@ -386,12 +386,6 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsAndSendEventWithReque
 		eventChan,
 	)
 	if err != nil {
-		if functionResponseEvent != nil {
-			emitErr := emitFunctionResponseEvent(
-				ctx, invocation, eventChan, functionResponseEvent,
-			)
-			err = errors.Join(err, emitErr)
-		}
 		log.ErrorfContext(
 			ctx,
 			"Function call handling failed for agent %s: %v",
@@ -404,26 +398,13 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsAndSendEventWithReque
 			model.ErrorTypeFlowError,
 			err.Error(),
 		))
-		return functionResponseEvent, err
+		return nil, err
 	}
 
 	if functionResponseEvent == nil {
 		return nil, nil
 	}
-	if err := emitFunctionResponseEvent(
-		ctx, invocation, eventChan, functionResponseEvent,
-	); err != nil {
-		return nil, err
-	}
-	return functionResponseEvent, nil
-}
 
-func emitFunctionResponseEvent(
-	ctx context.Context,
-	invocation *agent.Invocation,
-	eventChan chan<- *event.Event,
-	functionResponseEvent *event.Event,
-) error {
 	functionResponseEvent.RequiresCompletion = true
 	emitErr := agent.EmitEvent(
 		ctx,
@@ -443,23 +424,23 @@ func emitFunctionResponseEvent(
 				persistErr,
 			)
 		}
-		return emitErr
+		return nil, emitErr
 	}
 	if emitErr != nil {
-		return emitErr
+		return nil, emitErr
 	}
 
 	if !appender.IsAttached(invocation) {
-		return nil
+		return functionResponseEvent, nil
 	}
 
 	completionID :=
 		agent.GetAppendEventNoticeKey(functionResponseEvent.ID)
 	timeout := funcRespWaitTimeout(ctx)
-	err := invocation.AddNoticeChannelAndWait(ctx, completionID, timeout)
+	err = invocation.AddNoticeChannelAndWait(ctx, completionID, timeout)
 	if errors.Is(err, context.Canceled) ||
 		errors.Is(err, context.DeadlineExceeded) {
-		return err
+		return nil, err
 	}
 	if err != nil {
 		log.WarnfContext(
@@ -468,7 +449,7 @@ func emitFunctionResponseEvent(
 			err,
 		)
 	}
-	return nil
+	return functionResponseEvent, nil
 }
 
 func persistFunctionResponseAfterDeadline(
@@ -626,14 +607,11 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsWithRequest(
 		}
 		toolResults = append(toolResults, result)
 	}
-	toolCallResponsesEvents, err := p.attachStateDeltaToToolResults(
+	toolCallResponsesEvents := p.attachStateDeltaToToolResults(
 		ctx,
 		invocation,
 		toolResults,
 	)
-	if err != nil && len(toolCallResponsesEvents) == 0 {
-		return nil, err
-	}
 
 	if len(toolCallResponsesEvents) == 0 && invocation != nil {
 		for _, tc := range toolCalls {
@@ -648,9 +626,6 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsWithRequest(
 		ctx, invocation, llmResponse, tools, toolCalls, toolResults,
 		toolCallResponsesEvents,
 	)
-	if err != nil {
-		return mergedEvent, err
-	}
 	if err := p.applyAfterToolMessagesHooks(
 		ctx,
 		invocation,
@@ -906,14 +881,11 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequential(
 	if result.event == nil {
 		return nil, err
 	}
-	toolEvents, stateDeltaErr := p.attachStateDeltaToToolResults(
+	toolEvents := p.attachStateDeltaToToolResults(
 		ctx,
 		invocation,
 		[]toolResult{result},
 	)
-	if stateDeltaErr != nil {
-		return nil, errors.Join(err, stateDeltaErr)
-	}
 	if len(toolEvents) == 0 {
 		return nil, err
 	}
@@ -1144,15 +1116,11 @@ func (p *FunctionCallResponseProcessor) executeToolCallsInParallel(
 	// collector typically just sees ctx.Done()).
 	err := firstNonNilErr(g.Wait(), drainErr)
 
-	toolCallResponsesEvents, stateDeltaErr := p.attachStateDeltaToToolResults(
+	toolCallResponsesEvents := p.attachStateDeltaToToolResults(
 		ctx,
 		invocation,
 		toolResults,
 	)
-	err = errors.Join(err, stateDeltaErr)
-	if stateDeltaErr != nil && len(toolCallResponsesEvents) == 0 {
-		return nil, err
-	}
 	if len(toolCallResponsesEvents) == 0 && invocation != nil {
 		for _, tc := range toolCalls {
 			tl, ok := tools[tc.Function.Name]
@@ -1486,15 +1454,14 @@ func (p *FunctionCallResponseProcessor) decorateToolCallResponseEvent(
 
 // attachStateDelta copies tool-provided state delta to the event.
 func (p *FunctionCallResponseProcessor) attachStateDelta(
-	ctx context.Context,
 	inv *agent.Invocation,
 	tl tool.Tool,
 	args []byte,
 	choice *model.Choice,
 	ev *event.Event,
-) error {
+) {
 	if tl == nil || choice == nil || ev == nil {
-		return nil
+		return
 	}
 	b := []byte(choice.Message.Content)
 	toolCallID := choice.Message.ToolID
@@ -1510,49 +1477,18 @@ func (p *FunctionCallResponseProcessor) attachStateDelta(
 			[]byte,
 		) map[string][]byte
 	}
-	type stateDeltaErrorProvider interface {
-		StateDeltaWithError(
-			context.Context,
-			string,
-			[]byte,
-			[]byte,
-		) (map[string][]byte, error)
-	}
-	type invocationStateDeltaErrorProvider interface {
-		StateDeltaForInvocationWithError(
-			context.Context,
-			*agent.Invocation,
-			string,
-			[]byte,
-			[]byte,
-		) (map[string][]byte, error)
-	}
 
 	var delta map[string][]byte
 	providerTool := itool.ResolveSemantic(tl)
-	if provider, ok := providerTool.(invocationStateDeltaErrorProvider); ok {
-		var err error
-		delta, err = provider.StateDeltaForInvocationWithError(
-			ctx, inv, toolCallID, args, b,
-		)
-		if err != nil {
-			return err
-		}
-	} else if provider, ok := providerTool.(stateDeltaErrorProvider); ok {
-		var err error
-		delta, err = provider.StateDeltaWithError(ctx, toolCallID, args, b)
-		if err != nil {
-			return err
-		}
-	} else if isdp, ok := providerTool.(invocationStateDeltaProvider); ok {
+	if isdp, ok := providerTool.(invocationStateDeltaProvider); ok {
 		delta = isdp.StateDeltaForInvocation(inv, toolCallID, args, b)
 	} else if sdp, ok := providerTool.(stateDeltaProvider); ok {
 		delta = sdp.StateDelta(toolCallID, args, b)
 	} else {
-		return nil
+		return
 	}
 	if len(delta) == 0 {
-		return nil
+		return
 	}
 	if ev.StateDelta == nil {
 		ev.StateDelta = map[string][]byte{}
@@ -1560,7 +1496,6 @@ func (p *FunctionCallResponseProcessor) attachStateDelta(
 	for k, v := range delta {
 		ev.StateDelta[k] = v
 	}
-	return nil
 }
 
 // annotateSkipSummarization marks an event to skip outer summarization.
@@ -1781,9 +1716,8 @@ func (p *FunctionCallResponseProcessor) attachStateDeltaToToolResults(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	results []toolResult,
-) ([]*event.Event, error) {
+) []*event.Event {
 	var priorStateDelta []*event.Event
-	var stateDeltaErr error
 	events := make([]*event.Event, 0, len(results))
 	for i := 0; i < len(results); i++ {
 		result := results[i]
@@ -1802,17 +1736,13 @@ func (p *FunctionCallResponseProcessor) attachStateDeltaToToolResults(
 					priorStateDelta,
 				)
 			}
-			if err := p.attachStateDelta(
-				ctx,
+			p.attachStateDelta(
 				stateDeltaInv,
 				result.stateDelta.tool,
 				result.stateDelta.args,
 				&result.stateDelta.choice,
 				result.event,
-			); err != nil {
-				stateDeltaErr = errors.Join(stateDeltaErr, err)
-				continue
-			}
+			)
 		}
 		p.runPostToolResultHooks(ctx, invocation, result.event)
 		if len(result.event.StateDelta) > 0 {
@@ -1823,7 +1753,7 @@ func (p *FunctionCallResponseProcessor) attachStateDeltaToToolResults(
 		}
 		events = append(events, result.event)
 	}
-	return events, stateDeltaErr
+	return events
 }
 
 func (p *FunctionCallResponseProcessor) runPostToolResultHooks(
@@ -1905,16 +1835,10 @@ func (p *FunctionCallResponseProcessor) lookupDeclaration(
 	return &tool.Declaration{Name: "<not found>", Description: "<not found>"}
 }
 
-// sendToolResult preserves an already-completed result when the collector can
-// accept it immediately. Only wait on cancellation when delivery would block.
+// sendToolResult sends without blocking when the context is cancelled.
 func (p *FunctionCallResponseProcessor) sendToolResult(
 	ctx context.Context, ch chan<- toolResult, res toolResult,
 ) {
-	select {
-	case ch <- res:
-		return
-	default:
-	}
 	select {
 	case ch <- res:
 	case <-ctx.Done():

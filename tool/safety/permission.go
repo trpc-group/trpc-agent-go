@@ -55,10 +55,9 @@ func (policy *permissionPolicy) CheckToolPermission(
 		return tool.AllowPermission(), nil
 	}
 	report, err := policy.guard.scanRequest(ctx, AdaptRequest{
-		ToolName:   req.ToolName,
-		ToolCallID: req.ToolCallID,
-		Arguments:  append([]byte(nil), req.Arguments...),
-		Metadata:   req.Metadata,
+		ToolName:  req.ToolName,
+		Arguments: append([]byte(nil), req.Arguments...),
+		Metadata:  req.Metadata,
 	}, binding)
 	decision := permissionDecision(report)
 	if err != nil {
@@ -131,7 +130,15 @@ func adaptSafely(
 			err = errors.New("tool safety: input adapter failed")
 		}
 	}()
-	return binding.Adapter.Adapt(ctx, req, binding)
+	input, err = binding.Adapter.Adapt(ctx, req, binding)
+	if err != nil {
+		return ScanInput{}, err
+	}
+	input = bindTrustedInput(input, req, binding)
+	if err := validateScanInputShape(input); err != nil {
+		return ScanInput{}, err
+	}
+	return input, nil
 }
 
 func (guard *Guard) scanUnparsableRequest(
@@ -140,15 +147,11 @@ func (guard *Guard) scanUnparsableRequest(
 	binding Binding,
 ) (Report, error) {
 	input := ScanInput{
-		ToolName:   req.ToolName,
-		ToolCallID: req.ToolCallID,
-		Kind:       binding.Kind,
-		Backend:    binding.Backend,
-		Provider:   binding.Provider,
-		Operation:  operationForKind(binding.Kind),
-		Script:     "<unparsable-arguments>",
-		Language:   "arguments",
-		Metadata:   req.Metadata,
+		ToolName: req.ToolName,
+		Kind:     binding.Kind,
+		Backend:  binding.Backend,
+		Command:  "<unparsable-arguments>",
+		Metadata: req.Metadata,
 	}
 	findings := []Finding{newFinding(
 		"TOOL_INPUT_UNPARSABLE",
@@ -157,77 +160,6 @@ func (guard *Guard) scanUnparsableRequest(
 		"tool arguments could not be normalized",
 		"review the arguments and execution binding",
 	)}
-	findings = append(findings, guard.definiteRawFindings(ctx, req, input)...)
 	report := buildReport(guard.policy, input, scanOutcome{findings: findings})
 	return guard.finalizeReport(ctx, report, auditPhasePrecheck)
-}
-
-func operationForKind(kind ExecutionKind) Operation {
-	switch kind {
-	case ExecutionKindCodeExec:
-		return OperationCodeExecute
-	case ExecutionKindWorkspaceSession, ExecutionKindHostSession:
-		return OperationSessionInput
-	default:
-		return OperationExecute
-	}
-}
-
-func (guard *Guard) definiteRawFindings(
-	ctx context.Context,
-	req AdaptRequest,
-	base ScanInput,
-) []Finding {
-	findings := filterDefiniteFindings(rawCommandFindings(
-		string(req.Arguments),
-		"arguments",
-	))
-	raw := base
-	raw.Command = string(req.Arguments)
-	raw.Script = ""
-	report, err := guard.scan(ctx, raw)
-	if err != nil {
-		return findings
-	}
-	return appendUniqueFindings(findings, filterDefiniteFindings(report.Findings))
-}
-
-func filterDefiniteFindings(candidates []Finding) []Finding {
-	findings := make([]Finding, 0, len(candidates))
-	for _, finding := range candidates {
-		if definiteRawRule(finding.RuleID) {
-			findings = append(findings, finding)
-		}
-	}
-	return findings
-}
-
-func appendUniqueFindings(existing, candidates []Finding) []Finding {
-	seen := make(map[string]struct{}, len(existing))
-	for _, finding := range existing {
-		seen[finding.RuleID] = struct{}{}
-	}
-	for _, finding := range candidates {
-		if _, ok := seen[finding.RuleID]; ok {
-			continue
-		}
-		existing = append(existing, finding)
-		seen[finding.RuleID] = struct{}{}
-	}
-	return existing
-}
-
-func definiteRawRule(ruleID string) bool {
-	switch ruleID {
-	case "CMD_DANGEROUS_DELETE", "CMD_SYSTEM_OVERWRITE",
-		"CMD_PRIVILEGE_ESCALATION", "PATH_SSH_CREDENTIAL",
-		"PATH_ENV_FILE", "PATH_CREDENTIAL_FILE",
-		"NETWORK_DOMAIN_DENIED", "NETWORK_IP_LITERAL",
-		"RESOURCE_FORK_BOMB", "SECRET_PRIVATE_KEY",
-		"SECRET_CLOUD_CREDENTIAL", "SECRET_TOKEN",
-		"SECRET_PASSWORD", "SECRET_API_KEY":
-		return true
-	default:
-		return false
-	}
 }

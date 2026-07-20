@@ -10,193 +10,652 @@
 package safety
 
 import (
-	"fmt"
 	"net"
 	"net/url"
+	"path/filepath"
 	"runtime"
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/internal/shellsafe"
 )
 
-type networkOperands struct {
-	supported      bool
-	targets        []string
-	reviewRule     string
-	reviewEvidence string
+const (
+	ruleNetworkTargetReview    = "NETWORK_TARGET_UNPARSABLE"
+	ruleNetworkOptionReview    = "NETWORK_OPTION_REVIEW"
+	ruleNetworkAmbientConfig   = "NETWORK_AMBIENT_CONFIG"
+	ruleNetworkDestinationMap  = "NETWORK_DESTINATION_REMAP"
+	ruleNetworkExecutionOption = "NETWORK_EXECUTION_OPTION"
+	ruleNetworkCustomClient    = "NETWORK_CUSTOM_CLIENT"
+)
+
+var networkCommands = map[string]struct{}{
+	"curl": {}, "wget": {}, "nc": {}, "ncat": {}, "netcat": {},
+	"ssh": {}, "scp": {}, "git": {},
 }
 
-type networkOptionSpec struct {
-	valueOptions       map[string]struct{}
-	flagOptions        map[string]struct{}
-	targetOptions      map[string]struct{}
-	reviewOptions      map[string]struct{}
-	reviewValueOptions map[string]struct{}
+var optionTakesValue = map[string]map[string]struct{}{
+	"curl": {
+		"--connect-timeout": {}, "--max-redirs": {}, "--max-time": {},
+		"--config": {}, "--noproxy": {}, "--output": {}, "--url": {}, "-K": {}, "-o": {},
+	},
+	"wget": {
+		"--config": {}, "--execute": {}, "--output-document": {}, "-O": {},
+	},
+	"nc":  {"-p": {}, "-s": {}, "-w": {}},
+	"ssh": {"-F": {}, "-J": {}, "-o": {}, "-p": {}, "-i": {}, "-l": {}},
+	"scp": {"-F": {}, "-J": {}, "-o": {}, "-P": {}, "-S": {}, "-i": {}},
 }
 
-const maxNestedNetworkDepth = 8
+const (
+	curlShortOptionsWithValues = "AbcdeEFHKmoPQrTuXxYyz"
+	wgetShortOptionsWithValues = "aABDeilOoPQtTUw"
+	sshShortOptionsWithValues  = "BbcDEeFIiJLlmOoPpQRSWw"
+	scpShortOptionsWithValues  = "cDFiJloPSX"
+	ncShortOptionsWithValues   = "ceIiMmOPpqsTVwXx"
+)
 
-var curlNetworkOptions = networkOptionSpec{
-	valueOptions: networkOptionSet(
-		"-A", "--user-agent", "-H", "--header", "-d", "--data",
-		"--data-raw", "--data-binary", "-o", "--output", "-u", "--user",
-		"--connect-timeout", "-m", "--max-time", "--cacert", "--cert",
-		"--key", "-X", "--request", "--url",
-	),
-	flagOptions: networkOptionSet(
-		"-f", "--fail", "-s", "--silent", "-S", "--show-error",
-		"-I", "--head", "--compressed", "--fail-with-body",
-	),
-	targetOptions: networkOptionSet("--url"),
-	reviewOptions: networkOptionSet("-L", "--location"),
-	reviewValueOptions: networkOptionSet(
-		"-K", "--config", "-x", "--proxy", "--preproxy", "--proto-default",
-	),
+var shortOptionsWithValues = map[string]string{
+	"curl":   curlShortOptionsWithValues,
+	"wget":   wgetShortOptionsWithValues,
+	"ssh":    sshShortOptionsWithValues,
+	"scp":    scpShortOptionsWithValues,
+	"nc":     ncShortOptionsWithValues,
+	"ncat":   ncShortOptionsWithValues,
+	"netcat": ncShortOptionsWithValues,
 }
 
-var wgetNetworkOptions = networkOptionSpec{
-	valueOptions: networkOptionSet(
-		"-O", "--output-document", "-T", "--timeout", "-t", "--tries",
-		"--header", "--user-agent", "--method", "--body-data",
-	),
-	flagOptions: networkOptionSet(
-		"-q", "--quiet", "-nv", "--no-verbose", "--spider",
-		"--no-check-certificate", "--content-disposition",
-	),
-	reviewValueOptions: networkOptionSet(
-		"-e", "--execute", "--config", "-Y", "--proxy",
-	),
-}
-
-var sshNetworkOptions = networkOptionSpec{
-	valueOptions:       networkOptionSet("-p", "-i", "-l", "-E"),
-	flagOptions:        networkOptionSet("-T", "-N", "-n", "-q", "-v", "-vv", "-vvv"),
-	reviewValueOptions: networkOptionSet("-F", "-J", "-o", "-ProxyCommand"),
-}
-
-var scpNetworkOptions = networkOptionSpec{
-	valueOptions:       networkOptionSet("-P", "-i", "-l"),
-	flagOptions:        networkOptionSet("-q", "-p", "-r", "-v"),
-	reviewOptions:      networkOptionSet("-3"),
-	reviewValueOptions: networkOptionSet("-F", "-J", "-o", "-S"),
-}
-
-var gitCloneNetworkOptions = networkOptionSpec{
-	valueOptions: networkOptionSet(
-		"-b", "--branch", "-o", "--origin", "--depth", "--reference",
-		"--reference-if-able", "--separate-git-dir", "--upload-pack", "-u",
-	),
-	flagOptions: networkOptionSet(
-		"--bare", "--mirror", "--local", "--no-local", "--shared",
-		"--recurse-submodules", "--recursive", "--single-branch", "--no-tags",
-		"--ipv4", "--ipv6", "--quiet", "--verbose", "--progress",
-	),
-	reviewValueOptions: networkOptionSet("-c", "--config", "--server-option"),
-}
-
-var gitRemoteNetworkOptions = networkOptionSpec{
-	valueOptions: networkOptionSet(
-		"--depth", "--deepen", "--shallow-since", "--shallow-exclude", "--repo",
-	),
-	flagOptions: networkOptionSet(
-		"-a", "--all", "-p", "--prune", "--tags", "--no-tags", "-f", "--force",
-		"-u", "--update-head-ok", "--set-upstream", "--dry-run", "--atomic",
-	),
-	targetOptions: networkOptionSet("--repo"),
-	reviewValueOptions: networkOptionSet(
-		"--upload-pack", "--receive-pack", "--exec", "--server-option",
-	),
-}
-
-var gitArchiveNetworkOptions = networkOptionSpec{
-	valueOptions: networkOptionSet(
-		"--format", "--prefix", "-o", "--output", "--remote",
-	),
-	flagOptions:        networkOptionSet("-v", "--verbose", "--worktree-attributes"),
-	targetOptions:      networkOptionSet("--remote"),
-	reviewValueOptions: networkOptionSet("--exec"),
-}
-
-var ncNetworkOptions = networkOptionSpec{
-	valueOptions:  networkOptionSet("-w", "-i", "-p", "-s"),
-	flagOptions:   networkOptionSet("-z", "-v", "-n", "-u"),
-	reviewOptions: networkOptionSet("-l", "-k", "--listen"),
-	reviewValueOptions: networkOptionSet(
-		"-e", "-c", "-x", "-X", "--exec",
-	),
-}
-
-func inspectLiteralNetworkTargets(
+func inspectNetworkText(
 	text string,
 	source string,
 	policy Policy,
+	customOpenWorld bool,
 ) ([]Finding, bool) {
 	pipeline, err := shellsafe.ParseWithMaxSegments(text, guardMaxSegments)
 	if err != nil {
 		return nil, false
 	}
 	findings := make([]Finding, 0)
-	classified := false
+	handled := false
 	for _, argv := range pipeline.Commands {
-		operands := extractNetworkOperands(argv)
-		if !operands.supported {
+		current, ok := inspectNetworkArgv(argv, source, policy, customOpenWorld)
+		if !ok {
 			continue
 		}
-		classified = true
-		findings = append(findings, networkOperandFindings(operands, source, policy)...)
+		handled = true
+		findings = append(findings, current...)
 	}
-	return findings, classified
+	return findings, handled
 }
 
-func extractNetworkOperands(argv []string) networkOperands {
-	return extractNetworkOperandsDepth(argv, 0)
-}
-
-func extractNetworkOperandsDepth(argv []string, depth int) networkOperands {
+func inspectNetworkArgv(
+	argv []string,
+	source string,
+	policy Policy,
+	customOpenWorld bool,
+) ([]Finding, bool) {
 	if len(argv) == 0 {
-		return networkOperands{}
+		return nil, false
 	}
-	switch networkCommandBase(argv[0]) {
-	case "curl":
-		return collectNetworkOperands(argv[1:], curlNetworkOptions)
-	case "wget":
-		return collectNetworkOperands(argv[1:], wgetNetworkOptions)
-	case "ssh":
-		return sshTargetOperands(
-			collectNetworkOperands(argv[1:], sshNetworkOptions), depth,
-		)
-	case "scp":
-		return scpTargetOperands(collectNetworkOperands(argv[1:], scpNetworkOptions))
-	case "nc", "netcat", "ncat":
-		return firstTargetOperands(collectNetworkOperands(argv[1:], ncNetworkOptions))
-	case "git":
-		return gitTargetOperands(argv[1:])
-	default:
-		return networkOperands{}
+	command := networkCommandBase(argv[0])
+	if !isNetworkCommandName(command) {
+		return inspectCustomNetworkArgv(argv, source, policy, customOpenWorld)
 	}
+	argv = normalizeNetworkArgv(command, argv)
+	if command == "git" && !gitNetworkOperation(argv[1:]) {
+		return nil, true
+	}
+	findings := destinationRemapFindings(command, argv, source)
+	findings = append(findings, ambientConfigurationFindings(command, argv, source)...)
+	findings = append(findings, ambiguousNetworkOptionFindings(command, argv, source)...)
+	targets := networkTargets(command, argv)
+	for _, target := range targets {
+		findings = append(findings,
+			evaluateLiteralOrURLTarget(target, source, policy)...)
+	}
+	if command == "ssh" {
+		findings = append(findings, inspectSSHRemoteCommand(argv, source, policy)...)
+	}
+	if command == "git" {
+		findings = append(findings, networkReviewFinding(
+			ruleNetworkOptionReview, "git network operations require review", source,
+		))
+	} else if len(targets) == 0 {
+		findings = append(findings, networkReviewFinding(
+			ruleNetworkTargetReview, "network target could not be classified", source,
+		))
+	}
+	return findings, true
 }
 
-func hasParsedNetworkCommand(text string) bool {
-	pipeline, err := shellsafe.ParseWithMaxSegments(text, guardMaxSegments)
-	if err != nil {
-		return false
+func inspectCustomNetworkArgv(
+	argv []string,
+	source string,
+	policy Policy,
+	openWorld bool,
+) ([]Finding, bool) {
+	if isPassiveURLCommand(argv[0]) {
+		return nil, true
 	}
-	for _, argv := range pipeline.Commands {
-		if extractNetworkOperands(argv).supported {
+	targets := urlsInArguments(argv[1:])
+	downloader := isCustomDownloaderCommand(argv[0])
+	if downloader || openWorld {
+		for _, argument := range argv[1:] {
+			if downloader && looksLikeNetworkTarget(argument) ||
+				openWorld && looksLikeOpenWorldTarget(argument) {
+				targets = append(targets, argument)
+			}
+		}
+	}
+	targets = uniqueStrings(targets)
+	if len(targets) == 0 || !commandAllowed(policy.allowedCommands, argv[0]) {
+		return nil, false
+	}
+	findings := make([]Finding, 0, len(targets)+1)
+	for _, target := range targets {
+		findings = append(findings,
+			evaluateLiteralOrURLTarget(target, source, policy)...)
+	}
+	findings = append(findings, newFinding(
+		ruleNetworkCustomClient, RiskLevelMedium, DecisionAsk,
+		"custom network client detected: source="+safeLabel(source),
+		"review the client's redirect, proxy, and DNS behavior",
+	))
+	return findings, true
+}
+
+func isCustomDownloaderCommand(command string) bool {
+	name := networkCommandBase(command)
+	return strings.Contains(name, "fetch") || strings.Contains(name, "download") ||
+		strings.Contains(name, "http")
+}
+
+func networkTargets(command string, argv []string) []string {
+	targets := urlsInArguments(argv[1:])
+	switch command {
+	case "curl", "wget":
+		targets = append(targets, positionalTargets(command, argv[1:])...)
+	case "nc", "ncat", "netcat", "ssh":
+		if target := firstPositionalTarget(command, argv[1:]); target != "" {
+			targets = append(targets, target)
+		}
+	case "scp":
+		targets = append(targets, scpTargets(argv[1:])...)
+	case "git":
+		targets = append(targets, gitTargets(argv[1:])...)
+	}
+	return uniqueStrings(targets)
+}
+
+func urlsInArguments(arguments []string) []string {
+	var targets []string
+	for _, argument := range arguments {
+		targets = append(targets, urlPattern.FindAllString(argument, -1)...)
+	}
+	return targets
+}
+
+func positionalTargets(command string, arguments []string) []string {
+	var targets []string
+	skipNext := false
+	for _, argument := range arguments {
+		if skipNext {
+			skipNext = false
+			continue
+		}
+		option, _, hasValue := strings.Cut(argument, "=")
+		if optionRequiresValue(command, option) && !hasValue {
+			skipNext = true
+			continue
+		}
+		if strings.HasPrefix(argument, "-") || urlPattern.MatchString(argument) {
+			continue
+		}
+		if looksLikeNetworkTarget(argument) {
+			targets = append(targets, argument)
+		}
+	}
+	return targets
+}
+
+func firstPositionalTarget(command string, arguments []string) string {
+	targets := positionalTargets(command, arguments)
+	if len(targets) == 0 {
+		return ""
+	}
+	return targets[0]
+}
+
+func inspectSSHRemoteCommand(argv []string, source string, policy Policy) []Finding {
+	targetIndex := firstPositionalIndex("ssh", argv[1:])
+	if targetIndex < 0 || targetIndex+2 >= len(argv) {
+		return nil
+	}
+	remote := argv[targetIndex+2:]
+	findings, _ := inspectNetworkArgv(remote, source+".ssh_remote", policy, false)
+	return append(findings, networkReviewFinding(
+		ruleNetworkOptionReview, "SSH remote command requires review", source,
+	))
+}
+
+func firstPositionalIndex(command string, arguments []string) int {
+	skipNext := false
+	for index, argument := range arguments {
+		if skipNext {
+			skipNext = false
+			continue
+		}
+		option, _, hasValue := strings.Cut(argument, "=")
+		if optionRequiresValue(command, option) && !hasValue {
+			skipNext = true
+			continue
+		}
+		if !strings.HasPrefix(argument, "-") {
+			return index
+		}
+	}
+	return -1
+}
+
+func scpTargets(arguments []string) []string {
+	var targets []string
+	for _, argument := range positionalTargets("scp", arguments) {
+		if host, ok := scpRemoteHost(argument); ok {
+			targets = append(targets, host)
+		}
+	}
+	return targets
+}
+
+func gitTargets(arguments []string) []string {
+	var targets []string
+	for _, argument := range arguments {
+		if urlPattern.MatchString(argument) {
+			continue
+		}
+		_, value, hasValue := strings.Cut(argument, "=")
+		if hasValue && looksLikeNetworkTarget(value) {
+			targets = append(targets, value)
+			continue
+		}
+		if host, ok := scpRemoteHost(argument); ok {
+			targets = append(targets, host)
+		}
+	}
+	return targets
+}
+
+func gitNetworkOperation(arguments []string) bool {
+	for _, argument := range arguments {
+		switch strings.ToLower(strings.TrimLeft(argument, "-")) {
+		case "clone", "fetch", "pull", "push", "ls-remote", "submodule":
+			return true
+		}
+		if optionMatches(argument, "--remote") || optionMatches(argument, "--repo") {
+			return true
+		}
+		if urlPattern.MatchString(argument) {
+			return true
+		}
+		if _, ok := scpRemoteHost(argument); ok {
 			return true
 		}
 	}
 	return false
 }
 
-func hasNetworkCommandToken(text string) bool {
-	fields := strings.Fields(text)
-	for index, field := range fields {
-		if index != 0 && fields[index-1] != "|" {
+func destinationRemapFindings(command string, argv []string, source string) []Finding {
+	reviewConfiguration := false
+	for index, argument := range argv[1:] {
+		lower := strings.ToLower(argument)
+		if dangerousNetworkOption(command, argument, argv, index+1) {
+			return []Finding{newFinding(
+				ruleNetworkExecutionOption, RiskLevelHigh, DecisionDeny,
+				"network option can execute or replace a process: source="+safeLabel(source),
+				"remove command-execution and transport replacement options",
+			)}
+		}
+		sshValue := sshOptionValue(argument, argv, index+1)
+		if strings.Contains(sshValue, "hostname=") ||
+			strings.Contains(sshValue, "proxyjump=") {
+			return []Finding{newFinding(
+				ruleNetworkDestinationMap, RiskLevelHigh, DecisionDeny,
+				"network destination remapping detected: source="+safeLabel(source),
+				"remove proxy, host remapping, and jump-host options",
+			)}
+		}
+		if remapOption(command, lower) || proxyOption(command, lower, argv, index+1) {
+			return []Finding{newFinding(
+				ruleNetworkDestinationMap, RiskLevelHigh, DecisionDeny,
+				"network destination remapping detected: source="+safeLabel(source),
+				"remove proxy, host remapping, and jump-host options",
+			)}
+		}
+		if reviewOnlyConfiguration(command, argument) {
+			reviewConfiguration = true
+		}
+	}
+	if reviewConfiguration {
+		return []Finding{networkReviewFinding(
+			ruleNetworkOptionReview, "network configuration option requires review", source,
+		)}
+	}
+	return nil
+}
+
+func dangerousNetworkOption(command, argument string, argv []string, index int) bool {
+	lower := strings.ToLower(argument)
+	switch command {
+	case "curl":
+		return argument == "-K" || optionMatches(lower, "--config")
+	case "wget":
+		return optionMatches(lower, "--config")
+	case "nc", "ncat", "netcat":
+		return netcatExecutionOption(argument, lower)
+	case "ssh", "scp":
+		if command == "scp" && argument == "-S" {
+			return true
+		}
+	default:
+		return false
+	}
+	value := sshOptionValue(argument, argv, index)
+	return strings.Contains(value, "localcommand") ||
+		strings.Contains(value, "proxycommand")
+}
+
+func netcatExecutionOption(argument, lower string) bool {
+	return argument == "-e" || argument == "-c" ||
+		optionMatches(lower, "--exec") ||
+		optionMatches(lower, "--sh-exec") ||
+		optionMatches(lower, "--lua-exec")
+}
+
+func normalizeNetworkArgv(command string, argv []string) []string {
+	valueOptions := shortOptionsWithValues[command]
+	if valueOptions == "" {
+		return argv
+	}
+	normalized := make([]string, 0, len(argv))
+	normalized = append(normalized, argv[0])
+	optionsEnded := false
+	for _, argument := range argv[1:] {
+		if optionsEnded || len(argument) < 3 || argument[0] != '-' || argument[1] == '-' {
+			normalized = append(normalized, argument)
+			optionsEnded = optionsEnded || argument == "--"
 			continue
 		}
-		name := networkCommandBase(field)
-		if isNetworkCommandName(name) || (name == "git" && isGitNetworkToken(fields, index)) {
+		for index := 1; index < len(argument); index++ {
+			option := argument[index]
+			normalized = append(normalized, "-"+string(option))
+			if !strings.ContainsRune(valueOptions, rune(option)) {
+				continue
+			}
+			if index+1 < len(argument) {
+				normalized = append(normalized, argument[index+1:])
+			}
+			break
+		}
+	}
+	return normalized
+}
+
+func optionRequiresValue(command, option string) bool {
+	if _, ok := optionTakesValue[command][option]; ok {
+		return true
+	}
+	return len(option) == 2 && option[0] == '-' &&
+		strings.ContainsRune(shortOptionsWithValues[command], rune(option[1]))
+}
+
+func sshOptionValue(argument string, argv []string, index int) string {
+	if strings.HasPrefix(argument, "-o") && len(argument) > len("-o") {
+		return strings.ToLower(strings.TrimPrefix(argument, "-o"))
+	}
+	if argument == "-o" && index+1 < len(argv) {
+		return strings.ToLower(argv[index+1])
+	}
+	return ""
+}
+
+func reviewOnlyConfiguration(command, argument string) bool {
+	return (command == "ssh" || command == "scp") &&
+		(argument == "-o" || strings.HasPrefix(argument, "-o"))
+}
+
+func remapOption(command, argument string) bool {
+	switch command {
+	case "curl":
+		return optionMatches(argument, "--resolve") ||
+			optionMatches(argument, "--connect-to")
+	case "wget":
+		return optionMatches(argument, "--config")
+	case "ssh", "scp":
+		return strings.Contains(argument, "proxycommand") ||
+			strings.Contains(argument, "proxyjump") ||
+			strings.Contains(argument, "hostname=") ||
+			strings.HasPrefix(argument, "-j")
+	case "git":
+		return strings.Contains(argument, "proxy=") ||
+			strings.Contains(argument, "proxycommand")
+	default:
+		return false
+	}
+}
+
+func proxyOption(command, argument string, argv []string, index int) bool {
+	switch command {
+	case "curl":
+		return optionMatches(argument, "--proxy") || argument == "-x" ||
+			strings.HasPrefix(argument, "-x")
+	case "wget":
+		return strings.Contains(argument, "proxy=") ||
+			(argument == "-e" && index+1 < len(argv) &&
+				strings.Contains(strings.ToLower(argv[index+1]), "proxy"))
+	default:
+		return false
+	}
+}
+
+func ambientConfigurationFindings(command string, argv []string, source string) []Finding {
+	var isolated bool
+	switch command {
+	case "curl":
+		isolated = firstArgumentIs(argv, "-q", "--disable") &&
+			optionCount(argv, "-q")+optionCount(argv, "--disable") == 1 &&
+			optionCount(argv, "--noproxy") == 1 &&
+			optionValueCount(argv, "--noproxy", "*") == 1
+	case "wget":
+		isolated = optionCount(argv, "--no-config") == 1 &&
+			optionCount(argv, "--no-proxy") == 1 &&
+			optionCount(argv, "--max-redirect") == 1 &&
+			optionValueCount(argv, "--max-redirect", "0") == 1
+	case "ssh", "scp":
+		isolated = optionCount(argv, "-F") == 1 &&
+			optionValueCount(argv, "-F", "none") == 1
+	default:
+		return nil
+	}
+	if isolated {
+		return nil
+	}
+	return []Finding{networkReviewFinding(
+		ruleNetworkAmbientConfig,
+		"network client may load ambient proxy or host configuration",
+		source,
+	)}
+}
+
+func firstArgumentIs(argv []string, values ...string) bool {
+	if len(argv) < 2 {
+		return false
+	}
+	for _, value := range values {
+		if argv[1] == value {
+			return true
+		}
+	}
+	return false
+}
+
+func optionCount(argv []string, option string) int {
+	count := 0
+	for _, argument := range argv[1:] {
+		if argument == option || strings.HasPrefix(argument, option+"=") {
+			count++
+		}
+	}
+	return count
+}
+
+func optionValueCount(argv []string, option, value string) int {
+	count := 0
+	for index := 1; index < len(argv); index++ {
+		if argv[index] == option && index+1 < len(argv) && argv[index+1] == value {
+			count++
+		}
+		if argv[index] == option+"="+value {
+			count++
+		}
+	}
+	return count
+}
+
+func ambiguousNetworkOptionFindings(command string, argv []string, source string) []Finding {
+	for index, argument := range argv[1:] {
+		lower := strings.ToLower(argument)
+		ambiguous := command == "curl" &&
+			(lower == "-l" || strings.HasPrefix(lower, "--location") ||
+				strings.Contains(argument, "L"))
+		ambiguous = ambiguous || (command == "wget" &&
+			optionMatches(lower, "--max-redirect") &&
+			!optionHasValue(argv, index+1, "--max-redirect", "0"))
+		ambiguous = ambiguous || (command == "scp" && lower == "-s")
+		ambiguous = ambiguous || ((command == "nc" || command == "ncat" ||
+			command == "netcat") && lower == "-l")
+		if ambiguous {
+			return []Finding{networkReviewFinding(
+				ruleNetworkOptionReview, "network option requires review", source,
+			)}
+		}
+	}
+	return nil
+}
+
+func optionHasValue(argv []string, index int, option, value string) bool {
+	argument := argv[index]
+	return argument == option+"="+value ||
+		(argument == option && index+1 < len(argv) && argv[index+1] == value)
+}
+
+func optionMatches(argument, option string) bool {
+	return argument == option || strings.HasPrefix(argument, option+"=")
+}
+
+func networkReviewFinding(ruleID, message, source string) Finding {
+	return newFinding(
+		ruleID, RiskLevelHigh, DecisionNeedsHumanReview,
+		message+": source="+safeLabel(source),
+		"use an explicit literal target and isolated client configuration",
+	)
+}
+
+func evaluateLiteralOrURLTarget(target, source string, policy Policy) []Finding {
+	if strings.ContainsAny(target, "${}`") || strings.Contains(target, "$(") {
+		return []Finding{networkReviewFinding(
+			"NETWORK_DYNAMIC_TARGET", "dynamic network target detected", source,
+		)}
+	}
+	if strings.Contains(target, "://") {
+		parsed, err := url.Parse(target)
+		if err != nil || parsed.Hostname() == "" {
+			return []Finding{networkReviewFinding(
+				"NETWORK_URL_UNPARSABLE", "network URL could not be classified", source,
+			)}
+		}
+		return evaluateNetworkHost(parsed.Hostname(), source, policy)
+	}
+	host, ok := literalNetworkHost(target)
+	if !ok {
+		return []Finding{networkReviewFinding(
+			ruleNetworkTargetReview, "network target could not be classified", source,
+		)}
+	}
+	return evaluateNetworkHost(host, source, policy)
+}
+
+func literalNetworkHost(target string) (string, bool) {
+	target = strings.TrimSpace(target)
+	if at := strings.LastIndex(target, "@"); at >= 0 {
+		target = target[at+1:]
+	}
+	if host, ok := scpRemoteHost(target); ok {
+		return host, true
+	}
+	if host, _, err := net.SplitHostPort(target); err == nil {
+		return strings.Trim(host, "[]"), true
+	}
+	if host, _, ok := strings.Cut(target, "/"); ok {
+		target = host
+	}
+	target = strings.Trim(target, "[]")
+	if net.ParseIP(target) != nil || target == "localhost" || strings.Contains(target, ".") {
+		return target, true
+	}
+	return "", false
+}
+
+func scpRemoteHost(target string) (string, bool) {
+	if runtime.GOOS == "windows" && filepath.VolumeName(target) != "" {
+		return "", false
+	}
+	colon := strings.Index(target, ":")
+	if colon <= 0 || strings.Contains(target[:colon], "/") {
+		return "", false
+	}
+	host := target[:colon]
+	if at := strings.LastIndex(host, "@"); at >= 0 {
+		host = host[at+1:]
+	}
+	return strings.Trim(host, "[]"), host != ""
+}
+
+func looksLikeNetworkTarget(value string) bool {
+	if strings.Contains(value, "://") || net.ParseIP(strings.Trim(value, "[]")) != nil {
+		return true
+	}
+	if _, ok := scpRemoteHost(value); ok {
+		return true
+	}
+	return strings.Contains(value, ".") || value == "localhost"
+}
+
+func looksLikeOpenWorldTarget(value string) bool {
+	if strings.Contains(value, "://") || net.ParseIP(strings.Trim(value, "[]")) != nil {
+		return true
+	}
+	if _, ok := scpRemoteHost(value); ok {
+		return true
+	}
+	host, path, hasPath := strings.Cut(value, "/")
+	return hasPath && path != "" && validDomainPattern(strings.ToLower(host))
+}
+
+func uniqueStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
+}
+
+func hasNetworkCommandToken(text string) bool {
+	for _, field := range strings.Fields(strings.ToLower(text)) {
+		if isNetworkCommandName(networkCommandBase(field)) {
 			return true
 		}
 	}
@@ -204,507 +663,13 @@ func hasNetworkCommandToken(text string) bool {
 }
 
 func isNetworkCommandName(name string) bool {
-	switch name {
-	case "curl", "wget", "ssh", "scp", "nc", "ncat", "netcat":
-		return true
-	default:
-		return false
-	}
+	_, ok := networkCommands[name]
+	return ok
 }
 
 func networkCommandBase(command string) string {
 	base := strings.ToLower(commandBase(command))
-	if runtime.GOOS == "windows" {
-		return normalizePolicyCommand(base)
-	}
-	return strings.TrimSuffix(base, ".exe")
-}
-
-func gitTargetOperands(argv []string) networkOperands {
-	index, review := gitNetworkSubcommand(argv)
-	if index < 0 {
-		return gitURLFallback(argv, review)
-	}
-	subcommand := strings.ToLower(argv[index])
-	arguments := argv[index+1:]
-	if subcommand == "remote" {
-		return gitRemoteCommandOperands(arguments, review)
-	}
-	if subcommand == "archive" {
-		return reviewGitNetworkOperands(gitArchiveTargetOperands(arguments, review))
-	}
-	spec := gitRemoteNetworkOptions
-	if subcommand == "clone" {
-		spec = gitCloneNetworkOptions
-	}
-	switch subcommand {
-	case "clone", "fetch", "pull", "push", "ls-remote":
-		return reviewGitNetworkOperands(
-			gitTransferTargetOperands(arguments, spec, review),
-		)
-	case "submodule":
-		result := collectNetworkOperands(arguments, spec)
-		return reviewOperands(result, "git-submodule")
-	default:
-		return networkOperands{}
-	}
-}
-
-func reviewGitNetworkOperands(result networkOperands) networkOperands {
-	if !result.supported {
-		return result
-	}
-	return reviewOperands(result, "git-network-command")
-}
-
-func gitRemoteCommandOperands(argv []string, review string) networkOperands {
-	if len(argv) == 0 {
-		return networkOperands{}
-	}
-	switch strings.ToLower(argv[0]) {
-	case "update", "show", "prune":
-	default:
-		return networkOperands{}
-	}
-	result := reviewOperands(networkOperands{supported: true}, "git-remote-command")
-	if review != "" {
-		result = reviewOperands(result, review)
-	}
-	return result
-}
-
-func gitArchiveTargetOperands(argv []string, review string) networkOperands {
-	result := collectNetworkOperands(argv, gitArchiveNetworkOptions)
-	result.targets = networkTargetOptionValues(argv, gitArchiveNetworkOptions.targetOptions)
-	if len(result.targets) == 0 {
-		return networkOperands{}
-	}
-	if review != "" {
-		result = reviewOperands(result, review)
-	}
-	return normalizeGitRemoteTargets(result)
-}
-
-func gitTransferTargetOperands(
-	argv []string,
-	spec networkOptionSpec,
-	review string,
-) networkOperands {
-	result := collectNetworkOperands(argv, spec)
-	targets := networkTargetOptionValues(argv, spec.targetOptions)
-	if len(targets) == 0 {
-		targets = firstNetworkPositionalValue(argv, spec)
-	}
-	result.targets = targets
-	if review != "" {
-		result = reviewOperands(result, review)
-	}
-	return normalizeGitRemoteTargets(result)
-}
-
-func normalizeGitRemoteTargets(result networkOperands) networkOperands {
-	for index, target := range result.targets {
-		if host, ok := scpRemoteHost(target); ok {
-			result.targets[index] = host
-		}
-	}
-	return result
-}
-
-func networkTargetOptionValues(argv []string, options map[string]struct{}) []string {
-	targets := make([]string, 0, 1)
-	for index := 0; index < len(argv); index++ {
-		option, inline := splitNetworkOption(argv[index])
-		if !networkOptionContains(options, option) {
-			continue
-		}
-		value, next, ok := networkOptionValue(argv, index, inline)
-		if ok {
-			targets = append(targets, value)
-			index = next
-		}
-	}
-	return targets
-}
-
-func firstNetworkPositionalValue(
-	argv []string,
-	spec networkOptionSpec,
-) []string {
-	positional := false
-	for index := 0; index < len(argv); index++ {
-		argument := argv[index]
-		if positional || argument == "-" || !strings.HasPrefix(argument, "-") {
-			return []string{argument}
-		}
-		if argument == "--" {
-			positional = true
-			continue
-		}
-		option, inline := splitNetworkOption(argument)
-		if networkOptionContains(spec.valueOptions, option) ||
-			networkOptionContains(spec.reviewValueOptions, option) {
-			_, next, ok := networkOptionValue(argv, index, inline)
-			if ok {
-				index = next
-			}
-		}
-	}
-	return nil
-}
-
-func gitNetworkSubcommand(argv []string) (int, string) {
-	review := ""
-	for index := 0; index < len(argv); index++ {
-		argument := argv[index]
-		if isGitNetworkSubcommand(argument) {
-			return index, review
-		}
-		if !strings.HasPrefix(argument, "-") {
-			if !isSafeLocalGitSubcommand(argument) && review == "" {
-				review = "git-unknown-subcommand"
-			}
-			return -1, review
-		}
-		option, inline := splitNetworkOption(argument)
-		if option == "--version" {
-			return -1, review
-		}
-		if option == "-C" || option == "--git-dir" || option == "--work-tree" {
-			review = "git-global-option"
-			if inline == "" {
-				index++
-			}
-			continue
-		}
-		review = "git-global-option"
-		if (option == "-c" || option == "--config-env") && inline == "" {
-			index++
-		}
-	}
-	return -1, review
-}
-
-func isSafeLocalGitSubcommand(value string) bool {
-	switch strings.ToLower(value) {
-	case "status", "diff", "log", "show", "rev-parse", "branch", "tag":
-		return true
-	default:
-		return false
-	}
-}
-
-func gitURLFallback(argv []string, review string) networkOperands {
-	result := networkOperands{}
-	for _, argument := range argv {
-		if urlPattern.MatchString(argument) {
-			result.supported = true
-			result.targets = append(result.targets, argument)
-		}
-	}
-	if result.supported {
-		return reviewOperands(result, "git-command")
-	}
-	if review != "" {
-		return reviewOperands(networkOperands{supported: true}, review)
-	}
-	return networkOperands{}
-}
-
-func isGitNetworkSubcommand(value string) bool {
-	switch strings.ToLower(value) {
-	case "clone", "fetch", "pull", "push", "ls-remote", "submodule", "remote", "archive":
-		return true
-	default:
-		return false
-	}
-}
-
-func isGitNetworkToken(fields []string, index int) bool {
-	if index+1 >= len(fields) {
-		return false
-	}
-	subcommand := strings.ToLower(fields[index+1])
-	if subcommand == "remote" {
-		if index+2 >= len(fields) {
-			return false
-		}
-		switch strings.ToLower(fields[index+2]) {
-		case "update", "show", "prune":
-			return true
-		default:
-			return false
-		}
-	}
-	return isGitNetworkSubcommand(subcommand)
-}
-
-func collectNetworkOperands(argv []string, spec networkOptionSpec) networkOperands {
-	result := networkOperands{supported: true}
-	positional := false
-	for index := 0; index < len(argv); index++ {
-		argument := argv[index]
-		if positional || argument == "-" || !strings.HasPrefix(argument, "-") {
-			result.targets = append(result.targets, argument)
-			continue
-		}
-		if argument == "--" {
-			positional = true
-			continue
-		}
-		option, inlineValue := splitNetworkOption(argument)
-		if networkOptionContains(spec.reviewOptions, option) {
-			result = reviewOperands(result, option)
-			continue
-		}
-		if networkOptionContains(spec.reviewValueOptions, option) {
-			result = reviewOperands(result, option)
-			_, next, ok := networkOptionValue(argv, index, inlineValue)
-			if !ok {
-				return result
-			}
-			index = next
-			continue
-		}
-		if networkOptionContains(spec.flagOptions, option) {
-			continue
-		}
-		if !networkOptionContains(spec.valueOptions, option) {
-			combinedReview, ok := inspectCombinedNetworkFlags(option, spec)
-			if ok {
-				if combinedReview != "" {
-					result = reviewOperands(result, combinedReview)
-				}
-				continue
-			}
-			return reviewOperands(result, option)
-		}
-		value, next, ok := networkOptionValue(argv, index, inlineValue)
-		if !ok {
-			return reviewOperands(result, option)
-		}
-		index = next
-		if networkOptionContains(spec.targetOptions, option) {
-			result.targets = append(result.targets, value)
-		}
-	}
-	return result
-}
-
-func splitNetworkOption(argument string) (string, string) {
-	if index := strings.IndexByte(argument, '='); index > 0 {
-		return argument[:index], argument[index+1:]
-	}
-	return argument, ""
-}
-
-func inspectCombinedNetworkFlags(
-	argument string,
-	spec networkOptionSpec,
-) (string, bool) {
-	if len(argument) <= 2 || !strings.HasPrefix(argument, "-") ||
-		strings.HasPrefix(argument, "--") {
-		return "", false
-	}
-	review := ""
-	for _, flag := range argument[1:] {
-		option := "-" + string(flag)
-		if networkOptionContains(spec.reviewOptions, option) {
-			review = option
-			continue
-		}
-		if !networkOptionContains(spec.flagOptions, option) {
-			return "", false
-		}
-	}
-	return review, true
-}
-
-func networkOptionValue(
-	argv []string,
-	index int,
-	inline string,
-) (string, int, bool) {
-	if inline != "" {
-		return inline, index, true
-	}
-	if index+1 >= len(argv) {
-		return "", index, false
-	}
-	return argv[index+1], index + 1, true
-}
-
-func reviewOperands(result networkOperands, option string) networkOperands {
-	result.reviewRule = "NETWORK_OPTION_REVIEW"
-	result.reviewEvidence = "network option requires review: option=" + safeLabel(option)
-	return result
-}
-
-func firstTargetOperands(result networkOperands) networkOperands {
-	if len(result.targets) > 1 {
-		result.targets = result.targets[:1]
-	}
-	return result
-}
-
-func sshTargetOperands(result networkOperands, depth int) networkOperands {
-	if len(result.targets) <= 1 {
-		return result
-	}
-	remoteText := strings.Join(result.targets[1:], " ")
-	result.targets = result.targets[:1]
-	if depth >= maxNestedNetworkDepth {
-		return reviewOperands(result, "nested-remote-command")
-	}
-	pipeline, err := shellsafe.ParseWithMaxSegments(remoteText, guardMaxSegments)
-	if err != nil {
-		return reviewOperands(result, "remote-command")
-	}
-	for _, argv := range pipeline.Commands {
-		result = mergeNetworkOperands(
-			result, extractNetworkOperandsDepth(argv, depth+1),
-		)
-	}
-	return result
-}
-
-func mergeNetworkOperands(result, nested networkOperands) networkOperands {
-	if !nested.supported {
-		return reviewOperands(result, "remote-command")
-	}
-	result.targets = append(result.targets, nested.targets...)
-	if nested.reviewRule != "" && result.reviewRule == "" {
-		result.reviewRule = nested.reviewRule
-		result.reviewEvidence = nested.reviewEvidence
-	}
-	return result
-}
-
-func scpTargetOperands(result networkOperands) networkOperands {
-	remote := make([]string, 0, len(result.targets))
-	for _, target := range result.targets {
-		if host, ok := scpRemoteHost(target); ok {
-			remote = append(remote, host)
-		}
-	}
-	result.targets = remote
-	return result
-}
-
-func scpRemoteHost(target string) (string, bool) {
-	if strings.Contains(target, "://") {
-		return target, true
-	}
-	if runtime.GOOS == "windows" && len(target) >= 3 && target[1] == ':' &&
-		((target[0] >= 'a' && target[0] <= 'z') ||
-			(target[0] >= 'A' && target[0] <= 'Z')) {
-		return "", false
-	}
-	index := strings.IndexByte(target, ':')
-	if index <= 0 {
-		return "", false
-	}
-	return target[:index], true
-}
-
-func networkOperandFindings(
-	operands networkOperands,
-	source string,
-	policy Policy,
-) []Finding {
-	findings := make([]Finding, 0)
-	if operands.reviewRule != "" {
-		findings = append(findings, newFinding(
-			operands.reviewRule,
-			RiskLevelHigh,
-			DecisionNeedsHumanReview,
-			operands.reviewEvidence+"; source="+safeLabel(source),
-			"remove ambiguous options and use a literal allowlisted target",
-		))
-	}
-	if len(operands.targets) == 0 {
-		if len(findings) > 0 {
-			return findings
-		}
-		return []Finding{newFinding(
-			"NETWORK_TARGET_UNPARSABLE",
-			RiskLevelHigh,
-			DecisionNeedsHumanReview,
-			"network command has no classifiable target: source="+safeLabel(source),
-			"provide a literal allowlisted hostname",
-		)}
-	}
-	for _, target := range operands.targets {
-		if urlPattern.MatchString(target) {
-			continue
-		}
-		findings = append(findings, evaluateLiteralNetworkTarget(target, source, policy)...)
-	}
-	return findings
-}
-
-func evaluateLiteralNetworkTarget(
-	rawTarget string,
-	source string,
-	policy Policy,
-) []Finding {
-	if strings.ContainsAny(rawTarget, "$`{}*?") || strings.Contains(rawTarget, "$(") {
-		return []Finding{newFinding(
-			"NETWORK_DYNAMIC_TARGET",
-			RiskLevelHigh,
-			DecisionNeedsHumanReview,
-			"dynamic network target detected: source="+safeLabel(source),
-			"replace the target with a literal allowlisted hostname",
-		)}
-	}
-	host, err := literalNetworkHost(rawTarget)
-	if err != nil {
-		return []Finding{newFinding(
-			"NETWORK_TARGET_UNPARSABLE",
-			RiskLevelHigh,
-			DecisionNeedsHumanReview,
-			"network target could not be classified: source="+safeLabel(source),
-			"use a literal target with an allowlisted hostname",
-		)}
-	}
-	return evaluateNetworkHost(host, source, policy)
-}
-
-func literalNetworkHost(rawTarget string) (string, error) {
-	target := strings.TrimSpace(rawTarget)
-	if target == "" {
-		return "", fmt.Errorf("empty target")
-	}
-	if ip := net.ParseIP(strings.Trim(target, "[]")); ip != nil {
-		return ip.String(), nil
-	}
-	parsed, err := parseNetworkTarget(target)
-	if err != nil || parsed.Hostname() == "" {
-		return "", fmt.Errorf("invalid target")
-	}
-	host := strings.ToLower(strings.TrimSuffix(parsed.Hostname(), "."))
-	if strings.ContainsAny(host, "\\/\t\r\n ") {
-		return "", fmt.Errorf("invalid hostname")
-	}
-	return host, nil
-}
-
-func parseNetworkTarget(target string) (*url.URL, error) {
-	if strings.Contains(target, "://") {
-		return url.Parse(target)
-	}
-	return url.Parse("//" + target)
-}
-
-func networkOptionSet(values ...string) map[string]struct{} {
-	result := make(map[string]struct{}, len(values))
-	for _, value := range values {
-		result[value] = struct{}{}
-	}
-	return result
-}
-
-func networkOptionContains(options map[string]struct{}, option string) bool {
-	_, ok := options[option]
-	return ok
+	base = strings.TrimSuffix(base, ".exe")
+	base = strings.TrimSuffix(base, ".cmd")
+	return base
 }

@@ -66,21 +66,6 @@ func TestGuardScanRecordsRedactedAuditEvent(t *testing.T) {
 		auditor.events[0].Timestamp.Location().String() == "UTC")
 }
 
-func TestGuardScanPropagatesRemoteProvider(t *testing.T) {
-	auditor := &memoryAuditor{}
-	guard, err := NewGuard(DefaultPolicy(), WithAuditor(auditor))
-	require.NoError(t, err)
-	input := scanCommand("go env")
-	input.Backend = BackendRemoteSandbox
-	input.Provider = ProviderE2B
-
-	report, scanErr := guard.Scan(context.Background(), input)
-	require.NoError(t, scanErr)
-	require.Equal(t, ProviderE2B, report.Provider)
-	require.Len(t, auditor.events, 1)
-	require.Equal(t, ProviderE2B, auditor.events[0].Provider)
-}
-
 func TestGuardScanFailsClosedWhenAuditFails(t *testing.T) {
 	auditor := &memoryAuditor{err: errors.New("disk full")}
 	guard, err := NewGuard(DefaultPolicy(), WithAuditor(auditor))
@@ -108,7 +93,6 @@ func TestJSONLAuditorAppendsCompleteEvents(t *testing.T) {
 		Phase:     auditPhasePrecheck,
 		ToolName:  "execute_e2b",
 		Backend:   BackendRemoteSandbox,
-		Provider:  ProviderE2B,
 		Decision:  DecisionDeny,
 		RiskLevel: RiskLevelCritical,
 		RuleID:    "CMD_DANGEROUS_DELETE",
@@ -127,7 +111,6 @@ func TestJSONLAuditorAppendsCompleteEvents(t *testing.T) {
 	require.NoError(t, json.Unmarshal(scanner.Bytes(), &got))
 	require.Equal(t, want.Phase, got.Phase)
 	require.Equal(t, want.RuleID, got.RuleID)
-	require.Equal(t, want.Provider, got.Provider)
 	require.True(t, got.Blocked)
 	require.False(t, scanner.Scan())
 	require.NoError(t, scanner.Err())

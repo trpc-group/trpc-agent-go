@@ -28,70 +28,29 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const supportedPolicyVersion = 1
-
-var envKeyPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
-
-var decimalIntegerPattern = regexp.MustCompile(`^-?(0|[1-9][0-9]*)$`)
-
-type policyValueKind int
-
 const (
-	policyValueObject policyValueKind = iota
-	policyValueStringList
-	policyValueString
-	policyValueInteger
+	supportedPolicyVersion = 1
+
+	defaultMaxTimeout     = 30 * time.Second
+	defaultMaxOutputBytes = 1 << 20
+	defaultMaxSleep       = 10 * time.Second
+	defaultMaxConcurrency = 8
+
+	minimumDomainLabels       = 2
+	maximumLegacyIPv4Parts    = 4
+	legacyIPv4TwoParts        = 2
+	legacyIPv4ThreeParts      = 3
+	legacyIPv4FourParts       = 4
+	maximumIPv4Value          = 0xffffffff
+	maximumIPv4Byte           = 0xff
+	maximumIPv4TwoByteValue   = 0xffff
+	maximumIPv4ThreeByteValue = 0xffffff
+	maximumDomainNameLength   = 253
+	maximumDomainLabelLength  = 63
+	legacyIPv4ParseBitSize    = 32
 )
 
-var policyValueKinds = map[string]policyValueKind{
-	"":                           policyValueObject,
-	"version":                    policyValueInteger,
-	"commands":                   policyValueObject,
-	"commands.allowed":           policyValueStringList,
-	"commands.denied":            policyValueStringList,
-	"paths":                      policyValueObject,
-	"paths.denied":               policyValueStringList,
-	"network":                    policyValueObject,
-	"network.allowed_domains":    policyValueStringList,
-	"limits":                     policyValueObject,
-	"limits.max_timeout":         policyValueString,
-	"limits.max_output_bytes":    policyValueInteger,
-	"limits.max_sleep":           policyValueString,
-	"limits.max_concurrency":     policyValueInteger,
-	"environment":                policyValueObject,
-	"environment.allowed":        policyValueStringList,
-	"actions":                    policyValueObject,
-	"actions.parse_error":        policyValueString,
-	"actions.unknown_language":   policyValueString,
-	"actions.pipeline":           policyValueString,
-	"actions.dependency_install": policyValueString,
-	"actions.host_pty":           policyValueString,
-	"actions.host_background":    policyValueString,
-}
-
-var policyObjectKeys = map[string]map[string]struct{}{
-	"": stringSet(
-		"version", "commands", "paths", "network", "limits",
-		"environment", "actions",
-	),
-	"commands":    stringSet("allowed", "denied"),
-	"paths":       stringSet("denied"),
-	"network":     stringSet("allowed_domains"),
-	"limits":      stringSet("max_timeout", "max_output_bytes", "max_sleep", "max_concurrency"),
-	"environment": stringSet("allowed"),
-	"actions": stringSet(
-		"parse_error", "unknown_language", "pipeline",
-		"dependency_install", "host_pty", "host_background",
-	),
-}
-
-func stringSet(values ...string) map[string]struct{} {
-	set := make(map[string]struct{}, len(values))
-	for _, value := range values {
-		set[value] = struct{}{}
-	}
-	return set
-}
+var envKeyPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 var defaultAllowedCommands = []string{
 	"go", "git", "echo", "pwd", "ls", "cat", "curl", "wget",
@@ -124,13 +83,6 @@ type Policy struct {
 	maxOutputBytes int64
 	maxSleep       time.Duration
 	maxConcurrency int
-
-	parseErrorAction        Decision
-	unknownLanguageAction   Decision
-	pipelineAction          Decision
-	dependencyInstallAction Decision
-	hostPTYAction           Decision
-	hostBackgroundAction    Decision
 }
 
 type rawPolicy struct {
@@ -140,7 +92,6 @@ type rawPolicy struct {
 	Network     rawNetwork     `json:"network" yaml:"network"`
 	Limits      rawLimits      `json:"limits" yaml:"limits"`
 	Environment rawEnvironment `json:"environment" yaml:"environment"`
-	Actions     rawActions     `json:"actions" yaml:"actions"`
 }
 
 type rawCommands struct {
@@ -167,33 +118,18 @@ type rawEnvironment struct {
 	Allowed *[]string `json:"allowed" yaml:"allowed"`
 }
 
-type rawActions struct {
-	ParseError        *string `json:"parse_error" yaml:"parse_error"`
-	UnknownLanguage   *string `json:"unknown_language" yaml:"unknown_language"`
-	Pipeline          *string `json:"pipeline" yaml:"pipeline"`
-	DependencyInstall *string `json:"dependency_install" yaml:"dependency_install"`
-	HostPTY           *string `json:"host_pty" yaml:"host_pty"`
-	HostBackground    *string `json:"host_background" yaml:"host_background"`
-}
-
 // DefaultPolicy returns a new copy of the built-in conservative policy.
 func DefaultPolicy() Policy {
 	return Policy{
-		version:                 supportedPolicyVersion,
-		allowedCommands:         cloneStrings(defaultAllowedCommands),
-		deniedCommands:          cloneStrings(defaultDeniedCommands),
-		deniedPaths:             cloneStrings(defaultDeniedPaths),
-		allowedEnv:              cloneStrings(defaultAllowedEnv),
-		maxTimeout:              30 * time.Second,
-		maxOutputBytes:          1 << 20,
-		maxSleep:                10 * time.Second,
-		maxConcurrency:          8,
-		parseErrorAction:        DecisionNeedsHumanReview,
-		unknownLanguageAction:   DecisionNeedsHumanReview,
-		pipelineAction:          DecisionAsk,
-		dependencyInstallAction: DecisionAsk,
-		hostPTYAction:           DecisionAsk,
-		hostBackgroundAction:    DecisionDeny,
+		version:         supportedPolicyVersion,
+		allowedCommands: cloneStrings(defaultAllowedCommands),
+		deniedCommands:  cloneStrings(defaultDeniedCommands),
+		deniedPaths:     cloneStrings(defaultDeniedPaths),
+		allowedEnv:      cloneStrings(defaultAllowedEnv),
+		maxTimeout:      defaultMaxTimeout,
+		maxOutputBytes:  defaultMaxOutputBytes,
+		maxSleep:        defaultMaxSleep,
+		maxConcurrency:  defaultMaxConcurrency,
 	}
 }
 
@@ -227,22 +163,6 @@ func LoadPolicy(path string) (Policy, error) {
 }
 
 func decodeYAMLPolicy(data []byte, out *rawPolicy) error {
-	var node yaml.Node
-	nodeDecoder := yaml.NewDecoder(bytes.NewReader(data))
-	if err := nodeDecoder.Decode(&node); err != nil {
-		return err
-	}
-	if err := validateYAMLNode(&node, ""); err != nil {
-		return err
-	}
-	var extra yaml.Node
-	if err := nodeDecoder.Decode(&extra); !errors.Is(err, io.EOF) {
-		if err == nil {
-			return errors.New("multiple YAML documents are not allowed")
-		}
-		return err
-	}
-
 	decoder := yaml.NewDecoder(bytes.NewReader(data))
 	decoder.KnownFields(true)
 	if err := decoder.Decode(out); err != nil {
@@ -257,100 +177,7 @@ func decodeYAMLPolicy(data []byte, out *rawPolicy) error {
 	return nil
 }
 
-func validateYAMLNode(node *yaml.Node, fieldPath string) error {
-	if err := validateYAMLNodeValue(node); err != nil {
-		return err
-	}
-	if node.Kind == yaml.DocumentNode {
-		if len(node.Content) != 1 {
-			return errors.New("empty YAML document")
-		}
-		return validateYAMLNode(node.Content[0], fieldPath)
-	}
-	kind, ok := policyValueKinds[fieldPath]
-	if !ok {
-		return fmt.Errorf("unknown YAML field %q", fieldPath)
-	}
-	switch kind {
-	case policyValueObject:
-		return validateYAMLObject(node, fieldPath)
-	case policyValueStringList:
-		return validateYAMLStringList(node, fieldPath)
-	case policyValueString:
-		if node.Kind != yaml.ScalarNode || node.Tag != "!!str" {
-			return fmt.Errorf("YAML field %q must be a string", fieldPath)
-		}
-	case policyValueInteger:
-		if node.Kind != yaml.ScalarNode || node.Tag != "!!int" ||
-			!decimalIntegerPattern.MatchString(node.Value) {
-			return fmt.Errorf("YAML field %q must be a decimal integer", fieldPath)
-		}
-	}
-	return nil
-}
-
-func validateYAMLNodeValue(node *yaml.Node) error {
-	if node == nil {
-		return errors.New("empty YAML document")
-	}
-	if node.Kind == yaml.AliasNode {
-		return errors.New("YAML aliases are not allowed")
-	}
-	if node.Kind == yaml.ScalarNode && node.Tag == "!!null" {
-		return errors.New("null policy values are not allowed")
-	}
-	return nil
-}
-
-func validateYAMLObject(node *yaml.Node, fieldPath string) error {
-	if node.Kind != yaml.MappingNode {
-		return fmt.Errorf("YAML field %q must be an object", fieldPath)
-	}
-	allowed := policyObjectKeys[fieldPath]
-	seen := make(map[string]struct{}, len(node.Content)/2)
-	for i := 0; i+1 < len(node.Content); i += 2 {
-		key := node.Content[i]
-		if key.Kind != yaml.ScalarNode || key.Tag != "!!str" {
-			return errors.New("policy mapping keys must be strings")
-		}
-		if _, ok := seen[key.Value]; ok {
-			return fmt.Errorf("duplicate YAML key %q", key.Value)
-		}
-		childPath := joinPolicyPath(fieldPath, key.Value)
-		if _, ok := allowed[key.Value]; !ok {
-			return fmt.Errorf("unknown YAML field %q", childPath)
-		}
-		seen[key.Value] = struct{}{}
-		if err := validateYAMLNode(node.Content[i+1], childPath); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func validateYAMLStringList(node *yaml.Node, fieldPath string) error {
-	if node.Kind != yaml.SequenceNode {
-		return fmt.Errorf("YAML field %q must be a string list", fieldPath)
-	}
-	for _, child := range node.Content {
-		if child.Kind != yaml.ScalarNode || child.Tag != "!!str" {
-			return fmt.Errorf("YAML field %q must contain only strings", fieldPath)
-		}
-	}
-	return nil
-}
-
-func joinPolicyPath(parent, child string) string {
-	if parent == "" {
-		return child
-	}
-	return parent + "." + child
-}
-
 func decodeJSONPolicy(data []byte, out *rawPolicy) error {
-	if err := validateJSONDocument(data); err != nil {
-		return err
-	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(out); err != nil {
@@ -361,96 +188,6 @@ func decodeJSONPolicy(data []byte, out *rawPolicy) error {
 			return errors.New("multiple JSON values are not allowed")
 		}
 		return err
-	}
-	return nil
-}
-
-func validateJSONDocument(data []byte) error {
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.UseNumber()
-	if err := consumeJSONValue(decoder, ""); err != nil {
-		return err
-	}
-	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
-		if err == nil {
-			return errors.New("multiple JSON values are not allowed")
-		}
-		return err
-	}
-	return nil
-}
-
-func consumeJSONValue(decoder *json.Decoder, fieldPath string) error {
-	token, err := decoder.Token()
-	if err != nil {
-		return err
-	}
-	if token == nil {
-		return errors.New("null policy values are not allowed")
-	}
-	delim, ok := token.(json.Delim)
-	if !ok {
-		return nil
-	}
-	switch delim {
-	case '{':
-		return consumeJSONObject(decoder, fieldPath)
-	case '[':
-		return consumeJSONArray(decoder, fieldPath)
-	default:
-		return fmt.Errorf("unexpected JSON delimiter %q", delim)
-	}
-}
-
-func consumeJSONObject(decoder *json.Decoder, fieldPath string) error {
-	allowed, ok := policyObjectKeys[fieldPath]
-	if !ok {
-		return fmt.Errorf("JSON field %q must not be an object", fieldPath)
-	}
-	seen := make(map[string]struct{})
-	for decoder.More() {
-		keyToken, err := decoder.Token()
-		if err != nil {
-			return err
-		}
-		key, ok := keyToken.(string)
-		if !ok {
-			return errors.New("JSON object key is not a string")
-		}
-		if _, exists := seen[key]; exists {
-			return fmt.Errorf("duplicate JSON key %q", key)
-		}
-		childPath := joinPolicyPath(fieldPath, key)
-		if _, exists := allowed[key]; !exists {
-			return fmt.Errorf("unknown JSON field %q", childPath)
-		}
-		seen[key] = struct{}{}
-		if err := consumeJSONValue(decoder, childPath); err != nil {
-			return err
-		}
-	}
-	closing, err := decoder.Token()
-	if err != nil {
-		return err
-	}
-	if closing != json.Delim('}') {
-		return errors.New("invalid JSON object closing delimiter")
-	}
-	return nil
-}
-
-func consumeJSONArray(decoder *json.Decoder, fieldPath string) error {
-	for decoder.More() {
-		if err := consumeJSONValue(decoder, fieldPath); err != nil {
-			return err
-		}
-	}
-	closing, err := decoder.Token()
-	if err != nil {
-		return err
-	}
-	if closing != json.Delim(']') {
-		return errors.New("invalid JSON array closing delimiter")
 	}
 	return nil
 }
@@ -470,9 +207,6 @@ func compilePolicy(raw rawPolicy) (Policy, error) {
 		return Policy{}, err
 	}
 	if err := compileLimits(raw.Limits, &policy); err != nil {
-		return Policy{}, err
-	}
-	if err := compileActions(raw.Actions, &policy); err != nil {
 		return Policy{}, err
 	}
 	return policy.clone(), nil
@@ -552,44 +286,6 @@ func compileLimits(raw rawLimits, policy *Policy) error {
 		policy.maxConcurrency = *raw.MaxConcurrency
 	}
 	return nil
-}
-
-func compileActions(raw rawActions, policy *Policy) error {
-	actions := []struct {
-		name   string
-		raw    *string
-		target *Decision
-	}{
-		{"actions.parse_error", raw.ParseError, &policy.parseErrorAction},
-		{"actions.unknown_language", raw.UnknownLanguage, &policy.unknownLanguageAction},
-		{"actions.pipeline", raw.Pipeline, &policy.pipelineAction},
-		{"actions.dependency_install", raw.DependencyInstall, &policy.dependencyInstallAction},
-		{"actions.host_pty", raw.HostPTY, &policy.hostPTYAction},
-		{"actions.host_background", raw.HostBackground, &policy.hostBackgroundAction},
-	}
-	for _, action := range actions {
-		decision, err := compileAction(action.name, action.raw, *action.target)
-		if err != nil {
-			return err
-		}
-		*action.target = decision
-	}
-	return nil
-}
-
-func compileAction(name string, raw *string, fallback Decision) (Decision, error) {
-	if raw == nil {
-		return fallback, nil
-	}
-	decision := Decision(strings.TrimSpace(*raw))
-	switch decision {
-	case DecisionDeny, DecisionAsk, DecisionNeedsHumanReview:
-		return decision, nil
-	case DecisionAllow:
-		return "", fmt.Errorf("%s cannot be allow", name)
-	default:
-		return "", fmt.Errorf("%s has unknown decision %q", name, *raw)
-	}
 }
 
 func cleanUniqueList(name string, values []string) ([]string, error) {
@@ -706,7 +402,7 @@ func validDomainPattern(value string) bool {
 		return false
 	}
 	labels := strings.Split(value, ".")
-	if len(labels) < 2 {
+	if len(labels) < minimumDomainLabels {
 		return false
 	}
 	if onlyDecimalDigits(labels[len(labels)-1]) {
@@ -721,12 +417,12 @@ func validDomainPattern(value string) bool {
 }
 
 func validDomainName(value string) bool {
-	return value != "" && len(value) <= 253 &&
+	return value != "" && len(value) <= maximumDomainNameLength &&
 		!strings.ContainsAny(value, "/:@")
 }
 
 func validDomainLabel(label string) bool {
-	if label == "" || len(label) > 63 ||
+	if label == "" || len(label) > maximumDomainLabelLength ||
 		label[0] == '-' || label[len(label)-1] == '-' {
 		return false
 	}
@@ -756,7 +452,7 @@ func onlyDecimalDigits(value string) bool {
 
 func isLegacyIPv4Literal(value string) bool {
 	parts := strings.Split(value, ".")
-	if len(parts) == 0 || len(parts) > 4 {
+	if len(parts) == 0 || len(parts) > maximumLegacyIPv4Parts {
 		return false
 	}
 	values := make([]uint64, len(parts))
@@ -769,15 +465,17 @@ func isLegacyIPv4Literal(value string) bool {
 	}
 	switch len(values) {
 	case 1:
-		return values[0] <= 0xffffffff
-	case 2:
-		return values[0] <= 0xff && values[1] <= 0xffffff
-	case 3:
-		return values[0] <= 0xff && values[1] <= 0xff &&
-			values[2] <= 0xffff
-	case 4:
+		return values[0] <= maximumIPv4Value
+	case legacyIPv4TwoParts:
+		return values[0] <= maximumIPv4Byte &&
+			values[1] <= maximumIPv4ThreeByteValue
+	case legacyIPv4ThreeParts:
+		return values[0] <= maximumIPv4Byte &&
+			values[1] <= maximumIPv4Byte &&
+			values[2] <= maximumIPv4TwoByteValue
+	case legacyIPv4FourParts:
 		for _, value := range values {
-			if value > 0xff {
+			if value > maximumIPv4Byte {
 				return false
 			}
 		}
@@ -808,7 +506,7 @@ func parseIPv4Number(value string) (uint64, bool) {
 			}
 		}
 	}
-	parsed, err := strconv.ParseUint(digits, base, 32)
+	parsed, err := strconv.ParseUint(digits, base, legacyIPv4ParseBitSize)
 	return parsed, err == nil
 }
 
