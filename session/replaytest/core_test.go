@@ -152,6 +152,107 @@ func TestNormalizerMapsSummaryBoundaryToLogicalEvent(t *testing.T) {
 	require.Equal(t, 1, *summary.CutoffAtEventIndex)
 }
 
+func TestNormalizerFallsBackForUnmappedIDsAndNilCollections(t *testing.T) {
+	timestamp := time.Date(2026, 7, 20, 8, 0, 0, 0, time.UTC)
+	unmappedCall := "raw-unmapped-call"
+	sess := &session.Session{
+		ID: "session", AppName: "app", UserID: "user",
+		State: session.StateMap{"tracks": []byte(`"ignored"`)},
+		Events: []event.Event{
+			{
+				ID: "raw-event-a", InvocationID: "raw-invocation",
+				Author: "assistant", Timestamp: timestamp,
+				Response: &model.Response{
+					Usage: &model.Usage{
+						TimingInfo: &model.TimingInfo{},
+					},
+					Choices: []model.Choice{{
+						Message: model.Message{
+							Role:    model.RoleAssistant,
+							Content: "same content",
+							ToolCalls: []model.ToolCall{{
+								ID: unmappedCall,
+								Function: model.FunctionDefinitionParam{
+									Name: "tool", Arguments: []byte("not-json"),
+								},
+							}},
+						},
+					}},
+				},
+			},
+			{
+				ID: "raw-event-b", InvocationID: "raw-invocation",
+				Author: "assistant", Timestamp: timestamp.Add(time.Second),
+				Response: &model.Response{Choices: []model.Choice{{
+					Message: model.Message{
+						Role:    model.RoleAssistant,
+						Content: "same content",
+					},
+				}}},
+			},
+		},
+		Summaries: map[string]*session.Summary{
+			"nil-summary": nil,
+			"unmapped-boundary": {
+				Summary: "summary",
+				Boundary: session.NewSummaryBoundaryWithEventID(
+					"unmapped-boundary",
+					timestamp,
+					"missing-event",
+				),
+			},
+		},
+		Tracks: map[session.Track]*session.TrackEvents{
+			"unmapped-track": {
+				Track: "unmapped-track",
+				Events: []session.TrackEvent{{
+					Track: "unmapped-track",
+					Payload: json.RawMessage(
+						`{"invocation_id":"raw-invocation","tool_call_id":"raw-tool"}`,
+					),
+				}},
+			},
+		},
+	}
+	snapshot, err := NewNormalizer(NormalizeOptions{}).Normalize(
+		CaptureInput{Session: sess},
+		nil,
+	)
+	require.NoError(t, err)
+	require.Len(t, snapshot.Events, 2)
+	require.NotEqual(t, snapshot.Events[0]["id"], snapshot.Events[1]["id"])
+	require.Contains(t, snapshot.Events[0]["invocationId"], "invocation:unmapped:")
+	require.NotContains(t, snapshot.State, "tracks")
+
+	choices := snapshot.Events[0]["choices"].([]any)
+	message := choices[0].(map[string]any)["message"].(map[string]any)
+	call := message["tool_calls"].([]any)[0].(map[string]any)
+	require.Contains(t, call["id"], "tool-call:unmapped:")
+	require.Equal(
+		t,
+		TaggedBytes{Kind: "utf8", Value: "not-json"},
+		call["function"].(map[string]any)["arguments"],
+	)
+	require.Empty(t, snapshot.Summaries["nil-summary"].Text)
+	require.Equal(
+		t,
+		-1,
+		*snapshot.Summaries["unmapped-boundary"].LastEventIndex,
+	)
+	payload := snapshot.Tracks["unmapped-track"][0].Payload.(map[string]any)
+	require.Contains(t, payload["invocation_id"], "invocation:unmapped:")
+	require.Contains(t, payload["tool_call_id"], "tool-call:unmapped:")
+
+	nilTracks := NewNormalizer(NormalizeOptions{}).normalizeTracks(
+		&session.Session{
+			Tracks: map[session.Track]*session.TrackEvents{"nil-track": nil},
+		},
+		NewIdentityLedger(),
+	)
+	require.Contains(t, nilTracks, "nil-track")
+	require.Nil(t, nilTracks["nil-track"])
+}
+
 func TestSummaryReachedExpectedEventRejectsStaleSummary(t *testing.T) {
 	ledger := NewIdentityLedger()
 	require.NoError(t, ledger.Register(
@@ -313,6 +414,117 @@ func TestCompareTracesDetectsCheckpointOrderAndAfterOperation(t *testing.T) {
 	})
 }
 
+func TestCompareTracesReportsMissingCheckpointAndHonorsFirstRule(t *testing.T) {
+	snapshot := Snapshot{
+		SessionID: "session",
+		Summaries: map[string]SummarySnapshot{},
+		Tracks:    map[string][]TrackEventSnapshot{},
+	}
+	baseline := Trace{
+		Final: snapshot,
+		Checkpoints: []CheckpointSnapshot{{
+			Name: "only-left", AfterOp: "op", Snapshot: snapshot,
+		}},
+	}
+	compared := Trace{Final: snapshot}
+	path := `$.checkpoints["only-left"]`
+	diffs, err := CompareTraces(
+		"missing-checkpoint",
+		"inmemory",
+		"sqlite",
+		baseline,
+		compared,
+		[]AllowedDiff{
+			{
+				Section: "checkpoints", Path: path,
+				BackendA: "inmemory", BackendB: "sqlite",
+				Reason: "first matching reason",
+			},
+			{
+				Section: "checkpoints", Path: path,
+				BackendA: "inmemory", BackendB: "sqlite",
+				Reason: "duplicate rule must not override the first",
+			},
+		},
+	)
+	require.NoError(t, err)
+	require.Len(t, diffs, 2)
+	var checkpointDiff *Diff
+	for i := range diffs {
+		if diffs[i].Path == path {
+			checkpointDiff = &diffs[i]
+			break
+		}
+	}
+	require.NotNil(t, checkpointDiff)
+	require.True(t, checkpointDiff.AllowedDiff)
+	require.Equal(t, "first matching reason", checkpointDiff.Explanation)
+	require.Equal(t, "only-left", checkpointDiff.Checkpoint)
+}
+
+func TestCompareTracesRejectsEmptyCheckpointName(t *testing.T) {
+	snapshot := Snapshot{
+		SessionID: "session",
+		Summaries: map[string]SummarySnapshot{},
+		Tracks:    map[string][]TrackEventSnapshot{},
+	}
+	trace := Trace{
+		Final: snapshot,
+		Checkpoints: []CheckpointSnapshot{{
+			Snapshot: snapshot,
+		}},
+	}
+	_, err := CompareTraces("case", "a", "b", trace, Trace{Final: snapshot}, nil)
+	require.ErrorContains(t, err, "checkpoint name is empty")
+}
+
+func TestAllowedDiffValidationRejectsWildcardsAndWrongSections(t *testing.T) {
+	_, err := CompareSnapshots(
+		"wildcard",
+		"a",
+		"b",
+		Snapshot{},
+		Snapshot{},
+		[]AllowedDiff{{
+			Section: "state", Path: "$.state.*",
+			BackendA: "a", BackendB: "b", Reason: "too broad",
+		}},
+		"final",
+	)
+	require.ErrorContains(t, err, "must use an exact section and path")
+
+	_, err = CompareSnapshots(
+		"wrong-section",
+		"a",
+		"b",
+		Snapshot{},
+		Snapshot{},
+		[]AllowedDiff{{
+			Section: "events", Path: "$.state.key",
+			BackendA: "a", BackendB: "b", Reason: "wrong section",
+		}},
+		"final",
+	)
+	require.ErrorContains(t, err, "does not belong to section")
+}
+
+func TestCapabilitySectionMapping(t *testing.T) {
+	tests := map[CapabilityName]string{
+		CapabilityEvents:       "events",
+		CapabilityState:        "state",
+		CapabilityAppState:     "app_state",
+		CapabilityUserState:    "user_state",
+		CapabilityMemory:       "memories",
+		CapabilityMemorySearch: "memory_queries",
+		CapabilitySummary:      "summaries",
+		CapabilityTracks:       "tracks",
+		CapabilityTTL:          "",
+	}
+	for capability, section := range tests {
+		require.Equal(t, section, capabilitySection(capability))
+	}
+}
+
 func TestValidateEventOrderRejectsUnexpectedLogicalEvent(t *testing.T) {
 	snapshot := Snapshot{
 		SessionID: "session",
@@ -453,6 +665,101 @@ func TestBackendValidateRequiresUnsupportedReason(t *testing.T) {
 		backend.Validate(),
 		`unsupported capability "ttl" requires a reason`,
 	)
+}
+
+func TestBackendValidateRejectsMissingRequiredFields(t *testing.T) {
+	valid := captureOnlyBackend("backend", CapabilitySet{
+		CapabilityEvents: {Supported: true},
+	})
+	tests := []struct {
+		name    string
+		backend Backend
+		want    string
+	}{
+		{name: "name", backend: func() Backend {
+			value := valid
+			value.Name = ""
+			return value
+		}(), want: "backend name is required"},
+		{name: "session", backend: func() Backend {
+			value := valid
+			value.Session = nil
+			return value
+		}(), want: "session service is required"},
+		{name: "key", backend: func() Backend {
+			value := valid
+			value.SessionKey.SessionID = ""
+			return value
+		}(), want: "session key"},
+		{name: "capabilities", backend: func() Backend {
+			value := valid
+			value.Capabilities = nil
+			return value
+		}(), want: "capabilities are required"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.ErrorContains(t, test.backend.Validate(), test.want)
+		})
+	}
+	require.NoError(t, valid.Validate())
+}
+
+func TestValidateReplayCaseRejectsInvalidPrograms(t *testing.T) {
+	require.ErrorContains(t, validateReplayCase(ReplayCase{}), "name is required")
+	require.ErrorContains(t, validateReplayCase(ReplayCase{
+		Name: "empty",
+	}), "has no operations")
+	require.ErrorContains(t, validateReplayCase(ReplayCase{
+		Name:       "nil-operation",
+		Operations: []Operation{nil},
+	}), "operation 0 is nil")
+	require.ErrorContains(t, validateReplayCase(ReplayCase{
+		Name:       "missing-id",
+		Operations: []Operation{noOpOperation{}},
+	}), "has no id")
+	require.ErrorContains(t, validateReplayCase(ReplayCase{
+		Name: "duplicate",
+		Operations: []Operation{
+			noOpOperation{id: "same"},
+			noOpOperation{id: "same"},
+		},
+	}), "duplicate operation id")
+	require.ErrorContains(t, validateReplayCase(ReplayCase{
+		Name:       "bad-allowed-diff",
+		Operations: []Operation{noOpOperation{id: "noop"}},
+		Allowed: []AllowedDiff{{
+			Section: "state",
+			Path:    "$.state.key",
+		}},
+	}), "requires section, path, both backends, and reason")
+}
+
+func TestRunCaseRejectsInsufficientBackends(t *testing.T) {
+	replayCase := ReplayCase{
+		Name:       "one-backend",
+		Operations: []Operation{noOpOperation{id: "noop"}},
+	}
+	_, err := RunCase(context.Background(), replayCase, []Backend{
+		captureOnlyBackend("only", CapabilitySet{
+			CapabilityEvents: {Supported: true},
+		}),
+	})
+	require.ErrorContains(t, err, "requires at least two backends")
+}
+
+func TestCaseStatusHelpersCoverMixedAndInconclusive(t *testing.T) {
+	require.Equal(t, StatusFailed, incompleteCaseStatus([]Diff{{}}, false))
+	require.Equal(t, StatusMixed, incompleteCaseStatus(nil, true))
+	require.Equal(t, StatusInconclusive, incompleteCaseStatus(nil, false))
+	require.Equal(t, StatusFailed, completedCaseStatus([]Diff{{}}, false))
+	require.Equal(t, StatusMixed, completedCaseStatus(nil, true))
+	require.Equal(t, StatusPassed, completedCaseStatus(nil, false))
+}
+
+func TestRunSuiteRejectsInsufficientFactories(t *testing.T) {
+	_, err := RunSuite(context.Background(), nil, []BackendFactory{{Name: "only"}})
+	require.ErrorContains(t, err, "requires at least two backend factories")
 }
 
 func TestRunCaseFailsWhenRequiredCapabilityIsNotAllowed(t *testing.T) {

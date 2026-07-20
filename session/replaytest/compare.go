@@ -124,6 +124,7 @@ func CompareTraces(
 				if allowedDiffMatches(rule, diff) {
 					diff.AllowedDiff = true
 					diff.Explanation = rule.Reason
+					break
 				}
 			}
 			diffs = append(diffs, diff)
