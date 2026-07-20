@@ -168,7 +168,7 @@ func (s *transcriptStream) HandleRecord(rec codexEvent) []*event.Event {
 		s.result.Events = append(s.result.Events, events...)
 		return events
 	case codexEventTurnFailed, codexEventError:
-		evt := errorEventFromRecord(s.invocationID, s.author, rec)
+		evt := errorEventFromRecord(s.invocationID, s.author, rec, false)
 		s.result.Error = evt.Response.Error
 		s.result.Events = append(s.result.Events, evt)
 		return []*event.Event{evt}
@@ -271,36 +271,67 @@ func completedEventsFromItem(invocationID, author string, item *codexItem, toolN
 }
 
 // errorEventFromRecord creates a framework error event from a Codex failure record.
-func errorEventFromRecord(invocationID, author string, rec codexEvent) *event.Event {
-	responseErr := responseErrorFromRecord(rec)
-	rsp := &model.Response{
-		Object: model.ObjectTypeError,
-		Done:   true,
-		Choices: []model.Choice{
-			{
-				Index: 0,
-				Message: model.Message{
-					Role:    model.RoleAssistant,
-					Content: responseErr.Message,
-				},
-			},
+func errorEventFromRecord(invocationID, author string, rec codexEvent, terminal bool) *event.Event {
+	return errorEventFromResponseError(invocationID, author, responseErrorFromRecord(rec), terminal)
+}
+
+// errorEventFromResponseError creates a framework error event from parsed error details.
+func errorEventFromResponseError(invocationID, author string, responseErr *model.ResponseError, terminal bool) *event.Event {
+	if responseErr == nil {
+		return nil
+	}
+	object := model.ObjectTypeChatCompletionChunk
+	done := false
+	partial := true
+	choice := model.Choice{
+		Index: 0,
+		Delta: model.Message{
+			Role:    model.RoleAssistant,
+			Content: responseErr.Message,
 		},
-		Error: responseErr,
+	}
+	if terminal {
+		object = model.ObjectTypeError
+		done = true
+		partial = false
+		choice = model.Choice{
+			Index: 0,
+			Message: model.Message{
+				Role:    model.RoleAssistant,
+				Content: responseErr.Message,
+			},
+		}
+	}
+	rsp := &model.Response{
+		Object:    object,
+		Done:      done,
+		IsPartial: partial,
+		Choices:   []model.Choice{choice},
+		Error:     responseErr,
 	}
 	return event.NewResponseEvent(invocationID, author, rsp)
 }
 
-// newAssistantMessageEvent creates a non-terminal response for one complete Codex assistant item.
+// newAssistantMessageEvent creates a partial response segment for one complete Codex assistant item.
 func newAssistantMessageEvent(invocationID, author, responseID, text string) *event.Event {
 	content := strings.TrimSpace(text)
 	if content == "" {
 		return nil
 	}
 	rsp := &model.Response{
-		ID:      strings.TrimSpace(responseID),
-		Object:  model.ObjectTypeChatCompletion,
-		Done:    false,
-		Choices: []model.Choice{{Index: 0, Message: model.Message{Role: model.RoleAssistant, Content: content}}},
+		ID:        strings.TrimSpace(responseID),
+		Object:    model.ObjectTypeChatCompletionChunk,
+		Done:      false,
+		IsPartial: true,
+		Choices: []model.Choice{
+			{
+				Index: 0,
+				Delta: model.Message{
+					Role:    model.RoleAssistant,
+					Content: content,
+				},
+			},
+		},
 	}
 	return event.NewResponseEvent(invocationID, author, rsp)
 }

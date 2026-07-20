@@ -6,6 +6,7 @@ The agent executes `codex exec --json` and parses JSONL output to emit:
 
 - tool-call events for Codex command, MCP, built-in tool, and skill items
 - tool-result events for completed tool items
+- partial assistant chunk events for completed Codex assistant message items
 - a final response event from the Codex agent message
 - a session state update containing `codex.StateKeyThreadID` when Codex reports a new thread id
 

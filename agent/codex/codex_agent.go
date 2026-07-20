@@ -118,12 +118,15 @@ func (a *codexAgent) runInvocation(ctx context.Context, invocation *agent.Invoca
 		return
 	}
 	if cmdResult.runErr != nil {
-		if result.Error == nil {
-			a.emitRunError(ctx, invocation, out, combined, cmdResult.runErr)
+		if result.Error != nil {
+			a.emitCodexError(ctx, invocation, out, result.Error)
+			return
 		}
+		a.emitRunError(ctx, invocation, out, combined, cmdResult.runErr)
 		return
 	}
 	if result.Error != nil {
+		a.emitCodexError(ctx, invocation, out, result.Error)
 		return
 	}
 	a.emitFinalResponse(ctx, invocation, out, combined, result, observedThreadID, resumeThreadID)
@@ -278,6 +281,11 @@ func (a *codexAgent) emitRunError(ctx context.Context, invocation *agent.Invocat
 		},
 	}
 	a.emitEvent(ctx, invocation, out, event.NewResponseEvent(invocation.InvocationID, a.name, rsp))
+}
+
+// emitCodexError emits the terminal error response observed in the Codex transcript.
+func (a *codexAgent) emitCodexError(ctx context.Context, invocation *agent.Invocation, out chan<- *event.Event, responseErr *model.ResponseError) {
+	a.emitEvent(ctx, invocation, out, errorEventFromResponseError(invocation.InvocationID, a.name, responseErr, true))
 }
 
 // emitFlowError emits an error response event and stops further invocation processing.

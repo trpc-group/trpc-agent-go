@@ -104,7 +104,7 @@ func printAssistantEvent(evt *event.Event, lastAssistantResponseID *string) {
 	if evt.Response == nil || len(evt.Choices) == 0 || evt.IsToolCallResponse() || evt.IsToolResultResponse() {
 		return
 	}
-	content := strings.TrimSpace(evt.Choices[0].Message.Content)
+	content := assistantText(evt)
 	if content == "" {
 		return
 	}
@@ -115,13 +115,21 @@ func printAssistantEvent(evt *event.Event, lastAssistantResponseID *string) {
 		fmt.Printf("Assistant: %s\n", content)
 		return
 	}
-	if evt.Object != model.ObjectTypeChatCompletion || evt.Done || evt.IsPartial {
+	if evt.Object != model.ObjectTypeChatCompletionChunk || evt.Done || !evt.IsPartial {
 		return
 	}
 	if lastAssistantResponseID != nil {
 		*lastAssistantResponseID = evt.Response.ID
 	}
 	fmt.Printf("Assistant: %s\n", content)
+}
+
+func assistantText(evt *event.Event) string {
+	content := strings.TrimSpace(evt.Choices[0].Message.Content)
+	if content != "" {
+		return content
+	}
+	return strings.TrimSpace(evt.Choices[0].Delta.Content)
 }
 
 func printToolEvents(evt *event.Event) {
