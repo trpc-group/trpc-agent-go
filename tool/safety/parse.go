@@ -174,65 +174,187 @@ func operandCandidates(argv []string) []string {
 // tools (nc/ncat/telnet) it returns only the first operand, since trailing
 // operands are ports or data rather than additional hosts.
 func extractHosts(argv []string) []string {
-	// Single-host tools: only the first operand is the target — trailing
-	// operands are ports or data, not additional hosts. A single-label intranet
-	// host (`nc host 4444`, `telnet host 23`) is accepted; a bare number (port)
-	// is skipped.
 	switch commandBase(argv[0]) {
 	case "nc", "ncat", "telnet":
-		skipNext := false
-		for _, a := range argv[1:] {
-			if skipNext {
-				skipNext = false
-				continue
-			}
-			if a == "" || a == "-" {
-				continue
-			}
-			if isFlag(a) {
-				// An address-carrying flag (-s source, -x/-X proxy, -b bind)
-				// consumes the next token; skip it so the source/proxy address
-				// is not mistaken for the target host.
-				if _, ok := ncAddrFlags[a]; ok {
-					skipNext = true
-				}
-				continue
-			}
-			if _, err := strconv.Atoi(a); err == nil {
-				continue // bare port
-			}
-			if h, _ := hostFromToken(a); h != "" {
-				return []string{h}
-			}
-			return []string{strings.ToLower(strings.Trim(a, `"'`))}
-		}
+		return ncHosts(argv)
+	case "ssh":
+		return dedupHosts(sshHosts(argv))
+	case "scp", "sftp", "rsync":
+		return dedupHosts(scpHosts(argv))
+	case "curl", "wget":
+		return dedupHosts(curlHosts(argv))
+	default:
+		// Unknown network command: accept only an unambiguous host — a scheme
+		// URL or user@host form — since we do not know its operand grammar.
+		return dedupHosts(explicitHosts(argv))
+	}
+}
+
+func dedupHosts(in []string) []string {
+	if len(in) == 0 {
 		return nil
 	}
-	// Multi-target tools (curl/wget/ssh/scp/...): every referenced host, so a
-	// benign host cannot mask a second non-allowlisted exfil target. Only
-	// operands that EXPLICITLY mark a host position count — scheme URLs
-	// (https://h) and user@host forms — so a local file operand (release.tar.gz,
-	// archive.tar.gz) is not misread as a non-allowlisted host and denied.
-	var hosts []string
-	seen := make(map[string]struct{})
-	add := func(h string, explicit bool) {
-		if h == "" || !explicit {
-			return
+	seen := make(map[string]struct{}, len(in))
+	out := make([]string, 0, len(in))
+	for _, h := range in {
+		if h == "" {
+			continue
 		}
 		if _, ok := seen[h]; ok {
-			return
+			continue
 		}
 		seen[h] = struct{}{}
-		hosts = append(hosts, h)
+		out = append(out, h)
 	}
+	return out
+}
+
+// bareHost returns hostFromToken's host regardless of whether the token used an
+// explicit scheme/user@host form — for command positions that are known to be
+// hosts (ssh/scp/curl operands), a scheme-less dotted host is still a host.
+func bareHost(token string) string {
+	h, _ := hostFromToken(token)
+	return h
+}
+
+// ncHosts handles nc/ncat/telnet: only the first operand is the target; a bare
+// port and address-carrying flag values (-s/-x/-X/-b) are skipped.
+func ncHosts(argv []string) []string {
+	skipNext := false
+	for _, a := range argv[1:] {
+		if skipNext {
+			skipNext = false
+			continue
+		}
+		if a == "" || a == "-" {
+			continue
+		}
+		if isFlag(a) {
+			if _, ok := ncAddrFlags[a]; ok {
+				skipNext = true
+			}
+			continue
+		}
+		if _, err := strconv.Atoi(a); err == nil {
+			continue // bare port
+		}
+		if h := bareHost(a); h != "" {
+			return []string{h}
+		}
+		return []string{strings.ToLower(strings.Trim(a, `"'`))}
+	}
+	return nil
+}
+
+// sshValueFlags are ssh short flags that consume the next argv token.
+var sshValueFlags = map[string]struct{}{
+	"-b": {}, "-c": {}, "-D": {}, "-E": {}, "-e": {}, "-F": {}, "-I": {},
+	"-i": {}, "-J": {}, "-L": {}, "-l": {}, "-m": {}, "-O": {}, "-o": {},
+	"-p": {}, "-Q": {}, "-R": {}, "-S": {}, "-W": {}, "-w": {},
+}
+
+// sshHosts handles ssh: after skipping option values, the first operand is the
+// target host (scheme-less and single-label forms accepted).
+func sshHosts(argv []string) []string {
+	skipNext := false
+	for _, a := range argv[1:] {
+		if skipNext {
+			skipNext = false
+			continue
+		}
+		if a == "" {
+			continue
+		}
+		if isFlag(a) {
+			if _, ok := sshValueFlags[a]; ok {
+				skipNext = true
+			}
+			continue
+		}
+		if h := bareHost(a); h != "" {
+			return []string{h}
+		}
+		return []string{strings.ToLower(strings.Trim(a, `"'`))}
+	}
+	return nil
+}
+
+// scpHosts handles scp/sftp/rsync: a remote operand carries a colon
+// ([user@]host:path); local files have none, so they are not read as hosts.
+func scpHosts(argv []string) []string {
+	var hosts []string
+	for _, a := range argv[1:] {
+		if a == "" || isFlag(a) {
+			continue
+		}
+		i := strings.IndexByte(a, ':')
+		if i <= 0 {
+			continue // local file operand
+		}
+		hostPart := a[:i]
+		if at := strings.LastIndex(hostPart, "@"); at >= 0 {
+			hostPart = hostPart[at+1:]
+		}
+		if hostPart = strings.ToLower(strings.Trim(hostPart, `"'`)); hostPart != "" {
+			hosts = append(hosts, hostPart)
+		}
+	}
+	return hosts
+}
+
+// curlFileFlags are curl/wget flags whose value is a local file (an output or
+// config path), not a URL, so the value must not be read as a host.
+var curlFileFlags = map[string]struct{}{
+	"-o": {}, "--output": {}, "--output-dir": {}, "-T": {}, "--upload-file": {},
+	"-D": {}, "--dump-header": {}, "-K": {}, "--config": {}, "-c": {}, "--cookie-jar": {},
+}
+
+// curlHosts handles curl/wget: positional operands are URLs (scheme-less
+// accepted); @file uploads and the values of file-valued flags are excluded.
+func curlHosts(argv []string) []string {
+	var hosts []string
+	skipNext := false
+	for _, a := range argv[1:] {
+		if skipNext {
+			skipNext = false
+			continue
+		}
+		if a == "" || strings.HasPrefix(a, "@") {
+			continue
+		}
+		if isFlag(a) {
+			// A file-valued flag in separate form (-o FILE) consumes the next
+			// token; the attached form (--output=FILE) carries its own value.
+			if !strings.Contains(a, "=") {
+				if _, ok := curlFileFlags[a]; ok {
+					skipNext = true
+				}
+			}
+			continue
+		}
+		if h := bareHost(a); h != "" {
+			hosts = append(hosts, h)
+		}
+	}
+	return hosts
+}
+
+// explicitHosts accepts only operands that explicitly mark a host position (a
+// scheme URL or user@host form), plus their option values.
+func explicitHosts(argv []string) []string {
+	var hosts []string
 	for _, a := range argv[1:] {
 		if a == "" || strings.HasPrefix(a, "@") {
-			continue // curl @file upload operand, not a host
+			continue
 		}
-		add(hostFromToken(a))
+		if h, explicit := hostFromToken(a); explicit && h != "" {
+			hosts = append(hosts, h)
+		}
 		if i := strings.IndexByte(a, '='); i >= 0 && i+1 < len(a) {
 			if v := a[i+1:]; !strings.HasPrefix(v, "@") {
-				add(hostFromToken(v))
+				if h, explicit := hostFromToken(v); explicit && h != "" {
+					hosts = append(hosts, h)
+				}
 			}
 		}
 	}

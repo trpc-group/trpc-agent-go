@@ -36,16 +36,15 @@ type Scanner struct {
 // re-allow what the caller meant to deny). Use NewScannerChecked to receive the
 // error instead.
 func NewScanner(policy *Policy) *Scanner {
-	switch {
-	case policy == nil:
+	if policy == nil {
 		policy = DefaultPolicy()
-	case !policy.compiled:
-		if err := policy.compile(); err != nil {
-			log.Errorf("safety: invalid policy, scanner will deny all tool calls: %v", err)
-			return &Scanner{policy: DefaultPolicy(), now: time.Now, failClosed: true}
-		}
 	}
-	return &Scanner{policy: policy, now: time.Now}
+	snap := *policy
+	if err := snap.compile(); err != nil {
+		log.Errorf("safety: invalid policy, scanner will deny all tool calls: %v", err)
+		return &Scanner{policy: DefaultPolicy(), now: time.Now, failClosed: true}
+	}
+	return &Scanner{policy: &snap, now: time.Now}
 }
 
 // NewScannerChecked is like NewScanner but returns the policy compilation error
@@ -54,12 +53,12 @@ func NewScanner(policy *Policy) *Scanner {
 func NewScannerChecked(policy *Policy) (*Scanner, error) {
 	if policy == nil {
 		policy = DefaultPolicy()
-	} else if !policy.compiled {
-		if err := policy.compile(); err != nil {
-			return nil, err
-		}
 	}
-	return &Scanner{policy: policy, now: time.Now}, nil
+	snap := *policy
+	if err := snap.compile(); err != nil {
+		return nil, err
+	}
+	return &Scanner{policy: &snap, now: time.Now}, nil
 }
 
 // Policy returns the scanner's active policy.
@@ -91,6 +90,7 @@ func (s *Scanner) Scan(_ context.Context, in ScanInput) ScanReport {
 	}
 	findings = append(findings, s.checkEnv(in)...)
 	findings = append(findings, s.checkTimeout(in)...)
+	findings = append(findings, s.checkStdin(in)...)
 	findings = append(findings, s.checkInlineSecrets(in)...)
 
 	// Redact any secret that leaked into evidence so no plaintext survives.
@@ -255,6 +255,23 @@ func (s *Scanner) checkEnv(in ScanInput) []Finding {
 		}
 	}
 	return out
+}
+
+// checkStdin flags stdin piped to the command: it is fed to the process but not
+// statically analysed, and for an interpreter (python/sh/...) it is executable
+// code the command name hides, e.g. {"command":"python3","stdin":"os.system(...)"}.
+func (s *Scanner) checkStdin(in ScanInput) []Finding {
+	if strings.TrimSpace(in.Stdin) == "" {
+		return nil
+	}
+	decision := DecisionAsk
+	rec := "Stdin is fed to the command and not statically analysed; review the piped input before executing."
+	if isInterpreterName(firstCommandBase(in.Command)) {
+		decision = DecisionDeny
+		rec = "Stdin is executed as code by this interpreter; run an audited script instead of piping code on stdin."
+	}
+	return []Finding{s.finding(RuleStdinProvided, CategoryShellBypass,
+		RiskMedium, decision, "stdin provided", "", rec)}
 }
 
 // checkTimeout flags a requested timeout larger than the policy maximum.

@@ -19,11 +19,12 @@ import (
 )
 
 // OutputLimitCallback returns an AfterTool callback that enforces the policy's
-// Limits.MaxOutputBytes at execution time by truncating a recognised exec
-// tool's output once it exceeds the cap. This is the runtime half of the
-// resource limit: the static scan decides allow/deny before execution, while
-// this callback bounds output during execution, so max_output_bytes is a real,
-// enforced limit rather than advisory config.
+// Limits.MaxOutputBytes as a RESULT-SIZE limit: it truncates a recognised exec
+// tool's captured output before the result is returned to the model, once the
+// output exceeds the cap. It bounds what the model sees, not what the executor
+// produces (AfterTool runs after the tool has already generated and captured
+// its output), so it is not a runtime resource ceiling — pair it with an
+// executor-level cap for that.
 //
 // Register it alongside the permission policy, for example:
 //

@@ -128,13 +128,17 @@ func scanInput(s sample) safety.ScanInput {
 }
 
 func loadPolicy(path string) *safety.Policy {
+	// An explicit --policy that fails to load is fatal: silently falling back to
+	// the built-in default would drop the operator's custom denied commands and
+	// paths while appearing protected. DefaultPolicy is used only when no policy
+	// path was requested.
 	if path == "" {
 		return safety.DefaultPolicy()
 	}
 	p, err := safety.LoadPolicy(path)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "policy %q not loaded (%v); using built-in default\n", path, err)
-		return safety.DefaultPolicy()
+		fmt.Fprintf(os.Stderr, "load safety policy %q: %v\n", path, err)
+		os.Exit(1)
 	}
 	return p
 }

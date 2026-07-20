@@ -104,10 +104,19 @@ type execArgs struct {
 	Cwd           string            `json:"cwd"`
 	Workdir       string            `json:"workdir"`
 	Env           map[string]string `json:"env"`
+	Stdin         string            `json:"stdin"`
+	Chars         string            `json:"chars"`
 	Timeout       int               `json:"timeout"`
 	TimeoutSec    *int              `json:"timeout_sec"`
 	TimeoutSecOld *int              `json:"timeoutSec"`
 	CodeBlocks    json.RawMessage   `json:"code_blocks"`
+}
+
+// isStdinWriteTool reports whether a tool name is a follow-up stdin writer for
+// an interactive session (workspace_write_stdin, hostexec's write_stdin, or any
+// named-toolset-prefixed form).
+func isStdinWriteTool(name string) bool {
+	return name == "write_stdin" || strings.HasSuffix(name, "_write_stdin")
 }
 
 // decodeCodeBlocks flexibly decodes code_blocks, mirroring codeexec's
@@ -151,6 +160,9 @@ func decodeCodeBlocks(raw json.RawMessage) ([]CodeBlock, error) {
 // ScanRequest builds a ScanInput from a permission request and scans it. It is
 // exported so callers can reuse the guard outside the permission path.
 func (p *PermissionPolicy) ScanRequest(ctx context.Context, req *tool.PermissionRequest) (ScanReport, bool) {
+	if isStdinWriteTool(req.ToolName) {
+		return p.scanStdinWrite(req)
+	}
 	backend := p.backendFor(req.ToolName)
 	if backend == BackendUnknown {
 		return ScanReport{}, false
@@ -184,6 +196,7 @@ func (p *PermissionPolicy) ScanRequest(ctx context.Context, req *tool.Permission
 		CodeBlocks: blocks,
 		Cwd:        firstNonEmptyStr(a.Cwd, a.Workdir),
 		Env:        a.Env,
+		Stdin:      a.Stdin,
 		TimeoutSec: firstTimeout(a.TimeoutSec, a.TimeoutSecOld, a.Timeout),
 		Metadata: ToolMetadataView{
 			ReadOnly:    req.Metadata.ReadOnly,
@@ -191,6 +204,30 @@ func (p *PermissionPolicy) ScanRequest(ctx context.Context, req *tool.Permission
 		},
 	}
 	return p.scanner.Scan(ctx, in), true
+}
+
+// scanStdinWrite guards follow-up input to an interactive session. A non-empty
+// write cannot be statically validated (a payload may be split across calls), so
+// it is denied; an empty write (a poll) is left to the tool.
+func (p *PermissionPolicy) scanStdinWrite(req *tool.PermissionRequest) (ScanReport, bool) {
+	var a execArgs
+	_ = json.Unmarshal(req.Arguments, &a)
+	if strings.TrimSpace(a.Chars) == "" {
+		return ScanReport{}, false
+	}
+	r := ScanReport{
+		ToolName: req.ToolName,
+		Findings: []Finding{{
+			RuleID:         RuleStdinWrite,
+			Category:       CategoryShellBypass,
+			RiskLevel:      RiskHigh,
+			Decision:       DecisionDeny,
+			Evidence:       "interactive stdin write",
+			Recommendation: "Writing to a live session submits input that cannot be statically validated and may be split across calls; run an audited script instead.",
+		}},
+	}
+	r.aggregate()
+	return r, true
 }
 
 // CheckToolPermission implements tool.PermissionPolicy. Non-exec tools are

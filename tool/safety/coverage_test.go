@@ -85,8 +85,10 @@ func TestRiskForAndPolicyAccessor(t *testing.T) {
 	if p.riskFor("z", RiskMedium) != RiskMedium {
 		t.Error("fallback wrong")
 	}
-	if sc := NewScanner(p); sc.Policy() != p {
-		t.Error("Policy() accessor wrong")
+	// NewScanner compiles a private snapshot, so Policy() is a copy, not p; it
+	// must still preserve the configured override.
+	if sc := NewScanner(p); sc.Policy().riskFor("x.y", RiskLow) != RiskCritical {
+		t.Error("Policy() snapshot lost the risk override")
 	}
 }
 

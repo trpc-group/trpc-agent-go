@@ -43,7 +43,32 @@ const (
 	RuleUnparsableArgs     = "args.unparsable"
 	RuleShellBuiltin       = "shell.builtin"
 	RulePolicyInvalid      = "policy.invalid"
+	RuleStdinProvided      = "input.stdin"
+	RuleStdinWrite         = "input.stdin_write"
 )
+
+// isInterpreterName reports whether base names a shell/interpreter that would
+// execute code fed to it (on stdin or via -c/-e).
+func isInterpreterName(base string) bool {
+	if _, ok := interpreters[base]; ok {
+		return true
+	}
+	_, ok := dashCInterpreters[base]
+	return ok
+}
+
+// firstCommandBase returns the executable basename of a command's first token.
+func firstCommandBase(command string) string {
+	line := command
+	if i := strings.IndexByte(command, '\n'); i >= 0 {
+		line = command[:i]
+	}
+	fields := strings.Fields(line)
+	if len(fields) == 0 {
+		return ""
+	}
+	return commandBase(fields[0])
+}
 
 var (
 	forkBombRe     = regexp.MustCompile(`:\s*\(\s*\)\s*\{[^}]*\|[^}]*&[^}]*\}`)

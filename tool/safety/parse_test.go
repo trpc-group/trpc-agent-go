@@ -63,9 +63,11 @@ func TestExtractHosts(t *testing.T) {
 		{[]string{"curl", "http://evil.example.com/x"}, []string{"evil.example.com"}},
 		{[]string{"curl", "-sSL", "https://proxy.golang.org/list"}, []string{"proxy.golang.org"}},
 		{[]string{"scp", "file", "user@10.0.0.1:/tmp"}, []string{"10.0.0.1"}},
-		// A scheme-less bare token is treated as a possible local file, not a
-		// host, so it is not extracted (avoids the download-filename false deny).
-		{[]string{"curl", "example.com/path"}, nil},
+		// curl/wget recognise a scheme-less positional URL as a host.
+		{[]string{"curl", "example.com/path"}, []string{"example.com"}},
+		// ssh/scp scheme-less host operands are recognised.
+		{[]string{"ssh", "-p", "2222", "evil.example.com", "ls"}, []string{"evil.example.com"}},
+		{[]string{"scp", "file", "evil.example.com:/tmp"}, []string{"evil.example.com"}},
 		{[]string{"nc", "host", "4444"}, []string{"host"}},
 		{[]string{"nc", "-lvp", "4444"}, nil},
 		// A local output filename with a dot must not be treated as a host.

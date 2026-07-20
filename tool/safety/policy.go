@@ -11,7 +11,9 @@ package safety
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -53,11 +55,12 @@ type DependencyPolicy struct {
 type LimitsPolicy struct {
 	// MaxTimeoutSec is the largest accepted requested timeout, in seconds.
 	MaxTimeoutSec int `json:"max_timeout_sec" yaml:"max_timeout_sec"`
-	// MaxOutputBytes caps an exec tool's captured output. It is enforced at
-	// execution time by the AfterTool output-limit callback
-	// (PermissionPolicy.OutputLimitCallback), which truncates output beyond
-	// this size. Zero is treated as unset and defaults to 1 MiB; set a negative
-	// value to disable the cap.
+	// MaxOutputBytes is a result-size limit: the AfterTool output-limit callback
+	// (PermissionPolicy.OutputLimitCallback) truncates a tool result whose
+	// captured output exceeds this size before it is returned to the model. It
+	// bounds what the model sees, not what the executor produces, so it is not a
+	// runtime resource ceiling. Zero is treated as unset and defaults to 1 MiB;
+	// set a negative value to disable.
 	MaxOutputBytes int64 `json:"max_output_bytes" yaml:"max_output_bytes"`
 }
 
@@ -104,7 +107,6 @@ type Policy struct {
 	RiskOverrides map[string]RiskLevel `json:"risk_overrides" yaml:"risk_overrides"`
 
 	// Compiled lookup structures (populated by compile, not serialised).
-	compiled        bool
 	deniedCmdSet    map[string]struct{}
 	allowedCmdSet   map[string]struct{}
 	networkCmdSet   map[string]struct{}
@@ -165,11 +167,17 @@ func LoadPolicy(filePath string) (*Policy, error) {
 		if err := dec.Decode(&p); err != nil {
 			return nil, fmt.Errorf("safety: parse yaml policy %q: %w", filePath, err)
 		}
+		if err := dec.Decode(new(struct{})); !errors.Is(err, io.EOF) {
+			return nil, fmt.Errorf("safety: policy %q has content after the first YAML document; keep the policy in a single document", filePath)
+		}
 	case ".json":
 		dec := json.NewDecoder(bytes.NewReader(data))
 		dec.DisallowUnknownFields()
 		if err := dec.Decode(&p); err != nil {
 			return nil, fmt.Errorf("safety: parse json policy %q: %w", filePath, err)
+		}
+		if err := dec.Decode(new(struct{})); !errors.Is(err, io.EOF) {
+			return nil, fmt.Errorf("safety: policy %q has trailing content after the first JSON value", filePath)
 		}
 	default:
 		return nil, fmt.Errorf("safety: unsupported policy extension %q (use .yaml/.yml/.json)", filepath.Ext(filePath))
@@ -384,7 +392,6 @@ func (p *Policy) compile() error {
 		}
 		p.secrets = append(p.secrets, compiledSecret{name: s.Name, re: re})
 	}
-	p.compiled = true
 	return nil
 }
 

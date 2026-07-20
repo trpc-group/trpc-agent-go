@@ -61,7 +61,13 @@ calls it before every tool call (see
 `internal/flow/processor/functioncall.go`). A non-allow verdict skips execution.
 
 ```go
-policy, _ := safety.LoadPolicy("tool_safety_policy.yaml")
+// Fail fast if an explicitly requested policy cannot be loaded — do NOT ignore
+// the error, or a rejected/missing policy silently falls back to built-in
+// defaults, dropping your custom denied commands and paths.
+policy, err := safety.LoadPolicy("tool_safety_policy.yaml")
+if err != nil {
+    log.Fatalf("load safety policy: %v", err)
+}
 scanner := safety.NewScanner(policy)
 auditFile, _ := os.Create("tool_safety_audit.jsonl")
 pol := safety.NewPermissionPolicy(scanner,
@@ -75,10 +81,11 @@ runner.Run(ctx, userID, sessionID, msg,
     agent.WithToolPermissionPolicyFunc(pol.CheckToolPermission))
 ```
 
-The permission policy is the **before-execution** gate. For the
-**during-execution** half of the resource limit, register the AfterTool
-output-limit callback, which truncates an exec tool's output once it exceeds
-`limits.max_output_bytes`:
+The permission policy is the **before-execution** gate. To also bound the
+**result size** returned to the model, register the AfterTool output-limit
+callback, which truncates an exec tool's captured output once it exceeds
+`limits.max_output_bytes` (this bounds what the model sees, not what the executor
+produces — pair it with an executor-level cap for a true runtime ceiling):
 
 ```go
 ag := llmagent.New("agent",
@@ -104,7 +111,7 @@ allowed/denied commands, limits and secret patterns **without touching code**:
 | `network.allowed_domains` | hosts a network command may reach; others are denied |
 | `dependency_install.patterns` | install invocations that require review |
 | `limits.max_timeout_sec` | requested timeouts above this are flagged for review |
-| `limits.max_output_bytes` | exec-tool output above this is truncated at runtime by the AfterTool `OutputLimitCallback` |
+| `limits.max_output_bytes` | result-size limit: the AfterTool `OutputLimitCallback` truncates exec-tool output above this before it is returned to the model |
 | `secret_patterns` | inline-secret regexes used for detection and redaction |
 | `default_decision_on_parse_failure` | `deny` (default) or `ask` for unparsable commands |
 | `risk_overrides` | bump/lower a rule's risk by id |

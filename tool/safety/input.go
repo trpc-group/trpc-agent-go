@@ -64,6 +64,10 @@ type ScanInput struct {
 	// Command is the shell command or script (may be multi-line) for exec
 	// backends.
 	Command string
+	// Stdin is the initial input piped to the command, if any. It is fed to the
+	// process and can carry an interpreter program the command name does not
+	// reveal, so it is checked separately.
+	Stdin string
 	// CodeBlocks are the language-tagged fragments for the codeexec backend.
 	CodeBlocks []CodeBlock
 	// Cwd is the requested working directory, if any.
