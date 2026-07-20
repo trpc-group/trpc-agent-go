@@ -151,13 +151,15 @@ func TestResolver_CreateWorkspace_UsesSessionIDOrFallbackName(t *testing.T) {
 	ctx = agent.NewInvocationContext(context.Background(), inv)
 	ws3, err := r.CreateWorkspace(ctx, eng, "ignored-name")
 	require.NoError(t, err)
-	require.Equal(t, "sess-123", ws3.ID)
-	require.Equal(t, []string{"workspace", "sess-123"}, mgr.created)
+	wantSessOnly := KeyFromInvocation(inv)
+	require.Equal(t, "0:/0:/8:sess-123", wantSessOnly)
+	require.Equal(t, wantSessOnly, ws3.ID)
+	require.Equal(t, []string{"workspace", wantSessOnly}, mgr.created)
 
 	ws4, err := r.CreateWorkspace(ctx, eng, "ignored-name")
 	require.NoError(t, err)
 	require.Equal(t, ws3, ws4)
-	require.Equal(t, []string{"workspace", "sess-123"}, mgr.created)
+	require.Equal(t, []string{"workspace", wantSessOnly}, mgr.created)
 
 	inv.Session = &session.Session{
 		AppName: "app",
@@ -167,8 +169,10 @@ func TestResolver_CreateWorkspace_UsesSessionIDOrFallbackName(t *testing.T) {
 	ctx = agent.NewInvocationContext(context.Background(), inv)
 	ws5, err := r.CreateWorkspace(ctx, eng, "ignored-name")
 	require.NoError(t, err)
-	require.Equal(t, "app/user/sess-456", ws5.ID)
-	require.Equal(t, []string{"workspace", "sess-123", "app/user/sess-456"}, mgr.created)
+	wantFull := KeyFromInvocation(inv)
+	require.Equal(t, "3:app/4:user/8:sess-456", wantFull)
+	require.Equal(t, wantFull, ws5.ID)
+	require.Equal(t, []string{"workspace", wantSessOnly, wantFull}, mgr.created)
 }
 
 // artifactProbeManager asserts CreateWorkspace's context can resolve an artifact
@@ -232,6 +236,29 @@ func TestResolver_CreateWorkspace_InjectsArtifactContext(t *testing.T) {
 	r := NewResolver(nil, nil)
 	ws, err := r.CreateWorkspace(ctx, eng, "ignored")
 	require.NoError(t, err)
-	require.Equal(t, "myapp/u1/sess-art", ws.ID)
+	require.Equal(t, KeyFromInvocation(inv), ws.ID)
 	require.True(t, probe.sawOK)
+}
+
+
+func TestKeyFromInvocation_Injective(t *testing.T) {
+	// Slash-embedding collision that the old join scheme produced.
+	a := KeyFromInvocation(&agent.Invocation{Session: &session.Session{
+		AppName: "a/b", UserID: "c", ID: "d",
+	}})
+	b := KeyFromInvocation(&agent.Invocation{Session: &session.Session{
+		AppName: "a", UserID: "b/c", ID: "d",
+	}})
+	require.NotEqual(t, a, b)
+
+	// Incomplete fields: both used to collapse to bare ID.
+	c := KeyFromInvocation(&agent.Invocation{Session: &session.Session{ID: "x"}})
+	d := KeyFromInvocation(&agent.Invocation{Session: &session.Session{
+		AppName: "", UserID: "", ID: "x",
+	}})
+	require.Equal(t, c, d) // same fields
+	e := KeyFromInvocation(&agent.Invocation{Session: &session.Session{
+		AppName: "x", UserID: "", ID: "",
+	}})
+	require.NotEqual(t, c, e)
 }

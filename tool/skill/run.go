@@ -483,6 +483,18 @@ func (t *RunTool) Call(
 		ctx,
 		in,
 	)
+	// INV-PRE / INV-CLEAN: fail closed before prepareWorkspaceForRun so
+	// create/stage/PutFiles do not run when the engine cannot honor the
+	// requested output contract or command policy CleanEnv.
+	eng := t.ensureEngine()
+	if err := preflightDeclarativeOutputs(eng, in); err != nil {
+		return nil, err
+	}
+	if len(t.allowedCmds) > 0 || len(t.deniedCmds) > 0 {
+		if err := checkSkillRunnerSupportsPolicy(eng); err != nil {
+			return nil, err
+		}
+	}
 	eng, ws, skillRoot, ctxIO, staged, stageWarn, err := t.
 		prepareWorkspaceForRun(
 			ctx,
@@ -1142,6 +1154,13 @@ func (t *RunTool) buildRunProgramSpec(
 	if in.Timeout <= 0 {
 		timeout = defaultSkillRunTimeout
 	}
+	// INV-CLEAN: fail closed before prepareEditorEnv/PutFiles when policy
+	// mode is active on a runtime that cannot honor CleanEnv.
+	if len(t.allowedCmds) > 0 || len(t.deniedCmds) > 0 {
+		if err := checkSkillRunnerSupportsPolicy(eng); err != nil {
+			return codeexecutor.RunProgramSpec{}, err
+		}
+	}
 	env := cloneStringMap(in.Env)
 	t.maybeInjectSkillEnv(ctx, in.Skill, env)
 	if _, ok := env[codeexecutor.EnvSkillName]; !ok {
@@ -1787,6 +1806,52 @@ func withArtifactContext(ctx context.Context) context.Context {
 		)
 	}
 	return ctxIO
+}
+
+// preflightDeclarativeOutputs fails closed before runProgram when the
+// engine has audited SupportsDeclarativeIO=false and the request needs
+// CollectOutputs features that cannot be emulated by Collect(globs).
+// Globs-only OutputSpec and legacy output_files remain allowed.
+func preflightDeclarativeOutputs(
+	eng codeexecutor.Engine, in runInput,
+) error {
+	if eng == nil {
+		return nil
+	}
+	cap := eng.Describe().SupportsDeclarativeIO
+	if cap == nil || *cap {
+		// nil = unknown/unaudited (leave path alone); true = full support.
+		return nil
+	}
+	// Inputs require StageInputs; cannot be emulated without declarative I/O.
+	if len(in.Inputs) > 0 {
+		return codeexecutor.ErrDeclarativeIONotSupported
+	}
+	if in.Outputs == nil || len(in.OutputFiles) > 0 {
+		return nil
+	}
+	if outputSpecAllowsGlobsOnlyFallback(*in.Outputs) {
+		return nil
+	}
+	return codeexecutor.ErrDeclarativeIONotSupported
+}
+
+// checkSkillRunnerSupportsPolicy fails closed when skill_run is configured
+// with allowed/denied command lists but the engine cannot honor CleanEnv.
+// Mirrors tool/workspaceexec.checkRunnerSupportsPolicy.
+func checkSkillRunnerSupportsPolicy(eng codeexecutor.Engine) error {
+	if eng == nil {
+		return nil
+	}
+	if eng.Describe().SupportsCleanEnv {
+		return nil
+	}
+	return errors.New(
+		"skill_run: command allow/deny policy requires a runtime that " +
+			"supports RunProgramSpec.CleanEnv, but the configured runtime " +
+			"does not advertise it. Either run on a CleanEnv-capable " +
+			"backend (e.g. codeexecutor/local) or drop the policy lists",
+	)
 }
 
 // outputSpecAllowsGlobsOnlyFallback reports whether an OutputSpec can be

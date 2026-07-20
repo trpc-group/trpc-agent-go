@@ -301,7 +301,7 @@ func (c *CodeExecutor) Engine() codeexecutor.Engine {
 		rt, rt, rt,
 		codeexecutor.Capabilities{
 			SupportsCleanEnv:      true,
-			SupportsDeclarativeIO: codeexecutor.SupportsDeclarativeIOTrue,
+			SupportsDeclarativeIO: codeexecutor.SupportsDeclarativeIOTrue(),
 		},
 	)
 }

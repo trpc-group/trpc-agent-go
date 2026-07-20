@@ -133,7 +133,9 @@ func TestVisit_SkipsNonRegularFile(t *testing.T) {
 	// non-regular files) and only upload the regular file.
 	tmpDir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "real.txt"), []byte("x"), 0o644))
-	require.NoError(t, os.Symlink("real.txt", filepath.Join(tmpDir, "link.txt")))
+	if err := os.Symlink("real.txt", filepath.Join(tmpDir, "link.txt")); err != nil {
+		t.Skipf("symlink not permitted in this environment: %v", err)
+	}
 
 	err = exec.rt.PutDirectory(context.Background(), ws, tmpDir, "staged")
 	require.NoError(t, err)

@@ -1361,7 +1361,7 @@ func TestWorkspace_CreateWorkspace_Persist(t *testing.T) {
 	// Empty execID in PerSession mode should be rejected.
 	_, err = exec.CreateWorkspace(context.Background(), "", codeexecutor.WorkspacePolicy{})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "execID must not be empty")
+	assert.Contains(t, err.Error(), "ExecutionID must not be empty")
 }
 
 func TestWorkspace_PutFiles_InvalidPath(t *testing.T) {
@@ -1670,7 +1670,7 @@ func TestWorkspace_CreateWorkspace_PerSession_EmptyExecID(t *testing.T) {
 
 	_, err = exec.CreateWorkspace(context.Background(), "", codeexecutor.WorkspacePolicy{})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "execID must not be empty")
+	assert.Contains(t, err.Error(), "ExecutionID must not be empty")
 }
 
 // TestWorkspace_PutDirectory_NilSandbox verifies PutDirectory returns
@@ -3257,7 +3257,7 @@ func TestNewEngineWithCapabilities_UnknownDoesNotGate(t *testing.T) {
 
 	eng2 := codeexecutor.NewEngineWithCapabilities(
 		stub, stub, stub,
-		codeexecutor.Capabilities{SupportsDeclarativeIO: codeexecutor.SupportsDeclarativeIOFalse},
+		codeexecutor.Capabilities{SupportsDeclarativeIO: codeexecutor.SupportsDeclarativeIOFalse()},
 	)
 	err = eng2.FS().StageInputs(context.Background(), codeexecutor.Workspace{Path: "/tmp/x"}, nil)
 	require.ErrorIs(t, err, codeexecutor.ErrDeclarativeIONotSupported)

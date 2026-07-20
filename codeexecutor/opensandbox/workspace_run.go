@@ -663,14 +663,29 @@ func shellQuote(s string) string {
 // cappedBuffer accumulates string data up to maxCommandOutputBytes,
 // then drops further writes and appends a truncation marker. Used by
 // RunProgram's ExecutionHandlers to bound stdout/stderr memory.
+//
+// INV-OUT: each write is one SDK OutputMessage (one stdout/stderr line).
+// Execution.Text() inserts a newline between messages; we mirror that so
+// SkipAccumulation does not glue multi-event streams into helloworld.
 type cappedBuffer struct {
-	buf       strings.Builder
-	truncated bool
+	buf        strings.Builder
+	truncated  bool
+	hasContent bool
 }
 
 func (b *cappedBuffer) write(s string) {
 	if b.truncated {
 		return
+	}
+	// Preserve SDK Execution.Text() join semantics: newline between every
+	// OutputMessage, including empty intermediate messages (index-based join).
+	if b.hasContent {
+		if b.buf.Len()+1 > maxCommandOutputBytes {
+			fmt.Fprintf(&b.buf, "\n[output truncated: exceeded %d bytes]\n", maxCommandOutputBytes)
+			b.truncated = true
+			return
+		}
+		b.buf.WriteByte('\n')
 	}
 	if b.buf.Len()+len(s) > maxCommandOutputBytes {
 		remaining := maxCommandOutputBytes - b.buf.Len()
@@ -679,9 +694,13 @@ func (b *cappedBuffer) write(s string) {
 		}
 		fmt.Fprintf(&b.buf, "\n[output truncated: exceeded %d bytes]\n", maxCommandOutputBytes)
 		b.truncated = true
+		b.hasContent = true
 		return
 	}
 	b.buf.WriteString(s)
+	// Count this message even when empty so a subsequent message still gets
+	// the inter-event newline (SDK Text() does the same).
+	b.hasContent = true
 }
 
 func (b *cappedBuffer) string() string {

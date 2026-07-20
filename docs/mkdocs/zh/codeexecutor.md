@@ -109,7 +109,7 @@ agent := llmagent.New(
 
 ## 怎么选后端
 
-常见后端有三种：
+常见后端：
 
 - `local.New()`
   直接在宿主机执行。接入最简单，调试最方便，适合本地开发和可信环境。
@@ -117,12 +117,18 @@ agent := llmagent.New(
   在容器中执行。隔离更强，更接近生产环境，适合希望限制执行环境的场景。
 - `jupyter.New()`
   适合 notebook / kernel 风格的代码执行，常用于数据分析或 Python 交互场景。
+- `opensandbox.New(...)`
+  远程自托管 OpenSandbox。不想本地管 Docker 时可用；示例见
+  `examples/codeexecution/opensandbox`。
+- `e2b.New(...)`
+  云托管沙箱（在启用 e2b 后端的树中）。
 
 选择建议：
 
 - 本地验证功能：优先 `local`
-- 生产环境或更强调隔离：优先 `container`
+- 生产环境或更强调隔离：优先 `container` 或 `opensandbox`
 - 明确需要 Jupyter kernel：使用 `jupyter`
+- 托管云隔离：`e2b`
 
 ## Workspace 中有哪些目录
 
@@ -858,9 +864,12 @@ deny 里。
     operator 切到支持的 runtime。
 
     目前 `codeexecutor/local`、`codeexecutor/container` 和
-    `codeexecutor/e2b` 都已声明 `SupportsCleanEnv: true`，因此这三个后端
-    都支持策略模式。其它后端会保持 zero-valued capabilities，并在闸门处被拒掉，
-    直到完成审计并通过 `NewEngineWithCapabilities` 显式声明能力。
+    `codeexecutor/e2b` 都已声明 `SupportsCleanEnv: true`，因此这些后端
+    支持策略模式。`codeexecutor/opensandbox` 明确声明
+    `SupportsCleanEnv: false`（execd 仍会合并外层 shell 环境），策略模式
+    会在闸门处 fail-closed，而不是悄悄降级。其它后端保持 zero-valued
+    capabilities，并在闸门处被拒掉，直到完成审计并通过
+    `NewEngineWithCapabilities` 显式声明能力。
 
 ### 边界
 

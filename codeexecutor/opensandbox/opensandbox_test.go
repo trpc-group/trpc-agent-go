@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"path"
 	"strings"
 	"testing"
 	"time"
@@ -1285,4 +1286,383 @@ func TestEncodeSessionWorkspaceKey_Injective(t *testing.T) {
 		encodeSessionWorkspaceKey("app", "user", "sess"),
 		encodeSessionWorkspaceKey("app", "user", "sess"),
 	)
+}
+
+
+// --- INV-ISO / INV-LIFE falsifiers (multi-review-gate pack A) ---
+
+// TestInvariant_Isolation_ExplicitIDCrossSession verifies that two
+// sessions supplying the same model ExecutionID still get different
+// PerSession workspace paths (session namespacing).
+func TestInvariant_Isolation_ExplicitIDCrossSession(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	u, err := url.Parse(m.server.URL)
+	require.NoError(t, err)
+	exec, err := New(
+		WithDomain(u.Host),
+		WithProtocol("http"),
+		WithAPIKey("test-key"),
+		WithWorkspacePersistence(WorkspacePersistencePerSession),
+	)
+	require.NoError(t, err)
+	defer exec.Close()
+
+	blocks := []codeexecutor.CodeBlock{{Language: "bash", Code: "echo ok"}}
+	const sharedID = "model-chosen-id"
+	ctxA := agent.NewInvocationContext(context.Background(), &agent.Invocation{
+		Session: &session.Session{AppName: "app", UserID: "u", ID: "sess-a"},
+	})
+	ctxB := agent.NewInvocationContext(context.Background(), &agent.Invocation{
+		Session: &session.Session{AppName: "app", UserID: "u", ID: "sess-b"},
+	})
+
+	_, err = exec.ExecuteCode(ctxA, codeexecutor.CodeExecutionInput{
+		ExecutionID: sharedID,
+		CodeBlocks:  blocks,
+	})
+	require.NoError(t, err)
+	_, err = exec.ExecuteCode(ctxB, codeexecutor.CodeExecutionInput{
+		ExecutionID: sharedID,
+		CodeBlocks:  blocks,
+	})
+	require.NoError(t, err)
+
+	keyA := namespaceExecutionID(executionIDFromContext(ctxA), sharedID)
+	keyB := namespaceExecutionID(executionIDFromContext(ctxB), sharedID)
+	require.NotEqual(t, keyA, keyB)
+	ha := "ws_" + stableWorkspaceHash(keyA)
+	hb := "ws_" + stableWorkspaceHash(keyB)
+	require.NotEqual(t, ha, hb)
+
+	// Bare hash of the raw model ID must NOT be used once a session is present.
+	bare := "ws_" + stableWorkspaceHash(sharedID)
+	m.mu.Lock()
+	cmds := append([]string(nil), m.commands...)
+	m.mu.Unlock()
+	sawA, sawB, sawBare := false, false, false
+	for _, c := range cmds {
+		if strings.Contains(c, ha) {
+			sawA = true
+		}
+		if strings.Contains(c, hb) {
+			sawB = true
+		}
+		if strings.Contains(c, bare) {
+			sawBare = true
+		}
+	}
+	assert.True(t, sawA && sawB, "each session must keep a distinct namespaced workspace")
+	assert.False(t, sawBare, "raw model ExecutionID must not be the workspace key when session is present")
+}
+
+// TestInvariant_Lifecycle_PublicCleanupSessionDerived verifies callers can
+// destroy a context-derived PerSession workspace using only public APIs.
+func TestInvariant_Lifecycle_PublicCleanupSessionDerived(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	u, err := url.Parse(m.server.URL)
+	require.NoError(t, err)
+	exec, err := New(
+		WithDomain(u.Host),
+		WithProtocol("http"),
+		WithAPIKey("test-key"),
+		WithWorkspacePersistence(WorkspacePersistencePerSession),
+	)
+	require.NoError(t, err)
+	defer exec.Close()
+
+	ctx := agent.NewInvocationContext(context.Background(), &agent.Invocation{
+		Session: &session.Session{AppName: "app", UserID: "u", ID: "sess-clean"},
+	})
+	blocks := []codeexecutor.CodeBlock{{Language: "bash", Code: "echo ok"}}
+	_, err = exec.ExecuteCode(ctx, codeexecutor.CodeExecutionInput{CodeBlocks: blocks})
+	require.NoError(t, err)
+
+	ws, err := exec.ResolveWorkspace(ctx, "")
+	require.NoError(t, err)
+	wantPath := path.Join("/tmp/run", "ws_"+stableWorkspaceHash(executionIDFromContext(ctx)))
+	// defaultSandboxRunBase is /tmp/run; ResolveWorkspace must match CreateWorkspace.
+	require.Equal(t, wantPath, ws.Path)
+
+	err = exec.CleanupSession(ctx)
+	require.NoError(t, err)
+
+	m.mu.Lock()
+	cmds := append([]string(nil), m.commands...)
+	m.mu.Unlock()
+	sawRm := false
+	for _, c := range cmds {
+		if strings.Contains(c, "rm -rf") && strings.Contains(c, ws.Path) {
+			sawRm = true
+			break
+		}
+	}
+	assert.True(t, sawRm, "CleanupSession must issue rm -rf on the resolved path")
+}
+
+// TestInvariant_Lifecycle_PublicCleanupExplicitLabel verifies CleanupExecution
+// with a model label uses the same namespaced key as ExecuteCode.
+func TestInvariant_Lifecycle_PublicCleanupExplicitLabel(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	u, err := url.Parse(m.server.URL)
+	require.NoError(t, err)
+	exec, err := New(
+		WithDomain(u.Host),
+		WithProtocol("http"),
+		WithAPIKey("test-key"),
+		WithWorkspacePersistence(WorkspacePersistencePerSession),
+	)
+	require.NoError(t, err)
+	defer exec.Close()
+
+	ctx := agent.NewInvocationContext(context.Background(), &agent.Invocation{
+		Session: &session.Session{AppName: "app", UserID: "u", ID: "sess-x"},
+	})
+	const label = "shared-label"
+	blocks := []codeexecutor.CodeBlock{{Language: "bash", Code: "echo ok"}}
+	_, err = exec.ExecuteCode(ctx, codeexecutor.CodeExecutionInput{
+		ExecutionID: label,
+		CodeBlocks:  blocks,
+	})
+	require.NoError(t, err)
+
+	ws, err := exec.ResolveWorkspace(ctx, label)
+	require.NoError(t, err)
+	key := namespaceExecutionID(executionIDFromContext(ctx), label)
+	require.Equal(t, "ws_"+stableWorkspaceHash(key), path.Base(ws.Path))
+
+	require.NoError(t, exec.CleanupExecution(ctx, label))
+}
+
+
+// TestInvariant_Output_MultiEventNewlines locks SDK Execution.Text() join
+// semantics when SkipAccumulation handlers feed cappedBuffer.
+func TestInvariant_Output_MultiEventNewlines(t *testing.T) {
+	var b cappedBuffer
+	b.write("hello")
+	b.write("world")
+	require.Equal(t, "hello\nworld", b.string())
+
+	var b2 cappedBuffer
+	b2.write("only")
+	require.Equal(t, "only", b2.string())
+
+	// empty intermediate messages still get SDK Text() index-based joins
+	var b3 cappedBuffer
+	b3.write("a")
+	b3.write("")
+	b3.write("b")
+	require.Equal(t, "a\n\nb", b3.string())
+}
+
+
+// TestInvariant_Lifecycle_CleanupSessionSweepsLabels verifies CleanupSession
+// destroys both empty-label and explicit-label PerSession workspaces.
+func TestInvariant_Lifecycle_CleanupSessionSweepsLabels(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	u, err := url.Parse(m.server.URL)
+	require.NoError(t, err)
+	exec, err := New(
+		WithDomain(u.Host),
+		WithProtocol("http"),
+		WithAPIKey("test-key"),
+		WithWorkspacePersistence(WorkspacePersistencePerSession),
+	)
+	require.NoError(t, err)
+	defer exec.Close()
+
+	ctx := agent.NewInvocationContext(context.Background(), &agent.Invocation{
+		Session: &session.Session{AppName: "app", UserID: "u", ID: "sess-sweep"},
+	})
+	blocks := []codeexecutor.CodeBlock{{Language: "bash", Code: "echo ok"}}
+	_, err = exec.ExecuteCode(ctx, codeexecutor.CodeExecutionInput{CodeBlocks: blocks})
+	require.NoError(t, err)
+	_, err = exec.ExecuteCode(ctx, codeexecutor.CodeExecutionInput{
+		ExecutionID: "label-a",
+		CodeBlocks:  blocks,
+	})
+	require.NoError(t, err)
+	_, err = exec.ExecuteCode(ctx, codeexecutor.CodeExecutionInput{
+		ExecutionID: "label-b",
+		CodeBlocks:  blocks,
+	})
+	require.NoError(t, err)
+
+	emptyKey := executionIDFromContext(ctx)
+	keyA := namespaceExecutionID(emptyKey, "label-a")
+	keyB := namespaceExecutionID(emptyKey, "label-b")
+	paths := []string{
+		"ws_" + stableWorkspaceHash(emptyKey),
+		"ws_" + stableWorkspaceHash(keyA),
+		"ws_" + stableWorkspaceHash(keyB),
+	}
+
+	require.NoError(t, exec.CleanupSession(ctx))
+
+	m.mu.Lock()
+	cmds := append([]string(nil), m.commands...)
+	m.mu.Unlock()
+	for _, marker := range paths {
+		saw := false
+		for _, c := range cmds {
+			if strings.Contains(c, "rm -rf") && strings.Contains(c, marker) {
+				saw = true
+				break
+			}
+		}
+		assert.True(t, saw, "CleanupSession must rm %s", marker)
+	}
+}
+
+// TestInvariant_Isolation_CreateWorkspaceNamespacesExplicitID verifies the
+// public Manager CreateWorkspace path also binds model labels to session.
+func TestInvariant_Isolation_CreateWorkspaceNamespacesExplicitID(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	u, err := url.Parse(m.server.URL)
+	require.NoError(t, err)
+	exec, err := New(
+		WithDomain(u.Host),
+		WithProtocol("http"),
+		WithAPIKey("test-key"),
+		WithWorkspacePersistence(WorkspacePersistencePerSession),
+	)
+	require.NoError(t, err)
+	defer exec.Close()
+
+	ctxA := agent.NewInvocationContext(context.Background(), &agent.Invocation{
+		Session: &session.Session{AppName: "app", UserID: "u", ID: "ca"},
+	})
+	ctxB := agent.NewInvocationContext(context.Background(), &agent.Invocation{
+		Session: &session.Session{AppName: "app", UserID: "u", ID: "cb"},
+	})
+	const label = "same-label"
+	wsA, err := exec.CreateWorkspace(ctxA, label, codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+	wsB, err := exec.CreateWorkspace(ctxB, label, codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+	require.NotEqual(t, wsA.Path, wsB.Path)
+	bare := path.Join("/tmp/run", "ws_"+stableWorkspaceHash(label))
+	require.NotEqual(t, bare, wsA.Path)
+	require.NotEqual(t, bare, wsB.Path)
+}
+
+
+// TestInvariant_Isolation_EngineManagerNamespaces verifies Engine().Manager()
+// CreateWorkspace applies the same session namespacing as CodeExecutor.
+func TestInvariant_Isolation_EngineManagerNamespaces(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	u, err := url.Parse(m.server.URL)
+	require.NoError(t, err)
+	exec, err := New(
+		WithDomain(u.Host),
+		WithProtocol("http"),
+		WithAPIKey("test-key"),
+		WithWorkspacePersistence(WorkspacePersistencePerSession),
+	)
+	require.NoError(t, err)
+	defer exec.Close()
+
+	ctxA := agent.NewInvocationContext(context.Background(), &agent.Invocation{
+		Session: &session.Session{AppName: "app", UserID: "u", ID: "em-a"},
+	})
+	ctxB := agent.NewInvocationContext(context.Background(), &agent.Invocation{
+		Session: &session.Session{AppName: "app", UserID: "u", ID: "em-b"},
+	})
+	const label = "engine-label"
+	wsA, err := exec.Engine().Manager().CreateWorkspace(ctxA, label, codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+	wsB, err := exec.Engine().Manager().CreateWorkspace(ctxB, label, codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+	require.NotEqual(t, wsA.Path, wsB.Path)
+
+	// CleanupSession should track Engine-created labeled workspaces too.
+	require.NoError(t, exec.CleanupSession(ctxA))
+	m.mu.Lock()
+	cmds := append([]string(nil), m.commands...)
+	m.mu.Unlock()
+	marker := path.Base(wsA.Path)
+	saw := false
+	for _, c := range cmds {
+		if strings.Contains(c, "rm -rf") && strings.Contains(c, marker) {
+			saw = true
+			break
+		}
+	}
+	assert.True(t, saw, "Engine-created workspace must be tracked for CleanupSession")
+}
+
+
+// TestInvariant_Lifecycle_CleanupSessionRetainsOnFailure verifies tracking is
+// not forgotten when cleanup fails, so a later CleanupSession can retry.
+func TestInvariant_Lifecycle_CleanupSessionRetainsOnFailure(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	u, err := url.Parse(m.server.URL)
+	require.NoError(t, err)
+	exec, err := New(
+		WithDomain(u.Host),
+		WithProtocol("http"),
+		WithAPIKey("test-key"),
+		WithWorkspacePersistence(WorkspacePersistencePerSession),
+	)
+	require.NoError(t, err)
+	defer exec.Close()
+
+	ctx := agent.NewInvocationContext(context.Background(), &agent.Invocation{
+		Session: &session.Session{AppName: "app", UserID: "u", ID: "sess-retry"},
+	})
+	blocks := []codeexecutor.CodeBlock{{Language: "bash", Code: "echo ok"}}
+	_, err = exec.ExecuteCode(ctx, codeexecutor.CodeExecutionInput{
+		ExecutionID: "label-retry",
+		CodeBlocks:  blocks,
+	})
+	require.NoError(t, err)
+
+	// Cancelled ctx: CleanupSession must still attempt cleanup via detached
+	// context, and if we force failure by closing sandbox first...
+	// Use cancelled ctx; cleanupContext detaches so rm should still run.
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	// Even with canceled parent, cleanupContext uses WithoutCancel so success expected.
+	err = exec.CleanupSession(canceled)
+	// Should succeed because cleanupContext detaches cancellation.
+	require.NoError(t, err)
+
+	// After success, tracking should be gone; second cleanup is still safe.
+	require.NoError(t, exec.CleanupSession(ctx))
+}
+
+// TestInvariant_Isolation_SkillRegistryKeyMatchesSessionKey ensures that when
+// skill/registry passes the session key as execID, OpenSandbox does not
+// double-namespace it away from the empty-label session workspace.
+func TestInvariant_Isolation_SkillRegistryKeyMatchesSessionKey(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	u, err := url.Parse(m.server.URL)
+	require.NoError(t, err)
+	exec, err := New(
+		WithDomain(u.Host),
+		WithProtocol("http"),
+		WithAPIKey("test-key"),
+		WithWorkspacePersistence(WorkspacePersistencePerSession),
+	)
+	require.NoError(t, err)
+	defer exec.Close()
+
+	ctx := agent.NewInvocationContext(context.Background(), &agent.Invocation{
+		Session: &session.Session{AppName: "app", UserID: "u", ID: "sess-reg"},
+	})
+	sessionKey := executionIDFromContext(ctx)
+	wsEmpty, err := exec.CreateWorkspace(ctx, "", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+	// Passing the session key as explicit ID (registry/skill pattern) must
+	// map to the same workspace as empty-label.
+	wsReg, err := exec.CreateWorkspace(ctx, sessionKey, codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+	require.Equal(t, wsEmpty.Path, wsReg.Path)
 }

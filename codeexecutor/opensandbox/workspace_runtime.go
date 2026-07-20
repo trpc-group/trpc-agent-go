@@ -330,6 +330,33 @@ func (r *workspaceRuntime) validateWorkspace(
 	return nil
 }
 
+// resolvePerSessionWorkspace returns the Workspace handle for a
+// PerSession execID without creating the remote directory. Used by
+// ResolveWorkspace / CleanupExecution so callers can destroy durable
+// workspaces via public APIs (INV-LIFE).
+func (r *workspaceRuntime) resolvePerSessionWorkspace(
+	execID string,
+) (codeexecutor.Workspace, error) {
+	if r.cfg.workspacePersistence != WorkspacePersistencePerSession {
+		return codeexecutor.Workspace{}, errors.New(
+			"opensandbox: ResolveWorkspace requires WorkspacePersistencePerSession",
+		)
+	}
+	execID = strings.TrimSpace(execID)
+	if execID == "" {
+		return codeexecutor.Workspace{}, errors.New(
+			"opensandbox: execID must not be empty when resolving a PerSession workspace",
+		)
+	}
+	h := stableWorkspaceHash(execID)
+	wsPath := path.Join(r.cfg.runBase, fmt.Sprintf("ws_%s", h))
+	ws := codeexecutor.Workspace{ID: execID, Path: wsPath}
+	if err := r.validateWorkspace(ws); err != nil {
+		return codeexecutor.Workspace{}, err
+	}
+	return ws, nil
+}
+
 // Cleanup removes the workspace directory from the sandbox.
 func (r *workspaceRuntime) Cleanup(
 	ctx context.Context,

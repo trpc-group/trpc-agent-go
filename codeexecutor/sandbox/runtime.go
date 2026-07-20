@@ -105,7 +105,7 @@ func (r *Runtime) Describe() codeexecutor.Capabilities {
 		NetworkAllowed:        profile.network.Mode == NetworkEnabled,
 		ReadOnlyMount:         profile.enforcement() == enforcementManaged,
 		Streaming:             false,
-		SupportsDeclarativeIO: codeexecutor.SupportsDeclarativeIOTrue,
+		SupportsDeclarativeIO: codeexecutor.SupportsDeclarativeIOTrue(),
 	}
 }
 

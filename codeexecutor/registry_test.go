@@ -155,3 +155,22 @@ func TestWorkspaceRegistry_Acquire_CanceledMissDoesNotCreate(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 	require.Equal(t, 0, wm.callCount())
 }
+
+
+func TestWorkspaceRegistry_Release(t *testing.T) {
+	r := NewWorkspaceRegistry()
+	wm := &fakeWM{ws: Workspace{Path: "/tmp/w"}}
+	ctx := context.Background()
+	ws, err := r.Acquire(ctx, wm, "abc")
+	require.NoError(t, err)
+	got, ok := r.Get("abc")
+	require.True(t, ok)
+	require.Equal(t, ws, got)
+
+	require.NoError(t, r.Release(ctx, wm, "abc"))
+	_, ok = r.Get("abc")
+	require.False(t, ok)
+
+	// unknown id is no-op
+	require.NoError(t, r.Release(ctx, wm, "missing"))
+}

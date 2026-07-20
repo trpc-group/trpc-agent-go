@@ -242,8 +242,15 @@ const (
 	// for all turns in the same session. Files written during one turn
 	// remain visible to later turns in that session. In this mode
 	// ExecuteCode and ExecuteInline do NOT auto-cleanup the workspace;
-	// the caller is responsible for calling Cleanup when the session
-	// ends.
+	// the caller is responsible for CleanupExecution / CleanupSession /
+	// Cleanup when the session ends (see ResolveWorkspace).
+	//
+	// Workspace identity is bound to the invocation session when one is
+	// present in context. A non-empty ExecutionID is treated as an
+	// untrusted label and is namespaced under that session so two
+	// sessions cannot share a workspace by supplying the same model
+	// execution_id. Without a session in context, a non-empty
+	// ExecutionID is used as-is (trusted caller path).
 	//
 	// Concurrent calls with the same session ID are NOT safe: they
 	// reuse one workspace and will race on source files and output
@@ -256,7 +263,9 @@ const (
 // default is WorkspacePersistencePerTurn. Use
 // WorkspacePersistencePerSession when multi-turn agents should keep
 // files and intermediate state across turns; in that mode the caller
-// owns Cleanup (ExecuteCode/ExecuteInline skip auto-cleanup).
+// owns cleanup via CleanupExecution, CleanupSession, or Cleanup with a
+// handle from ResolveWorkspace (ExecuteCode/ExecuteInline skip
+// auto-cleanup).
 //
 // PerSession mode is NOT safe for concurrent calls with the same
 // session ID: they reuse one workspace and will race on source files
@@ -320,6 +329,10 @@ type CodeExecutor struct {
 	sandboxRunBase       string
 	workspacePersistence WorkspacePersistenceMode
 	rt                   *workspaceRuntime
+	// sessionWorkspaces tracks PerSession workspaces by trusted session
+	// key so CleanupSession can destroy every label used under that
+	// session (INV-LIFE), not only the empty-label path.
+	sessionWorkspaces map[string]map[string]codeexecutor.Workspace
 
 	// Sandbox instance.
 	sbx *osb.Sandbox
@@ -512,35 +525,18 @@ func (c *CodeExecutor) ExecuteCode(
 		)
 	}
 
-	execID := strings.TrimSpace(input.ExecutionID)
-	if execID == "" {
-		// Match codeexecutor/sandbox: tool/codeexec leaves execution_id
-		// optional, so PerSession must derive a stable key from the
-		// invocation session (app/user/session) when present.
-		execID = executionIDFromContext(ctx)
-	}
-	if execID == "" {
-		if c.workspacePersistence == WorkspacePersistencePerSession {
-			// Still no stable ID: refuse rather than mint a random one
-			// that would break persistence and leak workspaces.
-			return codeexecutor.CodeExecutionResult{}, errors.New(
-				"opensandbox: ExecutionID must not be empty when using " +
-					"WorkspacePersistencePerSession; provide a stable " +
-					"session-derived ID, invoke with a session in context " +
-					"so the workspace can be reused across turns, or " +
-					"switch to PerTurn mode (the default) which does not " +
-					"require a stable ID",
-			)
-		}
-		execID = fmt.Sprintf("exec_%d", time.Now().UnixNano())
+	execID, err := c.resolveWorkspaceExecID(ctx, input.ExecutionID)
+	if err != nil {
+		return codeexecutor.CodeExecutionResult{}, err
 	}
 
-	ws, err := c.CreateWorkspace(ctx, execID, codeexecutor.WorkspacePolicy{})
+	ws, err := c.createWorkspaceResolved(ctx, execID, codeexecutor.WorkspacePolicy{})
 	if err != nil {
 		return codeexecutor.CodeExecutionResult{}, fmt.Errorf(
 			"opensandbox: create workspace: %w", err,
 		)
 	}
+	c.trackSessionWorkspace(ctx, execID, ws)
 	// In PerSession mode the workspace is reused across turns; the
 	// caller owns cleanup. In PerTurn mode we clean up automatically.
 	// Use a context detached from the parent's cancellation so cleanup
@@ -663,7 +659,29 @@ func (c *CodeExecutor) ensureRuntime() *workspaceRuntime {
 }
 
 // CreateWorkspace creates a workspace inside the sandbox.
+//
+// In PerSession mode the execID is resolved with the same session-
+// namespacing rules as ExecuteCode (INV-ISO), so model-facing callers
+// that use Manager().CreateWorkspace cannot bypass isolation by passing
+// a bare execution label when a session is present in ctx.
 func (c *CodeExecutor) CreateWorkspace(
+	ctx context.Context, execID string, pol codeexecutor.WorkspacePolicy,
+) (codeexecutor.Workspace, error) {
+	id, err := c.resolveWorkspaceExecID(ctx, execID)
+	if err != nil {
+		return codeexecutor.Workspace{}, err
+	}
+	ws, err := c.createWorkspaceResolved(ctx, id, pol)
+	if err != nil {
+		return codeexecutor.Workspace{}, err
+	}
+	c.trackSessionWorkspace(ctx, id, ws)
+	return ws, nil
+}
+
+// createWorkspaceResolved creates a workspace for an already-resolved
+// exec key (no further session namespacing).
+func (c *CodeExecutor) createWorkspaceResolved(
 	ctx context.Context, execID string, pol codeexecutor.WorkspacePolicy,
 ) (codeexecutor.Workspace, error) {
 	return c.ensureRuntime().CreateWorkspace(ctx, execID, pol)
@@ -674,6 +692,187 @@ func (c *CodeExecutor) Cleanup(
 	ctx context.Context, ws codeexecutor.Workspace,
 ) error {
 	return c.ensureRuntime().Cleanup(ctx, ws)
+}
+
+// ResolveWorkspace returns the deterministic Workspace handle that
+// ExecuteCode / CreateWorkspace would use for executionID under the
+// current persistence mode and invocation context.
+//
+// Only WorkspacePersistencePerSession yields a stable path that can be
+// resolved without creating the directory. PerTurn workspaces include a
+// random suffix and cannot be re-derived; ResolveWorkspace returns an
+// error in that mode.
+//
+// Keying matches ExecuteCode: when a session is present in ctx, a
+// non-empty executionID is namespaced under that session (INV-ISO).
+func (c *CodeExecutor) ResolveWorkspace(
+	ctx context.Context, executionID string,
+) (codeexecutor.Workspace, error) {
+	execID, err := c.resolveWorkspaceExecID(ctx, executionID)
+	if err != nil {
+		return codeexecutor.Workspace{}, err
+	}
+	return c.ensureRuntime().resolvePerSessionWorkspace(execID)
+}
+
+// CleanupExecution removes the PerSession workspace for executionID
+// using the same public keying rules as ExecuteCode. Prefer this over
+// reverse-engineering stableWorkspaceHash when ending a session.
+func (c *CodeExecutor) CleanupExecution(
+	ctx context.Context, executionID string,
+) error {
+	ws, err := c.ResolveWorkspace(ctx, executionID)
+	if err != nil {
+		return err
+	}
+	cleanupCtx, cancel := cleanupContext(ctx)
+	defer cancel()
+	err = c.Cleanup(cleanupCtx, ws)
+	if err == nil {
+		c.untrackWorkspacePath(ctx, ws.Path)
+	}
+	return err
+}
+
+// CleanupSession removes every PerSession workspace tracked for the
+// invocation session in ctx, including empty-label and explicit-label
+// workspaces created via ExecuteCode / ExecuteInline / CreateWorkspace
+// under that session (INV-LIFE).
+//
+// Labels that were never tracked in this process (e.g. created only on
+// another host) are not discoverable; call CleanupExecution for those.
+func (c *CodeExecutor) CleanupSession(ctx context.Context) error {
+	sessionKey := executionIDFromContext(ctx)
+	if sessionKey == "" {
+		// No session: fall back to empty-label resolve (may error in PerSession).
+		return c.CleanupExecution(ctx, "")
+	}
+
+	// Snapshot tracking but do NOT forget labels until each cleanup
+	// succeeds (INV-LIFE). A cancelled caller ctx must not erase the
+	// only inventory of durable labeled workspaces.
+	c.mu.Lock()
+	var tracked []struct {
+		execID string
+		ws     codeexecutor.Workspace
+	}
+	if c.sessionWorkspaces != nil {
+		if m := c.sessionWorkspaces[sessionKey]; m != nil {
+			for id, ws := range m {
+				tracked = append(tracked, struct {
+					execID string
+					ws     codeexecutor.Workspace
+				}{execID: id, ws: ws})
+			}
+		}
+	}
+	c.mu.Unlock()
+
+	cleanupCtx, cancel := cleanupContext(ctx)
+	defer cancel()
+
+	var firstErr error
+	seen := map[string]struct{}{}
+	for _, item := range tracked {
+		ws := item.ws
+		if ws.Path == "" {
+			continue
+		}
+		if _, ok := seen[ws.Path]; ok {
+			// Already cleaned this path; drop duplicate tracking key.
+			c.untrackSessionExecID(sessionKey, item.execID)
+			continue
+		}
+		seen[ws.Path] = struct{}{}
+		if err := c.Cleanup(cleanupCtx, ws); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		c.untrackSessionExecID(sessionKey, item.execID)
+	}
+	// Always attempt empty-label path even if never tracked this process.
+	if ws, err := c.ResolveWorkspace(ctx, ""); err == nil {
+		if _, ok := seen[ws.Path]; !ok {
+			if err := c.Cleanup(cleanupCtx, ws); err != nil {
+				if firstErr == nil {
+					firstErr = err
+				}
+			} else {
+				c.untrackWorkspacePath(ctx, ws.Path)
+			}
+		}
+	}
+	return firstErr
+}
+
+// trackSessionWorkspace records a PerSession workspace under the trusted
+// session key from ctx so CleanupSession can destroy it later.
+func (c *CodeExecutor) trackSessionWorkspace(
+	ctx context.Context, execID string, ws codeexecutor.Workspace,
+) {
+	if c.workspacePersistence != WorkspacePersistencePerSession {
+		return
+	}
+	sessionKey := executionIDFromContext(ctx)
+	if sessionKey == "" || strings.TrimSpace(execID) == "" || ws.Path == "" {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.sessionWorkspaces == nil {
+		c.sessionWorkspaces = make(map[string]map[string]codeexecutor.Workspace)
+	}
+	m := c.sessionWorkspaces[sessionKey]
+	if m == nil {
+		m = make(map[string]codeexecutor.Workspace)
+		c.sessionWorkspaces[sessionKey] = m
+	}
+	m[execID] = ws
+}
+
+// untrackSessionExecID drops one tracked exec key after successful cleanup.
+func (c *CodeExecutor) untrackSessionExecID(sessionKey, execID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.sessionWorkspaces == nil {
+		return
+	}
+	m := c.sessionWorkspaces[sessionKey]
+	if m == nil {
+		return
+	}
+	delete(m, execID)
+	if len(m) == 0 {
+		delete(c.sessionWorkspaces, sessionKey)
+	}
+}
+
+// untrackWorkspacePath drops every tracking entry whose path matches.
+func (c *CodeExecutor) untrackWorkspacePath(ctx context.Context, path string) {
+	if path == "" {
+		return
+	}
+	sessionKey := executionIDFromContext(ctx)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.sessionWorkspaces == nil {
+		return
+	}
+	if sessionKey != "" {
+		if m := c.sessionWorkspaces[sessionKey]; m != nil {
+			for id, ws := range m {
+				if ws.Path == path {
+					delete(m, id)
+				}
+			}
+			if len(m) == 0 {
+				delete(c.sessionWorkspaces, sessionKey)
+			}
+		}
+		return
+	}
 }
 
 // PutFiles writes files into the sandbox workspace.
@@ -739,12 +938,25 @@ func (c *CodeExecutor) CollectOutputs(
 }
 
 // ExecuteInline writes inline code blocks into the sandbox and runs
-// them.
+// them. execID is resolved with the same session-namespacing rules as
+// ExecuteCode (see resolveWorkspaceExecID).
 func (c *CodeExecutor) ExecuteInline(
 	ctx context.Context, execID string,
 	blocks []codeexecutor.CodeBlock, timeout time.Duration,
 ) (codeexecutor.RunResult, error) {
-	return c.ensureRuntime().ExecuteInline(ctx, execID, blocks, timeout)
+	id, err := c.resolveWorkspaceExecID(ctx, execID)
+	if err != nil {
+		return codeexecutor.RunResult{}, err
+	}
+	res, err := c.ensureRuntime().ExecuteInline(ctx, id, blocks, timeout)
+	// Track only after the runtime path has successfully created/reused the
+	// workspace (ExecuteInline returns err before create completes on failure).
+	if err == nil && c.workspacePersistence == WorkspacePersistencePerSession {
+		if ws, rerr := c.ensureRuntime().resolvePerSessionWorkspace(id); rerr == nil {
+			c.trackSessionWorkspace(ctx, id, ws)
+		}
+	}
+	return res, err
 }
 
 // Engine exposes the sandbox-backed runtime as an Engine for skill
@@ -763,8 +975,11 @@ func (c *CodeExecutor) ExecuteInline(
 // outer shell does not inherit host env.
 func (c *CodeExecutor) Engine() codeexecutor.Engine {
 	rt := c.ensureRuntime()
+	// Manager is namespacedManager so Engine().Manager().CreateWorkspace
+	// applies the same INV-ISO resolve + INV-LIFE track as CodeExecutor.
+	// FS/Runner stay on the raw runtime (no ID keying).
 	return codeexecutor.NewEngineWithCapabilities(
-		rt, rt, rt,
+		&namespacedManager{ce: c}, rt, rt,
 		codeexecutor.Capabilities{
 			// SupportsCleanEnv is false: OpenSandbox execd launches
 			// commands as shell -c with env merged from the sandbox
@@ -775,9 +990,81 @@ func (c *CodeExecutor) Engine() codeexecutor.Engine {
 			// Explicitly unsupported: StageInputs/CollectOutputs are
 			// v1 stubs. gatingFS returns ErrDeclarativeIONotSupported
 			// so skill callers can detect the missing capability.
-			SupportsDeclarativeIO: codeexecutor.SupportsDeclarativeIOFalse,
+			SupportsDeclarativeIO: codeexecutor.SupportsDeclarativeIOFalse(),
 		},
 	)
+}
+
+// namespacedManager routes Engine Manager calls through CodeExecutor so
+// CreateWorkspace cannot bypass session namespacing or session tracking.
+type namespacedManager struct {
+	ce *CodeExecutor
+}
+
+func (m *namespacedManager) CreateWorkspace(
+	ctx context.Context, execID string, pol codeexecutor.WorkspacePolicy,
+) (codeexecutor.Workspace, error) {
+	return m.ce.CreateWorkspace(ctx, execID, pol)
+}
+
+func (m *namespacedManager) Cleanup(
+	ctx context.Context, ws codeexecutor.Workspace,
+) error {
+	return m.ce.Cleanup(ctx, ws)
+}
+
+// resolveWorkspaceExecID maps (ctx session, optional explicit ID) to the
+// stable key passed to CreateWorkspace.
+//
+// PerSession (INV-ISO):
+//   - session present + empty explicit -> session key
+//   - session present + non-empty explicit -> namespace(session, explicit)
+//     so model-supplied execution_id cannot collide across sessions
+//   - no session + empty explicit -> error (no random key in PerSession)
+//   - no session + non-empty explicit -> explicit (trusted caller)
+//
+// PerTurn:
+//   - non-empty explicit -> explicit
+//   - else session key if present
+//   - else random exec_* id
+func (c *CodeExecutor) resolveWorkspaceExecID(
+	ctx context.Context, explicit string,
+) (string, error) {
+	explicit = strings.TrimSpace(explicit)
+	sessionKey := executionIDFromContext(ctx)
+
+	if c.workspacePersistence == WorkspacePersistencePerSession {
+		if sessionKey != "" {
+			if explicit != "" {
+				// Registry/skill may already pass the session key as execID.
+				// Do not double-namespace that trusted session identity.
+				if explicit == sessionKey {
+					return sessionKey, nil
+				}
+				return namespaceExecutionID(sessionKey, explicit), nil
+			}
+			return sessionKey, nil
+		}
+		if explicit == "" {
+			return "", errors.New(
+				"opensandbox: ExecutionID must not be empty when using " +
+					"WorkspacePersistencePerSession; provide a stable " +
+					"session-derived ID, invoke with a session in context " +
+					"so the workspace can be reused across turns, or " +
+					"switch to PerTurn mode (the default) which does not " +
+					"require a stable ID",
+			)
+		}
+		return explicit, nil
+	}
+
+	if explicit != "" {
+		return explicit, nil
+	}
+	if sessionKey != "" {
+		return sessionKey, nil
+	}
+	return fmt.Sprintf("exec_%d", time.Now().UnixNano()), nil
 }
 
 // executionIDFromContext builds a stable, injective workspace key from
@@ -806,6 +1093,14 @@ func encodeSessionWorkspaceKey(app, user, id string) string {
 	// Parsing is: for each field, read decimal length, ':', then N bytes.
 	return fmt.Sprintf("%d:%s/%d:%s/%d:%s",
 		len(app), app, len(user), user, len(id), id)
+}
+
+// namespaceExecutionID binds an untrusted execution label under a
+// trusted session key so two sessions cannot share a workspace by
+// supplying the same model execution_id.
+func namespaceExecutionID(sessionKey, label string) string {
+	return fmt.Sprintf("%d:%s|%d:%s",
+		len(sessionKey), sessionKey, len(label), label)
 }
 
 // killTimeout bounds the Kill call in Close so that a sandbox whose

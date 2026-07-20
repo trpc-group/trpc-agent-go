@@ -182,22 +182,28 @@ type Capabilities struct {
 	// PutFiles/Collect. true means the backend implements the full
 	// surface and no wrapper is installed.
 	//
-	// Use SupportsDeclarativeIOTrue / SupportsDeclarativeIOFalse (or
+	// Use SupportsDeclarativeIOTrue() / SupportsDeclarativeIOFalse (or
 	// BoolPtr) rather than a bare bool so the zero value of
 	// Capabilities preserves historical unknown behaviour for
 	// external NewEngineWithCapabilities callers.
 	SupportsDeclarativeIO *bool
 }
 
-// BoolPtr returns a pointer to b. Convenience for capability fields.
-func BoolPtr(b bool) *bool { return &b }
+// BoolPtr returns a pointer to a fresh copy of b. Convenience for
+// capability fields. Each call allocates so callers do not share storage.
+func BoolPtr(b bool) *bool {
+	v := b
+	return &v
+}
 
-// SupportsDeclarativeIOTrue / SupportsDeclarativeIOFalse are the
-// audited true/false values for Capabilities.SupportsDeclarativeIO.
-var (
-	SupportsDeclarativeIOTrue  = BoolPtr(true)
-	SupportsDeclarativeIOFalse = BoolPtr(false)
-)
+// SupportsDeclarativeIOTrue() / SupportsDeclarativeIOFalse() return audited
+// true/false values for Capabilities.SupportsDeclarativeIO.
+//
+// INV-CAP: these are functions that allocate a fresh *bool on each call
+// so mutating the returned pointer (or Describe()'s copy) cannot change
+// other engines or later constructions.
+func SupportsDeclarativeIOTrue() *bool  { return BoolPtr(true) }
+func SupportsDeclarativeIOFalse() *bool { return BoolPtr(false) }
 
 // ErrDeclarativeIONotSupported is returned by the gatingFS wrapper
 // when a caller invokes StageInputs or CollectOutputs on an engine
@@ -236,7 +242,14 @@ type stdEngine struct {
 func (e *stdEngine) Manager() WorkspaceManager { return e.m }
 func (e *stdEngine) FS() WorkspaceFS           { return e.f }
 func (e *stdEngine) Runner() ProgramRunner     { return e.r }
-func (e *stdEngine) Describe() Capabilities    { return e.c }
+func (e *stdEngine) Describe() Capabilities {
+	c := e.c
+	if c.SupportsDeclarativeIO != nil {
+		v := *c.SupportsDeclarativeIO
+		c.SupportsDeclarativeIO = &v
+	}
+	return c
+}
 
 // gatingFS wraps a WorkspaceFS and rejects StageInputs/CollectOutputs
 // with ErrDeclarativeIONotSupported. It is installed by
@@ -297,6 +310,11 @@ func NewEngineWithCapabilities(
 	r ProgramRunner,
 	c Capabilities,
 ) Engine {
+	// Defensive copy: never retain caller-owned *bool that could be mutated.
+	if c.SupportsDeclarativeIO != nil {
+		v := *c.SupportsDeclarativeIO
+		c.SupportsDeclarativeIO = &v
+	}
 	if c.SupportsDeclarativeIO != nil && !*c.SupportsDeclarativeIO {
 		f = &gatingFS{inner: f}
 	}

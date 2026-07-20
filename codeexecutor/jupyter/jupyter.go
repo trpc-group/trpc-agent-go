@@ -316,7 +316,7 @@ func (c *CodeExecutor) Engine() codeexecutor.Engine {
 	rt := c.ensureWS()
 	return codeexecutor.NewEngineWithCapabilities(
 		rt, rt, rt,
-		codeexecutor.Capabilities{SupportsDeclarativeIO: codeexecutor.SupportsDeclarativeIOTrue},
+		codeexecutor.Capabilities{SupportsDeclarativeIO: codeexecutor.SupportsDeclarativeIOTrue()},
 	)
 }
 
