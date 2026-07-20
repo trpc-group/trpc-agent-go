@@ -1407,15 +1407,39 @@ type invocationStateDeltaProvider interface {
 	) map[string][]byte
 }
 
+// firstCapabilityTool returns the outermost tool in tl's wrapper chain for which
+// match returns true, honoring an intermediate transparent wrapper's own
+// capability instead of skipping straight to the innermost tool. Returns nil if
+// none matches.
+func firstCapabilityTool(tl tool.Tool, match func(tool.Tool) bool) tool.Tool {
+	var found tool.Tool
+	itool.WalkToolCapabilities(tl, func(cur tool.Tool) bool {
+		if match(cur) {
+			found = cur
+			return true
+		}
+		return false
+	})
+	return found
+}
+
+// resolveStateDeltaProvider returns the outermost tool in the wrapper chain that
+// contributes a state delta, so a stateful transparent wrapper's own delta is not
+// skipped by unwrapping straight to the innermost tool.
+func resolveStateDeltaProvider(tl tool.Tool) tool.Tool {
+	return firstCapabilityTool(tl, func(cur tool.Tool) bool {
+		if _, ok := cur.(invocationStateDeltaProvider); ok {
+			return true
+		}
+		_, ok := cur.(stateDeltaProvider)
+		return ok
+	})
+}
+
 // toolProvidesStateDelta reports whether the tool (through the wrapper chain)
 // contributes a state delta from its result content.
 func toolProvidesStateDelta(tl tool.Tool) bool {
-	semantic := itool.ResolveSemantic(tl)
-	if _, ok := semantic.(invocationStateDeltaProvider); ok {
-		return true
-	}
-	_, ok := semantic.(stateDeltaProvider)
-	return ok
+	return resolveStateDeltaProvider(tl) != nil
 }
 
 // marshalStateDeltaContent serializes result to the JSON bytes used as the
@@ -1454,7 +1478,7 @@ func (p *FunctionCallResponseProcessor) attachStateDelta(
 	toolCallID := choice.Message.ToolID
 
 	var delta map[string][]byte
-	providerTool := itool.ResolveSemantic(tl)
+	providerTool := resolveStateDeltaProvider(tl)
 	if isdp, ok := providerTool.(invocationStateDeltaProvider); ok {
 		delta = isdp.StateDeltaForInvocation(inv, toolCallID, args, b)
 	} else if sdp, ok := providerTool.(stateDeltaProvider); ok {
@@ -2838,12 +2862,16 @@ func streamableTool(t tool.Tool) (tool.StreamableTool, bool) {
 	if !ok {
 		return nil, false
 	}
-	probe := itool.ResolveSemantic(t)
-	if _, ok := probe.(tool.StreamableTool); !ok {
+	if _, ok := itool.ResolveSemantic(t).(tool.StreamableTool); !ok {
 		return nil, false
 	}
-	// Check if the tool has a stream preference and if it is enabled.
-	if pref, ok := probe.(streamInnerPreference); ok && !pref.StreamInner() {
+	// Check the stream preference outermost-first, so an intermediate transparent
+	// wrapper's preference is honored; it falls through to the inner tool's
+	// preference otherwise.
+	if pref := firstCapabilityTool(t, func(cur tool.Tool) bool {
+		_, ok := cur.(streamInnerPreference)
+		return ok
+	}); pref != nil && !pref.(streamInnerPreference).StreamInner() {
 		return nil, false
 	}
 	return streamable, true
@@ -3013,19 +3041,25 @@ func shouldRequestStructuredStreamErrors(tl tool.StreamableTool) bool {
 	if tl == nil {
 		return false
 	}
-	pref, ok := itool.ResolveSemantic(tl).(structuredStreamErrorOptIn)
-	return ok && pref.TRPCAgentGoStructuredStreamErrorsOptIn()
+	t := firstCapabilityTool(tl, func(cur tool.Tool) bool {
+		_, ok := cur.(structuredStreamErrorOptIn)
+		return ok
+	})
+	return t != nil && t.(structuredStreamErrorOptIn).TRPCAgentGoStructuredStreamErrorsOptIn()
 }
 
 func innerTextModeForTool(tl tool.StreamableTool) tool.InnerTextMode {
 	if tl == nil {
 		return tool.InnerTextModeInclude
 	}
-	pref, ok := itool.ResolveSemantic(tl).(innerTextModePreference)
-	if !ok {
+	t := firstCapabilityTool(tl, func(cur tool.Tool) bool {
+		_, ok := cur.(innerTextModePreference)
+		return ok
+	})
+	if t == nil {
 		return tool.InnerTextModeInclude
 	}
-	return pref.InnerTextMode()
+	return t.(innerTextModePreference).InnerTextMode()
 }
 
 // executeStreamableTool executes a streamable tool.
@@ -3506,10 +3540,16 @@ func markSkipSummarization(ev *event.Event) {
 }
 
 func toolPrefersSkipSummarization(tl tool.Tool) bool {
-	if skipper, ok := itool.ResolveSemantic(tl).(summarizationSkipper); ok {
-		return skipper.SkipSummarization()
+	// Outermost-first: an intermediate transparent wrapper's own preference is
+	// honored rather than skipped by unwrapping to the innermost tool.
+	t := firstCapabilityTool(tl, func(cur tool.Tool) bool {
+		_, ok := cur.(summarizationSkipper)
+		return ok
+	})
+	if t == nil {
+		return false
 	}
-	return false
+	return t.(summarizationSkipper).SkipSummarization()
 }
 
 // findCompatibleTool attempts to map a requested (missing) tool name to a compatible tool.

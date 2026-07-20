@@ -205,17 +205,22 @@ func ResolvePermissionChecker(t tool.Tool) (tool.PermissionChecker, error) {
 	return nil, ErrToolWrapperTraversalExhausted
 }
 
-// walkToolCapabilities visits the tools in t's wrapper chain from outermost to
+// WalkToolCapabilities visits the tools in t's wrapper chain from outermost to
 // innermost, honoring a capability declared by an intermediate transparent
 // wrapper before the wrapped tool (outermost-wins). Framework structural
 // wrappers (declaration overlays and NamedTool) are unwrapped without being
 // treated as capability sources, since they only delegate. visit is called until
 // it returns true or the chain ends; the return reports whether traversal hit the
 // depth bound (a cyclic or over-deep chain) without terminating, so callers can
-// fail closed. This mirrors resultcodec.codecTool's walkBase so capability
-// resolution is consistent whether a tool is wrapped by NamedTool or the codec.
-func walkToolCapabilities(t tool.Tool, visit func(tool.Tool) bool) (exhausted bool) {
-	for i := 0; i < maxToolUnwrapDepth && t != nil; i++ {
+// fail closed. A clean end (a nil tool, including a transparent wrapper that
+// unwraps to nil, or a base tool with no further wrapper) reports exhausted=false.
+// This mirrors resultcodec.codecTool's walkBase so capability resolution is
+// consistent whether a tool is wrapped by NamedTool or the codec.
+func WalkToolCapabilities(t tool.Tool, visit func(tool.Tool) bool) (exhausted bool) {
+	for i := 0; i < maxToolUnwrapDepth; i++ {
+		if t == nil {
+			return false
+		}
 		switch cur := t.(type) {
 		case declarationWrapper:
 			t = cur.originalTool()
@@ -251,7 +256,7 @@ func ResolveMetadata(t tool.Tool) tool.ToolMetadata {
 		haveConcurrency bool
 		foundProvider   bool
 	)
-	exhausted := walkToolCapabilities(t, func(cur tool.Tool) bool {
+	exhausted := WalkToolCapabilities(t, func(cur tool.Tool) bool {
 		if !haveConcurrency {
 			if aware, ok := cur.(tool.ConcurrencyAware); ok {
 				concurrency = aware.IsConcurrencySafe()
@@ -418,7 +423,7 @@ func (t *NamedTool) IsConcurrencySafe() bool {
 // wrapper chain, so the first DeferredTool declaration wins.
 func (t *NamedTool) ShouldDefer(ctx context.Context) bool {
 	deferred := false
-	walkToolCapabilities(t.original, func(cur tool.Tool) bool {
+	WalkToolCapabilities(t.original, func(cur tool.Tool) bool {
 		if d, ok := cur.(tool.DeferredTool); ok {
 			deferred = d.ShouldDefer(ctx)
 			return true
@@ -479,7 +484,7 @@ func (t *NamedTool) StreamableCall(ctx context.Context, jsonArgs []byte) (*tool.
 func (t *NamedTool) SkipSummarization() bool {
 	type skipper interface{ SkipSummarization() bool }
 	skip := false
-	walkToolCapabilities(t.original, func(cur tool.Tool) bool {
+	WalkToolCapabilities(t.original, func(cur tool.Tool) bool {
 		if s, ok := cur.(skipper); ok {
 			skip = s.SkipSummarization()
 			return true

@@ -374,3 +374,35 @@ func TestResolveMetadata_OuterWrapperOverridesDestructive(t *testing.T) {
 		t.Fatal("NamedTool must honor the outer Destructive=true")
 	}
 }
+
+// nilUnwrapTool is a transparent wrapper that unwraps to nil (a clean end).
+type nilUnwrapTool struct {
+	decl *tool.Declaration
+}
+
+func (n *nilUnwrapTool) Declaration() *tool.Declaration            { return n.decl }
+func (n *nilUnwrapTool) Call(context.Context, []byte) (any, error) { return nil, nil }
+func (n *nilUnwrapTool) TransparentUnwrap() tool.Tool              { return nil }
+
+func TestResolveMetadata_NilTerminationReturnsZero(t *testing.T) {
+	// A nil tool, or a transparent wrapper that unwraps to nil, is a clean end,
+	// not depth exhaustion: metadata must be the benign zero value, not the
+	// conservative fail-closed flags.
+	if md := ResolveMetadata(nil); md != (tool.ToolMetadata{}) {
+		t.Fatalf("ResolveMetadata(nil) must be zero, got %+v", md)
+	}
+	w := &nilUnwrapTool{decl: &tool.Declaration{Name: "n"}}
+	if md := ResolveMetadata(w); md != (tool.ToolMetadata{}) {
+		t.Fatalf("ResolveMetadata(nil-unwrap) must be zero, got %+v", md)
+	}
+}
+
+func TestResolveMetadata_CyclicFailsClosed(t *testing.T) {
+	// A cyclic chain (depth exhaustion) must still fail closed with conservative
+	// flags, distinct from the clean nil termination above.
+	s := &rcSelfUnwrap{name: "cyclic"}
+	md := ResolveMetadata(s)
+	if !md.Destructive || !md.OpenWorld {
+		t.Fatalf("cyclic chain must fail closed, got %+v", md)
+	}
+}

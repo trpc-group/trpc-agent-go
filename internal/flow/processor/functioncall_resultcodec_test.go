@@ -787,6 +787,72 @@ func TestCheckToolPermission_MetadataResolvedOutermostWins(t *testing.T) {
 		"permission policy must see the outer wrapper's Destructive=true, not the inner value")
 }
 
+// statefulTransparentWrapper provides its own state delta while delegating unwrap
+// to a plain (non-stateful) inner tool. It reproduces the reverse of the earlier
+// case: a stateful wrapper over a plain inner, whose delta must not be skipped.
+type statefulTransparentWrapper struct {
+	inner tool.Tool
+	key   string
+	value string
+}
+
+func (w *statefulTransparentWrapper) Declaration() *tool.Declaration { return w.inner.Declaration() }
+func (w *statefulTransparentWrapper) Call(ctx context.Context, args []byte) (any, error) {
+	return w.inner.(tool.CallableTool).Call(ctx, args)
+}
+func (w *statefulTransparentWrapper) TransparentUnwrap() tool.Tool { return w.inner }
+func (w *statefulTransparentWrapper) StateDelta(
+	_ string, _ []byte, _ []byte,
+) map[string][]byte {
+	return map[string][]byte{w.key: []byte(w.value)}
+}
+
+func TestExecuteToolCall_StatefulTransparentWrapperDeltaNotSkipped(t *testing.T) {
+	// A stateful transparent wrapper over a plain inner tool: the wrapper's own
+	// StateDelta must be applied to the event, not skipped by unwrapping straight
+	// to the plain inner (which would silently drop the state update).
+	inner := &recordingCallableTool{declaration: &tool.Declaration{Name: "plain"}}
+	wrapper := &statefulTransparentWrapper{inner: inner, key: "wkey", value: "wval"}
+	tools := map[string]tool.Tool{"plain": wrapper}
+	p := NewFunctionCallResponseProcessor(false, nil)
+	invocation := agent.NewInvocation()
+	invocation.Session = session.NewSession("app", "user", "sess")
+	tc := model.ToolCall{
+		ID:       "c1",
+		Function: model.FunctionDefinitionParam{Name: "plain", Arguments: []byte(`{}`)},
+	}
+	ev, err := p.executeSingleToolCallSequential(
+		context.Background(), invocation, &model.Response{}, tools, make(chan *event.Event, 8), 0, tc,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, ev)
+	require.Equal(t, "wval", string(ev.StateDelta["wkey"]),
+		"the stateful transparent wrapper's StateDelta must be applied, not skipped")
+}
+
+// skipSummTransparentWrapper declares a skip-summarization preference while
+// delegating unwrap to a plain inner tool.
+type skipSummTransparentWrapper struct {
+	inner tool.Tool
+}
+
+func (w *skipSummTransparentWrapper) Declaration() *tool.Declaration { return w.inner.Declaration() }
+func (w *skipSummTransparentWrapper) Call(ctx context.Context, args []byte) (any, error) {
+	return w.inner.(tool.CallableTool).Call(ctx, args)
+}
+func (w *skipSummTransparentWrapper) TransparentUnwrap() tool.Tool { return w.inner }
+func (w *skipSummTransparentWrapper) SkipSummarization() bool      { return true }
+
+func TestToolPrefersSkipSummarization_OutermostWrapperWins(t *testing.T) {
+	// A transparent wrapper's own skip-summarization preference must be honored
+	// even though the plain inner tool has none.
+	inner := &recordingCallableTool{declaration: &tool.Declaration{Name: "plain"}}
+	wrapper := &skipSummTransparentWrapper{inner: inner}
+	if !toolPrefersSkipSummarization(wrapper) {
+		t.Fatal("outer wrapper's SkipSummarization preference must be honored")
+	}
+}
+
 func TestToolCapabilityPollutesAutoMemory_ShortChainNotPolluting(t *testing.T) {
 	// A fully traversable chain with no pollution source must not be marked
 	// polluting; fail-closed must only trigger on cycles/exhaustion.
