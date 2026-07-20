@@ -80,6 +80,51 @@ host_exec:
 	}
 }
 
+// TestMergePolicyListsAndScalars exercises the per-section merge helpers
+// introduced when mergePolicy was decomposed to satisfy gocyclo: lists
+// present in the loaded policy replace the defaults (and an explicit
+// empty list clears them), scalars replace only when set, and untouched
+// sections keep their defaults.
+func TestMergePolicyListsAndScalars(t *testing.T) {
+	loaded := Policy{
+		DeniedCommands:            []string{"nc"}, // replaces default
+		DeniedPaths:               []string{},     // explicit clear
+		Network:                   NetworkPolicy{AllowedHosts: []string{"proxy.golang.org"}},
+		Limits:                    LimitsPolicy{MaxSleepSec: 5},
+		Env:                       EnvPolicy{AllowedNames: []string{"PATH"}},
+		DependencyInstallDecision: DecisionDeny,
+	}
+	out := mergePolicy(DefaultPolicy(), loaded)
+
+	if len(out.DeniedCommands) != 1 || out.DeniedCommands[0] != "nc" {
+		t.Errorf("denied_commands not replaced: %v", out.DeniedCommands)
+	}
+	if len(out.DeniedPaths) != 0 {
+		t.Errorf("explicit empty denied_paths should clear defaults, got %v", out.DeniedPaths)
+	}
+	if len(out.Network.AllowedHosts) != 1 {
+		t.Errorf("network.allowed_hosts not merged: %v", out.Network.AllowedHosts)
+	}
+	// Network.Decision was not set in loaded, so the default (deny) stays.
+	if out.Network.Decision != DecisionDeny {
+		t.Errorf("network.decision default not preserved: %q", out.Network.Decision)
+	}
+	// A scalar that was set replaces; one that was not keeps the default.
+	if out.Limits.MaxSleepSec != 5 {
+		t.Errorf("limits.max_sleep_sec not merged: %d", out.Limits.MaxSleepSec)
+	}
+	if out.Limits.MaxTimeoutSec != DefaultPolicy().Limits.MaxTimeoutSec {
+		t.Errorf("limits.max_timeout_sec default not preserved: %d", out.Limits.MaxTimeoutSec)
+	}
+	if out.DependencyInstallDecision != DecisionDeny {
+		t.Errorf("dependency_install_decision not merged: %q", out.DependencyInstallDecision)
+	}
+	// Env denied names untouched -> default preserved.
+	if len(out.Env.DeniedNames) == 0 {
+		t.Error("env.denied_names default should be preserved when not overridden")
+	}
+}
+
 func TestLoadPolicyJSON(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "policy.json")

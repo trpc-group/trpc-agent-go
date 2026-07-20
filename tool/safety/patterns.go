@@ -132,32 +132,65 @@ func isCatastrophicTarget(t string) bool {
 // whitespace-split argv starting at the "rm" token. It is a best-effort
 // tokeniser for text that never reaches shellsafe (non-shell code
 // blocks, raw arguments); shell command lines and shell code blocks are
-// parsed structurally instead. Quotes and shell operators are treated
-// as separators so "os.system('rm -r -f /')" yields ["rm","-r","-f","/"].
+// parsed structurally instead.
+//
+// Command boundaries (`;`, `|`, `&`, backtick, quotes and parentheses)
+// are emitted as standalone separator tokens so an rm segment ends at
+// the next command: "rm -rf ./build; ls /usr" no longer folds "/usr"
+// into the rm operands, while "os.system('rm -r -f /')" still yields
+// ["rm","-r","-f","/"].
 func rmSegments(text string) [][]string {
-	fields := strings.FieldsFunc(text, func(r rune) bool {
-		switch r {
-		case ' ', '\t', '\n', '\r', '\'', '"', '(', ')', ',', ';', '|', '&', '`':
-			return true
-		}
-		return false
-	})
+	toks := tokenizeWithBoundaries(text)
 	var segs [][]string
-	for i := 0; i < len(fields); i++ {
-		if lastPathSegment(strings.ToLower(fields[i])) != "rm" {
+	for i := 0; i < len(toks); i++ {
+		if toks[i] == rmBoundaryToken || lastPathSegment(strings.ToLower(toks[i])) != "rm" {
 			continue
 		}
 		seg := []string{"rm"}
-		for j := i + 1; j < len(fields); j++ {
-			// Stop at the next obvious command boundary token.
-			if lastPathSegment(strings.ToLower(fields[j])) == "rm" {
+		for j := i + 1; j < len(toks); j++ {
+			// Stop at a command boundary or the start of another rm.
+			if toks[j] == rmBoundaryToken ||
+				lastPathSegment(strings.ToLower(toks[j])) == "rm" {
 				break
 			}
-			seg = append(seg, fields[j])
+			seg = append(seg, toks[j])
 		}
 		segs = append(segs, seg)
 	}
 	return segs
+}
+
+// rmBoundaryToken is a sentinel emitted by tokenizeWithBoundaries where
+// a shell command separator was found. It cannot collide with a real
+// argv token because it contains characters a shell word never yields.
+const rmBoundaryToken = "\x00boundary\x00"
+
+// tokenizeWithBoundaries splits text on whitespace and quotes/parens
+// like the previous tokeniser, but turns command separators (`;`, `|`,
+// `&`, backtick) into an explicit boundary sentinel instead of a plain
+// separator, so callers can tell "rm; ls" from "rm ls".
+func tokenizeWithBoundaries(text string) []string {
+	var toks []string
+	var cur strings.Builder
+	flush := func() {
+		if cur.Len() > 0 {
+			toks = append(toks, cur.String())
+			cur.Reset()
+		}
+	}
+	for _, r := range text {
+		switch r {
+		case ';', '|', '&', '`':
+			flush()
+			toks = append(toks, rmBoundaryToken)
+		case ' ', '\t', '\n', '\r', '\'', '"', '(', ')', ',':
+			flush()
+		default:
+			cur.WriteRune(r)
+		}
+	}
+	flush()
+	return toks
 }
 
 // collapseSlashes replaces runs of "/" with a single "/", so redundant

@@ -269,72 +269,88 @@ func ParsePolicy(raw []byte, ext string) (Policy, error) {
 	return merged, nil
 }
 
-// mergePolicy overlays loaded onto base.
+// mergePolicy overlays loaded onto base. List fields replace the base
+// when present; scalar fields replace when non-zero. The per-section
+// helpers keep each field's merge rule in one place and keep this
+// function's cyclomatic complexity within the linter budget.
 func mergePolicy(base, loaded Policy) Policy {
 	out := base
 	if loaded.Version != 0 {
 		out.Version = loaded.Version
 	}
-	if loaded.AllowedCommands != nil {
-		out.AllowedCommands = loaded.AllowedCommands
-	}
-	if loaded.DeniedCommands != nil {
-		out.DeniedCommands = loaded.DeniedCommands
-	}
-	if loaded.DeniedPaths != nil {
-		out.DeniedPaths = loaded.DeniedPaths
-	}
-	if loaded.DestructivePatterns != nil {
-		out.DestructivePatterns = loaded.DestructivePatterns
-	}
-	if loaded.Network.AllowedHosts != nil {
-		out.Network.AllowedHosts = loaded.Network.AllowedHosts
-	}
-	if loaded.Network.EgressCommands != nil {
-		out.Network.EgressCommands = loaded.Network.EgressCommands
-	}
-	if loaded.Network.Decision != "" {
-		out.Network.Decision = loaded.Network.Decision
-	}
-	if loaded.Limits.MaxTimeoutSec != 0 {
-		out.Limits.MaxTimeoutSec = loaded.Limits.MaxTimeoutSec
-	}
-	if loaded.Limits.MaxOutputBytes != 0 {
-		out.Limits.MaxOutputBytes = loaded.Limits.MaxOutputBytes
-	}
-	if loaded.Limits.MaxSleepSec != 0 {
-		out.Limits.MaxSleepSec = loaded.Limits.MaxSleepSec
-	}
-	if loaded.Limits.MaxPipelineSegments != 0 {
-		out.Limits.MaxPipelineSegments = loaded.Limits.MaxPipelineSegments
-	}
-	if loaded.Env.AllowedNames != nil {
-		out.Env.AllowedNames = loaded.Env.AllowedNames
-	}
-	if loaded.Env.DeniedNames != nil {
-		out.Env.DeniedNames = loaded.Env.DeniedNames
-	}
-	// Merge each HostExec field independently so a policy that only sets
-	// allow_background/allow_pty (without a decision) is not silently dropped.
-	if loaded.HostExec.AllowBackground {
-		out.HostExec.AllowBackground = true
-	}
-	if loaded.HostExec.AllowPTY {
-		out.HostExec.AllowPTY = true
-	}
-	if loaded.HostExec.Decision != "" {
-		out.HostExec.Decision = loaded.HostExec.Decision
-	}
-	if loaded.DependencyInstallDecision != "" {
-		out.DependencyInstallDecision = loaded.DependencyInstallDecision
-	}
-	if loaded.ParseErrorDecision != "" {
-		out.ParseErrorDecision = loaded.ParseErrorDecision
-	}
+	out.AllowedCommands = mergeList(out.AllowedCommands, loaded.AllowedCommands)
+	out.DeniedCommands = mergeList(out.DeniedCommands, loaded.DeniedCommands)
+	out.DeniedPaths = mergeList(out.DeniedPaths, loaded.DeniedPaths)
+	out.DestructivePatterns = mergeList(out.DestructivePatterns, loaded.DestructivePatterns)
+	out.Network = mergeNetwork(out.Network, loaded.Network)
+	out.Limits = mergeLimits(out.Limits, loaded.Limits)
+	out.Env = mergeEnv(out.Env, loaded.Env)
+	out.HostExec = mergeHostExec(out.HostExec, loaded.HostExec)
+	out.DependencyInstallDecision = firstDecision(loaded.DependencyInstallDecision, out.DependencyInstallDecision)
+	out.ParseErrorDecision = firstDecision(loaded.ParseErrorDecision, out.ParseErrorDecision)
 	if loaded.RedactSecrets != nil {
 		out.RedactSecrets = loaded.RedactSecrets
 	}
 	return out
+}
+
+// mergeList returns loaded when it is present (non-nil), else base. A
+// non-nil empty slice deliberately clears the default.
+func mergeList(base, loaded []string) []string {
+	if loaded != nil {
+		return loaded
+	}
+	return base
+}
+
+// firstDecision returns loaded when set, else base.
+func firstDecision(loaded, base Decision) Decision {
+	if loaded != "" {
+		return loaded
+	}
+	return base
+}
+
+func mergeNetwork(base, loaded NetworkPolicy) NetworkPolicy {
+	base.AllowedHosts = mergeList(base.AllowedHosts, loaded.AllowedHosts)
+	base.EgressCommands = mergeList(base.EgressCommands, loaded.EgressCommands)
+	base.Decision = firstDecision(loaded.Decision, base.Decision)
+	return base
+}
+
+func mergeLimits(base, loaded LimitsPolicy) LimitsPolicy {
+	if loaded.MaxTimeoutSec != 0 {
+		base.MaxTimeoutSec = loaded.MaxTimeoutSec
+	}
+	if loaded.MaxOutputBytes != 0 {
+		base.MaxOutputBytes = loaded.MaxOutputBytes
+	}
+	if loaded.MaxSleepSec != 0 {
+		base.MaxSleepSec = loaded.MaxSleepSec
+	}
+	if loaded.MaxPipelineSegments != 0 {
+		base.MaxPipelineSegments = loaded.MaxPipelineSegments
+	}
+	return base
+}
+
+func mergeEnv(base, loaded EnvPolicy) EnvPolicy {
+	base.AllowedNames = mergeList(base.AllowedNames, loaded.AllowedNames)
+	base.DeniedNames = mergeList(base.DeniedNames, loaded.DeniedNames)
+	return base
+}
+
+// mergeHostExec merges each field independently so a policy that only
+// sets allow_background/allow_pty (without a decision) is not dropped.
+func mergeHostExec(base, loaded HostExecPolicy) HostExecPolicy {
+	if loaded.AllowBackground {
+		base.AllowBackground = true
+	}
+	if loaded.AllowPTY {
+		base.AllowPTY = true
+	}
+	base.Decision = firstDecision(loaded.Decision, base.Decision)
+	return base
 }
 
 // Validate rejects policies that would weaken the fail-closed

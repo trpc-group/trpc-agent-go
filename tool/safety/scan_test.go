@@ -396,6 +396,43 @@ func TestDangerousRmFlagForms(t *testing.T) {
 	}
 }
 
+// TestRmSegmentsRespectShellBoundaries covers the CodeRabbit follow-up:
+// the free-text rm tokeniser must stop at a command boundary so a system
+// path belonging to the *next* command is not folded into a scoped rm
+// and mis-flagged. The catastrophic in-code-block form stays denied.
+func TestRmSegmentsRespectShellBoundaries(t *testing.T) {
+	pol := testPolicy()
+
+	// A scoped delete followed by an unrelated command touching /usr must
+	// not be treated as "rm ... /usr". This is a non-shell code block, so
+	// it is only reachable through the raw-text rm tokeniser.
+	safe := Scan(Request{
+		ToolName: "execute_code", Backend: BackendCodeExec,
+		CodeBlocks: []CodeBlock{{Language: "python", Code: "import os\nos.system('rm -rf ./build; ls /usr')"}},
+	}, pol)
+	if hasRule(safe, RuleDangerousCommand) {
+		t.Errorf("scoped rm before `; ls /usr` must not flag dangerous_command; got %v", safe.RuleIDs())
+	}
+
+	// The genuinely catastrophic form is still denied.
+	danger := Scan(Request{
+		ToolName: "execute_code", Backend: BackendCodeExec,
+		CodeBlocks: []CodeBlock{{Language: "python", Code: "import os\nos.system('rm -r -f /')"}},
+	}, pol)
+	if !hasRule(danger, RuleDangerousCommand) {
+		t.Errorf("rm -r -f / must stay denied; got %v", danger.RuleIDs())
+	}
+
+	// A catastrophic rm that appears *after* a boundary is still caught.
+	after := Scan(Request{
+		ToolName: "execute_code", Backend: BackendCodeExec,
+		CodeBlocks: []CodeBlock{{Language: "python", Code: "import os\nos.system('cd /tmp && rm -rf /etc')"}},
+	}, pol)
+	if !hasRule(after, RuleDangerousCommand) {
+		t.Errorf("rm -rf /etc after `&&` must be denied; got %v", after.RuleIDs())
+	}
+}
+
 // TestDangerousRmInsideCodeBlock covers a recursive delete embedded in
 // a non-shell code block (os.system) reached only via the raw-text
 // tokeniser, including a split-flag form.
