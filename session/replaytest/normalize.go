@@ -467,21 +467,58 @@ func cloneStateMap(
 }
 
 func cloneJSONLike(value any) any {
-	switch typed := value.(type) {
-	case map[string]any:
-		return cloneStringMap(typed)
-	case []any:
-		cloned := make([]any, len(typed))
-		for i := range typed {
-			cloned[i] = cloneJSONLike(typed[i])
+	if value == nil {
+		return nil
+	}
+	return cloneJSONLikeValue(reflect.ValueOf(value)).Interface()
+}
+
+func cloneJSONLikeValue(value reflect.Value) reflect.Value {
+	if !value.IsValid() {
+		return value
+	}
+	switch value.Kind() {
+	case reflect.Interface:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		cloned := reflect.New(value.Type()).Elem()
+		cloned.Set(cloneJSONLikeValue(value.Elem()))
+		return cloned
+	case reflect.Map:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		cloned := reflect.MakeMapWithSize(value.Type(), value.Len())
+		iterator := value.MapRange()
+		for iterator.Next() {
+			cloned.SetMapIndex(iterator.Key(), cloneJSONLikeValue(iterator.Value()))
 		}
 		return cloned
-	case []byte:
-		return append([]byte(nil), typed...)
-	case json.RawMessage:
-		return append(json.RawMessage(nil), typed...)
+	case reflect.Pointer:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		cloned := reflect.New(value.Type().Elem())
+		cloned.Elem().Set(cloneJSONLikeValue(value.Elem()))
+		return cloned
+	case reflect.Slice:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		cloned := reflect.MakeSlice(value.Type(), value.Len(), value.Len())
+		for i := 0; i < value.Len(); i++ {
+			cloned.Index(i).Set(cloneJSONLikeValue(value.Index(i)))
+		}
+		return cloned
+	case reflect.Array:
+		cloned := reflect.New(value.Type()).Elem()
+		for i := 0; i < value.Len(); i++ {
+			cloned.Index(i).Set(cloneJSONLikeValue(value.Index(i)))
+		}
+		return cloned
 	default:
-		return typed
+		return value
 	}
 }
 

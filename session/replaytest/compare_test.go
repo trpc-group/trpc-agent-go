@@ -166,6 +166,74 @@ func TestCompareSnapshotsRejectsWildcardAndDuplicateAllowedDiffRules(t *testing.
 	}
 }
 
+func TestCompareSnapshotsRejectsUnusedAllowedDiffRules(t *testing.T) {
+	baseRule := AllowedDiffRule{
+		Case: "case", Backend: "sqlite", Path: "$.sessions",
+		Explanation: "expected test difference",
+	}
+	baseline := comparisonFixture()
+	changed := comparisonFixture()
+	changed.Sessions[0].Events[0].Content = "changed"
+	tests := []struct {
+		name     string
+		actual   Snapshot
+		rules    []AllowedDiffRule
+		wantRule string
+	}{
+		{name: "unknown path", actual: changed, rules: []AllowedDiffRule{{
+			Case: "case", Backend: "sqlite", Path: "$.sessions[0].missing",
+			Explanation: "misspelled path",
+		}}, wantRule: "rule 0"},
+		{name: "matching scope without difference", actual: baseline, rules: []AllowedDiffRule{
+			baseRule,
+		}, wantRule: "rule 0"},
+		{name: "overlapping rule not selected", actual: changed, rules: []AllowedDiffRule{
+			{
+				Case: "case", Backend: "sqlite", Path: "$.sessions", PathPrefix: true,
+				Explanation: "selected prefix",
+			},
+			{
+				Case: "case", Backend: "sqlite", Path: "$.sessions[0].events[0].content",
+				Explanation: "redundant exact rule",
+			},
+		}, wantRule: "rule 1"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := CompareSnapshots(CompareInput{
+				Case: "case", Backend: "sqlite", Baseline: baseline, Actual: test.actual,
+				Options: CompareOptions{AllowedDiffRules: test.rules},
+			})
+			if err == nil || !strings.Contains(err.Error(), "unused allowed diff") ||
+				!strings.Contains(err.Error(), test.wantRule) {
+				t.Fatalf("CompareSnapshots() error = %v", err)
+			}
+		})
+	}
+}
+
+func TestCompareSnapshotsConsumesPrefixRuleAcrossDifferences(t *testing.T) {
+	baseline := comparisonFixture()
+	actual := comparisonFixture()
+	actual.Sessions[0].Events[0].Content = "changed"
+	actual.Sessions[0].Events[0].Author = "changed"
+	differences, err := CompareSnapshots(CompareInput{
+		Case: "case", Backend: "sqlite", Baseline: baseline, Actual: actual,
+		Options: CompareOptions{AllowedDiffRules: []AllowedDiffRule{{
+			Case: "case", Backend: "sqlite", Path: "$.sessions", PathPrefix: true,
+			Explanation: "known session representation",
+		}}},
+	})
+	if err != nil {
+		t.Fatalf("CompareSnapshots() error = %v", err)
+	}
+	for _, difference := range differences {
+		if !difference.AllowedDiff {
+			t.Fatalf("difference was not allowed: %#v", difference)
+		}
+	}
+}
+
 func TestCompareSnapshotsReturnsEncodingErrors(t *testing.T) {
 	bad := Snapshot{Sessions: []SessionSnapshot{{State: map[string]StateValueSnapshot{
 		"bad": JSONStateValue(make(chan int)),

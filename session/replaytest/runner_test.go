@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -121,6 +122,141 @@ func TestRunnerMarksUnsupportedCapabilitiesAsAllowed(t *testing.T) {
 	}
 }
 
+func TestRunnerConsumesAllowedDiffRulesAcrossMatrix(t *testing.T) {
+	baselineBackend := Backend{Name: "baseline", New: func(_ context.Context, _ string) (Fixture, error) {
+		return &fakeFixture{
+			name: "baseline", capabilities: allCapabilities(), snapshot: comparisonFixture(),
+		}, nil
+	}}
+	matchingBackend := Backend{Name: "matching", New: func(_ context.Context, _ string) (Fixture, error) {
+		return &fakeFixture{
+			name: "matching", capabilities: allCapabilities(), snapshot: comparisonFixture(),
+		}, nil
+	}}
+	differentBackend := Backend{Name: "different", New: func(_ context.Context, caseName string) (Fixture, error) {
+		snapshot := comparisonFixture()
+		if caseName == "second" {
+			snapshot.Sessions[0].Events[0].Content = "changed"
+		}
+		return &fakeFixture{
+			name: "different", capabilities: allCapabilities(), snapshot: snapshot,
+		}, nil
+	}}
+	runner := Runner{
+		Backends: []Backend{baselineBackend, matchingBackend, differentBackend},
+		CompareOptions: CompareOptions{AllowedDiffRules: []AllowedDiffRule{{
+			Case: "second", Backend: "different",
+			Path: "$.sessions[0].events[0].content", Explanation: "known difference",
+		}}},
+	}
+	report, err := runner.Run(context.Background(), []ReplayCase{{Name: "first"}, {Name: "second"}})
+	if err != nil {
+		t.Fatalf("Runner.Run() error = %v", err)
+	}
+	if len(report.Differences) != 1 || !report.Differences[0].AllowedDiff {
+		t.Fatalf("Runner.Run() report = %#v", report)
+	}
+}
+
+func TestRunnerPreservesExecutionErrorBeforeUnusedAllowedDiff(t *testing.T) {
+	wantErr := errors.New("snapshot unavailable")
+	runner := Runner{
+		Backends: []Backend{
+			fakeBackend("baseline", &fakeFixture{name: "baseline", capabilities: allCapabilities()}),
+			fakeBackend("candidate", &fakeFixture{
+				name: "candidate", capabilities: allCapabilities(), snapshotErr: wantErr,
+			}),
+		},
+		CompareOptions: CompareOptions{AllowedDiffRules: []AllowedDiffRule{{
+			Case: "case", Backend: "candidate", Path: "$.sessions",
+			Explanation: "unused because execution fails",
+		}}},
+	}
+	_, err := runner.Run(context.Background(), []ReplayCase{{Name: "case"}})
+	if !errors.Is(err, wantErr) || strings.Contains(err.Error(), "unused allowed diff") {
+		t.Fatalf("Runner.Run() error = %v, want execution error", err)
+	}
+}
+
+func TestRunnerRejectsInvalidOrUnusedAllowedDiffRules(t *testing.T) {
+	validRule := AllowedDiffRule{
+		Case: "case", Backend: "candidate", Path: "$.sessions[0].missing",
+		Explanation: "stale rule",
+	}
+	baseline := func() Backend {
+		return Backend{Name: "baseline", New: func(_ context.Context, _ string) (Fixture, error) {
+			return &fakeFixture{name: "baseline", capabilities: allCapabilities()}, nil
+		}}
+	}
+	candidate := func(capabilities CapabilitySet) Backend {
+		return Backend{Name: "candidate", New: func(_ context.Context, _ string) (Fixture, error) {
+			return &fakeFixture{name: "candidate", capabilities: capabilities}, nil
+		}}
+	}
+	tests := []struct {
+		name     string
+		backends []Backend
+		cases    []ReplayCase
+		rule     AllowedDiffRule
+		want     string
+	}{
+		{
+			name: "invalid before execution", backends: []Backend{baseline()},
+			cases: []ReplayCase{{Name: "case"}}, rule: AllowedDiffRule{Path: "$.sessions"},
+			want: "requires case",
+		},
+		{
+			name: "baseline only", backends: []Backend{baseline()},
+			cases: []ReplayCase{{Name: "case"}}, rule: validRule,
+			want: "unused allowed diff rule",
+		},
+		{
+			name: "candidate unsupported", backends: []Backend{
+				baseline(), candidate(CapabilitySet{}),
+			},
+			cases: []ReplayCase{{Name: "case", Capabilities: []Capability{CapabilitySession}}},
+			rule:  validRule, want: "unused allowed diff rule",
+		},
+		{
+			name: "matching scope without difference", backends: []Backend{
+				baseline(), candidate(allCapabilities()),
+			},
+			cases: []ReplayCase{{Name: "case"}}, rule: validRule,
+			want: "unused allowed diff rule",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runner := Runner{
+				Backends:       test.backends,
+				CompareOptions: CompareOptions{AllowedDiffRules: []AllowedDiffRule{test.rule}},
+			}
+			_, err := runner.Run(context.Background(), test.cases)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Runner.Run() error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestRunnerValidatesAllowedDiffRulesBeforeCreatingFixtures(t *testing.T) {
+	newCalls := 0
+	runner := Runner{
+		Backends: []Backend{{Name: "baseline", New: func(context.Context, string) (Fixture, error) {
+			newCalls++
+			return &fakeFixture{name: "baseline", capabilities: allCapabilities()}, nil
+		}}},
+		CompareOptions: CompareOptions{AllowedDiffRules: []AllowedDiffRule{{Path: "$.sessions"}}},
+	}
+	_, err := runner.Run(context.Background(), []ReplayCase{{Name: "case"}})
+	if err == nil || !strings.Contains(err.Error(), "requires case") {
+		t.Fatalf("Runner.Run() error = %v", err)
+	}
+	if newCalls != 0 {
+		t.Fatalf("backend.New() calls = %d, want 0", newCalls)
+	}
+}
+
 func TestRunnerContinuesAfterExpectedFailure(t *testing.T) {
 	const expectedAppliedOperations = 1
 	fixture := &fakeFixture{name: "inmemory", capabilities: allCapabilities()}
@@ -137,6 +273,76 @@ func TestRunnerContinuesAfterExpectedFailure(t *testing.T) {
 	}
 	if len(report.Differences) != 0 || fixture.operationCount() != expectedAppliedOperations {
 		t.Fatalf("report = %#v, operations = %d", report, fixture.operationCount())
+	}
+}
+
+func TestExecuteOperationIsolatesFixtureInput(t *testing.T) {
+	normal := appendEvent("event-1", "user", "original", 1)
+	normal.Event.Extensions = map[string]any{"nested": map[string]any{"value": "original"}}
+	fault := normal
+	fault.InjectedFailure = "expected"
+	fault.FailurePoint = FailureBeforeWrite
+	fault.ExpectFailure = true
+	faultAfter := fault
+	faultAfter.FailurePoint = FailureAfterWrite
+	second := appendEvent("event-2", "assistant", "second", 2)
+	second.Event.Extensions = map[string]any{"nested": map[string]any{"value": "second"}}
+	parallel := Operation{Kind: OperationParallel, Parallel: []Operation{normal, second}}
+	for _, test := range []struct {
+		name      string
+		operation Operation
+	}{
+		{name: "normal", operation: normal},
+		{name: "fault before write", operation: fault},
+		{name: "fault after write", operation: faultAfter},
+		{name: "parallel", operation: parallel},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			want := cloneOperation(test.operation)
+			fixture := &fakeFixture{
+				name: "mutating", capabilities: allCapabilities(),
+				mutateOperation: mutateEventOperation,
+			}
+			if err := executeOperation(context.Background(), fixture, test.operation); err != nil {
+				t.Fatalf("executeOperation() error = %v", err)
+			}
+			if !reflect.DeepEqual(test.operation, want) {
+				t.Fatalf("fixture mutation escaped execution boundary:\ngot:  %#v\nwant: %#v", test.operation, want)
+			}
+		})
+	}
+}
+
+func TestRunnerIsolatesOperationsBetweenBackends(t *testing.T) {
+	operation := appendEvent("event-1", "user", "original", 1)
+	operation.Event.Extensions = map[string]any{"nested": map[string]any{"value": "original"}}
+	baseline := &fakeFixture{
+		name: "baseline", capabilities: allCapabilities(), mutateOperation: mutateEventOperation,
+	}
+	candidate := &fakeFixture{name: "candidate", capabilities: allCapabilities()}
+	runner := Runner{Backends: []Backend{
+		fakeBackend("baseline", baseline),
+		fakeBackend("candidate", candidate),
+	}}
+	if _, err := runner.Run(context.Background(), []ReplayCase{{
+		Name: "isolated-input", Operations: []Operation{operation},
+	}}); err != nil {
+		t.Fatalf("Runner.Run() error = %v", err)
+	}
+	got := candidate.operation(0)
+	if got.Event.Content != "original" ||
+		got.Event.Extensions["nested"].(map[string]any)["value"] != "original" {
+		t.Fatalf("candidate received mutated operation: %#v", got)
+	}
+}
+
+func mutateEventOperation(operation *Operation) {
+	if operation.Event == nil {
+		return
+	}
+	operation.Event.Content = "mutated"
+	if nested, ok := operation.Event.Extensions["nested"].(map[string]any); ok {
+		nested["value"] = "mutated"
 	}
 }
 
@@ -445,17 +651,18 @@ func TestExecuteCaseRejectsTopLevelDependencies(t *testing.T) {
 }
 
 type fakeFixture struct {
-	mu           sync.Mutex
-	name         string
-	capabilities CapabilitySet
-	snapshot     Snapshot
-	operations   []Operation
-	applyErr     error
-	faultErr     error
-	snapshotErr  error
-	closeErr     error
-	closed       bool
-	closeCount   int
+	mu              sync.Mutex
+	name            string
+	capabilities    CapabilitySet
+	snapshot        Snapshot
+	operations      []Operation
+	applyErr        error
+	faultErr        error
+	snapshotErr     error
+	closeErr        error
+	closed          bool
+	closeCount      int
+	mutateOperation func(*Operation)
 }
 
 func (fixture *fakeFixture) Name() string {
@@ -469,6 +676,9 @@ func (fixture *fakeFixture) Capabilities() CapabilitySet {
 func (fixture *fakeFixture) Apply(_ context.Context, operation Operation) error {
 	fixture.mu.Lock()
 	defer fixture.mu.Unlock()
+	if fixture.mutateOperation != nil {
+		fixture.mutateOperation(&operation)
+	}
 	fixture.operations = append(fixture.operations, operation)
 	return fixture.applyErr
 }
@@ -481,8 +691,16 @@ func (fixture *fakeFixture) ApplyWithFault(ctx context.Context, operation Operat
 		if err := fixture.Apply(ctx, operation); err != nil {
 			return err
 		}
+	} else if fixture.mutateOperation != nil {
+		fixture.mutateOperation(&operation)
 	}
 	return fmt.Errorf("%w: %s", ErrInjectedFailure, operation.InjectedFailure)
+}
+
+func (fixture *fakeFixture) operation(index int) Operation {
+	fixture.mu.Lock()
+	defer fixture.mu.Unlock()
+	return cloneOperation(fixture.operations[index])
 }
 
 func (fixture *fakeFixture) Snapshot(context.Context) (Snapshot, error) {

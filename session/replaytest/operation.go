@@ -61,6 +61,81 @@ type Operation struct {
 	ExpectFailure         bool
 }
 
+func cloneOperation(operation Operation) Operation {
+	cloned := operation
+	cloned.After = cloneOperationSlice(operation.After)
+	cloned.StateUpdates = cloneStringMap(operation.StateUpdates)
+	cloned.StateDeletes = cloneOperationSlice(operation.StateDeletes)
+	cloned.Event = cloneEventOperationPayload(operation.Event)
+	cloned.Memory = cloneMemoryOperationPayload(operation.Memory)
+	cloned.Summary = cloneSummaryOperationPayload(operation.Summary)
+	cloned.TrackEvent = cloneTrackOperationPayload(operation.TrackEvent)
+	if operation.Parallel != nil {
+		cloned.Parallel = make([]Operation, len(operation.Parallel))
+		for i := range operation.Parallel {
+			cloned.Parallel[i] = cloneOperation(operation.Parallel[i])
+		}
+	}
+	return cloned
+}
+
+func cloneEventOperationPayload(payload *EventSnapshot) *EventSnapshot {
+	if payload == nil {
+		return nil
+	}
+	cloned := *payload
+	cloned.StateDelta = cloneStateMap(payload.StateDelta)
+	cloned.Extensions = cloneStringMap(payload.Extensions)
+	cloned.ToolCalls = cloneOperationSlice(payload.ToolCalls)
+	for i := range cloned.ToolCalls {
+		cloned.ToolCalls[i].Arguments = cloneJSONLike(cloned.ToolCalls[i].Arguments)
+		cloned.ToolCalls[i].Extra = cloneStringMap(cloned.ToolCalls[i].Extra)
+	}
+	if payload.ToolResponse != nil {
+		response := *payload.ToolResponse
+		response.Extra = cloneStringMap(payload.ToolResponse.Extra)
+		cloned.ToolResponse = &response
+	}
+	return &cloned
+}
+
+func cloneMemoryOperationPayload(payload *MemorySnapshot) *MemorySnapshot {
+	if payload == nil {
+		return nil
+	}
+	cloned := *payload
+	cloned.Topics = cloneOperationSlice(payload.Topics)
+	cloned.Metadata = cloneStringMap(payload.Metadata)
+	return &cloned
+}
+
+func cloneSummaryOperationPayload(payload *SummarySnapshot) *SummarySnapshot {
+	if payload == nil {
+		return nil
+	}
+	cloned := *payload
+	cloned.Boundary = cloneStringMap(payload.Boundary)
+	return &cloned
+}
+
+func cloneTrackOperationPayload(payload *TrackEventSnapshot) *TrackEventSnapshot {
+	if payload == nil {
+		return nil
+	}
+	cloned := *payload
+	cloned.Payload = cloneStringMap(payload.Payload)
+	return &cloned
+}
+
+func cloneOperationSlice[T any](values []T) []T {
+	if values == nil {
+		return nil
+	}
+	cloned := make([]T, len(values))
+	copy(cloned, values)
+	return cloned
+}
+
 // Validate checks that an operation contains exactly the payload required by its kind.
 func (operation Operation) Validate() error {
 	if operation.Kind == "" {

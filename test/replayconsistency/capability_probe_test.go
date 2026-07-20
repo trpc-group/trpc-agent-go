@@ -10,9 +10,13 @@ package replayconsistency
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
+	memoryinmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
+	"trpc.group/trpc-go/trpc-agent-go/session"
+	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/session/replaytest"
 )
 
@@ -57,6 +61,136 @@ func TestLightweightTTLExpiryProbes(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSessionPaginationProbeRejectsInvalidUnpagedOracle(t *testing.T) {
+	tests := []struct {
+		name    string
+		corrupt func([]*session.Session) []*session.Session
+	}{
+		{name: "missing", corrupt: func(sessions []*session.Session) []*session.Session {
+			return append([]*session.Session(nil), sessions[:len(sessions)-1]...)
+		}},
+		{name: "duplicate", corrupt: func(sessions []*session.Session) []*session.Session {
+			cloned := append([]*session.Session(nil), sessions...)
+			cloned[len(cloned)-1] = cloned[0]
+			return cloned
+		}},
+		{name: "extra", corrupt: func(sessions []*session.Session) []*session.Session {
+			return append(append([]*session.Session(nil), sessions...), &session.Session{ID: "extra"})
+		}},
+		{name: "wrong order", corrupt: func(sessions []*session.Session) []*session.Session {
+			cloned := append([]*session.Session(nil), sessions...)
+			cloned[0], cloned[len(cloned)-1] = cloned[len(cloned)-1], cloned[0]
+			return cloned
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			service := &corruptingListSessionService{
+				Service: sessioninmemory.NewSessionService(), corrupt: test.corrupt,
+			}
+			fixture := newReplayFixture(replayFixtureConfig{
+				name: "corrupt", sessionService: service,
+				memoryService: memoryinmemory.NewMemoryService(), summarizer: &replaySummarizer{},
+			})
+			t.Cleanup(func() {
+				if err := fixture.Close(); err != nil {
+					t.Errorf("close fixture: %v", err)
+				}
+			})
+			result := runSessionPagingProbe(context.Background(), fixture)
+			if result.Status != replaytest.ResultFail || result.Explanation == "" {
+				t.Fatalf("session paging probe = %#v", result)
+			}
+		})
+	}
+}
+
+func TestSessionPaginationProbeRejectsNilPagedSession(t *testing.T) {
+	service := &corruptingListSessionService{
+		Service: sessioninmemory.NewSessionService(),
+		corruptPage: func([]*session.Session) []*session.Session {
+			return []*session.Session{nil}
+		},
+	}
+	fixture := newReplayFixture(replayFixtureConfig{
+		name: "nil-page", sessionService: service,
+		memoryService: memoryinmemory.NewMemoryService(), summarizer: &replaySummarizer{},
+	})
+	t.Cleanup(func() {
+		if err := fixture.Close(); err != nil {
+			t.Errorf("close fixture: %v", err)
+		}
+	})
+	result := runSessionPagingProbe(context.Background(), fixture)
+	if result.Status != replaytest.ResultFail || !strings.Contains(result.Explanation, "is nil") {
+		t.Fatalf("session paging probe = %#v", result)
+	}
+}
+
+func TestTTLProbeRejectsDroppedCreate(t *testing.T) {
+	backend := replaytest.Backend{Name: "dropping", New: func(
+		context.Context,
+		string,
+	) (replaytest.Fixture, error) {
+		service := &droppingCreateSessionService{Service: sessioninmemory.NewSessionService()}
+		return newReplayFixture(replayFixtureConfig{
+			name: "dropping", sessionService: service,
+			memoryService: memoryinmemory.NewMemoryService(), summarizer: &replaySummarizer{},
+		}), nil
+	}}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	result, err := runTTLExpiryProbe(ctx, backend)
+	if err != nil {
+		t.Fatalf("runTTLExpiryProbe() error = %v", err)
+	}
+	if result.Status != replaytest.ResultFail || !strings.Contains(result.Explanation, "not found") {
+		t.Fatalf("TTL probe = %#v", result)
+	}
+}
+
+type corruptingListSessionService struct {
+	session.Service
+	corrupt     func([]*session.Session) []*session.Session
+	corruptPage func([]*session.Session) []*session.Session
+}
+
+func (service *corruptingListSessionService) ListSessions(
+	ctx context.Context,
+	key session.UserKey,
+	options ...session.Option,
+) ([]*session.Session, error) {
+	sessions, err := service.Service.ListSessions(ctx, key, options...)
+	if err != nil {
+		return sessions, err
+	}
+	if len(options) > 0 {
+		if service.corruptPage != nil {
+			return service.corruptPage(sessions), nil
+		}
+		return sessions, nil
+	}
+	if service.corrupt != nil {
+		return service.corrupt(sessions), nil
+	}
+	return sessions, nil
+}
+
+type droppingCreateSessionService struct {
+	session.Service
+}
+
+func (service *droppingCreateSessionService) CreateSession(
+	_ context.Context,
+	key session.Key,
+	_ session.StateMap,
+	_ ...session.Option,
+) (*session.Session, error) {
+	return &session.Session{
+		AppName: key.AppName, UserID: key.UserID, ID: key.SessionID,
+	}, nil
 }
 
 func assertPaginationProbeReport(

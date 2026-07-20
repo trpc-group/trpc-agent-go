@@ -64,7 +64,8 @@ func runSessionPagingProbe(
 	fixture *replayFixture,
 ) replaytest.CapabilityProbeResult {
 	result := newProbeResult(fixture.Name(), sessionPagingProbeName, replaytest.CapabilitySessionPaging)
-	if err := seedProbeSessions(ctx, fixture); err != nil {
+	want, err := seedProbeSessions(ctx, fixture)
+	if err != nil {
 		return failedProbe(result, err)
 	}
 	all, err := fixture.sessionService.ListSessions(ctx, session.UserKey{
@@ -73,8 +74,11 @@ func runSessionPagingProbe(
 	if err != nil {
 		return failedProbe(result, fmt.Errorf("list all sessions: %w", err))
 	}
-	paged := make([]string, 0, len(all))
-	for offset := 0; offset < len(all); offset += probePageSize {
+	if err := validateProbeSessions(all, want); err != nil {
+		return failedProbe(result, err)
+	}
+	paged := make([]string, 0, len(want))
+	for offset := 0; offset < len(want); offset += probePageSize {
 		page, err := fixture.sessionService.ListSessions(
 			ctx,
 			session.UserKey{AppName: fixture.appName, UserID: fixture.userID},
@@ -83,9 +87,13 @@ func runSessionPagingProbe(
 		if err != nil {
 			return failedProbe(result, fmt.Errorf("list session page at %d: %w", offset, err))
 		}
-		paged = append(paged, sessionIDs(page)...)
+		pageIDs, err := sessionIDs(page)
+		if err != nil {
+			return failedProbe(result, fmt.Errorf("list session page at %d: %w", offset, err))
+		}
+		paged = append(paged, pageIDs...)
 	}
-	if want := sessionIDs(all); !reflect.DeepEqual(paged, want) {
+	if !reflect.DeepEqual(paged, want) {
 		return failedProbe(result, fmt.Errorf("paged session ids = %v, want %v", paged, want))
 	}
 	return result
@@ -153,6 +161,13 @@ func runTTLExpiryProbe(
 	}); err != nil {
 		return failedProbe(result, err), nil
 	}
+	created, err := adapter.sessionService.GetSession(ctx, adapter.sessionKey(sessionID))
+	if err != nil {
+		return failedProbe(result, fmt.Errorf("get created TTL session: %w", err)), nil
+	}
+	if err := validatePhysicalSessionScope(created, adapter.sessionKey(sessionID)); err != nil {
+		return failedProbe(result, fmt.Errorf("validate created TTL session: %w", err)), nil
+	}
 	if err := waitForSessionExpiry(ctx, adapter, sessionID); err != nil {
 		return failedProbe(result, err), nil
 	}
@@ -181,14 +196,39 @@ func probeUnsupportedEventPaging(
 	return result
 }
 
-func seedProbeSessions(ctx context.Context, fixture *replayFixture) error {
+func seedProbeSessions(ctx context.Context, fixture *replayFixture) ([]string, error) {
 	for i := 0; i < probeSessionCount; i++ {
 		if err := fixture.Apply(ctx, replaytest.Operation{
 			Kind:      replaytest.OperationCreateSession,
 			SessionID: fmt.Sprintf("page-session-%d", i),
 		}); err != nil {
-			return fmt.Errorf("create probe session %d: %w", i, err)
+			return nil, fmt.Errorf("create probe session %d: %w", i, err)
 		}
+	}
+	want := make([]string, probeSessionCount)
+	for i := range want {
+		want[i] = fmt.Sprintf("page-session-%d", probeSessionCount-1-i)
+	}
+	return want, nil
+}
+
+func validateProbeSessions(sessions []*session.Session, want []string) error {
+	if len(sessions) != len(want) {
+		return fmt.Errorf("unpaged session count = %d, want %d", len(sessions), len(want))
+	}
+	ids, err := sessionIDs(sessions)
+	if err != nil {
+		return fmt.Errorf("validate unpaged sessions: %w", err)
+	}
+	seen := make(map[string]struct{}, len(sessions))
+	for _, id := range ids {
+		if _, exists := seen[id]; exists {
+			return fmt.Errorf("unpaged session id %q is duplicated", id)
+		}
+		seen[id] = struct{}{}
+	}
+	if !reflect.DeepEqual(ids, want) {
+		return fmt.Errorf("unpaged session ids = %v, want %v", ids, want)
 	}
 	return nil
 }
@@ -283,12 +323,15 @@ func failedProbe(
 	return result
 }
 
-func sessionIDs(sessions []*session.Session) []string {
+func sessionIDs(sessions []*session.Session) ([]string, error) {
 	ids := make([]string, 0, len(sessions))
-	for _, sess := range sessions {
+	for i, sess := range sessions {
+		if sess == nil {
+			return nil, fmt.Errorf("session %d is nil", i)
+		}
 		ids = append(ids, sess.ID)
 	}
-	return ids
+	return ids, nil
 }
 
 func eventIDs(events []event.Event) []string {

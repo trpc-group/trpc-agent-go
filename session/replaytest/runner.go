@@ -56,6 +56,10 @@ func (runner Runner) Run(ctx context.Context, cases []ReplayCase) (Report, error
 	if err := validateRunnerInputs(runner.Backends, cases); err != nil {
 		return Report{}, err
 	}
+	allowedDiffs, err := newAllowedDiffTracker(runner.CompareOptions.AllowedDiffRules)
+	if err != nil {
+		return Report{}, err
+	}
 	allowances, err := validateUnsupportedAllowances(
 		runner.UnsupportedAllowances, runner.Backends, cases,
 	)
@@ -65,7 +69,9 @@ func (runner Runner) Run(ctx context.Context, cases []ReplayCase) (Report, error
 	baselineName := runner.Backends[0].Name
 	differences := make([]Difference, 0)
 	caseResults := make([]CaseResult, 0, len(cases))
-	execution := matrixExecution{runner: runner, ctx: ctx, allowances: allowances}
+	execution := matrixExecution{
+		runner: runner, ctx: ctx, allowances: allowances, allowedDiffs: allowedDiffs,
+	}
 	for _, replayCase := range cases {
 		result, caseDifferences, err := execution.runCase(replayCase)
 		if err != nil {
@@ -77,13 +83,17 @@ func (runner Runner) Run(ctx context.Context, cases []ReplayCase) (Report, error
 	if unused := unusedUnsupportedAllowances(allowances); len(unused) > 0 {
 		return Report{}, fmt.Errorf("unused unsupported allowance: %s", unused[0])
 	}
+	if err := allowedDiffs.validateConsumed(); err != nil {
+		return Report{}, err
+	}
 	return NewMatrixReport(baselineName, caseResults, differences), nil
 }
 
 type matrixExecution struct {
-	runner     Runner
-	ctx        context.Context
-	allowances map[unsupportedAllowanceKey]*allowanceState
+	runner       Runner
+	ctx          context.Context
+	allowances   map[unsupportedAllowanceKey]*allowanceState
+	allowedDiffs *allowedDiffTracker
 }
 
 type candidateComparison struct {
@@ -173,11 +183,11 @@ func (execution matrixExecution) compareCandidate(
 			replayCase.Name, backend.Name, err,
 		)
 	}
-	differences, err := CompareSnapshots(CompareInput{
+	differences, err := compareSnapshots(CompareInput{
 		Case: replayCase.Name, Backend: backend.Name,
 		Baseline: baseline, Actual: actual,
 		Options: execution.runner.CompareOptions,
-	})
+	}, execution.allowedDiffs)
 	if err != nil {
 		return candidateComparison{}, fmt.Errorf("compare replay snapshots: %w", err)
 	}
@@ -301,6 +311,7 @@ func executeOperation(ctx context.Context, fixture Fixture, operation Operation)
 	if err := operation.Validate(); err != nil {
 		return fmt.Errorf("validate operation: %w", err)
 	}
+	operation = cloneOperation(operation)
 	var err error
 	if operation.InjectedFailure != "" {
 		injector, ok := fixture.(FaultInjector)

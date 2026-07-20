@@ -49,6 +49,7 @@ type backendFactory struct {
 	New         func(BackendConfig) replaytest.Backend
 }
 
+// BackendConfig configures a replay backend connection and Session TTL.
 type BackendConfig struct {
 	Connection string
 	SessionTTL time.Duration

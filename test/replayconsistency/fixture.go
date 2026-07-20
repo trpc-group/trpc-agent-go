@@ -58,7 +58,7 @@ type replayFixture struct {
 	replayWindows  map[string]string
 	memoryScopes   map[replaytest.MemoryScope]memory.UserKey
 	stateDeletes   map[string]map[string]struct{}
-	searches       []replaytest.Operation
+	searches       []replaytest.MemorySearchSnapshot
 }
 
 type replayFixtureConfig struct {
@@ -142,11 +142,7 @@ func (fixture *replayFixture) apply(
 	case replaytest.OperationWriteMemory:
 		return fixture.applyWriteMemory(ctx, operation)
 	case replaytest.OperationSearchMemory:
-		fixture.memoryKey(operation.SearchAppName, operation.SearchUserID)
-		fixture.mu.Lock()
-		fixture.searches = append(fixture.searches, operation)
-		fixture.mu.Unlock()
-		return nil
+		return fixture.applySearchMemory(ctx, operation)
 	case replaytest.OperationUpdateSummary:
 		return fixture.applyUpdateSummary(ctx, operation)
 	case replaytest.OperationSetReplayWindow:
@@ -227,6 +223,45 @@ func (fixture *replayFixture) applyWriteMemory(
 	); err != nil {
 		return fmt.Errorf("write memory: %w", err)
 	}
+	return nil
+}
+
+func (fixture *replayFixture) applySearchMemory(
+	ctx context.Context,
+	operation replaytest.Operation,
+) error {
+	logicalScope := replaytest.MemoryScope{
+		AppName: operation.SearchAppName,
+		UserID:  operation.SearchUserID,
+	}
+	physicalScope := fixture.memoryKey(logicalScope.AppName, logicalScope.UserID)
+	results, err := fixture.memoryService.SearchMemories(
+		ctx,
+		physicalScope,
+		operation.SearchQuery,
+		memory.WithSearchOptions(memory.SearchOptions{
+			Query:               operation.SearchQuery,
+			MaxResults:          operation.SearchLimit,
+			SimilarityThreshold: operation.SearchMinScore,
+		}),
+	)
+	if err != nil {
+		return fmt.Errorf("search memories: %w", err)
+	}
+	search := replaytest.MemorySearchSnapshot{
+		AppName: logicalScope.AppName,
+		UserID:  logicalScope.UserID,
+		Query:   operation.SearchQuery,
+	}
+	for _, entry := range results {
+		if err := validatePhysicalMemoryScope(entry, physicalScope); err != nil {
+			return fmt.Errorf("search memories for %#v: %w", logicalScope, err)
+		}
+		search.Results = append(search.Results, toLogicalMemorySnapshot(entry, logicalScope))
+	}
+	fixture.mu.Lock()
+	fixture.searches = append(fixture.searches, cloneMemorySearchSnapshot(search))
+	fixture.mu.Unlock()
 	return nil
 }
 
@@ -316,51 +351,16 @@ func (fixture *replayFixture) Snapshot(ctx context.Context) (replaytest.Snapshot
 			)
 		}
 	}
-	for _, operation := range bookkeeping.searches {
-		logicalScope := replaytest.MemoryScope{
-			AppName: operation.SearchAppName,
-			UserID:  operation.SearchUserID,
-		}
-		physicalScope, ok := bookkeeping.memoryScopeKeys[logicalScope]
-		if !ok {
-			return replaytest.Snapshot{}, fmt.Errorf("memory search scope %#v is not registered", logicalScope)
-		}
-		results, err := fixture.memoryService.SearchMemories(
-			ctx,
-			physicalScope,
-			operation.SearchQuery,
-			memory.WithSearchOptions(memory.SearchOptions{
-				Query:               operation.SearchQuery,
-				MaxResults:          operation.SearchLimit,
-				SimilarityThreshold: operation.SearchMinScore,
-			}),
-		)
-		if err != nil {
-			return replaytest.Snapshot{}, fmt.Errorf("search memories: %w", err)
-		}
-		search := replaytest.MemorySearchSnapshot{
-			AppName: operation.SearchAppName,
-			UserID:  operation.SearchUserID,
-			Query:   operation.SearchQuery,
-		}
-		for _, entry := range results {
-			if err := validatePhysicalMemoryScope(entry, physicalScope); err != nil {
-				return replaytest.Snapshot{}, fmt.Errorf("search memories for %#v: %w", logicalScope, err)
-			}
-			search.Results = append(search.Results, toLogicalMemorySnapshot(entry, logicalScope))
-		}
-		snapshot.MemorySearches = append(snapshot.MemorySearches, search)
-	}
+	snapshot.MemorySearches = bookkeeping.searches
 	return snapshot, nil
 }
 
 type fixtureBookkeeping struct {
-	sessionIDs      []string
-	replayWindows   map[string]string
-	memoryScopes    []memoryScopeBinding
-	memoryScopeKeys map[replaytest.MemoryScope]memory.UserKey
-	stateDeletes    map[string]map[string]struct{}
-	searches        []replaytest.Operation
+	sessionIDs    []string
+	replayWindows map[string]string
+	memoryScopes  []memoryScopeBinding
+	stateDeletes  map[string]map[string]struct{}
+	searches      []replaytest.MemorySearchSnapshot
 }
 
 type memoryScopeBinding struct {
@@ -372,12 +372,11 @@ func (fixture *replayFixture) snapshotBookkeeping() fixtureBookkeeping {
 	fixture.mu.Lock()
 	defer fixture.mu.Unlock()
 	bookkeeping := fixtureBookkeeping{
-		sessionIDs:      make([]string, 0, len(fixture.sessionIDs)),
-		replayWindows:   make(map[string]string, len(fixture.replayWindows)),
-		memoryScopes:    make([]memoryScopeBinding, 0, len(fixture.memoryScopes)),
-		memoryScopeKeys: make(map[replaytest.MemoryScope]memory.UserKey, len(fixture.memoryScopes)),
-		stateDeletes:    make(map[string]map[string]struct{}, len(fixture.stateDeletes)),
-		searches:        append([]replaytest.Operation(nil), fixture.searches...),
+		sessionIDs:    make([]string, 0, len(fixture.sessionIDs)),
+		replayWindows: make(map[string]string, len(fixture.replayWindows)),
+		memoryScopes:  make([]memoryScopeBinding, 0, len(fixture.memoryScopes)),
+		stateDeletes:  make(map[string]map[string]struct{}, len(fixture.stateDeletes)),
+		searches:      cloneMemorySearchSnapshots(fixture.searches),
 	}
 	for id := range fixture.sessionIDs {
 		bookkeeping.sessionIDs = append(bookkeeping.sessionIDs, id)
@@ -389,7 +388,6 @@ func (fixture *replayFixture) snapshotBookkeeping() fixtureBookkeeping {
 		bookkeeping.memoryScopes = append(bookkeeping.memoryScopes, memoryScopeBinding{
 			logical: logical, physical: physical,
 		})
-		bookkeeping.memoryScopeKeys[logical] = physical
 	}
 	for id, keys := range fixture.stateDeletes {
 		bookkeeping.stateDeletes[id] = make(map[string]struct{}, len(keys))
@@ -468,12 +466,13 @@ func (fixture *replayFixture) getSession(
 	ctx context.Context,
 	sessionID string,
 ) (*session.Session, error) {
-	sess, err := fixture.sessionService.GetSession(ctx, fixture.sessionKey(sessionID))
+	key := fixture.sessionKey(sessionID)
+	sess, err := fixture.sessionService.GetSession(ctx, key)
 	if err != nil {
 		return nil, fmt.Errorf("get session: %w", err)
 	}
-	if sess == nil {
-		return nil, fmt.Errorf("get session: %q not found", sessionID)
+	if err := validatePhysicalSessionScope(sess, key); err != nil {
+		return nil, fmt.Errorf("get session: %w", err)
 	}
 	return sess, nil
 }
@@ -943,6 +942,61 @@ func validatePhysicalMemoryScope(entry *memory.Entry, want memory.UserKey) error
 		)
 	}
 	return nil
+}
+
+func validatePhysicalSessionScope(sess *session.Session, want session.Key) error {
+	if sess == nil {
+		return fmt.Errorf("session %q not found", want.SessionID)
+	}
+	if sess.AppName != want.AppName || sess.UserID != want.UserID || sess.ID != want.SessionID {
+		return fmt.Errorf(
+			"backend returned session {%q %q %q}, want {%q %q %q}",
+			sess.AppName,
+			sess.UserID,
+			sess.ID,
+			want.AppName,
+			want.UserID,
+			want.SessionID,
+		)
+	}
+	return nil
+}
+
+func cloneMemorySearchSnapshots(
+	searches []replaytest.MemorySearchSnapshot,
+) []replaytest.MemorySearchSnapshot {
+	if searches == nil {
+		return nil
+	}
+	cloned := make([]replaytest.MemorySearchSnapshot, len(searches))
+	for i, search := range searches {
+		cloned[i] = cloneMemorySearchSnapshot(search)
+	}
+	return cloned
+}
+
+func cloneMemorySearchSnapshot(
+	search replaytest.MemorySearchSnapshot,
+) replaytest.MemorySearchSnapshot {
+	cloned := search
+	if search.Results == nil {
+		return cloned
+	}
+	cloned.Results = make([]replaytest.MemorySnapshot, len(search.Results))
+	for i, result := range search.Results {
+		cloned.Results[i] = result
+		cloned.Results[i].Topics = append([]string(nil), result.Topics...)
+		if result.Metadata != nil {
+			cloned.Results[i].Metadata = make(map[string]any, len(result.Metadata))
+			for key, value := range result.Metadata {
+				if stringsValue, ok := value.([]string); ok {
+					value = append([]string(nil), stringsValue...)
+				}
+				cloned.Results[i].Metadata[key] = value
+			}
+		}
+	}
+	return cloned
 }
 
 func toMemoryMetadata(values map[string]any) (*memory.Metadata, error) {

@@ -98,8 +98,10 @@ func TestOptionalIntegrationPaginationProbes(t *testing.T) {
 			if connection == "" {
 				t.Skipf("%s is not configured", factory.Environment)
 			}
+			ctx, cancel := context.WithTimeout(context.Background(), integrationReplayTimeout)
+			defer cancel()
 			report, err := runPaginationProbes(
-				context.Background(), factory.New(BackendConfig{Connection: connection}),
+				ctx, factory.New(BackendConfig{Connection: connection}),
 			)
 			if err != nil {
 				t.Fatalf("runPaginationProbes() error = %v", err)

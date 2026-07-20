@@ -93,6 +93,81 @@ func TestValidatePhysicalMemoryScopeRejectsLeaks(t *testing.T) {
 	}
 }
 
+func TestValidatePhysicalSessionScopeRejectsLeaks(t *testing.T) {
+	want := session.Key{
+		AppName: "physical-app", UserID: "physical-user", SessionID: "physical-session",
+	}
+	valid := &session.Session{AppName: want.AppName, UserID: want.UserID, ID: want.SessionID}
+	if err := validatePhysicalSessionScope(valid, want); err != nil {
+		t.Fatalf("validatePhysicalSessionScope() error = %v", err)
+	}
+	for _, sess := range []*session.Session{
+		nil,
+		{AppName: "other-app", UserID: want.UserID, ID: want.SessionID},
+		{AppName: want.AppName, UserID: "other-user", ID: want.SessionID},
+		{AppName: want.AppName, UserID: want.UserID, ID: "other-session"},
+	} {
+		if err := validatePhysicalSessionScope(sess, want); err == nil {
+			t.Fatalf("validatePhysicalSessionScope(%#v) error = nil", sess)
+		}
+	}
+}
+
+func TestReplayFixtureCapturesMemorySearchAtApplyTime(t *testing.T) {
+	fixture := newReplayFixture(replayFixtureConfig{
+		name:           "inmemory",
+		sessionService: sessioninmemory.NewSessionService(),
+		memoryService:  memoryinmemory.NewMemoryService(),
+		summarizer:     &replaySummarizer{},
+	})
+	t.Cleanup(func() {
+		if err := fixture.Close(); err != nil {
+			t.Errorf("close fixture: %v", err)
+		}
+	})
+	first := replaytest.Operation{
+		Kind: replaytest.OperationWriteMemory,
+		Memory: &replaytest.MemorySnapshot{
+			AppName: replayAppName, UserID: replayUserID, Content: "shared first",
+			Topics: []string{"first"}, Metadata: map[string]any{"participants": []string{"one"}},
+		},
+	}
+	search := replaytest.Operation{
+		Kind: replaytest.OperationSearchMemory, SearchQuery: "shared", SearchLimit: 10,
+		SearchAppName: replayAppName, SearchUserID: replayUserID,
+	}
+	second := replaytest.Operation{
+		Kind: replaytest.OperationWriteMemory,
+		Memory: &replaytest.MemorySnapshot{
+			AppName: replayAppName, UserID: replayUserID, Content: "shared second",
+			Topics: []string{"second"},
+		},
+	}
+	for _, operation := range []replaytest.Operation{first, search, second} {
+		if err := fixture.Apply(context.Background(), operation); err != nil {
+			t.Fatalf("fixture.Apply(%s) error = %v", operation.Kind, err)
+		}
+	}
+	snapshot, err := fixture.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("fixture.Snapshot() error = %v", err)
+	}
+	if len(snapshot.MemorySearches) != 1 || len(snapshot.MemorySearches[0].Results) != 1 ||
+		snapshot.MemorySearches[0].Results[0].Content != "shared first" {
+		t.Fatalf("point-in-time search = %#v", snapshot.MemorySearches)
+	}
+	snapshot.MemorySearches[0].Results[0].Topics[0] = "mutated"
+	snapshot.MemorySearches[0].Results[0].Metadata["participants"].([]string)[0] = "mutated"
+	again, err := fixture.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("fixture.Snapshot() again error = %v", err)
+	}
+	result := again.MemorySearches[0].Results[0]
+	if result.Topics[0] != "first" || result.Metadata["participants"].([]string)[0] != "one" {
+		t.Fatalf("snapshot mutation escaped into fixture: %#v", result)
+	}
+}
+
 func TestReplayFixtureCanDeclareUnsupportedCapability(t *testing.T) {
 	summarizer := &replaySummarizer{}
 	fixture := newReplayFixture(replayFixtureConfig{

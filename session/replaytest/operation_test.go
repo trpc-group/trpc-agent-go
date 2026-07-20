@@ -10,8 +10,11 @@
 package replaytest
 
 import (
+	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestOperationValidateRejectsInvalidPayloads(t *testing.T) {
@@ -227,5 +230,90 @@ func TestParallelDependenciesRejectInvalidGraphs(t *testing.T) {
 				t.Fatal("parallelDependencies() error = nil")
 			}
 		})
+	}
+}
+
+func TestCloneOperationDeeplyIsolatesPayloads(t *testing.T) {
+	eventTime := time.Unix(123, 456).UTC()
+	original := Operation{
+		Kind:         OperationParallel,
+		Name:         "parent",
+		After:        []string{"before"},
+		StateUpdates: map[string]any{"nested": map[string]any{"items": []any{"value"}}},
+		StateDeletes: []string{"deleted"},
+		Event: &EventSnapshot{
+			ToolCalls: []ToolCallSnapshot{{
+				Arguments: map[string]any{"raw": json.RawMessage(`{"kept":true}`)},
+				Extra:     map[string]any{"bytes": []byte("bytes")},
+			}},
+			ToolResponse: &ToolResponse{Extra: map[string]any{"strings": []string{"one"}}},
+			StateDelta: map[string]StateValueSnapshot{
+				"state": JSONStateValue(map[string]any{"key": "value"}),
+			},
+			Extensions: map[string]any{
+				"labels":   map[string]string{"key": "value"},
+				"typed":    []map[string]any{{"bytes": []byte("bytes")}},
+				"byte_map": map[string][]byte{"bytes": []byte("bytes")},
+			},
+		},
+		Memory: &MemorySnapshot{
+			Topics: []string{"topic"},
+			Metadata: map[string]any{
+				"nested":     map[string]any{"key": "value"},
+				"event_time": &eventTime,
+			},
+		},
+		Summary:    &SummarySnapshot{Boundary: map[string]any{"ids": []any{"one"}}},
+		TrackEvent: &TrackEventSnapshot{Payload: map[string]any{"items": []any{"one"}}},
+		Parallel: []Operation{{
+			Kind: OperationAppendEvent,
+			Event: &EventSnapshot{
+				Extensions: map[string]any{"child": map[string]any{"key": "value"}},
+			},
+		}},
+	}
+	want := cloneOperation(original)
+	cloned := cloneOperation(original)
+	mutateClonedOperation(&cloned)
+	if !reflect.DeepEqual(original, want) {
+		t.Fatalf("clone mutation changed original:\ngot:  %#v\nwant: %#v", original, want)
+	}
+}
+
+func mutateClonedOperation(operation *Operation) {
+	operation.After[0] = "changed"
+	operation.StateUpdates["nested"].(map[string]any)["items"].([]any)[0] = "changed"
+	operation.StateDeletes[0] = "changed"
+	operation.Event.ToolCalls[0].Arguments.(map[string]any)["raw"].(json.RawMessage)[0] = 'X'
+	operation.Event.ToolCalls[0].Extra["bytes"].([]byte)[0] = 'X'
+	operation.Event.ToolResponse.Extra["strings"].([]string)[0] = "changed"
+	operation.Event.StateDelta["state"].Value.(map[string]any)["key"] = "changed"
+	operation.Event.Extensions["labels"].(map[string]string)["key"] = "changed"
+	operation.Event.Extensions["typed"].([]map[string]any)[0]["bytes"].([]byte)[0] = 'X'
+	operation.Event.Extensions["byte_map"].(map[string][]byte)["bytes"][0] = 'X'
+	operation.Memory.Topics[0] = "changed"
+	operation.Memory.Metadata["nested"].(map[string]any)["key"] = "changed"
+	*operation.Memory.Metadata["event_time"].(*time.Time) = time.Time{}
+	operation.Summary.Boundary["ids"].([]any)[0] = "changed"
+	operation.TrackEvent.Payload["items"].([]any)[0] = "changed"
+	operation.Parallel[0].Event.Extensions["child"].(map[string]any)["key"] = "changed"
+}
+
+func TestCloneOperationPreservesNonNilEmptyPayloads(t *testing.T) {
+	original := Operation{
+		After:        []string{},
+		StateDeletes: []string{},
+		Event: &EventSnapshot{
+			ToolCalls:  []ToolCallSnapshot{},
+			Extensions: map[string]any{"raw": json.RawMessage{}},
+		},
+		Memory:   &MemorySnapshot{Topics: []string{}},
+		Parallel: []Operation{},
+	}
+	cloned := cloneOperation(original)
+	if cloned.After == nil || cloned.StateDeletes == nil || cloned.Event.ToolCalls == nil ||
+		cloned.Event.Extensions["raw"].(json.RawMessage) == nil || cloned.Memory.Topics == nil ||
+		cloned.Parallel == nil {
+		t.Fatalf("clone changed non-nil empty payloads: %#v", cloned)
 	}
 }

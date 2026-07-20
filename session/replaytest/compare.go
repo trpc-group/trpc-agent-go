@@ -39,22 +39,33 @@ type snapshotComparator struct {
 	backend           string
 	scoreTolerance    float64
 	durationTolerance time.Duration
-	rules             []AllowedDiffRule
+	rules             *allowedDiffTracker
 	differences       []Difference
 }
 
 // CompareSnapshots compares two normalized snapshots.
 func CompareSnapshots(input CompareInput) ([]Difference, error) {
+	rules, err := newAllowedDiffTracker(input.Options.AllowedDiffRules)
+	if err != nil {
+		return nil, err
+	}
+	differences, err := compareSnapshots(input, rules)
+	if err != nil {
+		return nil, err
+	}
+	if err := rules.validateConsumed(); err != nil {
+		return nil, err
+	}
+	return differences, nil
+}
+
+func compareSnapshots(input CompareInput, rules *allowedDiffTracker) ([]Difference, error) {
 	options := input.Options
 	if options.ScoreTolerance <= 0 {
 		options.ScoreTolerance = defaultScoreTolerance
 	}
 	if options.DurationTolerance <= 0 {
 		options.DurationTolerance = time.Millisecond
-	}
-	rules := options.AllowedDiffRules
-	if err := validateAllowedDiffRules(rules); err != nil {
-		return nil, err
 	}
 	baselineValue, err := snapshotValue(input.Baseline)
 	if err != nil {
@@ -223,14 +234,54 @@ func (comparator *snapshotComparator) newDifference(
 		Actual:      actual,
 		Explanation: "unexpected normalized snapshot difference",
 	}
-	for _, rule := range comparator.rules {
-		if ruleMatches(rule, comparator.caseName, comparator.backend, path) {
-			difference.AllowedDiff = true
-			difference.Explanation = rule.Explanation
-			break
-		}
+	if rule, ok := comparator.rules.consume(comparator.caseName, comparator.backend, path); ok {
+		difference.AllowedDiff = true
+		difference.Explanation = rule.Explanation
 	}
 	return difference
+}
+
+type allowedDiffTracker struct {
+	rules    []AllowedDiffRule
+	consumed []bool
+}
+
+func newAllowedDiffTracker(rules []AllowedDiffRule) (*allowedDiffTracker, error) {
+	if err := validateAllowedDiffRules(rules); err != nil {
+		return nil, err
+	}
+	return &allowedDiffTracker{
+		rules:    append([]AllowedDiffRule(nil), rules...),
+		consumed: make([]bool, len(rules)),
+	}, nil
+}
+
+func (tracker *allowedDiffTracker) consume(
+	caseName string,
+	backend string,
+	path string,
+) (AllowedDiffRule, bool) {
+	for i, rule := range tracker.rules {
+		if ruleMatches(rule, caseName, backend, path) {
+			tracker.consumed[i] = true
+			return rule, true
+		}
+	}
+	return AllowedDiffRule{}, false
+}
+
+func (tracker *allowedDiffTracker) validateConsumed() error {
+	for i, consumed := range tracker.consumed {
+		if consumed {
+			continue
+		}
+		rule := tracker.rules[i]
+		return fmt.Errorf(
+			"unused allowed diff rule %d: case=%q backend=%q path=%q",
+			i, rule.Case, rule.Backend, rule.Path,
+		)
+	}
+	return nil
 }
 
 func ruleMatches(rule AllowedDiffRule, caseName, backend, differencePath string) bool {
