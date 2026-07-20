@@ -22,14 +22,14 @@
 #
 # Multi-stage build: the builder stage compiles staticcheck from source
 # so the final image contains a single static binary. The runtime stage
-# is golang:1.25-bookworm (Debian-based) because the agent's sandbox
-# relies on /bin/sh and the Go toolchain being available. Pinned to 1.25
-# to stay ahead of go.mod (currently 1.21) and to satisfy any future
-# dependency that requires Go 1.25+.
+# is golang:1.23-bookworm (Debian-based) because the agent's sandbox
+# relies on /bin/sh and the Go toolchain being available. 1.23 satisfies
+# the module's `go 1.21` directive with headroom; bump only when go.mod
+# raises the floor or a transitive dependency requires newer.
 
 # syntax=docker/dockerfile:1.6
 
-FROM golang:1.25-bookworm AS builder
+FROM golang:1.23-bookworm AS builder
 
 # Build staticcheck in a cache-friendly location. GOFLAGS=-mod=mod
 # ensures the build succeeds even if go.sum is slightly out of date.
@@ -44,7 +44,7 @@ RUN go install "honnef.co/go/tools/cmd/staticcheck@v${STATICCHECK_VERSION}"
 
 # Runtime stage: keep the Go toolchain (go vet / go test need it) and
 # copy the staticcheck binary from the builder stage.
-FROM golang:1.25-bookworm AS runtime
+FROM golang:1.23-bookworm AS runtime
 
 # Copy staticcheck from the builder stage. The binary lives under
 # /go/bin in the builder; install it into /usr/local/bin so it is on
@@ -54,7 +54,9 @@ COPY --from=builder /go/bin/staticcheck /usr/local/bin/staticcheck
 # Create a non-root user for running review commands. The sandbox
 # executor runs commands as the container's default user, so a non-root
 # user prevents accidental writes outside the workspace.
-RUN useradd --create-home --uid 1000 reviewer
+RUN useradd --create-home --uid 1000 reviewer \
+	&& mkdir -p /workspace \
+	&& chown -R reviewer:reviewer /workspace /home/reviewer
 
 # Pre-warm the Go build cache with the standard library so `go vet`
 # and `go test` do not need to recompile it on every run. This keeps
@@ -64,6 +66,11 @@ RUN su reviewer -c 'go build std 2>/dev/null || true'
 # Default working directory. The sandbox executor mounts the repo
 # read-only at /workspace/repo and writes output to /workspace/out.
 WORKDIR /workspace
+
+# Drop privileges for every process started by docker exec / the
+# container entrypoint. Without USER, the image would still run as
+# root despite creating the reviewer account.
+USER reviewer
 
 # Keep the container alive so the sandbox executor can run commands
 # inside it via docker exec.

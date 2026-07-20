@@ -14,6 +14,7 @@ package sandbox
 import (
 	"context"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -193,5 +194,32 @@ func TestNew_LocalRequiresUnsafeLocal(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "UnsafeLocal") {
 		t.Fatalf("error should mention UnsafeLocal, got: %v", err)
+	}
+}
+
+// TestBuildSandboxEnv_NoHostLeak ensures host GOPROXY/GOPATH/PATH are not
+// copied into the sandbox environment.
+func TestBuildSandboxEnv_NoHostLeak(t *testing.T) {
+	t.Setenv("GOPROXY", "https://user:s3cret@proxy.example/go")
+	t.Setenv("GOPATH", "/evil/gopath")
+	t.Setenv("GOCACHE", "/evil/gocache")
+	t.Setenv("PATH", "/evil/bin:/usr/bin")
+
+	ws := codeexecutor.Workspace{Path: t.TempDir()}
+	env := buildSandboxEnv(ws, nil)
+	if env["GOPROXY"] != "off" {
+		t.Fatalf("GOPROXY = %q, want off", env["GOPROXY"])
+	}
+	if env["GOPATH"] == "/evil/gopath" {
+		t.Fatal("host GOPATH leaked into sandbox env")
+	}
+	if env["GOCACHE"] == "/evil/gocache" {
+		t.Fatal("host GOCACHE leaked into sandbox env")
+	}
+	if env["PATH"] == "/evil/bin:/usr/bin" {
+		t.Fatal("host PATH leaked into sandbox env")
+	}
+	if env["GOPATH"] != filepath.Join(ws.Path, ".gopath") {
+		t.Fatalf("GOPATH = %q, want workspace-local", env["GOPATH"])
 	}
 }

@@ -212,12 +212,22 @@ func runPipeline(ctx context.Context, opts *pipelineOpts) (retErr error) {
 	input = in
 	log.Printf("loaded %d diff file(s) from %s", len(input.Files), input.Source)
 
-	if _, n := redact.DiffText(input.DiffText); n > 0 {
+	// Run rules / fake LLM on the original parsed content so secret-detection
+	// rules (SI-001) and LLM heuristics (LLM-001) still fire. Immediately scrub
+	// finding Evidence/Recommendation, then redact DiffText so no later sink
+	// retains plaintext secrets.
+	ruleFindings, revReport := runRules(taskID, input, metrics, opts.model)
+	scrubReviewSecrets(revReport)
+	for i := range ruleFindings {
+		e, r, _ := redact.FindingFields(ruleFindings[i].Evidence, ruleFindings[i].Recommendation)
+		ruleFindings[i].Evidence = e
+		ruleFindings[i].Recommendation = r
+	}
+	rev = revReport
+	if redacted, n := redact.DiffText(input.DiffText); n > 0 {
+		input.DiffText = redacted
 		log.Printf("redacted %d sensitive occurrence(s) in diff text", n)
 	}
-
-	ruleFindings, revReport := runRules(taskID, input, metrics, opts.model)
-	rev = revReport
 	log.Printf("rules: %d confirmed finding(s), %d warning(s), %d need human review",
 		len(rev.Findings), len(rev.Warnings), len(rev.NeedsHumanReview))
 
@@ -535,14 +545,20 @@ func runSandboxChecks(ctx context.Context, opts *pipelineOpts, taskID string, po
 
 // handleSandboxInitFailure applies the dry-run vs fail-closed policy when the
 // sandbox cannot be constructed or a workspace cannot be created. In dry-run
-// mode a single failed sandbox_run is recorded and a nil error is returned so
-// the pipeline can still produce a report; otherwise the error is returned.
+// mode a single StatusSkipped sandbox_run is recorded and a nil error is
+// returned so the pipeline can still produce a report without forcing
+// needs_human_review on an otherwise clean dry-run; otherwise the error is
+// returned (fail-closed).
 func handleSandboxInitFailure(opts *pipelineOpts, err error) ([]sandboxRunRecord, []store.PermissionDecision, error) {
 	if opts.dryRun {
-		log.Printf("warning: sandbox unavailable in dry-run, skipping (recorded as failed): %v", err)
+		log.Printf("warning: sandbox unavailable in dry-run, skipping: %v", err)
 		records := []sandboxRunRecord{{
 			command: "sandbox-init",
-			result:  sandbox.RunResult{Status: sandbox.StatusFailed, ExitCode: -1, Stderr: []byte(err.Error())},
+			result: sandbox.RunResult{
+				Status:   sandbox.StatusSkipped,
+				ExitCode: 0,
+				Stderr:   []byte(err.Error()),
+			},
 		}}
 		return records, nil, nil
 	}
@@ -571,23 +587,26 @@ func executeSandboxCommands(
 	for _, spec := range planSandboxCommands(opts, useSkillScripts) {
 		cmd := spec.Cmd + " " + strings.Join(spec.Args, " ")
 		dec, reason := policy.CheckNonInteractive(cmd)
+		// Redact command text before persistence so any accidental secret in
+		// a planned argv never lands in SQLite / reports.
+		safeCmd, _ := redact.CommandText(cmd)
 		perms = append(perms, store.PermissionDecision{
 			TaskID:    taskID,
-			Command:   cmd,
+			Command:   safeCmd,
 			Action:    string(dec.Action),
 			Reason:    reason,
 			CreatedAt: time.Now().UTC().Format(time.RFC3339),
 		})
 		if dec.Action != "allow" {
 			metrics.IncPermissionBlocked()
-			log.Printf("permission blocked %q: %s", cmd, reason)
+			log.Printf("permission blocked %q: %s", safeCmd, reason)
 			continue
 		}
 		result, runErr := sb.Run(ctx, ws, spec)
 		if runErr != nil {
 			result = sandbox.RunResult{Status: sandbox.StatusFailed, ExitCode: -1, Stderr: []byte(runErr.Error())}
 		}
-		records = append(records, sandboxRunRecord{command: cmd, result: result})
+		records = append(records, sandboxRunRecord{command: safeCmd, result: result})
 		metrics.IncToolCalls()
 		totalDuration += result.Duration
 		if result.Status == sandbox.StatusTimeout {
@@ -690,19 +709,24 @@ func buildAndPersistReport(
 		rd.Conclusion = report.Conclusion(conclusionOverride)
 	}
 
-	// Predict the report file paths before writing so the Artifacts field
-	// (which references the report files themselves) can be populated in
-	// the ReportData that gets serialized to JSON/Markdown. Without this,
-	// the written reports would always show an empty Artifacts list.
+	// Write reports first, then build Artifacts with real SizeBytes and
+	// rewrite so both on-disk JSON/MD and the DB agree (no SizeBytes:0 lie).
 	now := time.Now().UTC().Format(time.RFC3339)
-	predictedJSON, predictedMD := rd.PredictedPaths(opts.outDir)
-	artifacts := buildArtifacts(taskID, predictedJSON, predictedMD, now)
-	rd.Artifacts = artifacts
-
+	// Temporary empty artifacts so WriteAll can create the files.
+	rd.Artifacts = nil
 	jsonPath, mdPath, err := rd.WriteAll(opts.outDir)
 	if err != nil {
 		return nil, "", "", fmt.Errorf("write reports: %w", err)
 	}
+	artifacts := buildArtifacts(taskID, jsonPath, mdPath, now)
+	rd.Artifacts = artifacts
+	// Rewrite with real artifact sizes so on-disk reports match DB.
+	if _, _, err := rd.WriteAll(opts.outDir); err != nil {
+		return nil, "", "", fmt.Errorf("rewrite reports with artifact sizes: %w", err)
+	}
+	// Sizes may have grown by a few bytes after embedding Artifacts; refresh.
+	artifacts = buildArtifacts(taskID, jsonPath, mdPath, now)
+	rd.Artifacts = artifacts
 
 	// Derive the task status: a non-empty conclusionOverride means this is a
 	// partial report written after a step failure, so the task is "failed"
@@ -738,6 +762,16 @@ func buildTaskReport(
 	if input != nil {
 		diffSource = string(input.Source)
 	}
+	// Persist confirmed + warnings + needs-human-review so audits can
+	// reconstruct why a conclusion became needs_human_review from DB alone.
+	allFindings := make([]review.Finding, 0,
+		len(rd.Review.Findings)+len(rd.Review.Warnings)+len(rd.Review.NeedsHumanReview))
+	allFindings = append(allFindings, rd.Review.Findings...)
+	for _, w := range rd.Review.Warnings {
+		allFindings = append(allFindings, w.Finding)
+	}
+	allFindings = append(allFindings, rd.Review.NeedsHumanReview...)
+
 	return store.TaskReport{
 		Task: store.ReviewTask{
 			TaskID:            taskID,
@@ -749,7 +783,7 @@ func buildTaskReport(
 			TotalDurationMs:   int64(summary.TotalDuration.Milliseconds()),
 			SandboxDurationMs: int64(summary.SandboxDuration.Milliseconds()),
 		},
-		Findings:    toStoreFindings(rd.Review.Findings, taskID, now),
+		Findings:    toStoreFindings(allFindings, taskID, now),
 		SandboxRuns: toStoreSandboxRuns(runRecords, taskID, now),
 		Permissions: permDecisions,
 		Artifacts:   artifacts,
@@ -876,4 +910,24 @@ func printSummary(rd *report.ReportData, jsonPath, mdPath string) {
 	log.Printf("blocked permissions: %d", rd.PermissionBlocked)
 	log.Printf("report (json):     %s", jsonPath)
 	log.Printf("report (markdown): %s", mdPath)
+}
+
+// scrubReviewSecrets redacts Evidence/Recommendation on every finding
+// bucket in place so intermediate pipeline state never retains secrets.
+func scrubReviewSecrets(rev *review.Report) {
+	if rev == nil {
+		return
+	}
+	for i := range rev.Findings {
+		rev.Findings[i].Evidence = redact.MustText(rev.Findings[i].Evidence)
+		rev.Findings[i].Recommendation = redact.MustText(rev.Findings[i].Recommendation)
+	}
+	for i := range rev.Warnings {
+		rev.Warnings[i].Finding.Evidence = redact.MustText(rev.Warnings[i].Finding.Evidence)
+		rev.Warnings[i].Finding.Recommendation = redact.MustText(rev.Warnings[i].Finding.Recommendation)
+	}
+	for i := range rev.NeedsHumanReview {
+		rev.NeedsHumanReview[i].Evidence = redact.MustText(rev.NeedsHumanReview[i].Evidence)
+		rev.NeedsHumanReview[i].Recommendation = redact.MustText(rev.NeedsHumanReview[i].Recommendation)
+	}
 }

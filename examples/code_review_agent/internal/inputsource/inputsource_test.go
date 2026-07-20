@@ -224,12 +224,10 @@ func TestLoad_RepoPath_UntrackedFiles(t *testing.T) {
 	if err := exec.Command("git", "init", repo).Run(); err != nil {
 		t.Fatalf("git init: %v", err)
 	}
-	// Configure git so `git diff` and `git ls-files` work in a fresh repo
-	// without a default identity (required by some git versions for any
-	// write operation, but `git ls-files` doesn't need it; set anyway).
-	if err := os.Chdir(repo); err != nil {
-		t.Fatalf("chdir: %v", err)
-	}
+	// Configure identity for commit without chdir'ing into the temp repo
+	// (chdir would pin CWD on Windows and break TempDir cleanup).
+	_ = exec.Command("git", "-C", repo, "config", "user.email", "test@example.com").Run()
+	_ = exec.Command("git", "-C", repo, "config", "user.name", "test").Run()
 	// Create an untracked Go file with a hardcoded credential.
 	creds := filepath.Join(repo, "creds.go")
 	credsBody := []byte("package main\nconst password = \"sk-untracked-test-12345\"\n")
@@ -343,5 +341,40 @@ func TestShouldUploadFile(t *testing.T) {
 	linfo := createSymlinkOrSkip(t, target, link)
 	if shouldUploadFile(linfo) {
 		t.Fatal("symlink should not be uploaded")
+	}
+}
+
+// TestSyntheticDiff_IntermediateSymlinkRejected ensures a directory symlink
+// under the repo cannot be used to read host files via file-list / untracked
+// synthesis.
+func TestSyntheticDiff_IntermediateSymlinkRejected(t *testing.T) {
+	repo := t.TempDir()
+	outside := t.TempDir()
+	secret := filepath.Join(outside, "secret.env")
+	if err := os.WriteFile(secret, []byte("password = \"supersecret123\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	escape := filepath.Join(repo, "escape")
+	createSymlinkOrSkip(t, outside, escape)
+
+	_, err := syntheticDiffForFile(filepath.Join("escape", "secret.env"), repo, MaxDiffBytes)
+	if err == nil {
+		t.Fatal("expected intermediate symlink rejection, got nil")
+	}
+}
+
+// TestPathUnder_IntermediateSymlinkRejected verifies pathUnder rejects a
+// path whose intermediate component is a symlink escaping the parent.
+func TestPathUnder_IntermediateSymlinkRejected(t *testing.T) {
+	parent := t.TempDir()
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "passwd"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(parent, "escape")
+	createSymlinkOrSkip(t, outside, link)
+	child := filepath.Join(link, "passwd")
+	if _, err := pathUnder(parent, child); err == nil {
+		t.Fatal("expected pathUnder to reject intermediate symlink escape")
 	}
 }

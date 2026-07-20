@@ -58,13 +58,11 @@ var defaultDeniedCommands = []string{
 }
 
 // defaultAllowedCommands are the known-safe review tools that the
-// sandbox may run without prompting. They are read-only or low-risk
+// sandbox may run without prompting. Kept deliberately narrow: go/staticcheck/sh only; they are read-only or low-risk
 // for a code-review workload. "sh" is allowed so the skill's POSIX
 // shell scripts can be executed.
 var defaultAllowedCommands = []string{
-	"go", "staticcheck", "git", "ls", "cat", "grep", "find", "wc",
-	"diff", "head", "tail", "mkdir", "cp", "mv", "echo", "printf",
-	"sh",
+	"go", "staticcheck", "sh",
 }
 
 // Policy is a fail-closed PermissionPolicy for code-review sandbox

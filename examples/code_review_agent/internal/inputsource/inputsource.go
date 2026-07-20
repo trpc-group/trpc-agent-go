@@ -224,15 +224,20 @@ func syntheticDiffForFile(name, repoRoot string, maxBytes int64) (string, error)
 		return "", fmt.Errorf("inputsource: reject absolute path %q in file-list", name)
 	}
 	// Resolve the entry under repoRoot and verify it stays under root.
+	// rejectSymlinkComponents catches intermediate dir symlinks before
+	// pathUnder/EvalSymlinks follows them into host content.
 	full := filepath.Join(repoRoot, name)
 	abs, err := filepath.Abs(full)
 	if err != nil {
 		return "", fmt.Errorf("inputsource: resolve %q: %w", name, err)
 	}
+	if err := rejectSymlinkComponents(repoRoot, name); err != nil {
+		return "", err
+	}
 	if _, err := pathUnder(repoRoot, abs); err != nil {
 		return "", fmt.Errorf("inputsource: reject path traversal %q (resolves outside repo root)", name)
 	}
-	// Lstat to reject symlinks, devices, sockets, etc.
+	// Lstat to reject leaf symlinks, devices, sockets, etc.
 	info, err := os.Lstat(abs)
 	if err != nil {
 		return "", fmt.Errorf("inputsource: stat listed file %q: %w", name, err)
@@ -302,6 +307,9 @@ func loadRepoPath(ctx context.Context, repo string) (*Input, error) {
 		diffText += "\n"
 	}
 	diffText += working
+	if int64(len(diffText)) > MaxDiffBytes {
+		return nil, fmt.Errorf("inputsource: repo diff exceeds max total size %d bytes (committed+working)", MaxDiffBytes)
+	}
 	parsed, err := diffparse.Parse(strings.NewReader(diffText))
 	if err != nil {
 		return nil, fmt.Errorf("inputsource: parse repo diff: %w", err)
@@ -364,8 +372,9 @@ func gitCommittedDiff(ctx context.Context, repo, baseBranch string) (string, err
 // gitWorkingTreeDiff returns the working-tree diff against HEAD, capturing
 // both staged and unstaged changes so staged-but-uncommitted security or
 // correctness changes are reviewed rather than silently skipped. For repos
-// with an unborn HEAD (no commits), it falls back to `git diff` (unstaged
-// only) since there are no staged changes to miss in a fresh repo.
+// with an unborn HEAD (no commits), it falls back to staged (`git diff --cached`)
+// plus unstaged (`git diff`) so a developer who only `git add`s a secret-bearing
+// file is still reviewed.
 //
 // Untracked files (listed by `git ls-files --others --exclude-standard`) are
 // synthesised into "new file" diffs and appended so newly-added files —
@@ -376,10 +385,20 @@ func gitCommittedDiff(ctx context.Context, repo, baseBranch string) (string, err
 func gitWorkingTreeDiff(ctx context.Context, repo string) (string, error) {
 	diff, err := gitOutput(ctx, repo, "diff", "HEAD")
 	if err != nil {
-		// unborn HEAD (no commits): fall back to unstaged-only diff.
-		diff, err = gitOutput(ctx, repo, "diff")
-		if err != nil {
-			return "", fmt.Errorf("inputsource: git diff working tree: %w", err)
+		// unborn HEAD (no commits): capture staged + unstaged.
+		unstaged, uerr := gitOutput(ctx, repo, "diff")
+		if uerr != nil {
+			return "", fmt.Errorf("inputsource: git diff working tree: %w", uerr)
+		}
+		staged, serr := gitOutput(ctx, repo, "diff", "--cached")
+		if serr != nil {
+			diff = unstaged
+		} else {
+			diff = staged
+			if diff != "" && unstaged != "" {
+				diff += "\n"
+			}
+			diff += unstaged
 		}
 	}
 	untracked, err := gitUntrackedDiff(ctx, repo, int64(len(diff)))
@@ -404,20 +423,20 @@ func gitWorkingTreeDiff(ctx context.Context, repo string) (string, error) {
 // their account would be too aggressive. Absolute paths are still rejected
 // defensively (see comment in the loop).
 //
-// When the remaining size budget is exhausted, the loop breaks early and
-// returns whatever was collected so far. This mirrors how loadFixtureDir
-// behaves when the total cap is reached: the caller gets a partial result
-// rather than a hard failure.
+// When the remaining size budget is exhausted, the load fails closed so a
+// late secret-bearing untracked file is never silently omitted.
 func gitUntrackedDiff(ctx context.Context, repo string, alreadyUsed int64) (string, error) {
-	if alreadyUsed >= MaxDiffBytes {
-		return "", nil
-	}
 	out, err := gitOutput(ctx, repo, "ls-files", "--others", "--exclude-standard", "-z")
 	if err != nil {
 		return "", fmt.Errorf("ls-files: %w", err)
 	}
 	if out == "" {
 		return "", nil
+	}
+	// Fail closed when the tracked working-tree already filled the budget:
+	// silently returning empty would drop untracked secret-bearing files.
+	if alreadyUsed >= MaxDiffBytes {
+		return "", fmt.Errorf("inputsource: untracked diff exceeds max total size %d bytes (tracked working tree already at cap; would skip untracked files)", MaxDiffBytes)
 	}
 	// Resolve repo to an absolute root once so syntheticDiffForFile's
 	// pathUnder check is consistent across entries.
@@ -438,11 +457,11 @@ func gitUntrackedDiff(ctx context.Context, repo string, alreadyUsed int64) (stri
 		if filepath.IsAbs(name) {
 			return "", fmt.Errorf("reject absolute untracked path %q", name)
 		}
-		// Stop once the size budget is exhausted so we don't fail the
-		// whole load just because there are too many untracked files.
+		// Fail closed once the size budget is exhausted so a late secret file
+		// is never silently skipped under a flood of large untracked files.
 		remaining := MaxDiffBytes - alreadyUsed - totalSize
 		if remaining <= 0 {
-			break
+			return "", fmt.Errorf("inputsource: untracked diff exceeds max total size %d bytes (partial collection truncated)", MaxDiffBytes)
 		}
 		// Pre-check the file type so non-regular entries (directories,
 		// submodules, symlinks) are skipped rather than failing the
@@ -518,19 +537,97 @@ func shouldUploadFile(info os.FileInfo) bool {
 	return mode.IsRegular()
 }
 
+// rejectSymlinkComponents Lstat's every path component under repoRoot for
+// name and rejects any symlink. This closes the intermediate-directory
+// symlink escape that lexical pathUnder alone cannot catch.
+func rejectSymlinkComponents(repoRoot, name string) error {
+	clean := filepath.Clean(name)
+	if clean == "." || clean == string(filepath.Separator) {
+		return nil
+	}
+	parts := strings.Split(clean, string(filepath.Separator))
+	cur := repoRoot
+	for _, part := range parts {
+		if part == "" || part == "." {
+			continue
+		}
+		cur = filepath.Join(cur, part)
+		info, err := os.Lstat(cur)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return fmt.Errorf("inputsource: stat component %q: %w", cur, err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("inputsource: reject symlink component %q in path %q", cur, name)
+		}
+	}
+	return nil
+}
+
 // pathUnder ensures child is under parent, preventing directory traversal.
-// Both paths are cleaned with filepath.Clean; child is accepted only when
-// it equals parent or has parent as a path prefix (with a separator). The
-// cleaned child path is returned on success.
+// Paths are cleaned and, when they exist on disk, resolved with
+// filepath.EvalSymlinks so intermediate directory symlinks cannot escape
+// the parent (lexical HasPrefix alone is insufficient). The cleaned /
+// resolved child path is returned on success.
 func pathUnder(parent, child string) (string, error) {
 	pc := filepath.Clean(parent)
 	cc := filepath.Clean(child)
-	if cc == pc {
-		return cc, nil
+	// Lexical check first (fast reject for obvious ../ escapes).
+	if cc != pc {
+		prefix := pc + string(filepath.Separator)
+		if !strings.HasPrefix(cc, prefix) {
+			return "", fmt.Errorf("inputsource: path %q is not under %q", child, parent)
+		}
 	}
-	prefix := pc + string(filepath.Separator)
-	if !strings.HasPrefix(cc, prefix) {
-		return "", fmt.Errorf("inputsource: path %q is not under %q", child, parent)
+	// Resolve symlinks on both sides when the paths exist. If EvalSymlinks
+	// fails because a path does not yet exist, fall back to resolving the
+	// longest existing prefix.
+	realParent, perr := filepath.EvalSymlinks(pc)
+	if perr != nil {
+		realParent = pc
+	} else {
+		realParent = filepath.Clean(realParent)
 	}
-	return cc, nil
+	realChild, cerr := filepath.EvalSymlinks(cc)
+	if cerr != nil {
+		realChild, cerr = resolveExistingPrefix(cc)
+		if cerr != nil {
+			return "", fmt.Errorf("inputsource: path %q is not under %q: %w", child, parent, cerr)
+		}
+	} else {
+		realChild = filepath.Clean(realChild)
+	}
+	if realChild == realParent {
+		return realChild, nil
+	}
+	prefix := realParent + string(filepath.Separator)
+	if !strings.HasPrefix(realChild, prefix) {
+		return "", fmt.Errorf("inputsource: path %q resolves outside %q", child, parent)
+	}
+	return realChild, nil
+}
+
+// resolveExistingPrefix walks up from path until EvalSymlinks succeeds on a
+// prefix, then rejoins the missing suffix.
+func resolveExistingPrefix(path string) (string, error) {
+	path = filepath.Clean(path)
+	suffix := []string{}
+	cur := path
+	for {
+		if resolved, err := filepath.EvalSymlinks(cur); err == nil {
+			out := filepath.Clean(resolved)
+			for i := len(suffix) - 1; i >= 0; i-- {
+				out = filepath.Join(out, suffix[i])
+			}
+			return out, nil
+		}
+		dir, base := filepath.Dir(cur), filepath.Base(cur)
+		if dir == cur {
+			return path, nil
+		}
+		suffix = append(suffix, base)
+		cur = dir
+	}
 }

@@ -29,8 +29,11 @@ func scanSQLRowsLeak(fset *token.FileSet, file *ast.File, df diffparse.DiffFile)
 		if !ok || fn.Body == nil {
 			continue
 		}
+		// Collect Query result variables and which identifiers are
+		// closed via defer <ident>.Close(). A deferred file.Close()
+		// must NOT suppress a rows leak.
 		var rowsVars []string
-		hasRowsClose := false
+		closed := map[string]bool{}
 		ast.Inspect(fn.Body, func(n ast.Node) bool {
 			switch v := n.(type) {
 			case *ast.AssignStmt:
@@ -45,16 +48,16 @@ func scanSQLRowsLeak(fset *token.FileSet, file *ast.File, df diffparse.DiffFile)
 					}
 				}
 			case *ast.DeferStmt:
-				if isCloseCall(v.Call) {
-					hasRowsClose = true
+				if name, ok := closeIdent(v.Call); ok {
+					closed[name] = true
 				}
 			}
 			return true
 		})
-		if hasRowsClose {
-			continue
-		}
-		for range rowsVars {
+		for _, rv := range rowsVars {
+			if closed[rv] {
+				continue
+			}
 			findings = append(findings, astFinding{
 				node:           fn,
 				ruleID:         RuleSQLRowsLeak,
@@ -81,11 +84,15 @@ func isQueryCall(expr ast.Expr) bool {
 	if !ok {
 		return false
 	}
-	return sel.Sel.Name == "Query"
+	return sel.Sel.Name == "Query" || sel.Sel.Name == "QueryContext"
 }
 
-// isCloseCall reports whether call is `<x>.Close()`.
-func isCloseCall(call *ast.CallExpr) bool {
+// closeIdent reports whether call is `<ident>.Close()` and returns the
+// receiver identifier name (e.g. "rows" for defer rows.Close()).
+func closeIdent(call *ast.CallExpr) (string, bool) {
 	sel, ok := call.Fun.(*ast.SelectorExpr)
-	return ok && sel.Sel.Name == "Close"
+	if !ok || sel.Sel.Name != "Close" {
+		return "", false
+	}
+	return identName(sel.X)
 }

@@ -371,3 +371,18 @@ func TestRulesPhase1(t *testing.T) {
 		})
 	}
 }
+
+// TestTM001_ModifiedExistingFile ensures TM-001 only flags newly added
+// sources (OldPath == /dev/null), not routine edits to existing files.
+func TestTM001_ModifiedExistingFile(t *testing.T) {
+	diff := "diff --git a/existing.go b/existing.go\n" +
+		"--- a/existing.go\n" +
+		"+++ b/existing.go\n" +
+		"@@ -1,1 +1,1 @@\n" +
+		"-package existing\n" +
+		"+package existing // touched\n"
+	fs := runDiff(t, diff)
+	if hasRule(fs, "TM-001") {
+		t.Fatalf("expected no TM-001 for modified existing file, got: %v", fs)
+	}
+}

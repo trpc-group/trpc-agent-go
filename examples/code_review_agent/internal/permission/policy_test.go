@@ -368,3 +368,21 @@ func TestCheck_AllMetacharactersDenied(t *testing.T) {
 		}
 	}
 }
+
+func TestCheck_NarrowAllowlist(t *testing.T) {
+	p := NewPolicy(nil)
+	// Previously allowed host utilities must now ask (or deny), not allow.
+	for _, cmd := range []string{"git status", "mkdir x", "cp a b", "mv a b", "find .", "echo hi"} {
+		dec, reason := p.Check(cmd)
+		if dec.Action == tool.PermissionActionAllow {
+			t.Fatalf("%q: must not be allow under narrow default allowlist (%s)", cmd, reason)
+		}
+	}
+	// Core tools still allowed.
+	for _, cmd := range []string{"go vet ./...", "staticcheck ./...", "sh scripts/run_go_vet.sh"} {
+		dec, reason := p.Check(cmd)
+		if dec.Action != tool.PermissionActionAllow {
+			t.Fatalf("%q: want allow, got %q (%s)", cmd, dec.Action, reason)
+		}
+	}
+}

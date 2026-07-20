@@ -32,7 +32,11 @@ var patterns = []redactPattern{
 	{regexp.MustCompile(`(?i)(password|passwd|pwd)\s*[=:]\s*["']?[^\s"']{4,}["']?`), "[REDACTED:password]"},
 	{regexp.MustCompile(`(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----`), "[REDACTED:private_key]"},
 	{regexp.MustCompile(`\b(?:\d[ -]*?){13,16}\b`), "[REDACTED:credit_card]"},
+	// DB schemes first (more specific), then generic URL userinfo so
+	// credentialed proxies (GOPROXY, HTTPS feeds) are scrubbed before
+	// sandbox stdout / reports are persisted.
 	{regexp.MustCompile(`(?i)(postgres|mysql|mongodb|redis)://[^\s"']{8,}`), "[REDACTED:connection_string]"},
+	{regexp.MustCompile(`(?i)\b[a-z][a-z0-9+.-]*://[^/\s"'@]+:[^/\s"'@]+@[^\s"']+`), "[REDACTED:url_userinfo]"},
 	{regexp.MustCompile(`\beyJ[A-Za-z0-9_\-]{8,}\.eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\b`), "[REDACTED:jwt]"},
 	{regexp.MustCompile(`\bAKIA[0-9A-Z]{16}\b`), "[REDACTED:aws_access_key]"},
 	{regexp.MustCompile(`\bxox[baprs]-[A-Za-z0-9\-]{10,}`), "[REDACTED:slack_token]"},

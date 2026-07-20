@@ -9,11 +9,13 @@ set -e
 #
 # The package argument defaults to ./... (all packages under the repo root).
 # If the staticcheck binary is not installed, the script writes a skip notice
-# to stdout and exits 0 so the review pipeline can continue with the other
-# checks. The tool output is echoed to stdout so the pipeline captures it in
-# RunResult, and also persisted to out/staticcheck.txt for workspace artifacts.
+# to stderr and exits 2 so the pipeline records a non-success status rather
+# than claiming static analysis succeeded. Reviewers who need staticcheck
+# should build the project's Dockerfile (which bakes it in). The tool output
+# is echoed to stdout so the pipeline captures it in RunResult, and also
+# persisted to out/staticcheck.txt for workspace artifacts.
 # The real exit code propagates: 0 = clean, 1 = findings reported,
-# other = tool failure.
+# 2 = not installed / tool failure, other = tool failure.
 
 OUT="${WORKSPACE_DIR}/out"
 mkdir -p "$OUT"
@@ -21,8 +23,8 @@ cd "${WORKSPACE_DIR}/repo"
 PKG="${1:-./...}"
 
 if ! command -v staticcheck > /dev/null 2>&1; then
-    echo "staticcheck not installed, skipping"
-    exit 0
+    echo "staticcheck not installed, skipping" >&2
+    exit 2
 fi
 
 set +e

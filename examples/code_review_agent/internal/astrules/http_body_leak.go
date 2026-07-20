@@ -41,10 +41,12 @@ func scanHTTPBodyLeak(fset *token.FileSet, file *ast.File, df diffparse.DiffFile
 		if !ok || fn.Body == nil {
 			continue
 		}
-		// Collect response variable names and whether a deferred
-		// Body.Close() appears in the same function.
+		// Collect response variable names and which are closed via
+		// defer <var>.Body.Close(). Only *ast.DeferStmt counts —
+		// a plain resp.Body.Close() call (wrong path / too early)
+		// must not suppress the finding.
 		var respVars []string
-		hasBodyClose := false
+		closed := map[string]bool{}
 		ast.Inspect(fn.Body, func(n ast.Node) bool {
 			switch v := n.(type) {
 			case *ast.AssignStmt:
@@ -58,17 +60,17 @@ func scanHTTPBodyLeak(fset *token.FileSet, file *ast.File, df diffparse.DiffFile
 						}
 					}
 				}
-			case *ast.CallExpr:
-				if isDeferBodyClose(v) {
-					hasBodyClose = true
+			case *ast.DeferStmt:
+				if name, ok := deferBodyCloseVar(v.Call); ok {
+					closed[name] = true
 				}
 			}
 			return true
 		})
-		if hasBodyClose {
-			continue
-		}
 		for _, rv := range respVars {
+			if closed[rv] {
+				continue
+			}
 			findings = append(findings, astFinding{
 				node:           fn,
 				ruleID:         RuleHTTPBodyLeak,
@@ -87,7 +89,9 @@ func scanHTTPBodyLeak(fset *token.FileSet, file *ast.File, df diffparse.DiffFile
 
 // isHTTPCallReturningResponse reports whether expr is a call to
 // http.Get/Post/Head/PostForm or (*http.Client).Do — the standard
-// library functions that return a *http.Response.
+// library functions that return a *http.Response. Package-level
+// Get/Post/Head/PostForm must be on the `http` identifier to avoid
+// flagging unrelated methods such as db.Get or cache.Post.
 func isHTTPCallReturningResponse(expr ast.Expr) bool {
 	call, ok := expr.(*ast.CallExpr)
 	if !ok {
@@ -97,19 +101,38 @@ func isHTTPCallReturningResponse(expr ast.Expr) bool {
 	if !ok {
 		return false
 	}
-	return httpMethods[sel.Sel.Name]
+	if !httpMethods[sel.Sel.Name] {
+		return false
+	}
+	switch x := sel.X.(type) {
+	case *ast.Ident:
+		if x.Name == "http" {
+			return true
+		}
+		// client.Do is the common pattern; other methods on plain idents
+		// (db.Get, cache.Post) are too ambiguous and are ignored.
+		return sel.Sel.Name == "Do"
+	case *ast.SelectorExpr:
+		// http.DefaultClient.Get / cli.Transport... rare; accept Get/Post/Do.
+		return true
+	default:
+		return false
+	}
 }
 
-// isDeferBodyClose reports whether call is `<var>.Body.Close()`. It is
-// used to detect the compensating defer that suppresses the finding.
-func isDeferBodyClose(call *ast.CallExpr) bool {
+// deferBodyCloseVar reports whether call is `<var>.Body.Close()` and
+// returns the response variable name. Used only under *ast.DeferStmt.
+func deferBodyCloseVar(call *ast.CallExpr) (string, bool) {
 	sel, ok := call.Fun.(*ast.SelectorExpr)
 	if !ok || sel.Sel.Name != "Close" {
-		return false
+		return "", false
 	}
 	// sel.X must be <var>.Body
 	bodySel, ok := sel.X.(*ast.SelectorExpr)
-	return ok && bodySel.Sel.Name == "Body"
+	if !ok || bodySel.Sel.Name != "Body" {
+		return "", false
+	}
+	return identName(bodySel.X)
 }
 
 // identName returns the identifier name if expr is an *ast.Ident.

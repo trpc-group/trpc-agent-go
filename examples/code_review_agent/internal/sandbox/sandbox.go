@@ -12,8 +12,8 @@
 // Package sandbox provides a fail-closed execution layer over the
 // trpc-agent-go codeexecutor Engine API. It provisions an isolated
 // workspace, stages the repository read-only, and runs review tools with
-// a cleaned environment, client-side bounded output, and advisory
-// resource limits.
+// a cleaned environment (no host PATH/GOPROXY inheritance), client-side
+// retained-output caps, and advisory resource limits.
 //
 // The Executor never silently degrades to an unsafe backend: container/e2b
 // construction failures are returned to the caller, and the local backend is
@@ -43,7 +43,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"time"
 
 	tcontainer "github.com/docker/docker/api/types/container"
@@ -433,35 +436,66 @@ func (e *Executor) Close(ctx context.Context, ws codeexecutor.Workspace) error {
 
 // buildSandboxEnv constructs the minimal, allowlisted environment for a
 // spawned process. Only PATH, GOPATH, GOCACHE, GOPROXY and WORKSPACE_DIR are
-// injected; os.Environ is never called. When host GOPATH or GOCACHE is empty,
-// they default to workspace-local cache paths so Go commands work in a clean
-// sandbox. GOPROXY defaults to "off" when unset by the user, enforcing the
-// skill's offline-friendly safety claim; an explicit user value always wins.
-// Caller-supplied extra values are merged on top.
+// injected; os.Environ is never called.
+//
+// Security: host GOPATH / GOCACHE / GOPROXY / PATH values are NOT copied.
+// Host GOPROXY may contain credentials (https://user:token@proxy), and host
+// PATH may point at attacker-controlled tool shims. GOPATH and GOCACHE always
+// resolve under the workspace; GOPROXY is always "off" (offline); PATH is a
+// fixed minimal set (or the directories of tools LookPath finds on local).
+// Caller-supplied extra values are merged on top and may intentionally
+// override these defaults for tests.
 func buildSandboxEnv(ws codeexecutor.Workspace, extra map[string]string) map[string]string {
-	gopath := os.Getenv("GOPATH")
-	if gopath == "" {
-		gopath = filepath.Join(ws.Path, ".gopath")
-	}
-	gocache := os.Getenv("GOCACHE")
-	if gocache == "" {
-		gocache = filepath.Join(ws.Path, ".gocache")
-	}
-	goproxy := os.Getenv("GOPROXY")
-	if goproxy == "" {
-		goproxy = "off"
-	}
 	env := map[string]string{
-		"PATH":                          os.Getenv("PATH"),
-		"GOPATH":                        gopath,
-		"GOCACHE":                       gocache,
-		"GOPROXY":                       goproxy,
+		"PATH":                          minimalCleanPATH(),
+		"GOPATH":                        filepath.Join(ws.Path, ".gopath"),
+		"GOCACHE":                       filepath.Join(ws.Path, ".gocache"),
+		"GOPROXY":                       "off",
 		codeexecutor.WorkspaceEnvDirKey: ws.Path,
 	}
 	for k, v := range extra {
 		env[k] = v
 	}
 	return env
+}
+
+// minimalCleanPATH returns a PATH that does not inherit the host process
+// environment wholesale. On Unix it is a fixed image-friendly list. On
+// Windows (local backend tests) it is the directories of essential tools
+// resolved via LookPath so `go` / `git` remain invocable without reopening
+// the full host PATH.
+func minimalCleanPATH() string {
+	if runtime.GOOS != "windows" {
+		return "/usr/local/go/bin:/go/bin:/usr/local/bin:/usr/bin:/bin"
+	}
+	seen := make(map[string]struct{})
+	var dirs []string
+	add := func(dir string) {
+		if dir == "" {
+			return
+		}
+		if _, ok := seen[dir]; ok {
+			return
+		}
+		seen[dir] = struct{}{}
+		dirs = append(dirs, dir)
+	}
+	for _, tool := range []string{"go", "git", "sh", "bash", "staticcheck"} {
+		if p, err := exec.LookPath(tool); err == nil {
+			add(filepath.Dir(p))
+		}
+	}
+	// System32 so basic shells / builtins remain available under CleanEnv.
+	if root := os.Getenv("SystemRoot"); root != "" {
+		add(filepath.Join(root, "System32"))
+		add(root)
+	}
+	if len(dirs) == 0 {
+		// Last resort: empty PATH would break every command; fall back to
+		// a non-inherited empty string and let LookPath failures surface.
+		return ""
+	}
+	return strings.Join(dirs, string(os.PathListSeparator))
 }
 
 // limitedRead reads at most max bytes from r. If the source contained more

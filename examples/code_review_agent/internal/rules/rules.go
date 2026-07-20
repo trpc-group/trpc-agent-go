@@ -356,6 +356,10 @@ func (r *missingTestsRule) ScanAll(files []diffparse.DiffFile) []Finding {
 		if !strings.HasSuffix(f.NewPath, ".go") || strings.HasSuffix(f.NewPath, "_test.go") {
 			continue
 		}
+		// Only newly added source files.
+		if f.OldPath != "/dev/null" && f.OldPath != "" {
+			continue
+		}
 		if hasTest[f.NewPath] {
 			continue
 		}

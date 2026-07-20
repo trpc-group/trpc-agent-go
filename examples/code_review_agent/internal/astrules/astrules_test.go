@@ -287,3 +287,79 @@ parseable Go source
 		t.Fatalf("expected no findings on unparseable input, got: %+v", findings)
 	}
 }
+
+// TestAST002FileCloseDoesNotSuppress ensures defer f.Close() does not
+// hide a real rows leak.
+func TestAST002FileCloseDoesNotSuppress(t *testing.T) {
+	leak := newFileDiff("db.go", `package example
+
+import (
+	"database/sql"
+	"os"
+)
+
+func names(db *sql.DB) ([]string, error) {
+	f, _ := os.Open("x")
+	defer f.Close()
+	rows, err := db.Query("SELECT name FROM users")
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for rows.Next() {
+		var n string
+		rows.Scan(&n)
+		out = append(out, n)
+	}
+	return out, nil
+}
+`)
+	findings := runDiff(t, leak)
+	if !hasRule(findings, RuleSQLRowsLeak) {
+		t.Fatalf("expected AST-002 when only file.Close is deferred; got: %+v", findings)
+	}
+}
+
+// TestAST001NonDeferCloseDoesNotSuppress ensures a plain Body.Close()
+// call is not treated as a deferred close.
+func TestAST001NonDeferCloseDoesNotSuppress(t *testing.T) {
+	leak := newFileDiff("client.go", `package example
+
+import (
+	"net/http"
+	"io"
+)
+
+func fetch(url string) (string, error) {
+	resp, err := http.Get(url)
+	if err != nil {
+		return "", err
+	}
+	resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	return string(body), nil
+}
+`)
+	findings := runDiff(t, leak)
+	if !hasRule(findings, RuleHTTPBodyLeak) {
+		t.Fatalf("expected AST-001 when Body.Close is not deferred; got: %+v", findings)
+	}
+}
+
+// TestAST001DBGetNotFlagged ensures unrelated Get methods are ignored.
+func TestAST001DBGetNotFlagged(t *testing.T) {
+	src := newFileDiff("store.go", `package example
+
+type DB struct{}
+
+func (d *DB) Get(k string) string { return k }
+
+func load(d *DB) string {
+	return d.Get("x")
+}
+`)
+	findings := runDiff(t, src)
+	if hasRule(findings, RuleHTTPBodyLeak) {
+		t.Fatalf("AST-001 must not fire on db.Get; got: %+v", findings)
+	}
+}
