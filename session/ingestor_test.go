@@ -17,27 +17,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// applyIngestOpts mirrors the canonical apply-in-place loop documented on
-// IngestOptions so the test suite exercises helpers through the same path as
-// real Ingestor implementations.
-func applyIngestOpts(opts ...IngestOption) IngestOptions {
-	var got IngestOptions
-	for _, opt := range opts {
-		if opt == nil {
-			continue
-		}
-		opt(&got)
-	}
-	return got
-}
-
 func TestWithIngestMetadata_Sets(t *testing.T) {
-	got := applyIngestOpts(WithIngestMetadata(map[string]any{"k": "v"}))
+	got := ResolveIngestOptions(WithIngestMetadata(map[string]any{"k": "v"}))
 	require.Equal(t, map[string]any{"k": "v"}, got.Metadata)
 }
 
 func TestWithIngestMetadata_EmptyAndNilIgnored(t *testing.T) {
-	got := applyIngestOpts(
+	got := ResolveIngestOptions(
 		WithIngestMetadata(nil),
 		WithIngestMetadata(map[string]any{}),
 	)
@@ -45,7 +31,7 @@ func TestWithIngestMetadata_EmptyAndNilIgnored(t *testing.T) {
 }
 
 func TestWithIngestMetadata_MergesAndOverwrites(t *testing.T) {
-	got := applyIngestOpts(
+	got := ResolveIngestOptions(
 		WithIngestMetadata(map[string]any{"shared": "first", "only_in_first": 1}),
 		WithIngestMetadata(map[string]any{"shared": "second", "only_in_second": true}),
 	)
@@ -57,7 +43,7 @@ func TestWithIngestMetadata_MergesAndOverwrites(t *testing.T) {
 
 func TestWithIngestMetadata_ResolvedMapIsIndependent(t *testing.T) {
 	caller := map[string]any{"k": "v"}
-	got := applyIngestOpts(WithIngestMetadata(caller))
+	got := ResolveIngestOptions(WithIngestMetadata(caller))
 
 	caller["k"] = "mutated"
 	caller["new"] = "injected"
@@ -69,18 +55,18 @@ func TestWithIngestMetadata_ResolvedMapIsIndependent(t *testing.T) {
 
 func TestWithIngestAgentID(t *testing.T) {
 	t.Run("sets agent id", func(t *testing.T) {
-		got := applyIngestOpts(WithIngestAgentID("agent-a"))
+		got := ResolveIngestOptions(WithIngestAgentID("agent-a"))
 		assert.Equal(t, "agent-a", got.AgentID)
 	})
 	t.Run("empty value is ignored", func(t *testing.T) {
-		got := applyIngestOpts(
+		got := ResolveIngestOptions(
 			WithIngestAgentID("agent-a"),
 			WithIngestAgentID(""),
 		)
 		assert.Equal(t, "agent-a", got.AgentID, "empty string must not clear an earlier value")
 	})
 	t.Run("later non-empty overrides", func(t *testing.T) {
-		got := applyIngestOpts(
+		got := ResolveIngestOptions(
 			WithIngestAgentID("agent-a"),
 			WithIngestAgentID("agent-b"),
 		)
@@ -90,18 +76,18 @@ func TestWithIngestAgentID(t *testing.T) {
 
 func TestWithIngestRunID(t *testing.T) {
 	t.Run("sets run id", func(t *testing.T) {
-		got := applyIngestOpts(WithIngestRunID("run-a"))
+		got := ResolveIngestOptions(WithIngestRunID("run-a"))
 		assert.Equal(t, "run-a", got.RunID)
 	})
 	t.Run("empty value is ignored", func(t *testing.T) {
-		got := applyIngestOpts(
+		got := ResolveIngestOptions(
 			WithIngestRunID("run-a"),
 			WithIngestRunID(""),
 		)
 		assert.Equal(t, "run-a", got.RunID, "empty string must not clear an earlier value")
 	})
 	t.Run("later non-empty overrides", func(t *testing.T) {
-		got := applyIngestOpts(
+		got := ResolveIngestOptions(
 			WithIngestRunID("run-a"),
 			WithIngestRunID("run-b"),
 		)
@@ -109,13 +95,15 @@ func TestWithIngestRunID(t *testing.T) {
 	})
 }
 
-func TestIngestOptions_CombinedApply(t *testing.T) {
-	got := applyIngestOpts(
+func TestResolveIngestOptions(t *testing.T) {
+	got := ResolveIngestOptions(
 		WithIngestMetadata(map[string]any{"tag": "x"}),
+		nil,
 		WithIngestAgentID("agent-1"),
+		WithIngestAgentID("agent-2"),
 		WithIngestRunID("run-1"),
 	)
-	assert.Equal(t, "agent-1", got.AgentID)
+	assert.Equal(t, "agent-2", got.AgentID)
 	assert.Equal(t, "run-1", got.RunID)
 	assert.Equal(t, "x", got.Metadata["tag"])
 }
@@ -127,7 +115,7 @@ type stubIngestor struct {
 }
 
 func (s *stubIngestor) IngestSession(_ context.Context, _ *Session, opts ...IngestOption) error {
-	s.last = applyIngestOpts(opts...)
+	s.last = ResolveIngestOptions(opts...)
 	return nil
 }
 

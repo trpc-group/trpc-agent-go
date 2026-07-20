@@ -102,13 +102,7 @@ func (s *Service) IngestSession(
 		return nil
 	}
 	writeLastExtractAt(sess, latestTs)
-	var reqOpts session.IngestOptions
-	for _, opt := range opts {
-		if opt == nil {
-			continue
-		}
-		opt(&reqOpts)
-	}
+	reqOpts := session.ResolveIngestOptions(opts...)
 	job := &ingestJob{
 		Ctx:      context.WithoutCancel(ctx),
 		UserKey:  userKey,

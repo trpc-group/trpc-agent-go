@@ -11,38 +11,36 @@ package session
 
 import "context"
 
-// IngestOptions captures the per-request settings for Ingestor.IngestSession.
+// IngestOptions contains backend-neutral hints for one call to
+// Ingestor.IngestSession. Provider-specific ingestion policy and request
+// fields belong to the provider package rather than this shared contract.
 //
-// New fields can be added here over time without changing the Ingestor
-// interface signature, so implementations stay forward compatible as
-// ingestion semantics evolve. Callers configure it via the With* helpers
-// (e.g. WithIngestMetadata) and implementations resolve the effective values
-// by applying each option to a local IngestOptions value in a for-loop,
-// mirroring the SummaryOption pattern in this package:
-//
-//	var req session.IngestOptions
-//	for _, opt := range opts {
-//	    if opt != nil {
-//	        opt(&req)
-//	    }
-//	}
+// Implementations may ignore hints they do not support and should document
+// which hints they honor.
 type IngestOptions struct {
-	// Metadata is extra metadata to attach to the resulting memories.
-	// Backends typically merge it into the per-record metadata payload.
+	// Metadata contains caller-supplied attributes associated with the
+	// ingested session.
 	Metadata map[string]any
-	// AgentID identifies the agent that produced the session content.
-	// Backends that support multi-agent partitioning use it to scope memories.
+	// AgentID identifies the agent associated with the ingested session.
 	AgentID string
-	// RunID identifies the conversation/run associated with the ingestion.
-	// Backends that support per-run grouping use it to link related memories.
+	// RunID identifies the run associated with the ingested session.
 	RunID string
 }
 
-// IngestOption configures a single ingestion request. Use the With* helpers
-// (e.g. WithIngestMetadata, WithIngestAgentID, WithIngestRunID) to set the
-// well-known per-request fields, or construct a custom IngestOption that
-// mutates IngestOptions directly.
+// IngestOption configures the backend-neutral hints for one ingestion request.
 type IngestOption func(*IngestOptions)
+
+// ResolveIngestOptions applies opts in order and returns the resolved hints for
+// one ingestion request. Nil options are ignored.
+func ResolveIngestOptions(opts ...IngestOption) IngestOptions {
+	var resolved IngestOptions
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&resolved)
+		}
+	}
+	return resolved
+}
 
 // WithIngestMetadata attaches the supplied metadata to a single ingestion
 // request. Repeated calls merge the maps; later values overwrite earlier
@@ -85,16 +83,14 @@ func WithIngestRunID(runID string) IngestOption {
 	}
 }
 
-// Ingestor ingests a completed session transcript into an external long-term
-// memory platform (e.g. mem0). Implementations enqueue the session for
-// asynchronous ingestion; the runner calls IngestSession after each turn
-// completes.
+// Ingestor ingests completed session content into long-term memory. The runner
+// calls IngestSession after each turn completes. Implementations may process
+// the session synchronously or enqueue it for later processing.
 //
-// The variadic IngestOption slice lets callers configure per-request
-// behaviour (metadata, agent_id, run_id, ...) without breaking the interface
-// as ingestion semantics evolve. Implementations resolve the effective values
-// by applying each option to a local IngestOptions value (see the IngestOptions
-// doc comment for the canonical snippet).
+// A nil return means that no synchronous submission error occurred; it does not
+// guarantee durable persistence unless the implementation documents stronger
+// delivery semantics. Options carry common caller hints. Provider-specific
+// behavior is configured by the implementation that owns it.
 type Ingestor interface {
 	IngestSession(ctx context.Context, sess *Session, opts ...IngestOption) error
 }
