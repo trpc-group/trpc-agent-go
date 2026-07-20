@@ -281,19 +281,10 @@ type SearchOptions struct {
 	TimeAfter  *time.Time // Filter episodes with event_time >= TimeAfter.
 	TimeBefore *time.Time // Filter episodes with event_time <= TimeBefore.
 	MaxResults int        // Override default max results. 0 means use default.
-	AgentID    string     // Optionally narrow results to an agent when supported.
-	RunID      string     // Optionally narrow results to a run when supported.
 
 	// SimilarityThreshold sets the minimum similarity score for results.
 	// Results below this threshold are filtered out. 0 means use service default.
 	SimilarityThreshold float64
-
-	// IncludeExpired includes expired memories when the backend supports memory
-	// expiration. The default is false.
-	IncludeExpired bool
-
-	// Explain asks the backend to return ranking diagnostics when supported.
-	Explain bool
 
 	// OrderByEventTime applies event_time (ascending) as a tie-breaker
 	// after relevance ranking. Entries without event_time are appended

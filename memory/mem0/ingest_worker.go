@@ -29,7 +29,7 @@ type ingestJob struct {
 	Session  *session.Session
 	LatestTs time.Time
 	Messages []model.Message
-	Options  session.IngestOptions
+	Options  ingestOptions
 }
 
 type ingestWorker struct {
@@ -172,7 +172,7 @@ func (w *ingestWorker) ingest(
 	userKey memory.UserKey,
 	_ *session.Session,
 	messages []model.Message,
-	reqOpts session.IngestOptions,
+	reqOpts ingestOptions,
 ) error {
 	apiMsgs := make([]apiMessage, 0, len(messages))
 	for _, m := range messages {
@@ -186,8 +186,8 @@ func (w *ingestWorker) ingest(
 		return nil
 	}
 	infer := true
-	if reqOpts.Infer != nil {
-		infer = *reqOpts.Infer
+	if reqOpts.infer != nil {
+		infer = *reqOpts.infer
 	}
 	if w.apiMode == apiModeSelfHostedOSS {
 		return w.ingestOSS(ctx, userKey, apiMsgs, reqOpts, infer)
@@ -196,9 +196,9 @@ func (w *ingestWorker) ingest(
 		Messages:  apiMsgs,
 		UserID:    userKey.UserID,
 		AppID:     userKey.AppName,
-		AgentID:   reqOpts.AgentID,
-		RunID:     reqOpts.RunID,
-		Metadata:  cloneMetadata(reqOpts.Metadata),
+		AgentID:   reqOpts.agentID,
+		RunID:     reqOpts.runID,
+		Metadata:  cloneMetadata(reqOpts.metadata),
 		Infer:     infer,
 		Async:     w.asyncMode,
 		Version:   w.version,
@@ -216,19 +216,19 @@ func (w *ingestWorker) ingestOSS(
 	ctx context.Context,
 	userKey memory.UserKey,
 	messages []apiMessage,
-	reqOpts session.IngestOptions,
+	reqOpts ingestOptions,
 	infer bool,
 ) error {
 	req := ossCreateMemoryRequest{
 		Messages:       messages,
 		UserID:         userKey.UserID,
-		AgentID:        reqOpts.AgentID,
-		RunID:          reqOpts.RunID,
-		Metadata:       withTRPCAppMetadata(reqOpts.Metadata, userKey.AppName),
-		ExpirationDate: reqOpts.ExpirationDate,
+		AgentID:        reqOpts.agentID,
+		RunID:          reqOpts.runID,
+		Metadata:       withTRPCAppMetadata(reqOpts.metadata, userKey.AppName),
+		ExpirationDate: reqOpts.expirationDate,
 		Infer:          infer,
-		MemoryType:     reqOpts.MemoryType,
-		Prompt:         reqOpts.Prompt,
+		MemoryType:     string(reqOpts.memoryType),
+		Prompt:         reqOpts.prompt,
 	}
 	return w.c.doJSON(ctx, httpMethodPost, pathOSSMemories, nil, req, nil)
 }

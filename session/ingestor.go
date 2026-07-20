@@ -36,18 +36,6 @@ type IngestOptions struct {
 	// RunID identifies the conversation/run associated with the ingestion.
 	// Backends that support per-run grouping use it to link related memories.
 	RunID string
-	// Prompt contains per-request extraction instructions. Backends that do not
-	// support custom extraction instructions may reject or ignore it.
-	Prompt string
-	// ExpirationDate is an optional provider-formatted date after which memories
-	// created by this request should no longer be returned by default.
-	ExpirationDate string
-	// Infer controls whether the backend extracts memories from the transcript.
-	// Nil preserves the backend default.
-	Infer *bool
-	// MemoryType selects a provider-supported memory creation mode. Empty
-	// preserves the backend default.
-	MemoryType string
 }
 
 // IngestOption configures a single ingestion request. Use the With* helpers

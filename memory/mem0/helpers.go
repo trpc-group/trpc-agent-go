@@ -98,7 +98,7 @@ func cloudSearchFilters(userKey memory.UserKey, opts serviceOpts) map[string]any
 func ossSearchFilters(
 	userKey memory.UserKey,
 	includeUnscoped bool,
-	opts memory.SearchOptions,
+	opts OSSSearchOptions,
 ) map[string]any {
 	filters := map[string]any{
 		queryKeyUserID: userKey.UserID,

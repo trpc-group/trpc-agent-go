@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/memory"
 )
 
 const (
@@ -37,6 +37,20 @@ type OSSReadOptions struct {
 	IncludeExpired bool
 }
 
+// OSSSearchOptions controls a self-hosted OSS memory search request.
+type OSSSearchOptions struct {
+	// SearchOptions contains provider-independent filtering and ranking options.
+	SearchOptions memory.SearchOptions
+	// AgentID narrows the search to memories associated with one agent.
+	AgentID string
+	// RunID narrows the search to memories associated with one run.
+	RunID string
+	// IncludeExpired asks Mem0 to include expired memories.
+	IncludeExpired bool
+	// Explain asks Mem0 to return provider ranking diagnostics.
+	Explain bool
+}
+
 // MemoryType identifies a Mem0 memory creation mode.
 type MemoryType string
 
@@ -44,6 +58,19 @@ const (
 	// MemoryTypeProcedural stores agent procedures rather than user facts.
 	MemoryTypeProcedural MemoryType = "procedural_memory"
 )
+
+type ingestOptions struct {
+	metadata       map[string]any
+	agentID        string
+	runID          string
+	prompt         string
+	expirationDate string
+	infer          *bool
+	memoryType     MemoryType
+}
+
+// IngestOption configures one Mem0 ingestion request made through Service.Ingest.
+type IngestOption func(*ingestOptions)
 
 type apiMode int
 
@@ -92,46 +119,82 @@ var defaultOptions = serviceOpts{
 // ServiceOpt configures a mem0 service.
 type ServiceOpt func(*serviceOpts)
 
+// WithIngestMetadata attaches metadata to memories created by one request.
+// Repeated calls merge metadata, with later values replacing earlier ones.
+func WithIngestMetadata(metadata map[string]any) IngestOption {
+	return func(opts *ingestOptions) {
+		if len(metadata) == 0 {
+			return
+		}
+		if opts.metadata == nil {
+			opts.metadata = make(map[string]any, len(metadata))
+		}
+		for key, value := range metadata {
+			opts.metadata[key] = value
+		}
+	}
+}
+
+// WithIngestAgentID associates memories created by one request with an agent.
+func WithIngestAgentID(agentID string) IngestOption {
+	return func(opts *ingestOptions) {
+		if strings.TrimSpace(agentID) == "" {
+			return
+		}
+		opts.agentID = agentID
+	}
+}
+
+// WithIngestRunID associates memories created by one request with a run.
+func WithIngestRunID(runID string) IngestOption {
+	return func(opts *ingestOptions) {
+		if strings.TrimSpace(runID) == "" {
+			return
+		}
+		opts.runID = runID
+	}
+}
+
 // WithIngestPrompt adds custom extraction instructions to one Mem0 OSS ingest
 // request. Empty prompts are ignored.
-func WithIngestPrompt(prompt string) session.IngestOption {
-	return func(opts *session.IngestOptions) {
+func WithIngestPrompt(prompt string) IngestOption {
+	return func(opts *ingestOptions) {
 		if strings.TrimSpace(prompt) == "" {
 			return
 		}
-		opts.Prompt = prompt
+		opts.prompt = prompt
 	}
 }
 
 // WithIngestExpirationDate sets the calendar date after which memories created
 // by one Mem0 OSS ingest request are hidden by default. The date component in
 // expirationDate's location is used.
-func WithIngestExpirationDate(expirationDate time.Time) session.IngestOption {
-	return func(opts *session.IngestOptions) {
+func WithIngestExpirationDate(expirationDate time.Time) IngestOption {
+	return func(opts *ingestOptions) {
 		if expirationDate.IsZero() {
 			return
 		}
-		opts.ExpirationDate = expirationDate.Format(time.DateOnly)
+		opts.expirationDate = expirationDate.Format(time.DateOnly)
 	}
 }
 
 // WithIngestInference controls whether Mem0 extracts memories from the
 // transcript. When disabled, Mem0 stores non-system messages verbatim.
-func WithIngestInference(infer bool) session.IngestOption {
-	return func(opts *session.IngestOptions) {
+func WithIngestInference(infer bool) IngestOption {
+	return func(opts *ingestOptions) {
 		value := infer
-		opts.Infer = &value
+		opts.infer = &value
 	}
 }
 
 // WithIngestMemoryType selects the Mem0 memory creation mode for one request.
 // The self-hosted OSS API currently supports MemoryTypeProcedural.
-func WithIngestMemoryType(memoryType MemoryType) session.IngestOption {
-	return func(opts *session.IngestOptions) {
+func WithIngestMemoryType(memoryType MemoryType) IngestOption {
+	return func(opts *ingestOptions) {
 		if memoryType == "" {
 			return
 		}
-		opts.MemoryType = string(memoryType)
+		opts.memoryType = memoryType
 	}
 }
 

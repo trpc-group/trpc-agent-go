@@ -178,6 +178,56 @@ func TestIngestSession_ForwardsMessagesToBackend(t *testing.T) {
 	}
 }
 
+func TestIngest_ForwardsSelfHostedOSSFields(t *testing.T) {
+	gotBody := make(chan map[string]any, 1)
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		gotBody <- body
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"results":[]}`))
+	})
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	svc, err := NewService(
+		WithSelfHostedOSS(),
+		WithHost(srv.URL),
+		WithMemoryJobTimeout(time.Second),
+	)
+	require.NoError(t, err)
+	defer svc.Close()
+
+	sess := newIngestTestSession()
+	require.NoError(t, svc.Ingest(
+		context.Background(),
+		sess,
+		WithIngestMetadata(map[string]any{"source": "test"}),
+		WithIngestAgentID("agent-1"),
+		WithIngestRunID("run-1"),
+		WithIngestPrompt("extract deployment steps"),
+		WithIngestExpirationDate(time.Date(2026, time.August, 1, 0, 0, 0, 0, time.UTC)),
+		WithIngestInference(false),
+		WithIngestMemoryType(MemoryTypeProcedural),
+	))
+
+	select {
+	case body := <-gotBody:
+		assert.Equal(t, "agent-1", body["agent_id"])
+		assert.Equal(t, "run-1", body["run_id"])
+		assert.Equal(t, "extract deployment steps", body["prompt"])
+		assert.Equal(t, "2026-08-01", body["expiration_date"])
+		assert.Equal(t, false, body["infer"])
+		assert.Equal(t, string(MemoryTypeProcedural), body["memory_type"])
+		metadata, ok := body["metadata"].(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, "test", metadata["source"])
+		assert.Equal(t, "app", metadata[metadataKeyTRPCAppName])
+	case <-time.After(2 * time.Second):
+		t.Fatal("backend was not hit")
+	}
+}
+
 func TestIngestSession_SyncFallbackWhenQueueFull(t *testing.T) {
 	// Build a service pointing at a server that returns a quick SUCCEEDED
 	// response, then manually stop the async worker so every subsequent
@@ -227,39 +277,39 @@ func TestIngestSession_ValidatesOptionalFieldsBeforeWatermark(t *testing.T) {
 	tests := []struct {
 		name    string
 		service []ServiceOpt
-		opts    []session.IngestOption
+		opts    []IngestOption
 		wantErr string
 	}{
 		{
 			name:    "invalid expiration date",
 			service: []ServiceOpt{WithSelfHostedOSS(), WithHost("http://localhost:8888")},
-			opts: []session.IngestOption{func(opts *session.IngestOptions) {
-				opts.ExpirationDate = "07/17/2026"
+			opts: []IngestOption{func(opts *ingestOptions) {
+				opts.expirationDate = "07/17/2026"
 			}},
 			wantErr: "invalid expiration date",
 		},
 		{
 			name:    "unsupported memory type",
 			service: []ServiceOpt{WithSelfHostedOSS(), WithHost("http://localhost:8888")},
-			opts:    []session.IngestOption{WithIngestMemoryType(MemoryType("core"))},
+			opts:    []IngestOption{WithIngestMemoryType(MemoryType("core"))},
 			wantErr: "unsupported memory type",
 		},
 		{
 			name:    "procedural memory without agent",
 			service: []ServiceOpt{WithSelfHostedOSS(), WithHost("http://localhost:8888")},
-			opts:    []session.IngestOption{WithIngestMemoryType(MemoryTypeProcedural)},
+			opts:    []IngestOption{WithIngestMemoryType(MemoryTypeProcedural)},
 			wantErr: "requires an agent ID",
 		},
 		{
 			name:    "OSS-only prompt in cloud mode",
 			service: []ServiceOpt{WithAPIKey("key")},
-			opts:    []session.IngestOption{WithIngestPrompt("extract deadlines")},
+			opts:    []IngestOption{WithIngestPrompt("extract deadlines")},
 			wantErr: "require self-hosted OSS mode",
 		},
 		{
 			name:    "OSS-only expiration in cloud mode",
 			service: []ServiceOpt{WithAPIKey("key")},
-			opts: []session.IngestOption{WithIngestExpirationDate(
+			opts: []IngestOption{WithIngestExpirationDate(
 				time.Date(2026, time.August, 1, 0, 0, 0, 0, time.UTC),
 			)},
 			wantErr: "require self-hosted OSS mode",
@@ -267,8 +317,8 @@ func TestIngestSession_ValidatesOptionalFieldsBeforeWatermark(t *testing.T) {
 		{
 			name:    "OSS-only memory type in cloud mode",
 			service: []ServiceOpt{WithAPIKey("key")},
-			opts: []session.IngestOption{
-				session.WithIngestAgentID("agent-1"),
+			opts: []IngestOption{
+				WithIngestAgentID("agent-1"),
 				WithIngestMemoryType(MemoryTypeProcedural),
 			},
 			wantErr: "require self-hosted OSS mode",
@@ -281,7 +331,7 @@ func TestIngestSession_ValidatesOptionalFieldsBeforeWatermark(t *testing.T) {
 			require.NoError(t, err)
 			t.Cleanup(func() { _ = svc.Close() })
 			sess := newIngestTestSession()
-			err = svc.IngestSession(context.Background(), sess, tt.opts...)
+			err = svc.Ingest(context.Background(), sess, tt.opts...)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.wantErr)
 			assert.True(t, readLastExtractAt(sess).IsZero())
@@ -292,16 +342,16 @@ func TestIngestSession_ValidatesOptionalFieldsBeforeWatermark(t *testing.T) {
 func TestResolveIngestOptionsSnapshotsCallerData(t *testing.T) {
 	metadata := map[string]any{"nested": map[string]any{"value": "before"}}
 	infer := false
-	opts := resolveIngestOptions([]session.IngestOption{func(opts *session.IngestOptions) {
-		opts.Metadata = metadata
-		opts.Infer = &infer
+	opts := resolveIngestOptions([]IngestOption{func(opts *ingestOptions) {
+		opts.metadata = metadata
+		opts.infer = &infer
 	}})
 	metadata["nested"].(map[string]any)["value"] = "after"
 	infer = true
 
-	assert.Equal(t, "before", opts.Metadata["nested"].(map[string]any)["value"])
-	require.NotNil(t, opts.Infer)
-	assert.False(t, *opts.Infer)
+	assert.Equal(t, "before", opts.metadata["nested"].(map[string]any)["value"])
+	require.NotNil(t, opts.infer)
+	assert.False(t, *opts.infer)
 }
 
 func newIngestTestSession() *session.Session {
@@ -789,19 +839,21 @@ func TestSearchMemories_SelfHostedOSSForwardsOptionalFields(t *testing.T) {
 	require.NoError(t, err)
 	defer svc.Close()
 
-	searchOpts := memory.SearchOptions{
-		Query:               "query",
-		AgentID:             "agent-1",
-		RunID:               "run-1",
-		SimilarityThreshold: 0.42,
-		IncludeExpired:      true,
-		Explain:             true,
+	searchOpts := OSSSearchOptions{
+		SearchOptions: memory.SearchOptions{
+			Query:               "query",
+			SimilarityThreshold: 0.42,
+		},
+		AgentID:        "agent-1",
+		RunID:          "run-1",
+		IncludeExpired: true,
+		Explain:        true,
 	}
 	entries, err := svc.SearchOSSMemories(
 		context.Background(),
 		memory.UserKey{AppName: "app", UserID: "user"},
 		"query",
-		memory.WithSearchOptions(searchOpts),
+		searchOpts,
 	)
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
@@ -837,6 +889,7 @@ func TestSearchOSSMemories_RejectsCloudMode(t *testing.T) {
 		context.Background(),
 		memory.UserKey{AppName: "app", UserID: "user"},
 		"query",
+		OSSSearchOptions{},
 	)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "require self-hosted OSS mode")
@@ -863,11 +916,7 @@ func TestSearchMemories_CloudDoesNotForwardOSSFields(t *testing.T) {
 		"query",
 		memory.WithSearchOptions(memory.SearchOptions{
 			Query:               "query",
-			AgentID:             "agent-1",
-			RunID:               "run-1",
 			SimilarityThreshold: 0.42,
-			IncludeExpired:      true,
-			Explain:             true,
 		}),
 	)
 	require.NoError(t, err)

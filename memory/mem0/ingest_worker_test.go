@@ -152,7 +152,7 @@ func TestIngestWorker_Ingest_EmptyMessagesIsNoOp(t *testing.T) {
 		memory.UserKey{AppName: "a", UserID: "u"},
 		&session.Session{},
 		[]model.Message{{Role: model.RoleUser, Content: "   "}}, // whitespace → filtered out
-		session.IngestOptions{},
+		ingestOptions{},
 	)
 	assert.NoError(t, err)
 }
@@ -173,10 +173,10 @@ func TestIngestWorker_Ingest_CreatesAndTerminalStatus(t *testing.T) {
 		memory.UserKey{AppName: "a", UserID: "u"},
 		nil,
 		[]model.Message{{Role: model.RoleUser, Content: "hi"}},
-		session.IngestOptions{
-			Metadata: map[string]any{"k": "v"},
-			AgentID:  "agent",
-			RunID:    "run",
+		ingestOptions{
+			metadata: map[string]any{"k": "v"},
+			agentID:  "agent",
+			runID:    "run",
 		},
 	)
 	require.NoError(t, err)
@@ -198,7 +198,7 @@ func TestIngestWorker_IngestHostedForwardsInference(t *testing.T) {
 		memory.UserKey{AppName: "app", UserID: "u"},
 		nil,
 		[]model.Message{{Role: model.RoleUser, Content: "store this message"}},
-		session.IngestOptions{Infer: &infer},
+		ingestOptions{infer: &infer},
 	)
 	require.NoError(t, err)
 	assert.Equal(t, false, gotBody["infer"])
@@ -224,7 +224,7 @@ func TestIngestWorker_IngestSelfHostedOSSUsesSyncCreate(t *testing.T) {
 		memory.UserKey{AppName: "app", UserID: "u"},
 		nil,
 		[]model.Message{{Role: model.RoleUser, Content: "hi"}},
-		session.IngestOptions{Metadata: map[string]any{"k": "v"}},
+		ingestOptions{metadata: map[string]any{"k": "v"}},
 	)
 	require.NoError(t, err)
 	assert.Equal(t, "/memories", gotPath)
@@ -261,12 +261,12 @@ func TestIngestWorker_IngestSelfHostedOSSForwardsOptionalFields(t *testing.T) {
 		memory.UserKey{AppName: "app", UserID: "u"},
 		nil,
 		[]model.Message{{Role: model.RoleUser, Content: "deploy the service"}},
-		session.IngestOptions{
-			AgentID:        "agent-1",
-			ExpirationDate: "2026-08-01",
-			Infer:          &infer,
-			MemoryType:     string(MemoryTypeProcedural),
-			Prompt:         "extract a deployment procedure",
+		ingestOptions{
+			agentID:        "agent-1",
+			expirationDate: "2026-08-01",
+			infer:          &infer,
+			memoryType:     MemoryTypeProcedural,
+			prompt:         "extract a deployment procedure",
 		},
 	)
 	require.NoError(t, err)

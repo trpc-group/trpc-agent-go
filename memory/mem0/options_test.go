@@ -15,8 +15,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
 func apply(opts ...ServiceOpt) serviceOpts {
@@ -55,12 +53,24 @@ func TestWithSelfHostedOSSIncludeUnscopedMemories(t *testing.T) {
 }
 
 func TestIngestOptions(t *testing.T) {
+	t.Run("common request fields", func(t *testing.T) {
+		opts := resolveTestIngestOptions(
+			WithIngestMetadata(map[string]any{"first": 1, "shared": "old"}),
+			WithIngestMetadata(map[string]any{"second": 2, "shared": "new"}),
+			WithIngestAgentID("agent-1"),
+			WithIngestRunID("run-1"),
+		)
+		assert.Equal(t, map[string]any{"first": 1, "second": 2, "shared": "new"}, opts.metadata)
+		assert.Equal(t, "agent-1", opts.agentID)
+		assert.Equal(t, "run-1", opts.runID)
+	})
+
 	t.Run("prompt", func(t *testing.T) {
 		opts := resolveTestIngestOptions(
 			WithIngestPrompt("extract deadlines"),
 			WithIngestPrompt("   "),
 		)
-		assert.Equal(t, "extract deadlines", opts.Prompt)
+		assert.Equal(t, "extract deadlines", opts.prompt)
 	})
 
 	t.Run("expiration date", func(t *testing.T) {
@@ -68,16 +78,16 @@ func TestIngestOptions(t *testing.T) {
 		opts := resolveTestIngestOptions(WithIngestExpirationDate(
 			time.Date(2026, time.July, 17, 23, 0, 0, 0, location),
 		))
-		assert.Equal(t, "2026-07-17", opts.ExpirationDate)
+		assert.Equal(t, "2026-07-17", opts.expirationDate)
 
 		zero := resolveTestIngestOptions(WithIngestExpirationDate(time.Time{}))
-		assert.Empty(t, zero.ExpirationDate)
+		assert.Empty(t, zero.expirationDate)
 	})
 
 	t.Run("inference", func(t *testing.T) {
 		opts := resolveTestIngestOptions(WithIngestInference(false))
-		require.NotNil(t, opts.Infer)
-		assert.False(t, *opts.Infer)
+		require.NotNil(t, opts.infer)
+		assert.False(t, *opts.infer)
 	})
 
 	t.Run("memory type", func(t *testing.T) {
@@ -85,12 +95,12 @@ func TestIngestOptions(t *testing.T) {
 			WithIngestMemoryType(MemoryTypeProcedural),
 			WithIngestMemoryType(""),
 		)
-		assert.Equal(t, string(MemoryTypeProcedural), opts.MemoryType)
+		assert.Equal(t, MemoryTypeProcedural, opts.memoryType)
 	})
 }
 
-func resolveTestIngestOptions(options ...session.IngestOption) session.IngestOptions {
-	var opts session.IngestOptions
+func resolveTestIngestOptions(options ...IngestOption) ingestOptions {
+	var opts ingestOptions
 	for _, option := range options {
 		option(&opts)
 	}

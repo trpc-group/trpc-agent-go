@@ -74,10 +74,8 @@ func (s *Service) Tools() []tool.Tool {
 
 // IngestSession enqueues session transcript ingestion into mem0.
 //
-// Per-request settings are configured via session.IngestOption helpers. Common
-// scopes use session.WithIngestMetadata, session.WithIngestAgentID, and
-// session.WithIngestRunID. Mem0-specific request fields use the WithIngest*
-// helpers in this package.
+// Per-request settings are configured via session.IngestOption helpers.
+// Call Ingest when a request needs Mem0-specific fields.
 //
 // An invalid session scope (empty AppName / UserID) is surfaced as an error
 // rather than silently dropped, so caller misconfiguration is distinguishable
@@ -86,6 +84,25 @@ func (s *Service) IngestSession(
 	ctx context.Context,
 	sess *session.Session,
 	opts ...session.IngestOption,
+) error {
+	return s.ingestSession(ctx, sess, resolveSessionIngestOptions(opts))
+}
+
+// Ingest enqueues a session transcript with Mem0-specific request options.
+// It shares the same ingestion and watermark behavior as IngestSession while
+// keeping provider fields out of the session package.
+func (s *Service) Ingest(
+	ctx context.Context,
+	sess *session.Session,
+	opts ...IngestOption,
+) error {
+	return s.ingestSession(ctx, sess, resolveIngestOptions(opts))
+}
+
+func (s *Service) ingestSession(
+	ctx context.Context,
+	sess *session.Session,
+	reqOpts ingestOptions,
 ) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -102,7 +119,6 @@ func (s *Service) IngestSession(
 	if len(messages) == 0 {
 		return nil
 	}
-	reqOpts := resolveIngestOptions(opts)
 	if err := s.validateIngestOptions(reqOpts); err != nil {
 		return err
 	}
@@ -131,38 +147,53 @@ func (s *Service) IngestSession(
 	return s.ingestWorker.ingest(syncCtx, userKey, sess, messages, reqOpts)
 }
 
-func resolveIngestOptions(options []session.IngestOption) session.IngestOptions {
-	var opts session.IngestOptions
+func resolveSessionIngestOptions(options []session.IngestOption) ingestOptions {
+	var sessionOpts session.IngestOptions
+	for _, option := range options {
+		if option == nil {
+			continue
+		}
+		option(&sessionOpts)
+	}
+	return ingestOptions{
+		metadata: cloneMetadata(sessionOpts.Metadata),
+		agentID:  sessionOpts.AgentID,
+		runID:    sessionOpts.RunID,
+	}
+}
+
+func resolveIngestOptions(options []IngestOption) ingestOptions {
+	var opts ingestOptions
 	for _, option := range options {
 		if option == nil {
 			continue
 		}
 		option(&opts)
 	}
-	opts.Metadata = cloneMetadata(opts.Metadata)
-	if opts.Infer != nil {
-		infer := *opts.Infer
-		opts.Infer = &infer
+	opts.metadata = cloneMetadata(opts.metadata)
+	if opts.infer != nil {
+		infer := *opts.infer
+		opts.infer = &infer
 	}
 	return opts
 }
 
-func (s *Service) validateIngestOptions(opts session.IngestOptions) error {
-	if opts.ExpirationDate != "" {
-		if _, err := time.Parse(time.DateOnly, opts.ExpirationDate); err != nil {
-			return fmt.Errorf("mem0: invalid expiration date %q: %w", opts.ExpirationDate, err)
+func (s *Service) validateIngestOptions(opts ingestOptions) error {
+	if opts.expirationDate != "" {
+		if _, err := time.Parse(time.DateOnly, opts.expirationDate); err != nil {
+			return fmt.Errorf("mem0: invalid expiration date %q: %w", opts.expirationDate, err)
 		}
 	}
-	if opts.MemoryType != "" && opts.MemoryType != string(MemoryTypeProcedural) {
-		return fmt.Errorf("mem0: unsupported memory type %q", opts.MemoryType)
+	if opts.memoryType != "" && opts.memoryType != MemoryTypeProcedural {
+		return fmt.Errorf("mem0: unsupported memory type %q", opts.memoryType)
 	}
-	if opts.MemoryType == string(MemoryTypeProcedural) && strings.TrimSpace(opts.AgentID) == "" {
+	if opts.memoryType == MemoryTypeProcedural && strings.TrimSpace(opts.agentID) == "" {
 		return errors.New("mem0: procedural memory requires an agent ID")
 	}
 	if s.opts.apiMode == apiModeSelfHostedOSS {
 		return nil
 	}
-	if opts.Prompt != "" || opts.ExpirationDate != "" || opts.MemoryType != "" {
+	if opts.prompt != "" || opts.expirationDate != "" || opts.memoryType != "" {
 		return errors.New("mem0: prompt, expiration date, and memory type require self-hosted OSS mode")
 	}
 	return nil
@@ -307,7 +338,8 @@ func (s *Service) readOSSMemories(
 
 // SearchMemories searches memories for a user.
 func (s *Service) SearchMemories(ctx context.Context, userKey memory.UserKey, query string, opts ...memory.SearchOption) ([]*memory.Entry, error) {
-	results, err := s.searchMemories(ctx, userKey, query, false, opts...)
+	searchOpts := memory.ResolveSearchOptions(query, opts)
+	results, err := s.searchMemories(ctx, userKey, searchOpts, OSSSearchOptions{}, false)
 	if err != nil {
 		return nil, err
 	}
@@ -321,25 +353,28 @@ func (s *Service) SearchOSSMemories(
 	ctx context.Context,
 	userKey memory.UserKey,
 	query string,
-	opts ...memory.SearchOption,
+	opts OSSSearchOptions,
 ) ([]*OSSMemory, error) {
 	if s.opts.apiMode != apiModeSelfHostedOSS {
 		return nil, errors.New("mem0: OSS search options require self-hosted OSS mode")
 	}
-	return s.searchMemories(ctx, userKey, query, true, opts...)
+	searchOpts := opts.SearchOptions
+	if strings.TrimSpace(searchOpts.Query) == "" {
+		searchOpts.Query = query
+	}
+	return s.searchMemories(ctx, userKey, searchOpts, opts, true)
 }
 
 func (s *Service) searchMemories(
 	ctx context.Context,
 	userKey memory.UserKey,
-	query string,
+	searchOpts memory.SearchOptions,
+	ossOpts OSSSearchOptions,
 	includeProviderFields bool,
-	opts ...memory.SearchOption,
 ) ([]*OSSMemory, error) {
 	if err := userKey.CheckUserKey(); err != nil {
 		return nil, err
 	}
-	searchOpts := memory.ResolveSearchOptions(query, opts)
 	searchOpts.Query = strings.TrimSpace(searchOpts.Query)
 	if searchOpts.Query == "" {
 		return []*OSSMemory{}, nil
@@ -355,7 +390,7 @@ func (s *Service) searchMemories(
 		filters = ossSearchFilters(
 			userKey,
 			s.opts.includeUnscopedSelfHostedOSSMemories,
-			searchOpts,
+			ossOpts,
 		)
 	}
 	req := searchV2Request{
@@ -368,8 +403,8 @@ func (s *Service) searchMemories(
 			threshold := searchOpts.SimilarityThreshold
 			req.Threshold = &threshold
 		}
-		req.Explain = searchOpts.Explain
-		req.ShowExpired = searchOpts.IncludeExpired
+		req.Explain = ossOpts.Explain
+		req.ShowExpired = ossOpts.IncludeExpired
 	}
 	var resp searchV2Response
 	if err := s.c.doJSON(ctx, httpMethodPost, path, nil, req, &resp); err != nil {

@@ -1768,10 +1768,11 @@ defer r.Close()
 可以针对单次 ingest 显式配置其余 OSS create 字段：
 
 ```go
-err := mem0Svc.IngestSession(
+err := mem0Svc.Ingest(
     ctx,
     sess,
-    session.WithIngestAgentID("deployment-agent"),
+    memorymem0.WithIngestAgentID("deployment-agent"),
+    memorymem0.WithIngestRunID("run-1"),
     memorymem0.WithIngestPrompt("提取可复用的部署流程。"),
     memorymem0.WithIngestExpirationDate(
         time.Date(2026, time.December, 31, 0, 0, 0, 0, time.UTC),
@@ -1781,6 +1782,11 @@ err := mem0Svc.IngestSession(
 )
 ```
 
+- `Ingest` 是承载 Mem0 专属请求字段的具体 API。标准 `IngestSession` 与
+  `session.IngestOptions` 保持 provider-neutral，继续供 Runner 和其他 session
+  ingestor 使用。
+- `WithIngestMetadata`、`WithIngestAgentID` 与 `WithIngestRunID` 用于在该具体
+  调用路径中设置 Mem0 的通用请求 scope。
 - `WithIngestPrompt` 透传 Mem0 的单次提取 prompt。
 - `WithIngestExpirationDate` 透传 `YYYY-MM-DD` 格式的过期日期；使用传入
   `time.Time` 所在时区的日期部分。
@@ -1798,15 +1804,17 @@ records, err := mem0Svc.SearchOSSMemories(
     ctx,
     memory.UserKey{AppName: "my-app", UserID: "user-1"},
     "deployment procedure",
-    memory.WithSearchOptions(memory.SearchOptions{
-        Query:               "deployment procedure",
-        AgentID:             "deployment-agent",
-        RunID:               "run-1",
-        MaxResults:          20,
-        SimilarityThreshold: 0.5,
-        IncludeExpired:      true,
-        Explain:             true,
-    }),
+    memorymem0.OSSSearchOptions{
+        SearchOptions: memory.SearchOptions{
+            Query:               "deployment procedure",
+            MaxResults:          20,
+            SimilarityThreshold: 0.5,
+        },
+        AgentID:        "deployment-agent",
+        RunID:          "run-1",
+        IncludeExpired: true,
+        Explain:        true,
+    },
 )
 ```
 
@@ -1828,7 +1836,7 @@ API key，需要在 server 侧分别配置。OSS server 提供 `POST /configure`
 - 所有读取仍然基于当前 `<appName, userID>` 做隔离。
 - 本地 OSS 没有 top-level `app_id`，适配层使用 `metadata.trpc_app_name` 做 app 隔离。已有 OSS 记录如果缺少这个 metadata，默认会被隐藏，直到重新 ingest 或回填 metadata。迁移期确实需要读取这些历史记录时，可显式开启 `WithSelfHostedOSSIncludeUnscopedMemories()`。
 - 当前 OSS `GET /memories` API 最多返回 1000 条 user 级结果，不支持分页，也不能在服务端表达 `metadata.trpc_app_name` 过滤。因此 `ReadMemories` 要求传入大于 0 且不超过 1000 的 limit，并且只会在 OSS 返回的前 1000 条 user 级记录内尽力做本地 app 隔离。
-- Runner 会自动把 session 上下文带入 ingest；如果有需要，也可以通过 `session.WithIngestMetadata`、`session.WithIngestAgentID`、`session.WithIngestRunID` 追加信息。
+- Runner 会自动把 session 上下文带入 `IngestSession`。只需要通用 scope 的调用方仍可使用 `session.WithIngestMetadata`、`session.WithIngestAgentID` 与 `session.WithIngestRunID`；需要 Mem0 专属字段时，应使用 `Ingest` 和本包对应的 helper。
 - 当同一个 mem0 service 通过 `runner.WithSessionIngestor(mem0Svc)` 配置后，`WithPreloadMemory(N)` 可以使用 mem0 的只读能力；生产环境建议使用正数预算。
 - 当 mem0 返回结构化 metadata 时，检索结果仍可携带 `Topics`、`Kind`、`EventTime`、`Participants`、`Location` 等字段。
 - 使用完成后请调用 `Close()`，确保后台 worker 干净退出。

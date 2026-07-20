@@ -1736,10 +1736,11 @@ settings at their server defaults. Custom callers can explicitly configure the
 remaining OSS create fields for one ingestion request:
 
 ```go
-err := mem0Svc.IngestSession(
+err := mem0Svc.Ingest(
     ctx,
     sess,
-    session.WithIngestAgentID("deployment-agent"),
+    memorymem0.WithIngestAgentID("deployment-agent"),
+    memorymem0.WithIngestRunID("run-1"),
     memorymem0.WithIngestPrompt("Extract reusable deployment procedures."),
     memorymem0.WithIngestExpirationDate(
         time.Date(2026, time.December, 31, 0, 0, 0, 0, time.UTC),
@@ -1749,6 +1750,11 @@ err := mem0Svc.IngestSession(
 )
 ```
 
+- `Ingest` is the concrete Mem0 API for provider-specific request fields. The
+  standard `IngestSession` method and `session.IngestOptions` remain
+  provider-neutral for Runner and other session ingestors.
+- `WithIngestMetadata`, `WithIngestAgentID`, and `WithIngestRunID` set the
+  common Mem0 request scopes on this concrete path.
 - `WithIngestPrompt` forwards Mem0's per-request extraction prompt.
 - `WithIngestExpirationDate` forwards a `YYYY-MM-DD` expiration date. The date
   in the supplied value's location is used.
@@ -1768,15 +1774,17 @@ records, err := mem0Svc.SearchOSSMemories(
     ctx,
     memory.UserKey{AppName: "my-app", UserID: "user-1"},
     "deployment procedure",
-    memory.WithSearchOptions(memory.SearchOptions{
-        Query:               "deployment procedure",
-        AgentID:             "deployment-agent",
-        RunID:               "run-1",
-        MaxResults:          20,
-        SimilarityThreshold: 0.5,
-        IncludeExpired:      true,
-        Explain:             true,
-    }),
+    memorymem0.OSSSearchOptions{
+        SearchOptions: memory.SearchOptions{
+            Query:               "deployment procedure",
+            MaxResults:          20,
+            SimilarityThreshold: 0.5,
+        },
+        AgentID:        "deployment-agent",
+        RunID:          "run-1",
+        IncludeExpired: true,
+        Explain:        true,
+    },
 )
 ```
 
@@ -1800,7 +1808,7 @@ access the OSS server's internal vector store directly.
 - All reads remain scoped to the current `<appName, userID>`.
 - Self-hosted OSS app isolation uses `metadata.trpc_app_name` because the OSS API has no top-level `app_id`. Existing OSS records without this metadata are hidden by default until reingested or backfilled. Use `WithSelfHostedOSSIncludeUnscopedMemories()` only for migrations that need those legacy records visible.
 - The current OSS `GET /memories` API is capped at 1000 user-level results, is not pageable, and cannot express `metadata.trpc_app_name` as a server-side filter. `ReadMemories` therefore requires a positive limit no larger than 1000 and applies app isolation as a best-effort local filter over the first 1000 OSS records returned for the user.
-- Runner automatically passes session context into ingest. Custom callers can also use `session.WithIngestMetadata`, `session.WithIngestAgentID`, and `session.WithIngestRunID` when needed.
+- Runner automatically passes session context into `IngestSession`. Custom callers that only need common scopes can also use `session.WithIngestMetadata`, `session.WithIngestAgentID`, and `session.WithIngestRunID`; callers needing Mem0-only fields should use `Ingest` and this package's corresponding helpers.
 - `WithPreloadMemory(N)` works with mem0 when the same service is configured via `runner.WithSessionIngestor(mem0Svc)`. Use a positive budget in production.
 - When mem0 metadata is available, search results can still carry structured fields such as `Topics`, `Kind`, `EventTime`, `Participants`, and `Location`.
 - Call `Close()` on the service so background workers shut down cleanly.
