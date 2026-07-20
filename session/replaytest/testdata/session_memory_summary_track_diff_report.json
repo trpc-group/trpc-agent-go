@@ -1,0 +1,83 @@
+{
+  "generated_at": "2026-07-01T00:00:00Z",
+  "reference": "inmemory",
+  "backends": [
+    "inmemory",
+    "sqlite"
+  ],
+  "total_cases": 1,
+  "passed_cases": 0,
+  "failed_cases": 1,
+  "unsupported_cases": 0,
+  "blocking_diffs": 4,
+  "allowed_diffs": 1,
+  "cases": [
+    {
+      "case": "fault_injection_demo",
+      "status": "failed",
+      "duration_ms": 12,
+      "diffs": [
+        {
+          "case": "fault_injection_demo",
+          "backend_a": "inmemory",
+          "backend_b": "sqlite",
+          "session_id": "fault_injection_demo",
+          "event_index": 1,
+          "path": "/events/1/choices/0/message/content",
+          "baseline": "expected answer",
+          "actual": "drifted answer",
+          "allowed_diff": false,
+          "explanation": "semantic values differ"
+        },
+        {
+          "case": "fault_injection_demo",
+          "backend_a": "inmemory",
+          "backend_b": "sqlite",
+          "session_id": "fault_injection_demo",
+          "memory_id": "memory-0",
+          "path": "/memories/0/memory/memory",
+          "baseline": "User prefers concise answers.",
+          "actual": "User prefers verbose answers.",
+          "allowed_diff": false,
+          "explanation": "semantic values differ"
+        },
+        {
+          "case": "fault_injection_demo",
+          "backend_a": "inmemory",
+          "backend_b": "sqlite",
+          "session_id": "fault_injection_demo",
+          "summary_filter_key": "agent/weather",
+          "path": "/summaries/agent~1weather/text",
+          "baseline": "sunny",
+          "actual": null,
+          "allowed_diff": false,
+          "explanation": "summary is missing"
+        },
+        {
+          "case": "fault_injection_demo",
+          "backend_a": "inmemory",
+          "backend_b": "sqlite",
+          "session_id": "fault_injection_demo",
+          "track_name": "tool/weather",
+          "path": "/tracks/tool~1weather/0/payload/status",
+          "baseline": "ok",
+          "actual": "failed",
+          "allowed_diff": false,
+          "explanation": "semantic values differ"
+        },
+        {
+          "case": "fault_injection_demo",
+          "backend_a": "inmemory",
+          "backend_b": "sqlite",
+          "session_id": "fault_injection_demo",
+          "memory_id": "memory-0",
+          "path": "/memories/0/score",
+          "baseline": 0.92,
+          "actual": 0.9,
+          "allowed_diff": true,
+          "explanation": "vector similarity scores may vary within the documented tolerance"
+        }
+      ]
+    }
+  ]
+}
