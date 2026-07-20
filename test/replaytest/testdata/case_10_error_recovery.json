@@ -1,49 +1,72 @@
 {
   "name": "error_recovery",
-  "description": "异常恢复：模拟重复写入和验证去重，检查是否出现重复 event 或状态污染",
+  "description": "异常恢复：通过 fault injection 模拟 AppendEvent 在提交前/提交后失败，重试相同操作，验证 fail_before 下不丢事件、fail_after 下事件已提交（后端无幂等去重时产生重复），两个后端行为一致",
   "app_name": "replay-matrix",
   "user_id": "user-error-recovery",
   "session_id": "session-error-recovery",
   "steps": [
     {
-      "type": "create_session",
-      "state": {"initial": true}
+      "type": "create_session"
     },
     {
       "type": "append_event",
       "event": {
-        "author": "user", "role": "user",
-        "content": "first message",
-        "branch": "root", "filter_key": "root"
+        "id": "evt-001",
+        "author": "user",
+        "role": "user",
+        "content": "fail-before test message",
+        "branch": "root",
+        "filter_key": "root",
+        "tag": "fail-before"
+      },
+      "fault": {
+        "fail_before": true
       }
     },
     {
       "type": "append_event",
       "event": {
-        "author": "agent", "role": "assistant",
-        "content": "first response",
-        "branch": "root", "filter_key": "root"
+        "id": "evt-001",
+        "author": "user",
+        "role": "user",
+        "content": "fail-before test message",
+        "branch": "root",
+        "filter_key": "root",
+        "tag": "fail-before-retry"
       }
     },
     {
       "type": "append_event",
       "event": {
-        "author": "user", "role": "user",
-        "content": "first message",
-        "branch": "root", "filter_key": "root"
+        "id": "evt-002",
+        "author": "agent",
+        "role": "assistant",
+        "content": "fail-after test message",
+        "branch": "root",
+        "filter_key": "root",
+        "tag": "fail-after"
+      },
+      "fault": {
+        "fail_after": true
       }
     },
     {
       "type": "append_event",
       "event": {
-        "author": "agent", "role": "assistant",
-        "content": "first response",
-        "branch": "root", "filter_key": "root"
+        "id": "evt-002",
+        "author": "agent",
+        "role": "assistant",
+        "content": "fail-after test message",
+        "branch": "root",
+        "filter_key": "root",
+        "tag": "fail-after-retry"
       }
     },
-    {"type": "get_session"}
+    {
+      "type": "get_session"
+    }
   ],
   "verify": {
-    "events_count": 4
+    "events_count": 3
   }
 }

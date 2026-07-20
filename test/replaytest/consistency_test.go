@@ -50,6 +50,10 @@ func TestReplayConsistency_AllCases(t *testing.T) {
 		// later cases).
 		rc.AppName = "replaytest-" + rc.Name
 		t.Run(rc.Name, func(t *testing.T) {
+			// Share a single reference time so timestamps are identical
+			// across both backends, avoiding false diffs when the two
+			// time.Now() calls cross a second boundary.
+			rc.BaseTime = time.Now().UTC().Truncate(time.Second)
 			resultA := RunReplayCase(t, ctx, backends[0], rc)
 			resultB := RunReplayCase(t, ctx, backends[1], rc)
 
@@ -137,6 +141,75 @@ func verifySnapshot(t testing.TB, rc *ReplayCase, snap *ReplaySnapshot) {
 			seen[m.Key] = struct{}{}
 		}
 	}
+	if v.EventsOrderPreserved {
+		verifyEventsOrder(t, rc, snap)
+	}
+}
+
+// verifyEventsOrder asserts that snapshot events appear in the same order
+// as the append_event steps declared in the scenario.  Matching uses the
+// tag field because it is stable across backends and preserved in the
+// normalised snapshot; every scenario that sets events_order_preserved
+// must provide unique tags on its append_event steps.
+func verifyEventsOrder(t testing.TB, rc *ReplayCase, snap *ReplaySnapshot) {
+	t.Helper()
+
+	expectedTags := collectExpectedTags(rc.Steps)
+	if len(expectedTags) == 0 {
+		return
+	}
+
+	actualTags := extractSnapshotTags(snap.Events)
+
+	// Verify each expected tag appears as a subsequence of the actual
+	// tags in the same relative order.  Greedy scan: for each expected
+	// tag, advance through actual until it is found.
+	pos := 0
+	for _, expTag := range expectedTags {
+		found := false
+		for pos < len(actualTags) {
+			if actualTags[pos] == expTag {
+				found = true
+				pos++
+				break
+			}
+			pos++
+		}
+		if !found {
+			t.Errorf(
+				"[%s] events_order_preserved: expected event tag %q not found after position %d",
+				rc.Name, expTag, pos,
+			)
+			return
+		}
+	}
+}
+
+// collectExpectedTags extracts tags from top-level append_event steps in
+// the scenario, preserving their declared order.  Nested concurrent steps
+// are intentionally skipped: events_order_preserved is incompatible with
+// non-deterministic concurrency.
+func collectExpectedTags(steps []ReplayStep) []string {
+	var tags []string
+	for _, step := range steps {
+		if step.Type == StepAppendEvent && step.Event != nil {
+			tags = append(tags, step.Event.Tag)
+		}
+	}
+	return tags
+}
+
+// extractSnapshotTags returns the tag of each event in the snapshot,
+// preserving snapshot order.  An event without a tag contributes an empty
+// string.
+func extractSnapshotTags(events []map[string]any) []string {
+	tags := make([]string, len(events))
+	for i, e := range events {
+		if tag, ok := e["tag"].(string); ok {
+			tags[i] = tag
+		}
+	}
+	return tags
 }
 
 // ---------------------------------------------------------------------------
@@ -157,6 +230,7 @@ func TestReplayConsistency_LightweightMode(t *testing.T) {
 
 	for _, rc := range cases {
 		rc.AppName = "replaytest-" + rc.Name
+		rc.BaseTime = time.Now().UTC().Truncate(time.Second)
 		_ = RunReplayCase(t, ctx, backends[0], rc)
 		_ = RunReplayCase(t, ctx, backends[1], rc)
 	}
@@ -396,6 +470,167 @@ func TestReplayConsistency_SessionID(t *testing.T) {
 		}
 		seen[rc.SessionID] = rc.Name
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Validation: malformed inputs must produce descriptive load-time errors
+// ---------------------------------------------------------------------------
+
+func TestReplayCase_Validate_RejectsMalformed(t *testing.T) {
+	// Shared valid memory payload for memory-op tests.
+	validAddMem := &actionMemory{Op: "add", Content: "test memory"}
+	validUpdateMem := &actionMemory{Op: "update", Ref: "m1", Content: "updated"}
+	validDeleteMem := &actionMemory{Op: "delete", Ref: "m1"}
+
+	tests := []struct {
+		name        string
+		steps       []ReplayStep
+		wantContain string
+	}{
+		{
+			name: "append_event without event",
+			steps: []ReplayStep{
+				{Type: StepAppendEvent, Event: nil},
+			},
+			wantContain: "event is required",
+		},
+		{
+			name: "create_summary without summary",
+			steps: []ReplayStep{
+				{Type: StepCreateSummary, Summary: nil},
+			},
+			wantContain: "summary is required",
+		},
+		{
+			name: "create_summary without filter_key",
+			steps: []ReplayStep{
+				{Type: StepCreateSummary, Summary: &actionSummary{FilterKey: "", Text: "some text"}},
+			},
+			wantContain: "filter_key is required",
+		},
+		{
+			name: "append_track without track",
+			steps: []ReplayStep{
+				{Type: StepAppendTrack, Track: nil},
+			},
+			wantContain: "track is required",
+		},
+		{
+			name: "append_track without name",
+			steps: []ReplayStep{
+				{Type: StepAppendTrack, Track: &actionTrack{Name: "", Payload: map[string]any{"k": "v"}}},
+			},
+			wantContain: "track name is required",
+		},
+		{
+			name: "add_memory without memory",
+			steps: []ReplayStep{
+				{Type: StepAddMemory, Memory: nil},
+			},
+			wantContain: "memory is required",
+		},
+		{
+			name: "update_memory without memory",
+			steps: []ReplayStep{
+				{Type: StepUpdateMemory, Memory: nil},
+			},
+			wantContain: "memory is required",
+		},
+		{
+			name: "delete_memory without memory",
+			steps: []ReplayStep{
+				{Type: StepDeleteMemory, Memory: nil},
+			},
+			wantContain: "memory is required",
+		},
+		{
+			name: "memory with bad op",
+			steps: []ReplayStep{
+				{Type: StepAddMemory, Memory: &actionMemory{Op: "bogus", Content: "x"}},
+			},
+			wantContain: "unknown memory op",
+		},
+		{
+			name: "concurrent_events empty",
+			steps: []ReplayStep{
+				{Type: StepConcurrentEvents, Concurrent: nil},
+			},
+			wantContain: "must have at least one child",
+		},
+		{
+			name: "unknown step type",
+			steps: []ReplayStep{
+				{Type: "nonexistent"},
+			},
+			wantContain: "unknown type",
+		},
+		{
+			name: "nested concurrent missing event",
+			steps: []ReplayStep{
+				{
+					Type: StepConcurrentEvents,
+					Concurrent: []ReplayStep{
+						{Type: StepAppendEvent, Event: nil},
+					},
+				},
+			},
+			wantContain: "event is required",
+		},
+		{
+			name: "nested concurrent valid (sanity check)",
+			steps: []ReplayStep{
+				{
+					Type: StepConcurrentEvents,
+					Concurrent: []ReplayStep{
+						{Type: StepAppendEvent, Event: &actionEvent{Author: "user", Role: "user", Content: "hi"}},
+					},
+				},
+			},
+			wantContain: "",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rc := &ReplayCase{
+				Name:  "test",
+				Steps: tc.steps,
+			}
+			err := rc.Validate()
+			if tc.wantContain == "" {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("expected error containing %q, got nil", tc.wantContain)
+			}
+			if !strings.Contains(err.Error(), tc.wantContain) {
+				t.Errorf("expected error containing %q, got: %v", tc.wantContain, err)
+			}
+		})
+	}
+
+	// Verify that a well-formed case with all payload types passes.
+	t.Run("well-formed passes", func(t *testing.T) {
+		rc := &ReplayCase{
+			Name: "well-formed",
+			Steps: []ReplayStep{
+				{Type: StepCreateSession},
+				{Type: StepAppendEvent, Event: &actionEvent{Author: "user", Role: "user", Content: "hello"}},
+				{Type: StepAddMemory, Memory: validAddMem},
+				{Type: StepUpdateMemory, Memory: validUpdateMem},
+				{Type: StepDeleteMemory, Memory: validDeleteMem},
+				{Type: StepCreateSummary, Summary: &actionSummary{FilterKey: "main", Text: "summary text"}},
+				{Type: StepAppendTrack, Track: &actionTrack{Name: "events", Payload: map[string]any{"k": "v"}}},
+				{Type: StepGetSession},
+			},
+		}
+		if err := rc.Validate(); err != nil {
+			t.Errorf("well-formed case should pass validation: %v", err)
+		}
+	})
 }
 
 // ---------------------------------------------------------------------------

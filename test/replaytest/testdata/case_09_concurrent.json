@@ -1,6 +1,6 @@
 {
   "name": "concurrent",
-  "description": "并发写入：模拟多个工具调用或子 Agent 事件交错追加，检查最终回放顺序和归一化结果",
+  "description": "真正并发写入：barrier 同步 8 个 goroutine 后同时释放，混合 AppendEvent 与 AddMemory，验证后端无事件/记忆丢失，按内容排序后比较一致性",
   "app_name": "replay-matrix",
   "user_id": "user-concurrent",
   "session_id": "session-concurrent",
@@ -11,7 +11,7 @@
       "event": {
         "author": "user",
         "role": "user",
-        "content": "请同时搜索知识库、分析代码、获取数据和查询天气",
+        "content": "请同时搜索知识库、分析代码、获取数据、查询天气，并记住我的偏好",
         "branch": "root",
         "filter_key": "root"
       }
@@ -70,14 +70,58 @@
             "filter_key": "info",
             "tag": "concurrent-worker-4"
           }
+        },
+        {
+          "type": "append_event",
+          "event": {
+            "author": "assistant",
+            "role": "assistant",
+            "content": "Based on the search results and code analysis, I recommend focusing on the critical bugs first. The weather is pleasant today.",
+            "branch": "summary",
+            "filter_key": "summary",
+            "tag": "concurrent-worker-5"
+          }
+        },
+        {
+          "type": "append_event",
+          "event": {
+            "author": "tool_image",
+            "role": "tool",
+            "content": "generated chart image: temperature_trend.png",
+            "tool_id": "chart_1",
+            "tool_name": "generate_chart",
+            "branch": "visualization",
+            "filter_key": "visualization",
+            "tag": "concurrent-worker-6"
+          }
+        },
+        {
+          "type": "add_memory",
+          "memory": {
+            "op": "add",
+            "content": "User prefers dark theme with Chinese language",
+            "topics": ["preferences", "ui"],
+            "result_alias": "m1"
+          }
+        },
+        {
+          "type": "add_memory",
+          "memory": {
+            "op": "add",
+            "content": "User is working on code review for trpc-agent-go project",
+            "topics": ["project", "context"],
+            "result_alias": "m2"
+          }
         }
       ]
     },
     {"type": "get_session"}
   ],
   "verify": {
-    "events_count": 5,
+    "events_count": 7,
+    "memories_count": 2,
     "no_duplicate_events": true,
+    "no_duplicate_memories": true,
     "events_order_independent": true
   }
 }

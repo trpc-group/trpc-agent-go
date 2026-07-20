@@ -23,13 +23,35 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
-// stepBaseTime is the reference time for event timestamps.
-// It is set at the beginning of each RunReplayCase call so that event
-// timestamps naturally post-date session creation (which uses wall-clock
-// time.Now() during the first step).  This prevents SQLite's
-// getSummariesList from discarding summaries whose updated_at predates
-// the session created_at.
-var stepBaseTime time.Time
+// faultSessionService wraps a session.Service to inject transient
+// faults for error-recovery testing.  The driver sets nextFault before
+// each step; the wrapper consumes it on the next AppendEvent call and
+// then clears it so subsequent calls proceed normally.
+//
+// This wrapper is NOT safe for concurrent use.  It is only used for
+// sequential step execution in RunReplayCase, not inside runConcurrentSteps.
+type faultSessionService struct {
+	session.Service
+	nextFault *FaultConfig
+}
+
+func (s *faultSessionService) AppendEvent(
+	ctx context.Context, sess *session.Session, evt *event.Event, opts ...session.Option,
+) error {
+	cfg := s.nextFault
+	s.nextFault = nil
+	if cfg != nil && cfg.FailBefore {
+		return fmt.Errorf("fault injected: fail before AppendEvent")
+	}
+	err := s.Service.AppendEvent(ctx, sess, evt, opts...)
+	if err != nil {
+		return err
+	}
+	if cfg != nil && cfg.FailAfter {
+		return fmt.Errorf("fault injected: fail after AppendEvent")
+	}
+	return nil
+}
 
 // ReplayResult holds the output of running a ReplayCase against one backend.
 type ReplayResult struct {
@@ -49,7 +71,19 @@ func RunReplayCase(
 	// session creation (which uses wall-clock time.Now() inside the
 	// first step).  This prevents SQLite's getSummariesList from
 	// discarding summaries.
-	stepBaseTime = time.Now().UTC().Truncate(time.Second)
+	baseTime := rc.BaseTime
+	if baseTime.IsZero() {
+		baseTime = time.Now().UTC().Truncate(time.Second)
+	}
+
+	// Scan steps for fault-injection configs. If any step uses faults,
+	// wrap the backend SessionService so faults fire transparently
+	// during AppendEvent calls.
+	if hasFaults(rc.Steps) {
+		backend.SessionService = &faultSessionService{
+			Service: backend.SessionService,
+		}
+	}
 
 	key := session.Key{
 		AppName:   rc.AppName,
@@ -67,6 +101,11 @@ func RunReplayCase(
 				ctx, key, stateMapFromJSON(step.State),
 			)
 			if err != nil {
+				if step.Fault != nil {
+					t.Logf("step %d: expected fault on create session: %v", stepIdx, err)
+					stepIdx++
+					continue
+				}
 				t.Fatalf("create session: %v", err)
 			}
 			if sess == nil {
@@ -74,9 +113,19 @@ func RunReplayCase(
 			}
 
 		case StepAppendEvent:
+			if step.Fault != nil {
+				if fw, ok := backend.SessionService.(*faultSessionService); ok {
+					fw.nextFault = step.Fault
+				}
+			}
 			sess := mustGetSession(t, ctx, backend, key)
-			evt := buildEvent(step.Event, stepIdx)
+			evt := buildEvent(step.Event, stepIdx, baseTime)
 			if err := backend.SessionService.AppendEvent(ctx, sess, evt); err != nil {
+				if step.Fault != nil {
+					t.Logf("step %d: expected fault: %v", stepIdx, err)
+					stepIdx++
+					continue
+				}
 				t.Fatalf("append event step %d: %v", stepIdx, err)
 			}
 
@@ -124,14 +173,14 @@ func RunReplayCase(
 				&session.TrackEvent{
 					Track:     session.Track(step.Track.Name),
 					Payload:   payload,
-					Timestamp: stepBaseTime.Add(time.Duration(stepIdx) * time.Second),
+					Timestamp: baseTime.Add(time.Duration(stepIdx) * time.Second),
 				},
 			); err != nil {
 				t.Fatalf("append track event: %v", err)
 			}
 
 		case StepConcurrentEvents:
-			runConcurrentSteps(t, ctx, backend, key, memKey, aliases, step.Concurrent)
+			runConcurrentSteps(t, ctx, backend, key, memKey, aliases, step.Concurrent, baseTime)
 
 		case StepGetSession:
 			// snapshot point — captured at end of scenario.
@@ -179,7 +228,7 @@ func mustGetSession(
 	return sess
 }
 
-func buildEvent(ev *actionEvent, stepIndex int) *event.Event {
+func buildEvent(ev *actionEvent, stepIndex int, baseTime time.Time) *event.Event {
 	msg := model.Message{
 		Role:    model.Role(ev.Role),
 		Content: ev.Content,
@@ -204,20 +253,25 @@ func buildEvent(ev *actionEvent, stepIndex int) *event.Event {
 		obj = model.ObjectTypeToolResponse
 	}
 
-	ts := stepBaseTime.Add(time.Duration(stepIndex) * time.Second)
+	ts := baseTime.Add(time.Duration(stepIndex) * time.Second)
+	resp := &model.Response{
+		Object:    obj,
+		Done:      true,
+		Timestamp: ts,
+		Choices:   []model.Choice{{Index: 0, Message: msg}},
+	}
 	e := &event.Event{
-		Response: &model.Response{
-			Object:    obj,
-			Done:      true,
-			Timestamp: ts,
-			Choices:   []model.Choice{{Index: 0, Message: msg}},
-		},
+		Response:  resp,
 		Timestamp: ts,
 		Author:    ev.Author,
 		Branch:    ev.Branch,
 		FilterKey: ev.FilterKey,
 		Tag:       ev.Tag,
 		Version:   event.CurrentVersion,
+	}
+	if ev.ID != "" {
+		e.ID = ev.ID
+		resp.ID = ev.ID
 	}
 	if e.FilterKey == "" {
 		e.FilterKey = e.Branch
@@ -324,6 +378,22 @@ func buildMemoryMeta(m *memoryMeta) *memory.Metadata {
 	return md
 }
 
+// hasFaults reports whether any step (including nested concurrent steps)
+// has a fault-injection configuration.
+func hasFaults(steps []ReplayStep) bool {
+	for _, step := range steps {
+		if step.Fault != nil {
+			return true
+		}
+		for _, nested := range step.Concurrent {
+			if nested.Fault != nil {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func copyStrings(s []string) []string {
 	if s == nil {
 		return nil
@@ -334,7 +404,7 @@ func copyStrings(s []string) []string {
 func runConcurrentSteps(
 	t testing.TB, ctx context.Context, backend *ReplayBackend,
 	key session.Key, memKey memory.UserKey, aliases map[string]string,
-	steps []ReplayStep,
+	steps []ReplayStep, baseTime time.Time,
 ) {
 	// Pre-build all events outside the critical section so goroutines
 	// can interleave during construction.  All concurrent events share
@@ -348,11 +418,21 @@ func runConcurrentSteps(
 	for i, step := range steps {
 		pre[i].step = step
 		if step.Type == StepAppendEvent {
-			pre[i].evt = buildEvent(step.Event, 0)
+			pre[i].evt = buildEvent(step.Event, 0, baseTime)
 		}
 	}
 
-	var mu sync.Mutex
+	// Two-phase barrier: all goroutines report ready, then all are
+	// released simultaneously so AppendEvent calls genuinely race.
+	var ready sync.WaitGroup
+	var start sync.WaitGroup
+	ready.Add(len(steps))
+	start.Add(1)
+
+	// Narrow mutex only for aliases map access (Go maps are not
+	// safe for concurrent read+write).  Backend calls are intentionally
+	// outside this lock — they run truly concurrently.
+	var aliasesMu sync.Mutex
 	var wg sync.WaitGroup
 	errCh := make(chan error, len(steps))
 
@@ -361,34 +441,33 @@ func runConcurrentSteps(
 		go func(p prebuilt) {
 			defer wg.Done()
 
+			// Phase 1: signal ready, then block until release.
+			ready.Done()
+			start.Wait()
+
 			switch p.step.Type {
 			case StepAppendEvent:
-				// Serialise GetSession + AppendEvent to avoid
-				// lost updates under CopyOnWrite semantics.
-				mu.Lock()
+				// No external lock — backend must handle
+				// concurrent GetSession + AppendEvent safely.
 				sess, err := backend.SessionService.GetSession(ctx, key)
 				if err != nil {
-					mu.Unlock()
 					errCh <- fmt.Errorf("concurrent get session: %w", err)
 					return
 				}
 				if sess == nil {
-					mu.Unlock()
 					errCh <- fmt.Errorf("concurrent: session not found")
 					return
 				}
 				err = backend.SessionService.AppendEvent(ctx, sess, p.evt)
-				mu.Unlock()
 				if err != nil {
 					errCh <- fmt.Errorf("concurrent append event: %w", err)
 				}
 
 			case StepAddMemory, StepUpdateMemory, StepDeleteMemory:
-				mu.Lock()
 				err := applyMemoryOpSafe(
-					ctx, backend.MemoryService, memKey, aliases, p.step.Memory,
+					ctx, backend.MemoryService, memKey,
+					&aliasesMu, aliases, p.step.Memory,
 				)
-				mu.Unlock()
 				if err != nil {
 					errCh <- err
 				}
@@ -400,6 +479,11 @@ func runConcurrentSteps(
 			}
 		}(pre[i])
 	}
+
+	// Wait until every goroutine is at start.Wait(), then release.
+	ready.Wait()
+	start.Done()
+
 	wg.Wait()
 	close(errCh)
 	for err := range errCh {
@@ -411,9 +495,12 @@ func runConcurrentSteps(
 
 // applyMemoryOpSafe is like applyMemoryOp but returns an error instead of
 // calling t.Fatalf, making it safe to use from goroutines.
+// aliasesMu guards only the aliases map access; backend calls run outside
+// the lock so concurrent memory operations genuinely race.
 func applyMemoryOpSafe(
 	ctx context.Context, svc memory.Service,
-	userKey memory.UserKey, aliases map[string]string, a *actionMemory,
+	userKey memory.UserKey, aliasesMu *sync.Mutex, aliases map[string]string,
+	a *actionMemory,
 ) error {
 	switch a.Op {
 	case "add":
@@ -428,6 +515,7 @@ func applyMemoryOpSafe(
 		}
 		if a.ResultAlias != "" {
 			entries, _ := svc.ReadMemories(ctx, userKey, 0)
+			aliasesMu.Lock()
 			for _, e := range entries {
 				if e != nil && e.Memory != nil &&
 					e.Memory.Memory == a.Content {
@@ -435,9 +523,12 @@ func applyMemoryOpSafe(
 					break
 				}
 			}
+			aliasesMu.Unlock()
 		}
 	case "update":
+		aliasesMu.Lock()
 		memID, ok := aliases[a.Ref]
+		aliasesMu.Unlock()
 		if !ok {
 			return fmt.Errorf("memory alias %q not found", a.Ref)
 		}
@@ -461,10 +552,14 @@ func applyMemoryOpSafe(
 			return fmt.Errorf("update memory %q: %w", a.Content, err)
 		}
 		if a.ResultAlias != "" {
+			aliasesMu.Lock()
 			aliases[a.ResultAlias] = result.MemoryID
+			aliasesMu.Unlock()
 		}
 	case "delete":
+		aliasesMu.Lock()
 		memID, ok := aliases[a.Ref]
+		aliasesMu.Unlock()
 		if !ok {
 			return fmt.Errorf("memory alias %q not found", a.Ref)
 		}

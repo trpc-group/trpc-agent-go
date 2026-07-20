@@ -1,6 +1,6 @@
 {
   "name": "summary_truncation",
-  "description": "Summary 与事件截断：长对话压缩后验证 boundary（LastEventID、CutoffAt、Version）和 post-truncation 新事件",
+  "description": "Summary 与事件截断：长对话压缩后验证 boundary（LastEventID、CutoffAt、Version）和 post-truncation 新事件，使用显式事件 ID 以跨后端验证边界锚定",
   "app_name": "replay-matrix",
   "user_id": "user-summary-truncation",
   "session_id": "session-summary-truncation",
@@ -9,33 +9,41 @@
     {
       "type": "append_event",
       "event": {
+        "id": "evt-001",
         "author": "user", "role": "user",
         "content": "message 1 from user",
-        "branch": "main", "filter_key": "main"
+        "branch": "main", "filter_key": "main",
+        "tag": "msg-1"
       }
     },
     {
       "type": "append_event",
       "event": {
+        "id": "evt-002",
         "author": "agent", "role": "assistant",
         "content": "response 1 from agent",
-        "branch": "main", "filter_key": "main"
+        "branch": "main", "filter_key": "main",
+        "tag": "resp-1"
       }
     },
     {
       "type": "append_event",
       "event": {
+        "id": "evt-003",
         "author": "user", "role": "user",
         "content": "message 2 from user, a longer conversation turn",
-        "branch": "main", "filter_key": "main"
+        "branch": "main", "filter_key": "main",
+        "tag": "msg-2"
       }
     },
     {
       "type": "append_event",
       "event": {
+        "id": "evt-004",
         "author": "agent", "role": "assistant",
         "content": "response 2 from agent with more detail",
-        "branch": "main", "filter_key": "main"
+        "branch": "main", "filter_key": "main",
+        "tag": "resp-2"
       }
     },
     {
@@ -49,17 +57,21 @@
     {
       "type": "append_event",
       "event": {
+        "id": "evt-005",
         "author": "user", "role": "user",
         "content": "message 3 — new message after summary truncation",
-        "branch": "main", "filter_key": "main"
+        "branch": "main", "filter_key": "main",
+        "tag": "msg-3"
       }
     },
     {
       "type": "append_event",
       "event": {
+        "id": "evt-006",
         "author": "agent", "role": "assistant",
         "content": "response 3 — responding to post-truncation message",
-        "branch": "main", "filter_key": "main"
+        "branch": "main", "filter_key": "main",
+        "tag": "resp-3"
       }
     },
     {"type": "get_session"}

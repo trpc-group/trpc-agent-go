@@ -10,6 +10,7 @@ package replaytest
 
 import (
 	"encoding/json"
+	"time"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -57,6 +58,12 @@ type ReplayCase struct {
 	Steps        []ReplayStep      `json:"steps"`
 	Verify       *VerifySpec       `json:"verify,omitempty"`
 	AllowedDiffs []AllowedDiffRule `json:"allowed_diffs,omitempty"`
+
+	// BaseTime is the reference time used for event and track timestamps.
+	// When zero, RunReplayCase falls back to time.Now().  Set this to
+	// share a deterministic clock across backends so timestamps are
+	// identical in cross-backend comparisons.
+	BaseTime time.Time `json:"-"`
 }
 
 // ReplayStep is a single operation in the replay sequence.
@@ -67,11 +74,23 @@ type ReplayStep struct {
 	Memory     *actionMemory  `json:"memory,omitempty"`
 	Summary    *actionSummary `json:"summary,omitempty"`
 	Track      *actionTrack   `json:"track,omitempty"`
+	Fault      *FaultConfig   `json:"fault,omitempty"`
 	Concurrent []ReplayStep   `json:"concurrent,omitempty"`
+}
+
+// FaultConfig describes a fault to inject before or after a step's
+// backend operation.  Both fields are ignored when Fault is nil; when
+// set only one of them should be true (they are mutually exclusive in
+// practice).  Fault injection is used by error_recovery scenarios to
+// verify that backends handle transient failures correctly.
+type FaultConfig struct {
+	FailBefore bool `json:"fail_before,omitempty"`
+	FailAfter  bool `json:"fail_after,omitempty"`
 }
 
 // actionEvent describes a single event to be appended.
 type actionEvent struct {
+	ID         string         `json:"id,omitempty"`
 	Author     string         `json:"author"`
 	Role       string         `json:"role"`
 	Content    string         `json:"content"`
@@ -212,10 +231,53 @@ func validateSteps(step ReplayStep, index int) error {
 	if !validStepTypes[step.Type] {
 		return fmt.Errorf("step %d: unknown type %q", index, step.Type)
 	}
+
+	// Validate required payloads are present so malformed scenarios are
+	// caught at load time with a descriptive error rather than panicking
+	// deep inside execution.
+	switch step.Type {
+	case StepAppendEvent:
+		if step.Event == nil {
+			return fmt.Errorf("step %d (%s): event is required", index, step.Type)
+		}
+	case StepAddMemory, StepUpdateMemory, StepDeleteMemory:
+		if step.Memory == nil {
+			return fmt.Errorf("step %d (%s): memory is required", index, step.Type)
+		}
+		if !validMemoryOps[step.Memory.Op] {
+			return fmt.Errorf("step %d (%s): unknown memory op %q", index, step.Type, step.Memory.Op)
+		}
+	case StepCreateSummary:
+		if step.Summary == nil {
+			return fmt.Errorf("step %d (%s): summary is required", index, step.Type)
+		}
+		if step.Summary.FilterKey == "" {
+			return fmt.Errorf("step %d (%s): summary filter_key is required", index, step.Type)
+		}
+	case StepAppendTrack:
+		if step.Track == nil {
+			return fmt.Errorf("step %d (%s): track is required", index, step.Type)
+		}
+		if step.Track.Name == "" {
+			return fmt.Errorf("step %d (%s): track name is required", index, step.Type)
+		}
+	case StepConcurrentEvents:
+		if len(step.Concurrent) == 0 {
+			return fmt.Errorf("step %d (%s): concurrent_events must have at least one child step", index, step.Type)
+		}
+	}
+
 	for i, nested := range step.Concurrent {
 		if err := validateSteps(nested, i); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// validMemoryOps lists the allowed memory operation values.
+var validMemoryOps = map[string]bool{
+	"add":    true,
+	"update": true,
+	"delete": true,
 }

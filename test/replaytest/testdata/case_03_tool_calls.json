@@ -13,7 +13,8 @@
         "role": "user",
         "content": "what is the weather in Beijing?",
         "branch": "root",
-        "filter_key": "root"
+        "filter_key": "root",
+        "tag": "user-ask"
       }
     },
     {
@@ -24,6 +25,7 @@
         "content": "",
         "branch": "root",
         "filter_key": "root",
+        "tag": "tool-call",
         "tool_calls": [
           {
             "id": "call_abc123",
@@ -43,7 +45,8 @@
         "tool_id": "call_abc123",
         "tool_name": "get_weather",
         "branch": "root",
-        "filter_key": "root"
+        "filter_key": "root",
+        "tag": "tool-result"
       }
     },
     {
@@ -53,7 +56,8 @@
         "role": "assistant",
         "content": "Beijing is sunny and 22°C.",
         "branch": "root",
-        "filter_key": "root"
+        "filter_key": "root",
+        "tag": "agent-answer"
       }
     },
     {"type": "get_session"}

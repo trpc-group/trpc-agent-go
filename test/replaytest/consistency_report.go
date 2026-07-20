@@ -18,6 +18,7 @@ import (
 
 // EnvReportPath is the env var name for overriding the diff report output path.
 const EnvReportPath = "TRPC_AGENT_REPLAY_REPORT_PATH"
+
 // defaultReportName is the generated output filename. It is gitignored so
 // routine test runs never dirty the working tree. For a permanent reference
 // see sample_diff_report.json (tracked, read-only example).
