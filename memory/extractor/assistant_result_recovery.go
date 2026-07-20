@@ -41,10 +41,14 @@ eligible result and emit no tool call otherwise.
 - Preserve exact names, ordering, negation, quantities, and item-to-detail
   relationships. Keep a cohesive result together when splitting loses those
   relationships.
-- Do not store a response that merely acknowledges, copies, paraphrases,
-  reformats, or summarizes facts supplied by the user. Keep a genuinely new
-  assistant selection, recommendation, calculation, classification, or
-  transformation even when it reuses user-supplied entities and values.
+- Apply source novelty only after checking for a direct result. Skip only if
+  every substantive result claim was explicitly stated by the user and the
+  assistant merely repeats or reformats those same claims, such as copying a
+  user-provided gift into a formatted gift list.
+- If the assistant adds any substantive selection, recommendation,
+  calculation, classification, mapping, or transformed conclusion, store it.
+  Educational framing does not disqualify it. For example, store a full-stack
+  learning recommendation that names Ruby, Python, or PHP.
 - Do not store the request itself, generic definitions, tutorial steps,
   unselected alternatives, brainstorming, acknowledgments, or filler.
 - Do not duplicate a result already present in existing memories.
