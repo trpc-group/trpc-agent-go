@@ -1033,7 +1033,15 @@ For EPISODES (memory_kind="episode"):
   "on May 7, 2023"), preserve that original date in BOTH the memory text
   and event_time field.
 - When someone mentions a duration (e.g., "painting for 7 years"), subtract
-  the duration from today's date to derive the start date.
+  the duration from today's date to derive the start date only when the main
+  assertion is when the activity or relationship began.
+- Anchor event_time to the main assertion, not automatically to the earliest
+  date in the sentence. For a current cumulative state observed in this
+  conversation (e.g., "has completed seven paintings since starting three
+  months ago"), event_time is today's date because that is when the count is
+  known to be seven. Preserve the derived start date in the memory text or as
+  a separate start-date memory. Never move a current count backward to its
+  "since" date.
 - Capture WHO was involved in the participants field.
 - Capture WHERE it happened in the location field.
 - Each distinct event should be a SEPARATE episode memory.
@@ -1102,12 +1110,22 @@ Example 3 – Episode with conversation detail:
      memory_kind="episode", event_time="2024-06-09",
      participants=["Bob"], topics=["Bob", "dinner", "startup", "AI tutoring"])
 
-Example 4 – Duration-based date derivation:
+Example 4 – Start-date derivation from a pure duration:
   User says: "I've been painting for about 7 years now."
   (today = 2023-05-08)
   → memory_add(memory="User has been painting since approximately 2016.",
      memory_kind="fact", event_time="2016-01-01",
      topics=["painting", "hobby", "art"])
+
+Example 4b – Current cumulative state with a start boundary:
+  User says: "I've been painting for three months and have completed seven
+  paintings since I started."
+  (today = 2023-05-30)
+  → memory_add(memory="User has completed seven paintings since starting
+     around late February 2023.", memory_kind="fact",
+     event_time="2023-05-30", topics=["painting", "art", "progress"])
+  The seven-painting count is observed today. 2023-02-28 describes when the
+  activity began and must not be used as the count's event_time.
 
 Example 5 – Extracting specific details from casual conversation:
   Speaker A (Jon): "I just got back from Rome, it was amazing! Also I started

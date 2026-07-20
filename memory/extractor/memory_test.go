@@ -278,6 +278,26 @@ func TestExtractor_DefaultPromptRequiresGroundedStateTransitions(t *testing.T) {
 		`explicit source wording such as "sold", "traded in", "replaced"`)
 }
 
+func TestExtractor_DefaultPromptAnchorsCumulativeStateToObservation(t *testing.T) {
+	extractor := NewExtractor(
+		&mockModel{name: "test-model"},
+	).(*memoryExtractor)
+	prompt := extractor.buildSystemPrompt(
+		time.Date(2023, 5, 30, 0, 0, 0, 0, time.UTC), nil,
+	)
+	normalizedPrompt := strings.Join(strings.Fields(prompt), " ")
+	assert.Contains(t, normalizedPrompt,
+		"Anchor event_time to the main assertion")
+	assert.Contains(t, normalizedPrompt,
+		"current cumulative state observed in this conversation")
+	assert.Contains(t, normalizedPrompt,
+		`Never move a current count backward to its "since" date`)
+	assert.Contains(t, normalizedPrompt,
+		"event_time=\"2023-05-30\"")
+	assert.Contains(t, normalizedPrompt,
+		"2023-02-28 describes when the activity began")
+}
+
 func TestExtractor_DefaultPromptPreservesRelationScope(t *testing.T) {
 	extractor := NewExtractor(
 		&mockModel{name: "test-model"},
