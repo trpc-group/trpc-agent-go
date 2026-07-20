@@ -57,12 +57,22 @@ var backgroundTools = func() map[string]tool.Tool {
 
 const assistantResultAddToolName = "memory_add_assistant_result"
 
+const groundedStateAddToolName = "memory_add_grounded_state"
+
 var assistantResultAddTool = func() tool.Tool {
 	declaration := *memorytool.NewAddTool().Declaration()
 	declaration.Name = assistantResultAddToolName
 	declaration.Description = "Store a concrete result provided by the " +
 		"assistant in direct response to the user's request, including a " +
 		"named analytical or opinion-based conclusion."
+	return &declarationOnlyTool{decl: &declaration}
+}()
+
+var groundedStateAddTool = func() tool.Tool {
+	declaration := *memorytool.NewAddTool().Declaration()
+	declaration.Name = groundedStateAddToolName
+	declaration.Description = "Add a corrected state memory that preserves " +
+		"only relationships explicitly supported by the user's words."
 	return &declarationOnlyTool{decl: &declaration}
 }()
 
@@ -90,7 +100,8 @@ const (
 // parseToolCallArgs parses tool call arguments and returns a memory operation.
 func parseToolCallArgs(toolName string, args map[string]any) *Operation {
 	switch toolName {
-	case memory.AddToolName, assistantResultAddToolName:
+	case memory.AddToolName, assistantResultAddToolName,
+		groundedStateAddToolName:
 		mem, _ := args[argKeyMemory].(string)
 		if mem == "" {
 			return nil

@@ -168,6 +168,24 @@ func (e *memoryExtractor) ExtractOperationStages(
 	}
 	ctx, ops, err := e.generateOperations(ctx, primaryRequest)
 	primary, assistantResults := splitExtractionOperations(ops)
+	if err == nil {
+		recoveryCtx, recovered, recoveryErr :=
+			e.recoverUngroundedStateOperations(
+				ctx, messages, existing, primary,
+			)
+		if recoveryErr != nil {
+			if recoveryCtx.Err() != nil {
+				return primary, nil, recoveryErr
+			}
+			log.WarnfContext(ctx,
+				"extractor: grounded state recovery failed: %v",
+				recoveryErr,
+			)
+		} else {
+			ctx = recoveryCtx
+			primary = recovered
+		}
+	}
 	qualifyOperationsWithGroundedTopics(
 		conversationSourceText(messages), primary,
 	)
