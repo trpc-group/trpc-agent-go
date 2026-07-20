@@ -47,6 +47,7 @@ type Runtime struct {
 	preflightErr   error
 	bwrapPath      string
 	bwrapMountProc bool
+	seatbeltPath   string
 }
 
 // NewRuntime constructs a sandbox runtime.

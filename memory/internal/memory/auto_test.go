@@ -388,6 +388,71 @@ func TestAutoMemoryWorker_EnqueueJob_SyncFallback(t *testing.T) {
 	assert.Equal(t, 1, op.addCalls)
 }
 
+func TestAutoMemoryWorker_EnqueueJob_DisableOnExternalContext(t *testing.T) {
+	tests := []struct {
+		name       string
+		disable    bool
+		polluted   bool
+		wantAdds   int
+		wantReason string
+	}{
+		{
+			name:       "polluted session skips when enabled",
+			disable:    true,
+			polluted:   true,
+			wantAdds:   0,
+			wantReason: "guard enabled",
+		},
+		{
+			name:       "polluted session still extracts when disabled",
+			disable:    false,
+			polluted:   true,
+			wantAdds:   1,
+			wantReason: "default behavior preserved",
+		},
+		{
+			name:       "clean session extracts when enabled",
+			disable:    true,
+			polluted:   false,
+			wantAdds:   1,
+			wantReason: "no external context observed",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ext := &mockExtractor{
+				ops: []*extractor.Operation{
+					{
+						Type:   extractor.OperationAdd,
+						Memory: "User likes tea.",
+						Topics: []string{"preference"},
+					},
+				},
+			}
+			op := newMockOperator()
+			worker := NewAutoMemoryWorker(AutoMemoryConfig{
+				Extractor:                ext,
+				DisableOnExternalContext: tt.disable,
+			}, op)
+
+			sess := newTestSession("test-app", "user-1")
+			if tt.polluted {
+				sess.SetState(
+					memory.SessionStateKeyMemoryMode,
+					[]byte(memory.MemoryModePolluted),
+				)
+			}
+			appendSessionMessage(sess, time.Now(), model.NewUserMessage("hello"))
+
+			err := worker.EnqueueJob(context.Background(), sess)
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantAdds, op.addCalls, tt.wantReason)
+		})
+	}
+}
+
 func TestAutoMemoryWorker_EnqueueJob_SyncFallback_CancelledContext(t *testing.T) {
 	ext := &mockExtractor{
 		ops: []*extractor.Operation{

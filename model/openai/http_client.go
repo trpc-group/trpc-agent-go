@@ -19,6 +19,8 @@ var (
 	WithHTTPClientName = model.WithHTTPClientName
 	// WithHTTPClientTransport is the option for the HTTP client transport.
 	WithHTTPClientTransport = model.WithHTTPClientTransport
+	// WithHTTPClientTimeout is the option for the HTTP client timeout.
+	WithHTTPClientTimeout = model.WithHTTPClientTimeout
 )
 
 // HTTPClientOption is the option for the HTTP client.

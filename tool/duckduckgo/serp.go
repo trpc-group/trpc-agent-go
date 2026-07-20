@@ -12,6 +12,7 @@ package duckduckgo
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -22,6 +23,14 @@ import (
 )
 
 const maxSERPBodyBytes = 512 * 1024
+
+var errSERPChallenge = errors.New(
+	"duckduckgo returned an anti-bot challenge page",
+)
+
+var errAPIFallbackNoResults = errors.New(
+	"api fallback returned no results",
+)
 
 func (t *ddgTool) searchSERPWithFallback(
 	ctx context.Context,
@@ -73,17 +82,99 @@ func (t *ddgTool) searchSERPWithFallbackForBackend(
 		}
 		return fallback, nil
 	}
+	if isSERPRouteBlocker(err, fallbackErr) &&
+		!isDefaultSERPBaseURL(backend, baseURL) {
+		return searchResponse{
+			Query:   req.Query,
+			Results: []resultItem{},
+			Summary: "DuckDuckGo html and lite search pages are both " +
+				"unavailable for this query due to transport errors " +
+				"or anti-bot challenge pages; use direct URLs with " +
+				"web_fetch/browser or another configured search " +
+				"provider instead of immediately retrying DuckDuckGo",
+		}, nil
+	}
+	apiFallback, apiFallbackErr := t.searchAPIFallbackAfterSERPFailure(
+		ctx,
+		req,
+		backend,
+		baseURL,
+	)
+	if apiFallbackErr == nil {
+		if strings.TrimSpace(apiFallback.Summary) != "" {
+			apiFallback.Summary += fmt.Sprintf(
+				" (fallback from %s/%s after SERP failure)",
+				backend,
+				fallbackBackend,
+			)
+		}
+		return apiFallback, nil
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		if errors.Is(apiFallbackErr, ctxErr) {
+			return apiFallback, apiFallbackErr
+		}
+		return apiFallback, fmt.Errorf(
+			"%w: api fallback failed: %w",
+			ctxErr,
+			apiFallbackErr,
+		)
+	}
+	if isSERPRouteBlocker(err, fallbackErr) &&
+		errors.Is(apiFallbackErr, errAPIFallbackNoResults) {
+		return searchResponse{
+			Query:   req.Query,
+			Results: []resultItem{},
+			Summary: "DuckDuckGo html and lite search pages are both " +
+				"unavailable for this query due to transport errors " +
+				"or anti-bot challenge pages, and the Instant Answer " +
+				"API fallback did not return web results; use direct " +
+				"URLs with web_fetch/browser or another configured " +
+				"search provider instead of immediately retrying " +
+				"DuckDuckGo",
+		}, nil
+	}
+	if isSERPRouteBlocker(err, fallbackErr) &&
+		isAPIFallbackTransportIncompatible(apiFallbackErr) {
+		return searchResponse{
+			Query:   req.Query,
+			Results: []resultItem{},
+			Summary: "DuckDuckGo html and lite search pages are both " +
+				"unavailable for this query due to transport errors " +
+				"or anti-bot challenge pages, and the Instant Answer " +
+				"API fallback also failed due to HTTPS transport " +
+				"incompatibility; use direct URLs with web_fetch/" +
+				"browser or another configured search provider " +
+				"instead of immediately retrying DuckDuckGo",
+		}, nil
+	}
+	if isSERPRouteBlocker(err, fallbackErr) &&
+		isRetryableAPIStatus(apiFallbackErr) {
+		return searchResponse{
+			Query:   req.Query,
+			Results: []resultItem{},
+			Summary: "DuckDuckGo html and lite search pages are both " +
+				"unavailable for this query due to transport errors " +
+				"or anti-bot challenge pages, and the Instant Answer " +
+				"API fallback returned a retryable unavailable status; " +
+				"use direct URLs with web_fetch/browser or another " +
+				"configured search provider instead of immediately " +
+				"retrying DuckDuckGo",
+		}, nil
+	}
 	result.Summary = fmt.Sprintf(
-		"%s; fallback %s failed: %v",
+		"%s; fallback %s failed: %v; api fallback failed: %v",
 		result.Summary,
 		fallbackBackend,
 		fallbackErr,
+		apiFallbackErr,
 	)
 	return result, fmt.Errorf(
-		"%w; fallback %s failed: %w",
+		"%w; fallback %s failed: %w; api fallback failed: %w",
 		err,
 		fallbackBackend,
 		fallbackErr,
+		apiFallbackErr,
 	)
 }
 
@@ -180,15 +271,13 @@ func (t *ddgTool) searchSERP(
 	}
 	if isDuckDuckGoChallenge(body) {
 		return searchResponse{
-				Query:   req.Query,
-				Results: []resultItem{},
-				Summary: "DuckDuckGo returned an anti-bot challenge page; " +
-					"use direct URLs with web_fetch/browser or another " +
-					"configured search provider instead of immediately " +
-					"retrying the same query",
-			}, fmt.Errorf(
-				"duckduckgo returned an anti-bot challenge page",
-			)
+			Query:   req.Query,
+			Results: []resultItem{},
+			Summary: "DuckDuckGo returned an anti-bot challenge page; " +
+				"use direct URLs with web_fetch/browser or another " +
+				"configured search provider instead of immediately " +
+				"retrying the same query",
+		}, errSERPChallenge
 	}
 
 	results := parseSERPResults(body)
@@ -205,6 +294,32 @@ func (t *ddgTool) searchSERP(
 	}, nil
 }
 
+func isSERPChallengeError(err error) bool {
+	return errors.Is(err, errSERPChallenge)
+}
+
+func isSERPRouteBlocker(err error, fallbackErr error) bool {
+	return isSERPUnavailableError(err) &&
+		isSERPUnavailableError(fallbackErr)
+}
+
+func isSERPUnavailableError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if isSERPChallengeError(err) || shouldRetrySERPWithHTTP(err) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "search returned status 429") ||
+		strings.Contains(msg, "search returned status 502") ||
+		strings.Contains(msg, "search returned status 503")
+}
+
+func isAPIFallbackTransportIncompatible(err error) bool {
+	return shouldRetrySERPWithHTTP(err)
+}
+
 func fallbackSERPBackend(backend string) string {
 	switch backend {
 	case backendHTML:
@@ -214,6 +329,32 @@ func fallbackSERPBackend(backend string) string {
 	default:
 		return ""
 	}
+}
+
+func (t *ddgTool) searchAPIFallbackAfterSERPFailure(
+	ctx context.Context,
+	req searchRequest,
+	backend string,
+	baseURL string,
+) (searchResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return searchResponse{}, err
+	}
+	if !isDefaultSERPBaseURL(backend, baseURL) {
+		return searchResponse{}, fmt.Errorf(
+			"api fallback is disabled for non-default %s base URL %q",
+			backend,
+			baseURL,
+		)
+	}
+	result, err := t.searchAPIWithDefaultBaseURL(ctx, req)
+	if err != nil {
+		return searchResponse{}, err
+	}
+	if len(result.Results) == 0 {
+		return searchResponse{}, errAPIFallbackNoResults
+	}
+	return result, nil
 }
 
 func fallbackSERPBaseURL(backend string, baseURL string) string {
@@ -242,6 +383,11 @@ func fallbackSERPBaseURL(backend string, baseURL string) string {
 		return u.String()
 	}
 	return ""
+}
+
+func isDefaultSERPBaseURL(backend string, baseURL string) bool {
+	baseURL = strings.TrimSpace(baseURL)
+	return baseURL == "" || baseURL == defaultBaseURLForBackend(backend)
 }
 
 func apiFallbackSERPBaseURL(apiBaseURL string) string {

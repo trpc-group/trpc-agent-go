@@ -278,7 +278,17 @@ func execToolDescription(hasMemoryFile bool) string {
 			"something with host shell work, the same assistant " +
 			"message must call exec_command or the required tool.",
 		"Protected shell and credential paths may be blocked by policy.",
+		"Host system package-manager installs such as apt, yum, dnf, " +
+			"apk, pacman, zypper, and brew are blocked in chat; use " +
+			"preconfigured dependencies or ask for an explicit setup flow.",
 		"Sensitive env values may be redacted from returned output.",
+		"Large stdout/stderr may be truncated before it is returned " +
+			"to the model; write large outputs to files and read only " +
+			"the needed chunks.",
+		"Foreground commands clean up child jobs when the command " +
+			"exits; start long-running servers or processes with " +
+			"`background: true` when later tools must keep using " +
+			"them.",
 		"Do not use this just to inspect a PDF or spreadsheet already " +
 			"in chat; prefer read_document or read_spreadsheet for that.",
 	}
@@ -648,6 +658,7 @@ func (t *writeTool) Call(ctx context.Context, args []byte) (any, error) {
 		*v >= 0 {
 		yield = *v
 	}
+	yield = t.mgr.clampYieldMs(yield)
 	if yield > 0 {
 		timer := time.NewTimer(time.Duration(yield) * time.Millisecond)
 		defer timer.Stop()
@@ -908,7 +919,7 @@ func uploadEnvFromContext(
 
 	env := make(map[string]string)
 	if scope, ok := uploadScopeFromInvocation(inv); ok &&
-		store != nil {
+		store != nil && strings.TrimSpace(scope.Channel) != "" {
 		dir := strings.TrimSpace(store.ScopeDir(scope))
 		if dir != "" {
 			env[envSessionUploadsDir] = dir
@@ -1198,7 +1209,7 @@ func appendRecentUploadsFromStore(
 	if !ok {
 		return out
 	}
-	files, err := store.ListScope(scope, limit)
+	files, err := listUploadsForScope(store, scope, limit)
 	if err != nil {
 		return out
 	}
@@ -1235,6 +1246,36 @@ func appendRecentUploadsFromStore(
 		})
 	}
 	return out
+}
+
+func listUploadsForScope(
+	store *uploads.Store,
+	scope uploads.Scope,
+	limit int,
+) ([]uploads.ListedFile, error) {
+	if strings.TrimSpace(scope.Channel) != "" {
+		return store.ListScope(scope, limit)
+	}
+	files, err := store.ListAll(0)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]uploads.ListedFile, 0, len(files))
+	userID := strings.TrimSpace(scope.UserID)
+	sessionID := strings.TrimSpace(scope.SessionID)
+	for _, file := range files {
+		if limit > 0 && len(out) >= limit {
+			break
+		}
+		if strings.TrimSpace(file.Scope.UserID) != userID {
+			continue
+		}
+		if strings.TrimSpace(file.Scope.SessionID) != sessionID {
+			continue
+		}
+		out = append(out, file)
+	}
+	return out, nil
 }
 
 func uploadScopeFromInvocation(

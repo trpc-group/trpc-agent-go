@@ -33,12 +33,14 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool/wikipedia"
 
 	ocbrowser "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/browser"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/imageinspect"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/registry"
 )
 
 const (
 	toolProviderBrowser    = "browser"
 	toolProviderDuckDuckGo = "duckduckgo"
+	toolProviderImage      = "image_inspect"
 	toolProviderWebFetch   = "webfetch_http"
 
 	toolSetProviderMCP     = "mcp"
@@ -57,6 +59,8 @@ const (
 	mcpTransportStdio      = "stdio"
 	mcpTransportSSE        = "sse"
 	mcpTransportStreamable = "streamable"
+
+	browserArtifactDirName = ".playwright-mcp"
 )
 
 func init() {
@@ -67,6 +71,10 @@ func init() {
 	must(registry.RegisterToolProvider(
 		toolProviderDuckDuckGo,
 		newDuckDuckGoTools,
+	))
+	must(registry.RegisterToolProvider(
+		toolProviderImage,
+		newImageInspectTools,
 	))
 	must(registry.RegisterToolProvider(
 		toolProviderWebFetch,
@@ -110,6 +118,12 @@ type httpToolConfig struct {
 	Timeout   time.Duration `yaml:"timeout,omitempty"`
 }
 
+type duckDuckGoToolConfig struct {
+	httpToolConfig `yaml:",inline"`
+
+	BlockedResultURLPatterns []string `yaml:"blocked_result_url_patterns,omitempty"`
+}
+
 func newBrowserTools(
 	_ registry.ToolProviderDeps,
 	spec registry.PluginSpec,
@@ -130,12 +144,12 @@ func newDuckDuckGoTools(
 	_ registry.ToolProviderDeps,
 	spec registry.PluginSpec,
 ) ([]tool.Tool, error) {
-	var cfg httpToolConfig
+	var cfg duckDuckGoToolConfig
 	if err := registry.DecodeStrict(spec.Config, &cfg); err != nil {
 		return nil, err
 	}
 
-	opts := make([]duckduckgo.Option, 0, 4)
+	opts := make([]duckduckgo.Option, 0, 5)
 	if backend := strings.TrimSpace(cfg.Backend); backend != "" {
 		if !isSupportedDuckDuckGoBackend(backend) {
 			return nil, fmt.Errorf(
@@ -154,8 +168,32 @@ func newDuckDuckGoTools(
 	if cfg.Timeout > 0 {
 		opts = append(opts, duckduckgo.WithTimeout(cfg.Timeout))
 	}
+	if len(cfg.BlockedResultURLPatterns) > 0 {
+		opts = append(
+			opts,
+			duckduckgo.WithBlockedResultURLPatterns(
+				cfg.BlockedResultURLPatterns...,
+			),
+		)
+	}
 
 	return []tool.Tool{duckduckgo.NewTool(opts...)}, nil
+}
+
+func newImageInspectTools(
+	_ registry.ToolProviderDeps,
+	spec registry.PluginSpec,
+) ([]tool.Tool, error) {
+	var cfg imageinspect.Config
+	if err := registry.DecodeStrict(spec.Config, &cfg); err != nil {
+		return nil, err
+	}
+
+	imageTool, err := imageinspect.NewTool(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return []tool.Tool{imageTool}, nil
 }
 
 func isSupportedDuckDuckGoBackend(backend string) bool {
@@ -168,11 +206,13 @@ func isSupportedDuckDuckGoBackend(backend string) bool {
 }
 
 type httpWebFetchConfig struct {
-	AllowedDomains  []string      `yaml:"allowed_domains,omitempty"`
-	BlockedDomains  []string      `yaml:"blocked_domains,omitempty"`
-	AllowAll        bool          `yaml:"allow_all_domains,omitempty"`
-	Timeout         time.Duration `yaml:"timeout,omitempty"`
-	MainContentOnly bool          `yaml:"main_content_only,omitempty"`
+	AllowedDomains     []string      `yaml:"allowed_domains,omitempty"`
+	BlockedDomains     []string      `yaml:"blocked_domains,omitempty"`
+	AllowAll           bool          `yaml:"allow_all_domains,omitempty"`
+	Timeout            time.Duration `yaml:"timeout,omitempty"`
+	MainContentOnly    bool          `yaml:"main_content_only,omitempty"`
+	AllowSearchPages   *bool         `yaml:"allow_search_result_pages,omitempty"`
+	DetectBlockedPages *bool         `yaml:"detect_blocked_pages,omitempty"`
 
 	MaxContentLength      int `yaml:"max_content_length,omitempty"`
 	MaxTotalContentLength int `yaml:"max_total_content_length,omitempty"`
@@ -216,6 +256,12 @@ func newHTTPWebFetchTools(
 	}
 	if cfg.MainContentOnly {
 		opts = append(opts, httpfetch.WithMainContentExtraction(true))
+	}
+	if cfg.AllowSearchPages == nil || !*cfg.AllowSearchPages {
+		opts = append(opts, httpfetch.WithSearchResultPageBlocking(true))
+	}
+	if cfg.DetectBlockedPages == nil || *cfg.DetectBlockedPages {
+		opts = append(opts, httpfetch.WithBlockedPageDetection(true))
 	}
 	if len(cfg.AllowedDomains) > 0 {
 		opts = append(opts, httpfetch.WithAllowedDomains(cfg.AllowedDomains))
@@ -440,18 +486,72 @@ func newFileToolSet(
 }
 
 func defaultFileReadOnlyDirs(stateDir string) []string {
-	roots := []string{os.TempDir()}
+	roots := []string{absPathOrOriginal(os.TempDir())}
 	if runtime.GOOS != "windows" {
-		roots = append(roots, "/tmp")
+		roots = append(roots, absPathOrOriginal("/tmp"))
+	}
+	if cwd, err := os.Getwd(); err == nil {
+		if cwd = strings.TrimSpace(cwd); cwd != "" {
+			artifactDir, ok := browserArtifactReadRoot(cwd)
+			if ok {
+				roots = append(roots, artifactDir)
+			}
+		}
 	}
 	if stateDir := strings.TrimSpace(stateDir); stateDir != "" {
 		roots = append(
 			roots,
-			filepath.Join(stateDir, "runtime", "tmp"),
-			filepath.Join(stateDir, "workspaces", "scratch"),
+			absPathOrOriginal(filepath.Join(stateDir, "runtime", "tmp")),
+			absPathOrOriginal(filepath.Join(stateDir, "workspaces", "scratch")),
 		)
 	}
 	return roots
+}
+
+func browserArtifactReadRoot(cwd string) (string, bool) {
+	return browserArtifactReadRootWith(cwd, os.Lstat, os.MkdirAll)
+}
+
+type browserArtifactLstatFunc func(string) (os.FileInfo, error)
+
+type browserArtifactMkdirAllFunc func(string, os.FileMode) error
+
+func browserArtifactReadRootWith(
+	cwd string,
+	lstat browserArtifactLstatFunc,
+	mkdirAll browserArtifactMkdirAllFunc,
+) (string, bool) {
+	artifactDir := filepath.Join(cwd, browserArtifactDirName)
+	info, err := lstat(artifactDir)
+	switch {
+	case err == nil:
+		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return "", false
+		}
+	case os.IsNotExist(err):
+		if err := mkdirAll(artifactDir, 0o755); err != nil {
+			return "", false
+		}
+	default:
+		return "", false
+	}
+
+	info, err = lstat(artifactDir)
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return "", false
+	}
+	return artifactDir, true
+}
+
+func absPathOrOriginal(path string) string {
+	if strings.TrimSpace(path) == "" {
+		return path
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return path
+	}
+	return abs
 }
 
 type openAPISpecConfig struct {

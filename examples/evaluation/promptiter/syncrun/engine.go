@@ -194,11 +194,11 @@ func buildPromptIterRuntime(ctx context.Context, cfg syncRunConfig) (*promptIter
 	}
 	engineInstance, err := promptiterengine.New(
 		ctx,
-		candidateAgent,
-		agentEvaluator,
-		backwarderInstance,
-		aggregatorInstance,
-		optimizerInstance,
+		promptiterengine.WithAgent(candidateAgent),
+		promptiterengine.WithAgentEvaluator(agentEvaluator),
+		promptiterengine.WithBackwarder(backwarderInstance),
+		promptiterengine.WithAggregator(aggregatorInstance),
+		promptiterengine.WithOptimizer(optimizerInstance),
 	)
 	if err != nil {
 		agentEvaluator.Close()
@@ -214,7 +214,10 @@ func buildPromptIterRuntime(ctx context.Context, cfg syncRunConfig) (*promptIter
 	}, nil
 }
 
-func buildRunRequest(cfg syncRunConfig, targetSurfaceID string) *promptiterengine.RunRequest {
+func buildRunRequest(
+	cfg syncRunConfig,
+	targetSurfaceID string,
+) *promptiterengine.RunRequest {
 	targetScore := cfg.TargetScore
 	return &promptiterengine.RunRequest{
 		Train: []promptiterengine.EvalSetInput{

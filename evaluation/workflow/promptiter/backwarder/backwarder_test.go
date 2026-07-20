@@ -590,9 +590,12 @@ func TestBackwardRejectsInvalidResultOutput(t *testing.T) {
 
 		rsp, err := bw.Backward(context.Background(), newRestrictedInstructionRequest())
 
+		// LLM hallucinates an id outside the allowed surface set: that gradient
+		// is dropped. Since it's the only gradient, result becomes fully empty
+		// and falls through to the "backward result is empty" fatal path.
 		assert.Error(t, err)
 		assert.Nil(t, rsp)
-		assert.Contains(t, err.Error(), "allowed gradient surfaces")
+		assert.Contains(t, err.Error(), "backward result is empty")
 	})
 
 	t.Run("unknown predecessor step id", func(t *testing.T) {
@@ -974,6 +977,9 @@ func TestNormalizeRequestAndSanitizeBackwardResult(t *testing.T) {
 	result, err = sanitizeBackwardResult(request, nil)
 	assert.Nil(t, result)
 	assert.EqualError(t, err, "backward result is nil")
+	// LLM hallucinates a step id outside request Predecessors: single drop;
+	// if this is the only propagation, sanitize leaves upstream/gradients empty,
+	// so sanitizeBackwardResult falls through to "backward result is empty" fatal.
 	result, err = sanitizeBackwardResult(request, &Result{
 		Upstream: []Propagation{
 			{
@@ -985,14 +991,32 @@ func TestNormalizeRequestAndSanitizeBackwardResult(t *testing.T) {
 		},
 	})
 	assert.Nil(t, result)
-	assert.EqualError(t, err, `sanitize propagation: sanitize propagation predecessor step id: propagation predecessor step id "missing" is not part of request predecessors`)
+	assert.EqualError(t, err, "backward result is empty")
+	// Same for surface id hallucination: single drop -> all empty -> empty result.
 	result, err = sanitizeBackwardResult(request, &Result{
 		Gradients: []promptiter.SurfaceGradient{
 			{SurfaceID: "surf_2", Gradient: "wrong target"},
 		},
 	})
 	assert.Nil(t, result)
-	assert.EqualError(t, err, `sanitize surface gradient: sanitize gradient surface id: gradient surface id "surf_2" is not part of allowed gradient surfaces`)
+	assert.EqualError(t, err, "backward result is empty")
+	// Mixed hallucinated + valid entries: only the hallucinated ones are dropped.
+	result, err = sanitizeBackwardResult(request, &Result{
+		Gradients: []promptiter.SurfaceGradient{
+			{SurfaceID: "surf_2", Gradient: "wrong target"}, // hallucinated, drop
+			{SurfaceID: "surf_1", Gradient: "keep me", Severity: promptiter.LossSeverityP1},
+		},
+		Upstream: []Propagation{
+			{PredecessorStepID: "missing", Gradients: []GradientPacket{{Gradient: "hallucinated"}}}, // drop
+			{PredecessorStepID: "pred_1", Gradients: []GradientPacket{{Gradient: "keep me"}}},
+		},
+	})
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Len(t, result.Gradients, 1)
+	assert.Equal(t, "surf_1", result.Gradients[0].SurfaceID)
+	assert.Len(t, result.Upstream, 1)
+	assert.Equal(t, "pred_1", result.Upstream[0].PredecessorStepID)
 	result, err = sanitizeBackwardResult(request, &Result{
 		Gradients: []promptiter.SurfaceGradient{
 			{SurfaceID: "surf_1", Gradient: "keep this", Severity: promptiter.LossSeverityP1},
@@ -1277,12 +1301,13 @@ func newInstructionRequest() *Request {
 
 func newRestrictedInstructionRequest() *Request {
 	request := newInstructionRequest()
+	globalText := "global prompt"
 	request.Surfaces = append(request.Surfaces, astructure.Surface{
 		SurfaceID: "surf_2",
 		NodeID:    "node_1",
-		Type:      astructure.SurfaceTypeModel,
+		Type:      astructure.SurfaceTypeGlobalInstruction,
 		Value: astructure.SurfaceValue{
-			Model: &astructure.ModelRef{Name: "gpt-test"},
+			Text: &globalText,
 		},
 	})
 	request.AllowedGradientSurfaceIDs = []string{"surf_1"}

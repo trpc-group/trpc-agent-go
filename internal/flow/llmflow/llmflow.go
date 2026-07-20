@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"runtime/debug"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -34,15 +35,17 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/modelcontext"
 	"trpc.group/trpc-go/trpc-agent-go/internal/responseusage"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/steer"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryfork"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolcall"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolsurface"
 	itrace "trpc.group/trpc-go/trpc-agent-go/internal/trace"
+	"trpc.group/trpc-go/trpc-agent-go/internal/tracecapture"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
-	sessionsummary "trpc.group/trpc-go/trpc-agent-go/session/summary"
+	"trpc.group/trpc-go/trpc-agent-go/session/summary"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
@@ -54,6 +57,7 @@ const (
 	queuedUserAuthor          = "user"
 
 	errMsgNoModelResponse = "no response received from model"
+	errMsgNoLLMMessages   = "no messages available for LLM call"
 
 	flowRunPanicLogFmt = log.PanicPrefix + " Flow execution panic (invocation: %s, " +
 		"agent: %s): %v\n%s"
@@ -341,15 +345,17 @@ func traceSnapshotFromMessages(messages []model.Message) *atrace.Snapshot {
 	return &atrace.Snapshot{Text: string(bytes)}
 }
 
-func traceSnapshotFromEvent(evt *event.Event) *atrace.Snapshot {
-	if evt == nil || evt.Response == nil {
+func executionTraceAppliedSurfaceIDs(invocation *agent.Invocation) []string {
+	if invocation == nil || invocation.Agent == nil {
 		return nil
 	}
-	bytes, err := json.Marshal(evt.Response)
-	if err != nil {
+	reporter, ok := invocation.Agent.(interface {
+		ExecutionTraceAppliedSurfaceIDs(inv *agent.Invocation) []string
+	})
+	if !ok {
 		return nil
 	}
-	return &atrace.Snapshot{Text: string(bytes)}
+	return reporter.ExecutionTraceAppliedSurfaceIDs(invocation)
 }
 
 func (f *Flow) maybeConsumeQueuedUserMessages(
@@ -516,8 +522,16 @@ func (f *Flow) maybeSyncSummaryIntraRun(
 		return
 	}
 
+	summaryCtx := ctx
+	if parentRequest, ok := summaryfork.Request(invocation); ok {
+		summaryCtx = summary.ContextWithCacheSafeForkRequest(
+			summaryCtx,
+			parentRequest,
+		)
+	}
+
 	err = invocation.SessionService.CreateSessionSummary(
-		ctx,
+		summaryCtx,
 		invocation.Session,
 		invocation.GetEventFilterKey(),
 		false,
@@ -629,7 +643,9 @@ func runModelSelector(
 	return selector(ctx, invocation)
 }
 
-// runOneStep executes one step of the flow (one LLM call cycle).
+// runOneStep executes one LLM call cycle. Despite the legacy name, this is
+// not a structural execution-trace Step; every cycle updates the Step owned by
+// the surrounding agent run.
 // Returns the last event generated, or nil if no events.
 func (f *Flow) runOneStep(
 	ctx context.Context,
@@ -682,13 +698,6 @@ func (f *Flow) runOneStep(
 		return lastEvent, nil
 	}
 	observabilityInvocation := invocationViewForModel(invocation, callModel)
-	stepID := agent.StartExecutionTraceStep(
-		invocation,
-		agent.InvocationTraceNodeID(invocation),
-		traceSnapshotFromMessages(llmRequest.Messages),
-		nil,
-	)
-	agent.SetExecutionTraceStepAppliedSurfaceIDs(invocation, stepID)
 	var span oteltrace.Span
 	var modelName string
 	if callModel != nil {
@@ -699,10 +708,22 @@ func (f *Flow) runOneStep(
 		defer span.End()
 	}
 	// 2. Call LLM (get response sequence).
-	ctx, responseSeq, err := f.callLLM(ctx, invocation, llmRequest, callModel)
+	ctx, responseSeq, modelCalled, err := f.callLLM(ctx, invocation, llmRequest, callModel)
 	if err != nil {
-		agent.FinishExecutionTraceStep(invocation, stepID, nil, err)
 		return nil, err
+	}
+	var lastCompleteUsage *model.Usage
+	if modelCalled && invocation != nil && invocation.RunOptions.ExecutionTraceEnabled {
+		modelResponseSeq := responseSeq
+		responseSeq = func(yield func(*model.Response) bool) {
+			modelResponseSeq(func(response *model.Response) bool {
+				if response != nil && !response.IsPartial && response.Usage != nil {
+					usage := *response.Usage
+					lastCompleteUsage = &usage
+				}
+				return yield(response)
+			})
+		}
 	}
 	// 3. Process streaming responses.
 	lastEvent, err = f.processStreamingResponses(
@@ -715,9 +736,11 @@ func (f *Flow) runOneStep(
 		span,
 		startedSpan,
 	)
-	agent.FinishExecutionTraceStep(invocation, stepID, traceSnapshotFromEvent(lastEvent), err)
-	if lastEvent != nil && lastEvent.Response != nil {
-		agent.SetExecutionTraceStepUsage(invocation, stepID, lastEvent.Response.Usage)
+	if lastCompleteUsage != nil {
+		tracecapture.AddInvocationStepUsage(
+			agent.NewInvocationContext(ctx, invocation),
+			lastCompleteUsage,
+		)
 	}
 	return lastEvent, err
 }
@@ -803,6 +826,7 @@ type streamingResponseProcessor struct {
 	eventChan               chan<- *event.Event
 	span                    oteltrace.Span
 	startedSpan             bool
+	chatTraceState          itelemetry.ChatTraceState
 	tracker                 *itelemetry.ChatMetricsTracker
 	timingInfo              *model.TimingInfo
 	partialUsageState       responseusage.PartialState
@@ -918,6 +942,20 @@ func (p *streamingResponseProcessor) process(
 	response = p.applyCallbackResponse(response, customResp, callbackTimingAttachment)
 	responseusage.AttachTiming(response, p.timingInfo, &p.partialUsageState)
 	p.repairToolCallArguments(response)
+	p.repairToolCallTextAndStats(response)
+	if p.shouldBufferToolCallTextPartial(response) {
+		if err := agent.CheckContextCancelled(p.ctx); err != nil {
+			*p.err = err
+			responseErr = err
+			return false
+		}
+		if responseStarted && response != nil {
+			responseSpan.SetAttributes(
+				latencyResponseAttrs(response)...,
+			)
+		}
+		return true
+	}
 	llmResponseEvent := p.emitLLMResponse(
 		eventInvocation,
 		response,
@@ -1017,6 +1055,64 @@ func (p *streamingResponseProcessor) repairToolCallArguments(
 	jsonrepair.RepairResponseToolCallArgumentsInPlace(p.ctx, response)
 }
 
+func (p *streamingResponseProcessor) repairToolCallTextAndStats(
+	response *model.Response,
+) {
+	wasToolResponse := response != nil &&
+		(response.IsToolCallResponse() || response.IsToolResultResponse())
+	if p.repairToolCallText(response) && !wasToolResponse &&
+		response.IsToolCallResponse() {
+		p.toolResponseCount++
+	}
+}
+
+func (p *streamingResponseProcessor) repairToolCallText(
+	response *model.Response,
+) bool {
+	if p.currentInvocation == nil {
+		return false
+	}
+	if !isToolCallTextRepairEnabled(p.currentInvocation) {
+		return false
+	}
+	return repairResponseToolCallTextInPlace(p.ctx, p.llmRequest, response)
+}
+
+func (p *streamingResponseProcessor) shouldBufferToolCallTextPartial(
+	response *model.Response,
+) bool {
+	return response != nil && response.IsPartial &&
+		p.currentInvocation != nil &&
+		isToolCallTextRepairEnabled(p.currentInvocation) &&
+		p.llmRequest != nil && len(p.llmRequest.Tools) > 0 &&
+		responseMayContainTextToolCall(response)
+}
+
+func responseMayContainTextToolCall(response *model.Response) bool {
+	if response == nil {
+		return false
+	}
+	for i := range response.Choices {
+		msg := &response.Choices[i].Message
+		if msg.Role != model.RoleAssistant {
+			continue
+		}
+		text, ok := repairableMessageText(msg)
+		if !ok {
+			continue
+		}
+		if strings.Contains(text, textToolCallOpenTag) {
+			return true
+		}
+		for prefixLen := 1; prefixLen < len(textToolCallOpenTag); prefixLen++ {
+			if strings.HasSuffix(text, textToolCallOpenTag[:prefixLen]) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (p *streamingResponseProcessor) emitLLMResponse(
 	eventInvocation *agent.Invocation,
 	response *model.Response,
@@ -1056,7 +1152,7 @@ func (p *streamingResponseProcessor) traceChat(
 	if p.tracker != nil {
 		ttfb = p.tracker.FirstTokenTimeDuration()
 	}
-	itelemetry.TraceChat(p.span, &itelemetry.TraceChatAttributes{
+	p.chatTraceState.TraceChat(p.span, &itelemetry.TraceChatAttributes{
 		Invocation: observabilityInvocationForCurrent(
 			eventInvocation,
 			p.observabilityInvocation,
@@ -1518,7 +1614,7 @@ func (f *Flow) runContextCompaction(
 		latencySpanContextSummary,
 		contextCompactionAttrs(decision, req)...,
 	)
-	summaryCtx = sessionsummary.ContextWithCacheSafeForkRequest(summaryCtx, req)
+	summaryCtx = summary.ContextWithCacheSafeForkRequest(summaryCtx, req)
 	err := invocation.SessionService.CreateSessionSummary(
 		summaryCtx,
 		invocation.Session,
@@ -2170,7 +2266,7 @@ func (f *Flow) callLLM(
 	invocation *agent.Invocation,
 	llmRequest *model.Request,
 	callModel model.Model,
-) (context.Context, model.Seq[*model.Response], error) {
+) (context.Context, model.Seq[*model.Response], bool, error) {
 	ctx, span, started := startLatencySpan(
 		ctx,
 		invocation,
@@ -2188,7 +2284,7 @@ func (f *Flow) callLLM(
 	}()
 	if callModel == nil {
 		err = errors.New("no model available for LLM call")
-		return ctx, nil, err
+		return ctx, nil, false, err
 	}
 	log.DebugfContext(
 		ctx,
@@ -2199,23 +2295,40 @@ func (f *Flow) callLLM(
 	// configured (<= 0), this is a no-op and preserves existing behavior.
 	if err = invocation.IncLLMCallCount(); err != nil {
 		log.Errorf("LLM call limit exceeded for agent %s: %v", invocation.AgentName, err)
-		return ctx, nil, err
+		return ctx, nil, false, err
 	}
 	// Run before model callbacks if they exist.
 	ctx, customResp, err := f.runBeforeModelCallbacks(ctx, invocation, llmRequest)
 	if err != nil {
-		return ctx, nil, err
+		return ctx, nil, false, err
 	}
 	if customResp != nil {
 		return ctx, func(yield func(*model.Response) bool) {
 			yield(customResp)
-		}, nil
+		}, false, nil
 	}
+	if llmRequest == nil || len(llmRequest.Messages) == 0 {
+		err = errors.New(errMsgNoLLMMessages)
+		return ctx, nil, false, err
+	}
+	if invocation != nil && invocation.RunOptions.ExecutionTraceEnabled {
+		traceCtx := agent.NewInvocationContext(ctx, invocation)
+		tracecapture.SetInvocationStepInput(
+			traceCtx,
+			traceSnapshotFromMessages(llmRequest.Messages),
+		)
+		tracecapture.MergeInvocationStepAppliedSurfaceIDs(
+			traceCtx,
+			executionTraceAppliedSurfaceIDs(invocation),
+		)
+	}
+	ctx = contextWithModelRetryCallbacks(ctx, f, invocation, callModel)
+	summaryfork.Attach(invocation, llmRequest)
 	seq, err := f.generateContentSeq(ctx, invocation, llmRequest, callModel)
 	if err != nil {
-		return ctx, nil, err
+		return ctx, nil, true, err
 	}
-	return ctx, seq, nil
+	return ctx, seq, true, nil
 }
 
 func (f *Flow) runBeforeModelCallbacks(
@@ -2343,6 +2456,9 @@ func (f *Flow) generateContentSeq(
 	llmRequest *model.Request,
 	callModel model.Model,
 ) (model.Seq[*model.Response], error) {
+	if llmRequest == nil || len(llmRequest.Messages) == 0 {
+		return nil, errors.New(errMsgNoLLMMessages)
+	}
 	ctx, span, started := startLatencySpan(
 		ctx,
 		invocation,

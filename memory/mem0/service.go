@@ -11,6 +11,8 @@ package mem0
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/url"
 	"sort"
 	"strings"
@@ -19,6 +21,11 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+)
+
+var (
+	_ session.Ingestor = (*Service)(nil)
+	_ memory.Reader    = (*Service)(nil)
 )
 
 // Service provides an ingest-first integration with mem0.
@@ -37,6 +44,14 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 	for _, opt := range options {
 		opt(&opts)
 	}
+	if opts.apiMode == apiModeSelfHostedOSS {
+		if isCloudDefaultHost(opts.host) {
+			return nil, errors.New("mem0: self-hosted OSS cannot use the hosted platform default host")
+		}
+		if opts.orgID != "" || opts.projectID != "" {
+			return nil, errors.New("mem0: org/project identifiers are not supported by self-hosted OSS")
+		}
+	}
 	c, err := newClient(opts)
 	if err != nil {
 		return nil, err
@@ -45,6 +60,10 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 	svc.ingestWorker = newIngestWorker(c, opts)
 	svc.precomputedTools = buildReadOnlyTools(svc)
 	return svc, nil
+}
+
+func isCloudDefaultHost(host string) bool {
+	return strings.TrimRight(host, "/") == strings.TrimRight(defaultHost, "/")
 }
 
 // Tools returns the mem0 read-only tools exposed to the agent.
@@ -119,6 +138,9 @@ func (s *Service) ReadMemories(ctx context.Context, userKey memory.UserKey, limi
 	if err := userKey.CheckUserKey(); err != nil {
 		return nil, err
 	}
+	if s.opts.apiMode == apiModeSelfHostedOSS {
+		return s.readOSSMemories(ctx, userKey, limit)
+	}
 	pageSize := defaultListPageSize
 	if limit > 0 && limit < pageSize {
 		pageSize = limit
@@ -148,7 +170,50 @@ func (s *Service) ReadMemories(ctx context.Context, userKey memory.UserKey, limi
 				entries = append(entries, entry)
 			}
 		}
+		if limit > 0 && len(entries) >= limit {
+			break
+		}
 		page++
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].UpdatedAt.Equal(entries[j].UpdatedAt) {
+			return entries[i].CreatedAt.After(entries[j].CreatedAt)
+		}
+		return entries[i].UpdatedAt.After(entries[j].UpdatedAt)
+	})
+	if limit > 0 && len(entries) > limit {
+		entries = entries[:limit]
+	}
+	return entries, nil
+}
+
+func (s *Service) readOSSMemories(ctx context.Context, userKey memory.UserKey, limit int) ([]*memory.Entry, error) {
+	if limit <= 0 {
+		return nil, errors.New("mem0: self-hosted OSS ReadMemories requires a positive limit")
+	}
+	if limit > maxOSSListTopK {
+		return nil, fmt.Errorf("mem0: self-hosted OSS ReadMemories limit %d exceeds maximum %d", limit, maxOSSListTopK)
+	}
+	q := url.Values{}
+	q.Set(queryKeyUserID, userKey.UserID)
+	// The current OSS GET /memories API can only scope by user_id, run_id, or
+	// agent_id, not by metadata.trpc_app_name. Fetch the server-side cap and
+	// enforce app isolation locally as a best-effort view over those candidates.
+	q.Set(queryKeyTopK, itoa(maxOSSListTopK))
+
+	var batch listMemoriesResponse
+	if err := s.c.doJSON(ctx, httpMethodGet, pathOSSMemories, q, nil, &batch); err != nil {
+		return nil, err
+	}
+	entries := make([]*memory.Entry, 0, len(batch.Results))
+	for i := range batch.Results {
+		rec := &batch.Results[i]
+		if !recordMatchesTRPCApp(rec, userKey.AppName, s.opts.includeUnscopedSelfHostedOSSMemories) {
+			continue
+		}
+		if entry := toEntry(userKey.AppName, userKey.UserID, rec); entry != nil {
+			entries = append(entries, entry)
+		}
 	}
 	sort.Slice(entries, func(i, j int) bool {
 		if entries[i].UpdatedAt.Equal(entries[j].UpdatedAt) {
@@ -176,20 +241,19 @@ func (s *Service) SearchMemories(ctx context.Context, userKey memory.UserKey, qu
 	if searchOpts.MaxResults > 0 {
 		maxResults = searchOpts.MaxResults
 	}
-	filters := map[string]any{
-		"AND": []any{
-			map[string]any{queryKeyUserID: userKey.UserID},
-			map[string]any{queryKeyAppID: userKey.AppName},
-		},
+	path := pathV2Search
+	filters := cloudSearchFilters(userKey, s.opts)
+	if s.opts.apiMode == apiModeSelfHostedOSS {
+		path = pathOSSSearch
+		filters = ossSearchFilters(userKey, s.opts.includeUnscopedSelfHostedOSSMemories)
 	}
-	addOrgProjectFilter(filters, s.opts)
 	req := searchV2Request{
 		Query:   searchOpts.Query,
 		Filters: filters,
 		TopK:    searchCandidateLimit(searchOpts, maxResults),
 	}
 	var resp searchV2Response
-	if err := s.c.doJSON(ctx, httpMethodPost, pathV2Search, nil, req, &resp); err != nil {
+	if err := s.c.doJSON(ctx, httpMethodPost, path, nil, req, &resp); err != nil {
 		return nil, err
 	}
 	results := make([]*memory.Entry, 0, len(resp.Memories))
@@ -204,6 +268,10 @@ func (s *Service) SearchMemories(ctx context.Context, userKey memory.UserKey, qu
 		}
 		if m.UpdatedAt != nil {
 			rec.UpdatedAt = *m.UpdatedAt
+		}
+		if s.opts.apiMode == apiModeSelfHostedOSS &&
+			!recordMatchesTRPCApp(&rec, userKey.AppName, s.opts.includeUnscopedSelfHostedOSSMemories) {
+			continue
 		}
 		entry := toEntry(userKey.AppName, userKey.UserID, &rec)
 		if entry == nil {

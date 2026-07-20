@@ -47,14 +47,39 @@ func TestResolveContextWindow(t *testing.T) {
 			expected:  400000,
 		},
 		{
+			name:      "exact match - GPT-5.6 alias",
+			modelName: "gpt-5.6",
+			expected:  1047576,
+		},
+		{
+			name:      "exact match - GPT-5.6 Terra",
+			modelName: "gpt-5.6-terra",
+			expected:  1047576,
+		},
+		{
 			name:      "exact match - GPT-5.4",
 			modelName: "gpt-5.4",
-			expected:  1050000,
+			expected:  1047576,
 		},
 		{
 			name:      "exact match - GPT-5.4-pro",
 			modelName: "gpt-5.4-pro",
-			expected:  1050000,
+			expected:  1047576,
+		},
+		{
+			name:      "exact match - GPT-5.5",
+			modelName: "gpt-5.5",
+			expected:  1047576,
+		},
+		{
+			name:      "exact match - GPT-5.5-pro",
+			modelName: "gpt-5.5-pro",
+			expected:  1047576,
+		},
+		{
+			name:      "exact match - GPT-5.3-Codex",
+			modelName: "gpt-5.3-codex",
+			expected:  400000,
 		},
 		{
 			name:      "exact match - GPT-5.2-codex",
@@ -89,6 +114,26 @@ func TestResolveContextWindow(t *testing.T) {
 		{
 			name:      "exact match - Claude Sonnet 4.6",
 			modelName: "claude-sonnet-4-6",
+			expected:  1000000,
+		},
+		{
+			name:      "exact match - Claude Fable 5",
+			modelName: "claude-fable-5",
+			expected:  1000000,
+		},
+		{
+			name:      "exact match - Claude Mythos 5",
+			modelName: "claude-mythos-5",
+			expected:  1000000,
+		},
+		{
+			name:      "exact match - Claude Sonnet 5",
+			modelName: "claude-sonnet-5",
+			expected:  1000000,
+		},
+		{
+			name:      "exact match - Claude Opus 4.8 alias",
+			modelName: "claude-opus-4-8",
 			expected:  1000000,
 		},
 		{
@@ -197,6 +242,16 @@ func TestResolveContextWindow(t *testing.T) {
 			expected:  256000,
 		},
 		{
+			name:      "exact match - Kimi K2.7 Code",
+			modelName: "kimi-k2.7-code",
+			expected:  256000,
+		},
+		{
+			name:      "exact match - Kimi K2.7 Code HighSpeed",
+			modelName: "kimi-k2.7-code-highspeed",
+			expected:  256000,
+		},
+		{
 			name:      "exact match - Moonshot V1 128k",
 			modelName: "moonshot-v1-128k",
 			expected:  131072,
@@ -205,6 +260,11 @@ func TestResolveContextWindow(t *testing.T) {
 			name:      "exact match - Kimi K2 legacy preview",
 			modelName: "kimi-k2-0711-preview",
 			expected:  128000,
+		},
+		{
+			name:      "exact match - MiniMax M3",
+			modelName: "minimax-m3",
+			expected:  1000000,
 		},
 		{
 			name:      "exact match - MiniMax M2.7",
@@ -269,7 +329,17 @@ func TestResolveContextWindow(t *testing.T) {
 		{
 			name:      "longest prefix match - GPT-5.4 snapshot",
 			modelName: "gpt-5.4-2026-03-05",
-			expected:  1050000,
+			expected:  1047576,
+		},
+		{
+			name:      "longest prefix match - GPT-5.5 snapshot",
+			modelName: "gpt-5.5-2026-04-23",
+			expected:  1047576,
+		},
+		{
+			name:      "longest prefix match - GPT-5.6 snapshot",
+			modelName: "gpt-5.6-sol-2026-07-09",
+			expected:  1047576,
 		},
 		{
 			name:      "longest prefix match - GPT-5.4 mini snapshot",
@@ -519,5 +589,41 @@ func TestConcurrentResolveContextWindow(t *testing.T) {
 	// Wait for all goroutines to complete
 	for i := 0; i < 10; i++ {
 		<-done
+	}
+}
+
+func TestResolveMaxOutputTokens(t *testing.T) {
+	tests := []struct {
+		name      string
+		modelName string
+		expected  int
+	}{
+		{name: "empty model name", modelName: "", expected: 0},
+		{name: "exact gpt-4o", modelName: "gpt-4o", expected: 16384},
+		{name: "prefix gpt-4o-mini", modelName: "gpt-4o-mini", expected: 16384},
+		{name: "prefix o1-mini snapshot", modelName: "o1-mini-2024-09-12", expected: 65536},
+		{name: "exact gpt-5.2", modelName: "gpt-5.2", expected: 128000},
+		{name: "exact gpt-5.2 chat latest", modelName: "gpt-5.2-chat-latest", expected: 16384},
+		{name: "exact gpt-5.6 alias", modelName: "gpt-5.6", expected: 128000},
+		{name: "exact gpt-5.6 Luna", modelName: "gpt-5.6-luna", expected: 128000},
+		{name: "exact gpt-5.3 Codex", modelName: "gpt-5.3-codex", expected: 128000},
+		{name: "gpt-5.4 mini", modelName: "gpt-5.4-mini", expected: 128000},
+		{name: "claude fable 5", modelName: "claude-fable-5", expected: 128000},
+		{name: "claude mythos 5", modelName: "claude-mythos-5", expected: 128000},
+		{name: "claude sonnet 5", modelName: "claude-sonnet-5", expected: 128000},
+		{name: "claude opus 4.8", modelName: "claude-opus-4-8", expected: 128000},
+		{name: "claude sonnet 4.6", modelName: "claude-sonnet-4-6", expected: 128000},
+		{name: "claude 3.7 sonnet", modelName: "claude-3-7-sonnet-20250219", expected: 64000},
+		{name: "claude prefix", modelName: "claude-3-5-sonnet-20241022", expected: 8192},
+		{name: "gemini flash", modelName: "gemini-2.5-flash", expected: 65536},
+		{name: "deepseek reasoner", modelName: "deepseek-reasoner", expected: 393216},
+		{name: "deepseek v4 pro", modelName: "deepseek-v4-pro", expected: 393216},
+		{name: "unknown model", modelName: "not-a-real-model", expected: 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, ResolveMaxOutputTokens(tt.modelName))
+		})
 	}
 }

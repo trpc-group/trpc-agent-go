@@ -21,7 +21,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 	idecode "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/internal/decode"
 	irunner "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/internal/runner"
-	isurface "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/internal/surface"
+	"trpc.group/trpc-go/trpc-agent-go/internal/profilecompiler"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
@@ -260,9 +260,7 @@ func requestAllowedGradientSurfaceIDs(request *Request) []string {
 	if request.AllowedGradientSurfaceIDs == nil {
 		return requestSurfaceIDs(request)
 	}
-	cloned := make([]string, len(request.AllowedGradientSurfaceIDs))
-	copy(cloned, request.AllowedGradientSurfaceIDs)
-	return cloned
+	return request.AllowedGradientSurfaceIDs
 }
 
 func requestPredecessorStepIDs(request *Request) []string {
@@ -391,7 +389,7 @@ func normalizeRequest(request *Request) (*Request, error) {
 	if request.Input == nil {
 		return nil, errors.New("input is nil")
 	}
-	surfaceIndex, err := isurface.BuildIndex(request.Surfaces)
+	surfaceIndex, err := profilecompiler.BuildIndex(request.Surfaces)
 	if err != nil {
 		return nil, fmt.Errorf("build surface index: %w", err)
 	}
@@ -422,7 +420,7 @@ func sanitizeBackwardResult(request *Request, result *Result) (*Result, error) {
 	if result == nil {
 		return nil, errors.New("backward result is nil")
 	}
-	surfaceIndex, err := isurface.BuildIndex(request.Surfaces)
+	surfaceIndex, err := profilecompiler.BuildIndex(request.Surfaces)
 	if err != nil {
 		return nil, fmt.Errorf("build surface index: %w", err)
 	}
@@ -505,6 +503,15 @@ func sanitizeSurfaceGradient(
 			request.StepID,
 		)
 	}
+	// LLM sometimes hallucinates a surface id outside request AllowedGradientSurfaceIDs.
+	// Drop this single entry (keep=false) instead of failing the entire sanitize round.
+	// sanitizeBackwardResult still guards against a fully-empty result via
+	// its final "backward result is empty" check.
+	if gradient.SurfaceID != "" {
+		if _, ok := surfaceIndex[gradient.SurfaceID]; !ok {
+			return promptiter.SurfaceGradient{}, false, nil
+		}
+	}
 	surfaceID, err := sanitizeGradientSurfaceID(surfaceIndex, gradient.SurfaceID)
 	if err != nil {
 		return promptiter.SurfaceGradient{}, false, fmt.Errorf("sanitize gradient surface id: %w", err)
@@ -524,6 +531,15 @@ func sanitizePropagation(
 	predecessorIndex map[string]Predecessor,
 	propagation Propagation,
 ) (Propagation, bool, error) {
+	// LLM sometimes hallucinates a step id outside request Predecessors.
+	// Drop this single entry (keep=false) instead of failing the entire sanitize round.
+	// sanitizeBackwardResult still guards against a fully-empty result via
+	// its final "backward result is empty" check.
+	if propagation.PredecessorStepID != "" {
+		if _, ok := predecessorIndex[propagation.PredecessorStepID]; !ok {
+			return Propagation{}, false, nil
+		}
+	}
 	predecessorStepID, err := sanitizePropagationPredecessorStepID(predecessorIndex, propagation.PredecessorStepID)
 	if err != nil {
 		return Propagation{}, false, fmt.Errorf("sanitize propagation predecessor step id: %w", err)

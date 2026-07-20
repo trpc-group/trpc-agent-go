@@ -17,10 +17,11 @@ Within the same conversation, it enables natural continuity between turns, preve
 - **Event Limit**: Controls the maximum number of events stored per session to prevent memory overflow
 - **Event Pagination**: PostgreSQL/MySQL support paged history reads for `GetSession`
 - **TTL Management**: Supports automatic expiration and cleanup of session data
-- **Multiple Storage Backends**: Supports Memory, SQLite, Redis, PostgreSQL, PGVector, MySQL, and ClickHouse
+- **Flexible Persistence**: Supports no persistence through Noop, plus Memory, SQLite, Redis, PostgreSQL, PGVector, MySQL, ClickHouse, and MongoDB
 - **Concurrency Safe**: Built-in read-write locks ensure safe concurrent access
 - **Automatic Management**: Automatically handles session creation, loading, and updates when integrated with Runner
-- **Soft Delete Support**: SQLite/PostgreSQL/PGVector/MySQL/ClickHouse support soft delete for data recovery
+- **Soft Delete Support**: SQLite/PostgreSQL/PGVector/MySQL/ClickHouse/MongoDB support soft delete for data recovery
+- **Multimodal Externalization**: Optionally externalizes inline image/audio/file payloads in session events to Artifact storage
 
 ## Quick Start
 
@@ -28,9 +29,11 @@ Within the same conversation, it enables natural continuity between turns, preve
 
 Session management in tRPC-Agent-Go is integrated into the Runner via `runner.WithSessionService`. The Runner automatically handles session creation, loading, updating, and persistence.
 
-**Supported Storage Backends:** Memory, SQLite, Redis, PostgreSQL, PGVector, MySQL, ClickHouse
+**Supported Persistence Modes:** [Noop](noop.md) (no persistence), Memory, SQLite, Redis, PostgreSQL, PGVector, MySQL, ClickHouse, MongoDB
 
 **Default Behavior:** If `runner.WithSessionService` is not configured, the Runner defaults to in-memory storage, and data will be lost after process restart.
+
+If the upstream application owns the complete conversation history and Runner should not retain sessions across requests, explicitly use [Noop](noop.md).
 
 ### Basic Example
 
@@ -60,7 +63,7 @@ func main() {
         summary.WithChecksAny(
             summary.CheckEventThreshold(20),
             summary.CheckTokenThreshold(4000),
-            summary.CheckTimeThreshold(5*time.Minute), // Evaluated on summary check; triggers if the latest unsummarized event is older than 5 minutes
+            summary.CheckTimeThreshold(5*time.Minute), // Runner path: trigger when the idle gap before the next request exceeds 5 minutes
         ),
         summary.WithMaxSummaryWords(200),
     )
@@ -169,6 +172,57 @@ After integrating Session Service, the Runner automatically provides the followi
 3. **Automatic Session Update**: Automatically saves new events after conversation ends
 4. **Context Continuity**: Automatically injects conversation history into LLM input for multi-turn conversations
 5. **Automatic Summary Generation** (optional): Generates summaries asynchronously in the background when trigger conditions are met
+
+### Session Content Externalization
+
+Session events can contain `model.ContentParts` such as inline image, audio, or file bytes. For large payloads, storing these bytes directly in the session backend can increase storage size, serialization cost, and read amplification.
+
+Session content externalization is **disabled by default**. Enable it explicitly by wrapping the session service and provide an Artifact service:
+
+```go
+import (
+    artifactinmemory "trpc.group/trpc-go/trpc-agent-go/artifact/inmemory"
+    "trpc.group/trpc-go/trpc-agent-go/session/externalization"
+)
+
+artifactService := artifactinmemory.NewService()
+wrappedSessionService := externalization.Wrap(
+    sessionService,
+    artifactService,
+    externalization.Config{Enabled: true},
+)
+
+r := runner.NewRunner(
+    "my-agent",
+    agent,
+    runner.WithSessionService(wrappedSessionService),
+    runner.WithArtifactService(artifactService),
+)
+```
+
+When enabled:
+
+- Standard `ContentParts` inline payloads are externalized before they are persisted to `session.Events`:
+    - `Image.Data`
+    - `Audio.Data`
+    - `File.Data`
+    - data URLs in standard image/file URL fields
+- Persisted events store a lightweight `ContentRef` pointing to a pinned `artifact://<name>@<version>` reference.
+- The current runtime event and active session view keep the original bytes, so the current model request is not affected by persistence compaction.
+- `GetSession`, full `ListSessions`, `SearchEvents`, and `GetEventWindow` return hydrated content by default.
+- `ListSessions` with `WithListSessionOnlyMeta` skips hydration because event payloads are intentionally omitted.
+- Runner callbacks, tools, and plugins see the same wrapped service when it is passed through `runner.WithSessionService`. Business code that calls `AppendEvent` directly should also use this wrapped service rather than the raw backend.
+- Artifact lifecycle is not automatically inherited from the session lifecycle. Configure or operate your Artifact backend to handle long-term retention, TTL, deletion with sessions, and orphan cleanup according to your application's policy.
+- Keep using the wrapped session service while any externalized sessions may still be read. Removing the wrapper or reading those sessions with an older library version can leave `ContentRef` payloads unhydrated; migrate, clean up, or let the affected sessions and artifacts expire before rollback.
+
+The following inputs are not re-hosted by this feature:
+
+- Regular HTTP/HTTPS URLs
+- Provider file IDs
+- Existing internal or business-owned references
+- Arbitrary blobs embedded inside custom JSON, metadata, or tool result payloads
+
+Failure behavior is fail-closed: if Artifact storage is required but unavailable, or if artifact save/load fails, the operation returns an error instead of silently dropping content. If externalization fails before the event is handed to the session backend, the framework submits best-effort delete requests for artifacts saved by that attempt. After the append has been handed to the backend, artifacts are retained on ambiguous errors to avoid deleting content that a persisted event may already reference.
 
 ## Core Concepts
 
@@ -332,13 +386,15 @@ TTL is only refreshed on **write operations** (e.g., CreateSession, AppendEvent,
 | PGVector | Periodic scan (soft/hard delete) | Yes |
 | MySQL | Periodic scan (soft/hard delete) | Yes |
 | ClickHouse | Application-level cleanup + Native TTL | Yes |
+| MongoDB | TTL indexes + periodic event/track cleanup | Yes |
 
 ## Storage Backend Comparison
 
-tRPC-Agent-Go provides seven session storage backends for different scenarios:
+tRPC-Agent-Go provides a no-persistence mode and eight session storage backends for different scenarios:
 
 | Storage Type | Use Case | Persistence | Distributed | Complex Queries |
 | --- | --- | --- | --- | --- |
+| [Noop](noop.md) | Application-managed history, no cross-request persistence | ❌ | ❌ | ❌ |
 | [Memory](inmemory.md) | Dev/Test, small scale | ❌ | ❌ | ❌ |
 | [SQLite](sqlite.md) | Local persistence, single-node | ✅ | ❌ | ✅ |
 | [Redis](redis.md) | Production, distributed | ✅ | ✅ | ❌ |
@@ -346,6 +402,7 @@ tRPC-Agent-Go provides seven session storage backends for different scenarios:
 | [PGVector](pgvector.md) | Production, semantic recall | ✅ | ✅ | ✅ |
 | [MySQL](mysql.md) | Production, complex queries | ✅ | ✅ | ✅ |
 | [ClickHouse](clickhouse.md) | Production, massive data | ✅ | ✅ | ✅ |
+| [MongoDB](mongodb.md) | Production, document storage | ✅ | ✅ | ✅ |
 
 ## Hook Capabilities
 
@@ -403,7 +460,7 @@ sessionService := inmemory.NewSessionService(
 
 **Chain of Responsibility**: Hooks form a chain via `next()`. You can return early to short-circuit subsequent logic, and errors propagate upward.
 
-**Cross-Backend Consistency**: All storage backends (Memory, SQLite, Redis, PostgreSQL, PGVector, MySQL, ClickHouse) have unified Hook support. Simply inject Hook slices when constructing the service — the usage is identical across all backends.
+**Cross-Backend Consistency**: All storage backends (Memory, SQLite, Redis, PostgreSQL, PGVector, MySQL, ClickHouse, MongoDB) have unified Hook support. Simply inject Hook slices when constructing the service — the usage is identical across all backends.
 
 ## Advanced Usage
 
@@ -648,6 +705,7 @@ Not all storage backends implement `TrackService`. A type assertion is required:
 | PostgreSQL | ✅ |
 | PGVector | ✅ |
 | MySQL | ✅ |
+| MongoDB | ✅ |
 | ClickHouse | ❌ |
 
 **Basic usage**:
@@ -701,6 +759,7 @@ See [PGVector Session](pgvector.md) for configuration details, indexing behavior
 ## Related Documentation
 
 - [Session Summary](summary.md) - Automatic compression of long conversation history
+- [Noop](noop.md) - Application-managed history without cross-request persistence
 - [Memory Storage](inmemory.md) - Development and testing environment
 - [SQLite Storage](sqlite.md) - Local persistence, single-node
 - [Redis Storage](redis.md) - Production distributed storage
@@ -708,9 +767,11 @@ See [PGVector Session](pgvector.md) for configuration details, indexing behavior
 - [PGVector Session](pgvector.md) - PostgreSQL session storage with semantic recall
 - [MySQL Storage](mysql.md) - Relational database storage
 - [ClickHouse Storage](clickhouse.md) - Massive data storage
+- [MongoDB Storage](mongodb.md) - Distributed document database storage
 
 ## References
 
 - [Session Examples](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/runner)
+- [Noop + RunWithMessages Example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/runwithmessages)
 - [Summary Examples](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/summary)
 - [Hook Examples](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/session/hook)

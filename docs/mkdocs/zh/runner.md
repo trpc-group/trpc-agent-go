@@ -694,7 +694,8 @@ msgs := []model.Message{
 ch, err := runner.RunWithMessages(ctx, r, userID, sessionID, msgs, agent.WithRequestID("request-ID"))
 ```
 
-示例：`examples/runwithmessages`（使用 `RunWithMessages`；Runner 会 auto-seed 并复用 Session）
+示例：`examples/runwithmessages`（使用 `session/noop`，并在每次请求中通过
+`RunWithMessages` 传入业务侧维护的完整历史）
 
 方式 B：通过 RunOption 显式传入（与 Python ADK 一致的理念）
 
@@ -707,6 +708,8 @@ ch, err := r.Run(ctx, userID, sessionID, model.Message{}, agent.WithMessages(msg
 Session。内容处理器不会读取这个选项，它只会从 Session 事件中派生消息（或在 Session
 没有事件时回退到单条 `invocation.Message`）。`RunWithMessages` 仍会把最新的用户消息写入
 `invocation.Message`。
+
+如果上游业务负责持久化完整历史，并且不希望 Runner 跨请求保存 Session，可以给 Runner 注入 `session/noop`，并在每次请求中通过 `RunWithMessages` 传入更新后的完整历史。Noop 仍保留单次 `Run` 所需的临时 Session，但不会自动恢复上一轮数据。详见 [无持久化（Noop）](./session/noop.md)。
 
 #### 用户消息改写
 
@@ -1841,6 +1844,68 @@ bestOfNOpt, err := bestofn.NewRunnerOption(
 工具、插件、Skill、MCP ToolSet 和回调会在候选运行中执行。框架会隔离 Session 提交，并通过只读服务拦截框架管理的 Memory 和 Artifact 写入。业务代码主动发起的外部请求由业务侧控制。
 
 开启执行链路追踪或 Graph checkpoint 恢复时，本轮会绕过 Best-of-N 候选选择，按原有 Runner 流程执行。
+
+## 远程 tRPC-Agent Runner
+
+`runner/trpcagent` 用于把一次 `Runner.Run` 调用转成 [tRPC-Agent API](trpcagent.md) HTTP 请求。它适合平台和业务 Agent 服务分离的场景：业务服务用 `server/trpcagent` 暴露真实 Agent，平台侧用 `runner/trpcagent` 像普通 Runner 一样发起运行。
+
+用户服务侧先暴露 [tRPC-Agent API](trpcagent.md)：
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/runner"
+	"trpc.group/trpc-go/trpc-agent-go/server/trpcagent"
+)
+
+agentRunner := runner.NewRunner(appName, agent)
+defer agentRunner.Close()
+
+server, err := trpcagent.New(
+	trpcagent.WithAppName(appName),
+	trpcagent.WithAgent(agent),
+	trpcagent.WithRunner(agentRunner),
+)
+if err != nil {
+	return err
+}
+http.ListenAndServe(":8080", server.Handler())
+```
+
+平台侧创建远程 Runner：
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/model"
+	trpcagentrunner "trpc.group/trpc-go/trpc-agent-go/runner/trpcagent"
+)
+
+remoteRunner, err := trpcagentrunner.New(
+	"calculator",
+	trpcagentrunner.WithTarget("http://127.0.0.1:8080"),
+)
+if err != nil {
+	return err
+}
+defer remoteRunner.Close()
+
+snapshot, err := remoteRunner.Describe(ctx)
+if err != nil {
+	return err
+}
+_ = snapshot
+
+events, err := remoteRunner.Run(
+	ctx,
+	"user1",
+	"session1",
+	model.NewUserMessage("Use the calculator to compute 12 * 7."),
+)
+if err != nil {
+	return err
+}
+```
+
+默认路径为 `/trpc-agent/v1/apps/{appName}`。`Describe` 请求远端 structure，`Run` 请求远端 runs 接口并恢复为框架标准 `event.Event` 流。更多完整代码可参考 `examples/trpcagent`。
 
 ## 📝 总结
 

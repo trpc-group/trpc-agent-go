@@ -12,6 +12,7 @@ package llmagent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -23,6 +24,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/extension"
+	atrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor/workspaceio"
@@ -37,6 +39,7 @@ import (
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	toolcurrenttime "trpc.group/trpc-go/trpc-agent-go/internal/tool/currenttime"
 	itrace "trpc.group/trpc-go/trpc-agent-go/internal/trace"
+	"trpc.group/trpc-go/trpc-agent-go/internal/tracecapture"
 	knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -229,6 +232,14 @@ func New(name string, opts ...Option) *LLMAgent {
 
 	toolCallProcessorOptions := []processor.FunctionCallResponseProcessorOption{
 		processor.WithToolCallRetryPolicy(options.ToolCallRetryPolicy),
+	}
+	if options.ToolResultAttachmentBudget > 0 {
+		toolCallProcessorOptions = append(
+			toolCallProcessorOptions,
+			processor.WithToolResultAttachmentBudget(
+				options.ToolResultAttachmentBudget,
+			),
+		)
 	}
 	if len(options.toolActivationRules) > 0 {
 		toolCallProcessorOptions = append(
@@ -1500,6 +1511,25 @@ func codeExecutorSupportsWorkspaceExecSessions(
 // It executes the LLM agent flow and returns a channel of events.
 func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-chan *event.Event, err error) {
 	a.setupInvocation(invocation)
+	var traceLease tracecapture.StepLease
+	if invocation.RunOptions.ExecutionTraceEnabled {
+		traceNodeID := agent.InvocationTraceNodeID(invocation)
+		traceCtx := agent.NewInvocationContext(ctx, invocation)
+		traceLease = tracecapture.EnsureInvocationStep(
+			traceCtx,
+			func() string {
+				return agent.StartExecutionTraceStep(
+					invocation,
+					traceNodeID,
+					llmAgentTraceInputSnapshot(invocation),
+					nil,
+				)
+			},
+		)
+		if traceLease.Owns {
+			tracecapture.SetStepNodeType(traceCtx, traceLease.StepID, "llm")
+		}
+	}
 	ctx = a.withWorkspace(ctx, invocation)
 	ctx, span, startedSpan := itrace.StartSpan(
 		ctx,
@@ -1537,7 +1567,13 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-c
 			if startedSpan {
 				span.End()
 			}
-			return customErr.EventChan, nil
+			finishOwnedExecutionTraceStep(
+				invocation,
+				traceLease,
+				llmAgentTraceOutputSnapshot(customErr.event),
+				nil,
+			)
+			return customErr.eventChan, nil
 		}
 		// Handle actual errors
 		if startedSpan {
@@ -1545,9 +1581,29 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-c
 			span.SetAttributes(attribute.String(semconvtrace.KeyErrorType, itelemetry.ToErrorType(err, model.ErrorTypeRunError)))
 			span.End()
 		}
+		finishOwnedExecutionTraceStep(invocation, traceLease, nil, err)
 		return nil, err
 	}
-	return a.wrapEventChannelWithTelemetry(ctx, invocation, flowEventChan, span, tracker, startedSpan), nil
+	return a.wrapEventChannelWithTelemetry(
+		ctx,
+		invocation,
+		flowEventChan,
+		span,
+		tracker,
+		startedSpan,
+		traceLease,
+	), nil
+}
+
+func llmAgentTraceInputSnapshot(invocation *agent.Invocation) *atrace.Snapshot {
+	if invocation == nil {
+		return nil
+	}
+	payload, err := json.Marshal([]model.Message{invocation.Message})
+	if err != nil {
+		return nil
+	}
+	return &atrace.Snapshot{Text: string(payload)}
 }
 
 // executeAgentFlow executes the agent flow with before agent callbacks.
@@ -1571,7 +1627,10 @@ func (a *LLMAgent) executeAgentFlow(ctx context.Context, invocation *agent.Invoc
 			customEvent := event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, result.CustomResponse)
 			agent.EmitEvent(ctx, invocation, eventChan, customEvent)
 			close(eventChan)
-			return ctx, nil, &haveCustomResponseError{EventChan: eventChan}
+			return ctx, nil, &haveCustomResponseError{
+				eventChan: eventChan,
+				event:     customEvent,
+			}
 		}
 	}
 
@@ -1582,13 +1641,13 @@ func (a *LLMAgent) executeAgentFlow(ctx context.Context, invocation *agent.Invoc
 	}
 
 	return ctx, flowEventChan, nil
-
 }
 
 // haveCustomResponseError represents an early return due to a custom response from before agent callbacks.
 // This is not an actual error but a signal to return early with the custom response.
 type haveCustomResponseError struct {
-	EventChan <-chan *event.Event
+	eventChan <-chan *event.Event
+	event     *event.Event
 }
 
 func (e *haveCustomResponseError) Error() string {
@@ -1710,15 +1769,31 @@ func (a *LLMAgent) wrapEventChannelWithTelemetry(
 	span sdktrace.Span,
 	tracker *itelemetry.InvokeAgentTracker,
 	startedSpan bool,
+	traceLease tracecapture.StepLease,
 ) <-chan *event.Event {
 	// Create a new channel with the same capacity as the original channel
 	wrappedChan := make(chan *event.Event, cap(originalChan))
 	runCtx := agent.CloneContext(ctx)
 	go func(ctx context.Context) {
 		var fullRespEvent *event.Event
+		var traceOutput *atrace.Snapshot
 		var responseErrorType string
+		var runErr error
 		tokenUsage := &itelemetry.TokenUsage{}
 		defer func() {
+			if runErr == nil {
+				runErr = wrappedAgentError(fullRespEvent)
+			}
+			if runErr == nil && ctx.Err() != nil &&
+				(fullRespEvent == nil || !fullRespEvent.IsFinalResponse()) {
+				runErr = ctx.Err()
+			}
+			finishOwnedExecutionTraceStep(
+				invocation,
+				traceLease,
+				traceOutput,
+				runErr,
+			)
 			finalizeWrappedTelemetry(
 				span,
 				tracker,
@@ -1738,18 +1813,56 @@ func (a *LLMAgent) wrapEventChannelWithTelemetry(
 				&responseErrorType,
 			); trackedEvent != nil {
 				fullRespEvent = trackedEvent
+				if traceLease.Owns {
+					traceOutput = llmAgentTraceOutputSnapshot(trackedEvent)
+				}
 			}
 			if err := event.EmitEvent(ctx, wrappedChan, evt); err != nil {
+				runErr = err
 				return
 			}
 		}
 		if ctx, evt := a.runAfterAgentCallback(ctx, invocation, fullRespEvent); evt != nil {
 			fullRespEvent = evt
-			agent.EmitEvent(ctx, invocation, wrappedChan, evt)
+			if traceLease.Owns {
+				traceOutput = llmAgentTraceOutputSnapshot(evt)
+			}
+			if err := agent.EmitEvent(ctx, invocation, wrappedChan, evt); err != nil {
+				runErr = err
+			}
 		}
 	}(runCtx)
 
 	return wrappedChan
+}
+
+func finishOwnedExecutionTraceStep(
+	invocation *agent.Invocation,
+	lease tracecapture.StepLease,
+	output *atrace.Snapshot,
+	runErr error,
+) {
+	if !lease.Owns {
+		return
+	}
+	agent.FinishExecutionTraceStep(
+		invocation,
+		lease.StepID,
+		output,
+		runErr,
+	)
+	tracecapture.ReleaseInvocationStep(lease)
+}
+
+func llmAgentTraceOutputSnapshot(evt *event.Event) *atrace.Snapshot {
+	if evt == nil || evt.Response == nil {
+		return nil
+	}
+	payload, err := json.Marshal(evt.Response)
+	if err != nil {
+		return nil
+	}
+	return &atrace.Snapshot{Text: string(payload)}
 }
 
 func finalizeWrappedTelemetry(
@@ -1816,9 +1929,9 @@ func recordWrappedEventTelemetry(
 			fullRespEvent = evt
 		}
 	}
-	if evt.Error != nil {
+	if evt.Response != nil && evt.Response.Error != nil {
 		*responseErrorType = itelemetry.FormatResponseErrorLabel(
-			evt.Error,
+			evt.Response.Error,
 			model.ErrorTypeRunError,
 		)
 	}

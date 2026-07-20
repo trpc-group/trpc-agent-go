@@ -137,10 +137,13 @@ By default, browser navigation blocks:
 - loopback hosts such as `localhost`
 - private-network IPs
 - `file://` URLs
+- search-engine result pages such as Google, Google Scholar,
+  DuckDuckGo, Brave Search, Bing, and Yahoo search pages
 
 You can relax or refine that policy with:
 `allowed_domains`, `blocked_domains`, `allow_loopback`,
-`allow_private_networks`, and `allow_file_urls`.
+`allow_private_networks`, `allow_file_urls`, and
+`allow_search_result_pages`.
 
 Example config:
 
@@ -284,10 +287,10 @@ tools:
   # Leave unset to use the built-in default, or set to "" to disable it.
   openclaw_tooling_guidance: ""
   # Optional: reduce large parent model requests by exposing compact
-  # tool_search + dynamic_agent entrypoints when the direct tool surface
-  # exceeds the auto threshold. Default mode is auto; set
-  # defer_to_dynamic_agent_mode: on to force it on, or off to disable it.
-  defer_to_dynamic_agent_mode: auto # off|on|auto
+  # tool_search + dynamic_agent entrypoints. Default mode is off, which keeps
+  # configured tools directly available on the parent agent. Set auto to defer
+  # only when the direct tool surface exceeds the threshold, or on to force it.
+  defer_to_dynamic_agent_mode: off # off|on|auto
   defer_to_dynamic_agent_threshold_chars: 4000
   # Optional: cap one dynamic_agent child call; 0 or unset disables it.
   dynamic_agent_timeout: "180s"
@@ -306,7 +309,7 @@ tools:
     auto_execute_code_blocks: true
     sandbox:
       workspace_root: "" # default: state_dir/sandbox
-      backend: "auto" # auto|linux-bubblewrap
+      backend: "auto" # auto|linux-bubblewrap|macos-sandbox-exec
       profile: "workspace_write" # workspace_write|read_only|disabled
       network: "restricted" # restricted|enabled
       default_timeout: "30s"
@@ -1038,6 +1041,17 @@ go run ./cmd/openclaw bootstrap deps \
   -apply
 ```
 
+Some specialized toolchains are intentionally opt-in. For example,
+`chess` checks for a Stockfish-compatible UCI engine and installs Python
+board-analysis helpers for chess-position tasks:
+
+```bash
+cd openclaw
+go run ./cmd/openclaw bootstrap deps \
+  -profile chess \
+  -apply
+```
+
 The bootstrap command never runs automatically on startup. Startup logs may
 print a suggested `bootstrap deps` command when optional file tools are
 missing, but installation is always explicit. The managed Python environment
@@ -1050,7 +1064,9 @@ Go, npm, managed-Python, and asset download install actions. Explicit
 default dependency profiles automatically. `bootstrap deps --apply` is
 best-effort: user-space installs and downloads run first, while root-only
 steps are reported as deferred instead of aborting the entire run. Download
-actions store assets under `<state_dir>/tools/<skill>/...`.
+actions store assets under `<state_dir>/tools/<skill>/...` and may link
+selected executables into the managed toolchain `bin` directory when their
+metadata declares `links`.
 
 ### 5) Send a message
 

@@ -107,7 +107,7 @@ llm := llmagent.New(
   ),
 )
 
-inv := agent.NewInvoction()
+inv := agent.NewInvocation()
 inv.SetState("case", "case-1")
 
 // 通过 SessionService 初始化状态（用户态/应用态 + 会话本地键）
@@ -849,6 +849,26 @@ llmagent := llmagent.New("llmagent", llmagent.WithAgentCallbacks(callbacks))
 | **数据位置** | Event.StructuredOutput | Event.StructuredOutput | 模型响应内容 | Session State |
 | **主要用途** | 灵活 schema + 工具 | 类型安全的结构化输出 | 简单的结构化响应 | 状态存储和流程控制 |
 
+### Provider 兼容性
+
+框架允许同时配置工具与 `WithStructuredOutputJSONSchema` 或
+`WithStructuredOutputJSON`，但模型服务也必须支持组合使用工具调用与原生结构化输出。
+部分 OpenAI 兼容端点会接受 `tools` 和 `response_format: json_schema`，
+却把 JSON 约束应用于整个生成过程。在这种情况下，约束解码可能会抑制模型专用的
+工具调用语法，最终返回符合 schema 的 JSON，却没有实际发起任何工具调用。
+
+因此，HTTP 请求成功且 JSON 校验通过，并不能证明所需工具已执行。当结果正确性依赖
+工具执行时，应同时检查工具调用与工具结果事件。如果端点不能可靠支持该组合，
+可将操作拆成两次调用：先在不启用原生结构化输出的情况下调用工具，再禁用工具并
+生成结构化的最终答复。第二次调用必须通过延续相同的 session 或消息历史来获取
+第一次调用的证据，或者显式包含第一次调用的工具调用与工具结果消息。
+
+相关后端讨论包括
+[vLLM #39929](https://github.com/vllm-project/vllm/issues/39929)，该 issue
+跟踪 `response_format` 抑制自动工具调用的问题；以及
+[SGLang #21593](https://github.com/sgl-project/sglang/pull/21593)，该 PR
+修复了约束解码与模型专用工具调用格式之间的冲突。
+
 ### WithStructuredOutputJSONSchema
 
 提供用户自定义的 JSON schema 用于结构化输出，同时**允许使用工具**。这是需要结构化输出和工具能力的 Agent 的最灵活选项。
@@ -1481,6 +1501,7 @@ for evt := range events {
 每个步骤都会带上这些稳定字段：
 
 - `NodeID`：本次执行对应的静态节点路径
+- `NodeType`：节点的语义类型（`function`、`llm`、`tool` 或 `agent`），与静态结构中的节点类型一致
 - `PredecessorStepIDs`：这次运行里该步骤的直接前驱步骤
 - `Input` 和 `Output`：步骤输入输出的稳定文本快照
 - `Error`：步骤失败时记录的终态错误

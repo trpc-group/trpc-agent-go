@@ -16,20 +16,25 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"sync"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"golang.org/x/sync/errgroup"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonrepair"
+	"trpc.group/trpc-go/trpc-agent-go/internal/jsonutils"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/sessionroute"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolretry"
 	itrace "trpc.group/trpc-go/trpc-agent-go/internal/trace"
 	"trpc.group/trpc-go/trpc-agent-go/log"
+	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/plugin"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -49,9 +54,26 @@ const (
 	ErrorMarshalResult = "Error: failed to marshal result"
 )
 
+const (
+	maxToolNameSuggestions    = 3
+	maxToolNameDistance       = 3
+	maxToolNameErrorNameRunes = 160
+)
+
 // funcRespCompletionTimeout is the default wait duration for ensuring a
 // tool.response event has been processed by the session persistence layer.
 const funcRespCompletionTimeout = 5 * time.Second
+
+// funcRespDeadlinePersistenceTimeout bounds the fallback append used when a
+// completed tool response cannot enter the runner event loop after deadline.
+const funcRespDeadlinePersistenceTimeout = time.Second
+
+const (
+	knowledgeSearchToolName                    = "knowledge_search"
+	knowledgeSearchWithAgenticFilterName       = "knowledge_search_with_agentic_filter"
+	knowledgeSearchToolNameSuffix              = "_knowledge_search"
+	knowledgeSearchWithAgenticFilterNameSuffix = "_knowledge_search_with_agentic_filter"
+)
 
 // summarizationSkipper is implemented by tools that can indicate whether
 // the flow should skip a post-tool summarization step. This allows tools
@@ -70,6 +92,14 @@ type streamInnerPreference interface {
 
 type innerTextModePreference interface {
 	InnerTextMode() tool.InnerTextMode
+}
+
+type autoMemoryPollutionSource interface {
+	PollutesAutoMemory() bool
+}
+
+type originalToolProvider interface {
+	Original() tool.Tool
 }
 
 type toolEventStateDelta struct {
@@ -113,14 +143,21 @@ type subAgentCall struct {
 
 // FunctionCallResponseProcessor handles agent transfer operations after LLM responses.
 type FunctionCallResponseProcessor struct {
-	enableParallelTools bool
-	toolCallbacks       *tool.Callbacks
-	toolRetryPolicy     *tool.RetryPolicy
-	postToolResultHooks []PostToolResultHook
+	enableParallelTools       bool
+	toolCallbacks             *tool.Callbacks
+	toolRetryPolicy           *tool.RetryPolicy
+	postToolResultHooks       []PostToolResultHook
+	attachmentBudget          int
+	toolNameSuggestionOptions toolNameSuggestionOptions
 }
 
 // FunctionCallResponseProcessorOption configures a function-call response processor.
 type FunctionCallResponseProcessorOption func(*FunctionCallResponseProcessor)
+
+type toolNameSuggestionOptions struct {
+	maxSuggestions int
+	maxDistance    int
+}
 
 // PostToolResultHook observes and may mutate a completed tool result event.
 type PostToolResultHook func(
@@ -152,6 +189,35 @@ func WithPostToolResultHook(
 	}
 }
 
+// WithToolResultAttachmentBudget limits callback-managed attachments across
+// one tool response processing pass. Non-positive values preserve the legacy
+// unlimited behavior.
+func WithToolResultAttachmentBudget(
+	maxAttachments int,
+) FunctionCallResponseProcessorOption {
+	return func(p *FunctionCallResponseProcessor) {
+		p.attachmentBudget = maxAttachments
+	}
+}
+
+// WithToolNameSuggestions configures tool-not-found suggestion generation.
+// Non-positive maxSuggestions or negative maxDistance disables suggestions.
+func WithToolNameSuggestions(
+	maxSuggestions int,
+	maxDistance int,
+) FunctionCallResponseProcessorOption {
+	return func(p *FunctionCallResponseProcessor) {
+		if maxSuggestions <= 0 || maxDistance < 0 {
+			p.toolNameSuggestionOptions = toolNameSuggestionOptions{}
+			return
+		}
+		p.toolNameSuggestionOptions = toolNameSuggestionOptions{
+			maxSuggestions: maxSuggestions,
+			maxDistance:    maxDistance,
+		}
+	}
+}
+
 // NewFunctionCallResponseProcessor creates a new transfer response processor.
 func NewFunctionCallResponseProcessor(
 	enableParallelTools bool,
@@ -159,8 +225,9 @@ func NewFunctionCallResponseProcessor(
 	opts ...FunctionCallResponseProcessorOption,
 ) *FunctionCallResponseProcessor {
 	processor := &FunctionCallResponseProcessor{
-		enableParallelTools: enableParallelTools,
-		toolCallbacks:       toolCallbacks,
+		enableParallelTools:       enableParallelTools,
+		toolCallbacks:             toolCallbacks,
+		toolNameSuggestionOptions: defaultToolNameSuggestionOptions(),
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -339,7 +406,29 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsAndSendEventWithReque
 	}
 
 	functionResponseEvent.RequiresCompletion = true
-	agent.EmitEvent(ctx, invocation, eventChan, functionResponseEvent)
+	emitErr := agent.EmitEvent(
+		ctx,
+		invocation,
+		eventChan,
+		functionResponseEvent,
+	)
+	if errors.Is(emitErr, context.DeadlineExceeded) {
+		if persistErr := persistFunctionResponseAfterDeadline(
+			ctx,
+			invocation,
+			functionResponseEvent,
+		); persistErr != nil {
+			log.WarnfContext(
+				ctx,
+				"Persist tool response after deadline failed: %v",
+				persistErr,
+			)
+		}
+		return nil, emitErr
+	}
+	if emitErr != nil {
+		return nil, emitErr
+	}
 
 	if !appender.IsAttached(invocation) {
 		return functionResponseEvent, nil
@@ -361,6 +450,94 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsAndSendEventWithReque
 		)
 	}
 	return functionResponseEvent, nil
+}
+
+func persistFunctionResponseAfterDeadline(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	functionResponseEvent *event.Event,
+) error {
+	if functionResponseEvent == nil {
+		return nil
+	}
+	persistCtx, cancel := context.WithTimeout(
+		context.WithoutCancel(ctx),
+		funcRespDeadlinePersistenceTimeout,
+	)
+	defer cancel()
+	routeEvent := sessionroute.SnapshotEventIdentity(functionResponseEvent)
+	var parentMetadata *event.ParentInvocationMetadata
+	if functionResponseEvent.ParentMetadata != nil {
+		metadata := *functionResponseEvent.ParentMetadata
+		parentMetadata = &metadata
+	}
+	functionResponseEvent = applyEventPluginsAfterDeadline(
+		persistCtx,
+		invocation,
+		functionResponseEvent,
+	)
+	restoreEventRoutingFields(functionResponseEvent, routeEvent)
+	functionResponseEvent.ParentMetadata = parentMetadata
+
+	attached, err := appender.Invoke(
+		persistCtx,
+		invocation,
+		functionResponseEvent,
+	)
+	if err != nil {
+		return err
+	}
+	if attached {
+		return nil
+	}
+	if invocation == nil || invocation.SessionService == nil {
+		return errors.New("session service unavailable after deadline")
+	}
+	persistSession, routed := sessionroute.RouteEvent(
+		invocation,
+		routeEvent,
+	)
+	if !routed || persistSession == nil {
+		persistSession = invocation.Session
+	}
+	if persistSession == nil {
+		return errors.New("session unavailable after deadline")
+	}
+	return invocation.SessionService.AppendEvent(
+		persistCtx,
+		persistSession,
+		functionResponseEvent,
+	)
+}
+
+func applyEventPluginsAfterDeadline(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	evt *event.Event,
+) *event.Event {
+	if evt == nil || invocation == nil || invocation.Plugins == nil {
+		return evt
+	}
+	updated, err := invocation.Plugins.OnEvent(ctx, invocation, evt)
+	if err != nil {
+		log.ErrorfContext(ctx, "plugin OnEvent failed: %v", err)
+		return evt
+	}
+	if updated == nil {
+		return evt
+	}
+	return updated
+}
+
+func restoreEventRoutingFields(dst *event.Event, src *event.Event) {
+	if dst == nil || src == nil {
+		return
+	}
+	dst.RequestID = src.RequestID
+	dst.InvocationID = src.InvocationID
+	dst.ParentInvocationID = src.ParentInvocationID
+	dst.Branch = src.Branch
+	dst.FilterKey = src.FilterKey
 }
 
 func funcRespWaitTimeout(ctx context.Context) time.Duration {
@@ -396,6 +573,12 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsWithRequest(
 	tools map[string]tool.Tool,
 	eventChan chan<- *event.Event,
 ) (*event.Event, error) {
+	if p.attachmentBudget > 0 {
+		ctx = tool.WithToolResultAttachmentBudget(
+			ctx,
+			p.attachmentBudget,
+		)
+	}
 	toolCalls := llmResponse.Choices[0].Message.ToolCalls
 
 	// If parallel tools are enabled AND multiple tool calls, execute concurrently
@@ -768,6 +951,12 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequentialResult(
 	decl := p.lookupDeclaration(tools, toolCall.Function.Name)
 	var stateDelta *toolEventStateDelta
 	if err == nil {
+		markSessionAutoMemoryPolluted(
+			invocation,
+			toolEvent,
+			tools[toolCall.Function.Name],
+			toolCall.Function.Name,
+		)
 		stateDelta = p.buildToolEventStateDelta(
 			ctx,
 			invocation,
@@ -813,8 +1002,75 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequentialResult(
 	}, nil
 }
 
+func markSessionAutoMemoryPolluted(
+	invocation *agent.Invocation,
+	ev *event.Event,
+	tl tool.Tool,
+	toolName string,
+) {
+	if !toolPollutesAutoMemory(tl, toolName) {
+		return
+	}
+	value := []byte(memory.MemoryModePolluted)
+	if invocation != nil && invocation.Session != nil {
+		invocation.Session.SetState(memory.SessionStateKeyMemoryMode, value)
+	}
+	if ev != nil {
+		if ev.StateDelta == nil {
+			ev.StateDelta = make(map[string][]byte)
+		}
+		ev.StateDelta[memory.SessionStateKeyMemoryMode] = value
+	}
+}
+
+func toolPollutesAutoMemory(tl tool.Tool, name string) bool {
+	if toolCapabilityPollutesAutoMemory(tl) {
+		return true
+	}
+	return toolNamePollutesAutoMemory(name)
+}
+
+func toolCapabilityPollutesAutoMemory(tl tool.Tool) bool {
+	for tl != nil {
+		if source, ok := tl.(autoMemoryPollutionSource); ok && source.PollutesAutoMemory() {
+			return true
+		}
+		wrapper, ok := tl.(originalToolProvider)
+		if !ok {
+			return false
+		}
+		original := wrapper.Original()
+		if original == nil || original == tl {
+			return false
+		}
+		tl = original
+	}
+	return false
+}
+
+func toolNamePollutesAutoMemory(name string) bool {
+	switch name {
+	case knowledgeSearchToolName, knowledgeSearchWithAgenticFilterName:
+		return true
+	default:
+		return strings.HasSuffix(name, knowledgeSearchToolNameSuffix) ||
+			strings.HasSuffix(name, knowledgeSearchWithAgenticFilterNameSuffix)
+	}
+}
+
 // executeToolCallsInParallel runs multiple tool calls concurrently and merges
 // their results into a single event.
+//
+// Concurrency model: each tool call is dispatched on its own goroutine via an
+// [errgroup.Group]. The group ctx is derived from the parent ctx so that a
+// parent-side cancellation (e.g. agent timeout) cancels every sibling
+// immediately. When a sibling reports a *critical* (non-ignorable) tool
+// execution error, the group ctx is also cancelled and the remaining
+// siblings observe `ctx.Done()` and stop early instead of burning compute on
+// work whose result will never be consumed. Panics inside a tool execution
+// are recovered locally and surfaced as a tool error in the merged response;
+// they do NOT cancel sibling goroutines. Normal tool errors that callbacks
+// flag as "ignorable" are likewise non-cancelling.
 func (p *FunctionCallResponseProcessor) executeToolCallsInParallel(
 	ctx context.Context,
 	invocation *agent.Invocation,
@@ -824,34 +1080,51 @@ func (p *FunctionCallResponseProcessor) executeToolCallsInParallel(
 	eventChan chan<- *event.Event,
 ) (*event.Event, error) {
 	resultChan := make(chan toolResult, len(toolCalls))
-	var wg sync.WaitGroup
 
+	g, gctx := errgroup.WithContext(ctx)
 	for i, tc := range toolCalls {
-		wg.Add(1)
-		runCtx := agent.CloneContext(ctx)
-		runInv := invocation
-		if invocation != nil {
-			runInv = newParallelInvocationView(invocation)
-			if runCtx == nil {
-				runCtx = context.Background()
+		i, tc := i, tc
+		g.Go(func() error {
+			runCtx := agent.CloneContext(gctx)
+			runInv := invocation
+			if invocation != nil {
+				runInv = newParallelInvocationView(invocation)
+				if runCtx == nil {
+					runCtx = context.Background()
+				}
+				runCtx = agent.NewInvocationContext(runCtx, runInv)
 			}
-			runCtx = agent.NewInvocationContext(runCtx, runInv)
-		}
-		go p.runParallelToolCall(
-			runCtx, &wg, runInv, llmResponse, tools, eventChan, resultChan, i, tc,
-		)
+			return p.runParallelToolCall(
+				runCtx, runInv, llmResponse, tools, eventChan, resultChan, i, tc,
+			)
+		})
 	}
 
-	done := make(chan struct{})
+	// Wait for all siblings to finish in a separate goroutine so the
+	// collector can drain results as they arrive. Closing resultChan is
+	// what signals "no more results" to collectParallelToolResults.
+	// errgroup.Wait is safe to call multiple times — it returns the same
+	// stored error — so racing with the post-collect Wait below is OK.
 	go func() {
-		wg.Wait()
+		_ = g.Wait()
 		close(resultChan)
-		close(done)
 	}()
 
-	toolResults, err := p.collectParallelToolResults(
+	// Drain results in arrival order, preserving slot index. Use the
+	// parent ctx (not gctx) here: gctx is cancelled automatically when
+	// errgroup.Wait returns, so reading on gctx would race with the normal
+	// "all siblings done, channel closed" path and falsely report a
+	// cancellation on every successful run. The parent ctx is the right
+	// signal for "the caller has abandoned this work".
+	toolResults, drainErr := p.collectParallelToolResults(
 		ctx, resultChan, len(toolCalls),
 	)
+
+	// Read the first critical sibling error from the group; prefer it over
+	// the collector's view because it carries the causal failure (the
+	// collector typically just sees ctx.Done()).
+	err := firstNonNilErr(g.Wait(), drainErr)
+
 	toolCallResponsesEvents := p.attachStateDeltaToToolResults(
 		ctx,
 		invocation,
@@ -872,10 +1145,28 @@ func (p *FunctionCallResponseProcessor) executeToolCallsInParallel(
 	return mergedEvent, err
 }
 
+// firstNonNilErr returns the first non-nil error from its arguments, in
+// order. Used to prefer the group-level critical error (which carries the
+// causal failure) over a derived collector error.
+func firstNonNilErr(errs ...error) error {
+	for _, e := range errs {
+		if e != nil {
+			return e
+		}
+	}
+	return nil
+}
+
 // runParallelToolCall executes one tool call and reports the result.
+//
+// The returned error is non-nil only when the failure is critical enough
+// that sibling goroutines should be cancelled — i.e. the underlying call
+// returned a non-ignorable error. All other outcomes — successes, ignorable
+// errors, and recovered panics — return nil so the errgroup keeps remaining
+// siblings running. The same "critical" classification is also propagated
+// through toolResult.err so it flows into the merged event as before.
 func (p *FunctionCallResponseProcessor) runParallelToolCall(
 	ctx context.Context,
-	wg *sync.WaitGroup,
 	invocation *agent.Invocation,
 	llmResponse *model.Response,
 	tools map[string]tool.Tool,
@@ -883,14 +1174,14 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 	resultChan chan<- toolResult,
 	index int,
 	tc model.ToolCall,
-) {
-	defer wg.Done()
+) (rerr error) {
 	toolArgs := tc.Function.Arguments
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	ctx = context.WithValue(ctx, executingToolArgsContextKey{}, &toolArgs)
-	// Recover from panics to avoid breaking sibling goroutines.
+	// Recover from panics to avoid breaking sibling goroutines. Panics are
+	// surfaced as a tool error in the merged response (no sibling cancel).
 	defer func() {
 		if r := recover(); r != nil {
 			log.ErrorfContext(
@@ -918,6 +1209,8 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 				event:    errorEvent,
 				toolArgs: toolArgs,
 			})
+			// Recovered panic — do NOT cancel siblings.
+			rerr = nil
 		}
 	}()
 	// Trace the tool execution for observability.
@@ -974,7 +1267,9 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 			err:      returnErr,
 			toolArgs: modifiedArgs,
 		})
-		return
+		// Return the critical error so the errgroup cancels siblings.
+		// Ignorable errors return nil here and travel only via toolResult.err.
+		return returnErr
 	}
 
 	// No error and at least one choice means we have tool result messages.
@@ -994,7 +1289,7 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 			index:    index,
 			toolArgs: modifiedArgs,
 		})
-		return
+		return nil
 	}
 	// Include declaration for telemetry even when tool is missing.
 	decl := p.lookupDeclaration(tools, tc.Function.Name)
@@ -1015,6 +1310,12 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 			agentName = invocation.AgentName
 		}
 	}
+	markSessionAutoMemoryPolluted(
+		invocation,
+		toolCallResponseEvent,
+		tools[tc.Function.Name],
+		tc.Function.Name,
+	)
 	stateDelta := p.buildToolEventStateDelta(
 		ctx,
 		invocation,
@@ -1042,6 +1343,7 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 			toolArgs:   modifiedArgs,
 		},
 	)
+	return nil
 }
 
 func (p *FunctionCallResponseProcessor) buildToolCallResponseEvent(
@@ -1346,6 +1648,7 @@ func preserveStateDeltaInvocationDefaults(
 	view.StructuredOutput = base.StructuredOutput
 	view.StructuredOutputType = base.StructuredOutputType
 	view.MemoryService = base.MemoryService
+	view.MemoryReader = base.MemoryReader
 	view.ArtifactService = base.ArtifactService
 	view.MaxLLMCalls = base.MaxLLMCalls
 	view.MaxToolIterations = base.MaxToolIterations
@@ -1803,6 +2106,7 @@ func (p *FunctionCallResponseProcessor) resolveToolCallTarget(
 		if mapped := findCompatibleTool(toolCall.Function.Name, tools, invocation); mapped != nil {
 			tl = mapped
 			if newArgs := convertToolArguments(
+				invocation,
 				toolCall.Function.Name, toolCall.Function.Arguments,
 				mapped.Declaration().Name,
 			); newArgs != nil {
@@ -1810,6 +2114,11 @@ func (p *FunctionCallResponseProcessor) resolveToolCallTarget(
 				toolCall.Function.Arguments = newArgs
 			}
 		} else {
+			toolNotFoundErr := toolNotFoundError(
+				toolCall.Function.Name,
+				tools,
+				p.toolNameSuggestionOptions,
+			)
 			log.ErrorfContext(
 				ctx,
 				"CallableTool %s not found (agent=%s, model=%s)",
@@ -1817,7 +2126,10 @@ func (p *FunctionCallResponseProcessor) resolveToolCallTarget(
 				invocation.AgentName,
 				invocation.Model.Info().Name,
 			)
-			return toolCall, nil, true, fmt.Errorf("executeToolCall: %s", ErrorToolNotFound)
+			return toolCall, nil, true, fmt.Errorf(
+				"executeToolCall: %s",
+				toolNotFoundErr,
+			)
 		}
 	}
 	if invocation != nil &&
@@ -1825,6 +2137,153 @@ func (p *FunctionCallResponseProcessor) resolveToolCallTarget(
 		return toolCall, nil, true, nil
 	}
 	return toolCall, tl, false, nil
+}
+
+func defaultToolNameSuggestionOptions() toolNameSuggestionOptions {
+	return toolNameSuggestionOptions{
+		maxSuggestions: maxToolNameSuggestions,
+		maxDistance:    maxToolNameDistance,
+	}
+}
+
+func toolNotFoundError(
+	name string,
+	tools map[string]tool.Tool,
+	options toolNameSuggestionOptions,
+) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ErrorToolNotFound
+	}
+	suggestions := similarToolNames(name, tools, options)
+	displayName := displayToolName(name)
+	if len(suggestions) == 0 {
+		return fmt.Sprintf("%s: %s", ErrorToolNotFound, displayName)
+	}
+	if len(suggestions) == 1 {
+		return fmt.Sprintf(
+			"%s: %s; did you mean %q?",
+			ErrorToolNotFound,
+			displayName,
+			suggestions[0],
+		)
+	}
+	return fmt.Sprintf(
+		"%s: %s; did you mean one of %s?",
+		ErrorToolNotFound,
+		displayName,
+		quotedToolNames(suggestions),
+	)
+}
+
+func similarToolNames(
+	name string,
+	tools map[string]tool.Tool,
+	options toolNameSuggestionOptions,
+) []string {
+	if options.maxSuggestions <= 0 || options.maxDistance < 0 {
+		return nil
+	}
+	type candidate struct {
+		name     string
+		distance int
+	}
+	needle := strings.ToLower(strings.TrimSpace(name))
+	candidates := make([]candidate, 0, len(tools))
+	for toolName := range tools {
+		trimmed := strings.TrimSpace(toolName)
+		if trimmed == "" {
+			continue
+		}
+		distance := toolNameEditDistance(
+			needle,
+			strings.ToLower(trimmed),
+		)
+		if distance <= options.maxDistance {
+			candidates = append(candidates, candidate{
+				name:     trimmed,
+				distance: distance,
+			})
+			continue
+		}
+		if strings.Contains(needle, strings.ToLower(trimmed)) {
+			candidates = append(candidates, candidate{
+				name:     trimmed,
+				distance: options.maxDistance + 1,
+			})
+		}
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].distance != candidates[j].distance {
+			return candidates[i].distance < candidates[j].distance
+		}
+		return candidates[i].name < candidates[j].name
+	})
+	limit := len(candidates)
+	if limit > options.maxSuggestions {
+		limit = options.maxSuggestions
+	}
+	out := make([]string, 0, limit)
+	for i := 0; i < limit; i++ {
+		out = append(out, candidates[i].name)
+	}
+	return out
+}
+
+func displayToolName(name string) string {
+	name = collapseToolNameWhitespace(name)
+	runes := []rune(name)
+	if len(runes) <= maxToolNameErrorNameRunes {
+		return name
+	}
+	return string(runes[:maxToolNameErrorNameRunes]) + "..."
+}
+
+func collapseToolNameWhitespace(name string) string {
+	return strings.Join(strings.Fields(name), " ")
+}
+
+func quotedToolNames(names []string) string {
+	quoted := make([]string, 0, len(names))
+	for _, name := range names {
+		quoted = append(quoted, fmt.Sprintf("%q", name))
+	}
+	return strings.Join(quoted, ", ")
+}
+
+func toolNameEditDistance(a string, b string) int {
+	if a == b {
+		return 0
+	}
+	ar := []rune(a)
+	br := []rune(b)
+	if len(ar) == 0 {
+		return len(br)
+	}
+	if len(br) == 0 {
+		return len(ar)
+	}
+	prev := make([]int, len(br)+1)
+	curr := make([]int, len(br)+1)
+	for j := range prev {
+		prev[j] = j
+	}
+	for i, ca := range ar {
+		curr[0] = i + 1
+		for j, cb := range br {
+			cost := 1
+			if ca == cb {
+				cost = 0
+			}
+			curr[j+1] = min(
+				curr[j]+1,
+				prev[j+1]+1,
+				prev[j]+cost,
+			)
+		}
+		prev, curr = curr, prev
+	}
+	return prev[len(br)]
 }
 
 // applyToolResultMessagesCallback invokes the optional ToolResultMessages callback and
@@ -1913,7 +2372,9 @@ func (p *FunctionCallResponseProcessor) createErrorChoice(index int, toolID stri
 }
 
 // collectParallelToolResults drains resultChan and preserves order by index.
-// It returns only non-nil events.
+// It returns only non-nil events. When ctx is cancelled mid-drain it returns
+// the partial set together with ctx.Err() so callers can distinguish a
+// completed-but-erroring run from a cancelled-mid-flight run.
 func (p *FunctionCallResponseProcessor) collectParallelToolResults(
 	ctx context.Context,
 	resultChan <-chan toolResult,
@@ -1942,12 +2403,17 @@ func (p *FunctionCallResponseProcessor) collectParallelToolResults(
 				)
 			}
 		case <-ctx.Done():
-			// Context cancelled, return what we have.
+			// Context cancelled — siblings are aborting. Return what we
+			// have plus ctx.Err so the caller knows results may be partial.
 			log.WarnfContext(
 				ctx,
-				"Context cancelled while waiting for tool results",
+				"Context cancelled while waiting for tool results: %v",
+				ctx.Err(),
 			)
-			return p.compactToolResults(results), nil
+			if err == nil {
+				err = ctx.Err()
+			}
+			return p.compactToolResults(results), err
 		}
 	}
 }
@@ -2400,8 +2866,9 @@ func (p *FunctionCallResponseProcessor) executeCallableTool(
 	toolCall model.ToolCall,
 	tl tool.CallableTool,
 ) (context.Context, any, error) {
+	callCtx := tool.WithoutToolResultAttachmentBudget(ctx)
 	if p.toolRetryPolicy == nil {
-		result, err := tl.Call(ctx, toolCall.Function.Arguments)
+		result, err := tl.Call(callCtx, toolCall.Function.Arguments)
 		if err != nil {
 			log.ErrorfContext(
 				ctx,
@@ -2418,7 +2885,9 @@ func (p *FunctionCallResponseProcessor) executeCallableTool(
 		ToolCallID: toolCall.ID,
 		Arguments:  toolCall.Function.Arguments,
 		Policy:     p.toolRetryPolicy,
-		Call:       tl.Call,
+		Call: func(_ context.Context, args []byte) (any, error) {
+			return tl.Call(callCtx, args)
+		},
 		ResultError: func(result any) bool {
 			return extractResultError(result)
 		},
@@ -2534,7 +3003,10 @@ func (f *FunctionCallResponseProcessor) executeStreamableTool(
 	eventChan chan<- *event.Event,
 ) (context.Context, any, bool, error) {
 	reader, err := tl.StreamableCall(
-		streamableToolCallContext(ctx, tl),
+		streamableToolCallContext(
+			tool.WithoutToolResultAttachmentBudget(ctx),
+			tl,
+		),
 		toolCall.Function.Arguments,
 	)
 	if err != nil {
@@ -3023,14 +3495,25 @@ func findCompatibleTool(requested string, tools map[string]tool.Tool, invocation
 
 // convertToolArguments converts original args to the mapped tool args when needed.
 // When mapping sub-agent name -> transfer_to_agent, wrap message and set agent_name.
-func convertToolArguments(originalName string, originalArgs []byte, targetName string) []byte {
+func convertToolArguments(
+	invocation *agent.Invocation,
+	originalName string,
+	originalArgs []byte,
+	targetName string,
+) []byte {
 	if targetName != transfer.TransferToolName {
 		return nil
 	}
 
 	var input subAgentCall
 	if len(originalArgs) > 0 {
-		if err := json.Unmarshal(originalArgs, &input); err != nil {
+		var err error
+		if jsonrepair.IsToolCallArgumentsJSONRepairEnabled(invocation) {
+			err = jsonutils.DecodeLeadingJSON(string(originalArgs), &input)
+		} else {
+			err = json.Unmarshal(originalArgs, &input)
+		}
+		if err != nil {
 			log.Warnf("Failed to unmarshal sub-agent call arguments for %s: %v", originalName, err)
 			return nil
 		}

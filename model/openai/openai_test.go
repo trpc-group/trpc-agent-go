@@ -30,6 +30,7 @@ import (
 	openaigo "github.com/openai/openai-go"
 	openaiopt "github.com/openai/openai-go/option"
 	"github.com/openai/openai-go/packages/respjson"
+	"github.com/openai/openai-go/packages/ssestream"
 	"go.opentelemetry.io/otel/attribute"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
@@ -56,6 +57,8 @@ func TestMain(m *testing.M) {
 func TestNew(t *testing.T) {
 	var testKey = "test-key"
 	t.Setenv(deepSeekAPIKeyName, testKey)
+	t.Setenv(miniMaxAPIKeyName, testKey)
+	t.Setenv(kimiAPIKeyName, testKey)
 	tests := []struct {
 		name       string
 		modelName  string
@@ -93,6 +96,92 @@ func TestNew(t *testing.T) {
 			expectOpts: []Option{
 				WithAPIKey(testKey),
 				WithBaseURL(defaultDeepSeekBaseURL),
+			},
+		},
+		{
+			name:      "variant minimax",
+			modelName: "MiniMax-M3",
+			opts: []Option{
+				WithVariant(VariantMiniMax),
+			},
+			expectOpts: []Option{
+				WithAPIKey(testKey),
+				WithBaseURL(defaultMiniMaxBaseURL),
+			},
+		},
+		{
+			name:      "does not infer minimax from official model name",
+			modelName: "MiniMax-M3",
+			opts: []Option{
+				WithAPIKey(testKey),
+			},
+			expectOpts: nil,
+		},
+		{
+			name:      "variant kimi",
+			modelName: "kimi-k2.6",
+			opts: []Option{
+				WithVariant(VariantKimi),
+			},
+			expectOpts: []Option{
+				WithAPIKey(testKey),
+				WithBaseURL(defaultKimiBaseURL),
+			},
+		},
+		{
+			name:      "does not infer kimi from official model name",
+			modelName: "kimi-k2.6",
+			opts: []Option{
+				WithAPIKey(testKey),
+			},
+			expectOpts: nil,
+		},
+		{
+			name:      "infers minimax from international api base url",
+			modelName: "custom-model",
+			opts: []Option{
+				WithBaseURL("https://api.minimax.io/v1"),
+			},
+			expectOpts: []Option{
+				WithAPIKey(testKey),
+				WithBaseURL("https://api.minimax.io/v1"),
+				WithVariant(VariantMiniMax),
+			},
+		},
+		{
+			name:      "infers minimax from china api base url",
+			modelName: "custom-model",
+			opts: []Option{
+				WithBaseURL("https://api.minimaxi.com/v1"),
+			},
+			expectOpts: []Option{
+				WithAPIKey(testKey),
+				WithBaseURL("https://api.minimaxi.com/v1"),
+				WithVariant(VariantMiniMax),
+			},
+		},
+		{
+			name:      "infers kimi from international api base url",
+			modelName: "custom-model",
+			opts: []Option{
+				WithBaseURL("https://api.moonshot.ai/v1"),
+			},
+			expectOpts: []Option{
+				WithAPIKey(testKey),
+				WithBaseURL("https://api.moonshot.ai/v1"),
+				WithVariant(VariantKimi),
+			},
+		},
+		{
+			name:      "infers kimi from china api base url",
+			modelName: "custom-model",
+			opts: []Option{
+				WithBaseURL("https://api.moonshot.cn/v1"),
+			},
+			expectOpts: []Option{
+				WithAPIKey(testKey),
+				WithBaseURL("https://api.moonshot.cn/v1"),
+				WithVariant(VariantKimi),
 			},
 		},
 		{
@@ -227,6 +316,86 @@ func TestIsDeepSeekBaseURL(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.Equal(t, tt.want, isDeepSeekBaseURL(tt.rawURL))
+		})
+	}
+}
+
+func TestIsMiniMaxBaseURL(t *testing.T) {
+	tests := []struct {
+		name   string
+		rawURL string
+		want   bool
+	}{
+		{
+			name:   "matches international api host",
+			rawURL: "https://api.minimax.io/v1",
+			want:   true,
+		},
+		{
+			name:   "matches china api host after trim and lowercase",
+			rawURL: " HTTPS://API.MINIMAXI.COM/V1 ",
+			want:   true,
+		},
+		{
+			name:   "does not match platform host",
+			rawURL: "https://platform.minimax.io/v1",
+			want:   false,
+		},
+		{
+			name:   "does not match custom proxy host",
+			rawURL: "https://minimax-proxy.internal/v1",
+			want:   false,
+		},
+		{
+			name:   "parse error does not fall back to substring match",
+			rawURL: "https://api.minimax.io/%zz",
+			want:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, isMiniMaxBaseURL(tt.rawURL))
+		})
+	}
+}
+
+func TestIsKimiBaseURL(t *testing.T) {
+	tests := []struct {
+		name   string
+		rawURL string
+		want   bool
+	}{
+		{
+			name:   "matches international api host",
+			rawURL: "https://api.moonshot.ai/v1",
+			want:   true,
+		},
+		{
+			name:   "matches china api host after trim and lowercase",
+			rawURL: " HTTPS://API.MOONSHOT.CN/V1 ",
+			want:   true,
+		},
+		{
+			name:   "does not match platform host",
+			rawURL: "https://platform.moonshot.ai/v1",
+			want:   false,
+		},
+		{
+			name:   "does not match custom proxy host",
+			rawURL: "https://moonshot-proxy.internal/v1",
+			want:   false,
+		},
+		{
+			name:   "parse error does not fall back to substring match",
+			rawURL: "https://api.moonshot.ai/%zz",
+			want:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, isKimiBaseURL(tt.rawURL))
 		})
 	}
 }
@@ -2404,7 +2573,7 @@ func TestWithTokenTailoring_ReservesRequestMaxTokens(t *testing.T) {
 		WithEnableTokenTailoring(true),
 		WithTailoringStrategy(strategy),
 	)
-	maxCompletionTokens := 65536
+	maxCompletionTokens := 8192
 	req := &model.Request{
 		Messages: []model.Message{model.NewUserMessage("hello")},
 		GenerationConfig: model.GenerationConfig{
@@ -2419,6 +2588,36 @@ func TestWithTokenTailoring_ReservesRequestMaxTokens(t *testing.T) {
 		contextWindow,
 		imodel.DefaultProtocolOverheadTokens,
 		maxCompletionTokens,
+		imodel.DefaultInputTokensFloor,
+		imodel.DefaultSafetyMarginRatio,
+		imodel.DefaultMaxInputTokensRatio,
+	)
+	require.Equal(t, want, strategy.maxTokens)
+}
+
+func TestWithTokenTailoring_ClampsRequestMaxTokensToModelCap(t *testing.T) {
+	strategy := &captureMaxTokensStrategy{}
+	m := New("gpt-4o-mini",
+		WithEnableTokenTailoring(true),
+		WithTailoringStrategy(strategy),
+	)
+	overCap := 65536
+	req := &model.Request{
+		Messages: []model.Message{model.NewUserMessage("hello")},
+		GenerationConfig: model.GenerationConfig{
+			MaxTokens: &overCap,
+		},
+	}
+
+	m.applyTokenTailoring(context.Background(), req)
+
+	modelCap := imodel.ResolveMaxOutputTokens("gpt-4o-mini")
+	require.Equal(t, 16384, modelCap)
+	contextWindow := imodel.ResolveContextWindow("gpt-4o-mini")
+	want := imodel.CalculateMaxInputTokensWithParams(
+		contextWindow,
+		imodel.DefaultProtocolOverheadTokens,
+		modelCap,
 		imodel.DefaultInputTokensFloor,
 		imodel.DefaultSafetyMarginRatio,
 		imodel.DefaultMaxInputTokensRatio,
@@ -3554,6 +3753,324 @@ func TestModel_GenerateContent_WithReasoningContent_NonStreaming(t *testing.T) {
 	assert.Equalf(t, "Final answer", responses[0].Choices[0].Message.Content, "Expected content 'Final answer', got '%s'", responses[0].Choices[0].Message.Content)
 }
 
+func TestModel_GenerateContent_GLMThinkingPayload(t *testing.T) {
+	tests := []struct {
+		name    string
+		enabled bool
+		want    string
+	}{
+		{
+			name:    "enabled",
+			enabled: true,
+			want:    "enabled",
+		},
+		{
+			name:    "disabled",
+			enabled: false,
+			want:    "disabled",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var captured map[string]any
+			server := httptest.NewServer(http.HandlerFunc(
+				func(w http.ResponseWriter, r *http.Request) {
+					if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+						http.Error(w, "not found", http.StatusNotFound)
+						return
+					}
+					require.NoError(t, json.NewDecoder(r.Body).Decode(&captured))
+					w.Header().Set("Content-Type", "application/json")
+					fmt.Fprint(w, `{
+						"id": "test",
+						"object": "chat.completion",
+						"created": 1699200000,
+						"model": "glm50",
+						"choices": [{
+							"index": 0,
+							"message": {
+								"role": "assistant",
+								"content": "ok"
+							},
+							"finish_reason": "stop"
+						}]
+					}`)
+				},
+			))
+			defer server.Close()
+
+			m := New(
+				"glm50",
+				WithVariant(VariantGLM),
+				WithBaseURL(server.URL),
+				WithAPIKey("test-key"),
+			)
+			req := &model.Request{
+				Messages: []model.Message{
+					model.NewUserMessage("hi"),
+				},
+				GenerationConfig: model.GenerationConfig{
+					ThinkingEnabled: &tt.enabled,
+				},
+			}
+			ch, err := m.GenerateContent(context.Background(), req)
+			require.NoError(t, err)
+			for resp := range ch {
+				require.Nil(t, resp.Error)
+			}
+
+			thinking, ok := captured[thinkingKey].(map[string]any)
+			require.True(t, ok)
+			require.Equal(t, tt.want, thinking["type"])
+			require.NotContains(t, captured, model.ThinkingEnabledKey)
+		})
+	}
+}
+
+func TestModel_GenerateContent_HunyuanThinkingPayload(t *testing.T) {
+	tests := []struct {
+		name    string
+		enabled bool
+		want    string
+	}{
+		{
+			name:    "enabled",
+			enabled: true,
+			want:    "enabled",
+		},
+		{
+			name:    "disabled",
+			enabled: false,
+			want:    "disabled",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var captured map[string]any
+			server := httptest.NewServer(http.HandlerFunc(
+				func(w http.ResponseWriter, r *http.Request) {
+					if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+						http.Error(w, "not found", http.StatusNotFound)
+						return
+					}
+					require.NoError(t, json.NewDecoder(r.Body).Decode(&captured))
+					w.Header().Set("Content-Type", "application/json")
+					fmt.Fprint(w, `{
+						"id": "test",
+						"object": "chat.completion",
+						"created": 1699200000,
+						"model": "hy3-preview",
+						"choices": [{
+							"index": 0,
+							"message": {
+								"role": "assistant",
+								"content": "ok"
+							},
+							"finish_reason": "stop"
+						}]
+					}`)
+				},
+			))
+			defer server.Close()
+
+			m := New(
+				"hy3-preview",
+				WithVariant(VariantHunyuan),
+				WithBaseURL(server.URL),
+				WithAPIKey("test-key"),
+			)
+			req := &model.Request{
+				Messages: []model.Message{
+					model.NewUserMessage("hi"),
+				},
+				GenerationConfig: model.GenerationConfig{
+					ThinkingEnabled: &tt.enabled,
+				},
+			}
+			ch, err := m.GenerateContent(context.Background(), req)
+			require.NoError(t, err)
+			for resp := range ch {
+				require.Nil(t, resp.Error)
+			}
+
+			thinking, ok := captured[thinkingKey].(map[string]any)
+			require.True(t, ok)
+			require.Equal(t, tt.want, thinking["type"])
+			require.NotContains(t, captured, model.ThinkingEnabledKey)
+		})
+	}
+}
+
+func TestModel_GenerateContent_MiniMaxThinkingPayload(t *testing.T) {
+	tests := []struct {
+		name    string
+		enabled bool
+		want    string
+	}{
+		{
+			name:    "enabled uses adaptive",
+			enabled: true,
+			want:    "adaptive",
+		},
+		{
+			name:    "disabled",
+			enabled: false,
+			want:    "disabled",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			const nativeContent = "<think>reasoning</think>answer"
+			var captured map[string]any
+			server := httptest.NewServer(http.HandlerFunc(
+				func(w http.ResponseWriter, r *http.Request) {
+					if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+						http.Error(w, "not found", http.StatusNotFound)
+						return
+					}
+					require.NoError(t, json.NewDecoder(r.Body).Decode(&captured))
+					w.Header().Set("Content-Type", "application/json")
+					fmt.Fprintf(w, `{
+						"id": "test",
+						"object": "chat.completion",
+						"created": 1699200000,
+						"model": "MiniMax-M3",
+						"choices": [{
+							"index": 0,
+							"message": {
+								"role": "assistant",
+								"content": %q
+							},
+							"finish_reason": "stop"
+						}]
+					}`, nativeContent)
+				},
+			))
+			defer server.Close()
+
+			m := New(
+				"MiniMax-M3",
+				WithVariant(VariantMiniMax),
+				WithBaseURL(server.URL),
+				WithAPIKey("test-key"),
+			)
+			req := &model.Request{
+				Messages: []model.Message{
+					model.NewUserMessage("hi"),
+				},
+				GenerationConfig: model.GenerationConfig{
+					ThinkingEnabled: &tt.enabled,
+				},
+			}
+			ch, err := m.GenerateContent(context.Background(), req)
+			require.NoError(t, err)
+			var finalContent string
+			for resp := range ch {
+				require.Nil(t, resp.Error)
+				if len(resp.Choices) > 0 {
+					finalContent = resp.Choices[0].Message.Content
+				}
+			}
+
+			thinking, ok := captured[thinkingKey].(map[string]any)
+			require.True(t, ok)
+			require.Equal(t, tt.want, thinking["type"])
+			require.NotContains(t, captured, model.ThinkingEnabledKey)
+			require.NotContains(t, captured, "reasoning_split")
+			require.Equal(t, nativeContent, finalContent)
+
+			replayed := m.convertMessages([]model.Message{{
+				Role:    model.RoleAssistant,
+				Content: finalContent,
+			}})
+			require.Len(t, replayed, 1)
+			replayedJSON, err := json.Marshal(replayed[0])
+			require.NoError(t, err)
+			var replayedBody map[string]any
+			require.NoError(t, json.Unmarshal(replayedJSON, &replayedBody))
+			require.Equal(t, nativeContent, replayedBody["content"])
+		})
+	}
+}
+
+func TestModel_GenerateContent_KimiThinkingPayload(t *testing.T) {
+	tests := []struct {
+		name    string
+		enabled bool
+		want    string
+	}{
+		{
+			name:    "enabled",
+			enabled: true,
+			want:    "enabled",
+		},
+		{
+			name:    "disabled",
+			enabled: false,
+			want:    "disabled",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var captured map[string]any
+			server := httptest.NewServer(http.HandlerFunc(
+				func(w http.ResponseWriter, r *http.Request) {
+					if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+						http.Error(w, "not found", http.StatusNotFound)
+						return
+					}
+					require.NoError(t, json.NewDecoder(r.Body).Decode(&captured))
+					w.Header().Set("Content-Type", "application/json")
+					fmt.Fprint(w, `{
+						"id": "test",
+						"object": "chat.completion",
+						"created": 1699200000,
+						"model": "kimi-k2.6",
+						"choices": [{
+							"index": 0,
+							"message": {
+								"role": "assistant",
+								"content": "ok"
+							},
+							"finish_reason": "stop"
+						}]
+					}`)
+				},
+			))
+			defer server.Close()
+
+			m := New(
+				"kimi-k2.6",
+				WithVariant(VariantKimi),
+				WithBaseURL(server.URL),
+				WithAPIKey("test-key"),
+			)
+			req := &model.Request{
+				Messages: []model.Message{
+					model.NewUserMessage("hi"),
+				},
+				GenerationConfig: model.GenerationConfig{
+					ThinkingEnabled: &tt.enabled,
+				},
+			}
+			ch, err := m.GenerateContent(context.Background(), req)
+			require.NoError(t, err)
+			for resp := range ch {
+				require.Nil(t, resp.Error)
+			}
+
+			thinking, ok := captured[thinkingKey].(map[string]any)
+			require.True(t, ok)
+			require.Equal(t, tt.want, thinking["type"])
+			require.NotContains(t, captured, model.ThinkingEnabledKey)
+		})
+	}
+}
+
 // TestModel_GenerateContent_NonStreaming_ToolCallNoID_Synthesized verifies that
 // when the provider omits tool_call.id in a non-streaming response, we synthesize
 // a stable ID (auto_call_<index>). This covers the non-streaming code path in
@@ -3777,6 +4294,233 @@ func TestUploadFileData_Success(t *testing.T) {
 	assert.Equalf(t, "file_test_1", id, "expected id=file_test_1, got %s", id)
 }
 
+func TestUploadFileData_MiniMaxDefaults(t *testing.T) {
+	const fileID = "9223372036854775807"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodPost, r.Method)
+		require.Equal(t, miniMaxFileUploadPath, r.URL.Path)
+		require.NoError(t, r.ParseMultipartForm(10<<20))
+		require.Equal(
+			t,
+			string(miniMaxFilePurpose),
+			r.MultipartForm.Value["purpose"][0],
+		)
+		files := r.MultipartForm.File["file"]
+		require.Len(t, files, 1)
+		require.Equal(t, "clip.mp4", files[0].Filename)
+
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{
+			"file": {
+				"file_id": %s,
+				"bytes": 5,
+				"created_at": 123,
+				"filename": "clip.mp4",
+				"purpose": "video_understanding"
+			},
+			"base_resp": {"status_code": 0, "status_msg": "success"}
+		}`, fileID)
+	}))
+	defer server.Close()
+
+	m := New(
+		"MiniMax-M3",
+		WithVariant(VariantMiniMax),
+		WithAPIKey("test-key"),
+		WithBaseURL(server.URL+"/v1"),
+	)
+	id, err := m.UploadFileData(
+		context.Background(),
+		"clip.mp4",
+		[]byte("video"),
+	)
+	require.NoError(t, err)
+	require.Equal(t, fileID, id)
+}
+
+func TestMiniMaxFileIDExtractor(t *testing.T) {
+	tests := []struct {
+		name    string
+		raw     string
+		nilFile bool
+		want    string
+		wantErr string
+	}{
+		{name: "nil response", nilFile: true, wantErr: "empty response"},
+		{name: "openai id", raw: `{"id":"file_1"}`, want: "file_1"},
+		{name: "missing file", raw: `{}`, wantErr: "missing file"},
+		{name: "invalid file", raw: `{"file":"bad"}`, wantErr: "decode minimax file upload response"},
+		{name: "missing file id", raw: `{"file":{}}`, wantErr: "missing file_id"},
+		{name: "empty string file id", raw: `{"file":{"file_id":""}}`, wantErr: "empty file_id"},
+		{name: "string file id", raw: `{"file":{"file_id":"123"}}`, want: "123"},
+		{name: "invalid file id", raw: `{"file":{"file_id":true}}`, wantErr: "decode minimax file_id"},
+		{name: "numeric file id", raw: `{"file":{"file_id":123}}`, want: "123"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var file *openai.FileObject
+			if !tt.nilFile {
+				file = &openai.FileObject{}
+				require.NoError(t, json.Unmarshal([]byte(tt.raw), file))
+			}
+			got, err := miniMaxFileIDExtractor(file)
+			if tt.wantErr != "" {
+				require.ErrorContains(t, err, tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestMiniMaxFileDeletionResponseValidator(t *testing.T) {
+	tests := []struct {
+		name    string
+		raw     string
+		nilFile bool
+		wantErr string
+	}{
+		{name: "nil response", nilFile: true, wantErr: "empty response"},
+		{name: "missing base response", raw: `{}`, wantErr: "missing base_resp"},
+		{
+			name:    "invalid base response",
+			raw:     `{"base_resp":"invalid"}`,
+			wantErr: "decode minimax file deletion response",
+		},
+		{
+			name: "success",
+			raw:  `{"base_resp":{"status_code":0,"status_msg":"success"}}`,
+		},
+		{
+			name:    "business error",
+			raw:     `{"base_resp":{"status_code":1004,"status_msg":"permission denied"}}`,
+			wantErr: "status_code 1004: permission denied",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var file *openai.FileDeleted
+			if !tt.nilFile {
+				file = &openai.FileDeleted{}
+				require.NoError(t, json.Unmarshal([]byte(tt.raw), file))
+			}
+			err := miniMaxFileDeletionResponseValidator(file)
+			if tt.wantErr != "" {
+				require.ErrorContains(t, err, tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestUploadedFileID(t *testing.T) {
+	m := &Model{}
+	id, err := m.uploadedFileID(&openai.FileObject{ID: "file_1"})
+	require.NoError(t, err)
+	require.Equal(t, "file_1", id)
+
+	_, err = m.uploadedFileID(nil)
+	require.ErrorContains(t, err, "empty response")
+}
+
+func TestMiniMaxFileDeletionBodyConvertor(t *testing.T) {
+	custom := []byte(`{"custom":true}`)
+	require.Equal(
+		t,
+		custom,
+		miniMaxFileDeletionBodyConvertor(
+			custom,
+			"123",
+			miniMaxFilePurpose,
+		),
+	)
+	require.JSONEq(
+		t,
+		`{"file_id":123,"purpose":"video_understanding"}`,
+		string(miniMaxFileDeletionBodyConvertor(
+			nil,
+			"123",
+			miniMaxFilePurpose,
+		)),
+	)
+	require.JSONEq(
+		t,
+		`{"file_id":"file_123","purpose":"video_understanding"}`,
+		string(miniMaxFileDeletionBodyConvertor(
+			nil,
+			"file_123",
+			miniMaxFilePurpose,
+		)),
+	)
+
+	for _, tt := range []struct {
+		name   string
+		fileID string
+		want   json.Number
+	}{
+		{name: "leading plus", fileID: "+123", want: "123"},
+		{name: "leading zeros", fileID: "00123", want: "123"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			body := miniMaxFileDeletionBodyConvertor(
+				nil,
+				tt.fileID,
+				miniMaxFilePurpose,
+			)
+			decoder := json.NewDecoder(bytes.NewReader(body))
+			decoder.UseNumber()
+			var payload map[string]any
+			require.NoError(t, decoder.Decode(&payload))
+			require.Equal(t, tt.want, payload["file_id"])
+		})
+	}
+}
+
+func TestUploadFileData_KimiDefaults(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodPost, r.Method)
+		require.Equal(t, "/v1/files", r.URL.Path)
+		require.NoError(t, r.ParseMultipartForm(10<<20))
+		require.Equal(
+			t,
+			"file-extract",
+			r.MultipartForm.Value["purpose"][0],
+		)
+		files := r.MultipartForm.File["file"]
+		require.Len(t, files, 1)
+		require.Equal(t, "notes.txt", files[0].Filename)
+
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{
+			"id":"file_kimi_1",
+			"object":"file",
+			"bytes":5,
+			"created_at":123,
+			"filename":"notes.txt",
+			"purpose":"file-extract"
+		}`)
+	}))
+	defer server.Close()
+
+	m := New(
+		"kimi-k2.6",
+		WithVariant(VariantKimi),
+		WithAPIKey("test-key"),
+		WithBaseURL(server.URL+"/v1"),
+	)
+	id, err := m.UploadFileData(
+		context.Background(),
+		"notes.txt",
+		[]byte("hello"),
+	)
+	require.NoError(t, err)
+	require.Equal(t, "file_kimi_1", id)
+}
+
 // TestUploadFile_Success tests UploadFile with a temp file and mock server.
 func TestUploadFile_Success(t *testing.T) {
 	tmp, err := os.CreateTemp(t.TempDir(), "batch_input_*.jsonl")
@@ -3935,6 +4679,86 @@ func TestDeleteFile_Success(t *testing.T) {
 	m := New("test-model", WithAPIKey("k"), WithBaseURL(server.URL))
 	err := m.DeleteFile(context.Background(), "file_z")
 	require.NoErrorf(t, err, "DeleteFile failed: %v", err)
+}
+
+func TestDeleteFile_MiniMaxDefaults(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodPost, r.Method)
+		require.Equal(t, miniMaxFileDeletePath, r.URL.Path)
+		require.Equal(t, "application/json", r.Header.Get("Content-Type"))
+		decoder := json.NewDecoder(r.Body)
+		decoder.UseNumber()
+		var body map[string]any
+		require.NoError(t, decoder.Decode(&body))
+		require.Equal(t, json.Number("123"), body["file_id"])
+		require.Equal(t, string(miniMaxFilePurpose), body["purpose"])
+
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{
+			"file_id": 123,
+			"base_resp": {"status_code": 0, "status_msg": "success"}
+		}`)
+	}))
+	defer server.Close()
+
+	m := New(
+		"MiniMax-M3",
+		WithVariant(VariantMiniMax),
+		WithAPIKey("test-key"),
+		WithBaseURL(server.URL+"/v1"),
+	)
+	require.NoError(t, m.DeleteFile(context.Background(), "123"))
+}
+
+func TestDeleteFile_MiniMaxBusinessError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{
+			"file_id": 123,
+			"base_resp": {"status_code": 1004, "status_msg": "permission denied"}
+		}`)
+	}))
+	defer server.Close()
+
+	m := New(
+		"MiniMax-M3",
+		WithVariant(VariantMiniMax),
+		WithAPIKey("test-key"),
+		WithBaseURL(server.URL+"/v1"),
+	)
+	err := m.DeleteFile(context.Background(), "123")
+	require.ErrorContains(t, err, "status_code 1004")
+	require.ErrorContains(t, err, "permission denied")
+}
+
+func TestDeleteFile_CustomBodyDoesNotForceJSONContentType(t *testing.T) {
+	const body = "file_id=123"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodPost, r.Method)
+		require.NotEqual(t, "application/json", r.Header.Get("Content-Type"))
+		got, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		require.Equal(t, body, string(got))
+
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{
+			"file_id": 123,
+			"base_resp": {"status_code": 0, "status_msg": "success"}
+		}`)
+	}))
+	defer server.Close()
+
+	m := New(
+		"MiniMax-M3",
+		WithVariant(VariantMiniMax),
+		WithAPIKey("test-key"),
+		WithBaseURL(server.URL+"/v1"),
+	)
+	require.NoError(t, m.DeleteFile(
+		context.Background(),
+		"123",
+		WithBody([]byte(body)),
+	))
 }
 
 // TestModel_GenerateContent_Streaming_FinalReasoningAggregated
@@ -4361,6 +5185,35 @@ func TestWithVariant(t *testing.T) {
 		assert.True(t, opts.variantSet, "expected variantSet to be true")
 	})
 
+	t.Run("glm variant", func(t *testing.T) {
+		opts := &options{}
+		WithVariant(VariantGLM)(opts)
+
+		assert.Equal(
+			t,
+			VariantGLM,
+			opts.Variant,
+			"expected variant to be VariantGLM",
+		)
+		assert.True(t, opts.variantSet, "expected variantSet to be true")
+	})
+
+	t.Run("minimax variant", func(t *testing.T) {
+		opts := &options{}
+		WithVariant(VariantMiniMax)(opts)
+
+		assert.Equal(t, VariantMiniMax, opts.Variant, "expected variant to be VariantMiniMax")
+		assert.True(t, opts.variantSet, "expected variantSet to be true")
+	})
+
+	t.Run("kimi variant", func(t *testing.T) {
+		opts := &options{}
+		WithVariant(VariantKimi)(opts)
+
+		assert.Equal(t, VariantKimi, opts.Variant, "expected variant to be VariantKimi")
+		assert.True(t, opts.variantSet, "expected variantSet to be true")
+	})
+
 	t.Run("variant in model creation", func(t *testing.T) {
 		m := New("test-model", WithAPIKey("test-key"), WithVariant(VariantHunyuan))
 		require.NotNil(t, m, "expected model to be created")
@@ -4512,6 +5365,20 @@ func TestAppendFileID_NilFilePart(t *testing.T) {
 // TestBuildChatRequest_EdgeCases tests edge cases in buildChatRequest.
 func TestBuildChatRequest_EdgeCases(t *testing.T) {
 	m := New("gpt-3.5-turbo", WithAPIKey("test-key"))
+
+	t.Run("clamps max completion tokens to model cap", func(t *testing.T) {
+		m := New("gpt-4o", WithAPIKey("test-key"))
+		over := 114687
+		req := &model.Request{
+			Messages: []model.Message{model.NewUserMessage("hi")},
+			GenerationConfig: model.GenerationConfig{
+				MaxTokens: &over,
+			},
+		}
+		chatReq, _ := m.buildChatRequest(req)
+		require.NotNil(t, chatReq.MaxCompletionTokens)
+		assert.Equal(t, int64(16384), chatReq.MaxCompletionTokens.Value)
+	})
 
 	t.Run("empty messages", func(t *testing.T) {
 		req := &model.Request{
@@ -4696,6 +5563,7 @@ func TestConvertChatCompletionChoiceLogprobs(t *testing.T) {
 				Bytes:   []int64{65},
 				TopLogprobs: []openaigo.ChatCompletionTokenLogprobTopLogprob{
 					{Token: "B", Logprob: -0.2, Bytes: []int64{66}},
+					{Token: "C", Logprob: -0.3, Bytes: []int64{67, 68}},
 				},
 			},
 		},
@@ -4705,10 +5573,25 @@ func TestConvertChatCompletionChoiceLogprobs(t *testing.T) {
 	assert.Equal(t, "A", got.Content[0].Token)
 	assert.Equal(t, -0.1, got.Content[0].Logprob)
 	assert.Equal(t, []int{65}, got.Content[0].Bytes)
-	require.Len(t, got.Content[0].TopLogprobs, 1)
+	require.Len(t, got.Content[0].TopLogprobs, 2)
 	assert.Equal(t, "B", got.Content[0].TopLogprobs[0].Token)
 	assert.Equal(t, []int{66}, got.Content[0].TopLogprobs[0].Bytes)
-	assert.Nil(t, int64SliceToIntSlice(nil))
+	assert.Equal(t, []int{67, 68}, got.Content[0].TopLogprobs[1].Bytes)
+
+	// Each view has capped capacity, so appending cannot overwrite the
+	// neighboring bytes stored in the shared per-token arena.
+	got.Content[0].Bytes = append(got.Content[0].Bytes, 99)
+	assert.Equal(t, []int{66}, got.Content[0].TopLogprobs[0].Bytes)
+	assert.Equal(t, []int{67, 68}, got.Content[0].TopLogprobs[1].Bytes)
+	got.Content[0].TopLogprobs[0].Bytes = append(
+		got.Content[0].TopLogprobs[0].Bytes,
+		100,
+	)
+	assert.Equal(t, []int{67, 68}, got.Content[0].TopLogprobs[1].Bytes)
+
+	assert.Nil(t, convertChatCompletionChoiceLogprobs(
+		openaigo.ChatCompletionChoiceLogprobs{},
+	))
 }
 
 // TestConvertUserMessageContent_WithImage tests image content conversion.
@@ -6110,6 +6993,196 @@ func TestCreateFinalResponseFinishReason(t *testing.T) {
 		*finalResponse.Choices[0].FinishReason)
 }
 
+func TestCreateFinalResponseGLMReasoningContentFallback(t *testing.T) {
+	t.Parallel()
+
+	m := New("glm50", WithVariant(VariantGLM))
+	acc := openai.ChatCompletionAccumulator{
+		ChatCompletion: openai.ChatCompletion{
+			ID:    "acc-id",
+			Model: "glm50",
+			Choices: []openai.ChatCompletionChoice{{
+				Index:        0,
+				FinishReason: "stop",
+				Message: openai.ChatCompletionMessage{
+					Content: "",
+				},
+			}},
+		},
+	}
+
+	resp := m.createFinalResponse(acc, false, nil, "收到")
+	require.NotNil(t, resp)
+	require.Len(t, resp.Choices, 1)
+	require.Equal(t, "收到", resp.Choices[0].Message.Content)
+	require.Equal(t, "收到", resp.Choices[0].Message.ReasoningContent)
+}
+
+func TestCreateFinalResponseGLMReasoningContentFallbackSkipsToolCall(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	m := New("glm50", WithVariant(VariantGLM))
+	acc := openai.ChatCompletionAccumulator{
+		ChatCompletion: openai.ChatCompletion{
+			ID:    "acc-id",
+			Model: "glm50",
+			Choices: []openai.ChatCompletionChoice{{
+				Index: 0,
+				Message: openai.ChatCompletionMessage{
+					Content: "",
+				},
+			}},
+		},
+	}
+
+	resp := m.createFinalResponse(
+		acc,
+		true,
+		[]model.ToolCall{{
+			ID:   "call-1",
+			Type: functionToolType,
+			Function: model.FunctionDefinitionParam{
+				Name: "lookup",
+			},
+		}},
+		"need tool",
+	)
+	require.NotNil(t, resp)
+	require.Len(t, resp.Choices, 1)
+	require.Empty(t, resp.Choices[0].Message.Content)
+	require.Equal(t, "need tool", resp.Choices[0].Message.ReasoningContent)
+	require.Len(t, resp.Choices[0].Message.ToolCalls, 1)
+}
+
+func TestCreateFinalResponseReasoningContentNoFallbackForOpenAI(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	m := New("gpt-5", WithVariant(VariantOpenAI))
+	acc := openai.ChatCompletionAccumulator{
+		ChatCompletion: openai.ChatCompletion{
+			ID:    "acc-id",
+			Model: "gpt-5",
+			Choices: []openai.ChatCompletionChoice{{
+				Index: 0,
+				Message: openai.ChatCompletionMessage{
+					Content: "",
+				},
+			}},
+		},
+	}
+
+	resp := m.createFinalResponse(acc, false, nil, "thinking")
+	require.NotNil(t, resp)
+	require.Len(t, resp.Choices, 1)
+	require.Empty(t, resp.Choices[0].Message.Content)
+	require.Equal(t, "thinking", resp.Choices[0].Message.ReasoningContent)
+}
+
+func TestCreateResponseFromCompletionGLMReasoningContentFallback(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	m := New("glm50", WithVariant(VariantGLM))
+	var completion openai.ChatCompletion
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"id": "completion-id",
+		"object": "chat.completion",
+		"created": 1699200000,
+		"model": "glm50",
+		"choices": [{
+			"index": 0,
+			"message": {
+				"role": "assistant",
+				"content": "",
+				"reasoning_content": "收到"
+			},
+			"finish_reason": "stop"
+		}]
+	}`), &completion))
+
+	resp := m.createResponseFromCompletion(&completion)
+	require.NotNil(t, resp)
+	require.Len(t, resp.Choices, 1)
+	require.Equal(t, "收到", resp.Choices[0].Message.Content)
+	require.Equal(t, "收到", resp.Choices[0].Message.ReasoningContent)
+}
+
+func TestCreateResponseFromCompletionGLMReasoningContentSkipsToolCall(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	m := New("glm50", WithVariant(VariantGLM))
+	var completion openai.ChatCompletion
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"id": "completion-id",
+		"object": "chat.completion",
+		"created": 1699200000,
+		"model": "glm50",
+		"choices": [{
+			"index": 0,
+			"message": {
+				"role": "assistant",
+				"content": "",
+				"reasoning_content": "need lookup",
+				"tool_calls": [{
+					"id": "call-1",
+					"type": "function",
+					"function": {
+						"name": "lookup",
+						"arguments": "{\"query\":\"x\"}"
+					}
+				}]
+			},
+			"finish_reason": "tool_calls"
+		}]
+	}`), &completion))
+
+	resp := m.createResponseFromCompletion(&completion)
+	require.NotNil(t, resp)
+	require.Len(t, resp.Choices, 1)
+	require.Empty(t, resp.Choices[0].Message.Content)
+	require.Equal(t, "need lookup",
+		resp.Choices[0].Message.ReasoningContent)
+	require.Len(t, resp.Choices[0].Message.ToolCalls, 1)
+}
+
+func TestEmitStreamingFinalResponseGLMReasoningContentFallback(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	m := New("glm50", WithVariant(VariantGLM))
+	var got *model.Response
+	m.emitStreamingFinalResponse(
+		context.Background(),
+		&ssestream.Stream[openai.ChatCompletionChunk]{},
+		openai.ChatCompletionAccumulator{
+			ChatCompletion: openai.ChatCompletion{
+				ID:    "acc-id",
+				Model: "glm50",
+			},
+		},
+		nil,
+		nil,
+		"收到",
+		func(resp *model.Response) bool {
+			got = resp
+			return true
+		},
+	)
+
+	require.NotNil(t, got)
+	require.Len(t, got.Choices, 1)
+	require.Equal(t, "收到", got.Choices[0].Message.Content)
+	require.Equal(t, "收到", got.Choices[0].Message.ReasoningContent)
+}
+
 // TestCreateFinalResponseUsageConditional verifies that Usage is only set on the
 // final response when at least one token count is non-zero. This prevents the
 // Langfuse exporter from seeing zero-valued usage attributes that get filtered
@@ -6876,7 +7949,7 @@ func TestModel_buildChatRequest(t *testing.T) {
 				},
 			},
 			want1: []openaiopt.RequestOption{
-				openaiopt.WithJSONSet(model.EnabledThinkingKey, true),
+				openaiopt.WithJSONSet(model.EnableThinkingKey, true),
 				openaiopt.WithJSONSet(model.ThinkingTokensKey, tokens),
 			},
 		},
@@ -6906,7 +7979,7 @@ func TestModel_buildChatRequest(t *testing.T) {
 				},
 			},
 			want1: []openaiopt.RequestOption{
-				openaiopt.WithJSONSet("thinking", map[string]string{"type": "enabled"}),
+				openaiopt.WithJSONSet(thinkingKey, map[string]string{"type": "enabled"}),
 			},
 		},
 		{
@@ -7074,14 +8147,14 @@ func TestBuildThinkingOption(t *testing.T) {
 			name:            "DeepSeek variant with thinking enabled",
 			variant:         VariantDeepSeek,
 			thinkingEnabled: &trueVal,
-			wantKeys:        []string{"thinking"},
+			wantKeys:        []string{thinkingKey},
 			wantValues:      []any{map[string]string{"type": "enabled"}},
 		},
 		{
 			name:            "DeepSeek variant with thinking disabled",
 			variant:         VariantDeepSeek,
 			thinkingEnabled: &falseVal,
-			wantKeys:        []string{"thinking"},
+			wantKeys:        []string{thinkingKey},
 			wantValues:      []any{map[string]string{"type": "disabled"}},
 		},
 		{
@@ -7089,8 +8162,36 @@ func TestBuildThinkingOption(t *testing.T) {
 			variant:         VariantDeepSeek,
 			thinkingEnabled: &trueVal,
 			thinkingTokens:  &thinkingTokens,
-			wantKeys:        []string{model.ThinkingTokensKey, "thinking"},
+			wantKeys:        []string{model.ThinkingTokensKey, thinkingKey},
 			wantValues:      []any{1024, map[string]string{"type": "enabled"}},
+		},
+		{
+			name:            "GLM variant with thinking enabled",
+			variant:         VariantGLM,
+			thinkingEnabled: &trueVal,
+			wantKeys:        []string{thinkingKey},
+			wantValues:      []any{map[string]string{"type": "enabled"}},
+		},
+		{
+			name:            "Hunyuan variant with thinking enabled",
+			variant:         VariantHunyuan,
+			thinkingEnabled: &trueVal,
+			wantKeys:        []string{thinkingKey},
+			wantValues:      []any{map[string]string{"type": "enabled"}},
+		},
+		{
+			name:            "MiniMax variant with thinking enabled",
+			variant:         VariantMiniMax,
+			thinkingEnabled: &trueVal,
+			wantKeys:        []string{thinkingKey},
+			wantValues:      []any{map[string]string{"type": "adaptive"}},
+		},
+		{
+			name:            "Kimi variant with thinking enabled",
+			variant:         VariantKimi,
+			thinkingEnabled: &trueVal,
+			wantKeys:        []string{thinkingKey},
+			wantValues:      []any{map[string]string{"type": "enabled"}},
 		},
 		{
 			name:            "OpenAI variant with thinking enabled",
@@ -7110,7 +8211,7 @@ func TestBuildThinkingOption(t *testing.T) {
 			name:            "Qwen variant with thinking enabled",
 			variant:         VariantQwen,
 			thinkingEnabled: &trueVal,
-			wantKeys:        []string{model.EnabledThinkingKey},
+			wantKeys:        []string{model.EnableThinkingKey},
 			wantValues:      []any{true},
 		},
 		{
@@ -8948,6 +10049,111 @@ func TestAppendUserContentParts_FileURLWithDataSkippedForTextOnlyVariant(t *test
 	require.Empty(t, dst)
 }
 
+func TestAppendUserContentParts_GLMVariantPreservesNonTextByDefault(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	m := New("glm50", WithVariant(VariantGLM))
+	text := "use the attached files via tools"
+	dst := []openai.ChatCompletionContentPartUnionParam{}
+	fields := m.appendUserContentParts(&dst, []model.ContentPart{
+		{
+			Type: model.ContentTypeText,
+			Text: &text,
+		},
+		{
+			Type: model.ContentTypeImage,
+			Image: &model.Image{
+				Data:   []byte("png"),
+				Format: "png",
+			},
+		},
+		{
+			Type: model.ContentTypeFile,
+			File: &model.File{
+				Name:     "photo.jpg",
+				Data:     []byte("jpg"),
+				MimeType: "image/jpeg",
+			},
+		},
+	})
+
+	require.Nil(t, fields)
+	require.Len(t, dst, 3)
+	require.NotNil(t, dst[0].OfText)
+	require.Equal(t, text, dst[0].OfText.Text)
+	require.NotNil(t, dst[1].OfImageURL)
+	require.NotNil(t, dst[2].OfFile)
+	require.Empty(t,
+		m.omittedContentHint([]model.ContentPart{
+			{
+				Type: model.ContentTypeImage,
+				Image: &model.Image{
+					Data:   []byte("png"),
+					Format: "png",
+				},
+			},
+		}))
+}
+
+func TestAppendUserContentParts_TextOnlyOptionOmitsNonText(t *testing.T) {
+	t.Parallel()
+
+	m := New(
+		"glm50",
+		WithVariant(VariantGLM),
+		WithTextOnlyMessageContent(true),
+	)
+	text := "use the attached files via tools"
+	dst := []openai.ChatCompletionContentPartUnionParam{}
+	fields := m.appendUserContentParts(&dst, []model.ContentPart{
+		{
+			Type: model.ContentTypeText,
+			Text: &text,
+		},
+		{
+			Type: model.ContentTypeImage,
+			Image: &model.Image{
+				Data:   []byte("png"),
+				Format: "png",
+			},
+		},
+		{
+			Type: model.ContentTypeFile,
+			File: &model.File{
+				Name:     "photo.jpg",
+				Data:     []byte("jpg"),
+				MimeType: "image/jpeg",
+			},
+		},
+	})
+
+	require.Nil(t, fields)
+	require.Len(t, dst, 1)
+	require.NotNil(t, dst[0].OfText)
+	require.Equal(t, text, dst[0].OfText.Text)
+	require.Equal(t,
+		"Omitted non-text attachments for this provider: 1 image, 1 file.",
+		m.omittedContentHint([]model.ContentPart{
+			{
+				Type: model.ContentTypeImage,
+				Image: &model.Image{
+					Data:   []byte("png"),
+					Format: "png",
+				},
+			},
+			{
+				Type: model.ContentTypeFile,
+				File: &model.File{
+					Name:     "photo.jpg",
+					Data:     []byte("jpg"),
+					MimeType: "image/jpeg",
+				},
+			},
+		}))
+}
+
 func TestAppendUserContentParts_FileURLPreservedForSkipFileTypeVariant(t *testing.T) {
 	m := &Model{variantConfig: variantConfig{skipFileTypeInContent: true}}
 	dst := []openai.ChatCompletionContentPartUnionParam{}
@@ -9348,4 +10554,43 @@ func TestModel_GenerateContentIter_EmbeddedErrorHTTP200(t *testing.T) {
 	assert.Equal(t, "rate limit exceeded", resp.Error.Message)
 	assert.Equal(t, model.ErrorTypeAPIError, resp.Error.Type)
 	assert.True(t, resp.Done)
+}
+
+func TestImageToURLOrBase64(t *testing.T) {
+	tests := []struct {
+		name  string
+		image *model.Image
+		want  string
+	}{
+		{
+			name: "with URL",
+			image: &model.Image{
+				URL: "http://example.com/image.jpg",
+			},
+			want: "http://example.com/image.jpg",
+		},
+		{
+			name: "with extension format",
+			image: &model.Image{
+				Format: "png",
+				Data:   []byte("test"),
+			},
+			want: "data:image/png;base64,dGVzdA==",
+		},
+		{
+			name: "with full MIME format",
+			image: &model.Image{
+				Format: "image/png",
+				Data:   []byte("test"),
+			},
+			want: "data:image/png;base64,dGVzdA==",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := imageToURLOrBase64(tt.image)
+			assert.Equal(t, tt.want, result)
+		})
+	}
 }
