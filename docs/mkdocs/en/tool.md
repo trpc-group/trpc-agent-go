@@ -515,10 +515,12 @@ The `tool/resultcodec` package provides four codecs:
 | `resultcodec.JSON()` | JSON, compatible with the default tool result (no HTML escaping) |
 | `resultcodec.XML()` | XML derived from the JSON logical tree, with the same fields and values |
 | `resultcodec.Text()` | Text-typed results verbatim (string, bytes, `TextMarshaler`); other types return an error |
-| `resultcodec.Custom[T](fn)` | Whatever the typed encoder `fn` returns |
+| `resultcodec.Custom[T](fn)` | Typed encoder output, normalized to valid UTF-8 |
 
-Built-in codecs are deterministic, always emit valid UTF-8 (invalid bytes are
-replaced with U+FFFD), and are safe for concurrent use.
+The `JSON`, `XML`, and `Text` codec instances are stateless and safe for
+concurrent reuse. Successful output from every codec is valid UTF-8; `Custom`
+normalizes the encoder output when necessary. A `Custom` encoder's determinism
+and concurrency safety are the caller's responsibility.
 
 ### Configure a codec per tool
 
@@ -572,9 +574,10 @@ a `ToolSet`), wrap it with `resultcodec.Wrap`:
 wrapped := resultcodec.Wrap(existingTool, resultcodec.XML())
 ```
 
-`Wrap` adds result encoding without changing the framework's existing resolution
-of the wrapped tool's declaration or capabilities. It does not define precedence
-between independently nested capability wrappers.
+`Wrap` binds result encoding and delegates supported capabilities through the
+explicit `TransparentUnwrap` contract. Each capability resolver retains its own
+precedence and failure rules; `Wrap` does not establish a framework-wide
+precedence order for independently nested wrappers.
 
 ### Behavior and compatibility
 

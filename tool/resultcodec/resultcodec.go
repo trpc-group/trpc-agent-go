@@ -50,9 +50,10 @@ func recoverCodecPanic(name string, errp *error) {
 
 // Codec encodes the final result of a single tool call into model-visible text.
 //
-// Implementations must be deterministic for identical input and safe for
-// concurrent use when a single instance is shared across tools. Built-in codecs
-// return an error instead of panicking.
+// A Codec may be called concurrently when one instance is shared across tools,
+// so implementations must be safe for concurrent use. Whether repeated calls
+// produce identical text is implementation-dependent. Codecs returned by this
+// package return an error instead of panicking.
 type Codec interface {
 	// Encode converts a final tool result into the string used as the tool
 	// result message content.
@@ -65,10 +66,11 @@ type Codec interface {
 // returned tool preserves the callable and/or streamable capabilities of t and
 // exposes the codec to the framework.
 //
-// Adding this wrapper does not change how the framework resolves t's existing
-// declaration or capabilities. Capability precedence between independently
-// nested wrappers remains resolver-specific; Wrap does not define a global
-// outermost-first rule. Wrap returns nil when t is nil.
+// The wrapper delegates supported framework capabilities through t and tools
+// reachable from t via the explicit TransparentUnwrap contract. Each capability
+// resolver defines its own precedence and failure behavior; Wrap does not
+// establish a framework-wide precedence rule for independently nested wrappers.
+// Wrap returns nil when t is nil.
 func Wrap(t tool.Tool, codec Codec) tool.Tool {
 	if t == nil {
 		return nil

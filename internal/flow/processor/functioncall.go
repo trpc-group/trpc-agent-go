@@ -955,9 +955,6 @@ func toolCapabilityPollutesAutoMemory(tl tool.Tool) bool {
 		if next == nil {
 			return false
 		}
-		if next == tl {
-			return true
-		}
 		tl = next
 	}
 	return true

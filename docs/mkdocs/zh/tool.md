@@ -496,9 +496,11 @@ result 消息（role、tool name、tool call ID 配对），并保持 event、se
 | `resultcodec.JSON()` | JSON，与默认 tool result 兼容（不做 HTML 转义） |
 | `resultcodec.XML()` | 由 JSON 逻辑树推导出的 XML，字段与值保持一致 |
 | `resultcodec.Text()` | 直接输出文本类型结果（string、字节、`TextMarshaler`）；其他类型返回错误 |
-| `resultcodec.Custom[T](fn)` | 类型化 encoder `fn` 的返回值 |
+| `resultcodec.Custom[T](fn)` | 类型化 encoder 的输出，并规范为有效 UTF-8 |
 
-内置 codec 输出确定、始终为有效 UTF-8（非法字节替换为 U+FFFD），且支持并发调用。
+`JSON`、`XML` 和 `Text` codec 实例无状态，可安全并发复用。所有 codec 的成功输出均为
+有效 UTF-8，`Custom` 会在必要时规范 encoder 输出；`Custom` encoder 的确定性和并发
+安全性由调用方负责。
 
 ### 按工具配置 codec
 
@@ -552,8 +554,9 @@ bashTool := function.NewFunctionTool(
 wrapped := resultcodec.Wrap(existingTool, resultcodec.XML())
 ```
 
-`Wrap` 只增加结果编码，不改变框架对被包装工具已有 declaration 和 capability 的解析
-结果；它不定义多个独立 capability wrapper 之间的优先级。
+`Wrap` 绑定结果编码，并通过显式 `TransparentUnwrap` 契约委托框架支持的 capability。
+各 capability resolver 保留自身的优先级和失败规则；`Wrap` 不为多个独立 wrapper 建立
+框架级统一优先级。
 
 ### 行为与兼容性
 

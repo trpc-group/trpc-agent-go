@@ -22,7 +22,10 @@ import (
 // asserted to T before calling encode; a type mismatch returns a clear error so
 // business code never has to assert `any` itself. A panic inside encode is
 // recovered and converted to an error, matching the framework's tool and
-// callback panic-protection convention.
+// callback panic-protection convention. Successful output is normalized to
+// valid UTF-8. The encoder may be called concurrently when the codec is shared,
+// so the caller is responsible for its concurrency safety; determinism also
+// depends on the encoder.
 func Custom[T any](encode func(context.Context, T) (string, error)) Codec {
 	return &customCodec[T]{encode: encode}
 }
@@ -63,7 +66,7 @@ func (c *customCodec[T]) Encode(ctx context.Context, result any) (s string, err 
 	if encErr != nil {
 		return "", encErr
 	}
-	// Enforce the built-in codec UTF-8 guarantee for the encoder's output too.
+	// Normalize successful custom output to the package's valid UTF-8 contract.
 	return toValidUTF8(out), nil
 }
 

@@ -59,7 +59,9 @@ Notes:
 - Without a codec, the model-visible JSON is byte-identical to previous versions.
 - Encoding failures are reported as clear errors; the framework does not fall
   back to JSON or re-run the tool.
-- Built-in codecs are deterministic and always emit valid UTF-8.
+- Successful output from every codec is valid UTF-8. The JSON, XML, and Text
+  codec instances are stateless; a Custom encoder must provide any required
+  determinism and concurrency safety.
 - For a streamable tool, only the final result is encoded; intermediate stream
   events are unchanged.
 - Permission results (denied / approval-required) are framework control protocol

@@ -429,6 +429,16 @@ func (w *cyclicCallableWrapper) Call(ctx context.Context, args []byte) (any, err
 	return w.base.(tool.CallableTool).Call(ctx, args)
 }
 
+// nonComparableCyclicTool is a slice-backed Tool whose TransparentUnwrap
+// returns itself. Comparing two interface values holding it would panic.
+type nonComparableCyclicTool []int
+
+func (t nonComparableCyclicTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{Name: "non_comparable_cycle"}
+}
+
+func (t nonComparableCyclicTool) TransparentUnwrap() tool.Tool { return t }
+
 func TestExecuteToolCall_DeepWrapperChainDenyNotBypassed(t *testing.T) {
 	// A deny hidden past the traversal depth bound must fail closed, not allow.
 	base := &recordingCallableTool{declaration: &tool.Declaration{Name: "danger"}}
@@ -747,6 +757,20 @@ func TestToolCapabilityPollutesAutoMemory_CyclicFailsClosed(t *testing.T) {
 	cyclic := &cyclicCallableWrapper{base: base}
 	var got bool
 	runWithinTimeout(t, 5*time.Second, func() {
+		got = toolCapabilityPollutesAutoMemory(cyclic)
+	})
+	if !got {
+		t.Fatal("cyclic chain must fail closed (treated as polluting)")
+	}
+}
+
+func TestToolCapabilityPollutesAutoMemory_NonComparableCycleFailsClosed(t *testing.T) {
+	// Wrapper implementations are not required to have comparable dynamic
+	// types. Cycle protection must rely on the depth bound rather than comparing
+	// interface values, which panics for slice-backed tools.
+	cyclic := nonComparableCyclicTool{1}
+	var got bool
+	require.NotPanics(t, func() {
 		got = toolCapabilityPollutesAutoMemory(cyclic)
 	})
 	if !got {
