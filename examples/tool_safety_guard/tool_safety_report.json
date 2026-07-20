@@ -1,0 +1,500 @@
+{
+  "schema_version": "1",
+  "generated_at": "2026-07-20T14:36:07.645013513Z",
+  "reports": [
+    {
+      "schema_version": "1",
+      "scan_id": "b2b0b4ef-9a34-4c13-9b4e-005c74ab55c9",
+      "timestamp": "2026-07-20T14:36:07.645018802Z",
+      "tool_name": "workspace_exec",
+      "backend": "workspace_exec",
+      "command": "go test ./...",
+      "command_hash": "1bb497e3e13a1105cf24e3359fa3ef75de08b66ff8a2839cd7f9ea97824d9eb3",
+      "decision": "allow",
+      "risk_level": "low",
+      "findings": [],
+      "intercepted": false,
+      "redacted": false,
+      "duration_ms": 0.075
+    },
+    {
+      "schema_version": "1",
+      "scan_id": "f04c5850-a7f8-4700-808a-49cad12ca674",
+      "timestamp": "2026-07-20T14:36:07.645095113Z",
+      "tool_name": "workspace_exec",
+      "backend": "workspace_exec",
+      "command": "git status",
+      "command_hash": "e62b04aadf39df1a47b771265e4ae5c452df3f1903d5c263ab00f088e86102f6",
+      "decision": "allow",
+      "risk_level": "low",
+      "findings": [],
+      "intercepted": false,
+      "redacted": false,
+      "duration_ms": 0.008
+    },
+    {
+      "schema_version": "1",
+      "scan_id": "23585ed7-980b-4ecb-aa47-5e80bce641ef",
+      "timestamp": "2026-07-20T14:36:07.645103881Z",
+      "tool_name": "workspace_exec",
+      "backend": "workspace_exec",
+      "command": "rm -rf /",
+      "command_hash": "5c7923bd67b06c93279d49c466301c57023822eec29c49e269063e47aecd973c",
+      "decision": "deny",
+      "risk_level": "critical",
+      "findings": [
+        {
+          "rule_id": "command.dangerous_delete",
+          "risk_level": "critical",
+          "decision": "deny",
+          "evidence": "recursive/forced delete or destructive utility",
+          "recommendation": "Refuse recursive or forced deletion; require an explicit allowlist entry for the specific path"
+        },
+        {
+          "rule_id": "path.system_write",
+          "risk_level": "critical",
+          "decision": "deny",
+          "evidence": "system path target: /",
+          "recommendation": "Refuse writes or deletes to system paths; scope operations to the workspace"
+        },
+        {
+          "rule_id": "command.not_allowed",
+          "risk_level": "high",
+          "decision": "deny",
+          "evidence": "command \"rm\" is denied by denied_commands",
+          "recommendation": "Use a command from the allowed_commands list or extend the policy explicitly"
+        }
+      ],
+      "intercepted": true,
+      "redacted": false,
+      "duration_ms": 0.021
+    },
+    {
+      "schema_version": "1",
+      "scan_id": "8489afad-3a7e-4a95-bdea-389b974fb0b0",
+      "timestamp": "2026-07-20T14:36:07.645125108Z",
+      "tool_name": "workspace_exec",
+      "backend": "workspace_exec",
+      "command": "cat ~/.ssh/id_rsa",
+      "command_hash": "ba4127a37b1d6e0ad2c338ad03a21b1ff111ed6f01b927db6040d56e0111ac73",
+      "decision": "deny",
+      "risk_level": "critical",
+      "findings": [
+        {
+          "rule_id": "path.ssh_private_key",
+          "risk_level": "critical",
+          "decision": "deny",
+          "evidence": "ssh private key or config path pattern",
+          "recommendation": "Never read or transmit SSH private keys; require an explicit operator-approved workflow"
+        },
+        {
+          "rule_id": "path.denied",
+          "risk_level": "high",
+          "decision": "deny",
+          "evidence": "denied path pattern: ~/.ssh/id_rsa",
+          "recommendation": "Remove the denied path from the command or update the policy explicitly"
+        }
+      ],
+      "intercepted": true,
+      "redacted": false,
+      "duration_ms": 0.017
+    },
+    {
+      "schema_version": "1",
+      "scan_id": "3e325fcd-9caf-42ca-beaf-a36608156b59",
+      "timestamp": "2026-07-20T14:36:07.645142886Z",
+      "tool_name": "workspace_exec",
+      "backend": "workspace_exec",
+      "command": "cat ~/.aws/credentials",
+      "command_hash": "a67f9df6ce5bc6c647557a9b582ca687cf5937b6ef793c375649f3a89b92e4e5",
+      "decision": "deny",
+      "risk_level": "critical",
+      "findings": [
+        {
+          "rule_id": "path.credential_file",
+          "risk_level": "critical",
+          "decision": "deny",
+          "evidence": "credential file path pattern",
+          "recommendation": "Never read or transmit credential files; require an explicit operator-approved workflow"
+        },
+        {
+          "rule_id": "path.denied",
+          "risk_level": "high",
+          "decision": "deny",
+          "evidence": "denied path pattern: ~/.aws/credentials",
+          "recommendation": "Remove the denied path from the command or update the policy explicitly"
+        }
+      ],
+      "intercepted": true,
+      "redacted": false,
+      "duration_ms": 0.015
+    },
+    {
+      "schema_version": "1",
+      "scan_id": "0d86536b-c4c4-461b-9ce0-4d822d71e856",
+      "timestamp": "2026-07-20T14:36:07.645158452Z",
+      "tool_name": "workspace_exec",
+      "backend": "workspace_exec",
+      "command": "cat .env",
+      "command_hash": "648b13a0a3555ec5c302e06ca33a05aa40ba26836bd99f5498c138cb35d5787a",
+      "decision": "deny",
+      "risk_level": "high",
+      "findings": [
+        {
+          "rule_id": "path.denied",
+          "risk_level": "high",
+          "decision": "deny",
+          "evidence": "denied path pattern: .env",
+          "recommendation": "Remove the denied path from the command or update the policy explicitly"
+        },
+        {
+          "rule_id": "path.dotenv",
+          "risk_level": "high",
+          "decision": "deny",
+          "evidence": "dotenv file path pattern",
+          "recommendation": "Do not read .env files in tool calls; inject allowed env vars through the policy whitelist"
+        }
+      ],
+      "intercepted": true,
+      "redacted": false,
+      "duration_ms": 0.004
+    },
+    {
+      "schema_version": "1",
+      "scan_id": "6da5d233-1dcd-475b-b741-651d16323509",
+      "timestamp": "2026-07-20T14:36:07.645163218Z",
+      "tool_name": "workspace_exec",
+      "backend": "workspace_exec",
+      "command": "curl https://evil.example/x",
+      "command_hash": "8e3fa66660525034011df16fd74c34a768af7a526c86d7ef0c80426be765a1b0",
+      "decision": "deny",
+      "risk_level": "high",
+      "findings": [
+        {
+          "rule_id": "network.non_whitelisted_domain",
+          "risk_level": "high",
+          "decision": "deny",
+          "evidence": "host not in allowlist: evil.example",
+          "recommendation": "Add the host to network.allowed_domains or remove the network command"
+        }
+      ],
+      "intercepted": true,
+      "redacted": false,
+      "duration_ms": 0.064
+    },
+    {
+      "schema_version": "1",
+      "scan_id": "6b3e4ee5-171e-4e2f-bd62-c65718252069",
+      "timestamp": "2026-07-20T14:36:07.645228186Z",
+      "tool_name": "workspace_exec",
+      "backend": "workspace_exec",
+      "command": "curl https://github.com/org/repo",
+      "command_hash": "9475826e1b0b6b533434d542cdb5eeb4d8a2fc93b94ba102d51cdb8cb00740d8",
+      "decision": "allow",
+      "risk_level": "low",
+      "findings": [],
+      "intercepted": false,
+      "redacted": false,
+      "duration_ms": 0.033
+    },
+    {
+      "schema_version": "1",
+      "scan_id": "86dad4e5-9e86-433c-8a75-7ee54244f923",
+      "timestamp": "2026-07-20T14:36:07.645261852Z",
+      "tool_name": "workspace_exec",
+      "backend": "workspace_exec",
+      "command": "sh -c 'rm -rf /'",
+      "command_hash": "5eaeb042d998eea5dff60d85dbde3d3b7604030d52d98997695913f6a11615ae",
+      "decision": "deny",
+      "risk_level": "critical",
+      "findings": [
+        {
+          "rule_id": "command.dangerous_delete",
+          "risk_level": "critical",
+          "decision": "deny",
+          "evidence": "recursive/forced delete or destructive utility",
+          "recommendation": "Refuse recursive or forced deletion; require an explicit allowlist entry for the specific path"
+        },
+        {
+          "rule_id": "command.not_allowed",
+          "risk_level": "high",
+          "decision": "deny",
+          "evidence": "command \"sh\" is denied by built-in policy because it is a shell wrapper or re-ex",
+          "recommendation": "Use a command from the allowed_commands list or extend the policy explicitly"
+        },
+        {
+          "rule_id": "shell.wrapper",
+          "risk_level": "high",
+          "decision": "deny",
+          "evidence": "shell wrapper or re-executing builtin detected",
+          "recommendation": "Refuse shell wrappers; allow the underlying command directly or wrap it in an auditable script"
+        }
+      ],
+      "intercepted": true,
+      "redacted": false,
+      "duration_ms": 0.092
+    },
+    {
+      "schema_version": "1",
+      "scan_id": "87ecbd5d-4303-406f-88a3-a3fcc662f059",
+      "timestamp": "2026-07-20T14:36:07.645354794Z",
+      "tool_name": "workspace_exec",
+      "backend": "workspace_exec",
+      "command": "echo $(whoami)",
+      "command_hash": "30c0d146f86ab7957070dfc41cf45eb6bf81568afb6177dbd362a0b88d8d4f4c",
+      "decision": "deny",
+      "risk_level": "high",
+      "findings": [
+        {
+          "rule_id": "shell.substitution",
+          "risk_level": "high",
+          "decision": "deny",
+          "evidence": "command/parameter/arithmetic/process substitution",
+          "recommendation": "Refuse shell-bypass constructs; wrap the desired use in an auditable workspace script"
+        }
+      ],
+      "intercepted": true,
+      "redacted": false,
+      "duration_ms": 0.018
+    },
+    {
+      "schema_version": "1",
+      "scan_id": "521c9e19-908e-4774-b3c7-79f705a212bc",
+      "timestamp": "2026-07-20T14:36:07.645373658Z",
+      "tool_name": "workspace_exec",
+      "backend": "workspace_exec",
+      "command": "grep foo bar.txt",
+      "command_hash": "8cbbc7a63a3965aaaa9e756fc00ac5d8a4f99817e7752b60d5fd10285e81650d",
+      "decision": "allow",
+      "risk_level": "low",
+      "findings": [],
+      "intercepted": false,
+      "redacted": false,
+      "duration_ms": 0.01
+    },
+    {
+      "schema_version": "1",
+      "scan_id": "f6cf9144-096c-4f78-b5d9-3bcebef61d3c",
+      "timestamp": "2026-07-20T14:36:07.645384618Z",
+      "tool_name": "workspace_exec",
+      "backend": "workspace_exec",
+      "command": "cat README.md | grep foo",
+      "command_hash": "059149d4301839a5a41089c7e5e9f1ff03cf7c0d73b544aa92fecd8d575c8bf1",
+      "decision": "allow",
+      "risk_level": "low",
+      "findings": [],
+      "intercepted": false,
+      "redacted": false,
+      "duration_ms": 0.035
+    },
+    {
+      "schema_version": "1",
+      "scan_id": "40353935-dcb9-40a7-a761-4f2ecb98a3c5",
+      "timestamp": "2026-07-20T14:36:07.645420365Z",
+      "tool_name": "workspace_exec",
+      "backend": "workspace_exec",
+      "command": "npm install package",
+      "command_hash": "bed4ca19b229836f7a0fa7bc7ec20c3c2747cf77752aa9a5d85861a9edd1090c",
+      "decision": "ask",
+      "risk_level": "high",
+      "findings": [
+        {
+          "rule_id": "dependency.package_install",
+          "risk_level": "high",
+          "decision": "ask",
+          "evidence": "package manager install command detected",
+          "recommendation": "Approve the dependency change explicitly; pin versions and verify provenance"
+        }
+      ],
+      "intercepted": true,
+      "redacted": false,
+      "duration_ms": 0.021
+    },
+    {
+      "schema_version": "1",
+      "scan_id": "64ccf44f-f088-4ada-9b76-391175e3e26b",
+      "timestamp": "2026-07-20T14:36:07.645441662Z",
+      "tool_name": "workspace_exec",
+      "backend": "workspace_exec",
+      "command": "sleep 999999",
+      "command_hash": "eb326535b56f61b6f4060e7728a26a52110804ed54808688001d63ffba197177",
+      "decision": "deny",
+      "risk_level": "high",
+      "findings": [
+        {
+          "rule_id": "command.not_allowed",
+          "risk_level": "high",
+          "decision": "deny",
+          "evidence": "command \"sleep\" is not in allowed_commands",
+          "recommendation": "Use a command from the allowed_commands list or extend the policy explicitly"
+        },
+        {
+          "rule_id": "resource.long_sleep",
+          "risk_level": "high",
+          "decision": "deny",
+          "evidence": "sleep duration exceeds max_sleep_seconds",
+          "recommendation": "Reduce the sleep duration or raise max_sleep_seconds in the policy"
+        }
+      ],
+      "intercepted": true,
+      "redacted": false,
+      "duration_ms": 0.014
+    },
+    {
+      "schema_version": "1",
+      "scan_id": "7bfce388-952d-4b89-a0c9-9b826e784397",
+      "timestamp": "2026-07-20T14:36:07.645456635Z",
+      "tool_name": "workspace_exec",
+      "backend": "workspace_exec",
+      "command": "yes",
+      "command_hash": "8a798890fe93817163b10b5f7bd2ca4d25d84c52739a645a889c173eee7d9d3d",
+      "decision": "deny",
+      "risk_level": "high",
+      "findings": [
+        {
+          "rule_id": "command.not_allowed",
+          "risk_level": "high",
+          "decision": "deny",
+          "evidence": "command \"yes\" is not in allowed_commands",
+          "recommendation": "Use a command from the allowed_commands list or extend the policy explicitly"
+        },
+        {
+          "rule_id": "resource.output_bomb",
+          "risk_level": "high",
+          "decision": "deny",
+          "evidence": "unbounded output generator (yes/dd/seq/follow)",
+          "recommendation": "Refuse unbounded output; cap with head, count, or a timeout"
+        }
+      ],
+      "intercepted": true,
+      "redacted": false,
+      "duration_ms": 0.011
+    },
+    {
+      "schema_version": "1",
+      "scan_id": "baa42a99-9253-4b82-b053-f98695b3f85b",
+      "timestamp": "2026-07-20T14:36:07.645468028Z",
+      "tool_name": "exec_command",
+      "backend": "hostexec",
+      "command": "bash",
+      "command_hash": "37d2b12d5d9abc2a364ef9448767ee03938e383c0284193477dc7618f4b7c6c2",
+      "decision": "deny",
+      "risk_level": "high",
+      "findings": [
+        {
+          "rule_id": "command.not_allowed",
+          "risk_level": "high",
+          "decision": "deny",
+          "evidence": "command \"bash\" is denied by built-in policy because it is a shell wrapper or re-",
+          "recommendation": "Use a command from the allowed_commands list or extend the policy explicitly"
+        },
+        {
+          "rule_id": "host.pty_long_session",
+          "risk_level": "high",
+          "decision": "deny",
+          "evidence": "PTY session requested without bounded timeout",
+          "recommendation": "Require an explicit bounded timeout for PTY sessions"
+        },
+        {
+          "rule_id": "shell.wrapper",
+          "risk_level": "high",
+          "decision": "deny",
+          "evidence": "shell wrapper or re-executing builtin detected",
+          "recommendation": "Refuse shell wrappers; allow the underlying command directly or wrap it in an auditable script"
+        }
+      ],
+      "intercepted": true,
+      "redacted": false,
+      "duration_ms": 0.067
+    },
+    {
+      "schema_version": "1",
+      "scan_id": "51c1b75b-e2ef-47cd-90c2-9153d2b3075e",
+      "timestamp": "2026-07-20T14:36:07.645535198Z",
+      "tool_name": "exec_command",
+      "backend": "hostexec",
+      "command": "sudo id",
+      "command_hash": "737946bc6fba8511ccbd9ecb179542647d2f08791dd999bdfac130c8a9ce9efc",
+      "decision": "deny",
+      "risk_level": "critical",
+      "findings": [
+        {
+          "rule_id": "host.privilege",
+          "risk_level": "critical",
+          "decision": "deny",
+          "evidence": "privilege escalation command (sudo/su/doas/runuser)",
+          "recommendation": "Refuse privilege escalation; require the operator to approve an isolated workflow"
+        },
+        {
+          "rule_id": "command.not_allowed",
+          "risk_level": "high",
+          "decision": "deny",
+          "evidence": "command \"sudo\" is denied by denied_commands",
+          "recommendation": "Use a command from the allowed_commands list or extend the policy explicitly"
+        },
+        {
+          "rule_id": "shell.wrapper",
+          "risk_level": "high",
+          "decision": "deny",
+          "evidence": "shell wrapper or re-executing builtin detected",
+          "recommendation": "Refuse shell wrappers; allow the underlying command directly or wrap it in an auditable script"
+        }
+      ],
+      "intercepted": true,
+      "redacted": false,
+      "duration_ms": 0.018
+    },
+    {
+      "schema_version": "1",
+      "scan_id": "bef41fc9-32b4-4d6f-a525-72692acfdf9c",
+      "timestamp": "2026-07-20T14:36:07.645553509Z",
+      "tool_name": "workspace_exec",
+      "backend": "workspace_exec",
+      "command": "echo API_KEY=[REDACTED:stripe_key:len=28]",
+      "command_hash": "6736fbe9459a5118d93faa9d552ac00a611c81d9c11be1be3e23485266d4b3d2",
+      "decision": "deny",
+      "risk_level": "critical",
+      "findings": [
+        {
+          "rule_id": "secret.input_or_code",
+          "risk_level": "critical",
+          "decision": "deny",
+          "evidence": "patterns=stripe_key:len=28",
+          "recommendation": "Refuse the request; require the caller to inject secrets through a secret manager, not the tool payload"
+        }
+      ],
+      "intercepted": true,
+      "redacted": true,
+      "duration_ms": 0.036
+    },
+    {
+      "schema_version": "1",
+      "scan_id": "5b5a756e-8b57-4a91-b819-f8c26750eb8c",
+      "timestamp": "2026-07-20T14:36:07.645590482Z",
+      "tool_name": "workspace_exec",
+      "backend": "workspace_exec",
+      "command": "pip install -r requirements.txt",
+      "command_hash": "f634394e6be6cb445c6bc8191ae89e2f0de21f2214dc16b9cd2e080ad660b1dc",
+      "decision": "ask",
+      "risk_level": "high",
+      "findings": [
+        {
+          "rule_id": "dependency.package_install",
+          "risk_level": "high",
+          "decision": "ask",
+          "evidence": "package manager install command detected",
+          "recommendation": "Approve the dependency change explicitly; pin versions and verify provenance"
+        }
+      ],
+      "intercepted": true,
+      "redacted": false,
+      "duration_ms": 0.038
+    }
+  ],
+  "summary": {
+    "total": 19,
+    "allowed": 5,
+    "denied": 12,
+    "asked": 2
+  }
+}

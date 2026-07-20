@@ -1,0 +1,31 @@
+version: 1
+allowed_commands: [go, git, ls, cat, echo, pwd, grep, find, curl]
+denied_commands: [rm, sudo, su, doas, chmod, chown, dd, mkfs, killall]
+denied_paths: ["~/.ssh", "~/.aws", "~/.kube", ".env", "/etc", "/root", "~/.docker/config.json", "~/.netrc"]
+denied_path_globs: ["~/.ssh/*", "**/.env*", "**/*.pem", "**/*.key"]
+network:
+  allowed_domains: ["github.com", "api.github.com", "proxy.golang.org", "sum.golang.org", "pypi.org", "files.pythonhosted.org", "registry.npmjs.org"]
+  deny_all: false
+  commands: [curl, wget, nc, ssh, scp, sftp]
+max_timeout: 30s
+max_output_size: 1048576
+max_sleep_seconds: 300
+env_whitelist: [PATH, LANG, LC_ALL, GOPATH]
+rules:
+  dangerous_commands: {enabled: true, action: deny}
+  network: {enabled: true, action: deny}
+  shell_bypass: {enabled: true, action: deny}
+  hostexec: {enabled: true, action: deny}
+  dependencies: {enabled: true, action: ask}
+  resource_abuse: {enabled: true, action: deny}
+  secret_leak: {enabled: true, action: deny}
+decision_threshold:
+  critical: deny
+  high: deny
+  medium: ask
+  low: allow
+audit:
+  path: tool_safety_audit.jsonl
+  required: true
+  redact_secrets: true
+require_isolation: false
