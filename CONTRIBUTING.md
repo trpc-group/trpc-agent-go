@@ -95,6 +95,16 @@ and separate package names with a comma and a space:
 {package/a, package/b}: lowercase summary
 ```
 
+When a coherent cross-cutting change spans too many packages for a useful
+package list and no single package is primary, `lsc` may be used as the
+repository-level scope:
+
+```text
+lsc: lowercase summary
+```
+
+Do not use `lsc` merely to avoid identifying a clear primary package.
+
 Use one primary package whenever possible. Do not add documentation, tests, or
 examples to the package list when they only support the primary implementation
 change.

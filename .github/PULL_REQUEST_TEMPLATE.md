@@ -10,6 +10,10 @@ Preferred form:
 
 For multiple equally affected packages:
   {package/a, package/b}: lowercase summary
+
+For a coherent cross-cutting change spanning many packages with no primary
+package:
+  lsc: lowercase summary
 -->
 
 ## What changed
