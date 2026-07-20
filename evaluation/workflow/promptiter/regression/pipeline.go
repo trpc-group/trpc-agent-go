@@ -175,11 +175,11 @@ func Run(ctx context.Context, request RunRequest, evaluate EvaluateFunc, generat
 		if err != nil {
 			return nil, fmt.Errorf("serving cost round %d: %w", roundNumber, err)
 		}
-		gateCost, err := addCosts(servingCost, candidate.Cost)
+		projectedTotalCost, err := addCosts(run.TotalCost, servingCost, candidate.Cost)
 		if err != nil {
-			return nil, fmt.Errorf("gate cost round %d: %w", roundNumber, err)
+			return nil, fmt.Errorf("projected total cost round %d: %w", roundNumber, err)
 		}
-		decision, err := Gate(request.GatePolicy, validationDelta, gateCost)
+		decision, err := Gate(request.GatePolicy, validationDelta, projectedTotalCost)
 		if err != nil {
 			return nil, fmt.Errorf("gate round %d: %w", roundNumber, err)
 		}
@@ -205,10 +205,7 @@ func Run(ctx context.Context, request RunRequest, evaluate EvaluateFunc, generat
 			TrainAttribution: trainAttribution, Attribution: validationAttribution,
 			Gate: decision, ServingCost: servingCost, OptimizationCost: candidate.Cost,
 		})
-		run.TotalCost, err = addCosts(run.TotalCost, servingCost, candidate.Cost)
-		if err != nil {
-			return nil, fmt.Errorf("total cost round %d: %w", roundNumber, err)
-		}
+		run.TotalCost = projectedTotalCost
 		if decision.Accepted {
 			run.AcceptedPrompt = candidate.Prompt
 			run.AcceptedTrain = candidateTrain

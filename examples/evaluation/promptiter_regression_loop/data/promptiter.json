@@ -7,7 +7,7 @@
     "hardMetrics": ["quality"],
     "criticalCases": ["validation-case-3"],
     "maxMetricDrop": 0.5,
-    "maxModelCalls": 40,
-    "maxTokens": 200
+    "maxModelCalls": 120,
+    "maxTokens": 600
   }
 }

@@ -32,10 +32,11 @@ const (
 
 // Failure explains why one case failed.
 type Failure struct {
-	CaseID      string          `json:"case_id"`
-	Category    FailureCategory `json:"category"`
-	MetricNames []string        `json:"metric_names"`
-	Reason      string          `json:"reason"`
+	CaseID        string            `json:"case_id"`
+	Category      FailureCategory   `json:"category"`
+	MetricNames   []string          `json:"metric_names"`
+	MetricReasons map[string]string `json:"metric_reasons,omitempty"`
+	Reason        string            `json:"reason"`
 }
 
 // FailureHint is the bounded feedback supplied to PromptIter.
@@ -78,9 +79,13 @@ func Hints(attribution *Attribution) ([]FailureHint, error) {
 	hints := make([]FailureHint, 0, len(attribution.Failures))
 	for _, failure := range attribution.Failures {
 		for _, metricName := range failure.MetricNames {
+			reason := failure.MetricReasons[metricName]
+			if strings.TrimSpace(reason) == "" {
+				reason = failure.Reason
+			}
 			hints = append(hints, FailureHint{
 				CaseID: failure.CaseID, MetricName: metricName, Category: failure.Category,
-				Reason: truncate(failure.Reason, 512),
+				Reason: truncate(reason, 512),
 			})
 		}
 	}
@@ -128,7 +133,24 @@ func attributeCase(evalCase CaseSummary) Failure {
 		failure.Reason = metricReasonText(failedMetrics, "evaluation failed without a more specific cause")
 	}
 	failure.Reason = truncate(failure.Reason, 1024)
+	failure.MetricReasons = make(map[string]string, len(failedMetrics))
+	for _, metric := range failedMetrics {
+		reason := failure.Reason
+		if !sharedFailureReason(failure.Category) {
+			reason = firstNonEmpty(metric.Reason, failure.Reason)
+		}
+		failure.MetricReasons[metric.Name] = truncate(reason, 512)
+	}
 	return failure
+}
+
+func sharedFailureReason(category FailureCategory) bool {
+	switch category {
+	case FailureExecutionError, FailureRouteError, FailureToolCallError, FailureToolArgumentError:
+		return true
+	default:
+		return false
+	}
 }
 
 func routeHasError(invocations []InvocationSummary) bool {

@@ -2,9 +2,9 @@
   "schema_version": "v1",
   "status": "accepted",
   "audit": {
-    "run_id": "promptiter-regression-2003-20260718T141000.129395098Z",
-    "started_at": "2026-07-18T14:10:00.129395098Z",
-    "finished_at": "2026-07-18T14:10:00.133637289Z",
+    "run_id": "promptiter-regression-2003-20260720T141210.362223302Z",
+    "started_at": "2026-07-20T14:12:10.362223302Z",
+    "finished_at": "2026-07-20T14:12:10.366531466Z",
     "duration_ms": 4,
     "seed": 2003,
     "inputs": [
@@ -26,7 +26,7 @@
       {
         "name": "promptiter",
         "path": "promptiter.json",
-        "sha256": "604961453a14cf5e3a17c268eaca277840c627f21ba5f5f955bccfe0da1bc255"
+        "sha256": "3c25e8457e88f54953d32cde5ffcf8d6e22d471668e992fbe26a5cd6fe8b4f61"
       },
       {
         "name": "train_evalset",
@@ -42,7 +42,7 @@
     "runtime": {
       "mode": "fake",
       "model": "deterministic-ping-v1",
-      "config_sha256": "1deca002f96c1ba70eaac288a9822f1a21d82542664c45f4e24d4614db5b09fd",
+      "config_sha256": "09a2a08427679ddcd35788bcdd7bae3a9275c2cff0590a6f86ccdc97fef6a5ef",
       "config": {
         "max_rounds": "3",
         "optimizer": "deterministic-promptiter"
@@ -361,6 +361,9 @@
         "metric_names": [
           "quality"
         ],
+        "metric_reasons": {
+          "quality": "final response mismatch: text mismatch: source not-pong and target pong do not match"
+        },
         "reason": "quality: final response mismatch: text mismatch: source not-pong and target pong do not match"
       },
       {
@@ -369,6 +372,9 @@
         "metric_names": [
           "quality"
         ],
+        "metric_reasons": {
+          "quality": "final response mismatch: text mismatch: source not-pong and target pong do not match"
+        },
         "reason": "quality: final response mismatch: text mismatch: source not-pong and target pong do not match"
       }
     ],
@@ -384,6 +390,9 @@
         "metric_names": [
           "quality"
         ],
+        "metric_reasons": {
+          "quality": "final response mismatch: text mismatch: source not-pong and target pong do not match"
+        },
         "reason": "quality: final response mismatch: text mismatch: source not-pong and target pong do not match"
       },
       {
@@ -392,6 +401,9 @@
         "metric_names": [
           "quality"
         ],
+        "metric_reasons": {
+          "quality": "final response mismatch: text mismatch: source not-pong and target pong do not match"
+        },
         "reason": "quality: final response mismatch: text mismatch: source not-pong and target pong do not match"
       }
     ],
@@ -409,13 +421,13 @@
           "case_id": "train-case-2",
           "metric_name": "quality",
           "category": "final_response_mismatch",
-          "reason": "quality: final response mismatch: text mismatch: source not-pong and target pong do not match"
+          "reason": "final response mismatch: text mismatch: source not-pong and target pong do not match"
         },
         {
           "case_id": "train-case-3",
           "metric_name": "quality",
           "category": "final_response_mismatch",
-          "reason": "quality: final response mismatch: text mismatch: source not-pong and target pong do not match"
+          "reason": "final response mismatch: text mismatch: source not-pong and target pong do not match"
         }
       ],
       "train": {
@@ -572,6 +584,35 @@
         "kind": "unchanged",
         "score_delta": 0
       },
+      "train_attribution": {
+        "failures": [
+          {
+            "case_id": "train-case-2",
+            "category": "final_response_mismatch",
+            "metric_names": [
+              "quality"
+            ],
+            "metric_reasons": {
+              "quality": "final response mismatch: text mismatch: source not-pong and target pong do not match"
+            },
+            "reason": "quality: final response mismatch: text mismatch: source not-pong and target pong do not match"
+          },
+          {
+            "case_id": "train-case-3",
+            "category": "final_response_mismatch",
+            "metric_names": [
+              "quality"
+            ],
+            "metric_reasons": {
+              "quality": "final response mismatch: text mismatch: source not-pong and target pong do not match"
+            },
+            "reason": "quality: final response mismatch: text mismatch: source not-pong and target pong do not match"
+          }
+        ],
+        "counts": {
+          "final_response_mismatch": 2
+        }
+      },
       "validation_attribution": {
         "failures": [
           {
@@ -580,6 +621,9 @@
             "metric_names": [
               "quality"
             ],
+            "metric_reasons": {
+              "quality": "final response mismatch: text mismatch: source not-pong and target pong do not match"
+            },
             "reason": "quality: final response mismatch: text mismatch: source not-pong and target pong do not match"
           },
           {
@@ -588,6 +632,9 @@
             "metric_names": [
               "quality"
             ],
+            "metric_reasons": {
+              "quality": "final response mismatch: text mismatch: source not-pong and target pong do not match"
+            },
             "reason": "quality: final response mismatch: text mismatch: source not-pong and target pong do not match"
           }
         ],
@@ -621,13 +668,13 @@
           "case_id": "train-case-2",
           "metric_name": "quality",
           "category": "final_response_mismatch",
-          "reason": "quality: final response mismatch: text mismatch: source not-pong and target pong do not match"
+          "reason": "final response mismatch: text mismatch: source not-pong and target pong do not match"
         },
         {
           "case_id": "train-case-3",
           "metric_name": "quality",
           "category": "final_response_mismatch",
-          "reason": "quality: final response mismatch: text mismatch: source not-pong and target pong do not match"
+          "reason": "final response mismatch: text mismatch: source not-pong and target pong do not match"
         }
       ],
       "train": {
@@ -841,6 +888,10 @@
           }
         ]
       },
+      "train_attribution": {
+        "failures": null,
+        "counts": {}
+      },
       "validation_attribution": {
         "failures": [
           {
@@ -849,6 +900,9 @@
             "metric_names": [
               "quality"
             ],
+            "metric_reasons": {
+              "quality": "final response mismatch: text mismatch: source not-pong and target pong do not match"
+            },
             "reason": "quality: final response mismatch: text mismatch: source not-pong and target pong do not match"
           },
           {
@@ -857,6 +911,9 @@
             "metric_names": [
               "quality"
             ],
+            "metric_reasons": {
+              "quality": "final response mismatch: text mismatch: source not-pong and target pong do not match"
+            },
             "reason": "quality: final response mismatch: text mismatch: source not-pong and target pong do not match"
           },
           {
@@ -865,6 +922,9 @@
             "metric_names": [
               "quality"
             ],
+            "metric_reasons": {
+              "quality": "final response mismatch: text mismatch: source not-pong and target pong do not match"
+            },
             "reason": "quality: final response mismatch: text mismatch: source not-pong and target pong do not match"
           }
         ],
@@ -900,13 +960,13 @@
           "case_id": "train-case-2",
           "metric_name": "quality",
           "category": "final_response_mismatch",
-          "reason": "quality: final response mismatch: text mismatch: source not-pong and target pong do not match"
+          "reason": "final response mismatch: text mismatch: source not-pong and target pong do not match"
         },
         {
           "case_id": "train-case-3",
           "metric_name": "quality",
           "category": "final_response_mismatch",
-          "reason": "quality: final response mismatch: text mismatch: source not-pong and target pong do not match"
+          "reason": "final response mismatch: text mismatch: source not-pong and target pong do not match"
         }
       ],
       "train": {
@@ -1134,6 +1194,10 @@
             ]
           }
         ]
+      },
+      "train_attribution": {
+        "failures": null,
+        "counts": {}
       },
       "validation_attribution": {
         "failures": null,

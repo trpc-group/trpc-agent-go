@@ -78,6 +78,42 @@ func TestRunPromotesAcceptedPromptAndKeepsRejectedRound(t *testing.T) {
 	}
 }
 
+func TestRunAppliesBudgetToCumulativeCostAcrossRounds(t *testing.T) {
+	evaluations := map[string]*evaluation.EvaluationResult{
+		"base/train":             pipelineResult("train", 0, false),
+		"base/validation":        pipelineResult("validation", 0, false),
+		"candidate-1/train":      pipelineResult("train", 0.5, true),
+		"candidate-1/validation": pipelineResult("validation", 0, false),
+		"candidate-2/train":      pipelineResult("train", 1, true),
+		"candidate-2/validation": pipelineResult("validation", 1, true),
+	}
+	evaluate := func(_ context.Context, prompt, evalSetID string, _ int64) (*EvaluationOutput, error) {
+		return &EvaluationOutput{
+			Result: evaluations[prompt+"/"+evalSetID], Cost: Cost{ModelCalls: 1, Tokens: 10},
+		}, nil
+	}
+	run, err := Run(context.Background(), RunRequest{
+		InitialPrompt: "base", TrainEvalSetID: "train", ValidationEvalSetID: "validation",
+		MaxRounds: 2, GatePolicy: GatePolicy{MinValidationGain: 0.5, MaxModelCalls: 5, MaxTokens: 50},
+	}, evaluate, func(_ context.Context, request CandidateRequest) (*Candidate, error) {
+		return &Candidate{
+			Prompt: fmt.Sprintf("candidate-%d", request.Round), Cost: Cost{ModelCalls: 1, Tokens: 5},
+		}, nil
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(run.Rounds) != 2 || run.Rounds[0].Gate.Accepted || run.Rounds[1].Gate.Accepted ||
+		run.TotalCost.ModelCalls != 8 || run.TotalCost.Tokens != 70 || run.WriteBackRecommended {
+		t.Fatalf("run = %+v", run)
+	}
+	reasons := strings.Join(run.Rounds[1].Gate.Reasons, " ")
+	if !strings.Contains(reasons, "model calls 8 exceed budget 5") ||
+		!strings.Contains(reasons, "tokens 70 exceed budget 50") {
+		t.Fatalf("round two gate reasons = %v", run.Rounds[1].Gate.Reasons)
+	}
+}
+
 func TestRunRejectsWrongEvaluationSetBeforeGate(t *testing.T) {
 	evaluate := func(_ context.Context, _, evalSetID string, _ int64) (*EvaluationOutput, error) {
 		returnedID := evalSetID

@@ -122,6 +122,27 @@ func TestAttributeSortsCasesAndBuildsOneHintPerFailedMetric(t *testing.T) {
 	}
 }
 
+func TestHintsPreserveMetricSpecificReasons(t *testing.T) {
+	summary := &EvalSummary{Cases: []CaseSummary{failedCase("case", MetricSummary{
+		Name: "format", Evaluated: true, Reason: "invalid JSON",
+	}, nil)}}
+	summary.Cases[0].Metrics = append(summary.Cases[0].Metrics, MetricSummary{
+		Name: "quality", Evaluated: true, Reason: "missing citation",
+	})
+	attribution, err := Attribute(summary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hints, err := Hints(attribution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hints) != 2 || hints[0].MetricName != "format" || hints[0].Reason != "invalid JSON" ||
+		hints[1].MetricName != "quality" || hints[1].Reason != "missing citation" {
+		t.Fatalf("hints = %+v", hints)
+	}
+}
+
 func TestToolComparisonKeepsArgumentsAndResultsAssociated(t *testing.T) {
 	tool := func(argument, result string) ToolSummary {
 		return ToolSummary{Name: "search", Arguments: json.RawMessage(argument), Result: json.RawMessage(result)}

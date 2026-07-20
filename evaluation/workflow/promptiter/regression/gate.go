@@ -22,8 +22,11 @@ type GatePolicy struct {
 	HardMetrics       []string `json:"hard_metrics,omitempty"`
 	CriticalCases     []string `json:"critical_cases,omitempty"`
 	MaxMetricDrop     float64  `json:"max_metric_drop"`
-	MaxModelCalls     int      `json:"max_model_calls,omitempty"`
-	MaxTokens         int64    `json:"max_tokens,omitempty"`
+	// MaxModelCalls limits candidate acceptance by cumulative run calls. It
+	// includes baseline and all attempted rounds; zero disables the check.
+	MaxModelCalls int `json:"max_model_calls,omitempty"`
+	// MaxTokens applies the same cumulative acceptance limit to tokens.
+	MaxTokens int64 `json:"max_tokens,omitempty"`
 }
 
 // GateDecision records whether a candidate may replace the current prompt.
@@ -32,15 +35,15 @@ type GateDecision struct {
 	Reasons  []string `json:"reasons"`
 }
 
-// Gate evaluates validation quality and candidate serving cost.
-func Gate(policy GatePolicy, validation *DatasetDelta, cost Cost) (*GateDecision, error) {
+// Gate evaluates validation quality and projected cumulative run cost.
+func Gate(policy GatePolicy, validation *DatasetDelta, runCost Cost) (*GateDecision, error) {
 	if validation == nil {
 		return nil, errors.New("validation delta is nil")
 	}
 	if err := validatePolicy(policy); err != nil {
 		return nil, err
 	}
-	if cost.ModelCalls < 0 || cost.Tokens < 0 || cost.LatencyMS < 0 {
+	if runCost.ModelCalls < 0 || runCost.Tokens < 0 || runCost.LatencyMS < 0 {
 		return nil, errors.New("candidate cost must not be negative")
 	}
 	decision := &GateDecision{}
@@ -87,11 +90,11 @@ func Gate(policy GatePolicy, validation *DatasetDelta, cost Cost) (*GateDecision
 	if missing := missingNames(policy.CriticalCases, foundCases); len(missing) > 0 {
 		return nil, fmt.Errorf("critical cases not present in validation delta: %v", missing)
 	}
-	if policy.MaxModelCalls > 0 && cost.ModelCalls > policy.MaxModelCalls {
-		decision.Reasons = append(decision.Reasons, fmt.Sprintf("model calls %d exceed budget %d", cost.ModelCalls, policy.MaxModelCalls))
+	if policy.MaxModelCalls > 0 && runCost.ModelCalls > policy.MaxModelCalls {
+		decision.Reasons = append(decision.Reasons, fmt.Sprintf("model calls %d exceed budget %d", runCost.ModelCalls, policy.MaxModelCalls))
 	}
-	if policy.MaxTokens > 0 && cost.Tokens > policy.MaxTokens {
-		decision.Reasons = append(decision.Reasons, fmt.Sprintf("tokens %d exceed budget %d", cost.Tokens, policy.MaxTokens))
+	if policy.MaxTokens > 0 && runCost.Tokens > policy.MaxTokens {
+		decision.Reasons = append(decision.Reasons, fmt.Sprintf("tokens %d exceed budget %d", runCost.Tokens, policy.MaxTokens))
 	}
 	decision.Accepted = len(decision.Reasons) == 0
 	return decision, nil

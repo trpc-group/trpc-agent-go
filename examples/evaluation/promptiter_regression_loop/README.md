@@ -30,6 +30,8 @@ The fixtures contain three training cases and three held-out validation cases. E
 
 Rejected candidates are never promoted. The next round still starts from the last accepted prompt. The loop stops after the first candidate that passes the external regression gate.
 
+`gate.maxModelCalls` and `gate.maxTokens` limit candidate acceptance by cumulative cost across the baseline and all attempted rounds. They are not per-round limits or pre-execution hard stops; zero disables the check.
+
 ## Inputs and outputs
 
 - `data/train.evalset.json`: three training cases.
