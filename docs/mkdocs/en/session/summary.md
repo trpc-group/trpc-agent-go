@@ -150,7 +150,9 @@ with:
 
 - An optional system message rendered from `WithSystemPrompt(...)`.
 - One user message rendered from `WithPrompt(...)`, with
-  `{conversation_text}` replaced by the extracted conversation text.
+  `{conversation_text}` replaced by the extracted conversation text. A custom
+  prompt may also use `{previous_summary}` to position the previous rolling
+  summary separately from newly uncovered conversation events.
 
 This request is independent from the main agent request, so it is simple and
 works for synchronous, asynchronous, and manual summary calls.
@@ -192,8 +194,9 @@ mutating the parent request: unused tool schemas are removed first, older
 complete source rounds can be dropped while the latest round is protected, and
 large tool argument/result payloads are replaced as needed. If the fork still
 cannot fit, the summarizer rebuilds a bounded standalone request. This fallback
-truncates only `{conversation_text}` with head-and-tail preservation; the fixed
-system prompt and user-prompt template remain intact.
+truncates the `{conversation_text}` and `{previous_summary}` payloads with
+head-and-tail preservation; the fixed system prompt and user-prompt template
+remain intact.
 
 Budget fitting and the fork-to-standalone decision happen before the
 `BeforeModel` callback. The callback therefore receives the actual request that
@@ -215,16 +218,20 @@ all-branch summary.
 Prompt rules:
 
 - `WithPrompt(...)` configures the standalone user prompt. It must include
-  `{conversation_text}`. If `WithMaxSummaryWords(...)` is configured,
+  `{conversation_text}` and may include `{previous_summary}`. When the optional
+  placeholder is present, `{previous_summary}` receives the previous rolling
+  summary and `{conversation_text}` contains only newly uncovered events.
+  Without it, the previous summary remains merged into `{conversation_text}`
+  for backward compatibility. If `WithMaxSummaryWords(...)` is configured,
   `{max_summary_words}` must appear in either `WithPrompt(...)` or
   `WithSystemPrompt(...)`.
 - `WithSystemPrompt(...)` configures the optional standalone system message. It
-  must not include `{conversation_text}`. It may include
+  must not include `{conversation_text}` or `{previous_summary}`. It may include
   `{max_summary_words}`.
 - `WithCacheSafeForkPrompt(...)` configures only the user message appended in
-  fork mode. It must not include `{conversation_text}` because the cloned parent
-  request already contains the conversation. It may include
-  `{max_summary_words}`.
+  fork mode. It must not include `{conversation_text}` or
+  `{previous_summary}` because the cloned parent request already contains the
+  conversation and any injected summary. It may include `{max_summary_words}`.
 
 Keep the standalone prompt valid even when cache-safe forking is enabled,
 because fallback paths still use it. When writing a custom fork prompt, ask the
@@ -234,11 +241,13 @@ important facts. It should not call tools, answer the latest user request, or
 treat system and tool-use instructions as facts to summarize.
 
 `WithPreSummaryHook(...)` still runs before the summary model call. In
-standalone mode its modified text is rendered into `{conversation_text}`. In
-fork mode with a parent request available, that text is not embedded into the
-request because the conversation is already present in the cloned parent
-request; the hook remains useful for context updates, side effects, and
-fallback standalone calls.
+standalone mode its modified text is rendered into `{conversation_text}`. When
+the prompt uses `{previous_summary}`, the hook receives newly uncovered events
+and text in `Events` and `Text`, plus the separately editable previous summary
+in `PreviousSummary`. In fork mode with a parent request available, those
+payload edits are not embedded into the request because the conversation is
+already present in the cloned parent request; the hook remains useful for
+context updates, side effects, and fallback standalone calls.
 
 In fork mode, `WithPreSummaryHook(...)` text or event edits do not sanitize,
 redact, or filter the cloned parent request. If the hook is used for redaction
@@ -604,10 +613,10 @@ summary.WithChecksAny(
 | Option | Description |
 | --- | --- |
 | `WithMaxSummaryWords(maxWords int)` | Limit summary word count; included in prompt to guide model |
-| `WithPrompt(prompt string)` | Custom summary prompt; must contain `{conversation_text}` placeholder |
-| `WithSystemPrompt(prompt string)` | Add a separate system message for summarization instructions; must not contain `{conversation_text}` |
+| `WithPrompt(prompt string)` | Custom summary prompt; must contain `{conversation_text}` and may contain `{previous_summary}` |
+| `WithSystemPrompt(prompt string)` | Add a separate system message for summarization instructions; must not contain `{conversation_text}` or `{previous_summary}` |
 | `WithCacheSafeForking(enable bool)` | Opt in to cache-safe summary request forking when a parent request is available. Disabled by default |
-| `WithCacheSafeForkPrompt(prompt string)` | Customize the compacting user message appended in cache-safe fork mode. May include `{max_summary_words}`, but not `{conversation_text}` |
+| `WithCacheSafeForkPrompt(prompt string)` | Customize the compacting user message appended in cache-safe fork mode. May include `{max_summary_words}`, but not `{conversation_text}` or `{previous_summary}` |
 | `WithSkipRecent(skipFunc SkipRecentFunc)` | Custom function to skip recent events |
 
 ### Hook Options
@@ -735,10 +744,34 @@ summarizer := summary.NewSummarizer(
 )
 ```
 
-**Required placeholders**:
+**Prompt placeholders**:
 
 - `{conversation_text}`: Must be included; replaced with conversation content
+- `{previous_summary}`: Optional; separates the previous rolling summary from
+  conversation events discovered after its boundary. It is empty on the first
+  summary pass. Without this placeholder, the previous summary stays merged
+  into `{conversation_text}` for backward compatibility
 - `{max_summary_words}`: Must be included in either `WithPrompt(...)` or `WithSystemPrompt(...)` when `maxSummaryWords > 0`
+
+For incremental summaries where the previous summary needs a distinct position:
+
+```go
+userPrompt := `Update the previous summary with the new conversation.
+
+<previous_summary>
+{previous_summary}
+</previous_summary>
+
+<new_conversation>
+{conversation_text}
+</new_conversation>
+
+Updated summary:`
+```
+
+`{previous_summary}` applies to standalone requests and cache-safe fallback
+requests. A successful cache-safe fork uses the cloned parent request, which
+already determines where any injected summary appears.
 
 If you want to keep summarization instructions in a dedicated system message,
 combine `WithSystemPrompt` with a lighter user prompt that only carries the
@@ -768,7 +801,8 @@ Notes:
 
 - `WithPrompt` still renders into the **user message**
 - `WithSystemPrompt` renders into a dedicated **system message**
-- `WithSystemPrompt` must not include `{conversation_text}`; keep conversation content in the user prompt
+- `WithSystemPrompt` must not include `{conversation_text}` or
+  `{previous_summary}`; keep conversation content in the user prompt
 
 ## Token Counter Configuration
 

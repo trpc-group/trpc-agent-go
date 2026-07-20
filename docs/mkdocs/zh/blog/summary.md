@@ -508,7 +508,7 @@ summary.WithCacheSafeForking(true)
 
 **第二，它依赖父请求前缀稳定。** system prompt、tools、模型、上下文顺序如果频繁变化，prompt cache 仍然会被打散。
 
-**第三，追加的 compaction prompt 和普通 `WithPrompt(...)` 不一样。** cache-safe fork 模式下，父请求本身已经包含对话前缀，所以自定义 `WithCacheSafeForkPrompt(...)` 时不应该再塞 `{conversation_text}`，只需要告诉模型“把上面的对话压成后续可继续工作的 summary”。
+**第三，追加的 compaction prompt 和普通 `WithPrompt(...)` 不一样。** cache-safe fork 模式下，父请求本身已经包含对话前缀和已注入的摘要，所以自定义 `WithCacheSafeForkPrompt(...)` 时不应该再塞 `{conversation_text}` 或 `{previous_summary}`，只需要告诉模型“把上面的对话压成后续可继续工作的 summary”。
 
 **第四，summary 已经生成以后**，下一轮普通对话请求如果也希望更利于 prompt cache，仍然要回到前面说的注入策略：频繁变化的内容尽量放在 message 侧，避免总是改 system 前缀。也因此，超长会话里 user injection mode 和 cache-safe forking 是可以互相配合的。
 
