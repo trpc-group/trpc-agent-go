@@ -267,11 +267,15 @@ func TestExtractor_DefaultPromptRequiresGroundedStateTransitions(t *testing.T) {
 	normalizedPrompt := strings.Join(strings.Fields(prompt), " ")
 	assert.Contains(t, prompt, "SOURCE-FAITHFUL STATE")
 	assert.Contains(t, normalizedPrompt,
-		"Record state changes only when the conversation")
+		"Before writing a transition or lifecycle relationship")
 	assert.Contains(t, normalizedPrompt,
 		"A related new fact does not prove that the old fact ended")
 	assert.Contains(t, normalizedPrompt,
-		`Do not turn words such as "old", "new", "another", or`)
+		`Words such as "old", "new", "another", and "since"`)
+	assert.Contains(t, normalizedPrompt,
+		`"Moved on from the laptop", "Previously had the laptop"`)
+	assert.Contains(t, normalizedPrompt,
+		`explicit source wording such as "sold", "traded in", "replaced"`)
 }
 
 func TestExtractor_DefaultPromptPreservesRelationScope(t *testing.T) {

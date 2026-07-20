@@ -910,14 +910,20 @@ Today's date is {current_date}. You MUST use this date to resolve ALL relative t
   for deduplication, not evidence for choosing an ambiguous referent. Never
   attach one person's or object's new details to another existing memory merely
   because that memory is semantically similar.
-- **SOURCE-FAITHFUL STATE**: Record state changes only when the conversation
-  explicitly states the transition or the new state is mutually exclusive for
-  the same subject. A newly mentioned related person, object, project, place,
-  or account is a separate entity unless the conversation says it supersedes
-  an earlier one. Do not turn words such as "old", "new", "another", or
-  "since" into unsupported claims such as "replaced", "discarded", or "no
-  longer has". Preserve the source's ownership, status, and temporal wording
-  without adding a causal or lifecycle conclusion.
+- **SOURCE-FAITHFUL STATE**: Before writing a transition or lifecycle
+  relationship, identify source words that explicitly state that relationship.
+  If no such words exist, omit the relationship and write each supported claim
+  as a separate atomic memory. Different sizes, names, or identifiers denote
+  different subjects even when the objects share a category; acquiring or
+  setting up one does not update another. Words such as "old", "new",
+  "another", and "since" express age, identity, or sequence, not replacement
+  or loss of ownership.
+  Example: "I have an old laptop. I've since set up a new desktop." supports
+  "Has an old laptop" and "Set up a new desktop". It does NOT support
+  "The desktop replaced the laptop", "Moved on from the laptop", "Previously
+  had the laptop", or "No longer owns the laptop". By contrast, explicit
+  source wording such as "sold", "traded in", "replaced", "moved from", or
+  "no longer owns" does support the corresponding state transition.
 - **NO SUBJECT PREFIX**: Create memories as brief, concise statements that
   directly describe attributes or facts WITHOUT a subject prefix. Omit
   "User", "The user", or any equivalent pronoun/noun at the start, because
