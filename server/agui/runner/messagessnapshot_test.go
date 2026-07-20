@@ -31,6 +31,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/track"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/translator"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 )
 
 func TestMessagesSnapshotRequiresAppName(t *testing.T) {
@@ -647,6 +648,66 @@ func TestMessagesSnapshotFollowAfterCancelStopsAtTerminalEvent(t *testing.T) {
 	require.True(t, ok)
 	require.NoError(t, snapshot.Validate())
 	require.IsType(t, (*aguievents.RunFinishedEvent)(nil), snapshotEvents[2])
+}
+
+func TestMessagesSnapshotFollowReceivesPeriodicFlushedContent(t *testing.T) {
+	underlying := &streamingWaitRunner{
+		started: make(chan struct{}),
+		events:  make(chan *event.Event, 1),
+	}
+	r := New(
+		underlying,
+		WithAppName("demo"),
+		WithSessionService(inmemory.NewSessionService()),
+		WithFlushInterval(10*time.Millisecond),
+		WithMessagesSnapshotFollowEnabled(true),
+		WithMessagesSnapshotFollowMaxDuration(time.Second),
+		WithTrackPersistenceTimeout(200*time.Millisecond),
+	).(*runner)
+	runStream, err := r.Run(context.Background(), &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	})
+	require.NoError(t, err)
+	waitForAGUIEventType(t, runStream, (*aguievents.RunStartedEvent)(nil))
+	select {
+	case <-underlying.started:
+	case <-time.After(time.Second):
+		require.FailNow(t, "timeout waiting for runner start")
+	}
+	runDone := make(chan struct{})
+	go func() {
+		for range runStream {
+		}
+		close(runDone)
+	}()
+	defer func() {
+		close(underlying.events)
+		<-runDone
+	}()
+	snapshotCtx, cancelSnapshot := context.WithCancel(context.Background())
+	defer cancelSnapshot()
+	snapshotStream, err := r.MessagesSnapshot(snapshotCtx, &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "snapshot",
+	})
+	require.NoError(t, err)
+	waitForAGUIEventType(t, snapshotStream, (*aguievents.MessagesSnapshotEvent)(nil))
+	underlying.events <- &event.Event{Response: &model.Response{
+		ID:        "assistant-1",
+		Object:    model.ObjectTypeChatCompletionChunk,
+		IsPartial: true,
+		Choices: []model.Choice{{
+			Delta: model.Message{
+				Role:    model.RoleAssistant,
+				Content: "hello",
+			},
+		}},
+	}}
+	content := waitForTextMessageContent(t, snapshotStream)
+	require.Equal(t, "assistant-1", content.MessageID)
+	require.Equal(t, "hello", content.Delta)
 }
 
 func TestMessagesSnapshotEmptyTrack(t *testing.T) {
@@ -1491,6 +1552,19 @@ func (reasoningWaitRunner) Run(ctx context.Context, userID, sessionID string, me
 
 func (reasoningWaitRunner) Close() error { return nil }
 
+type streamingWaitRunner struct {
+	started chan struct{}
+	events  chan *event.Event
+}
+
+func (r *streamingWaitRunner) Run(ctx context.Context, userID, sessionID string, message model.Message,
+	runOpts ...agent.RunOption) (<-chan *event.Event, error) {
+	close(r.started)
+	return r.events, nil
+}
+
+func (r *streamingWaitRunner) Close() error { return nil }
+
 func waitForAGUIEventType(t *testing.T, ch <-chan aguievents.Event, want any) {
 	t.Helper()
 	wantType := reflect.TypeOf(want)
@@ -1504,6 +1578,22 @@ func waitForAGUIEventType(t *testing.T, ch <-chan aguievents.Event, want any) {
 			}
 		case <-timeout:
 			require.FailNow(t, "timeout waiting for AG-UI event")
+		}
+	}
+}
+
+func waitForTextMessageContent(t *testing.T, ch <-chan aguievents.Event) *aguievents.TextMessageContentEvent {
+	t.Helper()
+	timeout := time.After(time.Second)
+	for {
+		select {
+		case evt, ok := <-ch:
+			require.True(t, ok)
+			if content, ok := evt.(*aguievents.TextMessageContentEvent); ok {
+				return content
+			}
+		case <-timeout:
+			require.FailNow(t, "timeout waiting for text message content")
 		}
 	}
 }
@@ -1548,6 +1638,10 @@ func (s *sequenceTracker) Flush(ctx context.Context, key session.Key) error {
 	return nil
 }
 
+func (s *sequenceTracker) Close(ctx context.Context, key session.Key) error {
+	return nil
+}
+
 type blockingTracker struct {
 	unblock <-chan struct{}
 	events  *session.TrackEvents
@@ -1563,6 +1657,10 @@ func (b *blockingTracker) GetEvents(ctx context.Context, key session.Key, opts .
 }
 
 func (b *blockingTracker) Flush(ctx context.Context, key session.Key) error {
+	return nil
+}
+
+func (b *blockingTracker) Close(ctx context.Context, key session.Key) error {
 	return nil
 }
 
@@ -1591,6 +1689,10 @@ func (t *errorAfterFirstTracker) Flush(ctx context.Context, key session.Key) err
 	return nil
 }
 
+func (t *errorAfterFirstTracker) Close(ctx context.Context, key session.Key) error {
+	return nil
+}
+
 type emptyTrackThenTerminalTracker struct {
 	mu       sync.Mutex
 	calls    int
@@ -1616,6 +1718,10 @@ func (t *emptyTrackThenTerminalTracker) GetEvents(ctx context.Context, key sessi
 }
 
 func (t *emptyTrackThenTerminalTracker) Flush(ctx context.Context, key session.Key) error {
+	return nil
+}
+
+func (t *emptyTrackThenTerminalTracker) Close(ctx context.Context, key session.Key) error {
 	return nil
 }
 
