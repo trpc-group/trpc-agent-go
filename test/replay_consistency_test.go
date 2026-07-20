@@ -11,6 +11,7 @@ package e2e
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -67,16 +68,33 @@ func replayEventMessage(evt *event.Event) model.Message {
 
 func TestReplayConsistencyLightweight(t *testing.T) {
 	started := time.Now()
+	cases := replaytest.PublicCases()
+	require.GreaterOrEqual(t, len(cases), 10)
 	report, err := replaytest.RunSuite(
 		context.Background(),
-		replaytest.PublicCases(),
+		cases,
 		lightweightReplayFactories(t.TempDir()),
 	)
+	duration := time.Since(started)
 	require.NoError(t, err)
 	require.Truef(t, report.Healthy(), "unexpected replay differences: %+v", report.Cases)
+	require.Equal(t, len(cases), report.TotalCases)
+	require.Equal(t, report.TotalCases, report.PassedCases)
 	require.Zero(t, report.FailedCases)
+	require.Zero(t, report.SkippedCases)
+	require.Zero(t, report.MixedCases)
+	require.Zero(t, report.Inconclusive)
 	require.Zero(t, report.BlockingDiffs)
-	require.Less(t, time.Since(started), 30*time.Second)
+	falsePositiveRate := float64(report.FailedCases) / float64(report.TotalCases)
+	require.LessOrEqual(t, falsePositiveRate, 0.05)
+	require.Less(t, duration, 30*time.Second)
+	t.Logf(
+		"acceptance metrics: cases=%d passed=%d false_positive_rate=%.2f%% duration=%s",
+		report.TotalCases,
+		report.PassedCases,
+		falsePositiveRate*100,
+		duration,
+	)
 }
 
 func TestReplayConsistencyDetectsInjectedFaults(t *testing.T) {
@@ -84,11 +102,28 @@ func TestReplayConsistencyDetectsInjectedFaults(t *testing.T) {
 	cases := replaytest.PublicCases()
 	require.GreaterOrEqual(t, len(cases), 10)
 	caseByName := make(map[string]replaytest.ReplayCase, len(cases))
+	caseNames := make([]string, 0, len(cases))
 	for _, replayCase := range cases {
 		caseByName[replayCase.Name] = replayCase
+		caseNames = append(caseNames, replayCase.Name)
 	}
+	require.ElementsMatch(t, []string{
+		"single_turn_dialogue",
+		"multi_turn_ordering",
+		"tool_call_response_extensions",
+		"state_lifecycle",
+		"memory_write_read",
+		"memory_update_delete",
+		"summary_filter_and_overwrite",
+		"summary_event_window_recovery",
+		"track_status_error_invocation",
+		"concurrent_causal_order",
+		"failure_retry_ack_loss",
+		"identity_duplicate_preservation",
+	}, caseNames)
 
 	faultsByCase := make(map[string]int, len(cases))
+	detectedByCase := make(map[string]int, len(cases))
 	requiredSummaryFaults := map[string]bool{
 		"summary_loss":              false,
 		"summary_overwrite_failure": false,
@@ -101,9 +136,6 @@ func TestReplayConsistencyDetectsInjectedFaults(t *testing.T) {
 		replayCase, ok := caseByName[fault.Case]
 		require.Truef(t, ok, "fault %q references unknown case %q", fault.Name, fault.Case)
 		faultsByCase[fault.Case]++
-		if _, required := requiredSummaryFaults[fault.Name]; required {
-			requiredSummaryFaults[fault.Name] = true
-		}
 
 		t.Run(fault.Name, func(t *testing.T) {
 			result := runLightweightReplayCase(
@@ -138,18 +170,36 @@ func TestReplayConsistencyDetectsInjectedFaults(t *testing.T) {
 				return false
 			}, "fault %q produced no precisely located diff: %+v", fault.Name, diffs)
 			detected++
+			detectedByCase[fault.Case]++
+			if _, required := requiredSummaryFaults[fault.Name]; required {
+				requiredSummaryFaults[fault.Name] = true
+			}
 		})
 	}
 
 	for _, replayCase := range cases {
 		require.Positivef(t, faultsByCase[replayCase.Name],
 			"public case %q has no injected fault", replayCase.Name)
+		require.Positivef(t, detectedByCase[replayCase.Name],
+			"public case %q has no detected injected fault", replayCase.Name)
 	}
 	for name, covered := range requiredSummaryFaults {
-		require.Truef(t, covered, "required summary fault %q is missing", name)
+		require.Truef(t, covered, "required summary fault %q was not detected", name)
 	}
-	require.Equal(t, len(replaytest.PublicFaults()), detected)
-	require.Less(t, time.Since(started), 30*time.Second)
+	faultCount := len(replaytest.PublicFaults())
+	require.Equal(t, faultCount, detected)
+	detectionRate := float64(detected) / float64(faultCount)
+	duration := time.Since(started)
+	require.Equal(t, 1.0, detectionRate)
+	require.Less(t, duration, 30*time.Second)
+	t.Logf(
+		"acceptance metrics: public_cases=%d injected_faults=%d detected=%d detection_rate=%.2f%% summary_fault_detection=4/4 duration=%s",
+		len(cases),
+		faultCount,
+		detected,
+		detectionRate*100,
+		duration,
+	)
 }
 
 func TestReplayConsistencyServiceFaultWrappers(t *testing.T) {
@@ -480,21 +530,82 @@ func TestReplayConsistencyWritesExampleDiffReport(t *testing.T) {
 	report.GeneratedAt = time.Date(
 		2026, 7, 19, 0, 0, 0, 0, time.UTC,
 	)
-	path := filepath.Join(
+	expectedPath := filepath.Join(
 		"testdata",
 		"session_memory_summary_track_diff_report.json",
 	)
-	require.NoError(t, replaytest.WriteReport(path, report))
-	raw, err := os.ReadFile(path)
+	actualPath := filepath.Join(
+		t.TempDir(),
+		"session_memory_summary_track_diff_report.json",
+	)
+	require.NoError(t, replaytest.WriteReport(actualPath, report))
+	actual, err := os.ReadFile(actualPath)
 	require.NoError(t, err)
-	require.Contains(t, string(raw), `"summary_id"`)
-	require.Contains(t, string(raw), `"summary_filter_key"`)
-	require.Contains(t, string(raw), `"event_index"`)
-	require.Contains(t, string(raw), `"memory_id"`)
-	require.Contains(t, string(raw), `"track_name"`)
-	require.Contains(t, string(raw), `"allowed_diff": false`)
-	require.Contains(t, string(raw), `"unsupported"`)
-	require.Contains(t, string(raw), `"allowed_diff": true`)
+	expected, err := os.ReadFile(expectedPath)
+	require.NoError(t, err)
+	require.JSONEq(t, string(expected), string(actual))
+
+	secondPath := filepath.Join(
+		t.TempDir(),
+		"session_memory_summary_track_diff_report.json",
+	)
+	require.NoError(t, replaytest.WriteReport(secondPath, report))
+	second, err := os.ReadFile(secondPath)
+	require.NoError(t, err)
+	require.Equal(t, actual, second)
+
+	var decoded replaytest.Report
+	require.NoError(t, json.Unmarshal(actual, &decoded))
+	assertReplayReportContract(t, decoded)
+}
+
+func assertReplayReportContract(t *testing.T, report replaytest.Report) {
+	t.Helper()
+	require.Positive(t, report.TotalCases)
+	require.Equal(t, report.TotalCases, len(report.Cases))
+
+	var (
+		diffCount                int
+		hasEventIndex            bool
+		hasMemoryID              bool
+		hasSummaryID             bool
+		hasSummaryFilterKey      bool
+		hasTrackName             bool
+		hasAllowedUnsupportedGap bool
+	)
+	for _, caseReport := range report.Cases {
+		require.NotEmpty(t, caseReport.Name)
+		for _, unsupported := range caseReport.Unsupported {
+			require.NotEmpty(t, unsupported.Backend)
+			require.NotEmpty(t, unsupported.Capability)
+			require.NotEmpty(t, unsupported.Reason)
+			hasAllowedUnsupportedGap = hasAllowedUnsupportedGap ||
+				unsupported.AllowedDiff
+		}
+		for _, diff := range caseReport.Diffs {
+			diffCount++
+			require.NotEmpty(t, diff.Case)
+			require.NotEmpty(t, diff.SessionID)
+			require.NotEmpty(t, diff.BackendA)
+			require.NotEmpty(t, diff.BackendB)
+			require.NotEmpty(t, diff.Section)
+			require.NotEmpty(t, diff.Path)
+			require.NotEmpty(t, diff.Explanation)
+			hasEventIndex = hasEventIndex || diff.EventIndex != nil
+			hasMemoryID = hasMemoryID || diff.MemoryID != ""
+			hasSummaryID = hasSummaryID || diff.SummaryID != ""
+			hasSummaryFilterKey = hasSummaryFilterKey ||
+				diff.SummaryFilterKey != nil
+			hasTrackName = hasTrackName || diff.TrackName != ""
+		}
+	}
+	require.Positive(t, diffCount)
+	require.True(t, hasEventIndex)
+	require.True(t, hasMemoryID)
+	require.True(t, hasSummaryID)
+	require.True(t, hasSummaryFilterKey)
+	require.True(t, hasTrackName)
+	require.True(t, hasAllowedUnsupportedGap)
 }
 
 func publicReplayCase(t *testing.T, name string) replaytest.ReplayCase {

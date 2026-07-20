@@ -23,6 +23,25 @@ CGO_ENABLED=1 go test . -run ReplayConsistency -count=1
 故障包装器和 SQLite 存储层破坏。轻量完整运行设置了 30 秒上限；正常 replay
 应当没有 blocking diff。
 
+## 验收指标
+
+使用 verbose 模式运行带指标输出的测试：
+
+```bash
+cd test
+go test . -run 'TestReplayConsistency(Lightweight|DetectsInjectedFaults)$' -v -count=1
+```
+
+测试会强制校验并输出以下指标：
+
+| 指标 | 验收要求 | 当前矩阵 |
+| --- | --- | --- |
+| 公开 replay case | 至少 10 条 | 12 条 |
+| 人为故障检出率 | 100%，且每个公开 case 至少检出一个故障 | 15/15 |
+| 正常 case 误报率 | 不超过 5% | 0/12 |
+| 必要 Summary 故障检出率 | 100% | 丢失、覆盖错误、错误会话、错误 filter-key |
+| 轻量模式完整耗时 | 小于 30 秒 | 由测试强制校验 |
+
 ## 可选集成模式
 
 运行同一命令前，可设置：

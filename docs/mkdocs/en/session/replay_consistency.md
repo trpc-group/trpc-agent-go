@@ -27,6 +27,25 @@ anomaly. Extra tests exercise public service wrappers and direct SQLite storage
 corruption. The complete lightweight suite has a 30-second upper bound; normal
 replays are expected to produce zero blocking diffs.
 
+## Acceptance metrics
+
+Run the metric-bearing tests with verbose output:
+
+```bash
+cd test
+go test . -run 'TestReplayConsistency(Lightweight|DetectsInjectedFaults)$' -v -count=1
+```
+
+The tests enforce and print the following acceptance values:
+
+| Metric | Required | Current matrix |
+| --- | --- | --- |
+| Public replay cases | At least 10 | 12 |
+| Injected-fault detection | 100% and at least one detected fault per public case | 15/15 |
+| Normal-case false positives | At most 5% | 0/12 |
+| Required Summary fault detection | 100% | loss, overwrite, wrong session, and wrong filter-key |
+| Complete lightweight duration | Less than 30 seconds | Enforced by the tests |
+
 ## Optional integration mode
 
 Set any of the following variables before running the same command:
