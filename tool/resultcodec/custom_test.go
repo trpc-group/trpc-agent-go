@@ -58,6 +58,21 @@ func TestCustom_EncoderErrorPropagates(t *testing.T) {
 	}
 }
 
+func TestCustom_OutputSanitizedToValidUTF8(t *testing.T) {
+	// A Custom encoder returning invalid UTF-8 must be normalized, honoring the
+	// built-in codec UTF-8 guarantee.
+	c := Custom(func(_ context.Context, _ customBashResult) (string, error) {
+		return "ok\xffend", nil
+	})
+	got, err := c.Encode(context.Background(), customBashResult{})
+	if err != nil {
+		t.Fatalf("Encode error: %v", err)
+	}
+	if want := "ok\uFFFDend"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
 func TestCustom_PanicConvertedToError(t *testing.T) {
 	c := Custom(func(_ context.Context, _ customBashResult) (string, error) {
 		panic("kaboom")

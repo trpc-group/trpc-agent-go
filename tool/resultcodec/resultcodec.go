@@ -123,9 +123,12 @@ func (t *codecTool) ResultCodec() Codec {
 	return t.codec
 }
 
-// Unwrap returns the wrapped tool so framework capability checks can observe
-// the underlying tool. It follows the errors.Unwrap convention.
-func (t *codecTool) Unwrap() tool.Tool {
+// TransparentUnwrap returns the wrapped tool. It declares that this wrapper is
+// transparent: it keeps the wrapped tool's model-facing declaration and
+// delegates capabilities, so framework capability/permission resolution may
+// traverse it. This is a deliberate, explicit contract rather than a generic
+// errors.Unwrap, so a renaming wrapper is not silently treated as transparent.
+func (t *codecTool) TransparentUnwrap() tool.Tool {
 	return t.base
 }
 
@@ -146,13 +149,14 @@ const (
 	walkExhausted
 )
 
-// walkBase visits the wrapped tool and each tool reachable through Unwrap(),
-// starting at t.base, calling fn until it returns true or the chain ends. The
-// traversal is depth-bounded for cycle safety and reports how it terminated so
-// callers (permission in particular) can fail closed on walkExhausted. This
-// resolves delegated capabilities through the full wrapper chain so an
-// intermediate unwrap-only wrapper cannot hide a deeper capability (for example
-// a PermissionChecker).
+// walkBase visits the wrapped tool and each tool reachable through the explicit
+// transparency contract (TransparentUnwrap), starting at t.base, calling fn
+// until it returns true or the chain ends. The traversal is depth-bounded for
+// cycle safety and reports how it terminated so callers (permission in
+// particular) can fail closed on walkExhausted. It resolves delegated
+// capabilities through the full transparent-wrapper chain so an intermediate
+// transparent wrapper cannot hide a deeper capability (for example a
+// PermissionChecker).
 func (t *codecTool) walkBase(fn func(tool.Tool) bool) walkStatus {
 	cur := t.base
 	for i := 0; i < maxWrapDepth; i++ {
@@ -162,29 +166,43 @@ func (t *codecTool) walkBase(fn func(tool.Tool) bool) walkStatus {
 		if fn(cur) {
 			return walkFound
 		}
-		u, ok := cur.(interface{ Unwrap() tool.Tool })
+		u, ok := cur.(interface{ TransparentUnwrap() tool.Tool })
 		if !ok {
 			return walkEnded
 		}
-		cur = u.Unwrap()
+		cur = u.TransparentUnwrap()
 	}
 	return walkExhausted
 }
 
 // ToolMetadata resolves metadata through the full wrapper chain so it is
 // preserved for callers that inspect it directly (tool.MetadataOf does not
-// unwrap).
+// unwrap). Only a full MetadataProvider terminates the traversal; the nearest
+// ConcurrencyAware value is tracked separately and overlaid, so an outer wrapper
+// that only publishes concurrency safety cannot discard a deeper provider's
+// Destructive/OpenWorld/MaxResultSize metadata.
 func (t *codecTool) ToolMetadata() tool.ToolMetadata {
-	var meta tool.ToolMetadata
+	var (
+		meta            tool.ToolMetadata
+		concurrency     bool
+		haveConcurrency bool
+	)
 	t.walkBase(func(cur tool.Tool) bool {
-		_, isProvider := cur.(tool.MetadataProvider)
-		_, isAware := cur.(tool.ConcurrencyAware)
-		if isProvider || isAware {
-			meta = tool.MetadataOf(cur)
+		if !haveConcurrency {
+			if aware, ok := cur.(tool.ConcurrencyAware); ok {
+				concurrency = aware.IsConcurrencySafe()
+				haveConcurrency = true
+			}
+		}
+		if provider, ok := cur.(tool.MetadataProvider); ok {
+			meta = provider.ToolMetadata()
 			return true
 		}
 		return false
 	})
+	if haveConcurrency {
+		meta.ConcurrencySafe = concurrency
+	}
 	return meta
 }
 

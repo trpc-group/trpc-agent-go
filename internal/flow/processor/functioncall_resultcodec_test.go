@@ -411,7 +411,7 @@ type transparentWrapper struct {
 }
 
 func (w *transparentWrapper) Declaration() *tool.Declaration { return w.inner.Declaration() }
-func (w *transparentWrapper) Unwrap() tool.Tool              { return w.inner }
+func (w *transparentWrapper) TransparentUnwrap() tool.Tool   { return w.inner }
 func (w *transparentWrapper) Call(ctx context.Context, args []byte) (any, error) {
 	return w.inner.(tool.CallableTool).Call(ctx, args)
 }
@@ -423,7 +423,7 @@ type cyclicCallableWrapper struct {
 }
 
 func (w *cyclicCallableWrapper) Declaration() *tool.Declaration { return w.base.Declaration() }
-func (w *cyclicCallableWrapper) Unwrap() tool.Tool              { return w }
+func (w *cyclicCallableWrapper) TransparentUnwrap() tool.Tool   { return w }
 func (w *cyclicCallableWrapper) Call(ctx context.Context, args []byte) (any, error) {
 	return w.base.(tool.CallableTool).Call(ctx, args)
 }
@@ -524,10 +524,10 @@ func runWithinTimeout(t *testing.T, d time.Duration, fn func()) {
 	}
 }
 
-func TestExecuteToolCall_StateDeltaMarshalPanicHandled(t *testing.T) {
-	// Stateful tool + a result whose MarshalJSON panics: the invocation must not
-	// crash, the codec output still reaches the model, and the state delta is
-	// skipped rather than fed codec text.
+func TestExecuteToolCall_StateDeltaMarshalPanicSurfacesError(t *testing.T) {
+	// Stateful tool + a result whose MarshalJSON panics: the call must surface an
+	// error rather than succeed with the codec message while silently dropping
+	// the state delta. The invocation must not crash, and the tool runs once.
 	base := &recordingStateDeltaTool{
 		declaration: &tool.Declaration{Name: "stateful"},
 		result:      panicMarshalResult{},
@@ -538,26 +538,19 @@ func TestExecuteToolCall_StateDeltaMarshalPanicHandled(t *testing.T) {
 	wrapped := resultcodec.Wrap(base, codec)
 	tools := map[string]tool.Tool{"stateful": wrapped}
 	p := NewFunctionCallResponseProcessor(false, nil)
-	inv := &agent.Invocation{
-		AgentName: "a",
-		Model:     &mockModel{},
-		Session:   &session.Session{},
-	}
+	inv := &agent.Invocation{AgentName: "a", Model: &mockModel{}}
 	pc := model.ToolCall{
 		ID:       "c1",
 		Function: model.FunctionDefinitionParam{Name: "stateful", Arguments: []byte(`{}`)},
 	}
-	ev, err := p.executeSingleToolCallSequential(
-		context.Background(), inv, &model.Response{}, tools, make(chan *event.Event, 8), 0, pc,
-	)
-	require.NoError(t, err)
-	require.NotNil(t, ev)
-	require.NotEmpty(t, ev.Choices)
-
-	assert.Equal(t, "custom-out", ev.Choices[0].Message.Content)
-	assert.Nil(t, base.gotContent, "StateDelta must not receive codec text on marshal panic")
-	assert.Empty(t, ev.StateDelta)
-	assert.Equal(t, 1, base.calls, "tool must execute exactly once")
+	ch := make(chan *event.Event, 8)
+	_, choices, _, ignorable, _, err := p.executeToolCall(context.Background(), inv, pc, tools, 0, ch)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), ErrorMarshalResult)
+	assert.True(t, ignorable)
+	assert.Nil(t, choices, "must not hide the dropped state delta behind a success message")
+	assert.Equal(t, 1, base.calls, "tool must execute exactly once, not be rerun")
+	assert.Nil(t, base.gotContent, "state delta must never be fed codec text")
 }
 
 func TestExecuteToolCall_StateDeltaUsesJSONNotCodec(t *testing.T) {
@@ -618,7 +611,7 @@ type permissionWrapper struct {
 }
 
 func (w *permissionWrapper) Declaration() *tool.Declaration { return w.base.Declaration() }
-func (w *permissionWrapper) Unwrap() tool.Tool              { return w.base }
+func (w *permissionWrapper) TransparentUnwrap() tool.Tool   { return w.base }
 func (w *permissionWrapper) Call(ctx context.Context, args []byte) (any, error) {
 	return w.base.(tool.CallableTool).Call(ctx, args)
 }
@@ -683,9 +676,10 @@ type jsonFailResult struct {
 	Ch chan int `json:"ch"`
 }
 
-func TestExecuteToolCall_StateDeltaSkippedWhenJSONMarshalFails(t *testing.T) {
-	// When the state-delta JSON marshal fails, the stateful tool must not receive
-	// codec text; the state delta is skipped instead.
+func TestExecuteToolCall_StateDeltaMarshalErrorSurfaces(t *testing.T) {
+	// When the state-delta JSON serialization fails (a channel is not
+	// serializable), the call must fail rather than succeed with the codec
+	// message while dropping the state delta.
 	base := &recordingStateDeltaTool{
 		declaration: &tool.Declaration{Name: "stateful"},
 		result:      jsonFailResult{Ch: make(chan int)},
@@ -696,26 +690,42 @@ func TestExecuteToolCall_StateDeltaSkippedWhenJSONMarshalFails(t *testing.T) {
 	wrapped := resultcodec.Wrap(base, codec)
 	tools := map[string]tool.Tool{"stateful": wrapped}
 	p := NewFunctionCallResponseProcessor(false, nil)
-	inv := &agent.Invocation{
-		AgentName: "a",
-		Model:     &mockModel{},
-		Session:   &session.Session{},
-	}
+	inv := &agent.Invocation{AgentName: "a", Model: &mockModel{}}
 	pc := model.ToolCall{
 		ID:       "c1",
 		Function: model.FunctionDefinitionParam{Name: "stateful", Arguments: []byte(`{}`)},
 	}
-	ev, err := p.executeSingleToolCallSequential(
-		context.Background(), inv, &model.Response{}, tools, make(chan *event.Event, 8), 0, pc,
-	)
-	require.NoError(t, err)
-	require.NotNil(t, ev)
-	require.NotEmpty(t, ev.Choices)
+	ch := make(chan *event.Event, 8)
+	_, choices, _, ignorable, _, err := p.executeToolCall(context.Background(), inv, pc, tools, 0, ch)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), ErrorMarshalResult)
+	assert.True(t, ignorable)
+	assert.Nil(t, choices)
+	assert.Equal(t, 1, base.calls, "tool must execute exactly once")
+	assert.Nil(t, base.gotContent, "state delta must never be fed codec text")
+}
 
-	assert.Equal(t, "custom-out", ev.Choices[0].Message.Content)
-	assert.Nil(t, base.gotContent,
-		"StateDelta must be skipped on marshal failure, never fed codec text")
-	assert.Empty(t, ev.StateDelta)
+// pollutingTool marks the session as auto-memory polluted, like a knowledge tool.
+type pollutingTool struct {
+	declaration *tool.Declaration
+}
+
+func (p *pollutingTool) Declaration() *tool.Declaration            { return p.declaration }
+func (p *pollutingTool) Call(context.Context, []byte) (any, error) { return "ok", nil }
+func (p *pollutingTool) PollutesAutoMemory() bool                  { return true }
+
+func TestToolCapabilityPollutesAutoMemory_ThroughWrap(t *testing.T) {
+	// resultcodec.Wrap must not hide the PollutesAutoMemory capability, even when
+	// the tool uses a custom name that the name-based fallback does not match.
+	base := &pollutingTool{declaration: &tool.Declaration{Name: "custom_search"}}
+	wrapped := resultcodec.Wrap(base, resultcodec.XML())
+
+	if toolNamePollutesAutoMemory("custom_search") {
+		t.Fatal("precondition: a custom name should not match the name fallback")
+	}
+	if !toolCapabilityPollutesAutoMemory(wrapped) {
+		t.Fatal("resultcodec.Wrap must preserve the PollutesAutoMemory capability")
+	}
 }
 
 func TestExecuteToolCall_WrapBindsCodec(t *testing.T) {

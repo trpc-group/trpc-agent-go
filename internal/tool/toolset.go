@@ -120,8 +120,10 @@ func ApplyDeclarations(base []tool.Tool, declarations []tool.Declaration) []tool
 	return out
 }
 
-// ResolveDeclaration unwraps framework declaration overlays. The traversal is
-// depth-bounded so a cyclic wrapper chain cannot cause unbounded recursion.
+// ResolveDeclaration unwraps framework declaration overlays and explicitly
+// transparent wrappers. The traversal is depth-bounded so a cyclic wrapper chain
+// cannot cause unbounded recursion. A wrapper that only implements a generic
+// errors.Unwrap() is not followed, so a renaming wrapper keeps its declaration.
 func ResolveDeclaration(t tool.Tool) tool.Tool {
 	for i := 0; i < maxToolUnwrapDepth; i++ {
 		switch current := t.(type) {
@@ -129,8 +131,8 @@ func ResolveDeclaration(t tool.Tool) tool.Tool {
 			return nil
 		case declarationWrapper:
 			t = current.originalTool()
-		case toolUnwrapper:
-			t = current.Unwrap()
+		case transparentTool:
+			t = current.TransparentUnwrap()
 		default:
 			return t
 		}
@@ -138,9 +140,10 @@ func ResolveDeclaration(t tool.Tool) tool.Tool {
 	return t
 }
 
-// ResolveSemantic unwraps framework wrappers for semantic capability checks. The
-// traversal is depth-bounded so a cyclic wrapper chain cannot cause unbounded
-// recursion.
+// ResolveSemantic unwraps framework wrappers and explicitly transparent wrappers
+// for semantic capability checks. The traversal is depth-bounded so a cyclic
+// wrapper chain cannot cause unbounded recursion. A wrapper that only implements
+// a generic errors.Unwrap() is not followed, so its own hooks are preserved.
 func ResolveSemantic(t tool.Tool) tool.Tool {
 	for i := 0; i < maxToolUnwrapDepth; i++ {
 		switch current := t.(type) {
@@ -150,8 +153,8 @@ func ResolveSemantic(t tool.Tool) tool.Tool {
 			t = current.originalTool()
 		case *NamedTool:
 			t = current.Original()
-		case toolUnwrapper:
-			t = current.Unwrap()
+		case transparentTool:
+			t = current.TransparentUnwrap()
 		default:
 			return t
 		}
@@ -193,8 +196,8 @@ func ResolvePermissionChecker(t tool.Tool) (tool.PermissionChecker, error) {
 			return checker, nil
 		}
 		// A transparent wrapper without its own checker: keep unwrapping.
-		if u, ok := t.(toolUnwrapper); ok {
-			t = u.Unwrap()
+		if u, ok := t.(transparentTool); ok {
+			t = u.TransparentUnwrap()
 			continue
 		}
 		return nil, nil

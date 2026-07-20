@@ -939,21 +939,38 @@ func toolPollutesAutoMemory(tl tool.Tool, name string) bool {
 }
 
 func toolCapabilityPollutesAutoMemory(tl tool.Tool) bool {
-	for tl != nil {
+	// Traverse both NamedTool (Original) and transparent wrappers such as
+	// resultcodec.Wrap (TransparentUnwrap) so wrapping a knowledge tool does not
+	// hide its PollutesAutoMemory capability. Depth-bounded for cycle safety.
+	for i := 0; i < maxToolWrapperTraversalDepth && tl != nil; i++ {
 		if source, ok := tl.(autoMemoryPollutionSource); ok && source.PollutesAutoMemory() {
 			return true
 		}
-		wrapper, ok := tl.(originalToolProvider)
-		if !ok {
+		next := unwrapAutoMemoryTool(tl)
+		if next == nil || next == tl {
 			return false
 		}
-		original := wrapper.Original()
-		if original == nil || original == tl {
-			return false
-		}
-		tl = original
+		tl = next
 	}
 	return false
+}
+
+// maxToolWrapperTraversalDepth bounds wrapper-chain traversal for capability
+// discovery so a cyclic wrapper cannot loop forever.
+const maxToolWrapperTraversalDepth = 128
+
+// unwrapAutoMemoryTool returns the next tool in the wrapper chain, following
+// NamedTool (Original) and explicitly transparent wrappers (TransparentUnwrap).
+func unwrapAutoMemoryTool(tl tool.Tool) tool.Tool {
+	if wrapper, ok := tl.(originalToolProvider); ok {
+		if original := wrapper.Original(); original != nil {
+			return original
+		}
+	}
+	if wrapper, ok := tl.(interface{ TransparentUnwrap() tool.Tool }); ok {
+		return wrapper.TransparentUnwrap()
+	}
+	return nil
 }
 
 func toolNamePollutesAutoMemory(name string) bool {
@@ -1919,16 +1936,24 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 		// A result codec only changes the model-visible message. Stateful tools
 		// compute their state delta from the tool result content, which must stay
 		// JSON so JSON-parsing tools are not broken by the codec. Only stateful
-		// tools need this, so avoid the extra marshal (and its panic surface) for
-		// every codec'd call; a Custom codec may wrap results that are not
-		// JSON-friendly.
-		if stateContent, jerr := marshalStateDeltaContent(result); jerr == nil {
-			ctx = withStateDeltaContent(ctx, stateContent)
-		} else {
-			// Do not let the state-delta path fall back to codec text; skip the
-			// state delta for this call rather than write codec output as state.
-			ctx = withSkippedToolStateDelta(ctx)
+		// tools need this, so the extra marshal is avoided for every other
+		// codec'd call. If the result cannot be serialized to JSON (a Custom
+		// codec may accept non-JSON results), the state delta cannot be produced;
+		// fail the call rather than silently succeed and drop the state update,
+		// matching the default (no-codec) behavior where a marshal failure fails
+		// the tool result.
+		stateContent, jerr := marshalStateDeltaContent(result)
+		if jerr != nil {
+			log.WarnfContext(
+				ctx,
+				"Failed to serialize state delta content for %s: %v",
+				toolCall.Function.Name,
+				jerr,
+			)
+			return ctx, nil, modifiedArgs, true, skipSummarization,
+				fmt.Errorf("%s: %w", ErrorMarshalResult, jerr)
 		}
+		ctx = withStateDeltaContent(ctx, stateContent)
 	}
 	if suppressDefaultToolMessage {
 		defaultMsg, err := buildDefaultToolMessage(ctx, toolCall.ID, result, codec)

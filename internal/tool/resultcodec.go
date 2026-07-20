@@ -14,11 +14,14 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool/resultcodec"
 )
 
-// toolUnwrapper is implemented by wrappers that expose their underlying tool
-// following the errors.Unwrap convention. It lets framework capability checks
-// see through wrappers such as resultcodec.Wrap.
-type toolUnwrapper interface {
-	Unwrap() tool.Tool
+// transparentTool is implemented by wrappers that are transparent: they keep the
+// wrapped tool's model-facing declaration and delegate capabilities. Only such
+// wrappers are traversed by framework capability/permission resolution. A plain
+// errors.Unwrap() is intentionally NOT followed, so a wrapper that renames the
+// tool (different model-facing declaration) or owns its own hooks is not
+// silently stripped and keeps its declaration for execution filters.
+type transparentTool interface {
+	TransparentUnwrap() tool.Tool
 }
 
 // resultCodecProvider is the unexported discovery interface implemented by tools
@@ -49,8 +52,8 @@ func ResolveResultCodec(t tool.Tool) resultcodec.Codec {
 			cur = w.originalTool()
 		case *NamedTool:
 			cur = w.Original()
-		case toolUnwrapper:
-			cur = w.Unwrap()
+		case transparentTool:
+			cur = w.TransparentUnwrap()
 		default:
 			return nil
 		}

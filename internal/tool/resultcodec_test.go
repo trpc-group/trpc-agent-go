@@ -111,7 +111,7 @@ type rcPermChecker struct {
 }
 
 func (p *rcPermChecker) Declaration() *tool.Declaration { return &tool.Declaration{Name: p.name} }
-func (p *rcPermChecker) Unwrap() tool.Tool              { return p.inner }
+func (p *rcPermChecker) TransparentUnwrap() tool.Tool   { return p.inner }
 func (p *rcPermChecker) CheckPermission(
 	context.Context,
 	*tool.PermissionRequest,
@@ -160,7 +160,7 @@ type rcUnwrapOnly struct {
 }
 
 func (w *rcUnwrapOnly) Declaration() *tool.Declaration { return &tool.Declaration{Name: w.name} }
-func (w *rcUnwrapOnly) Unwrap() tool.Tool              { return w.inner }
+func (w *rcUnwrapOnly) TransparentUnwrap() tool.Tool   { return w.inner }
 
 func TestResolvePermissionChecker_ExhaustedChainFailsClosed(t *testing.T) {
 	// A checker hidden past the depth bound must not be reported as "no checker".
@@ -215,7 +215,7 @@ type rcSelfUnwrap struct {
 }
 
 func (s *rcSelfUnwrap) Declaration() *tool.Declaration { return &tool.Declaration{Name: s.name} }
-func (s *rcSelfUnwrap) Unwrap() tool.Tool              { return s }
+func (s *rcSelfUnwrap) TransparentUnwrap() tool.Tool   { return s }
 
 func TestResolvers_CyclicUnwrapTerminate(t *testing.T) {
 	// A cyclic Unwrap() chain must not cause unbounded recursion; the

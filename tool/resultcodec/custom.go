@@ -59,7 +59,12 @@ func (c *customCodec[T]) Encode(ctx context.Context, result any) (s string, err 
 			err = fmt.Errorf("resultcodec: Custom encoder panic: %v", r)
 		}
 	}()
-	return c.encode(ctx, typed)
+	out, encErr := c.encode(ctx, typed)
+	if encErr != nil {
+		return "", encErr
+	}
+	// Enforce the built-in codec UTF-8 guarantee for the encoder's output too.
+	return toValidUTF8(out), nil
 }
 
 // typeString returns the type name of T for error messages, working even when

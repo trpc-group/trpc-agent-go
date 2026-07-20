@@ -561,6 +561,9 @@ wrapped := resultcodec.Wrap(existingTool, resultcodec.XML())
 - codec 只影响所绑定的工具，不影响其他工具。
 - 编码失败会报明确错误；框架不会回退 JSON，也不会重新执行工具。
 - 对 streamable 工具，只编码最终结果；中间流式事件保持不变。
+- 对有状态工具（会发布 session/artifact state delta），state delta 仍基于结果的
+  JSON 形式计算，与 codec 无关。若结果无法序列化为 JSON，本次调用会直接失败，
+  而不是静默成功却丢弃状态更新。
 - 权限结果（denied / approval-required）属于框架控制协议，不会经过 codec。
 - Result Codec 处理“一个正常工具结果 → 一个 tool 消息”。返回多条消息、追加其他
   role、多模态内容或完全接管协议等场景，继续使用 `ToolResultMessages`；两者同时配置

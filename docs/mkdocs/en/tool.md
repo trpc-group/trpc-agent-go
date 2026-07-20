@@ -584,6 +584,10 @@ metadata, deferred loading, and summarization).
   back to JSON or re-run the tool.
 - For a streamable tool, only the final result is encoded; intermediate stream
   events are unchanged.
+- For a stateful tool (one that emits a session/artifact state delta), the state
+  delta is still computed from the JSON form of the result, independent of the
+  codec. If the result cannot be serialized to JSON, the call fails instead of
+  silently succeeding while dropping the state update.
 - Permission results (denied / approval-required) are framework control protocol
   and are never passed through the codec.
 - Result Codec covers "one normal tool result -> one tool message". For multiple

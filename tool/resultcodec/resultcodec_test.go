@@ -94,12 +94,12 @@ func TestWrap_ExposesCodecAndUnwrap(t *testing.T) {
 	if provider.ResultCodec() != codec {
 		t.Fatal("ResultCodec() should return the bound codec")
 	}
-	unwrapper, ok := wrapped.(interface{ Unwrap() tool.Tool })
+	unwrapper, ok := wrapped.(interface{ TransparentUnwrap() tool.Tool })
 	if !ok {
-		t.Fatal("wrapped tool should expose Unwrap()")
+		t.Fatal("wrapped tool should expose TransparentUnwrap()")
 	}
-	if unwrapper.Unwrap() != base {
-		t.Fatal("Unwrap() should return the base tool")
+	if unwrapper.TransparentUnwrap() != base {
+		t.Fatal("TransparentUnwrap() should return the base tool")
 	}
 }
 
@@ -154,6 +154,48 @@ func TestWrap_PreservesMetadata(t *testing.T) {
 	}
 }
 
+type metadataTool struct {
+	decl *tool.Declaration
+	meta tool.ToolMetadata
+}
+
+func (m *metadataTool) Declaration() *tool.Declaration            { return m.decl }
+func (m *metadataTool) Call(context.Context, []byte) (any, error) { return nil, nil }
+func (m *metadataTool) ToolMetadata() tool.ToolMetadata           { return m.meta }
+
+// concurrencyOnlyWrapper is a transparent wrapper that publishes only concurrency
+// safety, to check it does not discard a deeper provider's full metadata.
+type concurrencyOnlyWrapper struct {
+	inner tool.Tool
+	safe  bool
+}
+
+func (w *concurrencyOnlyWrapper) Declaration() *tool.Declaration { return w.inner.Declaration() }
+func (w *concurrencyOnlyWrapper) TransparentUnwrap() tool.Tool   { return w.inner }
+func (w *concurrencyOnlyWrapper) IsConcurrencySafe() bool        { return w.safe }
+
+func TestWrap_MetadataNotDiscardedByConcurrencyWrapper(t *testing.T) {
+	inner := &metadataTool{
+		decl: &tool.Declaration{Name: "m"},
+		meta: tool.ToolMetadata{
+			Destructive:     true,
+			OpenWorld:       true,
+			MaxResultSize:   42,
+			ConcurrencySafe: false,
+		},
+	}
+	outer := &concurrencyOnlyWrapper{inner: inner, safe: true}
+	wrapped := Wrap(outer, JSON())
+
+	got := tool.MetadataOf(wrapped)
+	if !got.Destructive || !got.OpenWorld || got.MaxResultSize != 42 {
+		t.Fatalf("inner provider metadata must be preserved, got %+v", got)
+	}
+	if !got.ConcurrencySafe {
+		t.Fatalf("outer ConcurrencyAware bit must be overlaid, got %+v", got)
+	}
+}
+
 func TestWrap_PreservesShouldDefer(t *testing.T) {
 	base := &mockMetaTool{decl: &tool.Declaration{Name: "m"}, deferLoad: true}
 	wrapped := Wrap(base, JSON())
@@ -181,7 +223,7 @@ func (u *unwrapOnlyTool) Declaration() *tool.Declaration { return u.inner.Declar
 func (u *unwrapOnlyTool) Call(ctx context.Context, args []byte) (any, error) {
 	return u.inner.(tool.CallableTool).Call(ctx, args)
 }
-func (u *unwrapOnlyTool) Unwrap() tool.Tool { return u.inner }
+func (u *unwrapOnlyTool) TransparentUnwrap() tool.Tool { return u.inner }
 
 // denyingTool implements PermissionChecker with a deny decision.
 type denyingTool struct {
@@ -223,7 +265,7 @@ type selfUnwrapTool struct {
 
 func (s *selfUnwrapTool) Declaration() *tool.Declaration            { return s.decl }
 func (s *selfUnwrapTool) Call(context.Context, []byte) (any, error) { return nil, nil }
-func (s *selfUnwrapTool) Unwrap() tool.Tool                         { return s }
+func (s *selfUnwrapTool) TransparentUnwrap() tool.Tool              { return s }
 
 func TestWrap_CyclicUnwrapTerminates(t *testing.T) {
 	// A cyclic Unwrap() chain must not hang, and permission must fail closed:
