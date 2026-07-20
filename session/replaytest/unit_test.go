@@ -106,6 +106,14 @@ func TestIDAliasMap_Concurrency(t *testing.T) {
 	}
 }
 
+func TestIDAliasMap_LegalAliasFormatDoesNotCollide(t *testing.T) {
+	m := NewIDAliasMap()
+	first := m.Alias("tool-actual", "tool-call")
+	second := m.Alias("tool-call-000", "tool-call")
+	assert.Equal(t, "tool-call-000", first)
+	assert.Equal(t, "tool-call-001", second)
+}
+
 // --- MissingValue tests ---
 
 func TestMissingValue_MarshalJSON(t *testing.T) {
@@ -1301,6 +1309,22 @@ func (s *failingScopedStateSessionService) ListUserStates(ctx context.Context, u
 	return nil, nil
 }
 
+type eventOnlyScopedStateSessionService struct {
+	failingScopedStateSessionService
+	sess *session.Session
+}
+
+func (s *eventOnlyScopedStateSessionService) GetSession(
+	ctx context.Context,
+	key session.Key,
+	opts ...session.Option,
+) (*session.Session, error) {
+	if s.sess != nil {
+		return s.sess.Clone(), nil
+	}
+	return &session.Session{ID: "mock", AppName: key.AppName, UserID: key.UserID}, nil
+}
+
 // --- New feature tests ---
 
 func TestHarness_RunSuite_Parallel(t *testing.T) {
@@ -2153,9 +2177,12 @@ func TestHarness_RunSuite_CircuitBreakerTripped(t *testing.T) {
 	cases := []Case{
 		{Name: "cb_case1", RequiredCaps: []string{CapEvents}, Run: func(ctx context.Context, b Backend) error { return nil }},
 	}
-	// Run will fail because Probe fails, and the circuit breaker should trip.
-	_, err := h.RunSuite(context.Background(), cases, "")
-	assert.Error(t, err)
+	report, err := h.RunSuite(context.Background(), cases, "")
+	require.NoError(t, err)
+	require.Len(t, report.Cases, 1)
+	assert.Equal(t, StatusInconclusive, report.Cases[0].Status)
+	assert.Contains(t, report.Cases[0].SkippedBackends, "bad-probe-a")
+	assert.Contains(t, report.Cases[0].SkippedBackends, "bad-probe-b")
 }
 
 func TestHarness_AllBackendsTripped(t *testing.T) {
@@ -2813,6 +2840,50 @@ func TestNormalize_NormalizeKnownIdentifiers_DoesNotRealiasStableIDs(t *testing.
 	assert.Contains(t, value["longRunningToolIDs"].(map[string]any), "tool-call-000")
 }
 
+func TestCapture_TrackPayloadPreservesBusinessIdentifiers(t *testing.T) {
+	key := sessKey("track-business-ids")
+	backends := makeBackends(t, key)
+	backend := backends[0]
+	_, err := backend.Sess.CreateSession(context.Background(), key, nil)
+	require.NoError(t, err)
+	sess, err := backend.Sess.GetSession(context.Background(), key)
+	require.NoError(t, err)
+	require.NoError(t, backend.Track.AppendTrackEvent(
+		context.Background(),
+		sess,
+		newTrackEvent("agent-run", `{"tool_id":"sku-a","triggerId":"campaign-a","invocation_id":"biz-inv-1"}`),
+	))
+
+	snap, err := Capture(context.Background(), backend, CaptureOptions{NormalizerConfig: DefaultNormalizerConfig()}, nil)
+	require.NoError(t, err)
+	payload := snap.Tracks["agent-run"][0].Payload.(map[string]any)
+	assert.Equal(t, "sku-a", payload["tool_id"])
+	assert.Equal(t, "campaign-a", payload["triggerId"])
+	assert.Equal(t, "biz-inv-1", payload["invocation_id"])
+}
+
+func TestCapture_EventExtensionsPreserveBusinessIdentifiers(t *testing.T) {
+	key := sessKey("extension-business-ids")
+	backends := makeBackends(t, key)
+	backend := backends[0]
+	_, err := backend.Sess.CreateSession(context.Background(), key, nil)
+	require.NoError(t, err)
+	sess, err := backend.Sess.GetSession(context.Background(), key)
+	require.NoError(t, err)
+	e := newUserEvent("ok")
+	e.Extensions = map[string]json.RawMessage{
+		"custom": json.RawMessage(`{"tool_id":"sku-a","toolCallId":"biz-tool-1"}`),
+	}
+	require.NoError(t, backend.Sess.AppendEvent(context.Background(), sess, e))
+
+	snap, err := Capture(context.Background(), backend, CaptureOptions{NormalizerConfig: DefaultNormalizerConfig()}, nil)
+	require.NoError(t, err)
+	extensions := snap.Events[0]["extensions"].(map[string]any)
+	custom := extensions["custom"].(map[string]any)
+	assert.Equal(t, "sku-a", custom["tool_id"])
+	assert.Equal(t, "biz-tool-1", custom["toolCallId"])
+}
+
 func TestNormalize_NormalizeJSON_Number(t *testing.T) {
 	// json.Number that is an integer should be converted to int64.
 	n := json.Number("42")
@@ -3121,6 +3192,38 @@ func TestCapture_LoadScopedStates_UserError(t *testing.T) {
 	assert.Contains(t, err.Error(), "ListUserStates on failing")
 }
 
+func TestCapture_SkipsScopedStateWhenCapabilityDisabled(t *testing.T) {
+	key := sessKey("event-only-scoped-state")
+	backend := Backend{
+		Name: "event-only",
+		Sess: &eventOnlyScopedStateSessionService{
+			failingScopedStateSessionService: failingScopedStateSessionService{
+				appErr:  errors.New("app denied"),
+				userErr: errors.New("user denied"),
+			},
+			sess: &session.Session{
+				ID:      "mock",
+				AppName: key.AppName,
+				UserID:  key.UserID,
+				Events: []event.Event{
+					*newUserEvent("hello"),
+				},
+			},
+		},
+		Caps: Capabilities{
+			CapEvents: {Supported: true},
+			CapState:  {Supported: false, Reason: "event-only backend"},
+		},
+		SessKey: func() session.Key { return key },
+	}
+
+	snap, err := Capture(context.Background(), backend, CaptureOptions{NormalizerConfig: DefaultNormalizerConfig()}, nil)
+	require.NoError(t, err)
+	require.Len(t, snap.Events, 1)
+	assert.Nil(t, snap.AppState)
+	assert.Nil(t, snap.UserState)
+}
+
 // --- Validate case edge cases ---
 
 func TestValidateCase_EmptyRequiredCap(t *testing.T) {
@@ -3135,6 +3238,13 @@ func TestValidateCase_DuplicateRequiredCap(t *testing.T) {
 	err := validateCase(c)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "duplicate required capability")
+}
+
+func TestValidateCase_UnsafeName(t *testing.T) {
+	c := Case{Name: "../outside", Run: func(ctx context.Context, b Backend) error { return nil }}
+	err := validateCase(c)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "safe file name")
 }
 
 func TestValidateBackends_EmptyName(t *testing.T) {
@@ -3739,8 +3849,9 @@ func TestHarness_Run_CtxCancelledDuringCapture(t *testing.T) {
 	backends := makeBackends(t, key)
 	normalizer := NewNormalizer(DefaultNormalizerConfig())
 	h := Harness{
-		Backends:   backends,
-		Normalizer: normalizer,
+		Backends:                  backends,
+		Normalizer:                normalizer,
+		CircuitBreakerMaxFailures: -1,
 	}
 	c := Case{
 		Name:         "ctx_cancel_capture_test",
@@ -3766,8 +3877,9 @@ func TestHarness_Run_OneSnapshot_MixedStatus(t *testing.T) {
 	normalizer := NewNormalizer(DefaultNormalizerConfig())
 	// Make the second backend skip by requiring a cap it doesn't have.
 	h := Harness{
-		Backends:   backends,
-		Normalizer: normalizer,
+		Backends:                  backends,
+		Normalizer:                normalizer,
+		CircuitBreakerMaxFailures: -1,
 	}
 	c := Case{
 		Name:         "one_snap_mixed_test",
@@ -3791,8 +3903,9 @@ func TestHarness_Run_PanicRecovered(t *testing.T) {
 	backends := makeBackends(t, key)
 	normalizer := NewNormalizer(DefaultNormalizerConfig())
 	h := Harness{
-		Backends:   backends,
-		Normalizer: normalizer,
+		Backends:                  backends,
+		Normalizer:                normalizer,
+		CircuitBreakerMaxFailures: -1,
 	}
 	c := Case{
 		Name:         "panic_recover_test",
@@ -4205,8 +4318,9 @@ func TestHarness_RunSuite_FailFast(t *testing.T) {
 	backends := makeBackends(t, key)
 	normalizer := NewNormalizer(DefaultNormalizerConfig())
 	h := Harness{
-		Backends:   backends,
-		Normalizer: normalizer,
+		Backends:                  backends,
+		Normalizer:                normalizer,
+		CircuitBreakerMaxFailures: -1,
 	}
 	cases := []Case{
 		{
@@ -4238,6 +4352,64 @@ func TestHarness_RunSuite_FailFast(t *testing.T) {
 	_, err := h.RunSuite(context.Background(), cases, "")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failfast_fail")
+}
+
+func TestHarness_RunSuite_CircuitBreakerSkipsFailedBackendSequential(t *testing.T) {
+	key := sessKey("cb-sequential-skip")
+	backends := makeBackends(t, key)
+	var badProbeCalls int
+	var goodRuns int
+	backends[0].Probe = func(ctx context.Context) error {
+		badProbeCalls++
+		return errors.New("probe failed")
+	}
+
+	h := Harness{
+		Backends:                  backends,
+		Normalizer:                NewNormalizer(DefaultNormalizerConfig()),
+		CircuitBreakerMaxFailures: 1,
+	}
+	cases := []Case{
+		{
+			Name:         "cb_seq_1",
+			RequiredCaps: []string{CapEvents},
+			Run: func(ctx context.Context, backend Backend) error {
+				if backend.Name == backends[1].Name {
+					goodRuns++
+				}
+				return nil
+			},
+		},
+		{
+			Name:         "cb_seq_2",
+			RequiredCaps: []string{CapEvents},
+			Run: func(ctx context.Context, backend Backend) error {
+				if backend.Name == backends[1].Name {
+					goodRuns++
+				}
+				return nil
+			},
+		},
+		{
+			Name:         "cb_seq_3",
+			RequiredCaps: []string{CapEvents},
+			Run: func(ctx context.Context, backend Backend) error {
+				if backend.Name == backends[1].Name {
+					goodRuns++
+				}
+				return nil
+			},
+		},
+	}
+
+	report, err := h.RunSuite(context.Background(), cases, "")
+	require.NoError(t, err)
+	require.Len(t, report.Cases, 3)
+	assert.Equal(t, 1, badProbeCalls)
+	assert.Equal(t, 3, goodRuns)
+	for _, result := range report.Cases {
+		assert.Contains(t, result.SkippedBackends, backends[0].Name)
+	}
 }
 
 func TestHarness_RunSuite_ParallelExecution(t *testing.T) {
@@ -4275,6 +4447,77 @@ func TestHarness_RunSuite_ParallelExecution(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 2, report.Summary.TotalCases)
 	assert.Equal(t, 2, report.Summary.PassedCases)
+}
+
+func TestHarness_RunSuite_CircuitBreakerSkipsFailedBackendParallel(t *testing.T) {
+	key := sessKey("cb-parallel-skip")
+	backends := makeBackends(t, key)
+	var mu sync.Mutex
+	var badProbeCalls int
+	var goodRuns int
+	backends[0].Probe = func(ctx context.Context) error {
+		mu.Lock()
+		badProbeCalls++
+		mu.Unlock()
+		return errors.New("probe failed")
+	}
+
+	h := Harness{
+		Backends:                  backends,
+		Normalizer:                NewNormalizer(DefaultNormalizerConfig()),
+		CircuitBreakerMaxFailures: 1,
+		Parallelism:               2,
+	}
+	cases := []Case{
+		{Name: "cb_par_1", RequiredCaps: []string{CapEvents}, Run: func(ctx context.Context, backend Backend) error {
+			if backend.Name == backends[1].Name {
+				mu.Lock()
+				goodRuns++
+				mu.Unlock()
+			}
+			return nil
+		}},
+		{Name: "cb_par_2", RequiredCaps: []string{CapEvents}, Run: func(ctx context.Context, backend Backend) error {
+			if backend.Name == backends[1].Name {
+				mu.Lock()
+				goodRuns++
+				mu.Unlock()
+			}
+			return nil
+		}},
+		{Name: "cb_par_3", RequiredCaps: []string{CapEvents}, Run: func(ctx context.Context, backend Backend) error {
+			if backend.Name == backends[1].Name {
+				mu.Lock()
+				goodRuns++
+				mu.Unlock()
+			}
+			return nil
+		}},
+		{Name: "cb_par_4", RequiredCaps: []string{CapEvents}, Run: func(ctx context.Context, backend Backend) error {
+			if backend.Name == backends[1].Name {
+				mu.Lock()
+				goodRuns++
+				mu.Unlock()
+			}
+			return nil
+		}},
+		{Name: "cb_par_5", RequiredCaps: []string{CapEvents}, Run: func(ctx context.Context, backend Backend) error {
+			if backend.Name == backends[1].Name {
+				mu.Lock()
+				goodRuns++
+				mu.Unlock()
+			}
+			return nil
+		}},
+	}
+
+	report, err := h.RunSuite(context.Background(), cases, "")
+	require.NoError(t, err)
+	require.Len(t, report.Cases, 5)
+	mu.Lock()
+	defer mu.Unlock()
+	assert.LessOrEqual(t, badProbeCalls, 2)
+	assert.Equal(t, 5, goodRuns)
 }
 
 func TestHarness_RunSuite_Parallel_MergesHarnessAllowedDiffs(t *testing.T) {
@@ -4907,9 +5150,11 @@ func TestHarness_Run_GoldenDirLoadError(t *testing.T) {
 			return backend.Sess.AppendEvent(ctx, sess, newUserEvent("hello"))
 		},
 	}
-	result, err := h.Run(context.Background(), c)
-	require.NoError(t, err)
-	assert.Equal(t, StatusPass, result.Status)
+	_, err := h.Run(context.Background(), c)
+	require.Error(t, err)
+	var replayErr *ReplayError
+	require.ErrorAs(t, err, &replayErr)
+	assert.Equal(t, ErrComparison, replayErr.Kind)
 }
 
 func TestFactory_SQLite_CreateFull(t *testing.T) {
@@ -5316,10 +5561,11 @@ func TestHarness_Run_GoldenDirWithComparisonError(t *testing.T) {
 			return backend.Sess.AppendEvent(ctx, sess, newUserEvent("hello"))
 		},
 	}
-	result, err := h.Run(context.Background(), c)
-	require.NoError(t, err)
-	// Should still pass even if golden comparison fails internally.
-	assert.NotEmpty(t, result.Status)
+	_, err := h.Run(context.Background(), c)
+	require.Error(t, err)
+	var replayErr *ReplayError
+	require.ErrorAs(t, err, &replayErr)
+	assert.Equal(t, ErrComparison, replayErr.Kind)
 }
 
 func TestWriteReport_EmptyPath(t *testing.T) {

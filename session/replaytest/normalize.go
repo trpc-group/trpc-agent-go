@@ -182,14 +182,6 @@ func (n *Normalizer) normalizeEvents(
 			value["longRunningToolIDs"] = aliased
 		}
 
-		// Recursively alias known identifiers in nested structures.
-		normalizeKnownIdentifiers(value, aliases, map[string]struct{}{
-			"invocationId":       {},
-			"parentInvocationId": {},
-			"parentMetadata":     {},
-			"longRunningToolIDs": {},
-		})
-
 		result = append(result, normalizeJSONMap(value, volatileSet))
 	}
 	return result, nil
@@ -369,7 +361,6 @@ func (n *Normalizer) normalizeTracks(
 				payload = string(trackEvent.Payload)
 			}
 			payload = normalizeJSON(payload, volatileSet)
-			normalizeKnownIdentifiers(payload, aliases, nil)
 			events = append(events, TrackSnapshot{
 				Track:   string(trackEvent.Track),
 				Payload: payload,

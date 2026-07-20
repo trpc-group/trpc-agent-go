@@ -36,6 +36,13 @@ import (
 	ssummary "trpc.group/trpc-go/trpc-agent-go/session/summary"
 )
 
+func closeWithWarning(t *testing.T, name string, closeFn func() error) {
+	t.Helper()
+	if closeErr := closeFn(); closeErr != nil {
+		t.Logf("warning: closing %s: %v", name, closeErr)
+	}
+}
+
 // fakeSummarizer implements summary.SessionSummarizer for deterministic testing.
 type fakeSummarizer struct{}
 
@@ -88,15 +95,11 @@ func (inMemoryFactory) Create(_ context.Context, t *testing.T) *Backend {
 		sessinmemory.WithSummarizer(&fakeSummarizer{}),
 	)
 	t.Cleanup(func() {
-		if closeErr := svc.Close(); closeErr != nil {
-			t.Logf("warning: closing inmemory session service: %v", closeErr)
-		}
+		closeWithWarning(t, "inmemory session service", svc.Close)
 	})
 	memSvc := inmemory.NewMemoryService()
 	t.Cleanup(func() {
-		if closeErr := memSvc.Close(); closeErr != nil {
-			t.Logf("warning: closing inmemory memory service: %v", closeErr)
-		}
+		closeWithWarning(t, "inmemory memory service", memSvc.Close)
 	})
 	return &Backend{
 		Name:    "inmemory",
@@ -121,9 +124,7 @@ func (sqliteFactory) Create(_ context.Context, t *testing.T) *Backend {
 	}
 	db.SetMaxOpenConns(1)
 	t.Cleanup(func() {
-		if closeErr := db.Close(); closeErr != nil {
-			t.Logf("warning: closing sqlite db: %v", closeErr)
-		}
+		closeWithWarning(t, "sqlite db", db.Close)
 	})
 	svc, err := ssqlite.NewService(db,
 		ssqlite.WithSummarizer(&fakeSummarizer{}),
@@ -132,9 +133,7 @@ func (sqliteFactory) Create(_ context.Context, t *testing.T) *Backend {
 		t.Fatalf("create sqlite service: %v", err)
 	}
 	t.Cleanup(func() {
-		if closeErr := svc.Close(); closeErr != nil {
-			t.Logf("warning: closing sqlite service: %v", closeErr)
-		}
+		closeWithWarning(t, "sqlite service", svc.Close)
 	})
 	memDB, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
@@ -143,8 +142,12 @@ func (sqliteFactory) Create(_ context.Context, t *testing.T) *Backend {
 	memDB.SetMaxOpenConns(1)
 	memSvc, err := msqlite.NewService(memDB)
 	if err != nil {
+		closeWithWarning(t, "sqlite memory db", memDB.Close)
 		t.Fatalf("create sqlite memory service: %v", err)
 	}
+	t.Cleanup(func() {
+		closeWithWarning(t, "sqlite memory service", memSvc.Close)
+	})
 	return &Backend{
 		Name:    "sqlite",
 		Sess:    svc,
@@ -177,9 +180,7 @@ func (miniredisFactory) Create(_ context.Context, t *testing.T) *Backend {
 		t.Fatalf("create redis session service: %v", err)
 	}
 	t.Cleanup(func() {
-		if closeErr := svc.Close(); closeErr != nil {
-			t.Logf("warning: closing miniredis session service: %v", closeErr)
-		}
+		closeWithWarning(t, "miniredis session service", svc.Close)
 	})
 	memSvc, err := mredis.NewService(
 		mredis.WithRedisClientURL("redis://" + mr.Addr()),
@@ -187,6 +188,9 @@ func (miniredisFactory) Create(_ context.Context, t *testing.T) *Backend {
 	if err != nil {
 		t.Fatalf("create miniredis memory service: %v", err)
 	}
+	t.Cleanup(func() {
+		closeWithWarning(t, "miniredis memory service", memSvc.Close)
+	})
 	return &Backend{
 		Name:    "miniredis",
 		Sess:    svc,
@@ -221,9 +225,7 @@ func (redisFactory) Create(_ context.Context, t *testing.T) *Backend {
 		t.Fatalf("create redis session service: %v", err)
 	}
 	t.Cleanup(func() {
-		if closeErr := svc.Close(); closeErr != nil {
-			t.Logf("warning: closing redis session service: %v", closeErr)
-		}
+		closeWithWarning(t, "redis session service", svc.Close)
 	})
 	memSvc, err := mredis.NewService(
 		mredis.WithRedisClientURL(url),
@@ -231,6 +233,9 @@ func (redisFactory) Create(_ context.Context, t *testing.T) *Backend {
 	if err != nil {
 		t.Fatalf("create redis memory service: %v", err)
 	}
+	t.Cleanup(func() {
+		closeWithWarning(t, "redis memory service", memSvc.Close)
+	})
 	return &Backend{
 		Name:    "redis",
 		Sess:    svc,
@@ -283,9 +288,7 @@ func (postgresFactory) Create(_ context.Context, t *testing.T) *Backend {
 		t.Fatalf("create postgres session service: %v", err)
 	}
 	t.Cleanup(func() {
-		if closeErr := svc.Close(); closeErr != nil {
-			t.Logf("warning: closing postgres session service: %v", closeErr)
-		}
+		closeWithWarning(t, "postgres session service", svc.Close)
 	})
 	memOpts := []mpostgres.ServiceOpt{
 		mpostgres.WithPostgresClientDSN(dsn),
@@ -297,6 +300,9 @@ func (postgresFactory) Create(_ context.Context, t *testing.T) *Backend {
 	if err != nil {
 		t.Fatalf("create postgres memory service: %v", err)
 	}
+	t.Cleanup(func() {
+		closeWithWarning(t, "postgres memory service", memSvc.Close)
+	})
 	return &Backend{
 		Name:    "postgres",
 		Sess:    svc,
@@ -350,9 +356,7 @@ func (mysqlFactory) Create(_ context.Context, t *testing.T) *Backend {
 		t.Fatalf("create mysql session service: %v", err)
 	}
 	t.Cleanup(func() {
-		if closeErr := svc.Close(); closeErr != nil {
-			t.Logf("warning: closing mysql session service: %v", closeErr)
-		}
+		closeWithWarning(t, "mysql session service", svc.Close)
 	})
 	memOpts := []mmysql.ServiceOpt{
 		mmysql.WithMySQLClientDSN(dsn),
@@ -364,6 +368,9 @@ func (mysqlFactory) Create(_ context.Context, t *testing.T) *Backend {
 	if err != nil {
 		t.Fatalf("create mysql memory service: %v", err)
 	}
+	t.Cleanup(func() {
+		closeWithWarning(t, "mysql memory service", memSvc.Close)
+	})
 	return &Backend{
 		Name:    "mysql",
 		Sess:    svc,

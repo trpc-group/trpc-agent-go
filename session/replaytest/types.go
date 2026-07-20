@@ -14,7 +14,6 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -55,9 +54,6 @@ func NewIDAliasMap() *IDAliasMap {
 func (m *IDAliasMap) Alias(original, category string) string {
 	if original == "" {
 		return ""
-	}
-	if strings.HasPrefix(original, category+"-") {
-		return original
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()

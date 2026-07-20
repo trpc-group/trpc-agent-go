@@ -83,7 +83,8 @@ type Harness struct {
 	// memoryCheckFn overrides the default memory pressure check for testing.
 	// When set, this function is called instead of reading runtime.MemStats.
 	// It returns an error if memory pressure is too high, or nil otherwise.
-	memoryCheckFn func(maxUsagePct float64) error
+	memoryCheckFn  func(maxUsagePct float64) error
+	circuitBreaker *circuitBreaker
 }
 
 func (h Harness) logf(format string, args ...any) {
@@ -175,6 +176,10 @@ func (h Harness) Run(ctx context.Context, replayCase Case) (CaseResult, error) {
 
 	// Probe backends that have health checks.
 	for _, backend := range h.Backends {
+		if h.circuitBreaker != nil && h.circuitBreaker.isTripped(backend.Name) {
+			result.SkippedBackends[backend.Name] = []string{string(ErrCircuitBreaker)}
+			continue
+		}
 		if backend.Probe != nil {
 			h.logf("replay: case=%s backend=%s phase=probe", replayCase.Name, backend.Name)
 			if err := retryOperation(ctx, retry, func(ctx context.Context) error {
@@ -182,13 +187,21 @@ func (h Harness) Run(ctx context.Context, replayCase Case) (CaseResult, error) {
 				defer cancel()
 				return backend.Probe(probeCtx)
 			}); err != nil {
-				return result, &ReplayError{Kind: ErrBackendProbe, Backend: backend.Name, Case: replayCase.Name, Cause: err}
+				replayErr := &ReplayError{Kind: ErrBackendProbe, Backend: backend.Name, Case: replayCase.Name, Cause: err}
+				if !h.handleBackendFailure(&result, replayErr) {
+					return result, replayErr
+				}
+				continue
 			}
 		}
 	}
 
 	// Warm-up backends that have validation cycles.
 	for _, backend := range h.Backends {
+		if h.circuitBreaker != nil && h.circuitBreaker.isTripped(backend.Name) {
+			result.SkippedBackends[backend.Name] = []string{string(ErrCircuitBreaker)}
+			continue
+		}
 		if backend.WarmUp != nil {
 			warmUpStart := time.Now()
 			h.logf("replay: case=%s backend=%s phase=warmup", replayCase.Name, backend.Name)
@@ -197,7 +210,11 @@ func (h Harness) Run(ctx context.Context, replayCase Case) (CaseResult, error) {
 				defer cancel()
 				return backend.WarmUp(warmUpCtx, backend)
 			}); err != nil {
-				return result, &ReplayError{Kind: ErrBackendWarmUp, Backend: backend.Name, Case: replayCase.Name, Cause: err}
+				replayErr := &ReplayError{Kind: ErrBackendWarmUp, Backend: backend.Name, Case: replayCase.Name, Cause: err}
+				if !h.handleBackendFailure(&result, replayErr) {
+					return result, replayErr
+				}
+				continue
 			}
 			h.logf("replay: case=%s backend=%s phase=warmup duration=%s",
 				replayCase.Name, backend.Name, time.Since(warmUpStart))
@@ -229,7 +246,10 @@ func (h Harness) Run(ctx context.Context, replayCase Case) (CaseResult, error) {
 		for i, backend := range h.Backends {
 			snap, err := h.captureOnBackend(ctx, replayCase, backend, normalizer, retry, timeout, maxSnapSize, i, &result)
 			if err != nil {
-				return result, err
+				if !h.handleBackendFailure(&result, err) {
+					return result, err
+				}
+				continue
 			}
 			if snap != nil {
 				snapshots = append(snapshots, *snap)
@@ -263,6 +283,10 @@ func (h Harness) Run(ctx context.Context, replayCase Case) (CaseResult, error) {
 				}
 				snap, err := h.captureOnBackend(gCtx, replayCase, backend, normalizer, retry, timeout, maxSnapSize, i, &local)
 				if err != nil {
+					if h.handleBackendFailure(&local, err) {
+						snapResults[i].local = local
+						return nil
+					}
 					return err
 				}
 				snapResults[i].local = local
@@ -407,13 +431,13 @@ func (h Harness) Run(ctx context.Context, replayCase Case) (CaseResult, error) {
 	if h.GoldenDir != "" && !h.UpdateGolden {
 		golden, found, err := LoadGoldenTrace(h.GoldenDir, replayCase.Name)
 		if err != nil {
-			h.logf("replay: %v", err)
+			return result, &ReplayError{Kind: ErrComparison, Case: replayCase.Name, Cause: err}
 		}
 		if found && len(golden.Snapshots) > 0 {
 			goldenDiffs, err := Compare(replayCase.Name, "golden", snapshots[0].backendName,
 				golden.Snapshots[0], snapshots[0].snapshot, allowed)
 			if err != nil {
-				h.logf("replay: golden comparison error for %s: %v", replayCase.Name, err)
+				return result, &ReplayError{Kind: ErrComparison, Case: replayCase.Name, Cause: err}
 			} else if len(goldenDiffs) > 0 {
 				h.logf("replay: GOLDEN REGRESSION in %s: %d diffs against golden trace",
 					replayCase.Name, len(goldenDiffs))
@@ -475,6 +499,11 @@ func (h Harness) captureOnBackend(
 	backendIdx int,
 	result *CaseResult,
 ) (*capturedSnapshot, error) {
+	if h.circuitBreaker != nil && h.circuitBreaker.isTripped(backend.Name) {
+		result.SkippedBackends[backend.Name] = []string{string(ErrCircuitBreaker)}
+		return nil, nil
+	}
+
 	caps := cloneCapabilities(backend.Caps)
 	if result.Capabilities != nil {
 		result.Capabilities[backend.Name] = caps
@@ -659,6 +688,8 @@ func (h Harness) RunSuite(ctx context.Context, cases []Case, checkpointDir strin
 	if cbMax > 0 {
 		cb = newCircuitBreaker(cbMax)
 	}
+	suiteHarness := h
+	suiteHarness.circuitBreaker = cb
 
 	// Load previously completed results from checkpoints.
 	var results []CaseResult
@@ -695,7 +726,7 @@ func (h Harness) RunSuite(ctx context.Context, cases []Case, checkpointDir strin
 				break
 			}
 
-			result, err := h.Run(ctx, c)
+			result, err := suiteHarness.Run(ctx, c)
 			if err != nil {
 				h.recordCBFailure(cb, err)
 				return nil, fmt.Errorf("run case %q: %w", c.Name, err)
@@ -717,24 +748,9 @@ func (h Harness) RunSuite(ctx context.Context, cases []Case, checkpointDir strin
 			err    error
 		}
 
-		caseCh := make(chan int, len(pendingCases))
+		caseCh := make(chan int)
 		resultCh := make(chan indexedResult, len(pendingCases))
-
-		// Filter out cases where all backends are tripped before dispatching.
-		runnableCases := make([]Case, 0, len(pendingCases))
-		for _, c := range pendingCases {
-			if cb != nil && h.allBackendsTripped(cb) {
-				h.logf("replay: all backends tripped, skipping case %s", c.Name)
-				continue
-			}
-			runnableCases = append(runnableCases, c)
-		}
-
-		// Dispatch case indices.
-		for i := range runnableCases {
-			caseCh <- i
-		}
-		close(caseCh)
+		runnableCases := append([]Case(nil), pendingCases...)
 
 		// Spawn workers.
 		actualWorkers := parallelism
@@ -768,12 +784,27 @@ func (h Harness) RunSuite(ctx context.Context, cases []Case, checkpointDir strin
 						MaxMemoryUsagePct:         h.MaxMemoryUsagePct,
 						Parallelism:               1,
 						ProgressFunc:              h.ProgressFunc,
+						circuitBreaker:            cb,
 					}
 					result, err := caseHarness.Run(suiteCtx, caseSpec)
 					resultCh <- indexedResult{index: idx, result: result, err: err}
 				}
 			}()
 		}
+
+		go func() {
+			defer close(caseCh)
+			for i := range runnableCases {
+				if suiteCtx.Err() != nil {
+					return
+				}
+				if cb != nil && h.allBackendsTripped(cb) {
+					h.logf("replay: all backends tripped, stopping parallel dispatch at case %s", runnableCases[i].Name)
+					return
+				}
+				caseCh <- i
+			}
+		}()
 
 		// Close resultCh when all workers finish.
 		go func() {
@@ -872,6 +903,29 @@ func (h Harness) recordCBSuccess(cb *circuitBreaker, result CaseResult) {
 	}
 }
 
+func (h Harness) handleBackendFailure(result *CaseResult, err error) bool {
+	if h.circuitBreaker == nil {
+		return false
+	}
+	var replayErr *ReplayError
+	if !errors.As(err, &replayErr) || replayErr.Backend == "" {
+		return false
+	}
+	switch replayErr.Kind {
+	case ErrBackendProbe, ErrBackendWarmUp, ErrBackendCapture, ErrBackendRun:
+	default:
+		return false
+	}
+	if result.SkippedBackends == nil {
+		result.SkippedBackends = make(map[string][]string)
+	}
+	result.SkippedBackends[replayErr.Backend] = []string{string(replayErr.Kind)}
+	h.circuitBreaker.recordFailure(replayErr.Backend)
+	h.logf("replay: case=%s backend=%s downgraded failure kind=%s: %v",
+		replayErr.Case, replayErr.Backend, replayErr.Kind, replayErr.Cause)
+	return true
+}
+
 // saveCheckpointAndProgress saves checkpoint and calls progress callback.
 func (h Harness) saveCheckpointAndProgress(checkpointDir, caseName string, result CaseResult, completed, total int) {
 	if checkpointDir != "" {
@@ -948,7 +1002,7 @@ func Capture(
 	}
 
 	// Load scoped states if not already provided in opts.
-	if opts.AppState == nil || opts.UserState == nil {
+	if backend.Caps.Has(CapState) && (opts.AppState == nil || opts.UserState == nil) {
 		appState, userState, err := loadScopedStates(ctx, backend)
 		if err != nil {
 			return Snapshot{}, err
@@ -1392,8 +1446,16 @@ func mergeAllowedDiffs(harness, caseLevel []AllowedDiff) []AllowedDiff {
 }
 
 func validateCase(replayCase Case) error {
-	if strings.TrimSpace(replayCase.Name) == "" {
+	name := strings.TrimSpace(replayCase.Name)
+	if name == "" {
 		return fmt.Errorf("replay case requires a name")
+	}
+	if name != replayCase.Name {
+		return fmt.Errorf("replay case %q must not have leading or trailing whitespace", replayCase.Name)
+	}
+	if name == "." || name == ".." || strings.Contains(name, "..") ||
+		strings.ContainsAny(name, `/\`) || filepath.Clean(name) != name {
+		return fmt.Errorf("replay case %q is not a safe file name", replayCase.Name)
 	}
 	if replayCase.Run == nil {
 		// Ops and ParallelGroups are reserved for future declarative execution.

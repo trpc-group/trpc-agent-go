@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -143,9 +144,13 @@ func case05MemorySearchAndScore() Case {
 	epTime := time.Date(2024, 6, 15, 10, 0, 0, 0, time.UTC)
 	return Case{
 		Name:              "case05_memory_search_and_score",
-		RequiredCaps:      []string{CapMemory},
+		RequiredCaps:      []string{CapMemory, CapEvents},
 		UnorderedMemories: true,
 		Run: func(ctx context.Context, backend Backend) error {
+			key := backend.SessKey()
+			if _, err := backend.Sess.CreateSession(ctx, key, nil); err != nil {
+				return err
+			}
 			uk := memory.UserKey{AppName: backend.SessKey().AppName, UserID: backend.SessKey().UserID}
 			if err := backend.Mem.AddMemory(ctx, uk, "User prefers dark mode", []string{"preference"}); err != nil {
 				return err
@@ -153,13 +158,42 @@ func case05MemorySearchAndScore() Case {
 			if err := backend.Mem.AddMemory(ctx, uk, "User is a Go developer", []string{"fact"}); err != nil {
 				return err
 			}
-			return backend.Mem.AddMemory(ctx, uk, "User went hiking at Mt. Fuji with Alice", []string{"episode"},
+			if err := backend.Mem.AddMemory(ctx, uk, "User went hiking at Mt. Fuji with Alice", []string{"episode"},
 				memory.WithMetadata(&memory.Metadata{
 					Kind:         memory.KindEpisode,
 					EventTime:    &epTime,
 					Participants: []string{"Alice"},
 					Location:     "Mt. Fuji",
-				}))
+				})); err != nil {
+				return err
+			}
+			results, err := backend.Mem.SearchMemories(ctx, uk, "Alice Fuji hiking")
+			if err != nil {
+				return err
+			}
+			sess, err := backend.Sess.GetSession(ctx, key)
+			if err != nil {
+				return err
+			}
+			normalizedResults := make([]map[string]any, 0, len(results))
+			for idx, entry := range results {
+				item := map[string]any{
+					"rank":  idx,
+					"score": fmt.Sprintf("%.6f", entry.Score),
+				}
+				if entry.Memory != nil {
+					item["content"] = entry.Memory.Memory
+				}
+				normalizedResults = append(normalizedResults, item)
+			}
+			payload, err := json.Marshal(map[string]any{
+				"query":   "Alice Fuji hiking",
+				"results": normalizedResults,
+			})
+			if err != nil {
+				return err
+			}
+			return backend.Sess.AppendEvent(ctx, sess, newAssistantEvent(string(payload)))
 		},
 	}
 }
@@ -286,11 +320,26 @@ func case09ConcurrentToolInterleaving() Case {
 			if err != nil {
 				return err
 			}
+			start := make(chan struct{})
+			errCh := make(chan error, 15)
+			var wg sync.WaitGroup
 			for gIdx := 0; gIdx < 3; gIdx++ {
 				for i := 0; i < 5; i++ {
-					if err := backend.Sess.AppendEvent(ctx, sess, newUserEvent(fmt.Sprintf("g%d-e%d", gIdx, i))); err != nil {
-						return err
-					}
+					gIdx, i := gIdx, i
+					wg.Add(1)
+					go func() {
+						defer wg.Done()
+						<-start
+						errCh <- backend.Sess.AppendEvent(ctx, sess, newUserEvent(fmt.Sprintf("g%d-e%d", gIdx, i)))
+					}()
+				}
+			}
+			close(start)
+			wg.Wait()
+			close(errCh)
+			for err := range errCh {
+				if err != nil {
+					return err
 				}
 			}
 			return nil
