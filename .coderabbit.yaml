@@ -106,7 +106,7 @@ reviews:
         - whether it duplicates or partially overlaps an existing public entry
           point;
         - whether its name represents a stable user-facing concept rather than
-          an incidental implementation, provider, vendor, or deployment detail;
+          an incidental implementation detail;
         - whether the design can evolve without parallel APIs, duplicate types,
           or incompatible renames;
         - whether defaults, zero values, nil inputs, errors, ownership,
@@ -123,24 +123,23 @@ reviews:
         source compatible. An unnecessary or overlapping export is still a
         long-term framework commitment.
 
-        Provider and abstraction boundaries:
+        Package and abstraction boundaries:
 
-        - Keep provider-, vendor-, model-, protocol-, business-, and
-          deployment-specific concepts in their owning packages.
-        - Do not move provider-specific fields or options into shared framework
-          types unless multiple implementations share the same semantics.
-        - Prefer capability-oriented shared abstractions over
-          provider-oriented abstractions.
+        - Keep implementation-specific concepts in their owning packages.
+        - Move a concept into a shared package only when its semantics are
+          genuinely shared across implementations.
+        - Prefer capability-oriented abstractions over abstractions organized
+          around a particular implementation.
         - Check whether changes to shared interfaces affect all existing
           implementations, including implementations outside the pull request.
-        - Check whether a concrete provider package can expose a necessary
-          specialized capability without expanding a shared package.
+        - Check whether an owning package can expose a necessary specialized
+          capability without expanding a shared package.
 
         Public API naming versus local naming:
 
         - Treat exported naming as a framework design concern when it affects
           semantic accuracy, discoverability, package fit, abstraction
-          boundaries, provider leakage, or future evolution.
+          boundaries, implementation leakage, or future evolution.
         - Do not dismiss a public naming concern as style merely because the
           code compiles or the name is internally consistent.
         - Treat unexported helpers, local variables, and test names as
@@ -150,6 +149,27 @@ reviews:
         - Raise a local naming issue only when the name is misleading,
           conflicts with an established convention, or is likely to cause
           incorrect behavior.
+
+        Idiomatic Go design:
+
+        - Check that package names are short, lowercase, and single words, and
+          that exported names read naturally when package-qualified without
+          stutter.
+        - Check MixedCaps and established initialism spelling.
+        - Prefer small, consumer-oriented interfaces. Question interfaces that
+          have no demonstrated abstraction or exist only for mocking.
+        - Prefer concrete constructor return types, useful zero values where
+          practical, and constructors that establish clear invariants.
+        - Require context.Context to be the first parameter when needed. Check
+          cancellation propagation and avoid stored contexts unless the type
+          explicitly owns that lifetime.
+        - Keep error strings lowercase and without trailing punctuation. Check
+          `%w` wrapping and expose sentinel or typed errors only when callers
+          need a stable inspection contract.
+        - Check that goroutine, channel, resource, cancellation, and shutdown
+          ownership is explicit and bounded.
+        - Require exported declaration comments to begin with the declared name
+          and describe the caller-visible contract.
 
         Compatibility and behavior:
 
@@ -201,8 +221,8 @@ reviews:
         - the old behavior;
         - the new behavior;
         - the affected users and extension points; and
-        - the tests, examples, documentation, migration notes, and release
-          notes that should be updated.
+        - the tests, examples, documentation, and migration guidance that
+          should be updated.
 
     - path: "**/*_test.go"
       instructions: |

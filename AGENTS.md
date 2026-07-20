@@ -25,12 +25,38 @@ new abstractions before their responsibility and ownership are clear.
 New behavior should preserve existing defaults and should be opt-in when
 practical.
 
-Framework abstractions should be capability-oriented. Keep provider-, vendor-,
-model-, protocol-, business-, and deployment-specific concepts in their owning
-packages unless there is a demonstrated provider-independent abstraction.
+Framework abstractions should be capability-oriented. Keep
+implementation-specific concepts in their owning packages unless their
+semantics are genuinely shared across implementations.
 
 Update documentation and examples whenever public behavior, defaults,
 configuration, or recommended usage changes.
+
+## Go design conventions
+
+Follow Effective Go and the Go Code Review Comments, while preserving
+established APIs when compatibility requires it.
+
+- Use `gofmt` and `goimports`.
+- Use short, lowercase, single-word package names, and make exported names read
+  naturally with their package qualifier without stutter.
+- Use MixedCaps and spell common initialisms consistently.
+- Prefer small, consumer-oriented interfaces and concrete constructor return
+  types. Do not add an interface for a hypothetical abstraction.
+- Make zero values useful when practical; use constructors to establish
+  invariants when necessary.
+- Pass `context.Context` first when needed, propagate cancellation, and avoid
+  storing contexts in structs unless the type owns that lifetime.
+- Keep error strings lowercase and without trailing punctuation. Preserve
+  causes with `%w` when callers need them; expose inspectable errors only for a
+  stable caller contract.
+- Make goroutine, channel, resource, cancellation, and shutdown ownership
+  explicit.
+- Write Godoc for exported declarations as complete sentences beginning with
+  the declared name and describing the caller-visible contract.
+
+Do not refactor established public APIs or raise local style comments merely to
+apply an idiom when the existing code is clear and compatible.
 
 ## Implementation workflow
 
@@ -124,10 +150,6 @@ For every added or changed public symbol, verify:
    Tests exercise the public contract and externally observable behavior rather
    than only implementation details.
 
-10. **Disclosure**
-    The pull request description lists the public API changes, their necessity,
-    and their compatibility implications.
-
 If an export cannot be justified, keep it private.
 
 If two public entry points perform substantially the same operation, consolidate
@@ -137,7 +159,7 @@ them or establish and document clearly distinct contracts.
 
 Public API naming is a framework design concern. Review exported names for
 semantic accuracy, discoverability, package fit, abstraction boundaries,
-provider leakage, and future evolution.
+implementation leakage, and future evolution.
 
 Unexported helpers, local variables, and test names are implementation details.
 Do not block a change based only on a personal naming or refactoring preference.
@@ -154,8 +176,8 @@ behavior are exempt from the English requirement.
 Comments should explain contracts, constraints, invariants, non-obvious
 behavior, or design reasoning. Avoid comments that merely restate the code.
 
-When preparing a pull request, follow the title, description, language, public
-API, label, and release-note requirements in `CONTRIBUTING.md`.
+When preparing a pull request, follow the title, description, language, and
+label requirements in `CONTRIBUTING.md`.
 
 ## Validation
 

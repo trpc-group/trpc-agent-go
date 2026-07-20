@@ -14,36 +14,20 @@ For multiple equally affected packages:
 
 ## What changed
 
-Describe the externally observable behavior, API, documentation, or example
-changes. Do not only list changed files.
+Summarize the outcome and its user or developer impact. Do not restate the
+implementation or enumerate changed files.
 
 ## Why
 
-Explain the problem, design motivation, and why this approach was selected.
-
-## Public API and compatibility
-
-List every added, removed, renamed, or changed public API or externally
-observable contract.
-
-For each change, explain its necessity, package ownership, relationship to
-existing APIs, default behavior, and compatibility implications.
-
-Write `None` if this pull request does not change public APIs or externally
-observable contracts.
+Explain the problem and any non-obvious design rationale.
 
 ## Testing
 
 List the automated and manual validation that was actually performed. If a
 check is not applicable, explain why.
 
-## Release notes
-
-Describe the user-visible effect of this change. Write `NONE` if there is no
-user-visible effect.
-
 ## Notes for reviewers
 
-Call out areas that deserve focused review, such as public API design,
-concurrency, persistence, event ordering, streaming, cancellation, protocol
-compatibility, security boundaries, or provider-specific behavior.
+Optionally call out risks or design decisions that are not obvious from the
+diff, such as public API, compatibility, concurrency, persistence, protocol, or
+security concerns.

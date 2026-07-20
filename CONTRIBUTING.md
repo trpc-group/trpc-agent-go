@@ -114,23 +114,21 @@ tool name, or bracketed tag does not replace the affected package name.
 
 ### Pull request description
 
-Keep the pull request template and complete every applicable section.
+Keep the description concise. The diff is the source of truth; the description
+should provide the context that code alone cannot.
 
-The description must explain:
+Use the pull request template to explain:
 
-- **What changed**: the externally observable behavior, API, documentation, or
-  example changes.
-- **Why**: the problem, design motivation, and reason for selecting the proposed
-  approach.
-- **Public API and compatibility**: the affected public contracts and their
-  compatibility implications.
-- **Testing**: the automated and manual validation that was actually performed.
-- **Release notes**: the user-visible effect of the change, or `NONE`.
-- **Notes for reviewers**: areas that deserve focused review.
+- **What changed**: the outcome and its user or developer impact.
+- **Why**: the problem and any non-obvious design rationale.
+- **Testing**: the validation that was actually performed.
+- **Notes for reviewers**: optional risks or design decisions that deserve
+  focused review.
 
-Do not leave template instructions unchanged. Do not submit a description that
-only repeats the title or lists changed files without explaining their behavior
-and motivation.
+Do not restate the implementation, enumerate every changed file or symbol, or
+leave template instructions unchanged. When a public API, compatibility, or
+migration concern is not clear from the diff, call it out under **Notes for
+reviewers**.
 
 Markdown is allowed in pull request descriptions.
 
@@ -155,25 +153,12 @@ Before adding a public API:
 
 - search for an existing API or extension point that can support the use case;
 - verify that the concept belongs to the selected package and abstraction layer;
-- keep provider-, vendor-, model-, protocol-, business-, and
-  deployment-specific concepts out of shared packages unless they form a
-  demonstrated general abstraction;
+- keep implementation-specific concepts in their owning packages unless their
+  semantics are genuinely shared across implementations;
 - avoid parallel entry points with substantially overlapping responsibilities;
 - prefer the smallest surface that supports external consumers; and
 - consider how the API can evolve without duplicate types, methods, or
   incompatible renames.
-
-The pull request description must list every added or changed public symbol and
-explain:
-
-- why the public surface is necessary;
-- why an existing API or extension point is insufficient;
-- why the symbol belongs in its package;
-- its default, zero-value, nil, error, ownership, and lifecycle behavior where
-  relevant;
-- its source, behavioral, serialization, persistence, and protocol
-  compatibility where relevant; and
-- any migration, deprecation, or future-extension considerations.
 
 Every exported symbol must have meaningful Godoc that explains its contract.
 Documentation that only restates the declaration is insufficient.
@@ -183,6 +168,40 @@ semantic accuracy, discoverability, package fit, abstraction boundaries, and
 future evolution. Unexported naming and local refactoring preferences are not
 public API concerns unless they are misleading or likely to cause incorrect
 behavior.
+
+### Go conventions
+
+Follow [Effective Go](https://go.dev/doc/effective_go) and the
+[Go Code Review Comments](https://go.dev/wiki/CodeReviewComments), while
+preserving established project APIs when compatibility requires it.
+
+- Format code with `gofmt` and organize imports with `goimports`.
+- Use short, lowercase, single-word package names. Avoid underscores, mixed
+  capitals, and names that repeat their package when qualified.
+- Use MixedCaps for Go names and spell common initialisms consistently, such as
+  `ID`, `URL`, and `HTTP`.
+- Make exported names read naturally with their package qualifier. Avoid
+  stutter and redundant prefixes such as `pkg.PkgType`.
+- Prefer small interfaces that describe behavior required by consumers. Do not
+  introduce an interface only to anticipate hypothetical implementations or to
+  make a concrete type easier to mock.
+- Prefer returning concrete types from constructors. Add a constructor when it
+  establishes invariants or improves usability; otherwise, make the zero value
+  useful when practical.
+- Pass `context.Context` as the first parameter when an operation needs it. Do
+  not store a context in a struct unless the type explicitly represents that
+  context's lifetime.
+- Keep error strings lowercase and without trailing punctuation. Wrap errors
+  with `%w` when callers need the cause, and expose sentinel or typed errors
+  only when callers have a stable reason to inspect them.
+- Make goroutine, channel, resource, cancellation, and shutdown ownership
+  explicit. Background work must have a bounded way to stop.
+- Write doc comments for exported declarations as complete sentences beginning
+  with the declared name, and document behavior that callers must understand.
+
+Do not turn idiomatic guidance into subjective churn. Match surrounding code
+when several forms are valid, and do not refactor established public APIs only
+to satisfy a style preference.
 
 ### Code quality and validation
 
@@ -236,29 +255,13 @@ Every pull request must have an appropriate type label:
 Use `type/api-change` whenever the change affects a public API or externally
 observable contract, even if another type label also applies.
 
-### Release notes
-
-Release notes are required for user-visible changes, including:
-
-- critical bug fixes;
-- notable features;
-- deprecations or removals;
-- public API or behavioral changes; and
-- significant documentation additions.
-
-Describe the impact from the user’s perspective and avoid unnecessary
-implementation detail.
-
-Use `NONE` for changes without user-visible impact, such as internal
-refactoring or test-only changes.
-
 ### Updating a pull request
 
 Push additional commits to the pull request branch when addressing feedback.
 
 Both incremental commits and rebasing with a force-push are accepted. Keep the
-pull request description synchronized with the final design and behavior,
-especially after public APIs or compatibility decisions change.
+pull request description synchronized with the final outcome and any important
+review context.
 
 ## Copyright headers
 
