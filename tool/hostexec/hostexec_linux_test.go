@@ -27,7 +27,7 @@ func TestApplyParentDeathSignal(t *testing.T) {
 	require.Equal(t, syscall.SIGTERM, attr.Pdeathsig)
 }
 
-func TestPrepareCommands_Pdeathsig(t *testing.T) {
+func TestPrepareCommandsParentDeathSignal(t *testing.T) {
 	pipeCmd := &exec.Cmd{}
 	preparePipeCommand(pipeCmd)
 	require.NotNil(t, pipeCmd.SysProcAttr)

@@ -116,11 +116,12 @@ func NewService(db *sql.DB, options ...ServiceOpt) (*Service, error) {
 			opts.enabledTools,
 		)
 		config := imemory.AutoMemoryConfig{
-			Extractor:        opts.extractor,
-			AsyncMemoryNum:   opts.asyncMemoryNum,
-			MemoryQueueSize:  opts.memoryQueueSize,
-			MemoryJobTimeout: opts.memoryJobTimeout,
-			EnabledTools:     opts.enabledTools,
+			Extractor:                opts.extractor,
+			AsyncMemoryNum:           opts.asyncMemoryNum,
+			MemoryQueueSize:          opts.memoryQueueSize,
+			MemoryJobTimeout:         opts.memoryJobTimeout,
+			DisableOnExternalContext: opts.disableAutoMemoryOnExternalContext,
+			EnabledTools:             opts.enabledTools,
 		}
 		s.autoMemoryWorker = imemory.NewAutoMemoryWorker(config, s)
 		s.autoMemoryWorker.Start()

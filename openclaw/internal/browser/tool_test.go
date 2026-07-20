@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -158,6 +159,450 @@ func TestToolCall_SnapshotWrapsUntrustedText(t *testing.T) {
 	require.Equal(t, mcpToolSnapshot, drv.calls[0].Tool)
 }
 
+func TestToolCall_BrowserBackendCrashGuardBlocksRepeatedCrashes(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	crashText := "### Error\nError: async initializeServer: " +
+		"Target page, context or browser has been closed\n" +
+		"[pid=123] <process did exit: signal=SIGTRAP>"
+	drv := &fakeDriver{
+		callResult: map[string]any{
+			mcpToolNavigate: []map[string]any{{
+				"type": "text",
+				"text": crashText,
+			}},
+		},
+	}
+	tool := newToolWithDrivers(
+		defaultProfileName,
+		false,
+		navigationPolicy{},
+		nil,
+		nil,
+		nil,
+		map[string]ProfileConfig{
+			defaultProfileName: {Name: defaultProfileName},
+		},
+		map[string]driver{
+			defaultProfileName: drv,
+		},
+	)
+	ctx := agent.NewInvocationContext(
+		context.Background(),
+		agent.NewInvocation(),
+	)
+
+	for i := 0; i < browserCrashThreshold; i++ {
+		raw, err := tool.Call(
+			ctx,
+			mustJSON(t, map[string]any{
+				"action": actionNavigate,
+				"url":    "https://example.com",
+			}),
+		)
+		require.NoError(t, err)
+		got := raw.(Result)
+		require.Contains(t, got.Text, "Target page")
+		require.NotEqual(t, stateDegraded, got.State)
+	}
+
+	raw, err := tool.Call(
+		ctx,
+		mustJSON(t, map[string]any{"action": actionSnapshot}),
+	)
+	require.NoError(t, err)
+	got := raw.(Result)
+	require.Equal(t, stateDegraded, got.State)
+	require.Contains(t, got.Text, "Browser backend is degraded")
+	require.Contains(t, got.Text, "browser automation blocker")
+	require.Contains(t, got.Text, "web_fetch")
+	require.Len(t, drv.calls, browserCrashThreshold)
+}
+
+func TestToolCall_BrowserBackendCrashGuardResetsAfterSuccessfulCall(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	drv := &fakeDriver{
+		callResult: map[string]any{
+			mcpToolNavigate: []map[string]any{{
+				"type": "text",
+				"text": "Error: Target page, context or browser has been closed",
+			}},
+		},
+	}
+	tool := newToolWithDrivers(
+		defaultProfileName,
+		false,
+		navigationPolicy{},
+		nil,
+		nil,
+		nil,
+		map[string]ProfileConfig{
+			defaultProfileName: {Name: defaultProfileName},
+		},
+		map[string]driver{
+			defaultProfileName: drv,
+		},
+	)
+	ctx := agent.NewInvocationContext(
+		context.Background(),
+		agent.NewInvocation(),
+	)
+
+	_, err := tool.Call(
+		ctx,
+		mustJSON(t, map[string]any{
+			"action": actionNavigate,
+			"url":    "https://example.com",
+		}),
+	)
+	require.NoError(t, err)
+	raw, err := tool.Call(
+		ctx,
+		mustJSON(t, map[string]any{"action": actionSnapshot}),
+	)
+	require.NoError(t, err)
+	got := raw.(Result)
+	require.NotEqual(t, stateDegraded, got.State)
+
+	_, err = tool.Call(
+		ctx,
+		mustJSON(t, map[string]any{
+			"action": actionNavigate,
+			"url":    "https://example.com",
+		}),
+	)
+	require.NoError(t, err)
+	raw, err = tool.Call(
+		ctx,
+		mustJSON(t, map[string]any{"action": actionSnapshot}),
+	)
+	require.NoError(t, err)
+	got = raw.(Result)
+	require.NotEqual(t, stateDegraded, got.State)
+	require.Len(t, drv.calls, 4)
+}
+
+func TestToolCall_BrowserBackendCrashGuardStartStopResetBlockedState(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	drv := &fakeDriver{
+		callResult: map[string]any{
+			mcpToolNavigate: []map[string]any{{
+				"type": "text",
+				"text": "Error: Target page, context or browser has been closed",
+			}},
+		},
+	}
+	tool := newToolWithDrivers(
+		defaultProfileName,
+		false,
+		navigationPolicy{},
+		nil,
+		nil,
+		nil,
+		map[string]ProfileConfig{
+			defaultProfileName: {Name: defaultProfileName},
+		},
+		map[string]driver{
+			defaultProfileName: drv,
+		},
+	)
+	ctx := agent.NewInvocationContext(
+		context.Background(),
+		agent.NewInvocation(),
+	)
+
+	for i := 0; i < browserCrashThreshold; i++ {
+		_, err := tool.Call(
+			ctx,
+			mustJSON(t, map[string]any{
+				"action": actionNavigate,
+				"url":    "https://example.com",
+			}),
+		)
+		require.NoError(t, err)
+	}
+	_, err := tool.Call(ctx, mustJSON(t, map[string]any{"action": actionStatus}))
+	require.NoError(t, err)
+	raw, err := tool.Call(
+		ctx,
+		mustJSON(t, map[string]any{"action": actionSnapshot}),
+	)
+	require.NoError(t, err)
+	require.Equal(t, stateDegraded, raw.(Result).State)
+	require.Len(t, drv.calls, browserCrashThreshold)
+
+	raw, err = tool.Call(ctx, mustJSON(t, map[string]any{"action": actionStart}))
+	require.NoError(t, err)
+	require.NotEqual(t, stateDegraded, raw.(Result).State)
+	raw, err = tool.Call(
+		ctx,
+		mustJSON(t, map[string]any{"action": actionSnapshot}),
+	)
+	require.NoError(t, err)
+	require.NotEqual(t, stateDegraded, raw.(Result).State)
+	require.Len(t, drv.calls, browserCrashThreshold+1)
+
+	for i := 0; i < browserCrashThreshold; i++ {
+		_, err = tool.Call(
+			ctx,
+			mustJSON(t, map[string]any{
+				"action": actionNavigate,
+				"url":    "https://example.com",
+			}),
+		)
+		require.NoError(t, err)
+	}
+	_, err = tool.Call(
+		ctx,
+		mustJSON(t, map[string]any{"action": actionProfiles}),
+	)
+	require.NoError(t, err)
+	raw, err = tool.Call(
+		ctx,
+		mustJSON(t, map[string]any{"action": actionSnapshot}),
+	)
+	require.NoError(t, err)
+	require.Equal(t, stateDegraded, raw.(Result).State)
+
+	raw, err = tool.Call(ctx, mustJSON(t, map[string]any{"action": actionStop}))
+	require.NoError(t, err)
+	require.Equal(t, stateStopped, raw.(Result).State)
+	require.Equal(t, 1, drv.StopCount())
+	raw, err = tool.Call(
+		ctx,
+		mustJSON(t, map[string]any{"action": actionSnapshot}),
+	)
+	require.NoError(t, err)
+	require.NotEqual(t, stateDegraded, raw.(Result).State)
+}
+
+func TestToolCall_BrowserBackendCrashGuardIsInvocationScoped(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{
+		callResult: map[string]any{
+			mcpToolNavigate: []map[string]any{{
+				"type": "text",
+				"text": "Error: Target page, context or browser has been closed",
+			}},
+		},
+	}
+	tool := newToolWithDrivers(
+		defaultProfileName,
+		false,
+		navigationPolicy{},
+		nil,
+		nil,
+		nil,
+		map[string]ProfileConfig{
+			defaultProfileName: {Name: defaultProfileName},
+		},
+		map[string]driver{
+			defaultProfileName: drv,
+		},
+	)
+	firstCtx := agent.NewInvocationContext(
+		context.Background(),
+		agent.NewInvocation(),
+	)
+	secondCtx := agent.NewInvocationContext(
+		context.Background(),
+		agent.NewInvocation(),
+	)
+
+	for i := 0; i < browserCrashThreshold; i++ {
+		_, err := tool.Call(
+			firstCtx,
+			mustJSON(t, map[string]any{
+				"action": actionNavigate,
+				"url":    "https://example.com",
+			}),
+		)
+		require.NoError(t, err)
+	}
+	_, err := tool.Call(
+		firstCtx,
+		mustJSON(t, map[string]any{"action": actionSnapshot}),
+	)
+	require.NoError(t, err)
+	require.Len(t, drv.calls, browserCrashThreshold)
+
+	raw, err := tool.Call(
+		secondCtx,
+		mustJSON(t, map[string]any{"action": actionSnapshot}),
+	)
+	require.NoError(t, err)
+	got := raw.(Result)
+	require.NotEqual(t, stateDegraded, got.State)
+	require.Len(t, drv.calls, browserCrashThreshold+1)
+}
+
+func TestCrashGuardedDriverDelegatesStatusAndRecordsCallErrors(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{
+		status: driverStatus{
+			State: stateReady,
+		},
+		callErr: errors.New(
+			"### Error\nError: browser has disconnected",
+		),
+	}
+	ctx := agent.NewInvocationContext(
+		context.Background(),
+		agent.NewInvocation(),
+	)
+	guarded := newCrashGuardedDriver(ctx, "", drv)
+	require.NotNil(t, guarded)
+
+	status, err := guarded.Status(ctx)
+	require.NoError(t, err)
+	require.Equal(t, stateReady, status.State)
+
+	_, err = guarded.Call(ctx, "browser_snapshot", nil)
+	require.Error(t, err)
+	state, ok := browserCrashStateForContext(ctx, defaultProfileName)
+	require.True(t, ok)
+	require.Equal(t, 1, state.Consecutive)
+	require.Equal(t, "browser has disconnected", state.Reason)
+}
+
+func TestNewCrashGuardedDriverSkipsWithoutInvocation(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{}
+	require.Nil(t, newCrashGuardedDriver(context.Background(), "", nil))
+	require.Same(
+		t,
+		drv,
+		newCrashGuardedDriver(context.Background(), defaultProfileName, drv),
+	)
+}
+
+func TestBrowserCrashBlockedContentUsesDefaults(t *testing.T) {
+	t.Parallel()
+
+	content := browserCrashBlockedContent("", "")
+	require.Len(t, content, 1)
+	require.Equal(t, "text", content[0]["type"])
+	text, ok := content[0]["text"].(string)
+	require.True(t, ok)
+	require.Contains(t, text, defaultProfileName)
+	require.Contains(t, text, "browser backend crashed repeatedly")
+}
+
+func TestDetectBrowserBackendCrash(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		text string
+		want bool
+	}{
+		{
+			name: "target closed",
+			text: "### Error\nError: Target page, context or browser has been closed",
+			want: true,
+		},
+		{
+			name: "browser has been closed",
+			text: "### Error\nError: browser has been closed",
+			want: true,
+		},
+		{
+			name: "browser has disconnected",
+			text: "### Error\nError: browser has disconnected",
+			want: true,
+		},
+		{
+			name: "browser is closed",
+			text: "### Error\nError: browser is closed",
+			want: true,
+		},
+		{
+			name: "process did exit",
+			text: "[pid=123] <process did exit: exitCode=1>",
+			want: true,
+		},
+		{
+			name: "browser connection closed",
+			text: "browser connection closed while reading response",
+			want: true,
+		},
+		{
+			name: "sigtrap with error context",
+			text: "### Error\n<process did exit: exitCode=null, signal=SIGTRAP>",
+			want: true,
+		},
+		{
+			name: "plain sigtrap page text",
+			text: "A public article mentions SIGTRAP in a debugging guide.",
+			want: false,
+		},
+		{
+			name: "sigtrap process log",
+			text: "<process did exit: exitCode=null, signal=SIGTRAP>",
+			want: true,
+		},
+		{
+			name: "plain process exit page text",
+			text: "The tutorial says the process did exit after cleanup.",
+			want: false,
+		},
+		{
+			name: "ordinary page text",
+			text: "A post explaining why a browser has been closed",
+			want: false,
+		},
+		{
+			name: "empty",
+			text: "   ",
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, _ := detectBrowserBackendCrash(tt.text)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestBrowserCrashGuardFromContextConcurrentCreate(t *testing.T) {
+	t.Parallel()
+
+	ctx := agent.NewInvocationContext(
+		context.Background(),
+		agent.NewInvocation(),
+	)
+	const workers = 16
+	start := make(chan struct{})
+	results := make(chan *browserCrashGuard, workers)
+	for i := 0; i < workers; i++ {
+		go func() {
+			<-start
+			results <- browserCrashGuardFromContext(ctx, true)
+		}()
+	}
+	close(start)
+
+	first := <-results
+	require.NotNil(t, first)
+	for i := 1; i < workers; i++ {
+		require.Same(t, first, <-results)
+	}
+}
+
 func TestToolCall_ActClickSelectsRequestedTab(t *testing.T) {
 	t.Parallel()
 
@@ -236,6 +681,7 @@ func TestToolCall_ActEvaluateDisabled(t *testing.T) {
 func TestToolCall_ProfilesAreSorted(t *testing.T) {
 	t.Parallel()
 
+	root := t.TempDir()
 	openclawDriver := &fakeDriver{
 		status: driverStatus{State: stateReady, ToolCount: 3},
 	}
@@ -246,7 +692,12 @@ func TestToolCall_ProfilesAreSorted(t *testing.T) {
 	tool := newToolWithDrivers(
 		defaultProfileName,
 		false,
-		navigationPolicy{},
+		navigationPolicy{
+			AllowedDomains:   []string{"example.com"},
+			BlockedDomains:   []string{"blocked.example"},
+			AllowLoopback:    true,
+			AllowedFileRoots: []string{root},
+		},
 		nil,
 		nil,
 		nil,
@@ -277,6 +728,23 @@ func TestToolCall_ProfilesAreSorted(t *testing.T) {
 	require.Equal(t, defaultProfileName, got.Profiles[1].Name)
 	require.Equal(t, driverTypePlaywrightMCP, got.Profiles[0].Driver)
 	require.Equal(t, driverTypePlaywrightMCP, got.Profiles[1].Driver)
+	require.NotNil(t, got.NavigationPolicy)
+	require.Equal(
+		t,
+		[]string{"example.com"},
+		got.NavigationPolicy.AllowedDomains,
+	)
+	require.Equal(
+		t,
+		[]string{"blocked.example"},
+		got.NavigationPolicy.BlockedDomains,
+	)
+	require.True(t, got.NavigationPolicy.AllowLoopback)
+	require.False(t, got.NavigationPolicy.AllowFileURLs)
+	require.True(t, got.NavigationPolicy.AllowRootFileURLs)
+	require.Equal(t, []string{root}, got.NavigationPolicy.AllowedFileRoots)
+	require.Equal(t, got.NavigationPolicy, got.Profiles[0].NavigationPolicy)
+	require.Equal(t, got.NavigationPolicy, got.Profiles[1].NavigationPolicy)
 }
 
 func TestToolCall_ScreenshotPreservesContent(t *testing.T) {
@@ -357,6 +825,31 @@ func TestToolCall_OpenCreatesThenNavigates(t *testing.T) {
 	)
 }
 
+func TestToolCall_OpenBlocksSearchResultPageBeforeCreatingTab(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	drv := &fakeDriver{}
+	tool := newTestTool(drv)
+
+	raw, err := tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action": actionOpen,
+			"url":    "https://www.google.com/search?q=openclaw",
+		}),
+	)
+	require.NoError(t, err)
+
+	got := raw.(Result)
+	require.Equal(t, actionOpen, got.Action)
+	require.Equal(t, stateBlocked, got.State)
+	require.Contains(t, got.Text, "search-engine result page")
+	require.Contains(t, got.Text, "allow_search_result_pages")
+	require.Empty(t, drv.calls)
+}
+
 func TestToolCall_FillUsesFillForm(t *testing.T) {
 	t.Parallel()
 
@@ -402,6 +895,76 @@ func TestToolCall_FillUsesFillForm(t *testing.T) {
 	require.Equal(t, "a@example.com", fields[0]["value"])
 	require.NotContains(t, fields[0], "ref")
 	require.NotContains(t, fields[0], "text")
+}
+
+func TestToolCall_ActFillAcceptsSingleTargetText(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{}
+	tool := newTestTool(drv)
+
+	_, err := tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action": actionAct,
+			"request": map[string]any{
+				"kind":   actFill,
+				"ref":    "e61",
+				"target": "Search combobox",
+				"text":   "book",
+			},
+		}),
+	)
+	require.NoError(t, err)
+	require.Len(t, drv.calls, 1)
+	require.Equal(t, mcpToolFillForm, drv.calls[0].Tool)
+	fields, ok := drv.calls[0].Args["fields"].([]map[string]any)
+	require.True(t, ok)
+	require.Len(t, fields, 1)
+	require.Equal(t, "Search combobox", fields[0]["target"])
+	require.Equal(t, "book", fields[0]["value"])
+	require.Contains(t, fields[0]["element"], "e61")
+}
+
+func TestToolCall_ActFillPreservesExactEmptyText(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{}
+	tool := newTestTool(drv)
+
+	_, err := tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action": actionAct,
+			"request": map[string]any{
+				"kind":   actFill,
+				"target": "Search combobox",
+				"text":   "",
+			},
+		}),
+	)
+	require.NoError(t, err)
+	require.Len(t, drv.calls, 1)
+	fields, ok := drv.calls[0].Args["fields"].([]map[string]any)
+	require.True(t, ok)
+	require.Len(t, fields, 1)
+	require.Equal(t, "", fields[0]["value"])
+
+	_, err = tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action": actionAct,
+			"request": map[string]any{
+				"kind":   actFill,
+				"target": "Search combobox",
+				"text":   "  exact text  ",
+			},
+		}),
+	)
+	require.NoError(t, err)
+	fields, ok = drv.calls[1].Args["fields"].([]map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "  exact text  ", fields[0]["value"])
 }
 
 func TestToolCall_WaitConvertsMilliseconds(t *testing.T) {
@@ -787,6 +1350,10 @@ func TestNewTool_DeclarationExposesSchema(t *testing.T) {
 	require.Equal(t, ToolName, decl.Name)
 	require.Contains(t, decl.Description, "current browser tab")
 	require.Contains(t, decl.Description, "not for direct inspection")
+	require.Contains(t, decl.Description, "general web search engine")
+	require.Contains(t, decl.Description, "Google Scholar")
+	require.Contains(t, decl.Description, "CAPTCHA")
+	require.Contains(t, decl.Description, "unusual traffic warning")
 	require.Contains(t, decl.Description, "file://, data:, or ad hoc localhost")
 	require.Contains(t, decl.Description, "MEDIA or MEDIA_DIR")
 	require.Contains(t, decl.Description, "evaluate action is disabled")
@@ -838,6 +1405,12 @@ func TestNewTool_DeclarationExposesSchema(t *testing.T) {
 			Description,
 		"scroll",
 	)
+	require.NotContains(
+		t,
+		decl.InputSchema.Properties["request"].Properties["kind"].
+			Description,
+		"evaluate",
+	)
 	require.Contains(
 		t,
 		decl.InputSchema.Properties["request"].Properties["selector"].
@@ -853,7 +1426,40 @@ func TestNewTool_DeclarationExposesSchema(t *testing.T) {
 	require.Contains(
 		t,
 		decl.InputSchema.Properties["target"].Description,
-		"only use sandbox or node when configured",
+		"No non-default browser targets are configured",
+	)
+	require.NotContains(
+		t,
+		decl.InputSchema.Properties["target"].Description,
+		"sandbox",
+	)
+	require.NotContains(
+		t,
+		decl.InputSchema.Properties["target"].Description,
+		"node",
+	)
+}
+
+func TestNewTool_DeclarationDescribesConfiguredBrowserTargets(t *testing.T) {
+	t.Parallel()
+
+	tool, err := NewTool(Config{
+		SandboxServerURL: "http://127.0.0.1:20790",
+		Nodes: []NodeConfig{{
+			ID:        "edge",
+			ServerURL: "http://127.0.0.1:21790",
+		}},
+		Profiles: []ProfileConfig{{
+			Name: defaultProfileName,
+		}},
+	})
+	require.NoError(t, err)
+
+	decl := tool.Declaration()
+	require.Contains(
+		t,
+		decl.InputSchema.Properties["target"].Description,
+		"Available non-default targets: node, sandbox",
 	)
 }
 
@@ -918,6 +1524,12 @@ func TestNewTool_DeclarationReflectsEvaluateEnabled(t *testing.T) {
 		decl.InputSchema.Properties["request"].Properties["fn"].
 			Description,
 		"evaluate is not available",
+	)
+	require.Contains(
+		t,
+		decl.InputSchema.Properties["request"].Properties["kind"].
+			Description,
+		"evaluate",
 	)
 }
 
@@ -1088,6 +1700,32 @@ func TestToolCall_FocusRefreshesTabs(t *testing.T) {
 	require.Equal(t, mcpToolTabs, drv.calls[1].Tool)
 }
 
+func TestToolCall_FocusDefaultTargetRefreshesTabs(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{
+		callResult: map[string]any{
+			mcpToolTabs: tabsPayload(),
+		},
+	}
+	tool := newTestTool(drv)
+
+	raw, err := tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action":   actionFocus,
+			"targetId": "default",
+		}),
+	)
+	require.NoError(t, err)
+
+	got := raw.(Result)
+	require.Equal(t, actionFocus, got.Action)
+	require.Len(t, drv.calls, 1)
+	require.Equal(t, mcpToolTabs, drv.calls[0].Tool)
+	require.Equal(t, tabActionList, drv.calls[0].Args["action"])
+}
+
 func TestToolCall_CloseRefreshesTabs(t *testing.T) {
 	t.Parallel()
 
@@ -1143,6 +1781,33 @@ func TestToolCall_NavigateSelectsTarget(t *testing.T) {
 	require.Equal(t, mcpToolNavigate, drv.calls[1].Tool)
 }
 
+func TestToolCall_NavigateDefaultTargetDoesNotSelect(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{
+		callResult: map[string]any{
+			mcpToolNavigate: textPayload("navigated"),
+		},
+	}
+	tool := newTestTool(drv)
+
+	raw, err := tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action":   actionNavigate,
+			"targetId": "default",
+			"url":      "https://example.com",
+		}),
+	)
+	require.NoError(t, err)
+
+	got := raw.(Result)
+	require.Equal(t, actionNavigate, got.Action)
+	require.Contains(t, got.Text, "navigated")
+	require.Len(t, drv.calls, 1)
+	require.Equal(t, mcpToolNavigate, drv.calls[0].Tool)
+}
+
 func TestToolCall_NavigateAcceptsTargetURL(t *testing.T) {
 	t.Parallel()
 
@@ -1168,6 +1833,211 @@ func TestToolCall_NavigateAcceptsTargetURL(t *testing.T) {
 	require.Len(t, drv.calls, 1)
 	require.Equal(t, mcpToolNavigate, drv.calls[0].Tool)
 	require.Equal(t, "https://example.com", drv.calls[0].Args["url"])
+}
+
+func TestToolCall_NavigateBlocksSearchResultPage(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{}
+	tool := newTestTool(drv)
+
+	raw, err := tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action":   actionNavigate,
+			"targetId": "tab-2",
+			"url":      "https://search.brave.com/search?q=openclaw",
+		}),
+	)
+	require.NoError(t, err)
+
+	got := raw.(Result)
+	require.Equal(t, actionNavigate, got.Action)
+	require.Equal(t, stateBlocked, got.State)
+	require.Contains(t, got.Text, "Brave Search")
+	require.Empty(t, drv.calls)
+}
+
+func TestToolCall_NavigateBlocksRedirectedSearchResultPage(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{callResult: map[string]any{
+		mcpToolNavigate: map[string]any{
+			"content": textPayload("navigated"),
+			"url":     "https://www.google.com/search?q=redirected",
+		},
+	}}
+	raw, err := newTestTool(drv).Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action": actionNavigate,
+			"url":    "https://example.com/redirect",
+		}),
+	)
+	require.NoError(t, err)
+
+	got := raw.(Result)
+	require.Equal(t, stateBlocked, got.State)
+	require.Contains(t, got.Text, "Google search")
+}
+
+func TestToolCall_ActBlocksResultingSearchPage(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{callResult: map[string]any{
+		mcpToolClick: map[string]any{
+			"content": textPayload("clicked"),
+			"url":     "https://www.bing.com/search?q=clicked",
+		},
+	}}
+	raw, err := newTestTool(drv).Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action": actionAct,
+			"request": map[string]any{
+				"kind": actClick,
+				"ref":  "e1",
+			},
+		}),
+	)
+	require.NoError(t, err)
+
+	got := raw.(Result)
+	require.Equal(t, stateBlocked, got.State)
+	require.Contains(t, got.Text, "Bing search")
+}
+
+func TestToolCall_NavigateAllowsSearchResultPageWhenConfigured(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	drv := &fakeDriver{
+		callResult: map[string]any{
+			mcpToolNavigate: textPayload("navigated"),
+		},
+	}
+	tool := newToolWithDrivers(
+		defaultProfileName,
+		false,
+		navigationPolicy{AllowSearchPages: true},
+		nil,
+		nil,
+		nil,
+		map[string]ProfileConfig{
+			defaultProfileName: {Name: defaultProfileName},
+		},
+		map[string]driver{
+			defaultProfileName: drv,
+		},
+	)
+
+	raw, err := tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action": actionNavigate,
+			"url":    "https://search.brave.com/search?q=openclaw",
+		}),
+	)
+	require.NoError(t, err)
+
+	got := raw.(Result)
+	require.Equal(t, actionNavigate, got.Action)
+	require.NotEqual(t, stateBlocked, got.State)
+	require.Len(t, drv.calls, 1)
+	require.Equal(t, mcpToolNavigate, drv.calls[0].Tool)
+}
+
+func TestTextResultBlockedDetectionIsConfigurableAndActionAware(t *testing.T) {
+	t.Parallel()
+
+	challenge := textPayload(
+		"Anti-bot security check: access blocked; verify to continue.",
+	)
+	tool := newTestTool(&fakeDriver{})
+
+	pageResult := tool.textResult(
+		actionSnapshot,
+		defaultProfileName,
+		driverTypePlaywrightMCP,
+		nil,
+		challenge,
+	)
+	require.Equal(t, stateBlocked, pageResult.State)
+
+	consoleResult := tool.textResult(
+		actionConsole,
+		defaultProfileName,
+		driverTypePlaywrightMCP,
+		nil,
+		challenge,
+	)
+	require.NotEqual(t, stateBlocked, consoleResult.State)
+
+	tool.detectBlocked = false
+	disabledResult := tool.textResult(
+		actionSnapshot,
+		defaultProfileName,
+		driverTypePlaywrightMCP,
+		nil,
+		challenge,
+	)
+	require.NotEqual(t, stateBlocked, disabledResult.State)
+}
+
+func TestToolCall_NavigateCompactsBrowserCrashOutput(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{
+		callResult: map[string]any{
+			mcpToolNavigate: browserCrashPayload(),
+		},
+	}
+	tool := newTestTool(drv)
+
+	raw, err := tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action": actionNavigate,
+			"url":    "https://example.com",
+		}),
+	)
+	require.NoError(t, err)
+
+	got := raw.(Result)
+	require.Contains(t, got.Text, browserCrashSummary)
+	require.NotContains(t, got.Text, "--disable-field-trial-config")
+	require.NotContains(t, got.Text, browserLaunchMarker)
+	require.Less(t, len(got.Text), 800)
+}
+
+func TestToolCall_NavigateMarksBlockedChallengePage(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{
+		callResult: map[string]any{
+			mcpToolNavigate: blockedChallengePayload(),
+		},
+	}
+	tool := newTestTool(drv)
+
+	raw, err := tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action": actionNavigate,
+			"url":    "https://example.com",
+		}),
+	)
+	require.NoError(t, err)
+
+	got := raw.(Result)
+	require.Equal(t, actionNavigate, got.Action)
+	require.Equal(t, stateBlocked, got.State)
+	require.Equal(t, blockedBrowserPageWarning, got.Warning)
+	require.Contains(t, got.Text, "web_fetch")
+	require.Contains(t, got.Text, "Just a moment")
+	require.Len(t, drv.calls, 1)
+	require.Equal(t, mcpToolNavigate, drv.calls[0].Tool)
 }
 
 func TestToolCall_ActWithURLDefaultsToNavigate(t *testing.T) {
@@ -1485,6 +2355,29 @@ func TestToolCall_ActNavigateRoutesToBrowserNavigate(t *testing.T) {
 	}
 }
 
+func TestToolCall_ActNavigateBlocksSearchResultPage(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{}
+	tool := newTestTool(drv)
+
+	raw, err := tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action": actionAct,
+			"kind":   actionNavigate,
+			"url":    "https://www.bing.com/search?q=openclaw",
+		}),
+	)
+	require.NoError(t, err)
+
+	got := raw.(Result)
+	require.Equal(t, actionAct, got.Action)
+	require.Equal(t, stateBlocked, got.State)
+	require.Contains(t, got.Text, "Bing search")
+	require.Empty(t, drv.calls)
+}
+
 func TestToolCall_ActRoutesLegacyFields(t *testing.T) {
 	t.Parallel()
 
@@ -1539,6 +2432,19 @@ func TestToolCall_ActRoutesLegacyFields(t *testing.T) {
 			},
 		},
 		{
+			name: "press key schema alias",
+			input: map[string]any{
+				"action": actionAct,
+				"kind":   "press/key",
+				"key":    "End",
+			},
+			wantTool: mcpToolPressKey,
+			assertArg: func(t *testing.T, call fakeCall) {
+				t.Helper()
+				require.Equal(t, "End", call.Args["key"])
+			},
+		},
+		{
 			name: "hover",
 			input: map[string]any{
 				"action": actionAct,
@@ -1565,6 +2471,20 @@ func TestToolCall_ActRoutesLegacyFields(t *testing.T) {
 				t.Helper()
 				require.Equal(t, 0, call.Args["deltaX"])
 				require.Equal(t, -400, call.Args["deltaY"])
+			},
+		},
+		{
+			name: "top-level scroll alias",
+			input: map[string]any{
+				"action":    actionScroll,
+				"direction": "up",
+				"amount":    500,
+			},
+			wantTool: mcpToolMouseWheel,
+			assertArg: func(t *testing.T, call fakeCall) {
+				t.Helper()
+				require.Equal(t, 0, call.Args["deltaX"])
+				require.Equal(t, -500, call.Args["deltaY"])
 			},
 		},
 		{
@@ -1677,6 +2597,276 @@ func TestToolCall_ActClickAcceptsElementTarget(t *testing.T) {
 	)
 	require.Equal(t, "left", drv.calls[0].Args["button"])
 	require.Equal(t, []string{"Shift"}, drv.calls[0].Args["modifiers"])
+}
+
+func TestToolCall_ActClickAcceptsTopLevelElementTarget(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{}
+	tool := newTestTool(drv)
+
+	_, err := tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action":  actionAct,
+			"kind":    actClick,
+			"target":  "article",
+			"element": "article list",
+		}),
+	)
+	require.NoError(t, err)
+	require.Len(t, drv.calls, 1)
+	require.Equal(t, mcpToolClick, drv.calls[0].Tool)
+	require.Equal(t, "article", drv.calls[0].Args["target"])
+	require.Equal(t, "element article", drv.calls[0].Args["element"])
+}
+
+func TestToolCall_ActClickPassesBrowserServerElementTarget(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{}
+	tool := newBrowserServerTestTool(drv)
+
+	_, err := tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action": actionAct,
+			"request": map[string]any{
+				"kind":   actClick,
+				"target": "button that says Download",
+			},
+		}),
+	)
+	require.NoError(t, err)
+	require.Len(t, drv.calls, 1)
+	require.Equal(t, mcpToolClick, drv.calls[0].Tool)
+	require.Equal(
+		t,
+		"button that says Download",
+		drv.calls[0].Args["element"],
+	)
+	require.NotContains(t, drv.calls[0].Args, "ref")
+}
+
+func TestToolCall_ActDragPassesBrowserServerElementTargets(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{}
+	tool := newBrowserServerTestTool(drv)
+
+	_, err := tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action":      actionAct,
+			"kind":        actDrag,
+			"startTarget": ".card",
+			"endTarget":   ".drop-zone",
+		}),
+	)
+	require.NoError(t, err)
+	require.Len(t, drv.calls, 1)
+	require.Equal(t, mcpToolDrag, drv.calls[0].Tool)
+	require.Equal(t, ".card", drv.calls[0].Args["startElement"])
+	require.Equal(t, ".drop-zone", drv.calls[0].Args["endElement"])
+	require.NotContains(t, drv.calls[0].Args, "startRef")
+	require.NotContains(t, drv.calls[0].Args, "endRef")
+}
+
+func TestToolCall_ActClickRejectsEmptyBrowserServerTarget(t *testing.T) {
+	t.Parallel()
+
+	_, err := newBrowserServerTestTool(&fakeDriver{}).Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action": actionAct,
+			"kind":   actClick,
+		}),
+	)
+	require.ErrorContains(t, err, "browser act requires ref or target")
+}
+
+func TestToolCall_ProfileAliasUsesDefaultProfile(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{}
+	tool := newTestTool(drv)
+
+	raw, err := tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action":  actionSnapshot,
+			"profile": "chrome",
+		}),
+	)
+	require.NoError(t, err)
+	got := raw.(Result)
+	require.Equal(t, defaultProfileName, got.Profile)
+	require.Len(t, drv.calls, 1)
+	require.Equal(t, mcpToolSnapshot, drv.calls[0].Tool)
+}
+
+func TestToolCall_ActDragAcceptsTopLevelElementTargets(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{}
+	tool := newTestTool(drv)
+
+	_, err := tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action":      actionAct,
+			"kind":        actDrag,
+			"startTarget": "source-card",
+			"endTarget":   "destination-list",
+		}),
+	)
+	require.NoError(t, err)
+	require.Len(t, drv.calls, 1)
+	require.Equal(t, mcpToolDrag, drv.calls[0].Tool)
+	require.Equal(t, "source-card", drv.calls[0].Args["startTarget"])
+	require.Equal(t, "destination-list", drv.calls[0].Args["endTarget"])
+}
+
+func TestNormalizeActRequestBackfillsNestedDragRefs(t *testing.T) {
+	t.Parallel()
+
+	got := normalizeActRequest(input{
+		StartRef: "source-ref",
+		EndRef:   "destination-ref",
+		Request: &actRequest{
+			Kind: actDrag,
+		},
+	})
+
+	require.Equal(t, "source-ref", got.StartRef)
+	require.Equal(t, "destination-ref", got.EndRef)
+}
+
+func TestToolCall_ActBackfillsTopLevelKindIntoNestedRequest(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{
+		callResult: map[string]any{
+			mcpToolPressKey: textPayload("pressed"),
+		},
+	}
+
+	raw, err := newTestTool(drv).Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action": actionAct,
+			"kind":   actPress,
+			"request": map[string]any{
+				"key": "Home",
+			},
+		}),
+	)
+	require.NoError(t, err)
+
+	got := raw.(Result)
+	require.Equal(t, actionAct, got.Action)
+	require.Len(t, drv.calls, 1)
+	require.Equal(t, mcpToolPressKey, drv.calls[0].Tool)
+	require.Equal(t, "Home", drv.calls[0].Args["key"])
+}
+
+func TestToolCall_ScrollOverridesConflictingNestedKind(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{
+		callResult: map[string]any{
+			mcpToolMouseWheel: textPayload("scrolled"),
+		},
+	}
+
+	_, err := newTestTool(drv).Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action": actionScroll,
+			"request": map[string]any{
+				"kind":   actClick,
+				"target": "do-not-click",
+			},
+			"direction": "down",
+			"amount":    250,
+		}),
+	)
+	require.NoError(t, err)
+	require.Len(t, drv.calls, 1)
+	require.Equal(t, mcpToolMouseWheel, drv.calls[0].Tool)
+}
+
+func TestToolCall_ActPreservesExplicitEmptyNestedText(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{}
+	_, err := newTestTool(drv).Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action": actionAct,
+			"kind":   actType,
+			"ref":    "fallback-ref",
+			"text":   "fallback",
+			"request": map[string]any{
+				"kind": actType,
+				"ref":  "nested-ref",
+				"text": "",
+			},
+		}),
+	)
+	require.NoError(t, err)
+	require.Len(t, drv.calls, 1)
+	require.Equal(t, "", drv.calls[0].Args["text"])
+}
+
+func TestToolCall_ActFillRejectsExplicitEmptyFields(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{}
+	_, err := newTestTool(drv).Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action": actionAct,
+			"request": map[string]any{
+				"kind":   actFill,
+				"target": "name",
+				"text":   "should-not-fill",
+				"fields": []map[string]any{},
+			},
+		}),
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "fill requires fields")
+	require.Empty(t, drv.calls)
+}
+
+func TestNormalizeActRequestPreservesExplicitNestedValues(t *testing.T) {
+	t.Parallel()
+
+	got := normalizeActRequest(input{
+		Kind:      actType,
+		Text:      "fallback",
+		Modifiers: []string{"Shift"},
+		Values:    []string{"fallback"},
+		Fields: []map[string]any{
+			{"target": "fallback", "text": "fallback"},
+		},
+		Request: &actRequest{
+			Kind:      actType,
+			Text:      " ",
+			Modifiers: []string{},
+			Values:    []string{},
+			Fields:    []map[string]any{},
+		},
+	})
+
+	require.Equal(t, " ", got.Text)
+	require.Empty(t, got.Modifiers)
+	require.NotNil(t, got.Modifiers)
+	require.Empty(t, got.Values)
+	require.NotNil(t, got.Values)
+	require.Empty(t, got.Fields)
+	require.NotNil(t, got.Fields)
 }
 
 func TestToolCall_ActPassesTimeoutToBrowserServer(t *testing.T) {
@@ -2101,6 +3291,143 @@ func TestToolCall_ScreenshotPassesOptions(t *testing.T) {
 	require.Equal(t, "e1", drv.calls[1].Args["ref"])
 	require.Equal(t, "hero", drv.calls[1].Args["element"])
 	require.Equal(t, "png", drv.calls[1].Args["type"])
+}
+
+func TestToolCall_ScreenshotDirRewritesRelativeFilename(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{
+		callResult: map[string]any{
+			mcpToolScreenshot: textPayload("ok"),
+		},
+	}
+	dir := t.TempDir()
+	tool := newTestTool(drv)
+	tool.screenshotDir = dir
+
+	_, err := tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action":   actionScreenshot,
+			"filename": "captures/page.png",
+		}),
+	)
+	require.NoError(t, err)
+	require.Len(t, drv.calls, 1)
+	require.Equal(
+		t,
+		filepath.Join(dir, "captures", "page.png"),
+		drv.calls[0].Args["filename"],
+	)
+}
+
+func TestToolCall_ScreenshotDirRejectsEscapingFilename(t *testing.T) {
+	t.Parallel()
+
+	tool := newTestTool(&fakeDriver{})
+	tool.screenshotDir = t.TempDir()
+
+	_, err := tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action":   actionScreenshot,
+			"filename": "../page.png",
+		}),
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "escapes screenshot_dir")
+}
+
+func TestToolCall_ScreenshotDirProvidesDefaultFilename(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{
+		callResult: map[string]any{
+			mcpToolScreenshot: textPayload("ok"),
+		},
+	}
+	dir := t.TempDir()
+	tool := newTestTool(drv)
+	tool.screenshotDir = dir
+
+	raw, err := tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action": actionScreenshot,
+			"type":   "jpeg",
+		}),
+	)
+	require.NoError(t, err)
+	require.Len(t, drv.calls, 1)
+	filename, _ := drv.calls[0].Args["filename"].(string)
+	require.NotEmpty(t, filename)
+	require.DirExists(t, filepath.Dir(filename))
+	require.Equal(t, dir, filepath.Dir(filename))
+	require.Contains(t, filepath.Base(filename), "screenshot-")
+	require.Equal(t, ".jpg", filepath.Ext(filename))
+
+	got := raw.(Result)
+	require.Equal(t, filename, got.ScreenshotPath)
+}
+
+func TestResolveScreenshotFilenameCompatibilityBranches(t *testing.T) {
+	t.Parallel()
+
+	withoutDir := newTestTool(&fakeDriver{})
+	got, err := withoutDir.resolveScreenshotFilename("page.png", "")
+	require.NoError(t, err)
+	require.Equal(t, "page.png", got)
+
+	dir := t.TempDir()
+	tool := newTestTool(&fakeDriver{})
+	tool.screenshotDir = dir
+
+	abs := filepath.Join(dir, "absolute.png")
+	got, err = tool.resolveScreenshotFilename(abs, "png")
+	require.NoError(t, err)
+	require.Equal(t, abs, got)
+
+	got, err = tool.resolveScreenshotFilename(".", "png")
+	require.NoError(t, err)
+	require.Empty(t, got)
+}
+
+func TestScreenshotExtension(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, "png", screenshotExtension(""))
+	require.Equal(t, "jpg", screenshotExtension("jpeg"))
+	require.Equal(t, "jpg", screenshotExtension("JPG"))
+	require.Equal(t, "webp", screenshotExtension("webp"))
+	require.Equal(t, "png", screenshotExtension("gif"))
+}
+
+func TestToolCall_ScreenshotCompactsBrowserCrashContent(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{
+		callResult: map[string]any{
+			mcpToolScreenshot: browserCrashPayload(),
+		},
+	}
+	tool := newTestTool(drv)
+	tool.screenshotDir = t.TempDir()
+
+	raw, err := tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action": actionScreenshot,
+		}),
+	)
+	require.NoError(t, err)
+
+	got := raw.(Result)
+	require.Empty(t, got.ScreenshotPath)
+	text := extractText(got.Content)
+	require.Contains(t, text, browserCrashSummary)
+	require.NotContains(t, text, "--disable-field-trial-config")
+	require.NotContains(t, text, browserLaunchMarker)
+	require.Less(t, len(text), 600)
 }
 
 func TestToolCall_SnapshotPassesBrowserServerOptions(t *testing.T) {
@@ -3062,6 +4389,35 @@ func TestToolCall_WaitActionAlias(t *testing.T) {
 	require.Equal(t, "Ready", drv.calls[0].Args["text"])
 }
 
+func TestToolCall_WaitMarksBlockedChallengePage(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{
+		callResult: map[string]any{
+			mcpToolWait: blockedChallengePayload(),
+		},
+	}
+	tool := newTestTool(drv)
+
+	raw, err := tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action": actionWait,
+			"timeMs": 1000,
+		}),
+	)
+	require.NoError(t, err)
+
+	got := raw.(Result)
+	require.Equal(t, actionAct, got.Action)
+	require.Equal(t, stateBlocked, got.State)
+	require.Equal(t, blockedBrowserPageWarning, got.Warning)
+	require.Contains(t, got.Text, "retrying")
+	require.Contains(t, got.Text, "Just a moment")
+	require.Len(t, drv.calls, 1)
+	require.Equal(t, mcpToolWait, drv.calls[0].Tool)
+}
+
 func TestToolCall_ActWithWaitFieldsDefaultsToWait(t *testing.T) {
 	t.Parallel()
 
@@ -3317,7 +4673,7 @@ func TestToolCall_ActScrollPassesBrowserServerRef(t *testing.T) {
 	require.Equal(t, "e1", drv.calls[0].Args["ref"])
 }
 
-func TestToolCall_ActScrollIntoViewRejectsMCPDriver(t *testing.T) {
+func TestToolCall_ActScrollIntoViewRejectsMCPWithoutEvaluate(t *testing.T) {
 	t.Parallel()
 
 	_, err := newTestTool(&fakeDriver{}).Call(
@@ -3331,7 +4687,7 @@ func TestToolCall_ActScrollIntoViewRejectsMCPDriver(t *testing.T) {
 		}),
 	)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "browser-server")
+	require.Contains(t, err.Error(), "requires browser evaluate support")
 }
 
 func TestToolCall_ActScrollUsesDefaultWheelDelta(t *testing.T) {
@@ -3426,6 +4782,67 @@ func TestToolCall_ActScrollFallsBackToPressKey(t *testing.T) {
 	require.Equal(t, "PageUp", drv.calls[1].Args["key"])
 }
 
+func TestToolCall_ActScrollIntoViewUsesEvaluateWithMCP(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{}
+	tool := newToolWithDrivers(
+		defaultProfileName,
+		true,
+		navigationPolicy{},
+		nil,
+		nil,
+		nil,
+		map[string]ProfileConfig{
+			defaultProfileName: {Name: defaultProfileName},
+		},
+		map[string]driver{
+			defaultProfileName: drv,
+		},
+	)
+
+	_, err := tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action": actionAct,
+			"request": map[string]any{
+				"kind":   actScrollIntoView,
+				"ref":    "e81",
+				"target": "Search result",
+			},
+		}),
+	)
+	require.NoError(t, err)
+	require.Len(t, drv.calls, 1)
+	require.Equal(t, mcpToolEvaluate, drv.calls[0].Tool)
+	require.Equal(t, scrollIntoViewFunction, drv.calls[0].Args["function"])
+	require.Equal(t, "Search result", drv.calls[0].Args["target"])
+}
+
+func TestToolCall_ActScrollIntoViewForwardsServerTarget(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{}
+	tool := newBrowserServerTestTool(drv)
+
+	_, err := tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action": actionAct,
+			"request": map[string]any{
+				"kind":      actScrollIntoView,
+				"target":    "Search result",
+				"timeoutMs": 1234,
+			},
+		}),
+	)
+	require.NoError(t, err)
+	require.Len(t, drv.calls, 1)
+	require.Equal(t, mcpToolScroll, drv.calls[0].Tool)
+	require.Equal(t, "Search result", drv.calls[0].Args["element"])
+	require.Equal(t, 1234, drv.calls[0].Args["timeoutMs"])
+}
+
 func TestToolCall_ActPressPassesDelayMS(t *testing.T) {
 	t.Parallel()
 
@@ -3512,6 +4929,15 @@ func TestToolCall_RejectsInvalidInputs(t *testing.T) {
 	)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unsupported browser action")
+
+	_, err = tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action": actionFocus,
+		}),
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "targetId is empty")
 
 	_, err = tool.Call(
 		context.Background(),
@@ -3611,6 +5037,32 @@ func TestToolResolveDriver_TargetFallbackPaths(t *testing.T) {
 		serverDrv, ok := drv.(*serverProfileDriver)
 		require.True(t, ok)
 		require.Equal(t, "http://127.0.0.1:20790", serverDrv.baseURL)
+	})
+
+	t.Run("sandbox without sandbox server stays strict", func(t *testing.T) {
+		tool := newToolWithDrivers(
+			defaultProfileName,
+			false,
+			navigationPolicy{},
+			&serverTargetConfig{
+				ID:        targetHost,
+				ServerURL: "http://127.0.0.1:19790",
+			},
+			nil,
+			nil,
+			map[string]ProfileConfig{
+				defaultProfileName: {Name: defaultProfileName},
+			},
+			map[string]driver{
+				defaultProfileName: &fakeDriver{},
+			},
+		)
+
+		_, _, err := tool.resolveDriver(input{
+			Target: targetSandbox,
+		})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "sandbox target is not configured")
 	})
 
 	t.Run("single node auto select", func(t *testing.T) {
@@ -3830,6 +5282,29 @@ func textPayload(text string) []map[string]any {
 		"type": "text",
 		"text": text,
 	}}
+}
+
+func browserCrashPayload() []map[string]any {
+	return textPayload(browserCrashPayloadText())
+}
+
+func blockedChallengePayload() []map[string]any {
+	return textPayload(
+		"Page Title: Just a moment...\n" +
+			"Checking if the site connection is secure\n" +
+			"Cloudflare Ray ID: test",
+	)
+}
+
+func browserCrashPayloadText() string {
+	return "### Error\n" +
+		"Error: async createBrowserWithInfo: Target page, context or " +
+		"browser has been closed\n" +
+		"Browser logs:\n\n" +
+		"<launching> /usr/bin/chromium-browser " +
+		"--disable-field-trial-config --disable-background-networking " +
+		"--headless --remote-debugging-pipe\n" +
+		"[pid=1] <process did exit: exitCode=null, signal=SIGTRAP>"
 }
 
 func tabsPayload() []map[string]any {

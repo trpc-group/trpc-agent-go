@@ -102,3 +102,39 @@ func TestLLMCriterionSampleParallelismJSON(t *testing.T) {
 	assert.True(t, decoded.SampleParallelismEnabled)
 	assert.Equal(t, 3, decoded.SampleParallelism)
 }
+
+func TestTemplateVariableSourceJSONSupportsExpandedFields(t *testing.T) {
+	const payload = `{
+  "scope": "actual",
+  "field": "traceStepOutput",
+  "selector": {
+    "nodeID": "fetch_match"
+  }
+}`
+	var source TemplateVariableSource
+	err := json.Unmarshal([]byte(payload), &source)
+	require.NoError(t, err)
+	assert.Equal(t, TemplateVariableScopeActual, source.Scope)
+	assert.Equal(t, TemplateVariableFieldTraceStepOutput, source.Field)
+	require.NotNil(t, source.Selector)
+	assert.Equal(t, "fetch_match", source.Selector.NodeID)
+	data, err := json.Marshal(source)
+	require.NoError(t, err)
+	assert.JSONEq(t, payload, string(data))
+}
+
+func TestTemplateVariableSourceConstantsCoverTemplateEvaluatorSources(t *testing.T) {
+	assert.Equal(t, TemplateVariableField("traceStepInput"), TemplateVariableFieldTraceStepInput)
+	assert.Equal(t, TemplateVariableField("traceStepOutput"), TemplateVariableFieldTraceStepOutput)
+}
+
+func TestTemplateVariableSourceOldJSONShapeRemainsStable(t *testing.T) {
+	source := TemplateVariableSource{
+		Scope: TemplateVariableScopeActual,
+		Field: TemplateVariableFieldUserContent,
+	}
+	data, err := json.Marshal(source)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"scope":"actual","field":"userContent"}`, string(data))
+	assert.NotContains(t, string(data), "selector")
+}

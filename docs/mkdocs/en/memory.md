@@ -1677,6 +1677,7 @@ agent := llmagent.New(
     "assistant",
     llmagent.WithModel(openai.New("deepseek-v4-flash")),
     llmagent.WithTools(mem0Svc.Tools()),
+    llmagent.WithPreloadMemory(10), // Optional read-only preload budget.
 )
 
 r := runner.NewRunner(
@@ -1692,6 +1693,7 @@ defer r.Close()
 
 - Register tools with `llmagent.WithTools(mem0Svc.Tools())`
 - Use `runner.WithSessionIngestor(mem0Svc)` to send session transcripts to mem0
+- Optionally enable `llmagent.WithPreloadMemory(N)`; because `mem0Svc` also implements `memory.Reader`, the runner can use it for read-only preload
 - Do **not** use `runner.WithMemoryService(...)` with this integration
 
 ### Why `WithSessionIngestor(...)` Instead of `WithMemoryService(...)`
@@ -1705,7 +1707,7 @@ Using `runner.WithSessionIngestor(...)` makes that boundary explicit:
 - Runner sends the completed session transcript after each turn
 - mem0 performs extraction and storage on the service side
 - per-request ingest fields such as `metadata`, `agent_id`, and `run_id` can be passed through `session.IngestOption`
-- the integration is not mistaken for a built-in backend that supports full framework-side CRUD or preload behavior
+- the integration is not mistaken for a built-in backend that supports full framework-side CRUD; framework-side preload uses only the read-only `memory.Reader` surface when explicitly enabled
 
 In short, `MemoryService` means "the framework manages memories directly", while `SessionIngestor` means "the framework hands the transcript to an external memory system". `mem0` matches the second model.
 
@@ -1713,25 +1715,37 @@ In short, `MemoryService` means "the framework manages memories directly", while
 
 | Option | Purpose | Default |
 | ------ | ------- | ------- |
-| `WithAPIKey(key)` | mem0 API key. Required for all requests. | required |
+| `WithAPIKey(key)` | mem0 API key. Required for hosted platform requests; optional for self-hosted OSS when auth is disabled. | required |
 | `WithHost(url)` | Override the mem0 API host/base URL. | `https://api.mem0.ai` |
-| `WithOrgProject(orgID, projectID)` | Add mem0 `org_id` / `project_id` to ingest and retrieval requests. | empty |
-| `WithAsyncMode(bool)` | Controls mem0's `async_mode` flag on ingest requests. | `true` |
-| `WithVersion(v)` | Sets the mem0 ingestion API version field. | `v2` |
+| `WithSelfHostedOSS()` | Use the self-hosted Mem0 OSS REST API (`/memories`, `/search`, `X-API-Key`). When enabled without `WithHost`, the host defaults to `http://localhost:8888`; the hosted-platform default host is rejected in OSS mode. | disabled |
+| `WithSelfHostedOSSIncludeUnscopedMemories()` | Include legacy OSS records that do not carry `metadata.trpc_app_name`; records tagged for a different app remain hidden. | disabled |
+| `WithOrgProject(orgID, projectID)` | Add hosted-platform `org_id` / `project_id`; unsupported with self-hosted OSS. | empty |
+| `WithAsyncMode(bool)` | Controls hosted-platform `async_mode`; self-hosted OSS writes are synchronous at the REST layer. | `true` |
+| `WithVersion(v)` | Sets the hosted-platform ingestion API version field. | `v2` |
 | `WithTimeout(d)` | HTTP timeout used by the client. | `10s` |
 | `WithLoadToolEnabled(bool)` | Expose `memory_load` from `Tools()`. | `false` |
 | `WithAsyncMemoryNum(n)` | Number of background ingest workers. | `1` |
 | `WithMemoryQueueSize(n)` | Queue size per ingest worker. | `10` |
 | `WithMemoryJobTimeout(d)` | Timeout for queued jobs and synchronous fallback ingest. | `30s` |
 
+For the official self-hosted OSS server, configure the server-side LLM and
+embedder independently when they use different endpoints or API keys. The OSS
+server exposes `POST /configure`; set `llm.provider=openai` with the LLM model,
+base URL, and API key, and set `embedder.provider=openai` with the embedding
+model, base URL, and API key. The Go adapter only uses the REST API and does not
+access the OSS server's internal vector store directly.
+
 ### Notes
 
 - `Tools()` exposes `memory_search` by default; `memory_load` can be enabled explicitly.
 - All reads remain scoped to the current `<appName, userID>`.
+- Self-hosted OSS app isolation uses `metadata.trpc_app_name` because the OSS API has no top-level `app_id`. Existing OSS records without this metadata are hidden by default until reingested or backfilled. Use `WithSelfHostedOSSIncludeUnscopedMemories()` only for migrations that need those legacy records visible.
+- The current OSS `GET /memories` API is capped at 1000 user-level results, is not pageable, and cannot express `metadata.trpc_app_name` as a server-side filter. `ReadMemories` therefore requires a positive limit no larger than 1000 and applies app isolation as a best-effort local filter over the first 1000 OSS records returned for the user.
 - Runner automatically passes session context into ingest. Custom callers can also use `session.WithIngestMetadata`, `session.WithIngestAgentID`, and `session.WithIngestRunID` when needed.
+- `WithPreloadMemory(N)` works with mem0 when the same service is configured via `runner.WithSessionIngestor(mem0Svc)`. Use a positive budget in production.
 - When mem0 metadata is available, search results can still carry structured fields such as `Topics`, `Kind`, `EventTime`, `Participants`, and `Location`.
 - Call `Close()` on the service so background workers shut down cleanly.
-- If you need full CRUD tools or framework-side preload, use one of the built-in memory backends instead.
+- If you need full CRUD tools, use one of the built-in memory backends instead.
 
 ## TencentDB Agent Memory Integration (`memory/tencentdb`)
 

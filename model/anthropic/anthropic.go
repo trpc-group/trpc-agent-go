@@ -240,34 +240,13 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 		return
 	}
 
-	// Determine max input tokens using priority: user config > auto calculation > default.
-	maxInputTokens := m.maxInputTokens
-	if maxInputTokens <= 0 {
-		// Auto-calculate based on model context window with custom or default parameters.
-		contextWindow := m.contextWindow
-		if contextWindow <= 0 {
-			contextWindow = imodel.ResolveContextWindow(m.name)
-		}
-		if m.protocolOverheadTokens > 0 || m.reserveOutputTokens > 0 {
-			// Use custom parameters if any are set.
-			maxInputTokens = imodel.CalculateMaxInputTokensWithParams(
-				contextWindow,
-				m.protocolOverheadTokens,
-				m.reserveOutputTokens,
-				m.inputTokensFloor,
-				m.safetyMarginRatio,
-				m.maxInputTokensRatio,
-			)
-		} else {
-			// Use default parameters.
-			maxInputTokens = imodel.CalculateMaxInputTokens(contextWindow)
-		}
+	maxInputTokens := m.InputTokenBudget(ctx, request)
+	if m.maxInputTokens <= 0 {
 		log.DebugfContext(
 			ctx,
 			"auto-calculated max input tokens: model=%s, "+
-				"contextWindow=%d, maxInputTokens=%d",
+				"maxInputTokens=%d",
 			m.name,
-			contextWindow,
 			maxInputTokens,
 		)
 	}
@@ -293,6 +272,28 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 	}
 
 	modeltailoring.ApplyResult(ctx, "anthropic.Model", request, tailored)
+}
+
+// InputTokenBudget returns the same input budget used by token tailoring.
+func (m *Model) InputTokenBudget(_ context.Context, _ *model.Request) int {
+	if m.maxInputTokens > 0 {
+		return m.maxInputTokens
+	}
+	contextWindow := m.contextWindow
+	if contextWindow <= 0 {
+		contextWindow = imodel.ResolveContextWindow(m.name)
+	}
+	if m.protocolOverheadTokens > 0 || m.reserveOutputTokens > 0 {
+		return imodel.CalculateMaxInputTokensWithParams(
+			contextWindow,
+			m.protocolOverheadTokens,
+			m.reserveOutputTokens,
+			m.inputTokensFloor,
+			m.safetyMarginRatio,
+			m.maxInputTokensRatio,
+		)
+	}
+	return imodel.CalculateMaxInputTokens(contextWindow)
 }
 
 // buildChatRequest builds the chat request for the Anthropic API.
@@ -327,15 +328,10 @@ func (m *Model) buildChatRequest(request *model.Request) (*anthropic.MessageNewP
 	if len(systemPrompts) > 0 {
 		chatRequest.System = systemPrompts
 	}
-	if request.GenerationConfig.MaxTokens == nil && m.explicitMaxTokens != nil {
-		request.GenerationConfig.MaxTokens = m.explicitMaxTokens
+	if mt := imodel.ClampMaxTokensForModel(m.name, request.MaxTokens); mt != nil {
+		chatRequest.MaxTokens = int64(*mt)
 	}
-	if request.GenerationConfig.MaxTokens != nil {
-		chatRequest.MaxTokens = int64(*request.GenerationConfig.MaxTokens)
-	}
-	// Anthropic requires max_tokens >= model.MinValidCompletionTokens. Apply the
-	// same default when unset or invalid; token tailoring only trims input.
-	if chatRequest.MaxTokens < int64(model.MinValidCompletionTokens) {
+	if chatRequest.MaxTokens < int64(imodel.MinValidCompletionTokens) {
 		chatRequest.MaxTokens = 4096
 	}
 	if request.Temperature != nil {

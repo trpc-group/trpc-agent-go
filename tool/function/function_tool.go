@@ -12,9 +12,12 @@ package function
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"reflect"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/internal/jsonrepair"
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonutils"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/log"
@@ -173,9 +176,9 @@ func NewFunctionTool[I, O any](fn func(context.Context, I) (O, error), opts ...O
 // Returns:
 //   - The result of the function execution or an error if unmarshalling fails.
 func (ft *FunctionTool[I, O]) Call(ctx context.Context, jsonArgs []byte) (any, error) {
-	jsonArgs = normalizeJSONArgs(jsonArgs)
+	jsonArgs = normalizeJSONArgs(jsonArgs, ft.inputSchema)
 	var input I
-	if err := ft.unmarshaler.Unmarshal(jsonArgs, &input); err != nil {
+	if err := unmarshalToolArgs(ctx, jsonArgs, &input); err != nil {
 		return nil, err
 	}
 	return ft.fn(ctx, input)
@@ -292,9 +295,9 @@ func NewStreamableFunctionTool[I, O any](fn func(context.Context, I) (*tool.Stre
 //   - A StreamReader[string] containing JSON-encoded results, or an error.
 func (t *StreamableFunctionTool[I, O]) StreamableCall(ctx context.Context, jsonArgs []byte) (*tool.StreamReader, error) {
 	// FunctionTool does not support streaming calls, so we return an error.
-	jsonArgs = normalizeJSONArgs(jsonArgs)
+	jsonArgs = normalizeJSONArgs(jsonArgs, t.inputSchema)
 	var input I
-	if err := t.unmarshaler.Unmarshal(jsonArgs, &input); err != nil {
+	if err := unmarshalToolArgs(ctx, jsonArgs, &input); err != nil {
 		return nil, err
 	}
 	if t.fn == nil {
@@ -342,17 +345,39 @@ type unmarshaler interface {
 
 type jsonUnmarshaler struct{}
 
-// normalizeJSONArgs coerces nil or empty argument payloads to "{}" so zero-parameter
-// tools can be invoked when an LLM omits the input object entirely.
-func normalizeJSONArgs(jsonArgs []byte) []byte {
-	if len(jsonArgs) == 0 {
+// normalizeJSONArgs coerces nil or empty argument payloads to "{}" only for
+// zero-parameter tools (input schema with no properties and no required fields).
+// Tools with required or optional properties keep empty args so unmarshal fails.
+func normalizeJSONArgs(jsonArgs []byte, inputSchema *tool.Schema) []byte {
+	if len(jsonArgs) > 0 {
+		return jsonArgs
+	}
+	if schemaAcceptsEmptyObject(inputSchema) {
 		return []byte("{}")
 	}
 	return jsonArgs
 }
 
-// Unmarshal unmarshals JSON tool arguments with repair when the payload is malformed.
-// Valid JSON is decoded strictly without calling jsonrepair.
+// schemaAcceptsEmptyObject reports whether an omitted argument object is valid.
+func schemaAcceptsEmptyObject(inputSchema *tool.Schema) bool {
+	if inputSchema == nil {
+		return false
+	}
+	return len(inputSchema.Required) == 0 && len(inputSchema.Properties) == 0
+}
+
+// unmarshalToolArgs decodes tool arguments using strict JSON by default. When
+// ToolCallArgumentsJSONRepairEnabled is set on the invocation in ctx, malformed
+// JSON is repaired via internal/jsonutils before unmarshaling.
+func unmarshalToolArgs(ctx context.Context, data []byte, v any) error {
+	if inv, ok := agent.InvocationFromContext(ctx); ok &&
+		jsonrepair.IsToolCallArgumentsJSONRepairEnabled(inv) {
+		return jsonutils.DecodeLeadingJSON(string(data), v)
+	}
+	return json.Unmarshal(data, v)
+}
+
+// Unmarshal unmarshals JSON data into the provided interface.
 func (j *jsonUnmarshaler) Unmarshal(data []byte, v any) error {
-	return jsonutils.DecodeLeadingJSON(string(data), v)
+	return json.Unmarshal(data, v)
 }

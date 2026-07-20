@@ -10,18 +10,53 @@
 package httpfetch
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	pdfpkg "github.com/dslipak/pdf"
+	"github.com/go-pdf/fpdf"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type errReader struct{}
+
+func (errReader) Read(_ []byte) (int, error) {
+	return 0, errors.New("read failed")
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(
+	req *http.Request,
+) (*http.Response, error) {
+	return f(req)
+}
+
+func TestBlockedFetchPageReasonIgnoresSecurityArticleTerms(t *testing.T) {
+	t.Parallel()
+
+	reason, blocked := blockedFetchPageReason(
+		"This security article compares anti-bot systems, CAPTCHA " +
+			"providers, and bot check terminology without blocking access.",
+	)
+	require.False(t, blocked)
+	require.Empty(t, reason)
+
+	reason, blocked = blockedFetchPageReason(
+		"Anti-bot security check: access blocked; verify to continue.",
+	)
+	require.True(t, blocked)
+	require.Contains(t, reason, "bot-check")
+}
 
 func TestWebFetch(t *testing.T) {
 	// Mock server
@@ -99,6 +134,193 @@ func TestWebFetch_NoURLs(t *testing.T) {
 	assert.Equal(t, "No URLs provided", resp.Summary)
 }
 
+func TestWebFetch_HTTPErrorIncludesStatusTextAndBodySnippet(
+	t *testing.T,
+) {
+	ts := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(http.StatusTooManyRequests)
+			fmt.Fprint(
+				w,
+				`<html><body><h1>Too Many Requests</h1></body></html>`,
+			)
+		},
+	))
+	defer ts.Close()
+
+	tool := NewTool()
+	args := fmt.Sprintf(`{"urls": ["%s"]}`, ts.URL)
+
+	res, err := tool.Call(context.Background(), []byte(args))
+	require.NoError(t, err)
+
+	resp := res.(fetchResponse)
+	require.Len(t, resp.Results, 1)
+	require.Empty(t, resp.Results[0].Content)
+	require.Contains(
+		t,
+		resp.Results[0].Error,
+		"HTTP status 429 Too Many Requests",
+	)
+	require.Contains(t, resp.Results[0].Error, "Too Many Requests")
+}
+
+func TestWebFetch_HTTPErrorIncludesBlockedPageHintWhenEnabled(
+	t *testing.T,
+) {
+	ts := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(http.StatusForbidden)
+			fmt.Fprint(
+				w,
+				`<html><head><title>Just a moment...</title></head>`+
+					`<body>Checking if the site connection is secure.</body>`,
+			)
+		},
+	))
+	defer ts.Close()
+
+	tool := NewTool(WithBlockedPageDetection(true))
+	args := fmt.Sprintf(`{"urls": ["%s"]}`, ts.URL)
+
+	res, err := tool.Call(context.Background(), []byte(args))
+	require.NoError(t, err)
+
+	resp := res.(fetchResponse)
+	require.Len(t, resp.Results, 1)
+	require.Empty(t, resp.Results[0].Content)
+	require.Contains(t, resp.Results[0].Error, "HTTP status 403")
+	require.Contains(t, resp.Results[0].Error, "page appears blocked")
+	require.Contains(t, resp.Results[0].Error, "Cloudflare")
+}
+
+func TestWebFetch_HTTPErrorDetectsShortJustAMomentBody(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(http.StatusForbidden)
+			fmt.Fprint(w, "Just a moment......")
+		},
+	))
+	defer ts.Close()
+
+	tool := NewTool(WithBlockedPageDetection(true))
+	args := fmt.Sprintf(`{"urls": ["%s"]}`, ts.URL)
+
+	res, err := tool.Call(context.Background(), []byte(args))
+	require.NoError(t, err)
+
+	resp := res.(fetchResponse)
+	require.Len(t, resp.Results, 1)
+	require.Empty(t, resp.Results[0].Content)
+	require.Contains(t, resp.Results[0].Error, "HTTP status 403")
+	require.Contains(t, resp.Results[0].Error, "page appears blocked")
+	require.Contains(t, resp.Results[0].Error, "Cloudflare")
+}
+
+func TestWebFetch_BlocksSearchResultPagesWhenEnabled(t *testing.T) {
+	tool := NewTool(WithSearchResultPageBlocking(true))
+	args := `{"urls": ["https://www.google.com/search?q=openclaw"]}`
+
+	res, err := tool.Call(context.Background(), []byte(args))
+	require.NoError(t, err)
+
+	resp := res.(fetchResponse)
+	require.Len(t, resp.Results, 1)
+	require.Empty(t, resp.Results[0].Content)
+	require.Contains(
+		t,
+		resp.Results[0].Error,
+		"web_fetch search-result page is blocked",
+	)
+	require.Contains(t, resp.Results[0].Error, "Google search")
+}
+
+func TestWebFetch_BlocksRedirectedSearchResultPages(t *testing.T) {
+	redirects := 0
+	client := &http.Client{
+		Transport: roundTripFunc(func(
+			req *http.Request,
+		) (*http.Response, error) {
+			if req.URL.Host == "example.com" {
+				return &http.Response{
+					StatusCode: http.StatusFound,
+					Header: http.Header{
+						"Location": []string{
+							"https://www.google.com/search?q=openclaw",
+						},
+					},
+					Body:    http.NoBody,
+					Request: req,
+				}, nil
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header: http.Header{
+					"Content-Type": []string{"text/html"},
+				},
+				Body: io.NopCloser(strings.NewReader(
+					"<html><body>results</body></html>",
+				)),
+				Request: req,
+			}, nil
+		}),
+		CheckRedirect: func(
+			_ *http.Request,
+			_ []*http.Request,
+		) error {
+			redirects++
+			return nil
+		},
+	}
+	tool := NewTool(
+		WithHTTPClient(client),
+		WithSearchResultPageBlocking(true),
+	)
+
+	res, err := tool.Call(
+		context.Background(),
+		[]byte(`{"urls":["https://example.com/start"]}`),
+	)
+	require.NoError(t, err)
+	response := res.(fetchResponse)
+	require.Equal(t, 1, redirects)
+	require.Len(t, response.Results, 1)
+	require.Contains(
+		t,
+		response.Results[0].Error,
+		"web_fetch search-result page is blocked",
+	)
+}
+
+func TestWebFetch_DetectsBlockedPagesWhenEnabled(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/html")
+			fmt.Fprint(
+				w,
+				`<html><head><title>Just a moment...</title></head>`+
+					`<body>Checking if the site connection is secure.</body>`,
+			)
+		},
+	))
+	defer ts.Close()
+
+	tool := NewTool(WithBlockedPageDetection(true))
+	args := fmt.Sprintf(`{"urls": ["%s"]}`, ts.URL)
+
+	res, err := tool.Call(context.Background(), []byte(args))
+	require.NoError(t, err)
+
+	resp := res.(fetchResponse)
+	require.Len(t, resp.Results, 1)
+	require.Empty(t, resp.Results[0].Content)
+	require.Contains(t, resp.Results[0].Error, "page appears blocked")
+	require.Contains(t, resp.Results[0].Error, "Cloudflare")
+}
+
 func TestWebFetch_PlainText(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8") // With params to test cleaning
@@ -166,7 +388,61 @@ func TestWebFetch_UnsupportedType(t *testing.T) {
 	assert.Contains(t, resp.Results[0].Error, "unsupported content type: application/octet-stream")
 }
 
-func TestWebFetch_UnsupportedPDFSuggestsDocumentReader(t *testing.T) {
+func TestWebFetch_PDF(t *testing.T) {
+	pdfBytes := createPDFBytes(t, []string{
+		"Quarterly reference works flyer",
+		"Life sciences collection",
+	})
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/pdf")
+		_, _ = w.Write(pdfBytes)
+	}))
+	defer ts.Close()
+
+	tool := NewTool()
+	args := fmt.Sprintf(`{"urls": ["%s"]}`, ts.URL)
+
+	res, err := tool.Call(context.Background(), []byte(args))
+	require.NoError(t, err)
+
+	resp, ok := res.(fetchResponse)
+	require.True(t, ok, "Response should be of type fetchResponse")
+	assert.Len(t, resp.Results, 1)
+	assert.Equal(t, "application/pdf", resp.Results[0].ContentType)
+	assert.Empty(t, resp.Results[0].Error)
+	assert.Contains(t, resp.Results[0].Content, "Quarterly reference")
+	assert.Contains(t, resp.Results[0].Content, "Life sciences")
+	assert.Contains(t, resp.Results[0].Content, "works flyer\nLife")
+}
+
+func TestWebFetch_PDFRespectsPerURLBodyLimit(t *testing.T) {
+	pdfBytes := createPDFBytes(t, []string{
+		"Quarterly reference works flyer",
+	})
+	ts := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		w.Header().Set("Content-Type", "application/pdf")
+		_, _ = w.Write(pdfBytes)
+	}))
+	defer ts.Close()
+
+	tool := NewTool(WithMaxContentLength(len(pdfBytes) - 1))
+	args := fmt.Sprintf(`{"urls": ["%s"]}`, ts.URL)
+
+	res, err := tool.Call(context.Background(), []byte(args))
+	require.NoError(t, err)
+
+	resp, ok := res.(fetchResponse)
+	require.True(t, ok, "Response should be of type fetchResponse")
+	require.Len(t, resp.Results, 1)
+	assert.Equal(t, "application/pdf", resp.Results[0].ContentType)
+	assert.Empty(t, resp.Results[0].Content)
+	assert.Contains(t, resp.Results[0].Error, "per-url content limit")
+}
+
+func TestWebFetch_InvalidPDFReportsParseError(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/pdf")
 		fmt.Fprint(w, `%PDF-1.7`)
@@ -184,11 +460,85 @@ func TestWebFetch_UnsupportedPDFSuggestsDocumentReader(t *testing.T) {
 	assert.Len(t, resp.Results, 1)
 	assert.Equal(t, "application/pdf", resp.Results[0].ContentType)
 	assert.Empty(t, resp.Results[0].Content)
-	assert.Contains(
-		t,
-		resp.Results[0].Error,
-		"Download the PDF and use a document-reading tool",
-	)
+	assert.Contains(t, resp.Results[0].Error, "read pdf")
+}
+
+func TestReadPDFPageText_NullPage(t *testing.T) {
+	text, err := readPDFPageText(pdfpkg.Page{})
+	require.NoError(t, err)
+	assert.Empty(t, text)
+}
+
+func TestReadPDFBody(t *testing.T) {
+	data, err := readPDFBody(strings.NewReader("abcdef"), 0)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("abcdef"), data)
+
+	data, err = readPDFBody(strings.NewReader("abc"), 3)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("abc"), data)
+
+	_, err = readPDFBody(strings.NewReader("abcd"), 3)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "per-url content limit")
+
+	_, err = readPDFBody(&failReader{}, 0)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to read response body")
+
+	_, err = readPDFBody(&failReader{}, 3)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to read response body")
+}
+
+func TestPDFPageTextFormatsFragments(t *testing.T) {
+	text := pdfPageText([]pdfpkg.Text{
+		{S: "Second line", X: 10, Y: 80, W: 60, FontSize: 12},
+		{S: "World ", X: 30, Y: 100, W: 30, FontSize: 12},
+		{S: "", X: 5, Y: 100, W: 0, FontSize: 12},
+		{S: "Hello", X: 10, Y: 100, W: 15, FontSize: 12},
+	})
+
+	assert.Equal(t, "Hello World\nSecond line", text)
+	assert.Empty(t, pdfPageText(nil))
+}
+
+func TestShouldSeparatePDFText(t *testing.T) {
+	assert.False(t, shouldSeparatePDFText(
+		pdfpkg.Text{S: "Hello ", X: 0, W: 10, FontSize: 12},
+		pdfpkg.Text{S: "World", X: 30, FontSize: 12},
+	))
+	assert.False(t, shouldSeparatePDFText(
+		pdfpkg.Text{S: "Hello", X: 0, W: 10, FontSize: 12},
+		pdfpkg.Text{S: " World", X: 30, FontSize: 12},
+	))
+	assert.False(t, shouldSeparatePDFText(
+		pdfpkg.Text{S: "Hello", X: 0, W: 10, FontSize: 12},
+		pdfpkg.Text{S: "World", X: 9, FontSize: 12},
+	))
+	assert.False(t, shouldSeparatePDFText(
+		pdfpkg.Text{S: "Hello", X: 0, W: 10, FontSize: 12},
+		pdfpkg.Text{S: "World", X: 12, FontSize: 12},
+	))
+	assert.True(t, shouldSeparatePDFText(
+		pdfpkg.Text{S: "Hello", X: 0, W: 10, FontSize: 12},
+		pdfpkg.Text{S: "World", X: 30, FontSize: 12},
+	))
+	assert.True(t, shouldSeparatePDFText(
+		pdfpkg.Text{S: "Hello", X: 0, W: 1},
+		pdfpkg.Text{S: "World", X: 5},
+	))
+}
+
+func TestTrimTrailingSpaces(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("already clean")
+	trimTrailingSpaces(&b)
+	assert.Equal(t, "already clean", b.String())
+
+	b.WriteString(" \t")
+	trimTrailingSpaces(&b)
+	assert.Equal(t, "already clean", b.String())
 }
 
 func TestWebFetch_PerUrlLimit(t *testing.T) {
@@ -368,6 +718,84 @@ func TestConvertHTMLToMarkdownCanPreferMainContent(t *testing.T) {
 	assert.Contains(t, result, "356,400-370,400 km")
 	assert.NotContains(t, result, "Main menu navigation")
 	assert.NotContains(t, result, "Footer links")
+}
+
+func TestHTMLVisibleTextFallbackKeepsVisiblePageText(t *testing.T) {
+	htmlContent := `
+		<html>
+		<body>
+			<header>Useful header notice</header>
+			<script>console.log("hidden")</script>
+			<style>.hidden { display: none }</style>
+			<div>Visible <span>article</span> text.</div>
+			<p hidden>Hidden paragraph.</p>
+			<p aria-hidden="true">Aria hidden paragraph.</p>
+			<p style="display: none">CSS hidden paragraph.</p>
+			<footer>Useful footer citation</footer>
+		</body>
+		</html>`
+
+	result, err := htmlVisibleTextFallback([]byte(htmlContent))
+	require.NoError(t, err)
+
+	assert.Contains(t, result, "Useful header notice")
+	assert.Contains(t, result, "Visible")
+	assert.Contains(t, result, "article")
+	assert.Contains(t, result, "text.")
+	assert.Contains(t, result, "Useful footer citation")
+	assert.NotContains(t, result, "console.log")
+	assert.NotContains(t, result, "display: none")
+	assert.NotContains(t, result, "Hidden paragraph")
+	assert.NotContains(t, result, "Aria hidden paragraph")
+	assert.NotContains(t, result, "CSS hidden paragraph")
+}
+
+func TestHTMLVisibleTextFallbackReportsEmptyContent(t *testing.T) {
+	result, err := htmlVisibleTextFallback([]byte(`
+		<html>
+		<body>
+			<script>console.log("hidden")</script>
+			<style>body { color: red }</style>
+		</body>
+		</html>`))
+
+	require.Error(t, err)
+	assert.Empty(t, result)
+	assert.Contains(t, err.Error(), "no visible text")
+}
+
+func TestHTMLVisibleTextFallbackReportsParseFailure(t *testing.T) {
+	result, err := htmlVisibleTextFallbackFromReader(
+		errReader{},
+		[]byte("  visible fallback text  "),
+	)
+
+	require.Error(t, err)
+	assert.Empty(t, result)
+	assert.Contains(t, err.Error(), "parse HTML for visible-text fallback")
+}
+
+func TestHTMLVisibleTextFallbackReportsParseFailureWithEmptyRawText(
+	t *testing.T,
+) {
+	result, err := htmlVisibleTextFallbackFromReader(errReader{}, nil)
+
+	require.Error(t, err)
+	assert.Empty(t, result)
+	assert.Contains(t, err.Error(), "parse HTML for visible-text fallback")
+}
+
+func TestConvertHTMLToMarkdownKeepsEmptyVisibleHTMLSuccessful(t *testing.T) {
+	result, err := convertHTMLToMarkdown(strings.NewReader(`
+		<html>
+		<body>
+			<script>console.log("hidden")</script>
+			<style>body { color: red }</style>
+		</body>
+		</html>`))
+
+	require.NoError(t, err)
+	assert.Empty(t, result)
 }
 
 func TestWebFetch_MainContentExtractionOption(t *testing.T) {
@@ -609,6 +1037,106 @@ func TestWebFetch_CombinedFilters(t *testing.T) {
 	assert.Equal(t, "Success", resp.Results[0].Content)
 }
 
+func TestWebFetch_SearchResultPageRules(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want string
+		ok   bool
+	}{
+		{
+			name: "DuckDuckGo main search",
+			raw:  "https://duckduckgo.com/?q=openclaw",
+			want: "DuckDuckGo search",
+			ok:   true,
+		},
+		{
+			name: "DuckDuckGo HTML search",
+			raw:  "https://html.duckduckgo.com/html/?q=openclaw",
+			want: "DuckDuckGo HTML search",
+			ok:   true,
+		},
+		{
+			name: "DuckDuckGo Lite search",
+			raw:  "https://lite.duckduckgo.com/lite/?q=openclaw",
+			want: "DuckDuckGo Lite search",
+			ok:   true,
+		},
+		{
+			name: "Google search",
+			raw:  "https://www.google.com/search?q=openclaw",
+			want: "Google search",
+			ok:   true,
+		},
+		{
+			name: "Google Scholar search",
+			raw:  "https://scholar.google.com/scholar?q=openclaw",
+			want: "Google Scholar search",
+			ok:   true,
+		},
+		{
+			name: "Google cached search",
+			raw:  "https://webcache.googleusercontent.com/search?q=cache:x",
+			want: "Google cached search",
+			ok:   true,
+		},
+		{
+			name: "Brave Search",
+			raw:  "https://search.brave.com/search?q=openclaw",
+			want: "Brave Search",
+			ok:   true,
+		},
+		{
+			name: "Bing search",
+			raw:  "https://www.bing.com/search?q=openclaw",
+			want: "Bing search",
+			ok:   true,
+		},
+		{
+			name: "Yahoo search",
+			raw:  "https://search.yahoo.com/search?p=openclaw",
+			want: "Yahoo search",
+			ok:   true,
+		},
+		{
+			name: "DuckDuckGo homepage without query",
+			raw:  "https://duckduckgo.com/",
+		},
+		{
+			name: "Google normal page",
+			raw:  "https://www.google.com/about/",
+		},
+		{
+			name: "Google search subpage without query",
+			raw:  "https://www.google.com/search/about",
+		},
+		{
+			name: "Google cached search subpage without query",
+			raw:  "https://webcache.googleusercontent.com/search/about",
+		},
+		{
+			name: "Bing search subpage without query",
+			raw:  "https://www.bing.com/search/overview",
+		},
+		{
+			name: "Brave Search subpage without query",
+			raw:  "https://search.brave.com/search/help",
+		},
+		{
+			name: "Yahoo search subpage without query",
+			raw:  "https://search.yahoo.com/search/help",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := blockedSearchResultPage(tt.raw)
+			require.Equal(t, tt.ok, ok)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
 // ============================================================================
 // Additional Edge Case Tests
 // ============================================================================
@@ -750,6 +1278,21 @@ func TestIsSupportedTextType(t *testing.T) {
 	assert.False(t, isSupportedTextType("image/png"))
 	assert.False(t, isSupportedTextType("video/mp4"))
 	assert.False(t, isSupportedTextType(""))
+}
+
+func createPDFBytes(t *testing.T, lines []string) []byte {
+	t.Helper()
+
+	pdf := fpdf.New("P", "mm", "A4", "")
+	pdf.AddPage()
+	pdf.SetFont("Arial", "", 12)
+	for _, line := range lines {
+		pdf.Cell(40, 10, line)
+		pdf.Ln(10)
+	}
+	var buf bytes.Buffer
+	require.NoError(t, pdf.Output(&buf))
+	return buf.Bytes()
 }
 
 func TestWebFetch_TotalLimitWithError(t *testing.T) {

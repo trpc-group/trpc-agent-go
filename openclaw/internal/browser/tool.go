@@ -14,9 +14,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/log"
@@ -54,6 +57,7 @@ const (
 	actionAct        = "act"
 	actionEvaluate   = "evaluate"
 	actionWait       = "wait"
+	actionScroll     = "scroll"
 )
 
 const (
@@ -83,6 +87,11 @@ const (
 	cancelCleanupStateKey     = "__openclaw_browser_cancel_cleanup__"
 	cancelCleanupNoticePrefix = "__openclaw_browser_cancel_cleanup:"
 )
+
+const scrollIntoViewFunction = `element => element.scrollIntoView({
+  block: "center",
+  inline: "nearest",
+})`
 
 const (
 	tabActionList   = "list"
@@ -132,6 +141,7 @@ var supportedActions = []string{
 	actionAct,
 	actionEvaluate,
 	actionWait,
+	actionScroll,
 }
 
 var supportedPlaywrightMCPActions = []string{
@@ -151,6 +161,7 @@ var supportedPlaywrightMCPActions = []string{
 	actionDialog,
 	actionAct,
 	actionEvaluate,
+	actionScroll,
 }
 
 func supportedActionsForDriver(driverType string) []string {
@@ -215,11 +226,28 @@ type actRequest struct {
 	TextGone    string           `json:"textGone,omitempty"`
 	TimeoutMs   *int             `json:"timeoutMs,omitempty"`
 	Fn          string           `json:"fn,omitempty"`
+	textSet     bool
+}
+
+func (r *actRequest) UnmarshalJSON(data []byte) error {
+	type actRequestAlias actRequest
+	var decoded actRequestAlias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*r = actRequest(decoded)
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	_, r.textSet = fields["text"]
+	return nil
 }
 
 type input struct {
 	Action         string            `json:"action"`
 	Target         string            `json:"target,omitempty"`
+	ActTarget      string            `json:"-"`
 	Node           string            `json:"node,omitempty"`
 	Profile        string            `json:"profile,omitempty"`
 	TargetURL      string            `json:"targetUrl,omitempty"`
@@ -279,7 +307,9 @@ type input struct {
 	Slowly         *bool             `json:"slowly,omitempty"`
 	Key            string            `json:"key,omitempty"`
 	DelayMs        *int              `json:"delayMs,omitempty"`
+	StartTarget    string            `json:"startTarget,omitempty"`
 	StartRef       string            `json:"startRef,omitempty"`
+	EndTarget      string            `json:"endTarget,omitempty"`
 	EndRef         string            `json:"endRef,omitempty"`
 	Values         []string          `json:"values,omitempty"`
 	Fields         []map[string]any  `json:"fields,omitempty"`
@@ -295,6 +325,8 @@ type input struct {
 type Tool struct {
 	defaultProfile  string
 	evaluateEnabled bool
+	detectBlocked   bool
+	screenshotDir   string
 	navigation      navigationPolicy
 	hostServer      *serverTargetConfig
 	sandboxServer   *serverTargetConfig
@@ -340,7 +372,7 @@ func NewTool(cfg Config) (*Tool, error) {
 		}
 	}
 
-	return newToolWithDrivers(
+	tool := newToolWithDrivers(
 		resolved.DefaultProfile,
 		resolved.EvaluateEnabled,
 		resolved.Navigation,
@@ -349,7 +381,10 @@ func NewTool(cfg Config) (*Tool, error) {
 		resolved.NodeTargets,
 		profiles,
 		drivers,
-	), nil
+	)
+	tool.screenshotDir = resolved.ScreenshotDir
+	tool.detectBlocked = resolved.DetectBlocked
+	return tool, nil
 }
 
 func newToolWithDrivers(
@@ -365,6 +400,7 @@ func newToolWithDrivers(
 	return &Tool{
 		defaultProfile:  defaultProfile,
 		evaluateEnabled: evaluateEnabled,
+		detectBlocked:   true,
 		navigation:      navigation,
 		hostServer:      hostServer,
 		sandboxServer:   sandboxServer,
@@ -382,8 +418,26 @@ func (t *Tool) Declaration() *tool.Declaration {
 		InputSchema: browserSchema(
 			t.evaluateEnabled,
 			t.driverTypeForProfile(t.defaultProfile),
+			t.browserTargetDescription(),
 		),
 	}
+}
+
+func (t *Tool) browserTargetDescription() string {
+	description := "Browser target. Omit for the default host browser."
+	targets := make([]string, 0, 2)
+	if hasServerTarget(t.sandboxServer) {
+		targets = append(targets, targetSandbox)
+	}
+	if hasNodeServerTarget(t.nodeTargets) {
+		targets = append(targets, targetNode)
+	}
+	if len(targets) == 0 {
+		return description + " No non-default browser targets are configured."
+	}
+	sort.Strings(targets)
+	return description + " Available non-default targets: " +
+		strings.Join(targets, ", ") + "."
 }
 
 // Close releases browser profile drivers owned by this tool.
@@ -426,9 +480,21 @@ func browserDescription(evaluateEnabled bool) string {
 		"native browser contract. Use it for live web pages, " +
 		"public URLs, and configured browser profiles, not for " +
 		"direct inspection of local or generated files. Do not " +
+		"use browser as a general web search engine: prefer search " +
+		"tools, APIs, direct source URLs, archives, or web_fetch " +
+		"for search-engine lookups and known static pages. Avoid " +
+		"driving DuckDuckGo, Google, Google Scholar, Brave Search, " +
+		"Bing, or other search-result pages through browser when " +
+		"search or fetch tools are available. If a page shows a " +
+		"CAPTCHA, Cloudflare or `Just a moment` challenge, unusual " +
+		"traffic warning, bot check, or anti-automation page, treat " +
+		"that route as blocked and switch tools or sources instead " +
+		"of waiting, screenshotting, or retrying it. Do not " +
+		"navigate to search-engine result pages unless " +
+		"allow_search_result_pages is explicitly enabled. Do not " +
 		"navigate to file://, data:, or ad hoc localhost/127.0.0.1 " +
 		"URLs unless the runtime configuration explicitly exposes " +
-		"that server; normal browser policy may block those paths. " +
+		"that file root or server; normal browser policy may block those paths. " +
 		"For local images, PDFs, audio, video, or generated " +
 		"artifacts, use file/document/exec tools and MEDIA or " +
 		"MEDIA_DIR outputs instead. Prefer snapshot + act for UI " +
@@ -470,6 +536,16 @@ func (t *Tool) Call(ctx context.Context, args []byte) (any, error) {
 		in = normalizeWaitActionInput(in)
 		actionKey = strings.ToLower(actionAct)
 	}
+	if actionKey == actionScroll {
+		in.Kind = actScroll
+		if in.Request != nil {
+			req := *in.Request
+			req.Kind = actScroll
+			in.Request = &req
+		}
+		actionKey = strings.ToLower(actionAct)
+	}
+	in = normalizeBrowserActionInput(in, actionKey)
 	if err := validateTargetSelection(in); err != nil {
 		return nil, err
 	}
@@ -487,12 +563,22 @@ func (t *Tool) Call(ctx context.Context, args []byte) (any, error) {
 	}
 	driverType := t.driverTypeForInput(profileName, in)
 	t.registerCancelCleanup(ctx, profileName, drv)
+	if result, ok := browserCrashBlockedResult(
+		ctx,
+		actionKey,
+		profileName,
+		driverType,
+		t.evaluateEnabled,
+	); ok {
+		return result, nil
+	}
+	drv = newCrashGuardedDriver(ctx, profileName, drv)
 
 	switch actionKey {
 	case strings.ToLower(actionStart):
 		return t.handleStart(ctx, profileName, driverType, drv)
 	case strings.ToLower(actionStop):
-		return t.handleStop(profileName, driverType, drv)
+		return t.handleStop(ctx, profileName, driverType, drv)
 	case strings.ToLower(actionTabs):
 		return t.handleTabs(ctx, profileName, driverType, drv, in)
 	case strings.ToLower(actionOpen):
@@ -697,7 +783,11 @@ func (r *cancelCleanupRegistry) register(profile string) bool {
 	return true
 }
 
-func browserSchema(evaluateEnabled bool, driverType string) *tool.Schema {
+func browserSchema(
+	evaluateEnabled bool,
+	driverType string,
+	targetDescription string,
+) *tool.Schema {
 	actionDescription := "Browser action. Supported actions include: " +
 		strings.Join(visibleActionsForDriver(
 			driverType,
@@ -712,13 +802,7 @@ func browserSchema(evaluateEnabled bool, driverType string) *tool.Schema {
 		actionDescription += " evaluate is not available."
 	}
 	fnDescription := evaluateFunctionDescription(evaluateEnabled)
-	actKindDescription := "Browser act kind. Supported kinds include " +
-		"click, type, press/key, hover, scroll, scrollIntoView, " +
-		"drag, select, fill, resize, wait, navigate, evaluate, " +
-		"and close. Use press/key with key=PageDown, End, or " +
-		"Enter for keyboard input. Use scroll with direction, " +
-		"deltaX, deltaY, or amount for page scrolling; use " +
-		"scrollIntoView with ref for browser-server element scrolling."
+	actKindDescription := browserActKindDescription(evaluateEnabled)
 	waitDescription := "Wait selector. Supported by the browser-server " +
 		"driver; Playwright MCP wait supports timeMs, text, and " +
 		"textGone."
@@ -767,11 +851,8 @@ func browserSchema(evaluateEnabled bool, driverType string) *tool.Schema {
 	}
 
 	properties := map[string]*tool.Schema{
-		"action": stringSchema(actionDescription),
-		"target": stringSchema(
-			"Browser target. Omit for default host; only use " +
-				"sandbox or node when configured.",
-		),
+		"action":         stringSchema(actionDescription),
+		"target":         stringSchema(targetDescription),
 		"node":           stringSchema("Node browser target."),
 		"profile":        stringSchema("Browser profile name."),
 		"targetUrl":      stringSchema("Alias for browser URL."),
@@ -809,10 +890,13 @@ func browserSchema(evaluateEnabled bool, driverType string) *tool.Schema {
 			Type:                 "object",
 			AdditionalProperties: true,
 		},
-		"path":        stringSchema("Download output path."),
-		"paths":       stringArraySchema("Upload paths."),
-		"inputRef":    stringSchema("Upload input ref."),
-		"filename":    stringSchema("Optional output filename."),
+		"path":     stringSchema("Download output path."),
+		"paths":    stringArraySchema("Upload paths."),
+		"inputRef": stringSchema("Upload input ref."),
+		"filename": stringSchema(
+			"Optional output filename. When browser screenshot_dir is " +
+				"configured, relative screenshot filenames are saved there.",
+		),
 		"timeoutMs":   numberSchema("Timeout in milliseconds."),
 		"clear":       boolSchema("Clear existing override."),
 		"accept":      boolSchema("Dialog accept flag."),
@@ -874,6 +958,20 @@ func evaluateFunctionDescription(evaluateEnabled bool) string {
 	return "Evaluate function; evaluate is not available."
 }
 
+func browserActKindDescription(evaluateEnabled bool) string {
+	kinds := "click, type, press/key, hover, scroll, scrollIntoView, " +
+		"drag, select, fill, resize, wait, navigate"
+	if evaluateEnabled {
+		kinds += ", evaluate"
+	}
+	kinds += ", and close"
+	return "Browser act kind. Supported kinds include " + kinds +
+		". Use press/key with key=PageDown, End, or Enter for " +
+		"keyboard input. Use scroll with direction, deltaX, deltaY, " +
+		"or amount for page scrolling; use scrollIntoView with ref " +
+		"for browser-server element scrolling."
+}
+
 func stringSchema(desc string) *tool.Schema {
 	return &tool.Schema{Type: "string", Description: desc}
 }
@@ -896,10 +994,7 @@ func stringArraySchema(desc string) *tool.Schema {
 
 func validateTargetSelection(in input) error {
 	target := strings.ToLower(strings.TrimSpace(in.Target))
-	switch target {
-	case "", targetHost:
-	case targetSandbox, targetNode:
-	default:
+	if !isBrowserRuntimeTarget(target) {
 		return fmt.Errorf("unknown browser target %q", in.Target)
 	}
 
@@ -911,13 +1006,32 @@ func validateTargetSelection(in input) error {
 	return nil
 }
 
+func normalizeBrowserActionInput(in input, actionKey string) input {
+	if actionKey != strings.ToLower(actionAct) {
+		return in
+	}
+	target := strings.TrimSpace(in.Target)
+	if target == "" || isBrowserRuntimeTarget(target) {
+		return in
+	}
+	in.ActTarget = target
+	in.Target = ""
+	return in
+}
+
+func isBrowserRuntimeTarget(raw string) bool {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", targetHost, targetSandbox, targetNode:
+		return true
+	default:
+		return false
+	}
+}
+
 func (t *Tool) resolveDriver(
 	in input,
 ) (string, driver, error) {
-	profile := strings.TrimSpace(in.Profile)
-	if profile == "" {
-		profile = t.defaultProfile
-	}
+	profile := t.normalizeProfile(in.Profile)
 
 	targetName := strings.ToLower(strings.TrimSpace(in.Target))
 	switch targetName {
@@ -977,6 +1091,32 @@ func (t *Tool) resolveDriver(
 	return profile, drv, nil
 }
 
+func (t *Tool) normalizeProfile(raw string) string {
+	profile := strings.TrimSpace(raw)
+	if profile == "" {
+		return t.defaultProfile
+	}
+	if _, ok := t.profiles[profile]; ok {
+		return profile
+	}
+	if _, ok := t.drivers[profile]; ok {
+		return profile
+	}
+	if isDefaultProfileAlias(profile) {
+		return t.defaultProfile
+	}
+	return profile
+}
+
+func isDefaultProfileAlias(raw string) bool {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "default", "current", "active", "browser", "chrome", "chromium":
+		return true
+	default:
+		return false
+	}
+}
+
 func (t *Tool) serverDriverForTarget(
 	target *serverTargetConfig,
 	profile string,
@@ -1016,10 +1156,11 @@ func (t *Tool) handleProfiles(
 	sort.Strings(names)
 
 	out := Result{
-		Action:          actionProfiles,
-		DefaultProfile:  t.defaultProfile,
-		Driver:          ToolName,
-		EvaluateEnabled: t.evaluateEnabled,
+		Action:           actionProfiles,
+		DefaultProfile:   t.defaultProfile,
+		Driver:           ToolName,
+		EvaluateEnabled:  t.evaluateEnabled,
+		NavigationPolicy: navigationPolicyInfo(t.navigation),
 		Supported: visibleActionsForDriver(
 			t.driverTypeForProfile(t.defaultProfile),
 			t.evaluateEnabled,
@@ -1031,11 +1172,12 @@ func (t *Tool) handleProfiles(
 		cfg := t.profiles[name]
 		driverType := t.driverTypeForProfile(name)
 		info := ProfileInfo{
-			Name:        name,
-			Description: cfg.Description,
-			Default:     name == t.defaultProfile,
-			Driver:      driverType,
-			Supported:   visibleActionsForDriver(driverType, t.evaluateEnabled),
+			Name:             name,
+			Description:      cfg.Description,
+			Default:          name == t.defaultProfile,
+			Driver:           driverType,
+			Supported:        visibleActionsForDriver(driverType, t.evaluateEnabled),
+			NavigationPolicy: out.NavigationPolicy,
 		}
 		drv := t.statusDriver(name, cfg)
 		if drv != nil {
@@ -1050,6 +1192,28 @@ func (t *Tool) handleProfiles(
 		out.Profiles = append(out.Profiles, info)
 	}
 	return out
+}
+
+func navigationPolicyInfo(policy navigationPolicy) *NavigationPolicyInfo {
+	if len(policy.AllowedDomains) == 0 &&
+		len(policy.BlockedDomains) == 0 &&
+		!policy.AllowLoopback &&
+		!policy.AllowPrivateNet &&
+		!policy.AllowFileURLs &&
+		!policy.AllowSearchPages &&
+		len(policy.AllowedFileRoots) == 0 {
+		return nil
+	}
+	return &NavigationPolicyInfo{
+		AllowedDomains:       append([]string(nil), policy.AllowedDomains...),
+		BlockedDomains:       append([]string(nil), policy.BlockedDomains...),
+		AllowLoopback:        policy.AllowLoopback,
+		AllowPrivateNetworks: policy.AllowPrivateNet,
+		AllowFileURLs:        policy.AllowFileURLs,
+		AllowRootFileURLs:    len(policy.AllowedFileRoots) > 0,
+		AllowSearchPages:     policy.AllowSearchPages,
+		AllowedFileRoots:     append([]string(nil), policy.AllowedFileRoots...),
+	}
 }
 
 func (t *Tool) statusDriver(
@@ -1145,6 +1309,7 @@ func (t *Tool) handleStart(
 	if err != nil {
 		return Result{}, err
 	}
+	resetBrowserCrash(ctx, profile)
 
 	result := newBaseResult(
 		actionStart,
@@ -1158,6 +1323,7 @@ func (t *Tool) handleStart(
 }
 
 func (t *Tool) handleStop(
+	ctx context.Context,
 	profile string,
 	driverType string,
 	drv driver,
@@ -1165,6 +1331,7 @@ func (t *Tool) handleStop(
 	if err := drv.Stop(); err != nil {
 		return Result{}, err
 	}
+	resetBrowserCrash(ctx, profile)
 
 	result := newBaseResult(
 		actionStop,
@@ -1206,6 +1373,15 @@ func (t *Tool) handleOpen(
 	if err := t.navigation.Validate(rawURL); err != nil {
 		return Result{}, err
 	}
+	if result, ok := t.searchResultBlockedResult(
+		actionOpen,
+		profile,
+		driverType,
+		rawURL,
+		nil,
+	); ok {
+		return result, nil
+	}
 	args := map[string]any{
 		"action": tabActionNew,
 	}
@@ -1230,6 +1406,20 @@ func (t *Tool) handleOpen(
 	if err != nil {
 		return Result{}, err
 	}
+	for _, tab := range result.Tabs {
+		if !tab.Active {
+			continue
+		}
+		if blocked, ok := t.searchResultBlockedResult(
+			actionOpen,
+			profile,
+			driverType,
+			tab.URL,
+			nil,
+		); ok {
+			return blocked, nil
+		}
+	}
 	result.Action = actionOpen
 	return result, nil
 }
@@ -1241,15 +1431,21 @@ func (t *Tool) handleFocus(
 	drv driver,
 	in input,
 ) (Result, error) {
-	index, err := parseTargetID(in.TargetID)
-	if err != nil {
-		return Result{}, err
+	targetID := strings.TrimSpace(in.TargetID)
+	if targetID == "" {
+		return Result{}, fmt.Errorf("targetId is empty")
 	}
-	if _, err := drv.Call(ctx, mcpToolTabs, map[string]any{
-		"action": tabActionSelect,
-		"index":  index,
-	}); err != nil {
-		return Result{}, err
+	if !isDefaultTargetID(targetID) {
+		index, err := parseTargetID(targetID)
+		if err != nil {
+			return Result{}, err
+		}
+		if _, err := drv.Call(ctx, mcpToolTabs, map[string]any{
+			"action": tabActionSelect,
+			"index":  index,
+		}); err != nil {
+			return Result{}, err
+		}
 	}
 	result, err := t.handleTabs(
 		ctx,
@@ -1273,8 +1469,8 @@ func (t *Tool) handleClose(
 	in input,
 ) (Result, error) {
 	args := map[string]any{"action": tabActionClose}
-	if strings.TrimSpace(in.TargetID) != "" {
-		index, err := parseTargetID(in.TargetID)
+	if targetID := optionalTargetID(in.TargetID); targetID != "" {
+		index, err := parseTargetID(targetID)
 		if err != nil {
 			return Result{}, err
 		}
@@ -1324,6 +1520,7 @@ func (t *Tool) handleSnapshot(
 	if err != nil {
 		return Result{}, err
 	}
+	raw = compactBrowserErrorResult(raw)
 	result := t.textResult(
 		actionSnapshot,
 		profile,
@@ -1338,6 +1535,67 @@ func (t *Tool) handleSnapshot(
 	}
 	result.Content = raw
 	return result, nil
+}
+
+func (t *Tool) resolveScreenshotFilename(
+	filename string,
+	imageType string,
+) (string, error) {
+	filename = strings.TrimSpace(filename)
+	screenshotDir := strings.TrimSpace(t.screenshotDir)
+	if screenshotDir == "" {
+		return filename, nil
+	}
+	if filename == "" {
+		filename = "screenshot-" + time.Now().UTC().Format(
+			"20060102T150405.000000000",
+		) + "." + screenshotExtension(imageType)
+	}
+	if filepath.IsAbs(filename) {
+		return filename, nil
+	}
+	cleaned := filepath.Clean(filename)
+	if cleaned == "." {
+		return "", nil
+	}
+	if cleaned == ".." ||
+		strings.HasPrefix(cleaned, ".."+string(os.PathSeparator)) {
+		return "", fmt.Errorf(
+			"browser screenshot filename %q escapes screenshot_dir",
+			filename,
+		)
+	}
+	root, err := filepath.Abs(screenshotDir)
+	if err != nil {
+		return "", fmt.Errorf("resolve browser screenshot_dir: %w", err)
+	}
+	root = filepath.Clean(root)
+	target := filepath.Clean(filepath.Join(root, cleaned))
+	if !pathInDir(target, root) {
+		return "", fmt.Errorf(
+			"browser screenshot filename %q escapes screenshot_dir",
+			filename,
+		)
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return "", fmt.Errorf("create browser screenshot dir: %w", err)
+	}
+	return target, nil
+}
+
+func screenshotExtension(imageType string) string {
+	switch strings.ToLower(strings.TrimSpace(imageType)) {
+	case "jpeg", "jpg":
+		return "jpg"
+	case "webp":
+		return "webp"
+	default:
+		return "png"
+	}
+}
+
+func pathInDir(path string, dir string) bool {
+	return path == dir || strings.HasPrefix(path, dir+string(os.PathSeparator))
 }
 
 func (t *Tool) handleScreenshot(
@@ -1355,7 +1613,11 @@ func (t *Tool) handleScreenshot(
 	if in.FullPage != nil {
 		args["fullPage"] = *in.FullPage
 	}
-	if filename := strings.TrimSpace(in.Filename); filename != "" {
+	filename, err := t.resolveScreenshotFilename(in.Filename, in.Type)
+	if err != nil {
+		return Result{}, err
+	}
+	if filename != "" {
 		args["filename"] = filename
 	}
 	if ref := strings.TrimSpace(in.Ref); ref != "" {
@@ -1372,6 +1634,8 @@ func (t *Tool) handleScreenshot(
 	if err != nil {
 		return Result{}, err
 	}
+	_, captureFailed := compactBrowserErrorText(extractText(raw))
+	raw = compactBrowserErrorResult(raw)
 
 	result := newBaseResult(
 		actionScreenshot,
@@ -1380,6 +1644,9 @@ func (t *Tool) handleScreenshot(
 		t.evaluateEnabled,
 	)
 	result.TargetID = strings.TrimSpace(in.TargetID)
+	if !captureFailed {
+		result.ScreenshotPath = filename
+	}
 	result.Content = raw
 	return result, nil
 }
@@ -1391,15 +1658,23 @@ func (t *Tool) handleNavigate(
 	drv driver,
 	in input,
 ) (Result, error) {
-	if err := selectTarget(ctx, drv, in.TargetID); err != nil {
-		return Result{}, err
-	}
-
 	rawURL := browserURL(in.URL, in.TargetURL)
 	if rawURL == "" {
 		return Result{}, errors.New("browser navigate requires url")
 	}
 	if err := t.navigation.Validate(rawURL); err != nil {
+		return Result{}, err
+	}
+	if result, ok := t.searchResultBlockedResult(
+		actionNavigate,
+		profile,
+		driverType,
+		rawURL,
+		in.MaxChars,
+	); ok {
+		return result, nil
+	}
+	if err := selectTarget(ctx, drv, in.TargetID); err != nil {
 		return Result{}, err
 	}
 
@@ -1409,6 +1684,16 @@ func (t *Tool) handleNavigate(
 	if err != nil {
 		return Result{}, err
 	}
+	if result, ok := t.searchResultBlockedFromRaw(
+		actionNavigate,
+		profile,
+		driverType,
+		raw,
+		in.MaxChars,
+	); ok {
+		return result, nil
+	}
+	raw = compactBrowserErrorResult(raw)
 	return t.textResult(
 		actionNavigate,
 		profile,
@@ -2093,6 +2378,17 @@ func (t *Tool) handleAct(
 	in input,
 ) (Result, error) {
 	req := normalizeActRequest(in)
+	if result, ok, err := t.blockedActNavigateResult(
+		actionAct,
+		profile,
+		driverType,
+		req,
+		in.MaxChars,
+	); err != nil {
+		return Result{}, err
+	} else if ok {
+		return result, nil
+	}
 	if err := selectTarget(ctx, drv, req.TargetID); err != nil {
 		return Result{}, err
 	}
@@ -2100,6 +2396,15 @@ func (t *Tool) handleAct(
 	raw, err := t.executeAct(ctx, drv, req, driverType)
 	if err != nil {
 		return Result{}, err
+	}
+	if result, ok := t.searchResultBlockedFromRaw(
+		actionAct,
+		profile,
+		driverType,
+		raw,
+		in.MaxChars,
+	); ok {
+		return result, nil
 	}
 
 	if req.Kind == actClose {
@@ -2128,11 +2433,71 @@ func (t *Tool) handleAct(
 func normalizeActRequest(in input) actRequest {
 	if in.Request != nil {
 		req := *in.Request
+		if strings.TrimSpace(req.Kind) == "" {
+			req.Kind = in.Kind
+		}
 		if strings.TrimSpace(req.TargetID) == "" {
 			req.TargetID = in.TargetID
 		}
+		if strings.TrimSpace(req.Target) == "" {
+			req.Target = in.ActTarget
+		}
 		if strings.TrimSpace(req.Ref) == "" {
 			req.Ref = in.Ref
+		}
+		if req.DoubleClick == nil {
+			req.DoubleClick = in.DoubleClick
+		}
+		if strings.TrimSpace(req.Button) == "" {
+			req.Button = in.Button
+		}
+		if req.Modifiers == nil {
+			req.Modifiers = in.Modifiers
+		}
+		if !req.textSet && req.Text == "" {
+			req.Text = in.Text
+		}
+		if req.Submit == nil {
+			req.Submit = in.Submit
+		}
+		if req.Slowly == nil {
+			req.Slowly = in.Slowly
+		}
+		if strings.TrimSpace(req.Key) == "" {
+			req.Key = in.Key
+		}
+		if req.DelayMs == nil {
+			req.DelayMs = in.DelayMs
+		}
+		if strings.TrimSpace(req.StartTarget) == "" {
+			req.StartTarget = in.StartTarget
+		}
+		if strings.TrimSpace(req.StartRef) == "" {
+			req.StartRef = in.StartRef
+		}
+		if strings.TrimSpace(req.EndTarget) == "" {
+			req.EndTarget = in.EndTarget
+		}
+		if strings.TrimSpace(req.EndRef) == "" {
+			req.EndRef = in.EndRef
+		}
+		if req.Values == nil {
+			req.Values = in.Values
+		}
+		if req.Fields == nil {
+			req.Fields = in.Fields
+		}
+		if req.Width == nil {
+			req.Width = in.Width
+		}
+		if req.Height == nil {
+			req.Height = in.Height
+		}
+		if req.TimeMs == nil {
+			req.TimeMs = in.TimeMs
+		}
+		if strings.TrimSpace(req.Selector) == "" {
+			req.Selector = in.Selector
 		}
 		if strings.TrimSpace(req.URL) == "" {
 			req.URL = browserURL(in.URL, in.TargetURL)
@@ -2149,6 +2514,18 @@ func normalizeActRequest(in input) actRequest {
 		if req.Amount == nil {
 			req.Amount = in.Amount
 		}
+		if strings.TrimSpace(req.LoadState) == "" {
+			req.LoadState = in.LoadState
+		}
+		if strings.TrimSpace(req.TextGone) == "" {
+			req.TextGone = in.TextGone
+		}
+		if req.TimeoutMs == nil {
+			req.TimeoutMs = in.TimeoutMs
+		}
+		if strings.TrimSpace(req.Fn) == "" {
+			req.Fn = in.Fn
+		}
 		req.Kind = defaultActKind(req)
 		return req
 	}
@@ -2164,6 +2541,7 @@ func normalizeActRequest(in input) actRequest {
 			LoadState: in.LoadState,
 		}),
 		TargetID:    in.TargetID,
+		Target:      in.ActTarget,
 		Ref:         in.Ref,
 		DoubleClick: in.DoubleClick,
 		Button:      in.Button,
@@ -2173,7 +2551,9 @@ func normalizeActRequest(in input) actRequest {
 		Slowly:      in.Slowly,
 		Key:         in.Key,
 		DelayMs:     in.DelayMs,
+		StartTarget: in.StartTarget,
 		StartRef:    in.StartRef,
+		EndTarget:   in.EndTarget,
 		EndRef:      in.EndRef,
 		Values:      in.Values,
 		Fields:      in.Fields,
@@ -2278,14 +2658,26 @@ func (t *Tool) executeAct(
 		addServerTimeoutArg(args, driverType, req.TimeoutMs)
 		return drv.Call(ctx, mcpToolHover, args)
 	case strings.ToLower(actScrollIntoView):
-		if driverType != driverTypeBrowserServer {
-			return nil, errors.New(
-				"scrollIntoView is only supported by the " +
-					"browser-server driver",
+		if driverType == driverTypePlaywrightMCP {
+			if !t.evaluateEnabled {
+				return nil, errors.New(
+					"scrollIntoView requires browser evaluate support",
+				)
+			}
+			args := map[string]any{
+				"function": scrollIntoViewFunction,
+			}
+			addOptionalElementArgs(
+				args,
+				req.Ref,
+				req.Target,
+				driverType,
 			)
+			return drv.Call(ctx, mcpToolEvaluate, args)
 		}
-		args := map[string]any{
-			"ref": strings.TrimSpace(req.Ref),
+		args, err := elementActionArgs(req, driverType)
+		if err != nil {
+			return nil, err
 		}
 		addServerTimeoutArg(args, driverType, req.TimeoutMs)
 		return drv.Call(ctx, mcpToolScroll, args)
@@ -2352,7 +2744,7 @@ func (t *Tool) executeAct(
 func normalizeActKind(kind string) string {
 	normalized := strings.ToLower(strings.TrimSpace(kind))
 	switch normalized {
-	case actKey, "keyboard":
+	case actKey, "keyboard", "press/key", "press-key":
 		return actPress
 	case "scroll_into_view", "scroll-into-view":
 		return strings.ToLower(actScrollIntoView)
@@ -2503,8 +2895,17 @@ func elementActionArgs(
 		)
 		return args, nil
 	}
-	args["ref"] = strings.TrimSpace(req.Ref)
-	args["element"] = describeElement(req.Ref, "")
+	ref := strings.TrimSpace(req.Ref)
+	target := strings.TrimSpace(req.Target)
+	if ref == "" && target == "" {
+		return nil, errors.New("browser act requires ref or target")
+	}
+	if ref != "" {
+		args["ref"] = ref
+		args["element"] = describeElement(ref, "")
+		return args, nil
+	}
+	args["element"] = target
 	return args, nil
 }
 
@@ -2550,12 +2951,30 @@ func dragArgs(req actRequest, driverType string) (map[string]any, error) {
 			),
 		}, nil
 	}
-	return map[string]any{
-		"startRef":     strings.TrimSpace(req.StartRef),
-		"startElement": describeElement(req.StartRef, "start"),
-		"endRef":       strings.TrimSpace(req.EndRef),
-		"endElement":   describeElement(req.EndRef, "end"),
-	}, nil
+	startRef := strings.TrimSpace(req.StartRef)
+	startTarget := strings.TrimSpace(req.StartTarget)
+	endRef := strings.TrimSpace(req.EndRef)
+	endTarget := strings.TrimSpace(req.EndTarget)
+	if startRef == "" && startTarget == "" {
+		return nil, errors.New("browser drag requires start ref or target")
+	}
+	if endRef == "" && endTarget == "" {
+		return nil, errors.New("browser drag requires end ref or target")
+	}
+	args := map[string]any{}
+	if startRef != "" {
+		args["startRef"] = startRef
+		args["startElement"] = describeElement(startRef, "start")
+	} else {
+		args["startElement"] = startTarget
+	}
+	if endRef != "" {
+		args["endRef"] = endRef
+		args["endElement"] = describeElement(endRef, "end")
+	} else {
+		args["endElement"] = endTarget
+	}
+	return args, nil
 }
 
 func (t *Tool) executeFill(
@@ -2564,18 +2983,38 @@ func (t *Tool) executeFill(
 	req actRequest,
 	driverType string,
 ) (any, error) {
-	if len(req.Fields) == 0 {
+	fields := fillFields(req)
+	if len(fields) == 0 {
 		return nil, errors.New("browser fill requires fields")
 	}
-	fields := req.Fields
 	if driverType == driverTypePlaywrightMCP {
-		fields = normalizeMCPFillFields(req.Fields)
+		fields = normalizeMCPFillFields(fields)
 	}
 	args := map[string]any{
 		"fields": fields,
 	}
 	addServerTimeoutArg(args, driverType, req.TimeoutMs)
 	return drv.Call(ctx, mcpToolFillForm, args)
+}
+
+func fillFields(req actRequest) []map[string]any {
+	if req.Fields != nil {
+		return req.Fields
+	}
+	target := firstNonEmpty(req.Ref, req.Target)
+	if target == "" {
+		return nil
+	}
+	field := map[string]any{
+		"text": req.Text,
+	}
+	if strings.TrimSpace(req.Ref) != "" {
+		field["ref"] = strings.TrimSpace(req.Ref)
+	}
+	if strings.TrimSpace(req.Target) != "" {
+		field["target"] = strings.TrimSpace(req.Target)
+	}
+	return []map[string]any{field}
 }
 
 func normalizeMCPFillFields(fields []map[string]any) []map[string]any {
@@ -2612,7 +3051,12 @@ func normalizeMCPFillFields(fields []map[string]any) []map[string]any {
 			normalized["type"] = "textbox"
 		}
 		if _, ok := normalized["value"]; !ok {
-			normalized["value"] = stringField(field, "text")
+			text := field["text"]
+			if text == nil {
+				normalized["value"] = ""
+			} else {
+				normalized["value"] = fmt.Sprint(text)
+			}
 		} else {
 			normalized["value"] = fmt.Sprint(normalized["value"])
 		}
@@ -2685,6 +3129,7 @@ func (t *Tool) textResult(
 	maxChars *int,
 	raw any,
 ) Result {
+	raw = compactBrowserErrorResult(raw)
 	result := newBaseResult(
 		action,
 		profile,
@@ -2693,11 +3138,119 @@ func (t *Tool) textResult(
 	)
 	result.Untrusted = true
 	result.Warning = untrustedBrowserWarning
-	result.Text = wrapUntrustedText(
-		extractText(raw),
-		intValue(maxChars),
-	)
+	text := extractText(raw)
+	if t.detectBlocked && browserActionHasPageContent(action) {
+		if reason, ok := blockedBrowserPageReason(text); ok {
+			result.State = stateBlocked
+			result.Warning = blockedBrowserPageWarning
+			result.Text = blockedBrowserPageText(
+				reason,
+				text,
+				intValue(maxChars),
+			)
+			result.Content = []textContentItem{{
+				Type: "text",
+				Text: result.Text,
+			}}
+			return result
+		}
+	}
+	result.Text = wrapUntrustedText(text, intValue(maxChars))
 	return result
+}
+
+func browserActionHasPageContent(action string) bool {
+	switch strings.ToLower(strings.TrimSpace(action)) {
+	case actionSnapshot, actionNavigate, actionAct, actionWait:
+		return true
+	default:
+		return false
+	}
+}
+
+func (t *Tool) searchResultBlockedFromRaw(
+	action string,
+	profile string,
+	driverType string,
+	raw any,
+	maxChars *int,
+) (Result, bool) {
+	rawURL := browserResultURL(raw)
+	if rawURL == "" {
+		return Result{}, false
+	}
+	return t.searchResultBlockedResult(
+		action,
+		profile,
+		driverType,
+		rawURL,
+		maxChars,
+	)
+}
+
+func (t *Tool) blockedActNavigateResult(
+	action string,
+	profile string,
+	driverType string,
+	req actRequest,
+	maxChars *int,
+) (Result, bool, error) {
+	if normalizeActKind(req.Kind) != actionNavigate {
+		return Result{}, false, nil
+	}
+	rawURL := browserURL(req.URL, req.TargetURL)
+	if rawURL == "" {
+		return Result{}, false, errors.New(
+			"browser act navigate requires url",
+		)
+	}
+	if err := t.navigation.Validate(rawURL); err != nil {
+		return Result{}, false, err
+	}
+	result, ok := t.searchResultBlockedResult(
+		action,
+		profile,
+		driverType,
+		rawURL,
+		maxChars,
+	)
+	return result, ok, nil
+}
+
+func (t *Tool) searchResultBlockedResult(
+	action string,
+	profile string,
+	driverType string,
+	rawURL string,
+	maxChars *int,
+) (Result, bool) {
+	source, ok := t.navigation.BlockedSearchResultPage(rawURL)
+	if !ok {
+		return Result{}, false
+	}
+	text := "Browser navigation blocked: " + rawURL +
+		" is a search-engine result page (" + source + "). Use " +
+		"search tools, web_fetch, direct source URLs, APIs, " +
+		"archives, or existing evidence instead. If browser " +
+		"inspection of this search page is required, enable " +
+		"allow_search_result_pages in browser config."
+	if max := intValue(maxChars); max > 0 {
+		text = truncateString(text, max)
+	}
+	result := newBaseResult(
+		action,
+		profile,
+		driverType,
+		t.evaluateEnabled,
+	)
+	result.State = stateBlocked
+	result.Text = text
+	result.Warning = "Search-result browser navigation is blocked."
+	result.Content = []textContentItem{{
+		Type: "text",
+		Text: text,
+	}}
+	return result, true
 }
 
 func (t *Tool) tabsResult(
@@ -2734,7 +3287,7 @@ func selectTarget(
 	drv driver,
 	targetID string,
 ) error {
-	trimmed := strings.TrimSpace(targetID)
+	trimmed := optionalTargetID(targetID)
 	if trimmed == "" {
 		return nil
 	}
@@ -2748,6 +3301,25 @@ func selectTarget(
 		"index":  index,
 	})
 	return err
+}
+
+func optionalTargetID(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if isDefaultTargetID(trimmed) {
+		return ""
+	}
+	return trimmed
+}
+
+func isDefaultTargetID(raw string) bool {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "default", "current", "active",
+		"current-tab", "active-tab",
+		"current_tab", "active_tab":
+		return true
+	default:
+		return false
+	}
 }
 
 func boolValue(v *bool) bool {

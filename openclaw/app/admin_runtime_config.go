@@ -382,6 +382,20 @@ func adminRuntimeConfigSectionSpecs() []adminRuntimeConfigSectionSpec {
 					"hunyuan",
 					"glm",
 				),
+				adminRuntimeBoolField(
+					"model.text_only_content",
+					"Text-Only Message Content",
+					"Drop non-text user content parts for text-only providers.",
+					[]adminRuntimeConfigKeyRef{
+						adminRuntimeKey("model"),
+						adminRuntimeKey("text_only_content"),
+					},
+					func(opts runOptions) string {
+						return strconv.FormatBool(
+							opts.OpenAITextOnlyMessageContent,
+						)
+					},
+				),
 			},
 		},
 		{
@@ -392,7 +406,9 @@ func adminRuntimeConfigSectionSpecs() []adminRuntimeConfigSectionSpec {
 				adminRuntimeNumberField(
 					"agent.max_llm_calls",
 					"Max LLM Calls",
-					"Limit LLM calls per invocation; 0 is unlimited.",
+					"Limit agent-facing LLM calls per invocation; "+
+						"auxiliary summary and memory calls are excluded; "+
+						"0 is unlimited.",
 					[]adminRuntimeConfigKeyRef{
 						adminRuntimeKey("agent"),
 						adminRuntimeKey("max_llm_calls"),
@@ -411,6 +427,18 @@ func adminRuntimeConfigSectionSpecs() []adminRuntimeConfigSectionSpec {
 					},
 					func(opts runOptions) string {
 						return strconv.Itoa(opts.MaxToolIterations)
+					},
+				),
+				adminRuntimeBoolField(
+					"agent.tool_call_arguments_json_repair",
+					"Tool Call JSON Repair",
+					"Best-effort repair malformed JSON in tool call arguments.",
+					[]adminRuntimeConfigKeyRef{
+						adminRuntimeKey("agent"),
+						adminRuntimeKey("tool_call_arguments_json_repair"),
+					},
+					func(opts runOptions) string {
+						return strconv.FormatBool(opts.ToolCallArgumentsJSONRepair)
 					},
 				),
 			},
@@ -604,9 +632,10 @@ func adminRuntimeConfigSectionSpecs() []adminRuntimeConfigSectionSpec {
 				adminRuntimeSelectField(
 					"tools.defer_to_dynamic_agent_mode",
 					"Deferred Tool Surface Mode",
-					"Control whether broad tool surfaces are loaded "+
-						"directly or through tool_search and "+
-						"dynamic_agent.",
+					"Control whether broad tool surfaces stay "+
+						"direct on the parent agent or move behind "+
+						"tool_search and dynamic_agent. Default "+
+						"is off.",
 					[]adminRuntimeConfigKeyRef{
 						adminRuntimeKey("tools"),
 						adminRuntimeKey(
@@ -686,6 +715,69 @@ func adminRuntimeConfigSectionSpecs() []adminRuntimeConfigSectionSpec {
 							return ""
 						}
 						return opts.HostExecDefaultTimeout.String()
+					},
+				),
+				adminRuntimeTextField(
+					"tools.host_exec_max_timeout",
+					"Host Exec Max Timeout",
+					"Maximum timeout for host exec_command calls, "+
+						"including timeout_sec requested by the model. "+
+						"Empty or 0 disables this cap.",
+					"",
+					[]adminRuntimeConfigKeyRef{
+						adminRuntimeKey("tools"),
+						adminRuntimeKey(
+							"host_exec_max_timeout",
+							"hostExecMaxTimeout",
+						),
+					},
+					func(opts runOptions) string {
+						if opts.HostExecMaxTimeout <= 0 {
+							return ""
+						}
+						return opts.HostExecMaxTimeout.String()
+					},
+				),
+				adminRuntimeTextField(
+					"tools.host_exec_max_yield",
+					"Host Exec Max Yield",
+					"Maximum wait before exec_command or write_stdin "+
+						"returns interim output. Empty or 0 disables "+
+						"this cap.",
+					"",
+					[]adminRuntimeConfigKeyRef{
+						adminRuntimeKey("tools"),
+						adminRuntimeKey(
+							"host_exec_max_yield",
+							"hostExecMaxYield",
+						),
+					},
+					func(opts runOptions) string {
+						if opts.HostExecMaxYield <= 0 {
+							return ""
+						}
+						return opts.HostExecMaxYield.String()
+					},
+				),
+				adminRuntimeTextField(
+					"tools.host_exec_max_idle_wait",
+					"Host Exec Max Idle Wait",
+					"Maximum sleep-style idle wait allowed inside "+
+						"host exec_command calls, for example 20s. "+
+						"Empty or 0 allows long idle waits.",
+					"",
+					[]adminRuntimeConfigKeyRef{
+						adminRuntimeKey("tools"),
+						adminRuntimeKey(
+							"host_exec_max_idle_wait",
+							"hostExecMaxIdleWait",
+						),
+					},
+					func(opts runOptions) string {
+						if opts.HostExecMaxIdleWait <= 0 {
+							return ""
+						}
+						return opts.HostExecMaxIdleWait.String()
 					},
 				),
 				adminRuntimeTextField(

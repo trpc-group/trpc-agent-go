@@ -17,8 +17,6 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/evolution"
 	"trpc.group/trpc-go/trpc-agent-go/log"
-	"trpc.group/trpc-go/trpc-agent-go/model"
-	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 )
 
@@ -98,33 +96,32 @@ func maybeCreateEvolutionService(
 		evoOpts = append(evoOpts, evolution.WithHumanGate(gate))
 		log.Infof("evolution: human gate enabled (mode=%s)", opts.EvolutionHumanGate)
 	}
+	if opts.EvolutionApprovalTimeout > 0 {
+		evoOpts = append(evoOpts, evolution.WithApprovalTimeout(opts.EvolutionApprovalTimeout))
+		if opts.EvolutionApprovalSweepInterval > 0 {
+			evoOpts = append(
+				evoOpts,
+				evolution.WithApprovalSweepInterval(opts.EvolutionApprovalSweepInterval),
+			)
+		}
+		log.Infof(
+			"evolution: approval auto-expire enabled (timeout=%s, sweep_interval=%s)",
+			opts.EvolutionApprovalTimeout,
+			opts.EvolutionApprovalSweepInterval,
+		)
+	}
 
-	// Use the same model configuration as the agent for reviewing.
-	mdl := newEvolutionReviewerModel(opts)
-	if mdl == nil {
+	// Use the same top-level model configuration as the agent, session
+	// summary, and automatic memory extraction.
+	mdl, err := modelFromOptions(opts)
+	if err != nil {
+		log.Errorf("evolution: create reviewer model: %v", err)
 		return nil
 	}
 
 	svc := evolution.NewService(mdl, evoOpts...)
 	log.Infof("evolution: enabled (skills_dir=%s, revisions_dir=%s)", managedDir, revisionsDir)
 	return svc
-}
-
-// newEvolutionReviewerModel creates a model for the evolution reviewer.
-// It reuses the same provider config as the agent (OpenAI base URL, etc).
-func newEvolutionReviewerModel(opts runOptions) model.Model {
-	if opts.ModelMode == modeMock {
-		return nil
-	}
-	modelName := opts.OpenAIModel
-	if modelName == "" {
-		modelName = defaultOpenAIModel
-	}
-	var modelOpts []openai.Option
-	if opts.OpenAIBaseURL != "" {
-		modelOpts = append(modelOpts, openai.WithBaseURL(opts.OpenAIBaseURL))
-	}
-	return openai.New(modelName, modelOpts...)
 }
 
 // resolveHumanGate returns the HumanGate implementation for the given

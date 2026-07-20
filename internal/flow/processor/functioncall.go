@@ -16,6 +16,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -26,11 +28,13 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonrepair"
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonutils"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/sessionroute"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolretry"
 	itrace "trpc.group/trpc-go/trpc-agent-go/internal/trace"
 	"trpc.group/trpc-go/trpc-agent-go/log"
+	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/plugin"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -50,9 +54,26 @@ const (
 	ErrorMarshalResult = "Error: failed to marshal result"
 )
 
+const (
+	maxToolNameSuggestions    = 3
+	maxToolNameDistance       = 3
+	maxToolNameErrorNameRunes = 160
+)
+
 // funcRespCompletionTimeout is the default wait duration for ensuring a
 // tool.response event has been processed by the session persistence layer.
 const funcRespCompletionTimeout = 5 * time.Second
+
+// funcRespDeadlinePersistenceTimeout bounds the fallback append used when a
+// completed tool response cannot enter the runner event loop after deadline.
+const funcRespDeadlinePersistenceTimeout = time.Second
+
+const (
+	knowledgeSearchToolName                    = "knowledge_search"
+	knowledgeSearchWithAgenticFilterName       = "knowledge_search_with_agentic_filter"
+	knowledgeSearchToolNameSuffix              = "_knowledge_search"
+	knowledgeSearchWithAgenticFilterNameSuffix = "_knowledge_search_with_agentic_filter"
+)
 
 // summarizationSkipper is implemented by tools that can indicate whether
 // the flow should skip a post-tool summarization step. This allows tools
@@ -71,6 +92,14 @@ type streamInnerPreference interface {
 
 type innerTextModePreference interface {
 	InnerTextMode() tool.InnerTextMode
+}
+
+type autoMemoryPollutionSource interface {
+	PollutesAutoMemory() bool
+}
+
+type originalToolProvider interface {
+	Original() tool.Tool
 }
 
 type toolEventStateDelta struct {
@@ -114,15 +143,21 @@ type subAgentCall struct {
 
 // FunctionCallResponseProcessor handles agent transfer operations after LLM responses.
 type FunctionCallResponseProcessor struct {
-	enableParallelTools bool
-	toolCallbacks       *tool.Callbacks
-	toolRetryPolicy     *tool.RetryPolicy
-	postToolResultHooks []PostToolResultHook
-	attachmentBudget    int
+	enableParallelTools       bool
+	toolCallbacks             *tool.Callbacks
+	toolRetryPolicy           *tool.RetryPolicy
+	postToolResultHooks       []PostToolResultHook
+	attachmentBudget          int
+	toolNameSuggestionOptions toolNameSuggestionOptions
 }
 
 // FunctionCallResponseProcessorOption configures a function-call response processor.
 type FunctionCallResponseProcessorOption func(*FunctionCallResponseProcessor)
+
+type toolNameSuggestionOptions struct {
+	maxSuggestions int
+	maxDistance    int
+}
 
 // PostToolResultHook observes and may mutate a completed tool result event.
 type PostToolResultHook func(
@@ -165,6 +200,24 @@ func WithToolResultAttachmentBudget(
 	}
 }
 
+// WithToolNameSuggestions configures tool-not-found suggestion generation.
+// Non-positive maxSuggestions or negative maxDistance disables suggestions.
+func WithToolNameSuggestions(
+	maxSuggestions int,
+	maxDistance int,
+) FunctionCallResponseProcessorOption {
+	return func(p *FunctionCallResponseProcessor) {
+		if maxSuggestions <= 0 || maxDistance < 0 {
+			p.toolNameSuggestionOptions = toolNameSuggestionOptions{}
+			return
+		}
+		p.toolNameSuggestionOptions = toolNameSuggestionOptions{
+			maxSuggestions: maxSuggestions,
+			maxDistance:    maxDistance,
+		}
+	}
+}
+
 // NewFunctionCallResponseProcessor creates a new transfer response processor.
 func NewFunctionCallResponseProcessor(
 	enableParallelTools bool,
@@ -172,8 +225,9 @@ func NewFunctionCallResponseProcessor(
 	opts ...FunctionCallResponseProcessorOption,
 ) *FunctionCallResponseProcessor {
 	processor := &FunctionCallResponseProcessor{
-		enableParallelTools: enableParallelTools,
-		toolCallbacks:       toolCallbacks,
+		enableParallelTools:       enableParallelTools,
+		toolCallbacks:             toolCallbacks,
+		toolNameSuggestionOptions: defaultToolNameSuggestionOptions(),
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -352,7 +406,29 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsAndSendEventWithReque
 	}
 
 	functionResponseEvent.RequiresCompletion = true
-	agent.EmitEvent(ctx, invocation, eventChan, functionResponseEvent)
+	emitErr := agent.EmitEvent(
+		ctx,
+		invocation,
+		eventChan,
+		functionResponseEvent,
+	)
+	if errors.Is(emitErr, context.DeadlineExceeded) {
+		if persistErr := persistFunctionResponseAfterDeadline(
+			ctx,
+			invocation,
+			functionResponseEvent,
+		); persistErr != nil {
+			log.WarnfContext(
+				ctx,
+				"Persist tool response after deadline failed: %v",
+				persistErr,
+			)
+		}
+		return nil, emitErr
+	}
+	if emitErr != nil {
+		return nil, emitErr
+	}
 
 	if !appender.IsAttached(invocation) {
 		return functionResponseEvent, nil
@@ -374,6 +450,94 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsAndSendEventWithReque
 		)
 	}
 	return functionResponseEvent, nil
+}
+
+func persistFunctionResponseAfterDeadline(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	functionResponseEvent *event.Event,
+) error {
+	if functionResponseEvent == nil {
+		return nil
+	}
+	persistCtx, cancel := context.WithTimeout(
+		context.WithoutCancel(ctx),
+		funcRespDeadlinePersistenceTimeout,
+	)
+	defer cancel()
+	routeEvent := sessionroute.SnapshotEventIdentity(functionResponseEvent)
+	var parentMetadata *event.ParentInvocationMetadata
+	if functionResponseEvent.ParentMetadata != nil {
+		metadata := *functionResponseEvent.ParentMetadata
+		parentMetadata = &metadata
+	}
+	functionResponseEvent = applyEventPluginsAfterDeadline(
+		persistCtx,
+		invocation,
+		functionResponseEvent,
+	)
+	restoreEventRoutingFields(functionResponseEvent, routeEvent)
+	functionResponseEvent.ParentMetadata = parentMetadata
+
+	attached, err := appender.Invoke(
+		persistCtx,
+		invocation,
+		functionResponseEvent,
+	)
+	if err != nil {
+		return err
+	}
+	if attached {
+		return nil
+	}
+	if invocation == nil || invocation.SessionService == nil {
+		return errors.New("session service unavailable after deadline")
+	}
+	persistSession, routed := sessionroute.RouteEvent(
+		invocation,
+		routeEvent,
+	)
+	if !routed || persistSession == nil {
+		persistSession = invocation.Session
+	}
+	if persistSession == nil {
+		return errors.New("session unavailable after deadline")
+	}
+	return invocation.SessionService.AppendEvent(
+		persistCtx,
+		persistSession,
+		functionResponseEvent,
+	)
+}
+
+func applyEventPluginsAfterDeadline(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	evt *event.Event,
+) *event.Event {
+	if evt == nil || invocation == nil || invocation.Plugins == nil {
+		return evt
+	}
+	updated, err := invocation.Plugins.OnEvent(ctx, invocation, evt)
+	if err != nil {
+		log.ErrorfContext(ctx, "plugin OnEvent failed: %v", err)
+		return evt
+	}
+	if updated == nil {
+		return evt
+	}
+	return updated
+}
+
+func restoreEventRoutingFields(dst *event.Event, src *event.Event) {
+	if dst == nil || src == nil {
+		return
+	}
+	dst.RequestID = src.RequestID
+	dst.InvocationID = src.InvocationID
+	dst.ParentInvocationID = src.ParentInvocationID
+	dst.Branch = src.Branch
+	dst.FilterKey = src.FilterKey
 }
 
 func funcRespWaitTimeout(ctx context.Context) time.Duration {
@@ -787,6 +951,12 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequentialResult(
 	decl := p.lookupDeclaration(tools, toolCall.Function.Name)
 	var stateDelta *toolEventStateDelta
 	if err == nil {
+		markSessionAutoMemoryPolluted(
+			invocation,
+			toolEvent,
+			tools[toolCall.Function.Name],
+			toolCall.Function.Name,
+		)
 		stateDelta = p.buildToolEventStateDelta(
 			ctx,
 			invocation,
@@ -830,6 +1000,62 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequentialResult(
 		stateDelta: stateDelta,
 		toolArgs:   modifiedArgs,
 	}, nil
+}
+
+func markSessionAutoMemoryPolluted(
+	invocation *agent.Invocation,
+	ev *event.Event,
+	tl tool.Tool,
+	toolName string,
+) {
+	if !toolPollutesAutoMemory(tl, toolName) {
+		return
+	}
+	value := []byte(memory.MemoryModePolluted)
+	if invocation != nil && invocation.Session != nil {
+		invocation.Session.SetState(memory.SessionStateKeyMemoryMode, value)
+	}
+	if ev != nil {
+		if ev.StateDelta == nil {
+			ev.StateDelta = make(map[string][]byte)
+		}
+		ev.StateDelta[memory.SessionStateKeyMemoryMode] = value
+	}
+}
+
+func toolPollutesAutoMemory(tl tool.Tool, name string) bool {
+	if toolCapabilityPollutesAutoMemory(tl) {
+		return true
+	}
+	return toolNamePollutesAutoMemory(name)
+}
+
+func toolCapabilityPollutesAutoMemory(tl tool.Tool) bool {
+	for tl != nil {
+		if source, ok := tl.(autoMemoryPollutionSource); ok && source.PollutesAutoMemory() {
+			return true
+		}
+		wrapper, ok := tl.(originalToolProvider)
+		if !ok {
+			return false
+		}
+		original := wrapper.Original()
+		if original == nil || original == tl {
+			return false
+		}
+		tl = original
+	}
+	return false
+}
+
+func toolNamePollutesAutoMemory(name string) bool {
+	switch name {
+	case knowledgeSearchToolName, knowledgeSearchWithAgenticFilterName:
+		return true
+	default:
+		return strings.HasSuffix(name, knowledgeSearchToolNameSuffix) ||
+			strings.HasSuffix(name, knowledgeSearchWithAgenticFilterNameSuffix)
+	}
 }
 
 // executeToolCallsInParallel runs multiple tool calls concurrently and merges
@@ -1084,6 +1310,12 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 			agentName = invocation.AgentName
 		}
 	}
+	markSessionAutoMemoryPolluted(
+		invocation,
+		toolCallResponseEvent,
+		tools[tc.Function.Name],
+		tc.Function.Name,
+	)
 	stateDelta := p.buildToolEventStateDelta(
 		ctx,
 		invocation,
@@ -1416,6 +1648,7 @@ func preserveStateDeltaInvocationDefaults(
 	view.StructuredOutput = base.StructuredOutput
 	view.StructuredOutputType = base.StructuredOutputType
 	view.MemoryService = base.MemoryService
+	view.MemoryReader = base.MemoryReader
 	view.ArtifactService = base.ArtifactService
 	view.MaxLLMCalls = base.MaxLLMCalls
 	view.MaxToolIterations = base.MaxToolIterations
@@ -1873,6 +2106,7 @@ func (p *FunctionCallResponseProcessor) resolveToolCallTarget(
 		if mapped := findCompatibleTool(toolCall.Function.Name, tools, invocation); mapped != nil {
 			tl = mapped
 			if newArgs := convertToolArguments(
+				invocation,
 				toolCall.Function.Name, toolCall.Function.Arguments,
 				mapped.Declaration().Name,
 			); newArgs != nil {
@@ -1880,6 +2114,11 @@ func (p *FunctionCallResponseProcessor) resolveToolCallTarget(
 				toolCall.Function.Arguments = newArgs
 			}
 		} else {
+			toolNotFoundErr := toolNotFoundError(
+				toolCall.Function.Name,
+				tools,
+				p.toolNameSuggestionOptions,
+			)
 			log.ErrorfContext(
 				ctx,
 				"CallableTool %s not found (agent=%s, model=%s)",
@@ -1887,7 +2126,10 @@ func (p *FunctionCallResponseProcessor) resolveToolCallTarget(
 				invocation.AgentName,
 				invocation.Model.Info().Name,
 			)
-			return toolCall, nil, true, fmt.Errorf("executeToolCall: %s", ErrorToolNotFound)
+			return toolCall, nil, true, fmt.Errorf(
+				"executeToolCall: %s",
+				toolNotFoundErr,
+			)
 		}
 	}
 	if invocation != nil &&
@@ -1895,6 +2137,153 @@ func (p *FunctionCallResponseProcessor) resolveToolCallTarget(
 		return toolCall, nil, true, nil
 	}
 	return toolCall, tl, false, nil
+}
+
+func defaultToolNameSuggestionOptions() toolNameSuggestionOptions {
+	return toolNameSuggestionOptions{
+		maxSuggestions: maxToolNameSuggestions,
+		maxDistance:    maxToolNameDistance,
+	}
+}
+
+func toolNotFoundError(
+	name string,
+	tools map[string]tool.Tool,
+	options toolNameSuggestionOptions,
+) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ErrorToolNotFound
+	}
+	suggestions := similarToolNames(name, tools, options)
+	displayName := displayToolName(name)
+	if len(suggestions) == 0 {
+		return fmt.Sprintf("%s: %s", ErrorToolNotFound, displayName)
+	}
+	if len(suggestions) == 1 {
+		return fmt.Sprintf(
+			"%s: %s; did you mean %q?",
+			ErrorToolNotFound,
+			displayName,
+			suggestions[0],
+		)
+	}
+	return fmt.Sprintf(
+		"%s: %s; did you mean one of %s?",
+		ErrorToolNotFound,
+		displayName,
+		quotedToolNames(suggestions),
+	)
+}
+
+func similarToolNames(
+	name string,
+	tools map[string]tool.Tool,
+	options toolNameSuggestionOptions,
+) []string {
+	if options.maxSuggestions <= 0 || options.maxDistance < 0 {
+		return nil
+	}
+	type candidate struct {
+		name     string
+		distance int
+	}
+	needle := strings.ToLower(strings.TrimSpace(name))
+	candidates := make([]candidate, 0, len(tools))
+	for toolName := range tools {
+		trimmed := strings.TrimSpace(toolName)
+		if trimmed == "" {
+			continue
+		}
+		distance := toolNameEditDistance(
+			needle,
+			strings.ToLower(trimmed),
+		)
+		if distance <= options.maxDistance {
+			candidates = append(candidates, candidate{
+				name:     trimmed,
+				distance: distance,
+			})
+			continue
+		}
+		if strings.Contains(needle, strings.ToLower(trimmed)) {
+			candidates = append(candidates, candidate{
+				name:     trimmed,
+				distance: options.maxDistance + 1,
+			})
+		}
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].distance != candidates[j].distance {
+			return candidates[i].distance < candidates[j].distance
+		}
+		return candidates[i].name < candidates[j].name
+	})
+	limit := len(candidates)
+	if limit > options.maxSuggestions {
+		limit = options.maxSuggestions
+	}
+	out := make([]string, 0, limit)
+	for i := 0; i < limit; i++ {
+		out = append(out, candidates[i].name)
+	}
+	return out
+}
+
+func displayToolName(name string) string {
+	name = collapseToolNameWhitespace(name)
+	runes := []rune(name)
+	if len(runes) <= maxToolNameErrorNameRunes {
+		return name
+	}
+	return string(runes[:maxToolNameErrorNameRunes]) + "..."
+}
+
+func collapseToolNameWhitespace(name string) string {
+	return strings.Join(strings.Fields(name), " ")
+}
+
+func quotedToolNames(names []string) string {
+	quoted := make([]string, 0, len(names))
+	for _, name := range names {
+		quoted = append(quoted, fmt.Sprintf("%q", name))
+	}
+	return strings.Join(quoted, ", ")
+}
+
+func toolNameEditDistance(a string, b string) int {
+	if a == b {
+		return 0
+	}
+	ar := []rune(a)
+	br := []rune(b)
+	if len(ar) == 0 {
+		return len(br)
+	}
+	if len(br) == 0 {
+		return len(ar)
+	}
+	prev := make([]int, len(br)+1)
+	curr := make([]int, len(br)+1)
+	for j := range prev {
+		prev[j] = j
+	}
+	for i, ca := range ar {
+		curr[0] = i + 1
+		for j, cb := range br {
+			cost := 1
+			if ca == cb {
+				cost = 0
+			}
+			curr[j+1] = min(
+				curr[j]+1,
+				prev[j+1]+1,
+				prev[j]+cost,
+			)
+		}
+		prev, curr = curr, prev
+	}
+	return prev[len(br)]
 }
 
 // applyToolResultMessagesCallback invokes the optional ToolResultMessages callback and
@@ -3106,14 +3495,25 @@ func findCompatibleTool(requested string, tools map[string]tool.Tool, invocation
 
 // convertToolArguments converts original args to the mapped tool args when needed.
 // When mapping sub-agent name -> transfer_to_agent, wrap message and set agent_name.
-func convertToolArguments(originalName string, originalArgs []byte, targetName string) []byte {
+func convertToolArguments(
+	invocation *agent.Invocation,
+	originalName string,
+	originalArgs []byte,
+	targetName string,
+) []byte {
 	if targetName != transfer.TransferToolName {
 		return nil
 	}
 
 	var input subAgentCall
 	if len(originalArgs) > 0 {
-		if err := jsonutils.DecodeLeadingJSON(string(originalArgs), &input); err != nil {
+		var err error
+		if jsonrepair.IsToolCallArgumentsJSONRepairEnabled(invocation) {
+			err = jsonutils.DecodeLeadingJSON(string(originalArgs), &input)
+		} else {
+			err = json.Unmarshal(originalArgs, &input)
+		}
+		if err != nil {
 			log.Warnf("Failed to unmarshal sub-agent call arguments for %s: %v", originalName, err)
 			return nil
 		}

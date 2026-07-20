@@ -55,11 +55,13 @@ func baseLLMAgentOptions(
 	genConfig model.GenerationConfig,
 	repo *ocskills.Repository,
 ) []llmagent.Option {
-	return []llmagent.Option{
+	opts := []llmagent.Option{
 		llmagent.WithModel(mdl),
+		llmagent.WithAgentCallbacks(blockedRouteAgentCallbacks()),
 		llmagent.WithInstruction(instruction),
 		llmagent.WithGlobalInstruction(systemPrompt),
 		llmagent.WithGenerationConfig(genConfig),
+		llmagent.WithAddCurrentTime(true),
 		llmagent.WithAddSessionSummary(cfg.AddSessionSummary),
 		llmagent.WithEnableContextCompaction(cfg.EnableContextCompaction),
 		llmagent.WithContextCompactionOversizedToolResultMaxTokens(
@@ -85,6 +87,50 @@ func baseLLMAgentOptions(
 			runtimeprofile.SkillVisibilityFilterForRepository(repo),
 		),
 	}
+	if cfg.MaxLLMCalls > 0 || cfg.DeadlineFinalizationWindow > 0 {
+		opts = append(opts, llmagent.WithModelCallbacks(
+			modelCallBudgetCallbacks(),
+		))
+	}
+	return opts
+}
+
+func appendDeferredSkillOverviewOptions(
+	opts []llmagent.Option,
+	cfg agentConfig,
+	repo *ocskills.Repository,
+	repoProvider skill.RepositoryProvider,
+) []llmagent.Option {
+	if repo == nil {
+		return opts
+	}
+	opts = append(
+		opts,
+		llmagent.WithSkills(repo),
+		llmagent.WithSkillRepositoryProvider(repoProvider),
+		llmagent.WithSkillScopeMode(cfg.EvolutionSkillScopeMode),
+		llmagent.WithAllowedSkillTools(llmagent.SkillToolLoad),
+		llmagent.WithSkillLoadMode(cfg.SkillsLoadMode),
+		llmagent.WithSkillLoadToolDescription(
+			openClawSkillLoadToolDescription,
+		),
+		llmagent.WithSkillsProtocolGuidance(
+			buildOpenClawSkillsGuidance(cfg),
+		),
+	)
+	if cfg.SkillsOverviewLimit > 0 {
+		opts = append(
+			opts,
+			llmagent.WithMaxOverviewSkills(cfg.SkillsOverviewLimit),
+		)
+	}
+	if cfg.SkillsMaxLoaded > 0 {
+		opts = append(
+			opts,
+			llmagent.WithMaxLoadedSkills(cfg.SkillsMaxLoaded),
+		)
+	}
+	return opts
 }
 
 func openClawToolResultCompactionConfig() *llmagent.ToolResultCompactionConfig {

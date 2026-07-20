@@ -30,10 +30,17 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/sessionroute"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge"
+	knowledgedoc "trpc.group/trpc-go/trpc-agent-go/knowledge/document"
+	knowledgegraph "trpc.group/trpc-go/trpc-agent-go/knowledge/graph"
+	knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
+	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/plugin"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	skillstate "trpc.group/trpc-go/trpc-agent-go/skill"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -101,6 +108,73 @@ type mockCallableTool struct {
 func (m *mockCallableTool) Declaration() *tool.Declaration { return m.declaration }
 func (m *mockCallableTool) Call(ctx context.Context, args []byte) (any, error) {
 	return m.callFn(ctx, args)
+}
+
+type recordingSessionService struct {
+	session.Service
+	appendCalls   atomic.Int32
+	appendSession atomic.Pointer[session.Session]
+}
+
+func (s *recordingSessionService) AppendEvent(
+	ctx context.Context,
+	sess *session.Session,
+	evt *event.Event,
+	opts ...session.Option,
+) error {
+	s.appendCalls.Add(1)
+	s.appendSession.Store(sess)
+	return s.Service.AppendEvent(ctx, sess, evt, opts...)
+}
+
+type fixedSessionEventRouter struct {
+	sess     *session.Session
+	routeEvt *event.Event
+}
+
+func (r *fixedSessionEventRouter) RouteEvent(
+	_ *agent.Invocation,
+	evt *event.Event,
+) (*session.Session, bool) {
+	r.routeEvt = evt
+	return r.sess, r.sess != nil
+}
+
+type autoMemoryPollutionTestKnowledge struct{}
+
+func (k autoMemoryPollutionTestKnowledge) Search(
+	context.Context,
+	*knowledge.SearchRequest,
+) (*knowledge.SearchResult, error) {
+	return &knowledge.SearchResult{
+		Documents: []*knowledge.Result{
+			{
+				Document: &knowledgedoc.Document{
+					ID:      "doc-1",
+					Content: "external context",
+				},
+				Score: 1,
+			},
+		},
+	}, nil
+}
+
+type autoMemoryPollutionTestGraphKnowledge struct {
+	autoMemoryPollutionTestKnowledge
+}
+
+func (k autoMemoryPollutionTestGraphKnowledge) Traverse(
+	context.Context,
+	*knowledgegraph.TraverseQuery,
+) (*knowledgegraph.TraverseResult, error) {
+	return nil, nil
+}
+
+func (k autoMemoryPollutionTestGraphKnowledge) FindPaths(
+	context.Context,
+	*knowledgegraph.PathQuery,
+) (*knowledgegraph.PathResult, error) {
+	return nil, nil
 }
 
 type permissionMockTool struct {
@@ -224,6 +298,139 @@ func TestExecuteSingleToolCallSequential_DisableTracingSkipsSpanCreation(t *test
 	require.NoError(t, err)
 	require.NotNil(t, toolEvent)
 	require.Empty(t, recorder.Ended())
+}
+
+func TestExecuteSingleToolCallSequential_MarksAutoMemoryPolluted(t *testing.T) {
+	tests := []struct {
+		name        string
+		toolName    string
+		toolFactory func(t *testing.T) tool.Tool
+		wantMark    bool
+	}{
+		{name: "knowledge search", toolName: "knowledge_search", wantMark: true},
+		{
+			name:     "agentic filter knowledge search",
+			toolName: "knowledge_search_with_agentic_filter",
+			wantMark: true,
+		},
+		{name: "prefixed knowledge search", toolName: "docs_knowledge_search", wantMark: true},
+		{
+			name:     "prefixed agentic filter knowledge search",
+			toolName: "docs_knowledge_search_with_agentic_filter",
+			wantMark: true,
+		},
+		{
+			name:     "renamed knowledge search",
+			toolName: "docs_search",
+			toolFactory: func(t *testing.T) tool.Tool {
+				t.Helper()
+				return knowledgetool.NewKnowledgeSearchTool(
+					autoMemoryPollutionTestKnowledge{},
+					knowledgetool.WithToolName("docs_search"),
+				)
+			},
+			wantMark: true,
+		},
+		{
+			name:     "graph tool set search",
+			toolName: "graph_search",
+			toolFactory: func(t *testing.T) tool.Tool {
+				t.Helper()
+				return toolFromSet(
+					t,
+					knowledgetool.NewGraphToolSet(
+						autoMemoryPollutionTestGraphKnowledge{},
+						nil,
+					),
+					"graph_search",
+				)
+			},
+			wantMark: true,
+		},
+		{
+			name:     "code graph tool set search",
+			toolName: "code_graph_search",
+			toolFactory: func(t *testing.T) tool.Tool {
+				t.Helper()
+				return toolFromSet(
+					t,
+					knowledgetool.NewCodeGraphSearchTool(
+						autoMemoryPollutionTestGraphKnowledge{},
+					),
+					"code_graph_search",
+				)
+			},
+			wantMark: true,
+		},
+		{name: "memory search", toolName: "memory_search"},
+		{name: "session search", toolName: "session_search"},
+		{name: "transfer", toolName: "transfer_to_agent"},
+		{name: "tool search", toolName: "tool_search"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := NewFunctionCallResponseProcessor(false, nil)
+			invocation := agent.NewInvocation()
+			invocation.Session = session.NewSession("test-app", "user-1", "session-1")
+			response := &model.Response{}
+			toolCall := model.ToolCall{
+				ID: "call-1",
+				Function: model.FunctionDefinitionParam{
+					Name:      tt.toolName,
+					Arguments: []byte(`{"query":"hello"}`),
+				},
+			}
+			tl := tool.Tool(&mockCallableTool{
+				declaration: &tool.Declaration{Name: tt.toolName},
+				callFn: func(context.Context, []byte) (any, error) {
+					return "ok", nil
+				},
+			})
+			if tt.toolFactory != nil {
+				tl = tt.toolFactory(t)
+			}
+			tools := map[string]tool.Tool{
+				tt.toolName: tl,
+			}
+			eventChan := make(chan *event.Event, 1)
+
+			toolEvent, err := p.executeSingleToolCallSequential(
+				context.Background(),
+				invocation,
+				response,
+				tools,
+				eventChan,
+				0,
+				toolCall,
+			)
+
+			require.NoError(t, err)
+			require.NotNil(t, toolEvent)
+			gotState, stateOK := invocation.Session.GetState(memory.SessionStateKeyMemoryMode)
+			gotDelta, deltaOK := toolEvent.StateDelta[memory.SessionStateKeyMemoryMode]
+			if tt.wantMark {
+				require.True(t, stateOK)
+				assert.Equal(t, memory.MemoryModePolluted, string(gotState))
+				require.True(t, deltaOK)
+				assert.Equal(t, memory.MemoryModePolluted, string(gotDelta))
+				return
+			}
+			assert.False(t, stateOK)
+			assert.False(t, deltaOK)
+		})
+	}
+}
+
+func toolFromSet(t *testing.T, set tool.ToolSet, name string) tool.Tool {
+	t.Helper()
+	for _, tl := range itool.NewNamedToolSet(set).Tools(context.Background()) {
+		if tl.Declaration().Name == name {
+			return tl
+		}
+	}
+	t.Fatalf("tool %q not found", name)
+	return nil
 }
 
 func TestExecuteSingleToolCallSequential_AddsToolCallArgsExtension(t *testing.T) {
@@ -1405,6 +1612,12 @@ func TestStateDeltaSessionHelpers_EdgeCases(t *testing.T) {
 	require.Nil(t, invocationView(nil))
 	preserveStateDeltaInvocationDefaults(nil, baseInv)
 	preserveStateDeltaInvocationDefaults(agent.NewInvocation(), nil)
+	memoryReader := &mockMemoryService{}
+	viewInv := agent.NewInvocation()
+	baseWithMemoryReader := agent.NewInvocation()
+	baseWithMemoryReader.MemoryReader = memoryReader
+	preserveStateDeltaInvocationDefaults(viewInv, baseWithMemoryReader)
+	require.Same(t, memoryReader, viewInv.MemoryReader)
 
 	current := session.StateMap{
 		baseKey:    []byte("base"),
@@ -3341,7 +3554,9 @@ func TestFunctionCallResponseProcessor_HandleFunctionCallsAndSendEvent_Canceled(
 		agent.WithInvocationAgent(&mockAgentWithTools{name: "test-agent"}),
 		agent.WithInvocationModel(&mockModel{}),
 	)
+	var appendCalls atomic.Int32
 	appender.Attach(inv, func(context.Context, *event.Event) error {
+		appendCalls.Add(1)
 		return nil
 	})
 
@@ -3396,8 +3611,599 @@ func TestFunctionCallResponseProcessor_HandleFunctionCallsAndSendEvent_Canceled(
 	case <-time.After(time.Second):
 		t.Fatalf("timeout waiting for tool.response event")
 	}
+	assert.Zero(t, appendCalls.Load())
 }
 
+func TestFunctionCallResponseProcessor_CanceledBeforeToolResponseEmit(
+	t *testing.T,
+) {
+	const (
+		toolName = "echo"
+		callID   = "call-1"
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{ID: "test-session"}),
+		agent.WithInvocationAgent(&mockAgentWithTools{name: "test-agent"}),
+		agent.WithInvocationModel(&mockModel{}),
+	)
+	var appendCalls atomic.Int32
+	appender.Attach(inv, func(context.Context, *event.Event) error {
+		appendCalls.Add(1)
+		return nil
+	})
+	tools := map[string]tool.Tool{
+		toolName: &mockCallableTool{
+			declaration: &tool.Declaration{Name: toolName},
+			callFn: func(context.Context, []byte) (any, error) {
+				return "late evidence", nil
+			},
+		},
+	}
+	rsp := &model.Response{
+		Model: "mock-model",
+		Choices: []model.Choice{{
+			Message: model.Message{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					ID:   callID,
+					Type: "function",
+					Function: model.FunctionDefinitionParam{
+						Name:      toolName,
+						Arguments: []byte(`{}`),
+					},
+				}},
+			},
+		}},
+	}
+	eventChan := make(chan *event.Event, 1)
+
+	got, err := NewFunctionCallResponseProcessor(
+		false,
+		nil,
+	).handleFunctionCallsAndSendEvent(
+		ctx,
+		inv,
+		rsp,
+		tools,
+		eventChan,
+	)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, got)
+	assert.Zero(t, appendCalls.Load())
+	select {
+	case <-eventChan:
+		t.Fatalf("unexpected tool.response event after cancellation")
+	default:
+	}
+}
+
+func TestFunctionCallResponseProcessor_PersistsToolResponseAfterDeadline(
+	t *testing.T,
+) {
+	const (
+		toolName = "echo"
+		callID   = "call-1"
+	)
+	type contextKey struct{}
+
+	baseCtx := context.WithValue(context.Background(), contextKey{}, "value")
+	ctx, cancel := context.WithDeadline(baseCtx, time.Now().Add(-time.Second))
+	defer cancel()
+
+	p := NewFunctionCallResponseProcessor(false, nil)
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{ID: "test-session"}),
+		agent.WithInvocationAgent(&mockAgentWithTools{name: "test-agent"}),
+		agent.WithInvocationModel(&mockModel{}),
+	)
+	appended := make(chan *event.Event, 1)
+	var appendCalls atomic.Int32
+	appender.Attach(inv, func(
+		appendCtx context.Context,
+		evt *event.Event,
+	) error {
+		appendCalls.Add(1)
+		require.NoError(t, appendCtx.Err())
+		require.Equal(t, "value", appendCtx.Value(contextKey{}))
+		deadline, ok := appendCtx.Deadline()
+		require.True(t, ok)
+		require.LessOrEqual(
+			t,
+			time.Until(deadline),
+			funcRespDeadlinePersistenceTimeout,
+		)
+		appended <- evt
+		return nil
+	})
+
+	tools := map[string]tool.Tool{
+		toolName: &mockCallableTool{
+			declaration: &tool.Declaration{Name: toolName},
+			callFn: func(context.Context, []byte) (any, error) {
+				return "late evidence", nil
+			},
+		},
+	}
+	rsp := &model.Response{
+		Model: "mock-model",
+		Choices: []model.Choice{{
+			Message: model.Message{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					ID:   callID,
+					Type: "function",
+					Function: model.FunctionDefinitionParam{
+						Name:      toolName,
+						Arguments: []byte(`{}`),
+					},
+				}},
+			},
+		}},
+	}
+
+	eventChan := make(chan *event.Event, 1)
+	got, err := p.handleFunctionCallsAndSendEvent(
+		ctx,
+		inv,
+		rsp,
+		tools,
+		eventChan,
+	)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Nil(t, got)
+
+	select {
+	case evt := <-appended:
+		require.NotNil(t, evt)
+		require.True(t, evt.RequiresCompletion)
+		require.True(t, evt.IsToolResultResponse())
+	default:
+		t.Fatalf("tool.response event was not persisted after deadline")
+	}
+	require.Equal(t, int32(1), appendCalls.Load())
+	select {
+	case <-eventChan:
+		t.Fatalf("tool.response event was emitted after deadline")
+	default:
+	}
+
+	persistErr := errors.New("deadline persistence failed")
+	appender.Attach(inv, func(context.Context, *event.Event) error {
+		return persistErr
+	})
+	failedEventChan := make(chan *event.Event, 1)
+	got, err = p.handleFunctionCallsAndSendEvent(
+		ctx,
+		inv,
+		rsp,
+		tools,
+		failedEventChan,
+	)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Nil(t, got)
+	select {
+	case <-failedEventChan:
+		t.Fatalf("failed persistence emitted tool.response after deadline")
+	default:
+	}
+}
+
+func TestPersistFunctionResponseAfterDeadline_UsesRoutedSessionService(
+	t *testing.T,
+) {
+	ctx, cancel := context.WithDeadline(
+		context.Background(),
+		time.Now().Add(-time.Second),
+	)
+	defer cancel()
+
+	service := sessioninmemory.NewSessionService()
+	t.Cleanup(func() {
+		require.NoError(t, service.Close())
+	})
+	rootSess, err := service.CreateSession(
+		context.Background(),
+		session.Key{
+			AppName:   "test-app",
+			UserID:    "test-user",
+			SessionID: "root-session",
+		},
+		nil,
+	)
+	require.NoError(t, err)
+	targetSess, err := service.CreateSession(
+		context.Background(),
+		session.Key{
+			AppName:   "test-app",
+			UserID:    "test-user",
+			SessionID: "target-session",
+		},
+		nil,
+	)
+	require.NoError(t, err)
+	userEvent := event.NewResponseEvent(
+		"user-invocation",
+		"user",
+		&model.Response{Choices: []model.Choice{{
+			Message: model.NewUserMessage("question"),
+		}}},
+	)
+	require.NoError(t, service.AppendEvent(
+		context.Background(),
+		targetSess,
+		userEvent,
+	))
+	recordingService := &recordingSessionService{Service: service}
+	pluginCalls := 0
+	mgr := plugin.MustNewManager(&hookPlugin{
+		name: "redact-routed-event",
+		reg: func(r *plugin.Registry) {
+			r.OnEvent(func(
+				context.Context,
+				*agent.Invocation,
+				*event.Event,
+			) (*event.Event, error) {
+				pluginCalls++
+				replacement := event.NewResponseEvent(
+					"other-invocation",
+					"test-agent",
+					&model.Response{Choices: []model.Choice{{
+						Message: model.NewToolMessage(
+							"call-1",
+							"echo",
+							"[redacted]",
+						),
+					}}},
+				)
+				replacement.RequestID = "other-request"
+				replacement.ParentInvocationID = "other-parent"
+				replacement.Branch = "other-branch"
+				replacement.FilterKey = "other-filter"
+				return replacement, nil
+			})
+		},
+	})
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(rootSess),
+		agent.WithInvocationSessionService(recordingService),
+		agent.WithInvocationAgent(&mockAgentWithTools{name: "test-agent"}),
+		agent.WithInvocationModel(&mockModel{}),
+		agent.WithInvocationPlugins(mgr),
+	)
+	router := &fixedSessionEventRouter{sess: targetSess}
+	sessionroute.AttachEventRouter(inv, router)
+	evt := event.NewResponseEvent(
+		inv.InvocationID,
+		inv.AgentName,
+		&model.Response{Choices: []model.Choice{{
+			Message: model.Message{
+				Role:     model.RoleTool,
+				Content:  "late evidence",
+				ToolID:   "call-1",
+				ToolName: "echo",
+			},
+		}}},
+	)
+	agent.InjectIntoEvent(inv, evt)
+	evt.ParentInvocationID = "parent-invocation"
+	evt.Branch = "original-branch"
+	evt.FilterKey = "original-filter"
+	require.True(t, evt.IsToolResultResponse())
+	require.True(t, evt.IsValidContent())
+	require.False(t, evt.IsPartial)
+	require.False(t, appender.IsAttached(inv))
+
+	err = persistFunctionResponseAfterDeadline(ctx, inv, evt)
+	require.NoError(t, err)
+	require.Equal(t, 1, pluginCalls)
+	require.Equal(t, int32(1), recordingService.appendCalls.Load())
+	require.NotNil(t, router.routeEvt)
+	require.Equal(t, evt.RequestID, router.routeEvt.RequestID)
+	require.Equal(t, evt.InvocationID, router.routeEvt.InvocationID)
+	require.Equal(t, evt.ParentInvocationID, router.routeEvt.ParentInvocationID)
+	require.Equal(t, evt.Branch, router.routeEvt.Branch)
+	require.Equal(t, evt.FilterKey, router.routeEvt.FilterKey)
+	persisted, err := service.GetSession(
+		context.Background(),
+		session.Key{
+			AppName:   targetSess.AppName,
+			UserID:    targetSess.UserID,
+			SessionID: targetSess.ID,
+		},
+	)
+	require.NoError(t, err)
+	require.Len(t, persisted.Events, 2)
+	require.Equal(
+		t,
+		"[redacted]",
+		persisted.Events[1].Response.Choices[0].Message.Content,
+	)
+	require.Equal(t, evt.InvocationID, persisted.Events[1].InvocationID)
+	require.Equal(t, evt.Branch, persisted.Events[1].Branch)
+}
+
+func TestPersistFunctionResponseAfterDeadline_FallbacksAndErrors(
+	t *testing.T,
+) {
+	ctx, cancel := context.WithDeadline(
+		context.Background(),
+		time.Now().Add(-time.Second),
+	)
+	defer cancel()
+	t.Run("nil event", func(t *testing.T) {
+		require.NoError(t, persistFunctionResponseAfterDeadline(
+			ctx,
+			nil,
+			nil,
+		))
+	})
+	evt := event.NewResponseEvent(
+		"test-invocation",
+		"test-agent",
+		&model.Response{Choices: []model.Choice{{
+			Message: model.Message{
+				Role:     model.RoleTool,
+				Content:  "late evidence",
+				ToolID:   "call-1",
+				ToolName: "echo",
+			},
+		}}},
+	)
+
+	t.Run("appender error", func(t *testing.T) {
+		wantErr := errors.New("append failed")
+		inv := agent.NewInvocation()
+		appender.Attach(inv, func(context.Context, *event.Event) error {
+			return wantErr
+		})
+
+		err := persistFunctionResponseAfterDeadline(ctx, inv, evt)
+		require.ErrorIs(t, err, wantErr)
+	})
+
+	t.Run("session service unavailable", func(t *testing.T) {
+		inv := agent.NewInvocation()
+
+		err := persistFunctionResponseAfterDeadline(ctx, inv, evt)
+		require.EqualError(
+			t,
+			err,
+			"session service unavailable after deadline",
+		)
+	})
+
+	service := sessioninmemory.NewSessionService()
+	t.Cleanup(func() {
+		require.NoError(t, service.Close())
+	})
+	recordingService := &recordingSessionService{Service: service}
+
+	t.Run("session unavailable", func(t *testing.T) {
+		inv := agent.NewInvocation(
+			agent.WithInvocationSessionService(recordingService),
+		)
+
+		err := persistFunctionResponseAfterDeadline(ctx, inv, evt)
+		require.EqualError(t, err, "session unavailable after deadline")
+	})
+
+	t.Run("root session fallback", func(t *testing.T) {
+		rootSess, err := service.CreateSession(
+			context.Background(),
+			session.Key{
+				AppName:   "test-app",
+				UserID:    "test-user",
+				SessionID: "root-session",
+			},
+			nil,
+		)
+		require.NoError(t, err)
+		inv := agent.NewInvocation(
+			agent.WithInvocationSession(rootSess),
+			agent.WithInvocationSessionService(recordingService),
+		)
+		agent.InjectIntoEvent(inv, evt)
+
+		err = persistFunctionResponseAfterDeadline(ctx, inv, evt)
+		require.NoError(t, err)
+		require.Equal(t, int32(1), recordingService.appendCalls.Load())
+		require.Same(t, rootSess, recordingService.appendSession.Load())
+	})
+}
+
+func TestPersistFunctionResponseAfterDeadline_AppliesEventPlugins(
+	t *testing.T,
+) {
+	ctx, cancel := context.WithDeadline(
+		context.Background(),
+		time.Now().Add(-time.Second),
+	)
+	defer cancel()
+
+	var pluginCalls int
+	mgr := plugin.MustNewManager(&hookPlugin{
+		name: "redact-event",
+		reg: func(r *plugin.Registry) {
+			r.OnEvent(func(
+				_ context.Context,
+				_ *agent.Invocation,
+				evt *event.Event,
+			) (*event.Event, error) {
+				pluginCalls++
+				evt.ParentMetadata.TriggerType =
+					event.TriggerTypeTransfer
+				evt.ParentMetadata.TriggerID = "mutated-trigger"
+				evt.ParentMetadata.TriggerName = "mutated-name"
+				replacement := event.NewResponseEvent(
+					"",
+					"test-agent",
+					&model.Response{Choices: []model.Choice{{
+						Message: model.NewToolMessage(
+							"call-1",
+							"echo",
+							"[redacted]",
+						),
+					}}},
+				)
+				replacement.RequestID = "other-request"
+				replacement.InvocationID = "other-invocation"
+				replacement.ParentInvocationID = "other-parent"
+				replacement.Branch = "other-branch"
+				replacement.FilterKey = "other-filter"
+				replacement.ParentMetadata =
+					&event.ParentInvocationMetadata{
+						TriggerType: event.TriggerTypeTransfer,
+						TriggerID:   "other-trigger",
+						TriggerName: "other-trigger-name",
+					}
+				return replacement, nil
+			})
+		},
+	})
+	inv := &agent.Invocation{Plugins: mgr}
+	var persisted *event.Event
+	appender.Attach(inv, func(_ context.Context, evt *event.Event) error {
+		persisted = evt
+		return nil
+	})
+	original := event.NewResponseEvent(
+		"test-invocation",
+		"test-agent",
+		&model.Response{Choices: []model.Choice{{
+			Message: model.NewToolMessage(
+				"call-1",
+				"echo",
+				"secret tool output",
+			),
+		}}},
+	)
+	original.RequestID = "request-1"
+	original.ParentInvocationID = "parent-1"
+	original.Branch = "branch-1"
+	original.FilterKey = "filter-1"
+	original.ParentMetadata = &event.ParentInvocationMetadata{
+		TriggerType: event.TriggerTypeToolCall,
+		TriggerID:   "call-1",
+		TriggerName: "echo",
+	}
+
+	err := persistFunctionResponseAfterDeadline(ctx, inv, original)
+
+	require.NoError(t, err)
+	require.Equal(t, 1, pluginCalls)
+	require.NotNil(t, persisted)
+	require.Equal(t, "[redacted]", persisted.Response.Choices[0].Message.Content)
+	require.Equal(t, original.RequestID, persisted.RequestID)
+	require.Equal(t, original.InvocationID, persisted.InvocationID)
+	require.Equal(t, original.ParentInvocationID, persisted.ParentInvocationID)
+	require.NotSame(t, original.ParentMetadata, persisted.ParentMetadata)
+	require.Equal(t, event.TriggerTypeToolCall,
+		persisted.ParentMetadata.TriggerType)
+	require.Equal(t, "call-1", persisted.ParentMetadata.TriggerID)
+	require.Equal(t, "echo", persisted.ParentMetadata.TriggerName)
+	require.Equal(t, "mutated-trigger", original.ParentMetadata.TriggerID)
+	require.Equal(t, original.Branch, persisted.Branch)
+	require.Equal(t, original.FilterKey, persisted.FilterKey)
+}
+
+func TestPersistFunctionResponseAfterDeadline_PluginErrorPersistsOriginal(
+	t *testing.T,
+) {
+	ctx, cancel := context.WithDeadline(
+		context.Background(),
+		time.Now().Add(-time.Second),
+	)
+	defer cancel()
+
+	wantErr := errors.New("redaction failed")
+	mgr := plugin.MustNewManager(&hookPlugin{
+		name: "failing-redaction",
+		reg: func(r *plugin.Registry) {
+			r.OnEvent(func(
+				context.Context,
+				*agent.Invocation,
+				*event.Event,
+			) (*event.Event, error) {
+				return nil, wantErr
+			})
+		},
+	})
+	service := sessioninmemory.NewSessionService()
+	t.Cleanup(func() {
+		require.NoError(t, service.Close())
+	})
+	recordingService := &recordingSessionService{Service: service}
+	sess, err := service.CreateSession(
+		context.Background(),
+		session.Key{
+			AppName:   "test-app",
+			UserID:    "test-user",
+			SessionID: "test-session",
+		},
+		nil,
+	)
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		name           string
+		attachAppender bool
+	}{
+		{name: "attached appender", attachAppender: true},
+		{name: "session service fallback"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			recordingService.appendCalls.Store(0)
+			inv := agent.NewInvocation(
+				agent.WithInvocationSession(sess),
+				agent.WithInvocationSessionService(recordingService),
+				agent.WithInvocationPlugins(mgr),
+			)
+			var appenderCalls atomic.Int32
+			var appended *event.Event
+			if tc.attachAppender {
+				appender.Attach(inv, func(
+					_ context.Context,
+					evt *event.Event,
+				) error {
+					appenderCalls.Add(1)
+					appended = evt
+					return nil
+				})
+			}
+			evt := event.NewResponseEvent(
+				"test-invocation",
+				"test-agent",
+				&model.Response{Choices: []model.Choice{{
+					Message: model.NewToolMessage(
+						"call-1",
+						"echo",
+						"secret tool output",
+					),
+				}}},
+			)
+
+			err := persistFunctionResponseAfterDeadline(ctx, inv, evt)
+
+			require.NoError(t, err)
+			if tc.attachAppender {
+				require.Equal(t, int32(1), appenderCalls.Load())
+				require.Zero(t, recordingService.appendCalls.Load())
+				require.Same(t, evt, appended)
+				return
+			}
+			require.Zero(t, appenderCalls.Load())
+			require.Equal(
+				t,
+				int32(1),
+				recordingService.appendCalls.Load(),
+			)
+		})
+	}
+}
 func TestFunctionCallResponseProcessor_HandleFunctionCallsAndSendEvent_Warns(
 	t *testing.T,
 ) {
@@ -4485,6 +5291,131 @@ func TestExecuteToolCall_ToolNotFound_ReturnsErrorChoice(t *testing.T) {
 	require.Nil(t, choices)
 }
 
+func TestExecuteToolCall_ToolNotFoundSuggestsSimilarTool(t *testing.T) {
+	ctx := context.Background()
+	p := NewFunctionCallResponseProcessor(false, nil)
+	inv := &agent.Invocation{Model: &mockModel{}}
+	tools := map[string]tool.Tool{
+		"alpha_tool": &mockTool{name: "alpha_tool"},
+		"web_fetch":  &mockTool{name: "web_fetch"},
+	}
+	call := model.ToolCall{
+		ID: "call-duck",
+		Function: model.FunctionDefinitionParam{
+			Name:      "alpha_too",
+			Arguments: []byte(`{}`),
+		},
+	}
+
+	_, choices, _, shouldIgnoreError, _, err := p.executeToolCall(
+		ctx, inv, call, tools, 0, nil,
+	)
+
+	require.True(t, shouldIgnoreError)
+	require.Nil(t, choices)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), ErrorToolNotFound)
+	require.Contains(t, err.Error(), "alpha_too")
+	require.Contains(t, err.Error(), `did you mean "alpha_tool"?`)
+}
+
+func TestExecuteToolCall_ToolNotFoundOmitsDistantSuggestions(t *testing.T) {
+	ctx := context.Background()
+	p := NewFunctionCallResponseProcessor(false, nil)
+	inv := &agent.Invocation{Model: &mockModel{}}
+	tools := map[string]tool.Tool{
+		"web_fetch": &mockTool{name: "web_fetch"},
+	}
+	call := model.ToolCall{
+		ID: "call-missing",
+		Function: model.FunctionDefinitionParam{
+			Name:      "totally_missing",
+			Arguments: []byte(`{}`),
+		},
+	}
+
+	_, choices, _, shouldIgnoreError, _, err := p.executeToolCall(
+		ctx, inv, call, tools, 0, nil,
+	)
+
+	require.True(t, shouldIgnoreError)
+	require.Nil(t, choices)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), ErrorToolNotFound)
+	require.Contains(t, err.Error(), "totally_missing")
+	require.NotContains(t, err.Error(), "did you mean")
+}
+
+func TestExecuteToolCall_ToolNameSuggestionsCanBeDisabled(t *testing.T) {
+	ctx := context.Background()
+	p := NewFunctionCallResponseProcessor(
+		false,
+		nil,
+		WithToolNameSuggestions(0, 0),
+	)
+	inv := &agent.Invocation{Model: &mockModel{}}
+	tools := map[string]tool.Tool{
+		"alpha_tool": &mockTool{name: "alpha_tool"},
+	}
+	call := model.ToolCall{
+		ID: "call-missing",
+		Function: model.FunctionDefinitionParam{
+			Name:      "alpha_too",
+			Arguments: []byte(`{}`),
+		},
+	}
+
+	_, choices, _, shouldIgnoreError, _, err := p.executeToolCall(
+		ctx, inv, call, tools, 0, nil,
+	)
+
+	require.True(t, shouldIgnoreError)
+	require.Nil(t, choices)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), ErrorToolNotFound)
+	require.Contains(t, err.Error(), "alpha_too")
+	require.NotContains(t, err.Error(), "did you mean")
+}
+
+func TestToolNotFoundError(t *testing.T) {
+	tools := map[string]tool.Tool{
+		"alpha_took":   &mockTool{name: "alpha_took"},
+		"alpha_tool":   &mockTool{name: "alpha_tool"},
+		"alpha_town":   &mockTool{name: "alpha_town"},
+		"exec_command": &mockTool{name: "exec_command"},
+		"tool_xyz":     &mockTool{name: "tool_xyz"},
+		"web_fetch":    &mockTool{name: "web_fetch"},
+	}
+	options := defaultToolNameSuggestionOptions()
+
+	require.Equal(t, ErrorToolNotFound, toolNotFoundError("", tools, options))
+	require.Equal(
+		t,
+		`Error: tool not found: alpha_too; did you mean one of `+
+			`"alpha_took", "alpha_tool", "alpha_town"?`,
+		toolNotFoundError("alpha_too", tools, options),
+	)
+	require.Equal(
+		t,
+		"Error: tool not found: browser_navigate",
+		toolNotFoundError("browser_navigate", tools, options),
+	)
+
+	malformed := "exec_exec_commandcommand</arg_key><arg_value>" +
+		strings.Repeat("script ", 80)
+	got := toolNotFoundError(malformed, tools, options)
+	require.Contains(t, got, `did you mean "exec_command"?`)
+	require.Contains(t, got, "exec_exec_commandcommand")
+	require.NotContains(t, got, strings.Repeat("script ", 40))
+}
+
+func TestToolNameEditDistance(t *testing.T) {
+	require.Equal(t, 0, toolNameEditDistance("web_fetch", "web_fetch"))
+	require.Equal(t, 1, toolNameEditDistance("alpha_too", "alpha_tool"))
+	require.Equal(t, 3, toolNameEditDistance("", "abc"))
+	require.Equal(t, 3, toolNameEditDistance("abc", ""))
+}
+
 func TestFindCompatibleTool(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -4652,7 +5583,7 @@ func TestConvertToolArguments(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := convertToolArguments(tt.originalName, tt.originalArgs, tt.targetName)
+			result := convertToolArguments(nil, tt.originalName, tt.originalArgs, tt.targetName)
 
 			if tt.expected == nil {
 				assert.Nil(t, result, tt.description)
@@ -4680,7 +5611,7 @@ func TestSetDefaultTransferMessage(t *testing.T) {
 	SetDefaultTransferMessage("delegated")
 	defer func() { SetDefaultTransferMessage("Task delegated from coordinator") }()
 
-	res := convertToolArguments("agent-x", []byte("{}"),
+	res := convertToolArguments(nil, "agent-x", []byte("{}"),
 		transfer.TransferToolName)
 	require.NotNil(t, res)
 	var got transfer.Request
@@ -5102,8 +6033,36 @@ func TestExecuteCallableTool_NoRetryPolicyCallsToolOnCanceledContext(t *testing.
 	require.Equal(t, "ok", result)
 }
 
+func TestConvertToolArguments_InvalidJSON(t *testing.T) {
+	b := convertToolArguments(nil, "child", []byte("{"),
+		transfer.TransferToolName)
+	require.Nil(t, b)
+}
+
 func TestConvertToolArguments_RepairsMalformedJSON(t *testing.T) {
-	b := convertToolArguments("child", []byte("{"),
+	enabled := true
+	inv := &agent.Invocation{
+		RunOptions: agent.RunOptions{
+			ToolCallArgumentsJSONRepairEnabled: &enabled,
+		},
+	}
+	b := convertToolArguments(inv, "child", []byte("{"),
+		transfer.TransferToolName)
+	require.NotNil(t, b)
+	var req transfer.Request
+	require.NoError(t, json.Unmarshal(b, &req))
+	require.Equal(t, "child", req.AgentName)
+	require.NotEmpty(t, req.Message)
+}
+
+func TestConvertToolArguments_RejectsLeadingProse(t *testing.T) {
+	enabled := true
+	inv := &agent.Invocation{
+		RunOptions: agent.RunOptions{
+			ToolCallArgumentsJSONRepairEnabled: &enabled,
+		},
+	}
+	b := convertToolArguments(inv, "child", []byte(`Summary: {"message":"hi"}`),
 		transfer.TransferToolName)
 	require.NotNil(t, b)
 	var req transfer.Request
@@ -7397,7 +8356,7 @@ func TestConvertToolArguments_DefaultMessageAndSetter(t *testing.T) {
 	SetDefaultTransferMessage("Delegated task")
 	// No message provided in original args should use default.
 	b := convertToolArguments(
-		"weather-agent", []byte("{}"), transfer.TransferToolName,
+		nil, "weather-agent", []byte("{}"), transfer.TransferToolName,
 	)
 	require.NotNil(t, b)
 	var req transfer.Request

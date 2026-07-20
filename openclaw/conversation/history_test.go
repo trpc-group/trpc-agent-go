@@ -12,6 +12,7 @@ package conversation
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -162,7 +163,7 @@ func TestBuildInjectedContextMessages(t *testing.T) {
 
 	got := BuildInjectedContextMessages(sess, HistoryOptions{
 		AddSessionSummary: true,
-		MaxHistoryRuns:    10,
+		MaxHistoryRuns:    1,
 		LabelOverrides: map[string]string{
 			"u2": "Robert",
 		},
@@ -175,6 +176,182 @@ func TestBuildInjectedContextMessages(t *testing.T) {
 	require.Contains(t, got[1].Content, "Message: latest question")
 	require.Equal(t, model.RoleAssistant, got[2].Role)
 	require.Equal(t, "latest answer", got[2].Content)
+}
+
+func TestBuildInjectedContextMessagesSummaryModeKeepsToolHeavyRun(
+	t *testing.T,
+) {
+	base := time.Now().Add(-10 * time.Minute)
+	events := []event.Event{
+		userEvent("u1", "Alice", "inspect everything", base),
+	}
+	for i := 0; i < 26; i++ {
+		callID := fmt.Sprintf("call-%d", i)
+		toolCall := model.Message{
+			Role: model.RoleAssistant,
+			ToolCalls: []model.ToolCall{{
+				ID:   callID,
+				Type: "function",
+				Function: model.FunctionDefinitionParam{
+					Name: "inspect",
+				},
+			}},
+		}
+		events = append(
+			events,
+			messageEvent(
+				authorAssistant,
+				toolCall,
+				base.Add(time.Duration(2*i+1)*time.Second),
+			),
+			messageEvent(
+				authorAssistant,
+				model.NewToolMessage(callID, "inspect", "ok"),
+				base.Add(time.Duration(2*i+2)*time.Second),
+			),
+		)
+	}
+
+	got := BuildInjectedContextMessages(&session.Session{Events: events}, HistoryOptions{
+		AddSessionSummary: true,
+		MaxHistoryRuns:    50,
+	})
+	require.Len(t, got, 53)
+	require.Equal(t, model.RoleUser, got[0].Role)
+	require.Equal(t, model.RoleAssistant, got[1].Role)
+	require.Equal(t, model.RoleTool, got[2].Role)
+}
+
+func TestBuildInjectedContextMessagesPreservesStructuredToolHistory(
+	t *testing.T,
+) {
+	base := time.Now().Add(-10 * time.Minute)
+	toolCall := model.Message{
+		Role:               model.RoleAssistant,
+		ReasoningContent:   "inspect the current configuration",
+		ReasoningSignature: "signature-1",
+		ToolCalls: []model.ToolCall{{
+			ID:   "call-1",
+			Type: "function",
+			Function: model.FunctionDefinitionParam{
+				Name:      "read_config",
+				Arguments: []byte(`{"path":"config.yaml"}`),
+			},
+		}},
+	}
+	toolResult := model.NewToolMessage(
+		"call-1",
+		"read_config",
+		`{"enabled":true}`,
+	)
+	finalAnswer := model.NewAssistantMessage("configuration is enabled")
+	finalAnswer.ReasoningContent = "summarize the tool result"
+
+	sess := &session.Session{
+		Events: []event.Event{
+			userEvent("u1", "Alice", "check config", base),
+			messageEvent(
+				authorAssistant,
+				toolCall,
+				base.Add(time.Minute),
+			),
+			messageEvent(
+				authorAssistant,
+				toolResult,
+				base.Add(2*time.Minute),
+			),
+			messageEvent(
+				authorAssistant,
+				finalAnswer,
+				base.Add(3*time.Minute),
+			),
+		},
+	}
+
+	got := BuildInjectedContextMessages(sess, HistoryOptions{})
+	require.Len(t, got, 4)
+	require.Equal(t, model.RoleUser, got[0].Role)
+	require.Equal(t, toolCall, got[1])
+	require.Equal(t, toolResult, got[2])
+	require.Equal(t, finalAnswer, got[3])
+}
+
+func TestBuildInjectedContextMessagesSkipsOrphanedToolResults(
+	t *testing.T,
+) {
+	base := time.Now().Add(-10 * time.Minute)
+	toolCall := model.Message{
+		Role: model.RoleAssistant,
+		ToolCalls: []model.ToolCall{{
+			ID:   "call-1",
+			Type: "function",
+			Function: model.FunctionDefinitionParam{
+				Name: "read_config",
+			},
+		}},
+	}
+	toolResult := model.NewToolMessage(
+		"call-1",
+		"read_config",
+		`{"enabled":true}`,
+	)
+	finalAnswer := model.NewAssistantMessage("configuration is enabled")
+	sess := &session.Session{
+		Events: []event.Event{
+			userEvent("u1", "Alice", "check config", base),
+			messageEvent(
+				authorAssistant,
+				toolCall,
+				base.Add(time.Minute),
+			),
+			messageEvent(
+				authorAssistant,
+				toolResult,
+				base.Add(2*time.Minute),
+			),
+			messageEvent(
+				authorAssistant,
+				finalAnswer,
+				base.Add(3*time.Minute),
+			),
+		},
+	}
+
+	got := BuildInjectedContextMessages(sess, HistoryOptions{
+		MaxHistoryRuns: 2,
+	})
+	require.Equal(t, []model.Message{finalAnswer}, got)
+}
+
+func TestTrimVisibleHistory(t *testing.T) {
+	recentUser := model.NewUserMessage("recent question")
+	recentAnswer := model.NewAssistantMessage("recent answer")
+	messages := []model.Message{
+		model.NewAssistantMessage("old answer"),
+		recentUser,
+		recentAnswer,
+	}
+	require.Equal(
+		t,
+		[]model.Message{recentUser, recentAnswer},
+		trimVisibleHistory(messages, 2),
+	)
+
+	unmatchedToolResult := model.NewToolMessage(
+		"unmatched-call",
+		"read_config",
+		`{"enabled":true}`,
+	)
+	messages = []model.Message{
+		model.NewAssistantMessage("old answer"),
+		unmatchedToolResult,
+		recentAnswer,
+	}
+	require.Equal(
+		t,
+		[]model.Message{unmatchedToolResult, recentAnswer},
+		trimVisibleHistory(messages, 2),
+	)
 }
 
 func TestBuildInjectedContextMessagesKeepsSameTimestampAfterBoundary(
@@ -650,7 +827,38 @@ func TestHistoryHelpers_RenderAndFilter(t *testing.T) {
 			}},
 		},
 	}
-	require.Empty(t, visibleAssistantMessages(assistantToolOnly))
+	visible := visibleAssistantMessages(assistantToolOnly)
+	require.Len(t, visible, 1)
+	require.Equal(t, model.RoleAssistant, visible[0].Role)
+	require.Equal(
+		t,
+		assistantToolOnly.Response.Choices[0].Message.ToolCalls,
+		visible[0].ToolCalls,
+	)
+	reasoningOnly := event.Event{
+		Author: authorAssistant,
+		Response: &model.Response{
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:             model.RoleAssistant,
+					ReasoningContent: "thinking",
+				},
+			}},
+		},
+	}
+	require.Empty(t, visibleAssistantMessages(reasoningOnly))
+
+	missingRole := event.Event{
+		Author: authorAssistant,
+		Response: &model.Response{
+			Choices: []model.Choice{{
+				Message: model.Message{Content: "answer"},
+			}},
+		},
+	}
+	visible = visibleAssistantMessages(missingRole)
+	require.Len(t, visible, 1)
+	require.Equal(t, model.RoleAssistant, visible[0].Role)
 
 	require.Empty(
 		t,
@@ -1030,6 +1238,22 @@ func assistantEvent(content string, ts time.Time) event.Event {
 			Choices: []model.Choice{{
 				Message: model.NewAssistantMessage(content),
 			}},
+		},
+	)
+	evt.Timestamp = ts
+	return *evt
+}
+
+func messageEvent(
+	author string,
+	message model.Message,
+	ts time.Time,
+) event.Event {
+	evt := event.NewResponseEvent(
+		"inv",
+		author,
+		&model.Response{
+			Choices: []model.Choice{{Message: message}},
 		},
 	)
 	evt.Timestamp = ts

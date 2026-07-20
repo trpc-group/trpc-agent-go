@@ -1174,7 +1174,10 @@ OpenAI SDK 自动重试以下错误：
 - **500+ Server Errors**：服务器内部错误（5xx）
 - **网络连接错误**：无响应或连接失败
 
-**注意**：SDK 默认最大重试次数为 2 次。
+**注意**：SDK 默认最大重试次数为 2 次。这表示初始请求失败后最多再重试
+2 次，因此一次调用默认最多会发起 3 次 HTTP 请求。`openaiopt.WithMaxRetries(n)`
+中的 `n` 指重试次数，不是总请求次数；设置为 `0` 可关闭 SDK 自动重试，
+只发送初始请求。
 
 ##### 重试策略
 
@@ -1214,6 +1217,18 @@ llm := openai.New("gpt-4o-mini",
 )
 ```
 
+**关闭重试**：
+
+```go
+// 需要完全关闭 SDK 自动重试的场景
+llm := openai.New("gpt-4o-mini",
+    openai.WithOpenAIOptions(
+        openaiopt.WithMaxRetries(0),  // 不重试，只发起一次请求
+        openaiopt.WithRequestTimeout(10*time.Second),
+    ),
+)
+```
+
 ##### 工作原理
 
 重试机制的执行流程：
@@ -1246,6 +1261,7 @@ llm := openai.New("gpt-4o-mini",
 - **无框架重试**：框架本身不实现重试逻辑
 - **客户端级重试**：所有重试由 OpenAI 客户端处理
 - **配置透传**：使用 `WithOpenAIOptions` 配置重试行为
+- **关闭重试**：设置 `openaiopt.WithMaxRetries(0)` 可关闭 SDK 自动重试
 - **自动处理**：速率限制（429）自动处理，无需额外代码
 
 ##### 使用示例
@@ -1756,7 +1772,7 @@ model := anthropic.New("claude-sonnet-4-0",
 
 #### 7. Variant 优化：平台特有行为适配
 
-Variant 机制是 Model 模块的重要优化，用于处理不同 OpenAI 兼容平台的特有行为差异。通过指定不同的 Variant，框架能够自动适配各平台的 API 差异，特别是文件上传、删除和处理逻辑。
+Variant 机制是 Model 模块的重要优化，用于处理不同 OpenAI 兼容平台的特有行为差异。通过指定不同的 Variant，框架能够自动适配各平台的 API 差异，包括文件处理和思考开关字段的序列化格式。
 
 ##### 7.1. 支持的 Variant 类型
 
@@ -1791,6 +1807,31 @@ Variant 机制是 Model 模块的重要优化，用于处理不同 OpenAI 兼容
 - API Key 环境变量名：`DASHSCOPE_API_KEY`
 - 其他行为与标准 OpenAI 一致
 
+**5. VariantGLM（智谱 GLM）**
+
+- GLM OpenAI-compatible 接口适配
+- 使用 GLM 的 `thinking` 对象格式序列化思考开关
+- 当部分 GLM 网关把最终答案放在 `reasoning_content` 且 `content` 为空时，框架会将其回退为可见内容
+
+**6. VariantKimi**
+
+- Kimi 开放平台适配
+- 默认 BaseURL：`https://api.moonshot.ai/v1`
+- API Key 环境变量名：`MOONSHOT_API_KEY`
+- 对官方 `api.moonshot.ai` 和 `api.moonshot.cn` host 自动推断
+- 将思考开关序列化为 `{"thinking": {"type": "enabled"}}`
+- 文件上传默认使用 `file-extract` purpose
+
+**7. VariantMiniMax**
+
+- MiniMax OpenAI 兼容接口适配
+- 默认 BaseURL：`https://api.minimax.io/v1`
+- API Key 环境变量名：`MINIMAX_API_KEY`
+- 对官方 `api.minimax.io` 和 `api.minimaxi.com` host 自动推断
+- 开启思考时序列化为 `{"thinking": {"type": "adaptive"}}`，关闭时序列化为 `{"thinking": {"type": "disabled"}}`
+- 保持 MiniMax 原生 `<think>...</think>` 内容不变，以便工具调用间完整回传交错思考
+- 文件上传和删除使用 MiniMax 的 `/v1/files/upload` 与 `/v1/files/delete` 接口，默认 purpose 为 `video_understanding`
+
 ##### 7.2. 使用方式
 
 **使用示例**：
@@ -1810,6 +1851,16 @@ model := openai.New("deepseek-v4-flash",
     openai.WithBaseURL("https://api.deepseek.com/v1"),
     openai.WithAPIKey("your-api-key"),
     openai.WithVariant(openai.VariantDeepSeek), // 指定 DeepSeek
+)
+
+// 使用 Kimi 开放平台
+model = openai.New("kimi-k2.6",
+    openai.WithVariant(openai.VariantKimi), // 自动读取 MOONSHOT_API_KEY
+)
+
+// 使用 MiniMax OpenAI 兼容接口
+model = openai.New("MiniMax-M3",
+    openai.WithVariant(openai.VariantMiniMax), // 自动读取 MINIMAX_API_KEY
 )
 ```
 
@@ -1842,6 +1893,12 @@ message := model.Message{
 # DeepSeek 自动配置
 export DEEPSEEK_API_KEY="your-api-key"
 # 无需显式调用 WithAPIKey，框架会自动读取
+
+# Kimi 自动配置
+export MOONSHOT_API_KEY="your-api-key"
+
+# MiniMax 自动配置
+export MINIMAX_API_KEY="your-api-key"
 ```
 
 ```go
@@ -1852,6 +1909,74 @@ model := openai.New("deepseek-v4-flash",
     openai.WithVariant(openai.VariantDeepSeek), // 自动读取 DEEPSEEK_API_KEY
 )
 ```
+
+##### 7.4. 思考开关与 Variant
+
+`Variant` 和 `GenerationConfig.ThinkingEnabled` 负责不同的事情：
+
+- `WithVariant(...)` 选择服务方协议，决定思考开关应使用哪个字段和 JSON 格式；
+- `ThinkingEnabled` 决定是否显式开启或关闭思考。
+
+仅设置 `Variant` **不会自动发送思考开关**。当 `ThinkingEnabled == nil` 时，框架不发送任何开关字段，由服务方使用默认值。即使某个服务方当前默认开启思考，如果调用方需要确定性行为，也应显式设置 `ThinkingEnabled`。
+
+各 OpenAI-compatible Variant 的序列化结果如下：
+
+| Variant | `ThinkingEnabled=true` 的请求字段 |
+| --- | --- |
+| `VariantOpenAI` | `"thinking_enabled": true` |
+| `VariantDeepSeek` | `"thinking": {"type": "enabled"}` |
+| `VariantHunyuan` | `"thinking": {"type": "enabled"}` |
+| `VariantGLM` | `"thinking": {"type": "enabled"}` |
+| `VariantQwen` | `"enable_thinking": true` |
+| `VariantKimi` | `"thinking": {"type": "enabled"}` |
+| `VariantMiniMax` | `"thinking": {"type": "adaptive"}` |
+
+例如，通过官方 DeepSeek API 确定性地开启思考：
+
+```go
+thinking := true
+
+llm := openai.New("deepseek-v4-flash",
+    openai.WithBaseURL("https://api.deepseek.com"),
+    openai.WithAPIKey("your-api-key"),
+    openai.WithVariant(openai.VariantDeepSeek),
+)
+
+request := &model.Request{
+    Messages: []model.Message{
+        model.NewUserMessage("分析这个问题。"),
+    },
+    GenerationConfig: model.GenerationConfig{
+        Stream:          true,
+        ThinkingEnabled: &thinking,
+    },
+}
+```
+
+`ThinkingEnabled` 只适用于提供显式思考开关的模型；如果模型只支持推理预算，请改用 `ReasoningEffort`。对实现上述思考开关格式的外部服务，通常显式设置对应 `Variant` 和 `ThinkingEnabled` 即可。如果代理网关使用了不同字段或需要额外参数，可以通过 `openai.WithExtraFields(...)` 添加或覆盖服务方特有字段。
+
+对于要求始终开启思考的 Kimi 模型，应省略 `ThinkingEnabled`。如需让
+Kimi K2.6 在多轮对话间保留推理内容，可显式传入完整的服务方扩展：
+
+```go
+llm := openai.New(
+    "kimi-k2.6",
+    openai.WithVariant(openai.VariantKimi),
+    openai.WithExtraFields(map[string]any{
+        "thinking": map[string]string{
+            "type": "enabled",
+            "keep": "all",
+        },
+    }),
+)
+```
+
+对 MiniMax-M3，`ThinkingEnabled=false` 会发送
+`thinking.type=disabled`；MiniMax M2.x 虽然接受该值，但仍会继续思考。
+适配器有意不设置 `reasoning_split`：MiniMax 原生 OpenAI 格式会把推理保留在
+assistant `content` 的 `<think>...</think>` 中，框架会在工具调用历史中原样保存。
+返回工具结果前，不应删除 assistant 历史中的这些标签。服务方的多轮要求参见
+[MiniMax OpenAI SDK 文档](https://platform.minimax.io/docs/api-reference/text-openai-api)。
 
 #### 8. 流式工具调用增量：ShowToolCallDelta
 

@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/summarytrigger"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	isummaryscope "trpc.group/trpc-go/trpc-agent-go/session/internal/summaryscope"
@@ -326,6 +327,33 @@ func TestCheckTimeThreshold_NoEvents(t *testing.T) {
 	}
 	result := checker(sess)
 	assert.False(t, result)
+}
+
+func TestCheckTimeThreshold_RequestGapObservation(t *testing.T) {
+	t.Run("uses available observation instead of latest event", func(t *testing.T) {
+		sess := &session.Session{Events: []event.Event{{Timestamp: time.Now()}}}
+		summarytrigger.SetObservation(sess, summarytrigger.RequestGapObservation{
+			Elapsed:   30 * time.Second,
+			Available: true,
+		})
+
+		check := evaluateTimeThreshold(20*time.Second)(context.Background(), sess)
+		assert.True(t, check.Passed)
+		assert.Equal(t, 30_000, check.Value)
+		assert.Equal(t, 20_000, check.Threshold)
+		assert.Equal(t, unitMilliseconds, check.Unit)
+	})
+
+	t.Run("unavailable observation disables wall clock fallback", func(t *testing.T) {
+		sess := &session.Session{Events: []event.Event{{
+			Timestamp: time.Now().Add(-time.Hour),
+		}}}
+		summarytrigger.SetObservation(sess, summarytrigger.RequestGapObservation{})
+
+		check := evaluateTimeThreshold(time.Minute)(context.Background(), sess)
+		assert.False(t, check.Passed)
+		assert.Zero(t, check.Value)
+	})
 }
 
 func TestCheckTimeThreshold_BranchScopeUsesScopedLastEvent(t *testing.T) {

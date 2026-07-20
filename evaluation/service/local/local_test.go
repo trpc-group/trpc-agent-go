@@ -25,6 +25,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	agenttrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	evalresultinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
@@ -315,6 +316,48 @@ func TestInferTraceConversationClearsActualToolMockWhenConversationHasNoToolMock
 	pluginCount := len(expectedRunner.runOptions.Plugins)
 	expectedRunner.mu.Unlock()
 	assert.Equal(t, 0, pluginCount)
+}
+
+func TestInferTraceConversationExpectedRunnerErrorPreservesExecutionTraces(t *testing.T) {
+	ctx := context.Background()
+	executionTrace := &agenttrace.Trace{RootInvocationID: "trace-root", SessionID: "session"}
+	svc := &local{}
+	evalCase := &evalset.EvalCase{
+		EvalID:                "case",
+		EvalMode:              evalset.EvalModeTrace,
+		ExpectedRunnerEnabled: true,
+		ActualConversation: []*evalset.Invocation{{
+			InvocationID:   "actual",
+			UserContent:    &model.Message{Role: model.RoleUser, Content: "question"},
+			FinalResponse:  &model.Message{Role: model.RoleAssistant, Content: "actual"},
+			ExecutionTrace: executionTrace,
+		}},
+		SessionInput: &evalset.SessionInput{UserID: "demo-user"},
+	}
+
+	inferenceResult, expectedInferences, err := svc.inferTraceConversation(ctx, evalCase, "session", &service.Options{})
+
+	require.ErrorContains(t, err, "expected runner is nil")
+	assert.Nil(t, expectedInferences)
+	require.NotNil(t, inferenceResult)
+	if assert.Len(t, inferenceResult.ExecutionTraces, 1) {
+		assert.Same(t, executionTrace, inferenceResult.ExecutionTraces[0])
+	}
+}
+
+func TestExecutionTracesFromInvocationsHandlesEmptyAndNilInvocations(t *testing.T) {
+	assert.Nil(t, executionTracesFromInvocations(nil))
+
+	executionTrace := &agenttrace.Trace{RootInvocationID: "trace-root", SessionID: "session"}
+	traces := executionTracesFromInvocations([]*evalset.Invocation{
+		nil,
+		{ExecutionTrace: executionTrace},
+	})
+
+	if assert.Len(t, traces, 2) {
+		assert.Nil(t, traces[0])
+		assert.Same(t, executionTrace, traces[1])
+	}
 }
 
 type fakeEvaluator struct {
@@ -2235,6 +2278,9 @@ func TestLocalInferenceTraceModeUsesConfiguredActualConversation(t *testing.T) {
 	_, err := mgr.Create(ctx, appName, evalSetID)
 	assert.NoError(t, err)
 
+	executionTrace := &agenttrace.Trace{RootInvocationID: "trace-root-1", SessionID: "trace-session-1"}
+	actualInvocation := makeActualInvocation("trace-inv-1", "prompt", "answer")
+	actualInvocation.ExecutionTrace = executionTrace
 	traceCase := &evalset.EvalCase{
 		EvalID:   caseID,
 		EvalMode: evalset.EvalModeTrace,
@@ -2242,7 +2288,7 @@ func TestLocalInferenceTraceModeUsesConfiguredActualConversation(t *testing.T) {
 			makeInvocation("trace-inv-1", "prompt"),
 		},
 		ActualConversation: []*evalset.Invocation{
-			makeActualInvocation("trace-inv-1", "prompt", "answer"),
+			actualInvocation,
 		},
 		SessionInput: &evalset.SessionInput{AppName: appName, UserID: "demo-user", State: map[string]any{}},
 	}
@@ -2262,6 +2308,10 @@ func TestLocalInferenceTraceModeUsesConfiguredActualConversation(t *testing.T) {
 	assert.Equal(t, "trace-inv-1", results[0].Inferences[0].InvocationID)
 	assert.NotNil(t, results[0].Inferences[0].FinalResponse)
 	assert.Equal(t, "answer", results[0].Inferences[0].FinalResponse.Content)
+	if assert.Len(t, results[0].ExecutionTraces, 1) {
+		assert.Equal(t, executionTrace.RootInvocationID, results[0].ExecutionTraces[0].RootInvocationID)
+		assert.Equal(t, executionTrace.SessionID, results[0].ExecutionTraces[0].SessionID)
+	}
 
 	runnerStub.mu.Lock()
 	callCount := len(runnerStub.calls)
@@ -3893,6 +3943,43 @@ func TestPrepareCaseEvaluationInputsScenarioBuildsPlaceholderExpecteds(t *testin
 	}
 }
 
+func TestPrepareCaseEvaluationInputsAttachesExecutionTraces(t *testing.T) {
+	evalCase := makeEvalCase("app", "case-1", "prompt")
+	evalCase.Conversation[0].FinalResponse = &model.Message{Role: model.RoleAssistant, Content: "expected"}
+	traceOne := &agenttrace.Trace{RootInvocationID: "root-1"}
+	traceTwo := &agenttrace.Trace{RootInvocationID: "root-2"}
+	inferenceResult := makeInferenceResult("app", "set", "case-1", "session-1", []*evalset.Invocation{
+		makeActualInvocation("inv-1", "prompt", "answer"),
+		makeActualInvocation("inv-2", "prompt two", "answer two"),
+	})
+	inferenceResult.Inferences[1].UserContent = &model.Message{Role: model.RoleUser, Content: "prompt two"}
+	evalCase.Conversation = []*evalset.Invocation{
+		{UserContent: &model.Message{Role: model.RoleUser, Content: "prompt"}, FinalResponse: &model.Message{Role: model.RoleAssistant, Content: "expected"}},
+		{UserContent: &model.Message{Role: model.RoleUser, Content: "prompt two"}, FinalResponse: &model.Message{Role: model.RoleAssistant, Content: "expected two"}},
+	}
+	inferenceResult.ExecutionTraces = []*agenttrace.Trace{traceOne, traceTwo}
+	svc := &local{}
+	inputs, err := svc.prepareCaseEvaluationInputs(context.Background(), inferenceResult, evalCase, &service.Options{})
+	assert.NoError(t, err)
+	if assert.Len(t, inputs.actuals, 2) {
+		assert.Same(t, traceOne, inputs.actuals[0].ExecutionTrace)
+		assert.Same(t, traceTwo, inputs.actuals[1].ExecutionTrace)
+	}
+}
+
+func TestPrepareCaseEvaluationInputsRejectsMisalignedExecutionTraces(t *testing.T) {
+	evalCase := makeEvalCase("app", "case-1", "prompt")
+	evalCase.Conversation[0].FinalResponse = &model.Message{Role: model.RoleAssistant, Content: "expected"}
+	inferenceResult := makeInferenceResult("app", "set", "case-1", "session-1", []*evalset.Invocation{
+		makeActualInvocation("inv-1", "prompt", "answer"),
+	})
+	inferenceResult.ExecutionTraces = []*agenttrace.Trace{{RootInvocationID: "root-1"}, {RootInvocationID: "root-2"}}
+	svc := &local{}
+	inputs, err := svc.prepareCaseEvaluationInputs(context.Background(), inferenceResult, evalCase, &service.Options{})
+	assert.ErrorContains(t, err, "execution trace count 2 does not match inference count 1")
+	assert.Nil(t, inputs)
+}
+
 func TestEvaluatePerCaseScenarioRunsConfiguredMetric(t *testing.T) {
 	ctx := context.Background()
 	appName := "app"
@@ -4139,6 +4226,211 @@ func TestEvaluatePerCaseTemplateEvaluatorKeepsCaseRubricInEffectiveCriterion(t *
 		if assert.Len(t, result.OverallEvalMetricResults[0].Criterion.LLMJudge.Rubrics, 1) {
 			assert.Equal(t, "case:template", result.OverallEvalMetricResults[0].Criterion.LLMJudge.Rubrics[0].ID)
 		}
+	}
+}
+
+func TestEvaluatePerCaseTemplateTraceBindingMaterializesPromptAndPersistsActualTrace(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+	caseID := "case-template-trace"
+	mgr := evalsetinmemory.New()
+	_, err := mgr.Create(ctx, appName, evalSetID)
+	assert.NoError(t, err)
+	evalCase := makeEvalCase(appName, caseID, "prompt")
+	evalCase.Conversation[0].FinalResponse = &model.Message{Role: model.RoleAssistant, Content: "expected"}
+	assert.NoError(t, mgr.AddCase(ctx, appName, evalSetID, evalCase))
+	reg := registry.New()
+	fakeEval := &fakeEvaluator{
+		name: llmtemplateevaluator.EvaluatorName,
+		result: &evaluator.EvaluateResult{
+			OverallScore:         1,
+			OverallStatus:        status.EvalStatusPassed,
+			PerInvocationResults: []*evaluator.PerInvocationResult{{Score: 1, Status: status.EvalStatusPassed}},
+		},
+	}
+	assert.NoError(t, reg.Register(fakeEval.name, fakeEval))
+	executionTrace := &agenttrace.Trace{
+		RootInvocationID: "root-1",
+		Steps: []agenttrace.Step{
+			{NodeID: "fetch_match", Output: &agenttrace.Snapshot{Text: "stale data"}},
+			{NodeID: "fetch_match", Output: &agenttrace.Snapshot{Text: "fresh match data"}},
+		},
+	}
+	inferenceResult := makeInferenceResult(appName, evalSetID, caseID, "session-1", []*evalset.Invocation{
+		makeActualInvocation("actual-1", "prompt", "answer"),
+	})
+	inferenceResult.ExecutionTraces = []*agenttrace.Trace{executionTrace}
+	svc := newLocalService(t, &fakeRunner{}, mgr, reg, "session-1")
+	result, err := svc.evaluatePerCase(ctx, inferenceResult, &service.EvaluateConfig{
+		EvalMetrics: []*metric.EvalMetric{
+			{
+				MetricName:    "trace_template",
+				EvaluatorName: llmtemplateevaluator.EvaluatorName,
+				Threshold:     0.5,
+				Criterion: &criterion.Criterion{
+					LLMJudge: &criterionllm.LLMCriterion{
+						Template: &criterionllm.JudgeTemplateOptions{
+							Prompt:             "Trace output: {{trace_output}}",
+							ResponseScorerName: "single_score",
+							VariableBindings: []*criterionllm.TemplateVariableBinding{
+								{
+									TemplateVariable: "trace_output",
+									Source: &criterionllm.TemplateVariableSource{
+										Scope: criterionllm.TemplateVariableScopeActual,
+										Field: criterionllm.TemplateVariableFieldTraceStepOutput,
+										Selector: &criterionllm.TemplateVariableSelector{
+											NodeID: "fetch_match",
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}, &service.Options{EvalSetManager: mgr, Registry: reg})
+	assert.NoError(t, err)
+	assert.Equal(t, status.EvalStatusPassed, result.FinalEvalStatus)
+	require.NotNil(t, fakeEval.receivedActuals[0].ExecutionTrace)
+	assert.Same(t, executionTrace, fakeEval.receivedActuals[0].ExecutionTrace)
+	if assert.Len(t, result.EvalMetricResultPerInvocation, 1) {
+		perInvocation := result.EvalMetricResultPerInvocation[0]
+		require.NotNil(t, perInvocation.ActualInvocation)
+		assert.Same(t, executionTrace, perInvocation.ActualInvocation.ExecutionTrace)
+		if assert.Len(t, perInvocation.EvalMetricResults, 1) {
+			gotCriterion := perInvocation.EvalMetricResults[0].Criterion
+			require.NotNil(t, gotCriterion)
+			require.NotNil(t, gotCriterion.LLMJudge)
+			require.NotNil(t, gotCriterion.LLMJudge.Template)
+			assert.Contains(t, gotCriterion.LLMJudge.Template.Prompt, "fresh match data")
+			assert.NotContains(t, gotCriterion.LLMJudge.Template.Prompt, "stale data")
+		}
+	}
+}
+
+func TestEvaluateTemplateMetricWithoutTraceBindingAllowsEmptyExecutionTraces(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+	caseID := "case-template-no-trace"
+	mgr := evalsetinmemory.New()
+	_, err := mgr.Create(ctx, appName, evalSetID)
+	assert.NoError(t, err)
+	evalCase := makeEvalCase(appName, caseID, "prompt")
+	evalCase.Conversation[0].FinalResponse = &model.Message{Role: model.RoleAssistant, Content: "expected"}
+	assert.NoError(t, mgr.AddCase(ctx, appName, evalSetID, evalCase))
+	reg := registry.New()
+	fakeEval := &fakeEvaluator{
+		name: llmtemplateevaluator.EvaluatorName,
+		result: &evaluator.EvaluateResult{
+			OverallScore:         1,
+			OverallStatus:        status.EvalStatusPassed,
+			PerInvocationResults: []*evaluator.PerInvocationResult{{Score: 1, Status: status.EvalStatusPassed}},
+		},
+	}
+	assert.NoError(t, reg.Register(fakeEval.name, fakeEval))
+	inferenceResult := makeInferenceResult(appName, evalSetID, caseID, "session-1", []*evalset.Invocation{
+		makeActualInvocation("actual-1", "prompt", "answer"),
+	})
+	svc := newLocalService(t, &fakeRunner{}, mgr, reg, "session-1")
+	result, err := svc.Evaluate(ctx, &service.EvaluateRequest{
+		AppName:          appName,
+		EvalSetID:        evalSetID,
+		InferenceResults: []*service.InferenceResult{inferenceResult},
+		EvaluateConfig: &service.EvaluateConfig{EvalMetrics: []*metric.EvalMetric{
+			{
+				MetricName:    "final_template",
+				EvaluatorName: llmtemplateevaluator.EvaluatorName,
+				Threshold:     0.5,
+				Criterion: &criterion.Criterion{
+					LLMJudge: &criterionllm.LLMCriterion{
+						Template: &criterionllm.JudgeTemplateOptions{
+							Prompt:             "Answer: {{answer}}",
+							ResponseScorerName: "single_score",
+							VariableBindings: []*criterionllm.TemplateVariableBinding{
+								{
+									TemplateVariable: "answer",
+									Source: &criterionllm.TemplateVariableSource{
+										Scope: criterionllm.TemplateVariableScopeActual,
+										Field: criterionllm.TemplateVariableFieldFinalResponse,
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		}},
+	})
+	assert.NoError(t, err)
+	if assert.Len(t, result.EvalCaseResults, 1) {
+		assert.Equal(t, status.EvalStatusPassed, result.EvalCaseResults[0].FinalEvalStatus)
+	}
+}
+
+func TestEvaluateTemplateTraceBindingMissingTraceReturnsFailedCaseResult(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+	caseID := "case-template-missing-trace"
+	mgr := evalsetinmemory.New()
+	_, err := mgr.Create(ctx, appName, evalSetID)
+	assert.NoError(t, err)
+	evalCase := makeEvalCase(appName, caseID, "prompt")
+	evalCase.Conversation[0].FinalResponse = &model.Message{Role: model.RoleAssistant, Content: "expected"}
+	assert.NoError(t, mgr.AddCase(ctx, appName, evalSetID, evalCase))
+	reg := registry.New()
+	fakeEval := &fakeEvaluator{
+		name: llmtemplateevaluator.EvaluatorName,
+		result: &evaluator.EvaluateResult{
+			OverallScore:         1,
+			OverallStatus:        status.EvalStatusPassed,
+			PerInvocationResults: []*evaluator.PerInvocationResult{{Score: 1, Status: status.EvalStatusPassed}},
+		},
+	}
+	assert.NoError(t, reg.Register(fakeEval.name, fakeEval))
+	inferenceResult := makeInferenceResult(appName, evalSetID, caseID, "session-1", []*evalset.Invocation{
+		makeActualInvocation("actual-1", "prompt", "answer"),
+	})
+	svc := newLocalService(t, &fakeRunner{}, mgr, reg, "session-1")
+	result, err := svc.Evaluate(ctx, &service.EvaluateRequest{
+		AppName:          appName,
+		EvalSetID:        evalSetID,
+		InferenceResults: []*service.InferenceResult{inferenceResult},
+		EvaluateConfig: &service.EvaluateConfig{EvalMetrics: []*metric.EvalMetric{
+			{
+				MetricName:    "trace_template",
+				EvaluatorName: llmtemplateevaluator.EvaluatorName,
+				Threshold:     0.5,
+				Criterion: &criterion.Criterion{
+					LLMJudge: &criterionllm.LLMCriterion{
+						Template: &criterionllm.JudgeTemplateOptions{
+							Prompt:             "Trace output: {{trace_output}}",
+							ResponseScorerName: "single_score",
+							VariableBindings: []*criterionllm.TemplateVariableBinding{
+								{
+									TemplateVariable: "trace_output",
+									Source: &criterionllm.TemplateVariableSource{
+										Scope: criterionllm.TemplateVariableScopeActual,
+										Field: criterionllm.TemplateVariableFieldTraceStepOutput,
+										Selector: &criterionllm.TemplateVariableSelector{
+											NodeID: "fetch_match",
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		}},
+	})
+	assert.NoError(t, err)
+	if assert.Len(t, result.EvalCaseResults, 1) {
+		assert.Equal(t, status.EvalStatusFailed, result.EvalCaseResults[0].FinalEvalStatus)
+		assert.Contains(t, result.EvalCaseResults[0].ErrorMessage, "executionTrace is empty")
 	}
 }
 

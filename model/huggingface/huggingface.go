@@ -450,32 +450,10 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 		return
 	}
 
-	// Determine max input tokens using priority: user config > auto calculation > default.
-	maxInputTokens := m.maxInputTokens
-	if maxInputTokens <= 0 {
-		// Auto-calculate based on model context window with custom or default parameters.
-		contextWindow := m.contextWindow
-		if contextWindow <= 0 {
-			contextWindow = imodel.ResolveContextWindow(m.name)
-		}
-		if m.tokenTailoringConfig != nil &&
-			(m.tokenTailoringConfig.ProtocolOverheadTokens > 0 ||
-				m.tokenTailoringConfig.ReserveOutputTokens > 0) {
-			// Use custom parameters if any are set.
-			maxInputTokens = imodel.CalculateMaxInputTokensWithParams(
-				contextWindow,
-				m.tokenTailoringConfig.ProtocolOverheadTokens,
-				m.tokenTailoringConfig.ReserveOutputTokens,
-				m.tokenTailoringConfig.InputTokensFloor,
-				m.tokenTailoringConfig.SafetyMarginRatio,
-				m.tokenTailoringConfig.MaxInputTokensRatio,
-			)
-		} else {
-			// Use default parameters.
-			maxInputTokens = imodel.CalculateMaxInputTokens(contextWindow)
-		}
-		log.Debugf("auto-calculated max input tokens: model=%s, contextWindow=%d, maxInputTokens=%d",
-			m.name, contextWindow, maxInputTokens)
+	maxInputTokens := m.InputTokenBudget(ctx, request)
+	if m.maxInputTokens <= 0 {
+		log.DebugfContext(ctx, "auto-calculated max input tokens: model=%s, maxInputTokens=%d",
+			m.name, maxInputTokens)
 	}
 
 	// Apply token tailoring.
@@ -497,4 +475,28 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 	// Intentionally do not infer GenerationConfig.MaxTokens here: the Hugging Face
 	// integration tests expect MaxTokens to remain unset unless the user sets it
 	// on the request (input tailoring only).
+}
+
+// InputTokenBudget returns the same input budget used by token tailoring.
+func (m *Model) InputTokenBudget(_ context.Context, _ *model.Request) int {
+	if m.maxInputTokens > 0 {
+		return m.maxInputTokens
+	}
+	contextWindow := m.contextWindow
+	if contextWindow <= 0 {
+		contextWindow = imodel.ResolveContextWindow(m.name)
+	}
+	if m.tokenTailoringConfig != nil &&
+		(m.tokenTailoringConfig.ProtocolOverheadTokens > 0 ||
+			m.tokenTailoringConfig.ReserveOutputTokens > 0) {
+		return imodel.CalculateMaxInputTokensWithParams(
+			contextWindow,
+			m.tokenTailoringConfig.ProtocolOverheadTokens,
+			m.tokenTailoringConfig.ReserveOutputTokens,
+			m.tokenTailoringConfig.InputTokensFloor,
+			m.tokenTailoringConfig.SafetyMarginRatio,
+			m.tokenTailoringConfig.MaxInputTokensRatio,
+		)
+	}
+	return imodel.CalculateMaxInputTokens(contextWindow)
 }

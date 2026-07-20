@@ -12,19 +12,19 @@ package llmagent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
-	"strings"
 	"sync"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/trace"
-	"go.opentelemetry.io/otel/trace/noop"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/extension"
+	atrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor/workspaceio"
@@ -38,6 +38,7 @@ import (
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	toolcurrenttime "trpc.group/trpc-go/trpc-agent-go/internal/tool/currenttime"
+	"trpc.group/trpc-go/trpc-agent-go/internal/tracecapture"
 	knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -45,7 +46,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/prompt"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
-	teletrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	toolawaitreply "trpc.group/trpc-go/trpc-agent-go/tool/awaitreply"
 	toolskill "trpc.group/trpc-go/trpc-agent-go/tool/skill"
@@ -1510,6 +1510,25 @@ func codeExecutorSupportsWorkspaceExecSessions(
 // It executes the LLM agent flow and returns a channel of events.
 func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-chan *event.Event, err error) {
 	a.setupInvocation(invocation)
+	var traceLease tracecapture.StepLease
+	if invocation.RunOptions.ExecutionTraceEnabled {
+		traceNodeID := agent.InvocationTraceNodeID(invocation)
+		traceCtx := agent.NewInvocationContext(ctx, invocation)
+		traceLease = tracecapture.EnsureInvocationStep(
+			traceCtx,
+			func() string {
+				return agent.StartExecutionTraceStep(
+					invocation,
+					traceNodeID,
+					llmAgentTraceInputSnapshot(invocation),
+					nil,
+				)
+			},
+		)
+		if traceLease.Owns {
+			tracecapture.SetStepNodeType(traceCtx, traceLease.StepID, "llm")
+		}
+	}
 	ctx = a.withWorkspace(ctx, invocation)
 
 	// Check if the parent context already carries an invoke_agent span
@@ -1545,7 +1564,13 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-c
 			if ownsSpan {
 				span.End()
 			}
-			return customErr.EventChan, nil
+			finishOwnedExecutionTraceStep(
+				invocation,
+				traceLease,
+				llmAgentTraceOutputSnapshot(customErr.event),
+				nil,
+			)
+			return customErr.eventChan, nil
 		}
 		// Handle actual errors
 		span.SetStatus(codes.Error, err.Error())
@@ -1553,44 +1578,29 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-c
 		if ownsSpan {
 			span.End()
 		}
+		finishOwnedExecutionTraceStep(invocation, traceLease, nil, err)
 		return nil, err
 	}
-
-	return a.wrapEventChannelWithTelemetry(ctx, invocation, flowEventChan, span, tracker, ownsSpan), nil
+	return a.wrapEventChannelWithTelemetry(
+		ctx,
+		invocation,
+		flowEventChan,
+		span,
+		tracker,
+		startedSpan,
+		traceLease,
+	), nil
 }
 
-// resolveOrCreateInvokeAgentSpan checks if the parent context already has an
-// invoke_agent span (e.g. from NewAgentNodeFunc in graph execution). If so,
-// returns it with ownsSpan=false so the caller does not end it. When the parent
-// span is absent or has a different operation, a new child span is created and
-// ownsSpan=true is returned.
-func resolveOrCreateInvokeAgentSpan(
-	ctx context.Context,
-	invocation *agent.Invocation,
-	agentName string,
-) (context.Context, sdktrace.Span, bool) {
-	if invocation != nil && invocation.RunOptions.DisableTracing {
-		return ctx, noop.Span{}, false
+func llmAgentTraceInputSnapshot(invocation *agent.Invocation) *atrace.Snapshot {
+	if invocation == nil {
+		return nil
 	}
-	parentSpan := sdktrace.SpanFromContext(ctx)
-	if parentSpan != nil && parentSpan.SpanContext().IsValid() && parentSpan.IsRecording() {
-		// Use the instrumentation span interface to access the span name.
-		// The OTel SDK's concrete span type implements an unexported Name()
-		// method, but we can check via the stringer or attribute pattern.
-		// A simpler, reliable approach: check if the span was started with
-		// the invoke_agent prefix by inspecting the span's string representation.
-		if namer, ok := parentSpan.(interface{ Name() string }); ok {
-			if strings.HasPrefix(namer.Name(), itelemetry.OperationInvokeAgent+" ") {
-				return ctx, parentSpan, false
-			}
-		}
+	payload, err := json.Marshal([]model.Message{invocation.Message})
+	if err != nil {
+		return nil
 	}
-	// No suitable parent span — create a new one.
-	ctx, span := teletrace.Tracer.Start(
-		ctx,
-		fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, agentName),
-	)
-	return ctx, span, true
+	return &atrace.Snapshot{Text: string(payload)}
 }
 
 // executeAgentFlow executes the agent flow with before agent callbacks.
@@ -1614,7 +1624,10 @@ func (a *LLMAgent) executeAgentFlow(ctx context.Context, invocation *agent.Invoc
 			customEvent := event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, result.CustomResponse)
 			agent.EmitEvent(ctx, invocation, eventChan, customEvent)
 			close(eventChan)
-			return ctx, nil, &haveCustomResponseError{EventChan: eventChan}
+			return ctx, nil, &haveCustomResponseError{
+				eventChan: eventChan,
+				event:     customEvent,
+			}
 		}
 	}
 
@@ -1625,13 +1638,13 @@ func (a *LLMAgent) executeAgentFlow(ctx context.Context, invocation *agent.Invoc
 	}
 
 	return ctx, flowEventChan, nil
-
 }
 
 // haveCustomResponseError represents an early return due to a custom response from before agent callbacks.
 // This is not an actual error but a signal to return early with the custom response.
 type haveCustomResponseError struct {
-	EventChan <-chan *event.Event
+	eventChan <-chan *event.Event
+	event     *event.Event
 }
 
 func (e *haveCustomResponseError) Error() string {
@@ -1752,40 +1765,41 @@ func (a *LLMAgent) wrapEventChannelWithTelemetry(
 	originalChan <-chan *event.Event,
 	span sdktrace.Span,
 	tracker *itelemetry.InvokeAgentTracker,
-	ownsSpan bool,
+	startedSpan bool,
+	traceLease tracecapture.StepLease,
 ) <-chan *event.Event {
 	// Create a new channel with the same capacity as the original channel
 	wrappedChan := make(chan *event.Event, cap(originalChan))
 	runCtx := agent.CloneContext(ctx)
 	go func(ctx context.Context) {
 		var fullRespEvent *event.Event
+		var traceOutput *atrace.Snapshot
 		var responseErrorType string
+		var runErr error
 		tokenUsage := &itelemetry.TokenUsage{}
 		defer func() {
-			if fullRespEvent != nil && fullRespEvent.Response != nil {
-				responseErrorType = ""
-				if fullRespEvent.Response.Error != nil {
-					responseErrorType = itelemetry.FormatResponseErrorLabel(
-						fullRespEvent.Response.Error,
-						model.ErrorTypeRunError,
-					)
-				}
+			if runErr == nil {
+				runErr = wrappedAgentError(fullRespEvent)
 			}
-			if span.IsRecording() && fullRespEvent != nil {
-				itelemetry.TraceAfterInvokeAgent(
-					span,
-					fullRespEvent,
-					tokenUsage,
-					tracker.FirstTokenTimeDuration(),
-					model.ErrorTypeRunError,
-				)
+			if runErr == nil && ctx.Err() != nil &&
+				(fullRespEvent == nil || !fullRespEvent.IsFinalResponse()) {
+				runErr = ctx.Err()
 			}
-			tracker.SetResponseErrorType(responseErrorType)
-			tracker.RecordMetrics()()
-			if ownsSpan {
-				span.End()
-			}
-			close(wrappedChan)
+			finishOwnedExecutionTraceStep(
+				invocation,
+				traceLease,
+				traceOutput,
+				runErr,
+			)
+			finalizeWrappedTelemetry(
+				span,
+				tracker,
+				fullRespEvent,
+				responseErrorType,
+				tokenUsage,
+				startedSpan,
+				wrappedChan,
+			)
 		}()
 		// Forward all events from the original channel
 		for evt := range originalChan {
@@ -1796,18 +1810,56 @@ func (a *LLMAgent) wrapEventChannelWithTelemetry(
 				&responseErrorType,
 			); trackedEvent != nil {
 				fullRespEvent = trackedEvent
+				if traceLease.Owns {
+					traceOutput = llmAgentTraceOutputSnapshot(trackedEvent)
+				}
 			}
 			if err := event.EmitEvent(ctx, wrappedChan, evt); err != nil {
+				runErr = err
 				return
 			}
 		}
 		if ctx, evt := a.runAfterAgentCallback(ctx, invocation, fullRespEvent); evt != nil {
 			fullRespEvent = evt
-			agent.EmitEvent(ctx, invocation, wrappedChan, evt)
+			if traceLease.Owns {
+				traceOutput = llmAgentTraceOutputSnapshot(evt)
+			}
+			if err := agent.EmitEvent(ctx, invocation, wrappedChan, evt); err != nil {
+				runErr = err
+			}
 		}
 	}(runCtx)
 
 	return wrappedChan
+}
+
+func finishOwnedExecutionTraceStep(
+	invocation *agent.Invocation,
+	lease tracecapture.StepLease,
+	output *atrace.Snapshot,
+	runErr error,
+) {
+	if !lease.Owns {
+		return
+	}
+	agent.FinishExecutionTraceStep(
+		invocation,
+		lease.StepID,
+		output,
+		runErr,
+	)
+	tracecapture.ReleaseInvocationStep(lease)
+}
+
+func llmAgentTraceOutputSnapshot(evt *event.Event) *atrace.Snapshot {
+	if evt == nil || evt.Response == nil {
+		return nil
+	}
+	payload, err := json.Marshal(evt.Response)
+	if err != nil {
+		return nil
+	}
+	return &atrace.Snapshot{Text: string(payload)}
 }
 
 func finalizeWrappedTelemetry(
@@ -1874,9 +1926,9 @@ func recordWrappedEventTelemetry(
 			fullRespEvent = evt
 		}
 	}
-	if evt.Error != nil {
+	if evt.Response != nil && evt.Response.Error != nil {
 		*responseErrorType = itelemetry.FormatResponseErrorLabel(
-			evt.Error,
+			evt.Response.Error,
 			model.ErrorTypeRunError,
 		)
 	}
