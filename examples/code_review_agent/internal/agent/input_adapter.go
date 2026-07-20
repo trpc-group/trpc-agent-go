@@ -28,7 +28,10 @@ func inputMetadataForRequest(diff []byte, req Request) review.InputMetadata {
 }
 
 func inputConfig(cfg Config) input.Config {
-	return input.Config{FixturesRoot: cfg.FixturesRoot}
+	return input.Config{
+		FixturesRoot:  cfg.FixturesRoot,
+		MaxInputBytes: cfg.MaxInputBytes,
+	}
 }
 
 func inputRequest(req Request) input.Request {

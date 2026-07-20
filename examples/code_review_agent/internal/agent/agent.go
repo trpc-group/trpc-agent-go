@@ -95,6 +95,8 @@ type Config struct {
 	OutputDir string
 	// FixturesRoot 是样本 diff 根目录。
 	FixturesRoot string
+	// MaxInputBytes limits loaded or generated diff input.
+	MaxInputBytes int64
 	// ContainerRepoHostPath 是容器只读挂载源。
 	ContainerRepoHostPath string
 	// Timeout 是执行超时。
@@ -119,6 +121,8 @@ type Config struct {
 	ModelOpenAI llm.OpenAIConfig
 	// EventSink 接收本项目通过官方 event.Event 暴露的阶段事件。
 	EventSink func(context.Context, *agentevent.Event)
+	// ExecutorFactory overrides runtime executor construction for tests.
+	ExecutorFactory execution.ExecutorFactory
 }
 
 // Request 描述一次审查输入。
@@ -209,14 +213,25 @@ func New(cfg Config) (*Agent, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load skill repository: %w", err)
 	}
-	// skill_run 和 codeexec 共用同一个执行器。
-	exec, err := execution.NewExecutor(execution.Config{
+	execCfg := execution.Config{
 		Runtime:               cfg.Runtime,
 		Timeout:               cfg.Timeout,
 		ContainerRepoHostPath: cfg.ContainerRepoHostPath,
-	})
-	if err != nil {
-		return nil, err
+	}
+	execFactory := cfg.ExecutorFactory
+	if execFactory == nil {
+		execFactory = execution.NewExecutor
+	}
+	// Container runtime setup can be expensive and dry-run never executes code,
+	// so defer construction until a real execution tool call occurs.
+	var exec codeexecutor.CodeExecutor
+	if cfg.Runtime == RuntimeContainer {
+		exec = execution.NewLazyExecutor(execCfg, execFactory)
+	} else {
+		exec, err = execFactory(execCfg)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	var store storage.Store
@@ -336,7 +351,9 @@ func (a *Agent) runDirect(ctx context.Context, req Request) (result review.Resul
 		if err != nil && taskStarted && a.store != nil {
 			cleanupCtx, cancel := a.taskCleanupContext(ctx)
 			defer cancel()
-			_ = a.saveTaskStatus(cleanupCtx, taskID, inputRef, digestBytes(diff), req.RepoPath, mode, terminalTaskStatus(ctx, err), start, time.Now())
+			if saveErr := a.saveTaskStatus(cleanupCtx, taskID, inputRef, digestBytes(diff), req.RepoPath, mode, terminalTaskStatus(ctx, err), start, time.Now()); saveErr != nil {
+				err = errors.Join(err, fmt.Errorf("save terminal task status: %w", saveErr))
+			}
 		}
 	}()
 

@@ -11,15 +11,22 @@
 package agent
 
 import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 	"unicode/utf8"
 
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
+	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/execution"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/llm"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/review"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/storage"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 func TestNormalizeExecutionPlan(t *testing.T) {
@@ -134,5 +141,215 @@ func TestFastPersistedReviewItemsDedupeAcrossBuckets(t *testing.T) {
 	items := persistedReviewItems(review.Result{Warnings: []review.Finding{item}, HumanReviewItems: []review.Finding{item}})
 	if len(items) != 1 {
 		t.Fatalf("persisted items = %+v, want one deduped item", items)
+	}
+}
+
+type fastCallableTool struct {
+	name string
+	call func(context.Context, []byte) (any, error)
+}
+
+func (t fastCallableTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{Name: t.name}
+}
+
+func (t fastCallableTool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
+	if t.call == nil {
+		return nil, nil
+	}
+	return t.call(ctx, jsonArgs)
+}
+
+type fastStore struct {
+	saveTaskCalls int
+	saveTaskErrAt int
+	saveTaskErr   error
+	saveReviewErr error
+}
+
+func (s *fastStore) SaveTask(context.Context, storage.Task) error {
+	s.saveTaskCalls++
+	if s.saveTaskErrAt > 0 && s.saveTaskCalls == s.saveTaskErrAt {
+		return s.saveTaskErr
+	}
+	return nil
+}
+
+func (*fastStore) SaveFinding(context.Context, string, review.Finding) error {
+	return nil
+}
+
+func (*fastStore) SaveDecision(context.Context, storage.DecisionRecord) error {
+	return nil
+}
+
+func (*fastStore) SaveFilterDecision(context.Context, storage.FilterDecisionRecord) error {
+	return nil
+}
+
+func (*fastStore) SaveSandboxRun(context.Context, storage.SandboxRunRecord) error {
+	return nil
+}
+
+func (*fastStore) SaveArtifact(context.Context, storage.ArtifactRecord) error {
+	return nil
+}
+
+func (*fastStore) SaveMetrics(context.Context, storage.MetricsRecord) error {
+	return nil
+}
+
+func (*fastStore) SaveReport(context.Context, string, []byte, []byte) error {
+	return nil
+}
+
+func (s *fastStore) SaveReview(context.Context, storage.ReviewRecord) error {
+	return s.saveReviewErr
+}
+
+func (*fastStore) Close() error {
+	return nil
+}
+
+func writeFastSkillRoot(t *testing.T) string {
+	t.Helper()
+
+	root := t.TempDir()
+	skillDir := filepath.Join(root, defaultSkillName)
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("mkdir skill dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("# code-review\n"), 0o644); err != nil {
+		t.Fatalf("write SKILL.md: %v", err)
+	}
+	return root
+}
+
+func writeFastDiffFile(t *testing.T) string {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "input.diff")
+	diff := "diff --git a/service.go b/service.go\n--- a/service.go\n+++ b/service.go\n@@ -1 +1 @@\n-old\n+new\n"
+	if err := os.WriteFile(path, []byte(diff), 0o644); err != nil {
+		t.Fatalf("write diff file: %v", err)
+	}
+	return path
+}
+
+func TestInputConfigMapsMaxInputBytes(t *testing.T) {
+	t.Parallel()
+
+	cfg := inputConfig(Config{
+		FixturesRoot:  "fixtures",
+		MaxInputBytes: 123,
+	})
+	if cfg.FixturesRoot != "fixtures" || cfg.MaxInputBytes != 123 {
+		t.Fatalf("input config = %+v, want fixtures root and max bytes propagated", cfg)
+	}
+}
+
+func TestNewDryRunDoesNotCreateContainerExecutor(t *testing.T) {
+	t.Parallel()
+
+	factoryCalls := 0
+	ag, err := New(Config{
+		SkillsRoot: writeFastSkillRoot(t),
+		Runtime:    RuntimeContainer,
+		OutputDir:  t.TempDir(),
+		Timeout:    time.Second,
+		ExecutorFactory: func(execution.Config) (codeexecutor.CodeExecutor, error) {
+			factoryCalls++
+			return execution.FakeExecutor{}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	if factoryCalls != 0 {
+		t.Fatalf("factory calls after New = %d, want 0", factoryCalls)
+	}
+
+	_, err = ag.Run(context.Background(), Request{
+		DiffFile: writeFastDiffFile(t),
+		Mode:     ModeDryRun,
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if factoryCalls != 0 {
+		t.Fatalf("factory calls after dry-run = %d, want 0", factoryCalls)
+	}
+	if err := ag.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+	if factoryCalls != 0 {
+		t.Fatalf("factory calls after unused Close = %d, want 0", factoryCalls)
+	}
+}
+
+func TestRunDirectJoinsTerminalSaveTaskFailureWithReviewError(t *testing.T) {
+	t.Parallel()
+
+	reviewErr := errors.New("save review boom")
+	saveErr := errors.New("save task boom")
+	ag := &Agent{
+		cfg: normalizeConfig(Config{
+			OutputDir: t.TempDir(),
+			Timeout:   time.Second,
+		}),
+		loadTool: fastCallableTool{
+			name: "skill_load",
+			call: func(context.Context, []byte) (any, error) {
+				return map[string]any{"loaded": true}, nil
+			},
+		},
+		store: &fastStore{
+			saveTaskErrAt: 2,
+			saveTaskErr:   saveErr,
+			saveReviewErr: reviewErr,
+		},
+	}
+
+	_, err := ag.runDirect(context.Background(), Request{
+		DiffFile: writeFastDiffFile(t),
+		Mode:     ModeDryRun,
+	})
+	if !errors.Is(err, reviewErr) {
+		t.Fatalf("error %v does not include review error %v", err, reviewErr)
+	}
+	if !errors.Is(err, saveErr) {
+		t.Fatalf("error %v does not include terminal save error %v", err, saveErr)
+	}
+}
+
+func TestRunDirectJoinsTerminalSaveTaskFailureWithCancelError(t *testing.T) {
+	t.Parallel()
+
+	saveErr := errors.New("save task boom")
+	ag := &Agent{
+		cfg: normalizeConfig(Config{
+			OutputDir: t.TempDir(),
+			Timeout:   time.Second,
+		}),
+		loadTool: fastCallableTool{
+			name: "skill_load",
+			call: func(ctx context.Context, _ []byte) (any, error) {
+				return nil, ctx.Err()
+			},
+		},
+		store: &fastStore{saveTaskErrAt: 2, saveTaskErr: saveErr},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := ag.runDirect(ctx, Request{
+		DiffFile: writeFastDiffFile(t),
+		Mode:     ModeDryRun,
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error %v does not include context cancellation", err)
+	}
+	if !errors.Is(err, saveErr) {
+		t.Fatalf("error %v does not include terminal save error %v", err, saveErr)
 	}
 }
