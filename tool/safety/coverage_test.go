@@ -425,6 +425,66 @@ func TestScannerReviewRegressionCases(t *testing.T) {
 		wantRule     string
 	}{
 		{
+			name: "quoted shell expansion is literal",
+			req: ExecutionRequest{
+				ToolName: "workspace_exec",
+				Backend:  BackendWorkspaceExec,
+				Command:  `echo 'uses ${HOME}'`,
+			},
+			wantDecision: DecisionAllow,
+		},
+		{
+			name: "structured shell expansion argument is literal",
+			req: ExecutionRequest{
+				ToolName: "workspace_exec",
+				Backend:  BackendWorkspaceExec,
+				Command:  "echo",
+				Args:     []string{"uses ${HOME}"},
+			},
+			wantDecision: DecisionAllow,
+		},
+		{
+			name: "structured argument still detects secret",
+			req: ExecutionRequest{
+				ToolName: "workspace_exec",
+				Backend:  BackendWorkspaceExec,
+				Command:  "echo",
+				Args:     []string{"token=super-secret-value"},
+			},
+			wantDecision: DecisionDeny,
+			wantRule:     RuleSecretLeak,
+		},
+		{
+			name: "unquoted shell expansion is rejected",
+			req: ExecutionRequest{
+				ToolName: "workspace_exec",
+				Backend:  BackendWorkspaceExec,
+				Command:  `echo ${HOME}`,
+			},
+			wantDecision: DecisionDeny,
+			wantRule:     RuleShellBypassConstruct,
+		},
+		{
+			name: "recursive delete with verbose flag",
+			req: ExecutionRequest{
+				ToolName: "workspace_exec",
+				Backend:  BackendWorkspaceExec,
+				Command:  "rm -vrf ./build",
+			},
+			wantDecision: DecisionDeny,
+			wantRule:     RuleDangerousDelete,
+		},
+		{
+			name: "recursive delete with interactive flag",
+			req: ExecutionRequest{
+				ToolName: "workspace_exec",
+				Backend:  BackendWorkspaceExec,
+				Command:  "rm -irf ./build",
+			},
+			wantDecision: DecisionDeny,
+			wantRule:     RuleDangerousDelete,
+		},
+		{
 			name: "bare credential filename",
 			req: ExecutionRequest{
 				ToolName: "workspace_exec",
@@ -487,6 +547,9 @@ func TestScannerReviewRegressionCases(t *testing.T) {
 	}
 	if !hasAnyFlag([]string{"-Rf"}, "-rf", "-fr", "-r", "-R", "--recursive") {
 		t.Fatalf("hasAnyFlag did not match recursive force short flag")
+	}
+	if !hasAnyFlag([]string{"-Rvf"}, "-rf", "-fr", "-r", "-R", "--recursive") {
+		t.Fatalf("hasAnyFlag did not match recursive force flag bundle")
 	}
 	if got := scanner.scanResourceArgv(nil, "test"); len(got) != 0 {
 		t.Fatalf("scanResourceArgv(nil) = %v, want none", got)

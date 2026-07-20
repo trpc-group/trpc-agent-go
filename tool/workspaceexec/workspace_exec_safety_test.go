@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
 	"trpc.group/trpc-go/trpc-agent-go/tool/safety"
 )
 
@@ -51,5 +52,25 @@ func TestExecTool_SafetyScannerSanitizesOutput(t *testing.T) {
 	}
 	if strings.Contains(out.Output, "super-secret-value") {
 		t.Fatalf("output leaked secret: %q", out.Output)
+	}
+}
+
+func TestExecTool_SafetyScannerUsesNormalizedCWD(t *testing.T) {
+	scanner, err := safety.NewScanner(safety.DefaultPolicy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = scanner.Close() })
+
+	tl := NewExecTool(local.New(), WithSafetyScanner(scanner))
+	req, err := tl.prepareExec(context.Background(), execInput{
+		Command: "echo ok",
+		Cwd:     "/",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if req.spec.Cwd != "." {
+		t.Fatalf("cwd = %q, want normalized workspace root", req.spec.Cwd)
 	}
 }

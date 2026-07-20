@@ -619,14 +619,14 @@ func (t *ExecTool) prepareExec(
 	ctx context.Context,
 	in execInput,
 ) (execRequest, error) {
-	if err := t.checkSafety(ctx, in); err != nil {
+	cwd, err := normalizeCWD(in.Cwd)
+	if err != nil {
+		return execRequest{}, err
+	}
+	if err := t.checkSafety(ctx, in, cwd); err != nil {
 		return execRequest{}, err
 	}
 	if err := t.checkCommandPolicy(in.Command); err != nil {
-		return execRequest{}, err
-	}
-	cwd, err := normalizeCWD(in.Cwd)
-	if err != nil {
 		return execRequest{}, err
 	}
 	eng, err := t.liveEngine()
@@ -666,7 +666,7 @@ func (t *ExecTool) prepareExec(
 	}, nil
 }
 
-func (t *ExecTool) checkSafety(ctx context.Context, in execInput) error {
+func (t *ExecTool) checkSafety(ctx context.Context, in execInput, cwd string) error {
 	if t.safetyScanner == nil {
 		return nil
 	}
@@ -678,7 +678,7 @@ func (t *ExecTool) checkSafety(ctx context.Context, in execInput) error {
 		ToolName:   "workspace_exec",
 		Backend:    safety.BackendWorkspaceExec,
 		Command:    in.Command,
-		Cwd:        in.Cwd,
+		Cwd:        cwd,
 		Env:        in.Env,
 		TimeoutMS:  int64(timeout) * 1000,
 		TTY:        firstBoolValue(in.TTY, in.PTY),

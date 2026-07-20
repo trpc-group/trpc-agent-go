@@ -126,11 +126,16 @@ func (s *Scanner) Close() error {
 
 func (s *Scanner) scanRequest(req ExecutionRequest) []Finding {
 	var findings []Finding
-	text := strings.Join([]string{req.Command, strings.Join(req.Args, " "), req.Script, req.Cwd}, "\n")
 	if strings.TrimSpace(req.Cwd) != "" {
 		findings = append(findings, s.scanCwd(req.Cwd)...)
+		findings = append(findings, s.scanSecretTextAt(req.Cwd, "cwd")...)
+	}
+	for i, arg := range req.Args {
+		loc := fmt.Sprintf("command.arg[%d]", i)
+		findings = append(findings, s.scanSecretTextAt(arg, loc)...)
 	}
 	if strings.TrimSpace(req.Command) != "" {
+		findings = append(findings, s.scanSecretTextAt(req.Command, "command")...)
 		if len(req.Args) > 0 {
 			argv := append([]string{req.Command}, req.Args...)
 			findings = append(findings, s.scanArgvInCwd(argv, "command", req.Cwd)...)
@@ -141,7 +146,6 @@ func (s *Scanner) scanRequest(req ExecutionRequest) []Finding {
 	if strings.TrimSpace(req.Script) != "" {
 		findings = append(findings, s.scanScript(req.Script, req.Language)...)
 	}
-	findings = append(findings, s.scanRawText(text)...)
 	findings = append(findings, s.scanEnv(req.Env)...)
 	findings = append(findings, s.scanResources(req)...)
 	findings = append(findings, s.scanBackend(req)...)
@@ -171,7 +175,7 @@ func (s *Scanner) scanCommandInCwd(command, cwd string) []Finding {
 			"command",
 			"Rewrite as a simple command without shell expansion, redirection, subshells, or wrappers.",
 		))
-		return append(findings, s.scanRawText(command)...)
+		return append(findings, s.scanShellTokensAt(command, "command")...)
 	}
 	if lim := s.policy.ResourceLimits.MaxSegments; lim > 0 && len(pipe.Commands) > lim {
 		findings = append(findings, finding(
@@ -265,11 +269,15 @@ func (s *Scanner) scanScript(script, language string) []Finding {
 	lines := strings.Split(script, "\n")
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+		if trimmed == "" {
 			continue
 		}
 		loc := fmt.Sprintf("script.line[%d]", i+1)
-		findings = append(findings, s.scanRawTextAt(trimmed, loc)...)
+		findings = append(findings, s.scanSecretTextAt(trimmed, loc)...)
+		if strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		findings = append(findings, s.scanShellTokensAt(trimmed, loc)...)
 		if allowCommandScan && looksLikeCommand(trimmed) {
 			for _, f := range s.scanCommand(trimmed) {
 				if f.Location == "" || f.Location == "command" {
@@ -282,36 +290,34 @@ func (s *Scanner) scanScript(script, language string) []Finding {
 	return findings
 }
 
-func (s *Scanner) scanRawText(text string) []Finding {
-	return s.scanRawTextAt(text, "text")
-}
-
-func (s *Scanner) scanRawTextAt(text, loc string) []Finding {
-	var findings []Finding
+func (s *Scanner) scanShellTokensAt(text, loc string) []Finding {
 	if text == "" {
-		return findings
+		return nil
 	}
 	lower := strings.ToLower(text)
 	for _, token := range []string{"`", "$(", "${", " 2>", "&>", "eval ", "sh -c", "bash -c"} {
 		if strings.Contains(lower, strings.ToLower(token)) {
-			findings = append(findings, finding(
+			return []Finding{finding(
 				RuleShellBypassConstruct, CategoryShellBypass, RiskHigh, DecisionDeny,
 				"shell bypass construct detected: "+token,
 				loc,
 				"Remove shell expansion, wrappers, and redirections before execution.",
-			))
-			break
+			)}
 		}
 	}
+	return nil
+}
+
+func (s *Scanner) scanSecretTextAt(text, loc string) []Finding {
 	if hasSecret(text) {
-		findings = append(findings, finding(
+		return []Finding{finding(
 			RuleSecretLeak, CategorySecretLeak, RiskHigh, DecisionDeny,
 			text,
 			loc,
 			"Remove secrets from commands, outputs, logs, and artifacts.",
-		))
+		)}
 	}
-	return findings
+	return nil
 }
 
 func (s *Scanner) scanDangerousArgv(argv []string, loc string) []Finding {
@@ -418,6 +424,7 @@ func isRecursiveForceShortFlag(short string) bool {
 			hasRecursive = true
 		case 'f', 'F':
 			hasForce = true
+		case 'd', 'i', 'I', 'P', 'v', 'W', 'x':
 		default:
 			return false
 		}
