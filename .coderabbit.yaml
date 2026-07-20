@@ -2,10 +2,9 @@
 
 language: "en-US"
 tone_instructions: >-
-  Concise professional reviews. Bilingual output: EN first, ZH collapsed.
-  This is a framework repository. Prioritize public API design, semantic and
-  behavioral compatibility, stable defaults and contracts, extensibility,
-  generality, usability, and correctness. Avoid subjective local style debates.
+  Concise professional reviews; English first, Chinese collapsed. Prioritize
+  public API design, compatibility, stable defaults, extensibility, correctness,
+  and usability. Avoid subjective local style debates.
 early_access: false
 
 reviews:
