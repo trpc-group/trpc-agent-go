@@ -284,6 +284,43 @@ func TestSkillCheckScriptFallbackParityForFollowingCleanup(t *testing.T) {
 	}
 }
 
+func TestSkillCheckScriptFallbackParityForCommandInjectionBoundaries(t *testing.T) {
+	t.Parallel()
+
+	skillRoot, err := SkillRoot()
+	if err != nil {
+		t.Fatalf("SkillRoot returned error: %v", err)
+	}
+	diff := "diff --git a/sample.go b/sample.go\n" +
+		"--- a/sample.go\n+++ b/sample.go\n" +
+		"@@ -0,0 +1,9 @@\n" +
+		"+package sample\n" +
+		"+\n" +
+		"+func sample(ctx context.Context, name, cmd string, args []string) {\n" +
+		"+  exec.Command(\"git\", args...)\n" +
+		"+  exec.Command(\"git\", \"branch-\"+args[0])\n" +
+		"+  exec.Command(\"sh\", \"-c\", name)\n" +
+		"+  exec.Command(cmd, \"status\")\n" +
+		"+  exec.CommandContext(ctx, cmd, \"status\")\n" +
+		"+}\n"
+
+	pythonPayload := runSkillCheck(t, skillRoot, diff, nil)
+	fallbackPayload := runSkillCheck(t, skillRoot, diff, fallbackScriptEnv(t))
+	assertSkillOutputParity(t, pythonPayload, fallbackPayload)
+
+	if got := countSkillRule(fallbackPayload.Findings, "command-injection"); got != 3 {
+		t.Fatalf("expected three command-injection findings from fallback, got %d: %+v", got, fallbackPayload.Findings)
+	}
+	for _, finding := range fallbackPayload.Findings {
+		if finding.RuleID != "command-injection" {
+			continue
+		}
+		if finding.Line == 4 || finding.Line == 5 {
+			t.Fatalf("unexpected command-injection finding for fixed executable: %+v", finding)
+		}
+	}
+}
+
 func countSkillRule(findings []Finding, ruleID string) int {
 	total := 0
 	for _, finding := range findings {

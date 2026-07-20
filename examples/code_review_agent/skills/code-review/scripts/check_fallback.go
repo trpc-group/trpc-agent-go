@@ -324,13 +324,10 @@ func reportsCommandInjection(text string) bool {
 	if strings.Contains(text, "\"-c\"") || strings.Contains(text, "'-c'") {
 		return true
 	}
-	if strings.Contains(text, "+") {
-		return true
-	}
-	return commandCallHasDynamicArgument(text)
+	return commandCallHasDynamicExecutable(text)
 }
 
-func commandCallHasDynamicArgument(text string) bool {
+func commandCallHasDynamicExecutable(text string) bool {
 	start := strings.Index(text, "exec.Command")
 	if start < 0 {
 		return false
@@ -341,19 +338,11 @@ func commandCallHasDynamicArgument(text string) bool {
 		return false
 	}
 	args := strings.Split(text[start+open+1:close], ",")
-	for i, arg := range args {
-		arg = strings.TrimSpace(arg)
-		if arg == "" {
-			continue
-		}
-		if strings.HasPrefix(text[start:], "exec.CommandContext") && i == 0 {
-			continue
-		}
-		if !isQuotedLiteral(arg) {
-			return true
-		}
+	executableIndex := 0
+	if strings.HasPrefix(text[start:], "exec.CommandContext") {
+		executableIndex = 1
 	}
-	return false
+	return executableIndex >= len(args) || !isQuotedLiteral(strings.TrimSpace(args[executableIndex]))
 }
 
 func isQuotedLiteral(text string) bool {
