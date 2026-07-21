@@ -1548,6 +1548,10 @@ func (s *sequenceTracker) Flush(ctx context.Context, key session.Key) error {
 	return nil
 }
 
+func (s *sequenceTracker) Close(ctx context.Context, key session.Key) error {
+	return nil
+}
+
 type blockingTracker struct {
 	unblock <-chan struct{}
 	events  *session.TrackEvents
@@ -1563,6 +1567,10 @@ func (b *blockingTracker) GetEvents(ctx context.Context, key session.Key, opts .
 }
 
 func (b *blockingTracker) Flush(ctx context.Context, key session.Key) error {
+	return nil
+}
+
+func (b *blockingTracker) Close(ctx context.Context, key session.Key) error {
 	return nil
 }
 
@@ -1591,6 +1599,10 @@ func (t *errorAfterFirstTracker) Flush(ctx context.Context, key session.Key) err
 	return nil
 }
 
+func (t *errorAfterFirstTracker) Close(ctx context.Context, key session.Key) error {
+	return nil
+}
+
 type emptyTrackThenTerminalTracker struct {
 	mu       sync.Mutex
 	calls    int
@@ -1616,6 +1628,10 @@ func (t *emptyTrackThenTerminalTracker) GetEvents(ctx context.Context, key sessi
 }
 
 func (t *emptyTrackThenTerminalTracker) Flush(ctx context.Context, key session.Key) error {
+	return nil
+}
+
+func (t *emptyTrackThenTerminalTracker) Close(ctx context.Context, key session.Key) error {
 	return nil
 }
 

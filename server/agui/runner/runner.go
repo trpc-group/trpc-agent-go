@@ -66,7 +66,6 @@ func New(r trunner.Runner, opt ...Option) Runner {
 		tracker, err = track.New(opts.SessionService,
 			track.WithAggregatorFactory(opts.AggregatorFactory),
 			track.WithAggregationOption(opts.AggregationOption...),
-			track.WithFlushInterval(opts.FlushInterval),
 		)
 		if err != nil {
 			log.Warnf("agui: tracker disabled: %v", err)
@@ -164,6 +163,7 @@ type runInput struct {
 	runOption       []agent.RunOption
 	translator      translator.Translator
 	enableTrack     bool
+	startTrackFlush func()
 	span            trace.Span
 	resume          *resumeInfo
 	terminalEmitted bool
@@ -385,6 +385,9 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 	if len(messages.toolMessages) > 0 {
 		runOption = append(runOption, withToolResultMessageRewriter(messages.toolMessages))
 	}
+	if appName != "" {
+		runOption = append(runOption, agent.WithAppName(appName))
+	}
 	ctx, span, err := r.startSpan(ctx, runAgentInput)
 	if err != nil {
 		return nil, fmt.Errorf("start span: %w", err)
@@ -457,24 +460,34 @@ func (r *runner) run(ctx context.Context, cancel context.CancelCauseFunc, key se
 	defer func() {
 		closeDone()
 		cancel(nil)
-		if input.enableTrack {
-			if err := r.flushTrack(ctx, input.key); err != nil {
-				log.WarnfContext(
-					ctx,
-					"agui run: threadID: %s, runID: %s, "+
-						"flush track events: %v",
-					threadID,
-					runID,
-					err,
-				)
-			}
-		}
 		r.finishDistributedCancel(ctx, key)
 		r.unregister(key)
 		input.span.End()
 		close(events)
 	}()
 	if input.enableTrack {
+		var stopTrackFlush func()
+		var startTrackFlushOnce sync.Once
+		input.startTrackFlush = func() {
+			startTrackFlushOnce.Do(func() {
+				stopTrackFlush = r.startTrackFlushLoop(ctx, input.key, threadID, runID)
+			})
+		}
+		defer func() {
+			if stopTrackFlush != nil {
+				stopTrackFlush()
+			}
+			if err := r.closeTrack(ctx, input.key); err != nil {
+				log.WarnfContext(
+					ctx,
+					"agui run: threadID: %s, runID: %s, "+
+						"close track events: %v",
+					threadID,
+					runID,
+					err,
+				)
+			}
+		}()
 		if input.messages.inputMessage.Role == model.RoleUser {
 			if err := r.recordUserMessage(ctx, input.key, input.messages.userMessage); err != nil {
 				log.WarnfContext(
@@ -485,6 +498,8 @@ func (r *runner) run(ctx context.Context, cancel context.CancelCauseFunc, key se
 					runID,
 					err,
 				)
+			} else {
+				input.startTrackFlush()
 			}
 		}
 	}
@@ -676,6 +691,42 @@ func (r *runner) flushTrack(ctx context.Context, key session.Key) error {
 	flushCtx, cancel := r.newTrackPersistenceContext(ctx)
 	defer cancel()
 	return r.tracker.Flush(flushCtx, key)
+}
+
+func (r *runner) closeTrack(ctx context.Context, key session.Key) error {
+	closeCtx, cancel := r.newTrackPersistenceContext(ctx)
+	defer cancel()
+	return r.tracker.Close(closeCtx, key)
+}
+
+func (r *runner) startTrackFlushLoop(ctx context.Context, key session.Key, threadID, runID string) func() {
+	if r.flushInterval <= 0 {
+		return nil
+	}
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(r.flushInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if err := r.flushTrack(ctx, key); err != nil {
+					log.WarnfContext(ctx, "agui run: threadID: %s, runID: %s, flush track events: %v",
+						threadID, runID, err)
+				}
+			case <-stop:
+				return
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return func() {
+		close(stop)
+		<-done
+	}
 }
 
 func (r *runner) emitPostRunTerminalEvent(ctx context.Context, events chan<- aguievents.Event, input *runInput) {
@@ -1062,6 +1113,8 @@ func (r *runner) writeEvent(ctx context.Context, events chan<- aguievents.Event,
 				input.runID,
 				err,
 			)
+		} else if input.startTrackFlush != nil {
+			input.startTrackFlush()
 		}
 	}
 	select {
