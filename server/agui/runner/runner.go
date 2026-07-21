@@ -566,7 +566,7 @@ func (r *runner) runEventLoop(
 					runID,
 					result.err,
 				)
-				pendingTerminal = r.afterTranslateEvent(ctx, aguievents.NewRunErrorEvent(
+				pendingTerminal, _ = r.afterTranslateEvent(ctx, aguievents.NewRunErrorEvent(
 					fmt.Sprintf("run agent: %v", result.err),
 					aguievents.WithRunID(runID),
 				), input)
@@ -606,6 +606,10 @@ func (r *runner) runEventLoop(
 				hookDone = nil
 			}
 			if err != nil {
+				if ctx.Err() != nil {
+					r.emitPostRunTerminalEvent(ctx, events, input)
+					return
+				}
 				log.ErrorfContext(ctx, "agui run hook: threadID: %s, runID: %s, err: %v", threadID, runID, err)
 				r.emitPostRunFinalization(ctx, events, input)
 				r.emitEvent(ctx, events, aguievents.NewRunErrorEvent(fmt.Sprintf("run hook: %v", err),
@@ -664,7 +668,7 @@ func (r *runner) emitAgentEventWithDeferredTerminal(
 		return nil, false
 	}
 	for _, aguiEvent := range aguiEvents {
-		aguiEvent = r.afterTranslateEvent(ctx, aguiEvent, input)
+		aguiEvent, _ = r.afterTranslateEvent(ctx, aguiEvent, input)
 		if terminal, _ := terminalRunSignal(aguiEvent); terminal {
 			return aguiEvent, true
 		}
@@ -1068,11 +1072,12 @@ func (r *runner) emitEvent(ctx context.Context, events chan<- aguievents.Event, 
 	if input != nil && input.terminalEmitted {
 		return false
 	}
-	event = r.afterTranslateEvent(ctx, event, input)
-	return r.writeEvent(ctx, events, event, input)
+	event, ok := r.afterTranslateEvent(ctx, event, input)
+	written := r.writeEvent(ctx, events, event, input)
+	return ok && written
 }
 
-func (r *runner) afterTranslateEvent(ctx context.Context, event aguievents.Event, input *runInput) aguievents.Event {
+func (r *runner) afterTranslateEvent(ctx context.Context, event aguievents.Event, input *runInput) (aguievents.Event, bool) {
 	translatedEvent, err := r.handleAfterTranslate(ctx, event)
 	if err != nil {
 		log.ErrorfContext(
@@ -1085,9 +1090,9 @@ func (r *runner) afterTranslateEvent(ctx context.Context, event aguievents.Event
 			err,
 		)
 		return aguievents.NewRunErrorEvent(fmt.Sprintf("after translate callback: %v", err),
-			aguievents.WithRunID(input.runID))
+			aguievents.WithRunID(input.runID)), false
 	}
-	return translatedEvent
+	return translatedEvent, true
 }
 
 func (r *runner) writeEvent(ctx context.Context, events chan<- aguievents.Event, event aguievents.Event,

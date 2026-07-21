@@ -200,6 +200,51 @@ func TestCancelCancelsRunningRun(t *testing.T) {
 	assert.ErrorIs(t, err, ErrRunNotFound)
 }
 
+func TestCancelPreservesRunFinishedWhenRunHookReturnsContextError(t *testing.T) {
+	ctxCh := make(chan context.Context, 1)
+	hookStarted := make(chan struct{})
+	underlying := &waitCancelRunner{ctxCh: ctxCh}
+	r := New(
+		underlying,
+		WithRunHook(func(ctx context.Context, run *Run) error {
+			close(hookStarted)
+			<-ctx.Done()
+			return ctx.Err()
+		}),
+	).(*runner)
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	}
+	events, err := r.Run(context.Background(), input)
+	assert.NoError(t, err)
+	select {
+	case evt := <-events:
+		assert.IsType(t, (*aguievents.RunStartedEvent)(nil), evt)
+	case <-time.After(3 * time.Second):
+		assert.FailNow(t, "timeout waiting for RUN_STARTED")
+	}
+	select {
+	case <-hookStarted:
+	case <-time.After(3 * time.Second):
+		assert.FailNow(t, "timeout waiting for run hook")
+	}
+	err = r.Cancel(context.Background(), &adapter.RunAgentInput{ThreadID: "thread", RunID: "run"})
+	assert.NoError(t, err)
+	remaining := collectEvents(t, events)
+	terminalCount := 0
+	for _, evt := range remaining {
+		terminal, _ := terminalRunSignal(evt)
+		if terminal {
+			terminalCount++
+		}
+	}
+	assert.Equal(t, 1, terminalCount)
+	assert.True(t, hasRunFinishedEvent(remaining))
+	assert.False(t, hasRunErrorEvent(remaining))
+}
+
 func TestCancelIgnoresRunID(t *testing.T) {
 	ctxCh := make(chan context.Context, 1)
 	underlying := &waitCancelRunner{ctxCh: ctxCh}

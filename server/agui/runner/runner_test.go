@@ -4734,16 +4734,17 @@ func TestTranslateCallbackError(t *testing.T) {
 			RegisterAfterTranslate(func(ctx context.Context, evt aguievents.Event) (aguievents.Event, error) {
 				return nil, errors.New("fail")
 			})
-		r := &runner{
-			runner: &fakeRunner{
-				run: func(ctx context.Context, userID, sessionID string, message model.Message,
-					opts ...agent.RunOption) (<-chan *agentevent.Event, error) {
-					ch := make(chan *agentevent.Event, 1)
-					ch <- agentevent.New("inv", "assistant")
-					close(ch)
-					return ch, nil
-				},
+		underlying := &fakeRunner{
+			run: func(ctx context.Context, userID, sessionID string, message model.Message,
+				opts ...agent.RunOption) (<-chan *agentevent.Event, error) {
+				ch := make(chan *agentevent.Event, 1)
+				ch <- agentevent.New("inv", "assistant")
+				close(ch)
+				return ch, nil
 			},
+		}
+		r := &runner{
+			runner:             underlying,
 			translateCallbacks: callbacks,
 			translatorFactory:  defaultTranslatorFactory,
 			userIDResolver:     defaultUserIDResolver,
@@ -4762,6 +4763,7 @@ func TestTranslateCallbackError(t *testing.T) {
 		assert.Len(t, evts, 1)
 		_, ok := evts[0].(*aguievents.RunErrorEvent)
 		assert.True(t, ok)
+		assert.Equal(t, 0, underlying.calls)
 	})
 }
 
