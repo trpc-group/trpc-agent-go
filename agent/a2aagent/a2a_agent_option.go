@@ -35,12 +35,6 @@ type ConvertToA2AMessageFunc func(isStream bool, agentName string, invocation *a
 // This follows the same middleware pattern as server-side ProcessMessageHook.
 type BuildMessageHook func(next ConvertToA2AMessageFunc) ConvertToA2AMessageFunc
 
-// HTTPReqHandlerWrapper wraps an A2A client HTTP request handler.
-//
-// The returned handler must delegate to next to preserve the underlying HTTP
-// request and anonymous-cookie handling behavior.
-type HTTPReqHandlerWrapper func(next client.HTTPReqHandler) client.HTTPReqHandler
-
 // A2ADataPartToolResponse is a public tool response payload used by custom
 // DataPart mappers.
 type A2ADataPartToolResponse struct {
@@ -266,29 +260,13 @@ func WithCustomA2AConverter(converter InvocationA2AConverter) Option {
 
 // WithA2AClientExtraOptions adds extra options to the A2A client.
 //
-// For anonymous invocations, A2AAgent installs an internal HTTP request handler
-// to persist only the anonymous identity cookie in session state. Custom HTTP
-// clients, transports, timeouts, and non-anonymous cookies are preserved, but a
-// client.WithHTTPReqHandler option is not used on anonymous calls because the
-// upstream client does not expose request-handler composition.
+// For anonymous invocations, A2AAgent places its anonymous-cookie middleware
+// outside the handler selected by these options. Custom HTTP clients,
+// transports, timeouts, non-anonymous cookies, and caller handlers are
+// therefore retained.
 func WithA2AClientExtraOptions(opts ...client.Option) Option {
 	return func(a *A2AAgent) {
 		a.extraA2AOptions = append(a.extraA2AOptions, opts...)
-	}
-}
-
-// WithHTTPReqHandlerWrapper configures a wrapper around the A2A client's HTTP
-// request handler.
-//
-// For anonymous invocations, the anonymous-cookie handler runs outside this
-// wrapper so it can prepare and persist the session-scoped cookie while the
-// wrapper delegates the request to next. Do not also configure
-// client.WithHTTPReqHandler through WithA2AClientExtraOptions; the two
-// configuration paths are mutually exclusive.
-func WithHTTPReqHandlerWrapper(wrapper HTTPReqHandlerWrapper) Option {
-	return func(a *A2AAgent) {
-		a.httpReqHandlerWrapper = wrapper
-		a.httpReqHandlerWrapperCount++
 	}
 }
 

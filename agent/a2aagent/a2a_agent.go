@@ -19,7 +19,6 @@ import (
 	"net/http"
 	"net/url"
 	"path"
-	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -58,22 +57,20 @@ const (
 // A2AAgent is an agent that communicates with a remote A2A agent via A2A protocol.
 type A2AAgent struct {
 	// options
-	name                       string
-	description                string
-	agentCard                  *server.AgentCard      // Agent card and resolution state
-	agentURL                   string                 // URL of the remote A2A agent
-	eventConverter             A2AEventConverter      // Custom A2A event converters
-	dataPartMappers            []A2ADataPartMapper    // Lightweight inbound DataPart mappers for default converter
-	a2aMessageConverter        InvocationA2AConverter // Custom A2A message converters for requests
-	extraA2AOptions            []client.Option        // Additional A2A client options
-	httpReqHandlerWrapper      HTTPReqHandlerWrapper  // Caller-provided HTTP request handler wrapper
-	httpReqHandlerWrapperCount int                    // Number of times the wrapper option was configured
-	streamingBufSize           int                    // Buffer size for streaming responses
-	streamingRespHandler       StreamingRespHandler   // Handler for streaming responses
-	transferStateKey           []string               // Keys in session state to transfer to the A2A agent message by metadata
-	buildMessageHook           BuildMessageHook       // Hook called after A2A message is built but before it is sent
-	userIDHeader               string                 // HTTP header name to send UserID to A2A server
-	enableStreaming            *bool                  // Explicitly set streaming mode; nil means use agent card capability
+	name                 string
+	description          string
+	agentCard            *server.AgentCard      // Agent card and resolution state
+	agentURL             string                 // URL of the remote A2A agent
+	eventConverter       A2AEventConverter      // Custom A2A event converters
+	dataPartMappers      []A2ADataPartMapper    // Lightweight inbound DataPart mappers for default converter
+	a2aMessageConverter  InvocationA2AConverter // Custom A2A message converters for requests
+	extraA2AOptions      []client.Option        // Additional A2A client options
+	streamingBufSize     int                    // Buffer size for streaming responses
+	streamingRespHandler StreamingRespHandler   // Handler for streaming responses
+	transferStateKey     []string               // Keys in session state to transfer to the A2A agent message by metadata
+	buildMessageHook     BuildMessageHook       // Hook called after A2A message is built but before it is sent
+	userIDHeader         string                 // HTTP header name to send UserID to A2A server
+	enableStreaming      *bool                  // Explicitly set streaming mode; nil means use agent card capability
 
 	a2aClient    *client.A2AClient
 	a2aClientURL string
@@ -144,12 +141,9 @@ func New(opts ...Option) (*A2AAgent, error) {
 	agentURL = ia2a.NormalizeURL(agentURL)
 
 	// Create A2A client first
-	a2aClient, err := client.NewA2AClient(agentURL, agent.extraA2AOptions...)
+	a2aClient, err := agent.newConfiguredA2AClient(agentURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create A2A client for %s: %w", agentURL, err)
-	}
-	if err := agent.applyHTTPReqHandlerWrapper(a2aClient); err != nil {
-		return nil, err
 	}
 	agent.a2aClient = a2aClient
 	agent.a2aClientURL = agentURL
@@ -178,12 +172,9 @@ func New(opts ...Option) (*A2AAgent, error) {
 
 		// Rebuild a2a client if URL changed
 		if agentCard.URL != agentURL {
-			a2aClient, err := client.NewA2AClient(agentCard.URL, agent.extraA2AOptions...)
+			a2aClient, err := agent.newConfiguredA2AClient(agentCard.URL, nil)
 			if err != nil {
 				return nil, fmt.Errorf("failed to create A2A client for %s: %w", agentCard.URL, err)
-			}
-			if err := agent.applyHTTPReqHandlerWrapper(a2aClient); err != nil {
-				return nil, err
 			}
 			agent.a2aClient = a2aClient
 			agent.a2aClientURL = agentCard.URL
@@ -261,11 +252,7 @@ func hasPersistentSessionKey(sess *session.Session) bool {
 func (r *A2AAgent) newAnonymousClient(
 	anonymousCookie *anonymousCookieState,
 ) (*client.A2AClient, error) {
-	next, err := r.wrapHTTPReqHandler(&httpClientDoHandler{})
-	if err != nil {
-		return nil, err
-	}
-	a2aClient, err := client.NewA2AClient(r.a2aClientURL, r.extraA2AOptions...)
+	a2aClient, err := r.newConfiguredA2AClient(r.a2aClientURL, anonymousCookie)
 	if err != nil {
 		return nil, fmt.Errorf(
 			"failed to create session-scoped A2A client for %s: %w",
@@ -273,62 +260,37 @@ func (r *A2AAgent) newAnonymousClient(
 			err,
 		)
 	}
-	hasCustomHandler, err := hasCustomA2AHTTPReqHandler(a2aClient)
-	if err != nil {
-		return nil, err
-	}
-	if hasCustomHandler {
-		return nil, errors.New(
-			"custom A2A HTTP request handler is not supported for anonymous invocations; use WithHTTPReqHandlerWrapper",
-		)
-	}
-	client.WithHTTPReqHandler(&anonymousCookieHTTPReqHandler{
-		next:                  next,
-		cookie:                anonymousCookie,
-		scope:                 anonymousCookieURLScopeFromAgentURL(r.a2aClientURL),
-		acquireInitialization: r.acquireAnonymousCookieInitialization,
-	})(a2aClient)
 	return a2aClient, nil
 }
 
-func (r *A2AAgent) applyHTTPReqHandlerWrapper(a2aClient *client.A2AClient) error {
-	if r.httpReqHandlerWrapperCount == 0 {
-		return nil
+func (r *A2AAgent) newConfiguredA2AClient(
+	agentURL string,
+	anonymousCookie *anonymousCookieState,
+) (*client.A2AClient, error) {
+	// Register internal middleware before caller options. The upstream client
+	// applies middleware in registration order, with the first middleware as
+	// the outermost wrapper.
+	opts := make([]client.Option, 0, len(r.extraA2AOptions)+1)
+	if anonymousCookie != nil {
+		opts = append(opts, client.WithMiddleware(a2aHTTPReqMiddleware(
+			func(next client.HTTPReqHandler) client.HTTPReqHandler {
+				return &anonymousCookieHTTPReqHandler{
+					next:                  next,
+					cookie:                anonymousCookie,
+					scope:                 anonymousCookieURLScopeFromAgentURL(agentURL),
+					acquireInitialization: r.acquireAnonymousCookieInitialization,
+				}
+			},
+		)))
 	}
-	handler, err := r.wrapHTTPReqHandler(&httpClientDoHandler{})
-	if err != nil {
-		return err
-	}
-	hasCustomHandler, err := hasCustomA2AHTTPReqHandler(a2aClient)
-	if err != nil {
-		return err
-	}
-	if hasCustomHandler {
-		return errors.New(
-			"WithHTTPReqHandlerWrapper cannot be combined with client.WithHTTPReqHandler in WithA2AClientExtraOptions",
-		)
-	}
-	client.WithHTTPReqHandler(handler)(a2aClient)
-	return nil
+	opts = append(opts, r.extraA2AOptions...)
+	return client.NewA2AClient(agentURL, opts...)
 }
 
-func (r *A2AAgent) wrapHTTPReqHandler(
-	next client.HTTPReqHandler,
-) (client.HTTPReqHandler, error) {
-	if r.httpReqHandlerWrapperCount == 0 {
-		return next, nil
-	}
-	if r.httpReqHandlerWrapperCount > 1 {
-		return nil, errors.New("HTTP request handler wrapper must be configured at most once")
-	}
-	if r.httpReqHandlerWrapper == nil {
-		return nil, errors.New("HTTP request handler wrapper must not be nil")
-	}
-	handler := r.httpReqHandlerWrapper(next)
-	if handler == nil {
-		return nil, errors.New("HTTP request handler wrapper returned nil")
-	}
-	return handler, nil
+type a2aHTTPReqMiddleware func(next client.HTTPReqHandler) client.HTTPReqHandler
+
+func (m a2aHTTPReqMiddleware) Wrap(next client.HTTPReqHandler) client.HTTPReqHandler {
+	return m(next)
 }
 
 func (r *A2AAgent) acquireAnonymousCookieInitialization(
@@ -389,36 +351,6 @@ func (r *A2AAgent) acquireAnonymousCookieInitialization(
 			releaseRef()
 		})
 	}, nil
-}
-
-func hasCustomA2AHTTPReqHandler(a2aClient *client.A2AClient) (bool, error) {
-	probe, err := client.NewA2AClient("http://127.0.0.1/")
-	if err != nil {
-		return false, fmt.Errorf("create A2A client option probe: %w", err)
-	}
-	defaultHandlerType, err := a2aClientHTTPReqHandlerType(probe)
-	if err != nil {
-		return false, err
-	}
-	handlerType, err := a2aClientHTTPReqHandlerType(a2aClient)
-	if err != nil {
-		return false, err
-	}
-	return handlerType != defaultHandlerType, nil
-}
-
-func a2aClientHTTPReqHandlerType(a2aClient *client.A2AClient) (string, error) {
-	if a2aClient == nil {
-		return "", errors.New("A2A client must not be nil")
-	}
-	field := reflect.ValueOf(a2aClient).Elem().FieldByName("httpReqHandler")
-	if !field.IsValid() || field.Kind() != reflect.Interface {
-		return "", errors.New("A2A client HTTP request handler field is unavailable")
-	}
-	if field.IsNil() {
-		return "", errors.New("A2A client HTTP request handler must not be nil")
-	}
-	return field.Elem().Type().String(), nil
 }
 
 type anonymousCookieState struct {
@@ -590,6 +522,9 @@ func (h *anonymousCookieHTTPReqHandler) Handle(
 	httpClient *http.Client,
 	req *http.Request,
 ) (*http.Response, error) {
+	if h == nil {
+		return nil, errors.New("a2a anonymous cookie handler: handler is nil")
+	}
 	if req == nil {
 		return nil, errors.New("a2a anonymous cookie handler: request is nil")
 	}
@@ -598,6 +533,9 @@ func (h *anonymousCookieHTTPReqHandler) Handle(
 	}
 	if h.next == nil {
 		return nil, errors.New("a2a anonymous cookie handler: next handler is nil")
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	release, err := h.acquireInitializationIfNeeded(ctx, req.URL)
 	if err != nil {
@@ -615,7 +553,102 @@ func (h *anonymousCookieHTTPReqHandler) Handle(
 		cookie: h.cookie,
 		scope:  h.scope,
 	}
-	return h.next.Handle(ctx, &requestClient, req.Clone(ctx))
+	requestClient.Transport = &anonymousCookieRoundTripper{
+		base:   httpClient.Transport,
+		cookie: h.cookie,
+		scope:  h.scope,
+	}
+	request := req.Clone(ctx)
+	setAnonymousCookieHeader(request, h.cookie, h.scope)
+	resp, err := h.next.Handle(ctx, &requestClient, request)
+	h.captureResponseCookie(ctx, request, resp)
+	return resp, err
+}
+
+func (h *anonymousCookieHTTPReqHandler) captureResponseCookie(
+	ctx context.Context,
+	req *http.Request,
+	resp *http.Response,
+) {
+	if h == nil || h.cookie == nil || resp == nil || !h.scope.matches(req.URL) {
+		return
+	}
+	responseURL := req.URL
+	if resp.Request != nil && resp.Request.URL != nil {
+		responseURL = resp.Request.URL
+	}
+	if !h.scope.matches(responseURL) {
+		return
+	}
+	for _, cookie := range resp.Cookies() {
+		if cookie != nil && cookie.Name == anonymousUserIDCookieName {
+			h.cookie.capture(ctx, cookie.Value)
+		}
+	}
+}
+
+type anonymousCookieRoundTripper struct {
+	base   http.RoundTripper
+	cookie *anonymousCookieState
+	scope  anonymousCookieURLScope
+}
+
+func (t *anonymousCookieRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req == nil {
+		return nil, errors.New("a2a anonymous cookie transport: request is nil")
+	}
+	base := t.base
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	request := req.Clone(req.Context())
+	setAnonymousCookieHeader(request, t.cookie, t.scope)
+	resp, err := base.RoundTrip(request)
+	if resp != nil && t.cookie != nil && t.scope.matches(request.URL) {
+		for _, cookie := range resp.Cookies() {
+			if cookie != nil && cookie.Name == anonymousUserIDCookieName {
+				t.cookie.capture(request.Context(), cookie.Value)
+			}
+		}
+	}
+	return resp, err
+}
+
+func setAnonymousCookieHeader(
+	req *http.Request,
+	cookie *anonymousCookieState,
+	scope anonymousCookieURLScope,
+) {
+	if req == nil {
+		return
+	}
+	if req.Header == nil {
+		req.Header = make(http.Header)
+	}
+	stripAnonymousCookieHeader(req)
+	if cookie == nil || !scope.matches(req.URL) {
+		return
+	}
+	if cookieValue, ok := cookie.load(); ok {
+		req.AddCookie(&http.Cookie{
+			Name:  anonymousUserIDCookieName,
+			Value: cookieValue,
+		})
+	}
+}
+
+func stripAnonymousCookieHeader(req *http.Request) {
+	if req == nil {
+		return
+	}
+	cookies := req.Cookies()
+	req.Header.Del("Cookie")
+	for _, cookie := range cookies {
+		if cookie == nil || cookie.Name == anonymousUserIDCookieName {
+			continue
+		}
+		req.AddCookie(cookie)
+	}
 }
 
 type httpClientDoHandler struct{}

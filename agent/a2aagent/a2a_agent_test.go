@@ -1706,16 +1706,16 @@ func TestAnonymousCookieRequestHandlerBoundaries(t *testing.T) {
 	require.Equal(t, anonymousTestCookieValue(4), captured)
 }
 
-func TestA2AAgent_HTTPReqHandlerWrapperComposesWithAnonymousCookies(t *testing.T) {
-	const markerHeader = "X-Test-HTTP-Wrapper"
+func TestA2AAgent_CustomHTTPReqHandlerComposesWithAnonymousCookies(t *testing.T) {
+	const markerHeader = "X-Test-HTTP-Handler"
 
 	var (
-		mu                     sync.Mutex
-		receivedCookies        []string
-		receivedMarkers        []string
-		wrapperCalls           int
-		wrapperSawAnonymousJar []bool
-		wrapperCookies         []string
+		mu                   sync.Mutex
+		receivedCookies      []string
+		receivedMarkers      []string
+		customHandlerCalls   int
+		customHandlerCookies []string
+		customHandlerHeaders []string
 	)
 	handlerErrs := make(chan error, 1)
 	reportHandlerError := func(err error) {
@@ -1771,33 +1771,39 @@ func TestA2AAgent_HTTPReqHandlerWrapperComposesWithAnonymousCookies(t *testing.T
 
 	a, err := New(
 		WithAgentCard(&server.AgentCard{
-			Name: "wrapper-agent",
+			Name: "handler-agent",
 			URL:  srv.URL,
 		}),
-		WithHTTPReqHandlerWrapper(func(next client.HTTPReqHandler) client.HTTPReqHandler {
-			return httpReqHandlerFunc(func(
-				ctx context.Context,
+		WithA2AClientExtraOptions(client.WithHTTPReqHandler(httpReqHandlerFunc(
+			func(
+				_ context.Context,
 				httpClient *http.Client,
 				req *http.Request,
 			) (*http.Response, error) {
-				_, sawAnonymousJar := httpClient.Jar.(*anonymousCookieJar)
-				wrapperCookie := ""
-				if httpClient.Jar != nil {
+				cookieValue := ""
+				headerCookieValue := ""
+				if cookie, cookieErr := req.Cookie(anonymousUserIDCookieName); cookieErr == nil {
+					headerCookieValue = cookie.Value
+				}
+				if httpClient != nil && httpClient.Jar != nil {
 					for _, cookie := range httpClient.Jar.Cookies(req.URL) {
 						if cookie.Name == anonymousUserIDCookieName {
-							wrapperCookie = cookie.Value
+							cookieValue = cookie.Value
 						}
 					}
 				}
 				mu.Lock()
-				wrapperCalls++
-				wrapperSawAnonymousJar = append(wrapperSawAnonymousJar, sawAnonymousJar)
-				wrapperCookies = append(wrapperCookies, wrapperCookie)
+				customHandlerCalls++
+				customHandlerCookies = append(customHandlerCookies, cookieValue)
+				customHandlerHeaders = append(customHandlerHeaders, headerCookieValue)
 				mu.Unlock()
 				req.Header.Set(markerHeader, "called")
-				return next.Handle(ctx, httpClient, req)
-			})
-		}),
+				if _, anonymous := httpClient.Jar.(*anonymousCookieJar); anonymous {
+					req.Header.Set("Cookie", anonymousUserIDCookieName+"="+anonymousTestCookieValue(9))
+				}
+				return httpClient.Do(req)
+			},
+		))),
 	)
 	require.NoError(t, err)
 
@@ -1827,9 +1833,9 @@ func TestA2AAgent_HTTPReqHandlerWrapperComposesWithAnonymousCookies(t *testing.T
 
 	mu.Lock()
 	defer mu.Unlock()
-	require.Equal(t, 3, wrapperCalls)
-	require.Equal(t, []bool{true, true, false}, wrapperSawAnonymousJar)
-	require.Equal(t, []string{"", anonymousTestCookieValue(1), ""}, wrapperCookies)
+	require.Equal(t, 3, customHandlerCalls)
+	require.Equal(t, []string{"", anonymousTestCookieValue(1), ""}, customHandlerCookies)
+	require.Equal(t, []string{"", anonymousTestCookieValue(1), ""}, customHandlerHeaders)
 	require.Equal(t, []string{"called", "called", "called"}, receivedMarkers)
 	require.Equal(t, []string{"", anonymousTestCookieValue(1), ""}, receivedCookies)
 	cookie, ok := anonymousSession.GetState(anonymousCookieStateKey(srv.URL))
@@ -1837,121 +1843,61 @@ func TestA2AAgent_HTTPReqHandlerWrapperComposesWithAnonymousCookies(t *testing.T
 	require.Equal(t, anonymousTestCookieValue(1), string(cookie))
 }
 
-func TestNew_HTTPReqHandlerWrapperConfigurationErrors(t *testing.T) {
-	agentCard := &server.AgentCard{Name: "test", URL: "http://example.com"}
+func TestAnonymousCookieRequestHandlerCapturesCustomResponseCookie(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer srv.Close()
 
-	t.Run("nil wrapper", func(t *testing.T) {
-		a, err := New(
-			WithAgentCard(agentCard),
-			WithHTTPReqHandlerWrapper(nil),
-		)
-		require.Nil(t, a)
-		require.EqualError(t, err, "HTTP request handler wrapper must not be nil")
-	})
+	sess := &session.Session{AppName: "app", ID: "session-a"}
+	state := newAnonymousCookieState(
+		sess,
+		nil,
+		nil,
+		anonymousCookieStateKey(srv.URL),
+	)
+	req, err := http.NewRequest(http.MethodPost, srv.URL, nil)
+	require.NoError(t, err)
+	wantCookie := anonymousTestCookieValue(5)
+	handler := &anonymousCookieHTTPReqHandler{
+		next: httpReqHandlerFunc(func(
+			_ context.Context,
+			_ *http.Client,
+			req *http.Request,
+		) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header: http.Header{
+					"Set-Cookie": []string{
+						anonymousUserIDCookieName + "=" + wantCookie + "; Path=/",
+					},
+				},
+				Body:    io.NopCloser(strings.NewReader("ok")),
+				Request: req,
+			}, nil
+		}),
+		cookie: state,
+		scope:  anonymousCookieURLScopeFromAgentURL(srv.URL),
+	}
 
-	t.Run("wrapper returns nil", func(t *testing.T) {
-		a, err := New(
-			WithAgentCard(agentCard),
-			WithHTTPReqHandlerWrapper(func(client.HTTPReqHandler) client.HTTPReqHandler {
-				return nil
-			}),
-		)
-		require.Nil(t, a)
-		require.EqualError(t, err, "HTTP request handler wrapper returned nil")
-	})
-
-	t.Run("wrapper configured twice", func(t *testing.T) {
-		identityWrapper := func(next client.HTTPReqHandler) client.HTTPReqHandler {
-			return next
-		}
-		a, err := New(
-			WithAgentCard(agentCard),
-			WithHTTPReqHandlerWrapper(identityWrapper),
-			WithHTTPReqHandlerWrapper(identityWrapper),
-		)
-		require.Nil(t, a)
-		require.EqualError(t, err, "HTTP request handler wrapper must be configured at most once")
-	})
-
-	t.Run("conflicts with client handler option", func(t *testing.T) {
-		a, err := New(
-			WithAgentCard(agentCard),
-			WithA2AClientExtraOptions(client.WithHTTPReqHandler(&staticStreamHandler{})),
-			WithHTTPReqHandlerWrapper(func(next client.HTTPReqHandler) client.HTTPReqHandler {
-				return next
-			}),
-		)
-		require.Nil(t, a)
-		require.EqualError(
-			t,
-			err,
-			"WithHTTPReqHandlerWrapper cannot be combined with client.WithHTTPReqHandler in WithA2AClientExtraOptions",
-		)
-	})
-
-	t.Run("extra option is applied once", func(t *testing.T) {
-		optionCalls := 0
-		countingOption := client.Option(func(*client.A2AClient) {
-			optionCalls++
-		})
-		a, err := New(
-			WithAgentCard(agentCard),
-			WithA2AClientExtraOptions(countingOption),
-			WithHTTPReqHandlerWrapper(func(next client.HTTPReqHandler) client.HTTPReqHandler {
-				return next
-			}),
-		)
-		require.NoError(t, err)
-		require.NotNil(t, a)
-		require.Equal(t, 1, optionCalls)
-	})
+	resp, err := handler.Handle(context.Background(), srv.Client(), req)
+	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
+	cookie, ok := state.load()
+	require.True(t, ok)
+	require.Equal(t, wantCookie, cookie)
 }
 
-func TestHasCustomA2AHTTPReqHandler(t *testing.T) {
-	t.Run("default handler", func(t *testing.T) {
-		a2aClient, err := client.NewA2AClient("http://example.com")
-		require.NoError(t, err)
-		hasCustom, err := hasCustomA2AHTTPReqHandler(a2aClient)
-		require.NoError(t, err)
-		require.False(t, hasCustom)
+func TestNew_A2AClientExtraOptionAppliedOnce(t *testing.T) {
+	optionCalls := 0
+	countingOption := client.Option(func(*client.A2AClient) {
+		optionCalls++
 	})
-
-	t.Run("unrelated option", func(t *testing.T) {
-		a2aClient, err := client.NewA2AClient(
-			"http://example.com",
-			client.WithTimeout(time.Second),
-		)
-		require.NoError(t, err)
-		hasCustom, err := hasCustomA2AHTTPReqHandler(a2aClient)
-		require.NoError(t, err)
-		require.False(t, hasCustom)
-	})
-
-	t.Run("custom handler", func(t *testing.T) {
-		a2aClient, err := client.NewA2AClient(
-			"http://example.com",
-			client.WithHTTPReqHandler(&staticStreamHandler{}),
-		)
-		require.NoError(t, err)
-		hasCustom, err := hasCustomA2AHTTPReqHandler(a2aClient)
-		require.NoError(t, err)
-		require.True(t, hasCustom)
-	})
-
-	t.Run("nil handler", func(t *testing.T) {
-		a2aClient, err := client.NewA2AClient(
-			"http://example.com",
-			client.WithHTTPReqHandler(nil),
-		)
-		require.NoError(t, err)
-		hasCustom, err := hasCustomA2AHTTPReqHandler(a2aClient)
-		require.False(t, hasCustom)
-		require.EqualError(
-			t,
-			err,
-			"A2A client HTTP request handler must not be nil",
-		)
-	})
+	a, err := New(
+		WithAgentCard(&server.AgentCard{Name: "test", URL: "http://example.com"}),
+		WithA2AClientExtraOptions(countingOption),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, a)
+	require.Equal(t, 1, optionCalls)
 }
 
 func TestAnonymousCookieURLScopeBoundaries(t *testing.T) {
@@ -1985,7 +1931,7 @@ func TestA2AAgent_AnonymousClientWithoutSessionIsEphemeral(
 	require.NotSame(t, first.client, second.client)
 }
 
-func TestA2AAgent_AnonymousClientRejectsCustomHTTPReqHandler(t *testing.T) {
+func TestA2AAgent_AnonymousClientComposesCustomHTTPReqHandler(t *testing.T) {
 	a := &A2AAgent{
 		a2aClientURL: "http://example.com",
 		extraA2AOptions: []client.Option{
@@ -2000,9 +1946,8 @@ func TestA2AAgent_AnonymousClientRejectsCustomHTTPReqHandler(t *testing.T) {
 			CreatedAt: time.Now(),
 		},
 	})
-	require.Error(t, err)
-	require.Nil(t, invocationClient)
-	require.Contains(t, err.Error(), "custom A2A HTTP request handler")
+	require.NoError(t, err)
+	require.NotNil(t, invocationClient)
 }
 
 func TestA2AAgent_CustomHTTPClientJarDoesNotCollapseAnonymousSessions(t *testing.T) {
@@ -3789,20 +3734,6 @@ func TestOptionFunctions(t *testing.T) {
 		WithA2AClientExtraOptions(opt1, opt2)(agent)
 		if len(agent.extraA2AOptions) != 2 {
 			t.Errorf("expected 2 extra options, got %d", len(agent.extraA2AOptions))
-		}
-	})
-
-	t.Run("WithHTTPReqHandlerWrapper", func(t *testing.T) {
-		agent := &A2AAgent{}
-		wrapper := func(next client.HTTPReqHandler) client.HTTPReqHandler {
-			return next
-		}
-		WithHTTPReqHandlerWrapper(wrapper)(agent)
-		if agent.httpReqHandlerWrapperCount != 1 {
-			t.Fatalf("expected wrapper count 1, got %d", agent.httpReqHandlerWrapperCount)
-		}
-		if agent.httpReqHandlerWrapper == nil {
-			t.Fatal("HTTP request handler wrapper should be set")
 		}
 	})
 
