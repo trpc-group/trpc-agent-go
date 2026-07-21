@@ -5,7 +5,7 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/mkdocs/assets/img/logo.png">
-    <img src="docs/mkdocs/assets/img/logo-readme.png" alt="tRPC logo" width="360">
+    <img src="docs/mkdocs/assets/img/logo-readme.png" alt="tRPC logo" width="260">
   </picture>
 </p>
 
