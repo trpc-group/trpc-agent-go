@@ -200,7 +200,7 @@ func resolveIngestExpirationDate(
 }
 
 func resolveSessionIngestOptions(
-	defaults ingestConfig,
+	config ingestConfig,
 	options []session.IngestOption,
 ) ingestOptions {
 	var sessionOpts session.IngestOptions
@@ -214,9 +214,9 @@ func resolveSessionIngestOptions(
 		metadata:   cloneMetadata(sessionOpts.Metadata),
 		agentID:    sessionOpts.AgentID,
 		runID:      sessionOpts.RunID,
-		prompt:     defaults.prompt,
-		infer:      defaults.infer,
-		memoryType: defaults.memoryType,
+		prompt:     config.prompt,
+		infer:      config.infer,
+		memoryType: config.memoryType,
 	}
 }
 
