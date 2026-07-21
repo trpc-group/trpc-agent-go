@@ -37,7 +37,7 @@ func TestRunnerRejectsInvalidConfiguration(t *testing.T) {
 	unknownCapabilityBackend := right
 	unknownCapabilityBackend.Name = "unknown-capability"
 	unknownCapabilityBackend.Capabilities = FullCapabilities()
-	unknownCapabilityBackend.Capabilities["memroy"] = true
+	unknownCapabilityBackend.Capabilities["not-a-capability"] = true
 	tests := []struct {
 		name     string
 		runner   Runner

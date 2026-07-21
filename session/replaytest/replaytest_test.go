@@ -91,7 +91,7 @@ func TestCaseValidationRejectsAmbiguousInputs(t *testing.T) {
 		},
 		{
 			Name:     "unknown-capability",
-			Requires: []Capability{CapabilitySession, "memroy"},
+			Requires: []Capability{CapabilitySession, "not-a-capability"},
 			Steps:    []Step{validStep},
 		},
 		{
