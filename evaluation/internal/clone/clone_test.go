@@ -117,6 +117,7 @@ func TestCloneEvalMetric_DeepCopiesJudgeTemplate(t *testing.T) {
 								Selector: &criterionllm.TemplateVariableSelector{
 									NodeID: "ignored",
 								},
+								Path: "$.question",
 							},
 						},
 					},
@@ -141,6 +142,8 @@ func TestCloneEvalMetric_DeepCopiesJudgeTemplate(t *testing.T) {
 	assert.Equal(t, criterionllm.TemplateVariableScopeActual, src.Criterion.LLMJudge.Template.VariableBindings[0].Source.Scope)
 	dst.Criterion.LLMJudge.Template.VariableBindings[0].Source.Selector.NodeID = "changed"
 	assert.Equal(t, "ignored", src.Criterion.LLMJudge.Template.VariableBindings[0].Source.Selector.NodeID)
+	dst.Criterion.LLMJudge.Template.VariableBindings[0].Source.Path = "$.changed"
+	assert.Equal(t, "$.question", src.Criterion.LLMJudge.Template.VariableBindings[0].Source.Path)
 	dst.Criterion.LLMJudge.Template.ResponseScorerOptions.Categories[0].Label = "changed"
 	assert.Equal(t, "correct", src.Criterion.LLMJudge.Template.ResponseScorerOptions.Categories[0].Label)
 }
