@@ -47,10 +47,13 @@ Finishes in well under a second and produces:
 - `output/optimization_report.md` — the human verdict, first section readable
   by non-engineers.
 - `output/candidate_prompt.txt` + `output/candidate_profile.json` — only when
-  the gate accepts: the instruction text plus the full accepted profile with
-  every surface override, e.g. the improved tool description. Both files are
-  removed at the start of every run, so a later rejecting run never leaves a
-  stale accepted candidate next to its rejection report.
+  the gate accepts: the instruction text plus the full **effective** profile —
+  the accepted overrides merged onto any previously written-back baseline
+  profile, so the artifact always describes the complete behavior that passed
+  the gate (e.g. an improved tool description inherited from an earlier
+  acceptance), not just this run's patches. Both files are removed at the
+  start of every run, so a later rejecting run never leaves a stale accepted
+  candidate next to its rejection report.
 - With `-write-back`, acceptance also updates the on-disk baseline:
   `baseline_prompt.txt` receives the instruction text, and
   `baseline_profile.json` (next to it) receives the **merged effective
@@ -166,10 +169,19 @@ a passing one and one whose recorded trajectory queried `ORD-1070` instead of
 `ORD-1007`. `TestTraceModeEvalSetRunsWithoutInference` locks the contract:
 zero runner/model calls, and the recorded tool trajectory flows through the
 same attribution engine (`tool_argument_error` with the final-response
-mismatch folded under it). Point `evalsets.train` or `evalsets.validation` at
-a trace-mode set to score and gate recorded behavior; note that PromptIter
-cannot improve trace cases (their output is frozen), so they act as fixed
-regression anchors rather than optimization targets.
+mismatch folded under it).
+
+Because the recording is frozen, trace mode is **historical scoring and
+attribution**, not candidate gating: baseline evaluation and every candidate
+round replay the same `actualConversation`, so per-case results never change
+across rounds. Pointing `evalsets.validation` at a trace-only set therefore
+cannot expose a candidate regression — every delta comes out `unchanged`, the
+default positive-gain rule rejects every candidate, and lowering the gain
+threshold to zero would accept without validating the candidate's behavior at
+all. Use trace sets to deterministically score and explain recorded (e.g.
+canary) behavior; to gate a live candidate against those scenarios, turn them
+into ordinary eval cases the candidate actually runs (drop `evalMode:
+"trace"` and keep the expected `conversation`).
 
 ## Canary follow-up (S7, extension)
 

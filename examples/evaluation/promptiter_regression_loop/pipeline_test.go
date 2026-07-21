@@ -11,6 +11,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
@@ -53,11 +54,27 @@ func loadExampleInputs(t *testing.T) (*Config, *resolvedInputs) {
 }
 
 // copyTestData clones the committed data dir into a temp dir so write-back
-// tests can mutate the baseline files without touching the repository.
+// tests can mutate the baseline files without touching the repository. It
+// walks the tree by hand because os.CopyFS needs Go 1.23 while the module
+// still declares Go 1.21.
 func copyTestData(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	require.NoError(t, os.CopyFS(dir, os.DirFS(testDataDir)))
+	source := os.DirFS(testDataDir)
+	require.NoError(t, fs.WalkDir(source, ".", func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dir, filepath.FromSlash(path))
+		if entry.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+		content, err := fs.ReadFile(source, path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(target, content, 0o644)
+	}))
 	return dir
 }
 
@@ -382,17 +399,34 @@ func TestConsecutiveWriteBacksKeepToolOverride(t *testing.T) {
 	zeroGain := 0.0
 	config.Engine.MinScoreGain = &zeroGain
 	config.Gate.MinValidationScoreGain = 0
+
+	// Accepted rerun without write-back: the engine's own round profile cannot
+	// carry the tool patch (the override is baked into the agent), yet the
+	// deployable candidate_profile.json must still publish the effective
+	// profile including the inherited override.
+	noWriteBackDir := t.TempDir()
+	noWriteBack := runExamplePipeline(t, config, inputs, dataDir, noWriteBackDir, false)
+	require.Equal(t, StatusAccepted, noWriteBack.Status)
+	require.NotContains(t, selectedRoundProfileJSON(t, noWriteBack), improved,
+		"the accepted round profile must not itself carry the tool patch")
+	candidateContent, err := os.ReadFile(filepath.Join(noWriteBackDir, "candidate_profile.json"))
+	require.NoError(t, err)
+	assert.Contains(t, string(candidateContent), improved,
+		"candidate_profile.json must carry the inherited tool override even without write-back")
+
 	second := runExamplePipeline(t, config, inputs, dataDir, outputDir, true)
 	require.Equal(t, StatusAccepted, second.Status)
 	assert.InDelta(t, 5.0/6.0, second.BaselineValidationScore, 1e-9,
 		"rerun baseline must behave as the previously accepted candidate")
-	// The scenario is only meaningful if the second accepted profile itself
-	// lacks the tool patch: the override is baked into the agent, so only
-	// the merge can carry it forward.
-	candidateContent, err := os.ReadFile(filepath.Join(outputDir, "candidate_profile.json"))
+	// The scenario is only meaningful if the second accepted round profile
+	// itself lacks the tool patch: the override is baked into the agent, so
+	// only the merge can carry it forward.
+	require.NotContains(t, selectedRoundProfileJSON(t, second), improved,
+		"the accepted round profile must not itself carry the tool patch")
+	candidateContent, err = os.ReadFile(filepath.Join(outputDir, "candidate_profile.json"))
 	require.NoError(t, err)
-	require.NotContains(t, string(candidateContent), improved,
-		"second accepted profile must not itself carry the tool patch")
+	assert.Contains(t, string(candidateContent), improved,
+		"candidate_profile.json must publish the effective profile")
 
 	// The second write-back keeps the inherited tool override.
 	profileContent, err = os.ReadFile(inputs.baselineProfilePath)
@@ -402,4 +436,21 @@ func TestConsecutiveWriteBacksKeepToolOverride(t *testing.T) {
 	_, reloaded := loadInputsAt(t, dataDir)
 	assert.Equal(t, improved, reloaded.baselineToolDescriptions[ToolQueryOrder])
 	assert.Contains(t, reloaded.baselinePrompt, OptimizedMarker)
+}
+
+// selectedRoundProfileJSON serializes the gate-selected round's raw engine
+// profile — the round-relative override set before the pipeline merges it
+// with the inherited baseline profile for publication.
+func selectedRoundProfileJSON(t *testing.T, result *Result) string {
+	t.Helper()
+	require.NotNil(t, result.Gate)
+	for _, candidate := range result.Candidates {
+		if candidate.Round == result.Gate.SelectedRound {
+			content, err := json.Marshal(candidate.Profile)
+			require.NoError(t, err)
+			return string(content)
+		}
+	}
+	t.Fatalf("selected round %d has no candidate", result.Gate.SelectedRound)
+	return ""
 }

@@ -489,18 +489,20 @@ func buildCandidates(
 	return candidates, nil
 }
 
-// writeCandidatePrompt persists the accepted candidate. The full profile
-// (every accepted surface override, e.g. tool descriptions) always lands in
-// candidate_profile.json; the instruction text additionally lands in
-// candidate_prompt.txt. The engine normalizes away no-op overrides, so an
-// accepted profile whose patches only touched non-instruction surfaces
-// legitimately carries no instruction text: that keeps the baseline prompt in
-// force. Write-back persists the complete effective baseline: the instruction
-// text over the prompt source, and the accepted overrides merged onto the
-// previously restored baseline profile into baseline_profile.json beside it.
-// Merging keeps consecutive write-backs lossless — once a restored override is
-// baked into the agent, a later accepted profile no longer carries it, so
-// writing the accepted profile alone would silently drop it.
+// writeCandidatePrompt persists the accepted candidate. The deployable
+// candidate_profile.json always carries the *effective* profile: the accepted
+// overrides merged onto the previously restored baseline profile. The restored
+// baseline overrides are baked into the agent for this run, so the engine no
+// longer emits them as patches; serializing the round-relative overrides alone
+// would publish an artifact missing inherited overrides (e.g. an earlier
+// accepted tool description) that were active when the candidate passed the
+// gate. The instruction text additionally lands in candidate_prompt.txt. The
+// engine normalizes away no-op overrides, so an accepted profile whose patches
+// only touched non-instruction surfaces legitimately carries no instruction
+// text: that keeps the baseline prompt in force. Write-back persists the same
+// effective profile as the next run's baseline: the instruction text over the
+// prompt source, and the merged profile into baseline_profile.json beside it,
+// keeping consecutive write-backs lossless.
 func writeCandidatePrompt(opts Options, inputs *resolvedInputs, result *Result, decision *GateDecision) error {
 	var profile *promptiter.Profile
 	for _, candidate := range result.Candidates {
@@ -512,14 +514,6 @@ func writeCandidatePrompt(opts Options, inputs *resolvedInputs, result *Result, 
 	if profile == nil {
 		return fmt.Errorf("selected round %d has no profile", decision.SelectedRound)
 	}
-	profilePath := filepath.Join(opts.OutputDir, candidateProfileFileName)
-	profileContent, err := json.MarshalIndent(profile, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal candidate profile: %w", err)
-	}
-	if err := os.WriteFile(profilePath, append(profileContent, '\n'), 0o644); err != nil {
-		return fmt.Errorf("write candidate profile: %w", err)
-	}
 	instructionSurfaceID, err := instructionTargetSurfaceID(opts.Config)
 	if err != nil {
 		return err
@@ -530,6 +524,15 @@ func writeCandidatePrompt(opts Options, inputs *resolvedInputs, result *Result, 
 			promptText = *override.Value.Text
 			break
 		}
+	}
+	effective := effectiveProfile(inputs, profile, instructionSurfaceID, promptText)
+	profilePath := filepath.Join(opts.OutputDir, candidateProfileFileName)
+	profileContent, err := json.MarshalIndent(effective, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal candidate profile: %w", err)
+	}
+	if err := os.WriteFile(profilePath, append(profileContent, '\n'), 0o644); err != nil {
+		return fmt.Errorf("write candidate profile: %w", err)
 	}
 	if promptText != "" {
 		result.CandidatePrompt = promptText
@@ -544,26 +547,23 @@ func writeCandidatePrompt(opts Options, inputs *resolvedInputs, result *Result, 
 				return fmt.Errorf("write back baseline prompt: %w", err)
 			}
 		}
-		merged := mergedBaselineProfile(inputs, profile, instructionSurfaceID, promptText)
-		mergedContent, err := json.MarshalIndent(merged, "", "  ")
-		if err != nil {
-			return fmt.Errorf("marshal merged baseline profile: %w", err)
-		}
-		if err := os.WriteFile(inputs.baselineProfilePath, append(mergedContent, '\n'), 0o644); err != nil {
+		if err := os.WriteFile(inputs.baselineProfilePath, append(profileContent, '\n'), 0o644); err != nil {
 			return fmt.Errorf("write back baseline profile: %w", err)
 		}
 	}
 	return nil
 }
 
-// mergedBaselineProfile overlays the accepted overrides onto the previously
-// restored baseline profile, producing the complete effective baseline for
-// the next run. Without the merge an instruction-only acceptance would
-// overwrite baseline_profile.json without the inherited tool overrides (they
-// are baked into the agent, so the engine no longer emits them as patches).
-// The instruction override is refreshed from the effective instruction text
-// so the stored profile always stays consistent with the prompt source.
-func mergedBaselineProfile(
+// effectiveProfile overlays the accepted overrides onto the previously
+// restored baseline profile, producing the complete profile that was actually
+// in force when the candidate passed the gate. Restored baseline overrides
+// are baked into the agent, so the engine no longer emits them as patches;
+// without the merge, both candidate_profile.json and a written-back
+// baseline_profile.json would silently drop inherited overrides such as an
+// earlier accepted tool description. The instruction override is refreshed
+// from the effective instruction text so the profile always stays consistent
+// with the prompt artifacts.
+func effectiveProfile(
 	inputs *resolvedInputs,
 	accepted *promptiter.Profile,
 	instructionSurfaceID string,
