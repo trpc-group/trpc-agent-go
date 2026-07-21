@@ -1,0 +1,152 @@
+{
+  "task": {
+    "id": "task_f3fe06af9b0f62ff",
+    "status": "complete",
+    "input_kind": "diff_file",
+    "input_summary": "files=1 go_files=1 added=4 deleted=0 sha256=6f8982be5ad4663c09194632ba750c172a6d3e29d582174e806b1716cdc976cd",
+    "skill_path": "skills\\code-review",
+    "runtime": "fake",
+    "dry_run": true,
+    "rule_only": true,
+    "started_at": "2026-07-01T09:04:42.2603449Z",
+    "completed_at": "2026-07-01T09:04:42.2656768Z"
+  },
+  "input": {
+    "diff_sha256": "6f8982be5ad4663c09194632ba750c172a6d3e29d582174e806b1716cdc976cd",
+    "file_count": 1,
+    "go_file_count": 1,
+    "added_line_count": 4,
+    "deleted_line_count": 0,
+    "packages": [
+      "user"
+    ]
+  },
+  "findings": [
+    {
+      "severity": "high",
+      "category": "security",
+      "file": "internal/user/repo.go",
+      "line": 9,
+      "title": "SQL statement is built with string formatting or concatenation",
+      "evidence": "query := fmt.Sprintf(\"select id, name from users where name = '%s'\", name)",
+      "recommendation": "Use parameterized QueryContext or ExecContext arguments instead of interpolating user-controlled values into SQL.",
+      "confidence": 0.86,
+      "source": "skill:code-review/rules/security",
+      "rule_id": "GO-SEC-002"
+    },
+    {
+      "severity": "high",
+      "category": "database_lifecycle",
+      "file": "internal/user/repo.go",
+      "line": 10,
+      "title": "Query rows may not be closed",
+      "evidence": "rows, err := db.Query(query)",
+      "recommendation": "Call defer rows.Close() after checking err, then inspect rows.Err() after iteration.",
+      "confidence": 0.84,
+      "source": "skill:code-review/rules/database",
+      "rule_id": "GO-DB-001"
+    }
+  ],
+  "warnings": null,
+  "needs_human_review": null,
+  "sandbox_runs": [
+    {
+      "id": "run_86b2e20aef227743",
+      "task_id": "task_f3fe06af9b0f62ff",
+      "runtime": "fake",
+      "tool": "codeexec",
+      "command": [
+        "go",
+        "test",
+        "./..."
+      ],
+      "status": "skipped",
+      "exit_code": 0,
+      "duration_ms": 0,
+      "output": "dry-run fake sandbox: no repo path; diff-only review executed deterministic rules",
+      "started_at": "2026-07-01T09:04:42.2625134Z",
+      "completed_at": "2026-07-01T09:04:42.2625134Z",
+      "output_truncated": false
+    },
+    {
+      "id": "run_b54dbfc1ee2373b5",
+      "task_id": "task_f3fe06af9b0f62ff",
+      "runtime": "fake",
+      "tool": "codeexec",
+      "command": [
+        "go",
+        "vet",
+        "./..."
+      ],
+      "status": "skipped",
+      "exit_code": 0,
+      "duration_ms": 0,
+      "output": "dry-run fake sandbox: no repo path; diff-only review executed deterministic rules",
+      "started_at": "2026-07-01T09:04:42.2635684Z",
+      "completed_at": "2026-07-01T09:04:42.2635684Z",
+      "output_truncated": false
+    }
+  ],
+  "permission_decisions": [
+    {
+      "id": "perm_8d6a87121c9e4416",
+      "task_id": "task_f3fe06af9b0f62ff",
+      "tool": "codeexec",
+      "command": [
+        "go",
+        "test",
+        "./..."
+      ],
+      "decision": "allow",
+      "risk": "medium",
+      "reason": "Go toolchain command is allowed with timeout, output cap, env allowlist, and redaction",
+      "created_at": "2026-07-01T09:04:42.2619808Z"
+    },
+    {
+      "id": "perm_ff40bd06ee8e06b1",
+      "task_id": "task_f3fe06af9b0f62ff",
+      "tool": "codeexec",
+      "command": [
+        "go",
+        "vet",
+        "./..."
+      ],
+      "decision": "allow",
+      "risk": "medium",
+      "reason": "Go toolchain command is allowed with timeout, output cap, env allowlist, and redaction",
+      "created_at": "2026-07-01T09:04:42.2630412Z"
+    },
+    {
+      "id": "perm_c683e6cee2562ac9",
+      "task_id": "task_f3fe06af9b0f62ff",
+      "tool": "codeexec",
+      "command": [
+        "staticcheck",
+        "./..."
+      ],
+      "decision": "needs_human_review",
+      "risk": "medium",
+      "reason": "staticcheck is optional and must be explicitly enabled for this workspace",
+      "created_at": "2026-07-01T09:04:42.2640984Z"
+    }
+  ],
+  "artifacts": null,
+  "monitoring": {
+    "task_id": "task_f3fe06af9b0f62ff",
+    "total_duration_ms": 5,
+    "sandbox_duration_ms": 0,
+    "tool_call_count": 2,
+    "permission_intercepts": 1,
+    "finding_count": 2,
+    "warning_count": 0,
+    "needs_human_review_count": 0,
+    "severity_distribution": {
+      "high": 2
+    },
+    "exception_distribution": {},
+    "created_at": "2026-07-01T09:04:42.2656768Z"
+  },
+  "final_conclusion": "Review completed with 2 findings, 0 warnings, and 0 items requiring human review. Critical=0, high=2. Address high-confidence findings before merge and inspect governance/sandbox summaries for blocked checks.",
+  "report_json_path": "sample_output\\review_report.json",
+  "report_markdown_path": "sample_output\\review_report.md"
+}

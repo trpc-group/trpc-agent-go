@@ -1,0 +1,25 @@
+diff --git a/pkg/math/add.go b/pkg/math/add.go
+index 1111111..2222222 100644
+--- a/pkg/math/add.go
++++ b/pkg/math/add.go
+@@ -1,5 +1,6 @@
+ package math
+ 
+ func Add(a, b int) int {
++	// Keep the simple implementation explicit for readability.
+ 	return a + b
+ }
+diff --git a/pkg/math/add_test.go b/pkg/math/add_test.go
+index 1111111..2222222 100644
+--- a/pkg/math/add_test.go
++++ b/pkg/math/add_test.go
+@@ -1,6 +1,9 @@
+ package math
+ 
+ import "testing"
+ 
+ func TestAdd(t *testing.T) {
++	if Add(2, 3) != 5 {
++		t.Fatal("bad add")
++	}
+ }

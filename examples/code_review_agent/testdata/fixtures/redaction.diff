@@ -1,0 +1,11 @@
+diff --git a/internal/client/client.go b/internal/client/client.go
+index 1111111..2222222 100644
+--- a/internal/client/client.go
++++ b/internal/client/client.go
+@@ -1,3 +1,8 @@
+ package client
++
++func authHeader() string {
++	password := "super-secret-password-12345"
++	return "Bearer sk_live_1234567890abcdef"
++}

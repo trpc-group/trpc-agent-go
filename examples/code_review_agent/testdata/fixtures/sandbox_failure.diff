@@ -1,0 +1,10 @@
+diff --git a/internal/build/build.go b/internal/build/build.go
+index 1111111..2222222 100644
+--- a/internal/build/build.go
++++ b/internal/build/build.go
+@@ -1,3 +1,7 @@
+ package build
++
++func Version() string {
++	return "dev"
++}

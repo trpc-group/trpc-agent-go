@@ -1,0 +1,17 @@
+diff --git a/internal/order/store.go b/internal/order/store.go
+index 1111111..2222222 100644
+--- a/internal/order/store.go
++++ b/internal/order/store.go
+@@ -1,8 +1,15 @@
+ package order
+ 
+ import "database/sql"
+ 
+ func Save(db *sql.DB, id string) error {
++	tx, err := db.Begin()
++	if err != nil {
++		return err
++	}
++	_, err = tx.Exec("insert into orders(id) values(?)", id)
++	return err
+ }

@@ -1,0 +1,10 @@
+diff --git a/internal/pay/price.go b/internal/pay/price.go
+index 1111111..2222222 100644
+--- a/internal/pay/price.go
++++ b/internal/pay/price.go
+@@ -1,3 +1,7 @@
+ package pay
++
++func Discount(cents int) int {
++	return cents / 10
++}
