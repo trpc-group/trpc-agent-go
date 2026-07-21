@@ -255,6 +255,8 @@ func categoryFromMetric(kind MetricKind, name, reason string) AttributionCategor
 
 func categoryFromWords(text string) AttributionCategory {
 	switch {
+	case containsAny(text, toolWords) && containsAny(text, parameterWords):
+		return CategoryToolParameterError
 	case containsAny(text, routeWords):
 		return CategoryRouteError
 	case containsAny(text, formatWords):

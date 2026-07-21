@@ -111,8 +111,8 @@ all attempted and rejected candidates remain under `rounds`.
 Run metadata includes the source configuration SHA-256 and deterministic fake
 engine version. JSON duration fields use the explicit `durationNanos` name.
 Typed metric criteria determine failure categories; trace errors remain attached
-as evidence and classify trace-only or untyped failures. An incomplete run
-always clears writeback and records a rejecting final decision.
+as evidence and classify trace-only or untyped failures. A run that fails after
+report initialization clears writeback and records a rejecting final decision.
 
 Configuration parsing rejects unknown fields and trailing JSON values so a
 misspelled budget cannot silently disable a gate. Report write failures are

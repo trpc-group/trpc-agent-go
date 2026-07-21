@@ -59,7 +59,8 @@ func renderMarkdown(report *Report) ([]byte, error) {
 	tmpl, err := template.New("optimization-report").Funcs(template.FuncMap{
 		"codeBlock": markdownCodeBlock,
 		"decision":  decisionLabel,
-		"join":      func(values []string) string { return strings.Join(values, "; ") },
+		"join":      joinMarkdownLines,
+		"line":      markdownLine,
 		"ms":        Milliseconds,
 	}).Parse(markdownTemplate)
 	if err != nil {
@@ -100,6 +101,18 @@ func markdownCodeBlock(value string) string {
 	return fence + "\n" + value + separator + fence
 }
 
+func joinMarkdownLines(values []string) string {
+	return markdownLine(strings.Join(values, "; "))
+}
+
+func markdownLine(value string) string {
+	replacer := strings.NewReplacer(
+		"\r\n", " ", "\r", " ", "\n", " ",
+		"\\", "\\\\", "`", "\\`", "<", "\\<", ">", "\\>", "[", "\\[", "]", "\\]",
+	)
+	return replacer.Replace(value)
+}
+
 const markdownTemplate = `# Prompt Optimization Report
 
 ## Decision
@@ -108,7 +121,7 @@ const markdownTemplate = `# Prompt Optimization Report
 - Should write back accepted prompt: {{.ShouldWriteBack}}
 - Decision reasons: {{join .Decision.Reasons}}
 - Run status: {{.Run.Status}}
-{{if .Run.Error}}- Run error: {{.Run.Error}}
+{{if .Run.Error}}- Run error: {{line .Run.Error}}
 {{end}}- Seed: {{.Run.Seed}}
 - Mode: {{.Run.Mode}}
 - Duration: {{ms .Run.Duration}} ms
@@ -125,13 +138,14 @@ const markdownTemplate = `# Prompt Optimization Report
 
 - Candidate train score: {{printf "%.4f" .Train.OverallScore}}
 - Validation score: {{printf "%.4f" .Validation.OverallScore}}
-- Baseline delta: {{printf "%.4f" .Delta.ScoreDelta}}
+- Original baseline delta: {{printf "%.4f" .Delta.ScoreDelta}}
+- Gate delta vs accepted baseline: {{printf "%.4f" .RegressionGateDecision.ScoreDelta}}
 - Regression gate: {{decision .RegressionGateDecision}}
 - Reasons: {{join .RegressionGateDecision.Reasons}}
 - Candidate prompt:
 
 {{codeBlock .CandidatePrompt.Text}}
-{{range .Delta.Cases}}  - {{.CaseID}}: {{.Kind}} ({{printf "%+.4f" .ScoreDelta}})
+{{range .Delta.Cases}}  - {{line .CaseID}}: {{.Kind}} ({{printf "%+.4f" .ScoreDelta}})
 {{end}}
 {{end}}
 ## Usage

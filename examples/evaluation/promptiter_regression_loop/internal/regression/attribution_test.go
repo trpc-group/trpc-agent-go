@@ -154,6 +154,26 @@ func TestToolInputTextDoesNotImplyParameterFailure(t *testing.T) {
 	assert.Equal(t, CategoryToolCallError, result.Items[0].Category)
 }
 
+func TestUntypedToolParameterFailuresUseSpecificCategory(t *testing.T) {
+	tests := []struct {
+		name   string
+		reason string
+	}{
+		{name: "english", reason: "tool call has an invalid argument"},
+		{name: "chinese", reason: "工具调用参数错误"},
+		{name: "mixed format signal", reason: "tool parameter contains invalid JSON format"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			item := caseWithNamedMetric(test.name, "custom", 0, status.EvalStatusFailed)
+			item.Metrics[0].Reason = test.reason
+			result := Attribute(evaluationWithCases(item), AttributionCatalog{})
+			require.Len(t, result.Items, 1)
+			assert.Equal(t, CategoryToolParameterError, result.Items[0].Category)
+		})
+	}
+}
+
 func TestTypedMetricCategoryIsNotOverriddenByTraceError(t *testing.T) {
 	item := caseWithNamedMetric("format", "schema", 0, status.EvalStatusFailed)
 	item.Metrics[0].Reason = "invalid JSON output"

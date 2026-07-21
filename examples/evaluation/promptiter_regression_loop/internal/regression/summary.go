@@ -30,7 +30,8 @@ func NormalizeAgentEvaluation(result *evaluation.EvaluationResult) (*EvaluationR
 		EvalSetID: result.EvalSetID, Cases: make([]promptiterengine.CaseResult, 0, len(result.EvalCases)),
 	}}}
 	total := 0.0
-	metrics := 0
+	evaluatedMetrics := 0
+	metricRecords := 0
 	for _, evalCase := range result.EvalCases {
 		item, score, count, err := convertAgentCase(result.EvalSetID, evalCase)
 		if err != nil {
@@ -38,12 +39,15 @@ func NormalizeAgentEvaluation(result *evaluation.EvaluationResult) (*EvaluationR
 		}
 		converted.EvalSets[0].Cases = append(converted.EvalSets[0].Cases, *item)
 		total += score
-		metrics += count
+		evaluatedMetrics += count
+		metricRecords += len(item.Metrics)
 	}
-	if metrics == 0 {
-		return nil, errors.New("agent evaluation has no metric scores")
+	if metricRecords == 0 {
+		return nil, errors.New("agent evaluation has no metrics")
 	}
-	converted.OverallScore = total / float64(metrics)
+	if evaluatedMetrics > 0 {
+		converted.OverallScore = total / float64(evaluatedMetrics)
+	}
 	converted.EvalSets[0].OverallScore = converted.OverallScore
 	return NormalizeEvaluation(converted)
 }
@@ -94,12 +98,30 @@ func NormalizeEvaluation(result *promptiterengine.EvaluationResult) (*Evaluation
 		OverallScore: result.OverallScore,
 		Cases:        make([]CaseResult, 0),
 	}
+	evalSetIDs := make(map[string]struct{}, len(result.EvalSets))
 	for _, evalSet := range result.EvalSets {
+		if evalSet.EvalSetID == "" {
+			return nil, errors.New("eval set id is empty")
+		}
+		if _, ok := evalSetIDs[evalSet.EvalSetID]; ok {
+			return nil, fmt.Errorf("duplicate eval set %q", evalSet.EvalSetID)
+		}
+		evalSetIDs[evalSet.EvalSetID] = struct{}{}
+		caseIDs := make(map[string]struct{}, len(evalSet.Cases))
 		for _, evalCase := range evalSet.Cases {
 			caseResult, err := normalizeCase(evalCase)
 			if err != nil {
 				return nil, fmt.Errorf("normalize case %q: %w", evalCase.EvalCaseID, err)
 			}
+			if evalCase.EvalSetID != evalSet.EvalSetID {
+				return nil, fmt.Errorf("case %q eval set %q does not match %q",
+					evalCase.EvalCaseID, evalCase.EvalSetID, evalSet.EvalSetID)
+			}
+			if _, ok := caseIDs[evalCase.EvalCaseID]; ok {
+				return nil, fmt.Errorf("duplicate case %q in eval set %q",
+					evalCase.EvalCaseID, evalSet.EvalSetID)
+			}
+			caseIDs[evalCase.EvalCaseID] = struct{}{}
 			normalized.Cases = append(normalized.Cases, *caseResult)
 			normalized.Usage = AddUsage(normalized.Usage, caseResult.Trace.Usage)
 		}
@@ -126,12 +148,17 @@ func normalizeCase(input promptiterengine.CaseResult) (*CaseResult, error) {
 		return nil, errors.New("case identity is empty")
 	}
 	metrics := make([]MetricResult, 0, len(input.Metrics))
+	metricNames := make(map[string]struct{}, len(input.Metrics))
 	aggregate := scoreAccumulator{}
 	passedCase := true
 	for _, item := range input.Metrics {
 		if item.MetricName == "" {
 			return nil, errors.New("metric name is empty")
 		}
+		if _, ok := metricNames[item.MetricName]; ok {
+			return nil, fmt.Errorf("duplicate metric %q", item.MetricName)
+		}
+		metricNames[item.MetricName] = struct{}{}
 		metrics = append(metrics, MetricResult{
 			Name: item.MetricName, Score: item.Score, Status: item.Status, Reason: item.Reason,
 		})

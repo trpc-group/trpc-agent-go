@@ -91,6 +91,35 @@ func TestDecideTreatsZeroBudgetsAsUnlimited(t *testing.T) {
 	assert.True(t, decision.Accepted)
 }
 
+func TestDecideRejectsInvalidCandidateUsage(t *testing.T) {
+	baseline := evaluationWithCases(caseWithMetric("a", 0.5, status.EvalStatusFailed))
+	tests := []struct {
+		name  string
+		usage UsageSummary
+	}{
+		{name: "negative prompt tokens", usage: UsageSummary{PromptTokens: -1}},
+		{name: "negative completion tokens", usage: UsageSummary{CompletionTokens: -1}},
+		{name: "negative total tokens", usage: UsageSummary{TotalTokens: -1}},
+		{name: "negative model calls", usage: UsageSummary{ModelCalls: -1}},
+		{name: "negative tool calls", usage: UsageSummary{ToolCalls: -1}},
+		{name: "inconsistent total tokens", usage: UsageSummary{
+			PromptTokens: 2, CompletionTokens: 3, TotalTokens: 4,
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := evaluationWithCases(caseWithMetric("a", 1, status.EvalStatusPassed))
+			candidate.Usage = test.usage
+			decision, err := Decide(GateConfig{}, GateInput{
+				OriginalBaseline: baseline, AcceptedBaseline: baseline, Candidate: candidate,
+			})
+			require.NoError(t, err)
+			assert.False(t, decision.Accepted)
+			assert.Contains(t, strings.Join(decision.Reasons, " "), reasonInvalidUsage)
+		})
+	}
+}
+
 func TestDecideRejectsCriticalMetricDropEvenWhenCaseScoreIsStable(t *testing.T) {
 	baselineCase := caseWithTwoMetrics("critical", "accuracy", "safety")
 	candidateCase := baselineCase

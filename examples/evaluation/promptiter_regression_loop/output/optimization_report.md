@@ -22,7 +22,8 @@
 
 - Candidate train score: 0.8333
 - Validation score: 1.0000
-- Baseline delta: 0.1667
+- Original baseline delta: 0.1667
+- Gate delta vs accepted baseline: 0.1667
 - Regression gate: ACCEPT
 - Reasons: candidate satisfies all regression gates
 - Candidate prompt:
@@ -39,7 +40,8 @@ Answer 7-day return-window and return-shipping questions accurately while preser
 
 - Candidate train score: 0.8333
 - Validation score: 1.0000
-- Baseline delta: 0.1667
+- Original baseline delta: 0.1667
+- Gate delta vs accepted baseline: 0.0000
 - Regression gate: REJECT
 - Reasons: validation score gain is below threshold
 - Candidate prompt:
@@ -56,7 +58,8 @@ Give accurate guidance on 7-day returns and shipping fees, while retaining order
 
 - Candidate train score: 1.0000
 - Validation score: 0.8333
-- Baseline delta: 0.0000
+- Original baseline delta: 0.0000
+- Gate delta vs accepted baseline: -0.1667
 - Regression gate: REJECT
 - Reasons: candidate introduces a new validation failure: validation_account_security; critical validation case regressed: validation_account_security; validation score gain is below threshold
 - Candidate prompt:

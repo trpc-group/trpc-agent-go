@@ -221,11 +221,11 @@ func compareCase(baseline, candidate CaseResult) (*CaseDelta, error) {
 }
 
 func compareMetrics(baseline, candidate []MetricResult) ([]MetricDelta, error) {
-	baselineIndex, err := indexMetrics("baseline", baseline, false)
+	baselineIndex, err := indexMetrics("baseline", baseline)
 	if err != nil {
 		return nil, err
 	}
-	candidateIndex, err := indexMetrics("candidate", candidate, true)
+	candidateIndex, err := indexMetrics("candidate", candidate)
 	if err != nil {
 		return nil, err
 	}
@@ -261,7 +261,6 @@ func compareMetrics(baseline, candidate []MetricResult) ([]MetricDelta, error) {
 func indexMetrics(
 	label string,
 	metrics []MetricResult,
-	allowNotEvaluated bool,
 ) (map[string]MetricResult, error) {
 	index := make(map[string]MetricResult, len(metrics))
 	for _, item := range metrics {
@@ -275,11 +274,7 @@ func indexMetrics(
 			return nil, fmt.Errorf("%s metric %q score is not finite", label, item.Name)
 		}
 		switch item.Status {
-		case status.EvalStatusPassed, status.EvalStatusFailed:
-		case status.EvalStatusNotEvaluated:
-			if !allowNotEvaluated {
-				return nil, fmt.Errorf("%s metric %q is not evaluated", label, item.Name)
-			}
+		case status.EvalStatusPassed, status.EvalStatusFailed, status.EvalStatusNotEvaluated:
 		default:
 			return nil, fmt.Errorf("%s metric %q has invalid status %q", label, item.Name, item.Status)
 		}

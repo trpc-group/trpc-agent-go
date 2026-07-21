@@ -25,6 +25,7 @@ const (
 	reasonModelCallBudget = "candidate exceeds validation model-call budget"
 	reasonToolCallBudget  = "candidate exceeds validation tool-call budget"
 	reasonNotEvaluated    = "candidate validation metric is not evaluated"
+	reasonInvalidUsage    = "candidate validation usage is invalid"
 )
 
 // Decide applies all configured regression gates.
@@ -195,6 +196,10 @@ func appendBudgetReasons(config GateConfig, candidate *EvaluationResult, decisio
 		return
 	}
 	usage := candidate.Usage
+	if err := validateUsage(usage); err != nil {
+		decision.Reasons = append(decision.Reasons, reasonInvalidUsage+": "+err.Error())
+		return
+	}
 	if config.MaxValidationTokens > 0 && usage.TotalTokens > config.MaxValidationTokens {
 		decision.Reasons = append(decision.Reasons, reasonTokenBudget)
 	}
@@ -203,6 +208,26 @@ func appendBudgetReasons(config GateConfig, candidate *EvaluationResult, decisio
 	}
 	if config.MaxValidationToolCalls > 0 && usage.ToolCalls > config.MaxValidationToolCalls {
 		decision.Reasons = append(decision.Reasons, reasonToolCallBudget)
+	}
+}
+
+func validateUsage(usage UsageSummary) error {
+	switch {
+	case usage.PromptTokens < 0:
+		return errors.New("prompt tokens are negative")
+	case usage.CompletionTokens < 0:
+		return errors.New("completion tokens are negative")
+	case usage.TotalTokens < 0:
+		return errors.New("total tokens are negative")
+	case usage.ModelCalls < 0:
+		return errors.New("model calls are negative")
+	case usage.ToolCalls < 0:
+		return errors.New("tool calls are negative")
+	case usage.TotalTokens < usage.PromptTokens ||
+		usage.TotalTokens-usage.PromptTokens < usage.CompletionTokens:
+		return errors.New("total tokens are less than prompt plus completion tokens")
+	default:
+		return nil
 	}
 }
 

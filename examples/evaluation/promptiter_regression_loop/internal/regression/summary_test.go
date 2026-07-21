@@ -64,6 +64,21 @@ func TestNormalizeAgentEvaluationConvertsPublicResult(t *testing.T) {
 	assert.Equal(t, 3, result.Usage.TotalTokens)
 }
 
+func TestNormalizeAgentEvaluationPreservesAllNotEvaluatedMetrics(t *testing.T) {
+	input := agentEvaluation("case", status.EvalStatusNotEvaluated)
+	input.EvalCases[0].RunDetails[0].Inference.ExecutionTraces[0].Status = atrace.TraceStatusFailed
+
+	result, err := NormalizeAgentEvaluation(input)
+	require.NoError(t, err)
+	require.Len(t, result.Cases, 1)
+	assert.Zero(t, result.OverallScore)
+	assert.False(t, result.Cases[0].Passed)
+	assert.Equal(t, status.EvalStatusNotEvaluated, result.Cases[0].Metrics[0].Status)
+	attributed := Attribute(result, AttributionCatalog{})
+	require.Len(t, attributed.Items, 1)
+	assert.Equal(t, CategoryExecutionError, attributed.Items[0].Category)
+}
+
 func TestNormalizeAgentEvaluationRejectsIncompleteResults(t *testing.T) {
 	complete := agentEvaluation("case", status.EvalStatusPassed)
 	tests := []struct {
@@ -92,6 +107,21 @@ func TestNormalizeAgentEvaluationRejectsIncompleteResults(t *testing.T) {
 
 func TestNormalizeEvaluationRejectsIncompleteInput(t *testing.T) {
 	validCase := engineCase("a", status.EvalStatusPassed, time.Unix(10, 0))
+	emptyEvalSetID := engineEvaluation(validCase)
+	emptyEvalSetID.EvalSets[0].EvalSetID = ""
+	mismatchedEvalSetID := engineEvaluation(validCase)
+	mismatchedEvalSetID.EvalSets[0].Cases[0].EvalSetID = "other"
+	duplicateEvalSet := engineEvaluation(validCase)
+	duplicateEvalSet.EvalSets = append(duplicateEvalSet.EvalSets, duplicateEvalSet.EvalSets[0])
+	duplicateCase := engineEvaluation(validCase)
+	duplicateCase.EvalSets[0].Cases = append(
+		duplicateCase.EvalSets[0].Cases, duplicateCase.EvalSets[0].Cases[0],
+	)
+	duplicateMetric := engineEvaluation(validCase)
+	duplicateMetric.EvalSets[0].Cases[0].Metrics = append(
+		duplicateMetric.EvalSets[0].Cases[0].Metrics,
+		duplicateMetric.EvalSets[0].Cases[0].Metrics[0],
+	)
 	tests := []struct {
 		name     string
 		input    *promptiterengine.EvaluationResult
@@ -99,6 +129,11 @@ func TestNormalizeEvaluationRejectsIncompleteInput(t *testing.T) {
 	}{
 		{name: "nil result", contains: "evaluation result is nil"},
 		{name: "no cases", input: &promptiterengine.EvaluationResult{}, contains: "has no cases"},
+		{name: "empty eval set id", input: emptyEvalSetID, contains: "eval set id is empty"},
+		{name: "mismatched eval set id", input: mismatchedEvalSetID, contains: "does not match"},
+		{name: "duplicate eval set", input: duplicateEvalSet, contains: "duplicate eval set"},
+		{name: "duplicate case", input: duplicateCase, contains: "duplicate case"},
+		{name: "duplicate metric", input: duplicateMetric, contains: "duplicate metric"},
 		{name: "empty identity", input: engineEvaluation(promptiterengine.CaseResult{}), contains: "case identity is empty"},
 		{name: "no metrics", input: engineEvaluation(promptiterengine.CaseResult{EvalSetID: testEvalSetID, EvalCaseID: "a"}), contains: "case has no metrics"},
 		{name: "nil trace", input: engineEvaluation(promptiterengine.CaseResult{EvalSetID: testEvalSetID, EvalCaseID: "a", Metrics: validCase.Metrics}), contains: "trace is nil"},

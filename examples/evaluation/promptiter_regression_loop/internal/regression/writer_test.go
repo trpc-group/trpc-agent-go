@@ -73,6 +73,39 @@ func TestRenderMarkdownProtectsCandidatePrompt(t *testing.T) {
 	assert.Greater(t, usageStart, blockEnd)
 }
 
+func TestRenderMarkdownDistinguishesGateDelta(t *testing.T) {
+	report := completeReport(t)
+	report.Rounds[0].Delta.ScoreDelta = 0.2
+	report.Rounds[0].RegressionGateDecision.ScoreDelta = 0
+
+	data, err := renderMarkdown(report)
+	require.NoError(t, err)
+	markdown := string(data)
+	assert.Contains(t, markdown, "Original baseline delta: 0.2000")
+	assert.Contains(t, markdown, "Gate delta vs accepted baseline: 0.0000")
+}
+
+func TestRenderMarkdownSanitizesLineValues(t *testing.T) {
+	report := completeReport(t)
+	report.Decision.Reasons = []string{"decision\n## injected `heading` \\<tag> \\[link]"}
+	report.Run.Error = "failure\r\n## injected error"
+	report.Rounds[0].RegressionGateDecision.Reasons = []string{"gate\r## injected reason"}
+	report.Rounds[0].Delta.Cases = []CaseDelta{{
+		CaseID: "case\n## injected case", Kind: DeltaUnchanged,
+	}}
+
+	data, err := renderMarkdown(report)
+	require.NoError(t, err)
+	markdown := string(data)
+	assert.Contains(t, markdown, "Decision reasons: decision ## injected \\`heading\\`")
+	assert.Contains(t, markdown, `\\\<tag\>`)
+	assert.Contains(t, markdown, `\\\[link\]`)
+	assert.Contains(t, markdown, "Run error: failure ## injected error")
+	assert.Contains(t, markdown, "Reasons: gate ## injected reason")
+	assert.Contains(t, markdown, "- case ## injected case: unchanged")
+	assert.NotContains(t, markdown, "\n## injected")
+}
+
 func TestMarkdownCodeBlock(t *testing.T) {
 	tests := []struct {
 		name  string

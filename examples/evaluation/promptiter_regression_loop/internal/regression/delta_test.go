@@ -75,7 +75,6 @@ func TestCompareRejectsInvalidOrMisalignedData(t *testing.T) {
 		{name: "empty metric name", baseline: evaluationWithCases(caseWithNamedMetric("a", "", 1, status.EvalStatusPassed)), candidate: valid, contains: "metric name is empty"},
 		{name: "duplicate metric", baseline: evaluationWithCases(caseWithTwoMetrics("a", "quality", "quality")), candidate: valid, contains: "duplicate metric"},
 		{name: "non finite metric", baseline: evaluationWithCases(caseWithNamedMetric("a", "quality", math.Inf(1), status.EvalStatusPassed)), candidate: valid, contains: "not finite"},
-		{name: "not evaluated", baseline: evaluationWithCases(caseWithMetric("a", 0, status.EvalStatusNotEvaluated)), candidate: valid, contains: "not evaluated"},
 		{name: "unknown status", baseline: evaluationWithCases(caseWithMetric("a", 1, status.EvalStatusUnknown)), candidate: valid, contains: "invalid status"},
 		{name: "metric mismatch", baseline: valid, candidate: evaluationWithCases(caseWithNamedMetric("a", "other", 1, status.EvalStatusPassed)), contains: "missing metric"},
 	}
@@ -83,6 +82,36 @@ func TestCompareRejectsInvalidOrMisalignedData(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			_, err := Compare(test.baseline, test.candidate)
 			require.ErrorContains(t, err, test.contains)
+		})
+	}
+}
+
+func TestCompareRepresentsBaselineNotEvaluatedForAuditing(t *testing.T) {
+	tests := []struct {
+		name           string
+		candidate      CaseResult
+		wantKind       DeltaKind
+		wantMetricKind DeltaKind
+	}{
+		{
+			name: "candidate passes", candidate: caseWithMetric("a", 1, status.EvalStatusPassed),
+			wantKind: DeltaNewPass, wantMetricKind: DeltaNewPass,
+		},
+		{
+			name: "candidate remains failed", candidate: caseWithMetric("a", 0, status.EvalStatusFailed),
+			wantKind: DeltaUnchanged, wantMetricKind: DeltaUnchanged,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			baseline := evaluationWithCases(caseWithMetric("a", 0, status.EvalStatusNotEvaluated))
+			delta, err := Compare(baseline, evaluationWithCases(test.candidate))
+			require.NoError(t, err)
+			require.Len(t, delta.Cases, 1)
+			assert.Equal(t, test.wantKind, delta.Cases[0].Kind)
+			require.Len(t, delta.Cases[0].Metrics, 1)
+			assert.Equal(t, status.EvalStatusNotEvaluated, delta.Cases[0].Metrics[0].BaselineStatus)
+			assert.Equal(t, test.wantMetricKind, delta.Cases[0].Metrics[0].Kind)
 		})
 	}
 }
