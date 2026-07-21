@@ -17,6 +17,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/evolution"
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonrepair"
+	"trpc.group/trpc-go/trpc-agent-go/internal/redact"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -112,7 +113,7 @@ func (r *llmReflector) propose(
 }
 
 func buildReflectionPrompt(input reflectionInput) (string, error) {
-	candidateJSON, err := json.Marshal(input.candidate)
+	candidateJSON, err := json.Marshal(redactReflectionSpec(input.candidate))
 	if err != nil {
 		return "", fmt.Errorf("marshal candidate: %w", err)
 	}
@@ -121,12 +122,12 @@ func buildReflectionPrompt(input reflectionInput) (string, error) {
 		evaluation := input.evaluation.byID[item.ID]
 		records = append(records, reflectionRecord{
 			CaseID:   item.ID,
-			Input:    truncateReflectionField(item.Input),
-			Expected: truncateReflectionField(item.Expected),
+			Input:    prepareReflectionField(item.Input),
+			Expected: prepareReflectionField(item.Expected),
 			Score:    evaluation.Score,
-			Output:   truncateReflectionField(evaluation.Output),
-			Feedback: truncateReflectionField(evaluation.Feedback),
-			Trace:    truncateReflectionField(evaluation.Trace),
+			Output:   prepareReflectionField(evaluation.Output),
+			Feedback: prepareReflectionField(evaluation.Feedback),
+			Trace:    prepareReflectionField(evaluation.Trace),
 		})
 	}
 	recordsJSON, err := json.Marshal(records)
@@ -140,6 +141,27 @@ func buildReflectionPrompt(input reflectionInput) (string, error) {
 		recordsJSON,
 		input.component.String(),
 	), nil
+}
+
+func redactReflectionSpec(spec *evolution.SkillSpec) *evolution.SkillSpec {
+	redacted := cloneSpec(spec)
+	if redacted == nil {
+		return nil
+	}
+	redacted.Name = redact.SensitiveText(redacted.Name)
+	redacted.Description = redact.SensitiveText(redacted.Description)
+	redacted.WhenToUse = redact.SensitiveText(redacted.WhenToUse)
+	for index := range redacted.Steps {
+		redacted.Steps[index] = redact.SensitiveText(redacted.Steps[index])
+	}
+	for index := range redacted.Pitfalls {
+		redacted.Pitfalls[index] = redact.SensitiveText(redacted.Pitfalls[index])
+	}
+	return redacted
+}
+
+func prepareReflectionField(value string) string {
+	return truncateReflectionField(redact.SensitiveText(value))
 }
 
 func applyReflection(

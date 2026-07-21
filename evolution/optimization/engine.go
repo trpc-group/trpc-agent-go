@@ -57,6 +57,8 @@ type iterationState struct {
 
 // Optimize runs reflective mutation, strict minibatch acceptance,
 // instance-level Pareto parent selection, and a final holdout comparison.
+// If optional submission or final recording fails after evaluation completes,
+// Optimize returns both the completed Result and the error.
 func (o *Optimizer) Optimize(
 	ctx context.Context,
 	req Request,
@@ -102,15 +104,16 @@ func (o *Optimizer) Optimize(
 		req, run.seed, best, baselineHoldout, candidateHoldout, result,
 	)
 	result.MetricCalls = run.budget.used
+	var submissionErr error
 	if req.Submit {
-		if err := o.submitCandidate(
-			runCtx, req, best, result,
-		); err != nil {
-			return nil, err
-		}
+		submissionErr = o.submitCandidate(runCtx, req, best, result)
 	}
-	if err := recorder.finish(result); err != nil {
-		return nil, fmt.Errorf("evolution optimization: finish experiment record: %w", err)
+	finishErr := recorder.finish(result)
+	if finishErr != nil {
+		finishErr = fmt.Errorf("evolution optimization: finish experiment record: %w", finishErr)
+	}
+	if submissionErr != nil || finishErr != nil {
+		return result, errors.Join(submissionErr, finishErr)
 	}
 	return result, nil
 }
@@ -545,6 +548,7 @@ func (o *Optimizer) submitCandidate(
 		},
 	})
 	if err != nil {
+		result.SubmissionReason = "revision submission failed: " + err.Error()
 		return fmt.Errorf("evolution optimization: submit revision: %w", err)
 	}
 	result.Revision = revision

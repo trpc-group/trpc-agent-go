@@ -17,12 +17,17 @@ import (
 	"strings"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 )
 
+const revisionEvidenceDeltaTolerance = 1e-9
+
 // RevisionRequest describes an evaluated skill candidate that should enter
 // the revision governance pipeline. External submissions are persisted for
-// approval and are never promoted directly to the live skill repository.
+// approval and are never promoted directly to the live skill repository. Spec
+// must contain a non-empty name, description, when-to-use condition, and at
+// least one non-empty step.
 type RevisionRequest struct {
 	Scope    skill.SkillScope
 	Source   string
@@ -85,6 +90,9 @@ func validateRevisionRequest(req RevisionRequest) (RevisionAction, error) {
 	if req.Spec == nil {
 		return "", errors.New("evolution: submit revision: nil skill spec")
 	}
+	if err := validateSubmittedSkillSpec(req.Spec); err != nil {
+		return "", fmt.Errorf("evolution: submit revision: invalid skill spec: %w", err)
+	}
 	action := req.Action
 	if action == "" {
 		action = RevisionActionUpdate
@@ -117,12 +125,39 @@ func validateRevisionEvidence(evidence *RevisionEvidence) error {
 		evidence.Delta < -1 || evidence.Delta > 1 {
 		return errors.New("delta must be finite and within [-1, 1]")
 	}
+	expectedDelta := evidence.CandidateScore - evidence.BaselineScore
+	if math.Abs(evidence.Delta-expectedDelta) > revisionEvidenceDeltaTolerance {
+		return fmt.Errorf(
+			"delta must equal candidate score minus baseline score: got %.17g, want %.17g",
+			evidence.Delta,
+			expectedDelta,
+		)
+	}
 	if evidence.CaseCount < 0 {
 		return errors.New("case count must not be negative")
 	}
 	for name, value := range evidence.Objectives {
 		if math.IsNaN(value) || math.IsInf(value, 0) {
 			return fmt.Errorf("objective %q must be finite", name)
+		}
+	}
+	return nil
+}
+
+func validateSubmittedSkillSpec(spec *SkillSpec) error {
+	switch {
+	case strings.TrimSpace(spec.Name) == "":
+		return errors.New("name is required")
+	case strings.TrimSpace(spec.Description) == "":
+		return errors.New("description is required")
+	case strings.TrimSpace(spec.WhenToUse) == "":
+		return errors.New("when_to_use is required")
+	case len(spec.Steps) == 0:
+		return errors.New("at least one step is required")
+	}
+	for index, step := range spec.Steps {
+		if strings.TrimSpace(step) == "" {
+			return fmt.Errorf("step %d is empty", index)
 		}
 	}
 	return nil
@@ -243,7 +278,12 @@ func (w *worker) holdSubmittedRevision(
 		Status:     string(rev.Status),
 		Reason:     "external candidate awaiting approval",
 	}); err != nil {
-		return nil, fmt.Errorf("evolution: submit revision: append audit: %w", err)
+		log.WarnfContext(
+			ctx,
+			"evolution: submit revision: append audit for revision %s failed after persistence: %v",
+			rev.RevisionID,
+			err,
+		)
 	}
 	return rev, nil
 }

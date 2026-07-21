@@ -29,7 +29,9 @@ const (
 )
 
 // Case is one immutable evaluation example. Evaluators may interpret Input,
-// Expected, and Metadata according to their task domain.
+// Expected, and Metadata according to their task domain. Sampled feedback
+// Input and Expected values cross the reflection-model boundary; all fields
+// are persisted when filesystem experiment recording is enabled.
 type Case struct {
 	ID       string            `json:"id"`
 	Input    string            `json:"input"`
@@ -39,10 +41,12 @@ type Case struct {
 }
 
 // Evaluation is an evaluator's result for one Case. Score must be finite and
-// normalized to [0, 1]. Feedback and Trace are consumed by the reflection
-// model; callers should redact secrets before returning them. Score is the
-// scalar metric used for search. Objectives are reported for analysis but do
-// not participate in candidate selection.
+// normalized to [0, 1]. Output, Feedback, and Trace cross the reflection-model
+// boundary for sampled feedback cases. The optimizer applies best-effort
+// credential redaction, but callers must remove domain-sensitive data from
+// these fields and from Case Input and Expected. Score is the scalar metric
+// used for search. Objectives are reported for analysis but do not participate
+// in candidate selection.
 type Evaluation struct {
 	CaseID     string             `json:"case_id"`
 	Score      float64            `json:"score"`
@@ -166,7 +170,11 @@ func WithTimeLimit(limit time.Duration) Option {
 	return func(o *options) { o.timeLimit = limit }
 }
 
-// WithStoreDir enables a filesystem experiment record under dir.
+// WithStoreDir enables a node-local filesystem experiment record under dir.
+// Records can contain dataset and evaluator data; experiment directories and
+// files use private permissions on permission-aware filesystems. Each
+// experiment has one writer, and this option does not provide distributed
+// coordination or remote durability.
 func WithStoreDir(dir string) Option {
 	return func(o *options) { o.storeDir = dir }
 }

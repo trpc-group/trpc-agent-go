@@ -184,6 +184,39 @@ func TestLLMReflectorChangesOnlySelectedComponent(t *testing.T) {
 	assert.Contains(t, modelStub.request.Messages[1].Content, "<untrusted_evaluation_records>")
 }
 
+func TestBuildReflectionPromptRedactsAllModelBoundText(t *testing.T) {
+	secret := "sk-" + "sensitive-reflection-123456789"
+	spec := testSeedSpec()
+	spec.Description = "api_key=" + secret
+	spec.WhenToUse = "use token " + secret
+	spec.Steps[0] = "send " + secret
+	spec.Pitfalls = []string{"never log " + secret}
+	cases := []Case{{
+		ID:       "feedback-1",
+		Input:    "input " + secret,
+		Expected: "expected " + secret,
+	}}
+	batch, err := newEvaluationBatch(cases, []Evaluation{{
+		CaseID:   "feedback-1",
+		Score:    0.2,
+		Output:   "output " + secret,
+		Feedback: "feedback " + secret,
+		Trace:    "trace " + secret,
+	}})
+	require.NoError(t, err)
+
+	prompt, err := buildReflectionPrompt(reflectionInput{
+		candidate:  spec,
+		component:  componentDescription,
+		evaluation: batch,
+	})
+	require.NoError(t, err)
+	assert.NotContains(t, prompt, secret)
+	assert.Contains(t, prompt, "[REDACTED]")
+	assert.Contains(t, spec.Description, secret, "redaction must not mutate the candidate")
+	assert.Contains(t, cases[0].Input, secret, "redaction must not mutate the dataset")
+}
+
 func TestNewValidatesOnlyUserFacingDependenciesAndOptions(t *testing.T) {
 	evaluator := &scoringEvaluator{}
 	modelStub := &reflectionModel{response: `{}`}

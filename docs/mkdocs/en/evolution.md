@@ -150,7 +150,9 @@ The optimizer:
 
 1. evaluates the seed skill on a validation split;
 2. evaluates a Pareto-selected parent on a feedback minibatch and sends the
-   score, output, evaluator feedback, and redacted trace to a reflection model;
+   current skill, case input and expected value, score, output, evaluator
+   feedback, and trace to a reflection model after best-effort credential
+   redaction;
 3. changes exactly one `SkillSpec` component and accepts the child only when it
    strictly improves the paired minibatch;
 4. tracks per-case validation winners and samples parents by instance-level
@@ -222,6 +224,12 @@ result, err := optimizer.Optimize(ctx, optimization.Request{
     },
 })
 if err != nil {
+    // Evaluation may already be complete when optional recording or revision
+    // submission fails. Preserve a non-nil result for diagnosis or retry.
+    if result != nil {
+        fmt.Printf("optimization %s completed but delivery failed: %v\n",
+            result.ExperimentID, err)
+    }
     return err
 }
 fmt.Printf("selected skill %q; validation=%.3f holdout=%.3f; promote=%t (%s)\n",
@@ -234,15 +242,34 @@ fmt.Printf("selected skill %q; validation=%.3f holdout=%.3f; promote=%t (%s)\n",
 ```
 
 The optimizer borrows the submitter. The application still owns and closes
-`evoSvc`.
+`evoSvc`. Once evaluation has completed, a recording or submission failure is
+returned together with the non-nil result, and `SubmissionReason` records a
+submission failure.
+
+`WithStoreDir` is an optional, node-local experiment recorder, distinct from
+the revision `CandidateStore`. Every run owns a UUID-named directory; on
+permission-aware filesystems, files use `0600` and directories use `0700`.
+Each persisted evaluator output, feedback, or trace field is capped at 16 KiB.
+It is not a distributed job coordinator or a remote durable store. Concurrent
+nodes may use the same POSIX-compatible shared root because experiments do not
+share directories, but exactly one node must write each experiment. On
+ephemeral or non-shared pod disks, upload the completed directory to
+application-owned durable storage. Revision `CandidateStore` and
+`ActivePointer` are pluggable, but their interface does not define a
+cross-backend transaction; a multi-node deployment must assign revision
+mutations to one owner or serialize them externally.
 
 Case IDs must be unique across splits. Scores must be finite and normalized to
 `[0,1]`. `PromotionEligible` and `PromotionReason` are populated even when
 `Submit` is false, so callers do not need to duplicate the holdout threshold
 and critical-case policy. Submission requires at least ten cases in each split.
-Keep holdout cases hidden from the search, redact secrets from feedback and
-traces, and run candidate agents without production credentials or
-side-effecting tools.
+Keep holdout cases hidden from the search. The optimizer applies the same
+best-effort credential-pattern redaction used by the online reviewer, but this
+does not identify tenant-specific sensitive data. Applications must sanitize
+the seed skill, case input and expected value, evaluator output, feedback, and
+trace before returning them, and run candidate agents without production
+credentials or side-effecting tools. Filesystem records also contain dataset
+metadata and these sanitized values.
 
 ## Review Policy
 

@@ -11,6 +11,7 @@ package evolution
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"math"
 	"path/filepath"
 	"sync"
@@ -24,6 +25,14 @@ import (
 type submissionPublisher struct {
 	mu      sync.Mutex
 	upserts int
+}
+
+type auditFailingCandidateStore struct {
+	CandidateStore
+}
+
+func (auditFailingCandidateStore) AppendAudit(context.Context, AuditEvent) error {
+	return errors.New("audit unavailable")
 }
 
 func (p *submissionPublisher) UpsertSkill(context.Context, *SkillSpec) error {
@@ -171,6 +180,32 @@ func TestSubmitRevisionValidatesRequestAndServiceState(t *testing.T) {
 		},
 	})
 	require.ErrorContains(t, err, "unsupported action")
+
+	valid := &SkillSpec{
+		Name:        "Valid",
+		Description: "Valid description.",
+		WhenToUse:   "Testing.",
+		Steps:       []string{"Do the work."},
+	}
+	tests := []struct {
+		name    string
+		mutate  func(*SkillSpec)
+		message string
+	}{
+		{"name", func(spec *SkillSpec) { spec.Name = " " }, "name is required"},
+		{"description", func(spec *SkillSpec) { spec.Description = "" }, "description is required"},
+		{"when to use", func(spec *SkillSpec) { spec.WhenToUse = "" }, "when_to_use is required"},
+		{"steps", func(spec *SkillSpec) { spec.Steps = nil }, "at least one step"},
+		{"empty step", func(spec *SkillSpec) { spec.Steps = []string{" "} }, "step 0 is empty"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			spec := cloneSkillSpec(valid)
+			test.mutate(spec)
+			_, submitErr := submitter.SubmitRevision(context.Background(), RevisionRequest{Spec: spec})
+			require.ErrorContains(t, submitErr, test.message)
+		})
+	}
 }
 
 func TestSubmissionCloneAndEvidenceNilPaths(t *testing.T) {
@@ -220,6 +255,9 @@ func TestRevisionEvidenceValidation(t *testing.T) {
 		{"baseline", &RevisionEvidence{BaselineScore: math.NaN()}, "baseline score"},
 		{"candidate", &RevisionEvidence{CandidateScore: 2}, "candidate score"},
 		{"delta", &RevisionEvidence{Delta: math.Inf(1)}, "delta"},
+		{"inconsistent delta", &RevisionEvidence{
+			BaselineScore: 0.9, CandidateScore: 0.1, Delta: 0.8,
+		}, "candidate score minus baseline score"},
 		{"cases", &RevisionEvidence{CaseCount: -1}, "case count"},
 		{"objective", &RevisionEvidence{Objectives: map[string]float64{"cost": math.NaN()}}, "objective"},
 	}
@@ -228,6 +266,30 @@ func TestRevisionEvidenceValidation(t *testing.T) {
 			require.ErrorContains(t, validateRevisionEvidence(test.evidence), test.message)
 		})
 	}
+}
+
+func TestSubmitRevisionTreatsAuditFailureAsCommitted(t *testing.T) {
+	ctx := context.Background()
+	baseStore := NewFileCandidateStore(filepath.Join(t.TempDir(), "candidates"))
+	store := auditFailingCandidateStore{CandidateStore: baseStore}
+	svc := NewService(nil, WithCandidateStore(store))
+	t.Cleanup(func() { require.NoError(t, svc.Close()) })
+
+	rev, err := revisionSubmitterForTest(t, svc).SubmitRevision(ctx, RevisionRequest{
+		Spec: &SkillSpec{
+			Name:        "Audit Failure",
+			Description: "A structurally valid candidate.",
+			WhenToUse:   "Testing audit persistence.",
+			Steps:       []string{"Submit the candidate."},
+		},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, rev)
+	assert.Equal(t, RevisionPendingApproval, rev.Status)
+
+	stored, err := baseStore.ReadRevision(ctx, rev.SkillID, rev.RevisionID)
+	require.NoError(t, err)
+	assert.Equal(t, RevisionPendingApproval, stored.Status)
 }
 
 func TestSubmitRevisionRequiresScopeForScopedService(t *testing.T) {

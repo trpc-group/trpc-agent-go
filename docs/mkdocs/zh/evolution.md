@@ -148,8 +148,9 @@ GEPA，但不依赖 DSPy、Python 或 companion process。
 优化器会：
 
 1. 先在 validation split 上评估 baseline skill；
-2. 按实例级 Pareto 选择 parent，在 feedback minibatch 上执行，并把 score、output、
-   evaluator feedback 和脱敏 trace 交给 reflection model；
+2. 按实例级 Pareto 选择 parent，在 feedback minibatch 上执行，并把当前 skill、case
+   input/expected、score、output、evaluator feedback 和 trace 经凭据模式脱敏后交给
+   reflection model；
 3. 每次只修改一个 `SkillSpec` component，且 child 只有在同一 minibatch、同一 seed
    下严格优于 parent 才进入候选池；
 4. 维护逐 case validation winner，并按 Pareto coverage 采样后续 parent；
@@ -216,6 +217,12 @@ result, err := optimizer.Optimize(ctx, optimization.Request{
     },
 })
 if err != nil {
+    // 可选的记录或 revision 提交失败时，评测可能已经完成；保留非 nil result，
+    // 便于诊断或重试交付动作。
+    if result != nil {
+        fmt.Printf("optimization %s completed but delivery failed: %v\n",
+            result.ExperimentID, err)
+    }
     return err
 }
 fmt.Printf("selected skill %q; validation=%.3f holdout=%.3f; promote=%t (%s)\n",
@@ -227,13 +234,27 @@ fmt.Printf("selected skill %q; validation=%.3f holdout=%.3f; promote=%t (%s)\n",
 )
 ```
 
-optimizer 只借用 submitter；`evoSvc` 的生命周期仍由应用管理并显式关闭。
+optimizer 只借用 submitter；`evoSvc` 的生命周期仍由应用管理并显式关闭。评测完成后，
+如果最终记录或提交失败，`Optimize` 会同时返回非 nil result 和 error；提交错误也会写入
+`SubmissionReason`。
+
+`WithStoreDir` 是可选的节点本地实验 recorder，与 revision 使用的 `CandidateStore`
+不是同一个概念。每次 run 独占一个 UUID 目录；在支持权限位的文件系统上，文件权限为
+`0600`、目录权限为 `0700`。持久化的每个 evaluator output、feedback、trace 字段最多
+保留 16 KiB。它不负责分布式任务协调，也不是远端持久存储。多个节点可以使用同一个兼容
+POSIX 的共享根目录，因为不同实验不会共用目录，但同一个实验只能由一个节点写入。如果
+Pod 磁盘是临时或不共享的，应用需要在实验完成后把目录上传到自己的持久存储。revision
+的 `CandidateStore` 和 `ActivePointer` 可以替换，但接口没有定义跨后端事务；多节点部署
+必须把 revision 变更交给单一 owner，或在 service 外部完成串行化。
 
 三个 split 的 case ID 不能重复，score 必须是 `[0,1]` 内的有限数值。提交 revision
 即使 `Submit=false`，结果也会填充 `PromotionEligible` 和 `PromotionReason`，调用方
 无需重复实现 holdout 阈值与 critical case 策略。提交 revision 时每个 split 至少需要
-10 个 case。holdout 必须对搜索不可见；feedback/trace 需要先
-脱敏；candidate agent 应在无生产凭据、无副作用工具的隔离环境中执行。
+10 个 case。holdout 必须对搜索不可见。optimizer 会执行与在线 Reviewer 相同的常见
+凭据模式脱敏，但无法识别租户特有的敏感数据；应用仍必须在返回前清洗 seed skill、case
+input/expected、evaluator output、feedback 和 trace。文件实验记录还会包含 dataset
+metadata 及上述已清洗字段。candidate agent 应在无生产凭据、无副作用工具的隔离环境中
+执行。
 
 ## 触发条件
 

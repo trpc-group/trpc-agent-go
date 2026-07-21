@@ -134,7 +134,8 @@ type Revision struct {
 // RevisionEvidence records reproducible evaluation evidence attached to an
 // externally submitted revision. Large traces stay in the experiment store;
 // the revision only carries the identifiers and aggregate scores required for
-// approval and audit.
+// approval and audit. Delta must equal CandidateScore minus BaselineScore
+// within floating-point tolerance.
 type RevisionEvidence struct {
 	ExperimentID   string             `json:"experiment_id,omitempty"`
 	DatasetID      string             `json:"dataset_id,omitempty"`

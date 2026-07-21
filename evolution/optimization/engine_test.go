@@ -10,12 +10,15 @@ package optimization
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -71,6 +74,15 @@ type stagedEvaluator struct {
 type recordingRevisionSubmitter struct {
 	delegate evolution.RevisionSubmitter
 	requests []evolution.RevisionRequest
+}
+
+type failingRevisionSubmitter struct{}
+
+func (failingRevisionSubmitter) SubmitRevision(
+	context.Context,
+	evolution.RevisionRequest,
+) (*evolution.Revision, error) {
+	return nil, errors.New("submission unavailable")
 }
 
 func (s *recordingRevisionSubmitter) SubmitRevision(
@@ -140,6 +152,7 @@ func TestOptimizerRunsReflectiveParetoLoopAndRecordsExperiment(t *testing.T) {
 	opts.maxIterations = 1
 	opts.reflectionBatchSize = 2
 	opts.storeDir = storeDir
+	opts.minimumHoldoutImprovement = 0.25
 	optimizer := &Optimizer{
 		reflector: improvingReflector{},
 		evaluator: evaluator,
@@ -172,10 +185,113 @@ func TestOptimizerRunsReflectiveParetoLoopAndRecordsExperiment(t *testing.T) {
 	assert.Equal(t, evaluator.calls[4].seed, evaluator.calls[5].seed,
 		"baseline and candidate holdout must be paired")
 
-	_, err = os.Stat(filepath.Join(storeDir, result.ExperimentID, "experiment.json"))
+	experimentDir := filepath.Join(storeDir, result.ExperimentID)
+	experimentPath := filepath.Join(experimentDir, "experiment.json")
+	_, err = os.Stat(experimentPath)
 	require.NoError(t, err)
-	_, err = os.Stat(filepath.Join(storeDir, result.ExperimentID, "result.json"))
+	_, err = os.Stat(filepath.Join(experimentDir, "result.json"))
 	require.NoError(t, err)
+
+	payload, err := os.ReadFile(experimentPath)
+	require.NoError(t, err)
+	var record experimentRecord
+	require.NoError(t, json.Unmarshal(payload, &record))
+	assert.Equal(t, 0.25, record.MinimumHoldoutImprovement)
+
+	if runtime.GOOS != "windows" {
+		for _, path := range []string{
+			experimentDir,
+			filepath.Join(experimentDir, "candidates"),
+			filepath.Join(experimentDir, "evaluations"),
+		} {
+			info, statErr := os.Stat(path)
+			require.NoError(t, statErr)
+			assert.Equal(t, os.FileMode(0o700), info.Mode().Perm(), path)
+		}
+		for _, path := range []string{
+			experimentPath,
+			filepath.Join(experimentDir, "result.json"),
+			filepath.Join(experimentDir, "events.jsonl"),
+		} {
+			info, statErr := os.Stat(path)
+			require.NoError(t, statErr)
+			assert.Equal(t, os.FileMode(0o600), info.Mode().Perm(), path)
+		}
+	}
+}
+
+func TestExperimentRecorderBoundsEvaluatorText(t *testing.T) {
+	root := t.TempDir()
+	recorder, err := newExperimentRecorder(root, "bounded")
+	require.NoError(t, err)
+	cases := []Case{{ID: "case-a"}}
+	oversized := strings.Repeat("界", storedEvaluationTextMaxBytes)
+	batch, err := newEvaluationBatch(cases, []Evaluation{{
+		CaseID:   "case-a",
+		Score:    1,
+		Output:   oversized,
+		Feedback: oversized,
+		Trace:    oversized,
+	}})
+	require.NoError(t, err)
+	require.NoError(t, recorder.recordEvaluation(
+		"validation",
+		&candidate{id: "candidate-a", spec: testSeedSpec()},
+		batch,
+		1,
+	))
+
+	paths, err := filepath.Glob(filepath.Join(root, "bounded", "evaluations", "*.json"))
+	require.NoError(t, err)
+	require.Len(t, paths, 1)
+	payload, err := os.ReadFile(paths[0])
+	require.NoError(t, err)
+	var record evaluationRecord
+	require.NoError(t, json.Unmarshal(payload, &record))
+	require.Len(t, record.Results, 1)
+	for _, value := range []string{
+		record.Results[0].Output,
+		record.Results[0].Feedback,
+		record.Results[0].Trace,
+	} {
+		assert.LessOrEqual(t, len(value), storedEvaluationTextMaxBytes)
+		assert.True(t, utf8.ValidString(value))
+		assert.Contains(t, value, storedTextTruncationMarker)
+	}
+}
+
+func TestOptimizerReturnsAndRecordsResultWhenSubmissionFails(t *testing.T) {
+	storeDir := t.TempDir()
+	opts := defaultOptions()
+	opts.maxIterations = 1
+	opts.reflectionBatchSize = 2
+	opts.storeDir = storeDir
+	opts.revisionSubmitter = failingRevisionSubmitter{}
+	optimizer := &Optimizer{
+		reflector: improvingReflector{},
+		evaluator: &scoringEvaluator{},
+		opts:      opts,
+	}
+	dataset := testDataset(10)
+	dataset.Feedback = makeCases("feedback", 10)
+	dataset.Validation = makeCases("validation", 10)
+
+	result, err := optimizer.Optimize(context.Background(), Request{
+		Seed:    testSeedSpec(),
+		Dataset: dataset,
+		Submit:  true,
+	})
+	require.ErrorContains(t, err, "submission unavailable")
+	require.NotNil(t, result)
+	assert.Contains(t, result.SubmissionReason, "submission unavailable")
+
+	payload, readErr := os.ReadFile(filepath.Join(
+		storeDir, result.ExperimentID, "result.json",
+	))
+	require.NoError(t, readErr)
+	var stored Result
+	require.NoError(t, json.Unmarshal(payload, &stored))
+	assert.Equal(t, result.SubmissionReason, stored.SubmissionReason)
 }
 
 func TestOptimizerRejectsCandidateWithoutStrictMinibatchImprovement(t *testing.T) {
