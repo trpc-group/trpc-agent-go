@@ -10,7 +10,7 @@
 [![Coverage](https://codecov.io/gh/trpc-group/trpc-agent-go/branch/main/graph/badge.svg)](https://app.codecov.io/gh/trpc-group/trpc-agent-go/tree/main)
 [![Documentation](https://img.shields.io/badge/Docs-Website-blue.svg)](https://trpc-group.github.io/trpc-agent-go/)
 
-<p>
+<p align="center">
   <a href="https://trendshift.io/repositories/15288">
     <img src="https://trendshift.io/api/badge/repositories/15288" alt="GitHub Trending #3 Repository Of The Day archived by Trendshift" width="250" height="55">
   </a>
