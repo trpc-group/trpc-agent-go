@@ -283,13 +283,16 @@ func requestPredecessorStepIDs(request *Request) []string {
 }
 
 func backwardGradientArraySchema(surfaceIDs []string) map[string]any {
+	surfaceIDSchema := map[string]any{
+		"type": "string",
+	}
+	if len(surfaceIDs) > 0 {
+		surfaceIDSchema["enum"] = surfaceIDs
+	}
 	itemSchema := map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"SurfaceID": map[string]any{
-				"type": "string",
-				"enum": surfaceIDs,
-			},
+			"SurfaceID": surfaceIDSchema,
 			"Severity": map[string]any{
 				"type": "string",
 				"enum": []string{
@@ -308,9 +311,8 @@ func backwardGradientArraySchema(surfaceIDs []string) map[string]any {
 	}
 	if len(surfaceIDs) == 0 {
 		return map[string]any{
-			"type":     "array",
-			"items":    itemSchema,
-			"maxItems": 0,
+			"type":  "array",
+			"items": itemSchema,
 		}
 	}
 	return map[string]any{
@@ -320,13 +322,16 @@ func backwardGradientArraySchema(surfaceIDs []string) map[string]any {
 }
 
 func backwardPropagationArraySchema(predecessorStepIDs []string) map[string]any {
+	predecessorStepIDSchema := map[string]any{
+		"type": "string",
+	}
+	if len(predecessorStepIDs) > 0 {
+		predecessorStepIDSchema["enum"] = predecessorStepIDs
+	}
 	itemSchema := map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"PredecessorStepID": map[string]any{
-				"type": "string",
-				"enum": predecessorStepIDs,
-			},
+			"PredecessorStepID": predecessorStepIDSchema,
 			"Gradients": map[string]any{
 				"type":     "array",
 				"minItems": 1,
@@ -356,9 +361,8 @@ func backwardPropagationArraySchema(predecessorStepIDs []string) map[string]any 
 	}
 	if len(predecessorStepIDs) == 0 {
 		return map[string]any{
-			"type":     "array",
-			"items":    itemSchema,
-			"maxItems": 0,
+			"type":  "array",
+			"items": itemSchema,
 		}
 	}
 	return map[string]any{

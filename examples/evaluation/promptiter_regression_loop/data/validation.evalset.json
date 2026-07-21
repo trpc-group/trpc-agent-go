@@ -1,0 +1,621 @@
+{
+  "evalSetId": "support-validation",
+  "name": "support-validation",
+  "passThreshold": 0.8,
+  "evalCases": [
+    {
+      "evalId": "validation_weather_unseen",
+      "tags": ["generalization", "optimizable"],
+      "conversation": [
+        {
+          "invocationId": "validation_weather_unseen-1",
+          "userContent": {
+            "role": "user",
+            "content": "广州现在天气怎么样？"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "广州当前小雨，24°C。"
+          },
+          "tools": [
+            {
+              "id": "expected-weather-guangzhou",
+              "name": "get_weather",
+              "arguments": {
+                "city": "广州"
+              },
+              "result": {
+                "condition": "小雨",
+                "temperatureC": 24
+              }
+            }
+          ]
+        }
+      ],
+      "expectations": {
+        "route": "weather_agent"
+      },
+      "fakeResponses": {
+        "baseline": {
+          "response": "上海当前晴，26°C。",
+          "tools": [
+            {
+              "id": "baseline-weather-guangzhou",
+              "name": "get_weather",
+              "arguments": {
+                "city": "上海"
+              },
+              "result": {
+                "condition": "晴",
+                "temperatureC": 26
+              }
+            }
+          ],
+          "route": "weather_agent",
+          "rubricScore": 0.2,
+          "rubricReason": "工具参数错误，复用了上海。",
+          "promptSemanticSha256": "3c789d0631455ed15c4b700f815fe13d7e052825105140b3cf0459f4a7800820",
+          "trace": [
+            {
+              "stepId": "validation-weather-baseline-route",
+              "kind": "route",
+              "name": "weather_agent",
+              "status": "completed",
+              "elapsedMs": 1
+            },
+            {
+              "stepId": "validation-weather-baseline",
+              "kind": "tool",
+              "name": "get_weather",
+              "status": "completed",
+              "elapsedMs": 6,
+              "input": {
+                "city": "上海"
+              },
+              "output": {
+                "condition": "晴",
+                "temperatureC": 26
+              }
+            },
+            {
+              "stepId": "validation-weather-baseline-final",
+              "kind": "final_response",
+              "status": "completed",
+              "elapsedMs": 12,
+              "message": "上海当前晴，26°C。",
+              "rubricScore": 0.2,
+              "rubricReason": "工具参数错误，复用了上海。",
+              "usage": {
+                "modelCalls": 1,
+                "toolCalls": 1,
+                "inputTokens": 42,
+                "outputTokens": 12,
+                "costUsd": 0,
+                "latencyMs": 12
+              }
+            }
+          ],
+          "usage": {
+            "modelCalls": 1,
+            "toolCalls": 1,
+            "inputTokens": 42,
+            "outputTokens": 12,
+            "costUsd": 0,
+            "latencyMs": 12
+          }
+        },
+        "candidate-overfit": {
+          "response": "上海当前晴，26°C。",
+          "tools": [
+            {
+              "id": "overfit-weather-guangzhou",
+              "name": "get_weather",
+              "arguments": {
+                "city": "上海"
+              },
+              "result": {
+                "condition": "晴",
+                "temperatureC": 26
+              }
+            }
+          ],
+          "route": "weather_agent",
+          "rubricScore": 0.2,
+          "rubricReason": "训练城市特例被错误复用于未见城市。",
+          "promptSemanticSha256": "87448623848fb0cb3fcfb04cd686bafe8c83eb1a1075e068edc34ac6c4683133",
+          "trace": [
+            {
+              "stepId": "validation-weather-overfit-route",
+              "kind": "route",
+              "name": "weather_agent",
+              "status": "completed",
+              "elapsedMs": 1
+            },
+            {
+              "stepId": "validation-weather-overfit",
+              "kind": "tool",
+              "name": "get_weather",
+              "status": "completed",
+              "elapsedMs": 6,
+              "input": {
+                "city": "上海"
+              },
+              "output": {
+                "condition": "晴",
+                "temperatureC": 26
+              }
+            },
+            {
+              "stepId": "validation-weather-overfit-final",
+              "kind": "final_response",
+              "status": "completed",
+              "elapsedMs": 12,
+              "message": "上海当前晴，26°C。",
+              "rubricScore": 0.2,
+              "rubricReason": "训练城市特例被错误复用于未见城市。",
+              "usage": {
+                "modelCalls": 1,
+                "toolCalls": 1,
+                "inputTokens": 71,
+                "outputTokens": 12,
+                "costUsd": 0,
+                "latencyMs": 12
+              }
+            }
+          ],
+          "usage": {
+            "modelCalls": 1,
+            "toolCalls": 1,
+            "inputTokens": 71,
+            "outputTokens": 12,
+            "costUsd": 0,
+            "latencyMs": 12
+          }
+        },
+        "candidate-balanced": {
+          "response": "广州当前小雨，24°C。",
+          "tools": [
+            {
+              "id": "balanced-weather-guangzhou",
+              "name": "get_weather",
+              "arguments": {
+                "city": "广州"
+              },
+              "result": {
+                "condition": "小雨",
+                "temperatureC": 24
+              }
+            }
+          ],
+          "route": "weather_agent",
+          "rubricScore": 1,
+          "rubricReason": "从当前请求提取城市，未复用训练样本。",
+          "promptSemanticSha256": "48188b412e0364151c49137c894668c234dddfb7e211b490e1057cfe10bfdc80",
+          "trace": [
+            {
+              "stepId": "validation-weather-balanced-route",
+              "kind": "route",
+              "name": "weather_agent",
+              "status": "completed",
+              "elapsedMs": 1
+            },
+            {
+              "stepId": "validation-weather-balanced",
+              "kind": "tool",
+              "name": "get_weather",
+              "status": "completed",
+              "elapsedMs": 6,
+              "input": {
+                "city": "广州"
+              },
+              "output": {
+                "condition": "小雨",
+                "temperatureC": 24
+              }
+            },
+            {
+              "stepId": "validation-weather-balanced-final",
+              "kind": "final_response",
+              "status": "completed",
+              "elapsedMs": 11,
+              "message": "广州当前小雨，24°C。",
+              "rubricScore": 1,
+              "rubricReason": "从当前请求提取城市，未复用训练样本。",
+              "usage": {
+                "modelCalls": 1,
+                "toolCalls": 1,
+                "inputTokens": 78,
+                "outputTokens": 12,
+                "costUsd": 0,
+                "latencyMs": 11
+              }
+            }
+          ],
+          "usage": {
+            "modelCalls": 1,
+            "toolCalls": 1,
+            "inputTokens": 78,
+            "outputTokens": 12,
+            "costUsd": 0,
+            "latencyMs": 11
+          }
+        }
+      }
+    },
+    {
+      "evalId": "validation_critical_refund",
+      "critical": true,
+      "tags": ["critical", "overfit_regression"],
+      "conversation": [
+        {
+          "invocationId": "validation_critical_refund-1",
+          "userContent": {
+            "role": "user",
+            "content": "已审核通过的退款什么时候到账？"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "审核通过后，退款将在 3 个工作日内到账。"
+          },
+          "tools": []
+        }
+      ],
+      "expectations": {
+        "route": "knowledge_search",
+        "requiredFacts": ["refund_sla_3_days"],
+        "minRetrievedDocuments": 1
+      },
+      "fakeResponses": {
+        "baseline": {
+          "response": "审核通过后，退款将在 3 个工作日内到账。",
+          "tools": [],
+          "route": "knowledge_search",
+          "retrievedFacts": ["refund_sla_3_days"],
+          "retrievedDocuments": 1,
+          "rubricScore": 1,
+          "rubricReason": "关键政策回答准确且有召回依据。",
+          "promptSemanticSha256": "3c789d0631455ed15c4b700f815fe13d7e052825105140b3cf0459f4a7800820",
+          "trace": [
+            {
+              "stepId": "validation-refund-baseline-route",
+              "kind": "route",
+              "name": "knowledge_search",
+              "status": "completed",
+              "elapsedMs": 1
+            },
+            {
+              "stepId": "validation-refund-baseline",
+              "kind": "retrieval",
+              "name": "knowledge_search",
+              "status": "completed",
+              "elapsedMs": 6,
+              "output": {
+                "documents": 1,
+                "facts": ["refund_sla_3_days"],
+                "matchedFacts": 1
+              }
+            },
+            {
+              "stepId": "validation-refund-baseline-final",
+              "kind": "final_response",
+              "status": "completed",
+              "elapsedMs": 10,
+              "message": "审核通过后，退款将在 3 个工作日内到账。",
+              "rubricScore": 1,
+              "rubricReason": "关键政策回答准确且有召回依据。",
+              "usage": {
+                "modelCalls": 1,
+                "toolCalls": 0,
+                "inputTokens": 48,
+                "outputTokens": 15,
+                "costUsd": 0,
+                "latencyMs": 10
+              }
+            }
+          ],
+          "usage": {
+            "modelCalls": 1,
+            "toolCalls": 0,
+            "inputTokens": 48,
+            "outputTokens": 15,
+            "costUsd": 0,
+            "latencyMs": 10
+          }
+        },
+        "candidate-overfit": {
+          "response": "退款时间无法确定，请咨询人工客服。",
+          "tools": [],
+          "route": "general_faq",
+          "retrievedFacts": [],
+          "retrievedDocuments": 0,
+          "rubricScore": 0.1,
+          "rubricReason": "激进规则导致关键退款 case 路由错误并丢失知识召回。",
+          "promptSemanticSha256": "87448623848fb0cb3fcfb04cd686bafe8c83eb1a1075e068edc34ac6c4683133",
+          "trace": [
+            {
+              "stepId": "validation-refund-overfit",
+              "kind": "route",
+              "name": "general_faq",
+              "status": "completed",
+              "elapsedMs": 2
+            },
+            {
+              "stepId": "validation-refund-overfit-final",
+              "kind": "final_response",
+              "status": "completed",
+              "elapsedMs": 8,
+              "message": "退款时间无法确定，请咨询人工客服。",
+              "rubricScore": 0.1,
+              "rubricReason": "激进规则导致关键退款 case 路由错误并丢失知识召回。",
+              "usage": {
+                "modelCalls": 1,
+                "toolCalls": 0,
+                "inputTokens": 77,
+                "outputTokens": 13,
+                "costUsd": 0,
+                "latencyMs": 8
+              }
+            }
+          ],
+          "usage": {
+            "modelCalls": 1,
+            "toolCalls": 0,
+            "inputTokens": 77,
+            "outputTokens": 13,
+            "costUsd": 0,
+            "latencyMs": 8
+          }
+        },
+        "candidate-balanced": {
+          "response": "审核通过后，退款将在 3 个工作日内到账。",
+          "tools": [],
+          "route": "knowledge_search",
+          "retrievedFacts": ["refund_sla_3_days"],
+          "retrievedDocuments": 1,
+          "rubricScore": 1,
+          "rubricReason": "通用知识路由规则保持关键政策回答准确。",
+          "promptSemanticSha256": "48188b412e0364151c49137c894668c234dddfb7e211b490e1057cfe10bfdc80",
+          "trace": [
+            {
+              "stepId": "validation-refund-balanced-route",
+              "kind": "route",
+              "name": "knowledge_search",
+              "status": "completed",
+              "elapsedMs": 1
+            },
+            {
+              "stepId": "validation-refund-balanced-retrieval",
+              "kind": "retrieval",
+              "name": "knowledge_search",
+              "status": "completed",
+              "elapsedMs": 6,
+              "output": {
+                "documents": 1,
+                "facts": ["refund_sla_3_days"],
+                "matchedFacts": 1
+              }
+            },
+            {
+              "stepId": "validation-refund-balanced-final",
+              "kind": "final_response",
+              "status": "completed",
+              "elapsedMs": 10,
+              "message": "审核通过后，退款将在 3 个工作日内到账。",
+              "rubricScore": 1,
+              "rubricReason": "通用知识路由规则保持关键政策回答准确。",
+              "usage": {
+                "modelCalls": 1,
+                "toolCalls": 0,
+                "inputTokens": 83,
+                "outputTokens": 15,
+                "costUsd": 0,
+                "latencyMs": 10
+              }
+            }
+          ],
+          "usage": {
+            "modelCalls": 1,
+            "toolCalls": 0,
+            "inputTokens": 83,
+            "outputTokens": 15,
+            "costUsd": 0,
+            "latencyMs": 10
+          }
+        }
+      }
+    },
+    {
+      "evalId": "validation_coupon_no_gain",
+      "tags": ["optimization_ineffective", "knowledge"],
+      "conversation": [
+        {
+          "invocationId": "validation_coupon_no_gain-1",
+          "userContent": {
+            "role": "user",
+            "content": "会员券可以和满减券叠加吗？"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "会员券不能与满减券叠加使用。"
+          },
+          "tools": []
+        }
+      ],
+      "expectations": {
+        "route": "knowledge_search",
+        "requiredFacts": ["coupon_stack_forbidden"],
+        "minRetrievedDocuments": 1
+      },
+      "fakeResponses": {
+        "baseline": {
+          "response": "优惠规则以结算页为准。",
+          "tools": [],
+          "route": "knowledge_search",
+          "retrievedFacts": [],
+          "retrievedDocuments": 1,
+          "rubricScore": 0.2,
+          "rubricReason": "检索未召回优惠券叠加规则，最终回复不明确。",
+          "promptSemanticSha256": "3c789d0631455ed15c4b700f815fe13d7e052825105140b3cf0459f4a7800820",
+          "trace": [
+            {
+              "stepId": "validation-coupon-baseline-route",
+              "kind": "route",
+              "name": "knowledge_search",
+              "status": "completed",
+              "elapsedMs": 1
+            },
+            {
+              "stepId": "validation-coupon-baseline",
+              "kind": "retrieval",
+              "name": "knowledge_search",
+              "status": "completed",
+              "elapsedMs": 5,
+              "output": {
+                "documents": 1,
+                "facts": [],
+                "matchedFacts": 0
+              }
+            },
+            {
+              "stepId": "validation-coupon-baseline-final",
+              "kind": "final_response",
+              "status": "completed",
+              "elapsedMs": 9,
+              "message": "优惠规则以结算页为准。",
+              "rubricScore": 0.2,
+              "rubricReason": "检索未召回优惠券叠加规则，最终回复不明确。",
+              "usage": {
+                "modelCalls": 1,
+                "toolCalls": 0,
+                "inputTokens": 44,
+                "outputTokens": 10,
+                "costUsd": 0,
+                "latencyMs": 9
+              }
+            }
+          ],
+          "usage": {
+            "modelCalls": 1,
+            "toolCalls": 0,
+            "inputTokens": 44,
+            "outputTokens": 10,
+            "costUsd": 0,
+            "latencyMs": 9
+          }
+        },
+        "candidate-overfit": {
+          "response": "优惠规则以结算页为准。",
+          "tools": [],
+          "route": "knowledge_search",
+          "retrievedFacts": [],
+          "retrievedDocuments": 1,
+          "rubricScore": 0.2,
+          "rubricReason": "训练特例未覆盖优惠券规则，检索仍无匹配事实。",
+          "promptSemanticSha256": "87448623848fb0cb3fcfb04cd686bafe8c83eb1a1075e068edc34ac6c4683133",
+          "trace": [
+            {
+              "stepId": "validation-coupon-overfit-route",
+              "kind": "route",
+              "name": "knowledge_search",
+              "status": "completed",
+              "elapsedMs": 1
+            },
+            {
+              "stepId": "validation-coupon-overfit-retrieval",
+              "kind": "retrieval",
+              "name": "knowledge_search",
+              "status": "completed",
+              "elapsedMs": 5,
+              "output": {
+                "documents": 1,
+                "facts": [],
+                "matchedFacts": 0
+              }
+            },
+            {
+              "stepId": "validation-coupon-overfit-final",
+              "kind": "final_response",
+              "status": "completed",
+              "elapsedMs": 9,
+              "message": "优惠规则以结算页为准。",
+              "rubricScore": 0.2,
+              "rubricReason": "训练特例未覆盖优惠券规则，检索仍无匹配事实。",
+              "usage": {
+                "modelCalls": 1,
+                "toolCalls": 0,
+                "inputTokens": 73,
+                "outputTokens": 10,
+                "costUsd": 0,
+                "latencyMs": 9
+              }
+            }
+          ],
+          "usage": {
+            "modelCalls": 1,
+            "toolCalls": 0,
+            "inputTokens": 73,
+            "outputTokens": 10,
+            "costUsd": 0,
+            "latencyMs": 9
+          }
+        },
+        "candidate-balanced": {
+          "response": "优惠规则以结算页为准。",
+          "tools": [],
+          "route": "knowledge_search",
+          "retrievedFacts": [],
+          "retrievedDocuments": 1,
+          "rubricScore": 0.2,
+          "rubricReason": "已重新执行候选，但检索仍未召回优惠券叠加规则。",
+          "promptSemanticSha256": "48188b412e0364151c49137c894668c234dddfb7e211b490e1057cfe10bfdc80",
+          "trace": [
+            {
+              "stepId": "validation-coupon-balanced-route",
+              "kind": "route",
+              "name": "knowledge_search",
+              "status": "completed",
+              "elapsedMs": 1
+            },
+            {
+              "stepId": "validation-coupon-balanced-retrieval",
+              "kind": "retrieval",
+              "name": "knowledge_search",
+              "status": "completed",
+              "elapsedMs": 5,
+              "output": {
+                "documents": 1,
+                "facts": [],
+                "matchedFacts": 0
+              }
+            },
+            {
+              "stepId": "validation-coupon-balanced-final",
+              "kind": "final_response",
+              "status": "completed",
+              "elapsedMs": 9,
+              "message": "优惠规则以结算页为准。",
+              "rubricScore": 0.2,
+              "rubricReason": "已重新执行候选，但检索仍未召回优惠券叠加规则。",
+              "usage": {
+                "modelCalls": 1,
+                "toolCalls": 0,
+                "inputTokens": 80,
+                "outputTokens": 10,
+                "costUsd": 0,
+                "latencyMs": 9
+              }
+            }
+          ],
+          "usage": {
+            "modelCalls": 1,
+            "toolCalls": 0,
+            "inputTokens": 80,
+            "outputTokens": 10,
+            "costUsd": 0,
+            "latencyMs": 9
+          }
+        }
+      }
+    }
+  ]
+}

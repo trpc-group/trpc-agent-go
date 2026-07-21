@@ -20,6 +20,7 @@ require (
 	github.com/panjf2000/ants/v2 v2.10.0
 	github.com/stretchr/testify v1.11.1
 	golang.org/x/sync v0.19.0
+	gopkg.in/yaml.v3 v3.0.1
 	trpc.group/trpc-go/trpc-agent-go v0.8.0
 	trpc.group/trpc-go/trpc-agent-go/model/provider v0.8.0
 	trpc.group/trpc-go/trpc-agent-go/storage/mysql v0.8.0
@@ -76,7 +77,6 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20251202230838-ff82c1b0f217 // indirect
 	google.golang.org/grpc v1.79.3 // indirect
 	google.golang.org/protobuf v1.36.10 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 	trpc.group/trpc-go/trpc-a2a-go v0.2.5 // indirect
 	trpc.group/trpc-go/trpc-agent-go/model/anthropic v0.8.0 // indirect
 	trpc.group/trpc-go/trpc-agent-go/model/gemini v0.8.1-0.20251222024650-ea147adf3d21 // indirect

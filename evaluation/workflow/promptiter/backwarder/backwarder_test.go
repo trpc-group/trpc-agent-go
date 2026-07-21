@@ -353,7 +353,7 @@ func TestBackwardUsesAllowedGradientSurfaceIDsInStructuredOutputSchema(t *testin
 	}
 }
 
-func TestBackwardStructuredOutputSchema_EmptyCollectionsStillDeclareItems(t *testing.T) {
+func TestBackwardStructuredOutputSchema_EmptyCollectionsUseCompatibleItems(t *testing.T) {
 	request := newInstructionRequest()
 	request.Surfaces = nil
 	request.Predecessors = nil
@@ -369,15 +369,47 @@ func TestBackwardStructuredOutputSchema_EmptyCollectionsStillDeclareItems(t *tes
 	if !ok {
 		return
 	}
-	assert.Equal(t, 0, gradientsSchema["maxItems"])
+	assert.NotContains(t, gradientsSchema, "maxItems")
 	assert.Contains(t, gradientsSchema, "items")
+	gradientItem, ok := gradientsSchema["items"].(map[string]any)
+	assert.True(t, ok)
+	if !ok {
+		return
+	}
+	gradientProps, ok := gradientItem["properties"].(map[string]any)
+	assert.True(t, ok)
+	if !ok {
+		return
+	}
+	gradientSurfaceIDSchema, ok := gradientProps["SurfaceID"].(map[string]any)
+	assert.True(t, ok)
+	if !ok {
+		return
+	}
+	assert.NotContains(t, gradientSurfaceIDSchema, "enum")
 	upstreamSchema, ok := schemaProps["Upstream"].(map[string]any)
 	assert.True(t, ok)
 	if !ok {
 		return
 	}
-	assert.Equal(t, 0, upstreamSchema["maxItems"])
+	assert.NotContains(t, upstreamSchema, "maxItems")
 	assert.Contains(t, upstreamSchema, "items")
+	upstreamItem, ok := upstreamSchema["items"].(map[string]any)
+	assert.True(t, ok)
+	if !ok {
+		return
+	}
+	upstreamProps, ok := upstreamItem["properties"].(map[string]any)
+	assert.True(t, ok)
+	if !ok {
+		return
+	}
+	predecessorSchema, ok := upstreamProps["PredecessorStepID"].(map[string]any)
+	assert.True(t, ok)
+	if !ok {
+		return
+	}
+	assert.NotContains(t, predecessorSchema, "enum")
 }
 
 func TestBackwardStructuredOutputSchema_EmptyAllowedGradientSurfaceIDsStayEmpty(t *testing.T) {
@@ -395,7 +427,7 @@ func TestBackwardStructuredOutputSchema_EmptyAllowedGradientSurfaceIDsStayEmpty(
 	if !ok {
 		return
 	}
-	assert.Equal(t, 0, gradientsSchema["maxItems"])
+	assert.NotContains(t, gradientsSchema, "maxItems")
 	gradientItem, ok := gradientsSchema["items"].(map[string]any)
 	assert.True(t, ok)
 	if !ok {
@@ -411,7 +443,7 @@ func TestBackwardStructuredOutputSchema_EmptyAllowedGradientSurfaceIDsStayEmpty(
 	if !ok {
 		return
 	}
-	assert.Equal(t, []string{}, gradientSurfaceIDSchema["enum"])
+	assert.NotContains(t, gradientSurfaceIDSchema, "enum")
 	upstreamSchema, ok := schemaProps["Upstream"].(map[string]any)
 	assert.True(t, ok)
 	if !ok {
