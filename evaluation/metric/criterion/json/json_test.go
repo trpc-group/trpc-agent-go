@@ -124,6 +124,20 @@ func TestJSONCriterionSchemaValidation(t *testing.T) {
 	assert.Contains(t, err.Error(), "json schema validation failed")
 }
 
+func TestJSONCriterionSchemaValidationWithDecodedString(t *testing.T) {
+	criterion := &JSONCriterion{
+		Schema:        `{"type":"string"}`,
+		MatchStrategy: JSONMatchStrategySkip,
+	}
+	ok, err := criterion.Match("Paris", nil)
+	assert.True(t, ok)
+	assert.NoError(t, err)
+	ok, err = criterion.Match(float64(1), nil)
+	assert.False(t, ok)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "json schema validation failed")
+}
+
 func TestJSONCriterionSchemaRejectsInvalidSchema(t *testing.T) {
 	criterion := &JSONCriterion{Schema: `{`}
 	ok, err := criterion.Match(json.RawMessage(`{"answer":"Paris"}`), json.RawMessage(`{}`))

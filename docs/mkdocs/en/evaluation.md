@@ -1013,7 +1013,17 @@ type JSONCriterion struct {
 type JSONMatchStrategy string
 ```
 
-During comparison, `actual` is the actual value and `expected` is the expected value. When `Compare` is provided from code, JSONCriterion uses that custom logic directly. Otherwise, `valid` first validates whether actual is a complete and strict legal JSON document, `schema` validates actual against JSON Schema structure and field constraints, and `matchStrategy` then decides whether to run built-in JSON value matching. Currently, `matchStrategy` supports `exact` and `skip`, with a default of `exact`; `exact` compares JSON values structurally, and `skip` skips built-in JSON value matching. If you only want JSON validity validation or Schema validation without comparing against expected, configure `valid: true` or `schema`, and set `matchStrategy: "skip"`. Object comparison requires identical key sets. Array comparison requires identical length and order. Numeric comparison supports a tolerance, default `1e-6`. `ignoreTree` ignores unstable fields; a leaf node set to true ignores that field and its subtree. `onlyTree` compares only selected fields; keys not present in the tree are ignored. A leaf node set to true compares that field and its subtree. `onlyTree` and `ignoreTree` cannot be set at the same time when both are non-empty.
+During comparison, `actual` is the actual value and `expected` is the expected value. JSONCriterion runs in this order:
+
+1. If `Compare` is provided from code, JSONCriterion uses that custom logic directly and does not run the built-in `valid`, `schema`, or `matchStrategy` logic.
+2. If `Compare` is not provided, JSONCriterion runs `valid` validation first, then `schema` validation, and finally uses `matchStrategy` to decide whether to run built-in JSON value matching.
+3. If you only want JSON validity validation or Schema validation without comparing against `expected`, configure `valid: true` or `schema`, and set `matchStrategy: "skip"`.
+
+The `schema` field itself is a serialized JSON Schema string. The `actual` value is validated as its runtime value: `json.RawMessage` and `[]byte` are parsed as raw JSON first, while a Go `string` is validated as an already decoded string value. Empty `schema` disables Schema validation; invalid schema text or actual validation failure returns `(false, error)`.
+
+Currently, `matchStrategy` supports `exact` and `skip`, with a default of `exact`. `exact` compares JSON values structurally, and `skip` skips built-in JSON value matching. Object comparison requires identical key sets. Array comparison requires identical length and order. Numeric comparison supports a tolerance, default `1e-6`.
+
+`ignoreTree` ignores unstable fields; a leaf node set to true ignores that field and its subtree. `onlyTree` compares only selected fields; keys not present in the tree are ignored. A leaf node set to true compares that field and its subtree. `onlyTree` and `ignoreTree` cannot be set at the same time when both are non-empty.
 
 Example configuration ignores `id` and `metadata.timestamp`, and relaxes numeric tolerance.
 

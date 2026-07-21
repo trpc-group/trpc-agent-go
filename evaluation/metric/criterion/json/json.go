@@ -11,6 +11,7 @@
 package json
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -145,11 +146,9 @@ func validateJSONSchema(actual any, schemaText string) error {
 func schemaValue(value any) (any, error) {
 	switch v := value.(type) {
 	case json.RawMessage:
-		return jsonschema.UnmarshalJSON(strings.NewReader(string(v)))
-	case string:
-		return jsonschema.UnmarshalJSON(strings.NewReader(v))
+		return jsonschema.UnmarshalJSON(bytes.NewReader(v))
 	case []byte:
-		return jsonschema.UnmarshalJSON(strings.NewReader(string(v)))
+		return jsonschema.UnmarshalJSON(bytes.NewReader(v))
 	default:
 		return value, nil
 	}
