@@ -130,33 +130,30 @@ func executeRound(
 ) (*roundExecution, error) {
 	startedAt := time.Now()
 	execution := &roundExecution{attempt: request.attempt}
+	defer func() {
+		execution.duration = time.Since(startedAt)
+	}()
 	engine, err := request.runtime.engineForAttempt(ctx, request.candidatePrompt, request.attempt)
 	if err != nil {
-		execution.duration = time.Since(startedAt)
 		return execution, err
 	}
 	result, err := engine.Run(ctx, buildRunRequest(request.cfg, request.acceptedProfile))
 	if err != nil {
-		execution.duration = time.Since(startedAt)
 		return execution, fmt.Errorf("run PromptIter attempt %d: %w", request.attempt, err)
 	}
 	if result == nil {
-		execution.duration = time.Since(startedAt)
 		return execution, fmt.Errorf("run PromptIter attempt %d returned nil result", request.attempt)
 	}
 	execution.result = result
 	if len(result.Rounds) != oneRound {
-		execution.duration = time.Since(startedAt)
 		return execution, fmt.Errorf("attempt %d returned %d rounds, want one", request.attempt, len(result.Rounds))
 	}
 	candidateTrain, err := request.runtime.evaluateProfile(
 		ctx, request.cfg.TrainEvalSetID, result.Rounds[0].OutputProfile,
 	)
 	if err != nil {
-		execution.duration = time.Since(startedAt)
 		return execution, fmt.Errorf("evaluate candidate train attempt %d: %w", request.attempt, err)
 	}
-	execution.duration = time.Since(startedAt)
 	execution.candidateTrain = candidateTrain
 	return execution, nil
 }
@@ -167,7 +164,6 @@ func buildRunRequest(cfg *config, profile *promptiter.Profile) *promptiterengine
 		Validation:        []promptiterengine.EvalSetInput{{EvalSetID: cfg.ValidationEvalSetID}},
 		InitialProfile:    profile,
 		EvaluationOptions: promptiterengine.EvaluationOptions{EvalCaseParallelism: caseParallelism},
-		AcceptancePolicy:  promptiterengine.AcceptancePolicy{MinScoreGain: cfg.Gate.MinValidationScoreGain},
 		MaxRounds:         oneRound,
 		TargetSurfaceIDs:  []string{cfg.TargetSurfaceID},
 	}

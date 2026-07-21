@@ -113,12 +113,12 @@ func Attribute(result *EvaluationResult, catalog AttributionCatalog) Attribution
 	}
 	for _, evalCase := range result.Cases {
 		nonPassingMetrics := 0
-		for _, metric := range evalCase.Metrics {
-			if metric.Status == status.EvalStatusPassed {
+		for _, metricResult := range evalCase.Metrics {
+			if metricResult.Status == status.EvalStatusPassed {
 				continue
 			}
 			nonPassingMetrics++
-			item := attributeMetric(evalCase, metric, catalog.MetricKinds[metric.Name])
+			item := attributeMetric(evalCase, metricResult, catalog.MetricKinds[metricResult.Name])
 			output.Items = append(output.Items, item)
 			output.Summary.TotalFailures++
 			output.Summary.AttributedFailures++

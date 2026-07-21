@@ -21,6 +21,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
 	atrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
@@ -244,6 +245,8 @@ func TestLoadConfigAppliesDefaults(t *testing.T) {
 	cfg, err := loadConfig(configPath)
 	require.NoError(t, err)
 	assert.Equal(t, defaultTimeout, time.Duration(cfg.Timeout))
+	assert.Equal(t, filepath.ToSlash(filepath.Clean(configPath)), cfg.ConfigPath)
+	assert.Equal(t, filepath.Dir(filepath.Clean(configPath)), cfg.DataDir)
 	assert.Equal(t, filepath.Join(filepath.Dir(configPath), "baseline_prompt.txt"), cfg.BaselinePromptSource)
 	assert.Len(t, cfg.ConfigSHA256, 64)
 }
@@ -398,6 +401,101 @@ func TestPipelineErrorHelpers(t *testing.T) {
 	assert.ErrorContains(t, err, "is nil")
 	_, err = compileProfileOptions(nil, &promptiter.Profile{})
 	assert.Error(t, err)
+}
+
+func TestCompileProfileOptionsAppliesInstructionPatch(t *testing.T) {
+	snapshot := testInstructionSnapshot("baseline")
+	compiled, err := compileProfileOptions(snapshot, nil)
+	require.NoError(t, err)
+	require.Len(t, compiled, 1)
+	assert.True(t, agent.NewRunOptions(compiled...).ExecutionTraceEnabled)
+
+	compiled, err = compileProfileOptions(snapshot, &promptiter.Profile{
+		StructureID: snapshot.StructureID,
+		Overrides: []promptiter.SurfaceOverride{{
+			SurfaceID: snapshot.Surfaces[0].SurfaceID,
+			Value:     promptValue("candidate"),
+		}},
+	})
+	require.NoError(t, err)
+	require.Len(t, compiled, 2)
+	assert.NotNil(t, agent.NewRunOptions(compiled...).CustomAgentConfigs)
+
+	compiled, err = compileProfileOptions(snapshot, &promptiter.Profile{Overrides: []promptiter.SurfaceOverride{{
+		SurfaceID: snapshot.Surfaces[0].SurfaceID, Value: promptValue("baseline"),
+	}}})
+	require.NoError(t, err)
+	assert.Len(t, compiled, 1)
+}
+
+func TestCompileProfileOptionsRejectsInvalidStructureAndProfile(t *testing.T) {
+	snapshot := testInstructionSnapshot("baseline")
+	duplicate := *snapshot
+	duplicate.Surfaces = append(append([]astructure.Surface(nil), snapshot.Surfaces...), snapshot.Surfaces[0])
+	tests := []struct {
+		name     string
+		snapshot *astructure.Snapshot
+		profile  *promptiter.Profile
+	}{
+		{name: "nil snapshot", profile: &promptiter.Profile{}},
+		{name: "empty structure id", snapshot: &astructure.Snapshot{}, profile: &promptiter.Profile{}},
+		{name: "duplicate surface", snapshot: &duplicate, profile: &promptiter.Profile{}},
+		{name: "structure mismatch", snapshot: snapshot, profile: &promptiter.Profile{StructureID: "other"}},
+		{name: "empty override", snapshot: snapshot, profile: &promptiter.Profile{Overrides: []promptiter.SurfaceOverride{{}}}},
+		{name: "unknown override", snapshot: snapshot, profile: &promptiter.Profile{Overrides: []promptiter.SurfaceOverride{{SurfaceID: "unknown"}}}},
+		{name: "duplicate override", snapshot: snapshot, profile: &promptiter.Profile{Overrides: []promptiter.SurfaceOverride{
+			{SurfaceID: snapshot.Surfaces[0].SurfaceID, Value: promptValue("one")},
+			{SurfaceID: snapshot.Surfaces[0].SurfaceID, Value: promptValue("two")},
+		}}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := compileProfileOptions(test.snapshot, test.profile)
+			assert.Error(t, err)
+		})
+	}
+}
+
+func TestCompileProfileOptionsRejectsInvalidInstructionValues(t *testing.T) {
+	snapshot := testInstructionSnapshot("baseline")
+	syntax := astructure.PromptSyntaxSingleBrace
+	values := []astructure.SurfaceValue{
+		{},
+		{Text: stringPointer("candidate"), PromptSyntax: &syntax},
+		{Text: stringPointer("candidate"), FewShot: []astructure.FewShotExample{{}}},
+		{Text: stringPointer("candidate"), Model: &astructure.ModelRef{Name: "model"}},
+		{Text: stringPointer("candidate"), Tools: []astructure.ToolRef{{ID: "tool"}}},
+		{Text: stringPointer("candidate"), Skills: []astructure.SkillRef{{ID: "skill"}}},
+	}
+	for index, value := range values {
+		_, err := compileProfileOptions(snapshot, &promptiter.Profile{Overrides: []promptiter.SurfaceOverride{{
+			SurfaceID: snapshot.Surfaces[0].SurfaceID, Value: value,
+		}}})
+		assert.Error(t, err, "invalid value %d", index)
+	}
+
+	nonInstruction := testInstructionSnapshot("baseline")
+	nonInstruction.Surfaces[0].Type = astructure.SurfaceTypeGlobalInstruction
+	_, err := compileProfileOptions(nonInstruction, &promptiter.Profile{Overrides: []promptiter.SurfaceOverride{{
+		SurfaceID: nonInstruction.Surfaces[0].SurfaceID, Value: promptValue("candidate"),
+	}}})
+	assert.Error(t, err)
+}
+
+func testInstructionSnapshot(text string) *astructure.Snapshot {
+	return &astructure.Snapshot{
+		StructureID: "structure", EntryNodeID: candidateAgentName,
+		Nodes: []astructure.Node{{NodeID: candidateAgentName, Kind: astructure.NodeKindLLM}},
+		Surfaces: []astructure.Surface{{
+			SurfaceID: astructure.SurfaceID(candidateAgentName, astructure.SurfaceTypeInstruction),
+			NodeID:    candidateAgentName, Type: astructure.SurfaceTypeInstruction,
+			Value: astructure.SurfaceValue{Text: stringPointer(text)},
+		}},
+	}
+}
+
+func stringPointer(value string) *string {
+	return &value
 }
 
 func TestBuildRoundReportRejectsIncompleteArtifacts(t *testing.T) {

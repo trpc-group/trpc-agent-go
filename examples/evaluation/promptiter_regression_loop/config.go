@@ -78,9 +78,10 @@ func loadConfig(path string) (*config, error) {
 	if err := requireJSONEOF(decoder); err != nil {
 		return nil, fmt.Errorf("decode config: %w", err)
 	}
-	cfg.ConfigPath = filepath.Clean(path)
+	cleanPath := filepath.Clean(path)
+	cfg.ConfigPath = filepath.ToSlash(cleanPath)
 	cfg.ConfigSHA256 = fmt.Sprintf("%x", sha256.Sum256(data))
-	cfg.DataDir = filepath.Dir(cfg.ConfigPath)
+	cfg.DataDir = filepath.Dir(cleanPath)
 	if cfg.Timeout == 0 {
 		cfg.Timeout = durationValue(defaultTimeout)
 	}

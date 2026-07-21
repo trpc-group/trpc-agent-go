@@ -26,7 +26,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 	promptiterengine "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/engine"
 	"trpc.group/trpc-go/trpc-agent-go/examples/evaluation/promptiter_regression_loop/internal/regression"
-	"trpc.group/trpc-go/trpc-agent-go/internal/profilecompiler"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
@@ -128,11 +127,7 @@ func (r *promptIterRuntime) evaluateProfile(
 	if err != nil {
 		return nil, fmt.Errorf("export candidate structure: %w", err)
 	}
-	structure, err := profilecompiler.NewStructure(snapshot)
-	if err != nil {
-		return nil, fmt.Errorf("create candidate structure: %w", err)
-	}
-	compiled, err := compileProfileOptions(structure, profile)
+	compiled, err := compileProfileOptions(snapshot, profile)
 	if err != nil {
 		return nil, err
 	}
@@ -149,30 +144,88 @@ func (r *promptIterRuntime) evaluateProfile(
 }
 
 func compileProfileOptions(
-	structure *profilecompiler.Structure,
+	snapshot *astructure.Snapshot,
 	profile *promptiter.Profile,
 ) ([]agent.RunOption, error) {
-	if structure == nil {
+	surfaces, err := indexProfileSurfaces(snapshot)
+	if err != nil {
+		return nil, err
+	}
+	options := []agent.RunOption{agent.WithExecutionTraceEnabled(true)}
+	if profile == nil {
+		return options, nil
+	}
+	if profile.StructureID != "" && profile.StructureID != snapshot.StructureID {
+		return nil, fmt.Errorf("profile structure id %q does not match structure id %q",
+			profile.StructureID, snapshot.StructureID)
+	}
+	seen := make(map[string]struct{}, len(profile.Overrides))
+	for _, override := range profile.Overrides {
+		if override.SurfaceID == "" {
+			return nil, errors.New("profile override surface id is empty")
+		}
+		if _, ok := seen[override.SurfaceID]; ok {
+			return nil, fmt.Errorf("duplicate profile override surface id %q", override.SurfaceID)
+		}
+		seen[override.SurfaceID] = struct{}{}
+		surface, ok := surfaces[override.SurfaceID]
+		if !ok {
+			return nil, fmt.Errorf("profile override references unknown surface id %q", override.SurfaceID)
+		}
+		text, err := instructionOverrideText(surface, override.Value)
+		if err != nil {
+			return nil, fmt.Errorf("validate profile override %q: %w", override.SurfaceID, err)
+		}
+		if *surface.Value.Text == text {
+			continue
+		}
+		var patch agent.SurfacePatch
+		patch.SetInstruction(text)
+		options = append(options, agent.WithSurfacePatchForNode(surface.NodeID, patch))
+	}
+	return options, nil
+}
+
+func indexProfileSurfaces(snapshot *astructure.Snapshot) (map[string]astructure.Surface, error) {
+	if snapshot == nil {
 		return nil, errors.New("candidate structure is nil")
 	}
-	var converted *profilecompiler.Profile
-	if profile != nil {
-		converted = &profilecompiler.Profile{StructureID: profile.StructureID}
-		for _, override := range profile.Overrides {
-			converted.Overrides = append(converted.Overrides, profilecompiler.SurfaceOverride{
-				SurfaceID: override.SurfaceID, Value: override.Value,
-			})
+	if snapshot.StructureID == "" {
+		return nil, errors.New("candidate structure id is empty")
+	}
+	index := make(map[string]astructure.Surface, len(snapshot.Surfaces))
+	for _, surface := range snapshot.Surfaces {
+		if surface.SurfaceID == "" {
+			return nil, errors.New("candidate surface id is empty")
 		}
+		if surface.NodeID == "" {
+			return nil, fmt.Errorf("candidate surface %q node id is empty", surface.SurfaceID)
+		}
+		if _, ok := index[surface.SurfaceID]; ok {
+			return nil, fmt.Errorf("duplicate candidate surface id %q", surface.SurfaceID)
+		}
+		index[surface.SurfaceID] = surface
 	}
-	normalized, err := structure.NormalizeProfile(converted)
-	if err != nil {
-		return nil, fmt.Errorf("normalize candidate profile: %w", err)
+	return index, nil
+}
+
+func instructionOverrideText(surface astructure.Surface, value astructure.SurfaceValue) (string, error) {
+	if surface.Type != astructure.SurfaceTypeInstruction {
+		return "", fmt.Errorf("surface type %q is unsupported", surface.Type)
 	}
-	options, err := profilecompiler.CompileRunOptions(normalized, true)
-	if err != nil {
-		return nil, fmt.Errorf("compile candidate profile: %w", err)
+	if surface.Value.Text == nil {
+		return "", errors.New("baseline instruction text is nil")
 	}
-	return append(options, profilecompiler.WithProfile(normalized)), nil
+	if value.Text == nil {
+		return "", errors.New("instruction text is nil")
+	}
+	if value.PromptSyntax != nil {
+		return "", errors.New("instruction prompt syntax is not nil")
+	}
+	if len(value.FewShot) > 0 || value.Model != nil || len(value.Tools) > 0 || len(value.Skills) > 0 {
+		return "", errors.New("instruction value contains non-text fields")
+	}
+	return *value.Text, nil
 }
 
 func (r *promptIterRuntime) Close() error {

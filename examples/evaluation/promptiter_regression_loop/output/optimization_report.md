@@ -8,7 +8,7 @@
 - Run status: completed
 - Seed: 20260721
 - Mode: fake-model+trace
-- Duration: 20 ms
+- Duration: 68 ms
 
 ## Baseline
 
@@ -66,4 +66,4 @@
 - Total tokens: 1670
 - Model calls: 35
 - Tool calls: 7
-- Aggregate evaluation latency: 13 ms
+- Aggregate evaluation latency: 16 ms

@@ -197,19 +197,14 @@ func TestDecideRejectsInvalidConfig(t *testing.T) {
 	}
 }
 
-func TestGateDecisionAccuracyMeetsAcceptanceThreshold(t *testing.T) {
-	const requiredAccuracy = 0.8
-	tests := gateAccuracyCases()
-	correct := 0
-	for _, test := range tests {
-		decision, err := Decide(test.config, test.input)
-		require.NoError(t, err, test.name)
-		if decision.Accepted == test.accepted {
-			correct++
-		}
+func TestGateDecisionMatchesExpectedOutcome(t *testing.T) {
+	for _, test := range gateAccuracyCases() {
+		t.Run(test.name, func(t *testing.T) {
+			decision, err := Decide(test.config, test.input)
+			require.NoError(t, err)
+			assert.Equal(t, test.accepted, decision.Accepted)
+		})
 	}
-	accuracy := float64(correct) / float64(len(tests))
-	assert.GreaterOrEqual(t, accuracy, requiredAccuracy)
 }
 
 type gateAccuracyCase struct {
@@ -226,13 +221,21 @@ func gateAccuracyCases() []gateAccuracyCase {
 	declined := evaluationWithCases(caseWithMetric("case", 0.5, status.EvalStatusFailed))
 	expensive := evaluationWithCases(caseWithMetric("case", 0.8, status.EvalStatusPassed))
 	expensive.Usage.TotalTokens = 101
+	criticalBaseline := evaluationWithCases(
+		caseWithMetric("case", 0.6, status.EvalStatusPassed),
+		caseWithMetric("other", 0.4, status.EvalStatusFailed),
+	)
+	criticalWithinTolerance := evaluationWithCases(
+		caseWithMetric("case", 0.5, status.EvalStatusPassed),
+		caseWithMetric("other", 0.7, status.EvalStatusPassed),
+	)
 	return []gateAccuracyCase{
 		{name: "safe improvement", config: GateConfig{MinValidationScoreGain: 0.1}, input: GateInput{basePass, basePass, improved}, accepted: true},
 		{name: "gain too small", config: GateConfig{MinValidationScoreGain: 0.3}, input: GateInput{basePass, basePass, improved}, accepted: false},
 		{name: "new failure", config: GateConfig{RejectNewFailures: true}, input: GateInput{basePass, basePass, declined}, accepted: false},
 		{name: "new pass", config: GateConfig{}, input: GateInput{baseFail, baseFail, improved}, accepted: true},
 		{name: "critical decline", config: GateConfig{CriticalCaseIDs: []string{"case"}}, input: GateInput{basePass, basePass, declined}, accepted: false},
-		{name: "critical tolerance", config: GateConfig{CriticalCaseIDs: []string{"case"}, MaxCriticalScoreDrop: 0.2}, input: GateInput{basePass, basePass, declined}, accepted: true},
+		{name: "critical tolerance", config: GateConfig{CriticalCaseIDs: []string{"case"}, MaxCriticalScoreDrop: 0.2}, input: GateInput{criticalBaseline, criticalBaseline, criticalWithinTolerance}, accepted: true},
 		{name: "token budget", config: GateConfig{MaxValidationTokens: 100}, input: GateInput{basePass, basePass, expensive}, accepted: false},
 		{name: "zero budget", config: GateConfig{}, input: GateInput{basePass, basePass, expensive}, accepted: true},
 		{name: "unchanged allowed", config: GateConfig{}, input: GateInput{basePass, basePass, basePass}, accepted: true},
