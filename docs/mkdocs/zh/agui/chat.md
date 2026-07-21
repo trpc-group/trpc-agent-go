@@ -242,6 +242,8 @@ server, _ := agui.New(runner, agui.WithAGUIRunnerOptions(aguirunner.WithUserIDRe
 
 `AppNameResolver` 返回非空字符串时，会使用该值作为本次请求的 `AppName`；返回空字符串时，会回退到 `agui.WithAppName(name)`。实时对话、消息快照和取消路由会复用同一套解析逻辑，因此同一会话的相关请求需要解析出一致的 `AppName`。
 
+解析得到的 `AppName` 是 AG-UI 请求的规范会话边界。实时对话运行时，AG-UI 会把该值作为 `agent.WithAppName` 传给底层 Runner，使底层 Runner 的 session key 与 AG-UI track、消息快照和取消路由保持一致。
+
 开启消息快照功能时，需要配置 `agui.WithAppName(name)` 作为默认值。
 
 ```go
@@ -274,6 +276,8 @@ server, _ := agui.New(
 ## 自定义 `RunOptionResolver`
 
 `RunOptionResolver` 用于为本次 Agent 运行补充 [`agent.RunOption`](https://github.com/trpc-group/trpc-agent-go/blob/main/agent/invocation.go)。它会在每次请求处理时执行，返回的选项只作用于当前这次运行。AG-UI runner 会在自定义 resolver 返回后，继续把请求里的 `input.Tools` 映射为调用方执行的工具。
+
+不要通过 `RunOptionResolver` 返回 `agent.WithAppName` 配置 AG-UI 会话归属。AG-UI 的 `AppName` 应由 `agui.WithAppName` 或 `agui.WithAppNameResolver` 提供；当解析出的 `AppName` 非空时，它会覆盖 `RunOptionResolver` 中设置的 `agent.WithAppName`。
 
 ```go
 import (

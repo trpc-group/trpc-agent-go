@@ -1520,6 +1520,88 @@ func TestRunUsesResolvedAppNameForTrackKey(t *testing.T) {
 	}
 }
 
+func TestRunUsesResolvedAppNameForUnderlyingRunner(t *testing.T) {
+	var gotOptions agent.RunOptions
+	underlying := &fakeRunner{
+		run: func(ctx context.Context, userID, sessionID string, message model.Message,
+			opts ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			gotOptions = agent.NewRunOptions(opts...)
+			ch := make(chan *agentevent.Event)
+			close(ch)
+			return ch, nil
+		},
+	}
+	r := New(
+		underlying,
+		WithAppName("static-app"),
+		WithAppNameResolver(forwardedPropsAppNameResolver),
+	)
+	input := &adapter.RunAgentInput{
+		ThreadID:       "thread",
+		RunID:          "run",
+		ForwardedProps: map[string]any{"appName": "dynamic-app"},
+		Messages:       []types.Message{{ID: "user-msg-1", Role: types.RoleUser, Content: "hi"}},
+	}
+	ch, err := r.Run(context.Background(), input)
+	require.NoError(t, err)
+	collectEvents(t, ch)
+	assert.Equal(t, "dynamic-app", gotOptions.AppName)
+}
+
+func TestRunUsesStaticAppNameForUnderlyingRunner(t *testing.T) {
+	var gotOptions agent.RunOptions
+	underlying := &fakeRunner{
+		run: func(ctx context.Context, userID, sessionID string, message model.Message,
+			opts ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			gotOptions = agent.NewRunOptions(opts...)
+			ch := make(chan *agentevent.Event)
+			close(ch)
+			return ch, nil
+		},
+	}
+	r := New(underlying, WithAppName("static-app"))
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{ID: "user-msg-1", Role: types.RoleUser, Content: "hi"}},
+	}
+	ch, err := r.Run(context.Background(), input)
+	require.NoError(t, err)
+	collectEvents(t, ch)
+	assert.Equal(t, "static-app", gotOptions.AppName)
+}
+
+func TestRunResolvedAppNameOverridesRunOptionResolverAppName(t *testing.T) {
+	var gotOptions agent.RunOptions
+	underlying := &fakeRunner{
+		run: func(ctx context.Context, userID, sessionID string, message model.Message,
+			opts ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			gotOptions = agent.NewRunOptions(opts...)
+			ch := make(chan *agentevent.Event)
+			close(ch)
+			return ch, nil
+		},
+	}
+	r := New(
+		underlying,
+		WithAppName("static-app"),
+		WithAppNameResolver(forwardedPropsAppNameResolver),
+		WithRunOptionResolver(func(context.Context, *adapter.RunAgentInput) ([]agent.RunOption, error) {
+			return []agent.RunOption{agent.WithAppName("custom-app")}, nil
+		}),
+	)
+	input := &adapter.RunAgentInput{
+		ThreadID:       "thread",
+		RunID:          "run",
+		ForwardedProps: map[string]any{"appName": "dynamic-app"},
+		Messages:       []types.Message{{ID: "user-msg-1", Role: types.RoleUser, Content: "hi"}},
+	}
+	ch, err := r.Run(context.Background(), input)
+	require.NoError(t, err)
+	collectEvents(t, ch)
+	assert.Equal(t, "dynamic-app", gotOptions.AppName)
+}
+
 func TestRunAppNameResolverError(t *testing.T) {
 	underlying := &fakeRunner{}
 	r := &runner{
