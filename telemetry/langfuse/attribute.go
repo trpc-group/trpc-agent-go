@@ -75,6 +75,25 @@ func (u *usageDetails) empty() bool {
 	return *u == (usageDetails{})
 }
 
+// normalized returns mutually exclusive usage buckets as required by Langfuse.
+//
+// OpenAI-compatible and Gemini providers report cached tokens as a subset of
+// input tokens. Anthropic and Bedrock report cache reads and cache creation as
+// separate buckets, and their adapters also populate InputCached as a cache-read
+// compatibility alias.
+func (u usageDetails) normalized() usageDetails {
+	if u.InputCacheRead != 0 || u.InputCacheCreation != 0 {
+		// Prefer provider-specific buckets and drop the duplicate compatibility alias.
+		u.InputCached = 0
+		return u
+	}
+
+	// Langfuse flat usage details must not overlap. Keep cached input in its own
+	// bucket and convert the inclusive provider input count to the uncached remainder.
+	u.Input = max(u.Input-u.InputCached, 0)
+	return u
+}
+
 // observationInputPrompt is the Langfuse observation.input shape.
 //
 // tools is passed through as raw JSON from gen_ai.request.tool.definitions.
