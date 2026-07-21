@@ -17,11 +17,18 @@ import (
 
 	evalresultinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult/inmemory"
 	evalsetinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/inmemory"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator"
+	operatorregistry "trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/registry"
+	llmtemplate "trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/template"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/registry"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
+	criterionllm "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/llm"
 	metricinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/inmemory"
 	metricregistry "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/registry"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/service"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/usersimulation"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 type stubService struct{}
@@ -60,9 +67,30 @@ func (stubEvalCaseResultAggregator) Aggregate(context.Context, *service.EvalCase
 	return &service.EvalCaseResultAggregationResult{}, nil
 }
 
+type evaluationTemplateScorer struct{}
+
+func (evaluationTemplateScorer) ScoreBasedOnResponse(context.Context, *model.Response,
+	*metric.EvalMetric) (*evaluator.ScoreResult, error) {
+	return &evaluator.ScoreResult{
+		Score:  0.85,
+		Reason: "evaluation scorer",
+	}, nil
+}
+
+func evaluationTemplateMetric(responseScorerName string) *metric.EvalMetric {
+	return &metric.EvalMetric{
+		Criterion: &criterion.Criterion{
+			LLMJudge: &criterionllm.LLMCriterion{
+				Template: &criterionllm.JudgeTemplateOptions{
+					ResponseScorerName: responseScorerName,
+				},
+			},
+		},
+	}
+}
+
 func TestNewOptionsDefaults(t *testing.T) {
 	opts := newOptions()
-
 	assert.Equal(t, defaultNumRuns, opts.numRuns)
 	assert.NotNil(t, opts.evalSetManager)
 	assert.NotNil(t, opts.evalResultManager)
@@ -101,14 +129,34 @@ func TestWithMetricManager(t *testing.T) {
 func TestWithRegistry(t *testing.T) {
 	custom := registry.New()
 	opts := newOptions(WithRegistry(custom))
+	assert.Equal(t, custom, opts.registry)
+}
 
+func TestWithLLMOperatorRegistry(t *testing.T) {
+	operatorRegistry := operatorregistry.New()
+	err := operatorRegistry.RegisterResponseScorer("evaluation_score", evaluationTemplateScorer{})
+	assert.NoError(t, err)
+	opts := newOptions(WithLLMOperatorRegistry(operatorRegistry))
+	templateEval, err := opts.registry.Get(llmtemplate.EvaluatorName)
+	assert.NoError(t, err)
+	scorer, ok := templateEval.(interface {
+		ScoreBasedOnResponse(context.Context, *model.Response, *metric.EvalMetric) (*evaluator.ScoreResult, error)
+	})
+	assert.True(t, ok)
+	result, err := scorer.ScoreBasedOnResponse(context.Background(), &model.Response{}, evaluationTemplateMetric("evaluation_score"))
+	assert.NoError(t, err)
+	assert.Equal(t, 0.85, result.Score)
+}
+
+func TestWithRegistryOverridesLLMOperatorRegistryWhenLast(t *testing.T) {
+	custom := registry.New()
+	opts := newOptions(WithLLMOperatorRegistry(operatorregistry.New()), WithRegistry(custom))
 	assert.Equal(t, custom, opts.registry)
 }
 
 func TestWithMetricRegistry(t *testing.T) {
 	custom := metricregistry.New()
 	opts := newOptions(WithMetricRegistry(custom))
-
 	assert.Equal(t, custom, opts.metricRegistry)
 }
 

@@ -100,8 +100,14 @@ func TestCloneEvalMetric_DeepCopiesJudgeTemplate(t *testing.T) {
 		Criterion: &criterion.Criterion{
 			LLMJudge: &criterionllm.LLMCriterion{
 				Template: &criterionllm.JudgeTemplateOptions{
-					Prompt:             "Question: {{question}}",
-					ResponseScorerName: "single_score",
+					Prompt:               "Question: {{question}}",
+					ResponseScorerName:   "single_score",
+					StructuredOutputName: "single_score_schema",
+					ResponseScorerOptions: &criterionllm.ResponseScorerOptions{
+						Categories: []*criterionllm.CategoryScore{
+							{Label: "correct", Score: 1},
+						},
+					},
 					VariableBindings: []*criterionllm.TemplateVariableBinding{
 						{
 							TemplateVariable: "question",
@@ -127,12 +133,16 @@ func TestCloneEvalMetric_DeepCopiesJudgeTemplate(t *testing.T) {
 	require.NotNil(t, dst.Criterion.LLMJudge.Template)
 	dst.Criterion.LLMJudge.Template.Prompt = "changed"
 	assert.Equal(t, "Question: {{question}}", src.Criterion.LLMJudge.Template.Prompt)
+	dst.Criterion.LLMJudge.Template.StructuredOutputName = "changed"
+	assert.Equal(t, "single_score_schema", src.Criterion.LLMJudge.Template.StructuredOutputName)
 	dst.Criterion.LLMJudge.Template.VariableBindings[0].TemplateVariable = "changed"
 	assert.Equal(t, "question", src.Criterion.LLMJudge.Template.VariableBindings[0].TemplateVariable)
 	dst.Criterion.LLMJudge.Template.VariableBindings[0].Source.Scope = criterionllm.TemplateVariableScopeExpected
 	assert.Equal(t, criterionllm.TemplateVariableScopeActual, src.Criterion.LLMJudge.Template.VariableBindings[0].Source.Scope)
 	dst.Criterion.LLMJudge.Template.VariableBindings[0].Source.Selector.NodeID = "changed"
 	assert.Equal(t, "ignored", src.Criterion.LLMJudge.Template.VariableBindings[0].Source.Selector.NodeID)
+	dst.Criterion.LLMJudge.Template.ResponseScorerOptions.Categories[0].Label = "changed"
+	assert.Equal(t, "correct", src.Criterion.LLMJudge.Template.ResponseScorerOptions.Categories[0].Label)
 }
 
 func TestCloneTemplateVariableHelpersHandleNil(t *testing.T) {

@@ -12,12 +12,11 @@ package template
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
-	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/internal/templateresolver"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/messagesconstructor"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/messagesconstructor/internal/content"
+	operatorregistry "trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/registry"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	metricllm "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/llm"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -25,11 +24,29 @@ import (
 )
 
 type templateMessagesConstructor struct {
+	operatorRegistry operatorregistry.Registry
+}
+
+// Option configures the template messages constructor.
+type Option func(*templateMessagesConstructor)
+
+// WithOperatorRegistry sets the LLM operator registry.
+func WithOperatorRegistry(registry operatorregistry.Registry) Option {
+	return func(c *templateMessagesConstructor) {
+		c.operatorRegistry = registry
+	}
 }
 
 // New returns a messages constructor for template prompts.
-func New() messagesconstructor.MessagesConstructor {
-	return &templateMessagesConstructor{}
+func New(opt ...Option) messagesconstructor.MessagesConstructor {
+	c := &templateMessagesConstructor{}
+	for _, o := range opt {
+		o(c)
+	}
+	if c.operatorRegistry == nil {
+		c.operatorRegistry = operatorregistry.New()
+	}
+	return c
 }
 
 // ConstructMessages renders the configured judge template into a user message.
@@ -39,10 +56,10 @@ func (c *templateMessagesConstructor) ConstructMessages(ctx context.Context, act
 	if err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(templateOptions.Prompt) == "" {
+	if templateOptions.Prompt == "" {
 		return nil, fmt.Errorf("template prompt is empty")
 	}
-	if strings.TrimSpace(templateOptions.ResponseScorerName) == "" {
+	if templateOptions.ResponseScorerName == "" {
 		return nil, fmt.Errorf("template responseScorerName is empty")
 	}
 	values, err := resolveTemplateValues(actuals, expecteds, templateOptions.VariableBindings)
@@ -64,14 +81,14 @@ func (c *templateMessagesConstructor) ConstructMessages(ctx context.Context, act
 	}}, nil
 }
 
-// StructuredOutput returns the structured output schema for the configured response scorer.
+// StructuredOutput returns the configured structured output schema.
 func (c *templateMessagesConstructor) StructuredOutput(ctx context.Context, actuals, expecteds []*evalset.Invocation,
 	evalMetric *metric.EvalMetric) (*model.StructuredOutput, error) {
-	templateOptions, err := judgeTemplateOptions(evalMetric)
-	if err != nil {
+	operators, err := c.operatorRegistry.Resolve(evalMetric)
+	if err != nil || operators.StructuredOutputProvider == nil {
 		return nil, err
 	}
-	return templateresolver.StructuredOutput(templateOptions.ResponseScorerName)
+	return operators.StructuredOutputProvider.StructuredOutput(ctx, actuals, expecteds, evalMetric)
 }
 
 func judgeTemplateOptions(evalMetric *metric.EvalMetric) (*metricllm.JudgeTemplateOptions, error) {
@@ -92,7 +109,7 @@ func resolveTemplateValues(actuals, expecteds []*evalset.Invocation,
 		if binding == nil {
 			return nil, fmt.Errorf("template binding is nil")
 		}
-		name := strings.TrimSpace(binding.TemplateVariable)
+		name := binding.TemplateVariable
 		if name == "" {
 			return nil, fmt.Errorf("templateVariable is empty")
 		}
@@ -170,7 +187,7 @@ func resolveExpectedValue(expecteds []*evalset.Invocation, source *metricllm.Tem
 func resolveTraceStepSnapshot(actuals []*evalset.Invocation, source *metricllm.TemplateVariableSource, input bool) (string, error) {
 	nodeID := ""
 	if source.Selector != nil {
-		nodeID = strings.TrimSpace(source.Selector.NodeID)
+		nodeID = source.Selector.NodeID
 	}
 	if nodeID == "" {
 		return "", fmt.Errorf("trace selector nodeID is required")
@@ -196,7 +213,7 @@ func resolveTraceStepSnapshot(actuals []*evalset.Invocation, source *metricllm.T
 	if input {
 		snapshot = step.Input
 	}
-	if snapshot == nil || strings.TrimSpace(snapshot.Text) == "" {
+	if snapshot == nil || snapshot.Text == "" {
 		return "", fmt.Errorf("trace snapshot is empty for %s.%s nodeID %q at invocation index %d",
 			source.Scope, source.Field, nodeID, index)
 	}

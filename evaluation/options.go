@@ -17,6 +17,7 @@ import (
 	evalresultinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	evalsetinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/inmemory"
+	operatorregistry "trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/registry"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/registry"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	metricinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/inmemory"
@@ -101,6 +102,13 @@ func WithMetricManager(m metric.Manager) Option {
 func WithRegistry(r registry.Registry) Option {
 	return func(o *options) {
 		o.registry = r
+	}
+}
+
+// WithLLMOperatorRegistry sets the operator registry used by the default template LLM evaluator.
+func WithLLMOperatorRegistry(r operatorregistry.Registry) Option {
+	return func(o *options) {
+		o.registry = registry.New(registry.WithLLMOperatorRegistry(r))
 	}
 }
 

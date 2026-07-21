@@ -71,9 +71,25 @@ type JudgeModelOptions struct {
 type JudgeTemplateOptions struct {
 	Prompt                   string                     `json:"prompt,omitempty"`
 	ResponseScorerName       string                     `json:"responseScorerName,omitempty"`
+	StructuredOutputName     string                     `json:"structuredOutputName,omitempty"`
+	ResponseScorerOptions    *ResponseScorerOptions     `json:"responseScorerOptions,omitempty"`
 	VariableBindings         []*TemplateVariableBinding `json:"variableBindings,omitempty"`
 	SampleAggregatorName     string                     `json:"sampleAggregatorName,omitempty"`
 	InvocationAggregatorName string                     `json:"invocationAggregatorName,omitempty"`
+}
+
+// ResponseScorerOptions configures template response scoring.
+type ResponseScorerOptions struct {
+	// Categories maps categorical labels to numeric scores.
+	Categories []*CategoryScore `json:"categories,omitempty"`
+}
+
+// CategoryScore maps one categorical label to a numeric score.
+type CategoryScore struct {
+	// Label identifies the category.
+	Label string `json:"label,omitempty"`
+	// Score is the numeric score mapped from the category.
+	Score float64 `json:"score"`
 }
 
 // TemplateVariableBinding binds one template variable to one evaluation source.

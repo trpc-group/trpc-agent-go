@@ -19,7 +19,13 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	evalresultinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult/inmemory"
 	evalsetinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/inmemory"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator"
+	operatorregistry "trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/registry"
+	llmtemplate "trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/template"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/registry"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
+	criterionllm "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/llm"
 	metricregistry "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/registry"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/usersimulation"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -94,6 +100,28 @@ func TestWithRegistry(t *testing.T) {
 	assert.Equal(t, custom, opts.Registry)
 }
 
+func TestWithLLMOperatorRegistry(t *testing.T) {
+	operatorRegistry := operatorregistry.New()
+	err := operatorRegistry.RegisterResponseScorer("service_score", serviceTemplateScorer{})
+	assert.NoError(t, err)
+	opts := NewOptions(WithLLMOperatorRegistry(operatorRegistry))
+	templateEval, err := opts.Registry.Get(llmtemplate.EvaluatorName)
+	assert.NoError(t, err)
+	scorer, ok := templateEval.(interface {
+		ScoreBasedOnResponse(context.Context, *model.Response, *metric.EvalMetric) (*evaluator.ScoreResult, error)
+	})
+	assert.True(t, ok)
+	result, err := scorer.ScoreBasedOnResponse(context.Background(), &model.Response{}, serviceTemplateMetric("service_score"))
+	assert.NoError(t, err)
+	assert.Equal(t, 0.8, result.Score)
+}
+
+func TestWithRegistryOverridesLLMOperatorRegistryWhenLast(t *testing.T) {
+	custom := registry.New()
+	opts := NewOptions(WithLLMOperatorRegistry(operatorregistry.New()), WithRegistry(custom))
+	assert.Equal(t, custom, opts.Registry)
+}
+
 func TestWithMetricRegistry(t *testing.T) {
 	custom := metricregistry.New()
 	opts := NewOptions(WithMetricRegistry(custom))
@@ -159,4 +187,26 @@ func TestWithEvalCaseParallelInferenceEnabled(t *testing.T) {
 func TestWithEvalCaseParallelEvaluationEnabled(t *testing.T) {
 	opts := NewOptions(WithEvalCaseParallelEvaluationEnabled(true))
 	assert.True(t, opts.EvalCaseParallelEvaluationEnabled)
+}
+
+type serviceTemplateScorer struct{}
+
+func (serviceTemplateScorer) ScoreBasedOnResponse(context.Context, *model.Response,
+	*metric.EvalMetric) (*evaluator.ScoreResult, error) {
+	return &evaluator.ScoreResult{
+		Score:  0.8,
+		Reason: "service scorer",
+	}, nil
+}
+
+func serviceTemplateMetric(responseScorerName string) *metric.EvalMetric {
+	return &metric.EvalMetric{
+		Criterion: &criterion.Criterion{
+			LLMJudge: &criterionllm.LLMCriterion{
+				Template: &criterionllm.JudgeTemplateOptions{
+					ResponseScorerName: responseScorerName,
+				},
+			},
+		},
+	}
 }

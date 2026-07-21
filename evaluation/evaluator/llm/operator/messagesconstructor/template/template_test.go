@@ -17,8 +17,8 @@ import (
 
 	agenttrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
-	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/internal/templateresolver"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/messagesconstructor"
+	operatorregistry "trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/registry"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
 	criterionllm "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/llm"
@@ -200,7 +200,7 @@ func TestStructuredOutputResolvesResponseScorerSchema(t *testing.T) {
 	require.NotNil(t, output.JSONSchema)
 	assert.Equal(t, "single_score_result", output.JSONSchema.Name)
 	evalMetric := buildTemplateEvalMetric("Answer: {{answer}}", nil)
-	evalMetric.Criterion.LLMJudge.Template.ResponseScorerName = templateresolver.ResponseScorerRubricScoresName
+	evalMetric.Criterion.LLMJudge.Template.ResponseScorerName = operatorregistry.ResponseScorerRubricScoresName
 	output, err = constructor.StructuredOutput(context.Background(), nil, nil, evalMetric)
 	require.NoError(t, err)
 	require.NotNil(t, output)
@@ -411,7 +411,7 @@ func TestResolveTraceStepErrors(t *testing.T) {
 					NodeID: " ",
 				},
 			},
-			wantErr: "trace selector nodeID is required",
+			wantErr: `trace step not found for actual.traceStepOutput nodeID " " at invocation index 0`,
 		},
 		{
 			name: "no matching step",
@@ -459,7 +459,7 @@ func buildTemplateEvalMetric(promptText string,
 			LLMJudge: &criterionllm.LLMCriterion{
 				Template: &criterionllm.JudgeTemplateOptions{
 					Prompt:             promptText,
-					ResponseScorerName: templateresolver.ResponseScorerSingleScoreName,
+					ResponseScorerName: operatorregistry.ResponseScorerSingleScoreName,
 					VariableBindings:   bindings,
 				},
 			},
