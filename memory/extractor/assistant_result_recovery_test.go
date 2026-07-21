@@ -73,6 +73,9 @@ func TestExtractor_RecoversStructuredAssistantResult(t *testing.T) {
 		},
 	}
 	e := NewExtractor(m, WithAssistantResultExtraction(true)).(*memoryExtractor)
+	existing := []*memory.Entry{{
+		Memory: &memory.Memory{Memory: "Existing result must stay out of recovery."},
+	}}
 
 	primary, assistantResults, err := e.ExtractOperationStages(
 		context.Background(),
@@ -81,7 +84,7 @@ func TestExtractor_RecoversStructuredAssistantResult(t *testing.T) {
 			model.NewAssistantMessage("* Dr. Arati Prabhakar\n* ITER\n" +
 				"* Livermore National Laboratory"),
 		},
-		nil,
+		existing,
 	)
 
 	require.NoError(t, err)
@@ -93,6 +96,10 @@ func TestExtractor_RecoversStructuredAssistantResult(t *testing.T) {
 	assert.Contains(t, m.requests[1].Tools, assistantResultAddToolName)
 	assert.Contains(t, m.requests[1].Messages[0].Content,
 		"<assistant_result_recovery>")
+	assert.NotContains(t, m.requests[1].Messages[0].Content,
+		"Existing result must stay out of recovery.")
+	assert.NotContains(t, m.requests[1].Messages[0].Content,
+		"<existing_memories>")
 	assert.Equal(t, model.RoleUser,
 		m.requests[1].Messages[len(m.requests[1].Messages)-1].Role)
 }
