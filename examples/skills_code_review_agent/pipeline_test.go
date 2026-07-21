@@ -207,8 +207,10 @@ func TestPipelineSandboxFailFixture(t *testing.T) {
 	if len(review.SandboxRuns) != 1 || review.SandboxRuns[0].Status != "failed" {
 		t.Fatalf("sandbox runs = %+v", review.SandboxRuns)
 	}
-	if len(review.PermissionDecisions) < 2 {
-		t.Fatalf("permission decisions = %d, want at least 2", len(review.PermissionDecisions))
+	for _, d := range review.PermissionDecisions {
+		if d.Action == "deny" {
+			t.Fatalf("clean fixture must not record synthetic denials: %+v", review.PermissionDecisions)
+		}
 	}
 }
 

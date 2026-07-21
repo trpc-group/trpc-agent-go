@@ -19,7 +19,9 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/examples/skills_code_review_agent/internal/diff"
 	"trpc.group/trpc-go/trpc-agent-go/examples/skills_code_review_agent/internal/findings"
+	"trpc.group/trpc-go/trpc-agent-go/examples/skills_code_review_agent/internal/redact"
 	"trpc.group/trpc-go/trpc-agent-go/examples/skills_code_review_agent/internal/sandbox"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
@@ -109,10 +111,15 @@ func Run(ctx context.Context, opts Options) ([]findings.Finding, error) {
 
 	content := collectAssistantText(events)
 
-	// 結構化後的llm評論
-	items, err := ParseFindings(content)
+	reviewed, err := diff.ParseUnifiedDiff(opts.DiffRaw)
 	if err != nil {
-		return nil, err
+		// Diff already parsed by pipeline; treat as no LLM findings rather than abort.
+		return nil, nil
+	}
+	items, err := ParseFindings(content, reviewed)
+	if err != nil {
+		// Malformed model JSON must not fail the whole review task.
+		return nil, nil
 	}
 	return items, nil
 }
@@ -152,7 +159,7 @@ func buildUserPrompt(opts Options) string {
 		b.WriteString("\n")
 	}
 	b.WriteString("Unified diff:\n```diff\n")
-	b.WriteString(opts.DiffRaw)
+	b.WriteString(redact.RedactString(opts.DiffRaw))
 	b.WriteString("\n```\n")
 	return b.String()
 }

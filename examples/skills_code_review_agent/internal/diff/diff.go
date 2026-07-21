@@ -13,7 +13,6 @@ package diff
 
 import (
 	"bufio"
-	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
@@ -183,38 +182,30 @@ func LoadFromFile(path string) (*Diff, error) {
 	return ParseUnifiedDiff(string(data))
 }
 
-// LoadFromRepo loads git workspace changes from a repository path.
-// 从git仓库加载变更
+// LoadFromRepo loads the final working-tree diff against HEAD.
+// A single `git diff HEAD` describes worktree+index versus HEAD coherently;
+// concatenating unstaged and cached diffs does not match any one repository state.
 func LoadFromRepo(repoPath string) (*Diff, error) {
 	repoPath = filepath.Clean(repoPath)
 	if !isGitRepo(repoPath) {
 		return nil, fmt.Errorf("repo path is not a git repository")
 	}
-	var buf bytes.Buffer
-	for _, args := range [][]string{
-		{"diff"},
-		{"diff", "--cached"},
-	} {
-		cmd := exec.Command("git", args...)
-		cmd.Dir = repoPath
-		out, err := cmd.Output() // 执行命令
-		if err != nil {
-			if exitErr, ok := err.(*exec.ExitError); ok && len(exitErr.Stderr) > 0 {
-				return nil, fmt.Errorf("git %v failed: %s", args, string(exitErr.Stderr))
-			}
-			return nil, fmt.Errorf("git %v failed: %w", args, err)
+	cmd := exec.Command("git", "diff", "HEAD", "--")
+	cmd.Dir = repoPath
+	out, err := cmd.Output()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok && len(exitErr.Stderr) > 0 {
+			return nil, fmt.Errorf("git diff HEAD failed: %s", string(exitErr.Stderr))
 		}
-		if len(out) > 0 {
-			buf.Write(out)
-			if !bytes.HasSuffix(out, []byte("\n")) {
-				buf.WriteByte('\n')
-			}
-		}
+		return nil, fmt.Errorf("git diff HEAD failed: %w", err)
 	}
-	if buf.Len() == 0 {
+	if len(out) > maxDiffBytes {
+		return nil, fmt.Errorf("diff too large: %d > %d", len(out), maxDiffBytes)
+	}
+	if len(out) == 0 {
 		return &Diff{}, nil
 	}
-	return ParseUnifiedDiff(buf.String())
+	return ParseUnifiedDiff(string(out))
 }
 
 // AllHunks returns flattened hunks across all files.
@@ -260,6 +251,34 @@ func (d *Diff) ChangedFiles() []string {
 	return files
 }
 
+// HasAddedLine reports whether file:line is an added line in this diff.
+func (d *Diff) HasAddedLine(file string, line int) bool {
+	if d == nil || line <= 0 {
+		return false
+	}
+	clean, err := SanitizeRepoRelativePath(file)
+	if err != nil {
+		return false
+	}
+	for _, f := range d.Files {
+		path := f.NewPath
+		if path == "" {
+			path = f.OldPath
+		}
+		if path != clean {
+			continue
+		}
+		for _, h := range f.Hunks {
+			for _, al := range h.AddedLines {
+				if al.Line == line {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
 // Summary returns a short summary of changed files.
 // 统计一下
 func (d *Diff) Summary() string {
@@ -297,14 +316,14 @@ func InferGoPackage(file string, repoPath string) string {
 	return filepath.ToSlash(dir)
 }
 
-// SanitizeRepoRelativePath 拒绝绝对路径与 ../ 逃逸。
+// SanitizeRepoRelativePath rejects absolute paths and ../ escapes.
+// It does NOT strip leading a/ or b/ — those may be real top-level directories.
+// Git header markers are stripped only once in normalizePath while parsing ---/+++.
 func SanitizeRepoRelativePath(file string) (string, error) {
 	return sanitizeRepoRelativePath(file)
 }
 
 func sanitizeRepoRelativePath(file string) (string, error) {
-	file = strings.TrimPrefix(file, "a/")
-	file = strings.TrimPrefix(file, "b/")
 	file = filepath.ToSlash(strings.TrimSpace(file))
 	if file == "" || file == "." {
 		return "", fmt.Errorf("empty path")
@@ -312,7 +331,11 @@ func sanitizeRepoRelativePath(file string) (string, error) {
 	if filepath.IsAbs(filepath.FromSlash(file)) {
 		return "", fmt.Errorf("absolute path not allowed: %s", file)
 	}
-	if !filepath.IsLocal(file) {
+	// Reject .. before Clean; on Windows IsLocal may not see '/' separators.
+	if file == ".." || strings.HasPrefix(file, "../") || strings.Contains(file, "/../") || strings.HasSuffix(file, "/..") {
+		return "", fmt.Errorf("path escapes repository: %s", file)
+	}
+	if !filepath.IsLocal(filepath.FromSlash(file)) {
 		return "", fmt.Errorf("path escapes repository: %s", file)
 	}
 	file = filepath.ToSlash(filepath.Clean(file))
@@ -340,17 +363,17 @@ func lookupGoPackage(repoPath, file string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// 规范化修改文件的路径
+// 规范化修改文件的路径；Git ---/+++ 头的 a/ 或 b/ 标记只剥一次。
 func normalizePath(raw string) string {
 	raw = strings.TrimSpace(raw)
 	if raw == "/dev/null" {
 		return raw
 	}
-	if strings.HasPrefix(raw, "a/") || strings.HasPrefix(raw, "b/") {
-		raw = raw[2:]
-	}
 	if strings.HasPrefix(raw, "+++ ") || strings.HasPrefix(raw, "--- ") {
 		raw = strings.TrimSpace(raw[4:])
+	}
+	if strings.HasPrefix(raw, "a/") || strings.HasPrefix(raw, "b/") {
+		raw = raw[2:]
 	}
 	if clean, err := sanitizeRepoRelativePath(raw); err != nil {
 		return ""

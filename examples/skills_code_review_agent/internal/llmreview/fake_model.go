@@ -33,11 +33,10 @@ func (m *fakeReviewModel) GenerateContent(
 	ctx context.Context,
 	_ *model.Request,
 ) (<-chan *model.Response, error) {
-	step := m.step.Add(1)
-	content := "[]"
-	if step == 1 {
-		content = `[{"severity":"medium","category":"testing","file":"review.go","line":1,"title":"Fake model supplemental check","evidence":"fake-model run","recommendation":"Replace with real LLM in production.","confidence":0.55,"rule_id":"LLM-001","source":"llm"}]`
-	}
+	_ = m.step.Add(1)
+	// Always return the supplemental finding so multi-step Agent calls
+	// (skill_load then answer) still leave a valid last assistant message.
+	content := `[{"severity":"medium","category":"testing","file":"internal/user/service.go","line":14,"title":"Fake model supplemental check","evidence":"fake-model run","recommendation":"Replace with real LLM in production.","confidence":0.55,"rule_id":"LLM-001","source":"llm"}]`
 	rsp := &model.Response{
 		ID:      "fake-review",
 		Object:  model.ObjectTypeChatCompletion,

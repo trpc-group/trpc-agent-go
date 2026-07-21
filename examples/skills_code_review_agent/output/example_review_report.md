@@ -1,6 +1,6 @@
 # Code Review Report
 
-**Task ID:** 4e573a31-ad3f-4a26-8d56-d7cea0bef30d
+**Task ID:** ba67ed43-1037-413f-94bb-34218d877c06
 
 **Status:** completed
 
@@ -43,18 +43,18 @@ No low-confidence warnings.
 
 ## Monitoring
 
-- Total duration: 0 ms
-- Tool calls: 0 (dry-run rule-only)
+- Total duration: 17 ms
+- Sandbox duration: 12 ms
+- Tool calls: 1
 - Permission denials: 0
-- Sandbox runs: 0
 
 ## Sandbox Execution
 
-No sandbox execution in Phase 1 dry-run mode.
+1. `bash scripts/run_checks.sh work/inputs/changes.diff` (local) — **completed** exit=0 duration=0ms
 
 ## Governance
 
-No permission or filter decisions in Phase 1 dry-run mode.
+1. [skill_run] `bash scripts/run_checks.sh work/inputs/changes.diff` → **allow**
 
 ## Recommendations
 

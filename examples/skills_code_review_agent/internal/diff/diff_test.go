@@ -11,6 +11,7 @@ package diff
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -187,5 +188,104 @@ func TestChangedFilesRejectsPathEscape(t *testing.T) {
 func TestSanitizeRepoRelativePathRejectsAbsolute(t *testing.T) {
 	if _, err := SanitizeRepoRelativePath("/etc/passwd"); err == nil {
 		t.Fatal("expected error for absolute path")
+	}
+}
+
+func TestNormalizePathKeepsTopLevelAAndBDirs(t *testing.T) {
+	d, err := ParseUnifiedDiff(`diff --git a/a/service.go b/a/service.go
+--- a/a/service.go
++++ b/a/service.go
+@@ -1,1 +1,2 @@
+ package a
++var X = 1
+`)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if d.Files[0].NewPath != "a/service.go" {
+		t.Fatalf("NewPath = %q, want a/service.go", d.Files[0].NewPath)
+	}
+	files := d.ChangedFiles()
+	if len(files) != 1 || files[0] != "a/service.go" {
+		t.Fatalf("ChangedFiles = %v", files)
+	}
+
+	d2, err := ParseUnifiedDiff(`diff --git a/b/handler.go b/b/handler.go
+--- a/b/handler.go
++++ b/b/handler.go
+@@ -1,1 +1,2 @@
+ package b
++var Y = 1
+`)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if d2.Files[0].NewPath != "b/handler.go" {
+		t.Fatalf("NewPath = %q, want b/handler.go", d2.Files[0].NewPath)
+	}
+}
+
+func TestSanitizeKeepsLegitimateAAndBPaths(t *testing.T) {
+	for _, p := range []string{"a/service.go", "b/handler.go", "pkg/a.go"} {
+		got, err := SanitizeRepoRelativePath(p)
+		if err != nil {
+			t.Fatalf("Sanitize(%q): %v", p, err)
+		}
+		if got != p {
+			t.Fatalf("Sanitize(%q) = %q, want unchanged", p, got)
+		}
+	}
+}
+
+func TestLoadFromRepoUsesHEADWorkingTree(t *testing.T) {
+	dir := t.TempDir()
+	runGitDiff(t, dir, "init")
+	runGitDiff(t, dir, "config", "user.email", "test@example.com")
+	runGitDiff(t, dir, "config", "user.name", "test")
+	path := filepath.Join(dir, "main.go")
+	if err := os.WriteFile(path, []byte("package main\n\nfunc main() {}\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	runGitDiff(t, dir, "add", "main.go")
+	runGitDiff(t, dir, "commit", "-m", "init")
+
+	// Stage one change, then further modify the worktree (partially staged).
+	if err := os.WriteFile(path, []byte("package main\n\nfunc main() { println(1) }\n"), 0o644); err != nil {
+		t.Fatalf("write staged: %v", err)
+	}
+	runGitDiff(t, dir, "add", "main.go")
+	if err := os.WriteFile(path, []byte("package main\n\nfunc main() { println(2) }\n"), 0o644); err != nil {
+		t.Fatalf("write worktree: %v", err)
+	}
+
+	d, err := LoadFromRepo(dir)
+	if err != nil {
+		t.Fatalf("LoadFromRepo: %v", err)
+	}
+	if len(d.Files) != 1 {
+		t.Fatalf("files = %d", len(d.Files))
+	}
+	found := false
+	for _, h := range d.Files[0].Hunks {
+		for _, al := range h.AddedLines {
+			if strings.Contains(al.Content, "println(2)") {
+				found = true
+			}
+			if strings.Contains(al.Content, "println(1)") {
+				t.Fatalf("stale staged-only line still present: %+v", al)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected worktree addition println(2) in %+v", d.Files[0].Hunks)
+	}
+}
+
+func runGitDiff(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
 	}
 }

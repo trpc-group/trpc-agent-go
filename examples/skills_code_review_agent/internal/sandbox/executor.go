@@ -58,15 +58,21 @@ func prepareRunEnv(ctx context.Context, opts Options) (*runEnv, func(), error) {
 		return &runEnv{}, func() {}, nil
 	}
 
-	ex, err := newWorkspaceExecutor(opts)
+	ex, closer, err := newWorkspaceExecutor(opts)
 	if err != nil {
 		return nil, nil, err
 	}
+	closeExec := func() {
+		if closer != nil {
+			_ = closer()
+		}
+	}
 	ws, err := ex.CreateWorkspace(ctx, opts.TaskID, codeexecutor.WorkspacePolicy{Isolated: true})
 	if err != nil {
+		closeExec()
 		return nil, nil, fmt.Errorf("create workspace: %w", err)
 	}
-	cleanup := func() { _ = ex.Cleanup(ctx, ws) }
+	cleanup := makeCleanup(closer, func() { _ = ex.Cleanup(ctx, ws) })
 	if err := stageWorkspace(ctx, ex, ws, opts); err != nil {
 		cleanup()
 		return nil, nil, fmt.Errorf("stage workspace: %w", err)
@@ -74,27 +80,49 @@ func prepareRunEnv(ctx context.Context, opts Options) (*runEnv, func(), error) {
 	return &runEnv{exec: ex, ws: ws, ready: true}, cleanup, nil
 }
 
-func newWorkspaceExecutor(opts Options) (workspaceExecutor, error) {
+func makeCleanup(closer func() error, cleanupWS func()) func() {
+	return func() {
+		if cleanupWS != nil {
+			cleanupWS()
+		}
+		if closer != nil {
+			_ = closer()
+		}
+	}
+}
+
+func newWorkspaceExecutor(opts Options) (workspaceExecutor, func() error, error) {
 	switch opts.Runtime {
 	case RuntimeContainer:
 		ex, err := newContainerCodeExecutor(opts.SkillsRoot)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		return asWorkspaceExecutor(ex)
+		we, err := asWorkspaceExecutor(ex)
+		if err != nil {
+			_ = ex.Close()
+			return nil, nil, err
+		}
+		return we, ex.Close, nil
 	case RuntimeE2B:
 		ex, err := e2bexec.New()
 		if err != nil {
-			return nil, fmt.Errorf("e2b sandbox: %w (set E2B_API_KEY)", err)
+			return nil, nil, fmt.Errorf("e2b sandbox: %w (set E2B_API_KEY)", err)
 		}
-		return asWorkspaceExecutor(ex)
+		we, err := asWorkspaceExecutor(ex)
+		if err != nil {
+			_ = ex.Close()
+			return nil, nil, err
+		}
+		return we, ex.Close, nil
 	case RuntimeLocal:
-		return localexec.New(
+		ex := localexec.New(
 			localexec.WithTimeout(opts.Timeout),
 			localexec.WithWorkspaceAutoInputs(false),
-		), nil
+		)
+		return ex, nil, nil
 	default:
-		return nil, fmt.Errorf("unsupported runtime: %s", opts.Runtime)
+		return nil, nil, fmt.Errorf("unsupported runtime: %s", opts.Runtime)
 	}
 }
 
@@ -111,6 +139,61 @@ func sandboxEnv() map[string]string {
 		"PATH": "/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin",
 		"LANG": "C.UTF-8",
 	}
+}
+
+// workspaceGoEnv returns a clean Go env for sandbox checks.
+// When module deps cannot be resolved offline (no vendor / cache), ok is false
+// and diag explains why go vet/test should be skipped.
+func workspaceGoEnv(ctx context.Context, env *runEnv, opts Options) (map[string]string, bool, string) {
+	base := sandboxEnv()
+	base["GOPROXY"] = "off"
+	base["GOSUMDB"] = "off"
+
+	tryList := func(extra map[string]string) (codeexecutor.RunResult, error) {
+		merged := map[string]string{}
+		for k, v := range base {
+			merged[k] = v
+		}
+		for k, v := range extra {
+			merged[k] = v
+		}
+		return env.exec.RunProgram(ctx, env.ws, codeexecutor.RunProgramSpec{
+			Cmd:      "go",
+			Args:     []string{"list", "./..."},
+			Cwd:      "work/repo",
+			Timeout:  opts.Timeout,
+			CleanEnv: true,
+			Env:      merged,
+		})
+	}
+
+	if result, err := tryList(map[string]string{"GOFLAGS": "-mod=vendor"}); err == nil && result.ExitCode == 0 {
+		base["GOFLAGS"] = "-mod=vendor"
+		return base, true, ""
+	}
+	if result, err := tryList(nil); err == nil && result.ExitCode == 0 {
+		return base, true, ""
+	}
+
+	result, err := tryList(nil)
+	diag := "go module dependencies unavailable in network-isolated sandbox; vendor the module or stage a module cache"
+	if result.Stderr != "" {
+		diag = diag + ": " + truncate(result.Stderr)
+	} else if result.Stdout != "" {
+		diag = diag + ": " + truncate(result.Stdout)
+	} else if err != nil {
+		diag = diag + ": " + err.Error()
+	}
+	return base, false, diag
+}
+
+func cleanHostEnv() []string {
+	env := sandboxEnv()
+	out := make([]string, 0, len(env))
+	for k, v := range env {
+		out = append(out, k+"="+v)
+	}
+	return out
 }
 
 // ResolveSkillsRoot finds the skills directory containing code-review.

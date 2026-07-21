@@ -15,7 +15,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/examples/skills_code_review_agent/internal/findings"
@@ -158,7 +157,6 @@ func severityOrder(counts map[string]int) []string {
 			out = append(out, sev)
 		}
 	}
-	sort.Strings(out)
 	return out
 }
 

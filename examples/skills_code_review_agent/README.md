@@ -23,12 +23,12 @@ Database: `reviews.db`
 | Flag | Description |
 |------|-------------|
 | `--fixture` | Fixture name under `fixtures/` (without `.diff`) |
-| `--diff-file` | Path to a unified diff file |
-| `--repo-path` | Git repo path (`git diff HEAD` + `--cached`) |
+| `--diff-file` | Path to a unified diff file (mutually exclusive with `--fixture` / `--repo-path`) |
+| `--repo-path` | Git repo path (`git diff HEAD` for final working tree; excludes untracked files) |
 | `--dry-run` | Rule-only mode without LLM (default: `true`) |
 | `--fake-model` | Agent path with mock model, no API key (tests full Agent orchestration) |
 | `--model` | OpenAI model when `--dry-run=false` (default: `gpt-4o-mini`) |
-| `--runtime` | Sandbox: `local` (dev fallback), `container` (prod, `golang:1.24-bookworm`), `e2b`, `skip` |
+| `--runtime` | Sandbox: `local` (dev fallback), `container` (prod, purpose-built Go+python3 image), `e2b`, `skip` |
 | `--skip-sandbox` | Disable sandbox execution |
 | `--skills-root` | Skills directory (default: `skills`) |
 | `--db-path` | SQLite path (default: `reviews.db`) |
@@ -80,11 +80,13 @@ Covers: diff parsing, rule matching, dedup, redaction, sandbox permission/failur
 
 Use **container** or **e2b** runtime in production (`local` is dev fallback only).
 
-Container uses the Go image `golang:1.24-bookworm` (see `docker/Dockerfile`):
+Container uses a purpose-built image from `docker/Dockerfile` (Go + bash + python3):
 
 ```bash
 go run . --repo-path /path/to/go/module --runtime=container --dry-run
 ```
+
+Network-isolated container checks require a `vendor/` tree (or staged module cache). When dependencies are unavailable, `go vet` / `go test` are skipped with `deps_unavailable` instead of crashing the review.
 
 E2B cloud sandbox (requires `E2B_API_KEY`):
 

@@ -92,11 +92,12 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 	if runtime != sandbox.RuntimeSkip {
 		var err error
 		sandboxResult, err = sandbox.Run(ctx, sandbox.Options{
-			TaskID:     taskID,
-			DiffRaw:    parsed.Raw,
-			RepoPath:   opts.RepoPath,
-			SkillsRoot: opts.SkillsRoot,
-			Runtime:    runtime,
+			TaskID:            taskID,
+			DiffRaw:           parsed.Raw,
+			RepoPath:          opts.RepoPath,
+			SkillsRoot:        opts.SkillsRoot,
+			Runtime:           runtime,
+			AllowHostFallback: runtime == sandbox.RuntimeLocal,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("sandbox: %w", err)
@@ -210,8 +211,8 @@ func toSandboxSummaries(items []sandbox.RunRecord) []findings.SandboxRunSummary 
 			ExitCode:   r.ExitCode,
 			DurationMs: r.DurationMs,
 			ErrorType:  r.ErrorType,
-			Stdout:     r.Stdout,
-			Stderr:     r.Stderr,
+			Stdout:     redact.RedactString(r.Stdout),
+			Stderr:     redact.RedactString(r.Stderr),
 		})
 	}
 	return out
@@ -234,13 +235,27 @@ func toStorageSandboxRuns(items []sandbox.RunRecord) []storage.SandboxRunRecord 
 		out = append(out, storage.SandboxRunRecord{
 			ID: r.ID, TaskID: r.TaskID, Command: r.Command, Runtime: r.Runtime,
 			Status: r.Status, ExitCode: r.ExitCode, DurationMs: r.DurationMs,
-			Stdout: r.Stdout, Stderr: r.Stderr, ErrorType: r.ErrorType,
+			Stdout: redact.RedactString(r.Stdout), Stderr: redact.RedactString(r.Stderr),
+			ErrorType: r.ErrorType,
 		})
 	}
 	return out
 }
 
 func loadInput(opts Options) (*diff.Diff, error) {
+	sources := 0
+	if opts.Fixture != "" {
+		sources++
+	}
+	if opts.DiffFile != "" {
+		sources++
+	}
+	if opts.RepoPath != "" {
+		sources++
+	}
+	if sources != 1 {
+		return nil, fmt.Errorf("exactly one of --fixture, --diff-file, or --repo-path is required")
+	}
 	switch {
 	case opts.Fixture != "":
 		path := filepath.Join("fixtures", opts.Fixture+".diff")
@@ -250,7 +265,7 @@ func loadInput(opts Options) (*diff.Diff, error) {
 	case opts.RepoPath != "":
 		return diff.LoadFromRepo(opts.RepoPath)
 	default:
-		return nil, fmt.Errorf("one of --fixture, --diff-file, or --repo-path is required")
+		return nil, fmt.Errorf("exactly one of --fixture, --diff-file, or --repo-path is required")
 	}
 }
 

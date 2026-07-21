@@ -1,5 +1,5 @@
 {
-  "task_id": "4e573a31-ad3f-4a26-8d56-d7cea0bef30d",
+  "task_id": "ba67ed43-1037-413f-94bb-34218d877c06",
   "status": "completed",
   "input_summary": "changed files: internal/auth/query.go",
   "findings": [
@@ -29,14 +29,35 @@
     }
   ],
   "warnings": [],
+  "permission_decisions": [
+    {
+      "tool_name": "skill_run",
+      "command": "bash scripts/run_checks.sh work/inputs/changes.diff",
+      "action": "allow"
+    }
+  ],
+  "sandbox_runs": [
+    {
+      "command": "bash scripts/run_checks.sh work/inputs/changes.diff",
+      "runtime": "local",
+      "status": "completed",
+      "exit_code": 0,
+      "duration_ms": 0,
+      "stdout": "sandbox checks passed (13 diff lines)"
+    }
+  ],
   "metrics": {
-    "total_duration_ms": 0,
+    "total_duration_ms": 17,
+    "sandbox_duration_ms": 12,
     "finding_count": 2,
     "warning_count": 0,
+    "tool_call_count": 1,
+    "permission_deny_count": 0,
     "severity_counts": {
       "critical": 1,
       "high": 1
     }
   },
-  "dry_run": true
+  "dry_run": true,
+  "sandbox_runtime": "local"
 }

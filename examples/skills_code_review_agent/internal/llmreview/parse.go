@@ -25,8 +25,9 @@ var validSeverities = map[string]struct{}{
 	"low":      {},
 }
 
-// ParseFindings extracts structured findings from an LLM response.
-func ParseFindings(content string) ([]findings.Finding, error) {
+// ParseFindings extracts structured findings from an LLM response and
+// keeps only those anchored to added lines in the reviewed diff.
+func ParseFindings(content string, reviewed *diff.Diff) ([]findings.Finding, error) {
 	content = strings.TrimSpace(content)
 	if content == "" {
 		return nil, nil
@@ -45,25 +46,30 @@ func ParseFindings(content string) ([]findings.Finding, error) {
 	}
 	out := make([]findings.Finding, 0, len(items))
 	for i := range items {
-		if normalized, ok := normalizeFinding(items[i]); ok {
+		if normalized, ok := normalizeFinding(items[i], reviewed); ok {
 			out = append(out, normalized)
 		}
 	}
 	return out, nil
 }
 
-func normalizeFinding(f findings.Finding) (findings.Finding, bool) {
+func normalizeFinding(f findings.Finding, reviewed *diff.Diff) (findings.Finding, bool) {
 	if strings.TrimSpace(f.Title) == "" {
 		return f, false
 	}
-	if strings.TrimSpace(f.File) != "" {
-		clean, err := diff.SanitizeRepoRelativePath(f.File)
-		if err != nil {
-			return f, false
-		}
-		f.File = clean
+	file := strings.TrimSpace(f.File)
+	if file == "" {
+		return f, false
 	}
-	if f.Line < 0 {
+	clean, err := diff.SanitizeRepoRelativePath(file)
+	if err != nil {
+		return f, false
+	}
+	f.File = clean
+	if f.Line <= 0 {
+		return f, false
+	}
+	if reviewed == nil || !reviewed.HasAddedLine(f.File, f.Line) {
 		return f, false
 	}
 	if _, ok := validSeverities[f.Severity]; !ok {
@@ -75,9 +81,8 @@ func normalizeFinding(f findings.Finding) (findings.Finding, bool) {
 	if f.Confidence > 1 {
 		f.Confidence = 1
 	}
-	if f.Source == "" {
-		f.Source = "llm"
-	}
+	// Force provenance; models must not masquerade as deterministic rules.
+	f.Source = "llm"
 	return f, true
 }
 
