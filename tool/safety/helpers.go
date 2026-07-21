@@ -239,10 +239,12 @@ func parseDecimalInt(s string, out *int64) (int, error) {
 
 type errNonDigit struct{ c byte }
 
+// Error returns the non-digit parse failure message.
 func (e errNonDigit) Error() string { return "non-digit byte in number" }
 
 var errEmptyNumber = &parseError{msg: "empty number"}
 
 type parseError struct{ msg string }
 
+// Error returns the parse failure message.
 func (e *parseError) Error() string { return e.msg }

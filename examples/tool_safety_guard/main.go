@@ -32,6 +32,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool/safety"
 )
 
+// main runs the tool safety guard example and exits non-zero on
+// failure.
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintf(os.Stderr, "tool_safety_guard example failed: %v\n", err)
@@ -39,6 +41,8 @@ func main() {
 	}
 }
 
+// run demonstrates permission checks, result redaction, batch
+// scanning, and report/audit output for the safety guard.
 func run() error {
 	ctx := context.Background()
 
@@ -137,6 +141,8 @@ type corpusEntry struct {
 	input safety.ScanInput
 }
 
+// buildCorpus returns the sample tool-call inputs scanned by the
+// example.
 func buildCorpus() []corpusEntry {
 	return []corpusEntry{
 		{name: "safe go test", input: safety.ScanInput{ToolName: "workspace_exec", Backend: safety.BackendWorkspaceExec, Command: "go test ./..."}},

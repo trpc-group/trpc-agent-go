@@ -25,6 +25,7 @@ type sessionTracker struct {
 	created map[string]time.Time
 }
 
+// newSessionTracker returns an empty sessionTracker.
 func newSessionTracker() *sessionTracker {
 	return &sessionTracker{
 		known:   make(map[string]bool),

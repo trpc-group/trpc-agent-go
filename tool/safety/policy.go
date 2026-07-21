@@ -303,6 +303,8 @@ func (p Policy) Validate() error {
 	return nil
 }
 
+// validateDecision rejects empty, unknown, and input-only decisions
+// for the policy field named name.
 func validateDecision(name string, d Decision) error {
 	switch d {
 	case DecisionAllow, DecisionDeny, DecisionAsk:
@@ -315,6 +317,8 @@ func validateDecision(name string, d Decision) error {
 	return fmt.Errorf("%s: unknown decision %q", name, d)
 }
 
+// validateDomain rejects empty, malformed, and over-broad wildcard
+// domain patterns.
 func validateDomain(dom string) error {
 	dom = strings.TrimSpace(dom)
 	if dom == "" {

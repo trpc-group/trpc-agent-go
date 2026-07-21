@@ -412,6 +412,8 @@ func (c *Callbacks) finalizeBeforeToolResult(
 	return lastResult, nil
 }
 
+// recoverToolCallbackPanic recovers from a panicking tool callback,
+// logs the panic with its stack, and stores a wrapped error in errp.
 func recoverToolCallbackPanic(
 	ctx context.Context,
 	stage string,
@@ -437,6 +439,8 @@ func recoverToolCallbackPanic(
 	*errp = fmt.Errorf(callbackPanicErrFmt, stage, recovered)
 }
 
+// runBeforeToolCallback invokes one before-tool callback, converting
+// a panic into an error via recoverToolCallbackPanic.
 func (c *Callbacks) runBeforeToolCallback(
 	ctx context.Context,
 	cb BeforeToolCallbackStructured,
@@ -548,6 +552,8 @@ func (c *Callbacks) finalizeAfterToolResult(
 	return lastResult, nil
 }
 
+// runAfterToolCallback invokes one after-tool callback, converting a
+// panic into an error via recoverToolCallbackPanic.
 func (c *Callbacks) runAfterToolCallback(
 	ctx context.Context,
 	cb AfterToolCallbackStructured,

@@ -319,6 +319,7 @@ func decodeCodeBlocks(raw map[string]any, key string) ([]CodeBlock, error) {
 	return nil, fmt.Errorf("field %q must be an array, an object, or a double-encoded JSON string, got %T", key, v)
 }
 
+// decodeOneBlock decodes a single code block object into a CodeBlock.
 func decodeOneBlock(item any) (CodeBlock, error) {
 	m, ok := item.(map[string]any)
 	if !ok {

@@ -48,6 +48,7 @@ type concurrencyLimiter struct {
 	perTool map[string]int
 }
 
+// newConcurrencyLimiter returns a concurrencyLimiter enforcing p.
 func newConcurrencyLimiter(p ConcurrencyPolicy) *concurrencyLimiter {
 	return &concurrencyLimiter{
 		policy:  p,
