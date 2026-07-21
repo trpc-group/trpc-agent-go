@@ -90,93 +90,100 @@ func extractCurlHosts(args []string) ([]string, []Finding) {
 			skipNext = false
 			continue
 		}
-		if arg == "-K" || arg == "--config" {
-			findings = append(findings, Finding{
-				RuleID:         "R-NET-001",
-				RuleName:       "Network Egress",
-				RiskLevel:      RiskLevelHigh,
-				Decision:       DecisionDeny,
-				Evidence:       "curl " + arg + " uses an unscanned config file",
-				Recommendation: "Inline the curl URL arguments so the guard can scan the actual endpoint.",
-			})
+		if finding, consumesNext, matched := curlConfigFinding(arg); matched {
+			findings = append(findings, finding)
+			skipNext = consumesNext
+			continue
+		}
+		if finding, consumesNext, matched := curlResolveFinding(arg, i, len(args)); matched {
+			findings = append(findings, finding)
+			skipNext = consumesNext
+			continue
+		}
+		if host, consumesNext, matched := curlURLHost(arg, i, args); matched {
+			if host != "" {
+				hosts = append(hosts, host)
+			}
+			skipNext = consumesNext
+			continue
+		}
+		if curlSkipsNextArg(arg) {
 			skipNext = true
 			continue
 		}
-		if strings.HasPrefix(arg, "--config=") || (strings.HasPrefix(arg, "-K") && len(arg) > 2) {
-			findings = append(findings, Finding{
-				RuleID:         "R-NET-001",
-				RuleName:       "Network Egress",
-				RiskLevel:      RiskLevelHigh,
-				Decision:       DecisionDeny,
-				Evidence:       "curl " + arg + " uses an unscanned config file",
-				Recommendation: "Inline the curl URL arguments so the guard can scan the actual endpoint.",
-			})
-			continue
-		}
-		if arg == "--resolve" && i+1 < len(args) {
-			findings = append(findings, Finding{
-				RuleID:         "R-NET-001",
-				RuleName:       "Network Egress",
-				RiskLevel:      RiskLevelHigh,
-				Decision:       DecisionDeny,
-				Evidence:       "curl --resolve overrides the destination endpoint",
-				Recommendation: "Remove --resolve or require explicit human review for endpoint overrides.",
-			})
-			skipNext = true
-			continue
-		}
-		if strings.HasPrefix(arg, "--resolve=") {
-			findings = append(findings, Finding{
-				RuleID:         "R-NET-001",
-				RuleName:       "Network Egress",
-				RiskLevel:      RiskLevelHigh,
-				Decision:       DecisionDeny,
-				Evidence:       "curl --resolve overrides the destination endpoint",
-				Recommendation: "Remove --resolve or require explicit human review for endpoint overrides.",
-			})
-			continue
-		}
-		// Handle --url flag: its value may be a bare host or a full URL.
-		if arg == "--url" && i+1 < len(args) {
-			h := hostFromArg(args[i+1])
-			if h != "" {
-				hosts = append(hosts, h)
-			}
-			skipNext = true
-			continue
-		}
-		// Handle --url=value form.
-		if strings.HasPrefix(arg, "--url=") {
-			val := strings.TrimPrefix(arg, "--url=")
-			h := hostFromArg(val)
-			if h != "" {
-				hosts = append(hosts, h)
-			}
-			continue
-		}
-		// Flags that take a value but are not URLs.
-		if flags, ok := urlBearingToolFlags["curl"]; ok {
-			if flags[arg] {
-				skipNext = true
-				continue
-			}
-			// Handle --flag=value form for non-URL flags.
-			for f := range flags {
-				if strings.HasPrefix(arg, f+"=") {
-					break
-				}
-			}
-		}
-		// Positional argument that looks like a URL or host.
-		if strings.HasPrefix(arg, "-") {
-			continue
-		}
-		h := hostFromArg(arg)
-		if h != "" {
-			hosts = append(hosts, h)
+		if host, ok := curlPositionalHost(arg); ok {
+			hosts = append(hosts, host)
 		}
 	}
 	return hosts, findings
+}
+
+func curlConfigFinding(arg string) (Finding, bool, bool) {
+	if arg == "-K" || arg == "--config" {
+		return unscannedCurlConfigFinding(arg), true, true
+	}
+	if strings.HasPrefix(arg, "--config=") || (strings.HasPrefix(arg, "-K") && len(arg) > 2) {
+		return unscannedCurlConfigFinding(arg), false, true
+	}
+	return Finding{}, false, false
+}
+
+func curlResolveFinding(arg string, index, argc int) (Finding, bool, bool) {
+	if arg == "--resolve" && index+1 < argc {
+		return curlResolveOverrideFinding(), true, true
+	}
+	if strings.HasPrefix(arg, "--resolve=") {
+		return curlResolveOverrideFinding(), false, true
+	}
+	return Finding{}, false, false
+}
+
+func curlURLHost(arg string, index int, args []string) (string, bool, bool) {
+	if arg == "--url" && index+1 < len(args) {
+		return hostFromArg(args[index+1]), true, true
+	}
+	if strings.HasPrefix(arg, "--url=") {
+		return hostFromArg(strings.TrimPrefix(arg, "--url=")), false, true
+	}
+	return "", false, false
+}
+
+func curlSkipsNextArg(arg string) bool {
+	flags, ok := urlBearingToolFlags["curl"]
+	return ok && flags[arg]
+}
+
+func curlPositionalHost(arg string) (string, bool) {
+	if strings.HasPrefix(arg, "-") {
+		return "", false
+	}
+	host := hostFromArg(arg)
+	if host == "" {
+		return "", false
+	}
+	return host, true
+}
+
+func unscannedCurlConfigFinding(arg string) Finding {
+	return Finding{
+		RuleID:         "R-NET-001",
+		RuleName:       "Network Egress",
+		RiskLevel:      RiskLevelHigh,
+		Decision:       DecisionDeny,
+		Evidence:       "curl " + arg + " uses an unscanned config file",
+		Recommendation: "Inline the curl URL arguments so the guard can scan the actual endpoint.",
+	}
+}
+
+func curlResolveOverrideFinding() Finding {
+	return Finding{
+		RuleID:         "R-NET-001",
+		RuleName:       "Network Egress",
+		RiskLevel:      RiskLevelHigh,
+		Decision:       DecisionDeny,
+		Evidence:       "curl --resolve overrides the destination endpoint",
+		Recommendation: "Remove --resolve or require explicit human review for endpoint overrides.",
+	}
 }
 
 // extractWgetHosts extracts target hostnames from wget arguments.
