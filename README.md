@@ -1,17 +1,12 @@
-English | [中文](README.zh_CN.md)
-
-# tRPC-Agent-Go
-
-<p align="center">
+<div align="center">
   <img src="docs/mkdocs/assets/img/logo-readme-blue.png" alt="tRPC logo" width="260">
-</p>
 
-[![Go Reference](https://pkg.go.dev/badge/trpc.group/trpc-go/trpc-agent-go.svg)](https://pkg.go.dev/trpc.group/trpc-go/trpc-agent-go)
-[![LICENSE](https://img.shields.io/badge/license-Apache--2.0-green.svg)](https://github.com/trpc-group/trpc-agent-go/blob/main/LICENSE)
-[![Releases](https://img.shields.io/github/release/trpc-group/trpc-agent-go.svg?style=flat-square)](https://github.com/trpc-group/trpc-agent-go/releases)
-[![Tests](https://github.com/trpc-group/trpc-agent-go/actions/workflows/prc.yml/badge.svg)](https://github.com/trpc-group/trpc-agent-go/actions/workflows/prc.yml)
-[![Coverage](https://codecov.io/gh/trpc-group/trpc-agent-go/branch/main/graph/badge.svg)](https://app.codecov.io/gh/trpc-group/trpc-agent-go/tree/main)
-[![Documentation](https://img.shields.io/badge/Docs-Website-blue.svg)](https://trpc-group.github.io/trpc-agent-go/)
+  <a id="trpc-agent-go"></a>
+  <h1>tRPC-Agent-Go</h1>
+
+  <p>
+    English | <a href="README.zh_CN.md">中文</a>
+  </p>
 
 <p align="center">
   <a href="https://trendshift.io/repositories/15288">
@@ -21,6 +16,18 @@ English | [中文](README.zh_CN.md)
     <img src="https://trendshift.io/api/badge/trendshift/repositories/15288/daily?language=Go" alt="Trendshift #1 Go Repository Of The Day" width="250" height="55">
   </a>
 </p>
+
+<p align="center">
+  <a href="https://pkg.go.dev/trpc.group/trpc-go/trpc-agent-go"><img src="https://pkg.go.dev/badge/trpc.group/trpc-go/trpc-agent-go.svg" alt="Go Reference"></a>
+  <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-green.svg" alt="LICENSE"></a>
+  <a href="https://github.com/trpc-group/trpc-agent-go/releases"><img src="https://img.shields.io/github/release/trpc-group/trpc-agent-go.svg?style=flat-square" alt="Releases"></a>
+  <a href="https://github.com/trpc-group/trpc-agent-go/actions/workflows/prc.yml"><img src="https://github.com/trpc-group/trpc-agent-go/actions/workflows/prc.yml/badge.svg" alt="Tests"></a>
+  <a href="https://app.codecov.io/gh/trpc-group/trpc-agent-go/tree/main"><img src="https://codecov.io/gh/trpc-group/trpc-agent-go/branch/main/graph/badge.svg" alt="Coverage"></a>
+  <a href="https://trpc-group.github.io/trpc-agent-go/"><img src="https://img.shields.io/badge/Docs-Website-blue.svg" alt="Documentation"></a>
+</p>
+
+  <hr />
+</div>
 
 **tRPC-Agent-Go is a Go framework for building production agent systems.**
 It provides LLM agents, graph workflows, tool calling, session and memory
