@@ -10,13 +10,16 @@ package safety
 
 import (
 	"encoding/json"
+	"net/url"
 	"regexp"
 	"strings"
 )
 
+const secretKeyPattern = `api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|oauth[_-]?token|session[_-]?token|csrf[_-]?token|xsrf[_-]?token|jwt[_-]?token|client[_-]?secret|db[_-]?(password|passwd|secret)|private[_-]?key|aws[_-]?(access[_-]?key|secret)|authorization(_(header|token|value|key))?|bearer(_(token|value))?|password|passwd|secret|token`
+
 var secretPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)"(api[_-]?key|token|password|passwd|secret)"\s*:\s*(?:"[^"]*"|'[^']*'|[^\s,}]+)`),
-	regexp.MustCompile(`(?i)(api[_-]?key|token|password|passwd|secret)\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s]+)`),
+	regexp.MustCompile(`(?i)"(` + secretKeyPattern + `)"\s*:\s*"[^"\\]+(\\.[^"\\]*)*"`),
+	regexp.MustCompile(`(?i)(` + secretKeyPattern + `)\s*[:=]\s*(?:"[^"]+"|'[^']+'|[^\s]+)`),
 	regexp.MustCompile(`(?i)(authorization\s*:\s*bearer)\s+[A-Za-z0-9._~+/-]+=*`),
 	regexp.MustCompile(`\bAKIA[0-9A-Z]{16}\b`),
 	regexp.MustCompile(`\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b`),
@@ -34,7 +37,47 @@ func redactString(s string) (string, bool) {
 			out = next
 		}
 	}
+	if next, changed := redactURLCredentials(out); changed {
+		redacted = true
+		out = next
+	}
 	return out, redacted
+}
+
+var credentialURLPattern = regexp.MustCompile(`(?i)\b(?:https?|ftp)://[^\s"'<>]+`)
+
+func redactURLCredentials(s string) (string, bool) {
+	matches := credentialURLPattern.FindAllStringIndex(s, -1)
+	if len(matches) == 0 {
+		return s, false
+	}
+	var out strings.Builder
+	last := 0
+	redacted := false
+	for _, match := range matches {
+		raw := s[match[0]:match[1]]
+		u, err := url.Parse(raw)
+		if err != nil || u.User == nil {
+			continue
+		}
+		password, hasPassword := u.User.Password()
+		if !hasPassword || password == "" {
+			continue
+		}
+		if !redacted {
+			out.Grow(len(s))
+		}
+		out.WriteString(s[last:match[0]])
+		u.User = nil
+		out.WriteString(u.String())
+		last = match[1]
+		redacted = true
+	}
+	if !redacted {
+		return s, false
+	}
+	out.WriteString(s[last:])
+	return out.String(), true
 }
 
 func containsSecret(s string) bool {
@@ -60,17 +103,38 @@ func redactEnv(env map[string]string) (map[string]string, bool) {
 }
 
 func looksSecretName(s string) bool {
-	name := strings.ToLower(s)
-	return strings.Contains(name, "token") ||
-		strings.Contains(name, "password") ||
-		strings.Contains(name, "passwd") ||
-		strings.Contains(name, "secret") ||
-		strings.Contains(name, "api_key") ||
-		strings.Contains(name, "apikey") ||
-		strings.Contains(name, "private_key") ||
-		strings.Contains(name, "authorization") ||
-		strings.Contains(name, "bearer") ||
-		strings.Contains(name, "aws_access_key")
+	name := strings.ToLower(strings.TrimSpace(s))
+	name = strings.ReplaceAll(name, "-", "_")
+	switch name {
+	case "token", "password", "passwd", "secret", "api_key", "apikey",
+		"access_token", "refresh_token", "id_token", "oauth_token",
+		"session_token", "csrf_token", "xsrf_token", "jwt_token",
+		"client_secret", "private_key", "authorization", "bearer",
+		"aws_access_key", "aws_secret_access_key":
+		return true
+	}
+	if strings.HasSuffix(name, "_token") ||
+		strings.HasSuffix(name, "_password") ||
+		strings.HasSuffix(name, "_passwd") ||
+		strings.HasSuffix(name, "_secret") ||
+		strings.HasSuffix(name, "_api_key") {
+		return true
+	}
+	if strings.HasPrefix(name, "authorization_") {
+		switch strings.TrimPrefix(name, "authorization_") {
+		case "header", "token", "value", "key":
+			return true
+		}
+	}
+	if strings.HasPrefix(name, "bearer_") {
+		switch strings.TrimPrefix(name, "bearer_") {
+		case "token", "value":
+			return true
+		}
+	}
+	return strings.HasPrefix(name, "aws_access_key_") ||
+		strings.HasPrefix(name, "private_key_") ||
+		strings.HasPrefix(name, "db_password_")
 }
 
 func containsJSONSecret(raw []byte) bool {
@@ -85,7 +149,7 @@ func valueContainsJSONSecret(v any) bool {
 	switch x := v.(type) {
 	case map[string]any:
 		for key, value := range x {
-			if looksSecretName(key) {
+			if looksSecretName(key) && jsonValueLooksSecret(value) {
 				return true
 			}
 			if valueContainsJSONSecret(value) {
@@ -101,6 +165,20 @@ func valueContainsJSONSecret(v any) bool {
 	case string:
 		_, redacted := redactString(x)
 		return redacted
+	}
+	return false
+}
+
+func jsonValueLooksSecret(v any) bool {
+	switch x := v.(type) {
+	case string:
+		return strings.TrimSpace(x) != ""
+	case []any:
+		for _, item := range x {
+			if jsonValueLooksSecret(item) {
+				return true
+			}
+		}
 	}
 	return false
 }

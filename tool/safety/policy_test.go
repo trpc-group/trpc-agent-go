@@ -208,6 +208,14 @@ denied_paths: []
 	require.True(t, disabled.DisableDefaultDenies)
 	require.Empty(t, disabled.DeniedCommands)
 	require.Empty(t, disabled.DeniedPaths)
+
+	flagOnly, err := LoadPolicyYAML(strings.NewReader(`
+disable_default_denies: true
+`))
+	require.NoError(t, err)
+	require.True(t, flagOnly.DisableDefaultDenies)
+	require.Empty(t, flagOnly.DeniedCommands)
+	require.Empty(t, flagOnly.DeniedPaths)
 }
 
 func TestPolicyValidate_RejectsEmptyDeniesWithoutOptOut(t *testing.T) {

@@ -86,7 +86,7 @@ func parseExecArgs(
 	if strings.TrimSpace(command) == "" {
 		return nil, fmt.Errorf("command is required")
 	}
-	timeout, err := intField(raw, "timeout_sec", "timeoutSec", "timeout")
+	timeout, err := timeoutField(toolName, raw)
 	if err != nil {
 		return nil, err
 	}
@@ -281,6 +281,30 @@ func intField(raw map[string]json.RawMessage, keys ...string) (int, error) {
 		return out, nil
 	}
 	return 0, nil
+}
+
+func timeoutField(toolName string, raw map[string]json.RawMessage) (int, error) {
+	switch toolName {
+	case "workspace_exec":
+		// workspace_exec first selects timeout_sec/timeoutSec, then falls
+		// back to timeout when the selected value is non-positive.
+		timeout, err := intField(raw, "timeout_sec", "timeoutSec")
+		if err != nil {
+			return 0, err
+		}
+		if timeout <= 0 {
+			return intField(raw, "timeout")
+		}
+		return timeout, nil
+	case "exec_command":
+		// exec_command does not expose the workspace_exec timeout alias.
+		return intField(raw, "timeout_sec", "timeoutSec")
+	case "skill_run", "skill_exec":
+		// Skill tools use timeout directly and ignore timeout_sec aliases.
+		return intField(raw, "timeout")
+	default:
+		return 0, nil
+	}
 }
 
 func boolField(raw map[string]json.RawMessage, key string) (bool, error) {

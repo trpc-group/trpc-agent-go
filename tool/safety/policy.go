@@ -85,11 +85,16 @@ func (p Policy) WithDefaults() Policy {
 	if p.AllowedCommands != nil {
 		d.AllowedCommands = cleanStringList(p.AllowedCommands)
 	}
-	if p.DeniedCommands != nil && (len(cleanStringList(p.DeniedCommands)) > 0 || p.DisableDefaultDenies) {
+	if p.DisableDefaultDenies {
 		d.DeniedCommands = cleanStringList(p.DeniedCommands)
-	}
-	if p.DeniedPaths != nil && (len(cleanStringList(p.DeniedPaths)) > 0 || p.DisableDefaultDenies) {
 		d.DeniedPaths = cleanStringList(p.DeniedPaths)
+	} else {
+		if p.DeniedCommands != nil && len(cleanStringList(p.DeniedCommands)) > 0 {
+			d.DeniedCommands = cleanStringList(p.DeniedCommands)
+		}
+		if p.DeniedPaths != nil && len(cleanStringList(p.DeniedPaths)) > 0 {
+			d.DeniedPaths = cleanStringList(p.DeniedPaths)
+		}
 	}
 	d.DisableDefaultDenies = p.DisableDefaultDenies
 	if p.NetworkAllowlist != nil {

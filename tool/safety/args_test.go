@@ -83,6 +83,33 @@ func TestRequestsFromToolCall_ParsesKnownToolArguments(t *testing.T) {
 			},
 		},
 		{
+			name:     "workspace_timeout_falls_back_from_zero",
+			toolName: "workspace_exec",
+			args:     []byte(`{"command":"sleep 1","timeout_sec":0,"timeout":3600}`),
+			assert: func(t *testing.T, reqs []ScanRequest) {
+				require.Len(t, reqs, 1)
+				require.Equal(t, 3600, reqs[0].TimeoutSec)
+			},
+		},
+		{
+			name:     "host_timeout_does_not_use_workspace_alias",
+			toolName: "exec_command",
+			args:     []byte(`{"command":"sleep 1","timeout_sec":0,"timeout":3600}`),
+			assert: func(t *testing.T, reqs []ScanRequest) {
+				require.Len(t, reqs, 1)
+				require.Zero(t, reqs[0].TimeoutSec)
+			},
+		},
+		{
+			name:     "skill_timeout_ignores_timeout_sec_alias",
+			toolName: "skill_run",
+			args:     []byte(`{"command":"sleep 1","timeout_sec":3600,"timeout":5}`),
+			assert: func(t *testing.T, reqs []ScanRequest) {
+				require.Len(t, reqs, 1)
+				require.Equal(t, 5, reqs[0].TimeoutSec)
+			},
+		},
+		{
 			name:     "write_stdin",
 			toolName: "write_stdin",
 			args:     []byte(`{"chars":"rm -rf /tmp/x","append_newline":true}`),

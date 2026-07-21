@@ -30,6 +30,18 @@ func TestContainsSecret_CoversJSONSecretShapes(t *testing.T) {
 	require.True(t, containsSecret(`{"nested":{"password":"abc123"}}`))
 	require.True(t, containsSecret(`{"items":[{"client_secret":"abc123"}]}`))
 	require.False(t, containsSecret(`{"message":"plain"}`))
+	require.False(t, containsSecret(`{"max_tokens":128}`))
+	require.False(t, containsSecret(`{"token_count":42}`))
+	require.False(t, containsSecret(`{"authorization_required":false}`))
+}
+
+func TestRedactString_RedactsURLUserinfo(t *testing.T) {
+	input := `curl https://alice:s3cr3t@allowed.example/path`
+	out, redacted := redactString(input)
+	require.True(t, redacted)
+	require.NotContains(t, out, "alice")
+	require.NotContains(t, out, "s3cr3t")
+	require.Contains(t, out, "https://allowed.example/path")
 }
 
 func TestRedactString_NoSecretLeavesInput(t *testing.T) {

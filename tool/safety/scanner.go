@@ -58,7 +58,20 @@ func (s *DefaultScanner) Scan(ctx context.Context, req ScanRequest) (Report, err
 	if req.Backend == "" {
 		req.Backend = BackendUnknown
 	}
-	findings := s.scanRequest(ctx, req)
+	var findings []Finding
+	if !req.Backend.Valid() {
+		unsupported := req.Backend
+		req.Backend = BackendUnknown
+		findings = []Finding{{
+			RuleID:         "backend.unsupported",
+			RiskLevel:      RiskCritical,
+			Decision:       DecisionDeny,
+			Evidence:       fmt.Sprintf("unsupported backend %q", unsupported),
+			Recommendation: "use a supported safety backend before tool execution",
+		}}
+	} else {
+		findings = s.scanRequest(ctx, req)
+	}
 	report := buildReport(req, findings, time.Since(start))
 	report.Command, report.Redacted = s.redactReportText(report.Command)
 	if report.Evidence != "" {
@@ -66,11 +79,19 @@ func (s *DefaultScanner) Scan(ctx context.Context, req ScanRequest) (Report, err
 		report.Evidence, redacted = s.redactReportText(report.Evidence)
 		report.Redacted = report.Redacted || redacted
 	}
+	if report.Recommendation != "" {
+		var redacted bool
+		report.Recommendation, redacted = s.redactReportText(report.Recommendation)
+		report.Redacted = report.Redacted || redacted
+	}
 	for i := range report.Findings {
 		var redacted bool
 		report.Findings[i].Evidence, redacted = s.redactReportText(report.Findings[i].Evidence)
 		report.Findings[i].Redacted = report.Findings[i].Redacted || redacted
 		report.Redacted = report.Redacted || report.Findings[i].Redacted
+		report.Findings[i].Recommendation, redacted = s.redactReportText(report.Findings[i].Recommendation)
+		report.Findings[i].Redacted = report.Findings[i].Redacted || redacted
+		report.Redacted = report.Redacted || redacted
 	}
 	return report, nil
 }
@@ -196,11 +217,19 @@ func (s *DefaultScanner) scanSize(req ScanRequest) []Finding {
 func (s *DefaultScanner) scanEnv(env map[string]string) []Finding {
 	var findings []Finding
 	for key, value := range env {
+		if isProcessControlEnv(key) {
+			findings = append(findings, Finding{
+				RuleID:         "env.process_control",
+				RiskLevel:      RiskHigh,
+				Decision:       DecisionDeny,
+				Evidence:       key,
+				Recommendation: "remove process-control environment variables before execution",
+			})
+		}
 		if len(s.policy.EnvAllowlist) > 0 && !s.envAllowed(key) {
 			decision := DecisionAsk
 			risk := RiskMedium
-			if strings.HasPrefix(strings.ToLower(key), "ld_") ||
-				strings.EqualFold(key, "path") {
+			if isProcessControlEnv(key) {
 				risk = RiskHigh
 			}
 			findings = append(findings, Finding{
@@ -386,11 +415,24 @@ func (s *DefaultScanner) scanSensitivePaths(req ScanRequest, argv []string) []Fi
 }
 
 func (s *DefaultScanner) scanNetwork(cmd string, argv []string) []Finding {
-	if !isNetworkCommand(cmd) {
-		return nil
-	}
 	text := strings.Join(argv, " ")
 	hosts := extractNetworkHosts(cmd, argv)
+	if !isNetworkCommand(cmd) && len(hosts) == 0 {
+		return nil
+	}
+	if hasNetworkDestinationOverride(cmd, argv) {
+		decision := DecisionAsk
+		if len(s.policy.NetworkAllowlist) > 0 {
+			decision = DecisionDeny
+		}
+		return []Finding{{
+			RuleID:         "network.destination_override",
+			RiskLevel:      RiskHigh,
+			Decision:       decision,
+			Evidence:       "curl destination override requires an explicit network review",
+			Recommendation: "remove curl destination-routing options or review the effective destination",
+		}}
+	}
 	if len(hosts) == 0 {
 		decision := DecisionAsk
 		if len(s.policy.NetworkAllowlist) > 0 {
@@ -834,6 +876,24 @@ func isNetworkCommand(cmd string) bool {
 	}
 }
 
+func hasNetworkDestinationOverride(cmd string, argv []string) bool {
+	if cmd != "curl" {
+		return false
+	}
+	for i := 1; i < len(argv); i++ {
+		arg := strings.ToLower(strings.TrimSpace(argv[i]))
+		switch {
+		case arg == "--resolve", arg == "--connect-to":
+			return i+1 < len(argv) && strings.TrimSpace(argv[i+1]) != ""
+		case strings.HasPrefix(arg, "--resolve="):
+			return strings.TrimSpace(strings.TrimPrefix(arg, "--resolve=")) != ""
+		case strings.HasPrefix(arg, "--connect-to="):
+			return strings.TrimSpace(strings.TrimPrefix(arg, "--connect-to=")) != ""
+		}
+	}
+	return false
+}
+
 func isHighRiskNetworkCommand(cmd string) bool {
 	switch cmd {
 	case "nc", "netcat", "ssh", "scp":
@@ -883,6 +943,9 @@ func networkArgHost(cmd, arg string) (string, bool) {
 			return "", false
 		}
 		return u.Hostname(), true
+	}
+	if !isNetworkCommand(cmd) && cmd != "git" {
+		return "", false
 	}
 	switch cmd {
 	case "curl", "wget":
@@ -980,6 +1043,23 @@ func (s *DefaultScanner) envAllowed(key string) bool {
 		}
 	}
 	return false
+}
+
+func isProcessControlEnv(key string) bool {
+	key = strings.ToUpper(strings.TrimSpace(key))
+	if key == "PATH" || strings.HasPrefix(key, "LD_") {
+		return true
+	}
+	switch key {
+	case "BASH_ENV", "ENV", "CDPATH", "GLOBIGNORE", "PROMPT_COMMAND",
+		"PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP", "NODE_PATH", "NODE_OPTIONS",
+		"RUBYLIB", "RUBYOPT", "PERL5LIB", "PERL5OPT", "DYLD_INSERT_LIBRARIES",
+		"DYLD_LIBRARY_PATH", "DYLD_FRAMEWORK_PATH", "DYLD_FALLBACK_LIBRARY_PATH",
+		"PATHEXT":
+		return true
+	default:
+		return false
+	}
 }
 
 func isPrivateHost(host string) bool {

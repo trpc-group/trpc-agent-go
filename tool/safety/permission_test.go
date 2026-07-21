@@ -47,6 +47,28 @@ func TestPermissionPolicy_MapsNeedsHumanReviewToAsk(t *testing.T) {
 	require.Equal(t, DecisionNeedsHumanReview, observed.Decision)
 }
 
+func TestPermissionPolicy_UnsupportedBackendResolverFailsClosed(t *testing.T) {
+	var observed Report
+	policy := NewPermissionPolicy(
+		MustDefaultScanner(Policy{}),
+		WithBackendResolver(func(*tool.PermissionRequest) Backend {
+			return Backend("HOST")
+		}),
+		WithReportObserver(func(_ context.Context, report Report) {
+			observed = report
+		}),
+	)
+	decision, err := policy.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:  "exec_command",
+		Arguments: []byte(`{"command":"python -i","background":true,"tty":true}`),
+	})
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionDeny, decision.Action)
+	require.Equal(t, BackendUnknown, observed.Backend)
+	require.Equal(t, DecisionDeny, observed.Decision)
+	require.Equal(t, "backend.unsupported", observed.RuleID)
+}
+
 func TestPermissionPolicy_AuditBestEffortKeepsDenyDecision(t *testing.T) {
 	policy := NewPermissionPolicy(
 		ScannerFunc(func(context.Context, ScanRequest) (Report, error) {
