@@ -12,7 +12,6 @@ package regression
 import (
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 )
 
@@ -45,12 +44,8 @@ func TestFileArtifactWriterErrorPaths(t *testing.T) {
 	if err := os.WriteFile(rootFile, []byte("not a directory"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	fileRootWriter, err := NewFileArtifactWriter(rootFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := fileRootWriter.Write("nested/report.json", nil); err == nil {
-		t.Fatal("writer created a directory below a file")
+	if _, err := NewFileArtifactWriter(rootFile); err == nil {
+		t.Fatal("writer accepted a file as its output directory")
 	}
 
 	root := t.TempDir()
@@ -65,11 +60,51 @@ func TestFileArtifactWriterErrorPaths(t *testing.T) {
 		t.Fatal("writer replaced a directory with a file")
 	}
 
-	if err := syncDirectory(filepath.Join(t.TempDir(), "missing")); runtime.GOOS != "windows" && err == nil {
-		t.Fatal("syncDirectory succeeded for a missing directory")
-	}
 	if err := writeJSON(writer, "bad.json", make(chan int)); err == nil {
 		t.Fatal("writeJSON marshaled an unsupported value")
+	}
+}
+
+func TestFileArtifactWriterRejectsSymlinkParentEscape(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(root, "round_1")); err != nil {
+		t.Skipf("create symlink: %v", err)
+	}
+	writer, err := NewFileArtifactWriter(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	if err := writer.Write("round_1/candidate_profile.json", []byte("escape")); err == nil {
+		t.Fatal("writer followed a symlink outside its root")
+	}
+	if _, err := os.Stat(filepath.Join(outside, "candidate_profile.json")); !os.IsNotExist(err) {
+		t.Fatalf("artifact escaped through symlink: %v", err)
+	}
+}
+
+func TestFileArtifactWriterRejectsProtectedInputSymlinkAlias(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	input := filepath.Join(outside, "train.evalset.json")
+	if err := os.WriteFile(input, []byte("protected"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "alias")); err != nil {
+		t.Skipf("create symlink: %v", err)
+	}
+	writer, err := NewFileArtifactWriterWithInputs(root, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	if err := writer.Write("alias/train.evalset.json", []byte("overwrite")); err == nil {
+		t.Fatal("writer followed a protected input symlink alias")
+	}
+	payload, err := os.ReadFile(input)
+	if err != nil || string(payload) != "protected" {
+		t.Fatalf("protected input changed: payload=%q err=%v", payload, err)
 	}
 }
 

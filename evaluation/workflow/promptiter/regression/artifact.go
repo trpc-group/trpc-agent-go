@@ -10,6 +10,8 @@
 package regression
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -26,7 +28,7 @@ type ArtifactWriter interface {
 
 // FileArtifactWriter atomically persists artifacts below one output directory.
 type FileArtifactWriter struct {
-	root string
+	rootHandle *os.Root
 }
 
 // NewFileArtifactWriter validates outputDir and returns a filesystem writer.
@@ -45,20 +47,39 @@ func NewFileArtifactWriterWithInputs(outputDir string, inputPaths ...string) (*F
 		return nil, fmt.Errorf("resolve artifact output directory: %w", err)
 	}
 	root = filepath.Clean(root)
+	root, err = canonicalPath(root)
+	if err != nil {
+		return nil, fmt.Errorf("resolve artifact output directory symlinks: %w", err)
+	}
 	for _, inputPath := range inputPaths {
 		if strings.TrimSpace(inputPath) == "" {
 			continue
 		}
-		input, err := filepath.Abs(inputPath)
+		input, err := canonicalPath(inputPath)
 		if err != nil {
 			return nil, fmt.Errorf("resolve protected input path: %w", err)
 		}
-		relative, err := filepath.Rel(root, filepath.Clean(input))
+		relative, err := filepath.Rel(root, input)
 		if err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
 			return nil, fmt.Errorf("artifact output directory %q contains protected input %q", outputDir, inputPath)
 		}
 	}
-	return &FileArtifactWriter{root: root}, nil
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return nil, fmt.Errorf("create artifact output directory: %w", err)
+	}
+	rootHandle, err := os.OpenRoot(root)
+	if err != nil {
+		return nil, fmt.Errorf("open artifact output directory: %w", err)
+	}
+	return &FileArtifactWriter{rootHandle: rootHandle}, nil
+}
+
+// Close releases the filesystem root handle held by the writer.
+func (w *FileArtifactWriter) Close() error {
+	if w == nil || w.rootHandle == nil {
+		return nil
+	}
+	return w.rootHandle.Close()
 }
 
 // Write atomically replaces one artifact and syncs its containing directory
@@ -67,29 +88,28 @@ func (w *FileArtifactWriter) Write(relativePath string, payload []byte) error {
 	if w == nil {
 		return errors.New("artifact writer is nil")
 	}
+	if w.rootHandle == nil {
+		return errors.New("artifact writer root is closed or unavailable")
+	}
 	target, err := w.resolve(relativePath)
 	if err != nil {
 		return err
 	}
 	dir := filepath.Dir(target)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := w.rootHandle.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create artifact directory: %w", err)
 	}
-	temporary, err := os.CreateTemp(dir, ".artifact-*.tmp")
+	temporary, temporaryPath, err := createRootTemp(w.rootHandle, dir)
 	if err != nil {
 		return fmt.Errorf("create temporary artifact: %w", err)
 	}
-	temporaryPath := temporary.Name()
 	committed := false
 	defer func() {
 		_ = temporary.Close()
 		if !committed {
-			_ = os.Remove(temporaryPath)
+			_ = w.rootHandle.Remove(temporaryPath)
 		}
 	}()
-	if err := temporary.Chmod(0o600); err != nil {
-		return fmt.Errorf("chmod temporary artifact: %w", err)
-	}
 	if _, err := temporary.Write(payload); err != nil {
 		return fmt.Errorf("write temporary artifact: %w", err)
 	}
@@ -99,11 +119,11 @@ func (w *FileArtifactWriter) Write(relativePath string, payload []byte) error {
 	if err := temporary.Close(); err != nil {
 		return fmt.Errorf("close temporary artifact: %w", err)
 	}
-	if err := os.Rename(temporaryPath, target); err != nil {
+	if err := w.rootHandle.Rename(temporaryPath, target); err != nil {
 		return fmt.Errorf("replace artifact: %w", err)
 	}
 	committed = true
-	if err := syncDirectory(dir); err != nil {
+	if err := syncRootDirectory(w.rootHandle, dir); err != nil {
 		return fmt.Errorf("sync artifact directory: %w", err)
 	}
 	return nil
@@ -119,16 +139,57 @@ func (w *FileArtifactWriter) resolve(relativePath string) (string, error) {
 	if cleanSlash == "." || cleanSlash == ".." || strings.HasPrefix(cleanSlash, "../") {
 		return "", fmt.Errorf("unsafe artifact path %q", relativePath)
 	}
-	target := filepath.Join(w.root, filepath.FromSlash(cleanSlash))
-	relative, err := filepath.Rel(w.root, target)
-	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("artifact path %q escapes output directory", relativePath)
-	}
-	return target, nil
+	return filepath.FromSlash(cleanSlash), nil
 }
 
-func syncDirectory(path string) error {
-	directory, err := os.Open(path)
+func canonicalPath(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	abs = filepath.Clean(abs)
+	current := abs
+	missing := make([]string, 0)
+	for {
+		resolved, err := filepath.EvalSymlinks(current)
+		if err == nil {
+			for i := len(missing) - 1; i >= 0; i-- {
+				resolved = filepath.Join(resolved, missing[i])
+			}
+			return filepath.Clean(resolved), nil
+		}
+		if !os.IsNotExist(err) {
+			return "", err
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return "", err
+		}
+		missing = append(missing, filepath.Base(current))
+		current = parent
+	}
+}
+
+func createRootTemp(root *os.Root, dir string) (*os.File, string, error) {
+	for range 100 {
+		var random [8]byte
+		if _, err := rand.Read(random[:]); err != nil {
+			return nil, "", err
+		}
+		name := filepath.Join(dir, ".artifact-"+hex.EncodeToString(random[:])+".tmp")
+		file, err := root.OpenFile(name, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+		if err == nil {
+			return file, name, nil
+		}
+		if !os.IsExist(err) {
+			return nil, "", err
+		}
+	}
+	return nil, "", errors.New("exhausted temporary artifact names")
+}
+
+func syncRootDirectory(root *os.Root, path string) error {
+	directory, err := root.Open(path)
 	if err != nil {
 		if runtime.GOOS == "windows" {
 			return nil
