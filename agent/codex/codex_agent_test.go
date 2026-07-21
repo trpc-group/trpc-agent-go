@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -316,6 +317,54 @@ func TestCodexAgent_Run_StreamsErrorsAsNonTerminalUntilCommandFinishes(t *testin
 	require.True(t, terminal.IsTerminalError())
 	require.Equal(t, model.ObjectTypeError, terminal.Object)
 	require.Equal(t, "second failure", terminal.Error.Message)
+}
+
+func TestCodexAgent_Run_StreamParseErrorEmitsFlowError(t *testing.T) {
+	ctx := context.Background()
+	sess := session.NewSession("app", "user", "sess-stream-parse-error")
+	inv := newTestInvocation("inv-stream-parse-error", sess, "Hi.")
+	runner := &scriptedRunner{
+		run: func(cmd command) ([]byte, []byte, error) {
+			return []byte("{not-json}\n"), nil, nil
+		},
+	}
+	ag, err := New(withCommandRunner(runner))
+	require.NoError(t, err)
+	ch, err := ag.Run(ctx, inv)
+	require.NoError(t, err)
+	events := drainEvents(ch)
+	require.Len(t, events, 1)
+	require.Equal(t, model.ObjectTypeError, events[0].Object)
+	require.NotNil(t, events[0].Error)
+	require.Equal(t, model.ErrorTypeFlowError, events[0].Error.Type)
+	require.Contains(t, events[0].Error.Message, "stream codex transcript")
+	require.Equal(t, "{not-json}", events[0].Choices[0].Message.Content)
+}
+
+func TestCodexAgent_Run_CommandErrorAfterCodexFailureEmitsTerminalCodexError(t *testing.T) {
+	ctx := context.Background()
+	sess := session.NewSession("app", "user", "sess-codex-error-run-error")
+	inv := newTestInvocation("inv-codex-error-run-error", sess, "Hi.")
+	runner := &scriptedRunner{
+		run: func(cmd command) ([]byte, []byte, error) {
+			transcript := []byte(`{"type":"turn.failed","error":{"message":"codex failed","code":"bad_turn"}}` + "\n")
+			return transcript, []byte("process failed"), errors.New("exit 1")
+		},
+	}
+	ag, err := New(withCommandRunner(runner))
+	require.NoError(t, err)
+	ch, err := ag.Run(ctx, inv)
+	require.NoError(t, err)
+	events := drainEvents(ch)
+	require.Len(t, events, 2)
+	require.False(t, events[0].Done)
+	require.True(t, events[0].IsPartial)
+	require.Nil(t, events[0].Error)
+	require.True(t, events[1].IsTerminalError())
+	require.Equal(t, "codex failed", events[1].Error.Message)
+	require.NotNil(t, events[1].Error.Code)
+	require.Equal(t, "bad_turn", *events[1].Error.Code)
+	require.Equal(t, "codex failed", events[1].Choices[0].Message.Content)
 }
 
 func TestCodexAgent_Run_ResumeFromSessionState(t *testing.T) {
@@ -647,6 +696,70 @@ func TestExecCommandRunner_Run(t *testing.T) {
 	require.Empty(t, string(result.stderr))
 }
 
+func TestExecCommandRunner_Run_StreamsStdoutLines(t *testing.T) {
+	runner := execCommandRunner{}
+	var lines []string
+	result := runner.Run(context.Background(), command{
+		bin:  "sh",
+		args: []string{"-c", "printf 'one\\n'; printf 'two'"},
+	}, func(line []byte) error {
+		lines = append(lines, string(line))
+		return nil
+	})
+	require.NoError(t, result.err())
+	require.Equal(t, "one\ntwo", string(result.stdout))
+	require.Empty(t, string(result.stderr))
+	require.Equal(t, []string{"one\n", "two"}, lines)
+}
+
+func TestExecCommandRunner_Run_StopsProcessOnStreamHandlerError(t *testing.T) {
+	runner := execCommandRunner{}
+	handlerErr := errors.New("stop streaming")
+	result := runner.Run(context.Background(), command{
+		bin:  "sh",
+		args: []string{"-c", "printf 'one\\n'; sleep 5; printf 'two\\n'"},
+	}, func(line []byte) error {
+		require.Equal(t, "one\n", string(line))
+		return handlerErr
+	})
+	require.ErrorIs(t, result.outputErr, handlerErr)
+	require.ErrorIs(t, result.err(), handlerErr)
+	require.Error(t, result.runErr)
+	require.Equal(t, "one\n", string(result.stdout))
+}
+
+func TestExecCommandRunner_Run_ReportsStartErrorWithStreaming(t *testing.T) {
+	runner := execCommandRunner{}
+	result := runner.Run(context.Background(), command{
+		bin: filepath.Join(t.TempDir(), "missing-codex"),
+	}, func(line []byte) error {
+		require.Empty(t, line)
+		return nil
+	})
+	require.Error(t, result.runErr)
+	require.NoError(t, result.outputErr)
+	require.Empty(t, result.stdout)
+	require.Empty(t, result.stderr)
+}
+
+func TestReadStdoutLines_ReportsReaderErrorAfterCapturedLine(t *testing.T) {
+	reader, writer := io.Pipe()
+	readErr := errors.New("read failed")
+	go func() {
+		_, _ = writer.Write([]byte("one\n"))
+		_ = writer.CloseWithError(readErr)
+	}()
+	var capture bytes.Buffer
+	var lines []string
+	err := readStdoutLines(reader, &capture, func(line []byte) error {
+		lines = append(lines, string(line))
+		return nil
+	})
+	require.ErrorIs(t, err, readErr)
+	require.Equal(t, "one\n", capture.String())
+	require.Equal(t, []string{"one\n"}, lines)
+}
+
 func TestParseTranscriptEvents_CompletedToolWithoutStarted(t *testing.T) {
 	transcript := `{"type":"thread.started","thread_id":"thread-parse"}
 {"type":"item.completed","item":{"id":"item_0","type":"command_execution","command":"pwd","aggregated_output":"/tmp\n","exit_code":0,"status":"completed"}}
@@ -743,6 +856,33 @@ func TestParseTranscriptEvents_ErrorEventMapping(t *testing.T) {
 	require.Equal(t, "top-level error", result.Error.Message)
 }
 
+func TestParseTranscriptEvents_ErrorPayloadShapes(t *testing.T) {
+	transcript := `{"type":"turn.failed","error":"quoted failure"}
+{"type":"turn.failed","error":{"type":"api_error","message":"api failed","code":"api_code"}}`
+	result, err := parseTranscriptEvents([]byte(transcript), "inv-parse-error-2", "codex")
+	require.NoError(t, err)
+	require.Len(t, result.Events, 2)
+	require.Equal(t, "quoted failure", result.Events[0].Choices[0].Delta.Content)
+	require.Equal(t, "api failed", result.Events[1].Choices[0].Delta.Content)
+	require.NotNil(t, result.Error)
+	require.Equal(t, "api_error", result.Error.Type)
+	require.NotNil(t, result.Error.Code)
+	require.Equal(t, "api_code", *result.Error.Code)
+}
+
+func TestErrorEventFromRecord(t *testing.T) {
+	evt := errorEventFromRecord("inv-error-record", "codex", codexEvent{
+		Type:  codexEventTurnFailed,
+		Error: json.RawMessage(`"quoted failure"`),
+	}, false)
+	require.NotNil(t, evt)
+	require.False(t, evt.Done)
+	require.True(t, evt.IsPartial)
+	require.Nil(t, evt.Error)
+	require.Equal(t, "quoted failure", evt.Choices[0].Delta.Content)
+	require.Nil(t, errorEventFromResponseError("inv-error-nil", "codex", nil, false))
+}
+
 func TestErrorEventFromResponseErrorClonesTerminalError(t *testing.T) {
 	param := "prompt"
 	code := "bad_turn"
@@ -783,6 +923,32 @@ func TestTranscriptHelpers_Fallbacks(t *testing.T) {
 	require.JSONEq(t, `{}`, string(marshalArgs(func() {})))
 	require.Nil(t, (*codexUsage)(nil).toModelUsage())
 	require.Nil(t, (&codexUsage{}).toModelUsage())
+}
+
+func TestTranscriptStream_HandlesEmptyLinesAndNilState(t *testing.T) {
+	require.Empty(t, (*transcriptStream)(nil).Result().Events)
+	require.Nil(t, (*transcriptStream)(nil).HandleRecord(codexEvent{Type: codexEventThreadStarted}))
+	stream := newTranscriptStream("inv-stream-helper", "codex")
+	events, err := stream.HandleLine([]byte(" \n"))
+	require.NoError(t, err)
+	require.Nil(t, events)
+	stream.result = nil
+	require.Empty(t, stream.Result().Events)
+}
+
+func TestCodexStreamEmitter_HandlesEmptyLinesAndNilState(t *testing.T) {
+	ctx := context.Background()
+	inv := newTestInvocation("inv-emitter-helper", session.NewSession("app", "user", "sess-emitter-helper"), "Hi.")
+	out := make(chan *event.Event, 1)
+	rawAgent, err := New()
+	require.NoError(t, err)
+	ag, ok := rawAgent.(*codexAgent)
+	require.True(t, ok)
+	emitter := newCodexStreamEmitter(ctx, ag, inv, out)
+	require.NoError(t, emitter.HandleLine([]byte("\n")))
+	require.False(t, emitter.emitted)
+	require.Empty(t, emitter.Result().Events)
+	require.Empty(t, (*codexStreamEmitter)(nil).Result().Events)
 }
 
 func TestParseTranscriptEvents_EmptyAndInvalidOutput(t *testing.T) {
