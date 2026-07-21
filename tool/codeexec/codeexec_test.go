@@ -154,9 +154,11 @@ func TestExecuteCodeSafetyScannerTruncatesOversizedOutputAndArtifacts(t *testing
 		result: codeexecutor.CodeExecutionResult{
 			Output: "0123456789x",
 			OutputFiles: []codeexecutor.File{{
-				Name:     "large.txt",
-				Content:  "abcdefghijx",
-				MIMEType: "text/plain",
+				Name:      "large.txt",
+				Content:   "abcdefghijx",
+				SizeBytes: 123,
+				Truncated: true,
+				MIMEType:  "text/plain",
 			}},
 		},
 	}
@@ -173,7 +175,7 @@ func TestExecuteCodeSafetyScannerTruncatesOversizedOutputAndArtifacts(t *testing
 	require.Len(t, out.OutputFiles[0].Content, 10)
 	require.Equal(t, "abcdefghij", out.OutputFiles[0].Content)
 	require.True(t, out.OutputFiles[0].Truncated)
-	require.EqualValues(t, 10, out.OutputFiles[0].SizeBytes)
+	require.EqualValues(t, 123, out.OutputFiles[0].SizeBytes)
 }
 
 func TestExecuteCodeTool_Call(t *testing.T) {

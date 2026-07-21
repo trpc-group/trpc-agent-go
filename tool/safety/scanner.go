@@ -47,6 +47,8 @@ const (
 
 	// DefaultHostExecTimeoutSec matches tool/hostexec's runtime default.
 	DefaultHostExecTimeoutSec = 1_800
+	// DefaultWorkspaceExecTimeoutSec matches workspace_exec and skill runtime defaults.
+	DefaultWorkspaceExecTimeoutSec = 300
 
 	outputTruncatedMarker = "\n[TRUNCATED: output exceeded max_output_bytes]\n"
 )
@@ -113,6 +115,7 @@ func (s *Scanner) Scan(ctx context.Context, req Request) Report {
 	if s == nil {
 		s = NewScanner(DefaultPolicy())
 	}
+	req = normalizeRequestForScan(req)
 	p := s.policy.Normalize()
 	var findings []Finding
 
@@ -138,6 +141,21 @@ func (s *Scanner) Scan(ctx context.Context, req Request) Report {
 	}
 	_ = ctx
 	return report
+}
+
+func normalizeRequestForScan(req Request) Request {
+	if shouldApplyWorkspaceDefaultTimeout(req) && req.TimeoutSec <= 0 {
+		req.TimeoutSec = DefaultWorkspaceExecTimeoutSec
+	}
+	return req
+}
+
+func shouldApplyWorkspaceDefaultTimeout(req Request) bool {
+	if req.Backend != BackendWorkspaceExec {
+		return false
+	}
+	name := normalizedToolName(req.ToolName)
+	return name == toolWorkspaceExec || isSkillRunTool(name) || isSkillExecTool(name)
 }
 
 func clonePolicy(p Policy) Policy {
@@ -1504,12 +1522,19 @@ func curlConnectionOverrideHosts(args []string) []string {
 		}
 		name, value, hasValue := strings.Cut(arg, "=")
 		switch name {
-		case "--connect-to", "--resolve":
+		case "--connect-to", "--resolve", "--proxy", "--preproxy":
 			if hasValue {
 				out = append(out, curlHostsFromOptionOperand(name, value)...)
 			} else {
 				pending = name
 			}
+			continue
+		}
+		switch {
+		case arg == "-x":
+			pending = arg
+		case strings.HasPrefix(arg, "-x") && len(arg) > 2:
+			out = append(out, curlHostsFromOptionOperand("-x", strings.TrimLeft(strings.TrimPrefix(arg, "-x"), "="))...)
 		}
 	}
 	return uniqueStrings(out)
@@ -1523,8 +1548,26 @@ func curlHostsFromOptionOperand(option, operand string) []string {
 		}
 	case "--resolve":
 		return curlResolveHosts(operand)
+	case "-x", "--proxy", "--preproxy":
+		if host := curlProxyHost(operand); host != "" {
+			return []string{host}
+		}
 	}
 	return nil
+}
+
+func curlProxyHost(value string) string {
+	value = strings.TrimSpace(strings.Trim(value, `"'`))
+	if value == "" {
+		return ""
+	}
+	if !strings.Contains(value, "://") {
+		value = "http://" + value
+	}
+	if host := hostFromURL(value); host != "" {
+		return host
+	}
+	return hostFromNetworkTarget(value)
 }
 
 func curlConnectToHost(value string) string {

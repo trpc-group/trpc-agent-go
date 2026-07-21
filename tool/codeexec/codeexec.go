@@ -294,6 +294,10 @@ func (t *executeCodeTool) scanOutput(
 		if result.OutputFiles[i].Content == "" {
 			continue
 		}
+		originalSize := result.OutputFiles[i].SizeBytes
+		if originalSize <= 0 {
+			originalSize = int64(len(result.OutputFiles[i].Content))
+		}
 		report := t.cfg.safety.ScanOutput(ctx, safety.Request{
 			ToolName: t.cfg.name,
 			Backend:  safety.BackendCodeExec,
@@ -313,7 +317,9 @@ func (t *executeCodeTool) scanOutput(
 			policy,
 		); truncated {
 			result.OutputFiles[i].Content = content
-			result.OutputFiles[i].SizeBytes = int64(len(content))
+			if result.OutputFiles[i].SizeBytes <= 0 {
+				result.OutputFiles[i].SizeBytes = originalSize
+			}
 			result.OutputFiles[i].Truncated = true
 		}
 	}

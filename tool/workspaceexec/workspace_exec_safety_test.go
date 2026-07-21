@@ -76,6 +76,21 @@ func TestExecToolSafetyScannerBlocksWriteStdinBeforeRun(t *testing.T) {
 	require.Equal(t, "TSG-CMD-001", blocked.Report.PrimaryRuleID())
 }
 
+func TestExecToolSafetyScannerUsesEffectiveDefaultTimeout(t *testing.T) {
+	policy := safety.DefaultPolicy()
+	policy.MaxTimeoutSec = 299
+	tl := NewExecTool(localexec.New(), WithSafetyScanner(
+		safety.NewScanner(policy),
+	))
+
+	_, err := tl.Call(context.Background(), []byte(`{"command":"echo ok"}`))
+	require.Error(t, err)
+	var blocked *safety.BlockedError
+	require.True(t, errors.As(err, &blocked), err)
+	require.Equal(t, safety.DecisionAsk, blocked.Report.Decision)
+	require.Equal(t, "TSG-RES-001", blocked.Report.PrimaryRuleID())
+}
+
 func TestExecToolSafetyScannerAllowsConfiguredInteractiveStdin(t *testing.T) {
 	policy := safety.DefaultPolicy()
 	policy.InteractiveStdinAction = safety.DecisionAllow

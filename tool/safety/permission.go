@@ -232,11 +232,11 @@ func (p *PermissionPolicy) CheckToolPermission(
 		if auditErr != nil {
 			return tool.DenyPermission("tool safety audit failed: " + auditErr.Error()), nil
 		}
-		if report.Decision != DecisionAllow || len(report.Findings) > 0 {
-			return permissionFromReport(report), nil
-		}
-		return permissionForDecision(p.unsupportedAction,
-			"tool safety guard does not support this tool"), nil
+		return permissionFromReportWithFallback(
+			report,
+			p.unsupportedAction,
+			"tool safety guard does not support this tool",
+		), nil
 	}
 	report, auditErr := p.scan(ctx, safetyReq)
 	if p.telemetry {
@@ -354,6 +354,15 @@ func permissionFromReport(report Report) tool.PermissionDecision {
 		reason = fmt.Sprintf("%s: %s (%s)", f.RuleID, f.Evidence, f.Recommendation)
 	}
 	return permissionForDecision(report.Decision, reason)
+}
+
+func permissionFromReportWithFallback(report Report, fallback Decision, defaultReason string) tool.PermissionDecision {
+	reason := defaultReason
+	if len(report.Findings) > 0 {
+		f := primaryPermissionFinding(report.Findings)
+		reason = fmt.Sprintf("%s: %s (%s)", f.RuleID, f.Evidence, f.Recommendation)
+	}
+	return permissionForDecision(maxDecision(report.Decision, fallback), reason)
 }
 
 func primaryPermissionFinding(findings []Finding) Finding {
@@ -480,7 +489,8 @@ func parseSkillRun(name string, args []byte) (Request, error) {
 		TimeoutSec: in.Timeout,
 		Background: in.Background,
 		Metadata: map[string]string{
-			"editor_text": strings.TrimSpace(in.EditorText),
+			"editor_text":  strings.TrimSpace(in.EditorText),
+			"output_files": strings.Join(in.OutputFiles, "\n"),
 		},
 	}, nil
 }

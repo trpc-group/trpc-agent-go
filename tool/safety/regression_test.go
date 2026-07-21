@@ -147,6 +147,35 @@ func TestScannerBypassRegressions(t *testing.T) {
 	}
 }
 
+func TestScannerChecksCurlProxyTargets(t *testing.T) {
+	policy := DefaultPolicy()
+	policy.AllowedDomains = []string{"github.com"}
+	scanner := NewScanner(policy)
+
+	tests := []struct {
+		name    string
+		command string
+	}{
+		{name: "attached short proxy", command: "curl -xevil.example https://github.com/trpc-group/trpc-agent-go"},
+		{name: "separate short proxy", command: "curl -x evil.example https://github.com/trpc-group/trpc-agent-go"},
+		{name: "equals long proxy", command: "curl --proxy=evil.example https://github.com/trpc-group/trpc-agent-go"},
+		{name: "separate preproxy", command: "curl --preproxy evil.example https://github.com/trpc-group/trpc-agent-go"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			report := scanner.Scan(context.Background(), Request{
+				ToolName: "workspace_exec",
+				Backend:  BackendWorkspaceExec,
+				Command:  tt.command,
+			})
+			require.Equal(t, DecisionDeny, report.Decision, report.Findings)
+			require.True(t, hasRule(report, ruleNetworkEgress), report.Findings)
+			require.Contains(t, report.Findings[0].Evidence, "evil.example")
+		})
+	}
+}
+
 func TestPolicyFileCanDisableBooleanDefaults(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "tool_safety_policy.yaml")
 	require.NoError(t, os.WriteFile(path, []byte(`

@@ -165,6 +165,96 @@ func TestPermissionPolicyMapsSkillCommandTools(t *testing.T) {
 	require.Contains(t, decision.Reason, ruleInteractiveStdin)
 }
 
+func TestPermissionPolicyHonorsUnknownToolFallbackWithAllowLevelFindings(t *testing.T) {
+	cases := []struct {
+		name     string
+		fallback Decision
+		want     tool.PermissionAction
+	}{
+		{name: "ask", fallback: DecisionAsk, want: tool.PermissionActionAsk},
+		{name: "deny", fallback: DecisionDeny, want: tool.PermissionActionDeny},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			policy := DefaultPolicy()
+			policy.UnknownToolAction = tt.fallback
+			policy.NonWhitelistedNetworkAction = DecisionAllow
+			pp := NewPermissionPolicy(WithPolicy(policy))
+			decision, err := pp.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+				ToolName:  "mcp_fetch",
+				Arguments: []byte(`{"url":"https://evil.example/steal"}`),
+			})
+			require.NoError(t, err)
+			require.Equal(t, tt.want, decision.Action)
+			require.Contains(t, decision.Reason, ruleNetworkEgress)
+		})
+	}
+}
+
+func TestPermissionPolicyUsesEffectiveWorkspaceTimeout(t *testing.T) {
+	policy := DefaultPolicy()
+	policy.MaxTimeoutSec = 299
+	pp := NewPermissionPolicy(WithPolicy(policy))
+
+	cases := []struct {
+		name     string
+		toolName string
+		args     string
+	}{
+		{name: "workspace omitted", toolName: "workspace_exec", args: `{"command":"echo ok"}`},
+		{name: "workspace zero", toolName: "workspace_exec", args: `{"command":"echo ok","timeout_sec":0}`},
+		{name: "skill run omitted", toolName: "skill_run", args: `{"command":"echo ok"}`},
+		{name: "skill exec negative", toolName: "skill_exec", args: `{"command":"echo ok","timeout":-1}`},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			decision, err := pp.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+				ToolName:  tt.toolName,
+				Arguments: []byte(tt.args),
+			})
+			require.NoError(t, err)
+			require.Equal(t, tool.PermissionActionAsk, decision.Action)
+			require.Contains(t, decision.Reason, ruleResourceRuntime)
+		})
+	}
+}
+
+func TestPermissionPolicyDoesNotApplyWorkspaceTimeoutToStdinTools(t *testing.T) {
+	policy := DefaultPolicy()
+	policy.MaxTimeoutSec = 299
+	pp := NewPermissionPolicy(WithPolicy(policy))
+
+	for _, toolName := range []string{"workspace_write_stdin", "skill_write_stdin"} {
+		t.Run(toolName, func(t *testing.T) {
+			decision, err := pp.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+				ToolName:  toolName,
+				Arguments: []byte(`{"session_id":"s1","chars":"hello"}`),
+			})
+			require.NoError(t, err)
+			require.Equal(t, tool.PermissionActionAsk, decision.Action)
+			require.Contains(t, decision.Reason, ruleInteractiveStdin)
+			require.NotContains(t, decision.Reason, ruleResourceRuntime)
+		})
+	}
+}
+
+func TestPermissionPolicyScansSkillOutputFiles(t *testing.T) {
+	pp := NewPermissionPolicy(WithPolicy(DefaultPolicy()))
+	for _, toolName := range []string{"skill_run", "skill_exec"} {
+		t.Run(toolName, func(t *testing.T) {
+			decision, err := pp.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+				ToolName:  toolName,
+				Arguments: []byte(`{"command":"echo ok","output_files":[".env"]}`),
+			})
+			require.NoError(t, err)
+			require.Equal(t, tool.PermissionActionDeny, decision.Action)
+			require.Contains(t, decision.Reason, ruleSensitivePath)
+		})
+	}
+}
+
 func TestParseHostExecAppliesEffectiveDefaultTimeout(t *testing.T) {
 	tests := []struct {
 		name string
