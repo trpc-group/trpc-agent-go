@@ -115,14 +115,18 @@ var genericOptions = map[string]map[string]optClass{
 // curlHostBearingLong are curl long options whose value carries a connection
 // target or the request URL that the whitelist must still see. --connect-to and
 // --resolve redirect the connection to a host different from the request URL;
-// --proxy/--preproxy route all traffic through a proxy; --url sets the request
-// URL out of band. Every host/IP in the value is extracted so a redirect such as
-// "--connect-to github.com:443:evil.io:443" cannot smuggle evil.io past a
-// github.com whitelist.
+// the proxy family (--proxy/--preproxy and every SOCKS/HTTP-1.0 variant) routes
+// all traffic through a proxy; --url sets the request URL out of band. Every
+// host/IP in the value is extracted so a redirect such as
+// "--connect-to github.com:443:evil.io:443" or
+// "--socks5-hostname evil.io:1080" cannot smuggle evil.io past a github.com
+// whitelist.
 var curlHostBearingLong = map[string]bool{
 	"--connect-to": true, "--resolve": true,
 	"--proxy": true, "--preproxy": true, "--url": true,
 	"--dns-servers": true, "--doh-url": true,
+	"--socks4": true, "--socks4a": true, "--socks5": true,
+	"--socks5-hostname": true, "--proxy1.0": true,
 }
 
 // curlLongValueOptions are curl long options whose value is an opaque
@@ -170,10 +174,18 @@ func extractHosts(cmd string, args []string) []string {
 func extractGenericHosts(cmd string, args []string) []string {
 	var hosts []string
 	opts := genericOptions[cmd]
+	// scp operands mix local paths and remote specs, so they need the
+	// remote-syntax test; every other command's operand names the target
+	// directly (sftp's destination is always remote), so the generic operand
+	// parser applies.
+	operandFn := operandHosts
+	if cmd == "scp" {
+		operandFn = scpOperandHosts
+	}
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		if !strings.HasPrefix(a, "-") || len(a) == 1 {
-			hosts = append(hosts, operandHosts(a)...)
+			hosts = append(hosts, operandFn(a)...)
 			continue
 		}
 		var cl optClass
@@ -360,6 +372,38 @@ func operandHosts(a string) []string {
 	return bareHost(a)
 }
 
+// scpOperandHosts extracts the remote host from one scp operand, or nil when
+// the operand is a local path. scp treats an operand as remote only when a ':'
+// appears before the first path separator ("user@host:/tmp", "host:file"), so
+// a dotted local filename ("release.tar.gz") must not go through the
+// dotted-domain heuristic and be mistaken for a host. scp:// URLs and
+// bracketed IPv6 remotes ("[2001:db8::1]:path", with or without user@) are
+// still parsed. A single-letter host before the colon stays a host (fail
+// closed): on non-Windows targets "x:file" genuinely names host "x", so a
+// Windows drive path is treated as a host (and flagged unless whitelisted)
+// rather than risking a bypass.
+func scpOperandHosts(a string) []string {
+	if h := hostFromURL(a); h != "" {
+		return []string{h}
+	}
+	rest := a
+	if at := strings.IndexByte(rest, '@'); at > 0 {
+		rest = rest[at+1:]
+	}
+	if strings.HasPrefix(rest, "[") {
+		return bareHost(rest)
+	}
+	colon := strings.IndexByte(rest, ':')
+	sep := strings.IndexAny(rest, "/\\")
+	if colon <= 0 || (sep >= 0 && sep < colon) {
+		return nil // no remote marker before the first separator: a local path
+	}
+	if host := rest[:colon]; hostTargetLike(host) {
+		return []string{host}
+	}
+	return nil
+}
+
 // hostFromURL returns the host of a URL embedded in a, or "" when there is none.
 func hostFromURL(a string) string {
 	if m := urlRe.FindString(a); m != "" {
@@ -436,7 +480,8 @@ func hostsFromCurlValue(flag, val string) []string {
 		return nil
 	}
 	switch flag {
-	case "-x", "--proxy", "--preproxy":
+	case "-x", "--proxy", "--preproxy",
+		"--socks4", "--socks4a", "--socks5", "--socks5-hostname", "--proxy1.0":
 		// [scheme://]host[:port].
 		if strings.Contains(val, "://") {
 			if u, err := url.Parse(val); err == nil && u.Hostname() != "" {

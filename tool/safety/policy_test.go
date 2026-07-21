@@ -113,6 +113,37 @@ func TestCompileOverrideNormalization(t *testing.T) {
 	}
 }
 
+// TestCompileRejectsUnknownRuleOverrideID pins that a rule_overrides entry
+// keyed by a typo'd rule id fails at compile time: accepted silently, it would
+// have no effect and leave the live policy weaker than the file suggests.
+func TestCompileRejectsUnknownRuleOverrideID(t *testing.T) {
+	p := DefaultPolicy()
+	p.RuleOverrides = map[string]Override{
+		"R-NTE-001": {Action: ActionDeny}, // typo of R-NET-001
+	}
+	err := p.compile()
+	if err == nil {
+		t.Fatalf("compile should reject an unknown rule override id")
+	}
+	if !strings.Contains(err.Error(), "unknown rule id") {
+		t.Errorf("error = %v, want unknown rule id error", err)
+	}
+}
+
+// TestLoadPolicyRejectsUnknownRuleOverrideID covers the same rejection through
+// the YAML file path.
+func TestLoadPolicyRejectsUnknownRuleOverrideID(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "p.yaml")
+	data := "version: 1\nrule_overrides:\n  R-NTE-001: {action: deny}\n"
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if _, err := LoadPolicy(path); err == nil ||
+		!strings.Contains(err.Error(), "unknown rule id") {
+		t.Fatalf("LoadPolicy = %v, want unknown rule id error", err)
+	}
+}
+
 func TestCompileRejectsUnknownRiskLevel(t *testing.T) {
 	p := DefaultPolicy()
 	p.RuleOverrides = map[string]Override{

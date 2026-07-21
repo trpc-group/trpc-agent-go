@@ -49,6 +49,18 @@ const (
 	ruleMetaID      = "R-META-001"
 )
 
+// knownRuleIDs indexes every built-in rule id. Policy compilation rejects a
+// rule_overrides entry keyed by an unknown id: there is no custom-rule
+// extension point, so an unmatched key is always a typo (R-NTE-001) that would
+// otherwise load fine, have no effect, and leave the live policy weaker than
+// the file suggests.
+var knownRuleIDs = map[string]bool{
+	ruleDangerousID: true, ruleCredID: true, ruleNetworkID: true,
+	ruleShellID: true, ruleCmdID: true, ruleHostID: true,
+	ruleDepID: true, ruleResourceID: true, ruleSecretID: true,
+	ruleEnvID: true, ruleMetaID: true,
+}
+
 // Finding categories.
 const (
 	catDangerous   = "dangerous_command"
@@ -177,7 +189,9 @@ func (p *Policy) scanCodeBlocks(blocks []CodeBlock) ([]Finding, *shellsafe.Pipel
 		}
 		if !isShellLanguage(b.Language) {
 			findings = append(findings, codeBridgeFindings(b)...)
-			findings = append(findings, p.codeNetworkFindings(b.Code)...)
+			if p.codeNetworkActive() {
+				findings = append(findings, p.codeNetworkFindings(b.Code)...)
+			}
 			continue
 		}
 		parsed, err := shellsafe.Parse(b.Code)
@@ -229,6 +243,18 @@ func codeBridgeFindings(b CodeBlock) []Finding {
 		}
 	}
 	return nil
+}
+
+// codeNetworkActive reports whether the URL whitelist pass applies to
+// non-shell code. It mirrors the shell side, where ruleNetwork only fires for
+// commands listed in network.download_commands: the built-in DefaultPolicy
+// configures neither download commands nor allowed domains and is documented
+// as having no network whitelist, so NewGuard() must not deny a benign
+// print("https://example.com"). Any explicit network configuration — a domain
+// whitelist or download commands — turns the code URL check on (an empty
+// whitelist then denies every URL, matching the shell behavior).
+func (p *Policy) codeNetworkActive() bool {
+	return len(p.Network.AllowedDomains) > 0 || len(p.Network.DownloadCommands) > 0
 }
 
 // codeNetworkFindings runs the network whitelist over URLs embedded in
@@ -391,7 +417,7 @@ func ruleDangerousArgs(c ruleCtx) []Finding {
 		}
 		switch lowerBase(argv[0]) {
 		case "rm":
-			if f, ok := rmFinding(argv); ok {
+			if f, ok := rmFinding(argv, c.er.Cwd); ok {
 				out = append(out, f)
 			}
 		case "chmod":
@@ -411,15 +437,23 @@ func ruleDangerousArgs(c ruleCtx) []Finding {
 
 // rmFinding evaluates one rm invocation: recursive with force is high risk;
 // recursive aimed at the root or a system directory is critical whether or not
-// force is present.
-func rmFinding(argv []string) (Finding, bool) {
+// force is present. Relative targets are also resolved against the request's
+// cwd, so "rm -rf .." run from /etc/apt is recognized as the /etc it deletes.
+func rmFinding(argv []string, cwd string) (Finding, bool) {
 	recursive, force := recursiveForceFlags(argv[1:])
 	if !recursive {
 		return Finding{}, false
 	}
 	system := false
 	for _, a := range argv[1:] {
-		if !strings.HasPrefix(a, "-") && isRootOrSystem(a) {
+		if strings.HasPrefix(a, "-") {
+			continue
+		}
+		if isRootOrSystem(a) {
+			system = true
+			break
+		}
+		if j := resolveAgainstCwd(cwd, a); j != "" && isRootOrSystem(j) {
 			system = true
 			break
 		}
@@ -486,6 +520,7 @@ func ruleNetwork(c ruleCtx) []Finding {
 	}
 	dl := toLowerSet(c.policy.Network.DownloadCommands)
 	var out []Finding
+	sawDownload := false
 	for _, argv := range c.pipe.Commands {
 		if len(argv) == 0 {
 			continue
@@ -494,6 +529,7 @@ func ruleNetwork(c ruleCtx) []Finding {
 		if !dl[cmd] {
 			continue
 		}
+		sawDownload = true
 		before := len(out)
 		// An opaque curl config file (-K/--config) can define url/proxy/resolve
 		// and other egress controls the guard cannot see, so it fails closed
@@ -563,6 +599,75 @@ func ruleNetwork(c ruleCtx) []Finding {
 				RiskLevel:      RiskMedium,
 				Evidence:       argv[0] + " (no parseable network target to check against the whitelist)",
 				Recommendation: recNetwork,
+			})
+		}
+	}
+	// A proxy environment override redirects a download command's real egress
+	// just like a command-line proxy option, so its destination must clear the
+	// same whitelist.
+	if sawDownload {
+		out = append(out, proxyEnvFindings(c)...)
+	}
+	return out
+}
+
+// proxyEnvVars are the environment keys (matched case-insensitively) that
+// curl, wget and friends honor for proxy routing. Their values redirect the
+// real egress, so the hosts they name must clear the same whitelist as a
+// command-line proxy option — otherwise HTTPS_PROXY=http://evil.io:8080
+// tunnels a whitelisted "curl https://github.com/a" through an unapproved
+// relay. The env-key rule (R-ENV-001) cannot be relied on for this: it is
+// opt-in, and an empty env.allowed_keys is documented as disabling it.
+var proxyEnvVars = map[string]bool{
+	"http_proxy": true, "https_proxy": true, "all_proxy": true,
+	"ftp_proxy": true, "ftps_proxy": true,
+}
+
+// proxyEnvFindings whitelist-checks proxy destinations supplied through the
+// request's environment overrides. It runs only when the pipeline contains a
+// download command. A proxy value with no parseable host fails closed like
+// the no-target operand fallback, but at the on_non_whitelisted action: the
+// value demonstrably redirects egress somewhere the guard cannot check.
+func proxyEnvFindings(c ruleCtx) []Finding {
+	if len(c.er.Env) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(c.er.Env))
+	for k := range c.er.Env {
+		if proxyEnvVars[strings.ToLower(k)] {
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys)
+	var out []Finding
+	for _, k := range keys {
+		v := strings.TrimSpace(c.er.Env[k])
+		if v == "" {
+			continue
+		}
+		hosts := hostsFromCurlValue("--proxy", v)
+		if len(hosts) == 0 {
+			out = append(out, Finding{
+				RuleID:         ruleNetworkID,
+				Category:       catNetwork,
+				RiskLevel:      RiskHigh,
+				Evidence:       "env " + k + " (no parseable proxy host to check against the whitelist)",
+				Recommendation: recNetwork,
+				action:         c.policy.Network.OnNonWhitelisted,
+			})
+			continue
+		}
+		for _, h := range hosts {
+			if c.policy.domainAllowed(h) {
+				continue
+			}
+			out = append(out, Finding{
+				RuleID:         ruleNetworkID,
+				Category:       catNetwork,
+				RiskLevel:      RiskHigh,
+				Evidence:       "env " + k + " -> " + h,
+				Recommendation: recNetwork,
+				action:         c.policy.Network.OnNonWhitelisted,
 			})
 		}
 	}
@@ -1019,16 +1124,17 @@ func pathCandidates(c ruleCtx) []string {
 
 // resolveAgainstCwd joins a relative, path-like argument onto the request's
 // working directory (path.Join also resolves the dot segments), or returns ""
-// when the argument is not a relative path. Only arguments containing a
-// separator are resolved: a bare word ("cat", "id_rsa") is already matched in
-// its raw form by the **-globs, and gluing every word onto cwd would only add
-// noise.
+// when the argument is not a relative path. Bare words are resolved too:
+// "cat shadow" run from /etc names /etc/shadow just as surely as a form with
+// a separator, and an absolute forbidden pattern only matches the resolved
+// spelling (the **-globs still catch the raw word, so the join adds coverage,
+// not noise).
 func resolveAgainstCwd(cwd, arg string) string {
 	if cwd == "" {
 		return ""
 	}
 	a := strings.ReplaceAll(strings.TrimSpace(arg), "\\", "/")
-	if a == "" || strings.HasPrefix(a, "-") || !strings.Contains(a, "/") {
+	if a == "" || strings.HasPrefix(a, "-") {
 		return ""
 	}
 	// Absolute paths, home-rooted paths, drive-letter paths and URLs are not

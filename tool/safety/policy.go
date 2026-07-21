@@ -221,15 +221,22 @@ func DefaultPolicy() Policy {
 // defaultSecretPatterns are the built-in secret shapes: provider token formats
 // (AWS, GitHub, OpenAI-style sk-, Slack xox), private-key material, bearer
 // headers, and a name-based key=value heuristic that catches a secret-named
-// assignment whatever the value looks like.
+// assignment whatever the value looks like. Pattern order matters for
+// redaction: the bounded full PEM block (header, base64 body and END marker)
+// must be replaced before the bare-header pattern, which otherwise would eat
+// the header and leave the key body behind in a report sink; the bare-header
+// pattern remains so a truncated key (no END marker) is still redacted. The
+// bearer charset covers the full RFC 6750 token68 alphabet (incl. +, /, ~, =)
+// so no token suffix survives redaction.
 func defaultSecretPatterns() []string {
 	return []string{
 		`AKIA[0-9A-Z]{16}`,
 		`ghp_[0-9A-Za-z]{36}`,
 		`sk-[A-Za-z0-9_-]{12,}`,
 		`xox[baprs]-[A-Za-z0-9-]{10,}`,
+		`-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----`,
 		`-----BEGIN [A-Z ]*PRIVATE KEY-----`,
-		`(?i)bearer\s+[a-z0-9._-]+`,
+		`(?i)bearer\s+[a-z0-9._~+/=-]+`,
 		`(?i)(api[_-]?key|token|password|passwd|secret|private[_-]?key|credential)[a-z0-9_]*=["']?[^\s"']+`,
 	}
 }
@@ -295,6 +302,9 @@ func (p *Policy) compile() error {
 		return fmt.Errorf("network.on_non_whitelisted: %w", err)
 	}
 	for id, ov := range p.RuleOverrides {
+		if !knownRuleIDs[id] {
+			return fmt.Errorf("rule_overrides[%s]: unknown rule id", id)
+		}
 		changed := false
 		if strings.TrimSpace(string(ov.Action)) != "" {
 			ca, ok := canonicalAction(ov.Action)

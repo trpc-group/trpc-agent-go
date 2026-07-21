@@ -51,6 +51,41 @@ func TestWithAuditFileError(t *testing.T) {
 	}
 }
 
+// TestNewGuardClosesAuditOnOptionError pins the descriptor lifecycle: when a
+// later option fails, the audit file a prior WithAuditFile already opened must
+// be closed, not leaked. The option order is deliberately audit-first. On
+// Windows a leaked handle makes os.Remove fail, so removal doubles as the
+// leak probe.
+func TestNewGuardClosesAuditOnOptionError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.jsonl")
+	_, err := NewGuard(
+		WithAuditFile(path),
+		WithPolicyFile(filepath.Join(t.TempDir(), "missing.yaml")),
+	)
+	if err == nil {
+		t.Fatalf("NewGuard should fail on the bad policy path")
+	}
+	if rmErr := os.Remove(path); rmErr != nil {
+		t.Errorf("audit file still open after failed NewGuard: %v", rmErr)
+	}
+}
+
+// TestRepeatedAuditFileOptionsCloseEarlier pins that a second audit option
+// closes the file the first one owned instead of leaking it.
+func TestRepeatedAuditFileOptionsCloseEarlier(t *testing.T) {
+	dir := t.TempDir()
+	first := filepath.Join(dir, "first.jsonl")
+	second := filepath.Join(dir, "second.jsonl")
+	g, err := NewGuard(WithAuditFile(first), WithAuditFile(second))
+	if err != nil {
+		t.Fatalf("NewGuard: %v", err)
+	}
+	defer g.Close()
+	if rmErr := os.Remove(first); rmErr != nil {
+		t.Errorf("first audit file still open after being replaced: %v", rmErr)
+	}
+}
+
 func TestGuardCloseNoAudit(t *testing.T) {
 	g, err := NewGuard()
 	if err != nil {

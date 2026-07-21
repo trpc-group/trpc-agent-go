@@ -77,7 +77,7 @@ func WithPolicy(p *Policy) Option {
 // WithAuditWriter sends audit events to w. The caller owns w's lifecycle.
 func WithAuditWriter(w io.Writer) Option {
 	return func(g *Guard) error {
-		g.audit = NewAuditWriter(w)
+		g.setAudit(NewAuditWriter(w))
 		return nil
 	}
 }
@@ -89,9 +89,19 @@ func WithAuditFile(path string) Option {
 		if err != nil {
 			return err
 		}
-		g.audit = aw
+		g.setAudit(aw)
 		return nil
 	}
+}
+
+// setAudit installs aw as the guard's audit writer, closing any previously
+// installed one first so a repeated audit option cannot leak the earlier
+// file descriptor (Close is a no-op for caller-owned writers).
+func (g *Guard) setAudit(aw *AuditWriter) {
+	if g.audit != nil {
+		_ = g.audit.Close()
+	}
+	g.audit = aw
 }
 
 // WithAuditErrorHandler registers fn to receive every audit write failure
@@ -125,6 +135,10 @@ func NewGuard(opts ...Option) (*Guard, error) {
 	g := &Guard{}
 	for _, opt := range opts {
 		if err := opt(g); err != nil {
+			// A prior WithAuditFile may already own an open file; release it
+			// so a failed construction (e.g. a bad policy path ordered after
+			// the audit option) does not leak the descriptor.
+			_ = g.Close()
 			return nil, err
 		}
 	}

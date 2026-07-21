@@ -61,6 +61,38 @@ func TestRedactPatterns(t *testing.T) {
 	}
 }
 
+// TestRedactFullSecretValues pins that redaction removes the complete secret,
+// not just a recognizable prefix: the base64 body and END marker of a private
+// key, and the tail of a bearer token containing token68 characters
+// (+ / ~ =), must not survive into a report sink.
+func TestRedactFullSecretValues(t *testing.T) {
+	p := loadExamplePolicy(t)
+
+	pem := "-----BEGIN RSA PRIVATE KEY-----\n" +
+		"MIIEfakebodyline1\nZmFrZWJvZHlsaW5lMg==\n" +
+		"-----END RSA PRIVATE KEY-----"
+	out, hit := p.redact("data = '''" + pem + "'''")
+	if !hit {
+		t.Fatalf("redact reported no hit for a full PEM block")
+	}
+	for _, leak := range []string{
+		"MIIEfakebodyline1", "ZmFrZWJvZHlsaW5lMg==", "END RSA PRIVATE KEY",
+	} {
+		if strings.Contains(out, leak) {
+			t.Errorf("redacted output still contains %q: %q", leak, out)
+		}
+	}
+
+	token := "abc.DEF+ghi/jkl~mno="
+	out, hit = p.redact("Authorization: Bearer " + token)
+	if !hit {
+		t.Fatalf("redact reported no hit for the bearer token")
+	}
+	if strings.Contains(out, "+ghi") || strings.Contains(out, token) {
+		t.Errorf("bearer token suffix survived redaction: %q", out)
+	}
+}
+
 func TestRedactReportSetsFlag(t *testing.T) {
 	p := loadExamplePolicy(t)
 	cmd := `curl -H "Authorization: Bearer ` + fakeGitHubPAT() + `" https://github.com/x`
