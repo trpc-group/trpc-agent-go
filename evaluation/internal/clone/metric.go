@@ -29,6 +29,7 @@ func CloneEvalMetric(src *metric.EvalMetric) (*metric.EvalMetric, error) {
 		return nil, errNilInput("eval metric")
 	}
 	copied := *src
+	// Extension is intentionally assigned as-is because callers own its clone semantics.
 	clonedCriterion, err := cloneCriterion(src.Criterion)
 	if err != nil {
 		return nil, err

@@ -79,6 +79,19 @@ func TestCloneEvalMetric_NilInput(t *testing.T) {
 	assert.Nil(t, got)
 }
 
+func TestCloneEvalMetric_AssignsExtensionAsIs(t *testing.T) {
+	extension := map[string]any{"weight": 0.7}
+	src := &metric.EvalMetric{
+		MetricName: "metric-1",
+		Extension:  extension,
+	}
+	dst, err := CloneEvalMetric(src)
+	require.NoError(t, err)
+	require.NotNil(t, dst)
+	dst.Extension.(map[string]any)["weight"] = 0.3
+	assert.Equal(t, 0.3, src.Extension.(map[string]any)["weight"])
+}
+
 func TestCloneEvalMetric_DeepCopiesJudgeTemplate(t *testing.T) {
 	src := &metric.EvalMetric{
 		MetricName:    "metric-1",
