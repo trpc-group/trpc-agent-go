@@ -10,8 +10,6 @@ package mem0
 
 import (
 	"context"
-	"encoding/json"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -186,9 +184,9 @@ func TestIngestWorker_Ingest_CreatesAndTerminalStatus(t *testing.T) {
 func TestIngestWorker_IngestHostedForwardsInference(t *testing.T) {
 	var gotBody map[string]any
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		require.NoError(t, err)
-		require.NoError(t, json.Unmarshal(body, &gotBody))
+		if !decodeTestJSONRequest(w, r, &gotBody) {
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`[{"id":"x","status":"SUCCEEDED"}]`))
 	})
@@ -208,9 +206,9 @@ func TestIngestWorker_IngestSelfHostedOSSUsesSyncCreate(t *testing.T) {
 	var gotBody map[string]any
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
-		body, err := io.ReadAll(r.Body)
-		require.NoError(t, err)
-		require.NoError(t, json.Unmarshal(body, &gotBody))
+		if !decodeTestJSONRequest(w, r, &gotBody) {
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"results":[{"id":"x","memory":"hi"}]}`))
 	})
@@ -245,9 +243,9 @@ func TestIngestWorker_IngestSelfHostedOSSUsesSyncCreate(t *testing.T) {
 func TestIngestWorker_IngestSelfHostedOSSForwardsOptionalFields(t *testing.T) {
 	var gotBody map[string]any
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		require.NoError(t, err)
-		require.NoError(t, json.Unmarshal(body, &gotBody))
+		if !decodeTestJSONRequest(w, r, &gotBody) {
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"results":[{"id":"x","memory":"procedure"}]}`))
 	})

@@ -40,14 +40,10 @@ type ingestOptions struct {
 }
 
 type ingestConfig struct {
-	prompt           string
-	expirationPolicy *expirationDatePolicy
-	infer            bool
-	memoryType       string
-}
-
-type expirationDatePolicy struct {
-	resolve func(context.Context, *session.Session) (time.Time, error)
+	prompt                 string
+	expirationDateResolver func(context.Context, *session.Session) (time.Time, error)
+	infer                  bool
+	memoryType             string
 }
 
 type apiMode int
@@ -102,7 +98,8 @@ var defaultOptions = serviceOpts{
 type ServiceOpt func(*serviceOpts)
 
 // WithSelfHostedIngestPrompt sets the extraction prompt used by every
-// self-hosted Mem0 ingestion request from this service.
+// self-hosted Mem0 ingestion request from this service. A custom prompt
+// requires inference; NewService returns an error if inference is disabled.
 func WithSelfHostedIngestPrompt(prompt string) ServiceOpt {
 	return func(opts *serviceOpts) {
 		if strings.TrimSpace(prompt) == "" {
@@ -118,7 +115,8 @@ func WithSelfHostedIngestPrompt(prompt string) ServiceOpt {
 // validated. A zero time omits expiration_date for that request.
 //
 // The resolver may be called concurrently and must be safe for concurrent use.
-// It must treat the provided session as read-only.
+// It must treat the provided session as read-only. Expiration hides a record
+// from normal Mem0 reads; it does not delete the record.
 func WithSelfHostedIngestExpirationDateResolver(
 	resolver func(context.Context, *session.Session) (time.Time, error),
 ) ServiceOpt {
@@ -126,16 +124,15 @@ func WithSelfHostedIngestExpirationDateResolver(
 		if resolver == nil {
 			return
 		}
-		opts.ingestDefaults.expirationPolicy = &expirationDatePolicy{
-			resolve: resolver,
-		}
+		opts.ingestDefaults.expirationDateResolver = resolver
 	}
 }
 
 // WithIngestInference controls whether Mem0 extracts memories from the
 // transcript for every ingestion request from this service. When disabled,
-// Mem0 stores non-system messages verbatim. Disabled inference cannot be
-// combined with a custom extraction prompt or procedural memory.
+// the adapter sends normalized non-system message text for direct import.
+// Provider storage behavior may differ by deployment mode. Disabled inference
+// cannot be combined with a custom extraction prompt or procedural memory.
 func WithIngestInference(infer bool) ServiceOpt {
 	return func(opts *serviceOpts) {
 		opts.ingestDefaults.infer = infer
@@ -143,7 +140,8 @@ func WithIngestInference(infer bool) ServiceOpt {
 }
 
 // WithSelfHostedProceduralMemory configures this service to create procedural
-// memories. Mem0 requires an agent ID for procedural memory ingestion.
+// memories. Procedural memory requires inference and an agent ID for each
+// ingestion. NewService returns an error if inference is disabled.
 func WithSelfHostedProceduralMemory() ServiceOpt {
 	return func(opts *serviceOpts) {
 		opts.ingestDefaults.memoryType = memoryTypeProcedural

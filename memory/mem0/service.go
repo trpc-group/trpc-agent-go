@@ -35,6 +35,7 @@ type Service struct {
 	c    *client
 
 	ingestWorker *ingestWorker
+	ingestLocks  *ingestSessionLocks
 
 	precomputedTools []tool.Tool
 }
@@ -53,15 +54,22 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 			return nil, errors.New("mem0: org/project identifiers are not supported by self-hosted OSS")
 		}
 	} else if opts.ingestDefaults.prompt != "" ||
-		opts.ingestDefaults.expirationPolicy != nil ||
+		opts.ingestDefaults.expirationDateResolver != nil ||
 		opts.ingestDefaults.memoryType != "" {
 		return nil, errors.New("mem0: self-hosted ingest options require self-hosted OSS mode")
+	}
+	if err := validateIngestConfig(opts.ingestDefaults); err != nil {
+		return nil, err
 	}
 	c, err := newClient(opts)
 	if err != nil {
 		return nil, err
 	}
-	svc := &Service{opts: opts, c: c}
+	svc := &Service{
+		opts:        opts,
+		c:           c,
+		ingestLocks: &ingestSessionLocks{},
+	}
 	svc.ingestWorker = newIngestWorker(c, opts)
 	svc.precomputedTools = buildReadOnlyTools(svc)
 	return svc, nil
@@ -99,25 +107,53 @@ func (s *Service) IngestSession(
 	if err := userKey.CheckUserKey(); err != nil {
 		return err
 	}
+	lock := s.ingestLocks.lockFor(sess)
+	lock.Lock()
 	since := readLastExtractAt(sess)
 	latestTs, messages := scanDeltaSince(sess, since)
 	if len(messages) == 0 {
+		lock.Unlock()
 		return nil
 	}
+	if !hasIngestibleMessages(messages) {
+		writeLastExtractAt(sess, latestTs)
+		lock.Unlock()
+		return nil
+	}
+	lock.Unlock()
+
 	reqOpts := resolveSessionIngestOptions(s.opts.ingestDefaults, opts)
-	if err := s.validateIngestOptions(reqOpts); err != nil {
+	if err := validateIngestOptions(reqOpts); err != nil {
 		return err
 	}
 	expirationDate, err := resolveIngestExpirationDate(
 		ctx,
 		sess,
-		s.opts.ingestDefaults.expirationPolicy,
+		s.opts.ingestDefaults.expirationDateResolver,
 	)
 	if err != nil {
 		return err
 	}
 	reqOpts.expirationDate = expirationDate
+
+	// The option callbacks and expiration resolver above are caller code and
+	// must not run while the session lock is held. Re-read the delta before
+	// committing the watermark so overlapping calls cannot enqueue it twice.
+	lock.Lock()
+	since = readLastExtractAt(sess)
+	latestTs, messages = scanDeltaSince(sess, since)
+	if len(messages) == 0 {
+		lock.Unlock()
+		return nil
+	}
+	if !hasIngestibleMessages(messages) {
+		writeLastExtractAt(sess, latestTs)
+		lock.Unlock()
+		return nil
+	}
 	writeLastExtractAt(sess, latestTs)
+	lock.Unlock()
+
 	job := &ingestJob{
 		Ctx:      context.WithoutCancel(ctx),
 		UserKey:  userKey,
@@ -145,17 +181,20 @@ func (s *Service) IngestSession(
 func resolveIngestExpirationDate(
 	ctx context.Context,
 	sess *session.Session,
-	policy *expirationDatePolicy,
+	resolver func(context.Context, *session.Session) (time.Time, error),
 ) (string, error) {
-	if policy == nil || policy.resolve == nil {
+	if resolver == nil {
 		return "", nil
 	}
-	expirationDate, err := policy.resolve(ctx, sess)
+	expirationDate, err := resolver(ctx, sess)
 	if err != nil {
 		return "", fmt.Errorf("mem0: resolve ingest expiration date: %w", err)
 	}
 	if expirationDate.IsZero() {
 		return "", nil
+	}
+	if year := expirationDate.Year(); year < 1 || year > 9999 {
+		return "", fmt.Errorf("mem0: expiration date year %d is outside the supported range [1, 9999]", year)
 	}
 	return expirationDate.Format(time.DateOnly), nil
 }
@@ -181,18 +220,29 @@ func resolveSessionIngestOptions(
 	}
 }
 
-func (s *Service) validateIngestOptions(opts ingestOptions) error {
+func validateIngestOptions(opts ingestOptions) error {
 	if opts.memoryType != "" && opts.memoryType != memoryTypeProcedural {
 		return fmt.Errorf("mem0: unsupported memory type %q", opts.memoryType)
 	}
-	if !opts.infer && opts.memoryType == memoryTypeProcedural {
-		return errors.New("mem0: procedural memory requires inference")
-	}
-	if !opts.infer && strings.TrimSpace(opts.prompt) != "" {
-		return errors.New("mem0: custom ingest prompt requires inference")
+	if err := validateIngestConfig(ingestConfig{
+		prompt:     opts.prompt,
+		infer:      opts.infer,
+		memoryType: opts.memoryType,
+	}); err != nil {
+		return err
 	}
 	if opts.memoryType == memoryTypeProcedural && strings.TrimSpace(opts.agentID) == "" {
 		return errors.New("mem0: procedural memory requires an agent ID")
+	}
+	return nil
+}
+
+func validateIngestConfig(config ingestConfig) error {
+	if !config.infer && config.memoryType == memoryTypeProcedural {
+		return errors.New("mem0: procedural memory requires inference")
+	}
+	if !config.infer && strings.TrimSpace(config.prompt) != "" {
+		return errors.New("mem0: custom ingest prompt requires inference")
 	}
 	return nil
 }

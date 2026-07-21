@@ -121,6 +121,52 @@ func TestIngestSession_NoMessagesReturnsNil(t *testing.T) {
 	assert.NoError(t, svc.IngestSession(context.Background(), sess))
 }
 
+func TestIngestSession_NoIngestibleTextSkipsOptionsAndAdvancesWatermark(t *testing.T) {
+	var requestCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requestCalls.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+
+	var resolverCalls atomic.Int32
+	svc, err := NewService(
+		WithSelfHostedOSS(),
+		WithHost(server.URL),
+		WithSelfHostedIngestExpirationDateResolver(
+			func(context.Context, *session.Session) (time.Time, error) {
+				resolverCalls.Add(1)
+				return time.Time{}, nil
+			},
+		),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+
+	eventTime := time.Date(2026, time.July, 21, 10, 0, 0, 0, time.UTC)
+	sess := &session.Session{
+		AppName: "app",
+		UserID:  "user",
+		ID:      "session",
+		Events: []event.Event{{
+			Timestamp: eventTime,
+			Response: &model.Response{Choices: []model.Choice{{
+				Message: model.Message{Role: model.RoleUser, Content: " \n\t "},
+			}}},
+		}},
+	}
+	var optionCalls atomic.Int32
+	option := session.IngestOption(func(*session.IngestOptions) {
+		optionCalls.Add(1)
+	})
+
+	require.NoError(t, svc.IngestSession(context.Background(), sess, option))
+	assert.Equal(t, eventTime, readLastExtractAt(sess))
+	assert.Zero(t, optionCalls.Load())
+	assert.Zero(t, resolverCalls.Load())
+	assert.Zero(t, requestCalls.Load())
+}
+
 func TestIngestSession_EarlyReturnDoesNotResolveOptions(t *testing.T) {
 	var resolverCalls atomic.Int32
 	svc, err := NewService(
@@ -184,7 +230,11 @@ func TestIngestSession_ForwardsMessagesToBackend(t *testing.T) {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
 		body, err := io.ReadAll(r.Body)
-		require.NoError(t, err)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			gotBody <- nil
+			return
+		}
 		gotBody <- body
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`[{"id":"x","status":"SUCCEEDED"}]`))
@@ -233,7 +283,9 @@ func TestIngestSession_ForwardsSelfHostedExtractionFields(t *testing.T) {
 	gotBody := make(chan map[string]any, 1)
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
-		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		if !decodeTestJSONRequest(w, r, &body) {
+			return
+		}
 		gotBody <- body
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"results":[]}`))
@@ -290,7 +342,9 @@ func TestIngestSession_ForwardsDisabledInference(t *testing.T) {
 	gotBody := make(chan map[string]any, 1)
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
-		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		if !decodeTestJSONRequest(w, r, &body) {
+			return
+		}
 		gotBody <- body
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"results":[]}`))
@@ -335,7 +389,7 @@ func TestIngestSession_ExpirationResolverErrorDoesNotAdvanceWatermark(t *testing
 	srv := httptest.NewServer(handler)
 	defer srv.Close()
 
-	wantErr := errors.New("expiration policy failed")
+	wantErr := errors.New("expiration resolver failed")
 	svc, err := NewService(
 		WithSelfHostedOSS(),
 		WithHost(srv.URL),
@@ -352,6 +406,35 @@ func TestIngestSession_ExpirationResolverErrorDoesNotAdvanceWatermark(t *testing
 	err = svc.IngestSession(context.Background(), sess)
 	require.ErrorIs(t, err, wantErr)
 	assert.Contains(t, err.Error(), "resolve ingest expiration date")
+	assert.True(t, readLastExtractAt(sess).IsZero())
+	assert.Zero(t, requestCalls.Load())
+}
+
+func TestIngestSession_InvalidExpirationDateDoesNotAdvanceWatermark(t *testing.T) {
+	var requestCalls atomic.Int32
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requestCalls.Add(1)
+		w.WriteHeader(http.StatusOK)
+	})
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	svc, err := NewService(
+		WithSelfHostedOSS(),
+		WithHost(srv.URL),
+		WithSelfHostedIngestExpirationDateResolver(
+			func(context.Context, *session.Session) (time.Time, error) {
+				return time.Date(10000, time.January, 1, 0, 0, 0, 0, time.UTC), nil
+			},
+		),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+
+	sess := newIngestTestSession()
+	err = svc.IngestSession(context.Background(), sess)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "outside the supported range")
 	assert.True(t, readLastExtractAt(sess).IsZero())
 	assert.Zero(t, requestCalls.Load())
 }
@@ -381,6 +464,7 @@ func TestIngestSession_ExpirationResolverSupportsConcurrentCalls(t *testing.T) {
 		),
 	)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
 
 	errCh := make(chan error, sessions)
 	var wg sync.WaitGroup
@@ -399,6 +483,59 @@ func TestIngestSession_ExpirationResolverSupportsConcurrentCalls(t *testing.T) {
 	require.NoError(t, svc.Close())
 	assert.Equal(t, int32(sessions), resolverCalls.Load())
 	assert.Equal(t, int32(sessions), requestCalls.Load())
+}
+
+func TestIngestSession_SerializesConcurrentCallsForSameSession(t *testing.T) {
+	var requestCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requestCalls.Add(1)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"results":[]}`))
+	}))
+	t.Cleanup(server.Close)
+
+	resolverEntered := make(chan struct{}, 2)
+	releaseResolver := make(chan struct{})
+	var resolverCalls atomic.Int32
+	svc, err := NewService(
+		WithSelfHostedOSS(),
+		WithHost(server.URL),
+		WithMemoryQueueSize(2),
+		WithSelfHostedIngestExpirationDateResolver(
+			func(context.Context, *session.Session) (time.Time, error) {
+				resolverCalls.Add(1)
+				resolverEntered <- struct{}{}
+				<-releaseResolver
+				return time.Time{}, nil
+			},
+		),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+
+	sess := newIngestTestSession()
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- svc.IngestSession(context.Background(), sess)
+	}()
+	secondDone := make(chan error, 1)
+	go func() {
+		secondDone <- svc.IngestSession(context.Background(), sess)
+	}()
+	for i := 0; i < 2; i++ {
+		select {
+		case <-resolverEntered:
+		case <-time.After(2 * time.Second):
+			t.Fatal("concurrent ingestion did not enter the expiration resolver")
+		}
+	}
+
+	close(releaseResolver)
+	require.NoError(t, <-firstDone)
+	require.NoError(t, <-secondDone)
+	require.NoError(t, svc.Close())
+	assert.Equal(t, int32(2), resolverCalls.Load())
+	assert.Equal(t, int32(1), requestCalls.Load())
 }
 
 func TestIngestSession_SyncFallbackWhenQueueFull(t *testing.T) {
@@ -478,49 +615,88 @@ func TestNewService_RejectsSelfHostedIngestOptionsInCloudMode(t *testing.T) {
 	}
 }
 
-func TestIngestSession_RejectsOptionsIgnoredWhenInferenceDisabled(t *testing.T) {
+func TestNewService_AllowsInferenceOptionInCloudMode(t *testing.T) {
+	svc, err := NewService(WithAPIKey("key"), WithIngestInference(false))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+}
+
+func TestNewService_RejectsOptionsIgnoredWhenInferenceDisabled(t *testing.T) {
 	tests := []struct {
-		name          string
-		serviceOption ServiceOpt
-		ingestOptions []session.IngestOption
-		want          string
+		name string
+		opt  ServiceOpt
+		want string
 	}{
 		{
-			name:          "custom prompt",
-			serviceOption: WithSelfHostedIngestPrompt("extract deadlines"),
-			want:          "custom ingest prompt requires inference",
+			name: "custom prompt",
+			opt:  WithSelfHostedIngestPrompt("extract deadlines"),
+			want: "custom ingest prompt requires inference",
 		},
 		{
-			name:          "procedural memory",
-			serviceOption: WithSelfHostedProceduralMemory(),
-			ingestOptions: []session.IngestOption{session.WithIngestAgentID("agent-1")},
-			want:          "procedural memory requires inference",
+			name: "procedural memory",
+			opt:  WithSelfHostedProceduralMemory(),
+			want: "procedural memory requires inference",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var resolverCalls atomic.Int32
-			svc, err := NewService(
+			_, err := NewService(
 				WithSelfHostedOSS(),
 				WithHost("http://localhost:8888"),
 				WithIngestInference(false),
-				tt.serviceOption,
-				WithSelfHostedIngestExpirationDateResolver(
-					func(context.Context, *session.Session) (time.Time, error) {
-						resolverCalls.Add(1)
-						return time.Time{}, nil
-					},
-				),
+				tt.opt,
 			)
-			require.NoError(t, err)
-			t.Cleanup(func() { _ = svc.Close() })
-
-			sess := newIngestTestSession()
-			err = svc.IngestSession(context.Background(), sess, tt.ingestOptions...)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.want)
-			assert.True(t, readLastExtractAt(sess).IsZero())
-			assert.Zero(t, resolverCalls.Load())
+		})
+	}
+}
+
+func TestService_ValidateIngestOptions(t *testing.T) {
+	tests := []struct {
+		name    string
+		opts    ingestOptions
+		wantErr string
+	}{
+		{
+			name:    "unsupported memory type",
+			opts:    ingestOptions{infer: true, memoryType: "unsupported"},
+			wantErr: "unsupported memory type",
+		},
+		{
+			name:    "procedural memory without inference",
+			opts:    ingestOptions{memoryType: memoryTypeProcedural},
+			wantErr: "procedural memory requires inference",
+		},
+		{
+			name:    "custom prompt without inference",
+			opts:    ingestOptions{prompt: "extract facts"},
+			wantErr: "custom ingest prompt requires inference",
+		},
+		{
+			name:    "procedural memory without agent ID",
+			opts:    ingestOptions{infer: true, memoryType: memoryTypeProcedural},
+			wantErr: "procedural memory requires an agent ID",
+		},
+		{
+			name: "valid procedural memory",
+			opts: ingestOptions{
+				agentID:    "agent",
+				infer:      true,
+				memoryType: memoryTypeProcedural,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateIngestOptions(tt.opts)
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
 		})
 	}
 }
@@ -898,9 +1074,9 @@ func TestSearchMemories_SelfHostedOSSUsesMetadataFilter(t *testing.T) {
 			http.NotFound(w, r)
 			return
 		}
-		body, err := io.ReadAll(r.Body)
-		require.NoError(t, err)
-		require.NoError(t, json.Unmarshal(body, &gotReq))
+		if !decodeTestJSONRequest(w, r, &gotReq) {
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"results":[
 			{"id":"keep","memory":"match","metadata":{"trpc_app_name":"app"},"score":0.9},
@@ -933,9 +1109,9 @@ func TestSearchMemories_SelfHostedOSSCanIncludeUnscopedMemories(t *testing.T) {
 			http.NotFound(w, r)
 			return
 		}
-		body, err := io.ReadAll(r.Body)
-		require.NoError(t, err)
-		require.NoError(t, json.Unmarshal(body, &gotReq))
+		if !decodeTestJSONRequest(w, r, &gotReq) {
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"results":[
 			{"id":"app","memory":"keep app","metadata":{"trpc_app_name":"app"},"score":0.9},
@@ -967,9 +1143,9 @@ func TestSearchMemories_SelfHostedOSSCanIncludeUnscopedMemories(t *testing.T) {
 func TestSearchMemories_SelfHostedOSSForwardsThreshold(t *testing.T) {
 	var gotReq searchV2Request
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		require.NoError(t, err)
-		require.NoError(t, json.Unmarshal(body, &gotReq))
+		if !decodeTestJSONRequest(w, r, &gotReq) {
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"results":[{
 			"id":"memory-1",
@@ -1007,9 +1183,9 @@ func TestSearchMemories_SelfHostedOSSForwardsThreshold(t *testing.T) {
 func TestSearchMemories_CloudDoesNotForwardSelfHostedThreshold(t *testing.T) {
 	var gotReq map[string]any
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		require.NoError(t, err)
-		require.NoError(t, json.Unmarshal(body, &gotReq))
+		if !decodeTestJSONRequest(w, r, &gotReq) {
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"memories":[]}`))
 	})
@@ -1030,4 +1206,12 @@ func TestSearchMemories_CloudDoesNotForwardSelfHostedThreshold(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.NotContains(t, gotReq, "threshold")
+}
+
+func decodeTestJSONRequest(w http.ResponseWriter, r *http.Request, dst any) bool {
+	if err := json.NewDecoder(r.Body).Decode(dst); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return false
+	}
+	return true
 }

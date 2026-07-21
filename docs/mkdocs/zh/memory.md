@@ -1784,35 +1784,50 @@ defer r.Close()
 | `memory_type` | `WithSelfHostedProceduralMemory`；普通记忆不发送该字段。 |
 
 ```go
-expirationForSession := func(
-    _ context.Context,
-    sess *session.Session,
-) (time.Time, error) {
-    if sess.CreatedAt.IsZero() {
-        return time.Time{}, nil
+package example
+
+import (
+    "context"
+    "time"
+
+    memorymem0 "trpc.group/trpc-go/trpc-agent-go/memory/mem0"
+    "trpc.group/trpc-go/trpc-agent-go/session"
+)
+
+func newProceduralMemoryService() (*memorymem0.Service, error) {
+    expirationForSession := func(
+        _ context.Context,
+        sess *session.Session,
+    ) (time.Time, error) {
+        if sess.CreatedAt.IsZero() {
+            return time.Time{}, nil
+        }
+        return sess.CreatedAt.AddDate(0, 0, 30), nil
     }
-    return sess.CreatedAt.AddDate(0, 0, 30), nil
+
+    return memorymem0.NewService(
+        memorymem0.WithSelfHostedOSS(),
+        memorymem0.WithHost("http://localhost:8888"),
+        memorymem0.WithSelfHostedIngestPrompt("提取可复用的部署流程。"),
+        memorymem0.WithSelfHostedIngestExpirationDateResolver(
+            expirationForSession,
+        ),
+        memorymem0.WithSelfHostedProceduralMemory(),
+    )
 }
 
-mem0Svc, err := memorymem0.NewService(
-    memorymem0.WithSelfHostedOSS(),
-    memorymem0.WithHost("http://localhost:8888"),
-    memorymem0.WithSelfHostedIngestPrompt("提取可复用的部署流程。"),
-    memorymem0.WithSelfHostedIngestExpirationDateResolver(expirationForSession),
-    memorymem0.WithSelfHostedProceduralMemory(),
-)
+func newRawMemoryService() (*memorymem0.Service, error) {
+    return memorymem0.NewService(
+        memorymem0.WithSelfHostedOSS(),
+        memorymem0.WithHost("http://localhost:8888"),
+        memorymem0.WithIngestInference(false),
+    )
+}
 ```
 
-如果需要跳过 LLM 提取并直接保存非 system 消息，应使用一个不包含自定义 prompt
-和 procedural memory 的独立 service：
-
-```go
-rawMem0Svc, err := memorymem0.NewService(
-    memorymem0.WithSelfHostedOSS(),
-    memorymem0.WithHost("http://localhost:8888"),
-    memorymem0.WithIngestInference(false),
-)
-```
+`newRawMemoryService` 跳过 LLM 提取，保存适配层规范化后的非 system 消息文本。
+它特意使用一个不包含自定义 prompt 和 procedural memory 的独立 service。
+Mem0 仍会调用 embedding 模型来持久化和检索这些原始记忆。
 
 - `session.WithIngestMetadata`、`session.WithIngestAgentID` 与
   `session.WithIngestRunID` 仍用于设置单次 `IngestSession` 的通用字段；
@@ -1822,19 +1837,28 @@ rawMem0Svc, err := memorymem0.NewService(
 - `WithSelfHostedIngestExpirationDateResolver` 会在每次有效且非空的 ingestion
   中、推进 watermark 之前执行一次。回调接收请求 context 和 session，并返回
   `time.Time`；适配层使用该值所在时区的日历日期，以 `YYYY-MM-DD` 发送。返回零值
-  时省略该字段；返回错误时不发送请求，也不推进 watermark。回调可能并发执行，
-  并且必须把传入的 session 视为只读。
+  时省略该字段；返回错误时不发送请求，也不推进 watermark。resolver 可能并发执行，
+  因此必须支持并发，并把传入的 session 视为只读。到期只会让普通读取隐藏该记忆，
+  不会删除底层记录。
 - `WithIngestInference` 控制 Mem0 的 `infer` 字段。默认值仍为 `true`；设为
-  `false` 时，Mem0 不通过 LLM 提取，而是直接保存非 system 消息，并且不能再
-  配置自定义提取 prompt 或 procedural memory。
+  `false` 时，适配层会把规范化后的非 system 消息发送给 Mem0 进行 direct import，
+  不经过 LLM 提取，并且不能再配置自定义提取 prompt 或 procedural memory。本地
+  OSS 会保存 user 和 assistant 两种角色；托管平台当前只保留 user 角色的 direct
+  import 消息。静态不兼容组合会在 `NewService` 阶段直接返回错误。
 - `WithSelfHostedProceduralMemory` 选择 Mem0 的 `procedural_memory` 模式。
   未配置时，Mem0 的公开 create API 会自行提取普通记忆；procedural memory 必须
   同时提供 `agent_id`，并且始终使用 inference。
 - prompt、expiration-date resolver 与 memory type 仅供本地 OSS 使用；托管模式会
   明确报错，不会静默忽略。`infer` 在两种模式下都支持。
+- 当前锁定的 OSS REST create schema 不暴露 `timestamp`；底层 `Memory.add` 会把
+  非空 timestamp 视为仅供平台使用并拒绝该值，因此适配层不暴露这个字段。
+- 这些本地请求字段以 Mem0 OSS 2.0.11（`mem0ai/mem0@3b9aed8`）为兼容基线。
+  更早的 OSS 版本不在这些字段的支持范围内，并且可能静默忽略 REST schema
+  无法识别的请求属性。
 
-本地模式与托管模式共用 `ReadMemories` 和 `SearchMemories`。
-`SearchMemories` 会把 `MaxResults` 作为 `top_k` 发送；在本地模式下，还会把
+本地模式与托管模式共用 `ReadMemories` 和 `SearchMemories`。`MaxResults` 限制
+本地过滤后的最终结果数量。为了让 kind 和时间等框架侧过滤仍能填满该数量，适配层
+可能通过更大的 `top_k` 向服务端获取候选；在本地模式下，还会把非零
 `SimilarityThreshold` 作为 `threshold` 发送。返回值统一映射为
 `memory.Entry`，包括 ID、正文、score、时间戳，以及 metadata 中保存的 tRPC
 结构化记忆字段。对于 `memory.Entry` 无法表达的 provider 专属诊断信息，适配层

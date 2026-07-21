@@ -1751,37 +1751,53 @@ service is created, so `IngestSession` remains the only ingestion API:
 | `memory_type` | `WithSelfHostedProceduralMemory`; omitted for ordinary memories. |
 
 ```go
-expirationForSession := func(
-    _ context.Context,
-    sess *session.Session,
-) (time.Time, error) {
-    if sess.CreatedAt.IsZero() {
-        return time.Time{}, nil
+package example
+
+import (
+    "context"
+    "time"
+
+    memorymem0 "trpc.group/trpc-go/trpc-agent-go/memory/mem0"
+    "trpc.group/trpc-go/trpc-agent-go/session"
+)
+
+func newProceduralMemoryService() (*memorymem0.Service, error) {
+    expirationForSession := func(
+        _ context.Context,
+        sess *session.Session,
+    ) (time.Time, error) {
+        if sess.CreatedAt.IsZero() {
+            return time.Time{}, nil
+        }
+        return sess.CreatedAt.AddDate(0, 0, 30), nil
     }
-    return sess.CreatedAt.AddDate(0, 0, 30), nil
+
+    return memorymem0.NewService(
+        memorymem0.WithSelfHostedOSS(),
+        memorymem0.WithHost("http://localhost:8888"),
+        memorymem0.WithSelfHostedIngestPrompt(
+            "Extract reusable deployment procedures.",
+        ),
+        memorymem0.WithSelfHostedIngestExpirationDateResolver(
+            expirationForSession,
+        ),
+        memorymem0.WithSelfHostedProceduralMemory(),
+    )
 }
 
-mem0Svc, err := memorymem0.NewService(
-    memorymem0.WithSelfHostedOSS(),
-    memorymem0.WithHost("http://localhost:8888"),
-    memorymem0.WithSelfHostedIngestPrompt(
-        "Extract reusable deployment procedures.",
-    ),
-    memorymem0.WithSelfHostedIngestExpirationDateResolver(expirationForSession),
-    memorymem0.WithSelfHostedProceduralMemory(),
-)
+func newRawMemoryService() (*memorymem0.Service, error) {
+    return memorymem0.NewService(
+        memorymem0.WithSelfHostedOSS(),
+        memorymem0.WithHost("http://localhost:8888"),
+        memorymem0.WithIngestInference(false),
+    )
+}
 ```
 
-To store non-system messages verbatim without LLM extraction, configure a
-separate service without a custom prompt or procedural memory:
-
-```go
-rawMem0Svc, err := memorymem0.NewService(
-    memorymem0.WithSelfHostedOSS(),
-    memorymem0.WithHost("http://localhost:8888"),
-    memorymem0.WithIngestInference(false),
-)
-```
+`newRawMemoryService` stores adapter-normalized non-system message text
+without LLM extraction. It deliberately uses a separate service without a
+custom prompt or procedural memory. Mem0 still invokes its embedder to persist
+and search these raw memories.
 
 - `session.WithIngestMetadata`, `session.WithIngestAgentID`, and
   `session.WithIngestRunID` continue to set common fields for an individual
@@ -1794,21 +1810,35 @@ rawMem0Svc, err := memorymem0.NewService(
   that value's location is sent as `YYYY-MM-DD`. A zero value omits the field.
   An error aborts ingestion without sending a request or advancing the
   watermark. The callback may run concurrently and must treat the session as
-  read-only.
+  read-only. Expiration hides a memory from normal reads after the date; it does
+  not delete the stored record.
 - `WithIngestInference` controls Mem0's `infer` field. Its default remains
-  `true`; `false` stores non-system messages without LLM extraction and cannot
-  be combined with a custom extraction prompt or procedural memory.
+  `true`; `false` sends normalized non-system messages for direct import
+  without LLM extraction and cannot be combined with a custom extraction
+  prompt or procedural memory. Self-hosted OSS stores both user and assistant
+  direct-import messages; the hosted platform currently retains only user-role
+  direct-import messages. Static incompatible combinations are rejected by
+  `NewService`.
 - `WithSelfHostedProceduralMemory` selects Mem0's
   `procedural_memory` mode. Mem0's public create API otherwise infers ordinary
   memories; procedural memory requires an `agent_id` and always uses inference.
 - Prompt, expiration-date resolver, and memory type are OSS-only and are
   rejected in hosted-platform mode rather than silently ignored. `infer` is
   supported in both modes.
+- The pinned OSS REST create schema does not expose `timestamp`; the underlying
+  `Memory.add` implementation marks a non-empty timestamp as platform-only and
+  rejects it. This adapter therefore does not expose that field.
+- These self-hosted request fields are validated against Mem0 OSS 2.0.11 at
+  `mem0ai/mem0@3b9aed8`. Older OSS releases are not supported for these fields
+  and may silently ignore request properties that their REST schema does not
+  recognize.
 
 Self-hosted reads and searches use the same `ReadMemories` and
-`SearchMemories` methods as the hosted adapter. `SearchMemories` forwards
-`MaxResults` as `top_k` and, in self-hosted mode, forwards
-`SimilarityThreshold` as `threshold`. Results are mapped to
+`SearchMemories` methods as the hosted adapter. `MaxResults` caps the final
+locally filtered result set. The adapter may request a larger `top_k` candidate
+set so framework-side kind and time filters can still fill that result budget.
+In self-hosted mode, a non-zero `SimilarityThreshold` is also forwarded as
+`threshold`. Results are mapped to
 `memory.Entry`, including ID, text, score, timestamps, and the structured
 tRPC memory fields stored in metadata. Provider-only diagnostics that have no
 representation in `memory.Entry` are intentionally not exposed as a second

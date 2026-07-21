@@ -92,10 +92,7 @@ func cloudSearchFilters(userKey memory.UserKey, opts serviceOpts) map[string]any
 	return filters
 }
 
-func ossSearchFilters(
-	userKey memory.UserKey,
-	includeUnscoped bool,
-) map[string]any {
+func ossSearchFilters(userKey memory.UserKey, includeUnscoped bool) map[string]any {
 	filters := map[string]any{
 		queryKeyUserID: userKey.UserID,
 	}
@@ -319,24 +316,23 @@ func matchesSearchFilters(entry *memory.Entry, opts memory.SearchOptions) bool {
 func sortSearchResults(results []*memory.Entry, opts memory.SearchOptions) {
 	sort.Slice(results, func(i, j int) bool {
 		if opts.Kind != "" && opts.KindFallback {
-			leftMatches := results[i] != nil && results[i].Memory != nil && results[i].Memory.Kind == opts.Kind
-			rightMatches := results[j] != nil && results[j].Memory != nil && results[j].Memory.Kind == opts.Kind
-			if leftMatches != rightMatches {
-				return leftMatches
+			ik := results[i] != nil && results[i].Memory != nil && results[i].Memory.Kind == opts.Kind
+			jk := results[j] != nil && results[j].Memory != nil && results[j].Memory.Kind == opts.Kind
+			if ik != jk {
+				return ik
 			}
 		}
 		if results[i].Score != results[j].Score {
 			return results[i].Score > results[j].Score
 		}
 		if opts.OrderByEventTime {
-			leftTime := results[i].Memory.EventTime
-			rightTime := results[j].Memory.EventTime
+			it, jt := results[i].Memory.EventTime, results[j].Memory.EventTime
 			switch {
-			case leftTime != nil && rightTime != nil && !leftTime.Equal(*rightTime):
-				return leftTime.Before(*rightTime)
-			case leftTime != nil && rightTime == nil:
+			case it != nil && jt != nil && !it.Equal(*jt):
+				return it.Before(*jt)
+			case it != nil && jt == nil:
 				return true
-			case leftTime == nil && rightTime != nil:
+			case it == nil && jt != nil:
 				return false
 			}
 		}

@@ -72,8 +72,8 @@ func TestSelfHostedIngestOptions(t *testing.T) {
 			WithSelfHostedIngestExpirationDateResolver(nil),
 			WithSelfHostedIngestExpirationDateResolver(resolver),
 		)
-		require.NotNil(t, opts.ingestDefaults.expirationPolicy)
-		got, err := opts.ingestDefaults.expirationPolicy.resolve(
+		require.NotNil(t, opts.ingestDefaults.expirationDateResolver)
+		got, err := opts.ingestDefaults.expirationDateResolver(
 			context.Background(),
 			&session.Session{},
 		)
@@ -147,19 +147,4 @@ func TestDefaultOptionsCloneIsValueCopy(t *testing.T) {
 	a.apiKey = "mutated"
 	assert.Equal(t, "mutated", a.apiKey)
 	assert.Empty(t, b.apiKey, "clone should produce an independent copy")
-}
-
-func TestServiceOptionsRemainComparable(t *testing.T) {
-	if got := defaultOptions.clone(); got != defaultOptions {
-		t.Fatal("cloned service options differ from defaults")
-	}
-
-	opts := apply(WithSelfHostedIngestExpirationDateResolver(
-		func(context.Context, *session.Session) (time.Time, error) {
-			return time.Time{}, nil
-		},
-	))
-	if cloned := opts.clone(); cloned != opts {
-		t.Fatal("cloned service options differ when an expiration resolver is configured")
-	}
 }
