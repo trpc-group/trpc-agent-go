@@ -181,12 +181,12 @@ func (s *Service) IngestSession(
 func resolveIngestExpirationDate(
 	ctx context.Context,
 	sess *session.Session,
-	resolver func(context.Context, *session.Session) (time.Time, error),
+	resolver *ingestExpirationDateResolver,
 ) (string, error) {
 	if resolver == nil {
 		return "", nil
 	}
-	expirationDate, err := resolver(ctx, sess)
+	expirationDate, err := resolver.resolve(ctx, sess)
 	if err != nil {
 		return "", fmt.Errorf("mem0: resolve ingest expiration date: %w", err)
 	}

@@ -73,7 +73,7 @@ func TestSelfHostedIngestOptions(t *testing.T) {
 			WithSelfHostedIngestExpirationDateResolver(resolver),
 		)
 		require.NotNil(t, opts.ingestDefaults.expirationDateResolver)
-		got, err := opts.ingestDefaults.expirationDateResolver(
+		got, err := opts.ingestDefaults.expirationDateResolver.resolve(
 			context.Background(),
 			&session.Session{},
 		)

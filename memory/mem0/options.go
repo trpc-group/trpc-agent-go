@@ -39,9 +39,15 @@ type ingestOptions struct {
 	memoryType     string
 }
 
+// ingestExpirationDateResolver is referenced by pointer so serviceOpts
+// remains comparable.
+type ingestExpirationDateResolver struct {
+	resolve func(context.Context, *session.Session) (time.Time, error)
+}
+
 type ingestConfig struct {
 	prompt                 string
-	expirationDateResolver func(context.Context, *session.Session) (time.Time, error)
+	expirationDateResolver *ingestExpirationDateResolver
 	infer                  bool
 	memoryType             string
 }
@@ -124,7 +130,9 @@ func WithSelfHostedIngestExpirationDateResolver(
 		if resolver == nil {
 			return
 		}
-		opts.ingestDefaults.expirationDateResolver = resolver
+		opts.ingestDefaults.expirationDateResolver = &ingestExpirationDateResolver{
+			resolve: resolver,
+		}
 	}
 }
 
