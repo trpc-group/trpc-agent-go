@@ -146,7 +146,8 @@ func isDangerousBaseCommand(base string, argv []string) bool {
 	return false
 }
 
-// isDangerousFindCommand checks find -delete and find -exec rm.
+// isDangerousFindCommand checks find -delete and destructive find -exec
+// payloads (including commands nested under shell wrappers).
 func isDangerousFindCommand(argv []string) bool {
 	if basenameLower(argv[0]) != "find" {
 		return false
@@ -157,18 +158,63 @@ func isDangerousFindCommand(argv []string) bool {
 	return findHasDestructiveExec(argv)
 }
 
-// findHasDestructiveExec checks for -exec/-execdir/-ok/-okdir followed by
-// rm, shred, or dd.
+// findHasDestructiveExec checks for -exec/-execdir/-ok/-okdir payloads
+// that hide a destructive or denied command. The complete payload is
+// analyzed as a nested command: the executable is checked against the
+// destructive-binary set and the shell-wrapper implicit deny set, its
+// arguments against the destructive-argument checks, and its tokens
+// against the raw destructive-source patterns.
 func findHasDestructiveExec(argv []string) bool {
-	destructive := []string{"-exec", "-execdir", "-ok", "-okdir"}
-	for i, arg := range argv {
-		for _, d := range destructive {
-			if arg == d && i+1 < len(argv) {
-				execBase := basenameLower(argv[i+1])
-				if execBase == "rm" || execBase == "shred" || execBase == "dd" {
-					return true
-				}
-			}
+	for i := 0; i+1 < len(argv); i++ {
+		switch argv[i] {
+		case "-exec", "-execdir", "-ok", "-okdir":
+		default:
+			continue
+		}
+		if execPayloadIsDangerous(execPayload(argv[i+1:])) {
+			return true
+		}
+	}
+	return false
+}
+
+// execPayload returns the command tokens of a find -exec clause,
+// stopping at the + or ; terminator.
+func execPayload(tokens []string) []string {
+	for j, tok := range tokens {
+		if tok == "+" || tok == ";" {
+			return tokens[:j]
+		}
+	}
+	return tokens
+}
+
+// execPayloadIsDangerous analyzes one find -exec payload as a nested
+// command. A bare rm/shred/dd is destructive regardless of its
+// arguments; a shell wrapper or command runner (sh -c, bash -c, env,
+// xargs, sudo, ...) can re-exec an arbitrary denied command under the
+// allowed find argv[0], so it is denied via the same implicit deny set
+// the shellsafe layer applies to pipeline segments. The remaining
+// payloads are checked for destructive arguments (dd of=/dev/...,
+// mkfs, nested find -delete) and destructive source patterns
+// (python -c 'shutil.rmtree(...)' and similar interpreter payloads).
+func execPayloadIsDangerous(payload []string) bool {
+	if len(payload) == 0 {
+		return false
+	}
+	switch basenameLower(payload[0]) {
+	case "rm", "shred", "dd":
+		return true
+	}
+	if isWrapperName(payload[0]) {
+		return true
+	}
+	if pipelineSegmentIsDangerous(payload) {
+		return true
+	}
+	for _, tok := range payload {
+		if rawSourceHasDangerousDelete(tok) {
+			return true
 		}
 	}
 	return false

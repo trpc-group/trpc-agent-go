@@ -96,6 +96,54 @@ func TestRedactValue_UnknownTypeNoSecret(t *testing.T) {
 	require.Equal(t, w, out)
 }
 
+// TestRedactValue_StructSecretFieldRedacted verifies the P1 regression:
+// a secret-named field on a concrete result struct must be redacted even
+// when the value matches no secret regex. The marshaled form is decoded
+// into a generic JSON tree so the field-aware redactor applies.
+func TestRedactValue_StructSecretFieldRedacted(t *testing.T) {
+	type result struct {
+		Password string `json:"password"`
+		Note     string `json:"note"`
+	}
+	out, changed, err := redactValue(result{Password: "hunter2", Note: "ok"})
+	require.NoError(t, err)
+	require.True(t, changed)
+	m, ok := out.(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "[REDACTED:field:password:len=7]", m["password"])
+	require.Equal(t, "ok", m["note"])
+}
+
+// TestRedactValue_TypedMapSecretFieldRedacted verifies the P1 regression:
+// a secret-named key on a typed map (map[string]string rather than
+// map[string]any) must be redacted even when the value matches no
+// secret regex.
+func TestRedactValue_TypedMapSecretFieldRedacted(t *testing.T) {
+	in := map[string]string{"api_key": "short-secret", "note": "ok"}
+	out, changed, err := redactValue(in)
+	require.NoError(t, err)
+	require.True(t, changed)
+	m, ok := out.(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "[REDACTED:field:api_key:len=12]", m["api_key"])
+	require.Equal(t, "ok", m["note"])
+}
+
+// TestRedactValue_TypedResultNoSecretUnchanged verifies that a concrete
+// result struct without any secret is still returned unchanged, so
+// callers do not lose type fidelity.
+func TestRedactValue_TypedResultNoSecretUnchanged(t *testing.T) {
+	type result struct {
+		Password string `json:"password"`
+		Note     string `json:"note"`
+	}
+	in := result{Password: "", Note: "plain"}
+	out, changed, err := redactValue(in)
+	require.NoError(t, err)
+	require.False(t, changed)
+	require.Equal(t, in, out)
+}
+
 func TestLimitString_TruncatesAndPreservesUTF8(t *testing.T) {
 	in := "héllo " + strings.Repeat("x", 100)
 	// Use a maxBytes large enough for the truncation marker (25 bytes)
@@ -126,6 +174,45 @@ func TestLimitResultBytes_MapAndSlice(t *testing.T) {
 	require.Less(t, size, int64(300))
 	raw, _ := json.Marshal(out)
 	require.True(t, strings.Contains(string(raw), "[truncated:tool_safety]"))
+}
+
+// TestLimitResultBytes_MarshaledFormWithinBudget verifies the P1
+// regression: the budget must account for the complete encoded
+// representation, not only string leaves. A map with a huge key and an
+// integer value, or a large numeric slice, serializes far beyond
+// maxBytes even though no string leaf is oversized, and must be
+// truncated so len(json.Marshal(out)) <= max.
+func TestLimitResultBytes_MarshaledFormWithinBudget(t *testing.T) {
+	const max = int64(4096)
+	t.Run("oversized map key with scalar value", func(t *testing.T) {
+		v := map[string]any{strings.Repeat("k", 1<<20): 1}
+		out, truncated, size := limitResultBytes(v, max)
+		require.True(t, truncated)
+		raw, err := json.Marshal(out)
+		require.NoError(t, err)
+		require.LessOrEqual(t, int64(len(raw)), max)
+		require.LessOrEqual(t, size, max)
+	})
+	t.Run("large numeric slice", func(t *testing.T) {
+		v := make([]any, 0, 100000)
+		for i := 0; i < 100000; i++ {
+			v = append(v, i)
+		}
+		out, truncated, size := limitResultBytes(v, max)
+		require.True(t, truncated)
+		raw, err := json.Marshal(out)
+		require.NoError(t, err)
+		require.LessOrEqual(t, int64(len(raw)), max)
+		require.LessOrEqual(t, size, max)
+	})
+	t.Run("scalar-only result still within budget", func(t *testing.T) {
+		v := map[string]any{"count": 42, "ok": true}
+		out, truncated, _ := limitResultBytes(v, max)
+		require.False(t, truncated)
+		raw, err := json.Marshal(out)
+		require.NoError(t, err)
+		require.LessOrEqual(t, int64(len(raw)), max)
+	})
 }
 
 func TestRedactString_URLCredentials(t *testing.T) {
@@ -191,13 +278,13 @@ func TestLimitWithBudget_DeterministicKeyOrder(t *testing.T) {
 	}
 	// The budget fits the first field in full but not the second; the
 	// lexicographically first key must always be the one preserved.
-	first, truncated, _ := limitResultBytes(mk(), 120)
+	first, truncated := limitWithBudget(mk(), &byteBudget{remaining: 120})
 	require.True(t, truncated)
 	firstMap, ok := first.(map[string]any)
 	require.True(t, ok)
 	require.Equal(t, strings.Repeat("x", 100), firstMap["aaa"])
 	for i := 0; i < 50; i++ {
-		out, truncated, _ := limitResultBytes(mk(), 120)
+		out, truncated := limitWithBudget(mk(), &byteBudget{remaining: 120})
 		require.True(t, truncated)
 		require.Equal(t, first, out)
 	}

@@ -273,14 +273,30 @@ func decodeEnvMap(raw map[string]any, key string) (map[string]string, error) {
 	return out, nil
 }
 
-// decodeCodeBlocks returns the code blocks at key. The accepted shapes are
-// the ones the codeexec tool already supports: an array of
-// {language, code} objects, a single such object, or a string (treated as
-// a bash block). A wrong type yields an error.
+// decodeCodeBlocks returns the code blocks at key. The accepted shapes
+// mirror the codeexec tool's unmarshalCodeBlocks exactly: an array of
+// {language, code} objects, a single such object, or a string holding
+// double-encoded JSON for either of the above. A wrong type or malformed
+// double-encoded JSON yields an error so the scanner denies rather than
+// inspecting the wrong artifact.
 func decodeCodeBlocks(raw map[string]any, key string) ([]CodeBlock, error) {
 	v, ok := raw[key]
 	if !ok {
 		return nil, fmt.Errorf("field %q is required", key)
+	}
+	// The codeexec tool treats a string value as double-encoded JSON and
+	// unwraps it into the declared code blocks. Mirror that here so the
+	// permission check analyzes what will actually execute; labeling the
+	// JSON text as a bash block would scan the wrapper, not the payload.
+	if s, isString := v.(string); isString {
+		if strings.TrimSpace(s) == "" {
+			return nil, fmt.Errorf("field %q is empty", key)
+		}
+		var decoded any
+		if err := json.Unmarshal([]byte(s), &decoded); err != nil {
+			return nil, fmt.Errorf("field %q: invalid double-encoded JSON: %w", key, err)
+		}
+		v = decoded
 	}
 	switch val := v.(type) {
 	case []any:
@@ -299,13 +315,8 @@ func decodeCodeBlocks(raw map[string]any, key string) ([]CodeBlock, error) {
 			return nil, fmt.Errorf("field %q: %w", key, err)
 		}
 		return []CodeBlock{b}, nil
-	case string:
-		if strings.TrimSpace(val) == "" {
-			return nil, errors.New("field \"code_blocks\" is empty")
-		}
-		return []CodeBlock{{Language: "bash", Code: val}}, nil
 	}
-	return nil, fmt.Errorf("field %q must be array, object, or string, got %T", key, v)
+	return nil, fmt.Errorf("field %q must be an array, an object, or a double-encoded JSON string, got %T", key, v)
 }
 
 func decodeOneBlock(item any) (CodeBlock, error) {

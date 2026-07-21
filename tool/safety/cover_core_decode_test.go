@@ -259,12 +259,14 @@ func TestCovercore_DecodeCodeBlocks(t *testing.T) {
 	}, "code_blocks")
 	require.Error(t, err)
 
-	// A plain string becomes a bash block.
-	blocks, err = decodeCodeBlocks(map[string]any{
+	// A plain non-JSON string is rejected: the codeexec tool treats a
+	// string value as double-encoded JSON, so an unparsable string is a
+	// decode error rather than a bash block.
+	_, err = decodeCodeBlocks(map[string]any{
 		"code_blocks": "echo hi",
 	}, "code_blocks")
-	require.NoError(t, err)
-	require.Equal(t, []CodeBlock{{Language: "bash", Code: "echo hi"}}, blocks)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "double-encoded")
 
 	// A blank string is rejected.
 	_, err = decodeCodeBlocks(map[string]any{"code_blocks": "   "}, "code_blocks")
@@ -273,7 +275,48 @@ func TestCovercore_DecodeCodeBlocks(t *testing.T) {
 	// A wrong scalar type is rejected.
 	_, err = decodeCodeBlocks(map[string]any{"code_blocks": 42}, "code_blocks")
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "array, object, or string")
+	require.Contains(t, err.Error(), "array, an object, or a double-encoded JSON string")
+}
+
+// TestCovercore_DecodeCodeBlocksDoubleEncoded mirrors the codeexec tool's
+// unmarshalCodeBlocks handling of double-encoded JSON string payloads.
+func TestCovercore_DecodeCodeBlocksDoubleEncoded(t *testing.T) {
+	// A JSON-encoded array of blocks is unwrapped into typed blocks, so a
+	// Python payload is analyzed as Python instead of shell text.
+	blocks, err := decodeCodeBlocks(map[string]any{
+		"code_blocks": `[{"language":"python","code":"print(1)"},{"language":"bash","code":"ls"}]`,
+	}, "code_blocks")
+	require.NoError(t, err)
+	require.Equal(t, []CodeBlock{
+		{Language: "python", Code: "print(1)"},
+		{Language: "bash", Code: "ls"},
+	}, blocks)
+
+	// A JSON-encoded single object is wrapped into a one-element slice.
+	blocks, err = decodeCodeBlocks(map[string]any{
+		"code_blocks": `{"language":"python","code":"print(2)"}`,
+	}, "code_blocks")
+	require.NoError(t, err)
+	require.Equal(t, []CodeBlock{{Language: "python", Code: "print(2)"}}, blocks)
+
+	// A dangerous payload keeps its code verbatim so the scanner can
+	// analyze the real command instead of the JSON wrapper.
+	blocks, err = decodeCodeBlocks(map[string]any{
+		"code_blocks": `[{"language":"python","code":"import os; os.system('rm -rf /')"}]`,
+	}, "code_blocks")
+	require.NoError(t, err)
+	require.Equal(t, "python", blocks[0].Language)
+	require.Equal(t, "import os; os.system('rm -rf /')", blocks[0].Code)
+
+	// A double-encoded scalar of the wrong shape is rejected.
+	_, err = decodeCodeBlocks(map[string]any{"code_blocks": `42`}, "code_blocks")
+	require.Error(t, err)
+
+	// A double-encoded array with a malformed item is rejected.
+	_, err = decodeCodeBlocks(map[string]any{
+		"code_blocks": `[{"language":"python"}]`,
+	}, "code_blocks")
+	require.Error(t, err)
 }
 
 // TestCovercore_DecodeOneBlock covers the per-block validation errors.

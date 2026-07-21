@@ -114,7 +114,13 @@ func redactMap(v map[string]any) (any, bool, error) {
 }
 
 // redactUnknownType handles types that are not JSON-compatible by
-// marshaling to JSON, redacting, and attempting to unmarshal back.
+// marshaling to JSON, decoding the marshaled form into a generic JSON
+// tree, and running the recursive field-aware redactor over that tree.
+// Decoding first ensures secret-named fields on concrete structs and
+// typed maps (for example a "password" struct field whose value matches
+// no secret regex) are redacted exactly like map[string]any fields. The
+// marshaled form is also scanned directly so secrets in positions the
+// tree walk does not visit, such as map keys, are still redacted.
 func redactUnknownType(value any) (any, bool, error) {
 	raw, err := json.Marshal(value)
 	if err != nil {
@@ -128,19 +134,28 @@ func redactUnknownType(value any) (any, bool, error) {
 		}
 		return value, false, nil
 	}
-	redacted, changed := redactString(string(raw))
-	if !changed {
+	redacted, rawChanged := redactString(string(raw))
+	var decoded any
+	if err := json.Unmarshal([]byte(redacted), &decoded); err != nil {
+		if !rawChanged {
+			return value, false, nil
+		}
+		return map[string]any{
+			"status":  "redacted",
+			"reason":  "tool result contained a secret and could not be re-decoded",
+			"pattern": "unknown",
+		}, true, nil
+	}
+	tree, treeChanged, err := redactValue(decoded)
+	if err != nil {
+		return nil, false, err
+	}
+	if !rawChanged && !treeChanged {
+		// No secret anywhere: return the original value unchanged so
+		// callers do not lose type fidelity.
 		return value, false, nil
 	}
-	var decoded any
-	if err := json.Unmarshal([]byte(redacted), &decoded); err == nil {
-		return decoded, true, nil
-	}
-	return map[string]any{
-		"status":  "redacted",
-		"reason":  "tool result contained a secret and could not be re-decoded",
-		"pattern": "unknown",
-	}, true, nil
+	return tree, true, nil
 }
 
 // limitString truncates s to at most maxBytes after redaction, appending a
@@ -181,8 +196,14 @@ func limitString(s string, maxBytes int64) (string, bool) {
 // per-leaf implementation did. The truncation marker is counted against
 // the budget.
 //
+// The per-leaf budget counts string values only; map keys, scalars, and
+// container syntax are not charged. A final marshal-and-verify pass
+// therefore checks the complete encoded form against maxBytes and
+// truncates the marshaled representation when it still exceeds the
+// limit, so the returned value always serializes to at most maxBytes.
+//
 // It returns the truncated value, whether any truncation happened, and
-// the total byte size of the (redacted, truncated) result.
+// the serialized byte size of the (redacted, truncated) result.
 func limitResultBytes(value any, maxBytes int64) (any, bool, int64) {
 	if maxBytes <= 0 {
 		// Unlimited: return unchanged.
@@ -190,7 +211,31 @@ func limitResultBytes(value any, maxBytes int64) (any, bool, int64) {
 	}
 	budget := &byteBudget{remaining: maxBytes}
 	out, truncated := limitWithBudget(value, budget)
-	return out, truncated, budget.used
+	raw, err := json.Marshal(out)
+	if err != nil {
+		// Unmarshalable values cannot be size-verified; report the
+		// budget accounting as-is.
+		return out, truncated, budget.used
+	}
+	if int64(len(raw)) <= maxBytes {
+		return out, truncated, int64(len(raw))
+	}
+	// The encoded form exceeds the budget even though every string
+	// leaf fit (oversized map keys, many scalars, or container
+	// syntax). Truncate the marshaled representation itself. The
+	// result is a plain string, so its own JSON encoding adds quotes
+	// and escapes; shrink until the re-encoded form fits the budget.
+	strBudget := maxBytes
+	for strBudget > 0 {
+		s, _ := limitString(string(raw), strBudget)
+		enc, _ := json.Marshal(s)
+		if int64(len(enc)) <= maxBytes {
+			return s, true, int64(len(enc))
+		}
+		strBudget -= int64(len(enc)) - maxBytes
+	}
+	// Pathological budget smaller than any JSON string encoding.
+	return "", true, int64(len(`""`))
 }
 
 // byteBudget tracks the remaining byte budget across all leaves of a

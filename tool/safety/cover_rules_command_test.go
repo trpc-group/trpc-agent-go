@@ -9,6 +9,7 @@
 package safety
 
 import (
+	"context"
 	"errors"
 	"path/filepath"
 	"testing"
@@ -119,6 +120,88 @@ func TestCoverrules_FindHasDestructiveExec(t *testing.T) {
 	// -exec as the last token has no command after it.
 	require.False(t, findHasDestructiveExec([]string{"find", ".", "-exec"}))
 	require.False(t, findHasDestructiveExec([]string{"find", ".", "-name", "rm"}))
+}
+
+// TestCoverrules_FindHasDestructiveExecNestedRunners covers denied shell
+// commands hidden behind command runners nested under find -exec.
+func TestCoverrules_FindHasDestructiveExecNestedRunners(t *testing.T) {
+	// sh -c and bash -c re-exec an arbitrary command under the allowed
+	// find argv[0]; the wrapper itself must trip the check.
+	require.True(t, findHasDestructiveExec(
+		[]string{"find", ".", "-exec", "sh", "-c", "rm -rf /", "{}", "+"}))
+	require.True(t, findHasDestructiveExec(
+		[]string{"find", ".", "-exec", "bash", "-c", "rm -rf /", "{}", "+"}))
+	// Other command runners from the implicit deny set are also caught.
+	require.True(t, findHasDestructiveExec(
+		[]string{"find", ".", "-exec", "env", "rm", "-rf", "/tmp/x", "{}", "+"}))
+	require.True(t, findHasDestructiveExec(
+		[]string{"find", ".", "-exec", "xargs", "rm", "{}", "+"}))
+	require.True(t, findHasDestructiveExec(
+		[]string{"find", ".", "-exec", "sudo", "rm", "{}", ";"}))
+	// Destructive arguments and interpreter payloads are caught even
+	// without a wrapper.
+	require.True(t, findHasDestructiveExec(
+		[]string{"find", ".", "-exec", "dd", "of=/dev/sda", "{}", "+"}))
+	require.True(t, findHasDestructiveExec(
+		[]string{"find", ".", "-exec", "mkfs", "/dev/sda", "{}", "+"}))
+	require.True(t, findHasDestructiveExec(
+		[]string{"find", ".", "-exec", "python", "-c", "import shutil; shutil.rmtree('/')", "{}", "+"}))
+	// A nested find -delete payload is caught.
+	require.True(t, findHasDestructiveExec(
+		[]string{"find", ".", "-exec", "find", "{}", "-delete", ";"}))
+	// Benign payloads remain allowed; tokens after the terminator are
+	// not part of the payload.
+	require.False(t, findHasDestructiveExec(
+		[]string{"find", ".", "-exec", "ls", "{}", "+", "-name", "rm"}))
+	require.False(t, findHasDestructiveExec(
+		[]string{"find", ".", "-exec", "grep", "-l", "pattern", "{}", "+"}))
+}
+
+// TestCoverrules_ExecPayload covers the -exec payload terminator handling.
+func TestCoverrules_ExecPayload(t *testing.T) {
+	require.Equal(t, []string{"rm", "{}"},
+		execPayload([]string{"rm", "{}", "+"}))
+	require.Equal(t, []string{"rm", "{}"},
+		execPayload([]string{"rm", "{}", ";"}))
+	require.Equal(t, []string{"rm", "{}"},
+		execPayload([]string{"rm", "{}"}))
+	require.Empty(t, execPayload(nil))
+}
+
+// TestCoverrules_ExecPayloadIsDangerous covers the nested-command checks.
+func TestCoverrules_ExecPayloadIsDangerous(t *testing.T) {
+	require.False(t, execPayloadIsDangerous(nil))
+	require.True(t, execPayloadIsDangerous([]string{"rm", "{}"}))
+	require.True(t, execPayloadIsDangerous([]string{"/bin/shred", "{}"}))
+	require.True(t, execPayloadIsDangerous([]string{"sh", "-c", "ls"}))
+	require.True(t, execPayloadIsDangerous([]string{"dd", "of=/dev/sda"}))
+	require.True(t, execPayloadIsDangerous([]string{"python", "-c", "os.remove('/x')"}))
+	require.False(t, execPayloadIsDangerous([]string{"ls", "{}"}))
+}
+
+// TestCoverrules_FindExecShellWrapperScan is the end-to-end regression:
+// `find . -exec sh -c 'rm -rf /' {} +` must be denied by the dangerous
+// delete rule even though find itself is allowlisted.
+func TestCoverrules_FindExecShellWrapperScan(t *testing.T) {
+	p := testPolicy(t)
+	s := NewScanner(p)
+	report, err := s.Scan(context.Background(), ScanInput{
+		ToolName: "workspace_exec",
+		Backend:  BackendWorkspaceExec,
+		Command:  "find . -exec sh -c 'rm -rf /' {} +",
+	})
+	require.NoError(t, err)
+	require.Equal(t, DecisionDeny, report.Decision)
+	require.Contains(t, ruleIDSet(report.Findings), "command.dangerous_delete")
+
+	report, err = s.Scan(context.Background(), ScanInput{
+		ToolName: "workspace_exec",
+		Backend:  BackendWorkspaceExec,
+		Command:  "find . -exec bash -c 'rm -rf /tmp/x' {} +",
+	})
+	require.NoError(t, err)
+	require.Equal(t, DecisionDeny, report.Decision)
+	require.Contains(t, ruleIDSet(report.Findings), "command.dangerous_delete")
 }
 
 func TestCoverrules_RawSourceHasDangerousDelete(t *testing.T) {

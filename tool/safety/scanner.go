@@ -36,12 +36,17 @@ func sortFindings(findings []Finding) {
 
 // Scanner runs the safety rules against one ScanInput and produces a
 // ScanReport. The scanner is safe for concurrent use; the policy is
-// treated as immutable after construction.
+// validated and deep-copied at construction and treated as immutable
+// afterwards, so later caller-side mutations cannot change live
+// decisions or race with concurrent scans. When the policy is invalid
+// the construction error is stored and every Scan returns it, so an
+// invalid policy fails closed instead of silently disabling rules.
 type Scanner struct {
-	policy   Policy
-	profiles profileRegistry
-	sessions *sessionTracker
-	clock    func() time.Time
+	policy    Policy
+	policyErr error
+	profiles  profileRegistry
+	sessions  *sessionTracker
+	clock     func() time.Time
 }
 
 // ScannerOption configures a Scanner.
@@ -76,12 +81,17 @@ func withScannerSessions(sess *sessionTracker) ScannerOption {
 	}
 }
 
-// NewScanner returns a Scanner with the given policy and default profiles.
+// NewScanner returns a Scanner with the given policy and default
+// profiles. The policy's mutable fields are deep-copied so caller-side
+// slice mutations cannot change live decisions. The policy is validated
+// at construction; when invalid, the scanner is still returned but every
+// Scan reports the validation error so the caller fails closed.
 func NewScanner(policy Policy, opts ...ScannerOption) *Scanner {
 	s := &Scanner{
-		policy:   policy,
-		profiles: newProfileRegistry(),
-		clock:    func() time.Time { return time.Now().UTC() },
+		policy:    clonePolicy(policy),
+		policyErr: policy.Validate(),
+		profiles:  newProfileRegistry(),
+		clock:     func() time.Time { return time.Now().UTC() },
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -91,9 +101,10 @@ func NewScanner(policy Policy, opts ...ScannerOption) *Scanner {
 
 // Scan runs every enabled rule against in and returns the aggregated
 // report. A decode error (caller-side) should be converted by the caller
-// into a deny decision; Scan itself returns a non-nil error only when a
-// known profile could not be decoded, which is reported as a deny
-// finding. No scan or decode error may silently become allow.
+// into a deny decision; Scan itself returns a non-nil error when the
+// policy failed validation at construction, which the caller must
+// convert into a deny decision. No scan or decode error may silently
+// become allow.
 //
 // The scanner separates three input shapes:
 //   - Shell command: parsed once via shellsafe, analyzed by every rule.
@@ -107,6 +118,11 @@ func NewScanner(policy Policy, opts ...ScannerOption) *Scanner {
 func (s *Scanner) Scan(ctx context.Context, in ScanInput) (ScanReport, error) {
 	if s == nil {
 		return ScanReport{}, errors.New("scanner is nil")
+	}
+	// An invalid policy fails closed: the caller converts the error into
+	// a deny decision rather than scanning with disabled rules.
+	if s.policyErr != nil {
+		return ScanReport{}, s.policyErr
 	}
 	start := s.clock()
 	report := ScanReport{

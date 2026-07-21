@@ -14,7 +14,6 @@ import (
 	"fmt"
 	"io"
 	"sync"
-	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -27,7 +26,7 @@ type guardOptions struct {
 	policy        Policy
 	policyPath    string
 	auditPath     string
-	auditWriter   *AuditWriter
+	auditWriter   io.Writer
 	telemetry     bool
 	redaction     bool
 	profiles      []ToolProfile
@@ -63,16 +62,18 @@ func WithAuditPath(path string) Option {
 }
 
 // WithAuditWriter uses an existing io.Writer as the audit destination.
-// The writer is wrapped in an AuditWriter; the caller does not need to
-// construct one first. When the caller wants to control the required or
-// redaction flags, they can pass WithRequiredAudit and rely on the
-// policy's audit.redact_secrets setting.
+// The raw writer is stored and wrapped in an AuditWriter only after the
+// final policy is resolved, so the policy's audit.required and
+// audit.redact_secrets settings apply to injected writers the same way
+// they apply to file-backed writers. WithRequiredAudit remains an
+// explicit override that can promote the required flag. The caller does
+// not need to construct an AuditWriter first.
 func WithAuditWriter(w io.Writer) Option {
 	return func(o *guardOptions) error {
 		if w == nil {
 			return errors.New("audit writer is nil")
 		}
-		o.auditWriter = NewAuditWriterFrom(w, o.requiredAudit, true)
+		o.auditWriter = w
 		return nil
 	}
 }
@@ -202,17 +203,17 @@ func NewGuard(opts ...Option) (*Guard, error) {
 	}
 
 	if o.auditWriter != nil {
-		g.audit = o.auditWriter
-		// The writer's required flag is the single source of truth
-		// for whether an append failure denies execution. The
-		// previous implementation also checked g.closeAudit, which
-		// meant an injected required writer could be bypassed when
-		// closeAudit was false. WithRequiredAudit(true) is now
-		// honored by promoting the writer's required flag when the
-		// caller asks for it.
-		if o.requiredAudit && !g.audit.required {
-			g.audit.required = true
-		}
+		// The writer is wrapped only now, after the final policy has
+		// been resolved, so the policy's audit.required and
+		// audit.redact_secrets settings apply. The writer's required
+		// flag is the single source of truth for whether an append
+		// failure denies execution; WithRequiredAudit(true) is an
+		// explicit override that promotes it.
+		g.audit = NewAuditWriterFrom(
+			o.auditWriter,
+			o.policy.Audit.Required || o.requiredAudit,
+			o.policy.Audit.RedactSecrets,
+		)
 	} else if o.auditPath != "" || o.policy.Audit.Path != "" {
 		path := o.auditPath
 		if path == "" {
@@ -353,34 +354,15 @@ func (g *Guard) CheckToolPermission(
 	}
 	report.Backend = coalesceBackend(report.Backend, in.Backend)
 
-	// Required-audit failure must deny even an otherwise-allow decision.
-	// The writer's required flag is the single source of truth; this
-	// covers both file-backed writers (closeAudit=true) and injected
-	// writers (closeAudit=false) that were configured with
-	// required=true.
-	if auditErr := g.maybeAuditPreflight(report); auditErr != nil &&
-		g.audit != nil && g.audit.required {
-		report.Decision = DecisionDeny
-		report.Intercepted = true
-		report.Findings = append(report.Findings, Finding{
-			RuleID:         "audit.write_failure",
-			RiskLevel:      RiskHigh,
-			Decision:       DecisionDeny,
-			Evidence:       "required audit writer rejected the preflight event",
-			Recommendation: "Restore audit storage or relax audit.required in the policy",
-		})
-		sortFindings(report.Findings)
-	}
-
-	if g.telemetry {
-		telemetryProject(ctx, safetyAttributes(report))
-	}
-
-	// Concurrency gate: acquire a slot ONLY when the decision is allow.
-	// Deny/ask/error paths never acquire, so they never leak slots. The
-	// release function is stashed for the after-tool callback.
+	// Concurrency gate: acquire a slot ONLY when the decision is allow,
+	// and BEFORE the preflight audit event is written, so the persisted
+	// record carries the final decision. Deny/ask/error paths never
+	// acquire, so they never leak slots. The release function is stashed
+	// for the after-tool callback once the decision is final.
+	var release func()
 	if report.Decision == DecisionAllow {
-		release, concErr := g.concurrency.acquire(ctx, req.ToolName)
+		var concErr error
+		release, concErr = g.concurrency.acquire(ctx, req.ToolName)
 		if concErr != nil {
 			report.Decision = DecisionDeny
 			report.Intercepted = true
@@ -393,19 +375,46 @@ func (g *Guard) CheckToolPermission(
 				Recommendation: "Reduce concurrent tool calls or raise the concurrency policy cap",
 			})
 			sortFindings(report.Findings)
-			if g.telemetry {
-				telemetryProject(ctx, safetyAttributes(report))
-			}
-		} else {
-			g.stashRelease(req.ToolCallID, release)
-			// Stash the scan event keyed by tool call id so the
-			// after-tool callback can reuse the scan id, decision,
-			// risk level, and rule ids for the post_execute audit
-			// event. Only the allow path stashes: deny/ask decisions
-			// never reach the after-tool callback, so their entries
-			// would linger until Close.
-			g.stashScanEvent(req.ToolCallID, fromReport(report))
+			release = nil
 		}
+	}
+
+	// Required-audit failure must deny even an otherwise-allow decision.
+	// The writer's required flag is the single source of truth; this
+	// covers both file-backed writers (closeAudit=true) and injected
+	// writers (closeAudit=false) that were configured with
+	// required=true. A denied call never executes, so a slot acquired
+	// above is released here instead of in the after-tool callback.
+	if auditErr := g.maybeAuditPreflight(report); auditErr != nil &&
+		g.audit != nil && g.audit.required {
+		report.Decision = DecisionDeny
+		report.Intercepted = true
+		report.Findings = append(report.Findings, Finding{
+			RuleID:         "audit.write_failure",
+			RiskLevel:      RiskHigh,
+			Decision:       DecisionDeny,
+			Evidence:       "required audit writer rejected the preflight event",
+			Recommendation: "Restore audit storage or relax audit.required in the policy",
+		})
+		sortFindings(report.Findings)
+		if release != nil {
+			release()
+			release = nil
+		}
+	}
+
+	if g.telemetry {
+		telemetryProject(ctx, safetyAttributes(report))
+	}
+
+	if report.Decision == DecisionAllow {
+		g.stashRelease(req.ToolCallID, release)
+		// Stash the scan event keyed by tool call id so the after-tool
+		// callback can reuse the scan id, decision, risk level, and rule
+		// ids for the post_execute audit event. Only the allow path
+		// stashes: deny/ask decisions never reach the after-tool
+		// callback, so their entries would linger until Close.
+		g.stashScanEvent(req.ToolCallID, fromReport(report))
 	}
 
 	switch report.Decision {
@@ -421,15 +430,20 @@ func (g *Guard) CheckToolPermission(
 
 // applyProfileDefaults fills in backend and default timeout from the
 // registered profile when the decoded ScanInput did not carry them. The
-// profile default timeout is capped at the policy's MaxTimeout so a
-// permissive profile default cannot bypass the policy limit.
+// profile default timeout is applied WITHOUT capping it at the policy's
+// MaxTimeout: when the request omits a timeout, the backend really runs
+// with its own default, so the scanner must evaluate that effective
+// duration. When the backend default exceeds MaxTimeout the
+// resource.timeout_exceeded rule fires and the call cannot be allowed
+// as-is; the caller must supply an explicit bounded timeout (or the
+// operator must raise max_timeout).
 func (g *Guard) applyProfileDefaults(in ScanInput) ScanInput {
 	if profile, ok := g.profiles.lookup(in.ToolProfile); ok {
 		if in.Backend == "" || in.Backend == BackendUnknown {
 			in.Backend = profile.Backend
 		}
 		if in.Timeout <= 0 {
-			in.Timeout = capTimeout(profile.DefaultTimeout, g.scanner.policy.MaxTimeout)
+			in.Timeout = profile.DefaultTimeout
 		}
 	}
 	if in.Backend == "" {
@@ -439,23 +453,11 @@ func (g *Guard) applyProfileDefaults(in ScanInput) ScanInput {
 			in.Backend = profile.Backend
 			in.ToolProfile = profile.Name
 			if in.Timeout <= 0 {
-				in.Timeout = capTimeout(profile.DefaultTimeout, g.scanner.policy.MaxTimeout)
+				in.Timeout = profile.DefaultTimeout
 			}
 		}
 	}
 	return in
-}
-
-// capTimeout returns d capped at max. When max is zero (unlimited), d is
-// returned unchanged. When d is zero, zero is returned.
-func capTimeout(d, max time.Duration) time.Duration {
-	if d <= 0 {
-		return 0
-	}
-	if max > 0 && d > max {
-		return max
-	}
-	return d
 }
 
 // maybeAuditPreflight appends a preflight audit event when the guard has
@@ -535,9 +537,9 @@ func (g *Guard) maybeAuditPostExecute(
 	return g.audit.appendPostExecute(ev, outputBytes, truncated, execution)
 }
 
-// Callbacks returns a *tool.Callbacks whose AfterTool callback redacts
+// Callbacks returns a *tool.Callbacks whose after-tool finalizer redacts
 // secrets, applies max_output_size, and emits the post_execute audit
-// event. The callback is also registered into the returned callbacks so
+// event. The finalizer is registered into the returned callbacks so
 // callers can merge it with their own callbacks.
 //
 // The returned callbacks are independent of any callbacks the caller
@@ -549,9 +551,13 @@ func (g *Guard) Callbacks() *tool.Callbacks {
 	return cbs
 }
 
-// AttachCallbacks merges the guard's after-tool callback into cbs. The
-// guard's callback is appended last so an earlier caller callback cannot
-// reintroduce a secret after redaction.
+// AttachCallbacks merges the guard's after-tool finalizer into cbs. The
+// guard's callback is registered as a finalizer so it runs over the
+// final callback result even when an earlier after-tool callback stops
+// the chain by returning a CustomResult or an error; an earlier callback
+// can therefore neither reintroduce a secret after redaction nor bypass
+// redaction, the output cap, post-execute audit, or the concurrency
+// release.
 func (g *Guard) AttachCallbacks(cbs *tool.Callbacks) {
 	if cbs == nil {
 		return
@@ -559,8 +565,8 @@ func (g *Guard) AttachCallbacks(cbs *tool.Callbacks) {
 	g.attachAfterTool(cbs)
 }
 
-// attachAfterTool appends the guard's after-tool callback to cbs. The
-// callback redacts secrets in args.Result, args.Error, and args.Meta,
+// attachAfterTool registers the guard's after-tool finalizer on cbs. The
+// finalizer redacts secrets in args.Result, args.Error, and args.Meta,
 // applies the global max_output_size budget, and emits the post_execute
 // audit event with the real redacted/truncated state.
 //
@@ -575,7 +581,7 @@ func (g *Guard) AttachCallbacks(cbs *tool.Callbacks) {
 //   - args.Meta: each value is redacted; MCP _meta fields frequently
 //     carry bearer tokens or request ids that must not leak.
 func (g *Guard) attachAfterTool(cbs *tool.Callbacks) {
-	cbs.RegisterAfterTool(func(
+	cbs.RegisterAfterToolFinalizer(func(
 		ctx context.Context,
 		args *tool.AfterToolArgs,
 	) (*tool.AfterToolResult, error) {

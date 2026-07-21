@@ -128,7 +128,7 @@ func TestCovercore_CheckToolPermissionMetadataMapping(t *testing.T) {
 	guard := newTestGuard(t)
 	decision, err := guard.CheckToolPermission(context.Background(), &tool.PermissionRequest{
 		ToolName:  "workspace_exec",
-		Arguments: []byte(`{"command":"ls"}`),
+		Arguments: []byte(`{"command":"ls","timeout":10}`),
 		Metadata: tool.ToolMetadata{
 			ReadOnly:      true,
 			MaxResultSize: 4096,
@@ -142,7 +142,7 @@ func TestCovercore_CheckToolPermissionMetadataMapping(t *testing.T) {
 // concurrency gate deny path and the after-tool release.
 func TestCovercore_CheckToolPermissionConcurrencyExceeded(t *testing.T) {
 	guard := newTestGuard(t, WithConcurrencyPolicy(ConcurrencyPolicy{MaxActiveCalls: 1}))
-	allowArgs := []byte(`{"command":"ls"}`)
+	allowArgs := []byte(`{"command":"ls","timeout":10}`)
 
 	decision, err := guard.CheckToolPermission(context.Background(), &tool.PermissionRequest{
 		ToolName:   "workspace_exec",
@@ -187,10 +187,11 @@ func TestCovercore_ApplyProfileDefaults(t *testing.T) {
 	guard := newTestGuard(t)
 
 	// Backend and timeout filled from the named profile; the profile
-	// default (5m) is capped at the policy max (30s).
+	// default (5m) is applied uncapped so the scanner evaluates the
+	// effective backend timeout against max_timeout.
 	in := guard.applyProfileDefaults(ScanInput{ToolName: "x", ToolProfile: "exec_command"})
 	require.Equal(t, BackendHostExec, in.Backend)
-	require.Equal(t, 30*time.Second, in.Timeout)
+	require.Equal(t, 5*time.Minute, in.Timeout)
 
 	// An explicit backend and timeout are preserved.
 	in = guard.applyProfileDefaults(ScanInput{
@@ -209,20 +210,11 @@ func TestCovercore_ApplyProfileDefaults(t *testing.T) {
 	in = guard.applyProfileDefaults(ScanInput{ToolName: "workspace_exec"})
 	require.Equal(t, BackendWorkspaceExec, in.Backend)
 	require.Equal(t, "workspace_exec", in.ToolProfile)
-	require.Equal(t, 30*time.Second, in.Timeout)
+	require.Equal(t, 5*time.Minute, in.Timeout)
 
 	// Empty backend with no matching profile stays unknown-ish.
 	in = guard.applyProfileDefaults(ScanInput{ToolName: "no_such_tool"})
 	require.Empty(t, in.Backend)
-}
-
-// TestCovercore_CapTimeout covers the timeout-cap branches.
-func TestCovercore_CapTimeout(t *testing.T) {
-	require.Zero(t, capTimeout(0, 30*time.Second))
-	require.Zero(t, capTimeout(-time.Second, 30*time.Second))
-	require.Equal(t, 10*time.Second, capTimeout(10*time.Second, 0))
-	require.Equal(t, 30*time.Second, capTimeout(time.Minute, 30*time.Second))
-	require.Equal(t, 10*time.Second, capTimeout(10*time.Second, 30*time.Second))
 }
 
 // TestCovercore_StashPopSideTables covers the scan-event and release side
@@ -263,10 +255,10 @@ func TestCovercore_AttachCallbacks(t *testing.T) {
 
 	cbs := tool.NewCallbacks()
 	guard.AttachCallbacks(cbs)
-	require.NotEmpty(t, cbs.AfterTool)
+	require.NotEmpty(t, cbs.AfterToolFinalizers)
 
-	// The nil-args invocation of the registered callback is a no-op.
-	out, err := cbs.AfterTool[0](context.Background(), nil)
+	// The nil-args invocation of the registered finalizer is a no-op.
+	out, err := cbs.AfterToolFinalizers[0](context.Background(), nil)
 	require.NoError(t, err)
 	require.Nil(t, out)
 }

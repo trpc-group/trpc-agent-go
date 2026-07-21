@@ -1504,3 +1504,97 @@ func TestToolCallbacks_Before_ToolCallID_Multiple(t *testing.T) {
 	require.Equal(t, []string{expectedToolCallID2, expectedToolCallID2}, capturedToolCallIDs)
 	require.Nil(t, result)
 }
+
+// TestRunAfterTool_FinalizerRunsAfterCustomResultShortCircuit verifies
+// that an after-tool finalizer still runs when an earlier callback stops
+// the chain by returning a CustomResult, and that the finalizer observes
+// and can replace that short-circuiting result.
+func TestRunAfterTool_FinalizerRunsAfterCustomResultShortCircuit(t *testing.T) {
+	callbacks := tool.NewCallbacks()
+
+	callbacks.RegisterAfterTool(func(ctx context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
+		return &tool.AfterToolResult{CustomResult: "short-circuit"}, nil
+	})
+	callbacks.RegisterAfterTool(func(ctx context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
+		t.Fatal("regular callback after a CustomResult must not run")
+		return nil, nil
+	})
+
+	finalizerRan := false
+	callbacks.RegisterAfterToolFinalizer(func(ctx context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
+		finalizerRan = true
+		// The finalizer observes the short-circuiting CustomResult as
+		// the effective result.
+		require.Equal(t, "short-circuit", args.Result)
+		return &tool.AfterToolResult{CustomResult: "finalized"}, nil
+	})
+
+	result, err := callbacks.RunAfterTool(context.Background(), &tool.AfterToolArgs{
+		ToolName: "test-tool",
+		Result:   "original",
+	})
+	require.NoError(t, err)
+	require.True(t, finalizerRan)
+	require.NotNil(t, result)
+	require.Equal(t, "finalized", result.CustomResult)
+}
+
+// TestRunAfterTool_FinalizerRunsAfterError verifies that finalizers run
+// even when a regular callback fails and the chain stops on the error.
+func TestRunAfterTool_FinalizerRunsAfterError(t *testing.T) {
+	callbacks := tool.NewCallbacks()
+
+	callbacks.RegisterAfterTool(func(ctx context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
+		return nil, NewError("callback failed")
+	})
+
+	finalizerRan := false
+	callbacks.RegisterAfterToolFinalizer(func(ctx context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
+		finalizerRan = true
+		return nil, nil
+	})
+
+	result, err := callbacks.RunAfterTool(context.Background(), &tool.AfterToolArgs{
+		ToolName: "test-tool",
+		Result:   "original",
+	})
+	require.Error(t, err)
+	require.True(t, finalizerRan)
+	require.Nil(t, result)
+}
+
+// TestRunAfterTool_FinalizerPassthrough verifies a finalizer that returns
+// nil leaves the chain result untouched.
+func TestRunAfterTool_FinalizerPassthrough(t *testing.T) {
+	callbacks := tool.NewCallbacks()
+
+	callbacks.RegisterAfterToolFinalizer(func(ctx context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
+		return nil, nil
+	})
+
+	result, err := callbacks.RunAfterTool(context.Background(), &tool.AfterToolArgs{
+		ToolName: "test-tool",
+		Result:   "original",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, "original", result.CustomResult)
+}
+
+// TestToolCallbacks_Clone_IncludesFinalizers verifies Clone copies the
+// finalizer list without sharing the backing slice.
+func TestToolCallbacks_Clone_IncludesFinalizers(t *testing.T) {
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterAfterToolFinalizer(func(ctx context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
+		return nil, nil
+	})
+
+	clone := callbacks.Clone()
+	require.Len(t, clone.AfterToolFinalizers, 1)
+
+	callbacks.RegisterAfterToolFinalizer(func(ctx context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
+		return nil, nil
+	})
+	require.Len(t, clone.AfterToolFinalizers, 1)
+	require.Len(t, callbacks.AfterToolFinalizers, 2)
+}

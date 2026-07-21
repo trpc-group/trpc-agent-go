@@ -94,7 +94,34 @@ func TestCovercore_PolicyValidateFieldErrors(t *testing.T) {
 	require.ErrorContains(t, p.Validate(), "secret_leak")
 }
 
-// TestCovercore_ValidateDomain covers every domain-validation branch.
+// TestCovercore_PolicyValidateDeniedPathGlobs proves malformed doublestar
+// patterns are rejected at policy load time instead of failing open.
+func TestCovercore_PolicyValidateDeniedPathGlobs(t *testing.T) {
+	base := DefaultPolicy()
+
+	// An unmatched bracket is rejected by Validate.
+	p := base
+	p.DeniedPathGlobs = []string{"**/*.pem", "/etc/[unclosed"}
+	require.ErrorContains(t, p.Validate(), "denied_path_globs")
+
+	// A malformed pattern in a policy file fails loading, so it cannot
+	// produce a usable guard.
+	_, err := LoadPolicyFromBytes([]byte(`
+version: 1
+denied_path_globs: ["**/[bad"]
+`))
+	require.ErrorContains(t, err, "denied_path_globs")
+
+	// NewGuard rejects an in-memory policy with a malformed pattern.
+	_, err = NewGuard(WithPolicy(p))
+	require.ErrorContains(t, err, "denied_path_globs")
+
+	// Valid patterns, including the default ~-rooted form, still load.
+	p = base
+	p.DeniedPathGlobs = []string{"~/.ssh/*", "**/*.key"}
+	require.NoError(t, p.Validate())
+}
+
 func TestCovercore_ValidateDomain(t *testing.T) {
 	require.NoError(t, validateDomain("example.com"))
 	require.NoError(t, validateDomain("*.example.com"))

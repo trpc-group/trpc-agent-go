@@ -287,9 +287,11 @@ func TestCoverrules_LimitResultBytes_GlobalBudget(t *testing.T) {
 	out, truncated, size := limitResultBytes(v, 1000)
 	require.True(t, truncated)
 	require.LessOrEqual(t, size, int64(1000))
-	m := out.(map[string]any)
-	total := len(m["a"].(string)) + len(m["b"].(string))
-	require.LessOrEqual(t, total, 1000)
+	// The complete serialized form, not only the string leaves, must
+	// fit the budget.
+	raw, err := json.Marshal(out)
+	require.NoError(t, err)
+	require.LessOrEqual(t, int64(len(raw)), int64(1000))
 }
 
 func TestCoverrules_MeasureBytes(t *testing.T) {

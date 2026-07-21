@@ -12,9 +12,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
+	"github.com/bmatcuk/doublestar/v4"
 	"gopkg.in/yaml.v3"
 )
 
@@ -112,6 +114,20 @@ type Policy struct {
 	DecisionThreshold DecisionThreshold `yaml:"decision_threshold" json:"decision_threshold"`
 	// Audit configures JSONL audit output.
 	Audit AuditPolicy `yaml:"audit" json:"audit"`
+}
+
+// clonePolicy returns a copy of p with every mutable slice field
+// deep-copied, so the scanner's stored policy cannot be changed or raced
+// by later caller-side mutations.
+func clonePolicy(p Policy) Policy {
+	p.AllowedCommands = slices.Clone(p.AllowedCommands)
+	p.DeniedCommands = slices.Clone(p.DeniedCommands)
+	p.DeniedPaths = slices.Clone(p.DeniedPaths)
+	p.DeniedPathGlobs = slices.Clone(p.DeniedPathGlobs)
+	p.Network.AllowedDomains = slices.Clone(p.Network.AllowedDomains)
+	p.Network.Commands = slices.Clone(p.Network.Commands)
+	p.EnvWhitelist = slices.Clone(p.EnvWhitelist)
+	return p
 }
 
 // DefaultPolicy returns a conservative default policy that matches the
@@ -273,6 +289,15 @@ func (p Policy) Validate() error {
 	for _, dom := range p.Network.AllowedDomains {
 		if err := validateDomain(dom); err != nil {
 			return fmt.Errorf("network.allowed_domains: %w", err)
+		}
+	}
+	// Compile every denied_path_globs pattern at load time. A malformed
+	// pattern (e.g. an unmatched bracket) would otherwise load
+	// successfully but never match, silently failing open for the path it
+	// was meant to protect.
+	for _, pattern := range p.DeniedPathGlobs {
+		if !doublestar.ValidatePattern(pattern) {
+			return fmt.Errorf("denied_path_globs: invalid pattern %q", pattern)
 		}
 	}
 	return nil
