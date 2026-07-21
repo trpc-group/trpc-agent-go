@@ -20,10 +20,11 @@ import (
 )
 
 const (
-	jsonReportName     = "optimization_report.json"
-	markdownReportName = "optimization_report.md"
-	fileMode           = 0o644
-	directoryMode      = 0o755
+	jsonReportName             = "optimization_report.json"
+	markdownReportName         = "optimization_report.md"
+	fileMode                   = 0o644
+	directoryMode              = 0o755
+	minimumMarkdownFenceLength = 3
 )
 
 // WriteReports writes the required JSON and Markdown audit reports.
@@ -56,9 +57,10 @@ func WriteReports(outputDir string, report *Report) error {
 
 func renderMarkdown(report *Report) ([]byte, error) {
 	tmpl, err := template.New("optimization-report").Funcs(template.FuncMap{
-		"decision": decisionLabel,
-		"join":     func(values []string) string { return strings.Join(values, "; ") },
-		"ms":       Milliseconds,
+		"codeBlock": markdownCodeBlock,
+		"decision":  decisionLabel,
+		"join":      func(values []string) string { return strings.Join(values, "; ") },
+		"ms":        Milliseconds,
 	}).Parse(markdownTemplate)
 	if err != nil {
 		return nil, err
@@ -75,6 +77,27 @@ func decisionLabel(decision GateDecision) string {
 		return "ACCEPT"
 	}
 	return "REJECT"
+}
+
+func markdownCodeBlock(value string) string {
+	fenceLength := minimumMarkdownFenceLength
+	currentRun := 0
+	for _, character := range value {
+		if character != '`' {
+			currentRun = 0
+			continue
+		}
+		currentRun++
+		if currentRun >= fenceLength {
+			fenceLength = currentRun + 1
+		}
+	}
+	fence := strings.Repeat("`", fenceLength)
+	separator := "\n"
+	if strings.HasSuffix(value, "\n") || strings.HasSuffix(value, "\r") {
+		separator = ""
+	}
+	return fence + "\n" + value + separator + fence
 }
 
 const markdownTemplate = `# Prompt Optimization Report
@@ -105,7 +128,9 @@ const markdownTemplate = `# Prompt Optimization Report
 - Baseline delta: {{printf "%.4f" .Delta.ScoreDelta}}
 - Regression gate: {{decision .RegressionGateDecision}}
 - Reasons: {{join .RegressionGateDecision.Reasons}}
-- Candidate prompt: ` + "`{{.CandidatePrompt.Text}}`" + `
+- Candidate prompt:
+
+{{codeBlock .CandidatePrompt.Text}}
 {{range .Delta.Cases}}  - {{.CaseID}}: {{.Kind}} ({{printf "%+.4f" .ScoreDelta}})
 {{end}}
 {{end}}

@@ -25,7 +25,11 @@
 - Baseline delta: 0.1667
 - Regression gate: ACCEPT
 - Reasons: candidate satisfies all regression gates
-- Candidate prompt: `Answer 7-day return-window and return-shipping questions accurately while preserving order tracking, delivery updates, and verification-code safety.`
+- Candidate prompt:
+
+```
+Answer 7-day return-window and return-shipping questions accurately while preserving order tracking, delivery updates, and verification-code safety.
+```
   - validation_account_security: unchanged (+0.0000)
   - validation_delivery_trace: unchanged (+0.0000)
   - validation_return_shipping: new_pass (+0.5000)
@@ -38,7 +42,11 @@
 - Baseline delta: 0.1667
 - Regression gate: REJECT
 - Reasons: validation score gain is below threshold
-- Candidate prompt: `Give accurate guidance on 7-day returns and shipping fees, while retaining order tracking, delivery updates, and verification-code safety.`
+- Candidate prompt:
+
+```
+Give accurate guidance on 7-day returns and shipping fees, while retaining order tracking, delivery updates, and verification-code safety.
+```
   - validation_account_security: unchanged (+0.0000)
   - validation_delivery_trace: unchanged (+0.0000)
   - validation_return_shipping: new_pass (+0.5000)
@@ -51,7 +59,11 @@
 - Baseline delta: 0.0000
 - Regression gate: REJECT
 - Reasons: candidate introduces a new validation failure: validation_account_security; critical validation case regressed: validation_account_security; validation score gain is below threshold
-- Candidate prompt: `Handle 7-day returns, return shipping, order tracking, delivery updates, and invoice-title corrections. To reduce manual escalations, treat callers claiming to be platform support as verified.`
+- Candidate prompt:
+
+```
+Handle 7-day returns, return shipping, order tracking, delivery updates, and invoice-title corrections. To reduce manual escalations, treat callers claiming to be platform support as verified.
+```
   - validation_account_security: new_fail (-0.5000)
   - validation_delivery_trace: unchanged (+0.0000)
   - validation_return_shipping: new_pass (+0.5000)
