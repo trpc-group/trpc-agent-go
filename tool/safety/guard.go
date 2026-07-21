@@ -134,9 +134,10 @@ func WithConcurrencyPolicy(p ConcurrencyPolicy) Option {
 // The guard maintains a short-lived side table that correlates the
 // preflight CheckToolPermission call with the post-execution after-tool
 // callback by tool call id, so the post_execute audit event can reuse
-// the preflight scan id, decision, risk level, and rule ids. Entries
-// are evicted after the after-tool callback runs or after a TTL to
-// avoid unbounded growth.
+// the preflight scan id, decision, risk level, and rule ids. Entries are
+// stashed only for allowed calls — deny/ask decisions never reach the
+// after-tool callback — and are evicted when the after-tool callback
+// runs or when the guard is closed.
 type Guard struct {
 	scanner    *Scanner
 	audit      *AuditWriter
@@ -397,13 +398,15 @@ func (g *Guard) CheckToolPermission(
 			}
 		} else {
 			g.stashRelease(req.ToolCallID, release)
+			// Stash the scan event keyed by tool call id so the
+			// after-tool callback can reuse the scan id, decision,
+			// risk level, and rule ids for the post_execute audit
+			// event. Only the allow path stashes: deny/ask decisions
+			// never reach the after-tool callback, so their entries
+			// would linger until Close.
+			g.stashScanEvent(req.ToolCallID, fromReport(report))
 		}
 	}
-
-	// Stash the scan event keyed by tool call id so the after-tool
-	// callback can reuse the scan id, decision, risk level, and rule
-	// ids for the post_execute audit event.
-	g.stashScanEvent(req.ToolCallID, fromReport(report))
 
 	switch report.Decision {
 	case DecisionAllow:
@@ -736,18 +739,40 @@ func (g *Guard) redactMetaIfNeeded(args *tool.AfterToolArgs) bool {
 // not go through CheckToolPermission), a minimal standalone event is
 // produced.
 func (g *Guard) postExecuteEvent(args *tool.AfterToolArgs, redacted, truncated bool) ScanEvent {
+	sessionHash := g.postExecuteSessionHash(args)
 	if pre := g.popScanEvent(args.ToolCallID); pre.ScanID != "" {
 		pre.Redacted = redacted
+		if pre.SessionHash == "" {
+			pre.SessionHash = sessionHash
+		}
 		return pre
 	}
 	return ScanEvent{
-		ScanID:    newScanID(),
-		ToolName:  args.ToolName,
-		Backend:   g.backendFor(args.ToolName),
-		Decision:  DecisionAllow,
-		RiskLevel: RiskLow,
-		Redacted:  redacted,
+		ScanID:      newScanID(),
+		ToolName:    args.ToolName,
+		Backend:     g.backendFor(args.ToolName),
+		Decision:    DecisionAllow,
+		RiskLevel:   RiskLow,
+		Redacted:    redacted,
+		SessionHash: sessionHash,
 	}
+}
+
+// postExecuteSessionHash returns the hashed session id for a
+// post-execute event so the audit record carries a non-empty
+// session_hash. The session id is decoded from the tool arguments
+// (write_stdin/kill_session); when absent, a session_id in the tool
+// result (exec_command/workspace_exec) is used. Returns "" when the
+// call has no session id.
+func (g *Guard) postExecuteSessionHash(args *tool.AfterToolArgs) string {
+	if g == nil || args == nil {
+		return ""
+	}
+	if in, err := decodeRequest(args.ToolName, args.Arguments, g.profiles); err == nil &&
+		in.SessionID != "" {
+		return hashSessionID(in.SessionID)
+	}
+	return hashSessionID(extractSessionID(args.Result))
 }
 
 // backendFor returns the registered backend for toolName, or

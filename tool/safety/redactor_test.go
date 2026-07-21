@@ -178,3 +178,40 @@ func isValidUTF8(s string) bool {
 	}
 	return true
 }
+
+// TestLimitWithBudget_DeterministicKeyOrder verifies that global-budget
+// truncation of a map is deterministic: identical inputs must truncate
+// the same fields regardless of Go's randomized map iteration order.
+func TestLimitWithBudget_DeterministicKeyOrder(t *testing.T) {
+	mk := func() map[string]any {
+		return map[string]any{
+			"aaa": strings.Repeat("x", 100),
+			"bbb": strings.Repeat("y", 100),
+		}
+	}
+	// The budget fits the first field in full but not the second; the
+	// lexicographically first key must always be the one preserved.
+	first, truncated, _ := limitResultBytes(mk(), 120)
+	require.True(t, truncated)
+	firstMap, ok := first.(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, strings.Repeat("x", 100), firstMap["aaa"])
+	for i := 0; i < 50; i++ {
+		out, truncated, _ := limitResultBytes(mk(), 120)
+		require.True(t, truncated)
+		require.Equal(t, first, out)
+	}
+}
+
+// TestIsSecretFieldName_TokenSubstrings verifies that embedded
+// token/access-key field names force redaction, matching the exact-match
+// list.
+func TestIsSecretFieldName_TokenSubstrings(t *testing.T) {
+	for _, name := range []string{
+		"id_token", "session_token", "csrf_token", "my_access_key",
+		"myaccesskey",
+	} {
+		require.True(t, isSecretFieldName(name), "name %q", name)
+	}
+	require.False(t, isSecretFieldName("username"))
+}

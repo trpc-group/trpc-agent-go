@@ -112,7 +112,7 @@ func scanCodeBlock(a *analysis, b CodeBlock) {
 	// Bash code block IS a shell command, not a string that might
 	// contain one.
 	if isShellLanguage(lang) {
-		shell := analyzeShell(code)
+		shell := analyzeShellWithCommands(code, a.ConfiguredNetworkCommands)
 		mergeAnalysis(a, &shell)
 		// Also scan for secrets in the code body.
 		return
@@ -122,7 +122,7 @@ func scanCodeBlock(a *analysis, b CodeBlock) {
 	// command/path/network/dependency rules fire on the inner command.
 	for _, m := range embeddedShellRegex.FindAllStringSubmatch(code, -1) {
 		if len(m) >= 2 {
-			inner := analyzeShell(m[1])
+			inner := analyzeShellWithCommands(m[1], a.ConfiguredNetworkCommands)
 			mergeAnalysis(a, &inner)
 		}
 	}
@@ -240,6 +240,23 @@ func hasCodeUnboundedLoop(code string) bool {
 	return !loopHasExit(code)
 }
 
+// allURLsAllowlisted returns true when urls is non-empty and every URL
+// parses to a host matched by the allowlist. It reuses the network rule's
+// hostAllowedByList semantics so code-block egress and shell egress apply
+// the same allowlist.
+func allURLsAllowlisted(urls []string, allow []string) bool {
+	if len(urls) == 0 {
+		return false
+	}
+	for _, u := range urls {
+		t := extractNetworkTarget(u)
+		if t.Malformed || t.Host == "" || !hostAllowedByList(t.Host, allow) {
+			return false
+		}
+	}
+	return true
+}
+
 // codeRuleFindings produces findings for code-pattern matches detected
 // during scanCodeBlock. It is called by the scanner after the analysis
 // is built so code-block findings get stable rule ids.
@@ -267,13 +284,15 @@ func codeRuleFindings(a *analysis, p Policy) []Finding {
 		if rec.networkCall {
 			// If literal URLs were extracted and all are allowlisted,
 			// do not emit a finding. Otherwise emit a finding.
-			out = append(out, Finding{
-				RuleID:         "code.network_call",
-				RiskLevel:      RiskMedium,
-				Decision:       ruleDecision(p.Rules.Network.Action, RiskMedium, p),
-				Evidence:       "code block performs a network call",
-				Recommendation: "Allow only known-safe hosts; refuse unknown egress from code",
-			})
+			if !allURLsAllowlisted(rec.networkURLs, p.Network.AllowedDomains) {
+				out = append(out, Finding{
+					RuleID:         "code.network_call",
+					RiskLevel:      RiskMedium,
+					Decision:       ruleDecision(p.Rules.Network.Action, RiskMedium, p),
+					Evidence:       "code block performs a network call",
+					Recommendation: "Allow only known-safe hosts; refuse unknown egress from code",
+				})
+			}
 		}
 		if rec.packageInstall {
 			out = append(out, Finding{

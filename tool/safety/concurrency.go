@@ -39,9 +39,7 @@ type ConcurrencyPolicy struct {
 // The limiter is acquired AFTER the scan completes and the decision is
 // allow. Deny/ask/error paths never acquire a slot, so they never leak.
 // The release function is stashed on the guard and invoked from the
-// after-tool callback; when no callback is attached or the callback is
-// short-circuited, the guard's Close or a TTL sweep reclaims orphaned
-// slots.
+// after-tool callback; the guard's Close discards any orphaned slots.
 type concurrencyLimiter struct {
 	policy ConcurrencyPolicy
 	active int64 // atomic; global count
@@ -87,8 +85,10 @@ func (c *concurrencyLimiter) acquire(ctx context.Context, toolName string) (func
 		c.mu.Lock()
 		if c.perTool[toolName] >= max {
 			c.mu.Unlock()
-			// Roll back the global increment.
-			atomic.AddInt64(&c.active, -1)
+			// Roll back the global increment only when one was made.
+			if c.policy.MaxActiveCalls > 0 {
+				atomic.AddInt64(&c.active, -1)
+			}
 			return nil, fmt.Errorf("concurrency limit exceeded for tool %q: %d active (max %d)",
 				toolName, c.perTool[toolName], max)
 		}
@@ -98,7 +98,12 @@ func (c *concurrencyLimiter) acquire(ctx context.Context, toolName string) (func
 	once := sync.Once{}
 	release := func() {
 		once.Do(func() {
-			atomic.AddInt64(&c.active, -1)
+			// Decrement the global counter only when acquire
+			// incremented it (MaxActiveCalls > 0); otherwise the
+			// counter would drift negative over time.
+			if c.policy.MaxActiveCalls > 0 {
+				atomic.AddInt64(&c.active, -1)
+			}
 			if max, ok := c.policy.PerToolLimits[toolName]; ok && max > 0 {
 				c.mu.Lock()
 				if c.perTool[toolName] > 0 {

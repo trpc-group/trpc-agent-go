@@ -11,6 +11,7 @@ package safety
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"unicode/utf8"
 )
@@ -242,7 +243,16 @@ func limitWithBudget(value any, b *byteBudget) (any, bool) {
 	case map[string]any:
 		truncated := false
 		out := make(map[string]any, len(v))
-		for k, item := range v {
+		// Iterate keys in sorted order so budget truncation is
+		// deterministic: identical inputs always truncate the same
+		// fields regardless of Go's randomized map iteration order.
+		keys := make([]string, 0, len(v))
+		for k := range v {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			item := v[k]
 			if b.remaining <= 0 {
 				truncated = true
 				continue
@@ -323,7 +333,9 @@ func isSecretFieldName(name string) bool {
 	if strings.Contains(low, "password") || strings.Contains(low, "passwd") ||
 		strings.Contains(low, "secret") || strings.Contains(low, "api_key") ||
 		strings.Contains(low, "apikey") || strings.Contains(low, "access_token") ||
-		strings.Contains(low, "accesstoken") || strings.Contains(low, "private_key") ||
+		strings.Contains(low, "accesstoken") || strings.Contains(low, "accesskey") ||
+		strings.Contains(low, "access_key") || strings.Contains(low, "token") ||
+		strings.Contains(low, "private_key") ||
 		strings.Contains(low, "privatekey") || strings.Contains(low, "client_secret") ||
 		strings.Contains(low, "bearer") || strings.Contains(low, "authorization") {
 		return true

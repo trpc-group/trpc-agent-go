@@ -258,7 +258,7 @@ func evaluatePathOp(op pathOp, p Policy, add func(Finding)) {
 
 // evaluateRawSourcePaths scans the raw source for ssh/credential/dotenv
 // patterns when shellsafe parsing failed. We accept some false-positive
-// risk on unparseable commands because they are already high-risk.
+// risk on unparsable commands because they are already high-risk.
 func evaluateRawSourcePaths(src string, p Policy, add func(Finding)) {
 	low := strings.ToLower(src)
 	if strings.Contains(low, "~/.ssh") || strings.Contains(low, "id_rsa") ||

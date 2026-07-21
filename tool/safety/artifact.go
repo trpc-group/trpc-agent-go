@@ -98,7 +98,7 @@ type artifactServiceWrapper struct {
 	inner artifact.Service
 }
 
-// NewArtifactServiceWrapper returns an artifact.Service that applies the
+// newArtifactServiceWrapper returns an artifact.Service that applies the
 // guard's redaction policy on SaveArtifact and LoadArtifact.
 func newArtifactServiceWrapper(inner artifact.Service) artifact.Service {
 	if inner == nil {

@@ -104,6 +104,10 @@ func hasDangerousDelete(a *analysis) bool {
 				return true
 			}
 		}
+		// The command parsed successfully and no segment is dangerous;
+		// the raw-source scan is a fallback for parse failures only, so
+		// quoted literals like `echo "rm -rf /"` are not flagged.
+		return false
 	}
 	return rawSourceHasDangerousDelete(a.Source)
 }
@@ -172,7 +176,7 @@ func findHasDestructiveExec(argv []string) bool {
 
 // rawSourceHasDangerousDelete does a best-effort scan of the raw source
 // when shellsafe parsing failed. We accept some false-positive risk on
-// unparseable commands because they are already high-risk; the
+// unparsable commands because they are already high-risk; the
 // parse-failure rule will also fire.
 func rawSourceHasDangerousDelete(src string) bool {
 	if src == "" {

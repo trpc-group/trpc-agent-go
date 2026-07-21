@@ -108,7 +108,15 @@ type networkTarget struct {
 // without executing anything. It returns an analysis whose ParseError is
 // non-nil when shellsafe rejects the command.
 func analyzeShell(src string) analysis {
+	return analyzeShellWithCommands(src, nil)
+}
+
+// analyzeShellWithCommands is analyzeShell with the policy's configured
+// network commands seeded before token classification, so configured
+// downloaders are recognized as network commands on the shell path.
+func analyzeShellWithCommands(src string, configured []string) analysis {
 	a := analysis{Source: src, SleepSeconds: -1}
+	a.ConfiguredNetworkCommands = configured
 	a.CommandHash = hashCommand(src)
 	a.CommandSummary = summarizeCommand(src)
 
@@ -183,7 +191,7 @@ func buildAnalysis(in ScanInput, p Policy) analysis {
 	a.CommandHash = hashAnalysisInput(in)
 	a.CommandSummary = summarizeAnalysisInput(in)
 	if strings.TrimSpace(in.Command) != "" {
-		shell := analyzeShell(in.Command)
+		shell := analyzeShellWithCommands(in.Command, p.Network.Commands)
 		shell.CommandHash = a.CommandHash
 		shell.CommandSummary = a.CommandSummary
 		mergeAnalysis(&a, &shell)

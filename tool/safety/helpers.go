@@ -9,8 +9,10 @@
 package safety
 
 import (
+	"errors"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -94,6 +96,12 @@ func sleepSeconds(argv []string) int64 {
 	}
 	var n int64
 	if _, err := parseDecimalInt(s, &n); err != nil {
+		if errors.Is(err, strconv.ErrRange) {
+			// An overflowing literal is an effectively unbounded
+			// sleep; flag it like "infinity" instead of letting the
+			// wrapped value bypass the max-sleep guard.
+			return 1<<62 - 1
+		}
 		// Try floating point: parse the integer part.
 		dot := strings.IndexByte(s, '.')
 		if dot > 0 {
@@ -206,20 +214,24 @@ func hasFlagSubcommand(argv []string, flag, subcommand string) bool {
 	return false
 }
 
-// parseDecimalInt parses a non-negative decimal integer into out. Returns
-// an error when the input contains non-digit bytes or is empty.
+// parseDecimalInt parses a non-negative decimal integer into out. It
+// returns the number of bytes consumed and an error when the input
+// contains non-digit bytes, is empty, or overflows int64 (the error
+// wraps strconv.ErrRange). Overflow is reported rather than silently
+// wrapping so an oversized literal cannot bypass the max-sleep guard.
 func parseDecimalInt(s string, out *int64) (int, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return 0, errEmptyNumber
 	}
-	var n int64
 	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if c < '0' || c > '9' {
+		if c := s[i]; c < '0' || c > '9' {
 			return i, errNonDigit{c: c}
 		}
-		n = n*10 + int64(c-'0')
+	}
+	n, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return len(s), err
 	}
 	*out = n
 	return len(s), nil

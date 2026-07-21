@@ -15,8 +15,12 @@ go run ./tool_safety_guard
 
 Expected output:
 
-```
-CheckToolPermission("rm -rf /") -> deny: safety deny: rule=command.dangerous_delete ...
+```text
+CheckToolPermission("dangerous delete") -> deny
+CheckToolPermission("credential read") -> deny
+CheckToolPermission("whitelisted request") -> allow
+CheckToolPermission("dependency install") -> ask
+CheckToolPermission("safe go test") -> allow
 AfterTool redacted result: {"output":"API_KEY=[REDACTED:stripe_key:len=28]"}
 Scanned 19 samples: 5 allowed, 12 denied, 2 asked (duration=1ms)
 Wrote tool_safety_report.json and tool_safety_audit.jsonl
@@ -33,7 +37,7 @@ Wrote tool_safety_report.json and tool_safety_audit.jsonl
 
 The guard plugs into the existing framework at two points:
 
-```
+```text
 model tool call
   -> before-tool callbacks
   -> tool.PermissionChecker (per-tool)

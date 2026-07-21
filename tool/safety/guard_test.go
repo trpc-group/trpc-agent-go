@@ -345,3 +345,69 @@ func (failingWriterError) Error() string { return "audit writer always fails" }
 func writeFile(path string, data []byte) error {
 	return saveFile(path, data)
 }
+
+// TestGuard_DenyDecisionDoesNotStashScanEvent verifies that deny and ask
+// decisions do not leave scan events in the side table; only allowed
+// calls reach the after-tool callback that pops them.
+func TestGuard_DenyDecisionDoesNotStashScanEvent(t *testing.T) {
+	guard := newTestGuard(t)
+	decision, err := guard.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:   "workspace_exec",
+		ToolCallID: "call-deny",
+		Arguments:  []byte(`{"command":"rm -rf /"}`),
+	})
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionDeny, decision.Action)
+	require.Empty(t, guard.popScanEvent("call-deny").ScanID)
+}
+
+// TestGuard_AskDecisionDoesNotStashScanEvent verifies the ask path also
+// leaves no side-table entry behind.
+func TestGuard_AskDecisionDoesNotStashScanEvent(t *testing.T) {
+	guard := newTestGuard(t)
+	decision, err := guard.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:   "workspace_exec",
+		ToolCallID: "call-ask",
+		Arguments:  []byte(`{"command":"npm install package"}`),
+	})
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionAsk, decision.Action)
+	require.Empty(t, guard.popScanEvent("call-ask").ScanID)
+}
+
+// TestGuard_AllowDecisionStashesScanEvent verifies the allow path still
+// stashes the preflight event for post-execute correlation.
+func TestGuard_AllowDecisionStashesScanEvent(t *testing.T) {
+	guard := newTestGuard(t)
+	decision, err := guard.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:   "workspace_exec",
+		ToolCallID: "call-allow",
+		Arguments:  []byte(`{"command":"go test ./..."}`),
+	})
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionAllow, decision.Action)
+	require.NotEmpty(t, guard.popScanEvent("call-allow").ScanID)
+}
+
+// TestGuard_PostExecuteEventPopulatesSessionHash verifies that
+// post-execute audit events carry the hashed session id on both the
+// stashed-event path and the fallback path.
+func TestGuard_PostExecuteEventPopulatesSessionHash(t *testing.T) {
+	guard := newTestGuard(t)
+	args := &tool.AfterToolArgs{
+		ToolName:  "write_stdin",
+		Arguments: []byte(`{"session_id":"sess-123","chars":"ls"}`),
+	}
+	// Fallback path: no stashed preflight event.
+	ev := guard.postExecuteEvent(args, false, false)
+	require.Equal(t, hashSessionID("sess-123"), ev.SessionHash)
+
+	// Stashed path: a preflight event without a hash still gets the
+	// current session digest.
+	guard.stashScanEvent("call-1", ScanEvent{ScanID: "scan-1"})
+	args.ToolCallID = "call-1"
+	ev = guard.postExecuteEvent(args, true, false)
+	require.Equal(t, "scan-1", ev.ScanID)
+	require.Equal(t, hashSessionID("sess-123"), ev.SessionHash)
+	require.True(t, ev.Redacted)
+}

