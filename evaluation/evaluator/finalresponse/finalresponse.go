@@ -19,6 +19,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	cfinalresponse "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/finalresponse"
+	scorepkg "trpc.group/trpc-go/trpc-agent-go/evaluation/score"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 )
 
@@ -75,6 +76,7 @@ func (e *finalResponseEvaluator) Evaluate(ctx context.Context, actuals, expected
 			Details: &evaluator.PerInvocationDetails{
 				Reason: reason,
 				Score:  score,
+				Value:  &scorepkg.Value{Kind: scorepkg.KindNumeric, Numeric: &score},
 			},
 		})
 		totalScore += score

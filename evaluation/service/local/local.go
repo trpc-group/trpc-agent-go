@@ -482,6 +482,7 @@ func (s *local) evaluatePerCase(ctx context.Context, inferenceResult *service.In
 				evalMetricResult.Details = &evalresult.EvalMetricResultDetails{
 					Reason:       invocationResult.Details.Reason,
 					Score:        invocationResult.Details.Score,
+					Value:        invocationResult.Details.Value,
 					RubricScores: invocationResult.Details.RubricScores,
 				}
 				reasons = append(reasons, invocationResult.Details.Reason)

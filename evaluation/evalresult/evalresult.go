@@ -16,6 +16,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/epochtime"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/score"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 )
 
@@ -81,6 +82,8 @@ type EvalMetricResultDetails struct {
 	Reason string `json:"reason,omitempty"`
 	// Score is the score for the metric evaluation result.
 	Score float64 `json:"score,omitempty"`
+	// Value is the typed score value for this metric evaluation result.
+	Value *score.Value `json:"value,omitempty"`
 	// RubricScores contains the scores for the rubric items.
 	RubricScores []*RubricScore `json:"rubricScores,omitempty"`
 }

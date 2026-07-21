@@ -36,6 +36,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/text"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/tooltrajectory"
 	criterionxml "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/xml"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/score"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/toolmock"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -676,6 +677,10 @@ func TestCloneEvalSetResult_DeepCopy(t *testing.T) {
 						Details: &evalresult.EvalMetricResultDetails{
 							Reason: "ok",
 							Score:  0.9,
+							Value: &score.Value{
+								Kind:    score.KindNumeric,
+								Numeric: float64Ptr(0.9),
+							},
 							RubricScores: []*evalresult.RubricScore{
 								{
 									ID:     "r1",
@@ -742,6 +747,11 @@ func TestCloneEvalSetResult_DeepCopy(t *testing.T) {
 
 	dst.EvalCaseResults[0].OverallEvalMetricResults[0].Details.RubricScores[0].Reason = "changed"
 	assert.Equal(t, "good", src.EvalCaseResults[0].OverallEvalMetricResults[0].Details.RubricScores[0].Reason)
+
+	require.NotNil(t, dst.EvalCaseResults[0].OverallEvalMetricResults[0].Details.Value)
+	require.NotNil(t, dst.EvalCaseResults[0].OverallEvalMetricResults[0].Details.Value.Numeric)
+	*dst.EvalCaseResults[0].OverallEvalMetricResults[0].Details.Value.Numeric = 0.1
+	assert.Equal(t, 0.9, *src.EvalCaseResults[0].OverallEvalMetricResults[0].Details.Value.Numeric)
 
 	dst.EvalCaseResults[0].EvalMetricResultPerInvocation[0].ActualInvocation.Tools[0].Arguments.(map[string]any)["k"] = "changed"
 	assert.Equal(t, "v", src.EvalCaseResults[0].EvalMetricResultPerInvocation[0].ActualInvocation.Tools[0].Arguments.(map[string]any)["k"])
