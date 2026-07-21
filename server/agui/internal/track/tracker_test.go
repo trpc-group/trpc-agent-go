@@ -187,7 +187,7 @@ func TestTrackerGetEventsForwardsOptions(t *testing.T) {
 		return sess, nil
 	}
 
-	tracker, err := New(svc, WithFlushInterval(0))
+	tracker, err := New(svc)
 	require.NoError(t, err)
 
 	_, err = tracker.GetEvents(ctx, key, session.WithEventTime(afterTime))
@@ -419,26 +419,36 @@ func TestTrackerFlushPersistsPendingAggregation(t *testing.T) {
 	svc := inmemory.NewSessionService()
 	tracker, err := New(svc)
 	require.NoError(t, err)
-
 	key := session.Key{AppName: "app", UserID: "user", SessionID: "thread"}
 	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewTextMessageStartEvent("msg",
 		aguievents.WithRole("assistant"))))
 	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewTextMessageContentEvent("msg", "hi ")))
 	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewTextMessageContentEvent("msg", "there")))
-
 	require.NoError(t, tracker.Flush(ctx, key))
-
 	sess, err := svc.GetSession(ctx, key)
 	require.NoError(t, err)
 	trackEvents, err := sess.GetTrackEvents(TrackAGUI)
 	require.NoError(t, err)
 	require.Len(t, trackEvents.Events, 2)
-
 	parsed, err := aguievents.EventFromJSON(trackEvents.Events[1].Payload)
 	require.NoError(t, err)
 	content, ok := parsed.(*aguievents.TextMessageContentEvent)
 	require.True(t, ok)
 	require.Equal(t, "hi there", content.Delta)
+	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewTextMessageContentEvent("msg", " again")))
+	require.NoError(t, tracker.Close(ctx, key))
+	sess, err = svc.GetSession(ctx, key)
+	require.NoError(t, err)
+	trackEvents, err = sess.GetTrackEvents(TrackAGUI)
+	require.NoError(t, err)
+	require.Len(t, trackEvents.Events, 3)
+	parsed, err = aguievents.EventFromJSON(trackEvents.Events[2].Payload)
+	require.NoError(t, err)
+	content, ok = parsed.(*aguievents.TextMessageContentEvent)
+	require.True(t, ok)
+	require.Equal(t, " again", content.Delta)
+	err = tracker.Flush(ctx, key)
+	require.ErrorContains(t, err, "session state not found")
 }
 
 func TestTrackerFlushReturnsAggregatorError(t *testing.T) {
@@ -461,28 +471,14 @@ func TestTrackerFlushReturnsAggregatorError(t *testing.T) {
 	require.ErrorContains(t, err, "aggregator flush: flush fail")
 }
 
-func TestTrackerFlushPeriodically(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	svc := inmemory.NewSessionService()
-	agg := &stubAggregator{flushCh: make(chan struct{}, 2)}
-	tracker, err := New(svc,
-		WithAggregatorFactory(func(ctx context.Context, opt ...aggregator.Option) aggregator.Aggregator {
-			return agg
-		}),
-		WithFlushInterval(10*time.Millisecond),
-	)
+func TestTrackerFlushAndCloseMissingState(t *testing.T) {
+	ctx := context.Background()
+	tracker, err := New(inmemory.NewSessionService())
 	require.NoError(t, err)
-
 	key := session.Key{AppName: "app", UserID: "user", SessionID: "thread"}
-	require.NoError(t, tracker.AppendEvent(ctx, key, aguievents.NewTextMessageContentEvent("msg", "hi")))
-
-	select {
-	case <-agg.flushCh:
-	case <-time.After(200 * time.Millisecond):
-		require.FailNow(t, "expected periodic flush")
-	}
+	err = tracker.Flush(ctx, key)
+	require.ErrorContains(t, err, "session state not found")
+	require.NoError(t, tracker.Close(ctx, key))
 }
 
 type serviceWithoutTrack struct{}
