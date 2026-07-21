@@ -3929,6 +3929,7 @@
 <h2 id="custom-appnameresolver">Custom <code>AppNameResolver</code></h2>
 <p><code>AppName</code> participates in session lookup together with <code>UserID</code> and <code>threadId</code>. By default, AG-UI uses the static <code>AppName</code> configured by <code>agui.WithAppName(name)</code>. To resolve the application identifier per request, implement <code>AppNameResolver</code> and inject it with <code>agui.WithAppNameResolver</code>.</p>
 <p>When <code>AppNameResolver</code> returns a non-empty string, that value is used as the <code>AppName</code> for the request. When it returns an empty string, the framework falls back to <code>agui.WithAppName(name)</code>. The real-time conversation, message snapshot, and cancel routes reuse the same resolution logic, so related requests for the same session must resolve to the same <code>AppName</code>.</p>
+<p>The resolved <code>AppName</code> is the canonical session boundary for an AG-UI request. During a real-time run, AG-UI passes it to the underlying Runner as <code>agent.WithAppName</code>, keeping the Runner session key consistent with AG-UI track events, message snapshots, and cancel routing.</p>
 <p>When message snapshots are enabled, configure <code>agui.WithAppName(name)</code> as the default value.</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-9-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-9-2"> 2</a></span>
@@ -3980,6 +3981,7 @@
 </span></code></pre></div></td></tr></table></div>
 <h2 id="custom-runoptionresolver">Custom <code>RunOptionResolver</code></h2>
 <p><code>RunOptionResolver</code> adds <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/agent/invocation.go"><code>agent.RunOption</code></a> for the current agent run. It runs for every request, and the returned options only affect that run. The AG-UI runner still maps request <code>input.Tools</code> to caller-executed tools after the custom resolver returns.</p>
+<p>Do not return <code>agent.WithAppName</code> from <code>RunOptionResolver</code> to configure AG-UI session ownership. AG-UI <code>AppName</code> should come from <code>agui.WithAppName</code> or <code>agui.WithAppNameResolver</code>; when the resolved <code>AppName</code> is non-empty, it overrides any <code>agent.WithAppName</code> set by <code>RunOptionResolver</code>.</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-10-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-10-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-10-3"> 3</a></span>
@@ -5676,7 +5678,7 @@ custom resolver only needs to return additional run options.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="June 16, 2026 10:45:00 UTC">2026-06-16 10:45:00</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="July 21, 2026 08:13:23 UTC">2026-07-21 08:13:23</span>
   </span>
 
     
