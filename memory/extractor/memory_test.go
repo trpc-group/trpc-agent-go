@@ -230,21 +230,19 @@ func TestExtractor_AssistantResultExtractionOption(t *testing.T) {
 
 	refDate := time.Date(2024, 6, 10, 0, 0, 0, 0, time.UTC)
 	prompt := e.buildSystemPrompt(refDate, nil)
+	normalizedPrompt := strings.Join(strings.Fields(prompt), " ")
 	assert.Contains(t, prompt, "<assistant_result_extraction>")
-	assert.Contains(t, prompt, "MANDATORY DIRECT-RESULT CHECK")
-	assert.Contains(t, prompt, "requested extraction, classification, or transformation")
-	assert.Contains(t, prompt,
-		"even when the assistant frames it as an opinion, an analysis")
-	assert.Contains(t, prompt, "A rationale or a")
-	assert.Contains(t, prompt,
-		"disclaimer that the assistant has no personal opinion")
+	assert.Contains(t, prompt, "DIRECT-RESULT CHECK")
+	assert.Contains(t, normalizedPrompt,
+		"requested extraction, classification, or transformation")
+	assert.Contains(t, prompt, "rationale, disclaimer, opinion, analysis")
 	assert.Contains(t, prompt, "Plan B best balances")
 	assert.Contains(t, prompt, "reliability and cost")
 	assert.Contains(t, prompt, "Do not store general definitions")
 	assert.Contains(t, prompt, `must begin with "Assistant result:"`)
 	assert.Contains(t, prompt, assistantResultAddToolName)
 	assert.Contains(t, assistantResultAddTool.Declaration().Description,
-		"analytical or opinion-based conclusion")
+		"assistant's direct reply")
 }
 
 func TestExtractor_DefaultPromptGroundsCurrentTurnReferences(t *testing.T) {

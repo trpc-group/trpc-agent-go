@@ -676,59 +676,29 @@ func updatePolicyPrompt(policy UpdatePolicy) string {
 const assistantResultExtractionPrompt = `
 
 <assistant_result_extraction>
-In addition to normal user-memory extraction, inspect concrete results that
-the assistant provided in direct response to the user's request. Emit those
-results with memory_add_assistant_result, never with memory_add or
-memory_update. Continue to use the normal memory tools for facts, preferences,
-events, goals, corrections, and forget requests supplied by the user.
+Inspect the assistant's direct reply separately from normal user memories. Use
+memory_add_assistant_result, never memory_add or memory_update, for a concrete
+result the user requested and could refer to later.
 
-Eligible results are named answers, recommendations or shortlists, ordered
-plans, decisions, calculations, and requested extractions, classifications, or
-transformations. This includes a selected answer to a judgment or comparison
-question even when the assistant frames it as an opinion, an analysis, or a
-conclusion based on available information. Do not store general definitions,
-explanatory background, tutorial prose, brainstorming without a selected
-result, or acknowledgments.
-
-Every assistant-result memory must begin with "Assistant result:" so its source
-remains explicit after persistence. The prefix distinguishes assistant-provided
-recommendations, estimates, and answers from facts confirmed by the user.
-
-- Store a concrete result the user explicitly requested and may refer to later,
-  such as a named answer, concise recommendation, final list or ordering, plan,
-  calculation, or requested extraction, classification, or transformation.
-- MANDATORY DIRECT-RESULT CHECK: Before finishing, inspect the assistant's
-  direct answer separately. If it contains concrete named items or a conclusion
-  requested by the user, emit a memory for that result even when the response
-  is educational, generally applicable, or based on non-personal material.
-  Do not emit only the user's goal while dropping the answer to that goal.
-- Determine eligibility by whether the response resolves the user's request
-  with a concise answer they could ask about later, not by whether the answer is
-  personal, objectively verifiable, or free of analysis. A rationale or a
-  disclaimer that the assistant has no personal opinion does not make an
-  otherwise concrete named answer into generic background.
-- Keep a cohesive result in one memory when splitting it would lose set
-  membership, ordering, or item-to-detail relationships. For a long response,
-  store one concise memory containing the requested answer rather than every
-  supporting explanation.
-- Example: if a user asks which materials to compare and the assistant answers
-  "steel for strength, aluminum for weight, and wood for cost", store one
-  memory containing all three material-to-property recommendations. Merely
-  storing that the user is comparing materials is incomplete.
-- Example: if a user asks which proposal best balances reliability and cost and
-  the assistant answers "Based on my analysis, Plan B is the best balance"
-  followed by supporting reasons, store "Assistant result: Plan B best balances
-  reliability and cost." The analytical framing and supporting explanation do
-  not disqualify the selected conclusion.
+- DIRECT-RESULT CHECK: retain a requested named answer, recommendation or
+  shortlist, ordering, plan, decision, calculation, or requested extraction,
+  classification, or transformation. Do not store only the user's goal while
+  dropping the result.
+- A rationale, disclaimer, opinion, analysis, educational framing, or
+  non-personal source does not disqualify an otherwise concrete selected result.
+- Do not store general definitions, tutorial/background prose, unselected
+  brainstorming, hidden reasoning, acknowledgments, repeated explanation, or
+  filler.
+- Every assistant-result memory must begin with "Assistant result:". Keep one
+  cohesive concise memory when splitting would lose set membership, ordering,
+  or item-to-detail relationships.
 - Preserve exact names, quantities, negation, modality, and relationships.
-- Every number, amount, range, percentage, date, duration, and measurement in
-  a result must appear in the assistant's direct response. Never invent a
-  missing estimate, fill in an unspecified price, or infer a new quantity.
-- Do not store hidden reasoning, unrequested generic teaching, every explored
-  alternative, repeated explanation, acknowledgments, or filler.
-- Do not reject a requested transformation merely because its source material
-  is not personal. Before emitting no operation, check whether the assistant
-  produced a direct result the user could ask about later.
+  Every claim must appear in the assistant's direct reply; never invent a
+  missing value, estimate, or relationship.
+- Example: "steel for strength, aluminum for weight, and wood for cost" is one
+  result preserving all item-to-property relationships. If analysis selects
+  Plan B for reliability and cost, store "Assistant result: Plan B best balances
+  reliability and cost."
 </assistant_result_extraction>
 `
 

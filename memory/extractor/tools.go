@@ -60,12 +60,28 @@ const assistantResultAddToolName = "memory_add_assistant_result"
 const groundedStateAddToolName = "memory_add_grounded_state"
 
 var assistantResultAddTool = func() tool.Tool {
-	declaration := *memorytool.NewAddTool().Declaration()
-	declaration.Name = assistantResultAddToolName
-	declaration.Description = "Store a concrete result provided by the " +
-		"assistant in direct response to the user's request, including a " +
-		"named analytical or opinion-based conclusion."
-	return &declarationOnlyTool{decl: &declaration}
+	return &declarationOnlyTool{decl: &tool.Declaration{
+		Name: assistantResultAddToolName,
+		Description: "Store one concrete result from the assistant's direct " +
+			"reply to the user's request.",
+		InputSchema: &tool.Schema{
+			Type:                 "object",
+			Required:             []string{argKeyMemory},
+			AdditionalProperties: false,
+			Properties: map[string]*tool.Schema{
+				argKeyMemory: {
+					Type: "string",
+					Description: "Concise self-contained assistant result with " +
+						"exact names, values, and relationships.",
+				},
+				argKeyTopics: {
+					Type:        "array",
+					Description: "Optional concrete topics for retrieval.",
+					Items:       &tool.Schema{Type: "string"},
+				},
+			},
+		},
+	}}
 }()
 
 var groundedStateAddTool = func() tool.Tool {
