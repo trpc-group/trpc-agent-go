@@ -2,6 +2,10 @@
 
 # tRPC-Agent-Go
 
+<p align="center">
+  <img src="docs/mkdocs/assets/img/logo-readme.png" alt="tRPC logo" width="360">
+</p>
+
 [![Go Reference](https://pkg.go.dev/badge/trpc.group/trpc-go/trpc-agent-go.svg)](https://pkg.go.dev/trpc.group/trpc-go/trpc-agent-go)
 [![Go Report Card](https://goreportcard.com/badge/github.com/trpc-group/trpc-agent-go)](https://goreportcard.com/report/github.com/trpc-group/trpc-agent-go)
 [![LICENSE](https://img.shields.io/badge/license-Apache--2.0-green.svg)](https://github.com/trpc-group/trpc-agent-go/blob/main/LICENSE)
