@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
@@ -91,11 +92,16 @@ func Run(ctx context.Context, options Options) (*Report, error) {
 	}
 	started := now()
 	initialProfile := options.InitialProfile
+	comparisonInitialProfile := initialProfile
 	searchProfile := initialProfile
 	releasedProfile := initialProfile
-	baselineRef := options.Config.BaselineProfileRef
-	if baselineRef == "" {
-		baselineRef = "baseline/input_profile.json"
+	hasReleasedCandidate := false
+	baselineRef := ""
+	if options.Config.SaveArtifacts {
+		baselineRef = options.Config.BaselineProfileRef
+		if baselineRef == "" {
+			baselineRef = "baseline/input_profile.json"
+		}
 	}
 	releasedRef := baselineRef
 	var initialTrain, initialValidation *engine.EvaluationResult
@@ -118,10 +124,28 @@ func Run(ctx context.Context, options Options) (*Report, error) {
 		if err != nil {
 			return nil, fmt.Errorf("run PromptIter round %d: %w", roundNumber, err)
 		}
+		if runResult == nil {
+			return nil, fmt.Errorf("PromptIter round %d returned a nil result", roundNumber)
+		}
 		if len(runResult.Rounds) != 1 {
 			return nil, fmt.Errorf("PromptIter round %d returned %d rounds", roundNumber, len(runResult.Rounds))
 		}
 		round := runResult.Rounds[0]
+		if roundNumber == 1 && round.InputProfile != nil {
+			comparisonInitialProfile = round.InputProfile
+		}
+		if runResult.BaselineValidation == nil {
+			return nil, fmt.Errorf("PromptIter round %d has no baseline validation evaluation", roundNumber)
+		}
+		if round.Train == nil {
+			return nil, fmt.Errorf("PromptIter round %d has no train evaluation", roundNumber)
+		}
+		if round.Validation == nil {
+			return nil, fmt.Errorf("PromptIter round %d has no validation evaluation", roundNumber)
+		}
+		if round.OutputProfile == nil {
+			return nil, fmt.Errorf("PromptIter round %d has no output profile", roundNumber)
+		}
 		if round.Acceptance == nil {
 			return nil, fmt.Errorf("PromptIter round %d has no acceptance decision", roundNumber)
 		}
@@ -137,6 +161,9 @@ func Run(ctx context.Context, options Options) (*Report, error) {
 		candidateTrain, err := options.Evaluator.EvaluateProfile(ctx, options.Config.TrainEvalSetID, round.OutputProfile)
 		if err != nil {
 			return nil, fmt.Errorf("evaluate candidate train round %d: %w", roundNumber, err)
+		}
+		if candidateTrain == nil {
+			return nil, fmt.Errorf("evaluate candidate train round %d returned a nil result", roundNumber)
 		}
 		roundMeasurement := measurementDelta(roundStartMeasurement, options.Meter.Total())
 		searchValidationMeasurement := options.Meter.Measure(options.Config.ValidationEvalSetID, searchProfile)
@@ -164,7 +191,10 @@ func Run(ctx context.Context, options Options) (*Report, error) {
 			InputLatencySeconds: releasedValidationMeasurement.LatencySeconds, CandidateLatencySeconds: candidateValidationMeasurement.LatencySeconds,
 			InputCost: releasedValidationMeasurement.Cost, CandidateCost: candidateValidationMeasurement.Cost,
 		})
-		references := roundArtifactReferences(roundNumber)
+		references := ArtifactReferences{}
+		if options.Config.SaveArtifacts {
+			references = roundArtifactReferences(roundNumber)
+		}
 		roundReport := RoundReport{
 			Round: roundNumber, PromptIterAccepted: round.Acceptance.Accepted,
 			PromptIterReasons: []string{round.Acceptance.Reason},
@@ -183,14 +213,21 @@ func Run(ctx context.Context, options Options) (*Report, error) {
 		if err := persistRound(options, roundNumber, searchProfile, round.OutputProfile, candidateTrain, round.Validation, roundReport.Delta, decision); err != nil {
 			return nil, err
 		}
-		rounds = append(rounds, roundReport)
 		if decision.Accepted {
+			if !options.Config.SaveArtifacts {
+				releasedRef = "released/candidate_profile.json"
+				if err := writeJSON(options.Artifacts, releasedRef, round.OutputProfile); err != nil {
+					return nil, fmt.Errorf("persist accepted profile round %d: %w", roundNumber, err)
+				}
+			} else {
+				releasedRef = references.CandidateProfile
+			}
 			releasedProfile = round.OutputProfile
+			hasReleasedCandidate = true
 			releasedTrain = candidateTrain
 			releasedValidation = round.Validation
 			releasedTrainMeasurement = candidateTrainMeasurement
 			releasedValidationMeasurement = candidateValidationMeasurement
-			releasedRef = references.CandidateProfile
 			noRelease = 0
 		} else {
 			noRelease++
@@ -198,16 +235,21 @@ func Run(ctx context.Context, options Options) (*Report, error) {
 		if round.Acceptance.Accepted {
 			searchProfile = round.OutputProfile
 		}
+		rounds = append(rounds, roundReport)
 		if noRelease >= options.Config.MaxRoundsWithoutRelease {
 			break
 		}
 	}
 	finished := now()
 	totalMeasurement := options.Meter.Total()
+	baselineArtifacts := ArtifactReferences{}
+	if options.Config.SaveArtifacts {
+		baselineArtifacts = ArtifactReferences{InputProfile: "baseline/input_profile.json", TrainEvaluation: "baseline/train_evaluation.json", ValidationEvaluation: "baseline/validation_evaluation.json"}
+	}
 	baseline := BaselineSnapshot{
 		Train:      summarizeEvaluationWithResources(initialTrain, initialTrainMeasurement, options.Config.EstimatedCost, options.Config.ExpectedAgentName, options.Config.ExpectedAgentNames),
 		Validation: summarizeEvaluationWithResources(initialValidation, initialValidationMeasurement, options.Config.EstimatedCost, options.Config.ExpectedAgentName, options.Config.ExpectedAgentNames),
-		Artifacts:  ArtifactReferences{InputProfile: "baseline/input_profile.json", TrainEvaluation: "baseline/train_evaluation.json", ValidationEvaluation: "baseline/validation_evaluation.json"},
+		Artifacts:  baselineArtifacts,
 	}
 	report := &Report{
 		Version: 1, Seed: options.Config.Seed, ModelConfig: options.Config.ModelConfig,
@@ -217,7 +259,7 @@ func Run(ctx context.Context, options Options) (*Report, error) {
 		EstimatedCost: costSnapshot(totalMeasurement.Cost, options.Config.EstimatedCost),
 		Baseline:      baseline,
 		Rounds:        rounds,
-		WriteBack:     WriteBackDecision{RecommendedForWriteBack: releasedProfile != initialProfile && releasedRef != baselineRef, Performed: options.Config.PerformedWriteBack, AcceptedProfileRef: filepath.ToSlash(releasedRef)},
+		WriteBack:     WriteBackDecision{RecommendedForWriteBack: hasReleasedCandidate && !profilesEqual(releasedProfile, comparisonInitialProfile), Performed: options.Config.PerformedWriteBack, AcceptedProfileRef: filepath.ToSlash(releasedRef)},
 	}
 	report.FailureAttributionStats = buildFailureAttributionStats(report.Baseline, report.Rounds)
 	if err := persistReport(options.Artifacts, report); err != nil {
@@ -354,28 +396,57 @@ func countCases(result *engine.EvaluationResult) int {
 }
 
 func evaluationComplete(expected, actual *engine.EvaluationResult) bool {
-	expectedStates := caseStates(expected)
-	actualStates := caseStates(actual)
-	if len(expectedStates) == 0 || len(expectedStates) != len(actualStates) {
-		return false
+	expectedInventory, expectedOK := evaluationInventoryFor(expected)
+	actualInventory, actualOK := evaluationInventoryFor(actual)
+	return expectedOK && actualOK && reflect.DeepEqual(expectedInventory, actualInventory)
+}
+
+type evaluationInventory struct {
+	EvalSets map[string]int
+	Cases    map[string]int
+	Metrics  map[string]int
+}
+
+func evaluationInventoryFor(result *engine.EvaluationResult) (evaluationInventory, bool) {
+	inventory := evaluationInventory{EvalSets: map[string]int{}, Cases: map[string]int{}, Metrics: map[string]int{}}
+	if result == nil || len(result.EvalSets) == 0 {
+		return inventory, false
 	}
-	for id := range expectedStates {
-		state, ok := actualStates[id]
-		if !ok || !state.present {
-			return false
-		}
-	}
-	for _, set := range actual.EvalSets {
+	caseCount := 0
+	for _, set := range result.EvalSets {
+		inventory.EvalSets[set.EvalSetID]++
 		for _, evalCase := range set.Cases {
 			if len(evalCase.Metrics) == 0 {
-				return false
+				return inventory, false
 			}
+			caseKey := set.EvalSetID + "\x00" + evalCase.EvalCaseID
+			inventory.Cases[caseKey]++
+			caseCount++
 			for _, metric := range evalCase.Metrics {
-				if metric.Status == status.EvalStatusNotEvaluated {
-					return false
+				if metric.Status != status.EvalStatusPassed && metric.Status != status.EvalStatusFailed {
+					return inventory, false
 				}
+				inventory.Metrics[caseKey+"\x00"+metric.MetricName]++
 			}
 		}
 	}
-	return true
+	return inventory, caseCount > 0
+}
+
+func profilesEqual(left, right *promptiter.Profile) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	if left.StructureID != right.StructureID {
+		return false
+	}
+	return reflect.DeepEqual(profileOverrideIndex(left), profileOverrideIndex(right))
+}
+
+func profileOverrideIndex(profile *promptiter.Profile) map[string]promptiter.SurfaceOverride {
+	index := make(map[string]promptiter.SurfaceOverride, len(profile.Overrides))
+	for _, override := range profile.Overrides {
+		index[override.SurfaceID] = override
+	}
+	return index
 }

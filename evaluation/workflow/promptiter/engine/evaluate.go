@@ -337,11 +337,16 @@ func expectedInvocations(result *evalresult.EvalCaseResult) []*evalset.Invocatio
 	if result == nil {
 		return nil
 	}
-	expected := make([]*evalset.Invocation, 0, len(result.EvalMetricResultPerInvocation))
-	for _, perInvocation := range result.EvalMetricResultPerInvocation {
+	expected := make([]*evalset.Invocation, len(result.EvalMetricResultPerInvocation))
+	hasEvidence := false
+	for i, perInvocation := range result.EvalMetricResultPerInvocation {
 		if perInvocation != nil && perInvocation.ExpectedInvocation != nil {
-			expected = append(expected, perInvocation.ExpectedInvocation)
+			expected[i] = perInvocation.ExpectedInvocation
+			hasEvidence = true
 		}
+	}
+	if !hasEvidence {
+		return nil
 	}
 	return expected
 }

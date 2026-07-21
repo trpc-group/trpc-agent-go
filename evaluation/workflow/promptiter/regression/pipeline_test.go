@@ -11,6 +11,8 @@ package regression
 
 import (
 	"context"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -143,6 +145,141 @@ func TestEvaluationCompleteRejectsIncompleteResults(t *testing.T) {
 	if evaluationComplete(complete, notEvaluated) {
 		t.Fatal("not-evaluated metric was accepted")
 	}
+	twoMetrics := pipelineEvaluation(1, status.EvalStatusPassed)
+	twoMetrics.EvalSets[0].Cases[0].Metrics = append(twoMetrics.EvalSets[0].Cases[0].Metrics,
+		engine.MetricResult{MetricName: "safety", Score: 1, Status: status.EvalStatusPassed})
+	if evaluationComplete(twoMetrics, complete) {
+		t.Fatal("candidate with a missing metric was accepted")
+	}
+	unknown := pipelineEvaluation(1, status.EvalStatusUnknown)
+	if evaluationComplete(complete, unknown) {
+		t.Fatal("unknown metric status was accepted")
+	}
+	emptyStatus := pipelineEvaluation(1, status.EvalStatus(""))
+	if evaluationComplete(complete, emptyStatus) {
+		t.Fatal("empty metric status was accepted")
+	}
+	changedName := pipelineEvaluation(1, status.EvalStatusPassed)
+	changedName.EvalSets[0].Cases[0].Metrics[0].MetricName = "different"
+	if evaluationComplete(complete, changedName) {
+		t.Fatal("candidate with a different metric set was accepted")
+	}
+}
+
+func TestRunWithoutRoundArtifactsPersistsAcceptedProfileReference(t *testing.T) {
+	initial := testProfile("initial")
+	candidate := testProfile("candidate")
+	artifacts := &memoryArtifacts{files: map[string][]byte{}}
+	report, err := Run(context.Background(), Options{
+		Config: Config{
+			TrainEvalSetID: "train", ValidationEvalSetID: "validation", TargetSurfaceIDs: []string{"agent#instruction"},
+			MaxRounds: 1, MaxRoundsWithoutRelease: 1, ReleaseGate: GatePolicy{MinValidationScoreGain: 0.1, RequireCompleteEvaluation: true},
+		},
+		Engine:    &pipelineEngine{result: pipelineRunResult(0.5, 0.5, 0.7, candidate)},
+		Evaluator: pipelineEvaluator{result: pipelineEvaluation(0.7, status.EvalStatusPassed)}, Meter: pipelineMeter{},
+		InitialProfile: initial, Artifacts: artifacts,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !report.WriteBack.RecommendedForWriteBack || report.WriteBack.AcceptedProfileRef != "released/candidate_profile.json" {
+		t.Fatalf("unexpected write-back decision: %#v", report.WriteBack)
+	}
+	if !reflect.DeepEqual(report.Baseline.Artifacts, ArtifactReferences{}) || !reflect.DeepEqual(report.Rounds[0].Artifacts, ArtifactReferences{}) {
+		t.Fatalf("disabled artifacts produced dangling references: baseline=%#v round=%#v", report.Baseline.Artifacts, report.Rounds[0].Artifacts)
+	}
+	if _, ok := artifacts.files[report.WriteBack.AcceptedProfileRef]; !ok {
+		t.Fatalf("accepted profile reference was not persisted: %#v", artifacts.files)
+	}
+	for path := range artifacts.files {
+		if strings.HasPrefix(path, "baseline/") || strings.HasPrefix(path, "round_1/") {
+			t.Fatalf("disabled round artifact was persisted: %s", path)
+		}
+	}
+}
+
+func TestAcceptedUnchangedProfileIsNotRecommendedForWriteBack(t *testing.T) {
+	initial := testProfile("same")
+	normalizedInitial := &promptiter.Profile{StructureID: "structure"}
+	candidate := &promptiter.Profile{StructureID: "structure"}
+	runResult := pipelineRunResult(0.5, 0.5, 0.5, candidate)
+	runResult.Rounds[0].InputProfile = normalizedInitial
+	report, err := Run(context.Background(), Options{
+		Config: Config{
+			TrainEvalSetID: "train", ValidationEvalSetID: "validation", TargetSurfaceIDs: []string{"agent#instruction"},
+			MaxRounds: 1, MaxRoundsWithoutRelease: 1, SaveArtifacts: true, ReleaseGate: GatePolicy{RequireCompleteEvaluation: true},
+		},
+		Engine:    &pipelineEngine{result: runResult},
+		Evaluator: pipelineEvaluator{result: pipelineEvaluation(0.5, status.EvalStatusPassed)}, Meter: pipelineMeter{},
+		InitialProfile: initial, Artifacts: &memoryArtifacts{files: map[string][]byte{}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !report.Rounds[0].ReleaseGate.Accepted || report.WriteBack.RecommendedForWriteBack {
+		t.Fatalf("unchanged accepted profile produced a write-back recommendation: %#v", report.WriteBack)
+	}
+}
+
+func TestRunRejectsIncompleteCollaboratorResults(t *testing.T) {
+	valid := pipelineRunResult(0.5, 0.5, 0.6, testProfile("candidate"))
+	tests := []struct {
+		name      string
+		result    *engine.RunResult
+		evaluator ProfileEvaluator
+		want      string
+	}{
+		{name: "nil run result", result: nil, evaluator: pipelineEvaluator{}, want: "nil result"},
+		{name: "missing baseline", result: cloneRunResult(valid, func(value *engine.RunResult) { value.BaselineValidation = nil }), evaluator: pipelineEvaluator{}, want: "no baseline validation"},
+		{name: "missing train", result: cloneRunResult(valid, func(value *engine.RunResult) { value.Rounds[0].Train = nil }), evaluator: pipelineEvaluator{}, want: "no train evaluation"},
+		{name: "missing validation", result: cloneRunResult(valid, func(value *engine.RunResult) { value.Rounds[0].Validation = nil }), evaluator: pipelineEvaluator{}, want: "no validation evaluation"},
+		{name: "missing profile", result: cloneRunResult(valid, func(value *engine.RunResult) { value.Rounds[0].OutputProfile = nil }), evaluator: pipelineEvaluator{}, want: "no output profile"},
+		{name: "nil candidate train", result: valid, evaluator: pipelineEvaluator{}, want: "returned a nil result"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := Run(context.Background(), Options{
+				Config: Config{TrainEvalSetID: "train", ValidationEvalSetID: "validation", TargetSurfaceIDs: []string{"agent#instruction"}, MaxRounds: 1, MaxRoundsWithoutRelease: 1},
+				Engine: &pipelineEngine{result: test.result}, Evaluator: test.evaluator, Meter: pipelineMeter{},
+				InitialProfile: testProfile("initial"), Artifacts: &memoryArtifacts{files: map[string][]byte{}},
+			})
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Run() error = %v, want substring %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestMaxRoundsWithoutReleaseStopsAcceptedSearch(t *testing.T) {
+	engineStub := &sequencePipelineEngine{results: []*engine.RunResult{
+		pipelineRunResult(0.5, 0.5, 0.4, testProfile("one")),
+		pipelineRunResult(0.4, 0.4, 0.3, testProfile("two")),
+		pipelineRunResult(0.3, 0.3, 0.2, testProfile("three")),
+	}}
+	evaluator := profilePipelineEvaluator{results: map[string]*engine.EvaluationResult{
+		"one": pipelineEvaluation(0.4, status.EvalStatusPassed), "two": pipelineEvaluation(0.3, status.EvalStatusPassed), "three": pipelineEvaluation(0.2, status.EvalStatusPassed),
+	}}
+	report, err := Run(context.Background(), Options{
+		Config: Config{
+			TrainEvalSetID: "train", ValidationEvalSetID: "validation", TargetSurfaceIDs: []string{"agent#instruction"},
+			MaxRounds: 3, MaxRoundsWithoutRelease: 2, PromptIterMinScoreGain: CandidatePassThroughGain,
+			ReleaseGate: GatePolicy{MinValidationScoreGain: 0.1, RequireCompleteEvaluation: true},
+		},
+		Engine: engineStub, Evaluator: evaluator, Meter: pipelineMeter{}, InitialProfile: testProfile("initial"), Artifacts: &memoryArtifacts{files: map[string][]byte{}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Rounds) != 2 || len(engineStub.requests) != 2 || !report.Rounds[0].PromptIterAccepted || !report.Rounds[1].PromptIterAccepted {
+		t.Fatalf("release stop condition did not stop after two rejected releases: rounds=%d requests=%d", len(report.Rounds), len(engineStub.requests))
+	}
+}
+
+func cloneRunResult(value *engine.RunResult, mutate func(*engine.RunResult)) *engine.RunResult {
+	clone := *value
+	clone.Rounds = append([]engine.RoundResult(nil), value.Rounds...)
+	mutate(&clone)
+	return &clone
 }
 
 func TestMeasurementDeltaAndDisabledArtifactPersistence(t *testing.T) {
@@ -190,7 +327,7 @@ func runLastReleasedBaselineScenario(t *testing.T) (*Report, []*engine.RunReques
 			TrainEvalSetID: "train", ValidationEvalSetID: "validation", TargetSurfaceIDs: []string{"agent#instruction"},
 			MaxRounds: 3, MaxRoundsWithoutRelease: 3, PromptIterMinScoreGain: CandidatePassThroughGain,
 			ReleaseGate:        GatePolicy{MinValidationScoreGain: 0.05, MaxModelCallIncrease: 100, MaxToolCallIncrease: 100, MaxCostIncrease: 100, MaxLatencyIncrease: 100, RejectValidationRegression: true, RequireCompleteEvaluation: true},
-			BaselineProfileRef: "baseline/input_profile.json",
+			BaselineProfileRef: "baseline/input_profile.json", SaveArtifacts: true,
 		},
 		Engine: engineStub, Evaluator: evaluator, Meter: meter, InitialProfile: initial,
 		Artifacts: &memoryArtifacts{files: map[string][]byte{}},

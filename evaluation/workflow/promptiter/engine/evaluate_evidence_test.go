@@ -41,7 +41,7 @@ func TestCaseResultEvidenceJSONCompatibility(t *testing.T) {
 	}
 }
 
-func TestExpectedInvocationsFiltersUnavailableEvidence(t *testing.T) {
+func TestExpectedInvocationsPreservesSparseEvidencePositions(t *testing.T) {
 	if got := expectedInvocations(nil); got != nil {
 		t.Fatalf("nil result evidence = %#v", got)
 	}
@@ -52,7 +52,10 @@ func TestExpectedInvocationsFiltersUnavailableEvidence(t *testing.T) {
 		{ExpectedInvocation: expected},
 	}}
 	got := expectedInvocations(result)
-	if len(got) != 1 || got[0] != expected {
+	if len(got) != 3 || got[0] != nil || got[1] != nil || got[2] != expected {
 		t.Fatalf("expected invocation evidence = %#v", got)
+	}
+	if got := expectedInvocations(&evalresult.EvalCaseResult{EvalMetricResultPerInvocation: []*evalresult.EvalMetricResultPerInvocation{nil, {}}}); got != nil {
+		t.Fatalf("empty invocation evidence = %#v, want nil", got)
 	}
 }
