@@ -53,12 +53,12 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		if opts.orgID != "" || opts.projectID != "" {
 			return nil, errors.New("mem0: org/project identifiers are not supported by self-hosted OSS")
 		}
-	} else if opts.ingestDefaults.prompt != "" ||
-		opts.ingestDefaults.expirationDateResolver != nil ||
-		opts.ingestDefaults.memoryType != "" {
+	} else if opts.ingest.prompt != "" ||
+		opts.ingest.expirationDateResolver != nil ||
+		opts.ingest.memoryType != "" {
 		return nil, errors.New("mem0: self-hosted ingest options require self-hosted OSS mode")
 	}
-	if err := validateIngestConfig(opts.ingestDefaults); err != nil {
+	if err := validateIngestConfig(opts.ingest); err != nil {
 		return nil, err
 	}
 	c, err := newClient(opts)
@@ -122,14 +122,14 @@ func (s *Service) IngestSession(
 	}
 	lock.Unlock()
 
-	reqOpts := resolveSessionIngestOptions(s.opts.ingestDefaults, opts)
+	reqOpts := resolveSessionIngestOptions(s.opts.ingest, opts)
 	if err := validateIngestOptions(reqOpts); err != nil {
 		return err
 	}
 	expirationDate, err := resolveIngestExpirationDate(
 		ctx,
 		sess,
-		s.opts.ingestDefaults.expirationDateResolver,
+		s.opts.ingest.expirationDateResolver,
 	)
 	if err != nil {
 		return err

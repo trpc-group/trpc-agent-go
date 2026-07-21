@@ -61,7 +61,7 @@ func TestSelfHostedIngestOptions(t *testing.T) {
 			WithSelfHostedIngestPrompt("extract deadlines"),
 			WithSelfHostedIngestPrompt("   "),
 		)
-		assert.Equal(t, "extract deadlines", opts.ingestDefaults.prompt)
+		assert.Equal(t, "extract deadlines", opts.ingest.prompt)
 	})
 
 	t.Run("expiration date resolver", func(t *testing.T) {
@@ -72,8 +72,8 @@ func TestSelfHostedIngestOptions(t *testing.T) {
 			WithSelfHostedIngestExpirationDateResolver(nil),
 			WithSelfHostedIngestExpirationDateResolver(resolver),
 		)
-		require.NotNil(t, opts.ingestDefaults.expirationDateResolver)
-		got, err := opts.ingestDefaults.expirationDateResolver.resolve(
+		require.NotNil(t, opts.ingest.expirationDateResolver)
+		got, err := opts.ingest.expirationDateResolver.resolve(
 			context.Background(),
 			&session.Session{},
 		)
@@ -82,13 +82,13 @@ func TestSelfHostedIngestOptions(t *testing.T) {
 	})
 
 	t.Run("inference", func(t *testing.T) {
-		assert.True(t, apply().ingestDefaults.infer)
-		assert.False(t, apply(WithIngestInference(false)).ingestDefaults.infer)
+		assert.True(t, apply().ingest.infer)
+		assert.False(t, apply(WithIngestInference(false)).ingest.infer)
 	})
 
 	t.Run("procedural memory", func(t *testing.T) {
 		opts := apply(WithSelfHostedProceduralMemory())
-		assert.Equal(t, memoryTypeProcedural, opts.ingestDefaults.memoryType)
+		assert.Equal(t, memoryTypeProcedural, opts.ingest.memoryType)
 	})
 }
 

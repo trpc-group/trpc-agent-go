@@ -75,7 +75,7 @@ type serviceOpts struct {
 
 	loadToolEnabled                      bool
 	includeUnscopedSelfHostedOSSMemories bool
-	ingestDefaults                       ingestConfig
+	ingest                               ingestConfig
 
 	asyncMemoryNum   int
 	memoryQueueSize  int
@@ -95,7 +95,7 @@ var defaultOptions = serviceOpts{
 	asyncMemoryNum:   defaultAsyncMemoryNum,
 	memoryQueueSize:  defaultMemoryQueueSize,
 	memoryJobTimeout: defaultMemoryJobTimeout,
-	ingestDefaults: ingestConfig{
+	ingest: ingestConfig{
 		infer: true,
 	},
 }
@@ -111,7 +111,7 @@ func WithSelfHostedIngestPrompt(prompt string) ServiceOpt {
 		if strings.TrimSpace(prompt) == "" {
 			return
 		}
-		opts.ingestDefaults.prompt = prompt
+		opts.ingest.prompt = prompt
 	}
 }
 
@@ -130,7 +130,7 @@ func WithSelfHostedIngestExpirationDateResolver(
 		if resolver == nil {
 			return
 		}
-		opts.ingestDefaults.expirationDateResolver = &ingestExpirationDateResolver{
+		opts.ingest.expirationDateResolver = &ingestExpirationDateResolver{
 			resolve: resolver,
 		}
 	}
@@ -143,7 +143,7 @@ func WithSelfHostedIngestExpirationDateResolver(
 // cannot be combined with a custom extraction prompt or procedural memory.
 func WithIngestInference(infer bool) ServiceOpt {
 	return func(opts *serviceOpts) {
-		opts.ingestDefaults.infer = infer
+		opts.ingest.infer = infer
 	}
 }
 
@@ -152,7 +152,7 @@ func WithIngestInference(infer bool) ServiceOpt {
 // ingestion. NewService returns an error if inference is disabled.
 func WithSelfHostedProceduralMemory() ServiceOpt {
 	return func(opts *serviceOpts) {
-		opts.ingestDefaults.memoryType = memoryTypeProcedural
+		opts.ingest.memoryType = memoryTypeProcedural
 	}
 }
 
