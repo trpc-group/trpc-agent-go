@@ -14,6 +14,8 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -35,7 +37,10 @@ type Config struct {
 	RepoPath    string
 	SandboxKind string
 	DryRun      bool
-	Timeout     time.Duration
+	// EnableStaticcheck adds "staticcheck ./..." to the check commands.
+	// It stays optional because the binary may be absent in the sandbox.
+	EnableStaticcheck bool
+	Timeout           time.Duration
 }
 
 // Result is the audit trail from sandbox execution.
@@ -53,6 +58,9 @@ func RunChecks(ctx context.Context, cfg Config) Result {
 		return Result{}
 	}
 	commands := []string{"go test ./...", "go vet ./..."}
+	if cfg.EnableStaticcheck {
+		commands = append(commands, "staticcheck ./...")
+	}
 	var out Result
 	for _, command := range commands {
 		decision := permission.Decide(command)
@@ -141,8 +149,16 @@ func runE2B(ctx context.Context, cfg Config, command string) review.SandboxRun {
 
 func runManaged(ctx context.Context, cfg Config, command string) review.SandboxRun {
 	start := time.Now()
+	repoPath, err := filepath.Abs(cfg.RepoPath)
+	if err != nil {
+		return failedRun(command, start, err)
+	}
+	profile := sandbox.WorkspaceWriteProfile().WithReadPaths(repoPath)
+	if runtime.GOROOT() != "" {
+		profile = profile.WithReadPaths(runtime.GOROOT())
+	}
 	rt := sandbox.NewRuntime(
-		sandbox.WithPermissionProfile(sandbox.WorkspaceWriteProfile()),
+		sandbox.WithPermissionProfile(profile),
 		sandbox.WithShellEnvironmentPolicy(sandbox.ShellEnvironmentPolicy{
 			Inherit:              sandbox.ShellEnvironmentPolicyInheritCore,
 			ApplyDefaultExcludes: true,
@@ -190,14 +206,23 @@ func runEngine(ctx context.Context, eng codeexecutor.Engine, cfg Config, command
 }
 
 func sandboxEnv(cfg Config) map[string]string {
-	if cfg.SandboxKind != "container" {
+	switch cfg.SandboxKind {
+	case "managed", "sandbox":
+		if runtime.GOROOT() == "" {
+			return nil
+		}
+		return map[string]string{
+			"GOROOT": runtime.GOROOT(),
+		}
+	case "container":
+		return map[string]string{
+			"GOCACHE": "/tmp/go-build",
+			"GOPATH":  "/tmp/go",
+			"HOME":    "/tmp",
+			"PATH":    "/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+		}
+	default:
 		return nil
-	}
-	return map[string]string{
-		"GOCACHE": "/tmp/go-build",
-		"GOPATH":  "/tmp/go",
-		"HOME":    "/tmp",
-		"PATH":    "/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
 	}
 }
 

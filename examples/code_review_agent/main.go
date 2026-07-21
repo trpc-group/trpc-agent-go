@@ -20,32 +20,42 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/diffparser"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/redaction"
 	reportwriter "trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/report"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/review"
+	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/reviewagent"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/rules"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/sandboxrunner"
+	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/skillrunner"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/store"
+	atrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 )
 
 type config struct {
-	diffFile    string
-	files       string
-	repoPath    string
-	fixture     string
-	taskID      string
-	outDir      string
-	dbPath      string
-	mode        string
-	sandboxKind string
-	dryRun      bool
-	timeout     time.Duration
+	diffFile          string
+	files             string
+	repoPath          string
+	fixture           string
+	taskID            string
+	outDir            string
+	dbPath            string
+	mode              string
+	modelName         string
+	sandboxKind       string
+	skillsRoot        string
+	telemetryEndpoint string
+	dryRun            bool
+	staticcheck       bool
+	timeout           time.Duration
 }
 
 func main() {
@@ -67,14 +77,34 @@ func parseFlags() config {
 	flag.StringVar(&cfg.outDir, "out-dir", "code_review_output", "output directory")
 	flag.StringVar(&cfg.dbPath, "db", "", "SQLite database path; defaults to out-dir/review.db")
 	flag.StringVar(&cfg.mode, "mode", "rule-only", "rule-only|fake-model|llm")
-	flag.StringVar(&cfg.sandboxKind, "sandbox", "mock", "mock|managed|container|e2b|local-dev")
+	flag.StringVar(&cfg.modelName, "model", defaultModelName(), "model name for --mode llm")
+	flag.StringVar(&cfg.sandboxKind, "sandbox", "managed", "managed|container|e2b|mock|local-dev")
+	flag.StringVar(&cfg.skillsRoot, "skills-root", "", "skills root directory; defaults to the bundled skills folder")
+	flag.StringVar(&cfg.telemetryEndpoint, "telemetry-endpoint", "", "OTLP gRPC endpoint for trace export; empty keeps the no-op tracer")
 	flag.BoolVar(&cfg.dryRun, "dry-run", false, "skip external command execution")
+	flag.BoolVar(&cfg.staticcheck, "staticcheck", false, "also run staticcheck ./... in the sandbox when available")
 	flag.Parse()
 	cfg.timeout = *timeout
 	return cfg
 }
 
 func run(ctx context.Context, cfg config) error {
+	if err := validateMode(cfg.mode); err != nil {
+		return err
+	}
+	if cfg.telemetryEndpoint != "" {
+		clean, err := atrace.Start(ctx,
+			atrace.WithEndpoint(cfg.telemetryEndpoint),
+			atrace.WithServiceName("code-review-agent"))
+		if err != nil {
+			return fmt.Errorf("start telemetry: %w", err)
+		}
+		defer func() {
+			if err := clean(); err != nil {
+				fmt.Fprintf(os.Stderr, "telemetry shutdown: %v\n", err)
+			}
+		}()
+	}
 	if cfg.dbPath == "" {
 		cfg.dbPath = filepath.Join(cfg.outDir, "review.db")
 	}
@@ -87,8 +117,24 @@ func run(ctx context.Context, cfg config) error {
 	return runOne(ctx, cfg)
 }
 
+func validateMode(mode string) error {
+	switch mode {
+	case "rule-only", reviewagent.ModeFakeModel, reviewagent.ModeLLM:
+		return nil
+	default:
+		return fmt.Errorf("unsupported --mode %q; use rule-only, fake-model, or llm", mode)
+	}
+}
+
+func defaultModelName() string {
+	if name := os.Getenv("MODEL_NAME"); name != "" {
+		return name
+	}
+	return "deepseek-v4-flash"
+}
+
 func queryTask(ctx context.Context, cfg config) error {
-	db, err := store.Open(ctx, cfg.dbPath)
+	db, err := openStore(ctx, cfg.dbPath)
 	if err != nil {
 		return err
 	}
@@ -102,8 +148,14 @@ func queryTask(ctx context.Context, cfg config) error {
 	return enc.Encode(snapshot)
 }
 
+// openStore opens the persistence backend behind the store.Store
+// interface so another SQL implementation can be swapped in here.
+func openStore(ctx context.Context, path string) (store.Store, error) {
+	return store.Open(ctx, path)
+}
+
 func runAllFixtures(ctx context.Context, cfg config) error {
-	fixtures, err := filepath.Glob(filepath.Join("code_review_agent", "testdata", "fixtures", "*.diff"))
+	fixtures, err := filepath.Glob(filepath.Join(fixturesDir(), "*.diff"))
 	if err != nil {
 		return err
 	}
@@ -126,15 +178,23 @@ func runAllFixtures(ctx context.Context, cfg config) error {
 	return nil
 }
 
-func runOne(ctx context.Context, cfg config) error {
+func runOne(ctx context.Context, cfg config) (err error) {
 	start := time.Now()
+	ctx, span := atrace.Tracer.Start(ctx, "code_review.run")
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+		}
+		span.End()
+	}()
 	if err := os.MkdirAll(cfg.outDir, 0o755); err != nil {
 		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(cfg.dbPath), 0o755); err != nil {
 		return err
 	}
-	db, err := store.Open(ctx, cfg.dbPath)
+	db, err := openStore(ctx, cfg.dbPath)
 	if err != nil {
 		return err
 	}
@@ -162,13 +222,19 @@ func runOne(ctx context.Context, cfg config) error {
 
 	ruleResult := rules.Scan(files)
 	redactedFiles := redactFiles(files)
+	modelOut, modelErr := runModelReview(ctx, cfg, task.ID, redactedFiles)
+	ruleResult = rules.Merge(ruleResult, modelOut.Findings)
 	sandboxResult := sandboxrunner.RunChecks(ctx, sandboxrunner.Config{
-		TaskID:      task.ID,
-		RepoPath:    cfg.repoPath,
-		SandboxKind: cfg.sandboxKind,
-		DryRun:      cfg.dryRun,
-		Timeout:     cfg.timeout,
+		TaskID:            task.ID,
+		RepoPath:          cfg.repoPath,
+		SandboxKind:       cfg.sandboxKind,
+		DryRun:            cfg.dryRun,
+		EnableStaticcheck: cfg.staticcheck,
+		Timeout:           cfg.timeout,
 	})
+	skillResult := runSkillScripts(ctx, cfg, task.ID, string(diffData))
+	allRuns := append(sandboxResult.Runs, skillResult.Runs...)
+	allDecisions := append(sandboxResult.Decisions, skillResult.Decisions...)
 	finished := time.Now().UTC()
 	task.Status = review.StatusCompleted
 	task.FinishedAt = &finished
@@ -179,11 +245,34 @@ func runOne(ctx context.Context, cfg config) error {
 		Findings:            ruleResult.Findings,
 		Warnings:            ruleResult.Warnings,
 		NeedsHumanReview:    ruleResult.NeedsHumanReview,
-		SandboxRuns:         sandboxResult.Runs,
-		PermissionDecisions: sandboxResult.Decisions,
-		Summary:             summary(ruleResult),
+		FilterDecisions:     ruleResult.FilterDecisions,
+		SandboxRuns:         allRuns,
+		PermissionDecisions: allDecisions,
+		Summary:             summary(ruleResult, modelOut, modelErr),
 	}
 	report.Metrics = buildMetrics(start, report)
+	report.Metrics.ModelCallCount = modelOut.ModelCalls
+	report.Metrics.ModelDurationMS = modelOut.DurationMS
+	if modelErr != nil {
+		report.Metrics.ExceptionCounts["model_error"]++
+	}
+	if skillResult.Err != nil {
+		report.Metrics.ExceptionCounts["skill_error"]++
+	}
+	span.SetAttributes(
+		attribute.String("code_review.task_id", task.ID),
+		attribute.String("code_review.mode", cfg.mode),
+		attribute.String("code_review.sandbox", cfg.sandboxKind),
+		attribute.Int("code_review.finding_count", len(report.Findings)),
+		attribute.Int("code_review.warning_count", len(report.Warnings)),
+		attribute.Int("code_review.human_review_count", len(report.NeedsHumanReview)),
+		attribute.Int("code_review.filter_decision_count", len(report.FilterDecisions)),
+		attribute.Int("code_review.sandbox_run_count", len(allRuns)),
+		attribute.Int("code_review.permission_deny_count", report.Metrics.PermissionDenyCount),
+	)
+	for decision, count := range report.Metrics.FilterDecisionCounts {
+		span.SetAttributes(attribute.Int("code_review.filter."+decision, count))
+	}
 	report.Artifacts = []review.Artifact{
 		{Kind: "json_report", Path: filepath.Join(cfg.outDir, "review_report.json")},
 		{Kind: "markdown_report", Path: filepath.Join(cfg.outDir, "review_report.md")},
@@ -200,10 +289,13 @@ func runOne(ctx context.Context, cfg config) error {
 	if err := db.SaveFindings(ctx, task.ID, append(append(ruleResult.Findings, ruleResult.Warnings...), ruleResult.NeedsHumanReview...)); err != nil {
 		return err
 	}
-	if err := db.SaveSandboxRuns(ctx, task.ID, sandboxResult.Runs); err != nil {
+	if err := db.SaveSandboxRuns(ctx, task.ID, allRuns); err != nil {
 		return err
 	}
-	if err := db.SavePermissionDecisions(ctx, task.ID, sandboxResult.Decisions); err != nil {
+	if err := db.SavePermissionDecisions(ctx, task.ID, allDecisions); err != nil {
+		return err
+	}
+	if err := db.SaveFilterDecisions(ctx, task.ID, ruleResult.FilterDecisions); err != nil {
 		return err
 	}
 	if err := db.SaveArtifacts(ctx, task.ID, artifacts); err != nil {
@@ -252,17 +344,75 @@ func loadInput(ctx context.Context, cfg config) ([]byte, string, string, error) 
 	}
 }
 
+// fixturesDir locates the bundled fixtures whether the binary runs from
+// the examples root, the code_review_agent directory, or any other
+// working directory (via the compile-time source location).
+func fixturesDir() string {
+	return firstExistingPath(
+		filepath.Join("code_review_agent", "testdata", "fixtures"),
+		filepath.Join("testdata", "fixtures"),
+		filepath.Join(exampleDir(), "testdata", "fixtures"),
+	)
+}
+
 func resolveFixturePath(name string) string {
-	candidates := []string{
+	return firstExistingPath(
 		filepath.Join("code_review_agent", "testdata", "fixtures", name+".diff"),
 		filepath.Join("testdata", "fixtures", name+".diff"),
+		filepath.Join(exampleDir(), "testdata", "fixtures", name+".diff"),
+	)
+}
+
+// resolveSkillsRoot locates the bundled skills directory when
+// --skills-root is not set.
+func resolveSkillsRoot(root string) string {
+	if root != "" {
+		return root
 	}
+	return firstExistingPath(
+		filepath.Join("code_review_agent", "skills"),
+		"skills",
+		filepath.Join(exampleDir(), "skills"),
+	)
+}
+
+// exampleDir returns the directory of this source file so bundled
+// fixtures and skills resolve regardless of the working directory.
+func exampleDir() string {
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		return "."
+	}
+	return filepath.Dir(file)
+}
+
+// firstExistingPath returns the first candidate that exists on disk,
+// falling back to the first candidate for error reporting.
+func firstExistingPath(candidates ...string) string {
 	for _, candidate := range candidates {
 		if _, err := os.Stat(candidate); err == nil {
 			return candidate
 		}
 	}
 	return candidates[0]
+}
+
+// runSkillScripts loads the code-review skill via tool/skill and runs
+// its scripts in the sandbox. Errors degrade to audit records only.
+func runSkillScripts(ctx context.Context, cfg config, taskID string, diffText string) skillrunner.Result {
+	result := skillrunner.RunScripts(ctx, skillrunner.Config{
+		TaskID:      taskID,
+		SkillsRoot:  resolveSkillsRoot(cfg.skillsRoot),
+		RepoPath:    cfg.repoPath,
+		SandboxKind: cfg.sandboxKind,
+		DryRun:      cfg.dryRun,
+		Timeout:     cfg.timeout,
+		DiffText:    diffText,
+	})
+	if result.Err != nil {
+		fmt.Fprintf(os.Stderr, "skill scripts degraded: %v\n", result.Err)
+	}
+	return result
 }
 
 func diffForFiles(repoPath, filesValue string) ([]byte, string, error) {
@@ -332,12 +482,41 @@ func displayPath(repoPath, hostPath, raw string) string {
 	return filepath.Base(raw)
 }
 
-func summary(result rules.Result) string {
+func summary(result rules.Result, modelOut reviewagent.Output, modelErr error) string {
+	var b strings.Builder
 	if len(result.Findings) == 0 && len(result.NeedsHumanReview) == 0 {
-		return "No high-confidence findings were detected."
+		b.WriteString("No high-confidence findings were detected.")
+	} else {
+		fmt.Fprintf(&b, "%d high-confidence findings and %d human-review items detected.",
+			len(result.Findings), len(result.NeedsHumanReview))
 	}
-	return fmt.Sprintf("%d high-confidence findings and %d human-review items detected.",
-		len(result.Findings), len(result.NeedsHumanReview))
+	if modelOut.Summary != "" {
+		b.WriteString(" Model review: ")
+		b.WriteString(modelOut.Summary)
+	}
+	if modelErr != nil {
+		b.WriteString(" Model review failed and was skipped: ")
+		b.WriteString(redaction.RedactText(modelErr.Error()))
+	}
+	return b.String()
+}
+
+// runModelReview runs the model-assisted pass for fake-model and llm modes.
+// Errors degrade the review to rule-only results instead of failing the task.
+func runModelReview(ctx context.Context, cfg config, taskID string, redactedFiles []review.ChangedFile) (reviewagent.Output, error) {
+	if cfg.mode == "rule-only" {
+		return reviewagent.Output{}, nil
+	}
+	out, err := reviewagent.Review(ctx, reviewagent.Config{
+		Mode:      cfg.mode,
+		ModelName: cfg.modelName,
+		TaskID:    taskID,
+		Timeout:   cfg.timeout,
+	}, redactedFiles)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "model review degraded to rule-only: %v\n", err)
+	}
+	return out, err
 }
 
 func buildMetrics(start time.Time, r review.ReviewReport) review.MetricsSummary {
@@ -359,6 +538,10 @@ func buildMetrics(start time.Time, r review.ReviewReport) review.MetricsSummary 
 			denies++
 		}
 	}
+	filterCounts := map[string]int{}
+	for _, d := range r.FilterDecisions {
+		filterCounts[d.Decision]++
+	}
 	return review.MetricsSummary{
 		TotalDurationMS:       time.Since(start).Milliseconds(),
 		SandboxDurationMS:     sandboxMS,
@@ -369,6 +552,7 @@ func buildMetrics(start time.Time, r review.ReviewReport) review.MetricsSummary 
 		NeedsHumanReviewCount: len(r.NeedsHumanReview),
 		SeverityCounts:        severity,
 		ExceptionCounts:       exceptions,
+		FilterDecisionCounts:  filterCounts,
 	}
 }
 

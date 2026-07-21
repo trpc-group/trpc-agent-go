@@ -81,6 +81,31 @@ type Finding struct {
 	RuleID         string  `json:"rule_id"`
 }
 
+// Filter decision stages and outcomes for the noise-control pipeline.
+const (
+	FilterStageDedup      = "dedup"
+	FilterStageConfidence = "confidence"
+
+	FilterDecisionKeep          = "keep"
+	FilterDecisionHumanReview   = "needs_human_review"
+	FilterDecisionWarning       = "warning"
+	FilterDecisionDropDuplicate = "drop_duplicate"
+)
+
+// FilterDecision records why the noise-control pipeline kept, demoted,
+// or dropped a finding.
+type FilterDecision struct {
+	RuleID     string    `json:"rule_id"`
+	File       string    `json:"file"`
+	Line       int       `json:"line"`
+	Source     string    `json:"source"`
+	Confidence float64   `json:"confidence"`
+	Stage      string    `json:"stage"`
+	Decision   string    `json:"decision"`
+	Reason     string    `json:"reason"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
 // PermissionDecision records whether a command may run.
 type PermissionDecision struct {
 	Command   string    `json:"command"`
@@ -121,6 +146,7 @@ type TaskSnapshot struct {
 	Findings            []Finding            `json:"findings"`
 	SandboxRuns         []SandboxRun         `json:"sandbox_runs"`
 	PermissionDecisions []PermissionDecision `json:"permission_decisions"`
+	FilterDecisions     []FilterDecision     `json:"filter_decisions"`
 	Artifacts           []Artifact           `json:"artifacts"`
 	Report              ReportRecord         `json:"report"`
 }
@@ -129,13 +155,16 @@ type TaskSnapshot struct {
 type MetricsSummary struct {
 	TotalDurationMS       int64          `json:"total_duration_ms"`
 	SandboxDurationMS     int64          `json:"sandbox_duration_ms"`
+	ModelDurationMS       int64          `json:"model_duration_ms"`
 	ToolCallCount         int            `json:"tool_call_count"`
+	ModelCallCount        int            `json:"model_call_count"`
 	PermissionDenyCount   int            `json:"permission_deny_count"`
 	FindingCount          int            `json:"finding_count"`
 	WarningCount          int            `json:"warning_count"`
 	NeedsHumanReviewCount int            `json:"needs_human_review_count"`
 	SeverityCounts        map[string]int `json:"severity_counts"`
 	ExceptionCounts       map[string]int `json:"exception_counts"`
+	FilterDecisionCounts  map[string]int `json:"filter_decision_counts"`
 }
 
 // ReviewReport is the final serializable report.
@@ -147,6 +176,7 @@ type ReviewReport struct {
 	NeedsHumanReview    []Finding            `json:"needs_human_review"`
 	SandboxRuns         []SandboxRun         `json:"sandbox_runs"`
 	PermissionDecisions []PermissionDecision `json:"permission_decisions"`
+	FilterDecisions     []FilterDecision     `json:"filter_decisions"`
 	Metrics             MetricsSummary       `json:"metrics"`
 	Artifacts           []Artifact           `json:"artifacts"`
 	Summary             string               `json:"summary"`

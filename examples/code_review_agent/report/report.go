@@ -24,6 +24,10 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/review"
 )
 
+// maxArtifactBytes caps a single report artifact so oversized reviews
+// cannot exhaust disk or database storage.
+const maxArtifactBytes = 2 << 20 // 2 MiB
+
 // Write writes review_report.json and review_report.md.
 func Write(outDir string, r review.ReviewReport) ([]review.Artifact, error) {
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
@@ -36,10 +40,16 @@ func Write(outDir string, r review.ReviewReport) ([]review.Artifact, error) {
 	if err != nil {
 		return nil, err
 	}
+	if len(data) > maxArtifactBytes {
+		return nil, fmt.Errorf("json report is %d bytes, exceeds artifact limit of %d bytes", len(data), maxArtifactBytes)
+	}
 	if err := os.WriteFile(jsonPath, data, 0o644); err != nil {
 		return nil, err
 	}
 	md := []byte(redaction.RedactText(markdown(safeReport)))
+	if len(md) > maxArtifactBytes {
+		return nil, fmt.Errorf("markdown report is %d bytes, exceeds artifact limit of %d bytes", len(md), maxArtifactBytes)
+	}
 	if err := os.WriteFile(mdPath, md, 0o644); err != nil {
 		return nil, err
 	}
@@ -81,6 +91,16 @@ func markdown(r review.ReviewReport) string {
 	} else {
 		for _, d := range r.PermissionDecisions {
 			fmt.Fprintf(&b, "- `%s`: **%s** - %s\n", d.Command, d.Decision, d.Reason)
+		}
+	}
+
+	fmt.Fprintf(&b, "\n## Filter Decisions\n\n")
+	if len(r.FilterDecisions) == 0 {
+		fmt.Fprintf(&b, "No noise-control filter decisions were recorded.\n")
+	} else {
+		for _, d := range r.FilterDecisions {
+			fmt.Fprintf(&b, "- `%s` at `%s:%d` (%s): **%s** - %s\n",
+				d.RuleID, d.File, d.Line, d.Stage, d.Decision, d.Reason)
 		}
 	}
 
@@ -155,6 +175,11 @@ func redactReport(r review.ReviewReport) review.ReviewReport {
 	for i := range out.PermissionDecisions {
 		out.PermissionDecisions[i].Command = redaction.RedactText(out.PermissionDecisions[i].Command)
 		out.PermissionDecisions[i].Reason = redaction.RedactText(out.PermissionDecisions[i].Reason)
+	}
+	out.FilterDecisions = make([]review.FilterDecision, len(r.FilterDecisions))
+	copy(out.FilterDecisions, r.FilterDecisions)
+	for i := range out.FilterDecisions {
+		out.FilterDecisions[i].Reason = redaction.RedactText(out.FilterDecisions[i].Reason)
 	}
 	out.Artifacts = make([]review.Artifact, len(r.Artifacts))
 	copy(out.Artifacts, r.Artifacts)

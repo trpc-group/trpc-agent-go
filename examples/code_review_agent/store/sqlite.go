@@ -116,6 +116,21 @@ VALUES (?, ?, ?, ?, ?)`,
 	return nil
 }
 
+// SaveFilterDecisions stores noise-control filter decisions.
+func (s *SQLiteStore) SaveFilterDecisions(ctx context.Context, taskID string, decisions []review.FilterDecision) error {
+	for _, d := range decisions {
+		if _, err := s.db.ExecContext(ctx, `
+INSERT INTO filter_decisions(task_id, rule_id, file, line, source, confidence, stage, decision, reason, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			taskID, d.RuleID, d.File, d.Line, d.Source, d.Confidence,
+			d.Stage, d.Decision, redaction.RedactText(d.Reason),
+			d.CreatedAt.Format(time.RFC3339Nano)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // SaveArtifacts stores artifacts.
 func (s *SQLiteStore) SaveArtifacts(ctx context.Context, taskID string, artifacts []review.Artifact) error {
 	for _, a := range artifacts {
@@ -187,6 +202,11 @@ FROM review_tasks WHERE id = ?`, taskID).Scan(
 		return snap, err
 	}
 	snap.PermissionDecisions = decisions
+	filters, err := s.getFilterDecisions(ctx, taskID)
+	if err != nil {
+		return snap, err
+	}
+	snap.FilterDecisions = filters
 	artifacts, err := s.getArtifacts(ctx, taskID)
 	if err != nil {
 		return snap, err
@@ -203,6 +223,9 @@ SELECT json_path, markdown_path, summary_json FROM review_reports WHERE task_id 
 	}
 	if snap.PermissionDecisions == nil {
 		snap.PermissionDecisions = []review.PermissionDecision{}
+	}
+	if snap.FilterDecisions == nil {
+		snap.FilterDecisions = []review.FilterDecision{}
 	}
 	if snap.Artifacts == nil {
 		snap.Artifacts = []review.Artifact{}
@@ -255,6 +278,19 @@ func (s *SQLiteStore) init(ctx context.Context) error {
 			reason TEXT NOT NULL,
 			created_at TEXT NOT NULL
 		);`,
+		`CREATE TABLE IF NOT EXISTS filter_decisions (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			task_id TEXT NOT NULL,
+			rule_id TEXT NOT NULL,
+			file TEXT NOT NULL,
+			line INTEGER NOT NULL,
+			source TEXT NOT NULL,
+			confidence REAL NOT NULL,
+			stage TEXT NOT NULL,
+			decision TEXT NOT NULL,
+			reason TEXT NOT NULL,
+			created_at TEXT NOT NULL
+		);`,
 		`CREATE TABLE IF NOT EXISTS review_reports (
 			task_id TEXT PRIMARY KEY,
 			json_path TEXT NOT NULL,
@@ -272,6 +308,7 @@ func (s *SQLiteStore) init(ctx context.Context) error {
 		`CREATE INDEX IF NOT EXISTS idx_review_findings_task ON review_findings(task_id);`,
 		`CREATE INDEX IF NOT EXISTS idx_sandbox_runs_task ON sandbox_runs(task_id);`,
 		`CREATE INDEX IF NOT EXISTS idx_permission_decisions_task ON permission_decisions(task_id);`,
+		`CREATE INDEX IF NOT EXISTS idx_filter_decisions_task ON filter_decisions(task_id);`,
 	}
 	for _, stmt := range stmts {
 		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
@@ -336,6 +373,30 @@ FROM permission_decisions WHERE task_id = ? ORDER BY id`, taskID)
 		var d review.PermissionDecision
 		var created string
 		if err := rows.Scan(&d.Command, &d.Decision, &d.Reason, &created); err != nil {
+			return nil, err
+		}
+		if t, err := time.Parse(time.RFC3339Nano, created); err == nil {
+			d.CreatedAt = t
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+func (s *SQLiteStore) getFilterDecisions(ctx context.Context, taskID string) ([]review.FilterDecision, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT rule_id, file, line, source, confidence, stage, decision, reason, created_at
+FROM filter_decisions WHERE task_id = ? ORDER BY id`, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []review.FilterDecision
+	for rows.Next() {
+		var d review.FilterDecision
+		var created string
+		if err := rows.Scan(&d.RuleID, &d.File, &d.Line, &d.Source,
+			&d.Confidence, &d.Stage, &d.Decision, &d.Reason, &created); err != nil {
 			return nil, err
 		}
 		if t, err := time.Parse(time.RFC3339Nano, created); err == nil {

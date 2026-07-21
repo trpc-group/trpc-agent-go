@@ -11,9 +11,11 @@
 package rules
 
 import (
+	"fmt"
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/redaction"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/review"
@@ -31,6 +33,7 @@ type Result struct {
 	Findings         []review.Finding
 	Warnings         []review.Finding
 	NeedsHumanReview []review.Finding
+	FilterDecisions  []review.FilterDecision
 }
 
 // Scan evaluates deterministic rules against changed files.
@@ -58,8 +61,16 @@ func Scan(files []review.ChangedFile) Result {
 			})
 		}
 	}
-	all = Deduplicate(all)
-	return splitByConfidence(all)
+	return filterPipeline(all)
+}
+
+// filterPipeline deduplicates findings, splits them by confidence, and
+// records one auditable filter decision per input finding.
+func filterPipeline(in []review.Finding) Result {
+	dropped := dedupDropDecisions(in)
+	out := splitByConfidence(Deduplicate(in))
+	out.FilterDecisions = append(dropped, out.FilterDecisions...)
+	return out
 }
 
 func scanHunk(file review.ChangedFile, hunk review.Hunk) []review.Finding {
@@ -173,11 +184,27 @@ func scanHunk(file review.ChangedFile, hunk review.Hunk) []review.Finding {
 	return findings
 }
 
+// Merge folds extra findings (for example model-assisted results) into an
+// existing result, then re-deduplicates and re-splits every bucket so noise
+// control applies uniformly to all sources.
+func Merge(res Result, extra []review.Finding) Result {
+	if len(extra) == 0 {
+		return res
+	}
+	all := make([]review.Finding, 0,
+		len(res.Findings)+len(res.Warnings)+len(res.NeedsHumanReview)+len(extra))
+	all = append(all, res.Findings...)
+	all = append(all, res.NeedsHumanReview...)
+	all = append(all, res.Warnings...)
+	all = append(all, extra...)
+	return filterPipeline(all)
+}
+
 // Deduplicate keeps the highest-confidence finding for the same file/line/rule.
 func Deduplicate(in []review.Finding) []review.Finding {
 	best := map[string]review.Finding{}
 	for _, f := range in {
-		key := f.File + "\x00" + f.RuleID + "\x00" + f.Category + "\x00" + itoa(f.Line)
+		key := dedupKey(f)
 		if existing, ok := best[key]; !ok || better(f, existing) {
 			best[key] = f
 		}
@@ -198,17 +225,81 @@ func Deduplicate(in []review.Finding) []review.Finding {
 	return out
 }
 
+func dedupKey(f review.Finding) string {
+	return f.File + "\x00" + f.RuleID + "\x00" + f.Category + "\x00" + itoa(f.Line)
+}
+
+// dedupDropDecisions records one drop decision per finding that loses
+// deduplication, so filtered-out results stay auditable.
+func dedupDropDecisions(in []review.Finding) []review.FilterDecision {
+	best := map[string]review.Finding{}
+	for _, f := range in {
+		key := dedupKey(f)
+		if existing, ok := best[key]; !ok || better(f, existing) {
+			best[key] = f
+		}
+	}
+	now := time.Now().UTC()
+	keptOnce := map[string]bool{}
+	var out []review.FilterDecision
+	for _, f := range in {
+		key := dedupKey(f)
+		if f == best[key] && !keptOnce[key] {
+			keptOnce[key] = true
+			continue
+		}
+		winner := best[key]
+		out = append(out, review.FilterDecision{
+			RuleID:     f.RuleID,
+			File:       f.File,
+			Line:       f.Line,
+			Source:     f.Source,
+			Confidence: f.Confidence,
+			Stage:      review.FilterStageDedup,
+			Decision:   review.FilterDecisionDropDuplicate,
+			Reason: fmt.Sprintf(
+				"duplicate of %s finding from %s (confidence %.2f)",
+				winner.RuleID, winner.Source, winner.Confidence),
+			CreatedAt: now,
+		})
+	}
+	return out
+}
+
 func splitByConfidence(in []review.Finding) Result {
 	var out Result
+	now := time.Now().UTC()
 	for _, f := range in {
+		var decision, reason string
 		switch {
 		case f.Confidence >= highConfidence:
 			out.Findings = append(out.Findings, f)
+			decision = review.FilterDecisionKeep
+			reason = fmt.Sprintf("confidence %.2f >= %.2f keeps the finding",
+				f.Confidence, highConfidence)
 		case f.Confidence >= lowConfidence:
 			out.NeedsHumanReview = append(out.NeedsHumanReview, f)
+			decision = review.FilterDecisionHumanReview
+			reason = fmt.Sprintf(
+				"confidence %.2f in [%.2f, %.2f) routes to human review",
+				f.Confidence, lowConfidence, highConfidence)
 		default:
 			out.Warnings = append(out.Warnings, f)
+			decision = review.FilterDecisionWarning
+			reason = fmt.Sprintf("confidence %.2f < %.2f demotes to warning",
+				f.Confidence, lowConfidence)
 		}
+		out.FilterDecisions = append(out.FilterDecisions, review.FilterDecision{
+			RuleID:     f.RuleID,
+			File:       f.File,
+			Line:       f.Line,
+			Source:     f.Source,
+			Confidence: f.Confidence,
+			Stage:      review.FilterStageConfidence,
+			Decision:   decision,
+			Reason:     reason,
+			CreatedAt:  now,
+		})
 	}
 	return out
 }

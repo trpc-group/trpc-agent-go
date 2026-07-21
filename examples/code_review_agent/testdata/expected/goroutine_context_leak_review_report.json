@@ -1,0 +1,27 @@
+{
+  "summary": "1 high-confidence findings and 1 human-review items detected.",
+  "findings": [
+    {
+      "severity": "high",
+      "category": "concurrency",
+      "file": "worker/worker.go",
+      "line": 6,
+      "title": "Goroutine may not have a cancellation path",
+      "evidence": "go func() {",
+      "recommendation": "Thread context cancellation through the goroutine and exit on ctx.Done().",
+      "confidence": 0.78,
+      "source": "rule-only",
+      "rule_id": "GOR001"
+    }
+  ],
+  "needs_human_review": [
+    {
+      "severity": "medium",
+      "category": "testing",
+      "file": "worker/worker.go",
+      "line": 5,
+      "title": "Changed Go code without nearby test changes",
+      "rule_id": "TEST001"
+    }
+  ]
+}
