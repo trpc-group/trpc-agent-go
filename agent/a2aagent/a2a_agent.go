@@ -454,39 +454,43 @@ func (s *anonymousCookieState) reload(ctx context.Context) error {
 	return nil
 }
 
-func (s *anonymousCookieState) capture(ctx context.Context, cookieValue string) {
+func (s *anonymousCookieState) capture(ctx context.Context, cookieValue string) error {
 	if s == nil || s.key == "" {
-		return
+		return nil
 	}
 	cookieValue = strings.TrimSpace(cookieValue)
 	if !isAnonymousUserIDCookieValue(cookieValue) {
-		return
+		return nil
+	}
+	if err := s.persist(ctx, cookieValue); err != nil {
+		return err
 	}
 	if s.session != nil {
 		s.session.SetState(s.key, []byte(cookieValue))
 	}
-	s.persist(ctx, cookieValue)
+	return nil
 }
 
-func (s *anonymousCookieState) persist(ctx context.Context, cookieValue string) {
+func (s *anonymousCookieState) persist(ctx context.Context, cookieValue string) error {
 	if s == nil ||
 		s.sessionService == nil ||
 		!hasPersistentSessionKey(s.persistSession) {
-		return
+		return nil
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	state := session.StateMap{s.key: []byte(cookieValue)}
-	s.persistSession.SetState(s.key, []byte(cookieValue))
 	key := session.Key{
 		AppName:   s.persistSession.AppName,
 		UserID:    s.persistSession.UserID,
 		SessionID: s.persistSession.ID,
 	}
 	if err := s.sessionService.UpdateSessionState(ctx, key, state); err != nil {
-		log.WarnfContext(ctx, "persist anonymous A2A cookie state skipped or failed: %v", err)
+		return fmt.Errorf("persist anonymous A2A cookie state: %w", err)
 	}
+	s.persistSession.SetState(s.key, []byte(cookieValue))
+	return nil
 }
 
 func anonymousCookieStateKey(agentURL string) string {
@@ -517,6 +521,31 @@ type anonymousCookieHTTPReqHandler struct {
 	acquireInitialization func(context.Context, *anonymousCookieState) (func(), error)
 }
 
+type anonymousCookieCaptureResult struct {
+	mu  sync.Mutex
+	err error
+}
+
+func (r *anonymousCookieCaptureResult) record(err error) {
+	if r == nil || err == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.err == nil {
+		r.err = err
+	}
+}
+
+func (r *anonymousCookieCaptureResult) error() error {
+	if r == nil {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.err
+}
+
 func (h *anonymousCookieHTTPReqHandler) Handle(
 	ctx context.Context,
 	httpClient *http.Client,
@@ -544,6 +573,7 @@ func (h *anonymousCookieHTTPReqHandler) Handle(
 	if release != nil {
 		defer release()
 	}
+	captureResult := &anonymousCookieCaptureResult{}
 	// Session state owns anonymous identity; a shared user-supplied Jar must
 	// not replay another local session's remote principal.
 	requestClient := *httpClient
@@ -552,16 +582,27 @@ func (h *anonymousCookieHTTPReqHandler) Handle(
 		base:   httpClient.Jar,
 		cookie: h.cookie,
 		scope:  h.scope,
+		result: captureResult,
 	}
 	requestClient.Transport = &anonymousCookieRoundTripper{
 		base:   httpClient.Transport,
 		cookie: h.cookie,
 		scope:  h.scope,
+		result: captureResult,
 	}
 	request := req.Clone(ctx)
 	setAnonymousCookieHeader(request, h.cookie, h.scope)
 	resp, err := h.next.Handle(ctx, &requestClient, request)
-	h.captureResponseCookie(ctx, request, resp)
+	h.captureResponseCookie(ctx, request, resp, captureResult)
+	if captureErr := captureResult.error(); captureErr != nil {
+		if resp != nil && resp.Body != nil {
+			_ = resp.Body.Close()
+		}
+		if err != nil {
+			return nil, errors.Join(err, captureErr)
+		}
+		return nil, captureErr
+	}
 	return resp, err
 }
 
@@ -569,6 +610,7 @@ func (h *anonymousCookieHTTPReqHandler) captureResponseCookie(
 	ctx context.Context,
 	req *http.Request,
 	resp *http.Response,
+	result *anonymousCookieCaptureResult,
 ) {
 	if h == nil || h.cookie == nil || resp == nil || !h.scope.matches(req.URL) {
 		return
@@ -582,7 +624,7 @@ func (h *anonymousCookieHTTPReqHandler) captureResponseCookie(
 	}
 	for _, cookie := range resp.Cookies() {
 		if cookie != nil && cookie.Name == anonymousUserIDCookieName {
-			h.cookie.capture(ctx, cookie.Value)
+			result.record(h.cookie.capture(ctx, cookie.Value))
 		}
 	}
 }
@@ -591,6 +633,7 @@ type anonymousCookieRoundTripper struct {
 	base   http.RoundTripper
 	cookie *anonymousCookieState
 	scope  anonymousCookieURLScope
+	result *anonymousCookieCaptureResult
 }
 
 func (t *anonymousCookieRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -607,7 +650,7 @@ func (t *anonymousCookieRoundTripper) RoundTrip(req *http.Request) (*http.Respon
 	if resp != nil && t.cookie != nil && t.scope.matches(request.URL) {
 		for _, cookie := range resp.Cookies() {
 			if cookie != nil && cookie.Name == anonymousUserIDCookieName {
-				t.cookie.capture(request.Context(), cookie.Value)
+				t.result.record(t.cookie.capture(request.Context(), cookie.Value))
 			}
 		}
 	}
@@ -711,6 +754,7 @@ type anonymousCookieJar struct {
 	base   http.CookieJar
 	cookie *anonymousCookieState
 	scope  anonymousCookieURLScope
+	result *anonymousCookieCaptureResult
 }
 
 func (j *anonymousCookieJar) SetCookies(u *url.URL, cookies []*http.Cookie) {
@@ -724,7 +768,7 @@ func (j *anonymousCookieJar) SetCookies(u *url.URL, cookies []*http.Cookie) {
 		}
 		if cookie.Name == anonymousUserIDCookieName {
 			if j.cookie != nil && j.scope.matches(u) {
-				j.cookie.capture(j.ctx, cookie.Value)
+				j.result.record(j.cookie.capture(j.ctx, cookie.Value))
 			}
 			continue
 		}

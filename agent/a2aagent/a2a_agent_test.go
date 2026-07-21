@@ -1886,6 +1886,99 @@ func TestAnonymousCookieRequestHandlerCapturesCustomResponseCookie(t *testing.T)
 	require.Equal(t, wantCookie, cookie)
 }
 
+func TestAnonymousCookieRequestHandlerPropagatesPersistenceFailure(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer srv.Close()
+
+	persistErr := fmt.Errorf("session store unavailable")
+	persistentSession := &session.Session{
+		AppName: "app",
+		UserID:  "user-1",
+		ID:      "session-a",
+	}
+	sessionService := &failingAnonymousCookieSessionService{err: persistErr}
+	state := newAnonymousCookieState(
+		persistentSession,
+		persistentSession,
+		sessionService,
+		anonymousCookieStateKey(srv.URL),
+	)
+	req, err := http.NewRequest(http.MethodPost, srv.URL, nil)
+	require.NoError(t, err)
+	handler := &anonymousCookieHTTPReqHandler{
+		next: httpReqHandlerFunc(func(
+			_ context.Context,
+			_ *http.Client,
+			req *http.Request,
+		) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header: http.Header{
+					"Set-Cookie": []string{
+						anonymousUserIDCookieName + "=" + anonymousTestCookieValue(6) + "; Path=/",
+					},
+				},
+				Body:    io.NopCloser(strings.NewReader("ok")),
+				Request: req,
+			}, nil
+		}),
+		cookie: state,
+		scope:  anonymousCookieURLScopeFromAgentURL(srv.URL),
+	}
+
+	resp, err := handler.Handle(context.Background(), srv.Client(), req)
+	require.Nil(t, resp)
+	require.ErrorIs(t, err, persistErr)
+	_, ok := persistentSession.GetState(anonymousCookieStateKey(srv.URL))
+	require.False(t, ok)
+}
+
+func TestAnonymousCookieRequestHandlerPropagatesHTTPClientPersistenceFailure(t *testing.T) {
+	persistErr := fmt.Errorf("session store unavailable")
+	persistentSession := &session.Session{
+		AppName: "app",
+		UserID:  "user-1",
+		ID:      "session-a",
+	}
+	sessionService := &failingAnonymousCookieSessionService{err: persistErr}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.SetCookie(w, &http.Cookie{
+			Name:  anonymousUserIDCookieName,
+			Value: anonymousTestCookieValue(7),
+			Path:  "/",
+		})
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer srv.Close()
+
+	state := newAnonymousCookieState(
+		persistentSession,
+		persistentSession,
+		sessionService,
+		anonymousCookieStateKey(srv.URL),
+	)
+	req, err := http.NewRequest(http.MethodPost, srv.URL, nil)
+	require.NoError(t, err)
+	handler := &anonymousCookieHTTPReqHandler{
+		next: httpReqHandlerFunc(func(
+			ctx context.Context,
+			httpClient *http.Client,
+			req *http.Request,
+		) (*http.Response, error) {
+			return httpClient.Do(req)
+		}),
+		cookie: state,
+		scope:  anonymousCookieURLScopeFromAgentURL(srv.URL),
+	}
+
+	resp, err := handler.Handle(context.Background(), srv.Client(), req)
+	require.Nil(t, resp)
+	require.ErrorIs(t, err, persistErr)
+	_, ok := persistentSession.GetState(anonymousCookieStateKey(srv.URL))
+	require.False(t, ok)
+}
+
 func TestNew_A2AClientExtraOptionAppliedOnce(t *testing.T) {
 	optionCalls := 0
 	countingOption := client.Option(func(*client.A2AClient) {
@@ -4896,6 +4989,19 @@ func TestValidateA2ARequestOptions(t *testing.T) {
 
 type staticStreamHandler struct {
 	body string
+}
+
+type failingAnonymousCookieSessionService struct {
+	session.Service
+	err error
+}
+
+func (s *failingAnonymousCookieSessionService) UpdateSessionState(
+	context.Context,
+	session.Key,
+	session.StateMap,
+) error {
+	return s.err
 }
 
 type httpReqHandlerFunc func(
