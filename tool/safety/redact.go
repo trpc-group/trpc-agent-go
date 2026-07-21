@@ -15,7 +15,7 @@ import (
 	"strings"
 )
 
-const secretKeyPattern = `api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|oauth[_-]?token|session[_-]?token|csrf[_-]?token|xsrf[_-]?token|jwt[_-]?token|client[_-]?secret|db[_-]?(password|passwd|secret)|private[_-]?key|aws[_-]?(access[_-]?key|secret)|authorization(_(header|token|value|key))?|bearer(_(token|value))?|password|passwd|secret|token`
+const secretKeyPattern = `api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|oauth[_-]?token|session[_-]?token|csrf[_-]?token|xsrf[_-]?token|jwt[_-]?token|client[_-]?secret|db[_-]?(password|passwd|secret)|private[_-]?key|aws[_-]?(access[_-]?key|secret)|authorization(_(header|token|value|key))?|bearer(_(token|value))?|password|passwd|secret|token` // #nosec G101 -- credential-name matching pattern, not a credential
 
 var secretPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)"(` + secretKeyPattern + `)"\s*:\s*"[^"\\]+(\\.[^"\\]*)*"`),
