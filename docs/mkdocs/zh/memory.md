@@ -1753,7 +1753,7 @@ defer r.Close()
 | `WithSelfHostedOSS()` | 使用本地 Mem0 OSS REST API（`/memories`、`/search`、`X-API-Key`）。开启后如果没有设置 `WithHost`，host 默认 `http://localhost:8888`；OSS 模式会拒绝托管平台默认 host。 | 关闭 |
 | `WithSelfHostedOSSIncludeUnscopedMemories()` | 包含没有 `metadata.trpc_app_name` 的历史 OSS 记录；已标记为其他 app 的记录仍会隐藏。 | 关闭 |
 | `WithSelfHostedIngestPrompt(prompt)` | 为该 service 的所有本地 Mem0 写入设置提取 prompt。 | 服务端默认值 |
-| `WithSelfHostedIngestExpirationDate(date)` | 设置该本地 service 新建记忆的过期日期。 | 无 |
+| `WithSelfHostedIngestExpirationDateResolver(resolver)` | 为每次本地 Mem0 写入独立解析 `expiration_date`。 | 不发送 |
 | `WithIngestInference(bool)` | 控制 Mem0 是否从 transcript 中提取记忆；同时适用于托管和本地写入。 | `true` |
 | `WithSelfHostedProceduralMemory()` | 创建本地 procedural memory；必须提供 `agent_id`。 | 关闭 |
 | `WithOrgProject(orgID, projectID)` | 追加托管平台的 `org_id` / `project_id`；本地 OSS 不支持。 | 空 |
@@ -1771,16 +1771,46 @@ defer r.Close()
 `agent_id`。Mem0 专属行为在创建 service 时统一配置，因此
 `IngestSession` 仍是唯一的写入 API：
 
+| Mem0 OSS create 字段 | 来源 |
+| -------------------- | ---- |
+| `messages` | ingestor 从 session 中选出的非空增量。 |
+| `user_id` | `session.Session.UserID`。 |
+| `agent_id` | `session.WithIngestAgentID`；Runner 自动提供当前 Agent 名称。 |
+| `run_id` | `session.WithIngestRunID`；Runner 自动提供 session ID。 |
+| `metadata` | `session.WithIngestMetadata`，以及适配层内部追加的 tRPC app scope。 |
+| `prompt` | `WithSelfHostedIngestPrompt`。 |
+| `expiration_date` | `WithSelfHostedIngestExpirationDateResolver`。 |
+| `infer` | `WithIngestInference`，默认为 `true`。 |
+| `memory_type` | `WithSelfHostedProceduralMemory`；普通记忆不发送该字段。 |
+
 ```go
+expirationForSession := func(
+    _ context.Context,
+    sess *session.Session,
+) (time.Time, error) {
+    if sess.CreatedAt.IsZero() {
+        return time.Time{}, nil
+    }
+    return sess.CreatedAt.AddDate(0, 0, 30), nil
+}
+
 mem0Svc, err := memorymem0.NewService(
     memorymem0.WithSelfHostedOSS(),
     memorymem0.WithHost("http://localhost:8888"),
     memorymem0.WithSelfHostedIngestPrompt("提取可复用的部署流程。"),
-    memorymem0.WithSelfHostedIngestExpirationDate(
-        time.Date(2026, time.December, 31, 0, 0, 0, 0, time.UTC),
-    ),
-    memorymem0.WithIngestInference(false),
+    memorymem0.WithSelfHostedIngestExpirationDateResolver(expirationForSession),
     memorymem0.WithSelfHostedProceduralMemory(),
+)
+```
+
+如果需要跳过 LLM 提取并直接保存非 system 消息，应使用一个不包含自定义 prompt
+和 procedural memory 的独立 service：
+
+```go
+rawMem0Svc, err := memorymem0.NewService(
+    memorymem0.WithSelfHostedOSS(),
+    memorymem0.WithHost("http://localhost:8888"),
+    memorymem0.WithIngestInference(false),
 )
 ```
 
@@ -1788,16 +1818,20 @@ mem0Svc, err := memorymem0.NewService(
   `session.WithIngestRunID` 仍用于设置单次 `IngestSession` 的通用字段；
   Runner 会自动提供 agent ID 和 run ID。
 - `WithSelfHostedIngestPrompt` 在每次本地 create 请求中透传该 service 的提取
-  prompt。
-- `WithSelfHostedIngestExpirationDate` 透传 `YYYY-MM-DD` 格式的过期日期；
-  使用传入 `time.Time` 所在时区的日期部分。
+  prompt；该选项要求开启 inference。
+- `WithSelfHostedIngestExpirationDateResolver` 会在每次有效且非空的 ingestion
+  中、推进 watermark 之前执行一次。回调接收请求 context 和 session，并返回
+  `time.Time`；适配层使用该值所在时区的日历日期，以 `YYYY-MM-DD` 发送。返回零值
+  时省略该字段；返回错误时不发送请求，也不推进 watermark。回调可能并发执行，
+  并且必须把传入的 session 视为只读。
 - `WithIngestInference` 控制 Mem0 的 `infer` 字段。默认值仍为 `true`；设为
-  `false` 时，Mem0 不通过 LLM 提取，而是直接保存非 system 消息。
+  `false` 时，Mem0 不通过 LLM 提取，而是直接保存非 system 消息，并且不能再
+  配置自定义提取 prompt 或 procedural memory。
 - `WithSelfHostedProceduralMemory` 选择 Mem0 的 `procedural_memory` 模式。
   未配置时，Mem0 的公开 create API 会自行提取普通记忆；procedural memory 必须
-  同时提供 `agent_id`。
-- prompt、过期日期与 memory type 仅供本地 OSS 使用；托管模式会明确报错，
-  不会静默忽略。`infer` 在两种模式下都支持。
+  同时提供 `agent_id`，并且始终使用 inference。
+- prompt、expiration-date resolver 与 memory type 仅供本地 OSS 使用；托管模式会
+  明确报错，不会静默忽略。`infer` 在两种模式下都支持。
 
 本地模式与托管模式共用 `ReadMemories` 和 `SearchMemories`。
 `SearchMemories` 会把 `MaxResults` 作为 `top_k` 发送；在本地模式下，还会把

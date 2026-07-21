@@ -11,9 +11,12 @@
 package mem0
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"time"
+
+	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
 const (
@@ -37,10 +40,14 @@ type ingestOptions struct {
 }
 
 type ingestConfig struct {
-	prompt         string
-	expirationDate string
-	infer          bool
-	memoryType     string
+	prompt           string
+	expirationPolicy *expirationDatePolicy
+	infer            bool
+	memoryType       string
+}
+
+type expirationDatePolicy struct {
+	resolve func(context.Context, *session.Session) (time.Time, error)
 }
 
 type apiMode int
@@ -105,21 +112,30 @@ func WithSelfHostedIngestPrompt(prompt string) ServiceOpt {
 	}
 }
 
-// WithSelfHostedIngestExpirationDate sets the calendar date after which
-// memories ingested by this self-hosted Mem0 service are hidden by default.
-// The date component in expirationDate's location is used.
-func WithSelfHostedIngestExpirationDate(expirationDate time.Time) ServiceOpt {
+// WithSelfHostedIngestExpirationDateResolver sets expiration_date separately
+// for each self-hosted Mem0 ingestion request. The resolver runs synchronously
+// after a non-empty session delta and the other ingestion options are
+// validated. A zero time omits expiration_date for that request.
+//
+// The resolver may be called concurrently and must be safe for concurrent use.
+// It must treat the provided session as read-only.
+func WithSelfHostedIngestExpirationDateResolver(
+	resolver func(context.Context, *session.Session) (time.Time, error),
+) ServiceOpt {
 	return func(opts *serviceOpts) {
-		if expirationDate.IsZero() {
+		if resolver == nil {
 			return
 		}
-		opts.ingestDefaults.expirationDate = expirationDate.Format(time.DateOnly)
+		opts.ingestDefaults.expirationPolicy = &expirationDatePolicy{
+			resolve: resolver,
+		}
 	}
 }
 
 // WithIngestInference controls whether Mem0 extracts memories from the
 // transcript for every ingestion request from this service. When disabled,
-// Mem0 stores non-system messages verbatim.
+// Mem0 stores non-system messages verbatim. Disabled inference cannot be
+// combined with a custom extraction prompt or procedural memory.
 func WithIngestInference(infer bool) ServiceOpt {
 	return func(opts *serviceOpts) {
 		opts.ingestDefaults.infer = infer

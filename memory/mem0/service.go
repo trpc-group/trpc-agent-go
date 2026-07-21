@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
@@ -52,7 +53,7 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 			return nil, errors.New("mem0: org/project identifiers are not supported by self-hosted OSS")
 		}
 	} else if opts.ingestDefaults.prompt != "" ||
-		opts.ingestDefaults.expirationDate != "" ||
+		opts.ingestDefaults.expirationPolicy != nil ||
 		opts.ingestDefaults.memoryType != "" {
 		return nil, errors.New("mem0: self-hosted ingest options require self-hosted OSS mode")
 	}
@@ -88,18 +89,6 @@ func (s *Service) IngestSession(
 	sess *session.Session,
 	opts ...session.IngestOption,
 ) error {
-	return s.ingestSession(
-		ctx,
-		sess,
-		resolveSessionIngestOptions(s.opts.ingestDefaults, opts),
-	)
-}
-
-func (s *Service) ingestSession(
-	ctx context.Context,
-	sess *session.Session,
-	reqOpts ingestOptions,
-) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -115,9 +104,19 @@ func (s *Service) ingestSession(
 	if len(messages) == 0 {
 		return nil
 	}
+	reqOpts := resolveSessionIngestOptions(s.opts.ingestDefaults, opts)
 	if err := s.validateIngestOptions(reqOpts); err != nil {
 		return err
 	}
+	expirationDate, err := resolveIngestExpirationDate(
+		ctx,
+		sess,
+		s.opts.ingestDefaults.expirationPolicy,
+	)
+	if err != nil {
+		return err
+	}
+	reqOpts.expirationDate = expirationDate
 	writeLastExtractAt(sess, latestTs)
 	job := &ingestJob{
 		Ctx:      context.WithoutCancel(ctx),
@@ -143,6 +142,24 @@ func (s *Service) ingestSession(
 	return s.ingestWorker.ingest(syncCtx, userKey, sess, messages, reqOpts)
 }
 
+func resolveIngestExpirationDate(
+	ctx context.Context,
+	sess *session.Session,
+	policy *expirationDatePolicy,
+) (string, error) {
+	if policy == nil || policy.resolve == nil {
+		return "", nil
+	}
+	expirationDate, err := policy.resolve(ctx, sess)
+	if err != nil {
+		return "", fmt.Errorf("mem0: resolve ingest expiration date: %w", err)
+	}
+	if expirationDate.IsZero() {
+		return "", nil
+	}
+	return expirationDate.Format(time.DateOnly), nil
+}
+
 func resolveSessionIngestOptions(
 	defaults ingestConfig,
 	options []session.IngestOption,
@@ -155,19 +172,24 @@ func resolveSessionIngestOptions(
 		option(&sessionOpts)
 	}
 	return ingestOptions{
-		metadata:       cloneMetadata(sessionOpts.Metadata),
-		agentID:        sessionOpts.AgentID,
-		runID:          sessionOpts.RunID,
-		prompt:         defaults.prompt,
-		expirationDate: defaults.expirationDate,
-		infer:          defaults.infer,
-		memoryType:     defaults.memoryType,
+		metadata:   cloneMetadata(sessionOpts.Metadata),
+		agentID:    sessionOpts.AgentID,
+		runID:      sessionOpts.RunID,
+		prompt:     defaults.prompt,
+		infer:      defaults.infer,
+		memoryType: defaults.memoryType,
 	}
 }
 
 func (s *Service) validateIngestOptions(opts ingestOptions) error {
 	if opts.memoryType != "" && opts.memoryType != memoryTypeProcedural {
 		return fmt.Errorf("mem0: unsupported memory type %q", opts.memoryType)
+	}
+	if !opts.infer && opts.memoryType == memoryTypeProcedural {
+		return errors.New("mem0: procedural memory requires inference")
+	}
+	if !opts.infer && strings.TrimSpace(opts.prompt) != "" {
+		return errors.New("mem0: custom ingest prompt requires inference")
 	}
 	if opts.memoryType == memoryTypeProcedural && strings.TrimSpace(opts.agentID) == "" {
 		return errors.New("mem0: procedural memory requires an agent ID")
@@ -275,10 +297,10 @@ func (s *Service) readSelfHostedMemories(
 
 // SearchMemories searches memories for a user.
 func (s *Service) SearchMemories(ctx context.Context, userKey memory.UserKey, query string, opts ...memory.SearchOption) ([]*memory.Entry, error) {
-	searchOpts := memory.ResolveSearchOptions(query, opts)
 	if err := userKey.CheckUserKey(); err != nil {
 		return nil, err
 	}
+	searchOpts := memory.ResolveSearchOptions(query, opts)
 	searchOpts.Query = strings.TrimSpace(searchOpts.Query)
 	if searchOpts.Query == "" {
 		return []*memory.Entry{}, nil

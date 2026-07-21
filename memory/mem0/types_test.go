@@ -119,7 +119,7 @@ func TestOSSCreateMemoryRequest_OptionalFields(t *testing.T) {
 			RunID:          "run-1",
 			Metadata:       map[string]any{"reference_date": "2026-07-17"},
 			ExpirationDate: "2026-08-01",
-			Infer:          false,
+			Infer:          true,
 			MemoryType:     memoryTypeProcedural,
 			Prompt:         "extract procedures",
 		})
@@ -131,14 +131,14 @@ func TestOSSCreateMemoryRequest_OptionalFields(t *testing.T) {
 			"run_id":"run-1",
 			"metadata":{"reference_date":"2026-07-17"},
 			"expiration_date":"2026-08-01",
-			"infer":false,
+			"infer":true,
 			"memory_type":"procedural_memory",
 			"prompt":"extract procedures"
 		}`, string(body))
 		var fields map[string]any
 		require.NoError(t, json.Unmarshal(body, &fields))
+		assert.Equal(t, true, fields["infer"])
 		assert.Equal(t, "2026-08-01", fields["expiration_date"])
-		assert.Equal(t, false, fields["infer"])
 		assert.Equal(t, memoryTypeProcedural, fields["memory_type"])
 		assert.Equal(t, "extract procedures", fields["prompt"])
 	})

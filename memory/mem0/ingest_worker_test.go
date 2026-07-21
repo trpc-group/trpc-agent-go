@@ -262,7 +262,7 @@ func TestIngestWorker_IngestSelfHostedOSSForwardsOptionalFields(t *testing.T) {
 		ingestOptions{
 			agentID:        "agent-1",
 			expirationDate: "2026-08-01",
-			infer:          false,
+			infer:          true,
 			memoryType:     memoryTypeProcedural,
 			prompt:         "extract a deployment procedure",
 		},
@@ -270,7 +270,7 @@ func TestIngestWorker_IngestSelfHostedOSSForwardsOptionalFields(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "agent-1", gotBody["agent_id"])
 	assert.Equal(t, "2026-08-01", gotBody["expiration_date"])
-	assert.Equal(t, false, gotBody["infer"])
+	assert.Equal(t, true, gotBody["infer"])
 	assert.Equal(t, memoryTypeProcedural, gotBody["memory_type"])
 	assert.Equal(t, "extract a deployment procedure", gotBody["prompt"])
 }

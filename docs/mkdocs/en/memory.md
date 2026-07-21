@@ -1720,7 +1720,7 @@ In short, `MemoryService` means "the framework manages memories directly", while
 | `WithSelfHostedOSS()` | Use the self-hosted Mem0 OSS REST API (`/memories`, `/search`, `X-API-Key`). When enabled without `WithHost`, the host defaults to `http://localhost:8888`; the hosted-platform default host is rejected in OSS mode. | disabled |
 | `WithSelfHostedOSSIncludeUnscopedMemories()` | Include legacy OSS records that do not carry `metadata.trpc_app_name`; records tagged for a different app remain hidden. | disabled |
 | `WithSelfHostedIngestPrompt(prompt)` | Set the extraction prompt for every self-hosted ingestion request from this service. | server default |
-| `WithSelfHostedIngestExpirationDate(date)` | Set the expiration date for memories created by this self-hosted service. | none |
+| `WithSelfHostedIngestExpirationDateResolver(resolver)` | Resolve the `expiration_date` independently for each self-hosted ingestion request. | omitted |
 | `WithIngestInference(bool)` | Control whether Mem0 extracts memories from transcripts. This applies to hosted and self-hosted ingestion. | `true` |
 | `WithSelfHostedProceduralMemory()` | Create self-hosted procedural memories. An `agent_id` is required. | disabled |
 | `WithOrgProject(orgID, projectID)` | Add hosted-platform `org_id` / `project_id`; unsupported with self-hosted OSS. | empty |
@@ -1738,18 +1738,48 @@ The standard Runner path supplies the session ID as `run_id` and the active
 agent name as `agent_id`. Mem0-specific behavior is configured once when the
 service is created, so `IngestSession` remains the only ingestion API:
 
+| Mem0 OSS create field | Source |
+| --------------------- | ------ |
+| `messages` | The non-empty session delta selected by the ingestor. |
+| `user_id` | `session.Session.UserID`. |
+| `agent_id` | `session.WithIngestAgentID`; Runner supplies the active agent name. |
+| `run_id` | `session.WithIngestRunID`; Runner supplies the session ID. |
+| `metadata` | `session.WithIngestMetadata`, plus the internal tRPC app scope. |
+| `prompt` | `WithSelfHostedIngestPrompt`. |
+| `expiration_date` | `WithSelfHostedIngestExpirationDateResolver`. |
+| `infer` | `WithIngestInference`; defaults to `true`. |
+| `memory_type` | `WithSelfHostedProceduralMemory`; omitted for ordinary memories. |
+
 ```go
+expirationForSession := func(
+    _ context.Context,
+    sess *session.Session,
+) (time.Time, error) {
+    if sess.CreatedAt.IsZero() {
+        return time.Time{}, nil
+    }
+    return sess.CreatedAt.AddDate(0, 0, 30), nil
+}
+
 mem0Svc, err := memorymem0.NewService(
     memorymem0.WithSelfHostedOSS(),
     memorymem0.WithHost("http://localhost:8888"),
     memorymem0.WithSelfHostedIngestPrompt(
         "Extract reusable deployment procedures.",
     ),
-    memorymem0.WithSelfHostedIngestExpirationDate(
-        time.Date(2026, time.December, 31, 0, 0, 0, 0, time.UTC),
-    ),
-    memorymem0.WithIngestInference(false),
+    memorymem0.WithSelfHostedIngestExpirationDateResolver(expirationForSession),
     memorymem0.WithSelfHostedProceduralMemory(),
+)
+```
+
+To store non-system messages verbatim without LLM extraction, configure a
+separate service without a custom prompt or procedural memory:
+
+```go
+rawMem0Svc, err := memorymem0.NewService(
+    memorymem0.WithSelfHostedOSS(),
+    memorymem0.WithHost("http://localhost:8888"),
+    memorymem0.WithIngestInference(false),
 )
 ```
 
@@ -1757,17 +1787,23 @@ mem0Svc, err := memorymem0.NewService(
   `session.WithIngestRunID` continue to set common fields for an individual
   `IngestSession` call. Runner supplies the agent and run IDs automatically.
 - `WithSelfHostedIngestPrompt` forwards the service's extraction prompt on
-  every self-hosted create request.
-- `WithSelfHostedIngestExpirationDate` forwards a `YYYY-MM-DD` expiration
-  date. The date in the supplied value's location is used.
+  every self-hosted create request with inference enabled.
+- `WithSelfHostedIngestExpirationDateResolver` runs once for each valid,
+  non-empty ingestion before the watermark advances. The callback receives the
+  request context and session, and returns a `time.Time`; its calendar date in
+  that value's location is sent as `YYYY-MM-DD`. A zero value omits the field.
+  An error aborts ingestion without sending a request or advancing the
+  watermark. The callback may run concurrently and must treat the session as
+  read-only.
 - `WithIngestInference` controls Mem0's `infer` field. Its default remains
-  `true`; `false` stores non-system messages without LLM extraction.
+  `true`; `false` stores non-system messages without LLM extraction and cannot
+  be combined with a custom extraction prompt or procedural memory.
 - `WithSelfHostedProceduralMemory` selects Mem0's
   `procedural_memory` mode. Mem0's public create API otherwise infers ordinary
-  memories; procedural memory requires an `agent_id`.
-- Prompt, expiration date, and memory type are OSS-only and are rejected in
-  hosted-platform mode rather than silently ignored. `infer` is supported in
-  both modes.
+  memories; procedural memory requires an `agent_id` and always uses inference.
+- Prompt, expiration-date resolver, and memory type are OSS-only and are
+  rejected in hosted-platform mode rather than silently ignored. `infer` is
+  supported in both modes.
 
 Self-hosted reads and searches use the same `ReadMemories` and
 `SearchMemories` methods as the hosted adapter. `SearchMemories` forwards

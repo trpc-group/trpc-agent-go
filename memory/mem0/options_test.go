@@ -9,11 +9,15 @@
 package mem0
 
 import (
+	"context"
 	"net/http"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
 func apply(opts ...ServiceOpt) serviceOpts {
@@ -60,15 +64,21 @@ func TestSelfHostedIngestOptions(t *testing.T) {
 		assert.Equal(t, "extract deadlines", opts.ingestDefaults.prompt)
 	})
 
-	t.Run("expiration date", func(t *testing.T) {
-		location := time.FixedZone("UTC+8", 8*60*60)
-		opts := apply(WithSelfHostedIngestExpirationDate(
-			time.Date(2026, time.July, 17, 23, 0, 0, 0, location),
-		))
-		assert.Equal(t, "2026-07-17", opts.ingestDefaults.expirationDate)
-
-		zero := apply(WithSelfHostedIngestExpirationDate(time.Time{}))
-		assert.Empty(t, zero.ingestDefaults.expirationDate)
+	t.Run("expiration date resolver", func(t *testing.T) {
+		resolver := func(context.Context, *session.Session) (time.Time, error) {
+			return time.Date(2026, time.August, 1, 0, 0, 0, 0, time.UTC), nil
+		}
+		opts := apply(
+			WithSelfHostedIngestExpirationDateResolver(nil),
+			WithSelfHostedIngestExpirationDateResolver(resolver),
+		)
+		require.NotNil(t, opts.ingestDefaults.expirationPolicy)
+		got, err := opts.ingestDefaults.expirationPolicy.resolve(
+			context.Background(),
+			&session.Session{},
+		)
+		require.NoError(t, err)
+		assert.Equal(t, time.Date(2026, time.August, 1, 0, 0, 0, 0, time.UTC), got)
 	})
 
 	t.Run("inference", func(t *testing.T) {
@@ -142,5 +152,14 @@ func TestDefaultOptionsCloneIsValueCopy(t *testing.T) {
 func TestServiceOptionsRemainComparable(t *testing.T) {
 	if got := defaultOptions.clone(); got != defaultOptions {
 		t.Fatal("cloned service options differ from defaults")
+	}
+
+	opts := apply(WithSelfHostedIngestExpirationDateResolver(
+		func(context.Context, *session.Session) (time.Time, error) {
+			return time.Time{}, nil
+		},
+	))
+	if cloned := opts.clone(); cloned != opts {
+		t.Fatal("cloned service options differ when an expiration resolver is configured")
 	}
 }

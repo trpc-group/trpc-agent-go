@@ -222,7 +222,7 @@ func (w *ingestWorker) ingestOSS(
 		Metadata:       withTRPCAppMetadata(reqOpts.metadata, userKey.AppName),
 		ExpirationDate: reqOpts.expirationDate,
 		Infer:          reqOpts.infer,
-		MemoryType:     string(reqOpts.memoryType),
+		MemoryType:     reqOpts.memoryType,
 		Prompt:         reqOpts.prompt,
 	}
 	return w.c.doJSON(ctx, httpMethodPost, pathOSSMemories, nil, req, nil)
