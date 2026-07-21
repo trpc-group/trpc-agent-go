@@ -3,7 +3,7 @@
 # tRPC-Agent-Go
 
 <p align="center">
-  <img src="docs/mkdocs/assets/img/logo-readme.png" alt="tRPC logo" width="260">
+  <img src="docs/mkdocs/assets/img/logo-readme-blue.png" alt="tRPC logo" width="260">
 </p>
 
 [![Go Reference](https://pkg.go.dev/badge/trpc.group/trpc-go/trpc-agent-go.svg)](https://pkg.go.dev/trpc.group/trpc-go/trpc-agent-go)
