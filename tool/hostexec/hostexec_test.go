@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -798,7 +799,8 @@ func TestToolCalls_NotConfigured(t *testing.T) {
 func TestWriteStdin_CanceledBeforePoll(t *testing.T) {
 	mgr := newManager()
 	sess := newSession("session", "cat", defaultMaxLines)
-	sess.stdin = &testWriteCloser{}
+	writer := &testWriteCloser{}
+	sess.stdin = writer
 	mgr.sessions[sess.id] = sess
 
 	tool := &writeStdinTool{mgr: mgr}
@@ -815,6 +817,33 @@ func TestWriteStdin_CanceledBeforePoll(t *testing.T) {
 		}),
 	)
 	require.ErrorIs(t, err, context.Canceled)
+	require.Empty(t, writer.String())
+}
+
+func TestWriteStdin_CanceledAfterWriteBeforePoll(t *testing.T) {
+	for _, yield := range []int{0, 200} {
+		t.Run(fmt.Sprintf("yield_%d", yield), func(t *testing.T) {
+			mgr := newManager()
+			sess := newSession("session", "cat", defaultMaxLines)
+			ctx, cancel := context.WithCancel(context.Background())
+			writer := &cancelAfterWriteCloser{cancel: cancel}
+			sess.stdin = writer
+			mgr.sessions[sess.id] = sess
+
+			tool := &writeStdinTool{mgr: mgr}
+			out, err := tool.Call(
+				ctx,
+				mustJSON(t, map[string]any{
+					"session_id":    sess.id,
+					"chars":         "hello",
+					"yield_time_ms": yield,
+				}),
+			)
+			require.NoError(t, err)
+			require.NotNil(t, out)
+			require.Equal(t, "hello", writer.String())
+		})
+	}
 }
 
 func TestHostexec_HelperFunctions(t *testing.T) {
@@ -1083,6 +1112,25 @@ type testWriteCloser struct {
 }
 
 func (w *testWriteCloser) Close() error {
+	return nil
+}
+
+type cancelAfterWriteCloser struct {
+	buf    bytes.Buffer
+	cancel context.CancelFunc
+}
+
+func (w *cancelAfterWriteCloser) Write(p []byte) (int, error) {
+	n, err := w.buf.Write(p)
+	w.cancel()
+	return n, err
+}
+
+func (w *cancelAfterWriteCloser) String() string {
+	return w.buf.String()
+}
+
+func (w *cancelAfterWriteCloser) Close() error {
 	return nil
 }
 
