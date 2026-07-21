@@ -9,8 +9,8 @@ memories, filter-key summaries, and named tracks.
 Normalization removes only values that do not carry portable semantics.
 Physical IDs become logical IDs, generated timestamps become presence markers,
 maps are canonicalized, and memories are sorted by normalized content.
-User-supplied memory times remain UTC instants. Track durations and timestamps
-are volatile, while status and errors remain semantic. Event content, tool
+User-supplied memory times remain UTC instants. Track event timestamps are
+volatile, while every caller-supplied payload value remains semantic. Event content, tool
 data, extensions, state delta, summary text, boundary, filter key, retained
 tail, and ownership remain comparable. Concurrent cases ignore global
 interleaving but preserve branch-local order and the complete event set.

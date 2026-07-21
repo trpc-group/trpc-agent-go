@@ -1,9 +1,11 @@
-# SQLite replay adapter
+# SQLite replay integration test
 
-This module binds `session/replaytest` to the file-backed Session and Memory
-SQLite services. Each case uses two temporary database files and synchronous
-session persistence. The adapter configures the same deterministic summarizer
-and filter-key policy as the InMemory reference.
+This source-tree test module binds `session/replaytest` to the file-backed
+Session and Memory SQLite services. It intentionally exposes no importable
+adapter: a separately published adapter cannot depend on the new root package
+until that package has been released. Each case uses two temporary database
+files and synchronous session persistence with the same deterministic
+summarizer and filter-key policy as the InMemory reference.
 
 SQLite requires CGO and a C compiler:
 

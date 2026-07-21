@@ -9,8 +9,10 @@
 package replaytest
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"sort"
 	"strconv"
 	"strings"
@@ -27,6 +29,7 @@ func normalizeSnapshot(
 	backendName string,
 	caseName string,
 	eventOrder EventOrderMode,
+	required Capabilities,
 	sess *session.Session,
 	appState session.StateMap,
 	userState session.StateMap,
@@ -39,17 +42,36 @@ func normalizeSnapshot(
 	if err != nil {
 		return Snapshot{}, err
 	}
-	normalizedMemories, err := normalizeMemories(memories)
-	if err != nil {
-		return Snapshot{}, err
+	normalizedMemories := make([]CanonicalMap, 0)
+	if required[CapabilityMemory] {
+		normalizedMemories, err = normalizeMemories(memories)
+		if err != nil {
+			return Snapshot{}, err
+		}
 	}
-	summaries, err := normalizeSummaries(sess, physicalToLogical)
-	if err != nil {
-		return Snapshot{}, err
+	summaries := make(map[string]CanonicalMap)
+	if required[CapabilitySummary] {
+		summaries, err = normalizeSummaries(sess, physicalToLogical)
+		if err != nil {
+			return Snapshot{}, err
+		}
 	}
-	tracks, err := normalizeTracks(sess)
-	if err != nil {
-		return Snapshot{}, err
+	tracks := make(map[string][]CanonicalMap)
+	if required[CapabilityTrack] {
+		tracks, err = normalizeTracks(sess)
+		if err != nil {
+			return Snapshot{}, err
+		}
+	}
+	state := map[string]map[string]string{"app": {}, "user": {}, "session": {}}
+	if required[CapabilityAppState] {
+		state["app"] = normalizeState(appState, "")
+	}
+	if required[CapabilityUserState] {
+		state["user"] = normalizeState(userState, "")
+	}
+	if required[CapabilitySessionState] {
+		state["session"] = normalizeState(sess.State, "session")
 	}
 	return Snapshot{
 		Backend: backendName,
@@ -63,14 +85,10 @@ func normalizeSnapshot(
 		},
 		Events:     events,
 		EventOrder: order,
-		State: map[string]map[string]string{
-			"app":     normalizeState(appState, ""),
-			"user":    normalizeState(userState, ""),
-			"session": normalizeState(sess.State, "session"),
-		},
-		Memories:  normalizedMemories,
-		Summaries: summaries,
-		Tracks:    tracks,
+		State:      state,
+		Memories:   normalizedMemories,
+		Summaries:  summaries,
+		Tracks:     tracks,
 	}, nil
 }
 
@@ -113,11 +131,13 @@ func normalizeEvents(
 			return nil, nil, nil, fmt.Errorf("marshal event %d: %w", index, err)
 		}
 		var value CanonicalMap
-		if err := json.Unmarshal(raw, &value); err != nil {
+		if err := decodeJSON(raw, &value); err != nil {
 			return nil, nil, nil, fmt.Errorf("decode event %d: %w", index, err)
 		}
 		value["id"] = logicalID
-		normalizeVolatile(value)
+		normalizeTimestamps(value, "timestamp")
+		response, _ := value["response"].(map[string]any)
+		normalizeTimestamps(response, "timestamp")
 		if extensions, ok := value["extensions"].(map[string]any); ok {
 			delete(extensions, logicalEventIDExtension)
 			if len(extensions) == 0 {
@@ -159,7 +179,7 @@ func normalizeState(input session.StateMap, scope string) map[string]string {
 			continue
 		}
 		var decoded any
-		if json.Unmarshal(value, &decoded) == nil {
+		if decodeJSON(value, &decoded) == nil {
 			raw, _ := json.Marshal(decoded)
 			output[key] = string(raw)
 			continue
@@ -180,13 +200,14 @@ func normalizeMemories(entries []*memory.Entry) ([]CanonicalMap, error) {
 			return nil, fmt.Errorf("marshal memory %d: %w", index, err)
 		}
 		var value CanonicalMap
-		if err := json.Unmarshal(raw, &value); err != nil {
+		if err := decodeJSON(raw, &value); err != nil {
 			return nil, fmt.Errorf("decode memory %d: %w", index, err)
 		}
-		normalizeVolatile(value)
+		normalizeTimestamps(value, "created_at", "updated_at")
+		memoryValue, _ := value["memory"].(map[string]any)
+		normalizeTimestamps(memoryValue, "last_updated")
 		if entry.Memory != nil && entry.Memory.EventTime != nil {
-			memoryValue, ok := value["memory"].(map[string]any)
-			if ok {
+			if memoryValue != nil {
 				memoryValue["event_time"] = entry.Memory.EventTime.UTC().Format(time.RFC3339Nano)
 			}
 		}
@@ -217,7 +238,6 @@ func normalizeSummaries(
 			continue
 		}
 		value := CanonicalMap{
-			"session_id":         sess.ID,
 			"text":               summary.Summary,
 			"topics":             append([]string(nil), summary.Topics...),
 			"updated_at":         normalizeTime(summary.UpdatedAt),
@@ -292,10 +312,9 @@ func normalizeTracks(sess *session.Session) (map[string][]CanonicalMap, error) {
 		for index, trackEvent := range history.Events {
 			var payload any
 			if len(trackEvent.Payload) > 0 {
-				if err := json.Unmarshal(trackEvent.Payload, &payload); err != nil {
+				if err := decodeJSON(trackEvent.Payload, &payload); err != nil {
 					return nil, fmt.Errorf("decode track %s event %d: %w", trackName, index, err)
 				}
-				normalizeDynamicPayload(payload)
 			}
 			events = append(events, CanonicalMap{
 				"track":     string(trackEvent.Track),
@@ -315,29 +334,28 @@ func normalizeTime(value time.Time) any {
 	return presentMarker
 }
 
-func normalizeVolatile(value any) {
-	switch typed := value.(type) {
-	case CanonicalMap:
-		normalizeVolatileMap(map[string]any(typed))
-	case map[string]any:
-		normalizeVolatileMap(typed)
-	case []any:
-		for _, child := range typed {
-			normalizeVolatile(child)
+func normalizeTimestamps(value map[string]any, keys ...string) {
+	for _, key := range keys {
+		if timestamp, ok := value[key]; ok {
+			value[key] = normalizeTimestampPresence(timestamp)
 		}
 	}
 }
 
-func normalizeVolatileMap(value map[string]any) {
-	for childKey, child := range value {
-		lower := strings.ToLower(childKey)
-		switch lower {
-		case "timestamp", "created_at", "updated_at", "last_updated", "event_time":
-			value[childKey] = normalizeTimestampPresence(child)
-		default:
-			normalizeVolatile(child)
-		}
+func decodeJSON(raw []byte, output any) error {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(output); err != nil {
+		return err
 	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("multiple JSON values")
+		}
+		return err
+	}
+	return nil
 }
 
 func normalizeTimestampPresence(value any) any {
@@ -355,36 +373,10 @@ func normalizeTimestampPresence(value any) any {
 		if typed == 0 {
 			return nil
 		}
+	case json.Number:
+		if number, err := typed.Float64(); err == nil && number == 0 {
+			return nil
+		}
 	}
 	return presentMarker
-}
-
-func normalizeDynamicPayload(value any) {
-	switch typed := value.(type) {
-	case map[string]any:
-		for childKey, child := range typed {
-			lower := strings.ToLower(childKey)
-			if isDurationKey(lower) || isTimestampKey(lower) {
-				if child != nil {
-					typed[childKey] = presentMarker
-				}
-				continue
-			}
-			normalizeDynamicPayload(child)
-		}
-	case []any:
-		for _, child := range typed {
-			normalizeDynamicPayload(child)
-		}
-	}
-}
-
-func isDurationKey(key string) bool {
-	return strings.Contains(key, "duration") || strings.Contains(key, "latency") ||
-		strings.Contains(key, "elapsed")
-}
-
-func isTimestampKey(key string) bool {
-	return key == "time" || strings.Contains(key, "timestamp") ||
-		strings.HasSuffix(key, "_at")
 }

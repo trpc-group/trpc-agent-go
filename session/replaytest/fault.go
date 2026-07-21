@@ -21,80 +21,122 @@ func InjectFault(input Snapshot, kind FaultKind) (Snapshot, error) {
 	if err != nil {
 		return Snapshot{}, err
 	}
+	var inject func(*Snapshot) error
 	switch kind {
 	case FaultEventContent:
-		message, err := firstEventMessage(output.Events)
-		if err != nil {
-			return Snapshot{}, err
-		}
-		message["content"] = "injected-content-drift"
+		inject = injectEventContent
 	case FaultEventOrder:
-		if len(output.Events) < 2 {
-			return Snapshot{}, errors.New("event order fault requires two events")
-		}
-		output.Events[0], output.Events[1] = output.Events[1], output.Events[0]
+		inject = injectEventOrder
 	case FaultToolArguments:
-		if err := mutateToolArguments(output.Events); err != nil {
-			return Snapshot{}, err
-		}
+		inject = injectToolArguments
 	case FaultStateValue:
-		if err := mutateState(output.State); err != nil {
-			return Snapshot{}, err
-		}
+		inject = injectStateValue
 	case FaultMemoryContent:
-		if len(output.Memories) == 0 {
-			return Snapshot{}, errors.New("memory fault requires a memory")
-		}
-		memoryValue, ok := output.Memories[0]["memory"].(map[string]any)
-		if !ok {
-			return Snapshot{}, errors.New("memory payload is missing")
-		}
-		memoryValue["memory"] = "injected-memory-drift"
+		inject = injectMemoryContent
 	case FaultSummaryText:
-		summary, err := firstSummary(output.Summaries)
-		if err != nil {
-			return Snapshot{}, err
-		}
-		summary["text"] = "injected-summary-drift"
+		inject = injectSummaryText
 	case FaultSummaryMissing:
-		key, _, err := firstSummaryEntry(output.Summaries)
-		if err != nil {
-			return Snapshot{}, err
-		}
-		delete(output.Summaries, key)
+		inject = injectSummaryMissing
 	case FaultSummaryFilterKey:
-		key, summary, err := firstSummaryEntry(output.Summaries)
-		if err != nil {
-			return Snapshot{}, err
-		}
-		delete(output.Summaries, key)
-		output.Summaries["wrong/filter"] = summary
+		inject = injectSummaryFilterKey
 	case FaultTrackPayload:
-		trackEvent, err := firstTrackEvent(output.Tracks)
-		if err != nil {
-			return Snapshot{}, err
-		}
-		payload, ok := trackEvent["payload"].(map[string]any)
-		if !ok {
-			return Snapshot{}, errors.New("track payload is missing")
-		}
-		payload["status"] = "injected-track-drift"
+		inject = injectTrackPayload
 	case FaultDuplicateEvent:
-		if len(output.Events) == 0 {
-			return Snapshot{}, errors.New("duplicate fault requires an event")
-		}
-		output.Events = append(output.Events, cloneJSONMap(output.Events[0]))
-	case FaultSummaryOwner:
-		summary, err := firstSummary(output.Summaries)
-		if err != nil {
-			return Snapshot{}, err
-		}
-		summary["session_id"] = "wrong-session"
+		inject = injectDuplicateEvent
 	default:
 		return Snapshot{}, fmt.Errorf("unknown fault %q", kind)
 	}
+	if err := inject(&output); err != nil {
+		return Snapshot{}, err
+	}
 	output.Backend += "-faulted"
 	return output, nil
+}
+
+func injectEventContent(output *Snapshot) error {
+	message, err := firstEventMessage(output.Events)
+	if err != nil {
+		return err
+	}
+	message["content"] = "injected-content-drift"
+	return nil
+}
+
+func injectEventOrder(output *Snapshot) error {
+	if len(output.Events) < 2 {
+		return errors.New("event order fault requires two events")
+	}
+	output.Events[0], output.Events[1] = output.Events[1], output.Events[0]
+	return nil
+}
+
+func injectToolArguments(output *Snapshot) error {
+	return mutateToolArguments(output.Events)
+}
+
+func injectStateValue(output *Snapshot) error {
+	return mutateState(output.State)
+}
+
+func injectMemoryContent(output *Snapshot) error {
+	if len(output.Memories) == 0 {
+		return errors.New("memory fault requires a memory")
+	}
+	memoryValue, ok := output.Memories[0]["memory"].(map[string]any)
+	if !ok {
+		return errors.New("memory payload is missing")
+	}
+	memoryValue["memory"] = "injected-memory-drift"
+	return nil
+}
+
+func injectSummaryText(output *Snapshot) error {
+	summary, err := firstSummary(output.Summaries)
+	if err != nil {
+		return err
+	}
+	summary["text"] = "injected-summary-drift"
+	return nil
+}
+
+func injectSummaryMissing(output *Snapshot) error {
+	key, _, err := firstSummaryEntry(output.Summaries)
+	if err != nil {
+		return err
+	}
+	delete(output.Summaries, key)
+	return nil
+}
+
+func injectSummaryFilterKey(output *Snapshot) error {
+	key, summary, err := firstSummaryEntry(output.Summaries)
+	if err != nil {
+		return err
+	}
+	delete(output.Summaries, key)
+	output.Summaries["wrong/filter"] = summary
+	return nil
+}
+
+func injectTrackPayload(output *Snapshot) error {
+	trackEvent, err := firstTrackEvent(output.Tracks)
+	if err != nil {
+		return err
+	}
+	payload, ok := trackEvent["payload"].(map[string]any)
+	if !ok {
+		return errors.New("track payload is missing")
+	}
+	payload["status"] = "injected-track-drift"
+	return nil
+}
+
+func injectDuplicateEvent(output *Snapshot) error {
+	if len(output.Events) == 0 {
+		return errors.New("duplicate fault requires an event")
+	}
+	output.Events = append(output.Events, cloneJSONMap(output.Events[0]))
+	return nil
 }
 
 func cloneSnapshot(input Snapshot) (Snapshot, error) {
@@ -103,7 +145,7 @@ func cloneSnapshot(input Snapshot) (Snapshot, error) {
 		return Snapshot{}, err
 	}
 	var output Snapshot
-	if err := json.Unmarshal(raw, &output); err != nil {
+	if err := decodeJSON(raw, &output); err != nil {
 		return Snapshot{}, err
 	}
 	return output, nil
@@ -174,6 +216,9 @@ func firstSummary(summaries map[string]CanonicalMap) (CanonicalMap, error) {
 func firstSummaryEntry(summaries map[string]CanonicalMap) (string, CanonicalMap, error) {
 	keys := make([]string, 0, len(summaries))
 	for key := range summaries {
+		if summaries[key] == nil {
+			continue
+		}
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)

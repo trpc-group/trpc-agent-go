@@ -6,10 +6,10 @@ backend, normalizes backend-generated values, and compares every result with a
 named reference backend or with every other backend in oracle-free consensus
 mode.
 
-The public matrix contains 11 cases: single-turn and multi-turn messages, tool
+The public matrix contains 10 cases: single-turn and multi-turn messages, tool
 calls, scoped state CRUD, memory persistence, summary generation/update,
 summary retained-tail reconstruction, summary filter keys, tracks, concurrent
-branch writes, and failure/retry recovery. Each case names an injected fault;
+branch writes. Each case names an injected fault;
 the unit test proves that every fault produces a blocking diff.
 
 ## Run

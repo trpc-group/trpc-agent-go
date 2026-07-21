@@ -22,15 +22,39 @@ import (
 type Capability string
 
 const (
-	CapabilitySession      Capability = "session"
-	CapabilityAppState     Capability = "app_state"
-	CapabilityUserState    Capability = "user_state"
+	// CapabilitySession indicates support for session lifecycle and events.
+	CapabilitySession Capability = "session"
+	// CapabilityAppState indicates support for application-scoped state.
+	CapabilityAppState Capability = "app_state"
+	// CapabilityUserState indicates support for user-scoped state.
+	CapabilityUserState Capability = "user_state"
+	// CapabilitySessionState indicates support for session-scoped state.
 	CapabilitySessionState Capability = "session_state"
-	CapabilityMemory       Capability = "memory"
-	CapabilitySummary      Capability = "summary"
-	CapabilityTrack        Capability = "track"
-	CapabilityConcurrent   Capability = "concurrent_write"
+	// CapabilityMemory indicates support for memory persistence.
+	CapabilityMemory Capability = "memory"
+	// CapabilitySummary indicates support for session summaries.
+	CapabilitySummary Capability = "summary"
+	// CapabilityTrack indicates support for track-event persistence.
+	CapabilityTrack Capability = "track"
+	// CapabilityConcurrent indicates support for concurrent writes.
+	CapabilityConcurrent Capability = "concurrent_write"
 )
+
+func isKnownCapability(capability Capability) bool {
+	switch capability {
+	case CapabilitySession,
+		CapabilityAppState,
+		CapabilityUserState,
+		CapabilitySessionState,
+		CapabilityMemory,
+		CapabilitySummary,
+		CapabilityTrack,
+		CapabilityConcurrent:
+		return true
+	default:
+		return false
+	}
+}
 
 // Capabilities declares backend support. Missing entries are unsupported.
 type Capabilities map[Capability]bool
@@ -52,8 +76,13 @@ func FullCapabilities() Capabilities {
 
 // Services owns one isolated pair of session and memory services.
 type Services struct {
+	// Session is the isolated session service under test.
 	Session session.Service
-	Memory  memory.Service
+	// Memory is the isolated memory service under test. It may be nil for cases
+	// that do not require CapabilityMemory.
+	Memory memory.Service
+	// Cleanup removes backend resources after both services are closed.
+	// It may be nil when the services own all of their resources.
 	Cleanup func() error
 }
 
@@ -77,21 +106,34 @@ func (s *Services) Close() error {
 
 // Backend creates isolated services for one case.
 type Backend struct {
-	Name         string
+	// Name is the stable, non-empty identifier used in reports and diff rules.
+	Name string
+	// Capabilities declares supported operations; omitted values are unsupported.
 	Capabilities Capabilities
-	Open         func(context.Context, string) (*Services, error)
+	// Open creates services isolated to the supplied case name. The runner calls
+	// Services.Close for every non-nil result, including results returned with an error.
+	Open func(context.Context, string) (*Services, error)
 }
 
 // Case is one deterministic replay scenario.
 type Case struct {
-	Name         string
-	Description  string
+	// Name is a stable, non-empty report and session identifier.
+	Name string
+	// Description states the externally observable contract exercised by the case.
+	Description string
+	// InitialState is copied before the session is created.
 	InitialState session.StateMap
-	Requires     []Capability
-	Steps        []Step
+	// Requires selects both the operations and snapshot domains exercised by the
+	// case. It must include CapabilitySession and every capability implied by Steps.
+	Requires []Capability
+	// Steps execute sequentially except for branches inside StepConcurrent.
+	Steps []Step
+	// AllowedDiffs documents non-blocking backend-pair differences.
 	AllowedDiffs []AllowedDiff
-	EventOrder   EventOrderMode
-	Fault        FaultKind
+	// EventOrder selects global ordering by default or branch-local causal ordering.
+	EventOrder EventOrderMode
+	// Fault identifies the acceptance mutation expected to make this case fail.
+	Fault FaultKind
 }
 
 // EventOrderMode controls whether global ordering or branch-local causal
@@ -99,7 +141,9 @@ type Case struct {
 type EventOrderMode string
 
 const (
+	// EventOrderGlobal requires one stable global event order.
 	EventOrderGlobal EventOrderMode = "global"
+	// EventOrderCausal compares order within each causal branch.
 	EventOrderCausal EventOrderMode = "causal"
 )
 
@@ -107,70 +151,100 @@ const (
 type StepKind string
 
 const (
-	StepAppendEvent   StepKind = "append_event"
-	StepRetryEvent    StepKind = "retry_event"
-	StepUpdateState   StepKind = "update_state"
-	StepAddMemory     StepKind = "add_memory"
+	// StepAppendEvent appends one event.
+	StepAppendEvent StepKind = "append_event"
+	// StepUpdateState applies one scoped state mutation.
+	StepUpdateState StepKind = "update_state"
+	// StepAddMemory persists one memory entry.
+	StepAddMemory StepKind = "add_memory"
+	// StepCreateSummary creates or refreshes one summary.
 	StepCreateSummary StepKind = "create_summary"
-	StepAppendTrack   StepKind = "append_track"
+	// StepAppendTrack appends one track event.
+	StepAppendTrack StepKind = "append_track"
+	// StepReloadSession reloads the active session from the backend.
 	StepReloadSession StepKind = "reload_session"
-	StepConcurrent    StepKind = "concurrent"
+	// StepConcurrent runs multiple ordered branches concurrently.
+	StepConcurrent StepKind = "concurrent"
 )
 
 // Step is a tagged replay operation. Exactly one payload matching Kind must
 // be populated, except ReloadSession which has no payload.
 type Step struct {
-	Name       string
-	Kind       StepKind
-	Event      *EventInput
-	State      *StateInput
-	Memory     *MemoryInput
-	Summary    *SummaryInput
-	Track      *TrackInput
+	// Name identifies the step in errors and must be non-empty.
+	Name string
+	// Kind selects the payload and operation.
+	Kind StepKind
+	// Event is populated only for event append steps.
+	Event *EventInput
+	// State is populated only for state update steps.
+	State *StateInput
+	// Memory is populated only for memory add steps.
+	Memory *MemoryInput
+	// Summary is populated only for summary creation steps.
+	Summary *SummaryInput
+	// Track is populated only for track append steps.
+	Track *TrackInput
+	// Concurrent contains ordered branches populated only for concurrent steps.
 	Concurrent [][]Step
 }
 
 // EventInput appends an event under a stable logical identity. Physical event
 // IDs may differ by backend and are normalized back to LogicalID.
 type EventInput struct {
+	// LogicalID is the stable event identity used after backend IDs are normalized.
 	LogicalID string
-	Event     *event.Event
-	Offset    time.Duration
+	// Event is cloned before the runner changes timestamps or extensions.
+	Event *event.Event
+	// Offset is added to the created session time for deterministic ordering.
+	Offset time.Duration
 }
 
 // StateScope identifies the owner of a state key.
 type StateScope string
 
 const (
-	StateScopeApp     StateScope = "app"
-	StateScopeUser    StateScope = "user"
+	// StateScopeApp selects application-scoped state.
+	StateScopeApp StateScope = "app"
+	// StateScopeUser selects user-scoped state.
+	StateScopeUser StateScope = "user"
+	// StateScopeSession selects session-scoped state.
 	StateScopeSession StateScope = "session"
 )
 
 // StateInput updates or deletes state keys in one scope. Session state does
 // not expose a delete operation, so DeleteKeys is valid only for app/user.
 type StateInput struct {
-	Scope      StateScope
-	Values     session.StateMap
+	// Scope selects the application, user, or session state owner.
+	Scope StateScope
+	// Values is copied before it is passed to the backend.
+	Values session.StateMap
+	// DeleteKeys applies only to application and user state.
 	DeleteKeys []string
 }
 
 // MemoryInput adds an idempotent memory entry.
 type MemoryInput struct {
-	Memory   string
-	Topics   []string
+	// Memory is the non-empty content persisted by the memory service.
+	Memory string
+	// Topics is copied before it is passed to the backend.
+	Topics []string
+	// Metadata is copied before it is passed to the backend and may be nil.
 	Metadata *memory.Metadata
 }
 
 // SummaryInput creates or refreshes one filter-aware summary.
 type SummaryInput struct {
+	// FilterKey selects a branch; an empty value selects the full session.
 	FilterKey string
-	Force     bool
+	// Force is passed to the session summary service unchanged.
+	Force bool
 }
 
 // TrackInput appends one observation event.
 type TrackInput struct {
-	Event  *session.TrackEvent
+	// Event is copied before its payload and timestamp are normalized.
+	Event *session.TrackEvent
+	// Offset is added to the created session time for deterministic ordering.
 	Offset time.Duration
 }
 
@@ -179,36 +253,54 @@ type CanonicalMap map[string]any
 
 // Snapshot is the backend-independent replay-visible state after a case.
 type Snapshot struct {
-	Backend    string                       `json:"backend"`
-	Case       string                       `json:"case"`
-	Session    CanonicalMap                 `json:"session"`
-	Events     []CanonicalMap               `json:"events"`
-	EventOrder map[string][]string          `json:"event_order"`
-	State      map[string]map[string]string `json:"state"`
-	Memories   []CanonicalMap               `json:"memories"`
-	Summaries  map[string]CanonicalMap      `json:"summaries"`
-	Tracks     map[string][]CanonicalMap    `json:"tracks"`
+	// Backend identifies the implementation that produced the snapshot.
+	Backend string `json:"backend"`
+	// Case identifies the replay scenario that produced the snapshot.
+	Case string `json:"case"`
+	// Session contains normalized session identity and timestamp presence.
+	Session CanonicalMap `json:"session"`
+	// Events contains normalized event values.
+	Events []CanonicalMap `json:"events"`
+	// EventOrder records logical IDs by the selected ordering scope.
+	EventOrder map[string][]string `json:"event_order"`
+	// State contains normalized application, user, and session state.
+	State map[string]map[string]string `json:"state"`
+	// Memories contains normalized memory entries ordered by semantic content.
+	Memories []CanonicalMap `json:"memories"`
+	// Summaries contains normalized summaries keyed by filter key.
+	Summaries map[string]CanonicalMap `json:"summaries"`
+	// Tracks contains normalized track events keyed by track name.
+	Tracks map[string][]CanonicalMap `json:"tracks"`
 }
 
 // AllowedRule controls how one known backend difference is evaluated.
 type AllowedRule string
 
 const (
-	AllowedIgnore      AllowedRule = "ignore"
+	// AllowedIgnore accepts every value at the matched path.
+	AllowedIgnore AllowedRule = "ignore"
+	// AllowedWithinDelta accepts numeric values within Delta.
 	AllowedWithinDelta AllowedRule = "within_delta"
-	AllowedSameType    AllowedRule = "same_type"
+	// AllowedSameType accepts present values with the same normalized JSON type.
+	AllowedSameType AllowedRule = "same_type"
 )
 
 // AllowedDiff documents one explicit, path-scoped backend difference.
 // BackendA and BackendB form an unordered pair. Path is a slash-separated
 // glob, for example /tracks/*/*/payload/duration_ms.
 type AllowedDiff struct {
-	BackendA string      `json:"backend_a"`
-	BackendB string      `json:"backend_b"`
-	Path     string      `json:"path"`
-	Rule     AllowedRule `json:"rule"`
-	Delta    float64     `json:"delta,omitempty"`
-	Reason   string      `json:"reason"`
+	// BackendA is one side of an unordered backend pair and may be "*".
+	BackendA string `json:"backend_a"`
+	// BackendB is the other side of an unordered backend pair and may be "*".
+	BackendB string `json:"backend_b"`
+	// Path is an absolute slash-separated glob over the normalized snapshot.
+	Path string `json:"path"`
+	// Rule selects how matched values are accepted.
+	Rule AllowedRule `json:"rule"`
+	// Delta is the non-negative tolerance used only by AllowedWithinDelta.
+	Delta float64 `json:"delta,omitempty"`
+	// Reason is the required report explanation for the allowance.
+	Reason string `json:"reason"`
 }
 
 // ComparisonMode selects the oracle used to interpret backend differences.
@@ -224,76 +316,121 @@ const (
 
 // Diff records one semantic mismatch and its nearest domain locator.
 type Diff struct {
-	Case             string `json:"case"`
-	BackendA         string `json:"backend_a"`
-	BackendB         string `json:"backend_b"`
-	SessionID        string `json:"session_id,omitempty"`
-	EventIndex       *int   `json:"event_index,omitempty"`
+	// Case identifies the scenario that produced the difference.
+	Case string `json:"case"`
+	// BackendA identifies the baseline or canonical first pair member.
+	BackendA string `json:"backend_a"`
+	// BackendB identifies the compared or canonical second pair member.
+	BackendB string `json:"backend_b"`
+	// SessionID identifies the affected logical session when available.
+	SessionID string `json:"session_id,omitempty"`
+	// EventIndex identifies the nearest normalized event when applicable.
+	EventIndex *int `json:"event_index,omitempty"`
+	// SummaryFilterKey identifies the nearest summary when applicable.
 	SummaryFilterKey string `json:"summary_filter_key,omitempty"`
-	TrackName        string `json:"track_name,omitempty"`
-	MemoryID         string `json:"memory_id,omitempty"`
-	Path             string `json:"path"`
-	Baseline         any    `json:"baseline"`
-	Actual           any    `json:"actual"`
-	Allowed          bool   `json:"allowed_diff"`
-	Explanation      string `json:"explanation,omitempty"`
+	// TrackName identifies the nearest track when applicable.
+	TrackName string `json:"track_name,omitempty"`
+	// MemoryID identifies the nearest normalized memory when applicable.
+	MemoryID string `json:"memory_id,omitempty"`
+	// Path is the absolute normalized snapshot path that differs.
+	Path string `json:"path"`
+	// Baseline is the normalized value from BackendA.
+	Baseline any `json:"baseline"`
+	// Actual is the normalized value from BackendB.
+	Actual any `json:"actual"`
+	// Allowed reports whether an AllowedDiff accepted this difference.
+	Allowed bool `json:"allowed_diff"`
+	// Explanation describes either the allowance or the blocking mismatch.
+	Explanation string `json:"explanation,omitempty"`
 }
 
 // ConsensusVerdict describes what an oracle-free comparison can conclude.
 type ConsensusVerdict string
 
 const (
-	ConsensusUnanimous    ConsensusVerdict = "unanimous"
-	ConsensusOutlier      ConsensusVerdict = "outlier"
-	ConsensusAmbiguous    ConsensusVerdict = "ambiguous"
+	// ConsensusUnanimous indicates that all comparable backends agree.
+	ConsensusUnanimous ConsensusVerdict = "unanimous"
+	// ConsensusOutlier identifies one backend that disagrees with all others.
+	ConsensusOutlier ConsensusVerdict = "outlier"
+	// ConsensusAmbiguous indicates disagreement without a unique outlier.
+	ConsensusAmbiguous ConsensusVerdict = "ambiguous"
+	// ConsensusInsufficient indicates that fewer than two backends were comparable.
 	ConsensusInsufficient ConsensusVerdict = "insufficient"
 )
 
 // PairComparison summarizes one deterministic backend-pair comparison.
 type PairComparison struct {
-	BackendA      string `json:"backend_a"`
-	BackendB      string `json:"backend_b"`
-	BlockingDiffs int    `json:"blocking_diffs"`
-	AllowedDiffs  int    `json:"allowed_diffs"`
+	// BackendA is the lexicographically first backend name.
+	BackendA string `json:"backend_a"`
+	// BackendB is the lexicographically second backend name.
+	BackendB string `json:"backend_b"`
+	// BlockingDiffs counts non-allowed differences for this pair.
+	BlockingDiffs int `json:"blocking_diffs"`
+	// AllowedDiffs counts explicitly allowed differences for this pair.
+	AllowedDiffs int `json:"allowed_diffs"`
 }
 
 // ConsensusResult records pairwise agreement without assuming one backend is
 // correct. Outliers is populated only for a conclusive single-outlier result.
 type ConsensusResult struct {
-	Verdict            ConsensusVerdict `json:"verdict"`
-	ComparableBackends []string         `json:"comparable_backends"`
-	Pairs              []PairComparison `json:"pairs"`
-	Outliers           []string         `json:"outliers,omitempty"`
+	// Verdict is derived from ComparableBackends and Pairs.
+	Verdict ConsensusVerdict `json:"verdict"`
+	// ComparableBackends is sorted and excludes unsupported or failed backends.
+	ComparableBackends []string `json:"comparable_backends"`
+	// Pairs contains every unique canonical pair of comparable backends.
+	Pairs []PairComparison `json:"pairs"`
+	// Outliers contains one backend only when Verdict is ConsensusOutlier.
+	Outliers []string `json:"outliers,omitempty"`
 }
 
 // CaseResult is one case in a report.
 type CaseResult struct {
-	Name      string           `json:"case"`
-	Status    string           `json:"status"`
-	Duration  int64            `json:"duration_ms"`
-	Diffs     []Diff           `json:"diffs,omitempty"`
+	// Name identifies the replay case.
+	Name string `json:"case"`
+	// Status is derived from blocking and capability evidence.
+	Status string `json:"status"`
+	// Duration is the wall-clock execution time in milliseconds.
+	Duration int64 `json:"duration_ms"`
+	// Diffs contains blocking, allowed, and backend exclusion evidence.
+	Diffs []Diff `json:"diffs,omitempty"`
+	// Consensus is populated only in ComparisonConsensus mode.
 	Consensus *ConsensusResult `json:"consensus,omitempty"`
 }
 
 const (
-	StatusPassed      = "passed"
-	StatusFailed      = "failed"
+	// StatusPassed indicates that a case has neither blocking differences nor
+	// unsupported capability evidence.
+	StatusPassed = "passed"
+	// StatusFailed indicates that a case has at least one blocking difference.
+	StatusFailed = "failed"
+	// StatusUnsupported indicates that at least one backend lacks a required capability.
 	StatusUnsupported = "unsupported"
 )
 
 // Report is the machine-readable replay result.
 type Report struct {
-	GeneratedAt      time.Time      `json:"generated_at"`
-	ComparisonMode   ComparisonMode `json:"comparison_mode"`
-	Reference        string         `json:"reference,omitempty"`
-	Backends         []string       `json:"backends"`
-	TotalCases       int            `json:"total_cases"`
-	PassedCases      int            `json:"passed_cases"`
-	FailedCases      int            `json:"failed_cases"`
-	UnsupportedCases int            `json:"unsupported_cases"`
-	BlockingDiffs    int            `json:"blocking_diffs"`
-	AllowedDiffs     int            `json:"allowed_diffs"`
-	Cases            []CaseResult   `json:"cases"`
+	// GeneratedAt is the UTC time returned by Runner.Now or time.Now.
+	GeneratedAt time.Time `json:"generated_at"`
+	// ComparisonMode records the oracle used for the run.
+	ComparisonMode ComparisonMode `json:"comparison_mode"`
+	// Reference names the reference backend and is empty in consensus mode.
+	Reference string `json:"reference,omitempty"`
+	// Backends lists every configured backend in runner order.
+	Backends []string `json:"backends"`
+	// TotalCases equals len(Cases).
+	TotalCases int `json:"total_cases"`
+	// PassedCases counts cases without blocking or capability evidence.
+	PassedCases int `json:"passed_cases"`
+	// FailedCases counts cases with at least one blocking difference.
+	FailedCases int `json:"failed_cases"`
+	// UnsupportedCases counts cases with non-blocking capability evidence.
+	UnsupportedCases int `json:"unsupported_cases"`
+	// BlockingDiffs is the sum of non-allowed differences across Cases.
+	BlockingDiffs int `json:"blocking_diffs"`
+	// AllowedDiffs is the sum of allowed differences across Cases.
+	AllowedDiffs int `json:"allowed_diffs"`
+	// Cases contains results in input case order.
+	Cases []CaseResult `json:"cases"`
 }
 
 // FaultKind identifies a deterministic snapshot mutation used to prove that
@@ -301,15 +438,24 @@ type Report struct {
 type FaultKind string
 
 const (
-	FaultEventContent     FaultKind = "event_content"
-	FaultEventOrder       FaultKind = "event_order"
-	FaultToolArguments    FaultKind = "tool_arguments"
-	FaultStateValue       FaultKind = "state_value"
-	FaultMemoryContent    FaultKind = "memory_content"
-	FaultSummaryText      FaultKind = "summary_text"
-	FaultSummaryMissing   FaultKind = "summary_missing"
+	// FaultEventContent changes one event message.
+	FaultEventContent FaultKind = "event_content"
+	// FaultEventOrder swaps two events.
+	FaultEventOrder FaultKind = "event_order"
+	// FaultToolArguments changes one persisted tool argument payload.
+	FaultToolArguments FaultKind = "tool_arguments"
+	// FaultStateValue changes one state value.
+	FaultStateValue FaultKind = "state_value"
+	// FaultMemoryContent changes one memory entry.
+	FaultMemoryContent FaultKind = "memory_content"
+	// FaultSummaryText changes one summary text.
+	FaultSummaryText FaultKind = "summary_text"
+	// FaultSummaryMissing removes one summary.
+	FaultSummaryMissing FaultKind = "summary_missing"
+	// FaultSummaryFilterKey moves one summary to the wrong filter key.
 	FaultSummaryFilterKey FaultKind = "summary_filter_key"
-	FaultTrackPayload     FaultKind = "track_payload"
-	FaultDuplicateEvent   FaultKind = "duplicate_event"
-	FaultSummaryOwner     FaultKind = "summary_owner"
+	// FaultTrackPayload changes one track payload.
+	FaultTrackPayload FaultKind = "track_payload"
+	// FaultDuplicateEvent duplicates one event.
+	FaultDuplicateEvent FaultKind = "duplicate_event"
 )

@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"os"
 	"reflect"
 	"strings"
@@ -21,6 +22,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -54,11 +56,13 @@ func TestCaseValidationRejectsAmbiguousInputs(t *testing.T) {
 	tests := []Case{
 		{
 			Name:       "unknown-order",
+			Requires:   []Capability{CapabilitySession},
 			EventOrder: "unordered",
 			Steps:      []Step{validStep},
 		},
 		{
-			Name: "multiple-payloads",
+			Name:     "multiple-payloads",
+			Requires: []Capability{CapabilitySession},
 			Steps: []Step{{
 				Name:  "ambiguous",
 				Kind:  StepAppendEvent,
@@ -67,11 +71,57 @@ func TestCaseValidationRejectsAmbiguousInputs(t *testing.T) {
 			}},
 		},
 		{
-			Name: "session-delete",
+			Name:     "session-delete",
+			Requires: []Capability{CapabilitySession, CapabilitySessionState},
 			Steps: []Step{{
 				Name:  "delete",
 				Kind:  StepUpdateState,
 				State: &StateInput{Scope: StateScopeSession, DeleteKeys: []string{"key"}},
+			}},
+		},
+		{
+			Name:     "missing-session-capability",
+			Requires: nil,
+			Steps:    []Step{validStep},
+		},
+		{
+			Name:     "duplicate-capability",
+			Requires: []Capability{CapabilitySession, CapabilitySession},
+			Steps:    []Step{validStep},
+		},
+		{
+			Name:     "unknown-capability",
+			Requires: []Capability{CapabilitySession, "memroy"},
+			Steps:    []Step{validStep},
+		},
+		{
+			Name:     "undeclared-memory-capability",
+			Requires: []Capability{CapabilitySession},
+			Steps: []Step{{
+				Name:   "memory",
+				Kind:   StepAddMemory,
+				Memory: &MemoryInput{Memory: "value"},
+			}},
+		},
+		{
+			Name:     "duplicate-logical-event-id",
+			Requires: []Capability{CapabilitySession, CapabilityConcurrent},
+			Steps: []Step{{
+				Name: "branches",
+				Kind: StepConcurrent,
+				Concurrent: [][]Step{
+					{messageStep("left", "duplicate", 1, "user", "user", "left", "left")},
+					{messageStep("right", "duplicate", 2, "user", "user", "right", "right")},
+				},
+			}},
+		},
+		{
+			Name:     "empty-track-name",
+			Requires: []Capability{CapabilitySession, CapabilityTrack},
+			Steps: []Step{{
+				Name:  "track",
+				Kind:  StepAppendTrack,
+				Track: &TrackInput{Event: &session.TrackEvent{}},
 			}},
 		},
 	}
@@ -124,6 +174,39 @@ func TestRunnerInMemoryMatrix(t *testing.T) {
 	}
 	if elapsed := time.Since(started); elapsed >= 30*time.Second {
 		t.Fatalf("lightweight in-memory matrix took %v, want < 30s", elapsed)
+	}
+}
+
+func TestConcurrentStepReloadsSessionBeforeSummary(t *testing.T) {
+	replayCase := Case{
+		Name:       "concurrent_then_summary",
+		Requires:   []Capability{CapabilitySession, CapabilitySummary, CapabilityConcurrent},
+		EventOrder: EventOrderCausal,
+		Steps: []Step{
+			messageStep("user", "user", 1, "user", model.RoleUser, "run both branches", ""),
+			{
+				Name: "parallel-events",
+				Kind: StepConcurrent,
+				Concurrent: [][]Step{
+					{messageStep("branch-a", "branch-a", 2, "assistant", model.RoleAssistant, "alpha", "")},
+					{messageStep("branch-b", "branch-b", 3, "assistant", model.RoleAssistant, "beta", "")},
+				},
+			},
+			{Name: "summary", Kind: StepCreateSummary, Summary: &SummaryInput{Force: true}},
+		},
+	}
+
+	snapshot, err := Replay(context.Background(), replayCase, InMemoryBackend())
+	if err != nil {
+		t.Fatalf("Replay() error = %v", err)
+	}
+	summary, ok := snapshot.Summaries[session.SummaryFilterKeyAllContents]
+	if !ok {
+		t.Fatal("summary after concurrent step is missing")
+	}
+	text, ok := summary["text"].(string)
+	if !ok || !strings.Contains(text, "alpha") || !strings.Contains(text, "beta") {
+		t.Fatalf("summary text = %v, want both concurrent branch events", summary["text"])
 	}
 }
 
@@ -535,11 +618,63 @@ func TestReplayClosesIncompleteServices(t *testing.T) {
 			return services, nil
 		},
 	}
-	if _, err := Replay(context.Background(), PublicCases()[0], backend); err == nil {
+	if _, err := Replay(context.Background(), memoryCase(), backend); err == nil {
 		t.Fatal("Replay() unexpectedly accepted incomplete services")
 	}
 	if !cleaned {
 		t.Fatal("Replay() did not clean up incomplete services")
+	}
+}
+
+func TestReplayReadsOnlyRequiredCapabilities(t *testing.T) {
+	reference := InMemoryBackend()
+	unexpectedCall := errors.New("unexpected unsupported capability call")
+	backend := Backend{
+		Name:         "session-only",
+		Capabilities: Capabilities{CapabilitySession: true},
+		Open: func(ctx context.Context, caseName string) (*Services, error) {
+			services, err := reference.Open(ctx, caseName)
+			if err != nil {
+				return nil, err
+			}
+			memoryService := services.Memory
+			services.Memory = nil
+			services.Session = &unexpectedStateReadService{
+				Service: services.Session,
+				err:     unexpectedCall,
+			}
+			services.Cleanup = memoryService.Close
+			return services, nil
+		},
+	}
+	snapshot, err := Replay(context.Background(), singleTurnCase(), backend)
+	if err != nil {
+		t.Fatalf("Replay() called an unrequired capability: %v", err)
+	}
+	if len(snapshot.Memories) != 0 || len(snapshot.Summaries) != 0 || len(snapshot.Tracks) != 0 {
+		t.Fatalf("snapshot contains unrequired domains: %+v", snapshot)
+	}
+	for scope, state := range snapshot.State {
+		if len(state) != 0 {
+			t.Fatalf("snapshot %s state = %v, want empty", scope, state)
+		}
+	}
+}
+
+func TestReplayRejectsCrossSessionSummaryLeak(t *testing.T) {
+	base := InMemoryBackend()
+	backend := base
+	backend.Name = "summary-leak"
+	backend.Open = func(ctx context.Context, caseName string) (*Services, error) {
+		services, err := base.Open(ctx, caseName)
+		if err != nil {
+			return nil, err
+		}
+		services.Session = &summaryLeakService{Service: services.Session}
+		return services, nil
+	}
+	if _, err := Replay(context.Background(), summaryUpdateCase(), backend); err == nil {
+		t.Fatal("Replay() unexpectedly accepted a cross-session summary leak")
 	}
 }
 
@@ -597,6 +732,8 @@ func TestCompareAllowedDiff(t *testing.T) {
 func TestCompareAllowedDiffBackendPairIsUnordered(t *testing.T) {
 	baseline := minimalSnapshot("baseline", `{"score":1}`)
 	actual := minimalSnapshot("actual", `{"score":2}`)
+	baseline.Case = "allowed-reverse"
+	actual.Case = "allowed-reverse"
 	rules := []AllowedDiff{{
 		BackendA: "actual",
 		BackendB: "baseline",
@@ -628,6 +765,8 @@ func TestCompareAllowedDiffBackendWildcardPairIsUnordered(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			baseline := minimalSnapshot(test.baseline, `{"score":1}`)
 			actual := minimalSnapshot(test.actual, `{"score":2}`)
+			baseline.Case = test.name
+			actual.Case = test.name
 			rules := []AllowedDiff{{
 				BackendA: "*",
 				BackendB: "sqlite",
@@ -682,11 +821,51 @@ func TestCompareAllowedDiffRules(t *testing.T) {
 				Delta: 0.5,
 			},
 		},
+		{
+			name:     "large integers outside zero delta",
+			baseline: int64(9007199254740992),
+			actual:   int64(9007199254740993),
+			rule: AllowedDiff{
+				Rule:  AllowedWithinDelta,
+				Delta: 0,
+			},
+		},
+		{
+			name:     "large integers within unit delta",
+			baseline: int64(9007199254740992),
+			actual:   int64(9007199254740993),
+			rule: AllowedDiff{
+				Rule:  AllowedWithinDelta,
+				Delta: 1,
+			},
+			allowed: true,
+		},
+		{
+			name:     "scientific notation within exact delta",
+			baseline: json.Number("1e3"),
+			actual:   json.Number("1000.5"),
+			rule: AllowedDiff{
+				Rule:  AllowedWithinDelta,
+				Delta: 0.5,
+			},
+			allowed: true,
+		},
+		{
+			name:     "excessive exponent is not expanded",
+			baseline: json.Number("1e1000000"),
+			actual:   json.Number("2e1000000"),
+			rule: AllowedDiff{
+				Rule:  AllowedWithinDelta,
+				Delta: 1,
+			},
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			baseline := minimalSnapshot("baseline", `{}`)
 			actual := minimalSnapshot("actual", `{}`)
+			baseline.Case = test.name
+			actual.Case = test.name
 			baseline.Session["private"] = test.baseline
 			actual.Session["private"] = test.actual
 			test.rule.BackendA = "baseline"
@@ -704,12 +883,27 @@ func TestCompareAllowedDiffRules(t *testing.T) {
 	}
 }
 
+func TestExactNumberBounds(t *testing.T) {
+	for _, value := range []json.Number{
+		json.Number(strings.Repeat("9", maxExactNumberCharacters+1)),
+		json.Number("1e1025"),
+		json.Number("1e-1025"),
+		json.Number("1/2"),
+	} {
+		if _, ok := exactNumber(value); ok {
+			t.Fatalf("exactNumber(%q) unexpectedly accepted an unbounded or invalid value", value)
+		}
+	}
+}
+
 func TestAllowedDiffValidation(t *testing.T) {
 	tests := []AllowedDiff{
 		{BackendA: "a", BackendB: "b", Path: "relative", Rule: AllowedIgnore, Reason: "bad path"},
 		{BackendA: "a", BackendB: "b", Path: "/x", Rule: "unknown", Reason: "bad rule"},
 		{BackendA: "a", BackendB: "b", Path: "/x", Rule: AllowedIgnore},
 		{BackendA: "a", BackendB: "b", Path: "/x", Rule: AllowedWithinDelta, Delta: -1, Reason: "bad delta"},
+		{BackendA: "a", BackendB: "b", Path: "/x", Rule: AllowedWithinDelta, Delta: math.NaN(), Reason: "bad delta"},
+		{BackendA: "a", BackendB: "b", Path: "/x", Rule: AllowedWithinDelta, Delta: math.Inf(1), Reason: "bad delta"},
 	}
 	for index, rule := range tests {
 		if err := validateAllowedDiffs([]AllowedDiff{rule}); err == nil {
@@ -718,27 +912,29 @@ func TestAllowedDiffValidation(t *testing.T) {
 	}
 }
 
-func TestTrackVolatileMetricsAreNormalized(t *testing.T) {
+func TestTrackPayloadValuesRemainSemantic(t *testing.T) {
 	left := map[string]any{
-		"status":      "ok",
-		"duration_ms": float64(10),
+		"status":               "ok",
+		"duration_ms":          float64(10),
+		"expected_duration_ms": float64(20),
+		"deadline_at":          "2026-07-01T00:00:00Z",
 		"nested": map[string]any{
 			"latency": float64(2),
 		},
 	}
 	right := map[string]any{
-		"status":      "ok",
-		"duration_ms": float64(500),
+		"status":               "ok",
+		"duration_ms":          float64(500),
+		"expected_duration_ms": float64(600),
+		"deadline_at":          "2026-07-02T00:00:00Z",
 		"nested": map[string]any{
 			"latency": float64(9),
 		},
 	}
-	normalizeDynamicPayload(left)
-	normalizeDynamicPayload(right)
 	leftJSON, _ := json.Marshal(left)
 	rightJSON, _ := json.Marshal(right)
-	if string(leftJSON) != string(rightJSON) {
-		t.Fatalf("normalized payloads differ: %s != %s", leftJSON, rightJSON)
+	if string(leftJSON) == string(rightJSON) {
+		t.Fatalf("distinct track payloads compare equal: %s", leftJSON)
 	}
 }
 
@@ -747,12 +943,45 @@ func TestZeroTimestampIsNotMarkedPresent(t *testing.T) {
 		"created_at": time.Time{}.Format(time.RFC3339Nano),
 		"updated_at": caseEpoch.Format(time.RFC3339Nano),
 	}
-	normalizeVolatile(value)
+	normalizeTimestamps(value, "created_at", "updated_at")
 	if value["created_at"] != nil {
 		t.Fatalf("zero created_at = %v, want nil", value["created_at"])
 	}
 	if value["updated_at"] != presentMarker {
 		t.Fatalf("updated_at = %v, want %q", value["updated_at"], presentMarker)
+	}
+}
+
+func TestEventExtensionTimestampsRemainSemantic(t *testing.T) {
+	evt := event.Event{
+		ID:        "physical-event",
+		Timestamp: caseEpoch,
+		Response:  &model.Response{Timestamp: caseEpoch},
+		Extensions: map[string]json.RawMessage{
+			"custom.example/v1": json.RawMessage(`{"timestamp":"2026-07-01T00:00:00Z","created_at":"semantic"}`),
+		},
+	}
+	events, _, _, err := normalizeEvents([]event.Event{evt}, EventOrderGlobal)
+	if err != nil {
+		t.Fatalf("normalizeEvents() error = %v", err)
+	}
+	if events[0]["timestamp"] != presentMarker {
+		t.Fatalf("event timestamp = %v, want %q", events[0]["timestamp"], presentMarker)
+	}
+	response, ok := events[0]["response"].(map[string]any)
+	if !ok || response["timestamp"] != presentMarker {
+		t.Fatalf("response timestamp = %v, want %q", response["timestamp"], presentMarker)
+	}
+	extensions, ok := events[0]["extensions"].(map[string]any)
+	if !ok {
+		t.Fatalf("event extensions = %T, want object", events[0]["extensions"])
+	}
+	payload, ok := extensions["custom.example/v1"].(map[string]any)
+	if !ok {
+		t.Fatalf("custom extension = %T, want object", extensions["custom.example/v1"])
+	}
+	if payload["timestamp"] != "2026-07-01T00:00:00Z" || payload["created_at"] != "semantic" {
+		t.Fatalf("semantic extension timestamps were normalized: %v", payload)
 	}
 }
 
@@ -914,6 +1143,39 @@ func causalEvent(t *testing.T, logicalID, filterKey, content string) event.Event
 
 type eventAuthorDriftService struct {
 	session.Service
+}
+
+type unexpectedStateReadService struct {
+	session.Service
+	err error
+}
+
+type summaryLeakService struct {
+	session.Service
+}
+
+func (s *summaryLeakService) GetSession(
+	ctx context.Context,
+	key session.Key,
+	options ...session.Option,
+) (*session.Session, error) {
+	sess, err := s.Service.GetSession(ctx, key, options...)
+	if err != nil || sess == nil || !strings.HasSuffix(key.SessionID, "-summary-isolation") {
+		return sess, err
+	}
+	sess = sess.Clone()
+	sess.Summaries = map[string]*session.Summary{
+		session.SummaryFilterKeyAllContents: {Summary: "leaked summary"},
+	}
+	return sess, nil
+}
+
+func (s *unexpectedStateReadService) ListAppStates(context.Context, string) (session.StateMap, error) {
+	return nil, s.err
+}
+
+func (s *unexpectedStateReadService) ListUserStates(context.Context, session.UserKey) (session.StateMap, error) {
+	return nil, s.err
 }
 
 func (s *eventAuthorDriftService) AppendEvent(

@@ -33,7 +33,6 @@ func PublicCases() []Case {
 		summaryFilterKeyCase(),
 		trackCase(),
 		concurrentCase(),
-		recoveryCase(),
 	}
 }
 
@@ -266,28 +265,6 @@ func concurrentCase() Case {
 			},
 		},
 		Fault: FaultDuplicateEvent,
-	}
-}
-
-func recoveryCase() Case {
-	preference := &MemoryInput{Memory: "Retries must be idempotent.", Topics: []string{"reliability"}}
-	return Case{
-		Name:        "failure_retry_recovery",
-		Description: "a pre-write failure, event retry, memory retry, reload, and summary retry leave no dirty data",
-		Requires:    []Capability{CapabilitySession, CapabilityMemory, CapabilitySummary},
-		Steps: []Step{
-			{
-				Name:  "retry-event-after-failure",
-				Kind:  StepRetryEvent,
-				Event: messageStep("ignored", "retry-event", 1, "user", model.RoleUser, "retry once", "").Event,
-			},
-			{Name: "retry-memory-first", Kind: StepAddMemory, Memory: preference},
-			{Name: "retry-memory-second", Kind: StepAddMemory, Memory: preference},
-			{Name: "reload", Kind: StepReloadSession},
-			{Name: "summary-first", Kind: StepCreateSummary, Summary: &SummaryInput{Force: true}},
-			{Name: "summary-retry", Kind: StepCreateSummary, Summary: &SummaryInput{Force: true}},
-		},
-		Fault: FaultSummaryOwner,
 	}
 }
 

@@ -6,7 +6,7 @@
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 
-package replaytestsqlite_test
+package replaytestsqlite
 
 import (
 	"context"
@@ -16,18 +16,19 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/session/replaytest"
-	replaytestsqlite "trpc.group/trpc-go/trpc-agent-go/session/replaytest/sqlite"
 )
 
 func TestLightweightReplayMatrix(t *testing.T) {
 	started := time.Now()
 	root := t.TempDir()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 	report, err := (replaytest.Runner{Reference: "inmemory"}).Run(
-		context.Background(),
+		ctx,
 		replaytest.PublicCases(),
 		[]replaytest.Backend{
 			replaytest.InMemoryBackend(),
-			replaytestsqlite.NewBackend(root),
+			sqliteBackend(root),
 		},
 	)
 	if err != nil {

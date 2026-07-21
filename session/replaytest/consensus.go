@@ -107,98 +107,135 @@ func validateConsensusResult(
 	diffs []Diff,
 	knownBackends map[string]struct{},
 ) error {
-	if !sort.StringsAreSorted(result.ComparableBackends) {
-		return fmt.Errorf("replaytest: case %q consensus backends are not sorted", caseName)
+	seenBackends, err := validateConsensusBackends(caseName, result.ComparableBackends, knownBackends)
+	if err != nil {
+		return err
 	}
-	seenBackends := make(map[string]struct{}, len(result.ComparableBackends))
-	for _, backend := range result.ComparableBackends {
+	seenPairs, err := validateConsensusPairs(caseName, result, diffs, seenBackends)
+	if err != nil {
+		return err
+	}
+	if err := validateConsensusEvidence(caseName, diffs, knownBackends, seenBackends, seenPairs); err != nil {
+		return err
+	}
+	wantVerdict, wantOutliers := classifyConsensus(result.ComparableBackends, result.Pairs)
+	if result.Verdict != wantVerdict || !slices.Equal(result.Outliers, wantOutliers) {
+		return fmt.Errorf("replaytest: case %q consensus verdict is inconsistent", caseName)
+	}
+	return nil
+}
+
+func validateConsensusBackends(
+	caseName string,
+	backends []string,
+	knownBackends map[string]struct{},
+) (map[string]struct{}, error) {
+	if !sort.StringsAreSorted(backends) {
+		return nil, fmt.Errorf("replaytest: case %q consensus backends are not sorted", caseName)
+	}
+	seenBackends := make(map[string]struct{}, len(backends))
+	for _, backend := range backends {
 		if _, ok := knownBackends[backend]; !ok {
-			return fmt.Errorf("replaytest: case %q consensus names unknown backend %q", caseName, backend)
+			return nil, fmt.Errorf("replaytest: case %q consensus names unknown backend %q", caseName, backend)
 		}
 		if _, exists := seenBackends[backend]; exists {
-			return fmt.Errorf("replaytest: case %q consensus repeats backend %q", caseName, backend)
+			return nil, fmt.Errorf("replaytest: case %q consensus repeats backend %q", caseName, backend)
 		}
 		seenBackends[backend] = struct{}{}
 	}
+	return seenBackends, nil
+}
+
+type consensusPairKey struct {
+	backendA string
+	backendB string
+}
+
+func validateConsensusPairs(
+	caseName string,
+	result ConsensusResult,
+	diffs []Diff,
+	seenBackends map[string]struct{},
+) (map[consensusPairKey]struct{}, error) {
 	wantPairs := len(result.ComparableBackends) * (len(result.ComparableBackends) - 1) / 2
 	if len(result.Pairs) != wantPairs {
-		return fmt.Errorf(
+		return nil, fmt.Errorf(
 			"replaytest: case %q consensus has %d pairs, want %d",
 			caseName,
 			len(result.Pairs),
 			wantPairs,
 		)
 	}
-	seenPairs := make(map[string]struct{}, len(result.Pairs))
+	seenPairs := make(map[consensusPairKey]struct{}, len(result.Pairs))
 	for _, pair := range result.Pairs {
-		if pair.BackendA >= pair.BackendB {
-			return fmt.Errorf("replaytest: case %q consensus pair is not ordered", caseName)
-		}
-		if _, ok := seenBackends[pair.BackendA]; !ok {
-			return fmt.Errorf("replaytest: case %q consensus pair names unavailable backend %q", caseName, pair.BackendA)
-		}
-		if _, ok := seenBackends[pair.BackendB]; !ok {
-			return fmt.Errorf("replaytest: case %q consensus pair names unavailable backend %q", caseName, pair.BackendB)
-		}
-		key := pair.BackendA + "\x00" + pair.BackendB
-		if _, exists := seenPairs[key]; exists {
-			return fmt.Errorf("replaytest: case %q consensus repeats pair %q/%q", caseName, pair.BackendA, pair.BackendB)
+		key, err := validateConsensusPair(caseName, pair, diffs, seenBackends, seenPairs)
+		if err != nil {
+			return nil, err
 		}
 		seenPairs[key] = struct{}{}
-		var blocking, allowed int
-		for _, diff := range diffs {
-			if diff.BackendA == pair.BackendA && diff.BackendB == pair.BackendB {
-				if diff.Allowed {
-					allowed++
-				} else {
-					blocking++
-				}
-			}
+	}
+	return seenPairs, nil
+}
+
+func validateConsensusPair(
+	caseName string,
+	pair PairComparison,
+	diffs []Diff,
+	seenBackends map[string]struct{},
+	seenPairs map[consensusPairKey]struct{},
+) (consensusPairKey, error) {
+	key := consensusPairKey{backendA: pair.BackendA, backendB: pair.BackendB}
+	if pair.BackendA >= pair.BackendB {
+		return key, fmt.Errorf("replaytest: case %q consensus pair is not ordered", caseName)
+	}
+	if _, ok := seenBackends[pair.BackendA]; !ok {
+		return key, fmt.Errorf("replaytest: case %q consensus pair names unavailable backend %q", caseName, pair.BackendA)
+	}
+	if _, ok := seenBackends[pair.BackendB]; !ok {
+		return key, fmt.Errorf("replaytest: case %q consensus pair names unavailable backend %q", caseName, pair.BackendB)
+	}
+	if _, exists := seenPairs[key]; exists {
+		return key, fmt.Errorf("replaytest: case %q consensus repeats pair %q/%q", caseName, pair.BackendA, pair.BackendB)
+	}
+	blocking, allowed := countPairDiffs(diffs, key)
+	if blocking != pair.BlockingDiffs || allowed != pair.AllowedDiffs {
+		return key, fmt.Errorf("replaytest: case %q consensus pair counters do not add up", caseName)
+	}
+	return key, nil
+}
+
+func countPairDiffs(diffs []Diff, key consensusPairKey) (blocking, allowed int) {
+	for _, diff := range diffs {
+		if diff.BackendA != key.backendA || diff.BackendB != key.backendB {
+			continue
 		}
-		if blocking != pair.BlockingDiffs || allowed != pair.AllowedDiffs {
-			return fmt.Errorf("replaytest: case %q consensus pair counters do not add up", caseName)
+		if diff.Allowed {
+			allowed++
+		} else {
+			blocking++
 		}
 	}
+	return blocking, allowed
+}
+
+func validateConsensusEvidence(
+	caseName string,
+	diffs []Diff,
+	knownBackends map[string]struct{},
+	seenBackends map[string]struct{},
+	seenPairs map[consensusPairKey]struct{},
+) error {
 	exclusionEvidence := make(map[string]struct{})
 	for _, diff := range diffs {
 		if diff.BackendA == diff.BackendB {
-			if _, comparable := seenBackends[diff.BackendA]; comparable {
-				return fmt.Errorf(
-					"replaytest: case %q comparable backend %q has a self diff",
-					caseName,
-					diff.BackendA,
-				)
-			}
-			validExecution := diff.Path == "/execution" && !diff.Allowed
-			validCapability := strings.HasPrefix(diff.Path, "/capabilities/") && diff.Allowed
-			if !validExecution && !validCapability {
-				return fmt.Errorf(
-					"replaytest: case %q backend %q has invalid exclusion evidence",
-					caseName,
-					diff.BackendA,
-				)
+			if err := validateExclusionEvidence(caseName, diff, seenBackends); err != nil {
+				return err
 			}
 			exclusionEvidence[diff.BackendA] = struct{}{}
 			continue
 		}
-		if diff.Path == "/execution" || strings.HasPrefix(diff.Path, "/capabilities/") {
-			return fmt.Errorf(
-				"replaytest: case %q uses reserved evidence path %q inside the consensus matrix",
-				caseName,
-				diff.Path,
-			)
-		}
-		if diff.BackendA >= diff.BackendB {
-			return fmt.Errorf("replaytest: case %q diff names a non-canonical consensus pair", caseName)
-		}
-		key := diff.BackendA + "\x00" + diff.BackendB
-		if _, exists := seenPairs[key]; !exists {
-			return fmt.Errorf(
-				"replaytest: case %q diff names pair %q/%q outside the consensus matrix",
-				caseName,
-				diff.BackendA,
-				diff.BackendB,
-			)
+		if err := validatePairEvidence(caseName, diff, seenPairs); err != nil {
+			return err
 		}
 	}
 	for backend := range knownBackends {
@@ -213,9 +250,49 @@ func validateConsensusResult(
 			)
 		}
 	}
-	wantVerdict, wantOutliers := classifyConsensus(result.ComparableBackends, result.Pairs)
-	if result.Verdict != wantVerdict || !slices.Equal(result.Outliers, wantOutliers) {
-		return fmt.Errorf("replaytest: case %q consensus verdict is inconsistent", caseName)
+	return nil
+}
+
+func validateExclusionEvidence(caseName string, diff Diff, seenBackends map[string]struct{}) error {
+	if _, comparable := seenBackends[diff.BackendA]; comparable {
+		return fmt.Errorf(
+			"replaytest: case %q comparable backend %q has a self diff",
+			caseName,
+			diff.BackendA,
+		)
+	}
+	validExecution := diff.Path == "/execution" && !diff.Allowed
+	_, capabilityEvidence := capabilityFromEvidencePath(diff.Path)
+	validCapability := capabilityEvidence && diff.Allowed
+	if !validExecution && !validCapability {
+		return fmt.Errorf(
+			"replaytest: case %q backend %q has invalid exclusion evidence",
+			caseName,
+			diff.BackendA,
+		)
+	}
+	return nil
+}
+
+func validatePairEvidence(caseName string, diff Diff, seenPairs map[consensusPairKey]struct{}) error {
+	if diff.Path == "/execution" || strings.HasPrefix(diff.Path, "/capabilities/") {
+		return fmt.Errorf(
+			"replaytest: case %q uses reserved evidence path %q inside the consensus matrix",
+			caseName,
+			diff.Path,
+		)
+	}
+	if diff.BackendA >= diff.BackendB {
+		return fmt.Errorf("replaytest: case %q diff names a non-canonical consensus pair", caseName)
+	}
+	key := consensusPairKey{backendA: diff.BackendA, backendB: diff.BackendB}
+	if _, exists := seenPairs[key]; !exists {
+		return fmt.Errorf(
+			"replaytest: case %q diff names pair %q/%q outside the consensus matrix",
+			caseName,
+			diff.BackendA,
+			diff.BackendB,
+		)
 	}
 	return nil
 }
