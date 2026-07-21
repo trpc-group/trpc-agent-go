@@ -10,7 +10,6 @@
 package hostexec
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"io"
@@ -53,11 +52,20 @@ type session struct {
 	partial    string
 	pollCursor int
 	maxLines   int
-	closeOnce  sync.Once
+
+	maxOutputBytes     int64
+	outputBytes        int64
+	outputLimitReached bool
+	closeOnce          sync.Once
 }
 
-func newSession(id string, command string, maxLines int) *session {
-	return &session{
+func newSession(
+	id string,
+	command string,
+	maxLines int,
+	maxOutputBytes ...int64,
+) *session {
+	sess := &session{
 		id:       id,
 		command:  command,
 		doneCh:   make(chan struct{}),
@@ -65,6 +73,10 @@ func newSession(id string, command string, maxLines int) *session {
 		started:  time.Now(),
 		maxLines: maxLines,
 	}
+	if len(maxOutputBytes) > 0 && maxOutputBytes[0] > 0 {
+		sess.maxOutputBytes = maxOutputBytes[0]
+	}
+	return sess
 }
 
 func newSessionID() string {
@@ -104,11 +116,13 @@ func (s *session) readFrom(reader io.Reader) {
 		return
 	}
 
-	bufReader := bufio.NewReaderSize(reader, 32*1024)
+	buffer := make([]byte, 32*1024)
 	for {
-		chunk, err := bufReader.ReadBytes('\n')
-		if len(chunk) > 0 {
-			s.appendOutput(string(chunk))
+		read, err := reader.Read(buffer)
+		if read > 0 {
+			if s.appendOutput(string(buffer[:read])) {
+				_ = s.kill(context.Background(), timeoutKillGrace)
+			}
 		}
 		if err != nil {
 			return
@@ -116,22 +130,38 @@ func (s *session) readFrom(reader io.Reader) {
 	}
 }
 
-func (s *session) appendOutput(chunk string) {
-	text := strings.ReplaceAll(chunk, "\r\n", "\n")
-
+func (s *session) appendOutput(chunk string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	limitReached := false
+	if s.maxOutputBytes > 0 {
+		remaining := s.maxOutputBytes - s.outputBytes
+		if remaining <= 0 {
+			s.outputLimitReached = true
+			return true
+		}
+		if int64(len(chunk)) >= remaining {
+			chunk = chunk[:remaining]
+			limitReached = true
+			s.outputLimitReached = true
+		}
+		s.outputBytes += int64(len(chunk))
+	}
+
+	text := strings.ReplaceAll(chunk, "\r\n", "\n")
 
 	text = s.partial + text
 	parts := strings.Split(text, "\n")
 	if len(parts) == 0 {
-		return
+		return limitReached
 	}
 	s.partial = parts[len(parts)-1]
 	for _, line := range parts[:len(parts)-1] {
 		s.lines = append(s.lines, line)
 	}
 	s.trimLocked()
+	return limitReached
 }
 
 func (s *session) trimLocked() {

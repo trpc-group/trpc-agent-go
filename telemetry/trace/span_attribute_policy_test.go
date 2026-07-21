@@ -41,6 +41,39 @@ func TestSetSpanAttributePolicy_FromDropRule(t *testing.T) {
 	}
 }
 
+func TestToolCallAttributeKeysCanBeDropped(t *testing.T) {
+	t.Cleanup(func() { SetSpanAttributePolicy(SpanAttributePolicy{}) })
+
+	if string(AttrToolCallArguments) != semconvtrace.KeyGenAIToolCallArguments {
+		t.Fatalf("unexpected tool arguments key %q", AttrToolCallArguments)
+	}
+	if string(AttrToolCallResult) != semconvtrace.KeyGenAIToolCallResult {
+		t.Fatalf("unexpected tool result key %q", AttrToolCallResult)
+	}
+
+	policy := SpanAttributePolicy{}
+	WithAttributeRule(
+		OperationExecuteTool,
+		AttrToolCallArguments,
+		Drop(),
+	)(&policy)
+	WithAttributeRule(
+		OperationExecuteTool,
+		AttrToolCallResult,
+		Drop(),
+	)(&policy)
+	SetSpanAttributePolicy(policy)
+
+	for _, key := range []string{
+		semconvtrace.KeyGenAIToolCallArguments,
+		semconvtrace.KeyGenAIToolCallResult,
+	} {
+		if got := itelemetry.Resolve(itelemetry.OperationExecuteTool, key).Action; got != itelemetry.AttributeDrop {
+			t.Fatalf("expected %s to be dropped, got %v", key, got)
+		}
+	}
+}
+
 func TestTruncate_SetsTruncateAction(t *testing.T) {
 	rule := attributeRule{action: itelemetry.AttributeCapture}
 	Truncate(2048)(&rule)

@@ -43,6 +43,10 @@ const (
 	AttrOutputMessages AttributeKey = semconvtrace.KeyGenAIOutputMessages
 	// AttrOutputMessagesOTel is the OTel output messages attribute key.
 	AttrOutputMessagesOTel AttributeKey = semconvtrace.KeyGenAIOutputMessagesOTel
+	// AttrToolCallArguments is the tool call arguments attribute key.
+	AttrToolCallArguments AttributeKey = semconvtrace.KeyGenAIToolCallArguments
+	// AttrToolCallResult is the tool call result attribute key.
+	AttrToolCallResult AttributeKey = semconvtrace.KeyGenAIToolCallResult
 )
 
 // SpanAttributePolicy controls production-side span attribute behavior.

@@ -27,10 +27,13 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	ichannel "trpc.group/trpc-go/trpc-agent-go/graph/internal/channel"
 	"trpc.group/trpc-go/trpc-agent-go/internal/agenttoolgraph"
+	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/plugin"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/safety"
 )
 
 func TestNewBuilder(t *testing.T) {
@@ -1864,6 +1867,526 @@ func TestRunToolWithEventContexts_ToolPermissionPolicyDenySkipsExecution(
 	require.Equal(t, denyReason, permissionResult.Reason)
 }
 
+func TestRunToolWithEventContexts_BeforeCallbackCannotRemovePermissionPolicy(
+	t *testing.T,
+) {
+	var policyCalls int
+	policy := tool.PermissionPolicyFunc(func(
+		context.Context,
+		*tool.PermissionRequest,
+	) (tool.PermissionDecision, error) {
+		policyCalls++
+		return tool.DenyPermission("blocked by original policy"), nil
+	})
+	invocation := &agent.Invocation{RunOptions: agent.NewRunOptions(
+		agent.WithToolPermissionPolicy(policy),
+	)}
+	ctx := agent.NewInvocationContext(context.Background(), invocation)
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterBeforeTool(func(
+		ctx context.Context,
+		_ *tool.BeforeToolArgs,
+	) (*tool.BeforeToolResult, error) {
+		return &tool.BeforeToolResult{Context: agent.NewInvocationContext(
+			ctx,
+			&agent.Invocation{},
+		)}, nil
+	})
+	tl := &captureTool{name: "sensitive", result: map[string]any{"secret": "raw"}}
+	toolCall := model.ToolCall{ID: "call-sensitive", Function: model.FunctionDefinitionParam{
+		Name: "sensitive", Arguments: []byte(`{"password":"supersecret"}`),
+	}}
+	_, _, _, _, result, _, err := runToolWithEventContexts(
+		ctx, toolCall, callbacks, tl, State{}, nil, 0,
+	)
+	require.NoError(t, err)
+	require.Equal(t, 1, policyCalls)
+	require.False(t, tl.called)
+	permissionResult, ok := result.(*tool.PermissionResult)
+	require.True(t, ok)
+	require.Equal(t, tool.PermissionResultStatusDenied, permissionResult.Status)
+}
+
+func TestObservableGraphToolArgumentsDiscoversToolLocalPolicy(t *testing.T) {
+	policy := &graphSanitizingPermissionPolicy{sanitize: func(
+		_ context.Context,
+		args *tool.AfterToolArgs,
+	) (any, error) {
+		return args.Result, nil
+	}}
+	tl := &graphLocalPolicyTool{
+		retryTool: retryTool{name: "safe"},
+		policy:    policy,
+	}
+	raw := []byte(`{"password":"supersecret"}`)
+	got := observableGraphToolArguments(nil, tl, raw)
+	require.NotEqual(t, string(raw), string(got))
+	require.NotContains(t, string(got), "supersecret")
+	require.Contains(t, string(got), "sha256")
+}
+
+func TestRunToolWithEventContexts_BeforeCallbackKeepsRuntimeSafetyPolicy(t *testing.T) {
+	guard, err := safety.NewDefaultGuard()
+	require.NoError(t, err)
+	originalInvocation := &agent.Invocation{RunOptions: agent.NewRunOptions(
+		agent.WithToolPermissionPolicy(guard),
+	)}
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterBeforeTool(func(
+		ctx context.Context,
+		_ *tool.BeforeToolArgs,
+	) (*tool.BeforeToolResult, error) {
+		return &tool.BeforeToolResult{Context: agent.NewInvocationContext(
+			ctx, &agent.Invocation{},
+		)}, nil
+	})
+	var runtimePolicy tool.PermissionPolicy
+	tl := &retryTool{name: "safe", callFn: func(ctx context.Context, _ []byte) (any, error) {
+		runtimePolicy = tool.PermissionPolicyFromContext(ctx)
+		return "ok", nil
+	}}
+	call := model.ToolCall{ID: "call-safe", Function: model.FunctionDefinitionParam{
+		Name: "safe", Arguments: []byte(`{"value":"safe"}`),
+	}}
+	_, _, _, _, result, modifiedArgs, err := runToolWithEventContexts(
+		agent.NewInvocationContext(context.Background(), originalInvocation),
+		call, callbacks, tl, State{}, nil, 0,
+	)
+	require.NoError(t, err)
+	require.Equal(t, "ok", result)
+	require.Same(t, guard, runtimePolicy)
+	require.NotEqual(t, modifiedArgs, observableGraphToolArguments(originalInvocation, tl, modifiedArgs))
+}
+
+func TestRunToolWithEventContexts_DirectToolGuardSanitizesAfterToolCustomResult(t *testing.T) {
+	guard, err := safety.NewDefaultGuard()
+	require.NoError(t, err)
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterAfterTool(func(
+		context.Context,
+		*tool.AfterToolArgs,
+	) (*tool.AfterToolResult, error) {
+		return &tool.AfterToolResult{CustomResult: map[string]any{
+			"password": "supersecret",
+		}}, nil
+	})
+	tl := &graphLocalPolicyTool{
+		retryTool: retryTool{
+			name:   "sensitive",
+			callFn: func(context.Context, []byte) (any, error) { return "safe", nil },
+		},
+		policy: guard,
+	}
+	invocation := &agent.Invocation{RunOptions: agent.NewRunOptions(
+		agent.WithToolPermissionPolicyFunc(func(
+			context.Context,
+			*tool.PermissionRequest,
+		) (tool.PermissionDecision, error) {
+			return tool.AllowPermission(), nil
+		}),
+	)}
+	_, _, _, _, result, _, err := runToolWithEventContexts(
+		agent.NewInvocationContext(context.Background(), invocation), model.ToolCall{
+			ID: "call-1", Function: model.FunctionDefinitionParam{
+				Name: "sensitive", Arguments: []byte(`{}`),
+			},
+		}, callbacks, tl, State{}, nil, 0,
+	)
+	require.NoError(t, err)
+	serialized, err := json.Marshal(result)
+	require.NoError(t, err)
+	require.NotContains(t, string(serialized), "supersecret")
+	require.Contains(t, string(serialized), "[REDACTED]")
+}
+
+func TestRunToolWithEventContexts_ComposesInvocationAndLocalSanitizers(t *testing.T) {
+	var order []string
+	invocationPolicy := &graphSanitizingPermissionPolicy{sanitize: func(
+		_ context.Context,
+		args *tool.AfterToolArgs,
+	) (any, error) {
+		order = append(order, "invocation")
+		require.Equal(t, "raw", args.Result)
+		return args.Result.(string) + "-invocation", nil
+	}}
+	localPolicy := &graphSanitizingPermissionPolicy{sanitize: func(
+		_ context.Context,
+		args *tool.AfterToolArgs,
+	) (any, error) {
+		order = append(order, "local")
+		require.Equal(t, "raw-invocation", args.Result)
+		return args.Result.(string) + "-local", nil
+	}}
+	invocation := &agent.Invocation{RunOptions: agent.NewRunOptions(
+		agent.WithToolPermissionPolicy(invocationPolicy),
+	)}
+	tl := &graphLocalPolicyTool{
+		retryTool: retryTool{name: "sensitive", callFn: func(
+			context.Context, []byte,
+		) (any, error) {
+			return "raw", nil
+		}},
+		policy: localPolicy,
+	}
+
+	_, _, _, _, result, _, err := runToolWithEventContexts(
+		agent.NewInvocationContext(context.Background(), invocation),
+		model.ToolCall{ID: "call-1", Function: model.FunctionDefinitionParam{
+			Name: "sensitive", Arguments: []byte(`{}`),
+		}},
+		nil, tl, State{}, nil, 0,
+	)
+	require.NoError(t, err)
+	require.Equal(t, "raw-invocation-local", result)
+	require.Equal(t, []string{"invocation", "local"}, order)
+}
+
+func TestRunToolWithEventContexts_RestoresPanicRedactionAfterContextReplacement(t *testing.T) {
+	policy := &graphErrorOnlyPermissionPolicy{sanitizeError: func(
+		_ context.Context,
+		args *tool.AfterToolArgs,
+	) (error, error) {
+		return args.Error, nil
+	}}
+	invocation := &agent.Invocation{RunOptions: agent.NewRunOptions(
+		agent.WithToolPermissionPolicy(policy),
+	)}
+	invocation.Plugins = plugin.MustNewManager(&graphHookPlugin{register: func(r *plugin.Registry) {
+		r.BeforeTool(func(
+			_ context.Context,
+			_ *tool.BeforeToolArgs,
+		) (*tool.BeforeToolResult, error) {
+			return &tool.BeforeToolResult{Context: agent.NewInvocationContext(
+				context.Background(), &agent.Invocation{},
+			)}, nil
+		})
+	}})
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterBeforeTool(func(
+		context.Context,
+		*tool.BeforeToolArgs,
+	) (*tool.BeforeToolResult, error) {
+		panic("password=supersecret")
+	})
+	tl := &retryTool{name: "sensitive", callFn: func(
+		context.Context, []byte,
+	) (any, error) {
+		t.Fatal("tool must not run after a callback panic")
+		return nil, nil
+	}}
+
+	_, _, _, _, result, _, err := runToolWithEventContexts(
+		agent.NewInvocationContext(context.Background(), invocation),
+		model.ToolCall{ID: "call-1", Function: model.FunctionDefinitionParam{
+			Name: "sensitive", Arguments: []byte(`{}`),
+		}},
+		callbacks, tl, State{}, nil, 0,
+	)
+	require.Error(t, err)
+	require.Nil(t, result)
+	require.Contains(t, err.Error(), "details redacted by tool safety policy")
+	require.NotContains(t, err.Error(), "supersecret")
+}
+
+func TestGraphCheckToolPermissionComposesSemanticAskWithInvocationDeny(t *testing.T) {
+	var invocationPolicyCalled bool
+	tl := &graphPermissionTool{
+		retryTool: retryTool{name: "danger"},
+		decision:  tool.AskPermission("semantic approval"),
+	}
+	inv := &agent.Invocation{RunOptions: agent.NewRunOptions(
+		agent.WithToolPermissionPolicyFunc(func(
+			context.Context,
+			*tool.PermissionRequest,
+		) (tool.PermissionDecision, error) {
+			invocationPolicyCalled = true
+			return tool.DenyPermission("framework deny"), nil
+		}),
+	)}
+	call := model.ToolCall{ID: "call", Function: model.FunctionDefinitionParam{Name: "danger"}}
+	result, err := checkToolPermission(context.Background(), inv, call, tl, tl.Declaration())
+	require.NoError(t, err)
+	require.True(t, invocationPolicyCalled)
+	require.NotNil(t, result)
+	require.Equal(t, tool.PermissionResultStatusDenied, result.Status)
+	require.Equal(t, "framework deny", result.Reason)
+}
+
+func TestRunToolWithEventContexts_InvocationPolicySanitizesEveryResultSource(
+	t *testing.T,
+) {
+	for _, source := range []string{
+		"tool",
+		"user_before",
+		"plugin_before",
+		"user_after",
+		"plugin_after",
+	} {
+		t.Run(source, func(t *testing.T) {
+			const (
+				toolName   = "sensitive"
+				toolCallID = "call-sensitive"
+			)
+			raw := map[string]any{"source": source, "secret": "raw"}
+			safe := map[string]any{"safe": true}
+			callbacks := tool.NewCallbacks()
+			policy := &graphSanitizingPermissionPolicy{
+				sanitize: func(
+					_ context.Context,
+					args *tool.AfterToolArgs,
+				) (any, error) {
+					require.Equal(t, toolCallID, args.ToolCallID)
+					require.Equal(t, toolName, args.ToolName)
+					require.Equal(t, raw, args.Result)
+					require.JSONEq(t, `{}`, string(args.Arguments))
+					return safe, nil
+				},
+			}
+			invocation := &agent.Invocation{
+				RunOptions: agent.NewRunOptions(
+					agent.WithToolPermissionPolicy(policy),
+				),
+			}
+
+			switch source {
+			case "user_before":
+				callbacks.RegisterBeforeTool(func(
+					context.Context,
+					*tool.BeforeToolArgs,
+				) (*tool.BeforeToolResult, error) {
+					return &tool.BeforeToolResult{CustomResult: raw}, nil
+				})
+			case "plugin_before":
+				invocation.Plugins = plugin.MustNewManager(&graphHookPlugin{
+					register: func(r *plugin.Registry) {
+						r.BeforeTool(func(
+							context.Context,
+							*tool.BeforeToolArgs,
+						) (*tool.BeforeToolResult, error) {
+							return &tool.BeforeToolResult{CustomResult: raw}, nil
+						})
+					},
+				})
+			case "user_after":
+				callbacks.RegisterAfterTool(func(
+					ctx context.Context,
+					_ *tool.AfterToolArgs,
+				) (*tool.AfterToolResult, error) {
+					return &tool.AfterToolResult{
+						Context: agent.NewInvocationContext(
+							ctx,
+							&agent.Invocation{},
+						),
+						CustomResult: raw,
+					}, nil
+				})
+			case "plugin_after":
+				invocation.Plugins = plugin.MustNewManager(&graphHookPlugin{
+					register: func(r *plugin.Registry) {
+						r.AfterTool(func(
+							context.Context,
+							*tool.AfterToolArgs,
+						) (*tool.AfterToolResult, error) {
+							return &tool.AfterToolResult{CustomResult: raw}, nil
+						})
+					},
+				})
+			}
+
+			ctx := agent.NewInvocationContext(
+				context.Background(),
+				invocation,
+			)
+			toolCall := model.ToolCall{
+				ID: toolCallID,
+				Function: model.FunctionDefinitionParam{
+					Name:      toolName,
+					Arguments: []byte(`{}`),
+				},
+			}
+			tl := &retryTool{
+				name: toolName,
+				callFn: func(context.Context, []byte) (any, error) {
+					return raw, nil
+				},
+			}
+			_, _, _, _, result, _, err := runToolWithEventContexts(
+				ctx,
+				toolCall,
+				callbacks,
+				tl,
+				State{},
+				nil,
+				0,
+			)
+			require.NoError(t, err)
+			require.Equal(t, safe, result)
+		})
+	}
+}
+
+func TestRunToolWithEventContexts_ResolvesWrappedPermissionChecker(
+	t *testing.T,
+) {
+	base := &graphPermissionTool{retryTool: retryTool{
+		name: "wrapped",
+		callFn: func(context.Context, []byte) (any, error) {
+			t.Fatal("denied wrapped tool must not execute")
+			return nil, nil
+		},
+	}}
+	wrapped := itool.NewUnprefixedNamedTool(base)
+	toolCall := model.ToolCall{
+		ID: "call-wrapped",
+		Function: model.FunctionDefinitionParam{
+			Name:      "wrapped",
+			Arguments: []byte(`{}`),
+		},
+	}
+
+	_, _, _, _, result, _, err := runToolWithEventContexts(
+		context.Background(),
+		toolCall,
+		nil,
+		wrapped,
+		State{},
+		nil,
+		0,
+	)
+	require.NoError(t, err)
+	require.True(t, base.checked)
+	require.NotNil(t, base.request)
+	require.True(t, base.request.Metadata.Destructive)
+	permissionResult, ok := result.(*tool.PermissionResult)
+	require.True(t, ok)
+	require.Equal(t, tool.PermissionResultStatusDenied, permissionResult.Status)
+}
+
+func TestRunToolWithEventContexts_ResultSanitizerErrorFailsClosed(
+	t *testing.T,
+) {
+	wantErr := errors.New("audit sink unavailable")
+	policy := &graphSanitizingPermissionPolicy{
+		sanitize: func(context.Context, *tool.AfterToolArgs) (any, error) {
+			return nil, wantErr
+		},
+	}
+	invocation := &agent.Invocation{RunOptions: agent.NewRunOptions(
+		agent.WithToolPermissionPolicy(policy),
+	)}
+	ctx := agent.NewInvocationContext(context.Background(), invocation)
+	toolCall := model.ToolCall{
+		ID: "call-sensitive",
+		Function: model.FunctionDefinitionParam{
+			Name:      "sensitive",
+			Arguments: []byte(`{}`),
+		},
+	}
+	tl := &retryTool{
+		name: "sensitive",
+		callFn: func(context.Context, []byte) (any, error) {
+			return map[string]any{"secret": "raw"}, nil
+		},
+	}
+
+	_, _, _, _, result, _, err := runToolWithEventContexts(
+		ctx,
+		toolCall,
+		nil,
+		tl,
+		State{},
+		nil,
+		0,
+	)
+	require.ErrorIs(t, err, wantErr)
+	require.Nil(t, result)
+}
+
+func TestRunToolWithEventContexts_ErrorSanitizerReplacesFinalError(
+	t *testing.T,
+) {
+	rawErr := errors.New("password=supersecret")
+	safeErr := errors.New("password=[REDACTED]")
+	policy := &graphSanitizingPermissionPolicy{
+		sanitize: func(_ context.Context, args *tool.AfterToolArgs) (any, error) {
+			return args.Result, nil
+		},
+		sanitizeError: func(_ context.Context, args *tool.AfterToolArgs) (error, error) {
+			require.ErrorIs(t, args.Error, rawErr)
+			return safeErr, nil
+		},
+	}
+	invocation := &agent.Invocation{RunOptions: agent.NewRunOptions(
+		agent.WithToolPermissionPolicy(policy),
+	)}
+	ctx := agent.NewInvocationContext(context.Background(), invocation)
+	toolCall := model.ToolCall{ID: "call-sensitive", Function: model.FunctionDefinitionParam{
+		Name: "sensitive", Arguments: []byte(`{}`),
+	}}
+	tl := &retryTool{name: "sensitive",
+		callFn: func(context.Context, []byte) (any, error) { return nil, rawErr }}
+	_, _, _, _, result, _, err := runToolWithEventContexts(
+		ctx, toolCall, nil, tl, State{}, nil, 0,
+	)
+	require.ErrorIs(t, err, safeErr)
+	require.NotContains(t, err.Error(), "supersecret")
+	require.Nil(t, result)
+}
+
+func TestRunToolWithEventContexts_ErrorSanitizerPreservesInterruptMetadata(
+	t *testing.T,
+) {
+	timestamp := time.Date(2026, time.July, 17, 12, 0, 0, 0, time.UTC)
+	rawInterrupt := &InterruptError{
+		Value:     "password=supersecret",
+		Key:       "approval",
+		NodeID:    "tools",
+		TaskID:    "task-1",
+		Step:      7,
+		Timestamp: timestamp,
+		Path:      []string{"root", "tools"},
+		SkipRerun: true,
+		NextNodes: []string{"review"},
+	}
+	policy := &graphErrorOnlyPermissionPolicy{sanitizeError: func(
+		_ context.Context,
+		args *tool.AfterToolArgs,
+	) (error, error) {
+		require.ErrorIs(t, args.Error, rawInterrupt)
+		return errors.New("password=[REDACTED]"), nil
+	}}
+	invocation := &agent.Invocation{RunOptions: agent.NewRunOptions(
+		agent.WithToolPermissionPolicy(policy),
+	)}
+	tl := &retryTool{name: "sensitive", callFn: func(
+		context.Context, []byte,
+	) (any, error) {
+		return nil, rawInterrupt
+	}}
+
+	_, _, _, _, result, _, err := runToolWithEventContexts(
+		agent.NewInvocationContext(context.Background(), invocation),
+		model.ToolCall{ID: "call-1", Function: model.FunctionDefinitionParam{
+			Name: "sensitive", Arguments: []byte(`{}`),
+		}},
+		nil, tl, State{}, nil, 0,
+	)
+	require.Error(t, err)
+	require.Nil(t, result)
+	safeInterrupt, ok := GetInterruptError(err)
+	require.True(t, ok)
+	require.Equal(t, "password=[REDACTED]", safeInterrupt.Value)
+	require.Equal(t, rawInterrupt.Key, safeInterrupt.Key)
+	require.Equal(t, rawInterrupt.NodeID, safeInterrupt.NodeID)
+	require.Equal(t, rawInterrupt.TaskID, safeInterrupt.TaskID)
+	require.Equal(t, rawInterrupt.Step, safeInterrupt.Step)
+	require.Equal(t, rawInterrupt.Timestamp, safeInterrupt.Timestamp)
+	require.Equal(t, rawInterrupt.Path, safeInterrupt.Path)
+	require.Equal(t, rawInterrupt.SkipRerun, safeInterrupt.SkipRerun)
+	require.Equal(t, rawInterrupt.NextNodes, safeInterrupt.NextNodes)
+	require.NotContains(t, err.Error(), "supersecret")
+}
+
 func TestNewToolsNodeFunc_ToolCallbacksPrecedence(t *testing.T) {
 	// Test that node-configured callbacks take precedence over state callbacks.
 	var nodeCallbackUsed, stateCallbackUsed bool
@@ -3610,6 +4133,95 @@ func (t *retryTool) Call(ctx context.Context, args []byte) (any, error) {
 type retryToolResult struct {
 	Value string `json:"value"`
 	Fail  bool   `json:"-"`
+}
+
+type graphSanitizingPermissionPolicy struct {
+	sanitize      func(context.Context, *tool.AfterToolArgs) (any, error)
+	sanitizeError func(context.Context, *tool.AfterToolArgs) (error, error)
+}
+
+type graphErrorOnlyPermissionPolicy struct {
+	sanitizeError func(context.Context, *tool.AfterToolArgs) (error, error)
+}
+
+type graphLocalPolicyTool struct {
+	retryTool
+	policy tool.PermissionPolicy
+}
+
+func (t *graphLocalPolicyTool) ToolPermissionPolicy() tool.PermissionPolicy {
+	return t.policy
+}
+
+func (p *graphSanitizingPermissionPolicy) SanitizeToolError(
+	ctx context.Context,
+	args *tool.AfterToolArgs,
+) (error, error) {
+	if p.sanitizeError == nil {
+		return args.Error, nil
+	}
+	return p.sanitizeError(ctx, args)
+}
+
+func (*graphSanitizingPermissionPolicy) CheckToolPermission(
+	context.Context,
+	*tool.PermissionRequest,
+) (tool.PermissionDecision, error) {
+	return tool.AllowPermission(), nil
+}
+
+func (p *graphSanitizingPermissionPolicy) SanitizeToolResult(
+	ctx context.Context,
+	args *tool.AfterToolArgs,
+) (any, error) {
+	return p.sanitize(ctx, args)
+}
+
+func (*graphErrorOnlyPermissionPolicy) CheckToolPermission(
+	context.Context,
+	*tool.PermissionRequest,
+) (tool.PermissionDecision, error) {
+	return tool.AllowPermission(), nil
+}
+
+func (p *graphErrorOnlyPermissionPolicy) SanitizeToolError(
+	ctx context.Context,
+	args *tool.AfterToolArgs,
+) (error, error) {
+	return p.sanitizeError(ctx, args)
+}
+
+type graphHookPlugin struct {
+	register func(*plugin.Registry)
+}
+
+func (*graphHookPlugin) Name() string { return "graph-result-sanitizer" }
+
+func (p *graphHookPlugin) Register(r *plugin.Registry) {
+	p.register(r)
+}
+
+type graphPermissionTool struct {
+	retryTool
+	checked  bool
+	request  *tool.PermissionRequest
+	decision tool.PermissionDecision
+}
+
+func (t *graphPermissionTool) ToolMetadata() tool.ToolMetadata {
+	return tool.ToolMetadata{Destructive: true}
+}
+
+func (t *graphPermissionTool) CheckPermission(
+	_ context.Context,
+	req *tool.PermissionRequest,
+) (tool.PermissionDecision, error) {
+	t.checked = true
+	t.request = req
+	if t.decision.Action != "" {
+		return t.decision, nil
+	}
+	return tool.DenyPermission("wrapped tool denied"), nil
 }
 
 func (r *retryToolResult) RetryResultError() bool {

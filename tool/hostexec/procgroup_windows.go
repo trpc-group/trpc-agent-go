@@ -13,8 +13,11 @@ package hostexec
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strconv"
 	"time"
 )
 
@@ -30,7 +33,36 @@ func terminateProcessTree(
 	_ context.Context,
 	process *os.Process,
 	_ int,
-	_ time.Duration,
+	grace time.Duration,
 ) error {
-	return killProcess(process)
+	if process == nil {
+		return nil
+	}
+	root := os.Getenv("SystemRoot")
+	if root == "" {
+		root = `C:\Windows`
+	}
+	const maxTaskkillDuration = 5 * time.Second
+	taskkillTimeout := maxTaskkillDuration
+	if grace > 0 && grace < taskkillTimeout {
+		taskkillTimeout = grace
+	}
+	// Process cleanup must still run after the command context is canceled.
+	taskkillCtx, cancel := context.WithTimeout(
+		context.Background(),
+		taskkillTimeout,
+	)
+	defer cancel()
+	err := exec.CommandContext( //nolint:gosec
+		taskkillCtx,
+		filepath.Join(root, "System32", "taskkill.exe"),
+		"/T", "/F", "/PID", strconv.Itoa(process.Pid),
+	).Run()
+	if err == nil {
+		return nil
+	}
+	if killErr := killProcess(process); killErr != nil {
+		return fmt.Errorf("terminate Windows process tree: %v; kill root: %w", err, killErr)
+	}
+	return fmt.Errorf("terminate Windows process tree: %w", err)
 }

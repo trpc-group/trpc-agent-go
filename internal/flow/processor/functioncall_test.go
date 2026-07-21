@@ -27,6 +27,7 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	agenttrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
@@ -46,6 +47,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	agenttool "trpc.group/trpc-go/trpc-agent-go/tool/agent"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
+	"trpc.group/trpc-go/trpc-agent-go/tool/safety"
 	skilltool "trpc.group/trpc-go/trpc-agent-go/tool/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool/transfer"
 )
@@ -188,6 +190,71 @@ type permissionMockTool struct {
 
 type afterToolMessagesTestPlugin struct {
 	hook plugin.AfterToolMessagesCallback
+}
+
+type sanitizingPermissionPolicy struct {
+	sanitize      func(context.Context, *tool.AfterToolArgs) (any, error)
+	sanitizeError func(context.Context, *tool.AfterToolArgs) (error, error)
+}
+
+type errorOnlyPermissionPolicy struct {
+	sanitizeError func(context.Context, *tool.AfterToolArgs) (error, error)
+}
+
+type streamPolicyTool struct {
+	*finalResultStreamTool
+	policy tool.PermissionPolicy
+}
+
+func (t *streamPolicyTool) ToolPermissionPolicy() tool.PermissionPolicy {
+	return t.policy
+}
+
+type localPolicyMockTool struct {
+	*mockCallableTool
+	policy tool.PermissionPolicy
+}
+
+func (t *localPolicyMockTool) ToolPermissionPolicy() tool.PermissionPolicy {
+	return t.policy
+}
+
+func (p *sanitizingPermissionPolicy) SanitizeToolError(
+	ctx context.Context,
+	args *tool.AfterToolArgs,
+) (error, error) {
+	if p.sanitizeError == nil {
+		return args.Error, nil
+	}
+	return p.sanitizeError(ctx, args)
+}
+
+func (*sanitizingPermissionPolicy) CheckToolPermission(
+	context.Context,
+	*tool.PermissionRequest,
+) (tool.PermissionDecision, error) {
+	return tool.AllowPermission(), nil
+}
+
+func (p *sanitizingPermissionPolicy) SanitizeToolResult(
+	ctx context.Context,
+	args *tool.AfterToolArgs,
+) (any, error) {
+	return p.sanitize(ctx, args)
+}
+
+func (*errorOnlyPermissionPolicy) CheckToolPermission(
+	context.Context,
+	*tool.PermissionRequest,
+) (tool.PermissionDecision, error) {
+	return tool.AllowPermission(), nil
+}
+
+func (p *errorOnlyPermissionPolicy) SanitizeToolError(
+	ctx context.Context,
+	args *tool.AfterToolArgs,
+) (error, error) {
+	return p.sanitizeError(ctx, args)
 }
 
 func (p afterToolMessagesTestPlugin) Name() string {
@@ -1822,7 +1889,8 @@ func TestAttachStateDeltaToToolResults_ReplaysPendingStateDeltas(
 		},
 	}
 
-	events := p.attachStateDeltaToToolResults(context.Background(), inv, results)
+	events, err := p.attachStateDeltaToToolResults(context.Background(), inv, results)
+	require.NoError(t, err)
 	require.Len(t, events, 2)
 	require.Equal(t, []byte("v1"), events[1].StateDelta[writeKey])
 }
@@ -1850,9 +1918,10 @@ func TestPostToolResultHookRunsAfterToolResult(t *testing.T) {
 			ev.StateDelta[hookKey] = []byte("ran")
 		}),
 	)
-	events := p.attachStateDeltaToToolResults(ctx, inv, []toolResult{
+	events, err := p.attachStateDeltaToToolResults(ctx, inv, []toolResult{
 		{event: &event.Event{}},
 	})
+	require.NoError(t, err)
 	require.Len(t, events, 1)
 	require.Equal(t, 1, called)
 	require.Equal(t, []byte("ran"), events[0].StateDelta[hookKey])
@@ -2780,6 +2849,339 @@ func TestAfterToolMessagesHook_ReplacesToolResultMessages(t *testing.T) {
 	assert.Equal(t, 7, toolEvent.Response.Choices[0].Index)
 	assert.Equal(t, "call-1", toolEvent.Response.Choices[0].Message.ToolID)
 	assert.Equal(t, "summary result_ref=refs/node.md", toolEvent.Response.Choices[0].Message.Content)
+}
+
+func TestAfterToolMessagesHook_CannotMutateLiveEventWithoutResult(t *testing.T) {
+	guard, err := safety.NewDefaultGuard()
+	require.NoError(t, err)
+	toolCall := model.ToolCall{ID: "call-1", Function: model.FunctionDefinitionParam{Name: "lookup"}}
+	llmResponse := &model.Response{Choices: []model.Choice{{Message: model.Message{
+		Role: model.RoleAssistant, ToolCalls: []model.ToolCall{toolCall},
+	}}}}
+	toolEvent := event.NewResponseEvent("inv-1", "agent", &model.Response{
+		Object:  model.ObjectTypeToolResponse,
+		Choices: []model.Choice{{Message: model.NewToolMessage("call-1", "lookup", "safe result")}},
+	})
+	mgr := plugin.MustNewManager(afterToolMessagesTestPlugin{hook: func(
+		_ context.Context,
+		args *plugin.AfterToolMessagesArgs,
+	) (*plugin.AfterToolMessagesResult, error) {
+		args.ToolResultEvent.Choices[0].Message.Content = "password=supersecret"
+		args.ToolResultEvent.StateDelta = map[string][]byte{"secret": []byte(`"password=supersecret"`)}
+		return nil, nil
+	}})
+	inv := &agent.Invocation{InvocationID: "inv-1", AgentName: "agent", Plugins: mgr,
+		RunOptions: agent.NewRunOptions(agent.WithToolPermissionPolicy(guard))}
+	err = NewFunctionCallResponseProcessor(false, nil).applyAfterToolMessagesHooks(
+		context.Background(), inv, &model.Request{}, llmResponse, toolEvent,
+	)
+	require.NoError(t, err)
+	require.Equal(t, "safe result", toolEvent.Choices[0].Message.Content)
+	require.Empty(t, toolEvent.StateDelta)
+}
+
+func TestAfterToolMessagesHook_PreservesLiveEventMutationWithoutSanitizer(t *testing.T) {
+	toolCall := model.ToolCall{ID: "call-1", Function: model.FunctionDefinitionParam{Name: "lookup"}}
+	llmResponse := &model.Response{Choices: []model.Choice{{Message: model.Message{
+		Role: model.RoleAssistant, ToolCalls: []model.ToolCall{toolCall},
+	}}}}
+	toolEvent := event.NewResponseEvent("inv-1", "agent", &model.Response{
+		Object:  model.ObjectTypeToolResponse,
+		Choices: []model.Choice{{Message: model.NewToolMessage("call-1", "lookup", "raw result")}},
+	})
+	mgr := plugin.MustNewManager(afterToolMessagesTestPlugin{hook: func(
+		_ context.Context,
+		args *plugin.AfterToolMessagesArgs,
+	) (*plugin.AfterToolMessagesResult, error) {
+		args.ToolResultEvent.Choices[0].Message.Content = "mutated in place"
+		args.ToolResultEvent.StateDelta = map[string][]byte{"plugin": []byte(`"live"`)}
+		return nil, nil
+	}})
+
+	err := NewFunctionCallResponseProcessor(false, nil).applyAfterToolMessagesHooks(
+		context.Background(), &agent.Invocation{Plugins: mgr},
+		&model.Request{}, llmResponse, toolEvent,
+	)
+	require.NoError(t, err)
+	require.Equal(t, "mutated in place", toolEvent.Choices[0].Message.Content)
+	require.JSONEq(t, `"live"`, string(toolEvent.StateDelta["plugin"]))
+}
+
+func TestAfterToolMessagesHook_SanitizesEachReplacementWithItsOwnToolPolicy(t *testing.T) {
+	appendSuffix := func(wantID, suffix string, calls *[]string) func(
+		context.Context, *tool.AfterToolArgs,
+	) (any, error) {
+		return func(_ context.Context, args *tool.AfterToolArgs) (any, error) {
+			require.Equal(t, wantID, args.ToolCallID)
+			messages, ok := args.Result.([]model.Message)
+			require.True(t, ok)
+			require.Len(t, messages, 1)
+			*calls = append(*calls, wantID+suffix)
+			messages = cloneModelMessages(messages)
+			messages[0].Content += suffix
+			return messages, nil
+		}
+	}
+
+	toolCalls := []model.ToolCall{
+		{ID: "call-1", Function: model.FunctionDefinitionParam{Name: "first", Arguments: []byte(`{"n":1}`)}},
+		{ID: "call-2", Function: model.FunctionDefinitionParam{Name: "second", Arguments: []byte(`{"n":2}`)}},
+	}
+	llmResponse := &model.Response{Choices: []model.Choice{{Message: model.Message{
+		Role: model.RoleAssistant, ToolCalls: toolCalls,
+	}}}}
+	toolEvent := event.NewResponseEvent("inv-1", "agent", &model.Response{
+		Object: model.ObjectTypeToolResponse,
+		Choices: []model.Choice{
+			{Index: 1, Message: model.NewToolMessage("call-1", "first", "old-1")},
+			{Index: 2, Message: model.NewToolMessage("call-2", "second", "old-2")},
+		},
+	})
+	var invocationCalls, firstCalls, secondCalls []string
+	invocationPolicy := &sanitizingPermissionPolicy{sanitize: func(
+		_ context.Context,
+		args *tool.AfterToolArgs,
+	) (any, error) {
+		messages := cloneModelMessages(args.Result.([]model.Message))
+		invocationCalls = append(invocationCalls, args.ToolCallID)
+		messages[0].Content += "-invocation"
+		return messages, nil
+	}}
+	firstPolicy := &sanitizingPermissionPolicy{sanitize: appendSuffix(
+		"call-1", "-first", &firstCalls,
+	)}
+	secondPolicy := &sanitizingPermissionPolicy{sanitize: appendSuffix(
+		"call-2", "-second", &secondCalls,
+	)}
+	requestTools := map[string]tool.Tool{
+		"first": &localPolicyMockTool{
+			mockCallableTool: &mockCallableTool{declaration: &tool.Declaration{Name: "first"}},
+			policy:           firstPolicy,
+		},
+		"second": &localPolicyMockTool{
+			mockCallableTool: &mockCallableTool{declaration: &tool.Declaration{Name: "second"}},
+			policy:           secondPolicy,
+		},
+	}
+	mgr := plugin.MustNewManager(afterToolMessagesTestPlugin{hook: func(
+		context.Context,
+		*plugin.AfterToolMessagesArgs,
+	) (*plugin.AfterToolMessagesResult, error) {
+		return &plugin.AfterToolMessagesResult{ToolResultMessages: []model.Message{
+			model.NewToolMessage("call-2", "second", "new-2"),
+			model.NewToolMessage("call-1", "first", "new-1"),
+		}}, nil
+	}})
+	invocation := &agent.Invocation{
+		Plugins: mgr,
+		RunOptions: agent.NewRunOptions(
+			agent.WithToolPermissionPolicy(invocationPolicy),
+		),
+	}
+
+	err := NewFunctionCallResponseProcessor(false, nil).applyAfterToolMessagesHooks(
+		context.Background(), invocation,
+		&model.Request{Tools: requestTools}, llmResponse, toolEvent,
+	)
+	require.NoError(t, err)
+	require.Equal(t, []string{"call-1", "call-2"}, invocationCalls)
+	require.Equal(t, []string{"call-1-first"}, firstCalls)
+	require.Equal(t, []string{"call-2-second"}, secondCalls)
+	require.Equal(t, "new-1-invocation-first", toolEvent.Choices[0].Message.Content)
+	require.Equal(t, "new-2-invocation-second", toolEvent.Choices[1].Message.Content)
+}
+
+func TestPostToolResultHook_FinalSanitizerCoversEventFields(t *testing.T) {
+	guard, err := safety.NewDefaultGuard()
+	require.NoError(t, err)
+	inv := &agent.Invocation{RunOptions: agent.NewRunOptions(
+		agent.WithToolPermissionPolicy(guard),
+	)}
+	p := NewFunctionCallResponseProcessor(false, nil, WithPostToolResultHook(func(
+		_ context.Context,
+		_ *agent.Invocation,
+		ev *event.Event,
+	) {
+		ev.Choices[0].Message.Content = "password=supersecret"
+		ev.Choices[0].Message.ContentParts = []model.ContentPart{{
+			Type: model.ContentTypeFile,
+			File: &model.File{Data: []byte("password=supersecret")},
+		}}
+		ev.StateDelta = map[string][]byte{"secret": []byte(`"password=supersecret"`)}
+		ev.StateDelta["binary"] = []byte{0xff, 0x00, 0x7f}
+		ev.StructuredOutput = map[string]any{"password": "supersecret"}
+	}))
+	ev := event.NewResponseEvent("inv", "agent", &model.Response{Choices: []model.Choice{{
+		Message: model.NewToolMessage("call-1", "lookup", "safe"),
+	}}})
+	events, err := p.attachStateDeltaToToolResults(context.Background(), inv, []toolResult{{
+		event: ev, toolArgs: []byte(`{}`),
+	}})
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+	serialized, err := json.Marshal(events[0])
+	require.NoError(t, err)
+	serialized = append(serialized, []byte(fmt.Sprint(events[0].StructuredOutput))...)
+	require.NotContains(t, string(serialized), "supersecret")
+	require.Contains(t, string(serialized), "[REDACTED]")
+	require.Contains(t, string(events[0].Choices[0].Message.ContentParts[0].File.Data), "[REDACTED]")
+	require.Equal(t, []byte{0xff, 0x00, 0x7f}, events[0].StateDelta["binary"])
+}
+
+func TestDirectToolGuardSanitizesAfterToolCustomResult(t *testing.T) {
+	guard, err := safety.NewDefaultGuard()
+	require.NoError(t, err)
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterAfterTool(func(
+		context.Context,
+		*tool.AfterToolArgs,
+	) (*tool.AfterToolResult, error) {
+		return &tool.AfterToolResult{CustomResult: map[string]any{
+			"password": "supersecret",
+		}}, nil
+	})
+	tl := &localPolicyMockTool{
+		mockCallableTool: &mockCallableTool{
+			declaration: &tool.Declaration{Name: "sensitive"},
+			callFn: func(context.Context, []byte) (any, error) {
+				return "safe", nil
+			},
+		},
+		policy: guard,
+	}
+	_, choices, _, _, _, err := NewFunctionCallResponseProcessor(false, callbacks).executeToolCall(
+		context.Background(), &agent.Invocation{}, model.ToolCall{
+			ID: "call-1", Function: model.FunctionDefinitionParam{
+				Name: "sensitive", Arguments: []byte(`{}`),
+			},
+		}, map[string]tool.Tool{"sensitive": tl}, 0, nil,
+	)
+	require.NoError(t, err)
+	require.Len(t, choices, 1)
+	require.NotContains(t, choices[0].Message.Content, "supersecret")
+	require.Contains(t, choices[0].Message.Content, "[REDACTED]")
+}
+
+func TestDirectToolGuardSanitizesAfterToolMessagesReplacement(t *testing.T) {
+	guard, err := safety.NewDefaultGuard()
+	require.NoError(t, err)
+	toolCall := model.ToolCall{ID: "call-1", Function: model.FunctionDefinitionParam{Name: "lookup"}}
+	llmResponse := &model.Response{Choices: []model.Choice{{Message: model.Message{
+		Role: model.RoleAssistant, ToolCalls: []model.ToolCall{toolCall},
+	}}}}
+	toolEvent := event.NewResponseEvent("inv-1", "agent", &model.Response{
+		Object:  model.ObjectTypeToolResponse,
+		Choices: []model.Choice{{Message: model.NewToolMessage("call-1", "lookup", "safe")}},
+	})
+	mgr := plugin.MustNewManager(afterToolMessagesTestPlugin{hook: func(
+		context.Context,
+		*plugin.AfterToolMessagesArgs,
+	) (*plugin.AfterToolMessagesResult, error) {
+		return &plugin.AfterToolMessagesResult{ToolResultMessages: []model.Message{
+			model.NewToolMessage("call-1", "lookup", "password=supersecret"),
+		}}, nil
+	}})
+	tl := &localPolicyMockTool{
+		mockCallableTool: &mockCallableTool{declaration: &tool.Declaration{Name: "lookup"}},
+		policy:           guard,
+	}
+	err = NewFunctionCallResponseProcessor(false, nil).applyAfterToolMessagesHooks(
+		context.Background(), &agent.Invocation{Plugins: mgr},
+		&model.Request{Tools: map[string]tool.Tool{"lookup": tl}}, llmResponse, toolEvent,
+	)
+	require.NoError(t, err)
+	require.NotContains(t, toolEvent.Choices[0].Message.Content, "supersecret")
+	require.Contains(t, toolEvent.Choices[0].Message.Content, "[REDACTED]")
+}
+
+func TestDirectToolGuardFinalEventSanitizerCoversAllMutableContent(t *testing.T) {
+	guard, err := safety.NewDefaultGuard()
+	require.NoError(t, err)
+	p := NewFunctionCallResponseProcessor(false, nil, WithPostToolResultHook(func(
+		_ context.Context,
+		_ *agent.Invocation,
+		ev *event.Event,
+	) {
+		fingerprint := "password=supersecret"
+		ev.Choices = append(ev.Choices, model.Choice{Message: model.Message{
+			Role: model.RoleAssistant, Content: "password=supersecret",
+		}})
+		ev.Tag = "password=supersecret"
+		ev.Model = "password=supersecret"
+		ev.SystemFingerprint = &fingerprint
+		ev.StructuredOutput = map[string]any{"password": "supersecret"}
+		ev.ExecutionTrace = &agenttrace.Trace{
+			RootAgentName: "password=supersecret",
+			Output:        &agenttrace.Snapshot{Text: "password=supersecret"},
+		}
+	}))
+	tl := &localPolicyMockTool{
+		mockCallableTool: &mockCallableTool{
+			declaration: &tool.Declaration{Name: "lookup"},
+			callFn:      func(context.Context, []byte) (any, error) { return "safe", nil },
+		},
+		policy: guard,
+	}
+	llmResponse := &model.Response{Choices: []model.Choice{{Message: model.Message{
+		Role:      model.RoleAssistant,
+		ToolCalls: []model.ToolCall{{ID: "call-1", Function: model.FunctionDefinitionParam{Name: "lookup"}}},
+	}}}}
+	ev, err := p.executeSingleToolCallSequential(
+		context.Background(), &agent.Invocation{}, llmResponse,
+		map[string]tool.Tool{"lookup": tl}, nil, 0,
+		llmResponse.Choices[0].Message.ToolCalls[0],
+	)
+	require.NoError(t, err)
+	require.NotNil(t, ev)
+	serialized, err := json.Marshal(struct {
+		Event *event.Event
+		Trace *agenttrace.Trace
+		Value any
+	}{ev, ev.ExecutionTrace, ev.StructuredOutput})
+	require.NoError(t, err)
+	require.NotContains(t, string(serialized), "supersecret")
+	require.Contains(t, string(serialized), "[REDACTED]")
+}
+
+func TestObservableToolArgumentsDiscoversToolLocalGuard(t *testing.T) {
+	guard, err := safety.NewDefaultGuard()
+	require.NoError(t, err)
+	tl := &localPolicyMockTool{
+		mockCallableTool: &mockCallableTool{declaration: &tool.Declaration{Name: "safe"}},
+		policy:           guard,
+	}
+	raw := []byte(`{"password":"supersecret"}`)
+	got := observableToolArguments(nil, tl, raw)
+	require.NotEqual(t, string(raw), string(got))
+	require.NotContains(t, string(got), "supersecret")
+	require.Contains(t, string(got), "sha256")
+}
+
+func TestCheckToolPermissionComposesSemanticAskWithInvocationDeny(t *testing.T) {
+	var invocationPolicyCalled bool
+	tl := &permissionMockTool{
+		mockCallableTool: &mockCallableTool{declaration: &tool.Declaration{Name: "danger"}},
+		decision:         tool.AskPermission("semantic approval"),
+	}
+	inv := &agent.Invocation{RunOptions: agent.NewRunOptions(
+		agent.WithToolPermissionPolicyFunc(func(
+			context.Context,
+			*tool.PermissionRequest,
+		) (tool.PermissionDecision, error) {
+			invocationPolicyCalled = true
+			return tool.DenyPermission("framework deny"), nil
+		}),
+	)}
+	result, err := NewFunctionCallResponseProcessor(false, nil).checkToolPermission(
+		context.Background(), inv,
+		model.ToolCall{ID: "call", Function: model.FunctionDefinitionParam{Name: "danger"}},
+		tl, tl.Declaration(),
+	)
+	require.NoError(t, err)
+	require.True(t, invocationPolicyCalled)
+	require.NotNil(t, result)
+	require.Equal(t, tool.PermissionResultStatusDenied, result.Status)
+	require.Equal(t, "framework deny", result.Reason)
 }
 
 func TestAfterToolMessagesHook_RejectsInvalidReplacement(t *testing.T) {
@@ -8636,6 +9038,259 @@ func TestExecuteToolWithCallbacks_PluginAfterToolOverrides(t *testing.T) {
 	require.Equal(t, map[string]any{"p": true}, res)
 }
 
+func TestExecuteToolCall_InvocationPolicySanitizesEveryResultSource(
+	t *testing.T,
+) {
+	for _, source := range []string{
+		"tool",
+		"user_before",
+		"plugin_before",
+		"user_after",
+		"plugin_after",
+	} {
+		t.Run(source, func(t *testing.T) {
+			const (
+				toolName   = "sensitive"
+				toolCallID = "call-sensitive"
+			)
+			raw := map[string]any{"source": source, "secret": "raw"}
+			safe := map[string]any{"safe": true}
+			local := tool.NewCallbacks()
+			policy := &sanitizingPermissionPolicy{
+				sanitize: func(
+					_ context.Context,
+					args *tool.AfterToolArgs,
+				) (any, error) {
+					require.Equal(t, toolCallID, args.ToolCallID)
+					require.Equal(t, toolName, args.ToolName)
+					require.Equal(t, raw, args.Result)
+					require.JSONEq(t, `{}`, string(args.Arguments))
+					return safe, nil
+				},
+			}
+			inv := &agent.Invocation{
+				RunOptions: agent.NewRunOptions(
+					agent.WithToolPermissionPolicy(policy),
+				),
+			}
+
+			switch source {
+			case "user_before":
+				local.RegisterBeforeTool(func(
+					context.Context,
+					*tool.BeforeToolArgs,
+				) (*tool.BeforeToolResult, error) {
+					return &tool.BeforeToolResult{CustomResult: raw}, nil
+				})
+			case "plugin_before":
+				inv.Plugins = plugin.MustNewManager(&hookPlugin{
+					name: "sanitizer-before",
+					reg: func(r *plugin.Registry) {
+						r.BeforeTool(func(
+							context.Context,
+							*tool.BeforeToolArgs,
+						) (*tool.BeforeToolResult, error) {
+							return &tool.BeforeToolResult{CustomResult: raw}, nil
+						})
+					},
+				})
+			case "user_after":
+				local.RegisterAfterTool(func(
+					context.Context,
+					*tool.AfterToolArgs,
+				) (*tool.AfterToolResult, error) {
+					return &tool.AfterToolResult{CustomResult: raw}, nil
+				})
+			case "plugin_after":
+				inv.Plugins = plugin.MustNewManager(&hookPlugin{
+					name: "sanitizer-after",
+					reg: func(r *plugin.Registry) {
+						r.AfterTool(func(
+							context.Context,
+							*tool.AfterToolArgs,
+						) (*tool.AfterToolResult, error) {
+							return &tool.AfterToolResult{CustomResult: raw}, nil
+						})
+					},
+				})
+			}
+
+			proc := NewFunctionCallResponseProcessor(false, local)
+			tl := &mockCallableTool{
+				declaration: &tool.Declaration{Name: toolName},
+				callFn: func(context.Context, []byte) (any, error) {
+					return raw, nil
+				},
+			}
+			toolCall := model.ToolCall{
+				ID: toolCallID,
+				Function: model.FunctionDefinitionParam{
+					Name:      toolName,
+					Arguments: []byte(`{}`),
+				},
+			}
+			_, choices, _, _, _, err := proc.executeToolCall(
+				context.Background(),
+				inv,
+				toolCall,
+				map[string]tool.Tool{toolName: tl},
+				0,
+				nil,
+			)
+			require.NoError(t, err)
+			require.Len(t, choices, 1)
+			require.JSONEq(t, `{"safe":true}`, choices[0].Message.Content)
+		})
+	}
+}
+
+func TestExecuteToolCall_ResultSanitizerErrorFailsClosed(t *testing.T) {
+	wantErr := errors.New("audit sink unavailable")
+	policy := &sanitizingPermissionPolicy{
+		sanitize: func(context.Context, *tool.AfterToolArgs) (any, error) {
+			return nil, wantErr
+		},
+	}
+	inv := &agent.Invocation{RunOptions: agent.NewRunOptions(
+		agent.WithToolPermissionPolicy(policy),
+	)}
+	toolCall := model.ToolCall{
+		ID: "call-sensitive",
+		Function: model.FunctionDefinitionParam{
+			Name:      "sensitive",
+			Arguments: []byte(`{}`),
+		},
+	}
+	tl := &mockCallableTool{
+		declaration: &tool.Declaration{Name: "sensitive"},
+		callFn: func(context.Context, []byte) (any, error) {
+			return map[string]any{"secret": "raw"}, nil
+		},
+	}
+	_, choices, _, shouldIgnore, _, err :=
+		NewFunctionCallResponseProcessor(false, nil).executeToolCall(
+			context.Background(),
+			inv,
+			toolCall,
+			map[string]tool.Tool{"sensitive": tl},
+			0,
+			nil,
+		)
+	require.ErrorIs(t, err, wantErr)
+	require.Nil(t, choices)
+	require.False(t, shouldIgnore)
+}
+
+func TestExecuteToolCall_ErrorSanitizerReplacesFinalError(t *testing.T) {
+	rawErr := errors.New("password=supersecret")
+	safeErr := errors.New("password=[REDACTED]")
+	policy := &sanitizingPermissionPolicy{
+		sanitize: func(_ context.Context, args *tool.AfterToolArgs) (any, error) {
+			return args.Result, nil
+		},
+		sanitizeError: func(_ context.Context, args *tool.AfterToolArgs) (error, error) {
+			require.ErrorIs(t, args.Error, rawErr)
+			return safeErr, nil
+		},
+	}
+	inv := &agent.Invocation{RunOptions: agent.NewRunOptions(
+		agent.WithToolPermissionPolicy(policy),
+	)}
+	toolCall := model.ToolCall{ID: "call-sensitive", Function: model.FunctionDefinitionParam{
+		Name: "sensitive", Arguments: []byte(`{}`),
+	}}
+	tl := &mockCallableTool{declaration: &tool.Declaration{Name: "sensitive"},
+		callFn: func(context.Context, []byte) (any, error) { return nil, rawErr }}
+	_, _, _, _, _, err := NewFunctionCallResponseProcessor(false, nil).executeToolCall(
+		context.Background(), inv, toolCall,
+		map[string]tool.Tool{"sensitive": tl}, 0, nil,
+	)
+	require.ErrorIs(t, err, safeErr)
+	require.NotContains(t, err.Error(), "supersecret")
+}
+
+func TestExecuteToolCall_ErrorSanitizerPreservesStopError(t *testing.T) {
+	rawStop := agent.NewStopError("password=supersecret")
+	policy := &errorOnlyPermissionPolicy{sanitizeError: func(
+		_ context.Context,
+		args *tool.AfterToolArgs,
+	) (error, error) {
+		_, ok := agent.AsStopError(args.Error)
+		require.True(t, ok)
+		return errors.New("password=[REDACTED]"), nil
+	}}
+	invocation := &agent.Invocation{RunOptions: agent.NewRunOptions(
+		agent.WithToolPermissionPolicy(policy),
+	)}
+	toolCall := model.ToolCall{ID: "call-sensitive", Function: model.FunctionDefinitionParam{
+		Name: "sensitive", Arguments: []byte(`{}`),
+	}}
+	tl := &mockCallableTool{
+		declaration: &tool.Declaration{Name: "sensitive"},
+		callFn: func(context.Context, []byte) (any, error) {
+			return nil, rawStop
+		},
+	}
+
+	_, _, _, shouldIgnore, _, err := NewFunctionCallResponseProcessor(false, nil).executeToolCall(
+		context.Background(), invocation, toolCall,
+		map[string]tool.Tool{"sensitive": tl}, 0, nil,
+	)
+	require.Error(t, err)
+	require.False(t, shouldIgnore)
+	_, ok := agent.AsStopError(err)
+	require.True(t, ok)
+	require.Contains(t, err.Error(), "[REDACTED]")
+	require.NotContains(t, err.Error(), "supersecret")
+}
+
+func TestErrorOnlySanitizerRedactsDiagnostics(t *testing.T) {
+	policy := &errorOnlyPermissionPolicy{sanitizeError: func(
+		_ context.Context,
+		args *tool.AfterToolArgs,
+	) (error, error) {
+		return args.Error, nil
+	}}
+	invocation := &agent.Invocation{AgentName: "agent", RunOptions: agent.NewRunOptions(
+		agent.WithToolPermissionPolicy(policy),
+	)}
+	toolCall := model.ToolCall{ID: "call-sensitive", Function: model.FunctionDefinitionParam{
+		Name: "sensitive", Arguments: []byte(`{"password":"supersecret"}`),
+	}}
+	tl := &mockCallableTool{
+		declaration: &tool.Declaration{Name: "sensitive"},
+		callFn: func(context.Context, []byte) (any, error) {
+			panic("password=supersecret")
+		},
+	}
+
+	require.Nil(t, effectiveToolResultSanitizer(invocation, tl))
+	require.NotNil(t, effectiveToolErrorSanitizer(invocation, tl))
+	safeCtx := withEffectiveToolSanitizers(context.Background(), invocation, tl)
+	redactLogs, _ := safeCtx.Value(redactToolExecutionLogContextKey{}).(bool)
+	require.True(t, redactLogs)
+	require.True(t, tool.ToolCallbackPanicsRedacted(safeCtx))
+	require.NotContains(t, string(observableToolArguments(
+		invocation, tl, toolCall.Function.Arguments,
+	)), "supersecret")
+
+	resultChan := make(chan toolResult, 1)
+	llmResponse := &model.Response{Choices: []model.Choice{{Message: model.Message{
+		Role: model.RoleAssistant, ToolCalls: []model.ToolCall{toolCall},
+	}}}}
+	err := NewFunctionCallResponseProcessor(false, nil).runParallelToolCall(
+		context.Background(), invocation, llmResponse,
+		map[string]tool.Tool{"sensitive": tl}, nil, resultChan, 0, toolCall,
+	)
+	require.NoError(t, err)
+	result := <-resultChan
+	require.NotNil(t, result.event)
+	require.Len(t, result.event.Choices, 1)
+	require.Contains(t, result.event.Choices[0].Message.Content, "details redacted")
+	require.NotContains(t, result.event.Choices[0].Message.Content, "supersecret")
+	require.NotContains(t, string(result.toolArgs), "supersecret")
+}
+
 func TestExecuteToolWithCallbacks_AfterToolReceivesNormalizedResultAndMeta(t *testing.T) {
 	var (
 		gotResult any
@@ -9745,7 +10400,7 @@ func TestExecuteSingleToolCallSequential_ToolPermissionResultIgnoresToolSkipSumm
 	require.JSONEq(t, permissionJSON, ev.Choices[0].Message.Content)
 }
 
-func TestExecuteToolWithCallbacks_ToolPermissionCheckerAskSkipsRunPolicy(
+func TestExecuteToolWithCallbacks_ToolPermissionCheckerAskComposesRunPolicy(
 	t *testing.T,
 ) {
 	const (
@@ -9793,7 +10448,7 @@ func TestExecuteToolWithCallbacks_ToolPermissionCheckerAskSkipsRunPolicy(
 		)
 	require.NoError(t, err)
 	require.False(t, calledTool)
-	require.False(t, calledRunPolicy)
+	require.True(t, calledRunPolicy)
 	require.JSONEq(t, permissionJSON, string(mustJSON(res)))
 }
 
@@ -9904,6 +10559,71 @@ func TestExecuteToolCall_StreamableFinalStateOnlyResultAfterToolContextReplaceme
 	case evt := <-eventCh:
 		require.Failf(t, "unexpected tool message event", "%#v", evt)
 	default:
+	}
+}
+
+func TestExecuteToolCall_StreamFinalStateDeltaIsSanitizedBeforeEmission(t *testing.T) {
+	guard, err := safety.NewDefaultGuard()
+	require.NoError(t, err)
+	p := NewFunctionCallResponseProcessor(false, nil)
+	inv := &agent.Invocation{
+		InvocationID: "inv-safe-state", AgentName: "tester", Branch: "br", Model: &mockModel{},
+		RunOptions: agent.NewRunOptions(agent.WithToolPermissionPolicy(guard)),
+	}
+	tc := model.ToolCall{ID: "call-1", Function: model.FunctionDefinitionParam{
+		Name: "final", Arguments: []byte(`{}`),
+	}}
+	tools := map[string]tool.Tool{"final": &finalResultStreamTool{
+		name: "final",
+		stateDelta: map[string][]byte{
+			"secret": []byte(`"password=supersecret"`),
+		},
+	}}
+	eventCh := make(chan *event.Event, 4)
+	_, _, _, _, _, err = p.executeToolCall(
+		context.Background(), inv, tc, tools, 0, eventCh,
+	)
+	require.NoError(t, err)
+	select {
+	case emitted := <-eventCh:
+		require.NotContains(t, string(emitted.StateDelta["secret"]), "supersecret")
+		require.Contains(t, string(emitted.StateDelta["secret"]), "[REDACTED]")
+	default:
+		t.Fatal("sanitized final state delta was not emitted")
+	}
+	select {
+	case emitted := <-eventCh:
+		require.Failf(t, "raw partial event escaped guard", "%#v", emitted)
+	default:
+	}
+}
+
+func TestExecuteToolCall_DirectToolGuardSanitizesStreamFinalState(t *testing.T) {
+	guard, err := safety.NewDefaultGuard()
+	require.NoError(t, err)
+	p := NewFunctionCallResponseProcessor(false, nil)
+	tc := model.ToolCall{ID: "call-1", Function: model.FunctionDefinitionParam{
+		Name: "final", Arguments: []byte(`{}`),
+	}}
+	stream := &finalResultStreamTool{name: "final", stateDelta: map[string][]byte{
+		"secret": []byte(`"password=supersecret"`),
+	}}
+	guarded := &streamPolicyTool{finalResultStreamTool: stream, policy: guard}
+	eventCh := make(chan *event.Event, 4)
+	inv := &agent.Invocation{
+		InvocationID: "inv-safe-state", AgentName: "tester", Model: &mockModel{},
+	}
+	_, _, _, _, _, err = p.executeToolCall(
+		context.Background(), inv, tc,
+		map[string]tool.Tool{"final": guarded}, 0, eventCh,
+	)
+	require.NoError(t, err)
+	select {
+	case emitted := <-eventCh:
+		require.NotContains(t, string(emitted.StateDelta["secret"]), "supersecret")
+		require.Contains(t, string(emitted.StateDelta["secret"]), "[REDACTED]")
+	default:
+		t.Fatal("sanitized final state delta was not emitted")
 	}
 }
 

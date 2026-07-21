@@ -202,6 +202,28 @@ func TestLocalCodeExecutor_ExecuteCode(t *testing.T) {
 	}
 }
 
+func TestLocalCodeExecutor_CleanExecutionEnvDoesNotInheritCanary(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("validated in the Linux race suite")
+	}
+	if !isExecutableAvailable("bash") {
+		t.Skip("bash is not available")
+	}
+	const canary = "TRPC_CODEEXEC_SAFETY_CANARY"
+	t.Setenv(canary, "must-not-leak")
+	executor := local.New()
+	ctx := codeexecutor.WithCleanExecutionEnv(context.Background())
+	result, err := executor.ExecuteCode(ctx, codeexecutor.CodeExecutionInput{
+		CodeBlocks: []codeexecutor.CodeBlock{{
+			Language: "bash",
+			Code:     `if [ -n "$TRPC_CODEEXEC_SAFETY_CANARY" ]; then echo leaked; else echo clean; fi`,
+		}},
+	})
+	require.NoError(t, err)
+	require.Contains(t, result.Output, "clean")
+	require.NotContains(t, result.Output, "leaked")
+}
+
 // isExecutableAvailable checks if an executable is available in PATH
 func isExecutableAvailable(name string) bool {
 	_, err := exec.LookPath(name)

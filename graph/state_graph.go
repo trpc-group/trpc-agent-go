@@ -4292,12 +4292,66 @@ func runToolWithEventContexts(
 	retryPolicy *tool.RetryPolicy,
 	toolCallIndex int,
 ) (context.Context, *agent.Invocation, context.Context, *agent.Invocation, any, []byte, error) {
+	policyInvocation := invocationFromContextOrFallback(ctx, nil)
+	startCtx, startInvocation, finalCtx, completeInvocation, result,
+		modifiedArgs, runErr := runToolWithEventContextsUnchecked(
+		ctx,
+		toolCall,
+		toolCallbacks,
+		t,
+		state,
+		retryPolicy,
+		toolCallIndex,
+	)
+	sanitizerInvocation := invocationOrFallback(
+		policyInvocation,
+		invocationFromContextOrFallback(finalCtx, completeInvocation),
+	)
+	result, sanitizeErr := sanitizeInvocationToolResult(
+		finalCtx,
+		sanitizerInvocation,
+		t,
+		toolCall,
+		t.Declaration(),
+		modifiedArgs,
+		result,
+		runErr,
+	)
+	if sanitizeErr != nil {
+		return startCtx, startInvocation, finalCtx, completeInvocation,
+			nil, modifiedArgs,
+			fmt.Errorf("tool result sanitizer: %w", sanitizeErr)
+	}
+	runErr, sanitizeErr = sanitizeInvocationToolError(
+		finalCtx, sanitizerInvocation, t, toolCall, t.Declaration(),
+		modifiedArgs, result, runErr,
+	)
+	if sanitizeErr != nil {
+		return startCtx, startInvocation, finalCtx, completeInvocation,
+			nil, modifiedArgs,
+			fmt.Errorf("tool error sanitizer: %w", sanitizeErr)
+	}
+	return startCtx, startInvocation, finalCtx, completeInvocation,
+		result, modifiedArgs, runErr
+}
+
+func runToolWithEventContextsUnchecked(
+	ctx context.Context,
+	toolCall model.ToolCall,
+	toolCallbacks *tool.Callbacks,
+	t tool.Tool,
+	state State,
+	retryPolicy *tool.RetryPolicy,
+	toolCallIndex int,
+) (context.Context, *agent.Invocation, context.Context, *agent.Invocation, any, []byte, error) {
 	ctx = context.WithValue(ctx, tool.ContextKeyToolCallID{}, toolCall.ID)
 	if invocation, ok := agent.InvocationFromContext(ctx); ok && jsonrepair.IsToolCallArgumentsJSONRepairEnabled(invocation) {
 		jsonrepair.RepairToolCallArgumentsInPlace(ctx, &toolCall)
 	}
 	decl := t.Declaration()
 	startInvocation := invocationFromContextOrFallback(ctx, nil)
+	policyInvocation := startInvocation
+	ctx = withGraphToolCallbackPanicRedaction(ctx, policyInvocation, t)
 
 	ctx, toolCall, customResult, err := runBeforeToolPluginCallbacks(
 		ctx,
@@ -4306,6 +4360,8 @@ func runToolWithEventContexts(
 		state,
 	)
 	startInvocation = invocationFromContextOrFallback(ctx, startInvocation)
+	policyInvocation = invocationOrFallback(policyInvocation, startInvocation)
+	ctx = withGraphToolCallbackPanicRedaction(ctx, policyInvocation, t)
 	if err != nil {
 		return ctx, startInvocation, ctx, startInvocation, customResult, toolCall.Function.Arguments, err
 	}
@@ -4321,6 +4377,8 @@ func runToolWithEventContexts(
 		state,
 	)
 	startInvocation = invocationFromContextOrFallback(ctx, startInvocation)
+	policyInvocation = invocationOrFallback(policyInvocation, startInvocation)
+	ctx = withGraphToolCallbackPanicRedaction(ctx, policyInvocation, t)
 	if err != nil {
 		return ctx, startInvocation, ctx, startInvocation, customResult, toolCall.Function.Arguments, err
 	}
@@ -4329,7 +4387,7 @@ func runToolWithEventContexts(
 	}
 	permissionResult, err := checkToolPermission(
 		ctx,
-		startInvocation,
+		policyInvocation,
 		toolCall,
 		t,
 		decl,
@@ -4346,7 +4404,7 @@ func runToolWithEventContexts(
 	if err != nil {
 		return startCtx, startInvocation, ctx, startInvocation, nil, toolCall.Function.Arguments, err
 	}
-	result, toolErr := callToolWithRetry(
+	result, toolErr := callToolWithRetryPolicy(
 		ctx,
 		toolCall,
 		callableTool,
@@ -4354,6 +4412,7 @@ func runToolWithEventContexts(
 		startInvocation,
 		state,
 		toolCallIndex,
+		permissionPolicyFromInvocation(policyInvocation),
 	)
 	completeInvocation := startInvocation
 
@@ -4365,6 +4424,7 @@ func runToolWithEventContexts(
 		toolErr,
 	)
 	completeInvocation = invocationFromContextOrFallback(ctx, completeInvocation)
+	ctx = withGraphToolCallbackPanicRedaction(ctx, policyInvocation, t)
 	if err != nil {
 		if customResult != nil {
 			return startCtx, startInvocation, ctx, completeInvocation, customResult, toolCall.Function.Arguments, err
@@ -4388,6 +4448,7 @@ func runToolWithEventContexts(
 		toolCallbacks,
 	)
 	completeInvocation = invocationFromContextOrFallback(ctx, completeInvocation)
+	ctx = withGraphToolCallbackPanicRedaction(ctx, policyInvocation, t)
 	if err != nil {
 		if customResult != nil {
 			return startCtx, startInvocation, ctx, completeInvocation, customResult, toolCall.Function.Arguments, err
@@ -4411,6 +4472,77 @@ func runToolWithEventContexts(
 			fmt.Errorf("tool %s call failed: %w", toolCall.Function.Name, toolErr)
 	}
 	return startCtx, startInvocation, ctx, completeInvocation, result, toolCall.Function.Arguments, nil
+}
+
+func withGraphToolCallbackPanicRedaction(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	t tool.Tool,
+) context.Context {
+	if effectiveGraphToolResultSanitizer(invocation, t) == nil &&
+		effectiveGraphToolErrorSanitizer(invocation, t) == nil {
+		return ctx
+	}
+	return tool.WithRedactedToolCallbackPanics(ctx)
+}
+
+func sanitizeInvocationToolResult(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	t tool.Tool,
+	toolCall model.ToolCall,
+	declaration *tool.Declaration,
+	arguments []byte,
+	result any,
+	runErr error,
+) (any, error) {
+	sanitizer := effectiveGraphToolResultSanitizer(invocation, t)
+	if sanitizer == nil {
+		return result, nil
+	}
+	return sanitizer.SanitizeToolResult(ctx, &tool.AfterToolArgs{
+		ToolCallID:  toolCall.ID,
+		ToolName:    toolCall.Function.Name,
+		Declaration: declaration,
+		Arguments:   arguments,
+		Result:      result,
+		Error:       runErr,
+		Meta:        extractMetaFromResult(result),
+	})
+}
+
+func sanitizeInvocationToolError(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	t tool.Tool,
+	toolCall model.ToolCall,
+	declaration *tool.Declaration,
+	arguments []byte,
+	result any,
+	runErr error,
+) (error, error) {
+	sanitizer := effectiveGraphToolErrorSanitizer(invocation, t)
+	if sanitizer == nil {
+		return runErr, nil
+	}
+	interrupt, wasInterrupt := GetInterruptError(runErr)
+	safeErr, err := sanitizer.SanitizeToolError(ctx, &tool.AfterToolArgs{
+		ToolCallID: toolCall.ID, ToolName: toolCall.Function.Name,
+		Declaration: declaration, Arguments: arguments,
+		Result: result, Error: runErr, Meta: extractMetaFromResult(result),
+	})
+	if err != nil || !wasInterrupt {
+		return safeErr, err
+	}
+	if _, stillInterrupt := GetInterruptError(safeErr); stillInterrupt {
+		return safeErr, nil
+	}
+	safeInterrupt := *interrupt
+	safeInterrupt.Value = "tool execution interrupted"
+	if safeErr != nil {
+		safeInterrupt.Value = safeErr.Error()
+	}
+	return &safeInterrupt, nil
 }
 
 func agentToolGraphRuntimeContext(
@@ -4453,6 +4585,25 @@ func callToolWithRetry(
 	state State,
 	toolCallIndex int,
 ) (any, error) {
+	return callToolWithRetryPolicy(
+		ctx, toolCall, callableTool, retryPolicy, invocation, state,
+		toolCallIndex, permissionPolicyFromInvocation(invocation),
+	)
+}
+
+func callToolWithRetryPolicy(
+	ctx context.Context,
+	toolCall model.ToolCall,
+	callableTool tool.CallableTool,
+	retryPolicy *tool.RetryPolicy,
+	invocation *agent.Invocation,
+	state State,
+	toolCallIndex int,
+	permissionPolicy tool.PermissionPolicy,
+) (any, error) {
+	if permissionPolicy != nil {
+		ctx = tool.WithPermissionPolicyContext(ctx, permissionPolicy)
+	}
 	runtimeTool, ok := callableTool.(agenttoolgraph.RuntimeCallable)
 	var graphRuntime agenttoolgraph.RuntimeContext
 	if ok {
@@ -4495,6 +4646,13 @@ func callToolWithRetry(
 	return runResult.Result, runResult.Error
 }
 
+func permissionPolicyFromInvocation(invocation *agent.Invocation) tool.PermissionPolicy {
+	if invocation == nil {
+		return nil
+	}
+	return invocation.RunOptions.ToolPermissionPolicy
+}
+
 func checkToolPermission(
 	ctx context.Context,
 	invocation *agent.Invocation,
@@ -4502,25 +4660,31 @@ func checkToolPermission(
 	t tool.Tool,
 	decl *tool.Declaration,
 ) (*tool.PermissionResult, error) {
+	semanticTool := itool.ResolveSemantic(t)
 	req := &tool.PermissionRequest{
 		Tool:        t,
 		ToolName:    toolCall.Function.Name,
 		ToolCallID:  toolCall.ID,
 		Declaration: decl,
 		Arguments:   toolCall.Function.Arguments,
-		Metadata:    tool.MetadataOf(t),
+		Metadata:    tool.MetadataOf(semanticTool),
 	}
-	if checker, ok := t.(tool.PermissionChecker); ok {
+	decisions := []tool.PermissionDecision{tool.AllowPermission()}
+	if checker, ok := semanticTool.(tool.PermissionChecker); ok {
 		decision, err := checker.CheckPermission(ctx, req)
-		result, err := normalizeToolPermissionResult(req, decision, err)
-		if result != nil || err != nil {
-			return result, err
+		if err != nil {
+			return nil, err
 		}
+		decisions = append(decisions, decision)
 	}
-	if invocation == nil || invocation.RunOptions.ToolPermissionPolicy == nil {
-		return nil, nil
+	if invocation != nil && invocation.RunOptions.ToolPermissionPolicy != nil {
+		decision, err := invocation.RunOptions.ToolPermissionPolicy.CheckToolPermission(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+		decisions = append(decisions, decision)
 	}
-	decision, err := invocation.RunOptions.ToolPermissionPolicy.CheckToolPermission(ctx, req)
+	decision, err := tool.MostRestrictivePermissionDecision(decisions...)
 	return normalizeToolPermissionResult(req, decision, err)
 }
 
@@ -5778,6 +5942,8 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 		eventInvocation,
 		config.InvocationID,
 	)
+	observableInvocation := invocationOrFallback(originalInvocation, eventInvocation)
+	observableArgs := observableGraphToolArguments(observableInvocation, t, modifiedArgs)
 	// Emit tool execution start event with modified arguments.
 	emitToolStartEvent(
 		finalCtx,
@@ -5787,7 +5953,7 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 		name,
 		id,
 		nodeID,
-		startTime, modifiedArgs, responseID,
+		startTime, observableArgs, responseID,
 	)
 
 	var interruptErr *InterruptError
@@ -5812,11 +5978,11 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 		StartTime:    startTime,
 		Result:       result,
 		Error:        eventErr,
-		Arguments:    modifiedArgs,
+		Arguments:    observableArgs,
 		ResponseID:   responseID,
 	})
 	if startedSpan {
-		itelemetry.TraceToolCall(span, sessInfo, t.Declaration(), modifiedArgs, event, err)
+		itelemetry.TraceToolCall(span, sessInfo, t.Declaration(), observableArgs, event, err)
 	}
 	itelemetry.ReportExecuteToolMetrics(ctx, itelemetry.ExecuteToolAttributes{
 		RequestModelName: "trpc-agent-go-graph",
@@ -5882,6 +6048,56 @@ func invocationOrFallback(invocation *agent.Invocation, fallback *agent.Invocati
 		return invocation
 	}
 	return fallback
+}
+
+func observableGraphToolArguments(
+	invocation *agent.Invocation,
+	t tool.Tool,
+	arguments []byte,
+) []byte {
+	if effectiveGraphToolResultSanitizer(invocation, t) == nil &&
+		effectiveGraphToolErrorSanitizer(invocation, t) == nil {
+		return arguments
+	}
+	digest := sha256.Sum256(arguments)
+	return []byte(fmt.Sprintf(`{"redacted":true,"sha256":"%x"}`, digest))
+}
+
+func effectiveGraphToolResultSanitizer(
+	invocation *agent.Invocation,
+	t tool.Tool,
+) tool.ToolResultSanitizer {
+	var invocationSanitizer tool.ToolResultSanitizer
+	if invocation != nil {
+		invocationSanitizer, _ = invocation.RunOptions.ToolPermissionPolicy.(tool.ToolResultSanitizer)
+	}
+	policy := graphToolLocalPermissionPolicy(t)
+	local, _ := policy.(tool.ToolResultSanitizer)
+	return tool.ComposeToolResultSanitizers(invocationSanitizer, local)
+}
+
+func effectiveGraphToolErrorSanitizer(
+	invocation *agent.Invocation,
+	t tool.Tool,
+) tool.ToolErrorSanitizer {
+	var invocationSanitizer tool.ToolErrorSanitizer
+	if invocation != nil {
+		invocationSanitizer, _ = invocation.RunOptions.ToolPermissionPolicy.(tool.ToolErrorSanitizer)
+	}
+	policy := graphToolLocalPermissionPolicy(t)
+	local, _ := policy.(tool.ToolErrorSanitizer)
+	return tool.ComposeToolErrorSanitizers(invocationSanitizer, local)
+}
+
+func graphToolLocalPermissionPolicy(t tool.Tool) tool.PermissionPolicy {
+	if t == nil {
+		return nil
+	}
+	provider, _ := itool.ResolveSemantic(t).(tool.PermissionPolicyProvider)
+	if provider == nil {
+		return nil
+	}
+	return provider.ToolPermissionPolicy()
 }
 
 func invocationIDOrFallback(invocation *agent.Invocation, fallback string) string {

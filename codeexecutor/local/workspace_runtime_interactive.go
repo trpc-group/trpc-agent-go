@@ -72,6 +72,10 @@ type interactiveSession struct {
 	closeOnce  sync.Once
 	stdout     strings.Builder
 	stderr     strings.Builder
+
+	maxOutputBytes     int64
+	outputBytes        int64
+	outputLimitReached bool
 }
 
 func newInteractiveSession(
@@ -266,11 +270,12 @@ func (s *interactiveSession) RunResult() codeexecutor.RunResult {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return codeexecutor.RunResult{
-		Stdout:   s.stdout.String(),
-		Stderr:   s.stderr.String(),
-		ExitCode: s.exitCode,
-		Duration: s.duration,
-		TimedOut: s.timedOut,
+		Stdout:             s.stdout.String(),
+		Stderr:             s.stderr.String(),
+		ExitCode:           s.exitCode,
+		Duration:           s.duration,
+		TimedOut:           s.timedOut,
+		OutputLimitReached: s.outputLimitReached,
 	}
 }
 
@@ -319,10 +324,22 @@ func (s *interactiveSession) appendOutput(
 	chunk string,
 	stream string,
 ) {
-	text := strings.ReplaceAll(chunk, "\r\n", "\n")
-
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	if s.outputLimitReached {
+		s.mu.Unlock()
+		return
+	}
+
+	if s.maxOutputBytes > 0 {
+		remaining := s.maxOutputBytes - s.outputBytes
+		if int64(len(chunk)) >= remaining {
+			chunk = chunk[:remaining]
+			s.outputLimitReached = true
+		}
+		s.outputBytes += int64(len(chunk))
+	}
+
+	text := strings.ReplaceAll(chunk, "\r\n", "\n")
 
 	switch stream {
 	case "stderr":
@@ -333,14 +350,18 @@ func (s *interactiveSession) appendOutput(
 
 	text = s.partial + text
 	parts := strings.Split(text, "\n")
-	if len(parts) == 0 {
-		return
-	}
 	s.partial = parts[len(parts)-1]
 	for _, line := range parts[:len(parts)-1] {
 		s.lines = append(s.lines, line)
 	}
 	s.trimLocked()
+	cancel := s.cancel
+	reached := s.outputLimitReached
+	s.mu.Unlock()
+
+	if reached && cancel != nil {
+		cancel()
+	}
 }
 
 func (s *interactiveSession) trimLocked() {
@@ -394,9 +415,11 @@ func (r *Runtime) StartProgram(
 	)
 	sess.cmd = cmd
 	sess.cancel = cancel
+	sess.maxOutputBytes = spec.MaxOutputBytes
 	startedAt := time.Now()
 
 	if spec.TTY {
+		disableProcessGroup(cmd)
 		if runtime.GOOS == "windows" {
 			cancel()
 			return nil, errInteractiveTTYWindows
@@ -553,6 +576,7 @@ func newLocalProgramCommand(
 	env []string,
 ) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, spec.Cmd, spec.Args...) //nolint:gosec
+	configureProcessGroup(cmd)
 	cmd.Dir = cwd
 	cmd.Env = env
 	if !isBareLocalCommand(spec.Cmd) {

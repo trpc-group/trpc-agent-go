@@ -15,11 +15,14 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/safety"
 )
 
 const policyTestTimeoutSec = 5
@@ -395,7 +398,7 @@ func TestExecTool_PolicyActive_HardensSpawn(t *testing.T) {
 			"PATH":       "/usr/bin",
 		},
 	}
-	req, err := tl.prepareExec(context.Background(), in)
+	req, err := tl.prepareExec(context.Background(), in, nil)
 	require.NoError(t, err)
 
 	require.Equal(t,
@@ -433,7 +436,7 @@ func TestExecTool_NoPolicy_PreservesHistoricalSpawn(t *testing.T) {
 			"PATH": "/usr/bin",
 		},
 	}
-	req, err := tl.prepareExec(context.Background(), in)
+	req, err := tl.prepareExec(context.Background(), in, nil)
 	require.NoError(t, err)
 
 	require.Equal(t,
@@ -443,6 +446,31 @@ func TestExecTool_NoPolicy_PreservesHistoricalSpawn(t *testing.T) {
 		"no policy must preserve historical host environment inheritance")
 	require.Equal(t, in.Env, req.spec.Env,
 		"no policy must keep env untouched")
+}
+
+func TestExecTool_FrameworkOnlySafetyGuardHardensRuntimeProfile(t *testing.T) {
+	policy := safety.DefaultPolicy()
+	policy.Profiles = map[string]safety.ToolProfile{"workspace_exec": {
+		MaxTimeout: safety.Duration(30 * time.Second), MaxOutputBytes: 1024,
+	}}
+	guard, err := safety.NewGuard(policy)
+	require.NoError(t, err)
+	ctx := tool.WithPermissionPolicyContext(context.Background(), guard)
+	tl := NewExecTool(localexec.New())
+	in := execInput{
+		Command: "echo hi", Timeout: 90,
+		Env: map[string]string{"BASH_ENV": "evil", "CI": "1"},
+	}
+	effective := effectiveSafetyGuard(ctx, tl.safetyGuard)
+	require.Same(t, guard, effective)
+	req, err := tl.prepareExec(ctx, in, effective)
+	require.NoError(t, err)
+	require.True(t, req.spec.CleanEnv)
+	require.Equal(t, []string{"-c", "echo hi"}, req.spec.Args)
+	require.Equal(t, 30*time.Second, req.spec.Timeout)
+	require.EqualValues(t, 1024, req.spec.MaxOutputBytes)
+	require.NotContains(t, req.spec.Env, "BASH_ENV")
+	require.Equal(t, "1", req.spec.Env["CI"])
 }
 
 func TestExecTool_NoPolicy_AllowsArbitraryShell(t *testing.T) {

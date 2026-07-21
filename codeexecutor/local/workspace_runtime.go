@@ -362,8 +362,24 @@ func (r *Runtime) RunProgram(
 	}
 
 	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	var outputLimit *sharedOutputLimit
+	if spec.MaxOutputBytes > 0 {
+		outputLimit = &sharedOutputLimit{
+			maxBytes: spec.MaxOutputBytes,
+			cancel:   cancel,
+		}
+		cmd.Stdout = limitedOutputWriter{limit: outputLimit}
+		cmd.Stderr = limitedOutputWriter{
+			limit:  outputLimit,
+			stderr: true,
+		}
+		// Bound Wait if a canceled command leaves a descendant holding a
+		// copied stdout or stderr pipe open.
+		cmd.WaitDelay = 2 * time.Second
+	} else {
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+	}
 
 	start := time.Now()
 	runErr := cmd.Run()
@@ -382,12 +398,19 @@ func (r *Runtime) RunProgram(
 		}
 	}
 
+	stdoutText := stdout.String()
+	stderrText := stderr.String()
+	outputLimitReached := false
+	if outputLimit != nil {
+		stdoutText, stderrText, outputLimitReached = outputLimit.result()
+	}
 	res := codeexecutor.RunResult{
-		Stdout:   stdout.String(),
-		Stderr:   stderr.String(),
-		ExitCode: exitCode,
-		Duration: dur,
-		TimedOut: errors.Is(tctx.Err(), context.DeadlineExceeded),
+		Stdout:             stdoutText,
+		Stderr:             stderrText,
+		ExitCode:           exitCode,
+		Duration:           dur,
+		TimedOut:           errors.Is(tctx.Err(), context.DeadlineExceeded),
+		OutputLimitReached: outputLimitReached,
 	}
 	span.SetAttributes(
 		attribute.Int(codeexecutor.AttrExitCode, res.ExitCode),

@@ -1,0 +1,16 @@
+version: 1
+default_action: allow
+profiles:
+  workspace_exec:
+    allowed_commands: [go, git]
+    allowed_domains: [api.github.com]
+    allowed_env: [CI]
+    max_timeout: 2m
+    max_output_bytes: 1048576
+  net_fetch:
+    allowed_domains: [api.github.com, "*.trusted.example"]
+    max_timeout: 30s
+    max_output_bytes: 1048576
+  code_execution:
+    max_timeout: 30s
+    max_output_bytes: 1048576

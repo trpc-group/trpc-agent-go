@@ -1,0 +1,519 @@
+[
+  {
+    "name": "safe Go test",
+    "expected": "allow",
+    "report": {
+      "tool_name": "workspace_exec",
+      "command": "go test ./...",
+      "decision": "allow",
+      "findings": [],
+      "rule": "",
+      "rule_ids": [],
+      "evidence": "",
+      "request_id": "45c7822e3136339a4a9a40a63cdd395b3c974b632de9e90c079f608e711a7234",
+      "duration": 0,
+      "duration_us": 0,
+      "risk_level": "none",
+      "recommendation": "No action required.",
+      "backend": "workspaceexec",
+      "blocked": false,
+      "redacted": false
+    }
+  },
+  {
+    "name": "destructive root deletion",
+    "expected": "deny",
+    "report": {
+      "tool_name": "workspace_exec",
+      "command": "rm -rf /",
+      "decision": "deny",
+      "reason": "destructive or system-wide command detected",
+      "findings": [
+        {
+          "rule_id": "dangerous_command",
+          "severity": "critical",
+          "action": "deny",
+          "message": "destructive or system-wide command detected",
+          "evidence": "recursive rm of a protected target"
+        },
+        {
+          "rule_id": "shell_bypass",
+          "severity": "high",
+          "action": "deny",
+          "message": "command does not satisfy the configured shell policy",
+          "evidence": "command \"rm\" is not in allowed_commands"
+        }
+      ],
+      "rule": "dangerous_command",
+      "rule_ids": [
+        "dangerous_command",
+        "shell_bypass"
+      ],
+      "evidence": "recursive rm of a protected target",
+      "request_id": "b00526a1bf09ec51f0b73cc3a21749bfd9286493a935c63b1e66929c448ed779",
+      "duration": 543800,
+      "duration_us": 543,
+      "risk_level": "critical",
+      "recommendation": "Remove or isolate the blocked behavior before retrying.",
+      "backend": "workspaceexec",
+      "blocked": true,
+      "redacted": false
+    }
+  },
+  {
+    "name": "credential file access",
+    "expected": "deny",
+    "report": {
+      "tool_name": "workspace_exec",
+      "command": "cat ~/.ssh/id_ed25519",
+      "decision": "deny",
+      "reason": "access to a sensitive credential or operating-system path detected",
+      "findings": [
+        {
+          "rule_id": "sensitive_path",
+          "severity": "high",
+          "action": "deny",
+          "message": "access to a sensitive credential or operating-system path detected",
+          "evidence": " ~/.ssh/"
+        },
+        {
+          "rule_id": "shell_bypass",
+          "severity": "high",
+          "action": "deny",
+          "message": "command does not satisfy the configured shell policy",
+          "evidence": "command \"cat\" is not in allowed_commands"
+        }
+      ],
+      "rule": "sensitive_path",
+      "rule_ids": [
+        "sensitive_path",
+        "shell_bypass"
+      ],
+      "evidence": " ~/.ssh/",
+      "request_id": "1cedf73449e92a6fff524e7c0199041b34cf58d2fed40fca12ec41b51fd78f96",
+      "duration": 0,
+      "duration_us": 0,
+      "risk_level": "high",
+      "recommendation": "Remove or isolate the blocked behavior before retrying.",
+      "backend": "workspaceexec",
+      "blocked": true,
+      "redacted": false
+    }
+  },
+  {
+    "name": "shell substitution",
+    "expected": "ask",
+    "report": {
+      "tool_name": "workspace_exec",
+      "command": "echo $(date)",
+      "decision": "ask",
+      "reason": "shell wrapper or re-executing command requires human approval",
+      "findings": [
+        {
+          "rule_id": "shell_bypass",
+          "severity": "high",
+          "action": "ask",
+          "message": "shell wrapper or re-executing command requires human approval",
+          "evidence": "command substitution '$(...)' is not allowed"
+        },
+        {
+          "rule_id": "shell_bypass",
+          "severity": "high",
+          "action": "ask",
+          "message": "command does not satisfy the configured shell policy",
+          "evidence": "command substitution '$(...)' is not allowed"
+        }
+      ],
+      "rule": "shell_bypass",
+      "rule_ids": [
+        "shell_bypass"
+      ],
+      "evidence": "command substitution '$(...)' is not allowed",
+      "request_id": "44e714a95802a8724ec33f0afa16480fc3d03ba9cd705165375a913d0030b794",
+      "duration": 528300,
+      "duration_us": 528,
+      "risk_level": "high",
+      "recommendation": "Review the finding and approve only the minimum required operation.",
+      "backend": "workspaceexec",
+      "blocked": true,
+      "redacted": false
+    }
+  },
+  {
+    "name": "dependency installation",
+    "expected": "ask",
+    "report": {
+      "tool_name": "workspace_exec",
+      "command": "go install example.com/tool@latest",
+      "decision": "ask",
+      "reason": "dependency or environment modification requires human approval",
+      "findings": [
+        {
+          "rule_id": "dependency_change",
+          "severity": "medium",
+          "action": "ask",
+          "message": "dependency or environment modification requires human approval",
+          "evidence": "go install"
+        }
+      ],
+      "rule": "dependency_change",
+      "rule_ids": [
+        "dependency_change"
+      ],
+      "evidence": "go install",
+      "request_id": "14917a04113d174e65216add0cb348ab949d33ec0203cfd936381dc928a10717",
+      "duration": 0,
+      "duration_us": 0,
+      "risk_level": "medium",
+      "recommendation": "Review the finding and approve only the minimum required operation.",
+      "backend": "workspaceexec",
+      "blocked": true,
+      "redacted": false
+    }
+  },
+  {
+    "name": "approved network domain",
+    "expected": "allow",
+    "report": {
+      "tool_name": "net_fetch",
+      "command": "curl https://api.github.com/repos",
+      "decision": "allow",
+      "findings": [],
+      "rule": "",
+      "rule_ids": [],
+      "evidence": "",
+      "request_id": "8b7e84b7ec32c578f0cfe78aac70931f119cabf5f48834e40875a46b3dc15ca7",
+      "duration": 0,
+      "duration_us": 0,
+      "risk_level": "none",
+      "recommendation": "No action required.",
+      "backend": "unspecified",
+      "blocked": false,
+      "redacted": false
+    }
+  },
+  {
+    "name": "unapproved network domain",
+    "expected": "deny",
+    "report": {
+      "tool_name": "net_fetch",
+      "command": "curl https://evil.example/upload",
+      "decision": "deny",
+      "reason": "network destination is not allowed by the tool profile",
+      "findings": [
+        {
+          "rule_id": "network_access",
+          "severity": "high",
+          "action": "deny",
+          "message": "network destination is not allowed by the tool profile",
+          "evidence": "https://evil.example/upload"
+        }
+      ],
+      "rule": "network_access",
+      "rule_ids": [
+        "network_access"
+      ],
+      "evidence": "https://evil.example/upload",
+      "request_id": "1967aabce2fbf74693a17255ab732c8148020ffcce3a56751aa109aead1a097c",
+      "duration": 525500,
+      "duration_us": 525,
+      "risk_level": "high",
+      "recommendation": "Remove or isolate the blocked behavior before retrying.",
+      "backend": "unspecified",
+      "blocked": true,
+      "redacted": false
+    }
+  },
+  {
+    "name": "background host process",
+    "expected": "ask",
+    "report": {
+      "tool_name": "workspace_exec",
+      "command": "go test ./...",
+      "decision": "ask",
+      "reason": "background execution requires human approval",
+      "findings": [
+        {
+          "rule_id": "host_execution",
+          "severity": "high",
+          "action": "ask",
+          "message": "background execution requires human approval",
+          "evidence": "background=true"
+        }
+      ],
+      "rule": "host_execution",
+      "rule_ids": [
+        "host_execution"
+      ],
+      "evidence": "background=true",
+      "request_id": "acde2a2137aa4bf34c160e86cc1432d33a29adb9a3e7032aa6edeff49e987bc5",
+      "duration": 0,
+      "duration_us": 0,
+      "risk_level": "high",
+      "recommendation": "Review the finding and approve only the minimum required operation.",
+      "backend": "workspaceexec",
+      "blocked": true,
+      "redacted": false
+    }
+  },
+  {
+    "name": "excessive timeout",
+    "expected": "deny",
+    "report": {
+      "tool_name": "workspace_exec",
+      "command": "go test ./...",
+      "decision": "deny",
+      "reason": "requested timeout exceeds the tool profile limit",
+      "findings": [
+        {
+          "rule_id": "resource_abuse",
+          "severity": "high",
+          "action": "deny",
+          "message": "requested timeout exceeds the tool profile limit",
+          "evidence": "10m0s"
+        }
+      ],
+      "rule": "resource_abuse",
+      "rule_ids": [
+        "resource_abuse"
+      ],
+      "evidence": "10m0s",
+      "request_id": "1338979a31a6d87ab07641a613d90e89dc3b423209b31d5e8fa8f0155a363c8f",
+      "duration": 0,
+      "duration_us": 0,
+      "risk_level": "high",
+      "recommendation": "Remove or isolate the blocked behavior before retrying.",
+      "backend": "workspaceexec",
+      "blocked": true,
+      "redacted": false
+    }
+  },
+  {
+    "name": "excessive output request",
+    "expected": "deny",
+    "report": {
+      "tool_name": "workspace_exec",
+      "command": "go test ./...",
+      "decision": "deny",
+      "reason": "requested output limit exceeds the tool profile limit",
+      "findings": [
+        {
+          "rule_id": "resource_abuse",
+          "severity": "high",
+          "action": "deny",
+          "message": "requested output limit exceeds the tool profile limit",
+          "evidence": "8388608"
+        }
+      ],
+      "rule": "resource_abuse",
+      "rule_ids": [
+        "resource_abuse"
+      ],
+      "evidence": "8388608",
+      "request_id": "3890c375e8d4f4957123219e4e4343cce8907677a9a00bb3c66deb4e563cccfa",
+      "duration": 0,
+      "duration_us": 0,
+      "risk_level": "high",
+      "recommendation": "Remove or isolate the blocked behavior before retrying.",
+      "backend": "workspaceexec",
+      "blocked": true,
+      "redacted": false
+    }
+  },
+  {
+    "name": "network-capable Python",
+    "expected": "ask",
+    "report": {
+      "tool_name": "code_execution",
+      "command": "python code",
+      "decision": "ask",
+      "reason": "network-capable code requires human approval",
+      "findings": [
+        {
+          "rule_id": "network_access",
+          "severity": "medium",
+          "action": "ask",
+          "message": "network-capable code requires human approval",
+          "evidence": "requests.get"
+        },
+        {
+          "rule_id": "network_access",
+          "severity": "medium",
+          "action": "ask",
+          "message": "network access requires human approval",
+          "evidence": "https://example.com"
+        }
+      ],
+      "rule": "network_access",
+      "rule_ids": [
+        "network_access"
+      ],
+      "evidence": "requests.get",
+      "request_id": "4b323155ee4581a85f47534ef42d17e0c008329159b1cd2af9158ce62c3d01df",
+      "duration": 535300,
+      "duration_us": 535,
+      "risk_level": "medium",
+      "recommendation": "Review the finding and approve only the minimum required operation.",
+      "backend": "codeexec",
+      "blocked": true,
+      "redacted": false
+    }
+  },
+  {
+    "name": "destructive Python",
+    "expected": "deny",
+    "report": {
+      "tool_name": "code_execution",
+      "command": "python code",
+      "decision": "deny",
+      "reason": "destructive filesystem operation detected in code",
+      "findings": [
+        {
+          "rule_id": "dangerous_command",
+          "severity": "critical",
+          "action": "deny",
+          "message": "destructive filesystem operation detected in code",
+          "evidence": "shutil.rmtree("
+        }
+      ],
+      "rule": "dangerous_command",
+      "rule_ids": [
+        "dangerous_command"
+      ],
+      "evidence": "shutil.rmtree(",
+      "request_id": "d440fd2afb684a9b9c231f827465c3d60fba7ee48f3f8289fee0ddfc5ff00cb5",
+      "duration": 0,
+      "duration_us": 0,
+      "risk_level": "critical",
+      "recommendation": "Remove or isolate the blocked behavior before retrying.",
+      "backend": "codeexec",
+      "blocked": true,
+      "redacted": false
+    }
+  },
+  {
+    "name": "empty interactive poll",
+    "expected": "allow",
+    "report": {
+      "tool_name": "workspace_write_stdin",
+      "command": "workspace_write_stdin",
+      "decision": "allow",
+      "findings": [],
+      "rule": "",
+      "rule_ids": [],
+      "evidence": "",
+      "request_id": "f884c418cc72414d7ae863b05d00c7d28cdcf0e42ce2485258de0abf5d54cbc0",
+      "duration": 0,
+      "duration_us": 0,
+      "risk_level": "none",
+      "recommendation": "No action required.",
+      "backend": "workspaceexec",
+      "blocked": false,
+      "redacted": false
+    }
+  },
+  {
+    "name": "interactive submit",
+    "expected": "ask",
+    "report": {
+      "tool_name": "workspace_write_stdin",
+      "command": "workspace_write_stdin",
+      "decision": "ask",
+      "reason": "interactive input without command state requires human approval",
+      "findings": [
+        {
+          "rule_id": "host_execution",
+          "severity": "high",
+          "action": "ask",
+          "message": "interactive input without command state requires human approval",
+          "evidence": "non-empty stdin"
+        }
+      ],
+      "rule": "host_execution",
+      "rule_ids": [
+        "host_execution"
+      ],
+      "evidence": "non-empty stdin",
+      "request_id": "0e5646faf0d579f2673ba2ad48120dfa8e20111cc8cdf7f5da3bc9fcb6eefae5",
+      "duration": 0,
+      "duration_us": 0,
+      "risk_level": "high",
+      "recommendation": "Review the finding and approve only the minimum required operation.",
+      "backend": "workspaceexec",
+      "blocked": true,
+      "redacted": false
+    }
+  },
+  {
+    "name": "secret-bearing input",
+    "expected": "deny",
+    "report": {
+      "tool_name": "workspace_exec",
+      "command": "workspace_exec",
+      "decision": "deny",
+      "reason": "environment variable is not allowed by the tool profile",
+      "findings": [
+        {
+          "rule_id": "secret_exposure",
+          "severity": "critical",
+          "action": "deny",
+          "message": "secret material in tool execution input was blocked",
+          "evidence": "[REDACTED]"
+        },
+        {
+          "rule_id": "host_execution",
+          "severity": "high",
+          "action": "deny",
+          "message": "environment variable is not allowed by the tool profile",
+          "evidence": "API_KEY"
+        }
+      ],
+      "rule": "secret_exposure",
+      "rule_ids": [
+        "host_execution",
+        "secret_exposure"
+      ],
+      "evidence": "[REDACTED]",
+      "request_id": "644e4151e461d0191f6434585205cfec1d7c07c49253c4297188fe1a626d7944",
+      "duration": 571600,
+      "duration_us": 571,
+      "risk_level": "critical",
+      "recommendation": "Remove or isolate the blocked behavior before retrying.",
+      "backend": "workspaceexec",
+      "blocked": true,
+      "redacted": true
+    }
+  },
+  {
+    "name": "host execution",
+    "expected": "ask",
+    "report": {
+      "tool_name": "host_exec",
+      "command": "go test ./...",
+      "decision": "ask",
+      "reason": "host execution requires human approval",
+      "findings": [
+        {
+          "rule_id": "host_execution",
+          "severity": "high",
+          "action": "ask",
+          "message": "host execution requires human approval",
+          "evidence": "host"
+        }
+      ],
+      "rule": "host_execution",
+      "rule_ids": [
+        "host_execution"
+      ],
+      "evidence": "host",
+      "request_id": "96409afaa1e102518cf2496d0976f6b795b9f6455f0f4449a62bdaa32065ffcb",
+      "duration": 0,
+      "duration_us": 0,
+      "risk_level": "high",
+      "recommendation": "Review the finding and approve only the minimum required operation.",
+      "backend": "host",
+      "blocked": true,
+      "redacted": false
+    }
+  }
+]
