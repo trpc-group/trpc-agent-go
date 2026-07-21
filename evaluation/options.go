@@ -36,6 +36,7 @@ type options struct {
 	metricManager                     metric.Manager
 	registry                          registry.Registry
 	metricRegistry                    metricregistry.Registry
+	evalCaseResultAggregator          service.EvalCaseResultAggregator
 	evalService                       service.Service
 	expectedRunner                    runner.Runner
 	userSimulator                     usersimulation.Simulator
@@ -107,6 +108,13 @@ func WithRegistry(r registry.Registry) Option {
 func WithMetricRegistry(r metricregistry.Registry) Option {
 	return func(o *options) {
 		o.metricRegistry = r
+	}
+}
+
+// WithEvalCaseResultAggregator sets the eval case result aggregator for service evaluation.
+func WithEvalCaseResultAggregator(aggregator service.EvalCaseResultAggregator) Option {
+	return func(o *options) {
+		o.evalCaseResultAggregator = aggregator
 	}
 }
 

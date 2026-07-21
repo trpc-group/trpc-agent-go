@@ -43,6 +43,8 @@ type EvalCaseResult struct {
 	EvalID string `json:"evalId,omitempty"`
 	// RunID identifies the run that produced this case result.
 	RunID int `json:"runId,omitempty"`
+	// Score is the aggregated case-level score.
+	Score float64 `json:"score,omitempty"`
 	// FinalEvalStatus is the final eval status for this eval case.
 	FinalEvalStatus status.EvalStatus `json:"finalEvalStatus,omitempty"`
 	// ErrorMessage contains the error message when evaluation execution failed.
