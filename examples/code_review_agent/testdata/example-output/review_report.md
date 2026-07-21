@@ -15,8 +15,8 @@ One actionable issue found. Go checks completed successfully.
 - Findings: 1
 - Warnings: 0
 - Needs human review: 0
-- Tool calls: 3
-- Permission interceptions: 1
+- Tool calls: 5
+- Permission interceptions: 2
 - Total duration: 6026 ms
 - Sandbox duration: 5421 ms
 - Severity distribution: critical=1
@@ -46,7 +46,7 @@ None.
 
 ## Governance Interceptions
 
-- ask `workspace_exec` — `exec /usr/bin/timeout --signal=TERM --kill-after=1s 120s sh -c 'sh skills/code-review/scripts/run-go-checks.sh work/inputs/repo'`: I need to run the code-review Skill's repository checks in the configured sandbox so the review can use observed test and static-analysis evidence.
+- ask `workspace_exec` — `exec /usr/bin/timeout --signal=TERM --kill-after=1s 120s sh -c 'sh skills/code-review/scripts/run-go-checks.sh work/inputs/repo'`: Call request_tool_permission with this target tool and its exact arguments, then retry the target tool only if permission is granted.
 
 ## Sandbox Runs
 

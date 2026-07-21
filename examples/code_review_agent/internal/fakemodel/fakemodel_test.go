@@ -36,9 +36,10 @@ func TestGenerateContentRunsDeterministicToolCallingFlow(t *testing.T) {
 		Content: "Review this code change.",
 	}}
 	availableTools := map[string]tool.Tool{
-		"skill_load":            nil,
-		"workspace_exec":        nil,
-		"submit_review_results": nil,
+		"skill_load":              nil,
+		"workspace_exec":          nil,
+		"request_tool_permission": nil,
+		"submit_review_results":   nil,
 	}
 
 	load := generateOne(t, fake, &model.Request{Messages: messages, Tools: availableTools})
@@ -56,12 +57,39 @@ func TestGenerateContentRunsDeterministicToolCallingFlow(t *testing.T) {
 		"command":     "sh skills/code-review/scripts/run-go-checks.sh work/inputs/repo",
 		"timeout_sec": float64(120),
 	})
-	if explanation := runChecks.Choices[0].Message.Content; explanation == "" ||
-		!strings.Contains(explanation, "go test") || !strings.Contains(explanation, "go vet") {
-		t.Fatalf("workspace_exec permission explanation = %q", explanation)
+	if content := runChecks.Choices[0].Message.Content; content != "" {
+		t.Fatalf("workspace_exec assistant content = %q, want no permission Reason in prose", content)
 	}
 	messages = append(messages, runChecks.Choices[0].Message, model.Message{
 		Role: model.RoleTool, ToolID: runChecks.Choices[0].Message.ToolCalls[0].ID,
+		ToolName: "workspace_exec", Content: `{"status":"approval_required","tool":"workspace_exec","reason":"request permission"}`,
+	})
+
+	requestPermission := generateOne(t, fake, &model.Request{Messages: messages, Tools: availableTools})
+	assertToolCall(t, requestPermission, "request_tool_permission", map[string]any{
+		"target_tool": "workspace_exec",
+		"target_arguments": map[string]any{
+			"command":     "sh skills/code-review/scripts/run-go-checks.sh work/inputs/repo",
+			"timeout_sec": float64(120),
+		},
+		"reason": "Run the affected module's bundled checks to collect observed go test and go vet evidence for the review.",
+	})
+	messages = append(messages, requestPermission.Choices[0].Message, model.Message{
+		Role: model.RoleTool, ToolID: requestPermission.Choices[0].Message.ToolCalls[0].ID,
+		ToolName: "request_tool_permission", Content: `{"status":"granted","target_tool":"workspace_exec"}`,
+	})
+
+	retryChecks := generateOne(t, fake, &model.Request{Messages: messages, Tools: availableTools})
+	assertToolCall(t, retryChecks, "workspace_exec", map[string]any{
+		"command":     "sh skills/code-review/scripts/run-go-checks.sh work/inputs/repo",
+		"timeout_sec": float64(120),
+	})
+	if firstID, retryID := runChecks.Choices[0].Message.ToolCalls[0].ID,
+		retryChecks.Choices[0].Message.ToolCalls[0].ID; firstID == retryID {
+		t.Fatalf("workspace_exec retry reused tool call id %q", retryID)
+	}
+	messages = append(messages, retryChecks.Choices[0].Message, model.Message{
+		Role: model.RoleTool, ToolID: retryChecks.Choices[0].Message.ToolCalls[0].ID,
 		ToolName: "workspace_exec", Content: `{"status":"completed","output":"go test: ok","exit_code":0}`,
 	})
 

@@ -25,9 +25,10 @@ import (
 const modelName = "fake-model"
 
 const (
-	skillLoadTool     = "skill_load"
-	workspaceExecTool = "workspace_exec"
-	submitResultsTool = "submit_review_results"
+	skillLoadTool             = "skill_load"
+	workspaceExecTool         = "workspace_exec"
+	requestToolPermissionTool = "request_tool_permission"
+	submitResultsTool         = "submit_review_results"
 )
 
 type scenario struct {
@@ -160,10 +161,22 @@ func (f *FakeModel) GenerateContent(ctx context.Context, request *model.Request)
 			"docs":  []string{"references/rules.md"},
 		})
 	case lastTool.ToolName == skillLoadTool:
-		response = f.toolCall(request, workspaceExecTool, map[string]any{
-			"command":     "sh skills/code-review/scripts/run-go-checks.sh work/inputs/repo",
-			"timeout_sec": 120,
+		response = f.toolCall(request, workspaceExecTool, reviewChecksArguments())
+	case lastTool.ToolName == workspaceExecTool && approvalRequired(lastTool.Content):
+		response = f.toolCall(request, requestToolPermissionTool, map[string]any{
+			"target_tool":      workspaceExecTool,
+			"target_arguments": reviewChecksArguments(),
+			"reason":           "Run the affected module's bundled checks to collect observed go test and go vet evidence for the review.",
 		})
+	case lastTool.ToolName == requestToolPermissionTool:
+		if !permissionGranted(lastTool.Content) {
+			response = errorResponse(
+				f.scenario.fixture,
+				"request_tool_permission did not grant the deterministic workspace_exec request",
+			)
+			break
+		}
+		response = f.toolCall(request, workspaceExecTool, reviewChecksArguments())
 	case lastTool.ToolName == workspaceExecTool:
 		submission := f.scenario.submission
 		failed := workspaceFailed(lastTool.Content)
@@ -222,6 +235,13 @@ func findingScenario(fixture string, finding reviewResult) scenario {
 	}
 }
 
+func reviewChecksArguments() map[string]any {
+	return map[string]any{
+		"command":     "sh skills/code-review/scripts/run-go-checks.sh work/inputs/repo",
+		"timeout_sec": 120,
+	}
+}
+
 func duplicateFindingScenario() scenario {
 	findings := []reviewResult{
 		{
@@ -272,21 +292,16 @@ func (f *FakeModel) toolCall(request *model.Request, name string, arguments any)
 		return errorResponse(f.scenario.fixture, fmt.Sprintf("encode %s arguments: %v", name, err))
 	}
 
-	var (
-		finishReason = "tool_calls"
-		reason       string
-	)
-
-	if name == workspaceExecTool {
-		reason = "I need to run the code-review Skill's repository checks in the configured sandbox to verify whether go test and go vet pass or fail for the affected module."
-	}
+	finishReason := "tool_calls"
+	callNumber := toolMessageCount(request.Messages, name) + 1
+	callID := fmt.Sprintf("fake-%s-%s-%d", f.scenario.fixture, name, callNumber)
 	return &model.Response{
-		ID:     "fake-model-" + f.scenario.fixture + "-" + name,
+		ID:     fmt.Sprintf("fake-model-%s-%s-%d", f.scenario.fixture, name, callNumber),
 		Object: model.ObjectTypeChatCompletion, Model: modelName, Done: true,
 		Choices: []model.Choice{{
 			Index: 0,
-			Message: model.Message{Role: model.RoleAssistant, Content: reason, ToolCalls: []model.ToolCall{{
-				ID:       "fake-" + f.scenario.fixture + "-" + name,
+			Message: model.Message{Role: model.RoleAssistant, ToolCalls: []model.ToolCall{{
+				ID:       callID,
 				Type:     "function",
 				Function: model.FunctionDefinitionParam{Name: name, Arguments: encoded},
 			}}},
@@ -350,6 +365,22 @@ func submissionAccepted(content string) bool {
 	}
 	return json.Unmarshal([]byte(content), &result) == nil &&
 		result.Status == "accepted"
+}
+
+func approvalRequired(content string) bool {
+	var result struct {
+		Status string `json:"status"`
+	}
+	return json.Unmarshal([]byte(content), &result) == nil &&
+		result.Status == "approval_required"
+}
+
+func permissionGranted(content string) bool {
+	var result struct {
+		Status string `json:"status"`
+	}
+	return json.Unmarshal([]byte(content), &result) == nil &&
+		result.Status == "granted"
 }
 
 func workspaceFailed(content string) bool {

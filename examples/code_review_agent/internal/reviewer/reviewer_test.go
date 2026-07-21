@@ -238,152 +238,6 @@ func TestRedactingToolCallbackReplacesCredentialBearingError(t *testing.T) {
 	}
 }
 
-func TestReviewModelCallbacksCaptureToolPermissionExplanation(t *testing.T) {
-	tracker := newReviewRunTracker()
-	callbacks := newReviewModelCallbacks(tracker)
-	const (
-		toolCallID  = "checks-call"
-		explanation = "Run repository checks to collect evidence for the review."
-	)
-	if _, err := callbacks.RunBeforeModel(context.Background(), &model.BeforeModelArgs{}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := callbacks.RunAfterModel(context.Background(), &model.AfterModelArgs{
-		Response: &model.Response{Choices: []model.Choice{{
-			Message: model.Message{
-				Role:    model.RoleAssistant,
-				Content: explanation,
-				ToolCalls: []model.ToolCall{{
-					ID: toolCallID,
-				}},
-			},
-		}}},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if got := tracker.permissionExplanation(toolCallID); got != explanation {
-		t.Fatalf("permission explanation = %q, want %q", got, explanation)
-	}
-}
-
-func TestReviewModelCallbacksDoNotReuseExplanationAcrossToolCalls(t *testing.T) {
-	tracker := newReviewRunTracker()
-	callbacks := newReviewModelCallbacks(tracker)
-	const explanation = "Run go test and go vet for both affected modules to establish their baseline results."
-	firstCommand := "sh skills/code-review/scripts/run-go-checks.sh work/inputs/repo/first"
-	secondCommand := "sh skills/code-review/scripts/run-go-checks.sh work/inputs/repo/second"
-
-	if _, err := callbacks.RunAfterModel(context.Background(), &model.AfterModelArgs{
-		Response: modelToolCallResponse("first-check", firstCommand, explanation),
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := callbacks.RunBeforeModel(context.Background(), &model.BeforeModelArgs{}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := callbacks.RunAfterModel(context.Background(), &model.AfterModelArgs{
-		Response: modelToolCallResponse("second-check", secondCommand, ""),
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if got := tracker.permissionExplanation("second-check"); got != "" {
-		t.Fatalf("second baseline explanation = %q, want no explanation from another tool call", got)
-	}
-}
-
-func modelToolCallResponse(toolCallID, command, content string) *model.Response {
-	return &model.Response{Choices: []model.Choice{{
-		Message: model.Message{
-			Role:    model.RoleAssistant,
-			Content: content,
-			ToolCalls: []model.ToolCall{{
-				ID: toolCallID,
-				Function: model.FunctionDefinitionParam{
-					Name: workspaceExecToolName,
-					Arguments: []byte(fmt.Sprintf(
-						`{"command":%q}`,
-						command,
-					)),
-				},
-			}},
-		},
-	}}}
-}
-
-func TestReviewPermissionPolicyRecordsAskBeforeDefaultApproval(t *testing.T) {
-	ctx := context.Background()
-	dbPath := filepath.Join(t.TempDir(), "review.db")
-	resources, err := persistence.Open(ctx, dbPath, redact.AppendEventHook(redact.New()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resources.Close()
-	const taskID = "permission-task"
-	if err := resources.ReviewStore.SaveTask(ctx, store.ReviewTaskRecord{
-		TaskID: taskID, AppName: codeReviewAgentName, UserID: "reviewer", InputKind: "fixture",
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	var prompt bytes.Buffer
-	tracker := newReviewRunTracker()
-	const explanation = "Run go test and go vet to verify whether the affected module passes both baseline checks."
-	recordPermissionExplanation(t, tracker, "checks-call", explanation)
-	arguments := prepareWorkspaceExecCall(
-		t,
-		tracker,
-		"checks-call",
-		[]byte(`{"command":"sh skills/code-review/scripts/run-go-checks.sh work/inputs/repo","timeout_sec":120}`),
-	)
-	policy := newReviewPermissionPolicy(
-		newReviewRecorder(resources.ReviewStore, redact.New()),
-		tracker,
-		newApprover(ApprovalConfig{Input: strings.NewReader("\n"), Output: &prompt}, false),
-	)
-	ctx = reviewInvocationContext(ctx, taskID)
-	decision, err := policy.CheckToolPermission(ctx, &tool.PermissionRequest{
-		ToolName: workspaceExecToolName, ToolCallID: "checks-call",
-		Arguments: arguments,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if decision.Action != tool.PermissionActionAllow {
-		t.Fatalf("decision = %q, want allow", decision.Action)
-	}
-	if !strings.Contains(prompt.String(), explanation) ||
-		!strings.Contains(prompt.String(), "Tool: workspace_exec") ||
-		!strings.Contains(prompt.String(), "[Y/n]") ||
-		strings.Contains(prompt.String(), "Purpose: run the bundled") {
-		t.Fatalf("approval prompt = %q", prompt.String())
-	}
-
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	rows, err := db.Query(`SELECT decision FROM permission_decisions WHERE task_id = ? ORDER BY id`, taskID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer rows.Close()
-	var decisions []string
-	for rows.Next() {
-		var decision string
-		if err := rows.Scan(&decision); err != nil {
-			t.Fatal(err)
-		}
-		decisions = append(decisions, decision)
-	}
-	if got, want := strings.Join(decisions, ","), "ask,allow"; got != want {
-		t.Fatalf("permission decisions = %q, want %q", got, want)
-	}
-	if tracker.toolCalls != 1 || tracker.permissionInterceptions != 1 {
-		t.Fatalf("tracker = tools:%d interceptions:%d", tracker.toolCalls, tracker.permissionInterceptions)
-	}
-}
-
 func TestCommandApproverRejectsN(t *testing.T) {
 	var output bytes.Buffer
 	decision, err := newApprover(
@@ -473,76 +327,6 @@ func TestCommandApproverDoesNotReuseLateResponseAfterCancellation(t *testing.T) 
 	}
 }
 
-func TestReviewPermissionPolicyDoesNotInventMissingExplanation(t *testing.T) {
-	ctx := context.Background()
-	dbPath := filepath.Join(t.TempDir(), "review.db")
-	resources, err := persistence.Open(ctx, dbPath, redact.AppendEventHook(redact.New()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resources.Close()
-	const taskID = "missing-explanation-task"
-	if err := resources.ReviewStore.SaveTask(ctx, store.ReviewTaskRecord{
-		TaskID: taskID, AppName: codeReviewAgentName, UserID: "reviewer", InputKind: "fixture",
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	tracker := newReviewRunTracker()
-	arguments := prepareWorkspaceExecCall(
-		t,
-		tracker,
-		"unexplained-call",
-		[]byte(`{"command":"sh skills/code-review/scripts/run-go-checks.sh work/inputs/repo","timeout_sec":120}`),
-	)
-	policy := newReviewPermissionPolicy(
-		newReviewRecorder(resources.ReviewStore, redact.New()),
-		tracker,
-		newApprover(ApprovalConfig{}, true),
-	)
-	decision, err := policy.CheckToolPermission(reviewInvocationContext(ctx, taskID), &tool.PermissionRequest{
-		ToolName: workspaceExecToolName, ToolCallID: "unexplained-call",
-		Arguments: arguments,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if decision.Action != tool.PermissionActionAsk || !strings.Contains(decision.Reason, "must explain") {
-		t.Fatalf("decision = %#v, want ask for missing Agent explanation", decision)
-	}
-	snapshot, err := resources.ReviewStore.LoadTaskSnapshot(ctx, taskID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(snapshot.PermissionDecisions) != 1 || snapshot.PermissionDecisions[0].Decision != "ask" {
-		t.Fatalf("permission audit = %#v, want one ask", snapshot.PermissionDecisions)
-	}
-	if len(tracker.executions) != 0 {
-		t.Fatalf("unexplained tool call was marked for execution: %#v", tracker.executions)
-	}
-}
-
-func TestReviewChecksModuleRecognizesDocumentedInvocation(t *testing.T) {
-	for _, command := range []string{
-		"sh skills/code-review/scripts/run-go-checks.sh work/inputs/repo",
-		"/bin/sh skills/code-review/scripts/run-go-checks.sh work/inputs/repo/nested",
-		"sh skills/code-review/scripts/run-go-checks.sh work/inputs/repo 2>&1",
-	} {
-		if _, ok := reviewChecksModule(command); !ok {
-			t.Errorf("reviewChecksModule(%q) rejected a documented invocation", command)
-		}
-	}
-	for _, command := range []string{
-		"cd work/inputs/repo && sh skills/code-review/scripts/run-go-checks.sh work/inputs/repo",
-		"sh work/inputs/repo/skills/code-review/scripts/run-go-checks.sh work/inputs/repo",
-		"sh skills/code-review/scripts/run-go-checks.sh ../repo",
-	} {
-		if _, ok := reviewChecksModule(command); ok {
-			t.Errorf("reviewChecksModule(%q) accepted a rewritten invocation", command)
-		}
-	}
-}
-
 func TestCommandAttemptsReviewChecksExecutionIgnoresReadOnlyInspection(t *testing.T) {
 	for _, command := range []string{
 		"sh skills/code-review/scripts/run-go-checks.sh work/inputs/repo",
@@ -601,7 +385,6 @@ func TestReviewPermissionPolicyAllowsReadOnlySkillScriptInspection(t *testing.T)
 	policy := newReviewPermissionPolicy(
 		newReviewRecorder(resources.ReviewStore, redact.New()),
 		tracker,
-		newApprover(ApprovalConfig{}, true),
 	)
 	decision, err := policy.CheckToolPermission(
 		reviewInvocationContext(ctx, taskID),
@@ -646,7 +429,6 @@ func TestReviewPermissionPolicyDoesNotForceChecksThroughSkillScript(t *testing.T
 	policy := newReviewPermissionPolicy(
 		newReviewRecorder(resources.ReviewStore, redact.New()),
 		tracker,
-		newApprover(ApprovalConfig{}, true),
 	)
 	decision, err := policy.CheckToolPermission(reviewInvocationContext(ctx, taskID), &tool.PermissionRequest{
 		ToolName: workspaceExecToolName, ToolCallID: "raw-go-test",
@@ -709,129 +491,57 @@ func TestValidateReviewResultsEnforcesFindingConfidenceAndLocalPath(t *testing.T
 	}
 }
 
-func TestSubmitReviewResultsSchemaRequiresRuntimeFields(t *testing.T) {
-	tools := newReviewToolSet(nil).Tools(context.Background())
-	if len(tools) != 1 {
-		t.Fatalf("review tools = %d, want 1", len(tools))
-	}
-	schema := tools[0].Declaration().InputSchema
-	if schema == nil {
-		t.Fatal("submit_review_results has no input schema")
-	}
-	got := append([]string(nil), schema.Required...)
-	sort.Strings(got)
-	want := []string{"conclusion", "findings", "needs_human_review", "warnings"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("required submit fields = %v, want %v", got, want)
-	}
-}
-
-func TestReviewPermissionPolicyRecordsAskThenDenyWithoutExecution(t *testing.T) {
-	ctx := context.Background()
-	dbPath := filepath.Join(t.TempDir(), "review.db")
-	resources, err := persistence.Open(ctx, dbPath, redact.AppendEventHook(redact.New()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resources.Close()
-	const taskID = "denied-permission-task"
-	if err := resources.ReviewStore.SaveTask(ctx, store.ReviewTaskRecord{
-		TaskID: taskID, AppName: codeReviewAgentName, UserID: "reviewer", InputKind: "fixture",
-	}); err != nil {
-		t.Fatal(err)
-	}
-	tracker := newReviewRunTracker()
-	recordPermissionExplanation(
-		t,
-		tracker,
-		"denied-checks",
-		"Run go test and go vet to verify whether the affected module passes both baseline checks.",
-	)
-	arguments := prepareWorkspaceExecCall(
-		t,
-		tracker,
-		"denied-checks",
-		[]byte(`{"command":"sh skills/code-review/scripts/run-go-checks.sh work/inputs/repo","timeout_sec":120}`),
-	)
-	policy := newReviewPermissionPolicy(
-		newReviewRecorder(resources.ReviewStore, redact.New()),
-		tracker,
-		newApprover(ApprovalConfig{Input: strings.NewReader("n\n"), Output: &bytes.Buffer{}}, false),
-	)
-	decision, err := policy.CheckToolPermission(reviewInvocationContext(ctx, taskID), &tool.PermissionRequest{
-		ToolName: workspaceExecToolName, ToolCallID: "denied-checks",
-		Arguments: arguments,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if decision.Action != tool.PermissionActionDeny {
-		t.Fatalf("decision = %q, want deny", decision.Action)
-	}
-	snapshot, err := resources.ReviewStore.LoadTaskSnapshot(ctx, taskID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(snapshot.PermissionDecisions) != 2 ||
-		snapshot.PermissionDecisions[0].Decision != "ask" ||
-		snapshot.PermissionDecisions[1].Decision != "deny" {
-		t.Fatalf("permission audit = %#v", snapshot.PermissionDecisions)
-	}
-	if len(snapshot.SandboxRuns) != 0 || len(tracker.executions) != 0 {
-		t.Fatalf("denied command was marked for execution: runs=%d pending=%d",
-			len(snapshot.SandboxRuns), len(tracker.executions))
-	}
-}
-
-func TestReviewPermissionPolicyRejectsBackgroundBaselineCheck(t *testing.T) {
-	ctx := context.Background()
-	dbPath := filepath.Join(t.TempDir(), "review.db")
-	resources, err := persistence.Open(ctx, dbPath, redact.AppendEventHook(redact.New()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resources.Close()
-	const taskID = "background-baseline-task"
-	if err := resources.ReviewStore.SaveTask(ctx, store.ReviewTaskRecord{
-		TaskID: taskID, AppName: codeReviewAgentName, UserID: "reviewer", InputKind: "fixture",
-	}); err != nil {
-		t.Fatal(err)
-	}
-	tracker := newReviewRunTracker()
-	recordPermissionExplanation(
-		t,
-		tracker,
-		"background-checks",
-		"Run the module checks to establish their terminal results.",
-	)
-	arguments := prepareWorkspaceExecCall(
-		t,
-		tracker,
-		"background-checks",
-		[]byte(`{"command":"sh skills/code-review/scripts/run-go-checks.sh work/inputs/repo","background":true}`),
-	)
-	policy := newReviewPermissionPolicy(
-		newReviewRecorder(resources.ReviewStore, redact.New()),
-		tracker,
+func TestReviewToolSchemasRequireRuntimeFields(t *testing.T) {
+	tools := newReviewToolSet(
+		nil,
+		newReviewRunTracker(),
 		newApprover(ApprovalConfig{}, true),
-	)
-	decision, err := policy.CheckToolPermission(
-		reviewInvocationContext(ctx, taskID),
-		&tool.PermissionRequest{
-			ToolName:   workspaceExecToolName,
-			ToolCallID: "background-checks",
-			Arguments:  arguments,
+		governedToolConfig{Backend: "local"},
+	).Tools(context.Background())
+	if len(tools) != 2 {
+		t.Fatalf("review tools = %d, want 2", len(tools))
+	}
+	tests := []struct {
+		name     string
+		required []string
+	}{
+		{
+			name:     requestToolPermissionName,
+			required: []string{"reason", "target_arguments", "target_tool"},
 		},
-	)
-	if err != nil {
-		t.Fatal(err)
+		{
+			name:     "submit_review_results",
+			required: []string{"conclusion", "findings", "needs_human_review", "warnings"},
+		},
 	}
-	if decision.Action != tool.PermissionActionDeny ||
-		!strings.Contains(decision.Reason, "foreground") {
-		t.Fatalf("decision = %#v, want foreground-only denial", decision)
-	}
-	if len(tracker.executions) != 0 {
-		t.Fatalf("background check entered execution: %#v", tracker.executions)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			schema := callableToolNamed(t, tools, tt.name).Declaration().InputSchema
+			if schema == nil {
+				t.Fatalf("%s has no input schema", tt.name)
+			}
+			got := append([]string(nil), schema.Required...)
+			sort.Strings(got)
+			if !reflect.DeepEqual(got, tt.required) {
+				t.Fatalf("required fields = %v, want %v", got, tt.required)
+			}
+			if tt.name == requestToolPermissionName {
+				targetArguments := schema.Properties["target_arguments"]
+				if targetArguments == nil || targetArguments.Type != "object" ||
+					targetArguments.AdditionalProperties != true {
+					t.Fatalf("target_arguments schema = %#v, want an object", targetArguments)
+				}
+				outputSchema := callableToolNamed(t, tools, tt.name).Declaration().OutputSchema
+				if outputSchema == nil {
+					t.Fatal("request_tool_permission has no output schema")
+				}
+				outputArguments := outputSchema.Properties["target_arguments"]
+				if outputArguments == nil || outputArguments.Type != "object" ||
+					outputArguments.AdditionalProperties != true {
+					t.Fatalf("output target_arguments schema = %#v, want an arbitrary object", outputArguments)
+				}
+			}
+		})
 	}
 }
 
@@ -852,12 +562,6 @@ func TestGovernedWorkspaceExecMasksTruncatesAndAudits(t *testing.T) {
 	}
 	ctx = reviewInvocationContext(ctx, taskID)
 	tracker := newReviewRunTracker()
-	recordPermissionExplanation(
-		t,
-		tracker,
-		"output-call",
-		"Run go test and go vet to verify their results and capture the evidence within the output limit.",
-	)
 	recorder := newReviewRecorder(resources.ReviewStore, sanitizer)
 	arguments := []byte(`{"command":"sh skills/code-review/scripts/run-go-checks.sh work/inputs/repo 2>&1","timeout_sec":120}`)
 	callbacks := newGovernedToolCallbacks(sanitizer, recorder, tracker, governedToolConfig{
@@ -872,7 +576,12 @@ func TestGovernedWorkspaceExecMasksTruncatesAndAudits(t *testing.T) {
 	if beforeResult != nil && len(beforeResult.ModifiedArguments) > 0 {
 		arguments = beforeResult.ModifiedArguments
 	}
-	policy := newReviewPermissionPolicy(recorder, tracker, newApprover(ApprovalConfig{}, true))
+	identity, requiresApproval, err := approvalIdentity(workspaceExecToolName, arguments)
+	if err != nil || !requiresApproval {
+		t.Fatalf("approval identity = %q, required = %t, err = %v", identity, requiresApproval, err)
+	}
+	tracker.grant(workspaceExecToolName, identity)
+	policy := newReviewPermissionPolicy(recorder, tracker)
 	decision, err := policy.CheckToolPermission(ctx, &tool.PermissionRequest{
 		ToolName: workspaceExecToolName, ToolCallID: "output-call", Arguments: arguments,
 	})
@@ -1044,30 +753,6 @@ func reviewInvocationContext(ctx context.Context, taskID string) context.Context
 		agent.WithRuntimeState(map[string]any{runtimeStateReviewTaskID: taskID}),
 	)))
 	return agent.NewInvocationContext(ctx, invocation)
-}
-
-func recordPermissionExplanation(
-	t *testing.T,
-	tracker *reviewRunTracker,
-	toolCallID string,
-	explanation string,
-) {
-	t.Helper()
-	callbacks := newReviewModelCallbacks(tracker)
-	if _, err := callbacks.RunBeforeModel(context.Background(), &model.BeforeModelArgs{}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := callbacks.RunAfterModel(context.Background(), &model.AfterModelArgs{
-		Response: &model.Response{Choices: []model.Choice{{Message: model.Message{
-			Role:    model.RoleAssistant,
-			Content: explanation,
-			ToolCalls: []model.ToolCall{{
-				ID: toolCallID,
-			}},
-		}}}},
-	}); err != nil {
-		t.Fatal(err)
-	}
 }
 
 func prepareWorkspaceExecCall(

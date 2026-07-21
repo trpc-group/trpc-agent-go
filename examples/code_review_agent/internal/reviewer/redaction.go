@@ -98,30 +98,21 @@ func newGovernedToolCallbacks(
 		if args == nil || args.ToolName != workspaceExecToolName {
 			return nil, nil
 		}
-		original, err := decodeWorkspaceExecInput(args.Arguments)
+		original, input, modified, filteredEnvironment, err := prepareWorkspaceExecArguments(
+			args.Arguments,
+			config,
+		)
 		if err != nil {
-			return nil, fmt.Errorf("decode workspace_exec governance arguments: %w", err)
+			return nil, err
 		}
-		input := original
-		input, filteredEnvironment := input.withAllowedEnvironment()
-		changed := filteredEnvironment > 0
 		if filteredEnvironment > 0 && tracker != nil {
 			tracker.recordException("environment_override_filtered")
-		}
-		if config.Backend == "container" {
-			var wrapped bool
-			input, wrapped = input.withContainerTimeout()
-			changed = changed || wrapped
 		}
 		if err := tracker.recordToolInput(args.ToolCallID, original, input); err != nil {
 			return nil, err
 		}
-		if !changed {
+		if modified == nil {
 			return nil, nil
-		}
-		modified, err := input.modifiedArguments()
-		if err != nil {
-			return nil, fmt.Errorf("encode workspace_exec timeout arguments: %w", err)
 		}
 		return &tool.BeforeToolResult{ModifiedArguments: modified}, nil
 	})
@@ -138,6 +129,40 @@ func newGovernedToolCallbacks(
 		return governWorkspaceExecResult(ctx, sanitizer, recorder, tracker, config, args)
 	})
 	return callbacks
+}
+
+func prepareWorkspaceExecArguments(
+	arguments []byte,
+	config governedToolConfig,
+) (
+	original workspaceExecInput,
+	executed workspaceExecInput,
+	modified []byte,
+	filteredEnvironment int,
+	err error,
+) {
+	original, err = decodeWorkspaceExecInput(arguments)
+	if err != nil {
+		return original, executed, nil, 0,
+			fmt.Errorf("decode workspace_exec governance arguments: %w", err)
+	}
+	executed = original
+	executed, filteredEnvironment = executed.withAllowedEnvironment()
+	changed := filteredEnvironment > 0
+	if config.Backend == "container" {
+		var wrapped bool
+		executed, wrapped = executed.withContainerTimeout()
+		changed = changed || wrapped
+	}
+	if !changed {
+		return original, executed, nil, filteredEnvironment, nil
+	}
+	modified, err = executed.modifiedArguments()
+	if err != nil {
+		return original, executed, nil, filteredEnvironment,
+			fmt.Errorf("encode workspace_exec governance arguments: %w", err)
+	}
+	return original, executed, modified, filteredEnvironment, nil
 }
 
 // governWorkspaceExecResult closes the execution prepared and allowed under the

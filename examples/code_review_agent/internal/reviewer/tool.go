@@ -11,23 +11,51 @@ package reviewer
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
+	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/store"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
+const (
+	requestToolPermissionName      = "request_tool_permission"
+	permissionStatusGranted        = "granted"
+	permissionStatusDenied         = "denied"
+	permissionStatusApprovalNeeded = "approval_required"
+	permissionStatusNotRequired    = "not_required"
+)
+
 type reviewToolSet struct {
-	recorder *reviewRecorder
-	tools    []tool.Tool
+	recorder       *reviewRecorder
+	runState       *reviewRunTracker
+	approver       *Approver
+	governedConfig governedToolConfig
+	tools          []tool.Tool
 }
 
-func newReviewToolSet(recorder *reviewRecorder) tool.ToolSet {
+func newReviewToolSet(
+	recorder *reviewRecorder,
+	runState *reviewRunTracker,
+	approver *Approver,
+	governedConfig governedToolConfig,
+) tool.ToolSet {
 	set := &reviewToolSet{
-		recorder: recorder,
+		recorder:       recorder,
+		runState:       runState,
+		approver:       approver,
+		governedConfig: governedConfig,
 	}
 	set.tools = []tool.Tool{
+		function.NewFunctionTool(
+			set.requestToolPermission,
+			function.WithName(requestToolPermissionName),
+			function.WithDescription("Request user permission for a specific target tool call. Pass the exact target tool name and complete argument object from an approval_required call, plus a concise Reason. The result echoes target_arguments; if granted, retry the real target tool by copying that complete object without dropping or changing fields."),
+			function.WithInputSchema(requestToolPermissionInputSchema()),
+			function.WithOutputSchema(requestToolPermissionOutputSchema()),
+		),
 		function.NewFunctionTool(
 			set.submitReviewResults,
 			function.WithName("submit_review_results"),
@@ -35,6 +63,53 @@ func newReviewToolSet(recorder *reviewRecorder) tool.ToolSet {
 		),
 	}
 	return set
+}
+
+func requestToolPermissionInputSchema() *tool.Schema {
+	return &tool.Schema{
+		Type: "object",
+		Properties: map[string]*tool.Schema{
+			"target_tool": {
+				Type:        "string",
+				Description: "Exact model-visible name of the tool that returned approval_required.",
+			},
+			"target_arguments": {
+				Type:                 "object",
+				Description:          "Complete argument object that will be copied when retrying the target tool.",
+				AdditionalProperties: true,
+			},
+			"reason": {
+				Type:        "string",
+				Description: "Concise user-facing Reason explaining why this target tool call is needed.",
+			},
+		},
+		Required:             []string{"target_tool", "target_arguments", "reason"},
+		AdditionalProperties: false,
+	}
+}
+
+func requestToolPermissionOutputSchema() *tool.Schema {
+	return &tool.Schema{
+		Type: "object",
+		Properties: map[string]*tool.Schema{
+			"status": {
+				Type: "string",
+				Enum: []any{
+					permissionStatusGranted,
+					permissionStatusDenied,
+					permissionStatusApprovalNeeded,
+					permissionStatusNotRequired,
+				},
+			},
+			"target_tool": {Type: "string"},
+			"target_arguments": {
+				Type:                 "object",
+				AdditionalProperties: true,
+			},
+		},
+		Required:             []string{"status", "target_tool", "target_arguments"},
+		AdditionalProperties: false,
+	}
 }
 
 func (s *reviewToolSet) Tools(context.Context) []tool.Tool {
@@ -46,7 +121,133 @@ func (s *reviewToolSet) Close() error {
 }
 
 func (s *reviewToolSet) Name() string {
-	return "code_review_submit"
+	return "code_review_tools"
+}
+
+type requestToolPermissionInput struct {
+	TargetTool      string                     `json:"target_tool"`
+	TargetArguments map[string]json.RawMessage `json:"target_arguments"`
+	Reason          string                     `json:"reason"`
+}
+
+type requestToolPermissionOutput struct {
+	Status          string                     `json:"status"`
+	TargetTool      string                     `json:"target_tool"`
+	TargetArguments map[string]json.RawMessage `json:"target_arguments"`
+}
+
+func (s *reviewToolSet) requestToolPermission(
+	ctx context.Context,
+	in requestToolPermissionInput,
+) (requestToolPermissionOutput, error) {
+	if s == nil || s.recorder == nil || s.runState == nil {
+		return requestToolPermissionOutput{}, fmt.Errorf("permission request tool is not configured")
+	}
+	targetTool := strings.TrimSpace(in.TargetTool)
+	if targetTool == "" {
+		return requestToolPermissionOutput{}, fmt.Errorf("target_tool is required")
+	}
+	if in.TargetArguments == nil {
+		return requestToolPermissionOutput{}, fmt.Errorf("target_arguments must be a JSON object")
+	}
+	reason := strings.TrimSpace(in.Reason)
+	if reason == "" {
+		return requestToolPermissionOutput{}, fmt.Errorf("reason is required")
+	}
+	targetArguments, err := json.Marshal(in.TargetArguments)
+	if err != nil {
+		return requestToolPermissionOutput{}, fmt.Errorf("encode target_arguments: %w", err)
+	}
+	finalArguments := targetArguments
+	if targetTool == workspaceExecToolName {
+		_, _, modified, _, err := prepareWorkspaceExecArguments(
+			targetArguments,
+			s.governedConfig,
+		)
+		if err != nil {
+			return requestToolPermissionOutput{}, err
+		}
+		if modified != nil {
+			finalArguments = modified
+		}
+	}
+	identity, requiresApproval, err := approvalIdentity(targetTool, finalArguments)
+	if err != nil {
+		return requestToolPermissionOutput{}, err
+	}
+	if !requiresApproval {
+		return requestToolPermissionOutput{
+			Status:          permissionStatusNotRequired,
+			TargetTool:      targetTool,
+			TargetArguments: in.TargetArguments,
+		}, nil
+	}
+
+	decision, err := s.approver.decide(
+		ctx,
+		targetTool,
+		s.recorder.mask(string(targetArguments)),
+		s.recorder.mask(reason),
+	)
+	if err != nil {
+		return requestToolPermissionOutput{}, err
+	}
+	if err := s.recordPermissionRequest(
+		ctx,
+		targetTool,
+		targetArguments,
+		reason,
+		decision,
+	); err != nil {
+		return requestToolPermissionOutput{}, err
+	}
+
+	status := permissionStatusApprovalNeeded
+	switch decision.Action {
+	case tool.PermissionActionAllow:
+		s.runState.grant(targetTool, identity)
+		status = permissionStatusGranted
+	case tool.PermissionActionDeny:
+		status = permissionStatusDenied
+	case tool.PermissionActionAsk:
+		status = permissionStatusApprovalNeeded
+	default:
+		return requestToolPermissionOutput{}, fmt.Errorf(
+			"unsupported approval decision %q",
+			decision.Action,
+		)
+	}
+	return requestToolPermissionOutput{
+		Status:          status,
+		TargetTool:      targetTool,
+		TargetArguments: in.TargetArguments,
+	}, nil
+}
+
+func (s *reviewToolSet) recordPermissionRequest(
+	ctx context.Context,
+	targetTool string,
+	targetArguments []byte,
+	reason string,
+	decision tool.PermissionDecision,
+) error {
+	taskID, err := reviewTaskIDFromContext(ctx)
+	if err != nil {
+		return err
+	}
+	toolCallID, ok := tool.ToolCallIDFromContext(ctx)
+	if !ok || toolCallID == "" {
+		return fmt.Errorf("permission request requires a non-empty tool call id")
+	}
+	return s.recorder.RecordPermissionDecision(ctx, taskID, store.PermissionDecisionRecord{
+		ToolCallID:     toolCallID,
+		DecisionKind:   "permission_request",
+		Operation:      targetTool,
+		ToolName:       targetTool,
+		CommandPreview: string(targetArguments),
+		Decision:       string(decision.Action),
+		Reason:         reason,
+	})
 }
 
 type submitReviewResultsInput struct {

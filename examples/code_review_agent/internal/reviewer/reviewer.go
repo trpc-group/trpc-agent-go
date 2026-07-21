@@ -234,7 +234,7 @@ func (r *reviewer) Review(ctx context.Context, spec reviewinput.Spec) (
 			agent.WithRuntimeState(map[string]any{
 				runtimeStateReviewTaskID: taskID,
 			}),
-			agent.WithToolPermissionPolicy(newReviewPermissionPolicy(r.recorder, tracker, r.approver)),
+			agent.WithToolPermissionPolicy(newReviewPermissionPolicy(r.recorder, tracker)),
 		)...,
 	)
 	if err != nil {
@@ -313,12 +313,12 @@ func (r *reviewer) newRunner(
 	if err != nil {
 		return nil, fmt.Errorf("create code executor: %w", err)
 	}
-	reviewTools := newReviewToolSet(r.recorder)
+	governedConfig := defaultGovernedToolConfig(r.config.Sandbox.Backend)
+	reviewTools := newReviewToolSet(r.recorder, tracker, r.approver, governedConfig)
 	reviewAgent := llmagent.New(codeReviewAgentName,
 		llmagent.WithDescription("A code review agent with Agent Skills, governed workspace execution, persistent task records, and structured reports"),
 		llmagent.WithModel(modelInstance),
 		llmagent.WithGenerationConfig(generationConfig),
-		llmagent.WithModelCallbacks(newReviewModelCallbacks(tracker)),
 		llmagent.WithSkills(skillRepo),
 		llmagent.WithCodeExecutor(codeExec),
 		llmagent.WithWorkspaceBootstrap(bootstrap),
@@ -328,7 +328,7 @@ func (r *reviewer) newRunner(
 			r.dependencies.Sanitizer,
 			r.recorder,
 			tracker,
-			defaultGovernedToolConfig(r.config.Sandbox.Backend),
+			governedConfig,
 		)),
 		llmagent.WithGlobalInstruction(systemPrompt),
 	)

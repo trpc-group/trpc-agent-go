@@ -11,6 +11,7 @@ package reviewer
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -23,7 +24,6 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/store"
-	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -47,6 +47,192 @@ type workspaceExecInput struct {
 	TimeoutSec    *int              `json:"timeout_sec,omitempty"`
 	TimeoutSecOld *int              `json:"timeoutSec,omitempty"`
 	raw           map[string]json.RawMessage
+}
+
+type variableArgumentIdentity struct {
+	Before string `json:"before_variable_argument"`
+	After  string `json:"after_variable_argument"`
+}
+
+func approvalIdentity(toolName string, arguments []byte) (string, bool, error) {
+	if toolName != workspaceExecToolName {
+		return "", false, nil
+	}
+	input, err := decodeWorkspaceExecInput(arguments)
+	if err != nil {
+		return "", false, fmt.Errorf("decode workspace_exec approval arguments: %w", err)
+	}
+	beforeVariable, afterVariable, standard := reviewChecksCommandIdentity(input.Command)
+	if standard {
+		fields := make(map[string]json.RawMessage, len(input.raw))
+		for name, value := range input.raw {
+			fields[name] = value
+		}
+		command, err := json.Marshal(variableArgumentIdentity{
+			Before: beforeVariable,
+			After:  afterVariable,
+		})
+		if err != nil {
+			return "", false, err
+		}
+		fields["command"] = command
+		identity, err := json.Marshal(fields)
+		return string(identity), true, err
+	}
+	semanticCommand := input.Command
+	for {
+		inner, _, wrapped := unwrapManagedTimeout(semanticCommand)
+		if !wrapped {
+			break
+		}
+		semanticCommand = inner
+	}
+	if !commandAttemptsReviewChecksExecution(semanticCommand) {
+		return "", false, nil
+	}
+	identity, err := canonicalJSON(arguments)
+	return string(identity), true, err
+}
+
+func unwrapManagedTimeout(command string) (inner, wrapperPrefix string, ok bool) {
+	const prefix = "exec /usr/bin/timeout --signal=TERM --kill-after=1s "
+	if !strings.HasPrefix(command, prefix) {
+		return "", "", false
+	}
+	remainder := strings.TrimPrefix(command, prefix)
+	const shellMarker = "s sh -c "
+	marker := strings.Index(remainder, shellMarker)
+	if marker <= 0 || !allASCIIDigits(remainder[:marker]) {
+		return "", "", false
+	}
+	quoted := remainder[marker+len(shellMarker):]
+	if len(quoted) < 2 || quoted[0] != '\'' || quoted[len(quoted)-1] != '\'' {
+		return "", "", false
+	}
+	inner = strings.ReplaceAll(quoted[1:len(quoted)-1], "'\\''", "'")
+	if shellSingleQuote(inner) != quoted {
+		return "", "", false
+	}
+	return inner, command[:len(command)-len(quoted)], true
+}
+
+func allASCIIDigits(value string) bool {
+	if value == "" {
+		return false
+	}
+	for index := range value {
+		if value[index] < '0' || value[index] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func canonicalJSON(value []byte) ([]byte, error) {
+	decoder := json.NewDecoder(bytes.NewReader(value))
+	decoder.UseNumber()
+	var decoded any
+	if err := decoder.Decode(&decoded); err != nil {
+		return nil, err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return nil, errors.New("JSON value contains trailing data")
+		}
+		return nil, err
+	}
+	return json.Marshal(decoded)
+}
+
+func reviewChecksCommandIdentity(command string) (string, string, bool) {
+	if inner, wrapperPrefix, ok := unwrapManagedTimeout(command); ok {
+		before, after, standard := reviewChecksCommandIdentity(inner)
+		if standard {
+			return wrapperPrefix + before, after, true
+		}
+	}
+	spans := whitespaceTokenSpans(command)
+	if len(spans) != 3 {
+		return "", "", false
+	}
+	program, ok := simpleShellPathToken(command[spans[0][0]:spans[0][1]])
+	if !ok || (program != "sh" && program != "/bin/sh") {
+		return "", "", false
+	}
+	script, ok := simpleShellPathToken(command[spans[1][0]:spans[1][1]])
+	if !ok || script != canonicalReviewChecksScript {
+		return "", "", false
+	}
+	moduleToken := command[spans[2][0]:spans[2][1]]
+	moduleValue, ok := simpleShellPathToken(moduleToken)
+	if !ok {
+		return "", "", false
+	}
+	module := path.Clean(moduleValue)
+	const repositoryRoot = "work/inputs/repo"
+	if module != repositoryRoot && !strings.HasPrefix(module, repositoryRoot+"/") {
+		return "", "", false
+	}
+
+	before := command[:spans[2][0]]
+	after := command[spans[2][1]:]
+	if len(moduleToken) >= 2 {
+		quote := moduleToken[0]
+		if (quote == '\'' || quote == '"') && moduleToken[len(moduleToken)-1] == quote {
+			before += string(quote)
+			after = string(quote) + after
+		}
+	}
+	return before, after, true
+}
+
+// simpleShellPathToken accepts only literal path tokens. Shell expansion in the
+// module position changes call structure, so it must retain a distinct raw
+// identity instead of being normalized as the explicitly variable module.
+func simpleShellPathToken(token string) (string, bool) {
+	if len(token) >= 2 {
+		quote := token[0]
+		if (quote == '\'' || quote == '"') && token[len(token)-1] == quote {
+			token = token[1 : len(token)-1]
+		}
+	}
+	if token == "" || strings.ContainsAny(token, "'\"\\$`*?[]{}~!;&|<>()") {
+		return "", false
+	}
+	for index := range token {
+		if isASCIISpace(token[index]) {
+			return "", false
+		}
+	}
+	return token, true
+}
+
+func whitespaceTokenSpans(value string) [][2]int {
+	var spans [][2]int
+	for index := 0; index < len(value); {
+		for index < len(value) && isASCIISpace(value[index]) {
+			index++
+		}
+		if index == len(value) {
+			break
+		}
+		start := index
+		for index < len(value) && !isASCIISpace(value[index]) {
+			index++
+		}
+		spans = append(spans, [2]int{start, index})
+	}
+	return spans
+}
+
+func isASCIISpace(value byte) bool {
+	switch value {
+	case ' ', '\t', '\n', '\r', '\v', '\f':
+		return true
+	default:
+		return false
+	}
 }
 
 // decodeWorkspaceExecInput retains fields that this example does not interpret.
@@ -169,18 +355,41 @@ type reviewRunTracker struct {
 	exceptions              map[string]int
 	executions              map[string]executionStart
 	toolInputs              map[string]executionStart
-	permissionExplanations  map[string]string
-	assistantExplanation    string
+	grants                  map[grantKey]struct{}
+}
+
+type grantKey struct {
+	ToolName string
+	Identity string
 }
 
 func newReviewRunTracker() *reviewRunTracker {
 	return &reviewRunTracker{
-		startedAt:              time.Now(),
-		exceptions:             make(map[string]int),
-		executions:             make(map[string]executionStart),
-		toolInputs:             make(map[string]executionStart),
-		permissionExplanations: make(map[string]string),
+		startedAt:  time.Now(),
+		exceptions: make(map[string]int),
+		executions: make(map[string]executionStart),
+		toolInputs: make(map[string]executionStart),
+		grants:     make(map[grantKey]struct{}),
 	}
+}
+
+func (t *reviewRunTracker) grant(toolName, identity string) {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	t.grants[grantKey{ToolName: toolName, Identity: identity}] = struct{}{}
+	t.mu.Unlock()
+}
+
+func (t *reviewRunTracker) hasGrant(toolName, identity string) bool {
+	if t == nil {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	_, ok := t.grants[grantKey{ToolName: toolName, Identity: identity}]
+	return ok
 }
 
 // recordToolInput binds both representations produced by BeforeTool to the
@@ -214,94 +423,6 @@ func (t *reviewRunTracker) toolInput(toolCallID string) (executionStart, bool) {
 	defer t.mu.Unlock()
 	input, ok := t.toolInputs[toolCallID]
 	return input, ok
-}
-
-func (t *reviewRunTracker) beginModelTurn() {
-	if t == nil {
-		return
-	}
-	t.mu.Lock()
-	t.assistantExplanation = ""
-	t.mu.Unlock()
-}
-
-// captureModelResponse binds only user-visible assistant text to tool calls
-// emitted by that same model turn. Reasoning content is deliberately excluded:
-// the approval prompt must show an explanation the user was actually given,
-// and a previous tool call's explanation must never authorize a later one.
-func (t *reviewRunTracker) captureModelResponse(response *model.Response) {
-	if t == nil || response == nil {
-		return
-	}
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	for _, choice := range response.Choices {
-		content := choice.Message.Content
-		if content == "" {
-			content = choice.Delta.Content
-		}
-		t.assistantExplanation = mergeAssistantExplanation(
-			t.assistantExplanation,
-			content,
-		)
-
-		toolCalls := choice.Message.ToolCalls
-		if len(toolCalls) == 0 {
-			toolCalls = choice.Delta.ToolCalls
-		}
-		explanation := strings.TrimSpace(t.assistantExplanation)
-		if explanation == "" {
-			continue
-		}
-		for _, toolCall := range toolCalls {
-			if toolCall.ID != "" {
-				t.permissionExplanations[toolCall.ID] = explanation
-			}
-		}
-	}
-}
-
-func mergeAssistantExplanation(existing, incoming string) string {
-	if incoming == "" {
-		return existing
-	}
-	if existing == "" || strings.HasPrefix(incoming, existing) {
-		return incoming
-	}
-	if strings.HasSuffix(existing, incoming) {
-		return existing
-	}
-	return existing + incoming
-}
-
-func (t *reviewRunTracker) permissionExplanation(toolCallID string) string {
-	if t == nil || toolCallID == "" {
-		return ""
-	}
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return strings.TrimSpace(t.permissionExplanations[toolCallID])
-}
-
-func newReviewModelCallbacks(tracker *reviewRunTracker) *model.Callbacks {
-	return model.NewCallbacks().
-		RegisterBeforeModel(func(
-			_ context.Context,
-			_ *model.BeforeModelArgs,
-		) (*model.BeforeModelResult, error) {
-			tracker.beginModelTurn()
-			return &model.BeforeModelResult{}, nil
-		}).
-		RegisterAfterModel(func(
-			_ context.Context,
-			args *model.AfterModelArgs,
-		) (*model.AfterModelResult, error) {
-			if args != nil {
-				tracker.captureModelResponse(args.Response)
-			}
-			return &model.AfterModelResult{}, nil
-		})
 }
 
 func (t *reviewRunTracker) recordToolCall() {
@@ -435,7 +556,7 @@ func (a *Approver) decide(
 		return tool.PermissionDecision{}, a.terminalErr
 	}
 	if _, err := fmt.Fprintf(a.writer,
-		"\nThe review agent requests permission to use a governed tool.\nTool: %s\nCommand: %s\nAgent explanation: %s\nApprove? [Y/n] ",
+		"\nThe review agent requests permission to use a governed tool.\nTarget tool: %s\nTarget arguments: %s\nReason: %s\nApprove? [Y/n] ",
 		toolName,
 		command,
 		reason,
@@ -469,11 +590,7 @@ func (a *Approver) decide(
 func newReviewPermissionPolicy(
 	recorder *reviewRecorder,
 	tracker *reviewRunTracker,
-	approver *Approver,
 ) tool.PermissionPolicy {
-	// PermissionPolicy classifies only the bundled baseline as ask. Other
-	// workspace commands remain immediately usable; the Skill, not this policy,
-	// decides which checks the Agent should run.
 	return tool.PermissionPolicyFunc(func(
 		ctx context.Context,
 		req *tool.PermissionRequest,
@@ -489,62 +606,31 @@ func newReviewPermissionPolicy(
 
 		decision := tool.AllowPermission()
 		var execInput workspaceExecInput
-		var approvalInput workspaceExecInput
 		if req.ToolName == workspaceExecToolName {
 			execInput, err = decodeWorkspaceExecInput(req.Arguments)
 			if err != nil {
 				return tool.PermissionDecision{}, fmt.Errorf("decode workspace_exec permission arguments: %w", err)
 			}
-			approvalInput = execInput
-			if prepared, ok := tracker.toolInput(req.ToolCallID); ok {
-				approvalInput = prepared.original
-			} else {
+			if _, ok := tracker.toolInput(req.ToolCallID); !ok {
 				return tool.PermissionDecision{}, fmt.Errorf(
 					"workspace execution %q reached permission without BeforeTool preparation",
 					req.ToolCallID,
 				)
 			}
 		}
-		_, requiresApproval := reviewChecksModule(approvalInput.Command)
-		if req.ToolName == workspaceExecToolName && requiresApproval {
+		identity, requiresApproval, err := approvalIdentity(req.ToolName, req.Arguments)
+		if err != nil {
+			return tool.PermissionDecision{}, err
+		}
+		if requiresApproval {
 			tracker.recordPermissionInterception()
-			reason := tracker.permissionExplanation(req.ToolCallID)
-			if recorder != nil {
-				reason = recorder.mask(reason)
-			}
-			if approvalInput.usesInteractiveSession() {
-				decision = tool.DenyPermission(
-					"the bundled review-checks script must run in the foreground without interactive session controls",
-				)
-			} else if reason == "" {
-				decision = tool.AskPermission("the agent must explain why this tool call needs approval")
-				if err := recordPermission(
-					ctx,
-					recorder,
-					taskID,
-					req,
-					approvalInput.Command,
-					decision,
-				); err != nil {
-					return tool.PermissionDecision{}, err
-				}
-				return decision, nil
+			if tracker.hasGrant(req.ToolName, identity) {
+				decision = tool.AllowPermission()
 			} else {
-				if err := recordPermission(ctx, recorder, taskID, req, approvalInput.Command,
-					tool.AskPermission(reason)); err != nil {
-					return tool.PermissionDecision{}, err
-				}
-				decision, err = approver.decide(ctx, req.ToolName, approvalInput.Command, reason)
-				if err != nil {
-					return tool.PermissionDecision{}, err
-				}
+				decision = tool.AskPermission(
+					"Call request_tool_permission with this target tool and its exact arguments, then retry the target tool only if permission is granted.",
+				)
 			}
-		} else if req.ToolName == workspaceExecToolName &&
-			commandAttemptsReviewChecksExecution(approvalInput.Command) {
-			tracker.recordPermissionInterception()
-			decision = tool.DenyPermission(
-				"the bundled review-checks script execution could not be safely classified for approval",
-			)
 		}
 
 		commandPreview := string(req.Arguments)
@@ -563,39 +649,9 @@ func newReviewPermissionPolicy(
 	})
 }
 
-// reviewChecksModule recognizes the single command form that is safe to put
-// before a human for approval. Other ways to execute the same script are
-// rejected by commandAttemptsReviewChecksExecution rather than silently
-// bypassing this canonical ask path.
-func reviewChecksModule(command string) (string, bool) {
-	fields := strings.Fields(strings.TrimSpace(command))
-	if len(fields) == 4 && fields[3] == "2>&1" {
-		fields = fields[:3]
-	}
-	if len(fields) != 3 {
-		return "", false
-	}
-	program := strings.Trim(fields[0], "'\"")
-	if program != "sh" && program != "/bin/sh" {
-		return "", false
-	}
-	script := strings.Trim(fields[1], "'\"")
-	if script != canonicalReviewChecksScript {
-		return "", false
-	}
-	module := path.Clean(strings.Trim(fields[2], "'\""))
-	const repositoryRoot = "work/inputs/repo"
-	if module != repositoryRoot &&
-		!strings.HasPrefix(module, repositoryRoot+"/") {
-		return "", false
-	}
-	return module, true
-}
-
-// commandAttemptsReviewChecksExecution separates an unrecognized execution
-// form from an inert use of the exact bundled script path. Any shell pipeline,
-// sequencing, or unknown program fails closed because superficial token order
-// cannot prove that the script will only be read.
+// commandAttemptsReviewChecksExecution separates execution from inert mentions
+// of the configured script. Every execution form requires approval; forms that
+// differ structurally receive distinct identities instead of being denied.
 func commandAttemptsReviewChecksExecution(command string) bool {
 	fields := strings.Fields(strings.TrimSpace(command))
 	if !mentionsBundledReviewChecksScript(command) {
@@ -618,8 +674,7 @@ func mentionsBundledReviewChecksScript(command string) bool {
 	)
 	for _, field := range strings.Fields(replacer.Replace(command)) {
 		candidate := strings.Trim(field, "'\"")
-		candidate = strings.TrimPrefix(candidate, "./")
-		if candidate == canonicalReviewChecksScript {
+		if path.Clean(candidate) == canonicalReviewChecksScript {
 			return true
 		}
 	}

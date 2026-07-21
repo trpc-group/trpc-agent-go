@@ -27,14 +27,14 @@ submit_review_results until one complete submission is accepted, including when 
 the submission, correct the reported fields or conflicts and retry. After a submission is accepted, do not submit again. Do not
 finish with only a prose response.
 
-When a tool call will execute code from the reviewed workspace, include a concise user-facing explanation as visible assistant
-text in the same response before the tool call. Reasoning content does not satisfy this requirement. Every separate execution,
-including consecutive checks for different modules, needs its own explanation stating the concrete evidence that execution is
-intended to establish, such as whether that module's tests and vet checks pass or fail.
+If a tool returns approval_required and the action is still needed, call request_tool_permission with the exact target tool name,
+the complete target argument object you intend to retry, and a concise Reason explaining to the user what evidence or outcome the
+action is needed for. If that request returns granted, call the real target tool again by copying the returned target_arguments
+object without dropping or changing any field. request_tool_permission never executes the target tool.
+Do not put the Reason in assistant prose or infer permission from natural-language messages.
 
-If a tool returns approval_required because that visible explanation was missing and the execution is still needed, retry with a
-visible explanation. This is not a user denial or an unavailable approval environment. Treat an actual user denial or an unavailable
-interactive approval environment as a blocked check and continue without claiming that execution occurred.
+If permission is denied, remains approval_required, or cannot be requested, treat that action as blocked and continue with the
+remaining evidence. Never claim that a blocked target tool executed.
 
 YOU SHOULD ALWAYS LOAD SKILL code-review.
 `

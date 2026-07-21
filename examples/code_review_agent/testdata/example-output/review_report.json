@@ -51,8 +51,8 @@
   "monitoring": {
     "total_duration_ms": 6026,
     "sandbox_duration_ms": 5421,
-    "tool_call_count": 3,
-    "permission_interception_count": 1,
+    "tool_call_count": 5,
+    "permission_interception_count": 2,
     "finding_count": 1,
     "result_kind_distribution": {
       "finding": 1
@@ -64,7 +64,7 @@
   },
   "permission_decisions": [
     {
-      "tool_call_id": "fake-acceptance-security-skill_load",
+      "tool_call_id": "fake-acceptance-security-skill_load-1",
       "tool_name": "skill_load",
       "operation": "skill_load",
       "command_preview": "{\"docs\":[\"references/rules.md\"],\"skill\":\"code-review\"}",
@@ -72,16 +72,33 @@
       "decided_at": "2026-07-16T16:35:12.504703127Z"
     },
     {
-      "tool_call_id": "fake-acceptance-security-workspace_exec",
+      "tool_call_id": "fake-acceptance-security-workspace_exec-1",
       "tool_name": "workspace_exec",
       "operation": "workspace_exec",
       "command_preview": "exec /usr/bin/timeout --signal=TERM --kill-after=1s 120s sh -c 'sh skills/code-review/scripts/run-go-checks.sh work/inputs/repo'",
       "decision": "ask",
-      "reason": "I need to run the code-review Skill's repository checks in the configured sandbox so the review can use observed test and static-analysis evidence.",
+      "reason": "Call request_tool_permission with this target tool and its exact arguments, then retry the target tool only if permission is granted.",
       "decided_at": "2026-07-16T16:35:12.508414912Z"
     },
     {
-      "tool_call_id": "fake-acceptance-security-workspace_exec",
+      "tool_call_id": "fake-acceptance-security-request_tool_permission-1",
+      "tool_name": "request_tool_permission",
+      "operation": "request_tool_permission",
+      "command_preview": "{\"reason\":\"Run the affected module's bundled checks to collect observed go test and go vet evidence for the review.\",\"target_arguments\":{\"command\":\"sh skills/code-review/scripts/run-go-checks.sh work/inputs/repo\",\"timeout_sec\":120},\"target_tool\":\"workspace_exec\"}",
+      "decision": "allow",
+      "decided_at": "2026-07-16T16:35:12.508600000Z"
+    },
+    {
+      "tool_call_id": "fake-acceptance-security-request_tool_permission-1",
+      "tool_name": "workspace_exec",
+      "operation": "workspace_exec",
+      "command_preview": "{\"command\":\"sh skills/code-review/scripts/run-go-checks.sh work/inputs/repo\",\"timeout_sec\":120}",
+      "decision": "allow",
+      "reason": "Run the affected module's bundled checks to collect observed go test and go vet evidence for the review.",
+      "decided_at": "2026-07-16T16:35:12.508700000Z"
+    },
+    {
+      "tool_call_id": "fake-acceptance-security-workspace_exec-2",
       "tool_name": "workspace_exec",
       "operation": "workspace_exec",
       "command_preview": "exec /usr/bin/timeout --signal=TERM --kill-after=1s 120s sh -c 'sh skills/code-review/scripts/run-go-checks.sh work/inputs/repo'",
@@ -89,7 +106,7 @@
       "decided_at": "2026-07-16T16:35:12.508800853Z"
     },
     {
-      "tool_call_id": "fake-acceptance-security-submit_review_results",
+      "tool_call_id": "fake-acceptance-security-submit_review_results-1",
       "tool_name": "submit_review_results",
       "operation": "submit_review_results",
       "command_preview": "{\"findings\":[{\"severity\":\"critical\",\"category\":\"security\",\"file\":\"command.go\",\"line\":15,\"title\":\"User input is executed by a shell\",\"evidence\":\"The changed code passes input to exec.Command(\\\"sh\\\", \\\"-c\\\", input), enabling command injection.\",\"recommendation\":\"Avoid a shell and pass validated arguments directly to a fixed executable.\",\"confidence\":0.99,\"source\":\"agent\",\"rule_id\":\"GO-SEC-001\"}],\"conclusion\":\"One actionable issue found. Go checks completed successfully.\"}",
@@ -99,7 +116,7 @@
   ],
   "sandbox_runs": [
     {
-      "tool_call_id": "fake-acceptance-security-workspace_exec",
+      "tool_call_id": "fake-acceptance-security-workspace_exec-2",
       "backend": "container",
       "command_preview": "exec /usr/bin/timeout --signal=TERM --kill-after=1s 120s sh -c 'sh skills/code-review/scripts/run-go-checks.sh work/inputs/repo'",
       "timeout_ms": 120000,
