@@ -9,12 +9,8 @@
   </p>
 
 <p align="center">
-  <a href="https://trendshift.io/repositories/15288">
-    <img src="https://trendshift.io/api/badge/repositories/15288" alt="GitHub Trending #3 Repository Of The Day archived by Trendshift" width="250" height="55">
-  </a>
-  <a href="https://trendshift.io/repositories/15288">
-    <img src="https://trendshift.io/api/badge/trendshift/repositories/15288/daily?language=Go" alt="Trendshift #1 Go Repository Of The Day" width="250" height="55">
-  </a>
+  <a href="https://trendshift.io/repositories/15288"><img src="https://trendshift.io/api/badge/repositories/15288" alt="GitHub Trending #3 Repository Of The Day archived by Trendshift" width="250" height="55"></a>
+  <a href="https://trendshift.io/repositories/15288"><img src="https://trendshift.io/api/badge/trendshift/repositories/15288/daily?language=Go" alt="Trendshift #1 Go Repository Of The Day" width="250" height="55"></a>
 </p>
 
 <p align="center">
