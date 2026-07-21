@@ -17,6 +17,8 @@ import (
 	"math"
 	"reflect"
 	"strings"
+
+	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
 )
 
 // CompareFunc defines custom JSON comparison logic.
@@ -36,6 +38,8 @@ type JSONCriterion struct {
 	NumberTolerance *float64 `json:"numberTolerance,omitempty"`
 	// Valid validates raw JSON content when used by callers that receive unparsed content.
 	Valid bool `json:"valid,omitempty"`
+	// Schema validates actual JSON content against the provided JSON schema.
+	Schema string `json:"schema,omitempty"`
 	// CompareName selects a registered comparison implementation by name.
 	CompareName string `json:"compareName,omitempty"`
 	// Compare overrides default comparison when provided.
@@ -52,6 +56,8 @@ const (
 	JSONMatchStrategySkip JSONMatchStrategy = "skip"
 )
 
+const inlineSchemaResource = "schema.json"
+
 // New creates a new JSONCriterion with the provided options.
 func New(opt ...Option) *JSONCriterion {
 	opts := newOptions(opt...)
@@ -62,6 +68,7 @@ func New(opt ...Option) *JSONCriterion {
 		MatchStrategy:   opts.matchStrategy,
 		NumberTolerance: opts.numberTolerance,
 		Valid:           opts.valid,
+		Schema:          opts.schema,
 		CompareName:     opts.compareName,
 		Compare:         opts.compare,
 	}
@@ -81,6 +88,11 @@ func (j *JSONCriterion) Match(actual, expected any) (bool, error) {
 	if j.Valid {
 		if err := validateRawJSON(actual); err != nil {
 			return false, fmt.Errorf("parse actual raw json: %w", err)
+		}
+	}
+	if j.Schema != "" {
+		if err := validateJSONSchema(actual, j.Schema); err != nil {
+			return false, err
 		}
 	}
 	if j.MatchStrategy == JSONMatchStrategySkip {
@@ -103,6 +115,43 @@ func (j *JSONCriterion) Match(actual, expected any) (bool, error) {
 		return matchValueIgnoreTree(actual, expected, j.IgnoreTree, tolerance)
 	default:
 		return false, fmt.Errorf("invalid match strategy %s", j.MatchStrategy)
+	}
+}
+
+func validateJSONSchema(actual any, schemaText string) error {
+	schemaDoc, err := jsonschema.UnmarshalJSON(strings.NewReader(schemaText))
+	if err != nil {
+		return fmt.Errorf("parse json schema: %w", err)
+	}
+	compiler := jsonschema.NewCompiler()
+	compiler.DefaultDraft(jsonschema.Draft7)
+	if err := compiler.AddResource(inlineSchemaResource, schemaDoc); err != nil {
+		return fmt.Errorf("add json schema resource: %w", err)
+	}
+	schema, err := compiler.Compile(inlineSchemaResource)
+	if err != nil {
+		return fmt.Errorf("compile json schema: %w", err)
+	}
+	value, err := schemaValue(actual)
+	if err != nil {
+		return fmt.Errorf("parse actual raw json: %w", err)
+	}
+	if err := schema.Validate(value); err != nil {
+		return fmt.Errorf("json schema validation failed: %w", err)
+	}
+	return nil
+}
+
+func schemaValue(value any) (any, error) {
+	switch v := value.(type) {
+	case json.RawMessage:
+		return jsonschema.UnmarshalJSON(strings.NewReader(string(v)))
+	case string:
+		return jsonschema.UnmarshalJSON(strings.NewReader(v))
+	case []byte:
+		return jsonschema.UnmarshalJSON(strings.NewReader(string(v)))
+	default:
+		return value, nil
 	}
 }
 

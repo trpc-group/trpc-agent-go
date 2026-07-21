@@ -18,6 +18,7 @@ require (
 	github.com/hashicorp/go-multierror v1.1.1
 	github.com/neurosnap/sentences v1.1.2
 	github.com/panjf2000/ants/v2 v2.10.0
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
 	github.com/stretchr/testify v1.11.1
 	golang.org/x/sync v0.19.0
 	trpc.group/trpc-go/trpc-agent-go v0.8.0

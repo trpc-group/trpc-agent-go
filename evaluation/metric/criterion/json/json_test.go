@@ -76,6 +76,7 @@ func TestJSONCriterionJSONRoundTrip(t *testing.T) {
 		WithMatchStrategy(JSONMatchStrategyExact),
 		WithNumberTolerance(tolerance),
 		WithValid(true),
+		WithSchema(`{"type":"object"}`),
 		WithCompareName("allow_delta"),
 	)
 	data, err := json.Marshal(criterion)
@@ -86,6 +87,7 @@ func TestJSONCriterionJSONRoundTrip(t *testing.T) {
 		"matchStrategy": "exact",
 		"numberTolerance": 0.001,
 		"valid": true,
+		"schema": "{\"type\":\"object\"}",
 		"compareName": "allow_delta"
 	}`, string(data))
 
@@ -95,10 +97,39 @@ func TestJSONCriterionJSONRoundTrip(t *testing.T) {
 	assert.Equal(t, criterion.Ignore, decoded.Ignore)
 	assert.Equal(t, criterion.MatchStrategy, decoded.MatchStrategy)
 	assert.Equal(t, criterion.Valid, decoded.Valid)
+	assert.Equal(t, criterion.Schema, decoded.Schema)
 	assert.Equal(t, criterion.CompareName, decoded.CompareName)
 	if assert.NotNil(t, decoded.NumberTolerance) {
 		assert.Equal(t, tolerance, *decoded.NumberTolerance)
 	}
+}
+
+func TestJSONCriterionSchemaValidation(t *testing.T) {
+	criterion := &JSONCriterion{
+		Schema: `{
+			"type": "object",
+			"required": ["answer"],
+			"properties": {
+				"answer": { "type": "string" }
+			}
+		}`,
+		MatchStrategy: JSONMatchStrategySkip,
+	}
+	ok, err := criterion.Match(json.RawMessage(`{"answer":"Paris"}`), json.RawMessage(`{}`))
+	assert.True(t, ok)
+	assert.NoError(t, err)
+	ok, err = criterion.Match(json.RawMessage(`{"answer":123}`), json.RawMessage(`{}`))
+	assert.False(t, ok)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "json schema validation failed")
+}
+
+func TestJSONCriterionSchemaRejectsInvalidSchema(t *testing.T) {
+	criterion := &JSONCriterion{Schema: `{`}
+	ok, err := criterion.Match(json.RawMessage(`{"answer":"Paris"}`), json.RawMessage(`{}`))
+	assert.False(t, ok)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "parse json schema")
 }
 
 func TestJSONCriterionMatchRawMessage(t *testing.T) {
