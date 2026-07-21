@@ -381,6 +381,37 @@ func TestCodexAgent_Run_ResumeErrorFallsBackToCreate(t *testing.T) {
 	require.Equal(t, "Hi.", string(calls[1].stdin))
 }
 
+func TestCodexAgent_Run_ResumeFailureAfterStreamedEventDoesNotFallback(t *testing.T) {
+	ctx := context.Background()
+	sess := session.NewSession("app", "user", "sess-resume-stream-error")
+	sess.SetState(StateKeyThreadID, []byte("thread-1"))
+	inv := newTestInvocation("inv-resume-stream-error", sess, "Hi.")
+	transcript := `{"type":"thread.started","thread_id":"thread-1"}
+{"type":"item.started","item":{"id":"item_0","type":"command_execution","command":"sleep 1","status":"in_progress"}}`
+	runner := &scriptedRunner{
+		run: func(cmd command) ([]byte, []byte, error) {
+			if len(cmd.args) > 1 && cmd.args[1] == "resume" {
+				return []byte(transcript), []byte("resume crashed"), errors.New("resume exit 1")
+			}
+			return []byte(`{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"fresh"}}`), nil, nil
+		},
+	}
+	ag, err := New(withCommandRunner(runner))
+	require.NoError(t, err)
+	ch, err := ag.Run(ctx, inv)
+	require.NoError(t, err)
+	events := drainEvents(ch)
+	require.Len(t, events, 2)
+	require.True(t, events[0].IsToolCallResponse())
+	require.True(t, events[1].IsTerminalError())
+	require.Equal(t, model.ErrorTypeRunError, events[1].Error.Type)
+	require.Contains(t, events[1].Error.Message, "resume crashed")
+	require.Empty(t, events[1].StateDelta)
+	calls := runner.Calls()
+	require.Len(t, calls, 1)
+	require.Equal(t, []string{"exec", "resume", "--json", "thread-1"}, calls[0].args)
+}
+
 func TestCodexAgent_Run_ResumeAndCreateErrorsReturnRunError(t *testing.T) {
 	ctx := context.Background()
 	sess := session.NewSession("app", "user", "sess-4")
@@ -701,16 +732,35 @@ func TestParseTranscriptEvents_ErrorEventMapping(t *testing.T) {
 	require.Equal(t, model.ObjectTypeChatCompletionChunk, result.Events[0].Object)
 	require.False(t, result.Events[0].Done)
 	require.True(t, result.Events[0].IsPartial)
+	require.Nil(t, result.Events[0].Error)
 	require.False(t, result.Events[0].IsTerminalError())
-	require.Equal(t, model.ErrorTypeRunError, result.Events[0].Error.Type)
-	require.Equal(t, "turn failed", result.Events[0].Error.Message)
-	require.NotNil(t, result.Events[0].Error.Code)
-	require.Equal(t, "bad_turn", *result.Events[0].Error.Code)
+	require.Equal(t, "turn failed", result.Events[0].Choices[0].Delta.Content)
 	require.False(t, result.Events[1].Done)
 	require.True(t, result.Events[1].IsPartial)
+	require.Nil(t, result.Events[1].Error)
 	require.False(t, result.Events[1].IsTerminalError())
-	require.Equal(t, "top-level error", result.Events[1].Error.Message)
+	require.Equal(t, "top-level error", result.Events[1].Choices[0].Delta.Content)
 	require.Equal(t, "top-level error", result.Error.Message)
+}
+
+func TestErrorEventFromResponseErrorClonesTerminalError(t *testing.T) {
+	param := "prompt"
+	code := "bad_turn"
+	responseErr := &model.ResponseError{
+		Type:    model.ErrorTypeRunError,
+		Message: "original",
+		Param:   &param,
+		Code:    &code,
+	}
+	evt := errorEventFromResponseError("inv-clone", "codex", responseErr, true)
+	responseErr.Message = "mutated"
+	*responseErr.Param = "mutated-param"
+	*responseErr.Code = "mutated-code"
+	require.Equal(t, "original", evt.Error.Message)
+	require.NotNil(t, evt.Error.Param)
+	require.Equal(t, "prompt", *evt.Error.Param)
+	require.NotNil(t, evt.Error.Code)
+	require.Equal(t, "bad_turn", *evt.Error.Code)
 }
 
 func TestTranscriptHelpers_Fallbacks(t *testing.T) {

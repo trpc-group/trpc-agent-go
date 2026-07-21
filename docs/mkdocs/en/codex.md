@@ -85,7 +85,7 @@ The agent emits assistant, tool, and error events as Codex JSONL records arrive,
 | `item.type == "command_execution"` | tool-call and tool-result response events |
 | `item.type == "mcp_tool_call"` | tool-call and tool-result response events |
 | Built-in tool items such as `web_search`, `file_change`, `image_view`, and `image_generation` | tool-call and tool-result response events |
-| `type == "turn.failed"` or `type == "error"` | non-terminal error observation, followed by one terminal error after the command finishes |
+| `type == "turn.failed"` or `type == "error"` | non-terminal error observation chunk without `Response.Error`, followed by one terminal error after the command finishes |
 | `item.type == "agent_message"` | partial assistant chunk event; the last item also becomes the final response content |
 | `type == "turn.completed"` | final response usage |
 
@@ -100,7 +100,7 @@ Codex creates its own thread id. The agent persists that id in session state und
 1. First turn: write the prompt to stdin of `codex exec --json`
 2. Later turns: write the prompt to stdin of `codex exec resume --json <thread-id>`
 
-If resume fails, the agent starts a fresh `codex exec` run and updates the stored thread id when the new run reports one. If both resume and create fail, the invocation returns a run error.
+If resume fails before any transcript event is emitted, the agent starts a fresh `codex exec` run and updates the stored thread id when the new run reports one. If resume has already emitted framework events, or if stdout parsing fails, the agent surfaces that failure instead of starting a fresh run to avoid duplicating visible progress or tool side effects. If both resume and create fail, the invocation returns a run error.
 
 To keep context, use the same app name, user ID, and session ID in `runner`.
 

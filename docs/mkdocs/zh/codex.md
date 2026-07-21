@@ -85,7 +85,7 @@ ag, err := codex.New(
 | `item.type == "command_execution"` | tool-call 与 tool-result response 事件 |
 | `item.type == "mcp_tool_call"` | tool-call 与 tool-result response 事件 |
 | `web_search`、`file_change`、`image_view`、`image_generation` 等内置工具 item | tool-call 与 tool-result response 事件 |
-| `type == "turn.failed"` 或 `type == "error"` | 非终止 error observation；命令结束后再发出一个终止 error |
+| `type == "turn.failed"` 或 `type == "error"` | 不携带 `Response.Error` 的非终止 error observation chunk；命令结束后再发出一个终止 error |
 | `item.type == "agent_message"` | partial assistant chunk 事件；最后一个 item 同时作为 final response 内容 |
 | `type == "turn.completed"` | final response usage |
 
@@ -100,7 +100,7 @@ Codex 会自行创建 thread id。该 Agent 会把这个 id 存入 session state
 1. 首轮：把 prompt 写入 `codex exec --json` 的 stdin
 2. 后续轮次：把 prompt 写入 `codex exec resume --json <thread-id>` 的 stdin
 
-如果 resume 失败，该 Agent 会重新发起一次新的 `codex exec`；如果新执行返回了 thread id，则更新已保存的 thread id。如果 resume 与新建执行都失败，本次调用会返回 run error。
+如果 resume 在发出任何 transcript 事件前失败，该 Agent 会重新发起一次新的 `codex exec`；如果新执行返回了 thread id，则更新已保存的 thread id。如果 resume 已经发出过框架事件，或 stdout 解析失败，则不会再启动新的执行，以避免重复暴露进度或重复执行工具副作用，而是直接返回本次失败。如果 resume 与新建执行都失败，本次调用会返回 run error。
 
 如需保持上下文，请在 `runner` 中持续使用相同的 app name、user ID、session ID。
 

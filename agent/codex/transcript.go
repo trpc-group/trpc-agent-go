@@ -168,8 +168,9 @@ func (s *transcriptStream) HandleRecord(rec codexEvent) []*event.Event {
 		s.result.Events = append(s.result.Events, events...)
 		return events
 	case codexEventTurnFailed, codexEventError:
-		evt := errorEventFromRecord(s.invocationID, s.author, rec, false)
-		s.result.Error = evt.Response.Error
+		responseErr := responseErrorFromRecord(rec)
+		evt := errorEventFromResponseError(s.invocationID, s.author, responseErr, false)
+		s.result.Error = cloneCodexResponseError(responseErr)
 		s.result.Events = append(s.result.Events, evt)
 		return []*event.Event{evt}
 	}
@@ -290,10 +291,12 @@ func errorEventFromResponseError(invocationID, author string, responseErr *model
 			Content: responseErr.Message,
 		},
 	}
+	var eventErr *model.ResponseError
 	if terminal {
 		object = model.ObjectTypeError
 		done = true
 		partial = false
+		eventErr = cloneCodexResponseError(responseErr)
 		choice = model.Choice{
 			Index: 0,
 			Message: model.Message{
@@ -307,7 +310,7 @@ func errorEventFromResponseError(invocationID, author string, responseErr *model
 		Done:      done,
 		IsPartial: partial,
 		Choices:   []model.Choice{choice},
-		Error:     responseErr,
+		Error:     eventErr,
 	}
 	return event.NewResponseEvent(invocationID, author, rsp)
 }
@@ -367,6 +370,23 @@ func responseErrorFromRecord(rec codexEvent) *model.ResponseError {
 		rspErr.Code = &code
 	}
 	return rspErr
+}
+
+// cloneCodexResponseError returns an owned copy of a Codex response error.
+func cloneCodexResponseError(responseErr *model.ResponseError) *model.ResponseError {
+	if responseErr == nil {
+		return nil
+	}
+	cloned := *responseErr
+	if responseErr.Param != nil {
+		param := *responseErr.Param
+		cloned.Param = &param
+	}
+	if responseErr.Code != nil {
+		code := *responseErr.Code
+		cloned.Code = &code
+	}
+	return &cloned
 }
 
 // decodeErrorPayload decodes a Codex error payload into message, type, and code.
