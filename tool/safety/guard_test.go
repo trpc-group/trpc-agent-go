@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"testing"
 
@@ -269,6 +270,110 @@ func TestGuard_CodeExec(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Equal(t, tool.PermissionActionAllow, decision.Action)
+}
+
+func TestGuard_DeniesHostWriteStdinByDefault(t *testing.T) {
+	policy := DefaultPolicy()
+	policy.DefaultAction = DecisionAllow
+	guard, err := NewGuard(WithPolicy(policy))
+	require.NoError(t, err)
+	defer guard.Close()
+
+	args, _ := json.Marshal(map[string]any{
+		"session_id": "sess-1",
+		"chars":      "rm -rf /",
+	})
+	decision, err := guard.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:  "write_stdin",
+		Arguments: args,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, tool.PermissionActionDeny, decision.Action)
+}
+
+func TestGuard_DeniesWorkspaceWriteStdinByDefault(t *testing.T) {
+	policy := DefaultPolicy()
+	policy.DefaultAction = DecisionAllow
+	guard, err := NewGuard(WithPolicy(policy))
+	require.NoError(t, err)
+	defer guard.Close()
+
+	args, _ := json.Marshal(map[string]any{
+		"session_id": "sess-1",
+		"chars":      "rm -rf /",
+	})
+	decision, err := guard.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:  "workspace_write_stdin",
+		Arguments: args,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, tool.PermissionActionDeny, decision.Action)
+}
+
+func TestGuard_WorkspaceExecStdinIsScanned(t *testing.T) {
+	policy := DefaultPolicy()
+	policy.DefaultAction = DecisionAllow
+	guard, err := NewGuard(WithPolicy(policy))
+	require.NoError(t, err)
+	defer guard.Close()
+
+	args, _ := json.Marshal(map[string]any{
+		"command": "python -",
+		"stdin":   "import os\nos.system('rm -rf /')\n",
+	})
+	decision, err := guard.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:  "workspace_exec",
+		Arguments: args,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, tool.PermissionActionDeny, decision.Action)
+}
+
+func TestGuard_WorkDirIsScanned(t *testing.T) {
+	policy := DefaultPolicy()
+	policy.DefaultAction = DecisionAllow
+	guard, err := NewGuard(WithPolicy(policy))
+	require.NoError(t, err)
+	defer guard.Close()
+
+	args, _ := json.Marshal(map[string]any{
+		"command": "cat id_rsa",
+		"workdir": "~/.ssh",
+	})
+	decision, err := guard.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:  "exec_command",
+		Arguments: args,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, tool.PermissionActionDeny, decision.Action)
+}
+
+type failingWriter struct{}
+
+func (failingWriter) Write(_ []byte) (int, error) {
+	return 0, errors.New("disk full")
+}
+
+func TestGuard_AuditWriterFailureFailsClosed(t *testing.T) {
+	policy := DefaultPolicy()
+	policy.DefaultAction = DecisionAllow
+	guard, err := NewGuard(
+		WithPolicy(policy),
+		WithAuditWriter(failingWriter{}),
+	)
+	require.NoError(t, err)
+	defer guard.Close()
+
+	args, _ := json.Marshal(map[string]any{
+		"command": "echo hello",
+	})
+	decision, err := guard.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:  "workspace_exec",
+		Arguments: args,
+	})
+	require.Error(t, err)
+	assert.Equal(t, tool.PermissionActionDeny, decision.Action)
+	assert.Contains(t, err.Error(), "audit write failed")
 }
 
 // writeTestFile is a helper to write test data to a file.

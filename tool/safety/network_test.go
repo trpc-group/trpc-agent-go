@@ -216,6 +216,48 @@ func TestNetworkEgress_CurlMultipleURLs(t *testing.T) {
 	assert.True(t, found, "should find non-whitelisted domain")
 }
 
+func TestNetworkEgress_CurlConfigFailsClosed(t *testing.T) {
+	rule := &NetworkEgressRule{}
+	policy := PolicyFile{
+		NetworkAllowlist: []string{"allowed.example"},
+	}
+
+	findings := rule.Scan(context.Background(), ScanInput{
+		Command: "curl http://allowed.example --config curl.conf",
+	}, policy)
+
+	assert.NotEmpty(t, findings)
+	assert.Contains(t, findings[0].Evidence, "--config")
+}
+
+func TestNetworkEgress_CurlResolveFailsClosed(t *testing.T) {
+	rule := &NetworkEgressRule{}
+	policy := PolicyFile{
+		NetworkAllowlist: []string{"allowed.example"},
+	}
+
+	findings := rule.Scan(context.Background(), ScanInput{
+		Command: "curl http://allowed.example --resolve allowed.example:80:203.0.113.1",
+	}, policy)
+
+	assert.NotEmpty(t, findings)
+	assert.Contains(t, findings[0].Evidence, "--resolve")
+}
+
+func TestNetworkEgress_ToolPathIsNormalized(t *testing.T) {
+	rule := &NetworkEgressRule{}
+	policy := PolicyFile{
+		NetworkAllowlist: []string{"allowed.example"},
+	}
+
+	findings := rule.Scan(context.Background(), ScanInput{
+		Command: "/usr/bin/curl http://evil.example.com/data",
+	}, policy)
+
+	assert.NotEmpty(t, findings)
+	assert.Contains(t, findings[0].Evidence, "evil.example.com")
+}
+
 // TestNetworkEgress_CurlSCPHost verifies extraction from scp command.
 func TestNetworkEgress_CurlSCPHost(t *testing.T) {
 	rule := &NetworkEgressRule{}
@@ -334,6 +376,7 @@ func TestExtractCurlHosts(t *testing.T) {
 		name     string
 		args     []string
 		expected []string
+		findings int
 	}{
 		{
 			name:     "simple URL",
@@ -346,16 +389,18 @@ func TestExtractCurlHosts(t *testing.T) {
 			expected: []string{"example.com"},
 		},
 		{
-			name:     "resolve flag skips value and extracts host",
+			name:     "resolve flag fails closed",
 			args:     []string{"--resolve", "example.com:443:127.0.0.1", "http://example.com/api"},
-			expected: []string{"example.com", "example.com"},
+			expected: []string{"example.com"},
+			findings: 1,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			hosts := extractCurlHosts(tt.args)
+			hosts, findings := extractCurlHosts(tt.args)
 			assert.Equal(t, tt.expected, hosts)
+			assert.Len(t, findings, tt.findings)
 		})
 	}
 }

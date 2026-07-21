@@ -42,11 +42,25 @@ func TestRedactor_AWSKey(t *testing.T) {
 func TestRedactor_PrivateKey(t *testing.T) {
 	r := NewRedactor()
 
-	input := `-----BEGIN RSA PRIVATE KEY-----MIIEpAIBAAKCAQEA...`
+	input := "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA...\n-----END RSA PRIVATE KEY-----"
 	result := r.RedactString(input)
 
 	assert.Contains(t, result, "[REDACTED]")
 	assert.NotContains(t, result, "BEGIN RSA PRIVATE KEY")
+	assert.NotContains(t, result, "MIIEpAIBAAKCAQEA")
+	assert.NotContains(t, result, "END RSA PRIVATE KEY")
+}
+
+func TestRedactor_PrivateKey_PKCS8(t *testing.T) {
+	r := NewRedactor()
+
+	input := "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkq...\n-----END PRIVATE KEY-----"
+	result := r.RedactString(input)
+
+	assert.Contains(t, result, "[REDACTED]")
+	assert.NotContains(t, result, "BEGIN PRIVATE KEY")
+	assert.NotContains(t, result, "MIIEvQIBADANBgkq")
+	assert.NotContains(t, result, "END PRIVATE KEY")
 }
 
 // TestRedactor_BearerToken verifies that bearer tokens are redacted.

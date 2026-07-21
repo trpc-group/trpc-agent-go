@@ -49,6 +49,8 @@ const (
 type ScanInput struct {
 	// Command is the shell command to scan (used by workspaceexec/hostexec).
 	Command string
+	// Stdin is additional stdin content that will be written before execution.
+	Stdin string
 	// CodeBlocks is the list of code blocks to scan (used by codeexec).
 	CodeBlocks []string
 	// Args are additional command-line arguments.

@@ -38,8 +38,8 @@ func NewRedactor() *Redactor {
 		`(?i)aws_secret_access_key\s*[=:]\s*\S+`,
 		// Generic API key / access key
 		`(?i)(api[_-]?key|apikey|access[_-]?key)\s*[=:]\s*['"]?\w{20,}`,
-		// PEM private key header
-		`-----BEGIN\s+\w+\s+PRIVATE\s+KEY-----`,
+		// PEM private key block
+		`-----BEGIN(?: [A-Z0-9]+)* PRIVATE KEY-----[\s\S]+?-----END(?: [A-Z0-9]+)* PRIVATE KEY-----`,
 		// Bearer token
 		`(?i)bearer\s+[A-Za-z0-9\-._~+/]+=*`,
 		// Password in URL

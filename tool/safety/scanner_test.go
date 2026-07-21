@@ -125,9 +125,15 @@ func TestScanner_NormalizedScanText(t *testing.T) {
 			expected: "print('a')\nprint('b')",
 		},
 		{
-			name:     "command and code blocks",
-			input:    ScanInput{Command: "go run .", CodeBlocks: []string{"func main() {}"}},
-			expected: "go run .\nfunc main() {}",
+			name: "command stdin workdir args and code blocks",
+			input: ScanInput{
+				Command:    "go run .",
+				Stdin:      "stdin payload",
+				WorkDir:    "~/.ssh",
+				Args:       []string{"--flag"},
+				CodeBlocks: []string{"func main() {}"},
+			},
+			expected: "go run .\nstdin payload\n~/.ssh\n--flag\nfunc main() {}",
 		},
 	}
 

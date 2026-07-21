@@ -11,6 +11,7 @@ package safety
 import (
 	"context"
 	"net/url"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -80,23 +81,59 @@ func hostFromArg(arg string) string {
 
 // extractCurlHosts extracts target hostnames from curl arguments, taking
 // into account flags that redirect output or rewrite DNS resolution.
-func extractCurlHosts(args []string) []string {
+func extractCurlHosts(args []string) ([]string, []Finding) {
 	var hosts []string
+	var findings []Finding
 	skipNext := false
 	for i, arg := range args {
 		if skipNext {
 			skipNext = false
 			continue
 		}
-		// --resolve flag rewrites DNS but the original host is still accessed.
-		if arg == "--resolve" && i+1 < len(args) {
-			// --resolve takes "host:port:addr" — the original host is the
-			// first component before the first colon.
-			parts := strings.SplitN(args[i+1], ":", 2)
-			if parts[0] != "" {
-				hosts = append(hosts, parts[0])
-			}
+		if arg == "-K" || arg == "--config" {
+			findings = append(findings, Finding{
+				RuleID:         "R-NET-001",
+				RuleName:       "Network Egress",
+				RiskLevel:      RiskLevelHigh,
+				Decision:       DecisionDeny,
+				Evidence:       "curl " + arg + " uses an unscanned config file",
+				Recommendation: "Inline the curl URL arguments so the guard can scan the actual endpoint.",
+			})
 			skipNext = true
+			continue
+		}
+		if strings.HasPrefix(arg, "--config=") || (strings.HasPrefix(arg, "-K") && len(arg) > 2) {
+			findings = append(findings, Finding{
+				RuleID:         "R-NET-001",
+				RuleName:       "Network Egress",
+				RiskLevel:      RiskLevelHigh,
+				Decision:       DecisionDeny,
+				Evidence:       "curl " + arg + " uses an unscanned config file",
+				Recommendation: "Inline the curl URL arguments so the guard can scan the actual endpoint.",
+			})
+			continue
+		}
+		if arg == "--resolve" && i+1 < len(args) {
+			findings = append(findings, Finding{
+				RuleID:         "R-NET-001",
+				RuleName:       "Network Egress",
+				RiskLevel:      RiskLevelHigh,
+				Decision:       DecisionDeny,
+				Evidence:       "curl --resolve overrides the destination endpoint",
+				Recommendation: "Remove --resolve or require explicit human review for endpoint overrides.",
+			})
+			skipNext = true
+			continue
+		}
+		if strings.HasPrefix(arg, "--resolve=") {
+			findings = append(findings, Finding{
+				RuleID:         "R-NET-001",
+				RuleName:       "Network Egress",
+				RiskLevel:      RiskLevelHigh,
+				Decision:       DecisionDeny,
+				Evidence:       "curl --resolve overrides the destination endpoint",
+				Recommendation: "Remove --resolve or require explicit human review for endpoint overrides.",
+			})
 			continue
 		}
 		// Handle --url flag: its value may be a bare host or a full URL.
@@ -139,7 +176,7 @@ func extractCurlHosts(args []string) []string {
 			hosts = append(hosts, h)
 		}
 	}
-	return hosts
+	return hosts, findings
 }
 
 // extractWgetHosts extracts target hostnames from wget arguments.
@@ -254,6 +291,7 @@ func domainMatchesAllowlist(domain string, allowlist []string) bool {
 // Scan evaluates the input for network egress policy violations.
 func (r *NetworkEgressRule) Scan(_ context.Context, input ScanInput, policy PolicyFile) []Finding {
 	var allHosts []string
+	var findings []Finding
 
 	// Parse the command via shellsafe if possible.
 	if input.Command != "" {
@@ -263,9 +301,9 @@ func (r *NetworkEgressRule) Scan(_ context.Context, input ScanInput, policy Poli
 				if len(argv) == 0 {
 					continue
 				}
-				tool := argv[0]
-				hosts := extractHostsFromCommand(tool, argv[1:])
+				hosts, commandFindings := extractHostsFromCommand(argv[0], argv[1:])
 				allHosts = append(allHosts, hosts...)
+				findings = append(findings, commandFindings...)
 			}
 		} else {
 			// Fallback: extract URLs from the raw command text.
@@ -298,7 +336,6 @@ func (r *NetworkEgressRule) Scan(_ context.Context, input ScanInput, policy Poli
 	}
 
 	// Evaluate each host against the allowlist.
-	var findings []Finding
 	seen := make(map[string]struct{})
 	for _, h := range allHosts {
 		h = strings.ToLower(h)
@@ -327,16 +364,16 @@ func (r *NetworkEgressRule) Scan(_ context.Context, input ScanInput, policy Poli
 }
 
 // extractHostsFromCommand dispatches host extraction based on the tool name.
-func extractHostsFromCommand(tool string, args []string) []string {
-	switch tool {
+func extractHostsFromCommand(tool string, args []string) ([]string, []Finding) {
+	switch normalizeExecutableName(tool) {
 	case "curl":
 		return extractCurlHosts(args)
 	case "wget":
-		return extractWgetHosts(args)
+		return extractWgetHosts(args), nil
 	case "ssh", "scp", "rsync":
-		return extractSSHHosts(args)
+		return extractSSHHosts(args), nil
 	default:
-		if networkToolsDirect[tool] {
+		if networkToolsDirect[normalizeExecutableName(tool)] {
 			// For nc/ncat/netcat, the first non-flag arg is typically host.
 			for _, a := range args {
 				if strings.HasPrefix(a, "-") {
@@ -344,16 +381,22 @@ func extractHostsFromCommand(tool string, args []string) []string {
 				}
 				h, _, ok := strings.Cut(a, ":")
 				if ok && h != "" {
-					return []string{h}
+					return []string{h}, nil
 				}
 				if a != "" {
-					return []string{a}
+					return []string{a}, nil
 				}
 			}
-			return []string{"unknown"}
+			return []string{"unknown"}, nil
 		}
-		return nil
+		return nil, nil
 	}
+}
+
+func normalizeExecutableName(tool string) string {
+	tool = strings.TrimSpace(tool)
+	tool = filepath.Base(strings.ReplaceAll(tool, `\`, `/`))
+	return strings.ToLower(tool)
 }
 
 // extractHostsFromText finds http/https URLs in raw text and returns their

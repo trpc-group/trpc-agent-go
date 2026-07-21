@@ -22,6 +22,7 @@ func TestExtractWorkspaceExec(t *testing.T) {
 		"command":    "go test ./...",
 		"cwd":        "/workspace",
 		"env":        map[string]string{"GOPATH": "/go"},
+		"stdin":      "input text",
 		"timeout":    30,
 		"background": false,
 	})
@@ -30,6 +31,7 @@ func TestExtractWorkspaceExec(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, "go test ./...", req.Command)
+	assert.Equal(t, "input text", req.Stdin)
 	assert.Equal(t, "/workspace", req.WorkDir)
 	assert.Equal(t, map[string]string{"GOPATH": "/go"}, req.Env)
 	assert.Equal(t, 30, req.Timeout)
@@ -81,7 +83,20 @@ func TestExtractWorkspaceExec_TimeoutSec(t *testing.T) {
 	req, err := extractWorkspaceExec("workspace_exec", args)
 	require.NoError(t, err)
 
-	assert.Equal(t, 60, req.Timeout, "timeout_sec should take precedence when larger")
+	assert.Equal(t, 60, req.Timeout, "timeout_sec should take precedence")
+}
+
+func TestExtractWorkspaceExec_TimeoutSecAlias(t *testing.T) {
+	args, _ := json.Marshal(map[string]any{
+		"command":    "go test ./...",
+		"timeoutSec": 3600,
+		"timeout":    10,
+	})
+
+	req, err := extractWorkspaceExec("workspace_exec", args)
+	require.NoError(t, err)
+
+	assert.Equal(t, 3600, req.Timeout, "timeoutSec alias should match tool behavior")
 }
 
 // TestExtractHostExec verifies extracting a hostexec request.
@@ -117,6 +132,17 @@ func TestExtractHostExec_PTYYAndTTY(t *testing.T) {
 	assert.True(t, req.PTY)
 }
 
+func TestExtractHostExec_TimeoutSecAlias(t *testing.T) {
+	args, _ := json.Marshal(map[string]any{
+		"command":    "echo hello",
+		"timeoutSec": 3600,
+	})
+
+	req, err := extractHostExec("exec_command", args)
+	require.NoError(t, err)
+	assert.Equal(t, 3600, req.Timeout)
+}
+
 // TestExtractCodeExec verifies extracting a codeexec request.
 func TestExtractCodeExec(t *testing.T) {
 	args, _ := json.Marshal(map[string]any{
@@ -133,6 +159,22 @@ func TestExtractCodeExec(t *testing.T) {
 	assert.Equal(t, []string{"print('hello')", "fmt.Println(\"world\")"}, req.CodeBlocks)
 	assert.Equal(t, "codeexec", req.Backend)
 	assert.Empty(t, req.Command)
+}
+
+func TestExtractCodeExec_SingleObject(t *testing.T) {
+	args := []byte(`{"code_blocks":{"language":"python","code":"print(1)"}}`)
+
+	req, err := extractCodeExec("execute_code", args)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"print(1)"}, req.CodeBlocks)
+}
+
+func TestExtractCodeExec_DoubleEncodedString(t *testing.T) {
+	args := []byte(`{"code_blocks":"[{\"language\":\"python\",\"code\":\"print(1)\"}]"}`)
+
+	req, err := extractCodeExec("execute_code", args)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"print(1)"}, req.CodeBlocks)
 }
 
 // TestExtractRequest_UnknownTool verifies that unknown tools get generic extraction.
@@ -187,6 +229,7 @@ func TestExtractCodeExec_InvalidJSON(t *testing.T) {
 func TestExecRequest_ToScanInput(t *testing.T) {
 	req := ExecRequest{
 		Command:    "go test ./...",
+		Stdin:      "stdin payload",
 		CodeBlocks: []string{"func main() {}"},
 		Args:       []string{"-v"},
 		WorkDir:    "/workspace",
@@ -200,6 +243,7 @@ func TestExecRequest_ToScanInput(t *testing.T) {
 	scanInput := req.ToScanInput("my_tool")
 
 	assert.Equal(t, "go test ./...", scanInput.Command)
+	assert.Equal(t, "stdin payload", scanInput.Stdin)
 	assert.Equal(t, []string{"func main() {}"}, scanInput.CodeBlocks)
 	assert.Equal(t, []string{"-v"}, scanInput.Args)
 	assert.Equal(t, "/workspace", scanInput.WorkDir)

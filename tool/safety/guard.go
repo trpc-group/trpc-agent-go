@@ -166,7 +166,9 @@ func (g *Guard) CheckToolPermission(ctx context.Context, req *tool.PermissionReq
 	// Step 4: Write audit event.
 	if g.auditWriter != nil {
 		event := auditEventFromScanResult(result, duration, redacted)
-		_ = g.auditWriter.WriteEvent(event)
+		if err := g.auditWriter.WriteEvent(event); err != nil {
+			return tool.DenyPermission("safety guard: audit write failed"), fmt.Errorf("safety guard: audit write failed: %w", err)
+		}
 	}
 
 	// Step 5: Send report to sink.

@@ -124,10 +124,17 @@ func defaultRules() []Rule {
 // normalizedScanText concatenates the command and all code blocks into a
 // single string for comprehensive pattern matching.
 func normalizedScanText(input ScanInput) string {
-	parts := make([]string, 0, 1+len(input.CodeBlocks))
+	parts := make([]string, 0, 4+len(input.Args)+len(input.CodeBlocks))
 	if input.Command != "" {
 		parts = append(parts, input.Command)
 	}
+	if input.Stdin != "" {
+		parts = append(parts, input.Stdin)
+	}
+	if input.WorkDir != "" {
+		parts = append(parts, input.WorkDir)
+	}
+	parts = append(parts, input.Args...)
 	parts = append(parts, input.CodeBlocks...)
 	return strings.Join(parts, "\n")
 }
