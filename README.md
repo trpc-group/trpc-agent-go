@@ -10,6 +10,15 @@ English | [中文](README.zh_CN.md)
 [![Coverage](https://codecov.io/gh/trpc-group/trpc-agent-go/branch/main/graph/badge.svg)](https://app.codecov.io/gh/trpc-group/trpc-agent-go/tree/main)
 [![Documentation](https://img.shields.io/badge/Docs-Website-blue.svg)](https://trpc-group.github.io/trpc-agent-go/)
 
+<p>
+  <a href="https://trendshift.io/repositories/15288">
+    <img src="https://trendshift.io/api/badge/repositories/15288" alt="GitHub Trending #3 Repository Of The Day archived by Trendshift" width="250" height="55">
+  </a>
+  <a href="https://trendshift.io/repositories/15288">
+    <img src="https://trendshift.io/api/badge/trendshift/repositories/15288/daily?language=Go" alt="Trendshift #1 Go Repository Of The Day" width="250" height="55">
+  </a>
+</p>
+
 **tRPC-Agent-Go is a Go framework for building production agent systems.**
 It provides LLM agents, graph workflows, tool calling, session and memory
 state, knowledge retrieval, agent self-evolution, evaluation, and OpenTelemetry

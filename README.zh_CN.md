@@ -10,6 +10,15 @@
 [![Coverage](https://codecov.io/gh/trpc-group/trpc-agent-go/branch/main/graph/badge.svg)](https://app.codecov.io/gh/trpc-group/trpc-agent-go/tree/main)
 [![Documentation](https://img.shields.io/badge/Docs-Website-blue.svg)](https://trpc-group.github.io/trpc-agent-go/)
 
+<p>
+  <a href="https://trendshift.io/repositories/15288">
+    <img src="https://trendshift.io/api/badge/repositories/15288" alt="GitHub Trending #3 Repository Of The Day archived by Trendshift" width="250" height="55">
+  </a>
+  <a href="https://trendshift.io/repositories/15288">
+    <img src="https://trendshift.io/api/badge/trendshift/repositories/15288/daily?language=Go" alt="Trendshift #1 Go Repository Of The Day" width="250" height="55">
+  </a>
+</p>
+
 **tRPC-Agent-Go 是一个用于构建生产级 Agent 系统的 Go 框架。**
 它把 LLM Agent、图工作流、工具调用、Session/Memory 状态、知识检索、
 Agent 自进化、评测与 OpenTelemetry 可观测性整合到一套 Go-native 技术栈中。
