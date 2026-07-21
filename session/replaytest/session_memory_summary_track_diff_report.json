@@ -1,0 +1,1305 @@
+{
+  "generated_by": "session/replaytest",
+  "pairs": [
+    {
+      "reference": "inmemory",
+      "candidate": "inmemory-faulty"
+    }
+  ],
+  "cases": [
+    {
+      "case": "basic/single_turn",
+      "description": "single user+assistant turn; event fidelity, no loss, no duplication",
+      "status": "pass"
+    },
+    {
+      "case": "basic/multi_turn_order",
+      "description": "six alternating turns; read-back order must equal write order",
+      "status": "fail",
+      "diffs": [
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "basic-2",
+          "event_index": 2,
+          "path": "events[2].author",
+          "value_a": "user",
+          "value_b": "assistant",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "basic-2",
+          "event_index": 2,
+          "path": "events[2].role",
+          "value_a": "user",
+          "value_b": "assistant",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "basic-2",
+          "event_index": 2,
+          "path": "events[2].content",
+          "value_a": "seq-02-user",
+          "value_b": "seq-02-assistant",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "basic-2",
+          "event_index": 2,
+          "path": "events[2].finish_reason",
+          "value_a": "",
+          "value_b": "stop",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "basic-2",
+          "event_index": 3,
+          "path": "events[3].invocation_id",
+          "value_a": "inv#2",
+          "value_b": "inv#3",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "basic-2",
+          "event_index": 3,
+          "path": "events[3].author",
+          "value_a": "assistant",
+          "value_b": "user",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "basic-2",
+          "event_index": 3,
+          "path": "events[3].role",
+          "value_a": "assistant",
+          "value_b": "user",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "basic-2",
+          "event_index": 3,
+          "path": "events[3].content",
+          "value_a": "seq-02-assistant",
+          "value_b": "seq-03-user",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "basic-2",
+          "event_index": 3,
+          "path": "events[3].finish_reason",
+          "value_a": "stop",
+          "value_b": "",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "basic-2",
+          "event_index": 4,
+          "path": "events[4].author",
+          "value_a": "user",
+          "value_b": "assistant",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "basic-2",
+          "event_index": 4,
+          "path": "events[4].role",
+          "value_a": "user",
+          "value_b": "assistant",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "basic-2",
+          "event_index": 4,
+          "path": "events[4].content",
+          "value_a": "seq-03-user",
+          "value_b": "seq-03-assistant",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "basic-2",
+          "event_index": 4,
+          "path": "events[4].finish_reason",
+          "value_a": "",
+          "value_b": "stop",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "basic-2",
+          "event_index": 5,
+          "path": "events[5].invocation_id",
+          "value_a": "inv#3",
+          "value_b": "inv#4",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "basic-2",
+          "event_index": 5,
+          "path": "events[5].author",
+          "value_a": "assistant",
+          "value_b": "user",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "basic-2",
+          "event_index": 5,
+          "path": "events[5].role",
+          "value_a": "assistant",
+          "value_b": "user",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "basic-2",
+          "event_index": 5,
+          "path": "events[5].content",
+          "value_a": "seq-03-assistant",
+          "value_b": "seq-04-user",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "basic-2",
+          "event_index": 5,
+          "path": "events[5].finish_reason",
+          "value_a": "stop",
+          "value_b": "",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "basic-2",
+          "event_index": 6,
+          "path": "events[6].author",
+          "value_a": "user",
+          "value_b": "assistant",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "basic-2",
+          "event_index": 6,
+          "path": "events[6].role",
+          "value_a": "user",
+          "value_b": "assistant",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "basic-2",
+          "event_index": 6,
+          "path": "events[6].content",
+          "value_a": "seq-04-user",
+          "value_b": "seq-04-assistant",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "basic-2",
+          "event_index": 6,
+          "path": "events[6].finish_reason",
+          "value_a": "",
+          "value_b": "stop",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "basic-2",
+          "event_index": 7,
+          "path": "events[7].invocation_id",
+          "value_a": "inv#4",
+          "value_b": "inv#5",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "basic-2",
+          "event_index": 7,
+          "path": "events[7].author",
+          "value_a": "assistant",
+          "value_b": "user",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "basic-2",
+          "event_index": 7,
+          "path": "events[7].role",
+          "value_a": "assistant",
+          "value_b": "user",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "basic-2",
+          "event_index": 7,
+          "path": "events[7].content",
+          "value_a": "seq-04-assistant",
+          "value_b": "seq-05-user",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "basic-2",
+          "event_index": 7,
+          "path": "events[7].finish_reason",
+          "value_a": "stop",
+          "value_b": "",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "basic-2",
+          "event_index": 8,
+          "path": "events[8].author",
+          "value_a": "user",
+          "value_b": "assistant",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "basic-2",
+          "event_index": 8,
+          "path": "events[8].role",
+          "value_a": "user",
+          "value_b": "assistant",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "basic-2",
+          "event_index": 8,
+          "path": "events[8].content",
+          "value_a": "seq-05-user",
+          "value_b": "seq-05-assistant",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "basic-2",
+          "event_index": 8,
+          "path": "events[8].finish_reason",
+          "value_a": "",
+          "value_b": "stop",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "basic-2",
+          "event_index": 9,
+          "path": "events[9].invocation_id",
+          "value_a": "inv#5",
+          "value_b": "inv#6",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "basic-2",
+          "event_index": 9,
+          "path": "events[9].author",
+          "value_a": "assistant",
+          "value_b": "user",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "basic-2",
+          "event_index": 9,
+          "path": "events[9].role",
+          "value_a": "assistant",
+          "value_b": "user",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "basic-2",
+          "event_index": 9,
+          "path": "events[9].content",
+          "value_a": "seq-05-assistant",
+          "value_b": "seq-06-user",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "basic-2",
+          "event_index": 9,
+          "path": "events[9].finish_reason",
+          "value_a": "stop",
+          "value_b": "",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "basic-2",
+          "event_index": 10,
+          "path": "events[10].author",
+          "value_a": "user",
+          "value_b": "assistant",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "basic-2",
+          "event_index": 10,
+          "path": "events[10].role",
+          "value_a": "user",
+          "value_b": "assistant",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "basic-2",
+          "event_index": 10,
+          "path": "events[10].content",
+          "value_a": "seq-06-user",
+          "value_b": "seq-06-assistant",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "basic-2",
+          "event_index": 10,
+          "path": "events[10].finish_reason",
+          "value_a": "",
+          "value_b": "stop",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "missing",
+          "session_id": "basic-2",
+          "event_index": 11,
+          "path": "events[11]",
+          "value_a": "assistant/assistant:seq-06-assistant",
+          "allowed": false
+        }
+      ]
+    },
+    {
+      "case": "toolcall/full_cycle",
+      "description": "tool call + tool response + args canonicalization; branch/tag/filterKey/stateDelta/extensions fidelity",
+      "status": "fail",
+      "diffs": [
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "tool-1",
+          "event_index": 2,
+          "path": "events[2].author",
+          "value_a": "get_weather",
+          "value_b": "assistant",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "tool-1",
+          "event_index": 2,
+          "path": "events[2].role",
+          "value_a": "tool",
+          "value_b": "assistant",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "tool-1",
+          "event_index": 2,
+          "path": "events[2].content",
+          "value_a": "{\"temp\":26.5,\"unit\":\"c\",\"text\":\"晴\"}",
+          "value_b": "深圳明天晴，26.5°C。",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "tool-1",
+          "event_index": 2,
+          "path": "events[2].branch",
+          "value_a": "root.weather",
+          "value_b": "",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "tool-1",
+          "event_index": 2,
+          "path": "events[2].tag",
+          "value_a": "tool-response",
+          "value_b": "",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "tool-1",
+          "event_index": 2,
+          "path": "events[2].filter_key",
+          "value_a": "weather",
+          "value_b": "",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "tool-1",
+          "event_index": 2,
+          "path": "events[2].finish_reason",
+          "value_a": "",
+          "value_b": "stop",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "tool-1",
+          "event_index": 2,
+          "path": "events[2].tool_id",
+          "value_a": "call#1",
+          "value_b": "",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "tool-1",
+          "event_index": 2,
+          "path": "events[2].tool_name",
+          "value_a": "get_weather",
+          "value_b": "",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "missing",
+          "session_id": "tool-1",
+          "event_index": 3,
+          "path": "events[3]",
+          "value_a": "assistant/assistant:深圳明天晴，26.5°C。",
+          "allowed": false
+        }
+      ]
+    },
+    {
+      "case": "state/overwrite_delete_clear",
+      "description": "state overwrite order, delete semantics, empty write, clear-to-empty at app/user scope, temp/app/user scoped merge views",
+      "status": "pass"
+    },
+    {
+      "case": "memory/write_read",
+      "description": "memory add/update/delete/clear with topics+metadata; list and search read-back",
+      "status": "pass"
+    },
+    {
+      "case": "memory/scope_isolation",
+      "description": "two users in one app write/update/delete/clear memories; per-user read-back must stay isolated (no cross-user leakage, scoped clear)",
+      "status": "pass"
+    },
+    {
+      "case": "summary/generate_update",
+      "description": "summary overwrite (v2 replaces v1), filter-key isolation, per-session attribution, boundary/version fields",
+      "status": "fail",
+      "diffs": [
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "sum-a",
+          "event_index": 2,
+          "path": "events[2].author",
+          "value_a": "user",
+          "value_b": "assistant",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "sum-a",
+          "event_index": 2,
+          "path": "events[2].role",
+          "value_a": "user",
+          "value_b": "assistant",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "sum-a",
+          "event_index": 2,
+          "path": "events[2].content",
+          "value_a": "branch-a 方案呢？",
+          "value_b": "branch-a 走增量摘要。",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "sum-a",
+          "event_index": 2,
+          "path": "events[2].finish_reason",
+          "value_a": "",
+          "value_b": "stop",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "missing",
+          "session_id": "sum-a",
+          "event_index": 3,
+          "path": "events[3]",
+          "value_a": "assistant/assistant:branch-a 走增量摘要。",
+          "allowed": false
+        },
+        {
+          "dimension": "summary",
+          "severity": "mismatch",
+          "session_id": "sum-a",
+          "event_index": -1,
+          "path": "summaries[\"\"].last_event_id",
+          "value_a": "evt#4",
+          "value_b": "evt#3",
+          "allowed": false
+        },
+        {
+          "dimension": "summary",
+          "severity": "mismatch",
+          "session_id": "sum-a",
+          "event_index": -1,
+          "filter_key": "branch-a",
+          "path": "summaries[\"branch-a\"].text",
+          "value_a": "FAKE-SUMMARY[sum-a:branch-a]#1 events=4",
+          "value_b": "FAKE-SUMMARY[sum-a:branch-a]#1 events=3",
+          "allowed": false
+        },
+        {
+          "dimension": "summary",
+          "severity": "mismatch",
+          "session_id": "sum-a",
+          "event_index": -1,
+          "filter_key": "branch-a",
+          "path": "summaries[\"branch-a\"].last_event_id",
+          "value_a": "evt#4",
+          "value_b": "evt#3",
+          "allowed": false
+        }
+      ]
+    },
+    {
+      "case": "summary/truncation_retain",
+      "description": "long history summarized, then new events appended; full and truncated (WithEventNum) read-backs keep summary + retained events coherent, boundary anchored outside the window",
+      "status": "fail",
+      "diffs": [
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "sum-t",
+          "event_index": 2,
+          "path": "events[2].content",
+          "value_a": "history-03",
+          "value_b": "history-04",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "sum-t",
+          "event_index": 3,
+          "path": "events[3].content",
+          "value_a": "history-04",
+          "value_b": "history-05",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "sum-t",
+          "event_index": 4,
+          "path": "events[4].content",
+          "value_a": "history-05",
+          "value_b": "history-06",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "sum-t",
+          "event_index": 5,
+          "path": "events[5].content",
+          "value_a": "history-06",
+          "value_b": "history-07",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "sum-t",
+          "event_index": 6,
+          "path": "events[6].content",
+          "value_a": "history-07",
+          "value_b": "history-08",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "sum-t",
+          "event_index": 7,
+          "path": "events[7].content",
+          "value_a": "history-08",
+          "value_b": "history-09",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "sum-t",
+          "event_index": 8,
+          "path": "events[8].content",
+          "value_a": "history-09",
+          "value_b": "history-10",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "sum-t",
+          "event_index": 9,
+          "path": "events[9].content",
+          "value_a": "history-10",
+          "value_b": "history-11",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "sum-t",
+          "event_index": 10,
+          "path": "events[10].content",
+          "value_a": "history-11",
+          "value_b": "history-12",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "sum-t",
+          "event_index": 11,
+          "path": "events[11].content",
+          "value_a": "history-12",
+          "value_b": "history-13",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "sum-t",
+          "event_index": 12,
+          "path": "events[12].content",
+          "value_a": "history-13",
+          "value_b": "history-14",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "sum-t",
+          "event_index": 13,
+          "path": "events[13].content",
+          "value_a": "history-14",
+          "value_b": "history-15",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "sum-t",
+          "event_index": 14,
+          "path": "events[14].content",
+          "value_a": "history-15",
+          "value_b": "history-16",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "sum-t",
+          "event_index": 15,
+          "path": "events[15].content",
+          "value_a": "history-16",
+          "value_b": "history-17",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "sum-t",
+          "event_index": 16,
+          "path": "events[16].content",
+          "value_a": "history-17",
+          "value_b": "history-18",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "sum-t",
+          "event_index": 17,
+          "path": "events[17].content",
+          "value_a": "history-18",
+          "value_b": "history-19",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "sum-t",
+          "event_index": 18,
+          "path": "events[18].content",
+          "value_a": "history-19",
+          "value_b": "history-20",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "sum-t",
+          "event_index": 19,
+          "path": "events[19].content",
+          "value_a": "history-20",
+          "value_b": "fresh-21",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "sum-t",
+          "event_index": 20,
+          "path": "events[20].content",
+          "value_a": "fresh-21",
+          "value_b": "fresh-22",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "sum-t",
+          "event_index": 21,
+          "path": "events[21].content",
+          "value_a": "fresh-22",
+          "value_b": "fresh-23",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "missing",
+          "session_id": "sum-t",
+          "event_index": 22,
+          "path": "events[22]",
+          "value_a": "user/user:fresh-23",
+          "allowed": false
+        },
+        {
+          "dimension": "summary",
+          "severity": "mismatch",
+          "session_id": "sum-t",
+          "event_index": -1,
+          "path": "summaries[\"\"].text",
+          "value_a": "FAKE-SUMMARY[sum-t:]#1 events=20",
+          "value_b": "FAKE-SUMMARY[sum-t:]#1 events=19",
+          "allowed": false
+        },
+        {
+          "dimension": "summary",
+          "severity": "mismatch",
+          "session_id": "sum-t",
+          "event_index": -1,
+          "path": "summaries[\"\"].last_event_id",
+          "value_a": "evt#20",
+          "value_b": "evt#19",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "sum-t@last3",
+          "event_index": 0,
+          "path": "events[0].invocation_id",
+          "value_a": "inv#21",
+          "value_b": "inv#20",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "sum-t@last3",
+          "event_index": 1,
+          "path": "events[1].invocation_id",
+          "value_a": "inv#22",
+          "value_b": "inv#21",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "sum-t@last3",
+          "event_index": 2,
+          "path": "events[2].invocation_id",
+          "value_a": "inv#23",
+          "value_b": "inv#22",
+          "allowed": false
+        },
+        {
+          "dimension": "summary",
+          "severity": "mismatch",
+          "session_id": "sum-t@last3",
+          "event_index": -1,
+          "path": "summaries[\"\"].text",
+          "value_a": "FAKE-SUMMARY[sum-t:]#1 events=20",
+          "value_b": "FAKE-SUMMARY[sum-t:]#1 events=19",
+          "allowed": false
+        }
+      ]
+    },
+    {
+      "case": "track/tool_and_subtask",
+      "description": "track events for tool latency, error record and subtask status; duration fields are allowed_diff",
+      "status": "pass"
+    },
+    {
+      "case": "concurrency/interleaved_append",
+      "description": "three concurrent writers interleave appends; multiset equality plus per-branch partial order",
+      "status": "fail",
+      "diffs": [
+        {
+          "dimension": "event",
+          "severity": "missing",
+          "session_id": "conc-1",
+          "event_index": -1,
+          "path": "events(set)",
+          "value_a": "{\"id\":\"evt#10\",\"invocation_id\":\"inv#3\",\"author\":\"replay\",\"role\":\"assistant\",\"content\":\"w2-msg-04\",\"branch\":\"worker-2\"}",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "extra",
+          "session_id": "conc-1",
+          "event_index": -1,
+          "path": "events(set)",
+          "value_b": "{\"id\":\"evt#10\",\"invocation_id\":\"inv#3\",\"author\":\"replay\",\"role\":\"assistant\",\"content\":\"w2-msg-05\",\"branch\":\"worker-2\"}",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "missing",
+          "session_id": "conc-1",
+          "event_index": -1,
+          "path": "events(set)",
+          "value_a": "{\"id\":\"evt#11\",\"invocation_id\":\"inv#3\",\"author\":\"replay\",\"role\":\"assistant\",\"content\":\"w2-msg-05\",\"branch\":\"worker-2\"}",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "extra",
+          "session_id": "conc-1",
+          "event_index": -1,
+          "path": "events(set)",
+          "value_b": "{\"id\":\"evt#11\",\"invocation_id\":\"inv#4\",\"author\":\"replay\",\"role\":\"assistant\",\"content\":\"w3-msg-01\",\"branch\":\"worker-3\"}",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "missing",
+          "session_id": "conc-1",
+          "event_index": -1,
+          "path": "events(set)",
+          "value_a": "{\"id\":\"evt#12\",\"invocation_id\":\"inv#4\",\"author\":\"replay\",\"role\":\"assistant\",\"content\":\"w3-msg-01\",\"branch\":\"worker-3\"}",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "extra",
+          "session_id": "conc-1",
+          "event_index": -1,
+          "path": "events(set)",
+          "value_b": "{\"id\":\"evt#12\",\"invocation_id\":\"inv#4\",\"author\":\"replay\",\"role\":\"assistant\",\"content\":\"w3-msg-02\",\"branch\":\"worker-3\"}",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "missing",
+          "session_id": "conc-1",
+          "event_index": -1,
+          "path": "events(set)",
+          "value_a": "{\"id\":\"evt#13\",\"invocation_id\":\"inv#4\",\"author\":\"replay\",\"role\":\"assistant\",\"content\":\"w3-msg-02\",\"branch\":\"worker-3\"}",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "extra",
+          "session_id": "conc-1",
+          "event_index": -1,
+          "path": "events(set)",
+          "value_b": "{\"id\":\"evt#13\",\"invocation_id\":\"inv#4\",\"author\":\"replay\",\"role\":\"assistant\",\"content\":\"w3-msg-03\",\"branch\":\"worker-3\"}",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "missing",
+          "session_id": "conc-1",
+          "event_index": -1,
+          "path": "events(set)",
+          "value_a": "{\"id\":\"evt#14\",\"invocation_id\":\"inv#4\",\"author\":\"replay\",\"role\":\"assistant\",\"content\":\"w3-msg-03\",\"branch\":\"worker-3\"}",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "extra",
+          "session_id": "conc-1",
+          "event_index": -1,
+          "path": "events(set)",
+          "value_b": "{\"id\":\"evt#14\",\"invocation_id\":\"inv#4\",\"author\":\"replay\",\"role\":\"assistant\",\"content\":\"w3-msg-04\",\"branch\":\"worker-3\"}",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "missing",
+          "session_id": "conc-1",
+          "event_index": -1,
+          "path": "events(set)",
+          "value_a": "{\"id\":\"evt#15\",\"invocation_id\":\"inv#4\",\"author\":\"replay\",\"role\":\"assistant\",\"content\":\"w3-msg-04\",\"branch\":\"worker-3\"}",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "extra",
+          "session_id": "conc-1",
+          "event_index": -1,
+          "path": "events(set)",
+          "value_b": "{\"id\":\"evt#15\",\"invocation_id\":\"inv#4\",\"author\":\"replay\",\"role\":\"assistant\",\"content\":\"w3-msg-05\",\"branch\":\"worker-3\"}",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "missing",
+          "session_id": "conc-1",
+          "event_index": -1,
+          "path": "events(set)",
+          "value_a": "{\"id\":\"evt#16\",\"invocation_id\":\"inv#4\",\"author\":\"replay\",\"role\":\"assistant\",\"content\":\"w3-msg-05\",\"branch\":\"worker-3\"}",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "missing",
+          "session_id": "conc-1",
+          "event_index": -1,
+          "path": "events(set)",
+          "value_a": "{\"id\":\"evt#2\",\"invocation_id\":\"inv#2\",\"author\":\"replay\",\"role\":\"assistant\",\"content\":\"w1-msg-01\",\"branch\":\"worker-1\"}",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "extra",
+          "session_id": "conc-1",
+          "event_index": -1,
+          "path": "events(set)",
+          "value_b": "{\"id\":\"evt#2\",\"invocation_id\":\"inv#2\",\"author\":\"replay\",\"role\":\"assistant\",\"content\":\"w1-msg-02\",\"branch\":\"worker-1\"}",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "missing",
+          "session_id": "conc-1",
+          "event_index": -1,
+          "path": "events(set)",
+          "value_a": "{\"id\":\"evt#3\",\"invocation_id\":\"inv#2\",\"author\":\"replay\",\"role\":\"assistant\",\"content\":\"w1-msg-02\",\"branch\":\"worker-1\"}",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "extra",
+          "session_id": "conc-1",
+          "event_index": -1,
+          "path": "events(set)",
+          "value_b": "{\"id\":\"evt#3\",\"invocation_id\":\"inv#2\",\"author\":\"replay\",\"role\":\"assistant\",\"content\":\"w1-msg-03\",\"branch\":\"worker-1\"}",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "missing",
+          "session_id": "conc-1",
+          "event_index": -1,
+          "path": "events(set)",
+          "value_a": "{\"id\":\"evt#4\",\"invocation_id\":\"inv#2\",\"author\":\"replay\",\"role\":\"assistant\",\"content\":\"w1-msg-03\",\"branch\":\"worker-1\"}",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "extra",
+          "session_id": "conc-1",
+          "event_index": -1,
+          "path": "events(set)",
+          "value_b": "{\"id\":\"evt#4\",\"invocation_id\":\"inv#2\",\"author\":\"replay\",\"role\":\"assistant\",\"content\":\"w1-msg-04\",\"branch\":\"worker-1\"}",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "missing",
+          "session_id": "conc-1",
+          "event_index": -1,
+          "path": "events(set)",
+          "value_a": "{\"id\":\"evt#5\",\"invocation_id\":\"inv#2\",\"author\":\"replay\",\"role\":\"assistant\",\"content\":\"w1-msg-04\",\"branch\":\"worker-1\"}",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "extra",
+          "session_id": "conc-1",
+          "event_index": -1,
+          "path": "events(set)",
+          "value_b": "{\"id\":\"evt#5\",\"invocation_id\":\"inv#2\",\"author\":\"replay\",\"role\":\"assistant\",\"content\":\"w1-msg-05\",\"branch\":\"worker-1\"}",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "missing",
+          "session_id": "conc-1",
+          "event_index": -1,
+          "path": "events(set)",
+          "value_a": "{\"id\":\"evt#6\",\"invocation_id\":\"inv#2\",\"author\":\"replay\",\"role\":\"assistant\",\"content\":\"w1-msg-05\",\"branch\":\"worker-1\"}",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "extra",
+          "session_id": "conc-1",
+          "event_index": -1,
+          "path": "events(set)",
+          "value_b": "{\"id\":\"evt#6\",\"invocation_id\":\"inv#3\",\"author\":\"replay\",\"role\":\"assistant\",\"content\":\"w2-msg-01\",\"branch\":\"worker-2\"}",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "missing",
+          "session_id": "conc-1",
+          "event_index": -1,
+          "path": "events(set)",
+          "value_a": "{\"id\":\"evt#7\",\"invocation_id\":\"inv#3\",\"author\":\"replay\",\"role\":\"assistant\",\"content\":\"w2-msg-01\",\"branch\":\"worker-2\"}",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "extra",
+          "session_id": "conc-1",
+          "event_index": -1,
+          "path": "events(set)",
+          "value_b": "{\"id\":\"evt#7\",\"invocation_id\":\"inv#3\",\"author\":\"replay\",\"role\":\"assistant\",\"content\":\"w2-msg-02\",\"branch\":\"worker-2\"}",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "missing",
+          "session_id": "conc-1",
+          "event_index": -1,
+          "path": "events(set)",
+          "value_a": "{\"id\":\"evt#8\",\"invocation_id\":\"inv#3\",\"author\":\"replay\",\"role\":\"assistant\",\"content\":\"w2-msg-02\",\"branch\":\"worker-2\"}",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "extra",
+          "session_id": "conc-1",
+          "event_index": -1,
+          "path": "events(set)",
+          "value_b": "{\"id\":\"evt#8\",\"invocation_id\":\"inv#3\",\"author\":\"replay\",\"role\":\"assistant\",\"content\":\"w2-msg-03\",\"branch\":\"worker-2\"}",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "missing",
+          "session_id": "conc-1",
+          "event_index": -1,
+          "path": "events(set)",
+          "value_a": "{\"id\":\"evt#9\",\"invocation_id\":\"inv#3\",\"author\":\"replay\",\"role\":\"assistant\",\"content\":\"w2-msg-03\",\"branch\":\"worker-2\"}",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "extra",
+          "session_id": "conc-1",
+          "event_index": -1,
+          "path": "events(set)",
+          "value_b": "{\"id\":\"evt#9\",\"invocation_id\":\"inv#3\",\"author\":\"replay\",\"role\":\"assistant\",\"content\":\"w2-msg-04\",\"branch\":\"worker-2\"}",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "conc-1",
+          "event_index": -1,
+          "path": "events(branch=\"worker-1\")[0].content",
+          "value_a": "w1-msg-01",
+          "value_b": "w1-msg-02",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "conc-1",
+          "event_index": -1,
+          "path": "events(branch=\"worker-1\")[1].content",
+          "value_a": "w1-msg-02",
+          "value_b": "w1-msg-03",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "conc-1",
+          "event_index": -1,
+          "path": "events(branch=\"worker-1\")[2].content",
+          "value_a": "w1-msg-03",
+          "value_b": "w1-msg-04",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "mismatch",
+          "session_id": "conc-1",
+          "event_index": -1,
+          "path": "events(branch=\"worker-1\")[3].content",
+          "value_a": "w1-msg-04",
+          "value_b": "w1-msg-05",
+          "allowed": false
+        },
+        {
+          "dimension": "event",
+          "severity": "order",
+          "session_id": "conc-1",
+          "event_index": -1,
+          "path": "events(branch=\"worker-1\")",
+          "value_a": 5,
+          "value_b": 4,
+          "allowed": false
+        }
+      ]
+    },
+    {
+      "case": "recovery/dirty_retry",
+      "description": "transient failure + retry stores the event once; duplicate retry stored consistently on both backends; summary after retried/duplicate writes stays consistent; duplicate memory write handled identically on both backends; error class agreement",
+      "status": "fail",
+      "diffs": [
+        {
+          "dimension": "event",
+          "severity": "missing",
+          "session_id": "rec-1",
+          "event_index": 3,
+          "path": "events[3]",
+          "value_a": "user/user:idempotent-content",
+          "allowed": false
+        },
+        {
+          "dimension": "summary",
+          "severity": "mismatch",
+          "session_id": "rec-1",
+          "event_index": -1,
+          "path": "summaries[\"\"].text",
+          "value_a": "FAKE-SUMMARY[rec-1:]#1 events=4",
+          "value_b": "FAKE-SUMMARY[rec-1:]#1 events=3",
+          "allowed": false
+        },
+        {
+          "dimension": "summary",
+          "severity": "mismatch",
+          "session_id": "rec-1",
+          "event_index": -1,
+          "path": "summaries[\"\"].last_event_id",
+          "value_a": "evt#4",
+          "value_b": "evt#3",
+          "allowed": false
+        }
+      ]
+    },
+    {
+      "case": "example/memory_order_note",
+      "description": "two distinct memories listed in a different order by the candidate; the content set matches, so the return-order difference is reported as an allowed_diff note",
+      "status": "pass",
+      "notes": [
+        {
+          "dimension": "memory",
+          "severity": "order",
+          "event_index": -1,
+          "path": "memories.order",
+          "value_a": [
+            0,
+            1
+          ],
+          "value_b": [
+            1,
+            0
+          ],
+          "allowed": true,
+          "note": "memory listing order is implementation-dependent"
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "total": 12,
+    "pass": 6,
+    "fail": 6,
+    "unsupported": 0
+  }
+}
