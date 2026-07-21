@@ -678,7 +678,7 @@ var rubricNegativeCueTerms = []string{
 	"not matched", "not consistent", "not called", "no correct", "no documents", "nothing retrieved",
 	"did not work", "does not work", "didn't work", "could not parse", "cannot parse", "not found",
 	"timed out", "timed-out", "parse failure", "parse error", "instead of",
-	"malformed", "unparseable", "unparsable", "unsupported", "unsuccessful", "insufficient", "inadequate",
+	"malformed", "unparsable", "unsupported", "unsuccessful", "insufficient", "inadequate",
 	"incomplete", "inconsistent", "incorrect", "invalid", "mismatched", "mismatch", "missing", "omitted",
 	"failed", "failure", "fail",
 	"errors", "error", "issues", "issue", "problems", "problem", "wrong", "flawed", "bad", "broken",

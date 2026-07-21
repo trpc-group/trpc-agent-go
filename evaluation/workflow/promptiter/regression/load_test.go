@@ -28,9 +28,9 @@ func TestLoadEvalSetRejectsMisspelledSafetyFields(t *testing.T) {
 		{
 			name: "critical",
 			caseBody: `
-        "criticial": true,
+        "criticality": true,
         "expectations": {},`,
-			unknown: "criticial",
+			unknown: "criticality",
 		},
 		{
 			name: "required_facts",

@@ -488,7 +488,7 @@ func TestLocalEvaluatorRejectsUnknownTraceStatus(t *testing.T) {
 			Expectations{},
 			FakeOutput{
 				Response: "answer",
-				Trace:    []TraceStep{{StepID: "llm-1", Kind: "llm", Status: "complted"}},
+				Trace:    []TraceStep{{StepID: "llm-1", Kind: "llm", Status: "finished"}},
 				Usage:    Usage{ModelCalls: 1},
 			},
 		)},

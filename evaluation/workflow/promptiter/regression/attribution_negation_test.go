@@ -302,8 +302,8 @@ func TestRubricAttributionPreservesLabelsContextAndFailureVocabulary(t *testing.
 		{name: "chinese parameter differs", reason: "参数与预期不同。", want: FailureToolParameterError},
 		{name: "english zero retrieval", reason: "Knowledge retrieval returned zero documents.", want: FailureKnowledgeRetrievalInsufficient},
 		{name: "chinese zero retrieval", reason: "知识检索返回零篇文档。", want: FailureKnowledgeRetrievalInsufficient},
-		{name: "english unparseable format", reason: "The JSON format could not be parsed.", want: FailureFormatError},
-		{name: "chinese unparseable format", reason: "结构化输出格式无法解析。", want: FailureFormatError},
+		{name: "english unparsable format", reason: "The JSON format could not be parsed.", want: FailureFormatError},
+		{name: "chinese unparsable format", reason: "结构化输出格式无法解析。", want: FailureFormatError},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -422,7 +422,7 @@ func TestRubricAttributionClassifiesConcreteFailureCues(t *testing.T) {
 		{name: "parameter unset chinese", reason: "参数未设置。", want: FailureToolParameterError},
 		{name: "tool input incorrect", reason: "The tool input was incorrect.", want: FailureToolParameterError},
 		{name: "tool input incorrect chinese", reason: "工具输入不正确。", want: FailureToolParameterError},
-		{name: "output unparseable", reason: "The output could not be parsed.", want: FailureFormatError},
+		{name: "output unparsable", reason: "The output could not be parsed.", want: FailureFormatError},
 		{name: "required field missing", reason: "结构化输出少必填字段。", want: FailureFormatError},
 		{name: "plain text not json", reason: "输出是普通文本非JSON。", want: FailureFormatError},
 		{name: "no relevant docs", reason: "Retrieval returned no relevant docs.", want: FailureKnowledgeRetrievalInsufficient},

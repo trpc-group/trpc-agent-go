@@ -309,12 +309,6 @@ func backwardGradientArraySchema(surfaceIDs []string) map[string]any {
 		"required":             []string{"SurfaceID", "Severity", "Gradient"},
 		"additionalProperties": false,
 	}
-	if len(surfaceIDs) == 0 {
-		return map[string]any{
-			"type":  "array",
-			"items": itemSchema,
-		}
-	}
 	return map[string]any{
 		"type":  "array",
 		"items": itemSchema,
@@ -358,12 +352,6 @@ func backwardPropagationArraySchema(predecessorStepIDs []string) map[string]any 
 		},
 		"required":             []string{"PredecessorStepID", "Gradients"},
 		"additionalProperties": false,
-	}
-	if len(predecessorStepIDs) == 0 {
-		return map[string]any{
-			"type":  "array",
-			"items": itemSchema,
-		}
 	}
 	return map[string]any{
 		"type":  "array",
