@@ -174,6 +174,17 @@ func buildConnString(opts ServiceOpts) string {
 	return conn.String()
 }
 
+func (s *Service) getEmbedding(
+	ctx context.Context,
+	text string,
+) ([]float64, error) {
+	return imemory.GetOrComputeRequestEmbedding(
+		ctx, s, text, func() ([]float64, error) {
+			return s.opts.embedder.GetEmbedding(ctx, text)
+		},
+	)
+}
+
 // AddMemory adds or updates a memory for a user (idempotent).
 // Options may include WithMetadata for episodic metadata.
 func (s *Service) AddMemory(
@@ -189,7 +200,7 @@ func (s *Service) AddMemory(
 	}
 
 	// Generate embedding for the memory content.
-	embedding, err := s.opts.embedder.GetEmbedding(ctx, memoryStr)
+	embedding, err := s.getEmbedding(ctx, memoryStr)
 	if err != nil {
 		return fmt.Errorf("generate embedding failed: %w", err)
 	}
@@ -362,7 +373,7 @@ func (s *Service) UpdateMemory(
 	}
 
 	// Generate new embedding for the updated memory content.
-	embedding, err := s.opts.embedder.GetEmbedding(ctx, memoryStr)
+	embedding, err := s.getEmbedding(ctx, memoryStr)
 	if err != nil {
 		return fmt.Errorf("generate embedding failed: %w", err)
 	}
@@ -560,7 +571,7 @@ func (s *Service) SearchMemories(
 	}
 
 	// Generate embedding for the query (reused across fallback searches).
-	queryEmbedding, err := s.opts.embedder.GetEmbedding(ctx, query)
+	queryEmbedding, err := s.getEmbedding(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("generate query embedding failed: %w", err)
 	}

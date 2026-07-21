@@ -445,6 +445,7 @@ func (w *AutoMemoryWorker) createAutoMemory(
 	if w.config.Extractor == nil {
 		return nil
 	}
+	ctx = WithRequestEmbeddingCache(ctx)
 
 	// Search for existing memories relevant to the current conversation
 	// instead of loading all memories. This keeps the extractor prompt

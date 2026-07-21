@@ -34,9 +34,11 @@ import (
 type mockEmbedder struct {
 	dimension int
 	err       error
+	calls     int
 }
 
 func (m *mockEmbedder) GetEmbedding(ctx context.Context, text string) ([]float64, error) {
+	m.calls++
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -1200,6 +1202,38 @@ func TestService_SearchMemories(t *testing.T) {
 	assert.Equal(t, "coffee brewing tips", results[0].Memory.Memory)
 	assert.Equal(t, "Alice likes coffee", results[1].Memory.Memory)
 
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestService_ReusesRequestEmbeddingForSearchAndAdd(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+
+	emb := newMockEmbedder(1536)
+	svc := setupMockService(t, db, mock,
+		WithSkipDBInit(true),
+		WithMemoryLimit(0),
+		WithEmbedder(emb),
+	)
+	defer svc.Close()
+
+	ctx := imemory.WithRequestEmbeddingCache(context.Background())
+	userKey := memory.UserKey{AppName: "test-app", UserID: "u1"}
+	mock.ExpectQuery(
+		"SELECT memory_id, app_name, user_id, memory_content, topics",
+	).WillReturnRows(sqlmock.NewRows(
+		[]string{"memory_id", "app_name", "user_id", "memory_content", "topics",
+			"memory_kind", "event_time", "participants", "location",
+			"created_at", "updated_at", "similarity"},
+	))
+	mock.ExpectExec("INSERT INTO").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	_, err := svc.SearchMemories(ctx, userKey, "same memory")
+	require.NoError(t, err)
+	require.NoError(t, svc.AddMemory(ctx, userKey, "same memory", nil))
+
+	assert.Equal(t, 1, emb.calls)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
