@@ -103,6 +103,7 @@ type TemplateVariableSource struct {
 	Scope    TemplateVariableScope     `json:"scope,omitempty"`
 	Field    TemplateVariableField     `json:"field,omitempty"`
 	Selector *TemplateVariableSelector `json:"selector,omitempty"`
+	Path     string                    `json:"path,omitempty"`
 }
 
 // TemplateVariableSelector selects one execution trace step.
@@ -118,6 +119,8 @@ const (
 	TemplateVariableScopeActual TemplateVariableScope = "actual"
 	// TemplateVariableScopeExpected binds against the current expected invocation.
 	TemplateVariableScopeExpected TemplateVariableScope = "expected"
+	// TemplateVariableScopeMetric binds against the current metric configuration.
+	TemplateVariableScopeMetric TemplateVariableScope = "metric"
 )
 
 // TemplateVariableField identifies which field is extracted from the source object.
@@ -132,6 +135,8 @@ const (
 	TemplateVariableFieldTraceStepInput TemplateVariableField = "traceStepInput"
 	// TemplateVariableFieldTraceStepOutput extracts the selected trace step output text.
 	TemplateVariableFieldTraceStepOutput TemplateVariableField = "traceStepOutput"
+	// TemplateVariableFieldRubrics extracts the metric rubrics.
+	TemplateVariableFieldRubrics TemplateVariableField = "rubrics"
 )
 
 // MarshalJSON omits APIKey from JSON output while still allowing JSON input to populate it.
