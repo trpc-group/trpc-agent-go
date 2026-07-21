@@ -54,6 +54,12 @@ func (stubConversation) Close() error {
 	return nil
 }
 
+type stubEvalCaseResultAggregator struct{}
+
+func (stubEvalCaseResultAggregator) Aggregate(context.Context, *service.EvalCaseResultAggregationInput) (*service.EvalCaseResultAggregationResult, error) {
+	return &service.EvalCaseResultAggregationResult{}, nil
+}
+
 func TestNewOptionsDefaults(t *testing.T) {
 	opts := newOptions()
 
@@ -104,6 +110,12 @@ func TestWithMetricRegistry(t *testing.T) {
 	opts := newOptions(WithMetricRegistry(custom))
 
 	assert.Equal(t, custom, opts.metricRegistry)
+}
+
+func TestWithEvalCaseResultAggregator(t *testing.T) {
+	custom := stubEvalCaseResultAggregator{}
+	opts := newOptions(WithEvalCaseResultAggregator(custom))
+	assert.Equal(t, custom, opts.evalCaseResultAggregator)
 }
 
 func TestWithEvaluationService(t *testing.T) {
