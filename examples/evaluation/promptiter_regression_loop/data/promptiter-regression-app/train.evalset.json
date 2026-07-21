@@ -1,0 +1,66 @@
+{
+  "evalSetId": "train",
+  "name": "E-commerce support training set",
+  "evalCases": [
+    {
+      "evalId": "train_return_window",
+      "conversation": [
+        {
+          "invocationId": "train_return_window-1",
+          "userContent": {
+            "role": "user",
+            "content": "My order arrived five days ago and the item is unopened. Can I still return it without giving a reason?"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "Yes. The unopened item is still within the 7-day return window; submit a return request from the order details page."
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-regression-app",
+        "userId": "offline-demo"
+      }
+    },
+    {
+      "evalId": "train_invoice_correction",
+      "conversation": [
+        {
+          "invocationId": "train_invoice_correction-1",
+          "userContent": {
+            "role": "user",
+            "content": "The title on my electronic invoice is wrong. How can I correct it?"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "Void the incorrect e-invoice first, then request a new invoice with the correct title from the order details page."
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-regression-app",
+        "userId": "offline-demo"
+      }
+    },
+    {
+      "evalId": "train_order_tracking",
+      "conversation": [
+        {
+          "invocationId": "train_order_tracking-1",
+          "userContent": {
+            "role": "user",
+            "content": "My order has shipped. Where can I see the latest delivery status?"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "Open the order details page and select View Logistics to see the latest carrier updates."
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-regression-app",
+        "userId": "offline-demo"
+      }
+    }
+  ]
+}
