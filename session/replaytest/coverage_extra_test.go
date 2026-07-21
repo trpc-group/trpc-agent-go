@@ -306,6 +306,29 @@ func TestRunValidationAndNormalizeExtraBranches(t *testing.T) {
 	}
 }
 
+func TestConcurrentUnsupportedTrackRecordingIsSerializedAndDeduped(t *testing.T) {
+	run := &serviceRun{
+		ctx: context.Background(),
+		backend: &serviceBackend{
+			name:        "svc",
+			unsupported: map[Capability]string{CapabilityTrack: "track unavailable"},
+		},
+	}
+	ops := make([]Operation, 32)
+	for i := range ops {
+		ops[i] = Operation{
+			Kind:  OpAppendTrack,
+			Track: &TrackSpec{Name: "missing-track"},
+		}
+	}
+	if err := run.applyConcurrentOperation(ops); err != nil {
+		t.Fatalf("applyConcurrentOperation() error = %v", err)
+	}
+	if len(run.unsupported) != 1 || run.unsupported[0].Capability != CapabilityTrack {
+		t.Fatalf("unsupported track not deduped: %+v", run.unsupported)
+	}
+}
+
 func TestBackendHelperExtraBranches(t *testing.T) {
 	if NewInMemoryBackend().Unsupported(CapabilityTTL) != "" {
 		t.Fatalf("supported in-memory TTL should not explain unsupported")

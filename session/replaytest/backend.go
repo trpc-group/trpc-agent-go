@@ -281,6 +281,7 @@ type serviceRun struct {
 	seenEventsMu       sync.Mutex
 	eventSeq           int
 	unsupported        []UnsupportedFeature
+	unsupportedMu      sync.Mutex
 }
 
 func (r *serviceRun) applyOperations() error {
@@ -532,11 +533,9 @@ func (r *serviceRun) recordUnsupported(cap Capability) {
 	if r.backend.Supports(cap) {
 		return
 	}
-	r.unsupported = append(r.unsupported, UnsupportedFeature{
-		Capability:  cap,
-		AllowedDiff: true,
-		Explanation: r.backend.Unsupported(cap),
-	})
+	r.unsupportedMu.Lock()
+	defer r.unsupportedMu.Unlock()
+	r.unsupported = appendUnsupportedFeature(r.unsupported, cap, r.backend.Unsupported(cap))
 }
 
 func (r *serviceRun) runCapabilityProbes(snapshot *Snapshot) error {
@@ -560,6 +559,7 @@ type inMemoryRun struct {
 	seenEventsMu       sync.Mutex
 	eventSeq           int
 	unsupported        []UnsupportedFeature
+	unsupportedMu      sync.Mutex
 }
 
 func (r *inMemoryRun) applyOperations() error {
@@ -804,11 +804,9 @@ func (r *inMemoryRun) recordUnsupported(cap Capability) {
 	if r.backend.Supports(cap) {
 		return
 	}
-	r.unsupported = append(r.unsupported, UnsupportedFeature{
-		Capability:  cap,
-		AllowedDiff: true,
-		Explanation: r.backend.Unsupported(cap),
-	})
+	r.unsupportedMu.Lock()
+	defer r.unsupportedMu.Unlock()
+	r.unsupported = appendUnsupportedFeature(r.unsupported, cap, r.backend.Unsupported(cap))
 }
 
 func (r *inMemoryRun) runCapabilityProbes(snapshot *Snapshot) error {
@@ -922,6 +920,7 @@ type jsonFileRun struct {
 	seenEventsMu     sync.Mutex
 	eventSeq         int
 	unsupported      []UnsupportedFeature
+	unsupportedMu    sync.Mutex
 }
 
 func (r *jsonFileRun) applyOperations() error {
@@ -988,11 +987,9 @@ func (r *jsonFileRun) recordUnsupported(cap Capability) {
 	if r.backend.Supports(cap) {
 		return
 	}
-	r.unsupported = append(r.unsupported, UnsupportedFeature{
-		Capability:  cap,
-		AllowedDiff: true,
-		Explanation: r.backend.Unsupported(cap),
-	})
+	r.unsupportedMu.Lock()
+	defer r.unsupportedMu.Unlock()
+	r.unsupported = appendUnsupportedFeature(r.unsupported, cap, r.backend.Unsupported(cap))
 }
 
 func applyFileStateOperation(sess *session.Session, op Operation) {
@@ -1284,15 +1281,22 @@ func addUnsupported(snapshot *Snapshot, cap Capability, explanation string) {
 	if snapshot == nil || cap == "" {
 		return
 	}
-	for _, feature := range snapshot.Unsupported {
+	snapshot.Unsupported = appendUnsupportedFeature(snapshot.Unsupported, cap, explanation)
+}
+
+func appendUnsupportedFeature(features []UnsupportedFeature, cap Capability, explanation string) []UnsupportedFeature {
+	if cap == "" {
+		return features
+	}
+	for _, feature := range features {
 		if feature.Capability == cap {
-			return
+			return features
 		}
 	}
 	if explanation == "" {
 		explanation = "capability is not exposed by this replay backend"
 	}
-	snapshot.Unsupported = append(snapshot.Unsupported, UnsupportedFeature{
+	return append(features, UnsupportedFeature{
 		Capability:  cap,
 		AllowedDiff: true,
 		Explanation: explanation,

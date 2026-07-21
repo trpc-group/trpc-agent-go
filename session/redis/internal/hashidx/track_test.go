@@ -12,6 +12,8 @@ package hashidx
 import (
 	"context"
 	"encoding/json"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -298,6 +300,65 @@ func TestAppendTrackEvent_LuaError(t *testing.T) {
 	err = c.AppendTrackEvent(ctx, key, te, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "append track event")
+}
+
+type evalScriptHook struct {
+	sawEval    *atomic.Bool
+	sawEvalSHA *atomic.Bool
+}
+
+func (h evalScriptHook) DialHook(next redis.DialHook) redis.DialHook {
+	return next
+}
+
+func (h evalScriptHook) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
+	return next
+}
+
+func (h evalScriptHook) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
+	return func(ctx context.Context, cmds []redis.Cmder) error {
+		for _, cmd := range cmds {
+			switch {
+			case strings.EqualFold(cmd.FullName(), "eval"):
+				h.sawEval.Store(true)
+			case strings.EqualFold(cmd.FullName(), "evalsha"):
+				h.sawEvalSHA.Store(true)
+			}
+		}
+		return next(ctx, cmds)
+	}
+}
+
+func TestClient_AppendTrackEvent_QueuesEvalSoScriptCacheFlushCannotDropEvent(t *testing.T) {
+	mr, rdb := setupMiniredis(t)
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "trk-noscript"}
+
+	flushClient := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = flushClient.Close() })
+
+	var sawEval, sawEvalSHA atomic.Bool
+	client := rdb.(*redis.Client)
+	client.AddHook(evalScriptHook{
+		sawEval:    &sawEval,
+		sawEvalSHA: &sawEvalSHA,
+	})
+
+	c := NewClient(client, defaultConfig())
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	require.NoError(t, flushClient.ScriptFlush(ctx).Err())
+
+	tracksJSON, err := json.Marshal([]string{"alpha"})
+	require.NoError(t, err)
+	err = c.AppendTrackEvent(ctx, key, &session.TrackEvent{
+		Track:     "alpha",
+		Payload:   json.RawMessage(`"payload"`),
+		Timestamp: time.Now(),
+	}, tracksJSON)
+	require.NoError(t, err)
+	require.True(t, sawEval.Load())
+	require.False(t, sawEvalSHA.Load())
 }
 
 func TestLoadTrackEventsViaLua_BadEventJSON(t *testing.T) {

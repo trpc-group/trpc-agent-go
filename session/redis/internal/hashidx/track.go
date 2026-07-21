@@ -44,20 +44,16 @@ func (c *Client) AppendTrackEvent(ctx context.Context, key session.Key, trackEve
 		c.keys.TrackTimeIndexKey(key, track),
 		c.keys.SessionMetaKey(key),
 	}
-	scriptSHA, err := luaAppendTrackEvent.Load(ctx, c.client).Result()
-	if err != nil {
-		return fmt.Errorf("append track event: load script: %w", err)
-	}
-
 	retryDelay := 5 * time.Millisecond
+	var watchErr error
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		err := c.client.Watch(ctx, func(tx *redis.Tx) error {
+		watchErr = c.client.Watch(ctx, func(tx *redis.Tx) error {
 			mergedTracksState, err := c.mergedTracksState(ctx, tx, key, track, tracksState)
 			if err != nil {
-				return err
+				return fmt.Errorf("append track event: merge tracks state: %w", err)
 			}
 			tracksVal := ""
 			if len(mergedTracksState) > 0 {
@@ -65,9 +61,9 @@ func (c *Client) AppendTrackEvent(ctx context.Context, key session.Key, trackEve
 			}
 			var appendCmd *redis.Cmd
 			_, err = tx.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
-				appendCmd = pipe.EvalSha(
+				appendCmd = luaAppendTrackEvent.Eval(
 					ctx,
-					scriptSHA,
+					pipe,
 					keys,
 					string(eventJSON),
 					trackEvent.Timestamp.UnixNano(),
@@ -91,10 +87,10 @@ func (c *Client) AppendTrackEvent(ctx context.Context, key session.Key, trackEve
 			}
 			return nil
 		}, keys[2])
-		if err == nil {
+		if watchErr == nil {
 			return nil
 		}
-		if err == redis.TxFailedErr {
+		if watchErr == redis.TxFailedErr {
 			timer := time.NewTimer(retryDelay)
 			select {
 			case <-ctx.Done():
@@ -109,7 +105,7 @@ func (c *Client) AppendTrackEvent(ctx context.Context, key session.Key, trackEve
 			}
 			continue
 		}
-		return err
+		return fmt.Errorf("append track event: %w", watchErr)
 	}
 }
 

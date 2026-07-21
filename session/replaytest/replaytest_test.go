@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -412,33 +413,56 @@ func TestApplyConcurrentOperationsLetsCallsOverlap(t *testing.T) {
 
 func TestNormalizeEventPreservesCorrelationFields(t *testing.T) {
 	evt, err := eventFromSpec(EventSpec{
-		LogicalID:    "tool-response",
-		InvocationID: "inv-tool-response",
-		Author:       "tool",
-		Role:         model.RoleTool,
-		Content:      "ok",
-		ToolID:       "call-1",
-		ToolName:     "lookup",
-		Object:       model.ObjectTypeToolResponse,
-		Done:         true,
+		LogicalID:          "tool-response",
+		InvocationID:       "inv-tool-response",
+		ParentInvocationID: "parent-inv",
+		ParentMetadata: &event.ParentInvocationMetadata{
+			TriggerType: event.TriggerTypeToolCall,
+			TriggerID:   "call-parent",
+			TriggerName: "lookup-parent",
+		},
+		Author:             "tool",
+		Role:               model.RoleTool,
+		Content:            "ok",
+		ToolID:             "call-1",
+		ToolName:           "lookup",
+		Object:             model.ObjectTypeToolResponse,
+		Done:               true,
+		RequiresCompletion: true,
+		LongRunningToolIDs: map[string]struct{}{"call-1": {}},
 	}, 0)
 	if err != nil {
 		t.Fatalf("eventFromSpec() error = %v", err)
 	}
 	got := normalizeEvent(0, *evt)
 	if got.InvocationID != "inv-tool-response" ||
+		got.ParentInvocationID != "parent-inv" ||
 		got.Object != model.ObjectTypeToolResponse ||
-		!got.Done {
+		!got.Done ||
+		!got.RequiresCompletion {
 		t.Fatalf("normalized correlation fields = %+v", got)
+	}
+	if got.ParentMetadata == nil ||
+		got.ParentMetadata.TriggerType != event.TriggerTypeToolCall ||
+		got.ParentMetadata.TriggerID != "call-parent" ||
+		got.ParentMetadata.TriggerName != "lookup-parent" {
+		t.Fatalf("normalized parent metadata = %+v", got.ParentMetadata)
+	}
+	if _, ok := got.LongRunningToolIDs["call-1"]; !ok || len(got.LongRunningToolIDs) != 1 {
+		t.Fatalf("normalized long running IDs = %+v", got.LongRunningToolIDs)
 	}
 
 	base := &Snapshot{Events: []NormalizedEvent{got}}
 	compare := cloneSnapshot(base)
 	compare.Events[0].InvocationID = "wrong"
+	compare.Events[0].ParentInvocationID = "wrong-parent"
+	compare.Events[0].ParentMetadata.TriggerID = "wrong-trigger"
 	compare.Events[0].Object = model.ObjectTypeChatCompletion
 	compare.Events[0].Done = false
+	delete(compare.Events[0].LongRunningToolIDs, "call-1")
+	compare.Events[0].RequiresCompletion = false
 	diffs := CompareSnapshots(base, compare)
-	for _, want := range []string{"invocation_id", "object", "done"} {
+	for _, want := range []string{"invocation_id", "parent_invocation_id", "parent_metadata", "object", "done", "requires_completion", "long_running_tool_ids"} {
 		if !containsField(diffs, want) {
 			t.Fatalf("diffs do not include %q: %+v", want, diffs)
 		}
@@ -1111,6 +1135,9 @@ func hasUnsupportedCapability(features []UnsupportedFeature, cap Capability) boo
 }
 
 func TestJSONFileBackendPersistsWithPrivatePermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("file mode bits are not preserved on Windows")
+	}
 	dir := t.TempDir()
 	c := singleTurnCase()
 	_, err := NewJSONFileBackend(dir).Apply(context.Background(), c)
@@ -1812,6 +1839,12 @@ func injectMismatch(s *Snapshot) bool {
 		s.Events[0].Content = "partial chunk leaked"
 	case "16_event_metadata_roundtrip":
 		s.Events[0].Extensions["replay.metadata"] = `{"visible":false}`
+		s.Events[0].ParentInvocationID = "wrong-parent"
+		if s.Events[0].ParentMetadata != nil {
+			s.Events[0].ParentMetadata.TriggerID = "wrong-trigger"
+		}
+		delete(s.Events[0].LongRunningToolIDs, "call-meta-parent")
+		s.Events[0].RequiresCompletion = false
 	case "17_multi_part_event_roundtrip":
 		s.Events[1].Extensions["replay.parts"] = `[{"kind":"text","text":"wrong"}]`
 	case "18_memory_after_summary_truncation":

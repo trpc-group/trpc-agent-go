@@ -35,10 +35,34 @@ func TestReplayConsistencyRedisBackend(t *testing.T) {
 		redisURL = "redis://" + mr.Addr()
 		advanceTTL = mr.FastForward
 	}
+	runPrefix := uniqueRedisReplayRunPrefix(t.Name())
+	runRedisReplaySuite(t, ctx, redisURL, advanceTTL, runPrefix)
+}
 
+func TestReplayConsistencyRedisBackend_IsolatesRepeatedRuns(t *testing.T) {
+	ctx := context.Background()
+	mr, err := miniredis.Run()
+	if err != nil {
+		t.Fatalf("miniredis.Run() error = %v", err)
+	}
+	t.Cleanup(mr.Close)
+	redisURL := "redis://" + mr.Addr()
+
+	runRedisReplaySuite(t, ctx, redisURL, mr.FastForward, uniqueRedisReplayRunPrefix(t.Name()+"-first"))
+	runRedisReplaySuite(t, ctx, redisURL, mr.FastForward, uniqueRedisReplayRunPrefix(t.Name()+"-second"))
+}
+
+func runRedisReplaySuite(
+	t *testing.T,
+	ctx context.Context,
+	redisURL string,
+	advanceTTL func(time.Duration),
+	runPrefix string,
+) {
+	t.Helper()
 	report, err := replaytest.Run(ctx, replaytest.PublicCases(), []replaytest.Backend{
 		replaytest.NewInMemoryBackend(),
-		newRedisReplayBackend(redisURL, advanceTTL),
+		newRedisReplayBackend(redisURL, advanceTTL, runPrefix),
 	})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -49,11 +73,15 @@ func TestReplayConsistencyRedisBackend(t *testing.T) {
 	}
 }
 
-func newRedisReplayBackend(url string, advanceTTL func(time.Duration)) replaytest.Backend {
+func uniqueRedisReplayRunPrefix(name string) string {
+	return fmt.Sprintf("replay:%s:%d", sanitizeRedisReplayPrefix(name), time.Now().UTC().UnixNano())
+}
+
+func newRedisReplayBackend(url string, advanceTTL func(time.Duration), runPrefix string) replaytest.Backend {
 	return replaytest.NewServiceBackend(
 		"session/redis+memory/redis",
 		func(ctx context.Context, c replaytest.ReplayCase) (*replaytest.ServiceBundle, error) {
-			prefix := "replay:" + sanitizeRedisReplayPrefix(c.Name)
+			prefix := runPrefix + ":" + sanitizeRedisReplayPrefix(c.Name)
 			sessionSvc, err := sessredis.NewService(
 				sessredis.WithRedisClientURL(url),
 				sessredis.WithKeyPrefix(prefix+":session"),

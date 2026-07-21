@@ -89,13 +89,19 @@ func normalizeSession(
 
 func normalizeEvent(index int, evt event.Event) NormalizedEvent {
 	out := NormalizedEvent{
-		ID:           stableEventOrderID(evt),
-		Index:        index,
-		InvocationID: evt.InvocationID,
-		Author:       evt.Author,
-		Branch:       evt.Branch,
-		Tag:          evt.Tag,
-		FilterKey:    evt.FilterKey,
+		ID:                 stableEventOrderID(evt),
+		Index:              index,
+		InvocationID:       evt.InvocationID,
+		ParentInvocationID: evt.ParentInvocationID,
+		ParentMetadata:     cloneParentInvocationMetadata(evt.ParentMetadata),
+		Author:             evt.Author,
+		Branch:             evt.Branch,
+		Tag:                evt.Tag,
+		FilterKey:          evt.FilterKey,
+		RequiresCompletion: evt.RequiresCompletion,
+	}
+	if len(evt.LongRunningToolIDs) > 0 {
+		out.LongRunningToolIDs = cloneLongRunningToolIDs(evt.LongRunningToolIDs)
 	}
 	if evt.Response != nil && len(evt.Response.Choices) > 0 {
 		out.Object = evt.Response.Object
@@ -658,9 +664,13 @@ func eventFromSpec(spec EventSpec, sequence int) (*event.Event, error) {
 	evt := event.NewResponseEvent(spec.InvocationID, spec.Author, rsp)
 	evt.ID = "event-" + spec.LogicalID
 	evt.Timestamp = deterministicEventTime(sequence)
+	evt.ParentInvocationID = spec.ParentInvocationID
+	evt.ParentMetadata = cloneParentInvocationMetadata(spec.ParentMetadata)
 	evt.Branch = spec.Branch
 	evt.Tag = spec.Tag
 	evt.FilterKey = spec.FilterKey
+	evt.RequiresCompletion = spec.RequiresCompletion
+	evt.LongRunningToolIDs = cloneLongRunningToolIDs(spec.LongRunningToolIDs)
 	evt.StateDelta = stateDelta
 	evt.IsPartial = spec.Partial
 	for k, v := range spec.Extensions {
@@ -669,6 +679,25 @@ func eventFromSpec(spec EventSpec, sequence int) (*event.Event, error) {
 		}
 	}
 	return evt, nil
+}
+
+func cloneParentInvocationMetadata(src *event.ParentInvocationMetadata) *event.ParentInvocationMetadata {
+	if src == nil {
+		return nil
+	}
+	clone := *src
+	return &clone
+}
+
+func cloneLongRunningToolIDs(src map[string]struct{}) map[string]struct{} {
+	if len(src) == 0 {
+		return nil
+	}
+	clone := make(map[string]struct{}, len(src))
+	for k := range src {
+		clone[k] = struct{}{}
+	}
+	return clone
 }
 
 func deterministicEventTime(sequence int) time.Time {

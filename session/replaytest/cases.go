@@ -415,14 +415,24 @@ func eventMetadataCase() ReplayCase {
 			{
 				Kind: OpAppendEvent,
 				Event: &EventSpec{
-					LogicalID:    "meta-u1",
-					InvocationID: "inv-meta",
-					Author:       "user",
-					Role:         model.RoleUser,
-					Content:      "preserve metadata",
-					Branch:       "root/metadata",
-					Tag:          "audit;replay",
-					FilterKey:    "root/metadata",
+					LogicalID:          "meta-u1",
+					InvocationID:       "inv-meta",
+					ParentInvocationID: "parent-meta",
+					ParentMetadata: &event.ParentInvocationMetadata{
+						TriggerType: event.TriggerTypeToolCall,
+						TriggerID:   "call-meta-parent",
+						TriggerName: "metadata_probe",
+					},
+					Author:             "user",
+					Role:               model.RoleUser,
+					Content:            "preserve metadata",
+					Branch:             "root/metadata",
+					Tag:                "audit;replay",
+					FilterKey:          "root/metadata",
+					RequiresCompletion: true,
+					LongRunningToolIDs: map[string]struct{}{
+						"call-meta-parent": {},
+					},
 					StateDelta: map[string]json.RawMessage{
 						"meta:last": raw(`{"step":1,"ok":true}`),
 					},
