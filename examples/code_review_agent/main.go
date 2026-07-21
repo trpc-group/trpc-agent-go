@@ -286,31 +286,37 @@ func runOne(ctx context.Context, cfg config) (err error) {
 		{Kind: "markdown_report", Path: filepath.Join(cfg.outDir, "review_report.md")},
 	}
 
-	artifacts, err := reportwriter.Write(cfg.outDir, report)
-	if err != nil {
+	// fail finalizes the task so persistence errors never leave it in
+	// the "running" state without an audit trail.
+	fail := func(err error) error {
 		task.Status = review.StatusFailed
 		task.Error = err.Error()
 		_ = db.FinishTask(ctx, task)
 		return err
 	}
 
+	artifacts, err := reportwriter.Write(cfg.outDir, report)
+	if err != nil {
+		return fail(err)
+	}
+
 	if err := db.SaveFindings(ctx, task.ID, append(append(ruleResult.Findings, ruleResult.Warnings...), ruleResult.NeedsHumanReview...)); err != nil {
-		return err
+		return fail(err)
 	}
 	if err := db.SaveSandboxRuns(ctx, task.ID, allRuns); err != nil {
-		return err
+		return fail(err)
 	}
 	if err := db.SavePermissionDecisions(ctx, task.ID, allDecisions); err != nil {
-		return err
+		return fail(err)
 	}
 	if err := db.SaveFilterDecisions(ctx, task.ID, ruleResult.FilterDecisions); err != nil {
-		return err
+		return fail(err)
 	}
 	if err := db.SaveArtifacts(ctx, task.ID, artifacts); err != nil {
-		return err
+		return fail(err)
 	}
 	if err := db.SaveReport(ctx, task.ID, report, filepath.Join(cfg.outDir, "review_report.json"), filepath.Join(cfg.outDir, "review_report.md")); err != nil {
-		return err
+		return fail(err)
 	}
 	if err := db.FinishTask(ctx, task); err != nil {
 		return err

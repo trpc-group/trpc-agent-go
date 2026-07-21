@@ -43,14 +43,17 @@ func Write(outDir string, r review.ReviewReport) ([]review.Artifact, error) {
 	if len(data) > maxArtifactBytes {
 		return nil, fmt.Errorf("json report is %d bytes, exceeds artifact limit of %d bytes", len(data), maxArtifactBytes)
 	}
-	if err := os.WriteFile(jsonPath, data, 0o644); err != nil {
-		return nil, err
-	}
 	md := []byte(redaction.RedactText(markdown(safeReport)))
 	if len(md) > maxArtifactBytes {
 		return nil, fmt.Errorf("markdown report is %d bytes, exceeds artifact limit of %d bytes", len(md), maxArtifactBytes)
 	}
+	// Validate both artifacts before writing either so a markdown
+	// failure cannot leave an orphaned JSON report behind.
+	if err := os.WriteFile(jsonPath, data, 0o644); err != nil {
+		return nil, err
+	}
 	if err := os.WriteFile(mdPath, md, 0o644); err != nil {
+		_ = os.Remove(jsonPath)
 		return nil, err
 	}
 	return []review.Artifact{

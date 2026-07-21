@@ -260,7 +260,7 @@ func TestRunRejectsUnknownMode(t *testing.T) {
 // TestExpectedOutputsStayInSync re-runs every fixture and compares the
 // result against the curated files under testdata/expected, so the samples
 // never drift from the real reports. Regenerate them with
-// testdata/gen_expected.py after intentional rule changes.
+// testdata/gen_expected.go after intentional rule changes.
 func TestExpectedOutputsStayInSync(t *testing.T) {
 	paths, err := filepath.Glob(filepath.Join("testdata", "expected", "*_review_report.json"))
 	if err != nil {

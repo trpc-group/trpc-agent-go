@@ -16,5 +16,12 @@ cd "${target}"
 : "${GOPATH:=${TMPDIR:-/tmp}/gopath}"
 export GOCACHE GOPATH
 
-go test ./...
-go vet ./...
+# Run both checks even when one fails so a single invocation reports
+# every problem, then exit non-zero if either check failed.
+test_status=0
+go test ./... || test_status=$?
+vet_status=0
+go vet ./... || vet_status=$?
+if [[ ${test_status} -ne 0 || ${vet_status} -ne 0 ]]; then
+  exit 1
+fi

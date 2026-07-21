@@ -198,7 +198,11 @@ func Merge(res Result, extra []review.Finding) Result {
 	all = append(all, res.NeedsHumanReview...)
 	all = append(all, res.Warnings...)
 	all = append(all, extra...)
-	return filterPipeline(all)
+	merged := filterPipeline(all)
+	// Keep the pre-merge dedup decisions so the persisted audit trail
+	// covers both filter passes.
+	merged.FilterDecisions = append(res.FilterDecisions, merged.FilterDecisions...)
+	return merged
 }
 
 // Deduplicate keeps the highest-confidence finding for the same file/line/rule.

@@ -104,19 +104,27 @@ func checkCommand(command string) tool.PermissionDecision {
 			return tool.DenyPermission("command is blocked by the high-risk command policy")
 		}
 	}
-	allowedPrefixes := []string{
+	// Go tool invocations must match exactly so extra flags such as
+	// "go test ./... -exec=/tmp/evil" cannot ride on the allow list.
+	allowedCommands := []string{
 		"go test ./...",
 		"go vet ./...",
 		"go list ./...",
 		"staticcheck ./...",
-		"bash skills/code-review/scripts/",
 	}
-	for _, prefix := range allowedPrefixes {
-		if lower == prefix || strings.HasPrefix(lower, prefix) {
+	for _, cmd := range allowedCommands {
+		if lower == cmd {
 			return tool.PermissionDecision{
 				Action: tool.PermissionActionAllow,
 				Reason: "command is allow-listed for code review checks",
 			}
+		}
+	}
+	// Bundled skill scripts keep prefix matching for their arguments.
+	if strings.HasPrefix(lower, "bash skills/code-review/scripts/") {
+		return tool.PermissionDecision{
+			Action: tool.PermissionActionAllow,
+			Reason: "command is allow-listed for code review checks",
 		}
 	}
 	return tool.AskPermission("unknown command requires review")

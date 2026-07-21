@@ -167,4 +167,10 @@ func TestEngineRunStatusClassification(t *testing.T) {
 	if errRun.Status != "failed" || errRun.Error != "boom" {
 		t.Fatalf("engine error should be failed with error: %+v", errRun)
 	}
+	timedOutErr := engineRun("go test ./...", start,
+		codeexecutor.RunResult{ExitCode: 1, TimedOut: true},
+		errors.New("context deadline exceeded"))
+	if timedOutErr.Status != "timeout" {
+		t.Fatalf("timeout should win over engine error: %+v", timedOutErr)
+	}
 }

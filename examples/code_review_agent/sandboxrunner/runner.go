@@ -210,12 +210,14 @@ func engineRun(command string, start time.Time, res codeexecutor.RunResult, err 
 		run.Status = "failed"
 		run.Error = fmt.Sprintf("command exited with code %d", res.ExitCode)
 	}
-	if res.TimedOut {
-		run.Status = "timeout"
-	}
 	if err != nil {
 		run.Status = "failed"
 		run.Error = redaction.RedactText(err.Error())
+	}
+	// Timeout wins last so a deadline is never masked by the generic
+	// engine error that usually accompanies it.
+	if res.TimedOut {
+		run.Status = "timeout"
 	}
 	return run
 }

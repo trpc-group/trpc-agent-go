@@ -14,6 +14,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -56,7 +57,7 @@ func (s *SQLiteStore) CreateTask(ctx context.Context, task review.ReviewTask) er
 INSERT INTO review_tasks(id, status, input_type, input_summary, repo_path, started_at, error)
 VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		task.ID, task.Status, task.InputType, redaction.RedactText(task.InputSummary),
-		task.RepoPath, task.StartedAt.Format(time.RFC3339Nano), redaction.RedactText(task.Error))
+		redaction.RedactText(task.RepoPath), task.StartedAt.Format(time.RFC3339Nano), redaction.RedactText(task.Error))
 	return err
 }
 
@@ -72,76 +73,99 @@ UPDATE review_tasks SET status = ?, finished_at = ?, error = ? WHERE id = ?`,
 	return err
 }
 
+// inTx runs fn inside a transaction so batch inserts are all-or-nothing.
+func (s *SQLiteStore) inTx(ctx context.Context, fn func(tx *sql.Tx) error) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	if err := fn(tx); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	return tx.Commit()
+}
+
 // SaveFindings stores findings for a task.
 func (s *SQLiteStore) SaveFindings(ctx context.Context, taskID string, findings []review.Finding) error {
-	for _, f := range findings {
-		if _, err := s.db.ExecContext(ctx, `
+	return s.inTx(ctx, func(tx *sql.Tx) error {
+		for _, f := range findings {
+			if _, err := tx.ExecContext(ctx, `
 INSERT INTO review_findings(task_id, severity, category, file, line, title, evidence, recommendation, confidence, source, rule_id)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			taskID, f.Severity, f.Category, f.File, f.Line, redaction.RedactText(f.Title),
-			redaction.RedactText(f.Evidence), redaction.RedactText(f.Recommendation),
-			f.Confidence, f.Source, f.RuleID); err != nil {
-			return err
+				taskID, f.Severity, f.Category, f.File, f.Line, redaction.RedactText(f.Title),
+				redaction.RedactText(f.Evidence), redaction.RedactText(f.Recommendation),
+				f.Confidence, f.Source, f.RuleID); err != nil {
+				return err
+			}
 		}
-	}
-	return nil
+		return nil
+	})
 }
 
 // SaveSandboxRuns stores sandbox runs.
 func (s *SQLiteStore) SaveSandboxRuns(ctx context.Context, taskID string, runs []review.SandboxRun) error {
-	for _, run := range runs {
-		if _, err := s.db.ExecContext(ctx, `
+	return s.inTx(ctx, func(tx *sql.Tx) error {
+		for _, run := range runs {
+			if _, err := tx.ExecContext(ctx, `
 INSERT INTO sandbox_runs(task_id, command, status, exit_code, duration_ms, stdout_excerpt, stderr_excerpt, error)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-			taskID, redaction.RedactText(run.Command), run.Status, run.ExitCode, run.DurationMS,
-			redaction.RedactText(run.StdoutExcerpt), redaction.RedactText(run.StderrExcerpt),
-			redaction.RedactText(run.Error)); err != nil {
-			return err
+				taskID, redaction.RedactText(run.Command), run.Status, run.ExitCode, run.DurationMS,
+				redaction.RedactText(run.StdoutExcerpt), redaction.RedactText(run.StderrExcerpt),
+				redaction.RedactText(run.Error)); err != nil {
+				return err
+			}
 		}
-	}
-	return nil
+		return nil
+	})
 }
 
 // SavePermissionDecisions stores command governance decisions.
 func (s *SQLiteStore) SavePermissionDecisions(ctx context.Context, taskID string, decisions []review.PermissionDecision) error {
-	for _, d := range decisions {
-		if _, err := s.db.ExecContext(ctx, `
+	return s.inTx(ctx, func(tx *sql.Tx) error {
+		for _, d := range decisions {
+			if _, err := tx.ExecContext(ctx, `
 INSERT INTO permission_decisions(task_id, command, decision, reason, created_at)
 VALUES (?, ?, ?, ?, ?)`,
-			taskID, redaction.RedactText(d.Command), d.Decision, redaction.RedactText(d.Reason),
-			d.CreatedAt.Format(time.RFC3339Nano)); err != nil {
-			return err
+				taskID, redaction.RedactText(d.Command), d.Decision, redaction.RedactText(d.Reason),
+				d.CreatedAt.Format(time.RFC3339Nano)); err != nil {
+				return err
+			}
 		}
-	}
-	return nil
+		return nil
+	})
 }
 
 // SaveFilterDecisions stores noise-control filter decisions.
 func (s *SQLiteStore) SaveFilterDecisions(ctx context.Context, taskID string, decisions []review.FilterDecision) error {
-	for _, d := range decisions {
-		if _, err := s.db.ExecContext(ctx, `
+	return s.inTx(ctx, func(tx *sql.Tx) error {
+		for _, d := range decisions {
+			if _, err := tx.ExecContext(ctx, `
 INSERT INTO filter_decisions(task_id, rule_id, file, line, source, confidence, stage, decision, reason, created_at)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			taskID, d.RuleID, d.File, d.Line, d.Source, d.Confidence,
-			d.Stage, d.Decision, redaction.RedactText(d.Reason),
-			d.CreatedAt.Format(time.RFC3339Nano)); err != nil {
-			return err
+				taskID, d.RuleID, d.File, d.Line, d.Source, d.Confidence,
+				d.Stage, d.Decision, redaction.RedactText(d.Reason),
+				d.CreatedAt.Format(time.RFC3339Nano)); err != nil {
+				return err
+			}
 		}
-	}
-	return nil
+		return nil
+	})
 }
 
 // SaveArtifacts stores artifacts.
 func (s *SQLiteStore) SaveArtifacts(ctx context.Context, taskID string, artifacts []review.Artifact) error {
-	for _, a := range artifacts {
-		if _, err := s.db.ExecContext(ctx, `
+	return s.inTx(ctx, func(tx *sql.Tx) error {
+		for _, a := range artifacts {
+			if _, err := tx.ExecContext(ctx, `
 INSERT INTO artifacts(task_id, kind, path, sha256, size_bytes)
 VALUES (?, ?, ?, ?, ?)`,
-			taskID, a.Kind, redaction.RedactText(a.Path), a.SHA256, a.SizeBytes); err != nil {
-			return err
+				taskID, a.Kind, redaction.RedactText(a.Path), a.SHA256, a.SizeBytes); err != nil {
+				return err
+			}
 		}
-	}
-	return nil
+		return nil
+	})
 }
 
 // SaveReport stores the final report metadata and summary.
@@ -212,9 +236,12 @@ FROM review_tasks WHERE id = ?`, taskID).Scan(
 		return snap, err
 	}
 	snap.Artifacts = artifacts
-	_ = s.db.QueryRowContext(ctx, `
+	if err := s.db.QueryRowContext(ctx, `
 SELECT json_path, markdown_path, summary_json FROM review_reports WHERE task_id = ?`,
-		taskID).Scan(&snap.Report.JSONPath, &snap.Report.MarkdownPath, &snap.Report.SummaryJSON)
+		taskID).Scan(&snap.Report.JSONPath, &snap.Report.MarkdownPath,
+		&snap.Report.SummaryJSON); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return snap, err
+	}
 	if snap.Findings == nil {
 		snap.Findings = []review.Finding{}
 	}

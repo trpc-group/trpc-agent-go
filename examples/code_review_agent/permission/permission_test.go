@@ -29,6 +29,24 @@ func TestDecide(t *testing.T) {
 	}
 }
 
+// TestDecideGoCommandWithFlagsNotAllowed guards against flag smuggling on
+// the allow list, e.g. running an attacker-controlled -exec wrapper.
+func TestDecideGoCommandWithFlagsNotAllowed(t *testing.T) {
+	flagged := []string{
+		"go test ./... -exec=/tmp/evil",
+		"go vet ./... -vettool=/tmp/evil",
+		"staticcheck ./... -debug.run=/tmp/evil",
+	}
+	for _, cmd := range flagged {
+		if got := Decide(cmd).Decision; got == DecisionAllow {
+			t.Fatalf("command %q must not be allow-listed", cmd)
+		}
+	}
+	if got := Decide("bash skills/code-review/scripts/diff_summary.sh /tmp/x.diff").Decision; got != DecisionAllow {
+		t.Fatalf("script with args decision=%s", got)
+	}
+}
+
 // TestPolicyCheckToolPermission exercises the framework PermissionPolicy hook.
 func TestPolicyCheckToolPermission(t *testing.T) {
 	var policy tool.PermissionPolicy = Policy{}

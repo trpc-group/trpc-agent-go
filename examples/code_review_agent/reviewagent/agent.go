@@ -173,6 +173,7 @@ func collectFinalContent(eventCh <-chan *event.Event) (string, error) {
 func BuildPrompt(files []review.ChangedFile) string {
 	var b strings.Builder
 	b.WriteString("Review this Go diff and answer with the JSON contract only.\n\n")
+fileLoop:
 	for _, file := range files {
 		fmt.Fprintf(&b, "FILE: %s", file.NewPath)
 		if file.PackageName != "" {
@@ -189,13 +190,15 @@ func BuildPrompt(files []review.ChangedFile) string {
 				default:
 					fmt.Fprintf(&b, "  %d: %s\n", line.NewLine, line.Content)
 				}
+				// The cap must hold per line: one oversized hunk in an
+				// untrusted diff must not produce an unbounded prompt.
+				if b.Len() > promptByteCap {
+					b.WriteString("[diff truncated]\n")
+					break fileLoop
+				}
 			}
 		}
 		b.WriteByte('\n')
-		if b.Len() > promptByteCap {
-			b.WriteString("[diff truncated]\n")
-			break
-		}
 	}
 	return b.String()
 }

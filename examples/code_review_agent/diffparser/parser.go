@@ -65,6 +65,14 @@ func ParseUnifiedDiff(data []byte) ([]review.ChangedFile, error) {
 				current.NewPath = cleanDiffPath(parts[3])
 			}
 		case strings.HasPrefix(line, "--- "):
+			// A plain unified diff has no "diff --git" header, so a new
+			// "--- " line after a file with parsed hunks starts the next
+			// file. The hunk check keeps git-style headers (which set
+			// NewPath before any hunk) attached to the same file.
+			if current != nil && current.NewPath != "" &&
+				(len(current.Hunks) > 0 || currentHunk != nil) {
+				flushFile()
+			}
 			if current == nil {
 				current = &review.ChangedFile{}
 			}

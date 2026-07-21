@@ -38,3 +38,32 @@ func TestParseUnifiedDiff(t *testing.T) {
 		t.Fatalf("added line=%d, want 3", got)
 	}
 }
+
+// TestParseUnifiedDiffPlainMultiFile verifies plain diffs without
+// "diff --git" headers still split into one entry per file.
+func TestParseUnifiedDiffPlainMultiFile(t *testing.T) {
+	diff := []byte(`--- a/foo.go
++++ b/foo.go
+@@ -1,1 +1,2 @@
+ package foo
++func Foo() {}
+--- a/bar.go
++++ b/bar.go
+@@ -1,1 +1,2 @@
+ package bar
++func Bar() {}
+`)
+	files, err := ParseUnifiedDiff(diff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 2 {
+		t.Fatalf("files=%d, want 2", len(files))
+	}
+	if files[0].NewPath != "foo.go" || files[1].NewPath != "bar.go" {
+		t.Fatalf("paths=%q,%q", files[0].NewPath, files[1].NewPath)
+	}
+	if len(files[0].Hunks) != 1 || len(files[1].Hunks) != 1 {
+		t.Fatalf("hunks=%d,%d, want 1,1", len(files[0].Hunks), len(files[1].Hunks))
+	}
+}

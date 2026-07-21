@@ -19,4 +19,6 @@ fi
 printf 'files_changed='
 printf '%s\n' "${diff_content}" | grep -cE '^\+\+\+ b/' || true
 printf 'added_lines='
-printf '%s\n' "${diff_content}" | grep -cE '^\+[^+]' || true
+# "([^+]|$)" keeps added blank lines in the count while still skipping
+# the "+++ b/..." file headers.
+printf '%s\n' "${diff_content}" | grep -cE '^\+([^+]|$)' || true
