@@ -25,7 +25,7 @@ import (
 	"trpc.group/trpc-go/trpc-a2a-go/v2/protocol"
 	a2a "trpc.group/trpc-go/trpc-a2a-go/v2/server"
 	"trpc.group/trpc-go/trpc-a2a-go/v2/taskmanager"
-	"trpc.group/trpc-go/trpc-a2a-go/v2/taskmanager/memory"
+	"trpc.group/trpc-go/trpc-a2a-go/v2/taskmanager/stateless"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
@@ -135,12 +135,20 @@ func buildProcessor(
 		a2aToAgentConverter = &defaultA2AMessageToAgentMessage{}
 	}
 
+	// A custom TaskManager opts into the A2A task lifecycle. Without one, the
+	// stateless manager accepts direct Messages only.
+	taskMode := options.taskManagerBuilder != nil
+	streamingEventType := options.streamingEventType
+	if !taskMode {
+		streamingEventType = StreamingEventTypeMessage
+	}
+
 	eventToA2AConverter := options.eventToA2AConverter
 	if eventToA2AConverter == nil {
 		eventToA2AConverter = &defaultEventToA2AMessage{
 			adkCompatibility:          options.adkCompatibility,
 			graphEventObjectAllowlist: options.graphEventObjectAllowlist,
-			streamingEventType:        options.streamingEventType,
+			streamingEventType:        streamingEventType,
 			eventPartMappers:          options.eventPartMappers,
 		}
 	} else if len(options.eventPartMappers) > 0 {
@@ -155,8 +163,9 @@ func buildProcessor(
 		debugLogging:         options.debugLogging,
 		adkCompatibility:     options.adkCompatibility,
 		responseRewriter:     options.responseRewriter,
-		streamingEventType:   options.streamingEventType,
+		streamingEventType:   streamingEventType,
 		structuredTaskErrors: options.structuredTaskErrors,
+		taskMode:             taskMode,
 		agentName:            serverIdentity,
 		runOptions:           options.runOptions,
 	}, nil
@@ -188,12 +197,14 @@ func buildA2AServer(options *options) (*a2a.A2AServer, error) {
 		processor = options.processorHook(processor)
 	}
 
-	// Create a task manager that wraps the session service
+	// By default, A2A is only the transport: trpc-agent-go's session service owns
+	// conversation context and the stateless manager retains no duplicate task
+	// state. An explicit builder opts into A2A task management.
 	var taskManager taskmanager.TaskManager
 	if options.taskManagerBuilder != nil {
 		taskManager = options.taskManagerBuilder(processor)
 	} else {
-		taskManager, err = memory.NewTaskManager(processor)
+		taskManager, err = stateless.NewTaskManager(processor)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create task manager: %w", err)
 		}
@@ -281,6 +292,7 @@ type messageProcessor struct {
 	responseRewriter     ResponseRewriter
 	streamingEventType   StreamingEventType
 	structuredTaskErrors bool
+	taskMode             bool
 	agentName            string
 	runOptions           []agent.RunOption
 }
@@ -522,11 +534,11 @@ func (m *messageProcessor) handleStreamingProcessingError(
 }
 
 // ProcessMessage is the main entry point for processing messages. It adapts the
-// agent runner to the event-stream MessageProcessor contract: one code path
-// serves message/send and message/stream alike by emitting the task lifecycle
-// (submitted -> converted agent output -> completed) on the returned channel.
-// The framework owns task creation and persistence and derives the unary result
-// from the same events.
+// agent runner to the event-stream MessageProcessor contract. By default it
+// emits direct Messages for the stateless manager. With an explicit
+// TaskManagerBuilder it emits the task lifecycle (submitted -> converted agent
+// output -> completed). The selected manager derives the unary result from the
+// same events.
 func (m *messageProcessor) ProcessMessage(
 	ctx context.Context,
 	ec *taskmanager.ExecContext,
@@ -603,15 +615,139 @@ func (m *messageProcessor) ProcessMessage(
 		return m.replyError(ctx, &message, err)
 	}
 
-	// Emit the task lifecycle from a goroutine: the framework starts draining
-	// the channel only after ProcessMessage returns, so events must not be sent
-	// inline. Closing out ends the round.
+	// Emit events from a goroutine: the framework starts draining the channel
+	// only after ProcessMessage returns, so events must not be sent inline.
+	// Closing out ends the round.
 	out := make(chan protocol.StreamEvent)
 	go func() {
 		defer close(out)
+		if !m.taskMode && !ec.Streaming {
+			m.collectUnaryAgentEvents(ctx, out, &message, agentMsgChan)
+			return
+		}
 		m.streamAgentEvents(ctx, out, ec.TaskID, userID, ctxID, &message, agentMsgChan)
 	}()
 	return out, nil
+}
+
+// collectUnaryAgentEvents converts a non-streaming stateless round into one
+// complete Message. Partial model deltas are ignored by the unary converter;
+// the final full response becomes the direct message/send result.
+func (m *messageProcessor) collectUnaryAgentEvents(
+	ctx context.Context,
+	out chan<- protocol.StreamEvent,
+	a2aMsg *protocol.Message,
+	agentMsgChan <-chan *event.Event,
+) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.ErrorfContext(
+				ctx,
+				log.PanicPrefix+" panic in unary processing: %v",
+				r,
+			)
+			if err := m.handleStreamingProcessingError(
+				ctx,
+				out,
+				a2aMsg,
+				fmt.Errorf("unary processing panic: %v", r),
+			); err != nil {
+				log.ErrorfContext(ctx, "failed to handle unary panic: %v", err)
+			}
+		}
+	}()
+
+	var last *protocol.Message
+	for agentEvent := range agentMsgChan {
+		if err := ctx.Err(); err != nil {
+			return
+		}
+		if agentEvent == nil || agentEvent.Response == nil {
+			continue
+		}
+		if isFinalStreamingEvent(agentEvent) &&
+			!agentEvent.Response.IsValidContent() {
+			mergeMessageMetadata(last, buildFinalStreamingMetadata(agentEvent))
+			continue
+		}
+
+		converted, err := m.eventToA2AConverter.ConvertToA2AMessage(
+			ctx,
+			agentEvent,
+			EventToA2AUnaryOptions{CtxID: *a2aMsg.ContextID},
+		)
+		if err != nil {
+			if handleErr := m.handleStreamingProcessingError(
+				ctx,
+				out,
+				a2aMsg,
+				err,
+			); handleErr != nil {
+				log.ErrorfContext(ctx, "failed to handle unary error: %v", handleErr)
+			}
+			return
+		}
+		if converted == nil {
+			continue
+		}
+		message, ok := converted.(*protocol.Message)
+		if !ok {
+			err := fmt.Errorf(
+				"stateless unary converter returned %T, want Message",
+				converted,
+			)
+			if handleErr := m.handleStreamingProcessingError(
+				ctx,
+				out,
+				a2aMsg,
+				err,
+			); handleErr != nil {
+				log.ErrorfContext(ctx, "failed to handle unary error: %v", handleErr)
+			}
+			return
+		}
+		last = message
+	}
+
+	if last == nil {
+		if err := m.handleStreamingProcessingError(
+			ctx,
+			out,
+			a2aMsg,
+			errors.New("no response message from agent"),
+		); err != nil {
+			log.ErrorfContext(ctx, "failed to handle empty unary response: %v", err)
+		}
+		return
+	}
+	if err := m.sendEvent(ctx, out, last); err != nil {
+		log.ErrorfContext(ctx, "failed to send unary message: %v", err)
+	}
+}
+
+func mergeMessageMetadata(message *protocol.Message, metadata map[string]any) {
+	if message == nil || len(metadata) == 0 {
+		return
+	}
+	if message.Metadata == nil {
+		message.Metadata = make(map[string]any, len(metadata))
+	}
+	for key, value := range metadata {
+		if key != ia2a.MessageMetadataStateDeltaKey {
+			message.Metadata[key] = value
+			continue
+		}
+		merged := DecodeStateDeltaMetadata(message.Metadata[key])
+		if merged == nil {
+			merged = make(map[string][]byte)
+		}
+		for deltaKey, deltaValue := range DecodeStateDeltaMetadata(value) {
+			merged[deltaKey] = deltaValue
+		}
+		if encoded := EncodeStateDeltaMetadata(merged); len(encoded) > 0 {
+			message.Metadata[key] = encoded
+		}
+	}
 }
 
 // buildRunnerOptions applies user-defined run options first, then merges A2A
@@ -650,11 +786,9 @@ func (m *messageProcessor) buildRunnerOptions(message protocol.Message) []agent.
 	return runnerOpts
 }
 
-// streamAgentEvents drives one agent run to completion, emitting the task
-// lifecycle on out. The caller closes out when this returns: on a terminal or
-// suspend event the framework ends the response stream, and closing out in a
-// non-terminal state after a CancelTask cancellation leads the framework to
-// mark the task CANCELED.
+// streamAgentEvents drives one agent run to completion. In task mode it emits
+// the task lifecycle on out; in stateless mode it emits converted Messages
+// only. The caller closes out when this returns.
 func (m *messageProcessor) streamAgentEvents(
 	ctx context.Context,
 	out chan<- protocol.StreamEvent,
@@ -707,15 +841,17 @@ func (m *messageProcessor) streamAgentEvents(
 		)
 	}
 
-	if m.abortStreamingOnError(ctx, out, a2aMsg, m.sendTaskSubmittedEvent(
-		ctx,
-		out,
-		taskID,
-		userID,
-		sessionID,
-		a2aMsg,
-	)) {
-		return
+	if m.taskMode {
+		if m.abortStreamingOnError(ctx, out, a2aMsg, m.sendTaskSubmittedEvent(
+			ctx,
+			out,
+			taskID,
+			userID,
+			sessionID,
+			a2aMsg,
+		)) {
+			return
+		}
 	}
 
 	// run event tunnel
@@ -725,6 +861,12 @@ func (m *messageProcessor) streamAgentEvents(
 		if m.abortStreamingOnError(ctx, out, a2aMsg, err) {
 			return
 		}
+	}
+	if !m.taskMode {
+		finalMessage := protocol.NewMessage(protocol.MessageRoleAgent, nil)
+		finalMessage.Metadata = cloneStreamingMetadata(finalStreamingMetadata)
+		m.abortStreamingOnError(ctx, out, a2aMsg, m.sendEvent(ctx, out, &finalMessage))
+		return
 	}
 	if terminalTaskError {
 		return
@@ -894,7 +1036,7 @@ func (m *messageProcessor) processBatchStreamingEvents(
 			continue
 		}
 
-		if m.structuredTaskErrors &&
+		if m.taskMode && m.structuredTaskErrors &&
 			isStructuredTaskErrorEvent(agentEvent) {
 			task := buildStructuredFailureTask(
 				taskID,
