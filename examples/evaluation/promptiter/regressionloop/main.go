@@ -58,6 +58,7 @@ func run(ctx context.Context, configPath, outputOverride string) error {
 	if err != nil {
 		return err
 	}
+	defer writer.Close()
 	report, err := regression.Run(ctx, regression.Options{
 		Config: pipelineConfig(cfg), Engine: environment.Engine, Evaluator: environment.Evaluator,
 		Meter: environment.Evaluator, InitialProfile: environment.InitialProfile, Artifacts: writer,
@@ -74,7 +75,7 @@ func pipelineConfig(cfg *config.Config) regression.Config {
 		Seed: cfg.Seed, TrainEvalSetID: cfg.Evaluation.TrainEvalSetID,
 		ValidationEvalSetID: cfg.Evaluation.ValidationEvalSetID,
 		TargetSurfaceIDs:    append([]string(nil), cfg.Prompt.TargetSurfaceIDs...),
-		MaxRounds:           cfg.Optimization.MaxRounds, MaxRoundsWithoutRelease: cfg.Optimization.MaxRoundsWithoutAcceptance,
+		MaxRounds:           cfg.Optimization.MaxRounds, MaxRoundsWithoutRelease: cfg.Optimization.MaxRoundsWithoutRelease,
 		PromptIterMinScoreGain: cfg.Optimization.MinScoreGain, ReleaseGate: cfg.Gate,
 		ModelConfig:   regression.ModelConfig{Mode: cfg.Mode, Name: "fake-deterministic", Config: map[string]any{"seed": cfg.Seed}},
 		EstimatedCost: regression.EstimatedCost{Currency: "USD", Amount: 0, Source: "fake-model"},

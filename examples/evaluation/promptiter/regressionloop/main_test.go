@@ -29,12 +29,16 @@ var updateGolden = flag.Bool("update", false, "update expected optimization repo
 func TestPipelineConfigUsesOptimizationMinScoreGain(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Optimization.MinScoreGain = 0.125
+	cfg.Optimization.MaxRoundsWithoutRelease = 7
 	cfg.Evaluation.ExpectedAgentName = "candidate"
 	if got := pipelineConfig(cfg).PromptIterMinScoreGain; got != 0.125 {
 		t.Fatalf("PromptIterMinScoreGain = %v, want 0.125", got)
 	}
 	if got := pipelineConfig(cfg).ExpectedAgentName; got != "candidate" {
 		t.Fatalf("ExpectedAgentName = %q, want candidate", got)
+	}
+	if got := pipelineConfig(cfg).MaxRoundsWithoutRelease; got != 7 {
+		t.Fatalf("MaxRoundsWithoutRelease = %d, want 7", got)
 	}
 }
 

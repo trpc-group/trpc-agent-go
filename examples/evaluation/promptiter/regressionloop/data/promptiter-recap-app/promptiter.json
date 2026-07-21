@@ -17,7 +17,7 @@
   },
   "optimization": {
     "maxRounds": 3,
-    "maxRoundsWithoutAcceptance": 2,
+    "maxRoundsWithoutRelease": 2,
     "minScoreGain": -1.0
   },
   "gate": {

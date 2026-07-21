@@ -41,7 +41,9 @@ func TestValidateRejectsInvalidConfigurations(t *testing.T) {
 		mutate func(*Config)
 	}{
 		{"same sets", func(c *Config) { c.Evaluation.ValidationEvalSetID = c.Evaluation.TrainEvalSetID }},
+		{"trace disabled", func(c *Config) { c.Evaluation.TraceMode = false }},
 		{"rounds", func(c *Config) { c.Optimization.MaxRounds = 0 }},
+		{"release rounds", func(c *Config) { c.Optimization.MaxRoundsWithoutRelease = 0 }},
 		{"nan", func(c *Config) { c.Optimization.MinScoreGain = math.NaN() }},
 		{"nan latency budget", func(c *Config) { c.Gate.MaxLatencyIncrease = math.NaN() }},
 		{"nan cost budget", func(c *Config) { c.Gate.MaxCostIncrease = math.NaN() }},

@@ -40,9 +40,9 @@ type Config struct {
 		ExpectedAgentName   string `json:"expectedAgentName"`
 	} `json:"evaluation"`
 	Optimization struct {
-		MaxRounds                  int     `json:"maxRounds"`
-		MaxRoundsWithoutAcceptance int     `json:"maxRoundsWithoutAcceptance"`
-		MinScoreGain               float64 `json:"minScoreGain"`
+		MaxRounds               int     `json:"maxRounds"`
+		MaxRoundsWithoutRelease int     `json:"maxRoundsWithoutRelease"`
+		MinScoreGain            float64 `json:"minScoreGain"`
 	} `json:"optimization"`
 	Gate  regression.GatePolicy `json:"gate"`
 	Audit struct {
@@ -93,10 +93,12 @@ func (c *Config) validateBasic() error {
 		return errors.New("train and validation eval set ids must not be empty")
 	case c.Evaluation.TrainEvalSetID == c.Evaluation.ValidationEvalSetID:
 		return errors.New("train and validation eval sets must differ")
+	case !c.Evaluation.TraceMode:
+		return errors.New("trace mode must be enabled for auditable failure attribution")
 	case c.Optimization.MaxRounds <= 0:
 		return errors.New("max rounds must be greater than zero")
-	case c.Optimization.MaxRoundsWithoutAcceptance <= 0:
-		return errors.New("max rounds without acceptance must be greater than zero")
+	case c.Optimization.MaxRoundsWithoutRelease <= 0:
+		return errors.New("max rounds without release must be greater than zero")
 	case !finite(c.Optimization.MinScoreGain), !finite(c.Gate.MinValidationScoreGain):
 		return errors.New("score thresholds must be finite")
 	case c.Gate.MaxNewHardFailures < 0, c.Gate.MaxToolCallIncrease < 0, c.Gate.MaxModelCallIncrease < 0:
