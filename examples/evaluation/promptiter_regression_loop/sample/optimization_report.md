@@ -5,6 +5,7 @@ Mode: `fake`
 ## Audit Configuration
 
 - Deterministic seed: `0`
+- Sample report: `true`
 - Baseline prompt: `./config/baseline_prompt.txt`
 - Baseline prompt SHA-256: `75357d685f238b6afd7738be9786fdafde641eb6ca9a3be7471939715a68a4de`
 - PromptIter config: `./config/promptiter.json`
@@ -12,6 +13,7 @@ Mode: `fake`
 - Model: `phase4v2-fake-model` (deterministic=`true`, temperature=`0.0`, max tokens=`1024`, stream=`false`)
 - PromptIter: max rounds=`2`, min score gain=`0.1000`, target score=`1.0000`, max rounds without acceptance=`0`
 - Final gate: rejectOnNewHardFail=`true`, rejectOnCriticalRegression=`true`, maxDurationMs=`180000`, maxModelCalls=`100`
+- Critical case scope: `validation_status_tr789`
 
 Single round: `false`
 
@@ -73,7 +75,7 @@ Final release outcome: rejected by the final gate because critical validation re
 - validation gain 0.5000 satisfies minimum 0.0500
 - new hard fail cases: [validation_status_tr789]
 - critical regression cases: [validation_status_tr789]
-- optimization latency 0ms is within maximum 180000ms
+- latency budget check skipped for sample report
 - model calls 29 is within maximum 100
 - cost check skipped (fake mode)
 

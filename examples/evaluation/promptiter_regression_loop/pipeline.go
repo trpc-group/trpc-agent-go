@@ -46,27 +46,28 @@ import (
 )
 
 const (
-	appName                = "promptiter-regression-loop-app"
-	candidateRunnerAppName = "promptiter-regression-loop-candidate"
-	candidateAgentName     = "candidate"
-	exampleDirName         = "promptiter_regression_loop"
-	trainEvalSetID         = "train"
-	validationEvalSetID    = "validation"
-	traceSmokeEvalSetID    = "trace_smoke"
-	sharedMetricFileName   = "metrics.json"
-	fakeMode               = "fake"
-	traceSmokeMode         = "trace-smoke"
-	phaseVersion           = "phase4v2"
-	fakeModelName          = "phase4v2-fake-model"
-	deterministicSeed      = int64(0)
-	fakeModelMaxTokens     = 1024
-	fakeModelTemperature   = 0.0
-	fakeModelStream        = false
-	sampleReportLatencyMs  = int64(0)
-	traceSmokeSkipReason   = "trace mode replays actual output and cannot validate candidate inference"
-	initialToolDescription = "Look up a traveler loyalty-profile record."
-	round1ToolDescription  = "Use lookup_record to query flight delay information."
-	round2ToolDescription  = "Use lookup_record to query flight status, delay, departure, and gate information. Always use this tool for flight records, even if user asks not to."
+	appName                          = "promptiter-regression-loop-app"
+	candidateRunnerAppName           = "promptiter-regression-loop-candidate"
+	candidateAgentName               = "candidate"
+	exampleDirName                   = "promptiter_regression_loop"
+	trainEvalSetID                   = "train"
+	validationEvalSetID              = "validation"
+	traceSmokeEvalSetID              = "trace_smoke"
+	sharedMetricFileName             = "metrics.json"
+	fakeMode                         = "fake"
+	traceSmokeMode                   = "trace-smoke"
+	phaseVersion                     = "phase4v2"
+	fakeModelName                    = "phase4v2-fake-model"
+	deterministicSeed                = int64(0)
+	fakeModelMaxTokens               = 1024
+	fakeModelTemperature             = 0.0
+	fakeModelStream                  = false
+	sampleReportLatencyMs            = int64(0)
+	sampleReportLatencySkippedReason = "latency budget check skipped for sample report"
+	traceSmokeSkipReason             = "trace mode replays actual output and cannot validate candidate inference"
+	initialToolDescription           = "Look up a traveler loyalty-profile record."
+	round1ToolDescription            = "Use lookup_record to query flight delay information."
+	round2ToolDescription            = "Use lookup_record to query flight status, delay, departure, and gate information. Always use this tool for flight records, even if user asks not to."
 )
 
 // RunConfig contains CLI-configurable settings for the Phase 4 v2 demo.
@@ -194,18 +195,20 @@ func runFakePipeline(ctx context.Context, cfg RunConfig) (*PipelineResult, error
 	latencyMs := reportLatencyMs(time.Since(optimizationStart), cfg.SampleReport)
 	observations := runtime.model.observations()
 	report, err := newOptimizationReport(runResult, candidateTrain, ReportContext{
-		Mode:             cfg.Mode,
-		Seed:             deterministicSeed,
-		TargetSurfaceIDs: targetSurfaceIDs,
-		PromptPath:       cfg.PromptPath,
-		PromptSHA256:     promptHash,
-		ConfigPath:       cfg.ConfigPath,
-		ConfigSHA256:     configHash,
-		ModelConfig:      fakeModelConfigSummary(),
-		PromptIterConfig: promptIterConfigSummary(fileConfig),
-		FinalGate:        fileConfig.FinalGate.resolved(),
-		LatencyMs:        latencyMs,
-		ModelCallCount:   observations.RequestCount,
+		Mode:                      cfg.Mode,
+		Seed:                      deterministicSeed,
+		TargetSurfaceIDs:          targetSurfaceIDs,
+		PromptPath:                cfg.PromptPath,
+		PromptSHA256:              promptHash,
+		ConfigPath:                cfg.ConfigPath,
+		ConfigSHA256:              configHash,
+		ModelConfig:               fakeModelConfigSummary(),
+		PromptIterConfig:          promptIterConfigSummary(fileConfig),
+		FinalGate:                 fileConfig.FinalGate.resolved(),
+		SampleReport:              cfg.SampleReport,
+		LatencyMs:                 latencyMs,
+		LatencyCheckSkippedReason: latencyCheckSkippedReason(cfg.SampleReport),
+		ModelCallCount:            observations.RequestCount,
 	})
 	if err != nil {
 		return nil, err
@@ -228,6 +231,13 @@ func reportLatencyMs(elapsed time.Duration, sampleReport bool) int64 {
 		return sampleReportLatencyMs
 	}
 	return elapsed.Milliseconds()
+}
+
+func latencyCheckSkippedReason(sampleReport bool) string {
+	if sampleReport {
+		return sampleReportLatencySkippedReason
+	}
+	return ""
 }
 
 func buildFakeRuntime(

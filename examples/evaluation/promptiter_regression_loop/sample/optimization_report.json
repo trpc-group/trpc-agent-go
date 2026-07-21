@@ -1,6 +1,7 @@
 {
   "phase": "phase4v2",
   "mode": "fake",
+  "sampleReport": true,
   "seed": 0,
   "singleRound": false,
   "targetSurfaceIds": [
@@ -715,7 +716,7 @@
       "validation gain 0.5000 satisfies minimum 0.0500",
       "new hard fail cases: [validation_status_tr789]",
       "critical regression cases: [validation_status_tr789]",
-      "optimization latency 0ms is within maximum 180000ms",
+      "latency budget check skipped for sample report",
       "model calls 29 is within maximum 100",
       "cost check skipped (fake mode)"
     ],

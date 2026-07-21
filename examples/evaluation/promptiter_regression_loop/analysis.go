@@ -54,6 +54,10 @@ type finalGateConfig struct {
 	RejectOnCriticalRegression bool
 }
 
+type gateReportOptions struct {
+	LatencyCheckSkippedReason string
+}
+
 type ValidationDelta struct {
 	PerCase []CaseDelta  `json:"perCase"`
 	Summary DeltaSummary `json:"summary"`
@@ -244,12 +248,17 @@ func buildGateReport(
 	latencyMs int64,
 	modelCallCount int,
 	mode string,
+	options ...gateReportOptions,
 ) (*GateReport, error) {
 	if baseline == nil || candidate == nil {
 		return nil, errors.New("baseline and candidate validation summaries are required")
 	}
 	if delta == nil {
 		return nil, errors.New("validation delta is nil")
+	}
+	var opts gateReportOptions
+	if len(options) > 0 {
+		opts = options[0]
 	}
 	criticalSet := make(map[string]struct{}, len(cfg.CriticalCaseIDs))
 	for _, id := range cfg.CriticalCaseIDs {
@@ -315,7 +324,9 @@ func buildGateReport(
 	} else {
 		report.Reasons = append(report.Reasons, fmt.Sprintf("critical regression cases detected but not enforced: %v", report.CriticalRegressions))
 	}
-	if cfg.MaxDurationMs > 0 {
+	if opts.LatencyCheckSkippedReason != "" {
+		report.Reasons = append(report.Reasons, opts.LatencyCheckSkippedReason)
+	} else if cfg.MaxDurationMs > 0 {
 		if latencyMs > cfg.MaxDurationMs {
 			reject = true
 			report.Reasons = append(report.Reasons, fmt.Sprintf("optimization latency %dms exceeds maximum %dms", latencyMs, cfg.MaxDurationMs))

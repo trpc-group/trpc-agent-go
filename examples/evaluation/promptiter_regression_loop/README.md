@@ -60,7 +60,7 @@ The checked-in sample snapshot under `sample/` is refreshed only with an explici
 go run . -mode fake -output-dir ./sample -sample-report
 ```
 
-The committed sample uses the normalized `0ms` latency in the top-level report, final gate, and gate reason. It intentionally ends with `gate.decision = "reject"`: train reaches `1.0` and validation rises from `0.25` to `0.75`, but `validation_status_tr789` becomes a new hard fail and critical regression. Normal runs do not overwrite this snapshot.
+The committed sample is marked with `sampleReport = true` and uses normalized `0ms` latency for stable JSON and Markdown presentation. Because that latency is synthetic, the final gate records the latency check as skipped for the sample artifact instead of treating `0ms` as a release-gate measurement. The sample intentionally ends with `gate.decision = "reject"`: train reaches `1.0` and validation rises from `0.25` to `0.75`, but `validation_status_tr789` becomes a new hard fail and critical regression. Normal runs do not overwrite this snapshot.
 
 ## Trace Smoke Mode
 

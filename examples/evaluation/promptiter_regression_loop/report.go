@@ -25,23 +25,26 @@ import (
 var phase4Pending = []string{}
 
 type ReportContext struct {
-	Mode             string
-	Seed             int64
-	TargetSurfaceIDs []string
-	PromptPath       string
-	PromptSHA256     string
-	ConfigPath       string
-	ConfigSHA256     string
-	ModelConfig      *ModelConfigSummary
-	PromptIterConfig *PromptIterConfigSummary
-	FinalGate        finalGateConfig
-	LatencyMs        int64
-	ModelCallCount   int
+	Mode                      string
+	Seed                      int64
+	TargetSurfaceIDs          []string
+	PromptPath                string
+	PromptSHA256              string
+	ConfigPath                string
+	ConfigSHA256              string
+	ModelConfig               *ModelConfigSummary
+	PromptIterConfig          *PromptIterConfigSummary
+	FinalGate                 finalGateConfig
+	SampleReport              bool
+	LatencyMs                 int64
+	LatencyCheckSkippedReason string
+	ModelCallCount            int
 }
 
 type OptimizationReport struct {
 	Phase            string                   `json:"phase"`
 	Mode             string                   `json:"mode"`
+	SampleReport     bool                     `json:"sampleReport"`
 	Seed             int64                    `json:"seed"`
 	SingleRound      bool                     `json:"singleRound"`
 	TargetSurfaceIDs []string                 `json:"targetSurfaceIds"`
@@ -207,13 +210,16 @@ func newOptimizationReport(
 	if err != nil {
 		return nil, fmt.Errorf("build candidate validation attribution: %w", err)
 	}
-	gate, err := buildGateReport(baselineValidation, candidateValidation, delta, ctx.FinalGate, ctx.LatencyMs, ctx.ModelCallCount, ctx.Mode)
+	gate, err := buildGateReport(baselineValidation, candidateValidation, delta, ctx.FinalGate, ctx.LatencyMs, ctx.ModelCallCount, ctx.Mode, gateReportOptions{
+		LatencyCheckSkippedReason: ctx.LatencyCheckSkippedReason,
+	})
 	if err != nil {
 		return nil, err
 	}
 	return &OptimizationReport{
 		Phase:            phaseVersion,
 		Mode:             ctx.Mode,
+		SampleReport:     ctx.SampleReport,
 		Seed:             ctx.Seed,
 		SingleRound:      len(result.Rounds) == 1,
 		TargetSurfaceIDs: append([]string(nil), ctx.TargetSurfaceIDs...),
@@ -257,6 +263,7 @@ func newTraceSmokeOptimizationReport(
 	return &OptimizationReport{
 		Phase:            phaseVersion,
 		Mode:             ctx.Mode,
+		SampleReport:     ctx.SampleReport,
 		Seed:             ctx.Seed,
 		SingleRound:      false,
 		TargetSurfaceIDs: []string{},
@@ -513,6 +520,10 @@ func renderFinalReleaseOutcomeMarkdown(buf *bytes.Buffer, gate *GateReport) {
 		return
 	}
 	if len(gate.CriticalRegressions) > 0 {
+		if !gate.RejectOnCriticalRegression {
+			fmt.Fprintf(buf, "Final release outcome: rejected by the final gate; see the Final Gate reasons below.\n\n")
+			return
+		}
 		quotedCases := make([]string, 0, len(gate.CriticalRegressions))
 		for _, caseID := range gate.CriticalRegressions {
 			quotedCases = append(quotedCases, fmt.Sprintf("`%s`", caseID))
@@ -530,6 +541,7 @@ func finalizedMarkdown(buf *bytes.Buffer) []byte {
 func renderAuditSummaryMarkdown(buf *bytes.Buffer, report *OptimizationReport) {
 	fmt.Fprintf(buf, "## Audit Configuration\n\n")
 	fmt.Fprintf(buf, "- Deterministic seed: `%d`\n", report.Seed)
+	fmt.Fprintf(buf, "- Sample report: `%t`\n", report.SampleReport)
 	if report.PromptPath != "" {
 		fmt.Fprintf(buf, "- Baseline prompt: `%s`\n", report.PromptPath)
 	}
@@ -568,8 +580,21 @@ func renderAuditSummaryMarkdown(buf *bytes.Buffer, report *OptimizationReport) {
 			report.Gate.MaxDurationMs,
 			report.Gate.MaxModelCalls,
 		)
+		if len(report.Gate.CriticalCaseIDs) == 0 {
+			fmt.Fprintf(buf, "- Critical case scope: disabled\n")
+		} else {
+			fmt.Fprintf(buf, "- Critical case scope: %s\n", inlineCodeList(report.Gate.CriticalCaseIDs))
+		}
 	}
 	fmt.Fprintf(buf, "\n")
+}
+
+func inlineCodeList(items []string) string {
+	quoted := make([]string, 0, len(items))
+	for _, item := range items {
+		quoted = append(quoted, fmt.Sprintf("`%s`", item))
+	}
+	return strings.Join(quoted, ", ")
 }
 
 func renderTraceSmokeMarkdown(buf *bytes.Buffer, report *OptimizationReport) {

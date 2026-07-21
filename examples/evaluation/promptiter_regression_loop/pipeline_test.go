@@ -120,6 +120,7 @@ func TestRunTraceSmokePipelineEndToEnd(t *testing.T) {
 	require.Nil(t, result.Run)
 	require.Equal(t, phaseVersion, result.Report.Phase)
 	require.Equal(t, traceSmokeMode, result.Report.Mode)
+	require.True(t, result.Report.SampleReport)
 	require.Equal(t, deterministicSeed, result.Report.Seed)
 	require.Equal(t, fakeModelConfigSummary(), result.Report.ModelConfig)
 	require.Empty(t, result.Report.ConfigPath)
@@ -164,10 +165,11 @@ func TestSampleReportSnapshotIsStableAndUpToDate(t *testing.T) {
 			SampleReport: true,
 		})
 		require.NoError(t, err)
+		require.True(t, result.Report.SampleReport)
 		require.Zero(t, result.Report.LatencyMs)
 		require.NotNil(t, result.Report.Gate)
 		require.Zero(t, result.Report.Gate.LatencyMs)
-		require.Contains(t, result.Report.Gate.Reasons, "optimization latency 0ms is within maximum 180000ms")
+		require.Contains(t, result.Report.Gate.Reasons, sampleReportLatencySkippedReason)
 		jsonContent, err := os.ReadFile(result.ReportJSONPath)
 		require.NoError(t, err)
 		markdownContent, err := os.ReadFile(result.ReportMarkdownPath)
@@ -375,6 +377,7 @@ func TestReportSchema(t *testing.T) {
 	require.NotNil(t, report.Gate)
 	require.NotNil(t, report.Attribution)
 	require.NotEmpty(t, report.Rounds)
+	require.False(t, report.SampleReport)
 	require.NotNil(t, report.Rounds[0].Train)
 	require.NotNil(t, report.Rounds[0].Validation)
 	require.NotNil(t, report.Rounds[0].OutputProfile)
@@ -393,6 +396,8 @@ func TestReportSchema(t *testing.T) {
 	require.Equal(t, phaseVersion, decoded["phase"])
 	require.Contains(t, decoded, "baseline")
 	require.Equal(t, float64(deterministicSeed), decoded["seed"])
+	require.Contains(t, decoded, "sampleReport")
+	require.Equal(t, false, decoded["sampleReport"])
 	require.Contains(t, decoded, "configPath")
 	require.Contains(t, decoded, "configSha256")
 	require.Contains(t, decoded, "modelConfig")
@@ -419,7 +424,9 @@ func TestReportSchema(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, string(markdown), "- Baseline prompt: `./config/baseline_prompt.txt`")
 	require.Contains(t, string(markdown), "- Baseline prompt SHA-256: `75357d685f238b6afd7738be9786fdafde641eb6ca9a3be7471939715a68a4de`")
+	require.Contains(t, string(markdown), "- Sample report: `false`")
 	require.Contains(t, string(markdown), "- Final gate: rejectOnNewHardFail=`true`, rejectOnCriticalRegression=`true`, maxDurationMs=`180000`, maxModelCalls=`100`")
+	require.Contains(t, string(markdown), "- Critical case scope: `validation_status_tr789`")
 }
 
 func TestTraceSmokeAdapterUsesRunDetailsExecutionTrace(t *testing.T) {
@@ -554,8 +561,10 @@ func TestMarkdownGateDecisionSummaryUsesActualGateReasons(t *testing.T) {
 		name                string
 		decision            string
 		reason              string
+		rejectCritical      bool
 		criticalRegressions []string
 		expectedSummary     string
+		unexpectedSummary   string
 	}{
 		{
 			name:            "accepted",
@@ -573,8 +582,18 @@ func TestMarkdownGateDecisionSummaryUsesActualGateReasons(t *testing.T) {
 			name:                "critical regression rejected",
 			decision:            gateDecisionReject,
 			reason:              "critical regression cases: [critical]",
+			rejectCritical:      true,
 			criticalRegressions: []string{"critical"},
 			expectedSummary:     "Final release outcome: rejected by the final gate because critical validation regression cases were detected: `critical`.",
+		},
+		{
+			name:                "critical regression detected but disabled policy did not reject",
+			decision:            gateDecisionReject,
+			reason:              "model calls 6 exceeds maximum 5",
+			rejectCritical:      false,
+			criticalRegressions: []string{"critical"},
+			expectedSummary:     "Final release outcome: rejected by the final gate; see the Final Gate reasons below.",
+			unexpectedSummary:   "critical validation regression cases were detected",
 		},
 		{
 			name:            "model call budget rejected",
@@ -588,13 +607,17 @@ func TestMarkdownGateDecisionSummaryUsesActualGateReasons(t *testing.T) {
 			report := &OptimizationReport{
 				Mode: fakeMode,
 				Gate: &GateReport{
-					Decision:            tt.decision,
-					Reasons:             []string{tt.reason},
-					CriticalRegressions: tt.criticalRegressions,
+					Decision:                   tt.decision,
+					Reasons:                    []string{tt.reason},
+					RejectOnCriticalRegression: tt.rejectCritical,
+					CriticalRegressions:        tt.criticalRegressions,
 				},
 			}
 			markdown := string(renderMarkdownReport(report))
 			require.Contains(t, markdown, tt.expectedSummary)
+			if tt.unexpectedSummary != "" {
+				require.NotContains(t, markdown, tt.unexpectedSummary)
+			}
 			require.Contains(t, markdown, tt.reason)
 			require.NotContains(t, markdown, "Train and validation aggregate scores improved")
 		})
@@ -615,9 +638,10 @@ func TestMarkdownClarifiesPromptIterAcceptanceIsNotReleaseApproval(t *testing.T)
 			},
 		},
 		Gate: &GateReport{
-			Decision:            gateDecisionReject,
-			Reasons:             []string{"critical regression cases: [critical]"},
-			CriticalRegressions: []string{"critical"},
+			Decision:                   gateDecisionReject,
+			Reasons:                    []string{"critical regression cases: [critical]"},
+			RejectOnCriticalRegression: true,
+			CriticalRegressions:        []string{"critical"},
 		},
 	}
 	markdown := string(renderMarkdownReport(report))
@@ -629,6 +653,18 @@ func TestMarkdownClarifiesPromptIterAcceptanceIsNotReleaseApproval(t *testing.T)
 	require.Contains(t, markdown, "critical validation regression cases were detected: `critical`")
 	require.NotContains(t, markdown, "\n### Accepted Profile\n")
 	require.NotContains(t, markdown, "\n- Accepted: `true`\n")
+}
+
+func TestMarkdownAuditShowsDisabledCriticalCaseScope(t *testing.T) {
+	report := &OptimizationReport{
+		Mode: fakeMode,
+		Gate: &GateReport{
+			Decision:        gateDecisionAccept,
+			CriticalCaseIDs: []string{},
+		},
+	}
+	markdown := string(renderMarkdownReport(report))
+	require.Contains(t, markdown, "- Critical case scope: disabled")
 }
 
 func TestFinalGateConfigDefaultsAndOverrides(t *testing.T) {
@@ -986,6 +1022,15 @@ func TestFinalGateDecisions(t *testing.T) {
 	gate, err = buildGateReport(baseline, candidate, delta, latencyCfg, 2, 5, fakeMode)
 	require.NoError(t, err)
 	require.Equal(t, gateDecisionReject, gate.Decision)
+	require.Contains(t, gate.Reasons, "optimization latency 2ms exceeds maximum 1ms")
+
+	gate, err = buildGateReport(baseline, candidate, delta, latencyCfg, 2, 5, fakeMode, gateReportOptions{
+		LatencyCheckSkippedReason: sampleReportLatencySkippedReason,
+	})
+	require.NoError(t, err)
+	require.Equal(t, gateDecisionAccept, gate.Decision)
+	require.Contains(t, gate.Reasons, sampleReportLatencySkippedReason)
+	require.NotContains(t, gate.Reasons, "optimization latency 2ms exceeds maximum 1ms")
 
 	latencyCfg.MaxDurationMs = 0
 	gate, err = buildGateReport(baseline, candidate, delta, latencyCfg, 2, 5, fakeMode)
