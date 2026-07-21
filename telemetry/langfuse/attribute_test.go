@@ -109,3 +109,81 @@ func TestConstantNamingConvention(t *testing.T) {
 	assert.Equal(t, "langfuse.user.id", traceUserID)
 	assert.Equal(t, "langfuse.session.id", traceSessionID)
 }
+
+func TestUsageDetailsNormalized(t *testing.T) {
+	tests := []struct {
+		name  string
+		usage usageDetails
+		want  usageDetails
+	}{
+		{
+			name:  "without cache",
+			usage: usageDetails{Input: 100, Output: 50},
+			want:  usageDetails{Input: 100, Output: 50},
+		},
+		{
+			name:  "inclusive cached input",
+			usage: usageDetails{Input: 100, Output: 50, InputCached: 30},
+			want:  usageDetails{Input: 70, Output: 50, InputCached: 30},
+		},
+		{
+			name:  "all input cached",
+			usage: usageDetails{Input: 30, Output: 10, InputCached: 30},
+			want:  usageDetails{Output: 10, InputCached: 30},
+		},
+		{
+			name:  "cached input exceeds input",
+			usage: usageDetails{Input: 20, Output: 10, InputCached: 30},
+			want:  usageDetails{Output: 10, InputCached: 30},
+		},
+		{
+			name: "provider cache read replaces compatibility alias",
+			usage: usageDetails{
+				Input:          20,
+				Output:         10,
+				InputCached:    80,
+				InputCacheRead: 80,
+			},
+			want: usageDetails{
+				Input:          20,
+				Output:         10,
+				InputCacheRead: 80,
+			},
+		},
+		{
+			name: "provider cache creation preserves exclusive input",
+			usage: usageDetails{
+				Input:              20,
+				Output:             10,
+				InputCacheCreation: 80,
+			},
+			want: usageDetails{
+				Input:              20,
+				Output:             10,
+				InputCacheCreation: 80,
+			},
+		},
+		{
+			name: "provider cache details take precedence",
+			usage: usageDetails{
+				Input:              20,
+				Output:             10,
+				InputCached:        70,
+				InputCacheRead:     70,
+				InputCacheCreation: 10,
+			},
+			want: usageDetails{
+				Input:              20,
+				Output:             10,
+				InputCacheRead:     70,
+				InputCacheCreation: 10,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, tt.usage.normalized())
+		})
+	}
+}
