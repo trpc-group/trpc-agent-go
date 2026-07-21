@@ -80,22 +80,7 @@ func redactedReport(in review.Report) review.Report {
 	out.Plan.Runtime = redactString(in.Plan.Runtime)
 	out.Plan.Commands = redactStrings(in.Plan.Commands)
 	out.Plan.RuleSources = redactStrings(in.Plan.RuleSources)
-	out.ChangedFiles = make([]review.DiffFile, len(in.ChangedFiles))
-	for index, file := range in.ChangedFiles {
-		out.ChangedFiles[index] = file
-		out.ChangedFiles[index].OldPath = redactString(file.OldPath)
-		out.ChangedFiles[index].NewPath = redactString(file.NewPath)
-		out.ChangedFiles[index].PackageDir = redactString(file.PackageDir)
-		out.ChangedFiles[index].Hunks = make([]review.DiffHunk, len(file.Hunks))
-		for hunkIndex, hunk := range file.Hunks {
-			out.ChangedFiles[index].Hunks[hunkIndex] = hunk
-			out.ChangedFiles[index].Hunks[hunkIndex].Lines = make([]review.DiffLine, len(hunk.Lines))
-			for lineIndex, line := range hunk.Lines {
-				out.ChangedFiles[index].Hunks[hunkIndex].Lines[lineIndex] = line
-				out.ChangedFiles[index].Hunks[hunkIndex].Lines[lineIndex].Content = redactString(line.Content)
-			}
-		}
-	}
+	out.ChangedFiles = redact.DiffFiles(in.ChangedFiles)
 	out.Findings = make([]review.Finding, len(in.Findings))
 	for index, finding := range in.Findings {
 		out.Findings[index] = finding
@@ -312,12 +297,13 @@ func Write(outDir string, r review.Report, now time.Time) ([]review.ArtifactReco
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create output directory: %w", err)
 	}
+	stem := "review_report_" + safeTaskID(r.Task.ID)
 	records := []review.ArtifactRecord{
 		{
 			ID:        "json_report-" + r.Task.ID,
 			TaskID:    r.Task.ID,
 			Kind:      "json_report",
-			Path:      filepath.Join(outDir, "review_report.json"),
+			Path:      filepath.Join(outDir, stem+".json"),
 			MimeType:  "application/json",
 			CreatedAt: now.UTC(),
 		},
@@ -325,7 +311,7 @@ func Write(outDir string, r review.Report, now time.Time) ([]review.ArtifactReco
 			ID:        "markdown_report-" + r.Task.ID,
 			TaskID:    r.Task.ID,
 			Kind:      "markdown_report",
-			Path:      filepath.Join(outDir, "review_report.md"),
+			Path:      filepath.Join(outDir, stem+".md"),
 			MimeType:  "text/markdown",
 			CreatedAt: now.UTC(),
 		},
@@ -371,6 +357,20 @@ func Write(outDir string, r review.Report, now time.Time) ([]review.ArtifactReco
 		record.SHA256 = hex.EncodeToString(sum[:])
 	}
 	return records, nil
+}
+
+func safeTaskID(taskID string) string {
+	var b strings.Builder
+	for _, r := range taskID {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' ||
+			r >= '0' && r <= '9' || r == '-' || r == '_' || r == '.' {
+			b.WriteRune(r)
+		}
+	}
+	if b.Len() == 0 {
+		return "unknown"
+	}
+	return b.String()
 }
 
 func mustJSON(v map[string]int) string {

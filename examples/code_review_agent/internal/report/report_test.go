@@ -153,10 +153,24 @@ func TestWriteReportsCreatesArtifacts(t *testing.T) {
 	if len(artifacts) != 2 {
 		t.Fatalf("len(artifacts) = %d, want 2", len(artifacts))
 	}
-	if _, err := os.Stat(filepath.Join(dir, "review_report.json")); err != nil {
-		t.Fatalf("review_report.json missing: %v", err)
+	if _, err := os.Stat(filepath.Join(dir, "review_report_task-1.json")); err != nil {
+		t.Fatalf("task-specific JSON report missing: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "review_report.md")); err != nil {
-		t.Fatalf("review_report.md missing: %v", err)
+	if _, err := os.Stat(filepath.Join(dir, "review_report_task-1.md")); err != nil {
+		t.Fatalf("task-specific Markdown report missing: %v", err)
+	}
+}
+
+func TestWriteReportsSanitizesTaskIDForPath(t *testing.T) {
+	dir := t.TempDir()
+	r := review.Report{Task: review.ReviewTask{ID: "../task id", Status: review.TaskStatusPassed}}
+	artifacts, err := Write(dir, r, time.Unix(1, 0))
+	if err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	for _, artifact := range artifacts {
+		if filepath.Dir(artifact.Path) != dir {
+			t.Fatalf("artifact escaped output directory: %#v", artifact)
+		}
 	}
 }

@@ -21,13 +21,14 @@ go run . -fixture-dir testdata/fixtures -out-dir ./out -model "$MODEL"
 Supported input modes:
 
 - `--fixture-dir testdata/fixtures` for deterministic public samples.
-- `--diff-file path/to/change.diff` for a unified diff.
+- `--diff-file path/to/change.diff` for a unified diff; add
+  `--repo-path path/to/repo` when sandbox checks should run against the patched checkout.
 - `--repo-path path/to/repo` for `git diff --no-ext-diff --binary`; sandbox commands run in that repository.
-- `--file-list path/to/files.txt --repo-path path/to/repo` for a newline-delimited changed-file list tied to the repository that owns those paths. The repository path controls planner context, sandbox CWD, and `go test`/`go vet` scope; content-based deterministic rules require diff input.
+- `--file-list path/to/files.txt --repo-path path/to/repo` for a newline-delimited changed-file list tied to the repository that owns those paths. Without `--repo-path`, sandbox validation is skipped. The repository path controls planner context, sandbox CWD, and `go test`/`go vet` scope; content-based deterministic rules require diff input.
 
 The CLI reads diff fixtures, asks an OpenAI-compatible model for the execution
-plan, records a review task, writes `review_report.json` and
-`review_report.md`, and prints an English summary. Unit tests use mock model
+plan, records a review task, writes task-specific `review_report_<task-id>.json`
+and `review_report_<task-id>.md` artifacts, and prints an English summary. Unit tests use mock model
 and sandbox seams with `--runtime fake`; non-fake CLI runs require
 `OPENAI_API_KEY`, optional `OPENAI_BASE_URL`, and `MODEL` or `--model`.
 
@@ -45,9 +46,9 @@ and sandbox seams with `--runtime fake`; non-fake CLI runs require
 
 ## Outputs
 
-- `review_report.json`: structured findings, governance decisions, artifacts,
+- `review_report_<task-id>.json`: structured findings, governance decisions, artifacts,
   and metrics.
-- `review_report.md`: human-readable summary.
+- `review_report_<task-id>.md`: human-readable summary.
 - `review_agent.db`: dependency-free durable task, input, sandbox run,
   permission decision, finding, artifact, and report records. The generated
   `.db` file is not checked in.

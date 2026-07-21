@@ -10,19 +10,24 @@ package orchestrator
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/inputsource"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/review"
+	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/sandboxrun"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/store"
 )
 
@@ -437,6 +442,286 @@ func TestFileListReviewUsesSelectedRepositoryWorkspace(t *testing.T) {
 	workspace := newSandboxWorkspace(plannedWorkDir)
 	if got := workspace.runtimeCwd("container"); got != "work" {
 		t.Fatalf("container CWD = %q, want work", got)
+	}
+}
+
+func TestStandaloneFileListSkipsSandboxValidation(t *testing.T) {
+	listDir := t.TempDir()
+	fileList := filepath.Join(listDir, "files.txt")
+	if err := os.WriteFile(fileList, []byte("pkg/a.go\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(file list) error = %v", err)
+	}
+	outDir := t.TempDir()
+	result, err := Run(context.Background(), Options{
+		FileList: fileList,
+		OutDir:   outDir,
+		DBPath:   filepath.Join(outDir, "review_agent.db"),
+		Runtime:  "fake",
+		Now:      fixedTestTime(),
+		Planner: plannerFunc(func(ctx context.Context, req PlanRequest) (review.ReviewPlan, error) {
+			if req.WorkDir != "" {
+				t.Fatalf("planner WorkDir = %q, want empty", req.WorkDir)
+			}
+			return review.ReviewPlan{Model: "test", Provider: "test", Source: "test", Skill: defaultSkillName, Runtime: "fake", Commands: []string{"go test ./..."}}, nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(result.Report.SandboxRuns) != 0 || len(result.Report.PermissionDecisions) != 0 {
+		t.Fatalf("standalone file-list executed sandbox: runs=%#v decisions=%#v", result.Report.SandboxRuns, result.Report.PermissionDecisions)
+	}
+	if result.Report.Conclusion != "no_sandbox_run" {
+		t.Fatalf("conclusion = %q, want no_sandbox_run", result.Report.Conclusion)
+	}
+}
+
+func TestStandaloneDiffFileCanUseSelectedRepositoryWorkspace(t *testing.T) {
+	diffPath := filepath.Join(t.TempDir(), "change.diff")
+	if err := os.WriteFile(diffPath, []byte("diff --git a/pkg/a.go b/pkg/a.go\n--- a/pkg/a.go\n+++ b/pkg/a.go\n@@ -1 +1 @@\n-package pkg\n+package pkg\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(diff) error = %v", err)
+	}
+	repo := t.TempDir()
+	outDir := t.TempDir()
+	var plannedWorkDir string
+	result, err := Run(context.Background(), Options{
+		DiffFile: diffPath,
+		RepoPath: repo,
+		OutDir:   outDir,
+		DBPath:   filepath.Join(outDir, "review_agent.db"),
+		Runtime:  "fake",
+		Now:      fixedTestTime(),
+		Planner: plannerFunc(func(ctx context.Context, req PlanRequest) (review.ReviewPlan, error) {
+			plannedWorkDir = req.WorkDir
+			return review.ReviewPlan{Model: "test", Provider: "test", Source: "test", Skill: defaultSkillName, Runtime: "fake", Commands: []string{"go test ./..."}}, nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	wantRepo, err := filepath.Abs(repo)
+	if err != nil {
+		t.Fatalf("Abs(repo) error = %v", err)
+	}
+	if plannedWorkDir != wantRepo || result.Report.Task.RepoPath != wantRepo {
+		t.Fatalf("workspace = %q/%q, want %q/%q", plannedWorkDir, result.Report.Task.RepoPath, wantRepo, wantRepo)
+	}
+	if len(result.Report.SandboxRuns) != 1 {
+		t.Fatalf("sandbox runs = %d, want one for associated workspace", len(result.Report.SandboxRuns))
+	}
+}
+
+func TestBuildReviewSnapshotExcludesGitIgnoredAndEnvironmentFiles(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	repo := t.TempDir()
+	runGitCommand(t, repo, "init")
+	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("ignored.txt\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(.gitignore) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "tracked.go"), []byte("package tracked\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(tracked) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".env"), []byte("TOKEN=local-secret\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(.env) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "ignored.txt"), []byte("ignored\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(ignored) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "review_agent.db"), []byte("local store\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(store) error = %v", err)
+	}
+	runGitCommand(t, repo, "add", ".gitignore", "tracked.go", ".env")
+	snapshot, cleanup, err := buildReviewSnapshot(context.Background(), repo)
+	if err != nil {
+		t.Fatalf("buildReviewSnapshot() error = %v", err)
+	}
+	defer cleanup()
+	if _, err := os.Stat(filepath.Join(snapshot, "tracked.go")); err != nil {
+		t.Fatalf("tracked.go missing from snapshot: %v", err)
+	}
+	for _, excluded := range []string{".git", ".env", "ignored.txt", "review_agent.db"} {
+		if _, err := os.Stat(filepath.Join(snapshot, excluded)); !os.IsNotExist(err) {
+			t.Fatalf("excluded %s present in snapshot, stat err=%v", excluded, err)
+		}
+	}
+	fs := &recordingStageFS{}
+	stagedCleanup, err := stageReviewWorkspace(context.Background(), fs, codeexecutor.Workspace{Path: "/work"}, "e2b", repo)
+	if err != nil {
+		t.Fatalf("stageReviewWorkspace() error = %v", err)
+	}
+	defer stagedCleanup()
+	if fs.src == repo || fs.src == "" {
+		t.Fatalf("E2B staged source = %q, want filtered snapshot", fs.src)
+	}
+	if _, err := os.Stat(filepath.Join(fs.src, "tracked.go")); err != nil {
+		t.Fatalf("staged snapshot missing tracked.go: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(fs.src, ".env")); !os.IsNotExist(err) {
+		t.Fatalf("staged snapshot contains .env, stat err=%v", err)
+	}
+}
+
+type recordingStageFS struct {
+	src string
+}
+
+func (f *recordingStageFS) PutFiles(context.Context, codeexecutor.Workspace, []codeexecutor.PutFile) error {
+	return nil
+}
+
+func (f *recordingStageFS) StageDirectory(_ context.Context, _ codeexecutor.Workspace, src string, _ string, _ codeexecutor.StageOptions) error {
+	f.src = src
+	return nil
+}
+
+func (f *recordingStageFS) Collect(context.Context, codeexecutor.Workspace, []string) ([]codeexecutor.File, error) {
+	return nil, nil
+}
+
+func (f *recordingStageFS) StageInputs(context.Context, codeexecutor.Workspace, []codeexecutor.InputSpec) error {
+	return nil
+}
+
+func (f *recordingStageFS) CollectOutputs(context.Context, codeexecutor.Workspace, codeexecutor.OutputSpec) (codeexecutor.OutputManifest, error) {
+	return codeexecutor.OutputManifest{}, nil
+}
+
+var _ codeexecutor.WorkspaceFS = (*recordingStageFS)(nil)
+
+func runGitCommand(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %s failed: %v\n%s", strings.Join(args, " "), err, output)
+	}
+}
+
+type cancelingRuntime struct {
+	cancel context.CancelFunc
+}
+
+func (r cancelingRuntime) Name() string { return "fake" }
+
+func (r cancelingRuntime) Run(ctx context.Context, _ string) (sandboxrun.Result, error) {
+	r.cancel()
+	<-ctx.Done()
+	return sandboxrun.Result{}, ctx.Err()
+}
+
+func TestCanceledSandboxRunIsPersistedWithFailedTask(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	path := filepath.Join(t.TempDir(), "review_agent.db")
+	st, err := store.NewSQLite(context.Background(), path)
+	if err != nil {
+		t.Fatalf("NewSQLite() error = %v", err)
+	}
+	task := review.ReviewTask{ID: "task-canceled", Status: review.TaskStatusRunning}
+	if err := st.CreateTask(context.Background(), task); err != nil {
+		t.Fatalf("CreateTask() error = %v", err)
+	}
+	_, runs, err := executePlannedCommandsWithFactory(
+		ctx,
+		st,
+		task.ID,
+		"fake",
+		false,
+		[]string{"go test ./..."},
+		fixedTestTime(),
+		time.Second,
+		"",
+		func(context.Context, string, string, string, time.Duration, string, bool) (sandboxrun.Runtime, func(), *review.SandboxRun) {
+			return cancelingRuntime{cancel: cancel}, nil, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("executePlannedCommandsWithFactory() error = %v", err)
+	}
+	if len(runs) != 1 || runs[0].ErrorType != sandboxrun.ErrorCanceled {
+		t.Fatalf("runs = %#v, want one canceled run", runs)
+	}
+	if err := recordSandboxRuns(ctx, st, runs); err != nil {
+		t.Fatalf("recordSandboxRuns() error = %v", err)
+	}
+	finishCtx, finishCancel := failedTaskContext(ctx)
+	if err := st.FinishTask(finishCtx, task.ID, review.TaskStatusFailed, context.Canceled.Error(), fixedTestTime()); err != nil {
+		t.Fatalf("FinishTask() error = %v", err)
+	}
+	finishCancel()
+	if err := st.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	reopened, err := store.NewSQLite(context.Background(), path)
+	if err != nil {
+		t.Fatalf("reopen NewSQLite() error = %v", err)
+	}
+	defer reopened.Close()
+	loaded, err := reopened.LoadTaskReport(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("LoadTaskReport() error = %v", err)
+	}
+	if loaded.Task.Status != review.TaskStatusFailed {
+		t.Fatalf("loaded status = %q, want failed", loaded.Task.Status)
+	}
+	if len(loaded.SandboxRuns) != 1 || loaded.SandboxRuns[0].ErrorType != sandboxrun.ErrorCanceled {
+		t.Fatalf("loaded sandbox runs = %#v, want canceled run", loaded.SandboxRuns)
+	}
+}
+
+func TestRunKeepsTaskArtifactsUniqueAcrossRuns(t *testing.T) {
+	outDir := t.TempDir()
+	dbPath := filepath.Join(outDir, "review_agent.db")
+	first, err := Run(context.Background(), Options{
+		FixtureDir: filepath.Join("..", "..", "testdata", "fixtures"),
+		OutDir:     outDir,
+		DBPath:     dbPath,
+		Runtime:    "fake",
+		Now:        time.Date(2026, 7, 21, 0, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("first Run() error = %v", err)
+	}
+	second, err := Run(context.Background(), Options{
+		FixtureDir: filepath.Join("..", "..", "testdata", "fixtures"),
+		OutDir:     outDir,
+		DBPath:     dbPath,
+		Runtime:    "fake",
+		Now:        time.Date(2026, 7, 21, 0, 0, 1, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("second Run() error = %v", err)
+	}
+	if first.JSONPath == second.JSONPath || first.MarkdownPath == second.MarkdownPath {
+		t.Fatalf("artifact paths were reused: first=%q/%q second=%q/%q", first.JSONPath, first.MarkdownPath, second.JSONPath, second.MarkdownPath)
+	}
+	reopened, err := store.NewSQLite(context.Background(), dbPath)
+	if err != nil {
+		t.Fatalf("reopen NewSQLite() error = %v", err)
+	}
+	defer reopened.Close()
+	for _, result := range []Result{first, second} {
+		loaded, err := reopened.LoadTaskReport(context.Background(), result.TaskID)
+		if err != nil {
+			t.Fatalf("LoadTaskReport(%s) error = %v", result.TaskID, err)
+		}
+		if len(loaded.Artifacts) != 2 {
+			t.Fatalf("task %s artifacts = %d, want 2", result.TaskID, len(loaded.Artifacts))
+		}
+		for _, artifact := range loaded.Artifacts {
+			if !strings.Contains(filepath.Base(artifact.Path), result.TaskID) {
+				t.Fatalf("task %s artifact path = %q, want task ID", result.TaskID, artifact.Path)
+			}
+			raw, err := os.ReadFile(artifact.Path)
+			if err != nil {
+				t.Fatalf("ReadFile(%s) error = %v", artifact.Path, err)
+			}
+			sum := sha256.Sum256(raw)
+			if got := hex.EncodeToString(sum[:]); got != artifact.SHA256 {
+				t.Fatalf("task %s artifact %s checksum = %q, want %q", result.TaskID, artifact.Path, got, artifact.SHA256)
+			}
+		}
 	}
 }
 

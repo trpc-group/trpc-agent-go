@@ -19,10 +19,12 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	tcontainer "github.com/docker/docker/api/types/container"
@@ -459,7 +461,7 @@ func Run(ctx context.Context, opts Options) (result Result, err error) {
 	if err != nil {
 		return Result{}, failTask(err)
 	}
-	changedFilesJSON, err := json.Marshal(files)
+	changedFilesJSON, err := json.Marshal(redact.DiffFiles(files))
 	if err != nil {
 		return Result{}, failTask(fmt.Errorf("marshal changed files: %w", err))
 	}
@@ -496,14 +498,19 @@ func Run(ctx context.Context, opts Options) (result Result, err error) {
 		return Result{}, failTask(err)
 	}
 
-	decisions, runs, err := executePlannedCommands(ctx, st, task.ID, opts.Runtime, opts.AllowTrustedLocal, plan.Commands, now, opts.SandboxTimeout, input.WorkDir)
-	if err != nil {
-		return Result{}, failTask(err)
-	}
-	for _, run := range runs {
-		if err := st.RecordSandboxRun(ctx, run); err != nil {
+	var decisions []review.PermissionDecisionRecord
+	var runs []review.SandboxRun
+	if sandboxValidationAvailable(input) {
+		decisions, runs, err = executePlannedCommands(ctx, st, task.ID, opts.Runtime, opts.AllowTrustedLocal, plan.Commands, now, opts.SandboxTimeout, input.WorkDir)
+		if err != nil {
 			return Result{}, failTask(err)
 		}
+		if err := recordSandboxRuns(ctx, st, runs); err != nil {
+			return Result{}, failTask(err)
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return Result{}, failTask(err)
 	}
 
 	finishedAt := resolveFinishedAt()
@@ -515,6 +522,9 @@ func Run(ctx context.Context, opts Options) (result Result, err error) {
 	task.Status = statusFor(findings, runs)
 	task.FinishedAt = &finishedAt
 	conclusion := conclusionFor(task.Status, findings, runs)
+	if !sandboxValidationAvailable(input) {
+		conclusion = "no_sandbox_run"
+	}
 	r := review.Report{
 		Task:                task,
 		Summary:             summarizeOutcome(input, files, findings, runs, plan),
@@ -603,6 +613,9 @@ func summarizeDiff(input inputsource.Source, files []review.DiffFile) string {
 
 func summarizeOutcome(input inputsource.Source, files []review.DiffFile, findings []review.Finding, runs []review.SandboxRun, plan review.ReviewPlan) string {
 	summary := fmt.Sprintf("Model plan %q coordinated skill %q for %d changed files, produced %d findings, and recorded %d sandbox runs.", plan.Model, plan.Skill, len(files), len(findings), len(runs))
+	if !sandboxValidationAvailable(input) {
+		summary += " Sandbox validation was skipped because this input has no reviewed workspace."
+	}
 	if input.Type == review.InputTypeFileList {
 		if input.RepoPath != "" {
 			return summary + fmt.Sprintf(" File-list input supplies path context only for repository %s; content-based deterministic rules require diff input.", input.RepoPath)
@@ -612,7 +625,39 @@ func summarizeOutcome(input inputsource.Source, files []review.DiffFile, finding
 	return summary
 }
 
+func sandboxValidationAvailable(input inputsource.Source) bool {
+	switch input.Type {
+	case review.InputTypeDiffFile, review.InputTypeFileList:
+		return strings.TrimSpace(input.WorkDir) != ""
+	default:
+		return true
+	}
+}
+
+func recordSandboxRuns(ctx context.Context, st store.Store, runs []review.SandboxRun) error {
+	for _, run := range runs {
+		if err := st.RecordSandboxRun(ctx, run); err != nil {
+			if ctx.Err() == nil {
+				return err
+			}
+			persistCtx, cancel := failedTaskContext(ctx)
+			retryErr := st.RecordSandboxRun(persistCtx, run)
+			cancel()
+			if retryErr != nil {
+				return retryErr
+			}
+		}
+	}
+	return nil
+}
+
+type runtimeFactory func(context.Context, string, string, string, time.Duration, string, bool) (sandboxrun.Runtime, func(), *review.SandboxRun)
+
 func executePlannedCommands(ctx context.Context, st store.Store, taskID string, runtimeName string, allowTrustedLocal bool, commands []string, now time.Time, timeout time.Duration, workDir string) ([]review.PermissionDecisionRecord, []review.SandboxRun, error) {
+	return executePlannedCommandsWithFactory(ctx, st, taskID, runtimeName, allowTrustedLocal, commands, now, timeout, workDir, runtimeForName)
+}
+
+func executePlannedCommandsWithFactory(ctx context.Context, st store.Store, taskID string, runtimeName string, allowTrustedLocal bool, commands []string, now time.Time, timeout time.Duration, workDir string, factory runtimeFactory) ([]review.PermissionDecisionRecord, []review.SandboxRun, error) {
 	if len(commands) == 0 {
 		commands = newSandboxWorkspace(workDir).commandAllowlist()
 	}
@@ -653,7 +698,7 @@ func executePlannedCommands(ctx context.Context, st store.Store, taskID string, 
 		}
 		if runtime == nil {
 			var initRun *review.SandboxRun
-			runtime, cleanup, initRun = runtimeForName(ctx, runtimeName, taskID, suffix, timeout, workDir, allowTrustedLocal)
+			runtime, cleanup, initRun = factory(ctx, runtimeName, taskID, suffix, timeout, workDir, allowTrustedLocal)
 			if initRun != nil {
 				runs = append(runs, *initRun)
 			}
@@ -663,8 +708,12 @@ func executePlannedCommands(ctx context.Context, st store.Store, taskID string, 
 		if timeout > 0 {
 			runCtx, cancel = context.WithTimeout(ctx, timeout)
 		}
-		runs = append(runs, sandboxrun.Run(runCtx, runtime, taskID, runID, command, defaultMaxSandboxOutput))
+		run := sandboxrun.Run(runCtx, runtime, taskID, runID, command, defaultMaxSandboxOutput)
+		runs = append(runs, run)
 		cancel()
+		if run.ErrorType == sandboxrun.ErrorTimeout || run.ErrorType == sandboxrun.ErrorCanceled || ctx.Err() != nil {
+			break
+		}
 	}
 	return decisions, runs, nil
 }
@@ -763,17 +812,25 @@ func newWorkspaceRuntime(ctx context.Context, runtimeName string, taskID string,
 		}
 		return nil, nil, err
 	}
-	cleanup := func() {
+	snapshotCleanup, err := stageReviewWorkspace(ctx, eng.FS(), ws, runtimeName, repoRoot)
+	if err != nil {
 		_ = eng.Manager().Cleanup(context.Background(), ws)
 		if closeFn != nil {
 			_ = closeFn()
 		}
+		return nil, nil, err
 	}
-	if runtimeName != "local" {
-		if err := eng.FS().StageDirectory(ctx, ws, repoRoot, codeexecutor.DirWork, codeexecutor.StageOptions{AllowMount: true}); err != nil {
-			cleanup()
-			return nil, nil, err
-		}
+	var cleanupOnce sync.Once
+	cleanup := func() {
+		cleanupOnce.Do(func() {
+			_ = eng.Manager().Cleanup(context.Background(), ws)
+			if closeFn != nil {
+				_ = closeFn()
+			}
+			if snapshotCleanup != nil {
+				snapshotCleanup()
+			}
+		})
 	}
 	return sandboxrun.WorkspaceRuntime{
 		RuntimeName: runtimeName,
@@ -782,7 +839,110 @@ func newWorkspaceRuntime(ctx context.Context, runtimeName string, taskID string,
 		Cwd:         workspace.runtimeCwd(runtimeName),
 		Timeout:     timeout,
 		Env:         workspaceRuntimeEnv(runtimeName),
+		TerminateFn: func(context.Context) { cleanup() },
 	}, cleanup, nil
+}
+
+func stageReviewWorkspace(ctx context.Context, fs codeexecutor.WorkspaceFS, ws codeexecutor.Workspace, runtimeName string, repoRoot string) (func(), error) {
+	if runtimeName == "local" {
+		return nil, nil
+	}
+	stageRoot := repoRoot
+	var snapshotCleanup func()
+	if runtimeName == "e2b" {
+		var err error
+		stageRoot, snapshotCleanup, err = buildReviewSnapshot(ctx, repoRoot)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if err := fs.StageDirectory(ctx, ws, stageRoot, codeexecutor.DirWork, codeexecutor.StageOptions{AllowMount: true}); err != nil {
+		if snapshotCleanup != nil {
+			snapshotCleanup()
+		}
+		return nil, err
+	}
+	return snapshotCleanup, nil
+}
+
+func buildReviewSnapshot(ctx context.Context, repoRoot string) (string, func(), error) {
+	files, err := trackedReviewFiles(ctx, repoRoot)
+	if err != nil {
+		return "", nil, err
+	}
+	snapshot, err := os.MkdirTemp("", "review-agent-snapshot-")
+	if err != nil {
+		return "", nil, fmt.Errorf("create review snapshot: %w", err)
+	}
+	cleanup := func() { _ = os.RemoveAll(snapshot) }
+	for _, file := range files {
+		if excludedReviewSnapshotPath(file) {
+			continue
+		}
+		rel := filepath.FromSlash(file)
+		clean := filepath.Clean(rel)
+		if filepath.IsAbs(clean) || clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(os.PathSeparator)) {
+			cleanup()
+			return "", nil, fmt.Errorf("unsafe review snapshot path %q", file)
+		}
+		src := filepath.Join(repoRoot, clean)
+		info, err := os.Lstat(src)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			cleanup()
+			return "", nil, fmt.Errorf("stat review snapshot file %s: %w", file, err)
+		}
+		if !info.Mode().IsRegular() {
+			continue
+		}
+		data, err := os.ReadFile(src)
+		if err != nil {
+			cleanup()
+			return "", nil, fmt.Errorf("read review snapshot file %s: %w", file, err)
+		}
+		dest := filepath.Join(snapshot, clean)
+		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+			cleanup()
+			return "", nil, fmt.Errorf("create review snapshot directory: %w", err)
+		}
+		if err := os.WriteFile(dest, data, info.Mode().Perm()); err != nil {
+			cleanup()
+			return "", nil, fmt.Errorf("write review snapshot file %s: %w", file, err)
+		}
+	}
+	return snapshot, cleanup, nil
+}
+
+func trackedReviewFiles(ctx context.Context, repoRoot string) ([]string, error) {
+	cmd := exec.CommandContext(ctx, "git", "-C", repoRoot, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
+	raw, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("list tracked review files: %w", err)
+	}
+	parts := bytes.Split(raw, []byte{0})
+	files := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if len(part) == 0 {
+			continue
+		}
+		files = append(files, filepath.ToSlash(string(part)))
+	}
+	sort.Strings(files)
+	return files, nil
+}
+
+func excludedReviewSnapshotPath(file string) bool {
+	for _, part := range strings.Split(filepath.ToSlash(file), "/") {
+		if part == ".git" {
+			return true
+		}
+	}
+	base := strings.ToLower(filepath.Base(file))
+	return base == ".env" || strings.HasPrefix(base, ".env.") ||
+		base == "review_agent.db" || base == "review_agent.db.lock" ||
+		strings.HasPrefix(base, "review_report_")
 }
 
 func validateRuntimePolicy(runtimeName string, allowTrustedLocal bool) error {

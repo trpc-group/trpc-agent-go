@@ -55,10 +55,7 @@ func NewDurable(ctx context.Context, path string) (*DurableStore, error) {
 		return nil, fmt.Errorf("create store directory: %w", err)
 	}
 	store := &DurableStore{path: path, data: newDurableData()}
-	if err := store.load(); err != nil {
-		return nil, err
-	}
-	if err := store.flush(); err != nil {
+	if err := store.initialize(ctx); err != nil {
 		return nil, err
 	}
 	return store, nil
@@ -75,131 +72,110 @@ func (s *DurableStore) Close() error {
 }
 
 func (s *DurableStore) CreateTask(ctx context.Context, task review.ReviewTask) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	task.Error = redact.Text(task.Error).Text
-	s.data.Tasks[task.ID] = task
-	return s.flush()
+	return s.mutate(ctx, func(data *durableData) error {
+		task.Error = redact.Text(task.Error).Text
+		data.Tasks[task.ID] = task
+		return nil
+	})
 }
 
 func (s *DurableStore) FinishTask(ctx context.Context, taskID string, status string, errText string, finishedAt time.Time) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	task, ok := s.data.Tasks[taskID]
-	if !ok {
-		return fmt.Errorf("finish task: task %q not found", taskID)
-	}
-	task.Status = status
-	if finishedAt.IsZero() {
-		finishedAt = time.Now().UTC()
-	} else {
-		finishedAt = finishedAt.UTC()
-	}
-	task.FinishedAt = &finishedAt
-	task.Error = redact.Text(errText).Text
-	s.data.Tasks[taskID] = task
-	return s.flush()
+	return s.mutate(ctx, func(data *durableData) error {
+		task, ok := data.Tasks[taskID]
+		if !ok {
+			return fmt.Errorf("finish task: task %q not found", taskID)
+		}
+		task.Status = status
+		if finishedAt.IsZero() {
+			finishedAt = time.Now().UTC()
+		} else {
+			finishedAt = finishedAt.UTC()
+		}
+		task.FinishedAt = &finishedAt
+		task.Error = redact.Text(errText).Text
+		data.Tasks[taskID] = task
+		return nil
+	})
 }
 
 func (s *DurableStore) RecordInput(ctx context.Context, input InputRecord) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	input.DiffSummary = redact.Text(input.DiffSummary).Text
-	input.ChangedFilesJSON = redact.Text(input.ChangedFilesJSON).Text
-	input.RedactedDiff = redact.Text(input.RedactedDiff).Text
-	s.data.Inputs[input.TaskID] = input
-	return s.flush()
+	return s.mutate(ctx, func(data *durableData) error {
+		input.DiffSummary = redact.Text(input.DiffSummary).Text
+		input.ChangedFilesJSON = redactChangedFilesJSON(input.ChangedFilesJSON)
+		input.RedactedDiff = redact.Text(input.RedactedDiff).Text
+		data.Inputs[input.TaskID] = input
+		return nil
+	})
 }
 
 func (s *DurableStore) RecordSandboxRun(ctx context.Context, run review.SandboxRun) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	run.Command = redact.Text(run.Command).Text
-	run.StdoutRedacted = redact.Text(run.StdoutRedacted).Text
-	run.StderrRedacted = redact.Text(run.StderrRedacted).Text
-	s.data.SandboxRuns[run.TaskID] = append(s.data.SandboxRuns[run.TaskID], run)
-	return s.flush()
+	return s.mutate(ctx, func(data *durableData) error {
+		run.Command = redact.Text(run.Command).Text
+		run.StdoutRedacted = redact.Text(run.StdoutRedacted).Text
+		run.StderrRedacted = redact.Text(run.StderrRedacted).Text
+		data.SandboxRuns[run.TaskID] = append(data.SandboxRuns[run.TaskID], run)
+		return nil
+	})
 }
 
 func (s *DurableStore) RecordPermissionDecision(ctx context.Context, decision review.PermissionDecisionRecord) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	decision.Command = redact.Text(decision.Command).Text
-	decision.Reason = redact.Text(decision.Reason).Text
-	s.data.PermissionDecisions[decision.TaskID] = append(s.data.PermissionDecisions[decision.TaskID], decision)
-	return s.flush()
+	return s.mutate(ctx, func(data *durableData) error {
+		decision.Command = redact.Text(decision.Command).Text
+		decision.Reason = redact.Text(decision.Reason).Text
+		data.PermissionDecisions[decision.TaskID] = append(data.PermissionDecisions[decision.TaskID], decision)
+		return nil
+	})
 }
 
 func (s *DurableStore) SaveFindings(ctx context.Context, taskID string, findings []review.Finding) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	existing := make(map[string]bool)
-	for _, finding := range s.data.Findings[taskID] {
-		existing[finding.Fingerprint] = true
-	}
-	for index, finding := range findings {
-		if finding.Fingerprint == "" {
-			finding.Fingerprint = review.Fingerprint(finding)
+	return s.mutate(ctx, func(data *durableData) error {
+		existing := make(map[string]bool)
+		for _, finding := range data.Findings[taskID] {
+			existing[finding.Fingerprint] = true
 		}
-		if finding.ID == "" {
-			finding.ID = fmt.Sprintf("%s-finding-%03d", taskID, index+1)
+		for index, finding := range findings {
+			if finding.Fingerprint == "" {
+				finding.Fingerprint = review.Fingerprint(finding)
+			}
+			if finding.ID == "" {
+				finding.ID = fmt.Sprintf("%s-finding-%03d", taskID, index+1)
+			}
+			finding.Title = redact.Text(finding.Title).Text
+			finding.Evidence = redact.Text(finding.Evidence).Text
+			finding.Recommendation = redact.Text(finding.Recommendation).Text
+			if existing[finding.Fingerprint] {
+				continue
+			}
+			existing[finding.Fingerprint] = true
+			data.Findings[taskID] = append(data.Findings[taskID], finding)
 		}
-		finding.Title = redact.Text(finding.Title).Text
-		finding.Evidence = redact.Text(finding.Evidence).Text
-		finding.Recommendation = redact.Text(finding.Recommendation).Text
-		if existing[finding.Fingerprint] {
-			continue
-		}
-		existing[finding.Fingerprint] = true
-		s.data.Findings[taskID] = append(s.data.Findings[taskID], finding)
-	}
-	return s.flush()
+		return nil
+	})
 }
 
 func (s *DurableStore) SaveArtifacts(ctx context.Context, artifacts []review.ArtifactRecord) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, artifact := range artifacts {
-		s.data.Artifacts[artifact.TaskID] = append(s.data.Artifacts[artifact.TaskID], artifact)
-	}
-	return s.flush()
+	return s.mutate(ctx, func(data *durableData) error {
+		for _, artifact := range artifacts {
+			data.Artifacts[artifact.TaskID] = append(data.Artifacts[artifact.TaskID], artifact)
+		}
+		return nil
+	})
 }
 
 func (s *DurableStore) SaveReport(ctx context.Context, report ReportRecord) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	report.Conclusion = redact.Text(report.Conclusion).Text
-	report.MetricsJSON = redact.Text(report.MetricsJSON).Text
-	s.data.Reports[report.TaskID] = report
-	return s.flush()
+	return s.mutate(ctx, func(data *durableData) error {
+		report.Conclusion = redact.Text(report.Conclusion).Text
+		report.MetricsJSON = redact.Text(report.MetricsJSON).Text
+		data.Reports[report.TaskID] = report
+		return nil
+	})
 }
 
 func (s *DurableStore) LoadTaskReport(ctx context.Context, taskID string) (TaskReport, error) {
 	if err := ctx.Err(); err != nil {
+		return TaskReport{}, err
+	}
+	if err := s.refresh(ctx); err != nil {
 		return TaskReport{}, err
 	}
 	s.mu.Lock()
@@ -219,6 +195,55 @@ func (s *DurableStore) LoadTaskReport(ctx context.Context, taskID string) (TaskR
 	}, nil
 }
 
+func (s *DurableStore) initialize(ctx context.Context) error {
+	lock, err := acquireStoreFileLock(ctx, s.path)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	s.data = newDurableData()
+	if err := s.load(); err != nil {
+		return err
+	}
+	return s.flush()
+}
+
+func (s *DurableStore) mutate(ctx context.Context, mutate func(*durableData) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	lock, err := acquireStoreFileLock(ctx, s.path)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	s.data = newDurableData()
+	if err := s.load(); err != nil {
+		return err
+	}
+	if err := mutate(&s.data); err != nil {
+		return err
+	}
+	return s.flush()
+}
+
+func (s *DurableStore) refresh(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	lock, err := acquireStoreFileLock(ctx, s.path)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	s.data = newDurableData()
+	return s.load()
+}
+
 func (s *DurableStore) load() error {
 	b, err := os.ReadFile(s.path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -235,6 +260,18 @@ func (s *DurableStore) load() error {
 	}
 	s.data.ensure()
 	return nil
+}
+
+func redactChangedFilesJSON(raw string) string {
+	var files []review.DiffFile
+	if err := json.Unmarshal([]byte(raw), &files); err != nil {
+		return redact.Text(raw).Text
+	}
+	encoded, err := json.Marshal(redact.DiffFiles(files))
+	if err != nil {
+		return redact.Text(raw).Text
+	}
+	return string(encoded)
 }
 
 func (s *DurableStore) flush() error {

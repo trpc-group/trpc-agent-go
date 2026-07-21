@@ -42,9 +42,9 @@ English:
 The agent supports four input modes:
 
 - `--fixture-dir`: loads a directory of test diffs and expected review scenarios.
-- `--diff-file`: reads one unified diff file directly.
+- `--diff-file`: reads one unified diff file directly; it may be combined with `--repo-path` to associate sandbox validation with the patched checkout.
 - `--repo-path`: inspects a Git workspace, derives current changes, and runs sandbox commands in that workspace.
-- `--file-list`: reads a newline-delimited list of file paths for planning and sandbox context; it may be combined with `--repo-path` to identify the repository that owns those paths. Content-based deterministic rules require diff input.
+- `--file-list`: reads a newline-delimited list of file paths for planning and sandbox context; it may be combined with `--repo-path` to identify the repository that owns those paths. Without a repository, sandbox validation is skipped. Content-based deterministic rules require diff input.
 
 Unified diffs are parsed into files, hunks, added/deleted/context lines, and candidate line numbers. Go package information is extracted when available so checks can be scoped to the right module or package. Fixture mode is primarily used for deterministic acceptance tests, while repo and diff modes are closer to real review usage.
 
@@ -52,9 +52,9 @@ Unified diffs are parsed into files, hunks, added/deleted/context lines, and can
 Agent 支持四种输入模式：
 
 - `--fixture-dir`：读取测试 fixture 目录中的 diff 和审查场景。
-- `--diff-file`：直接读取一个 unified diff 文件。
+- `--diff-file`：直接读取一个 unified diff 文件；可以与 `--repo-path` 组合，将 sandbox 校验关联到补丁所属 checkout。
 - `--repo-path`：检查 Git 工作区、提取当前变更，并在该工作区运行沙箱命令。
-- `--file-list`：读取按行分隔的文件路径列表，用于 planning 和 sandbox 上下文；可以与 `--repo-path` 组合以明确路径所属仓库；基于内容的确定性规则需要 diff 输入。
+- `--file-list`：读取按行分隔的文件路径列表，用于 planning 和 sandbox 上下文；可以与 `--repo-path` 组合以明确路径所属仓库；未提供仓库时跳过 sandbox 校验；基于内容的确定性规则需要 diff 输入。
 
 Unified diff 会被解析为文件、hunk、新增/删除/上下文行以及候选行号。对于 Go 代码，会尽量提取 package 信息，便于把检查限定到正确的 module 或 package。fixture 模式主要用于确定性验收测试，repo 和 diff 模式更接近真实审查场景。
 
@@ -93,13 +93,17 @@ The implementation also tracks status and fingerprint metadata. High-confidence 
 ## 5. Sandbox Isolation Strategy / 沙箱隔离策略
 
 English:
-For the container runtime, the orchestrator stages the selected workspace into an isolated workspace. Fixture and standalone diff inputs run commands from the example module directory so the sample's review scripts and rules are available. `--repo-path` inputs, including file-list inputs paired with `--repo-path`, run commands from the selected repository root instead, and the command allowlist is limited to checks that are valid in an arbitrary Go repository, such as `go test ./...` and `go vet ./...`. The container is unprivileged, auto-removed, resource-limited, and only the reviewed workspace is mounted. Network mode is explicitly set to `none`; the image/runtime must provide dependencies for `GOMODCACHE=/go/pkg/mod` because the host-wide module cache is never mounted. The runtime also sets container-safe Go paths such as `HOME=/tmp`, `GOPATH=/go`, and `GOCACHE=/tmp/go-build`.
+For the container runtime, the orchestrator stages the selected workspace into an isolated workspace. Fixture inputs run commands from the example module directory so the sample's review scripts and rules are available. Standalone diff and file-list inputs without `--repo-path` skip sandbox validation; associated `--repo-path` inputs run commands from the selected repository root, and the command allowlist is limited to checks that are valid in an arbitrary Go repository, such as `go test ./...` and `go vet ./...`. The container is unprivileged, auto-removed, resource-limited, and only the reviewed workspace is mounted. Network mode is explicitly set to `none`; the image/runtime must provide dependencies for `GOMODCACHE=/go/pkg/mod` because the host-wide module cache is never mounted. The runtime also sets container-safe Go paths such as `HOME=/tmp`, `GOPATH=/go`, and `GOCACHE=/tmp/go-build`.
+
+For E2B, the upload boundary uses a temporary review snapshot built from `git ls-files --cached --others --exclude-standard`. Git metadata, ignored files, environment files, and local report/store artifacts are excluded before `StageDirectory` uploads the snapshot.
 
 
 Execution is bounded by command timeouts and output size limits. Stdout and stderr are redacted before they are stored or reported. Sandbox failures, command failures, timeouts, and truncated output are recorded as sandbox run records instead of crashing the whole review task.
 
 中文：
-在 container runtime 中，orchestrator 会把选中的工作区 staging 到隔离 workspace。fixture 和单独 diff 输入会从示例模块目录执行命令，便于使用示例自带的 review scripts 和 rules。`--repo-path` 输入（包括与 `--repo-path` 组合的 file-list 输入）会从用户选择的仓库根目录执行命令，并将命令 allowlist 限制为适用于任意 Go 仓库的检查，例如 `go test ./...` 和 `go vet ./...`。容器以非特权方式运行，执行结束后自动删除，并设置资源上限；只挂载被审查的工作区。网络模式显式设置为 `none`；沙箱命令不会通过网络下载 Go module，镜像或 runtime 必须自行提供 `GOMODCACHE=/go/pkg/mod` 所需依赖，绝不挂载宿主机全局 module cache。runtime 还会设置容器内安全的 Go 路径，例如 `HOME=/tmp`、`GOPATH=/go` 和 `GOCACHE=/tmp/go-build`。
+在 container runtime 中，orchestrator 会把选中的工作区 staging 到隔离 workspace。fixture 输入会从示例模块目录执行命令，便于使用示例自带的 review scripts 和 rules。未提供 `--repo-path` 的单独 diff 和 file-list 输入会跳过 sandbox 校验；关联 `--repo-path` 的输入会从用户选择的仓库根目录执行命令，并将命令 allowlist 限制为适用于任意 Go 仓库的检查，例如 `go test ./...` 和 `go vet ./...`。容器以非特权方式运行，执行结束后自动删除，并设置资源上限；只挂载被审查的工作区。网络模式显式设置为 `none`；沙箱命令不会通过网络下载 Go module，镜像或 runtime 必须自行提供 `GOMODCACHE=/go/pkg/mod` 所需依赖，绝不挂载宿主机全局 module cache。runtime 还会设置容器内安全的 Go 路径，例如 `HOME=/tmp`、`GOPATH=/go` 和 `GOCACHE=/tmp/go-build`。
+
+对于 E2B，上传边界使用由 `git ls-files --cached --others --exclude-standard` 构建的临时 review snapshot。在 `StageDirectory` 上传前会排除 Git 元数据、ignored 文件、环境文件以及本地 report/store 产物。
 
 
 命令执行受 timeout 和输出大小限制约束。stdout 和 stderr 在落库或写入报告前会先做脱敏处理。沙箱初始化失败、命令失败、超时、输出截断都会记录为 sandbox run，而不是让整个 review task 崩溃。
@@ -237,18 +241,18 @@ This boundary is especially important because code review agents operate on untr
 ## 11. Report Artifacts / 报告产物
 
 English:
-Each run writes two primary reports:
+Each run writes two task-specific primary reports:
 
-- `review_report.json`: structured report for automated checks, CI integration, and database comparison.
-- `review_report.md`: human-readable report with summaries, severity distribution, review findings, human-review items, governance decisions, sandbox summaries, metrics, and fix recommendations.
+- `review_report_<task-id>.json`: structured report for automated checks, CI integration, and database comparison.
+- `review_report_<task-id>.md`: human-readable report with summaries, severity distribution, review findings, human-review items, governance decisions, sandbox summaries, metrics, and fix recommendations.
 
 The output directory also contains the durable review store, currently `review_agent.db`. The store is intended to support task-level queries and historical audit. A review can be accepted only when the reports and store agree on task status, sandbox runs, permission decisions, findings, metrics, artifacts, and final conclusion.
 
 中文：
 每次运行会写出两个主要报告：
 
-- `review_report.json`：结构化报告，供自动化检查、CI 集成和数据库比对使用。
-- `review_report.md`：面向人的报告，包含摘要、severity 分布、findings、人工复核项、治理决策、沙箱摘要、监控指标和修复建议。
+- `review_report_<task-id>.json`：结构化报告，供自动化检查、CI 集成和数据库比对使用。
+- `review_report_<task-id>.md`：面向人的报告，包含摘要、severity 分布、findings、人工复核项、治理决策、沙箱摘要、监控指标和修复建议。
 
 输出目录还会包含持久化 review store，目前为 `review_agent.db`。该 store 用于支持按 task 查询和历史审计。只有当报告和 store 中的 task 状态、sandbox run、permission decision、finding、metrics、artifact 和最终结论一致时，才算完整可验收。
 

@@ -50,12 +50,12 @@ func Read(ctx context.Context, opts Options) (Source, error) {
 		return Source{}, err
 	}
 	selected := configured(opts)
-	if strings.TrimSpace(opts.DiffFile) != "" && (strings.TrimSpace(opts.RepoPath) != "" || strings.TrimSpace(opts.FileList) != "") {
+	if strings.TrimSpace(opts.DiffFile) != "" && strings.TrimSpace(opts.FileList) != "" {
 		return Source{}, fmt.Errorf("choose only one input source: %s", strings.Join(selected, ", "))
 	}
 	switch {
 	case strings.TrimSpace(opts.DiffFile) != "":
-		return readDiffFile(opts.DiffFile)
+		return readDiffFile(opts.DiffFile, opts.RepoPath)
 	case strings.TrimSpace(opts.FileList) != "":
 		return readFileList(opts.FileList, opts.RepoPath)
 	case strings.TrimSpace(opts.RepoPath) != "":
@@ -124,15 +124,25 @@ func normalizeFixtureDiff(raw []byte) []byte {
 	return raw
 }
 
-func readDiffFile(path string) (Source, error) {
+func readDiffFile(path string, repoPath string) (Source, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return Source{}, fmt.Errorf("read diff file: %w", err)
 	}
+	absRepo, err := resolveRepoPath(repoPath)
+	if err != nil {
+		return Source{}, err
+	}
+	summary := fmt.Sprintf("Reviewed unified diff file %s.", filepath.Base(path))
+	if absRepo != "" {
+		summary = fmt.Sprintf("Reviewed unified diff file %s for repository %s.", filepath.Base(path), absRepo)
+	}
 	return Source{
-		Type:    review.InputTypeDiffFile,
-		Diff:    string(raw),
-		Summary: fmt.Sprintf("Reviewed unified diff file %s.", filepath.Base(path)),
+		Type:     review.InputTypeDiffFile,
+		Diff:     string(raw),
+		RepoPath: absRepo,
+		WorkDir:  absRepo,
+		Summary:  summary,
 	}, nil
 }
 

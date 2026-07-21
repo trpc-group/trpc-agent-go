@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
@@ -30,6 +31,7 @@ const (
 	ErrorCommandFailed      = "command_failed"
 	ErrorPermissionBlocked  = "permission_blocked"
 	ErrorTimeout            = "timeout"
+	ErrorCanceled           = "canceled"
 )
 
 // Result is the raw outcome from a runtime.
@@ -37,12 +39,18 @@ type Result struct {
 	ExitCode int
 	Stdout   string
 	Stderr   string
+	TimedOut bool
 }
 
 // Runtime executes a command in a workspace runtime.
 type Runtime interface {
 	Name() string
 	Run(ctx context.Context, command string) (Result, error)
+}
+
+// Terminator stops a runtime after a timed-out or canceled command.
+type Terminator interface {
+	Terminate(context.Context)
 }
 
 // WorkspaceRuntime executes shell commands through a codeexecutor workspace
@@ -55,6 +63,7 @@ type WorkspaceRuntime struct {
 	Cwd         string
 	Env         map[string]string
 	Timeout     time.Duration
+	TerminateFn func(context.Context)
 }
 
 func (r WorkspaceRuntime) Name() string {
@@ -81,11 +90,19 @@ func (r WorkspaceRuntime) Run(ctx context.Context, command string) (Result, erro
 		ExitCode: res.ExitCode,
 		Stdout:   res.Stdout,
 		Stderr:   res.Stderr,
+		TimedOut: res.TimedOut,
 	}
 	if res.TimedOut && err == nil {
 		err = context.DeadlineExceeded
 	}
 	return out, err
+}
+
+// Terminate stops the runtime workspace and its underlying process container.
+func (r WorkspaceRuntime) Terminate(ctx context.Context) {
+	if r.TerminateFn != nil {
+		r.TerminateFn(ctx)
+	}
 }
 
 // FakeRuntime is a deterministic test/runtime seam.
@@ -133,7 +150,28 @@ func Run(ctx context.Context, runtime Runtime, taskID string, id string, command
 			ErrorType:      ErrorRuntimeUnavailable,
 		}
 	}
+	var terminate func()
+	if terminator, ok := runtime.(Terminator); ok {
+		var terminateOnce sync.Once
+		terminate = func() {
+			terminateOnce.Do(func() {
+				terminator.Terminate(context.WithoutCancel(ctx))
+			})
+		}
+		stopMonitor := make(chan struct{})
+		defer close(stopMonitor)
+		go func() {
+			select {
+			case <-ctx.Done():
+				terminate()
+			case <-stopMonitor:
+			}
+		}()
+	}
 	res, err := runtime.Run(ctx, command)
+	if err == nil && res.TimedOut {
+		err = context.DeadlineExceeded
+	}
 	stdout := truncate(redact.Text(res.Stdout).Text, maxOutput)
 	stderr := truncate(redact.Text(res.Stderr).Text, maxOutput)
 	record := review.SandboxRun{
@@ -154,8 +192,16 @@ func Run(ctx context.Context, runtime Runtime, taskID string, id string, command
 		record.StderrRedacted = truncate(redact.Text(err.Error()).Text, maxOutput).Text
 		if errors.Is(err, context.DeadlineExceeded) {
 			record.ErrorType = ErrorTimeout
+		} else if errors.Is(err, context.Canceled) {
+			record.ErrorType = ErrorCanceled
+		}
+		if terminate != nil && (record.ErrorType == ErrorTimeout || record.ErrorType == ErrorCanceled || res.TimedOut) {
+			terminate()
 		}
 		return record
+	}
+	if terminate != nil && res.TimedOut {
+		terminate()
 	}
 	if res.ExitCode != 0 {
 		record.Status = StatusFailed

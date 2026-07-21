@@ -32,6 +32,31 @@ func TestReadDiffFile(t *testing.T) {
 	if !strings.Contains(src.Diff, "diff --git") {
 		t.Fatalf("Diff did not contain unified diff content")
 	}
+	if src.WorkDir != "" || src.RepoPath != "" {
+		t.Fatalf("standalone diff unexpectedly has workspace: %#v", src)
+	}
+}
+
+func TestReadDiffFileAssociatesRepositoryWorkspace(t *testing.T) {
+	repo := t.TempDir()
+	path := filepath.Join(t.TempDir(), "change.diff")
+	if err := os.WriteFile(path, []byte("diff --git a/pkg/a.go b/pkg/a.go\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(diff) error = %v", err)
+	}
+	src, err := Read(context.Background(), Options{DiffFile: path, RepoPath: repo})
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	wantRepo, err := filepath.Abs(repo)
+	if err != nil {
+		t.Fatalf("Abs(repo) error = %v", err)
+	}
+	if src.RepoPath != wantRepo || src.WorkDir != wantRepo {
+		t.Fatalf("workspace = %q/%q, want %q/%q", src.RepoPath, src.WorkDir, wantRepo, wantRepo)
+	}
+	if !strings.Contains(src.Summary, wantRepo) {
+		t.Fatalf("Summary = %q, want repository path", src.Summary)
+	}
 }
 
 func TestReadFixturesNormalizesLineEndings(t *testing.T) {
@@ -125,7 +150,7 @@ func TestUntrackedFileDiffQuotesAndPreservesSpecialPath(t *testing.T) {
 func TestReadRejectsMultipleInputSources(t *testing.T) {
 	_, err := Read(context.Background(), Options{
 		DiffFile: "a.diff",
-		RepoPath: ".",
+		FileList: "files.txt",
 	})
 	if err == nil || !strings.Contains(err.Error(), "choose only one input source") {
 		t.Fatalf("Read() error = %v, want multiple input source error", err)

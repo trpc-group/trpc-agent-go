@@ -49,3 +49,54 @@ func TestShellFallbackUsesShellForEmptyCommand(t *testing.T) {
 		t.Fatalf("shellArgs(empty) = %#v, want [-c true]", args)
 	}
 }
+
+type terminatingRuntime struct {
+	terminated bool
+	err        error
+}
+
+func (r *terminatingRuntime) Name() string { return "container" }
+
+func (r *terminatingRuntime) Run(context.Context, string) (Result, error) {
+	return Result{}, r.err
+}
+
+func (r *terminatingRuntime) Terminate(context.Context) {
+	r.terminated = true
+}
+
+func TestRunTerminatesRuntimeAfterCancellation(t *testing.T) {
+	runtime := &terminatingRuntime{err: context.Canceled}
+	run := Run(context.Background(), runtime, "task-1", "run-1", "go test ./...", 1024)
+	if run.ErrorType != ErrorCanceled {
+		t.Fatalf("ErrorType = %q, want %q", run.ErrorType, ErrorCanceled)
+	}
+	if !runtime.terminated {
+		t.Fatal("runtime was not terminated after cancellation")
+	}
+}
+
+func TestRunTerminatesRuntimeAfterTimeoutResult(t *testing.T) {
+	runtime := &terminatingRuntime{}
+	run := Run(context.Background(), timeoutResultRuntime{runtime: runtime}, "task-1", "run-1", "go test ./...", 1024)
+	if run.ErrorType != ErrorTimeout {
+		t.Fatalf("ErrorType = %q, want %q", run.ErrorType, ErrorTimeout)
+	}
+	if !runtime.terminated {
+		t.Fatal("runtime was not terminated after timeout")
+	}
+}
+
+type timeoutResultRuntime struct {
+	runtime *terminatingRuntime
+}
+
+func (r timeoutResultRuntime) Name() string { return r.runtime.Name() }
+
+func (r timeoutResultRuntime) Run(context.Context, string) (Result, error) {
+	return Result{TimedOut: true}, nil
+}
+
+func (r timeoutResultRuntime) Terminate(ctx context.Context) {
+	r.runtime.Terminate(ctx)
+}

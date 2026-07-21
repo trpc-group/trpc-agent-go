@@ -829,7 +829,7 @@
       "id": "json_report-review-dbabce9d1bfa",
       "task_id": "review-dbabce9d1bfa",
       "kind": "json_report",
-      "path": "review_report.json",
+      "path": "review_report_review-dbabce9d1bfa.json",
       "mime_type": "application/json",
       "created_at": "2026-07-06T00:00:00Z"
     },
@@ -837,7 +837,7 @@
       "id": "markdown_report-review-dbabce9d1bfa",
       "task_id": "review-dbabce9d1bfa",
       "kind": "markdown_report",
-      "path": "review_report.md",
+      "path": "review_report_review-dbabce9d1bfa.md",
       "mime_type": "text/markdown",
       "created_at": "2026-07-06T00:00:00Z"
     }

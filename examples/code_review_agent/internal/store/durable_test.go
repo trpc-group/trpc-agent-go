@@ -206,6 +206,79 @@ func TestDurableStoreSaveFindingsComputesMissingFingerprints(t *testing.T) {
 	}
 }
 
+func TestDurableStoreRedactsQuotedChangedFilesBeforeMarshal(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "review_agent.db")
+	s, err := NewSQLite(ctx, path)
+	if err != nil {
+		t.Fatalf("NewSQLite() error = %v", err)
+	}
+	defer s.Close()
+	if err := s.CreateTask(ctx, review.ReviewTask{ID: "task-quoted", Status: review.TaskStatusRunning}); err != nil {
+		t.Fatalf("CreateTask() error = %v", err)
+	}
+	changedFiles, err := json.Marshal([]review.DiffFile{{
+		OldPath: "pkg/config.go",
+		NewPath: "pkg/config.go",
+		Hunks: []review.DiffHunk{{Lines: []review.DiffLine{
+			{Kind: "+", Content: `password="quoted-password-value"`},
+			{Kind: "+", Content: `token="quoted-token-value"`},
+			{Kind: "+", Content: `api_key="quoted-api-key-value"`},
+		}}},
+	}})
+	if err != nil {
+		t.Fatalf("Marshal(changed files) error = %v", err)
+	}
+	if err := s.RecordInput(ctx, InputRecord{TaskID: "task-quoted", ChangedFilesJSON: string(changedFiles)}); err != nil {
+		t.Fatalf("RecordInput() error = %v", err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(store) error = %v", err)
+	}
+	for _, secret := range []string{"quoted-password-value", "quoted-token-value", "quoted-api-key-value"} {
+		if strings.Contains(string(raw), secret) {
+			t.Fatalf("store leaked quoted secret %q: %s", secret, raw)
+		}
+	}
+}
+
+func TestDurableStoreIndependentHandlesPreserveUpdates(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "review_agent.db")
+	first, err := NewSQLite(ctx, path)
+	if err != nil {
+		t.Fatalf("NewSQLite(first) error = %v", err)
+	}
+	defer first.Close()
+	second, err := NewSQLite(ctx, path)
+	if err != nil {
+		t.Fatalf("NewSQLite(second) error = %v", err)
+	}
+	defer second.Close()
+	for _, item := range []struct {
+		store *DurableStore
+		id    string
+	}{
+		{store: first, id: "task-first"},
+		{store: second, id: "task-second"},
+	} {
+		if err := item.store.CreateTask(ctx, review.ReviewTask{ID: item.id, Status: review.TaskStatusRunning}); err != nil {
+			t.Fatalf("CreateTask(%s) error = %v", item.id, err)
+		}
+	}
+	reopened, err := NewSQLite(ctx, path)
+	if err != nil {
+		t.Fatalf("NewSQLite(reopened) error = %v", err)
+	}
+	defer reopened.Close()
+	for _, id := range []string{"task-first", "task-second"} {
+		if _, err := reopened.LoadTaskReport(ctx, id); err != nil {
+			t.Fatalf("LoadTaskReport(%s) error = %v", id, err)
+		}
+	}
+}
+
 func TestReviewTaskOmitsZeroFinishedAt(t *testing.T) {
 	task := review.ReviewTask{
 		ID:        "task-1",

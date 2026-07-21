@@ -31,8 +31,9 @@ the evidence is plausible but not strong enough, route it to `warning` or
    skipped, failed, or unavailable runs instead of silently falling back.
 7. Redact secrets before persisting findings, sandbox output, reports, metrics,
    or audit records.
-8. Generate both `review_report.json` and `review_report.md` from the same
-   structured review result.
+8. Generate task-specific `review_report_<task-id>.json` and
+   `review_report_<task-id>.md` artifacts from the same structured review
+   result.
 
 ## Bundled Resources
 
