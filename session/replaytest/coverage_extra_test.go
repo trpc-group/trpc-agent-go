@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -131,7 +132,9 @@ func TestRun_RejectsEmptyBackendNameAndUnknownRule(t *testing.T) {
 	}
 
 	h2 := NewHarness(DefaultHarnessOpts())
-	h2.AddBackend(openInMemoryBackend(t))
+	b2 := openInMemoryBackend(t)
+	h2.opts.ReferenceBackend = b2.Name
+	h2.AddBackend(b2)
 	_, err = h2.Run(context.Background(), []ReplayCase{{
 		Name:         "bad-rule",
 		AllowedDiffs: []AllowedDiff{{PathPattern: "x", Rule: "mystery"}},
@@ -139,6 +142,211 @@ func TestRun_RejectsEmptyBackendNameAndUnknownRule(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "unknown rule") {
 		t.Fatalf("err=%v", err)
 	}
+}
+
+func TestRun_RejectsEmptyBackends(t *testing.T) {
+	h := NewHarness(DefaultHarnessOpts())
+	// No AddBackend: must not produce a green report of "passed" cases.
+	report, err := h.Run(context.Background(), []ReplayCase{CaseSingleTurnText()})
+	if err == nil {
+		t.Fatalf("expected config error, got report=%+v", report)
+	}
+	if !strings.Contains(err.Error(), "no backends") {
+		t.Fatalf("err=%v", err)
+	}
+	if report != nil {
+		t.Fatalf("expected nil report on config error, got %+v", report)
+	}
+}
+
+func TestRun_RejectsUnregisteredReference(t *testing.T) {
+	// Default ReferenceBackend is "inmemory"; register only a differently named backend.
+	h := NewHarness(DefaultHarnessOpts())
+	b := openInMemoryBackend(t)
+	b.Name = "sqlite-like"
+	h.AddBackend(b)
+	_, err := h.Run(context.Background(), []ReplayCase{CaseSingleTurnText()})
+	if err == nil {
+		t.Fatal("expected error for unregistered reference backend")
+	}
+	if !strings.Contains(err.Error(), "not registered") {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestRun_RejectsCapabilitySkippedReference(t *testing.T) {
+	// Reference is registered but lacks caps for this case; two other backends
+	// still produce snapshots. Without a hard error, referencePairs would have
+	// silently re-based onto map iteration order.
+	h := NewHarness(HarnessOpts{
+		ComparisonMode:   ComparisonReference,
+		ReferenceBackend: "ref",
+		Mode:             "lightweight",
+	})
+	ref := openInMemoryBackend(t)
+	ref.Name = "ref"
+	ref.Profile.SupportsTrack = false
+	a := openInMemoryBackend(t)
+	a.Name = "a"
+	b := openInMemoryBackend(t)
+	b.Name = "b"
+	h.AddBackend(ref)
+	h.AddBackend(a)
+	h.AddBackend(b)
+
+	_, err := h.Run(context.Background(), []ReplayCase{CaseTrackEvents()})
+	if err == nil {
+		t.Fatal("expected error when reference is capability-skipped but other backends compared")
+	}
+	if !strings.Contains(err.Error(), "reference backend") && !strings.Contains(err.Error(), "no snapshot") {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+// getSessionFailService wraps a real session.Service but makes GetSession fail,
+// so ensureSession must not fall through to CreateSession.
+type getSessionFailService struct {
+	session.Service
+	getErr  error
+	creates int
+}
+
+func (s *getSessionFailService) GetSession(ctx context.Context, key session.Key, options ...session.Option) (*session.Session, error) {
+	return nil, s.getErr
+}
+
+func (s *getSessionFailService) CreateSession(ctx context.Context, key session.Key, state session.StateMap, options ...session.Option) (*session.Session, error) {
+	s.creates++
+	return s.Service.CreateSession(ctx, key, state, options...)
+}
+
+func TestEnsureSession_PropagatesGetSessionError(t *testing.T) {
+	base := openInMemoryBackend(t)
+	wantErr := errors.New("simulated getsession outage")
+	failing := &getSessionFailService{Service: base.SessionService, getErr: wantErr}
+	b := NamedBackend{
+		Name:           "fail-get",
+		Profile:        base.Profile,
+		SessionService: failing,
+		MemoryService:  base.MemoryService,
+	}
+	key := SessionKeyFor("get_err")
+	_, err := executeCase(context.Background(), ReplayCase{
+		Name: "get_err",
+		Steps: []Step{
+			// ensureSession path: no cache yet → GetSession then would Create if error swallowed.
+			UpdateStateStep{
+				StepKey: "sess.set", Scope: "session", SessionKey: key,
+				State: session.StateMap{"k": []byte("v")},
+			},
+		},
+	}, b)
+	if err == nil {
+		t.Fatal("expected GetSession error to surface")
+	}
+	if !errors.Is(err, wantErr) && !strings.Contains(err.Error(), wantErr.Error()) {
+		t.Fatalf("err=%v want wrap/contain %v", err, wantErr)
+	}
+	if failing.creates != 0 {
+		t.Fatalf("CreateSession called %d times; must not create after GetSession error", failing.creates)
+	}
+}
+
+func TestCreateSummary_PropagatesGetSessionError(t *testing.T) {
+	// Session already exists on the real service. First GetSession (ensureSession)
+	// succeeds; second GetSession (createSummary refresh) fails and must surface.
+	base := openInMemoryBackend(t)
+	key := SessionKeyFor("sum_get_err")
+	if _, err := executeCase(context.Background(), ReplayCase{
+		Name: "seed",
+		Steps: []Step{
+			AppendEventStep{StepKey: "e", SessionKey: key, Event: UserEvent("e", "hi")},
+		},
+	}, base); err != nil {
+		t.Fatal(err)
+	}
+	wantErr := errors.New("refresh getsession failed")
+	failing := &getSessionCountFailService{
+		Service: base.SessionService, failAfter: 1, getErr: wantErr,
+	}
+	b := NamedBackend{
+		Name: "fail-refresh", Profile: base.Profile,
+		SessionService: failing, MemoryService: base.MemoryService,
+	}
+	_, err := executeCase(context.Background(), ReplayCase{
+		Name: "sum_get_err",
+		Steps: []Step{
+			CreateSummaryStep{StepKey: "sum", SessionKey: key, Force: true},
+		},
+	}, b)
+	if err == nil {
+		t.Fatal("expected GetSession error from createSummary refresh")
+	}
+	if !errors.Is(err, wantErr) && !strings.Contains(err.Error(), wantErr.Error()) {
+		t.Fatalf("err=%v", err)
+	}
+	if failing.creates != 0 {
+		t.Fatalf("CreateSession called %d times after GetSession error", failing.creates)
+	}
+}
+
+func TestAppendTrack_PropagatesGetSessionError(t *testing.T) {
+	base := openInMemoryBackend(t)
+	key := SessionKeyFor("track_get_err")
+	if _, err := executeCase(context.Background(), ReplayCase{
+		Name: "seed",
+		Steps: []Step{
+			AppendEventStep{StepKey: "e", SessionKey: key, Event: UserEvent("e", "hi")},
+		},
+	}, base); err != nil {
+		t.Fatal(err)
+	}
+	wantErr := errors.New("track refresh getsession failed")
+	failing := &getSessionCountFailService{
+		Service: base.SessionService, failAfter: 1, getErr: wantErr,
+	}
+	b := NamedBackend{
+		Name: "fail-track-refresh", Profile: base.Profile,
+		SessionService: failing, MemoryService: base.MemoryService,
+	}
+	_, err := executeCase(context.Background(), ReplayCase{
+		Name: "track_get_err",
+		Steps: []Step{
+			AppendTrackStep{StepKey: "tr", SessionKey: key, Event: TrackPayload("tool", `{"n":1}`)},
+		},
+	}, b)
+	if err == nil {
+		t.Fatal("expected GetSession error from appendTrack refresh")
+	}
+	if !errors.Is(err, wantErr) && !strings.Contains(err.Error(), wantErr.Error()) {
+		t.Fatalf("err=%v", err)
+	}
+	if failing.creates != 0 {
+		t.Fatalf("CreateSession called %d times after GetSession error", failing.creates)
+	}
+}
+
+// getSessionCountFailService succeeds for the first failAfter GetSession calls,
+// then returns getErr. CreateSession is counted if ever invoked.
+type getSessionCountFailService struct {
+	session.Service
+	failAfter int
+	n         int
+	getErr    error
+	creates   int
+}
+
+func (s *getSessionCountFailService) GetSession(ctx context.Context, key session.Key, options ...session.Option) (*session.Session, error) {
+	s.n++
+	if s.n > s.failAfter {
+		return nil, s.getErr
+	}
+	return s.Service.GetSession(ctx, key, options...)
+}
+
+func (s *getSessionCountFailService) CreateSession(ctx context.Context, key session.Key, state session.StateMap, options ...session.Option) (*session.Session, error) {
+	s.creates++
+	return s.Service.CreateSession(ctx, key, state, options...)
 }
 
 func TestHarness_AllPairsAndFailedStatus(t *testing.T) {
@@ -172,10 +380,22 @@ func TestHarness_AllPairsAndFailedStatus(t *testing.T) {
 	if len(pairs) != 3 {
 		t.Fatalf("pairs=%d want 3: %v", len(pairs), pairs)
 	}
-	// referencePairs fallback when reference missing
-	pairs = referencePairs("missing", snaps)
+	// referencePairs must error when reference is missing (no silent fallback).
+	if _, err := referencePairs("missing", snaps); err == nil {
+		t.Fatal("expected error when reference backend has no snapshot")
+	}
+	// Deterministic orientation when reference is present.
+	pairs, err = referencePairs("b", snaps)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(pairs) != 2 {
-		t.Fatalf("reference pairs=%d want 2", len(pairs))
+		t.Fatalf("pairs=%d want 2: %v", len(pairs), pairs)
+	}
+	for _, p := range pairs {
+		if p[0] != "b" {
+			t.Fatalf("reference should be first in pair: %v", p)
+		}
 	}
 
 	// finalize failed vs skipped keep
@@ -333,6 +553,77 @@ func TestExecuteCase_ParallelGroupError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected parallel branch error")
 	}
+}
+
+func TestExecuteCase_ParallelConcurrentInterleaved(t *testing.T) {
+	// Built-in concurrent case under race detector (enable with go test -race).
+	b := openInMemoryBackend(t)
+	snap, err := executeCase(context.Background(), CaseConcurrentInterleaved(), b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.Session == nil {
+		t.Fatal("nil session")
+	}
+	// seed + 2 branches * 2 events
+	if n := len(snap.Session.Events); n != 5 {
+		t.Fatalf("events=%d want 5", n)
+	}
+}
+
+func TestExecuteCase_ParallelFirstWriteNewSession(t *testing.T) {
+	// Two branches first-touch the same new session without a serial seed.
+	// ensureSession must single-flight CreateSession and stay race-free.
+	base := openInMemoryBackend(t)
+	key := SessionKeyFor("pg_first_write")
+	counting := &createCountService{Service: base.SessionService}
+	b := NamedBackend{
+		Name: "pg-first", Profile: base.Profile,
+		SessionService: counting, MemoryService: base.MemoryService,
+	}
+	tc := ReplayCase{
+		Name: "pg_first_write",
+		Steps: []Step{
+			ParallelGroupStep{
+				StepKey: "pg",
+				Branches: [][]Step{
+					{
+						AppendEventStep{StepKey: "a1", SessionKey: key, Event: BranchEvent("a1", "A", "a1")},
+						AppendEventStep{StepKey: "a2", SessionKey: key, Event: BranchEvent("a2", "A", "a2")},
+					},
+					{
+						AppendEventStep{StepKey: "b1", SessionKey: key, Event: BranchEvent("b1", "B", "b1")},
+						AppendEventStep{StepKey: "b2", SessionKey: key, Event: BranchEvent("b2", "B", "b2")},
+					},
+				},
+			},
+			GetSessionStep{StepKey: "get", SessionKey: key},
+		},
+	}
+	snap, err := executeCase(context.Background(), tc, b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counting.creates != 1 {
+		t.Fatalf("CreateSession calls=%d want 1 (single-flight)", counting.creates)
+	}
+	if snap.Session == nil || len(snap.Session.Events) != 4 {
+		t.Fatalf("session events=%v", snap)
+	}
+}
+
+// createCountService counts CreateSession invocations.
+type createCountService struct {
+	session.Service
+	creates int
+	mu      sync.Mutex
+}
+
+func (s *createCountService) CreateSession(ctx context.Context, key session.Key, state session.StateMap, options ...session.Option) (*session.Session, error) {
+	s.mu.Lock()
+	s.creates++
+	s.mu.Unlock()
+	return s.Service.CreateSession(ctx, key, state, options...)
 }
 
 func TestExecuteCase_ReloadMissing(t *testing.T) {

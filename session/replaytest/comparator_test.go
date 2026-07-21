@@ -366,6 +366,75 @@ func TestComparator_SessionPresence(t *testing.T) {
 	}
 }
 
+func TestComparator_SessionIdentityFields(t *testing.T) {
+	cmp := NewComparator()
+	tc := ReplayCase{Name: "session_identity"}
+	evt := *UserEvent("e1", "hello")
+	baseSess := func() *session.Session {
+		return &session.Session{
+			ID:      "session-s1",
+			AppName: DefaultApp,
+			UserID:  DefaultUser,
+			Events:  []event.Event{evt},
+		}
+	}
+	baseSnap := func() *Snapshot {
+		return &Snapshot{
+			Backend:   "a",
+			SessionID: "session-s1",
+			Session:   baseSess(),
+		}
+	}
+
+	// Snapshot.SessionID only.
+	aID, bID := baseSnap(), baseSnap()
+	bID.Backend = "b"
+	bID.SessionID = "session-s2"
+	assertSessionIdentityDiff(t, cmp, tc, aID, bID, "session_id", "session-s1", "session-s2")
+
+	// Session.ID only (payload events unchanged).
+	aSID, bSID := baseSnap(), baseSnap()
+	bSID.Backend = "b"
+	bSID.Session.ID = "session-other"
+	assertSessionIdentityDiff(t, cmp, tc, aSID, bSID, "session.id", "session-s1", "session-other")
+
+	// Session.AppName only.
+	aApp, bApp := baseSnap(), baseSnap()
+	bApp.Backend = "b"
+	bApp.Session.AppName = "other-app"
+	assertSessionIdentityDiff(t, cmp, tc, aApp, bApp, "session.app_name", DefaultApp, "other-app")
+
+	// Session.UserID only.
+	aUser, bUser := baseSnap(), baseSnap()
+	bUser.Backend = "b"
+	bUser.Session.UserID = "other-user"
+	assertSessionIdentityDiff(t, cmp, tc, aUser, bUser, "session.user_id", DefaultUser, "other-user")
+
+	// Matching identity should not invent identity diffs.
+	aOK, bOK := baseSnap(), baseSnap()
+	bOK.Backend = "b"
+	for _, d := range cmp.Compare(tc, aOK, bOK, InMemoryProfile(), InMemoryProfile()) {
+		if !d.Allowed && (d.Path == "session_id" || d.Path == "session.id" ||
+			d.Path == "session.app_name" || d.Path == "session.user_id") {
+			t.Fatalf("unexpected identity diff when equal: %+v", d)
+		}
+	}
+}
+
+func assertSessionIdentityDiff(t *testing.T, cmp *Comparator, tc ReplayCase, a, b *Snapshot, path string, wantBase, wantActual any) {
+	t.Helper()
+	diffs := cmp.Compare(tc, a, b, InMemoryProfile(), InMemoryProfile())
+	for _, d := range diffs {
+		if d.Path == path && !d.Allowed {
+			if d.Baseline != wantBase || d.Actual != wantActual {
+				t.Fatalf("path %s: baseline=%v actual=%v want %v / %v", path, d.Baseline, d.Actual, wantBase, wantActual)
+			}
+			return
+		}
+	}
+	t.Fatalf("expected non-allowed diff at %s, got %+v", path, diffs)
+}
+
 func TestComparator_MemoryPresence(t *testing.T) {
 	cmp := NewComparator()
 	tc := ReplayCase{Name: "memory_presence"}
@@ -382,4 +451,68 @@ func TestComparator_MemoryPresence(t *testing.T) {
 	if !found {
 		t.Fatalf("expected memory presence mismatch, got %+v", diffs)
 	}
+}
+
+func TestComparator_MemoryOwnershipFields(t *testing.T) {
+	cmp := NewComparator()
+	tc := ReplayCase{Name: "memory_ownership"}
+	base := &memory.Entry{
+		ID:      "m1",
+		AppName: DefaultApp,
+		UserID:  DefaultUser,
+		Memory:  &memory.Memory{Memory: "likes tea", Topics: []string{"prefs"}},
+	}
+
+	// Same content, only AppName differs — must surface a non-allowed diff.
+	aApp := &Snapshot{Backend: "a", Memories: []*memory.Entry{cloneMemoryForTest(base)}}
+	bApp := &Snapshot{Backend: "b", Memories: []*memory.Entry{cloneMemoryForTest(base)}}
+	bApp.Memories[0].AppName = "other-app"
+	assertMemoryOwnershipDiff(t, cmp, tc, aApp, bApp, "memories[0].app_name", DefaultApp, "other-app")
+
+	// Same content, only UserID differs.
+	aUser := &Snapshot{Backend: "a", Memories: []*memory.Entry{cloneMemoryForTest(base)}}
+	bUser := &Snapshot{Backend: "b", Memories: []*memory.Entry{cloneMemoryForTest(base)}}
+	bUser.Memories[0].UserID = "other-user"
+	assertMemoryOwnershipDiff(t, cmp, tc, aUser, bUser, "memories[0].user_id", DefaultUser, "other-user")
+
+	// Matching ownership should not invent ownership diffs.
+	aOK := &Snapshot{Backend: "a", Memories: []*memory.Entry{cloneMemoryForTest(base)}}
+	bOK := &Snapshot{Backend: "b", Memories: []*memory.Entry{cloneMemoryForTest(base)}}
+	for _, d := range cmp.Compare(tc, aOK, bOK, InMemoryProfile(), InMemoryProfile()) {
+		if !d.Allowed && (d.Path == "memories[0].app_name" || d.Path == "memories[0].user_id") {
+			t.Fatalf("unexpected ownership diff when equal: %+v", d)
+		}
+	}
+}
+
+func cloneMemoryForTest(in *memory.Entry) *memory.Entry {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	if in.Memory != nil {
+		m := *in.Memory
+		if in.Memory.Topics != nil {
+			m.Topics = append([]string(nil), in.Memory.Topics...)
+		}
+		if in.Memory.Participants != nil {
+			m.Participants = append([]string(nil), in.Memory.Participants...)
+		}
+		out.Memory = &m
+	}
+	return &out
+}
+
+func assertMemoryOwnershipDiff(t *testing.T, cmp *Comparator, tc ReplayCase, a, b *Snapshot, path string, wantBase, wantActual any) {
+	t.Helper()
+	diffs := cmp.Compare(tc, a, b, InMemoryProfile(), InMemoryProfile())
+	for _, d := range diffs {
+		if d.Path == path && !d.Allowed {
+			if d.Baseline != wantBase || d.Actual != wantActual {
+				t.Fatalf("path %s: baseline=%v actual=%v want %v / %v", path, d.Baseline, d.Actual, wantBase, wantActual)
+			}
+			return
+		}
+	}
+	t.Fatalf("expected non-allowed diff at %s, got %+v", path, diffs)
 }

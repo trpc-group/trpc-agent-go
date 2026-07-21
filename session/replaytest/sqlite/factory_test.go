@@ -1,3 +1,5 @@
+//go:build cgo
+
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
@@ -15,10 +17,7 @@ import (
 
 func TestOpen_InMemoryVsSQLite_Lightweight(t *testing.T) {
 	sess, mem, profile, cleanup, err := replaysqlite.Open(t.TempDir())
-	if err != nil {
-		// CGO/sqlite driver may be unavailable on some hosts.
-		t.Skipf("sqlite backend unavailable: %v", err)
-	}
+	requireSQLiteAvailable(t, err)
 	t.Cleanup(cleanup)
 
 	h := replaytest.NewHarness(replaytest.DefaultHarnessOpts())

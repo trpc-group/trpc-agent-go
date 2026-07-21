@@ -66,6 +66,11 @@ func (c *Comparator) Compare(
 		}, tc.Name, backendA, backendB, sessionID))
 	}
 
+	// Session identity is semantic (tenant + session key), not only report metadata.
+	for _, d := range compareSessionIdentity(a, b) {
+		diffs = append(diffs, annotateDiff(d, tc.Name, backendA, backendB, sessionID))
+	}
+
 	diffs = append(diffs, compareSnapshotEvents(tc, backendA, backendB, sessionID, a, b)...)
 	diffs = append(diffs, compareSnapshotStates(tc, backendA, backendB, sessionID, a, b)...)
 	diffs = append(diffs, compareSummaries(tc, backendA, backendB, sessionID, a, b)...)
@@ -209,6 +214,34 @@ func compareMemories(tc ReplayCase, backendA, backendB, sessionID string, a, b [
 		id := ""
 		if a[i] != nil {
 			id = a[i].ID
+		}
+		// Tenant ownership is semantic: same content under the wrong app/user
+		// must not compare equal across backends.
+		if appA, appB := memoryAppName(a[i]), memoryAppName(b[i]); appA != appB {
+			diffs = append(diffs, Diff{
+				CaseName:    tc.Name,
+				BackendA:    backendA,
+				BackendB:    backendB,
+				SessionID:   sessionID,
+				MemoryID:    id,
+				Path:        fmt.Sprintf("memories[%d].app_name", i),
+				Baseline:    appA,
+				Actual:      appB,
+				Explanation: "memory app_name mismatch",
+			})
+		}
+		if userA, userB := memoryUserID(a[i]), memoryUserID(b[i]); userA != userB {
+			diffs = append(diffs, Diff{
+				CaseName:    tc.Name,
+				BackendA:    backendA,
+				BackendB:    backendB,
+				SessionID:   sessionID,
+				MemoryID:    id,
+				Path:        fmt.Sprintf("memories[%d].user_id", i),
+				Baseline:    userA,
+				Actual:      userB,
+				Explanation: "memory user_id mismatch",
+			})
 		}
 		if ca != cb {
 			diffs = append(diffs, Diff{
@@ -456,6 +489,20 @@ func memoryParticipants(e *memory.Entry) []string {
 		return nil
 	}
 	return append([]string(nil), e.Memory.Participants...)
+}
+
+func memoryAppName(e *memory.Entry) string {
+	if e == nil {
+		return ""
+	}
+	return e.AppName
+}
+
+func memoryUserID(e *memory.Entry) string {
+	if e == nil {
+		return ""
+	}
+	return e.UserID
 }
 
 func memoryTimestamps(e *memory.Entry) map[string]any {

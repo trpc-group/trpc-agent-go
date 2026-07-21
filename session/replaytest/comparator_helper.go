@@ -29,6 +29,53 @@ func compareSessionID(a, b *Snapshot) string {
 	return ""
 }
 
+// compareSessionIdentity checks Snapshot.SessionID and Session tenant fields.
+// Presence (nil vs non-nil Session) is handled by Compare; this only compares
+// identity when both sides have a Session for Session.* fields.
+func compareSessionIdentity(a, b *Snapshot) []Diff {
+	if a == nil || b == nil {
+		return nil
+	}
+	var diffs []Diff
+	if a.SessionID != b.SessionID {
+		diffs = append(diffs, Diff{
+			Path:        "session_id",
+			Baseline:    a.SessionID,
+			Actual:      b.SessionID,
+			Explanation: "snapshot session_id mismatch",
+		})
+	}
+	// When either Session is missing, presence handling owns the mismatch.
+	if a.Session == nil || b.Session == nil {
+		return diffs
+	}
+	if a.Session.ID != b.Session.ID {
+		diffs = append(diffs, Diff{
+			Path:        "session.id",
+			Baseline:    a.Session.ID,
+			Actual:      b.Session.ID,
+			Explanation: "session id mismatch",
+		})
+	}
+	if a.Session.AppName != b.Session.AppName {
+		diffs = append(diffs, Diff{
+			Path:        "session.app_name",
+			Baseline:    a.Session.AppName,
+			Actual:      b.Session.AppName,
+			Explanation: "session app_name mismatch",
+		})
+	}
+	if a.Session.UserID != b.Session.UserID {
+		diffs = append(diffs, Diff{
+			Path:        "session.user_id",
+			Baseline:    a.Session.UserID,
+			Actual:      b.Session.UserID,
+			Explanation: "session user_id mismatch",
+		})
+	}
+	return diffs
+}
+
 func annotateDiff(d Diff, caseName, backendA, backendB, sessionID string) Diff {
 	d.CaseName = caseName
 	d.BackendA = backendA

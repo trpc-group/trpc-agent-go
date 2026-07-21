@@ -8,6 +8,7 @@ package replaytest
 import (
 	"context"
 	"fmt"
+	"sort"
 )
 
 // collectCaseSnapshots runs the case on each capable backend and returns
@@ -45,24 +46,33 @@ func (h *Harness) collectCaseSnapshots(
 }
 
 // buildComparisonPairs selects backend pairs according to ComparisonMode.
+// In reference mode the configured reference must be present in snaps;
+// silent fallback is not allowed.
 func buildComparisonPairs(
 	mode ComparisonMode,
 	reference string,
 	snaps map[string]*Snapshot,
-) [][2]string {
+) ([][2]string, error) {
 	switch mode {
 	case ComparisonAllPairs:
-		return allPairs(snaps)
+		return allPairs(snaps), nil
 	default:
 		return referencePairs(reference, snaps)
 	}
 }
 
-func allPairs(snaps map[string]*Snapshot) [][2]string {
+func sortedSnapshotNames(snaps map[string]*Snapshot) []string {
 	names := make([]string, 0, len(snaps))
 	for n := range snaps {
 		names = append(names, n)
 	}
+	// Deterministic order for reports and pair orientation.
+	sort.Strings(names)
+	return names
+}
+
+func allPairs(snaps map[string]*Snapshot) [][2]string {
+	names := sortedSnapshotNames(snaps)
 	var pairs [][2]string
 	for i := 0; i < len(names); i++ {
 		for j := i + 1; j < len(names); j++ {
@@ -72,23 +82,23 @@ func allPairs(snaps map[string]*Snapshot) [][2]string {
 	return pairs
 }
 
-func referencePairs(reference string, snaps map[string]*Snapshot) [][2]string {
-	ref := reference
-	if _, ok := snaps[ref]; !ok {
-		// pick first as reference
-		for n := range snaps {
-			ref = n
-			break
-		}
+func referencePairs(reference string, snaps map[string]*Snapshot) ([][2]string, error) {
+	if _, ok := snaps[reference]; !ok {
+		// Do not silently replace with map iteration order — that hides
+		// unregistered or capability-skipped reference backends.
+		return nil, fmt.Errorf(
+			"reference backend %q has no snapshot (not registered or capability-skipped for this case)",
+			reference,
+		)
 	}
 	var pairs [][2]string
-	for n := range snaps {
-		if n == ref {
+	for _, n := range sortedSnapshotNames(snaps) {
+		if n == reference {
 			continue
 		}
-		pairs = append(pairs, [2]string{ref, n})
+		pairs = append(pairs, [2]string{reference, n})
 	}
-	return pairs
+	return pairs, nil
 }
 
 // compareSnapshotPairs runs the comparator for each backend pair.

@@ -119,7 +119,9 @@ func TestRunCase_PreservesSkippedWhenSingleBackendRuns(t *testing.T) {
 
 func TestRun_RejectsEmptyAllowedRule(t *testing.T) {
 	h := NewHarness(DefaultHarnessOpts())
-	h.AddBackend(openInMemoryBackend(t))
+	b := openInMemoryBackend(t)
+	h.opts.ReferenceBackend = b.Name
+	h.AddBackend(b)
 	_, err := h.Run(context.Background(), []ReplayCase{{
 		Name:         "bad",
 		AllowedDiffs: []AllowedDiff{{PathPattern: "x", Rule: ""}},
@@ -145,8 +147,13 @@ func TestRun_RejectsDuplicateBackendNames(t *testing.T) {
 
 func TestRecoveryDuplicateEvent_LogicalKeyShared(t *testing.T) {
 	h := NewHarness(DefaultHarnessOpts())
-	h.AddBackend(openInMemoryBackend(t))
-	h.AddBackend(openInMemoryBackend(t))
+	b1 := openInMemoryBackend(t)
+	b1.Name = "inmemory-a"
+	b2 := openInMemoryBackend(t)
+	b2.Name = "inmemory-b"
+	h.opts.ReferenceBackend = "inmemory-a"
+	h.AddBackend(b1)
+	h.AddBackend(b2)
 	report, err := h.Run(context.Background(), []ReplayCase{CaseRecoveryDuplicateEvent()})
 	if err != nil {
 		t.Fatal(err)
@@ -157,5 +164,20 @@ func TestRecoveryDuplicateEvent_LogicalKeyShared(t *testing.T) {
 				t.Fatalf("recovery case failed: %+v", r.Diffs)
 			}
 		}
+	}
+
+	// Cross-backend equality alone is not enough: both executors could drop the
+	// post-reload write and still compare equal. Assert absolute event multiplicity
+	// after recovery on a fresh backend (append + reload + duplicate append => 2).
+	fresh := openInMemoryBackend(t)
+	snap, err := executeCase(context.Background(), CaseRecoveryDuplicateEvent(), fresh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.Session == nil {
+		t.Fatal("nil session after recovery case")
+	}
+	if n := len(snap.Session.Events); n != 2 {
+		t.Fatalf("recovery event count=%d want 2 (duplicate logical writes both persisted)", n)
 	}
 }

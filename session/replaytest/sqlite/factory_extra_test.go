@@ -1,3 +1,5 @@
+//go:build cgo
+
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
@@ -17,16 +19,20 @@ import (
 
 func TestOpen_TempDirAndCleanup(t *testing.T) {
 	sess, mem, profile, cleanup, err := replaysqlite.Open("")
-	if err != nil {
-		t.Skipf("sqlite backend unavailable: %v", err)
-	}
+	requireSQLiteAvailable(t, err)
 	if profile.Name != "sqlite" {
 		t.Fatalf("profile=%s", profile.Name)
 	}
 	if sess == nil || mem == nil {
 		t.Fatal("nil services")
 	}
-	// cleanup should be idempotent
+	// Close services before temp-dir removal; cleanup is idempotent.
+	if err := mem.Close(); err != nil {
+		t.Fatalf("mem.Close: %v", err)
+	}
+	if err := sess.Close(); err != nil {
+		t.Fatalf("sess.Close: %v", err)
+	}
 	cleanup()
 	cleanup()
 }
@@ -34,10 +40,12 @@ func TestOpen_TempDirAndCleanup(t *testing.T) {
 func TestOpen_ExplicitDir(t *testing.T) {
 	dir := t.TempDir()
 	sess, mem, profile, cleanup, err := replaysqlite.Open(dir)
-	if err != nil {
-		t.Skipf("sqlite backend unavailable: %v", err)
-	}
-	t.Cleanup(cleanup)
+	requireSQLiteAvailable(t, err)
+	t.Cleanup(func() {
+		_ = mem.Close()
+		_ = sess.Close()
+		cleanup()
+	})
 	if profile.Name != "sqlite" {
 		t.Fatalf("profile=%s", profile.Name)
 	}
@@ -48,21 +56,18 @@ func TestOpen_ExplicitDir(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "memory.db")); err != nil {
 		t.Fatalf("memory.db: %v", err)
 	}
-	_ = sess
-	_ = mem
 }
 
 func TestFactory_AndNamedBackend(t *testing.T) {
 	factory := replaysqlite.Factory()
 	sess, mem, profile, err := factory()
-	if err != nil {
-		t.Skipf("sqlite backend unavailable: %v", err)
-	}
+	requireSQLiteAvailable(t, err)
 	t.Cleanup(func() {
-		_ = sess.Close()
 		if mem != nil {
 			_ = mem.Close()
 		}
+		// sessionCloser.Close also runs Open cleanup (temp dir).
+		_ = sess.Close()
 	})
 	nb := replaysqlite.NamedBackend("", sess, mem, profile)
 	if nb.Name != profile.Name {
