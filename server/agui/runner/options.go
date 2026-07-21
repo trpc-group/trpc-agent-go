@@ -17,12 +17,12 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/aggregator"
-	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/track"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/translator"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
 const (
+	defaultFlushInterval                          = time.Second
 	defaultPostRunFinalizationTimeout             = 5 * time.Second
 	defaultTrackPersistenceTimeout                = 5 * time.Second
 	defaultTimeout                                = time.Hour
@@ -84,7 +84,7 @@ func NewOptions(opt ...Option) *Options {
 		StateResolver:                          defaultStateResolver,
 		RunOptionResolver:                      defaultRunOptionResolver,
 		AggregatorFactory:                      aggregator.New,
-		FlushInterval:                          track.DefaultFlushInterval,
+		FlushInterval:                          defaultFlushInterval,
 		StartSpan:                              defaultStartSpan,
 		PostRunFinalizationTimeout:             defaultPostRunFinalizationTimeout,
 		TrackPersistenceTimeout:                defaultTrackPersistenceTimeout,
