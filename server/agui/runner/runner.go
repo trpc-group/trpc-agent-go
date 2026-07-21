@@ -160,6 +160,7 @@ type runInput struct {
 	runOption       []agent.RunOption
 	translator      translator.Translator
 	enableTrack     bool
+	startTrackFlush func()
 	span            trace.Span
 	resume          *resumeInfo
 	terminalEmitted bool
@@ -441,6 +442,12 @@ func (r *runner) run(ctx context.Context, cancel context.CancelCauseFunc, key se
 	runID := input.runID
 	if input.enableTrack {
 		var stopTrackFlush func()
+		var startTrackFlushOnce sync.Once
+		input.startTrackFlush = func() {
+			startTrackFlushOnce.Do(func() {
+				stopTrackFlush = r.startTrackFlushLoop(ctx, input.key, threadID, runID)
+			})
+		}
 		defer func() {
 			if stopTrackFlush != nil {
 				stopTrackFlush()
@@ -467,7 +474,7 @@ func (r *runner) run(ctx context.Context, cancel context.CancelCauseFunc, key se
 					err,
 				)
 			} else {
-				stopTrackFlush = r.startTrackFlushLoop(ctx, input.key, threadID, runID)
+				input.startTrackFlush()
 			}
 		}
 	}
@@ -930,6 +937,8 @@ func (r *runner) emitEvent(ctx context.Context, events chan<- aguievents.Event, 
 				input.runID,
 				err,
 			)
+		} else if input.startTrackFlush != nil {
+			input.startTrackFlush()
 		}
 	}
 	select {

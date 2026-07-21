@@ -710,6 +710,90 @@ func TestMessagesSnapshotFollowReceivesPeriodicFlushedContent(t *testing.T) {
 	require.Equal(t, "hello", content.Delta)
 }
 
+func TestMessagesSnapshotFollowReceivesPeriodicFlushedContentForToolRun(t *testing.T) {
+	ctx := context.Background()
+	sessionService := inmemory.NewSessionService()
+	key := session.Key{AppName: "demo", UserID: "user", SessionID: "thread"}
+	sess, err := sessionService.CreateSession(ctx, key, session.StateMap{})
+	require.NoError(t, err)
+	seedEvents := []session.TrackEvent{
+		newUserMessageTrackEvent(t, "user-1", "use the tool"),
+		newTrackEvent(t, aguievents.NewTextMessageStartEvent("assistant-0", aguievents.WithRole("assistant"))),
+		newTrackEvent(t, aguievents.NewToolCallStartEvent("call-1", "calc", aguievents.WithParentMessageID("assistant-0"))),
+		newTrackEvent(t, aguievents.NewToolCallArgsEvent("call-1", "{}")),
+		newTrackEvent(t, aguievents.NewToolCallEndEvent("call-1")),
+		newTrackEvent(t, aguievents.NewTextMessageEndEvent("assistant-0")),
+	}
+	for _, evt := range seedEvents {
+		trackEvent := evt
+		require.NoError(t, sessionService.AppendTrackEvent(ctx, sess, &trackEvent))
+	}
+	underlying := &streamingWaitRunner{
+		started: make(chan struct{}),
+		events:  make(chan *event.Event, 1),
+	}
+	r := New(
+		underlying,
+		WithAppName("demo"),
+		WithSessionService(sessionService),
+		WithFlushInterval(10*time.Millisecond),
+		WithMessagesSnapshotFollowEnabled(true),
+		WithMessagesSnapshotFollowMaxDuration(time.Second),
+		WithTrackPersistenceTimeout(200*time.Millisecond),
+	).(*runner)
+	runStream, err := r.Run(ctx, &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{
+			ID:         "tool-msg-1",
+			Role:       types.RoleTool,
+			Content:    "result",
+			Name:       "calc",
+			ToolCallID: "call-1",
+		}},
+	})
+	require.NoError(t, err)
+	waitForAGUIEventType(t, runStream, (*aguievents.RunStartedEvent)(nil))
+	waitForAGUIEventType(t, runStream, (*aguievents.ToolCallResultEvent)(nil))
+	select {
+	case <-underlying.started:
+	case <-time.After(time.Second):
+		require.FailNow(t, "timeout waiting for runner start")
+	}
+	runDone := make(chan struct{})
+	go func() {
+		for range runStream {
+		}
+		close(runDone)
+	}()
+	defer func() {
+		close(underlying.events)
+		<-runDone
+	}()
+	snapshotCtx, cancelSnapshot := context.WithCancel(ctx)
+	defer cancelSnapshot()
+	snapshotStream, err := r.MessagesSnapshot(snapshotCtx, &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "snapshot",
+	})
+	require.NoError(t, err)
+	waitForAGUIEventType(t, snapshotStream, (*aguievents.MessagesSnapshotEvent)(nil))
+	underlying.events <- &event.Event{Response: &model.Response{
+		ID:        "assistant-1",
+		Object:    model.ObjectTypeChatCompletionChunk,
+		IsPartial: true,
+		Choices: []model.Choice{{
+			Delta: model.Message{
+				Role:    model.RoleAssistant,
+				Content: "hello",
+			},
+		}},
+	}}
+	content := waitForTextMessageContent(t, snapshotStream)
+	require.Equal(t, "assistant-1", content.MessageID)
+	require.Equal(t, "hello", content.Delta)
+}
+
 func TestMessagesSnapshotEmptyTrack(t *testing.T) {
 	svc := &testSessionService{}
 	tracker, err := track.New(svc)
