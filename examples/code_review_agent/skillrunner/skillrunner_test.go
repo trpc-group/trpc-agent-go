@@ -145,3 +145,25 @@ func TestRunScriptsUnknownSkill(t *testing.T) {
 			len(result.Runs))
 	}
 }
+
+func TestScriptRunStatusClassification(t *testing.T) {
+	start := time.Now()
+	ok := scriptRun("bash scripts/diff_summary.sh", start,
+		runResult{ExitCode: 0, Duration: 5})
+	if ok.Status != "completed" || ok.Error != "" {
+		t.Fatalf("zero exit should stay completed: %+v", ok)
+	}
+	failed := scriptRun("bash scripts/secret_scan.sh", start,
+		runResult{ExitCode: 2, Duration: 5})
+	if failed.Status != "failed" || failed.ExitCode != 2 {
+		t.Fatalf("non-zero exit should be failed: %+v", failed)
+	}
+	if failed.Error == "" {
+		t.Fatalf("failed run should record an error: %+v", failed)
+	}
+	timedOut := scriptRun("bash scripts/go_static_checks.sh", start,
+		runResult{ExitCode: 1, TimedOut: true})
+	if timedOut.Status != "timeout" {
+		t.Fatalf("timeout should win over exit code: %+v", timedOut)
+	}
+}

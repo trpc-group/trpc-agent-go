@@ -187,6 +187,11 @@ func runEngine(ctx context.Context, eng codeexecutor.Engine, cfg Config, command
 		Timeout:  cfg.Timeout,
 		CleanEnv: true,
 	})
+	return engineRun(command, start, res, err)
+}
+
+// engineRun converts an engine RunProgram result into an audited run.
+func engineRun(command string, start time.Time, res codeexecutor.RunResult, err error) review.SandboxRun {
 	run := review.SandboxRun{
 		Command:       command,
 		Status:        "completed",
@@ -194,6 +199,11 @@ func runEngine(ctx context.Context, eng codeexecutor.Engine, cfg Config, command
 		DurationMS:    time.Since(start).Milliseconds(),
 		StdoutExcerpt: excerpt(redaction.RedactText(res.Stdout)),
 		StderrExcerpt: excerpt(redaction.RedactText(res.Stderr)),
+	}
+	// Non-zero exits are failed checks and must reach exception metrics.
+	if res.ExitCode != 0 {
+		run.Status = "failed"
+		run.Error = fmt.Sprintf("command exited with code %d", res.ExitCode)
 	}
 	if res.TimedOut {
 		run.Status = "timeout"

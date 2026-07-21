@@ -334,8 +334,13 @@ func executeScript(ctx context.Context, runTool *toolskill.RunTool, cfg Config, 
 	if err := json.Unmarshal(raw, &rr); err != nil {
 		return failedRun(spec.command, start, err)
 	}
+	return scriptRun(spec.command, start, rr)
+}
+
+// scriptRun converts a skill_run result into an audited SandboxRun.
+func scriptRun(command string, start time.Time, rr runResult) review.SandboxRun {
 	run := review.SandboxRun{
-		Command:       spec.command,
+		Command:       command,
 		Status:        "completed",
 		ExitCode:      rr.ExitCode,
 		DurationMS:    rr.Duration,
@@ -344,6 +349,11 @@ func executeScript(ctx context.Context, runTool *toolskill.RunTool, cfg Config, 
 	}
 	if run.DurationMS == 0 {
 		run.DurationMS = time.Since(start).Milliseconds()
+	}
+	// Non-zero exits are failed scripts and must reach exception metrics.
+	if rr.ExitCode != 0 {
+		run.Status = "failed"
+		run.Error = fmt.Sprintf("script exited with code %d", rr.ExitCode)
 	}
 	if rr.TimedOut {
 		run.Status = "timeout"

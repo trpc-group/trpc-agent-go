@@ -11,11 +11,13 @@ package sandboxrunner
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/permission"
 )
 
@@ -132,5 +134,30 @@ func TestRunChecksNoRepoNoRuns(t *testing.T) {
 	if len(result.Runs) != 0 || len(result.Decisions) != 0 {
 		t.Fatalf("no repo should produce no runs, got %d/%d",
 			len(result.Runs), len(result.Decisions))
+	}
+}
+
+func TestEngineRunStatusClassification(t *testing.T) {
+	start := time.Now()
+	ok := engineRun("go vet ./...", start, codeexecutor.RunResult{ExitCode: 0}, nil)
+	if ok.Status != "completed" || ok.Error != "" {
+		t.Fatalf("zero exit should stay completed: %+v", ok)
+	}
+	failed := engineRun("go test ./...", start, codeexecutor.RunResult{ExitCode: 1}, nil)
+	if failed.Status != "failed" || failed.ExitCode != 1 {
+		t.Fatalf("non-zero exit should be failed: %+v", failed)
+	}
+	if failed.Error == "" {
+		t.Fatalf("failed run should record an error: %+v", failed)
+	}
+	timedOut := engineRun("go test ./...", start,
+		codeexecutor.RunResult{ExitCode: 1, TimedOut: true}, nil)
+	if timedOut.Status != "timeout" {
+		t.Fatalf("timeout should win over exit code: %+v", timedOut)
+	}
+	errRun := engineRun("go test ./...", start,
+		codeexecutor.RunResult{ExitCode: 1}, errors.New("boom"))
+	if errRun.Status != "failed" || errRun.Error != "boom" {
+		t.Fatalf("engine error should be failed with error: %+v", errRun)
 	}
 }
