@@ -315,10 +315,10 @@ func TestCovercore_AfterToolErrorWithoutSecret(t *testing.T) {
 	out, err := cbs.RunAfterTool(context.Background(), args)
 	require.NoError(t, err)
 	// The guard callback made no change, so the result passes through
-	// untouched.
-	if out != nil && out.CustomResult != nil {
-		require.Equal(t, "partial", out.CustomResult)
-	}
+	// untouched. Assert unconditionally: a nil override or a mutated
+	// result must fail this test.
+	require.NotNil(t, out)
+	require.Equal(t, "partial", out.CustomResult)
 	require.Contains(t, auditBuf.String(), `"execution":"error"`)
 }
 
