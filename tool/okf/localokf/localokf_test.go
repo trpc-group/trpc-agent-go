@@ -12,10 +12,12 @@ package localokf
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"trpc.group/trpc-go/trpc-agent-go/tool/okf"
@@ -167,6 +169,15 @@ func TestRead_NotFound(t *testing.T) {
 	}
 }
 
+func TestRead_ReservedFilesRejected(t *testing.T) {
+	s := newTestStore(t)
+	for _, id := range []string{"index", "log", "research/index"} {
+		if _, err := s.Read(context.Background(), id); !errors.Is(err, okf.ErrNotFound) {
+			t.Errorf("Read(%q) error = %v, want ErrNotFound", id, err)
+		}
+	}
+}
+
 func TestRead_PathEscapeRejected(t *testing.T) {
 	s := newTestStore(t)
 	for _, id := range []string{"../../etc/passwd", "../okf", "research/../../secret"} {
@@ -221,9 +232,39 @@ func TestFind_ByTextAndLimit(t *testing.T) {
 	}
 }
 
+func TestFind_DefaultLimitIsBounded(t *testing.T) {
+	dir := t.TempDir()
+	for i := 0; i < defaultFindLimit+2; i++ {
+		name := filepath.Join(dir, fmt.Sprintf("concept-%02d.md", i))
+		if err := os.WriteFile(name, []byte("---\ntype: Note\n---\n\nbody\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s, err := New(dir)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	for _, limit := range []int{0, -1} {
+		hits, err := s.Find(context.Background(), okf.Query{Limit: limit})
+		if err != nil {
+			t.Fatalf("Find limit %d: %v", limit, err)
+		}
+		if len(hits) != defaultFindLimit {
+			t.Errorf("Find limit %d returned %d hits, want backend default %d", limit, len(hits), defaultFindLimit)
+		}
+	}
+	hits, err := s.Find(context.Background(), okf.Query{Limit: defaultFindLimit + 1})
+	if err != nil {
+		t.Fatalf("Find explicit limit: %v", err)
+	}
+	if len(hits) != defaultFindLimit+1 {
+		t.Errorf("Find explicit limit returned %d hits, want %d", len(hits), defaultFindLimit+1)
+	}
+}
+
 func TestRead_BodyCapIsRuneSafeAndKeepsFrontmatter(t *testing.T) {
 	dir := t.TempDir()
-	body := "协议说明:这是用于测试的中文正文内容。"
+	body := "协议说明:这是用于测试的中文正文内容。\n\nSee [late](late-target.md)."
 	content := "---\ntype: 笔记\ntitle: 中文\n---\n\n" + body + "\n"
 	if err := os.WriteFile(filepath.Join(dir, "cjk.md"), []byte(content), 0o644); err != nil {
 		t.Fatal(err)
@@ -245,6 +286,12 @@ func TestRead_BodyCapIsRuneSafeAndKeepsFrontmatter(t *testing.T) {
 	}
 	if len(c.Body) > 7 {
 		t.Errorf("body exceeds cap: %d", len(c.Body))
+	}
+	if !c.Truncated {
+		t.Error("Truncated = false, want true when the body cap applies")
+	}
+	if len(c.Links) != 1 || c.Links[0].Target != "late-target" {
+		t.Errorf("links should be extracted from the full body before truncation, got %v", c.Links)
 	}
 }
 
@@ -291,5 +338,98 @@ func TestFind_ReservedExcluded(t *testing.T) {
 		if base == "index" || base == "log" {
 			t.Errorf("reserved file surfaced as concept: %q", h.ID)
 		}
+	}
+}
+
+func TestOperations_RespectCanceledContext(t *testing.T) {
+	s := newTestStore(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if _, err := s.List(ctx, ""); !errors.Is(err, context.Canceled) {
+		t.Errorf("List error = %v, want context.Canceled", err)
+	}
+	if _, err := s.Read(ctx, "rules/minimal"); !errors.Is(err, context.Canceled) {
+		t.Errorf("Read error = %v, want context.Canceled", err)
+	}
+	if _, err := s.Find(ctx, okf.Query{}); !errors.Is(err, context.Canceled) {
+		t.Errorf("Find error = %v, want context.Canceled", err)
+	}
+}
+
+func TestOperations_RespectExpiredDeadline(t *testing.T) {
+	s := newTestStore(t)
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+
+	if _, err := s.List(ctx, ""); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("List error = %v, want context.DeadlineExceeded", err)
+	}
+	if _, err := s.Read(ctx, "rules/minimal"); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("Read error = %v, want context.DeadlineExceeded", err)
+	}
+	if _, err := s.Find(ctx, okf.Query{}); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("Find error = %v, want context.DeadlineExceeded", err)
+	}
+}
+
+func TestSymlinkFileRejected(t *testing.T) {
+	base := t.TempDir()
+	bundle := filepath.Join(base, "bundle")
+	if err := os.Mkdir(bundle, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(base, "secret.md")
+	if err := os.WriteFile(outside, []byte("---\ntype: Secret\n---\n\ncredential\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(bundle, "leak.md")); err != nil {
+		t.Fatal(err)
+	}
+	s, err := New(bundle)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	if _, err := s.Read(context.Background(), "leak"); err == nil {
+		t.Error("Read should reject a symlinked concept")
+	}
+	if _, err := s.List(context.Background(), ""); err == nil {
+		t.Error("List should reject a symlinked entry")
+	}
+	if _, err := s.Find(context.Background(), okf.Query{}); err == nil {
+		t.Error("Find should reject a symlinked entry")
+	}
+}
+
+func TestSymlinkDirectoryRejected(t *testing.T) {
+	base := t.TempDir()
+	bundle := filepath.Join(base, "bundle")
+	outside := filepath.Join(base, "outside")
+	if err := os.Mkdir(bundle, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(outside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(outside, "secret.md"), []byte("---\ntype: Secret\n---\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(bundle, "linked")); err != nil {
+		t.Fatal(err)
+	}
+	s, err := New(bundle)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	if _, err := s.Read(context.Background(), "linked/secret"); err == nil {
+		t.Error("Read should reject a symlinked parent directory")
+	}
+	if _, err := s.List(context.Background(), "linked"); err == nil {
+		t.Error("List should reject a symlinked directory")
+	}
+	if _, err := s.Find(context.Background(), okf.Query{}); err == nil {
+		t.Error("Find should reject a symlinked directory")
 	}
 }

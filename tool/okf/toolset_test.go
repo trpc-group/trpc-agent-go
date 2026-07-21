@@ -12,6 +12,7 @@ package okf
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -105,6 +106,51 @@ func TestNewToolSet_NamePrefix(t *testing.T) {
 	ts, _ := NewToolSet(&fakeStore{}, WithNamePrefix("paydocs"))
 	if toolByName(ts.Tools(context.Background()), "paydocs_okf_read") == nil {
 		t.Errorf("prefix not applied: %v", toolNames(ts.Tools(context.Background())))
+	}
+	if ts.Name() != "paydocs_okf" {
+		t.Errorf("prefixed tool set name = %q, want paydocs_okf", ts.Name())
+	}
+}
+
+func TestToolSet_CloseAndListDispatch(t *testing.T) {
+	store := &fakeStore{}
+	ts, err := NewToolSet(store)
+	if err != nil {
+		t.Fatalf("NewToolSet: %v", err)
+	}
+	if err := ts.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	list := toolByName(ts.Tools(context.Background()), "okf_list")
+	callTool(t, list, `{}`)
+	if store.lastListDir != "" {
+		t.Errorf("root list dir = %q, want empty", store.lastListDir)
+	}
+	callTool(t, list, `{"dir":"research"}`)
+	if store.lastListDir != "research" {
+		t.Errorf("explicit list dir = %q, want research", store.lastListDir)
+	}
+}
+
+func TestNewToolSet_RejectsInvalidOptions(t *testing.T) {
+	tests := []struct {
+		name string
+		opts []Option
+	}{
+		{name: "prefix with space", opts: []Option{WithNamePrefix("pay docs")}},
+		{name: "prefix with unicode", opts: []Option{WithNamePrefix("支付")}},
+		{name: "prefix too long", opts: []Option{WithNamePrefix(strings.Repeat("a", 56))}},
+		{name: "zero find limit", opts: []Option{WithFindLimit(0)}},
+		{name: "negative find limit", opts: []Option{WithFindLimit(-1)}},
+		{name: "negative body limit", opts: []Option{WithMaxBodyBytes(-1)}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := NewToolSet(&fakeStore{}, tt.opts...); err == nil {
+				t.Fatal("NewToolSet should reject invalid options")
+			}
+		})
 	}
 }
 
@@ -217,6 +263,57 @@ func TestCall_ReadNotFound(t *testing.T) {
 	}
 }
 
+func TestCall_ReadNotFoundUsesAvailablePrefixedTools(t *testing.T) {
+	tests := []struct {
+		name      string
+		opts      []Option
+		want      []string
+		doNotWant []string
+	}{
+		{
+			name:      "list only",
+			opts:      []Option{WithNamePrefix("paydocs"), WithFindEnabled(false)},
+			want:      []string{"paydocs_okf_list"},
+			doNotWant: []string{"paydocs_okf_find"},
+		},
+		{
+			name:      "find only",
+			opts:      []Option{WithNamePrefix("paydocs"), WithListEnabled(false)},
+			want:      []string{"paydocs_okf_find"},
+			doNotWant: []string{"paydocs_okf_list"},
+		},
+		{
+			name:      "no navigation tools",
+			opts:      []Option{WithNamePrefix("paydocs"), WithListEnabled(false), WithFindEnabled(false)},
+			doNotWant: []string{"paydocs_okf_list", "paydocs_okf_find", "call okf_"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ts, err := NewToolSet(&fakeStore{}, tt.opts...)
+			if err != nil {
+				t.Fatalf("NewToolSet: %v", err)
+			}
+			read := toolByName(ts.Tools(context.Background()), "paydocs_okf_read").(tool.CallableTool)
+			_, err = read.Call(context.Background(), []byte(`{"concept_id":"__missing__"}`))
+			if err == nil {
+				t.Fatal("expected missing concept error")
+			}
+			for _, want := range tt.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error %q does not mention available tool %q", err, want)
+				}
+			}
+			for _, unwanted := range tt.doNotWant {
+				if strings.Contains(err.Error(), unwanted) {
+					t.Errorf("error %q mentions unavailable tool %q", err, unwanted)
+				}
+			}
+		})
+	}
+}
+
 func TestCall_FindEmpty(t *testing.T) {
 	ts, _ := NewToolSet(&fakeStore{})
 	out := callTool(t, toolByName(ts.Tools(context.Background()), "okf_find"), `{"query":"__none__"}`)
@@ -225,6 +322,31 @@ func TestCall_FindEmpty(t *testing.T) {
 	}
 	if !strings.Contains(string(out), "no concepts matched") {
 		t.Errorf("empty find should carry a guidance note, got %s", out)
+	}
+}
+
+func TestFindGuidanceUsesAvailablePrefixedTools(t *testing.T) {
+	ts, err := NewToolSet(&fakeStore{}, WithNamePrefix("paydocs"), WithListEnabled(false))
+	if err != nil {
+		t.Fatalf("NewToolSet: %v", err)
+	}
+	find := toolByName(ts.Tools(context.Background()), "paydocs_okf_find")
+	if desc := find.Declaration().Description; !strings.Contains(desc, "paydocs_okf_read") ||
+		strings.Contains(desc, "then use okf_read") {
+		t.Errorf("find description does not use the actual read tool: %q", desc)
+	}
+	out := callTool(t, find, `{"query":"__none__"}`)
+	if strings.Contains(string(out), "okf_list") {
+		t.Errorf("empty-result guidance mentions disabled list tool: %s", out)
+	}
+
+	ts, err = NewToolSet(&fakeStore{}, WithNamePrefix("paydocs"), WithReadEnabled(false))
+	if err != nil {
+		t.Fatalf("NewToolSet: %v", err)
+	}
+	find = toolByName(ts.Tools(context.Background()), "paydocs_okf_find")
+	if strings.Contains(find.Declaration().Description, "okf_read") {
+		t.Errorf("find description mentions disabled read tool: %q", find.Declaration().Description)
 	}
 }
 
@@ -240,5 +362,25 @@ func TestCall_FindDefaultLimit(t *testing.T) {
 	callTool(t, find, `{"query":"pay","limit":3,"type":"Rule","tags":["a"]}`)
 	if store.lastQuery.Limit != 3 || store.lastQuery.Type != "Rule" || len(store.lastQuery.Tags) != 1 {
 		t.Errorf("explicit find args not plumbed: %+v", store.lastQuery)
+	}
+}
+
+func TestCall_FindRejectsNonPositiveLimit(t *testing.T) {
+	for _, limit := range []int{0, -1} {
+		t.Run(fmt.Sprintf("limit_%d", limit), func(t *testing.T) {
+			store := &fakeStore{}
+			ts, err := NewToolSet(store)
+			if err != nil {
+				t.Fatalf("NewToolSet: %v", err)
+			}
+			find := toolByName(ts.Tools(context.Background()), "okf_find").(tool.CallableTool)
+			_, err = find.Call(context.Background(), []byte(fmt.Sprintf(`{"query":"pay","limit":%d}`, limit)))
+			if err == nil || !strings.Contains(err.Error(), "greater than zero") {
+				t.Fatalf("Call error = %v, want positive-limit validation", err)
+			}
+			if store.lastQuery.Text != "" {
+				t.Fatalf("store was called with invalid limit: %+v", store.lastQuery)
+			}
+		})
 	}
 }

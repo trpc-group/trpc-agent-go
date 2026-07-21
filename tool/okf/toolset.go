@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"unicode/utf8"
 
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -53,6 +54,23 @@ func NewToolSet(store Store, opts ...Option) (tool.ToolSet, error) {
 	}
 	for _, opt := range opts {
 		opt(t)
+	}
+	if t.namePrefix != "" {
+		for _, r := range t.namePrefix {
+			if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') &&
+				(r < '0' || r > '9') && r != '_' && r != '-' {
+				return nil, fmt.Errorf("okf: invalid tool name prefix %q: use only letters, numbers, underscores, and hyphens", t.namePrefix)
+			}
+		}
+		if len(t.toolName("okf_find")) > 64 {
+			return nil, fmt.Errorf("okf: tool name prefix %q produces a name longer than 64 characters", t.namePrefix)
+		}
+	}
+	if t.findLimit <= 0 {
+		return nil, fmt.Errorf("okf: find limit must be greater than zero")
+	}
+	if t.maxBodyBytes < 0 {
+		return nil, fmt.Errorf("okf: max body bytes must not be negative")
 	}
 	var tools []tool.Tool
 	if t.listEnabled {
@@ -132,12 +150,25 @@ type readArgs struct {
 }
 
 func (t *toolSet) readTool() tool.Tool {
+	var notFoundActions []string
+	if t.listEnabled {
+		notFoundActions = append(notFoundActions,
+			fmt.Sprintf("call %s to browse the bundle", t.toolName("okf_list")))
+	}
+	if t.findEnabled {
+		notFoundActions = append(notFoundActions,
+			fmt.Sprintf("call %s to search by keyword", t.toolName("okf_find")))
+	}
 	return function.NewFunctionTool(
 		func(ctx context.Context, a readArgs) (Concept, error) {
 			c, err := t.store.Read(ctx, a.ConceptID)
 			if err != nil {
 				if errors.Is(err, ErrNotFound) {
-					return Concept{}, fmt.Errorf("concept %q not found — call okf_list to browse the bundle or okf_find to search by keyword", a.ConceptID)
+					msg := fmt.Sprintf("concept %q not found", a.ConceptID)
+					if len(notFoundActions) > 0 {
+						msg += " — " + strings.Join(notFoundActions, " or ")
+					}
+					return Concept{}, errors.New(msg)
 				}
 				return Concept{}, err
 			}
@@ -160,7 +191,7 @@ type findArgs struct {
 	Query string   `json:"query" jsonschema:"description=Free-text query matched against concept title/description and body,required"`
 	Type  *string  `json:"type,omitempty" jsonschema:"description=Optional exact frontmatter 'type' filter"`
 	Tags  []string `json:"tags,omitempty" jsonschema:"description=Optional tags; a concept must carry all of them"`
-	Limit *int     `json:"limit,omitempty" jsonschema:"description=Maximum number of results"`
+	Limit *int     `json:"limit,omitempty" jsonschema:"description=Maximum number of results; must be positive"`
 }
 
 type findResult struct {
@@ -169,6 +200,12 @@ type findResult struct {
 }
 
 func (t *toolSet) findTool() tool.Tool {
+	description := "Search the OKF bundle for concepts matching a free-text query, " +
+		"optionally filtered by frontmatter type and tags. Returns concept ids with title/description."
+	if t.readEnabled {
+		description += " Then use " + t.toolName("okf_read") +
+			" to read the full content and follow links."
+	}
 	return function.NewFunctionTool(
 		func(ctx context.Context, a findArgs) (findResult, error) {
 			q := Query{Text: a.Query, Tags: a.Tags}
@@ -176,6 +213,9 @@ func (t *toolSet) findTool() tool.Tool {
 				q.Type = *a.Type
 			}
 			if a.Limit != nil {
+				if *a.Limit <= 0 {
+					return findResult{}, fmt.Errorf("limit must be greater than zero")
+				}
 				q.Limit = *a.Limit
 			} else {
 				q.Limit = t.findLimit
@@ -189,13 +229,15 @@ func (t *toolSet) findTool() tool.Tool {
 			}
 			res := findResult{Hits: hits}
 			if len(hits) == 0 {
-				res.Note = "no concepts matched; try broader terms, drop the type/tags filter, or call okf_list to browse the bundle root"
+				res.Note = "no concepts matched; try broader terms or drop the type/tags filter"
+				if t.listEnabled {
+					res.Note += ", or call " + t.toolName("okf_list") +
+						" to browse the bundle root"
+				}
 			}
 			return res, nil
 		},
 		function.WithName(t.toolName("okf_find")),
-		function.WithDescription("Search the OKF bundle for concepts matching a free-text query, "+
-			"optionally filtered by frontmatter type and tags. Returns concept ids with title/description; "+
-			"then use okf_read to read the full content and follow links."),
+		function.WithDescription(description),
 	)
 }

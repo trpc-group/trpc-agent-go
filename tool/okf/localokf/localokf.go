@@ -31,6 +31,8 @@ type Local struct {
 	maxFileBytes int64
 }
 
+const defaultFindLimit = 10
+
 var _ okf.Store = (*Local)(nil)
 
 // LocalOption configures a Local store.
@@ -48,6 +50,10 @@ func New(root string, opts ...LocalOption) (*Local, error) {
 	if err != nil {
 		return nil, fmt.Errorf("okf/localokf: resolve root: %w", err)
 	}
+	abs, err = filepath.EvalSymlinks(abs)
+	if err != nil {
+		return nil, fmt.Errorf("okf/localokf: resolve root symlinks: %w", err)
+	}
 	info, err := os.Stat(abs)
 	if err != nil {
 		return nil, fmt.Errorf("okf/localokf: open root: %w", err)
@@ -63,7 +69,10 @@ func New(root string, opts ...LocalOption) (*Local, error) {
 }
 
 // List implements okf.Store.
-func (l *Local) List(_ context.Context, dir string) (okf.Listing, error) {
+func (l *Local) List(ctx context.Context, dir string) (okf.Listing, error) {
+	if err := ctx.Err(); err != nil {
+		return okf.Listing{}, err
+	}
 	abs, err := l.resolve(dir)
 	if err != nil {
 		return okf.Listing{}, err
@@ -77,8 +86,18 @@ func (l *Local) List(_ context.Context, dir string) (okf.Listing, error) {
 	}
 	listing := okf.Listing{Dir: normDir(dir)}
 	for _, e := range entries {
+		if err := ctx.Err(); err != nil {
+			return okf.Listing{}, err
+		}
+		info, err := e.Info()
+		if err != nil {
+			return okf.Listing{}, fmt.Errorf("okf/localokf: inspect %q: %w", e.Name(), err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return okf.Listing{}, symlinkError(e.Name())
+		}
 		name := e.Name()
-		if e.IsDir() {
+		if info.IsDir() {
 			listing.Subdirs = append(listing.Subdirs, name)
 			continue
 		}
@@ -87,7 +106,13 @@ func (l *Local) List(_ context.Context, dir string) (okf.Listing, error) {
 		}
 		switch name {
 		case okf.IndexFile:
+			if err := ctx.Err(); err != nil {
+				return okf.Listing{}, err
+			}
 			if data, err := os.ReadFile(filepath.Join(abs, name)); err == nil {
+				if err := ctx.Err(); err != nil {
+					return okf.Listing{}, err
+				}
 				listing.Index = string(data)
 				if normDir(dir) == "" { // okf_version lives only in the root index.md.
 					fm, _ := okf.SplitFrontmatter(data)
@@ -98,9 +123,15 @@ func (l *Local) List(_ context.Context, dir string) (okf.Listing, error) {
 		case okf.LogFile:
 			continue
 		}
+		if err := ctx.Err(); err != nil {
+			return okf.Listing{}, err
+		}
 		data, err := os.ReadFile(filepath.Join(abs, name))
 		if err != nil {
 			continue // tolerate unreadable files.
+		}
+		if err := ctx.Err(); err != nil {
+			return okf.Listing{}, err
 		}
 		fm, _ := okf.SplitFrontmatter(data)
 		listing.Concepts = append(listing.Concepts, okf.ConceptMeta{
@@ -114,10 +145,20 @@ func (l *Local) List(_ context.Context, dir string) (okf.Listing, error) {
 }
 
 // Read implements okf.Store.
-func (l *Local) Read(_ context.Context, conceptID string) (okf.Concept, error) {
+func (l *Local) Read(ctx context.Context, conceptID string) (okf.Concept, error) {
+	if err := ctx.Err(); err != nil {
+		return okf.Concept{}, err
+	}
 	id := normDir(conceptID)
+	if base := path.Base(id); base == strings.TrimSuffix(okf.IndexFile, ".md") ||
+		base == strings.TrimSuffix(okf.LogFile, ".md") {
+		return okf.Concept{}, fmt.Errorf("%w: %q", okf.ErrNotFound, conceptID)
+	}
 	abs, err := l.resolve(id + ".md")
 	if err != nil {
+		return okf.Concept{}, err
+	}
+	if err := ctx.Err(); err != nil {
 		return okf.Concept{}, err
 	}
 	data, err := os.ReadFile(abs)
@@ -127,28 +168,48 @@ func (l *Local) Read(_ context.Context, conceptID string) (okf.Concept, error) {
 		}
 		return okf.Concept{}, fmt.Errorf("okf/localokf: read %q: %w", conceptID, err)
 	}
+	if err := ctx.Err(); err != nil {
+		return okf.Concept{}, err
+	}
 	fm, body := okf.SplitFrontmatter(data)
+	links := okf.ExtractLinks(path.Dir(id), body)
+	truncated := false
 	// Cap the parsed body (not the raw file): a small cap must not swallow the
 	// frontmatter fence, and must not split a multi-byte rune.
 	if l.maxFileBytes > 0 && int64(len(body)) > l.maxFileBytes {
 		body = truncateUTF8Bytes(body, int(l.maxFileBytes))
+		truncated = true
 	}
 	return okf.Concept{
 		ID:          id,
 		Frontmatter: fm,
 		Body:        string(body),
-		Links:       okf.ExtractLinks(path.Dir(id), body),
+		Links:       links,
+		Truncated:   truncated,
 	}, nil
 }
 
 // Find implements okf.Store. It walks the bundle and matches on frontmatter
 // type/tags and a case-insensitive substring over title/description/body. Hits
 // are unranked (Score == 0).
-func (l *Local) Find(_ context.Context, q okf.Query) ([]okf.Hit, error) {
+func (l *Local) Find(ctx context.Context, q okf.Query) ([]okf.Hit, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	limit := q.Limit
+	if limit <= 0 {
+		limit = defaultFindLimit
+	}
 	var hits []okf.Hit
 	walkErr := filepath.WalkDir(l.root, func(p string, d fs.DirEntry, err error) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if err != nil {
 			return nil // tolerate traversal errors.
+		}
+		if d.Type()&os.ModeSymlink != 0 {
+			return symlinkError(d.Name())
 		}
 		if d.IsDir() {
 			return nil
@@ -157,9 +218,15 @@ func (l *Local) Find(_ context.Context, q okf.Query) ([]okf.Hit, error) {
 		if !strings.HasSuffix(name, ".md") || name == okf.IndexFile || name == okf.LogFile {
 			return nil
 		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		data, err := os.ReadFile(p)
 		if err != nil {
 			return nil
+		}
+		if err := ctx.Err(); err != nil {
+			return err
 		}
 		fm, body := okf.SplitFrontmatter(data)
 		if !matchQuery(fm, body, q) {
@@ -175,7 +242,7 @@ func (l *Local) Find(_ context.Context, q okf.Query) ([]okf.Hit, error) {
 			},
 			Snippet: snippet(fm, body),
 		})
-		if q.Limit > 0 && len(hits) >= q.Limit {
+		if len(hits) >= limit {
 			return filepath.SkipAll
 		}
 		return nil
@@ -194,7 +261,28 @@ func (l *Local) resolve(rel string) (string, error) {
 	if err != nil || inside == ".." || strings.HasPrefix(inside, ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf("okf/localokf: path %q escapes bundle root", rel)
 	}
+	current := l.root
+	for _, part := range strings.Split(inside, string(filepath.Separator)) {
+		if part == "." {
+			continue
+		}
+		current = filepath.Join(current, part)
+		info, statErr := os.Lstat(current)
+		if statErr != nil {
+			if os.IsNotExist(statErr) {
+				break
+			}
+			return "", fmt.Errorf("okf/localokf: inspect %q: %w", rel, statErr)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return "", symlinkError(rel)
+		}
+	}
 	return p, nil
+}
+
+func symlinkError(rel string) error {
+	return fmt.Errorf("okf/localokf: symbolic link %q is not allowed", rel)
 }
 
 // normDir normalizes a slash path: "" stays "", otherwise leading "/" is
