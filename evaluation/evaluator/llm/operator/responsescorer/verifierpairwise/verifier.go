@@ -19,6 +19,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/responsescorer"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
+	scorepkg "trpc.group/trpc-go/trpc-agent-go/evaluation/score"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -45,7 +46,11 @@ func (s *verifierResponseScorer) ScoreBasedOnResponse(ctx context.Context, respo
 	if err != nil {
 		return nil, err
 	}
-	return &evaluator.ScoreResult{Score: score, Reason: reason}, nil
+	return &evaluator.ScoreResult{
+		Score:  score,
+		Value:  &scorepkg.Value{Kind: scorepkg.KindNumeric, Numeric: &score},
+		Reason: reason,
+	}, nil
 }
 
 func scoreFromLogprobs(response *model.Response, granularity int) (float64, string, error) {
