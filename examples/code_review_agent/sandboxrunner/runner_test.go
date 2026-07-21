@@ -21,6 +21,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/permission"
 )
 
+// writeRepo materializes an in-memory file map as a temp repo.
 func writeRepo(t *testing.T, files map[string]string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -36,6 +37,7 @@ func writeRepo(t *testing.T, files map[string]string) string {
 	return dir
 }
 
+// TestRunChecksLocalDevFailureDoesNotCrash asserts broken repos yield failed runs, not panics.
 func TestRunChecksLocalDevFailureDoesNotCrash(t *testing.T) {
 	repo := writeRepo(t, map[string]string{
 		"go.mod": "module broken\n\ngo 1.21\n",
@@ -70,6 +72,7 @@ func TestRunChecksLocalDevFailureDoesNotCrash(t *testing.T) {
 	}
 }
 
+// TestRunChecksLocalDevTimeoutDoesNotCrash asserts command timeouts degrade to timeout runs.
 func TestRunChecksLocalDevTimeoutDoesNotCrash(t *testing.T) {
 	repo := writeRepo(t, map[string]string{
 		"go.mod": "module ok\n\ngo 1.21\n",
@@ -94,6 +97,7 @@ func TestRunChecksLocalDevTimeoutDoesNotCrash(t *testing.T) {
 	}
 }
 
+// TestRunChecksMockSkipsExecution asserts mock sandboxes never execute commands.
 func TestRunChecksMockSkipsExecution(t *testing.T) {
 	result := RunChecks(context.Background(), Config{
 		TaskID:      "test-mock",
@@ -110,6 +114,7 @@ func TestRunChecksMockSkipsExecution(t *testing.T) {
 	}
 }
 
+// TestRunChecksUnsupportedKindSkips asserts unknown sandbox kinds skip all runs.
 func TestRunChecksUnsupportedKindSkips(t *testing.T) {
 	result := RunChecks(context.Background(), Config{
 		TaskID:      "test-unknown",
@@ -126,6 +131,7 @@ func TestRunChecksUnsupportedKindSkips(t *testing.T) {
 	}
 }
 
+// TestRunChecksNoRepoNoRuns asserts absent repos produce no runs or decisions.
 func TestRunChecksNoRepoNoRuns(t *testing.T) {
 	result := RunChecks(context.Background(), Config{
 		TaskID:      "test-empty",
@@ -137,6 +143,7 @@ func TestRunChecksNoRepoNoRuns(t *testing.T) {
 	}
 }
 
+// TestEngineRunStatusClassification covers completed, failed, and timeout mapping.
 func TestEngineRunStatusClassification(t *testing.T) {
 	start := time.Now()
 	ok := engineRun("go vet ./...", start, codeexecutor.RunResult{ExitCode: 0}, nil)

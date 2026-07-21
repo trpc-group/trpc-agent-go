@@ -73,6 +73,7 @@ func filterPipeline(in []review.Finding) Result {
 	return out
 }
 
+// scanHunk applies every rule detector to the added lines of one hunk.
 func scanHunk(file review.ChangedFile, hunk review.Hunk) []review.Finding {
 	var findings []review.Finding
 	hunkText := hunkText(hunk)
@@ -225,6 +226,7 @@ func Deduplicate(in []review.Finding) []review.Finding {
 	return out
 }
 
+// dedupKey identifies findings that describe the same defect.
 func dedupKey(f review.Finding) string {
 	return f.File + "\x00" + f.RuleID + "\x00" + f.Category + "\x00" + itoa(f.Line)
 }
@@ -266,6 +268,7 @@ func dedupDropDecisions(in []review.Finding) []review.FilterDecision {
 	return out
 }
 
+// splitByConfidence buckets findings and records a filter decision for each.
 func splitByConfidence(in []review.Finding) Result {
 	var out Result
 	now := time.Now().UTC()
@@ -304,6 +307,7 @@ func splitByConfidence(in []review.Finding) Result {
 	return out
 }
 
+// better reports whether finding a should win deduplication over b.
 func better(a, b review.Finding) bool {
 	if severityRank(a.Severity) != severityRank(b.Severity) {
 		return severityRank(a.Severity) > severityRank(b.Severity)
@@ -314,6 +318,7 @@ func better(a, b review.Finding) bool {
 	return len(a.Evidence) > len(b.Evidence)
 }
 
+// severityRank orders severities so higher values indicate worse defects.
 func severityRank(s string) int {
 	switch s {
 	case review.SeverityCritical:
@@ -329,6 +334,7 @@ func severityRank(s string) int {
 	}
 }
 
+// hunkText joins all hunk lines into one searchable string.
 func hunkText(h review.Hunk) string {
 	var b strings.Builder
 	for _, l := range h.Lines {
@@ -338,6 +344,7 @@ func hunkText(h review.Hunk) string {
 	return b.String()
 }
 
+// opensResource reports whether the line acquires a closable resource.
 func opensResource(line string) bool {
 	needles := []string{"os.Open(", "os.OpenFile(", "http.Get(", "http.Post(", ".Query(", ".QueryContext(", "sql.Open("}
 	for _, needle := range needles {
@@ -348,6 +355,7 @@ func opensResource(line string) bool {
 	return false
 }
 
+// ignoresError reports whether the line discards an error value.
 func ignoresError(line string) bool {
 	if strings.Contains(line, "_ =") {
 		return true
@@ -355,6 +363,7 @@ func ignoresError(line string) bool {
 	return strings.Contains(line, ", _ :=") || strings.Contains(line, ", _ =")
 }
 
+// missingTest reports whether added Go code lacks a sibling test change.
 func missingTest(file review.ChangedFile, files []review.ChangedFile) bool {
 	if strings.HasSuffix(file.NewPath, "_test.go") {
 		return false
@@ -380,6 +389,7 @@ func missingTest(file review.ChangedFile, files []review.ChangedFile) bool {
 	return true
 }
 
+// looksLikeCode reports whether the line contains real Go code.
 func looksLikeCode(line string) bool {
 	line = strings.TrimSpace(line)
 	return strings.HasPrefix(line, "func ") ||
@@ -389,6 +399,7 @@ func looksLikeCode(line string) bool {
 		strings.Contains(line, "return ")
 }
 
+// firstAddedLine returns the first added line number of the file.
 func firstAddedLine(file review.ChangedFile) int {
 	for _, h := range file.Hunks {
 		for _, line := range h.Lines {
@@ -400,6 +411,7 @@ func firstAddedLine(file review.ChangedFile) int {
 	return 1
 }
 
+// dirName returns the directory portion of a slash-separated path.
 func dirName(path string) string {
 	if i := strings.LastIndex(path, "/"); i >= 0 {
 		return path[:i]
@@ -407,6 +419,7 @@ func dirName(path string) string {
 	return "."
 }
 
+// itoa formats n in decimal without importing strconv.
 func itoa(n int) string {
 	if n == 0 {
 		return "0"

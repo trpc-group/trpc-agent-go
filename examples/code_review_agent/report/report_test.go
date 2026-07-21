@@ -18,6 +18,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/review"
 )
 
+// TestWriteProducesBothArtifacts verifies JSON and markdown artifacts are written.
 func TestWriteProducesBothArtifacts(t *testing.T) {
 	dir := t.TempDir()
 	artifacts, err := Write(dir, review.ReviewReport{
@@ -43,6 +44,7 @@ func TestWriteProducesBothArtifacts(t *testing.T) {
 	}
 }
 
+// TestWriteRejectsOversizedReport verifies the artifact size cap is enforced.
 func TestWriteRejectsOversizedReport(t *testing.T) {
 	dir := t.TempDir()
 	// Short words with spaces survive redaction, unlike one long token.
@@ -64,6 +66,7 @@ func TestWriteRejectsOversizedReport(t *testing.T) {
 	}
 }
 
+// TestMarkdownIncludesFilterDecisions verifies filter decisions appear in markdown.
 func TestMarkdownIncludesFilterDecisions(t *testing.T) {
 	dir := t.TempDir()
 	if _, err := Write(dir, review.ReviewReport{

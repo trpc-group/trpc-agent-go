@@ -101,6 +101,7 @@ func RunChecks(ctx context.Context, cfg Config) Result {
 	return out
 }
 
+// runLocal executes the command directly on the host as a development fallback.
 func runLocal(ctx context.Context, repoPath string, command string, timeout time.Duration) review.SandboxRun {
 	start := time.Now()
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
@@ -116,6 +117,7 @@ func runLocal(ctx context.Context, repoPath string, command string, timeout time
 	return runFromOutput(command, start, output, exitCode, runCtx.Err(), err)
 }
 
+// runContainer executes the command inside a Docker-based golang container.
 func runContainer(ctx context.Context, cfg Config, command string) review.SandboxRun {
 	start := time.Now()
 	exec, err := containerexec.New(
@@ -134,6 +136,7 @@ func runContainer(ctx context.Context, cfg Config, command string) review.Sandbo
 	return runEngine(ctx, exec.Engine(), cfg, command, start)
 }
 
+// runE2B executes the command inside a remote E2B sandbox.
 func runE2B(ctx context.Context, cfg Config, command string) review.SandboxRun {
 	start := time.Now()
 	exec, err := e2bexec.NewWithContext(ctx,
@@ -147,6 +150,7 @@ func runE2B(ctx context.Context, cfg Config, command string) review.SandboxRun {
 	return runEngine(ctx, exec.Engine(), cfg, command, start)
 }
 
+// runManaged executes the command inside the managed OS sandbox runtime.
 func runManaged(ctx context.Context, cfg Config, command string) review.SandboxRun {
 	start := time.Now()
 	repoPath, err := filepath.Abs(cfg.RepoPath)
@@ -169,6 +173,7 @@ func runManaged(ctx context.Context, cfg Config, command string) review.SandboxR
 	return runEngine(ctx, rt, cfg, command, start)
 }
 
+// runEngine stages the repo into a workspace and runs the command on the engine.
 func runEngine(ctx context.Context, eng codeexecutor.Engine, cfg Config, command string, start time.Time) review.SandboxRun {
 	ws, err := eng.Manager().CreateWorkspace(ctx, cfg.TaskID, codeexecutor.WorkspacePolicy{})
 	if err != nil {
@@ -215,6 +220,7 @@ func engineRun(command string, start time.Time, res codeexecutor.RunResult, err 
 	return run
 }
 
+// sandboxEnv supplies per-runtime Go environment for sandboxed commands.
 func sandboxEnv(cfg Config) map[string]string {
 	switch cfg.SandboxKind {
 	case "managed", "sandbox":
@@ -236,6 +242,7 @@ func sandboxEnv(cfg Config) map[string]string {
 	}
 }
 
+// runFromOutput builds an audited run from raw process output and exit status.
 func runFromOutput(command string, start time.Time, output []byte, exitCode int, ctxErr error, err error) review.SandboxRun {
 	run := review.SandboxRun{
 		Command:       command,
@@ -256,6 +263,7 @@ func runFromOutput(command string, start time.Time, output []byte, exitCode int,
 	return run
 }
 
+// failedRun records a command that could not be executed.
 func failedRun(command string, start time.Time, err error) review.SandboxRun {
 	return review.SandboxRun{
 		Command:    command,
@@ -265,6 +273,7 @@ func failedRun(command string, start time.Time, err error) review.SandboxRun {
 	}
 }
 
+// excerpt truncates output to the audit excerpt limit.
 func excerpt(s string) string {
 	if len(s) <= outputExcerptLimit {
 		return s

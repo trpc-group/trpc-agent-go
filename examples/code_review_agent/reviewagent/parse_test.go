@@ -14,6 +14,7 @@ import (
 	"testing"
 )
 
+// TestParseModelReviewFencedJSON verifies fenced JSON model replies are parsed.
 func TestParseModelReviewFencedJSON(t *testing.T) {
 	content := "Here is my review:\n```json\n" +
 		`{"summary":"one issue","findings":[{"severity":"HIGH","category":"Concurrency",` +
@@ -39,6 +40,7 @@ func TestParseModelReviewFencedJSON(t *testing.T) {
 	}
 }
 
+// TestParseModelReviewDowngradesHallucinatedLocation verifies out-of-diff findings lose confidence.
 func TestParseModelReviewDowngradesHallucinatedLocation(t *testing.T) {
 	content := `{"summary":"","findings":[{"severity":"critical","category":"security",` +
 		`"file":"not/in/diff.go","line":99,"title":"made up","evidence":"x",` +
@@ -52,6 +54,7 @@ func TestParseModelReviewDowngradesHallucinatedLocation(t *testing.T) {
 	}
 }
 
+// TestParseModelReviewRedactsSecrets verifies secrets never survive parsing.
 func TestParseModelReviewRedactsSecrets(t *testing.T) {
 	content := `{"summary":"apiKey=sk-abcdefghijklmnopqrstuvwxyz123456 leaked",` +
 		`"findings":[{"severity":"critical","category":"security",` +
@@ -68,6 +71,7 @@ func TestParseModelReviewRedactsSecrets(t *testing.T) {
 	}
 }
 
+// TestParseModelReviewRejectsNonJSON verifies non-JSON replies produce an error.
 func TestParseModelReviewRejectsNonJSON(t *testing.T) {
 	if _, err := ParseModelReview("no json here", testFiles(), ModeLLM); err == nil {
 		t.Fatal("expected error for non-JSON reply")

@@ -29,6 +29,7 @@ const testDiff = `diff --git a/config.go b/config.go
 
 const skillsRoot = "../skills"
 
+// TestRunScriptsLocalDev runs the bundled skill scripts on the host.
 func TestRunScriptsLocalDev(t *testing.T) {
 	result := RunScripts(context.Background(), Config{
 		TaskID:      "test-local",
@@ -84,6 +85,7 @@ func TestRunScriptsLocalDev(t *testing.T) {
 	}
 }
 
+// TestRunScriptsMock verifies mock mode skips script execution.
 func TestRunScriptsMock(t *testing.T) {
 	result := RunScripts(context.Background(), Config{
 		TaskID:      "test-mock",
@@ -108,6 +110,7 @@ func TestRunScriptsMock(t *testing.T) {
 	}
 }
 
+// TestRunScriptsUnsupportedSandbox verifies unknown sandboxes skip scripts.
 func TestRunScriptsUnsupportedSandbox(t *testing.T) {
 	result := RunScripts(context.Background(), Config{
 		TaskID:      "test-unsupported",
@@ -128,6 +131,7 @@ func TestRunScriptsUnsupportedSandbox(t *testing.T) {
 	}
 }
 
+// TestRunScriptsUnknownSkill verifies missing skills fail the load step.
 func TestRunScriptsUnknownSkill(t *testing.T) {
 	result := RunScripts(context.Background(), Config{
 		TaskID:     "test-missing",
@@ -146,6 +150,7 @@ func TestRunScriptsUnknownSkill(t *testing.T) {
 	}
 }
 
+// TestScriptRunStatusClassification covers completed, failed, and timeout mapping.
 func TestScriptRunStatusClassification(t *testing.T) {
 	start := time.Now()
 	ok := scriptRun("bash scripts/diff_summary.sh", start,

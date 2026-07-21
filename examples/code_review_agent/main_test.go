@@ -29,6 +29,7 @@ import (
 	atrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 )
 
+// TestFixtureReportsExpectedRules verifies each fixture triggers its rule IDs.
 func TestFixtureReportsExpectedRules(t *testing.T) {
 	expected := map[string][]string{
 		"security_secret":        {"SEC001"},
@@ -78,6 +79,7 @@ func TestFixtureReportsExpectedRules(t *testing.T) {
 	}
 }
 
+// TestFilesInputBuildsReview verifies --files input produces a full review.
 func TestFilesInputBuildsReview(t *testing.T) {
 	dir := t.TempDir()
 	src := filepath.Join(dir, "secret.go")
@@ -110,6 +112,7 @@ var apiKey = "sk-abcdefghijklmnopqrstuvwxyz123456"
 	assertNoFixtureSecrets(t, filepath.Join(cfg.outDir, "review_report.json"))
 }
 
+// TestFakeModelModeRunsAgentChain verifies fake-model mode reaches the agent chain.
 func TestFakeModelModeRunsAgentChain(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config{
@@ -141,6 +144,7 @@ func TestFakeModelModeRunsAgentChain(t *testing.T) {
 	assertNoFixtureSecrets(t, filepath.Join(cfg.outDir, "review_report.md"))
 }
 
+// TestLLMModeFailureDegradesToRuleOnly verifies model errors keep rule results.
 func TestLLMModeFailureDegradesToRuleOnly(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "")
 	dir := t.TempDir()
@@ -168,6 +172,7 @@ func TestLLMModeFailureDegradesToRuleOnly(t *testing.T) {
 	}
 }
 
+// TestCleanFixtureReportsNoFindings verifies clean diffs stay silent.
 func TestCleanFixtureReportsNoFindings(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config{
@@ -199,6 +204,7 @@ func TestCleanFixtureReportsNoFindings(t *testing.T) {
 	}
 }
 
+// TestSandboxFailureFixtureDegradesGracefully verifies sandbox errors do not abort reviews.
 func TestSandboxFailureFixtureDegradesGracefully(t *testing.T) {
 	repo := t.TempDir()
 	// Mirror the fixture: a repository whose checks cannot compile.
@@ -243,6 +249,7 @@ func TestSandboxFailureFixtureDegradesGracefully(t *testing.T) {
 	}
 }
 
+// TestRunRejectsUnknownMode verifies invalid --mode values fail fast.
 func TestRunRejectsUnknownMode(t *testing.T) {
 	err := run(context.Background(), config{mode: "bogus"})
 	if err == nil || !strings.Contains(err.Error(), "unsupported --mode") {
@@ -305,6 +312,7 @@ func TestExpectedOutputsStayInSync(t *testing.T) {
 	}
 }
 
+// assertSameFindings compares actual and curated findings for one bucket.
 func assertSameFindings(t *testing.T, fixture, bucket string, actual, want []review.Finding) {
 	t.Helper()
 	got := findingKeys(actual)
@@ -315,6 +323,7 @@ func assertSameFindings(t *testing.T, fixture, bucket string, actual, want []rev
 	}
 }
 
+// findingKeys reduces findings to comparable identity strings.
 func findingKeys(fs []review.Finding) []string {
 	keys := make([]string, 0, len(fs))
 	for _, f := range fs {
@@ -324,6 +333,7 @@ func findingKeys(fs []review.Finding) []string {
 	return keys
 }
 
+// TestFilterDecisionsReportedAndPersisted verifies filter decisions reach report and DB.
 func TestFilterDecisionsReportedAndPersisted(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config{
@@ -376,6 +386,7 @@ func TestFilterDecisionsReportedAndPersisted(t *testing.T) {
 	assertNoFixtureSecrets(t, filepath.Join(cfg.outDir, "review_report.md"))
 }
 
+// TestTelemetrySpanRecordsReviewMetrics verifies OTLP spans carry review metrics.
 func TestTelemetrySpanRecordsReviewMetrics(t *testing.T) {
 	recorder := tracetest.NewSpanRecorder()
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
@@ -428,6 +439,7 @@ func TestTelemetrySpanRecordsReviewMetrics(t *testing.T) {
 	}
 }
 
+// readReport loads a written review report from disk.
 func readReport(t *testing.T, path string) review.ReviewReport {
 	t.Helper()
 	data, err := os.ReadFile(path)
@@ -441,6 +453,7 @@ func readReport(t *testing.T, path string) review.ReviewReport {
 	return report
 }
 
+// hasRule reports whether the report contains a finding with ruleID.
 func hasRule(report review.ReviewReport, ruleID string) bool {
 	for _, f := range report.Findings {
 		if f.RuleID == ruleID {
@@ -460,6 +473,7 @@ func hasRule(report review.ReviewReport, ruleID string) bool {
 	return false
 }
 
+// assertNoFixtureSecrets fails if any fixture secret leaks into the file.
 func assertNoFixtureSecrets(t *testing.T, path string) {
 	t.Helper()
 	data, err := os.ReadFile(path)

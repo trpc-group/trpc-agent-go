@@ -14,6 +14,7 @@ import (
 	"testing"
 )
 
+// TestRedactText verifies known secret shapes are masked.
 func TestRedactText(t *testing.T) {
 	in := `api_key = "sk-abcdefghijklmnopqrstuvwxyz123456" password=super-secret`
 	out := RedactText(in)

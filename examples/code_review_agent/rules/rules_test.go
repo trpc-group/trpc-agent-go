@@ -16,6 +16,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/review"
 )
 
+// TestScanSecretAndDedup verifies secret detection and duplicate collapsing.
 func TestScanSecretAndDedup(t *testing.T) {
 	diff := []byte(`diff --git a/foo.go b/foo.go
 --- a/foo.go
@@ -42,6 +43,7 @@ func TestScanSecretAndDedup(t *testing.T) {
 	}
 }
 
+// TestDeduplicateKeepsHigherSeverity verifies dedup keeps the worst finding.
 func TestDeduplicateKeepsHigherSeverity(t *testing.T) {
 	in := []review.Finding{
 		{File: "a.go", Line: 3, Category: "security", RuleID: "SEC001", Severity: review.SeverityLow, Confidence: 0.9},
@@ -56,6 +58,7 @@ func TestDeduplicateKeepsHigherSeverity(t *testing.T) {
 	}
 }
 
+// TestMergeReclassifiesModelFindings verifies model findings re-enter the buckets.
 func TestMergeReclassifiesModelFindings(t *testing.T) {
 	base := Result{
 		Findings: []review.Finding{
@@ -88,6 +91,7 @@ func TestMergeReclassifiesModelFindings(t *testing.T) {
 	}
 }
 
+// TestFilterPipelineRecordsDecisions verifies every keep, demote, and drop is recorded.
 func TestFilterPipelineRecordsDecisions(t *testing.T) {
 	in := []review.Finding{
 		// Winner of the dedup pair.
@@ -136,6 +140,7 @@ func TestFilterPipelineRecordsDecisions(t *testing.T) {
 	}
 }
 
+// TestScanIdenticalDuplicatesKeepOneDecision verifies identical hits leave one decision.
 func TestScanIdenticalDuplicatesKeepOneDecision(t *testing.T) {
 	// Two byte-identical findings: one keep + one drop decision.
 	in := []review.Finding{

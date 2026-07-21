@@ -58,6 +58,7 @@ type config struct {
 	timeout           time.Duration
 }
 
+// main is the CLI entry point for the code review agent example.
 func main() {
 	cfg := parseFlags()
 	if err := run(context.Background(), cfg); err != nil {
@@ -66,6 +67,7 @@ func main() {
 	}
 }
 
+// parseFlags builds the CLI configuration from command-line flags.
 func parseFlags() config {
 	timeout := flag.Duration("timeout", 30*time.Second, "sandbox command timeout")
 	cfg := config{}
@@ -88,6 +90,7 @@ func parseFlags() config {
 	return cfg
 }
 
+// run dispatches the CLI into query, all-fixtures, or single-review mode.
 func run(ctx context.Context, cfg config) error {
 	if err := validateMode(cfg.mode); err != nil {
 		return err
@@ -117,6 +120,7 @@ func run(ctx context.Context, cfg config) error {
 	return runOne(ctx, cfg)
 }
 
+// validateMode rejects unknown model modes early.
 func validateMode(mode string) error {
 	switch mode {
 	case "rule-only", reviewagent.ModeFakeModel, reviewagent.ModeLLM:
@@ -126,6 +130,7 @@ func validateMode(mode string) error {
 	}
 }
 
+// defaultModelName picks the model from MODEL_NAME with a sane default.
 func defaultModelName() string {
 	if name := os.Getenv("MODEL_NAME"); name != "" {
 		return name
@@ -133,6 +138,7 @@ func defaultModelName() string {
 	return "deepseek-v4-flash"
 }
 
+// queryTask prints the stored snapshot of a previous review task.
 func queryTask(ctx context.Context, cfg config) error {
 	db, err := openStore(ctx, cfg.dbPath)
 	if err != nil {
@@ -154,6 +160,7 @@ func openStore(ctx context.Context, path string) (store.Store, error) {
 	return store.Open(ctx, path)
 }
 
+// runAllFixtures reviews every bundled fixture in sequence.
 func runAllFixtures(ctx context.Context, cfg config) error {
 	fixtures, err := filepath.Glob(filepath.Join(fixturesDir(), "*.diff"))
 	if err != nil {
@@ -178,6 +185,7 @@ func runAllFixtures(ctx context.Context, cfg config) error {
 	return nil
 }
 
+// runOne executes a full review for one input and persists the results.
 func runOne(ctx context.Context, cfg config) (err error) {
 	start := time.Now()
 	ctx, span := atrace.Tracer.Start(ctx, "code_review.run")
@@ -315,6 +323,7 @@ func runOne(ctx context.Context, cfg config) (err error) {
 	return nil
 }
 
+// loadInput resolves the diff bytes and labels from the configured source.
 func loadInput(ctx context.Context, cfg config) ([]byte, string, string, error) {
 	switch {
 	case cfg.fixture != "":
@@ -355,6 +364,7 @@ func fixturesDir() string {
 	)
 }
 
+// resolveFixturePath locates a bundled fixture independent of the working dir.
 func resolveFixturePath(name string) string {
 	return firstExistingPath(
 		filepath.Join("code_review_agent", "testdata", "fixtures", name+".diff"),
@@ -415,6 +425,7 @@ func runSkillScripts(ctx context.Context, cfg config, taskID string, diffText st
 	return result
 }
 
+// diffForFiles synthesizes a unified diff for an explicit file list.
 func diffForFiles(repoPath, filesValue string) ([]byte, string, error) {
 	paths := splitFiles(filesValue)
 	if len(paths) == 0 {
@@ -452,6 +463,7 @@ func diffForFiles(repoPath, filesValue string) ([]byte, string, error) {
 	return []byte(b.String()), strings.Join(summaries, ","), nil
 }
 
+// splitFiles splits the comma-separated --files value into paths.
 func splitFiles(filesValue string) []string {
 	parts := strings.FieldsFunc(filesValue, func(r rune) bool {
 		return r == ',' || r == '\n' || r == '\t'
@@ -466,6 +478,7 @@ func splitFiles(filesValue string) []string {
 	return out
 }
 
+// displayPath prefers a repo-relative path when rendering file names.
 func displayPath(repoPath, hostPath, raw string) string {
 	if repoPath != "" {
 		if absRepo, err := filepath.Abs(repoPath); err == nil {
@@ -482,6 +495,7 @@ func displayPath(repoPath, hostPath, raw string) string {
 	return filepath.Base(raw)
 }
 
+// summary produces the one-line result description for the report.
 func summary(result rules.Result, modelOut reviewagent.Output, modelErr error) string {
 	var b strings.Builder
 	if len(result.Findings) == 0 && len(result.NeedsHumanReview) == 0 {
@@ -519,6 +533,7 @@ func runModelReview(ctx context.Context, cfg config, taskID string, redactedFile
 	return out, err
 }
 
+// buildMetrics aggregates the monitoring summary from the final report.
 func buildMetrics(start time.Time, r review.ReviewReport) review.MetricsSummary {
 	severity := map[string]int{}
 	for _, f := range r.Findings {
@@ -556,6 +571,7 @@ func buildMetrics(start time.Time, r review.ReviewReport) review.MetricsSummary 
 	}
 }
 
+// redactFiles redacts changed-file contents before persistence.
 func redactFiles(files []review.ChangedFile) []review.ChangedFile {
 	out := make([]review.ChangedFile, len(files))
 	copy(out, files)

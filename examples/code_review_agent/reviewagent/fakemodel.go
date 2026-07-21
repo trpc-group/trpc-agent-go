@@ -31,6 +31,7 @@ var (
 // without any API key, producing stable output for tests and dry runs.
 type fakeModel struct{}
 
+// newFakeModel builds the deterministic offline model used in fake-model mode.
 func newFakeModel() *fakeModel { return &fakeModel{} }
 
 // Info implements model.Model.
@@ -71,6 +72,7 @@ func (m *fakeModel) GenerateContent(_ context.Context, request *model.Request) (
 	return ch, nil
 }
 
+// lastUserMessage returns the content of the most recent user message.
 func lastUserMessage(request *model.Request) string {
 	if request == nil {
 		return ""

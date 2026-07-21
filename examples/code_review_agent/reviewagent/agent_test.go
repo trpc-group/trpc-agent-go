@@ -18,6 +18,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/review"
 )
 
+// testFiles returns a minimal changed-file set for agent tests.
 func testFiles() []review.ChangedFile {
 	return []review.ChangedFile{{
 		NewPath:     "pkg/service/service.go",
@@ -34,6 +35,7 @@ func testFiles() []review.ChangedFile {
 	}}
 }
 
+// TestReviewFakeModelEndToEnd runs the full agent chain with the offline model.
 func TestReviewFakeModelEndToEnd(t *testing.T) {
 	out, err := Review(context.Background(), Config{
 		Mode:    ModeFakeModel,
@@ -61,12 +63,14 @@ func TestReviewFakeModelEndToEnd(t *testing.T) {
 	}
 }
 
+// TestReviewUnsupportedMode verifies unknown modes fail fast.
 func TestReviewUnsupportedMode(t *testing.T) {
 	if _, err := Review(context.Background(), Config{Mode: "bogus"}, testFiles()); err == nil {
 		t.Fatal("expected error for unsupported mode")
 	}
 }
 
+// TestReviewLLMModeRequiresAPIKey verifies llm mode demands an API key.
 func TestReviewLLMModeRequiresAPIKey(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "")
 	_, err := Review(context.Background(), Config{Mode: ModeLLM, ModelName: "any"}, testFiles())
@@ -75,6 +79,7 @@ func TestReviewLLMModeRequiresAPIKey(t *testing.T) {
 	}
 }
 
+// TestBuildPromptContainsFileAndLines verifies prompts embed the diff context.
 func TestBuildPromptContainsFileAndLines(t *testing.T) {
 	prompt := BuildPrompt(testFiles())
 	for _, want := range []string{

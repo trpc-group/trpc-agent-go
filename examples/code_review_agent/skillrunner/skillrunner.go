@@ -361,6 +361,7 @@ func scriptRun(command string, start time.Time, rr runResult) review.SandboxRun 
 	return run
 }
 
+// skippedRun records a script that was not executed and why.
 func skippedRun(command, reason string) review.SandboxRun {
 	return review.SandboxRun{
 		Command: command,
@@ -369,6 +370,7 @@ func skippedRun(command, reason string) review.SandboxRun {
 	}
 }
 
+// failedRun records a script invocation that could not complete.
 func failedRun(command string, start time.Time, err error) review.SandboxRun {
 	return review.SandboxRun{
 		Command:    command,
@@ -378,6 +380,7 @@ func failedRun(command string, start time.Time, err error) review.SandboxRun {
 	}
 }
 
+// excerpt truncates output to the audit excerpt limit.
 func excerpt(s string) string {
 	if len(s) <= outputExcerptLimit {
 		return s

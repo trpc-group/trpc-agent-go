@@ -105,6 +105,7 @@ func extractJSON(content string) string {
 	return content[start : end+1]
 }
 
+// normalizeSeverity maps model output onto the known severity levels.
 func normalizeSeverity(s string) string {
 	switch strings.ToLower(strings.TrimSpace(s)) {
 	case review.SeverityCritical:
@@ -118,6 +119,7 @@ func normalizeSeverity(s string) string {
 	}
 }
 
+// normalizeCategory lower-cases the category, defaulting to model_review.
 func normalizeCategory(s string) string {
 	s = strings.ToLower(strings.TrimSpace(s))
 	if s == "" {
@@ -126,6 +128,7 @@ func normalizeCategory(s string) string {
 	return s
 }
 
+// normalizeRuleID trims the rule ID, defaulting to LLM-GENERIC.
 func normalizeRuleID(s string) string {
 	s = strings.TrimSpace(s)
 	if s == "" {
@@ -134,6 +137,7 @@ func normalizeRuleID(s string) string {
 	return s
 }
 
+// clampConfidence bounds a confidence value to the [0, 1] range.
 func clampConfidence(v float64) float64 {
 	if v < 0 {
 		return 0
@@ -144,6 +148,7 @@ func clampConfidence(v float64) float64 {
 	return v
 }
 
+// locationInDiff reports whether file and line exist in the reviewed diff.
 func locationInDiff(file string, line int, files []review.ChangedFile) bool {
 	for _, f := range files {
 		if f.NewPath != file {

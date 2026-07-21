@@ -16,6 +16,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
+// TestDecide covers allow, deny, and human-review command routing.
 func TestDecide(t *testing.T) {
 	if got := Decide("go test ./...").Decision; got != DecisionAllow {
 		t.Fatalf("go test decision=%s", got)
@@ -28,6 +29,7 @@ func TestDecide(t *testing.T) {
 	}
 }
 
+// TestPolicyCheckToolPermission exercises the framework PermissionPolicy hook.
 func TestPolicyCheckToolPermission(t *testing.T) {
 	var policy tool.PermissionPolicy = Policy{}
 	cases := []struct {

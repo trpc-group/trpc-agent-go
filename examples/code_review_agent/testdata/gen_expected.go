@@ -60,6 +60,7 @@ type curated struct {
 	NeedsHumanReview []curatedHuman `json:"needs_human_review,omitempty"`
 }
 
+// main regenerates curated expected outputs from recorded fixture runs.
 func main() {
 	if len(os.Args) != 3 {
 		fmt.Fprintln(os.Stderr, "usage: go run gen_expected.go <run_dir> <expected_dir>")
@@ -71,6 +72,7 @@ func main() {
 	}
 }
 
+// run converts every report under runDir into curated files in expectedDir.
 func run(runDir, expectedDir string) error {
 	if err := os.MkdirAll(expectedDir, 0o755); err != nil {
 		return err
@@ -112,6 +114,7 @@ func run(runDir, expectedDir string) error {
 	return nil
 }
 
+// curate strips volatile fields so the expected output stays stable.
 func curate(r report) curated {
 	out := curated{Summary: r.Summary, Findings: r.Findings}
 	for _, f := range r.NeedsHumanReview {
@@ -127,6 +130,7 @@ func curate(r report) curated {
 	return out
 }
 
+// writeJSON writes doc as indented JSON with a trailing newline.
 func writeJSON(path string, doc curated) error {
 	data, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {
@@ -135,6 +139,7 @@ func writeJSON(path string, doc curated) error {
 	return os.WriteFile(path, append(data, '\n'), 0o644)
 }
 
+// markdown renders the curated report in the expected markdown layout.
 func markdown(r report) string {
 	var b strings.Builder
 	b.WriteString("# Code Review Report\n\n")

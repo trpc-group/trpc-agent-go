@@ -11,6 +11,7 @@ package diffparser
 
 import "testing"
 
+// TestParseUnifiedDiff verifies hunk, line, and metadata parsing of a unified diff.
 func TestParseUnifiedDiff(t *testing.T) {
 	diff := []byte(`diff --git a/foo.go b/foo.go
 --- a/foo.go

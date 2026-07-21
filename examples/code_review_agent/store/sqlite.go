@@ -233,6 +233,7 @@ SELECT json_path, markdown_path, summary_json FROM review_reports WHERE task_id 
 	return snap, nil
 }
 
+// init creates the SQLite schema when it does not exist yet.
 func (s *SQLiteStore) init(ctx context.Context) error {
 	stmts := []string{
 		`CREATE TABLE IF NOT EXISTS review_tasks (
@@ -318,6 +319,7 @@ func (s *SQLiteStore) init(ctx context.Context) error {
 	return nil
 }
 
+// getFindings loads all persisted findings of a task.
 func (s *SQLiteStore) getFindings(ctx context.Context, taskID string) ([]review.Finding, error) {
 	rows, err := s.db.QueryContext(ctx, `
 SELECT severity, category, file, line, title, evidence, recommendation, confidence, source, rule_id
@@ -339,6 +341,7 @@ FROM review_findings WHERE task_id = ? ORDER BY file, line, rule_id`, taskID)
 	return out, rows.Err()
 }
 
+// getSandboxRuns loads all persisted sandbox runs of a task.
 func (s *SQLiteStore) getSandboxRuns(ctx context.Context, taskID string) ([]review.SandboxRun, error) {
 	rows, err := s.db.QueryContext(ctx, `
 SELECT command, status, exit_code, duration_ms, stdout_excerpt, stderr_excerpt, error
@@ -360,6 +363,7 @@ FROM sandbox_runs WHERE task_id = ? ORDER BY id`, taskID)
 	return out, rows.Err()
 }
 
+// getPermissionDecisions loads the permission audit trail of a task.
 func (s *SQLiteStore) getPermissionDecisions(ctx context.Context, taskID string) ([]review.PermissionDecision, error) {
 	rows, err := s.db.QueryContext(ctx, `
 SELECT command, decision, reason, created_at
@@ -383,6 +387,7 @@ FROM permission_decisions WHERE task_id = ? ORDER BY id`, taskID)
 	return out, rows.Err()
 }
 
+// getFilterDecisions loads the filter audit trail of a task.
 func (s *SQLiteStore) getFilterDecisions(ctx context.Context, taskID string) ([]review.FilterDecision, error) {
 	rows, err := s.db.QueryContext(ctx, `
 SELECT rule_id, file, line, source, confidence, stage, decision, reason, created_at
@@ -407,6 +412,7 @@ FROM filter_decisions WHERE task_id = ? ORDER BY id`, taskID)
 	return out, rows.Err()
 }
 
+// getArtifacts loads artifact records of a task.
 func (s *SQLiteStore) getArtifacts(ctx context.Context, taskID string) ([]review.Artifact, error) {
 	rows, err := s.db.QueryContext(ctx, `
 SELECT kind, path, sha256, size_bytes FROM artifacts WHERE task_id = ? ORDER BY id`, taskID)

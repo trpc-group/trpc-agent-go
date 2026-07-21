@@ -19,6 +19,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/review"
 )
 
+// TestSQLiteStoreSavesFinding verifies findings round-trip through SQLite.
 func TestSQLiteStoreSavesFinding(t *testing.T) {
 	ctx := context.Background()
 	db, err := Open(ctx, filepath.Join(t.TempDir(), "review.db"))
@@ -62,6 +63,7 @@ func TestSQLiteStoreSavesFinding(t *testing.T) {
 	}
 }
 
+// TestSQLiteStoreFilterDecisionRoundTrip verifies filter decisions persist.
 func TestSQLiteStoreFilterDecisionRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	db, err := Open(ctx, filepath.Join(t.TempDir(), "review.db"))
@@ -121,6 +123,7 @@ func TestSQLiteStoreFilterDecisionRoundTrip(t *testing.T) {
 	}
 }
 
+// TestGetTaskEmptyFilterDecisions verifies snapshots tolerate empty audit rows.
 func TestGetTaskEmptyFilterDecisions(t *testing.T) {
 	ctx := context.Background()
 	db, err := Open(ctx, filepath.Join(t.TempDir(), "review.db"))

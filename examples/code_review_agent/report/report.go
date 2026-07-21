@@ -59,6 +59,7 @@ func Write(outDir string, r review.ReviewReport) ([]review.Artifact, error) {
 	}, nil
 }
 
+// markdown renders the review report as human-readable markdown.
 func markdown(r review.ReviewReport) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Code Review Report\n\n")
@@ -124,6 +125,7 @@ func markdown(r review.ReviewReport) string {
 	return b.String()
 }
 
+// writeFindings appends one findings section to the markdown report.
 func writeFindings(b *strings.Builder, title string, findings []review.Finding) {
 	fmt.Fprintf(b, "\n## %s\n\n", title)
 	if len(findings) == 0 {
@@ -141,6 +143,7 @@ func writeFindings(b *strings.Builder, title string, findings []review.Finding) 
 	}
 }
 
+// redactReport applies secret redaction to every report field.
 func redactReport(r review.ReviewReport) review.ReviewReport {
 	out := r
 	out.Task.InputSummary = redaction.RedactText(out.Task.InputSummary)
@@ -189,6 +192,7 @@ func redactReport(r review.ReviewReport) review.ReviewReport {
 	return out
 }
 
+// redactFindings returns a copy of findings with redacted text fields.
 func redactFindings(in []review.Finding) []review.Finding {
 	out := make([]review.Finding, len(in))
 	copy(out, in)
@@ -200,6 +204,7 @@ func redactFindings(in []review.Finding) []review.Finding {
 	return out
 }
 
+// artifact describes a produced file with its checksum and size.
 func artifact(kind, path string, data []byte) review.Artifact {
 	sum := sha256.Sum256(data)
 	return review.Artifact{

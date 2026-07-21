@@ -97,6 +97,7 @@ func Review(ctx context.Context, cfg Config, files []review.ChangedFile) (Output
 	return out, nil
 }
 
+// buildModel selects the model implementation for the configured mode.
 func buildModel(cfg Config) (model.Model, error) {
 	switch cfg.Mode {
 	case ModeFakeModel:
@@ -144,6 +145,7 @@ func invoke(ctx context.Context, cfg Config, mdl model.Model, prompt string) (st
 	return collectFinalContent(eventCh)
 }
 
+// collectFinalContent drains runner events and returns the final response text.
 func collectFinalContent(eventCh <-chan *event.Event) (string, error) {
 	var content string
 	for evt := range eventCh {
@@ -198,6 +200,8 @@ func BuildPrompt(files []review.ChangedFile) string {
 	return b.String()
 }
 
+// intPtr returns a pointer to i.
 func intPtr(i int) *int { return &i }
 
+// floatPtr returns a pointer to f.
 func floatPtr(f float64) *float64 { return &f }

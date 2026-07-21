@@ -131,6 +131,7 @@ func ParseUnifiedDiff(data []byte) ([]review.ChangedFile, error) {
 	return files, nil
 }
 
+// cleanDiffPath normalizes a diff header path, dropping a/ b/ prefixes and /dev/null.
 func cleanDiffPath(path string) string {
 	path = strings.TrimSpace(path)
 	path = strings.Trim(path, `"`)
@@ -142,6 +143,7 @@ func cleanDiffPath(path string) string {
 	return filepath.ToSlash(path)
 }
 
+// atoiDefault parses s as an int, falling back on empty or invalid input.
 func atoiDefault(s string, fallback int) int {
 	if s == "" {
 		return fallback
@@ -153,6 +155,7 @@ func atoiDefault(s string, fallback int) int {
 	return n
 }
 
+// languageForPath reports the language of a changed file by extension.
 func languageForPath(path string) string {
 	if strings.EqualFold(filepath.Ext(path), ".go") {
 		return "go"
@@ -160,6 +163,7 @@ func languageForPath(path string) string {
 	return ""
 }
 
+// detectPackage extracts the Go package name from the file's hunk lines.
 func detectPackage(file review.ChangedFile) string {
 	for _, h := range file.Hunks {
 		for _, line := range h.Lines {
