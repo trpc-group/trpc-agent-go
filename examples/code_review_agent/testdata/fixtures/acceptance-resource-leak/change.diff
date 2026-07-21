@@ -1,7 +1,7 @@
 diff --git a/file.go b/file.go
 --- a/file.go
 +++ b/file.go
-@@ -8,7 +8,14 @@
+@@ -10,7 +10,14 @@
  package resourceleak
  
 -import "os"

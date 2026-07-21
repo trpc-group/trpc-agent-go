@@ -1,7 +1,7 @@
 diff --git a/database.go b/database.go
 --- a/database.go
 +++ b/database.go
-@@ -12,6 +12,10 @@ import (
+@@ -14,6 +14,10 @@ import (
  	"database/sql"
  )
  

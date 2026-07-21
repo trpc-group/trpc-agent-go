@@ -1,7 +1,7 @@
 diff --git a/http.go b/http.go
 --- a/http.go
 +++ b/http.go
-@@ -12,8 +12,8 @@ import "net/http"
+@@ -14,8 +14,8 @@ import "net/http"
  func Status(url string) (int, error) {
  	response, err := http.Get(url)
  	if err != nil {

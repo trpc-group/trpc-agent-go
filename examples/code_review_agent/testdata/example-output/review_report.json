@@ -92,7 +92,7 @@
       "tool_call_id": "fake-acceptance-security-submit_review_results",
       "tool_name": "submit_review_results",
       "operation": "submit_review_results",
-      "command_preview": "{\"findings\":[{\"severity\":\"critical\",\"category\":\"security\",\"file\":\"command.go\",\"line\":13,\"title\":\"User input is executed by a shell\",\"evidence\":\"The changed code passes input to exec.Command(\\\"sh\\\", \\\"-c\\\", input), enabling command injection.\",\"recommendation\":\"Avoid a shell and pass validated arguments directly to a fixed executable.\",\"confidence\":0.99,\"source\":\"agent\",\"rule_id\":\"GO-SEC-001\"}],\"conclusion\":\"One actionable issue found. Go checks completed successfully.\"}",
+      "command_preview": "{\"findings\":[{\"severity\":\"critical\",\"category\":\"security\",\"file\":\"command.go\",\"line\":15,\"title\":\"User input is executed by a shell\",\"evidence\":\"The changed code passes input to exec.Command(\\\"sh\\\", \\\"-c\\\", input), enabling command injection.\",\"recommendation\":\"Avoid a shell and pass validated arguments directly to a fixed executable.\",\"confidence\":0.99,\"source\":\"agent\",\"rule_id\":\"GO-SEC-001\"}],\"conclusion\":\"One actionable issue found. Go checks completed successfully.\"}",
       "decision": "allow",
       "decided_at": "2026-07-16T16:35:17.933468103Z"
     }
@@ -118,7 +118,7 @@
       "severity": "critical",
       "category": "security",
       "file": "command.go",
-      "line": 13,
+      "line": 15,
       "title": "User input is executed by a shell",
       "evidence": "The changed code passes input to exec.Command(\"sh\", \"-c\", input), enabling command injection.",
       "recommendation": "Avoid a shell and pass validated arguments directly to a fixed executable.",

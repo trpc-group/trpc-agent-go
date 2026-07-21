@@ -1,7 +1,7 @@
 diff --git a/command.go b/command.go
 --- a/command.go
 +++ b/command.go
-@@ -9,6 +9,6 @@ package security
+@@ -11,6 +11,6 @@ package security
  
  import "os/exec"
  

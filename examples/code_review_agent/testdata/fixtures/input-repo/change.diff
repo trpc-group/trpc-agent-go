@@ -1,7 +1,7 @@
 diff --git a/value.go b/value.go
 --- a/value.go
 +++ b/value.go
-@@ -8,4 +8,4 @@
+@@ -10,4 +10,4 @@
  
  package fixture
  

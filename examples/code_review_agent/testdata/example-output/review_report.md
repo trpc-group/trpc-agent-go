@@ -28,7 +28,7 @@ One actionable issue found. Go checks completed successfully.
 
 - Severity: critical
 - Category: security
-- Location: `command.go:13`
+- Location: `command.go:15`
 - Confidence: 0.99
 - Source: agent (`GO-SEC-001`)
 

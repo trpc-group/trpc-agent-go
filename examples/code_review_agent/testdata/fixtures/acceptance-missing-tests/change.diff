@@ -1,7 +1,7 @@
 diff --git a/discount.go b/discount.go
 --- a/discount.go
 +++ b/discount.go
-@@ -8,5 +8,8 @@
+@@ -10,5 +10,8 @@
  package missingtests
  
  func Discount(total int) int {

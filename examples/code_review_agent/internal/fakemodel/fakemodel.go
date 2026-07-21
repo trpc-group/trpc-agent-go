@@ -1,10 +1,10 @@
 //
-// Tencent is pleased to support the open source community by making
-// trpc-agent-go available.
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2026 Tencent.  All rights reserved.
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
+//
 //
 
 // Package fakemodel provides deterministic model behavior for offline review
@@ -63,14 +63,14 @@ var scenarios = map[string]scenario{
 		submission: submission{Conclusion: "No actionable issues found. Go checks completed successfully."},
 	},
 	"acceptance-context-leak": findingScenario("acceptance-context-leak", reviewResult{
-		Severity: "high", Category: "concurrency", File: "worker.go", Line: 13,
+		Severity: "high", Category: "concurrency", File: "worker.go", Line: 15,
 		Title:          "Goroutine ignores context cancellation",
 		Evidence:       "The new goroutine ranges only over jobs and no longer selects on ctx.Done().",
 		Recommendation: "Select on both jobs and ctx.Done() inside the goroutine.",
 		Confidence:     0.99, Source: "agent", RuleID: "GO-CONC-001",
 	}),
 	"acceptance-database-lifecycle": findingScenario("acceptance-database-lifecycle", reviewResult{
-		Severity: "high", Category: "database_lifecycle", File: "database.go", Line: 15,
+		Severity: "high", Category: "database_lifecycle", File: "database.go", Line: 17,
 		Title:          "Query rows are not closed",
 		Evidence:       "db.QueryContext returns rows, but the function returns rows.Err() without closing rows.",
 		Recommendation: "Defer rows.Close() immediately after the successful query and handle its errors as appropriate.",
@@ -81,7 +81,7 @@ var scenarios = map[string]scenario{
 		fixture: "acceptance-missing-tests",
 		submission: submission{
 			Warnings: []reviewResult{{
-				Severity: "low", Category: "tests", File: "discount.go", Line: 11,
+				Severity: "low", Category: "tests", File: "discount.go", Line: 13,
 				Title:          "New discount branch has no matching test",
 				Evidence:       "The diff adds behavior for totals over 100 without changing or adding a test file.",
 				Recommendation: "Add boundary tests for totals at, below, and above 100.",
@@ -91,7 +91,7 @@ var scenarios = map[string]scenario{
 		},
 	},
 	"acceptance-resource-leak": findingScenario("acceptance-resource-leak", reviewResult{
-		Severity: "high", Category: "resource_lifecycle", File: "file.go", Line: 16,
+		Severity: "high", Category: "resource_lifecycle", File: "file.go", Line: 18,
 		Title:          "Opened file is not closed",
 		Evidence:       "os.Open succeeds and io.ReadAll returns without any file.Close call.",
 		Recommendation: "Defer file.Close() immediately after the successful open.",
@@ -103,14 +103,14 @@ var scenarios = map[string]scenario{
 		submission:            submission{Conclusion: "No code finding submitted; deterministic Go checks failed and the failure is recorded in sandbox evidence."},
 	},
 	"acceptance-secret-redaction": findingScenario("acceptance-secret-redaction", reviewResult{
-		Severity: "critical", Category: "sensitive_info", File: "config.go", Line: 12,
+		Severity: "critical", Category: "sensitive_info", File: "config.go", Line: 14,
 		Title:          "Hard-coded API credential",
 		Evidence:       "The added APIKey constant contains an OpenAI-shaped credential; the plaintext value is redacted.",
 		Recommendation: "Remove the credential from source and load it from a secret manager or environment variable.",
 		Confidence:     0.99, Source: "agent", RuleID: "GO-SECRET-001",
 	}),
 	"acceptance-security": findingScenario("acceptance-security", reviewResult{
-		Severity: "critical", Category: "security", File: "command.go", Line: 13,
+		Severity: "critical", Category: "security", File: "command.go", Line: 15,
 		Title:          "User input is executed by a shell",
 		Evidence:       "The changed code passes input to exec.Command(\"sh\", \"-c\", input), enabling command injection.",
 		Recommendation: "Avoid a shell and pass validated arguments directly to a fixed executable.",
@@ -225,14 +225,14 @@ func findingScenario(fixture string, finding reviewResult) scenario {
 func duplicateFindingScenario() scenario {
 	findings := []reviewResult{
 		{
-			Severity: "high", Category: "resource_lifecycle", File: "http.go", Line: 17,
+			Severity: "high", Category: "resource_lifecycle", File: "http.go", Line: 19,
 			Title:          "HTTP response body is not closed",
 			Evidence:       "The response returned by http.Get leaves response.Body open on the successful path.",
 			Recommendation: "Defer response.Body.Close() after checking the error.",
 			Confidence:     0.99, Source: "agent", RuleID: "GO-RES-001",
 		},
 		{
-			Severity: "medium", Category: "resource_lifecycle", File: "http.go", Line: 17,
+			Severity: "medium", Category: "resource_lifecycle", File: "http.go", Line: 19,
 			Title:          "Leaked HTTP response body",
 			Evidence:       "The changed success path returns without closing response.Body.",
 			Recommendation: "Restore a deferred response.Body.Close().",
@@ -245,7 +245,7 @@ func duplicateFindingScenario() scenario {
 	}
 	conflicting := corrected
 	conflicting.Warnings = []reviewResult{{
-		Severity: "medium", Category: "resource_lifecycle", File: "http.go", Line: 17,
+		Severity: "medium", Category: "resource_lifecycle", File: "http.go", Line: 19,
 		Title:          "Response body cleanup needs review",
 		Evidence:       "The same response body observation was routed as a warning.",
 		Recommendation: "Choose one result collection for this rule and location.",

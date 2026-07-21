@@ -1,7 +1,7 @@
 diff --git a/config.go b/config.go
 --- a/config.go
 +++ b/config.go
-@@ -8,3 +8,5 @@
+@@ -10,3 +10,5 @@
  package secretredaction
  
  const Endpoint = "https://example.invalid"

@@ -1,6 +1,6 @@
 diff --git a/math.go b/math.go
 --- a/math.go
 +++ b/math.go
-@@ -10 +10,2 @@
+@@ -12 +12,2 @@
 +// Add returns the sum of a and b.
  func Add(a, b int) int { return a + b }

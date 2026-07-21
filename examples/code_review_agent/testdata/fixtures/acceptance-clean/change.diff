@@ -1,7 +1,7 @@
 diff --git a/calculator.go b/calculator.go
 --- a/calculator.go
 +++ b/calculator.go
-@@ -8,3 +8,5 @@
+@@ -10,3 +10,5 @@
  package clean
  
  func Add(a, b int) int { return a + b }
@@ -10,7 +10,7 @@ diff --git a/calculator.go b/calculator.go
 diff --git a/calculator_test.go b/calculator_test.go
 --- a/calculator_test.go
 +++ b/calculator_test.go
-@@ -14,3 +14,9 @@ func TestAdd(t *testing.T) {
+@@ -16,3 +16,9 @@ func TestAdd(t *testing.T) {
  		t.Fatalf("Add(1, 2) = %d, want 3", got)
  	}
  }

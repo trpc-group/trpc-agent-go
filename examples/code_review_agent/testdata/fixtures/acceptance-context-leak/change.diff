@@ -1,7 +1,7 @@
 diff --git a/worker.go b/worker.go
 --- a/worker.go
 +++ b/worker.go
-@@ -9,12 +9,9 @@ package contextleak
+@@ -11,12 +11,9 @@ package contextleak
  
  import "context"
  
