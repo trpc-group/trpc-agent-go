@@ -2322,6 +2322,7 @@ func (f *Flow) callLLM(
 			executionTraceAppliedSurfaceIDs(invocation),
 		)
 	}
+	ctx = contextWithModelRetryCallbacks(ctx, f, invocation, callModel)
 	summaryfork.Attach(invocation, llmRequest)
 	seq, err := f.generateContentSeq(ctx, invocation, llmRequest, callModel)
 	if err != nil {

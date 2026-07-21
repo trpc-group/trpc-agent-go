@@ -19,8 +19,6 @@ import (
 
 	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"go.uber.org/multierr"
-	"trpc.group/trpc-go/trpc-agent-go/agent"
-	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/aggregator"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -34,8 +32,10 @@ type Tracker interface {
 	AppendEvent(ctx context.Context, key session.Key, event aguievents.Event) error
 	// GetEvents retrieves the AG-UI track events from the session.
 	GetEvents(ctx context.Context, key session.Key, opts ...session.Option) (*session.TrackEvents, error)
-	// Flush flushes any pending aggregated events for the given session key.
+	// Flush flushes buffered events for the given session key without closing the session state.
 	Flush(ctx context.Context, key session.Key) error
+	// Close flushes buffered events and releases the session state for the given session key.
+	Close(ctx context.Context, key session.Key) error
 }
 
 // tracker is the implementation of the Tracker interface.
@@ -46,14 +46,12 @@ type tracker struct {
 	aggregatorFactory aggregator.Factory            // aggregatorFactory builds aggregators for new sessions.
 	aggregationOption []aggregator.Option           // aggregationOption applies to newly built aggregators.
 	sessionStates     map[session.Key]*sessionState // sessionStates stores the state of each session.
-	flushInterval     time.Duration                 // flushInterval is the interval for flushing the session state.
 }
 
 // sessionState stores the state of a session.
 type sessionState struct {
-	mu         sync.Mutex            // mu guards the aggregator and the done channel.
+	mu         sync.Mutex            // mu guards the aggregator and cached session.
 	aggregator aggregator.Aggregator // aggregator aggregates events.
-	done       chan struct{}         // done is closed when the session state is removed.
 	session    *session.Session      // session caches the ensured session to avoid repeated lookups.
 }
 
@@ -70,7 +68,6 @@ func New(service session.Service, opt ...Option) (Tracker, error) {
 		aggregatorFactory: opts.aggregatorFactory,
 		aggregationOption: opts.aggregationOption,
 		sessionStates:     make(map[session.Key]*sessionState),
-		flushInterval:     opts.flushInterval,
 	}, nil
 }
 
@@ -111,13 +108,31 @@ func (t *tracker) GetEvents(ctx context.Context, key session.Key, opts ...sessio
 	return trackEvents, nil
 }
 
-// Flush flushes any pending aggregated events for the given session key.
+// Flush flushes buffered events for the given session key without closing the session state.
 func (t *tracker) Flush(ctx context.Context, key session.Key) error {
 	if err := key.CheckSessionKey(); err != nil {
 		return fmt.Errorf("session key: %w", err)
 	}
+	state := t.getExistingSessionState(key)
+	if state == nil {
+		return fmt.Errorf("session state not found: %v", key)
+	}
+	if err := t.flush(ctx, key, state); err != nil {
+		return fmt.Errorf("flush: %w", err)
+	}
+	return nil
+}
+
+// Close flushes buffered events and releases the session state for the given session key.
+func (t *tracker) Close(ctx context.Context, key session.Key) error {
+	if err := key.CheckSessionKey(); err != nil {
+		return fmt.Errorf("session key: %w", err)
+	}
+	state := t.getExistingSessionState(key)
+	if state == nil {
+		return nil
+	}
 	defer t.deleteSessionState(key)
-	state := t.getSessionState(ctx, key)
 	if err := t.flush(ctx, key, state); err != nil {
 		return fmt.Errorf("flush: %w", err)
 	}
@@ -191,47 +206,23 @@ func (t *tracker) getSessionState(ctx context.Context, key session.Key) *session
 	}
 	state := &sessionState{
 		aggregator: t.aggregatorFactory(ctx, t.aggregationOption...),
-		done:       make(chan struct{}),
 	}
 	t.sessionStates[key] = state
-	if t.flushInterval > 0 {
-		state.done = make(chan struct{})
-		flushCtx := agent.CloneContext(ctx)
-		go t.flushPeriodically(flushCtx, key, state)
-	}
 	return state
+}
+
+// getExistingSessionState returns the cached session state for the key when it exists.
+func (t *tracker) getExistingSessionState(key session.Key) *sessionState {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.sessionStates[key]
 }
 
 // deleteSessionState removes the cached session state for the session key.
 func (t *tracker) deleteSessionState(key session.Key) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.flushInterval > 0 {
-		close(t.sessionStates[key].done)
-	}
 	delete(t.sessionStates, key)
-}
-
-// flushPeriodically flushes the session state periodically.
-func (t *tracker) flushPeriodically(ctx context.Context, key session.Key, state *sessionState) {
-	ticker := time.NewTicker(t.flushInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ticker.C:
-			if err := t.flush(ctx, key, state); err != nil {
-				log.WarnfContext(
-					ctx,
-					"flush: %v",
-					err,
-				)
-			}
-		case <-state.done:
-			return
-		case <-ctx.Done():
-			return
-		}
-	}
 }
 
 // flush flushes the session state.

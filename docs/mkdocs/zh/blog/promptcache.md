@@ -208,7 +208,7 @@ summarizer := summary.NewSummarizer(
 )
 ```
 
-如果需要自定义 fork 模式下追加的压缩指令，可以使用 `summary.WithCacheSafeForkPrompt(...)`。这条 prompt 可以包含 `{max_summary_words}`，但不应再包含 `{conversation_text}`，因为父请求本身已经包含完整的对话前缀。
+如果需要自定义 fork 模式下追加的压缩指令，可以使用 `summary.WithCacheSafeForkPrompt(...)`。这条 prompt 可以包含 `{max_summary_words}`，但不应再包含 `{conversation_text}` 或 `{previous_summary}`，因为父请求本身已经包含完整的对话前缀和已注入的摘要。
 
 ### Summary injection：避免改写 request prefix
 
@@ -277,7 +277,7 @@ summarizer := summary.NewSummarizer(
 )
 ```
 
-自定义 fork prompt 时使用 `summary.WithCacheSafeForkPrompt(...)`，不要再把 `{conversation_text}` 放进去。
+自定义 fork prompt 时使用 `summary.WithCacheSafeForkPrompt(...)`，不要再把 `{conversation_text}` 或 `{previous_summary}` 放进去。
 
 普通对话请求注入 summary 时，可以使用 user/history 模式避免改写首条 system：
 
