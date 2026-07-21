@@ -242,6 +242,8 @@ server, _ := agui.New(runner, agui.WithAGUIRunnerOptions(aguirunner.WithUserIDRe
 
 When `AppNameResolver` returns a non-empty string, that value is used as the `AppName` for the request. When it returns an empty string, the framework falls back to `agui.WithAppName(name)`. The real-time conversation, message snapshot, and cancel routes reuse the same resolution logic, so related requests for the same session must resolve to the same `AppName`.
 
+The resolved `AppName` is the canonical session boundary for an AG-UI request. During a real-time run, AG-UI passes it to the underlying Runner as `agent.WithAppName`, keeping the Runner session key consistent with AG-UI track events, message snapshots, and cancel routing.
+
 When message snapshots are enabled, configure `agui.WithAppName(name)` as the default value.
 
 ```go
@@ -274,6 +276,8 @@ server, _ := agui.New(
 ## Custom `RunOptionResolver`
 
 `RunOptionResolver` adds [`agent.RunOption`](https://github.com/trpc-group/trpc-agent-go/blob/main/agent/invocation.go) for the current agent run. It runs for every request, and the returned options only affect that run. The AG-UI runner still maps request `input.Tools` to caller-executed tools after the custom resolver returns.
+
+Do not return `agent.WithAppName` from `RunOptionResolver` to configure AG-UI session ownership. AG-UI `AppName` should come from `agui.WithAppName` or `agui.WithAppNameResolver`; when the resolved `AppName` is non-empty, it overrides any `agent.WithAppName` set by `RunOptionResolver`.
 
 ```go
 import (
