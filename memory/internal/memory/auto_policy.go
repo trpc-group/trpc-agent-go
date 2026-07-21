@@ -24,8 +24,9 @@ import (
 const (
 	extractorMetadataUpdatePolicy = "update_policy"
 
-	historyOldCoverage = 0.95
-	historyNewCoverage = 0.70
+	assistantResultPolicyName = "assistant-result-preserving"
+	resultOldCoverage         = 0.95
+	resultNewCoverage         = 0.70
 )
 
 var (
@@ -41,7 +42,7 @@ var (
 	capitalizedTokenPattern = regexp.MustCompile(`\b[A-Z][A-Za-z0-9_-]*\b`)
 )
 
-type historyCandidate struct {
+type assistantResultCandidate struct {
 	entry       *memory.Entry
 	duplicate   bool
 	oldCoverage float64
@@ -64,8 +65,7 @@ func updatePolicyFromMetadata(ext extractor.MemoryExtractor) extractor.UpdatePol
 		policy = extractor.UpdatePolicy(value)
 	}
 	switch policy {
-	case extractor.UpdatePolicyHistoryPreserving,
-		extractor.UpdatePolicyAddOnly:
+	case extractor.UpdatePolicyAddOnly:
 		return policy
 	default:
 		return extractor.UpdatePolicyReconcile
@@ -78,14 +78,10 @@ func (w *AutoMemoryWorker) applyUpdatePolicy(
 	ops []*extractor.Operation,
 	existing []*memory.Entry,
 ) []*extractor.Operation {
-	switch w.updatePolicy {
-	case extractor.UpdatePolicyHistoryPreserving:
-		return w.applyHistoryPreservingPolicy(ctx, userKey, ops, existing)
-	case extractor.UpdatePolicyAddOnly:
+	if w.updatePolicy == extractor.UpdatePolicyAddOnly {
 		return w.applyAddOnlyPolicy(ctx, userKey, ops, existing)
-	default:
-		return w.reconcileOps(ctx, userKey, ops)
 	}
+	return w.reconcileOps(ctx, userKey, ops)
 }
 
 func (w *AutoMemoryWorker) applyAssistantResultPolicy(
@@ -100,10 +96,12 @@ func (w *AutoMemoryWorker) applyAssistantResultPolicy(
 	if w.updatePolicy == extractor.UpdatePolicyAddOnly {
 		return w.applyAddOnlyPolicy(ctx, userKey, ops, existing)
 	}
-	return w.applyHistoryPreservingPolicy(ctx, userKey, ops, existing)
+	return w.applyAssistantResultPreservingPolicy(
+		ctx, userKey, ops, existing,
+	)
 }
 
-func (w *AutoMemoryWorker) applyHistoryPreservingPolicy(
+func (w *AutoMemoryWorker) applyAssistantResultPreservingPolicy(
 	ctx context.Context,
 	userKey memory.UserKey,
 	ops []*extractor.Operation,
@@ -122,9 +120,13 @@ func (w *AutoMemoryWorker) applyHistoryPreservingPolicy(
 		}
 		switch op.Type {
 		case extractor.OperationAdd:
-			out = w.appendHistoryAdd(ctx, userKey, out, op, existing)
+			out = w.appendAssistantResultAdd(
+				ctx, userKey, out, op, existing,
+			)
 		case extractor.OperationUpdate:
-			out = w.appendHistoryUpdate(ctx, userKey, out, op, byID[op.MemoryID])
+			out = w.appendAssistantResultUpdate(
+				ctx, userKey, out, op, byID[op.MemoryID],
+			)
 		default:
 			out = append(out, op)
 		}
@@ -132,7 +134,7 @@ func (w *AutoMemoryWorker) applyHistoryPreservingPolicy(
 	return out
 }
 
-func (w *AutoMemoryWorker) appendHistoryAdd(
+func (w *AutoMemoryWorker) appendAssistantResultAdd(
 	ctx context.Context,
 	userKey memory.UserKey,
 	out []*extractor.Operation,
@@ -142,47 +144,47 @@ func (w *AutoMemoryWorker) appendHistoryAdd(
 	if !w.isToolEnabled(memory.AddToolName) {
 		return append(out, op)
 	}
-	match := selectHistoryCandidate(op, existing)
+	match := selectAssistantResultCandidate(op, existing)
 	if match == nil {
-		logPolicyDecision(ctx, extractor.UpdatePolicyHistoryPreserving,
+		logPolicyDecision(ctx, assistantResultPolicyName,
 			userKey, op, nil, "add", "no safe candidate")
 		return append(out, op)
 	}
 	if match.duplicate {
-		logPolicyDecision(ctx, extractor.UpdatePolicyHistoryPreserving,
+		logPolicyDecision(ctx, assistantResultPolicyName,
 			userKey, op, match, "no-op", "exact duplicate")
 		return out
 	}
 	if !w.isToolEnabled(memory.UpdateToolName) {
-		logPolicyDecision(ctx, extractor.UpdatePolicyHistoryPreserving,
+		logPolicyDecision(ctx, assistantResultPolicyName,
 			userKey, op, match, "add", "update tool disabled")
 		return append(out, op)
 	}
-	logPolicyDecision(ctx, extractor.UpdatePolicyHistoryPreserving,
+	logPolicyDecision(ctx, assistantResultPolicyName,
 		userKey, op, match, "update", "strict enrichment")
 	return append(out, toUpdateOp(op, match.entry))
 }
 
-func (w *AutoMemoryWorker) appendHistoryUpdate(
+func (w *AutoMemoryWorker) appendAssistantResultUpdate(
 	ctx context.Context,
 	userKey memory.UserKey,
 	out []*extractor.Operation,
 	op *extractor.Operation,
 	existing *memory.Entry,
 ) []*extractor.Operation {
-	match := classifyHistoryCandidate(op, existing)
+	match := classifyAssistantResultCandidate(op, existing)
 	if match != nil && match.duplicate {
-		logPolicyDecision(ctx, extractor.UpdatePolicyHistoryPreserving,
+		logPolicyDecision(ctx, assistantResultPolicyName,
 			userKey, op, match, "no-op", "exact duplicate")
 		return out
 	}
 	if match != nil && w.isToolEnabled(memory.UpdateToolName) {
-		logPolicyDecision(ctx, extractor.UpdatePolicyHistoryPreserving,
+		logPolicyDecision(ctx, assistantResultPolicyName,
 			userKey, op, match, "update", "strict enrichment")
 		return append(out, toUpdateOp(op, existing))
 	}
 	add := asAddOperation(op)
-	logPolicyDecision(ctx, extractor.UpdatePolicyHistoryPreserving,
+	logPolicyDecision(ctx, assistantResultPolicyName,
 		userKey, op, match, "add", "unsafe or unknown update")
 	return append(out, add)
 }
@@ -203,38 +205,40 @@ func (w *AutoMemoryWorker) applyAddOnlyPolicy(
 		case extractor.OperationAdd, extractor.OperationUpdate:
 			add := asAddOperation(op)
 			if selectExactDuplicate(add, known) != nil {
-				logPolicyDecision(ctx, extractor.UpdatePolicyAddOnly,
+				logPolicyDecision(ctx, string(extractor.UpdatePolicyAddOnly),
 					userKey, op, nil, "no-op", "exact duplicate")
 				continue
 			}
 			out = append(out, add)
 			known = append(known, entryForOperation(add))
 		default:
-			logPolicyDecision(ctx, extractor.UpdatePolicyAddOnly,
+			logPolicyDecision(ctx, string(extractor.UpdatePolicyAddOnly),
 				userKey, op, nil, "no-op", "add-only policy")
 		}
 	}
 	return out
 }
 
-func selectHistoryCandidate(
+func selectAssistantResultCandidate(
 	op *extractor.Operation,
 	existing []*memory.Entry,
-) *historyCandidate {
-	var best *historyCandidate
+) *assistantResultCandidate {
+	var best *assistantResultCandidate
 	for _, entry := range existing {
-		candidate := classifyHistoryCandidate(op, entry)
+		candidate := classifyAssistantResultCandidate(op, entry)
 		if candidate == nil {
 			continue
 		}
-		if best == nil || historyCandidateLess(best, candidate) {
+		if best == nil || assistantResultCandidateLess(best, candidate) {
 			best = candidate
 		}
 	}
 	return best
 }
 
-func historyCandidateLess(left, right *historyCandidate) bool {
+func assistantResultCandidateLess(
+	left, right *assistantResultCandidate,
+) bool {
 	if left.duplicate != right.duplicate {
 		return right.duplicate
 	}
@@ -247,15 +251,15 @@ func historyCandidateLess(left, right *historyCandidate) bool {
 	return left.entry.Score < right.entry.Score
 }
 
-func classifyHistoryCandidate(
+func classifyAssistantResultCandidate(
 	op *extractor.Operation,
 	entry *memory.Entry,
-) *historyCandidate {
+) *assistantResultCandidate {
 	if op == nil || !validMemoryEntry(entry) {
 		return nil
 	}
 	if exactMemoryDuplicate(op, entry.Memory) {
-		return &historyCandidate{
+		return &assistantResultCandidate{
 			entry:       entry,
 			duplicate:   true,
 			oldCoverage: 1,
@@ -268,7 +272,7 @@ func classifyHistoryCandidate(
 	oldCoverage, newCoverage := directionalTokenCoverage(
 		entry.Memory.Memory, op.Memory,
 	)
-	if oldCoverage < historyOldCoverage || newCoverage < historyNewCoverage {
+	if oldCoverage < resultOldCoverage || newCoverage < resultNewCoverage {
 		return nil
 	}
 	if !materialTokensPreserved(entry.Memory.Memory, op.Memory) ||
@@ -280,7 +284,7 @@ func classifyHistoryCandidate(
 		!changeMarkerPattern.MatchString(entry.Memory.Memory) {
 		return nil
 	}
-	return &historyCandidate{
+	return &assistantResultCandidate{
 		entry:       entry,
 		oldCoverage: oldCoverage,
 		newCoverage: newCoverage,
@@ -485,10 +489,10 @@ func stringSet(values []string) map[string]struct{} {
 
 func logPolicyDecision(
 	ctx context.Context,
-	policy extractor.UpdatePolicy,
+	policy string,
 	userKey memory.UserKey,
 	op *extractor.Operation,
-	match *historyCandidate,
+	match *assistantResultCandidate,
 	action string,
 	reason string,
 ) {

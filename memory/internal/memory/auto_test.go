@@ -2002,26 +2002,22 @@ func TestBuildSearchQuery(t *testing.T) {
 }
 
 func TestSearchRelevantMemories(t *testing.T) {
-	for _, policy := range []string{"history-preserving", "add-only"} {
-		t.Run(policy+" uses user-only query", func(t *testing.T) {
-			ext := &mockExtractor{metadata: map[string]any{
-				extractorMetadataUpdatePolicy: policy,
-			}}
-			op := newMockOperator()
-			worker := NewAutoMemoryWorker(AutoMemoryConfig{Extractor: ext}, op)
+	t.Run("uses user-only query", func(t *testing.T) {
+		ext := &mockExtractor{}
+		op := newMockOperator()
+		worker := NewAutoMemoryWorker(AutoMemoryConfig{Extractor: ext}, op)
 
-			_, err := worker.searchRelevantMemories(
-				context.Background(),
-				memory.UserKey{AppName: "app", UserID: "user"},
-				[]model.Message{
-					model.NewUserMessage("user fact"),
-					model.NewAssistantMessage("long assistant result"),
-				},
-			)
-			require.NoError(t, err)
-			require.Equal(t, []string{"user fact"}, op.searchQueries)
-		})
-	}
+		_, err := worker.searchRelevantMemories(
+			context.Background(),
+			memory.UserKey{AppName: "app", UserID: "user"},
+			[]model.Message{
+				model.NewUserMessage("user fact"),
+				model.NewAssistantMessage("long assistant result"),
+			},
+		)
+		require.NoError(t, err)
+		require.Equal(t, []string{"user fact"}, op.searchQueries)
+	})
 
 	t.Run("empty query returns nil", func(t *testing.T) {
 		ext := &mockExtractor{}
@@ -2411,34 +2407,6 @@ func TestReconcileMetadataCompatible_IgnoresBlankLocation(t *testing.T) {
 		&extractor.Operation{Location: " \t"},
 		&memory.Memory{Location: "Science Museum"},
 	))
-}
-
-func TestHistoryPolicy_KeepsDistinctFactsWithHighTopicScore(t *testing.T) {
-	existing := "Attended a religious service at a cathedral on February 1."
-	incoming := "Interested in charities that provide food and shelter during Lent."
-	stored := []*memory.Entry{{
-		ID:      "mem-service",
-		AppName: "app", UserID: "u1",
-		Memory: &memory.Memory{
-			Memory: existing,
-			Topics: []string{"religion", "community"},
-		},
-		Score: 0.95,
-	}}
-	worker := NewAutoMemoryWorker(AutoMemoryConfig{}, newMockOperator())
-	worker.updatePolicy = extractor.UpdatePolicyHistoryPreserving
-	in := []*extractor.Operation{{
-		Type:   extractor.OperationAdd,
-		Memory: incoming,
-		Topics: []string{"religion", "community", "charity"},
-	}}
-
-	out := worker.applyUpdatePolicy(
-		context.Background(), reconcileUserKey(), in, stored,
-	)
-	require.Len(t, out, 1)
-	assert.Equal(t, extractor.OperationAdd, out[0].Type)
-	assert.Empty(t, out[0].MemoryID)
 }
 
 // TestReconcileOps_PreservesNonAddOps ensures Update / Delete / Clear

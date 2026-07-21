@@ -28,8 +28,8 @@ func TestUpdatePolicyFromMetadata(t *testing.T) {
 	}{
 		{name: "missing", want: extractor.UpdatePolicyReconcile},
 		{name: "reconcile", raw: "reconcile", want: extractor.UpdatePolicyReconcile},
-		{name: "history preserving", raw: "history-preserving", want: extractor.UpdatePolicyHistoryPreserving},
 		{name: "typed add only", raw: extractor.UpdatePolicyAddOnly, want: extractor.UpdatePolicyAddOnly},
+		{name: "removed history policy", raw: "history-preserving", want: extractor.UpdatePolicyReconcile},
 		{name: "unknown", raw: "custom", want: extractor.UpdatePolicyReconcile},
 		{name: "wrong type", raw: 42, want: extractor.UpdatePolicyReconcile},
 	}
@@ -94,7 +94,7 @@ func TestAssistantResultPolicyPreservesDistinctResult(t *testing.T) {
 	assert.Empty(t, assistantResult[0].MemoryID)
 }
 
-func TestHistoryPreservingPolicy_StrictEnrichmentUpdates(t *testing.T) {
+func TestAssistantResultPolicy_StrictEnrichmentUpdates(t *testing.T) {
 	oldTime := time.Date(2025, 12, 1, 0, 0, 0, 0, time.UTC)
 	newTime := time.Date(2025, 12, 1, 16, 0, 0, 0, time.UTC)
 	existing := []*memory.Entry{{
@@ -114,9 +114,8 @@ func TestHistoryPreservingPolicy_StrictEnrichmentUpdates(t *testing.T) {
 		EventTime:  &newTime,
 	}}
 	worker := NewAutoMemoryWorker(AutoMemoryConfig{}, newMockOperator())
-	worker.updatePolicy = extractor.UpdatePolicyHistoryPreserving
 
-	out := worker.applyUpdatePolicy(
+	out := worker.applyAssistantResultPolicy(
 		context.Background(), reconcileUserKey(), in, existing,
 	)
 	require.Len(t, out, 1)
@@ -126,7 +125,7 @@ func TestHistoryPreservingPolicy_StrictEnrichmentUpdates(t *testing.T) {
 	assert.Contains(t, out[0].Topics, "time")
 }
 
-func TestHistoryPreservingPolicy_ChangedStateRemainsAdditive(t *testing.T) {
+func TestAssistantResultPolicy_ChangedStateRemainsAdditive(t *testing.T) {
 	existing := []*memory.Entry{{
 		ID: "job",
 		Memory: &memory.Memory{
@@ -135,7 +134,6 @@ func TestHistoryPreservingPolicy_ChangedStateRemainsAdditive(t *testing.T) {
 		},
 	}}
 	worker := NewAutoMemoryWorker(AutoMemoryConfig{}, newMockOperator())
-	worker.updatePolicy = extractor.UpdatePolicyHistoryPreserving
 
 	for _, operationType := range []extractor.OperationType{
 		extractor.OperationAdd,
@@ -152,7 +150,7 @@ func TestHistoryPreservingPolicy_ChangedStateRemainsAdditive(t *testing.T) {
 				Memory:     "Now works at Globex as an engineer.",
 				MemoryKind: memory.KindFact,
 			}}
-			out := worker.applyUpdatePolicy(
+			out := worker.applyAssistantResultPolicy(
 				context.Background(), reconcileUserKey(), in, existing,
 			)
 			require.Len(t, out, 1)
@@ -162,7 +160,7 @@ func TestHistoryPreservingPolicy_ChangedStateRemainsAdditive(t *testing.T) {
 	}
 }
 
-func TestHistoryPreservingPolicy_ExactDuplicateIsNoOp(t *testing.T) {
+func TestAssistantResultPolicy_ExactDuplicateIsNoOp(t *testing.T) {
 	existing := []*memory.Entry{{
 		ID: "coffee",
 		Memory: &memory.Memory{
@@ -171,8 +169,7 @@ func TestHistoryPreservingPolicy_ExactDuplicateIsNoOp(t *testing.T) {
 		},
 	}}
 	worker := NewAutoMemoryWorker(AutoMemoryConfig{}, newMockOperator())
-	worker.updatePolicy = extractor.UpdatePolicyHistoryPreserving
-	out := worker.applyUpdatePolicy(
+	out := worker.applyAssistantResultPolicy(
 		context.Background(), reconcileUserKey(),
 		[]*extractor.Operation{{Type: extractor.OperationAdd, Memory: " LIKES coffee "}},
 		existing,
@@ -180,7 +177,7 @@ func TestHistoryPreservingPolicy_ExactDuplicateIsNoOp(t *testing.T) {
 	assert.Empty(t, out)
 }
 
-func TestHistoryPreservingPolicy_UpdateOperations(t *testing.T) {
+func TestAssistantResultPolicy_UpdateOperations(t *testing.T) {
 	existing := []*memory.Entry{{
 		ID: "trip",
 		Memory: &memory.Memory{
@@ -189,9 +186,8 @@ func TestHistoryPreservingPolicy_UpdateOperations(t *testing.T) {
 		},
 	}}
 	worker := NewAutoMemoryWorker(AutoMemoryConfig{}, newMockOperator())
-	worker.updatePolicy = extractor.UpdatePolicyHistoryPreserving
 
-	duplicate := worker.applyUpdatePolicy(
+	duplicate := worker.applyAssistantResultPolicy(
 		context.Background(), reconcileUserKey(),
 		[]*extractor.Operation{{
 			Type:     extractor.OperationUpdate,
@@ -201,7 +197,7 @@ func TestHistoryPreservingPolicy_UpdateOperations(t *testing.T) {
 	)
 	assert.Empty(t, duplicate)
 
-	enrichment := worker.applyUpdatePolicy(
+	enrichment := worker.applyAssistantResultPolicy(
 		context.Background(), reconcileUserKey(),
 		[]*extractor.Operation{{
 			Type:     extractor.OperationUpdate,
@@ -214,24 +210,24 @@ func TestHistoryPreservingPolicy_UpdateOperations(t *testing.T) {
 	assert.Equal(t, "trip", enrichment[0].MemoryID)
 }
 
-func TestHistoryCandidateLess(t *testing.T) {
+func TestAssistantResultCandidateLess(t *testing.T) {
 	entry := func(score float64) *memory.Entry {
 		return &memory.Entry{Score: score}
 	}
-	assert.True(t, historyCandidateLess(
-		&historyCandidate{}, &historyCandidate{duplicate: true},
+	assert.True(t, assistantResultCandidateLess(
+		&assistantResultCandidate{}, &assistantResultCandidate{duplicate: true},
 	))
-	assert.True(t, historyCandidateLess(
-		&historyCandidate{oldCoverage: 0.8},
-		&historyCandidate{oldCoverage: 0.9},
+	assert.True(t, assistantResultCandidateLess(
+		&assistantResultCandidate{oldCoverage: 0.8},
+		&assistantResultCandidate{oldCoverage: 0.9},
 	))
-	assert.True(t, historyCandidateLess(
-		&historyCandidate{oldCoverage: 0.9, newCoverage: 0.8},
-		&historyCandidate{oldCoverage: 0.9, newCoverage: 0.9},
+	assert.True(t, assistantResultCandidateLess(
+		&assistantResultCandidate{oldCoverage: 0.9, newCoverage: 0.8},
+		&assistantResultCandidate{oldCoverage: 0.9, newCoverage: 0.9},
 	))
-	assert.True(t, historyCandidateLess(
-		&historyCandidate{oldCoverage: 0.9, newCoverage: 0.9, entry: entry(0.7)},
-		&historyCandidate{oldCoverage: 0.9, newCoverage: 0.9, entry: entry(0.8)},
+	assert.True(t, assistantResultCandidateLess(
+		&assistantResultCandidate{oldCoverage: 0.9, newCoverage: 0.9, entry: entry(0.7)},
+		&assistantResultCandidate{oldCoverage: 0.9, newCoverage: 0.9, entry: entry(0.8)},
 	))
 }
 
