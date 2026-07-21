@@ -18,7 +18,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator"
-	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/internal/templateresolver"
+	operatorregistry "trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/registry"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
 	criterionllm "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/llm"
@@ -52,7 +52,7 @@ func TestConstructMessagesDelegatesToTemplateConstructor(t *testing.T) {
 		}},
 		buildTemplateMetric(
 			"Question: {{question}}\nAnswer: {{answer}}\nReference: {{reference}}",
-			templateresolver.ResponseScorerSingleScoreName,
+			operatorregistry.ResponseScorerSingleScoreName,
 			"",
 			"",
 			&criterionllm.TemplateVariableBinding{
@@ -91,7 +91,7 @@ func TestScoreBasedOnResponseSupportsSingleScore(t *testing.T) {
 		}},
 	}, buildTemplateMetric(
 		"Answer: {{answer}}",
-		templateresolver.ResponseScorerSingleScoreName,
+		operatorregistry.ResponseScorerSingleScoreName,
 		"",
 		"",
 	))
@@ -108,7 +108,7 @@ func TestScoreBasedOnResponseSupportsRubricScores(t *testing.T) {
 		}},
 	}, buildTemplateMetric(
 		"Answer: {{answer}}",
-		templateresolver.ResponseScorerRubricScoresName,
+		operatorregistry.ResponseScorerRubricScoresName,
 		"",
 		"",
 	))
@@ -119,6 +119,28 @@ func TestScoreBasedOnResponseSupportsRubricScores(t *testing.T) {
 	assert.Contains(t, result.Reason, "ok")
 }
 
+func TestTemplateEvaluatorUsesInjectedOperatorRegistry(t *testing.T) {
+	operatorRegistry := operatorregistry.New()
+	err := operatorRegistry.RegisterResponseScorer("custom_score", fixedResponseScorer{})
+	require.NoError(t, err)
+	err = operatorRegistry.RegisterStructuredOutput("custom_schema", fixedStructuredOutputProvider{})
+	require.NoError(t, err)
+	e := New(WithOperatorRegistry(operatorRegistry)).(*templateEvaluator)
+	result, err := e.ScoreBasedOnResponse(context.Background(), &model.Response{},
+		buildTemplateMetric("Answer: {{answer}}", "custom_score", "", ""))
+	require.NoError(t, err)
+	assert.Equal(t, 0.25, result.Score)
+	assert.Equal(t, "custom", result.Reason)
+	evalMetric := buildTemplateMetric("Answer: {{answer}}", "custom_score", "", "")
+	evalMetric.Criterion.LLMJudge.Template.StructuredOutputName = "custom_schema"
+	output, err := e.StructuredOutput(context.Background(), nil, nil,
+		evalMetric)
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	require.NotNil(t, output.JSONSchema)
+	assert.Equal(t, "custom_schema_result", output.JSONSchema.Name)
+}
+
 func TestAggregateSamplesUsesDefaultAggregator(t *testing.T) {
 	e := New().(*templateEvaluator)
 	result, err := e.AggregateSamples(context.Background(), []*evaluator.PerInvocationResult{
@@ -127,13 +149,33 @@ func TestAggregateSamplesUsesDefaultAggregator(t *testing.T) {
 		{Score: 1, Status: status.EvalStatusPassed},
 	}, buildTemplateMetric(
 		"Answer: {{answer}}",
-		templateresolver.ResponseScorerSingleScoreName,
+		operatorregistry.ResponseScorerSingleScoreName,
 		"",
 		"",
 	))
 	require.NoError(t, err)
 	assert.Equal(t, status.EvalStatusPassed, result.Status)
 	assert.Equal(t, 1.0, result.Score)
+}
+
+type fixedResponseScorer struct{}
+
+func (fixedResponseScorer) ScoreBasedOnResponse(context.Context, *model.Response,
+	*metric.EvalMetric) (*evaluator.ScoreResult, error) {
+	return &evaluator.ScoreResult{
+		Score:  0.25,
+		Reason: "custom",
+	}, nil
+}
+
+type fixedStructuredOutputProvider struct{}
+
+func (fixedStructuredOutputProvider) StructuredOutput(context.Context, []*evalset.Invocation, []*evalset.Invocation,
+	*metric.EvalMetric) (*model.StructuredOutput, error) {
+	return &model.StructuredOutput{
+		Type:       model.StructuredOutputJSONSchema,
+		JSONSchema: &model.JSONSchemaConfig{Name: "custom_schema_result"},
+	}, nil
 }
 
 func TestAggregateInvocationsUsesDefaultAggregator(t *testing.T) {
@@ -143,7 +185,7 @@ func TestAggregateInvocationsUsesDefaultAggregator(t *testing.T) {
 		{Score: 0, Status: status.EvalStatusFailed},
 	}, buildTemplateMetric(
 		"Answer: {{answer}}",
-		templateresolver.ResponseScorerSingleScoreName,
+		operatorregistry.ResponseScorerSingleScoreName,
 		"",
 		"",
 	))
@@ -152,20 +194,11 @@ func TestAggregateInvocationsUsesDefaultAggregator(t *testing.T) {
 	assert.InDelta(t, 0.5, result.OverallScore, 1e-9)
 }
 
-func TestResponseScorerNameRequiresConfiguredScorer(t *testing.T) {
-	_, err := responseScorerName(buildTemplateMetric("Answer: {{answer}}", "", "", ""))
+func TestScoreBasedOnResponseRequiresConfiguredScorer(t *testing.T) {
+	e := New().(*templateEvaluator)
+	_, err := e.ScoreBasedOnResponse(context.Background(), &model.Response{}, buildTemplateMetric("Answer: {{answer}}", "", "", ""))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "template responseScorerName is empty")
-}
-
-func TestJudgeTemplateOptionsRequiresTemplate(t *testing.T) {
-	_, err := judgeTemplateOptions(&metric.EvalMetric{
-		Criterion: &criterion.Criterion{
-			LLMJudge: &criterionllm.LLMCriterion{},
-		},
-	})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "template is nil")
 }
 
 func TestScoreBasedOnResponseRejectsUnknownScorer(t *testing.T) {
@@ -183,7 +216,7 @@ func TestAggregateSamplesRejectsUnknownAggregator(t *testing.T) {
 	e := New().(*templateEvaluator)
 	_, err := e.AggregateSamples(context.Background(), []*evaluator.PerInvocationResult{
 		{Score: 1, Status: status.EvalStatusPassed},
-	}, buildTemplateMetric("Answer: {{answer}}", templateresolver.ResponseScorerSingleScoreName, "missing", ""))
+	}, buildTemplateMetric("Answer: {{answer}}", operatorregistry.ResponseScorerSingleScoreName, "missing", ""))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `unsupported samples aggregator "missing"`)
 }
@@ -192,7 +225,7 @@ func TestAggregateInvocationsRejectsUnknownAggregator(t *testing.T) {
 	e := New().(*templateEvaluator)
 	_, err := e.AggregateInvocations(context.Background(), []*evaluator.PerInvocationResult{
 		{Score: 1, Status: status.EvalStatusPassed},
-	}, buildTemplateMetric("Answer: {{answer}}", templateresolver.ResponseScorerSingleScoreName, "", "missing"))
+	}, buildTemplateMetric("Answer: {{answer}}", operatorregistry.ResponseScorerSingleScoreName, "", "missing"))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `unsupported invocations aggregator "missing"`)
 }
@@ -209,26 +242,6 @@ func TestAggregateHelpersPreserveTemplateConfigErrors(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "template is nil")
-}
-
-func TestJudgeTemplateOptionsRejectsMissingLLMJudgeCriterion(t *testing.T) {
-	_, err := judgeTemplateOptions(nil)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "missing llm judge criterion")
-}
-
-func TestTemplateEvaluatorNameHelpers(t *testing.T) {
-	assert.Equal(t, templateresolver.SampleAggregatorMajorityVoteName, sampleAggregatorName(nil))
-	assert.Equal(t, templateresolver.InvocationAggregatorAverageName, invocationAggregatorName(nil))
-	templateOptions, err := judgeTemplateOptions(buildTemplateMetric(
-		"Answer: {{answer}}",
-		templateresolver.ResponseScorerSingleScoreName,
-		"custom_sample",
-		"custom_invocation",
-	))
-	require.NoError(t, err)
-	assert.Equal(t, "custom_sample", sampleAggregatorName(templateOptions))
-	assert.Equal(t, "custom_invocation", invocationAggregatorName(templateOptions))
 }
 
 func buildTemplateMetric(promptText string, responseScorerName string,
@@ -264,9 +277,9 @@ func TestAggregateInvocationsUsesConfiguredAggregatorName(t *testing.T) {
 		},
 	}, buildTemplateMetric(
 		"Answer: {{answer}}",
-		templateresolver.ResponseScorerSingleScoreName,
+		operatorregistry.ResponseScorerSingleScoreName,
 		"",
-		templateresolver.InvocationAggregatorAverageName,
+		operatorregistry.InvocationAggregatorAverageName,
 	))
 	require.NoError(t, err)
 	assert.Equal(t, status.EvalStatusPassed, result.OverallStatus)

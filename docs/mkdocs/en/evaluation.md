@@ -1588,9 +1588,22 @@ type JudgeModelOptions struct {
 type JudgeTemplateOptions struct {
 	Prompt                   string                     // Prompt is the judge template text.
 	ResponseScorerName       string                     // ResponseScorerName is the response scorer name.
+	StructuredOutputName     string                     // StructuredOutputName is the structured output provider name.
+	ResponseScorerOptions    *ResponseScorerOptions     // ResponseScorerOptions configures response scoring.
 	VariableBindings         []*TemplateVariableBinding // VariableBindings is the variable binding list.
 	SampleAggregatorName     string                     // SampleAggregatorName is the sample aggregator name.
 	InvocationAggregatorName string                     // InvocationAggregatorName is the invocation aggregator name.
+}
+
+// ResponseScorerOptions represents response scorer-specific options.
+type ResponseScorerOptions struct {
+	Categories []*CategoryScore // Categories maps categorical labels to numeric scores.
+}
+
+// CategoryScore maps one categorical label to a numeric score.
+type CategoryScore struct {
+	Label string  // Label is the category label.
+	Score float64 // Score is the numeric score between 0 and 1.
 }
 
 // TemplateVariableBinding represents one template variable binding.
@@ -1725,6 +1738,10 @@ The target metric uses `criterion.llmJudge` to carry the rubric list. Built-in r
 
 - `single_score`: the judge returns `{"score": number, "reason": string}`.
 - `rubric_scores`: the judge returns `{"rubricScores": [{"id": string, "score": number, "reason": string}]}`.
+- `boolean`: the judge returns `{"passed": boolean, "reason": string}`. `passed=true` maps to score `1`, and `passed=false` maps to score `0`.
+- `categorical`: the judge returns `{"category": string, "reason": string}`. Configure `template.responseScorerOptions.categories` to map each allowed label to a numeric score between `0` and `1`.
+
+`template.structuredOutputName` is optional. When omitted, the template evaluator uses the structured output provider with the same name as `responseScorerName` if one is registered. Set it when the judge JSON schema and response scorer should be named independently, for example when a platform scorer parses a platform-owned schema.
 
 `template.sampleAggregatorName` and `template.invocationAggregatorName` are optional. They default to `majority_vote` and `average`. Template evaluation reuses the standard LLM Judge sampling and multi-turn aggregation flow.
 
@@ -2474,13 +2491,13 @@ Example metric configuration for LLM pairwise comparison:
 
 The LLM template evaluator uses the evaluator name `llm_judge_template` and belongs to the LLM Judge evaluator family. It is suitable for scenarios where the evaluation orchestration stays the same, but you want to reduce the number of evaluator definitions by customizing the judge prompt, variable bindings, and response parsing strategy. Unlike the `llm_rubric_*` family, template evaluators do not consume structured `rubrics`; evaluation criteria should be written directly into `criterion.llmJudge.template.prompt`.
 
-Template evaluators are typically configured with `evaluatorName: "llm_judge_template"`, while `metricName` remains the metric instance name. This allows one metric file to define multiple template metrics, such as one using `single_score` and another using `rubric_scores`, while reusing the same evaluator implementation and keeping distinct `metricName` values in results.
+Template evaluators are typically configured with `evaluatorName: "llm_judge_template"`, while `metricName` remains the metric instance name. This allows one metric file to define multiple template metrics, such as one using `single_score`, another using `rubric_scores`, and another using a platform-registered scorer, while reusing the same evaluator implementation and keeping distinct `metricName` values in results.
 
 The template evaluator runs as follows:
 
 1. `messagesconstructor/template` renders the unique judge input for the current turn from `template.prompt` and `template.variableBindings`.
-2. The judge model returns JSON that matches the structured output schema for `responseScorerName`.
-3. `responsescorer/singlescore` or `responsescorer/rubricscores` parses the judge output.
+2. The judge model returns JSON that matches the structured output schema for `structuredOutputName`, or `responseScorerName` when `structuredOutputName` is omitted.
+3. The response scorer selected by `responseScorerName` parses the judge output.
 4. Sample aggregation defaults to `majority_vote`, and multi-turn aggregation defaults to `average`. You can override them through `template.sampleAggregatorName` and `template.invocationAggregatorName`.
 
 Variable bindings support the following sources:
@@ -2493,10 +2510,37 @@ Variable bindings support the following sources:
 
 Every placeholder in the template must be explicitly bound in `variableBindings`. `actual.traceStepInput` and `actual.traceStepOutput` require `source.selector.nodeID`; the resolver selects the last step whose `NodeID` matches in the current invocation execution trace. When using a trace source, the evaluation caller must enable `agent.WithExecutionTraceEnabled(true)`. Binding `expected.finalResponse` requires the current expected turn to contain `finalResponse`; if the template uses that field but the expected turn does not contain a final response, evaluation fails directly.
 
-The template evaluator currently supports two response parsing modes:
+The template evaluator currently provides four built-in response parsing modes:
 
 - `single_score`: the judge returns `score` and `reason`
 - `rubric_scores`: the judge returns `rubricScores`
+- `boolean`: the judge returns `passed` and `reason`
+- `categorical`: the judge returns `category` and `reason`; configure `responseScorerOptions.categories` to map labels to numeric scores
+
+Platforms can register custom template operators and inject them through evaluation options. A custom structured output provider is optional; register it when the judge model should be constrained to a platform-owned JSON schema. The registered operator instances are shared and may be called concurrently.
+
+```go
+opRegistry := operatorregistry.New()
+_ = opRegistry.RegisterResponseScorer("platform_score", platformScorer{})
+_ = opRegistry.RegisterStructuredOutput("platform_schema", platformStructuredOutput{})
+
+agentEvaluator, err := evaluation.New(
+	"app",
+	runner,
+	evaluation.WithLLMOperatorRegistry(opRegistry),
+)
+```
+
+The metric references the registered names:
+
+```json
+{
+  "template": {
+    "responseScorerName": "platform_score",
+    "structuredOutputName": "platform_schema"
+  }
+}
+```
 
 Example template metric configuration:
 

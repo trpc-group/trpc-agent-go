@@ -1591,9 +1591,22 @@ type JudgeModelOptions struct {
 type JudgeTemplateOptions struct {
 	Prompt                   string                     // Prompt 是裁判模板文本
 	ResponseScorerName       string                     // ResponseScorerName 是响应解析器名称
+	StructuredOutputName     string                     // StructuredOutputName 是结构化输出器名称
+	ResponseScorerOptions    *ResponseScorerOptions     // ResponseScorerOptions 是响应解析器配置
 	VariableBindings         []*TemplateVariableBinding // VariableBindings 是变量绑定列表
 	SampleAggregatorName     string                     // SampleAggregatorName 是样本聚合器名称，可选
 	InvocationAggregatorName string                     // InvocationAggregatorName 是多轮聚合器名称，可选
+}
+
+// ResponseScorerOptions 表示响应解析器专属配置
+type ResponseScorerOptions struct {
+	Categories []*CategoryScore // Categories 将分类标签映射为数值分数
+}
+
+// CategoryScore 将一个分类标签映射为数值分数
+type CategoryScore struct {
+	Label string  // Label 是分类标签
+	Score float64 // Score 是 0 到 1 之间的数值分数
 }
 
 // TemplateVariableBinding 表示单个模板变量绑定
@@ -1723,6 +1736,10 @@ type RubricContent struct {
 
 - `single_score`：要求裁判输出 `{"score": number, "reason": string}`。
 - `rubric_scores`：要求裁判输出 `{"rubricScores": [{"id": string, "score": number, "reason": string}]}`。
+- `boolean`：要求裁判输出 `{"passed": boolean, "reason": string}`。`passed=true` 映射为分数 `1`，`passed=false` 映射为分数 `0`。
+- `categorical`：要求裁判输出 `{"category": string, "reason": string}`。需要通过 `template.responseScorerOptions.categories` 配置允许的分类标签，并把每个标签映射为 `0` 到 `1` 之间的数值分数。
+
+`template.structuredOutputName` 为可选字段。不配置时，模板评估器会尝试使用与 `responseScorerName` 同名的结构化输出器；当裁判 JSON schema 与响应解析器需要独立命名时，可以显式配置该字段，例如平台用自定义 schema 约束模型输出，再用另一个 scorer 名称解析结果。
 
 `template.sampleAggregatorName` 与 `template.invocationAggregatorName` 为可选字段，默认分别使用 `majority_vote` 与 `average`。模板评估器复用 LLM Judge 的统一多次采样与多轮聚合编排。
 
@@ -2471,13 +2488,13 @@ LLM 成对比较评估指标配置示例如下：
 
 LLM 模板评估器对应的评估器名称为 `llm_judge_template`，属于 LLM Judge 类评估器。它适用于这样一类场景：评估执行链路本身没有变化，但希望通过自定义 prompt、变量绑定和响应解析策略来减少新评估器定义数量。与 `llm_rubric_*` 系列不同，模板评估器不消费结构化 `rubrics`，评估标准应直接写入 `criterion.llmJudge.template.prompt`。
 
-模板评估器通常配合 `evaluatorName: "llm_judge_template"` 使用，并让 `metricName` 仅承担指标实例名的职责。这样一份指标文件里可以同时配置多条模板评估指标，例如一条走 `single_score`，另一条走 `rubric_scores`，它们都复用同一个评估器实现，但结果中的 `metricName` 彼此独立。
+模板评估器通常配合 `evaluatorName: "llm_judge_template"` 使用，并让 `metricName` 仅承担指标实例名的职责。这样一份指标文件里可以同时配置多条模板评估指标，例如一条走 `single_score`，另一条走 `rubric_scores`，另一条走平台注册的 scorer，它们都复用同一个评估器实现，但结果中的 `metricName` 彼此独立。
 
 模板评估器的运行方式如下：
 
 1. `messagesconstructor/template` 使用 `template.prompt` 与 `template.variableBindings` 渲染当前轮唯一的裁判输入。
-2. 裁判模型按 `responseScorerName` 对应的结构化输出 schema 返回 JSON。
-3. `responsescorer/singlescore` 或 `responsescorer/rubricscores` 解析裁判输出。
+2. 裁判模型按 `structuredOutputName` 对应的结构化输出 schema 返回 JSON；如果未配置 `structuredOutputName`，则使用与 `responseScorerName` 同名的结构化输出器。
+3. `responseScorerName` 选中的响应解析器解析裁判输出。
 4. 样本聚合默认使用 `majority_vote`，多轮聚合默认使用 `average`，也可以分别通过 `template.sampleAggregatorName` 和 `template.invocationAggregatorName` 显式指定。
 
 变量绑定支持以下来源：
@@ -2490,10 +2507,37 @@ LLM 模板评估器对应的评估器名称为 `llm_judge_template`，属于 LLM
 
 模板中的每个占位符都必须在 `variableBindings` 中显式绑定。`actual.traceStepInput` 与 `actual.traceStepOutput` 需要配置 `source.selector.nodeID`，解析器会选择当前 invocation execution trace 中最后一个 `NodeID` 匹配的 step。使用 trace source 时，评估调用方需要开启 `agent.WithExecutionTraceEnabled(true)`；`expected.finalResponse` 绑定要求当前预期轮存在 `finalResponse`，如果模板使用了该字段但预期轮没有最终回答，评估会直接报错。
 
-模板评估器当前支持两种响应解析模式：
+模板评估器当前内置四种响应解析模式：
 
 - `single_score`：裁判返回 `score` 与 `reason`
 - `rubric_scores`：裁判返回 `rubricScores`
+- `boolean`：裁判返回 `passed` 与 `reason`
+- `categorical`：裁判返回 `category` 与 `reason`；需要通过 `responseScorerOptions.categories` 将标签映射为数值分数
+
+平台可以注册自定义模板 operator，并通过 evaluation options 注入。自定义结构化输出器是可选的；当需要用平台自己的 JSON schema 约束裁判模型输出时再注册。注册进去的 operator 是共享实例，可能会被并发调用。
+
+```go
+opRegistry := operatorregistry.New()
+_ = opRegistry.RegisterResponseScorer("platform_score", platformScorer{})
+_ = opRegistry.RegisterStructuredOutput("platform_schema", platformStructuredOutput{})
+
+agentEvaluator, err := evaluation.New(
+	"app",
+	runner,
+	evaluation.WithLLMOperatorRegistry(opRegistry),
+)
+```
+
+指标配置中引用注册名称即可：
+
+```json
+{
+  "template": {
+    "responseScorerName": "platform_score",
+    "structuredOutputName": "platform_schema"
+  }
+}
+```
 
 模板评估指标配置示例如下：
 

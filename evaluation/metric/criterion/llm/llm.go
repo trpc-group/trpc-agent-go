@@ -69,11 +69,34 @@ type JudgeModelOptions struct {
 
 // JudgeTemplateOptions configures the template-based LLM judge evaluator.
 type JudgeTemplateOptions struct {
-	Prompt                   string                     `json:"prompt,omitempty"`
-	ResponseScorerName       string                     `json:"responseScorerName,omitempty"`
-	VariableBindings         []*TemplateVariableBinding `json:"variableBindings,omitempty"`
-	SampleAggregatorName     string                     `json:"sampleAggregatorName,omitempty"`
-	InvocationAggregatorName string                     `json:"invocationAggregatorName,omitempty"`
+	// Prompt is the judge template text rendered with variable bindings.
+	Prompt string `json:"prompt,omitempty"`
+	// ResponseScorerName selects how the judge response is parsed.
+	ResponseScorerName string `json:"responseScorerName,omitempty"`
+	// StructuredOutputName optionally selects a structured output provider independent of ResponseScorerName.
+	StructuredOutputName string `json:"structuredOutputName,omitempty"`
+	// ResponseScorerOptions carries response scorer-specific configuration.
+	ResponseScorerOptions *ResponseScorerOptions `json:"responseScorerOptions,omitempty"`
+	// VariableBindings bind template placeholders to evaluation artifacts.
+	VariableBindings []*TemplateVariableBinding `json:"variableBindings,omitempty"`
+	// SampleAggregatorName selects how multiple judge samples for one invocation are aggregated.
+	SampleAggregatorName string `json:"sampleAggregatorName,omitempty"`
+	// InvocationAggregatorName selects how invocation-level results are aggregated for a metric.
+	InvocationAggregatorName string `json:"invocationAggregatorName,omitempty"`
+}
+
+// ResponseScorerOptions configures template response scoring.
+type ResponseScorerOptions struct {
+	// Categories maps categorical labels to numeric scores for the categorical response scorer.
+	Categories []*CategoryScore `json:"categories,omitempty"`
+}
+
+// CategoryScore maps one categorical label to a numeric score.
+type CategoryScore struct {
+	// Label identifies the category.
+	Label string `json:"label,omitempty"`
+	// Score is the numeric score mapped from the category and must be between 0 and 1.
+	Score float64 `json:"score"`
 }
 
 // TemplateVariableBinding binds one template variable to one evaluation source.

@@ -53,6 +53,8 @@ The metrics use:
 - `template.responseScorerName: "single_score"` for one metric
 - `template.responseScorerName: "rubric_scores"` for the other metric
 
+Other template metrics can use the built-in `boolean` and `categorical` scorers, or platform-registered response scorers and structured output providers through `evaluation.WithLLMOperatorRegistry`.
+
 ## Output
 
 Results are written under `./output/template-eval-app`. The console prints a short summary of overall and per-case outcomes.

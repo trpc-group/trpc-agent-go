@@ -17,6 +17,8 @@ import (
 	evalresultinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	evalsetinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/inmemory"
+	operatorregistry "trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/registry"
+	llmtemplate "trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/template"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/registry"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	metricinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/inmemory"
@@ -35,6 +37,7 @@ type options struct {
 	evalResultManager                 evalresult.Manager
 	metricManager                     metric.Manager
 	registry                          registry.Registry
+	llmOperatorRegistry               operatorregistry.Registry
 	metricRegistry                    metricregistry.Registry
 	evalCaseResultAggregator          service.EvalCaseResultAggregator
 	evalService                       service.Service
@@ -70,6 +73,7 @@ func newOptions(opt ...Option) *options {
 	for _, o := range opt {
 		o(opts)
 	}
+	configureLLMOperatorRegistry(opts.registry, opts.llmOperatorRegistry)
 	return opts
 }
 
@@ -101,7 +105,24 @@ func WithMetricManager(m metric.Manager) Option {
 func WithRegistry(r registry.Registry) Option {
 	return func(o *options) {
 		o.registry = r
+		configureLLMOperatorRegistry(o.registry, o.llmOperatorRegistry)
 	}
+}
+
+// WithLLMOperatorRegistry sets the operator registry used by the default template LLM evaluator.
+func WithLLMOperatorRegistry(r operatorregistry.Registry) Option {
+	return func(o *options) {
+		o.llmOperatorRegistry = r
+		configureLLMOperatorRegistry(o.registry, o.llmOperatorRegistry)
+	}
+}
+
+func configureLLMOperatorRegistry(r registry.Registry, opRegistry operatorregistry.Registry) {
+	if r == nil || opRegistry == nil {
+		return
+	}
+	templateEvaluator := llmtemplate.New(llmtemplate.WithOperatorRegistry(opRegistry))
+	_ = r.Register(llmtemplate.EvaluatorName, templateEvaluator)
 }
 
 // WithMetricRegistry sets the metric runtime registry.

@@ -245,6 +245,7 @@ func (a *agentEvaluator) mergeCallOptions(opt ...Option) (*options, error) {
 	for _, o := range opt {
 		o(callOpts)
 	}
+	configureLLMOperatorRegistry(callOpts.registry, callOpts.llmOperatorRegistry)
 	if err := callOpts.validate(true); err != nil {
 		return nil, err
 	}
