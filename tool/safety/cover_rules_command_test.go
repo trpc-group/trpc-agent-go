@@ -155,6 +155,14 @@ func TestCoverrules_FindHasDestructiveExecNestedRunners(t *testing.T) {
 		[]string{"find", ".", "-exec", "ls", "{}", "+", "-name", "rm"}))
 	require.False(t, findHasDestructiveExec(
 		[]string{"find", ".", "-exec", "grep", "-l", "pattern", "{}", "+"}))
+	// A token like "-exec" inside a consumed payload is data, not a new
+	// find clause; skipping the payload avoids a false-positive denial.
+	require.False(t, findHasDestructiveExec(
+		[]string{"find", ".", "-exec", "echo", "-exec", "rm", "{}", ";"}))
+	// A genuine second -exec clause after the terminator is still
+	// analyzed.
+	require.True(t, findHasDestructiveExec(
+		[]string{"find", ".", "-exec", "ls", "{}", "+", "-exec", "rm", "{}", ";"}))
 }
 
 // TestCoverrules_ExecPayload covers the -exec payload terminator handling.

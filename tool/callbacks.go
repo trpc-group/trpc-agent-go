@@ -647,6 +647,11 @@ func (c *Callbacks) runAfterToolFinalizers(
 	if len(c.AfterToolFinalizers) == 0 {
 		return result, runErr
 	}
+	// Start from the context the regular chain produced (if a callback
+	// set one) so finalizers do not observe a stale pre-chain context.
+	if result != nil && result.Context != nil {
+		ctx = result.Context
+	}
 	for _, cb := range c.AfterToolFinalizers {
 		// Expose the current effective result so the finalizer
 		// observes the value the framework would return, including a

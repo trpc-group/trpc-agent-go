@@ -1539,6 +1539,39 @@ func TestRunAfterTool_FinalizerRunsAfterCustomResultShortCircuit(t *testing.T) {
 	require.Equal(t, "finalized", result.CustomResult)
 }
 
+// TestRunAfterTool_FinalizerObservesChainContext verifies that a
+// finalizer observes the context a regular after-tool callback set on
+// its result, per the documented "used for subsequent callbacks"
+// contract.
+func TestRunAfterTool_FinalizerObservesChainContext(t *testing.T) {
+	callbacks := tool.NewCallbacks()
+	type ctxKey struct{}
+
+	callbacks.RegisterAfterTool(func(ctx context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
+		return &tool.AfterToolResult{
+			Context:      context.WithValue(ctx, ctxKey{}, "chain"),
+			CustomResult: "short-circuit",
+		}, nil
+	})
+
+	finalizerRan := false
+	callbacks.RegisterAfterToolFinalizer(func(ctx context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
+		finalizerRan = true
+		require.Equal(t, "chain", ctx.Value(ctxKey{}))
+		return nil, nil
+	})
+
+	result, err := callbacks.RunAfterTool(context.Background(), &tool.AfterToolArgs{
+		ToolName: "test-tool",
+		Result:   "original",
+	})
+	require.NoError(t, err)
+	require.True(t, finalizerRan)
+	require.NotNil(t, result)
+	require.NotNil(t, result.Context)
+	require.Equal(t, "chain", result.Context.Value(ctxKey{}))
+}
+
 // TestRunAfterTool_FinalizerRunsAfterError verifies that finalizers run
 // even when a regular callback fails and the chain stops on the error.
 func TestRunAfterTool_FinalizerRunsAfterError(t *testing.T) {

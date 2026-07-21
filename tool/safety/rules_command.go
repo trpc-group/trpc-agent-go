@@ -171,9 +171,13 @@ func findHasDestructiveExec(argv []string) bool {
 		default:
 			continue
 		}
-		if execPayloadIsDangerous(execPayload(argv[i+1:])) {
+		payload := execPayload(argv[i+1:])
+		if execPayloadIsDangerous(payload) {
 			return true
 		}
+		// Skip the consumed payload so a token like "-exec" inside it
+		// is not re-evaluated as a new find flag.
+		i += len(payload)
 	}
 	return false
 }
