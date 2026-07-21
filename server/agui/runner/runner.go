@@ -375,6 +375,9 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 	if len(messages.toolMessages) > 0 {
 		runOption = append(runOption, withToolResultMessageRewriter(messages.toolMessages))
 	}
+	if appName != "" {
+		runOption = append(runOption, agent.WithAppName(appName))
+	}
 	ctx, span, err := r.startSpan(ctx, runAgentInput)
 	if err != nil {
 		return nil, fmt.Errorf("start span: %w", err)
