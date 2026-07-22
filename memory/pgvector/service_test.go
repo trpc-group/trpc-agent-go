@@ -2505,61 +2505,41 @@ func TestExecuteVectorSearch_OrderByEventTimeUsesSimilarityFirst(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestExpandedHybridSearchLimit(t *testing.T) {
-	assert.Equal(t, 120, expandedHybridSearchLimit(30))
-	assert.Equal(t, 0, expandedHybridSearchLimit(0))
-	assert.Equal(t, -1, expandedHybridSearchLimit(-1))
-
-	maxInt := int(^uint(0) >> 1)
-	assert.Equal(t, maxInt, expandedHybridSearchLimit(maxInt))
-}
-
-func TestRankedResultsByMemoryKindPromotesMinorityKind(t *testing.T) {
-	episodePositions := map[int]bool{
-		12: true, 17: true, 19: true, 20: true, 23: true,
-		26: true, 27: true, 32: true, 46: true, 47: true,
-	}
-	vectorResults := make([]*memory.Entry, 0, 72)
-	for index := 0; index < 72; index++ {
-		kind := memory.KindFact
-		if episodePositions[index] {
-			kind = memory.KindEpisode
+func TestMergeHybridResults(t *testing.T) {
+	entry := func(id string) *memory.Entry {
+		return &memory.Entry{
+			ID:     id,
+			Memory: &memory.Memory{Memory: id},
 		}
-		id := fmt.Sprintf("memory-%02d", index)
-		if index == 47 {
-			id = "target-episode"
-		}
-		vectorResults = append(vectorResults, &memory.Entry{
-			ID: id,
-			Memory: &memory.Memory{
-				Memory: id,
-				Kind:   kind,
-			},
-		})
 	}
 
-	kindRankings := rankedResultsByMemoryKind(vectorResults)
-	require.Len(t, kindRankings, 2)
-	merged := imemory.MergeRankedResults(
-		append([][]*memory.Entry{vectorResults}, kindRankings...),
-		defaultRRFK,
-		len(vectorResults),
+	results := mergeHybridResults(
+		[]*memory.Entry{entry("mem-1"), entry("mem-2")},
+		[]*memory.Entry{entry("mem-2"), entry("mem-3")},
+		nil,
+		0,
+		2,
 	)
 
-	require.Len(t, merged, len(vectorResults))
-	targetIndex := entryIndex(merged, "target-episode")
-	require.NotEqual(t, -1, targetIndex)
-	assert.Less(t, targetIndex, 47)
-	assert.Nil(t, rankedResultsByMemoryKind(vectorResults[:4]))
+	require.Len(t, results, 2)
+	assert.Equal(t, "mem-2", results[0].ID)
+	assert.Greater(t, results[0].Score, results[1].Score)
 }
 
-func entryIndex(entries []*memory.Entry, id string) int {
-	for index, entry := range entries {
-		if entry != nil && entry.ID == id {
-			return index
-		}
-	}
-	return -1
+func TestMergeHybridResultsUsesFocusedRanking(t *testing.T) {
+	first := &memory.Entry{ID: "first", Memory: &memory.Memory{Memory: "first"}}
+	focused := &memory.Entry{ID: "focused", Memory: &memory.Memory{Memory: "focused"}}
+
+	results := mergeHybridResults(
+		[]*memory.Entry{first, focused},
+		nil,
+		[]*memory.Entry{focused},
+		defaultRRFK,
+		2,
+	)
+
+	require.Len(t, results, 2)
+	assert.Equal(t, "focused", results[0].ID)
 }
 
 func TestMergeSearchResults(t *testing.T) {
@@ -2666,51 +2646,6 @@ func TestService_SearchMemories_OrderByEventTimeKeepsHigherSimilarityFirst(t *te
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestService_SearchMemories_BackfillsTemporalEventTail(t *testing.T) {
-	db, mock := setupMockDB(t)
-	defer db.Close()
-
-	svc := setupMockService(t, db, mock, WithSkipDBInit(true))
-	defer svc.Close()
-
-	baseTime := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
-	columns := []string{
-		"memory_id", "app_name", "user_id", "memory_content", "topics",
-		"memory_kind", "event_time", "participants", "location",
-		"created_at", "updated_at", "similarity",
-	}
-	mock.ExpectQuery("SELECT memory_id, app_name, user_id, memory_content, topics").
-		WillReturnRows(sqlmock.NewRows(columns).
-			AddRow("latest", "test-app", "u1", "Saw a sculpture exhibition", pq.Array([]string{"museum"}),
-				"episode", baseTime.Add(48*time.Hour), pq.Array([]string{}), "Art Museum",
-				baseTime.Add(48*time.Hour), baseTime.Add(48*time.Hour), 0.95).
-			AddRow("middle", "test-app", "u1", "Attended an art lecture", pq.Array([]string{"museum"}),
-				"episode", baseTime.Add(24*time.Hour), pq.Array([]string{}), "City Museum",
-				baseTime.Add(24*time.Hour), baseTime.Add(24*time.Hour), 0.90).
-			AddRow("earliest", "test-app", "u1", "Visited a dinosaur collection", pq.Array([]string{"museum"}),
-				"episode", baseTime, pq.Array([]string{}), "History Museum",
-				baseTime, baseTime, 0.85))
-	mock.ExpectQuery("SELECT memory_id, app_name, user_id, memory_content, topics").
-		WillReturnRows(sqlmock.NewRows(columns))
-
-	results, err := svc.SearchMemories(
-		context.Background(),
-		memory.UserKey{AppName: "test-app", UserID: "u1"},
-		"List the museums from earliest to latest.",
-		memory.WithSearchOptions(memory.SearchOptions{
-			Query:        "List the museums from earliest to latest.",
-			HybridSearch: true,
-			MaxResults:   2,
-		}),
-	)
-	require.NoError(t, err)
-	require.Len(t, results, 2)
-	assert.Equal(t, []string{"latest", "earliest"}, []string{
-		results[0].ID, results[1].ID,
-	})
-	require.NoError(t, mock.ExpectationsWereMet())
-}
-
 func TestService_SearchMemories_KindFallbackKeepsRequestedKindFirst(t *testing.T) {
 	db, mock := setupMockDB(t)
 	defer db.Close()
@@ -2758,7 +2693,7 @@ func TestService_SearchMemories_KindFallbackKeepsRequestedKindFirst(t *testing.T
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestService_SearchMemories_KindFallbackAndHybridSearch(t *testing.T) {
+func TestService_SearchMemories_KindFallbackAndHybridSearchUsesRequestedLimit(t *testing.T) {
 	db, mock := setupMockDB(t)
 	defer db.Close()
 
@@ -2774,18 +2709,18 @@ func TestService_SearchMemories_KindFallbackAndHybridSearch(t *testing.T) {
 		)
 	}
 
-	mock.ExpectQuery("SELECT memory_id, app_name, user_id, memory_content, topics").
+	mock.ExpectQuery("SELECT memory_id.*LIMIT 4").
 		WillReturnRows(rows().AddRow(
 			"mem-1", "test-app", "u1", "Alice hiked in Kyoto", pq.Array([]string{"travel"}),
 			"episode", now, pq.Array([]string{"Alice"}), "Kyoto", now, now, 0.95,
 		))
-	mock.ExpectQuery("SELECT memory_id, app_name, user_id, memory_content, topics").
+	mock.ExpectQuery("SELECT memory_id.*LIMIT 4").
 		WillReturnRows(rows().
 			AddRow("mem-2", "test-app", "u1", "Alice planned a Kyoto trip", pq.Array([]string{"travel"}),
 				"episode", now, pq.Array([]string{"Alice"}), "Kyoto", now, now, 0.89).
 			AddRow("mem-3", "test-app", "u1", "Alice likes coffee", pq.Array([]string{"profile"}),
 				"fact", nil, pq.Array([]string{}), nil, now, now, 0.88))
-	mock.ExpectQuery("SELECT memory_id, app_name, user_id, memory_content, topics").
+	mock.ExpectQuery("SELECT memory_id.*LIMIT 4").
 		WillReturnRows(rows().AddRow(
 			"mem-1", "test-app", "u1", "Alice hiked in Kyoto", pq.Array([]string{"travel"}),
 			"episode", now, pq.Array([]string{"Alice"}), "Kyoto", now, now, 0.50,

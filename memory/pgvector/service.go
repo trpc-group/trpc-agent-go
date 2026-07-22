@@ -546,10 +546,7 @@ func (s *Service) ReadMemories(
 
 // minKindFallbackResults is the threshold below which a kind-filtered
 // search triggers a fallback unfiltered search when KindFallback is enabled.
-const (
-	minKindFallbackResults = 3
-	hybridOverfetchFactor  = 4
-)
+const minKindFallbackResults = 3
 
 // SearchMemories searches memories for a user using vector similarity.
 // Options may include WithSearchOptions for advanced filtering
@@ -586,12 +583,7 @@ func (s *Service) SearchMemories(
 	if opts.MaxResults > 0 {
 		maxResults = opts.MaxResults
 	}
-	candidateLimit := maxResults
-	if opts.HybridSearch {
-		candidateLimit = expandedHybridSearchLimit(maxResults)
-	}
-
-	results, err := s.executeVectorSearch(ctx, userKey, opts, vector, candidateLimit)
+	results, err := s.executeVectorSearch(ctx, userKey, opts, vector, maxResults)
 	if err != nil {
 		return nil, err
 	}
@@ -603,45 +595,30 @@ func (s *Service) SearchMemories(
 		fallbackOpts.Kind = ""
 		fallbackOpts.KindFallback = false
 		fallbackResults, fallbackErr := s.executeVectorSearch(
-			ctx, userKey, fallbackOpts, vector, candidateLimit,
+			ctx, userKey, fallbackOpts, vector, maxResults,
 		)
 		if fallbackErr == nil && len(fallbackResults) > 0 {
-			results = mergeSearchResults(
-				results, fallbackResults, opts.Kind, candidateLimit,
-			)
+			results = mergeSearchResults(results, fallbackResults, opts.Kind, maxResults)
 		}
 	}
 
-	// Explicit sequence queries may need one distinct dated event beyond the
-	// normal similarity head. Keep that candidate separate until after dedup.
-	var temporalEventResults []*memory.Entry
-	// Hybrid search fuses global vector, keyword, and per-kind vector rankings.
-	// The per-kind rankings normalize rank for minority memory kinds without a
-	// fixed quota.
+	// Hybrid search fuses vector, keyword, and focused-passage rankings.
 	if opts.HybridSearch {
-		vectorResults := results
-		keywordResults, kwErr := s.executeKeywordSearch(
-			ctx, userKey, opts, candidateLimit,
-		)
-		rankings := make([][]*memory.Entry, 0, 4)
-		rankings = append(rankings, results)
-		if kwErr == nil && len(keywordResults) > 0 {
-			rankings = append(rankings, keywordResults)
+		keywordResults, kwErr := s.executeKeywordSearch(ctx, userKey, opts, maxResults)
+		if kwErr != nil {
+			keywordResults = nil
 		}
-		if focusedResults := rankResultsByFocusedPassage(query, results); len(focusedResults) > 0 {
-			rankings = append(rankings, focusedResults)
-		}
-		temporalEventResults = rankResultsByTemporalEventCoverage(
-			query, vectorResults,
-		)
-		rankings = append(rankings, rankedResultsByMemoryKind(results)...)
 		rrfK := opts.HybridRRFK
 		if rrfK <= 0 {
 			rrfK = defaultRRFK
 		}
-		if len(rankings) > 1 {
-			results = imemory.MergeRankedResults(rankings, rrfK, candidateLimit)
-		}
+		results = mergeHybridResults(
+			results,
+			keywordResults,
+			rankResultsByFocusedPassage(query, results),
+			rrfK,
+			maxResults,
+		)
 	}
 
 	// Apply similarity threshold filtering.
@@ -675,64 +652,12 @@ func (s *Service) SearchMemories(
 	// Content-based deduplication of near-identical memories.
 	if opts.Deduplicate && len(results) > 1 {
 		results = imemory.DeduplicateResultsPreservingConflicts(results)
-		temporalEventResults = imemory.DeduplicateResultsPreservingConflicts(
-			temporalEventResults,
-		)
-	}
-	if len(temporalEventResults) > 0 {
-		results = backfillTemporalEventTail(
-			results,
-			temporalEventResults,
-			maxResults,
-			temporalEventTailSlots,
-		)
 	}
 	if maxResults > 0 && len(results) > maxResults {
 		results = results[:maxResults]
 	}
 
 	return results, nil
-}
-
-func expandedHybridSearchLimit(limit int) int {
-	if limit <= 0 {
-		return limit
-	}
-	maxInt := int(^uint(0) >> 1)
-	if limit > maxInt/hybridOverfetchFactor {
-		return maxInt
-	}
-	return limit * hybridOverfetchFactor
-}
-
-func rankedResultsByMemoryKind(
-	results []*memory.Entry,
-) [][]*memory.Entry {
-	byKind := make(map[string][]*memory.Entry)
-	for _, entry := range results {
-		if entry == nil || entry.Memory == nil {
-			continue
-		}
-		kind := imemory.EffectiveKind(entry.Memory)
-		if kind == "" {
-			continue
-		}
-		key := string(kind)
-		byKind[key] = append(byKind[key], entry)
-	}
-	if len(byKind) < 2 {
-		return nil
-	}
-	kinds := make([]string, 0, len(byKind))
-	for kind := range byKind {
-		kinds = append(kinds, kind)
-	}
-	slices.Sort(kinds)
-	rankings := make([][]*memory.Entry, 0, len(kinds))
-	for _, kind := range kinds {
-		rankings = append(rankings, byKind[kind])
-	}
-	return rankings
 }
 
 // executeVectorSearch runs a single vector similarity search against pgvector.
@@ -877,6 +802,29 @@ func (s *Service) executeKeywordSearch(
 		return []*memory.Entry{}, nil
 	}
 	return results, nil
+}
+
+// mergeHybridResults combines vector, keyword, and focused-passage rankings
+// using Reciprocal Rank Fusion (RRF).
+func mergeHybridResults(
+	vectorResults []*memory.Entry,
+	keywordResults []*memory.Entry,
+	focusedResults []*memory.Entry,
+	k int,
+	maxResults int,
+) []*memory.Entry {
+	rankings := make([][]*memory.Entry, 0, 3)
+	rankings = append(rankings, vectorResults)
+	if len(keywordResults) > 0 {
+		rankings = append(rankings, keywordResults)
+	}
+	if len(focusedResults) > 0 {
+		rankings = append(rankings, focusedResults)
+	}
+	if len(rankings) == 1 {
+		return vectorResults
+	}
+	return imemory.MergeRankedResults(rankings, k, maxResults)
 }
 
 // mergeSearchResults merges kind-filtered results with fallback results.
