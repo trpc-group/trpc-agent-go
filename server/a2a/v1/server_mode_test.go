@@ -47,6 +47,42 @@ func (r *modeTestRunner) Run(
 
 func (*modeTestRunner) Close() error { return nil }
 
+func TestNewRequiresRunnerAndAgentCard(t *testing.T) {
+	card := a2aserver.AgentCard{
+		Name: "agent",
+		URL:  "http://localhost:8080",
+	}
+	tests := []struct {
+		name    string
+		opts    []Option
+		wantErr string
+	}{
+		{
+			name:    "runner",
+			wantErr: "runner (WithRunner) is required",
+		},
+		{
+			name:    "agent card",
+			opts:    []Option{WithRunner(&modeTestRunner{})},
+			wantErr: "agent card (WithAgentCard) is required",
+		},
+		{
+			name:    "runner before agent card",
+			opts:    []Option{WithAgentCard(card)},
+			wantErr: "runner (WithRunner) is required",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := New(test.opts...)
+			if err == nil || err.Error() != test.wantErr {
+				t.Fatalf("New error = %v, want %q", err, test.wantErr)
+			}
+		})
+	}
+}
+
 func TestBuildProcessorKeepsEventTypeAcrossManagers(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -78,7 +114,7 @@ func TestBuildProcessorKeepsEventTypeAcrossManagers(t *testing.T) {
 				streamingEventType: test.streamingType,
 				taskManagerBuilder: test.taskManager,
 			}
-			processor, err := buildProcessor(nil, nil, "agent", opts)
+			processor, err := buildProcessor("agent", opts)
 			if err != nil {
 				t.Fatalf("buildProcessor failed: %v", err)
 			}
@@ -152,7 +188,7 @@ func TestMessageProcessorManagerModes(t *testing.T) {
 	ctx := NewContextWithUserID(context.Background(), "user")
 
 	t.Run("stateless returns request-local Task", func(t *testing.T) {
-		processor, err := buildProcessor(nil, nil, "agent", &options{
+		processor, err := buildProcessor("agent", &options{
 			runner:             newRunner(),
 			errorHandler:       defaultErrorHandler,
 			streamingEventType: StreamingEventTypeTaskArtifactUpdate,
@@ -197,7 +233,7 @@ func TestMessageProcessorManagerModes(t *testing.T) {
 	})
 
 	t.Run("stateless unary supports task-bound Messages", func(t *testing.T) {
-		processor, err := buildProcessor(nil, nil, "agent", &options{
+		processor, err := buildProcessor("agent", &options{
 			runner:             newRunner(),
 			errorHandler:       defaultErrorHandler,
 			streamingEventType: StreamingEventTypeMessage,
@@ -231,7 +267,7 @@ func TestMessageProcessorManagerModes(t *testing.T) {
 	})
 
 	t.Run("stateless streaming supports task-bound Messages", func(t *testing.T) {
-		processor, err := buildProcessor(nil, nil, "agent", &options{
+		processor, err := buildProcessor("agent", &options{
 			runner:             newRunner(),
 			errorHandler:       defaultErrorHandler,
 			streamingEventType: StreamingEventTypeMessage,
@@ -304,7 +340,7 @@ func TestMessageProcessorManagerModes(t *testing.T) {
 	})
 
 	t.Run("explicit manager returns Task", func(t *testing.T) {
-		processor, err := buildProcessor(nil, nil, "agent", &options{
+		processor, err := buildProcessor("agent", &options{
 			runner:             newRunner(),
 			errorHandler:       defaultErrorHandler,
 			streamingEventType: StreamingEventTypeTaskArtifactUpdate,
@@ -358,7 +394,7 @@ func TestResponseRewriterRunsBeforeTaskAggregation(t *testing.T) {
 			},
 		},
 	}}
-	processor, err := buildProcessor(nil, nil, "agent", &options{
+	processor, err := buildProcessor("agent", &options{
 		runner:             runner,
 		errorHandler:       defaultErrorHandler,
 		streamingEventType: StreamingEventTypeMessage,

@@ -33,8 +33,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
-	"trpc.group/trpc-go/trpc-agent-go/session"
-	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 )
 
 // New creates a new a2a server.
@@ -50,45 +48,14 @@ func New(opts ...Option) (*a2a.A2AServer, error) {
 		opt(options)
 	}
 
-	if options.sessionService == nil {
-		options.sessionService = inmemory.NewSessionService()
+	if options.runner == nil {
+		return nil, errors.New("runner (WithRunner) is required")
 	}
-
-	if options.agent == nil && options.runner == nil {
-		return nil, errors.New("either agent (WithAgent) or runner (WithRunner) is required")
-	}
-	if options.agent != nil && options.runner != nil {
-		return nil, errors.New("WithAgent and WithRunner cannot be used together; use WithAgentCard with WithRunner")
-	}
-
-	if options.agent == nil && options.agentCard == nil {
-		return nil, errors.New("agent card (WithAgentCard) is required when using runner without agent")
-	}
-
-	// Host is only required if we need to build an agent card
-	// If user provides a custom agent card, host is optional
-	if options.agentCard == nil && options.host == "" {
-		return nil, errors.New("host is required when agent card is not provided")
+	if options.agentCard == nil {
+		return nil, errors.New("agent card (WithAgentCard) is required")
 	}
 
 	return buildA2AServer(options)
-}
-
-func buildAgentCard(options *options) (a2a.AgentCard, error) {
-	if options.agentCard != nil {
-		return *options.agentCard, nil
-	}
-	if options.agent == nil {
-		return a2a.AgentCard{}, errors.New("agent is required when agent card is not provided")
-	}
-	info := options.agent.Info()
-	return NewAgentCard(
-		info.Name,
-		info.Description,
-		options.host,
-		options.enableStreaming,
-		WithCardTools(options.agent.Tools()...),
-	)
 }
 
 // buildRuntimeState makes a shallow copy of message metadata for RuntimeState.
@@ -111,22 +78,14 @@ func cloneMetadata(metadata map[string]any) map[string]any {
 	return cloned
 }
 
-func buildProcessor(
-	agent agent.Agent,
-	sessionService session.Service,
-	serverIdentity string,
-	options *options,
-) (*messageProcessor, error) {
+func buildProcessor(serverIdentity string, options *options) (*messageProcessor, error) {
 	if serverIdentity == "" {
 		return nil, errors.New("agent card name is required")
 	}
 
 	procRunner := options.runner
 	if procRunner == nil {
-		if agent == nil {
-			return nil, errors.New("agent is required when runner is not provided")
-		}
-		procRunner = runner.NewRunner(serverIdentity, agent, runner.WithSessionService(sessionService))
+		return nil, errors.New("runner is required")
 	}
 
 	// Use custom converters if provided, otherwise use defaults
@@ -163,22 +122,19 @@ func buildProcessor(
 }
 
 func buildA2AServer(options *options) (*a2a.A2AServer, error) {
-	agent := options.agent
-	sessionService := options.sessionService
-
-	agentCard, err := buildAgentCard(options)
-	if err != nil {
-		return nil, err
-	}
+	agentCard := *options.agentCard
 	if agentCard.Name == "" {
 		return nil, errors.New("agent card name is required")
 	}
 
-	var processor taskmanager.MessageProcessor
+	var (
+		processor taskmanager.MessageProcessor
+		err       error
+	)
 	if options.processorBuilder != nil {
-		processor = options.processorBuilder(agent, sessionService)
+		processor = options.processorBuilder(options.runner)
 	} else {
-		processor, err = buildProcessor(agent, sessionService, agentCard.Name, options)
+		processor, err = buildProcessor(agentCard.Name, options)
 		if err != nil {
 			return nil, fmt.Errorf("failed to build processor: %w", err)
 		}
