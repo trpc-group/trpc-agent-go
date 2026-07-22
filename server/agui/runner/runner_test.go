@@ -294,6 +294,94 @@ func TestRunHookEmitsBeforeDelayedRunFinished(t *testing.T) {
 	waitForChannelClose(t, eventsCh)
 }
 
+func TestRunHookFailureCancelsBlockedRunnerStartup(t *testing.T) {
+	runnerStarted := make(chan struct{})
+	runnerCanceled := make(chan struct{})
+	underlying := &fakeRunner{
+		run: func(ctx context.Context,
+			userID, sessionID string,
+			message model.Message,
+			_ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			close(runnerStarted)
+			<-ctx.Done()
+			close(runnerCanceled)
+			return nil, ctx.Err()
+		},
+	}
+	r := New(underlying, WithRunHook(func(ctx context.Context, run *Run) error {
+		return errors.New("hook failed")
+	}))
+	eventsCh, err := r.Run(context.Background(), &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	})
+	require.NoError(t, err)
+	assert.IsType(t, (*aguievents.RunStartedEvent)(nil), waitForNextEvent(t, eventsCh))
+	select {
+	case <-runnerStarted:
+	case <-time.After(time.Second):
+		require.FailNow(t, "timeout waiting for runner start")
+	}
+	events := collectEvents(t, eventsCh)
+	select {
+	case <-runnerCanceled:
+	default:
+		require.FailNow(t, "runner was not canceled before run cleanup waited")
+	}
+	require.True(t, hasRunErrorEvent(events))
+}
+
+func TestRunTerminalEventWaitsForAgentStreamCloseBeforeReleasingSession(t *testing.T) {
+	releaseAgentClose := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() {
+		releaseOnce.Do(func() {
+			close(releaseAgentClose)
+		})
+	}
+	t.Cleanup(release)
+	underlying := &fakeRunner{
+		run: func(ctx context.Context,
+			userID, sessionID string,
+			message model.Message,
+			_ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			agentEvents := make(chan *agentevent.Event, 1)
+			agentEvents <- &agentevent.Event{
+				Response: &model.Response{
+					Object: model.ObjectTypeRunnerCompletion,
+					Done:   true,
+				},
+			}
+			go func() {
+				<-releaseAgentClose
+				close(agentEvents)
+			}()
+			return agentEvents, nil
+		},
+	}
+	r := New(underlying)
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	}
+	eventsCh, err := r.Run(context.Background(), input)
+	require.NoError(t, err)
+	assert.IsType(t, (*aguievents.RunStartedEvent)(nil), waitForNextEvent(t, eventsCh))
+	assert.IsType(t, (*aguievents.RunFinishedEvent)(nil), waitForNextEvent(t, eventsCh))
+	assertNoAGUIEvent(t, eventsCh, 20*time.Millisecond)
+	events2, err := r.Run(context.Background(), &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run-2",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi again"}},
+	})
+	require.Nil(t, events2)
+	require.ErrorIs(t, err, ErrRunAlreadyExists)
+	release()
+	waitForChannelClose(t, eventsCh)
+}
+
 func TestRunHookEmitsBeforeDelayedRunnerError(t *testing.T) {
 	allowHook := make(chan struct{})
 	hookStarted := make(chan struct{})

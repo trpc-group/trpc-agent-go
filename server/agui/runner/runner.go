@@ -529,6 +529,7 @@ func (r *runner) run(ctx context.Context, cancel context.CancelCauseFunc, key se
 	}()
 	r.runEventLoop(ctx, events, input, agentRun, hookEvents, hookDone, hookRemaining)
 	closeDone()
+	cancel(nil)
 	<-agentRunDone
 }
 
@@ -547,8 +548,11 @@ func (r *runner) runEventLoop(
 	var pendingTerminal aguievents.Event
 	agentDone := false
 	for {
-		if agentDone && hookRemaining == 0 {
+		if pendingTerminal != nil && hookRemaining == 0 {
 			r.emitPendingTerminal(ctx, events, input, pendingTerminal)
+			pendingTerminal = nil
+		}
+		if agentDone && hookRemaining == 0 {
 			return
 		}
 		select {
@@ -587,14 +591,15 @@ func (r *runner) runEventLoop(
 				agentDone = true
 				continue
 			}
+			if pendingTerminal != nil || input.terminalEmitted {
+				continue
+			}
 			terminal, ok := r.emitAgentEventWithDeferredTerminal(ctx, events, input, agentEvent)
 			if !ok {
 				return
 			}
 			if terminal != nil {
 				pendingTerminal = terminal
-				agentEvents = nil
-				agentDone = true
 			}
 		case req := <-hookEvents:
 			if !r.handleHookEvent(ctx, events, input, req) {
