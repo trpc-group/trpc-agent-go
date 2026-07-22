@@ -154,8 +154,9 @@ func TestFileTool_ReadFile_NilRequest(t *testing.T) {
 	fileToolSet := toolSet.(*fileToolSet)
 
 	rsp, err := fileToolSet.readFile(context.Background(), nil)
-	assert.Error(t, err)
+	assert.EqualError(t, err, "request cannot be nil")
 	assert.NotNil(t, rsp)
+	assert.Equal(t, "Error: request cannot be nil", rsp.Message)
 }
 
 func TestValidateReadFileRequest_Nil(t *testing.T) {

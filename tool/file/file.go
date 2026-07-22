@@ -16,6 +16,7 @@ package file
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -507,7 +508,7 @@ func (f *fileToolSet) matchFiles(
 	caseSensitive bool,
 ) ([]string, error) {
 	if pattern == "" {
-		return nil, fmt.Errorf("pattern cannot be empty")
+		return nil, errors.New("pattern cannot be empty")
 	}
 	opts := []doublestar.GlobOption{}
 	if !caseSensitive {
