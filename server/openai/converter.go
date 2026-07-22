@@ -416,8 +416,7 @@ func (c *converter) aggregateStreamingEvents(events []*event.Event) (*openAIResp
 		if evt.Response != nil && evt.Usage != nil {
 			finalEvent = evt
 		}
-		if evt.Response != nil && len(evt.Response.Choices) > 0 {
-			choice := evt.Response.Choices[0]
+		if choice, ok := firstResponseChoice(evt); ok {
 			// Handle streaming delta content.
 			if choice.Delta.Content != "" {
 				allContent.WriteString(choice.Delta.Content)
@@ -440,11 +439,9 @@ func (c *converter) aggregateStreamingEvents(events []*event.Event) (*openAIResp
 		// Use the last event if no event with usage found.
 		finalEvent = events[len(events)-1]
 	}
-	if finalEvent.Response != nil && len(finalEvent.Response.Choices) > 0 {
-		if finalContent := finalEvent.Response.Choices[0].Message.Content; finalContent != "" {
-			allContent.Reset()
-			allContent.WriteString(finalContent)
-		}
+	if finalContent := finalResponseMessageContent(finalEvent); finalContent != "" {
+		allContent.Reset()
+		allContent.WriteString(finalContent)
 	}
 	// Build the aggregated message.
 	msg := model.Message{
@@ -487,6 +484,21 @@ func (c *converter) aggregateStreamingEvents(events []*event.Event) (*openAIResp
 		}
 	}
 	return response, nil
+}
+
+func firstResponseChoice(evt *event.Event) (model.Choice, bool) {
+	if evt == nil || evt.Response == nil || len(evt.Response.Choices) == 0 {
+		return model.Choice{}, false
+	}
+	return evt.Response.Choices[0], true
+}
+
+func finalResponseMessageContent(evt *event.Event) string {
+	choice, ok := firstResponseChoice(evt)
+	if !ok {
+		return ""
+	}
+	return choice.Message.Content
 }
 
 // generateResponseID generates a unique response ID.
