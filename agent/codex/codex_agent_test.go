@@ -25,7 +25,9 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	trunner "trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 )
 
 // scriptedRunner is a deterministic commandRunner used for unit tests.
@@ -133,26 +135,30 @@ func TestCodexAgent_Run_CreateParsesEventsAndStoresThread(t *testing.T) {
 	ch, err := ag.Run(ctx, inv)
 	require.NoError(t, err)
 	events := drainEvents(ch)
-	require.Len(t, events, 4)
+	require.Len(t, events, 5)
 	require.True(t, events[0].IsToolCallResponse())
-	require.True(t, events[1].IsToolResultResponse())
-	require.False(t, events[2].IsFinalResponse())
-	require.True(t, events[2].IsPartial)
-	require.Equal(t, model.ObjectTypeChatCompletionChunk, events[2].Object)
-	require.True(t, events[3].IsFinalResponse())
+	require.True(t, events[0].IsPartial)
+	require.True(t, events[1].IsToolCallResponse())
+	require.False(t, events[1].IsPartial)
+	require.True(t, events[2].IsToolResultResponse())
+	require.False(t, events[3].IsFinalResponse())
+	require.True(t, events[3].IsPartial)
+	require.Equal(t, model.ObjectTypeChatCompletionChunk, events[3].Object)
+	require.True(t, events[4].IsFinalResponse())
 	require.Equal(t, "command_execution", events[0].Choices[0].Message.ToolCalls[0].Function.Name)
 	require.Equal(t, `{"command":"/usr/bin/bash -lc 'printf hi'"}`, string(events[0].Choices[0].Message.ToolCalls[0].Function.Arguments))
-	require.Equal(t, "hi", events[1].Choices[0].Message.Content)
-	require.Equal(t, "done", events[2].Choices[0].Delta.Content)
-	require.Equal(t, "inv-1:item_1", events[2].Response.ID)
-	require.Equal(t, "done", events[3].Choices[0].Message.Content)
+	require.Equal(t, `{"command":"/usr/bin/bash -lc 'printf hi'"}`, string(events[1].Choices[0].Message.ToolCalls[0].Function.Arguments))
+	require.Equal(t, "hi", events[2].Choices[0].Message.Content)
+	require.Equal(t, "done", events[3].Choices[0].Delta.Content)
 	require.Equal(t, "inv-1:item_1", events[3].Response.ID)
-	require.Equal(t, 10, events[3].Usage.PromptTokens)
-	require.Equal(t, 3, events[3].Usage.CompletionTokens)
-	require.Equal(t, 13, events[3].Usage.TotalTokens)
-	require.Equal(t, 2, events[3].Usage.PromptTokensDetails.CachedTokens)
-	require.Equal(t, 1, events[3].Usage.CompletionTokensDetails.ReasoningTokens)
-	require.Equal(t, []byte("thread-1"), events[3].StateDelta[StateKeyThreadID])
+	require.Equal(t, "done", events[4].Choices[0].Message.Content)
+	require.Equal(t, "inv-1:item_1", events[4].Response.ID)
+	require.Equal(t, 10, events[4].Usage.PromptTokens)
+	require.Equal(t, 3, events[4].Usage.CompletionTokens)
+	require.Equal(t, 13, events[4].Usage.TotalTokens)
+	require.Equal(t, 2, events[4].Usage.PromptTokensDetails.CachedTokens)
+	require.Equal(t, 1, events[4].Usage.CompletionTokensDetails.ReasoningTokens)
+	require.Equal(t, []byte("thread-1"), events[4].StateDelta[StateKeyThreadID])
 	calls := runner.Calls()
 	require.Len(t, calls, 1)
 	require.Equal(t, "codex", calls[0].bin)
@@ -195,6 +201,7 @@ func TestCodexAgent_Run_StreamsToolEventBeforeCommandReturns(t *testing.T) {
 		require.FailNow(t, "timed out waiting for streamed tool event")
 	}
 	require.True(t, first.IsToolCallResponse())
+	require.True(t, first.IsPartial)
 	require.Equal(t, "sleep 1", commandArg(t, first))
 	select {
 	case <-returned:
@@ -203,15 +210,17 @@ func TestCodexAgent_Run_StreamsToolEventBeforeCommandReturns(t *testing.T) {
 	}
 	close(release)
 	events := append([]*event.Event{first}, drainEvents(ch)...)
-	require.Len(t, events, 4)
-	require.True(t, events[1].IsToolResultResponse())
-	require.Equal(t, "done", events[1].Choices[0].Message.Content)
-	require.False(t, events[2].IsFinalResponse())
-	require.True(t, events[2].IsPartial)
-	require.Equal(t, "finished", events[2].Choices[0].Delta.Content)
-	require.True(t, events[3].IsFinalResponse())
-	require.Equal(t, "finished", events[3].Choices[0].Message.Content)
-	require.Equal(t, 3, events[3].Usage.TotalTokens)
+	require.Len(t, events, 5)
+	require.True(t, events[1].IsToolCallResponse())
+	require.False(t, events[1].IsPartial)
+	require.True(t, events[2].IsToolResultResponse())
+	require.Equal(t, "done", events[2].Choices[0].Message.Content)
+	require.False(t, events[3].IsFinalResponse())
+	require.True(t, events[3].IsPartial)
+	require.Equal(t, "finished", events[3].Choices[0].Delta.Content)
+	require.True(t, events[4].IsFinalResponse())
+	require.Equal(t, "finished", events[4].Choices[0].Message.Content)
+	require.Equal(t, 3, events[4].Usage.TotalTokens)
 }
 
 func TestCodexAgent_Run_StreamsAssistantMessagesAroundToolEvents(t *testing.T) {
@@ -261,17 +270,20 @@ func TestCodexAgent_Run_StreamsAssistantMessagesAroundToolEvents(t *testing.T) {
 	}
 	close(release)
 	events := append([]*event.Event{first}, drainEvents(ch)...)
-	require.Len(t, events, 5)
+	require.Len(t, events, 6)
 	require.True(t, events[1].IsToolCallResponse())
-	require.True(t, events[2].IsToolResultResponse())
-	require.False(t, events[3].IsFinalResponse())
-	require.True(t, events[3].IsPartial)
-	require.Equal(t, "practice makes perfect", events[3].Choices[0].Delta.Content)
-	require.Equal(t, "inv-stream-2:item_2", events[3].Response.ID)
-	require.True(t, events[4].IsFinalResponse())
-	require.Equal(t, "practice makes perfect", events[4].Choices[0].Message.Content)
+	require.True(t, events[1].IsPartial)
+	require.True(t, events[2].IsToolCallResponse())
+	require.False(t, events[2].IsPartial)
+	require.True(t, events[3].IsToolResultResponse())
+	require.False(t, events[4].IsFinalResponse())
+	require.True(t, events[4].IsPartial)
+	require.Equal(t, "practice makes perfect", events[4].Choices[0].Delta.Content)
 	require.Equal(t, "inv-stream-2:item_2", events[4].Response.ID)
-	require.Equal(t, 7, events[4].Usage.TotalTokens)
+	require.True(t, events[5].IsFinalResponse())
+	require.Equal(t, "practice makes perfect", events[5].Choices[0].Message.Content)
+	require.Equal(t, "inv-stream-2:item_2", events[5].Response.ID)
+	require.Equal(t, 7, events[5].Usage.TotalTokens)
 }
 
 func TestCodexAgent_Run_StreamsErrorsAsNonTerminalUntilCommandFinishes(t *testing.T) {
@@ -452,6 +464,7 @@ func TestCodexAgent_Run_ResumeFailureAfterStreamedEventDoesNotFallback(t *testin
 	events := drainEvents(ch)
 	require.Len(t, events, 2)
 	require.True(t, events[0].IsToolCallResponse())
+	require.True(t, events[0].IsPartial)
 	require.True(t, events[1].IsTerminalError())
 	require.Equal(t, model.ErrorTypeRunError, events[1].Error.Type)
 	require.Contains(t, events[1].Error.Message, "resume crashed")
@@ -459,6 +472,43 @@ func TestCodexAgent_Run_ResumeFailureAfterStreamedEventDoesNotFallback(t *testin
 	calls := runner.Calls()
 	require.Len(t, calls, 1)
 	require.Equal(t, []string{"exec", "resume", "--json", "thread-1"}, calls[0].args)
+}
+
+func TestCodexAgent_Run_ToolStartedFailureDoesNotPersistOrphanToolCall(t *testing.T) {
+	ctx := context.Background()
+	transcript := `{"type":"item.started","item":{"id":"item_0","type":"command_execution","command":"sleep 1","status":"in_progress"}}`
+	cmdErr := errors.New("codex failed")
+	cmdRunner := &scriptedRunner{
+		run: func(command) ([]byte, []byte, error) {
+			return []byte(transcript), []byte("failed"), cmdErr
+		},
+	}
+	ag, err := New(withCommandRunner(cmdRunner))
+	require.NoError(t, err)
+	sessionService := sessioninmemory.NewSessionService()
+	r := trunner.NewRunner("app", ag, trunner.WithSessionService(sessionService))
+	t.Cleanup(func() {
+		require.NoError(t, r.Close())
+	})
+	eventCh, err := r.Run(ctx, "user", "sess-orphan-tool", model.NewUserMessage("Run slow command."))
+	require.NoError(t, err)
+	var sawPartialToolCall bool
+	for evt := range eventCh {
+		if evt != nil && evt.IsToolCallResponse() {
+			sawPartialToolCall = true
+			require.True(t, evt.IsPartial)
+		}
+	}
+	require.True(t, sawPartialToolCall)
+	sess, err := sessionService.GetSession(ctx, session.Key{
+		AppName:   "app",
+		UserID:    "user",
+		SessionID: "sess-orphan-tool",
+	})
+	require.NoError(t, err)
+	for _, evt := range sess.Events {
+		require.False(t, evt.IsToolCallResponse())
+	}
 }
 
 func TestCodexAgent_Run_ResumeAndCreateErrorsReturnRunError(t *testing.T) {
@@ -586,19 +636,22 @@ func TestCodexAgent_Run_RawOutputHookError(t *testing.T) {
 	ch, err := ag.Run(ctx, inv)
 	require.NoError(t, err)
 	events := drainEvents(ch)
-	require.Len(t, events, 4)
+	require.Len(t, events, 5)
 	require.True(t, events[0].IsToolCallResponse())
-	require.True(t, events[1].IsToolResultResponse())
-	require.True(t, events[2].IsPartial)
-	require.Equal(t, "hello", events[2].Choices[0].Delta.Content)
-	require.True(t, events[3].IsFinalResponse())
-	require.Equal(t, model.ObjectTypeError, events[3].Object)
-	require.NotNil(t, events[3].Error)
-	require.Equal(t, model.ErrorTypeFlowError, events[3].Error.Type)
-	require.Contains(t, events[3].Error.Message, "raw output hook")
-	require.Contains(t, events[3].Error.Message, "hook failed")
-	require.Contains(t, events[3].Choices[0].Message.Content, "thread-hook-2")
-	require.Contains(t, events[3].Choices[0].Message.Content, "warn")
+	require.True(t, events[0].IsPartial)
+	require.True(t, events[1].IsToolCallResponse())
+	require.False(t, events[1].IsPartial)
+	require.True(t, events[2].IsToolResultResponse())
+	require.True(t, events[3].IsPartial)
+	require.Equal(t, "hello", events[3].Choices[0].Delta.Content)
+	require.True(t, events[4].IsFinalResponse())
+	require.Equal(t, model.ObjectTypeError, events[4].Object)
+	require.NotNil(t, events[4].Error)
+	require.Equal(t, model.ErrorTypeFlowError, events[4].Error.Type)
+	require.Contains(t, events[4].Error.Message, "raw output hook")
+	require.Contains(t, events[4].Error.Message, "hook failed")
+	require.Contains(t, events[4].Choices[0].Message.Content, "thread-hook-2")
+	require.Contains(t, events[4].Choices[0].Message.Content, "warn")
 }
 
 func TestCodexAgent_InfoAndRunnerArgs(t *testing.T) {
@@ -800,11 +853,15 @@ func TestParseTranscriptEvents_MCPToolCallMapping(t *testing.T) {
 {"type":"turn.completed","usage":{"input_tokens":4,"output_tokens":5}}`
 	result, err := parseTranscriptEvents([]byte(transcript), "inv-parse-2", "codex")
 	require.NoError(t, err)
-	require.Len(t, result.Events, 2)
+	require.Len(t, result.Events, 3)
 	require.Equal(t, "mcp__calc__add", result.Events[0].Choices[0].Message.ToolCalls[0].Function.Name)
-	require.Equal(t, "mcp__calc__add", result.Events[1].Choices[0].Message.ToolName)
+	require.True(t, result.Events[0].IsPartial)
+	require.Equal(t, "mcp__calc__add", result.Events[1].Choices[0].Message.ToolCalls[0].Function.Name)
+	require.False(t, result.Events[1].IsPartial)
+	require.Equal(t, "mcp__calc__add", result.Events[2].Choices[0].Message.ToolName)
 	require.JSONEq(t, `{"a":1,"b":2}`, string(result.Events[0].Choices[0].Message.ToolCalls[0].Function.Arguments))
-	require.Equal(t, "3", result.Events[1].Choices[0].Message.Content)
+	require.JSONEq(t, `{"a":1,"b":2}`, string(result.Events[1].Choices[0].Message.ToolCalls[0].Function.Arguments))
+	require.Equal(t, "3", result.Events[2].Choices[0].Message.Content)
 	require.Equal(t, 9, result.Usage.TotalTokens)
 }
 
@@ -819,19 +876,23 @@ func TestParseTranscriptEvents_BuiltInToolMapping(t *testing.T) {
 {"type":"item.completed","item":{"id":"item_image","type":"image_generation","saved_path":"/tmp/icon.png","revised_prompt":"draw a clean icon","status":"completed"}}`
 	result, err := parseTranscriptEvents([]byte(transcript), "inv-parse-builtins-1", "codex")
 	require.NoError(t, err)
-	require.Len(t, result.Events, 8)
+	require.Len(t, result.Events, 12)
 	require.Equal(t, "web_search", result.Events[0].Choices[0].Message.ToolCalls[0].Function.Name)
 	require.JSONEq(t, `{"query":"trpc agent"}`, string(result.Events[0].Choices[0].Message.ToolCalls[0].Function.Arguments))
-	require.JSONEq(t, `[{"title":"doc"}]`, result.Events[1].Choices[0].Message.Content)
-	require.Equal(t, "file_change", result.Events[2].Choices[0].Message.ToolCalls[0].Function.Name)
-	require.JSONEq(t, `{"path":"main.go","kind":"update"}`, string(result.Events[2].Choices[0].Message.ToolCalls[0].Function.Arguments))
-	require.JSONEq(t, `{"path":"main.go","kind":"update"}`, result.Events[3].Choices[0].Message.Content)
-	require.Equal(t, "image_view", result.Events[4].Choices[0].Message.ToolCalls[0].Function.Name)
-	require.JSONEq(t, `{"path":"/tmp/input.png"}`, string(result.Events[4].Choices[0].Message.ToolCalls[0].Function.Arguments))
-	require.JSONEq(t, `{"width":64,"height":32}`, result.Events[5].Choices[0].Message.Content)
-	require.Equal(t, "image_generation", result.Events[6].Choices[0].Message.ToolCalls[0].Function.Name)
-	require.JSONEq(t, `{"prompt":"draw icon"}`, string(result.Events[6].Choices[0].Message.ToolCalls[0].Function.Arguments))
-	require.JSONEq(t, `{"saved_path":"/tmp/icon.png","revised_prompt":"draw a clean icon","status":"completed"}`, result.Events[7].Choices[0].Message.Content)
+	require.True(t, result.Events[0].IsPartial)
+	require.Equal(t, "web_search", result.Events[1].Choices[0].Message.ToolCalls[0].Function.Name)
+	require.False(t, result.Events[1].IsPartial)
+	require.JSONEq(t, `[{"title":"doc"}]`, result.Events[2].Choices[0].Message.Content)
+	require.Equal(t, "file_change", result.Events[3].Choices[0].Message.ToolCalls[0].Function.Name)
+	require.JSONEq(t, `{"path":"main.go","kind":"update"}`, string(result.Events[3].Choices[0].Message.ToolCalls[0].Function.Arguments))
+	require.Equal(t, "file_change", result.Events[4].Choices[0].Message.ToolCalls[0].Function.Name)
+	require.JSONEq(t, `{"path":"main.go","kind":"update"}`, result.Events[5].Choices[0].Message.Content)
+	require.Equal(t, "image_view", result.Events[6].Choices[0].Message.ToolCalls[0].Function.Name)
+	require.JSONEq(t, `{"path":"/tmp/input.png"}`, string(result.Events[6].Choices[0].Message.ToolCalls[0].Function.Arguments))
+	require.JSONEq(t, `{"width":64,"height":32}`, result.Events[8].Choices[0].Message.Content)
+	require.Equal(t, "image_generation", result.Events[9].Choices[0].Message.ToolCalls[0].Function.Name)
+	require.JSONEq(t, `{"prompt":"draw icon"}`, string(result.Events[9].Choices[0].Message.ToolCalls[0].Function.Arguments))
+	require.JSONEq(t, `{"saved_path":"/tmp/icon.png","revised_prompt":"draw a clean icon","status":"completed"}`, result.Events[11].Choices[0].Message.Content)
 }
 
 func TestParseTranscriptEvents_SkillToolMapping(t *testing.T) {
@@ -839,16 +900,20 @@ func TestParseTranscriptEvents_SkillToolMapping(t *testing.T) {
 {"type":"item.completed","item":{"id":"item_skill","type":"skill","skill":"debug","result":"ok","status":"completed"}}`
 	result, err := parseTranscriptEvents([]byte(transcript), "inv-parse-skill-1", "codex")
 	require.NoError(t, err)
-	require.Len(t, result.Events, 2)
+	require.Len(t, result.Events, 3)
 	require.True(t, result.Events[0].IsToolCallResponse())
-	require.True(t, result.Events[1].IsToolResultResponse())
+	require.True(t, result.Events[0].IsPartial)
+	require.True(t, result.Events[1].IsToolCallResponse())
+	require.False(t, result.Events[1].IsPartial)
+	require.True(t, result.Events[2].IsToolResultResponse())
 	require.Equal(t, "skill_run", result.Events[0].Choices[0].Message.ToolCalls[0].Function.Name)
-	require.Equal(t, "skill_run", result.Events[1].Choices[0].Message.ToolName)
+	require.Equal(t, "skill_run", result.Events[1].Choices[0].Message.ToolCalls[0].Function.Name)
+	require.Equal(t, "skill_run", result.Events[2].Choices[0].Message.ToolName)
 	var directArgs skillRunArgs
 	require.NoError(t, json.Unmarshal(result.Events[0].Choices[0].Message.ToolCalls[0].Function.Arguments, &directArgs))
 	require.Equal(t, "debug", directArgs.Skill)
 	require.Equal(t, "", directArgs.Command)
-	require.Equal(t, "ok", result.Events[1].Choices[0].Message.Content)
+	require.Equal(t, "ok", result.Events[2].Choices[0].Message.Content)
 }
 
 func TestParseTranscriptEvents_ErrorEventMapping(t *testing.T) {

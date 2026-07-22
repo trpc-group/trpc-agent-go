@@ -237,7 +237,7 @@ func toolCallEventFromItem(invocationID, author string, item *codexItem, toolNam
 		return nil
 	}
 	toolNames[toolID] = toolName
-	return newToolCallEvent(invocationID, author, toolID, toolName, toolArguments(item))
+	return newToolCallEvent(invocationID, author, toolID, toolName, toolArguments(item), true)
 }
 
 // completedEventsFromItem creates framework events for an item.completed record.
@@ -266,8 +266,8 @@ func completedEventsFromItem(invocationID, author string, item *codexItem, toolN
 			return nil
 		}
 		toolNames[toolID] = toolName
-		events = append(events, newToolCallEvent(invocationID, author, toolID, toolName, toolArguments(item)))
 	}
+	events = append(events, newToolCallEvent(invocationID, author, toolID, toolName, toolArguments(item), false))
 	events = append(events, newToolResultEvent(invocationID, author, toolID, toolName, toolResult(item)))
 	return events
 }
@@ -692,7 +692,7 @@ func decodeRawJSON(raw json.RawMessage) string {
 }
 
 // newToolCallEvent creates a tool-call event for one Codex item.
-func newToolCallEvent(invocationID, author, toolID, toolName string, args []byte) *event.Event {
+func newToolCallEvent(invocationID, author, toolID, toolName string, args []byte, partial bool) *event.Event {
 	toolCall := model.ToolCall{
 		Type: "function",
 		ID:   toolID,
@@ -702,8 +702,9 @@ func newToolCallEvent(invocationID, author, toolID, toolName string, args []byte
 		},
 	}
 	rsp := &model.Response{
-		Object: model.ObjectTypeChatCompletion,
-		Done:   false,
+		Object:    model.ObjectTypeChatCompletion,
+		Done:      false,
+		IsPartial: partial,
 		Choices: []model.Choice{
 			{
 				Index: 0,
