@@ -64,3 +64,25 @@ func TestQuotedShellMetacharactersDoNotCreateFalsePositive(t *testing.T) {
 		}
 	}
 }
+func TestContainsActiveWindowsExpansion(t *testing.T) {
+	tests := []struct {
+		command string
+		active  bool
+	}{
+		{command: "echo %PATH%", active: true},
+		{command: "echo \"%PATH%\"", active: true},
+		{command: "echo '%PATH%'", active: true},
+		{command: "echo %PATH:~0,1%", active: true},
+		{command: "echo %PATH:C:=D:%", active: true},
+		{command: "echo !PATH!", active: true},
+		{command: "echo 100%", active: false},
+		{command: "echo %%PATH%%", active: false},
+		{command: "echo ^%PATH^%", active: false},
+	}
+	for _, test := range tests {
+		if got := containsActiveWindowsExpansion(test.command); got != test.active {
+			t.Errorf("containsActiveWindowsExpansion(%q) = %v, want %v",
+				test.command, got, test.active)
+		}
+	}
+}

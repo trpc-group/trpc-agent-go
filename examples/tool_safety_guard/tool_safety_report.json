@@ -3,7 +3,7 @@
   "generated_at": "2026-01-01T00:00:00Z",
   "deterministic": true,
   "policy_id": "example-tool-safety-v1",
-  "policy_sha256": "sha256:d5dbb52419b4903e643842a0f0f0ca7b492756e5b5f8277716331749a82ff6fc",
+  "policy_sha256": "sha256:a0f9c84b1bce13a00bab761e3e933b38385c2c40daba5f6a6a39344d9bd8de76",
   "policy_file": "tool_safety_policy.yaml",
   "fixtures_file": "public_cases.json",
   "duration_ms": 0,
@@ -80,8 +80,8 @@
         "decision": "deny",
         "risk_level": "critical",
         "rule_id": "destructive.delete",
-        "evidence": "script invokes a recursive or broad deletion API",
-        "recommendation": "Replace it with a scoped workspace cleanup operation over verified paths.",
+        "evidence": "command starts a recursive, forced, or broad deletion",
+        "recommendation": "Use a scoped workspace cleanup API with verified paths and no recursive host deletion.",
         "tool_name": "workspace_exec",
         "command": "rm -rf /",
         "backend": "workspace",
@@ -93,8 +93,8 @@
             "decision": "deny",
             "risk_level": "critical",
             "rule_id": "destructive.delete",
-            "evidence": "script invokes a recursive or broad deletion API",
-            "recommendation": "Replace it with a scoped workspace cleanup operation over verified paths."
+            "evidence": "command starts a recursive, forced, or broad deletion",
+            "recommendation": "Use a scoped workspace cleanup API with verified paths and no recursive host deletion."
           },
           {
             "decision": "deny",
@@ -142,6 +142,20 @@
         "redacted": false,
         "duration_ms": 0,
         "matches": [
+          {
+            "decision": "ask",
+            "risk_level": "high",
+            "rule_id": "host.environment_inheritance",
+            "evidence": "host execution inherits ambient process environment outside request-level filtering",
+            "recommendation": "Prefer a sandbox with an executor-enforced clean environment or explicitly review host execution."
+          },
+          {
+            "decision": "ask",
+            "risk_level": "high",
+            "rule_id": "host.long_session",
+            "evidence": "host execution can outlive a short, non-interactive command",
+            "recommendation": "Prefer workspace isolation and enforce process-group cleanup and a short timeout."
+          },
           {
             "decision": "deny",
             "risk_level": "critical",
@@ -238,9 +252,9 @@
         "rule_id": "credential.access",
         "evidence": "input references credential or private-key material \"~/.ssh\"",
         "recommendation": "Remove credential access and inject only narrowly scoped secrets at runtime.",
-        "tool_name": "exec_command",
+        "tool_name": "workspace_exec",
         "command": "bash -c 'cat ~/.ssh/id_rsa'",
-        "backend": "host",
+        "backend": "workspace",
         "blocked": true,
         "redacted": false,
         "duration_ms": 0,
@@ -319,6 +333,13 @@
             "rule_id": "network.denied",
             "evidence": "network destination \"attacker.invalid\" is not allowlisted",
             "recommendation": "Use an allowlisted domain and enforce the same restriction in the sandbox network policy."
+          },
+          {
+            "decision": "ask",
+            "risk_level": "high",
+            "rule_id": "network.local_upload",
+            "evidence": "network command reads local content for upload",
+            "recommendation": "Review the source path and payload, then enforce sandbox egress and artifact limits."
           }
         ]
       }
@@ -476,9 +497,9 @@
       "report": {
         "decision": "ask",
         "risk_level": "high",
-        "rule_id": "host.pty",
-        "evidence": "host execution requests an interactive PTY",
-        "recommendation": "Use a non-interactive workspace runtime or obtain human approval.",
+        "rule_id": "host.environment_inheritance",
+        "evidence": "host execution inherits ambient process environment outside request-level filtering",
+        "recommendation": "Prefer a sandbox with an executor-enforced clean environment or explicitly review host execution.",
         "tool_name": "exec_command",
         "command": "go test ./tool/...",
         "backend": "host",
@@ -486,6 +507,13 @@
         "redacted": false,
         "duration_ms": 0,
         "matches": [
+          {
+            "decision": "ask",
+            "risk_level": "high",
+            "rule_id": "host.environment_inheritance",
+            "evidence": "host execution inherits ambient process environment outside request-level filtering",
+            "recommendation": "Prefer a sandbox with an executor-enforced clean environment or explicitly review host execution."
+          },
           {
             "decision": "ask",
             "risk_level": "high",

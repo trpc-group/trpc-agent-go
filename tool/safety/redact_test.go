@@ -107,3 +107,175 @@ func TestRedactorLeavesOrdinaryTextUntouched(t *testing.T) {
 	require.Equal(t, input, redacted)
 	require.False(t, strings.Contains(redacted, RedactedValue))
 }
+
+type jsonHiddenSecretOutput struct {
+	Password string `json:"-"`
+	Safe     string `json:"safe"`
+}
+
+type camelCaseHiddenSecretOutput struct {
+	APIToken string `json:"-"`
+	Safe     string `json:"safe"`
+}
+
+type customMarshalSecretOutput struct {
+	Token string
+	Safe  string
+}
+
+func (value customMarshalSecretOutput) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		Safe string `json:"safe"`
+	}{Safe: value.Safe})
+}
+
+type ordinaryHiddenOutput struct {
+	Cache string `json:"-"`
+	Safe  string `json:"safe"`
+}
+
+type overlappingHiddenOutput struct {
+	Visible []string `json:"visible"`
+	Hidden  []string `json:"-"`
+}
+
+func TestRedactorFailsClosedForJSONHiddenSecrets(t *testing.T) {
+	shared := []string{"ordinary", "token=overlapping-slice-secret"}
+	tests := []struct {
+		name  string
+		value any
+	}{
+		{
+			name: "json ignored exported field",
+			value: jsonHiddenSecretOutput{
+				Password: "hidden-password-value",
+				Safe:     "visible",
+			},
+		},
+		{
+			name: "camel case sensitive field",
+			value: camelCaseHiddenSecretOutput{
+				APIToken: "camel-case-hidden-token",
+				Safe:     "visible",
+			},
+		},
+		{
+			name: "custom marshaler omitted field",
+			value: customMarshalSecretOutput{
+				Token: "custom-marshaler-token",
+				Safe:  "visible",
+			},
+		},
+		{
+			name: "overlapping hidden slice",
+			value: overlappingHiddenOutput{
+				Visible: shared[:1],
+				Hidden:  shared[:2],
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			clean, count := NewRedactor().RedactValue(test.value)
+			require.Positive(t, count)
+			require.Equal(t, RedactedValue, clean)
+		})
+	}
+}
+
+func TestRedactorPreservesOrdinaryConcreteValue(t *testing.T) {
+	input := ordinaryHiddenOutput{Cache: "compiled-state", Safe: "visible"}
+
+	clean, count := NewRedactor().RedactValue(input)
+
+	require.Zero(t, count)
+	require.IsType(t, ordinaryHiddenOutput{}, clean)
+	require.Equal(t, input, clean)
+}
+
+func TestRedactorHandlesTruncatedPEMAndShortAuthorization(t *testing.T) {
+	tests := []struct {
+		name   string
+		secret string
+		input  string
+	}{
+		{
+			name:   "truncated private key",
+			secret: "truncated-private-key-material",
+			input: "prefix\n-----BEGIN PRIVATE KEY-----\n" +
+				"truncated-private-key-material",
+		},
+		{
+			name:   "short bearer authorization",
+			secret: "abc",
+			input:  "Authorization: Bearer abc",
+		},
+		{
+			name:   "short basic authorization",
+			secret: "eA==",
+			input:  "authorization=Basic eA==",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			clean, count := NewRedactor().RedactString(test.input)
+			require.Positive(t, count)
+			require.NotContains(t, clean, test.secret)
+			require.Contains(t, clean, RedactedValue)
+		})
+	}
+}
+
+type panickingMarshalOutput struct {
+	Safe string
+}
+
+func (panickingMarshalOutput) MarshalJSON() ([]byte, error) {
+	panic("marshal failure")
+}
+
+func TestRedactorFailsClosedWhenCustomMarshalerPanics(t *testing.T) {
+	clean, count := NewRedactor().RedactValue(
+		panickingMarshalOutput{Safe: "ordinary"},
+	)
+
+	require.Positive(t, count)
+	require.Equal(t, RedactedValue, clean)
+}
+
+type namedSecretMap map[string]string
+
+func TestRedactorPreservesNamedMapAfterRedaction(t *testing.T) {
+	input := namedSecretMap{
+		"token": "named-map-token",
+		"safe":  "visible",
+	}
+
+	clean, count := NewRedactor().RedactValue(input)
+
+	require.Positive(t, count)
+	require.IsType(t, namedSecretMap{}, clean)
+	result := clean.(namedSecretMap)
+	require.Equal(t, RedactedValue, result["token"])
+	require.Equal(t, "named-map-token", input["token"])
+}
+
+type panickingUnmarshalOutput struct {
+	Password string `json:"password"`
+}
+
+func (*panickingUnmarshalOutput) UnmarshalJSON([]byte) error {
+	panic("unmarshal failure")
+}
+
+func TestRedactorFailsClosedWhenCustomUnmarshalerPanics(t *testing.T) {
+	const secret = "unmarshal-secret"
+	clean, count := NewRedactor().RedactValue(
+		panickingUnmarshalOutput{Password: secret},
+	)
+
+	require.Positive(t, count)
+	encoded, err := json.Marshal(clean)
+	require.NoError(t, err)
+	require.NotContains(t, string(encoded), secret)
+}

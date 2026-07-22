@@ -28,7 +28,11 @@ func TestWrapCallableToolBlocksBeforeExecutionAndAudits(t *testing.T) {
 	)
 
 	var audit bytes.Buffer
-	guard, err := New(policy, WithAuditSink(NewJSONLAuditSink(&audit)))
+	guard, err := New(
+		policy,
+		withTrustedWorkspaceOutputLimit(4096),
+		WithAuditSink(NewJSONLAuditSink(&audit)),
+	)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
@@ -115,6 +119,18 @@ func assertPermissionResult(t *testing.T, value any, wantStatus string) {
 	if result.Status != wantStatus {
 		t.Fatalf("permission status = %q, want %q", result.Status, wantStatus)
 	}
+}
+
+func withTrustedWorkspaceOutputLimit(limit int64) Option {
+	return WithExtractor("workspace_exec", ExtractorFunc(func(
+		req *tool.PermissionRequest,
+	) (Request, bool, error) {
+		request, handled, err := extractWorkspaceExec(req)
+		if err == nil && handled {
+			request.MaxOutputBytes = limit
+		}
+		return request, handled, err
+	}))
 }
 
 type recordingExecutionTool struct {

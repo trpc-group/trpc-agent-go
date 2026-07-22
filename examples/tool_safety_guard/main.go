@@ -10,6 +10,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -218,29 +219,38 @@ func validateOutputPaths(cfg config) error {
 			return fmt.Errorf("%s path is empty", name)
 		}
 	}
-	clean := func(path string) string {
-		absolute, err := filepath.Abs(path)
-		if err != nil {
-			return filepath.Clean(path)
-		}
-		return filepath.Clean(absolute)
-	}
-	inputs := map[string]struct{}{
-		clean(cfg.policyPath):   {},
-		clean(cfg.fixturesPath): {},
-	}
+	inputs := []string{cfg.policyPath, cfg.fixturesPath}
 	for name, path := range map[string]string{
 		"report": cfg.reportPath,
 		"audit":  cfg.auditPath,
 	} {
-		if _, exists := inputs[clean(path)]; exists {
-			return fmt.Errorf("%s output must not overwrite an input file", name)
+		for _, input := range inputs {
+			if pathsAlias(path, input) {
+				return fmt.Errorf("%s output must not overwrite an input file", name)
+			}
 		}
 	}
-	if clean(cfg.reportPath) == clean(cfg.auditPath) {
+	if pathsAlias(cfg.reportPath, cfg.auditPath) {
 		return errors.New("report and audit outputs must be different files")
 	}
 	return nil
+}
+
+func pathsAlias(left, right string) bool {
+	leftPath, leftErr := filepath.Abs(left)
+	if leftErr != nil {
+		leftPath = filepath.Clean(left)
+	}
+	rightPath, rightErr := filepath.Abs(right)
+	if rightErr != nil {
+		rightPath = filepath.Clean(right)
+	}
+	if leftPath == rightPath {
+		return true
+	}
+	leftInfo, leftErr := os.Stat(leftPath)
+	rightInfo, rightErr := os.Stat(rightPath)
+	return leftErr == nil && rightErr == nil && os.SameFile(leftInfo, rightInfo)
 }
 
 func loadFixtures(path string) ([]fixtureCase, error) {
@@ -338,7 +348,7 @@ func reportHasRule(report safety.Report, ruleID string) bool {
 }
 
 func missingRequiredReportFields(report safety.Report) []string {
-	missing := make([]string, 0, 5)
+	missing := make([]string, 0, 7)
 	if report.Decision == "" {
 		missing = append(missing, "decision")
 	}
@@ -353,6 +363,12 @@ func missingRequiredReportFields(report safety.Report) []string {
 	}
 	if strings.TrimSpace(report.Recommendation) == "" {
 		missing = append(missing, "recommendation")
+	}
+	if strings.TrimSpace(report.ToolName) == "" {
+		missing = append(missing, "tool_name")
+	}
+	if report.Backend == "" {
+		missing = append(missing, "backend")
 	}
 	return missing
 }
@@ -444,6 +460,7 @@ func hashFile(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	digest := sha256.Sum256(data)
+	normalized := bytes.ReplaceAll(data, []byte("\r\n"), []byte("\n"))
+	digest := sha256.Sum256(normalized)
 	return "sha256:" + hex.EncodeToString(digest[:]), nil
 }

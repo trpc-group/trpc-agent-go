@@ -18,11 +18,17 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
+const (
+	maxPermissionArgumentsBytes = 1 << 20
+	maxReportMatches            = 256
+)
+
 // Option configures a Guard during construction.
 type Option func(*Guard)
 
 // Guard scans execution requests and implements tool.PermissionPolicy.
-// A Guard is safe for concurrent use after New returns.
+// A Guard is safe for concurrent use after New returns when every custom
+// Extractor, Rule, AuditSink, Redactor, and audit error hook is concurrency-safe.
 type Guard struct {
 	policy     Policy
 	extractors map[string]Extractor
@@ -49,7 +55,7 @@ func New(policy Policy, options ...Option) (*Guard, error) {
 			option(guard)
 		}
 	}
-	if guard.redactor == nil {
+	if isNilRedactor(guard.redactor) {
 		guard.redactor = NewRedactor()
 	}
 	return guard, nil
@@ -76,7 +82,8 @@ func WithExtractor(toolName string, extractor Extractor) Option {
 }
 
 // WithRule appends an application-specific rule. Built-in non-negotiable
-// rules are evaluated first, and the most restrictive result wins.
+// rules are evaluated first, and the most restrictive result wins. The rule
+// must be safe for concurrent use.
 func WithRule(rule Rule) Option {
 	return func(guard *Guard) {
 		if guard != nil && rule != nil {
@@ -99,6 +106,7 @@ func (g *Guard) Scan(ctx context.Context, request Request) (Report, error) {
 	if g == nil {
 		return Report{}, errors.New("tool safety guard is nil")
 	}
+	ctx = nonNilContext(ctx)
 	started := time.Now()
 	request.ToolName = strings.TrimSpace(request.ToolName)
 	if request.ToolName == "" {
@@ -107,7 +115,7 @@ func (g *Guard) Scan(ctx context.Context, request Request) (Report, error) {
 	request.Backend = normalizeBackend(request.Backend)
 
 	matches := make([]Match, 0, 8)
-	if requestRequiresPayload(request) && requestPayload(request) == "" {
+	if requestRequiresPayload(request) && !requestHasPayload(request) {
 		matches = append(matches, newMatch(
 			tool.PermissionActionAsk,
 			RiskLevelHigh,
@@ -117,11 +125,24 @@ func (g *Guard) Scan(ctx context.Context, request Request) (Report, error) {
 		))
 	}
 	matches = append(matches, evaluateBuiltins(ctx, request, g.policy)...)
-	for _, rule := range g.rules {
-		if rule == nil {
-			continue
+	matches = append(matches, scanStructuredExecutionFields(ctx, request, g.policy)...)
+	if !requestExceedsScanBounds(request, g.policy) &&
+		!structuredExecutionFieldsExceedBounds(request, g.policy) {
+		for _, rule := range g.rules {
+			if rule == nil {
+				continue
+			}
+			if isNilValue(rule) {
+				matches = append(matches, invalidConfiguredRuleMatch())
+				continue
+			}
+			matches = append(matches, evaluateRuleSafely(
+				ctx,
+				rule,
+				cloneRequest(request),
+				clonePolicy(g.policy),
+			)...)
 		}
-		matches = append(matches, rule.Evaluate(ctx, request, clonePolicy(g.policy))...)
 	}
 	report := g.finishReport(ctx, request, matches, started)
 	return report, nil
@@ -140,14 +161,50 @@ func (g *Guard) CheckToolPermission(
 	if permissionRequest == nil {
 		return tool.DenyPermission("tool safety request is nil"), nil
 	}
+	ctx = nonNilContext(ctx)
+	declaration, declarationErr := resolvePermissionDeclaration(permissionRequest)
 	name := normalizedToolName(permissionRequest.ToolName)
-	if name == "" && permissionRequest.Declaration != nil {
-		name = normalizedToolName(permissionRequest.Declaration.Name)
+	if name == "" && declaration != nil {
+		name = normalizedToolName(declaration.Name)
 	}
-	permissionRequest.ToolName = name
+	if name == "" && declarationErr == nil {
+		request := Request{
+			ToolCallID: permissionRequest.ToolCallID,
+			Backend:    BackendUnknown,
+			Metadata:   permissionRequest.Metadata,
+		}
+		report := g.finishReport(ctx, request, []Match{newMatch(
+			tool.PermissionActionAsk,
+			RiskLevelHigh,
+			"input.invalid_tool",
+			"the pending tool has no usable name or declaration",
+			"Provide the pending tool or its declaration before enabling execution.",
+		)}, time.Now())
+		return permissionDecision(report), nil
+	}
+	if declarationErr != nil {
+		request := Request{
+			ToolName:   name,
+			ToolCallID: permissionRequest.ToolCallID,
+			Backend:    BackendUnknown,
+			Metadata:   permissionRequest.Metadata,
+		}
+		report := g.finishReport(ctx, request, []Match{newMatch(
+			tool.PermissionActionAsk,
+			RiskLevelHigh,
+			"input.invalid_tool",
+			"the pending tool does not provide a usable declaration",
+			"Fix the tool instance and declaration before enabling execution.",
+		)}, time.Now())
+		return permissionDecision(report), nil
+	}
+	normalizedRequest := *permissionRequest
+	normalizedRequest.ToolName = name
+	normalizedRequest.Declaration = declaration
+	permissionRequest = &normalizedRequest
 	extractor, ok := g.extractors[name]
 	if !ok {
-		if !looksLikeUnknownExecutor(name, permissionRequest.Metadata) {
+		if !looksLikeUnknownExecutor(name, permissionRequest.Metadata, permissionRequest.Declaration) {
 			return tool.AllowPermission(), nil
 		}
 		request := Request{
@@ -165,8 +222,44 @@ func (g *Guard) CheckToolPermission(
 		)}, time.Now())
 		return permissionDecision(report), nil
 	}
+	if len(permissionRequest.Arguments) > maxPermissionArgumentsBytes {
+		request := Request{
+			ToolName:   name,
+			ToolCallID: permissionRequest.ToolCallID,
+			Backend:    BackendUnknown,
+			Metadata:   permissionRequest.Metadata,
+		}
+		report := g.finishReport(ctx, request, []Match{newMatch(
+			tool.PermissionActionAsk,
+			RiskLevelHigh,
+			"input.arguments_too_large",
+			fmt.Sprintf(
+				"execution tool arguments are %d bytes; safety parsing is limited to %d bytes",
+				len(permissionRequest.Arguments),
+				maxPermissionArgumentsBytes,
+			),
+			"Reduce the structured arguments or require human review.",
+		)}, time.Now())
+		return permissionDecision(report), nil
+	}
+	if isNilValue(extractor) {
+		request := Request{
+			ToolName:   name,
+			ToolCallID: permissionRequest.ToolCallID,
+			Backend:    BackendUnknown,
+			Metadata:   permissionRequest.Metadata,
+		}
+		report := g.finishReport(ctx, request, []Match{newMatch(
+			tool.PermissionActionAsk,
+			RiskLevelHigh,
+			"input.invalid_extractor",
+			fmt.Sprintf("safety extractor for execution tool %q is nil", name),
+			"Register a non-nil typed extractor before enabling the tool.",
+		)}, time.Now())
+		return permissionDecision(report), nil
+	}
 
-	request, handled, err := extractor.Extract(permissionRequest)
+	request, handled, err := extractSafely(extractor, permissionRequest)
 	if err != nil {
 		fallback := Request{
 			ToolName:   name,
@@ -184,17 +277,24 @@ func (g *Guard) CheckToolPermission(
 		return permissionDecision(report), nil
 	}
 	if !handled {
-		return tool.AllowPermission(), nil
+		fallback := Request{
+			ToolName:   name,
+			ToolCallID: permissionRequest.ToolCallID,
+			Backend:    BackendUnknown,
+			Metadata:   permissionRequest.Metadata,
+		}
+		report := g.finishReport(ctx, fallback, []Match{newMatch(
+			tool.PermissionActionAsk,
+			RiskLevelHigh,
+			"input.unhandled_arguments",
+			fmt.Sprintf("registered safety extractor did not handle execution tool %q", name),
+			"Fix the extractor or remove its registration before enabling the tool.",
+		)}, time.Now())
+		return permissionDecision(report), nil
 	}
-	if request.ToolName == "" {
-		request.ToolName = name
-	}
-	if request.ToolCallID == "" {
-		request.ToolCallID = permissionRequest.ToolCallID
-	}
-	if request.Metadata == (tool.ToolMetadata{}) {
-		request.Metadata = permissionRequest.Metadata
-	}
+	request.ToolName = name
+	request.ToolCallID = permissionRequest.ToolCallID
+	request.Metadata = permissionRequest.Metadata
 	report, err := g.Scan(ctx, request)
 	if err != nil {
 		return tool.DenyPermission("tool safety scan failed"), err
@@ -238,10 +338,8 @@ func (g *Guard) finishReport(
 		Matches:        matches,
 	}
 	report = sanitizeReport(g.redactor, report)
-	if err := writeGuardAudit(ctx, g.auditSink, request, report); err != nil {
-		if g.auditError != nil {
-			g.auditError(err)
-		}
+	if err := writeGuardAudit(ctx, g.auditSink, g.redactor, request, report, g.policy.PolicyID); err != nil {
+		notifyAuditErrorSafely(g.auditError, err)
 		if g.policy.Actions.AuditFailure != tool.PermissionActionAllow {
 			auditMatch := newMatch(
 				g.policy.Actions.AuditFailure,
@@ -267,6 +365,50 @@ func (g *Guard) finishReport(
 	return report
 }
 
+func extractSafely(
+	extractor Extractor,
+	request *tool.PermissionRequest,
+) (normalized Request, handled bool, err error) {
+	defer func() {
+		if recover() != nil {
+			normalized = Request{}
+			handled = true
+			err = errors.New("tool safety extractor panicked")
+		}
+	}()
+	return extractor.Extract(request)
+}
+
+func evaluateRuleSafely(
+	ctx context.Context,
+	rule Rule,
+	request Request,
+	policy Policy,
+) (matches []Match) {
+	defer func() {
+		if recover() != nil {
+			matches = []Match{newMatch(
+				tool.PermissionActionAsk,
+				RiskLevelHigh,
+				"rule.failure",
+				"a custom safety rule panicked",
+				"Fix or remove the failing rule before executing this request.",
+			)}
+		}
+	}()
+	return rule.Evaluate(ctx, request, policy)
+}
+
+func notifyAuditErrorSafely(hook func(error), err error) {
+	if hook == nil {
+		return
+	}
+	defer func() {
+		_ = recover()
+	}()
+	hook(err)
+}
+
 func permissionDecision(report Report) tool.PermissionDecision {
 	reason := fmt.Sprintf(
 		"tool safety rule %s: %s Recommendation: %s",
@@ -285,19 +427,48 @@ func permissionDecision(report Report) tool.PermissionDecision {
 }
 
 func requestRequiresPayload(request Request) bool {
+	if isSessionControlTool(request.ToolName) {
+		return false
+	}
+	switch request.Backend {
+	case BackendWorkspace, BackendHost, BackendCode, BackendSkill:
+		return true
+	}
 	switch normalizedToolName(request.ToolName) {
-	case "workspace_exec", "exec_command", "execute_code", "skill_run":
+	case "workspace_exec", "exec_command", "execute_code", "skill_exec", "skill_run":
 		return true
 	default:
 		return false
 	}
 }
 
-func looksLikeUnknownExecutor(name string, metadata tool.ToolMetadata) bool {
-	if !(metadata.OpenWorld || metadata.Destructive) {
-		return false
+func looksLikeUnknownExecutor(
+	name string,
+	metadata tool.ToolMetadata,
+	declaration *tool.Declaration,
+) bool {
+	executionName := hasExecutionToolName(name)
+	if declaration != nil && declaration.InputSchema != nil {
+		for field := range declaration.InputSchema.Properties {
+			switch normalizedToolName(field) {
+			case "command", "script", "code_blocks", "argv", "program",
+				"executable", "shell_command":
+				return true
+			case "args", "code":
+				if executionName || metadata.OpenWorld || metadata.Destructive {
+					return true
+				}
+			}
+		}
 	}
-	for _, marker := range []string{"exec", "shell", "command", "code", "script", "run"} {
+	return executionName
+}
+
+func hasExecutionToolName(name string) bool {
+	for _, marker := range []string{
+		"exec", "shell", "command", "code", "script", "run",
+		"terminal", "bash", "powershell", "pwsh", "cmd",
+	} {
 		if strings.Contains(name, marker) {
 			return true
 		}
@@ -306,31 +477,85 @@ func looksLikeUnknownExecutor(name string, metadata tool.ToolMetadata) bool {
 }
 
 func normalizeMatches(matches []Match) []Match {
-	seen := make(map[string]struct{}, len(matches))
-	out := make([]Match, 0, len(matches))
-	for _, match := range matches {
-		if validateAction(match.Decision) != nil {
-			match.Decision = tool.PermissionActionAsk
-			match.RiskLevel = RiskLevelHigh
-			match.RuleID = "rule.invalid"
-			match.Evidence = "a custom safety rule returned an invalid decision"
-			match.Recommendation = "Correct the custom rule before executing this request."
+	seen := make(map[string]struct{}, min(len(matches), maxReportMatches))
+	out := make([]Match, 0, min(len(matches), maxReportMatches))
+	var strongest Match
+	hasStrongest := false
+	truncated := false
+	for _, rawMatch := range matches {
+		match := normalizeMatch(rawMatch)
+		if !hasStrongest || matchDominates(match, strongest) {
+			strongest = match
+			hasStrongest = true
 		}
-		if riskRank(match.RiskLevel) == 0 {
-			match.RiskLevel = RiskLevelHigh
-		}
-		if strings.TrimSpace(match.RuleID) == "" {
-			match.RuleID = "rule.unnamed"
-		}
-		key := string(match.Decision) + "\x00" + string(match.RiskLevel) + "\x00" +
-			match.RuleID + "\x00" + match.Evidence
+		key := normalizedMatchKey(match)
 		if _, ok := seen[key]; ok {
+			continue
+		}
+		if len(out) >= maxReportMatches-1 {
+			truncated = true
 			continue
 		}
 		seen[key] = struct{}{}
 		out = append(out, match)
 	}
-	return out
+	if !truncated {
+		return out
+	}
+	overflow := newMatch(
+		tool.PermissionActionAsk,
+		RiskLevelHigh,
+		"limits.match_count",
+		"safety findings exceed the bounded report capacity",
+		"Reduce the request or split it into independently reviewable executions.",
+	)
+	if hasStrongest && matchDominates(strongest, overflow) &&
+		!containsNormalizedMatch(out, strongest) {
+		if len(out) == 0 {
+			out = append(out, strongest)
+		} else {
+			out[len(out)-1] = strongest
+		}
+	}
+	return append(out, overflow)
+}
+
+func normalizeMatch(match Match) Match {
+	if validateAction(match.Decision) != nil {
+		match.Decision = tool.PermissionActionAsk
+		match.RiskLevel = RiskLevelHigh
+		match.RuleID = "rule.invalid"
+		match.Evidence = "a custom safety rule returned an invalid decision"
+		match.Recommendation = "Correct the custom rule before executing this request."
+	}
+	if riskRank(match.RiskLevel) == 0 {
+		match.RiskLevel = RiskLevelHigh
+	}
+	if strings.TrimSpace(match.RuleID) == "" {
+		match.RuleID = "rule.unnamed"
+	}
+	if strings.TrimSpace(match.Evidence) == "" {
+		match.Evidence = "custom safety rule matched without specific evidence"
+	}
+	if strings.TrimSpace(match.Recommendation) == "" {
+		match.Recommendation = "Review the custom safety rule and request before execution."
+	}
+	return match
+}
+
+func normalizedMatchKey(match Match) string {
+	return string(match.Decision) + "\x00" + string(match.RiskLevel) + "\x00" +
+		match.RuleID + "\x00" + match.Evidence
+}
+
+func containsNormalizedMatch(matches []Match, wanted Match) bool {
+	wantedKey := normalizedMatchKey(wanted)
+	for _, match := range matches {
+		if normalizedMatchKey(match) == wantedKey {
+			return true
+		}
+	}
+	return false
 }
 
 func matchDominates(candidate, current Match) bool {
@@ -368,6 +593,25 @@ func riskRank(risk RiskLevel) int {
 	default:
 		return 0
 	}
+}
+
+func cloneRequest(request Request) Request {
+	clone := request
+	clone.CodeBlocks = append([]CodeBlock(nil), request.CodeBlocks...)
+	clone.Inputs = append([]InputSpec(nil), request.Inputs...)
+	clone.OutputFiles = append([]string(nil), request.OutputFiles...)
+	clone.Outputs = cloneOutputSpec(request.Outputs)
+	if request.YieldMS != nil {
+		yieldMS := *request.YieldMS
+		clone.YieldMS = &yieldMS
+	}
+	if request.Env != nil {
+		clone.Env = make(map[string]string, len(request.Env))
+		for key, value := range request.Env {
+			clone.Env[key] = value
+		}
+	}
+	return clone
 }
 
 func clonePolicy(policy Policy) Policy {

@@ -8,11 +8,16 @@
 
 package safety
 
+import "runtime"
+
 // containsActiveShellExpansion identifies expansion syntax that the shell
 // would evaluate. Text inside single quotes and escaped metacharacters are
 // literals, so treating them as active would create avoidable false positives.
 // Structural acceptance remains the responsibility of internal/shellsafe.
 func containsActiveShellExpansion(command string) bool {
+	if runtime.GOOS == "windows" && containsActiveWindowsExpansion(command) {
+		return true
+	}
 	var (
 		singleQuoted bool
 		doubleQuoted bool
@@ -66,4 +71,34 @@ func isShellParameterStart(character byte) bool {
 	default:
 		return false
 	}
+}
+func containsActiveWindowsExpansion(command string) bool {
+	for index := 0; index < len(command); index++ {
+		character := command[index]
+		if character == '^' {
+			index++
+			continue
+		}
+		if character != '%' && character != '!' {
+			continue
+		}
+		if index+1 < len(command) && command[index+1] == character {
+			index++
+			continue
+		}
+		for closing := index + 1; closing < len(command); closing++ {
+			if command[closing] == '^' {
+				closing++
+				continue
+			}
+			if command[closing] != character {
+				continue
+			}
+			if closing > index+1 {
+				return true
+			}
+			break
+		}
+	}
+	return false
 }

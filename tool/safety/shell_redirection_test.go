@@ -43,7 +43,8 @@ func TestRedirectionScannerHonorsQuotesAndProtectsSystemPaths(t *testing.T) {
 
 func TestSystemWriteCommandsAndLiteralOperators(t *testing.T) {
 	policy := testPolicy()
-	policy.Commands.Allowed = append(policy.Commands.Allowed, "dd", "tee", "truncate")
+	policy.Commands.Allowed = append(policy.Commands.Allowed,
+		"cp", "dd", "install", "mv", "sed", "tee", "truncate")
 	guard, err := New(policy)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -59,6 +60,12 @@ func TestSystemWriteCommandsAndLiteralOperators(t *testing.T) {
 		{command: "tee /etc/profile", decision: tool.PermissionActionDeny, ruleID: "destructive.system_write"},
 		{command: "truncate /var/log/system.log", decision: tool.PermissionActionDeny, ruleID: "destructive.system_write"},
 		{command: "dd if=/dev/zero of=/boot/image", decision: tool.PermissionActionDeny, ruleID: "destructive.system_write"},
+		{command: "cp input /tmp/../etc/passwd", decision: tool.PermissionActionDeny, ruleID: "destructive.system_write"},
+		{command: "mv output /var/lib/output", decision: tool.PermissionActionDeny, ruleID: "destructive.system_write"},
+		{command: "install -t /usr/local/bin tool", decision: tool.PermissionActionDeny, ruleID: "destructive.system_write"},
+		{command: "curl -o /etc/profile https://go.dev/x", decision: tool.PermissionActionDeny, ruleID: "destructive.system_write"},
+		{command: "wget -P /var/tmp https://go.dev/x", decision: tool.PermissionActionDeny, ruleID: "destructive.system_write"},
+		{command: "sed -ibak s/a/b/ /etc/hosts", decision: tool.PermissionActionDeny, ruleID: "destructive.system_write"},
 		{command: "tee output.txt", decision: tool.PermissionActionAllow, ruleID: "SAFETY_ALLOW"},
 	}
 	for _, test := range tests {
@@ -73,5 +80,19 @@ func TestSystemWriteCommandsAndLiteralOperators(t *testing.T) {
 			t.Errorf("Scan(%q) = %+v, want decision=%s rule=%s",
 				test.command, report, test.decision, test.ruleID)
 		}
+	}
+}
+func TestSystemWriteCommandTargetSelection(t *testing.T) {
+	if commandWritesSystemPath("cp", []string{"/etc/hosts", "workspace-hosts"}) {
+		t.Fatal("copying from a system path into the workspace was treated as a system write")
+	}
+	if !commandWritesSystemPath("wget", []string{"-P", "/tmp/../var/cache", "https://go.dev/x"}) {
+		t.Fatal("wget directory-prefix traversal was not treated as a system write")
+	}
+	if !commandWritesSystemPath("curl", []string{"--output-dir", "/etc", "-O"}) {
+		t.Error("curl --output-dir system path was not detected")
+	}
+	if !commandWritesSystemPath("sed", []string{"-ibak", "s/a/b/", "/etc/hosts"}) {
+		t.Fatal("sed attached in-place suffix was not treated as a system write")
 	}
 }

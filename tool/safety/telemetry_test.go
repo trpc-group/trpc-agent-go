@@ -78,3 +78,30 @@ func attributeMap(attributes []attribute.KeyValue) map[string]attribute.Value {
 	}
 	return result
 }
+
+func TestRecordSpanSanitizesDirectCallerIdentifiers(t *testing.T) {
+	const secret = "direct-span-secret-value"
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	ctx, span := provider.Tracer("tool-safety-test").Start(
+		context.Background(),
+		"direct-scan",
+	)
+
+	RecordSpan(ctx, Report{
+		Decision:  tool.PermissionAction("token=" + secret),
+		RiskLevel: RiskLevel(strings.Repeat("x", maxSafetyIdentifierRunes+1)),
+		RuleID:    "password=" + secret,
+		Backend:   Backend("token=" + secret),
+	})
+	span.End()
+
+	ended := recorder.Ended()
+	require.Len(t, ended, 1)
+	attributes := attributeMap(ended[0].Attributes())
+	serialized := fmt.Sprint(ended[0].Attributes())
+	require.NotContains(t, serialized, secret)
+	require.Equal(t, omittedSafetyIdentifier, attributes[AttributeRiskLevel].AsString())
+	require.Equal(t, "unknown", attributes[AttributeBackend].AsString())
+	require.True(t, attributes[AttributeRedacted].AsBool())
+}

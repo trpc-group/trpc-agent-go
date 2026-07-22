@@ -11,47 +11,56 @@ package safety
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
+	"reflect"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 const (
-	auditSchemaVersion   = "1.0"
-	maxAuditPreviewRunes = 256
+	auditSchemaVersion       = "1.0"
+	maxAuditPreviewRunes     = 256
+	maxReportPayloadBytes    = 64 << 10
+	maxSafetyIdentifierRunes = 128
+	maxSafetyTextRunes       = 1024
+
+	omittedReportPayload    = "[PAYLOAD OMITTED: exceeds report byte limit]"
+	omittedSafetyIdentifier = "[OMITTED: identifier exceeds safety limit]"
+	omittedSafetyText       = "[OMITTED: text exceeds safety limit]"
+	omittedAuditPreview     = "[OMITTED: preview exceeds safety limit]"
 )
 
-// AuditEvent is the non-sensitive record emitted for one safety decision.
+// AuditEvent is the bounded, redacted record emitted for one safety decision.
 // It intentionally has no raw argument, environment, script, or output field.
+// RequestSHA256 is correlatable and should be protected like other audit data.
 type AuditEvent struct {
-	SchemaVersion   string                `json:"schema_version"`
-	Timestamp       time.Time             `json:"timestamp"`
-	ToolName        string                `json:"tool_name"`
-	ToolCallID      string                `json:"tool_call_id,omitempty"`
-	Backend         Backend               `json:"backend"`
-	Decision        tool.PermissionAction `json:"decision"`
-	RiskLevel       RiskLevel             `json:"risk_level"`
-	RuleID          string                `json:"rule_id"`
-	RuleIDs         []string              `json:"rule_ids,omitempty"`
-	Evidence        string                `json:"evidence,omitempty"`
-	Recommendation  string                `json:"recommendation,omitempty"`
-	Blocked         bool                  `json:"blocked"`
-	Redacted        bool                  `json:"redacted"`
-	RedactionCount  int                   `json:"redaction_count,omitempty"`
-	DurationMS      int64                 `json:"duration_ms"`
-	CommandSHA256   string                `json:"command_sha256,omitempty"`
-	CommandPreview  string                `json:"command_preview,omitempty"`
-	ExecutionStatus string                `json:"execution_status,omitempty"`
-	OutputBytes     int64                 `json:"output_bytes,omitempty"`
-	OutputTruncated bool                  `json:"output_truncated,omitempty"`
-	ErrorType       string                `json:"error_type,omitempty"`
+	SchemaVersion  string                `json:"schema_version"`
+	PolicyID       string                `json:"policy_id"`
+	Timestamp      time.Time             `json:"timestamp"`
+	ToolName       string                `json:"tool_name"`
+	ToolCallID     string                `json:"tool_call_id,omitempty"`
+	Backend        Backend               `json:"backend"`
+	Decision       tool.PermissionAction `json:"decision"`
+	RiskLevel      RiskLevel             `json:"risk_level"`
+	RuleID         string                `json:"rule_id"`
+	RuleIDs        []string              `json:"rule_ids,omitempty"`
+	Evidence       string                `json:"evidence,omitempty"`
+	Recommendation string                `json:"recommendation,omitempty"`
+	Blocked        bool                  `json:"blocked"`
+	Redacted       bool                  `json:"redacted"`
+	RedactionCount int                   `json:"redaction_count,omitempty"`
+	DurationMS     int64                 `json:"duration_ms"`
+	RequestSHA256  string                `json:"request_sha256,omitempty"`
+	CommandPreview string                `json:"command_preview,omitempty"`
 }
 
 // AuditSink persists safety decisions. Implementations should be concurrency-safe.
@@ -62,10 +71,10 @@ type AuditSink interface {
 // AuditSinkFunc adapts a function into an AuditSink.
 type AuditSinkFunc func(context.Context, AuditEvent) error
 
-// WriteAudit implements AuditSink.
+// WriteAudit implements AuditSink and returns an error for a nil function.
 func (f AuditSinkFunc) WriteAudit(ctx context.Context, event AuditEvent) error {
 	if f == nil {
-		return nil
+		return errors.New("tool safety: audit sink function is nil")
 	}
 	return f(ctx, event)
 }
@@ -117,46 +126,112 @@ func writeAll(writer io.Writer, value []byte) error {
 	return nil
 }
 
+func normalizeRequestDigest(value string) (string, bool) {
+	const prefix = "sha256:"
+	value = strings.TrimSpace(value)
+	if len(value) != len(prefix)+sha256.Size*2 ||
+		!strings.EqualFold(value[:len(prefix)], prefix) {
+		return "", false
+	}
+	hexValue := strings.ToLower(value[len(prefix):])
+	if _, err := hex.DecodeString(hexValue); err != nil {
+		return "", false
+	}
+	return prefix + hexValue, true
+}
+
 func sanitizeReport(redactor Redactor, report Report) Report {
-	if redactor == nil {
+	if isNilRedactor(redactor) {
 		redactor = NewRedactor()
 	}
-	count := 0
-	report.ToolName, count = redactAndAccumulate(redactor, report.ToolName, count)
+	report.Matches = append([]Match(nil), report.Matches...)
+	count := report.redactionCount
+	changed := report.Redacted || report.Command == omittedReportPayload
+	report.ToolName = sanitizeBoundedRunes(
+		redactor,
+		report.ToolName,
+		maxSafetyIdentifierRunes,
+		omittedSafetyIdentifier,
+		&count,
+		&changed,
+	)
 	report.Backend = normalizeBackend(report.Backend)
-	report.RuleID, count = redactAndAccumulate(redactor, report.RuleID, count)
-	report.Command, count = redactAndAccumulate(redactor, report.Command, count)
-	report.Evidence, count = redactAndAccumulate(redactor, report.Evidence, count)
-	report.Recommendation, count = redactAndAccumulate(redactor, report.Recommendation, count)
+	report.RuleID = sanitizeBoundedRunes(
+		redactor,
+		report.RuleID,
+		maxSafetyIdentifierRunes,
+		omittedSafetyIdentifier,
+		&count,
+		&changed,
+	)
+	report.Command = sanitizeBoundedBytes(
+		redactor,
+		report.Command,
+		maxReportPayloadBytes,
+		omittedReportPayload,
+		&count,
+		&changed,
+	)
+	report.Evidence = sanitizeBoundedRunes(
+		redactor,
+		report.Evidence,
+		maxSafetyTextRunes,
+		omittedSafetyText,
+		&count,
+		&changed,
+	)
+	report.Recommendation = sanitizeBoundedRunes(
+		redactor,
+		report.Recommendation,
+		maxSafetyTextRunes,
+		omittedSafetyText,
+		&count,
+		&changed,
+	)
 	for index := range report.Matches {
-		report.Matches[index].RuleID, count = redactAndAccumulate(
+		report.Matches[index].RuleID = sanitizeBoundedRunes(
 			redactor,
 			report.Matches[index].RuleID,
-			count,
+			maxSafetyIdentifierRunes,
+			omittedSafetyIdentifier,
+			&count,
+			&changed,
 		)
-		report.Matches[index].Evidence, count = redactAndAccumulate(
+		report.Matches[index].Evidence = sanitizeBoundedRunes(
 			redactor,
 			report.Matches[index].Evidence,
-			count,
+			maxSafetyTextRunes,
+			omittedSafetyText,
+			&count,
+			&changed,
 		)
-		report.Matches[index].Recommendation, count = redactAndAccumulate(
+		report.Matches[index].Recommendation = sanitizeBoundedRunes(
 			redactor,
 			report.Matches[index].Recommendation,
-			count,
+			maxSafetyTextRunes,
+			omittedSafetyText,
+			&count,
+			&changed,
 		)
 	}
-	if count > 0 {
-		report.Redacted = true
-	}
+	report.Redacted = changed || count > 0
+	report.redactionCount = count
 	return report
 }
 
 func sanitizeAuditEvent(redactor Redactor, event AuditEvent) AuditEvent {
-	if redactor == nil {
+	if isNilRedactor(redactor) {
 		redactor = NewRedactor()
 	}
-	if event.SchemaVersion == "" {
+	count := event.RedactionCount
+	changed := event.Redacted
+	if count < 0 {
+		count = 0
+		changed = true
+	}
+	if event.SchemaVersion != auditSchemaVersion {
 		event.SchemaVersion = auditSchemaVersion
+		changed = true
 	}
 	if event.Timestamp.IsZero() {
 		event.Timestamp = time.Now().UTC()
@@ -164,48 +239,199 @@ func sanitizeAuditEvent(redactor Redactor, event AuditEvent) AuditEvent {
 		event.Timestamp = event.Timestamp.UTC()
 	}
 	event.Backend = normalizeBackend(event.Backend)
-	count := event.RedactionCount
-	event.ToolName, count = redactAndAccumulate(redactor, event.ToolName, count)
-	event.ToolCallID, count = redactAndAccumulate(redactor, event.ToolCallID, count)
-	event.RuleID, count = redactAndAccumulate(redactor, event.RuleID, count)
+	if validateAction(event.Decision) != nil {
+		event.Decision = tool.PermissionActionAsk
+		changed = true
+	}
+	if riskRank(event.RiskLevel) == 0 {
+		event.RiskLevel = RiskLevelHigh
+		changed = true
+	}
+	event.Blocked = event.Decision != tool.PermissionActionAllow
+	if event.DurationMS < 0 {
+		event.DurationMS = 0
+		changed = true
+	}
+	if digest, ok := normalizeRequestDigest(event.RequestSHA256); ok {
+		event.RequestSHA256 = digest
+	} else if event.RequestSHA256 != "" {
+		event.RequestSHA256 = ""
+		changed = true
+	}
+	if len(event.RuleIDs) > maxReportMatches {
+		event.RuleIDs = append(
+			[]string(nil), event.RuleIDs[:maxReportMatches-1]...,
+		)
+		event.RuleIDs = append(event.RuleIDs, "limits.rule_ids")
+		changed = true
+	} else {
+		event.RuleIDs = append([]string(nil), event.RuleIDs...)
+	}
+	event.ToolName = sanitizeBoundedRunes(
+		redactor,
+		event.ToolName,
+		maxSafetyIdentifierRunes,
+		omittedSafetyIdentifier,
+		&count,
+		&changed,
+	)
+	event.ToolCallID = sanitizeBoundedRunes(
+		redactor,
+		event.ToolCallID,
+		maxSafetyIdentifierRunes,
+		omittedSafetyIdentifier,
+		&count,
+		&changed,
+	)
+	event.PolicyID = sanitizeBoundedRunes(
+		redactor,
+		event.PolicyID,
+		maxSafetyIdentifierRunes,
+		omittedSafetyIdentifier,
+		&count,
+		&changed,
+	)
+	event.RuleID = sanitizeBoundedRunes(
+		redactor,
+		event.RuleID,
+		maxSafetyIdentifierRunes,
+		omittedSafetyIdentifier,
+		&count,
+		&changed,
+	)
 	for index := range event.RuleIDs {
-		event.RuleIDs[index], count = redactAndAccumulate(redactor, event.RuleIDs[index], count)
+		event.RuleIDs[index] = sanitizeBoundedRunes(
+			redactor,
+			event.RuleIDs[index],
+			maxSafetyIdentifierRunes,
+			omittedSafetyIdentifier,
+			&count,
+			&changed,
+		)
 	}
-	event.Evidence, count = redactAndAccumulate(redactor, event.Evidence, count)
-	event.Recommendation, count = redactAndAccumulate(redactor, event.Recommendation, count)
-	event.CommandPreview, count = redactAndAccumulate(redactor, event.CommandPreview, count)
-	event.ExecutionStatus, count = redactAndAccumulate(redactor, event.ExecutionStatus, count)
-	event.ErrorType, count = redactAndAccumulate(redactor, event.ErrorType, count)
-	event.CommandPreview = truncateRunes(event.CommandPreview, maxAuditPreviewRunes)
+	event.Evidence = sanitizeBoundedRunes(
+		redactor,
+		event.Evidence,
+		maxSafetyTextRunes,
+		omittedSafetyText,
+		&count,
+		&changed,
+	)
+	event.Recommendation = sanitizeBoundedRunes(
+		redactor,
+		event.Recommendation,
+		maxSafetyTextRunes,
+		omittedSafetyText,
+		&count,
+		&changed,
+	)
+	event.CommandPreview = sanitizeBoundedRunes(
+		redactor,
+		event.CommandPreview,
+		maxAuditPreviewRunes,
+		omittedAuditPreview,
+		&count,
+		&changed,
+	)
 	event.RedactionCount = count
-	if count > 0 {
-		event.Redacted = true
-	}
+	event.Redacted = changed || count > 0
 	return event
 }
 
-func redactAndAccumulate(redactor Redactor, value string, count int) (string, int) {
+func sanitizeBoundedRunes(
+	redactor Redactor,
+	value string,
+	limit int,
+	omission string,
+	count *int,
+	changed *bool,
+) string {
+	bounded, omitted := omitOverlongRunes(value, limit, omission)
+	if omitted {
+		*changed = true
+		return bounded
+	}
+	redacted, found := redactor.RedactString(bounded)
+	*count += found
+	if found > 0 {
+		*changed = true
+	}
+	bounded, omitted = omitOverlongRunes(redacted, limit, omission)
+	if omitted {
+		*changed = true
+		return bounded
+	}
+	return bounded
+}
+
+func sanitizeBoundedBytes(
+	redactor Redactor,
+	value string,
+	limit int,
+	omission string,
+	count *int,
+	changed *bool,
+) string {
+	if limit > 0 && len(value) > limit {
+		*changed = true
+		return omission
+	}
 	redacted, found := redactor.RedactString(value)
-	return redacted, count + found
+	*count += found
+	if found > 0 {
+		*changed = true
+	}
+	if limit > 0 && len(redacted) > limit {
+		*changed = true
+		return omission
+	}
+	return redacted
+}
+
+func omitOverlongRunes(value string, limit int, omission string) (string, bool) {
+	if limit <= 0 {
+		return value, false
+	}
+	count := 0
+	for range value {
+		if count == limit {
+			return omission, true
+		}
+		count++
+	}
+	return value, false
 }
 
 func writeGuardAudit(
 	ctx context.Context,
 	sink AuditSink,
+	redactor Redactor,
 	request Request,
 	report Report,
+	policyID string,
 ) error {
 	if sink == nil {
 		return nil
 	}
+	if isNilAuditSink(sink) {
+		return errors.New("tool safety: audit sink is nil")
+	}
+	if isNilRedactor(redactor) {
+		redactor = NewRedactor()
+	}
 	rawCommand := requestPayload(request)
-	cleanPreview, previewRedactions := NewRedactor().RedactString(rawCommand)
+	cleanPreview, previewRedactions := redactor.RedactString(rawCommand)
 	if report.Command != "" {
 		cleanPreview = report.Command
+	}
+	redactionCount := report.redactionCount
+	if report.Command == "" {
+		redactionCount += previewRedactions
 	}
 	event := AuditEvent{
 		SchemaVersion:  auditSchemaVersion,
 		Timestamp:      time.Now().UTC(),
+		PolicyID:       policyID,
 		ToolName:       report.ToolName,
 		ToolCallID:     request.ToolCallID,
 		Backend:        report.Backend,
@@ -216,13 +442,38 @@ func writeGuardAudit(
 		Evidence:       report.Evidence,
 		Recommendation: report.Recommendation,
 		Blocked:        report.Blocked,
-		Redacted:       report.Redacted || previewRedactions > 0,
-		RedactionCount: previewRedactions,
+		Redacted:       report.Redacted || redactionCount > 0,
+		RedactionCount: redactionCount,
 		DurationMS:     report.DurationMS,
-		CommandSHA256:  hashText(rawCommand),
+		RequestSHA256:  hashRequestPayload(request),
 		CommandPreview: truncateRunes(cleanPreview, maxAuditPreviewRunes),
 	}
+	event = sanitizeAuditEvent(redactor, event)
+	return writeAuditSafely(ctx, sink, event)
+}
+
+func writeAuditSafely(
+	ctx context.Context,
+	sink AuditSink,
+	event AuditEvent,
+) (err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = errors.New("tool safety: audit sink panicked")
+		}
+	}()
 	return sink.WriteAudit(ctx, event)
+}
+
+func isNilAuditSink(sink AuditSink) bool {
+	value := reflect.ValueOf(sink)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map,
+		reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
 }
 
 func reportRuleIDs(report Report) []string {
@@ -245,58 +496,272 @@ func reportRuleIDs(report Report) []string {
 	return ruleIDs
 }
 
-func requestPayload(request Request) string {
-	parts := make([]string, 0, len(request.CodeBlocks)+2)
-	if request.Command != "" {
-		parts = append(parts, request.Command)
-	}
-	if request.Script != "" {
-		parts = append(parts, request.Script)
+func requestHasPayload(request Request) bool {
+	if request.Command != "" || request.Script != "" || request.SessionInput != "" {
+		return true
 	}
 	for _, block := range request.CodeBlocks {
 		if block.Code != "" {
-			parts = append(parts, block.Code)
+			return true
+		}
+	}
+	return false
+}
+
+func requestPayload(request Request) string {
+	parts := make([]string, 0, 2)
+	size := 0
+	appendPart := func(part string) bool {
+		if part == "" {
+			return true
+		}
+		separatorBytes := 0
+		if len(parts) > 0 {
+			separatorBytes = 1
+		}
+		if len(part) > maxReportPayloadBytes-size-separatorBytes {
+			return false
+		}
+		size += separatorBytes + len(part)
+		parts = append(parts, part)
+		return true
+	}
+	if !appendPart(request.Command) || !appendPart(request.Script) {
+		return omittedReportPayload
+	}
+	for _, block := range request.CodeBlocks {
+		if !appendPart(block.Code) {
+			return omittedReportPayload
 		}
 	}
 	return strings.Join(parts, "\n")
 }
 
-func hashText(value string) string {
-	if value == "" {
+func hashRequestPayload(request Request) string {
+	digest := sha256.New()
+	wrote := false
+	writeValue := func(label string, value string) {
+		wrote = true
+		writeHashString(digest, label)
+		_, _ = digest.Write([]byte{0})
+		var length [8]byte
+		binary.BigEndian.PutUint64(length[:], uint64(len(value)))
+		_, _ = digest.Write(length[:])
+		writeHashString(digest, value)
+	}
+
+	writeValue("tool.name", normalizedToolName(request.ToolName))
+	writeValue("backend", string(normalizeBackend(request.Backend)))
+	hashCommandAndCode(request, writeValue)
+	hashExecutionContext(request, writeValue)
+	hashStructuredExecution(request, writeValue)
+	if !wrote {
 		return ""
 	}
-	digest := sha256.Sum256([]byte(value))
-	return "sha256:" + hex.EncodeToString(digest[:])
+	return "sha256:" + hex.EncodeToString(digest.Sum(nil))
+}
+
+func hashCommandAndCode(request Request, writeValue func(string, string)) {
+	writeNonEmptyHashValue(writeValue, "skill", request.Skill)
+	writeNonEmptyHashValue(writeValue, "execution.id", request.ExecutionID)
+	writeNonEmptyHashValue(writeValue, "command", request.Command)
+	if request.Script != "" {
+		writeValue("script.language", request.Language)
+		writeValue("script.content", request.Script)
+	}
+	if len(request.CodeBlocks) == 0 {
+		return
+	}
+	writeValue("code.count", strconv.Itoa(len(request.CodeBlocks)))
+	for index, block := range request.CodeBlocks {
+		prefix := "code." + strconv.Itoa(index) + "."
+		writeValue(prefix+"language", block.Language)
+		writeValue(prefix+"content", block.Code)
+	}
+}
+
+func hashExecutionContext(request Request, writeValue func(string, string)) {
+	writeNonEmptyHashValue(writeValue, "cwd", request.CWD)
+	hashEnvironment(request.Env, writeValue)
+	if timeout := request.EffectiveTimeout(); timeout != 0 {
+		writeValue("timeout_ns", strconv.FormatInt(int64(timeout), 10))
+	}
+	if request.MaxOutputBytes != 0 {
+		writeValue(
+			"max_output_bytes",
+			strconv.FormatInt(request.MaxOutputBytes, 10),
+		)
+	}
+	if request.Background {
+		writeValue("background", "true")
+	}
+	if request.TTY {
+		writeValue("tty", "true")
+	}
+	writeNonEmptyHashValue(writeValue, "session.id", request.SessionID)
+	writeNonEmptyHashValue(writeValue, "session.input", request.SessionInput)
+	if request.YieldMS != nil {
+		writeValue("yield_ms", strconv.Itoa(*request.YieldMS))
+	}
+	if request.PollLines != 0 {
+		writeValue("poll_lines", strconv.Itoa(request.PollLines))
+	}
+	writeNonEmptyHashValue(writeValue, "editor.text", request.EditorText)
+}
+
+func hashEnvironment(
+	environment map[string]string,
+	writeValue func(string, string),
+) {
+	if len(environment) == 0 {
+		return
+	}
+	keys := make([]string, 0, len(environment))
+	for key := range environment {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	writeValue("env.count", strconv.Itoa(len(keys)))
+	for index, key := range keys {
+		prefix := "env." + strconv.Itoa(index) + "."
+		writeValue(prefix+"key", key)
+		writeValue(prefix+"value", environment[key])
+	}
+}
+
+func hashStructuredExecution(
+	request Request,
+	writeValue func(string, string),
+) {
+	hashInputSpecs(request.Inputs, writeValue)
+	hashOutputSpecs(request.OutputFiles, request.Outputs, writeValue)
+	if request.SaveArtifacts {
+		writeValue("artifacts.save", "true")
+	}
+	if request.OmitInline {
+		writeValue("artifacts.omit_inline", "true")
+	}
+	writeNonEmptyHashValue(
+		writeValue,
+		"artifacts.prefix",
+		request.ArtifactPrefix,
+	)
+}
+
+func hashInputSpecs(inputs []InputSpec, writeValue func(string, string)) {
+	if len(inputs) == 0 {
+		return
+	}
+	writeValue("input.count", strconv.Itoa(len(inputs)))
+	for index, input := range inputs {
+		prefix := "input." + strconv.Itoa(index) + "."
+		writeValue(prefix+"from", input.From)
+		writeValue(prefix+"to", input.To)
+		writeValue(prefix+"mode", input.Mode)
+		writeValue(prefix+"pin", strconv.FormatBool(input.Pin))
+	}
+}
+
+func hashOutputSpecs(
+	outputFiles []string,
+	outputs *OutputSpec,
+	writeValue func(string, string),
+) {
+	if len(outputFiles) > 0 {
+		writeValue("output_file.count", strconv.Itoa(len(outputFiles)))
+		for index, outputFile := range outputFiles {
+			writeValue(
+				"output_file."+strconv.Itoa(index),
+				outputFile,
+			)
+		}
+	}
+	if outputs == nil {
+		return
+	}
+	writeValue("outputs.present", "true")
+	writeValue("outputs.glob.count", strconv.Itoa(len(outputs.Globs)))
+	for index, glob := range outputs.Globs {
+		writeValue("outputs.glob."+strconv.Itoa(index), glob)
+	}
+	writeValue("outputs.max_files", strconv.Itoa(outputs.MaxFiles))
+	writeValue(
+		"outputs.max_file_bytes",
+		strconv.FormatInt(outputs.MaxFileBytes, 10),
+	)
+	writeValue(
+		"outputs.max_total_bytes",
+		strconv.FormatInt(outputs.MaxTotalBytes, 10),
+	)
+	writeValue("outputs.save", strconv.FormatBool(outputs.Save))
+	writeValue("outputs.name_template", outputs.NameTemplate)
+	writeValue("outputs.inline", strconv.FormatBool(outputs.Inline))
+}
+
+func writeNonEmptyHashValue(
+	writeValue func(string, string),
+	label string,
+	value string,
+) {
+	if value != "" {
+		writeValue(label, value)
+	}
+}
+
+func writeHashString(writer io.Writer, value string) {
+	const chunkBytes = 32 << 10
+	for len(value) > 0 {
+		size := len(value)
+		if size > chunkBytes {
+			size = chunkBytes
+		}
+		_, _ = writer.Write([]byte(value[:size]))
+		value = value[size:]
+	}
 }
 
 func truncateRunes(value string, limit int) string {
-	if limit <= 0 || utf8.RuneCountInString(value) <= limit {
+	if limit <= 0 {
 		return value
 	}
-	runes := []rune(value)
-	return string(runes[:limit])
+	count := 0
+	for index := range value {
+		if count == limit {
+			return value[:index]
+		}
+		count++
+	}
+	return value
 }
 
-// WithAuditSink records each Guard decision without changing that decision.
+// WithAuditSink records each Guard decision. An audit persistence failure may
+// make the final decision more restrictive according to ActionPolicy.
 func WithAuditSink(sink AuditSink) Option {
 	return func(guard *Guard) {
-		guard.auditSink = sink
+		if guard != nil {
+			guard.auditSink = sink
+		}
 	}
 }
 
-// WithRedactor replaces the default report and audit redactor.
+// WithRedactor adds organization-specific redaction after the built-in
+// credential redactor. The supplied implementation must be concurrency-safe,
+// non-mutating, and idempotent.
 func WithRedactor(redactor Redactor) Option {
 	return func(guard *Guard) {
-		if redactor != nil {
-			guard.redactor = redactor
+		if guard != nil && !isNilRedactor(redactor) {
+			guard.redactor = chainRedactors(guard.redactor, redactor)
 		}
 	}
 }
 
 // WithAuditErrorHook observes audit persistence failures. Guard decisions are
-// not changed by hook failures or by a missing hook.
+// not changed by hook failures or by a missing hook. The hook must be safe for
+// concurrent use.
 func WithAuditErrorHook(hook func(error)) Option {
 	return func(guard *Guard) {
-		guard.auditError = hook
+		if guard != nil {
+			guard.auditError = hook
+		}
 	}
 }

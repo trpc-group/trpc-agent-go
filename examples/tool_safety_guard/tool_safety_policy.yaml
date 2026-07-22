@@ -54,6 +54,8 @@ limits:
   max_timeout_seconds: 120
   max_output_bytes: 1048576
   max_command_bytes: 16384
+  max_script_bytes: 1048576
+  max_session_input_bytes: 65536
   max_script_lines: 500
   max_sleep_seconds: 30
 hostexec:
@@ -61,7 +63,7 @@ hostexec:
   allow_pty: false
   max_timeout_seconds: 30
 actions:
-  unparseable: ask
+  unparsable: ask
   unlisted_command: ask
   unknown_script: ask
   dependency_change: ask

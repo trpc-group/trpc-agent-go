@@ -85,14 +85,69 @@ func shellWordAfterRedirection(input string) string {
 func commandWritesSystemPath(name string, args []string) bool {
 	switch name {
 	case "tee", "truncate":
+		return anyPositionalSystemPath(args)
+	case "dd":
 		for _, arg := range args {
-			if !strings.HasPrefix(arg, "-") && isSystemPath(arg) {
+			if strings.HasPrefix(strings.ToLower(arg), "of=") &&
+				isSystemPath(arg[3:]) {
 				return true
 			}
 		}
-	case "dd":
-		for _, arg := range args {
-			if strings.HasPrefix(strings.ToLower(arg), "of=") && isSystemPath(arg[3:]) {
+	case "cp", "mv", "install":
+		if optionWritesSystemPath(args, "-t", "--target-directory") {
+			return true
+		}
+		return isSystemPath(lastPositionalArg(args))
+	case "curl":
+		return optionWritesSystemPath(args, "-o", "--output") ||
+			optionWritesSystemPath(args, "", "--output-dir")
+	case "wget":
+		return optionWritesSystemPath(args, "-O", "--output-document") ||
+			optionWritesSystemPath(args, "-P", "--directory-prefix")
+	case "sed":
+		if !hasOption(args, "-i", "--in-place") {
+			return false
+		}
+		return anyPositionalSystemPath(args)
+	}
+	return false
+}
+
+func anyPositionalSystemPath(args []string) bool {
+	for _, arg := range args {
+		if !strings.HasPrefix(arg, "-") && isSystemPath(arg) {
+			return true
+		}
+	}
+	return false
+}
+
+func lastPositionalArg(args []string) string {
+	for index := len(args) - 1; index >= 0; index-- {
+		if args[index] != "" && !strings.HasPrefix(args[index], "-") {
+			return args[index]
+		}
+	}
+	return ""
+}
+
+func optionWritesSystemPath(args []string, short, long string) bool {
+	for index, arg := range args {
+		lower := strings.ToLower(arg)
+		shortLower := strings.ToLower(short)
+		longLower := strings.ToLower(long)
+		switch {
+		case lower == shortLower || lower == longLower:
+			if index+1 < len(args) && isSystemPath(args[index+1]) {
+				return true
+			}
+		case strings.HasPrefix(lower, longLower+"="):
+			if isSystemPath(arg[len(long)+1:]) {
+				return true
+			}
+		case len(short) == 2 && strings.HasPrefix(lower, shortLower) &&
+			len(arg) > len(short) && !strings.HasPrefix(lower, "--"):
+			if isSystemPath(arg[len(short):]) {
 				return true
 			}
 		}
@@ -100,13 +155,20 @@ func commandWritesSystemPath(name string, args []string) bool {
 	return false
 }
 
-func isSystemPath(path string) bool {
-	normalized := strings.ToLower(strings.TrimSpace(path))
-	normalized = strings.Trim(normalized, "'\"")
-	normalized = strings.ReplaceAll(normalized, "\\", "/")
-	for strings.Contains(normalized, "//") {
-		normalized = strings.ReplaceAll(normalized, "//", "/")
+func hasOption(args []string, short, long string) bool {
+	for _, arg := range args {
+		lower := strings.ToLower(arg)
+		if lower == strings.ToLower(short) || lower == strings.ToLower(long) ||
+			strings.HasPrefix(lower, strings.ToLower(short)) && len(arg) > len(short) ||
+			strings.HasPrefix(lower, strings.ToLower(long)+"=") {
+			return true
+		}
 	}
+	return false
+}
+
+func isSystemPath(value string) bool {
+	normalized := normalizeLexicalPath(value)
 	if len(normalized) >= 3 && normalized[1] == ':' && normalized[2] == '/' {
 		normalized = normalized[2:]
 	}

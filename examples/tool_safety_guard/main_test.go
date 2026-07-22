@@ -236,6 +236,27 @@ func TestValidateOutputPathsProtectsInputs(t *testing.T) {
 	if err := validateOutputPaths(cfg); err == nil {
 		t.Fatal("validateOutputPaths allowed report and audit to share a path")
 	}
+	dir := t.TempDir()
+	policyPath := filepath.Join(dir, "policy.yaml")
+	fixturesPath := filepath.Join(dir, "fixtures.json")
+	reportAlias := filepath.Join(dir, "report.json")
+	if err := os.WriteFile(policyPath, []byte("policy"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(fixturesPath, []byte("[]"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(policyPath, reportAlias); err != nil {
+		t.Skipf("hard links unavailable: %v", err)
+	}
+	cfg = config{
+		policyPath: policyPath, fixturesPath: fixturesPath,
+		reportPath: reportAlias, auditPath: filepath.Join(dir, "audit.jsonl"),
+	}
+	if err := validateOutputPaths(cfg); err == nil {
+		t.Fatal("validateOutputPaths allowed a hard link to overwrite policy")
+	}
+
 }
 
 func loadCorpus(t *testing.T, path string) []fixtureCase {
@@ -269,6 +290,18 @@ func assertAuditLines(t *testing.T, data []byte, expected int) {
 		}
 		if event.Decision == "" || event.RiskLevel == "" || event.RuleID == "" {
 			t.Errorf("audit line %d missing decision fields: %+v", count, event)
+		}
+		if event.PolicyID == "" || event.ToolName == "" || event.Backend == "" {
+			t.Errorf("audit line %d missing identity fields: %+v", count, event)
+		}
+		var raw map[string]json.RawMessage
+		if err := json.Unmarshal(scanner.Bytes(), &raw); err != nil {
+			t.Fatalf("decode raw audit line %d: %v", count, err)
+		}
+		for _, field := range []string{"blocked", "redacted", "duration_ms"} {
+			if _, ok := raw[field]; !ok {
+				t.Errorf("audit line %d missing %s", count, field)
+			}
 		}
 		if event.Timestamp.Format(time.RFC3339) != deterministicTime {
 			t.Errorf("audit line %d timestamp = %s, want %s",

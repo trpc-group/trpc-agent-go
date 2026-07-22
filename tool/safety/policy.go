@@ -27,6 +27,8 @@ const (
 	defaultMaxTimeoutSeconds = 300
 	defaultMaxOutputBytes    = 1 << 20
 	defaultMaxCommandBytes   = 64 << 10
+	defaultMaxScriptBytes    = 1 << 20
+	defaultMaxSessionBytes   = 64 << 10
 	defaultMaxScriptLines    = 5000
 	defaultMaxSleepSeconds   = 30
 )
@@ -71,11 +73,13 @@ type EnvironmentPolicy struct {
 
 // LimitsPolicy controls request-side resource declarations and input sizes.
 type LimitsPolicy struct {
-	MaxTimeoutSeconds int   `json:"max_timeout_seconds" yaml:"max_timeout_seconds"`
-	MaxOutputBytes    int64 `json:"max_output_bytes" yaml:"max_output_bytes"`
-	MaxCommandBytes   int   `json:"max_command_bytes" yaml:"max_command_bytes"`
-	MaxScriptLines    int   `json:"max_script_lines" yaml:"max_script_lines"`
-	MaxSleepSeconds   int   `json:"max_sleep_seconds" yaml:"max_sleep_seconds"`
+	MaxTimeoutSeconds    int   `json:"max_timeout_seconds" yaml:"max_timeout_seconds"`
+	MaxOutputBytes       int64 `json:"max_output_bytes" yaml:"max_output_bytes"`
+	MaxCommandBytes      int   `json:"max_command_bytes" yaml:"max_command_bytes"`
+	MaxScriptBytes       int   `json:"max_script_bytes" yaml:"max_script_bytes"`
+	MaxSessionInputBytes int   `json:"max_session_input_bytes" yaml:"max_session_input_bytes"`
+	MaxScriptLines       int   `json:"max_script_lines" yaml:"max_script_lines"`
+	MaxSleepSeconds      int   `json:"max_sleep_seconds" yaml:"max_sleep_seconds"`
 }
 
 // HostExecPolicy applies stricter review rules to direct host execution.
@@ -89,7 +93,7 @@ type HostExecPolicy struct {
 // classified conclusively. AuditFailure is retained as an observable policy
 // field; audit failures never silently turn an unsafe request into allow.
 type ActionPolicy struct {
-	Unparseable      tool.PermissionAction `json:"unparseable" yaml:"unparseable"`
+	Unparsable       tool.PermissionAction `json:"unparsable" yaml:"unparsable"`
 	UnlistedCommand  tool.PermissionAction `json:"unlisted_command" yaml:"unlisted_command"`
 	UnknownScript    tool.PermissionAction `json:"unknown_script" yaml:"unknown_script"`
 	DependencyChange tool.PermissionAction `json:"dependency_change" yaml:"dependency_change"`
@@ -117,15 +121,17 @@ func DefaultPolicy() Policy {
 			"ENV", "PROMPT_COMMAND", "PYTHONSTARTUP", "NODE_OPTIONS",
 		}},
 		Limits: LimitsPolicy{
-			MaxTimeoutSeconds: defaultMaxTimeoutSeconds,
-			MaxOutputBytes:    defaultMaxOutputBytes,
-			MaxCommandBytes:   defaultMaxCommandBytes,
-			MaxScriptLines:    defaultMaxScriptLines,
-			MaxSleepSeconds:   defaultMaxSleepSeconds,
+			MaxTimeoutSeconds:    defaultMaxTimeoutSeconds,
+			MaxOutputBytes:       defaultMaxOutputBytes,
+			MaxCommandBytes:      defaultMaxCommandBytes,
+			MaxScriptBytes:       defaultMaxScriptBytes,
+			MaxSessionInputBytes: defaultMaxSessionBytes,
+			MaxScriptLines:       defaultMaxScriptLines,
+			MaxSleepSeconds:      defaultMaxSleepSeconds,
 		},
 		HostExec: HostExecPolicy{MaxTimeoutSeconds: 120},
 		Actions: ActionPolicy{
-			Unparseable:      tool.PermissionActionAsk,
+			Unparsable:       tool.PermissionActionAsk,
 			UnlistedCommand:  tool.PermissionActionAsk,
 			UnknownScript:    tool.PermissionActionAsk,
 			DependencyChange: tool.PermissionActionAsk,
@@ -204,6 +210,15 @@ func normalizeAndValidatePolicy(p Policy) (Policy, error) {
 		p.PolicyID = defaults.PolicyID
 	}
 	p.PolicyID = strings.TrimSpace(p.PolicyID)
+	applyPolicyDefaults(&p, defaults)
+	normalizePolicyLists(&p)
+	if err := validatePolicy(p); err != nil {
+		return Policy{}, err
+	}
+	return p, nil
+}
+
+func applyPolicyDefaults(p *Policy, defaults Policy) {
 	if p.Paths.Denied == nil {
 		p.Paths.Denied = defaults.Paths.Denied
 	}
@@ -222,6 +237,12 @@ func normalizeAndValidatePolicy(p Policy) (Policy, error) {
 	if p.Limits.MaxCommandBytes == 0 {
 		p.Limits.MaxCommandBytes = defaults.Limits.MaxCommandBytes
 	}
+	if p.Limits.MaxScriptBytes == 0 {
+		p.Limits.MaxScriptBytes = defaults.Limits.MaxScriptBytes
+	}
+	if p.Limits.MaxSessionInputBytes == 0 {
+		p.Limits.MaxSessionInputBytes = defaults.Limits.MaxSessionInputBytes
+	}
 	if p.Limits.MaxScriptLines == 0 {
 		p.Limits.MaxScriptLines = defaults.Limits.MaxScriptLines
 	}
@@ -234,8 +255,8 @@ func normalizeAndValidatePolicy(p Policy) (Policy, error) {
 	if p.Network.DefaultAction == "" {
 		p.Network.DefaultAction = defaults.Network.DefaultAction
 	}
-	if p.Actions.Unparseable == "" {
-		p.Actions.Unparseable = defaults.Actions.Unparseable
+	if p.Actions.Unparsable == "" {
+		p.Actions.Unparsable = defaults.Actions.Unparsable
 	}
 	if p.Actions.UnlistedCommand == "" {
 		p.Actions.UnlistedCommand = defaults.Actions.UnlistedCommand
@@ -249,6 +270,9 @@ func normalizeAndValidatePolicy(p Policy) (Policy, error) {
 	if p.Actions.AuditFailure == "" {
 		p.Actions.AuditFailure = defaults.Actions.AuditFailure
 	}
+}
+
+func normalizePolicyLists(p *Policy) {
 
 	p.Commands.Allowed = cleanPolicyList(p.Commands.Allowed)
 	p.Commands.Denied = cleanPolicyList(p.Commands.Denied)
@@ -259,29 +283,41 @@ func normalizeAndValidatePolicy(p Policy) (Policy, error) {
 	p.Environment.AllowedVariables = cleanPolicyList(p.Environment.AllowedVariables)
 	p.Environment.DeniedVariables = cleanPolicyList(p.Environment.DeniedVariables)
 
+}
+
+func validatePolicy(p Policy) error {
 	if p.Limits.MaxTimeoutSeconds <= 0 || p.Limits.MaxOutputBytes <= 0 ||
-		p.Limits.MaxCommandBytes <= 0 || p.Limits.MaxScriptLines <= 0 ||
+		p.Limits.MaxCommandBytes <= 0 || p.Limits.MaxScriptBytes <= 0 ||
+		p.Limits.MaxSessionInputBytes <= 0 || p.Limits.MaxScriptLines <= 0 ||
 		p.Limits.MaxSleepSeconds <= 0 || p.HostExec.MaxTimeoutSeconds <= 0 {
-		return Policy{}, errors.New("tool safety limits must be positive")
+		return errors.New("tool safety limits must be positive")
 	}
-	for name, action := range map[string]tool.PermissionAction{
-		"network.default_action":    p.Network.DefaultAction,
-		"actions.unparseable":       p.Actions.Unparseable,
-		"actions.unlisted_command":  p.Actions.UnlistedCommand,
-		"actions.unknown_script":    p.Actions.UnknownScript,
-		"actions.dependency_change": p.Actions.DependencyChange,
-		"actions.audit_failure":     p.Actions.AuditFailure,
-	} {
-		if err := validateAction(action); err != nil {
-			return Policy{}, fmt.Errorf("%s: %w", name, err)
+	actions := []struct {
+		name       string
+		action     tool.PermissionAction
+		failClosed bool
+	}{
+		{name: "network.default_action", action: p.Network.DefaultAction, failClosed: true},
+		{name: "actions.unparsable", action: p.Actions.Unparsable, failClosed: true},
+		{name: "actions.unlisted_command", action: p.Actions.UnlistedCommand},
+		{name: "actions.unknown_script", action: p.Actions.UnknownScript, failClosed: true},
+		{name: "actions.dependency_change", action: p.Actions.DependencyChange},
+		{name: "actions.audit_failure", action: p.Actions.AuditFailure},
+	}
+	for _, entry := range actions {
+		if err := validateAction(entry.action); err != nil {
+			return fmt.Errorf("%s: %w", entry.name, err)
+		}
+		if entry.failClosed && entry.action == tool.PermissionActionAllow {
+			return fmt.Errorf("%s must be deny or ask", entry.name)
 		}
 	}
 	for _, domain := range p.Network.AllowedDomains {
 		if err := validateDomainPattern(domain); err != nil {
-			return Policy{}, err
+			return err
 		}
 	}
-	return p, nil
+	return nil
 }
 
 func validateAction(action tool.PermissionAction) error {

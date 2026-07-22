@@ -13,34 +13,33 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"path"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/internal/envscrub"
 	"trpc.group/trpc-go/trpc-agent-go/internal/shellsafe"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 var (
-	urlPattern          = regexp.MustCompile(`(?i)\b(?:https?|ftp)://[^\s'"<>]+`)
-	infiniteLoopPattern = regexp.MustCompile(`(?i)(while[[:space:]]+(?:true|1)\b|for[[:space:]]*\([[:space:]]*;[[:space:]]*;[[:space:]]*\)|for[[:space:]]*\{)`)
-	privateKeyPattern   = regexp.MustCompile(`(?i)-----BEGIN[[:space:]]+(?:RSA[[:space:]]+|EC[[:space:]]+|OPENSSH[[:space:]]+)?PRIVATE[[:space:]]+KEY-----`)
+	urlPattern               = regexp.MustCompile(`(?i)\b(?:https?|ftp)://[^\s'"<>]+`)
+	infiniteLoopPattern      = regexp.MustCompile(`(?i)(while[[:space:]]+(?:true|1)\b|for[[:space:]]*\([[:space:]]*;[[:space:]]*;[[:space:]]*\)|for[[:space:]]*\{)`)
+	shellInfiniteLoopPattern = regexp.MustCompile(`(?i)^[[:space:]]*(?:while[[:space:]]+(?:true|1)\b|for[[:space:]]*\([[:space:]]*;[[:space:]]*;[[:space:]]*\)|for[[:space:]]*\{)`)
+	privateKeyPattern        = regexp.MustCompile(`(?i)-----BEGIN[[:space:]]+(?:RSA[[:space:]]+|EC[[:space:]]+|OPENSSH[[:space:]]+)?PRIVATE[[:space:]]+KEY-----`)
 )
 
 var credentialMarkers = []string{
 	"~/.ssh", "/.ssh/", "\\.ssh\\", ".env", ".aws/credentials",
-	"application_default_credentials.json", "id_rsa", "id_ed25519",
-	"credentials.json", "service-account.json", "service_account.json",
-}
-
-var shellWrappers = map[string]struct{}{
-	"sh": {}, "bash": {}, "zsh": {}, "ash": {}, "dash": {}, "ksh": {},
-	"fish": {}, "pwsh": {}, "powershell": {}, "cmd": {}, "eval": {},
-	"exec": {}, "source": {}, ".": {}, "xargs": {}, "env": {}, "sudo": {},
-	"su": {}, "doas": {}, "busybox": {}, "toybox": {}, "nohup": {},
+	".netrc", ".npmrc", ".pypirc", ".docker/config.json", ".kube/config",
+	"application_default_credentials.json", "id_rsa", "id_dsa",
+	"id_ecdsa", "id_ed25519", "credentials.json", "service-account.json",
+	"service_account.json",
 }
 
 func evaluateBuiltins(ctx context.Context, req Request, policy Policy) []Match {
@@ -54,38 +53,88 @@ func evaluateBuiltins(ctx context.Context, req Request, policy Policy) []Match {
 		)}
 	}
 	matches := make([]Match, 0, 8)
+	if req.Backend == BackendUnknown {
+		matches = append(matches, newMatch(
+			tool.PermissionActionAsk,
+			RiskLevelHigh,
+			"backend.unknown",
+			"execution backend is unknown or invalid",
+			"Select a known, isolated execution backend before approval.",
+		))
+	}
 
 	if req.Backend == BackendHost {
 		matches = append(matches, scanHostSession(req, policy)...)
 	}
 	matches = append(matches, scanLimits(req, policy)...)
-	matches = append(matches, scanEnvironment(req, policy)...)
-	matches = append(matches, scanDeniedCWD(req, policy)...)
+	if !structuredExecutionFieldsExceedBounds(req, policy) {
+		matches = append(matches, scanEnvironment(req, policy)...)
+		matches = append(matches, scanDeniedCWD(req, policy)...)
+	}
 
-	if strings.TrimSpace(req.SessionInput) != "" {
+	if len(req.SessionInput) > 0 {
 		matches = append(matches, newMatch(
 			tool.PermissionActionAsk,
 			RiskLevelHigh,
-			"host.session_input",
-			"non-empty input controls an already running execution session",
-			"Review the session state and submitted characters before continuing.",
+			"session.input",
+			"non-empty stdin can control an execution process or interactive session",
+			"Review the target process and submitted characters before continuing.",
 		))
-		matches = append(matches, scanCommand(req.SessionInput, policy)...)
+		if len(req.SessionInput) <= policy.Limits.MaxSessionInputBytes {
+			matches = append(matches, scanCommand(req.SessionInput, policy)...)
+		}
 	}
 	if strings.TrimSpace(req.Command) != "" {
-		matches = append(matches, scanCommand(req.Command, policy)...)
+		if len(req.Command) <= policy.Limits.MaxCommandBytes {
+			matches = append(matches, scanCommand(req.Command, policy)...)
+		}
 	}
+	scriptWithinLimit := scriptByteCount(req) <= policy.Limits.MaxScriptBytes &&
+		scriptLineCount(req) <= policy.Limits.MaxScriptLines
 	if strings.TrimSpace(req.Script) != "" {
-		matches = append(matches, scanScript(req.Language, req.Script, policy)...)
+		if scriptWithinLimit {
+			matches = append(matches, scanScript(req.Language, req.Script, policy)...)
+		}
 	}
-	for _, block := range req.CodeBlocks {
-		matches = append(matches, scanScript(block.Language, block.Code, policy)...)
+	if scriptWithinLimit {
+		for _, block := range req.CodeBlocks {
+			matches = append(matches, scanScript(block.Language, block.Code, policy)...)
+		}
 	}
 	return matches
 }
 
 func scanHostSession(req Request, policy Policy) []Match {
-	matches := make([]Match, 0, 3)
+	matches := make([]Match, 0, 6)
+	if runtime.GOOS == "windows" && strings.TrimSpace(req.Command) != "" {
+		if marker, ok := windowsHostShellMetacharacter(req.Command); ok {
+			matches = append(matches, newMatch(
+				tool.PermissionActionDeny,
+				RiskLevelCritical,
+				"host.windows_shell",
+				fmt.Sprintf("Windows host command contains cmd.exe metacharacter %q outside the POSIX safety grammar", marker),
+				"Use a simple literal command without cmd.exe metacharacters, or execute in a non-host sandbox.",
+			))
+		}
+	}
+	if normalizedToolName(req.ToolName) == "exec_command" {
+		matches = append(matches, newMatch(
+			tool.PermissionActionAsk,
+			RiskLevelHigh,
+			"host.environment_inheritance",
+			"host execution inherits ambient process environment outside request-level filtering",
+			"Prefer a sandbox with an executor-enforced clean environment or explicitly review host execution.",
+		))
+	}
+	if isSessionControlTool(req.ToolName) {
+		matches = append(matches, newMatch(
+			tool.PermissionActionAsk,
+			RiskLevelHigh,
+			"host.session_control",
+			"host session control can read from or write to a long-lived process",
+			"Require human review and verify process ownership and cleanup.",
+		))
+	}
 	if req.TTY && !policy.HostExec.AllowPTY {
 		matches = append(matches, newMatch(
 			tool.PermissionActionAsk,
@@ -105,7 +154,10 @@ func scanHostSession(req Request, policy Policy) []Match {
 		))
 	}
 	hostLimit := time.Duration(policy.HostExec.MaxTimeoutSeconds) * time.Second
-	if req.TTY || req.Background || req.EffectiveTimeout() > hostLimit {
+	hostExecCanCreateSession := normalizedToolName(req.ToolName) == "exec_command" &&
+		(req.YieldMS == nil || *req.YieldMS > 0)
+	if req.TTY || req.Background || hostExecCanCreateSession ||
+		req.EffectiveTimeout() > hostLimit {
 		matches = append(matches, newMatch(
 			tool.PermissionActionAsk,
 			RiskLevelHigh,
@@ -117,30 +169,17 @@ func scanHostSession(req Request, policy Policy) []Match {
 	return matches
 }
 
+func windowsHostShellMetacharacter(command string) (string, bool) {
+	for _, marker := range []string{"'", "^", "&", "|", "<", ">", "%", "!", "\r", "\n"} {
+		if strings.Contains(command, marker) {
+			return marker, true
+		}
+	}
+	return "", false
+}
+
 func scanLimits(req Request, policy Policy) []Match {
-	matches := make([]Match, 0, 4)
-	if len(req.Command) > policy.Limits.MaxCommandBytes {
-		matches = append(matches, newMatch(
-			tool.PermissionActionAsk,
-			RiskLevelMedium,
-			"limits.command_length",
-			fmt.Sprintf("command is %d bytes; policy maximum is %d", len(req.Command), policy.Limits.MaxCommandBytes),
-			"Move reviewed logic into a versioned workspace script.",
-		))
-	}
-	lineCount := countScriptLines(req.Script)
-	for _, block := range req.CodeBlocks {
-		lineCount += countScriptLines(block.Code)
-	}
-	if lineCount > policy.Limits.MaxScriptLines {
-		matches = append(matches, newMatch(
-			tool.PermissionActionAsk,
-			RiskLevelMedium,
-			"limits.script_lines",
-			fmt.Sprintf("script contains %d lines; policy maximum is %d", lineCount, policy.Limits.MaxScriptLines),
-			"Split and review the script before execution.",
-		))
-	}
+	matches := scanInputLimits(req, policy)
 	timeout := req.EffectiveTimeout()
 	if timeout < 0 {
 		matches = append(matches, newMatch(
@@ -150,7 +189,7 @@ func scanLimits(req Request, policy Policy) []Match {
 			"requested timeout is negative",
 			"Use a positive timeout no greater than the policy maximum.",
 		))
-	} else if timeout == 0 && requestPayload(req) != "" {
+	} else if timeout == 0 && requestHasPayload(req) {
 		matches = append(matches, newMatch(
 			tool.PermissionActionAsk,
 			RiskLevelHigh,
@@ -176,7 +215,7 @@ func scanLimits(req Request, policy Policy) []Match {
 			"requested output limit is negative",
 			"Use a positive byte limit no greater than the policy maximum.",
 		))
-	} else if req.MaxOutputBytes == 0 && requestPayload(req) != "" {
+	} else if req.MaxOutputBytes == 0 && requestHasPayload(req) {
 		matches = append(matches, newMatch(
 			tool.PermissionActionAsk,
 			RiskLevelHigh,
@@ -197,6 +236,76 @@ func scanLimits(req Request, policy Policy) []Match {
 	return matches
 }
 
+func scanInputLimits(req Request, policy Policy) []Match {
+	matches := make([]Match, 0, 4)
+	if len(req.Command) > policy.Limits.MaxCommandBytes {
+		matches = append(matches, newMatch(
+			tool.PermissionActionAsk,
+			RiskLevelMedium,
+			"limits.command_length",
+			fmt.Sprintf("command is %d bytes; policy maximum is %d", len(req.Command), policy.Limits.MaxCommandBytes),
+			"Move reviewed logic into a versioned workspace script.",
+		))
+	}
+	scriptBytes := scriptByteCount(req)
+	if scriptBytes > policy.Limits.MaxScriptBytes {
+		matches = append(matches, newMatch(
+			tool.PermissionActionAsk,
+			RiskLevelMedium,
+			"limits.script_bytes",
+			fmt.Sprintf("script is %d bytes; policy maximum is %d", scriptBytes, policy.Limits.MaxScriptBytes),
+			"Split and review the script before execution.",
+		))
+	} else {
+		lineCount := scriptLineCount(req)
+		if lineCount > policy.Limits.MaxScriptLines {
+			matches = append(matches, newMatch(
+				tool.PermissionActionAsk,
+				RiskLevelMedium,
+				"limits.script_lines",
+				fmt.Sprintf("script contains %d lines; policy maximum is %d", lineCount, policy.Limits.MaxScriptLines),
+				"Split and review the script before execution.",
+			))
+		}
+	}
+	if len(req.SessionInput) > policy.Limits.MaxSessionInputBytes {
+		matches = append(matches, newMatch(
+			tool.PermissionActionAsk,
+			RiskLevelHigh,
+			"limits.session_input_bytes",
+			fmt.Sprintf("session input is %d bytes; policy maximum is %d", len(req.SessionInput), policy.Limits.MaxSessionInputBytes),
+			"Send a smaller, reviewable input or restart with a bounded non-interactive command.",
+		))
+	}
+	return matches
+}
+
+func scriptByteCount(req Request) int {
+	total := len(req.Script)
+	maxInt := int(^uint(0) >> 1)
+	for _, block := range req.CodeBlocks {
+		if len(block.Code) > maxInt-total {
+			return maxInt
+		}
+		total += len(block.Code)
+	}
+	return total
+}
+
+func requestExceedsScanBounds(req Request, policy Policy) bool {
+	return len(req.Command) > policy.Limits.MaxCommandBytes ||
+		len(req.SessionInput) > policy.Limits.MaxSessionInputBytes ||
+		scriptByteCount(req) > policy.Limits.MaxScriptBytes ||
+		scriptLineCount(req) > policy.Limits.MaxScriptLines
+}
+
+func scriptLineCount(req Request) int {
+	total := countScriptLines(req.Script)
+	for _, block := range req.CodeBlocks {
+		total += countScriptLines(block.Code)
+	}
+	return total
+}
 func countScriptLines(script string) int {
 	if script == "" {
 		return 0
@@ -215,18 +324,30 @@ func scanEnvironment(req Request, policy Policy) []Match {
 	sort.Strings(keys)
 	matches := make([]Match, 0, len(keys))
 	for _, key := range keys {
-		if listContainsFold(policy.Environment.DeniedVariables, key) {
-			matches = append(matches, newMatch(
-				tool.PermissionActionDeny,
-				RiskLevelCritical,
-				"env.denied",
-				fmt.Sprintf("environment variable %q can alter execution or load untrusted code", key),
-				"Remove the variable and pass only explicitly allowlisted environment keys.",
-			))
+		value := req.Env[key]
+		if envscrub.IsMalformedKey(key) {
+			matches = append(matches, malformedEnvironmentMatch(key))
 			continue
 		}
-		if len(policy.Environment.AllowedVariables) > 0 &&
-			!listContainsFold(policy.Environment.AllowedVariables, key) {
+		if envscrub.IsBlocked(key, runtime.GOOS == "windows") ||
+			listContainsFold(policy.Environment.DeniedVariables, key) {
+			matches = append(matches, deniedEnvironmentMatch(key))
+			continue
+		}
+		matches = append(matches, scanEnvironmentControl(key, value, policy)...)
+		if !isNetworkRoutingEnvironment(strings.ToUpper(key)) {
+			matches = append(matches, scanTextHazards(value, policy)...)
+		}
+		if containsActiveShellExpansion(value) {
+			matches = append(matches, newMatch(
+				tool.PermissionActionDeny,
+				RiskLevelHigh,
+				"env.dynamic",
+				fmt.Sprintf("environment variable %q contains dynamic shell expansion", key),
+				"Pass a literal reviewed value without shell or command expansion.",
+			))
+		}
+		if !listContainsFold(policy.Environment.AllowedVariables, key) {
 			matches = append(matches, newMatch(
 				tool.PermissionActionAsk,
 				RiskLevelMedium,
@@ -239,9 +360,135 @@ func scanEnvironment(req Request, policy Policy) []Match {
 	return matches
 }
 
+func malformedEnvironmentMatch(key string) Match {
+	return newMatch(
+		tool.PermissionActionDeny,
+		RiskLevelCritical,
+		"env.malformed",
+		fmt.Sprintf("environment variable name %q is malformed", key),
+		"Use a portable POSIX environment variable name without separators or shell metacharacters.",
+	)
+}
+
+func deniedEnvironmentMatch(key string) Match {
+	return newMatch(
+		tool.PermissionActionDeny,
+		RiskLevelCritical,
+		"env.denied",
+		fmt.Sprintf("environment variable %q can alter execution or load untrusted code", key),
+		"Remove the variable and pass only explicitly allowlisted environment keys.",
+	)
+}
+
+func scanEnvironmentControl(key, value string, policy Policy) []Match {
+	upper := strings.ToUpper(key)
+	if isGitExecutionEnvironment(upper) ||
+		upper == "GOFLAGS" && hasUnsafeGoFlags(value) {
+		return []Match{newMatch(
+			tool.PermissionActionDeny,
+			RiskLevelCritical,
+			"env.execution_control",
+			fmt.Sprintf("environment variable %q can redirect the executable or helper chain", key),
+			"Remove execution-control flags and configure the sandbox image explicitly.",
+		)}
+	}
+	if isNetworkRoutingEnvironment(upper) {
+		return scanEnvironmentNetwork(key, value, policy)
+	}
+	return nil
+}
+
+func isGitExecutionEnvironment(key string) bool {
+	return key == "GIT_SSH" || key == "GIT_SSH_COMMAND" ||
+		key == "GIT_ASKPASS" || key == "SSH_ASKPASS" ||
+		strings.HasPrefix(key, "GIT_CONFIG_")
+}
+
+func hasUnsafeGoFlags(value string) bool {
+	for _, field := range strings.Fields(value) {
+		lower := strings.ToLower(field)
+		if lower == "-exec" || strings.HasPrefix(lower, "-exec=") ||
+			lower == "-toolexec" || strings.HasPrefix(lower, "-toolexec=") {
+			return true
+		}
+	}
+	return false
+}
+
+func isNetworkRoutingEnvironment(key string) bool {
+	switch key {
+	case "GOPROXY", "GONOPROXY", "HTTP_PROXY", "HTTPS_PROXY",
+		"ALL_PROXY", "NO_PROXY":
+		return true
+	default:
+		return false
+	}
+}
+
+func scanEnvironmentNetwork(key, value string, policy Policy) []Match {
+	value = strings.TrimSpace(value)
+	if value == "" || strings.EqualFold(value, "direct") ||
+		strings.EqualFold(value, "off") {
+		return nil
+	}
+	hosts := environmentNetworkHosts(value)
+	if len(hosts) == 0 {
+		return []Match{newMatch(
+			policy.Network.DefaultAction,
+			RiskLevelHigh,
+			"network.review",
+			fmt.Sprintf("environment variable %q has no statically verifiable network destination", key),
+			"Use an explicit allowlisted proxy endpoint or remove the routing override.",
+		)}
+	}
+	matches := make([]Match, 0, len(hosts))
+	for _, host := range hosts {
+		if domainAllowed(host, policy.Network.AllowedDomains) {
+			continue
+		}
+		matches = append(matches, newMatch(
+			policy.Network.DefaultAction,
+			RiskLevelHigh,
+			"network.denied",
+			fmt.Sprintf("environment variable %q routes traffic to non-allowlisted host %q", key, host),
+			"Use an allowlisted proxy endpoint and enforce the same egress policy in the sandbox.",
+		))
+	}
+	return matches
+}
+
+func environmentNetworkHosts(value string) []string {
+	var hosts []string
+	for _, field := range strings.FieldsFunc(value, func(character rune) bool {
+		return character == ',' || character == '|' || character == ' '
+	}) {
+		field = strings.TrimSpace(field)
+		if field == "" || strings.EqualFold(field, "direct") ||
+			strings.EqualFold(field, "off") {
+			continue
+		}
+		if strings.Contains(field, "://") {
+			hosts = append(hosts, hostFromURL(field))
+			continue
+		}
+		hosts = append(hosts, normalizeBareNetworkHost(field))
+	}
+	return compactHosts(hosts)
+}
+
 func scanDeniedCWD(req Request, policy Policy) []Match {
 	if req.CWD == "" {
 		return nil
+	}
+	if (req.Backend == BackendWorkspace || req.Backend == BackendSkill) &&
+		unsafeWorkspaceRelativePath(req.CWD) {
+		return []Match{newMatch(
+			tool.PermissionActionDeny,
+			RiskLevelHigh,
+			"workspace.cwd",
+			"working directory escapes or bypasses the workspace-relative boundary",
+			"Use a reviewed workspace-relative working directory.",
+		)}
 	}
 	for _, denied := range policy.Paths.Denied {
 		if containsPathReference(req.CWD, denied) {
@@ -263,7 +510,25 @@ func scanCommand(command string, policy Policy) []Match {
 		return nil
 	}
 	matches := make([]Match, 0, 6)
-	matches = append(matches, scanTextHazards(trimmed, policy)...)
+	matches = append(matches, scanLiteralTextHazards(trimmed, policy)...)
+	if shellInfiniteLoopPattern.MatchString(trimmed) {
+		matches = append(matches, newMatch(
+			tool.PermissionActionDeny,
+			RiskLevelHigh,
+			"resource.infinite_loop",
+			"shell command starts a syntactically unbounded loop",
+			"Add an explicit iteration bound, cancellation check, and timeout.",
+		))
+	}
+	if rawCommandRequestsDestructiveDelete(trimmed) {
+		matches = append(matches, newMatch(
+			tool.PermissionActionDeny,
+			RiskLevelCritical,
+			"destructive.delete",
+			"command starts a recursive, forced, or broad deletion",
+			"Use a scoped workspace cleanup API with verified paths and no recursive host deletion.",
+		))
+	}
 
 	if containsActiveSystemWrite(trimmed) {
 		matches = append(matches, newMatch(
@@ -296,9 +561,9 @@ func scanCommand(command string, policy Policy) []Match {
 	pipeline, err := shellsafe.Parse(trimmed)
 	if err != nil {
 		matches = append(matches, newMatch(
-			policy.Actions.Unparseable,
+			policy.Actions.Unparsable,
 			RiskLevelHigh,
-			"shell.unparseable",
+			"shell.unparsable",
 			"command is outside the conservative shell grammar: "+safeParserError(err),
 			"Use literal argv and simple pipelines, or require human review.",
 		))
@@ -310,13 +575,30 @@ func scanCommand(command string, policy Policy) []Match {
 	return matches
 }
 
+func rawCommandRequestsDestructiveDelete(command string) bool {
+	fields := strings.Fields(command)
+	if len(fields) < 2 {
+		return false
+	}
+	name := commandBase(strings.Trim(fields[0], "'\""))
+	return isDestructiveDelete(name, fields[1:])
+}
+
 func scanCommandSegment(argv []string, policy Policy) []Match {
 	if len(argv) == 0 {
 		return nil
 	}
 	name := commandBase(argv[0])
 	matches := make([]Match, 0, 4)
-	if _, ok := shellWrappers[name]; ok {
+	for _, arg := range argv {
+		matches = append(matches, scanLiteralTextHazards(arg, policy)...)
+	}
+	if scansExplicitNetworkArguments(name) {
+		matches = append(matches, scanURLHazards(
+			strings.Join(argv[1:], " "), policy,
+		)...)
+	}
+	if isSafetyShellWrapper(argv) || commandCanReExecute(name, argv[1:]) {
 		matches = append(matches, newMatch(
 			tool.PermissionActionDeny,
 			RiskLevelHigh,
@@ -343,6 +625,18 @@ func scanCommandSegment(argv []string, policy Policy) []Match {
 			"Write only inside the isolated workspace and export a bounded artifact.",
 		))
 	}
+	if name == "git" {
+		if hasUnsafeGitExecutionOption(argv[1:]) {
+			matches = append(matches, newMatch(
+				tool.PermissionActionDeny,
+				RiskLevelHigh,
+				"git.execution_config",
+				"git execution configuration can redirect helpers or inject commands",
+				"Remove dynamic git configuration and use a reviewed repository setup.",
+			))
+		}
+		matches = append(matches, scanGitNetwork(argv[1:], policy)...)
+	}
 
 	if commandMatches(policy.Commands.Denied, argv[0]) {
 		matches = append(matches, newMatch(
@@ -362,7 +656,7 @@ func scanCommandSegment(argv []string, policy Policy) []Match {
 			"Obtain approval before executing this command.",
 		))
 	}
-	if len(policy.Commands.Allowed) > 0 && !commandMatches(policy.Commands.Allowed, argv[0]) {
+	if !commandAllowed(policy.Commands.Allowed, argv[0]) {
 		matches = append(matches, newMatch(
 			policy.Actions.UnlistedCommand,
 			RiskLevelMedium,
@@ -390,7 +684,7 @@ func scanCommandSegment(argv []string, policy Policy) []Match {
 			"Pin and review dependencies, then install them while building the sandbox image.",
 		))
 	}
-	if name == "sleep" && sleepExceeds(argv[1:], policy.Limits.MaxSleepSeconds) {
+	if sleepCommandExceeds(name, argv[1:], policy.Limits.MaxSleepSeconds) {
 		matches = append(matches, newMatch(
 			tool.PermissionActionDeny,
 			RiskLevelMedium,
@@ -414,8 +708,65 @@ func scanCommandSegment(argv []string, policy Policy) []Match {
 	return matches
 }
 
-func scanTextHazards(text string, policy Policy) []Match {
-	matches := make([]Match, 0, 4)
+func commandCanReExecute(name string, args []string) bool {
+	switch name {
+	case "find":
+		return containsVerb(args, "-exec", "-execdir", "-ok", "-okdir")
+	case "xargs", "env", "nohup":
+		return true
+	case "sed":
+		return sedCanReExecute(args)
+	case "rg":
+		for index := range args {
+			if _, ok := optionValueAt(args, index, "--pre"); ok {
+				return true
+			}
+		}
+	case "tar":
+		return tarCanReExecute(args)
+	}
+	return false
+}
+
+func sedCanReExecute(args []string) bool {
+	for _, arg := range args {
+		lower := strings.ToLower(strings.TrimSpace(arg))
+		if strings.HasPrefix(lower, "e ") || strings.HasPrefix(lower, "e\t") ||
+			strings.Contains(lower, ";e ") || strings.Contains(lower, "; e ") ||
+			strings.HasPrefix(lower, "--expression=e ") ||
+			strings.HasPrefix(lower, "--expression=e\t") {
+			return true
+		}
+	}
+	return false
+}
+
+func tarCanReExecute(args []string) bool {
+	for index := range args {
+		if value, ok := optionValueAt(args, index, "--checkpoint-action"); ok &&
+			strings.HasPrefix(strings.ToLower(strings.TrimSpace(value)), "exec=") {
+			return true
+		}
+		for _, option := range []string{
+			"-I", "--info-script", "--new-volume-script",
+			"--to-command", "--use-compress-program",
+		} {
+			if _, ok := optionValueAt(args, index, option); ok {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func isSafetyShellWrapper(argv []string) bool {
+	if len(argv) == 0 || !shellsafe.IsImplicitlyDenied(argv[0]) {
+		return false
+	}
+	return commandBase(argv[0]) != "printf" || hasShortOption(argv[1:], "v")
+}
+func scanLiteralTextHazards(text string, policy Policy) []Match {
+	matches := make([]Match, 0, 2)
 	if marker := credentialReference(text); marker != "" {
 		matches = append(matches, newMatch(
 			tool.PermissionActionDeny,
@@ -436,6 +787,11 @@ func scanTextHazards(text string, policy Policy) []Match {
 			))
 		}
 	}
+	return matches
+}
+
+func scanTextHazards(text string, policy Policy) []Match {
+	matches := scanLiteralTextHazards(text, policy)
 	if containsSourceDelete(text) {
 		matches = append(matches, newMatch(
 			tool.PermissionActionDeny,
@@ -454,7 +810,13 @@ func scanTextHazards(text string, policy Policy) []Match {
 			"Add an explicit iteration bound, cancellation check, and timeout.",
 		))
 	}
-	for _, rawURL := range urlPattern.FindAllString(text, -1) {
+	matches = append(matches, scanURLHazards(text, policy)...)
+	return matches
+}
+
+func scanURLHazards(text string, policy Policy) []Match {
+	matches := make([]Match, 0, 2)
+	for _, rawURL := range urlPattern.FindAllString(text, maxReportMatches) {
 		host := hostFromURL(rawURL)
 		if host != "" && !domainAllowed(host, policy.Network.AllowedDomains) {
 			matches = append(matches, newMatch(
@@ -469,6 +831,15 @@ func scanTextHazards(text string, policy Policy) []Match {
 	return matches
 }
 
+func scansExplicitNetworkArguments(name string) bool {
+	switch name {
+	case "cat", "echo", "grep", "printf", "rg", "sed", "type":
+		return false
+	default:
+		return true
+	}
+}
+
 func scanScript(language, script string, policy Policy) []Match {
 	if strings.TrimSpace(script) == "" {
 		return nil
@@ -479,7 +850,7 @@ func scanScript(language, script string, policy Policy) []Match {
 		matches := make([]Match, 0, 4)
 		for _, line := range strings.Split(script, "\n") {
 			line = strings.TrimSpace(line)
-			if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "//") {
+			if line == "" || strings.HasPrefix(line, "#") {
 				continue
 			}
 			matches = append(matches, scanCommand(line, policy)...)
@@ -538,7 +909,7 @@ func safeParserError(err error) string {
 func commandBase(command string) string {
 	command = strings.Trim(strings.TrimSpace(command), "'\"")
 	command = strings.ReplaceAll(command, "\\", "/")
-	base := strings.ToLower(filepath.Base(command))
+	base := strings.ToLower(path.Base(command))
 	return strings.TrimSuffix(base, ".exe")
 }
 
@@ -562,6 +933,24 @@ func commandMatches(entries []string, command string) bool {
 			continue
 		}
 		if !strings.ContainsAny(entry, "/\\") && (strings.EqualFold(entry, command) || commandBase(entry) == base) {
+			return true
+		}
+	}
+	return false
+}
+func commandAllowed(entries []string, command string) bool {
+	for _, entry := range entries {
+		if entry == command {
+			return true
+		}
+	}
+	if len(entries) == 0 || strings.ContainsAny(command, "/\\") ||
+		runtime.GOOS == "linux" {
+		return false
+	}
+	base := commandBase(command)
+	for _, entry := range entries {
+		if !strings.ContainsAny(entry, "/\\") && commandBase(entry) == base {
 			return true
 		}
 	}
@@ -597,61 +986,194 @@ func isInlineInterpreter(name string, args []string) bool {
 func isDestructiveDelete(name string, args []string) bool {
 	switch name {
 	case "rm":
-		for _, arg := range args {
-			lower := strings.ToLower(arg)
-			if lower == "--recursive" || lower == "--force" {
-				return true
-			}
-			if strings.HasPrefix(lower, "-") && !strings.HasPrefix(lower, "--") &&
-				strings.ContainsAny(strings.TrimPrefix(lower, "-"), "rf") {
-				return true
-			}
-		}
+		return listContainsFold(args, "--recursive") ||
+			listContainsFold(args, "--force") || hasShortOption(args, "rf")
 	case "rmdir", "del", "erase":
-		for _, arg := range args {
-			lower := strings.ToLower(arg)
-			if lower == "/s" || lower == "/q" || lower == "-r" || lower == "--recursive" {
-				return true
-			}
-		}
+		return listContainsFold(args, "/s") || listContainsFold(args, "/q") ||
+			listContainsFold(args, "-r") || listContainsFold(args, "--recursive")
 	case "remove-item":
-		for _, arg := range args {
-			lower := strings.ToLower(arg)
-			if lower == "-recurse" || lower == "-force" {
-				return true
-			}
-		}
+		return listContainsFold(args, "-recurse") || listContainsFold(args, "-force")
 	case "git":
-		if len(args) == 0 {
-			break
-		}
-		verb := strings.ToLower(args[0])
-		if verb == "clean" {
-			for _, arg := range args[1:] {
-				lower := strings.ToLower(arg)
-				if lower == "-n" || lower == "--dry-run" {
-					return false
-				}
-			}
-			for _, arg := range args[1:] {
-				lower := strings.ToLower(arg)
-				if lower == "--force" || strings.HasPrefix(lower, "-") &&
-					!strings.HasPrefix(lower, "--") && strings.Contains(lower[1:], "f") {
-					return true
-				}
-			}
-		}
-		if verb == "reset" {
-			for _, arg := range args[1:] {
-				if strings.EqualFold(arg, "--hard") {
-					return true
-				}
-			}
-		}
+		return isDestructiveGit(args)
 	case "find":
 		return listContainsFold(args, "-delete")
+	default:
+		return false
+	}
+}
+
+func isDestructiveGit(args []string) bool {
+	subcommand, options := gitSubcommand(args)
+	switch subcommand {
+	case "clean":
+		if listContainsFold(options, "--dry-run") || hasShortOption(options, "n") {
+			return false
+		}
+		return listContainsFold(options, "--force") || hasShortOption(options, "f")
+	case "reset":
+		return listContainsFold(options, "--hard")
+	default:
+		return false
+	}
+}
+
+func gitSubcommand(args []string) (string, []string) {
+	for index := 0; index < len(args); index++ {
+		arg := args[index]
+		if arg == "--" {
+			if index+1 < len(args) {
+				return strings.ToLower(args[index+1]), args[index+2:]
+			}
+			return "", nil
+		}
+		if gitGlobalOptionConsumesValue(arg) {
+			if !strings.Contains(arg, "=") {
+				index++
+			}
+			continue
+		}
+		if strings.HasPrefix(arg, "-C") && len(arg) > 2 {
+			continue
+		}
+		if strings.HasPrefix(arg, "-c") && len(arg) > 2 {
+			continue
+		}
+		if strings.HasPrefix(arg, "-") {
+			continue
+		}
+		return strings.ToLower(arg), args[index+1:]
+	}
+	return "", nil
+}
+
+func gitGlobalOptionConsumesValue(arg string) bool {
+	lower := strings.ToLower(arg)
+	for _, option := range []string{
+		"-C", "-c", "--config-env", "--exec-path", "--git-dir",
+		"--namespace", "--super-prefix", "--work-tree",
+	} {
+		if arg == option || lower == strings.ToLower(option) ||
+			strings.HasPrefix(lower, strings.ToLower(option)+"=") {
+			return true
+		}
 	}
 	return false
+}
+
+func hasUnsafeGitExecutionOption(args []string) bool {
+	for _, arg := range args {
+		lower := strings.ToLower(arg)
+		if arg == "-c" || strings.HasPrefix(arg, "-c") && len(arg) > 2 ||
+			lower == "--config-env" || strings.HasPrefix(lower, "--config-env=") ||
+			lower == "--exec-path" || strings.HasPrefix(lower, "--exec-path=") {
+			return true
+		}
+	}
+	return false
+}
+
+func hasShortOption(args []string, options string) bool {
+	for _, arg := range args {
+		lower := strings.ToLower(arg)
+		if strings.HasPrefix(lower, "-") && !strings.HasPrefix(lower, "--") &&
+			strings.ContainsAny(strings.TrimPrefix(lower, "-"), options) {
+			return true
+		}
+	}
+	return false
+}
+
+func scanGitNetwork(args []string, policy Policy) []Match {
+	verb, rest, ok := gitNetworkInvocation(args)
+	if !ok {
+		return nil
+	}
+	hosts := make([]string, 0, 2)
+	for _, candidate := range rest {
+		if host := gitRemoteHost(candidate); host != "" {
+			hosts = append(hosts, host)
+		}
+	}
+	hosts = compactHosts(hosts)
+	if len(hosts) == 0 {
+		if verb == "clone" && hasLocalGitSource(rest) {
+			return nil
+		}
+		return []Match{newMatch(
+			policy.Network.DefaultAction,
+			RiskLevelHigh,
+			"network.review",
+			fmt.Sprintf("git %s has no statically verifiable destination", verb),
+			"Use an explicit allowlisted remote URL or require human review.",
+		)}
+	}
+	matches := make([]Match, 0, len(hosts))
+	for _, host := range hosts {
+		if domainAllowed(host, policy.Network.AllowedDomains) {
+			continue
+		}
+		matches = append(matches, newMatch(
+			policy.Network.DefaultAction,
+			RiskLevelHigh,
+			"network.denied",
+			fmt.Sprintf("network destination %q is not allowlisted", host),
+			"Use an allowlisted domain and enforce the same restriction in the sandbox network policy.",
+		))
+	}
+	return matches
+}
+
+func gitNetworkInvocation(args []string) (string, []string, bool) {
+	verb, rest := gitSubcommand(args)
+	switch verb {
+	case "clone", "fetch", "ls-remote", "pull", "push", "submodule":
+		return verb, rest, true
+	default:
+		return "", nil, false
+	}
+}
+
+func gitRemoteHost(candidate string) string {
+	candidate = strings.TrimSpace(candidate)
+	lower := strings.ToLower(candidate)
+	if candidate == "" || strings.HasPrefix(candidate, "-") ||
+		strings.HasPrefix(lower, "file://") || isWindowsDrivePath(candidate) {
+		return ""
+	}
+	if strings.Contains(candidate, "://") {
+		parsed, err := url.Parse(candidate)
+		if err != nil {
+			return ""
+		}
+		return canonicalHost(parsed.Hostname())
+	}
+	if strings.Contains(candidate, "@") || strings.Contains(candidate, ":") {
+		return canonicalHost(normalizeBareNetworkHost(candidate))
+	}
+	return ""
+}
+
+func hasLocalGitSource(args []string) bool {
+	for _, candidate := range args {
+		if candidate == "" || strings.HasPrefix(candidate, "-") {
+			continue
+		}
+		lower := strings.ToLower(candidate)
+		if strings.HasPrefix(lower, "file://") ||
+			strings.HasPrefix(candidate, ".") ||
+			strings.ContainsAny(candidate, "/\\") ||
+			filepath.IsAbs(candidate) || isWindowsDrivePath(candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+func isWindowsDrivePath(value string) bool {
+	return len(value) >= 3 &&
+		((value[0] >= 'a' && value[0] <= 'z') ||
+			(value[0] >= 'A' && value[0] <= 'Z')) &&
+		value[1] == ':' && (value[2] == '\\' || value[2] == '/')
 }
 
 func containsSourceDelete(source string) bool {
@@ -669,17 +1191,44 @@ func containsSourceDelete(source string) bool {
 }
 
 func isDependencyChange(name string, args []string) bool {
-	if len(args) == 0 {
-		return false
-	}
-	verb := strings.ToLower(args[0])
 	switch name {
-	case "go", "cargo":
-		return verb == "install"
-	case "npm", "pnpm", "yarn", "pip", "pip3", "uv":
-		return verb == "install" || verb == "add" || verb == "sync"
+	case "go":
+		return containsVerb(args, "get", "install")
+	case "cargo":
+		return containsVerb(args, "add", "install", "update")
+	case "npm", "pnpm", "yarn":
+		return containsVerb(args, "add", "ci", "i", "install", "update")
+	case "pip", "pip3", "uv":
+		return containsVerb(args, "add", "install", "sync")
+	case "python", "python3", "py":
+		return pythonRunsPackageInstaller(args)
+	case "npx":
+		return true
 	case "apt", "apt-get", "apk", "yum", "dnf", "brew", "choco", "winget":
-		return verb == "install" || verb == "add" || verb == "upgrade"
+		return containsVerb(args, "install", "add", "upgrade")
+	}
+	return false
+}
+
+func pythonRunsPackageInstaller(args []string) bool {
+	for index := 0; index+2 < len(args); index++ {
+		if args[index] == "-m" &&
+			(strings.EqualFold(args[index+1], "pip") ||
+				strings.EqualFold(args[index+1], "pip3")) &&
+			containsVerb(args[index+2:], "install", "sync") {
+			return true
+		}
+	}
+	return false
+}
+
+func containsVerb(args []string, verbs ...string) bool {
+	for _, arg := range args {
+		for _, verb := range verbs {
+			if strings.EqualFold(arg, verb) {
+				return true
+			}
+		}
 	}
 	return false
 }
@@ -687,8 +1236,10 @@ func isDependencyChange(name string, args []string) bool {
 func sourceChangesDependencies(source string) bool {
 	lower := strings.ToLower(source)
 	markers := []string{
-		"pip install ", "pip3 install ", "npm install ", "npm add ",
-		"go install ", "apt install ", "apt-get install ", "cargo install ",
+		"pip install ", "pip3 install ", "-m pip install ",
+		"-m pip3 install ", "npm install ", "npm add ", "npm ci",
+		"npm i ", "go get ", "go install ", "apt install ",
+		"apt-get install ", "cargo install ",
 	}
 	for _, marker := range markers {
 		if strings.Contains(lower, marker) {
@@ -698,13 +1249,79 @@ func sourceChangesDependencies(source string) bool {
 	return false
 }
 
+func sleepCommandExceeds(name string, args []string, maximum int) bool {
+	switch name {
+	case "sleep":
+		return sleepExceeds(args, maximum)
+	case "start-sleep":
+		return startSleepExceeds(args, maximum)
+	default:
+		return false
+	}
+}
+
 func sleepExceeds(args []string, maximum int) bool {
+	total := 0.0
+	afterOptions := false
+	for _, arg := range args {
+		if !afterOptions && arg == "--" {
+			afterOptions = true
+			continue
+		}
+		if !afterOptions && (arg == "--help" || arg == "--version") {
+			return false
+		}
+		seconds, ok := parseSleepSeconds(arg)
+		if !ok || seconds < 0 {
+			continue
+		}
+		total += seconds
+		if total > float64(maximum) {
+			return true
+		}
+	}
+	return false
+}
+
+func startSleepExceeds(args []string, maximum int) bool {
 	if len(args) == 0 {
 		return false
 	}
-	raw := strings.TrimSuffix(strings.ToLower(args[0]), "s")
-	seconds, err := strconv.ParseFloat(raw, 64)
-	return err == nil && seconds > float64(maximum)
+	factor := 1.0
+	raw := args[0]
+	for index, arg := range args {
+		switch strings.ToLower(arg) {
+		case "-seconds", "-s":
+			if index+1 < len(args) {
+				raw = args[index+1]
+			}
+		case "-milliseconds", "-ms":
+			factor = 0.001
+			if index+1 < len(args) {
+				raw = args[index+1]
+			}
+		}
+	}
+	seconds, ok := parseSleepSeconds(raw)
+	return ok && seconds*factor > float64(maximum)
+}
+
+func parseSleepSeconds(raw string) (float64, bool) {
+	raw = strings.TrimSpace(strings.ToLower(raw))
+	if raw == "infinity" || raw == "inf" {
+		return float64(^uint(0) >> 1), true
+	}
+	if seconds, err := strconv.ParseFloat(raw, 64); err == nil {
+		return seconds, true
+	}
+	if duration, err := time.ParseDuration(raw); err == nil {
+		return duration.Seconds(), true
+	}
+	if strings.HasSuffix(raw, "d") {
+		days, err := strconv.ParseFloat(strings.TrimSuffix(raw, "d"), 64)
+		return days * 24 * 60 * 60, err == nil
+	}
+	return 0, false
 }
 
 func isUnboundedOutput(name string, args []string) bool {
@@ -729,17 +1346,18 @@ func scanNetworkCommand(name string, args []string, policy Policy) []Match {
 	if networkInfoOnly(args) {
 		return nil
 	}
+	matches := scanNetworkOptions(name, args, policy)
 	hosts := networkHosts(name, args)
 	if len(hosts) == 0 {
-		return []Match{newMatch(
+		matches = append(matches, newMatch(
 			policy.Network.DefaultAction,
 			RiskLevelHigh,
 			"network.review",
 			fmt.Sprintf("network command %q has no statically verifiable destination", name),
 			"Provide an explicit allowlisted URL or require human review.",
-		)}
+		))
+		return matches
 	}
-	matches := make([]Match, 0, len(hosts))
 	for _, host := range hosts {
 		if domainAllowed(host, policy.Network.AllowedDomains) {
 			continue
@@ -755,56 +1373,544 @@ func scanNetworkCommand(name string, args []string, policy Policy) []Match {
 	return matches
 }
 
-func networkInfoOnly(args []string) bool {
-	if len(args) != 1 {
+func scanNetworkOptions(name string, args []string, policy Policy) []Match {
+	matches := make([]Match, 0, 4)
+	if name == "scp" && scpUploadsLocalFile(args) {
+		matches = append(matches, newMatch(
+			tool.PermissionActionAsk,
+			RiskLevelHigh,
+			"network.local_upload",
+			"scp uploads a local path to a remote destination",
+			"Review the source path and enforce sandbox egress before uploading.",
+		))
+	}
+	for index, arg := range args {
+		lower := strings.ToLower(arg)
+		if match, ok := networkCredentialOption(name, args, index); ok {
+			matches = append(matches, match)
+		}
+		if strings.Contains(lower, "file://") {
+			matches = append(matches, newMatch(
+				tool.PermissionActionDeny,
+				RiskLevelCritical,
+				"network.local_file",
+				fmt.Sprintf("network command %q references a local file URL", name),
+				"Use reviewed workspace file APIs instead of a network client for local files.",
+			))
+		}
+		if isNetworkDynamicConfig(name, args, index) {
+			matches = append(matches, networkOptionMatch(
+				policy, "network.dynamic_config",
+				"network client configuration can add hidden destinations or commands",
+			))
+		}
+		if isNetworkDestinationOverride(arg) ||
+			isSSHRouteOverride(name, args, index) {
+			matches = append(matches, networkOptionMatch(
+				policy, "network.destination_override",
+				"network option overrides DNS, connection, or proxy routing",
+			))
+		}
+		if isSSHForwardingOption(name, args, index) {
+			matches = append(matches, networkOptionMatch(
+				policy, "network.forwarding",
+				"SSH forwarding can expose or reach destinations outside the approved route",
+			))
+		}
+		if arg == "-L" || lower == "--location" ||
+			lower == "--location-trusted" {
+			matches = append(matches, networkOptionMatch(
+				policy, "network.redirect",
+				"automatic redirects can leave the statically approved destination",
+			))
+		}
+		if isNetworkLocalUpload(name, args, index) {
+			matches = append(matches, newMatch(
+				tool.PermissionActionAsk,
+				RiskLevelHigh,
+				"network.local_upload",
+				"network command reads local content for upload",
+				"Review the source path and payload, then enforce sandbox egress and artifact limits.",
+			))
+		}
+	}
+	return matches
+}
+
+func isNetworkDynamicConfig(name string, args []string, index int) bool {
+	arg := args[index]
+	lower := strings.ToLower(arg)
+	switch name {
+	case "curl":
+		return isCurlDynamicConfig(arg, lower)
+	case "wget":
+		return isWgetDynamicConfig(arg, lower)
+	case "ssh", "scp", "sftp":
+		return isSSHDynamicConfig(args, index, arg)
+	default:
 		return false
 	}
-	for _, arg := range args {
-		switch strings.ToLower(arg) {
-		case "--version", "-v", "--help", "-h":
+}
+
+func isCurlDynamicConfig(arg, lower string) bool {
+	return arg == "-K" || strings.HasPrefix(arg, "-K") && len(arg) > 2 ||
+		lower == "--config" || strings.HasPrefix(lower, "--config=")
+}
+
+func isWgetDynamicConfig(arg, lower string) bool {
+	return arg == "-i" || strings.HasPrefix(arg, "-i") && len(arg) > 2 ||
+		arg == "-e" || strings.HasPrefix(arg, "-e") && len(arg) > 2 ||
+		lower == "--input-file" || strings.HasPrefix(lower, "--input-file=") ||
+		lower == "--execute" || strings.HasPrefix(lower, "--execute=")
+}
+
+func isSSHDynamicConfig(args []string, index int, arg string) bool {
+	if arg == "-F" || strings.HasPrefix(arg, "-F") && len(arg) > 2 {
+		return true
+	}
+	value, ok := shortOptionValue(args, index, "-o")
+	if !ok {
+		return false
+	}
+	value = strings.ToLower(value)
+	return strings.HasPrefix(value, "proxycommand=") ||
+		strings.HasPrefix(value, "localcommand=")
+}
+
+func isSSHRouteOverride(name string, args []string, index int) bool {
+	if !isSSHFamily(name) {
+		return false
+	}
+	for _, option := range []string{"-J", "-W"} {
+		if _, ok := shortOptionValue(args, index, option); ok {
+			return true
+		}
+	}
+	value, ok := shortOptionValue(args, index, "-o")
+	if !ok {
+		return false
+	}
+	value = strings.ToLower(strings.TrimSpace(value))
+	for _, prefix := range []string{
+		"hostname=", "hostname ",
+		"proxyjump=", "proxyjump ",
+		"proxycommand=", "proxycommand ",
+		"localcommand=", "localcommand ",
+	} {
+		if strings.HasPrefix(value, prefix) {
 			return true
 		}
 	}
 	return false
 }
 
-func networkHosts(name string, args []string) []string {
-	seen := map[string]struct{}{}
-	var hosts []string
-	appendHost := func(host string) {
-		host = canonicalHost(host)
-		if host == "" {
-			return
+func isSSHForwardingOption(name string, args []string, index int) bool {
+	if !isSSHFamily(name) {
+		return false
+	}
+	for _, option := range []string{"-D", "-L", "-R"} {
+		if _, ok := shortOptionValue(args, index, option); ok {
+			return true
 		}
-		if _, ok := seen[host]; ok {
-			return
+	}
+	return false
+}
+
+func isSSHFamily(name string) bool {
+	switch name {
+	case "ssh", "scp", "sftp":
+		return true
+	default:
+		return false
+	}
+}
+
+func isNetworkLocalUpload(name string, args []string, index int) bool {
+	switch name {
+	case "curl":
+		for _, option := range []string{"-T", "--upload-file"} {
+			if _, ok := optionValueAt(args, index, option); ok {
+				return true
+			}
+		}
+		for _, option := range []string{
+			"-d", "--data", "--data-binary", "--data-raw",
+		} {
+			value, ok := optionValueAt(args, index, option)
+			if ok && strings.HasPrefix(value, "@") {
+				return true
+			}
+		}
+		for _, option := range []string{"--data-urlencode", "--url-query"} {
+			value, ok := optionValueAt(args, index, option)
+			if ok && strings.Contains(value, "@") {
+				return true
+			}
+		}
+		for _, option := range []string{"-F", "--form"} {
+			value, ok := optionValueAt(args, index, option)
+			if ok && (strings.Contains(value, "=@") ||
+				strings.Contains(value, "=<")) {
+				return true
+			}
+		}
+	case "wget":
+		for _, option := range []string{"--post-file", "--body-file"} {
+			if _, ok := optionValueAt(args, index, option); ok {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func networkCredentialOption(name string, args []string, index int) (Match, bool) {
+	switch name {
+	case "curl":
+		return curlCredentialOption(args, index)
+	case "wget":
+		return wgetCredentialOption(args, index)
+	case "ssh", "scp", "sftp":
+		if _, ok := optionValueAt(args, index, "-i"); ok {
+			return credentialFileOptionMatch("SSH identity file"), true
+		}
+	}
+	return Match{}, false
+}
+
+func curlCredentialOption(args []string, index int) (Match, bool) {
+	lower := strings.ToLower(args[index])
+	if lower == "--netrc" || lower == "--netrc-optional" {
+		return credentialFileOptionMatch("curl netrc lookup"), true
+	}
+	for _, option := range []string{"--netrc-file", "--key", "--cert"} {
+		if _, ok := optionValueAt(args, index, option); ok {
+			return credentialFileOptionMatch("curl credential file"), true
+		}
+	}
+	for _, option := range []string{"-b", "--cookie"} {
+		if value, ok := optionValueAt(args, index, option); ok &&
+			value != "" && !strings.ContainsAny(value, "=;") {
+			return credentialFileOptionMatch("curl cookie file"), true
+		}
+	}
+	for _, option := range []string{"-u", "--user", "--proxy-user"} {
+		if _, ok := optionValueAt(args, index, option); ok {
+			return newMatch(
+				tool.PermissionActionAsk, RiskLevelHigh, "credential.inline",
+				"network command includes inline authentication material",
+				"Use a sandbox-scoped secret injection mechanism and keep credentials out of command arguments.",
+			), true
+		}
+	}
+	for _, option := range []string{"-H", "--header"} {
+		if value, ok := optionValueAt(args, index, option); ok &&
+			strings.HasPrefix(value, "@") {
+			return localFileOptionMatch("curl header file"), true
+		}
+	}
+	return Match{}, false
+}
+
+func wgetCredentialOption(args []string, index int) (Match, bool) {
+	for _, option := range []string{
+		"--load-cookies", "--certificate", "--private-key",
+	} {
+		if _, ok := optionValueAt(args, index, option); ok {
+			return credentialFileOptionMatch("wget credential file"), true
+		}
+	}
+	if _, ok := optionValueAt(args, index, "--ca-certificate"); ok {
+		return localFileOptionMatch("wget CA file"), true
+	}
+	return Match{}, false
+}
+
+func credentialFileOptionMatch(source string) Match {
+	return newMatch(
+		tool.PermissionActionDeny,
+		RiskLevelCritical,
+		"credential.file",
+		source+" can read authentication material from a local path",
+		"Remove local credential-file access and inject a narrowly scoped secret inside the sandbox.",
+	)
+}
+
+func localFileOptionMatch(source string) Match {
+	return newMatch(
+		tool.PermissionActionAsk,
+		RiskLevelHigh,
+		"network.local_read",
+		source+" reads content from a local path",
+		"Review the source path and use a workspace-contained file before enabling network access.",
+	)
+}
+
+func scpUploadsLocalFile(args []string) bool {
+	positionals := networkPositionals("scp", args)
+	hasRemote := false
+	hasLocal := false
+	for _, argument := range positionals {
+		if strings.ContainsAny(argument, "@:") {
+			hasRemote = true
+			continue
+		}
+		hasLocal = true
+	}
+	return hasRemote && hasLocal
+}
+
+func networkPositionals(name string, args []string) []string {
+	positionals := make([]string, 0, len(args))
+	skipNext := false
+	for _, argument := range args {
+		if skipNext {
+			skipNext = false
+			continue
+		}
+		if networkOptionConsumesValue(name, argument) {
+			if !networkOptionHasInlineValue(argument) {
+				skipNext = true
+			}
+			continue
+		}
+		if argument != "" && !strings.HasPrefix(argument, "-") {
+			positionals = append(positionals, argument)
+		}
+	}
+	return positionals
+}
+
+func optionValueAt(args []string, index int, option string) (string, bool) {
+	arg := args[index]
+	if arg == option {
+		if index+1 < len(args) {
+			return args[index+1], true
+		}
+		return "", true
+	}
+	if strings.HasPrefix(option, "--") {
+		prefix := option + "="
+		if strings.HasPrefix(strings.ToLower(arg), strings.ToLower(prefix)) {
+			return arg[len(prefix):], true
+		}
+		return "", false
+	}
+	if strings.HasPrefix(arg, option) && len(arg) > len(option) {
+		return arg[len(option):], true
+	}
+	return "", false
+}
+
+func shortOptionValue(args []string, index int, option string) (string, bool) {
+	arg := args[index]
+	if arg == option {
+		if index+1 < len(args) {
+			return args[index+1], true
+		}
+		return "", true
+	}
+	if strings.HasPrefix(arg, option) && len(arg) > len(option) {
+		return arg[len(option):], true
+	}
+	return "", false
+}
+
+func networkOptionMatch(policy Policy, ruleID, evidence string) Match {
+	return newMatch(
+		policy.Network.DefaultAction,
+		RiskLevelHigh,
+		ruleID,
+		evidence,
+		"Remove the routing override or require review with sandbox-enforced egress.",
+	)
+}
+
+func isNetworkDestinationOverride(arg string) bool {
+	lower := strings.ToLower(arg)
+	for _, option := range []string{
+		"--connect-to", "--resolve", "--proxy", "--preproxy",
+		"--interface", "--unix-socket", "--abstract-unix-socket",
+		"--doh-url", "--dns-servers",
+	} {
+		if lower == option || strings.HasPrefix(lower, option+"=") {
+			return true
+		}
+	}
+	return arg == "-x" || strings.HasPrefix(arg, "-x") && len(arg) > 2
+}
+
+func networkInfoOnly(args []string) bool {
+	if len(args) != 1 {
+		return false
+	}
+	switch strings.ToLower(args[0]) {
+	case "--version", "-v", "--help", "-h":
+		return true
+	default:
+		return false
+	}
+}
+
+func networkHosts(name string, args []string) []string {
+	var candidates []string
+	for _, arg := range args {
+		for _, rawURL := range urlPattern.FindAllString(arg, maxReportMatches-len(candidates)) {
+			candidates = append(candidates, hostFromURL(rawURL))
+		}
+	}
+	for _, target := range bareNetworkTargets(name, args) {
+		candidates = append(candidates, normalizeBareNetworkHost(target))
+	}
+	return compactHosts(candidates)
+}
+
+func bareNetworkTargets(name string, args []string) []string {
+	targets := make([]string, 0, 2)
+	skipNext := false
+	for _, arg := range args {
+		if skipNext {
+			skipNext = false
+			continue
+		}
+		if networkOptionConsumesValue(name, arg) {
+			if !networkOptionHasInlineValue(arg) {
+				skipNext = true
+			}
+			continue
+		}
+		if arg == "" || strings.HasPrefix(arg, "-") ||
+			strings.Contains(arg, "://") {
+			continue
+		}
+		switch name {
+		case "curl", "wget":
+			targets = append(targets, arg)
+		case "ssh":
+			if len(targets) == 0 {
+				targets = append(targets, arg)
+			}
+		case "nc", "netcat":
+			if len(targets) == 0 {
+				targets = append(targets, arg)
+			}
+		case "scp", "sftp":
+			if strings.ContainsAny(arg, "@:") {
+				targets = append(targets, arg)
+			}
+		}
+		if len(targets) >= maxReportMatches {
+			break
+		}
+	}
+	return targets
+}
+
+func networkOptionConsumesValue(name, arg string) bool {
+	if matchesLongNetworkOption(arg) {
+		return true
+	}
+	var shortOptions []string
+	switch name {
+	case "curl":
+		shortOptions = []string{
+			"-A", "-b", "-c", "-d", "-e", "-F", "-H", "-o", "-T",
+			"-u", "-x", "-K", "-X",
+		}
+	case "wget":
+		shortOptions = []string{"-O", "-P", "-e", "-i"}
+	case "ssh", "scp", "sftp":
+		shortOptions = []string{
+			"-B", "-b", "-c", "-D", "-E", "-e", "-F", "-I",
+			"-i", "-J", "-L", "-l", "-m", "-O", "-o", "-P",
+			"-p", "-Q", "-R", "-S", "-W", "-w",
+		}
+	case "nc", "netcat":
+		shortOptions = []string{"-i", "-p", "-s", "-w"}
+	}
+	return matchesShortNetworkOption(arg, shortOptions)
+}
+
+func matchesLongNetworkOption(arg string) bool {
+	lower := strings.ToLower(arg)
+	for _, option := range []string{
+		"--abstract-unix-socket", "--alt-svc", "--aws-sigv4",
+		"--bind-address", "--body-data", "--body-file", "--cacert",
+		"--capath", "--cert", "--ciphers", "--config", "--connect-timeout",
+		"--connect-to", "--continue-at", "--cookie", "--cookie-jar",
+		"--data", "--data-binary", "--data-raw", "--data-urlencode",
+		"--directory-prefix", "--dns-interface", "--dns-ipv4-addr",
+		"--dns-ipv6-addr", "--dns-servers", "--dns-timeout", "--doh-url",
+		"--etag-compare",
+		"--etag-save", "--execute", "--form", "--form-string",
+		"--ftp-account", "--header", "--input-file", "--interface",
+		"--key", "--limit-rate", "--local-port", "--max-filesize",
+		"--max-redirs", "--max-time", "--output", "--output-dir",
+		"--output-document", "--parallel-max", "--password", "--post-data",
+		"--post-file", "--preproxy", "--proto", "--proto-default",
+		"--proxy", "--quote", "--quota", "--range", "--rate",
+		"--read-timeout", "--referer", "--request", "--resolve",
+		"--retry", "--retry-delay", "--retry-max-time", "--speed-limit",
+		"--speed-time", "--timeout", "--tls-max", "--tls13-ciphers", "--tries",
+		"--unix-socket", "--upload-file", "--url", "--url-query",
+		"--user", "--user-agent", "--variable", "--wait", "--waitretry",
+	} {
+		if lower == option || strings.HasPrefix(lower, option+"=") {
+			return true
+		}
+	}
+	return false
+}
+
+func matchesShortNetworkOption(arg string, options []string) bool {
+	for _, option := range options {
+		if arg == option || strings.HasPrefix(arg, option) &&
+			len(arg) > len(option) {
+			return true
+		}
+	}
+	return false
+}
+
+func networkOptionHasInlineValue(arg string) bool {
+	if strings.Contains(arg, "=") {
+		return true
+	}
+	return len(arg) > 2 && strings.HasPrefix(arg, "-") &&
+		!strings.HasPrefix(arg, "--")
+}
+
+func normalizeBareNetworkHost(candidate string) string {
+	candidate = strings.TrimSpace(candidate)
+	if at := strings.LastIndex(candidate, "@"); at >= 0 {
+		candidate = candidate[at+1:]
+	}
+	if slash := strings.Index(candidate, "/"); slash >= 0 {
+		candidate = candidate[:slash]
+	}
+	if parsedHost, _, err := net.SplitHostPort(candidate); err == nil {
+		return parsedHost
+	}
+	if colon := strings.Index(candidate, ":"); colon > 0 &&
+		net.ParseIP(candidate) == nil {
+		candidate = candidate[:colon]
+	}
+	return candidate
+}
+
+func compactHosts(candidates []string) []string {
+	seen := make(map[string]struct{}, len(candidates))
+	hosts := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		host := canonicalHost(candidate)
+		if host == "" {
+			continue
+		}
+		if _, exists := seen[host]; exists {
+			continue
 		}
 		seen[host] = struct{}{}
 		hosts = append(hosts, host)
-	}
-	for _, arg := range args {
-		for _, rawURL := range urlPattern.FindAllString(arg, -1) {
-			appendHost(hostFromURL(rawURL))
-		}
-	}
-	if len(hosts) > 0 {
-		return hosts
-	}
-	for _, arg := range args {
-		if strings.HasPrefix(arg, "-") || arg == "" {
-			continue
-		}
-		candidate := arg
-		if at := strings.LastIndex(candidate, "@"); at >= 0 {
-			candidate = candidate[at+1:]
-		}
-		if colon := strings.Index(candidate, ":"); colon > 0 && net.ParseIP(candidate) == nil {
-			candidate = candidate[:colon]
-		}
-		if name == "ssh" || name == "scp" || name == "sftp" || name == "nc" || name == "netcat" {
-			appendHost(candidate)
-			break
-		}
 	}
 	return hosts
 }
@@ -848,16 +1954,8 @@ func credentialReference(text string) string {
 	if privateKeyPattern.MatchString(text) {
 		return "private-key block"
 	}
-	lower := strings.ToLower(strings.ReplaceAll(text, "\\", "/"))
 	for _, marker := range credentialMarkers {
-		normalized := strings.ToLower(strings.ReplaceAll(marker, "\\", "/"))
-		if normalized == ".env" {
-			if containsDotEnv(lower) {
-				return marker
-			}
-			continue
-		}
-		if strings.Contains(lower, normalized) {
+		if containsPathReference(text, marker) {
 			return marker
 		}
 	}
@@ -896,6 +1994,11 @@ func containsPathReference(text, denied string) bool {
 	if denied == "" {
 		return false
 	}
+	for _, candidate := range lexicalPathCandidates(text) {
+		if pathMatchesDenied(candidate, denied) {
+			return true
+		}
+	}
 	if denied == ".env" {
 		return containsDotEnv(text)
 	}
@@ -912,6 +2015,78 @@ func containsPathReference(text, denied string) bool {
 			return true
 		}
 		offset = after
+	}
+	return false
+}
+func lexicalPathCandidates(text string) []string {
+	fields := strings.FieldsFunc(text, func(value rune) bool {
+		switch value {
+		case ' ', '\t', '\r', '\n', '\'', '"', '(', ')', '[', ']', '{', '}',
+			',', ';', '|', '&', '>', '<':
+			return true
+		default:
+			return false
+		}
+	})
+	candidates := make([]string, 0, len(fields)*2)
+	for _, field := range fields {
+		field = strings.TrimSpace(field)
+		if field == "" {
+			continue
+		}
+		candidates = append(candidates, field)
+		if separator := strings.LastIndexAny(field, "=@"); separator >= 0 &&
+			separator+1 < len(field) {
+			candidates = append(candidates, field[separator+1:])
+		}
+	}
+	return candidates
+}
+
+func normalizeLexicalPath(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	value = strings.Trim(value, "\"'")
+	value = strings.ReplaceAll(value, "\\", "/")
+	if strings.HasPrefix(value, "file://") {
+		value = strings.TrimPrefix(value, "file://")
+	}
+	if value == "" {
+		return ""
+	}
+	return path.Clean(value)
+}
+
+func pathMatchesDenied(candidate, denied string) bool {
+	rawDenied := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(denied), "\\", "/"))
+	componentOnly := strings.HasPrefix(rawDenied, "/") &&
+		strings.HasSuffix(rawDenied, "/")
+	candidate = normalizeLexicalPath(candidate)
+	denied = normalizeLexicalPath(rawDenied)
+	if candidate == "" || denied == "" {
+		return false
+	}
+	if denied == ".env" {
+		base := path.Base(candidate)
+		return base == ".env" || strings.HasPrefix(base, ".env.")
+	}
+	if componentOnly {
+		return hasPathComponent(candidate, strings.Trim(denied, "/"))
+	}
+	if strings.HasPrefix(denied, "/") || strings.HasPrefix(denied, "~/") ||
+		(len(denied) >= 3 && denied[1] == ':' && denied[2] == '/') {
+		return candidate == denied || strings.HasPrefix(candidate, denied+"/")
+	}
+	if strings.Contains(denied, "/") {
+		return candidate == denied || strings.HasSuffix(candidate, "/"+denied)
+	}
+	return hasPathComponent(candidate, denied)
+}
+
+func hasPathComponent(candidate, wanted string) bool {
+	for _, component := range strings.Split(candidate, "/") {
+		if component == wanted {
+			return true
+		}
 	}
 	return false
 }

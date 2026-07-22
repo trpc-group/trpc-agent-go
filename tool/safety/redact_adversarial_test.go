@@ -94,3 +94,69 @@ func TestRedactorDoesNotMatchKeyLikeOrdinaryWords(t *testing.T) {
 		t.Fatalf("ordinary text was redacted: count=%d text=%q", count, redacted)
 	}
 }
+
+func TestRedactorCoversShellQuotesMultiwordAndNestedKeys(t *testing.T) {
+	redactor := NewRedactor()
+	for _, test := range []struct {
+		name   string
+		secret string
+		input  string
+	}{
+		{name: "ANSI-C assignment", secret: "supersecret", input: "TOKEN=$'supersecret'"},
+		{name: "ANSI-C flag", secret: "flagsecret", input: "run --token $'flagsecret'"},
+		{name: "multiword password", secret: "correct horse battery staple", input: "password: correct horse battery staple"},
+		{name: "curl short auth", secret: "agent:curl-secret", input: "curl -u agent:curl-secret https://go.dev"},
+		{name: "sshpass short flag", secret: "ssh-secret", input: "sshpass -p ssh-secret ssh host"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			clean, count := redactor.RedactString(test.input)
+			if count == 0 || strings.Contains(clean, test.secret) {
+				t.Fatalf("RedactString() = %q, count=%d", clean, count)
+			}
+			again, secondCount := redactor.RedactString(clean)
+			if again != clean || secondCount != 0 {
+				t.Fatalf("second redaction = %q, count=%d; want unchanged", again, secondCount)
+			}
+		})
+	}
+
+	input := map[string]any{
+		"db.password":    "database phrase",
+		"private_key":    "private material",
+		"tls/passphrase": "key phrase",
+		"dbPassword":     "camel database secret",
+		"serviceToken":   "camel token secret",
+		"tlsPassphrase":  "camel passphrase secret",
+	}
+	clean, count := redactor.RedactValue(input)
+	encoded, err := json.Marshal(clean)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	if count != len(input) {
+		t.Fatalf("redaction count = %d, want %d", count, len(input))
+	}
+	for _, secret := range []string{
+		"database phrase", "private material", "key phrase",
+		"camel database secret", "camel token secret", "camel passphrase secret",
+	} {
+		if strings.Contains(string(encoded), secret) {
+			t.Fatalf("structured redaction leaked %q: %s", secret, encoded)
+		}
+	}
+}
+
+func TestRedactorReplacesNonJSONValues(t *testing.T) {
+	for _, value := range []any{func() {}, make(chan int), complex(1, 2)} {
+		clean, count := NewRedactor().RedactValue(value)
+		if clean != RedactedValue || count == 0 {
+			t.Fatalf("RedactValue(%T) = %#v, %d", value, clean, count)
+		}
+	}
+	for _, value := range []any{true, int64(7), uint(8), 1.5} {
+		clean, count := NewRedactor().RedactValue(value)
+		if clean != value || count != 0 {
+			t.Fatalf("RedactValue(%T) = %#v, %d", value, clean, count)
+		}
+	}
+}

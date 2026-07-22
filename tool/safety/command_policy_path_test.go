@@ -62,8 +62,24 @@ func TestCommandPolicyCannotBeBypassedWithExecutablePath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Scan() error = %v", err)
 	}
+	if report.Decision != tool.PermissionActionAsk || !hasRule(report, "command.not_allowed") {
+		t.Fatalf("bare allow entry admitted executable path: %+v", report)
+	}
+
+	policy.Commands.Allowed = append(policy.Commands.Allowed, "/usr/bin/go")
+	guard, err = New(policy)
+	if err != nil {
+		t.Fatalf("New() with explicit path error = %v", err)
+	}
+	report, err = guard.Scan(
+		context.Background(),
+		commandRequest(BackendWorkspace, "/usr/bin/go test ./tool/safety"),
+	)
+	if err != nil {
+		t.Fatalf("Scan() with explicit path error = %v", err)
+	}
 	if report.Decision != tool.PermissionActionAllow {
-		t.Fatalf("allowed executable path decision = %s, matches=%+v",
+		t.Fatalf("explicit executable path decision = %s, matches=%+v",
 			report.Decision, report.Matches)
 	}
 }

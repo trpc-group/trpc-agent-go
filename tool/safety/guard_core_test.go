@@ -238,6 +238,16 @@ func TestCheckToolPermissionExtractorsFailClosed(t *testing.T) {
 			},
 			decision: tool.PermissionActionAsk,
 		},
+		{
+			name: "unknown executor declaration",
+			request: &tool.PermissionRequest{
+				ToolName: "terminal",
+				Declaration: &tool.Declaration{InputSchema: &tool.Schema{
+					Properties: map[string]*tool.Schema{"command": {Type: "string"}},
+				}},
+			},
+			decision: tool.PermissionActionAsk,
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

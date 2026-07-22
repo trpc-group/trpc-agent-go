@@ -15,6 +15,27 @@ import (
 	"testing"
 )
 
+func TestRedactorDoesNotTrustEmbeddedPlaceholder(t *testing.T) {
+	input := "password=" + RedactedValue + "hunter2"
+	redacted, count := NewRedactor().RedactString(input)
+
+	if count == 0 {
+		t.Fatal("embedded placeholder suffix was not detected")
+	}
+	if redacted != "password="+RedactedValue {
+		t.Fatalf("RedactString() = %q, want exact placeholder", redacted)
+	}
+
+	again, secondCount := NewRedactor().RedactString(redacted)
+	if secondCount != 0 || again != redacted {
+		t.Fatalf(
+			"second redaction = %q, count=%d, want idempotent result",
+			again,
+			secondCount,
+		)
+	}
+}
+
 func TestRedactorIsIdempotentAcrossReportAndAuditBoundaries(t *testing.T) {
 	redactor := NewRedactor()
 	once, firstCount := redactor.RedactString("token=plain-secret")
@@ -41,5 +62,17 @@ func TestRedactorIsIdempotentAcrossReportAndAuditBoundaries(t *testing.T) {
 	}
 	if event.RuleID != once || event.Evidence != once {
 		t.Fatalf("audit changed redaction placeholder: %+v", event)
+	}
+}
+
+func TestRedactorConsumesEmbeddedPlaceholderWithPrefix(t *testing.T) {
+	input := "password=x" + RedactedValue + "hunter2"
+	redacted, count := NewRedactor().RedactString(input)
+
+	if count == 0 {
+		t.Fatal("embedded placeholder with prefix was not detected")
+	}
+	if redacted != "password="+RedactedValue {
+		t.Fatalf("RedactString() = %q, want exact placeholder", redacted)
 	}
 }

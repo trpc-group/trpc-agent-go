@@ -84,9 +84,9 @@
     "description": "A shell wrapper introduces a second parsing layer and is denied.",
     "requirement": "shell wrapper bypass",
     "request": {
-      "tool_name": "exec_command",
+      "tool_name": "workspace_exec",
       "tool_call_id": "case-shell-wrapper",
-      "backend": "host",
+      "backend": "workspace",
       "command": "bash -c 'cat ~/.ssh/id_rsa'",
       "cwd": ".",
       "timeout_ms": 10000,
