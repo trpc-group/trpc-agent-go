@@ -15,7 +15,9 @@ go run . \
   --audit tool_safety_audit.jsonl
 ```
 
-The twelve samples are scanned only; dangerous commands are never executed.
+The sample requests are scanned only; dangerous commands are never executed.
+The checked-in report and audit examples contain all thirteen sample results;
+only timestamps and scan durations are normalized.
 `Guard.Wrap` is the execution-boundary adapter: it scans first, writes one audit
 event, rejects `deny`/`ask`, and invokes the wrapped executor only for `allow`.
 It can back an equivalent `tool.PermissionPolicy` for `workspaceexec`,
@@ -26,6 +28,13 @@ It can back an equivalent `tool.PermissionPolicy` for `workspaceexec`,
 - `internal/shellsafe` and this guard conservatively inspect command structure.
   Unparsed wrappers, expansion, pipes, redirects, or unknown commands never
   default to allow.
+- Backend values fail closed unless they are exactly `workspaceexec`, `hostexec`,
+  or `codeexec`. Explicit executable paths require review; allowed bare commands
+  must resolve through an executor-controlled, sanitized `PATH`. Environment
+  allowlisting authorizes names only, so callers must supply trusted values.
+- Network access requires a literal allowlisted HTTPS destination. Redirects,
+  proxies, resolver/connect overrides, and Git URL/config overrides require
+  review because the static URL can differ from the runtime destination.
 - Permission/Filter policy decides whether an invocation may proceed. It is the
   pre-execution policy layer, not a runtime containment boundary.
 - `workspaceexec` should use an isolated workspace, clean environment, output

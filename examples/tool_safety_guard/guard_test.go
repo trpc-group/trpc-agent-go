@@ -126,6 +126,253 @@ func TestOmittedTimeoutIsDenied(t *testing.T) {
 		t.Fatalf("omitted timeout not denied: %+v", result)
 	}
 }
+
+func TestOutputLimitIsRequired(t *testing.T) {
+	g, _ := loadTest(t)
+	for _, limit := range []int{0, -1} {
+		result := g.Scan(Request{
+			ToolName: "workspace_exec", Command: "go test ./...", Backend: "workspaceexec",
+			TimeoutSeconds: 30, MaxOutputBytes: limit,
+		})
+		if result.Decision != "deny" || result.RuleID != "OUTPUT_LIMIT" {
+			t.Fatalf("output limit %d not denied: %+v", limit, result)
+		}
+	}
+}
+
+func TestNetworkPolicyHandlesGlobalOptionsAndOverrides(t *testing.T) {
+	g, _ := loadTest(t)
+	requests := []struct {
+		name     string
+		command  string
+		decision string
+		rule     string
+	}{
+		{"git-global-option", "git -C . clone https://evil.example/repo", "deny", "NETWORK_NOT_ALLOWLISTED"},
+		{"curl-connect-override", "curl --connect-to api.github.com:443:evil.example:443 https://api.github.com/repo", "ask", "NETWORK_OVERRIDE"},
+		{"curl-connect-override-equals", "curl --connect-to=api.github.com:443:evil.example:443 https://api.github.com/repo", "ask", "NETWORK_OVERRIDE"},
+		{"curl-resolve-override", "curl --resolve api.github.com:443:192.0.2.1 https://api.github.com/repo", "ask", "NETWORK_OVERRIDE"},
+		{"curl-resolve-override-equals", "curl --resolve=api.github.com:443:192.0.2.1 https://api.github.com/repo", "ask", "NETWORK_OVERRIDE"},
+		{"curl-short-proxy-attached", "curl -xhttps://api.github.com https://api.github.com/repo", "ask", "NETWORK_OVERRIDE"},
+		{"non-https-scheme", "git clone ssh://api.github.com/repo", "ask", "NETWORK_SCHEME"},
+	}
+	for _, tc := range requests {
+		t.Run(tc.name, func(t *testing.T) {
+			result := g.Scan(Request{
+				ToolName: "workspace_exec", Command: tc.command, Backend: "workspaceexec",
+				TimeoutSeconds: 30, MaxOutputBytes: 1024,
+			})
+			if result.Decision != tc.decision || result.RuleID != tc.rule {
+				t.Fatalf("got %s/%s, want %s/%s: %+v", result.Decision, result.RuleID, tc.decision, tc.rule, result)
+			}
+		})
+	}
+}
+
+func TestCommandParsingCoversExecutablePathsAndWrapperVariants(t *testing.T) {
+	g, _ := loadTest(t)
+	tests := []struct {
+		name     string
+		command  string
+		decision string
+		rule     string
+	}{
+		{"absolute-denied-command", "/usr/bin/sudo whoami", "deny", "DENIED_COMMAND"},
+		{"login-shell", "bash -lc echo-safe", "ask", "SHELL_WRAPPER"},
+		{"shell-with-leading-options", "bash --noprofile -c echo-safe", "ask", "SHELL_WRAPPER"},
+		{"zsh", "zsh script.zsh", "ask", "SHELL_WRAPPER"},
+		{"pwsh", "pwsh -Command echo-safe", "ask", "SHELL_WRAPPER"},
+		{"powershell-exe", "powershell.exe -EncodedCommand ZQBjAGgAbwA=", "ask", "SHELL_WRAPPER"},
+		{"cmd-exe", "cmd.exe /c echo-safe", "ask", "SHELL_WRAPPER"},
+		{"windows-forbidden-path", `git config --file C:\Users\me\.ssh\config user.name test`, "deny", "FORBIDDEN_PATH"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result := g.Scan(Request{
+				ToolName: "workspace_exec", Command: tc.command, Backend: "workspaceexec",
+				TimeoutSeconds: 30, MaxOutputBytes: 1024,
+			})
+			if result.Decision != tc.decision || result.RuleID != tc.rule {
+				t.Fatalf("got %s/%s, want %s/%s: %+v", result.Decision, result.RuleID, tc.decision, tc.rule, result)
+			}
+		})
+	}
+}
+
+func TestAllowlistedExecutableCannotBeSpoofedByPath(t *testing.T) {
+	g, _ := loadTest(t)
+	for _, command := range []string{
+		"/tmp/curl https://api.github.com/repo",
+		"./go test ./...",
+		`C:\evil\git.exe status`,
+	} {
+		result := g.Scan(Request{
+			ToolName: "workspace_exec", Command: command, Backend: "workspaceexec",
+			TimeoutSeconds: 30, MaxOutputBytes: 1024,
+		})
+		if result.Decision != "ask" || result.RuleID != "EXPLICIT_EXECUTABLE_PATH" {
+			t.Fatalf("explicit executable path %q was not reviewed: %+v", command, result)
+		}
+	}
+}
+
+func TestNetworkPolicyReviewsRedirectsAndGitOverrides(t *testing.T) {
+	g, _ := loadTest(t)
+	for _, command := range []string{
+		"curl -L https://api.github.com/repo",
+		"curl -fsSL https://api.github.com/repo",
+		"curl --location=https://api.github.com/repo",
+		"git -c http.proxy=localhost:8080 clone https://api.github.com/repo",
+	} {
+		result := g.Scan(Request{
+			ToolName: "workspace_exec", Command: command, Backend: "workspaceexec",
+			TimeoutSeconds: 30, MaxOutputBytes: 1024,
+		})
+		if result.Decision != "ask" || result.RuleID != "NETWORK_OVERRIDE" {
+			t.Fatalf("network override %q was not reviewed: %+v", command, result)
+		}
+	}
+}
+
+func TestCredentialOptionsAndDigestHeaderAreRedacted(t *testing.T) {
+	g, _ := loadTest(t)
+	authName := "Author" + "ization"
+	responseName := "res" + "ponse"
+	secret := "credential-" + "fragment"
+	oauthOption := "--oauth2-" + "bearer"
+	commands := []string{
+		"curl -u user:" + secret + " https://api.github.com/repo",
+		"curl --user=user:" + secret + " https://api.github.com/repo",
+		"curl --proxy-user proxy:" + secret + " https://api.github.com/repo",
+		"curl " + oauthOption + " " + secret + " https://api.github.com/repo",
+		`curl -H '` + authName + `: Digest username="user", ` + responseName + `="` + secret + `"' https://api.github.com/repo`,
+		`echo '{"` + authName + `":"Bearer ` + secret + `","x":1}'`,
+	}
+	for _, command := range commands {
+		result := g.Scan(Request{
+			ToolName: "workspace_exec", Command: command, Backend: "workspaceexec",
+			TimeoutSeconds: 30, MaxOutputBytes: 1024,
+		})
+		data, err := json.Marshal(result)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(data), secret) || !result.Redacted {
+			t.Fatalf("credential option leaked: %s", data)
+		}
+	}
+}
+
+func TestAuthorizationRedactionPreservesFollowingURL(t *testing.T) {
+	g, _ := loadTest(t)
+	authName := "Author" + "ization"
+	secret := "header-" + "fragment"
+	command := "curl -H " + authName + ": Bearer " + secret + " https://api.github.com/repo"
+	result := g.Scan(Request{
+		ToolName: "workspace_exec", Command: command, Backend: "workspaceexec",
+		TimeoutSeconds: 30, MaxOutputBytes: 1024,
+	})
+	if strings.Contains(result.Command, secret) || !strings.Contains(result.Command, "https://api.github.com/repo") {
+		t.Fatalf("authorization redaction leaked or consumed following URL: %q", result.Command)
+	}
+}
+
+func TestUnknownBackendIsDenied(t *testing.T) {
+	g, _ := loadTest(t)
+	result := g.Scan(Request{
+		ToolName: "workspace_exec", Command: "go test ./...", Backend: "unreviewed-executor",
+		TimeoutSeconds: 30, MaxOutputBytes: 1024,
+	})
+	if result.Decision != "deny" || result.RuleID != "BACKEND_NOT_ALLOWED" {
+		t.Fatalf("unknown backend was not denied: %+v", result)
+	}
+}
+
+func TestLoadPolicyRejectsMalformedOrUnsafeConfiguration(t *testing.T) {
+	valid := `{"allowed_commands":["go"],"denied_commands":["rm"],"forbidden_paths":["/.ssh"],"allowed_domains":["api.github.com"],"max_timeout_seconds":30,"max_output_bytes":1024,"allowed_env_vars":["PATH"]}`
+	tests := map[string]string{
+		"unknown-field": strings.TrimSuffix(valid, "}") + `,"denied_commmands":["sudo"]}`,
+		"trailing-json": valid + `{}`,
+		"invalid-limit": strings.Replace(valid, `"max_timeout_seconds":30`, `"max_timeout_seconds":0`, 1),
+	}
+	for name, content := range tests {
+		t.Run(name, func(t *testing.T) {
+			path := t.TempDir() + "/policy.json"
+			if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := LoadPolicy(path); err == nil {
+				t.Fatalf("unsafe policy %s was accepted", content)
+			}
+		})
+	}
+}
+
+func TestRedactionCoversCommonCredentialForms(t *testing.T) {
+	g, _ := loadTest(t)
+	credentialKey := "OPENAI_" + "API_KEY"
+	authName := "Author" + "ization"
+	jsonKey := "pass" + "word"
+	encodedKey := "access_" + "token"
+	tests := []struct {
+		name    string
+		command string
+		secret  string
+	}{
+		{"prefixed-env", "echo " + credentialKey + "=env-fragment", "env-fragment"},
+		{"json-body", `curl https://api.github.com -d '{"` + jsonKey + `":"json-fragment"}'`, "json-fragment"},
+		{"digest-header", `curl https://api.github.com -H '` + authName + `: Digest digest-fragment'`, "digest-fragment"},
+		{"token-userinfo", "curl https://userinfo-fragment@api.github.com/repo", "userinfo-fragment"},
+		{"encoded-assignment", "curl 'https://api.github.com/?" + encodedKey + "%3Dencoded-fragment'", "encoded-fragment"},
+		{"double-encoded-assignment", "curl 'https://api.github.com/?" + encodedKey + "%253Ddouble-encoded-fragment'", "double-encoded-fragment"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result := g.Scan(Request{
+				ToolName: "workspace_exec", Command: tc.command, Backend: "workspaceexec",
+				TimeoutSeconds: 30, MaxOutputBytes: 1024,
+			})
+			data, err := json.Marshal(result)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(data), tc.secret) {
+				t.Fatalf("credential %q leaked: %s", tc.secret, data)
+			}
+			if !result.Redacted {
+				t.Fatalf("redaction was not recorded: %s", data)
+			}
+		})
+	}
+}
+
+func TestRunReturnsErrorWhenSampleExpectationMismatches(t *testing.T) {
+	dir := t.TempDir()
+	samples := []Sample{{
+		Name: "intentional-mismatch", ExpectedDecision: "deny",
+		Request: Request{
+			ToolName: "workspace_exec", Command: "go test ./...", Backend: "workspaceexec",
+			TimeoutSeconds: 30, MaxOutputBytes: 1024,
+		},
+	}}
+	data, err := json.Marshal(samples)
+	if err != nil {
+		t.Fatal(err)
+	}
+	samplesPath := dir + "/samples.json"
+	reportPath := dir + "/report.json"
+	if err := os.WriteFile(samplesPath, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err = run("tool_safety_policy.json", samplesPath, reportPath, dir+"/audit.jsonl")
+	if err == nil {
+		t.Fatal("mismatched sample expectations returned success")
+	}
+	if _, statErr := os.Stat(reportPath); statErr != nil {
+		t.Fatalf("report was not written before mismatch error: %v", statErr)
+	}
+}
+
 func TestRedaction(t *testing.T) {
 	g, _ := loadTest(t)
 	authScheme := "Bearer"

@@ -99,6 +99,9 @@ func run(policyPath, samplesPath, reportPath, auditPath string) error {
 		return e
 	}
 	fmt.Printf("samples=%d expected=%d duration audited\n", report.Samples, report.MatchedExpected)
+	if report.MatchedExpected != report.Samples {
+		return fmt.Errorf("sample expectations matched %d of %d requests", report.MatchedExpected, report.Samples)
+	}
 	return nil
 }
 

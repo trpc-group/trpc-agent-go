@@ -4,9 +4,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -76,8 +78,40 @@ func LoadPolicy(path string) (Policy, error) {
 	if e != nil {
 		return p, e
 	}
-	e = json.Unmarshal(data, &p)
-	return p, e
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if e = decoder.Decode(&p); e != nil {
+		return p, fmt.Errorf("decode policy: %w", e)
+	}
+	if e = decoder.Decode(&struct{}{}); e != io.EOF {
+		if e == nil {
+			return p, fmt.Errorf("decode policy: trailing JSON value")
+		}
+		return p, fmt.Errorf("decode policy trailing data: %w", e)
+	}
+	if e = validatePolicy(p); e != nil {
+		return p, e
+	}
+	return p, nil
+}
+
+func validatePolicy(p Policy) error {
+	if len(p.AllowedCommands) == 0 {
+		return fmt.Errorf("validate policy: allowed_commands must not be empty")
+	}
+	if len(p.DeniedCommands) == 0 {
+		return fmt.Errorf("validate policy: denied_commands must not be empty")
+	}
+	if len(p.ForbiddenPaths) == 0 {
+		return fmt.Errorf("validate policy: forbidden_paths must not be empty")
+	}
+	if p.MaxTimeoutSeconds <= 0 {
+		return fmt.Errorf("validate policy: max_timeout_seconds must be positive")
+	}
+	if p.MaxOutputBytes <= 0 {
+		return fmt.Errorf("validate policy: max_output_bytes must be positive")
+	}
+	return nil
 }
 
 type deniedCommandPattern struct {
@@ -103,26 +137,96 @@ func NewGuard(p Policy) *Guard {
 }
 
 var (
-	quotedSecretRE       = regexp.MustCompile(`(?i)\b(api[_-]?key|access[_-]?token|auth[_-]?token|token|password|passwd|secret)\b(\s*[=:]\s*)("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')`)
-	secretAssignmentRE   = regexp.MustCompile(`(?i)\b(api[_-]?key|access[_-]?token|auth[_-]?token|token|password|passwd|secret)\b(\s*[=:]\s*)[^\s,;]+`)
-	secretFlagRE         = regexp.MustCompile(`(?i)(--?(?:api[_-]?key|access[_-]?token|auth[_-]?token|token|password|passwd|secret)(?:\s+|=))("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s,;]+)`)
-	authorizationRE      = regexp.MustCompile(`(?i)(authorization\s*:\s*(?:bearer|basic)\s+)("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s,;]+)`)
-	urlUserinfoRE        = regexp.MustCompile(`(?i)([a-z][a-z0-9+.-]*://)[^\s/@:]+:[^\s/@]+@`)
-	destructiveCommandRE = regexp.MustCompile(`\brm\s+[^\n]*(?:-rf|-fr)|\b(?:mkfs|dd)\b`)
-	secretReadRE         = regexp.MustCompile(`(?i)(cat|type|grep|less|head|tail)\s+[^\n]*(\.env|credentials|id_rsa|\.ssh)`)
-	shellWrapperRE       = regexp.MustCompile(`\b(?:sh|bash|cmd|powershell)\s+(?:-c|/c|-command)\b|\beval\b`)
-	dependencyChangeRE   = regexp.MustCompile(`\b(go\s+install|npm\s+install|pip\s+install|apt(?:-get)?\s+install)\b`)
-	unboundedExecutionRE = regexp.MustCompile(`\b(while\s+true|for\s*\(\s*;\s*;|yes\b|fork\s*bomb)`)
-	sleepRE              = regexp.MustCompile(`\bsleep\s+(\d+)`)
+	secretKeyPattern      = `(?:[a-z0-9]+[_-])*(?:api[_-]?key|access[_-]?token|auth[_-]?token|token|password|passwd|secret)(?:[_-][a-z0-9]+)*`
+	encodedSeparator      = `%(?:25)*(?:3d|3a)`
+	quotedSecretRE        = regexp.MustCompile(`(?i)(["']?` + secretKeyPattern + `["']?)(\s*(?:[=:]|` + encodedSeparator + `)\s*)("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')`)
+	secretAssignmentRE    = regexp.MustCompile(`(?i)(["']?` + secretKeyPattern + `["']?)(\s*(?:[=:]|` + encodedSeparator + `)\s*)[^\s,;&"']+`)
+	secretFlagRE          = regexp.MustCompile(`(?i)(--?` + secretKeyPattern + `(?:\s+|=))("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s,;&]+)`)
+	authorizationPrefixRE = regexp.MustCompile(`(?i)\b(?:proxy-)?authorization["']?\s*:\s*`)
+	credentialOptionRE    = regexp.MustCompile(`(?i)((?:^|\s)(?:--(?:user|proxy-user|oauth2-bearer)(?:\s+|=)|-u(?:\s+|=)?))("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s,;&]+)`)
+	urlUserinfoRE         = regexp.MustCompile(`(?i)([a-z][a-z0-9+.-]*://)[^\s/@]+@`)
+	networkURLRE          = regexp.MustCompile(`(?i)[a-z][a-z0-9+.-]*://[^\s"'<>|]+`)
+	networkOverrideRE     = regexp.MustCompile(`(?i)(^|\s)(?:(?:--connect-to|--resolve|--proxy|--preproxy|--unix-socket|--config|--insecure|--location|--location-trusted)(?:[=\s]|$)|-[a-z]*l[a-z]*(?:[=\s]|$)|-[a-z]*[xk][^\s]*)`)
+	gitNetworkOverrideRE  = regexp.MustCompile(`(?i)(^|\s)(?:-c|--config-env)(?:[=\s]|$)|\b(?:https?\.proxy|url\.[^\s]+\.insteadof)=`)
+	destructiveCommandRE  = regexp.MustCompile(`\brm\s+[^\n]*(?:-rf|-fr)|\b(?:mkfs|dd)\b`)
+	secretReadRE          = regexp.MustCompile(`(?i)(cat|type|grep|less|head|tail)\s+[^\n]*(\.env|credentials|id_rsa|\.ssh)`)
+	shellWrapperRE        = regexp.MustCompile(`\b(?:sh|bash|dash|zsh|ksh|cmd(?:\.exe)?|powershell(?:\.exe)?|pwsh(?:\.exe)?)\s+(?:-[a-z]*c|/c|-command)\b|\beval\b`)
+	dependencyChangeRE    = regexp.MustCompile(`\b(go\s+install|npm\s+install|pip\s+install|apt(?:-get)?\s+install)\b`)
+	unboundedExecutionRE  = regexp.MustCompile(`\b(while\s+true|for\s*\(\s*;\s*;|yes\b|fork\s*bomb)`)
+	sleepRE               = regexp.MustCompile(`\bsleep\s+(\d+)`)
 )
 
 func redact(s string) (string, bool) {
 	out := quotedSecretRE.ReplaceAllString(s, `${1}${2}***REDACTED***`)
 	out = secretFlagRE.ReplaceAllString(out, `${1}***REDACTED***`)
-	out = authorizationRE.ReplaceAllString(out, `${1}***REDACTED***`)
+	out = credentialOptionRE.ReplaceAllString(out, `${1}***REDACTED***`)
+	out, _ = redactAuthorizationHeaders(out)
 	out = secretAssignmentRE.ReplaceAllString(out, `${1}${2}***REDACTED***`)
-	out = urlUserinfoRE.ReplaceAllString(out, `${1}***REDACTED***:***REDACTED***@`)
+	out = urlUserinfoRE.ReplaceAllString(out, `${1}***REDACTED***@`)
 	return out, out != s
+}
+
+func redactAuthorizationHeaders(input string) (string, bool) {
+	out := input
+	changed := false
+	searchFrom := 0
+	for searchFrom < len(out) {
+		match := authorizationPrefixRE.FindStringIndex(out[searchFrom:])
+		if match == nil {
+			break
+		}
+		headerStart := searchFrom + match[0]
+		valueStart := searchFrom + match[1]
+		quote := byte(0)
+		for i := headerStart - 1; i >= 0; i-- {
+			if out[i] == ' ' || out[i] == '\t' {
+				continue
+			}
+			if out[i] == '\'' || out[i] == '"' {
+				quote = out[i]
+			}
+			break
+		}
+		replacementStart := valueStart
+		if quote != 0 && replacementStart < len(out) && out[replacementStart] == quote {
+			replacementStart++
+		}
+		valueEnd := authorizationValueEnd(out, replacementStart, quote)
+		out = out[:replacementStart] + "***REDACTED***" + out[valueEnd:]
+		searchFrom = replacementStart + len("***REDACTED***")
+		changed = true
+	}
+	return out, changed
+}
+
+func authorizationValueEnd(input string, start int, quote byte) int {
+	if quote != 0 {
+		for i := start; i < len(input); i++ {
+			if input[i] == quote && (i == start || input[i-1] != '\\') {
+				return i
+			}
+		}
+		return len(input)
+	}
+	for i := start; i < len(input); i++ {
+		if input[i] == '\r' || input[i] == '\n' {
+			return i
+		}
+		if input[i] != ' ' && input[i] != '\t' {
+			continue
+		}
+		j := i
+		for j < len(input) && (input[j] == ' ' || input[j] == '\t') {
+			j++
+		}
+		if j < len(input) && input[j] == '-' {
+			return i
+		}
+		if match := networkURLRE.FindStringIndex(input[j:]); match != nil && match[0] == 0 {
+			return i
+		}
+	}
+	return len(input)
 }
 func (g *Guard) Scan(req Request) ScanResult {
 	started := time.Now()
@@ -137,20 +241,24 @@ func (g *Guard) Scan(req Request) ScanResult {
 	tokens := strings.Fields(lower)
 	base := ""
 	if len(tokens) > 0 {
-		base = strings.Trim(tokens[0], "'\"")
+		base = executableName(tokens[0])
 	}
 	for _, denied := range g.deniedPatterns {
 		if base == denied.command || denied.pattern.MatchString(lower) {
 			add("deny", "critical", "DENIED_COMMAND", denied.command, "remove the denied command")
 		}
 	}
+	if len(tokens) > 0 && strings.ContainsAny(strings.Trim(tokens[0], "'\""), `/\`) {
+		add("ask", "high", "EXPLICIT_EXECUTABLE_PATH", tokens[0], "use a reviewed bare command resolved from the executor's trusted PATH")
+	}
 	if destructiveCommandRE.MatchString(lower) {
 		add("deny", "critical", "DESTRUCTIVE_COMMAND", req.Command, "do not run destructive filesystem commands")
 	}
 	workingDir := strings.ToLower(filepath.ToSlash(filepath.Clean(req.WorkingDir)))
+	normalizedCommand := strings.ToLower(strings.ReplaceAll(req.Command, `\`, "/"))
 	for _, path := range g.policy.ForbiddenPaths {
 		normalizedPath := strings.ToLower(filepath.ToSlash(filepath.Clean(path)))
-		if strings.Contains(lower, strings.ToLower(path)) {
+		if strings.Contains(normalizedCommand, normalizedPath) {
 			add("deny", "critical", "FORBIDDEN_PATH", path, "remove access to the protected path")
 		}
 		if req.WorkingDir != "" && strings.Contains(workingDir, normalizedPath) {
@@ -161,17 +269,23 @@ func (g *Guard) Scan(req Request) ScanResult {
 		add("deny", "critical", "SECRET_READ", req.Command, "use a secret provider instead of reading credential files")
 	}
 	if isNetworkCommand(tokens) {
-		hosts := extractHosts(req.Command)
-		if len(hosts) == 0 {
+		targets := extractNetworkTargets(req.Command)
+		if len(targets) == 0 {
 			add("ask", "high", "NETWORK_UNPARSED", req.Command, "provide a literal allowlisted HTTPS URL")
 		}
-		for _, host := range hosts {
-			if !containsFold(g.policy.AllowedDomains, host) {
-				add("deny", "critical", "NETWORK_NOT_ALLOWLISTED", host, "add a reviewed domain to allowed_domains or remove the request")
+		if networkOverrideRE.MatchString(lower) || (base == "git" && gitNetworkOverrideRE.MatchString(lower)) {
+			add("ask", "high", "NETWORK_OVERRIDE", req.Command, "remove network destination overrides and use a literal allowlisted HTTPS URL")
+		}
+		for _, target := range targets {
+			if !strings.EqualFold(target.Scheme, "https") {
+				add("ask", "high", "NETWORK_SCHEME", target.Scheme, "use an HTTPS URL for reviewed network access")
+			}
+			if !containsFold(g.policy.AllowedDomains, target.Hostname()) {
+				add("deny", "critical", "NETWORK_NOT_ALLOWLISTED", target.Hostname(), "add a reviewed domain to allowed_domains or remove the request")
 			}
 		}
 	}
-	if shellWrapperRE.MatchString(lower) {
+	if isShellWrapper(tokens) || shellWrapperRE.MatchString(lower) {
 		add("ask", "high", "SHELL_WRAPPER", req.Command, "expand and review the wrapped command before execution")
 	}
 	if strings.ContainsAny(req.Command, "`$|;&><\r\n") {
@@ -192,8 +306,11 @@ func (g *Guard) Scan(req Request) ScanResult {
 	if req.TimeoutSeconds <= 0 || req.TimeoutSeconds > g.policy.MaxTimeoutSeconds {
 		add("deny", "high", "TIMEOUT_LIMIT", fmt.Sprint(req.TimeoutSeconds), "use a timeout within policy")
 	}
-	if req.MaxOutputBytes > g.policy.MaxOutputBytes {
+	if req.MaxOutputBytes <= 0 || req.MaxOutputBytes > g.policy.MaxOutputBytes {
 		add("deny", "high", "OUTPUT_LIMIT", fmt.Sprint(req.MaxOutputBytes), "lower the maximum output size")
+	}
+	if req.Backend != "workspaceexec" && req.Backend != "hostexec" && req.Backend != "codeexec" {
+		add("deny", "high", "BACKEND_NOT_ALLOWED", req.Backend, "use workspaceexec, hostexec, or codeexec")
 	}
 	if req.Backend == "hostexec" && (req.PTY || req.Background || strings.Contains(lower, "&")) {
 		add("ask", "high", "HOST_SESSION", req.Command, "prefer workspaceexec; require approval and process-tree cleanup")
@@ -223,30 +340,48 @@ func isNetworkCommand(tokens []string) bool {
 	if len(tokens) == 0 {
 		return false
 	}
-	base := strings.Trim(tokens[0], "'\"")
+	base := executableName(tokens[0])
 	switch base {
 	case "curl", "wget", "nc", "netcat", "ssh":
 		return true
 	case "git":
-		if len(tokens) < 2 {
-			return false
-		}
-		switch strings.Trim(tokens[1], "'\"") {
-		case "clone", "fetch", "pull", "push", "ls-remote", "submodule":
-			return true
+		for _, token := range tokens[1:] {
+			switch strings.Trim(token, "'\"") {
+			case "clone", "fetch", "pull", "push", "ls-remote", "submodule":
+				return true
+			}
 		}
 	case "go":
-		if len(tokens) < 2 {
-			return false
-		}
-		switch strings.Trim(tokens[1], "'\"") {
-		case "get", "install":
-			return true
-		case "mod":
-			return len(tokens) > 2 && strings.Trim(tokens[2], "'\"") == "download"
+		for i, token := range tokens[1:] {
+			token = strings.Trim(token, "'\"")
+			if token == "get" || token == "install" {
+				return true
+			}
+			if token == "mod" && i+2 < len(tokens) && strings.Trim(tokens[i+2], "'\"") == "download" {
+				return true
+			}
 		}
 	}
 	return false
+}
+
+func isShellWrapper(tokens []string) bool {
+	if len(tokens) == 0 {
+		return false
+	}
+	switch executableName(tokens[0]) {
+	case "sh", "bash", "dash", "zsh", "ksh", "cmd", "powershell", "pwsh", "eval":
+		return true
+	}
+	return false
+}
+
+func executableName(token string) string {
+	token = strings.Trim(token, "'\"")
+	if index := strings.LastIndexAny(token, `/\`); index >= 0 {
+		token = token[index+1:]
+	}
+	return strings.TrimSuffix(token, ".exe")
 }
 func rank(v string) int {
 	switch v {
@@ -267,12 +402,12 @@ func containsFold(values []string, want string) bool {
 	}
 	return false
 }
-func extractHosts(s string) []string {
-	var out []string
-	for _, word := range strings.Fields(s) {
-		word = strings.Trim(word, "'\";,|<>")
-		if u, e := url.Parse(word); e == nil && u.Hostname() != "" {
-			out = append(out, u.Hostname())
+func extractNetworkTargets(s string) []*url.URL {
+	var out []*url.URL
+	for _, match := range networkURLRE.FindAllString(s, -1) {
+		match = strings.TrimRight(match, ".,;)]}")
+		if target, err := url.Parse(match); err == nil && target.Hostname() != "" {
+			out = append(out, target)
 		}
 	}
 	return out
