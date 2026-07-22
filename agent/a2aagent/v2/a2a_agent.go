@@ -43,7 +43,10 @@ const (
 	defaultUserIDHeader            = "X-User-ID"
 )
 
-// A2AAgent is an agent that communicates with a remote A2A agent via A2A protocol.
+// A2AAgent is an agent that communicates with a remote A2A agent via A2A
+// protocol. It adapts blocking and streaming message calls to agent Events; use
+// trpc-a2a-go/v2/client directly for the task control plane (lookup,
+// cancellation, resubscription, listing, or push configuration).
 type A2AAgent struct {
 	// options
 	name                 string
@@ -675,8 +678,12 @@ func (r *A2AAgent) runNonStreaming(ctx context.Context, invocation *agent.Invoca
 			return
 		}
 
+		historyLength := 0
 		params := protocol.SendMessageParams{
 			Message: *a2aMessage,
+			Configuration: &protocol.SendMessageConfiguration{
+				HistoryLength: &historyLength,
+			},
 		}
 		requestOpts := r.buildRequestOptions(ctx, invocation)
 		result, err := r.a2aClient.SendMessage(ctx, params, requestOpts...)
