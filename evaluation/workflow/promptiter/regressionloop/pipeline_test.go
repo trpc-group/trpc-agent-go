@@ -246,6 +246,63 @@ func TestPipelineUsesCostProviderWithEstimatedModelCallFallback(t *testing.T) {
 	assert.False(t, result.Report.Cost.Estimated)
 }
 
+func TestPipelineRejectsEstimatedPositiveProviderModelCalls(t *testing.T) {
+	dir := t.TempDir()
+	promptPath := filepath.Join(dir, "prompt.txt")
+	metricsPath := filepath.Join(dir, "metrics.json")
+	require.NoError(t, os.WriteFile(promptPath, []byte("baseline prompt"), 0o644))
+	require.NoError(t, os.WriteFile(metricsPath, []byte(`{"metrics":[]}`), 0o644))
+	iterator := &capturingPromptIterator{
+		result: &promptiterengine.RunResult{
+			Status: promptiterengine.RunStatusSucceeded,
+			BaselineValidation: evalResult("validation", []caseSpec{
+				{id: "validation_case", metric: "metric", score: 1, status: status.EvalStatusPassed},
+			}),
+			Rounds: []promptiterengine.RoundResult{
+				{Round: 1},
+			},
+		},
+	}
+	pipeline := Pipeline{
+		Evaluator: &scriptedEvaluator{
+			results: map[Phase]*promptiterengine.EvaluationResult{
+				PhaseBaselineTrain: evalResult("train", []caseSpec{
+					{id: "train_case", metric: "metric", score: 1, status: status.EvalStatusPassed},
+				}),
+				PhaseBaselineValidation: evalResult("validation", []caseSpec{
+					{id: "validation_case", metric: "metric", score: 1, status: status.EvalStatusPassed},
+				}),
+			},
+		},
+		PromptIterator: iterator,
+		CostProvider: staticCostProvider{summary: CostSummary{
+			ModelCalls: 5,
+			Estimated:  true,
+		}},
+		Clock: &sequenceClock{times: []time.Time{time.Unix(1, 0), time.Unix(2, 0)}},
+	}
+	cfg := Config{
+		AppName:             "app",
+		PromptSource:        promptPath,
+		MetricsPath:         metricsPath,
+		TrainEvalSetID:      "train",
+		ValidationEvalSetID: "validation",
+		OutputJSON:          filepath.Join(dir, "optimization_report.json"),
+		OutputMarkdown:      filepath.Join(dir, "optimization_report.md"),
+		TargetSurfaceIDs:    []string{"agent#instruction"},
+		PromptIter:          PromptIterConfig{MaxRounds: 1},
+		Gate:                GateConfig{RequireEngineAccepted: false, MaxModelCalls: 10},
+	}
+	result, err := pipeline.Run(context.Background(), cfg)
+	require.NoError(t, err)
+	assert.Equal(t, 5, result.Report.Cost.ModelCalls)
+	assert.Equal(t, CostSourceProvider, result.Report.Cost.Source)
+	assert.True(t, result.Report.Cost.Estimated)
+	assert.False(t, result.Report.Cost.ModelCallsMeasured)
+	assert.False(t, result.Report.GateDecision.Accepted)
+	assert.Contains(t, result.Report.GateDecision.Reasons, "model call count unavailable; configure CostProvider to enforce maxModelCalls")
+}
+
 func TestPipelineCountsCandidateAttributionBeforeCostSnapshots(t *testing.T) {
 	dir := t.TempDir()
 	promptPath := filepath.Join(dir, "prompt.txt")
