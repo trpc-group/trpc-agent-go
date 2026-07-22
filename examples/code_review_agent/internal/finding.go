@@ -162,8 +162,12 @@ var privateKeyPattern = regexp.MustCompile(
 	`(?s)-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?(?:-----END [A-Z0-9 ]*PRIVATE KEY-----|\z)`,
 )
 
+var jsonAuthorizationPattern = regexp.MustCompile(
+	`(?i)("(?:proxy-)?authorization"\s*:\s*)"(?:\\.|[^"\\])*"`,
+)
+
 var authorizationHeaderPattern = regexp.MustCompile(
-	`(?im)(authorization\s*:\s*)(?:bearer|basic|token)\s+[^\s]+`,
+	`(?im)(\bauthorization[ \t]*:[ \t]*)[^\r\n]*`,
 )
 
 // sensitivePatterns are pre-compiled regexes for common secret formats.
@@ -190,7 +194,8 @@ var sensitivePatterns = []*regexp.Regexp{
 // sensitive values in the input string with ***REDACTED***.
 func RedactSensitiveInfo(input string) string {
 	input = privateKeyPattern.ReplaceAllString(input, redactedValue)
-	input = authorizationHeaderPattern.ReplaceAllString(input, "$1"+redactedValue)
+	input = jsonAuthorizationPattern.ReplaceAllString(input, `${1}"`+redactedValue+`"`)
+	input = authorizationHeaderPattern.ReplaceAllString(input, "${1}"+redactedValue)
 	for _, re := range sensitivePatterns {
 		input = re.ReplaceAllString(input, "$1="+redactedValue)
 	}
@@ -201,6 +206,9 @@ func RedactSensitiveInfo(input string) string {
 // pattern that looks like a secret.
 func ContainsSensitiveInfo(input string) bool {
 	if privateKeyPattern.MatchString(input) {
+		return true
+	}
+	if jsonAuthorizationPattern.MatchString(input) {
 		return true
 	}
 	if authorizationHeaderPattern.MatchString(input) {

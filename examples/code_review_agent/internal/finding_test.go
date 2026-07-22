@@ -11,6 +11,7 @@
 package internal
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -108,13 +109,30 @@ func TestRedactSensitiveInfo_AuthorizationHeaders(t *testing.T) {
 	for _, input := range []string{
 		"Authorization: Basic dXNlcjpwYXNzd29yZA==",
 		"authorization: token ghp_1234567890abcdef",
+		`Authorization: Digest username="user", nonce="server-nonce", response="secret-response"`,
 	} {
 		redacted := RedactSensitiveInfo(input)
 		require.Contains(t, redacted, redactedValue)
 		require.NotEqual(t, input, redacted)
 		require.NotContains(t, redacted, "dXNlcjpwYXNzd29yZA==")
 		require.NotContains(t, redacted, "ghp_1234567890abcdef")
+		require.NotContains(t, redacted, "secret-response")
+		require.True(t, ContainsSensitiveInfo(input))
 	}
+}
+
+func TestRedactSensitiveInfo_JSONAuthorizationPreservesJSON(t *testing.T) {
+	input := `{"request":{"Authorization":"Basic dXNlcjpwYXNz","method":"GET"}}`
+	redacted := RedactSensitiveInfo(input)
+	require.NotContains(t, redacted, "dXNlcjpwYXNz")
+	require.True(t, ContainsSensitiveInfo(input))
+
+	var decoded struct {
+		Request map[string]string `json:"request"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(redacted), &decoded))
+	require.Equal(t, redactedValue, decoded.Request["Authorization"])
+	require.Equal(t, "GET", decoded.Request["method"])
 }
 
 func TestRedactSensitiveInfo_ConnectionString(t *testing.T) {
