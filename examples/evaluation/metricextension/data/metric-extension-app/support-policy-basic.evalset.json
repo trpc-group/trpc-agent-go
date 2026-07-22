@@ -1,0 +1,26 @@
+{
+  "evalSetId": "support-policy-basic",
+  "name": "support-policy-basic",
+  "evalCases": [
+    {
+      "evalId": "sign_in_help",
+      "conversation": [
+        {
+          "invocationId": "sign_in_help-1",
+          "userContent": {
+            "role": "user",
+            "content": "I cannot sign in to my workspace."
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "Please open a support ticket with your workspace ID so support can help check the account status."
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "metric-extension-app",
+        "userId": "user"
+      }
+    }
+  ]
+}

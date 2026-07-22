@@ -854,6 +854,7 @@ type EvalMetric struct {
 	EvaluatorName string               // EvaluatorName is an optional evaluator implementation name.
 	Threshold     float64              // Threshold is the threshold value.
 	Criterion     *criterion.Criterion // Criterion is the evaluation criteria.
+	Extension     any                  // Extension is caller-defined metadata.
 }
 
 // Criterion represents a collection of evaluation criteria.
@@ -878,6 +879,8 @@ type Criterion struct {
 - `llm_rubric_knowledge_recall`: LLM rubric knowledge recall evaluator, requires EvalSet to provide session input and LLMJudge plus rubrics.
 
 `threshold` defines the threshold. Evaluators output a `score` and determine pass or fail based on it. The definition of `score` varies slightly across evaluators, but a common approach is to compute scores per Invocation and aggregate them into an overall score. Under the same EvalSet, `metricName` must be unique. The order of metrics in the file also affects the evaluation execution order and result display order.
+
+`extension` carries caller-defined metadata for an evaluation metric, such as platform-side weights, grouping, or display configuration. The framework only reads, stores, and passes this field with `EvalMetric`; it does not interpret its business meaning or guarantee deep-copy semantics for its contents. Custom evaluators, platform logic, or custom aggregation logic can read it when needed.
 
 Below is an example metric file for tool trajectory.
 
@@ -2865,6 +2868,40 @@ agentEvaluator, err := evaluation.New(
 	evaluation.WithRegistry(reg),
 )
 ```
+
+#### Custom Evaluators
+
+When built-in evaluators do not cover a business rule, implement `evaluator.Evaluator` and register it in Registry. A metric file uses `evaluatorName` to select the evaluator implementation, while `metricName` remains the metric instance name shown in results. If the evaluator needs extra configuration, put it in `extension` and read it from the custom evaluator.
+
+Example metric configuration:
+
+```json
+{
+  "metricName": "support_response_policy",
+  "evaluatorName": "response_policy",
+  "threshold": 1,
+  "extension": {
+    "requiredPhrase": "support"
+  }
+}
+```
+
+Example wiring:
+
+```go
+reg := registry.New()
+if err := reg.Register("response_policy", responsePolicyEvaluator{}); err != nil {
+	log.Fatalf("register evaluator: %v", err)
+}
+
+agentEvaluator, err := evaluation.New(
+	appName,
+	runner,
+	evaluation.WithRegistry(reg),
+)
+```
+
+For a complete runnable example, see [examples/evaluation/metricextension](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/metricextension).
 
 ### EvalResult
 
