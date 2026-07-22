@@ -6,30 +6,37 @@ can quickly verify the commands that exercise the full path.
 
 ## Verified Locally
 
-Date: 2026-07-16
+Date: 2026-07-22
 
 Commands:
 
 ```bash
 go test ./...
 go vet ./...
+bash scripts/integration_proof_regression.sh
 ./scripts/run_all_fixtures.sh
 go run . --container-smoke --container-install-staticcheck \
   --container-base-image docker.m.daocloud.io/library/golang:1.23-bookworm \
-  --output-dir output/container-proof-latest --timeout 120s
+  --output-dir output/container-smoke-latest --timeout 120s
 ```
 
 Results:
 
 - `go test ./...`: passed.
 - `go vet ./...`: passed.
+- `bash scripts/integration_proof_regression.sh`: passed. Lexical traversal and
+  external output paths were rejected without deleting sentinel files.
+  Symlink and Junction creation are unavailable from the current Windows Git
+  Bash environment, so the standalone script skips that branch; a separate
+  Windows Junction probe also rejected the path and preserved its sentinel.
 - Public fixture matrix: 10/10 fixtures completed and generated JSON,
   Markdown, SQLite records, sandbox run summaries, and permission
   decisions.
 - Holdout quality regression: covered by
   `TestHoldoutFixtureQualityThresholds` with 10 risk fixtures and 3
   benign fixtures under `internal/review/testdata/holdout`.
-- Container smoke: passed with real `codeexecutor/container` execution.
+- Container smoke: passed with real `codeexecutor/container` execution in
+  `output/integration-proof-run-20260722/container-smoke`.
   The proof preinstalls staticcheck so `staticcheck ./...` must run
   successfully instead of being recorded as an optional unavailable tool.
 

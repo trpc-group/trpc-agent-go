@@ -54,10 +54,10 @@ func ParseUnifiedDiff(raw string) (ParsedDiff, error) {
 		case strings.HasPrefix(line, "diff --git "):
 			flushFile()
 			currentFile = DiffFile{}
-			parts := strings.Fields(line)
-			if len(parts) >= 4 {
-				currentFile.OldPath = cleanDiffPath(parts[2])
-				currentFile.NewPath = cleanDiffPath(parts[3])
+			oldPath, newPath, ok := parseDiffGitPaths(line)
+			if ok {
+				currentFile.OldPath = cleanDiffPath(oldPath)
+				currentFile.NewPath = cleanDiffPath(newPath)
 			}
 		case strings.HasPrefix(line, "@@ "):
 			flushHunk()
@@ -124,12 +124,65 @@ func ParseUnifiedDiff(raw string) (ParsedDiff, error) {
 
 func cleanDiffPath(path string) string {
 	path = strings.TrimSpace(path)
+	path = decodeGitQuotedPath(path)
 	path = strings.TrimPrefix(path, "a/")
 	path = strings.TrimPrefix(path, "b/")
+	path = decodeGitQuotedPath(path)
 	if path == "/dev/null" {
 		return ""
 	}
-	return path
+	return filepathSlash(path)
+}
+
+func parseDiffGitPaths(line string) (string, string, bool) {
+	rest := strings.TrimSpace(strings.TrimPrefix(line, "diff --git "))
+	oldPath, rest, ok := consumeGitPathToken(rest)
+	if !ok {
+		return "", "", false
+	}
+	newPath, _, ok := consumeGitPathToken(rest)
+	if !ok {
+		return "", "", false
+	}
+	return oldPath, newPath, true
+}
+
+func consumeGitPathToken(raw string) (string, string, bool) {
+	raw = strings.TrimLeft(raw, " \t")
+	if raw == "" {
+		return "", "", false
+	}
+	if raw[0] != '"' {
+		idx := strings.IndexAny(raw, " \t")
+		if idx < 0 {
+			return raw, "", true
+		}
+		return raw[:idx], raw[idx+1:], true
+	}
+	escaped := false
+	for i := 1; i < len(raw); i++ {
+		switch {
+		case escaped:
+			escaped = false
+		case raw[i] == '\\':
+			escaped = true
+		case raw[i] == '"':
+			return raw[:i+1], raw[i+1:], true
+		}
+	}
+	return "", "", false
+}
+
+func decodeGitQuotedPath(path string) string {
+	path = strings.TrimSpace(path)
+	if len(path) < 2 || path[0] != '"' || path[len(path)-1] != '"' {
+		return path
+	}
+	decoded, err := strconv.Unquote(path)
+	if err != nil {
+		return path
+	}
+	return decoded
 }
 
 func atoiDefault(s string, def int) int {

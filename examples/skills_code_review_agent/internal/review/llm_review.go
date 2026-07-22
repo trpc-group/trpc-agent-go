@@ -31,6 +31,9 @@ const (
 	llmReviewAppName   = "skills-code-review-agent"
 	llmReviewAgentName = "code-review-agent"
 	llmReviewUserID    = "review-user"
+	llmMaxDiffBytes    = 48 << 10
+	llmMaxDiffChunks   = 4
+	llmMaxRuleFindings = 32
 )
 
 type LLMReviewConfig struct {
@@ -89,17 +92,53 @@ func RunLLMReview(ctx context.Context, cfg LLMReviewConfig) ([]Finding, error) {
 	)
 	defer r.Close()
 
-	runCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
-	defer cancel()
-	events, err := r.Run(runCtx, llmReviewUserID, "review-"+cfg.TaskID, model.NewUserMessage(buildLLMReviewPrompt(cfg)))
-	if err != nil {
-		return nil, fmt.Errorf("run llm review agent: %w", err)
+	chunks, truncated := splitDiffForLLM(cfg.DiffRaw, llmMaxDiffBytes)
+	var allFindings []Finding
+	for i, chunk := range chunks {
+		runCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
+		events, err := r.Run(runCtx, llmReviewUserID, fmt.Sprintf("review-%s-%d", cfg.TaskID, i+1), model.NewUserMessage(buildLLMReviewPrompt(cfg, chunk, i+1, len(chunks), truncated)))
+		cancel()
+		if err != nil {
+			return nil, fmt.Errorf("run llm review agent: %w", err)
+		}
+		findings, err := parseLLMFindings(collectAssistantText(events))
+		if err != nil {
+			return nil, err
+		}
+		allFindings = append(allFindings, findings...)
 	}
-	findings, err := parseLLMFindings(collectAssistantText(events))
-	if err != nil {
-		return nil, err
+	allFindings = validateLLMFindings(allFindings, cfg.ParsedDiff)
+	if provider == "fake" && len(allFindings) == 0 {
+		if anchor := firstAddedAnchor(cfg.ParsedDiff); anchor.file != "" && anchor.line > 0 {
+			allFindings = append(allFindings, Finding{
+				Severity:       SeverityMedium,
+				Category:       "testing",
+				File:           anchor.file,
+				Line:           anchor.line,
+				Title:          "Fake model supplemental review item",
+				Evidence:       "fake-model run through llmagent and code-review skill",
+				Recommendation: "Use a real model in production or keep this as deterministic CI coverage.",
+				Confidence:     0.54,
+				Source:         "llm",
+				RuleID:         "llm/fake-model/supplemental",
+			})
+		}
 	}
-	return validateLLMFindings(findings, cfg.ParsedDiff), nil
+	if truncated {
+		allFindings = append(allFindings, Finding{
+			Severity:       SeverityLow,
+			Category:       "llm_review",
+			File:           "",
+			Line:           0,
+			Title:          "LLM review input was truncated to stay within budget",
+			Evidence:       fmt.Sprintf("Model review used %d chunk(s), capped at %d total chunk(s) and %d bytes per request; some content was omitted.", len(chunks), llmMaxDiffChunks, llmMaxDiffBytes),
+			Recommendation: "Inspect omitted files or hunks manually, or rerun with a narrower diff when supplemental model review is required.",
+			Confidence:     0.55,
+			Source:         "llm",
+			RuleID:         "llm/input-truncated",
+		})
+	}
+	return DedupeFindings(allFindings), nil
 }
 
 func normalizeModelProvider(provider string, fake bool) string {
@@ -171,7 +210,7 @@ Do not wrap the JSON in markdown fences.
 `)
 }
 
-func buildLLMReviewPrompt(cfg LLMReviewConfig) string {
+func buildLLMReviewPrompt(cfg LLMReviewConfig, diffChunk string, chunkIndex, chunkCount int, truncated bool) string {
 	var b strings.Builder
 	b.WriteString("Review this Go change set.\n\n")
 	fmt.Fprintf(&b, "Input summary: files=%d go_files=%d added=%d deleted=%d\n\n",
@@ -182,14 +221,24 @@ func buildLLMReviewPrompt(cfg LLMReviewConfig) string {
 	)
 	if len(cfg.RuleFindings) > 0 {
 		b.WriteString("Rule-engine findings already detected:\n")
-		for _, f := range cfg.RuleFindings {
+		for i, f := range cfg.RuleFindings {
+			if i >= llmMaxRuleFindings {
+				fmt.Fprintf(&b, "- %d additional rule finding(s) omitted to keep model input bounded\n", len(cfg.RuleFindings)-i)
+				break
+			}
 			fmt.Fprintf(&b, "- [%s] %s:%d %s (%s)\n",
-				f.Severity, f.File, f.Line, f.Title, f.RuleID)
+				f.Severity, truncate(f.File, 160), f.Line, truncate(f.Title, 160), truncate(f.RuleID, 96))
 		}
 		b.WriteString("\n")
 	}
+	if chunkCount > 1 {
+		fmt.Fprintf(&b, "Chunk: %d of %d\n", chunkIndex, chunkCount)
+	}
+	if truncated {
+		b.WriteString("Some diff content was omitted to stay within the configured model input budget. Treat omitted content as incomplete analysis.\n\n")
+	}
 	b.WriteString("Unified diff:\n```diff\n")
-	b.WriteString(redactSecrets(cfg.DiffRaw))
+	b.WriteString(redactSecrets(diffChunk))
 	b.WriteString("\n```\n")
 	return b.String()
 }
@@ -398,4 +447,140 @@ func firstAddedAnchor(pd ParsedDiff) fakeReviewAnchor {
 
 func filepathJoin(elem ...string) string {
 	return strings.Join(elem, string(os.PathSeparator))
+}
+
+func splitDiffForLLM(raw string, maxBytes int) ([]string, bool) {
+	return splitDiffForLLMWithLimit(raw, maxBytes, llmMaxDiffChunks)
+}
+
+func splitDiffForLLMWithLimit(raw string, maxBytes, maxChunks int) ([]string, bool) {
+	if maxBytes <= 0 || len(raw) <= maxBytes {
+		return []string{raw}, false
+	}
+	if maxChunks <= 0 {
+		return []string{truncate(raw, maxBytes)}, true
+	}
+	sections := splitDiffSections(raw)
+	var chunks []string
+	var current strings.Builder
+	var truncated bool
+	for _, section := range sections {
+		if len(section) > maxBytes {
+			if current.Len() > 0 {
+				chunks = append(chunks, current.String())
+				current.Reset()
+			}
+			sub, subTruncated := splitLargeDiffSection(section, maxBytes)
+			chunks = append(chunks, sub...)
+			truncated = truncated || subTruncated
+			continue
+		}
+		addedLen := len(section)
+		if current.Len() > 0 {
+			addedLen++
+		}
+		if current.Len() > 0 && current.Len()+addedLen > maxBytes {
+			chunks = append(chunks, current.String())
+			current.Reset()
+		}
+		if current.Len() > 0 {
+			current.WriteByte('\n')
+		}
+		current.WriteString(section)
+	}
+	if current.Len() > 0 {
+		chunks = append(chunks, current.String())
+	}
+	if len(chunks) == 0 {
+		return []string{truncate(raw, maxBytes)}, true
+	}
+	if len(chunks) > maxChunks {
+		return chunks[:maxChunks], true
+	}
+	return chunks, truncated
+}
+
+func splitDiffSections(raw string) []string {
+	lines := strings.Split(raw, "\n")
+	var sections []string
+	var current []string
+	for _, line := range lines {
+		if strings.HasPrefix(line, "diff --git ") && len(current) > 0 {
+			sections = append(sections, strings.Join(current, "\n"))
+			current = nil
+		}
+		current = append(current, line)
+	}
+	if len(current) > 0 {
+		sections = append(sections, strings.Join(current, "\n"))
+	}
+	return sections
+}
+
+func splitLargeDiffSection(section string, maxBytes int) ([]string, bool) {
+	if len(section) <= maxBytes {
+		return []string{section}, false
+	}
+	lines := strings.Split(section, "\n")
+	headerEnd := len(lines)
+	for i, line := range lines {
+		if strings.HasPrefix(line, "@@ ") {
+			headerEnd = i
+			break
+		}
+	}
+	header := strings.Join(lines[:headerEnd], "\n")
+	if len(header) >= maxBytes {
+		return []string{truncate(section, maxBytes)}, true
+	}
+	var chunks []string
+	var current strings.Builder
+	current.WriteString(header)
+	truncated := false
+	for i := headerEnd; i < len(lines); {
+		hunkStart := i
+		i++
+		for i < len(lines) && !strings.HasPrefix(lines[i], "@@ ") {
+			i++
+		}
+		hunk := strings.Join(lines[hunkStart:i], "\n")
+		addedLen := len(hunk)
+		if current.Len() > 0 {
+			addedLen++
+		}
+		if current.Len()+addedLen > maxBytes {
+			if current.Len() > len(header) {
+				chunks = append(chunks, current.String())
+				current.Reset()
+				current.WriteString(header)
+			}
+			addedLen = len(hunk)
+			if current.Len() > 0 {
+				addedLen++
+			}
+			if current.Len()+addedLen > maxBytes {
+				room := maxBytes - current.Len() - 1
+				if room > 0 {
+					current.WriteByte('\n')
+					current.WriteString(truncate(hunk, room))
+				}
+				chunks = append(chunks, current.String())
+				current.Reset()
+				current.WriteString(header)
+				truncated = true
+				continue
+			}
+		}
+		if current.Len() > 0 {
+			current.WriteByte('\n')
+		}
+		current.WriteString(hunk)
+	}
+	if current.Len() > len(header) {
+		chunks = append(chunks, current.String())
+	}
+	if len(chunks) == 0 {
+		return []string{truncate(section, maxBytes)}, true
+	}
+	return chunks, truncated
 }

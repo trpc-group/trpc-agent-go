@@ -53,6 +53,28 @@ func TestParseUnifiedDiff(t *testing.T) {
 	}
 }
 
+func TestParseUnifiedDiffDecodesGitQuotedNonASCIIGoPath(t *testing.T) {
+	raw := "diff --git \"a/\\344\\275\\240\\345\\245\\275.go\" \"b/\\344\\275\\240\\345\\245\\275.go\"\n" +
+		"--- \"a/\\344\\275\\240\\345\\245\\275.go\"\n" +
+		"+++ \"b/\\344\\275\\240\\345\\245\\275.go\"\n" +
+		"@@ -1,2 +1,3 @@\n" +
+		" package main\n" +
+		"+func Hello() {}\n"
+	diff, err := ParseUnifiedDiff(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diff.Summary.GoFiles != 1 || len(diff.Files) != 1 {
+		t.Fatalf("expected quoted non-ASCII path to be classified as Go: %+v", diff)
+	}
+	if diff.Files[0].NewPath != "你好.go" || !diff.Files[0].IsGo {
+		t.Fatalf("unexpected decoded file: %+v", diff.Files[0])
+	}
+	if !addedLineAnchors(diff)["你好.go"][2] {
+		t.Fatalf("missing added-line anchor for decoded path: %+v", diff.Hunks)
+	}
+}
+
 func TestParseUnifiedDiffDoesNotBleedHunksAcrossFiles(t *testing.T) {
 	raw := `diff --git a/service/a.go b/service/a.go
 --- a/service/a.go
@@ -171,6 +193,102 @@ func TestAnalyzeDiffBucketsLowConfidenceMissingTest(t *testing.T) {
 	}
 	if got := needsHuman[0].RuleID; got != "go/test/missing-test-change" {
 		t.Fatalf("rule id = %s", got)
+	}
+}
+
+func TestAnalyzeDiffDoesNotSuppressMissingTestAcrossPackages(t *testing.T) {
+	raw := `diff --git a/pkg/a/a.go b/pkg/a/a.go
+--- a/pkg/a/a.go
++++ b/pkg/a/a.go
+@@ -1,2 +1,3 @@
+ package a
++func Changed() {}
+diff --git a/pkg/b/b_test.go b/pkg/b/b_test.go
+--- a/pkg/b/b_test.go
++++ b/pkg/b/b_test.go
+@@ -1,2 +1,3 @@
+ package b
++func TestB(t *testing.T) {}
+`
+	diff, err := ParseUnifiedDiff(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, needsHuman := AnalyzeDiff(diff)
+	if !hasFindingForFile(needsHuman, "pkg/a/a.go", "go/test/missing-test-change") {
+		t.Fatalf("expected pkg/a production change to still require test review, got %+v", needsHuman)
+	}
+}
+
+func TestAnalyzeDiffDoesNotReportEnvironmentBackedCredentials(t *testing.T) {
+	raw := hiddenStyleDiffWithTest(`func Config(cfg Config) {
+	token := os.Getenv("TOKEN")
+	password := cfg.Password()
+	secret := secretstore.Lookup("service")
+	_, _, _ = token, password, secret
+}`)
+	diff, err := ParseUnifiedDiff(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	findings, warnings, needsHuman := AnalyzeDiff(diff)
+	all := append(findings, warnings...)
+	all = append(all, needsHuman...)
+	if hasRule(all, "go/security/secret-literal") {
+		t.Fatalf("environment/config backed credentials should not be hard-coded secret findings: %+v", all)
+	}
+}
+
+func TestAnalyzeDiffDoesNotReportCredentialFragmentsInIdentifiers(t *testing.T) {
+	raw := hiddenStyleDiffWithTest(`func Config(msg interface{ String() string }) {
+	eyJPayload := msg.String()
+	sgPrefix := msg.String()
+	_ = eyJPayload + sgPrefix
+}`)
+	diff, err := ParseUnifiedDiff(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	findings, warnings, needsHuman := AnalyzeDiff(diff)
+	all := append(findings, warnings...)
+	all = append(all, needsHuman...)
+	if hasRule(all, "go/security/secret-literal") {
+		t.Fatalf("identifier and method fragments should not be hard-coded secret findings: %+v", all)
+	}
+}
+
+func TestAnalyzeDiffDoesNotReportCredentialFragmentsInStringLiterals(t *testing.T) {
+	raw := hiddenStyleDiffWithTest(`func Config(msg interface{ String() string }) {
+	slug := "risk-factor"
+	method := "msg.String()"
+	_ = slug + method
+}`)
+	diff, err := ParseUnifiedDiff(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	findings, warnings, needsHuman := AnalyzeDiff(diff)
+	all := append(findings, warnings...)
+	all = append(all, needsHuman...)
+	if hasRule(all, "go/security/secret-literal") {
+		t.Fatalf("ordinary string fragments should not be hard-coded secret findings: %+v", all)
+	}
+}
+
+func TestAnalyzeDiffReportsCredentialStringLiteral(t *testing.T) {
+	raw := hiddenStyleDiffWithTest(`func Config() {
+	token := "ghp_1234567890abcdefghijklmnopqrstuvwxyz"
+	_ = token
+}`)
+	diff, err := ParseUnifiedDiff(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	findings, warnings, needsHuman := AnalyzeDiff(diff)
+	all := append(findings, warnings...)
+	all = append(all, needsHuman...)
+	if !hasRule(all, "go/security/secret-literal") {
+		t.Fatalf("expected hard-coded credential literal finding, got %+v", all)
 	}
 }
 
@@ -356,18 +474,56 @@ func TestParseSandboxFindings(t *testing.T) {
 	runs := []SandboxRun{{
 		Command:   "staticcheck",
 		Status:    "failed",
-		Stderr:    "service/handler.go:12:6: should use errors.Is (SA1032)",
+		Stderr:    "service/handler.go:13:6: should use errors.Is (SA1032)",
 		ErrorType: "non_zero_exit",
 	}}
-	findings := ParseSandboxFindings(runs)
+	pd, err := ParseUnifiedDiff(`diff --git a/service/handler.go b/service/handler.go
+--- a/service/handler.go
++++ b/service/handler.go
+@@ -11,1 +12,2 @@
+ func old() {}
++func handler() {}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	findings := ParseSandboxFindings(runs, pd)
 	if len(findings) != 1 {
 		t.Fatalf("findings = %d, want 1", len(findings))
 	}
-	if findings[0].File != "service/handler.go" || findings[0].Line != 12 {
+	if findings[0].File != "service/handler.go" || findings[0].Line != 13 {
 		t.Fatalf("unexpected location: %+v", findings[0])
 	}
 	if findings[0].RuleID != "sandbox/staticcheck/sa1032" {
 		t.Fatalf("rule id = %s", findings[0].RuleID)
+	}
+}
+
+func TestParseSandboxFindingsRoutesUnchangedLineToHumanReview(t *testing.T) {
+	runs := []SandboxRun{{
+		Command:   "go",
+		Args:      []string{"test", "./..."},
+		Status:    "failed",
+		Stderr:    "pkg/old.go:13: baseline failure",
+		ErrorType: "non_zero_exit",
+	}}
+	pd, err := ParseUnifiedDiff(`diff --git a/pkg/new.go b/pkg/new.go
+--- a/pkg/new.go
++++ b/pkg/new.go
+@@ -1,1 +1,2 @@
+ package pkg
++func changed() {}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	findings := ParseSandboxFindings(runs, pd)
+	if len(findings) != 0 {
+		t.Fatalf("unchanged-line sandbox diagnostic should not be actionable: %+v", findings)
+	}
+	items := sandboxReviewItems(runs, pd, findings)
+	if !hasRule(items, "sandbox/diagnostic-outside-diff") {
+		t.Fatalf("expected unanchored sandbox diagnostic human-review item, got %+v", items)
 	}
 }
 
@@ -378,7 +534,7 @@ func TestSandboxReviewItemsSuppressesByCommandAndArgs(t *testing.T) {
 			Args:      []string{"test", "./..."},
 			Status:    "failed",
 			ErrorType: "non_zero_exit",
-			Stderr:    "pkg/a.go:12: test failed",
+			Stderr:    "pkg/a.go:13: test failed",
 		},
 		{
 			Command:   "go",
@@ -388,8 +544,18 @@ func TestSandboxReviewItemsSuppressesByCommandAndArgs(t *testing.T) {
 			Stderr:    "vet failed without file location",
 		},
 	}
-	parsed := ParseSandboxFindings(runs)
-	items := sandboxReviewItems(runs, parsed)
+	pd, err := ParseUnifiedDiff(`diff --git a/pkg/a.go b/pkg/a.go
+--- a/pkg/a.go
++++ b/pkg/a.go
+@@ -11,1 +12,2 @@
+ func old() {}
++func changed() {}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed := ParseSandboxFindings(runs, pd)
+	items := sandboxReviewItems(runs, pd, parsed)
 	if len(items) != 1 {
 		t.Fatalf("human review items = %d, want 1: parsed=%+v items=%+v", len(items), parsed, items)
 	}
@@ -401,6 +567,15 @@ func TestSandboxReviewItemsSuppressesByCommandAndArgs(t *testing.T) {
 func hasRule(findings []Finding, ruleID string) bool {
 	for _, f := range findings {
 		if f.RuleID == ruleID {
+			return true
+		}
+	}
+	return false
+}
+
+func hasFindingForFile(findings []Finding, file string, ruleID string) bool {
+	for _, f := range findings {
+		if f.File == file && f.RuleID == ruleID {
 			return true
 		}
 	}
@@ -701,6 +876,53 @@ func TestIntegrationProofRejectsExternalOutputWithoutDeletingSentinel(t *testing
 	cmd := exec.Command("bash", script, dir)
 	if err := cmd.Run(); err == nil {
 		t.Fatal("expected external output directory to be rejected")
+	}
+	if _, err := os.Stat(sentinel); err != nil {
+		t.Fatalf("sentinel was removed: %v", err)
+	}
+}
+
+func TestIntegrationProofRejectsLexicalEscapeUnderOutput(t *testing.T) {
+	outside := filepath.Join(exampleDir(), "outside-proof-test")
+	t.Cleanup(func() { _ = os.RemoveAll(outside) })
+	sentinel := filepath.Join(outside, "sentinel.txt")
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sentinel, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(exampleDir(), "scripts", "integration_proof.sh")
+	cmd := exec.Command("bash", script, "output/../outside-proof-test")
+	cmd.Dir = exampleDir()
+	if err := cmd.Run(); err == nil {
+		t.Fatal("expected lexical output escape to be rejected")
+	}
+	if _, err := os.Stat(sentinel); err != nil {
+		t.Fatalf("sentinel was removed: %v", err)
+	}
+}
+
+func TestIntegrationProofRejectsSymlinkEscapeUnderOutput(t *testing.T) {
+	outside := t.TempDir()
+	sentinel := filepath.Join(outside, "sentinel.txt")
+	if err := os.WriteFile(sentinel, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(exampleDir(), "output", "proof-link-out")
+	t.Cleanup(func() { _ = os.Remove(link) })
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("bash", "-c", "ln -s \"$1\" \"$2\"", "ln", outside, link)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Skipf("symlink creation unavailable: %v\n%s", err, out)
+	}
+	script := filepath.Join(exampleDir(), "scripts", "integration_proof.sh")
+	cmd = exec.Command("bash", script, "output/proof-link-out/run")
+	cmd.Dir = exampleDir()
+	if err := cmd.Run(); err == nil {
+		t.Fatal("expected symlink output escape to be rejected")
 	}
 	if _, err := os.Stat(sentinel); err != nil {
 		t.Fatalf("sentinel was removed: %v", err)

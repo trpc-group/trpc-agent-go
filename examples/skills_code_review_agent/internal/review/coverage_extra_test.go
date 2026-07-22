@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -69,7 +70,7 @@ func (m *mockWorkspaceEngine) RunProgram(_ context.Context, _ codeexecutor.Works
 		return codeexecutor.RunResult{ExitCode: 0, Stdout: "ok"}, nil
 	case "go":
 		if len(spec.Args) > 0 && spec.Args[0] == "test" {
-			return codeexecutor.RunResult{ExitCode: 1, Stderr: "work/repo/pkg/a.go:10: test failed"}, nil
+			return codeexecutor.RunResult{ExitCode: 1, Stderr: "work/repo/pkg/a.go:3: test failed"}, nil
 		}
 		return codeexecutor.RunResult{ExitCode: 0}, nil
 	case "staticcheck":
@@ -583,6 +584,72 @@ replace example.com/localmod => ./localmod
 	}
 }
 
+func TestWorkspaceSandboxRunnerRejectsLocalReplaceOutsideSnapshot(t *testing.T) {
+	root := t.TempDir()
+	repo := filepath.Join(root, "repo")
+	external := filepath.Join(root, "externalmod")
+	writeTestFile(t, filepath.Join(repo, "go.mod"), `module example.com/deps
+
+go 1.23
+
+require example.com/externalmod v0.0.0
+
+replace example.com/externalmod => ../externalmod
+`)
+	writeTestFile(t, filepath.Join(external, "go.mod"), "module example.com/externalmod\n\ngo 1.23\n")
+	plan, err := buildSandboxSnapshotPlan(testContext(t), repo, sandboxSnapshotMaxFiles)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !repoHasUnvendoredExternalModulesForSnapshot(repo, plan) {
+		t.Fatal("out-of-snapshot local replace should make offline repo checks unavailable")
+	}
+	engine := &mockWorkspaceEngine{}
+	runner := &WorkspaceSandboxRunner{
+		executorName:     "container",
+		engine:           engine,
+		timeout:          time.Second,
+		outputLimitBytes: 1024,
+		outputDir:        t.TempDir(),
+	}
+	result := runner.RunChecks(testContext(t), "task-external-replace", repo, ParsedDiff{Raw: "diff"})
+	if len(engine.runSpecs) != 1 || engine.runSpecs[0].Cmd != "bash" {
+		t.Fatalf("expected out-of-snapshot replace to skip repo commands, specs=%+v result=%+v", engine.runSpecs, result.Runs)
+	}
+	var unavailable int
+	for _, run := range result.Runs {
+		if run.ErrorType == "dependency_unavailable" && run.Status == "skipped" {
+			unavailable++
+		}
+	}
+	if unavailable != 3 {
+		t.Fatalf("expected three dependency-unavailable runs, got %+v", result.Runs)
+	}
+}
+
+func TestWorkspaceSandboxRunnerRejectsIgnoredLocalReplaceInsideRoot(t *testing.T) {
+	repo := t.TempDir()
+	runGit(t, repo, "init", "-q")
+	writeTestFile(t, filepath.Join(repo, ".gitignore"), "localmod/\n")
+	writeTestFile(t, filepath.Join(repo, "go.mod"), `module example.com/deps
+
+go 1.23
+
+require example.com/localmod v0.0.0
+
+replace example.com/localmod => ./localmod
+`)
+	writeTestFile(t, filepath.Join(repo, "localmod", "go.mod"), "module example.com/localmod\n\ngo 1.23\n")
+	runGit(t, repo, "add", ".gitignore", "go.mod")
+	plan, err := buildSandboxSnapshotPlan(testContext(t), repo, sandboxSnapshotMaxFiles)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !repoHasUnvendoredExternalModulesForSnapshot(repo, plan) {
+		t.Fatal("ignored local replace target should not be treated as available in the sandbox snapshot")
+	}
+}
+
 func TestWorkspaceSandboxRunnerSetupFailures(t *testing.T) {
 	pd := ParsedDiff{Raw: "diff --git a/a.go b/a.go\n"}
 	runner := &WorkspaceSandboxRunner{executorName: "mock", engine: &mockWorkspaceEngine{createErr: errors.New("no workspace")}}
@@ -618,7 +685,7 @@ func TestRepoSnapshotHelpersEdgeCases(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "nested", "file.go"), []byte("package nested\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	files, err := walkSandboxRepoFiles(dir)
+	files, err := walkSandboxRepoFiles(dir, sandboxSnapshotMaxFiles)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -626,26 +693,27 @@ func TestRepoSnapshotHelpersEdgeCases(t *testing.T) {
 		t.Fatalf("walk files = %+v", files)
 	}
 	dst := t.TempDir()
-	if err := copySandboxFile(dir, dst, "nested/file.go"); err != nil {
+	budget := sandboxSnapshotBudget{maxFiles: 10, maxTotalBytes: 1024, maxFileBytes: 1024}
+	if err := copySandboxFile(testContext(t), dir, dst, "nested/file.go", &budget); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(dst, "nested", "file.go")); err != nil {
 		t.Fatal(err)
 	}
-	if err := copySandboxFile(dir, dst, "../escape"); err != nil {
+	if err := copySandboxFile(testContext(t), dir, dst, "../escape", &budget); err != nil {
 		t.Fatal(err)
 	}
-	if err := copySandboxFile(dir, dst, "missing.go"); err == nil {
+	if err := copySandboxFile(testContext(t), dir, dst, "missing.go", &budget); err == nil {
 		t.Fatal("expected missing file copy error")
 	}
-	if files, err := sandboxRepoFileList(testContext(t), dir); err != nil || len(files) == 0 {
+	if files, err := sandboxRepoFileList(testContext(t), dir, sandboxSnapshotMaxFiles); err != nil || len(files) == 0 {
 		t.Fatalf("sandboxRepoFileList files=%v err=%v", files, err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "link-target"), []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Symlink("link-target", filepath.Join(dir, "link")); err == nil {
-		if err := copySandboxFile(dir, dst, "link"); err != nil {
+		if err := copySandboxFile(testContext(t), dir, dst, "link", &budget); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -692,7 +760,7 @@ func TestLLMParsingAndBucketingEdges(t *testing.T) {
 			RuleID:   "rule",
 		}},
 		DiffRaw: "+token := \"sk-1234567890abcdefghijklmnop\"",
-	}), "[REDACTED]") {
+	}, "+token := \"sk-1234567890abcdefghijklmnop\"", 1, 1, false), "[REDACTED]") {
 		t.Fatal("expected LLM prompt to redact diff")
 	}
 	t.Setenv("OPENAI_API_KEY", "test-key")
@@ -804,11 +872,33 @@ func TestReportMetricsAndArtifactEdges(t *testing.T) {
 
 func TestSandboxOutputAndStorageSmallHelpers(t *testing.T) {
 	runs := []SandboxRun{
-		{Command: "go", Status: "failed", Stderr: "a.go:7: bad"},
-		{Command: "staticcheck", Status: "failed", Stderr: "b.go:8:1: warning (SA1000)"},
-		{Command: "bash", Status: "failed", Stderr: "c.go:9: bad"},
+		{Command: "go", Status: "failed", Stderr: "a.go:8: bad"},
+		{Command: "staticcheck", Status: "failed", Stderr: "b.go:9:1: warning (SA1000)"},
+		{Command: "bash", Status: "failed", Stderr: "c.go:10: bad"},
 	}
-	findings := ParseSandboxFindings(runs)
+	pd, err := ParseUnifiedDiff(`diff --git a/a.go b/a.go
+--- a/a.go
++++ b/a.go
+@@ -6,1 +7,2 @@
+ package a
++func A() {}
+diff --git a/b.go b/b.go
+--- a/b.go
++++ b/b.go
+@@ -7,1 +8,2 @@
+ package b
++func B() {}
+diff --git a/c.go b/c.go
+--- a/c.go
++++ b/c.go
+@@ -8,1 +9,2 @@
+ package c
++func C() {}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	findings := ParseSandboxFindings(runs, pd)
 	if len(findings) != 3 {
 		t.Fatalf("sandbox findings = %+v", findings)
 	}
@@ -1043,5 +1133,201 @@ func TestContainerSmokeRepoCanceledContext(t *testing.T) {
 	}
 	if err := runSmokeGit(ctx, t.TempDir(), "status"); err == nil {
 		t.Fatal("expected canceled context to fail git command")
+	}
+}
+
+func TestRunReviewStoresTaskScopedFinalReportArtifacts(t *testing.T) {
+	out := t.TempDir()
+	first, _, _, err := RunReview(testContext(t), ReviewConfig{
+		Fixture:   "security_issue",
+		OutputDir: out,
+		DBPath:    filepath.Join(out, "reviews.sqlite"),
+		DryRun:    true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, _, _, err := RunReview(testContext(t), ReviewConfig{
+		Fixture:   "no_issue",
+		OutputDir: out,
+		DBPath:    filepath.Join(out, "reviews2.sqlite"),
+		DryRun:    true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Task.ID == second.Task.ID {
+		t.Fatal("expected distinct tasks")
+	}
+	for _, report := range []ReviewReport{first, second} {
+		for _, artifact := range report.Artifacts {
+			if artifact.Name != "review_report.json" && artifact.Name != "review_report.md" &&
+				artifact.Name != "review_diagnostics.json" && artifact.Name != "review_report.zh.md" {
+				continue
+			}
+			if !strings.Contains(filepath.ToSlash(artifact.Path), "/"+report.Task.ID+"/") {
+				t.Fatalf("report artifact path is not task-scoped: %+v", artifact)
+			}
+			st, err := os.Stat(artifact.Path)
+			if err != nil {
+				t.Fatalf("artifact path missing after later task: %+v err=%v", artifact, err)
+			}
+			if st.Size() != artifact.SizeBytes {
+				t.Fatalf("artifact size = %d, stat = %d for %+v", artifact.SizeBytes, st.Size(), artifact)
+			}
+			if artifact.Name == "review_report.json" {
+				data, err := os.ReadFile(artifact.Path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !strings.Contains(string(data), report.Task.ID) {
+					t.Fatalf("task-scoped report does not contain its task id: %s", artifact.Path)
+				}
+			}
+		}
+	}
+}
+
+func TestPrepareSandboxRepoSnapshotRejectsOversizedFileAndCleansPartialSnapshot(t *testing.T) {
+	repo := t.TempDir()
+	runGit(t, repo, "init", "-q")
+	writeTestFile(t, filepath.Join(repo, "go.mod"), "module example.com/large\n\ngo 1.23\n")
+	if err := os.WriteFile(filepath.Join(repo, "large.bin"), []byte(strings.Repeat("x", int(sandboxSnapshotMaxFileBytes)+1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repo, "add", ".")
+	var budgetErr *sandboxSnapshotBudgetError
+	snapshot, cleanup, err := prepareSandboxRepoSnapshot(testContext(t), repo)
+	if err == nil {
+		_ = cleanup()
+		t.Fatalf("expected oversized snapshot to fail, got %s", snapshot)
+	}
+	if !errors.As(err, &budgetErr) {
+		t.Fatalf("expected sandboxSnapshotBudgetError, got %T %v", err, err)
+	}
+	engine := &mockWorkspaceEngine{}
+	runner := &WorkspaceSandboxRunner{
+		executorName:     "container",
+		engine:           engine,
+		timeout:          time.Second,
+		outputLimitBytes: 1024,
+		outputDir:        t.TempDir(),
+	}
+	result := runner.RunChecks(testContext(t), "task-large-snapshot", repo, ParsedDiff{Raw: "diff"})
+	var unavailable int
+	for _, run := range result.Runs {
+		if run.ErrorType == "snapshot_budget_exceeded" && run.Status == "skipped" {
+			unavailable++
+		}
+	}
+	if unavailable != 3 {
+		t.Fatalf("expected repo checks unavailable after budget exceed, got %+v", result.Runs)
+	}
+}
+
+func TestSplitDiffForLLMBoundsOversizedHunk(t *testing.T) {
+	raw := `diff --git a/big.go b/big.go
+--- a/big.go
++++ b/big.go
+@@ -1,1 +1,2 @@
+ package big
++` + strings.Repeat("x", llmMaxDiffBytes*2)
+	chunks, truncated := splitDiffForLLM(raw, llmMaxDiffBytes)
+	if !truncated {
+		t.Fatal("expected oversized hunk to be marked truncated")
+	}
+	if len(chunks) == 0 {
+		t.Fatal("expected at least one bounded chunk")
+	}
+	for _, chunk := range chunks {
+		if len(chunk) > llmMaxDiffBytes+len("...[truncated]") {
+			t.Fatalf("chunk exceeds budget: %d", len(chunk))
+		}
+	}
+	prompt := buildLLMReviewPrompt(LLMReviewConfig{
+		InputSummary: DiffSummary{FilesChanged: 1, GoFiles: 1},
+	}, chunks[0], 1, len(chunks), truncated)
+	if !strings.Contains(prompt, "omitted") {
+		t.Fatalf("expected truncation to be visible in prompt: %s", prompt)
+	}
+}
+
+func TestSplitDiffForLLMEnforcesTotalChunkLimit(t *testing.T) {
+	var raw strings.Builder
+	for i := 0; i < llmMaxDiffChunks+3; i++ {
+		raw.WriteString("diff --git a/file")
+		raw.WriteString(string(rune('a' + i)))
+		raw.WriteString(".go b/file")
+		raw.WriteString(string(rune('a' + i)))
+		raw.WriteString(".go\n--- a/file.go\n+++ b/file.go\n@@ -1,1 +1,2 @@\n package p\n+")
+		raw.WriteString(strings.Repeat("x", llmMaxDiffBytes/2))
+		raw.WriteString("\n")
+	}
+	chunks, truncated := splitDiffForLLM(raw.String(), llmMaxDiffBytes)
+	if !truncated {
+		t.Fatal("expected total chunk cap to mark LLM input truncated")
+	}
+	if len(chunks) != llmMaxDiffChunks {
+		t.Fatalf("chunks = %d, want %d", len(chunks), llmMaxDiffChunks)
+	}
+}
+
+func TestBuildLLMReviewPromptBoundsRuleFindings(t *testing.T) {
+	findings := make([]Finding, llmMaxRuleFindings+2)
+	for i := range findings {
+		findings[i] = Finding{
+			Severity: SeverityHigh,
+			File:     strings.Repeat("p", 200) + ".go",
+			Line:     i + 1,
+			Title:    strings.Repeat("t", 220),
+			RuleID:   "rule/test",
+		}
+	}
+	prompt := buildLLMReviewPrompt(LLMReviewConfig{
+		InputSummary: DiffSummary{FilesChanged: 1, GoFiles: 1},
+		RuleFindings: findings,
+	}, "diff --git a/a.go b/a.go", 1, 1, false)
+	if !strings.Contains(prompt, "additional rule finding(s) omitted") {
+		t.Fatalf("expected prompt to disclose omitted rule findings: %s", prompt)
+	}
+	if strings.Contains(prompt, strings.Repeat("t", 220)) {
+		t.Fatalf("expected long rule titles to be truncated: %s", prompt)
+	}
+}
+
+func TestSplitNULFileListRejectsTooManyFiles(t *testing.T) {
+	raw := []byte("a.go\x00b.go\x00")
+	var budgetErr *sandboxSnapshotBudgetError
+	if _, err := splitNULFileList(raw, 1); !errors.As(err, &budgetErr) {
+		t.Fatalf("expected file-count budget error, got %v", err)
+	}
+}
+
+func TestSandboxSnapshotBudgetCountsCopiedBytes(t *testing.T) {
+	budget := sandboxSnapshotBudget{maxFiles: 1, maxTotalBytes: 6, maxFileBytes: 5}
+	if err := budget.reserveFile("grow.txt", 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := budget.reserveBytes("grow.txt", 3); err != nil {
+		t.Fatal(err)
+	}
+	var budgetErr *sandboxSnapshotBudgetError
+	if err := budget.reserveBytes("grow.txt", 3); !errors.As(err, &budgetErr) {
+		t.Fatalf("expected copied byte budget error, got %v", err)
+	}
+}
+
+func TestRunAllFixturesRejectsExternalOutputRoot(t *testing.T) {
+	root := t.TempDir()
+	sentinelDir := filepath.Join(root, "security_issue")
+	writeTestFile(t, filepath.Join(sentinelDir, "sentinel.txt"), "keep")
+	cmd := exec.Command("bash", filepath.Join(exampleDir(), "scripts", "run_all_fixtures.sh"), root)
+	cmd.Dir = exampleDir()
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected external output root to be rejected:\n%s", out)
+	}
+	if _, statErr := os.Stat(filepath.Join(sentinelDir, "sentinel.txt")); statErr != nil {
+		t.Fatalf("sentinel should not be deleted: %v", statErr)
 	}
 }

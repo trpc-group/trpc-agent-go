@@ -1,20 +1,50 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DEFAULT_OUT_DIR="${ROOT_DIR}/output/integration-proof"
-OUT_DIR="${1:-"${DEFAULT_OUT_DIR}"}"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 OUTPUT_ROOT="${ROOT_DIR}/output"
+mkdir -p "${OUTPUT_ROOT}"
+OUTPUT_ROOT="$(cd "${OUTPUT_ROOT}" && pwd -P)"
+DEFAULT_OUT_DIR="${OUTPUT_ROOT}/integration-proof"
+OUT_ARG="${1:-"${DEFAULT_OUT_DIR}"}"
 OWNERSHIP_MARKER=".integration-proof-owned"
-PROOF="${OUT_DIR}/proof.md"
 
-case "${OUT_DIR}" in
-  "${OUTPUT_ROOT}"/*) ;;
-  *)
-    echo "integration proof output must be under ${OUTPUT_ROOT}" >&2
-    exit 2
-    ;;
-esac
+canonical_output_target() {
+	local target="$1"
+	case "${target}" in
+		/*) ;;
+		*) target="${ROOT_DIR}/${target}" ;;
+	esac
+	target="${target%/}"
+	local existing="${target}"
+	local suffix=""
+	while [[ ! -e "${existing}" && "${existing}" != "/" ]]; do
+		suffix="/$(basename "${existing}")${suffix}"
+		existing="$(dirname "${existing}")"
+	done
+	if [[ ! -d "${existing}" ]]; then
+		echo "refusing to use output path below non-directory parent: ${target}" >&2
+		exit 2
+	fi
+	local real_existing
+	real_existing="$(cd "${existing}" && pwd -P)"
+	printf '%s%s\n' "${real_existing}" "${suffix}"
+}
+
+ensure_output_contained() {
+	local real_target
+	real_target="$(canonical_output_target "$1")"
+	case "${real_target}" in
+		"${OUTPUT_ROOT}"/*) printf '%s\n' "${real_target}" ;;
+		*)
+			echo "integration proof output must be under ${OUTPUT_ROOT}" >&2
+			exit 2
+			;;
+	esac
+}
+
+OUT_DIR="$(ensure_output_contained "${OUT_ARG}")"
+PROOF="${OUT_DIR}/proof.md"
 
 if [[ "${OUT_DIR}" != "${DEFAULT_OUT_DIR}" && -d "${OUT_DIR}" && ! -f "${OUT_DIR}/${OWNERSHIP_MARKER}" ]]; then
 	if find "${OUT_DIR}" -mindepth 1 -maxdepth 1 | grep -q .; then
@@ -28,6 +58,7 @@ if [[ -e "${OUT_DIR}" && ! -d "${OUT_DIR}" ]]; then
 	exit 2
 fi
 
+OUT_DIR="$(ensure_output_contained "${OUT_DIR}")"
 rm -rf "${OUT_DIR}"
 mkdir -p "${OUT_DIR}"
 touch "${OUT_DIR}/${OWNERSHIP_MARKER}"

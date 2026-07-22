@@ -11,11 +11,11 @@ package review
 
 import (
 	"regexp"
+	"strconv"
 	"strings"
 )
 
 var (
-	secretLineRE = regexp.MustCompile(`(?i)(api[_-]?key|access[_-]?key|secret[_-]?access[_-]?key|client[_-]?secret|refresh[_-]?token|session[_-]?token|auth[_-]?token|token|secret|credential|password|passwd|authorization|private key)\s*[:=]`)
 	osOpenRE     = regexp.MustCompile(`\b(os\.Open|os\.OpenFile|os\.Create|os\.CreateTemp|ioutil\.TempFile|sql\.Open|sql\.OpenDB|http\.Get|http\.Post|net\.Dial|net\.Listen|template\.ParseFiles)\b`)
 	httpDoRE     = regexp.MustCompile(`\b([A-Za-z0-9_]+\.)?Do\s*\(`)
 	rowsQueryRE  = regexp.MustCompile(`\b[A-Za-z0-9_]+\s*(?:,|:=|=).*\b[A-Za-z0-9_]+\.(Query|QueryContext)\s*\(`)
@@ -71,7 +71,7 @@ func AnalyzeDiff(pd ParsedDiff) (findings, warnings, needsHuman []Finding) {
 
 func lineRules(file string, line int, text string, hunkText string) []Finding {
 	var out []Finding
-	if secretLineRE.MatchString(text) || textContainsCredentialLiteral(text) {
+	if lineContainsCredentialLiteral(text) {
 		out = append(out, Finding{
 			Severity:       SeverityCritical,
 			Category:       "security",
@@ -604,19 +604,103 @@ func textContainsCredentialLiteral(text string) bool {
 	lower := strings.ToLower(text)
 	return authHeaderRE.MatchString(text) ||
 		strings.Contains(lower, "-----begin") && strings.Contains(lower, "private key") ||
-		strings.Contains(lower, "akia") ||
-		strings.Contains(lower, "aiza") ||
-		strings.Contains(lower, "eyj") ||
-		strings.Contains(lower, "ghp_") ||
+		strings.HasPrefix(lower, "akia") ||
+		strings.HasPrefix(lower, "aiza") ||
+		strings.HasPrefix(lower, "eyj") ||
+		strings.HasPrefix(lower, "ghp_") ||
 		strings.Contains(lower, "github_pat_") ||
-		strings.Contains(lower, "glpat-") ||
-		strings.Contains(lower, "xoxb-") ||
-		strings.Contains(lower, "xoxa-") ||
-		strings.Contains(lower, "sg.") ||
-		strings.Contains(lower, "sk-") ||
-		strings.Contains(lower, "sk_live_") ||
-		strings.Contains(lower, "rk_live_") ||
-		strings.Contains(lower, "npm_")
+		strings.HasPrefix(lower, "glpat-") ||
+		strings.HasPrefix(lower, "xoxb-") ||
+		strings.HasPrefix(lower, "xoxa-") ||
+		strings.HasPrefix(lower, "sg.") ||
+		strings.HasPrefix(lower, "sk-") ||
+		strings.HasPrefix(lower, "sk_live_") ||
+		strings.HasPrefix(lower, "rk_live_") ||
+		strings.HasPrefix(lower, "npm_")
+}
+
+func lineContainsCredentialLiteral(text string) bool {
+	for _, value := range stringLiteralValues(text) {
+		if textContainsCredentialLiteral(value) || highEntropyToken(value) {
+			return true
+		}
+	}
+	return false
+}
+
+func stringLiteralValues(text string) []string {
+	var values []string
+	for i := 0; i < len(text); i++ {
+		quote := text[i]
+		if quote != '"' && quote != '`' {
+			continue
+		}
+		start := i
+		escaped := false
+		for j := i + 1; j < len(text); j++ {
+			ch := text[j]
+			foundEnd := false
+			if quote == '"' {
+				switch {
+				case escaped:
+					escaped = false
+				case ch == '\\':
+					escaped = true
+				case ch == quote:
+					if value, err := strconv.Unquote(text[start : j+1]); err == nil {
+						values = append(values, value)
+					}
+					i = j
+					foundEnd = true
+				}
+			} else if ch == quote {
+				if value, err := strconv.Unquote(text[start : j+1]); err == nil {
+					values = append(values, value)
+				}
+				i = j
+				foundEnd = true
+			}
+			if foundEnd {
+				break
+			}
+		}
+	}
+	return values
+}
+
+func credentialNameLike(name string) bool {
+	normalized := strings.NewReplacer("_", "", "-", "", " ", "").Replace(strings.ToLower(strings.TrimSpace(name)))
+	for _, token := range []string{
+		"apikey", "accesskey", "secretaccesskey", "clientsecret",
+		"refreshtoken", "sessiontoken", "authtoken", "authorization",
+		"credential", "password", "passwd", "privatekey", "token", "secret",
+	} {
+		if strings.Contains(normalized, token) {
+			return true
+		}
+	}
+	return false
+}
+
+func looksHardcodedCredentialValue(value string) bool {
+	value = strings.TrimSpace(value)
+	if len(value) < 8 || looksPlaceholderCredentialValue(value) {
+		return false
+	}
+	return textContainsCredentialLiteral(value) || highEntropyToken(value) || len(value) >= 12
+}
+
+func looksPlaceholderCredentialValue(value string) bool {
+	lower := strings.ToLower(strings.TrimSpace(value))
+	for _, token := range []string{
+		"placeholder", "changeme", "change-me", "example", "sample",
+		"dummy", "test", "fake", "todo", "redacted",
+	} {
+		if lower == token || strings.Contains(lower, token+"-") || strings.Contains(lower, token+"_") {
+			return true
+		}
+	}
+	return false
 }
 
 func looksHighEntropySecretLiteral(text string) bool {
@@ -687,23 +771,27 @@ func firstAddedTextAtLine(h DiffHunk, line int) string {
 }
 
 func missingTestFindings(pd ParsedDiff) []Finding {
-	changedGo := map[string]bool{}
-	testChanged := false
+	changedGo := map[string]string{}
+	testChangedPackages := map[string]bool{}
 	for _, f := range pd.Files {
 		if !f.IsGo {
 			continue
 		}
+		pkg := firstNonEmpty(f.PackagePath, packagePath(f.NewPath))
 		if f.IsTest {
-			testChanged = true
+			testChangedPackages[pkg] = true
 			continue
 		}
-		changedGo[f.NewPath] = true
+		changedGo[f.NewPath] = pkg
 	}
-	if len(changedGo) == 0 || testChanged {
+	if len(changedGo) == 0 {
 		return nil
 	}
 	out := make([]Finding, 0, len(changedGo))
-	for file := range changedGo {
+	for file, pkg := range changedGo {
+		if testChangedPackages[pkg] {
+			continue
+		}
 		out = append(out, Finding{
 			Severity:       SeverityLow,
 			Category:       "test_coverage",

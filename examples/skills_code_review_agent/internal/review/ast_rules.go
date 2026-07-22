@@ -13,6 +13,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"strconv"
 	"strings"
 )
 
@@ -153,7 +154,10 @@ func astFindings(pd ParsedDiff) []Finding {
 						RuleID:         "go/error/ignored-error",
 					})
 				}
+				findings = append(findings, assignmentSecretFindings(h.File, parsed, node)...)
 				findings = append(findings, assignmentLifecycleFindings(h.File, parsed, facts, node)...)
+			case *ast.ValueSpec:
+				findings = append(findings, valueSpecSecretFindings(h.File, parsed, node)...)
 			}
 			return true
 		})
@@ -395,6 +399,75 @@ func assignmentLifecycleFindings(file string, parsed parsedHunkAST, facts astFac
 				RuleID:         "go/db/transaction-lifecycle",
 			})
 		}
+	}
+	return findings
+}
+
+func assignmentSecretFindings(file string, parsed parsedHunkAST, assign *ast.AssignStmt) []Finding {
+	var findings []Finding
+	for i, rhs := range assign.Rhs {
+		line := parsed.actualLine(rhs.Pos())
+		if line == 0 && i < len(assign.Lhs) {
+			line = parsed.actualLine(assign.Lhs[i].Pos())
+		}
+		if line == 0 || !parsed.addedNewLine[line] {
+			continue
+		}
+		value, ok := stringLiteralValue(rhs)
+		if !ok || !looksHardcodedCredentialValue(value) {
+			continue
+		}
+		for _, name := range lhsNamesAt(assign.Lhs, i) {
+			if !credentialNameLike(name) {
+				continue
+			}
+			findings = append(findings, Finding{
+				Severity:       SeverityCritical,
+				Category:       "security",
+				File:           file,
+				Line:           line,
+				Title:          "Hard-coded secret or credential-like value",
+				Evidence:       parsed.textByLine[line],
+				Recommendation: "Move secrets to a managed secret store or environment variable and rotate any exposed value.",
+				Confidence:     0.95,
+				Source:         "ast",
+				RuleID:         "go/security/secret-literal",
+			})
+			break
+		}
+	}
+	return findings
+}
+
+func valueSpecSecretFindings(file string, parsed parsedHunkAST, spec *ast.ValueSpec) []Finding {
+	var findings []Finding
+	for i, valueExpr := range spec.Values {
+		if i >= len(spec.Names) || spec.Names[i] == nil {
+			continue
+		}
+		line := parsed.actualLine(valueExpr.Pos())
+		if line == 0 {
+			line = parsed.actualLine(spec.Names[i].Pos())
+		}
+		if line == 0 || !parsed.addedNewLine[line] || !credentialNameLike(spec.Names[i].Name) {
+			continue
+		}
+		value, ok := stringLiteralValue(valueExpr)
+		if !ok || !looksHardcodedCredentialValue(value) {
+			continue
+		}
+		findings = append(findings, Finding{
+			Severity:       SeverityCritical,
+			Category:       "security",
+			File:           file,
+			Line:           line,
+			Title:          "Hard-coded secret or credential-like value",
+			Evidence:       parsed.textByLine[line],
+			Recommendation: "Move secrets to a managed secret store or environment variable and rotate any exposed value.",
+			Confidence:     0.95,
+			Source:         "ast",
+			RuleID:         "go/security/secret-literal",
+		})
 	}
 	return findings
 }
@@ -653,6 +726,18 @@ func typeExprString(expr ast.Expr) string {
 func exprIsStringLiteral(expr ast.Expr) bool {
 	lit, ok := expr.(*ast.BasicLit)
 	return ok && lit.Kind == token.STRING
+}
+
+func stringLiteralValue(expr ast.Expr) (string, bool) {
+	lit, ok := expr.(*ast.BasicLit)
+	if !ok || lit.Kind != token.STRING {
+		return "", false
+	}
+	value, err := strconv.Unquote(lit.Value)
+	if err != nil {
+		return "", false
+	}
+	return value, true
 }
 
 func exprIsStringBuilder(expr ast.Expr) bool {

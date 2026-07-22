@@ -10,11 +10,15 @@
 package review
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
+	sandboxpath "path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -39,6 +43,20 @@ type WorkspaceSandboxRunner struct {
 	timeout          time.Duration
 	outputLimitBytes int
 	outputDir        string
+}
+
+const (
+	sandboxSnapshotMaxFiles      = 4096
+	sandboxSnapshotMaxTotalBytes = 64 << 20
+	sandboxSnapshotMaxFileBytes  = 8 << 20
+	sandboxSnapshotMaxListBytes  = 1 << 20
+	sandboxSnapshotCopyChunkSize = 32 << 10
+)
+
+type sandboxSnapshotPlan struct {
+	root    string
+	files   []string
+	fileSet map[string]bool
 }
 
 func NewSandboxRunner(cfg ReviewConfig) (SandboxRunner, error) {
@@ -242,11 +260,11 @@ func (r *WorkspaceSandboxRunner) RunChecks(ctx context.Context, taskID string, r
 	}
 	defer r.engine.Manager().Cleanup(ctx, ws)
 	skillPath := filepath.Join(exampleDir(), "skills", "code-review")
-	if err := r.engine.FS().StageDirectory(ctx, ws, skillPath, filepath.Join(codeexecutor.DirSkills, "code-review"), codeexecutor.StageOptions{ReadOnly: true}); err != nil {
+	if err := r.engine.FS().StageDirectory(ctx, ws, skillPath, sandboxpath.Join(codeexecutor.DirSkills, "code-review"), codeexecutor.StageOptions{ReadOnly: true}); err != nil {
 		return SandboxResult{Runs: []SandboxRun{failedSetupRun(taskID, r.executorName, "stage_skill", err)}}
 	}
 	if err := r.engine.FS().PutFiles(ctx, ws, []codeexecutor.PutFile{{
-		Path:    filepath.Join(codeexecutor.DirWork, "change.diff"),
+		Path:    sandboxpath.Join(codeexecutor.DirWork, "change.diff"),
 		Content: []byte(redactSecrets(pd.Raw)),
 		Mode:    0o600,
 	}}); err != nil {
@@ -258,13 +276,24 @@ func (r *WorkspaceSandboxRunner) RunChecks(ctx context.Context, taskID string, r
 		hasRepo = false
 		repoChecksUnavailable = "e2b_egress_not_enforced"
 	}
-	repoCwd := filepath.Join(codeexecutor.DirWork, "repo")
+	repoCwd := sandboxpath.Join(codeexecutor.DirWork, "repo")
 	if hasRepo {
 		absRepo, err := filepath.Abs(repoPath)
 		if err != nil {
 			return SandboxResult{Runs: []SandboxRun{failedSetupRun(taskID, r.executorName, "abs_repo", err)}}
 		}
-		if r.executorName == "container" && repoHasUnvendoredExternalModules(absRepo) {
+		sourceRoot, _ := sandboxGitRootAndPrefix(ctx, absRepo)
+		plan, err := buildSandboxSnapshotPlan(ctx, sourceRoot, sandboxSnapshotMaxFiles)
+		if err != nil {
+			var budgetErr *sandboxSnapshotBudgetError
+			if errors.As(err, &budgetErr) {
+				hasRepo = false
+				repoChecksUnavailable = "snapshot_budget_exceeded"
+			} else {
+				return SandboxResult{Runs: []SandboxRun{failedSetupRun(taskID, r.executorName, "prepare_repo_plan", err)}}
+			}
+		}
+		if hasRepo && r.executorName == "container" && repoHasUnvendoredExternalModulesForSnapshot(absRepo, plan) {
 			hasRepo = false
 			repoChecksUnavailable = "dependency_unavailable"
 		}
@@ -276,13 +305,21 @@ func (r *WorkspaceSandboxRunner) RunChecks(ctx context.Context, taskID string, r
 		}
 		stageRepo, stagedRepoCwd, cleanupRepo, err := prepareSandboxRepoSnapshotForPath(ctx, absRepo)
 		if err != nil {
-			return SandboxResult{Runs: []SandboxRun{failedSetupRun(taskID, r.executorName, "prepare_repo_snapshot", err)}}
+			var budgetErr *sandboxSnapshotBudgetError
+			if errors.As(err, &budgetErr) {
+				hasRepo = false
+				repoChecksUnavailable = "snapshot_budget_exceeded"
+			} else {
+				return SandboxResult{Runs: []SandboxRun{failedSetupRun(taskID, r.executorName, "prepare_repo_snapshot", err)}}
+			}
 		}
-		defer cleanupRepo()
-		if err := r.engine.FS().StageDirectory(ctx, ws, stageRepo, filepath.Join(codeexecutor.DirWork, "repo"), codeexecutor.StageOptions{}); err != nil {
-			return SandboxResult{Runs: []SandboxRun{failedSetupRun(taskID, r.executorName, "stage_repo", err)}}
+		if hasRepo {
+			defer cleanupRepo()
+			if err := r.engine.FS().StageDirectory(ctx, ws, stageRepo, sandboxpath.Join(codeexecutor.DirWork, "repo"), codeexecutor.StageOptions{}); err != nil {
+				return SandboxResult{Runs: []SandboxRun{failedSetupRun(taskID, r.executorName, "stage_repo", err)}}
+			}
+			repoCwd = sandboxpath.Join(codeexecutor.DirWork, "repo", stagedRepoCwd)
 		}
-		repoCwd = filepath.Join(codeexecutor.DirWork, "repo", filepath.FromSlash(stagedRepoCwd))
 	}
 	checks := []struct {
 		cmd  string
@@ -291,7 +328,7 @@ func (r *WorkspaceSandboxRunner) RunChecks(ctx context.Context, taskID string, r
 	}{
 		{
 			cmd:  "bash",
-			args: []string{filepath.Join(codeexecutor.DirSkills, "code-review", "scripts", "diff_summary.sh"), filepath.Join(codeexecutor.DirWork, "change.diff"), filepath.Join(codeexecutor.DirOut, "diff_summary.json")},
+			args: []string{sandboxpath.Join(codeexecutor.DirSkills, "code-review", "scripts", "diff_summary.sh"), sandboxpath.Join(codeexecutor.DirWork, "change.diff"), sandboxpath.Join(codeexecutor.DirOut, "diff_summary.json")},
 			cwd:  ".",
 		},
 	}
@@ -341,17 +378,34 @@ func (r *WorkspaceSandboxRunner) RunChecks(ctx context.Context, taskID string, r
 		}
 		runs = append(runs, r.runProgram(ctx, ws, taskID, check.cmd, check.args, check.cwd))
 	}
-	if files, err := r.engine.FS().Collect(ctx, ws, []string{filepath.Join(codeexecutor.DirOut, "diff_summary.json")}); err == nil {
+	if files, err := r.engine.FS().Collect(ctx, ws, []string{sandboxpath.Join(codeexecutor.DirOut, "diff_summary.json")}); err == nil {
 		for _, f := range files {
 			if artifact, err := r.materializeCollectedArtifact(taskID, f); err == nil {
 				artifacts = append(artifacts, artifact)
 			}
 		}
 	}
+	if len(artifacts) == 0 {
+		for _, run := range runs {
+			if run.Command != "bash" || run.Status != "success" {
+				continue
+			}
+			if content, err := json.Marshal(pd.Summary); err == nil {
+				if artifact, err := r.materializeCollectedArtifact(taskID, codeexecutor.File{
+					Name:     "out/diff_summary.json",
+					Content:  string(content),
+					MIMEType: "application/json",
+				}); err == nil {
+					artifacts = append(artifacts, artifact)
+				}
+			}
+			break
+		}
+	}
 	return SandboxResult{
 		Runs:        runs,
 		Decisions:   decisions,
-		Findings:    ParseSandboxFindings(runs),
+		Findings:    ParseSandboxFindings(runs, pd),
 		Artifacts:   artifacts,
 		SkillLoaded: true,
 	}
@@ -367,7 +421,7 @@ func (r *WorkspaceSandboxRunner) runProgram(ctx context.Context, ws codeexecutor
 		Cwd:      cwd,
 		Timeout:  r.timeout,
 		CleanEnv: true,
-		Env:      goReviewEnv(),
+		Env:      goReviewEnvForExecutor(r.executorName),
 	})
 	out, outTrunc := limitText(redactSecrets(res.Stdout), r.outputLimitBytes)
 	stderr, errTrunc := limitText(redactSecrets(res.Stderr), r.outputLimitBytes)
@@ -449,6 +503,8 @@ func unavailableRepoCheckRuns(taskID, executor, reason string) []SandboxRun {
 		stderr = "repository checks are disabled for E2B because outbound network egress is not denied; only diff summary is executed"
 	case "dependency_unavailable":
 		stderr = "repository declares external modules without a vendor directory; offline container checks cannot resolve dependencies"
+	case "snapshot_budget_exceeded":
+		stderr = "repository snapshot exceeds host-side sandbox staging budgets; repository checks are unavailable for this review"
 	default:
 		stderr = "repository checks are unavailable"
 	}
@@ -525,7 +581,28 @@ func goReviewEnv() map[string]string {
 	}
 }
 
+func goReviewEnvForExecutor(executor string) map[string]string {
+	env := goReviewEnv()
+	if executor == "local-dev-fallback" {
+		env["PATH"] = strings.Join([]string{
+			`C:\Program Files\Git\bin`,
+			`C:\Program Files\Git\usr\bin`,
+			`C:\Program Files\Git\cmd`,
+			env["PATH"],
+		}, string(os.PathListSeparator))
+	}
+	return env
+}
+
 func repoHasUnvendoredExternalModules(repoPath string) bool {
+	plan, err := buildSandboxSnapshotPlan(context.Background(), repoPath, sandboxSnapshotMaxFiles)
+	if err != nil {
+		plan = sandboxSnapshotPlan{root: repoPath}
+	}
+	return repoHasUnvendoredExternalModulesForSnapshot(repoPath, plan)
+}
+
+func repoHasUnvendoredExternalModulesForSnapshot(repoPath string, plan sandboxSnapshotPlan) bool {
 	if _, err := os.Stat(filepath.Join(repoPath, "vendor")); err == nil {
 		return false
 	}
@@ -533,13 +610,21 @@ func repoHasUnvendoredExternalModules(repoPath string) bool {
 	if err != nil {
 		return false
 	}
-	return goModHasRequire(string(data))
+	return goModHasRequireOutsideSnapshot(string(data), repoPath, plan)
 }
 
 func goModHasRequire(data string) bool {
-	requires, localReplaces := parseGoModRequiresAndLocalReplaces(data)
+	return goModHasRequireOutsideSnapshot(data, "", sandboxSnapshotPlan{})
+}
+
+func goModHasRequireOutsideSnapshot(data, moduleDir string, plan sandboxSnapshotPlan) bool {
+	requires, localReplaces := parseGoModRequiresAndLocalReplaceTargets(data)
 	for module := range requires {
-		if !localReplaces[module] {
+		target, ok := localReplaces[module]
+		if !ok {
+			return true
+		}
+		if moduleDir != "" && plan.root != "" && !localReplaceTargetWithinSnapshot(moduleDir, plan, target) {
 			return true
 		}
 	}
@@ -547,8 +632,17 @@ func goModHasRequire(data string) bool {
 }
 
 func parseGoModRequiresAndLocalReplaces(data string) (map[string]bool, map[string]bool) {
-	requires := map[string]bool{}
+	requires, targets := parseGoModRequiresAndLocalReplaceTargets(data)
 	localReplaces := map[string]bool{}
+	for module := range targets {
+		localReplaces[module] = true
+	}
+	return requires, localReplaces
+}
+
+func parseGoModRequiresAndLocalReplaceTargets(data string) (map[string]bool, map[string]string) {
+	requires := map[string]bool{}
+	localReplaces := map[string]string{}
 	block := ""
 	for _, raw := range strings.Split(data, "\n") {
 		line := stripGoModComment(raw)
@@ -573,16 +667,16 @@ func parseGoModRequiresAndLocalReplaces(data string) (map[string]bool, map[strin
 				requires[module] = true
 			}
 		case block == "replace":
-			if module, ok := localReplaceModule(line); ok {
-				localReplaces[module] = true
+			if module, target, ok := localReplaceModule(line); ok {
+				localReplaces[module] = target
 			}
 		case strings.HasPrefix(line, "require "):
 			if module := requireModule(strings.TrimSpace(strings.TrimPrefix(line, "require "))); module != "" {
 				requires[module] = true
 			}
 		case strings.HasPrefix(line, "replace "):
-			if module, ok := localReplaceModule(strings.TrimSpace(strings.TrimPrefix(line, "replace "))); ok {
-				localReplaces[module] = true
+			if module, target, ok := localReplaceModule(strings.TrimSpace(strings.TrimPrefix(line, "replace "))); ok {
+				localReplaces[module] = target
 			}
 		}
 	}
@@ -604,20 +698,20 @@ func requireModule(line string) string {
 	return fields[0]
 }
 
-func localReplaceModule(line string) (string, bool) {
+func localReplaceModule(line string) (string, string, bool) {
 	left, right, ok := strings.Cut(line, "=>")
 	if !ok {
-		return "", false
+		return "", "", false
 	}
 	leftFields := strings.Fields(strings.TrimSpace(left))
 	rightFields := strings.Fields(strings.TrimSpace(right))
 	if len(leftFields) == 0 || len(rightFields) == 0 {
-		return "", false
+		return "", "", false
 	}
 	if !isLocalReplaceTarget(rightFields[0]) {
-		return "", false
+		return "", "", false
 	}
-	return leftFields[0], true
+	return leftFields[0], rightFields[0], true
 }
 
 func isLocalReplaceTarget(target string) bool {
@@ -625,6 +719,57 @@ func isLocalReplaceTarget(target string) bool {
 		strings.HasPrefix(target, "./") ||
 		strings.HasPrefix(target, "../") ||
 		filepath.IsAbs(target)
+}
+
+func localReplaceTargetWithinSnapshot(moduleDir string, plan sandboxSnapshotPlan, target string) bool {
+	if !isLocalReplaceTarget(target) || filepath.IsAbs(target) {
+		return false
+	}
+	root, err := filepath.Abs(plan.root)
+	if err != nil {
+		return false
+	}
+	moduleRoot, err := filepath.Abs(moduleDir)
+	if err != nil {
+		return false
+	}
+	absTarget, err := filepath.Abs(filepath.Join(moduleRoot, filepath.FromSlash(target)))
+	if err != nil {
+		return false
+	}
+	info, err := os.Stat(absTarget)
+	if err != nil || !info.IsDir() {
+		return false
+	}
+	if _, err := os.Stat(filepath.Join(absTarget, "go.mod")); err != nil {
+		return false
+	}
+	if realRoot, err := filepath.EvalSymlinks(root); err == nil {
+		root = realRoot
+	}
+	if realTarget, err := filepath.EvalSymlinks(absTarget); err == nil {
+		absTarget = realTarget
+	}
+	rel, err := filepath.Rel(root, absTarget)
+	if err != nil {
+		return false
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return false
+	}
+	if plan.fileSet == nil {
+		return true
+	}
+	rel = filepath.ToSlash(rel)
+	if rel == "." {
+		return plan.fileSet["go.mod"]
+	}
+	for file := range plan.fileSet {
+		if file == rel+"/go.mod" || strings.HasPrefix(file, rel+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 func prepareSandboxRepoSnapshotForPath(ctx context.Context, repoPath string) (string, string, func() error, error) {
@@ -652,7 +797,7 @@ func sandboxGitRootAndPrefix(ctx context.Context, repoPath string) (string, stri
 }
 
 func prepareSandboxRepoSnapshot(ctx context.Context, repoPath string) (string, func() error, error) {
-	files, err := sandboxRepoFileList(ctx, repoPath)
+	plan, err := buildSandboxSnapshotPlan(ctx, repoPath, sandboxSnapshotMaxFiles)
 	if err != nil {
 		return "", nil, err
 	}
@@ -661,11 +806,20 @@ func prepareSandboxRepoSnapshot(ctx context.Context, repoPath string) (string, f
 		return "", nil, err
 	}
 	cleanup := func() error { return os.RemoveAll(dir) }
-	for _, file := range files {
+	budget := sandboxSnapshotBudget{
+		maxFiles:      sandboxSnapshotMaxFiles,
+		maxTotalBytes: sandboxSnapshotMaxTotalBytes,
+		maxFileBytes:  sandboxSnapshotMaxFileBytes,
+	}
+	for _, file := range plan.files {
+		if err := ctx.Err(); err != nil {
+			_ = cleanup()
+			return "", nil, err
+		}
 		if shouldSkipSandboxStagePath(file) {
 			continue
 		}
-		if err := copySandboxFile(repoPath, dir, file); err != nil {
+		if err := copySandboxFile(ctx, repoPath, dir, file, &budget); err != nil {
 			_ = cleanup()
 			return "", nil, err
 		}
@@ -673,27 +827,92 @@ func prepareSandboxRepoSnapshot(ctx context.Context, repoPath string) (string, f
 	return dir, cleanup, nil
 }
 
-func sandboxRepoFileList(ctx context.Context, repoPath string) ([]string, error) {
-	raw, err := gitOutput(ctx, repoPath, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
-	if err == nil {
-		return splitNULFileList(raw), nil
+func buildSandboxSnapshotPlan(ctx context.Context, repoPath string, maxFiles int) (sandboxSnapshotPlan, error) {
+	root, err := filepath.Abs(repoPath)
+	if err != nil {
+		return sandboxSnapshotPlan{}, err
 	}
-	return walkSandboxRepoFiles(repoPath)
+	files, err := sandboxRepoFileList(ctx, root, maxFiles)
+	if err != nil {
+		return sandboxSnapshotPlan{}, err
+	}
+	plan := sandboxSnapshotPlan{
+		root:    root,
+		files:   make([]string, 0, len(files)),
+		fileSet: make(map[string]bool, len(files)),
+	}
+	for _, file := range files {
+		if shouldSkipSandboxStagePath(file) {
+			continue
+		}
+		plan.files = append(plan.files, file)
+		plan.fileSet[file] = true
+	}
+	return plan, nil
 }
 
-func splitNULFileList(raw []byte) []string {
-	parts := strings.Split(string(raw), "\x00")
+func sandboxRepoFileList(ctx context.Context, repoPath string, maxFiles int) ([]string, error) {
+	raw, err := sandboxGitOutputLimited(ctx, repoPath, sandboxSnapshotMaxListBytes, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
+	if err == nil {
+		return splitNULFileList(raw, maxFiles)
+	}
+	var budgetErr *sandboxSnapshotBudgetError
+	if errors.As(err, &budgetErr) {
+		return nil, err
+	}
+	return walkSandboxRepoFiles(repoPath, maxFiles)
+}
+
+func sandboxGitOutputLimited(ctx context.Context, repoPath string, maxBytes int64, args ...string) ([]byte, error) {
+	cmdArgs := append([]string{"-C", repoPath}, args...)
+	cmd := exec.CommandContext(ctx, "git", cmdArgs...)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	out, readErr := io.ReadAll(io.LimitReader(stdout, maxBytes+1))
+	if readErr != nil {
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+		_ = cmd.Wait()
+		return nil, readErr
+	}
+	if int64(len(out)) > maxBytes {
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+		_ = cmd.Wait()
+		return nil, &sandboxSnapshotBudgetError{path: "git ls-files", reason: "file-list byte budget exceeded", limit: maxBytes, got: int64(len(out))}
+	}
+	waitErr := cmd.Wait()
+	if waitErr != nil && strings.TrimSpace(stderr.String()) != "" {
+		return nil, fmt.Errorf("%w: %s", waitErr, strings.TrimSpace(stderr.String()))
+	}
+	return out, waitErr
+}
+
+func splitNULFileList(raw []byte, maxFiles int) ([]string, error) {
+	parts := bytes.Split(raw, []byte{0})
 	files := make([]string, 0, len(parts))
 	for _, part := range parts {
-		file := normalizeSandboxRelPath(part)
+		file := normalizeSandboxRelPath(string(part))
 		if file != "" {
+			if maxFiles > 0 && len(files)+1 > maxFiles {
+				return nil, &sandboxSnapshotBudgetError{path: file, reason: "file-count budget exceeded", limit: int64(maxFiles), got: int64(len(files) + 1)}
+			}
 			files = append(files, file)
 		}
 	}
-	return files
+	return files, nil
 }
 
-func walkSandboxRepoFiles(repoPath string) ([]string, error) {
+func walkSandboxRepoFiles(repoPath string, maxFiles int) ([]string, error) {
 	var files []string
 	err := filepath.WalkDir(repoPath, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -713,13 +932,16 @@ func walkSandboxRepoFiles(repoPath string) ([]string, error) {
 			}
 			return nil
 		}
+		if maxFiles > 0 && len(files)+1 > maxFiles {
+			return &sandboxSnapshotBudgetError{path: rel, reason: "file-count budget exceeded", limit: int64(maxFiles), got: int64(len(files) + 1)}
+		}
 		files = append(files, rel)
 		return nil
 	})
 	return files, err
 }
 
-func copySandboxFile(repoPath, snapshotDir, rel string) error {
+func copySandboxFile(ctx context.Context, repoPath, snapshotDir, rel string, budget *sandboxSnapshotBudget) error {
 	rel = normalizeSandboxRelPath(rel)
 	if rel == "" || shouldSkipSandboxStagePath(rel) {
 		return nil
@@ -731,6 +953,11 @@ func copySandboxFile(repoPath, snapshotDir, rel string) error {
 	}
 	if info.IsDir() || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
 		return nil
+	}
+	if budget != nil {
+		if err := budget.reserveFile(rel, info.Size()); err != nil {
+			return err
+		}
 	}
 	dst := filepath.Join(snapshotDir, filepath.FromSlash(rel))
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
@@ -745,13 +972,90 @@ func copySandboxFile(repoPath, snapshotDir, rel string) error {
 	if err != nil {
 		return fmt.Errorf("create staged file %s: %w", rel, err)
 	}
-	if _, err := io.Copy(out, in); err != nil {
-		_ = out.Close()
-		return fmt.Errorf("copy staged file %s: %w", rel, err)
+	buf := make([]byte, sandboxSnapshotCopyChunkSize)
+	for {
+		if err := ctx.Err(); err != nil {
+			_ = out.Close()
+			return err
+		}
+		n, readErr := in.Read(buf)
+		if n > 0 {
+			if budget != nil {
+				if err := budget.reserveBytes(rel, int64(n)); err != nil {
+					_ = out.Close()
+					return err
+				}
+			}
+			if _, err := out.Write(buf[:n]); err != nil {
+				_ = out.Close()
+				return fmt.Errorf("copy staged file %s: %w", rel, err)
+			}
+		}
+		if errors.Is(readErr, io.EOF) {
+			break
+		}
+		if readErr != nil {
+			_ = out.Close()
+			return fmt.Errorf("copy staged file %s: %w", rel, readErr)
+		}
 	}
 	if err := out.Close(); err != nil {
 		return fmt.Errorf("close staged file %s: %w", rel, err)
 	}
+	return nil
+}
+
+type sandboxSnapshotBudget struct {
+	maxFiles      int
+	maxTotalBytes int64
+	maxFileBytes  int64
+	files         int
+	totalBytes    int64
+	fileBytes     map[string]int64
+}
+
+type sandboxSnapshotBudgetError struct {
+	path   string
+	reason string
+	limit  int64
+	got    int64
+}
+
+func (e *sandboxSnapshotBudgetError) Error() string {
+	return fmt.Sprintf("sandbox snapshot %s for %s: got %d, limit %d", e.reason, e.path, e.got, e.limit)
+}
+
+func (b *sandboxSnapshotBudget) reserveFile(path string, size int64) error {
+	if b.maxFiles > 0 && b.files+1 > b.maxFiles {
+		return &sandboxSnapshotBudgetError{path: path, reason: "file-count budget exceeded", limit: int64(b.maxFiles), got: int64(b.files + 1)}
+	}
+	if b.maxFileBytes > 0 && size > b.maxFileBytes {
+		return &sandboxSnapshotBudgetError{path: path, reason: "per-file budget exceeded", limit: b.maxFileBytes, got: size}
+	}
+	b.files++
+	if b.fileBytes == nil {
+		b.fileBytes = map[string]int64{}
+	}
+	b.fileBytes[path] = 0
+	return nil
+}
+
+func (b *sandboxSnapshotBudget) reserveBytes(path string, n int64) error {
+	if n <= 0 {
+		return nil
+	}
+	if b.fileBytes == nil {
+		b.fileBytes = map[string]int64{}
+	}
+	fileTotal := b.fileBytes[path] + n
+	if b.maxFileBytes > 0 && fileTotal > b.maxFileBytes {
+		return &sandboxSnapshotBudgetError{path: path, reason: "per-file copy budget exceeded", limit: b.maxFileBytes, got: fileTotal}
+	}
+	if b.maxTotalBytes > 0 && b.totalBytes+n > b.maxTotalBytes {
+		return &sandboxSnapshotBudgetError{path: path, reason: "total-byte budget exceeded", limit: b.maxTotalBytes, got: b.totalBytes + n}
+	}
+	b.fileBytes[path] = fileTotal
+	b.totalBytes += n
 	return nil
 }
 
@@ -831,7 +1135,7 @@ func (r NoopSandboxRunner) RunChecks(ctx context.Context, taskID string, repoPat
 	}{
 		{
 			cmd:  "bash",
-			args: []string{filepath.Join(codeexecutor.DirSkills, "code-review", "scripts", "diff_summary.sh"), filepath.Join(codeexecutor.DirWork, "change.diff"), filepath.Join(codeexecutor.DirOut, "diff_summary.json")},
+			args: []string{sandboxpath.Join(codeexecutor.DirSkills, "code-review", "scripts", "diff_summary.sh"), sandboxpath.Join(codeexecutor.DirWork, "change.diff"), sandboxpath.Join(codeexecutor.DirOut, "diff_summary.json")},
 		},
 	}
 	if strings.TrimSpace(repoPath) != "" {
@@ -900,8 +1204,13 @@ type FakeFailSandboxRunner struct{}
 
 func (FakeFailSandboxRunner) Close() error { return nil }
 
-func (FakeFailSandboxRunner) RunChecks(ctx context.Context, taskID string, _ string, _ ParsedDiff) SandboxResult {
+func (FakeFailSandboxRunner) RunChecks(ctx context.Context, taskID string, _ string, pd ParsedDiff) SandboxResult {
 	record, _, _ := ReviewPermissionPolicy{TaskID: taskID}.Decide(ctx, "go", []string{"test", "./..."})
+	anchor := firstAddedAnchor(pd)
+	stderr := "service/handler.go:12: simulated sandbox failure"
+	if anchor.file != "" && anchor.line > 0 {
+		stderr = fmt.Sprintf("%s:%d: simulated sandbox failure", anchor.file, anchor.line)
+	}
 	runs := []SandboxRun{{
 		ID:        newID("run"),
 		TaskID:    taskID,
@@ -912,9 +1221,9 @@ func (FakeFailSandboxRunner) RunChecks(ctx context.Context, taskID string, _ str
 		ExitCode:  1,
 		ErrorType: "executor_error",
 		StartedAt: time.Now(),
-		Stderr:    "service/handler.go:12: simulated sandbox failure",
+		Stderr:    stderr,
 	}}
-	return SandboxResult{Runs: runs, Decisions: []PermissionDecisionRecord{record}, Findings: ParseSandboxFindings(runs)}
+	return SandboxResult{Runs: runs, Decisions: []PermissionDecisionRecord{record}, Findings: ParseSandboxFindings(runs, pd)}
 }
 
 func exampleDir() string {

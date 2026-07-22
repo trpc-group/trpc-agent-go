@@ -123,7 +123,7 @@ func RunReview(ctx context.Context, cfg ReviewConfig) (ReviewReport, string, str
 		sandboxResult = runner.RunChecks(ctx, task.ID, cfg.RepoPath, pd)
 	}
 	findings = append(findings, sandboxResult.Findings...)
-	needsHuman = append(needsHuman, sandboxReviewItems(sandboxResult.Runs, sandboxResult.Findings)...)
+	needsHuman = append(needsHuman, sandboxReviewItems(sandboxResult.Runs, pd, sandboxResult.Findings)...)
 	if inputMode == "file-list" {
 		needsHuman = append(needsHuman, fileListIncompleteFinding())
 	}
@@ -152,12 +152,7 @@ func RunReview(ctx context.Context, cfg ReviewConfig) (ReviewReport, string, str
 	if err := os.MkdirAll(cfg.OutputDir, 0o755); err != nil {
 		return ReviewReport{}, "", "", err
 	}
-	jsonPath, mdPath, err := WriteReports(cfg.OutputDir, report)
-	if err != nil {
-		return ReviewReport{}, "", "", err
-	}
-	report.Artifacts, report.ArtifactPolicy = reportArtifacts(task.ID, append(sandboxResult.Artifacts, reportFileArtifacts(task.ID, jsonPath, mdPath)...))
-	jsonPath, mdPath, err = WriteReports(cfg.OutputDir, report)
+	jsonPath, mdPath, err := finalizeReportArtifacts(cfg.OutputDir, &report, sandboxResult.Artifacts)
 	if err != nil {
 		return ReviewReport{}, "", "", err
 	}
@@ -422,11 +417,16 @@ func writeNewFileDiff(b *strings.Builder, file string, lines []string, noNewline
 	}
 }
 
-func sandboxReviewItems(runs []SandboxRun, parsed []Finding) []Finding {
+func sandboxReviewItems(runs []SandboxRun, pd ParsedDiff, parsed []Finding) []Finding {
 	var out []Finding
 	parsedByCommand := map[string]bool{}
 	for _, f := range parsed {
 		parsedByCommand[strings.TrimPrefix(f.Source, "sandbox:")] = true
+	}
+	_, unanchored := splitSandboxDiagnostics(runs, pd)
+	for _, f := range unanchored {
+		parsedByCommand[strings.TrimPrefix(f.Source, "sandbox:")] = true
+		out = append(out, f)
 	}
 	for _, run := range runs {
 		if run.Status == "success" || run.Status == "skipped" {
@@ -448,7 +448,7 @@ func sandboxReviewItems(runs []SandboxRun, parsed []Finding) []Finding {
 			RuleID:         "sandbox/check-failed",
 		})
 	}
-	return out
+	return DedupeFindings(out)
 }
 
 func buildMetrics(report ReviewReport, total time.Duration) AuditMetrics {
@@ -528,6 +528,10 @@ func hasCritical(findings []Finding) bool {
 }
 
 func reportFileArtifacts(taskID, jsonPath, mdPath string) []ArtifactRecord {
+	return reportFileArtifactsAt(taskID, jsonPath, mdPath, time.Now())
+}
+
+func reportFileArtifactsAt(taskID, jsonPath, mdPath string, createdAt time.Time) []ArtifactRecord {
 	outputDir := filepath.Dir(jsonPath)
 	paths := []struct{ name, path, mime string }{
 		{"review_report.json", jsonPath, "application/json"},
@@ -548,10 +552,70 @@ func reportFileArtifacts(taskID, jsonPath, mdPath string) []ArtifactRecord {
 			Path:      p.path,
 			MimeType:  p.mime,
 			SizeBytes: st.Size(),
-			CreatedAt: time.Now(),
+			CreatedAt: createdAt,
 		})
 	}
 	return out
+}
+
+func finalizeReportArtifacts(outputDir string, report *ReviewReport, sandboxArtifacts []ArtifactRecord) (string, string, error) {
+	createdAt := report.Task.EndedAt
+	if createdAt.IsZero() {
+		createdAt = time.Now()
+	}
+	var jsonPath string
+	var mdPath string
+	for i := 0; i < 8; i++ {
+		nextJSONPath, nextMDPath, err := WriteReports(outputDir, *report)
+		if err != nil {
+			return "", "", err
+		}
+		jsonPath, mdPath = nextJSONPath, nextMDPath
+		nextArtifacts, nextPolicy := reportArtifacts(
+			report.Task.ID,
+			append(append([]ArtifactRecord{}, sandboxArtifacts...), reportFileArtifactsAt(report.Task.ID, jsonPath, mdPath, createdAt)...),
+		)
+		if reportArtifactsEqual(report.Artifacts, nextArtifacts) && artifactPoliciesEqual(report.ArtifactPolicy, nextPolicy) {
+			return jsonPath, mdPath, nil
+		}
+		report.Artifacts = nextArtifacts
+		report.ArtifactPolicy = nextPolicy
+	}
+	jsonPath, mdPath, err := WriteReports(outputDir, *report)
+	if err != nil {
+		return "", "", err
+	}
+	finalArtifacts, finalPolicy := reportArtifacts(
+		report.Task.ID,
+		append(append([]ArtifactRecord{}, sandboxArtifacts...), reportFileArtifactsAt(report.Task.ID, jsonPath, mdPath, createdAt)...),
+	)
+	report.Artifacts = finalArtifacts
+	report.ArtifactPolicy = finalPolicy
+	return WriteReports(outputDir, *report)
+}
+
+func reportArtifactsEqual(a, b []ArtifactRecord) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].TaskID != b[i].TaskID ||
+			a[i].Name != b[i].Name ||
+			a[i].Path != b[i].Path ||
+			a[i].MimeType != b[i].MimeType ||
+			a[i].SizeBytes != b[i].SizeBytes {
+			return false
+		}
+	}
+	return true
+}
+
+func artifactPoliciesEqual(a, b ArtifactPolicy) bool {
+	return a.MaxArtifacts == b.MaxArtifacts &&
+		a.MaxBytesPerFile == b.MaxBytesPerFile &&
+		a.RetainedCount == b.RetainedCount &&
+		a.RejectedCount == b.RejectedCount &&
+		strings.Join(a.AllowedFileNames, "\x00") == strings.Join(b.AllowedFileNames, "\x00")
 }
 
 func reportArtifacts(taskID string, candidates []ArtifactRecord) ([]ArtifactRecord, ArtifactPolicy) {

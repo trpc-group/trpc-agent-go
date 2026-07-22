@@ -22,27 +22,41 @@ func WriteReports(outputDir string, report ReviewReport) (string, string, error)
 	if err := os.MkdirAll(outputDir, 0o755); err != nil {
 		return "", "", err
 	}
-	jsonPath := filepath.Join(outputDir, "review_report.json")
-	mdPath := filepath.Join(outputDir, "review_report.md")
-	diagnosticsPath := filepath.Join(outputDir, "review_diagnostics.json")
-	zhPath := filepath.Join(outputDir, "review_report.zh.md")
 	data, err := json.MarshalIndent(redactedReport(report), "", "  ")
 	if err != nil {
 		return "", "", err
 	}
-	if err := os.WriteFile(jsonPath, data, 0o644); err != nil {
+	taskDir := outputDir
+	if strings.TrimSpace(report.Task.ID) != "" {
+		taskDir = filepath.Join(outputDir, report.Task.ID)
+	}
+	if err := os.MkdirAll(taskDir, 0o755); err != nil {
 		return "", "", err
 	}
-	if err := os.WriteFile(mdPath, []byte(RenderMarkdown(report)), 0o644); err != nil {
+	jsonPath := filepath.Join(taskDir, "review_report.json")
+	mdPath := filepath.Join(taskDir, "review_report.md")
+	if err := writeReportFileSet(taskDir, data, report); err != nil {
 		return "", "", err
 	}
-	if err := os.WriteFile(diagnosticsPath, []byte(RenderDiagnosticsJSON(report)), 0o644); err != nil {
-		return "", "", err
-	}
-	if err := os.WriteFile(zhPath, []byte(RenderMarkdownZH(report)), 0o644); err != nil {
-		return "", "", err
+	if taskDir != outputDir {
+		if err := writeReportFileSet(outputDir, data, report); err != nil {
+			return "", "", err
+		}
 	}
 	return jsonPath, mdPath, nil
+}
+
+func writeReportFileSet(dir string, data []byte, report ReviewReport) error {
+	if err := os.WriteFile(filepath.Join(dir, "review_report.json"), data, 0o644); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(dir, "review_report.md"), []byte(RenderMarkdown(report)), 0o644); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(dir, "review_diagnostics.json"), []byte(RenderDiagnosticsJSON(report)), 0o644); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, "review_report.zh.md"), []byte(RenderMarkdownZH(report)), 0o644)
 }
 
 func RenderDiagnosticsJSON(report ReviewReport) string {

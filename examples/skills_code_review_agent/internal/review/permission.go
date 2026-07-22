@@ -56,7 +56,7 @@ func permissionDisposition(action string) string {
 }
 
 func (p ReviewPermissionPolicy) CheckToolPermission(_ context.Context, req *tool.PermissionRequest) (tool.PermissionDecision, error) {
-	raw := strings.ToLower(string(req.Arguments))
+	raw := strings.ToLower(strings.ReplaceAll(string(req.Arguments), "\\", "/"))
 	fields := strings.Fields(raw)
 	if len(fields) == 0 {
 		return tool.DenyPermission("empty command"), nil

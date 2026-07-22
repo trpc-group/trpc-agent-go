@@ -20,7 +20,26 @@ import (
 var sandboxLocationRE = regexp.MustCompile(`(?m)([A-Za-z0-9_./-]+\.go):([0-9]+)(?::[0-9]+)?:\s*(.+)`)
 var staticcheckRuleRE = regexp.MustCompile(`\(([A-Z]+[0-9]+)\)`)
 
-func ParseSandboxFindings(runs []SandboxRun) []Finding {
+func ParseSandboxFindings(runs []SandboxRun, pd ParsedDiff) []Finding {
+	anchored, _ := splitSandboxDiagnostics(runs, pd)
+	return anchored
+}
+
+func splitSandboxDiagnostics(runs []SandboxRun, pd ParsedDiff) ([]Finding, []Finding) {
+	added := addedLineAnchors(pd)
+	var anchored []Finding
+	var unanchored []Finding
+	for _, finding := range parseSandboxDiagnosticsRaw(runs) {
+		if added[finding.File][finding.Line] {
+			anchored = append(anchored, finding)
+			continue
+		}
+		unanchored = append(unanchored, sandboxUnanchoredDiagnosticFinding(finding))
+	}
+	return DedupeFindings(anchored), DedupeFindings(unanchored)
+}
+
+func parseSandboxDiagnosticsRaw(runs []SandboxRun) []Finding {
 	var findings []Finding
 	for _, run := range runs {
 		if run.Status == "success" || run.Status == "skipped" {
@@ -45,6 +64,21 @@ func ParseSandboxFindings(runs []SandboxRun) []Finding {
 		}
 	}
 	return DedupeFindings(findings)
+}
+
+func sandboxUnanchoredDiagnosticFinding(f Finding) Finding {
+	return Finding{
+		Severity:       SeverityMedium,
+		Category:       "sandbox",
+		File:           f.File,
+		Line:           f.Line,
+		Title:          "Sandbox diagnostic is outside changed lines",
+		Evidence:       redactSecrets(strings.TrimSpace(strings.TrimPrefix(f.Source, "sandbox:") + ": " + f.Evidence)),
+		Recommendation: "Inspect whether this is a pre-existing failure or an environment issue before treating it as a PR regression.",
+		Confidence:     0.66,
+		Source:         "sandbox",
+		RuleID:         "sandbox/diagnostic-outside-diff",
+	}
 }
 
 func sandboxRunKey(run SandboxRun) string {

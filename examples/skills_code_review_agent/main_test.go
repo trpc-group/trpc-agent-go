@@ -13,6 +13,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -34,12 +35,19 @@ func TestRunCLIReportsSummary(t *testing.T) {
 	text := out.String()
 	for _, want := range []string{
 		"task_id=review-",
-		"json_report=" + filepath.Join(outDir, "review_report.json"),
-		"markdown_report=" + filepath.Join(outDir, "review_report.md"),
+		"json_report=" + outDir + string(filepath.Separator) + "review-",
+		string(filepath.Separator) + "review_report.json",
+		"markdown_report=" + outDir + string(filepath.Separator) + "review-",
+		string(filepath.Separator) + "review_report.md",
 		"findings=1 warnings=0 needs_human_review=1",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("output missing %q:\n%s", want, text)
+		}
+	}
+	for _, name := range []string{"review_report.json", "review_report.md"} {
+		if _, err := os.Stat(filepath.Join(outDir, name)); err != nil {
+			t.Fatalf("expected latest alias %s: %v", name, err)
 		}
 	}
 }
