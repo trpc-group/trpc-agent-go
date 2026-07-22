@@ -54,9 +54,9 @@ type RawOutputHookArgs struct {
 	Error error
 }
 
-// RawOutputHook is invoked after the CLI command completes and before transcript parsing.
+// RawOutputHook is invoked after the CLI command completes and after streamed transcript events are emitted.
 //
-// If the hook returns an error, the agent emits a final error event and stops processing the invocation.
+// If the hook returns an error, the agent emits a trailing error event and skips the final assistant response.
 type RawOutputHook func(ctx context.Context, args *RawOutputHookArgs) error
 
 // WithName sets the agent name.
@@ -120,7 +120,7 @@ func withCommandRunner(runner commandRunner) Option {
 func newOptions(opt ...Option) (*options, error) {
 	opts := &options{
 		name:          "codex-cli",
-		description:   "Invokes a locally installed Codex CLI and emits tool events from its JSONL output.",
+		description:   "Invokes a locally installed Codex CLI and emits assistant and tool events from its JSONL output.",
 		bin:           "codex",
 		commandRunner: execCommandRunner{},
 	}
