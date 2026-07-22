@@ -111,6 +111,7 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20251202230838-ff82c1b0f217 // indirect
 	google.golang.org/grpc v1.79.3 // indirect
 	google.golang.org/protobuf v1.36.10 // indirect
+	trpc.group/trpc-go/trpc-a2a-go/v2 v2.0.0-alpha.3 // indirect
 	trpc.group/trpc-go/trpc-agent-go/model/anthropic v1.1.2-0.20260108033914-7a20241f1ad5 // indirect
 	trpc.group/trpc-go/trpc-agent-go/model/gemini v1.1.2-0.20260108033914-7a20241f1ad5 // indirect
 	trpc.group/trpc-go/trpc-agent-go/model/ollama v1.1.2-0.20260108033914-7a20241f1ad5 // indirect
