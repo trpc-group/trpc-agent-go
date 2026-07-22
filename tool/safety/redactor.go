@@ -382,6 +382,7 @@ func isSecretFieldName(name string) bool {
 		strings.Contains(low, "access_key") || strings.Contains(low, "token") ||
 		strings.Contains(low, "private_key") ||
 		strings.Contains(low, "privatekey") || strings.Contains(low, "client_secret") ||
+		strings.Contains(low, "credential") ||
 		strings.Contains(low, "bearer") || strings.Contains(low, "authorization") {
 		return true
 	}
@@ -397,7 +398,13 @@ func isSecretFieldName(name string) bool {
 func redactedSnippet(s string, max int) string {
 	redacted, _ := redactString(s)
 	if max > 0 && len(redacted) > max {
-		redacted = redacted[:max]
+		// Truncate on a rune boundary so a multi-byte UTF-8 rune is
+		// never split, mirroring limitString.
+		cut := max
+		for cut > 0 && !utf8.RuneStart(redacted[cut]) {
+			cut--
+		}
+		redacted = redacted[:cut]
 	}
 	return strings.TrimSpace(redacted)
 }

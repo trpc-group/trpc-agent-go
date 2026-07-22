@@ -9,6 +9,8 @@
 package safety
 
 import (
+	"fmt"
+	"math"
 	"testing"
 	"time"
 
@@ -336,4 +338,36 @@ func TestCovercore_DecodeOneBlock(t *testing.T) {
 	b, err := decodeOneBlock(map[string]any{"language": "python", "code": "print(1)"})
 	require.NoError(t, err)
 	require.Equal(t, CodeBlock{Language: "python", Code: "print(1)"}, b)
+}
+
+// TestCovercore_DecodeOptionalFieldsTimeoutBounds is the X7 regression:
+// timeout values that would overflow int64 when converted to
+// time.Duration must be a decode error instead of wrapping negative and
+// bypassing resource.timeout_exceeded.
+func TestCovercore_DecodeOptionalFieldsTimeoutBounds(t *testing.T) {
+	reg := newProfileRegistry()
+	maxSeconds := int64(math.MaxInt64) / int64(time.Second)
+
+	// The maximum representable timeout is accepted.
+	in, err := decodeRequest("workspace_exec",
+		[]byte(fmt.Sprintf(`{"command":"ls","timeout":%d}`, maxSeconds)), reg)
+	require.NoError(t, err)
+	require.Equal(t, time.Duration(maxSeconds)*time.Second, in.Timeout)
+
+	// One past the maximum overflows and must be rejected.
+	_, err = decodeRequest("workspace_exec",
+		[]byte(fmt.Sprintf(`{"command":"ls","timeout":%d}`, maxSeconds+1)), reg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "timeout")
+
+	// A negative timeout is rejected.
+	_, err = decodeRequest("workspace_exec",
+		[]byte(`{"command":"ls","timeout":-1}`), reg)
+	require.Error(t, err)
+
+	// Zero remains valid.
+	in, err = decodeRequest("workspace_exec",
+		[]byte(`{"command":"ls","timeout":0}`), reg)
+	require.NoError(t, err)
+	require.Zero(t, in.Timeout)
 }

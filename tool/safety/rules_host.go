@@ -143,8 +143,9 @@ func ruleCapability(in ScanInput, p Policy, profiles profileRegistry) []Finding 
 	}}
 }
 
-// hasPrivilegeCommand returns true when the parsed pipeline or the raw
-// source mentions a privilege-escalation command.
+// hasPrivilegeCommand returns true when the parsed pipeline contains a
+// privilege-escalation command in executable position, or — only when
+// parsing failed — the raw source appears to invoke one.
 func hasPrivilegeCommand(a *analysis) bool {
 	if a == nil {
 		return false
@@ -159,6 +160,11 @@ func hasPrivilegeCommand(a *analysis) bool {
 				return true
 			}
 		}
+		// The command parsed successfully and no segment escalates
+		// privileges; the raw-source scan is a fallback for parse
+		// failures only, so quoted literals like `echo "a; sudo b"`
+		// are not flagged.
+		return false
 	}
 	return rawSourceHasPrivilegeCommand(a.Source)
 }

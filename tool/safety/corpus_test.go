@@ -144,6 +144,10 @@ func TestCorpusFixture_QualityGateFromFixture(t *testing.T) {
 	require.LessOrEqual(t, fpRate, 0.10, "safe false-positive rate too high: %.2f", fpRate)
 
 	for cat, got := range mandatory {
+		// Guard against a vacuous 0/0 pass when the fixture loses a
+		// mandatory category.
+		require.NotZero(t, mandatoryTotal[cat],
+			"mandatory category %s has no fixture cases", cat)
 		require.Equal(t, mandatoryTotal[cat], got,
 			"mandatory category %s: expected 100%% detection (%d/%d)",
 			cat, got, mandatoryTotal[cat])

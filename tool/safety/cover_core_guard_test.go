@@ -223,7 +223,7 @@ func TestCovercore_StashPopSideTables(t *testing.T) {
 	guard := newTestGuard(t)
 
 	// Empty ids are ignored.
-	guard.stashScanEvent("", ScanEvent{ScanID: "x"})
+	guard.stashScanEvent("", scanEvent{ScanID: "x"})
 	guard.stashRelease("", func() {})
 	require.Empty(t, guard.popScanEvent("").ScanID)
 	require.Nil(t, guard.popRelease(""))
@@ -241,10 +241,16 @@ func TestCovercore_StashPopSideTables(t *testing.T) {
 	require.True(t, ran)
 	require.Nil(t, guard.popRelease("rel"))
 
-	// After Close the maps are nil; stashScanEvent reinitializes.
+	// After Close the maps are nil; the stash helpers reinitialize them.
 	require.NoError(t, guard.Close())
-	guard.stashScanEvent("after-close", ScanEvent{ScanID: "s"})
+	guard.stashScanEvent("after-close", scanEvent{ScanID: "s"})
 	require.Equal(t, "s", guard.popScanEvent("after-close").ScanID)
+
+	ran = false
+	require.NotPanics(t, func() {
+		guard.stashRelease("after-close-rel", func() { ran = true })
+	})
+	require.NotNil(t, guard.popRelease("after-close-rel"))
 }
 
 // TestCovercore_AttachCallbacks covers merging into existing callbacks and
@@ -718,7 +724,7 @@ func TestCovercore_MaybeAuditPostExecuteNoWriter(t *testing.T) {
 	g, err := NewGuard(WithPolicy(covercoreNoAuditPolicy()))
 	require.NoError(t, err)
 	defer g.Close()
-	require.NoError(t, g.maybeAuditPostExecute(ScanEvent{ScanID: "s"}, 0, false, "ok"))
+	require.NoError(t, g.maybeAuditPostExecute(scanEvent{ScanID: "s"}, 0, false, "ok"))
 }
 
 // TestCovercore_RedactArtifactBinaryClean covers the binary no-secret

@@ -67,6 +67,10 @@ func (c *concurrencyLimiter) acquire(ctx context.Context, toolName string) (func
 	if c == nil {
 		return func() {}, nil
 	}
+	// Do not grab a slot for an already-cancelled call.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	// Global CAS loop.
 	if c.policy.MaxActiveCalls > 0 {
 		for {

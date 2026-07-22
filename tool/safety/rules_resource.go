@@ -73,17 +73,17 @@ func ruleResource(in ScanInput, a *analysis, p Policy) []Finding {
 		})
 	}
 
-	// Unbounded loops in code blocks.
-	if len(in.CodeBlocks) > 0 {
-		if hasUnboundedLoop(in.CodeBlocks) {
-			out = append(out, Finding{
-				RuleID:         "resource.unbounded_loop",
-				RiskLevel:      RiskHigh,
-				Decision:       ruleDecision(p.Rules.ResourceAbuse.Action, RiskHigh, p),
-				Evidence:       "code block contains while(true)/for(;;) without break",
-				Recommendation: "Bound the loop explicitly or refuse the code block",
-			})
-		}
+	// Unbounded loops in code blocks. scanCodeBlock records the
+	// detection in the shared analysis during buildAnalysis; consume
+	// it here instead of re-scanning the input blocks.
+	if a.HasUnboundedLoop {
+		out = append(out, Finding{
+			RuleID:         "resource.unbounded_loop",
+			RiskLevel:      RiskHigh,
+			Decision:       ruleDecision(p.Rules.ResourceAbuse.Action, RiskHigh, p),
+			Evidence:       "code block contains while(true)/for(;;) without break",
+			Recommendation: "Bound the loop explicitly or refuse the code block",
+		})
 	}
 
 	return out
@@ -98,23 +98,6 @@ func ruleResource(in ScanInput, a *analysis, p Policy) []Finding {
 //   - Ruby: loop do, while true
 //   - Bash: while true; do, while :; do
 var loopRegex = regexp.MustCompile(`(?m)(?:while\s*\(\s*(?:true|1|True|TRUE)\s*\)|while\s+(?:true|True|TRUE|1)\s*:|while\s+true\b|while\s+\[\s*\]|for\s*\(\s*;\s*;\s*\)|for\s*\(;;\)|for\s+;\s*;|for\s*\{\s*\}|while\s+:\s*\n?\s*pass|loop\s*\{\s*\}|loop\s+do|while\s+true\s*do|while\s+:\s*do)`)
-
-// hasUnboundedLoop returns true when any code block contains an unbounded
-// loop shape without an obvious break/return exit.
-func hasUnboundedLoop(blocks []CodeBlock) bool {
-	for _, b := range blocks {
-		code := b.Code
-		if loopRegex.MatchString(code) {
-			// Heuristic: if the loop body contains break/return/exit,
-			// do not flag. This keeps "while true { if cond { break } }"
-			// from being a false positive.
-			if !loopHasExit(code) {
-				return true
-			}
-		}
-	}
-	return false
-}
 
 // loopHasExit returns true when code contains an obvious exit statement.
 func loopHasExit(code string) bool {

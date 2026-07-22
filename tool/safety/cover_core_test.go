@@ -16,7 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestCovercore_SessionTrackerLifecycle exercises register, kill, clear,
+// TestCovercore_SessionTrackerLifecycle exercises register, kill, reset,
 // and the empty-id guards of the session tracker.
 func TestCovercore_SessionTrackerLifecycle(t *testing.T) {
 	tr := newSessionTracker()
@@ -24,7 +24,6 @@ func TestCovercore_SessionTrackerLifecycle(t *testing.T) {
 	// Empty ids are ignored by every mutator and accessor.
 	tr.register("")
 	tr.kill("")
-	tr.clear("")
 	require.False(t, tr.isKnown(""))
 	require.False(t, tr.isKilled(""))
 
@@ -38,7 +37,7 @@ func TestCovercore_SessionTrackerLifecycle(t *testing.T) {
 	tr.kill("sess-1")
 	require.True(t, tr.isKilled("sess-1"))
 
-	tr.clear("sess-1")
+	tr.reset()
 	require.False(t, tr.isKnown("sess-1"))
 	require.False(t, tr.isKilled("sess-1"))
 }
@@ -265,11 +264,11 @@ func TestCovercore_ConcurrencyLimiterReleaseIdempotent(t *testing.T) {
 // guard and the int/int64 attribute branches of setSpanAttribute.
 func TestCovercore_TelemetryNilContextAndIntAttributes(t *testing.T) {
 	require.NotPanics(t, func() {
-		telemetryProject(nil, []SpanAttribute{{Key: "k", Value: "v"}})
+		telemetryProject(nil, []spanAttribute{{Key: "k", Value: "v"}})
 	})
 
 	ctx, span := newRecordingSpan()
-	telemetryProject(ctx, []SpanAttribute{
+	telemetryProject(ctx, []spanAttribute{
 		{Key: "int", Value: 3},
 		{Key: "int64", Value: int64(4)},
 		{Key: "skipped", Value: struct{}{}},

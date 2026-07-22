@@ -107,6 +107,14 @@ func scanCodeBlock(a *analysis, b CodeBlock) {
 
 	lang := strings.ToLower(strings.TrimSpace(b.Language))
 
+	// Unbounded loop detection applies to every block language,
+	// including shell blocks parsed via shellsafe below, so
+	// ruleResource can consume HasUnboundedLoop without re-scanning
+	// the input.
+	if hasCodeUnboundedLoop(code) {
+		a.HasUnboundedLoop = true
+	}
+
 	// For Bash/sh code blocks, parse the entire body via shellsafe so
 	// command/path/network/dependency rules fire. This is critical: a
 	// Bash code block IS a shell command, not a string that might
@@ -175,24 +183,23 @@ func scanCodeBlock(a *analysis, b CodeBlock) {
 			})
 		case "code.dangerous_delete":
 			rec.dangerousDelete = true
-			// Add a real path op targeting "/" so rulePath fires
-			// path.system_write.
-			a.PathOps = append(a.PathOps, pathOp{
-				Token:      extractDeleteTargetFromCode(code),
-				Op:         "delete",
-				Executable: "code:" + lang,
-			})
+			// Add the concrete target as a path op so rulePath can match
+			// it against system paths. When no target is extractable
+			// (a variable or an unquoted expression), skip the path op
+			// rather than fabricating a root target.
+			if target, ok := extractDeleteTargetFromCode(code); ok {
+				a.PathOps = append(a.PathOps, pathOp{
+					Token:      target,
+					Op:         "delete",
+					Executable: "code:" + lang,
+				})
+			}
 		case "code.output_bomb":
 			rec.outputBomb = true
 			a.HasOutputBomb = true
 		}
 	}
 	a.codeMatches = append(a.codeMatches, rec)
-
-	// Unbounded loop detection for code blocks.
-	if hasCodeUnboundedLoop(code) {
-		a.HasUnboundedLoop = true
-	}
 }
 
 // isShellLanguage returns true for bash/sh/zsh/dash/etc. code blocks
@@ -217,18 +224,22 @@ func extractCredentialPathFromCode(code string) string {
 
 // extractDeleteTargetFromCode returns the first dangerous delete target
 // found in code, for use in a pathOp so rulePath can match it against
-// system paths.
-func extractDeleteTargetFromCode(code string) string {
-	// Look for rm -rf /, shutil.rmtree("/"), os.remove("/"), etc.
-	deletePathRegex := regexp.MustCompile(`(?:rm\s+-rf?\s*['"]?(/[^\s'"]*)|shutil\.rmtree\s*\(\s*['"](/[^'"]*)['"]|os\.remove\s*\(\s*['"](/[^'"]*)['"]|os\.unlink\s*\(\s*['"](/[^'"]*)['"]|fs\.rmSync\s*\(\s*['"](/[^'"]*)['"])`)
+// system paths. The second return value is false when no concrete target
+// is extractable (e.g. shutil.rmtree(path) with a variable); callers
+// must skip the path op in that case rather than fabricating one.
+func extractDeleteTargetFromCode(code string) (string, bool) {
+	// Look for rm -rf /, shutil.rmtree("/"), os.remove("/"), etc. The
+	// function-call forms also capture relative targets so a relative
+	// path is evaluated as itself instead of being replaced with "/".
+	deletePathRegex := regexp.MustCompile(`(?:rm\s+-rf?\s*['"]?(/[^\s'"]*)|shutil\.rmtree\s*\(\s*['"]([^'"]+)['"]|os\.remove\s*\(\s*['"]([^'"]+)['"]|os\.unlink\s*\(\s*['"]([^'"]+)['"]|fs\.rmSync\s*\(\s*['"]([^'"]+)['"])`)
 	if m := deletePathRegex.FindStringSubmatch(code); m != nil {
 		for _, g := range m[1:] {
 			if g != "" {
-				return g
+				return g, true
 			}
 		}
 	}
-	return "/"
+	return "", false
 }
 
 // hasCodeUnboundedLoop returns true when code contains an unbounded loop

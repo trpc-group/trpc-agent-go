@@ -39,7 +39,7 @@ func TestTelemetry_ProjectsAttributesOnActiveSpan(t *testing.T) {
 
 func TestTelemetry_NoopWhenNoSpan(t *testing.T) {
 	require.NotPanics(t, func() {
-		telemetryProject(context.Background(), []SpanAttribute{
+		telemetryProject(context.Background(), []spanAttribute{
 			{Key: KeyToolSafetyDecision, Value: "deny"},
 		})
 	})

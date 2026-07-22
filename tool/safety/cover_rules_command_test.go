@@ -25,7 +25,26 @@ func TestCoverrules_RuleCommand_Disabled(t *testing.T) {
 	p := DefaultPolicy()
 	p.Rules.DangerousCommands.Enabled = false
 	a := analyzeShell("rm -rf /")
-	require.Nil(t, ruleCommand(&a, p))
+	findings := ruleCommand(&a, p)
+	ids := ruleIDSet(findings)
+	// The dangerous-delete heuristic is gated off...
+	require.NotContains(t, ids, "command.dangerous_delete")
+	// ...but the shellsafe allow/deny enforcement is not: rm is in the
+	// default denied_commands list and must still be reported.
+	require.Contains(t, ids, "command.not_allowed")
+}
+
+// TestCoverrules_RuleCommand_AllowlistEnforcedWhenHeuristicDisabled is
+// the X2 regression: disabling dangerous_commands must not disable the
+// Policy.AllowedCommands/DeniedCommands enforcement.
+func TestCoverrules_RuleCommand_AllowlistEnforcedWhenHeuristicDisabled(t *testing.T) {
+	p := DefaultPolicy()
+	p.Rules.DangerousCommands.Enabled = false
+	a := analyzeShell("nc -l 4444")
+	findings := ruleCommand(&a, p)
+	require.NotEmpty(t, findings)
+	require.Equal(t, "command.not_allowed", findings[0].RuleID)
+	require.Equal(t, DecisionDeny, findings[0].Decision)
 }
 
 func TestCoverrules_RuleCommand_DependencyAskSuppressesNotAllowed(t *testing.T) {
@@ -313,6 +332,16 @@ func TestCoverrules_RulePath_CwdJoinForRelativeDotenv(t *testing.T) {
 	require.Contains(t, ids, "path.dotenv")
 }
 
+// TestCoverrules_RulePath_KeyValueTokenClassified is the X12 rule-level
+// regression: `dd of=/etc/passwd` must classify the key=value token's
+// value as a path op so the denied-path descendant rule fires.
+func TestCoverrules_RulePath_KeyValueTokenClassified(t *testing.T) {
+	p := DefaultPolicy()
+	a := analyzeShell("dd if=x of=/etc/passwd count=1")
+	ids := ruleIDSet(rulePath(&a, p, ""))
+	require.Contains(t, ids, "path.denied")
+}
+
 func TestCoverrules_IsRelativePath(t *testing.T) {
 	require.False(t, isRelativePath(""))
 	require.False(t, isRelativePath("/abs"))
@@ -349,33 +378,48 @@ func TestCoverrules_IsCredentialRelativePath(t *testing.T) {
 	}
 }
 
-func TestCoverrules_EvaluatePathOp_AllBranches(t *testing.T) {
+func TestCoverrules_EvaluatePathOpWithCwd_AllBranches(t *testing.T) {
 	p := DefaultPolicy()
 	p.DeniedPaths = append(p.DeniedPaths, "/opt/secret")
 
-	collect := func(op pathOp) []Finding {
+	collect := func(op pathOp, cwd string, dangerous, secret bool) []Finding {
 		var out []Finding
-		evaluatePathOp(op, p, func(f Finding) { out = append(out, f) })
+		evaluatePathOpWithCwd(op, p, cwd, dangerous, secret,
+			func(f Finding) { out = append(out, f) })
 		return out
 	}
+	both := func(op pathOp) []Finding { return collect(op, "", true, true) }
 
-	ids := ruleIDSet(collect(pathOp{Token: "/etc", Op: "delete", Executable: "rm"}))
+	ids := ruleIDSet(both(pathOp{Token: "/etc", Op: "delete", Executable: "rm"}))
 	require.Contains(t, ids, "path.system_write")
 
-	ids = ruleIDSet(collect(pathOp{Token: "~/.ssh/id_rsa", Op: "read", Executable: "cat"}))
+	ids = ruleIDSet(both(pathOp{Token: "~/.ssh/id_rsa", Op: "read", Executable: "cat"}))
 	require.Contains(t, ids, "path.ssh_private_key")
 
-	ids = ruleIDSet(collect(pathOp{Token: "~/.aws/credentials", Op: "read", Executable: "cat"}))
+	ids = ruleIDSet(both(pathOp{Token: "~/.aws/credentials", Op: "read", Executable: "cat"}))
 	require.Contains(t, ids, "path.credential_file")
 
-	ids = ruleIDSet(collect(pathOp{Token: ".env", Op: "read", Executable: "cat"}))
+	ids = ruleIDSet(both(pathOp{Token: ".env", Op: "read", Executable: "cat"}))
 	require.Contains(t, ids, "path.dotenv")
 
-	ids = ruleIDSet(collect(pathOp{Token: "/opt/secret/key", Op: "read", Executable: "cat"}))
+	ids = ruleIDSet(both(pathOp{Token: "/opt/secret/key", Op: "read", Executable: "cat"}))
 	require.Contains(t, ids, "path.denied")
 
+	// A relative token is joined with cwd before matching.
+	ids = ruleIDSet(collect(
+		pathOp{Token: ".env", Op: "read", Executable: "cat"}, "/work/project", true, true))
+	require.Contains(t, ids, "path.dotenv")
+
+	// The dangerous family is gated off independently of the secret family.
+	ids = ruleIDSet(collect(
+		pathOp{Token: "/etc", Op: "delete", Executable: "rm"}, "", false, true))
+	require.NotContains(t, ids, "path.system_write")
+	ids = ruleIDSet(collect(
+		pathOp{Token: "~/.ssh/id_rsa", Op: "read", Executable: "cat"}, "", true, false))
+	require.NotContains(t, ids, "path.ssh_private_key")
+
 	// A benign path produces no findings.
-	require.Empty(t, collect(pathOp{Token: "/tmp/ok.txt", Op: "read", Executable: "cat"}))
+	require.Empty(t, both(pathOp{Token: "/tmp/ok.txt", Op: "read", Executable: "cat"}))
 }
 
 func TestCoverrules_EvaluateRawSourcePaths(t *testing.T) {
@@ -737,6 +781,23 @@ func TestCoverrules_HasPrivilegeCommand(t *testing.T) {
 	require.False(t, hasPrivilegeCommand(c))
 }
 
+// TestCoverrules_HasPrivilegeCommand_QuotedLiteralNotFlagged is the X3
+// regression: when the pipeline parses, the raw-source scan must not run,
+// so a quoted `; sudo` literal inside an echo argument is not flagged.
+func TestCoverrules_HasPrivilegeCommand_QuotedLiteralNotFlagged(t *testing.T) {
+	a := analyzeShell(`echo "a; sudo b"`)
+	require.NoError(t, a.ParseError)
+	require.NotNil(t, a.Pipeline)
+	require.False(t, hasPrivilegeCommand(&a))
+
+	// A parse-failed source containing sudo in command position is still
+	// flagged via the raw-source fallback.
+	b := analyzeShell(`sudo ls; echo $HOME`)
+	require.Error(t, b.ParseError)
+	require.Nil(t, b.Pipeline)
+	require.True(t, hasPrivilegeCommand(&b))
+}
+
 func TestCoverrules_RawSourceHasPrivilegeCommand(t *testing.T) {
 	require.False(t, rawSourceHasPrivilegeCommand(""))
 	require.True(t, rawSourceHasPrivilegeCommand("sudo ls"))
@@ -786,6 +847,44 @@ func TestCoverrules_RuleNetwork_AllowlistedHostNoFindings(t *testing.T) {
 	require.Empty(t, ruleNetwork(&a, p))
 }
 
+// TestCoverrules_RuleNetwork_SCPLikeSSHURL is the X4 regression: an
+// SCP-like git URL (git@github.com:org/repo) must match the allowlist on
+// the host part, not on the raw "git@github.com" token.
+func TestCoverrules_RuleNetwork_SCPLikeSSHURL(t *testing.T) {
+	p := DefaultPolicy()
+	a := analyzeShell("git clone git@github.com:org/repo.git")
+	require.NotEmpty(t, a.NetworkTargets)
+	require.Equal(t, "github.com", a.NetworkTargets[0].Host)
+	require.Empty(t, ruleNetwork(&a, p),
+		"github.com is allowlisted; the clone must not be flagged")
+
+	// The same URL is denied when the host is not allowlisted.
+	p.Network.AllowedDomains = []string{"example.com"}
+	ids := ruleIDSet(ruleNetwork(&a, p))
+	require.Contains(t, ids, "network.non_whitelisted_domain")
+}
+
+// TestCoverrules_RuleNetwork_TrailingDotHost verifies that a single
+// trailing dot (the DNS root label) still matches the bare allowlisted
+// domain.
+func TestCoverrules_RuleNetwork_TrailingDotHost(t *testing.T) {
+	p := DefaultPolicy()
+	a := analyzeShell("git clone github.com./org/repo")
+	require.NotEmpty(t, a.NetworkTargets)
+	require.Equal(t, "github.com", a.NetworkTargets[0].Host)
+	require.Empty(t, ruleNetwork(&a, p))
+}
+
+// TestCoverrules_RuleNetwork_BundledFlagEndToEnd verifies that a bundled
+// redirect flag is reported even when the URL host is allowlisted.
+func TestCoverrules_RuleNetwork_BundledFlagEndToEnd(t *testing.T) {
+	p := DefaultPolicy()
+	a := analyzeShell("curl -sL https://github.com/x")
+	ids := ruleIDSet(ruleNetwork(&a, p))
+	require.Contains(t, ids, "network.dangerous_flag")
+	require.NotContains(t, ids, "network.non_whitelisted_domain")
+}
+
 func TestCoverrules_NetworkFlagFindings(t *testing.T) {
 	p := DefaultPolicy()
 
@@ -813,8 +912,29 @@ func TestCoverrules_NetworkFlagFindings(t *testing.T) {
 		require.Equal(t, RiskMedium, findings[0].RiskLevel, flag)
 	}
 
+	// Bundled single-dash short flags necessarily enable the contained
+	// option (X11): -sL enables -L, -Kcfg enables -K.
+	a := build([]string{"curl", "-sL", "https://github.com"})
+	findings := networkFlagFindings(a, p)
+	require.NotEmpty(t, findings, "-sL bundle")
+	require.Equal(t, RiskMedium, findings[0].RiskLevel)
+
+	a = build([]string{"curl", "-Kcfg", "https://github.com"})
+	findings = networkFlagFindings(a, p)
+	require.NotEmpty(t, findings, "-Kcfg bundle")
+	require.Equal(t, RiskHigh, findings[0].RiskLevel)
+
+	// A bundle without L or K, a long option, and a key=value token are
+	// not dangerous flags.
+	a = build([]string{"curl", "-sS", "https://github.com"})
+	require.Empty(t, networkFlagFindings(a, p))
+	a = build([]string{"curl", "--silent", "https://github.com"})
+	require.Empty(t, networkFlagFindings(a, p))
+	a = build([]string{"curl", "-o=out.txt", "https://github.com"})
+	require.Empty(t, networkFlagFindings(a, p))
+
 	// Non-downloader executables and empty segments are skipped.
-	a := build([]string{}, []string{"ls", "-K"})
+	a = build([]string{}, []string{"ls", "-K"})
 	require.Empty(t, networkFlagFindings(a, p))
 
 	// aria2c is also inspected.

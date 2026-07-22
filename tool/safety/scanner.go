@@ -212,6 +212,9 @@ func (s *Scanner) ScanBatch(ctx context.Context, inputs []ScanInput) (BatchRepor
 		Reports:       make([]ScanReport, 0, len(inputs)),
 	}
 	for _, in := range inputs {
+		if err := ctx.Err(); err != nil {
+			return batch, err
+		}
 		report, err := s.Scan(ctx, in)
 		if err != nil {
 			return batch, err

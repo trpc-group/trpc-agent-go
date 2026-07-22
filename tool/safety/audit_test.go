@@ -9,6 +9,7 @@
 package safety
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"os"
@@ -116,4 +117,26 @@ func TestAuditEvent_HasNoSecret(t *testing.T) {
 	require.NoError(t, err)
 	require.NotContains(t, string(raw), "sk_live_")
 	require.NotContains(t, string(raw), "AKIA")
+}
+
+// TestAuditWriter_CloseErrorHonorsRequired verifies the Close contract
+// documented on AuditWriter: flush and close failures surface only when
+// the writer is required; a best-effort writer never fails Close.
+func TestAuditWriter_CloseErrorHonorsRequired(t *testing.T) {
+	// A non-required writer swallows the closer error.
+	w := &AuditWriter{
+		w:      new(bytes.Buffer),
+		bw:     bufio.NewWriter(new(bytes.Buffer)),
+		closer: covercoreFailingCloser{},
+	}
+	require.NoError(t, w.Close())
+
+	// A required writer surfaces the same closer error.
+	wReq := &AuditWriter{
+		w:        new(bytes.Buffer),
+		bw:       bufio.NewWriter(new(bytes.Buffer)),
+		closer:   covercoreFailingCloser{},
+		required: true,
+	}
+	require.Error(t, wReq.Close())
 }

@@ -202,60 +202,6 @@ func isCredentialRelativePath(p string) bool {
 	return false
 }
 
-// evaluatePathOp inspects one path-like token and emits findings for
-// system writes, ssh keys, credential files, dotenv, and user-configured
-// denied paths.
-func evaluatePathOp(op pathOp, p Policy, add func(Finding)) {
-	token := op.Token
-	normalized := normalizePath(token)
-
-	if (op.Op == "delete" || op.Op == "write") && isRootOrSystemPath(normalized) {
-		add(Finding{
-			RuleID:         "path.system_write",
-			RiskLevel:      RiskCritical,
-			Decision:       ruleDecision(p.Rules.DangerousCommands.Action, RiskCritical, p),
-			Evidence:       "system path target: " + redactedPath(normalized),
-			Recommendation: "Refuse writes or deletes to system paths; scope operations to the workspace",
-		})
-	}
-	if isSSHPath(normalized) {
-		add(Finding{
-			RuleID:         "path.ssh_private_key",
-			RiskLevel:      RiskCritical,
-			Decision:       ruleDecision(p.Rules.SecretLeak.Action, RiskCritical, p),
-			Evidence:       "ssh private key or config path pattern",
-			Recommendation: "Never read or transmit SSH private keys; require an explicit operator-approved workflow",
-		})
-	}
-	if isCredentialPath(normalized) {
-		add(Finding{
-			RuleID:         "path.credential_file",
-			RiskLevel:      RiskCritical,
-			Decision:       ruleDecision(p.Rules.SecretLeak.Action, RiskCritical, p),
-			Evidence:       "credential file path pattern",
-			Recommendation: "Never read or transmit credential files; require an explicit operator-approved workflow",
-		})
-	}
-	if isDotenvPath(normalized) {
-		add(Finding{
-			RuleID:         "path.dotenv",
-			RiskLevel:      RiskHigh,
-			Decision:       ruleDecision(p.Rules.SecretLeak.Action, RiskHigh, p),
-			Evidence:       "dotenv file path pattern",
-			Recommendation: "Do not read .env files in tool calls; inject allowed env vars through the policy whitelist",
-		})
-	}
-	if matchesDeniedPath(normalized, p) {
-		add(Finding{
-			RuleID:         "path.denied",
-			RiskLevel:      RiskHigh,
-			Decision:       ruleDecision(p.Rules.DangerousCommands.Action, RiskHigh, p),
-			Evidence:       "denied path pattern: " + redactedPath(normalized),
-			Recommendation: "Remove the denied path from the command or update the policy explicitly",
-		})
-	}
-}
-
 // evaluateRawSourcePaths scans the raw source for ssh/credential/dotenv
 // patterns when shellsafe parsing failed. We accept some false-positive
 // risk on unparsable commands because they are already high-risk.

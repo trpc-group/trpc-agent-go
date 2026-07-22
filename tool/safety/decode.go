@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 )
@@ -146,6 +147,14 @@ func decodeOptionalFields(
 	}
 	for _, f := range profile.TimeoutFields {
 		if v, ok := rawInt(raw, f); ok {
+			// time.Duration(v) * time.Second must not overflow int64:
+			// a wrapped negative timeout would bypass
+			// resource.timeout_exceeded, so out-of-range values are a
+			// decode error (the scanner denies malformed inputs).
+			if v < 0 || int64(v) > math.MaxInt64/int64(time.Second) {
+				return fmt.Errorf("tool %q: field %q must be between 0 and %d seconds",
+					toolName, f, math.MaxInt64/int64(time.Second))
+			}
 			in.Timeout = time.Duration(v) * time.Second
 			break
 		}
@@ -222,9 +231,6 @@ func rawInt(raw map[string]any, key string) (int, bool) {
 	}
 	switch n := v.(type) {
 	case float64:
-		if n == float64(int(n)) {
-			return int(n), true
-		}
 		return int(n), true
 	case int:
 		return n, true

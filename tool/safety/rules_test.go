@@ -197,7 +197,9 @@ func TestRuleResource_TimeoutExceeded(t *testing.T) {
 func TestRuleResource_UnboundedLoop(t *testing.T) {
 	p := testPolicy(t)
 	in := ScanInput{CodeBlocks: []CodeBlock{{Language: "python", Code: "while True:\n    print('x')"}}}
-	a := analysis{}
+	// ruleResource consumes the flag recorded during buildAnalysis.
+	a := buildAnalysis(in, p)
+	require.True(t, a.HasUnboundedLoop)
 	findings := ruleResource(in, &a, p)
 	ruleIDs := ruleIDSet(findings)
 	require.Contains(t, ruleIDs, "resource.unbounded_loop")
@@ -206,7 +208,7 @@ func TestRuleResource_UnboundedLoop(t *testing.T) {
 func TestRuleResource_BoundedLoopNotFlagged(t *testing.T) {
 	p := testPolicy(t)
 	in := ScanInput{CodeBlocks: []CodeBlock{{Language: "go", Code: "for i := 0; i < 10; i++ {\n  println(i)\n}"}}}
-	a := analysis{}
+	a := buildAnalysis(in, p)
 	findings := ruleResource(in, &a, p)
 	require.Empty(t, findings)
 }
@@ -455,10 +457,6 @@ func TestRuleCorpus(t *testing.T) {
 		},
 	}
 
-	scannerWithCustom := NewScanner(p, WithScannerProfile(ToolProfile{
-		Name: "custom_mcp_runner", Backend: BackendMCP,
-	}))
-
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			s := scanner
@@ -501,8 +499,6 @@ func TestRuleCorpus(t *testing.T) {
 			}
 		})
 	}
-	// Reference scannerWithCustom to keep it from being flagged unused.
-	_ = scannerWithCustom
 }
 
 // TestBuildAnalysis_ConfiguredNetworkCommandBareHost verifies that the
@@ -560,4 +556,54 @@ func TestCodeRuleFindings_NetworkCallHonorsAllowlist(t *testing.T) {
 	require.True(t, ruleIDSet(denyReport.Findings)["code.network_call"],
 		"non-allowlisted URL must trigger code.network_call; findings=%+v",
 		denyReport.Findings)
+}
+
+// TestScan_ExecuteCodeParseFailureIsSticky is the X1 end-to-end
+// regression: an execute_code call whose first bash block fails to parse
+// (parameter expansion) followed by a benign block that parses must still
+// be denied. A later successful parse must not erase the earlier failure,
+// and the nil pipeline must keep the raw-source fallbacks engaged.
+func TestScan_ExecuteCodeParseFailureIsSticky(t *testing.T) {
+	p := testPolicy(t)
+	scanner := NewScanner(p)
+
+	report, err := scanner.Scan(context.Background(), ScanInput{
+		ToolName: "execute_code",
+		Backend:  BackendCodeExec,
+		CodeBlocks: []CodeBlock{
+			{Language: "bash", Code: "cat ~/.ssh/id_rsa; echo $HOME"},
+			{Language: "bash", Code: "ls"},
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, DecisionDeny, report.Decision,
+		"unparsable block followed by a benign block must deny; findings=%+v",
+		report.Findings)
+	ids := ruleIDSet(report.Findings)
+	require.Contains(t, ids, "shell.substitution")
+	// The raw-source path fallback engages because the merged pipeline
+	// stays nil.
+	require.Contains(t, ids, "path.ssh_private_key")
+}
+
+// TestScan_CommandParseFailureSurvivesBenignCodeBlock covers the companion
+// X1 shape: a Command with a substitution plus one benign bash code block
+// must still deny with shell.substitution.
+func TestScan_CommandParseFailureSurvivesBenignCodeBlock(t *testing.T) {
+	p := testPolicy(t)
+	scanner := NewScanner(p)
+
+	report, err := scanner.Scan(context.Background(), ScanInput{
+		ToolName: "execute_code",
+		Backend:  BackendCodeExec,
+		Command:  "echo $HOME",
+		CodeBlocks: []CodeBlock{
+			{Language: "bash", Code: "ls"},
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, DecisionDeny, report.Decision,
+		"command substitution must not be erased by a benign block; findings=%+v",
+		report.Findings)
+	require.Contains(t, ruleIDSet(report.Findings), "shell.substitution")
 }

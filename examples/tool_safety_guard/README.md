@@ -22,9 +22,11 @@ CheckToolPermission("whitelisted request") -> allow
 CheckToolPermission("dependency install") -> ask
 CheckToolPermission("safe go test") -> allow
 AfterTool redacted result: {"output":"API_KEY=[REDACTED:stripe_key:len=28]"}
-Scanned 19 samples: 5 allowed, 12 denied, 2 asked (duration=1ms)
+Scanned 19 samples: 5 allowed, 12 denied, 2 asked (duration=3ms)
 Wrote tool_safety_report.json and tool_safety_audit.jsonl
 ```
+
+The allow/ask permission cases pass an explicit bounded timeout (`"timeout":10`) because an omitted timeout is denied under the shipped policy.
 
 ## Files
 

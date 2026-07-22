@@ -298,3 +298,16 @@ func joinLines(lines []string) string {
 	}
 	return out
 }
+
+// TestScanner_ScanBatchCancelledContext verifies that ScanBatch observes
+// context cancellation instead of scanning the remaining inputs.
+func TestScanner_ScanBatchCancelledContext(t *testing.T) {
+	s := NewScanner(DefaultPolicy())
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := s.ScanBatch(ctx, []ScanInput{
+		{ToolName: "workspace_exec", Backend: BackendWorkspaceExec, Command: "ls"},
+		{ToolName: "workspace_exec", Backend: BackendWorkspaceExec, Command: "pwd"},
+	})
+	require.ErrorIs(t, err, context.Canceled)
+}

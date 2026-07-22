@@ -8,9 +8,10 @@
 
 // Package trace extends the trpc-agent-go trace semantic conventions with
 // tool-safety guard attributes. The constants here are the canonical OTel
-// attribute keys for safety scanning; tool/safety re-exports them as
-// safety.Key* aliases for callers that do not want to import this
-// package.
+// attribute keys for safety scanning; tool/safety declares its safety.Key*
+// constants as aliases of these so consumers of either package always see
+// the same attribute names. This package must not import tool/safety;
+// the aliasing is one-directional.
 package trace
 
 const (

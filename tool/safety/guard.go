@@ -16,6 +16,7 @@ import (
 	"sync"
 
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -154,7 +155,7 @@ type Guard struct {
 	concurrency *concurrencyLimiter
 
 	mu         sync.Mutex
-	scanEvents map[string]ScanEvent // keyed by tool call id
+	scanEvents map[string]scanEvent // keyed by tool call id
 	releases   map[string]func()    // keyed by tool call id
 }
 
@@ -190,7 +191,7 @@ func NewGuard(opts ...Option) (*Guard, error) {
 		profiles:    newProfileRegistry(),
 		sessions:    newSessionTracker(),
 		concurrency: newConcurrencyLimiter(o.concurrency),
-		scanEvents:  make(map[string]ScanEvent),
+		scanEvents:  make(map[string]scanEvent),
 		releases:    make(map[string]func()),
 	}
 	// Inject the guard's session tracker into the scanner so
@@ -225,6 +226,12 @@ func NewGuard(opts ...Option) (*Guard, error) {
 		}
 		g.audit = w
 		g.closeAudit = true
+	}
+	if g.audit == nil && (o.policy.Audit.Required || o.requiredAudit) {
+		// A required audit with no writable destination would silently
+		// produce no audit trail at all; fail construction instead.
+		return nil, errors.New(
+			"audit is required but no audit writer is configured (no audit path and no injected writer)")
 	}
 	return g, nil
 }
@@ -273,41 +280,15 @@ func (g *Guard) CheckToolPermission(
 	}
 	in, decodeErr := decodeRequest(req.ToolName, req.Arguments, g.profiles)
 	if decodeErr != nil {
-		// Distinguish known vs unknown tools. A known tool with
-		// malformed arguments is denied (fail closed). An unknown tool
-		// with malformed arguments is asked (we cannot determine what
-		// it would do, so human review is required).
-		_, isKnown := g.profiles.lookup(req.ToolName)
-		decision := DecisionDeny
-		riskLevel := RiskHigh
-		ruleID := "input.decode_failure"
-		if !isKnown {
-			decision = DecisionAsk
-			riskLevel = RiskMedium
-			ruleID = "input.unknown_malformed"
-		}
-		report := ScanReport{
-			SchemaVersion: "1",
-			ScanID:        newScanID(),
-			Timestamp:     g.scanner.clock(),
-			ToolName:      req.ToolName,
-			Backend:       BackendUnknown,
-			Decision:      decision,
-			RiskLevel:     riskLevel,
-			Findings: []Finding{{
-				RuleID:         ruleID,
-				RiskLevel:      riskLevel,
-				Decision:       decision,
-				Evidence:       redactedSnippet(decodeErr.Error(), 80),
-				Recommendation: "Refuse the call; the tool arguments could not be decoded safely",
-			}},
-			Intercepted: true,
-		}
-		g.maybeAuditPreflight(report)
+		report := g.decodeFailureReport(req, decodeErr)
+		// A required audit failure downgrades even an ask decision to a
+		// deny: a host-approved execution without an audit record would
+		// leave no trail.
+		g.auditPreflightOrDeny(&report)
 		if g.telemetry {
 			telemetryProject(ctx, safetyAttributes(report))
 		}
-		if decision == DecisionDeny {
+		if report.Decision == DecisionDeny {
 			return tool.DenyPermission(formatReason(report)), nil
 		}
 		return tool.AskPermission(formatReason(report)), nil
@@ -354,53 +335,14 @@ func (g *Guard) CheckToolPermission(
 	}
 	report.Backend = coalesceBackend(report.Backend, in.Backend)
 
-	// Concurrency gate: acquire a slot ONLY when the decision is allow,
-	// and BEFORE the preflight audit event is written, so the persisted
-	// record carries the final decision. Deny/ask/error paths never
-	// acquire, so they never leak slots. The release function is stashed
-	// for the after-tool callback once the decision is final.
-	var release func()
-	if report.Decision == DecisionAllow {
-		var concErr error
-		release, concErr = g.concurrency.acquire(ctx, req.ToolName)
-		if concErr != nil {
-			report.Decision = DecisionDeny
-			report.Intercepted = true
-			report.RiskLevel = RiskHigh
-			report.Findings = append(report.Findings, Finding{
-				RuleID:         "resource.concurrency_exceeded",
-				RiskLevel:      RiskHigh,
-				Decision:       DecisionDeny,
-				Evidence:       redactedSnippet(concErr.Error(), 80),
-				Recommendation: "Reduce concurrent tool calls or raise the concurrency policy cap",
-			})
-			sortFindings(report.Findings)
-			release = nil
-		}
-	}
-
-	// Required-audit failure must deny even an otherwise-allow decision.
-	// The writer's required flag is the single source of truth; this
-	// covers both file-backed writers (closeAudit=true) and injected
-	// writers (closeAudit=false) that were configured with
-	// required=true. A denied call never executes, so a slot acquired
-	// above is released here instead of in the after-tool callback.
-	if auditErr := g.maybeAuditPreflight(report); auditErr != nil &&
-		g.audit != nil && g.audit.required {
-		report.Decision = DecisionDeny
-		report.Intercepted = true
-		report.Findings = append(report.Findings, Finding{
-			RuleID:         "audit.write_failure",
-			RiskLevel:      RiskHigh,
-			Decision:       DecisionDeny,
-			Evidence:       "required audit writer rejected the preflight event",
-			Recommendation: "Restore audit storage or relax audit.required in the policy",
-		})
-		sortFindings(report.Findings)
-		if release != nil {
-			release()
-			release = nil
-		}
+	// Concurrency gate first, preflight audit second, so the persisted
+	// record carries the final decision. A denied call never executes, so
+	// a slot acquired by the gate is released here instead of in the
+	// after-tool callback.
+	release := g.gateConcurrency(ctx, req, &report)
+	if denied := g.auditPreflightOrDeny(&report); denied && release != nil {
+		release()
+		release = nil
 	}
 
 	if g.telemetry {
@@ -426,6 +368,105 @@ func (g *Guard) CheckToolPermission(
 		return tool.DenyPermission(formatReason(report)), nil
 	}
 	return tool.DenyPermission(formatReason(report)), nil
+}
+
+// decodeFailureReport builds the fail-closed report for undecodable
+// arguments. A known tool with malformed arguments is denied (fail
+// closed). An unknown tool with malformed arguments is asked (we cannot
+// determine what it would do, so human review is required).
+func (g *Guard) decodeFailureReport(req *tool.PermissionRequest, decodeErr error) ScanReport {
+	_, isKnown := g.profiles.lookup(req.ToolName)
+	decision := DecisionDeny
+	riskLevel := RiskHigh
+	ruleID := "input.decode_failure"
+	if !isKnown {
+		decision = DecisionAsk
+		riskLevel = RiskMedium
+		ruleID = "input.unknown_malformed"
+	}
+	return ScanReport{
+		SchemaVersion: "1",
+		ScanID:        newScanID(),
+		Timestamp:     g.scanner.clock(),
+		ToolName:      req.ToolName,
+		Backend:       BackendUnknown,
+		Decision:      decision,
+		RiskLevel:     riskLevel,
+		Findings: []Finding{{
+			RuleID:         ruleID,
+			RiskLevel:      riskLevel,
+			Decision:       decision,
+			Evidence:       redactedSnippet(decodeErr.Error(), 80),
+			Recommendation: "Refuse the call; the tool arguments could not be decoded safely",
+		}},
+		Intercepted: true,
+	}
+}
+
+// gateConcurrency acquires a concurrency slot for an allow decision and
+// returns the release function the caller must stash for the after-tool
+// callback. Deny/ask/error decisions never acquire a slot, so they never
+// leak. When the cap is exceeded the report is downgraded to a deny with
+// a resource.concurrency_exceeded finding and no slot is held.
+//
+// A request without a tool call id cannot be correlated with the
+// after-tool callback that would release the slot, so the slot is
+// released inline as soon as the permission check completes: the slot
+// only spans the permission check itself. Concurrency accounting and
+// audit correlation both require a tool call id.
+func (g *Guard) gateConcurrency(
+	ctx context.Context,
+	req *tool.PermissionRequest,
+	report *ScanReport,
+) (release func()) {
+	if report.Decision != DecisionAllow {
+		return nil
+	}
+	release, err := g.concurrency.acquire(ctx, req.ToolName)
+	if err != nil {
+		report.Decision = DecisionDeny
+		report.Intercepted = true
+		report.RiskLevel = RiskHigh
+		report.Findings = append(report.Findings, Finding{
+			RuleID:         "resource.concurrency_exceeded",
+			RiskLevel:      RiskHigh,
+			Decision:       DecisionDeny,
+			Evidence:       redactedSnippet(err.Error(), 80),
+			Recommendation: "Reduce concurrent tool calls or raise the concurrency policy cap",
+		})
+		sortFindings(report.Findings)
+		return nil
+	}
+	if req.ToolCallID == "" {
+		release()
+		return nil
+	}
+	return release
+}
+
+// auditPreflightOrDeny appends the preflight audit event. When the
+// writer is required and rejects the event, the report is downgraded to
+// a deny with an audit.write_failure finding and true is returned so the
+// caller can release any concurrency slot it already holds. The writer's
+// required flag is the single source of truth; this covers both
+// file-backed writers (closeAudit=true) and injected writers
+// (closeAudit=false) that were configured with required=true.
+func (g *Guard) auditPreflightOrDeny(report *ScanReport) bool {
+	if auditErr := g.maybeAuditPreflight(*report); auditErr != nil &&
+		g.audit != nil && g.audit.required {
+		report.Decision = DecisionDeny
+		report.Intercepted = true
+		report.Findings = append(report.Findings, Finding{
+			RuleID:         "audit.write_failure",
+			RiskLevel:      RiskHigh,
+			Decision:       DecisionDeny,
+			Evidence:       "required audit writer rejected the preflight event",
+			Recommendation: "Restore audit storage or relax audit.required in the policy",
+		})
+		sortFindings(report.Findings)
+		return true
+	}
+	return false
 }
 
 // applyProfileDefaults fills in backend and default timeout from the
@@ -472,23 +513,23 @@ func (g *Guard) maybeAuditPreflight(report ScanReport) error {
 // stashScanEvent records the preflight scan event keyed by tool call id
 // so the after-tool callback can correlate the two phases. The event is
 // evicted by popScanEvent or by Close.
-func (g *Guard) stashScanEvent(toolCallID string, ev ScanEvent) {
+func (g *Guard) stashScanEvent(toolCallID string, ev scanEvent) {
 	if g == nil || toolCallID == "" {
 		return
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.scanEvents == nil {
-		g.scanEvents = make(map[string]ScanEvent)
+		g.scanEvents = make(map[string]scanEvent)
 	}
 	g.scanEvents[toolCallID] = ev
 }
 
 // popScanEvent returns and removes the preflight scan event for
-// toolCallID. Returns a zero ScanEvent when no event was stashed.
-func (g *Guard) popScanEvent(toolCallID string) ScanEvent {
+// toolCallID. Returns a zero scanEvent when no event was stashed.
+func (g *Guard) popScanEvent(toolCallID string) scanEvent {
 	if g == nil || toolCallID == "" {
-		return ScanEvent{}
+		return scanEvent{}
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -500,13 +541,23 @@ func (g *Guard) popScanEvent(toolCallID string) ScanEvent {
 }
 
 // stashRelease records the concurrency-limiter release function for
-// toolCallID so the after-tool callback can free the slot.
+// toolCallID so the after-tool callback can free the slot. When an entry
+// for toolCallID already exists it is superseded: the previous release
+// is invoked before the new one is stored, so a re-stash never leaks the
+// earlier slot.
 func (g *Guard) stashRelease(toolCallID string, release func()) {
 	if g == nil || toolCallID == "" || release == nil {
 		return
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	if g.releases == nil {
+		g.releases = make(map[string]func())
+	}
+	if prev := g.releases[toolCallID]; prev != nil {
+		delete(g.releases, toolCallID)
+		prev()
+	}
 	g.releases[toolCallID] = release
 }
 
@@ -526,7 +577,7 @@ func (g *Guard) popRelease(toolCallID string) func() {
 
 // maybeAuditPostExecute appends a post_execute audit event.
 func (g *Guard) maybeAuditPostExecute(
-	ev ScanEvent,
+	ev scanEvent,
 	outputBytes int64,
 	truncated bool,
 	execution string,
@@ -601,9 +652,7 @@ func (g *Guard) attachAfterTool(cbs *tool.Callbacks) {
 		// Step 1: Handle error redaction FIRST, before computing
 		// safeResult. When the error contains a secret, replace
 		// args.Result with a structured safe error message so the
-		// model never sees the raw error text. The previous
-		// implementation computed safeResult before redacting the
-		// error, then returned the old safeResult.
+		// model never sees the raw error text.
 		errorRedacted := g.redactErrorIfNeeded(args)
 
 		// Step 2: Redact and limit the result (which may have been
@@ -613,8 +662,12 @@ func (g *Guard) attachAfterTool(cbs *tool.Callbacks) {
 		// Step 3: Redact Meta in place.
 		metaRedacted := g.redactMetaIfNeeded(args)
 
-		// Track host/workspace session lifecycle.
-		g.trackSessionLifecycle(args.ToolName, safeResult)
+		// Track host/workspace session lifecycle only for successful
+		// calls: a failed exec/kill call carrying a session id must not
+		// register or clear session state.
+		if args.Error == nil {
+			g.trackSessionLifecycle(args.ToolName, safeResult)
+		}
 
 		execution := "ok"
 		if args.Error != nil {
@@ -623,9 +676,15 @@ func (g *Guard) attachAfterTool(cbs *tool.Callbacks) {
 		redacted := resultChanged || errorRedacted || metaRedacted
 		truncated := resultTruncated
 
-		// Build the post_execute audit event.
+		// Build the post_execute audit event. Execution already
+		// happened, so an audit failure cannot deny anything; with a
+		// required writer it is surfaced as a warning instead.
 		ev := g.postExecuteEvent(args, redacted, truncated)
-		_ = g.maybeAuditPostExecute(ev, resultSize, truncated, execution)
+		if err := g.maybeAuditPostExecute(ev, resultSize, truncated, execution); err != nil {
+			log.WarnfContext(ctx,
+				"tool_safety: post-execute audit append failed for tool %q: %v",
+				args.ToolName, err)
+		}
 
 		if !resultChanged && !errorRedacted && !metaRedacted && !resultTruncated {
 			return nil, nil
@@ -637,7 +696,9 @@ func (g *Guard) attachAfterTool(cbs *tool.Callbacks) {
 // trackSessionLifecycle registers or clears session state based on the
 // tool name and the result. When exec_command or workspace_exec returns
 // a session_id, the session is registered. When kill_session or
-// workspace_kill_session completes, the session is marked killed.
+// workspace_kill_session completes, the session is marked killed. The
+// caller invokes this only for successful calls; a failed call must not
+// mutate lifecycle state.
 func (g *Guard) trackSessionLifecycle(toolName string, result any) {
 	if g == nil || g.sessions == nil {
 		return
@@ -698,9 +759,10 @@ func (g *Guard) redactAndLimitTracked(value any) (safe any, changed bool, trunca
 	return out, changed, trunc, sz
 }
 
-// redactErrorIfNeeded returns true when args.Error contained a secret and
-// was replaced. The redacted error text is stored in the guard's
-// trackedError field so the callback can return it as a CustomResult.
+// redactErrorIfNeeded returns true when args.Error contained a secret.
+// In that case args.Result is replaced with a safe structured error so
+// the callback returns the redacted message as a CustomResult and the
+// model never sees the raw error text.
 func (g *Guard) redactErrorIfNeeded(args *tool.AfterToolArgs) bool {
 	if args.Error == nil || !g.redaction {
 		return false
@@ -737,14 +799,13 @@ func (g *Guard) redactMetaIfNeeded(args *tool.AfterToolArgs) bool {
 	return changed
 }
 
-// postExecuteEvent builds a post_execute ScanEvent that reuses the
+// postExecuteEvent builds a post_execute scanEvent that reuses the
 // preflight scan event when available. The guard stashes the preflight
-// event in a side table keyed by (tool name, tool call id) so the after
-// callback can correlate the two phases. When no preflight event is
-// found (e.g. the guard was attached to a callbacks pipeline that did
-// not go through CheckToolPermission), a minimal standalone event is
-// produced.
-func (g *Guard) postExecuteEvent(args *tool.AfterToolArgs, redacted, truncated bool) ScanEvent {
+// event in a side table keyed by tool call id so the after callback can
+// correlate the two phases. When no preflight event is found (e.g. the
+// guard was attached to a callbacks pipeline that did not go through
+// CheckToolPermission), a minimal standalone event is produced.
+func (g *Guard) postExecuteEvent(args *tool.AfterToolArgs, redacted, truncated bool) scanEvent {
 	sessionHash := g.postExecuteSessionHash(args)
 	if pre := g.popScanEvent(args.ToolCallID); pre.ScanID != "" {
 		pre.Redacted = redacted
@@ -753,7 +814,7 @@ func (g *Guard) postExecuteEvent(args *tool.AfterToolArgs, redacted, truncated b
 		}
 		return pre
 	}
-	return ScanEvent{
+	return scanEvent{
 		ScanID:      newScanID(),
 		ToolName:    args.ToolName,
 		Backend:     g.backendFor(args.ToolName),
@@ -834,9 +895,10 @@ func (g *Guard) WrapArtifactService(service artifact.Service) artifact.Service {
 }
 
 // Close releases the guard's resources. It flushes and closes the audit
-// writer when the guard owns it. It is safe to call Close after every
-// scan has completed; calling Close while a scan is in progress may
-// discard pending audit writes.
+// writer when the guard owns it and resets the session tracker so its
+// state does not grow without bound over the guard's lifetime. It is
+// safe to call Close after every scan has completed; calling Close while
+// a scan is in progress may discard pending audit writes.
 func (g *Guard) Close() error {
 	if g == nil {
 		return nil
@@ -845,6 +907,9 @@ func (g *Guard) Close() error {
 	defer g.mu.Unlock()
 	g.scanEvents = nil
 	g.releases = nil
+	if g.sessions != nil {
+		g.sessions.reset()
+	}
 	if g.audit != nil && g.closeAudit {
 		err := g.audit.Close()
 		g.audit = nil

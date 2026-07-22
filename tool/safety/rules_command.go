@@ -21,16 +21,19 @@ import (
 //   - command.not_allowed       executable outside allow or in deny.
 //   - command.dangerous_delete  recursive/forced delete or destructive utility.
 func ruleCommand(a *analysis, p Policy) []Finding {
-	if !p.Rules.DangerousCommands.Enabled {
-		return nil
-	}
 	var out []Finding
 
 	// dangerous_delete: inspect argv for rm -rf, rm -fr, rm --recursive,
 	// rm --force, and equivalent destructive utilities (dd of=/dev/...,
 	// mkfs, shred). We look at the parsed pipeline when available; on a
 	// parse failure we still inspect the raw source string.
-	if hasDangerousDelete(a) {
+	//
+	// Only this heuristic is gated on DangerousCommands.Enabled. The
+	// shellsafe allow/deny check below runs unconditionally because it
+	// is the only enforcement of Policy.AllowedCommands/DeniedCommands;
+	// disabling the heuristic must not disable the operator's explicit
+	// command allowlist.
+	if p.Rules.DangerousCommands.Enabled && hasDangerousDelete(a) {
 		out = append(out, Finding{
 			RuleID:         "command.dangerous_delete",
 			RiskLevel:      RiskCritical,

@@ -14,6 +14,7 @@ import (
 	"net"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"trpc.group/trpc-go/trpc-agent-go/internal/shellsafe"
 )
@@ -42,10 +43,6 @@ type analysis struct {
 	// NetworkTargets lists URL/host candidates extracted from known
 	// network commands and explicit URL-looking arguments.
 	NetworkTargets []networkTarget
-	// EnvNames lists environment variable names referenced in the
-	// command (assignments are rejected by shellsafe, but explicit
-	// -E VAR or env VAR=val forms still surface here when present).
-	EnvNames []string
 	// ConfiguredNetworkCommands lists the network commands from the
 	// policy's Network.Commands field. classifyToken uses this to
 	// decide whether a token is a network target for a configured
@@ -138,7 +135,7 @@ func analyzeShellWithCommands(src string, configured []string) analysis {
 		}
 		for _, tok := range argv[1:] {
 			a.AllTokens = append(a.AllTokens, tok)
-			classifyToken(&a, exec, tok)
+			classifyToken(&a, argv, tok)
 		}
 		if isSleepCommand(exec, argv) {
 			if secs := sleepSeconds(argv); secs >= 0 && secs > a.SleepSeconds {
@@ -184,7 +181,7 @@ func analyzeShellWithCommands(src string, configured []string) analysis {
 // P1 regression where ConfiguredNetworkCommands was set after
 // buildAnalysis completed, making it ineffective.
 func buildAnalysis(in ScanInput, p Policy) analysis {
-	a := analysis{Source: in.Command, SleepSeconds: -1}
+	a := analysis{SleepSeconds: -1}
 	a.ConfiguredNetworkCommands = p.Network.Commands
 	// Build a combined summary/hash from command + code blocks so
 	// code-only scripts get a non-empty summary and hash in the report.
@@ -210,7 +207,7 @@ func buildAnalysis(in ScanInput, p Policy) analysis {
 		}
 		for _, tok := range argv[1:] {
 			a.AllTokens = append(a.AllTokens, tok)
-			classifyToken(&a, exec, tok)
+			classifyToken(&a, argv, tok)
 		}
 		if isSleepCommand(exec, argv) {
 			if secs := sleepSeconds(argv); secs >= 0 && secs > a.SleepSeconds {
@@ -233,16 +230,40 @@ func buildAnalysis(in ScanInput, p Policy) analysis {
 	return a
 }
 
-// mergeAnalysis copies shell's fields into a, preserving a's hash/summary.
+// mergeAnalysis accumulates shell's fields into a, preserving a's
+// hash/summary. Parse failures are sticky: the first non-nil ParseError
+// is kept and the merged pipeline stays nil so the raw-source fallback
+// scans engage. A later successful parse must not erase an earlier
+// failure — otherwise a multi-block input could smuggle an unparsable
+// (and therefore unscanned) block past the rules by following it with a
+// benign block that parses cleanly.
 func mergeAnalysis(a, shell *analysis) {
-	a.Source = shell.Source
-	a.Pipeline = shell.Pipeline
-	a.ParseError = shell.ParseError
+	if a.Source == "" {
+		a.Source = shell.Source
+	} else if shell.Source != "" {
+		a.Source += "\n" + shell.Source
+	}
+	switch {
+	case shell.ParseError != nil:
+		if a.ParseError == nil {
+			a.ParseError = shell.ParseError
+		}
+		a.Pipeline = nil
+	case a.ParseError != nil:
+		// An earlier parse failure dominates: keep the pipeline nil so
+		// the raw-source fallbacks engage.
+		a.Pipeline = nil
+	case shell.Pipeline != nil:
+		if a.Pipeline == nil {
+			a.Pipeline = shell.Pipeline
+		} else {
+			a.Pipeline.Commands = append(a.Pipeline.Commands, shell.Pipeline.Commands...)
+		}
+	}
 	a.Executables = append(a.Executables, shell.Executables...)
 	a.AllTokens = append(a.AllTokens, shell.AllTokens...)
 	a.PathOps = append(a.PathOps, shell.PathOps...)
 	a.NetworkTargets = append(a.NetworkTargets, shell.NetworkTargets...)
-	a.EnvNames = append(a.EnvNames, shell.EnvNames...)
 	a.HasSubstitution = a.HasSubstitution || shell.HasSubstitution
 	a.HasRedirection = a.HasRedirection || shell.HasRedirection
 	a.HasBackground = a.HasBackground || shell.HasBackground
@@ -287,14 +308,14 @@ func summarizeAnalysisInput(in ScanInput) string {
 		}
 		hint := summarizeCommand(b.Code)
 		if len(hint) > 60 {
-			hint = hint[:57] + "..."
+			hint = truncateRuneSafe(hint, 57) + "..."
 		}
 		parts = append(parts, b.Language+":"+hint)
 	}
 	s := strings.Join(parts, " ")
 	redacted, _ := redactString(s)
 	if len(redacted) > summaryMaxLen {
-		redacted = redacted[:summaryMaxLen-3] + "..."
+		redacted = truncateRuneSafe(redacted, summaryMaxLen-3) + "..."
 	}
 	return redacted
 }
@@ -318,15 +339,29 @@ func classifyParseError(a *analysis, err error) {
 	}
 }
 
-// classifyToken inspects one argv token and updates path/network/env IR.
+// classifyToken inspects one argv token of the pipeline segment argv and
+// updates the path/network IR. argv[0] is the executable; the full
+// segment is passed so network-subcommand detection judges the segment
+// the token belongs to rather than rescanning the whole pipeline (in
+// `git status && git clone host/x` the clone argument must be judged
+// against its own segment).
+//
 // For network commands, only URL-like tokens (with a scheme) and tokens
 // after a network-fetching subcommand (clone, fetch, push, pull) are
 // treated as network targets. Bare subcommand arguments like "git status"
 // or "git diff" must not be treated as network targets.
-func classifyToken(a *analysis, exec, tok string) {
-	if isPathLike(tok) {
+func classifyToken(a *analysis, argv []string, tok string) {
+	exec := argv[0]
+	// Strip a leading key= prefix (dd of=/etc/passwd, tar -f out.tar
+	// style values) so the value is classified as a path when it looks
+	// like one. Flag tokens (--output=/x) keep their own handling.
+	target := tok
+	if i := strings.IndexByte(target, '='); i > 0 && target[0] != '-' {
+		target = target[i+1:]
+	}
+	if isPathLike(target) {
 		op := opForCommand(exec)
-		a.PathOps = append(a.PathOps, pathOp{Token: tok, Op: op, Executable: exec})
+		a.PathOps = append(a.PathOps, pathOp{Token: target, Op: op, Executable: exec})
 	}
 	if looksLikeURL(tok) {
 		if t := extractNetworkTarget(tok); t.Raw != "" {
@@ -342,7 +377,7 @@ func classifyToken(a *analysis, exec, tok string) {
 	}
 	// For git, only clone/fetch/push/pull subcommands produce network
 	// targets from bare host/path arguments.
-	if isNetworkCommandForPolicy(exec, a.ConfiguredNetworkCommands) && isNetworkSubcommand(exec, a) && !strings.HasPrefix(tok, "-") {
+	if isNetworkCommandForPolicy(exec, a.ConfiguredNetworkCommands) && isNetworkSubcommand(argv) && !strings.HasPrefix(tok, "-") {
 		if t := extractNetworkTarget(tok); t.Raw != "" && t.Host != "" {
 			// Only add targets that have a real host (with a dot or
 			// an IP). Skip ambiguous bare names that would produce
@@ -350,12 +385,6 @@ func classifyToken(a *analysis, exec, tok string) {
 			if strings.Contains(t.Host, ".") || net.ParseIP(t.Host) != nil {
 				a.NetworkTargets = append(a.NetworkTargets, t)
 			}
-		}
-	}
-	if strings.HasPrefix(tok, "-") {
-		// -E VAR, -u VAR, --env VAR style flags surface env names.
-		if i := strings.Index(tok, "="); i > 0 {
-			a.EnvNames = append(a.EnvNames, tok[:i])
 		}
 	}
 }
@@ -396,33 +425,26 @@ func isNetworkCommandForPolicy(exec string, configured []string) bool {
 	return false
 }
 
-// isNetworkSubcommand returns true when the current pipeline segment
-// for exec is a network-fetching subcommand. For git, only clone/fetch/
-// push/pull are network subcommands; status, diff, log, add, commit,
-// etc. are local operations.
-func isNetworkSubcommand(exec string, a *analysis) bool {
-	if len(a.Executables) == 0 {
+// isNetworkSubcommand returns true when the pipeline segment argv is a
+// network-fetching invocation. For git, only clone/fetch/push/pull/
+// ls-remote are network subcommands; status, diff, log, add, commit,
+// etc. are local operations. The judgment is per-segment: callers pass
+// the argv of the segment the token belongs to.
+func isNetworkSubcommand(argv []string) bool {
+	if len(argv) == 0 {
 		return false
 	}
-	base := basenameLower(exec)
-	if base == "git" {
+	if basenameLower(argv[0]) == "git" {
 		// The first non-flag argument after git is the subcommand.
-		if a.Pipeline != nil {
-			for _, argv := range a.Pipeline.Commands {
-				if len(argv) == 0 || basenameLower(argv[0]) != "git" {
-					continue
-				}
-				for _, arg := range argv[1:] {
-					if strings.HasPrefix(arg, "-") {
-						continue
-					}
-					switch arg {
-					case "clone", "fetch", "push", "pull", "ls-remote":
-						return true
-					}
-					return false
-				}
+		for _, arg := range argv[1:] {
+			if strings.HasPrefix(arg, "-") {
+				continue
 			}
+			switch arg {
+			case "clone", "fetch", "push", "pull", "ls-remote":
+				return true
+			}
+			return false
 		}
 		return false
 	}
@@ -501,9 +523,21 @@ func summarizeCommand(src string) string {
 	s := strings.TrimSpace(src)
 	redacted, _ := redactString(s)
 	if len(redacted) > summaryMaxLen {
-		redacted = redacted[:summaryMaxLen-3] + "..."
+		redacted = truncateRuneSafe(redacted, summaryMaxLen-3) + "..."
 	}
 	return redacted
+}
+
+// truncateRuneSafe cuts s to at most max bytes without splitting a
+// multi-byte UTF-8 rune, mirroring limitString's rune safety.
+func truncateRuneSafe(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	for max > 0 && !utf8.RuneStart(s[max]) {
+		max--
+	}
+	return s[:max]
 }
 
 // urlRegex matches explicit http(s):// or ssh:// URLs.
@@ -518,49 +552,47 @@ func looksLikeURL(tok string) bool {
 // non-ASCII, IP-literal, loopback, link-local, and metadata targets are
 // reported as malformed so the network rule can deny them. A bare host
 // without a dot is still scanned: localhost, loopback IPs, and metadata
-// service names are hard-dened, while other bare hosts are reported as
+// service names are hard-denied, while other bare hosts are reported as
 // ambiguous so the network rule can apply the allowlist or deny.
 func extractNetworkTarget(tok string) networkTarget {
 	t := networkTarget{Raw: tok}
 	if looksLikeURL(tok) {
-		u, host, scheme, err := parseURL(tok)
+		_, host, scheme, err := parseURL(tok)
 		if err != nil {
 			t.Malformed = true
 			return t
 		}
 		t.Host = host
 		t.Scheme = scheme
-		_ = u
 		return t
 	}
-	// Bare host:port or host/path arguments to ssh/scp/sftp.
+	// Bare host:port or host/path arguments to ssh/scp/sftp, including
+	// SCP-like user@host:path forms (git clone git@github.com:org/repo):
+	// the user prefix is not part of the host being matched.
 	host := tok
+	if i := strings.LastIndex(host, "@"); i >= 0 {
+		host = host[i+1:]
+	}
 	if i := strings.IndexAny(host, "/:"); i >= 0 {
 		host = host[:i]
 	}
 	host = strings.ToLower(strings.TrimSpace(host))
+	// A single trailing dot (the DNS root label in an FQDN) does not
+	// change the domain being matched.
+	host = strings.TrimSuffix(host, ".")
 	if host == "" {
 		return networkTarget{}
 	}
 	// Bare hosts are scanned: localhost, loopback/metadata IPs, and
-	// ambiguous targets are hard-dened by the network rule. Bare hosts
+	// ambiguous targets are hard-denied by the network rule. Bare hosts
 	// that contain a dot are treated as domain candidates. Bare hosts
-	// without a dot that are NOT localhost/etc are reported as
-	// malformed so the network rule can deny or ask rather than
-	// silently allow.
+	// without a dot (localhost, a subcommand argument like "status", or
+	// an internal host) are marked malformed so the network rule can
+	// deny or ask rather than silently allow.
 	t.Host = host
 	t.Scheme = ""
 	if !strings.Contains(host, ".") {
-		// localhost and similar are meaningful targets that must be
-		// checked; other bare names are ambiguous.
-		if host == "localhost" {
-			t.Malformed = true
-		} else {
-			// Could be a subcommand argument (git status) or an
-			// internal host. Mark as ambiguous so the network rule
-			// can decide based on the allowlist.
-			t.Malformed = true
-		}
+		t.Malformed = true
 	}
 	return t
 }

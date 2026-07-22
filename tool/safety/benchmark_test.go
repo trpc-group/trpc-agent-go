@@ -11,7 +11,6 @@ package safety
 import (
 	"context"
 	"testing"
-	"time"
 )
 
 // BenchmarkScan measures the per-scan cost so reviewers can use it as a
@@ -101,7 +100,3 @@ func BenchmarkScanBatch500(b *testing.B) {
 		_, _ = s.ScanBatch(ctx, inputs)
 	}
 }
-
-// Ensure time is referenced so the import is not flagged as unused when
-// the benchmark file is built standalone.
-var _ = time.Second

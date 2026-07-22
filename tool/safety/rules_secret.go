@@ -41,7 +41,7 @@ var secretPatterns = []secretPattern{
 	},
 	{
 		id:      "aws_secret_access_key",
-		pattern: regexp.MustCompile(`aws_secret_access_key\s*=\s*['"][A-Za-z0-9/+=]{40}['"]`),
+		pattern: regexp.MustCompile(`aws_secret_access_key\s*[:=]\s*['"]?[A-Za-z0-9/+=]{40}['"]?`),
 	},
 	{
 		id:      "github_pat",
@@ -65,11 +65,11 @@ var secretPatterns = []secretPattern{
 	},
 	{
 		id:      "url_credentials",
-		pattern: regexp.MustCompile(`[a-z][a-z0-9+\-.]*://[^/\s:@]{1,64}:[^/\s:@]{1,64}@[^\s/]+`),
+		pattern: regexp.MustCompile(`[a-z][a-z0-9+\-.]*://[^/\s:@]{1,256}:[^/\s:@]{1,256}@[^\s/]+`),
 	},
 	{
 		id:      "password_assignment",
-		pattern: regexp.MustCompile(`(?i)(?:password|passwd|pwd)\s*[:=]\s*['"][^'"\s]{6,}['"]`),
+		pattern: regexp.MustCompile(`(?i)(?:password|passwd|pwd)\s*[:=]\s*['"]?[^'"\s]{6,}['"]?`),
 	},
 	{
 		id:      "api_key_assignment",
@@ -81,7 +81,7 @@ var secretPatterns = []secretPattern{
 	},
 	{
 		id:      "env_secret_assignment",
-		pattern: regexp.MustCompile(`(?i)(?:API_KEY|SECRET|TOKEN|PASSWORD|PRIVATE_KEY)=[A-Za-z0-9_\-/+=]{8,}`),
+		pattern: regexp.MustCompile(`(?i)(?:API_KEY|SECRET|TOKEN|PASSWORD|PRIVATE_KEY)\s*=\s*[A-Za-z0-9_\-/+=]{8,}`),
 	},
 }
 
@@ -214,13 +214,22 @@ func hasSecret(text string) bool {
 }
 
 // ruleSecret evaluates secret-leak rules against the input command, code
-// blocks, and environment values. Evidence records only the pattern id
-// and the matched length; never the secret value.
+// blocks, environment values, and session stdin. Evidence records only
+// the pattern id and the matched length; never the secret value.
+//
+// Session stdin (the write_stdin chars argument, ScanInput.SessionInput)
+// is secret-scanned here so a credential pasted into an allowed
+// interactive session is still flagged. It is deliberately NOT
+// command-scanned: once a session runs an allowed interactive program,
+// arbitrary operator input is expected and must not trip the command
+// rules.
 //
 // Rule ids:
 //
 //   - secret.input_or_code    secret detected in command or code block.
 //   - secret.env_value        secret detected in an environment value.
+//   - secret.session_input    secret detected in session stdin
+//     (write_stdin chars).
 //   - secret.env_name         environment variable name not in the
 //     policy whitelist (also surfaced by
 //     ruleEnvName).
@@ -261,6 +270,13 @@ func ruleSecret(in ScanInput, p Policy) []Finding {
 		if matches := findSecrets(v); len(matches) > 0 {
 			add("secret.env_value", summarizeMatches(matches), RiskCritical)
 		}
+	}
+
+	// Session stdin (write_stdin chars). Scanned for secrets only; the
+	// content is operator input to an already-allowed interactive
+	// session, so the command rules do not apply to it.
+	if matches := findSecrets(in.SessionInput); len(matches) > 0 {
+		add("secret.session_input", summarizeMatches(matches), RiskCritical)
 	}
 
 	return out

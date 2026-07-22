@@ -111,6 +111,23 @@ func TestArtifactServiceWrapper_RefusesBinarySecretOnSave(t *testing.T) {
 	require.Error(t, err)
 }
 
+// TestArtifactServiceWrapper_RefusesSecretFilename verifies that a
+// secret-bearing filename is rejected before it becomes a persisted
+// storage key that ListArtifactKeys would expose.
+func TestArtifactServiceWrapper_RefusesSecretFilename(t *testing.T) {
+	stub := &stubArtifactService{}
+	wrapped := newArtifactServiceWrapper(stub)
+	in := &artifact.Artifact{
+		MimeType: "text/plain",
+		Data:     []byte("harmless"),
+	}
+	_, err := wrapped.SaveArtifact(context.Background(), artifact.SessionInfo{},
+		"creds-AKIAIOSFODNN7EXAMPLE.txt", in)
+	require.Error(t, err)
+	// The inner service must never see the save.
+	require.Nil(t, stub.saved)
+}
+
 func TestArtifactServiceWrapper_RedactsOnLoad(t *testing.T) {
 	stub := &stubArtifactService{
 		loaded: &artifact.Artifact{

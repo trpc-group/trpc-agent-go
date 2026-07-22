@@ -56,7 +56,7 @@ func TestSafetyGuard_PreventsToolExecutionThroughFramework(t *testing.T) {
 			ID: "call-safety-deny",
 			Function: model.FunctionDefinitionParam{
 				Name:      "workspace_exec",
-				Arguments: []byte(`{"command":"rm -rf /"}`),
+				Arguments: []byte(`{"command":"rm -rf /","timeout":10}`),
 			},
 		},
 		tl,
@@ -103,7 +103,7 @@ func TestSafetyGuard_AllowsSafeToolThroughFramework(t *testing.T) {
 			ID: "call-safety-allow",
 			Function: model.FunctionDefinitionParam{
 				Name:      "workspace_exec",
-				Arguments: []byte(`{"command":"go test ./..."}`),
+				Arguments: []byte(`{"command":"go test ./...","timeout":10}`),
 			},
 		},
 		tl,

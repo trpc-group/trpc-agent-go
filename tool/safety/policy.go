@@ -23,8 +23,15 @@ import (
 // RuleSetting toggles a rule family and overrides its action.
 //
 // Action is the action contributed by findings from this rule, applied
-// before the global risk threshold. A critical rule configured as allow or
-// ask is rejected by Validate because critical findings must deny.
+// before the global risk threshold. Critical findings deny at scan time
+// regardless of the configured action: ruleDecision and Scan force a
+// deny decision for any critical finding, so a permissive Action is
+// never a fail-open path. Validate rejects Action=allow for the families
+// whose findings are predominantly critical (DangerousCommands,
+// SecretLeak) so a misleading configuration fails at load time. Families
+// that emit a mix of critical and lower-risk findings (for example
+// HostExec) may use any action; their critical findings still deny at
+// scan time.
 type RuleSetting struct {
 	// Enabled controls whether the rule runs at all.
 	Enabled bool `yaml:"enabled" json:"enabled"`

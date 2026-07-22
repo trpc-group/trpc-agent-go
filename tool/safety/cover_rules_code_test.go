@@ -129,12 +129,59 @@ func TestCoverrules_ExtractCredentialPathFromCode(t *testing.T) {
 }
 
 func TestCoverrules_ExtractDeleteTargetFromCode(t *testing.T) {
-	require.Equal(t, "/data", extractDeleteTargetFromCode(`shutil.rmtree("/data")`))
-	require.Equal(t, "/tmp/f", extractDeleteTargetFromCode(`os.remove("/tmp/f")`))
-	require.Equal(t, "/var/log", extractDeleteTargetFromCode(`os.unlink("/var/log")`))
-	require.Equal(t, "/x", extractDeleteTargetFromCode(`rm -rf /x`))
-	// No recognizable target: root is the conservative fallback.
-	require.Equal(t, "/", extractDeleteTargetFromCode(`print("hi")`))
+	extract := func(code string) (string, bool) {
+		return extractDeleteTargetFromCode(code)
+	}
+
+	target, ok := extract(`shutil.rmtree("/data")`)
+	require.True(t, ok)
+	require.Equal(t, "/data", target)
+
+	target, ok = extract(`os.remove("/tmp/f")`)
+	require.True(t, ok)
+	require.Equal(t, "/tmp/f", target)
+
+	target, ok = extract(`os.unlink("/var/log")`)
+	require.True(t, ok)
+	require.Equal(t, "/var/log", target)
+
+	target, ok = extract(`rm -rf /x`)
+	require.True(t, ok)
+	require.Equal(t, "/x", target)
+
+	// A relative target is returned as itself, not fabricated into "/".
+	target, ok = extract(`shutil.rmtree("build")`)
+	require.True(t, ok)
+	require.Equal(t, "build", target)
+
+	// No recognizable target: report none instead of fabricating "/".
+	_, ok = extract(`print("hi")`)
+	require.False(t, ok)
+
+	// A variable target is not extractable either.
+	_, ok = extract(`shutil.rmtree(build_dir)`)
+	require.False(t, ok)
+}
+
+// TestCoverrules_ScanCodeBlock_DeleteTargetNotFabricated is the X6
+// regression: a relative or non-extractable delete target must not
+// produce a bogus "/" path op, while the dangerous_delete pattern still
+// fires for the code rule.
+func TestCoverrules_ScanCodeBlock_DeleteTargetNotFabricated(t *testing.T) {
+	// A relative target is recorded as itself.
+	a := &analysis{SleepSeconds: -1}
+	scanCodeBlock(a, CodeBlock{Language: "python", Code: `shutil.rmtree("build")`})
+	require.NotEmpty(t, a.PathOps)
+	require.Equal(t, pathOp{Token: "build", Op: "delete", Executable: "code:python"}, a.PathOps[0])
+	require.NotEmpty(t, a.codeMatches)
+	require.True(t, a.codeMatches[0].dangerousDelete)
+
+	// A variable target adds no path op, but the code pattern still fires.
+	b := &analysis{SleepSeconds: -1}
+	scanCodeBlock(b, CodeBlock{Language: "python", Code: `shutil.rmtree(build_dir)`})
+	require.Empty(t, b.PathOps)
+	require.NotEmpty(t, b.codeMatches)
+	require.True(t, b.codeMatches[0].dangerousDelete)
 }
 
 func TestCoverrules_AllURLsAllowlisted(t *testing.T) {
@@ -282,16 +329,21 @@ func TestCoverrules_RuleResource_OutputSizeHint(t *testing.T) {
 
 func TestCoverrules_RuleResource_UnboundedLoop(t *testing.T) {
 	p := DefaultPolicy()
+	// ruleResource consumes the HasUnboundedLoop flag recorded by
+	// scanCodeBlock during buildAnalysis; it does not re-scan the input.
 	in := ScanInput{CodeBlocks: []CodeBlock{
 		{Language: "python", Code: "while True:\n    pass"},
 	}}
-	ids := ruleIDSet(ruleResource(in, &analysis{}, p))
+	a := buildAnalysis(in, p)
+	require.True(t, a.HasUnboundedLoop)
+	ids := ruleIDSet(ruleResource(in, &a, p))
 	require.Contains(t, ids, "resource.unbounded_loop")
 
-	bounded := ScanInput{CodeBlocks: []CodeBlock{
+	boundedIn := ScanInput{CodeBlocks: []CodeBlock{
 		{Language: "go", Code: "for {\n if done { break }\n}"},
 	}}
-	require.Empty(t, ruleResource(bounded, &analysis{}, p))
+	bounded := buildAnalysis(boundedIn, p)
+	require.Empty(t, ruleResource(boundedIn, &bounded, p))
 }
 
 func TestCoverrules_LoopHasExit(t *testing.T) {

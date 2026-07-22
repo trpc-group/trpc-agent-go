@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -404,7 +405,7 @@ func TestGuard_PostExecuteEventPopulatesSessionHash(t *testing.T) {
 
 	// Stashed path: a preflight event without a hash still gets the
 	// current session digest.
-	guard.stashScanEvent("call-1", ScanEvent{ScanID: "scan-1"})
+	guard.stashScanEvent("call-1", scanEvent{ScanID: "scan-1"})
 	args.ToolCallID = "call-1"
 	ev = guard.postExecuteEvent(args, true, false)
 	require.Equal(t, "scan-1", ev.ScanID)
@@ -637,4 +638,140 @@ func TestGuard_FinalizerRunsDespiteEarlierCustomResult(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, tool.PermissionActionAllow, decision.Action)
+}
+
+// TestGuard_EmptyToolCallIDReleasesConcurrencySlot verifies that allowed
+// calls without a tool call id release the concurrency slot inline:
+// repeated calls never get denied and the active count returns to zero.
+func TestGuard_EmptyToolCallIDReleasesConcurrencySlot(t *testing.T) {
+	guard := newTestGuard(t, WithConcurrencyPolicy(ConcurrencyPolicy{MaxActiveCalls: 1}))
+	for i := 0; i < 3; i++ {
+		decision, err := guard.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+			ToolName:  "workspace_exec",
+			Arguments: []byte(`{"command":"ls","timeout":10}`),
+		})
+		require.NoError(t, err)
+		require.Equal(t, tool.PermissionActionAllow, decision.Action,
+			"iteration %d must not be denied by a leaked slot", i)
+	}
+	require.Equal(t, int64(0), guard.concurrency.activeCount())
+}
+
+// TestGuard_StashReleaseSupersedesExistingRelease verifies that a second
+// stash under the same tool call id invokes the previous release instead
+// of silently dropping it.
+func TestGuard_StashReleaseSupersedesExistingRelease(t *testing.T) {
+	guard := newTestGuard(t)
+	ran := 0
+	guard.stashRelease("call-1", func() { ran++ })
+	guard.stashRelease("call-1", func() { ran++ })
+	require.Equal(t, 1, ran, "the superseded release must run, not leak")
+	release := guard.popRelease("call-1")
+	require.NotNil(t, release)
+	release()
+	require.Equal(t, 2, ran)
+	require.Nil(t, guard.popRelease("call-1"))
+}
+
+// TestGuard_UnknownToolMalformedRequiredAuditDenies verifies that the
+// decode-error ask path honors a required audit writer: when the
+// preflight event cannot be written, the ask decision is downgraded to a
+// deny so no unaudited execution can be approved.
+func TestGuard_UnknownToolMalformedRequiredAuditDenies(t *testing.T) {
+	g, err := NewGuard(
+		WithPolicyFile("testdata/tool_safety_policy.yaml"),
+		WithAuditWriter(&failingWriter{}),
+		WithRequiredAudit(true),
+	)
+	require.NoError(t, err)
+	defer g.Close()
+
+	decision, err := g.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:  "totally_unknown_tool",
+		Arguments: []byte(`{broken`),
+	})
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionDeny, decision.Action)
+	require.Contains(t, decision.Reason, "audit.write_failure")
+}
+
+// TestGuard_PostExecuteAuditFailureStillReturns verifies that a failing
+// required audit writer on the post-execute path cannot break the
+// after-tool finalizer: the error is logged and the finalizer returns
+// normally.
+func TestGuard_PostExecuteAuditFailureStillReturns(t *testing.T) {
+	g, err := NewGuard(
+		WithPolicyFile("testdata/tool_safety_policy.yaml"),
+		WithAuditWriter(&failingWriter{}),
+		WithRequiredAudit(true),
+	)
+	require.NoError(t, err)
+	defer g.Close()
+
+	cbs := g.Callbacks()
+	require.NotPanics(t, func() {
+		out, runErr := cbs.RunAfterTool(context.Background(), &tool.AfterToolArgs{
+			ToolName:   "workspace_exec",
+			ToolCallID: "call-audit-fail",
+			Arguments:  []byte(`{"command":"ls","timeout":10}`),
+			Result:     "ok",
+		})
+		require.NoError(t, runErr)
+		require.NotNil(t, out)
+	})
+}
+
+// TestGuard_FailedToolCallDoesNotTrackSession verifies that a failed
+// exec/kill call carrying a session id does not mutate the session
+// lifecycle state.
+func TestGuard_FailedToolCallDoesNotTrackSession(t *testing.T) {
+	guard := newTestGuard(t)
+	cbs := guard.Callbacks()
+
+	// A failed exec_command must not register the session.
+	_, err := cbs.RunAfterTool(context.Background(), &tool.AfterToolArgs{
+		ToolName:  "exec_command",
+		Arguments: []byte(`{"command":"ls"}`),
+		Error:     errors.New("exec failed"),
+		Result:    map[string]any{"session_id": "sess-failed"},
+	})
+	require.NoError(t, err)
+	require.False(t, guard.sessions.isKnown("sess-failed"))
+
+	// A failed kill_session must not mark the session killed.
+	_, err = cbs.RunAfterTool(context.Background(), &tool.AfterToolArgs{
+		ToolName:  "kill_session",
+		Arguments: []byte(`{"session_id":"sess-x"}`),
+		Error:     errors.New("kill failed"),
+		Result:    map[string]any{"session_id": "sess-x"},
+	})
+	require.NoError(t, err)
+	require.False(t, guard.sessions.isKilled("sess-x"))
+}
+
+// TestGuard_RequiredAuditWithoutWriterFailsConstruction verifies that a
+// policy requiring audit with no writable destination fails NewGuard
+// instead of silently producing no audit trail.
+func TestGuard_RequiredAuditWithoutWriterFailsConstruction(t *testing.T) {
+	policy := DefaultPolicy()
+	policy.Audit.Path = ""
+	require.True(t, policy.Audit.Required)
+
+	_, err := NewGuard(WithPolicy(policy))
+	require.ErrorContains(t, err, "audit is required")
+
+	// WithRequiredAudit(true) triggers the same failure even when the
+	// policy itself does not require audit.
+	policy.Audit.Required = false
+	_, err = NewGuard(WithPolicy(policy), WithRequiredAudit(true))
+	require.ErrorContains(t, err, "audit is required")
+
+	// An injected writer satisfies the requirement.
+	g, err := NewGuard(
+		WithPolicy(policy),
+		WithRequiredAudit(true),
+		WithAuditWriter(new(bytes.Buffer)),
+	)
+	require.NoError(t, err)
+	require.NoError(t, g.Close())
 }

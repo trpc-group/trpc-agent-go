@@ -73,7 +73,8 @@ func run() error {
 
 	// Exercise CheckToolPermission with several representative requests
 	// so the audit contains preflight events for allow, deny, and ask
-	// decisions.
+	// decisions. The allow/ask cases pass an explicit bounded timeout:
+	// an omitted timeout is denied under the shipped policy.
 	permissionCases := []struct {
 		name      string
 		toolName  string
@@ -81,9 +82,9 @@ func run() error {
 	}{
 		{"dangerous delete", "workspace_exec", `{"command":"rm -rf /"}`},
 		{"credential read", "workspace_exec", `{"command":"cat ~/.ssh/id_rsa"}`},
-		{"whitelisted request", "workspace_exec", `{"command":"curl https://github.com/org/repo"}`},
-		{"dependency install", "workspace_exec", `{"command":"npm install package"}`},
-		{"safe go test", "workspace_exec", `{"command":"go test ./..."}`},
+		{"whitelisted request", "workspace_exec", `{"command":"curl https://github.com/org/repo","timeout":10}`},
+		{"dependency install", "workspace_exec", `{"command":"npm install package","timeout":10}`},
+		{"safe go test", "workspace_exec", `{"command":"go test ./...","timeout":10}`},
 	}
 	for _, pc := range permissionCases {
 		decision, err := guard.CheckToolPermission(ctx, &tool.PermissionRequest{

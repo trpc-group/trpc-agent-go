@@ -10,7 +10,6 @@ package safety
 
 import (
 	"bufio"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -197,6 +196,15 @@ func (w *AuditWriter) Close() error {
 	if w.bw != nil {
 		flushErr = w.bw.Flush()
 	}
+	// Both flush and close failures surface only for a required writer,
+	// matching the Append contract: a best-effort writer never fails
+	// Close.
+	if !w.required {
+		if w.closer != nil {
+			_ = w.closer.Close()
+		}
+		return nil
+	}
 	if w.closer != nil {
 		if err := w.closer.Close(); err != nil {
 			if flushErr != nil {
@@ -205,10 +213,7 @@ func (w *AuditWriter) Close() error {
 			return err
 		}
 	}
-	if flushErr != nil && w.required {
-		return flushErr
-	}
-	return nil
+	return flushErr
 }
 
 // appendPreflight constructs and appends a preflight audit event.
@@ -221,7 +226,7 @@ func (w *AuditWriter) appendPreflight(report ScanReport) error {
 
 // appendPostExecute constructs and appends a post_execute audit event.
 func (w *AuditWriter) appendPostExecute(
-	report ScanEvent,
+	report scanEvent,
 	outputBytes int64,
 	truncated bool,
 	execution string,
@@ -285,26 +290,4 @@ func ruleIDsFromFindings(findings []Finding) []string {
 		out = append(out, f.RuleID)
 	}
 	return out
-}
-
-// auditContextKey carries the ScanEvent through the after-tool callback.
-type auditContextKey struct{}
-
-// withScanEvent stores a scan event in ctx so the after-tool callback can
-// emit a correlated post_execute audit record.
-func withScanEvent(ctx context.Context, ev ScanEvent) context.Context {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	return context.WithValue(ctx, auditContextKey{}, ev)
-}
-
-// scanEventFromContext returns the scan event stored by withScanEvent, if
-// any. Used by the guard's after-tool callback.
-func scanEventFromContext(ctx context.Context) (ScanEvent, bool) {
-	if ctx == nil {
-		return ScanEvent{}, false
-	}
-	ev, ok := ctx.Value(auditContextKey{}).(ScanEvent)
-	return ev, ok
 }

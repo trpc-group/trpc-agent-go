@@ -107,13 +107,19 @@ func newArtifactServiceWrapper(inner artifact.Service) artifact.Service {
 	return &artifactServiceWrapper{inner: inner}
 }
 
-// SaveArtifact implements artifact.Service.
+// SaveArtifact implements artifact.Service. A filename that itself
+// contains a secret is rejected rather than persisted, because the
+// filename becomes a storage key that ListArtifactKeys would expose.
 func (w *artifactServiceWrapper) SaveArtifact(
 	ctx context.Context,
 	info artifact.SessionInfo,
 	filename string,
 	a *artifact.Artifact,
 ) (int, error) {
+	if hasSecret(filename) {
+		return 0, errors.New(
+			"artifact filename contains a secret; refusing to persist it")
+	}
 	safe, _, err := redactArtifact(a)
 	if err != nil {
 		return 0, err

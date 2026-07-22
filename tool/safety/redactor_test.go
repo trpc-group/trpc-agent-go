@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/require"
 )
@@ -220,6 +221,81 @@ func TestRedactString_URLCredentials(t *testing.T) {
 	out, changed := redactString(in)
 	require.True(t, changed)
 	require.NotContains(t, out, "supersecretpass123")
+}
+
+// TestRedactString_URLCredentialsLong verifies that URL credentials
+// longer than the previous 64-byte cap are still redacted.
+func TestRedactString_URLCredentialsLong(t *testing.T) {
+	user := strings.Repeat("u", 80)
+	pass := strings.Repeat("p", 100)
+	in := "https://" + user + ":" + pass + "@host.example/path"
+	out, changed := redactString(in)
+	require.True(t, changed)
+	require.NotContains(t, out, user+":"+pass)
+}
+
+// TestRedactString_UnquotedSecretAssignments verifies the P1 regression:
+// secret assignments without quotes, with whitespace around the
+// separator, or in YAML `key: value` form must still be redacted.
+func TestRedactString_UnquotedSecretAssignments(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		leak string
+	}{
+		{
+			name: "aws credentials file format",
+			in:   "aws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+			leak: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+		},
+		{
+			name: "unquoted password with spaces",
+			in:   "password = hunter2xyz",
+			leak: "hunter2xyz",
+		},
+		{
+			name: "yaml style password",
+			in:   "password: hunter2xyz",
+			leak: "hunter2xyz",
+		},
+		{
+			name: "env assignment with spaces",
+			in:   "API_KEY = sk_live_1234567890abcdef1234",
+			leak: "sk_live_1234567890abcdef1234",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out, changed := redactString(tc.in)
+			require.True(t, changed)
+			require.NotContains(t, out, tc.leak)
+			require.Contains(t, out, "[REDACTED:")
+		})
+	}
+}
+
+// TestRedactedSnippet_RuneSafe verifies that snippet truncation never
+// splits a multi-byte UTF-8 rune.
+func TestRedactedSnippet_RuneSafe(t *testing.T) {
+	in := strings.Repeat("a", 10) + strings.Repeat("世", 20)
+	out := redactedSnippet(in, 15)
+	require.LessOrEqual(t, len(out), 15)
+	require.True(t, utf8.ValidString(out))
+	for _, r := range out {
+		require.NotEqual(t, '\uFFFD', r)
+	}
+}
+
+// TestIsSecretFieldName_CredentialSubstrings verifies that the
+// "credential" substring match catches compound field names that the
+// exact-match list alone would miss.
+func TestIsSecretFieldName_CredentialSubstrings(t *testing.T) {
+	for _, name := range []string{
+		"aws_credentials", "db_credential", "service_account_credentials",
+	} {
+		require.True(t, isSecretFieldName(name), "name %q", name)
+	}
+	require.False(t, isSecretFieldName("username"))
 }
 
 // TestRedactString_MixedPrioritySecretsBothReplaced verifies the P0

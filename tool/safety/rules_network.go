@@ -104,7 +104,8 @@ func networkFlagFindings(a *analysis, p Policy) []Finding {
 			case flag == "-K", flag == "--config",
 				strings.HasPrefix(flag, "--config="),
 				flag == "--resolve",
-				strings.HasPrefix(flag, "--resolve="):
+				strings.HasPrefix(flag, "--resolve="),
+				isBundledShortFlag(flag, 'K'):
 				out = append(out, Finding{
 					RuleID:         "network.dangerous_flag",
 					RiskLevel:      RiskHigh,
@@ -114,7 +115,8 @@ func networkFlagFindings(a *analysis, p Policy) []Finding {
 				})
 			case flag == "-L", flag == "--location",
 				flag == "--location-trusted",
-				strings.HasPrefix(flag, "--max-redirs"):
+				strings.HasPrefix(flag, "--max-redirs"),
+				isBundledShortFlag(flag, 'L'):
 				out = append(out, Finding{
 					RuleID:         "network.dangerous_flag",
 					RiskLevel:      RiskMedium,
@@ -126,4 +128,19 @@ func networkFlagFindings(a *analysis, p Policy) []Finding {
 		}
 	}
 	return out
+}
+
+// isBundledShortFlag returns true when tok is a bundled single-dash
+// short-option token (e.g. -sL or -Kcfg) that contains the given option
+// letter. curl/wget/aria2c short options are single characters, so a
+// bundle like -sL necessarily enables -L even though the token does not
+// equal "-L". Long "--" options and key=value tokens are not bundles.
+func isBundledShortFlag(tok string, c byte) bool {
+	if len(tok) <= 2 || tok[0] != '-' || tok[1] == '-' {
+		return false
+	}
+	if strings.ContainsRune(tok, '=') {
+		return false
+	}
+	return strings.IndexByte(tok[1:], c) >= 0
 }

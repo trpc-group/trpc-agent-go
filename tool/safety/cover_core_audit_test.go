@@ -11,7 +11,6 @@ package safety
 import (
 	"bufio"
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -37,7 +36,7 @@ func TestCovercore_AuditWriterNilReceiver(t *testing.T) {
 	require.NoError(t, w.Append(AuditEvent{ScanID: "x"}))
 	require.NoError(t, w.Close())
 	require.NoError(t, w.appendPreflight(ScanReport{ScanID: "x"}))
-	require.NoError(t, w.appendPostExecute(ScanEvent{ScanID: "x"}, 0, false, "ok"))
+	require.NoError(t, w.appendPostExecute(scanEvent{ScanID: "x"}, 0, false, "ok"))
 }
 
 // TestCovercore_AuditAppendOnClosedWriter covers the closed-writer
@@ -107,19 +106,22 @@ func TestCovercore_AuditCloseFlushAndCloseErrors(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, w2.Close())
 
-	// Failing closer with no flush error surfaces the close error.
+	// Failing closer with no flush error surfaces the close error only
+	// for a required writer.
 	w3 := &AuditWriter{
-		w:      new(bytes.Buffer),
-		bw:     bufio.NewWriter(new(bytes.Buffer)),
-		closer: covercoreFailingCloser{},
+		w:        new(bytes.Buffer),
+		bw:       bufio.NewWriter(new(bytes.Buffer)),
+		closer:   covercoreFailingCloser{},
+		required: true,
 	}
 	require.Error(t, w3.Close())
 
 	// Failing closer combined with a flush error yields a combined error.
 	w4 := &AuditWriter{
-		w:      &failingWriter{},
-		bw:     bufio.NewWriter(&failingWriter{}),
-		closer: covercoreFailingCloser{},
+		w:        &failingWriter{},
+		bw:       bufio.NewWriter(&failingWriter{}),
+		closer:   covercoreFailingCloser{},
+		required: true,
 	}
 	_, err = w4.bw.WriteString("pending")
 	require.NoError(t, err)
@@ -170,7 +172,7 @@ func TestCovercore_AppendPreflightEventFields(t *testing.T) {
 func TestCovercore_AppendPostExecuteEventFields(t *testing.T) {
 	buf := new(bytes.Buffer)
 	w := NewAuditWriterFrom(buf, false, true)
-	require.NoError(t, w.appendPostExecute(ScanEvent{
+	require.NoError(t, w.appendPostExecute(scanEvent{
 		ScanID:    "scan-10",
 		ToolName:  "exec_command",
 		Backend:   BackendHostExec,
@@ -195,25 +197,6 @@ func TestCovercore_RuleIDsFromFindingsDedup(t *testing.T) {
 	require.Equal(t, []string{"a", "b"}, ruleIDsFromFindings([]Finding{
 		{RuleID: "a"}, {RuleID: "b"}, {RuleID: "a"},
 	}))
-}
-
-// TestCovercore_ScanEventContextRoundTrip covers the context stash and
-// lookup helpers.
-func TestCovercore_ScanEventContextRoundTrip(t *testing.T) {
-	// Nil context is upgraded to Background.
-	ctx := withScanEvent(nil, ScanEvent{ScanID: "ctx-1"})
-	require.NotNil(t, ctx)
-	ev, ok := scanEventFromContext(ctx)
-	require.True(t, ok)
-	require.Equal(t, "ctx-1", ev.ScanID)
-
-	// Missing key reports ok=false.
-	_, ok = scanEventFromContext(context.Background())
-	require.False(t, ok)
-
-	// Nil context reports ok=false.
-	_, ok = scanEventFromContext(nil)
-	require.False(t, ok)
 }
 
 // TestCovercore_AuditAppendOversizedEvent covers the buffered-write error

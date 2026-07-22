@@ -57,3 +57,14 @@ func TestConcurrencyLimiter_GlobalLimitBalanced(t *testing.T) {
 	release()
 	require.Equal(t, int64(0), c.activeCount())
 }
+
+// TestConcurrencyLimiter_AcquireCancelledContext verifies that acquire
+// refuses to reserve a slot for an already-cancelled call.
+func TestConcurrencyLimiter_AcquireCancelledContext(t *testing.T) {
+	c := newConcurrencyLimiter(ConcurrencyPolicy{MaxActiveCalls: 1})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := c.acquire(ctx, "tool")
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, int64(0), c.activeCount())
+}

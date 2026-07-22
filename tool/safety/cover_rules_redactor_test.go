@@ -324,3 +324,33 @@ func TestCoverrules_RedactedSnippet(t *testing.T) {
 	require.Len(t, redactedSnippet(long, 10), 10)
 	require.Equal(t, long, redactedSnippet(long, 0))
 }
+
+// TestCoverrules_RuleSecret_SessionInput verifies the P2 regression:
+// write_stdin session input must be secret-scanned so a credential
+// pasted into an allowed interactive session is flagged and redacted.
+// The session input is deliberately not command-scanned.
+func TestCoverrules_RuleSecret_SessionInput(t *testing.T) {
+	in := ScanInput{
+		ToolName:     "write_stdin",
+		SessionID:    "s1",
+		SessionInput: "aws creds AKIAIOSFODNN7EXAMPLE",
+	}
+	findings := ruleSecret(in, DefaultPolicy())
+	var hit *Finding
+	for i := range findings {
+		if findings[i].RuleID == "secret.session_input" {
+			hit = &findings[i]
+		}
+	}
+	require.NotNil(t, hit, "expected secret.session_input finding, got %v", findings)
+	require.Equal(t, RiskCritical, hit.RiskLevel)
+	require.Equal(t, DecisionDeny, hit.Decision)
+	// Evidence must never carry the raw secret value.
+	require.NotContains(t, hit.Evidence, "AKIAIOSFODNN7EXAMPLE")
+	require.Contains(t, hit.Evidence, "aws_access_key_id")
+
+	// The same input redacts cleanly.
+	redacted, changed := redactString(in.SessionInput)
+	require.True(t, changed)
+	require.NotContains(t, redacted, "AKIAIOSFODNN7EXAMPLE")
+}

@@ -10,7 +10,6 @@ package safety
 
 import (
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/trace"
 )
 
 // keyString returns a KeyValue for a string attribute.
@@ -37,6 +36,3 @@ func keyInt64(k string, v int64) attribute.KeyValue {
 func keyStringSlice(k string, v []string) attribute.KeyValue {
 	return attribute.StringSlice(k, v)
 }
-
-// Ensure trace.Span is referenced for the imports used by telemetry.go.
-var _ = trace.SpanFromContext
