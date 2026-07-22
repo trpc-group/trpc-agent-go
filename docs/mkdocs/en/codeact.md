@@ -19,7 +19,8 @@ shared local Python runtime, which applies defense-in-depth checks such as
 source-size limits, a minimal process environment, an empty temporary working
 directory by default, a private bootstrap script, best-effort guest process
 termination with process-group cleanup on Unix-like systems, and an optional
-`LocalRunner.Timeout`.
+full-execution timeout configured with
+`codeact.NewLocalRunner(codeact.LocalRunnerConfig{Timeout: ...})`.
 
 CodeAct preserves general Python syntax and builtins, including imports and
 exception handling. Unlike Dynamic Workflow, it does not apply an AST or

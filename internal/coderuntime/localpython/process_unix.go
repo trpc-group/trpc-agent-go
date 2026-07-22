@@ -1,4 +1,4 @@
-//go:build !windows
+//go:build aix || android || darwin || dragonfly || freebsd || illumos || ios || linux || netbsd || openbsd || solaris
 
 //
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
@@ -24,4 +24,8 @@ func killProcessGroup(cmd *exec.Cmd) error {
 		return nil
 	}
 	return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+}
+
+func cleanupProcessTree(cmd *exec.Cmd) {
+	_ = killProcessGroup(cmd)
 }

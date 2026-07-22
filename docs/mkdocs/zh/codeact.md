@@ -14,7 +14,8 @@ LLM -> execute_tool_code -> Runtime -> guest call_tool(name, JSON args)
 `LocalRunner` 仅用于开发或已经隔离的容器/VM；它不是安全 sandbox。它使用共享的
 local Python runtime，为本地生成代码执行提供 defense-in-depth 防护，包括限制源码大小、
 使用最小进程环境、默认使用空的临时工作目录、将 bootstrap 脚本放在私有目录、尽力终止
-guest 进程（Unix-like 系统下会清理进程组），以及可选的 `LocalRunner.Timeout`。
+guest 进程（Unix-like 系统下会清理进程组），以及通过
+`codeact.NewLocalRunner(codeact.LocalRunnerConfig{Timeout: ...})` 配置的可选全流程 timeout。
 
 CodeAct 会保留通用 Python 语法和 builtins，包括 import 与异常处理。它与 Dynamic
 Workflow 不同，不应用 AST 或 builtin allowlist。二者共享的是进程启动和生命周期

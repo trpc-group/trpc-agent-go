@@ -262,8 +262,8 @@ func (p *Process) Stdin() io.WriteCloser { return p.stdin }
 // Stdout returns the process stdout pipe.
 func (p *Process) Stdout() io.ReadCloser { return p.stdout }
 
-// Kill terminates the process. On Unix-like systems, it kills the process
-// group; on Windows it falls back to killing the process.
+// Kill terminates the process. On supported Unix-like systems, it kills the
+// process group; on other systems it falls back to killing the root process.
 func (p *Process) Kill() error {
 	if p == nil {
 		return nil
@@ -277,6 +277,7 @@ func (p *Process) Wait() error {
 		return nil
 	}
 	err := p.cmd.Wait()
+	cleanupProcessTree(p.cmd)
 	p.cleanupOnce.Do(func() {
 		if p.cleanup != nil {
 			p.cleanup()

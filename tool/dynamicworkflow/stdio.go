@@ -13,7 +13,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -39,20 +38,41 @@ const (
 // callback protocol. It is intended only for development or an environment
 // that the application has already isolated; it is not a security sandbox.
 //
-// Set Python to select a specific interpreter. The default is python3.
+// Its single-field layout is retained for source compatibility; use
+// NewLocalRunner for advanced configuration.
 type LocalRunner struct {
 	// Python selects the Python interpreter. The default is python3.
 	Python string
-	// Timeout optionally bounds the local guest process lifetime. The zero
-	// value preserves existing behavior and relies on the caller's context.
+}
+
+// LocalRunnerConfig configures a local Dynamic Workflow guest process.
+type LocalRunnerConfig struct {
+	// Python selects the Python interpreter. The default is python3.
+	Python string
+	// Timeout optionally bounds the full local execution, including host
+	// callbacks. The zero value relies on the caller's context.
 	Timeout time.Duration
 	// MaxCodeBytes bounds the workflow source size before launching Python.
 	// The default is 64 KiB. Use a negative value to disable this limit.
 	MaxCodeBytes int
-	// WorkDir sets the guest process working directory. When empty, LocalRunner
+	// Env supplies explicitly approved guest environment variables. Shell,
+	// loader, and Python preload/search-path variables are still filtered.
+	Env []string
+	// WorkDir sets the guest process working directory. When empty, the runner
 	// creates an empty temporary directory and removes it after the guest exits.
 	// WorkDir is not automatically added to Python's module search path.
 	WorkDir string
+}
+
+type configuredLocalRunner struct {
+	config LocalRunnerConfig
+}
+
+// NewLocalRunner returns a local Runtime with advanced process configuration.
+// The returned runtime is not a security sandbox.
+func NewLocalRunner(config LocalRunnerConfig) Runtime {
+	config.Env = append([]string(nil), config.Env...)
+	return &configuredLocalRunner{config: config}
 }
 
 type protocolMessage struct {
@@ -60,6 +80,7 @@ type protocolMessage struct {
 	ID     string          `json:"id,omitempty"`
 	Kind   CallKind        `json:"kind,omitempty"`
 	Name   string          `json:"name,omitempty"`
+	Code   string          `json:"code,omitempty"`
 	Args   json.RawMessage `json:"args,omitempty"`
 	Result json.RawMessage `json:"result,omitempty"`
 	Stdout string          `json:"stdout,omitempty"`
@@ -71,6 +92,7 @@ type workflowGuestProcess struct {
 	stdin   io.WriteCloser
 	stdout  io.Reader
 	stderr  *limitedBuffer
+	code    string
 }
 
 type workflowProcess interface {
@@ -89,36 +111,61 @@ func (r LocalRunner) ExecuteWorkflow(
 	req Request,
 	handler CallHandler,
 ) (Result, error) {
+	return executeLocalWorkflow(ctx, LocalRunnerConfig{Python: r.Python}, req, handler)
+}
+
+func (r configuredLocalRunner) ExecuteWorkflow(
+	ctx context.Context,
+	req Request,
+	handler CallHandler,
+) (Result, error) {
+	runCtx, cancel := localExecutionContext(ctx, r.config.Timeout)
+	defer cancel()
+	return executeLocalWorkflow(runCtx, r.config, req, handler)
+}
+
+func executeLocalWorkflow(
+	ctx context.Context,
+	config LocalRunnerConfig,
+	req Request,
+	handler CallHandler,
+) (Result, error) {
 	if handler == nil {
 		return Result{}, required("call handler")
 	}
-	guest, err := r.startWorkflowGuest(ctx, req.Code)
+	guest, err := startWorkflowGuest(ctx, config, req.Code)
 	if err != nil {
 		return Result{}, err
 	}
 	return runWorkflowGuest(ctx, guest, handler)
 }
 
-func (r LocalRunner) startWorkflowGuest(
+func localExecutionContext(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if timeout <= 0 {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, timeout)
+}
+
+func startWorkflowGuest(
 	ctx context.Context,
+	config LocalRunnerConfig,
 	code string,
 ) (*workflowGuestProcess, error) {
 	stderr := newLimitedBuffer(workflowGuestCapturedOutputLimit)
 	proc, err := localpython.StartScript(
 		ctx,
 		localpython.Config{
-			Python:       r.Python,
-			Timeout:      r.Timeout,
-			MaxCodeBytes: r.MaxCodeBytes,
-			WorkDir:      r.WorkDir,
+			Python:       config.Python,
+			MaxCodeBytes: config.MaxCodeBytes,
+			Env:          config.Env,
+			WorkDir:      config.WorkDir,
 		},
 		code,
 		"guest.py",
 		[]byte(pythonGuest),
 		nil,
-		[]string{
-			base64.StdEncoding.EncodeToString([]byte(code)),
-		},
+		nil,
 		stderr,
 	)
 	if err != nil {
@@ -129,6 +176,7 @@ func (r LocalRunner) startWorkflowGuest(
 		stdin:   proc.Stdin(),
 		stdout:  proc.Stdout(),
 		stderr:  stderr,
+		code:    code,
 	}, nil
 }
 
@@ -147,6 +195,10 @@ func runWorkflowGuest(
 	calls := &sync.WaitGroup{}
 	writeErr := &workflowWriteError{}
 	state := &workflowGuestState{}
+	if err := encoder.Encode(protocolMessage{Type: "run", Code: guest.code}); err != nil {
+		state.guestErr = fmt.Errorf("dynamicworkflow: write workflow source: %w", err)
+		return finishWorkflowGuest(ctx, cancelCallbacks, guest, scanner, calls, writeErr, state)
+	}
 	for scanner.Scan() {
 		if stop := processWorkflowGuestMessage(
 			callbackCtx,
@@ -297,6 +349,9 @@ func finishWorkflowGuest(
 		cancelCallbacks()
 	}
 	if err := waitWorkflowGuestCallbacks(ctx, calls); err != nil && state.guestErr == nil {
+		state.guestErr = err
+	}
+	if err := ctx.Err(); err != nil && state.guestErr == nil && state.completed == nil {
 		state.guestErr = err
 	}
 	writeErr.Lock()
@@ -459,6 +514,7 @@ func (b *limitedBuffer) Exceeded() bool {
 }
 
 var _ Runtime = LocalRunner{}
+var _ Runtime = (*configuredLocalRunner)(nil)
 
 // pythonGuest is deliberately small: workflow source receives only the
 // documented host callbacks. LocalRunner is not a sandbox; production runners
@@ -466,7 +522,6 @@ var _ Runtime = LocalRunner{}
 const pythonGuest = `
 import asyncio
 import ast
-import base64
 import inspect
 import io
 import json
@@ -779,7 +834,13 @@ def _validate_workflow_ast(parsed):
 
 async def _main():
     global _bridge
-    source = base64.b64decode(sys.argv[1]).decode("utf-8")
+    request_line = sys.stdin.readline()
+    if not request_line:
+        raise RuntimeError("host closed workflow bridge before sending source")
+    request = json.loads(request_line)
+    if request.get("type") != "run" or not isinstance(request.get("code"), str):
+        raise RuntimeError("invalid workflow run request")
+    source = request["code"]
     wrapped = "async def __workflow__():\n" + "\n".join("    " + line for line in source.splitlines())
 
     parsed = ast.parse(wrapped, "<dynamic-workflow>", "exec")

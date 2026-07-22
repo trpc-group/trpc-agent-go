@@ -351,7 +351,8 @@ restricted Python syntax, restricted builtins, source-size limits, captured
 output limits, a minimal process environment, an empty temporary working
 directory by default, a private bootstrap script, best-effort guest process
 termination with process-group cleanup on Unix-like systems, and an optional
-`LocalRunner.Timeout`.
+full-execution timeout configured with
+`dynamicworkflow.NewLocalRunner(dynamicworkflow.LocalRunnerConfig{Timeout: ...})`.
 The default timeout is intentionally unset; LocalRunner inherits the caller's
 context so long Agent workflows are not cut off unexpectedly.
 

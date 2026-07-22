@@ -8,12 +8,11 @@
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 
-package localpython
+package codeact
 
 import (
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,20 +22,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestConfigureProcessUsesProcessGroup(t *testing.T) {
-	cmd := &exec.Cmd{}
-	configureProcess(cmd)
-	require.NotNil(t, cmd.SysProcAttr)
-	require.True(t, cmd.SysProcAttr.Setpgid)
-}
-
-func TestKillProcessGroupNoProcess(t *testing.T) {
-	require.NoError(t, killProcessGroup(nil))
-	require.NoError(t, killProcessGroup(&exec.Cmd{}))
-	cleanupProcessTree(nil)
-}
-
-func TestProcessWaitCleansDescendantsAfterRootExits(t *testing.T) {
+func TestLocalRunnerCleansDescendantsAfterSuccessfulCompletion(t *testing.T) {
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 unavailable")
 	}
@@ -50,22 +36,19 @@ func TestProcessWaitCleansDescendantsAfterRootExits(t *testing.T) {
 		gate,
 		marker,
 	)
-	script := fmt.Sprintf(
-		"import subprocess,sys\nsubprocess.Popen([sys.executable, '-c', %q], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n",
+	code := fmt.Sprintf(
+		"import subprocess,sys\nsubprocess.Popen([sys.executable, '-c', %q], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\nreturn 'done'",
 		childCode,
 	)
-	proc, err := StartScript(
+	result, err := Execute(
 		context.Background(),
-		Config{},
-		script,
-		"guest.py",
-		[]byte(script),
-		nil,
-		nil,
-		io.Discard,
+		LocalRunner{},
+		fakeToolCallHandler{},
+		code,
 	)
 	require.NoError(t, err)
-	require.NoError(t, proc.Wait())
+	require.JSONEq(t, `"done"`, string(result.Value))
+
 	time.Sleep(50 * time.Millisecond)
 	require.NoError(t, os.WriteFile(gate, []byte("go"), 0o600))
 	time.Sleep(200 * time.Millisecond)

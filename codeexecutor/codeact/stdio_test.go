@@ -347,7 +347,7 @@ func TestLocalRunnerEnforcesMaxCodeBytes(t *testing.T) {
 	}
 	_, err := Execute(
 		context.Background(),
-		LocalRunner{MaxCodeBytes: 8},
+		NewLocalRunner(LocalRunnerConfig{MaxCodeBytes: 8}),
 		fakeToolCallHandler{},
 		"return None",
 	)
@@ -361,12 +361,30 @@ func TestLocalRunnerOptionalTimeoutStopsBusyCode(t *testing.T) {
 	start := time.Now()
 	_, err := Execute(
 		context.Background(),
-		LocalRunner{Timeout: 100 * time.Millisecond},
+		NewLocalRunner(LocalRunnerConfig{Timeout: 100 * time.Millisecond}),
 		fakeToolCallHandler{},
 		"while True:\n    pass",
 	)
 	require.Error(t, err)
 	require.Less(t, time.Since(start), 5*time.Second)
+}
+
+func TestConfiguredLocalRunnerTimeoutCancelsToolHandler(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 unavailable")
+	}
+	started := time.Now()
+	_, err := Execute(
+		context.Background(),
+		NewLocalRunner(LocalRunnerConfig{Timeout: 100 * time.Millisecond}),
+		toolCallHandlerFunc(func(ctx context.Context, _ ToolCall) (json.RawMessage, error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}),
+		"return await call_tool('wait')",
+	)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Less(t, time.Since(started), 5*time.Second)
 }
 
 func TestLocalRunnerUsesConfiguredWorkDir(t *testing.T) {
@@ -376,7 +394,7 @@ func TestLocalRunnerUsesConfiguredWorkDir(t *testing.T) {
 	workDir := t.TempDir()
 	result, err := Execute(
 		context.Background(),
-		LocalRunner{WorkDir: workDir},
+		NewLocalRunner(LocalRunnerConfig{WorkDir: workDir}),
 		fakeToolCallHandler{},
 		`import os
 return os.getcwd()`,
@@ -389,6 +407,25 @@ return os.getcwd()`,
 	resolvedGot, err := filepath.EvalSymlinks(got)
 	require.NoError(t, err)
 	require.Equal(t, resolvedWorkDir, resolvedGot)
+}
+
+func TestConfiguredLocalRunnerUsesApprovedEnvironment(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 unavailable")
+	}
+	result, err := Execute(
+		context.Background(),
+		NewLocalRunner(LocalRunnerConfig{Env: []string{
+			"TRPC_CODEACT_ENV_PROBE=visible",
+			"PYTHONPATH=/tmp/unsafe",
+		}}),
+		fakeToolCallHandler{},
+		"import os\nreturn {"+
+			"'visible': os.getenv('TRPC_CODEACT_ENV_PROBE'), "+
+			"'pythonpath': os.getenv('PYTHONPATH')}",
+	)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"visible":"visible","pythonpath":null}`, string(result.Value))
 }
 
 type fakeStdioRunner struct {

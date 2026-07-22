@@ -43,30 +43,69 @@ type stdioProcess interface {
 }
 
 // LocalRunner runs the guest with a caller-supplied Python executable. Use it
-// only in an already isolated environment or for development/tests.
+// only in an already isolated environment or for development/tests. Its
+// single-field layout is retained for source compatibility; use NewLocalRunner
+// for advanced configuration.
 type LocalRunner struct {
 	// Python selects the Python interpreter. The default is python3.
 	Python string
-	// Timeout optionally bounds the local guest process lifetime. The zero
-	// value preserves existing behavior and relies on the caller's context.
+}
+
+// LocalRunnerConfig configures a local CodeAct guest process.
+type LocalRunnerConfig struct {
+	// Python selects the Python interpreter. The default is python3.
+	Python string
+	// Timeout optionally bounds the full local execution, including host tool
+	// calls. The zero value relies on the caller's context.
 	Timeout time.Duration
 	// MaxCodeBytes bounds the generated code size before launching Python.
 	// The default is 64 KiB. Use a negative value to disable this limit.
 	MaxCodeBytes int
-	// WorkDir sets the guest process working directory. When empty, LocalRunner
+	// Env supplies explicitly approved guest environment variables. Shell,
+	// loader, and Python preload/search-path variables are still filtered.
+	Env []string
+	// WorkDir sets the guest process working directory. When empty, the runner
 	// creates an empty temporary directory and removes it after the guest exits.
 	// WorkDir is not automatically added to Python's module search path.
 	WorkDir string
 }
 
+type configuredLocalRunner struct {
+	config LocalRunnerConfig
+}
+
+// NewLocalRunner returns a local Runtime with advanced process configuration.
+// The returned runtime is not a security sandbox.
+func NewLocalRunner(config LocalRunnerConfig) Runtime {
+	config.Env = append([]string(nil), config.Env...)
+	return &configuredLocalRunner{config: config}
+}
+
 func (r LocalRunner) start(ctx context.Context, req Request, script string) (stdioProcess, error) {
+	return startLocalGuest(ctx, LocalRunnerConfig{Python: r.Python}, req, script)
+}
+
+func (r configuredLocalRunner) start(
+	ctx context.Context,
+	req Request,
+	script string,
+) (stdioProcess, error) {
+	return startLocalGuest(ctx, r.config, req, script)
+}
+
+func startLocalGuest(
+	ctx context.Context,
+	config LocalRunnerConfig,
+	req Request,
+	script string,
+) (stdioProcess, error) {
 	return localpython.StartScript(
 		ctx,
 		localpython.Config{
-			Python:       r.Python,
-			Timeout:      r.Timeout,
-			MaxCodeBytes: r.MaxCodeBytes,
-			WorkDir:      r.WorkDir,
+			Python:       config.Python,
+			MaxCodeBytes: config.MaxCodeBytes,
+			Env:          config.Env,
+			WorkDir:      config.WorkDir,
 		},
 		req.Code,
 		"guest.py",
@@ -80,6 +119,23 @@ func (r LocalRunner) start(ctx context.Context, req Request, script string) (std
 // ExecuteCodeAct implements Runtime using a fresh local Python stdio guest.
 func (r LocalRunner) ExecuteCodeAct(ctx context.Context, req Request, handler ToolCallHandler) (Result, error) {
 	return executeStdio(ctx, r, req, handler)
+}
+
+func (r configuredLocalRunner) ExecuteCodeAct(
+	ctx context.Context,
+	req Request,
+	handler ToolCallHandler,
+) (Result, error) {
+	runCtx, cancel := localExecutionContext(ctx, r.config.Timeout)
+	defer cancel()
+	return executeStdio(runCtx, r, req, handler)
+}
+
+func localExecutionContext(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if timeout <= 0 {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, timeout)
 }
 
 type protocolMessage struct {
@@ -148,6 +204,9 @@ func executeStdio(ctx context.Context, runner stdioRunner, req Request, handler 
 				Name: msg.Name,
 				Args: msg.Args,
 			})
+			if err := ctx.Err(); err != nil {
+				return Result{}, err
+			}
 			out := protocolResponse{Type: "tool_result", ID: msg.ID, Result: value}
 			if callErr != nil {
 				out.Error = callErr.Error()
@@ -223,3 +282,4 @@ func waitForCompletedGuest(ctx context.Context, p stdioProcess, timeout time.Dur
 }
 
 var _ Runtime = LocalRunner{}
+var _ Runtime = (*configuredLocalRunner)(nil)

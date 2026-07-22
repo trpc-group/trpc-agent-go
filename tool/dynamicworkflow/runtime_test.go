@@ -61,6 +61,71 @@ return {"answer": answer, "review": review}
 	require.Equal(t, "starting\n", result.Stdout)
 }
 
+func TestRunWorkflowGuestSendsSourceOverStdin(t *testing.T) {
+	stdin := &bytes.Buffer{}
+	guest := &workflowGuestProcess{
+		process: newExitedWorkflowProcess(),
+		stdin:   nopWriteCloser{Writer: stdin},
+		stdout: strings.NewReader(
+			`{"type":"done","result":{"ok":true}}` + "\n",
+		),
+		stderr: newLimitedBuffer(workflowGuestCapturedOutputLimit),
+		code:   "return {'ok': true}",
+	}
+	result, err := runWorkflowGuest(
+		context.Background(),
+		guest,
+		callHandlerFunc(func(context.Context, Call) (json.RawMessage, error) {
+			return nil, nil
+		}),
+	)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"ok":true}`, string(result.Value))
+
+	var request protocolMessage
+	require.NoError(t, json.NewDecoder(stdin).Decode(&request))
+	require.Equal(t, "run", request.Type)
+	require.Equal(t, guest.code, request.Code)
+}
+
+func TestRunWorkflowGuestReportsSourceWriteError(t *testing.T) {
+	guest := &workflowGuestProcess{
+		process: newExitedWorkflowProcess(),
+		stdin:   nopWriteCloser{Writer: errorWriter{}},
+		stdout:  strings.NewReader(""),
+		stderr:  newLimitedBuffer(workflowGuestCapturedOutputLimit),
+		code:    "return None",
+	}
+	_, err := runWorkflowGuest(
+		context.Background(),
+		guest,
+		callHandlerFunc(func(context.Context, Call) (json.RawMessage, error) {
+			return nil, nil
+		}),
+	)
+	require.ErrorContains(t, err, "write workflow source")
+}
+
+func TestLocalRunnerTransportsWorkflowNearDefaultCodeLimit(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 is not installed")
+	}
+	code := strings.Repeat("# padding\n", 6400) + "return {'ok': true}\n"
+	require.Greater(t, len(code), 60<<10)
+	require.LessOrEqual(t, len(code), 64<<10)
+
+	result, err := Execute(
+		context.Background(),
+		LocalRunner{},
+		callHandlerFunc(func(context.Context, Call) (json.RawMessage, error) {
+			return nil, nil
+		}),
+		code,
+	)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"ok":true}`, string(result.Value))
+}
+
 func TestLocalRunnerRoutesDynamicAgentSpec(t *testing.T) {
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 is not installed")
@@ -333,7 +398,7 @@ func TestLocalRunnerOptionalTimeoutStopsBusyWorkflow(t *testing.T) {
 	}
 
 	start := time.Now()
-	_, err := Execute(context.Background(), LocalRunner{Timeout: 100 * time.Millisecond}, callHandlerFunc(func(context.Context, Call) (json.RawMessage, error) {
+	_, err := Execute(context.Background(), NewLocalRunner(LocalRunnerConfig{Timeout: 100 * time.Millisecond}), callHandlerFunc(func(context.Context, Call) (json.RawMessage, error) {
 		return nil, nil
 	}), `
 while True:
@@ -341,6 +406,24 @@ while True:
 `)
 	require.Error(t, err)
 	require.Less(t, time.Since(start), 5*time.Second)
+}
+
+func TestConfiguredLocalRunnerTimeoutCancelsCallback(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 is not installed")
+	}
+	started := time.Now()
+	_, err := Execute(
+		context.Background(),
+		NewLocalRunner(LocalRunnerConfig{Timeout: 100 * time.Millisecond}),
+		callHandlerFunc(func(ctx context.Context, _ Call) (json.RawMessage, error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}),
+		`return await agent({"task": "wait"})`,
+	)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Less(t, time.Since(started), 5*time.Second)
 }
 
 func TestFinishWorkflowGuestPreservesCompletedResultAfterExitTimeout(t *testing.T) {
@@ -532,7 +615,7 @@ func TestLocalRunnerEnforcesMaxCodeBytes(t *testing.T) {
 	}
 	_, err := Execute(
 		context.Background(),
-		LocalRunner{MaxCodeBytes: 8},
+		NewLocalRunner(LocalRunnerConfig{MaxCodeBytes: 8}),
 		callHandlerFunc(func(context.Context, Call) (json.RawMessage, error) {
 			return nil, nil
 		}),
@@ -555,7 +638,7 @@ func TestLocalRunnerWorkDirCannotShadowBootstrapImports(t *testing.T) {
 
 	result, err := Execute(
 		context.Background(),
-		LocalRunner{WorkDir: workDir},
+		NewLocalRunner(LocalRunnerConfig{WorkDir: workDir}),
 		callHandlerFunc(func(context.Context, Call) (json.RawMessage, error) {
 			return nil, nil
 		}),

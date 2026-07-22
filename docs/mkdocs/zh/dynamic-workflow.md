@@ -314,8 +314,9 @@ Go 框架掌控。
 `dynamicworkflow.LocalRunner` 会通过共享的 local Python runtime 启动本地 Python
 进程。它不是安全 sandbox。它会为本地使用提供 defense-in-depth 防护，包括限制 Python 语法、限制 builtins、
 限制源码大小、限制捕获输出、使用最小进程环境、默认使用空的临时工作目录、将 bootstrap
-脚本放在私有目录、尽力终止 guest 进程（Unix-like 系统下会清理进程组），以及可选的
-`LocalRunner.Timeout`。
+脚本放在私有目录、尽力终止 guest 进程（Unix-like 系统下会清理进程组），以及通过
+`dynamicworkflow.NewLocalRunner(dynamicworkflow.LocalRunnerConfig{Timeout: ...})`
+配置的可选全流程 timeout。
 默认 timeout 会刻意保持未设置，LocalRunner 只继承调用方 context，避免意外截断
 耗时较长的 Agent workflow。
 
