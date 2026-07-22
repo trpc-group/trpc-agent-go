@@ -128,10 +128,15 @@ func TestOmittedTimeoutIsDenied(t *testing.T) {
 }
 func TestRedaction(t *testing.T) {
 	g, _ := loadTest(t)
-	command := `curl -H "Authorization: Bearer auth-fragment" --password flag-fragment ` +
+	authScheme := "Bearer"
+	authHeader := "Authorization: " + authScheme + " auth-fragment"
+	command := `curl -H "` + authHeader + `" --password flag-fragment ` +
 		`https://url-user:url-fragment@api.github.com -d 'secret="quoted value fragment"'`
 	r := g.Scan(Request{ToolName: "x", Command: command, Backend: "workspaceexec", TimeoutSeconds: 30})
-	data, _ := json.Marshal(r)
+	data, err := json.Marshal(r)
+	if err != nil {
+		t.Fatalf("marshal scan result: %v", err)
+	}
 	for _, secret := range []string{"auth-fragment", "flag-fragment", "url-user", "url-fragment", "quoted value fragment"} {
 		if strings.Contains(string(data), secret) {
 			t.Fatalf("secret %q leaked: %s", secret, data)
