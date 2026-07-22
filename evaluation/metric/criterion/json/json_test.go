@@ -12,6 +12,7 @@ package json
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -172,6 +173,44 @@ func TestJSONCriterionValidAndSchemaUseSameParsedValue(t *testing.T) {
 	assert.ErrorContains(t, err, "parse actual raw json")
 }
 
+func TestJSONCriterionValidAndSchemaPreservesLargeNumbers(t *testing.T) {
+	criterion := &JSONCriterion{
+		Valid:         true,
+		Schema:        json.RawMessage(`{"const":9007199254740993}`),
+		MatchStrategy: JSONMatchStrategySkip,
+	}
+	ok, err := criterion.Match(`9007199254740993`, nil)
+	assert.True(t, ok)
+	assert.NoError(t, err)
+	ok, err = criterion.Match(`9007199254740992`, nil)
+	assert.False(t, ok)
+	assert.ErrorContains(t, err, "json schema validation failed")
+}
+
+func TestJSONCriterionValidAndSchemaCanonicalizesGoValues(t *testing.T) {
+	type namedMap map[string]string
+	type answerStruct struct {
+		Answer string `json:"answer"`
+	}
+	criterion := &JSONCriterion{
+		Valid: true,
+		Schema: json.RawMessage(`{
+			"type": "object",
+			"required": ["answer"],
+			"properties": {
+				"answer": { "const": "Paris" }
+			}
+		}`),
+		MatchStrategy: JSONMatchStrategySkip,
+	}
+	ok, err := criterion.Match(namedMap{"answer": "Paris"}, nil)
+	assert.True(t, ok)
+	assert.NoError(t, err)
+	ok, err = criterion.Match(answerStruct{Answer: "Paris"}, nil)
+	assert.True(t, ok)
+	assert.NoError(t, err)
+}
+
 func TestJSONCriterionSchemaUsesDraft2020ByDefault(t *testing.T) {
 	criterion := &JSONCriterion{
 		Schema:        json.RawMessage(`{"type":"array","prefixItems":[{"type":"string"}]}`),
@@ -197,6 +236,8 @@ func TestJSONCriterionSchemaRejectsInvalidSchemaKeyword(t *testing.T) {
 	ok, err := criterion.Match(map[string]any{}, nil)
 	assert.False(t, ok)
 	assert.ErrorContains(t, err, "compile json schema")
+	assert.Contains(t, fmt.Sprint(err), inlineSchemaResource)
+	assert.NotContains(t, fmt.Sprint(err), "file://")
 }
 
 func TestJSONCriterionMatchRawMessage(t *testing.T) {

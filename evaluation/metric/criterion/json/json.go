@@ -57,7 +57,7 @@ const (
 	JSONMatchStrategySkip JSONMatchStrategy = "skip"
 )
 
-const inlineSchemaResource = "schema.json"
+const inlineSchemaResource = "https://trpc.group/trpc-agent-go/evaluation/metric/criterion/json/schema.json"
 
 // New creates a new JSONCriterion with the provided options.
 func New(opt ...Option) *JSONCriterion {
@@ -172,14 +172,17 @@ func (j *JSONCriterion) normalizeInputs(actual, expected any) (any, any, error) 
 func rawJSONValue(value any) (any, error) {
 	switch v := value.(type) {
 	case json.RawMessage:
-		return parseRawJSON(v)
+		return jsonschema.UnmarshalJSON(bytes.NewReader(v))
 	case string:
-		return parseRawJSON(json.RawMessage(v))
+		return jsonschema.UnmarshalJSON(strings.NewReader(v))
 	case []byte:
-		return parseRawJSON(json.RawMessage(v))
+		return jsonschema.UnmarshalJSON(bytes.NewReader(v))
 	default:
-		_, err := json.Marshal(value)
-		return value, err
+		raw, err := json.Marshal(value)
+		if err != nil {
+			return nil, err
+		}
+		return jsonschema.UnmarshalJSON(bytes.NewReader(raw))
 	}
 }
 
