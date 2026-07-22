@@ -145,7 +145,7 @@ func takeSnapshot(
 			if err != nil {
 				return err
 			}
-			snap.Memories = append(snap.Memories, toMemorySnaps(u, entries)...)
+			snap.Memories = append(snap.Memories, toMemorySnaps(entries)...)
 		}
 		if c.SearchQuery != "" && t.Caps().MemorySearch {
 			ukey := memory.UserKey{AppName: CaseAppName, UserID: CaseUserID}
@@ -153,7 +153,7 @@ func takeSnapshot(
 			if err != nil {
 				return err
 			}
-			snap.Search = toMemorySnaps(CaseUserID, found)
+			snap.Search = toMemorySnaps(found)
 		}
 	}
 
@@ -161,15 +161,18 @@ func takeSnapshot(
 	return nil
 }
 
-// toMemorySnaps converts memory entries of one user scope to snapshots.
-func toMemorySnaps(userID string, entries []*memory.Entry) []*MemorySnap {
+// toMemorySnaps converts memory entries to snapshots. The scope attribution
+// (UserID) comes from the stored entry itself, not from the queried key, so
+// an entry persisted under the wrong scope surfaces as a user_id mismatch
+// instead of being masked by the read-back.
+func toMemorySnaps(entries []*memory.Entry) []*MemorySnap {
 	out := make([]*MemorySnap, 0, len(entries))
 	for _, e := range entries {
 		if e == nil || e.Memory == nil {
 			continue
 		}
 		ms := &MemorySnap{
-			UserID:       userID,
+			UserID:       e.UserID,
 			ID:           e.ID,
 			Content:      e.Memory.Memory,
 			Topics:       append([]string(nil), e.Memory.Topics...),

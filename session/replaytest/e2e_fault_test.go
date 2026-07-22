@@ -32,8 +32,10 @@ import (
 // inconsistency is injected at the backend boundary, then asserts the whole
 // Runner -> Snapshot -> Normalize -> Diff chain reports a failure in the
 // expected dimension (proving the snapshot cannot silently miss a write).
-// Covered faults: a silently dropped write (acked but never persisted) and
-// a dirty half-write (event persisted, state delta lost).
+// Covered faults: a silently dropped write (acked but never persisted), a
+// dirty half-write (event persisted, state delta lost), a wrong stored
+// memory scope (read-back UserID differs from the written scope) and a
+// cross-session summary leak.
 
 // wrapperTarget swaps the inner target's session service for a faulty one,
 // and optionally the memory service too. The faulty services are rebuilt on
@@ -198,6 +200,70 @@ func TestEndToEndDroppedStateDelta(t *testing.T) {
 		"a lost state delta must surface as an event-dimension diff, got %v", dims)
 	assert.True(t, dims[replaytest.DimState],
 		"a lost state delta must surface as a state-dimension diff, got %v", dims)
+}
+
+// wrongScopeService simulates a backend that persists the wrong scope
+// attribution: entries read back carry a stored UserID that differs from
+// the user scope they were written under. Entries are shallow-copied before
+// rewriting because the in-memory backend returns its stored pointers.
+type wrongScopeService struct {
+	memory.Service
+}
+
+// ReadMemories implements memory.Service.
+func (s *wrongScopeService) ReadMemories(
+	ctx context.Context,
+	userKey memory.UserKey,
+	limit int,
+) ([]*memory.Entry, error) {
+	entries, err := s.Service.ReadMemories(ctx, userKey, limit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*memory.Entry, 0, len(entries))
+	for _, e := range entries {
+		cp := *e
+		cp.UserID = "wrong-user"
+		out = append(out, &cp)
+	}
+	return out, nil
+}
+
+// TestEndToEndMemoryScopeMismatch injects a wrong stored scope attribution
+// at the backend boundary and asserts the full chain fails with a
+// memory-dimension diff: the snapshot must trust the entry's stored UserID,
+// not the queried key, or this fault would be masked by the read-back.
+func TestEndToEndMemoryScopeMismatch(t *testing.T) {
+	ref := replaytest.NewInMemoryTarget("inmemory-ref")
+	defer ref.Close()
+	inner := replaytest.NewInMemoryTarget("inmemory-cand")
+	defer inner.Close()
+	cand := &wrapperTarget{
+		Target: inner,
+		wrap: func(s session.Service) session.Service {
+			return &faultService{Service: s}
+		},
+		memWrap: func(m memory.Service) memory.Service {
+			return &wrongScopeService{Service: m}
+		},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	require.NoError(t, cand.Reset(ctx))
+	rep, err := replaytest.RunPair(ctx, cases.All(), ref, cand)
+	require.NoError(t, err)
+
+	assert.Greater(t, rep.Totals.Fail, 0,
+		"a wrong stored memory scope must fail at least one case end to end")
+	dims := map[string]bool{}
+	for _, cr := range rep.Cases {
+		for _, d := range cr.Diffs {
+			dims[d.Dimension] = true
+		}
+	}
+	assert.True(t, dims[replaytest.DimMemory],
+		"a wrong stored memory scope must surface as a memory-dimension diff, got %v", dims)
 }
 
 // summaryLeakService simulates a backend that stores summaries at the wrong

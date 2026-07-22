@@ -137,7 +137,7 @@ cd session/replaytest && REPLAY_REPORT_OUT=session_memory_summary_track_diff_rep
 以下是框架自身的回归测试，用于防止改动破坏比较链路；它们按比较器代码路径选取故障注入点，**不构成对「所有可能不一致都能检出」的证明**。
 
 - **比较器层**：`mutate_test.go` 对每条公开 case 施加 9 类变异（丢事件、同 branch 换序、state 污染、summary 丢失/过期覆盖/filter-key 错/归属错、memory 污染、track 污染），断言 Differ 必出非 allowed diff 且维度、路径正确。变异按比较器代码路径去重，每条路径一个代表。
-- **端到端**：`e2e_fault_test.go` 在真实 `session.Service` 边界注入三类故障——静默丢写（ack 成功但未落库）、脏半写（事件落库但 state delta 丢失）、跨 session 摘要泄漏（摘要从新建 session 中可读），断言 Runner → Snapshot → Normalize → Diff 全链路判 fail 且维度正确（丢写 → event 维度；丢 delta → event + state 双维度；摘要泄漏 → 探针直接终止该 case 运行），堵住"快照漏读/归一化误抹"导致的证明链缺口。
+- **端到端**：`e2e_fault_test.go` 在真实 `session.Service` / `memory.Service` 边界注入四类故障——静默丢写（ack 成功但未落库）、脏半写（事件落库但 state delta 丢失）、memory 归属错（读回 entry 的 UserID 与写入作用域不符）、跨 session 摘要泄漏（摘要从新建 session 中可读），断言 Runner → Snapshot → Normalize → Diff 全链路判 fail 且维度正确（丢写 → event 维度；丢 delta → event + state 双维度；归属错 → memory 维度；摘要泄漏 → 探针直接终止该 case 运行），堵住"快照漏读/归一化误抹"导致的证明链缺口。
 - **误报（目标 ≤5%，显式断言）**：设计上靠符号化归一与稳定轮询消除合法噪声；`selftest_test.go` 的 `TestFalsePositiveRateWithinBudget` 将全套件在双 InMemory 实例上重复 10 轮（110 次 case 运行），显式断言失败率 ≤5%（实测 0）；并发 case 另由 `TestSelfTestConcurrentStability` 重复 100 次验证无 flaky。轻量模式 ≤30s 同样落成显式断言：`sqlite/replay_test.go` 的 `TestReplayConsistencySQLite` 计时并断言全套件耗时 < 30s（实测约 6–9s）。
 
 ## 局限性
